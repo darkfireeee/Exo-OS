@@ -1,0 +1,1 @@
+// Stockage local du navigateur

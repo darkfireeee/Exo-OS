@@ -1,0 +1,7 @@
+# Configuration bootimage pour Exo-OS
+
+[default]
+runner = "qemu-system-x86_64 -drive format=raw,file={}"
+
+[target.'cfg(target_os = "none")']
+runner = "bootimage runner"

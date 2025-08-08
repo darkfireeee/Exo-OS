@@ -1,0 +1,12 @@
+# Configuration Cargo pour Exo-OS
+[build]
+target = "x86_64-exo_os"
+
+[target.x86_64-exo_os]
+rustflags = [
+    "-C", "link-arg=-Tlinker.ld",
+]
+
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]

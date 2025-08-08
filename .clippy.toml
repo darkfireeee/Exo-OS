@@ -1,0 +1,4 @@
+warn-on-all-wildcard-imports = true
+cognitive-complexity-threshold = 30
+too-many-arguments-threshold = 10
+doc-valid-idents = ["IA", "GPU", "TPM", "WASM"]
