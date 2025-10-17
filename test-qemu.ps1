@@ -20,17 +20,24 @@ Set-Location ..
 # Vérifier si QEMU est installé
 $qemuPath = Get-Command qemu-system-x86_64 -ErrorAction SilentlyContinue
 
+# Si QEMU n'est pas dans le PATH, vérifier l'emplacement standard
 if (-not $qemuPath) {
-    Write-Host "⚠️  QEMU non trouvé!" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "Pour installer QEMU sur Windows:" -ForegroundColor White
-    Write-Host "  1. Télécharger depuis: https://qemu.weilnetz.de/w64/" -ForegroundColor Gray
-    Write-Host "  2. Ou via Chocolatey: choco install qemu" -ForegroundColor Gray
-    Write-Host "  3. Ou via Scoop: scoop install qemu" -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "Kernel compilé disponible ici:" -ForegroundColor White
-    Write-Host "  kernel\target\x86_64-unknown-none\debug\libexo_kernel.a" -ForegroundColor Gray
-    exit 0
+    $qemuStandardPath = "C:\Program Files\qemu\qemu-system-x86_64.exe"
+    if (Test-Path $qemuStandardPath) {
+        $qemuPath = Get-Item $qemuStandardPath
+        Write-Host "✅ QEMU trouvé dans: $qemuStandardPath" -ForegroundColor Green
+    } else {
+        Write-Host "⚠️  QEMU non trouvé!" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Pour installer QEMU sur Windows:" -ForegroundColor White
+        Write-Host "  1. Télécharger depuis: https://qemu.weilnetz.de/w64/" -ForegroundColor Gray
+        Write-Host "  2. Ou via Chocolatey: choco install qemu" -ForegroundColor Gray
+        Write-Host "  3. Ou via Scoop: scoop install qemu" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "Kernel compilé disponible ici:" -ForegroundColor White
+        Write-Host "  kernel\target\x86_64-unknown-none\debug\libexo_kernel.a" -ForegroundColor Gray
+        exit 0
+    }
 }
 
 Write-Host "🖥️  Lancement de QEMU..." -ForegroundColor Cyan

@@ -5,6 +5,8 @@ authors = ["ExoOS Team"]
 edition = "2021"
 
 [lib]
+name = "exo_kernel"
+path = "src/lib.rs"
 crate-type = ["staticlib"]
 
 [dependencies]

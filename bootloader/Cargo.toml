@@ -1,0 +1,11 @@
+[package]
+name = "exo-bootloader"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bootloader = "0.11"
+
+[[bin]]
+name = "exo-bootloader"
+path = "src/main.rs"
