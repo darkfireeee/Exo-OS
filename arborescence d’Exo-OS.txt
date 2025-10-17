@@ -1,0 +1,44 @@
+exo-kernel/
+├── .cargo/
+│   └── config.toml           # Configuration Cargo pour le noyau
+├── src/
+│   ├── main.rs               # Binaire pour les tests unitaires
+│   ├── lib.rs                # Point d'entrée de la bibliothèque du noyau
+│   ├── arch/
+│   │   ├── mod.rs            # Abstraction d'architecture
+│   │   └── x86_64/
+│   │       ├── mod.rs        # Module principal pour x86_64
+│   │       ├── boot.asm      # Entrée assembleur (setup minimal)
+│   │       ├── boot.c        # Logique de boot en C (pont vers Rust)
+│   │       ├── gdt.rs        # Global Descriptor Table
+│   │       ├── idt.rs        # Interrupt Descriptor Table
+│   │       └── interrupts.rs # Gestionnaires d'interruptions
+│   ├── c_compat/             # Module d'interopérabilité C (FFI)
+│   │   ├── mod.rs            # Wrappers Rust pour les fonctions C
+│   │   ├── serial.c          # Pilote série simple en C (pour le debug)
+│   │   └── pci.c             # Pilote PCI basique en C (pour la compatibilité)
+│   ├── memory/
+│   │   ├── mod.rs            # Module de gestion mémoire
+│   │   ├── frame_allocator.rs # Allocateur de frames physiques (bitmap)
+│   │   ├── page_table.rs     # Gestion des tables de pages (mémoire virtuelle)
+│   │   └── heap_allocator.rs # Allocateur de tas pour le noyau (buddy system)
+│   ├── scheduler/
+│   │   ├── mod.rs            # Module de l'ordonnanceur
+│   │   ├── thread.rs         # Structure de thread (TCB)
+│   │   ├── scheduler.rs      # Logique de l'ordonnanceur (work-stealing, NUMA-aware)
+│   │   └── context_switch.S # Changement de contexte en assembleur pur
+│   ├── ipc/
+│   │   ├── mod.rs            # Module IPC
+│   │   ├── message.rs        # Structure des messages (rapides, via registres)
+│   │   └── channel.rs        # Canaux lock-free (MPSC queues)
+│   ├── syscall/
+│   │   ├── mod.rs            # Interface des appels système
+│   │   └── dispatch.rs       # Distribution des appels système
+│   └── drivers/
+│       ├── mod.rs            # Abstraction pour les pilotes
+│       └── block/
+│           └── mod.rs        # Interface pour les périphériques bloc
+├── build.rs                  # Script de build pour compiler le code C
+├── Cargo.toml                 # Fichier de configuration du projet
+├── x86_64-unknown-none.json   # Cible de compilation personnalisée
+└── linker.ld                  # Script de l'éditeur de liens
