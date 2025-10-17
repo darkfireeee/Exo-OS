@@ -28,6 +28,7 @@ use scheduler::Scheduler;
 use lazy_static::lazy_static;
 use spin::Mutex;
 use x86_64::instructions::interrupts;
+use crate::println;
 
 /// Ordonnanceur global, initialisé au démarrage.
 lazy_static! {
@@ -58,7 +59,7 @@ pub fn init(cpu_count: u32) {
 /// L'identifiant unique du thread créé.
 pub fn spawn(f: fn(), name: Option<&str>, cpu_affinity: Option<u32>) -> ThreadId {
     interrupts::without_interrupts(|| {
-        let thread = Thread::new(f, name, cpu_affinity);
+        let thread = unsafe { Thread::new(f, name, cpu_affinity) };
         let thread_id = thread.id;
         SCHEDULER.lock().add_thread(thread);
         thread_id

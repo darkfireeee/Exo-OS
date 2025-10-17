@@ -1,0 +1,13 @@
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+# Utiliser rust-lld comme linker
+linker = "rust-lld"
+# Passer le script linker comme argument
+rustflags = ["-C", "link-arg=-T../linker.ld"]
+
+[unstable]
+# Construire core et alloc nous-mêmes pour un contrôle total
+build-std-features = ["compiler-builtins-mem"]
+build-std = ["core", "compiler_builtins", "alloc"]

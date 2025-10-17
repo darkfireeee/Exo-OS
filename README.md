@@ -10,48 +10,6 @@ Salut 👋 et bienvenue sur Exo-OS !
 
 Exo-OS est un système d'exploitation de nouvelle génération qui combine une architecture microkernel sécurisée avec une intégration profonde de l'intelligence artificielle pour offrir une expérience utilisateur moderne, robuste et sécurisée.
 
-## 🚀 État Actuel du Développement
-
-**Version** : 1.2.0-dev  
-**Phase** : Phase 10 - IPC Message-Passing ✅ **COMPLÉTÉE**  
-**Date** : 4 octobre 2025
-
-### ✅ Phases Complétées
-
-- [x] **Phase 1-7** : Foundation (GDT, IDT, Paging, Frame Allocator, Serial, VGA)
-- [x] **Phase 8** : Heap Allocator (1MB @ 0x08000000, Vec/Box/String support)
-- [x] **Phase 9** : Syscalls & User/Kernel Transition (SYSCALL/SYSRET, 6 syscalls)
-- [x] **Phase 10** : IPC Message-Passing (4 IPC syscalls, 4 default channels, FIFO queues)
-
-### 🔄 Phase Actuelle : Transition vers Phase 11
-
-**Prochaine Phase** : Scheduler Multi-Agent (~4-5h)
-
-**Objectifs Phase 11** :
-- [ ] Task/Agent structure avec context save/restore
-- [ ] Round-robin ou CFS scheduler
-- [ ] Context switching entre agents
-- [ ] IPC + Scheduler integration (blocked agents)
-- [ ] User space setup (user code mapping)
-- [ ] Multi-agent tests
-
-### 📊 Métriques Actuelles
-
-- **Kernel size** : 3.87 MB
-- **Boot score** : 6/8 tests passing
-- **IPC tests** : 5/5 passing ✅
-- **Syscalls** : 8 fonctionnels (4 base + 4 IPC)
-- **Default channels** : 4 (kernel, debug, broadcast, log)
-- **Max channels** : 32 simultaneous
-- **Max message size** : 64 
-### 📚 Documentation Récente
-
-- [Phase 10 Rapport Final](docs/PHASE_10_RAPPORT_FINAL.md) - Rapport complet 70+ pages
-- [Phase 10 Quick Reference](docs/PHASE_10_QUICK_REFERENCE.md) - API reference rapide
-- [Changelog](CHANGELOG.md) - Historique détaillé des changements
-
----
-
 ## 🌟 Caractéristiques principales
 
 ### 🧠 Intelligence artificielle intégrée

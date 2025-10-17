@@ -50,7 +50,7 @@ impl ChannelHandle {
 #[derive(Debug)]
 pub struct Channel {
     /// Nom du canal (pour le debug)
-    name: &'static str,
+    name: alloc::string::String,
     /// Queue de messages lock-free
     queue: SegQueue<Message>,
     /// Nombre de messages envoyés
@@ -63,9 +63,9 @@ pub struct Channel {
 
 impl Channel {
     /// Crée un nouveau canal
-    pub fn new(name: &'static str, max_size: usize) -> Self {
+    pub fn new(name: &str, max_size: usize) -> Self {
         Self {
-            name,
+            name: alloc::string::String::from(name),
             queue: SegQueue::new(),
             sent_count: AtomicUsize::new(0),
             received_count: AtomicUsize::new(0),

@@ -167,7 +167,7 @@ pub fn sys_exit(args: SyscallArgs) -> u64 {
 /// 0 en cas de succès
 pub fn sys_yield(_args: SyscallArgs) -> u64 {
     // Demander au scheduler de changer de thread
-    scheduler::yield_current();
+    scheduler::yield_();
     0
 }
 
@@ -252,21 +252,25 @@ pub fn sys_clone(args: SyscallArgs) -> u64 {
 /// Envoie un message IPC
 /// 
 /// # Arguments
-/// * `args.rdi` - ID du destinataire
+/// * `args.rdi` - ID du canal
 /// * `args.rsi` - Pointeur vers le message
 /// * `args.rdx` - Taille du message
 /// 
 /// # Retour
 /// 0 en cas de succès ou code d'erreur
 pub fn sys_ipc_send(args: SyscallArgs) -> u64 {
-    let dest_id = args.rdi;
+    let channel_id = args.rdi as u32;
     let msg_ptr = args.rsi as *const u8;
-    let msg_size = args.rdx;
+    let msg_size = args.rdx as usize;
     
     // TODO: Valider que msg_ptr est dans l'espace utilisateur valide
     
+    // Créer un message IPC
+    let data = unsafe { core::slice::from_raw_parts(msg_ptr, msg_size) };
+    let msg = ipc::message::Message::new_buffered(0, 0, 0, alloc::vec::Vec::from(data));
+    
     // Utiliser le module IPC pour envoyer le message
-    match ipc::send_message(dest_id, unsafe { core::slice::from_raw_parts(msg_ptr, msg_size as usize) }) {
+    match ipc::send_message(channel_id, msg) {
         Ok(()) => 0,
         Err(_) => 0xFFFFFFFFFFFFFFFF,  // Erreur
     }
@@ -275,23 +279,29 @@ pub fn sys_ipc_send(args: SyscallArgs) -> u64 {
 /// Reçoit un message IPC
 /// 
 /// # Arguments
-/// * `args.rdi` - ID de l'expéditeur (ou 0 pour n'importe qui)
+/// * `args.rdi` - ID du canal
 /// * `args.rsi` - Pointeur vers le buffer de réception
 /// * `args.rdx` - Taille maximale du buffer
 /// 
 /// # Retour
 /// Taille du message reçu ou code d'erreur
 pub fn sys_ipc_recv(args: SyscallArgs) -> u64 {
-    let sender_id = args.rdi;
+    let channel_id = args.rdi as u32;
     let buf_ptr = args.rsi as *mut u8;
-    let buf_size = args.rdx;
+    let buf_size = args.rdx as usize;
     
     // TODO: Valider que buf_ptr est dans l'espace utilisateur valide
     
     // Utiliser le module IPC pour recevoir un message
-    let buffer = unsafe { core::slice::from_raw_parts_mut(buf_ptr, buf_size as usize) };
-    match ipc::receive_message(sender_id, buffer) {
-        Ok(size) => size as u64,
+    match ipc::receive_message(channel_id) {
+        Ok(msg) => {
+            let data = msg.data();
+            let copy_size = core::cmp::min(data.len(), buf_size);
+            unsafe {
+                core::ptr::copy_nonoverlapping(data.as_ptr(), buf_ptr, copy_size);
+            }
+            copy_size as u64
+        }
         Err(_) => 0xFFFFFFFFFFFFFFFF,  // Erreur
     }
 }

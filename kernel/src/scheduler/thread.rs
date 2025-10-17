@@ -3,12 +3,10 @@
 //! Ce fichier définit la structure représentant un thread. Un thread est une unité
 //! d'exécution avec son propre contexte (registres, pile) et son état.
 
-use alloc::collections::btree_map::BTreeMap;
 use alloc::string::String;
-use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
-use spin::Mutex;
 use x86_64::VirtAddr;
+use crate::println;
 
 /// Identifiant unique pour un thread.
 pub type ThreadId = u64;
@@ -89,9 +87,12 @@ impl Thread {
         // 1. Allouer une pile pour le thread.
         // Une taille de 8 KiB est un bon point de départ pour les threads du noyau.
         let stack_size = 8 * 1024; // 8 KiB
-        let stack_start = crate::memory::heap_allocator::allocate_frame(stack_size)
-            .expect("Failed to allocate stack for new thread");
-        let stack_top = stack_start + stack_size;
+        
+        // Pour l'instant, on utilise une allocation statique simple
+        // TODO: Utiliser un vrai allocateur de pile quand le heap sera prêt
+        static mut STACK_SPACE: [u8; 8192] = [0; 8192];
+        let stack_start = VirtAddr::from_ptr(&STACK_SPACE as *const _);
+        let stack_top: VirtAddr = stack_start + stack_size;
 
         // 2. Préparer la pile pour le premier lancement.
         // La pile doit ressembler à ce que `context_switch` s'attend à trouver
@@ -121,8 +122,7 @@ impl Thread {
 
 impl Drop for Thread {
     fn drop(&mut self) {
-        // Libère la mémoire de la pile lorsque le TCB est détruit.
-        crate::memory::heap_allocator::deallocate_frame(self.stack_start, self.stack_size);
+        // TODO: Libérer la mémoire de la pile quand le heap sera implémenté
         println!("[thread] Dropped thread '{}' (ID: {})", self.name.as_deref().unwrap_or("unnamed"), self.id);
     }
 }

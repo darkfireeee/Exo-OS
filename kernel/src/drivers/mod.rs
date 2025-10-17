@@ -6,7 +6,9 @@
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use spin::Mutex;
+use crate::println;
 
 /// Types de pilotes supportés
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,13 +135,12 @@ lazy_static::lazy_static! {
 
 /// Initialise le sous-système de pilotes
 pub fn init() {
-    crate::c_compat::serial_write_str("Initializing driver subsystem...\n");
+    println!("[DRIVERS] Initialisation du sous-système de pilotes...");
     
     // L'initialisation est différée jusqu'à ce que les pilotes spécifiques soient enregistrés
     
-    crate::c_compat::serial_write_str("Driver subsystem initialized.\n");
+    println!("[DRIVERS] Sous-système de pilotes initialisé.");
 }
 
 // Inclure les implémentations des pilotes spécifiques
 pub mod block;
-pub use block::*;

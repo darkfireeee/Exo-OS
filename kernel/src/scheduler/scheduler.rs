@@ -4,9 +4,12 @@
 //! par CPU, implémente la logique de work-stealing et orchestre les changements
 //! de contexte.
 
-use crate::scheduler::thread::{Thread, ThreadId, ThreadState};
+use crate::scheduler::thread::{Thread, ThreadId, ThreadState, ThreadContext};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use alloc::vec;
+use crate::println;
+use alloc::sync::Arc;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
 
@@ -80,14 +83,14 @@ impl Scheduler {
                 // On ne remet pas le thread dans la file s'il est `Blocked` ou `Exited`.
                 if thread.state == ThreadState::Ready {
                     // On le remet dans sa file préférée.
-                    let target_cpu = thread.cpu_affinity.unwrap_or(current_cpu_id);
+                    let target_cpu = thread.cpu_affinity.unwrap_or(current_cpu_id as u32);
                     self.ready_queues[target_cpu as usize].push(id);
                 }
             }
         }
 
         // 3. Trouver le prochain thread à exécuter (logique de work-stealing).
-        let next_thread_id = self.find_next_thread(current_cpu_id);
+        let next_thread_id = self.find_next_thread(current_cpu_id as u32);
 
         // 4. Mettre à jour le thread courant et effectuer le changement de contexte.
         if let Some(id) = next_thread_id {
@@ -99,13 +102,14 @@ impl Scheduler {
             // Récupérer les contextes.
             let old_context_ptr = old_thread_id
                 .and_then(|id| self.threads.get(&id))
-                .map(|t| &mut t.lock().context as *mut _);
-            let new_context_ptr = self.threads.get(&id).unwrap().lock().context.rsp();
+                .map(|t| &mut t.lock().context as *mut _)
+                .unwrap_or(core::ptr::null_mut());
+            let new_context_ptr = self.threads.get(&id).unwrap().lock().context.rsp().as_u64();
 
             // Effectuer le changement de contexte en assembleur.
             // C'est un point de non-retour pour l'ancien thread.
             unsafe {
-                super::context_switch(old_context_ptr, new_context_ptr);
+                context_switch(old_context_ptr, new_context_ptr);
             }
         } else {
             // Aucun thread à exécuter. On peut mettre le CPU en pause (halt).
@@ -154,5 +158,5 @@ impl Scheduler {
 
 /// Fonction externe définie dans `context_switch.S`.
 extern "C" {
-    fn context_switch(old_context: *mut ThreadContext, new_rsp: x86_64::VirtAddr);
+    fn context_switch(old_context: *mut ThreadContext, new_rsp: u64);
 }

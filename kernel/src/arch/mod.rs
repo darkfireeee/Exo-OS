@@ -1,17 +1,8 @@
-// src/arch/x86_64/mod.rs
-// Module principal pour x86_64
+// src/arch/mod.rs
+// Abstraction d'architecture - Point d'entrée pour l'architecture spécifique
 
-pub mod gdt;
-pub mod idt;
-pub mod interrupts;
+#[cfg(target_arch = "x86_64")]
+pub use self::x86_64::*;
 
-/// Initialise l'architecture x86_64
-pub fn init() {
-    println!("Initialisation de l'architecture x86_64...");
-    
-    gdt::init();
-    idt::init();
-    interrupts::init();
-    
-    println!("Architecture x86_64 initialisée.");
-}
+#[cfg(target_arch = "x86_64")]
+pub mod x86_64;

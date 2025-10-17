@@ -17,8 +17,8 @@ pub mod interrupts;
 ///
 /// Cette fonction est appelée depuis le point d'entrée principal du noyau (`rust_main`)
 /// pour mettre en place l'environnement d'exécution de base sur un processeur x86_64.
-pub fn init() {
-    println!("Initialisation de l'architecture x86_64...");
+pub fn init(cores: usize) {
+    crate::println!("Initialisation de l'architecture x86_64...");
 
     // L'ordre d'initialisation est important.
     // 1. La GDT (Global Descriptor Table) doit être chargée en premier.
@@ -30,5 +30,5 @@ pub fn init() {
     // 3. Enfin, on active les interruptions matérielles.
     interrupts::init();
 
-    println!("Architecture x86_64 initialisée avec succès.");
+    crate::println!("Architecture x86_64 initialisée avec succès.");
 }

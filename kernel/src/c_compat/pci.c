@@ -2,6 +2,7 @@
 // Pilote PCI basique en C (pour la compatibilité)
 
 #include <stddef.h>
+#include <stdint.h>
 
 // Adresses des ports de configuration PCI
 #define PCI_CONFIG_ADDRESS 0xCF8
@@ -38,11 +39,12 @@ uint32_t pci_config_read_word(uint8_t bus, uint8_t device, uint8_t function, uin
     address = (uint32_t)((lbus << 16) | (ldevice << 11) |
               (lfunction << 8) | (offset & 0xFC) | ((uint32_t)0x80000000));
 
+    uint32_t result;
     // Écrire l'adresse dans le port d'adresse
-    asm volatile("outl %0, %1" : : "a"(address), "Nd"(PCI_CONFIG_ADDRESS));
+    __asm__ volatile("outl %%eax, %%dx" : : "a"(address), "d"(PCI_CONFIG_ADDRESS) : "memory");
     // Lire les données depuis le port de données
-    asm volatile("inl %1, %0" : "=a"(tmp) : "Nd"(PCI_CONFIG_DATA));
-    return tmp;
+    __asm__ volatile("inl %%dx, %%eax" : "=a"(result) : "d"(PCI_CONFIG_DATA) : "memory");
+    return result;
 }
 
 // Initialise le sous-système PCI (peut rester vide pour cet exemple)
@@ -68,7 +70,7 @@ void pci_enumerate_buses() {
             serial_print_hex(vendor_id);
             serial_print(", DeviceID=");
             serial_print_hex(device_id);
-            serial_print_char('\n');
+            serial_write_char('\n');
         }
     }
 }

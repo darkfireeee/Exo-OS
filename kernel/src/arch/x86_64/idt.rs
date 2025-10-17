@@ -43,46 +43,46 @@ pub fn init() {
     IDT.load();
 }
 
-extern "x86-interrupt" fn breakpoint_handler(stack_frame: &mut InterruptStackFrame) {
+extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
     println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
 }
 
-extern "x86-interrupt" fn divide_error_handler(stack_frame: &mut InterruptStackFrame) {
+extern "x86-interrupt" fn divide_error_handler(stack_frame: InterruptStackFrame) {
     println!("EXCEPTION: DIVIDE ERROR\n{:#?}", stack_frame);
     loop {}
 }
 
-extern "x86-interrupt" fn debug_handler(stack_frame: &mut InterruptStackFrame) {
+extern "x86-interrupt" fn debug_handler(stack_frame: InterruptStackFrame) {
     println!("EXCEPTION: DEBUG\n{:#?}", stack_frame);
 }
 
-extern "x86-interrupt" fn nmi_handler(stack_frame: &mut InterruptStackFrame) {
+extern "x86-interrupt" fn nmi_handler(stack_frame: InterruptStackFrame) {
     println!("EXCEPTION: NON-MASKABLE INTERRUPT\n{:#?}", stack_frame);
     loop {}
 }
 
-extern "x86-interrupt" fn overflow_handler(stack_frame: &mut InterruptStackFrame) {
+extern "x86-interrupt" fn overflow_handler(stack_frame: InterruptStackFrame) {
     println!("EXCEPTION: OVERFLOW\n{:#?}", stack_frame);
     loop {}
 }
 
-extern "x86-interrupt" fn bound_range_exceeded_handler(stack_frame: &mut InterruptStackFrame) {
+extern "x86-interrupt" fn bound_range_exceeded_handler(stack_frame: InterruptStackFrame) {
     println!("EXCEPTION: BOUND RANGE EXCEEDED\n{:#?}", stack_frame);
     loop {}
 }
 
-extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: &mut InterruptStackFrame) {
+extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFrame) {
     println!("EXCEPTION: INVALID OPCODE\n{:#?}", stack_frame);
     loop {}
 }
 
-extern "x86-interrupt" fn device_not_available_handler(stack_frame: &mut InterruptStackFrame) {
+extern "x86-interrupt" fn device_not_available_handler(stack_frame: InterruptStackFrame) {
     println!("EXCEPTION: DEVICE NOT AVAILABLE\n{:#?}", stack_frame);
     loop {}
 }
 
 extern "x86-interrupt" fn double_fault_handler(
-    stack_frame: &mut InterruptStackFrame,
+    stack_frame: InterruptStackFrame,
     _error_code: u64,
 ) -> ! {
     println!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
@@ -90,7 +90,7 @@ extern "x86-interrupt" fn double_fault_handler(
 }
 
 extern "x86-interrupt" fn page_fault_handler(
-    stack_frame: &mut InterruptStackFrame,
+    stack_frame: InterruptStackFrame,
     error_code: PageFaultErrorCode,
 ) {
     println!("EXCEPTION: PAGE FAULT");
@@ -101,7 +101,7 @@ extern "x86-interrupt" fn page_fault_handler(
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(
-    stack_frame: &mut InterruptStackFrame,
+    stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
     println!("EXCEPTION: GENERAL PROTECTION FAULT");
@@ -110,22 +110,24 @@ extern "x86-interrupt" fn general_protection_fault_handler(
     loop {}
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: &mut InterruptStackFrame) {
+extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
     // Gérer l'interruption du timer
     println!("Timer interrupt");
     
     // Envoyer EOI (End Of Interrupt) au PIC
     unsafe {
-        x86_64::instructions::port::outb(0x20, 0x20);
+        let mut port = x86_64::instructions::port::Port::<u8>::new(0x20);
+        port.write(0x20);
     }
 }
 
-extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: &mut InterruptStackFrame) {
+extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     // Gérer l'interruption du clavier
     println!("Keyboard interrupt");
     
     // Envoyer EOI (End Of Interrupt) au PIC
     unsafe {
-        x86_64::instructions::port::outb(0x20, 0x20);
+        let mut port = x86_64::instructions::port::Port::<u8>::new(0x20);
+        port.write(0x20);
     }
 }

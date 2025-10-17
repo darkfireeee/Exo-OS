@@ -1,6 +1,8 @@
 // src/c_compat/mod.rs
 // Module d'interopérabilité C (FFI)
 
+use crate::println;
+
 // Indique au linker Rust de lier la bibliothèque statique `libc_compat.a`
 // qui est générée par le script `build.rs` à partir des fichiers .c.
 #[link(name = "c_compat", kind = "static")]

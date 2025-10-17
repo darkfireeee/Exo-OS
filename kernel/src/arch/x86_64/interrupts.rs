@@ -1,27 +1,30 @@
 // src/arch/x86_64/interrupts.rs
 // Gestionnaires d'interruptions
 
-use x86_64::instructions::interrupts::{enable, disable};
-use crate::println;
+use x86_64::instructions::interrupts;
 
 /// Initialise les interruptions
 pub fn init() {
-    println!("Initialisation des interruptions...");
+    crate::println!("Initialisation des interruptions...");
     
     // Activer les interruptions
-    enable();
+    unsafe {
+        interrupts::enable();
+    }
     
-    println!("Interruptions activées.");
+    crate::println!("Interruptions activées.");
 }
 
 /// Désactive les interruptions
-pub fn disable() {
-    disable();
+pub fn disable_interrupts() {
+    interrupts::disable();
 }
 
 /// Active les interruptions
-pub fn enable() {
-    enable();
+pub fn enable_interrupts() {
+    unsafe {
+        interrupts::enable();
+    }
 }
 
 /// Exécute une fonction avec les interruptions désactivées
@@ -29,14 +32,5 @@ pub fn without_interrupts<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    // Désactiver les interruptions
-    disable();
-    
-    // Exécuter la fonction
-    let result = f();
-    
-    // Réactiver les interruptions
-    enable();
-    
-    result
+    interrupts::without_interrupts(f)
 }

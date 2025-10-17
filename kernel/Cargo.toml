@@ -1,0 +1,63 @@
+[package]
+name = "exo-kernel"
+version = "0.1.0"
+authors = ["ExoOS Team"]
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+# Dépendances fondamentales no_std
+bitflags = "2.4.1"
+spin = "0.9.8"
+volatile = "0.5.1"
+lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+
+# Allocation mémoire
+linked_list_allocator = "0.10.5"
+
+# Bootloader et mémoire virtuelle
+bootloader = { version = "0.9", features = ["map_physical_memory"] }
+
+# IPC lock-free
+crossbeam-queue = { version = "0.3.11", default-features = false, features = ["alloc"] }
+
+# Structures de données no_std
+hashbrown = { version = "0.14.2", default-features = false, features = ["inline-more"] }
+
+# Cryptographie pour l'audit sécurisé (optionnel)
+sha3 = { version = "0.10.8", default-features = false, optional = true }
+ed25519-dalek = { version = "2.1.1", default-features = false, features = ["fast"], optional = true }
+
+# Sérialisation pour l'IPC (optionnel)
+capnp = { version = "0.18.1", default-features = false, optional = true }
+
+# Dépendances spécifiques à l'architecture
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+x86_64 = "0.14.11"
+raw-cpuid = "10.7.0"
+uart_16550 = "0.2.19"
+pic8259 = "0.10.4"
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+aarch64-cpu = "9.4.0"
+
+[features]
+default = []
+crypto = ["sha3", "ed25519-dalek"]
+serialization = ["capnp"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+debug = false
+strip = true
+
+[build-dependencies]
+cc = "1.0"

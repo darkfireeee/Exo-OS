@@ -10,6 +10,7 @@ use alloc::collections::BTreeMap;
 use spin::Mutex;
 use lazy_static::lazy_static;
 use core::sync::atomic::{AtomicU32, Ordering};
+use crate::println;
 
 lazy_static! {
     /// Registre global des canaux IPC
@@ -65,4 +66,17 @@ pub fn receive_message(channel_id: u32) -> Result<message::Message, &'static str
     } else {
         Err("Canal introuvable")
     }
+}
+
+/// Initialise le système IPC
+pub fn init() {
+    println!("[IPC] Initialisation du système IPC...");
+    
+    // Créer les canaux par défaut
+    let _ = create_channel("kernel", 256);
+    let _ = create_channel("debug", 128);
+    let _ = create_channel("broadcast", 512);
+    let _ = create_channel("log", 256);
+    
+    println!("[IPC] Système IPC initialisé avec 4 canaux par défaut.");
 }

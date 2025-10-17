@@ -6,6 +6,8 @@
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
+use alloc::boxed::Box;
 use spin::Mutex;
 use crate::drivers::{Driver, DriverError, DriverType};
 
@@ -33,7 +35,6 @@ pub enum BlockOperation {
 }
 
 /// Requête d'opération sur un périphérique bloc
-#[derive(Debug)]
 pub struct BlockRequest {
     /// Type d'opération
     pub operation: BlockOperation,
@@ -47,6 +48,10 @@ pub struct BlockRequest {
     pub callback: Option<Box<dyn FnOnce(Result<(), BlockError>) + Send>>,
 }
 
+// Safety: BlockRequest peut être envoyé entre threads car l'utilisateur
+// garantit que le pointeur data reste valide pendant toute la durée de la requête
+unsafe impl Send for BlockRequest {}
+
 /// Erreurs spécifiques aux périphériques bloc
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockError {
@@ -56,6 +61,7 @@ pub enum BlockError {
     Timeout,
     WriteProtected,
     MediaError,
+    OperationNotSupported,
 }
 
 /// Interface pour les périphériques bloc
@@ -252,9 +258,18 @@ impl BlockDevice for GenericBlockDevice {
             return;
         }
         
-        // Traiter les requêtes en attente
-        let mut queue = self.async_queue.lock();
-        while let Some(request) = queue.pop_front() {
+        // Extraire toutes les requêtes de la queue
+        let requests: Vec<BlockRequest> = {
+            let mut queue = self.async_queue.lock();
+            let mut reqs = Vec::new();
+            while let Some(request) = queue.pop_front() {
+                reqs.push(request);
+            }
+            reqs
+        };
+        
+        // Traiter les requêtes (maintenant le lock est libéré)
+        for request in requests {
             let result = match request.operation {
                 BlockOperation::Read => {
                     self.read_sectors(request.sector, request.count, request.data)
@@ -285,14 +300,16 @@ pub fn register_block_device(device: Arc<Mutex<dyn BlockDevice>>) -> Result<u32,
 }
 
 /// Récupère un périphérique bloc par son ID
-pub fn get_block_device(id: u32) -> Option<Arc<Mutex<dyn BlockDevice>>> {
+/// Note: Retourne un Driver générique, le code appelant doit vérifier le type
+pub fn get_block_device(id: u32) -> Option<Arc<Mutex<dyn Driver>>> {
     if let Some(driver) = crate::drivers::DRIVER_MANAGER.lock().get_driver(id) {
         // Vérifier que le pilote est bien un périphérique bloc
-        let d = driver.lock();
-        if d.driver_type() == DriverType::Block {
-            // Le downcast n'est pas possible directement avec les traits objets,
-            // donc nous retournons le pilote générique
-            // Le code appelant devra faire la vérification appropriée
+        let is_block = {
+            let d = driver.lock();
+            d.driver_type() == DriverType::Block
+        };
+        
+        if is_block {
             Some(driver)
         } else {
             None
@@ -303,18 +320,11 @@ pub fn get_block_device(id: u32) -> Option<Arc<Mutex<dyn BlockDevice>>> {
 }
 
 /// Récupère tous les périphériques bloc
-pub fn get_all_block_devices() -> Vec<(u32, Arc<Mutex<dyn BlockDevice>>)> {
-    let mut result = Vec::new();
-    
+/// Note: Retourne des Driver génériques, le code appelant doit vérifier le type
+pub fn get_all_block_devices() -> Vec<(u32, Arc<Mutex<dyn Driver>>)> {
     let drivers = crate::drivers::DRIVER_MANAGER.lock();
     let block_drivers = drivers.get_drivers_by_type(DriverType::Block);
-    
-    for (id, driver) in block_drivers {
-        // Même remarque que pour get_block_device
-        result.push((id, driver));
-    }
-    
-    result
+    block_drivers
 }
 
 /// Traite les requêtes asynchrones pour tous les périphériques bloc
