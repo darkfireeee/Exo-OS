@@ -6,49 +6,79 @@ Cette structure est inspirée de projets industriels et de recherche de pointe, 
 ```
 exo-kernel/
 ├── .cargo/
-│   └── config.toml           # Configuration Cargo pour le noyau
-├── src/
-│   ├── main.rs               # Binaire pour les tests unitaires
-│   ├── lib.rs                # Point d'entrée de la bibliothèque du noyau
-│   ├── arch/
-│   │   ├── mod.rs            # Abstraction d'architecture
+│   └── config.toml                  # Configuration Cargo pour le noyau
+├── build.rs                         # Script de build pour compiler le code C
+├── Cargo.toml                       # Fichier de configuration du projet
+├── x86_64-unknown-none.json         # Cible de compilation personnalisée
+└── linker.ld                        # Script de l'éditeur de liens
+src/
+├── main.rs                          # Binaire pour les tests unitaires
+├── lib.rs                           # Point d'entrée de la bibliothèque du noyau
+├── lib/
+│   ├── mod.rs                       # Déclaration des sous-modules
+│   ├── collections/                 # Structures de données sans allocation
+│   │   ├── mod.rs
+│   │   ├── vec.rs                   # Vecteur simple (no_std)
+│   │   └── string.rs                # Gestion des chaînes de caractères
+│   ├── sync/                        # Primitifs de synchronisation
+│   │   ├── mod.rs
+│   │   ├── mutex.rs                 # Mutex adapté au noyau
+│   │   └── once.rs                  # Initialisation unique
+│   ├── memory/                      # Abstractions mémoire bas niveau
+│   │   ├── mod.rs
+│   │   ├── paging.rs                # Wrappers autour des tables de pages
+│   │   └── address.rs               # Types pour les adresses (Virtuelle/Physique)
+│   ├── arch/                        # Abstractions spécifiques à l'architecture
+│   │   ├── mod.rs
 │   │   └── x86_64/
-│   │       ├── mod.rs        # Module principal pour x86_64
-│   │       ├── boot.asm      # Entrée assembleur (setup minimal)
-│   │       ├── boot.c        # Logique de boot en C (pont vers Rust)
-│   │       ├── gdt.rs        # Global Descriptor Table
-│   │       ├── idt.rs        # Interrupt Descriptor Table
-│   │       └── interrupts.rs # Gestionnaires d'interruptions
-│   ├── c_compat/             # Module d'interopérabilité C (FFI)
-│   │   ├── mod.rs            # Wrappers Rust pour les fonctions C
-│   │   ├── serial.c          # Pilote série simple en C (pour le debug)
-│   │   └── pci.c             # Pilote PCI basique en C (pour la compatibilité)
-│   ├── memory/
-│   │   ├── mod.rs            # Module de gestion mémoire
-│   │   ├── frame_allocator.rs # Allocateur de frames physiques (bitmap)
-│   │   ├── page_table.rs     # Gestion des tables de pages (mémoire virtuelle)
-│   │   └── heap_allocator.rs # Allocateur de tas pour le noyau (buddy system)
-│   ├── scheduler/
-│   │   ├── mod.rs            # Module de l'ordonnanceur
-│   │   ├── thread.rs         # Structure de thread (TCB)
-│   │   ├── scheduler.rs      # Logique de l'ordonnanceur (work-stealing, NUMA-aware)
-│   │   └── context_switch.S # Changement de contexte en assembleur pur
-│   ├── ipc/
-│   │   ├── mod.rs            # Module IPC
-│   │   ├── message.rs        # Structure des messages (rapides, via registres)
-│   │   └── channel.rs        # Canaux lock-free (MPSC queues)
-│   ├── syscall/
-│   │   ├── mod.rs            # Interface des appels système
-│   │   └── dispatch.rs       # Distribution des appels système
-│   └── drivers/
-│       ├── mod.rs            # Abstraction pour les pilotes
-│       └── block/
-│           └── mod.rs        # Interface pour les périphériques bloc
-├── build.rs                  # Script de build pour compiler le code C
-├── Cargo.toml                 # Fichier de configuration du projet
-├── x86_64-unknown-none.json   # Cible de compilation personnalisée
-└── linker.ld                  # Script de l'éditeur de liens
-```
+│   │       ├── mod.rs
+│   │       ├── registers.rs         # Accès aux registres CPU
+│   │       └── interrupts.rs        # Gestion des interruptions
+│   ├── macros/                      # Macros utilitaires
+│   │   ├── mod.rs
+│   │   ├── println.rs               # Macro `kprintln!` pour le debug
+│   │   └── lazy_static.rs           # Version `no_std` de lazy_static
+│   └── ffi/                         # Wrappers sûrs pour les appels C
+│       ├── mod.rs
+│       ├── c_str.rs                 # Gestion des chaînes C
+│       └── va_list.rs               # Support des listes d'arguments variables
+├── arch/
+│   ├── mod.rs                       # Abstraction d'architecture
+│   └── x86_64/
+│       ├── mod.rs
+│       ├── boot.asm                 # Entrée assembleur
+│       ├── boot.c                   # Logique de boot en C
+│       ├── gdt.rs                   # Global Descriptor Table
+│       ├── idt.rs                   # Interrupt Descriptor Table
+│       └── interrupts.rs            # Gestionnaires d'interruptions
+├── c_compat/                        # Interopérabilité C (FFI)
+│   ├── mod.rs
+│   ├── serial.c                     # Pilote série simple
+│   └── pci.c                        # Pilote PCI basique
+├── memory/
+│   ├── mod.rs                       # Module mémoire
+│   ├── frame_allocator.rs           # Allocateur de frames physiques
+│   ├── page_table.rs                # Tables de pages (mémoire virtuelle)
+│   └── heap_allocator.rs            # Allocateur de tas (buddy system)
+├── scheduler/
+│   ├── mod.rs                       # Module de l'ordonnanceur
+│   ├── thread.rs                    # Structure de thread (TCB)
+│   ├── scheduler.rs                 # Logique work-stealing, NUMA-aware
+│   └── context_switch.S             # Changement de contexte (ASM)
+├── sync/
+│   └── mod.rs                       # Primitives de synchronisation
+├── ipc/
+│   ├── mod.rs                       # Module IPC
+│   ├── message.rs                   # Messages rapides via registres
+│   └── channel.rs                   # Canaux lock-free (MPSC queues)
+├── syscall/
+│   ├── mod.rs                       # Interface des appels système
+│   └── dispatch.rs                  # Distribution des appels
+└── drivers/
+    ├── mod.rs                       # Abstraction des pilotes
+    └── block/
+        └── mod.rs                   # Interface périphériques bloc
+
 
 ---
 

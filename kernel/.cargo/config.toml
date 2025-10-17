@@ -4,8 +4,11 @@ target = "x86_64-unknown-none"
 [target.x86_64-unknown-none]
 # Utiliser rust-lld comme linker
 linker = "rust-lld"
-# Passer le script linker comme argument
-rustflags = ["-C", "link-arg=-T../linker.ld"]
+# Passer le script linker comme argument avec chemin absolu depuis la racine du workspace
+rustflags = [
+    "-C", "link-arg=-TC:/Users/Eric/Documents/Exo-OS/linker.ld",
+    "-C", "link-arg=--strip-debug"
+]
 
 [unstable]
 # Construire core et alloc nous-mêmes pour un contrôle total

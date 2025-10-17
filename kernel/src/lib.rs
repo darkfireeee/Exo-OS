@@ -11,12 +11,16 @@ extern crate alloc;
 
 // Modules du noyau
 pub mod arch;
-pub mod c_compat;
+pub mod libutils;  // Bibliothèque de modules réutilisables
+// pub mod c_compat;  // Module C pour serial et PCI - temporairement désactivé (besoin de clang)
 pub mod memory;
 pub mod scheduler;
 pub mod ipc;
 pub mod syscall;
 pub mod drivers;
+
+// Réexportation des macros de libutils
+pub use libutils::macros::*;
 
 use core::panic::PanicInfo;
 
@@ -47,11 +51,8 @@ struct SerialWriter;
 
 impl core::fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for byte in s.bytes() {
-            unsafe {
-                c_compat::serial_write_char(byte);
-            }
-        }
+        // Utiliser le pilote serial Rust
+        drivers::serial::write_str(s);
         Ok(())
     }
 }
@@ -69,7 +70,7 @@ fn alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
     panic!("Allocation error: {:?}", layout);
 }
 
-/// Cette fonction est appelée en cas de panic.
+/// Panic handler pour le noyau
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -79,18 +80,24 @@ fn panic(info: &PanicInfo) -> ! {
     }
 }
 
-/// Point d'entrée principal du noyau Rust
+/// Point d'entrée principal du noyau (appelé depuis main.rs)
 #[no_mangle]
-pub extern "C" fn rust_main() -> ! {
+pub fn kernel_main(boot_info: &'static bootloader::BootInfo) -> ! {
     // Initialiser le port série en premier pour avoir des logs
-    unsafe {
-        c_compat::serial_init();
-    }
+    // Initialiser le serial en premier pour les logs
+    drivers::serial::init();
     
     println!("===========================================");
     println!("  Exo-OS Kernel v0.1.0");
     println!("  Architecture: x86_64");
     println!("===========================================");
+    
+    // Afficher les infos du bootloader
+    println!("[BOOT] Mémoire physique disponible:");
+    let memory_map = &boot_info.memory_map;
+    for region in memory_map.iter() {
+        println!("  Region: {:?} - Size: {} KB", region.region_type, region.range.end_addr() - region.range.start_addr());
+    }
     
     // Initialisation des modules dans l'ordre de dépendance
     println!("[INIT] Architecture x86_64...");
@@ -116,8 +123,9 @@ pub extern "C" fn rust_main() -> ! {
     println!("\n[SUCCESS] Noyau initialisé avec succès!\n");
     
     // Test du système
-    println!("[TEST] Enumération PCI...");
-    c_compat::enumerate_pci();
+    // TODO: Réactiver quand le code C PCI sera recompilé avec clang
+    // println!("[TEST] Enumération PCI...");
+    // c_compat::enumerate_pci();
     
     println!("\n[KERNEL] Entrant dans la boucle principale...");
     

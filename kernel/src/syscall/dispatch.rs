@@ -4,7 +4,7 @@
 //! Chaque fonction est optimisée pour minimiser la latence et maximiser
 //! le débit (> 5M appels/sec).
 
-use crate::c_compat::serial_write_str;
+use crate::println;
 use super::SyscallArgs;
 use crate::scheduler;
 use crate::memory;
@@ -36,18 +36,18 @@ pub fn sys_read(args: SyscallArgs) -> u64 {
     match fd {
         0 => {
             // stdin - Pour l'instant, nous n'avons pas de gestion d'entrée
-            serial_write_str("Read from stdin not implemented\n");
+            println!("Read from stdin not implemented\n");
             0xFFFFFFFFFFFFFFFF  // Erreur
         }
         1 | 2 => {
             // stdout/stderr - Lecture non supportée
-            serial_write_str("Read from stdout/stderr not supported\n");
+            println!("Read from stdout/stderr not supported\n");
             0xFFFFFFFFFFFFFFFF  // Erreur
         }
         _ => {
             // Autres descripteurs - redirection vers le pilote approprié
             // TODO: Implémenter la table des descripteurs de fichiers
-            serial_write_str("File descriptor not implemented\n");
+            println!("File descriptor not implemented\n");
             0xFFFFFFFFFFFFFFFF  // Erreur
         }
     }
@@ -81,7 +81,7 @@ pub fn sys_write(args: SyscallArgs) -> u64 {
             unsafe {
                 for i in 0..count {
                     let c = *buf_ptr.add(i as usize);
-                    crate::c_compat::serial_write_char(c);
+                    crate::drivers::serial::write_char(c);
                 }
             }
             count
@@ -91,7 +91,7 @@ pub fn sys_write(args: SyscallArgs) -> u64 {
             unsafe {
                 for i in 0..count {
                     let c = *buf_ptr.add(i as usize);
-                    crate::c_compat::serial_write_char(c);
+                    crate::drivers::serial::write_char(c);
                 }
             }
             count
@@ -99,7 +99,7 @@ pub fn sys_write(args: SyscallArgs) -> u64 {
         _ => {
             // Autres descripteurs - redirection vers le pilote approprié
             // TODO: Implémenter la table des descripteurs de fichiers
-            serial_write_str("File descriptor not implemented\n");
+            println!("File descriptor not implemented\n");
             0xFFFFFFFFFFFFFFFF  // Erreur
         }
     }
@@ -120,7 +120,7 @@ pub fn sys_open(args: SyscallArgs) -> u64 {
     let mode = args.rdx;
     
     // TODO: Implémenter l'ouverture de fichiers
-    serial_write_str("Open syscall not implemented\n");
+    println!("Open syscall not implemented\n");
     0xFFFFFFFFFFFFFFFF  // Erreur
 }
 
@@ -135,7 +135,7 @@ pub fn sys_close(args: SyscallArgs) -> u64 {
     let fd = args.rdi;
     
     // TODO: Implémenter la fermeture de fichiers
-    serial_write_str("Close syscall not implemented\n");
+    println!("Close syscall not implemented\n");
     0xFFFFFFFFFFFFFFFF  // Erreur
 }
 
@@ -150,7 +150,7 @@ pub fn sys_exit(args: SyscallArgs) -> u64 {
     let exit_code = args.rdi;
     
     // TODO: Implémenter la terminaison de processus
-    serial_write_str("Exit syscall not implemented\n");
+    println!("Exit syscall not implemented\n");
     
     // Pour l'instant, on boucle indéfiniment
     loop {
@@ -182,7 +182,7 @@ pub fn sys_sleep(args: SyscallArgs) -> u64 {
     let ms = args.rdi;
     
     // TODO: Implémenter la mise en pause des threads
-    serial_write_str("Sleep syscall not implemented\n");
+    println!("Sleep syscall not implemented\n");
     0xFFFFFFFFFFFFFFFF  // Erreur
 }
 
@@ -207,7 +207,7 @@ pub fn sys_mmap(args: SyscallArgs) -> u64 {
     let offset = args.r9;
     
     // TODO: Implémenter le mapping mémoire
-    serial_write_str("Mmap syscall not implemented\n");
+    println!("Mmap syscall not implemented\n");
     0xFFFFFFFFFFFFFFFF  // Erreur
 }
 
@@ -224,7 +224,7 @@ pub fn sys_munmap(args: SyscallArgs) -> u64 {
     let length = args.rsi;
     
     // TODO: Implémenter la libération de mapping mémoire
-    serial_write_str("Munmap syscall not implemented\n");
+    println!("Munmap syscall not implemented\n");
     0xFFFFFFFFFFFFFFFF  // Erreur
 }
 
@@ -245,7 +245,7 @@ pub fn sys_clone(args: SyscallArgs) -> u64 {
     let regs_ptr = args.r10;
     
     // TODO: Implémenter le clonage de processus
-    serial_write_str("Clone syscall not implemented\n");
+    println!("Clone syscall not implemented\n");
     0xFFFFFFFFFFFFFFFF  // Erreur
 }
 

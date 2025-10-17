@@ -7,6 +7,9 @@ pub mod gdt;
 pub mod idt;
 pub mod interrupts;
 
+// Réexportation de registers depuis libutils
+pub use crate::libutils::arch::x86_64::registers;
+
 // Note : Les fichiers `boot.asm` et `boot.c` sont des cas spéciaux.
 // - `boot.asm` est un fichier d'assemblage global, lié via le script de l'éditeur de liens.
 //   Il n'a pas besoin d'être déclaré ici.

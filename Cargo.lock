@@ -158,6 +158,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-bootloader"
+version = "0.1.0"
+dependencies = [
+ "bootloader",
+]
+
+[[package]]
 name = "exo-kernel"
 version = "0.1.0"
 dependencies = [

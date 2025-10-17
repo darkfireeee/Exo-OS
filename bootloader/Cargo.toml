@@ -2,10 +2,12 @@
 name = "exo-bootloader"
 version = "0.1.0"
 edition = "2021"
+authors = ["ExoOS Team"]
 
 [dependencies]
-bootloader = "0.11"
+# Utilise bootloader 0.9 pour compatibilité avec notre configuration
+bootloader = { version = "0.9", features = ["map_physical_memory"] }
 
-[[bin]]
-name = "exo-bootloader"
-path = "src/main.rs"
+[lib]
+name = "exo_bootloader"
+path = "src/lib.rs"

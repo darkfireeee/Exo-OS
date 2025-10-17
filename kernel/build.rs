@@ -15,48 +15,36 @@ fn main() {
         return;
     }
 
+    // TODO: Réactiver quand clang sera disponible ou réécrire en Rust
+    // Pour l'instant on utilise uart_16550 pour serial
+    /*
     println!("cargo:rerun-if-changed=src/c_compat/serial.c");
     println!("cargo:rerun-if-changed=src/c_compat/pci.c");
-    println!("cargo:rerun-if-changed=src/arch/x86_64/boot.c");
-    println!("cargo:rerun-if-changed=src/arch/x86_64/boot.asm");
-    println!("cargo:rerun-if-changed=src/scheduler/context_switch.S");
 
-    // Compiler les fichiers C avec cc
+    // Compiler les fichiers C avec cc - configuré pour bare-metal x86_64
     let mut build = cc::Build::new();
     
     build
         .file("src/c_compat/serial.c")
         .file("src/c_compat/pci.c")
-        // Options de compilation pour bare-metal
+        // Options de compilation pour bare-metal x86_64
+        .target(&target)  // Utiliser la cible spécifiée
+        .compiler("clang")  // Utiliser clang au lieu de GCC pour compatibilité avec rust-lld
         .flag("-ffreestanding")
         .flag("-fno-stack-protector")
         .flag("-fno-pic")
         .flag("-mno-red-zone")
+        .flag("-mno-sse")
+        .flag("-mno-sse2")
+        .flag("--target=x86_64-unknown-none")  // Cible explicite pour clang
         .opt_level(2)
         .warnings(true);
-    
-    // Ajouter boot.c s'il existe
-    if std::path::Path::new("src/arch/x86_64/boot.c").exists() {
-        build.file("src/arch/x86_64/boot.c");
-    }
     
     // Compiler la bibliothèque statique
     build.compile("c_compat");
 
-    // Compiler le fichier assembleur context_switch.S s'il existe
-    if std::path::Path::new("src/scheduler/context_switch.S").exists() {
-        cc::Build::new()
-            .file("src/scheduler/context_switch.S")
-            .flag("-ffreestanding")
-            .flag("-fno-pic")
-            .compile("context_switch");
-    }
-
     // Lier les bibliothèques
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=c_compat");
-    
-    if std::path::Path::new("src/scheduler/context_switch.S").exists() {
-        println!("cargo:rustc-link-lib=static=context_switch");
-    }
+    */
 }
