@@ -1,11 +1,14 @@
-# Fichiers Rust : conserver LF
+# For Rust source files
 *.rs text eol=lf
 
-# Fichiers Markdown : conserver LF
+# For Markdown and config files
 *.md text eol=lf
-
-# Fichier linker : conserver LF
+*.toml text eol=lf
+*.cfg text eol=lf
+*.asm text eol=lf
 *.ld text eol=lf
+*.json text eol=lf
+*.ps1 text eol=lf
 
 # Tous les autres fichiers : conversion automatique selon le système
 * text=auto
