@@ -6,13 +6,12 @@ use x86_64::instructions::interrupts;
 /// Initialise les interruptions
 pub fn init() {
     crate::println!("Initialisation des interruptions...");
-    
-    // Activer les interruptions
-    unsafe {
-        interrupts::enable();
-    }
-    
-    crate::println!("Interruptions activées.");
+
+    // NE PAS activer les interruptions immédiatement !
+    // Le PIC doit être initialisé en premier
+    // Les interruptions seront activées manuellement plus tard
+
+    crate::println!("Interruptions configurées (désactivées).");
 }
 
 /// Désactive les interruptions

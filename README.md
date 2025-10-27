@@ -1,10 +1,10 @@
 # Exo-OS — Système d'exploitation intelligent et sécurisé
 
 ![Exo-OS Badge](https://img.shields.io/badge/Exo--OS-Intelligent%20%26%20S%C3%A9curis%C3%A9-blue?style=for-the-badge&logo=shield&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.2.0--dev-green?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-0.1.0--dev-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT%2FApache%202.0-yellow?style=for-the-badge)
-![Architecture](https://img.shields.io/badge/architecture-Microkernel-red?style=for-the-badge)
-![Phase](https://img.shields.io/badge/phase-10%20IPC%20Complete-success?style=for-the-badge)
+![Architecture](https://img.shields.io/badge/architecture-x86__64-red?style=for-the-badge)
+![Bootloader](https://img.shields.io/badge/bootloader-Multiboot2%20%2B%20GRUB-orange?style=for-the-badge)
 
 Salut 👋 et bienvenue sur Exo-OS !
 

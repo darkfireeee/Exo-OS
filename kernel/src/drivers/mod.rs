@@ -145,3 +145,4 @@ pub fn init() {
 // Inclure les implémentations des pilotes spécifiques
 pub mod block;
 pub mod serial;
+pub mod vga_text;

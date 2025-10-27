@@ -9,6 +9,7 @@ pub mod sync;
 // pub mod memory;  // Temporairement désactivé - conflits avec kernel/src/memory
 pub mod arch;
 pub mod macros;
+pub mod display;
 // pub mod ffi;  // Temporairement désactivé
 
 // Réexportations pour un accès facile
@@ -17,4 +18,5 @@ pub use sync::*;
 // pub use memory::*;
 pub use arch::*;
 pub use macros::*;
+pub use display::*;
 // pub use ffi::*;

@@ -1,12 +1,18 @@
 //! Point d'entrée binaire du kernel Exo-OS
+//! Entry point pour Multiboot2
 
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
-use bootloader::BootInfo;
 
-#[no_mangle]
-pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
-    exo_kernel::kernel_main(boot_info);
+use core::panic::PanicInfo;
+
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+	// Affiche le panic sur le port série si possible
+	// (On ne peut pas garantir que drivers::serial est initialisé ici)
+	loop {
+		unsafe { core::arch::asm!("hlt") };
+	}
 }

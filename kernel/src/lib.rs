@@ -80,33 +80,102 @@ fn panic(info: &PanicInfo) -> ! {
     }
 }
 
-/// Point d'entrée principal du noyau (appelé depuis main.rs)
+/// Point d'entrée principal du noyau (appelé depuis bootloader/boot.asm)
+/// 
+/// Arguments passés depuis l'assembleur :
+/// - RDI : pointeur vers la structure d'information multiboot2
+/// - RSI : magic number multiboot2 (0x36d76289)
 #[no_mangle]
-pub fn kernel_main(boot_info: &'static bootloader::BootInfo) -> ! {
+pub extern "C" fn kernel_main(multiboot_info_ptr: u64, multiboot_magic: u32) -> ! {
     // Initialiser le port série en premier pour avoir des logs
-    // Initialiser le serial en premier pour les logs
     drivers::serial::init();
     
     println!("===========================================");
     println!("  Exo-OS Kernel v0.1.0");
     println!("  Architecture: x86_64");
+    println!("  Bootloader: Multiboot2 + GRUB");
     println!("===========================================");
     
-    // Afficher les infos du bootloader
-    println!("[BOOT] Mémoire physique disponible:");
-    let memory_map = &boot_info.memory_map;
-    for region in memory_map.iter() {
-        println!("  Region: {:?} - Size: {} KB", region.region_type, region.range.end_addr() - region.range.start_addr());
+    // Vérifier le magic number multiboot2
+    if multiboot_magic != 0x36d76289 {
+        panic!("Invalid multiboot2 magic number: 0x{:x}", multiboot_magic);
+    }
+    
+    println!("[BOOT] Multiboot2 magic validé: 0x{:x}", multiboot_magic);
+    println!("[BOOT] Multiboot info @ 0x{:x}", multiboot_info_ptr);
+    
+    // Parser les informations multiboot2 avec la nouvelle API
+        let boot_info = unsafe {
+            use multiboot2::{BootInformationHeader, BootInformation};
+            BootInformation::load(multiboot_info_ptr as *const BootInformationHeader)
+                .expect("Failed to load multiboot2 information")
+        };
+    
+    // Afficher les informations de la mémoire et initialiser le heap
+    let mut heap_initialized = false;
+    if let Some(memory_map_tag) = boot_info.memory_map_tag() {
+        let mut total_usable = 0u64;
+        let mut region_count = 0;
+        println!("\n[MEMORY] Carte mémoire:");
+        for area in memory_map_tag.memory_areas() {
+            let start: u64 = area.start_address();
+            let end: u64 = area.end_address();
+            let size = end - start;
+            if area.typ() == multiboot2::MemoryAreaType::Available {
+                total_usable += size;
+                region_count += 1;
+                println!("  0x{:016x} - 0x{:016x} ({} MB) [Disponible]", start, end, size / 1024 / 1024);
+                // Initialise le heap sur la première région disponible
+                if !heap_initialized && size > 1024 * 1024 {
+                    use core::ptr::NonNull;
+                    let heap_start = start as usize + 0x10000; // Laisse 64K pour le boot
+                    let heap_size = (size as usize).saturating_sub(0x10000).min(16 * 1024 * 1024); // max 16 MiB
+                    unsafe {
+                        ALLOCATOR.lock().init(heap_start as *mut u8, heap_size);
+                    }
+                    println!("[MEMORY] Heap initialisé: 0x{:x} - 0x{:x} ({} KB)", heap_start, heap_start + heap_size, heap_size / 1024);
+                    heap_initialized = true;
+                }
+            }
+        }
+        println!("\n  {} régions mémoire utilisables", region_count);
+        println!("  Mémoire utilisable totale: {} MB", total_usable / 1024 / 1024);
+        if !heap_initialized {
+            println!("[WARNING] Heap non initialisé: aucune région mémoire disponible suffisante");
+        }
+    } else {
+        println!("[WARNING] Pas de carte mémoire disponible");
+    }
+    
+    // Afficher les informations sur les modules chargés
+    let mut has_modules = false;
+    for module in boot_info.module_tags() {
+        if !has_modules {
+            println!("\n[BOOT] Modules chargés:");
+            has_modules = true;
+        }
+        println!("  Module @ 0x{:x} - 0x{:x}", 
+            module.start_address(), module.end_address());
+        if let Ok(name) = module.cmdline() {
+            println!("    Nom: {}", name);
+        }
+    }
+    
+    // Afficher les informations du bootloader
+    if let Some(boot_loader_name_tag) = boot_info.boot_loader_name_tag() {
+        if let Ok(name) = boot_loader_name_tag.name() {
+            println!("\n[BOOT] Bootloader: {}", name);
+        }
     }
     
     // Initialisation des modules dans l'ordre de dépendance
-    println!("[INIT] Architecture x86_64...");
+    println!("\n[INIT] Architecture x86_64...");
     arch::init(4); // 4 cores par défaut
     
     println!("[INIT] Gestionnaire de mémoire...");
     // Note: memory::init() nécessite des infos du bootloader
-    // Pour l'instant on skip, à implémenter plus tard
-    // memory::init();
+    // TODO: Implémenter l'initialisation de la mémoire avec les infos multiboot2
+    // memory::init(&boot_info);
     
     println!("[INIT] Ordonnanceur...");
     scheduler::init(4); // 4 CPUs par défaut
@@ -122,11 +191,11 @@ pub fn kernel_main(boot_info: &'static bootloader::BootInfo) -> ! {
     
     println!("\n[SUCCESS] Noyau initialisé avec succès!\n");
     
-    // Test du système
-    // TODO: Réactiver quand le code C PCI sera recompilé avec clang
-    // println!("[TEST] Enumération PCI...");
-    // c_compat::enumerate_pci();
-    
+    // Affichage visuel sur VGA (fallback) pour confirmer que le noyau est actif.
+    // Nous utilisons `libutils::display` pour centraliser cet utilitaire
+    // et éviter la duplication entre différents modules du noyau.
+    libutils::display::write_banner();
+
     println!("\n[KERNEL] Entrant dans la boucle principale...");
     
     // Boucle principale du noyau

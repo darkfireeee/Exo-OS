@@ -23,8 +23,8 @@ lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
 # Allocation mémoire
 linked_list_allocator = "0.10.5"
 
-# Bootloader et mémoire virtuelle
-bootloader = { version = "0.9", features = ["map_physical_memory"] }
+# Multiboot2 pour le parsing des informations de boot
+multiboot2 = "0.22"
 
 # IPC lock-free
 crossbeam-queue = { version = "0.3.11", default-features = false, features = ["alloc"] }

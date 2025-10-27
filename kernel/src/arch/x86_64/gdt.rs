@@ -5,7 +5,7 @@ use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
 
-pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
+pub const DOUBLE_FAULT_IST_INDEX: u16 = 1;
 
 lazy_static::lazy_static! {
     static ref TSS: TaskStateSegment = {
@@ -48,4 +48,8 @@ pub fn init() {
         load_ds(GDT.1.data_selector);
         load_tss(GDT.1.tss_selector);
     }
+    
+    // DEBUG: Afficher les adresses IST pour diagnostic
+    crate::println!("[DEBUG] TSS IST[{}] @ 0x{:x}", DOUBLE_FAULT_IST_INDEX, 
+        TSS.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize].as_u64());
 }

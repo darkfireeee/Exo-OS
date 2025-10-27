@@ -5,8 +5,8 @@ edition = "2021"
 authors = ["ExoOS Team"]
 
 [dependencies]
-# Utilise bootloader 0.9 pour compatibilité avec notre configuration
-bootloader = { version = "0.9", features = ["map_physical_memory"] }
+# Utilise bootloader 0.9 sans map_physical_memory pour éviter les conflits de mapping
+bootloader = "0.9"
 
 [lib]
 name = "exo_bootloader"

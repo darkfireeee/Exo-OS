@@ -1,0 +1,2390 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   C:\Users\Eric\Documents\Exo-OS\kernel\Cargo.toml
+workspace: C:\Users\Eric\Documents\Exo-OS\Cargo.toml
+warning: virtual workspace defaulting to `resolver = "1"` despite one or more workspace members being on edition 2021 which implies `resolver = "2"`
+note: to keep the current resolver, specify `workspace.resolver = "1"` in the workspace root's manifest
+note: to use the edition 2021 resolver, specify `workspace.resolver = "2"` in the workspace root's manifest
+note: for more details see https://doc.rust-lang.org/cargo/reference/resolver.html#resolver-versions
+   0.398769700s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: true }/TargetInner { ..: lib_target("exo_kernel", ["staticlib", "rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\lib.rs", Edition2021) }
+   0.398852800s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\exo-kernel-b374eddf787692ee\test-lib-exo_kernel`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.428684100s  INFO prepare_target{force=false package_id=bitflags v2.9.4 target="bitflags"}: cargo::core::compiler::fingerprint: fingerprint error for bitflags v2.9.4/Check { test: false }/TargetInner { ..: lib_target("bitflags", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\bitflags-2.9.4\\src\\lib.rs", Edition2021) }
+   0.428717500s  INFO prepare_target{force=false package_id=bitflags v2.9.4 target="bitflags"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\bitflags-e5b3c00812d3d00e\lib-bitflags`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.429631500s  INFO prepare_target{force=false package_id=crossbeam-queue v0.3.12 target="crossbeam_queue"}: cargo::core::compiler::fingerprint: fingerprint error for crossbeam-queue v0.3.12/Check { test: false }/TargetInner { ..: lib_target("crossbeam_queue", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\crossbeam-queue-0.3.12\\src\\lib.rs", Edition2021) }
+   0.429661900s  INFO prepare_target{force=false package_id=crossbeam-queue v0.3.12 target="crossbeam_queue"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\crossbeam-queue-d69942509f019c44\lib-crossbeam_queue`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.430465800s  INFO prepare_target{force=false package_id=crossbeam-utils v0.8.21 target="crossbeam_utils"}: cargo::core::compiler::fingerprint: fingerprint error for crossbeam-utils v0.8.21/Check { test: false }/TargetInner { ..: lib_target("crossbeam_utils", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\crossbeam-utils-0.8.21\\src\\lib.rs", Edition2021) }
+   0.430491100s  INFO prepare_target{force=false package_id=crossbeam-utils v0.8.21 target="crossbeam_utils"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\crossbeam-utils-37b0e3bf7c7a3819\lib-crossbeam_utils`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.432565200s  INFO prepare_target{force=false package_id=crossbeam-utils v0.8.21 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for crossbeam-utils v0.8.21/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\crossbeam-utils-0.8.21\\build.rs", Edition2021) }
+   0.432598200s  INFO prepare_target{force=false package_id=crossbeam-utils v0.8.21 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\crossbeam-utils-f26228ddc845ad9d\run-build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_libgit2_prerelease
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: git_midx_writer_dump
+  21: git_filter_source_repo
+  22: git_midx_writer_dump
+  23: BaseThreadInitThunk
+  24: RtlUserThreadStart
+   0.433179000s  INFO prepare_target{force=false package_id=crossbeam-utils v0.8.21 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for crossbeam-utils v0.8.21/Build/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\crossbeam-utils-0.8.21\\build.rs", Edition2021) }
+   0.433211800s  INFO prepare_target{force=false package_id=crossbeam-utils v0.8.21 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\crossbeam-utils-20c867ebae804abb\build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_libgit2_prerelease
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: git_midx_writer_dump
+  21: git_filter_source_repo
+  22: git_midx_writer_dump
+  23: BaseThreadInitThunk
+  24: RtlUserThreadStart
+   0.436471900s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\build.rs", Edition2021) }
+   0.436517100s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\exo-kernel-7e1e56dbbc2b5a80\run-build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.437347600s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Build/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\build.rs", Edition2021) }
+   0.437391500s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\exo-kernel-3f3770cf8dffc507\build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.439025300s  INFO prepare_target{force=false package_id=cc v1.2.41 target="cc"}: cargo::core::compiler::fingerprint: fingerprint error for cc v1.2.41/Build/TargetInner { ..: lib_target("cc", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\cc-1.2.41\\src\\lib.rs", Edition2018) }
+   0.439088100s  INFO prepare_target{force=false package_id=cc v1.2.41 target="cc"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\cc-11a0b1894705db5f\lib-cc`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.441017300s  INFO prepare_target{force=false package_id=find-msvc-tools v0.1.4 target="find_msvc_tools"}: cargo::core::compiler::fingerprint: fingerprint error for find-msvc-tools v0.1.4/Build/TargetInner { ..: lib_target("find_msvc_tools", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\find-msvc-tools-0.1.4\\src\\lib.rs", Edition2018) }
+   0.441068200s  INFO prepare_target{force=false package_id=find-msvc-tools v0.1.4 target="find_msvc_tools"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\find-msvc-tools-86fbb740f87f0494\lib-find_msvc_tools`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_libgit2_prerelease
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: git_midx_writer_dump
+  21: git_filter_source_repo
+  22: git_midx_writer_dump
+  23: BaseThreadInitThunk
+  24: RtlUserThreadStart
+   0.442777800s  INFO prepare_target{force=false package_id=shlex v1.3.0 target="shlex"}: cargo::core::compiler::fingerprint: fingerprint error for shlex v1.3.0/Build/TargetInner { name_inferred: true, ..: lib_target("shlex", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\shlex-1.3.0\\src\\lib.rs", Edition2015) }
+   0.442856000s  INFO prepare_target{force=false package_id=shlex v1.3.0 target="shlex"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\shlex-a918df6411f507de\lib-shlex`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_libgit2_prerelease
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: git_midx_writer_dump
+  21: git_filter_source_repo
+  22: git_midx_writer_dump
+  23: BaseThreadInitThunk
+  24: RtlUserThreadStart
+   0.443649300s  INFO prepare_target{force=false package_id=hashbrown v0.14.5 target="hashbrown"}: cargo::core::compiler::fingerprint: fingerprint error for hashbrown v0.14.5/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("hashbrown", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\hashbrown-0.14.5\\src\\lib.rs", Edition2021) }
+   0.443677100s  INFO prepare_target{force=false package_id=hashbrown v0.14.5 target="hashbrown"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\hashbrown-fadcba3b073a83af\lib-hashbrown`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.444528500s  INFO prepare_target{force=false package_id=lazy_static v1.5.0 target="lazy_static"}: cargo::core::compiler::fingerprint: fingerprint error for lazy_static v1.5.0/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("lazy_static", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\lazy_static-1.5.0\\src\\lib.rs", Edition2015) }
+   0.444554700s  INFO prepare_target{force=false package_id=lazy_static v1.5.0 target="lazy_static"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\lazy_static-5fb8de86b70cf873\lib-lazy_static`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.445298200s  INFO prepare_target{force=false package_id=spin v0.9.8 target="spin"}: cargo::core::compiler::fingerprint: fingerprint error for spin v0.9.8/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("spin", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\spin-0.9.8\\src\\lib.rs", Edition2015) }
+   0.445322000s  INFO prepare_target{force=false package_id=spin v0.9.8 target="spin"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\spin-83eb7ad0364303c9\lib-spin`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.446085300s  INFO prepare_target{force=false package_id=lock_api v0.4.14 target="lock_api"}: cargo::core::compiler::fingerprint: fingerprint error for lock_api v0.4.14/Check { test: false }/TargetInner { ..: lib_target("lock_api", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\lock_api-0.4.14\\src\\lib.rs", Edition2021) }
+   0.446110100s  INFO prepare_target{force=false package_id=lock_api v0.4.14 target="lock_api"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\lock_api-fef8dd7ee88f5508\lib-lock_api`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.446889600s  INFO prepare_target{force=false package_id=scopeguard v1.2.0 target="scopeguard"}: cargo::core::compiler::fingerprint: fingerprint error for scopeguard v1.2.0/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("scopeguard", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\scopeguard-1.2.0\\src\\lib.rs", Edition2015) }
+   0.446916000s  INFO prepare_target{force=false package_id=scopeguard v1.2.0 target="scopeguard"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\scopeguard-0ddf3bfcacbcd354\lib-scopeguard`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_libgit2_prerelease
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: git_midx_writer_dump
+  21: git_filter_source_repo
+  22: git_midx_writer_dump
+  23: BaseThreadInitThunk
+  24: RtlUserThreadStart
+   0.448526600s  INFO prepare_target{force=false package_id=linked_list_allocator v0.10.5 target="linked_list_allocator"}: cargo::core::compiler::fingerprint: fingerprint error for linked_list_allocator v0.10.5/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("linked_list_allocator", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\linked_list_allocator-0.10.5\\src\\lib.rs", Edition2015) }
+   0.448569600s  INFO prepare_target{force=false package_id=linked_list_allocator v0.10.5 target="linked_list_allocator"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\linked_list_allocator-109a0949eec64339\lib-linked_list_allocator`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.449837600s  INFO prepare_target{force=false package_id=spinning_top v0.2.5 target="spinning_top"}: cargo::core::compiler::fingerprint: fingerprint error for spinning_top v0.2.5/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("spinning_top", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\spinning_top-0.2.5\\src\\lib.rs", Edition2018) }
+   0.449877700s  INFO prepare_target{force=false package_id=spinning_top v0.2.5 target="spinning_top"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\spinning_top-efe286c7db686744\lib-spinning_top`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.450914500s  INFO prepare_target{force=false package_id=multiboot2 v0.22.2 target="multiboot2"}: cargo::core::compiler::fingerprint: fingerprint error for multiboot2 v0.22.2/Check { test: false }/TargetInner { ..: lib_target("multiboot2", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\multiboot2-0.22.2\\src\\lib.rs", Edition2021) }
+   0.450947900s  INFO prepare_target{force=false package_id=multiboot2 v0.22.2 target="multiboot2"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\multiboot2-876bb2321939b176\lib-multiboot2`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.451931700s  INFO prepare_target{force=false package_id=derive_more v0.99.20 target="derive_more"}: cargo::core::compiler::fingerprint: fingerprint error for derive_more v0.99.20/Build/TargetInner { for_host: true, proc_macro: true, ..: lib_target("derive_more", ["proc-macro"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\derive_more-0.99.20\\src\\lib.rs", Edition2018) }
+   0.451959300s  INFO prepare_target{force=false package_id=derive_more v0.99.20 target="derive_more"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\derive_more-7fb48249a0261349\lib-derive_more`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.452901400s  INFO prepare_target{force=false package_id=proc-macro2 v1.0.101 target="proc_macro2"}: cargo::core::compiler::fingerprint: fingerprint error for proc-macro2 v1.0.101/Build/TargetInner { ..: lib_target("proc_macro2", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\proc-macro2-1.0.101\\src\\lib.rs", Edition2021) }
+   0.452933800s  INFO prepare_target{force=false package_id=proc-macro2 v1.0.101 target="proc_macro2"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\proc-macro2-7a49637918a447e8\lib-proc_macro2`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.457355000s  INFO prepare_target{force=false package_id=proc-macro2 v1.0.101 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for proc-macro2 v1.0.101/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\proc-macro2-1.0.101\\build.rs", Edition2021) }
+   0.457401900s  INFO prepare_target{force=false package_id=proc-macro2 v1.0.101 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\proc-macro2-9273593b3e504485\run-build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_filter_source_repo
+  16: git_libgit2_prerelease
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: <unknown>
+  21: git_midx_writer_dump
+  22: git_filter_source_repo
+  23: git_midx_writer_dump
+  24: BaseThreadInitThunk
+  25: RtlUserThreadStart
+   0.458470400s  INFO prepare_target{force=false package_id=proc-macro2 v1.0.101 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for proc-macro2 v1.0.101/Build/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\proc-macro2-1.0.101\\build.rs", Edition2021) }
+   0.458509300s  INFO prepare_target{force=false package_id=proc-macro2 v1.0.101 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\proc-macro2-5c3c1520252580a1\build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_filter_source_repo
+  16: git_libgit2_prerelease
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: <unknown>
+  21: git_midx_writer_dump
+  22: git_filter_source_repo
+  23: git_midx_writer_dump
+  24: BaseThreadInitThunk
+  25: RtlUserThreadStart
+   0.459408800s  INFO prepare_target{force=false package_id=unicode-ident v1.0.19 target="unicode_ident"}: cargo::core::compiler::fingerprint: fingerprint error for unicode-ident v1.0.19/Build/TargetInner { ..: lib_target("unicode_ident", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\unicode-ident-1.0.19\\src\\lib.rs", Edition2018) }
+   0.459435000s  INFO prepare_target{force=false package_id=unicode-ident v1.0.19 target="unicode_ident"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\unicode-ident-5648ed4d548d26d2\lib-unicode_ident`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_libgit2_prerelease
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: git_midx_writer_dump
+  21: git_filter_source_repo
+  22: git_midx_writer_dump
+  23: BaseThreadInitThunk
+  24: RtlUserThreadStart
+   0.460273100s  INFO prepare_target{force=false package_id=quote v1.0.41 target="quote"}: cargo::core::compiler::fingerprint: fingerprint error for quote v1.0.41/Build/TargetInner { ..: lib_target("quote", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\quote-1.0.41\\src\\lib.rs", Edition2018) }
+   0.460305600s  INFO prepare_target{force=false package_id=quote v1.0.41 target="quote"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\quote-1fff8fbeb539a568\lib-quote`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.462825700s  INFO prepare_target{force=false package_id=quote v1.0.41 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for quote v1.0.41/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\quote-1.0.41\\build.rs", Edition2018) }
+   0.462857600s  INFO prepare_target{force=false package_id=quote v1.0.41 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\quote-cc12b9de84562156\run-build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_filter_source_repo
+  16: git_libgit2_prerelease
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: <unknown>
+  21: git_midx_writer_dump
+  22: git_filter_source_repo
+  23: git_midx_writer_dump
+  24: BaseThreadInitThunk
+  25: RtlUserThreadStart
+   0.463415700s  INFO prepare_target{force=false package_id=quote v1.0.41 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for quote v1.0.41/Build/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\quote-1.0.41\\build.rs", Edition2018) }
+   0.463438200s  INFO prepare_target{force=false package_id=quote v1.0.41 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\quote-a814a317d90cf3aa\build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_filter_source_repo
+  16: git_libgit2_prerelease
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: <unknown>
+  21: git_midx_writer_dump
+  22: git_filter_source_repo
+  23: git_midx_writer_dump
+  24: BaseThreadInitThunk
+  25: RtlUserThreadStart
+   0.464304800s  INFO prepare_target{force=false package_id=syn v2.0.106 target="syn"}: cargo::core::compiler::fingerprint: fingerprint error for syn v2.0.106/Build/TargetInner { ..: lib_target("syn", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\syn-2.0.106\\src\\lib.rs", Edition2021) }
+   0.464330700s  INFO prepare_target{force=false package_id=syn v2.0.106 target="syn"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\syn-64ba0273491d84de\lib-syn`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.465404200s  INFO prepare_target{force=false package_id=log v0.4.28 target="log"}: cargo::core::compiler::fingerprint: fingerprint error for log v0.4.28/Check { test: false }/TargetInner { ..: lib_target("log", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\log-0.4.28\\src\\lib.rs", Edition2021) }
+   0.465443800s  INFO prepare_target{force=false package_id=log v0.4.28 target="log"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\log-d92cadf34e3d529c\lib-log`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.466583300s  INFO prepare_target{force=false package_id=multiboot2-common v0.1.2 target="multiboot2_common"}: cargo::core::compiler::fingerprint: fingerprint error for multiboot2-common v0.1.2/Check { test: false }/TargetInner { ..: lib_target("multiboot2_common", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\multiboot2-common-0.1.2\\src\\lib.rs", Edition2021) }
+   0.466620900s  INFO prepare_target{force=false package_id=multiboot2-common v0.1.2 target="multiboot2_common"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\multiboot2-common-94757e95897272d1\lib-multiboot2_common`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.467770200s  INFO prepare_target{force=false package_id=ptr_meta v0.2.0 target="ptr_meta"}: cargo::core::compiler::fingerprint: fingerprint error for ptr_meta v0.2.0/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("ptr_meta", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\ptr_meta-0.2.0\\src\\lib.rs", Edition2018) }
+   0.467810700s  INFO prepare_target{force=false package_id=ptr_meta v0.2.0 target="ptr_meta"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\ptr_meta-bd7bb917f5a3e0d3\lib-ptr_meta`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.468812200s  INFO prepare_target{force=false package_id=ptr_meta_derive v0.2.0 target="ptr_meta_derive"}: cargo::core::compiler::fingerprint: fingerprint error for ptr_meta_derive v0.2.0/Build/TargetInner { name_inferred: true, for_host: true, proc_macro: true, ..: lib_target("ptr_meta_derive", ["proc-macro"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\ptr_meta_derive-0.2.0\\src\\lib.rs", Edition2021) }
+   0.468870600s  INFO prepare_target{force=false package_id=ptr_meta_derive v0.2.0 target="ptr_meta_derive"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\ptr_meta_derive-4a373454b131e9be\lib-ptr_meta_derive`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_libgit2_prerelease
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: git_midx_writer_dump
+  21: git_filter_source_repo
+  22: git_midx_writer_dump
+  23: BaseThreadInitThunk
+  24: RtlUserThreadStart
+   0.470185600s  INFO prepare_target{force=false package_id=syn v1.0.109 target="syn"}: cargo::core::compiler::fingerprint: fingerprint error for syn v1.0.109/Build/TargetInner { name_inferred: true, doc_scrape_examples: Disabled, ..: lib_target("syn", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\syn-1.0.109\\src\\lib.rs", Edition2018) }
+   0.470239700s  INFO prepare_target{force=false package_id=syn v1.0.109 target="syn"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\syn-d1be61d32328e18a\lib-syn`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_filter_source_repo
+  16: git_libgit2_prerelease
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: <unknown>
+  21: git_midx_writer_dump
+  22: git_filter_source_repo
+  23: git_midx_writer_dump
+  24: BaseThreadInitThunk
+  25: RtlUserThreadStart
+   0.475809000s  INFO prepare_target{force=false package_id=syn v1.0.109 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for syn v1.0.109/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\syn-1.0.109\\build.rs", Edition2018) }
+   0.475859700s  INFO prepare_target{force=false package_id=syn v1.0.109 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\syn-bb6754ba77727a2a\run-build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_filter_source_repo
+  16: git_filter_source_repo
+  17: git_filter_source_repo
+  18: git_libgit2_prerelease
+  19: <unknown>
+  20: <unknown>
+  21: <unknown>
+  22: <unknown>
+  23: git_midx_writer_dump
+  24: git_filter_source_repo
+  25: git_midx_writer_dump
+  26: BaseThreadInitThunk
+  27: RtlUserThreadStart
+   0.476845800s  INFO prepare_target{force=false package_id=syn v1.0.109 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for syn v1.0.109/Build/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\syn-1.0.109\\build.rs", Edition2018) }
+   0.476878000s  INFO prepare_target{force=false package_id=syn v1.0.109 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\syn-acffac230533695c\build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_filter_source_repo
+  16: git_filter_source_repo
+  17: git_filter_source_repo
+  18: git_libgit2_prerelease
+  19: <unknown>
+  20: <unknown>
+  21: <unknown>
+  22: <unknown>
+  23: git_midx_writer_dump
+  24: git_filter_source_repo
+  25: git_midx_writer_dump
+  26: BaseThreadInitThunk
+  27: RtlUserThreadStart
+   0.477901400s  INFO prepare_target{force=false package_id=uefi-raw v0.5.2 target="uefi_raw"}: cargo::core::compiler::fingerprint: fingerprint error for uefi-raw v0.5.2/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("uefi_raw", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\uefi-raw-0.5.2\\src\\lib.rs", Edition2021) }
+   0.477929200s  INFO prepare_target{force=false package_id=uefi-raw v0.5.2 target="uefi_raw"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\uefi-raw-ddd57362a1fac8b0\lib-uefi_raw`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.479352400s  INFO prepare_target{force=false package_id=uguid v2.2.1 target="uguid"}: cargo::core::compiler::fingerprint: fingerprint error for uguid v2.2.1/Check { test: false }/TargetInner { ..: lib_target("uguid", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\uguid-2.2.1\\src\\lib.rs", Edition2021) }
+   0.479393500s  INFO prepare_target{force=false package_id=uguid v2.2.1 target="uguid"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\uguid-371808592449b94a\lib-uguid`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.480607900s  INFO prepare_target{force=false package_id=pic8259 v0.10.4 target="pic8259"}: cargo::core::compiler::fingerprint: fingerprint error for pic8259 v0.10.4/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("pic8259", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\pic8259-0.10.4\\src\\lib.rs", Edition2018) }
+   0.480653000s  INFO prepare_target{force=false package_id=pic8259 v0.10.4 target="pic8259"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\pic8259-50dd0fd076da2e27\lib-pic8259`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.481939600s  INFO prepare_target{force=false package_id=x86_64 v0.14.13 target="x86_64"}: cargo::core::compiler::fingerprint: fingerprint error for x86_64 v0.14.13/Check { test: false }/TargetInner { ..: lib_target("x86_64", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\x86_64-0.14.13\\src\\lib.rs", Edition2018) }
+   0.481995900s  INFO prepare_target{force=false package_id=x86_64 v0.14.13 target="x86_64"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\x86_64-00fdb6a7b79028d2\lib-x86_64`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.483511700s  INFO prepare_target{force=false package_id=bit_field v0.10.3 target="bit_field"}: cargo::core::compiler::fingerprint: fingerprint error for bit_field v0.10.3/Check { test: false }/TargetInner { ..: lib_target("bit_field", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\bit_field-0.10.3\\src\\lib.rs", Edition2015) }
+   0.483556500s  INFO prepare_target{force=false package_id=bit_field v0.10.3 target="bit_field"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\bit_field-ca244f006659aa91\lib-bit_field`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.484803800s  INFO prepare_target{force=false package_id=rustversion v1.0.22 target="rustversion"}: cargo::core::compiler::fingerprint: fingerprint error for rustversion v1.0.22/Build/TargetInner { for_host: true, proc_macro: true, ..: lib_target("rustversion", ["proc-macro"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustversion-1.0.22\\src\\lib.rs", Edition2018) }
+   0.484846300s  INFO prepare_target{force=false package_id=rustversion v1.0.22 target="rustversion"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\rustversion-c5e1b2863daba62c\lib-rustversion`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.489139800s  INFO prepare_target{force=false package_id=rustversion v1.0.22 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for rustversion v1.0.22/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustversion-1.0.22\\build\\build.rs", Edition2018) }
+   0.489200800s  INFO prepare_target{force=false package_id=rustversion v1.0.22 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\rustversion-f2c4f83a9e90c0e4\run-build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_filter_source_repo
+  16: git_libgit2_prerelease
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: <unknown>
+  21: git_midx_writer_dump
+  22: git_filter_source_repo
+  23: git_midx_writer_dump
+  24: BaseThreadInitThunk
+  25: RtlUserThreadStart
+   0.490341000s  INFO prepare_target{force=false package_id=rustversion v1.0.22 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for rustversion v1.0.22/Build/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustversion-1.0.22\\build\\build.rs", Edition2018) }
+   0.490393200s  INFO prepare_target{force=false package_id=rustversion v1.0.22 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\rustversion-04709b9a17c124b6\build-script-build-script-build`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_filter_source_repo
+  16: git_libgit2_prerelease
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: <unknown>
+  21: git_midx_writer_dump
+  22: git_filter_source_repo
+  23: git_midx_writer_dump
+  24: BaseThreadInitThunk
+  25: RtlUserThreadStart
+   0.492455800s  INFO prepare_target{force=false package_id=volatile v0.4.6 target="volatile"}: cargo::core::compiler::fingerprint: fingerprint error for volatile v0.4.6/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("volatile", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\volatile-0.4.6\\src\\lib.rs", Edition2015) }
+   0.492504600s  INFO prepare_target{force=false package_id=volatile v0.4.6 target="volatile"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\volatile-eeb9e226a36ccf76\lib-volatile`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.493702300s  INFO prepare_target{force=false package_id=raw-cpuid v10.7.0 target="raw_cpuid"}: cargo::core::compiler::fingerprint: fingerprint error for raw-cpuid v10.7.0/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("raw_cpuid", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\raw-cpuid-10.7.0\\src\\lib.rs", Edition2018) }
+   0.493745400s  INFO prepare_target{force=false package_id=raw-cpuid v10.7.0 target="raw_cpuid"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\raw-cpuid-afd24e0e118e04e7\lib-raw_cpuid`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.494652100s  INFO prepare_target{force=false package_id=bitflags v1.3.2 target="bitflags"}: cargo::core::compiler::fingerprint: fingerprint error for bitflags v1.3.2/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("bitflags", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\bitflags-1.3.2\\src\\lib.rs", Edition2018) }
+   0.494678600s  INFO prepare_target{force=false package_id=bitflags v1.3.2 target="bitflags"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\bitflags-5ae31dde6af2a664\lib-bitflags`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.495391300s  INFO prepare_target{force=false package_id=uart_16550 v0.2.19 target="uart_16550"}: cargo::core::compiler::fingerprint: fingerprint error for uart_16550 v0.2.19/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("uart_16550", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\uart_16550-0.2.19\\src\\lib.rs", Edition2018) }
+   0.495415100s  INFO prepare_target{force=false package_id=uart_16550 v0.2.19 target="uart_16550"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\uart_16550-9e437f7e8cc95c3f\lib-uart_16550`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.496176600s  INFO prepare_target{force=false package_id=volatile v0.5.4 target="volatile"}: cargo::core::compiler::fingerprint: fingerprint error for volatile v0.5.4/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("volatile", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\volatile-0.5.4\\src\\lib.rs", Edition2021) }
+   0.496200900s  INFO prepare_target{force=false package_id=volatile v0.5.4 target="volatile"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\volatile-ca9c904035a27b81\lib-volatile`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.498677700s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: false }/TargetInner { ..: lib_target("exo_kernel", ["staticlib", "rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\lib.rs", Edition2021) }
+   0.498709500s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\exo-kernel-b36872bcf09611c5\lib-exo_kernel`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.499650100s  INFO prepare_target{force=false package_id=bitflags v2.9.4 target="bitflags"}: cargo::core::compiler::fingerprint: fingerprint error for bitflags v2.9.4/Check { test: false }/TargetInner { ..: lib_target("bitflags", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\bitflags-2.9.4\\src\\lib.rs", Edition2021) }
+   0.499678200s  INFO prepare_target{force=false package_id=bitflags v2.9.4 target="bitflags"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\bitflags-78cc001b27858fbe\lib-bitflags`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.500528200s  INFO prepare_target{force=false package_id=crossbeam-queue v0.3.12 target="crossbeam_queue"}: cargo::core::compiler::fingerprint: fingerprint error for crossbeam-queue v0.3.12/Check { test: false }/TargetInner { ..: lib_target("crossbeam_queue", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\crossbeam-queue-0.3.12\\src\\lib.rs", Edition2021) }
+   0.500560800s  INFO prepare_target{force=false package_id=crossbeam-queue v0.3.12 target="crossbeam_queue"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\crossbeam-queue-39e13231231ce72f\lib-crossbeam_queue`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.501417100s  INFO prepare_target{force=false package_id=crossbeam-utils v0.8.21 target="crossbeam_utils"}: cargo::core::compiler::fingerprint: fingerprint error for crossbeam-utils v0.8.21/Check { test: false }/TargetInner { ..: lib_target("crossbeam_utils", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\crossbeam-utils-0.8.21\\src\\lib.rs", Edition2021) }
+   0.501448100s  INFO prepare_target{force=false package_id=crossbeam-utils v0.8.21 target="crossbeam_utils"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\crossbeam-utils-9422f96a85e91547\lib-crossbeam_utils`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.502252400s  INFO prepare_target{force=false package_id=hashbrown v0.14.5 target="hashbrown"}: cargo::core::compiler::fingerprint: fingerprint error for hashbrown v0.14.5/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("hashbrown", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\hashbrown-0.14.5\\src\\lib.rs", Edition2021) }
+   0.502279200s  INFO prepare_target{force=false package_id=hashbrown v0.14.5 target="hashbrown"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\hashbrown-3ae69fd414393cce\lib-hashbrown`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.503003600s  INFO prepare_target{force=false package_id=lazy_static v1.5.0 target="lazy_static"}: cargo::core::compiler::fingerprint: fingerprint error for lazy_static v1.5.0/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("lazy_static", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\lazy_static-1.5.0\\src\\lib.rs", Edition2015) }
+   0.503029400s  INFO prepare_target{force=false package_id=lazy_static v1.5.0 target="lazy_static"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\lazy_static-5a787f2f4c9a1f67\lib-lazy_static`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.503829000s  INFO prepare_target{force=false package_id=spin v0.9.8 target="spin"}: cargo::core::compiler::fingerprint: fingerprint error for spin v0.9.8/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("spin", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\spin-0.9.8\\src\\lib.rs", Edition2015) }
+   0.503905900s  INFO prepare_target{force=false package_id=spin v0.9.8 target="spin"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\spin-27c72c6f6dd70292\lib-spin`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.506584100s  INFO prepare_target{force=false package_id=lock_api v0.4.14 target="lock_api"}: cargo::core::compiler::fingerprint: fingerprint error for lock_api v0.4.14/Check { test: false }/TargetInner { ..: lib_target("lock_api", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\lock_api-0.4.14\\src\\lib.rs", Edition2021) }
+   0.506691100s  INFO prepare_target{force=false package_id=lock_api v0.4.14 target="lock_api"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\lock_api-15fb43c197ecc174\lib-lock_api`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.508655800s  INFO prepare_target{force=false package_id=scopeguard v1.2.0 target="scopeguard"}: cargo::core::compiler::fingerprint: fingerprint error for scopeguard v1.2.0/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("scopeguard", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\scopeguard-1.2.0\\src\\lib.rs", Edition2015) }
+   0.508748800s  INFO prepare_target{force=false package_id=scopeguard v1.2.0 target="scopeguard"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\scopeguard-55ec9e1fbbfdf76d\lib-scopeguard`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_libgit2_prerelease
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: git_midx_writer_dump
+  21: git_filter_source_repo
+  22: git_midx_writer_dump
+  23: BaseThreadInitThunk
+  24: RtlUserThreadStart
+   0.510394300s  INFO prepare_target{force=false package_id=linked_list_allocator v0.10.5 target="linked_list_allocator"}: cargo::core::compiler::fingerprint: fingerprint error for linked_list_allocator v0.10.5/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("linked_list_allocator", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\linked_list_allocator-0.10.5\\src\\lib.rs", Edition2015) }
+   0.510468000s  INFO prepare_target{force=false package_id=linked_list_allocator v0.10.5 target="linked_list_allocator"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\linked_list_allocator-c86a5c6fac5229f4\lib-linked_list_allocator`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.511823200s  INFO prepare_target{force=false package_id=spinning_top v0.2.5 target="spinning_top"}: cargo::core::compiler::fingerprint: fingerprint error for spinning_top v0.2.5/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("spinning_top", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\spinning_top-0.2.5\\src\\lib.rs", Edition2018) }
+   0.511884000s  INFO prepare_target{force=false package_id=spinning_top v0.2.5 target="spinning_top"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\spinning_top-774f7c81b5ab18c5\lib-spinning_top`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.513708400s  INFO prepare_target{force=false package_id=multiboot2 v0.22.2 target="multiboot2"}: cargo::core::compiler::fingerprint: fingerprint error for multiboot2 v0.22.2/Check { test: false }/TargetInner { ..: lib_target("multiboot2", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\multiboot2-0.22.2\\src\\lib.rs", Edition2021) }
+   0.513760800s  INFO prepare_target{force=false package_id=multiboot2 v0.22.2 target="multiboot2"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\multiboot2-640e8f53ca08dd35\lib-multiboot2`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.515301100s  INFO prepare_target{force=false package_id=log v0.4.28 target="log"}: cargo::core::compiler::fingerprint: fingerprint error for log v0.4.28/Check { test: false }/TargetInner { ..: lib_target("log", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\log-0.4.28\\src\\lib.rs", Edition2021) }
+   0.515352300s  INFO prepare_target{force=false package_id=log v0.4.28 target="log"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\log-603b7e8dae63d9b4\lib-log`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.516762100s  INFO prepare_target{force=false package_id=multiboot2-common v0.1.2 target="multiboot2_common"}: cargo::core::compiler::fingerprint: fingerprint error for multiboot2-common v0.1.2/Check { test: false }/TargetInner { ..: lib_target("multiboot2_common", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\multiboot2-common-0.1.2\\src\\lib.rs", Edition2021) }
+   0.516812200s  INFO prepare_target{force=false package_id=multiboot2-common v0.1.2 target="multiboot2_common"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\multiboot2-common-c03ca3d94e8289e7\lib-multiboot2_common`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.518259400s  INFO prepare_target{force=false package_id=ptr_meta v0.2.0 target="ptr_meta"}: cargo::core::compiler::fingerprint: fingerprint error for ptr_meta v0.2.0/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("ptr_meta", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\ptr_meta-0.2.0\\src\\lib.rs", Edition2018) }
+   0.518304600s  INFO prepare_target{force=false package_id=ptr_meta v0.2.0 target="ptr_meta"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\ptr_meta-ec7817715fbefb04\lib-ptr_meta`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.519315900s  INFO prepare_target{force=false package_id=uefi-raw v0.5.2 target="uefi_raw"}: cargo::core::compiler::fingerprint: fingerprint error for uefi-raw v0.5.2/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("uefi_raw", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\uefi-raw-0.5.2\\src\\lib.rs", Edition2021) }
+   0.519346800s  INFO prepare_target{force=false package_id=uefi-raw v0.5.2 target="uefi_raw"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\uefi-raw-06b47a648d208471\lib-uefi_raw`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.520655000s  INFO prepare_target{force=false package_id=uguid v2.2.1 target="uguid"}: cargo::core::compiler::fingerprint: fingerprint error for uguid v2.2.1/Check { test: false }/TargetInner { ..: lib_target("uguid", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\uguid-2.2.1\\src\\lib.rs", Edition2021) }
+   0.520729300s  INFO prepare_target{force=false package_id=uguid v2.2.1 target="uguid"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\uguid-9f133ee61fc11f09\lib-uguid`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.522442200s  INFO prepare_target{force=false package_id=pic8259 v0.10.4 target="pic8259"}: cargo::core::compiler::fingerprint: fingerprint error for pic8259 v0.10.4/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("pic8259", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\pic8259-0.10.4\\src\\lib.rs", Edition2018) }
+   0.522494900s  INFO prepare_target{force=false package_id=pic8259 v0.10.4 target="pic8259"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\pic8259-99e534db3194567c\lib-pic8259`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.524567500s  INFO prepare_target{force=false package_id=x86_64 v0.14.13 target="x86_64"}: cargo::core::compiler::fingerprint: fingerprint error for x86_64 v0.14.13/Check { test: false }/TargetInner { ..: lib_target("x86_64", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\x86_64-0.14.13\\src\\lib.rs", Edition2018) }
+   0.524734400s  INFO prepare_target{force=false package_id=x86_64 v0.14.13 target="x86_64"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\x86_64-46daf5bf50963c76\lib-x86_64`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.526523100s  INFO prepare_target{force=false package_id=bit_field v0.10.3 target="bit_field"}: cargo::core::compiler::fingerprint: fingerprint error for bit_field v0.10.3/Check { test: false }/TargetInner { ..: lib_target("bit_field", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\bit_field-0.10.3\\src\\lib.rs", Edition2015) }
+   0.526575300s  INFO prepare_target{force=false package_id=bit_field v0.10.3 target="bit_field"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\bit_field-93fd0f3b9a331931\lib-bit_field`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.527871400s  INFO prepare_target{force=false package_id=volatile v0.4.6 target="volatile"}: cargo::core::compiler::fingerprint: fingerprint error for volatile v0.4.6/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("volatile", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\volatile-0.4.6\\src\\lib.rs", Edition2015) }
+   0.527915600s  INFO prepare_target{force=false package_id=volatile v0.4.6 target="volatile"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\volatile-4e9748e62eebb62d\lib-volatile`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_libgit2_prerelease
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: git_midx_writer_dump
+  20: git_filter_source_repo
+  21: git_midx_writer_dump
+  22: BaseThreadInitThunk
+  23: RtlUserThreadStart
+   0.528978200s  INFO prepare_target{force=false package_id=raw-cpuid v10.7.0 target="raw_cpuid"}: cargo::core::compiler::fingerprint: fingerprint error for raw-cpuid v10.7.0/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("raw_cpuid", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\raw-cpuid-10.7.0\\src\\lib.rs", Edition2018) }
+   0.529028100s  INFO prepare_target{force=false package_id=raw-cpuid v10.7.0 target="raw_cpuid"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\raw-cpuid-3df16ef757d05e10\lib-raw_cpuid`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.530221900s  INFO prepare_target{force=false package_id=bitflags v1.3.2 target="bitflags"}: cargo::core::compiler::fingerprint: fingerprint error for bitflags v1.3.2/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("bitflags", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\bitflags-1.3.2\\src\\lib.rs", Edition2018) }
+   0.530254600s  INFO prepare_target{force=false package_id=bitflags v1.3.2 target="bitflags"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\bitflags-b7700e73f60761da\lib-bitflags`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.531198400s  INFO prepare_target{force=false package_id=uart_16550 v0.2.19 target="uart_16550"}: cargo::core::compiler::fingerprint: fingerprint error for uart_16550 v0.2.19/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("uart_16550", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\uart_16550-0.2.19\\src\\lib.rs", Edition2018) }
+   0.531228900s  INFO prepare_target{force=false package_id=uart_16550 v0.2.19 target="uart_16550"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\uart_16550-4663595f0ad31c6d\lib-uart_16550`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.532123300s  INFO prepare_target{force=false package_id=volatile v0.5.4 target="volatile"}: cargo::core::compiler::fingerprint: fingerprint error for volatile v0.5.4/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("volatile", ["lib"], "C:\\Users\\Eric\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\volatile-0.5.4\\src\\lib.rs", Edition2021) }
+   0.532158000s  INFO prepare_target{force=false package_id=volatile v0.5.4 target="volatile"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\volatile-767feaa1c57502bc\lib-volatile`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.533624200s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: true }/TargetInner { name: "exo-kernel", doc: true, ..: with_path("C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\main.rs", Edition2021) }
+   0.533667500s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\exo-kernel-c65f43f146df4f47\test-bin-exo-kernel`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.534802800s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: false }/TargetInner { ..: lib_target("exo_kernel", ["staticlib", "rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\lib.rs", Edition2021) }
+   0.534853100s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\exo-kernel-f84b8c6e69be407d\lib-exo_kernel`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.536376300s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: false }/TargetInner { name: "exo-kernel", doc: true, ..: with_path("C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\main.rs", Edition2021) }
+   0.536415500s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\exo-kernel-b4983a9b7128b4d5\bin-exo-kernel`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.539045200s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="basic_boot"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: true }/TargetInner { kind: "test", name: "basic_boot", benched: false, ..: with_path("C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\tests\\basic_boot.rs", Edition2021) }
+   0.539220500s  INFO prepare_target{force=false package_id=exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="basic_boot"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\debug\.fingerprint\exo-kernel-9940ded53daed039\test-integration-test-basic_boot`
+
+Caused by:
+    Le fichier spécifié est introuvable. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   Compiling proc-macro2 v1.0.101
+   Compiling quote v1.0.41
+   Compiling unicode-ident v1.0.19
+   Compiling syn v1.0.109
+   Compiling rustversion v1.0.22
+   Compiling crossbeam-utils v0.8.21
+    Checking scopeguard v1.2.0
+    Checking bitflags v2.9.4
+   Compiling find-msvc-tools v0.1.4
+   Compiling shlex v1.3.0
+    Checking lock_api v0.4.14
+    Checking volatile v0.4.6
+    Checking bit_field v0.10.3
+   Compiling cc v1.2.41
+    Checking uguid v2.2.1
+   Compiling exo-kernel v0.1.0 (C:\Users\Eric\Documents\Exo-OS\kernel)
+    Checking bitflags v1.3.2
+    Checking spinning_top v0.2.5
+    Checking spin v0.9.8
+    Checking log v0.4.28
+    Checking linked_list_allocator v0.10.5
+    Checking lazy_static v1.5.0
+    Checking crossbeam-queue v0.3.12
+    Checking raw-cpuid v10.7.0
+    Checking hashbrown v0.14.5
+    Checking volatile v0.5.4
+warning: exo-kernel@0.1.0: Skipping C compilation for non-kernel target: x86_64-pc-windows-msvc
+    Checking x86_64 v0.14.13
+   Compiling syn v2.0.106
+    Checking pic8259 v0.10.4
+    Checking uart_16550 v0.2.19
+   Compiling derive_more v0.99.20
+   Compiling ptr_meta_derive v0.2.0
+    Checking ptr_meta v0.2.0
+    Checking uefi-raw v0.5.2
+    Checking multiboot2-common v0.1.2
+    Checking multiboot2 v0.22.2
+warning: exo-kernel@0.1.0: Skipping C compilation for non-kernel target: x86_64-pc-windows-msvc
+error: could not compile `exo-kernel` (lib test) due to 1 previous error; 50 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: exo-kernel@0.1.0: Skipping C compilation for non-kernel target: x86_64-pc-windows-msvc
+error: could not compile `exo-kernel` (lib) due to 1 previous error; 49 warnings emitted

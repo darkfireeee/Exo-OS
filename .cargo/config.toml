@@ -1,0 +1,5 @@
+[target.x86_64-unknown-none]
+linker = "ld"
+rustflags = [
+    "-C", "link-arg=-T/mnt/c/Users/Eric/Documents/Exo-OS/linker.ld"
+]

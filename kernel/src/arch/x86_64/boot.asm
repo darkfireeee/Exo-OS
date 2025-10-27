@@ -166,6 +166,19 @@ long_mode_start:
     mov fs, ax
     mov gs, ax
     
+    ; Configurer la pile 64-bit avant d'appeler Rust
+    mov rsp, stack_top
+    xor rbp, rbp
+    
+    ; DEBUG: Vérifier que la pile est bien configurée
+    ; On ne peut pas utiliser println! ici car le noyau n'est pas encore initialisé
+    ; On va écrire directement sur la console VGA pour vérifier
+    mov rax, 0xB8000      ; Adresse du buffer VGA
+    mov rbx, 'S'          ; Caractère à afficher
+    mov rcx, 0x0F00       ; Couleur (blanc sur noir)
+    mov [rax], rbx        ; Écrire le caractère
+    mov [rax+2], rcx      ; Écrire la couleur
+    
     ; Appeler le point d'entrée Rust
     call rust_main
     

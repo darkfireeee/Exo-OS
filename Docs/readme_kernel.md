@@ -457,4 +457,3 @@ Memory manager initialized.
 ...
 ```
 
-Cette structure hybride vous donne le meilleur des deux mondes : la performance et le contrôle du C et de l'assembleur pour les interactions matérielles, et la sécurité et la productivité de Rust pour la logique complexe du noyau. C'est la voie royale pour un OS moderne visant l'excellence.

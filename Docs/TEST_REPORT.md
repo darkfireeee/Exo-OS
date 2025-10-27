@@ -133,6 +133,7 @@ scoop install qemu
 #### 2. Tester le Boot 🧪
 ```powershell
 .\test-qemu.ps1
+wsl bash -lc "cd /mnt/c/Users/Eric/Documents/Exo-OS && ./scripts/run-qemu.sh 2>&1 | sed -n '1,260p'"     
 # OU
 cd kernel
 cargo bootimage --run
@@ -320,3 +321,5 @@ Le kernel **Exo-OS compile avec succès** avec 0 erreurs. Les 42 warnings sont n
 **Dernière mise à jour**: 17 octobre 2025  
 **Auteur**: GitHub Copilot  
 **Version Kernel**: 0.1.0
+
+wsl bash -lc "cd /mnt/c/Users/Eric/Documents/Exo-OS && ./scripts/run-qemu.sh 2>&1 | sed -n '1,260p'"

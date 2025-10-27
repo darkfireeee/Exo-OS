@@ -1,0 +1,10 @@
+C:\Users\Eric\Documents\Exo-OS\target\debug\deps\multiboot2_common-c03ca3d94e8289e7.d: C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\lib.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\test_utils.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\boxed.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\bytes_ref.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\iter.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\tag.rs
+
+C:\Users\Eric\Documents\Exo-OS\target\debug\deps\libmultiboot2_common-c03ca3d94e8289e7.rmeta: C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\lib.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\test_utils.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\boxed.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\bytes_ref.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\iter.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\tag.rs
+
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\lib.rs:
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\test_utils.rs:
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\boxed.rs:
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\bytes_ref.rs:
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\iter.rs:
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multiboot2-common-0.1.2\src\tag.rs:
