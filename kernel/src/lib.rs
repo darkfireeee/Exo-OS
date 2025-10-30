@@ -12,12 +12,13 @@ extern crate alloc;
 // Modules du noyau
 pub mod arch;
 pub mod libutils;  // Bibliothèque de modules réutilisables
-// pub mod c_compat;  // Module C pour serial et PCI - temporairement désactivé (besoin de clang)
+pub mod c_compat;  // Module C pour serial et PCI - réactivé pour le port série
 pub mod memory;
 pub mod scheduler;
 pub mod ipc;
 pub mod syscall;
 pub mod drivers;
+pub mod perf_counters;  // Module de mesure de performance
 
 // Réexportation des macros de libutils
 pub use libutils::macros::*;
@@ -173,9 +174,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: u64, multiboot_magic: u32) -> 
     arch::init(4); // 4 cores par défaut
     
     println!("[INIT] Gestionnaire de mémoire...");
-    // Note: memory::init() nécessite des infos du bootloader
-    // TODO: Implémenter l'initialisation de la mémoire avec les infos multiboot2
-    // memory::init(&boot_info);
+    memory::init(&boot_info);
     
     println!("[INIT] Ordonnanceur...");
     scheduler::init(4); // 4 CPUs par défaut
@@ -189,14 +188,22 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: u64, multiboot_magic: u32) -> 
     println!("[INIT] Pilotes...");
     drivers::init();
     
+    // Initialiser le système de mesure de performance
+    println!("[PERF] Initialisation des compteurs de performance...");
+    perf_counters::PERF_MANAGER.reset();
+    println!("[PERF] Système de performance initialisé.");
+    
     println!("\n[SUCCESS] Noyau initialisé avec succès!\n");
     
-    // Affichage visuel sur VGA (fallback) pour confirmer que le noyau est actif.
-    // Nous utilisons `libutils::display` pour centraliser cet utilitaire
-    // et éviter la duplication entre différents modules du noyau.
+    // Affichage visuel sur VGA pour confirmer que le noyau est actif
+    println!("[DISPLAY] Écriture du banner VGA...");
     libutils::display::write_banner();
+    println!("[DISPLAY] Banner VGA écrit avec succès");
 
     println!("\n[KERNEL] Entrant dans la boucle principale...");
+    
+    // Afficher un rapport de performance au démarrage
+    crate::perf_counters::print_summary_report();
     
     // Boucle principale du noyau
     loop {

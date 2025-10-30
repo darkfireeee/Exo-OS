@@ -1,7 +1,26 @@
 // src/c_compat/serial.c
 // Pilote série simple en C (pour le debug)
 
+// Configuration pour le code kernel freestanding
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Wattributes"
+#endif
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wattributes"
+#endif
+
 #include <stddef.h>
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
 
 // Adresse de base du port série COM1
 #define SERIAL_COM1_BASE 0x3F8
@@ -37,7 +56,7 @@ void serial_configure_line(unsigned short com) {
 }
 
 // Initialise le port série
-void serial_init() {
+void serial_init(void) {
     // Désactiver les interruptions
     outb(SERIAL_MODEM_CMD_REG(SERIAL_COM1_BASE), 0x00);
     // Configurer le baud rate à 38400
@@ -49,9 +68,34 @@ void serial_init() {
 // Écrit un caractère sur le port série
 void serial_write_char(unsigned char c) {
     // Attendre que le transmit buffer soit vide
-    while ( (inb(SERIAL_LINE_STATUS_REG(SERIAL_COM1_BASE)) & 0x20) == 0 ) {
+    while ((inb(SERIAL_LINE_STATUS_REG(SERIAL_COM1_BASE)) & 0x20) == 0) {
         // Attendre
     }
     // Écrire le caractère
     outb(SERIAL_DATA_REG(SERIAL_COM1_BASE), c);
 }
+
+// Fonction de panic pour le code C
+void c_panic(const char* msg) {
+    // Écrire le message de panic sur le port série
+    if (msg) {
+        const char* p = msg;
+        while (*p) {
+            serial_write_char(*p);
+            p++;
+        }
+        serial_write_char('\n');
+    }
+    
+    // Boucle infinie
+    while (1) {
+        __asm__ volatile("hlt");
+    }
+}
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif

@@ -10,7 +10,7 @@ pub mod sync;
 pub mod arch;
 pub mod macros;
 pub mod display;
-// pub mod ffi;  // Temporairement désactivé
+pub mod ffi;  // Réactivé pour l'interopérabilité C/Rust
 
 // Réexportations pour un accès facile
 // pub use collections::*;
@@ -19,4 +19,4 @@ pub use sync::*;
 pub use arch::*;
 pub use macros::*;
 pub use display::*;
-// pub use ffi::*;
+pub use ffi::*;

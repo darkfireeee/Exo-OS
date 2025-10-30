@@ -42,6 +42,8 @@ fn attr_byte(fg: u8) -> u8 {
 
 /// Efface l'écran en utilisant la couleur d'avant-plan courante.
 pub fn clear_screen() {
+    let start = crate::perf_counters::rdtsc();
+    
     let fg = FG_COLOR.load(Ordering::SeqCst);
     let attr = attr_byte(fg);
     let buf = BUFFER_ADDR as *mut u8;
@@ -55,6 +57,9 @@ pub fn clear_screen() {
             }
         }
     }
+    
+    let end = crate::perf_counters::rdtsc();
+    crate::perf_counters::PERF_MANAGER.record(crate::perf_counters::Component::Vga, end - start);
 }
 
 /// Définit la couleur d'avant-plan pour les écritures suivantes
@@ -64,7 +69,11 @@ pub fn set_color(c: Color) {
 
 /// Écrit une chaîne ASCII à la position fournie (ligne/colonne)
 pub fn write_str_at(row: usize, col: usize, s: &str) {
+    let start = crate::perf_counters::rdtsc();
+    
     if row >= HEIGHT || col >= WIDTH {
+        let end = crate::perf_counters::rdtsc();
+        crate::perf_counters::PERF_MANAGER.record(crate::perf_counters::Component::Vga, end - start);
         return;
     }
     let fg = FG_COLOR.load(Ordering::SeqCst);
@@ -84,19 +93,32 @@ pub fn write_str_at(row: usize, col: usize, s: &str) {
         }
         c += 1;
     }
+    
+    let end = crate::perf_counters::rdtsc();
+    crate::perf_counters::PERF_MANAGER.record(crate::perf_counters::Component::Vga, end - start);
 }
 
 /// Écrit la chaîne centrée horizontalement sur la ligne donnée
 pub fn write_centered(row: usize, s: &str) {
+    let start = crate::perf_counters::rdtsc();
+    
     let len = s.len();
-    let start = if len >= WIDTH { 0 } else { (WIDTH - len) / 2 };
-    write_str_at(row, start, s);
+    let start_col = if len >= WIDTH { 0 } else { (WIDTH - len) / 2 };
+    write_str_at(row, start_col, s);
+    
+    let end = crate::perf_counters::rdtsc();
+    crate::perf_counters::PERF_MANAGER.record(crate::perf_counters::Component::Vga, end - start);
 }
 
 /// Écrit un petit banner au centre de l'écran (utilisé comme fallback)
 pub fn write_banner() {
+    let start = crate::perf_counters::rdtsc();
+    
     clear_screen();
     set_color(Color::LightGreen);
     write_centered(10, "EXO-OS KERNEL v0.1.0");
     set_color(Color::White);
+    
+    let end = crate::perf_counters::rdtsc();
+    crate::perf_counters::PERF_MANAGER.record(crate::perf_counters::Component::Vga, end - start);
 }

@@ -17,6 +17,10 @@ extern "C" {
     // Fonctions du pilote PCI
     pub fn pci_init();
     pub fn pci_enumerate_buses();
+    
+    // Nouvelles fonctions pour l'intégration avec le kernel Rust
+    pub fn c_kernel_main(multiboot_info_ptr: u64, multiboot_magic: u32) -> !;
+    pub fn c_panic(msg: *const i8);
 }
 
 /// Fournit une API Rust sûre et agréable pour écrire une chaîne sur le port série.
@@ -35,21 +39,43 @@ pub fn serial_write_str(s: &str) {
 /// Initialise les pilotes C.
 /// Cette fonction sert de point d'entrée unique pour l'initialisation de ce module.
 pub fn init() {
-    println!("Initialisation de la couche de compatibilité C...");
+    println!("[C_COMPAT] Initialisation de la couche de compatibilité C...");
 
     unsafe {
         serial_init();
         pci_init();
     }
 
-    println!("Couche C initialisée.");
+    println!("[C_COMPAT] Couche C initialisée.");
 }
 
 /// Lance l'énumération des bus PCI via le pilote C.
 pub fn enumerate_pci() {
-    println!("Énumération des périphériques PCI...");
+    println!("[C_COMPAT] Énumération des périphériques PCI...");
     unsafe {
         pci_enumerate_buses();
     }
-    println!("Énumération PCI terminée.");
+    println!("[C_COMPAT] Énumération PCI terminée.");
+}
+
+/// Point d'entrée C pour le kernel (appelé depuis boot.c)
+pub fn kernel_main_c(multiboot_info_ptr: u64, multiboot_magic: u32) -> ! {
+    unsafe {
+        c_kernel_main(multiboot_info_ptr, multiboot_magic)
+    }
+}
+
+/// Fonction de panic pour le code C
+pub fn panic_c(msg: &str) {
+    use alloc::ffi::CString;
+    
+    if let Ok(c_msg) = CString::new(msg) {
+        unsafe {
+            c_panic(c_msg.as_ptr());
+        }
+    } else {
+        unsafe {
+            c_panic(b"Invalid UTF-8 panic message\0".as_ptr() as *const i8);
+        }
+    }
 }

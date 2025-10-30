@@ -3,6 +3,7 @@
 //! Ce module fournit des types et des fonctions pour travailler avec des chaînes
 //! de caractères au format C (terminées par un byte nul).
 
+use alloc::string::String;
 use core::fmt;
 use core::ops::Deref;
 use core::slice;

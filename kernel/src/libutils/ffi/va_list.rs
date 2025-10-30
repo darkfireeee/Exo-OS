@@ -174,28 +174,27 @@ impl<'a> Clone for VaList<'a> {
     }
 }
 
-impl<'a> Copy for VaList<'a> {}
+// impl<'a> Copy for VaList<'a> {} // VaList ne peut pas implémenter Copy car elle contient des pointeurs
 
 /// Macro pour créer une fonction qui accepte une liste d'arguments variables
 #[macro_export]
 macro_rules! va_func {
     (
         $(#[$meta:meta])*
-        $vis:vis fn $name:ident($($param:ident: $ptype:ty),*) -> $ret:ty {
+        $vis:vis fn $name:ident($($param:ident: $ptype:ty),* ) -> $ret:ty
+        {
             $($body:tt)*
         }
     ) => {
         $(#[$meta])*
-        $vis unsafe extern "C" fn $name($($param: $ptype), ...) -> $ret {
-            // Créer une VaList à partir des registres et de la pile
+        #[inline(never)]
+        $vis unsafe extern "C" fn $name($($param: $ptype,)*) -> $ret {
             let mut args = $crate::ffi::va_list::VaList::new();
-            
-            // Appeler la fonction interne avec la VaList
-            $name_impl($($param),*, args)
+            $name ## _impl($($param,)* &mut args)
         }
         
-        // Fonction interne qui prend une VaList
-        $vis fn $name_impl($($param: $ptype),*, mut args: $crate::ffi::va_list::VaList) -> $ret {
+        #[inline(never)]
+        $vis fn $name ## _impl($($param: $ptype,)* args: &mut $crate::ffi::va_list::VaList) -> $ret {
             $($body)*
         }
     };

@@ -1,0 +1,474 @@
+[0;34m=========================================[0m
+[0;34m  Exo-OS Build System[0m
+[0;34m=========================================[0m
+[1;33m[INFO][0m Répertoire du projet: /mnt/c/Users/Eric/Documents/Exo-OS
+[1;33m[BUILD][0m Nettoyage des anciens builds...
+[1;33m[BUILD][0m Compilation du bootloader...
+[0;32m[SUCCESS][0m Bootloader compilé
+[1;33m[BUILD][0m Compilation du kernel Rust...
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /mnt/c/Users/Eric/Documents/Exo-OS/kernel/Cargo.toml
+workspace: /mnt/c/Users/Eric/Documents/Exo-OS/Cargo.toml
+warning: virtual workspace defaulting to `resolver = "1"` despite one or more workspace members being on edition 2021 which implies `resolver = "2"`
+  |
+  = note: to keep the current resolver, specify `workspace.resolver = "1"` in the workspace root's manifest
+  = note: to use the edition 2021 resolver, specify `workspace.resolver = "2"` in the workspace root's manifest
+  = note: for more details see https://doc.rust-lang.org/cargo/reference/resolver.html#resolver-versions
+warning: unexpected `cfg` condition value: `debug`
+   --> kernel/src/libutils/arch/x86_64/interrupts.rs:127:15
+    |
+127 |         #[cfg(feature = "debug")]
+    |               ^^^^^^^^^^^^^^^^^
+    |
+    = note: expected values for `feature` are: `binary`, `capnp`, `crypto`, `default`, `ed25519-dalek`, `serialization`, and `sha3`
+    = help: consider adding `debug` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unused import: `Ordering`
+ --> kernel/src/libutils/macros/lazy_static.rs:6:38
+  |
+6 | use core::sync::atomic::{AtomicBool, Ordering};
+  |                                      ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `core::ops::Deref`
+ --> kernel/src/libutils/macros/lazy_static.rs:9:5
+  |
+9 | use core::ops::Deref;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `PhysAddr`
+ --> kernel/src/memory/frame_allocator.rs:7:5
+  |
+7 |     PhysAddr,
+  |     ^^^^^^^^
+
+warning: unused imports: `FrameAllocator`, `Mapper`, `OffsetPageTable`, `PageTableFlags`, `PageTable`, `Page`, `PhysAddr`, `PhysFrame`, `Size4KiB`, and `VirtAddr`
+ --> kernel/src/memory/page_table.rs:7:9
+  |
+7 |         FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,
+  |         ^^^^^^^^^^^^^^  ^^^^^^  ^^^^^^^^^^^^^^^  ^^^^  ^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^
+8 |     },
+9 |     PhysAddr, VirtAddr,
+  |     ^^^^^^^^  ^^^^^^^^
+
+warning: unused imports: `PageTableFlags`, `Page`, `Size4KiB`, and `VirtAddr`
+  --> kernel/src/memory/mod.rs:13:9
+   |
+13 |         Page, PageTableFlags, Size4KiB,
+   |         ^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^
+14 |     },
+15 |     VirtAddr,
+   |     ^^^^^^^^
+
+warning: unused doc comment
+  --> kernel/src/scheduler/mod.rs:33:1
+   |
+33 | /// Ordonnanceur global, initialisé au démarrage.
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+   = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused doc comment
+   --> kernel/src/scheduler/scheduler.rs:159:1
+    |
+159 |   /// Fonction externe définie dans `context_switch.S`.
+    |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+160 | / extern "C" {
+161 | |     fn context_switch(old_context: *mut ThreadContext, new_rsp: u64);
+162 | | }
+    | |_- rustdoc does not generate documentation for extern blocks
+    |
+    = help: use `//` for a plain comment
+
+warning: unused import: `ThreadState`
+  --> kernel/src/scheduler/mod.rs:26:32
+   |
+26 | use thread::{Thread, ThreadId, ThreadState};
+   |                                ^^^^^^^^^^^
+
+warning: unused import: `core::arch::asm`
+ --> kernel/src/syscall/mod.rs:7:5
+  |
+7 | use core::arch::asm;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::memory`
+  --> kernel/src/syscall/dispatch.rs:10:5
+   |
+10 | use crate::memory;
+   |     ^^^^^^^^^^^^^
+
+warning: unused import: `crate::drivers::block`
+  --> kernel/src/syscall/dispatch.rs:12:5
+   |
+12 | use crate::drivers::block;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused doc comment
+   --> kernel/src/perf_counters.rs:235:1
+    |
+235 | /// Instance globale du gestionnaire de performance
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused import: `print`
+ --> kernel/src/perf_counters.rs:8:22
+  |
+8 | use crate::{println, print};
+  |                      ^^^^^
+
+warning: unused import: `core::ptr::NonNull`
+   --> kernel/src/lib.rs:131:25
+    |
+131 |                     use core::ptr::NonNull;
+    |                         ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `x86_64::instructions::segmentation::set_cs`: use `CS::set_reg()` instead
+  --> kernel/src/arch/x86_64/gdt.rs:47:9
+   |
+47 |         set_cs(GDT.1.code_selector);
+   |         ^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated function `x86_64::instructions::segmentation::load_ds`: use `DS::set_reg()` instead
+  --> kernel/src/arch/x86_64/gdt.rs:48:9
+   |
+48 |         load_ds(GDT.1.data_selector);
+   |         ^^^^^^^
+
+warning: use of deprecated function `x86_64::instructions::segmentation::set_cs`: use `CS::set_reg()` instead
+  --> kernel/src/arch/x86_64/gdt.rs:42:46
+   |
+42 |     use x86_64::instructions::segmentation::{set_cs, load_ds};
+   |                                              ^^^^^^
+
+warning: use of deprecated function `x86_64::instructions::segmentation::load_ds`: use `DS::set_reg()` instead
+  --> kernel/src/arch/x86_64/gdt.rs:42:54
+   |
+42 |     use x86_64::instructions::segmentation::{set_cs, load_ds};
+   |                                                      ^^^^^^^
+
+warning: use of deprecated function `core::sync::atomic::spin_loop_hint`: use hint::spin_loop instead
+ --> kernel/src/libutils/sync/mutex.rs:8:48
+  |
+8 | use core::sync::atomic::{AtomicBool, Ordering, spin_loop_hint};
+  |                                                ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `core::sync::atomic::spin_loop_hint`: use hint::spin_loop instead
+  --> kernel/src/libutils/sync/mutex.rs:51:13
+   |
+51 |             spin_loop_hint();
+   |             ^^^^^^^^^^^^^^
+
+warning: unnecessary `unsafe` block
+  --> kernel/src/arch/x86_64/interrupts.rs:24:5
+   |
+24 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `cores`
+  --> kernel/src/arch/x86_64/mod.rs:23:13
+   |
+23 | pub fn init(cores: usize) {
+   |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_cores`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `index`
+   --> kernel/src/libutils/arch/x86_64/interrupts.rs:126:41
+    |
+126 |     fn print_unhandled_interrupt(&self, index: u8, context: &InterruptContext) {
+    |                                         ^^^^^ help: if this is intentional, prefix it with an underscore: `_index`
+
+warning: unused variable: `context`
+   --> kernel/src/libutils/arch/x86_64/interrupts.rs:126:52
+    |
+126 |     fn print_unhandled_interrupt(&self, index: u8, context: &InterruptContext) {
+    |                                                    ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_context`
+
+warning: unnecessary `unsafe` block
+  --> kernel/src/libutils/macros/println.rs:50:17
+   |
+50 |                 unsafe {
+   |                 ^^^^^^ unnecessary `unsafe` block
+
+warning: unused variable: `buf_ptr`
+  --> kernel/src/syscall/dispatch.rs:25:9
+   |
+25 |     let buf_ptr = args.rsi as *mut u8;
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_buf_ptr`
+
+warning: unused variable: `path_ptr`
+   --> kernel/src/syscall/dispatch.rs:118:9
+    |
+118 |     let path_ptr = args.rdi as *const u8;
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_path_ptr`
+
+warning: unused variable: `flags`
+   --> kernel/src/syscall/dispatch.rs:119:9
+    |
+119 |     let flags = args.rsi;
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_flags`
+
+warning: unused variable: `mode`
+   --> kernel/src/syscall/dispatch.rs:120:9
+    |
+120 |     let mode = args.rdx;
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_mode`
+
+warning: unused variable: `fd`
+   --> kernel/src/syscall/dispatch.rs:135:9
+    |
+135 |     let fd = args.rdi;
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_fd`
+
+warning: unused variable: `exit_code`
+   --> kernel/src/syscall/dispatch.rs:150:9
+    |
+150 |     let exit_code = args.rdi;
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exit_code`
+
+warning: unused variable: `ms`
+   --> kernel/src/syscall/dispatch.rs:182:9
+    |
+182 |     let ms = args.rdi;
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_ms`
+
+warning: unused variable: `addr`
+   --> kernel/src/syscall/dispatch.rs:202:9
+    |
+202 |     let addr = args.rdi;
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_addr`
+
+warning: unused variable: `length`
+   --> kernel/src/syscall/dispatch.rs:203:9
+    |
+203 |     let length = args.rsi;
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_length`
+
+warning: unused variable: `prot`
+   --> kernel/src/syscall/dispatch.rs:204:9
+    |
+204 |     let prot = args.rdx;
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_prot`
+
+warning: unused variable: `flags`
+   --> kernel/src/syscall/dispatch.rs:205:9
+    |
+205 |     let flags = args.r10;
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_flags`
+
+warning: unused variable: `fd`
+   --> kernel/src/syscall/dispatch.rs:206:9
+    |
+206 |     let fd = args.r8;
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_fd`
+
+warning: unused variable: `offset`
+   --> kernel/src/syscall/dispatch.rs:207:9
+    |
+207 |     let offset = args.r9;
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_offset`
+
+warning: unused variable: `addr`
+   --> kernel/src/syscall/dispatch.rs:223:9
+    |
+223 |     let addr = args.rdi;
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_addr`
+
+warning: unused variable: `length`
+   --> kernel/src/syscall/dispatch.rs:224:9
+    |
+224 |     let length = args.rsi;
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_length`
+
+warning: unused variable: `flags`
+   --> kernel/src/syscall/dispatch.rs:242:9
+    |
+242 |     let flags = args.rdi;
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_flags`
+
+warning: unused variable: `stack_ptr`
+   --> kernel/src/syscall/dispatch.rs:243:9
+    |
+243 |     let stack_ptr = args.rsi;
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_stack_ptr`
+
+warning: unused variable: `tls_ptr`
+   --> kernel/src/syscall/dispatch.rs:244:9
+    |
+244 |     let tls_ptr = args.rdx;
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tls_ptr`
+
+warning: unused variable: `regs_ptr`
+   --> kernel/src/syscall/dispatch.rs:245:9
+    |
+245 |     let regs_ptr = args.r10;
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_regs_ptr`
+
+warning: unused variable: `data`
+   --> kernel/src/drivers/block/mod.rs:191:57
+    |
+191 |     fn read_sectors(&mut self, sector: u64, count: u64, data: *mut u8) -> Result<(), BlockError> {
+    |                                                         ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
+
+warning: unused variable: `data`
+   --> kernel/src/drivers/block/mod.rs:210:58
+    |
+210 |     fn write_sectors(&mut self, sector: u64, count: u64, data: *const u8) -> Result<(), BlockError> {
+    |                                                          ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
+
+warning: unused variable: `driver`
+   --> kernel/src/drivers/block/mod.rs:335:13
+    |
+335 |     for (_, driver) in block_drivers {
+    |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_driver`
+
+warning: unnecessary `unsafe` block
+  --> kernel/src/drivers/serial.rs:18:9
+   |
+18 |         unsafe {
+   |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+  --> kernel/src/drivers/serial.rs:30:9
+   |
+30 |         unsafe { read_port_u8(self.port + 5) & 0x20 != 0 }
+   |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+  --> kernel/src/drivers/serial.rs:35:9
+   |
+35 |         unsafe {
+   |         ^^^^^^ unnecessary `unsafe` block
+
+warning: field `next` is never read
+  --> kernel/src/memory/frame_allocator.rs:12:5
+   |
+11 | pub struct BitmapFrameAllocator {
+   |            -------------------- field in this struct
+12 |     next: usize,
+   |     ^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `name` is never read
+  --> kernel/src/ipc/channel.rs:53:5
+   |
+51 | pub struct Channel {
+   |            ------- field in this struct
+52 |     /// Nom du canal (pour le debug)
+53 |     name: alloc::string::String,
+   |     ^^^^
+   |
+   = note: `Channel` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: creating a shared reference to mutable static
+  --> kernel/src/arch/x86_64/gdt.rs:17:59
+   |
+17 |             let stack_start = VirtAddr::from_ptr(unsafe { &STACK });
+   |                                                           ^^^^^^ shared reference to mutable static
+   |
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+   = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+   = note: `#[warn(static_mut_refs)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
+help: use `&raw const` instead to create a raw pointer
+   |
+17 |             let stack_start = VirtAddr::from_ptr(unsafe { &raw const STACK });
+   |                                                            +++++++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> kernel/src/libutils/sync/mutex.rs:29:21
+   |
+29 |     pub fn try_lock(&self) -> Option<MutexGuard<T>> {
+   |                     ^^^^^            ^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                     |
+   |                     the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+   = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+   |
+29 |     pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
+   |                                                 +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> kernel/src/libutils/sync/mutex.rs:43:17
+   |
+43 |     pub fn lock(&self) -> MutexGuard<T> {
+   |                 ^^^^^     ^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                 |
+   |                 the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+43 |     pub fn lock(&self) -> MutexGuard<'_, T> {
+   |                                      +++
+
+warning: creating a shared reference to mutable static
+  --> kernel/src/scheduler/thread.rs:94:46
+   |
+94 |         let stack_start = VirtAddr::from_ptr(&STACK_SPACE as *const _);
+   |                                              ^^^^^^^^^^^^ shared reference to mutable static
+   |
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+   = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+help: use `&raw const` instead to create a raw pointer
+   |
+94 |         let stack_start = VirtAddr::from_ptr(&raw const STACK_SPACE as *const _);
+   |                                               +++++++++
+
+warning: `exo-kernel` (lib) generated 57 warnings (run `cargo fix --lib -p exo-kernel` to apply 38 suggestions)
+warning: unused variable: `info`
+  --> kernel/src/main.rs:12:10
+   |
+12 | fn panic(info: &PanicInfo) -> ! {
+   |          ^^^^ help: if this is intentional, prefix it with an underscore: `_info`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `exo-kernel` (bin "exo-kernel") generated 1 warning (run `cargo fix --bin "exo-kernel"` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 40.91s
+[0;32m[SUCCESS][0m Kernel compilé
+[1;33m[BUILD][0m Linkage du bootloader et du kernel...
+ld: warning: eec18c0b8961f434-context_switch.o: missing .note.GNU-stack section implies executable stack
+ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+ld: warning: kernel.bin has a LOAD segment with RWX permissions
+[0;32m[SUCCESS][0m kernel.bin créé (1.1M)
+[0;32m[SUCCESS][0m kernel.bin est un binaire multiboot2 valide
+[1;33m[BUILD][0m Création de l'image ISO...
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Drive current: -outdev 'stdio:/mnt/c/Users/Eric/Documents/Exo-OS/build/exo-os.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data, 41.7g free
+Added to ISO image: directory '/'='/tmp/grub.SMhG8V'
+xorriso : UPDATE :     295 files added in 1 seconds
+Added to ISO image: directory '/'='/mnt/c/Users/Eric/Documents/Exo-OS/build/isofiles'
+xorriso : UPDATE :     299 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/usr/lib/grub/i386-pc/boot_hybrid.img'
+xorriso : UPDATE :  86.70% done
+ISO image produced: 3015 sectors
+Written to medium : 3015 sectors at LBA 0
+Writing to 'stdio:/mnt/c/Users/Eric/Documents/Exo-OS/build/exo-os.iso' completed successfully.
+
+[0;32m[SUCCESS][0m ISO créée: /mnt/c/Users/Eric/Documents/Exo-OS/build/exo-os.iso (5.9M)
+[0;34m=========================================[0m
+[0;32m[SUCCESS][0m Build terminé avec succès!
+[0;34m=========================================[0m
+  Bootloader: /mnt/c/Users/Eric/Documents/Exo-OS/build/boot.o
+  Kernel: /mnt/c/Users/Eric/Documents/Exo-OS/build/kernel.bin
+  ISO: /mnt/c/Users/Eric/Documents/Exo-OS/build/exo-os.iso
+[0;34m=========================================[0m
+Pour tester: [1;33m./scripts/run-qemu.sh[0m
+[0;34m=========================================[0m
