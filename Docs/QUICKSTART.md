@@ -1,123 +1,66 @@
-# 🚀 Quick Start - Test Exo-OS
+# Guide de démarrage rapide - Exo-OS
 
-## ✅ Compilation Validée
-Le kernel compile sans erreurs ! (42 warnings non-critiques)
+## 🚀 Démarrage rapide (5 minutes)
 
----
+### Étape 1 : Installer les dépendances
 
-## 🧪 Option 1: Test Rapide (Recommandé)
-
-### Installation des Outils
+Depuis Windows PowerShell :
 
 ```powershell
-# Installer bootimage
-cargo install bootimage
-
-# Installer llvm-tools
-rustup component add llvm-tools-preview
+cd C:\Users\Eric\Documents\Exo-OS
+.\build-wsl.ps1
+# Choisir option [1] pour installer les dépendances
 ```
 
-### Lancer le Test
+### Étape 2 : Compiler
 
 ```powershell
-# Depuis le dossier kernel/
-cd kernel
-cargo bootimage --run
+.\build-wsl.ps1
+# Choisir option [2] pour compiler
 ```
 
-**Résultat attendu**: QEMU démarre et affiche le output du kernel
-
----
-
-## 🖥️ Option 2: Script PowerShell
+### Étape 3 : Tester
 
 ```powershell
-# Depuis la racine du projet
-.\test-qemu.ps1
+.\build-wsl.ps1
+# Choisir option [3] pour compiler et lancer dans QEMU
 ```
 
-Ce script :
-- ✅ Compile automatiquement
-- ✅ Vérifie QEMU
-- ✅ Guide l'installation si nécessaire
+## 📁 Fichiers importants
 
----
+- `build-wsl.ps1` - Script PowerShell interactif pour Windows
+- `scripts/setup-wsl.sh` - Installe les dépendances dans WSL
+- `scripts/build-all.sh` - Compile tout (kernel + bootloader + ISO)
+- `scripts/run-qemu.sh` - Lance dans QEMU
+- `scripts/clean.sh` - Nettoie les fichiers de build
+- `BUILD_GUIDE.md` - Guide complet et détaillé
+- `RECAP_MIGRATION.md` - Récapitulatif de la migration Multiboot2
 
-## 🔧 Option 3: Compilation Manuelle
+## 🐛 En cas de problème
 
-```powershell
-# Compiler
-cd kernel
-cargo +nightly build --target "../x86_64-unknown-none.json" -Z build-std=core,alloc,compiler_builtins
+Consultez :
+1. `BUILD_GUIDE.md` - Section "Problèmes fréquents"
+2. `KNOWN_ISSUES.md` - Problèmes connus
+3. `bootloader/README.md` - Documentation du bootloader
 
-# Vérifier le résultat
-ls target/x86_64-unknown-none/debug/libexo_kernel.a
+## 🎯 Sortie attendue
+
+```
+===========================================
+  Exo-OS Kernel v0.1.0
+  Architecture: x86_64
+  Bootloader: Multiboot2 + GRUB
+===========================================
+[BOOT] Multiboot2 magic validé: 0x36d76289
+[MEMORY] Carte mémoire: ...
+[INIT] Architecture x86_64...
+[SUCCESS] Noyau initialisé avec succès!
 ```
 
----
+## 📚 Documentation complète
 
-## 📊 État Actuel
-
-### ✅ Fonctionnel
-- Compilation sans erreurs
-- Code C (serial.c, pci.c) intégré
-- Architecture x86_64 configurée
-- GDT, IDT, Interrupts définis
-- Scheduler implémenté
-- IPC channels créés
-
-### ⚠️ Stubs (À Implémenter)
-- Memory allocator (utilise linked_list_allocator)
-- Page tables (stubbed)
-- Syscall dispatch (stubbed)
-- Block drivers (stubbed)
-
-### 🎯 Prochaines Étapes
-1. **[MAINTENANT]** Tester le boot avec bootimage
-2. **[ENSUITE]** Valider serial output
-3. **[PUIS]** Implémenter memory allocator
-4. **[APRÈS]** Mesurer baseline de performance
-5. **[ENFIN]** Optimiser vers objectifs
-
----
-
-## 🐛 Troubleshooting
-
-### "bootimage not found"
-```powershell
-cargo install bootimage
-rustup component add llvm-tools-preview
-```
-
-### "QEMU not found"
-Installer QEMU:
-- Chocolatey: `choco install qemu`
-- Scoop: `scoop install qemu`
-- Direct: https://qemu.weilnetz.de/w64/
-
-### "linking error"
-Vérifier que vous êtes dans le dossier `kernel/` avant de compiler
-
----
-
-## 📖 Documentation Complète
-
-- **TESTING.md** - Guide complet de test
-- **ROADMAP.md** - Plan de développement et optimisation
-- **README.md** - Présentation du projet
-
----
-
-## 🎯 Objectifs de Performance (Après Tests)
-
-Une fois le kernel stable, nous optimiserons vers :
-
-| Métrique | Objectif |
-|----------|----------|
-| IPC Latency | < 500 ns |
-| Context Switch | < 1 µs |
-| Syscalls | > 5M/sec |
-| Boot Time | < 500 ms |
-| Threads | > 1M scalable |
-
-**Mais d'abord : faire fonctionner le kernel ! 🚀**
+Voir `BUILD_GUIDE.md` pour :
+- Compilation manuelle étape par étape
+- Débogage avancé
+- Test sur matériel réel
+- Références techniques
