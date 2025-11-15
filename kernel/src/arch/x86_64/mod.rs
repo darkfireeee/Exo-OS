@@ -6,6 +6,8 @@
 pub mod gdt;
 pub mod idt;
 pub mod interrupts;
+pub mod pic;
+pub mod timer;
 
 // Réexportation de registers depuis libutils
 pub use crate::libutils::arch::x86_64::registers;
@@ -30,7 +32,12 @@ pub fn init(cores: usize) {
     // 2. L'IDT (Interrupt Descriptor Table) est configurée ensuite.
     idt::init();
     
-    // 3. Enfin, on active les interruptions matérielles.
+    // 3. Remapper le PIC, configurer le timer PIT puis activer les interruptions.
+    //    On remappe sur 0x20..0x2F pour ne pas chevaucher les exceptions CPU (0x00..0x1F).
+    pic::init(0x20, 0x28);
+    // Démarre le PIT à 100 Hz (résolution 10 ms)
+    timer::init_pit(100);
+    // Configure l'état global des interruptions (ne les active qu'après la config du PIC/PIT)
     interrupts::init();
 
     crate::println!("Architecture x86_64 initialisée avec succès.");

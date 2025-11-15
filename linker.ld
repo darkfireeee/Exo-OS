@@ -8,33 +8,36 @@ ENTRY(_start)
 SECTIONS {
     . = 0x100000;  /* 1 MiB */
 
-    _kernel_start = .;
+    kernel_phys_start = .;
 
-    .boot : {
+    /* Section boot avec Multiboot2 header et code de démarrage */
+    .boot : ALIGN(4096) {
         KEEP(*(.multiboot_header))
-        KEEP(*(.text.boot))
+        KEEP(*(.multiboot))
     }
 
-    .text : {
+    /* Pile et tables de pages de boot.asm */
+    .bss.boot : ALIGN(4096) {
+        *(.bss)
+    }
+
+    /* Code exécutable */
+    .text : ALIGN(4096) {
+        *(.text._start)
         *(.text .text.*)
     }
 
-    .rodata : {
+    /* Données en lecture seule */
+    .rodata : ALIGN(4096) {
         *(.rodata .rodata.*)
     }
 
-    .data : {
+    /* Données modifiables */
+    .data : ALIGN(4096) {
         *(.data .data.*)
     }
 
-    .bss (NOLOAD) : {
-        _bss_start = .;
-        *(.bss .bss.*)
-        *(COMMON)
-        _bss_end = .;
-    }
-
-    _kernel_end = .;
+    kernel_phys_end = .;
 
     /DISCARD/ : {
         *(.eh_frame)

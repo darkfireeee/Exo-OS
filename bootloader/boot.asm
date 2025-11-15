@@ -168,9 +168,11 @@ section .rodata
 gdt64:
     dq 0                         ; entrée nulle
 .code: equ $ - gdt64
-    dq (1<<43) | (1<<44) | (1<<47) | (1<<53) ; code segment
+    ; Code 64-bit: P=1, DPL=0, S=1, Type=0xA (exécutable/lisible), L=1, D=0, G=0
+    dq 0x00209A0000000000
 .data: equ $ - gdt64
-    dq (1<<44) | (1<<47)         ; data segment
+    ; Données 64-bit: P=1, DPL=0, S=1, Type=0x2 (lecture/écriture)
+    dq 0x0000920000000000
 .pointer:
     dw $ - gdt64 - 1
     dq gdt64
@@ -180,19 +182,21 @@ bits 64
 long_mode_start:
     ; Nous sommes maintenant en mode long!
     
-    ; Charger les segments de données avec le sélecteur null
-    mov ax, 0
+    ; Charger des segments valides (data R/W ring 0)
+    mov ax, gdt64.data
     mov ss, ax
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
+
+    ; DEBUG VGA (texte): écrire 'K' vert sur la première case pour valider le mode texte
+    mov rax, 0xB8000
+    mov word [rax], 0x2F4B  ; 'K' vert (fg=2) sur noir
     
     ; Préparer les arguments pour kernel_main
-    ; RDI = multiboot info pointer (déjà dans EDI depuis le 32-bit)
-    ; RSI = multiboot magic (déjà dans ESI depuis le 32-bit)
-    mov rdi, rdi                 ; zero-extend EDI vers RDI
-    mov rsi, rsi                 ; zero-extend ESI vers RSI
+    ; RDI = multiboot info pointer (dans EDI depuis le 32-bit, zéro-étendu automatiquement)
+    ; RSI = multiboot magic (dans ESI depuis le 32-bit)
     
     ; Appeler le kernel Rust
     call kernel_main

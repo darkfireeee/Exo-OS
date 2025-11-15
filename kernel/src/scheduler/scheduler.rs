@@ -156,7 +156,7 @@ impl Scheduler {
     }
 }
 
-/// Fonction externe définie dans `context_switch.S`.
+/// Fonction externe définie dans l'assembleur windowed_context_switch.S (alias context_switch)
 extern "C" {
     fn context_switch(old_context: *mut ThreadContext, new_rsp: u64);
 }

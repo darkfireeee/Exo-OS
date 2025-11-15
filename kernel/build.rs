@@ -6,70 +6,62 @@ use std::path::PathBuf;
 
 fn main() {
     // Récupérer le répertoire de sortie
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let _out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     
     // Ne compiler que pour la cible bare-metal
     let target = env::var("TARGET").unwrap();
     if !target.contains("unknown-none") && !target.contains("elf") {
-        println!("cargo:warning=Skipping C compilation for non-kernel target: {}", target);
+        println!("cargo:warning=Skipping assembly compilation for non-kernel target: {}", target);
         return;
     }
 
-    // Compiler le fichier d'assembly context_switch.S
-    println!("cargo:rerun-if-changed=src/scheduler/context_switch.S");
-    
-    // Compiler avec cc (qui gère aussi l'assembly)
-    let mut build = cc::Build::new();
-    build
-        .file("src/scheduler/context_switch.S")
-        .target(&target)
-        .compiler("gcc")
-        .flag("-ffreestanding")
-        .flag("-fno-stack-protector")
-        .flag("-fno-pic")
-        .flag("-mno-red-zone")
-        .flag("-mno-sse")
-        .flag("-mno-sse2")
-        .flag("-m64")
-        .opt_level(2)
-        .warnings(false); // Désactiver les warnings pour l'assembly
-    
-    build.compile("context_switch");
-
-    // Lier les bibliothèques
-    println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=context_switch");
-
-    // TODO: Réactiver quand clang sera disponible ou réécrire en Rust
-    // Pour l'instant on utilise uart_16550 pour serial
-    /*
+    // Compiler boot.asm (entry point pour QEMU/Multiboot2) avec NASM
+    println!("cargo:rerun-if-changed=src/arch/x86_64/boot.asm");
     println!("cargo:rerun-if-changed=src/c_compat/serial.c");
-    println!("cargo:rerun-if-changed=src/c_compat/pci.c");
-
-    // Compiler les fichiers C avec cc - configuré pour bare-metal x86_64
-    let mut build = cc::Build::new();
     
-    build
+    // Compiler boot.asm avec NASM
+    let boot_obj = std::path::PathBuf::from(env::var("OUT_DIR").unwrap()).join("boot.o");
+    let status = std::process::Command::new("nasm")
+        .args(&[
+            "-f", "elf64",
+            "-o", boot_obj.to_str().unwrap(),
+            "src/arch/x86_64/boot.asm"
+        ])
+        .status()
+        .expect("Failed to run nasm");
+    
+    if !status.success() {
+        panic!("NASM compilation failed");
+    }
+    
+    // Lier boot.o
+    println!("cargo:rustc-link-arg={}", boot_obj.to_str().unwrap());
+    println!("cargo:warning=Compiled boot.asm with NASM");
+    
+    // Compiler serial.c (port série COM1)
+    cc::Build::new()
         .file("src/c_compat/serial.c")
-        .file("src/c_compat/pci.c")
-        // Options de compilation pour bare-metal x86_64
-        .target(&target)  // Utiliser la cible spécifiée
-        .compiler("clang")  // Utiliser clang au lieu de GCC pour compatibilité avec rust-lld
         .flag("-ffreestanding")
         .flag("-fno-stack-protector")
-        .flag("-fno-pic")
         .flag("-mno-red-zone")
-        .flag("-mno-sse")
-        .flag("-mno-sse2")
-        .flag("--target=x86_64-unknown-none")  // Cible explicite pour clang
-        .opt_level(2)
-        .warnings(true);
-    
-    // Compiler la bibliothèque statique
-    build.compile("c_compat");
+        .flag("-m64")
+        .flag("-nostdlib")
+        .flag("-O2")
+        .include("src/c_compat")
+        .compile("c_serial");
+        
+    println!("cargo:warning=Compiled serial.c");
 
-    // Lier les bibliothèques
-    println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=c_compat");
-    */
+    // Compiler windowed_context_switch.S (toujours, pour fournir 'context_switch')
+    // Cela évite les problèmes d'assemblage spécifiques à Windows/MSVC avec le fichier .S complet
+    println!("cargo:rerun-if-changed=src/scheduler/windowed_context_switch.S");
+    cc::Build::new()
+        .file("src/scheduler/windowed_context_switch.S")
+        .flag("-ffreestanding")
+        .flag("-fno-stack-protector")
+        .flag("-mno-red-zone")
+        .compile("windowed_context_switch");
+    println!("cargo:warning=Compiled windowed_context_switch.S (alias context_switch)");
+
+    // Note: context_switch.S classique reste désactivé pour compatibilité environnement
 }

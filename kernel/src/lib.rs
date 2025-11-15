@@ -1,6 +1,5 @@
 // src/lib.rs
 // Point d'entrée de la bibliothèque du noyau
-
 #![no_std] // Pas de bibliothèque standard
 #![cfg_attr(test, no_main)]
 #![feature(abi_x86_interrupt)] // Pour les handlers d'interruptions
@@ -12,13 +11,14 @@ extern crate alloc;
 // Modules du noyau
 pub mod arch;
 pub mod libutils;  // Bibliothèque de modules réutilisables
-pub mod c_compat;  // Module C pour serial et PCI - réactivé pour le port série
+pub mod c_compat;  // Module C pour serial (compilé dans build.rs)
 pub mod memory;
 pub mod scheduler;
 pub mod ipc;
 pub mod syscall;
 pub mod drivers;
 pub mod perf_counters;  // Module de mesure de performance
+pub mod perf;  // Phase 6: Framework de benchmarking unifié
 
 // Réexportation des macros de libutils
 pub use libutils::macros::*;
@@ -66,6 +66,7 @@ static SERIAL_WRITER: Mutex<SerialWriter> = Mutex::new(SerialWriter);
 static ALLOCATOR: linked_list_allocator::LockedHeap = linked_list_allocator::LockedHeap::empty();
 
 /// Handler pour les erreurs d'allocation
+#[cfg(not(test))]
 #[alloc_error_handler]
 fn alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
     panic!("Allocation error: {:?}", layout);
@@ -92,7 +93,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: u64, multiboot_magic: u32) -> 
     drivers::serial::init();
     
     println!("===========================================");
-    println!("  Exo-OS Kernel v0.1.0");
+    println!("  Exo-OS Kernel v0.2.0-PHASE8-BOOT");
     println!("  Architecture: x86_64");
     println!("  Bootloader: Multiboot2 + GRUB");
     println!("===========================================");
@@ -175,9 +176,31 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: u64, multiboot_magic: u32) -> 
     
     println!("[INIT] Gestionnaire de mémoire...");
     memory::init(&boot_info);
+    // Auto-test heap après init mémoire
+    memory::heap_allocator::selftest();
     
     println!("[INIT] Ordonnanceur...");
     scheduler::init(4); // 4 CPUs par défaut
+    // Threads de démonstration préemptifs
+    fn demo_a() {
+        loop {
+            println!("[demo A] tick");
+            // Simule un travail puis cède volontairement parfois
+            for _ in 0..10 { unsafe { core::arch::asm!("nop") }; }
+            // Cooperative yield pour voir l'alternance même sans timer
+            crate::scheduler::yield_();
+        }
+    }
+    fn demo_b() {
+        loop {
+            println!("[demo B] tick");
+            for _ in 0..5 { unsafe { core::arch::asm!("nop") }; }
+            crate::scheduler::yield_();
+        }
+    }
+    println!("[INIT] Spawn demo threads...");
+    scheduler::spawn(demo_a, Some("demo_a"), None);
+    scheduler::spawn(demo_b, Some("demo_b"), None);
     
     println!("[INIT] IPC...");
     ipc::init();

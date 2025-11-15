@@ -3,8 +3,14 @@
 //! Ce module fournit des mécanismes de communication inter-processus haute performance
 //! avec une latence cible de < 500ns pour les messages rapides.
 
-pub mod message;
 pub mod channel;
+pub mod message;
+
+#[cfg(feature = "fusion_rings")]
+pub mod fusion_ring;
+
+#[cfg(test)]
+pub mod bench_fusion;
 
 use alloc::collections::BTreeMap;
 use spin::Mutex;

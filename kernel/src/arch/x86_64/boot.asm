@@ -39,22 +39,42 @@ p3_table:
 p2_table:
     resb 4096
 
-section .text
+; Stockage de l'adresse Multiboot2 (sauvegardée depuis EBX en 32-bit)
+align 8
+multiboot_info_ptr:
+    dq 0
+; Stockage du magic Multiboot2 (sauvegardé depuis EAX en 32-bit)
+align 8
+multiboot_magic:
+    dq 0
+
+section .multiboot_header
 global _start
-extern rust_main  ; Point d'entrée Rust défini dans lib.rs
+extern kernel_main  ; Point d'entrée Rust principal (lib.rs)
 
 _start:
+    ; DEBUG: Écrire 'A' en mode 32-bit (prouve que GRUB a appelé _start)
+    mov dword [0xB8000], 0x4F414F41  ; 'AA' en blanc sur fond rouge
+    
     ; Désactiver les interruptions
     cli
     
     ; Configurer la pile
     mov esp, stack_top
     
-    ; Sauvegarder les informations du bootloader
-    mov edi, ebx  ; ebx contient l'adresse de la structure multiboot
+    ; DEBUG: Écrire 'B' après config pile
+    mov dword [0xB8004], 0x2F422F42  ; 'BB' en vert
+    
+    ; Sauvegarder l'adresse Multiboot2 fournie par GRUB (dans EBX)
+    mov dword [multiboot_info_ptr], ebx
+    ; Sauvegarder le magic Multiboot2 fourni par GRUB (dans EAX)
+    mov dword [multiboot_magic], eax
     
     ; Vérifier le support du mode long (x86_64)
     call check_long_mode
+    
+    ; DEBUG: Écrire 'P' après check_long_mode
+    mov dword [0xB8008], 0x1F501F50  ; 'PP' en bleu
     
     ; Activer la pagination et passer en mode long
     call setup_page_tables
@@ -158,7 +178,11 @@ enter_long_mode:
 
 [BITS 64]
 long_mode_start:
-    ; Charger les segments
+    ; DEBUG: Écrire '6' en mode long (prouve qu'on est arrivé en 64-bit)
+    mov rax, 0xB8000
+    mov word [rax], 0x4F36  ; '6' en blanc sur fond rouge
+    
+    ; Charger les segments (nécessite un segment de données R/W valide pour SS)
     mov ax, gdt64.data
     mov ss, ax
     mov ds, ax
@@ -166,23 +190,32 @@ long_mode_start:
     mov fs, ax
     mov gs, ax
     
+    ; DEBUG: Écrire '4' après chargement des segments
+    mov rax, 0xB8000
+    mov word [rax + 2], 0x2F34  ; '4' en vert
+    
     ; Configurer la pile 64-bit avant d'appeler Rust
     mov rsp, stack_top
     xor rbp, rbp
     
-    ; DEBUG: Vérifier que la pile est bien configurée
-    ; On ne peut pas utiliser println! ici car le noyau n'est pas encore initialisé
-    ; On va écrire directement sur la console VGA pour vérifier
-    mov rax, 0xB8000      ; Adresse du buffer VGA
-    mov rbx, 'S'          ; Caractère à afficher
-    mov rcx, 0x0F00       ; Couleur (blanc sur noir)
-    mov [rax], rbx        ; Écrire le caractère
-    mov [rax+2], rcx      ; Écrire la couleur
+    ; DEBUG: Écrire 'S' après configuration de la pile (pile OK)
+    mov rax, 0xB8000
+    mov word [rax + 4], 0x1F53  ; 'S' en bleu
+
+    ; Récupérer l'adresse Multiboot2 et le magic sauvegardés
+    mov rdi, [rel multiboot_info_ptr]  ; RDI = adresse multiboot (1er argument SysV x86_64)
+    mov esi, dword [rel multiboot_magic] ; RSI = magic (2e argument)
     
-    ; Appeler le point d'entrée Rust
-    call rust_main
+    ; DEBUG: Écrire 'C' avant CALL (prêt à appeler Rust)
+    mov rax, 0xB8000
+    mov word [rax + 6], 0x6F43  ; 'C' en jaune
     
-    ; Si rust_main retourne (ne devrait pas arriver)
+    ; Appeler le point d'entrée Rust principal
+    ; kernel_main(multiboot_info_ptr: u64, multiboot_magic: u32) -> !
+    call kernel_main
+    
+    ; Si _kernel_start retourne (ne devrait pas arriver)
+    cli
     hlt
     jmp $
 
@@ -191,9 +224,11 @@ section .rodata
 gdt64:
     dq 0  ; Entrée nulle
 .code: equ $ - gdt64
-    dq (1<<43) | (1<<44) | (1<<47) | (1<<53)  ; segment de code
+    ; Descripteur de code 64-bit: P=1, DPL=0, S=1 (code/données), Type=0xA (exécutable, lisible), L=1, D=0, G=0
+    dq 0x00209A0000000000
 .data: equ $ - gdt64
-    dq (1<<44) | (1<<47)  ; segment de données
+    ; Descripteur de données 64-bit: P=1, DPL=0, S=1, Type=0x2 (données, lecture/écriture), L=0, D=0, G=0
+    dq 0x0000920000000000
 .pointer:
     dw $ - gdt64 - 1
     dq gdt64

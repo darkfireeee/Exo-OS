@@ -20,8 +20,17 @@
 //! - `scheduler.rs`: Contient la logique de l'ordonnanceur.
 //! - `context_switch.S`: Routine assembleur pour le changement de contexte.
 
-pub mod thread;
 pub mod scheduler;
+pub mod thread;
+
+#[cfg(feature = "windowed_context_switch")]
+pub mod windowed_thread;
+
+#[cfg(feature = "predictive_scheduler")]
+pub mod predictive_scheduler;
+
+#[cfg(test)]
+pub mod bench_predictive;
 
 use thread::{Thread, ThreadId, ThreadState};
 use scheduler::Scheduler;

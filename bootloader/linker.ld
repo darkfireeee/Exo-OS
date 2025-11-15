@@ -1,6 +1,6 @@
 /* Linker script pour Exo-OS avec bootloader multiboot2 */
 
-ENTRY(_start)
+ENTRY(start)
 
 SECTIONS
 {

@@ -146,3 +146,10 @@ pub fn init() {
 pub mod block;
 pub mod serial;
 // pub mod vga_text; // Supprimé - utilisation de libutils::display à la place
+
+// Phase 5: Adaptive Drivers - Auto-optimisation Polling/Interrupt
+pub mod adaptive_driver;
+pub mod adaptive_block;
+
+#[cfg(test)]
+pub mod bench_adaptive;

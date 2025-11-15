@@ -1,6 +1,6 @@
 [package]
 name = "exo-kernel"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["ExoOS Team"]
 edition = "2021"
 
@@ -54,6 +54,12 @@ default = []
 binary = []
 crypto = ["sha3", "ed25519-dalek"]
 serialization = ["capnp"]
+# Optimisations Zero-Copy Fusion
+fusion_rings = []
+windowed_context_switch = []
+hybrid_allocator = []
+predictive_scheduler = []
+adaptive_drivers = []
 
 [profile.dev]
 panic = "abort"

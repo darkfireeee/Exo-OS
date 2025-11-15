@@ -3,9 +3,11 @@
 //! Ce module fournit des fonctions pour lire et écrire dans les registres
 //! du processeur x86_64.
 
+#[cfg(not(target_os = "windows"))]
 use core::arch::asm;
 
 /// Lit le registre CR3 (Page Directory Base)
+#[cfg(not(target_os = "windows"))]
 pub fn read_cr3() -> usize {
     let value: usize;
     unsafe {
@@ -14,20 +16,37 @@ pub fn read_cr3() -> usize {
     value
 }
 
+#[cfg(target_os = "windows")]
+pub fn read_cr3() -> usize {
+    0
+}
+
 /// Écrit dans le registre CR3 (Page Directory Base)
+#[cfg(not(target_os = "windows"))]
 pub fn write_cr3(value: usize) {
     unsafe {
         asm!("mov cr3, {}", in(reg) value);
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn write_cr3(_value: usize) {
+    // No-op sur Windows pour tests
+}
+
 /// Lit le registre CR2 (Page Fault Linear Address)
+#[cfg(not(target_os = "windows"))]
 pub fn read_cr2() -> usize {
     let value: usize;
     unsafe {
         asm!("mov {}, cr2", out(reg) value);
     }
     value
+}
+
+#[cfg(target_os = "windows")]
+pub fn read_cr2() -> usize {
+    0
 }
 
 /// Lit le registre CR0 (Control Register 0)

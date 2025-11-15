@@ -7,6 +7,7 @@ use alloc::string::String;
 use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::VirtAddr;
 use crate::println;
+use alloc::alloc::{alloc, dealloc, Layout};
 
 /// Identifiant unique pour un thread.
 pub type ThreadId = u64;
@@ -30,17 +31,23 @@ pub enum ThreadState {
 /// Contexte d'exécution d'un thread.
 /// Cette structure est directement manipulée par le code assembleur `context_switch.S`.
 /// Elle doit être `#[repr(C)]` pour garantir une disposition mémoire prévisible.
-#[repr(C)]
+#[repr(C, align(16))]
 pub struct ThreadContext {
     /// Pointeur de sommet de pile (RSP).
     /// C'est le seul champ que le code assembleur modifie directement.
     rsp: VirtAddr,
+    
+    /// Padding pour forcer l'alignement à 16 bytes
+    _padding: u64,
 }
 
 impl ThreadContext {
     /// Crée un nouveau contexte avec une adresse de pile donnée.
     pub fn new(stack_top: VirtAddr) -> Self {
-        Self { rsp: stack_top }
+        Self { 
+            rsp: stack_top,
+            _padding: 0,
+        }
     }
 
     /// Retourne l'adresse de sommet de pile.
@@ -55,6 +62,7 @@ impl ThreadContext {
 }
 
 /// La structure de contrôle de thread (TCB).
+#[repr(C, align(16))]
 pub struct Thread {
     /// Identifiant unique du thread.
     pub id: ThreadId,
@@ -84,14 +92,15 @@ impl Thread {
     /// Cette fonction est `unsafe` car elle manipule directement la mémoire
     /// pour allouer une pile et préparer le contexte d'exécution initial.
     pub unsafe fn new(f: fn(), name: Option<&str>, cpu_affinity: Option<u32>) -> Self {
-        // 1. Allouer une pile pour le thread.
-        // Une taille de 8 KiB est un bon point de départ pour les threads du noyau.
-        let stack_size = 8 * 1024; // 8 KiB
-        
-        // Pour l'instant, on utilise une allocation statique simple
-        // TODO: Utiliser un vrai allocateur de pile quand le heap sera prêt
-        static mut STACK_SPACE: [u8; 8192] = [0; 8192];
-        let stack_start = VirtAddr::from_ptr(&STACK_SPACE as *const _);
+        // 1. Allouer une pile pour le thread depuis le heap global.
+        // Taille par défaut: 16 KiB (un peu plus de marge pour appels imbriqués)
+        let stack_size = 16 * 1024; // 16 KiB
+        let layout = Layout::from_size_align(stack_size, 16).expect("Invalid stack layout");
+        let raw_stack_ptr = alloc(layout);
+        if raw_stack_ptr.is_null() {
+            panic!("[thread] Échec allocation pile {} bytes", stack_size);
+        }
+        let stack_start = VirtAddr::from_ptr(raw_stack_ptr);
         let stack_top: VirtAddr = stack_start + stack_size;
 
         // 2. Préparer la pile pour le premier lancement.
@@ -122,7 +131,9 @@ impl Thread {
 
 impl Drop for Thread {
     fn drop(&mut self) {
-        // TODO: Libérer la mémoire de la pile quand le heap sera implémenté
-        println!("[thread] Dropped thread '{}' (ID: {})", self.name.as_deref().unwrap_or("unnamed"), self.id);
+        // Libérer la pile
+        let layout = Layout::from_size_align(self.stack_size, 16).unwrap();
+        unsafe { dealloc(self.stack_start.as_mut_ptr(), layout); }
+        println!("[thread] Dropped thread '{}' (ID: {}) - stack freed", self.name.as_deref().unwrap_or("unnamed"), self.id);
     }
 }

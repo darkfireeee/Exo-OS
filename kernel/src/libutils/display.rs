@@ -116,7 +116,7 @@ pub fn write_banner() {
     
     clear_screen();
     set_color(Color::LightGreen);
-    write_centered(10, "EXO-OS KERNEL v0.1.0");
+    write_centered(10, "EXO-OS KERNEL v0.2.0-PHASE8-BOOT");
     set_color(Color::White);
     
     let end = crate::perf_counters::rdtsc();

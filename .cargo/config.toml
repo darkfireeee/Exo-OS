@@ -1,5 +1,10 @@
+[build]
+target = "x86_64-unknown-none"
+
 [target.x86_64-unknown-none]
-linker = "ld"
 rustflags = [
-    "-C", "link-arg=-T/mnt/c/Users/Eric/Documents/Exo-OS/linker.ld"
+    "-C", "link-arg=-T",
+    "-C", "link-arg=linker.ld",
+    "-C", "link-arg=--no-pie",
+    "-C", "relocation-model=static",
 ]

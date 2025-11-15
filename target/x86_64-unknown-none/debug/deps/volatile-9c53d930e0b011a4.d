@@ -1,0 +1,10 @@
+C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\deps\volatile-9c53d930e0b011a4.d: C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\lib.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\access.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ptr\mod.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ptr\macros.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ptr\operations.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ref.rs
+
+C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\deps\libvolatile-9c53d930e0b011a4.rmeta: C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\lib.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\access.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ptr\mod.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ptr\macros.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ptr\operations.rs C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ref.rs
+
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\lib.rs:
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\access.rs:
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ptr\mod.rs:
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ptr\macros.rs:
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ptr\operations.rs:
+C:\Users\Eric\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\volatile-0.5.4\src\volatile_ref.rs:

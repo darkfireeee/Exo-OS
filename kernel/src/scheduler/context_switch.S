@@ -10,7 +10,9 @@
 # La fonction sauvegarde l'état complet du thread actuel,
 # puis restaure l'état du nouveau thread.
 
+.section .text
 .global context_switch
+.p2align 4, 0x90
 
 # RDI = *mut ThreadContext (pointeur vers l'ancien contexte)
 # RSI = VirtAddr (nouveau RSP)
@@ -20,7 +22,7 @@ context_switch:
     # Si le pointeur vers l'ancien contexte est nul, cela signifie que c'est
     # le premier lancement d'un thread (pas d'ancien contexte à sauvegarder).
     test %rdi, %rdi
-    jz .restore_context
+    jz .Lrestore_context
 
     # Sauvegarder tous les registres généraux (callee-saved) sur la pile actuelle.
     push %rbp
@@ -35,7 +37,8 @@ context_switch:
     # à l'adresse pointée par RDI.
     mov %rsp, (%rdi)
 
-.restore_context:
+.p2align 4, 0x90
+.Lrestore_context:
     # --- Restauration du contexte du nouveau thread ---
 
     # Charger le nouveau pointeur de pile depuis RSI.

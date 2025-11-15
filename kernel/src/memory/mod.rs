@@ -8,6 +8,12 @@ pub mod frame_allocator;
 pub mod page_table;
 pub mod heap_allocator;
 
+#[cfg(feature = "hybrid_allocator")]
+pub mod hybrid_allocator;
+
+#[cfg(test)]
+pub mod bench_allocator;
+
 use x86_64::{
     structures::paging::{
         Page, PageTableFlags, Size4KiB,

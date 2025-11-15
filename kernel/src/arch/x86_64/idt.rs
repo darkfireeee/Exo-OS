@@ -3,6 +3,7 @@
 
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use crate::println;
+use core::sync::atomic::{AtomicU64, Ordering};
 use lazy_static::lazy_static;
 
 lazy_static! {
@@ -110,24 +111,26 @@ extern "x86-interrupt" fn general_protection_fault_handler(
     loop {}
 }
 
+static TICKS: AtomicU64 = AtomicU64::new(0);
+
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    // Gérer l'interruption du timer
-    println!("Timer interrupt");
-    
-    // Envoyer EOI (End Of Interrupt) au PIC
-    unsafe {
-        let mut port = x86_64::instructions::port::Port::<u8>::new(0x20);
-        port.write(0x20);
+    // Incrémenter le tick et appeler l'ordonnanceur (préemptif)
+    let ticks = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+    if ticks % 100 == 0 {
+        // Log ponctuel toutes les ~1s à 100 Hz pour éviter le spam
+        crate::println!("[timer] {} ticks", ticks);
     }
+
+    // Notifier l'ordonnanceur (peut être un NOP si non implémenté)
+    crate::scheduler::on_timer_tick();
+
+    // Envoyer EOI au PIC maître
+    crate::arch::x86_64::pic::eoi(0);
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     // Gérer l'interruption du clavier
     println!("Keyboard interrupt");
-    
-    // Envoyer EOI (End Of Interrupt) au PIC
-    unsafe {
-        let mut port = x86_64::instructions::port::Port::<u8>::new(0x20);
-        port.write(0x20);
-    }
+    // EOI maître uniquement (IRQ1)
+    crate::arch::x86_64::pic::eoi(1);
 }

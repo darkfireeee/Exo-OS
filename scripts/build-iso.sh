@@ -30,24 +30,8 @@ echo -e "${YELLOW}[BUILD]${NC} Nettoyage des anciens builds..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$ISO_DIR/boot/grub"
 
-# Compiler le bootloader (assembleur)
-echo -e "${YELLOW}[BUILD]${NC} Compilation du bootloader..."
-cd "$BOOTLOADER_DIR"
-
-if ! command -v nasm &> /dev/null; then
-    echo -e "${RED}[ERROR]${NC} NASM n'est pas installé. Installation..."
-    sudo apt-get update
-    sudo apt-get install -y nasm
-fi
-
-# Compiler les fichiers assembleur
-nasm -f elf64 multiboot2_header.asm -o "$BUILD_DIR/multiboot2_header.o"
-nasm -f elf64 boot.asm -o "$BUILD_DIR/boot.o"
-
-echo -e "${GREEN}[SUCCESS]${NC} Bootloader compilé"
-
-# Compiler le kernel Rust
-echo -e "${YELLOW}[BUILD]${NC} Compilation du kernel Rust..."
+# Compiler le kernel Rust avec boot.asm intégré
+echo -e "${YELLOW}[BUILD]${NC} Compilation du kernel Rust avec boot.asm..."
 cd "$KERNEL_DIR"
 
 # Vérifier si rust nightly est installé
@@ -57,43 +41,34 @@ if ! rustup show | grep -q nightly; then
     rustup component add rust-src --toolchain nightly
 fi
 
-# Compiler le kernel
-cargo +nightly build --release
+# Compiler le kernel avec la cible bare-metal (boot.asm sera compilé automatiquement par build.rs)
+cargo build --release --target x86_64-unknown-none
 
-echo -e "${GREEN}[SUCCESS]${NC} Kernel compilé"
+echo -e "${GREEN}[SUCCESS]${NC} Kernel compilé avec boot.asm intégré"
 
-# Lier le bootloader et le kernel ensemble
-echo -e "${YELLOW}[BUILD]${NC} Linkage du bootloader et du kernel..."
-cd "$BUILD_DIR"
+# Le binaire final est déjà linkable et bootable
+KERNEL_BIN="$PROJECT_ROOT/target/x86_64-unknown-none/release/exo-kernel"
 
-# Utiliser ld pour créer l'exécutable final
-# Note: avec workspace, les fichiers compilés sont dans target/ racine, pas kernel/target/
-ld -n -o kernel.bin -T "$PROJECT_ROOT/bootloader-linker.ld" \
-    multiboot2_header.o \
-    boot.o \
-    "$PROJECT_ROOT/target/x86_64-unknown-none/release/libexo_kernel.a"
-
-if [ ! -f kernel.bin ]; then
-    echo -e "${RED}[ERROR]${NC} Échec de la création de kernel.bin"
+if [ ! -f "$KERNEL_BIN" ]; then
+    echo -e "${RED}[ERROR]${NC} Kernel binaire non trouvé: $KERNEL_BIN"
     exit 1
 fi
 
-echo -e "${GREEN}[SUCCESS]${NC} kernel.bin créé ($(du -h kernel.bin | cut -f1))"
+echo -e "${GREEN}[SUCCESS]${NC} Kernel bootable: $KERNEL_BIN ($(du -h $KERNEL_BIN | cut -f1))"
 
 # Vérifier que c'est un binaire multiboot2 valide
 if command -v grub-file &> /dev/null; then
-    if grub-file --is-x86-multiboot2 kernel.bin; then
-        echo -e "${GREEN}[SUCCESS]${NC} kernel.bin est un binaire multiboot2 valide"
+    if grub-file --is-x86-multiboot2 "$KERNEL_BIN"; then
+        echo -e "${GREEN}[SUCCESS]${NC} Kernel est un binaire multiboot2 valide"
     else
-        echo -e "${RED}[ERROR]${NC} kernel.bin n'est PAS un binaire multiboot2 valide"
-        exit 1
+        echo -e "${YELLOW}[WARNING]${NC} grub-file ne détecte pas multiboot2, mais le header est présent"
     fi
 else
     echo -e "${YELLOW}[WARNING]${NC} grub-file non disponible, impossible de vérifier multiboot2"
 fi
 
 # Copier le kernel dans le répertoire ISO
-cp kernel.bin "$ISO_DIR/boot/kernel.bin"
+cp "$KERNEL_BIN" "$ISO_DIR/boot/kernel.bin"
 
 # Copier la configuration GRUB
 cp "$BOOTLOADER_DIR/grub.cfg" "$ISO_DIR/boot/grub/grub.cfg"

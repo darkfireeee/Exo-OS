@@ -2,16 +2,20 @@
 // Gestionnaires d'interruptions
 
 use x86_64::instructions::interrupts;
+use core::sync::atomic::{AtomicU64, Ordering};
+
+// Compteur global de ticks PIT
+static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Initialise les interruptions
 pub fn init() {
     crate::println!("Initialisation des interruptions...");
 
-    // NE PAS activer les interruptions immédiatement !
-    // Le PIC doit être initialisé en premier
-    // Les interruptions seront activées manuellement plus tard
+    // A ce stade, le PIC/PIT a été configuré par arch::init.
+    // On peut activer les interruptions globales.
+    unsafe { interrupts::enable(); }
 
-    crate::println!("Interruptions configurées (désactivées).");
+    crate::println!("Interruptions activées.");
 }
 
 /// Désactive les interruptions
@@ -21,9 +25,7 @@ pub fn disable_interrupts() {
 
 /// Active les interruptions
 pub fn enable_interrupts() {
-    unsafe {
-        interrupts::enable();
-    }
+    unsafe { interrupts::enable(); }
 }
 
 /// Exécute une fonction avec les interruptions désactivées

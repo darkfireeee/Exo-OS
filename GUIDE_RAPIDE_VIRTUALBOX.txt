@@ -1,0 +1,156 @@
+╔══════════════════════════════════════════════════════════════╗
+║        EXO-OS PHASE 8 - TEST AVEC VIRTUALBOX               ║
+║              Guide Ultra-Rapide (5 minutes)                 ║
+╚══════════════════════════════════════════════════════════════╝
+
+📥 ÉTAPE 1 : INSTALLER VIRTUALBOX (si pas déjà fait)
+════════════════════════════════════════════════════════════════
+  1. Aller sur : https://www.virtualbox.org/wiki/Downloads
+  2. Télécharger : "Windows hosts"
+  3. Installer le fichier téléchargé
+  4. Lancer VirtualBox
+
+🔧 ÉTAPE 2 : CRÉER LA VM
+════════════════════════════════════════════════════════════════
+  1. Ouvrir VirtualBox
+  2. Cliquer "Nouvelle" (bouton bleu)
+  3. Remplir :
+     ┌────────────────────────────────────┐
+     │ Nom     : Exo-OS-Test             │
+     │ Type    : Linux                    │
+     │ Version : Other Linux (64-bit)     │
+     │ Mémoire : 512 MB                   │
+     │ Disque  : Ne pas ajouter           │
+     └────────────────────────────────────┘
+  4. Cliquer "Créer"
+
+💿 ÉTAPE 3 : ATTACHER L'ISO
+════════════════════════════════════════════════════════════════
+  1. Sélectionner "Exo-OS-Test"
+  2. Cliquer "Configuration" (icône engrenage)
+  3. Menu "Stockage" (à gauche)
+  4. Cliquer sur le CD vide sous "Contrôleur IDE"
+  5. À droite, cliquer l'icône de disque 💿
+  6. Choisir "Choose a disk file..."
+  7. Naviguer vers :
+     C:\Users\Eric\Documents\Exo-OS\build\exo-os-v2.iso
+  8. Cliquer "OK" pour fermer la configuration
+
+🚀 ÉTAPE 4 : DÉMARRER ET OBSERVER
+════════════════════════════════════════════════════════════════
+  1. Sélectionner "Exo-OS-Test"
+  2. Cliquer "Démarrer" (flèche verte)
+  3. Une fenêtre s'ouvre → OBSERVEZ L'ÉCRAN !
+
+════════════════════════════════════════════════════════════════
+📋 CE QUE VOUS DEVEZ VOIR
+════════════════════════════════════════════════════════════════
+
+✅ ÉCRAN 1 - MENU GRUB (après quelques secondes)
+────────────────────────────────────────────────────────────────
+   GNU GRUB version X.XX
+   
+   ╔════════════════════════════════════════╗
+   ║ Exo-OS Kernel v0.2.0-PHASE8-BOOT      ║ ← VÉRIFIER ICI !
+   ╚════════════════════════════════════════╝
+   
+   ⚠️  DOIT DIRE "v0.2.0-PHASE8-BOOT"
+   ❌ Si vous voyez "v0.1.0" → ISO pas à jour
+
+✅ ÉCRAN 2 - MARQUEURS DE BOOT (après Enter)
+────────────────────────────────────────────────────────────────
+   Regardez le COIN SUPÉRIEUR GAUCHE de l'écran :
+   
+   AA BB PP 64 4 S C XXXXXXXXXXXXXXXXXXXXXXX...
+   ↑  ↑  ↑  ↑  ↑ ↑ ↑ ↑
+   │  │  │  │  │ │ │ └─ rust_main exécuté ✅
+   │  │  │  │  │ │ └─── Avant appel rust_main
+   │  │  │  │  │ └───── Stack 64-bit OK
+   │  │  │  │  └─────── Segments chargés
+   │  │  │  └────────── Mode 64-bit actif
+   │  │  └───────────── CPU supporte 64-bit
+   │  └──────────────── Stack configuré
+   └─────────────────── Point d'entrée atteint
+
+   Couleurs attendues :
+   • AA → Blanc sur fond Rouge
+   • BB → Vert sur fond Noir
+   • PP → Bleu sur fond Noir
+   • 64 → Blanc sur fond Rouge
+   • 4  → Vert sur fond Noir
+   • S  → Bleu sur fond Noir
+   • C  → Jaune sur fond Noir
+   • XXX... → Ligne de X verts (toute la ligne)
+
+════════════════════════════════════════════════════════════════
+🎯 RÉSULTATS ATTENDUS
+════════════════════════════════════════════════════════════════
+
+✅ SUCCÈS TOTAL
+   • Menu GRUB montre "v0.2.0-PHASE8-BOOT"
+   • TOUS les marqueurs apparaissent : AA BB PP 64 4 S C XXX...
+   • Pas d'erreur "address is out of range"
+   → LE KERNEL BOOT CORRECTEMENT ! 🎉
+
+⚠️ SUCCÈS PARTIEL (diagnostic nécessaire)
+   • Seulement AA BB → Problème dans check_long_mode
+   • Seulement AA BB PP → Problème dans setup_page_tables
+   • Jusqu'à C mais pas de XXX → Problème dans rust_main
+   → Me dire exactement quels marqueurs vous voyez
+
+❌ ÉCHEC
+   • Erreur "address is out of range" → Linker pas appliqué
+   • Aucun marqueur visible → Tester test-minimal.iso
+   • Écran noir total → ISO corrompue ?
+
+════════════════════════════════════════════════════════════════
+🔍 TEST DIAGNOSTIC (si problème)
+════════════════════════════════════════════════════════════════
+
+Si vous ne voyez AUCUN marqueur :
+
+1. Éteindre la VM
+2. Configuration → Stockage
+3. Changer l'ISO pour :
+   C:\Users\Eric\Documents\Exo-OS\build\test-minimal.iso
+4. Redémarrer
+
+Vous devriez voir : !!ETST (en couleurs)
+
+Interprétation :
+• test-minimal.iso fonctionne → Problème dans le kernel principal
+• test-minimal.iso ne fonctionne pas → Problème GRUB/VirtualBox
+
+════════════════════════════════════════════════════════════════
+📸 RAPPORTER LES RÉSULTATS
+════════════════════════════════════════════════════════════════
+
+Merci de me dire :
+
+1. Version dans le menu : v0.1.0 ou v0.2.0-PHASE8-BOOT ?
+2. Marqueurs visibles : Listez-les exactement (AA, BB, PP, ...)
+3. Erreurs affichées : Copiez le texte exact
+4. Comportement : Freeze ? Reboot ? Stable ?
+
+Vous pouvez aussi prendre des screenshots avec :
+VirtualBox → Menu "Périphériques" → "Prendre une capture d'écran"
+
+════════════════════════════════════════════════════════════════
+🧹 NETTOYAGE (après le test)
+════════════════════════════════════════════════════════════════
+
+Pour supprimer la VM de test :
+1. Fermer la fenêtre de la VM
+2. VirtualBox → Sélectionner "Exo-OS-Test"
+3. Clic droit → "Supprimer"
+4. Choisir "Supprimer tous les fichiers"
+
+════════════════════════════════════════════════════════════════
+
+Fichier ISO à utiliser :
+C:\Users\Eric\Documents\Exo-OS\build\exo-os-v2.iso
+
+Taille : 5.0 MB
+Créé le : 12 Nov 2025
+
+════════════════════════════════════════════════════════════════
