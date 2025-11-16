@@ -1,0 +1,181 @@
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+06FD1F90+06F31F90 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from Floppy...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[01;01H[2J[02;30HGNU GRUB  version 2.12[04;02H┌────────────────────────────────────────────────────────────────────────────┐[05;02H│[05;79H│[06;02H│[06;79H│[07;02H│[07;79H│[08;02H│[08;79H│[09;02H│[09;79H│[10;02H│[10;79H│[11;02H│[11;79H│[12;02H│[12;79H│[13;02H│[13;79H│[14;02H│[14;79H│[15;02H│[15;79H│[16;02H│[16;79H│[17;02H│[17;79H│[18;02H└─────────────────────[18;23H[18;24H─────────────────────────────────────[18;60H[18;61H──────────────────┘[20;02H     Use the ↑ and ↓ keys to select which entry is highlighted.          
+      Press enter to b[21;22H[21;23Hoot the selected OS, `e' to edit the c[21;60H[21;61Hommands       
+      before booting or `c' for a command-line.                           [05;80H [05;03H[0;30;47m*Exo-OS Kernel v0.2.0-PHASE8-BOOT                                           [06;03H[0m Exo-OS Kernel v0.2.0 (Safe Mode)                                           [07;03H Reboot                          [07;35H[07;36H                                           [08;03H Shutdown                                  [08;45H[08;46H                                 [09;03H                                                                            [10;03H                                                [10;50H[10;51H                            [11;03H                   [11;21H[11;22H                                                         [12;03H                                                     [12;55H[12;56H                       [13;03H                   [13;21H[13;22H                                                         [14;03H                                                             [14;63H[14;64H               [15;03H                                                                            [16;03H                                                                [16;66H[16;67H            [17;03H                                              [17;48H[17;49H                              [17;80H 
+
+
+
+
+
+   The highlighted entry wil[23;28H[23;29Hl be executed automatically in[23;58H[23;59H 5s.                 [05;78H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   The highlighted entry will be executed automatically in 4s.                 [05;78H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   The highli[23;13H[23;14Hghted entry will be executed automatically in 3s.                 [05;78H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   The highlighted entry will be executed au[23;44H[23;45Htomatically in 2s.                 [05;78H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   The highlighted[23;18H[23;19H entry will be executed automatically in 1s.                 [05;78H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   The highlighted entry will be executed automatically in 0s.     [23;67H[23;68H            [01;01H[2J[2J===========================================
+  Exo-OS Kernel v0.2.0-PHASE8-BOOT
+  Architecture: x86_64
+  Bootloader: Multiboot2 + GRUB
+===========================================
+[BOOT] Multiboot2 magic validé: 0x36d76289
+[BOOT] Multiboot info @ 0x10e360
+
+[MEMORY] Carte mémoire:
+  0x0000000000000000 - 0x000000000009fc00 (0 MB) [Disponible]
+  0x0000000000100000 - 0x0000000007fe0000 (126 MB) [Disponible]
+[MEMORY] Heap initialisé: 0x110000 - 0x1110000 (16384 KB)
+
+  2 régions mémoire utilisables
+  Mémoire utilisable totale: 127 MB
+
+[BOOT] Bootloader: GRUB 2.12-1ubuntu7.3
+
+[INIT] Architecture x86_64...
+Initialisation de l'architecture x86_64...
+[DEBUG] TSS IST[1] @ 0x10d028
+Initialisation des interruptions...
+Interruptions activées.
+Architecture x86_64 initialisée avec succès.
+[INIT] Gestionnaire de mémoire...
+[MEMORY] Initialisation du gestionnaire de mémoire...
+[MEMORY] Memory map trouvée avec 7 zones
+[MEMORY] Mémoire totale: 12415 MB
+[MEMORY] Mémoire utilisable: 127 MB
+[FRAME_ALLOC] Initialisation:
+  Adresse de base: 0x10000
+  Taille: 588800 bytes (0)
+  Frames totales: 143
+  Bitmap size: 18 bytes
+[MEMORY] Frame allocator initialisé: 0x10000 - 0x9fc00
+[PAGE_TABLE] Initialisation du gestionnaire de tables de pages...
+[PAGE_TABLE] Gestionnaire de tables de pages initialisé.
+[HEAP] Allocateur de tas initialisé (via linked_list_allocator).
+[MEMORY] Gestionnaire de mémoire initialisé avec succès.
+[HEAP] Selftest démarrage...
+[HEAP] Selftest OK
+[HEAP] Stats: used=0 allocs=2 frees=2
+[INIT] Ordonnanceur...
+[scheduler] Initialized RR scheduler for 4 CPUs.
+[INIT] IPC...
+[IPC] Initialisation du système IPC...
+[IPC][TRACE] Création canal 'kernel'...
+[IPC][TRACE] Création canal 'debug'...
+[IPC][TRACE] Création canal 'broadcast'...
+[IPC][TRACE] Création canal 'log' (standard)...
+[IPC] Système IPC initialisé avec 4 canaux par défaut.
+[INIT] Appels système...
+[SYSCALL] Initialisation du mécanisme d'appels système...
+[SYSCALL] Interface d'appels système initialisée (mode simplifié).
+[INIT] Pilotes...
+[DRIVERS] Initialisation du sous-système de pilotes...
+[DRIVERS] Sous-système de pilotes initialisé.
+[PERF] Initialisation des compteurs de performance...
+[PERF] Système de performance initialisé.
+
+[SUCCESS] Noyau initialisé avec succès!
+
+[DISPLAY] Écriture du banner VGA...
+[DISPLAY] Banner VGA écrit avec succès
+
+[KERNEL] Entrant dans la boucle principale...
+
+[PERF] Démarrage des microbenchmarks runtime...
+[MICROBENCH][IPC Inline] mean=

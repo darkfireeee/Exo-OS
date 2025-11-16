@@ -30,7 +30,10 @@ source ~/.cargo/env
 # Étape 1: Compiler le kernel Rust
 echo -e "${YELLOW}[1/5]${NC} Compilation du kernel Rust..."
 cd kernel
-cargo build --release --target x86_64-unknown-none -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+cargo build --release --target x86_64-unknown-none \
+    --features "fusion_rings,hybrid_allocator" \
+    -Z build-std=core,alloc,compiler_builtins \
+    -Z build-std-features=compiler-builtins-mem
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ Échec de la compilation du kernel${NC}"

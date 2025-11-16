@@ -24,17 +24,19 @@
      └────────────────────────────────────┘
   4. Cliquer "Créer"
 
-💿 ÉTAPE 3 : ATTACHER L'ISO
+💿 ÉTAPE 3 : ATTACHER L'ISO (BIOS uniquement)
 ════════════════════════════════════════════════════════════════
   1. Sélectionner "Exo-OS-Test"
   2. Cliquer "Configuration" (icône engrenage)
-  3. Menu "Stockage" (à gauche)
-  4. Cliquer sur le CD vide sous "Contrôleur IDE"
-  5. À droite, cliquer l'icône de disque 💿
-  6. Choisir "Choose a disk file..."
-  7. Naviguer vers :
-     C:\Users\Eric\Documents\Exo-OS\build\exo-os-v2.iso
-  8. Cliquer "OK" pour fermer la configuration
+  3. Dans "Système" → décocher "Activer EFI" (BIOS seulement)
+  4. Dans "Système" → Ordre de démarrage: CD/DVD en premier
+  5. Menu "Stockage" (à gauche)
+  6. Cliquer sur le CD vide sous "Contrôleur IDE"
+  7. À droite, cliquer l'icône de disque 💿
+  8. Choisir "Choose a disk file..."
+  9. Naviguer vers :
+     C:\Users\Eric\Documents\Exo-OS\build\exo-os.iso
+  10. Cliquer "OK" pour fermer la configuration
 
 🚀 ÉTAPE 4 : DÉMARRER ET OBSERVER
 ════════════════════════════════════════════════════════════════
@@ -57,30 +59,25 @@
    ⚠️  DOIT DIRE "v0.2.0-PHASE8-BOOT"
    ❌ Si vous voyez "v0.1.0" → ISO pas à jour
 
-✅ ÉCRAN 2 - MARQUEURS DE BOOT (après Enter)
+✅ ÉCRAN 2 - BANNIÈRE VGA ET STATUTS (après Enter)
 ────────────────────────────────────────────────────────────────
-   Regardez le COIN SUPÉRIEUR GAUCHE de l'écran :
+   L'écran texte (VGA) affiche proprement :
    
-   AA BB PP 64 4 S C XXXXXXXXXXXXXXXXXXXXXXX...
-   ↑  ↑  ↑  ↑  ↑ ↑ ↑ ↑
-   │  │  │  │  │ │ │ └─ rust_main exécuté ✅
-   │  │  │  │  │ │ └─── Avant appel rust_main
-   │  │  │  │  │ └───── Stack 64-bit OK
-   │  │  │  │  └─────── Segments chargés
-   │  │  │  └────────── Mode 64-bit actif
-   │  │  └───────────── CPU supporte 64-bit
-   │  └──────────────── Stack configuré
-   └─────────────────── Point d'entrée atteint
+      EXO-OS 64
+      Kernel v0.2.0-PHASE8-BOOT
+      Arch: x86_64
+      Boot: Multiboot2 + GRUB
+   
+   Puis des lignes de statut en bas :
+      Mémoire utilisable: <XXX> MB
+      Heap: OK
+      Scheduler: OK
+      IPC: OK
 
-   Couleurs attendues :
-   • AA → Blanc sur fond Rouge
-   • BB → Vert sur fond Noir
-   • PP → Bleu sur fond Noir
-   • 64 → Blanc sur fond Rouge
-   • 4  → Vert sur fond Noir
-   • S  → Bleu sur fond Noir
-   • C  → Jaune sur fond Noir
-   • XXX... → Ligne de X verts (toute la ligne)
+   Remarques:
+   • Aucun artefact « 64SCPP » ni ligne de X ne doit apparaître
+   • Si vous voyez encore une ancienne ligne "XXX" ou du texte coloré aléatoire,
+    c'est que l'ISO chargée n'est pas la bonne. Vérifiez le chemin et le hash.
 
 ════════════════════════════════════════════════════════════════
 🎯 RÉSULTATS ATTENDUS
@@ -88,7 +85,7 @@
 
 ✅ SUCCÈS TOTAL
    • Menu GRUB montre "v0.2.0-PHASE8-BOOT"
-   • TOUS les marqueurs apparaissent : AA BB PP 64 4 S C XXX...
+   • BANNIÈRE propre "EXO-OS 64" + statuts OK (Mémoire/Heap/Scheduler/IPC)
    • Pas d'erreur "address is out of range"
    → LE KERNEL BOOT CORRECTEMENT ! 🎉
 
@@ -100,7 +97,7 @@
 
 ❌ ÉCHEC
    • Erreur "address is out of range" → Linker pas appliqué
-   • Aucun marqueur visible → Tester test-minimal.iso
+   • Écran brouillé/artefacts → Mauvaise ISO (vérifiez le chemin et la SHA-256)
    • Écran noir total → ISO corrompue ?
 
 ════════════════════════════════════════════════════════════════
@@ -148,9 +145,9 @@ Pour supprimer la VM de test :
 ════════════════════════════════════════════════════════════════
 
 Fichier ISO à utiliser :
-C:\Users\Eric\Documents\Exo-OS\build\exo-os-v2.iso
+C:\Users\Eric\Documents\Exo-OS\build\exo-os.iso
 
-Taille : 5.0 MB
-Créé le : 12 Nov 2025
+Astuce: Vous pouvez vérifier l'empreinte:
+   PowerShell → Get-FileHash build\exo-os.iso -Algorithm SHA256
 
 ════════════════════════════════════════════════════════════════

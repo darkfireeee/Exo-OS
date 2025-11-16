@@ -228,7 +228,7 @@ impl AdaptiveBlockDriver {
     
     /// Retourne les statistiques du controller
     pub fn controller_stats(&self) -> DriverStats {
-        self.controller.lock().stats().clone()
+        self.controller.lock().get_stats().clone()
     }
 }
 

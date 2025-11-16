@@ -10,6 +10,7 @@ use crate::scheduler;
 use crate::memory;
 use crate::ipc;
 use crate::drivers::block;
+use crate::perf_counters::{rdtsc, PERF_MANAGER, Component};
 
 /// Lit des données depuis un descripteur de fichier
 /// 
@@ -259,21 +260,40 @@ pub fn sys_clone(args: SyscallArgs) -> u64 {
 /// # Retour
 /// 0 en cas de succès ou code d'erreur
 pub fn sys_ipc_send(args: SyscallArgs) -> u64 {
+    let start = rdtsc();
+    
     let channel_id = args.rdi as u32;
     let msg_ptr = args.rsi as *const u8;
     let msg_size = args.rdx as usize;
     
     // TODO: Valider que msg_ptr est dans l'espace utilisateur valide
     
-    // Créer un message IPC
+    // Données à envoyer
     let data = unsafe { core::slice::from_raw_parts(msg_ptr, msg_size) };
+
+    // Fast path: si Fusion Rings + canal rapide associé et message inline
+    #[cfg(feature = "fusion_rings")]
+    {
+        if msg_size <= crate::ipc::fusion_ring::INLINE_SIZE {
+            if ipc::send_fast_by_id(channel_id, data).is_ok() {
+                let end = rdtsc();
+                PERF_MANAGER.record(Component::Syscall, end - start);
+                return 0;
+            }
+        }
+    }
+
+    // Fallback: chemin standard via Channel
     let msg = ipc::message::Message::new_buffered(0, 0, 0, alloc::vec::Vec::from(data));
-    
-    // Utiliser le module IPC pour envoyer le message
-    match ipc::send_message(channel_id, msg) {
+    let result = match ipc::send_message(channel_id, msg) {
         Ok(()) => 0,
         Err(_) => 0xFFFFFFFFFFFFFFFF,  // Erreur
-    }
+    };
+    
+    let end = rdtsc();
+    PERF_MANAGER.record(Component::Syscall, end - start);
+    
+    result
 }
 
 /// Reçoit un message IPC
@@ -286,14 +306,28 @@ pub fn sys_ipc_send(args: SyscallArgs) -> u64 {
 /// # Retour
 /// Taille du message reçu ou code d'erreur
 pub fn sys_ipc_recv(args: SyscallArgs) -> u64 {
+    let start = rdtsc();
+    
     let channel_id = args.rdi as u32;
     let buf_ptr = args.rsi as *mut u8;
     let buf_size = args.rdx as usize;
     
     // TODO: Valider que buf_ptr est dans l'espace utilisateur valide
     
-    // Utiliser le module IPC pour recevoir un message
-    match ipc::receive_message(channel_id) {
+    // Fast path: si Fusion Rings + canal rapide et des données disponibles
+    #[cfg(feature = "fusion_rings")]
+    {
+        if let Ok(bytes) = ipc::receive_fast_by_id(channel_id) {
+            let copy_size = core::cmp::min(bytes.len(), buf_size);
+            unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf_ptr, copy_size); }
+            let end = rdtsc();
+            PERF_MANAGER.record(Component::Syscall, end - start);
+            return copy_size as u64;
+        }
+    }
+
+    // Fallback: chemin standard via Channel
+    let result = match ipc::receive_message(channel_id) {
         Ok(msg) => {
             let data = msg.data();
             let copy_size = core::cmp::min(data.len(), buf_size);
@@ -303,5 +337,10 @@ pub fn sys_ipc_recv(args: SyscallArgs) -> u64 {
             copy_size as u64
         }
         Err(_) => 0xFFFFFFFFFFFFFFFF,  // Erreur
-    }
+    };
+    
+    let end = rdtsc();
+    PERF_MANAGER.record(Component::Syscall, end - start);
+    
+    result
 }

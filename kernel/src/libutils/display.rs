@@ -113,12 +113,111 @@ pub fn write_centered(row: usize, s: &str) {
 /// Écrit un petit banner au centre de l'écran (utilisé comme fallback)
 pub fn write_banner() {
     let start = crate::perf_counters::rdtsc();
-    
+
+    // Nettoyer l'écran et afficher un bandeau d'accueil lisible
     clear_screen();
-    set_color(Color::LightGreen);
-    write_centered(10, "EXO-OS KERNEL v0.2.0-PHASE8-BOOT");
+
+    // Titre principal
     set_color(Color::White);
-    
+    write_centered(7, "EXO-OS 64");
+
+    // Sous-titre / version
+    set_color(Color::LightGreen);
+    write_centered(9, "Kernel v0.2.0-PHASE8-BOOT");
+
+    // Informations essentielles
+    set_color(Color::LightGray);
+    write_centered(11, "Arch: x86_64");
+    write_centered(12, "Boot: Multiboot2 + GRUB");
+
+    // Laisser la couleur par défaut en blanc
+    set_color(Color::White);
+
     let end = crate::perf_counters::rdtsc();
     crate::perf_counters::PERF_MANAGER.record(crate::perf_counters::Component::Vga, end - start);
+}
+
+/// Écrit un entier décimal à la position donnée sans allocation.
+/// Retourne le nombre de chiffres écrits.
+pub fn write_decimal_at(row: usize, mut col: usize, mut num: u64) -> usize {
+    if row >= HEIGHT || col >= WIDTH {
+        return 0;
+    }
+    // Buffer local pour stocker les chiffres en ordre inverse (u64 max = 20 chiffres)
+    let mut tmp = [0u8; 20];
+    let mut i = 0usize;
+    if num == 0 {
+        tmp[0] = b'0';
+        i = 1;
+    } else {
+        while num > 0 && i < tmp.len() {
+            let d = (num % 10) as u8;
+            tmp[i] = b'0' + d;
+            num /= 10;
+            i += 1;
+        }
+    }
+
+    // Écrire les chiffres dans l'ordre correct
+    let fg = FG_COLOR.load(Ordering::SeqCst);
+    let attr = attr_byte(fg);
+    let buf = BUFFER_ADDR as *mut u8;
+
+    let mut written = 0usize;
+    let mut j = i;
+    while j > 0 && col < WIDTH {
+        j -= 1;
+        let ch = tmp[j];
+        let idx = (row * WIDTH + col) * 2;
+        unsafe {
+            core::ptr::write_volatile(buf.add(idx), ch);
+            core::ptr::write_volatile(buf.add(idx + 1), attr);
+        }
+        col += 1;
+        written += 1;
+    }
+    written
+}
+
+/// Écrit une ligne de statut de la forme "<label>: OK/FAIL". Couleur du label claire, et OK en vert.
+pub fn write_status_line(row: usize, label: &str, ok: bool) {
+    // Label
+    set_color(Color::LightGray);
+    write_str_at(row, 2, label);
+    let mut col = 2 + label.len();
+    if col + 2 < WIDTH {
+        write_str_at(row, col, ": ");
+        col += 2;
+    }
+
+    // Valeur
+    if ok {
+        set_color(Color::LightGreen);
+        write_str_at(row, col, "OK");
+    } else {
+        set_color(Color::LightRed);
+        write_str_at(row, col, "FAIL");
+    }
+
+    // Restaurer
+    set_color(Color::White);
+}
+
+/// Affiche sous la bannière les informations utiles de boot et statuts clés
+pub fn write_boot_status(mem_mb: u64, heap_ok: bool, scheduler_ok: bool, ipc_ok: bool) {
+    // Mémoire utilisable
+    set_color(Color::LightCyan);
+    let label = "Mémoire utilisable: ";
+    write_str_at(14, 2, label);
+    set_color(Color::LightCyan);
+    let digits = write_decimal_at(14, 2 + label.len(), mem_mb);
+    write_str_at(14, 2 + label.len() + digits, " MB");
+
+    // Statuts
+    write_status_line(15, "Heap", heap_ok);
+    write_status_line(16, "Scheduler", scheduler_ok);
+    write_status_line(17, "IPC", ipc_ok);
+
+    // Restaurer la couleur
+    set_color(Color::White);
 }

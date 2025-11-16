@@ -2,6 +2,7 @@
 members = [
     "kernel",
 ]
+resolver = "2"
 
 [workspace.package]
 authors = ["ExoOS Team"]

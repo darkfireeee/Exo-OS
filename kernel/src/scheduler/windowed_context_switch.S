@@ -19,7 +19,10 @@
 windowed_context_switch:
     # === SAUVEGARDE MINIMAL (16 bytes) ===
     # Sauvegarde RSP actuel
+    test %rdi, %rdi
+    jz 1f
     mov %rsp, (%rdi)
+1:
     
     # === SWITCH VERS NOUVELLE PILE ===
     mov %rsi, %rsp

@@ -10,12 +10,14 @@
 use core::sync::atomic::{AtomicU64, Ordering, fence};
 use alloc::vec::Vec;
 use spin::Mutex;
+use core::mem::MaybeUninit;
 
 /// Taille d'une page (4KB)
 const PAGE_SIZE: usize = 4096;
 
 /// Taille du ring (doit être puissance de 2)
-const RING_SIZE: usize = 4096;
+/// Note: réduit pour éviter une allocation massive sur la pile lors de la construction
+const RING_SIZE: usize = 64;
 
 /// Taille d'un slot (1 cache line)
 const SLOT_SIZE: usize = 64;
@@ -133,7 +135,15 @@ pub struct BatchDescriptor {
 impl FusionRing {
     /// Crée un nouveau ring
     pub fn new() -> Self {
-        Self {
+        // Construction initiale avec slots zeroed puis correction des numéros de séquence.
+        // Algorithme attendu (inspiré des rings lock-free classiques):
+        //  - seq initial par slot = index (i)
+        //  - producteur: slot libre si seq == tail
+        //      -> écrit données puis seq = tail + 1
+        //  - consommateur: données présentes si seq == head + 1
+        //      -> lit puis seq = head + RING_SIZE (libération)
+        // Ceci garantit réutilisation cyclique correcte sans off-by-one.
+        let mut ring = Self {
             head: AtomicU64::new(0),
             tail: AtomicU64::new(0),
             batch_size: 16,
@@ -141,7 +151,17 @@ impl FusionRing {
             _pad1: [0; 56],
             _pad2: [0; 48],
             slots: unsafe { core::mem::zeroed() },
+        };
+        // Initialiser correctement chaque slot
+        for i in 0..RING_SIZE {
+            ring.slots[i].seq.store(i as u64, Ordering::Relaxed);
+            unsafe {
+                let slot_mut = &ring.slots[i] as *const Slot as *mut Slot;
+                (*slot_mut).msg_type = MessageType::Control; // état neutre
+                (*slot_mut).flags = 0;
+            }
         }
+        ring
     }
     
     /// Envoie un message zero-copy (via descripteur shared memory)
@@ -305,8 +325,8 @@ impl FusionRing {
             }
         };
         
-        // Marque le slot comme libre
-        slot.seq.store(head + RING_SIZE as u64 + 1, Ordering::Release);
+        // Marque le slot comme libre (remet seq = head + RING_SIZE pour disponibilité future)
+        slot.seq.store(head + RING_SIZE as u64, Ordering::Release);
         
         // Avance le head
         self.head.store(head + 1, Ordering::Release);
@@ -381,8 +401,7 @@ impl FusionRing {
             let slot = &self.slots[slot_idx];
             slot.seq.store(tail + 1, Ordering::Release);
         }
-        
-        // Avance le tail d'un coup
+
         self.tail.store(start_tail + sent_count as u64, Ordering::Release);
         
         Ok(sent_count)
@@ -514,17 +533,18 @@ mod tests {
     #[test]
     fn test_multiple_messages() {
         let ring = FusionRing::new();
-        
-        // Envoie 100 messages
-        for i in 0..100 {
-            let data = [i as u8; 56];
-            ring.send_inline(&data).unwrap();
+
+        // Envoie exactement RING_SIZE messages (capacité maximale)
+        for i in 0..RING_SIZE {
+            let mut data = [0u8; INLINE_SIZE];
+            data[0] = i as u8;
+            ring.send_inline(&data[..56.min(INLINE_SIZE)]).unwrap();
         }
-        
-        assert_eq!(ring.pending_messages(), 100);
-        
+
+        assert_eq!(ring.pending_messages(), RING_SIZE);
+
         // Reçoit tous
-        for i in 0..100 {
+        for i in 0..RING_SIZE {
             match ring.recv().unwrap() {
                 Message::Inline(received) => {
                     assert_eq!(received[0], i as u8);
@@ -532,7 +552,7 @@ mod tests {
                 _ => panic!("Wrong message type"),
             }
         }
-        
+
         assert_eq!(ring.pending_messages(), 0);
     }
     
@@ -695,25 +715,25 @@ mod tests {
     #[test]
     fn test_batch_vs_individual_performance() {
         let ring = FusionRing::new();
-        
-        // Test avec batch : beaucoup plus rapide grâce à la fence unique
+
+        // Test avec batch : envoyer au plus RING_SIZE messages
         let msg = [0xAB; 32];
-        let messages: Vec<&[u8]> = (0..100).map(|_| &msg[..]).collect();
-        
+        let messages: Vec<&[u8]> = (0..RING_SIZE).map(|_| &msg[..]).collect();
+
         let sent = ring.send_batch(&messages).unwrap();
-        assert_eq!(sent, 100);
-        
+        assert_eq!(sent, RING_SIZE);
+
         // Vide le ring
-        for _ in 0..100 {
+        for _ in 0..RING_SIZE {
             ring.recv().unwrap();
         }
-        
+
         // Test individuel (pour comparaison)
-        for _ in 0..100 {
+        for _ in 0..RING_SIZE {
             ring.send_inline(&msg).unwrap();
         }
-        
-        assert_eq!(ring.pending_messages(), 100);
+
+        assert_eq!(ring.pending_messages(), RING_SIZE);
     }
     
     #[test]

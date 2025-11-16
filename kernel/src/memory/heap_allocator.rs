@@ -7,6 +7,7 @@ use core::ptr::NonNull;
 use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::println;
+use crate::drivers::serial;
 
 /// Initialise le tas avec la zone fournie par le bootloader
 static USED_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -14,7 +15,11 @@ static ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
 static DEALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 pub fn init() {
+    #[cfg(not(feature = "hybrid_allocator"))]
     println!("[HEAP] Allocateur de tas initialisé (via linked_list_allocator).");
+    
+    #[cfg(feature = "hybrid_allocator")]
+    println!("[HEAP] Allocateur de tas initialisé (mode hybrid - fallback actif).");
 }
 
 /// Vérifie l'intégrité du tas (fonction de debug)
@@ -46,6 +51,27 @@ pub struct HeapStats {
     pub free: usize,
     pub allocated_blocks: usize,
     pub free_blocks: usize,
+}
+
+#[inline(always)]
+fn print_usize_dec(mut n: usize) {
+    // Conversion décimale sans allocation
+    let mut buf = [0u8; 32];
+    let mut i = 0;
+    if n == 0 {
+        serial::write_char(b'0');
+        return;
+    }
+    while n > 0 && i < buf.len() {
+        let d = (n % 10) as u8;
+        buf[i] = b'0' + d;
+        n /= 10;
+        i += 1;
+    }
+    while i > 0 {
+        i -= 1;
+        serial::write_char(buf[i]);
+    }
 }
 
 /// Allocation manuelle pour tests (contourne l'API globale)
@@ -94,5 +120,12 @@ pub fn selftest() {
     // 3. Intégrité
     if check_heap_integrity() { println!("[HEAP] Selftest OK"); } else { println!("[HEAP] Selftest FAIL"); }
     let stats = get_stats();
-    println!("[HEAP] Stats: used={} allocs={} frees={}", stats.used, stats.allocated_blocks, stats.free_blocks);
+    // Impression manuelle (évite les formats complexes si UART est capricieux)
+    serial::write_str("[HEAP] Stats: used=");
+    print_usize_dec(stats.used);
+    serial::write_str(" allocs=");
+    print_usize_dec(stats.allocated_blocks);
+    serial::write_str(" frees=");
+    print_usize_dec(stats.free_blocks);
+    serial::write_str("\n");
 }

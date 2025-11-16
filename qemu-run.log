@@ -1,0 +1,12 @@
+[0;34m=========================================[0m
+[0;34m  Exo-OS QEMU Runner[0m
+[0;34m=========================================[0m
+[0;32m[QEMU][0m Lancement de Exo-OS...
+[1;33m[INFO][0m ISO: /mnt/c/Users/Eric/Documents/Exo-OS/build/exo-os.iso
+[1;33m[INFO][0m SHA-256: 4824111963bc8ae94365432ea7052b8f54acceab30fe9b58d986728c2958643e
+[1;33m[INFO][0m Taille: 5314560 octets
+[1;33m[INFO][0m Pour quitter: Ctrl+A puis X
+[0;34m=========================================[0m
+[1;33m[INFO][0m Mode headless (-nographic)
+[1;33m[INFO][0m Serial → file: qemu-serial.log
+[1;33m[INFO][0m isa-debug-exit activé (port 0xF4)

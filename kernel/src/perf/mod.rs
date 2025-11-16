@@ -3,6 +3,7 @@
 //! Framework unifié pour mesurer et comparer les performances des optimisations.
 
 pub mod bench_framework;
+pub mod runtime_bench;
 
 #[cfg(test)]
 pub mod bench_orchestrator;

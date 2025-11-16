@@ -12,6 +12,7 @@ use crate::println;
 use alloc::sync::Arc;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
+use crate::perf_counters::{rdtsc, PERF_MANAGER, Component};
 
 /// Structure représentant l'ordonnanceur.
 pub struct Scheduler {
@@ -66,6 +67,8 @@ impl Scheduler {
     /// Orchestre un changement de contexte.
     /// C'est la fonction principale appelée par `yield_`, `exit`, ou les interruptions.
     pub fn schedule(&mut self) {
+        let start = rdtsc();
+        
         // Obtenir l'ID du CPU actuel. Dans un vrai noyau, cela viendrait de registres spécifiques (ex: GS base).
         // Pour cet exemple, nous simulons être sur le CPU 0.
         let current_cpu_id = 0; 
@@ -106,6 +109,9 @@ impl Scheduler {
                 .unwrap_or(core::ptr::null_mut());
             let new_context_ptr = self.threads.get(&id).unwrap().lock().context.rsp().as_u64();
 
+            let end = rdtsc();
+            PERF_MANAGER.record(Component::Scheduler, end - start);
+
             // Effectuer le changement de contexte en assembleur.
             // C'est un point de non-retour pour l'ancien thread.
             unsafe {
@@ -114,6 +120,9 @@ impl Scheduler {
         } else {
             // Aucun thread à exécuter. On peut mettre le CPU en pause (halt).
             self.current_threads[current_cpu_id] = None;
+            let end = rdtsc();
+            PERF_MANAGER.record(Component::Scheduler, end - start);
+            
             println!("[scheduler] CPU {} has no work to do. Halting.", current_cpu_id);
             x86_64::instructions::hlt();
         }

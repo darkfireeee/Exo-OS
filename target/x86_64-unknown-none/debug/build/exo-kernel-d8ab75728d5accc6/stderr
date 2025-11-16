@@ -1,2 +1,0 @@
-src/arch/x86_64/boot.asm:45: warning: attempt to initialize memory in BSS section `.bss': ignored [-w+other]
-src/arch/x86_64/boot.asm:49: warning: attempt to initialize memory in BSS section `.bss': ignored [-w+other]

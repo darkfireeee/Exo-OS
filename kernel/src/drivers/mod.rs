@@ -139,6 +139,12 @@ pub fn init() {
     
     // L'initialisation est différée jusqu'à ce que les pilotes spécifiques soient enregistrés
     
+    #[cfg(feature = "adaptive_drivers")]
+    {
+        println!("[DRIVERS] Exécution de la démo Loopback Adaptive Driver...");
+        loopback_driver::demo_load_test();
+    }
+    
     println!("[DRIVERS] Sous-système de pilotes initialisé.");
 }
 
@@ -150,6 +156,9 @@ pub mod serial;
 // Phase 5: Adaptive Drivers - Auto-optimisation Polling/Interrupt
 pub mod adaptive_driver;
 pub mod adaptive_block;
+
+#[cfg(feature = "adaptive_drivers")]
+pub mod loopback_driver;
 
 #[cfg(test)]
 pub mod bench_adaptive;

@@ -356,7 +356,7 @@ impl AdaptiveController {
     }
     
     /// Retourne les statistiques
-    pub fn stats(&self) -> &DriverStats {
+    pub fn get_stats(&self) -> &DriverStats {
         &self.stats
     }
     

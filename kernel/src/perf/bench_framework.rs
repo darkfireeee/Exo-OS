@@ -9,11 +9,28 @@ use alloc::format;
 /// RDTSC helper unifié
 #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 pub fn rdtsc() -> u64 {
+    // Lecture TSC sans sérialisation forte
     unsafe {
         let mut low: u32;
         let mut high: u32;
         core::arch::asm!(
             "rdtsc",
+            out("eax") low,
+            out("edx") high,
+            options(nostack, nomem)
+        );
+        ((high as u64) << 32) | (low as u64)
+    }
+}
+
+/// Version sérialisée (lfence+rdtsc) pour mesures haute précision
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+pub fn rdtsc_precise() -> u64 {
+    unsafe {
+        let mut low: u32;
+        let mut high: u32;
+        core::arch::asm!(
+            "lfence; rdtsc; lfence",
             out("eax") low,
             out("edx") high,
             options(nostack, nomem)
@@ -85,11 +102,13 @@ impl BenchStats {
             })
             .sum::<u64>() / samples.len() as u64;
         
-        // Approximation de sqrt pour no_std (méthode de Newton)
+        // Approximation de sqrt pour no_std (méthode de Newton) avec garde anti-division-par-zéro
         let std_dev = if variance == 0 {
             0
         } else {
-            let mut x = variance / 2;
+            // Si variance == 1, variance/2 == 0 en entier → division par zéro au premier itér.
+            // On force x >= 1 pour garantir variance / x valide.
+            let mut x = if variance > 1 { variance / 2 } else { 1 };
             for _ in 0..10 {
                 let x_next = (x + variance / x) / 2;
                 if x_next == x {
@@ -150,7 +169,7 @@ impl BenchStats {
     
     /// Export CSV (une ligne)
     pub fn to_csv_line(&self, tsc_freq_mhz: u64) -> String {
-        format!("{},{},{},{},{},{},{},{},{}\n",
+        format!("BENCH,{},{},{},{},{},{},{},{},{}\n",
             self.name,
             self.samples.len(),
             self.mean,
@@ -363,8 +382,10 @@ where
         let mut samples = Vec::with_capacity(iterations);
         
         for _ in 0..iterations {
-            let cycles = bench_fn();
-            samples.push(cycles);
+            let start = rdtsc_precise();
+            let _ = bench_fn();
+            let end = rdtsc_precise();
+            samples.push(end - start);
         }
         
         let mean = samples.iter().sum::<u64>() / samples.len() as u64;
@@ -391,9 +412,9 @@ macro_rules! benchmark {
         let mut samples = alloc::vec::Vec::with_capacity($iterations);
         
         for _ in 0..$iterations {
-            let start = $crate::perf::bench_framework::rdtsc();
+            let start = $crate::perf::bench_framework::rdtsc_precise();
             $code
-            let end = $crate::perf::bench_framework::rdtsc();
+            let end = $crate::perf::bench_framework::rdtsc_precise();
             samples.push(end - start);
         }
         

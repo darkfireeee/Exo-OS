@@ -321,6 +321,36 @@ pub fn print_summary_report() {
             println!("Memory: {} appels, {} cycles moyen ({:.3} µs)", calls, avg, time_us);
         }
     }
+
+    // IPC
+    if let Some(stats) = PERF_MANAGER.get_stats(Component::Ipc) {
+        let calls = stats.total_calls.load(Ordering::Relaxed);
+        if calls > 0 {
+            let avg = stats.average_cycles();
+            let time_us = (avg as f64) / 3000.0;
+            println!("IPC: {} appels, {} cycles moyen ({:.3} µs)", calls, avg, time_us);
+        }
+    }
+
+    // Drivers
+    if let Some(stats) = PERF_MANAGER.get_stats(Component::Drivers) {
+        let calls = stats.total_calls.load(Ordering::Relaxed);
+        if calls > 0 {
+            let avg = stats.average_cycles();
+            let time_us = (avg as f64) / 3000.0;
+            println!("Drivers: {} appels, {} cycles moyen ({:.3} µs)", calls, avg, time_us);
+        }
+    }
+
+    // Kernel Boot
+    if let Some(stats) = PERF_MANAGER.get_stats(Component::KernelBoot) {
+        let calls = stats.total_calls.load(Ordering::Relaxed);
+        if calls > 0 {
+            let avg = stats.average_cycles();
+            let time_us = (avg as f64) / 3000.0;
+            println!("KernelBoot: {} mesures, {} cycles moyen ({:.3} µs)", calls, avg, time_us);
+        }
+    }
     
     println!("==============================================");
 }

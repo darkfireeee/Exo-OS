@@ -11,7 +11,7 @@ Stop-Process -Name "qemu-system-x86_64" -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 500
 
 # Chemins
-$ISO = "C:\Users\Eric\Documents\Exo-OS\exo-os.iso"
+$ISO = "C:\Users\Eric\Documents\Exo-OS\build\exo-os.iso"
 $LOG = "C:\Users\Eric\Documents\Exo-OS\boot-test.log"
 $QEMU = "C:\Program Files\qemu\qemu-system-x86_64.exe"
 
@@ -33,6 +33,7 @@ if (Test-Path $LOG) {
 
 Write-Host "[1/3] Lancement QEMU..." -ForegroundColor Yellow
 Write-Host "  → ISO: $([math]::Round((Get-Item $ISO).Length/1MB, 2)) MB" -ForegroundColor Gray
+try { Write-Host "  → SHA-256: $((Get-FileHash $ISO -Algorithm SHA256).Hash)" -ForegroundColor Gray } catch {}
 Write-Host "  → Mémoire: 512 MB" -ForegroundColor Gray
 Write-Host "  → Log: boot-test.log" -ForegroundColor Gray
 Write-Host ""

@@ -53,17 +53,11 @@ global _start
 extern kernel_main  ; Point d'entrée Rust principal (lib.rs)
 
 _start:
-    ; DEBUG: Écrire 'A' en mode 32-bit (prouve que GRUB a appelé _start)
-    mov dword [0xB8000], 0x4F414F41  ; 'AA' en blanc sur fond rouge
-    
     ; Désactiver les interruptions
     cli
     
     ; Configurer la pile
     mov esp, stack_top
-    
-    ; DEBUG: Écrire 'B' après config pile
-    mov dword [0xB8004], 0x2F422F42  ; 'BB' en vert
     
     ; Sauvegarder l'adresse Multiboot2 fournie par GRUB (dans EBX)
     mov dword [multiboot_info_ptr], ebx
@@ -73,8 +67,7 @@ _start:
     ; Vérifier le support du mode long (x86_64)
     call check_long_mode
     
-    ; DEBUG: Écrire 'P' après check_long_mode
-    mov dword [0xB8008], 0x1F501F50  ; 'PP' en bleu
+    ; (trace VGA supprimée)
     
     ; Activer la pagination et passer en mode long
     call setup_page_tables
@@ -178,9 +171,18 @@ enter_long_mode:
 
 [BITS 64]
 long_mode_start:
-    ; DEBUG: Écrire '6' en mode long (prouve qu'on est arrivé en 64-bit)
-    mov rax, 0xB8000
-    mov word [rax], 0x4F36  ; '6' en blanc sur fond rouge
+    ; Afficher une bannière VGA très précoce pour retour visuel (propre, sans artefacts)
+    mov rax, 0xB8000                ; Base du buffer texte VGA
+    ; Attribut 0x0F = blanc sur noir
+    mov word [rax + 0],  0x0F45     ; 'E'
+    mov word [rax + 2],  0x0F58     ; 'X'
+    mov word [rax + 4],  0x0F4F     ; 'O'
+    mov word [rax + 6],  0x0F2D     ; '-'
+    mov word [rax + 8],  0x0F4F     ; 'O'
+    mov word [rax + 10], 0x0F53     ; 'S'
+    mov word [rax + 12], 0x0F20     ; ' '
+    mov word [rax + 14], 0x0F36     ; '6'
+    mov word [rax + 16], 0x0F34     ; '4'
     
     ; Charger les segments (nécessite un segment de données R/W valide pour SS)
     mov ax, gdt64.data
@@ -190,25 +192,13 @@ long_mode_start:
     mov fs, ax
     mov gs, ax
     
-    ; DEBUG: Écrire '4' après chargement des segments
-    mov rax, 0xB8000
-    mov word [rax + 2], 0x2F34  ; '4' en vert
-    
     ; Configurer la pile 64-bit avant d'appeler Rust
     mov rsp, stack_top
     xor rbp, rbp
-    
-    ; DEBUG: Écrire 'S' après configuration de la pile (pile OK)
-    mov rax, 0xB8000
-    mov word [rax + 4], 0x1F53  ; 'S' en bleu
 
     ; Récupérer l'adresse Multiboot2 et le magic sauvegardés
     mov rdi, [rel multiboot_info_ptr]  ; RDI = adresse multiboot (1er argument SysV x86_64)
     mov esi, dword [rel multiboot_magic] ; RSI = magic (2e argument)
-    
-    ; DEBUG: Écrire 'C' avant CALL (prêt à appeler Rust)
-    mov rax, 0xB8000
-    mov word [rax + 6], 0x6F43  ; 'C' en jaune
     
     ; Appeler le point d'entrée Rust principal
     ; kernel_main(multiboot_info_ptr: u64, multiboot_magic: u32) -> !

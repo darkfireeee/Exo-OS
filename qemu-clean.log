@@ -1,0 +1,45 @@
+[DBG] kernel_main(): args: magic=0x36d76289, info=0x10e360
+===========================================
+  Exo-OS Kernel v0.2.0-PHASE8-BOOT
+  Architecture: x86_64
+  Bootloader: Multiboot2 + GRUB
+===========================================
+[BOOT] Multiboot2 magic validé: 0x36d76289
+[BOOT] Multiboot info @ 0x10e360
+[DBG] Chargement des tags Multiboot2...
+[DBG] BootInformation::load OK
+
+[MEMORY] Carte mémoire:
+  0x0000000000000000 - 0x000000000009fc00 (0 MB) [Disponible]
+  0x0000000000100000 - 0x000000001ffe0000 (510 MB) [Disponible]
+[MEMORY] Heap initialisé: 0x110000 - 0x1110000 (16384 KB)
+
+  2 régions mémoire utilisables
+  Mémoire utilisable totale: 511 MB
+
+[BOOT] Bootloader: GRUB 2.12-1ubuntu7.3
+
+[INIT] Architecture x86_64...
+Initialisation de l'architecture x86_64...
+[DEBUG] TSS IST[1] @ 0x10e290
+Initialisation des interruptions...
+Interruptions activées.
+Architecture x86_64 initialisée avec succès.
+[INIT] Gestionnaire de mémoire...
+[MEMORY] Initialisation du gestionnaire de mémoire...
+[MEMORY] Memory map trouvée avec 7 zones
+[MEMORY] Mémoire totale: 12799 MB
+[MEMORY] Mémoire utilisable: 511 MB
+[FRAME_ALLOC] Initialisation:
+  Adresse de base: 0x10000
+  Taille: 588800 bytes (0)
+  Frames totales: 143
+  Bitmap size: 18 bytes
+[MEMORY] Frame allocator initialisé: 0x10000 - 0x9fc00
+[PAGE_TABLE] Initialisation du gestionnaire de tables de pages...
+[PAGE_TABLE] Gestionnaire de tables de pages initialisé.
+[HEAP] Allocateur de tas initialisé (via linked_list_allocator).
+[MEMORY] Gestionnaire de mémoire initialisé avec succès.
+[HEAP] Selftest démarrage...
+[HEAP] Selftest OK
+[HEAP] Stats: used=

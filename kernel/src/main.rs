@@ -18,14 +18,6 @@ use exo_kernel::c_compat;
 /// * `multiboot_info_addr` - Adresse des informations Multiboot2 (passée par GRUB)
 #[no_mangle]
 pub extern "C" fn rust_main(multiboot_info_addr: usize) -> ! {
-    // DEBUG CRITIQUE: Écrire sur VGA AVANT TOUT
-    unsafe {
-        let vga = 0xB8000 as *mut u16;
-        // Remplir la première ligne avec des 'X' verts
-        for i in 0..80 {
-            *vga.offset(i) = 0x2F58; // 'X' vert sur noir
-        }
-    }
     
     // Initialiser le port série COM1 avec le code C
     unsafe {

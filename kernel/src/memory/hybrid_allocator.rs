@@ -311,11 +311,11 @@ impl CpuSlab {
         
         // Subdiviser la page en objets et créer une free list
         let first_obj = page;
-        let mut prev_obj = first_obj as *mut FreeNode;
+        let mut prev_obj = first_obj as *mut FreeBlock;
         
         for i in 1..objects_per_page {
             let obj_ptr = page.add(i * obj_size);
-            let node = obj_ptr as *mut FreeNode;
+            let node = obj_ptr as *mut FreeBlock;
             (*prev_obj).next = node;
             prev_obj = node;
         }
@@ -340,8 +340,8 @@ impl CpuSlab {
             return 0;
         }
         
-        let slab = &self.slabs[bin_idx];
-        let free_count = slab.free_count.load(Ordering::Acquire);
+        let free_count = self.slabs[bin_idx].free_count.load(Ordering::Acquire);
+        let obj_size = self.slabs[bin_idx].object_size;
         
         // Si pas assez d'objets libres, allouer une nouvelle page
         if free_count < count {
@@ -349,7 +349,7 @@ impl CpuSlab {
                 // Ajouter au cache
                 let cache_bin = &mut cache.bins[bin_idx];
                 if cache_bin.count < MAX_OBJECTS_PER_BIN {
-                    let node = first_obj as *mut FreeNode;
+                    let node = first_obj as *mut FreeBlock;
                     (*node).next = cache_bin.free_list;
                     cache_bin.free_list = node;
                     cache_bin.count += 1;
@@ -364,9 +364,8 @@ impl CpuSlab {
             return 0;
         }
         
-        let pages = slab.pages.lock();
+        let pages = self.slabs[bin_idx].pages.lock();
         let cache_bin = &mut cache.bins[bin_idx];
-        let obj_size = slab.object_size;
         let mut transferred = 0;
         
         // Parcourir les pages pour récupérer des objets libres
@@ -382,7 +381,7 @@ impl CpuSlab {
                 }
                 
                 let obj_ptr = page.add(i * obj_size);
-                let node = obj_ptr as *mut FreeNode;
+                let node = obj_ptr as *mut FreeBlock;
                 
                 // Ajouter à la free list du cache
                 (*node).next = cache_bin.free_list;
@@ -394,7 +393,7 @@ impl CpuSlab {
         
         // Mettre à jour les compteurs
         if transferred > 0 {
-            slab.free_count.fetch_sub(transferred, Ordering::Release);
+            self.slabs[bin_idx].free_count.fetch_sub(transferred, Ordering::Release);
             self.allocations.fetch_add(transferred as u64, Ordering::Relaxed);
         }
         
@@ -408,7 +407,7 @@ impl CpuSlab {
         }
         
         let slab = &self.slabs[bin_idx];
-        let node = obj as *mut FreeNode;
+        let node = obj as *mut FreeBlock;
         
         // Pour l'instant, on ajoute simplement à la liste
         // Dans une vraie implémentation, on pourrait libérer des pages entières
@@ -762,7 +761,7 @@ mod tests {
             // Créer une chaîne d'objets libres
             for i in 0..10 {
                 let obj = memory.add(i * 8);
-                let node = obj as *mut FreeNode;
+                let node = obj as *mut FreeBlock;
                 (*node).next = bin.free_list;
                 bin.free_list = node;
                 bin.count += 1;
@@ -864,7 +863,7 @@ mod tests {
                 
                 for i in 0..10 {
                     let obj = memory.add(i * size);
-                    let node = obj as *mut FreeNode;
+                    let node = obj as *mut FreeBlock;
                     (*node).next = bin.free_list;
                     bin.free_list = node;
                     bin.count += 1;

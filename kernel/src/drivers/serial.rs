@@ -31,7 +31,18 @@ impl SerialPort {
     }
 
     pub fn write_byte(&self, byte: u8) {
-        while !self.is_transmit_empty() {}
+        // Attente active limitée pour éviter un blocage infini si le LSR se fige
+        let mut spins: u32 = 0;
+        while !self.is_transmit_empty() {
+            spins = spins.wrapping_add(1);
+            // Délai très court pour laisser l'UART vidanger son FIFO
+            core::hint::spin_loop();
+            if spins > 1_000_000 {
+                // Si le périphérique ne devient jamais prêt, on force l'écriture
+                // (certains hyperviseurs peuvent ignorer l'état LSR sur fichiers)
+                break;
+            }
+        }
         unsafe {
             write_port_u8(self.port, byte);
         }

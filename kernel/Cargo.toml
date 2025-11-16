@@ -60,6 +60,8 @@ windowed_context_switch = []
 hybrid_allocator = []
 predictive_scheduler = []
 adaptive_drivers = []
+# Sortie automatique QEMU après microbenchmarks (isa-debug-exit)
+bench_auto_exit = []
 
 [profile.dev]
 panic = "abort"
