@@ -1,0 +1,19 @@
+[package]
+name = "exo_ipc"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Inter-process communication primitives for Exo-OS"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[features]
+default = []
+fusion_rings = []
+
+[package.metadata.exo-os]
+role = "ipc"
+stage = "core"

@@ -1,0 +1,35 @@
+# tools/image_builder/Cargo.toml
+
+[package]
+name = "exo-image-builder"
+version = "0.1.0"
+edition = "2021"
+authors = ["Exo-OS Team"]
+description = "Builds bootable disk images (ISO, HDD) for Exo-OS"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "exo-image-builder"
+path = "src/main.rs"
+
+[dependencies]
+# Pour l'interface en ligne de commande
+clap = { version = "4.0", features = ["derive"] }
+
+# Pour la création d'images ISO 9660
+iso9660 = "0.1"
+
+# Pour la création d'archives cpio (pour l'initramfs)
+cpio = "0.2"
+
+# Pour la compression gzip
+flate2 = "1.0"
+
+# Pour parcourir les répertoires
+walkdir = "2.0"
+
+# Gestion des erreurs
+anyhow = "1.0"
+
+# Pour la lecture de fichiers
+fs_extra = "1.2"

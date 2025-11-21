@@ -1,0 +1,24 @@
+[package]
+name = "services"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Common services framework for Exo-OS"
+
+[dependencies]
+log = "0.4"
+exo_std = { path = "../../libs/exo_std" }
+exo_ipc = { path = "../../libs/exo_ipc" }
+exo_types = { path = "../../libs/exo_types" }
+
+[lib]
+name = "services"
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[package.metadata.exo-os]
+role = "userland-framework"
+stage = "core"

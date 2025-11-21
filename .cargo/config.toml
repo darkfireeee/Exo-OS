@@ -1,0 +1,32 @@
+# .cargo/config.toml - Configuration globale du workspace Exo-OS
+# --------------------------------------------------------------
+# Ce fichier centralise la configuration de build pour le noyau et les outils.
+# Il force la cible bare-metal et applique des rustflags adaptés OS dev.
+
+[build]
+target = "x86_64-unknown-none"
+incremental = true
+
+[target.x86_64-unknown-none]
+# Runner optionnel (désactivé par défaut). Vous pouvez décommenter et adapter.
+# runner = "pwsh scripts/run-qemu-gui.ps1"
+
+rustflags = [
+  "-C", "link-arg=-Tlinker.ld",
+  "-C", "link-arg=--no-pie",
+  "-C", "relocation-model=static",
+  "-C", "code-model=kernel",
+  "-C", "debuginfo=1",
+]
+
+[unstable]
+# Requiert nightly
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+
+[env]
+# Active la sortie QEMU auto via feature bench_auto_exit si défini != 0
+EXO_QEMU_EXIT = "0"
+
+# Pour réduire la verbosité crossbeam en tests éventuels
+RUST_LOG = "info"

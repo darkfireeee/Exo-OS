@@ -1,0 +1,17 @@
+[package]
+name = "exo_std"
+version = "0.1.0"
+edition = "2021"
+description = "Standard library for Exo-OS native applications"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+exo_types = { path = "../exo_types" }
+exo_ipc = { path = "../exo_ipc" }
+exo_crypto = { path = "../exo_crypto" }
+bitflags = "1.3"
+log = "0.4"
+
+[features]
+default = []
+test_mode = []

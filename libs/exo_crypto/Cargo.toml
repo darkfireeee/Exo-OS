@@ -1,0 +1,22 @@
+[package]
+name = "exo_crypto"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Stub cryptographic primitives for Exo-OS"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+log = "0.4"
+
+[features]
+default = []
+std = []
+
+[package.metadata.exo-os]
+role = "crypto"
+stage = "early"

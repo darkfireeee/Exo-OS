@@ -1,0 +1,962 @@
+warning: exo-kernel@0.2.0: Compiled boot.asm with NASM (path src/arch/x86_64/boot/boot.asm)
+warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
+warning: exo-kernel@0.2.0: Compiled serial.c
+warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
+warning: exo-kernel@0.2.0: Compiled windowed.S (provides context_switch symbol)
+warning: unused import: `core::convert::TryInto`
+ --> libs\exo_crypto\src\chacha20.rs:4:5
+  |
+4 | use core::convert::TryInto;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `aad`
+   --> libs\exo_crypto\src\chacha20.rs:283:23
+    |
+283 | fn poly1305(m: &[u8], aad: &[u8], key: &[u8; POLY1305_KEYBYTES]) -> [u8; POLY1305_TAGBYTES] {
+    |                       ^^^ help: if this is intentional, prefix it with an underscore: `_aad`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `path`, `size`, and `extra_flags` are never read
+  --> libs\exo_types\src\capability.rs:67:5
+   |
+65 | pub struct CapabilityMetadata {
+   |            ------------------ fields in this struct
+66 |     /// Chemin ou nom pour les objets nomm├⌐s
+67 |     path: Option<String>,
+   |     ^^^^
+...
+70 |     size: Option<usize>,
+   |     ^^^^
+...
+73 |     extra_flags: u32,
+   |     ^^^^^^^^^^^
+   |
+   = note: `CapabilityMetadata` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `core::mem::MaybeUninit`
+ --> libs\exo_ipc\src\channel.rs:5:5
+  |
+5 | use core::mem::MaybeUninit;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `MAX_INLINE_SIZE`, `MessageFlags`, and `MessageHeader`
+ --> libs\exo_ipc\src\channel.rs:9:22
+  |
+9 | use crate::{Message, MessageFlags, MessageHeader, MAX_INLINE_SIZE, SLOT_SIZE};
+  |                      ^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `core::mem::size_of`
+ --> libs\exo_ipc\src\message.rs:4:5
+  |
+4 | use core::mem::size_of;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `size`
+   --> libs\exo_ipc\src\channel.rs:252:24
+    |
+252 | unsafe fn alloc_zeroed(size: usize) -> *mut u8 {
+    |                        ^^^^
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+    |
+252 | unsafe fn alloc_zeroed(_size: usize) -> *mut u8 {
+    |                        +
+help: you might have meant to pattern match on the similarly named constant `SLOT_ALIGN`
+    |
+252 - unsafe fn alloc_zeroed(size: usize) -> *mut u8 {
+252 + unsafe fn alloc_zeroed(SLOT_ALIGN: usize) -> *mut u8 {
+    |
+
+warning: field `capacity` is never read
+  --> libs\exo_ipc\src\channel.rs:30:5
+   |
+28 | struct RingBuffer<T> {
+   |        ---------- field in this struct
+29 |     buffer: *mut T,
+30 |     capacity: usize,
+   |     ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `capacity` is never read
+   --> libs\exo_ipc\src\channel.rs:101:5
+    |
+ 90 | pub struct Channel<T> {
+    |            ------- field in this struct
+...
+101 |     capacity: usize,
+    |     ^^^^^^^^
+
+warning: `exo_crypto` (lib) generated 2 warnings (run `cargo fix --lib -p exo_crypto` to apply 1 suggestion)
+warning: `exo_types` (lib) generated 1 warning
+warning: `exo_ipc` (lib) generated 6 warnings (run `cargo fix --lib -p exo_ipc` to apply 4 suggestions)
+   Compiling exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)
+error: unsafe attribute used without unsafe
+  --> kernel\src\arch\x86_64\context.rs:71:3
+   |
+71 | #[naked]
+   |   ^^^^^ usage of unsafe attribute
+   |
+help: wrap the attribute in `unsafe(...)`
+   |
+71 | #[unsafe(naked)]
+   |   +++++++     +
+
+warning: the feature `core_intrinsics` is internal to the compiler or standard library
+  --> kernel\src\lib.rs:10:12
+   |
+10 | #![feature(core_intrinsics)]
+   |            ^^^^^^^^^^^^^^^
+   |
+   = note: using it is strongly discouraged
+   = note: `#[warn(internal_features)]` on by default
+
+warning: unused `#[macro_use]` import
+  --> kernel\src\lib.rs:14:1
+   |
+14 | #[macro_use]
+   | ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused `#[macro_use]` import
+  --> kernel\src\lib.rs:16:1
+   |
+16 | #[macro_use]
+   | ^^^^^^^^^^^^
+
+warning: unused imports: `Cr4Flags` and `Cr4`
+ --> kernel\src\arch\x86_64\cpu\features.rs:6:34
+  |
+6 | use x86_64::registers::control::{Cr4, Cr4Flags};
+  |                                  ^^^  ^^^^^^^^
+
+warning: unused import: `super::cpuid`
+ --> kernel\src\arch\x86_64\cpu\features.rs:8:5
+  |
+8 | use super::cpuid;
+  |     ^^^^^^^^^^^^
+
+warning: unused imports: `read_msr` and `write_msr`
+ --> kernel\src\arch\x86_64\cpu\power.rs:6:38
+  |
+6 | use crate::arch::x86_64::registers::{read_msr, write_msr};
+  |                                      ^^^^^^^^  ^^^^^^^^^
+
+warning: unused doc comment
+  --> kernel\src\arch\x86_64\memory\mod.rs:42:1
+   |
+42 | /// Page table flags
+   | ^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+   = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `UnmapError`
+ --> kernel\src\arch\x86_64\memory\paging.rs:6:34
+  |
+6 | use super::{MapError, PageFlags, UnmapError};
+  |                                  ^^^^^^^^^^
+
+warning: unused imports: `GlobalAlloc` and `Layout`
+  --> kernel\src\arch\x86_64\memory\mod.rs:11:19
+   |
+11 | use core::alloc::{GlobalAlloc, Layout};
+   |                   ^^^^^^^^^^^  ^^^^^^
+
+warning: unused import: `core::ptr::NonNull`
+  --> kernel\src\arch\x86_64\memory\mod.rs:12:5
+   |
+12 | use core::ptr::NonNull;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::memory::frame_allocator::FrameAllocator`
+  --> kernel\src\arch\x86_64\memory\mod.rs:14:5
+   |
+14 | use crate::memory::frame_allocator::FrameAllocator;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::memory::heap::LockedHeap`
+  --> kernel\src\arch\x86_64\memory\mod.rs:15:5
+   |
+15 | use crate::memory::heap::LockedHeap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `phys_to_virt` and `virt_to_phys`
+  --> kernel\src\arch\x86_64\interrupts\ioapic.rs:13:21
+   |
+13 | use crate::memory::{phys_to_virt, virt_to_phys};
+   |                     ^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused import: `core::arch::asm`
+ --> kernel\src\arch\x86_64\syscall.rs:6:5
+  |
+6 | use core::arch::asm;
+  |     ^^^^^^^^^^^^^^^
+
+warning: ambiguous glob re-exports
+  --> kernel\src\arch\x86_64\mod.rs:35:9
+   |
+35 | pub use cpu::*;
+   |         ^^^^^^ the name `init` in the value namespace is first re-exported here
+36 | pub use memory::*;
+37 | pub use interrupts::*;
+   |         ------------- but the name `init` in the value namespace is also re-exported here
+   |
+   = note: `#[warn(ambiguous_glob_reexports)]` on by default
+
+warning: unused doc comment
+  --> kernel\src\arch\x86_64\registers.rs:53:1
+   |
+53 | /// CR0 register flags
+   | ^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+  --> kernel\src\arch\x86_64\registers.rs:70:1
+   |
+70 | /// CR4 register flags
+   | ^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+  --> kernel\src\arch\x86_64\registers.rs:95:1
+   |
+95 | /// RFLAGS register flags
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> kernel\src\arch\x86_64\registers.rs:307:1
+    |
+307 | /// EFER register flags
+    | ^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused import: `cpu::topology::CpuTopology`
+  --> kernel\src\arch\x86_64\mod.rs:49:5
+   |
+49 | use cpu::topology::CpuTopology;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `cpu::features::CpuFeatures`
+  --> kernel\src\arch\x86_64\mod.rs:50:5
+   |
+50 | use cpu::features::CpuFeatures;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `memory::paging::PageTableManager`
+  --> kernel\src\arch\x86_64\mod.rs:51:5
+   |
+51 | use memory::paging::PageTableManager;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unexpected `cfg` condition value: `acpi`
+  --> kernel\src\boot\mod.rs:15:7
+   |
+15 | #[cfg(feature = "acpi")]
+   |       ^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `adaptive_drivers`, `bench_auto_exit`, `binary`, `capnp`, `crypto`, `default`, `ed25519-dalek`, `fusion_rings`, `hybrid_allocator`, `post-quantum`, `predictive_scheduler`, `serialization`, `sha3`, and `windowed_context_switch`
+   = help: consider adding `acpi` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unused import: `FrameAllocator`
+  --> kernel\src\boot\mod.rs:11:27
+   |
+11 | use crate::memory::{self, FrameAllocator};
+   |                           ^^^^^^^^^^^^^^
+
+warning: unexpected `cfg` condition value: `ai`
+  --> kernel\src\boot\late_init.rs:89:11
+   |
+89 |     #[cfg(feature = "ai")]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `adaptive_drivers`, `bench_auto_exit`, `binary`, `capnp`, `crypto`, `default`, `ed25519-dalek`, `fusion_rings`, `hybrid_allocator`, `post-quantum`, `predictive_scheduler`, `serialization`, `sha3`, and `windowed_context_switch`
+   = help: consider adding `ai` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `tpm`
+   --> kernel\src\boot\late_init.rs:101:11
+    |
+101 |     #[cfg(feature = "tpm")]
+    |           ^^^^^^^^^^^^^^^
+    |
+    = note: expected values for `feature` are: `adaptive_drivers`, `bench_auto_exit`, `binary`, `capnp`, `crypto`, `default`, `ed25519-dalek`, `fusion_rings`, `hybrid_allocator`, `post-quantum`, `predictive_scheduler`, `serialization`, `sha3`, and `windowed_context_switch`
+    = help: consider adding `tpm` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unused import: `core::ptr::NonNull`
+ --> kernel\src\c_compat\mod.rs:8:5
+  |
+8 | use core::ptr::NonNull;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused doc comment
+   --> kernel\src\c_compat\mod.rs:189:1
+    |
+189 |   /// FFI declarations
+    |   ^^^^^^^^^^^^^^^^^^^^
+190 | / extern "C" {
+191 | |     // serial.c
+192 | |     fn serial_init(port: u16);
+193 | |     fn serial_putc(port: u16, c: u8);
+...   |
+213 | |     fn acpi_initialize() -> i32;
+214 | | }
+    | |_- rustdoc does not generate documentation for extern blocks
+    |
+    = help: use `//` for a plain comment
+
+warning: unused import: `PhysicalAddress`
+ --> kernel\src\memory\physical\bitmap_allocator.rs:8:21
+  |
+8 | use crate::memory::{PhysicalAddress, MemoryResult, MemoryError};
+  |                     ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::arch`
+ --> kernel\src\memory\physical\bitmap_allocator.rs:9:5
+  |
+9 | use crate::arch;
+  |     ^^^^^^^^^^^
+
+warning: unused import: `PhysicalAddress`
+ --> kernel\src\memory\physical\buddy_allocator.rs:8:21
+  |
+8 | use crate::memory::{PhysicalAddress, MemoryResult, MemoryError};
+  |                     ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::arch`
+ --> kernel\src\memory\physical\buddy_allocator.rs:9:5
+  |
+9 | use crate::arch;
+  |     ^^^^^^^^^^^
+
+warning: unused import: `page_table::PageTable`
+   --> kernel\src\memory\virtual_mem\mod.rs:214:5
+    |
+214 | use page_table::PageTable;
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `PhysicalAddress`
+  --> kernel\src\memory\shared\mod.rs:10:21
+   |
+10 | use crate::memory::{PhysicalAddress, VirtualAddress, MemoryResult, MemoryError, PageProtection};
+   |                     ^^^^^^^^^^^^^^^
+
+warning: unused import: `PhysicalAddress`
+ --> kernel\src\memory\shared\pool.rs:6:21
+  |
+6 | use crate::memory::{PhysicalAddress, MemoryResult, MemoryError};
+  |                     ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::arch`
+ --> kernel\src\memory\shared\pool.rs:7:5
+  |
+7 | use crate::arch;
+  |     ^^^^^^^^^^^
+
+warning: unused import: `core::ptr::NonNull`
+  --> kernel\src\memory\mod.rs:74:5
+   |
+74 | use core::ptr::NonNull;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `spin::Mutex`
+  --> kernel\src\drivers\mod.rs:18:5
+   |
+18 | use spin::Mutex; // Utiliser `spin` pour les mutexes dans un environnement noyau
+   |     ^^^^^^^^^^^
+
+warning: unused import: `alloc::vec::Vec`
+ --> kernel\src\drivers\block\mod.rs:7:5
+  |
+7 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `core::ops::Range`
+ --> kernel\src\drivers\block\mod.rs:8:5
+  |
+8 | use core::ops::Range;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `BlockOpType`
+ --> kernel\src\drivers\block\nvme.rs:5:65
+  |
+5 | use super::{BlockDriver, BlockRequest, BlockError, BlockDevice, BlockOpType};
+  |                                                                 ^^^^^^^^^^^
+
+warning: unused import: `alloc::vec::Vec`
+ --> kernel\src\drivers\block\nvme.rs:7:5
+  |
+7 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `spin::Mutex`
+  --> kernel\src\drivers\block\nvme.rs:10:5
+   |
+10 | use spin::Mutex;
+   |     ^^^^^^^^^^^
+
+warning: unused import: `alloc::sync::Arc`
+  --> kernel\src\drivers\char\console.rs:11:5
+   |
+11 | use alloc::sync::Arc;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `outb`
+ --> kernel\src\drivers\input\keyboard.rs:8:36
+  |
+8 | use crate::arch::x86_64::io::{inb, outb};
+  |                                    ^^^^
+
+warning: unused doc comment
+  --> kernel\src\drivers\pci\mod.rs:98:1
+   |
+98 | /// Statut de commande d'un p├⌐riph├⌐rique PCI.
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused import: `volatile::VolatileRef`
+ --> kernel\src\drivers\video\vga.rs:7:5
+  |
+7 | use volatile::VolatileRef;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::vec::Vec`
+ --> kernel\src\fs\mod.rs:5:5
+  |
+5 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::string::String`
+ --> kernel\src\fs\mod.rs:6:5
+  |
+6 | use alloc::string::String;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `FsError`
+ --> kernel\src\fs\vfs\mod.rs:3:23
+  |
+3 | use super::{FsResult, FsError};
+  |                       ^^^^^^^
+
+warning: unused import: `alloc::vec::Vec`
+ --> kernel\src\net\mod.rs:5:5
+  |
+5 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `NetError`
+ --> kernel\src\net\core\mod.rs:3:24
+  |
+3 | use super::{NetResult, NetError};
+  |                        ^^^^^^^^
+
+warning: the feature `naked_functions` has been stable since 1.88.0 and no longer requires an attribute to enable
+  --> kernel\src\lib.rs:11:12
+   |
+11 | #![feature(naked_functions)]
+   |            ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(stable_features)]` on by default
+
+warning: unused attribute
+  --> kernel\src\arch\x86_64\context.rs:71:1
+   |
+71 | #[naked]
+   | ^^^^^^^^ help: remove this attribute
+   |
+note: attribute also specified here
+  --> kernel\src\arch\x86_64\context.rs:69:1
+   |
+69 | #[unsafe(naked)]
+   | ^^^^^^^^^^^^^^^^
+   = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: formatting may not be suitable for sub-register argument
+   --> kernel\src\arch\x86_64\cpu\topology.rs:180:23
+    |
+180 |             "mov ecx, {level}",
+    |                       ^^^^^^^
+181 |             "cpuid",
+182 |             level = in(reg) level,
+    |                             ----- for this argument
+    |
+    = help: use `{0:e}` to have the register formatted as `eax` (for 32-bit values)
+    = help: or use `{0:r}` to keep the default formatting of `rax` (for 64-bit values)
+    = note: `#[warn(asm_sub_register)]` on by default
+
+warning: formatting may not be suitable for sub-register argument
+  --> kernel\src\arch\x86_64\memory\tlb.rs:98:26
+   |
+98 |                 "invpcid {0}, [{1}]",
+   |                          ^^^
+99 |                 in(reg) 1, // Single context invalidation
+   |                         - for this argument
+   |
+   = help: use `{0:e}` to have the register formatted as `eax` (for 32-bit values)
+   = help: or use `{0:r}` to keep the default formatting of `rax` (for 64-bit values)
+
+warning: unreachable statement
+   --> kernel\src\boot\mod.rs:125:5
+    |
+122 |     recovery::recovery_shell();
+    |     -------------------------- any code following this expression is unreachable
+...
+125 |     crate::arch::halt();
+    |     ^^^^^^^^^^^^^^^^^^^^ unreachable statement
+    |
+    = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable expression
+  --> kernel\src\panic.rs:55:5
+   |
+52 |       crate::boot::enter_recovery_mode();
+   |       ---------------------------------- any code following this expression is unreachable
+...
+55 | /     loop {
+56 | |         halt();
+57 | |     }
+   | |_____^ unreachable expression
+
+warning: unused variable: `pdp_table`
+   --> kernel\src\arch\x86_64\memory\paging.rs:131:13
+    |
+131 |         let pdp_table = self.get_or_create_table(0, indices.pml4)?;
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_pdp_table`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `pd_table`
+   --> kernel\src\arch\x86_64\memory\paging.rs:134:13
+    |
+134 |         let pd_table = self.get_or_create_table(1, indices.pdp)?;
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_pd_table`
+
+warning: unused variable: `level`
+   --> kernel\src\arch\x86_64\memory\paging.rs:158:9
+    |
+158 |         level: usize,
+    |         ^^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+158 |         _level: usize,
+    |         +
+help: you might have meant to pattern match on the similarly named constant `VGA_ROWS`
+    |
+158 -         level: usize,
+158 +         drivers::video::vga::VGA_ROWS: usize,
+    |
+
+warning: unused variable: `index`
+   --> kernel\src\arch\x86_64\memory\paging.rs:159:9
+    |
+159 |         index: usize,
+    |         ^^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+159 |         _index: usize,
+    |         +
+help: you might have meant to pattern match on the similarly named constant `VGA_ROWS`
+    |
+159 -         index: usize,
+159 +         drivers::video::vga::VGA_ROWS: usize,
+    |
+
+warning: unused variable: `active_table`
+   --> kernel\src\arch\x86_64\memory\paging.rs:204:17
+    |
+204 |         let mut active_table = ActivePageTable::new();
+    |                 ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_active_table`
+
+warning: variable does not need to be mutable
+   --> kernel\src\arch\x86_64\memory\paging.rs:204:13
+    |
+204 |         let mut active_table = ActivePageTable::new();
+    |             ----^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `flags`
+   --> kernel\src\arch\x86_64\memory\numa.rs:145:44
+    |
+145 | pub fn alloc_frame_on_node(node_id: usize, flags: PageFlags) -> Option<usize> {
+    |                                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_flags`
+
+warning: unused variable: `msi_addr`
+   --> kernel\src\arch\x86_64\interrupts\ioapic.rs:303:5
+    |
+303 |     msi_addr: u64,
+    |     ^^^^^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+303 |     _msi_addr: u64,
+    |     +
+help: you might have meant to pattern match on the similarly named constant `DMA_MAX_ADDRESS`
+    |
+303 -     msi_addr: u64,
+303 +     arch::dma::DMA_MAX_ADDRESS: u64,
+    |
+
+warning: unused variable: `msi_data`
+   --> kernel\src\arch\x86_64\interrupts\ioapic.rs:304:5
+    |
+304 |     msi_data: u32,
+    |     ^^^^^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+304 |     _msi_data: u32,
+    |     +
+help: you might have meant to pattern match on the similarly named constant `MAGENTA`
+    |
+304 -     msi_data: u32,
+304 +     drivers::video::colors::MAGENTA: u32,
+    |
+
+warning: unused variable: `active_low`
+   --> kernel\src\arch\x86_64\interrupts\ioapic.rs:308:5
+    |
+308 |     active_low: bool,
+    |     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_active_low`
+
+warning: unused variable: `level_triggered`
+   --> kernel\src\arch\x86_64\interrupts\ioapic.rs:338:5
+    |
+338 |     level_triggered: bool,
+    |     ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_level_triggered`
+
+warning: unused variable: `active_low`
+   --> kernel\src\arch\x86_64\interrupts\ioapic.rs:339:5
+    |
+339 |     active_low: bool,
+    |     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_active_low`
+
+warning: unnecessary `unsafe` block
+  --> kernel\src\arch\x86_64\syscall.rs:93:5
+   |
+93 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `syscall_num`
+   --> kernel\src\arch\x86_64\mod.rs:111:22
+    |
+111 |     fn syscall_entry(syscall_num: usize, args: &[usize]) -> isize {
+    |                      ^^^^^^^^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+111 |     fn syscall_entry(_syscall_num: usize, args: &[usize]) -> isize {
+    |                      +
+help: you might have meant to pattern match on the similarly named constant `VGA_ROWS`
+    |
+111 -     fn syscall_entry(syscall_num: usize, args: &[usize]) -> isize {
+111 +     fn syscall_entry(drivers::video::vga::VGA_ROWS: usize, args: &[usize]) -> isize {
+    |
+
+warning: unused variable: `args`
+   --> kernel\src\arch\x86_64\mod.rs:111:42
+    |
+111 |     fn syscall_entry(syscall_num: usize, args: &[usize]) -> isize {
+    |                                          ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: value assigned to `eax` is never read
+   --> kernel\src\arch\x86_64\mod.rs:167:13
+    |
+167 |     let mut eax: u32 = 0;
+    |             ^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `edx` is never read
+   --> kernel\src\arch\x86_64\mod.rs:168:13
+    |
+168 |     let mut edx: u32 = 0;
+    |             ^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unused variable: `boot_info`
+  --> kernel\src\boot\late_init.rs:29:21
+   |
+29 | pub fn init_drivers(boot_info: &BootInfo) -> Result<(), ArchError> {
+   |                     ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_boot_info`
+
+warning: unused variable: `boot_info`
+  --> kernel\src\boot\late_init.rs:73:19
+   |
+73 | pub fn init_posix(boot_info: &BootInfo) -> Result<(), ArchError> {
+   |                   ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_boot_info`
+
+warning: unused variable: `boot_info`
+  --> kernel\src\boot\late_init.rs:85:16
+   |
+85 | pub fn init_ai(boot_info: &BootInfo) -> Result<(), ArchError> {
+   |                ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_boot_info`
+
+warning: unused variable: `boot_info`
+  --> kernel\src\boot\late_init.rs:99:22
+   |
+99 | pub fn init_security(boot_info: &BootInfo) -> Result<(), ArchError> {
+   |                      ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_boot_info`
+
+warning: unused variable: `zone_manager`
+  --> kernel\src\memory\physical\bitmap_allocator.rs:89:42
+   |
+89 |     fn init_bitmap_from_zones(&mut self, zone_manager: &super::zone::ZoneManager) -> MemoryResult<()> {
+   |                                          ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_zone_manager`
+
+warning: unused variable: `bitmap`
+   --> kernel\src\memory\physical\bitmap_allocator.rs:127:13
+    |
+127 |         let bitmap = self.bitmap.as_mut().ok_or(MemoryError::InternalError("Bitmap not allocated"))?;
+    |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_bitmap`
+
+warning: unused variable: `zone`
+   --> kernel\src\memory\physical\bitmap_allocator.rs:150:40
+    |
+150 |     pub fn allocate_in_zone(&mut self, zone: MemoryZone) -> MemoryResult<Frame> {
+    |                                        ^^^^ help: if this is intentional, prefix it with an underscore: `_zone`
+
+warning: unused variable: `node`
+   --> kernel\src\memory\physical\bitmap_allocator.rs:161:40
+    |
+161 |     pub fn allocate_on_node(&mut self, node: u32) -> MemoryResult<Frame> {
+    |                                        ^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+161 |     pub fn allocate_on_node(&mut self, _node: u32) -> MemoryResult<Frame> {
+    |                                        +
+help: you might have meant to pattern match on the similarly named constant `MAGENTA`
+    |
+161 -     pub fn allocate_on_node(&mut self, node: u32) -> MemoryResult<Frame> {
+161 +     pub fn allocate_on_node(&mut self, drivers::video::colors::MAGENTA: u32) -> MemoryResult<Frame> {
+    |
+
+warning: unused variable: `zone`
+   --> kernel\src\memory\physical\buddy_allocator.rs:135:40
+    |
+135 |     pub fn allocate_in_zone(&mut self, zone: MemoryZone) -> MemoryResult<Frame> {
+    |                                        ^^^^ help: if this is intentional, prefix it with an underscore: `_zone`
+
+warning: unused variable: `node`
+   --> kernel\src\memory\physical\buddy_allocator.rs:142:40
+    |
+142 |     pub fn allocate_on_node(&mut self, node: u32) -> MemoryResult<Frame> {
+    |                                        ^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+142 |     pub fn allocate_on_node(&mut self, _node: u32) -> MemoryResult<Frame> {
+    |                                        +
+help: you might have meant to pattern match on the similarly named constant `MAGENTA`
+    |
+142 -     pub fn allocate_on_node(&mut self, node: u32) -> MemoryResult<Frame> {
+142 +     pub fn allocate_on_node(&mut self, drivers::video::colors::MAGENTA: u32) -> MemoryResult<Frame> {
+    |
+
+warning: unused variable: `next`
+   --> kernel\src\memory\physical\buddy_allocator.rs:267:30
+    |
+267 |                         Some(next) => {
+    |                              ^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+267 |                         Some(_next) => {
+    |                              +
+help: you might have meant to pattern match on the similarly named constant `VGA_ROWS`
+    |
+267 -                         Some(next) => {
+267 +                         Some(drivers::video::vga::VGA_ROWS) => {
+    |
+
+warning: variable does not need to be mutable
+   --> kernel\src\memory\physical\buddy_allocator.rs:259:21
+    |
+259 |                 let mut current = block;
+    |                     ----^^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: unused variable: `block`
+   --> kernel\src\memory\physical\buddy_allocator.rs:365:25
+    |
+365 |             if let Some(block) = &self.free_lists[order] {
+    |                         ^^^^^ help: if this is intentional, prefix it with an underscore: `_block`
+
+warning: unused variable: `slab_class`
+   --> kernel\src\memory\heap\cpu_slab.rs:424:13
+    |
+424 |         for slab_class in &self.slabs {
+    |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_slab_class`
+
+warning: unused variable: `slab_class`
+   --> kernel\src\memory\heap\cpu_slab.rs:440:13
+    |
+440 |         for slab_class in &mut self.slabs {
+    |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_slab_class`
+
+warning: variable does not need to be mutable
+   --> kernel\src\memory\heap\cpu_slab.rs:437:13
+    |
+437 |         let mut freed_pages = 0;
+    |             ----^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unnecessary `unsafe` block
+   --> kernel\src\memory\heap\slab.rs:281:19
+    |
+281 |         let ptr = unsafe {
+    |                   ^^^^^^ unnecessary `unsafe` block
+
+warning: unused variable: `size`
+   --> kernel\src\memory\dma.rs:254:9
+    |
+254 |     let size = (length + page_size - 1) & !(page_size - 1);
+    |         ^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+254 |     let _size = (length + page_size - 1) & !(page_size - 1);
+    |         +
+help: you might have meant to pattern match on the similarly named constant `VGA_ROWS`
+    |
+254 -     let size = (length + page_size - 1) & !(page_size - 1);
+254 +     let drivers::video::vga::VGA_ROWS = (length + page_size - 1) & !(page_size - 1);
+    |
+
+warning: unused variable: `physical_addr`
+   --> kernel\src\memory\dma.rs:311:24
+    |
+311 |         if let Ok(Some(physical_addr)) = crate::memory::virtual_mem::get_physical_address(current_addr) {
+    |                        ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_physical_addr`
+
+warning: unused variable: `size`
+   --> kernel\src\memory\mmap.rs:219:9
+    |
+219 |     let size = (length + page_size - 1) & !(page_size - 1);
+    |         ^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+219 |     let _size = (length + page_size - 1) & !(page_size - 1);
+    |         +
+help: you might have meant to pattern match on the similarly named constant `VGA_ROWS`
+    |
+219 -     let size = (length + page_size - 1) & !(page_size - 1);
+219 +     let drivers::video::vga::VGA_ROWS = (length + page_size - 1) & !(page_size - 1);
+    |
+
+warning: unused variable: `addr`
+   --> kernel\src\memory\mmap.rs:205:5
+    |
+205 |     addr: Option<VirtualAddress>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_addr`
+
+warning: unused variable: `protection`
+   --> kernel\src\memory\mmap.rs:207:5
+    |
+207 |     protection: MmapProtection,
+    |     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_protection`
+
+warning: unused variable: `fd`
+   --> kernel\src\memory\mmap.rs:209:5
+    |
+209 |     fd: Option<usize>,
+    |     ^^ help: if this is intentional, prefix it with an underscore: `_fd`
+
+warning: unused variable: `offset`
+   --> kernel\src\memory\mmap.rs:210:5
+    |
+210 |     offset: usize,
+    |     ^^^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+210 |     _offset: usize,
+    |     +
+help: you might have meant to pattern match on the similarly named constant `VGA_ROWS`
+    |
+210 -     offset: usize,
+210 +     drivers::video::vga::VGA_ROWS: usize,
+    |
+
+warning: unused variable: `size`
+   --> kernel\src\memory\mmap.rs:254:9
+    |
+254 |     let size = (length + page_size - 1) & !(page_size - 1);
+    |         ^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+254 |     let _size = (length + page_size - 1) & !(page_size - 1);
+    |         +
+help: you might have meant to pattern match on the similarly named constant `VGA_ROWS`
+    |
+254 -     let size = (length + page_size - 1) & !(page_size - 1);
+254 +     let drivers::video::vga::VGA_ROWS = (length + page_size - 1) & !(page_size - 1);
+    |
+
+warning: unused variable: `physical_addr`
+   --> kernel\src\memory\mmap.rs:311:24
+    |
+311 |         if let Ok(Some(physical_addr)) = crate::memory::virtual_mem::get_physical_address(current_addr) {
+    |                        ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_physical_addr`
+
+warning: unnecessary `unsafe` block
+   --> kernel\src\drivers\block\nvme.rs:177:25
+    |
+177 |         let registers = unsafe {
+    |                         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+  --> kernel\src\drivers\char\serial.rs:39:25
+   |
+39 |         let registers = unsafe { NonNull::new(base_address as *mut UartRegisters).unwrap() };
+   |                         ^^^^^^ unnecessary `unsafe` block
+
+warning: unused variable: `device`
+   --> kernel\src\drivers\input\keyboard.rs:153:21
+    |
+153 |     fn probe(&self, device: &dyn crate::drivers::Device) -> Result<(), crate::drivers::DriverError> {
+    |                     ^^^^^^ help: if this is intentional, prefix it with an underscore: `_device`
+
+warning: unused variable: `packet`
+  --> kernel\src\drivers\input\mouse.rs:82:13
+   |
+82 |         let packet = self.read_packet();
+   |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_packet`
+
+warning: `exo-kernel` (lib) generated 105 warnings
+warning: exo-kernel@0.2.0: Compiled boot.asm with NASM (path src/arch/x86_64/boot/boot.asm)
+warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
+warning: exo-kernel@0.2.0: Compiled serial.c
+warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
+warning: exo-kernel@0.2.0: Compiled windowed.S (provides context_switch symbol)
+error: could not compile `exo-kernel` (lib) due to 1 previous error; 105 warnings emitted

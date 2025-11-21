@@ -1,0 +1,68 @@
+# Workspace Cargo.toml - Exo-OS
+# Centralise les profils et les membres. Les crates vides sont des stubs à compléter.
+
+[workspace]
+members = [
+    "kernel",
+    "libs/exo_types",
+    "libs/exo_std",
+    "libs/exo_ipc",
+    "libs/exo_crypto"
+]
+default-members = ["kernel"]
+resolver = "2"
+
+# Modules exclus temporairement (non prêts):
+#   kernel/posix_x_lib
+#   tools/posix_x_tools
+#   userland/init
+#   userland/shell
+#   userland/net_service
+#   userland/fs_service
+#   userland/ai_core
+
+
+[workspace.package]
+edition = "2021"
+authors = ["ExoOS Team"]
+license = "MIT OR Apache-2.0"
+
+[profile.dev]
+panic = "abort"
+incremental = true
+codegen-units = 8
+lto = "thin"
+opt-level = 1
+debug = true
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = "fat"
+opt-level = "z" # Favorise la taille (changer en 3 pour vitesse)
+strip = true
+debug = false
+
+[profile.release-maxperf]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+debug = false
+
+[workspace.metadata.exo-os]
+min-supported-rust = "nightly"
+primary-target = "x86_64-unknown-none"
+kernel-crate = "kernel"
+userland-entry = "(désactivé)"
+
+[workspace.metadata.exo-os.excluded]
+posix = ["kernel/posix_x_lib", "tools/posix_x_tools"]
+network = ["userland/net_service"]
+filesystem = ["userland/fs_service"]
+# userland = ["userland/init", "userland/shell", "userland/ai_core"]
+# libs = ["libs/exo_types", "libs/exo_std"]
+
+# (Optionnel) Dépendances communes verrouillables plus tard
+# [workspace.dependencies]
+# log = "0.4.20"
+# spin = "0.9.8"

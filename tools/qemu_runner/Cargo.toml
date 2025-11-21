@@ -1,0 +1,20 @@
+# tools/qemu_runner/Cargo.toml
+
+[package]
+name = "exo-qemu-runner"
+version = "0.1.0"
+edition = "2021"
+authors = ["Exo-OS Team"]
+description = "A simple runner to launch Exo-OS in QEMU for testing"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "exo-qemu"
+path = "src/main.rs"
+
+[dependencies]
+# Pour l'interface en ligne de commande
+clap = { version = "4.0", features = ["derive"] }
+
+# Gestion des erreurs
+anyhow = "1.0"

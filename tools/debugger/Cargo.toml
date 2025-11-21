@@ -1,0 +1,33 @@
+# tools/debugger/Cargo.toml
+
+[package]
+name = "exo-debugger"
+version = "0.1.0"
+edition = "2021"
+authors = ["Exo-OS Team"]
+description = "A user-friendly kernel debugger for Exo-OS with GDB integration"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "exo-debugger"
+path = "src/main.rs"
+
+[dependencies]
+# Pour l'interface en ligne de commande
+clap = { version = "4.0", features = ["derive"] }
+
+# Pour parler le protocole GDB Remote Serial Protocol (RSP)
+gdb-protocol = "0.1"
+
+# Pour gérer les processus (lancer GDB)
+nix = "0.26"
+
+# Pour construire une interface utilisateur en terminal (TUI)
+crossterm = "0.25"
+
+# Gestion des erreurs
+anyhow = "1.0"
+
+# Pour le logging
+log = "0.4"
+env_logger = "0.10"
