@@ -7,6 +7,8 @@
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 #![feature(const_mut_refs)]
+#![feature(unsafe_attributes)]
+#![feature(naked_functions)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
@@ -67,23 +69,109 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
     // Afficher message de bienvenue Rust
     rust_welcome(magic, multiboot_info);
     
-    // TODO: Initialize architecture
-    // arch::init().expect("Failed to initialize architecture");
+    // Initialiser l'architecture (IDT simple)
+    debug_msg(b"[ARCH] Init IDT...");
+    arch::x86_64::init().expect("Failed to initialize architecture");
+    debug_msg(b"[ARCH] IDT OK!");
     
-    // TODO: Parse multiboot info
-    // let mboot = boot::parse_multiboot(multiboot_info);
+    // Test: déclencher un breakpoint pour vérifier le gestionnaire
+    debug_msg(b"[TEST] Calling int3...");
+    unsafe {
+        core::arch::asm!("int3", options(nomem, nostack));
+    }
+    debug_msg(b"[TEST] int3 OK!");
     
-    // TODO: Initialize memory
-    // memory::init(&mboot).expect("Failed to initialize memory");
+    // Initialiser la mémoire
+    debug_msg(b"[MEM] Init memory...");
+    let mem_config = memory::MemoryConfig::default_config();
+    memory::init(mem_config).expect("Failed to initialize memory");
+    debug_msg(b"[MEM] Memory OK!");
     
-    // TODO: Initialize heap
-    // unsafe { ALLOCATOR.init(heap_start, heap_size); }
+    // Afficher les stats mémoire
+    display_memory_init();
     
-    // TODO: Initialize scheduler
-    // scheduler::init();
+    // NE PAS activer les interruptions pour l'instant
+    debug_msg(b"[INFO] Timer disabled");
+    debug_msg(b"[KERN] Ready!");
     
-    // Boucle principale du kernel
+    // Boucle principale simple sans timer
     kernel_main_loop()
+}
+
+/// Affiche la confirmation de l'initialisation mémoire
+fn display_memory_init() {
+    let vga_buffer = 0xB8000 as *mut u16;
+    
+    unsafe {
+        let row = 17;
+        let msg = b"[RUST] Memory system initialized";
+        for (i, &byte) in msg.iter().enumerate() {
+            let offset = (row * 80 + i) as isize;
+            *vga_buffer.offset(offset) = 0x0A00 | byte as u16;
+        }
+
+        // Afficher les stats si disponible
+        if let Some(stats) = memory::physical::get_allocator_stats() {
+            let row = 18;
+            let msg2 = b"[MEM] Total:     MB  Free:     MB";
+            for (i, &byte) in msg2.iter().enumerate() {
+                let offset = (row * 80 + i) as isize;
+                *vga_buffer.offset(offset) = 0x0700 | byte as u16;
+            }
+
+            // Afficher total en MB
+            let total_mb = stats.total_memory / (1024 * 1024);
+            write_decimal(vga_buffer, row, 13, total_mb as u32);
+
+            // Afficher free en MB
+            let free_mb = stats.free_memory / (1024 * 1024);
+            write_decimal(vga_buffer, row, 27, free_mb as u32);
+        }
+
+        // Afficher les stats du heap
+        let heap_stats = ALLOCATOR.stats();
+        let row = 19;
+        let msg3 = b"[HEAP] Total:     MB  Free:     MB";
+        for (i, &byte) in msg3.iter().enumerate() {
+            let offset = (row * 80 + i) as isize;
+            *vga_buffer.offset(offset) = 0x0700 | byte as u16;
+        }
+
+        let heap_total_mb = heap_stats.total_size / (1024 * 1024);
+        write_decimal(vga_buffer, row, 14, heap_total_mb as u32);
+
+        let heap_free_mb = heap_stats.free / (1024 * 1024);
+        write_decimal(vga_buffer, row, 28, heap_free_mb as u32);
+    }
+}
+
+/// Affiche un nombre décimal à l'écran (jusqu'à 3 chiffres)
+unsafe fn write_decimal(vga_buffer: *mut u16, row: usize, col: usize, mut value: u32) {
+    let mut digits = [b'0'; 3];
+    
+    for i in (0..3).rev() {
+        digits[i] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+
+    for (i, &digit) in digits.iter().enumerate() {
+        let offset = (row * 80 + col + i) as isize;
+        *vga_buffer.offset(offset) = 0x0700 | digit as u16;
+    }
+}
+
+/// Affiche un message de debug
+fn debug_msg(msg: &[u8]) {
+    static mut DEBUG_ROW: usize = 20;
+    let vga_buffer = 0xB8000 as *mut u16;
+    
+    unsafe {
+        for (i, &byte) in msg.iter().enumerate() {
+            let offset = (DEBUG_ROW * 80 + i) as isize;
+            *vga_buffer.offset(offset) = 0x0E00 | byte as u16; // Jaune
+        }
+        DEBUG_ROW += 1;
+    }
 }
 
 /// Affiche un message de bienvenue depuis le code Rust
@@ -151,6 +239,48 @@ fn kernel_main_loop() -> ! {
     
     // Boucle infinie avec HLT
     loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack));
+        }
+    }
+}
+
+/// Boucle principale avec affichage du timer
+fn kernel_main_loop_with_timer() -> ! {
+    let vga_buffer = 0xB8000 as *mut u16;
+    let mut last_second = 0u64;
+    
+    unsafe {
+        let row = 15;
+        let msg = b"[KERNEL] Running with timer...";
+        for (i, &byte) in msg.iter().enumerate() {
+            let offset = (row * 80 + i) as isize;
+            *vga_buffer.offset(offset) = 0x0B00 | byte as u16;
+        }
+    }
+    
+    loop {
+        let uptime_ms = arch::x86_64::pit::get_uptime_ms();
+        let current_second = uptime_ms / 1000;
+        
+        // Mettre à jour l'affichage chaque seconde
+        if current_second != last_second {
+            last_second = current_second;
+            
+            unsafe {
+                let row = 16;
+                let msg = b"[TIME] Uptime:       seconds";
+                for (i, &byte) in msg.iter().enumerate() {
+                    let offset = (row * 80 + i) as isize;
+                    *vga_buffer.offset(offset) = 0x0E00 | byte as u16;
+                }
+                
+                // Afficher le nombre de secondes
+                write_decimal(vga_buffer, row, 15, current_second as u32);
+            }
+        }
+        
+        // HLT pour économiser le CPU entre les interruptions
         unsafe {
             core::arch::asm!("hlt", options(nomem, nostack));
         }

@@ -6,9 +6,10 @@
 //! - Gestion des interruptions et exceptions CPU
 //! - Configuration des registres de contrôle
 
-pub mod gdt;
+pub mod handlers;  // Interrupt handlers with correct stack alignment
 pub mod idt;
-pub mod interrupts;
+pub mod pic;  // Programmable Interrupt Controller
+pub mod pit;  // Programmable Interval Timer
 
 // Constantes d'architecture
 pub const PAGE_SIZE: usize = 4096;
@@ -41,13 +42,12 @@ pub const VGA_BUFFER_SIZE: usize = 80 * 25 * 2;
 /// - Les interruptions CPU
 pub fn init() -> Result<(), &'static str> {
     // Pour l'instant, le bootloader a déjà configuré la GDT
-    // On se contente d'initialiser l'IDT plus tard
     
-    // TODO: Initialiser IDT
-    // idt::init();
+    // Initialiser l'IDT avec tous les handlers
+    idt::init();
     
-    // TODO: Activer les interruptions
-    // interrupts::enable();
+    // Note: On n'active PAS les interruptions ici car le PIC n'est pas encore configuré
+    // Les interruptions seront activées après la configuration du PIC
     
     Ok(())
 }
