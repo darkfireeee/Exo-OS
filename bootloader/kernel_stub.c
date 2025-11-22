@@ -117,19 +117,15 @@ struct multiboot_info {
     // ... d'autres champs existent mais on n'en a pas besoin pour l'instant
 };
 
-// Point d'entrée du kernel (appelé depuis boot.asm en mode 64-bit)
-// Cette fonction ne retourne JAMAIS
+// Déclaration du point d'entrée Rust
+extern void rust_main(uint32_t magic, uint64_t multiboot_info_addr) __attribute__((noreturn));
+
+// Point d'entrée C du kernel (appelé depuis boot.asm en mode 64-bit)
+// Initialise l'environnement de base puis passe le contrôle au kernel Rust
 __attribute__((noreturn))
 void kernel_main(uint32_t magic, uint64_t multiboot_info_addr) {
-    // Point de contrôle 1: Entrée dans kernel_main
-    volatile uint16_t* vga = (volatile uint16_t*)0xB8000;
-    vga[0] = 0x0F31; // "1" = kernel_main appelé
-    
     // Effacer l'écran
     vga_clear();
-    
-    // Point de contrôle 2: Écran effacé
-    vga[0] = 0x0F32; // "2"
     
     // Titre avec couleurs
     vga_set_color(VGA_YELLOW, VGA_BLACK);
@@ -137,16 +133,10 @@ void kernel_main(uint32_t magic, uint64_t multiboot_info_addr) {
     vga_print("         EXO-OS KERNEL v0.1.0          \n");
     vga_print("========================================\n\n");
     
-    // Point de contrôle 3: Titre affiché
-    vga[1] = 0x0F33; // "3"
-    
     // Informations de boot
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
     vga_print("Boot Mode: 64-bit Long Mode\n");
     vga_print("Bootloader: GRUB (Multiboot1)\n\n");
-    
-    // Point de contrôle 4: Avant vérification magic
-    vga[2] = 0x0F34; // "4"
     
     // Vérifier magic Multiboot
     vga_print("Multiboot Magic: ");
@@ -162,31 +152,16 @@ void kernel_main(uint32_t magic, uint64_t multiboot_info_addr) {
         goto halt;
     }
     
-    // Point de contrôle 5: Magic OK
-    vga[3] = 0x0F35; // "5"
-    
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
     vga_print("Multiboot Info: ");
     vga_print_hex64(multiboot_info_addr);
     vga_print("\n\n");
-    
-    // Point de contrôle 6: Avant accès mémoire multiboot
-    vga[4] = 0x0F36; // "6"
-    
-    // NE PAS accéder à multiboot_info pour l'instant (peut causer crash)
-    // if (multiboot_info_addr != 0) { ... }
-    
-    // Point de contrôle 7: Mémoire OK (skippé)
-    vga[5] = 0x0F37; // "7"
     
     // Message de succès
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_print("[SUCCESS] ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
     vga_print("Kernel initialized successfully!\n\n");
-    
-    // Point de contrôle 8: Avant boucle finale
-    vga[6] = 0x0F38; // "8"
     
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     vga_print("System ready. Entering idle loop...\n");
@@ -195,21 +170,13 @@ void kernel_main(uint32_t magic, uint64_t multiboot_info_addr) {
     vga_print("Press Ctrl+Alt+2 for QEMU monitor, type 'quit' to exit\n");
     
 halt:
-    // Point de contrôle 9: Dans la boucle halt
-    vga[7] = 0x0F39; // "9"
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    vga_print("\n>>> Passing control to Rust kernel...\n");
     
-    // Boucle infinie avec HLT pour économiser le CPU
-    vga_set_color(VGA_YELLOW, VGA_BLACK);
-    vga_print("\n>>> HALTED - System in infinite loop <<<\n");
+    // Passer le contrôle au kernel Rust
+    // Cette fonction ne retourne jamais
+    rust_main(magic, multiboot_info_addr);
     
-    // Point de contrôle 10: Message affiché, avant cli
-    vga[8] = 0x0C41; // "A" en rouge = HALT atteint!
-    
-    // Désactiver les interruptions et boucler pour toujours
-    __asm__ volatile("cli");
-    
-    // Boucle ultra-simple pour debug
-    for(;;) {
-        __asm__ volatile("hlt");
-    }
+    // Ne devrait JAMAIS arriver ici
+    __builtin_unreachable();
 }

@@ -16,9 +16,17 @@ pub const PAGE_SIZE_2MB: usize = 2 * 1024 * 1024;
 pub const PAGE_SIZE_1GB: usize = 1024 * 1024 * 1024;
 
 // Layout mémoire du kernel (identity mapped pour l'instant)
-pub const KERNEL_PHYSICAL_BASE: usize = 0x0010_0000;    // 1MB (après GRUB)
-pub const KERNEL_VIRTUAL_BASE: usize = 0x0010_0000;     // Identity mapped
-pub const KERNEL_STACK_SIZE: usize = 16 * 1024;         // 16KB
+pub const KERNEL_PHYSICAL_BASE: usize = 0x0010_0000;        // 1MB (après GRUB)
+pub const KERNEL_VIRTUAL_BASE: usize = 0x0010_0000;         // Identity mapped
+pub const KERNEL_STACK_SIZE: usize = 16 * 1024;             // 16KB
+
+// Constantes legacy pour compatibilité avec le code existant
+pub const KERNEL_START_ADDRESS: usize = 0xFFFF_8000_0000_0000;
+pub const KERNEL_END_ADDRESS: usize = 0xFFFF_FFFF_FFFF_FFFF;
+pub const KERNEL_VIRTUAL_OFFSET: usize = 0xFFFF_8000_0000_0000;
+pub const KERNEL_CODE_START: usize = 0xFFFF_8000_0010_0000;
+pub const KERNEL_CODE_END: usize = 0xFFFF_8000_0020_0000;
+pub const KERNEL_BASE: usize = 0xFFFF_8000_0000_0000;
 
 // Adresses importantes
 pub const VGA_BUFFER_ADDR: usize = 0xB8000;
