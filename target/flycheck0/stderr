@@ -1,5 +1,5 @@
-   0.927412500s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: true }/TargetInner { ..: lib_target("exo_kernel", ["staticlib", "rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\lib.rs", Edition2021) }
-   0.927555500s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo-kernel-ce735d76897594b2\test-lib-exo_kernel`
+   0.276699700s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: true }/TargetInner { ..: lib_target("exo_kernel", ["staticlib", "rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\lib.rs", Edition2021) }
+   0.276775900s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo-kernel-ce735d76897594b2\test-lib-exo_kernel`
 
 Caused by:
     Le fichier spécifié est introuvable. (os error 2)
@@ -26,16 +26,12 @@ Stack backtrace:
   18: git_midx_writer_dump
   19: BaseThreadInitThunk
   20: RtlUserThreadStart
-   1.068045300s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint: stale: changed "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\arch\\x86_64\\cpu\\topology.rs"
-   1.068136800s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint:           (vs) "C:\\Users\\Eric\\Documents\\Exo-OS\\target\\x86_64-unknown-none\\debug\\.fingerprint\\exo-kernel-6dcda96beb1cfaa0\\dep-lib-exo_kernel"
-   1.068162200s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 13408229527, nanos: 7605000 } < FileTime { seconds: 13408230026, nanos: 992840700 }
-   1.069178700s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint: fingerprint dirty for exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: false }/TargetInner { ..: lib_target("exo_kernel", ["staticlib", "rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\lib.rs", Edition2021) }
-   1.069258500s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "C:\\Users\\Eric\\Documents\\Exo-OS\\target\\x86_64-unknown-none\\debug\\.fingerprint\\exo-kernel-6dcda96beb1cfaa0\\dep-lib-exo_kernel", reference_mtime: FileTime { seconds: 13408229527, nanos: 7605000 }, stale: "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\arch\\x86_64\\cpu\\topology.rs", stale_mtime: FileTime { seconds: 13408230026, nanos: 992840700 } }))
-   1.093757200s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint: stale: changed "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\arch\\x86_64\\cpu\\smp.rs"
-   1.093813600s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint:           (vs) "C:\\Users\\Eric\\Documents\\Exo-OS\\target\\x86_64-unknown-none\\debug\\.fingerprint\\exo-kernel-bab760aec489d370\\dep-lib-exo_kernel"
-   1.093831200s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 13408229526, nanos: 993863100 } < FileTime { seconds: 13408230026, nanos: 714542400 }
-   1.094121600s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: true }/TargetInner { name: "exo-kernel", doc: true, ..: with_path("C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\main.rs", Edition2021) }
-   1.094186600s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo-kernel-dd71e7ee1d4394b1\test-bin-exo-kernel`
+   0.331490800s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint: dependency on `build_script_build` is newer than we are 13408274680.336213700s > 13408273978.717947200s "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel"
+   0.333789000s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint: fingerprint dirty for exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: false }/TargetInner { ..: lib_target("exo_kernel", ["staticlib", "rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\lib.rs", Edition2021) }
+   0.333850300s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { name: "build_script_build", dep_mtime: FileTime { seconds: 13408274680, nanos: 336213700 }, max_mtime: FileTime { seconds: 13408273978, nanos: 717947200 } })
+   0.344186700s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint: dependency on `build_script_build` is newer than we are 13408274680.336213700s > 13408273978.503053900s "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel"
+   0.344342400s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: true }/TargetInner { name: "exo-kernel", doc: true, ..: with_path("C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\main.rs", Edition2021) }
+   0.344365600s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo-kernel-dd71e7ee1d4394b1\test-bin-exo-kernel`
 
 Caused by:
     Le fichier spécifié est introuvable. (os error 2)
@@ -62,10 +58,10 @@ Stack backtrace:
   18: git_midx_writer_dump
   19: BaseThreadInitThunk
   20: RtlUserThreadStart
-   1.097337900s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint: fingerprint dirty for exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: false }/TargetInner { ..: lib_target("exo_kernel", ["staticlib", "rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\lib.rs", Edition2021) }
-   1.097471800s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "C:\\Users\\Eric\\Documents\\Exo-OS\\target\\x86_64-unknown-none\\debug\\.fingerprint\\exo-kernel-bab760aec489d370\\dep-lib-exo_kernel", reference_mtime: FileTime { seconds: 13408229526, nanos: 993863100 }, stale: "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\arch\\x86_64\\cpu\\smp.rs", stale_mtime: FileTime { seconds: 13408230026, nanos: 714542400 } }))
-   1.100394700s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: false }/TargetInner { name: "exo-kernel", doc: true, ..: with_path("C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\main.rs", Edition2021) }
-   1.100459600s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo-kernel-b1f7965e4f97e3be\bin-exo-kernel`
+   0.345673900s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint: fingerprint dirty for exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: false }/TargetInner { ..: lib_target("exo_kernel", ["staticlib", "rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\lib.rs", Edition2021) }
+   0.345701300s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo_kernel"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { name: "build_script_build", dep_mtime: FileTime { seconds: 13408274680, nanos: 336213700 }, max_mtime: FileTime { seconds: 13408273978, nanos: 503053900 } })
+   0.347013500s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint: fingerprint error for exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)/Check { test: false }/TargetInner { name: "exo-kernel", doc: true, ..: with_path("C:\\Users\\Eric\\Documents\\Exo-OS\\kernel\\src\\main.rs", Edition2021) }
+   0.347037900s  INFO prepare_target{force=false package_id=exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel) target="exo-kernel"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo-kernel-b1f7965e4f97e3be\bin-exo-kernel`
 
 Caused by:
     Le fichier spécifié est introuvable. (os error 2)
@@ -92,8 +88,8 @@ Stack backtrace:
   18: git_midx_writer_dump
   19: BaseThreadInitThunk
   20: RtlUserThreadStart
-   1.102331200s  INFO prepare_target{force=false package_id=exo_crypto v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_crypto) target="exo_crypto"}: cargo::core::compiler::fingerprint: fingerprint error for exo_crypto v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_crypto)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("exo_crypto", ["rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\libs\\exo_crypto\\src\\lib.rs", Edition2021) }
-   1.102389100s  INFO prepare_target{force=false package_id=exo_crypto v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_crypto) target="exo_crypto"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo_crypto-a6956ed1e3ad1ef8\test-lib-exo_crypto`
+   0.348027000s  INFO prepare_target{force=false package_id=exo_crypto v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_crypto) target="exo_crypto"}: cargo::core::compiler::fingerprint: fingerprint error for exo_crypto v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_crypto)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("exo_crypto", ["rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\libs\\exo_crypto\\src\\lib.rs", Edition2021) }
+   0.348052200s  INFO prepare_target{force=false package_id=exo_crypto v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_crypto) target="exo_crypto"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo_crypto-a6956ed1e3ad1ef8\test-lib-exo_crypto`
 
 Caused by:
     Le fichier spécifié est introuvable. (os error 2)
@@ -120,8 +116,8 @@ Stack backtrace:
   18: git_midx_writer_dump
   19: BaseThreadInitThunk
   20: RtlUserThreadStart
-   1.103513500s  INFO prepare_target{force=false package_id=exo_ipc v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_ipc) target="exo_ipc"}: cargo::core::compiler::fingerprint: fingerprint error for exo_ipc v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_ipc)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("exo_ipc", ["rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\libs\\exo_ipc\\src\\lib.rs", Edition2021) }
-   1.103565800s  INFO prepare_target{force=false package_id=exo_ipc v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_ipc) target="exo_ipc"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo_ipc-9e67b5ae75689e13\test-lib-exo_ipc`
+   0.348825500s  INFO prepare_target{force=false package_id=exo_ipc v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_ipc) target="exo_ipc"}: cargo::core::compiler::fingerprint: fingerprint error for exo_ipc v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_ipc)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("exo_ipc", ["rlib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\libs\\exo_ipc\\src\\lib.rs", Edition2021) }
+   0.348849100s  INFO prepare_target{force=false package_id=exo_ipc v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_ipc) target="exo_ipc"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo_ipc-9e67b5ae75689e13\test-lib-exo_ipc`
 
 Caused by:
     Le fichier spécifié est introuvable. (os error 2)
@@ -148,8 +144,8 @@ Stack backtrace:
   18: git_midx_writer_dump
   19: BaseThreadInitThunk
   20: RtlUserThreadStart
-   1.104703600s  INFO prepare_target{force=false package_id=exo_std v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_std) target="exo_std"}: cargo::core::compiler::fingerprint: fingerprint error for exo_std v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_std)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("exo_std", ["lib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\libs\\exo_std\\src\\lib.rs", Edition2021) }
-   1.104761200s  INFO prepare_target{force=false package_id=exo_std v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_std) target="exo_std"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo_std-f6e7371fadb60217\test-lib-exo_std`
+   0.349597600s  INFO prepare_target{force=false package_id=exo_std v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_std) target="exo_std"}: cargo::core::compiler::fingerprint: fingerprint error for exo_std v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_std)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("exo_std", ["lib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\libs\\exo_std\\src\\lib.rs", Edition2021) }
+   0.349621900s  INFO prepare_target{force=false package_id=exo_std v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_std) target="exo_std"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo_std-f6e7371fadb60217\test-lib-exo_std`
 
 Caused by:
     Le fichier spécifié est introuvable. (os error 2)
@@ -176,8 +172,8 @@ Stack backtrace:
   18: git_midx_writer_dump
   19: BaseThreadInitThunk
   20: RtlUserThreadStart
-   1.108594000s  INFO prepare_target{force=false package_id=exo_types v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_types) target="exo_types"}: cargo::core::compiler::fingerprint: fingerprint error for exo_types v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_types)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("exo_types", ["lib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\libs\\exo_types\\src\\lib.rs", Edition2021) }
-   1.108657900s  INFO prepare_target{force=false package_id=exo_types v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_types) target="exo_types"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo_types-87abaf6f397cd36b\test-lib-exo_types`
+   0.351614400s  INFO prepare_target{force=false package_id=exo_types v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_types) target="exo_types"}: cargo::core::compiler::fingerprint: fingerprint error for exo_types v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_types)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("exo_types", ["lib"], "C:\\Users\\Eric\\Documents\\Exo-OS\\libs\\exo_types\\src\\lib.rs", Edition2021) }
+   0.351653400s  INFO prepare_target{force=false package_id=exo_types v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_types) target="exo_types"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\Eric\Documents\Exo-OS\target\x86_64-unknown-none\debug\.fingerprint\exo_types-87abaf6f397cd36b\test-lib-exo_types`
 
 Caused by:
     Le fichier spécifié est introuvable. (os error 2)
@@ -204,36 +200,24 @@ Stack backtrace:
   18: git_midx_writer_dump
   19: BaseThreadInitThunk
   20: RtlUserThreadStart
-warning: exo-kernel@0.2.0: Compiled boot.asm with NASM (path src/arch/x86_64/boot/boot.asm)
 warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
-warning: exo-kernel@0.2.0: Compiled serial.c
 warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
-warning: exo-kernel@0.2.0: Compiled windowed.S (provides context_switch symbol)
     Checking exo-kernel v0.2.0 (C:\Users\Eric\Documents\Exo-OS\kernel)
     Checking exo_std v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_std)
-    Checking exo_types v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_types)
     Checking exo_crypto v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_crypto)
+    Checking exo_types v0.1.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_types)
     Checking exo_ipc v0.0.0 (C:\Users\Eric\Documents\Exo-OS\libs\exo_ipc)
 error: could not compile `exo_std` (lib test) due to 3 previous errors; 5 warnings emitted
 warning: build failed, waiting for other jobs to finish...
-error: could not compile `exo_crypto` (lib test) due to 17 previous errors; 9 warnings emitted
 error: could not compile `exo_ipc` (lib test) due to 5 previous errors; 2 warnings emitted
+error: could not compile `exo_crypto` (lib test) due to 17 previous errors; 9 warnings emitted
 error: could not compile `exo_types` (lib test) due to 3 previous errors
-warning: exo-kernel@0.2.0: Compiled boot.asm with NASM (path src/arch/x86_64/boot/boot.asm)
 warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
-warning: exo-kernel@0.2.0: Compiled serial.c
 warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
-warning: exo-kernel@0.2.0: Compiled windowed.S (provides context_switch symbol)
-error: could not compile `exo-kernel` (bin "exo-kernel" test) due to 3 previous errors
-warning: exo-kernel@0.2.0: Compiled boot.asm with NASM (path src/arch/x86_64/boot/boot.asm)
+error: could not compile `exo-kernel` (lib) due to 11 previous errors; 1 warning emitted
 warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
-warning: exo-kernel@0.2.0: Compiled serial.c
 warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
-warning: exo-kernel@0.2.0: Compiled windowed.S (provides context_switch symbol)
-error: could not compile `exo-kernel` (bin "exo-kernel") due to 2 previous errors
-warning: exo-kernel@0.2.0: Compiled boot.asm with NASM (path src/arch/x86_64/boot/boot.asm)
+error: could not compile `exo-kernel` (lib test) due to 12 previous errors; 1 warning emitted
 warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
-warning: exo-kernel@0.2.0: Compiled serial.c
 warning: exo-kernel@0.2.0: Inherited flag "-mcmodel=kernel" is not supported by the currently used CC
-warning: exo-kernel@0.2.0: Compiled windowed.S (provides context_switch symbol)
-error: could not compile `exo-kernel` (lib test) due to 2 previous errors; 107 warnings emitted
+error: could not compile `exo-kernel` (lib) due to 11 previous errors; 1 warning emitted

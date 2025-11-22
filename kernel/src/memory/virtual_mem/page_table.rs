@@ -157,7 +157,7 @@ impl PageTable {
 impl Drop for PageTable {
     fn drop(&mut self) {
         // Démapper la table de l'espace d'adressage du noyau
-        let _ = arch::mmu::unmap_temporary(self.virtual_address.value());
+        arch::mmu::unmap_temporary(self.virtual_address);
         
         // Libérer la frame physique
         let frame = crate::memory::physical::Frame::containing_address(self.physical_address);
@@ -302,7 +302,7 @@ impl PageTableWalker {
             if all_empty {
                 // Libérer la table de pages
                 let frame = crate::memory::physical::Frame::containing_address(*table_address);
-                crate::memory::physical::deallocate_frame(frame)?;
+                crate::memory::physical::deallocate_frame(frame);
             }
         }
         
@@ -387,7 +387,7 @@ pub fn init() -> MemoryResult<()> {
     }
     
     // Activer la pagination
-    arch::mmu::enable_paging(root_table.physical_address())?;
+    arch::mmu::enable_paging();
     
     log::info!("Kernel page tables initialized");
     Ok(())

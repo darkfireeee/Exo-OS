@@ -1,4 +1,42 @@
-use super::{PhysicalAddress, VirtualAddress};
+//! Memory address types
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PhysicalAddress(usize);
+
+impl PhysicalAddress {
+    pub const fn new(addr: usize) -> Self {
+        Self(addr)
+    }
+    
+    pub const fn value(&self) -> usize {
+        self.0
+    }
+    
+    pub const fn is_page_aligned(&self) -> bool {
+        self.0 % 4096 == 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct VirtualAddress(usize);
+
+impl VirtualAddress {
+    pub const fn new(addr: usize) -> Self {
+        Self(addr)
+    }
+    
+    pub const fn value(&self) -> usize {
+        self.0
+    }
+    
+    pub fn is_kernel(&self) -> bool {
+        self.0 >= 0xFFFF_8000_0000_0000
+    }
+    
+    pub const fn is_page_aligned(&self) -> bool {
+        self.0 % 4096 == 0
+    }
+}
 
 pub type VirtAddr = VirtualAddress;
 pub type PhysAddr = PhysicalAddress;

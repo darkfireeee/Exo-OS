@@ -180,8 +180,8 @@ impl CowManager {
         
         unsafe {
             core::ptr::copy_nonoverlapping(
-                old_virtual as *const u8,
-                temp_virtual as *mut u8,
+                old_virtual.value() as *const u8,
+                temp_virtual.value() as *mut u8,
                 arch::PAGE_SIZE,
             );
         }

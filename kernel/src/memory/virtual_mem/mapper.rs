@@ -92,7 +92,7 @@ impl MemoryMapper {
         self.walker.map(virtual_addr, physical_addr, flags)?;
         
         // Invalider l'entrée TLB pour cette adresse
-        arch::mmu::invalidate_tlb(virtual_addr.value());
+        arch::mmu::invalidate_tlb(virtual_addr);
         
         // Mettre à jour les statistiques
         self.stats.inc_mapped_pages();
@@ -111,7 +111,7 @@ impl MemoryMapper {
         self.walker.unmap(virtual_addr)?;
         
         // Invalider l'entrée TLB pour cette adresse
-        arch::mmu::invalidate_tlb(virtual_addr.value());
+        arch::mmu::invalidate_tlb(virtual_addr);
         
         // Mettre à jour les statistiques
         self.stats.inc_unmapped_pages();
@@ -134,7 +134,7 @@ impl MemoryMapper {
         self.walker.protect(virtual_addr, flags)?;
         
         // Invalider l'entrée TLB pour cette adresse
-        arch::mmu::invalidate_tlb(virtual_addr.value());
+        arch::mmu::invalidate_tlb(virtual_addr);
         
         // Mettre à jour les statistiques
         self.stats.inc_protection_changes();

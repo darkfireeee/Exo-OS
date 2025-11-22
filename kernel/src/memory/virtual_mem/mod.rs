@@ -366,7 +366,7 @@ pub fn get_stats() -> &'static VirtualMemoryStats {
 
 /// Invalide une entrée TLB pour une adresse spécifique
 pub fn invalidate_tlb(virtual_addr: VirtualAddress) {
-    arch::mmu::invalidate_tlb(virtual_addr.value());
+    arch::mmu::invalidate_tlb(virtual_addr);
 }
 
 /// Invalide toutes les entrées TLB
