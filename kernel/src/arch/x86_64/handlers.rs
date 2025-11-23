@@ -145,9 +145,43 @@ extern "C" fn timer_interrupt_handler(_stack_frame: &InterruptStackFrame) {
     // Incrémenter les ticks
     crate::arch::x86_64::pit::tick();
     
-    // IMPORTANT: Envoyer EOI au PIC
+    // Afficher le compteur toutes les 100 ticks (1 seconde à 100Hz)
+    let ticks = crate::arch::x86_64::pit::get_ticks();
+    if ticks % 100 == 0 {
+        display_timer_count(ticks / 100);
+    }
+    
+    // IMPORTANT: Envoyer EOI au PIC via le wrapper
+    crate::arch::x86_64::pic_wrapper::send_eoi(32);  // IRQ 0 → Vector 32
+}
+
+/// Affiche le compteur de secondes sur la ligne 3
+fn display_timer_count(seconds: u64) {
+    let vga = 0xB8000 as *mut u16;
     unsafe {
-        asm!("out 0x20, al", in("al") 0x20u8, options(nomem, nostack));
+        // Label
+        let msg = b"[TIMER] Uptime: ";
+        for (i, &byte) in msg.iter().enumerate() {
+            *vga.add(3 * 80 + i) = 0x0B00 | byte as u16; // Cyan
+        }
+        
+        // Afficher les secondes (5 chiffres max)
+        let mut temp = seconds;
+        let mut digits = [b'0'; 5];
+        for i in (0..5).rev() {
+            digits[i] = b'0' + (temp % 10) as u8;
+            temp /= 10;
+        }
+        
+        for (i, &digit) in digits.iter().enumerate() {
+            *vga.add(3 * 80 + 16 + i) = 0x0A00 | digit as u16; // Vert clair
+        }
+        
+        // Ajouter " sec"
+        let suffix = b" sec";
+        for (i, &byte) in suffix.iter().enumerate() {
+            *vga.add(3 * 80 + 21 + i) = 0x07000 | byte as u16;
+        }
     }
 }
 
@@ -155,15 +189,49 @@ extern "C" fn timer_interrupt_handler(_stack_frame: &InterruptStackFrame) {
 #[no_mangle]
 extern "C" fn keyboard_interrupt_handler(_stack_frame: &InterruptStackFrame) {
     // Lire le scancode (obligatoire sinon le clavier se bloque)
-    let _scancode: u8;
+    let scancode: u8;
     unsafe {
-        asm!("in al, 0x60", out("al") _scancode, options(nomem, nostack));
+        asm!("in al, 0x60", out("al") scancode, options(nomem, nostack));
     }
     
-    // EOI au PIC Master
+    // Afficher sur la ligne 4 avec wrapping automatique
+    static mut KEY_COUNT: usize = 0;
+    let vga = 0xB8000 as *mut u16;
+    
     unsafe {
-        asm!("out 0x20, al", in("al") 0x20u8, options(nomem, nostack));
+        // Label permanent
+        let msg = b"[KEYS] Last 20: ";
+        for (i, &byte) in msg.iter().enumerate() {
+            *vga.add(4 * 80 + i) = 0x0E00 | byte as u16; // Jaune
+        }
+        
+        // Position pour les scancodes (20 scancodes max)
+        let base_col = 16;
+        let max_keys = 20;
+        let pos = KEY_COUNT % max_keys;
+        
+        // Afficher le scancode en hexadécimal
+        let high = (scancode >> 4) & 0x0F;
+        let low = scancode & 0x0F;
+        let high_char = if high < 10 { b'0' + high } else { b'A' + high - 10 };
+        let low_char = if low < 10 { b'0' + low } else { b'A' + low - 10 };
+        
+        let col = base_col + (pos * 3);
+        *vga.add(4 * 80 + col) = 0x0A00 | high_char as u16; // Vert
+        *vga.add(4 * 80 + col + 1) = 0x0A00 | low_char as u16;
+        *vga.add(4 * 80 + col + 2) = 0x0700 | b' ' as u16; // Espace
+        
+        KEY_COUNT += 1;
+        
+        // Effacer la prochaine position pour montrer le wrapping
+        let next_pos = (pos + 1) % max_keys;
+        let next_col = base_col + (next_pos * 3);
+        *vga.add(4 * 80 + next_col) = 0x0800 | b'_' as u16; // Curseur gris
+        *vga.add(4 * 80 + next_col + 1) = 0x0800 | b'_' as u16;
     }
+    
+    // EOI au PIC Master via le wrapper
+    crate::arch::x86_64::pic_wrapper::send_eoi(33);  // IRQ 1 → Vector 33
 }
 
 // ============================================================================

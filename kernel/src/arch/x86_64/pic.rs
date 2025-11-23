@@ -30,37 +30,35 @@ pub const PIC2_OFFSET: u8 = 40; // IRQ 8-15 → INT 40-47
 /// On les remappe vers 32-47 pour éviter les conflits.
 pub fn init() {
     unsafe {
-        // Sauvegarder les masques actuels
-        let mask1 = inb(PIC1_DATA);
-        let mask2 = inb(PIC2_DATA);
+        use core::arch::asm;
+        
+        // ICW1: Commencer l'initialisation
+        asm!("out dx, al", in("dx") 0x20u16, in("al") 0x11u8, options(nomem, nostack));
+        asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); // io_wait
+        asm!("out dx, al", in("dx") 0xA0u16, in("al") 0x11u8, options(nomem, nostack));
+        asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); // io_wait
 
-        // Commencer l'initialisation (ICW1)
-        outb(PIC1_COMMAND, ICW1_INIT | ICW1_ICW4);
-        io_wait();
-        outb(PIC2_COMMAND, ICW1_INIT | ICW1_ICW4);
-        io_wait();
+        // ICW2: Définir les offsets (32 pour master, 40 pour slave)
+        asm!("out dx, al", in("dx") 0x21u16, in("al") 32u8, options(nomem, nostack));
+        asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); // io_wait
+        asm!("out dx, al", in("dx") 0xA1u16, in("al") 40u8, options(nomem, nostack));
+        asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); // io_wait
 
-        // Définir les offsets (ICW2)
-        outb(PIC1_DATA, PIC1_OFFSET);
-        io_wait();
-        outb(PIC2_DATA, PIC2_OFFSET);
-        io_wait();
+        // ICW3: Configurer le chaînage
+        asm!("out dx, al", in("dx") 0x21u16, in("al") 4u8, options(nomem, nostack)); // IRQ2 = slave
+        asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); // io_wait
+        asm!("out dx, al", in("dx") 0xA1u16, in("al") 2u8, options(nomem, nostack)); // Cascade identity
+        asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); // io_wait
 
-        // Configurer le chaînage (ICW3)
-        outb(PIC1_DATA, 4); // IRQ2 est connecté au slave
-        io_wait();
-        outb(PIC2_DATA, 2); // Cascade identity
-        io_wait();
+        // ICW4: Mode 8086
+        asm!("out dx, al", in("dx") 0x21u16, in("al") 0x01u8, options(nomem, nostack));
+        asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); // io_wait
+        asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x01u8, options(nomem, nostack));
+        asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); // io_wait
 
-        // Mode 8086 (ICW4)
-        outb(PIC1_DATA, ICW4_8086);
-        io_wait();
-        outb(PIC2_DATA, ICW4_8086);
-        io_wait();
-
-        // Restaurer les masques
-        outb(PIC1_DATA, mask1);
-        outb(PIC2_DATA, mask2);
+        // Masquer toutes les IRQ par défaut
+        asm!("out dx, al", in("dx") 0x21u16, in("al") 0xFFu8, options(nomem, nostack));
+        asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xFFu8, options(nomem, nostack));
     }
 }
 

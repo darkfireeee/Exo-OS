@@ -74,13 +74,6 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
     arch::x86_64::init().expect("Failed to initialize architecture");
     debug_msg(b"[ARCH] IDT OK!");
     
-    // Test: déclencher un breakpoint pour vérifier le gestionnaire
-    debug_msg(b"[TEST] Calling int3...");
-    unsafe {
-        core::arch::asm!("int3", options(nomem, nostack));
-    }
-    debug_msg(b"[TEST] int3 OK!");
-    
     // Initialiser la mémoire
     debug_msg(b"[MEM] Init memory...");
     let mem_config = memory::MemoryConfig::default_config();
@@ -90,12 +83,30 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
     // Afficher les stats mémoire
     display_memory_init();
     
-    // NE PAS activer les interruptions pour l'instant
-    debug_msg(b"[INFO] Timer disabled");
-    debug_msg(b"[KERN] Ready!");
+    // NOUVEAU: Diagnostic I/O et configuration IOPL (compact)
+    arch::x86_64::io_diagnostic::diagnose_io_privileges();
     
-    // Boucle principale simple sans timer
-    kernel_main_loop()
+    // Fixer IOPL=3 pour autoriser les I/O
+    unsafe {
+        arch::x86_64::io_diagnostic::set_iopl_3();
+    }
+    
+    // Status ligne 2
+    display_status(2, b"[INIT] PIC...");
+    arch::x86_64::pic_wrapper::init_pic();
+    
+    display_status(2, b"[INIT] PIT (100Hz)...");
+    arch::x86_64::pit::init(100);  // 100 Hz
+    
+    display_status(2, b"[INIT] Enable IRQs...  ");
+    unsafe {
+        core::arch::asm!("sti", options(nomem, nostack));
+    }
+    
+    display_status(2, b"[READY] System active!  ");
+    
+    // Boucle principale avec interruptions
+    kernel_main_loop_with_timer()
 }
 
 /// Affiche la confirmation de l'initialisation mémoire
@@ -174,6 +185,27 @@ fn debug_msg(msg: &[u8]) {
     }
 }
 
+/// Affiche un status sur une ligne donnée (efface d'abord la ligne)
+fn display_status(row: usize, msg: &[u8]) {
+    let vga_buffer = 0xB8000 as *mut u16;
+    
+    unsafe {
+        // Effacer la ligne
+        for col in 0..80 {
+            let offset = (row * 80 + col) as isize;
+            *vga_buffer.offset(offset) = 0x0700;
+        }
+        
+        // Afficher le message
+        for (i, &byte) in msg.iter().enumerate() {
+            if i < 80 {
+                let offset = (row * 80 + i) as isize;
+                *vga_buffer.offset(offset) = 0x0D00 | byte as u16; // Magenta clair
+            }
+        }
+    }
+}
+
 /// Affiche un message de bienvenue depuis le code Rust
 fn rust_welcome(magic: u32, mboot_info: u64) {
     // Buffer VGA à 0xB8000
@@ -248,40 +280,23 @@ fn kernel_main_loop() -> ! {
 /// Boucle principale avec affichage du timer
 fn kernel_main_loop_with_timer() -> ! {
     let vga_buffer = 0xB8000 as *mut u16;
-    let mut last_second = 0u64;
     
     unsafe {
-        let row = 15;
-        let msg = b"[KERNEL] Running with timer...";
+        // Message sur ligne 5
+        let row = 5;
+        let msg = b"[STATUS] Kernel idle - Waiting for interrupts (HLT loop)";
         for (i, &byte) in msg.iter().enumerate() {
-            let offset = (row * 80 + i) as isize;
-            *vga_buffer.offset(offset) = 0x0B00 | byte as u16;
+            if i < 80 {
+                let offset = (row * 80 + i) as isize;
+                *vga_buffer.offset(offset) = 0x0800 | byte as u16; // Gris
+            }
         }
     }
     
+    // Le timer et le keyboard s'affichent automatiquement via leurs handlers
     loop {
-        let uptime_ms = arch::x86_64::pit::get_uptime_ms();
-        let current_second = uptime_ms / 1000;
-        
-        // Mettre à jour l'affichage chaque seconde
-        if current_second != last_second {
-            last_second = current_second;
-            
-            unsafe {
-                let row = 16;
-                let msg = b"[TIME] Uptime:       seconds";
-                for (i, &byte) in msg.iter().enumerate() {
-                    let offset = (row * 80 + i) as isize;
-                    *vga_buffer.offset(offset) = 0x0E00 | byte as u16;
-                }
-                
-                // Afficher le nombre de secondes
-                write_decimal(vga_buffer, row, 15, current_second as u32);
-            }
-        }
-        
-        // HLT pour économiser le CPU entre les interruptions
         unsafe {
+            // HLT attend une interruption
             core::arch::asm!("hlt", options(nomem, nostack));
         }
     }

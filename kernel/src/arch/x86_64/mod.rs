@@ -8,8 +8,10 @@
 
 pub mod handlers;  // Interrupt handlers with correct stack alignment
 pub mod idt;
-pub mod pic;  // Programmable Interrupt Controller
+pub mod pic;  // Programmable Interrupt Controller (old implementation)
+pub mod pic_wrapper;  // NEW: PIC wrapper using pic8259 crate
 pub mod pit;  // Programmable Interval Timer
+pub mod io_diagnostic;  // NEW: I/O privilege diagnostic tools
 
 // Constantes d'architecture
 pub const PAGE_SIZE: usize = 4096;
