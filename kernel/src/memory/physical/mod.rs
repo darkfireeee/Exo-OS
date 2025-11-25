@@ -1,7 +1,10 @@
 //! Physical memory management
 
 pub mod bitmap_allocator;
+pub mod buddy_allocator;
+pub mod frame;
 pub mod numa;
+pub mod zone;
 
 use crate::memory::{PhysicalAddress, MemoryError, MemoryResult};
 

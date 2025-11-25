@@ -1,7 +1,15 @@
 //! Heap allocator
 //! 
-//! Implémente un allocateur de heap simple basé sur une liste chaînée (linked-list)
-//! Utilise un algorithme first-fit pour trouver des blocs libres
+//! Implémente un allocateur hybride 3-niveaux:
+//! - Thread-local cache (≤256B, ~8 cycles)
+//! - CPU slab (≤4KB, ~50 cycles)
+//! - Buddy allocator (>4KB, ~200 cycles)
+
+pub mod thread_cache;
+pub mod cpu_slab;
+pub mod size_class;
+pub mod statistics;
+pub mod hybrid_allocator;
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::{self, NonNull};

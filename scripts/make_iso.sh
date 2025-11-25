@@ -6,8 +6,8 @@ set -e
 echo "=== Création d'une ISO bootable ==="
 
 # Vérifier que l'image kernel existe
-if [ ! -f "build/exo_kernel.elf" ]; then
-    echo "Erreur: build/exo_kernel.elf introuvable"
+if [ ! -f "build/kernel.bin" ]; then
+    echo "Erreur: build/kernel.bin introuvable"
     exit 1
 fi
 
@@ -15,18 +15,23 @@ fi
 mkdir -p build/iso/boot/grub
 
 # Copier le kernel
-cp build/exo_kernel.elf build/iso/boot/
+cp build/kernel.bin build/iso/boot/
 
-# Créer le fichier de configuration GRUB
-cat > build/iso/boot/grub/grub.cfg << 'EOF'
-set timeout=0
+# Copier le fichier grub.cfg depuis bootloader/
+if [ -f "bootloader/grub.cfg" ]; then
+    cp bootloader/grub.cfg build/iso/boot/grub/
+else
+    # Fallback: créer un grub.cfg basique
+    cat > build/iso/boot/grub/grub.cfg << 'EOF'
+set timeout=5
 set default=0
 
-menuentry "Exo-OS" {
-    multiboot /boot/exo_kernel.elf
+menuentry "Exo-OS v0.4.0" {
+    multiboot2 /boot/kernel.bin
     boot
 }
 EOF
+fi
 
 echo "-> Structure ISO créée"
 

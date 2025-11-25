@@ -8,7 +8,7 @@ pub use exo_ipc::{Channel, Message};
 pub use exo_crypto::{Kyber, Dilithium, ChaCha20};
 
 // Versioning
-pub const EXO_LIBS_VERSION: &str = "0.1.0-alpha";
+pub const EXO_LIBS_VERSION: &str = "0.3.0-alpha";
 
 // Initialisation des bibliothèques
 pub fn init() {

@@ -1,34 +1,29 @@
-//! # Canaux Typés Synchrones
+//! # Canal Typé (TypedChannel)
 //!
 //! `TypedChannel<T>` permet l'envoi et la réception de messages d'un type
-//! spécifique `T` de manière transparente.
+//! spécifique `T`. Les données sont automatiquement sérialisées/désérialisées.
 
-use crate::ipc::fusion_ring::{FusionRing, FusionRingError};
-use crate::ipc::shared_memory::{SharedMemoryPool, MappedMemory};
-use crate::ipc::descriptor::IpcDescriptor;
-use crate::ipc::capability::{IpcCapability, Permissions, ResourceType};
-use crate::ipc::message::{IpcMessage, MessagePayload};
+use crate::ipc::fusion_ring::{Ring, FusionRing};
+use crate::memory::{MemoryResult, MemoryError};
 use alloc::sync::Arc;
 use core::marker::PhantomData;
 use core::mem;
 
 /// L'extrémité d'envoi d'un `TypedChannel`.
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct TypedSender<T> {
     ring: Arc<FusionRing>,
-    pool: Arc<SharedMemoryPool>,
     _phantom: PhantomData<T>,
 }
 
 /// L'extrémité de réception d'un `TypedChannel`.
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct TypedReceiver<T> {
     ring: Arc<FusionRing>,
-    pool: Arc<SharedMemoryPool>,
     _phantom: PhantomData<T>,
 }
 
-/// Un canal typé, composé d'un émetteur et d'un récepteur.
+/// Un canal de communication typé
 pub struct TypedChannel<T> {
     pub sender: TypedSender<T>,
     pub receiver: TypedReceiver<T>,
@@ -38,127 +33,123 @@ impl<T> TypedChannel<T>
 where
     T: Copy + Send + 'static,
 {
-    /// Crée un nouveau canal typé.
-    pub fn new() -> Result<Self, ChannelError> {
-        let ring = Arc::new(FusionRing::new()?);
-        let pool = SharedMemoryPool::global(); // Le pool est un singleton.
-
+    /// Crée un nouveau canal typé
+    pub fn new(capacity: usize) -> MemoryResult<Self> {
+        // Allocate ring from fusion_ring (returns &'static Ring)
+        let actual_ring = crate::ipc::fusion_ring::ring::Ring::new(capacity);
+        let ring = FusionRing {
+            ring: Some(actual_ring), // Now actual_ring is &'static Ring
+            sync: crate::ipc::fusion_ring::sync::RingSync::new(),
+        };
+        let ring = Arc::new(ring);
+        
         let sender = TypedSender {
-            ring: ring.clone(),
-            pool: pool.clone(),
+            ring: Arc::clone(&ring),
             _phantom: PhantomData,
         };
+        
         let receiver = TypedReceiver {
             ring,
-            pool,
             _phantom: PhantomData,
         };
-
-        Ok(Self { sender, receiver })
+        
+        Ok(TypedChannel { sender, receiver })
     }
 }
 
 impl<T> TypedSender<T>
 where
-    T: Copy,
+    T: Copy + Send + 'static,
 {
-    /// Envoie une valeur de type `T` sur le canal.
-    pub fn send(&self, item: T) -> Result<(), ChannelError> {
-        let size = mem::size_of::<T>();
-        let data_ptr = &item as *const T as *const u8;
-        let data_slice = unsafe { core::slice::from_raw_parts(data_ptr, size) };
-
-        // 2. Choisir le chemin de performance.
-        if size <= 56 {
-            // Chemin rapide "inline".
-            let message = IpcMessage::new_inline(0, data_slice);
-            self.ring.send(message)?;
-        } else {
-            // Chemin zero-copy.
-            let page = self.pool.allocate(size)?;
-            let mut mapped_mem = self.pool.map(IpcDescriptor::new(
-                page.id,
-                0,
-                page.size,
-                IpcCapability::new(0, ResourceType::SharedMemory, Permissions::READ | Permissions::WRITE),
-            )?)?;
-            mapped_mem.copy_from_slice(data_slice);
-
-            let descriptor = IpcDescriptor::new(
-                page.id,
-                0,
-                size,
-                IpcCapability::new(0, ResourceType::SharedMemory, Permissions::READ),
-            )?;
-            let message = IpcMessage::new_shared_memory(0, descriptor);
-            self.ring.send(message)?;
-        }
-        Ok(())
+    /// Envoie un message
+    pub fn send(&self, msg: T) -> MemoryResult<()> {
+        // Sérialise le message en bytes
+        let data = unsafe {
+            core::slice::from_raw_parts(
+                &msg as *const T as *const u8,
+                mem::size_of::<T>(),
+            )
+        };
+        
+        self.ring.send(data)
+    }
+    
+    /// Essaie d'envoyer un message sans bloquer
+    pub fn try_send(&self, msg: T) -> MemoryResult<()> {
+        self.send(msg)
+    }
+    
+    /// Envoie un message en bloquant si nécessaire
+    pub fn send_blocking(&self, msg: T) -> MemoryResult<()> {
+        let data = unsafe {
+            core::slice::from_raw_parts(
+                &msg as *const T as *const u8,
+                mem::size_of::<T>(),
+            )
+        };
+        
+        self.ring.send_blocking(data)
     }
 }
 
 impl<T> TypedReceiver<T>
 where
-    T: Copy,
+    T: Copy + Send + 'static,
 {
-    /// Reçoit une valeur de type `T` depuis le canal. Bloque jusqu'à ce qu'un message soit disponible.
-    pub fn recv(&self) -> Result<T, ChannelError> {
-        loop {
-            match self.ring.receive() {
-                Ok(message) => {
-                    match message.payload {
-                        MessagePayload::Inline(data) => {
-                            if data.len() != mem::size_of::<T>() {
-                                // Should handle error properly, but for now just panic or return error
-                                return Err(ChannelError::Ring(FusionRingError::RingEmpty)); // Invalid error but ok for now
-                            }
-                            let mut item = unsafe { mem::zeroed::<T>() };
-                            let item_ptr = &mut item as *mut T as *mut u8;
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(data.as_ptr(), item_ptr, mem::size_of::<T>());
-                            }
-                            return Ok(item);
-                        }
-                        MessagePayload::SharedMemory(descriptor) => {
-                            let mapped_mem = self.pool.map(descriptor)?;
-                            if mapped_mem.len() < mem::size_of::<T>() {
-                                 return Err(ChannelError::Ring(FusionRingError::RingEmpty));
-                            }
-                            let mut item = unsafe { mem::zeroed::<T>() };
-                            let item_ptr = &mut item as *mut T as *mut u8;
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(mapped_mem.as_ptr(), item_ptr, mem::size_of::<T>());
-                            }
-                            return Ok(item);
-                        }
-                    }
-                }
-                Err(FusionRingError::RingEmpty) => {
-                    core::hint::spin_loop();
-                }
-                Err(e) => return Err(e.into()),
-            }
+    /// Reçoit un message
+    pub fn recv(&self) -> MemoryResult<T> {
+        let mut buffer = [0u8; 4096]; // Max message size
+        let len = self.ring.recv(&mut buffer)?;
+        
+        if len != mem::size_of::<T>() {
+            log::error!("Size mismatch: expected {} bytes, got {} bytes", mem::size_of::<T>(), len);
+            return Err(MemoryError::OutOfMemory); // TODO: Create IpcError::InvalidMessageSize
         }
+        
+        // Désérialise
+        let msg = unsafe {
+            core::ptr::read_unaligned(buffer.as_ptr() as *const T)
+        };
+        
+        Ok(msg)
+    }
+    
+    /// Essaie de recevoir sans bloquer
+    pub fn try_recv(&self) -> MemoryResult<T> {
+        self.recv()
+    }
+    
+    /// Reçoit en bloquant
+    pub fn recv_blocking(&self) -> MemoryResult<T> {
+        let mut buffer = [0u8; 4096];
+        let len = self.ring.recv_blocking(&mut buffer)?;
+        
+        if len != mem::size_of::<T>() {
+            return Err(MemoryError::OutOfMemory);
+        }
+        
+        let msg = unsafe {
+            core::ptr::read_unaligned(buffer.as_ptr() as *const T)
+        };
+        
+        Ok(msg)
     }
 }
 
-/// Erreurs spécifiques aux canaux typés.
-#[derive(Debug)]
+/// Erreur de canal
+#[derive(Debug, Clone, Copy)]
 pub enum ChannelError {
-    /// Erreur du Fusion Ring.
-    Ring(FusionRingError),
-    /// Erreur de mémoire partagée.
-    SharedMemory(crate::ipc::SharedMemoryError),
+    Full,
+    Empty,
+    Closed,
+    InvalidSize,
 }
 
-impl From<FusionRingError> for ChannelError {
-    fn from(err: FusionRingError) -> Self {
-        ChannelError::Ring(err)
-    }
-}
-
-impl From<crate::ipc::SharedMemoryError> for ChannelError {
-    fn from(err: crate::ipc::SharedMemoryError) -> Self {
-        ChannelError::SharedMemory(err)
-    }
+// Fonction helper pour créer un canal
+pub fn typed_channel<T>(capacity: usize) -> MemoryResult<(TypedSender<T>, TypedReceiver<T>)>
+where
+    T: Copy + Send + 'static,
+{
+    let channel = TypedChannel::new(capacity)?;
+    Ok((channel.sender, channel.receiver))
 }

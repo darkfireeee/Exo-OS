@@ -1,6 +1,6 @@
 //! Virtual File System layer
 
-use super::{FsResult, FsError};
+use super::{FsError, FsResult};
 
 /// VFS inode
 pub mod inode;
@@ -14,8 +14,12 @@ pub mod mount;
 /// VFS cache
 pub mod cache;
 
+/// tmpfs - Temporary RAM filesystem
+pub mod tmpfs;
+
 /// Initialize VFS
 pub fn init() -> FsResult<()> {
-    log::debug!("VFS initialized");
+    cache::init();
+    log::info!("VFS initialized with cache and tmpfs");
     Ok(())
 }

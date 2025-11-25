@@ -8,6 +8,7 @@ pub mod mmap;
 pub mod protection;
 pub mod shared;
 pub mod address;
+pub mod cache;
 
 // Re-exports
 pub use heap::LockedHeap;
@@ -25,6 +26,8 @@ pub enum MemoryError {
     PermissionDenied,
     AlignmentError,
     InvalidSize,
+    NotFound,
+    InvalidParameter,
     InternalError(&'static str),
 }
 
@@ -38,6 +41,8 @@ impl core::fmt::Display for MemoryError {
             MemoryError::PermissionDenied => write!(f, "Permission denied"),
             MemoryError::AlignmentError => write!(f, "Alignment error"),
             MemoryError::InvalidSize => write!(f, "Invalid size"),
+            MemoryError::NotFound => write!(f, "Not found"),
+            MemoryError::InvalidParameter => write!(f, "Invalid parameter"),
             MemoryError::InternalError(msg) => write!(f, "Internal error: {}", msg),
         }
     }

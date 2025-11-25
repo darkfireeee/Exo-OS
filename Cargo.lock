@@ -51,6 +51,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bootloader"
+version = "0.9.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bdfddac270bbdd45903296bc1caf29a7fdce6b326aaf0bbab7f04c5f98b7447"
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -198,6 +204,7 @@ dependencies = [
  "aarch64-cpu",
  "bit_field",
  "bitflags 2.10.0",
+ "bootloader",
  "capnp",
  "cc",
  "crossbeam-queue",

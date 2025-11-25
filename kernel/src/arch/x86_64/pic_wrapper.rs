@@ -38,34 +38,26 @@ pub fn init_pic() {
 
 /// Active une IRQ spécifique (0-15)
 pub unsafe fn unmask_irq(irq: u8) {
-    use x86_64::instructions::port::Port;
-    
     if irq < 8 {
         // IRQ Master (0-7)
-        let mut mask = Port::new(0x21);
-        let current: u8 = mask.read();
-        mask.write(current & !(1 << irq));
+        let current = super::inb(0x21);
+        super::outb(0x21, current & !(1 << irq));
     } else {
         // IRQ Slave (8-15)
-        let mut mask = Port::new(0xA1);
-        let current: u8 = mask.read();
-        mask.write(current & !(1 << (irq - 8)));
+        let current = super::inb(0xA1);
+        super::outb(0xA1, current & !(1 << (irq - 8)));
     }
 }
 
 /// Désactive une IRQ spécifique (0-15)
 #[allow(dead_code)]
 pub unsafe fn mask_irq(irq: u8) {
-    use x86_64::instructions::port::Port;
-    
     if irq < 8 {
-        let mut mask = Port::new(0x21);
-        let current: u8 = mask.read();
-        mask.write(current | (1 << irq));
+        let current = super::inb(0x21);
+        super::outb(0x21, current | (1 << irq));
     } else {
-        let mut mask = Port::new(0xA1);
-        let current: u8 = mask.read();
-        mask.write(current | (1 << (irq - 8)));
+        let current = super::inb(0xA1);
+        super::outb(0xA1, current | (1 << (irq - 8)));
     }
 }
 
@@ -87,20 +79,10 @@ pub fn disable() {
 }
 
 // Fonction helper pour afficher des messages de debug
+// NOTE: VGA debug désactivé pour v0.4.0 - splash screen ne doit pas être écrasé
+// Les messages PIC sont visibles dans serial.log
+#[allow(unused_variables)]
 fn debug_msg(msg: &[u8]) {
-    static mut ROW: usize = 6;
-    let vga_buffer = 0xB8000 as *mut u16;
-    
-    unsafe {
-        for (i, &byte) in msg.iter().enumerate() {
-            let offset = ROW * 80 + i;
-            if offset < 80 * 25 {
-                vga_buffer.add(offset).write_volatile((byte as u16) | 0x0F00);
-            }
-        }
-        ROW += 1;
-        if ROW >= 25 {
-            ROW = 6;
-        }
-    }
+    // Messages désactivés pour préserver le splash v0.4.0
+    // Utilisez serial.log pour voir les messages de debug PIC
 }

@@ -125,267 +125,39 @@ pub fn init() {
 // Gestionnaires d'exceptions CPU (0-31)
 //
 
-/// Handler ASM simple pour Division par zéro (Exception #0)
-/// Utilise naked function avec affichage VGA direct
-#[unsafe(naked)]
-#[no_mangle]
-extern "C" fn divide_error_handler() {
-    core::arch::naked_asm!(
-            // Sauvegarder les registres
-            "push rax",
-            "push rbx",
-            "push rcx",
-            
-            // Afficher message VGA
-            "mov rax, 0xB8000",              // Adresse VGA
-            "add rax, {row_offset}",          // Ligne 24
-            "mov word ptr [rax + 0], 0x4F5B", // '['
-            "mov word ptr [rax + 2], 0x4F45", // 'E'
-            "mov word ptr [rax + 4], 0x4F58", // 'X'
-            "mov word ptr [rax + 6], 0x4F43", // 'C'
-            "mov word ptr [rax + 8], 0x4F45", // 'E'
-            "mov word ptr [rax + 10], 0x4F50", // 'P'
-            "mov word ptr [rax + 12], 0x4F5D", // ']'
-            "mov word ptr [rax + 14], 0x4F20", // ' '
-            "mov word ptr [rax + 16], 0x4F44", // 'D'
-            "mov word ptr [rax + 18], 0x4F69", // 'i'
-            "mov word ptr [rax + 20], 0x4F76", // 'v'
-            "mov word ptr [rax + 22], 0x4F20", // ' '
-            "mov word ptr [rax + 24], 0x4F62", // 'b'
-            "mov word ptr [rax + 26], 0x4F79", // 'y'
-            "mov word ptr [rax + 28], 0x4F20", // ' '
-            "mov word ptr [rax + 30], 0x4F30", // '0'
-            
-            // Restaurer les registres
-            "pop rcx",
-            "pop rbx",
-            "pop rax",
-            
-            // Retour d'interruption
-            "iretq",
-            
-            row_offset = const (24 * 80 * 2)
-        );
+// Handlers définis dans idt_handlers.asm (évite les problèmes LLVM avec naked_asm! et global_asm!)
+extern "C" {
+    fn divide_error_handler();
 }
 
 /*
 // Anciens handlers naked commentés pour référence
-#[unsafe(naked)]
-extern "C" fn divide_error_handler() {
-    core::arch::naked_asm!(
-        "push 0",                    // Pas de code d'erreur
-        "push 0",                    // Numéro d'exception: 0
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
+// Handlers définis dans idt_handlers.asm (évite les problèmes LLVM avec naked_asm!)
+extern "C" {
+    fn divide_error_handler();
 }
 
-#[unsafe(naked)]
-extern "C" fn debug_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 1",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn nmi_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 2",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn breakpoint_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 3",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn overflow_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 4",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn bound_range_exceeded_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 5",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn invalid_opcode_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 6",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn device_not_available_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 7",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn double_fault_handler() {
-    core::arch::naked_asm!(
-        // Double fault pousse déjà un code d'erreur
-        "push 8",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn coprocessor_segment_overrun_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 9",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn invalid_tss_handler() {
-    core::arch::naked_asm!(
-        "push 10",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn segment_not_present_handler() {
-    core::arch::naked_asm!(
-        "push 11",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn stack_segment_fault_handler() {
-    core::arch::naked_asm!(
-        "push 12",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn general_protection_fault_handler() {
-    core::arch::naked_asm!(
-        "push 13",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn page_fault_handler() {
-    core::arch::naked_asm!(
-        "push 14",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn x87_fpu_error_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 16",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn alignment_check_handler() {
-    core::arch::naked_asm!(
-        "push 17",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn machine_check_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 18",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn simd_floating_point_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 19",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn virtualization_exception_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 20",
-        "jmp {common_handler}",
-        common_handler = sym exception_common_handler
-    );
-}
-
-//
-// Gestionnaires d'interruptions matérielles
-//
-
-#[unsafe(naked)]
-extern "C" fn default_irq_handler() {
-    core::arch::naked_asm!(
-        "push 0",                    // Pas de code d'erreur
-        "push 32",                   // Numéro IRQ arbitraire
-        "jmp {common_handler}",
-        common_handler = sym irq_common_handler
-    );
-}
-
-#[unsafe(naked)]
-extern "C" fn default_interrupt_handler() {
-    core::arch::naked_asm!(
-        "push 0",
-        "push 255",
-        "jmp {common_handler}",
-        common_handler = sym irq_common_handler
-    );
+    fn debug_handler();
+    fn nmi_handler();
+    fn breakpoint_handler();
+    fn overflow_handler();
+    fn bound_range_exceeded_handler();
+    fn invalid_opcode_handler();
+    fn device_not_available_handler();
+    fn double_fault_handler();
+    fn coprocessor_segment_overrun_handler();
+    fn invalid_tss_handler();
+    fn segment_not_present_handler();
+    fn stack_segment_fault_handler();
+    fn general_protection_fault_handler();
+    fn page_fault_handler();
+    fn x87_fpu_error_handler();
+    fn alignment_check_handler();
+    fn machine_check_handler();
+    fn simd_floating_point_handler();
+    fn virtualization_exception_handler();
+    fn default_irq_handler();
+    fn default_interrupt_handler();
 }
 
 //
@@ -413,102 +185,10 @@ struct InterruptFrame {
     ss: u64,
 }
 
-/// Gestionnaire commun pour toutes les exceptions
-#[unsafe(naked)]
-extern "C" fn exception_common_handler() {
-    core::arch::naked_asm!(
-            // Sauvegarder tous les registres
-            "push rax",
-            "push rbx",
-            "push rcx",
-            "push rdx",
-            "push rbp",
-            "push rsi",
-            "push rdi",
-            "push r8",
-            "push r9",
-            "push r10",
-            "push r11",
-            "push r12",
-            "push r13",
-            "push r14",
-            "push r15",
-            
-            // Appeler le gestionnaire Rust
-            "mov rdi, rsp",              // Premier argument: pointeur vers InterruptFrame
-            "call {handler}",
-            
-            // Restaurer tous les registres
-            "pop r15",
-            "pop r14",
-            "pop r13",
-            "pop r12",
-            "pop r11",
-            "pop r10",
-            "pop r9",
-            "pop r8",
-            "pop rdi",
-            "pop rsi",
-            "pop rbp",
-            "pop rdx",
-            "pop rcx",
-            "pop rbx",
-            "pop rax",
-            
-            // Nettoyer le numéro d'interruption et le code d'erreur
-            "add rsp, 16",
-            
-            // Retourner de l'interruption
-            "iretq",
-            
-            handler = sym exception_handler_rust
-        );
-}
-
-/// Gestionnaire commun pour les IRQ
-#[unsafe(naked)]
-extern "C" fn irq_common_handler() {
-    core::arch::naked_asm!(
-            "push rax",
-            "push rbx",
-            "push rcx",
-            "push rdx",
-            "push rbp",
-            "push rsi",
-            "push rdi",
-            "push r8",
-            "push r9",
-            "push r10",
-            "push r11",
-            "push r12",
-            "push r13",
-            "push r14",
-            "push r15",
-            
-            "mov rdi, rsp",
-            "call {handler}",
-            
-            "pop r15",
-            "pop r14",
-            "pop r13",
-            "pop r12",
-            "pop r11",
-            "pop r10",
-            "pop r9",
-            "pop r8",
-            "pop rdi",
-            "pop rsi",
-            "pop rbp",
-            "pop rdx",
-            "pop rcx",
-            "pop rbx",
-            "pop rax",
-            
-            "add rsp, 16",
-            "iretq",
-            
-            handler = sym irq_handler_rust
-        );
+// Les gestionnaires communs sont définis dans idt_handlers.asm
+extern "C" {
+    fn exception_common_handler();
+    fn irq_common_handler();
 }
 
 /// Gestionnaire Rust pour les exceptions

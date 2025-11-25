@@ -15,6 +15,18 @@ pub mod fat32;
 /// ext4 filesystem  
 pub mod ext4;
 
+/// TmpFS - Temporary filesystem (RAM)
+pub mod tmpfs;
+
+/// DevFS - Device filesystem
+pub mod devfs;
+
+/// ProcFS - Process information
+pub mod procfs;
+
+/// SysFS - System information
+pub mod sysfs;
+
 /// Filesystem errors
 #[derive(Debug)]
 pub enum FsError {

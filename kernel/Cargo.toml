@@ -47,6 +47,9 @@ ed25519-dalek = { version = "2.1.1", default-features = false, features = ["fast
 # Sérialisation pour l'IPC (optionnel)
 capnp = { version = "0.18.1", default-features = false, optional = true }
 
+# Boot loader for creating bootable disk images
+bootloader = "0.9.23"
+
 # Dépendances spécifiques à l'architecture
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 x86_64 = "0.14.11"

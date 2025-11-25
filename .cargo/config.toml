@@ -14,6 +14,7 @@ incremental = true
 rustflags = [
   "-C", "link-arg=-Tlinker.ld",
   "-C", "link-arg=--no-pie",
+  "-C", "link-arg=--allow-multiple-definition",
   "-C", "relocation-model=static",
   "-C", "code-model=kernel",
   "-C", "debuginfo=1",

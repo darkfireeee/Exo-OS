@@ -21,61 +21,13 @@ pub struct InterruptStackFrame {
 // MACRO POUR GÉNÉRER LES HANDLERS AVEC STACK ALIGNMENT CORRECT
 // ============================================================================
 
+// REMARQUE: Les handlers assembleur sont maintenant dans idt_handlers.asm
+// pour éviter les problèmes LLVM avec naked_asm! sur Windows/MSVC
+// Cette macro n'est plus utilisée
 macro_rules! interrupt_handler {
     ($name:ident, $handler_fn:path) => {
-        #[unsafe(naked)]
-        pub extern "C" fn $name() {
-            core::arch::naked_asm!(
-                // 1. Sauvegarder TOUS les registres (System V ABI)
-                "push rax",
-                "push rcx",
-                "push rdx",
-                "push rbx",
-                "push rbp",
-                "push rsi",
-                "push rdi",
-                "push r8",
-                "push r9",
-                "push r10",
-                "push r11",
-                "push r12",
-                "push r13",
-                "push r14",
-                "push r15",
-                
-                // 2. Le CPU a déjà pushé 5*8=40 bytes
-                // + nos 15*8=120 bytes = 160 total (multiple de 16 ✓)
-                
-                // 3. Passer le pointeur stack frame en premier argument (rdi)
-                "mov rdi, rsp",
-                "add rdi, 15*8",  // Pointer vers InterruptStackFrame
-                
-                // 4. Appeler le handler Rust
-                "call {handler}",
-                
-                // 5. Restaurer les registres
-                "pop r15",
-                "pop r14",
-                "pop r13",
-                "pop r12",
-                "pop r11",
-                "pop r10",
-                "pop r9",
-                "pop r8",
-                "pop rdi",
-                "pop rsi",
-                "pop rbp",
-                "pop rbx",
-                "pop rdx",
-                "pop rcx",
-                "pop rax",
-                
-                // 6. Retour d'interruption
-                "iretq",
-                
-                handler = sym $handler_fn
-            )
-        }
+        // Stub vide - les vrais handlers sont dans l'.asm
+        pub extern "C" fn $name() {}
     };
 }
 
@@ -151,18 +103,23 @@ extern "C" fn timer_interrupt_handler(_stack_frame: &InterruptStackFrame) {
         display_timer_count(ticks / 100);
     }
     
-    // IMPORTANT: Envoyer EOI au PIC via le wrapper
-    crate::arch::x86_64::pic_wrapper::send_eoi(32);  // IRQ 0 → Vector 32
+    // IMPORTANT: Envoyer EOI au PIC avant le scheduler
+    crate::arch::x86_64::pic_wrapper::send_eoi(0);  // IRQ 0 (Timer)
+    
+    // Préemption: Appeler le scheduler tous les 10 ticks (10ms à 100Hz)
+    if ticks % 10 == 0 {
+        crate::scheduler::SCHEDULER.schedule();
+    }
 }
 
-/// Affiche le compteur de secondes sur la ligne 3
+/// Affiche le compteur de secondes sur la ligne 16
 fn display_timer_count(seconds: u64) {
     let vga = 0xB8000 as *mut u16;
     unsafe {
         // Label
-        let msg = b"[TIMER] Uptime: ";
+        let msg = b"[UPTIME] ";
         for (i, &byte) in msg.iter().enumerate() {
-            *vga.add(3 * 80 + i) = 0x0B00 | byte as u16; // Cyan
+            *vga.add(16 * 80 + i) = 0x0B00 | byte as u16; // Cyan
         }
         
         // Afficher les secondes (5 chiffres max)
@@ -174,13 +131,13 @@ fn display_timer_count(seconds: u64) {
         }
         
         for (i, &digit) in digits.iter().enumerate() {
-            *vga.add(3 * 80 + 16 + i) = 0x0A00 | digit as u16; // Vert clair
+            *vga.add(16 * 80 + 9 + i) = 0x0A00 | digit as u16; // Vert clair
         }
         
-        // Ajouter " sec"
-        let suffix = b" sec";
+        // Ajouter " seconds"
+        let suffix = b" seconds";
         for (i, &byte) in suffix.iter().enumerate() {
-            *vga.add(3 * 80 + 21 + i) = 0x07000 | byte as u16;
+            *vga.add(16 * 80 + 14 + i) = 0x0700 | byte as u16;
         }
     }
 }
@@ -194,44 +151,72 @@ extern "C" fn keyboard_interrupt_handler(_stack_frame: &InterruptStackFrame) {
         asm!("in al, 0x60", out("al") scancode, options(nomem, nostack));
     }
     
-    // Afficher sur la ligne 4 avec wrapping automatique
-    static mut KEY_COUNT: usize = 0;
+    // Traiter le scancode avec le driver
+    if let Some(c) = crate::drivers::input::hid::process_scancode(scancode) {
+        // TODO: Send to shell when implemented
+        display_typed_char(c);
+    }
+    
+    // EOI au PIC Master via le wrapper
+    crate::arch::x86_64::pic_wrapper::send_eoi(1);  // IRQ 1 (Keyboard)
+}
+
+/// Affiche les caractères tapés sur la ligne 17
+fn display_typed_char(c: char) {
+    static mut COL_POS: usize = 0;
+    const MAX_COL: usize = 69; // Laisser de la place
     let vga = 0xB8000 as *mut u16;
     
     unsafe {
         // Label permanent
-        let msg = b"[KEYS] Last 20: ";
+        let msg = b"[INPUT] ";
         for (i, &byte) in msg.iter().enumerate() {
-            *vga.add(4 * 80 + i) = 0x0E00 | byte as u16; // Jaune
+            *vga.add(17 * 80 + i) = 0x0E00 | byte as u16; // Jaune
         }
         
-        // Position pour les scancodes (20 scancodes max)
-        let base_col = 16;
-        let max_keys = 20;
-        let pos = KEY_COUNT % max_keys;
+        let base_col = 8;
         
-        // Afficher le scancode en hexadécimal
-        let high = (scancode >> 4) & 0x0F;
-        let low = scancode & 0x0F;
-        let high_char = if high < 10 { b'0' + high } else { b'A' + high - 10 };
-        let low_char = if low < 10 { b'0' + low } else { b'A' + low - 10 };
-        
-        let col = base_col + (pos * 3);
-        *vga.add(4 * 80 + col) = 0x0A00 | high_char as u16; // Vert
-        *vga.add(4 * 80 + col + 1) = 0x0A00 | low_char as u16;
-        *vga.add(4 * 80 + col + 2) = 0x0700 | b' ' as u16; // Espace
-        
-        KEY_COUNT += 1;
-        
-        // Effacer la prochaine position pour montrer le wrapping
-        let next_pos = (pos + 1) % max_keys;
-        let next_col = base_col + (next_pos * 3);
-        *vga.add(4 * 80 + next_col) = 0x0800 | b'_' as u16; // Curseur gris
-        *vga.add(4 * 80 + next_col + 1) = 0x0800 | b'_' as u16;
+        // Gérer les caractères spéciaux
+        match c {
+            '\n' => {
+                // Enter: nouvelle ligne (réinitialiser)
+                COL_POS = 0;
+                // Effacer la ligne
+                for col in base_col..80 {
+                    *vga.add(17 * 80 + col) = 0x0700 | b' ' as u16;
+                }
+            }
+            '\x08' => {
+                // Backspace: effacer le dernier caractère
+                if COL_POS > 0 {
+                    COL_POS -= 1;
+                    *vga.add(17 * 80 + base_col + COL_POS) = 0x0700 | b' ' as u16;
+                }
+            }
+            '\t' => {
+                // Tab: 4 espaces
+                for _ in 0..4 {
+                    if COL_POS < MAX_COL {
+                        *vga.add(17 * 80 + base_col + COL_POS) = 0x0A00 | b' ' as u16;
+                        COL_POS += 1;
+                    }
+                }
+            }
+            c if c.is_ascii() => {
+                // Caractère normal
+                if COL_POS < MAX_COL {
+                    *vga.add(17 * 80 + base_col + COL_POS) = 0x0A00 | c as u16;
+                    COL_POS += 1;
+                    
+                    // Curseur clignotant à la position suivante
+                    if COL_POS < MAX_COL {
+                        *vga.add(17 * 80 + base_col + COL_POS) = 0x0F00 | b'_' as u16;
+                    }
+                }
+            }
+            _ => {} // Ignorer les caractères non-ASCII
+        }
     }
-    
-    // EOI au PIC Master via le wrapper
-    crate::arch::x86_64::pic_wrapper::send_eoi(33);  // IRQ 1 → Vector 33
 }
 
 // ============================================================================
@@ -243,104 +228,11 @@ interrupt_handler!(division_error_wrapper, division_error_handler);
 interrupt_handler!(breakpoint_wrapper, breakpoint_handler);
 
 // Exceptions avec error code (Double Fault, Page Fault)
-#[unsafe(naked)]
-pub extern "C" fn double_fault_wrapper() {
-    core::arch::naked_asm!(
-        // Le CPU a pushé l'error code AVANT le stack frame
-        // Stack: [error_code] [SS] [RSP] [RFLAGS] [CS] [RIP]
-        
-        // Sauvegarder les registres
-        "push rax",
-        "push rcx",
-        "push rdx",
-        "push rbx",
-        "push rbp",
-        "push rsi",
-        "push rdi",
-        "push r8",
-        "push r9",
-        "push r10",
-        "push r11",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        
-        // Arguments: rdi=stack_frame, rsi=error_code
-        "mov rdi, rsp",
-        "add rdi, 15*8 + 8",      // Sauter registres + error_code
-        "mov rsi, [rsp + 15*8]",   // Lire error_code
-        
-        // Appeler le handler
-        "call double_fault_handler",
-        
-        // Restaurer (ne devrait jamais arriver ici)
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop r11",
-        "pop r10",
-        "pop r9",
-        "pop r8",
-        "pop rdi",
-        "pop rsi",
-        "pop rbp",
-        "pop rbx",
-        "pop rdx",
-        "pop rcx",
-        "pop rax",
-        
-        "add rsp, 8",  // Pop error code
-        "iretq"
-    )
-}
+// Stub temporaire - l'implémentation réelle est dans idt_handlers.asm
+pub extern "C" fn double_fault_wrapper() {}
 
-#[unsafe(naked)]
-pub extern "C" fn page_fault_wrapper() {
-    core::arch::naked_asm!(
-        "push rax",
-        "push rcx",
-        "push rdx",
-        "push rbx",
-        "push rbp",
-        "push rsi",
-        "push rdi",
-        "push r8",
-        "push r9",
-        "push r10",
-        "push r11",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        
-        "mov rdi, rsp",
-        "add rdi, 15*8 + 8",
-        "mov rsi, [rsp + 15*8]",
-        
-        "call page_fault_handler",
-        
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop r11",
-        "pop r10",
-        "pop r9",
-        "pop r8",
-        "pop rdi",
-        "pop rsi",
-        "pop rbp",
-        "pop rbx",
-        "pop rdx",
-        "pop rcx",
-        "pop rax",
-        
-        "add rsp, 8",
-        "iretq"
-    )
-}
+// Stub temporaire - l'implémentation réelle est dans idt_handlers.asm
+pub extern "C" fn page_fault_wrapper() {}
 
 // IRQs (pas d'error code)
 interrupt_handler!(timer_wrapper, timer_interrupt_handler);

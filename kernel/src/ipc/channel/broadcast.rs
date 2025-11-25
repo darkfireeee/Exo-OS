@@ -1,55 +1,153 @@
-//! # Canal de Diffusion (Broadcast)
+//! Broadcast Channels - One-to-Many IPC
 //!
-//! `BroadcastChannel<T>` permet à un producteur d'envoyer un message à
-//! plusieurs consommateurs (1->N). Il utilise une architecture "fan-out"
-//! où une tâche dédiée lit depuis un anneau central et redistribue les
-//! messages à des anneaux privés pour chaque consommateur.
+//! Allows one sender to broadcast messages to multiple receivers
 
-use super::typed::{TypedSender, TypedReceiver, ChannelError};
-// use serde::{Serialize, Deserialize};
+use crate::ipc::fusion_ring::{FusionRing, Ring};
+use crate::memory::{MemoryResult, MemoryError};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use spin::Mutex;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
-/// L'extrémité d'envoi pour un canal de diffusion.
-#[derive(Debug)]
-pub struct BroadcastSender<T> {
-    sender: TypedSender<T>,
+/// Broadcast sender
+pub struct BroadcastSender {
+    /// Rings for each receiver
+    rings: Arc<Mutex<Vec<Arc<FusionRing>>>>,
+    
+    /// Number of receivers
+    receiver_count: Arc<AtomicUsize>,
 }
 
-/// L'extrémité de réception pour un canal de diffusion.
-#[derive(Debug)]
-pub struct BroadcastReceiver<T> {
-    receiver: TypedReceiver<T>,
-}
-
-/// Un canal de diffusion.
-pub struct BroadcastChannel<T> {
-    _marker: core::marker::PhantomData<T>,
-}
-
-impl<T> BroadcastChannel<T>
-where
-    T: Serialize + for<'de> Deserialize<'de> + Send + Clone + 'static,
-{
-    /// Crée un nouveau canal de diffusion.
-    pub fn new() -> Result<(Self, BroadcastSender<T>, BroadcastReceiver<T>), ChannelError> {
-        // TODO: Implement broadcast channel without tokio
-        Err(ChannelError::InternalError)
+impl BroadcastSender {
+    /// Send message to all receivers
+    pub fn send(&self, data: &[u8]) -> MemoryResult<usize> {
+        let rings = self.rings.lock();
+        let mut sent_count = 0;
+        
+        for ring in rings.iter() {
+            if ring.send(data).is_ok() {
+                sent_count += 1;
+            }
+        }
+        
+        Ok(sent_count)
+    }
+    
+    /// Get number of active receivers
+    pub fn receiver_count(&self) -> usize {
+        self.receiver_count.load(Ordering::Acquire)
     }
 }
 
-impl<T> BroadcastSender<T>
-where
-    T: Serialize,
-{
-    pub fn send(&self, item: T) -> Result<(), ChannelError> {
-        self.sender.send(item)
+/// Broadcast receiver
+pub struct BroadcastReceiver {
+    /// Personal ring
+    ring: Arc<FusionRing>,
+    
+    /// Reference to sender's ring list
+    rings: Arc<Mutex<Vec<Arc<FusionRing>>>>,
+    
+    /// Receiver count
+    receiver_count: Arc<AtomicUsize>,
+    
+    /// Index in ring list
+    index: usize,
+}
+
+impl BroadcastReceiver {
+    /// Receive message
+    pub fn recv(&self, buffer: &mut [u8]) -> MemoryResult<usize> {
+        self.ring.recv(buffer)
+    }
+    
+    /// Try receive (non-blocking)
+    pub fn try_recv(&self, buffer: &mut [u8]) -> MemoryResult<usize> {
+        self.ring.recv(buffer)
     }
 }
 
-impl<T> BroadcastReceiver<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    pub fn recv(&self) -> Result<T, ChannelError> {
-        self.receiver.recv()
+impl Drop for BroadcastReceiver {
+    fn drop(&mut self) {
+        // Remove from ring list
+        let mut rings = self.rings.lock();
+        if self.index < rings.len() {
+            rings.remove(self.index);
+        }
+        
+        // Decrement count
+        self.receiver_count.fetch_sub(1, Ordering::Release);
+    }
+}
+
+/// Broadcast channel
+pub struct BroadcastChannel {
+    sender: BroadcastSender,
+    rings: Arc<Mutex<Vec<Arc<FusionRing>>>>,
+    receiver_count: Arc<AtomicUsize>,
+}
+
+impl BroadcastChannel {
+    /// Create new broadcast channel
+    pub fn new() -> Self {
+        let rings = Arc::new(Mutex::new(Vec::new()));
+        let receiver_count = Arc::new(AtomicUsize::new(0));
+        
+        let sender = BroadcastSender {
+            rings: rings.clone(),
+            receiver_count: receiver_count.clone(),
+        };
+        
+        Self {
+            sender,
+            rings,
+            receiver_count,
+        }
+    }
+    
+    /// Get sender
+    pub fn sender(&self) -> &BroadcastSender {
+        &self.sender
+    }
+    
+    /// Subscribe (create new receiver)
+    pub fn subscribe(&self) -> MemoryResult<BroadcastReceiver> {
+        // Create new ring for this receiver
+        let ring = Arc::new(FusionRing::new_dummy());
+        
+        let mut rings = self.rings.lock();
+        let index = rings.len();
+        rings.push(ring.clone());
+        
+        self.receiver_count.fetch_add(1, Ordering::Release);
+        
+        Ok(BroadcastReceiver {
+            ring,
+            rings: self.rings.clone(),
+            receiver_count: self.receiver_count.clone(),
+            index,
+        })
+    }
+    
+    /// Get number of active receivers
+    pub fn receiver_count(&self) -> usize {
+        self.receiver_count.load(Ordering::Acquire)
+    }
+}
+
+/// Create broadcast channel with initial capacity
+pub fn broadcast_channel(capacity: usize) -> BroadcastChannel {
+    let mut channel = BroadcastChannel::new();
+    
+    // Pre-allocate space for receivers
+    channel.rings.lock().reserve(capacity);
+    
+    channel
+}
+
+impl FusionRing {
+    /// Dummy constructor for now
+    fn new_dummy() -> Self {
+        // TODO: Proper construction
+        unsafe { core::mem::zeroed() }
     }
 }
