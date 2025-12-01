@@ -1,6 +1,7 @@
 # Guide Complet POSIX-X pour Exo-OS
 
 ## Table des Matières
+
 1. [Introduction](#introduction)
 2. [Installation Rapide](#installation-rapide)
 3. [Architecture Détaillée](#architecture-détaillée)
@@ -15,6 +16,7 @@
 POSIX-X est la couche de compatibilité POSIX d'Exo-OS, basée sur **musl libc** adapté. Elle permet d'exécuter des applications Linux/Unix existantes sur Exo-OS avec des performances optimisées grâce à une traduction intelligente des syscalls.
 
 ### Objectifs
+
 - ✅ **Compatibilité** : 90%+ des apps POSIX fonctionnent sans recompilation
 - ✅ **Performance** : 2-3x plus rapide que Linux sur syscalls critiques
 - ✅ **Simplicité** : Installation d'apps aussi simple que `apt install`
@@ -31,6 +33,7 @@ cd exo-os/
 ```
 
 Ce script :
+
 1. Clone musl libc v1.2.5
 2. Crée les fichiers d'adaptation
 3. Patch `syscall_arch.h`
@@ -109,12 +112,12 @@ Application POSIX
 
 ### Priorité 4 : Mémoire (2 semaines)
 
-| Syscall | Traduction | Complexité |
-|---------|------------|------------|
-| `mmap` | Shared memory | Moyen |
-| `munmap` | Dealloc | Facile |
-| `mprotect` | Rights update | Moyen |
-| `brk/sbrk` | Heap extend | Moyen |
+| Syscall | Traduction | Complexité | Status |
+|---------|------------|------------|--------|
+| `mmap` | Shared memory | Moyen | ✅ (Kernel) |
+| `munmap` | Dealloc | Facile | ✅ (Kernel) |
+| `mprotect` | Rights update | Moyen | ✅ (Kernel) |
+| `brk/sbrk` | Heap extend | Moyen | 🚧 |
 
 ### Priorité 5 : Signaux (4 semaines)
 
@@ -132,6 +135,7 @@ Application POSIX
 ### Exemple 1 : `getpid()` (Trivial - Fast Path)
 
 **Kernel** (`kernel/src/syscall/handlers/process.rs`) :
+
 ```rust
 pub fn getpid() -> u32 {
     // Lire directement depuis le TCB (Thread Control Block)
@@ -141,6 +145,7 @@ pub fn getpid() -> u32 {
 ```
 
 **Bridge** (`kernel/src/posix_x/bridge.rs`) :
+
 ```rust
 3 => syscall::getpid() as i64,
 ```
@@ -152,6 +157,7 @@ pub fn getpid() -> u32 {
 ### Exemple 2 : `read()` (Moyen - Hybrid Path)
 
 **Kernel** :
+
 ```rust
 // kernel/src/syscall/handlers/io.rs
 pub fn read(fd: i32, buf: *mut u8, count: usize) -> isize {
@@ -175,6 +181,7 @@ pub fn read(fd: i32, buf: *mut u8, count: usize) -> isize {
 ```
 
 **Performance** :
+
 - < 56 bytes : ~400 cycles
 - > 56 bytes : ~800 cycles (0 copies!)
 
@@ -231,6 +238,7 @@ int main() {
 ```
 
 **Compilation** :
+
 ```bash
 cd third_party/musl
 make
@@ -243,11 +251,13 @@ clang -nostdlib -static \
 ```
 
 **Exécution** :
+
 ```bash
 ./build/qemu.sh --kernel kernel.elf --initrd hello.elf
 ```
 
 **Attendu** :
+
 ```
 [POSIX-X] Syscall 1 (write) called
 [POSIX-X] Buffer: "Hello from Exo-OS POSIX-X!\n"
@@ -283,6 +293,7 @@ int main() {
 ```
 
 **Test** :
+
 ```bash
 echo "This is a test file" > initrd/test.txt
 ./build/qemu.sh --kernel kernel.elf --initrd file_io.elf
@@ -321,11 +332,13 @@ int main() {
 ### Problème 1 : Compilation musl échoue
 
 **Erreur** :
+
 ```
 exo_syscall_bridge.c:5:10: fatal error: 'exo_syscall_numbers.h' file not found
 ```
 
 **Solution** :
+
 ```bash
 cd third_party/musl
 ls exo_syscall_numbers.h  # Vérifier que le fichier existe
@@ -338,11 +351,13 @@ Si absent, relancez `./scripts/setup_posix_x.sh`.
 ### Problème 2 : Linker errors
 
 **Erreur** :
+
 ```
 undefined reference to `exo_kernel_syscall'
 ```
 
 **Solution** :
+
 1. Vérifier que `mod posix_x;` est dans `kernel/src/lib.rs`
 2. Vérifier que la fonction est bien `#[no_mangle]`
 3. Compiler le kernel avec `cargo build --release`
@@ -352,6 +367,7 @@ undefined reference to `exo_kernel_syscall'
 ### Problème 3 : Syscall retourne toujours -1
 
 **Diagnostic** :
+
 ```rust
 // Ajouter des logs dans bridge.rs
 #[no_mangle]
@@ -373,29 +389,34 @@ pub extern "C" fn exo_kernel_syscall(...) -> i64 {
 ## Roadmap d'Implémentation
 
 ### Semaine 1-2 : Foundation
+
 - [x] Setup musl
 - [x] Bridge C ↔ Rust
 - [ ] 5 syscalls basiques (exit, getpid, read, write, open)
 - [ ] Test Hello World
 
 ### Semaine 3-4 : I/O Complet
+
 - [ ] 10 syscalls I/O
 - [ ] FD table fonctionnelle
 - [ ] Test file operations
 
 ### Semaine 5-8 : Processus
+
 - [ ] fork() émulé
 - [ ] execve() loader ELF
 - [ ] wait4(), exit status
 - [ ] Test multi-process
 
 ### Semaine 9-12 : Signaux & IPC
+
 - [ ] Signaux basiques (SIGINT, SIGTERM)
 - [ ] Signal handlers
 - [ ] Pipes via Fusion Rings
 - [ ] Sockets basics
 
 ### Semaine 13-16 : Optimisations
+
 - [ ] Cache capabilities
 - [ ] Zero-copy détection automatique
 - [ ] Batching intelligent
@@ -406,16 +427,20 @@ pub extern "C" fn exo_kernel_syscall(...) -> i64 {
 ## Ressources
 
 ### Documentation
-- musl source : https://git.musl-libc.org/
-- Linux syscalls : https://man7.org/linux/man-pages/man2/syscalls.2.html
-- POSIX spec : https://pubs.opengroup.org/onlinepubs/9699919799/
+
+- musl source : <https://git.musl-libc.org/>
+- Linux syscalls : <https://man7.org/linux/man-pages/man2/syscalls.2.html>
+- POSIX spec : <https://pubs.opengroup.org/onlinepubs/9699919799/>
 
 ### Exemples
-- Redox OS (Rust libc) : https://gitlab.redox-os.org/redox-os/relibc
-- SerenityOS (C++ libc) : https://github.com/SerenityOS/serenity
+
+- Redox OS (Rust libc) : <https://gitlab.redox-os.org/redox-os/relibc>
+- SerenityOS (C++ libc) : <https://github.com/SerenityOS/serenity>
 
 ### Contact
+
 Si bloqué, ouvrez une issue avec :
+
 1. Le code problématique
 2. Les logs kernel
 3. La commande de compilation

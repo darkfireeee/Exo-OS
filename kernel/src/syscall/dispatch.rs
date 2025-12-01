@@ -1,5 +1,5 @@
 //! Syscall Dispatcher
-//! 
+//!
 //! Fast syscall implementation using SYSCALL/SYSRET instructions
 //! Target: <60 cycles for fast path
 
@@ -60,6 +60,27 @@ pub fn unregister_syscall(num: usize) -> Result<(), SyscallError> {
     }
 
     Ok(())
+}
+
+/// Check and convert a user pointer to a string (null-terminated)
+pub fn check_str(ptr: u64) -> Result<&'static str, SyscallError> {
+    if ptr == 0 {
+        return Err(SyscallError::InvalidArgument);
+    }
+    // TODO: Validate memory access properly using VMM
+    unsafe {
+        let ptr = ptr as *const u8;
+        let mut len = 0;
+        // Simple safety limit
+        while *ptr.add(len) != 0 {
+            len += 1;
+            if len > 4096 {
+                return Err(SyscallError::InvalidArgument);
+            }
+        }
+        let slice = core::slice::from_raw_parts(ptr, len);
+        core::str::from_utf8(slice).map_err(|_| SyscallError::InvalidArgument)
+    }
 }
 
 /// Dispatch a syscall
@@ -161,10 +182,12 @@ pub mod syscall_numbers {
     pub const SYS_BRK: usize = 12;
     pub const SYS_RT_SIGACTION: usize = 13;
     pub const SYS_RT_SIGPROCMASK: usize = 14;
+    pub const SYS_RT_SIGRETURN: usize = 15;
     pub const SYS_IOCTL: usize = 16;
+    pub const SYS_READV: usize = 19;
+    pub const SYS_WRITEV: usize = 20;
     pub const SYS_PIPE: usize = 22;
     pub const SYS_SELECT: usize = 23;
-    pub const SYS_SCHED_YIELD: usize = 24;
     pub const SYS_MREMAP: usize = 25;
     pub const SYS_DUP: usize = 32;
     pub const SYS_DUP2: usize = 33;
@@ -176,6 +199,16 @@ pub mod syscall_numbers {
     pub const SYS_ACCEPT: usize = 43;
     pub const SYS_SENDTO: usize = 44;
     pub const SYS_RECVFROM: usize = 45;
+    pub const SYS_SENDMSG: usize = 46;
+    pub const SYS_RECVMSG: usize = 47;
+    pub const SYS_SHUTDOWN: usize = 48;
+    pub const SYS_BIND: usize = 49;
+    pub const SYS_LISTEN: usize = 50;
+    pub const SYS_GETSOCKNAME: usize = 51;
+    pub const SYS_GETPEERNAME: usize = 52;
+    pub const SYS_SOCKETPAIR: usize = 53;
+    pub const SYS_SETSOCKOPT: usize = 54;
+    pub const SYS_GETSOCKOPT: usize = 55;
     pub const SYS_CLONE: usize = 56;
     pub const SYS_FORK: usize = 57;
     pub const SYS_VFORK: usize = 58;
@@ -183,13 +216,113 @@ pub mod syscall_numbers {
     pub const SYS_EXIT: usize = 60;
     pub const SYS_WAIT4: usize = 61;
     pub const SYS_KILL: usize = 62;
+    pub const SYS_FCNTL: usize = 72;
+    pub const SYS_GETDENTS: usize = 78;
+    pub const SYS_GETCWD: usize = 79;
+    pub const SYS_CHDIR: usize = 80;
+    pub const SYS_FCHDIR: usize = 81;
+    pub const SYS_RENAME: usize = 82;
+    pub const SYS_MKDIR: usize = 83;
+    pub const SYS_RMDIR: usize = 84;
+    pub const SYS_CREAT: usize = 85;
+    pub const SYS_LINK: usize = 86;
+    pub const SYS_UNLINK: usize = 87;
+    pub const SYS_SYMLINK: usize = 88;
+    pub const SYS_READLINK: usize = 89;
+    pub const SYS_CHMOD: usize = 90;
+    pub const SYS_FCHMOD: usize = 91;
+    pub const SYS_CHOWN: usize = 92;
+    pub const SYS_FCHOWN: usize = 93;
+    pub const SYS_LCHOWN: usize = 94;
+    pub const SYS_GETTIMEOFDAY: usize = 96;
+    pub const SYS_GETRLIMIT: usize = 97;
+    pub const SYS_GETRUSAGE: usize = 98;
+    pub const SYS_TIMES: usize = 100;
     pub const SYS_GETUID: usize = 102;
     pub const SYS_GETGID: usize = 104;
+    pub const SYS_RT_SIGPENDING: u64 = 127;
+    pub const SYS_RT_SIGSUSPEND: u64 = 130;
+    pub const SYS_SIGALTSTACK: u64 = 131;
     pub const SYS_GETTID: usize = 186;
-    pub const SYS_FUTEX: usize = 202;
+    pub const SYS_TKILL: u64 = 200;
+
+    // Phase 16: Threading
+    pub const SYS_FUTEX: u64 = 202;
+    pub const SYS_SET_TID_ADDRESS: u64 = 218;
+    pub const SYS_SET_ROBUST_LIST: u64 = 273;
+
+    // Phase 18: Pipe & FIFO
+    pub const SYS_MKFIFO: usize = 132;
+    pub const SYS_MKNOD: usize = 133;
+    pub const SYS_EPOLL_CREATE1: u64 = 291;
+    pub const SYS_EPOLL_WAIT: u64 = 232;
+    pub const SYS_EPOLL_CTL: u64 = 233;
+    pub const SYS_PSELECT6: u64 = 270;
+    pub const SYS_PPOLL: u64 = 271;
+
     pub const SYS_GETDENTS64: usize = 217;
     pub const SYS_CLOCK_GETTIME: usize = 228;
     pub const SYS_EXIT_GROUP: usize = 231;
+    pub const SYS_UNLINKAT: usize = 263;
+    pub const SYS_RENAMEAT: usize = 264;
+    pub const SYS_SYMLINKAT: usize = 266;
+    pub const SYS_READLINKAT: usize = 267;
+    pub const SYS_DUP3: usize = 292;
+
+    // Custom/Legacy
+    pub const SYS_MADVISE: u64 = 28;
+    pub const SYS_MINCORE: u64 = 27;
+    pub const SYS_MLOCK: u64 = 149;
+    pub const SYS_MUNLOCK: u64 = 150;
+    pub const SYS_SETRLIMIT: u64 = 160;
+    pub const SYS_PRLIMIT64: u64 = 302;
+
+    pub const SYS_SHMGET: usize = 29;
+    pub const SYS_SHMAT: usize = 30;
+    pub const SYS_SHMCTL: usize = 31;
+    pub const SYS_SHMDT: usize = 67;
+    pub const SYS_MSGGET: usize = 68;
+    pub const SYS_MSGSND: usize = 69;
+    pub const SYS_MSGRCV: usize = 70;
+    pub const SYS_MSGCTL: usize = 71;
+    pub const SYS_SEMGET: usize = 64;
+    pub const SYS_SEMOP: usize = 65;
+    pub const SYS_SEMCTL: usize = 66;
+
+    pub const SYS_EVENTFD2: usize = 290;
+    pub const SYS_SIGNALFD4: usize = 289;
+
+    pub const SYS_TRUNCATE: usize = 76;
+    pub const SYS_FTRUNCATE: usize = 77;
+    pub const SYS_SYNC: usize = 162;
+    pub const SYS_FSYNC: usize = 74;
+    pub const SYS_FDATASYNC: usize = 75;
+    pub const SYS_SENDFILE: usize = 40;
+    pub const SYS_SPLICE: usize = 275;
+    pub const SYS_TEE: usize = 276;
+
+    pub const SYS_UNAME: usize = 63;
+    pub const SYS_SYSINFO: usize = 99;
+    pub const SYS_UMASK: usize = 95;
+    pub const SYS_GETRANDOM: usize = 318;
+
+    pub const SYS_SCHED_YIELD: usize = 24;
+    pub const SYS_SCHED_SETSCHEDULER: usize = 144;
+    pub const SYS_SCHED_GETSCHEDULER: usize = 145;
+    pub const SYS_SCHED_SETPARAM: usize = 142;
+    pub const SYS_SCHED_GETPARAM: usize = 143;
+    pub const SYS_SETPRIORITY: usize = 141;
+    pub const SYS_GETPRIORITY: usize = 140;
+
+    pub const SYS_INOTIFY_INIT: usize = 253;
+    pub const SYS_INOTIFY_ADD_WATCH: usize = 254;
+    pub const SYS_INOTIFY_RM_WATCH: usize = 255;
+    pub const SYS_INOTIFY_INIT1: usize = 294;
+
+    pub const SYS_PRCTL: usize = 157;
+
+    pub const SYS_SEND: usize = 205;
+    pub const SYS_RECV: usize = 206;
 }
 
 /// Default syscall handlers (stubs)
@@ -229,8 +362,8 @@ mod default_handlers {
 
 /// Initialize default syscall handlers
 pub fn init_default_handlers() {
-    use syscall_numbers::*;
     use default_handlers::*;
+    use syscall_numbers::*;
 
     let _ = register_syscall(SYS_READ, sys_read);
     let _ = register_syscall(SYS_WRITE, sys_write);

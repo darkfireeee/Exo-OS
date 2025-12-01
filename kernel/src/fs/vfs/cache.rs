@@ -5,11 +5,22 @@
 //! - Lock-free reads where possible
 //! - Cache-aligned structures
 
-use alloc::sync::Arc;
-use alloc::collections::VecDeque;
-use spin::RwLock;
-use hashbrown::HashMap;
 use super::inode::Inode;
+use crate::fs::{FsError, FsResult};
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use hashbrown::HashMap;
+use spin::RwLock;
+
+/// Get inode from global cache
+pub fn get_inode(ino: u64) -> FsResult<Arc<RwLock<dyn Inode>>> {
+    if let Some(inode) = get_cache().inode_cache.get(ino) {
+        Ok(inode)
+    } else {
+        // TODO: Load from underlying FS if possible
+        Err(FsError::NotFound)
+    }
+}
 
 /// Inode cache entry
 #[derive(Clone)]
@@ -41,15 +52,15 @@ impl InodeCache {
     /// Get inode from cache
     pub fn get(&self, ino: u64) -> Option<Arc<RwLock<dyn Inode>>> {
         let mut cache = self.cache.write();
-        
+
         if let Some(entry) = cache.get_mut(&ino) {
             entry.access_count += 1;
-            
+
             // Update LRU (move to back)
             let mut lru = self.lru.write();
             lru.retain(|&i| i != ino);
             lru.push_back(ino);
-            
+
             Some(entry.inode.clone())
         } else {
             None
@@ -60,7 +71,7 @@ impl InodeCache {
     pub fn insert(&self, ino: u64, inode: Arc<RwLock<dyn Inode>>) {
         let mut cache = self.cache.write();
         let mut lru = self.lru.write();
-        
+
         // Evict if cache is full
         if cache.len() >= self.max_size {
             if let Some(evict_ino) = lru.pop_front() {
@@ -73,14 +84,14 @@ impl InodeCache {
                 }
             }
         }
-        
+
         // Insert new entry
         let entry = InodeCacheEntry {
             inode,
             access_count: 1,
             dirty: false,
         };
-        
+
         cache.insert(ino, entry);
         lru.push_back(ino);
     }
@@ -108,7 +119,7 @@ impl InodeCache {
     pub fn stats(&self) -> CacheStats {
         let cache = self.cache.read();
         let dirty_count = cache.values().filter(|e| e.dirty).count();
-        
+
         CacheStats {
             total_entries: cache.len(),
             dirty_entries: dirty_count,
@@ -147,14 +158,14 @@ impl DentryCache {
     /// Insert path -> inode mapping
     pub fn insert(&self, path: alloc::string::String, ino: u64) {
         let mut cache = self.cache.write();
-        
+
         // Simple eviction: remove random entry if full
         if cache.len() >= self.max_size {
             if let Some(key) = cache.keys().next().cloned() {
                 cache.remove(&key);
             }
         }
-        
+
         cache.insert(path, ino);
     }
 
@@ -178,7 +189,7 @@ pub struct VfsCache {
 impl VfsCache {
     pub fn new() -> Self {
         Self {
-            inode_cache: InodeCache::new(1024), // 1024 inodes
+            inode_cache: InodeCache::new(1024),   // 1024 inodes
             dentry_cache: DentryCache::new(2048), // 2048 dentries
         }
     }

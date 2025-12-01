@@ -1,20 +1,20 @@
 //! Memory management subsystem
 
-pub mod heap;
-pub mod physical;
-pub mod virtual_mem;
-pub mod dma;
-pub mod mmap;
-pub mod protection;
-pub mod shared;
 pub mod address;
 pub mod cache;
+pub mod dma;
+pub mod heap;
+pub mod mmap;
+pub mod physical;
+pub mod protection;
+pub mod shared;
+pub mod virtual_mem;
 
 // Re-exports
-pub use heap::LockedHeap;
 pub use address::{PhysicalAddress, VirtualAddress};
-pub use protection::PageProtection;
+pub use heap::LockedHeap;
 pub use physical::Frame;
+pub use protection::PageProtection;
 
 // Error type for memory operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +28,7 @@ pub enum MemoryError {
     InvalidSize,
     NotFound,
     InvalidParameter,
+    Mfile,
     InternalError(&'static str),
 }
 
@@ -43,6 +44,7 @@ impl core::fmt::Display for MemoryError {
             MemoryError::InvalidSize => write!(f, "Invalid size"),
             MemoryError::NotFound => write!(f, "Not found"),
             MemoryError::InvalidParameter => write!(f, "Invalid parameter"),
+            MemoryError::Mfile => write!(f, "Too many open files"),
             MemoryError::InternalError(msg) => write!(f, "Internal error: {}", msg),
         }
     }
@@ -71,11 +73,11 @@ impl MemoryConfig {
     pub fn default_config() -> Self {
         // Configuration pour mémoire identity-mapped (0-1GB)
         // Le bootloader map les premiers 1GB avec huge pages
-        const HEAP_START: usize = 0x0080_0000;  // 8MB (après le kernel à ~4MB)
-        const HEAP_SIZE: usize = 10 * 1024 * 1024;  // 10MB de heap
-        const BITMAP_START: usize = 0x0050_0000;  // 5MB (juste après le kernel)
-        const TOTAL_MEMORY: usize = 64 * 1024 * 1024;  // 64MB utilisables
-        const BITMAP_SIZE: usize = TOTAL_MEMORY / 4096 / 8;  // 1 bit par frame de 4KB = 2KB
+        const HEAP_START: usize = 0x0080_0000; // 8MB (après le kernel à ~4MB)
+        const HEAP_SIZE: usize = 10 * 1024 * 1024; // 10MB de heap
+        const BITMAP_START: usize = 0x0050_0000; // 5MB (juste après le kernel)
+        const TOTAL_MEMORY: usize = 64 * 1024 * 1024; // 64MB utilisables
+        const BITMAP_SIZE: usize = TOTAL_MEMORY / 4096 / 8; // 1 bit par frame de 4KB = 2KB
 
         MemoryConfig {
             heap_start: HEAP_START,
@@ -89,7 +91,7 @@ impl MemoryConfig {
 }
 
 /// Initialise le système de gestion de la mémoire
-/// 
+///
 /// Cette fonction doit être appelée tôt dans le boot process.
 /// Elle initialise:
 /// - L'allocateur de frames physiques (bitmap)
@@ -114,16 +116,10 @@ pub fn init(config: MemoryConfig) -> MemoryResult<()> {
     physical::mark_region_used(PhysicalAddress::new(0x100000), 3 * 1024 * 1024);
 
     // Réserver le bitmap
-    physical::mark_region_used(
-        PhysicalAddress::new(config.bitmap_addr),
-        config.bitmap_size,
-    );
+    physical::mark_region_used(PhysicalAddress::new(config.bitmap_addr), config.bitmap_size);
 
     // Réserver le heap
-    physical::mark_region_used(
-        PhysicalAddress::new(config.heap_start),
-        config.heap_size,
-    );
+    physical::mark_region_used(PhysicalAddress::new(config.heap_start), config.heap_size);
 
     // 3. Initialiser le heap allocator
     unsafe {
@@ -134,7 +130,7 @@ pub fn init(config: MemoryConfig) -> MemoryResult<()> {
 }
 
 /// Initialise le heap avec une région mémoire spécifique
-/// 
+///
 /// # Safety
 /// La région [start, start + size) doit être valide et non utilisée
 pub unsafe fn init_heap(start: usize, size: usize) {

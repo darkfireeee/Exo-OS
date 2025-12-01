@@ -1,5 +1,5 @@
 //! Scheduler Core - 3-Queue EMA Prediction (V2 - Production Ready)
-//! 
+//!
 //! Implements Hot/Normal/Cold queues with Exponential Moving Average prediction
 //! Target: 304 cycle context switch (windowed)
 //!
@@ -11,15 +11,15 @@
 //! - Statistics tracking
 //! - Idle thread fallback
 
-use alloc::collections::VecDeque;
-use alloc::boxed::Box;
-use alloc::vec::Vec;
-use alloc::format;
-use spin::Mutex;
-use crate::scheduler::thread::{Thread, ThreadId, ThreadState, ThreadContext, alloc_thread_id};
+use crate::logger;
 use crate::scheduler::idle;
 use crate::scheduler::switch::windowed;
-use crate::logger;
+use crate::scheduler::thread::{alloc_thread_id, Thread, ThreadContext, ThreadId, ThreadState};
+use alloc::boxed::Box;
+use alloc::collections::VecDeque;
+use alloc::format;
+use alloc::vec::Vec;
+use spin::Mutex;
 
 /// Run queue types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,9 +50,11 @@ impl RunQueue {
 
     /// Classify thread into queue based on EMA runtime
     fn classify_queue(ema_ns: u64) -> QueueType {
-        if ema_ns < 1_000_000 {  // <1ms
+        if ema_ns < 1_000_000 {
+            // <1ms
             QueueType::Hot
-        } else if ema_ns < 10_000_000 {  // <10ms
+        } else if ema_ns < 10_000_000 {
+            // <10ms
             QueueType::Normal
         } else {
             QueueType::Cold
@@ -63,18 +65,30 @@ impl RunQueue {
     fn enqueue(&mut self, thread: Box<Thread>) {
         let ema = thread.ema_runtime_ns();
         let queue_type = Self::classify_queue(ema);
-        
+
         match queue_type {
             QueueType::Hot => {
-                logger::debug(&format!("Enqueue thread {} to HOT queue (EMA: {}ns)", thread.id(), ema));
+                logger::debug(&format!(
+                    "Enqueue thread {} to HOT queue (EMA: {}ns)",
+                    thread.id(),
+                    ema
+                ));
                 self.hot.push_back(thread);
             }
             QueueType::Normal => {
-                logger::debug(&format!("Enqueue thread {} to NORMAL queue (EMA: {}ns)", thread.id(), ema));
+                logger::debug(&format!(
+                    "Enqueue thread {} to NORMAL queue (EMA: {}ns)",
+                    thread.id(),
+                    ema
+                ));
                 self.normal.push_back(thread);
             }
             QueueType::Cold => {
-                logger::debug(&format!("Enqueue thread {} to COLD queue (EMA: {}ns)", thread.id(), ema));
+                logger::debug(&format!(
+                    "Enqueue thread {} to COLD queue (EMA: {}ns)",
+                    thread.id(),
+                    ema
+                ));
                 self.cold.push_back(thread);
             }
         }
@@ -111,20 +125,23 @@ impl RunQueue {
 pub struct Scheduler {
     /// Run queue (3-queue system)
     run_queue: Mutex<RunQueue>,
-    
+
     /// Currently running thread (per CPU, for now just one)
     current_thread: Mutex<Option<Box<Thread>>>,
-    
+
     /// All threads registry (for unblock, etc.)
     threads: Mutex<Vec<ThreadId>>,
-    
+
     /// Scheduler statistics
     total_switches: Mutex<u64>,
     total_spawns: Mutex<u64>,
     total_runtime_ns: Mutex<u64>,
-    
+
     /// Idle thread ID
     idle_thread_id: Mutex<Option<ThreadId>>,
+
+    /// Blocked threads registry
+    blocked_threads: Mutex<alloc::collections::BTreeMap<ThreadId, Box<Thread>>>,
 }
 
 impl Scheduler {
@@ -142,61 +159,75 @@ impl Scheduler {
             total_spawns: Mutex::new(0),
             total_runtime_ns: Mutex::new(0),
             idle_thread_id: Mutex::new(None),
+            blocked_threads: Mutex::new(alloc::collections::BTreeMap::new()),
         }
     }
 
     /// Spawn a new thread
-    /// 
+    ///
     /// # Returns
     /// ThreadId on success
     ///
     /// # Panics
     /// If allocation fails (OOM)
     pub fn spawn(&self, name: &str, entry: fn() -> !, stack_size: usize) -> ThreadId {
-        logger::debug(&format!("[SPAWN] Creating thread '{}' with {}KB stack...", name, stack_size / 1024));
-        
+        logger::debug(&format!(
+            "[SPAWN] Creating thread '{}' with {}KB stack...",
+            name,
+            stack_size / 1024
+        ));
+
         // Allocate thread ID
         let id = alloc_thread_id();
         logger::debug(&format!("[SPAWN]   Allocated TID: {}", id));
-        
+
         // Create thread
         // Note: If this panics due to OOM, kernel will halt (expected behavior)
         let thread = Box::new(Thread::new_kernel(id, name, entry, stack_size));
         logger::debug("[SPAWN]   ✓ Thread created successfully");
-        
+
         // Register in global threads list
         {
             let mut threads = self.threads.lock();
             threads.push(id);
-            logger::debug(&format!("[SPAWN]   Registered in threads list (total: {})", threads.len()));
+            logger::debug(&format!(
+                "[SPAWN]   Registered in threads list (total: {})",
+                threads.len()
+            ));
         }
-        
+
         // Add to run queue
         {
             let mut run_queue = self.run_queue.lock();
             run_queue.enqueue(thread);
             let (hot, normal, cold) = run_queue.lengths();
-            logger::debug(&format!("[SPAWN]   Enqueued. Queue lengths: Hot={}, Normal={}, Cold={}", hot, normal, cold));
+            logger::debug(&format!(
+                "[SPAWN]   Enqueued. Queue lengths: Hot={}, Normal={}, Cold={}",
+                hot, normal, cold
+            ));
         }
-        
+
         // Update stats
         *self.total_spawns.lock() += 1;
-        
-        logger::info(&format!("✓ Thread '{}' (TID {}) spawned successfully", name, id));
-        
+
+        logger::info(&format!(
+            "✓ Thread '{}' (TID {}) spawned successfully",
+            name, id
+        ));
+
         id
     }
 
     /// Spawn idle thread
     pub fn spawn_idle(&self) {
         logger::info("Spawning idle thread...");
-        
+
         let id = self.spawn("idle", idle::idle_thread_entry as fn() -> !, 4096);
-        
+
         // Register as idle thread
         *self.idle_thread_id.lock() = Some(id);
         idle::register_idle_thread(id);
-        
+
         logger::info(&format!("✓ Idle thread spawned (TID {})", id));
     }
 
@@ -205,36 +236,65 @@ impl Scheduler {
         self.current_thread.lock().as_ref().map(|t| t.id())
     }
 
+    /// Execute closure with mutable reference to current thread
+    pub fn with_current_thread<F, R>(&self, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut Thread) -> R,
+    {
+        let mut current = self.current_thread.lock();
+        current.as_mut().map(|t| f(t))
+    }
+
     /// Schedule next thread (called by timer interrupt)
-    /// 
+    ///
     /// This is the core scheduling algorithm:
     /// 1. Save current thread state
     /// 2. Pick next thread from run queue (Hot > Normal > Cold)
     /// 3. Context switch to new thread
     pub fn schedule(&self) {
         logger::debug("[SCHEDULE] Scheduling next thread...");
-        
+
         let mut run_queue = self.run_queue.lock();
         let mut current = self.current_thread.lock();
 
         // Log current state
         let (hot, normal, cold) = run_queue.lengths();
-        logger::debug(&format!("[SCHEDULE]   Queue lengths: Hot={}, Normal={}, Cold={}", hot, normal, cold));
+        logger::debug(&format!(
+            "[SCHEDULE]   Queue lengths: Hot={}, Normal={}, Cold={}",
+            hot, normal, cold
+        ));
 
         // Save current thread if exists
         if let Some(mut thread) = current.take() {
-            logger::debug(&format!("[SCHEDULE]   Current thread: {} (state: {:?})", thread.id(), thread.state()));
-            
+            logger::debug(&format!(
+                "[SCHEDULE]   Current thread: {} (state: {:?})",
+                thread.id(),
+                thread.state()
+            ));
+
             if thread.state() == ThreadState::Running {
                 thread.set_state(ThreadState::Ready);
-                
+
                 // Re-enqueue for next scheduling round
                 let tid = thread.id();
                 run_queue.enqueue(thread);
-                
+
                 logger::debug(&format!("[SCHEDULE]   Thread {} saved to run queue", tid));
+            } else if thread.state() == ThreadState::Blocked {
+                // Move to blocked threads list
+                let tid = thread.id();
+                self.blocked_threads.lock().insert(tid, thread);
+                logger::debug(&format!(
+                    "[SCHEDULE]   Thread {} moved to blocked list",
+                    tid
+                ));
             } else {
-                logger::debug(&format!("[SCHEDULE]   Thread {} NOT re-enqueued (state: {:?})", thread.id(), thread.state()));
+                logger::debug(&format!(
+                    "[SCHEDULE]   Thread {} NOT re-enqueued (state: {:?})",
+                    thread.id(),
+                    thread.state()
+                ));
+                // Thread is dropped here (Terminated)
             }
         } else {
             logger::debug("[SCHEDULE]   No current thread");
@@ -244,25 +304,25 @@ impl Scheduler {
         if let Some(mut next_thread) = run_queue.dequeue() {
             let tid = next_thread.id();
             logger::debug(&format!("[SCHEDULE]   Picked thread {} from queue", tid));
-            
+
             next_thread.set_state(ThreadState::Running);
             next_thread.inc_context_switches();
-            
+
             // Update stats
             *self.total_switches.lock() += 1;
-            
+
             // Get context pointer before moving thread
             let ctx_ptr = next_thread.context_ptr();
-            
+
             // Set as current thread
             *current = Some(next_thread);
-            
+
             // Drop locks before context switch
             drop(current);
             drop(run_queue);
-            
+
             logger::debug(&format!("[SCHEDULE]   Switching to thread {}", tid));
-            
+
             // Context switch (never returns)
             unsafe {
                 windowed::switch_to(ctx_ptr as *const ThreadContext);
@@ -270,17 +330,20 @@ impl Scheduler {
         } else {
             // No threads in run queue
             logger::warn("[SCHEDULE]   No threads in run queue!");
-            
+
             // Try idle thread
             if let Some(idle_tid) = *self.idle_thread_id.lock() {
-                logger::debug(&format!("[SCHEDULE]   Falling back to idle thread {}", idle_tid));
+                logger::debug(&format!(
+                    "[SCHEDULE]   Falling back to idle thread {}",
+                    idle_tid
+                ));
                 // TODO: Switch to idle thread
             }
-            
+
             // If no idle thread, just halt
             drop(current);
             drop(run_queue);
-            
+
             logger::warn("[SCHEDULE]   No idle thread, halting CPU...");
             idle::halt();
         }
@@ -295,15 +358,15 @@ impl Scheduler {
     /// Block current thread (waiting for I/O, lock, etc.)
     pub fn block_current(&self) {
         logger::debug("[BLOCK] Blocking current thread...");
-        
+
         let mut current = self.current_thread.lock();
-        
+
         if let Some(ref mut thread) = *current {
             let tid = thread.id();
             thread.set_state(ThreadState::Blocked);
             logger::debug(&format!("[BLOCK]   Thread {} blocked", tid));
         }
-        
+
         drop(current);
         self.schedule();
     }
@@ -311,25 +374,175 @@ impl Scheduler {
     /// Unblock a thread by ID (move from Blocked to Ready)
     pub fn unblock_thread(&self, id: ThreadId) {
         logger::debug(&format!("[UNBLOCK] Unblocking thread {}...", id));
-        
-        // TODO: Implement proper unblock mechanism
-        // For now, just log
-        logger::warn(&format!("[UNBLOCK]   Thread {} unblock not fully implemented yet", id));
+
+        let mut blocked = self.blocked_threads.lock();
+        if let Some(mut thread) = blocked.remove(&id) {
+            thread.set_state(ThreadState::Ready);
+
+            let mut run_queue = self.run_queue.lock();
+            run_queue.enqueue(thread);
+
+            logger::debug(&format!("[UNBLOCK]   Thread {} moved to run queue", id));
+        } else {
+            logger::warn(&format!(
+                "[UNBLOCK]   Thread {} not found in blocked list",
+                id
+            ));
+        }
     }
 
     /// Get scheduler statistics
     pub fn stats(&self) -> SchedulerStats {
         let (hot, normal, cold) = self.run_queue.lock().lengths();
-        
+
         SchedulerStats {
+            total_threads: self.threads.lock().len(),
             total_switches: *self.total_switches.lock(),
             total_spawns: *self.total_spawns.lock(),
             total_runtime_ns: *self.total_runtime_ns.lock(),
             hot_queue_len: hot,
             normal_queue_len: normal,
             cold_queue_len: cold,
-            total_threads: self.threads.lock().len(),
         }
+    }
+
+    /// Get thread state by ID (Phase 9: for wait4 zombie detection)
+    /// Returns None if thread is not in scheduler (terminated/reaped)
+    pub fn get_thread_state(&self, thread_id: ThreadId) -> Option<ThreadState> {
+        // Check current thread first
+        if let Some(ref current) = *self.current_thread.lock() {
+            if current.id() == thread_id {
+                return Some(current.state());
+            }
+        }
+
+        // Check run queues
+        let queue = self.run_queue.lock();
+
+        // Search hot queue
+        for thread in &queue.hot {
+            if thread.id() == thread_id {
+                return Some(thread.state());
+            }
+        }
+
+        // Search normal queue
+        for thread in &queue.normal {
+            if thread.id() == thread_id {
+                return Some(thread.state());
+            }
+        }
+
+        // Search cold queue
+        for thread in &queue.cold {
+            if thread.id() == thread_id {
+                return Some(thread.state());
+            }
+        }
+
+        // Check blocked threads
+        if let Some(thread) = self.blocked_threads.lock().get(&thread_id) {
+            return Some(thread.state());
+        }
+
+        // Not in scheduler = terminated or zombie
+        None
+    }
+
+    /// Get exit status for a thread (Phase 9: for wait4)
+    /// Returns None if thread doesn't have exit status
+    pub fn get_exit_status(&self, thread_id: ThreadId) -> Option<i32> {
+        // Check current thread
+        if let Some(ref current) = *self.current_thread.lock() {
+            if current.id() == thread_id {
+                return Some(current.exit_status());
+            }
+        }
+
+        // Check run queues
+        let queue = self.run_queue.lock();
+
+        // Search hot queue
+        for thread in &queue.hot {
+            if thread.id() == thread_id {
+                return Some(thread.exit_status());
+            }
+        }
+
+        // Search normal queue
+        for thread in &queue.normal {
+            if thread.id() == thread_id {
+                return Some(thread.exit_status());
+            }
+        }
+
+        // Search cold queue
+        for thread in &queue.cold {
+            if thread.id() == thread_id {
+                return Some(thread.exit_status());
+            }
+        }
+
+        // Check blocked threads
+        if let Some(thread) = self.blocked_threads.lock().get(&thread_id) {
+            return Some(thread.exit_status());
+        }
+
+        None
+    }
+
+    /// Handle pending signals for current thread
+    /// Returns true if a signal was handled (and execution flow might have changed)
+    pub fn handle_signals(&self) -> bool {
+        let mut current_lock = self.current_thread.lock();
+
+        if let Some(ref mut thread) = *current_lock {
+            // Check for pending signals
+            if let Some(sig) = thread.get_next_pending_signal() {
+                logger::debug(&format!(
+                    "Handling signal {} for thread {}",
+                    sig,
+                    thread.id()
+                ));
+
+                // Get action
+                let action = thread
+                    .get_signal_handler(sig)
+                    .unwrap_or(crate::posix_x::signals::SigAction::Default);
+
+                match action {
+                    crate::posix_x::signals::SigAction::Ignore => {
+                        logger::debug("Signal ignored");
+                        thread.remove_pending_signal(sig);
+                        return false;
+                    }
+                    crate::posix_x::signals::SigAction::Default => {
+                        logger::info(&format!(
+                            "Terminating thread {} due to signal {}",
+                            thread.id(),
+                            sig
+                        ));
+                        // TODO: Terminate thread properly
+                        // For now, just remove signal to avoid infinite loop
+                        thread.remove_pending_signal(sig);
+                        return true;
+                    }
+                    crate::posix_x::signals::SigAction::Handler { handler, mask: _ } => {
+                        logger::info(&format!(
+                            "Dispatching signal {} to handler {:#x}",
+                            sig, handler
+                        ));
+
+                        // Setup signal stack frame and redirect execution
+                        thread.setup_signal_context(sig, handler);
+
+                        thread.remove_pending_signal(sig);
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Print scheduler statistics
@@ -339,22 +552,27 @@ impl Scheduler {
         logger::info(&format!("Total threads:  {}", stats.total_threads));
         logger::info(&format!("Total spawns:   {}", stats.total_spawns));
         logger::info(&format!("Total switches: {}", stats.total_switches));
-        logger::info(&format!("Queue lengths:  Hot={}, Normal={}, Cold={}", 
-            stats.hot_queue_len, stats.normal_queue_len, stats.cold_queue_len));
-        logger::info(&format!("Total runtime:  {} ms", stats.total_runtime_ns / 1_000_000));
+        logger::info(&format!(
+            "Queue lengths:  Hot={}, Normal={}, Cold={}",
+            stats.hot_queue_len, stats.normal_queue_len, stats.cold_queue_len
+        ));
+        logger::info(&format!(
+            "Total runtime:  {} ms",
+            stats.total_runtime_ns / 1_000_000
+        ));
     }
 }
 
 /// Scheduler statistics
 #[derive(Debug, Clone, Copy)]
 pub struct SchedulerStats {
+    pub total_threads: usize,
     pub total_switches: u64,
     pub total_spawns: u64,
     pub total_runtime_ns: u64,
     pub hot_queue_len: usize,
     pub normal_queue_len: usize,
     pub cold_queue_len: usize,
-    pub total_threads: usize,
 }
 
 /// Global scheduler instance
@@ -363,23 +581,23 @@ pub static SCHEDULER: Scheduler = Scheduler::new();
 /// Initialize the scheduler
 pub fn init() {
     logger::info("Initializing scheduler...");
-    
+
     // Initialize windowed context switch
     windowed::init();
-    
+
     // Initialize idle thread system
     idle::init();
-    
+
     logger::info("✓ Scheduler initialized");
 }
 
 /// Start scheduling (called after initial threads are spawned)
 pub fn start() {
     logger::info("Starting scheduler...");
-    
+
     // Print initial stats
     SCHEDULER.print_stats();
-    
+
     // Begin scheduling
     SCHEDULER.schedule();
 }

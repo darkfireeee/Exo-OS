@@ -1,0 +1,1774 @@
+exo-os/
+│
+├── kernel/                                    # ═══════════════════════════════════════════════
+│    │                                          # NOYAU MINIMAL HAUTE PERFORMANCE
+│    │                                          # < 50K lignes Rust + ASM + C optimisés
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── Cargo.toml                            # Workspace kernel + dépendances
+│    ├── Cargo.lock                            # Lock file pour reproductibilité
+│    ├── rust-toolchain.toml                   # Version Rust exacte (nightly)
+│    │
+│    ├── build.rs                              # ═══════════════════════════════════════════════
+│    │                                          # BUILD SCRIPT INTELLIGENT
+│    │                                          # • Compile ASM (boot.asm, windowed.S)
+│    │                                          # • Compile C (drivers, FFI, boot.c)
+│    │                                          # • Génère bindings Rust ↔ C
+│    │                                          # • Link static libs
+│    │                                          # • Target-specific compilation
+│    │                                          # • Intègre drivers Linux (DRM, WiFi, etc.)
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── linker-scripts/                       # ──── SCRIPTS LINKER ────
+│    │    ├── x86_64.ld                        # Linker x86_64
+│    │    ├── aarch64.ld                       # Linker ARM64
+│    │    ├── riscv64.ld                       # Linker RISC-V
+│    │    └── common.ld                        # Sections communes
+│    │
+│    ├── .cargo/
+│    │    └── config.toml                      # Config build per-target
+│    │                                          # • x86_64-unknown-none
+│    │                                          # • aarch64-unknown-none
+│    │                                          # • riscv64-unknown-none
+│    │
+│    ├── configs/                              # ──── CONFIGURATIONS ────
+│    │    ├── hardware/
+│    │    │    ├── x86_64.toml                 # Intel/AMD config
+│    │    │    ├── aarch64.toml                # ARM64 config
+│    │    │    └── riscv64.toml                # RISC-V config
+│    │    ├── features/
+│    │    │    ├── performance.toml            # Profil performance max
+│    │    │    ├── security.toml               # Profil sécurité max
+│    │    │    └── balanced.toml               # Profil équilibré
+│    │    └── qemu.toml                        # Config émulation QEMU
+│    │
+│    ├── third_party/                          # ══════════════════════════════════════════════
+│    │    │                                     # DRIVERS LINUX ADAPTÉS (DRM, WiFi, etc.)
+│    │    │                                     # ══════════════════════════════════════════════
+│    │    ├── drm/                             # Linux DRM subsystem
+│    │    │    ├── drm_drv.c
+│    │    │    ├── drm_gem.c
+│    │    │    ├── drm_fb.c
+│    │    │    ├── i915/                       # Intel GPU driver
+│    │    │    │    ├── i915_drv.c
+│    │    │    │    ├── i915_gem.c
+│    │    │    │    └── i915_irq.c
+│    │    │    ├── amdgpu/                     # AMD GPU driver
+│    │    │    │    ├── amdgpu_drv.c
+│    │    │    │    └── amdgpu_device.c
+│    │    │    └── include/
+│    │    │         └── drm/
+│    │    │              ├── drm.h
+│    │    │              └── drm_mode.h
+│    │    │
+│    │    ├── wifi/                            # WiFi drivers
+│    │    │    ├── iwlwifi/                    # Intel WiFi
+│    │    │    │    ├── iwl-drv.c
+│    │    │    │    └── pcie/
+│    │    │    ├── ath10k/                     # Qualcomm Atheros
+│    │    │    │    └── core.c
+│    │    │    └── rtw88/                      # Realtek
+│    │    │         └── main.c
+│    │    │
+│    │    ├── bluetooth/                       # Bluetooth drivers
+│    │    │    └── btusb.c
+│    │    │
+│    │    └── firmware/                        # Firmware blobs
+│    │         ├── i915/                       # Intel GPU firmware
+│    │         ├── amdgpu/                     # AMD GPU firmware
+│    │         ├── iwlwifi/                    # Intel WiFi firmware
+│    │         └── rtl_bt/                     # Realtek Bluetooth
+│    │
+│    └── src/
+│         │
+│         ├── main.rs                          # ═══════════════════════════════════════════════
+│         │                                     # POINT D'ENTRÉE KERNEL
+│         │                                     # • extern "C" fn rust_kernel_main()
+│         │                                     # • Appelé depuis boot.c
+│         │                                     # • Init séquence boot
+│         │                                     # • < 200 lignes
+│         │                                     # ═══════════════════════════════════════════════
+│         │
+│         ├── lib.rs                           # Bibliothèque kernel
+│         ├── panic.rs                         # Panic handler no_std
+│         ├── logger.rs                        # Logger kernel minimal
+│         │
+│         ├── boot/                            # ═══════════════════════════════════════════════
+│         │    │                                # SÉQUENCE DE BOOT OPTIMISÉE
+│         │    │                                # Objectif boot : < 300ms
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs                      # Orchestration boot
+│         │    ├── multiboot2.rs               # Parser Multiboot2
+│         │    ├── phases.rs                   # Boot phases (Critical/Normal/Deferred)
+│         │    ├── early_init.rs               # Init ultra-précoce (GDT, IDT, Memory)
+│         │    ├── late_init.rs                # Init tardive (Scheduler, IPC, Drivers)
+│         │    └── recovery.rs                 # Boot recovery mode
+│         │
+│         ├── arch/                            # ═══════════════════════════════════════════════
+│         │    │                                # ABSTRACTION ARCHITECTURE
+│         │    │                                # Support: x86_64, ARM64, RISC-V
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs                      # Trait Architecture
+│         │    │
+│         │    ├── x86_64/                     # ─────────────────────────────────────────────
+│         │    │    │                           # INTEL/AMD 64-BIT
+│         │    │    │                           # ─────────────────────────────────────────────
+│         │    │    ├── mod.rs                 # Interface x86_64
+│         │    │    │
+│         │    │    ├── boot/                  # • BOOTSTRAP •
+│         │    │    │    ├── boot.asm          # Bootstrap 32→64 bit
+│         │    │    │    ├── boot.c            # Pont C → Rust
+│         │    │    │    └── trampoline.asm    # Trampoline SMP
+│         │    │    │
+│         │    │    ├── cpu/                   # • CPU MANAGEMENT •
+│         │    │    │    ├── mod.rs
+│         │    │    │    ├── cpuid.rs          # CPUID features
+│         │    │    │    ├── msr.rs            # Model-Specific Registers
+│         │    │    │    ├── features.rs       # Feature detection
+│         │    │    │    ├── topology.rs       # CPU topology (NUMA)
+│         │    │    │    ├── smp.rs            # Symmetric Multi-Processing
+│         │    │    │    └── power.rs          # Power management
+│         │    │    │
+│         │    │    ├── memory/                # • MEMORY MANAGEMENT •
+│         │    │    │    ├── mod.rs
+│         │    │    │    ├── paging.rs         # 4-level page tables
+│         │    │    │    ├── tlb.rs            # TLB management
+│         │    │    │    ├── pat.rs            # Page Attribute Table
+│         │    │    │    └── numa.rs           # NUMA support
+│         │    │    │
+│         │    │    ├── interrupts/            # • INTERRUPTS •
+│         │    │    │    ├── mod.rs
+│         │    │    │    ├── idt.rs            # Interrupt Descriptor Table
+│         │    │    │    ├── handlers.rs       # Exception handlers
+│         │    │    │    ├── apic.rs           # Advanced PIC (local)
+│         │    │    │    ├── ioapic.rs         # I/O APIC
+│         │    │    │    └── pic.rs            # Legacy 8259 PIC
+│         │    │    │
+│         │    │    ├── gdt.rs                 # Global Descriptor Table
+│         │    │    ├── tss.rs                 # Task State Segment
+│         │    │    ├── syscall.rs             # Syscall entry (SYSCALL/SYSRET)
+│         │    │    ├── context.rs             # Context save/restore
+│         │    │    ├── registers.rs           # Register definitions
+│         │    │    └── simd.rs                # SIMD save/restore
+│         │    │
+│         │    ├── aarch64/                    # ARM64 (similar structure)
+│         │    │    ├── mod.rs
+│         │    │    ├── boot/
+│         │    │    ├── cpu/
+│         │    │    ├── memory/
+│         │    │    └── interrupts/
+│         │    │
+│         │    └── riscv64/                    # RISC-V (similar structure)
+│         │         ├── mod.rs
+│         │         ├── boot/
+│         │         ├── cpu/
+│         │         ├── memory/
+│         │         └── interrupts/
+│         │
+│         ├── c_compat/                        # ═══════════════════════════════════════════════
+│         │    │                                # COUCHE COMPATIBILITÉ C (FFI)
+│         │    │                                # Bridge sûr Rust ↔ C
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs                      # Déclarations externes C
+│         │    ├── serial.c                    # Pilote série (debug précoce)
+│         │    ├── pci.c                       # Pilote PCI basique
+│         │    ├── vga.c                       # Pilote VGA text mode
+│         │    ├── keyboard.c                  # Pilote clavier PS/2
+│         │    └── acpi.c                      # ACPI basique
+│         │
+│         ├── ffi/                             # ═══════════════════════════════════════════════
+│         │    │                                # FFI UTILITIES
+│         │    │                                # Wrappers sûrs pour interop C
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    ├── c_str.rs                    # Gestion chaînes C
+│         │    ├── va_list.rs                  # Variadic arguments
+│         │    ├── types.rs                    # Type aliases C ↔ Rust
+│         │    ├── bindings.rs                 # Auto-generated bindings (bindgen)
+│         │    └── callbacks.rs                # Callback infrastructure
+│         │
+│         ├── posix_x/                         # ═══════════════════════════════════════════════
+│         │    │                                # POSIX-X KERNEL INTERFACE
+│         │    │                                # Hooks kernel pour POSIX-X userspace
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    ├── syscall_hooks.rs            # Hooks syscalls POSIX
+│         │    ├── fd_table_kernel.rs          # FD table kernel-side
+│         │    ├── capability_bridge.rs        # Bridge capabilities
+│         │    └── signal_routing.rs           # Signal → IPC routing
+│         │
+│         ├── memory/                          # ═══════════════════════════════════════════════
+│         │    │                                # GESTION MÉMOIRE HAUTE PERF
+│         │    │                                # Objectif : Alloc < 10 cycles
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    │
+│         │    ├── physical/                   # ──── MÉMOIRE PHYSIQUE ────
+│         │    │    ├── mod.rs
+│         │    │    ├── bitmap_allocator.rs    # Allocateur bitmap
+│         │    │    ├── buddy_allocator.rs     # Buddy allocator
+│         │    │    ├── frame.rs               # Frame definition
+│         │    │    ├── zone.rs                # Memory zones (DMA/Normal/High)
+│         │    │    └── numa.rs                # NUMA-aware allocation
+│         │    │
+│         │    ├── virtual/                    # ──── MÉMOIRE VIRTUELLE ────
+│         │    │    ├── mod.rs
+│         │    │    ├── page_table.rs          # Page table ops
+│         │    │    ├── mapper.rs              # Virtual↔Physical mapping
+│         │    │    ├── address_space.rs       # Address space per process
+│         │    │    └── cow.rs                 # Copy-on-Write
+│         │    │
+│         │    ├── heap/                       # ──── HEAP KERNEL ────
+│         │    │    ├── mod.rs
+│         │    │    ├── hybrid_allocator.rs    # Allocateur 3 niveaux
+│         │    │    ├── thread_cache.rs        # Cache per-thread (8 cycles!)
+│         │    │    ├── cpu_slab.rs            # Slab per-CPU
+│         │    │    ├── slab.rs                # Slab allocator core
+│         │    │    ├── size_class.rs          # Size classes
+│         │    │    └── statistics.rs          # Stats allocation
+│         │    │
+│         │    ├── shared/                     # ──── SHARED MEMORY ────
+│         │    │    ├── mod.rs
+│         │    │    ├── pool.rs                # Pool de pages partagées
+│         │    │    ├── descriptor.rs          # Shared memory descriptors
+│         │    │    └── permissions.rs         # RO/RW permissions
+│         │    │
+│         │    ├── cache.rs                    # Cache management
+│         │    ├── dma.rs                      # DMA allocations
+│         │    ├── mmap.rs                     # Memory mapping syscall
+│         │    └── protection.rs               # Memory protection (NX, ASLR)
+│         │
+│         ├── scheduler/                       # ═══════════════════════════════════════════════
+│         │    │                                # ORDONNANCEUR PRÉDICTIF
+│         │    │                                # Objectif : Pick < 100 cycles
+│         │    │                                # Context switch < 350 cycles
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    │
+│         │    ├── core/                       # ──── CORE SCHEDULER ────
+│         │    │    ├── mod.rs
+│         │    │    ├── predictive.rs          # Predictive scheduler O(1)
+│         │    │    ├── runqueue.rs            # Run queues per-CPU
+│         │    │    ├── affinity.rs            # CPU affinity tracking
+│         │    │    ├── load_balancing.rs      # Load balancing
+│         │    │    └── statistics.rs          # Stats scheduling
+│         │    │
+│         │    ├── thread/                     # ──── THREADS ────
+│         │    │    ├── mod.rs
+│         │    │    ├── windowed_thread.rs     # Thread avec register windows
+│         │    │    ├── context.rs             # Context (RSP + RIP)
+│         │    │    ├── stack.rs               # Stack allocation
+│         │    │    ├── state.rs               # Thread states
+│         │    │    ├── priority.rs            # Priority management
+│         │    │    └── local_storage.rs       # Thread-local storage
+│         │    │
+│         │    ├── switch/                     # ──── CONTEXT SWITCH ────
+│         │    │    ├── mod.rs
+│         │    │    ├── windowed.S             # Windowed switch (ASM) - 304 cycles!
+│         │    │    ├── fpu.rs                 # Lazy FPU save/restore
+│         │    │    ├── simd.rs                # SIMD state management
+│         │    │    └── benchmark.rs           # Benchmarks context switch
+│         │    │
+│         │    ├── prediction/                 # ──── PRÉDICTION ────
+│         │    │    ├── mod.rs
+│         │    │    ├── ema.rs                 # Exponential Moving Average
+│         │    │    ├── history.rs             # Historique exécutions
+│         │    │    └── heuristics.rs          # Heuristiques
+│         │    │
+│         │    ├── realtime/                   # ──── TEMPS RÉEL ────
+│         │    │    ├── mod.rs
+│         │    │    ├── deadline.rs            # Deadline scheduling
+│         │    │    ├── priorities.rs          # RT priorities (0-99)
+│         │    │    └── latency.rs             # Latency tracking
+│         │    │
+│         │    └── idle.rs                     # Idle thread management
+│         │
+│         ├── ipc/                             # ═══════════════════════════════════════════════
+│         │    │                                # IPC ZERO-COPY FUSION
+│         │    │                                # Objectif : < 400 cycles
+│         │    │                                # CLEF DE PERFORMANCE
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    │
+│         │    ├── fusion_ring/                # ──── FUSION RINGS ────
+│         │    │    │                           # RÉVOLUTIONNAIRE - 347 cycles!
+│         │    │    ├── mod.rs
+│         │    │    ├── ring.rs                # Structure ring lock-free
+│         │    │    ├── slot.rs                # Slot 64 bytes (1 cache line)
+│         │    │    ├── inline.rs              # Fast path (≤56B) - ~350 cycles
+│         │    │    ├── zerocopy.rs            # Zero-copy path (>56B) - ~800 cycles
+│         │    │    ├── batch.rs               # Batch processing - 131 cycles/msg
+│         │    │    └── sync.rs                # Synchronisation lock-free
+│         │    │
+│         │    ├── shared_memory/              # ──── SHARED MEMORY ────
+│         │    │    ├── mod.rs
+│         │    │    ├── pool.rs                # Pool global
+│         │    │    ├── page.rs                # Shared page
+│         │    │    └── mapping.rs             # Mapping management
+│         │    │
+│         │    ├── channel/                    # ──── CHANNELS ────
+│         │    │    ├── mod.rs
+│         │    │    ├── typed.rs               # Typed channels (Channel<T>)
+│         │    │    ├── async.rs               # Async channels
+│         │    │    └── broadcast.rs           # Broadcast channels (1→N)
+│         │    │
+│         │    ├── message.rs                  # Message structure
+│         │    ├── descriptor.rs               # Descripteurs IPC
+│         │    ├── capability.rs               # Capabilities IPC
+│         │    └── benchmark.rs                # Benchmarks IPC
+│         │
+│         ├── syscall/                         # ═══════════════════════════════════════════════
+│         │    │                                # SYSCALLS ULTRA-RAPIDES
+│         │    │                                # Objectif : < 50 cycles (simple)
+│         │    │                                # < 700 cycles (I/O)
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    │
+│         │    ├── entry/                      # ──── ENTRÉE SYSCALL ────
+│         │    │    ├── mod.rs
+│         │    │    ├── fast_path.rs           # Fast path (< 50 cycles)
+│         │    │    ├── slow_path.rs           # Slow path (< 700 cycles)
+│         │    │    └── validation.rs          # Validation arguments
+│         │    │
+│         │    ├── handlers/                   # ──── HANDLERS ────
+│         │    │    ├── mod.rs                 # Dispatch table (256 syscalls)
+│         │    │    ├── process.rs             # Process syscalls
+│         │    │    ├── memory.rs              # Memory syscalls
+│         │    │    ├── io.rs                  # I/O syscalls (zero-copy)
+│         │    │    ├── ipc.rs                 # IPC syscalls (fast path)
+│         │    │    ├── time.rs                # Time syscalls
+│         │    │    └── security.rs            # Security syscalls
+│         │    │
+│         │    ├── numbers.rs                  # Numéros syscalls (ABI stable)
+│         │    ├── abi.rs                      # ABI definition
+│         │    └── benchmark.rs                # Benchmarks syscalls
+│         │
+│         ├── security/                        # ═══════════════════════════════════════════════
+│         │    │                                # SÉCURITÉ NATIVE INTÉGRÉE
+│         │    │                                # TPM/HSM/Capabilities/PostQuantum
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    │
+│         │    ├── capability/                 # ──── CAPABILITIES ────
+│         │    │    ├── mod.rs                 # Capability system
+│         │    │    ├── token.rs               # Capability tokens (unforgeable)
+│         │    │    ├── rights.rs              # Rights definition
+│         │    │    ├── transfer.rs            # Capability transfer
+│         │    │    └── revoke.rs              # Revocation
+│         │    │
+│         │    ├── lsm/                        # ──── LSM-LIKE FRAMEWORK ────
+│         │    │    │                           # SELinux/AppArmor alternative
+│         │    │    ├── mod.rs                 # LSM hooks
+│         │    │    ├── policy.rs              # Security policies
+│         │    │    ├── context.rs             # Security contexts
+│         │    │    └── audit.rs               # Audit hooks
+│         │    │
+│         │    ├── tpm/                        # ──── TPM 2.0 ────
+│         │    │    ├── mod.rs                 # TPM interface
+│         │    │    ├── commands.rs            # TPM commands
+│         │    │    ├── attestation.rs         # Remote attestation
+│         │    │    ├── pcr.rs                 # Platform Config Registers
+│         │    │    ├── keys.rs                # Key management
+│         │    │    └── seal.rs                # Sealed storage
+│         │    │
+│         │    ├── hsm/                        # ──── HSM ────
+│         │    │    ├── mod.rs                 # HSM interface
+│         │    │    ├── provider.rs            # HSM provider abstraction
+│         │    │    ├── crypto.rs              # Crypto operations
+│         │    │    └── keys.rs                # Key storage
+│         │    │
+│         │    ├── crypto/                     # ──── CRYPTOGRAPHIE ────
+│         │    │    ├── mod.rs
+│         │    │    ├── post_quantum/          # Crypto post-quantique
+│         │    │    │    ├── mod.rs
+│         │    │    │    ├── kyber.rs          # Kyber KEM (NIST)
+│         │    │    │    └── dilithium.rs      # Dilithium signatures (NIST)
+│         │    │    ├── chacha20.rs            # XChaCha20-Poly1305 (AEAD)
+│         │    │    ├── blake3.rs              # BLAKE3 hash
+│         │    │    └── random.rs              # CSPRNG (hardware RNG)
+│         │    │
+│         │    ├── isolation/                  # ──── ISOLATION ────
+│         │    │    ├── mod.rs
+│         │    │    ├── sandbox.rs             # Sandboxing
+│         │    │    ├── seccomp.rs             # Syscall filtering
+│         │    │    └── namespaces.rs          # Isolation namespaces
+│         │    │
+│         │    └── audit/                      # ──── AUDIT ────
+│         │         ├── mod.rs
+│         │         ├── logger.rs              # Security event logging
+│         │         └── analyzer.rs            # Behavioral analysis
+│         │
+│         ├── drivers/                         # ═══════════════════════════════════════════════
+│         │    │                                # DRIVERS KERNEL
+│         │    │                                # Mix Rust + C legacy + wrappers Linux
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    │
+│         │    ├── gpu/                        # ──── GPU DRIVERS ────
+│         │    │    ├── mod.rs
+│         │    │    ├── drm_compat.rs          # DRM compatibility layer
+│         │    │    ├── drm_ioctl.rs           # DRM ioctl handlers
+│         │    │    ├── drm_gem.rs             # GEM memory manager
+│         │    │    ├── drm_fb.rs              # Framebuffer support
+│         │    │    └── drivers/
+│         │    │         ├── i915_wrapper.rs   # Intel wrapper (calls Linux driver)
+│         │    │         ├── amdgpu_wrapper.rs # AMD wrapper (calls Linux driver)
+│         │    │         └── virtio_gpu.rs     # VirtIO GPU (pure Rust)
+│         │    │
+│         │    ├── char/                       # Character devices
+│         │    │    ├── mod.rs
+│         │    │    ├── serial.rs              # Serial port (wrapper Rust)
+│         │    │    ├── console.rs             # Console
+│         │    │    └── null.rs                # /dev/null, /dev/zero
+│         │    │
+│         │    ├── block/                      # Block devices
+│         │    │    ├── mod.rs
+│         │    │    ├── ahci.rs                # AHCI/SATA
+│         │    │    ├── nvme.rs                # NVMe
+│         │    │    └── ramdisk.rs             # RAM disk
+│         │    │
+│         │    ├── net/                        # ──── NETWORK DEVICES ────
+│         │    │    ├── mod.rs
+│         │    │    ├── wifi/                  # WiFi drivers
+│         │    │    │    ├── mod.rs
+│         │    │    │    ├── iwlwifi_wrapper.rs # Intel WiFi (wrapper)
+│         │    │    │    ├── ath10k_wrapper.rs  # Qualcomm (wrapper)
+│         │    │    │    └── rtw88_wrapper.rs   # Realtek (wrapper)
+│         │    │    ├── ethernet/              # Ethernet drivers
+│         │    │    │    ├── e1000.rs          # Intel E1000 (C wrapper)
+│         │    │    │    ├── rtl8139.rs        # Realtek (C wrapper)
+│         │    │    │    └── virtio_net.rs     # VirtIO network
+│         │    │    └── bluetooth/             # Bluetooth drivers
+│         │    │         ├── mod.rs
+│         │    │         └── btusb_wrapper.rs  # Bluetooth USB (wrapper)
+│         │    │
+│         │    ├── pci/                        # PCI subsystem
+│         │    │    ├── mod.rs                 # PCI Rust wrapper
+│         │    │    ├── config.rs              # Config space
+│         │    │    ├── enumeration.rs         # Device enumeration
+│         │    │    └── msi.rs                 # MSI/MSI-X
+│         │    │
+│         │    ├── usb/                        # USB subsystem
+│         │    │    ├── mod.rs
+│         │    │    ├── xhci.rs                # xHCI controller
+│         │    │    └── hub.rs                 # USB hub
+│         │    │
+│         │    ├── video/                      # Video drivers
+│         │    │    ├── mod.rs
+│         │    │    ├── vga.rs                 # VGA text (C wrapper)
+│         │    │    ├── framebuffer.rs         # Framebuffer
+│         │    │    └── virtio_gpu.rs          # VirtIO GPU
+│         │    │
+│         │    └── input/                      # ──── INPUT DEVICES ────
+│         │         ├── mod.rs
+│         │         ├── evdev.rs               # evdev device abstraction
+│         │         ├── keyboard.rs            # PS/2 keyboard (C wrapper)
+│         │         ├── mouse.rs               # PS/2 mouse
+│         │         ├── hid.rs                 # HID devices
+│         │         ├── touchpad.rs            # Touchpad support
+│         │         └── gamepad.rs             # Gamepad support
+│         │
+│         ├── fs/                              # ═══════════════════════════════════════════════
+│         │    │                                # FILESYSTEM SUBSYSTEM
+│         │    │                                # VFS + filesystems
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    │
+│         │    ├── vfs/                        # ──── VFS LAYER ────
+│         │    │    ├── mod.rs
+│         │    │    ├── inode.rs               # Inode abstraction
+│         │    │    ├── dentry.rs              # Directory entry cache
+│         │    │    ├── mount.rs               # Mount management
+│         │    │    └── cache.rs               # Page cache
+│         │    │
+│         │    ├── ext4/                       # Ext4 filesystem
+│         │    │    ├── mod.rs
+│         │    │    ├── super.rs               # Superblock
+│         │    │    ├── inode.rs               # Inode operations
+│         │    │    ├── extent.rs              # Extent tree
+│         │    │    └── journal.rs             # Journaling
+│         │    │
+│         │    ├── btrfs/                      # ──── BTRFS (Snapshots/CoW) ────
+│         │    │    ├── mod.rs
+│         │    │    ├── super.rs
+│         │    │    ├── extent_tree.rs
+│         │    │    ├── snapshot.rs            # Snapshot management
+│         │    │    └── compression.rs         # Compression support
+│         │    │
+│         │    ├── fat32/                      # FAT32 filesystem
+│         │    │    └── mod.rs
+│         │    │
+│         │    ├── tmpfs/                      # Temporary filesystem (RAM)
+│         │    │    └── mod.rs
+│         │    │
+│         │    ├── devfs/                      # Device filesystem
+│         │    │    └── mod.rs
+│         │    │
+│         │    ├── procfs/                     # /proc filesystem
+│         │    │    └── mod.rs
+│         │    │
+│         │    ├── sysfs/                      # /sys filesystem
+│         │    │    └── mod.rs
+│         │    │
+│         │    ├── overlayfs/                  # ──── OVERLAY FS (Containers) ────
+│         │    │    ├── mod.rs
+│         │    │    ├── layer.rs               # Layer management
+│         │    │    └── merge.rs               # Merge logic
+│         │    │
+│         │    └── encryption/                 # ──── FS ENCRYPTION ────
+│         │         ├── mod.rs
+│         │         ├── luks.rs                # LUKS-like encryption
+│         │         └── fscrypt.rs             # Per-file encryption
+│         │
+│         ├── net/                             # ═══════════════════════════════════════════════
+│         │    │                                # NETWORK STACK
+│         │    │                                # TCP/IP optimisé
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    │
+│         │    ├── core/                       # ──── CORE NETWORKING ────
+│         │    │    ├── mod.rs
+│         │    │    ├── socket.rs              # Socket abstraction
+│         │    │    ├── buffer.rs              # Packet buffers (zero-copy)
+│         │    │    └── device.rs              # Network device abstraction
+│         │    │
+│         │    ├── ethernet/                   # Ethernet layer
+│         │    │    └── mod.rs
+│         │    │
+│         │    ├── ip/                         # IP layer
+│         │    │    ├── mod.rs
+│         │    │    ├── ipv4.rs                # IPv4
+│         │    │    ├── ipv6.rs                # IPv6
+│         │    │    └── routing.rs             # Routing table
+│         │    │
+│         │    ├── tcp/                        # TCP layer
+│         │    │    ├── mod.rs
+│         │    │    ├── connection.rs          # TCP connection
+│         │    │    ├── congestion.rs          # Congestion control
+│         │    │    └── retransmit.rs          # Retransmission
+│         │    │
+│         │    ├── udp/                        # UDP layer
+│         │    │    └── mod.rs
+│         │    │
+│         │    ├── netlink/                    # ──── NETLINK (WiFi/nl80211) ────
+│         │    │    ├── mod.rs
+│         │    │    ├── nl80211.rs             # nl80211 protocol
+│         │    │    └── generic.rs             # Generic netlink
+│         │    │
+│         │    ├── firewall/                   # ──── FIREWALL ────
+│         │    │    ├── mod.rs
+│         │    │    ├── nftables.rs            # nftables backend
+│         │    │    ├── rules.rs               # Rule engine
+│         │    │    └── nat.rs                 # NAT support
+│         │    │
+│         │    └── wireguard/                  # ──── WIREGUARD INTÉGRÉ ────
+│         │         ├── mod.rs                 # WireGuard VPN
+│         │         ├── crypto.rs              # Crypto (Noise protocol)
+│         │         ├── handshake.rs           # Handshake
+│         │         └── tunnel.rs              # Tunnel management
+│         │
+│         ├── time/                            # ═══════════════════════════════════════════════
+│         │    │                                # TIME MANAGEMENT
+│         │    │                                # High-resolution timers
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    ├── clock.rs                    # Clock sources
+│         │    ├── timer.rs                    # Timer management
+│         │    ├── hpet.rs                     # HPET (High Precision Timer)
+│         │    ├── tsc.rs                      # TSC (Time Stamp Counter)
+│         │    └── rtc.rs                      # RTC (Real-Time Clock)
+│         │
+│         ├── sync/                            # ═══════════════════════════════════════════════
+│         │    │                                # SYNCHRONIZATION PRIMITIVES
+│         │    │                                # Lock-free où possible
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    ├── spinlock.rs                 # Spinlock (last resort)
+│         │    ├── mutex.rs                    # Sleeping mutex
+│         │    ├── rwlock.rs                   # Read-write lock
+│         │    ├── semaphore.rs                # Semaphore
+│         │    ├── atomic.rs                   # Atomic operations
+│         │    └── once.rs                     # One-time initialization
+│         │
+│         ├── power/                           # ═══════════════════════════════════════════════
+│         │    │                                # POWER MANAGEMENT
+│         │    │                                # ACPI, sleep states, thermal
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    ├── acpi.rs                     # ACPI (C wrapper)
+│         │    ├── cpufreq.rs                  # CPU frequency scaling
+│         │    ├── idle.rs                     # Idle states (C-states)
+│         │    ├── suspend.rs                  # Suspend/resume
+│         │    ├── hibernate.rs                # Hibernate support
+│         │    ├── battery.rs                  # Battery monitoring
+│         │    ├── thermal.rs                  # Thermal management
+│         │    └── backlight.rs                # Backlight control
+│         │
+│         ├── containers/                      # ═══════════════════════════════════════════════
+│         │    │                                # CONTAINERS SUPPORT
+│         │    │                                # Namespaces + Cgroups
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    │
+│         │    ├── namespaces/                 # ──── NAMESPACES ────
+│         │    │    ├── mod.rs
+│         │    │    ├── pid.rs                 # PID namespace
+│         │    │    ├── net.rs                 # Network namespace
+│         │    │    ├── mnt.rs                 # Mount namespace
+│         │    │    ├── uts.rs                 # UTS namespace (hostname)
+│         │    │    ├── ipc.rs                 # IPC namespace
+│         │    │    └── user.rs                # User namespace
+│         │    │
+│         │    └── cgroups/                    # ──── CGROUPS V2 ────
+│         │         ├── mod.rs
+│         │         ├── cpu.rs                 # CPU controller
+│         │         ├── memory.rs              # Memory controller
+│         │         ├── io.rs                  # I/O controller
+│         │         └── pids.rs                # PID controller
+│         │
+│         ├── debug/                           # ═══════════════════════════════════════════════
+│         │    │                                # DEBUG UTILITIES
+│         │    │                                # Profiling, tracing
+│         │    │                                # ═══════════════════════════════════════════════
+│         │    ├── mod.rs
+│         │    ├── serial_console.rs           # Serial debug console
+│         │    ├── backtrace.rs                # Stack backtrace
+│         │    ├── profiler.rs                 # Kernel profiler
+│         │    ├── tracing.rs                  # Event tracing
+│         │    ├── gdb_stub.rs                 # GDB remote debugging
+│         │    └── ebpf/                       # ──── eBPF-like Probes ────
+│         │         ├── mod.rs
+│         │         ├── vm.rs                  # Safe VM for probes
+│         │         ├── verifier.rs            # Bytecode verifier
+│         │         └── maps.rs                # eBPF maps
+│         │
+│         └── ai/                              # ═══════════════════════════════════════════════
+│              │                                # IA INTÉGRÉE (KERNEL HOOKS)
+│              │                                # Hooks pour agents userspace
+│              │                                # ═══════════════════════════════════════════════
+│              ├── mod.rs
+│              ├── hooks.rs                    # Hooks pour AI agents
+│              ├── prediction.rs               # Prediction hints
+│              ├── monitoring.rs               # System monitoring
+│              └── wasm_runtime.rs             # WebAssembly runtime (sandboxing)
+│
+│
+├── posix_x/                                   # ═══════════════════════════════════════════════
+│    │                                          # POSIX-X STANDALONE LIBRARY
+│    │                                          # Bibliothèque séparée linkable
+│    │                                          # Compatibilité Linux apps
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── Cargo.toml                            # Workspace POSIX-X
+│    ├── build.rs                              # Build musl adaptée
+│    ├── README.md                             # Documentation POSIX-X complète
+│    │
+│    ├── include/                              # ──── HEADERS C ────
+│    │    ├── posix_x.h                        # API publique POSIX-X
+│    │    ├── sys/                             # Headers système
+│    │    │    ├── types.h
+│    │    │    ├── stat.h
+│    │    │    ├── socket.h
+│    │    │    └── mman.h
+│    │    ├── unistd.h                         # POSIX unistd
+│    │    ├── fcntl.h                          # File control
+│    │    ├── signal.h                         # Signals
+│    │    └── pthread.h                        # Threads POSIX
+│    │
+│    ├── src/                                  # ──── SOURCE POSIX-X ────
+│    │    │
+│    │    ├── lib.rs                           # Main library
+│    │    │
+│    │    ├── musl/                            # ═══════════════════════════════════════════════
+│    │    │    │                                # MUSL LIBC ADAPTÉE
+│    │    │    │                                # Base: musl 1.2.5
+│    │    │    │                                # Modifié pour Exo-OS
+│    │    │    │                                # ═══════════════════════════════════════════════
+│    │    │    ├── stdio/                      # Standard I/O
+│    │    │    │    ├── printf.c
+│    │    │    │    ├── scanf.c
+│    │    │    │    ├── fopen.c
+│    │    │    │    ├── fread.c
+│    │    │    │    ├── fwrite.c
+│    │    │    │    └── setvbuf.c
+│    │    │    │
+│    │    │    ├── string/                     # String operations
+│    │    │    │    ├── memcpy.c
+│    │    │    │    ├── memmove.c
+│    │    │    │    ├── memset.c
+│    │    │    │    ├── strcmp.c
+│    │    │    │    ├── strcpy.c
+│    │    │    │    └── strlen.c
+│    │    │    │
+│    │    │    ├── stdlib/                     # Standard library
+│    │    │    │    ├── malloc.c               # malloc → Exo-OS allocator
+│    │    │    │    ├── free.c
+│    │    │    │    ├── calloc.c
+│    │    │    │    ├── realloc.c
+│    │    │    │    ├── atoi.c
+│    │    │    │    ├── strtol.c
+│    │    │    │    └── qsort.c
+│    │    │    │
+│    │    │    ├── unistd/                     # POSIX unistd
+│    │    │    │    ├── read.c                 # read → Fusion Ring
+│    │    │    │    ├── write.c                # write → Fusion Ring
+│    │    │    │    ├── close.c
+│    │    │    │    ├── lseek.c
+│    │    │    │    ├── pipe.c                 # pipe → Fusion Ring!
+│    │    │    │    ├── fork.c                 # fork (émulation lente)
+│    │    │    │    ├── execve.c
+│    │    │    │    └── getpid.c               # Fast path
+│    │    │    │
+│    │    │    ├── fcntl/                      # File control
+│    │    │    │    ├── open.c                 # open → Capabilities
+│    │    │    │    ├── fcntl.c
+│    │    │    │    └── ioctl.c
+│    │    │    │
+│    │    │    ├── pthread/                    # POSIX threads
+│    │    │    │    ├── pthread_create.c       # pthread → Exo threads
+│    │    │    │    ├── pthread_join.c
+│    │    │    │    ├── pthread_mutex.c
+│    │    │    │    ├── pthread_cond.c
+│    │    │    │    ├── pthread_rwlock.c
+│    │    │    │    └── pthread_key.c
+│    │    │    │
+│    │    │    ├── signal/                     # Signals
+│    │    │    │    ├── signal.c               # signal → IPC messages
+│    │    │    │    ├── kill.c                 # kill → send_message
+│    │    │    │    ├── sigaction.c
+│    │    │    │    └── raise.c
+│    │    │    │
+│    │    │    ├── socket/                     # Network sockets
+│    │    │    │    ├── socket.c
+│    │    │    │    ├── bind.c
+│    │    │    │    ├── listen.c
+│    │    │    │    ├── accept.c
+│    │    │    │    ├── connect.c
+│    │    │    │    ├── send.c                 # send via IPC
+│    │    │    │    ├── recv.c                 # recv via IPC
+│    │    │    │    └── select.c
+│    │    │    │
+│    │    │    ├── time/                       # Time functions
+│    │    │    │    ├── time.c
+│    │    │    │    ├── gettimeofday.c
+│    │    │    │    ├── clock_gettime.c        # Fast path (~100 cycles)
+│    │    │    │    ├── nanosleep.c
+│    │    │    │    └── strftime.c
+│    │    │    │
+│    │    │    ├── dirent/                     # Directory operations
+│    │    │    │    ├── opendir.c
+│    │    │    │    ├── readdir.c
+│    │    │    │    └── closedir.c
+│    │    │    │
+│    │    │    ├── stat/                       # File stats
+│    │    │    │    ├── stat.c
+│    │    │    │    ├── fstat.c
+│    │    │    │    └── lstat.c
+│    │    │    │
+│    │    │    ├── mman/                       # Memory mapping
+│    │    │    │    ├── mmap.c                 # mmap → Exo-OS shared mem
+│    │    │    │    ├── munmap.c
+│    │    │    │    └── mprotect.c
+│    │    │    │
+│    │    │    ├── env/                        # Environment
+│    │    │    │    ├── getenv.c
+│    │    │    │    ├── setenv.c
+│    │    │    │    └── environ.c
+│    │    │    │
+│    │    │    ├── errno/                      # Error handling
+│    │    │    │    ├── errno.c                # Thread-local errno
+│    │    │    │    └── strerror.c
+│    │    │    │
+│    │    │    └── internal/                   # Internal musl
+│    │    │         ├── syscall.c              # Syscall wrapper
+│    │    │         ├── libc.c
+│    │    │         └── pthread_impl.c
+│    │    │
+│    │    ├── kernel_interface/                # ═══════════════════════════════════════════════
+│    │    │    │                                # INTERFACE KERNEL EXO-OS
+│    │    │    │                                # Bridge POSIX-X ↔ Kernel
+│    │    │    │                                # ═══════════════════════════════════════════════
+│    │    │    ├── mod.rs
+│    │    │    ├── syscall_adapter.rs          # Adaptateur syscalls
+│    │    │    ├── fd_table.rs                 # Table FD globale
+│    │    │    ├── capability_cache.rs         # Cache capabilities (LRU)
+│    │    │    ├── ipc_bridge.rs               # Bridge IPC (pipes → Fusion Rings)
+│    │    │    ├── signal_daemon.rs            # Daemon signaux
+│    │    │    └── memory_bridge.rs            # Bridge mémoire
+│    │    │
+│    │    ├── optimization/                    # ──── OPTIMIZATIONS ────
+│    │    │    ├── mod.rs
+│    │    │    ├── adaptive_optimizer.rs       # Optimiseur adaptatif
+│    │    │    ├── zerocopy_detector.rs        # Détecteur zero-copy
+│    │    │    ├── batch_optimizer.rs          # Batching intelligent
+│    │    │    └── statistics.rs               # Stats collection
+│    │    │
+│    │    ├── tools/                           # ──── OUTILS ────
+│    │    │    ├── profiler.rs                 # Profiler POSIX-X
+│    │    │    ├── analyzer.rs                 # Analyseur binaires
+│    │    │    ├── migrator.rs                 # Assistant migration
+│    │    │    └── benchmark.rs                # Suite benchmarks
+│    │    │
+│    │    └── tests/                           # ──── TESTS ────
+│    │         ├── unit_tests.rs
+│    │         ├── integration_tests.rs
+│    │         ├── compat_tests.rs
+│    │         └── perf_tests.rs
+│    │
+│    ├── examples/                             # ──── EXEMPLES ────
+│    │    ├── hello_world.c
+│    │    ├── file_io.c
+│    │    ├── pipe_example.c
+│    │    ├── threading.c
+│    │    ├── socket_server.c
+│    │    └── mixed_api.c
+│    │
+│    ├── benchmarks/                           # ──── BENCHMARKS ────
+│    │    ├── syscall_bench.c
+│    │    ├── io_bench.c
+│    │    ├── ipc_bench.c
+│    │    ├── thread_bench.c
+│    │    └── compare_linux.sh
+│    │
+│    └── docs/                                 # ──── DOCUMENTATION ────
+│         ├── API.md
+│         ├── ARCHITECTURE.md
+│         ├── PERFORMANCE.md
+│         ├── MIGRATION.md
+│         └── TROUBLESHOOTING.md
+│
+│
+├── userland/                                  # ═══════════════════════════════════════════════
+│    │                                          # ESPACE UTILISATEUR
+│    │                                          # Services, drivers, apps
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── init/                                 # ──── INIT SYSTEM ────
+│    │    ├── Cargo.toml
+│    │    └── src/
+│    │         ├── main.rs                     # Init process (PID 1)
+│    │         ├── service_manager.rs          # Manage services
+│    │         └── recovery.rs                 # Recovery mode
+│    │
+│    ├── services/                             # ═══════════════════════════════════════════════
+│    │    │                                     # SERVICES USERSPACE
+│    │    │                                     # ═══════════════════════════════════════════════
+│    │    │
+│    │    ├── service_manager/                 # ──── SERVICE MANAGER (s6 + wrapper) ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    └── s6/                    # s6 supervision suite
+│    │    │    │         ├── s6-svc
+│    │    │    │         ├── s6-supervise
+│    │    │    │         └── s6-rc
+│    │    │    └── src/
+│    │    │         ├── main.rs                # Rust orchestrator
+│    │    │         ├── dependencies.rs        # Dependency resolution
+│    │    │         ├── s6_bridge.rs           # Bridge to s6
+│    │    │         └── dbus_interface.rs      # D-Bus interface
+│    │    │
+│    │    ├── dbus/                            # ──── D-BUS (zbus + dbus-broker) ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    └── dbus-broker/           # dbus-broker daemon (C)
+│    │    │    └── src/
+│    │    │         ├── main.rs                # Start dbus-broker + zbus wrapper
+│    │    │         └── policy.rs              # D-Bus policy
+│    │    │
+│    │    ├── display_manager/                 # ──── DISPLAY MANAGER (greetd) ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    └── greetd/                # greetd (Rust)
+│    │    │    └── src/
+│    │    │         ├── main.rs                # Wrapper greetd
+│    │    │         ├── pam_bridge.rs          # PAM integration
+│    │    │         └── session.rs             # Session management
+│    │    │
+│    │    ├── device_manager/                  # ──── DEVICE MANAGER (eudev) ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    └── eudev/                 # eudev (C)
+│    │    │    ├── rules/                      # udev rules
+│    │    │    │    ├── 10-exo-os.rules
+│    │    │    │    ├── 50-input.rules
+│    │    │    │    └── 99-custom.rules
+│    │    │    └── src/
+│    │    │         ├── main.rs                # Rust wrapper
+│    │    │         └── hotplug.rs             # Hotplug handler
+│    │    │
+│    │    ├── fs_service/                      # Filesystem service
+│    │    │    ├── Cargo.toml
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── vfs.rs                 # VFS implementation
+│    │    │         └── cache.rs               # Page cache
+│    │    │
+│    │    ├── net_service/                     # ──── NETWORK SERVICE ────
+│    │    │    ├── Cargo.toml
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── tcp_stack.rs           # TCP/IP stack
+│    │    │         ├── dhcp_client.rs         # DHCP client
+│    │    │         ├── wifi_manager.rs        # WiFi management (nl80211)
+│    │    │         ├── bluetooth_manager.rs   # Bluetooth management
+│    │    │         └── firewall.rs            # Firewall interface
+│    │    │
+│    │    ├── audio_service/                   # ──── AUDIO SERVICE (PipeWire) ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    └── pipewire/              # PipeWire (patched for Fusion Rings)
+│    │    │    └── src/
+│    │    │         ├── main.rs                # Audio service
+│    │    │         ├── fusion_ring_transport.rs # Fusion Ring transport
+│    │    │         └── mixer.rs               # Audio mixer
+│    │    │
+│    │    ├── power_service/                   # ──── POWER SERVICE ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    ├── tlp/                   # TLP power management
+│    │    │    │    └── power-profiles-daemon/ # Power profiles
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── battery.rs             # Battery monitoring
+│    │    │         ├── thermal.rs             # Thermal management
+│    │    │         ├── cpufreq.rs             # CPU frequency
+│    │    │         └── profiles.rs            # Power profiles
+│    │    │
+│    │    ├── firmware_service/                # ──── FIRMWARE SERVICE (fwupd) ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    └── fwupd/                 # fwupd (Linux Vendor Firmware Service)
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         └── updater.rs
+│    │    │
+│    │    ├── logging_service/                 # ──── LOGGING SERVICE ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    └── syslog-ng/             # syslog-ng (C)
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── structured_logs.rs     # Structured logging
+│    │    │         └── indexer.rs             # Fast indexing
+│    │    │
+│    │    ├── time_service/                    # ──── TIME SERVICE (chrony) ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    └── chrony/                # chrony NTP client
+│    │    │    └── src/
+│    │    │         └── main.rs
+│    │    │
+│    │    ├── printing_service/                # ──── PRINTING SERVICE (CUPS) ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    └── cups/                  # CUPS (C)
+│    │    │    └── src/
+│    │    │         └── main.rs
+│    │    │
+│    │    ├── backup_service/                  # ──── BACKUP SERVICE ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    ├── timeshift/             # Timeshift snapshots
+│    │    │    └── restic/                # Restic encrypted backups
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── snapshots.rs
+│    │    │         └── scheduler.rs
+│    │    │
+│    │    ├── telemetry_service/               # ──── TELEMETRY SERVICE (opt-in) ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    └── sentry/                # Sentry crash reporting
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── crash_handler.rs       # Crash dump handler
+│    │    │         ├── privacy.rs             # Privacy controls
+│    │    │         └── anonymizer.rs          # Data anonymization
+│    │    │
+│    │    └── container_runtime/               # ──── CONTAINER RUNTIME (crun) ────
+│    │         ├── Cargo.toml
+│    │         ├── third_party/
+│    │         │    └── crun/                  # crun (C, patched for Exo-OS)
+│    │         └── src/
+│    │              ├── main.rs
+│    │              ├── oci_runtime.rs         # OCI runtime interface
+│    │              └── image_manager.rs       # Container image management
+│    │
+│    ├── desktop/                              # ═══════════════════════════════════════════════
+│    │    │                                     # DESKTOP ENVIRONMENT
+│    │    │                                     # ═══════════════════════════════════════════════
+│    │    │
+│    │    ├── cosmic/                          # ──── COSMIC DESKTOP (System76) ────
+│    │    │    │                                # 100% Rust, moderne
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    └── cosmic-epoch/          # Cosmic Desktop (git submodule)
+│    │    │    │         ├── cosmic-comp       # Compositor
+│    │    │    │         ├── cosmic-panel      # Panel/Taskbar
+│    │    │    │         ├── cosmic-launcher   # App launcher
+│    │    │    │         ├── cosmic-settings   # Settings app
+│    │    │    │         ├── cosmic-files      # File manager
+│    │    │    │         ├── cosmic-term       # Terminal
+│    │    │    │         ├── cosmic-edit       # Text editor
+│    │    │    │         ├── cosmic-applets    # System tray applets
+│    │    │    │         └── cosmic-greeter    # Login greeter
+│    │    │    └── src/
+│    │    │         ├── main.rs                # Cosmic session manager
+│    │    │         ├── exo_integration.rs     # Exo-OS specific integration
+│    │    │         └── theme.rs               # Exo-OS theme
+│    │    │
+│    │    ├── wayland/                         # ──── WAYLAND (wlroots/smithay) ────
+│    │    │    ├── Cargo.toml
+│    │    │    ├── third_party/
+│    │    │    │    ├── wlroots/               # wlroots (C) - backend option
+│    │    │    │    └── smithay/               # smithay (Rust) - preferred
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── compositor.rs          # Compositor logic
+│    │    │         ├── drm_backend.rs         # DRM backend
+│    │    │         └── input_backend.rs       # Input backend
+│    │    │
+│    │    ├── xwayland/                        # ──── XWAYLAND (X11 compat) ────
+│    │    │    ├── Cargo.toml
+│    │    │    └── third_party/
+│    │    │         └── xwayland/              # XWayland (upstream)
+│    │    │
+│    │    ├── clipboard/                       # ──── CLIPBOARD ────
+│    │    │    ├── Cargo.toml
+│    │    │    └── third_party/
+│    │    │         └── wl-clipboard/          # wl-clipboard (C)
+│    │    │
+│    │    ├── notifications/                   # ──── NOTIFICATIONS ────
+│    │    │    ├── Cargo.toml
+│    │    │    └── third_party/
+│    │    │         └── mako/                  # mako notification daemon (C)
+│    │    │
+│    │    └── accessibility/                   # ──── ACCESSIBILITY ────
+│    │         ├── Cargo.toml
+│    │         ├── third_party/
+│    │         │    ├── at-spi2-core/          # AT-SPI protocol
+│    │         │    └── orca/                  # Orca screen reader
+│    │         └── src/
+│    │              ├── main.rs
+│    │              ├── screen_reader.rs
+│    │              └── magnifier.rs
+│    │
+│    ├── apps/                                 # ═══════════════════════════════════════════════
+│    │    │                                     # DEFAULT APPLICATIONS
+│    │    │                                     # ═══════════════════════════════════════════════
+│    │    │
+│    │    ├── browser/                         # ──── WEB BROWSER ────
+│    │    │    ├── Cargo.toml
+│    │    │    └── third_party/
+│    │    │         ├── chromium/              # Option 1: Chromium (heavy)
+│    │    │         └── falkon/                # Option 2: Falkon (Qt WebEngine, lighter)
+│    │    │
+│    │    ├── office/                          # ──── OFFICE SUITE ────
+│    │    │    └── third_party/
+│    │    │         ├── libreoffice/           # Option 1: LibreOffice (full)
+│    │    │         ├── abiword/               # Option 2: AbiWord (lightweight word processor)
+│    │    │         └── gnumeric/              # Option 2: Gnumeric (lightweight spreadsheet)
+│    │    │
+│    │    ├── email/                           # ──── EMAIL CLIENT ────
+│    │    │    └── third_party/
+│    │    │         ├── thunderbird/           # Option 1: Thunderbird (full)
+│    │    │         └── geary/                 # Option 2: Geary (GTK, lightweight)
+│    │    │
+│    │    ├── media/                           # ──── MEDIA PLAYERS ────
+│    │    │    ├── video/
+│    │    │    │    └── third_party/
+│    │    │    │         ├── vlc/              # VLC media player
+│    │    │    │         └── mpv/              # mpv (lightweight alternative)
+│    │    │    ├── music/
+│    │    │    │    └── third_party/
+│    │    │    │         └── rhythmbox/        # Rhythmbox music player
+│    │    │    └── codecs/
+│    │    │         └── third_party/
+│    │    │              └── ffmpeg/           # FFmpeg (all codecs)
+│    │    │
+│    │    ├── image_viewer/                    # ──── IMAGE VIEWER ────
+│    │    │    └── third_party/
+│    │    │         └── eog/                   # Eye of GNOME
+│    │    │
+│    │    ├── pdf_viewer/                      # ──── PDF VIEWER ────
+│    │    │    └── third_party/
+│    │    │         └── evince/                # Evince PDF viewer
+│    │    │
+│    │    ├── calculator/                      # ──── CALCULATOR ────
+│    │    │    └── third_party/
+│    │    │         └── gnome-calculator/
+│    │    │
+│    │    ├── system_monitor/                  # ──── SYSTEM MONITOR ────
+│    │    │    ├── Cargo.toml
+│    │    │    └── src/
+│    │    │         ├── main.rs                # Rust system monitor (native)
+│    │    │         ├── cpu.rs
+│    │    │         ├── memory.rs
+│    │    │         └── processes.rs
+│    │    │
+│    │    ├── archive_manager/                 # ──── ARCHIVE MANAGER ────
+│    │    │    └── third_party/
+│    │    │         └── file-roller/           # File Roller (GNOME)
+│    │    │
+│    │    └── cloud_integration/               # ──── CLOUD INTEGRATION ────
+│    │         └── third_party/
+│    │              └── gnome-online-accounts/ # GNOME Online Accounts
+│    │
+│    ├── ai_agents/                            # ═══════════════════════════════════════════════
+│    │    │                                     # AGENTS IA
+│    │    │                                     # ═══════════════════════════════════════════════
+│    │    │
+│    │    ├── ai_core/                         # AI-Core (orchestrateur)
+│    │    │    ├── Cargo.toml
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── orchestrator.rs        # Orchestration agents
+│    │    │         ├── ipc_coord.rs           # Coordination IPC
+│    │    │         └── security.rs            # Clés éphémères PQ
+│    │    │
+│    │    ├── ai_res/                          # AI-Res (ressources)
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── eco_plus_plus.rs       # Algo Eco++ (big.LITTLE)
+│    │    │         ├── load_balancer.rs       # Load balancing
+│    │    │         └── power_manager.rs       # Power management
+│    │    │
+│    │    ├── ai_user/                         # AI-User (interface)
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── peg_parser.rs          # PEG hybride
+│    │    │         ├── intent_engine.rs       # Moteur d'intention (SLM)
+│    │    │         └── adaptive_ui.rs         # UI adaptative
+│    │    │
+│    │    ├── ai_sec/                          # AI-Sec (sécurité)
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── behavioral.rs          # Analyse comportementale
+│    │    │         ├── fuzzer.rs              # libFuzzer integration
+│    │    │         └── detector.rs            # Threat detection
+│    │    │
+│    │    ├── ai_learn/                        # AI-Learn (apprentissage)
+│    │    │    └── src/
+│    │    │         ├── main.rs
+│    │    │         ├── federated.rs           # Federated learning
+│    │    │         ├── homomorphic.rs         # Homomorphic encryption
+│    │    │         └── optimizer.rs           # Model optimization
+│    │    │
+│    │    └── ai_assistant/                    # Embedded assistant
+│    │         └── src/
+│    │              ├── main.rs
+│    │              ├── voice.rs               # Voice commands
+│    │              ├── nlp.rs                 # NLP processing
+│    │              └── actions.rs             # System actions
+│    │
+│    ├── drivers/                              # ──── DRIVERS USERSPACE ────
+│    │    │                                     # Drivers complexes en userland
+│    │    ├── gpu/
+│    │    │    ├── nvidia/                     # NVIDIA (adapter C libs)
+│    │    │    └── amd/                        # AMD (adapter C libs)
+│    │    ├── wifi/
+│    │    │    ├── third_party/
+│    │    │    │    └── wpa_supplicant/        # wpa_supplicant
+│    │    │    └── src/                        # Wrapper C drivers
+│    │    │         └── main.rs
+│    │    └── bluetooth/
+│    │         ├── third_party/
+│    │         │    └── bluez/                 # BlueZ stack
+│    │         └── src/
+│    │              └── main.rs
+│    │
+│    ├── shell/                                # ──── SHELL ────
+│    │    ├── Cargo.toml
+│    │    └── src/
+│    │         ├── main.rs                     # Shell interactif
+│    │         ├── parser.rs                   # Command parser
+│    │         ├── executor.rs                 # Command executor
+│    │         ├── builtin.rs                  # Builtin commands
+│    │         └── ai_integration.rs           # AI assistant intégré
+│    │
+│    ├── coreutils/                            # ──── COREUTILS ────
+│    │    ├── ls/                              # ls command
+│    │    ├── cat/                             # cat command
+│    │    ├── grep/                            # grep command
+│    │    ├── cp/                              # cp command
+│    │    ├── mv/                              # mv command
+│    │    └── rm/                              # rm command
+│    │
+│    ├── gaming/                               # ═══════════════════════════════════════════════
+│    │    │                                     # GAMING SUPPORT
+│    │    │                                     # ═══════════════════════════════════════════════
+│    │    ├── steam/
+│    │    │    └── third_party/
+│    │    │         └── steam/                 # Steam client (binary from Valve)
+│    │    └── gamemode/
+│    │         ├── Cargo.toml
+│    │         └── third_party/
+│    │              └── gamemode/              # GameMode (Feral Interactive)
+│    │
+│    ├── developer_tools/                      # ═══════════════════════════════════════════════
+│    │    │                                     # DEVELOPER TOOLS
+│    │    │                                     # ═══════════════════════════════════════════════
+│    │    ├── toolchain/
+│    │    │    ├── gcc/                        # GCC compiler
+│    │    │    ├── clang/                      # Clang/LLVM
+│    │    │    ├── rust/                       # Rust toolchain
+│    │    │    └── go/                         # Go toolchain
+│    │    ├── debuggers/
+│    │    │    ├── gdb/                        # GNU Debugger
+│    │    │    └── lldb/                       # LLVM Debugger
+│    │    ├── build_systems/
+│    │    │    ├── make/                       # GNU Make
+│    │    │    ├── cmake/                      # CMake
+│    │    │    ├── ninja/                      # Ninja
+│    │    │    └── meson/                      # Meson
+│    │    ├── vcs/
+│    │    │    └── git/                        # Git
+│    │    ├── editors/
+│    │    │    ├── vim/                        # Vim
+│    │    │    ├── emacs/                      # Emacs
+│    │    │    └── nano/                       # Nano
+│    │    └── ide/
+│    │         ├── vscode/                     # VS Code (Electron)
+│    │         └── jetbrains/                  # JetBrains IDEs
+│    │
+│    ├── installer/                            # ═══════════════════════════════════════════════
+│    │    │                                     # SYSTEM INSTALLER
+│    │    │                                     # ═══════════════════════════════════════════════
+│    │    ├── Cargo.toml
+│    │    ├── third_party/
+│    │    │    └── calamares/                  # Calamares installer framework
+│    │    ├── modules/                         # Custom Calamares modules
+│    │    │    ├── exo_bootloader/             # Limine installer module
+│    │    │    ├── exo_partition/              # Partition module
+│    │    │    └── exo_users/                  # User creation module
+│    │    ├── branding/                        # Exo-OS branding
+│    │    │    ├── branding.desc
+│    │    │    ├── logo.png
+│    │    │    └── slideshow/
+│    │    └── src/
+│    │         └── main.rs                     # Installer wrapper
+│    │
+│    ├── package_manager/                      # ═══════════════════════════════════════════════
+│    │    │                                     # PACKAGE MANAGER
+│    │    │                                     # ═══════════════════════════════════════════════
+│    │    ├── Cargo.toml
+│    │    ├── third_party/
+│    │    │    ├── libsolv/                    # libsolv (dependency resolver)
+│    │    │    └── ostree/                     # OSTree (atomic updates)
+│    │    └── src/
+│    │         ├── cli/                        # exo-pkg CLI
+│    │         │    ├── main.rs
+│    │         │    ├── install.rs
+│    │         │    ├── update.rs
+│    │         │    ├── remove.rs
+│    │         │    └── search.rs
+│    │         ├── gui/                        # GUI (adapted GNOME Software)
+│    │         │    └── third_party/
+│    │         │         └── gnome-software/
+│    │         ├── solver.rs                   # Dependency solver (libsolv wrapper)
+│    │         ├── updater.rs                  # System updater (OSTree wrapper)
+│    │         ├── downloader.rs               # Package downloader
+│    │         └── repo.rs                     # Repository management
+│    │
+│    └── libc/                                 # ──── LIBC USERSPACE ────
+│         └── (symlink to ../posix_x/)         # Copy of POSIX-X for apps
+│
+│
+├── libs/                                      # ═══════════════════════════════════════════════
+│    │                                          # BIBLIOTHÈQUES PARTAGÉES
+│    │                                          # Communes kernel + userland
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── exo_types/                            # ──── TYPES COMMUNS ────
+│    │    ├── Cargo.toml
+│    │    └── src/
+│    │         ├── lib.rs
+│    │         ├── address.rs                  # PhysAddr, VirtAddr
+│    │         ├── capability.rs               # Capability types
+│    │         └── error.rs                    # Error types
+│    │
+│    ├── exo_ipc/                              # ──── IPC LIBRARY ────
+│    │    └── src/
+│    │         ├── lib.rs
+│    │         ├── channel.rs                  # Channel API
+│    │         └── message.rs                  # Message types
+│    │
+│    ├── exo_crypto/                           # ──── CRYPTO LIBRARY ────
+│    │    └── src/
+│    │         ├── lib.rs
+│    │         ├── kyber.rs                    # Kyber wrapper
+│    │         ├── dilithium.rs                # Dilithium wrapper
+│    │         └── chacha20.rs                 # ChaCha20 wrapper
+│    │
+│    ├── exo_std/                              # ═══════════════════════════════════════════════
+│    │    │                                     # NATIVE STANDARD LIBRARY
+│    │    │                                     # API moderne Exo-OS
+│    │    │                                     # ═══════════════════════════════════════════════
+│    │    ├── Cargo.toml
+│    │    └── src/
+│    │         ├── lib.rs                      # Main library
+│    │         │
+│    │         ├── io/                         # I/O module
+│    │         │    ├── mod.rs
+│    │         │    ├── read.rs                # Read trait
+│    │         │    ├── write.rs               # Write trait
+│    │         │    └── seek.rs                # Seek trait
+│    │         │
+│    │         ├── fs/                         # Filesystem module
+│    │         │    ├── mod.rs
+│    │         │    ├── file.rs                # File API (capabilities)
+│    │         │    ├── dir.rs                 # Directory API
+│    │         │    └── metadata.rs            # Metadata
+│    │         │
+│    │         ├── ipc/                        # IPC module
+│    │         │    ├── mod.rs
+│    │         │    ├── channel.rs             # Channel<T> (zero-copy)
+│    │         │    ├── shared_mem.rs          # Shared memory
+│    │         │    └── async_channel.rs       # Async channels
+│    │         │
+│    │         ├── process/                    # Process module
+│    │         │    ├── mod.rs
+│    │         │    ├── spawn.rs               # spawn() (NO fork!)
+│    │         │    ├── command.rs             # Command builder
+│    │         │    └── exit.rs                # Process exit
+│    │         │
+│    │         ├── thread/                     # Thread module
+│    │         │    ├── mod.rs
+│    │         │    ├── spawn.rs               # Thread spawning
+│    │         │    ├── join.rs                # Thread join
+│    │         │    └── local.rs               # Thread-local storage
+│    │         │
+│    │         ├── sync/                       # Sync primitives
+│    │         │    ├── mod.rs
+│    │         │    ├── mutex.rs               # Mutex
+│    │         │    ├── rwlock.rs              # RwLock
+│    │         │    └── atomic.rs              # Atomics
+│    │         │
+│    │         ├── net/                        # Network module
+│    │         │    ├── mod.rs
+│    │         │    ├── tcp.rs                 # TCP (via IPC)
+│    │         │    ├── udp.rs                 # UDP (via IPC)
+│    │         │    └── addr.rs                # Address types
+│    │         │
+│    │         ├── time/                       # Time module
+│    │         │    ├── mod.rs
+│    │         │    ├── instant.rs             # Instant
+│    │         │    ├── duration.rs            # Duration
+│    │         │    └── sleep.rs               # Sleep
+│    │         │
+│    │         ├── security/                   # Security module
+│    │         │    ├── mod.rs
+│    │         │    ├── capability.rs          # Capability API
+│    │         │    ├── crypto.rs              # Crypto API
+│    │         │    └── tpm.rs                 # TPM API
+│    │         │
+│    │         └── ai/                         # AI module
+│    │              ├── mod.rs
+│    │              ├── agent.rs               # Agent API
+│    │              └── query.rs               # Query interface
+│    │
+│    ├── mesa/                                 # ──── MESA (Vulkan/OpenGL) ────
+│    │    ├── third_party/
+│    │    │    └── mesa/                       # Mesa3D (patched for Exo-OS)
+│    │    ├── patches/
+│    │    │    └── exo-os-drm-compat.patch
+│    │    └── build/
+│    │         └── meson.build
+│    │
+│    ├── icu/                                  # ──── ICU (i18n) ────
+│    │    └── third_party/
+│    │         └── icu4c/                      # ICU library
+│    │
+│    └── pam/                                  # ──── PAM (authentication) ────
+│         └── third_party/
+│              └── linux-pam/                  # Linux-PAM
+│
+│
+├── third_party/                               # ═══════════════════════════════════════════════
+│    │                                          # DÉPENDANCES EXTERNES
+│    │                                          # Code tiers (submodules git)
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── musl/                                 # MUSL LIBC (submodule git)
+│    │    └── (git submodule)                  # Version: 1.2.5, patches dans posix_x/
+│    │
+│    ├── kyber/                                # Kyber (post-quantum KEM)
+│    │    └── (git submodule)
+│    │
+│    ├── dilithium/                            # Dilithium (post-quantum sig)
+│    │    └── (git submodule)
+│    │
+│    └── linux-firmware/                       # ──── FIRMWARE BLOBS ────
+│         ├── i915/                            # Intel GPU firmware
+│         ├── amdgpu/                          # AMD GPU firmware
+│         ├── iwlwifi/                         # Intel WiFi firmware
+│         ├── rtl_bt/                          # Realtek Bluetooth
+│         └── nvidia/                          # NVIDIA firmware (proprietary)
+│
+│
+├── build/                                     # ═══════════════════════════════════════════════
+│    │                                          # SCRIPTS DE BUILD
+│    │                                          # Compilation et packaging
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── build_kernel.sh                       # ═══════════════════════════════════════════════
+│    │                                          # BUILD KERNEL COMPLET
+│    │                                          # • Compile Rust
+│    │                                          # • Compile ASM (NASM)
+│    │                                          # • Compile C (gcc/clang)
+│    │                                          # • Link Linux drivers (DRM, WiFi)
+│    │                                          # • Génère kernel.elf
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── build_posix_x.sh                      # Build POSIX-X library
+│    ├── build_userland.sh                     # Build userland
+│    ├── build_desktop.sh                      # Build Cosmic Desktop
+│    ├── build_apps.sh                         # Build default apps
+│    │
+│    ├── image.sh                              # ═══════════════════════════════════════════════
+│    │                                          # GÉNÉRATION IMAGE SYSTÈME
+│    │                                          # • Create bootable ISO
+│    │                                          # • limine bootloader
+│    │                                          # • Initramfs
+│    │                                          # • Output: exo-os.iso
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── test.sh                               # Run tests
+│    ├── qemu.sh                               # Lancement QEMU
+│    ├── benchmark.sh                          # Run benchmarks
+│    └── clean.sh                              # Clean build artifacts
+│
+│
+├── scripts/                                   # ═══════════════════════════════════════════════
+│    │                                          # SCRIPTS UTILITAIRES
+│    │                                          # Dev, deploy, debug
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── setup/                                # ──── SETUP SCRIPTS ────
+│    │    ├── check_env.ps1                    # Check Windows environment
+│    │    ├── check_env.sh                     # Check Linux/macOS env
+│    │    ├── install_deps.sh                  # Install dependencies
+│    │    ├── tpm_setup.sh                     # Setup TPM
+│    │    ├── hsm_setup.sh                     # Setup HSM
+│    │    └── post_quantum_setup.sh            # Setup PQ crypto
+│    │
+│    ├── build/                                # ──── BUILD HELPERS ────
+│    │    ├── build_windows.ps1               # Build on Windows
+│    │    ├── build_linux.sh                   # Build on Linux
+│    │    └── cross_compile.sh                 # Cross-compilation
+│    │
+│    ├── debug/                                # ──── DEBUG SCRIPTS ────
+│    │    ├── gdb_kernel.sh                    # GDB kernel debugging
+│    │    ├── trace.sh                         # Kernel tracing
+│    │    └── analyze_crash.sh                 # Crash analysis
+│    │
+│    ├── posix_x/                              # ──── POSIX-X TOOLS ────
+│    │    ├── analyze_binary.sh                # Analyze app compatibility
+│    │    ├── profile_app.sh                   # Profile POSIX-X usage
+│    │    ├── migrate_app.sh                   # Migrate app to native
+│    │    └── benchmark_compat.sh              # Benchmark compatibility
+│    │
+│    ├── deploy/                               # ──── DEPLOYMENT ────
+│    │    ├── create_usb.sh                    # Create bootable USB
+│    │    ├── network_boot.sh                  # PXE boot setup
+│    │    └── install.sh                       # Installation script
+│    │
+│    └── maintenance/                          # ──── MAINTENANCE ────
+│         ├── update_firmware.sh               # Update firmware blobs
+│         ├── clone_third_party.sh             # Clone all third-party deps
+│         └── sync_patches.sh                  # Sync patches to third-party
+│
+│
+├── docs/                                      # ═══════════════════════════════════════════════
+│    │                                          # DOCUMENTATION COMPLÈTE
+│    │                                          # Guides, références, specs
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── README.md                             # README principal
+│    ├── QUICK_START.md                        # Quick start guide
+│    ├── QUICK_START_WINDOWS.md                # Windows specific guide
+│    │
+│    ├── architecture/                         # ──── ARCHITECTURE ────
+│    │    ├── OVERVIEW.md                      # Vue d'ensemble
+│    │    ├── KERNEL_DESIGN.md                 # Design kernel
+│    │    ├FUSION_RINGS.md                  # Fusion Rings détaillé
+│    │    ├── WINDOWED_CONTEXT.md              # Windowed context switch
+│    │    ├── MEMORY_MANAGEMENT.md             # Gestion mémoire
+│    │    ├── SCHEDULER.md                     # Ordonnanceur
+│    │    ├── SECURITY.md                      # Architecture sécurité
+│    │    ├── AI_INTEGRATION.md                # Intégration IA
+│    │    ├── POSIX_X_DESIGN.md                # Design POSIX-X détaillé
+│    │    ├── CONTAINERS.md                    # Containers architecture
+│    │    └── DESKTOP_ENVIRONMENT.md           # Desktop environment architecture
+│    │
+│    ├── api/                                  # ──── API REFERENCE ────
+│    │    ├── KERNEL_API.md                    # Kernel API
+│    │    ├── SYSCALLS.md                      # Syscalls reference
+│    │    ├── IPC_API.md                       # IPC API
+│    │    ├── POSIX_X_API.md                   # API POSIX-X complète
+│    │    ├── NATIVE_API.md                    # Native Exo-OS API
+│    │    └── C_FFI.md                         # C FFI reference
+│    │
+│    ├── guides/                               # ──── GUIDES ────
+│    │    ├── BUILDING.md                      # Guide compilation
+│    │    ├── DEBUGGING.md                     # Guide debugging
+│    │    ├── DRIVER_DEVELOPMENT.md            # Développement drivers
+│    │    ├── APP_DEVELOPMENT.md               # Développement apps
+│    │    ├── POSIX_MIGRATION.md               # Guide migration POSIX
+│    │    ├── RUST_C_INTEGRATION.md            # Intégration Rust + C
+│    │    ├── SECURITY_HARDENING.md            # Guide sécurité
+│    │    ├── PERFORMANCE_TUNING.md            # Guide optimisation
+│    │    ├── AI_AGENTS.md                     # Guide agents IA
+│    │    ├── DESKTOP_CUSTOMIZATION.md         # Customization Cosmic Desktop
+│    │    └── PACKAGE_CREATION.md              # Creating packages
+│    │
+│    ├── specs/                                # ──── SPECIFICATIONS ────
+│    │    ├── BOOT_PROTOCOL.md                 # Boot protocol spec
+│    │    ├── SYSCALL_ABI.md                   # Syscall ABI spec
+│    │    ├── IPC_PROTOCOL.md                  # IPC protocol spec
+│    │    ├── CAPABILITY_SYSTEM.md             # Capability system spec
+│    │    ├── POSIX_COMPATIBILITY.md           # Spécification compatibilité POSIX
+│    │    ├── PACKAGE_FORMAT.md                # Package format (.exopkg)
+│    │    └── CONTAINER_RUNTIME.md             # OCI runtime spec
+│    │
+│    ├── benchmarks/                           # ──── BENCHMARKS ────
+│    │    ├── METHODOLOGY.md                   # Méthodologie benchmarks
+│    │    ├── RESULTS.md                       # Résultats benchmarks
+│    │    ├── COMPARISON_LINUX.md              # Comparaison vs Linux
+│    │    ├── COMPARISON_REDOX.md              # Comparaison vs Redox
+│    │    └── POSIX_X_PERFORMANCE.md           # Performance POSIX-X
+│    │
+│    ├── tutorials/                            # ──── TUTORIELS ────
+│    │    ├── 01_hello_kernel.md               # Premier module kernel
+│    │    ├── 02_ipc_basics.md                 # Bases IPC
+│    │    ├── 03_driver_simple.md              # Driver simple
+│    │    ├── 04_posix_app.md                  # Créer app POSIX
+│    │    ├── 05_native_app.md                 # Créer app native
+│    │    ├── 06_hybrid_app.md                 # App hybride (POSIX + Native)
+│    │    ├── 07_ai_integration.md             # Intégration IA
+│    │    ├── 08_desktop_app.md                # Desktop app (Cosmic)
+│    │    └── 09_packaging.md                  # Packaging app
+│    │
+│    ├── user_manual/                          # ──── USER MANUAL ────
+│    │    ├── GETTING_STARTED.md               # Getting started
+│    │    ├── INSTALLATION.md                  # Installation guide
+│    │    ├── FIRST_STEPS.md                   # First steps
+│    │    ├── DESKTOP_USAGE.md                 # Using Cosmic Desktop
+│    │    ├── APPLICATIONS.md                  # Using applications
+│    │    ├── PACKAGE_MANAGEMENT.md            # Managing packages
+│    │    ├── SYSTEM_SETTINGS.md               # System settings
+│    │    ├── TROUBLESHOOTING.md               # Troubleshooting
+│    │    └── FAQ.md                           # FAQ
+│    │
+│    └── legal/                                # ──── LEGAL ────
+│         ├── LICENSES.md                      # Licenses overview
+│         ├── CODEC_LICENSING.md               # Codec licensing strategy
+│         ├── PRIVACY_POLICY.md                # Privacy policy
+│         └── THIRD_PARTY_NOTICES.md           # Third-party licenses
+│
+│
+├── tests/                                     # ═══════════════════════════════════════════════
+│    │                                          # TESTS COMPLETS
+│    │                                          # Unit, integration, system
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── unit/                                 # ──── TESTS UNITAIRES ────
+│    │    ├── memory_test.rs                   # Tests mémoire
+│    │    ├── scheduler_test.rs                # Tests scheduler
+│    │    ├── ipc_test.rs                      # Tests IPC
+│    │    ├── posix_x_test.rs                  # Tests POSIX-X
+│    │    └── security_test.rs                 # Tests security
+│    │
+│    ├── integration/                          # ──── TESTS INTÉGRATION ────
+│    │    ├── boot_test.rs                     # Test boot sequence
+│    │    ├── multicore_test.rs                # Test multi-core
+│    │    ├── filesystem_test.rs               # Test filesystem
+│    │    ├── network_test.rs                  # Test network stack
+│    │    ├── posix_apps_test.rs               # Tests apps POSIX
+│    │    ├── desktop_test.rs                  # Test desktop environment
+│    │    └── container_test.rs                # Test containers
+│    │
+│    ├── system/                               # ──── TESTS SYSTÈME ────
+│    │    ├── stress_test.rs                   # Stress tests
+│    │    ├── stability_test.rs                # Stability tests
+│    │    ├── performance_test.rs              # Performance tests
+│    │    └── regression_test.rs               # Regression tests
+│    │
+│    ├── benchmarks/                           # ──── BENCHMARKS ────
+│    │    ├── syscall_bench.rs                 # Benchmark syscalls
+│    │    ├── ipc_bench.rs                     # Benchmark IPC
+│    │    ├── scheduler_bench.rs               # Benchmark scheduler
+│    │    ├── memory_bench.rs                  # Benchmark memory
+│    │    ├── posix_x_bench.rs                 # Benchmark POSIX-X
+│    │    └── desktop_bench.rs                 # Benchmark desktop
+│    │
+│    └── compatibility/                        # ──── TESTS COMPATIBILITÉ ────
+│         ├── posix_compliance.rs              # POSIX compliance tests
+│         ├── linux_abi_test.rs                # Linux ABI compatibility
+│         └── app_compatibility/               # Test apps réelles
+│              ├── nginx/
+│              ├── redis/
+│              ├── postgres/
+│              ├── gcc/
+│              ├── python/
+│              └── nodejs/
+│
+│
+├── tools/                                     # ═══════════════════════════════════════════════
+│    │                                          # OUTILS DE DÉVELOPPEMENT
+│    │                                          # Profiling, debugging, analysis
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── profiler/                             # ──── PROFILER ────
+│    │    ├── Cargo.toml
+│    │    └── src/
+│    │         ├── main.rs                     # Kernel profiler
+│    │         ├── trace_analyzer.rs           # Trace analysis
+│    │         └── flame_graph.rs              # Flame graph generator
+│    │
+│    ├── debugger/                             # ──── DEBUGGER ────
+│    │    └── src/
+│    │         ├── main.rs                     # Kernel debugger UI
+│    │         └── gdb_bridge.rs               # GDB integration
+│    │
+│    ├── posix_x_tools/                        # ═══════════════════════════════════════════════
+│    │    │                                     # OUTILS POSIX-X
+│    │    │                                     # Migration et analysis
+│    │    │                                     # ═══════════════════════════════════════════════
+│    │    ├── Cargo.toml
+│    │    └── src/
+│    │         ├── main.rs                     # CLI principale
+│    │         │
+│    │         ├── commands/                   # Commandes
+│    │         │    ├── analyze.rs             # posix-x analyze ./app
+│    │         │    ├── profile.rs             # posix-x profile ./app
+│    │         │    ├── migrate.rs             # posix-x migrate app.c -o app_exo.c
+│    │         │    ├── run.rs                 # posix-x run --optimize ./app
+│    │         │    └── benchmark.rs           # posix-x benchmark ./app
+│    │         │
+│    │         ├── analyzer/                   # Binary analyzer
+│    │         │    ├── elf_parser.rs
+│    │         │    ├── symbol_finder.rs
+│    │         │    └── dependency_graph.rs
+│    │         │
+│    │         ├── migrator/                   # Code migrator
+│    │         │    ├── c_parser.rs
+│    │         │    ├── transformer.rs
+│    │         │    └── codegen.rs
+│    │         │
+│    │         └── profiler/                   # Runtime profiler
+│    │              ├── tracer.rs
+│    │              ├── stats.rs
+│    │              └── reporter.rs
+│    │
+│    ├── image_builder/                        # ──── IMAGE BUILDER ────
+│    │    └── src/
+│    │         ├── main.rs                     # Build bootable images
+│    │         ├── iso.rs                      # ISO generation
+│    │         └── initramfs.rs                # Initramfs creation
+│    │
+│    ├── qemu_runner/                          # ──── QEMU RUNNER ────
+│    │    └── src/
+│    │         ├── main.rs                     # QEMU test runner
+│    │         └── serial_capture.rs           # Capture serial output
+│    │
+│    └── package_tools/                        # ──── PACKAGE TOOLS ────
+│         └── src/
+│              ├── main.rs                     # exo-pkg-tools
+│              ├── create.rs                   # Create .exopkg
+│              ├── sign.rs                     # Sign packages
+│              └── repo_manager.rs             # Manage repositories
+│
+│
+├── configs/                                   # ═══════════════════════════════════════════════
+│    │                                          # CONFIGURATIONS SYSTÈME
+│    │                                          # Profils et presets
+│    │                                          # ═══════════════════════════════════════════════
+│    │
+│    ├── default.toml                          # Configuration par défaut
+│    ├── desktop.toml                          # Profil desktop
+│    ├── server.toml                           # Profil serveur
+│    ├── embedded.toml                         # Profil embarqué
+│    ├── hpc.toml                              # Profil HPC
+│    │
+│    ├── posix_x/                              # ──── CONFIGURATIONS POSIX-X ────
+│    │    ├── default.toml                     # Config par défaut (Hybrid mode)
+│    │    ├── performance.toml                 # Profil performance max (Native mode)
+│    │    ├── compatibility.toml               # Profil compat max (Legacy mode)
+│    │    └── learning.toml                    # Mode apprentissage
+│    │
+│    ├── desktop/                              # ──── CONFIGURATIONS DESKTOP ────
+│    │    ├── cosmic.toml                      # Cosmic Desktop config
+│    │    ├── themes/                          # Themes
+│    │    │    ├── default.toml
+│    │    │    ├── dark.toml
+│    │    │    └── high_contrast.toml
+│    │    └── keybindings.toml                 # Keybindings
+│    │
+│    └── repositories/                         # ──── PACKAGE REPOSITORIES ────
+│         ├── main.toml                        # Main repository
+│         ├── restricted.toml                  # Restricted (codecs)
+│         ├── testing.toml                     # Testing repository
+│         └── security.toml                    # Security updates
+│
+│
+├── .github/                                   # ═══════════════════════════════════════════════
+│    │                                          # GITHUB CI/CD
+│    │                                          # Workflows, actions
+│    │                                          # ═══════════════════════════════════════════════
+│    ├── workflows/
+│    │    ├── ci.yml                           # CI: build + test
+│    │    ├── release.yml                      # Release automation
+│    │    ├── benchmarks.yml                   # Automated benchmarks
+│    │    └── security_scan.yml                # Security scanning
+│    │
+│    └── ISSUE_TEMPLATE/                       # Issue templates
+│         ├── bug_report.md
+│         ├── feature_request.md
+│         └── compatibility_issue.md
+│
+│
+├── LICENSE-MIT                                # License MIT
+├── LICENSE-APACHE                             # License Apache 2.0
+├── CONTRIBUTING.md                            # Guide contribution
+├── CODE_OF_CONDUCT.md                         # Code of conduct
+├── CHANGELOG.md                               # Changelog
+├── SECURITY.md                                # Security policy
+│
+├── ROADMAP.md                                 # ═══════════════════════════════════════════════
+│                                               # ROADMAP PROJET
+│                                               # • Phase 1-6: Kernel + Services (28 mois)
+│                                               # • Phase 7: Desktop Environment (3 mois)
+│                                               # • Phase 8: Applications (3 mois)
+│                                               # • Phase 9: Installer + Docs (3 mois)
+│                                               # • Phase 10: Polish (2 mois)
+│                                               # TOTAL: 39 mois → v1.0
+│                                               # ═══════════════════════════════════════════════
+│
+├── README.md                                  # README principal (from docs/)
+│
+├── Cargo.toml                                 # ═══════════════════════════════════════════════
+│                                               # WORKSPACE ROOT
+│                                               # Members:
+│                                               # • kernel
+│                                               # • posix_x
+│                                               # • userland/* (services, desktop, apps, etc.)
+│                                               # • libs/* (exo_types, exo_ipc, exo_std, etc.)
+│                                               # • tools/* (profiler, debugger, package_tools)
+│                                               # ═══════════════════════════════════════════════
+│
+└── Makefile                                   # ═══════════════════════════════════════════════
+# MAKEFILE PRINCIPAL
+# Targets:
+# • make kernel           (build kernel)
+# • make posix-x          (build POSIX-X)
+# • make desktop          (build Cosmic Desktop)
+# • make apps             (build default apps)
+# • make userland         (build all userland)
+# • make all              (build everything)
+# • make test             (run tests)
+# • make benchmark        (run benchmarks)
+# • make iso              (create bootable ISO)
+# • make qemu             (run in QEMU)
+# • make install-deps     (install dependencies)
+# • make clean            (clean artifacts)

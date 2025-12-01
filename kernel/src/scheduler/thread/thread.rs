@@ -1,13 +1,19 @@
 //! Thread Structure and Management
-//! 
+//!
 //! Represents a schedulable thread with minimal overhead
 
-use alloc::boxed::Box;
-use alloc::vec::Vec;
-use alloc::vec;
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use crate::memory::address::VirtualAddress;
 use super::state::ThreadState;
+use crate::memory::address::VirtualAddress;
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+use crate::posix_x::signals::types::SignalStackFrame;
+
+// Phase 11: Import signal types from kernel root
+type SigSet = crate::posix_x::signals::SigSet;
+type SigAction = crate::posix_x::signals::SigAction;
 
 /// Thread ID type
 pub type ThreadId = u64;
@@ -51,55 +57,70 @@ impl ThreadContext {
 pub struct Thread {
     /// Unique thread ID
     id: ThreadId,
-    
+
     /// Thread name (for debugging)
     name: Box<str>,
-    
+
     /// Current state
     state: ThreadState,
-    
+
     /// Priority
     priority: ThreadPriority,
-    
+
     /// Saved context (for windowed context switch)
     context: ThreadContext,
-    
+
     /// Kernel stack base
     kernel_stack: VirtualAddress,
-    
+
     /// Kernel stack size
     kernel_stack_size: usize,
-    
+
     /// User stack (if user-space thread)
     user_stack: Option<VirtualAddress>,
-    
+
     /// CPU affinity (which CPU this thread prefers)
     cpu_affinity: Option<usize>,
-    
+
     /// Runtime statistics
     total_runtime_ns: AtomicU64,
     context_switches: AtomicU64,
-    
+
     /// Prediction: Exponential Moving Average of runtime
     ema_runtime_ns: AtomicU64,
+
+    // Phase 9: Parent-child tracking
+    /// Parent thread ID (0 if no parent)
+    parent_id: AtomicU64,
+
+    /// Children thread IDs
+    children: spin::Mutex<Vec<ThreadId>>,
+
+    /// Exit status (for zombie reaping)
+    exit_status: core::sync::atomic::AtomicI32,
+
+    // Phase 11: Signal handling
+    /// Blocked signals mask
+    sigmask: spin::Mutex<crate::posix_x::signals::SigSet>,
+
+    /// Pending signals
+    pending_signals: spin::Mutex<crate::posix_x::signals::SigSet>,
+
+    /// Signal handlers (indexed by signal number - 1)
+    signal_handlers: spin::Mutex<[crate::posix_x::signals::SigAction; 64]>,
 }
 
 impl Thread {
     /// Create a new kernel thread
-    pub fn new_kernel(
-        id: ThreadId,
-        name: &str,
-        entry_point: fn() -> !,
-        stack_size: usize,
-    ) -> Self {
+    pub fn new_kernel(id: ThreadId, name: &str, entry_point: fn() -> !, stack_size: usize) -> Self {
         // Allocate kernel stack
         let stack = Self::allocate_stack(stack_size);
-        
+
         // Setup initial context
         let context = ThreadContext {
             rsp: (stack.value() + stack_size) as u64,
             rip: entry_point as u64,
-            cr3: 0, // Will be set by scheduler
+            cr3: 0,        // Will be set by scheduler
             rflags: 0x202, // IF=1 (interrupts enabled)
         };
 
@@ -116,6 +137,16 @@ impl Thread {
             total_runtime_ns: AtomicU64::new(0),
             context_switches: AtomicU64::new(0),
             ema_runtime_ns: AtomicU64::new(0),
+
+            // Phase 9: Parent-child tracking
+            parent_id: AtomicU64::new(0),
+            children: spin::Mutex::new(Vec::new()),
+            exit_status: core::sync::atomic::AtomicI32::new(0),
+
+            // Phase 11: Signal handling
+            sigmask: spin::Mutex::new(crate::posix_x::signals::SigSet::empty()),
+            pending_signals: spin::Mutex::new(crate::posix_x::signals::SigSet::empty()),
+            signal_handlers: spin::Mutex::new([crate::posix_x::signals::SigAction::Default; 64]),
         }
     }
 
@@ -126,7 +157,7 @@ impl Thread {
         let stack_vec: Vec<u8> = vec![0u8; size];
         let boxed = stack_vec.into_boxed_slice();
         let ptr = Box::into_raw(boxed) as *mut u8;
-        
+
         VirtualAddress::new(ptr as usize)
     }
 
@@ -168,7 +199,7 @@ impl Thread {
     /// Record runtime
     pub fn add_runtime(&self, ns: u64) {
         self.total_runtime_ns.fetch_add(ns, Ordering::Relaxed);
-        
+
         // Update EMA: ema = alpha * new + (1 - alpha) * old
         // alpha = 0.25 (shift by 2)
         let old_ema = self.ema_runtime_ns.load(Ordering::Relaxed);
@@ -197,6 +228,147 @@ impl Thread {
             context_switches: self.context_switches.load(Ordering::Relaxed),
             ema_runtime_ns: self.ema_runtime_ns.load(Ordering::Relaxed),
         }
+    }
+
+    // Phase 9: Parent-child tracking methods
+
+    /// Get exit status
+    pub fn exit_status(&self) -> i32 {
+        self.exit_status.load(Ordering::Acquire)
+    }
+
+    /// Set exit status
+    pub fn set_exit_status(&self, code: i32) {
+        self.exit_status.store(code, Ordering::Release);
+    }
+
+    /// Get parent ID
+    pub fn parent_id(&self) -> ThreadId {
+        self.parent_id.load(Ordering::Acquire)
+    }
+
+    /// Set parent ID
+    pub fn set_parent_id(&self, parent: ThreadId) {
+        self.parent_id.store(parent, Ordering::Release);
+    }
+
+    /// Add child
+    pub fn add_child(&self, child_id: ThreadId) {
+        self.children.lock().push(child_id);
+    }
+
+    /// Get children (clone for safe access)
+    pub fn get_children(&self) -> Vec<ThreadId> {
+        self.children.lock().clone()
+    }
+
+    /// Remove child
+    pub fn remove_child(&self, child_id: ThreadId) {
+        self.children.lock().retain(|&id| id != child_id);
+    }
+
+    // Phase 11: Signal handling methods
+
+    /// Get current signal mask
+    pub fn get_sigmask(&self) -> crate::posix_x::signals::SigSet {
+        *self.sigmask.lock()
+    }
+
+    /// Set signal mask
+    pub fn set_sigmask(&self, mask: crate::posix_x::signals::SigSet) {
+        *self.sigmask.lock() = mask;
+    }
+
+    /// Add pending signal
+    pub fn add_pending_signal(&self, sig: u32) {
+        self.pending_signals.lock().add(sig);
+    }
+
+    /// Get next pending signal (not blocked)
+    pub fn get_next_pending_signal(&self) -> Option<u32> {
+        let pending = *self.pending_signals.lock();
+        let blocked = *self.sigmask.lock();
+
+        for sig in 1..=64 {
+            if pending.contains(sig) && !blocked.contains(sig) {
+                return Some(sig);
+            }
+        }
+        None
+    }
+
+    /// Remove pending signal
+    pub fn remove_pending_signal(&self, sig: u32) {
+        self.pending_signals.lock().remove(sig);
+    }
+
+    /// Set signal handler
+    pub fn set_signal_handler(&self, sig: u32, action: crate::posix_x::signals::SigAction) {
+        if sig > 0 && sig <= 64 {
+            self.signal_handlers.lock()[(sig - 1) as usize] = action;
+        }
+    }
+
+    /// Get signal handler
+    pub fn get_signal_handler(&self, sig: u32) -> Option<crate::posix_x::signals::SigAction> {
+        if sig > 0 && sig <= 64 {
+            Some(self.signal_handlers.lock()[(sig - 1) as usize])
+        } else {
+            None
+        }
+    }
+
+    /// Setup signal context (Phase 11)
+    /// Saves current context to stack and redirects execution to handler
+    pub fn setup_signal_context(&mut self, sig: u32, handler: usize) {
+        // 1. Get current stack pointer
+        let sp = self.context.rsp;
+
+        // 2. Align stack to 16 bytes and make space for frame
+        // Red zone (128 bytes) + Frame size
+        let frame_size = core::mem::size_of::<SignalStackFrame>();
+        let mut new_sp = sp - 128 - frame_size as u64;
+        new_sp &= !0xF; // Align to 16 bytes
+
+        // 3. Create signal frame
+        let frame = SignalStackFrame {
+            context: self.context,
+            sig,
+            ret_addr: 0, // Caller (musl trampoline) should handle return
+        };
+
+        // 4. Write frame to stack
+        // SAFETY: We assume the stack is mapped and writable.
+        // In a real kernel, we would need to check permissions/page tables.
+        unsafe {
+            let ptr = new_sp as *mut SignalStackFrame;
+            *ptr = frame;
+        }
+
+        // 5. Update context to jump to handler
+        self.context.rsp = new_sp;
+        self.context.rip = handler as u64;
+
+        // Note: We cannot set RDI (arg1) here because ThreadContext doesn't have it.
+        // This is a limitation of the current windowed context switch.
+        // Real user-mode signal delivery requires access to TrapFrame.
+    }
+
+    /// Restore signal context (Phase 11)
+    /// Restores context from stack frame
+    pub fn restore_signal_context(&mut self) {
+        // 1. Get current stack pointer
+        let sp = self.context.rsp;
+
+        // 2. Read frame from stack
+        // SAFETY: Assuming stack is valid and contains frame
+        let frame = unsafe { &*(sp as *const SignalStackFrame) };
+
+        // 3. Restore context
+        self.context = frame.context;
+
+        // Note: This restores the context saved by setup_signal_context.
+        // It effectively "returns" to the point where the signal was delivered.
     }
 }
 
