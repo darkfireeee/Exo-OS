@@ -33,10 +33,11 @@ multiboot2_header_end:
 section .bss
 align 4096
 
-; Tables de pagination (identity mapping)
+; Tables de pagination (identity mapping pour 8GB)
+; Architecture: P4 -> P3 -> P2[0..7] -> 2MB pages
 p4_table:       resb 4096   ; PML4 (Page Map Level 4)
 p3_table:       resb 4096   ; PDPT (Page Directory Pointer Table)
-p2_table:       resb 4096   ; PD (Page Directory)
+p2_tables:      resb 4096 * 8   ; 8 tables PD, une par GB (chacune mappe 512 * 2MB = 1GB)
 
 ; Stack pour le kernel (augmentée pour log:: macros)
 stack_bottom:   resb 65536  ; 64 KB (was 16 KB)
@@ -176,28 +177,58 @@ check_long_mode:
     hlt
 
 ; === FONCTION: Configurer tables de pagination ===
+; Mappe 8GB avec des pages de 2MB via 8 tables P2
 setup_page_tables:
-    ; Mapper P4[0] -> P3
+    ; --- Étape 1: P4[0] -> P3 ---
     mov eax, p3_table
     or eax, PAGE_PRESENT | PAGE_WRITE
     mov [p4_table], eax
     
-    ; Mapper P3[0] -> P2
-    mov eax, p2_table
+    ; --- Étape 2: P3[0..7] -> P2_tables[0..7] ---
+    ; Chaque entrée P3 pointe vers une table P2 différente
+    mov ecx, 0                      ; Index de la table P2 (0 à 7)
+.setup_p3:
+    ; Calculer adresse de la table P2[ecx]
+    mov eax, p2_tables
+    mov edx, ecx
+    shl edx, 12                     ; edx = ecx * 4096 (taille d'une table)
+    add eax, edx                    ; eax = p2_tables + ecx * 4096
     or eax, PAGE_PRESENT | PAGE_WRITE
-    mov [p3_table], eax
-    
-    ; Identity map premiers 2MB avec huge pages
-    mov ecx, 0
-.loop:
-    mov eax, 0x200000               ; 2MB
-    mul ecx
-    or eax, PAGE_PRESENT | PAGE_WRITE | PAGE_HUGE
-    mov [p2_table + ecx * 8], eax
+    mov [p3_table + ecx * 8], eax   ; P3[ecx] = &P2_tables[ecx]
     
     inc ecx
-    cmp ecx, 512                    ; 512 entrées = 1GB
-    jne .loop
+    cmp ecx, 8
+    jne .setup_p3
+    
+    ; --- Étape 3: Remplir chaque table P2 avec 512 entrées de 2MB ---
+    mov ecx, 0                      ; Index global (0 à 8*512 = 4096 pages de 2MB)
+.fill_p2:
+    ; Calculer adresse physique = ecx * 2MB
+    mov eax, ecx
+    shl eax, 21                     ; eax = ecx * 0x200000 (2MB)
+    or eax, PAGE_PRESENT | PAGE_WRITE | PAGE_HUGE  ; Page 2MB
+    
+    ; Stocker dans la bonne table P2
+    ; Table index = ecx / 512, Entry index = ecx % 512
+    mov edx, ecx
+    shr edx, 9                      ; edx = ecx / 512 = index de table P2
+    mov ebx, ecx
+    and ebx, 0x1FF                  ; ebx = ecx % 512 = index dans la table
+    
+    ; Adresse de l'entrée = p2_tables + (table * 4096) + (entry * 8)
+    push eax
+    mov eax, edx
+    shl eax, 12                     ; eax = table * 4096
+    add eax, p2_tables              ; eax = &p2_tables[table]
+    shl ebx, 3                      ; ebx = entry * 8
+    add eax, ebx                    ; eax = &p2_tables[table].entries[entry]
+    mov edx, eax                    ; edx = destination address
+    pop eax                         ; eax = page entry value
+    mov [edx], eax
+    
+    inc ecx
+    cmp ecx, 4096                   ; 8 tables * 512 entrées = 4096
+    jne .fill_p2
     
     ret
 

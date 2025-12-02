@@ -5,7 +5,7 @@
 //! - Calling convention x86_64 System V ABI non respectée
 //! - IRETQ qui nécessite un stack frame exact
 
-use core::arch::asm;
+use core::arch::{asm, global_asm};
 
 /// Stack frame poussé par le CPU lors d'une interruption
 #[repr(C)]
@@ -18,17 +18,164 @@ pub struct InterruptStackFrame {
 }
 
 // ============================================================================
-// MACRO POUR GÉNÉRER LES HANDLERS AVEC STACK ALIGNMENT CORRECT
+// WRAPPERS ASSEMBLEUR POUR LES HANDLERS D'INTERRUPTION
 // ============================================================================
 
-// REMARQUE: Les handlers assembleur sont maintenant dans idt_handlers.asm
-// pour éviter les problèmes LLVM avec naked_asm! sur Windows/MSVC
-// Cette macro n'est plus utilisée
-macro_rules! interrupt_handler {
-    ($name:ident, $handler_fn:path) => {
-        // Stub vide - les vrais handlers sont dans l'.asm
-        pub extern "C" fn $name() {}
-    };
+global_asm!(
+    ".intel_syntax noprefix",
+    "",
+    "# Common interrupt wrapper macro",
+    "# Saves all registers, aligns stack, calls handler, restores, iretq",
+    "",
+    ".global timer_wrapper",
+    "timer_wrapper:",
+    "    push rax",
+    "    push rcx",
+    "    push rdx",
+    "    push rsi",
+    "    push rdi",
+    "    push r8",
+    "    push r9",
+    "    push r10",
+    "    push r11",
+    "    mov rdi, rsp",        // rdi = pointer to saved regs (for stack frame)
+    "    add rdi, 72",         // Skip over saved regs to get to interrupt frame
+    "    call timer_interrupt_handler",
+    "    pop r11",
+    "    pop r10",
+    "    pop r9",
+    "    pop r8",
+    "    pop rdi",
+    "    pop rsi",
+    "    pop rdx",
+    "    pop rcx",
+    "    pop rax",
+    "    iretq",
+    "",
+    ".global keyboard_wrapper",
+    "keyboard_wrapper:",
+    "    push rax",
+    "    push rcx",
+    "    push rdx",
+    "    push rsi",
+    "    push rdi",
+    "    push r8",
+    "    push r9",
+    "    push r10",
+    "    push r11",
+    "    mov rdi, rsp",
+    "    add rdi, 72",
+    "    call keyboard_interrupt_handler",
+    "    pop r11",
+    "    pop r10",
+    "    pop r9",
+    "    pop r8",
+    "    pop rdi",
+    "    pop rsi",
+    "    pop rdx",
+    "    pop rcx",
+    "    pop rax",
+    "    iretq",
+    "",
+    ".global division_error_wrapper",
+    "division_error_wrapper:",
+    "    push rax",
+    "    push rcx",
+    "    push rdx",
+    "    push rsi",
+    "    push rdi",
+    "    push r8",
+    "    push r9",
+    "    push r10",
+    "    push r11",
+    "    mov rdi, rsp",
+    "    add rdi, 72",
+    "    call division_error_handler",
+    "    pop r11",
+    "    pop r10",
+    "    pop r9",
+    "    pop r8",
+    "    pop rdi",
+    "    pop rsi",
+    "    pop rdx",
+    "    pop rcx",
+    "    pop rax",
+    "    iretq",
+    "",
+    ".global breakpoint_wrapper",
+    "breakpoint_wrapper:",
+    "    push rax",
+    "    push rcx",
+    "    push rdx",
+    "    push rsi",
+    "    push rdi",
+    "    push r8",
+    "    push r9",
+    "    push r10",
+    "    push r11",
+    "    mov rdi, rsp",
+    "    add rdi, 72",
+    "    call breakpoint_handler",
+    "    pop r11",
+    "    pop r10",
+    "    pop r9",
+    "    pop r8",
+    "    pop rdi",
+    "    pop rsi",
+    "    pop rdx",
+    "    pop rcx",
+    "    pop rax",
+    "    iretq",
+    "",
+    ".global double_fault_wrapper",
+    "double_fault_wrapper:",
+    "    push rax",
+    "    push rcx",
+    "    push rdx",
+    "    push rsi",
+    "    push rdi",
+    "    push r8",
+    "    push r9",
+    "    push r10",
+    "    push r11",
+    "    mov rdi, rsp",
+    "    add rdi, 72",
+    "    call double_fault_handler",
+    "    # Double fault doesn't return",
+    "1:  hlt",
+    "    jmp 1b",
+    "",
+    ".global page_fault_wrapper",
+    "page_fault_wrapper:",
+    "    # Page fault has error code on stack - skip it for now",
+    "    add rsp, 8",
+    "    push rax",
+    "    push rcx",
+    "    push rdx",
+    "    push rsi",
+    "    push rdi",
+    "    push r8",
+    "    push r9",
+    "    push r10",
+    "    push r11",
+    "    mov rdi, rsp",
+    "    add rdi, 72",
+    "    call page_fault_handler",
+    "    # Page fault handler loops, doesn't return",
+    "1:  hlt",
+    "    jmp 1b",
+    "",
+    ".att_syntax prefix",
+);
+
+// External wrapper functions defined in global_asm! above
+extern "C" {
+    pub fn timer_wrapper();
+    pub fn keyboard_wrapper();
+    pub fn division_error_wrapper();
+    pub fn breakpoint_wrapper();
+    pub fn double_fault_wrapper();
+    pub fn page_fault_wrapper();
 }
 
 // ============================================================================
@@ -94,6 +241,19 @@ extern "C" fn page_fault_handler(stack_frame: &InterruptStackFrame, error_code: 
 /// Handler pour Timer (IRQ 0)
 #[no_mangle]
 extern "C" fn timer_interrupt_handler(_stack_frame: &InterruptStackFrame) {
+    // Debug très tôt: écrire sur VGA pour confirmer entrée dans handler
+    let vga = 0xB8000 as *mut u16;
+    unsafe {
+        // Écrire le numéro de tick sur ligne 0, colonnes 70-79
+        static mut CALL_COUNT: u64 = 0;
+        CALL_COUNT += 1;
+        
+        // Écrire 'H' pour "Handler" au coin supérieur droit
+        let digit = (CALL_COUNT % 10) as u8;
+        *vga.add(78) = 0x0E00 | b'0'.wrapping_add(digit) as u16;  // Jaune
+        *vga.add(79) = 0x0A00 | b'H' as u16;  // Vert
+    }
+    
     // Incrémenter les ticks
     crate::arch::x86_64::pit::tick();
     
@@ -101,10 +261,11 @@ extern "C" fn timer_interrupt_handler(_stack_frame: &InterruptStackFrame) {
     let ticks = crate::arch::x86_64::pit::get_ticks();
     if ticks % 100 == 0 {
         display_timer_count(ticks / 100);
+        crate::logger::early_print("[T]"); // Timer still running
     }
     
-    // IMPORTANT: Envoyer EOI au PIC avant le scheduler
-    crate::arch::x86_64::pic_wrapper::send_eoi(0);  // IRQ 0 (Timer)
+    // IMPORTANT: Envoyer EOI au PIC 8259
+    crate::arch::x86_64::pic_wrapper::send_eoi(0);  // IRQ 0 = Timer
     
     // Préemption: Appeler le scheduler tous les 10 ticks (10ms à 100Hz)
     if ticks % 10 == 0 {
@@ -218,25 +379,6 @@ fn display_typed_char(c: char) {
         }
     }
 }
-
-// ============================================================================
-// GÉNÉRATION DES WRAPPERS ASM
-// ============================================================================
-
-// Exceptions sans error code
-interrupt_handler!(division_error_wrapper, division_error_handler);
-interrupt_handler!(breakpoint_wrapper, breakpoint_handler);
-
-// Exceptions avec error code (Double Fault, Page Fault)
-// Stub temporaire - l'implémentation réelle est dans idt_handlers.asm
-pub extern "C" fn double_fault_wrapper() {}
-
-// Stub temporaire - l'implémentation réelle est dans idt_handlers.asm
-pub extern "C" fn page_fault_wrapper() {}
-
-// IRQs (pas d'error code)
-interrupt_handler!(timer_wrapper, timer_interrupt_handler);
-interrupt_handler!(keyboard_wrapper, keyboard_interrupt_handler);
 
 // ============================================================================
 // FONCTION PUBLIQUE POUR RÉCUPÉRER LES ADRESSES DES HANDLERS

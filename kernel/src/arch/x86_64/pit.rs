@@ -4,6 +4,8 @@
 
 use crate::arch::x86_64::outb;
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
 /// Port du canal 0 du PIT
 const PIT_CHANNEL0: u16 = 0x40;
 /// Port de commande du PIT
@@ -12,8 +14,8 @@ const PIT_COMMAND: u16 = 0x43;
 /// Fréquence de base du PIT (1.193182 MHz)
 const PIT_BASE_FREQUENCY: u32 = 1193182;
 
-/// Compteur de ticks global
-static mut TICKS: u64 = 0;
+/// Compteur de ticks global (atomic pour éviter problèmes d'optimisation)
+static TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// Configure le PIT pour générer des interruptions à une fréquence donnée
 /// 
@@ -40,20 +42,18 @@ pub fn init(frequency: u32) {
 
 /// Incrémente le compteur de ticks (appelé par le handler d'interruption)
 pub fn tick() {
-    unsafe {
-        TICKS = TICKS.wrapping_add(1);
-    }
+    TICKS.fetch_add(1, Ordering::SeqCst);
 }
 
 /// Retourne le nombre de ticks depuis le démarrage
 pub fn get_ticks() -> u64 {
-    unsafe { TICKS }
+    TICKS.load(Ordering::SeqCst)
 }
 
 /// Retourne le temps écoulé en millisecondes (approximatif)
 /// Suppose une fréquence de 100 Hz (10ms par tick)
 pub fn get_uptime_ms() -> u64 {
-    unsafe { TICKS * 10 }
+    TICKS.load(Ordering::SeqCst) * 10
 }
 
 /// Attend un certain nombre de millisecondes (busy wait)

@@ -1,92 +1,65 @@
 //! Test threads for scheduler demonstration
 //! 
-//! Three simple threads that display different messages on VGA
+//! Three simple threads that run in loops. Timer interrupts do preemption.
 
-/// Test thread 1: Displays "Thread A" on line 18
+/// Write directly to serial port (avoids allocator deadlocks)
+#[inline(never)]
+fn serial_out(s: &str) {
+    for b in s.bytes() {
+        unsafe { core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b, options(nomem, nostack)); }
+    }
+}
+
+/// Ensure interrupts are enabled (critical for preemption after context switch)
+#[inline(always)]
+fn enable_interrupts() {
+    unsafe { core::arch::asm!("sti", options(nomem, nostack, preserves_flags)); }
+}
+
+/// Test thread A - runs in infinite loop, timer will preempt it
 pub fn thread_a() -> ! {
-    let vga = 0xB8000 as *mut u16;
-    let mut counter = 0u64;
+    enable_interrupts();  // Re-enable interrupts after context switch
+    serial_out("[A] Started\n");
     
+    let mut counter = 0u64;
     loop {
-        unsafe {
-            // Display thread name
-            let msg = b"[Thread A] Count: ";
-            for (i, &byte) in msg.iter().enumerate() {
-                *vga.add(18 * 80 + i) = 0x0C00 | byte as u16; // Red
-            }
-            
-            // Display counter
-            display_number(vga, 18, 18, counter);
-            
-            counter = counter.wrapping_add(1);
-            
-            // Busy wait a bit to see the switching
-            for _ in 0..100_000 {
-                core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
-            }
+        counter = counter.wrapping_add(1);
+        
+        // Print [A] every 500000 iterations
+        if counter % 500000 == 0 {
+            serial_out("[A]");
         }
     }
 }
 
-/// Test thread 2: Displays "Thread B" on line 19
+/// Test thread B - runs in infinite loop, timer will preempt it
 pub fn thread_b() -> ! {
-    let vga = 0xB8000 as *mut u16;
-    let mut counter = 0u64;
+    enable_interrupts();  // Re-enable interrupts after context switch
+    serial_out("[B] Started\n");
     
+    let mut counter = 0u64;
     loop {
-        unsafe {
-            // Display thread name
-            let msg = b"[Thread B] Count: ";
-            for (i, &byte) in msg.iter().enumerate() {
-                *vga.add(19 * 80 + i) = 0x0E00 | byte as u16; // Yellow
-            }
-            
-            // Display counter
-            display_number(vga, 19, 18, counter);
-            
-            counter = counter.wrapping_add(1);
-            
-            // Busy wait a bit to see the switching
-            for _ in 0..100_000 {
-                core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
-            }
+        counter = counter.wrapping_add(1);
+        
+        // Print [B] every 500000 iterations
+        if counter % 500000 == 0 {
+            serial_out("[B]");
         }
     }
 }
 
-/// Test thread 3: Displays "Thread C" on line 20
+/// Test thread C - runs in infinite loop, timer will preempt it
 pub fn thread_c() -> ! {
-    let vga = 0xB8000 as *mut u16;
+    enable_interrupts();  // Re-enable interrupts after context switch
+    serial_out("[C] Started\n");
+    
     let mut counter = 0u64;
-    
     loop {
-        unsafe {
-            // Display thread name
-            let msg = b"[Thread C] Count: ";
-            for (i, &byte) in msg.iter().enumerate() {
-                *vga.add(20 * 80 + i) = 0x0B00 | byte as u16; // Cyan
-            }
-            
-            // Display counter
-            display_number(vga, 20, 18, counter);
-            
-            counter = counter.wrapping_add(1);
-            
-            // Busy wait a bit to see the switching
-            for _ in 0..100_000 {
-                core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
-            }
+        counter = counter.wrapping_add(1);
+        
+        // Print [C] every 500000 iterations
+        if counter % 500000 == 0 {
+            serial_out("[C]");
         }
-    }
-}
-
-/// Helper to display a number on VGA
-unsafe fn display_number(vga: *mut u16, row: usize, col: usize, mut num: u64) {
-    const HEX_CHARS: &[u8] = b"0123456789ABCDEF";
-    
-    // Display as hex (16 digits)
-    for i in 0..16 {
-        let nibble = ((num >> ((15 - i) * 4)) & 0xF) as usize;
-        *vga.add(row * 80 + col + i) = 0x0F00 | HEX_CHARS[nibble] as u16;
     }
 }

@@ -70,7 +70,7 @@
 
 [MB2] Bootloader: GRUB 2.12-1ubuntu7.3
 [MB2] Command line: 
-[MB2] Total memory: 261631 KB
+[MB2] Total memory: 523775 KB
 
 [MB2] Memory Map: Detected
 [KERNEL] Initializing frame allocator...
@@ -87,13 +87,28 @@
 [KERNEL]   INITIALIZING SYSTEM TABLES
 [KERNEL] ═══════════════════════════════════════
 
+[PAGING] Mapping APIC regions...
+[PAGING] ✓ APIC regions mapped (0xFEC00000, 0xFEE00000)
+[PIC] Masking all I/O APIC entries...
+[PIC] I/O APIC has 24 entries
+[PIC] ✓ I/O APIC fully masked
 [KERNEL] Initializing GDT...
 [KERNEL] ✓ GDT loaded successfully
 [KERNEL] Initializing IDT...
 [KERNEL] ✓ IDT loaded successfully
-[KERNEL] Initializing PIC 8259...
-[KERNEL] ✓ PIC configured (IRQs 32-47)
-[KERNEL] ✓ Timer (IRQ0) and Keyboard (IRQ1) unmasked
+[KERNEL] Interrupts disabled (CLI)
+[KERNEL] Configuring PIC 8259...
+[PIC] Manual initialization starting...
+[PIC] Sending ICW1 (init + need ICW4)...
+[PIC] Sending ICW2 (vector offsets 32, 40)...
+[PIC] Sending ICW3 (cascade on IRQ2)...
+[PIC] Sending ICW4 (8086 mode)...
+[PIC] Masking all IRQs...
+[PIC] Base initialization complete
+[PIC] Read mask before unmask: 0xFF
+[PIC] Wrote 0xFC, verify read: 0xFC
+[PIC] Timer and Keyboard unmasked
+[KERNEL] ✓ PIC configured (vectors 32-47)
 [KERNEL] Configuring PIT timer (100Hz)...
 [KERNEL] ✓ PIT configured at 100Hz
 
@@ -121,17 +136,11 @@
 [DEBUG] About to call disable_interrupts
 [DEBUG] disable_interrupts OK
 [DEBUG] About to call scheduler::init()
-[SCHED] scheduler::init() entered
 [INFO ] Initializing scheduler...
-[SCHED] About to call windowed::init()
-[INFO ] Windowed context switch initialized (16-byte contexts)
-[SCHED] windowed::init() OK
-[SCHED] About to call idle::init()
+[WINDOWED] Context switch initialized
 [INFO ] Initializing idle thread...
 [INFO ] ✓ Idle thread system initialized
-[SCHED] idle::init() OK
 [INFO ] ✓ Scheduler initialized
-[SCHED] scheduler::init() completed
 [KERNEL] ✓ Scheduler initialized
 [KERNEL] Creating test threads (interrupts disabled)...
 [INFO ] ✓ Thread 'Thread A' (TID 1) spawned successfully
@@ -141,21 +150,20 @@
 [INFO ] ✓ Thread 'Thread C' (TID 3) spawned successfully
 [KERNEL]   ✓ Thread C ready (4KB stack)
 [KERNEL] ✓ 3 threads spawned successfully
-[KERNEL] ✓ Interrupts re-enabled
-
 [KERNEL] Final System Status:
   [✓] Scheduler: 3-Queue EMA (Hot/Normal/Cold)
   [✓] Threads: 3 ready for execution
   [✓] Preemptive multitasking: ENABLED
-  [✓] Context switch: Every 10ms (timer)
+  [✓] Context switch: Every 10ms (PIT timer)
 
 [KERNEL] Starting scheduler...
 [KERNEL] *** Watch lines 16-20 for thread counters! ***
 
-[INFO ] Starting scheduler...
-[INFO ] === Scheduler Statistics ===
-[INFO ] Total threads:  3
-[INFO ] Total spawns:   3
-[INFO ] Total switches: 0
-[INFO ] Queue lengths:  Hot=3, Normal=0, Cold=0
-[INFO ] Total runtime:  0 ms
+[SCHED] ✓ Timer interrupts enabled
+[INFO ] [SCHED] schedule() called for the first time!
+[INFO ] [SCHED] First switch! Launching TID 1
+[INFO ] [SCHED] Performing first context switch NOW!
+[A] Started
+[A][A][A][A][A][A][B] Started
+[B][B][B][B][B][B][B][B][B][B][B][B][B][B][C] Started
+[C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][B][B][B][B][B][B][C][C][C][C][A][A][A][A][A][A][T][B][B][B][C][C][C][C][A][A][A][B][B][B][B][B][B][B][C][C][C][C][A][A][A][A][B][B][B][B][B][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][T][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][T][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][T][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][A][A][A][A][B][B][B][B][C][C][C][C][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][T][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][T][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][T][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][T][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][T][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][T][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A][A][A][A][A][A][A][B][B][B][B][B][B][B][B][B][B][B][C][C][C][C][C][C][A][A][A][A][A][B][B][B][B][B][B][B][B][C][C][C][C][C][C][C][C][A][A][A][A][B][B][B][T][C][C][C][C][A][A][A][A][B][B][B][B][B][C][C][C][C][C][C][C][C][C][C][A][A][A][A][A][A][A][A]

@@ -301,6 +301,12 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             logger::early_print("[KERNEL]   INITIALIZING SYSTEM TABLES\n");
             logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
 
+            // Mapper les régions APIC avant de les utiliser
+            arch::x86_64::memory::paging::map_apic_regions();
+            
+            // Désactiver l'I/O APIC pour forcer le mode PIC legacy
+            arch::x86_64::pic_wrapper::disable_ioapic();
+
             // Initialiser GDT (Global Descriptor Table)
             logger::early_print("[KERNEL] Initializing GDT...\n");
             arch::x86_64::gdt::init();
@@ -311,15 +317,17 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             arch::x86_64::idt::init();
             logger::early_print("[KERNEL] ✓ IDT loaded successfully\n");
 
-            // Initialiser le PIC (Programmable Interrupt Controller)
-            logger::early_print("[KERNEL] Initializing PIC 8259...\n");
+            // Désactiver les interrupts pendant la configuration
+            unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)); }
+            logger::early_print("[KERNEL] Interrupts disabled (CLI)\n");
+            
+            // Configurer PIC et PIT (méthode legacy qui fonctionne)
+            logger::early_print("[KERNEL] Configuring PIC 8259...\n");
             arch::x86_64::pic_wrapper::init_pic();
-            logger::early_print("[KERNEL] ✓ PIC configured (IRQs 32-47)\n");
-            logger::early_print("[KERNEL] ✓ Timer (IRQ0) and Keyboard (IRQ1) unmasked\n");
-
-            // Initialiser le PIT (Programmable Interval Timer)
+            logger::early_print("[KERNEL] ✓ PIC configured (vectors 32-47)\n");
+            
             logger::early_print("[KERNEL] Configuring PIT timer (100Hz)...\n");
-            arch::x86_64::pit::init(100); // 100 ticks/seconde
+            arch::x86_64::pit::init(100);
             logger::early_print("[KERNEL] ✓ PIT configured at 100Hz\n");
 
             // Afficher le statut du système avec splash
@@ -359,15 +367,11 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
 
             logger::early_print("[KERNEL] ✓ 3 threads spawned successfully\n");
 
-            // Réactiver les interrupts
-            arch::x86_64::enable_interrupts();
-            logger::early_print("[KERNEL] ✓ Interrupts re-enabled\n\n");
-
             logger::early_print("[KERNEL] Final System Status:\n");
             logger::early_print("  [✓] Scheduler: 3-Queue EMA (Hot/Normal/Cold)\n");
             logger::early_print("  [✓] Threads: 3 ready for execution\n");
             logger::early_print("  [✓] Preemptive multitasking: ENABLED\n");
-            logger::early_print("  [✓] Context switch: Every 10ms (timer)\n\n");
+            logger::early_print("  [✓] Context switch: Every 10ms (PIT timer)\n\n");
 
             logger::early_print("[KERNEL] Starting scheduler...\n");
             logger::early_print("[KERNEL] *** Watch lines 16-20 for thread counters! ***\n\n");

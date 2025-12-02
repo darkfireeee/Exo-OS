@@ -115,7 +115,7 @@ extern "C" {
 
 /// Initialize windowed context switch subsystem
 pub fn init() {
-    crate::logger::info("Windowed context switch initialized (16-byte contexts)");
+    crate::logger::early_print("[WINDOWED] Context switch initialized\n");
 }
 
 /// Perform windowed context switch between two threads

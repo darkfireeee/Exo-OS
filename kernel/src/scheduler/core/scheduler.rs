@@ -97,13 +97,10 @@ impl RunQueue {
     /// Get next thread to run (Hot > Normal > Cold priority)
     fn dequeue(&mut self) -> Option<Box<Thread>> {
         if let Some(thread) = self.hot.pop_front() {
-            logger::debug(&format!("Dequeue thread {} from HOT queue", thread.id()));
             Some(thread)
         } else if let Some(thread) = self.normal.pop_front() {
-            logger::debug(&format!("Dequeue thread {} from NORMAL queue", thread.id()));
             Some(thread)
         } else if let Some(thread) = self.cold.pop_front() {
-            logger::debug(&format!("Dequeue thread {} from COLD queue", thread.id()));
             Some(thread)
         } else {
             None
@@ -252,106 +249,118 @@ impl Scheduler {
     /// 2. Pick next thread from run queue (Hot > Normal > Cold)
     /// 3. Context switch to new thread
     pub fn schedule(&self) {
-        logger::debug("[SCHEDULE] Scheduling next thread...");
-
-        let mut run_queue = self.run_queue.lock();
-        let mut current = self.current_thread.lock();
-
-        // Log current state
-        let (hot, normal, cold) = run_queue.lengths();
-        logger::debug(&format!(
-            "[SCHEDULE]   Queue lengths: Hot={}, Normal={}, Cold={}",
-            hot, normal, cold
-        ));
-
-        // Save current thread if exists
-        if let Some(mut thread) = current.take() {
-            logger::debug(&format!(
-                "[SCHEDULE]   Current thread: {} (state: {:?})",
-                thread.id(),
-                thread.state()
-            ));
-
-            if thread.state() == ThreadState::Running {
-                thread.set_state(ThreadState::Ready);
-
-                // Re-enqueue for next scheduling round
-                let tid = thread.id();
-                run_queue.enqueue(thread);
-
-                logger::debug(&format!("[SCHEDULE]   Thread {} saved to run queue", tid));
-            } else if thread.state() == ThreadState::Blocked {
-                // Move to blocked threads list
-                let tid = thread.id();
-                self.blocked_threads.lock().insert(tid, thread);
-                logger::debug(&format!(
-                    "[SCHEDULE]   Thread {} moved to blocked list",
-                    tid
-                ));
-            } else {
-                logger::debug(&format!(
-                    "[SCHEDULE]   Thread {} NOT re-enqueued (state: {:?})",
-                    thread.id(),
-                    thread.state()
-                ));
-                // Thread is dropped here (Terminated)
-            }
-        } else {
-            logger::debug("[SCHEDULE]   No current thread");
+        // Simple round-robin scheduler for preemptive multitasking
+        // Called from timer interrupt every 10 ticks (100ms)
+        
+        // Static counter for reduced logging
+        static SCHEDULE_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+        let count = SCHEDULE_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        
+        if count == 0 {
+            logger::info("[SCHED] schedule() called for the first time!");
         }
-
-        // Pick next thread
-        if let Some(mut next_thread) = run_queue.dequeue() {
-            let tid = next_thread.id();
-            logger::debug(&format!("[SCHEDULE]   Picked thread {} from queue", tid));
-
-            next_thread.set_state(ThreadState::Running);
-            next_thread.inc_context_switches();
-
-            // Update stats
-            *self.total_switches.lock() += 1;
-
-            // Get context pointer before moving thread
-            let ctx_ptr = next_thread.context_ptr();
-
-            // Set as current thread
-            *current = Some(next_thread);
-
-            // Drop locks before context switch
-            drop(current);
-            drop(run_queue);
-
-            logger::debug(&format!("[SCHEDULE]   Switching to thread {}", tid));
-
-            // Context switch (never returns)
+        
+        // Get pointers for context switch (must be done before acquiring locks)
+        let old_ctx: *mut ThreadContext;
+        let new_ctx: *const ThreadContext;
+        let switch_needed: bool;
+        
+        {
+            // Scope for locks - they MUST be dropped before context switch
+            let mut run_queue = self.run_queue.lock();
+            let mut current = self.current_thread.lock();
+            
+            // Check if we have a current thread to save
+            if let Some(ref mut curr_thread) = *current {
+                if curr_thread.state() == ThreadState::Running {
+                    // Get next thread from queue
+                    if let Some(mut next_thread) = run_queue.dequeue() {
+                        // We have a switch to perform!
+                        let curr_tid = curr_thread.id();
+                        let next_tid = next_thread.id();
+                        
+                        // Only switch if different threads
+                        if curr_tid != next_tid {
+                            // Save current thread's context pointer
+                            old_ctx = curr_thread.context_ptr();
+                            
+                            // Put current thread back in queue (it's still Ready)
+                            curr_thread.set_state(ThreadState::Ready);
+                            
+                            // Get next thread's context pointer
+                            new_ctx = next_thread.context_ptr();
+                            next_thread.set_state(ThreadState::Running);
+                            next_thread.inc_context_switches();
+                            
+                            // Swap: take out current, put in next
+                            let old_thread = current.take().unwrap();
+                            run_queue.enqueue(old_thread);
+                            *current = Some(next_thread);
+                            
+                            // Update stats
+                            *self.total_switches.lock() += 1;
+                            
+                            switch_needed = true;
+                        } else {
+                            // Same thread, put it back
+                            run_queue.enqueue(next_thread);
+                            switch_needed = false;
+                            old_ctx = core::ptr::null_mut();
+                            new_ctx = core::ptr::null();
+                        }
+                    } else {
+                        // No other threads, continue current
+                        switch_needed = false;
+                        old_ctx = core::ptr::null_mut();
+                        new_ctx = core::ptr::null();
+                    }
+                } else {
+                    // Current thread not running, weird state
+                    switch_needed = false;
+                    old_ctx = core::ptr::null_mut();
+                    new_ctx = core::ptr::null();
+                }
+            } else {
+                // No current thread - pick first available (first switch!)
+                if let Some(mut next_thread) = run_queue.dequeue() {
+                    let next_tid = next_thread.id();
+                    logger::info(&format!("[SCHED] First switch! Launching TID {}", next_tid));
+                    
+                    new_ctx = next_thread.context_ptr();
+                    logger::debug(&format!("[SCHED] Context ptr: {:p}, RSP: 0x{:x}", new_ctx, unsafe { (*new_ctx).rsp }));
+                    
+                    next_thread.set_state(ThreadState::Running);
+                    *current = Some(next_thread);
+                    
+                    // First switch - no old context to save
+                    old_ctx = core::ptr::null_mut();
+                    switch_needed = true;
+                } else {
+                    // No threads at all
+                    logger::warn("[SCHED] No threads to schedule!");
+                    switch_needed = false;
+                    old_ctx = core::ptr::null_mut();
+                    new_ctx = core::ptr::null();
+                }
+            }
+            
+            // Locks are dropped here at end of scope
+        }
+        
+        // Now perform context switch AFTER locks are released
+        if switch_needed && !new_ctx.is_null() {
+            if count == 0 {
+                logger::info("[SCHED] Performing first context switch NOW!");
+            }
             unsafe {
-                windowed::switch_to(ctx_ptr as *const ThreadContext);
+                windowed::switch(old_ctx, new_ctx);
             }
-        } else {
-            // No threads in run queue
-            logger::warn("[SCHEDULE]   No threads in run queue!");
-
-            // Try idle thread
-            if let Some(idle_tid) = *self.idle_thread_id.lock() {
-                logger::debug(&format!(
-                    "[SCHEDULE]   Falling back to idle thread {}",
-                    idle_tid
-                ));
-                // TODO: Switch to idle thread
-            }
-
-            // If no idle thread, just halt
-            drop(current);
-            drop(run_queue);
-
-            logger::warn("[SCHEDULE]   No idle thread, halting CPU...");
-            idle::halt();
+            // We return here after being switched back!
         }
     }
 
     /// Yield current thread voluntarily
     pub fn yield_now(&self) {
-        logger::debug("[YIELD] Current thread yielding CPU...");
         self.schedule();
     }
 
@@ -580,32 +589,36 @@ pub static SCHEDULER: Scheduler = Scheduler::new();
 
 /// Initialize the scheduler
 pub fn init() {
-    crate::logger::early_print("[SCHED] scheduler::init() entered\n");
     logger::info("Initializing scheduler...");
 
     // Initialize windowed context switch
-    crate::logger::early_print("[SCHED] About to call windowed::init()\n");
     windowed::init();
-    crate::logger::early_print("[SCHED] windowed::init() OK\n");
 
     // Initialize idle thread system
-    crate::logger::early_print("[SCHED] About to call idle::init()\n");
     idle::init();
-    crate::logger::early_print("[SCHED] idle::init() OK\n");
 
     logger::info("✓ Scheduler initialized");
-    crate::logger::early_print("[SCHED] scheduler::init() completed\n");
 }
 
 /// Start scheduling (called after initial threads are spawned)
 pub fn start() {
-    logger::info("Starting scheduler...");
-
-    // Print initial stats
-    SCHEDULER.print_stats();
-
-    // Begin scheduling
+    // Enable interrupts - this is CRITICAL for timer preemption
+    unsafe { core::arch::asm!("sti", options(nomem, nostack, preserves_flags)); }
+    
+    // Verify IF is set
+    let rflags: u64;
+    unsafe { core::arch::asm!("pushfq; pop {}", out(reg) rflags); }
+    if rflags & 0x200 != 0 {
+        crate::logger::early_print("[SCHED] ✓ Timer interrupts enabled\n");
+    } else {
+        crate::logger::early_print("[SCHED] ✗ Timer interrupts DISABLED!\n");
+    }
+    
+    // Do the first schedule to start running threads
     SCHEDULER.schedule();
+    
+    // We should never get here - the first thread takes over
+    loop { unsafe { core::arch::asm!("hlt"); } }
 }
 
 /// Yield current thread (syscall interface)
