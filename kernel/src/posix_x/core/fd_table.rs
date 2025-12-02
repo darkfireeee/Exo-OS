@@ -59,9 +59,33 @@ impl FdTable {
     }
 
     /// Create default FD table with stdin/stdout/stderr
-    /// TODO: Add actual VFS handles for stdio
     pub fn with_defaults() -> Self {
-        Self::new()
+        let mut table = Self::new();
+
+        // Initialize stdio handles
+        // These will be connected to console or null device depending on system state
+        if let Some(stdin_handle) = create_stdin_handle() {
+            table.entries[0] = FdEntry::Active {
+                handle: Arc::new(RwLock::new(stdin_handle)),
+                flags: 0, // No special flags
+            };
+        }
+
+        if let Some(stdout_handle) = create_stdout_handle() {
+            table.entries[1] = FdEntry::Active {
+                handle: Arc::new(RwLock::new(stdout_handle)),
+                flags: 0,
+            };
+        }
+
+        if let Some(stderr_handle) = create_stderr_handle() {
+            table.entries[2] = FdEntry::Active {
+                handle: Arc::new(RwLock::new(stderr_handle)),
+                flags: 0,
+            };
+        }
+
+        table
     }
 
     /// Get VFS handle for file descriptor
@@ -282,6 +306,41 @@ impl Default for FdTable {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Create stdin handle (FD 0)
+fn create_stdin_handle() -> Option<VfsHandle> {
+    // Try to open console or /dev/null
+    use crate::posix_x::vfs_posix::file_ops;
+
+    // Try console first, fallback to null
+    use crate::posix_x::vfs_posix::OpenFlags;
+    if let Ok(handle) = file_ops::open("/dev/console", OpenFlags::from_posix(0), 0, None) {
+        return Some(handle);
+    }
+
+    // Fallback: create a null/dummy handle
+    file_ops::open("/dev/null", OpenFlags::from_posix(0), 0, None).ok()
+}
+
+/// Create stdout handle (FD 1)
+fn create_stdout_handle() -> Option<VfsHandle> {
+    use crate::posix_x::vfs_posix::file_ops;
+
+    // Try console first
+    use crate::posix_x::vfs_posix::OpenFlags;
+    if let Ok(handle) = file_ops::open("/dev/console", OpenFlags::from_posix(1), 0, None) {
+        // O_WRONLY = 1
+        return Some(handle);
+    }
+
+    file_ops::open("/dev/null", OpenFlags::from_posix(1), 0, None).ok()
+}
+
+/// Create stderr handle (FD 2)
+fn create_stderr_handle() -> Option<VfsHandle> {
+    // stderr is same as stdout
+    create_stdout_handle()
 }
 
 // TODO: Add tests for VFS-based FD table

@@ -1,152 +1,164 @@
-//! I/O Syscalls - Phase 8 Implementation
-//!
-//! POSIX I/O syscalls integrated with VFS adapter.
+//! I/O Syscalls - read/write/open/close with real VFS integration
 
-use crate::fs::FsError;
 use crate::posix_x::core::fd_table::GLOBAL_FD_TABLE;
-use crate::posix_x::vfs_posix::{file_ops, OpenFlags, SeekWhence};
+use crate::posix_x::translation::errno::Errno;
+use crate::posix_x::vfs_posix::file_ops;
+use alloc::sync::Arc;
 use core::ffi::CStr;
+use core::slice;
+use spin::RwLock;
 
-/// Convert FsError to POSIX errno
-fn fs_error_to_errno(e: FsError) -> i32 {
-    match e {
-        FsError::NotFound => 2,          // ENOENT
-        FsError::PermissionDenied => 13, // EACCES
-        FsError::FileExists => 17,       // EEXIST
-        FsError::NotDirectory => 20,     // ENOTDIR
-        FsError::IsDirectory => 21,      // EISDIR
-        FsError::InvalidArgument => 22,  // EINVAL
-        FsError::TooManyFiles => 24,     // EMFILE
-        _ => 5,                          // EIO
+/// Read from file descriptor
+pub fn sys_read(fd: i32, buf: usize, count: usize) -> i64 {
+    // Validate pointers
+    if buf == 0 || count == 0 {
+        return -(Errno::EFAULT as i64);
+    }
+
+    // Get FD handle
+    let table = GLOBAL_FD_TABLE.read();
+    let handle_arc = match table.get(fd) {
+        Some(h) => h.clone(),
+        None => return -(Errno::EBADF as i64),
+    };
+    drop(table);
+
+    // Read from handle
+    let mut handle = handle_arc.write();
+    let buffer = unsafe { slice::from_raw_parts_mut(buf as *mut u8, count) };
+
+    match handle.read(buffer) {
+        Ok(bytes_read) => bytes_read as i64,
+        Err(_e) => -(Errno::EIO as i64),
     }
 }
 
-/// open(pathname, flags, mode)
-#[no_mangle]
-pub unsafe extern "C" fn sys_open(pathname: *const i8, flags: i32, mode: u32) -> i64 {
-    // Validate pointer
-    if pathname.is_null() {
-        return -14; // -EFAULT
+/// Write to file descriptor
+pub fn sys_write(fd: i32, buf: usize, count: usize) -> i64 {
+    // Validate pointers
+    if buf == 0 || count == 0 {
+        return 0; // Writing 0 bytes is success
+    }
+
+    // Get FD handle
+    let table = GLOBAL_FD_TABLE.read();
+    let handle_arc = match table.get(fd) {
+        Some(h) => h.clone(),
+        None => return -(Errno::EBADF as i64),
+    };
+    drop(table);
+
+    // Write to handle
+    let mut handle = handle_arc.write();
+    let buffer = unsafe { slice::from_raw_parts(buf as *const u8, count) };
+
+    match handle.write(buffer) {
+        Ok(bytes_written) => bytes_written as i64,
+        Err(_e) => -(Errno::EIO as i64),
+    }
+}
+
+/// Open file
+pub fn sys_open(pathname: usize, flags: i32, mode: u32) -> i64 {
+    if pathname == 0 {
+        return -(Errno::EFAULT as i64);
     }
 
     // Convert C string to Rust
-    let path = match CStr::from_ptr(pathname).to_str() {
-        Ok(s) => s,
-        Err(_) => return -22, // -EINVAL
+    let path = unsafe {
+        match CStr::from_ptr(pathname as *const i8).to_str() {
+            Ok(s) => s,
+            Err(_) => return -(Errno::EINVAL as i64),
+        }
     };
 
-    // Convert POSIX flags to internal format
+    // Convert POSIX flags to OpenFlags
+    use crate::posix_x::vfs_posix::OpenFlags;
     let open_flags = OpenFlags::from_posix(flags);
 
-    // Open file via VFS
-    let handle = match file_ops::open(path, open_flags, mode, None) {
-        Ok(h) => h,
-        Err(e) => {
-            let errno = fs_error_to_errno(e);
-            return -(errno as i64);
+    // Open via VFS (no cwd_inode for now)
+    match file_ops::open(path, open_flags, mode, None) {
+        Ok(handle) => {
+            // Allocate FD
+            let mut table = GLOBAL_FD_TABLE.write();
+            match table.allocate(handle) {
+                Ok(fd) => fd as i64,
+                Err(_) => -(Errno::EMFILE as i64),
+            }
         }
-    };
-
-    // Allocate FD
-    let mut table = GLOBAL_FD_TABLE.lock();
-    match table.allocate(handle) {
-        Ok(fd) => fd as i64,
-        Err(_) => -24, // -EMFILE
-    }
-}
-
-/// read(fd, buf, count)
-#[no_mangle]
-pub unsafe extern "C" fn sys_read(fd: i32, buf: *mut u8, count: usize) -> i64 {
-    // Validate buffer
-    if buf.is_null() {
-        return -14; // -EFAULT
-    }
-
-    // Get VFS handle
-    let table = GLOBAL_FD_TABLE.lock();
-    let handle_arc = match table.get(fd) {
-        Some(h) => h,
-        None => return -9, // -EBADF
-    };
-    drop(table);
-
-    // Read from file
-    let buffer = core::slice::from_raw_parts_mut(buf, count);
-    let mut handle = handle_arc.write();
-
-    match handle.read(buffer) {
-        Ok(n) => n as i64,
-        Err(e) => -(fs_error_to_errno(e) as i64),
-    }
-}
-
-/// write(fd, buf, count)
-#[no_mangle]
-pub unsafe extern "C" fn sys_write(fd: i32, buf: *const u8, count: usize) -> i64 {
-    // Validate buffer
-    if buf.is_null() {
-        return -14; // -EFAULT
-    }
-
-    // Special case: stdout/stderr via serial (keep existing behavior)
-    if fd == 1 || fd == 2 {
-        let slice = core::slice::from_raw_parts(buf, count);
-        for &byte in slice {
-            crate::logger::early_putc(byte as char);
+        Err(fs_error) => {
+            // Convert FsError to errno
+            use crate::fs::FsError;
+            let errno = match fs_error {
+                FsError::NotFound => Errno::ENOENT,
+                FsError::PermissionDenied => Errno::EACCES,
+                FsError::AlreadyExists => Errno::EEXIST,
+                FsError::InvalidFd => Errno::EBADF,
+                _ => Errno::EIO,
+            };
+            -(errno as i64)
         }
-        return count as i64;
-    }
-
-    // Get VFS handle
-    let table = GLOBAL_FD_TABLE.lock();
-    let handle_arc = match table.get(fd) {
-        Some(h) => h,
-        None => return -9, // -EBADF
-    };
-    drop(table);
-
-    // Write to file
-    let buffer = core::slice::from_raw_parts(buf, count);
-    let mut handle = handle_arc.write();
-
-    match handle.write(buffer) {
-        Ok(n) => n as i64,
-        Err(e) => -(fs_error_to_errno(e) as i64),
     }
 }
 
-/// close(fd)
-#[no_mangle]
-pub unsafe extern "C" fn sys_close(fd: i32) -> i64 {
-    let mut table = GLOBAL_FD_TABLE.lock();
+/// Close file descriptor
+pub fn sys_close(fd: i32) -> i64 {
+    let mut table = GLOBAL_FD_TABLE.write();
     match table.close(fd) {
         Ok(()) => 0,
-        Err(_) => -9, // -EBADF
+        Err(_) => -(Errno::EBADF as i64),
     }
 }
 
-/// lseek(fd, offset, whence)
-#[no_mangle]
-pub unsafe extern "C" fn sys_lseek(fd: i32, offset: i64, whence: i32) -> i64 {
-    // Get handle
-    let table = GLOBAL_FD_TABLE.lock();
+/// Seek in file
+pub fn sys_lseek(fd: i32, offset: i64, whence: i32) -> i64 {
+    // Get FD handle
+    let table = GLOBAL_FD_TABLE.read();
     let handle_arc = match table.get(fd) {
-        Some(h) => h,
-        None => return -9, // -EBADF
+        Some(h) => h.clone(),
+        None => return -(Errno::EBADF as i64),
     };
     drop(table);
 
-    // Convert whence
-    let seek_whence = match SeekWhence::from_i32(whence) {
-        Some(w) => w,
-        None => return -22, // -EINVAL
+    // Seek
+    use crate::posix_x::vfs_posix::SeekWhence;
+    let seek_whence = match whence {
+        0 => SeekWhence::Set, // SEEK_SET
+        1 => SeekWhence::Cur, // SEEK_CUR
+        2 => SeekWhence::End, // SEEK_END
+        _ => return -(Errno::EINVAL as i64),
     };
 
-    // Perform seek
     let mut handle = handle_arc.write();
     match handle.seek(seek_whence, offset) {
         Ok(new_offset) => new_offset as i64,
-        Err(e) => -(fs_error_to_errno(e) as i64),
+        Err(_) => -(Errno::EINVAL as i64),
     }
+}
+
+/// ioctl - Device control
+pub fn sys_ioctl(_fd: i32, _request: u64, _argp: usize) -> i64 {
+    // Basic ioctl support
+    -(Errno::ENOTTY as i64)
+}
+
+/// fsync - Sync file to disk
+pub fn sys_fsync(fd: i32) -> i64 {
+    // Get FD handle
+    let table = GLOBAL_FD_TABLE.read();
+    let handle_arc = match table.get(fd) {
+        Some(h) => h.clone(),
+        None => return -(Errno::EBADF as i64),
+    };
+    drop(table);
+
+    // Flush (VFS handle automatically flushes on write)
+    // For now, just return success
+    0
+}
+
+/// fdatasync - Sync file data (not metadata)
+pub fn sys_fdatasync(fd: i32) -> i64 {
+    // For now, same as fsync
+    sys_fsync(fd)
 }

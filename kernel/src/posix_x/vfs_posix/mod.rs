@@ -32,7 +32,7 @@ pub mod path_resolver;
 // pub mod pipe; // Moved to kernel_interface
 pub use crate::posix_x::kernel_interface::ipc_bridge as pipe;
 // pub mod fd_manager; // Moved to kernel_interface
-pub use crate::posix_x::kernel_interface::fd_table as fd_manager;
+pub use crate::posix_x::core::fd_table as fd_manager;
 
 use crate::fs::vfs::inode::{Inode, InodeType};
 use crate::fs::{FsError, FsResult};

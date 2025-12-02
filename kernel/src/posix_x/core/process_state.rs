@@ -23,6 +23,15 @@ pub struct ProcessState {
     /// Session ID
     pub sid: u32,
 
+    /// User ID
+    pub uid: u32,
+    /// Group ID
+    pub gid: u32,
+    /// Effective user ID
+    pub euid: u32,
+    /// Effective group ID
+    pub egid: u32,
+
     /// Current working directory
     pub cwd: String,
 
@@ -61,6 +70,10 @@ impl ProcessState {
             ppid,
             pgid: pid, // Process group = own PID by default
             sid: pid,  // Session ID = own PID by default
+            uid: 1000, // Default user
+            gid: 1000, // Default group
+            euid: 1000,
+            egid: 1000,
             cwd: String::from("/"),
             env: BTreeMap::new(),
             fd_table: FdTable::with_defaults(),
@@ -77,6 +90,10 @@ impl ProcessState {
             ppid: self.pid, // Parent = current process
             pgid: self.pgid,
             sid: self.sid,
+            uid: self.uid,
+            gid: self.gid,
+            euid: self.euid,
+            egid: self.egid,
             cwd: self.cwd.clone(),
             env: self.env.clone(),
             fd_table: self.fd_table.clone_table(),

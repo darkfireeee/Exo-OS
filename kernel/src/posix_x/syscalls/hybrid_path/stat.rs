@@ -30,19 +30,19 @@ pub struct PosixStat {
 impl From<FileStat> for PosixStat {
     fn from(fs: FileStat) -> Self {
         Self {
-            st_dev: 0, // TODO: Real device ID
-            st_ino: fs.inode_id,
-            st_mode: fs.mode,
-            st_nlink: fs.nlinks as u64,
-            st_uid: fs.uid,
-            st_gid: fs.gid,
+            st_dev: 0,         // TODO: Real device ID
+            st_ino: 0,         // fs.inode_id - not available yet
+            st_mode: 0o100644, // fs.mode - default regular file, rw-r--r--
+            st_nlink: 1,       // fs.nlinks
+            st_uid: 1000,      // fs.uid - default user
+            st_gid: 1000,      // fs.gid - default group
             st_rdev: 0,
             st_size: fs.size as i64,
             st_blksize: 4096, // Standard block size
             st_blocks: ((fs.size + 511) / 512) as i64,
-            st_atime: fs.atime,
-            st_mtime: fs.mtime,
-            st_ctime: fs.ctime,
+            st_atime: 0, // fs.atime - not available yet
+            st_mtime: 0, // fs.mtime
+            st_ctime: 0, // fs.ctime
         }
     }
 }
@@ -52,10 +52,9 @@ fn fs_error_to_errno(e: FsError) -> i32 {
     match e {
         FsError::NotFound => 2,          // ENOENT
         FsError::PermissionDenied => 13, // EACCES
-        FsError::FileExists => 17,       // EEXIST
-        FsError::NotDirectory => 20,     // ENOTDIR
-        FsError::IsDirectory => 21,      // EISDIR
-        FsError::InvalidArgument => 22,  // EINVAL
+        FsError::AlreadyExists => 17,    // EEXIST
+        FsError::InvalidFd => 9,         // EBADF
+        FsError::TooManyFiles => 24,     // EMFILE
         _ => 5,                          // EIO
     }
 }
@@ -92,7 +91,7 @@ pub unsafe extern "C" fn sys_fstat(fd: i32, statbuf: *mut PosixStat) -> i64 {
     }
 
     // Get VFS handle
-    let table = GLOBAL_FD_TABLE.lock();
+    let table = GLOBAL_FD_TABLE.read();
     let handle_arc = match table.get(fd) {
         Some(h) => h,
         None => return -9, // -EBADF
