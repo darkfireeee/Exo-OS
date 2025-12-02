@@ -1,12 +1,12 @@
-//! Exo-OS v0.4.0 Splash Screen & Boot Display
+//! Exo-OS v0.4.1 Splash Screen & Boot Display
 //! 
-//! Système d'affichage amélioré pour la version 0.4.0
+//! Système d'affichage amélioré pour la version 0.4.1
 //! Affiche les informations de boot avec un design moderne
 
 use crate::logger;
 
 /// Version du kernel
-pub const VERSION: &str = "0.4.0";
+pub const VERSION: &str = "0.4.1";
 pub const VERSION_NAME: &str = "Quantum Leap";
 pub const BUILD_DATE: &str = "2025-11-25";
 

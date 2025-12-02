@@ -33,18 +33,30 @@ impl FxsaveArea {
     }
 }
 
-pub fn init() {
+/// Early SSE initialization - call BEFORE any code that might use SSE instructions
+/// This includes log macros, format!, and potentially memory copies.
+/// Does NOT use any logging since the logger might use SSE itself.
+#[inline(always)]
+pub fn init_early() {
     unsafe {
-        // Enable SSE
-        let mut cr0 = crate::arch::x86_64::registers::read_cr0();
-        cr0 &= !(1 << 2); // Clear EM
-        cr0 |= 1 << 1;    // Set MP
+        // Enable SSE in CR0: Clear EM (bit 2), Set MP (bit 1)
+        let mut cr0: u64;
+        core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack));
+        cr0 &= !(1 << 2); // Clear EM (Emulation)
+        cr0 |= 1 << 1;    // Set MP (Monitor Coprocessor)
         core::arch::asm!("mov cr0, {}", in(reg) cr0, options(nomem, nostack));
 
-        let mut cr4 = crate::arch::x86_64::registers::read_cr4();
+        // Enable SSE in CR4: Set OSFXSR (bit 9) and OSXMMEXCPT (bit 10)
+        let mut cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack));
         cr4 |= 3 << 9;    // Set OSFXSR and OSXMMEXCPT
         core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nomem, nostack));
     }
+}
 
+/// Full SIMD initialization with logging
+pub fn init() {
+    // SSE should already be enabled by init_early()
+    // This just logs the status
     log::info!("SIMD initialized (SSE enabled)");
 }

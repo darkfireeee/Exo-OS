@@ -1,0 +1,161 @@
+═══════════════════════════════════════════════════════
+  Exo-OS Kernel v0.4.1 - Booting...
+═══════════════════════════════════════════════════════
+
+[BOOT] Multiboot2 magic verified
+[BOOT] Multiboot2 info detected
+[BOOT] Command line: 
+[BOOT] Bootloader: GRUB 2.12-1ubuntu7.3
+[BOOT] Memory map detected
+[BOOT] Basic memory info detected
+[BOOT] Jumping to Rust kernel...
+
+
+[KERNEL] Initializing logger system...
+[LOGGER] Setting logger...
+[LOGGER] Logger initialized successfully!
+
+
+╔══════════════════════════════════════════════════════════════════════╗
+║                                                                      ║
+║     ███████╗██╗  ██╗ ██████╗        ██████╗ ███████╗               ║
+║     ██╔════╝╚██╗██╔╝██╔═══██╗      ██╔═══██╗██╔════╝               ║
+║     █████╗   ╚███╔╝ ██║   ██║█████╗██║   ██║███████╗               ║
+║     ██╔══╝   ██╔██╗ ██║   ██║╚════╝██║   ██║╚════██║               ║
+║     ███████╗██╔╝ ██╗╚██████╔╝      ╚██████╔╝███████║               ║
+║     ╚══════╝╚═╝  ╚═╝ ╚═════╝        ╚═════╝ ╚══════╝               ║
+║                                                                      ║
+║                    🚀 Version 0.4.0 - Quantum Leap 🚀                 ║
+║                                                                      ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  ✨ NOUVELLES FONCTIONNALITÉS v0.4.0                                │
+├─────────────────────────────────────────────────────────────────────┤
+│  ✅ Gestion mémoire complète                                        │
+│     • mmap/munmap/mprotect/brk/madvise/mlock/mremap                │
+│     • NUMA topology & allocation NUMA-aware                        │
+│     • Zerocopy IPC avec VM allocator et ref counting              │
+│                                                                     │
+│  ✅ Système de temps complet                                        │
+│     • TSC/HPET/RTC integration                                     │
+│     • Timers POSIX avec intervals                                  │
+│     • clock_gettime, nanosleep, alarm                              │
+│                                                                     │
+│  ✅ I/O & VFS haute performance                                     │
+│     • File descriptor table                                        │
+│     • VFS cache (inode LRU + dentry)                               │
+│     • Console série intégrée                                       │
+│                                                                     │
+│  ✅ Interruptions avancées                                          │
+│     • Local APIC + I/O APIC                                        │
+│     • x2APIC support avec MSR custom                               │
+│     • IRQ routing dynamique                                        │
+│                                                                     │
+│  ✅ Sécurité complète                                               │
+│     • Capability system par processus                              │
+│     • Credentials (UID/GID/EUID/EGID)                              │
+│     • seccomp, pledge, unveil restrictions                         │
+│                                                                     │
+│  📊 STATS: ~3000+ lignes | 150+ TODOs éliminés | 0 erreurs         │
+└─────────────────────────────────────────────────────────────────────┘
+
+[KERNEL] Using direct serial output (heap not yet initialized)
+
+[KERNEL] Multiboot2 Magic: 0x36D76289
+[KERNEL] ✓ Valid Multiboot2 magic detected
+
+[KERNEL] Parsing Multiboot2 information...
+[KERNEL] ✓ Multiboot2 info parsed successfully
+
+[MB2] Bootloader: GRUB 2.12-1ubuntu7.3
+[MB2] Command line: 
+[MB2] Total memory: 261631 KB
+
+[MB2] Memory Map: Detected
+[KERNEL] Initializing frame allocator...
+[KERNEL] Marking reserved regions...
+[KERNEL] ✓ Frame allocator ready
+[KERNEL] ✓ Physical memory management ready
+[KERNEL] Initializing heap allocator...
+[KERNEL] ✓ Heap allocator initialized (10MB)
+[KERNEL] Testing heap allocation...
+[KERNEL] ✓ Heap allocation test passed
+[KERNEL] ✓ Dynamic memory allocation ready
+
+[KERNEL] ═══════════════════════════════════════
+[KERNEL]   INITIALIZING SYSTEM TABLES
+[KERNEL] ═══════════════════════════════════════
+
+[KERNEL] Initializing GDT...
+[KERNEL] ✓ GDT loaded successfully
+[KERNEL] Initializing IDT...
+[KERNEL] ✓ IDT loaded successfully
+[KERNEL] Initializing PIC 8259...
+[KERNEL] ✓ PIC configured (IRQs 32-47)
+[KERNEL] ✓ Timer (IRQ0) and Keyboard (IRQ1) unmasked
+[KERNEL] Configuring PIT timer (100Hz)...
+[KERNEL] ✓ PIT configured at 100Hz
+
+  [██████████████████████████████████████████████████] 100% - System Tables
+
+  ✅ KERNEL READY - All systems initialized
+
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  💻 INFORMATIONS SYSTÈME                                            │
+├─────────────────────────────────────────────────────────────────────┤
+│  Kernel:       Exo-OS v0.4.1 (Quantum Leap)                         │
+│  Build:        2025-11-25                                              │
+│  Architecture: x86_64 (64-bit)                                      │
+│  Memory:       512 MB                                               │
+│  CPU Cores:    1                                                    │
+│  Features:     NUMA, APIC, VFS, Security, Zerocopy IPC             │
+└─────────────────────────────────────────────────────────────────────┘
+
+
+[KERNEL] ═══════════════════════════════════════
+[KERNEL]   INITIALIZING SCHEDULER
+[KERNEL] ═══════════════════════════════════════
+
+[DEBUG] About to call disable_interrupts
+[DEBUG] disable_interrupts OK
+[DEBUG] About to call scheduler::init()
+[SCHED] scheduler::init() entered
+[INFO ] Initializing scheduler...
+[SCHED] About to call windowed::init()
+[INFO ] Windowed context switch initialized (16-byte contexts)
+[SCHED] windowed::init() OK
+[SCHED] About to call idle::init()
+[INFO ] Initializing idle thread...
+[INFO ] ✓ Idle thread system initialized
+[SCHED] idle::init() OK
+[INFO ] ✓ Scheduler initialized
+[SCHED] scheduler::init() completed
+[KERNEL] ✓ Scheduler initialized
+[KERNEL] Creating test threads (interrupts disabled)...
+[INFO ] ✓ Thread 'Thread A' (TID 1) spawned successfully
+[KERNEL]   ✓ Thread A ready (4KB stack)
+[INFO ] ✓ Thread 'Thread B' (TID 2) spawned successfully
+[KERNEL]   ✓ Thread B ready (4KB stack)
+[INFO ] ✓ Thread 'Thread C' (TID 3) spawned successfully
+[KERNEL]   ✓ Thread C ready (4KB stack)
+[KERNEL] ✓ 3 threads spawned successfully
+[KERNEL] ✓ Interrupts re-enabled
+
+[KERNEL] Final System Status:
+  [✓] Scheduler: 3-Queue EMA (Hot/Normal/Cold)
+  [✓] Threads: 3 ready for execution
+  [✓] Preemptive multitasking: ENABLED
+  [✓] Context switch: Every 10ms (timer)
+
+[KERNEL] Starting scheduler...
+[KERNEL] *** Watch lines 16-20 for thread counters! ***
+
+[INFO ] Starting scheduler...
+[INFO ] === Scheduler Statistics ===
+[INFO ] Total threads:  3
+[INFO ] Total spawns:   3
+[INFO ] Total switches: 0
+[INFO ] Queue lengths:  Hot=3, Normal=0, Cold=0
+[INFO ] Total runtime:  0 ms

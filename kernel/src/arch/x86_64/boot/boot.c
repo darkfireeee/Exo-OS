@@ -259,7 +259,7 @@ void __attribute__((noreturn)) boot_main(uint32_t magic, uint64_t multiboot_info
     
     // Print boot message
     debug_print("═══════════════════════════════════════════════════════\n");
-    debug_print("  Exo-OS Kernel v0.4.0 - Booting...\n");
+    debug_print("  Exo-OS Kernel v0.4.1 - Booting...\n");
     debug_print("═══════════════════════════════════════════════════════\n");
     debug_print("\n");
     

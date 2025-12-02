@@ -101,9 +101,9 @@ impl TpmCommand {
 
 /// Helper: Build TPM2_GetRandom command
 pub fn build_get_random(bytes_requested: u16) -> Vec<u8> {
-    TpmCommand::new(TpmStructureTag::NoSessions, TpmCommandCode::GetRandom)
-        .add_u16(bytes_requested)
-        .finalize()
+    let mut cmd = TpmCommand::new(TpmStructureTag::NoSessions, TpmCommandCode::GetRandom);
+    cmd.add_u16(bytes_requested);
+    cmd.finalize()
 }
 
 /// Helper: Build TPM2_PCR_Extend command
@@ -157,7 +157,7 @@ pub fn build_pcr_read(pcr_selection: &[u32], hash_alg: u16) -> Vec<u8> {
 
 /// Helper: Build TPM2_Startup command
 pub fn build_startup(startup_type: u16) -> Vec<u8> {
-    TpmCommand::new(TpmStructureTag::NoSessions, TpmCommandCode::Startup)
-        .add_u16(startup_type)
-        .finalize()
+    let mut cmd = TpmCommand::new(TpmStructureTag::NoSessions, TpmCommandCode::Startup);
+    cmd.add_u16(startup_type);
+    cmd.finalize()
 }

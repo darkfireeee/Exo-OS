@@ -580,15 +580,21 @@ pub static SCHEDULER: Scheduler = Scheduler::new();
 
 /// Initialize the scheduler
 pub fn init() {
+    crate::logger::early_print("[SCHED] scheduler::init() entered\n");
     logger::info("Initializing scheduler...");
 
     // Initialize windowed context switch
+    crate::logger::early_print("[SCHED] About to call windowed::init()\n");
     windowed::init();
+    crate::logger::early_print("[SCHED] windowed::init() OK\n");
 
     // Initialize idle thread system
+    crate::logger::early_print("[SCHED] About to call idle::init()\n");
     idle::init();
+    crate::logger::early_print("[SCHED] idle::init() OK\n");
 
     logger::info("✓ Scheduler initialized");
+    crate::logger::early_print("[SCHED] scheduler::init() completed\n");
 }
 
 /// Start scheduling (called after initial threads are spawned)

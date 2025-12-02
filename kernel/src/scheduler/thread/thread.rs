@@ -115,14 +115,17 @@ impl Thread {
     pub fn new_kernel(id: ThreadId, name: &str, entry_point: fn() -> !, stack_size: usize) -> Self {
         // Allocate kernel stack
         let stack = Self::allocate_stack(stack_size);
+        let stack_top = (stack.value() + stack_size) as u64;
 
-        // Setup initial context
-        let context = ThreadContext {
-            rsp: (stack.value() + stack_size) as u64,
-            rip: entry_point as u64,
-            cr3: 0,        // Will be set by scheduler
-            rflags: 0x202, // IF=1 (interrupts enabled)
-        };
+        // Setup initial context using windowed init (prepares stack for context switch)
+        let mut context = ThreadContext::empty();
+        unsafe {
+            crate::scheduler::switch::windowed::init_context(
+                &mut context as *mut ThreadContext,
+                stack_top,
+                entry_point as u64,
+            );
+        }
 
         Self {
             id,

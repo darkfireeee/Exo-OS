@@ -122,7 +122,11 @@ pub fn test_panic_handler(info: &PanicInfo) -> ! {
 /// - VGA text mode est initialisé
 #[no_mangle]
 pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
-    // Affichage VGA avec balayage d'écran et splash screen v0.4.0
+    // CRITICAL: Enable SSE/SIMD FIRST before any other code that might use it
+    // The Rust compiler may generate SSE instructions for format!/log!/etc.
+    arch::x86_64::simd::init_early();
+    
+    // Affichage VGA avec balayage d'écran et splash screen v0.4.1
     unsafe {
         vga_clear_with_sweep();
         vga_show_boot_splash();
@@ -332,8 +336,11 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
 
             // IMPORTANT: Désactiver les interrupts pendant création des threads
+            logger::early_print("[DEBUG] About to call disable_interrupts\n");
             arch::x86_64::disable_interrupts();
+            logger::early_print("[DEBUG] disable_interrupts OK\n");
 
+            logger::early_print("[DEBUG] About to call scheduler::init()\n");
             scheduler::init();
             logger::early_print("[KERNEL] ✓ Scheduler initialized\n");
 
@@ -537,7 +544,7 @@ unsafe fn vga_show_boot_splash() {
     );
 
     // Version et nom (centré ligne 10)
-    vga_write_str(10, 18, "🚀 Version 0.4.0 - Quantum Leap 🚀", title_color);
+    vga_write_str(10, 18, "🚀 Version 0.4.1 - Quantum Leap 🚀", title_color);
 
     // Ligne de séparation
     vga_write_str(

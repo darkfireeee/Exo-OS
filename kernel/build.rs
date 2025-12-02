@@ -57,14 +57,9 @@ fn main() {
     }
     */
     
-    // Context switch assembly (future Phase 2)
-    if std::path::Path::new("src/scheduler/switch/windowed.S").exists() {
-        println!("cargo:rerun-if-changed=src/scheduler/switch/windowed.S");
-        cc::Build::new()
-            .file("src/scheduler/switch/windowed.S")
-            .flag("-nostdlib")
-            .compile("windowed");
-    }
+    // Context switch assembly - REMOVED: Now using global_asm! in windowed.rs
+    // No external .S file needed - ASM is compiled directly into the kernel
+    // See: kernel/src/scheduler/switch/windowed.rs
     
     // ═══════════════════════════════════════════════════════════════
     // 3. Compile IDT handlers (ASM) to avoid LLVM naked_asm! issues
