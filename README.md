@@ -2,11 +2,39 @@
 
 ![Exo-OS Banner](https://img.shields.io/badge/Exo--OS-Next--Gen%20OS-blue?style=for-the-badge&logo=rust&logoColor=white)
 
-[![Version](https://img.shields.io/badge/version-0.1.0--alpha-green?style=flat-square)](https://github.com/exo-os/exo-os/releases)
+[![Version](https://img.shields.io/badge/version-0.4.1-green?style=flat-square)](https://github.com/exo-os/exo-os/releases)
 [![License](https://img.shields.io/badge/license-MIT%2FApache%202.0-yellow?style=flat-square)](LICENSE-MIT)
 [![Build](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square)](https://github.com/exo-os/exo-os/actions)
-[![Architecture](https://img.shields.io/badge/arch-x86__64%20%7C%20ARM64%20%7C%20RISC--V-red?style=flat-square)](#architectures-supportées)
+[![Architecture](https://img.shields.io/badge/arch-x86__64-red?style=flat-square)](#architectures-supportées)
 [![Language](https://img.shields.io/badge/lang-Rust%20%7C%20C%20%7C%20ASM-orange?style=flat-square)](#technologies)
+
+---
+
+## 🚀 État Actuel: v0.4.1 "Quantum Leap"
+
+**Dernière mise à jour:** 2 décembre 2025
+
+### ✅ Fonctionnel Maintenant
+- ✅ Boot complet GRUB2 → Multiboot2 → Rust kernel
+- ✅ Mémoire physique (Frame allocator bitmap)
+- ✅ Heap dynamique (10MB, linked-list allocator)
+- ✅ GDT/IDT/TSS configurés
+- ✅ PIC 8259 + Timer PIT 100Hz
+- ✅ **SSE/SIMD activé** (instructions vectorielles)
+- ✅ Serial output (COM1 @ 115200)
+- ✅ VGA text mode avec splash screen
+- ✅ Scheduler 3-Queue EMA (structure complète)
+- ✅ Création de threads (3 threads de test)
+- ✅ Interrupts timer fonctionnels
+- ✅ Syscall dispatch table
+
+### 🎯 Objectif v0.5.0 "Stellar Engine"
+- [ ] Context switch réel entre threads
+- [ ] Timer preemption (multitâche préemptif)
+- [ ] Mapping mémoire virtuelle (mmap/munmap)
+- [ ] VFS minimal avec tmpfs
+- [ ] Clavier PS/2
+- [ ] Premier processus userspace
 
 ---
 
@@ -22,12 +50,12 @@
 
 ---
 
-## 📊 Performances Révolutionnaires
+## 📊 Performances Cibles
 
 ### Comparaison avec Linux
 
-| Métrique | Exo-OS | Linux | **Gain** |
-|----------|--------|-------|----------|
+| Métrique | Exo-OS (Cible) | Linux | **Gain** |
+|----------|----------------|-------|----------|
 | **IPC Latency** | 347 cycles | 1247 cycles | **3.6x** 🔥 |
 | **Context Switch** | 304 cycles | 2134 cycles | **7x** 🔥 |
 | **Thread-local Alloc** | 8 cycles | ~50 cycles | **6.25x** 🔥 |
@@ -96,7 +124,7 @@ Hit rate: > 95%
 └─────────────────────────────────────────────────────────────────┘
            │                      │                  │
 ┌──────────▼──────────────────────▼──────────────────▼───────────┐
-│                       MATÉRIEL (x86_64 / ARM64 / RISC-V)        │
+│                       MATÉRIEL (x86_64)                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

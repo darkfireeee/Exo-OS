@@ -1,301 +1,333 @@
-# 📋 TODO List - Exo-OS v0.5.0
+# 📋 Roadmap Exo-OS v0.5.0 "Stellar Engine"
 
 **Dernière mise à jour:** 2 décembre 2025  
-**Version cible:** v0.5.0 "Stellar Engine"  
-**État actuel:** v0.4.0 (~55% fonctionnel réel)
+**Version actuelle:** v0.4.1 "Quantum Leap"  
+**Version cible:** v0.5.0 "Stellar Engine"
 
 ---
 
-## 🔴 Priorité BLOQUANTE (Semaine 1)
+## 📊 Progression Globale
 
-### 1. ⚡ Context Switch Réel
-**Statut:** 🚨 CRITIQUE - VIDE!  
-**Fichier:** `kernel/src/scheduler/switch/windowed.rs`  
-**Problème:** Le fichier ne contient que des stubs vides!
+| Phase | Objectif | État | Priorité |
+|-------|----------|------|----------|
+| **Phase 1** | Context Switch Réel | ✅ 80% | 🔴 CRITIQUE |
+| **Phase 2** | Timer Preemption | 🟡 50% | 🔴 CRITIQUE |
+| **Phase 3** | Mémoire Virtuelle | 🔴 20% | 🟠 HAUTE |
+| **Phase 4** | VFS Minimal | 🔴 10% | 🟠 HAUTE |
+| **Phase 5** | Clavier PS/2 | 🔴 0% | 🟡 MOYENNE |
+| **Phase 6** | Premier Userspace | 🔴 0% | 🟡 MOYENNE |
+| **Phase 7** | Stabilisation | 🔴 0% | 🟢 NORMALE |
 
-**Code actuel (5 lignes):**
+**Progression globale v0.5.0:** 25% 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜
+
+---
+
+## ✅ Terminé dans v0.4.1
+
+### Boot & Initialisation
+- [x] Boot GRUB2 → Multiboot2 → Rust kernel
+- [x] Serial output (COM1 @ 115200 baud)
+- [x] VGA text mode avec splash screen animé
+- [x] **SSE/SIMD activé** (init_early avant tout code)
+
+### Mémoire
+- [x] Frame allocator (bitmap, ~256MB supporté)
+- [x] Heap allocator (linked-list, 10MB)
+- [x] Structures mmap/VMA (pas encore mapper)
+
+### Interruptions & CPU
+- [x] GDT avec segments kernel
+- [x] IDT avec 256 vecteurs
+- [x] PIC 8259 configuré (IRQs 32-47)
+- [x] Timer PIT 100Hz fonctionnel
+- [x] Interrupts timer reçus
+
+### Scheduler
+- [x] Structure 3-Queue EMA (Hot/Normal/Cold)
+- [x] Thread spawn avec allocation stack
+- [x] ThreadContext avec RSP/RIP
+- [x] **Context switch ASM** (global_asm! inline)
+- [x] 3 threads de test créés
+
+### Syscalls
+- [x] Dispatch table avec 400+ entrées
+- [x] Handlers stubs pour la plupart
+
+---
+
+## 🔴 Phase 1: Context Switch Réel (CRITIQUE)
+
+**Statut:** ✅ 80% - ASM implémenté, intégration en cours
+
+### Fichiers concernés
+- `kernel/src/scheduler/switch/windowed.rs` ✅
+- `kernel/src/scheduler/core/scheduler.rs` 🟡
+- `kernel/src/arch/x86_64/interrupts.rs` 🔴
+
+### Tâches
+- [x] Implémenter `windowed_context_switch` en global_asm!
+- [x] Implémenter `windowed_init_context` pour setup stack
+- [x] Corriger commentaires ASM (// → #)
+- [ ] **Appeler switch depuis timer handler**
+- [ ] Tester switch entre Thread A et Thread B
+- [ ] Mesurer cycles (objectif: <500)
+
+### Code à ajouter dans `interrupts.rs`
 ```rust
-pub fn init() { /* Placeholder */ }
-pub fn windowed_context_switch(_old: &Context, _new: &Context) {
-    // TODO: Implement
-}
-```
-
-**Solution requise:**
-```rust
-extern "C" {
-    fn windowed_context_switch(old_rsp: *mut u64, new_rsp: *const u64);
-    fn windowed_init_context(ctx: *mut u64, entry: u64, stack: u64);
-}
-
-pub fn switch_to(old: &mut ThreadContext, new: &ThreadContext) {
-    unsafe {
-        windowed_context_switch(
-            &mut old.rsp as *mut u64,
-            &new.rsp as *const u64
-        );
+// Dans timer_interrupt_handler:
+pub extern "x86-interrupt" fn timer_handler(_frame: InterruptStackFrame) {
+    // Incrémenter tick
+    crate::time::tick();
+    
+    // Preemption tous les 10 ticks (100ms)
+    if crate::time::ticks() % 10 == 0 {
+        crate::scheduler::schedule();
     }
+    
+    // EOI
+    unsafe { crate::arch::x86_64::pic::end_of_interrupt(0x20); }
 }
 ```
 
-**Tâches:**
-- [ ] Implémenter liaison FFI avec windowed_context_switch.S
-- [ ] Tester switch entre 2 threads
-- [ ] Mesurer cycles (<500 objectif)
-- [ ] Intégrer dans scheduler.rs switch_to_thread()
+---
+
+## 🔴 Phase 2: Timer Preemption (CRITIQUE)
+
+**Statut:** 🟡 50% - Timer fonctionne, preemption pas encore
+
+### Fichiers concernés
+- `kernel/src/time/mod.rs` 🟡
+- `kernel/src/scheduler/core/scheduler.rs` 🟡
+- `kernel/src/arch/x86_64/pic.rs` ✅
+
+### Tâches
+- [x] PIT configuré à 100Hz
+- [x] IRQ0 → handler appelé
+- [ ] **Compteur de ticks global**
+- [ ] **Fonction schedule() appelée depuis timer**
+- [ ] Quantum configurable (10-50ms)
+- [ ] Round-robin basique entre threads ready
 
 ---
 
-### 2. ⚡ Timer Preemption
-**Statut:** 🚨 CRITIQUE  
-**Fichier:** `kernel/src/arch/x86_64/interrupts.rs`  
-**Problème:** Timer tick ne déclenche pas schedule()
+## 🟠 Phase 3: Mémoire Virtuelle (HAUTE)
 
-**Tâches:**
-- [ ] Modifier timer_interrupt_handler
-- [ ] Appeler crate::scheduler::yield_now() tous les N ticks
-- [ ] Configurer quantum (10-50ms)
-- [ ] Tester preemption automatique
+**Statut:** 🔴 20% - Structures OK, mapping non implémenté
 
----
+### Fichiers concernés
+- `kernel/src/memory/virtual_mem/mapper.rs` 🔴
+- `kernel/src/memory/mmap.rs` 🟡
+- `kernel/src/memory/page_table.rs` 🟡
 
-### 3. ⚡ Page Table Mapper
-**Statut:** 🚨 CRITIQUE - NON IMPLÉMENTÉ  
-**Fichier:** `kernel/src/memory/virtual_mem/mapper.rs`  
-**Problème:** mmap/munmap créent des structures mais ne mappent pas!
+### Tâches
+- [x] Structures VMA et VmMapping
+- [x] Fonction mmap() structure
+- [ ] **Implémenter map_page(virt, phys, flags)**
+- [ ] **Implémenter unmap_page(virt)**
+- [ ] Flush TLB avec invlpg
+- [ ] mmap anonyme fonctionnel
+- [ ] mprotect pour changer permissions
 
-**Tâches:**
-- [ ] Implémenter map_page(virt, phys, flags)
-- [ ] Implémenter unmap_page(virt)
-- [ ] Flush TLB (invlpg)
-- [ ] Tester mapping anonyme
-
----
-
-## 🟠 Priorité HAUTE (Semaines 2-3)
-
-### 4. 🔧 mmap/munmap Réels
-**Statut:** ⚠️ Partiel  
-**Fichier:** `kernel/src/memory/mmap.rs`
-
-**Tâches:**
-- [ ] Appeler mapper dans mmap()
-- [ ] Appeler mapper dans munmap()
-- [ ] Gérer protections (R/W/X)
-- [ ] Allouer vraies frames physiques
-
----
-
-### 5. 🔧 sys_brk Réel
-**Statut:** ⚠️ Stub  
-**Fichier:** `kernel/src/syscall/handlers/memory.rs`
-
-**Tâches:**
-- [ ] Implémenter expansion heap
-- [ ] Implémenter réduction heap
-- [ ] Mapper nouvelles pages
-- [ ] Retourner nouvelle adresse
+### Code requis pour `mapper.rs`
+```rust
+pub fn map_page(
+    page_table: &mut PageTable,
+    virt: VirtAddr,
+    phys: PhysAddr,
+    flags: PageFlags,
+) -> Result<(), MapError> {
+    let p4 = page_table.level4_table();
+    let p4_index = virt.p4_index();
+    
+    // Créer P3 si nécessaire
+    if !p4[p4_index].is_present() {
+        let frame = allocate_frame()?;
+        p4[p4_index] = PageTableEntry::new(frame, PageFlags::PRESENT | PageFlags::WRITABLE);
+    }
+    
+    // ... continuer pour P3, P2, P1
+    
+    // Mapper la page finale
+    p1[p1_index] = PageTableEntry::new(phys, flags);
+    
+    // Flush TLB
+    unsafe { asm!("invlpg [{}]", in(reg) virt.as_u64()); }
+    
+    Ok(())
+}
+```
 
 ---
 
-### 6. 🔧 tmpfs Fonctionnel
-**Statut:** ❌ Stub  
-**Fichier:** `kernel/src/fs/vfs/tmpfs.rs`
+## 🟠 Phase 4: VFS Minimal (HAUTE)
 
-**Tâches:**
-- [ ] Implémenter TmpfsInode (fichier/dossier)
-- [ ] Implémenter create, read, write
-- [ ] Monter sur /
-- [ ] Créer /dev, /tmp, /etc
+**Statut:** 🔴 10% - Structure VFS existe, tmpfs stub
+
+### Fichiers concernés
+- `kernel/src/fs/vfs/mod.rs` 🟡
+- `kernel/src/fs/vfs/tmpfs.rs` 🔴
+- `kernel/src/fs/vfs/devfs.rs` 🔴
+
+### Tâches
+- [x] Trait VfsNode défini
+- [x] Structure VFS avec root
+- [ ] **Implémenter TmpfsInode (fichier/dossier)**
+- [ ] create(), read(), write() pour tmpfs
+- [ ] Monter tmpfs sur /
+- [ ] Créer /dev, /tmp, /proc
+- [ ] /dev/null, /dev/zero, /dev/console
 
 ---
 
-### 7. 🔧 Keyboard Driver
-**Statut:** ❌ Non existant  
-**Fichier:** `kernel/src/drivers/input/keyboard.rs` (à créer)
+## 🟡 Phase 5: Clavier PS/2 (MOYENNE)
 
-**Tâches:**
-- [ ] Créer fichier + module
-- [ ] Handler IRQ1
-- [ ] Scan code → ASCII (US layout)
-- [ ] Buffer circulaire 256 chars
+**Statut:** 🔴 0% - Non commencé
+
+### Fichiers à créer
+- `kernel/src/drivers/input/mod.rs`
+- `kernel/src/drivers/input/keyboard.rs`
+- `kernel/src/drivers/input/scancode.rs`
+
+### Tâches
+- [ ] Créer module drivers/input
+- [ ] Handler IRQ1 (keyboard)
+- [ ] Table scancode → ASCII (US layout)
+- [ ] Buffer circulaire 256 caractères
+- [ ] Fonction keyboard_read() bloquante
 - [ ] Exposer via /dev/tty
 
 ---
 
-## 🟡 Priorité MOYENNE (Semaines 3-4)
+## 🟡 Phase 6: Premier Userspace (MOYENNE)
 
-### 8. 📂 Initramfs/TarFS
-**Statut:** ❌ Non existant  
-**Fichier:** `kernel/src/fs/tarfs/` (à créer)
+**Statut:** 🔴 0% - Non commencé
 
-**Tâches:**
-- [ ] Parser header TAR
-- [ ] Extraire fichiers en mémoire
-- [ ] Monter sur /initrd
-- [ ] Accès lecture seule
+### Fichiers concernés
+- `kernel/src/posix_x/elf/loader.rs` 🔴
+- `kernel/src/arch/x86_64/usermode.rs` (à créer)
+- `userspace/init/main.c` (à créer)
 
----
-
-### 9. 📂 ELF Loader
-**Statut:** ❌ Stub  
-**Fichier:** `kernel/src/posix_x/elf/loader.rs`
-
-**Tâches:**
+### Tâches
 - [ ] Parser ELF64 header
 - [ ] Charger segments PT_LOAD
-- [ ] Initialiser .bss
+- [ ] Initialiser .bss à zéro
 - [ ] Préparer stack userspace
-- [ ] Retourner entry point
-
----
-
-### 10. 📂 User Mode Transition
-**Statut:** ❌ Non existant  
-**Fichier:** `kernel/src/arch/x86_64/usermode.rs` (à créer)
-
-**Tâches:**
-- [ ] Configurer TSS pour Ring 0 stack
-- [ ] Préparer iretq frame
-- [ ] Jump Ring 3
+- [ ] Configurer TSS pour ring 0 stack
+- [ ] Transition vers Ring 3 (iretq)
 - [ ] Syscall return (sysretq)
 
----
-
-### 11. 📂 /bin/init
-**Statut:** ❌ Non existant  
-**Fichier:** `userspace/init/main.c` (à créer)
-
-**Code minimal:**
+### /bin/init minimal
 ```c
+// userspace/init/main.c
 void _start() {
     const char* msg = "Exo-OS v0.5.0 Userspace!\n";
+    // sys_write(1, msg, 26)
     asm volatile("syscall" :: "a"(1), "D"(1), "S"(msg), "d"(26));
-    for(;;) asm volatile("syscall" :: "a"(34)); // pause
+    // Boucle infinie avec pause
+    for(;;) asm volatile("syscall" :: "a"(34)); // sys_pause
 }
 ```
 
 ---
 
-## 🟢 Priorité NORMALE (Semaines 4-6)
+## 🟢 Phase 7: Stabilisation (NORMALE)
 
-### 12. Multi-core (SMP)
-**Statut:** ⚠️ Désactivé  
-**Fichier:** `kernel/src/arch/x86_64/boot/trampoline.asm`  
-**Problème:** Directives NASM incompatibles avec global_asm!()
-
-**Tâches:**
-- [ ] Compiler trampoline.asm séparément avec NASM
-- [ ] Lier via build.rs
-- [ ] Réactiver SMP dans smp.rs
-- [ ] Tester sur QEMU -smp 4
-
----
-
-### 13. Syscall Handlers Manquants
-**Statut:** ⚠️ ~70% stubs  
-**Fichiers:** `kernel/src/syscall/handlers/*.rs`
-
-**Priorités:**
-- [ ] fork() - Duplication process (structure, pas COW)
-- [ ] exec() - Charger ELF
-- [ ] wait() - Attendre child
-- [ ] pipe() - IPC basique
-- [ ] dup/dup2() - Duplication FD
-
----
-
-### 14. Cleanup Warnings
-**Statut:** 📝 TODO  
-**Objectif:** Réduire 200+ warnings à <50
-
-**Tâches:**
-- [ ] `cargo fix --allow-dirty`
-- [ ] Ajouter #[allow(dead_code)] sur code préparatoire
-- [ ] Préfixer _ sur variables debug
-- [ ] Migrer static mut vers SyncUnsafeCell
-
----
-
-### 15. Documentation
-**Statut:** 📝 TODO
-
-**Tâches:**
+### Tâches
+- [ ] Réduire warnings (200+ → <50)
+- [ ] Documenter syscalls implémentés
+- [ ] Tests de regression
+- [ ] Benchmark context switch
 - [ ] Mettre à jour ARCHITECTURE.md
-- [ ] Documenter syscalls supportés
-- [ ] Créer USERSPACE_GUIDE.md
-- [ ] Générer rustdoc
 
 ---
 
-## 🔵 Priorité BASSE (Après v0.5.0)
+## 🔮 Après v0.5.0 (Futur)
 
-### 16. 🔮 Prediction EMA Scheduler
-- [ ] Implémenter scheduler/prediction/ema.rs
-- [ ] Historique exécutions
-- [ ] Classification Hot/Normal/Cold automatique
+### v0.6.0 "Nebula Core"
+- [ ] Multi-core SMP (APIC, trampoline)
+- [ ] fork/exec/wait complets
+- [ ] Pipes et redirection
+- [ ] Shell basique
 
-### 17. 🔮 Zero-Copy IPC
-- [ ] Shared memory réel
-- [ ] Fusion Ring avec mapping
-- [ ] Benchmark vs Linux pipes
-
-### 18. 🔮 Network Stack
-- [ ] TCP/IP stack
-- [ ] Socket API
+### v0.7.0 "Quantum Gate"
+- [ ] Network stack TCP/IP
 - [ ] virtio-net driver
+- [ ] Socket API
 
-### 19. 🔮 Real Filesystems
-- [ ] FAT32 driver
-- [ ] ext4 read-only
+### v0.8.0 "Dark Matter"
+- [ ] Filesystems réels (FAT32, ext4)
 - [ ] AHCI/NVMe drivers
+- [ ] Persistence
+
+### v1.0.0 "Singularity"
+- [ ] IA Agents intégrés
+- [ ] Fusion Rings IPC
+- [ ] Zero-copy everywhere
+- [ ] Production ready
 
 ---
 
-## 📊 Progression v0.5.0
+## 📅 Planning Semaine
 
-| Phase | Objectif | État |
-|-------|----------|------|
-| **Phase 1** | Context Switch | 🔴 0% |
-| **Phase 2** | Mémoire Virtuelle | 🔴 0% |
-| **Phase 3** | VFS Minimal | 🔴 0% |
-| **Phase 4** | Keyboard | 🔴 0% |
-| **Phase 5** | Userspace | 🔴 0% |
-| **Phase 6** | Stabilisation | 🔴 0% |
+### Semaine 1 (2-8 décembre 2025)
+| Jour | Objectif | Fichiers |
+|------|----------|----------|
+| Lun | Timer preemption | interrupts.rs, time/mod.rs |
+| Mar | schedule() dans timer | scheduler.rs |
+| Mer | Test context switch | windowed.rs |
+| Jeu | Debug + mesures | - |
+| Ven | mapper.rs début | mapper.rs |
+| Sam | map_page impl | mapper.rs |
+| Dim | Tests mémoire | - |
 
-**Progression globale v0.5.0:** 0% ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜
-
----
-
-## 🎯 Objectif Cette Semaine
-
-1. **Jour 1-2:** Implémenter windowed.rs avec liaison ASM
-2. **Jour 3:** Tester context switch entre 2 threads
-3. **Jour 4:** Timer preemption
-4. **Jour 5:** Debug et stabilisation
-5. **Weekend:** Début mapper.rs
+### Semaine 2 (9-15 décembre 2025)
+| Jour | Objectif |
+|------|----------|
+| Lun-Mar | mmap/munmap réels |
+| Mer-Jeu | tmpfs basique |
+| Ven-Dim | Clavier PS/2 |
 
 ---
 
-## ✅ Terminé (Héritage v0.4.0)
+## 🛠️ Commandes Utiles
 
-- [x] Boot GRUB → Rust
-- [x] Frame allocator (bitmap)
-- [x] Heap allocator (10MB)
-- [x] GDT/IDT
-- [x] PIC 8259 + PIT 100Hz
-- [x] Serial output
-- [x] VGA text mode
-- [x] 3-Queue scheduler (structure)
-- [x] Thread spawn (structure)
-- [x] Syscall dispatch table
+```bash
+# Build complet
+wsl bash -c "./build.sh"
+
+# Test QEMU
+qemu-system-x86_64 -cdrom build/exo_os.iso -m 256M -serial stdio
+
+# Debug avec logs
+qemu-system-x86_64 -cdrom build/exo_os.iso -m 256M -serial file:serial.log -d int -D qemu.log
+
+# Voir serial log
+cat serial.log
+
+# Clean build
+rm -rf target build && ./build.sh
+```
+
+---
+
+## 📈 Métriques de Succès v0.5.0
+
+| Métrique | Objectif | Actuel |
+|----------|----------|--------|
+| Context switch | <500 cycles | 🔴 N/A |
+| Preemption | Automatique | 🔴 Non |
+| Threads actifs | 3+ | ✅ 3 |
+| Uptime stable | >5 min | ✅ ∞ |
+| Userspace | 1 process | 🔴 Non |
 
 ---
 
 **Légende:**
-- 🚨 BLOQUANT - Empêche le fonctionnement
-- ⚠️ Partiel - Structure OK, implémentation manquante
-- ❌ Non existant - À créer
-- 📝 TODO - Planifié
 - ✅ Terminé
-- 🔮 Futur - Après v0.5.0
+- 🟡 En cours / Partiel
+- 🔴 Non commencé
+- 🔴 CRITIQUE - Bloquant
+- 🟠 HAUTE - Important
+- 🟡 MOYENNE - Nécessaire
+- 🟢 NORMALE - Nice to have
+- 🔮 FUTUR - Après v0.5.0

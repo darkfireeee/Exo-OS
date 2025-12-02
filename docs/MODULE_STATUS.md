@@ -1,8 +1,8 @@
 # 📊 MODULE STATUS - État Réel du Kernel Exo-OS
 
 **Date de mise à jour**: 2 décembre 2025  
-**Version**: v0.4.0 "Quantum Leap"  
-**Basé sur**: Analyse complète du code source
+**Version**: v0.4.1 "Quantum Leap"  
+**Basé sur**: Analyse complète du code source + tests QEMU
 
 ---
 
@@ -10,20 +10,31 @@
 
 | Module | Fichiers | État | Fonctionnel |
 |--------|----------|------|-------------|
-| **lib.rs** | 1 (852 lignes) | ✅ Complet | Boot, init, splash |
+| **lib.rs** | 1 (855 lignes) | ✅ Complet | Boot, init, splash, SSE |
+| **arch/x86_64** | 20+ fichiers | ✅ 85% | GDT/IDT/PIC/PIT/SSE OK |
 | **memory/** | 12+ fichiers | ⚠️ 60% | Alloc OK, mapping ❌ |
-| **scheduler/** | 15+ fichiers | ⚠️ 50% | Structure OK, switch ❌ |
+| **scheduler/** | 15+ fichiers | ⚠️ 70% | Structure + ASM OK, schedule() ❌ |
 | **syscall/** | 25+ fichiers | ⚠️ 25% | Table OK, handlers stubs |
 | **fs/** | 14+ fichiers | ⚠️ 30% | Cache OK, I/O ❌ |
 | **ipc/** | 10+ fichiers | ⚠️ 20% | Structure OK, ring ❌ |
 | **security/** | 12+ fichiers | ✅ 70% | Capabilities OK |
-| **time/** | 5 fichiers | ✅ 80% | TSC/RTC OK |
+| **time/** | 5 fichiers | ✅ 80% | TSC/RTC/PIT OK |
 | **net/** | 8+ fichiers | ❌ 10% | Structures only |
-| **drivers/** | 10+ fichiers | ⚠️ 40% | Serial/VGA OK |
+| **drivers/** | 10+ fichiers | ⚠️ 50% | Serial/VGA OK, KB ❌ |
 | **posix_x/** | 20+ fichiers | ✅ 70% | FD table OK |
-| **boot/** | 6 fichiers | ✅ 80% | Phases OK |
+| **boot/** | 6 fichiers | ✅ 90% | Phases OK, Multiboot2 OK |
 
-**Estimation globale: ~55% fonctionnel** (vs 81% annoncé)
+**Estimation globale: ~60% fonctionnel**
+
+---
+
+## ✅ Nouveautés v0.4.1
+
+- **SSE/SIMD** activé via `simd::init_early()` avant tout code
+- **Context switch ASM** implémenté en `global_asm!` (windowed.rs)
+- **Timer interrupts** fonctionnels (PIT 100Hz, IRQ reçus)
+- **3 threads créés** avec succès au boot
+- **Pas de Triple Fault** - kernel stable
 
 ---
 
