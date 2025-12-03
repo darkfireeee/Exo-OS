@@ -5,10 +5,17 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
+use core::fmt;
 
 /// Capability ID
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CapabilityId(pub u64);
+
+impl fmt::Display for CapabilityId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Cap#{}", self.0)
+    }
+}
 
 /// IPC capability types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +156,7 @@ impl CapabilityFlags {
 }
 
 /// IPC capability token
+#[derive(Clone)]
 pub struct Capability {
     /// Unique capability ID
     pub id: CapabilityId,
@@ -232,6 +240,7 @@ pub struct CapabilityGrant {
 }
 
 /// Process capability set
+#[derive(Clone)]
 pub struct ProcessCapabilities {
     /// Process ID
     pub pid: u64,
@@ -278,6 +287,9 @@ impl ProcessCapabilities {
         self.capabilities.retain(|c| !c.is_expired(current_time));
     }
 }
+
+/// Type alias for backwards compatibility
+pub type CapabilityTable = ProcessCapabilities;
 
 use alloc::collections::BTreeMap;
 use spin::Mutex;

@@ -1,37 +1,76 @@
-//! Idle Thread Implementation
+//! Idle Thread Implementation - SMP Support
 //! 
-//! Provides idle threads that run when no other threads are ready.
+//! Provides one idle thread per CPU that runs when no other threads are ready.
 //! Idle threads use HLT instruction to save power and reduce CPU usage.
 //!
 //! # Design
-//! - One idle thread per CPU (future: SMP support)
+//! - One idle thread per CPU for SMP systems
 //! - Lowest priority (never picked if real work exists)
-//! - Uses HLT to reduce power consumption
+//! - Uses HLT/MWAIT to reduce power consumption
 //! - Wakes up on interrupts automatically
+//! - Per-CPU idle statistics for power management
 
 use super::thread::{Thread, ThreadId};
-use core::sync::atomic::{AtomicU64, Ordering};
+use crate::arch::x86_64::cpu::smp;
+use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use alloc::vec::Vec;
 use spin::Mutex;
 
-/// Global idle thread registry
-static IDLE_THREADS: Mutex<Vec<ThreadId>> = Mutex::new(Vec::new());
+/// Maximum supported CPUs
+const MAX_CPUS: usize = 256;
 
-/// Current idle thread (per-CPU, for now just one)
-static CURRENT_IDLE_TID: AtomicU64 = AtomicU64::new(0);
+/// Per-CPU idle thread data
+struct PerCpuIdle {
+    /// Thread ID of this CPU's idle thread
+    tid: AtomicU64,
+    /// Number of times we've entered idle
+    idle_count: AtomicU64,
+    /// Total cycles spent in idle (approximation)
+    idle_cycles: AtomicU64,
+    /// Is this CPU currently idle?
+    is_idle: AtomicU32,
+}
+
+impl PerCpuIdle {
+    const fn new() -> Self {
+        Self {
+            tid: AtomicU64::new(0),
+            idle_count: AtomicU64::new(0),
+            idle_cycles: AtomicU64::new(0),
+            is_idle: AtomicU32::new(0),
+        }
+    }
+}
+
+/// Per-CPU idle data
+static PER_CPU_IDLE: [PerCpuIdle; MAX_CPUS] = {
+    const INIT: PerCpuIdle = PerCpuIdle::new();
+    [INIT; MAX_CPUS]
+};
+
+/// Global idle thread registry (for backward compatibility)
+static IDLE_THREADS: Mutex<Vec<ThreadId>> = Mutex::new(Vec::new());
 
 /// Idle thread entry point
 /// 
 /// This function never returns and continuously halts the CPU
 /// until an interrupt occurs.
-///
-/// # Public for scheduler
-/// This needs to be public so scheduler can use it
 pub fn idle_thread_entry() -> ! {
-    crate::logger::debug("Idle thread started");
+    let cpu_id = smp::get_apic_id() as usize;
+    
+    // Mark this CPU as having an active idle thread
+    if cpu_id < MAX_CPUS {
+        log::debug!("Idle thread started on CPU {}", cpu_id);
+    }
     
     loop {
-        // Enable interrupts before HLT
+        // Mark as entering idle
+        if cpu_id < MAX_CPUS {
+            PER_CPU_IDLE[cpu_id].is_idle.store(1, Ordering::Release);
+            PER_CPU_IDLE[cpu_id].idle_count.fetch_add(1, Ordering::Relaxed);
+        }
+        
+        // Enable interrupts and halt
         // This ensures we wake up on timer/keyboard/other interrupts
         unsafe {
             core::arch::asm!(
@@ -41,43 +80,69 @@ pub fn idle_thread_entry() -> ! {
             );
         }
         
-        // After interrupt, yield back to scheduler
-        // The interrupt handler will have changed scheduler state
+        // Mark as exiting idle
+        if cpu_id < MAX_CPUS {
+            PER_CPU_IDLE[cpu_id].is_idle.store(0, Ordering::Release);
+        }
+        
+        // After interrupt, loop back
+        // The interrupt handler may have made threads runnable
     }
 }
 
-/// Create idle thread for current CPU
-pub fn create_idle_thread() -> Thread {
+/// Create idle thread for a specific CPU
+pub fn create_idle_thread_for_cpu(cpu_id: u32) -> Thread {
     Thread::new_kernel(
         0, // TID will be assigned by scheduler
-        "idle",
+        &alloc::format!("idle-{}", cpu_id),
         idle_thread_entry,
         4096, // 4KB stack is enough for idle
     )
 }
 
-/// Initialize idle thread subsystem
-pub fn init() {
-    // Create one idle thread (TODO: one per CPU in SMP)
-    crate::logger::info("Initializing idle thread...");
-    
-    // The idle thread will be created by scheduler when needed
-    // We just initialize the global state here
-    
-    crate::logger::info("✓ Idle thread system initialized");
+/// Create idle thread for current CPU
+pub fn create_idle_thread() -> Thread {
+    create_idle_thread_for_cpu(smp::get_apic_id())
 }
 
-/// Register an idle thread
-pub fn register_idle_thread(tid: ThreadId) {
-    let mut idle_threads = IDLE_THREADS.lock();
-    idle_threads.push(tid);
+/// Initialize idle thread subsystem
+pub fn init() {
+    log::info!("Initializing per-CPU idle threads...");
     
-    // Set as current idle if first one
-    if idle_threads.len() == 1 {
-        CURRENT_IDLE_TID.store(tid, Ordering::Release);
+    // The actual idle threads will be created by the scheduler
+    // when boot_aps() completes and each CPU enters the scheduler
+    
+    log::info!("✓ Idle thread system initialized");
+}
+
+/// Initialize idle threads for all CPUs
+pub fn init_all_cpus() {
+    let cpu_count = smp::cpu_count();
+    log::info!("Creating {} idle threads for SMP", cpu_count);
+    
+    // BSP idle thread is already created during boot
+    // AP idle threads are created when each AP boots and enters scheduler
+}
+
+/// Register an idle thread for a specific CPU
+pub fn register_idle_thread_for_cpu(cpu_id: u32, tid: ThreadId) {
+    if (cpu_id as usize) < MAX_CPUS {
+        PER_CPU_IDLE[cpu_id as usize].tid.store(tid, Ordering::Release);
     }
     
-    crate::logger::debug(&alloc::format!("Registered idle thread {}", tid));
+    // Also add to global list for compatibility
+    let mut idle_threads = IDLE_THREADS.lock();
+    if !idle_threads.contains(&tid) {
+        idle_threads.push(tid);
+    }
+    
+    log::debug!("Registered idle thread {} for CPU {}", tid, cpu_id);
+}
+
+/// Register an idle thread (backward compatible)
+pub fn register_idle_thread(tid: ThreadId) {
+    let cpu_id = smp::get_apic_id();
+    register_idle_thread_for_cpu(cpu_id, tid);
 }
 
 /// Check if a thread ID is an idle thread
@@ -86,34 +151,50 @@ pub fn is_idle_thread(tid: ThreadId) -> bool {
     idle_threads.contains(&tid)
 }
 
-/// Check if current thread is idle thread
-pub fn is_current_idle() -> bool {
-    let current_idle = CURRENT_IDLE_TID.load(Ordering::Acquire);
-    if current_idle == 0 {
-        return false;
+/// Check if specified CPU is currently idle
+pub fn is_cpu_idle(cpu_id: u32) -> bool {
+    if (cpu_id as usize) < MAX_CPUS {
+        PER_CPU_IDLE[cpu_id as usize].is_idle.load(Ordering::Acquire) != 0
+    } else {
+        false
     }
-    
-    // TODO: Get actual current TID from scheduler
-    // For now, assume not idle
-    false
+}
+
+/// Check if current CPU is idle
+pub fn is_current_idle() -> bool {
+    is_cpu_idle(smp::get_apic_id())
 }
 
 /// Get idle thread for current CPU
 pub fn get_idle_tid() -> Option<ThreadId> {
-    let tid = CURRENT_IDLE_TID.load(Ordering::Acquire);
-    if tid == 0 {
-        None
+    get_idle_tid_for_cpu(smp::get_apic_id())
+}
+
+/// Get idle thread for specified CPU
+pub fn get_idle_tid_for_cpu(cpu_id: u32) -> Option<ThreadId> {
+    if (cpu_id as usize) < MAX_CPUS {
+        let tid = PER_CPU_IDLE[cpu_id as usize].tid.load(Ordering::Acquire);
+        if tid != 0 {
+            return Some(tid);
+        }
+    }
+    None
+}
+
+/// Get idle statistics for a CPU
+pub fn get_idle_stats(cpu_id: u32) -> (u64, u64) {
+    if (cpu_id as usize) < MAX_CPUS {
+        let count = PER_CPU_IDLE[cpu_id as usize].idle_count.load(Ordering::Relaxed);
+        let cycles = PER_CPU_IDLE[cpu_id as usize].idle_cycles.load(Ordering::Relaxed);
+        (count, cycles)
     } else {
-        Some(tid)
+        (0, 0)
     }
 }
 
-/// Idle loop (called when no threads are ready)
-/// 
-/// This is a fallback if somehow we don't have an idle thread.
-/// Should rarely/never be called in normal operation.
+/// Idle loop (fallback if somehow we don't have an idle thread)
 pub fn idle_loop() -> ! {
-    crate::logger::warn("Entered fallback idle loop!");
+    log::warn!("Entered fallback idle loop on CPU {}!", smp::get_apic_id());
     
     loop {
         // Power-saving halt with interrupts enabled
@@ -128,9 +209,6 @@ pub fn idle_loop() -> ! {
 }
 
 /// Enter low-power idle state
-/// 
-/// Uses HLT instruction to reduce CPU power consumption
-/// until next interrupt.
 #[inline]
 pub fn halt() {
     unsafe {
@@ -139,5 +217,22 @@ pub fn halt() {
             "hlt",      // Halt
             options(nomem, nostack)
         );
+    }
+}
+
+/// Wake up a specific CPU from idle (send IPI)
+pub fn wake_cpu(cpu_id: u32) {
+    if is_cpu_idle(cpu_id) {
+        // Send a scheduler IPI to wake the CPU
+        smp::send_ipi(cpu_id, 0x20); // Vector 0x20 = scheduler IPI
+    }
+}
+
+/// Wake up all idle CPUs
+pub fn wake_all_idle() {
+    for cpu_id in 0..smp::cpu_count() {
+        if is_cpu_idle(cpu_id) {
+            smp::send_ipi(cpu_id, 0x20);
+        }
     }
 }

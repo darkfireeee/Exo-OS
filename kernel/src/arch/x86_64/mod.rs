@@ -24,6 +24,7 @@ pub mod serial;
 pub mod simd;
 pub mod syscall;
 pub mod tss;
+pub mod usermode;
 
 // Constantes d'architecture
 pub const PAGE_SIZE: usize = 4096;

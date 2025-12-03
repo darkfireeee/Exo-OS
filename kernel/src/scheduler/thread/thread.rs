@@ -164,6 +164,68 @@ impl Thread {
         VirtualAddress::new(ptr as usize)
     }
 
+    /// Create a new user-space thread
+    /// 
+    /// This creates a thread that will execute in Ring 3 (user mode).
+    /// The thread will start at `entry_point` with stack at `user_stack_top`.
+    pub fn new_user(
+        id: ThreadId,
+        name: &str,
+        entry_point: VirtualAddress,
+        user_stack_top: VirtualAddress,
+        kernel_stack_size: usize,
+    ) -> Self {
+        // Allocate kernel stack (for syscall/interrupt handling)
+        let kernel_stack = Self::allocate_stack(kernel_stack_size);
+        let kernel_stack_top = (kernel_stack.value() + kernel_stack_size) as u64;
+
+        // Create context that will jump to user mode via trampoline
+        let mut context = ThreadContext::empty();
+        
+        // Store user entry point and stack in context for the trampoline
+        context.rdi = entry_point.value() as u64;
+        context.rsi = user_stack_top.value() as u64;
+        
+        // Setup context to jump to user_mode_trampoline
+        unsafe {
+            crate::scheduler::switch::windowed::init_context(
+                &mut context as *mut ThreadContext,
+                kernel_stack_top,
+                user_mode_trampoline as u64,
+            );
+        }
+
+        Self {
+            id,
+            name: name.into(),
+            state: ThreadState::Ready,
+            priority: ThreadPriority::Normal,
+            context,
+            kernel_stack,
+            kernel_stack_size,
+            user_stack: Some(user_stack_top),
+            cpu_affinity: None,
+            total_runtime_ns: AtomicU64::new(0),
+            context_switches: AtomicU64::new(0),
+            ema_runtime_ns: AtomicU64::new(0),
+
+            // Phase 9: Parent-child tracking
+            parent_id: AtomicU64::new(0),
+            children: spin::Mutex::new(Vec::new()),
+            exit_status: core::sync::atomic::AtomicI32::new(0),
+
+            // Phase 11: Signal handling
+            sigmask: spin::Mutex::new(crate::posix_x::signals::SigSet::empty()),
+            pending_signals: spin::Mutex::new(crate::posix_x::signals::SigSet::empty()),
+            signal_handlers: spin::Mutex::new([crate::posix_x::signals::SigAction::Default; 64]),
+        }
+    }
+
+    /// Check if this is a user-space thread
+    pub fn is_user_thread(&self) -> bool {
+        self.user_stack.is_some()
+    }
+
     /// Get thread ID
     pub fn id(&self) -> ThreadId {
         self.id
@@ -393,4 +455,49 @@ static NEXT_THREAD_ID: AtomicU64 = AtomicU64::new(1);
 /// Allocate a new thread ID
 pub fn alloc_thread_id() -> ThreadId {
     NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Trampoline function for user-space threads
+/// 
+/// This function is called when a user thread is first scheduled.
+/// It sets up TSS.RSP0 and jumps to user mode.
+/// 
+/// Arguments passed via ThreadContext (set in Thread::new_user):
+/// - rdi: user entry point address
+/// - rsi: user stack pointer
+fn user_mode_trampoline() -> ! {
+    // Get entry point and stack from registers (set by init_context)
+    let entry_point: u64;
+    let user_stack: u64;
+    
+    unsafe {
+        core::arch::asm!(
+            "",
+            out("rdi") entry_point,
+            out("rsi") user_stack,
+            options(nomem, nostack)
+        );
+    }
+    
+    log::info!(
+        "User mode trampoline: entry={:#x}, stack={:#x}",
+        entry_point, user_stack
+    );
+    
+    // Set up TSS.RSP0 for kernel re-entry on syscall/interrupt
+    let current_rsp: u64;
+    unsafe {
+        core::arch::asm!("mov {}, rsp", out(reg) current_rsp, options(nomem, nostack));
+        crate::arch::x86_64::tss::set_rsp0(current_rsp);
+    }
+    
+    // Create user context and jump to user mode
+    let entry = VirtualAddress::new(entry_point as usize);
+    let stack = VirtualAddress::new(user_stack as usize);
+    
+    let context = crate::arch::x86_64::usermode::UserContext::new(entry, stack);
+    
+    unsafe {
+        crate::arch::x86_64::usermode::jump_to_usermode(&context);
+    }
 }

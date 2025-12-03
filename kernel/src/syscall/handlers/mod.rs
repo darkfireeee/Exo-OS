@@ -1180,5 +1180,10 @@ fn memory_err_to_syscall_err(
         MemoryError::InvalidParameter => SyscallError::InvalidArgument,
         MemoryError::Mfile => SyscallError::IoError,
         MemoryError::InternalError(_) => SyscallError::IoError,
+        MemoryError::WouldBlock => SyscallError::WouldBlock,
+        MemoryError::Timeout => SyscallError::Timeout,
+        MemoryError::Interrupted => SyscallError::Interrupted,
+        MemoryError::QueueFull => SyscallError::WouldBlock,
+        MemoryError::NotSupported => SyscallError::NotSupported,
     }
 }

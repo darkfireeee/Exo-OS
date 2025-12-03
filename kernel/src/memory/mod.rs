@@ -5,16 +5,21 @@ pub mod cache;
 pub mod dma;
 pub mod heap;
 pub mod mmap;
+pub mod pat;
 pub mod physical;
 pub mod protection;
 pub mod shared;
+pub mod user_space;
 pub mod virtual_mem;
 
 // Re-exports
 pub use address::{PhysicalAddress, VirtualAddress};
 pub use heap::LockedHeap;
 pub use physical::Frame;
+pub use physical::buddy_allocator::PAGE_SIZE;
 pub use protection::PageProtection;
+pub use pat::MemoryType;
+pub use user_space::{UserAddressSpace, UserPageFlags};
 
 // Error type for memory operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +35,16 @@ pub enum MemoryError {
     InvalidParameter,
     Mfile,
     InternalError(&'static str),
+    /// Operation would block
+    WouldBlock,
+    /// Operation timed out
+    Timeout,
+    /// Operation was interrupted
+    Interrupted,
+    /// Operation not supported
+    NotSupported,
+    /// Queue is full
+    QueueFull,
 }
 
 impl core::fmt::Display for MemoryError {
@@ -46,6 +61,11 @@ impl core::fmt::Display for MemoryError {
             MemoryError::InvalidParameter => write!(f, "Invalid parameter"),
             MemoryError::Mfile => write!(f, "Too many open files"),
             MemoryError::InternalError(msg) => write!(f, "Internal error: {}", msg),
+            MemoryError::WouldBlock => write!(f, "Would block"),
+            MemoryError::Timeout => write!(f, "Timeout"),
+            MemoryError::Interrupted => write!(f, "Interrupted"),
+            MemoryError::NotSupported => write!(f, "Not supported"),
+            MemoryError::QueueFull => write!(f, "Queue full"),
         }
     }
 }

@@ -10,6 +10,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 pub const PAGE_SIZE: usize = 4096;
 
 /// Shared page descriptor
+#[derive(Debug)]
 pub struct SharedPage {
     /// Physical address
     phys_addr: PhysicalAddress,
@@ -90,27 +91,164 @@ impl SharedPage {
     }
 }
 
-/// Allocate shared page
+use spin::Mutex;
+use alloc::collections::BTreeMap;
+
+/// Global shared page allocator
+static SHARED_PAGE_ALLOCATOR: Mutex<SharedPageAllocator> = Mutex::new(SharedPageAllocator::new());
+
+/// Shared page allocator with reference counting
+struct SharedPageAllocator {
+    /// Next allocation address (bump allocator for simplicity)
+    next_addr: usize,
+    /// End of allocatable region
+    end_addr: usize,
+    /// Active allocations: phys_addr -> ref_count
+    allocations: Option<BTreeMap<usize, usize>>,
+}
+
+impl SharedPageAllocator {
+    const fn new() -> Self {
+        Self {
+            // Start at 32MB, reserve 0x2000000 - 0x4000000 (32MB) for shared pages
+            next_addr: 0x2000_0000,
+            end_addr: 0x4000_0000,
+            allocations: None,
+        }
+    }
+    
+    fn ensure_init(&mut self) {
+        if self.allocations.is_none() {
+            self.allocations = Some(BTreeMap::new());
+        }
+    }
+    
+    fn allocate(&mut self) -> Option<PhysicalAddress> {
+        self.ensure_init();
+        
+        if self.next_addr + PAGE_SIZE > self.end_addr {
+            return None;
+        }
+        
+        let addr = self.next_addr;
+        self.next_addr += PAGE_SIZE;
+        
+        // Track allocation
+        if let Some(ref mut allocs) = self.allocations {
+            allocs.insert(addr, 1);
+        }
+        
+        log::trace!("SharedPageAllocator: allocated page at {:#x}", addr);
+        Some(PhysicalAddress::new(addr))
+    }
+    
+    fn retain(&mut self, addr: usize) -> bool {
+        self.ensure_init();
+        
+        if let Some(ref mut allocs) = self.allocations {
+            if let Some(ref_count) = allocs.get_mut(&addr) {
+                *ref_count += 1;
+                return true;
+            }
+        }
+        false
+    }
+    
+    fn release(&mut self, addr: usize) -> Option<usize> {
+        self.ensure_init();
+        
+        if let Some(ref mut allocs) = self.allocations {
+            if let Some(ref_count) = allocs.get_mut(&addr) {
+                *ref_count -= 1;
+                let remaining = *ref_count;
+                if remaining == 0 {
+                    allocs.remove(&addr);
+                    // Note: Physical memory is NOT reclaimed in this simple allocator
+                    // A production allocator would add addr back to free list
+                    log::trace!("SharedPageAllocator: released page at {:#x}", addr);
+                }
+                return Some(remaining);
+            }
+        }
+        None
+    }
+}
+
+/// Allocate shared page using the real allocator
 pub fn alloc_shared_page(flags: PageFlags) -> MemoryResult<SharedPage> {
-    // TODO: Use proper physical frame allocator when API complete
-    // For now, return dummy physical address
-    let phys_addr = PhysicalAddress::new(0x1000_0000);
+    let mut allocator = SHARED_PAGE_ALLOCATOR.lock();
+    
+    let phys_addr = allocator.allocate()
+        .ok_or(MemoryError::OutOfMemory)?;
+    
+    // Zero the page for security
+    // Safety: We just allocated this address, it's valid and ours
+    unsafe {
+        // In kernel with identity mapping, phys == virt for low addresses
+        let ptr = phys_addr.value() as *mut u8;
+        core::ptr::write_bytes(ptr, 0, PAGE_SIZE);
+    }
+    
     Ok(SharedPage::new(phys_addr, flags))
+}
+
+/// Allocate multiple contiguous shared pages
+pub fn alloc_shared_pages(count: usize, flags: PageFlags) -> MemoryResult<alloc::vec::Vec<SharedPage>> {
+    let mut pages = alloc::vec::Vec::with_capacity(count);
+    
+    for _ in 0..count {
+        pages.push(alloc_shared_page(flags)?);
+    }
+    
+    Ok(pages)
 }
 
 /// Free shared page if ref_count reaches 0
 pub fn free_shared_page(page: &SharedPage) -> MemoryResult<()> {
-    if page.ref_count() == 0 {
-        // TODO: Free physical frame when deallocator API complete
-        log::debug!("Would free page at phys {:?}", page.phys_addr);
+    let remaining = page.dec_ref();
+    
+    if remaining == 0 {
+        // Release from allocator
+        let mut allocator = SHARED_PAGE_ALLOCATOR.lock();
+        allocator.release(page.phys_addr.value());
         Ok(())
     } else {
-        Err(MemoryError::PermissionDenied)
+        // Page still has references, nothing to do
+        Ok(())
     }
 }
 
 /// Clone shared page (increment ref count)
 pub fn clone_shared_page(page: &SharedPage) -> SharedPage {
     page.inc_ref();
+    
+    // Also track in allocator
+    let mut allocator = SHARED_PAGE_ALLOCATOR.lock();
+    allocator.retain(page.phys_addr.value());
+    
     SharedPage::new(page.phys_addr, page.flags)
+}
+
+/// Get statistics about shared page allocator
+pub fn shared_page_stats() -> SharedPageStats {
+    let allocator = SHARED_PAGE_ALLOCATOR.lock();
+    let allocated_pages = (allocator.next_addr - 0x2000_0000) / PAGE_SIZE;
+    let active_pages = allocator.allocations.as_ref().map(|a| a.len()).unwrap_or(0);
+    
+    SharedPageStats {
+        total_allocated: allocated_pages,
+        currently_active: active_pages,
+        bytes_used: allocated_pages * PAGE_SIZE,
+    }
+}
+
+/// Statistics for shared page allocator
+#[derive(Debug, Clone, Copy)]
+pub struct SharedPageStats {
+    /// Total pages ever allocated
+    pub total_allocated: usize,
+    /// Currently active (non-freed) pages
+    pub currently_active: usize,
+    /// Total bytes used
+    pub bytes_used: usize,
 }

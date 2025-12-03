@@ -11,6 +11,13 @@
 //! - **`AsyncChannel<T>`** : Une version asynchrone de `TypedChannel`,
 //!   intégrable avec les runtimes comme Tokio.
 //! - **`BroadcastChannel<T>`** : Un canal de diffusion (1 producteur, N consommateurs).
+//!
+//! ## Canaux Avancés (High-Performance)
+//!
+//! - **`PriorityChannel`** : 5 niveaux de priorité (RealTime→Bulk)
+//! - **`MulticastChannel`** : Un émetteur vers N récepteurs avec gestion lag
+//! - **`AnycastChannel`** : Load balancing avec 4 politiques
+//! - **`RequestReplyChannel`** : Pattern RPC avec corrélation
 
 // --- Déclaration des sous-modules ---
 
@@ -27,3 +34,12 @@ pub mod broadcast;   // Canaux de diffusion.
 pub use typed::{TypedChannel, TypedSender, TypedReceiver, ChannelError};
 pub use async_channel::{AsyncSender, AsyncReceiver, async_channel};
 pub use broadcast::{BroadcastSender, BroadcastReceiver, broadcast_channel};
+
+// --- Advanced Channels (from core) ---
+pub use crate::ipc::core::{
+    PriorityChannel, PriorityChannelStats,
+    MulticastChannel, MulticastReceiverState,
+    AnycastChannel, AnycastReceiverState,
+    RequestReplyChannel,
+    PriorityClass, AnycastPolicy,
+};

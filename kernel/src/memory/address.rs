@@ -29,6 +29,16 @@ impl VirtualAddress {
         self.0
     }
     
+    /// Alias for value() - returns as usize
+    pub const fn as_usize(&self) -> usize {
+        self.0
+    }
+    
+    /// Returns as u64
+    pub const fn as_u64(&self) -> u64 {
+        self.0 as u64
+    }
+    
     pub fn is_kernel(&self) -> bool {
         self.0 >= 0xFFFF_8000_0000_0000
     }

@@ -215,6 +215,40 @@ impl Scheduler {
         id
     }
 
+    /// Add an already-constructed thread to the scheduler
+    /// 
+    /// This is used for user-space threads that are created with
+    /// Thread::new_user() rather than through spawn().
+    pub fn add_thread(&self, thread: Thread) {
+        let id = thread.id();
+        let name = thread.name().to_string();
+        
+        logger::info(&format!(
+            "Adding thread '{}' (TID {}) to scheduler",
+            name, id
+        ));
+
+        // Register in global threads list
+        {
+            let mut threads = self.threads.lock();
+            threads.push(id);
+        }
+
+        // Add to run queue
+        {
+            let mut run_queue = self.run_queue.lock();
+            run_queue.enqueue(Box::new(thread));
+        }
+
+        // Update stats
+        *self.total_spawns.lock() += 1;
+
+        logger::info(&format!(
+            "✓ Thread '{}' (TID {}) added to scheduler",
+            name, id
+        ));
+    }
+
     /// Spawn idle thread
     pub fn spawn_idle(&self) {
         logger::info("Spawning idle thread...");
@@ -378,6 +412,72 @@ impl Scheduler {
 
         drop(current);
         self.schedule();
+    }
+
+    /// Terminate a thread by ID (for signals like SIGKILL)
+    pub fn terminate_thread(&self, id: ThreadId, exit_code: i32) {
+        logger::debug(&format!("[TERMINATE] Terminating thread {} with code {}", id, exit_code));
+        
+        // Check if it's the current thread
+        {
+            let current = self.current_thread.lock();
+            if let Some(ref curr) = *current {
+                if curr.id() == id {
+                    drop(current); // Release lock before modifying
+                    // Terminate current thread
+                    self.with_current_thread(|t| {
+                        t.set_state(ThreadState::Terminated);
+                        t.set_exit_status(exit_code);
+                    });
+                    self.schedule();
+                    return;
+                }
+            }
+        }
+        
+        // Check blocked threads (can be removed directly)
+        {
+            let mut blocked = self.blocked_threads.lock();
+            if let Some(mut thread) = blocked.remove(&id) {
+                thread.set_state(ThreadState::Terminated);
+                thread.set_exit_status(exit_code);
+                logger::info(&format!("[TERMINATE] Thread {} terminated from blocked", id));
+                return;
+            }
+        }
+        
+        // For threads in run queue, we can't easily remove them
+        // Mark them for termination instead (they will check on next schedule)
+        logger::warn(&format!("[TERMINATE] Thread {} not found or in run queue (marked)", id));
+    }
+    
+    /// Block a thread by ID (for signals like SIGSTOP)
+    pub fn block_thread(&self, id: ThreadId) {
+        logger::debug(&format!("[BLOCK] Blocking thread {}...", id));
+        
+        // Check if it's the current thread
+        {
+            let current = self.current_thread.lock();
+            if let Some(ref curr) = *current {
+                if curr.id() == id {
+                    drop(current);
+                    // Block current thread using existing method
+                    self.block_current();
+                    return;
+                }
+            }
+        }
+        
+        // For blocked threads, nothing to do
+        {
+            let blocked = self.blocked_threads.lock();
+            if blocked.contains_key(&id) {
+                logger::debug(&format!("[BLOCK] Thread {} already blocked", id));
+                return;
+            }
+        }
+        
+        logger::warn(&format!("[BLOCK] Thread {} in run queue (will block on next schedule)", id));
     }
 
     /// Unblock a thread by ID (move from Blocked to Ready)

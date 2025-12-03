@@ -1,6 +1,6 @@
 //! NUMA (Non-Uniform Memory Access) support
 //! 
-//! Provides NUMA-aware memory allocation
+//! Provides NUMA-aware memory allocation with real ACPI SRAT parsing.
 
 use crate::memory::PhysicalAddress;
 use super::Frame;
@@ -26,6 +26,10 @@ pub struct NumaNodeInfo {
     pub base_addr: PhysicalAddress,
     pub size: usize,
     pub free_frames: usize,
+    /// Is this a hotpluggable memory region
+    pub hotpluggable: bool,
+    /// Is this non-volatile (persistent) memory
+    pub nonvolatile: bool,
 }
 
 impl NumaNodeInfo {
@@ -35,7 +39,15 @@ impl NumaNodeInfo {
             base_addr,
             size,
             free_frames: size / super::FRAME_SIZE,
+            hotpluggable: false,
+            nonvolatile: false,
         }
+    }
+    
+    pub fn with_flags(mut self, hotpluggable: bool, nonvolatile: bool) -> Self {
+        self.hotpluggable = hotpluggable;
+        self.nonvolatile = nonvolatile;
+        self
     }
 }
 
@@ -43,21 +55,46 @@ use alloc::vec::Vec;
 use spin::Mutex;
 
 static NUMA_NODES: Mutex<Vec<NumaNodeInfo>> = Mutex::new(Vec::new());
+static NUMA_NODE_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Initialize NUMA subsystem
+/// 
+/// Attempts to parse ACPI SRAT table for real NUMA topology.
+/// Falls back to single-node UMA if SRAT is not available.
 pub fn init() {
     let mut nodes = NUMA_NODES.lock();
     
-    // Detect NUMA topology (stub - would parse ACPI SRAT)
-    // For now, create single node for UMA systems
+    // Try to get SRAT from ACPI
+    if let Some(srat_addr) = crate::acpi::get_srat_addr() {
+        if let Some(srat_info) = unsafe { crate::acpi::srat::parse_srat(srat_addr) } {
+            // Use real NUMA topology from SRAT
+            for mem in &srat_info.memory_affinities {
+                let node_info = NumaNodeInfo::new(
+                    NumaNode::new(mem.node),
+                    PhysicalAddress::new(mem.base_addr as usize),
+                    mem.size as usize,
+                ).with_flags(mem.hotpluggable, mem.nonvolatile);
+                
+                nodes.push(node_info);
+            }
+            
+            NUMA_NODE_COUNT.store(srat_info.node_count, core::sync::atomic::Ordering::SeqCst);
+            log::info!("NUMA: initialized with {} node(s) from ACPI SRAT", srat_info.node_count);
+            return;
+        }
+    }
+    
+    // Fallback: single node for UMA systems
+    log::info!("NUMA: SRAT not available, using UMA fallback");
     let node_info = NumaNodeInfo::new(
         NumaNode::new(0),
         PhysicalAddress::new(0x100000), // 1MB
-        512 * 1024 * 1024, // 512MB
+        512 * 1024 * 1024, // 512MB default
     );
     
     nodes.push(node_info);
-    log::info!("NUMA: initialized with {} node(s)", nodes.len());
+    NUMA_NODE_COUNT.store(1, core::sync::atomic::Ordering::SeqCst);
+    log::info!("NUMA: initialized with 1 node (UMA fallback)");
 }
 
 /// Get NUMA node count
@@ -81,6 +118,8 @@ impl Clone for NumaNodeInfo {
             base_addr: self.base_addr,
             size: self.size,
             free_frames: self.free_frames,
+            hotpluggable: self.hotpluggable,
+            nonvolatile: self.nonvolatile,
         }
     }
 }

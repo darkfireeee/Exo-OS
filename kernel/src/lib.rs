@@ -17,6 +17,7 @@ extern crate alloc;
 use core::panic::PanicInfo;
 
 // Public modules
+pub mod acpi;
 pub mod arch;
 pub mod boot;
 pub mod c_compat;
@@ -31,6 +32,7 @@ pub use drivers::video::vga::{_print as _vga_print, WRITER};
 pub mod ffi;
 pub mod fs;
 pub mod ipc;
+pub mod loader;
 pub mod memory;
 pub mod net;
 pub mod posix_x;

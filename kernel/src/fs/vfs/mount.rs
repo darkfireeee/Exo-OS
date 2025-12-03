@@ -24,11 +24,17 @@ pub enum FsType {
 }
 
 /// Mount flags
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct MountFlags {
     pub read_only: bool,
     pub no_exec: bool,
     pub no_suid: bool,
+    pub no_dev: bool,
+    pub synchronous: bool,
+    pub no_atime: bool,
+    pub bind: bool,           // Bind mount
+    pub move_mount: bool,     // Move mount
+    pub remount: bool,        // Remount with new flags
 }
 
 impl MountFlags {
@@ -37,6 +43,12 @@ impl MountFlags {
             read_only: false,
             no_exec: false,
             no_suid: false,
+            no_dev: false,
+            synchronous: false,
+            no_atime: false,
+            bind: false,
+            move_mount: false,
+            remount: false,
         }
     }
 
@@ -45,12 +57,63 @@ impl MountFlags {
             read_only: true,
             no_exec: false,
             no_suid: false,
+            no_dev: false,
+            synchronous: false,
+            no_atime: false,
+            bind: false,
+            move_mount: false,
+            remount: false,
         }
+    }
+    
+    /// Parse from mount options string (e.g., "ro,noexec,nosuid")
+    pub fn from_options(options: &str) -> Self {
+        let mut flags = Self::new();
+        for opt in options.split(',') {
+            match opt.trim() {
+                "ro" => flags.read_only = true,
+                "rw" => flags.read_only = false,
+                "noexec" => flags.no_exec = true,
+                "exec" => flags.no_exec = false,
+                "nosuid" => flags.no_suid = true,
+                "suid" => flags.no_suid = false,
+                "nodev" => flags.no_dev = true,
+                "dev" => flags.no_dev = false,
+                "sync" => flags.synchronous = true,
+                "async" => flags.synchronous = false,
+                "noatime" => flags.no_atime = true,
+                "atime" => flags.no_atime = false,
+                "bind" => flags.bind = true,
+                "move" => flags.move_mount = true,
+                "remount" => flags.remount = true,
+                _ => {}
+            }
+        }
+        flags
     }
 }
 
+/// Mount propagation type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MountPropagation {
+    /// Private mount (default)
+    #[default]
+    Private,
+    /// Shared mount (events propagate to peers)
+    Shared,
+    /// Slave mount (receives events from master)
+    Slave,
+    /// Unbindable mount
+    Unbindable,
+}
+
+/// Unique mount ID
+static NEXT_MOUNT_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
 /// A mount point in the VFS
 pub struct Mount {
+    /// Unique mount ID
+    pub id: u64,
     /// Mount point path (e.g., "/", "/dev", "/proc")
     pub path: String,
     /// Filesystem type
@@ -59,6 +122,12 @@ pub struct Mount {
     pub root: Arc<RwLock<dyn Inode>>,
     /// Mount flags
     pub flags: MountFlags,
+    /// Mount propagation
+    pub propagation: MountPropagation,
+    /// Source path (for bind mounts)
+    pub source: Option<String>,
+    /// Device name or identifier
+    pub device: Option<String>,
 }
 
 impl Mount {
@@ -69,11 +138,22 @@ impl Mount {
         flags: MountFlags,
     ) -> Self {
         Self {
+            id: NEXT_MOUNT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
             path,
             fs_type,
             root,
             flags,
+            propagation: MountPropagation::Private,
+            source: None,
+            device: None,
         }
+    }
+    
+    /// Create a bind mount
+    pub fn bind(source_path: String, target_path: String, root: Arc<RwLock<dyn Inode>>, flags: MountFlags) -> Self {
+        let mut mount = Self::new(target_path, FsType::Tmpfs, root, flags);
+        mount.source = Some(source_path);
+        mount
     }
 }
 

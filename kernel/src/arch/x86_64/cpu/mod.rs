@@ -6,6 +6,7 @@ pub mod features;
 pub mod topology;
 pub mod smp;
 pub mod power;
+pub mod cache;
 
 pub use cpuid::*;
 pub use msr::*;

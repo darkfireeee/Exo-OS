@@ -25,7 +25,8 @@ pub struct TmpfsInode {
     data: Vec<u8>,
     /// Directory children (inode number by name)
     /// Using hashbrown for better performance
-    children: HashMap<String, u64>,
+    /// Made public for VFS operations
+    pub children: HashMap<String, u64>,
 }
 
 impl TmpfsInode {

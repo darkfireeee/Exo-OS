@@ -25,6 +25,7 @@ pub enum SyscallError {
     Interrupted = -8,
     WouldBlock = -9,
     NotSupported = -10,
+    Timeout = -11,
 }
 
 impl SyscallError {

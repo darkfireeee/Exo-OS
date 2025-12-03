@@ -111,8 +111,8 @@ impl BroadcastChannel {
     
     /// Subscribe (create new receiver)
     pub fn subscribe(&self) -> MemoryResult<BroadcastReceiver> {
-        // Create new ring for this receiver
-        let ring = Arc::new(FusionRing::new_dummy());
+        // Create new ring for this receiver with proper initialization
+        let ring = Arc::new(FusionRing::new(BROADCAST_RING_CAPACITY));
         
         let mut rings = self.rings.lock();
         let index = rings.len();
@@ -144,10 +144,5 @@ pub fn broadcast_channel(capacity: usize) -> BroadcastChannel {
     channel
 }
 
-impl FusionRing {
-    /// Dummy constructor for now
-    fn new_dummy() -> Self {
-        // TODO: Proper construction
-        unsafe { core::mem::zeroed() }
-    }
-}
+/// Default ring capacity for broadcast receivers
+const BROADCAST_RING_CAPACITY: usize = 256;

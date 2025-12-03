@@ -12,14 +12,22 @@ use alloc::sync::Arc;
 use hashbrown::HashMap;
 use spin::RwLock;
 
-/// Get inode from global cache
+/// Get inode from global cache or underlying filesystem
 pub fn get_inode(ino: u64) -> FsResult<Arc<RwLock<dyn Inode>>> {
+    // First check local cache
     if let Some(inode) = get_cache().inode_cache.get(ino) {
-        Ok(inode)
-    } else {
-        // TODO: Load from underlying FS if possible
-        Err(FsError::NotFound)
+        return Ok(inode);
     }
+    
+    // Cache miss - load from tmpfs via VFS
+    // This returns Arc<RwLock<TmpfsInode>> which implements Inode trait
+    let tmpfs_inode = super::get_inode(ino)?;
+    
+    // Store in cache and return
+    let inode: Arc<RwLock<dyn Inode>> = tmpfs_inode;
+    get_cache().inode_cache.insert(ino, Arc::clone(&inode));
+    
+    Ok(inode)
 }
 
 /// Inode cache entry

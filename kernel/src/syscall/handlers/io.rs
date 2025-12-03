@@ -1,13 +1,11 @@
 //! I/O System Call Handlers
 //!
 //! Handles file operations: open, close, read, write, seek, stat
-//! Delegates to posix_x::vfs_posix adapter.
+//! Uses the central VFS API from crate::fs::vfs
 
+use crate::fs::{vfs, FsError};
 use crate::memory::{MemoryError, MemoryResult};
-use crate::posix_x::core::fd_table::FdEntry;
-use crate::posix_x::core::fd_table::GLOBAL_FD_TABLE;
-use crate::posix_x::vfs_posix::{file_ops, OpenFlags, VfsHandle};
-use crate::syscall::utils::{copy_to_user, read_user_string, write_user_type};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -29,6 +27,19 @@ pub struct FileFlags {
     pub create: bool,
     pub truncate: bool,
     pub nonblock: bool,
+}
+
+impl Default for FileFlags {
+    fn default() -> Self {
+        Self {
+            read: true,
+            write: false,
+            append: false,
+            create: false,
+            truncate: false,
+            nonblock: false,
+        }
+    }
 }
 
 /// File statistics
@@ -53,18 +64,66 @@ pub enum SeekWhence {
 use alloc::collections::BTreeMap;
 use spin::Mutex;
 
+/// File descriptor entry mapping to VFS handle
 #[derive(Debug, Clone)]
 struct FileDescriptor {
     fd: Fd,
-    inode: u64,
-    offset: usize,
+    vfs_handle: u64,      // VFS internal handle
+    path: String,         // Path for debugging/stat
+    offset: usize,        // Current offset (managed here for seek)
     flags: FileFlags,
 }
 
 static FD_TABLE: Mutex<BTreeMap<Fd, FileDescriptor>> = Mutex::new(BTreeMap::new());
 static NEXT_FD: AtomicU64 = AtomicU64::new(3); // 0=stdin, 1=stdout, 2=stderr
 
-/// Open file
+/// VFS open flags (matching vfs/mod.rs)
+const O_RDONLY: u32 = 0;
+const O_WRONLY: u32 = 1;
+const O_RDWR: u32 = 2;
+const O_APPEND: u32 = 0o2000;
+
+/// Convert FileFlags to VFS u32 flags
+fn flags_to_vfs_flags(flags: &FileFlags) -> u32 {
+    let mut vfs_flags = if flags.read && flags.write {
+        O_RDWR
+    } else if flags.write {
+        O_WRONLY
+    } else {
+        O_RDONLY
+    };
+    
+    if flags.append {
+        vfs_flags |= O_APPEND;
+    }
+    
+    vfs_flags
+}
+
+/// Convert VFS error to memory error
+fn vfs_to_memory_error(e: FsError) -> MemoryError {
+    match e {
+        FsError::NotFound => MemoryError::NotFound,
+        FsError::PermissionDenied => MemoryError::PermissionDenied,
+        FsError::AlreadyExists | FsError::FileExists => MemoryError::AlreadyMapped,
+        FsError::NotDirectory => MemoryError::InvalidAddress,
+        FsError::IsDirectory => MemoryError::InvalidAddress,
+        FsError::DirectoryNotEmpty => MemoryError::InvalidAddress,
+        FsError::InvalidPath => MemoryError::InvalidAddress,
+        FsError::InvalidArgument => MemoryError::InvalidParameter,
+        FsError::TooManySymlinks => MemoryError::InvalidAddress,
+        FsError::InvalidData => MemoryError::InvalidAddress,
+        FsError::IoError => MemoryError::InternalError("IO error"),
+        FsError::NotSupported => MemoryError::PermissionDenied,
+        FsError::TooManyFiles => MemoryError::Mfile,
+        FsError::InvalidFd => MemoryError::NotFound,
+        FsError::ConnectionRefused => MemoryError::PermissionDenied,
+        FsError::Again => MemoryError::InternalError("Try again"),
+        FsError::Memory(mem_err) => mem_err,
+    }
+}
+
+/// Open file using VFS
 pub fn sys_open(path: &str, flags: FileFlags, mode: Mode) -> MemoryResult<Fd> {
     log::debug!(
         "sys_open: path={}, flags={:?}, mode={:o}",
@@ -73,40 +132,47 @@ pub fn sys_open(path: &str, flags: FileFlags, mode: Mode) -> MemoryResult<Fd> {
         mode
     );
 
-    // 1. Resolve path using VFS cache
-    let cache = crate::fs::vfs::cache::get_cache();
-    let inode = if let Some(ino) = cache.dentry_cache.lookup(path) {
-        ino
-    } else {
-        // Create new file if create flag set
+    // Determine if file exists
+    let exists = vfs::exists(path);
+
+    // Handle file creation
+    if !exists {
         if flags.create {
-            // Stub: would create through VFS
-            let new_ino = 100; // Dummy inode
-            cache
-                .dentry_cache
-                .insert(alloc::string::String::from(path), new_ino);
-            new_ino
+            // Create the file
+            vfs::create_file(path).map_err(vfs_to_memory_error)?;
+            log::debug!("sys_open: created file {}", path);
         } else {
             return Err(MemoryError::NotFound);
         }
-    };
+    }
 
-    // 2. Check permissions (stub)
+    // Convert flags to VFS format
+    let vfs_flags = flags_to_vfs_flags(&flags);
 
-    // 3. Allocate FD
+    // Open via VFS
+    let vfs_handle = vfs::open(path, vfs_flags).map_err(vfs_to_memory_error)?;
+
+    // Handle truncation
+    if flags.truncate && flags.write {
+        // Truncate by writing empty content
+        let _ = vfs::write(vfs_handle, &[]);
+    }
+
+    // Allocate FD
     let fd = NEXT_FD.fetch_add(1, Ordering::SeqCst) as i32;
 
-    // 4. Add to process FD table
+    // Create descriptor
     let descriptor = FileDescriptor {
         fd,
-        inode,
+        vfs_handle,
+        path: String::from(path),
         offset: 0,
         flags,
     };
 
     FD_TABLE.lock().insert(fd, descriptor);
 
-    log::info!("open: {} -> fd={}, inode={}", path, fd, inode);
+    log::info!("sys_open: {} -> fd={}, vfs_handle={}", path, fd, vfs_handle);
     Ok(fd)
 }
 
@@ -114,14 +180,14 @@ pub fn sys_open(path: &str, flags: FileFlags, mode: Mode) -> MemoryResult<Fd> {
 pub fn sys_close(fd: Fd) -> MemoryResult<()> {
     log::debug!("sys_close: fd={}", fd);
 
-    // 1. Remove from FD table
+    // Remove from FD table
     let mut table = FD_TABLE.lock();
     let descriptor = table.remove(&fd).ok_or(MemoryError::NotFound)?;
 
-    // 2. Decrement file ref count (stub)
-    // 3. Close if ref count reaches 0 (stub)
+    // Close VFS handle
+    vfs::close(descriptor.vfs_handle).map_err(vfs_to_memory_error)?;
 
-    log::info!("close: fd={}, inode={}", fd, descriptor.inode);
+    log::info!("sys_close: fd={}, path={}", fd, descriptor.path);
     Ok(())
 }
 
@@ -135,27 +201,23 @@ pub fn sys_read(fd: Fd, buffer: &mut [u8]) -> MemoryResult<usize> {
         return Ok(0);
     }
 
-    // 1. Look up FD
+    // Look up FD
     let mut table = FD_TABLE.lock();
     let descriptor = table.get_mut(&fd).ok_or(MemoryError::NotFound)?;
 
-    // 2. Check read permission
+    // Check read permission
     if !descriptor.flags.read {
         return Err(MemoryError::PermissionDenied);
     }
 
-    // 3. Read from VFS inode (stub)
-    let cache = crate::fs::vfs::cache::get_cache();
-    let bytes_read = if let Some(_inode) = cache.inode_cache.get(descriptor.inode) {
-        // Would call inode.read_at(offset, buffer)
-        0 // Stub
-    } else {
-        0
-    };
+    // Read from VFS at current offset
+    let bytes_read = vfs::read_at(descriptor.vfs_handle, descriptor.offset, buffer)
+        .map_err(vfs_to_memory_error)?;
 
-    // 4. Update offset
+    // Update offset
     descriptor.offset += bytes_read;
 
+    log::debug!("sys_read: fd={}, read {} bytes", fd, bytes_read);
     Ok(bytes_read)
 }
 
@@ -173,30 +235,31 @@ pub fn sys_write(fd: Fd, buffer: &[u8]) -> MemoryResult<usize> {
         return Ok(buffer.len());
     }
 
-    // 1. Look up FD
+    // Look up FD
     let mut table = FD_TABLE.lock();
     let descriptor = table.get_mut(&fd).ok_or(MemoryError::NotFound)?;
 
-    // 2. Check write permission
+    // Check write permission
     if !descriptor.flags.write {
         return Err(MemoryError::PermissionDenied);
     }
 
-    // 3. Write to VFS inode
-    let cache = crate::fs::vfs::cache::get_cache();
-    let bytes_written = if let Some(_inode) = cache.inode_cache.get(descriptor.inode) {
-        // Would call inode.write_at(offset, buffer)
-        buffer.len() // Stub
-    } else {
-        return Err(MemoryError::NotFound);
-    };
+    // Handle append mode
+    if descriptor.flags.append {
+        // Get file size and set offset to end
+        if let Ok(stat) = vfs::stat(&descriptor.path) {
+            descriptor.offset = stat.size as usize;
+        }
+    }
 
-    // 4. Update offset
+    // Write to VFS at current offset
+    let bytes_written = vfs::write_at(descriptor.vfs_handle, descriptor.offset, buffer)
+        .map_err(vfs_to_memory_error)?;
+
+    // Update offset
     descriptor.offset += bytes_written;
 
-    // Mark inode as dirty
-    cache.inode_cache.mark_dirty(descriptor.inode);
-
+    log::debug!("sys_write: fd={}, wrote {} bytes", fd, bytes_written);
     Ok(bytes_written)
 }
 
@@ -209,14 +272,16 @@ pub fn sys_seek(fd: Fd, offset: Offset, whence: SeekWhence) -> MemoryResult<usiz
         whence
     );
 
-    // 1. Look up FD
+    // Look up FD
     let mut table = FD_TABLE.lock();
     let descriptor = table.get_mut(&fd).ok_or(MemoryError::NotFound)?;
 
-    // 2. Get file size (stub - would query inode)
-    let file_size = 0usize; // Stub
+    // Get file size via VFS stat
+    let file_size = vfs::stat(&descriptor.path)
+        .map(|s| s.size as usize)
+        .unwrap_or(0);
 
-    // 3. Calculate new offset based on whence
+    // Calculate new offset based on whence
     let new_offset = match whence {
         SeekWhence::Start => offset.max(0) as usize,
         SeekWhence::Current => {
@@ -229,10 +294,10 @@ pub fn sys_seek(fd: Fd, offset: Offset, whence: SeekWhence) -> MemoryResult<usiz
         }
     };
 
-    // 4. Update file offset
+    // Update file offset
     descriptor.offset = new_offset;
 
-    log::debug!("seek: fd={}, new_offset={}", fd, new_offset);
+    log::debug!("sys_seek: fd={}, new_offset={}", fd, new_offset);
     Ok(new_offset)
 }
 
@@ -240,20 +305,20 @@ pub fn sys_seek(fd: Fd, offset: Offset, whence: SeekWhence) -> MemoryResult<usiz
 pub fn sys_stat(path: &str) -> MemoryResult<FileStat> {
     log::debug!("sys_stat: path={}", path);
 
-    // 1. Resolve path
-    let cache = crate::fs::vfs::cache::get_cache();
-    let inode = cache
-        .dentry_cache
-        .lookup(path)
-        .ok_or(MemoryError::NotFound)?;
+    // Get stat via VFS
+    let vfs_stat = vfs::stat(path).map_err(vfs_to_memory_error)?;
 
-    // 2. Get inode and fill stat
+    // Get inode number via lookup
+    let inode = vfs::lookup(path).unwrap_or(0);
+
+    // Convert to our stat format
+    let mode = if vfs_stat.is_dir { 0o40755 } else { 0o100644 };
     let stat = FileStat {
-        size: 0, // Would query inode.size()
-        blocks: 0,
+        size: vfs_stat.size as usize,
+        blocks: (vfs_stat.size as usize + 4095) / 4096,
         block_size: 4096,
         inode,
-        mode: 0o644,
+        mode,
         nlink: 1,
     };
 
@@ -264,42 +329,42 @@ pub fn sys_stat(path: &str) -> MemoryResult<FileStat> {
 pub fn sys_fstat(fd: Fd) -> MemoryResult<FileStat> {
     log::debug!("sys_fstat: fd={}", fd);
 
-    // 1. Look up FD
+    // Look up FD
     let table = FD_TABLE.lock();
     let descriptor = table.get(&fd).ok_or(MemoryError::NotFound)?;
 
-    // 2. Fill stat structure
-    let stat = FileStat {
-        size: 0, // Would query inode
-        blocks: 0,
-        block_size: 4096,
-        inode: descriptor.inode,
-        mode: 0o644,
-        nlink: 1,
-    };
-
-    Ok(stat)
+    // Get stat via path
+    sys_stat(&descriptor.path)
 }
 
 /// Duplicate file descriptor
 pub fn sys_dup(oldfd: Fd) -> MemoryResult<Fd> {
     log::debug!("sys_dup: fd={}", oldfd);
 
-    // 1. Look up FD
+    // Look up FD
     let mut table = FD_TABLE.lock();
-    let descriptor = table.get(&oldfd).ok_or(MemoryError::NotFound)?.clone();
+    let descriptor = table.get(&oldfd).ok_or(MemoryError::NotFound)?;
 
-    // 2. Allocate new FD
+    // Reopen file via VFS (creates new handle)
+    let vfs_flags = flags_to_vfs_flags(&descriptor.flags);
+    let new_vfs_handle = vfs::open(&descriptor.path, vfs_flags)
+        .map_err(vfs_to_memory_error)?;
+
+    // Allocate new FD
     let new_fd = NEXT_FD.fetch_add(1, Ordering::SeqCst) as i32;
 
-    // 3. Copy file pointer with new FD
-    let mut new_descriptor = descriptor;
-    new_descriptor.fd = new_fd;
+    // Copy descriptor with new FD and handle
+    let new_descriptor = FileDescriptor {
+        fd: new_fd,
+        vfs_handle: new_vfs_handle,
+        path: descriptor.path.clone(),
+        offset: descriptor.offset,
+        flags: descriptor.flags,
+    };
 
-    // 4. Insert and increment ref count (stub)
     table.insert(new_fd, new_descriptor);
 
-    log::info!("dup: fd={} -> new_fd={}", oldfd, new_fd);
+    log::info!("sys_dup: fd={} -> new_fd={}", oldfd, new_fd);
     Ok(new_fd)
 }
 
@@ -313,21 +378,31 @@ pub fn sys_dup2(oldfd: Fd, newfd: Fd) -> MemoryResult<Fd> {
 
     let mut table = FD_TABLE.lock();
 
-    // 1. Close newfd if open
-    if table.contains_key(&newfd) {
-        table.remove(&newfd);
+    // Close newfd if open
+    if let Some(old_desc) = table.remove(&newfd) {
+        let _ = vfs::close(old_desc.vfs_handle);
     }
 
-    // 2. Copy oldfd to newfd
-    let descriptor = table.get(&oldfd).ok_or(MemoryError::NotFound)?.clone();
+    // Get old descriptor
+    let descriptor = table.get(&oldfd).ok_or(MemoryError::NotFound)?;
 
-    let mut new_descriptor = descriptor;
-    new_descriptor.fd = newfd;
+    // Reopen file via VFS
+    let vfs_flags = flags_to_vfs_flags(&descriptor.flags);
+    let new_vfs_handle = vfs::open(&descriptor.path, vfs_flags)
+        .map_err(vfs_to_memory_error)?;
 
-    // 3. Insert and increment ref count
+    // Create new descriptor
+    let new_descriptor = FileDescriptor {
+        fd: newfd,
+        vfs_handle: new_vfs_handle,
+        path: descriptor.path.clone(),
+        offset: descriptor.offset,
+        flags: descriptor.flags,
+    };
+
     table.insert(newfd, new_descriptor);
 
-    log::info!("dup2: oldfd={} -> newfd={}", oldfd, newfd);
+    log::info!("sys_dup2: oldfd={} -> newfd={}", oldfd, newfd);
     Ok(newfd)
 }
 
@@ -335,14 +410,60 @@ pub fn sys_dup2(oldfd: Fd, newfd: Fd) -> MemoryResult<Fd> {
 pub fn sys_readdir(fd: Fd, buffer: &mut [u8]) -> MemoryResult<usize> {
     log::debug!("sys_readdir: fd={}, len={}", fd, buffer.len());
 
-    // 1. Look up FD
+    // Look up FD
     let table = FD_TABLE.lock();
     let descriptor = table.get(&fd).ok_or(MemoryError::NotFound)?;
 
-    // 2. Check it's a directory (stub - would check inode type)
-    // 3. Read directory entries (stub)
-    // 4. Fill buffer (stub)
+    // Check it's a directory
+    if !vfs::is_directory(&descriptor.path) {
+        return Err(MemoryError::InvalidAddress); // Not a directory
+    }
 
-    log::debug!("readdir: fd={}, inode={}", fd, descriptor.inode);
-    Ok(0)
+    // Read directory entries via VFS (returns Vec<String>)
+    let entries = vfs::readdir(&descriptor.path).map_err(vfs_to_memory_error)?;
+
+    // Format entries into buffer (simple format: name\0name\0...)
+    let mut offset = 0;
+    for name in entries {
+        let name_bytes = name.as_bytes();
+        if offset + name_bytes.len() + 1 > buffer.len() {
+            break;
+        }
+        buffer[offset..offset + name_bytes.len()].copy_from_slice(name_bytes);
+        buffer[offset + name_bytes.len()] = 0; // null terminator
+        offset += name_bytes.len() + 1;
+    }
+
+    log::debug!("sys_readdir: fd={}, returned {} bytes", fd, offset);
+    Ok(offset)
+}
+
+// ============================================================================
+// Additional utility functions for compatibility
+// ============================================================================
+
+/// Check if a file exists
+pub fn sys_access(path: &str) -> MemoryResult<bool> {
+    Ok(vfs::exists(path))
+}
+
+/// Create directory
+pub fn sys_mkdir(path: &str, _mode: Mode) -> MemoryResult<()> {
+    vfs::create_dir(path).map_err(vfs_to_memory_error)?;
+    Ok(())
+}
+
+/// Remove directory
+pub fn sys_rmdir(path: &str) -> MemoryResult<()> {
+    vfs::rmdir(path).map_err(vfs_to_memory_error)
+}
+
+/// Unlink (delete) file
+pub fn sys_unlink(path: &str) -> MemoryResult<()> {
+    vfs::unlink(path).map_err(vfs_to_memory_error)
+}
+
+/// Rename file
+pub fn sys_rename(old_path: &str, new_path: &str) -> MemoryResult<()> {
+    vfs::rename(old_path, new_path).map_err(vfs_to_memory_error)
 }
