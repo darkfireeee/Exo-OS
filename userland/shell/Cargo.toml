@@ -1,0 +1,12 @@
+[package]
+name = "exo-shell"
+version = "0.5.0"
+edition = "2021"
+
+[dependencies]
+# Pas de dépendances externes - utilisera les syscalls directs
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "z"

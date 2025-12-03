@@ -16,7 +16,6 @@ pub mod idt;
 pub mod interrupts;
 pub mod io_diagnostic;
 pub mod memory;
-pub mod pic;
 pub mod pic_wrapper;
 pub mod pit;
 pub mod registers;

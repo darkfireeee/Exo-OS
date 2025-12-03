@@ -19,11 +19,6 @@ extern "C" {
     pub fn vga_puts(s: *const c_char);
     pub fn vga_set_color(fg: c_uchar, bg: c_uchar);
     
-    // Keyboard
-    pub fn keyboard_init();
-    pub fn keyboard_getc() -> c_char;
-    pub fn keyboard_has_input() -> c_int;
-    
     // PCI bus
     pub fn pci_init();
     pub fn pci_read_config_byte(bus: c_uchar, slot: c_uchar, func: c_uchar, offset: c_uchar) -> c_uchar;
@@ -85,27 +80,6 @@ pub fn vga_write_str(s: &str) {
 /// Set VGA color
 pub fn vga_set_colors(fg: u8, bg: u8) {
     unsafe { vga_set_color(fg, bg); }
-}
-
-/// Initialize keyboard
-pub fn init_keyboard() {
-    unsafe { keyboard_init(); }
-}
-
-/// Check if keyboard has input
-pub fn keyboard_available() -> bool {
-    unsafe { keyboard_has_input() != 0 }
-}
-
-/// Read character from keyboard
-pub fn keyboard_read() -> Option<char> {
-    if keyboard_available() {
-        let c = unsafe { keyboard_getc() };
-        if c != 0 {
-            return Some(c as u8 as char);
-        }
-    }
-    None
 }
 
 /// Initialize PCI bus
