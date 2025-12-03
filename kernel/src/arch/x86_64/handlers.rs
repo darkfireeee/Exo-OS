@@ -313,7 +313,7 @@ extern "C" fn keyboard_interrupt_handler(_stack_frame: &InterruptStackFrame) {
     }
     
     // Traiter le scancode avec le driver
-    if let Some(c) = crate::drivers::input::hid::process_scancode(scancode) {
+    if let Some(c) = crate::drivers::input::keyboard::process_scancode(scancode) {
         // TODO: Send to shell when implemented
         display_typed_char(c);
     }

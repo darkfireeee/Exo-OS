@@ -23,14 +23,6 @@ pub mod vga {
     }
 }
 
-pub mod keyboard {
-    extern "C" {
-        pub fn keyboard_init();
-        pub fn keyboard_getc() -> u8;
-        pub fn keyboard_has_input() -> i32;
-    }
-}
-
 pub mod pci {
     extern "C" {
         pub fn pci_init();
@@ -58,7 +50,6 @@ pub fn init_all() {
     unsafe {
         serial::serial_init();
         vga::vga_init();
-        keyboard::keyboard_init();
         pci::pci_init();
         let _ = acpi::acpi_init();
     }
