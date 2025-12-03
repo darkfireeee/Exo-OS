@@ -10,9 +10,9 @@
 
 ---
 
-## 🚀 État Actuel: v0.4.1 "Quantum Leap"
+## 🚀 État Actuel: v0.5.0 "Shell Complete"
 
-**Dernière mise à jour:** 2 décembre 2025
+**Dernière mise à jour:** 3 décembre 2025
 
 ### ✅ Fonctionnel Maintenant
 - ✅ Boot complet GRUB2 → Multiboot2 → Rust kernel
@@ -26,15 +26,18 @@
 - ✅ Scheduler 3-Queue EMA (structure complète)
 - ✅ Création de threads (3 threads de test)
 - ✅ Interrupts timer fonctionnels
-- ✅ Syscall dispatch table
+- ✅ **Syscalls complets** (40+ appels Linux x86_64)
+- ✅ **VFS complet** avec tmpfs opérationnel
+- ✅ **Clavier PS/2** (QWERTY/AZERTY, buffer circulaire)
+- ✅ **Shell interactif** Exo-Shell avec 14 commandes
 
-### 🎯 Objectif v0.5.0 "Stellar Engine"
+### 🎯 Objectif v0.6.0 "Stellar Engine"
+- [ ] Tests QEMU complets du shell
+- [ ] Fork/Exec pour processus externes
+- [ ] Hello World userspace (/bin/hello)
 - [ ] Context switch réel entre threads
 - [ ] Timer preemption (multitâche préemptif)
-- [ ] Mapping mémoire virtuelle (mmap/munmap)
-- [ ] VFS minimal avec tmpfs
-- [ ] Clavier PS/2
-- [ ] Premier processus userspace
+- [ ] Réactivation SMP multi-core
 
 ---
 
