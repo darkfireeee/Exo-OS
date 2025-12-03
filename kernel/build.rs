@@ -64,30 +64,46 @@ fn main() {
     // ═══════════════════════════════════════════════════════════════
     // 3. Compile IDT handlers (ASM) to avoid LLVM naked_asm! issues
     // ═══════════════════════════════════════════════════════════════
-    if std::path::Path::new("src/arch/x86_64/idt_handlers.asm").exists() {
-        println!("cargo:rerun-if-changed=src/arch/x86_64/idt_handlers.asm");
-        
-        // Try to assemble with NASM
-        let obj_file = format!("{}/idt_handlers.o", out_dir);
-        let status = Command::new("nasm")
-            .args(&[
-                "-f", "win64",  // Win64 COFF format for MSVC
-                "-o", &obj_file,
-                "src/arch/x86_64/idt_handlers.asm"
-            ])
-            .status();
-        
-        match status {
-            Ok(s) if s.success() => {
-                println!("cargo:rustc-link-search=native={}", out_dir);
-                println!("cargo:rustc-link-arg={}", obj_file);
-            }
-            _ => {
-                // If NASM fails, just warn but don't fail build
-                // (naked_asm! stubs will be used instead)
-                println!("cargo:warning=Could not assemble idt_handlers.asm with NASM");
-                println!("cargo:warning=Using Rust stubs instead (may have performance impact)");
-            }
+    compile_asm_file(&out_dir, "src/arch/x86_64/idt_handlers.asm", "idt_handlers");
+    
+    // ═══════════════════════════════════════════════════════════════
+    // 4. Compile Syscall entry point (ASM)
+    // ═══════════════════════════════════════════════════════════════
+    compile_asm_file(&out_dir, "src/arch/x86_64/syscall_entry.asm", "syscall_entry");
+}
+
+/// Compile an assembly file with NASM
+fn compile_asm_file(out_dir: &str, src_path: &str, name: &str) {
+    if !std::path::Path::new(src_path).exists() {
+        println!("cargo:warning=ASM file {} not found", src_path);
+        return;
+    }
+    
+    println!("cargo:rerun-if-changed={}", src_path);
+    
+    // Try ELF64 format first (for Linux/Codespace), then win64 for Windows
+    let obj_file = format!("{}/{}.o", out_dir, name);
+    
+    // Detect platform and use appropriate format
+    let format = if cfg!(target_os = "windows") { "win64" } else { "elf64" };
+    
+    let status = Command::new("nasm")
+        .args(&[
+            "-f", format,
+            "-o", &obj_file,
+            src_path
+        ])
+        .status();
+    
+    match status {
+        Ok(s) if s.success() => {
+            println!("cargo:rustc-link-search=native={}", out_dir);
+            println!("cargo:rustc-link-arg={}", obj_file);
+            println!("cargo:warning=Compiled {} with NASM ({})", name, format);
+        }
+        _ => {
+            println!("cargo:warning=Could not assemble {} with NASM", src_path);
+            println!("cargo:warning=Using Rust stubs instead (may have performance impact)");
         }
     }
 }

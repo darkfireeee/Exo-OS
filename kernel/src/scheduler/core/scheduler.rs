@@ -18,6 +18,7 @@ use crate::scheduler::thread::{alloc_thread_id, Thread, ThreadContext, ThreadId,
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::format;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use spin::Mutex;
 

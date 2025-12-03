@@ -40,6 +40,10 @@ pub struct ThreadContext {
     pub cr3: u64,
     /// Flags register (RFLAGS)
     pub rflags: u64,
+    /// First argument register (RDI) - used for user mode entry point
+    pub rdi: u64,
+    /// Second argument register (RSI) - used for user stack pointer
+    pub rsi: u64,
 }
 
 impl ThreadContext {
@@ -49,6 +53,8 @@ impl ThreadContext {
             rip: 0,
             cr3: 0,
             rflags: 0,
+            rdi: 0,
+            rsi: 0,
         }
     }
 }

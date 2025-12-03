@@ -306,8 +306,15 @@ pub fn spawn_from_path(
 ) -> Result<ThreadId, SpawnError> {
     log::info!("spawn_from_path: {}", path);
     
-    // TODO: Read file from VFS
-    Err(SpawnError::FileNotFound)
+    // Read file from VFS
+    let elf_data = crate::fs::vfs::read_file(path)
+        .map_err(|_| SpawnError::FileNotFound)?;
+    
+    // Extract name from path
+    let name = path.rsplit('/').next().unwrap_or(path);
+    
+    // Use spawn_and_schedule with the file data
+    spawn_and_schedule(&elf_data, name, params)
 }
 
 /// Create a minimal ELF that just calls exit(0)
