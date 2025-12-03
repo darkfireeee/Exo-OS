@@ -1,2 +1,0 @@
-src/arch/x86_64/idt_handlers.asm:63: error: symbol `exception_handler_rust' not defined
-src/arch/x86_64/idt_handlers.asm:107: error: symbol `irq_handler_rust' not defined

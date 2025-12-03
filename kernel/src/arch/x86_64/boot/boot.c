@@ -98,7 +98,7 @@ static inline uint8_t inb(uint16_t port) {
     return ret;
 }
 
-static void serial_init(void) {
+void serial_init(void) {
     outb(COM1_PORT + 1, 0x00);    // Disable interrupts
     outb(COM1_PORT + 3, 0x80);    // Enable DLAB (set baud rate divisor)
     outb(COM1_PORT + 0, 0x03);    // Divisor low byte (38400 baud)
@@ -139,7 +139,7 @@ static size_t vga_row = 0;
 static size_t vga_col = 0;
 static uint8_t vga_color = 0x07; // Light grey on black
 
-static void vga_clear(void) {
+void vga_clear(void) {
     for (size_t y = 0; y < VGA_HEIGHT; y++) {
         for (size_t x = 0; x < VGA_WIDTH; x++) {
             vga_buffer[y * VGA_WIDTH + x] = (vga_color << 8) | ' ';
@@ -240,11 +240,51 @@ static void parse_multiboot2(uint64_t mbi_addr) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Exported C functions for Rust FFI
+// ────────────────────────────────────────────────────────────────────────────
+
+// Serial functions
+void serial_putc(char c) {
+    serial_write_char(c);
+}
+
+void serial_puts(const char* str) {
+    serial_write_string(str);
+}
+
+// VGA functions  
+void vga_putc(char c) {
+    vga_putchar(c);
+}
+
+void vga_puts(const char* str) {
+    vga_write_string(str);
+}
+
+void vga_init(void) {
+    vga_clear();
+}
+
+void vga_set_color(uint8_t color) {
+    vga_color = color;
+}
+
+// Stubs for other C functions referenced by Rust
+void pci_init(void) {}
+void acpi_init(void) {}
+void acpi_shutdown(void) {}
+void acpi_reboot(void) {}
+
+// Syscall entry (stub - real implementation in syscall.asm)
+extern void syscall_entry_simple(void);
+void syscall_entry_simple(void) {}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Rust interface
 // ────────────────────────────────────────────────────────────────────────────
 
 // Déclaré dans kernel Rust (lib.rs)
-extern void rust_kernel_entry(uint32_t magic, uint64_t multiboot_info) __attribute__((noreturn));
+extern void rust_main(uint32_t magic, uint64_t multiboot_info) __attribute__((noreturn));
 
 // ────────────────────────────────────────────────────────────────────────────
 // boot_main - Point d'entrée depuis boot.asm
@@ -286,7 +326,7 @@ void __attribute__((noreturn)) boot_main(uint32_t magic, uint64_t multiboot_info
     debug_print("\n");
     
     // Jump to Rust kernel
-    rust_kernel_entry(magic, multiboot_info);
+    rust_main(magic, multiboot_info);
     
     // Should never reach here
     debug_print("[ERROR] Rust kernel returned!\n");

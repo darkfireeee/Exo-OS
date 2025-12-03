@@ -39,6 +39,7 @@ pub mod posix_x;
 pub mod power;
 pub mod scheduler;
 pub mod security;
+pub mod shell;
 pub mod sync;
 pub mod syscall;
 pub mod time;
@@ -354,32 +355,12 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             scheduler::init();
             logger::early_print("[KERNEL] ✓ Scheduler initialized\n");
 
-            // Créer des threads de test
-            logger::early_print("[KERNEL] Creating test threads (interrupts disabled)...\n");
-            let stack_size = 4 * 1024; // 4KB par thread
+            logger::early_print("[KERNEL] ═══════════════════════════════════════\n");
+            logger::early_print("[KERNEL]   LAUNCHING INTERACTIVE SHELL\n");
+            logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
 
-            scheduler::SCHEDULER.spawn("Thread A", scheduler::test_threads::thread_a, stack_size);
-            logger::early_print("[KERNEL]   ✓ Thread A ready (4KB stack)\n");
-
-            scheduler::SCHEDULER.spawn("Thread B", scheduler::test_threads::thread_b, stack_size);
-            logger::early_print("[KERNEL]   ✓ Thread B ready (4KB stack)\n");
-
-            scheduler::SCHEDULER.spawn("Thread C", scheduler::test_threads::thread_c, stack_size);
-            logger::early_print("[KERNEL]   ✓ Thread C ready (4KB stack)\n");
-
-            logger::early_print("[KERNEL] ✓ 3 threads spawned successfully\n");
-
-            logger::early_print("[KERNEL] Final System Status:\n");
-            logger::early_print("  [✓] Scheduler: 3-Queue EMA (Hot/Normal/Cold)\n");
-            logger::early_print("  [✓] Threads: 3 ready for execution\n");
-            logger::early_print("  [✓] Preemptive multitasking: ENABLED\n");
-            logger::early_print("  [✓] Context switch: Every 10ms (PIT timer)\n\n");
-
-            logger::early_print("[KERNEL] Starting scheduler...\n");
-            logger::early_print("[KERNEL] *** Watch lines 16-20 for thread counters! ***\n\n");
-
-            // Démarrer le scheduler (ne revient jamais)
-            scheduler::start();
+            // Lancer le shell interactif (ne revient jamais)
+            shell::run();
         }
         Err(e) => {
             logger::early_print("[KERNEL] ✗ Failed to parse Multiboot2 info: ");

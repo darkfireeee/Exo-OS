@@ -89,11 +89,17 @@ impl Heap {
             // Retirer le bloc de la liste et potentiellement créer un nouveau bloc
             // pour le reste de l'espace
             let excess_size = region.end_addr() - alloc_end;
-            if excess_size > 0 {
+            // FIX CRITIQUE : Ne créer un nouveau nœud que s'il y a assez d'espace (>= MIN_BLOCK_SIZE)
+            // et que l'adresse est correctement alignée
+            let node_align = core::mem::align_of::<ListNode>();
+            let aligned_alloc_end = align_up(alloc_end, node_align);
+            let adjusted_excess = region.end_addr().saturating_sub(aligned_alloc_end);
+            
+            if adjusted_excess >= MIN_BLOCK_SIZE && aligned_alloc_end < region.end_addr() {
                 // Il reste de l'espace, créer un nouveau nœud
-                let new_node = ListNode::new(excess_size);
+                let new_node = ListNode::new(adjusted_excess);
                 unsafe {
-                    let new_node_ptr = alloc_end as *mut ListNode;
+                    let new_node_ptr = aligned_alloc_end as *mut ListNode;
                     new_node_ptr.write(new_node);
                     self.insert_node(NonNull::new_unchecked(new_node_ptr));
                 }
@@ -126,6 +132,7 @@ impl Heap {
     /// Trouve une région libre assez grande
     fn find_region(&mut self, size: usize, align: usize) -> Option<(&'static mut ListNode, usize)> {
         let mut current = self.head;
+        let mut prev: Option<NonNull<ListNode>> = None;
 
         while let Some(mut node_ptr) = current {
             let node = unsafe { node_ptr.as_mut() };
@@ -134,15 +141,22 @@ impl Heap {
             let alloc_start = align_up(node.start_addr(), align);
             let alloc_end = alloc_start.saturating_add(size);
 
-            if alloc_end <= node.end_addr() {
+            // FIX : Vérifier que l'allocation tient dans le nœud avec alignement
+            if alloc_start >= node.start_addr() && alloc_end <= node.end_addr() {
                 // Bloc trouvé ! Le retirer de la liste
                 let next = node.next;
-                let ret = Some((node, alloc_start));
-                self.head = next;
-                return ret;
+                
+                if let Some(mut prev_ptr) = prev {
+                    unsafe { prev_ptr.as_mut().next = next; }
+                } else {
+                    self.head = next;
+                }
+                
+                return Some((node, alloc_start));
             }
 
             // Continuer avec le nœud suivant
+            prev = Some(node_ptr);
             current = node.next;
         }
 
