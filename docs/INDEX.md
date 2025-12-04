@@ -4,7 +4,35 @@
 
 Exo-OS est un système d'exploitation hybride ultra-performant conçu pour surpasser Linux.
 
-## Catégories de Documentation
+**📖 Voir [README.md](README.md) pour la structure complète de la documentation organisée**
+
+---
+
+## 📂 Navigation Rapide
+
+### 🎯 Documents Actuels
+- **[Phase 1 Status](current/PHASE_1_STATUS.md)** - ✅ COMPLÈTE: fork/wait cycle
+- **[Phase 2 Plan](current/PHASE_2_PLAN.md)** - 📋 Fork context copy & POSIX
+- **[Phase 2 Quickstart](current/PHASE_2_QUICKSTART.md)** - 🚀 Guide démarrage rapide
+- **[Roadmap](current/ROADMAP.md)** - 🗺️ Plan v1.0.0 "Linux Crusher"
+- **[Module Status](current/MODULE_STATUS.md)** - 📊 État modules
+- **[TODO](current/TODO.md)** - Liste tâches
+
+### 🏗️ Architecture
+- **[Architecture v0.5.0](architecture/ARCHITECTURE_v0.5.0.md)** - Vue d'ensemble
+- **[Architecture Complète](architecture/ARCHITECTURE_COMPLETE.md)** - Détails complets
+- **[Scheduler](architecture/SCHEDULER_DOCUMENTATION.md)** - 3-Queue EMA
+- **[IPC](architecture/IPC_DOCUMENTATION.md)** - Inter-Process Communication
+- **[POSIX-X](architecture/POSIX_X_SYSCALL_ANALYSIS.md)** - Analyse syscalls
+
+### 📖 Guides
+- **[Build & Test](guides/BUILD_AND_TEST_GUIDE.md)** - 🔨 Compilation et tests
+- **[AI Integration](guides/AI_INTEGRATION.md)** - 🤖 IA dans Exo-OS
+- **[Benchmarks](guides/exo-os-benchmarks.md)** - ⚡ Performance
+
+---
+
+## Catégories de Documentation Technique
 
 ### 📡 [IPC - Inter-Process Communication](./ipc/README.md)
 Communication inter-processus haute performance (12-50x plus rapide que Linux).
