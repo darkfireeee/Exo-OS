@@ -677,13 +677,9 @@ pub fn sys_exit_group(code: ExitCode) -> ! {
 pub fn sys_wait(pid: Pid, options: WaitOptions) -> MemoryResult<(Pid, ProcessStatus)> {
     use crate::scheduler::{ThreadState, SCHEDULER};
 
-    // TODO Phase 9: Get children from current thread
-    // For now, we don't have parent-child tracking in Thread
-    // This is a limitation - would need Thread to have children field
-
-    // Simplified: Check if any thread exists with this PID
-    // and if it's in zombie state
-
+    // Get current process to access children list
+    let current_pid = sys_getpid();
+    
     // If PID specified, check its state
     if pid != u64::MAX && pid != 0 {
         let state = SCHEDULER.get_thread_state(pid);
@@ -696,7 +692,7 @@ pub fn sys_wait(pid: Pid, options: WaitOptions) -> MemoryResult<(Pid, ProcessSta
         };
 
         if is_zombie {
-            // Get real exit code (Phase 9)
+            // Get real exit code
             let exit_code = SCHEDULER.get_exit_status(pid).unwrap_or(0);
 
             // TODO: Remove from parent's children list
@@ -714,10 +710,41 @@ pub fn sys_wait(pid: Pid, options: WaitOptions) -> MemoryResult<(Pid, ProcessSta
         return Ok((0, ProcessStatus::Running));
     }
 
-    // TODO: Sleep on child exit event
-    // For now, return stub
+    // Wait for ANY child (pid == u64::MAX or 0)
+    // Search for a zombie child in current process's children list
+    if let Some(process) = PROCESS_TABLE.read().get(&current_pid) {
+        let children = process.children.lock();
+        
+        // Check each child to see if it's zombie
+        for &child_pid in children.iter() {
+            let state = SCHEDULER.get_thread_state(child_pid);
+            
+            let is_zombie = match state {
+                None => true, // Not in scheduler = terminated/zombie
+                Some(ThreadState::Terminated) => true,
+                _ => false,
+            };
+            
+            if is_zombie {
+                // Found a zombie child!
+                let exit_code = SCHEDULER.get_exit_status(child_pid).unwrap_or(0);
+                
+                // TODO: Remove from children list
+                // TODO: Call Thread::cleanup()
+                
+                return Ok((child_pid, ProcessStatus::Exited(exit_code)));
+            }
+        }
+    }
 
-    Ok((pid, ProcessStatus::Exited(0)))
+    // No zombie children found
+    if options.nohang {
+        return Ok((0, ProcessStatus::Running));
+    }
+
+    // Would block waiting for child - for now return 0
+    // TODO: Sleep on child exit event
+    Ok((0, ProcessStatus::Running))
 }
 
 /// Get process ID
