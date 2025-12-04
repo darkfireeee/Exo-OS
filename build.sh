@@ -191,8 +191,25 @@ echo ""
 
 # Create ISO
 echo -e "${BLUE}[6/6] Creating bootable ISO...${NC}"
-chmod +x scripts/make_iso.sh
-./scripts/make_iso.sh
+
+# Prepare ISO directory structure
+ISO_DIR="$BUILD_DIR/iso"
+mkdir -p "$ISO_DIR/boot/grub"
+
+# Copy kernel (both .bin for grub.cfg and .elf as backup)
+cp "$BUILD_DIR/kernel.bin" "$ISO_DIR/boot/"
+cp "$BUILD_DIR/kernel.elf" "$ISO_DIR/boot/"
+
+# Copy GRUB configuration
+cp bootloader/grub.cfg "$ISO_DIR/boot/grub/"
+
+# Create ISO with grub-mkrescue
+if command -v grub-mkrescue >/dev/null 2>&1; then
+    grub-mkrescue -o "$BUILD_DIR/exo_os.iso" "$ISO_DIR" 2>&1 | grep -E "(Writing|completed)" || true
+    echo -e "${GREEN}✓ ISO created: $BUILD_DIR/exo_os.iso${NC}"
+else
+    echo -e "${YELLOW}Warning: grub-mkrescue not found, ISO not created${NC}"
+fi
 
 echo ""
 echo -e "${GREEN}=== Build completed successfully! ===${NC}"
