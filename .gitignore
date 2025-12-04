@@ -1,0 +1,29 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# OS artifacts
+*.iso
+*.img
+*.elf
+build/exo_os.iso
+build/exo_os_new.iso
+build/kernel_stripped.elf
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.log
+*.tmp
+/tmp/
+
+# macOS
+.DS_Store
+
+# Linux
+.fuse_hidden*
