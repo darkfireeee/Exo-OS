@@ -217,12 +217,16 @@ impl Process {
 
 /// Fork - create child process (full implementation)
 pub fn sys_fork() -> MemoryResult<Pid> {
-    log::debug!("sys_fork: starting full fork implementation");
-
-    // 1. Get parent info
-    let parent_pid = SCHEDULER.with_current_thread(|t| t.id()).unwrap_or(0);
+    // TEMPORARY STUB: Fork causes system freeze (Process::new() deadlock/panic)
+    // This is a Phase 3 feature (COW fork) - for now, return "not implemented"
+    crate::logger::early_print("[FORK] STUB: Fork not yet fully implemented (Phase 3 COW fork)\n");
+    return Err(MemoryError::OutOfMemory); // Use OutOfMemory as "not implemented" error
     
-    // 2. Allocate new PID for child
+    // TODO Phase 3: Full fork implementation with COW
+    // See SESSION_SUMMARY.md for analysis - Process::new() freezes system
+    /*
+    // COMMENTED OUT - causes system freeze
+    let parent_pid = SCHEDULER.with_current_thread(|t| t.id()).unwrap_or(0);
     let child_pid = NEXT_PID.fetch_add(1, Ordering::SeqCst);
     
     // 3. Get or create parent process
@@ -337,6 +341,7 @@ pub fn sys_fork() -> MemoryResult<Pid> {
     
     // Return child PID to parent (child would return 0 via context setup)
     Ok(child_pid)
+    */
 }
 
 /// Load executable file from filesystem
