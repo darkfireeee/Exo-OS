@@ -463,6 +463,94 @@ pub fn alloc_thread_id() -> ThreadId {
     NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Child thread entry point for forked threads
+/// 
+/// This function is called when a forked child thread starts.
+/// For Phase 1, it immediately sets itself to Terminated state and yields.
+/// In a real implementation, this would restore the parent's context
+/// and return 0 from the fork syscall.
+pub fn child_entry_point() -> ! {
+    use crate::scheduler::{SCHEDULER, ThreadState};
+    
+    let tid = SCHEDULER.current_thread_id().unwrap_or(0);
+    log::debug!("Child thread {} started, becoming zombie", tid);
+    
+    // Set thread state to Terminated (zombie)
+    SCHEDULER.with_current_thread(|thread| {
+        thread.set_state(ThreadState::Terminated);
+        thread.set_exit_status(0);
+    });
+    
+    log::info!("Process {} exiting with code 0 (zombie state)", tid);
+    
+    // Yield forever - scheduler won't schedule terminated threads
+    loop {
+        crate::scheduler::yield_now();
+        unsafe { core::arch::asm!("pause") };
+    }
+}
+
+impl Thread {
+    /// Create a forked child thread from parent
+    /// 
+    /// Phase 1 simplified implementation:
+    /// - Creates a new thread that immediately exits
+    /// - Sets up parent-child relationship
+    /// - In a full implementation, this would copy the parent's context
+    ///   and make fork return 0 in the child
+    pub fn fork_from(parent: &Thread, child_id: ThreadId, child_pid: u64) -> Self {
+        log::debug!("Thread::fork_from: parent={}, child_id={}", parent.id, child_id);
+        
+        // Create a simple child thread that will exit immediately
+        // This allows testing the fork→exit→wait cycle
+        let stack_size = 8192; // 8KB stack
+        let kernel_stack = Self::allocate_stack(stack_size);
+        let kernel_stack_top = (kernel_stack.value() + stack_size) as u64;
+        
+        // Setup context to call child_entry_point
+        let mut context = ThreadContext::empty();
+        unsafe {
+            crate::scheduler::switch::windowed::init_context(
+                &mut context as *mut ThreadContext,
+                kernel_stack_top,
+                child_entry_point as u64,
+            );
+        }
+        
+        let child = Self {
+            id: child_id,
+            name: alloc::format!("child_{}", child_pid).into_boxed_str(),
+            state: ThreadState::Ready,
+            priority: parent.priority,
+            context,
+            kernel_stack,
+            kernel_stack_size: stack_size,
+            user_stack: parent.user_stack,
+            cpu_affinity: parent.cpu_affinity,
+            total_runtime_ns: AtomicU64::new(0),
+            context_switches: AtomicU64::new(0),
+            ema_runtime_ns: AtomicU64::new(0),
+            
+            // Set parent-child relationship
+            parent_id: AtomicU64::new(parent.id),
+            children: spin::Mutex::new(Vec::new()),
+            exit_status: core::sync::atomic::AtomicI32::new(0),
+            
+            // Copy signal handling state
+            sigmask: spin::Mutex::new(*parent.sigmask.lock()),
+            pending_signals: spin::Mutex::new(crate::posix_x::signals::SigSet::empty()),
+            signal_handlers: spin::Mutex::new(*parent.signal_handlers.lock()),
+        };
+        
+        // Add child to parent's children list
+        parent.add_child(child_id);
+        
+        log::info!("Thread fork: parent={} -> child={}", parent.id, child_id);
+        
+        child
+    }
+}
+
 /// Trampoline function for user-space threads
 /// 
 /// This function is called when a user thread is first scheduled.

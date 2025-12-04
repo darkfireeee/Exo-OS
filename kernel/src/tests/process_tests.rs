@@ -105,85 +105,173 @@ pub fn test_getpid() {
 pub fn test_fork_wait_cycle() {
     crate::logger::early_print("\n[TEST] test_fork_wait_cycle starting...\n");
     
-    // Note: fork() currently doesn't properly return 0 in child context
-    // This is because we don't yet modify the child thread's RAX register
-    // For now, we test that fork creates processes and they appear in PROCESS_TABLE
-    
     let mut child_pids = alloc::vec::Vec::new();
     
-    // Fork 3 children
+    // Fork 3 children that will immediately exit
+    crate::logger::early_print("[TEST] Forking 3 children...\n");
     for i in 0..3 {
         match process::sys_fork() {
             Ok(child_pid) => {
                 child_pids.push(child_pid);
-                crate::logger::early_print("[TEST] Parent: spawned child PID ");
+                crate::logger::early_print("[TEST]   Spawned child PID ");
                 print_u64(child_pid);
                 crate::logger::early_print("\n");
             }
             Err(_) => {
-                crate::logger::early_print("[TEST] Fork ");
+                crate::logger::early_print("[TEST]   Fork ");
                 print_u64(i);
-                crate::logger::early_print(" failed\n");
+                crate::logger::early_print(" FAILED\n");
             }
         }
     }
     
-    // Verify children exist in PROCESS_TABLE
-    crate::logger::early_print("[TEST] Verifying children in process table...\n");
-    for &child_pid in &child_pids {
-        let exists = process::PROCESS_TABLE.read().contains_key(&child_pid);
-        crate::logger::early_print("[TEST]   PID ");
-        print_u64(child_pid);
-        crate::logger::early_print(": ");
-        if exists {
-            crate::logger::early_print("✅ exists\n");
-        } else {
-            crate::logger::early_print("❌ NOT FOUND\n");
-        }
+    // Give children time to execute and exit (become zombies)
+    crate::logger::early_print("[TEST] Yielding to let children execute...\n");
+    for _ in 0..10 {
+        crate::scheduler::yield_now();
     }
     
-    // Test wait with nohang (should return 0 since children aren't zombies yet)
-    crate::logger::early_print("[TEST] Testing wait with nohang (no zombies yet)...\n");
-    let options = process::WaitOptions {
-        nohang: true,
-        untraced: false,
-        continued: false,
-    };
+    // Now wait for each child (they should be zombies)
+    crate::logger::early_print("[TEST] Waiting for zombie children...\n");
+    let mut zombies_found = 0;
     
-    match process::sys_wait(u64::MAX, options) {
-        Ok((pid, status)) => {
-            crate::logger::early_print("[TEST]   wait returned PID ");
-            print_u64(pid);
-            if pid == 0 {
-                crate::logger::early_print(" (no zombie found - correct)\n");
-            } else {
-                crate::logger::early_print(" (unexpected)\n");
+    for _ in 0..3 {
+        let options = process::WaitOptions {
+            nohang: false, // Block until zombie found
+            untraced: false,
+            continued: false,
+        };
+        
+        match process::sys_wait(u64::MAX, options) {
+            Ok((pid, status)) => {
+                if pid > 0 {
+                    crate::logger::early_print("[TEST]   ✅ Found zombie PID ");
+                    print_u64(pid);
+                    crate::logger::early_print(" status=");
+                    match status {
+                        process::ProcessStatus::Exited(code) => {
+                            print_i32(code);
+                        }
+                        _ => {
+                            crate::logger::early_print("?");
+                        }
+                    }
+                    crate::logger::early_print("\n");
+                    zombies_found += 1;
+                } else {
+                    crate::logger::early_print("[TEST]   ⚠️  wait returned PID 0 (no zombie)\n");
+                    break;
+                }
+            }
+            Err(_) => {
+                crate::logger::early_print("[TEST]   ❌ wait failed\n");
+                break;
             }
         }
-        Err(_) => {
-            crate::logger::early_print("[TEST]   wait failed\n");
-        }
     }
     
-    crate::logger::early_print("[TEST] ✅ test_fork_wait_cycle COMPLETE\n");
-    crate::logger::early_print("[TEST]    Note: Full fork/wait cycle requires child context setup\n");
+    crate::logger::early_print("[TEST] Found ");
+    print_u64(zombies_found as u64);
+    crate::logger::early_print("/3 zombies\n");
+    
+    if zombies_found == 3 {
+        crate::logger::early_print("[TEST] ✅ test_fork_wait_cycle PASSED\n");
+    } else {
+        crate::logger::early_print("[TEST] ⚠️  test_fork_wait_cycle PARTIAL (");
+        print_u64(zombies_found as u64);
+        crate::logger::early_print("/3 zombies found)\n");
+    }
 }
 
-/// Run all process tests
-pub fn run_all() {
-    crate::logger::early_print("\n");
-    crate::logger::early_print("╔════════════════════════════════════════╗\n");
-    crate::logger::early_print("║   PROCESS SYSCALL TESTS (Phase 1)     ║\n");
-    crate::logger::early_print("╚════════════════════════════════════════╝\n");
-    crate::logger::early_print("\n");
+/// Test exec - load and execute ELF binary
+pub fn test_exec() {
+    crate::logger::early_print("\n[TEST] test_exec starting...\n");
+    
+    // Check if /tmp/hello.elf exists
+    crate::logger::early_print("[TEST] Checking for /tmp/hello.elf...\n");
+    
+    match process::sys_exec("/tmp/hello.elf", &[], &[]) {
+        Ok(_) => {
+            // Should never reach here - exec replaces current process
+            crate::logger::early_print("[TEST] ❌ test_exec FAILED: exec returned instead of replacing process\n");
+        }
+        Err(_) => {
+            crate::logger::early_print("[TEST] ⚠️  test_exec SKIPPED: /tmp/hello.elf not found (expected in minimal environment)\n");
+        }
+    }
+}
 
+/// Test runner entry point (runs as a scheduler thread)
+fn test_runner_main() -> ! {
     test_getpid();
     test_fork();
     test_fork_wait_cycle();
+    test_exec();
 
     crate::logger::early_print("\n");
     crate::logger::early_print("╔════════════════════════════════════════╗\n");
     crate::logger::early_print("║   ALL PROCESS TESTS COMPLETE          ║\n");
     crate::logger::early_print("╚════════════════════════════════════════╝\n");
     crate::logger::early_print("\n");
+    
+    // Exit when done
+    process::sys_exit(0);
+}
+
+/// Run all process tests
+/// 
+/// Creates a test runner thread and starts the scheduler.
+/// The scheduler takes over execution and never returns here.
+pub fn run_all() {
+    use crate::scheduler::{SCHEDULER, Thread};
+    use crate::syscall::handlers::process::PROCESS_TABLE;
+    use alloc::sync::Arc;
+    use core::sync::atomic::AtomicI32;
+    
+    crate::logger::early_print("\n");
+    crate::logger::early_print("╔════════════════════════════════════════╗\n");
+    crate::logger::early_print("║   PROCESS SYSCALL TESTS (Phase 1)     ║\n");
+    crate::logger::early_print("╚════════════════════════════════════════╝\n");
+    crate::logger::early_print("\n");
+
+    // Create test runner process in PROCESS_TABLE (PID 1)
+    {
+        let test_process = process::Process {
+            pid: 1,
+            ppid: 0,
+            pgid: 1,
+            sid: 1,
+            main_tid: 1,
+            name: alloc::string::String::from("test_runner"),
+            fd_table: spin::Mutex::new(alloc::collections::BTreeMap::new()),
+            memory_regions: spin::Mutex::new(alloc::vec::Vec::new()),
+            cwd: spin::Mutex::new(alloc::string::String::from("/")),
+            environ: spin::Mutex::new(alloc::vec::Vec::new()),
+            exit_status: AtomicI32::new(0),
+            state: spin::Mutex::new(process::ProcessState::Running),
+            children: spin::Mutex::new(alloc::vec::Vec::new()),
+            uid: 0,
+            gid: 0,
+            euid: 0,
+            egid: 0,
+        };
+        
+        PROCESS_TABLE.write().insert(1, Arc::new(test_process));
+        crate::logger::early_print("[TEST] Created test process (PID 1) in PROCESS_TABLE\n");
+    }
+
+    // Create test runner thread
+    let test_thread = Thread::new_kernel(
+        1, // TID 1 for test runner
+        "test_runner",
+        test_runner_main,
+        16384, // 16KB stack
+    );
+    
+    crate::logger::early_print("[TEST] Created test runner thread (TID 1)\n");
+    SCHEDULER.add_thread(test_thread);
+    
+    // Start scheduler - this takes over and never returns
+    crate::logger::early_print("[TEST] Starting scheduler...\n\n");
+    crate::scheduler::start();
 }

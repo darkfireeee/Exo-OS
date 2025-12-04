@@ -270,17 +270,36 @@ pub fn sys_fork() -> MemoryResult<Pid> {
     }
     
     // 6. Create child thread with copied context
-    SCHEDULER.with_current_thread(|parent_thread| {
-        // Get parent context
-        let parent_name = parent_thread.name();
-        let child_name = alloc::format!("{}_child_{}", parent_name, child_pid);
+    // For Phase 1, create a simple child thread that will exit immediately
+    // In a full implementation, we would copy the parent's context
+    let child_thread = {
+        // Allocate thread ID (same as PID for simplicity)
+        let child_tid = child_pid;
         
-        // Create child thread entry
-        log::debug!("Fork: creating child thread {}", child_name);
+        // Create a simple child thread that exits immediately
+        // This allows testing fork→exit→wait cycle
+        let stack_size = 8192; // 8KB stack
+        let child = crate::scheduler::thread::thread::Thread::new_kernel(
+            child_tid,
+            &alloc::format!("child_{}", child_pid),
+            crate::scheduler::thread::thread::child_entry_point,
+            stack_size,
+        );
         
-        // Note: The actual thread creation and context copy happens in the scheduler
-        // For now, we rely on the scheduler's spawn mechanism
-    });
+        // Set parent ID for parent-child tracking
+        child.set_parent_id(parent_pid);
+        
+        // Add child to parent's children list
+        if let Some(parent) = PROCESS_TABLE.read().get(&parent_pid) {
+            parent.children.lock().push(child_pid);
+        }
+        
+        child
+    };
+    
+    // Add child thread to scheduler
+    SCHEDULER.add_thread(child_thread);
+    log::debug!("Fork: created and scheduled child thread {}", child_pid);
     
     // 7. Setup COW for parent's memory regions
     // Mark parent's writable pages as read-only COW
@@ -650,14 +669,12 @@ pub fn sys_exit(code: ExitCode) -> ! {
         thread.set_state(ThreadState::Terminated);
     });
     
-    log::info!("Process {} exiting with code {}", current_pid, code);
+    log::info!("Process {} exiting with code {} (zombie state)", current_pid, code);
 
-    // 8. Schedule next process (never returns)
-    crate::scheduler::yield_now();
-
-    // Fallback halt
+    // 8. Yield forever (thread is now zombie, scheduler won't run it again)
     loop {
-        unsafe { core::arch::asm!("hlt") };
+        crate::scheduler::yield_now();
+        unsafe { core::arch::asm!("pause") };
     }
 }
 
@@ -679,6 +696,7 @@ pub fn sys_wait(pid: Pid, options: WaitOptions) -> MemoryResult<(Pid, ProcessSta
 
     // Get current process to access children list
     let current_pid = sys_getpid();
+    log::info!("sys_wait: current_pid={}, looking for pid={}", current_pid, pid);
     
     // If PID specified, check its state
     if pid != u64::MAX && pid != 0 {
@@ -712,12 +730,15 @@ pub fn sys_wait(pid: Pid, options: WaitOptions) -> MemoryResult<(Pid, ProcessSta
 
     // Wait for ANY child (pid == u64::MAX or 0)
     // Search for a zombie child in current process's children list
+    log::info!("wait: getting process {} from PROCESS_TABLE", current_pid);
     if let Some(process) = PROCESS_TABLE.read().get(&current_pid) {
         let children = process.children.lock();
+        log::info!("wait: found process, searching {} children of PID {}", children.len(), current_pid);
         
         // Check each child to see if it's zombie
         for &child_pid in children.iter() {
             let state = SCHEDULER.get_thread_state(child_pid);
+            log::info!("wait: checking child {} state={:?}", child_pid, state);
             
             let is_zombie = match state {
                 None => true, // Not in scheduler = terminated/zombie
@@ -728,9 +749,17 @@ pub fn sys_wait(pid: Pid, options: WaitOptions) -> MemoryResult<(Pid, ProcessSta
             if is_zombie {
                 // Found a zombie child!
                 let exit_code = SCHEDULER.get_exit_status(child_pid).unwrap_or(0);
+                log::info!("wait: found zombie child {} with exit_code={}", child_pid, exit_code);
                 
-                // TODO: Remove from children list
-                // TODO: Call Thread::cleanup()
+                // Remove from children list (reap the zombie)
+                drop(children); // Release lock before modifying
+                if let Some(process) = PROCESS_TABLE.read().get(&current_pid) {
+                    let mut children_mut = process.children.lock();
+                    children_mut.retain(|&pid| pid != child_pid);
+                    log::info!("wait: reaped zombie {}, {} children remain", child_pid, children_mut.len());
+                }
+                
+                // TODO: Call Thread::cleanup() to free resources
                 
                 return Ok((child_pid, ProcessStatus::Exited(exit_code)));
             }

@@ -140,6 +140,9 @@ pub struct Scheduler {
 
     /// Blocked threads registry
     blocked_threads: Mutex<alloc::collections::BTreeMap<ThreadId, Box<Thread>>>,
+    
+    /// Zombie threads (terminated but not yet reaped by parent)
+    zombie_threads: Mutex<alloc::collections::BTreeMap<ThreadId, Box<Thread>>>,
 }
 
 impl Scheduler {
@@ -158,6 +161,7 @@ impl Scheduler {
             total_runtime_ns: Mutex::new(0),
             idle_thread_id: Mutex::new(None),
             blocked_threads: Mutex::new(alloc::collections::BTreeMap::new()),
+            zombie_threads: Mutex::new(alloc::collections::BTreeMap::new()),
         }
     }
 
@@ -299,6 +303,7 @@ impl Scheduler {
         let old_ctx: *mut ThreadContext;
         let new_ctx: *const ThreadContext;
         let switch_needed: bool;
+        let mut zombie_to_add: Option<(ThreadId, Box<Thread>)> = None;
         
         {
             // Scope for locks - they MUST be dropped before context switch
@@ -307,7 +312,38 @@ impl Scheduler {
             
             // Check if we have a current thread to save
             if let Some(ref mut curr_thread) = *current {
-                if curr_thread.state() == ThreadState::Running {
+                let curr_state = curr_thread.state();
+                
+                // Handle terminated threads - DON'T put them back in queue
+                if curr_state == ThreadState::Terminated {
+                    let tid = curr_thread.id();
+                    logger::debug(&format!("[SCHED] Thread {} terminated, will move to zombie list", tid));
+                    
+                    // Get next thread from queue
+                    if let Some(mut next_thread) = run_queue.dequeue() {
+                        // Switch to next thread
+                        new_ctx = next_thread.context_ptr();
+                        next_thread.set_state(ThreadState::Running);
+                        next_thread.inc_context_switches();
+                        
+                        // Take out terminated thread and save for zombie list
+                        let terminated_thread = current.take().unwrap();
+                        zombie_to_add = Some((tid, terminated_thread));
+                        
+                        *current = Some(next_thread);
+                        *self.total_switches.lock() += 1;
+                        
+                        // No old context to save - terminated thread context is gone
+                        old_ctx = core::ptr::null_mut();
+                        switch_needed = true;
+                    } else {
+                        // No more threads, keep terminated thread as current
+                        logger::warn("[SCHED] No threads left after termination!");
+                        switch_needed = false;
+                        old_ctx = core::ptr::null_mut();
+                        new_ctx = core::ptr::null();
+                    }
+                } else if curr_state == ThreadState::Running {
                     // Get next thread from queue
                     if let Some(mut next_thread) = run_queue.dequeue() {
                         // We have a switch to perform!
@@ -350,10 +386,24 @@ impl Scheduler {
                         new_ctx = core::ptr::null();
                     }
                 } else {
-                    // Current thread not running, weird state
-                    switch_needed = false;
-                    old_ctx = core::ptr::null_mut();
-                    new_ctx = core::ptr::null();
+                    // Current thread not running (blocked, etc), switch to next
+                    if let Some(mut next_thread) = run_queue.dequeue() {
+                        new_ctx = next_thread.context_ptr();
+                        next_thread.set_state(ThreadState::Running);
+                        
+                        let old_thread = current.take().unwrap();
+                        *current = Some(next_thread);
+                        
+                        // Don't put blocked thread back in queue
+                        // TODO: Add to blocked list
+                        
+                        old_ctx = core::ptr::null_mut();
+                        switch_needed = true;
+                    } else {
+                        switch_needed = false;
+                        old_ctx = core::ptr::null_mut();
+                        new_ctx = core::ptr::null();
+                    }
                 }
             } else {
                 // No current thread - pick first available (first switch!)
@@ -380,6 +430,13 @@ impl Scheduler {
             }
             
             // Locks are dropped here at end of scope
+        }
+        
+        // Add zombie thread if we have one (after locks are released)
+        if let Some((tid, terminated_thread)) = zombie_to_add {
+            let mut zombies = self.zombie_threads.lock();
+            zombies.insert(tid, terminated_thread);
+            logger::debug(&format!("[SCHED]   Thread {} added to zombie list (total zombies: {})", tid, zombies.len()));
         }
         
         // Now perform context switch AFTER locks are released
@@ -519,7 +576,12 @@ impl Scheduler {
     /// Get thread state by ID (Phase 9: for wait4 zombie detection)
     /// Returns None if thread is not in scheduler (terminated/reaped)
     pub fn get_thread_state(&self, thread_id: ThreadId) -> Option<ThreadState> {
-        // Check current thread first
+        // Check zombie threads first
+        if self.zombie_threads.lock().contains_key(&thread_id) {
+            return Some(ThreadState::Terminated);
+        }
+        
+        // Check current thread
         if let Some(ref current) = *self.current_thread.lock() {
             if current.id() == thread_id {
                 return Some(current.state());
@@ -562,6 +624,11 @@ impl Scheduler {
     /// Get exit status for a thread (Phase 9: for wait4)
     /// Returns None if thread doesn't have exit status
     pub fn get_exit_status(&self, thread_id: ThreadId) -> Option<i32> {
+        // Check zombie threads first (most likely for exit status queries)
+        if let Some(thread) = self.zombie_threads.lock().get(&thread_id) {
+            return Some(thread.exit_status());
+        }
+        
         // Check current thread
         if let Some(ref current) = *self.current_thread.lock() {
             if current.id() == thread_id {
