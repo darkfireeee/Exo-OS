@@ -269,33 +269,22 @@ pub fn sys_fork() -> MemoryResult<Pid> {
         table.insert(child_pid, child_process);
     }
     
-    // 6. Create child thread with copied context
-    // For Phase 1, create a simple child thread that will exit immediately
-    // In a full implementation, we would copy the parent's context
-    let child_thread = {
+    // 6. Create child thread with copied context (Phase 2 full implementation)
+    // Use Thread::fork_from() to copy parent's complete CPU state
+    let child_thread = SCHEDULER.with_current_thread(|parent_thread| {
         // Allocate thread ID (same as PID for simplicity)
         let child_tid = child_pid;
         
-        // Create a simple child thread that exits immediately
-        // This allows testing fork→exit→wait cycle
-        let stack_size = 8192; // 8KB stack
-        let child = crate::scheduler::thread::thread::Thread::new_kernel(
+        // Create child thread by copying parent's context
+        let child = crate::scheduler::thread::thread::Thread::fork_from(
+            parent_thread,
             child_tid,
-            &alloc::format!("child_{}", child_pid),
-            crate::scheduler::thread::thread::child_entry_point,
-            stack_size,
+            child_pid,
         );
         
-        // Set parent ID for parent-child tracking
-        child.set_parent_id(parent_pid);
-        
-        // Add child to parent's children list
-        if let Some(parent) = PROCESS_TABLE.read().get(&parent_pid) {
-            parent.children.lock().push(child_pid);
-        }
-        
+        log::debug!("sys_fork: created child thread {} from parent {}", child_tid, parent_pid);
         child
-    };
+    }).expect("sys_fork: failed to get current thread");
     
     // Add child thread to scheduler
     SCHEDULER.add_thread(child_thread);

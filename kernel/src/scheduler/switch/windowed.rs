@@ -49,7 +49,10 @@ global_asm!(
     "# Arguments:",
     "#   rdi = *mut ThreadContext: old context to save",
     "#   rsi = *const ThreadContext: new context to restore",
-    "# ThreadContext layout: rsp(0), rip(8), cr3(16), rflags(24)",
+    "# ThreadContext layout (Phase 2):",
+    "#   rsp(0), rip(8), cr3(16), rflags(24), rax(32), rbx(40), rcx(48), rdx(56),",
+    "#   rbp(64), rdi(72), rsi(80), r8(88), r9(96), r10(104), r11(112),",
+    "#   r12(120), r13(128), r14(136), r15(144)",
     ".global windowed_context_switch_full",
     "windowed_context_switch_full:",
     "    push rbx",
@@ -73,6 +76,31 @@ global_asm!(
     "    pop r12",
     "    pop rbp",
     "    pop rbx",
+    "    ret",
+    "",
+    "# windowed_restore_full - Restore complete context for forked child",
+    "# Arguments:",
+    "#   rdi = *const ThreadContext: context to restore (all registers)",
+    "# This is used when first scheduling a forked child thread",
+    ".global windowed_restore_full",
+    "windowed_restore_full:",
+    "    mov rsp, [rdi]",
+    "    mov rax, [rdi + 32]",
+    "    mov rbx, [rdi + 40]",
+    "    mov rcx, [rdi + 48]",
+    "    mov rdx, [rdi + 56]",
+    "    mov rbp, [rdi + 64]",
+    "    mov r8,  [rdi + 88]",
+    "    mov r9,  [rdi + 96]",
+    "    mov r10, [rdi + 104]",
+    "    mov r11, [rdi + 112]",
+    "    mov r12, [rdi + 120]",
+    "    mov r13, [rdi + 128]",
+    "    mov r14, [rdi + 136]",
+    "    mov r15, [rdi + 144]",
+    "    mov rsi, [rdi + 80]",
+    "    push QWORD PTR [rdi + 8]",
+    "    mov rdi, [rdi + 72]",
     "    ret",
     "",
     "# windowed_init_context - Initialize a new thread's stack for first switch",
@@ -111,6 +139,7 @@ extern "C" {
     fn windowed_context_switch(old_rsp_ptr: *mut u64, new_rsp: u64);
     fn windowed_context_switch_full(old_ctx: *mut ThreadContext, new_ctx: *const ThreadContext);
     fn windowed_init_context(ctx: *mut ThreadContext, stack_top: u64, entry_point: u64);
+    fn windowed_restore_full(ctx: *const ThreadContext);
 }
 
 /// Initialize windowed context switch subsystem
@@ -156,5 +185,12 @@ pub unsafe fn init_context(
 #[inline(always)]
 pub unsafe fn switch_to(new_ctx: *const ThreadContext) -> ! {
     windowed_context_switch(core::ptr::null_mut(), (*new_ctx).rsp);
+    core::hint::unreachable_unchecked()
+}
+
+/// Restore full context (all registers) - used for forked child threads
+#[inline(always)]
+pub unsafe fn restore_full(ctx: *const ThreadContext) -> ! {
+    windowed_restore_full(ctx);
     core::hint::unreachable_unchecked()
 }

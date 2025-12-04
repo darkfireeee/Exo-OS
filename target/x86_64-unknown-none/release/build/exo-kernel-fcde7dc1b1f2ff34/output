@@ -1,0 +1,11 @@
+cargo:rerun-if-changed=src/arch/x86_64/boot/boot.asm
+cargo:rerun-if-changed=src/arch/x86_64/boot/boot.c
+cargo:warning=Failed to compile boot objects with link_boot.ps1
+cargo:warning=Run './link_boot.ps1' manually before building
+cargo:rerun-if-changed=src/arch/x86_64/idt_handlers.asm
+cargo:warning=Could not assemble src/arch/x86_64/idt_handlers.asm with NASM
+cargo:warning=Using Rust stubs instead (may have performance impact)
+cargo:rerun-if-changed=src/arch/x86_64/syscall_entry.asm
+cargo:rustc-link-search=native=/workspaces/Exo-OS/target/x86_64-unknown-none/release/build/exo-kernel-fcde7dc1b1f2ff34/out
+cargo:rustc-link-arg=/workspaces/Exo-OS/target/x86_64-unknown-none/release/build/exo-kernel-fcde7dc1b1f2ff34/out/syscall_entry.o
+cargo:warning=Compiled syscall_entry with NASM (elf64)

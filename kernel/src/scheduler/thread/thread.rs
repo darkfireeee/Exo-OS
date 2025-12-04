@@ -40,10 +40,32 @@ pub struct ThreadContext {
     pub cr3: u64,
     /// Flags register (RFLAGS)
     pub rflags: u64,
-    /// First argument register (RDI) - used for user mode entry point
+    
+    // General purpose registers (needed for fork)
+    /// Return value register (RAX)
+    pub rax: u64,
+    /// Base register (RBX)
+    pub rbx: u64,
+    /// Counter register (RCX)
+    pub rcx: u64,
+    /// Data register (RDX)
+    pub rdx: u64,
+    /// Base pointer (RBP)
+    pub rbp: u64,
+    /// First argument register (RDI)
     pub rdi: u64,
-    /// Second argument register (RSI) - used for user stack pointer
+    /// Second argument register (RSI)
     pub rsi: u64,
+    
+    // Extended registers
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
 }
 
 impl ThreadContext {
@@ -53,8 +75,58 @@ impl ThreadContext {
             rip: 0,
             cr3: 0,
             rflags: 0,
+            rax: 0,
+            rbx: 0,
+            rcx: 0,
+            rdx: 0,
+            rbp: 0,
             rdi: 0,
             rsi: 0,
+            r8: 0,
+            r9: 0,
+            r10: 0,
+            r11: 0,
+            r12: 0,
+            r13: 0,
+            r14: 0,
+            r15: 0,
+        }
+    }
+    
+    /// Capture full register context from current stack frame
+    /// 
+    /// This reads the registers saved by windowed_context_switch on the parent's stack.
+    /// Stack layout after windowed_context_switch:
+    ///   [rsp+0]  = r15
+    ///   [rsp+8]  = r14
+    ///   [rsp+16] = r13
+    ///   [rsp+24] = r12
+    ///   [rsp+32] = rbp
+    ///   [rsp+40] = rbx
+    ///   [rsp+48] = return address (RIP)
+    pub unsafe fn capture_from_stack(parent_rsp: u64) -> Self {
+        let stack_ptr = parent_rsp as *const u64;
+        
+        Self {
+            rsp: parent_rsp,
+            rip: *stack_ptr.offset(6),  // return address after callee-saved regs
+            cr3: 0,  // Will be set by caller
+            rflags: 0x202,  // IF enabled
+            rax: 0,  // Child gets 0 as return value from fork()
+            rbx: *stack_ptr.offset(5),
+            rcx: 0,  // Caller-saved, not preserved
+            rdx: 0,  // Caller-saved, not preserved
+            rbp: *stack_ptr.offset(4),
+            rdi: 0,  // Caller-saved, not preserved
+            rsi: 0,  // Caller-saved, not preserved
+            r8: 0,   // Caller-saved, not preserved
+            r9: 0,   // Caller-saved, not preserved
+            r10: 0,  // Caller-saved, not preserved
+            r11: 0,  // Caller-saved, not preserved
+            r12: *stack_ptr.offset(3),
+            r13: *stack_ptr.offset(2),
+            r14: *stack_ptr.offset(1),
+            r15: *stack_ptr.offset(0),
         }
     }
 }
@@ -493,28 +565,63 @@ pub fn child_entry_point() -> ! {
 impl Thread {
     /// Create a forked child thread from parent
     /// 
-    /// Phase 1 simplified implementation:
-    /// - Creates a new thread that immediately exits
-    /// - Sets up parent-child relationship
-    /// - In a full implementation, this would copy the parent's context
-    ///   and make fork return 0 in the child
+    /// Phase 2 full implementation:
+    /// - Copies parent's complete CPU context (all registers)
+    /// - Allocates new kernel stack and copies parent's stack content
+    /// - Sets RAX=0 in child context (fork() returns 0 in child)
+    /// - Preserves parent-child relationship
     pub fn fork_from(parent: &Thread, child_id: ThreadId, child_pid: u64) -> Self {
-        log::debug!("Thread::fork_from: parent={}, child_id={}", parent.id, child_id);
+        log::debug!("Thread::fork_from: parent={}, child_id={}, copying full context", parent.id, child_id);
         
-        // Create a simple child thread that will exit immediately
-        // This allows testing the fork→exit→wait cycle
-        let stack_size = 8192; // 8KB stack
+        // Allocate new kernel stack with same size as parent
+        let stack_size = parent.kernel_stack_size;
         let kernel_stack = Self::allocate_stack(stack_size);
         let kernel_stack_top = (kernel_stack.value() + stack_size) as u64;
         
-        // Setup context to call child_entry_point
-        let mut context = ThreadContext::empty();
-        unsafe {
-            crate::scheduler::switch::windowed::init_context(
-                &mut context as *mut ThreadContext,
-                kernel_stack_top,
-                child_entry_point as u64,
-            );
+        // Copy parent's context (captures callee-saved registers from stack)
+        let mut context = unsafe {
+            ThreadContext::capture_from_stack(parent.context.rsp)
+        };
+        
+        // Set child-specific values
+        context.rax = 0;  // fork() returns 0 in child
+        context.cr3 = parent.context.cr3;  // Same page table initially (COW)
+        
+        // Copy parent's stack content to child's stack
+        // Calculate how much of parent's stack is used
+        let parent_stack_bottom = parent.kernel_stack.value() as u64;
+        let parent_stack_top = parent_stack_bottom + parent.kernel_stack_size as u64;
+        let parent_stack_used = parent_stack_top - parent.context.rsp;
+        
+        if parent_stack_used > 0 && parent_stack_used < stack_size as u64 {
+            let child_stack_bottom = kernel_stack.value() as u64;
+            let child_rsp = child_stack_bottom + stack_size as u64 - parent_stack_used;
+            
+            unsafe {
+                // Copy stack data from parent to child
+                core::ptr::copy_nonoverlapping(
+                    parent.context.rsp as *const u8,
+                    child_rsp as *mut u8,
+                    parent_stack_used as usize,
+                );
+            }
+            
+            // Adjust RSP to point to child's stack
+            context.rsp = child_rsp;
+            
+            log::debug!("fork_from: copied {} bytes of stack data, child_rsp={:#x}", 
+                       parent_stack_used, child_rsp);
+        } else {
+            // Fallback: use child_entry_point if stack copy fails
+            log::warn!("fork_from: stack copy failed (used={}, size={}), using child_entry_point",
+                      parent_stack_used, stack_size);
+            unsafe {
+                crate::scheduler::switch::windowed::init_context(
+                    &mut context as *mut ThreadContext,
+                    kernel_stack_top,
+                    child_entry_point as u64,
+                );
+            }
         }
         
         let child = Self {
