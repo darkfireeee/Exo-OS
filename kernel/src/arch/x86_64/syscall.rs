@@ -517,7 +517,7 @@ fn sys_uname(buf: *mut u8) -> i64 {
         // nodename
         core::ptr::copy_nonoverlapping(b"exo\0".as_ptr(), buf.add(65), 4);
         // release
-        core::ptr::copy_nonoverlapping(b"0.4.0\0".as_ptr(), buf.add(130), 6);
+        core::ptr::copy_nonoverlapping(b"0.5.0\0".as_ptr(), buf.add(130), 6);
         // version
         core::ptr::copy_nonoverlapping(b"#1\0".as_ptr(), buf.add(195), 3);
         // machine

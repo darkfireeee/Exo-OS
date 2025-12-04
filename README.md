@@ -102,7 +102,7 @@ GRUB → boot.asm (32→64bit) → boot.c (FFI) → rust_main() → Exo-Shell
 - 📋 **[Release Notes](docs/v0.5.0_RELEASE_NOTES.md)** - Nouveautés v0.5.0
 - 🔗 **[Linkage Report](docs/LINKAGE_SUCCESS_REPORT.md)** - Détails C/Rust
 - 🧠 **[Heap Fix](docs/HEAP_ALLOCATOR_FIX.md)** - Correction allocator
-- 🏗️ **[Architecture](docs/ARCHITECTURE_v0.4.0.md)** - Vue d'ensemble
+- 🏗️ **[Architecture](docs/ARCHITECTURE_v0.5.0.md)** - Vue d'ensemble
 
 ---
 
@@ -185,9 +185,10 @@ Voir [CONTRIBUTING.md](CONTRIBUTING.md) pour les guidelines.
 
 ## 📊 Statistiques
 
-- **Code** : ~20,000 lignes (Rust + C + ASM)
-- **Kernel** : 2.7MB stripped
-- **ISO** : 7.6MB bootable
+- **Code** : ~60,000 lignes (Rust + C + ASM)
+- **Fichiers Rust** : 409 modules
+- **Kernel** : 22MB (avec debug)
+- **ISO** : 27MB bootable
 - **Boot time** : ~2s (QEMU)
 
 ---

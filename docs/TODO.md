@@ -1,24 +1,63 @@
-# 📋 Roadmap Exo-OS v0.5.0 "Stellar Engine"
+# 📋 Roadmap Exo-OS - Vision v1.0.0 "Linux Crusher"
 
-**Dernière mise à jour:** 2 décembre 2025  
-**Version actuelle:** v0.4.1 "Quantum Leap"  
-**Version cible:** v0.5.0 "Stellar Engine"
+**Dernière mise à jour:** 4 décembre 2025  
+**Version actuelle:** v0.5.0 "Stellar Engine"  
+**Version cible:** v1.0.0 "Linux Crusher"  
+**Licence:** GPL-2.0 (compatible drivers Linux)
 
 ---
 
-## 📊 Progression Globale
+## 🎯 VISION: Écraser Linux sur les Performances
 
-| Phase | Objectif | État | Priorité |
-|-------|----------|------|----------|
-| **Phase 1** | Context Switch Réel | ✅ 80% | 🔴 CRITIQUE |
-| **Phase 2** | Timer Preemption | 🟡 50% | 🔴 CRITIQUE |
-| **Phase 3** | Mémoire Virtuelle | 🔴 20% | 🟠 HAUTE |
-| **Phase 4** | VFS Minimal | 🔴 10% | 🟠 HAUTE |
-| **Phase 5** | Clavier PS/2 | 🔴 0% | 🟡 MOYENNE |
-| **Phase 6** | Premier Userspace | 🔴 0% | 🟡 MOYENNE |
-| **Phase 7** | Stabilisation | 🔴 0% | 🟢 NORMALE |
+| Métrique | Linux | Exo-OS Target | Ratio |
+|----------|-------|---------------|-------|
+| IPC Latence | 1247 cycles | **347 cycles** | 3.6x |
+| Context Switch | 2134 cycles | **304 cycles** | 7x |
+| Alloc Thread-Local | ~50 cycles | **8 cycles** | 6.25x |
+| Scheduler Pick | ~200 cycles | **87 cycles** | 2.3x |
 
-**Progression globale v0.5.0:** 25% 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜
+---
+
+## 📊 Progression Globale v1.0.0
+
+| Phase | Version | Objectif | État | Priorité |
+|-------|---------|----------|------|----------|
+| **Phase 0** | v0.5.0 | Timer + Context Switch + Virtual Memory | 🟡 30% | 🔴 CRITIQUE |
+| **Phase 1** | v0.6.0 | VFS Complet + POSIX-X + fork/exec | 🔴 25% | 🔴 CRITIQUE |
+| **Phase 2** | v0.7.0 | SMP Multi-core + Network TCP/IP | 🔴 10% | 🟠 HAUTE |
+| **Phase 3** | v0.8.0 | Drivers Linux GPL-2.0 + Storage | 🔴 5% | 🟠 HAUTE |
+| **Phase 4** | v0.9.0 | Security + Crypto + TPM | 🟡 40% | 🟡 MOYENNE |
+| **Phase 5** | v1.0.0 | Performance Tuning + Polish | 🔴 0% | 🟡 MOYENNE |
+
+**Progression globale v1.0.0:** ~20% 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜
+
+📚 **Documents de référence:**
+- [ROADMAP_v1.0.0_LINUX_CRUSHER.md](ROADMAP_v1.0.0_LINUX_CRUSHER.md) - Plan détaillé 9-10 mois
+- [TODO_TECHNIQUE_IMMEDIAT.md](TODO_TECHNIQUE_IMMEDIAT.md) - Actions cette semaine
+- [POSIX_X_SYSCALL_ANALYSIS.md](POSIX_X_SYSCALL_ANALYSIS.md) - Analyse 100+ syscalls
+
+---
+
+## 🚀 PHASE 0 - v0.5.0 "Stellar Engine" (EN COURS)
+
+**Objectif:** Timer preemption + Context switch fonctionnel + Virtual memory de base
+**Statut:** 🟢 85% COMPLÈTE
+
+### ✅ Terminé Phase 0
+- [x] **Boot ISO fonctionnel** - grub-bios installé, El Torito OK
+- [x] **Linkage C/ASM/Rust** - boot.asm → boot.c → rust_main
+- [x] **Timer preemption** - 3 threads avec préemption automatique (PIT 100Hz)
+- [x] **Context switch** - windowed_context_switch ASM fonctionnel
+- [x] **MMU fonctions réelles** - get/set CR3, invalidate TLB
+- [x] **Benchmark infrastructure** - rdtsc/rdtscp pour mesurer cycles
+- [x] **Clavier PS/2** - IRQ1 handler, scancode→ASCII (QWERTY/AZERTY)
+- [x] **pipe() syscall** - IPC named channels implémenté
+- [x] **tmpfs** - read/write/create fonctionnels
+
+### 🔴 Restant Phase 0
+- [ ] Mesurer cycles context switch (objectif: <500)
+- [ ] Tests exhaustifs mémoire virtuelle
+- [ ] Shell interactif avec clavier
 
 ---
 

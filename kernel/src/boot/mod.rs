@@ -18,7 +18,7 @@ pub unsafe fn boot_sequence_simple(multiboot_magic: u32, multiboot_addr: usize) 
     
     // Log banner
     log::info!("═══════════════════════════════════════════════════════");
-    log::info!("  EXO-OS KERNEL v0.4.1 - Rust Initialization");
+    log::info!("  EXO-OS KERNEL v0.5.0 - Rust Initialization");
     log::info!("═══════════════════════════════════════════════════════");
     log::info!("");
     
@@ -39,7 +39,7 @@ pub unsafe fn boot_sequence(multiboot_magic: u32, multiboot_addr: usize) -> Resu
     crate::logger::early_print("[RUST] After logger::init()\n");
     
     log::info!("═══════════════════════════════════════════════════════");
-    log::info!("  EXO-OS KERNEL v0.4.1 - Rust Initialization");
+    log::info!("  EXO-OS KERNEL v0.5.0 - Rust Initialization");
     log::info!("═══════════════════════════════════════════════════════");
     
     crate::logger::early_print("[RUST] After log::info banner\n");

@@ -40,33 +40,62 @@ pub fn run() -> ! {
     // Afficher le splash screen
     print_splash();
     
-    // Boucle principale
+    // Initialiser VFS si pas déjà fait
+    print("Initializing VFS...\n");
+    if let Err(e) = vfs::init() {
+        print("Warning: VFS init failed (may already be initialized)\n");
+    } else {
+        print("✓ VFS initialized with tmpfs root\n");
+    }
+    
+    // Tests automatiques pour valider le shell
+    println("\n📋 Running initial diagnostics...\n");
+    execute_command("version");
+    execute_command("threads");
+    
+    println("\n🧪 Creating test threads for scheduler validation...");
+    execute_command("testthreads");
+    
+    // IMPORTANT: Activer les interrupts pour le preemptive scheduling
+    println("\n⚡ Enabling interrupts for preemptive scheduling...");
+    unsafe {
+        core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
+    }
+    
+    // Vérifier que les interrupts sont bien activés
+    let rflags: u64;
+    unsafe {
+        core::arch::asm!("pushfq; pop {}", out(reg) rflags, options(nomem, nostack));
+    }
+    if rflags & 0x200 != 0 {
+        println("✓ Interrupts enabled (IF=1)");
+    } else {
+        println("✗ Warning: Interrupts still disabled!");
+    }
+    
+    println("\n════════════════════════════════════════════════════════");
+    println("  SCHEDULER RUNNING - Threads will preempt every 10ms");
+    println("  Watch the output to see threads alternating...");
+    println("════════════════════════════════════════════════════════\n");
+    
+    // Boucle principale du shell - laisse le scheduler fonctionner
+    // Le timer interrupt va appeler schedule() automatiquement
+    let mut counter = 0u64;
     loop {
-        // Afficher le prompt
-        print("exo-os:~$ ");
+        // Yield explicitement pour permettre aux autres threads de s'exécuter
+        crate::scheduler::yield_now();
         
-        // Lire la commande (pour l'instant, simuler avec les commandes de test)
-        // TODO: Implémenter la lecture du clavier
-        println("Shell ready - keyboard input not yet implemented");
-        println("Testing VFS commands...\n");
+        counter += 1;
         
-        // Tests automatiques pour valider le shell
-        execute_command("help");
-        execute_command("version");
-        execute_command("ls /");
-        execute_command("mkdir /test");
-        execute_command("ls /");
-        execute_command("touch /test/hello.txt");
-        execute_command("write /test/hello.txt Hello from Exo-OS!");
-        execute_command("cat /test/hello.txt");
-        execute_command("ls /test");
+        // Afficher un heartbeat toutes les 100 yields
+        if counter % 100 == 0 {
+            print(".");
+        }
         
-        println("\n\nShell tests complete. System halting...");
-        
-        // Halt après les tests
-        loop {
+        // Pause pour ne pas surcharger
+        for _ in 0..10000 {
             unsafe {
-                core::arch::asm!("hlt", options(nomem, nostack));
+                core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
             }
         }
     }
@@ -117,6 +146,8 @@ fn execute_command(line: &str) {
         "rmdir" => cmd_rmdir(args),
         "touch" => cmd_touch(args),
         "write" => cmd_write(args),
+        "threads" => cmd_threads(),
+        "testthreads" => cmd_testthreads(),
         _ => {
             print("❌ Unknown command: '");
             print(cmd);
@@ -385,4 +416,100 @@ fn cmd_write(args: &[&str]) {
             println("❌ Error opening file for writing");
         }
     }
+}
+
+fn cmd_threads() {
+    println("\n🧵 Scheduler Status:\n");
+    
+    // Obtenir les stats du scheduler
+    use crate::scheduler;
+    let stats = scheduler::get_stats();
+    
+    print("  Total threads spawned: ");
+    println(&alloc::format!("{}", stats.total_spawns));
+    print("  Total context switches: ");
+    println(&alloc::format!("{}", stats.total_switches));
+    print("  Ready queue length: ");
+    println(&alloc::format!("{}", stats.ready_queue_len));
+    println("");
+}
+
+// Test thread functions
+fn test_thread_1() -> ! {
+    loop {
+        for i in 1..=5 {
+            crate::logger::early_print("[THREAD-1] Count: ");
+            crate::logger::early_print(match i {
+                1 => "1\n",
+                2 => "2\n",
+                3 => "3\n",
+                4 => "4\n",
+                5 => "5\n",
+                _ => "?\n",
+            });
+            crate::scheduler::yield_now();
+        }
+        crate::logger::early_print("[THREAD-1] Cycle complete\n");
+        crate::scheduler::yield_now();
+    }
+}
+
+fn test_thread_2() -> ! {
+    loop {
+        for c in ['A', 'B', 'C', 'D', 'E'] {
+            crate::logger::early_print("[THREAD-2] Letter: ");
+            crate::logger::early_print(match c {
+                'A' => "A\n",
+                'B' => "B\n",
+                'C' => "C\n",
+                'D' => "D\n",
+                'E' => "E\n",
+                _ => "?\n",
+            });
+            crate::scheduler::yield_now();
+        }
+        crate::logger::early_print("[THREAD-2] Cycle complete\n");
+        crate::scheduler::yield_now();
+    }
+}
+
+fn test_thread_3() -> ! {
+    loop {
+        for s in ['*', '#', '@', '&', '%'] {
+            crate::logger::early_print("[THREAD-3] Symbol: ");
+            crate::logger::early_print(match s {
+                '*' => "*\n",
+                '#' => "#\n",
+                '@' => "@\n",
+                '&' => "&\n",
+                '%' => "%\n",
+                _ => "?\n",
+            });
+            crate::scheduler::yield_now();
+        }
+        crate::logger::early_print("[THREAD-3] Cycle complete\n");
+        crate::scheduler::yield_now();
+    }
+}
+
+fn cmd_testthreads() {
+    use crate::scheduler;
+    use alloc::format;
+    
+    println("🧪 Creating test threads...\n");
+    
+    // Thread 1: Compte jusqu'à 5
+    let tid1 = scheduler::SCHEDULER.spawn("counter", test_thread_1, 8192);
+    println(&format!("  ✓ Thread 1 created (TID {})", tid1));
+    
+    // Thread 2: Affiche des lettres
+    let tid2 = scheduler::SCHEDULER.spawn("letters", test_thread_2, 8192);
+    println(&format!("  ✓ Thread 2 created (TID {})", tid2));
+    
+    // Thread 3: Affiche des symbols
+    let tid3 = scheduler::SCHEDULER.spawn("symbols", test_thread_3, 8192);
+    println(&format!("  ✓ Thread 3 created (TID {})", tid3));
+    
+    println("\n✅ 3 test threads created successfully!");
+    println("   They will execute when the scheduler switches to them.\n");
 }

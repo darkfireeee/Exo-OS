@@ -19,6 +19,7 @@ use core::panic::PanicInfo;
 // Public modules
 pub mod acpi;
 pub mod arch;
+pub mod bench;  // Module de benchmark pour mesurer les performances
 pub mod boot;
 pub mod c_compat;
 pub mod debug;
@@ -129,12 +130,12 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
     // The Rust compiler may generate SSE instructions for format!/log!/etc.
     arch::x86_64::simd::init_early();
     
-    // Affichage VGA avec balayage d'écran et splash screen v0.4.1
+    // Affichage VGA avec balayage d'écran et splash screen v0.5.0
     unsafe {
         vga_clear_with_sweep();
         vga_show_boot_splash();
 
-        // Note: vga_show_system_info() désactivé pour préserver le splash v0.4.0
+        // Note: vga_show_system_info() désactivé pour préserver le splash v0.5.0
         // Les infos système sont visibles dans serial.log
     }
 
@@ -142,7 +143,7 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
     logger::early_print("\n[KERNEL] Initializing logger system...\n");
     logger::init();
 
-    // Afficher le splash screen v0.4.0
+    // Afficher le splash screen v0.5.0
     splash::display_splash();
     splash::display_features();
 
@@ -468,7 +469,7 @@ unsafe fn vga_write_str(row: usize, col: usize, s: &str, color: u16) {
 }
 
 unsafe fn vga_show_boot_splash() {
-    // Couleurs pour le splash v0.4.0
+    // Couleurs pour le splash v0.5.0
     let frame_color = 0x0B00u16; // Cyan
     let logo_color = 0x0B00u16; // Cyan pour le logo
     let title_color = 0x0E00u16; // Jaune
@@ -531,7 +532,7 @@ unsafe fn vga_show_boot_splash() {
     );
 
     // Version et nom (centré ligne 10)
-    vga_write_str(10, 18, "🚀 Version 0.4.1 - Quantum Leap 🚀", title_color);
+    vga_write_str(10, 18, "🚀 Version 0.5.0 - Linux Crusher 🚀", title_color);
 
     // Ligne de séparation
     vga_write_str(

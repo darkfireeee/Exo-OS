@@ -1,6 +1,6 @@
 [package]
 name = "exo-kernel"
-version = "0.4.1"
+version = "0.5.0"
 authors = ["ExoOS Team"]
 edition = "2021"
 description = "Exo-OS noyau expérimental (x86_64 bare-metal, multiboot2)"

@@ -1,6 +1,6 @@
 # 📚 Documentation Index - Exo-OS v0.5.0
 
-Bienvenue dans la documentation complète d'Exo-OS v0.5.0 "Quantum Leap".
+Bienvenue dans la documentation complète d'Exo-OS v0.5.0 "Linux Crusher".
 
 ---
 
@@ -12,7 +12,7 @@ Bienvenue dans la documentation complète d'Exo-OS v0.5.0 "Quantum Leap".
 3. **[v0.5.0_RELEASE_NOTES.md](v0.5.0_RELEASE_NOTES.md)** - Notes de version
 
 ### Pour les développeurs
-1. **[ARCHITECTURE_v0.4.0.md](ARCHITECTURE_v0.4.0.md)** - Architecture système
+1. **[ARCHITECTURE_v0.5.0.md](ARCHITECTURE_v0.5.0.md)** - Architecture système v0.5.0
 2. **[LINKAGE_SUCCESS_REPORT.md](LINKAGE_SUCCESS_REPORT.md)** - Linkage C/Rust
 3. **[HEAP_ALLOCATOR_FIX.md](HEAP_ALLOCATOR_FIX.md)** - Correction heap allocator
 
@@ -24,8 +24,9 @@ Bienvenue dans la documentation complète d'Exo-OS v0.5.0 "Quantum Leap".
 
 | Document | Description | Status |
 |----------|-------------|--------|
-| [ARCHITECTURE_v0.4.0.md](ARCHITECTURE_v0.4.0.md) | Architecture complète du système | ✅ v0.4.0 |
-| [📘 Exo-OS - Architecture Complète.md](%F0%9F%93%98%20Exo-OS%20-%20Architecture%20Compl%C3%A8te.md) | Documentation détaillée | ✅ v0.4.0 |
+| [ARCHITECTURE_v0.5.0.md](ARCHITECTURE_v0.5.0.md) | Architecture complète du système | ✅ v0.5.0 |
+| [ARCHITECTURE_v0.4.0.md](ARCHITECTURE_v0.4.0.md) | Architecture v0.4.0 (archive) | 📦 Archive |
+| [📘 Exo-OS - Architecture Complète.md](%F0%9F%93%98%20Exo-OS%20-%20Architecture%20Compl%C3%A8te.md) | Documentation détaillée | ✅ v0.5.0 |
 | [LINKAGE_SUCCESS_REPORT.md](LINKAGE_SUCCESS_REPORT.md) | Architecture linkage C/Rust | ✅ v0.5.0 |
 
 ### 🔨 Build & Compilation
