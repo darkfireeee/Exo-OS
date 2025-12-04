@@ -90,7 +90,29 @@ pub fn init() -> FsResult<()> {
     create_dir("/proc")?;
     create_dir("/sys")?;
     
+    // Load test binaries into tmpfs
+    load_test_binaries()?;
+    
     log::info!("VFS initialized with tmpfs root and standard directories");
+    Ok(())
+}
+
+/// Load test binaries into tmpfs at boot
+fn load_test_binaries() -> FsResult<()> {
+    // Embed hello.elf binary at compile time
+    // Path is relative to workspace root (where Cargo.toml is)
+    const HELLO_ELF: &[u8] = include_bytes!("../../../../userland/hello.elf");
+    
+    // Write hello.elf to /tmp/hello.elf
+    match write_file("/tmp/hello.elf", HELLO_ELF) {
+        Ok(_) => {
+            log::info!("VFS: loaded /tmp/hello.elf ({} bytes)", HELLO_ELF.len());
+        }
+        Err(e) => {
+            log::warn!("VFS: failed to load hello.elf: {:?}", e);
+        }
+    }
+    
     Ok(())
 }
 
