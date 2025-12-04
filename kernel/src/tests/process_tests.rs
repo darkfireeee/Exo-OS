@@ -265,31 +265,115 @@ pub fn test_fork_wait_cycle() {
     }
 }
 
-/// Test exec - load and execute ELF binary
-pub fn test_exec() {
-    crate::logger::early_print("\n[TEST] test_exec starting...\n");
+/// Test fork+exec+wait - complete POSIX process lifecycle
+pub fn test_fork_exec_wait() {
+    crate::logger::early_print("\n[TEST] test_fork_exec_wait starting...\n");
+    crate::logger::early_print("[TEST] This tests the complete POSIX process creation cycle:\n");
+    crate::logger::early_print("[TEST]   1. Parent forks child\n");
+    crate::logger::early_print("[TEST]   2. Child execs /tmp/hello.elf\n");
+    crate::logger::early_print("[TEST]   3. hello.elf writes \"Hello from execve!\" and exits\n");
+    crate::logger::early_print("[TEST]   4. Parent waits and collects exit status\n");
     
-    // Check if /tmp/hello.elf exists
-    crate::logger::early_print("[TEST] Checking for /tmp/hello.elf...\n");
+    let parent_pid = process::sys_getpid();
+    crate::logger::early_print("[TEST] Parent PID: ");
+    print_u64(parent_pid);
+    crate::logger::early_print("\n");
     
-    match process::sys_exec("/tmp/hello.elf", &[], &[]) {
-        Ok(_) => {
-            // Should never reach here - exec replaces current process
-            crate::logger::early_print("[TEST] ❌ test_exec FAILED: exec returned instead of replacing process\n");
+    match process::sys_fork() {
+        Ok(fork_result) => {
+            if fork_result == 0 {
+                // ========== CHILD PROCESS ==========
+                crate::logger::early_print("[TEST] Child: About to exec /tmp/hello.elf...\n");
+                
+                // Give parent time to set up wait
+                for _ in 0..5 {
+                    crate::scheduler::yield_now();
+                }
+                
+                // Execute hello.elf - this should replace the child process
+                match process::sys_exec("/tmp/hello.elf", &[], &[]) {
+                    Ok(_) => {
+                        // Should NEVER reach here - exec replaces process image
+                        crate::logger::early_print("[TEST] ❌ Child: exec returned (BUG!)\n");
+                        process::sys_exit(-1);
+                    }
+                    Err(_) => {
+                        crate::logger::early_print("[TEST] ❌ Child: exec failed (file not found or ELF error)\n");
+                        process::sys_exit(-2);
+                    }
+                }
+            } else {
+                // ========== PARENT PROCESS ==========
+                crate::logger::early_print("[TEST] Parent: Forked child PID ");
+                print_u64(fork_result);
+                crate::logger::early_print("\n");
+                crate::logger::early_print("[TEST] Parent: Waiting for child to exec and exit...\n");
+                
+                // Wait for child to complete
+                let options = process::WaitOptions {
+                    nohang: false,
+                    untraced: false,
+                    continued: false,
+                };
+                
+                match process::sys_wait(fork_result, options) {
+                    Ok((waited_pid, status)) => {
+                        if waited_pid == fork_result {
+                            crate::logger::early_print("[TEST] ✅ Parent: Child completed\n");
+                            crate::logger::early_print("[TEST]   PID: ");
+                            print_u64(waited_pid);
+                            crate::logger::early_print("\n[TEST]   Status: ");
+                            
+                            match status {
+                                process::ProcessStatus::Exited(code) => {
+                                    print_i32(code);
+                                    crate::logger::early_print("\n");
+                                    
+                                    if code == 0 {
+                                        crate::logger::early_print("[TEST] ✅✅✅ test_fork_exec_wait PASSED\n");
+                                        crate::logger::early_print("[TEST]   hello.elf executed successfully!\n");
+                                    } else if code == -1 {
+                                        crate::logger::early_print("[TEST] ❌ test_fork_exec_wait FAILED: exec returned\n");
+                                    } else if code == -2 {
+                                        crate::logger::early_print("[TEST] ❌ test_fork_exec_wait FAILED: exec error\n");
+                                    } else {
+                                        crate::logger::early_print("[TEST] ⚠️  test_fork_exec_wait: unexpected exit code\n");
+                                    }
+                                }
+                                _ => {
+                                    crate::logger::early_print("(signal)\n");
+                                    crate::logger::early_print("[TEST] ⚠️  test_fork_exec_wait: child terminated by signal\n");
+                                }
+                            }
+                        } else {
+                            crate::logger::early_print("[TEST] ❌ Parent: wait returned wrong PID\n");
+                        }
+                    }
+                    Err(_) => {
+                        crate::logger::early_print("[TEST] ❌ Parent: wait() failed\n");
+                    }
+                }
+            }
         }
         Err(_) => {
-            crate::logger::early_print("[TEST] ⚠️  test_exec SKIPPED: /tmp/hello.elf not found (expected in minimal environment)\n");
+            crate::logger::early_print("[TEST] ❌ test_fork_exec_wait FAILED: fork() failed\n");
         }
     }
+}
+
+/// Test exec - simple stub (replaced by test_fork_exec_wait)
+pub fn test_exec() {
+    crate::logger::early_print("\n[TEST] test_exec (stub - see test_fork_exec_wait for full test)\n");
 }
 
 /// Test runner entry point (runs as a scheduler thread)
 fn test_runner_main() -> ! {
     test_getpid();
     test_fork();
-    test_fork_return_value();  // NEW: Critical test for inline context capture
+    test_fork_return_value();  // Critical test for inline context capture
     test_fork_wait_cycle();
-    test_exec();
+    test_fork_exec_wait();     // Complete POSIX process lifecycle test
+    test_exec();               // Stub
 
     crate::logger::early_print("\n");
     crate::logger::early_print("╔════════════════════════════════════════╗\n");
