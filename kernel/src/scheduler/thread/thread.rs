@@ -570,22 +570,50 @@ impl Thread {
     /// - Allocates new kernel stack and copies parent's stack content
     /// - Sets RAX=0 in child context (fork() returns 0 in child)
     /// - Preserves parent-child relationship
-    pub fn fork_from(parent: &Thread, child_id: ThreadId, child_pid: u64) -> Self {
+    pub fn fork_from(
+        parent: &Thread, 
+        child_id: ThreadId, 
+        child_pid: u64,
+        captured_regs: (u64, u64, u64, u64, u64, u64, u64), // (rbx, rbp, r12-r15, rsp)
+    ) -> Self {
         log::debug!("Thread::fork_from: parent={}, child_id={}, copying full context", parent.id, child_id);
+        
+        let (rbx, rbp, r12, r13, r14, r15, captured_rsp) = captured_regs;
         
         // Allocate new kernel stack with same size as parent
         let stack_size = parent.kernel_stack_size;
         let kernel_stack = Self::allocate_stack(stack_size);
         let kernel_stack_top = (kernel_stack.value() + stack_size) as u64;
         
-        // Copy parent's context (captures callee-saved registers from stack)
-        let mut context = unsafe {
-            ThreadContext::capture_from_stack(parent.context.rsp)
+        // Build context from captured registers (inline from fork syscall)
+        let mut context = ThreadContext {
+            rsp: captured_rsp,
+            rip: 0,  // Will be set from return address on stack
+            cr3: parent.context.cr3,
+            rflags: 0x202,  // IF enabled
+            rax: 0,  // fork() returns 0 in child
+            rbx,
+            rcx: 0,  // Caller-saved, not needed
+            rdx: 0,  // Caller-saved, not needed
+            rbp,
+            rdi: 0,  // Caller-saved, not needed
+            rsi: 0,  // Caller-saved, not needed
+            r8: 0,
+            r9: 0,
+            r10: 0,
+            r11: 0,
+            r12,
+            r13,
+            r14,
+            r15,
         };
         
-        // Set child-specific values
-        context.rax = 0;  // fork() returns 0 in child
-        context.cr3 = parent.context.cr3;  // Same page table initially (COW)
+        // Extract return address from captured stack
+        unsafe {
+            let stack_ptr = captured_rsp as *const u64;
+            // Return address should be on top of stack after call instruction
+            context.rip = *stack_ptr;
+        }
         
         // Copy parent's stack content to child's stack
         // Calculate how much of parent's stack is used

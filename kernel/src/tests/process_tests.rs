@@ -82,6 +82,88 @@ pub fn test_fork() {
     }
 }
 
+/// Test fork return value - critical for inline context capture validation
+pub fn test_fork_return_value() {
+    crate::logger::early_print("\n[TEST] test_fork_return_value starting...\n");
+    crate::logger::early_print("[TEST] Validates inline assembly context capture fix\n");
+    
+    let parent_pid = process::sys_getpid();
+    crate::logger::early_print("[TEST] Parent PID: ");
+    print_u64(parent_pid);
+    crate::logger::early_print("\n");
+    
+    match process::sys_fork() {
+        Ok(fork_result) => {
+            if fork_result == 0 {
+                // ✅ Child path - fork() returned 0
+                crate::logger::early_print("[TEST] ✅ Child: fork() returned 0 (CORRECT)\n");
+                
+                let child_pid = process::sys_getpid();
+                let child_ppid = process::sys_getppid();
+                
+                crate::logger::early_print("[TEST] Child PID: ");
+                print_u64(child_pid);
+                crate::logger::early_print(" PPID: ");
+                print_u64(child_ppid);
+                crate::logger::early_print("\n");
+                
+                // Verify we're a different process
+                if child_pid != parent_pid && child_ppid == parent_pid {
+                    crate::logger::early_print("[TEST] ✅ Child: PID verification PASSED\n");
+                } else {
+                    crate::logger::early_print("[TEST] ❌ Child: PID verification FAILED\n");
+                }
+                
+                process::sys_exit(42);
+            } else {
+                // ✅ Parent path - fork() returned child_pid
+                crate::logger::early_print("[TEST] ✅ Parent: fork() returned child PID ");
+                print_u64(fork_result);
+                crate::logger::early_print(" (CORRECT)\n");
+                
+                // Wait for child
+                let options = process::WaitOptions {
+                    nohang: false,
+                    untraced: false,
+                    continued: false,
+                };
+                
+                match process::sys_wait(fork_result, options) {
+                    Ok((waited_pid, status)) => {
+                        if waited_pid == fork_result {
+                            crate::logger::early_print("[TEST] ✅ Parent: wait() returned correct PID\n");
+                        } else {
+                            crate::logger::early_print("[TEST] ❌ Parent: wait() returned wrong PID\n");
+                        }
+                        
+                        match status {
+                            process::ProcessStatus::Exited(code) => {
+                                if code == 42 {
+                                    crate::logger::early_print("[TEST] ✅ Parent: child exit status 42 (CORRECT)\n");
+                                    crate::logger::early_print("[TEST] ✅✅✅ test_fork_return_value PASSED\n");
+                                } else {
+                                    crate::logger::early_print("[TEST] ❌ Parent: wrong exit status ");
+                                    print_i32(code);
+                                    crate::logger::early_print("\n");
+                                }
+                            }
+                            _ => {
+                                crate::logger::early_print("[TEST] ❌ Parent: unexpected status type\n");
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        crate::logger::early_print("[TEST] ❌ Parent: wait() failed\n");
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            crate::logger::early_print("[TEST] ❌ test_fork_return_value FAILED: fork error\n");
+        }
+    }
+}
+
 /// Test getpid/getppid
 pub fn test_getpid() {
     crate::logger::early_print("\n[TEST] test_getpid starting...\n");
@@ -205,6 +287,7 @@ pub fn test_exec() {
 fn test_runner_main() -> ! {
     test_getpid();
     test_fork();
+    test_fork_return_value();  // NEW: Critical test for inline context capture
     test_fork_wait_cycle();
     test_exec();
 

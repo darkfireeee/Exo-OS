@@ -270,6 +270,37 @@ pub fn sys_fork() -> MemoryResult<Pid> {
     }
     
     // 6. Create child thread with copied context (Phase 2 full implementation)
+    // CRITICAL: Capture current register state inline before any function calls
+    // This ensures we capture the actual fork() call site, not a stale context
+    let captured_context = unsafe {
+        let mut rbx: u64;
+        let mut rbp: u64;
+        let mut r12: u64;
+        let mut r13: u64;
+        let mut r14: u64;
+        let mut r15: u64;
+        let mut rsp: u64;
+        
+        core::arch::asm!(
+            "mov {rbx}, rbx",
+            "mov {rbp}, rbp",
+            "mov {r12}, r12",
+            "mov {r13}, r13",
+            "mov {r14}, r14",
+            "mov {r15}, r15",
+            "mov {rsp}, rsp",
+            rbx = out(reg) rbx,
+            rbp = out(reg) rbp,
+            r12 = out(reg) r12,
+            r13 = out(reg) r13,
+            r14 = out(reg) r14,
+            r15 = out(reg) r15,
+            rsp = out(reg) rsp,
+        );
+        
+        (rbx, rbp, r12, r13, r14, r15, rsp)
+    };
+    
     // Use Thread::fork_from() to copy parent's complete CPU state
     let child_thread = SCHEDULER.with_current_thread(|parent_thread| {
         // Allocate thread ID (same as PID for simplicity)
@@ -280,6 +311,7 @@ pub fn sys_fork() -> MemoryResult<Pid> {
             parent_thread,
             child_tid,
             child_pid,
+            captured_context,
         );
         
         log::debug!("sys_fork: created child thread {} from parent {}", child_tid, parent_pid);

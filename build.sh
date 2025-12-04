@@ -166,6 +166,7 @@ fi
 # Use LD to create final executable
 # First link as ELF
 ld -n -T "$LINKER_SCRIPT" \
+    --allow-multiple-definition \
     -o "$BUILD_DIR/kernel.elf" \
     "$BOOT_OBJ_DIR/boot.o" \
     "$BOOT_OBJ_DIR/boot_c.o" \
@@ -175,6 +176,7 @@ ld -n -T "$LINKER_SCRIPT" \
     --no-whole-archive \
     --gc-sections 2>/dev/null || \
 ld -n -T "$LINKER_SCRIPT" \
+    --allow-multiple-definition \
     -o "$BUILD_DIR/kernel.elf" \
     "$BOOT_OBJ_DIR/boot.o" \
     "$BOOT_OBJ_DIR/boot_c.o" \
