@@ -27,6 +27,7 @@ pub mod drivers;
 pub mod logger;
 pub mod multiboot2;
 pub mod splash;
+pub mod tests;  // Module de tests pour Phase 1
 pub use drivers::char::console::{_print as _console_print, CONSOLE};
 pub use drivers::char::serial::{_print as _serial_print, SERIAL1};
 pub use drivers::video::vga::{_print as _vga_print, WRITER};
@@ -356,7 +357,19 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             scheduler::init();
             logger::early_print("[KERNEL] ✓ Scheduler initialized\n");
 
+            // Activer les interrupts maintenant que tout est initialisé
+            logger::early_print("[DEBUG] About to enable interrupts\n");
+            arch::x86_64::enable_interrupts();
+            logger::early_print("[DEBUG] Interrupts enabled (STI)\n\n");
+
             logger::early_print("[KERNEL] ═══════════════════════════════════════\n");
+            logger::early_print("[KERNEL]   PHASE 1 TESTS - fork/exec/wait\n");
+            logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
+            
+            // Exécuter les tests de processus
+            tests::process_tests::run_all();
+
+            logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
             logger::early_print("[KERNEL]   LAUNCHING INTERACTIVE SHELL\n");
             logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
 
