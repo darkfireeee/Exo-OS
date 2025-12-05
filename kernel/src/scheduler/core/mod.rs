@@ -1,10 +1,12 @@
 //! Scheduler core module
 //!
-//! This module provides two scheduler implementations:
-//! - `scheduler`: Original V1 scheduler (has fork deadlock issues)
-//! - `scheduler_v2`: New fork-safe scheduler with lock-free pending queue
+//! This module provides the fork-safe scheduler with:
+//! - Lock-free pending queue (AtomicPtr + CAS)
+//! - Atomic statistics counters
+//! - Thread limits and zombie cleanup
 //!
-//! Use SCHEDULER_V2 for fork-safe operations.
+//! The `scheduler` module is the main production scheduler (V3).
+//! The `scheduler_v2` module is a backup/reference implementation.
 
 pub mod scheduler;
 pub mod scheduler_v2;
@@ -12,10 +14,25 @@ pub mod affinity;
 pub mod statistics;
 pub mod predictive;
 
-// V1 exports (for backward compatibility)
-pub use scheduler::{Scheduler, QueueType, SchedulerStats, SCHEDULER, init, start, yield_now, block_current, unblock};
+// V3 exports (main scheduler with lock-free pending queue)
+pub use scheduler::{
+    Scheduler, 
+    QueueType, 
+    SchedulerStats,       // Legacy stats struct (Copy/Clone)
+    AtomicSchedulerStats, // Lock-free atomic stats
+    SchedulerError,       // Error enum
+    SCHEDULER, 
+    init, 
+    start, 
+    yield_now, 
+    block_current, 
+    unblock,
+    MAX_THREADS,
+    MAX_PENDING_THREADS,
+    MAX_ZOMBIE_THREADS,
+};
 
-// V2 exports (fork-safe)
+// V2 exports (backup fork-safe implementation)
 pub use scheduler_v2::{SchedulerV2, SchedulerStatsV2, SCHEDULER_V2, InterruptGuard};
 
 pub use affinity::{CpuMask, ThreadAffinity};

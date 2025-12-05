@@ -258,7 +258,12 @@ pub fn sys_fork() -> MemoryResult<Pid> {
     // 4. Add child to scheduler (LOCK-FREE via pending queue!)
     // This uses atomic CAS to add to a linked list, so it NEVER deadlocks
     crate::logger::early_print("[FORK] Adding to scheduler (lock-free pending queue)...\n");
-    SCHEDULER.add_thread(child_thread);
+    if let Err(e) = SCHEDULER.add_thread(child_thread) {
+        crate::logger::early_print("[FORK] ERROR: Failed to add child to scheduler\n");
+        let s = alloc::format!("[FORK] Error: {:?}\n", e);
+        crate::logger::early_print(&s);
+        return Err(MemoryError::OutOfMemory);
+    }
     
     crate::logger::early_print("[FORK] SUCCESS: Child ");
     let s = alloc::format!("{} added to pending queue\n", child_tid);
