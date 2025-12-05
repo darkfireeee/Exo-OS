@@ -1,0 +1,35 @@
+[package]
+name = "package_manager"
+version = "0.1.0"
+edition = "2021"
+description = "Package manager for Exo-OS - libsolv + OSTree atomic updates"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "package_manager"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "exo-pkg"
+path = "src/main.rs"
+
+[features]
+default = ["ostree", "libsolv"]
+ostree = []           # OSTree atomic updates support
+libsolv = []          # libsolv dependency resolution
+rollback = []         # A/B partition rollback support
+
+[dependencies]
+log = "0.4"
+
+[package.metadata.exo-os]
+role = "system-package-manager"
+stage = "core"
+performance-targets = """
+Dependency resolution: < 500 ms vs ~2 sec apt/dnf
+Download (100 MB): < 5 sec vs ~8 sec apt/dnf
+Install time: < 10 sec vs ~20 sec apt/dnf
+Update system: < 30 sec vs ~2 min apt/dnf
+Rollback: < 5 sec vs N/A apt/dnf
+"""

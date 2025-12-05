@@ -6,6 +6,7 @@ Cargo.lock
 *.iso
 *.img
 *.elf
+!userland/hello.elf
 build/exo_os.iso
 build/exo_os_new.iso
 build/kernel_stripped.elf

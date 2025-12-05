@@ -1,0 +1,30 @@
+[package]
+name = "posix_x"
+version = "0.1.0"
+edition = "2021"
+description = "POSIX-X Compatibility Layer for Exo-OS - Adaptive syscall translation"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "posix_x"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[features]
+default = ["fast_path", "hybrid_path"]
+fast_path = []       # Enable fast path optimizations (< 50 cycles)
+hybrid_path = []     # Enable hybrid path optimizations (400-1000 cycles)
+legacy_path = []     # Enable legacy emulation (8000-50000 cycles)
+learning_mode = []   # Enable runtime learning for path optimization
+fusion_rings = []    # Use Fusion Rings IPC instead of Unix sockets
+
+[dependencies]
+log = "0.4"
+bitflags = "1.3"
+
+[dev-dependencies]
+
+[package.metadata.exo-os]
+role = "posix-compatibility"
+stage = "core"
+performance-target = "78-85% native"

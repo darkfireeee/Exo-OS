@@ -1,0 +1,33 @@
+[package]
+name = "audio_service"
+version = "0.1.0"
+edition = "2021"
+description = "Audio service for Exo-OS - PipeWire-based with Fusion Rings IPC"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "audio_service"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "audio-service"
+path = "src/main.rs"
+
+[features]
+default = ["fusion_rings"]
+fusion_rings = []      # Use Fusion Rings for IPC (5.8x faster than Unix sockets)
+pipewire_compat = []   # PipeWire protocol compatibility
+
+[dependencies]
+log = "0.4"
+
+[package.metadata.exo-os]
+role = "system-service"
+stage = "desktop"
+performance-targets = """
+Audio latency: < 1 ms (target) vs 5 ms (PipeWire Linux)
+Buffer underruns: ~0
+CPU usage (idle): < 0.5%
+IPC transport: 347 cycles vs ~2000 cycles (5.8x gain)
+"""

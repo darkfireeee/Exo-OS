@@ -1,0 +1,13 @@
+[package]
+name = "cosmic-files"
+version = "0.1.0"
+edition = "2021"
+description = "Cosmic File Manager for Exo-OS"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "cosmic_files"
+path = "src/lib.rs"
+
+[dependencies]
+log = "0.4"

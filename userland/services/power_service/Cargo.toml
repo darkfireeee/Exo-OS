@@ -1,0 +1,33 @@
+[package]
+name = "power_service"
+version = "0.1.0"
+edition = "2021"
+description = "Power management service for Exo-OS - TLP-inspired with performance profiles"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "power_service"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "power-service"
+path = "src/main.rs"
+
+[features]
+default = []
+tlp_compat = []        # TLP compatibility mode
+ai_optimization = []   # AI-based power optimization (AI-Res integration)
+
+[dependencies]
+log = "0.4"
+
+[package.metadata.exo-os]
+role = "system-service"
+stage = "core"
+performance-targets = """
+Battery life (idle): > 10h vs ~9h Linux
+Suspend time: < 1 sec vs ~2 sec Linux
+Resume time: < 2 sec vs ~3 sec Linux
+CPU freq switch: < 10 ms vs ~20 ms Linux
+"""

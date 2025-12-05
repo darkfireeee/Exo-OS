@@ -1,0 +1,42 @@
+[package]
+name = "cosmic-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Cosmic Desktop Environment for Exo-OS"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "cosmic_desktop"
+path = "src/lib.rs"
+
+[features]
+default = ["wayland", "fusion_rings"]
+wayland = []          # Wayland compositor backend
+x11 = []              # X11 compatibility (XWayland)
+fusion_rings = []     # Use Fusion Rings for IPC
+
+[dependencies]
+log = "0.4"
+
+[workspace]
+members = [
+    "cosmic-comp",
+    "cosmic-panel",
+    "cosmic-launcher",
+    "cosmic-settings",
+    "cosmic-files",
+    "cosmic-term",
+]
+
+[package.metadata.exo-os]
+role = "desktop-environment"
+stage = "desktop"
+performance-targets = """
+Boot to desktop: < 3 sec vs ~8 sec GNOME
+Memory footprint: < 400 MB vs ~800 MB GNOME
+App launch (cold): < 500 ms vs ~1 sec GNOME
+App launch (warm): < 150 ms vs ~300 ms GNOME
+Frame time (idle): < 16 ms (60 FPS)
+Frame time (load): < 16 ms (60 FPS)
+Input latency: < 10 ms vs ~15 ms GNOME
+"""
