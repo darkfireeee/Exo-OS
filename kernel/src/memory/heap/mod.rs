@@ -4,6 +4,9 @@
 //! - Thread-local cache (≤256B, ~8 cycles)
 //! - CPU slab (≤4KB, ~50 cycles)
 //! - Buddy allocator (>4KB, ~200 cycles)
+//! 
+//! INTERRUPT SAFETY: Utilise InterruptGuard pour désactiver les interrupts
+//! pendant les critical sections et éviter les deadlocks avec timer IRQ
 
 pub mod thread_cache;
 pub mod cpu_slab;
@@ -15,6 +18,58 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::{self, NonNull};
 use core::mem;
 use spin::Mutex;
+
+/// RAII guard qui désactive les interrupts pendant sa durée de vie
+/// Utilisé pour protéger les critical sections de l'allocateur
+struct InterruptGuard {
+    were_enabled: bool,
+}
+
+impl InterruptGuard {
+    #[inline]
+    fn new() -> Self {
+        let were_enabled = are_interrupts_enabled();
+        if were_enabled {
+            disable_interrupts();
+        }
+        Self { were_enabled }
+    }
+}
+
+impl Drop for InterruptGuard {
+    #[inline]
+    fn drop(&mut self) {
+        if self.were_enabled {
+            enable_interrupts();
+        }
+    }
+}
+
+/// Vérifie si les interrupts sont activés (bit IF dans RFLAGS)
+#[inline]
+fn are_interrupts_enabled() -> bool {
+    let rflags: u64;
+    unsafe {
+        core::arch::asm!("pushfq; pop {}", out(reg) rflags, options(nomem, preserves_flags));
+    }
+    rflags & 0x200 != 0 // IF bit
+}
+
+/// Désactive les interrupts (CLI)
+#[inline]
+fn disable_interrupts() {
+    unsafe {
+        core::arch::asm!("cli", options(nomem, nostack));
+    }
+}
+
+/// Active les interrupts (STI)
+#[inline]
+fn enable_interrupts() {
+    unsafe {
+        core::arch::asm!("sti", options(nomem, nostack));
+    }
+}
 
 /// Taille minimale d'un bloc (doit contenir au moins ListNode)
 const MIN_BLOCK_SIZE: usize = mem::size_of::<ListNode>();
@@ -78,9 +133,17 @@ impl Heap {
 
     /// Alloue un bloc de mémoire
     pub fn allocate(&mut self, layout: Layout) -> Result<NonNull<u8>, ()> {
+        // INTERRUPT SAFETY: Disable interrupts during allocation to prevent deadlock
+        let _interrupt_guard = InterruptGuard::new();
+        
         // Ajuster la taille pour l'alignement et la taille minimale
         let size = layout.size().max(MIN_BLOCK_SIZE);
         let size = align_up(size, layout.align());
+        
+        // Validation: Check for overflow and reasonable size
+        if size > self.heap_size || size == 0 {
+            return Err(());
+        }
 
         // Chercher un bloc libre assez grand (first-fit)
         if let Some((region, alloc_start)) = self.find_region(size, layout.align()) {
@@ -117,8 +180,19 @@ impl Heap {
     /// # Safety
     /// ptr doit avoir été alloué avec ce heap allocator
     pub unsafe fn deallocate(&mut self, ptr: NonNull<u8>, layout: Layout) {
+        // INTERRUPT SAFETY: Disable interrupts during deallocation
+        let _interrupt_guard = InterruptGuard::new();
+        
         let size = layout.size().max(MIN_BLOCK_SIZE);
         let size = align_up(size, layout.align());
+        
+        // Validation: Verify pointer is within heap bounds
+        let ptr_addr = ptr.as_ptr() as usize;
+        if ptr_addr < self.heap_start || ptr_addr >= self.heap_start + self.heap_size {
+            // Invalid pointer - could panic here, but for robustness just return
+            // In production, should log error
+            return;
+        }
 
         // Créer un nouveau nœud libre
         let new_node = ListNode::new(size);
@@ -126,7 +200,9 @@ impl Heap {
         new_node_ptr.write(new_node);
         
         self.insert_node(NonNull::new_unchecked(new_node_ptr));
-        self.allocated -= size;
+        
+        // Update allocated counter with saturation to prevent underflow
+        self.allocated = self.allocated.saturating_sub(size);
     }
 
     /// Trouve une région libre assez grande

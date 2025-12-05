@@ -99,7 +99,49 @@ fn panic(info: &PanicInfo) -> ! {
 // Allocation error handler
 #[alloc_error_handler]
 fn alloc_error(layout: core::alloc::Layout) -> ! {
-    panic!("Allocation error: {:?}", layout);
+    logger::early_print("\n\n");
+    logger::early_print("═══════════════════════════════════════\n");
+    logger::early_print("  HEAP ALLOCATION ERROR!\n");
+    logger::early_print("═══════════════════════════════════════\n");
+    
+    use core::fmt::Write;
+    let mut buf = [0u8; 128];
+    let mut writer = crate::logger::BufferWriter {
+        buffer: &mut buf,
+        pos: 0,
+    };
+    
+    let _ = core::write!(&mut writer, "Requested size: {} bytes\n", layout.size());
+    let _ = core::write!(&mut writer, "Required align: {} bytes\n", layout.align());
+    
+    let pos = writer.pos;
+    unsafe {
+        crate::logger::serial_write_buf(&buf[..pos]);
+    }
+    
+    // Get heap stats
+    let stats = ALLOCATOR.stats();
+    logger::early_print("Heap stats:\n");
+    let mut buf2 = [0u8; 256];
+    let mut writer2 = crate::logger::BufferWriter {
+        buffer: &mut buf2,
+        pos: 0,
+    };
+    let _ = core::write!(&mut writer2, "  Total: {} KB\n", stats.total_size / 1024);
+    let _ = core::write!(&mut writer2, "  Used:  {} KB\n", stats.allocated / 1024);
+    let _ = core::write!(&mut writer2, "  Free:  {} KB\n", stats.free / 1024);
+    let pos2 = writer2.pos;
+    unsafe {
+        crate::logger::serial_write_buf(&buf2[..pos2]);
+    }
+    
+    logger::early_print("System halted.\n");
+    
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack));
+        }
+    }
 }
 
 /// Test runner entry point for custom test frameworks
@@ -267,10 +309,11 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
                 BITMAP_SIZE,
             );
 
-            // 4. Heap (8MB - 18MB = 10MB)
+            // 4. Heap (8MB - 72MB = 64MB) - Increased for fork allocations
+            const HEAP_SIZE: usize = 64 * 1024 * 1024;
             memory::physical::mark_region_used(
                 memory::PhysicalAddress::new(HEAP_START),
-                10 * 1024 * 1024,
+                HEAP_SIZE,
             );
 
             // Vérifier l'initialisation
@@ -282,12 +325,12 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
 
             logger::early_print("[KERNEL] ✓ Physical memory management ready\n");
 
-            // Initialiser le heap allocator
+            // Initialiser le heap allocator (64MB pour fork/exec)
             logger::early_print("[KERNEL] Initializing heap allocator...\n");
             unsafe {
-                ALLOCATOR.init(HEAP_START, 10 * 1024 * 1024);
+                ALLOCATOR.init(HEAP_START, HEAP_SIZE);
             }
-            logger::early_print("[KERNEL] ✓ Heap allocator initialized (10MB)\n");
+            logger::early_print("[KERNEL] ✓ Heap allocator initialized (64MB)\n");
 
             // Tester une allocation pour vérifier que le heap fonctionne
             logger::early_print("[KERNEL] Testing heap allocation...\n");
