@@ -11,23 +11,23 @@ Instead of doing one at a time, we'll implement all four in parallel where possi
 
 ---
 
-## ✅ TODO A: Virtual Memory (PRIORITY 1)
+## ✅ TODO A: Virtual Memory (PRIORITY 1) - 20% ████░░░░░░░░░░░░░░░░
 
-### A1. Page Table Walking ⏳ NEXT
-- [ ] Implement `walk_page_table()` helper
-- [ ] Add `get_page_table_entry()` function
-- [ ] Test page table traversal
+### A1. Page Table Walking ✅ DONE
+- [x] Implement `walk_page_table()` helper (PageTableWalker exists)
+- [x] Add `get_page_table_entry()` function (walk() method)
+- [x] Test page table traversal
 
-### A2. Page Mapping
-- [ ] Implement `map_page()` in `mapper.rs`
-- [ ] Implement `unmap_page()` in `mapper.rs`
-- [ ] Add `remap_page()` for permission changes
-- [ ] Implement `is_mapped()` checker
+### A2. Page Mapping ✅ DONE
+- [x] Implement `map_page()` in `mapper.rs`
+- [x] Implement `unmap_page()` in `mapper.rs`
+- [x] Add `remap_page()` for permission changes (protect_page)
+- [x] Implement `is_mapped()` checker (is_page_present)
 
-### A3. TLB Management
-- [ ] Add `flush_tlb_single()` with invlpg
-- [ ] Add `flush_tlb_all()` with CR3 reload
-- [ ] Add `flush_tlb_range()` for multiple pages
+### A3. TLB Management ✅ DONE
+- [x] Add `flush_tlb_single()` with invlpg (invalidate_tlb)
+- [x] Add `flush_tlb_all()` with CR3 reload
+- [x] Add `flush_tlb_range()` for multiple pages (invalidate_tlb_range)
 - [ ] Create TLB flush tracking metrics
 
 ### A4. Copy-On-Write (COW)
@@ -87,33 +87,33 @@ Instead of doing one at a time, we'll implement all four in parallel where possi
 
 ---
 
-## ✅ TODO C: exec() Implementation (PRIORITY 2)
+## ✅ TODO C: exec() Implementation (PRIORITY 2) - 30% ██████░░░░░░░░░░░░░░
 
-### C1. ELF Parser
-- [ ] Create `loader/elf.rs` module
-- [ ] Parse ELF header (magic, class, endian)
-- [ ] Parse program headers (PT_LOAD, PT_INTERP)
-- [ ] Parse section headers
-- [ ] Validate ELF file
+### C1. ELF Parser ✅ DONE
+- [x] Create `loader/elf.rs` module (291 lines created)
+- [x] Parse ELF header (magic, class, endian)
+- [x] Parse program headers (PT_LOAD, PT_INTERP)
+- [x] Parse section headers (Elf64SectionHeader)
+- [x] Validate ELF file (ElfFile::parse with validation)
 
-### C2. Memory Loading
-- [ ] Load ELF segments into memory
-- [ ] Setup program break (brk)
-- [ ] Allocate and setup stack
-- [ ] Map ELF into virtual memory
-- [ ] Handle BSS section (zero-fill)
+### C2. Memory Loading ✅ DONE
+- [x] Load ELF segments into memory (load_elf_into_memory implemented)
+- [x] Map ELF into virtual memory (uses MemoryMapper)
+- [x] Handle BSS section (zero-fill with write_bytes)
+- [ ] Setup program break (brk) (TODO: need brk tracking in process)
+- [ ] Allocate and setup stack (TODO: need stack setup)
 
-### C3. Execution Transfer
-- [ ] Create new address space
+### C3. Execution Transfer ⏳ NEXT
+- [ ] Create new address space (integrate with process)
 - [ ] Copy argv/envp to stack
-- [ ] Setup initial registers
+- [ ] Setup initial registers (rsp, rip, etc.)
 - [ ] Jump to entry point
 - [ ] Cleanup old process state
 
-### C4. exec() Syscall
+### C4. exec() Syscall ⏳ NEXT
 - [ ] Implement `sys_execve()` in handlers
 - [ ] Add argument/environment parsing
-- [ ] Handle path resolution
+- [ ] Handle path resolution (integrate with VFS)
 - [ ] Add error handling
 
 ### C5. Testing
@@ -126,16 +126,20 @@ Instead of doing one at a time, we'll implement all four in parallel where possi
 
 ---
 
-## ✅ TODO D: SMP Multi-core (PRIORITY 4)
+## ✅ TODO D: SMP Multi-core (PRIORITY 4) - 15% ███░░░░░░░░░░░░░░░░░
 
-### D1. AP (Application Processor) Initialization
-- [ ] Create `arch/x86_64/smp.rs` module
-- [ ] Detect number of CPUs (ACPI/MP tables)
+### D1. AP (Application Processor) Initialization ⏳ PARTIAL
+- [x] Create `arch/x86_64/smp/mod.rs` module (255 lines)
+- [x] Define MAX_CPUS = 64, CpuInfo, SmpSystem
+- [x] Add ACPI MADT parsing stubs (detect_cpu_count, parse_madt)
+- [ ] Complete RSDP search in EBDA/BIOS ROM
+- [ ] Detect number of CPUs (finish ACPI parsing)
 - [ ] Setup APIC for each CPU
 - [ ] Send INIT-SIPI-SIPI sequence
 - [ ] Wait for APs to boot
 
-### D2. Per-CPU Data Structures
+### D2. Per-CPU Data Structures ⏳ PARTIAL
+- [x] CpuInfo with per-CPU metrics (context_switches, idle/busy time)
 - [ ] Create per-CPU run queues
 - [ ] Add per-CPU scheduler state
 - [ ] Implement CPU-local storage
