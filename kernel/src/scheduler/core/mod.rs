@@ -42,9 +42,6 @@ pub mod affinity;
 pub mod statistics;
 pub mod predictive;
 
-// Keep scheduler_v2 for reference but don't export it
-mod scheduler_v2;
-
 // ═══════════════════════════════════════════════════════════════
 // Main Scheduler Exports (V3 - Production)
 // ═══════════════════════════════════════════════════════════════
