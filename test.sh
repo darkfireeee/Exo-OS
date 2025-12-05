@@ -16,11 +16,20 @@ if [ ! -f "build/exo_os.iso" ]; then
     exit 1
 fi
 
-echo "[1/3] Starting QEMU..."
+ISO_SIZE=$(stat -c%s "build/exo_os.iso" 2>/dev/null || stat -f%z "build/exo_os.iso")
+ISO_SIZE_MB=$((ISO_SIZE / 1024 / 1024))
+echo "ISO size: ${ISO_SIZE_MB}MB"
+
+if [ "$ISO_SIZE_MB" -lt 15 ]; then
+    echo "⚠️  Warning: ISO seems small (< 15MB), may not boot correctly"
+fi
+echo ""
+
+echo "[1/3] Starting QEMU (20 seconds)..."
 LOG_FILE="/tmp/exo_os_test_$(date +%s).log"
 
-# Run QEMU with 15 second timeout
-timeout 15 qemu-system-x86_64 \
+# Run QEMU with 20 second timeout
+timeout 20 qemu-system-x86_64 \
     -cdrom build/exo_os.iso \
     -serial file:"$LOG_FILE" \
     -no-reboot \

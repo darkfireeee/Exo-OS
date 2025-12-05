@@ -217,15 +217,26 @@ impl Process {
 
 /// Fork - create child process (full implementation)
 pub fn sys_fork() -> MemoryResult<Pid> {
-    // TEMPORARY STUB: Fork causes system freeze (Process::new() deadlock/panic)
-    // This is a Phase 3 feature (COW fork) - for now, return "not implemented"
-    crate::logger::early_print("[FORK] STUB: Fork not yet fully implemented (Phase 3 COW fork)\n");
-    return Err(MemoryError::OutOfMemory); // Use OutOfMemory as "not implemented" error
+    // PHASE 3 TODO: Full fork implementation
+    //
+    // Current blocker: Thread::fork_from() -> allocate_stack() freezes system
+    // Root cause: vec![0u8; size] allocation during syscall context causes deadlock
+    //
+    // Possible causes:
+    // 1. Heap allocator not interrupt-safe (timer IRQ during allocation)
+    // 2. spin::Mutex deadlock (allocator mutex held, timer IRQ tries same mutex)
+    // 3. Stack allocation too large (16KB default)
+    //
+    // Required for full implementation:
+    // - Interrupt-safe allocator OR disable interrupts during fork
+    // - COW page table duplication (already implemented in memory/virtual_mem/cow.rs)
+    // - Process struct without BTreeMap/String allocations
+    //
+    // For now: Return error to allow tests to continue
+    crate::logger::early_print("[FORK] Not implemented - Phase 3 (allocator freeze issue)\n");
+    Err(MemoryError::OutOfMemory)
     
-    // TODO Phase 3: Full fork implementation with COW
-    // See SESSION_SUMMARY.md for analysis - Process::new() freezes system
-    /*
-    // COMMENTED OUT - causes system freeze
+    /* OLD IMPLEMENTATION - COMMENTED OUT (Process::new freeze issue)
     let parent_pid = SCHEDULER.with_current_thread(|t| t.id()).unwrap_or(0);
     let child_pid = NEXT_PID.fetch_add(1, Ordering::SeqCst);
     

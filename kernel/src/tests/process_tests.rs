@@ -401,6 +401,18 @@ pub fn run_all() {
     crate::logger::early_print("╚════════════════════════════════════════╝\n");
     crate::logger::early_print("\n");
 
+    // Initialize VFS before tests (needed for exec tests)
+    crate::logger::early_print("[TEST] Initializing VFS...\n");
+    match crate::fs::vfs::init() {
+        Ok(_) => {
+            crate::logger::early_print("[TEST] ✓ VFS initialized (hello.elf should be loaded at /tmp/)\n");
+        }
+        Err(e) => {
+            crate::logger::early_print("[TEST] ⚠️  VFS init failed (tests may be limited)\n");
+        }
+    }
+    crate::logger::early_print("\n");
+
     // Create test runner process in PROCESS_TABLE (PID 1)
     {
         let test_process = process::Process {
