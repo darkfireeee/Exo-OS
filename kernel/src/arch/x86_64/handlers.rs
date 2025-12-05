@@ -223,19 +223,66 @@ extern "C" fn double_fault_handler(stack_frame: &InterruptStackFrame, error_code
 }
 
 /// Handler pour Page Fault (#PF)
+/// Intégré avec COW (Copy-On-Write) pour Phase 0
 #[no_mangle]
-extern "C" fn page_fault_handler(stack_frame: &InterruptStackFrame, error_code: u64) {
+extern "C" fn page_fault_handler(_stack_frame: &InterruptStackFrame, error_code: u64) {
+    use crate::memory::address::VirtualAddress;
+    use crate::logger;
+    
+    // Lire CR2 (adresse qui a causé le fault)
     let cr2: u64;
     unsafe { asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack)) };
     
-    let vga = 0xB8000 as *mut u16;
-    unsafe {
-        let msg = b"[PAGE FAULT] Access violation!";
-        for (i, &byte) in msg.iter().enumerate() {
-            *vga.add(24 * 80 + i) = 0x4F00 | byte as u16;
+    let fault_addr = VirtualAddress::new(cr2 as usize);
+    
+    // Décoder error_code
+    let is_present = (error_code & 0x1) != 0;
+    let is_write = (error_code & 0x2) != 0;
+    let is_user = (error_code & 0x4) != 0;
+    let is_reserved = (error_code & 0x8) != 0;
+    let is_instruction = (error_code & 0x10) != 0;
+    
+    // Log détaillé (uniquement en debug pour éviter spam)
+    #[cfg(debug_assertions)]
+    logger::debug(&alloc::format!(
+        "[PAGE FAULT] addr={:?} present={} write={} user={} reserved={} instr={}",
+        fault_addr, is_present, is_write, is_user, is_reserved, is_instruction
+    ));
+    
+    // Appeler le handler de mémoire virtuelle
+    match crate::memory::virtual_mem::handle_page_fault(fault_addr, error_code) {
+        Ok(()) => {
+            // Fault géré avec succès (COW, demand paging, etc.)
+            #[cfg(debug_assertions)]
+            logger::debug(&alloc::format!("[PAGE FAULT] Successfully handled at {:?}", fault_addr));
+            return;
+        }
+        Err(e) => {
+            // Fault non récupérable - afficher erreur et panic
+            logger::error("╔══════════════════════════════════════════════════════════╗");
+            logger::error("║              FATAL PAGE FAULT                            ║");
+            logger::error("╚══════════════════════════════════════════════════════════╝");
+            logger::error(&alloc::format!("  Address:     {:?}", fault_addr));
+            logger::error(&alloc::format!("  Error code:  0x{:x}", error_code));
+            logger::error(&alloc::format!("  Present:     {}", is_present));
+            logger::error(&alloc::format!("  Write:       {}", is_write));
+            logger::error(&alloc::format!("  User:        {}", is_user));
+            logger::error(&alloc::format!("  Reserved:    {}", is_reserved));
+            logger::error(&alloc::format!("  Instruction: {}", is_instruction));
+            logger::error(&alloc::format!("  Error:       {:?}", e));
+            
+            // VGA pour visibilité immédiate
+            let vga = 0xB8000 as *mut u16;
+            unsafe {
+                let msg = b"[FATAL PAGE FAULT] See serial log";
+                for (i, &byte) in msg.iter().enumerate() {
+                    *vga.add(24 * 80 + i) = 0x4F00 | byte as u16;
+                }
+            }
+            
+            panic!("Unrecoverable page fault at {:?}: {:?}", fault_addr, e);
         }
     }
-    loop { unsafe { asm!("hlt") } }
 }
 
 /// Handler pour Timer (IRQ 0)

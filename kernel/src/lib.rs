@@ -406,6 +406,16 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             logger::early_print("[DEBUG] Interrupts enabled (STI)\n\n");
 
             logger::early_print("[KERNEL] ═══════════════════════════════════════\n");
+            logger::early_print("[KERNEL]   PHASE 0 BENCHMARK - Context Switch\n");
+            logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
+            
+            // Exécuter benchmark context switch (Phase 0 validation)
+            let (avg, min, max) = scheduler::run_context_switch_benchmark();
+            
+            // Sauvegarder dans les stats globales
+            bench::BENCH_STATS.record_context_switch(avg);
+            
+            logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
             logger::early_print("[KERNEL]   PHASE 1 TESTS - fork/exec/wait\n");
             logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
             

@@ -1047,3 +1047,94 @@ pub fn block_current() {
 pub fn unblock(tid: ThreadId) {
     SCHEDULER.unblock_thread(tid);
 }
+
+/// Run context switch benchmark (Phase 0 validation)
+/// Target: < 500 cycles per switch
+/// Linux baseline: ~2134 cycles
+pub fn run_context_switch_benchmark() -> (u64, u64, u64) {
+    use crate::bench::{rdtsc, serialize};
+    
+    logger::info("╔══════════════════════════════════════════════════════════╗");
+    logger::info("║        PHASE 0 - CONTEXT SWITCH BENCHMARK               ║");
+    logger::info("╚══════════════════════════════════════════════════════════╝");
+    
+    const ITERATIONS: usize = 1000;
+    const WARMUP: usize = 100;
+    
+    // Warmup (exclure les cache misses)
+    logger::info("[BENCH] Warming up cache...");
+    for _ in 0..WARMUP {
+        yield_now();
+    }
+    
+    // Mesures réelles
+    logger::info(&format!("[BENCH] Running {} iterations...", ITERATIONS));
+    
+    let mut total_cycles = 0u64;
+    let mut min_cycles = u64::MAX;
+    let mut max_cycles = 0u64;
+    
+    for i in 0..ITERATIONS {
+        serialize();
+        let start = rdtsc();
+        
+        // yield_now() fait 2 context switches:
+        // 1. current → scheduler → next
+        // 2. next → scheduler → current
+        yield_now();
+        
+        serialize();
+        let end = rdtsc();
+        
+        let cycles = end.saturating_sub(start);
+        total_cycles += cycles;
+        
+        if cycles < min_cycles {
+            min_cycles = cycles;
+        }
+        if cycles > max_cycles {
+            max_cycles = cycles;
+        }
+        
+        // Log périodique
+        if (i + 1) % 100 == 0 {
+            logger::info(&format!("[BENCH]   Progress: {}/{}", i + 1, ITERATIONS));
+        }
+    }
+    
+    // Résultats
+    let avg_total = total_cycles / ITERATIONS as u64;
+    let avg_per_switch = avg_total / 2; // 2 switches par yield
+    let min_per_switch = min_cycles / 2;
+    let max_per_switch = max_cycles / 2;
+    
+    logger::info("╔══════════════════════════════════════════════════════════╗");
+    logger::info("║                  BENCHMARK RESULTS                       ║");
+    logger::info("╠══════════════════════════════════════════════════════════╣");
+    logger::info(&format!("║  Iterations:         {:>8}                        ║", ITERATIONS));
+    logger::info(&format!("║  Avg per switch:     {:>8} cycles                 ║", avg_per_switch));
+    logger::info(&format!("║  Min per switch:     {:>8} cycles                 ║", min_per_switch));
+    logger::info(&format!("║  Max per switch:     {:>8} cycles                 ║", max_per_switch));
+    logger::info("╠══════════════════════════════════════════════════════════╣");
+    logger::info(&format!("║  Exo-OS Target:      {:>8} cycles                 ║", 304));
+    logger::info(&format!("║  Phase 0 Limit:      {:>8} cycles                 ║", 500));
+    logger::info(&format!("║  Linux baseline:     {:>8} cycles                 ║", 2134));
+    logger::info("╠══════════════════════════════════════════════════════════╣");
+    
+    if avg_per_switch < 304 {
+        logger::info("║  Status: ✅ EXCELLENT - Under target!                 ║");
+    } else if avg_per_switch < 500 {
+        logger::info("║  Status: ✅ PASSED - Under 500 cycles!                ║");
+    } else {
+        logger::warn("║  Status: ❌ FAILED - Over 500 cycles                 ║");
+    }
+    
+    if avg_per_switch < 2134 {
+        let ratio = (2134.0 / avg_per_switch as f32 * 10.0) as u64;
+        logger::info(&format!("║  vs Linux: {}x FASTER 🚀                           ║", ratio / 10));
+    }
+    
+    logger::info("╚══════════════════════════════════════════════════════════╝");
+    
+    (avg_per_switch, min_per_switch, max_per_switch)
+}
