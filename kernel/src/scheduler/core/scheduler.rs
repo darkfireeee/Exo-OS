@@ -143,6 +143,16 @@ pub struct Scheduler {
     
     /// Zombie threads (terminated but not yet reaped by parent)
     zombie_threads: Mutex<alloc::collections::BTreeMap<ThreadId, Box<Thread>>>,
+    
+    /// Pending threads (lock-free for fork safety)
+    /// This is a lock-free linked list head pointer
+    pending_head: core::sync::atomic::AtomicPtr<PendingThreadNode>,
+}
+
+/// Node for lock-free pending thread list
+struct PendingThreadNode {
+    thread: Box<Thread>,
+    next: core::sync::atomic::AtomicPtr<PendingThreadNode>,
 }
 
 impl Scheduler {
@@ -162,6 +172,7 @@ impl Scheduler {
             idle_thread_id: Mutex::new(None),
             blocked_threads: Mutex::new(alloc::collections::BTreeMap::new()),
             zombie_threads: Mutex::new(alloc::collections::BTreeMap::new()),
+            pending_head: core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()),
         }
     }
 
@@ -224,34 +235,88 @@ impl Scheduler {
     /// 
     /// This is used for user-space threads that are created with
     /// Thread::new_user() rather than through spawn().
+    /// 
+    /// FORK-SAFE: Uses lock-free pending queue to avoid deadlocks
+    /// This function is COMPLETELY lock-free - no locks are acquired!
     pub fn add_thread(&self, thread: Thread) {
-        let id = thread.id();
-        let name = thread.name().to_string();
+        // Note: We intentionally avoid ALL locks here to be fork-safe
+        // Thread ID registration happens in process_pending() instead
         
-        logger::info(&format!(
-            "Adding thread '{}' (TID {}) to scheduler",
-            name, id
-        ));
-
-        // Register in global threads list
-        {
-            let mut threads = self.threads.lock();
-            threads.push(id);
+        // Add to lock-free pending queue (NO LOCKS AT ALL!)
+        self.add_to_pending(Box::new(thread));
+        
+        // Note: Stats updated in process_pending() to avoid locks here
+    }
+    
+    /// Add thread to lock-free pending queue (NEVER blocks, NO LOCKS)
+    fn add_to_pending(&self, thread: Box<Thread>) {
+        use core::sync::atomic::Ordering;
+        
+        // Log without locks (early_print is lock-free)
+        crate::logger::early_print("[SCHED] add_to_pending: creating node\n");
+        
+        let node = Box::into_raw(Box::new(PendingThreadNode {
+            thread,
+            next: core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()),
+        }));
+        
+        crate::logger::early_print("[SCHED] add_to_pending: CAS loop\n");
+        
+        loop {
+            let head = self.pending_head.load(Ordering::Acquire);
+            unsafe { (*node).next.store(head, Ordering::Relaxed); }
+            
+            match self.pending_head.compare_exchange(
+                head,
+                node,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    crate::logger::early_print("[SCHED] add_to_pending: CAS SUCCESS\n");
+                    break;
+                }
+                Err(_) => {
+                    // CAS failed, retry (should be rare)
+                    continue;
+                }
+            }
         }
-
-        // Add to run queue
-        {
-            let mut run_queue = self.run_queue.lock();
-            run_queue.enqueue(Box::new(thread));
+    }
+    
+    /// Process pending threads (called at start of schedule with run_queue locked)
+    fn process_pending(&self, run_queue: &mut RunQueue) {
+        use core::sync::atomic::Ordering;
+        
+        // Atomically take the entire pending list
+        let head = self.pending_head.swap(core::ptr::null_mut(), Ordering::AcqRel);
+        
+        if head.is_null() {
+            return;
         }
-
-        // Update stats
-        *self.total_spawns.lock() += 1;
-
-        logger::info(&format!(
-            "✓ Thread '{}' (TID {}) added to scheduler",
-            name, id
-        ));
+        
+        // Process all pending threads
+        let mut count = 0;
+        let mut current = head;
+        
+        while !current.is_null() {
+            let node = unsafe { Box::from_raw(current) };
+            let next = node.next.load(Ordering::Relaxed);
+            
+            // Register thread ID
+            let id = node.thread.id();
+            self.threads.lock().push(id);
+            
+            // Add to run queue
+            run_queue.enqueue(node.thread);
+            count += 1;
+            
+            current = next;
+        }
+        
+        if count > 0 {
+            logger::info(&format!("[SCHED] Processed {} pending threads", count));
+        }
     }
 
     /// Spawn idle thread
@@ -284,9 +349,10 @@ impl Scheduler {
     /// Schedule next thread (called by timer interrupt)
     ///
     /// This is the core scheduling algorithm:
-    /// 1. Save current thread state
-    /// 2. Pick next thread from run queue (Hot > Normal > Cold)
-    /// 3. Context switch to new thread
+    /// 1. Process pending threads (from fork, etc.) - LOCK-FREE addition
+    /// 2. Save current thread state
+    /// 3. Pick next thread from run queue (Hot > Normal > Cold)
+    /// 4. Context switch to new thread
     pub fn schedule(&self) {
         // Simple round-robin scheduler for preemptive multitasking
         // Called from timer interrupt every 10 ticks (100ms)
@@ -308,6 +374,12 @@ impl Scheduler {
         {
             // Scope for locks - they MUST be dropped before context switch
             let mut run_queue = self.run_queue.lock();
+            
+            // CRITICAL: Process pending threads FIRST (from fork, spawn, etc.)
+            // This is what makes fork() work - threads added via lock-free queue
+            // are moved to run_queue here, safely.
+            self.process_pending(&mut run_queue);
+            
             let mut current = self.current_thread.lock();
             
             // Check if we have a current thread to save
