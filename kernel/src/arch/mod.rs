@@ -88,6 +88,24 @@ pub mod mmu {
             );
         }
     }
+    
+    /// Invalide une plage d'adresses TLB (4K pages)
+    #[inline(always)]
+    pub fn invalidate_tlb_range(start: VirtualAddress, num_pages: usize) {
+        // Si plus de 64 pages, full flush est plus efficace
+        if num_pages > 64 {
+            invalidate_tlb_all();
+            return;
+        }
+        
+        let mut addr = start.value();
+        for _ in 0..num_pages {
+            unsafe {
+                core::arch::asm!("invlpg [{}]", in(reg) addr, options(nostack));
+            }
+            addr += crate::arch::PAGE_SIZE;
+        }
+    }
 }
 
 // Common architecture functions
