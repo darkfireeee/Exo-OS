@@ -1,13 +1,14 @@
 #!/bin/bash
-# Build script for Exo-OS (WSL Ubuntu)
+# Build script for Exo-OS (Ubuntu/WSL/Alpine/Codespaces)
 # Compiles boot objects, kernel, and creates bootable ISO
+# Auto-installs dependencies if missing
 
 set -e  # Exit on error
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "=== Exo-OS Build Script (Ubuntu/WSL) ==="
+echo "=== Exo-OS Build Script with Auto-Install ==="
 echo ""
 
 # Colors
@@ -17,40 +18,161 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Check dependencies
-echo -e "${BLUE}[1/6] Checking dependencies...${NC}"
-MISSING_DEPS=()
-
-command -v nasm >/dev/null 2>&1 || MISSING_DEPS+=("nasm")
-command -v gcc >/dev/null 2>&1 || MISSING_DEPS+=("gcc")
-command -v ar >/dev/null 2>&1 || MISSING_DEPS+=("binutils")
-command -v grub-mkrescue >/dev/null 2>&1 || MISSING_DEPS+=("grub-pc-bin xorriso")
-
-if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
-    echo -e "${RED}Missing dependencies: ${MISSING_DEPS[*]}${NC}"
-    echo -e "${YELLOW}Install with: sudo apt-get install ${MISSING_DEPS[*]}${NC}"
-    exit 1
+# Detect OS/distro
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS_ID="$ID"
+else
+    OS_ID="unknown"
 fi
 
-# Check for Rust (via WSL or native)
+echo -e "${BLUE}Detected OS: $OS_ID${NC}"
+echo ""
+
+# Function to install packages based on distro
+install_package() {
+    local pkg=$1
+    echo -e "${YELLOW}Installing $pkg...${NC}"
+    
+    case "$OS_ID" in
+        alpine)
+            apk add --no-cache $pkg
+            ;;
+        ubuntu|debian)
+            apt-get update -qq && apt-get install -y $pkg
+            ;;
+        fedora|rhel|centos)
+            dnf install -y $pkg
+            ;;
+        arch)
+            pacman -S --noconfirm $pkg
+            ;;
+        *)
+            echo -e "${RED}Unknown distro, cannot auto-install $pkg${NC}"
+            return 1
+            ;;
+    esac
+}
+
+# Check and install dependencies
+echo -e "${BLUE}[1/7] Checking and installing dependencies...${NC}"
+
+# Check NASM
+if ! command -v nasm >/dev/null 2>&1; then
+    echo -e "${YELLOW}NASM not found, installing...${NC}"
+    install_package nasm
+fi
+
+# Check GCC/Clang
+if ! command -v gcc >/dev/null 2>&1 && ! command -v clang >/dev/null 2>&1; then
+    echo -e "${YELLOW}Compiler not found, installing GCC...${NC}"
+    case "$OS_ID" in
+        alpine)
+            install_package "gcc g++ musl-dev"
+            ;;
+        *)
+            install_package "gcc g++"
+            ;;
+    esac
+fi
+
+# Check binutils (ld, ar)
+if ! command -v ar >/dev/null 2>&1; then
+    echo -e "${YELLOW}Binutils not found, installing...${NC}"
+    install_package binutils
+fi
+
+# Check GRUB tools
+if ! command -v grub-mkrescue >/dev/null 2>&1; then
+    echo -e "${YELLOW}GRUB tools not found, installing...${NC}"
+    case "$OS_ID" in
+        alpine)
+            install_package "grub grub-bios xorriso"
+            ;;
+        ubuntu|debian)
+            install_package "grub-pc-bin xorriso"
+            ;;
+        *)
+            install_package "grub2-tools xorriso"
+            ;;
+    esac
+fi
+
+# Check QEMU (for testing)
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    echo -e "${YELLOW}QEMU not found, installing...${NC}"
+    case "$OS_ID" in
+        alpine)
+            install_package "qemu-system-x86_64"
+            ;;
+        ubuntu|debian)
+            install_package "qemu-system-x86"
+            ;;
+        *)
+            install_package "qemu-system-x86"
+            ;;
+    esac
+fi
+
+# Check for Rust and install if missing
+echo -e "${BLUE}[2/7] Checking Rust installation...${NC}"
+
 USE_WINDOWS_CARGO=false
 if ! command -v cargo >/dev/null 2>&1; then
     # Try Windows cargo via .exe
     if command -v cargo.exe >/dev/null 2>&1; then
         USE_WINDOWS_CARGO=true
-        echo -e "${YELLOW}Note: Using Windows cargo.exe (Rust not installed in WSL)${NC}"
+        echo -e "${YELLOW}Note: Using Windows cargo.exe${NC}"
     else
-        echo -e "${RED}Missing: Rust/Cargo${NC}"
-        echo -e "${YELLOW}Install in WSL: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh${NC}"
-        exit 1
+        echo -e "${YELLOW}Rust not found, installing...${NC}"
+        
+        # Install rustup
+        export CARGO_HOME="${CARGO_HOME:-/tmp/rust-codespace/.cargo}"
+        export RUSTUP_HOME="${RUSTUP_HOME:-/tmp/rust-codespace/.rustup}"
+        export PATH="$CARGO_HOME/bin:$PATH"
+        
+        # Create directories
+        mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
+        
+        # Install Rust
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+        
+        # Source cargo env
+        source "$CARGO_HOME/env"
+        
+        # Install nightly (required for Exo-OS)
+        rustup toolchain install nightly
+        rustup default nightly
+        
+        # Add rust-src component (required for no_std)
+        rustup component add rust-src
+        
+        echo -e "${GREEN}✓ Rust installed successfully${NC}"
+    fi
+else
+    # Rust already installed, check nightly
+    export PATH="$CARGO_HOME/bin:$PATH"
+    
+    if ! rustup toolchain list | grep -q nightly; then
+        echo -e "${YELLOW}Installing Rust nightly...${NC}"
+        rustup toolchain install nightly
+    fi
+    
+    # Set nightly as default
+    rustup default nightly
+    
+    # Ensure rust-src is installed
+    if ! rustup component list | grep -q "rust-src.*installed"; then
+        echo -e "${YELLOW}Installing rust-src component...${NC}"
+        rustup component add rust-src
     fi
 fi
 
-echo -e "${GREEN}✓ All dependencies found${NC}"
+echo -e "${GREEN}✓ All dependencies installed${NC}"
 echo ""
 
 # Build boot objects (C + ASM)
-echo -e "${BLUE}[2/6] Compiling boot objects...${NC}"
+echo -e "${BLUE}[3/7] Compiling boot objects...${NC}"
 BOOT_DIR="kernel/src/arch/x86_64/boot"
 BUILD_DIR="build"
 BOOT_OBJ_DIR="$BUILD_DIR/boot_objs"
@@ -108,7 +230,7 @@ echo -e "${GREEN}✓ Boot objects compiled${NC}"
 echo ""
 
 # Copy to cargo OUT_DIR (find it first)
-echo -e "${BLUE}[3/6] Preparing cargo build...${NC}"
+echo -e "${BLUE}[4/7] Preparing cargo build...${NC}"
 # Build once to create OUT_DIR structure
 cargo build --target x86_64-unknown-none.json --manifest-path kernel/Cargo.toml >/dev/null 2>&1 || true
 
@@ -125,7 +247,7 @@ echo -e "${GREEN}✓ Boot objects ready${NC}"
 echo ""
 
 # Build Rust kernel
-echo -e "${BLUE}[4/6] Building Rust kernel...${NC}"
+echo -e "${BLUE}[5/7] Building Rust kernel...${NC}"
 
 if [ "$USE_WINDOWS_CARGO" = true ]; then
     # Use Windows cargo
@@ -149,7 +271,7 @@ echo -e "${GREEN}✓ Kernel compiled successfully${NC}"
 echo ""
 
 # Link final kernel binary
-echo -e "${BLUE}[5/6] Linking kernel binary...${NC}"
+echo -e "${BLUE}[6/7] Linking kernel binary...${NC}"
 mkdir -p "$BUILD_DIR"
 
 # Check if linker script exists
@@ -190,7 +312,7 @@ echo -e "${GREEN}✓ Kernel binary created: $BUILD_DIR/kernel.bin (ELF multiboot
 echo ""
 
 # Create ISO
-echo -e "${BLUE}[6/6] Creating bootable ISO...${NC}"
+echo -e "${BLUE}[7/7] Creating bootable ISO...${NC}"
 
 # Prepare ISO directory structure
 ISO_DIR="$BUILD_DIR/iso"

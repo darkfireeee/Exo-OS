@@ -55,6 +55,7 @@ pub use scheduler::{
     yield_now, 
     block_current, 
     unblock,
+    run_context_switch_benchmark,
     
     // Queue types
     QueueType,

@@ -12,7 +12,7 @@ pub mod realtime;
 pub mod test_threads;
 
 // Re-exports
-pub use self::core::{SCHEDULER, init, start, SchedulerStats, yield_now, block_current, unblock};
+pub use self::core::{SCHEDULER, init, start, SchedulerStats, yield_now, block_current, unblock, run_context_switch_benchmark};
 pub use thread::{Thread, ThreadId, ThreadState, ThreadPriority, ThreadContext};
 
 /// Convenient function to get scheduler statistics
