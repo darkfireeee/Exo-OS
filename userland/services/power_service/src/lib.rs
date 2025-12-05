@@ -227,9 +227,16 @@ impl PowerService {
     }
 
     /// Detect current power source
+    ///
+    /// Attempts to detect the power source from ACPI. Currently returns
+    /// `Unknown` as actual ACPI integration is not yet implemented.
     fn detect_power_source(&mut self) -> Result<(), PowerError> {
-        // TODO: Read from ACPI
-        self.source = PowerSource::AC;
+        // TODO: Implement actual ACPI power source detection
+        // This would read from /sys/class/power_supply/ on Linux
+        // or use ACPI tables directly on Exo-OS
+        
+        log::debug!("Power source detection not yet implemented, defaulting to Unknown");
+        self.source = PowerSource::Unknown;
         Ok(())
     }
 
@@ -239,11 +246,15 @@ impl PowerService {
     }
 
     /// Get battery info
+    ///
+    /// Returns battery information. Currently returns placeholder values
+    /// as actual ACPI battery integration is not yet implemented.
     pub fn battery_info(&self) -> Result<BatteryInfo, PowerError> {
-        // TODO: Read from ACPI
+        // TODO: Implement actual ACPI battery reading
+        log::trace!("Battery info requested (placeholder values)");
         Ok(BatteryInfo {
             percentage: 100,
-            state: BatteryState::Full,
+            state: BatteryState::Unknown,
             time_to_empty: None,
             time_to_full: None,
             energy_rate: 0,

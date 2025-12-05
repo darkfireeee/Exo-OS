@@ -71,7 +71,10 @@ pub mod translation;
 
 // Re-exports for public API
 pub use compat::PosixCompat;
-pub use kernel_interface::{CapabilityCache, CapabilityHandle, KernelInterface};
+pub use kernel_interface::{
+    CapabilityCache, CapabilityHandle, CapabilityRights, CapabilityType,
+    CacheStatsSnapshot, KernelInterface,
+};
 pub use optimization::{BatchOptimizer, ZeroCopyDetector};
 pub use signals::{Signal, SignalAction, SignalHandlers};
 pub use translation::SyscallTranslator;

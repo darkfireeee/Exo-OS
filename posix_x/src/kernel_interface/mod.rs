@@ -375,22 +375,20 @@ impl CapabilityCache {
     }
 }
 
-/// Global capability cache
-static mut CAPABILITY_CACHE: Option<CapabilityCache> = None;
+use spin::Mutex;
+use spin::Once;
+
+/// Global capability cache (thread-safe)
+static CAPABILITY_CACHE: Once<Mutex<CapabilityCache>> = Once::new();
 
 /// Initialize capability cache
 ///
 /// Must be called before using any cache functions.
+/// Thread-safe initialization using spin::Once.
 pub fn init_capability_cache() -> Result<(), PosixXError> {
-    // Safety: Called only during single-threaded initialization
-    unsafe {
-        if CAPABILITY_CACHE.is_some() {
-            return Err(PosixXError::InternalError(
-                "Capability cache already initialized".into(),
-            ));
-        }
-        CAPABILITY_CACHE = Some(CapabilityCache::new(CACHE_SIZE));
-    }
+    // Initialize only once
+    CAPABILITY_CACHE.call_once(|| Mutex::new(CapabilityCache::new(CACHE_SIZE)));
+    
     log::info!(
         "Capability cache initialized: {} entries max, {} cycle hit target",
         CACHE_SIZE,
@@ -404,12 +402,15 @@ pub fn init_capability_cache() -> Result<(), PosixXError> {
 /// # Performance
 /// - Cache hit: ~50 cycles
 /// - Cache miss: ~2000 cycles
+///
+/// # Thread Safety
+/// Uses spin lock for concurrent access.
 pub fn get_capability(path: &str) -> Result<CapabilityHandle, PosixXError> {
-    let cache = unsafe {
-        CAPABILITY_CACHE
-            .as_mut()
-            .ok_or_else(|| PosixXError::InternalError("Cache not initialized".into()))?
-    };
+    let cache_lock = CAPABILITY_CACHE
+        .get()
+        .ok_or_else(|| PosixXError::InternalError("Cache not initialized".into()))?;
+    
+    let mut cache = cache_lock.lock();
 
     // Try cache first (50 cycles target)
     if let Some((handle, _rights)) = cache.get(path) {
@@ -462,15 +463,47 @@ fn resolve_path_to_capability(
 }
 
 /// Invalidate capability cache entry
+///
+/// Thread-safe invalidation of a cache entry.
 pub fn invalidate_capability(path: &str) {
-    if let Some(cache) = unsafe { CAPABILITY_CACHE.as_mut() } {
-        cache.invalidate(path);
+    if let Some(cache_lock) = CAPABILITY_CACHE.get() {
+        cache_lock.lock().invalidate(path);
     }
 }
 
 /// Get cache statistics
-pub fn cache_stats() -> Option<&'static CacheStats> {
-    unsafe { CAPABILITY_CACHE.as_ref().map(|c| c.stats()) }
+///
+/// Returns a snapshot of cache statistics.
+pub fn cache_stats() -> Option<CacheStatsSnapshot> {
+    CAPABILITY_CACHE.get().map(|cache_lock| {
+        let cache = cache_lock.lock();
+        let stats = cache.stats();
+        CacheStatsSnapshot {
+            lookups: stats.lookups.load(Ordering::Relaxed),
+            hits: stats.hits.load(Ordering::Relaxed),
+            misses: stats.misses.load(Ordering::Relaxed),
+            evictions: stats.evictions.load(Ordering::Relaxed),
+            invalidations: stats.invalidations.load(Ordering::Relaxed),
+            hit_ratio: stats.hit_ratio(),
+        }
+    })
+}
+
+/// Cache statistics snapshot (non-atomic copy)
+#[derive(Debug, Clone)]
+pub struct CacheStatsSnapshot {
+    /// Total lookups
+    pub lookups: u64,
+    /// Cache hits
+    pub hits: u64,
+    /// Cache misses
+    pub misses: u64,
+    /// Evictions
+    pub evictions: u64,
+    /// Invalidations
+    pub invalidations: u64,
+    /// Hit ratio percentage
+    pub hit_ratio: f32,
 }
 
 /// Kernel interface for IPC operations using Fusion Rings

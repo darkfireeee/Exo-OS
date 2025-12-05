@@ -195,20 +195,33 @@ impl Default for BatchOptimizer {
     }
 }
 
-/// Global zero-copy detector
-static mut ZEROCOPY_DETECTOR: Option<ZeroCopyDetector> = None;
+use spin::Mutex;
+use spin::Once;
 
-/// Global batch optimizer
-static mut BATCH_OPTIMIZER: Option<BatchOptimizer> = None;
+/// Global zero-copy detector (thread-safe)
+static ZEROCOPY_DETECTOR: Once<Mutex<ZeroCopyDetector>> = Once::new();
+
+/// Global batch optimizer (thread-safe)
+static BATCH_OPTIMIZER: Once<Mutex<BatchOptimizer>> = Once::new();
 
 /// Initialize batch optimizer
+///
+/// Thread-safe initialization using spin::Once
 pub fn init_batch_optimizer() -> Result<(), PosixXError> {
-    unsafe {
-        ZEROCOPY_DETECTOR = Some(ZeroCopyDetector::new(32));
-        BATCH_OPTIMIZER = Some(BatchOptimizer::new());
-    }
+    ZEROCOPY_DETECTOR.call_once(|| Mutex::new(ZeroCopyDetector::new(32)));
+    BATCH_OPTIMIZER.call_once(|| Mutex::new(BatchOptimizer::new()));
     log::debug!("Batch optimizer initialized");
     Ok(())
+}
+
+/// Get zero-copy detector reference
+pub fn zerocopy_detector() -> Option<&'static Mutex<ZeroCopyDetector>> {
+    ZEROCOPY_DETECTOR.get()
+}
+
+/// Get batch optimizer reference
+pub fn batch_optimizer() -> Option<&'static Mutex<BatchOptimizer>> {
+    BATCH_OPTIMIZER.get()
 }
 
 /// Get current timestamp (microseconds)
