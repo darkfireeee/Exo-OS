@@ -7,6 +7,12 @@
 
 use crate::net::{NetError, NetResult};
 
+/// VLAN support (802.1Q)
+pub mod vlan;
+
+// Re-exports
+pub use vlan::{VlanId, VlanTag, VlanPriority, VlanFrame, QinQFrame, VlanError};
+
 /// MAC address (48 bits)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]

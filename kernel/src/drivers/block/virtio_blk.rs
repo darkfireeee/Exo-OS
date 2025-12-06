@@ -239,8 +239,73 @@ impl BlockDevice for VirtioBlkDriver {
             return Err(DriverError::NotSupported);
         }
         
-        // Similar to read but with req_type = 1 (VIRTIO_BLK_T_OUT)
-        Err(DriverError::NotSupported) // TODO: Implement write
+        let vq = self.virtqueue.as_mut().ok_or(DriverError::InitFailed)?;
+        
+        // Allocate DMA buffers
+        let (hdr_virt, hdr_phys) = dma_alloc_coherent(
+            core::mem::size_of::<VirtioBlkReqHeader>(), true
+        ).map_err(|_| DriverError::NoMemory)?;
+        
+        let (data_virt, data_phys) = dma_alloc_coherent(data.len(), false)
+            .map_err(|_| DriverError::NoMemory)?;
+        
+        let (status_virt, status_phys) = dma_alloc_coherent(1, true)
+            .map_err(|_| DriverError::NoMemory)?;
+        
+        // Fill request header
+        unsafe {
+            let hdr = &mut *(hdr_virt as *mut VirtioBlkReqHeader);
+            hdr.req_type = 1; // VIRTIO_BLK_T_OUT (write)
+            hdr.reserved = 0;
+            hdr.sector = sector;
+        }
+        
+        // Copy data to DMA buffer
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                data_virt as *mut u8,
+                data.len()
+            );
+        }
+        
+        // Add to virtqueue (header → data → status)
+        let buffers = [
+            (hdr_phys, core::mem::size_of::<VirtioBlkReqHeader>() as u32, false),
+            (data_phys, data.len() as u32, false), // Write = device reads from this
+            (status_phys, 1, true), // Device writes status
+        ];
+        
+        vq.add_buffer(&buffers).map_err(|_| DriverError::ResourceBusy)?;
+        
+        // Notify device
+        vq.kick(self.base_addr + VIRTIO_BLK_REG_QUEUE_NOTIFY as u64);
+        
+        // Wait for completion (busy wait for now)
+        while !vq.has_used() {
+            core::hint::spin_loop();
+        }
+        
+        // Get used buffer
+        if let Some((_, _)) = vq.get_used() {
+            // Check status
+            let status = unsafe { *(status_virt as *const u8) };
+            
+            // Free DMA buffers
+            let _ = dma_free_coherent(hdr_virt);
+            let _ = dma_free_coherent(data_virt);
+            let _ = dma_free_coherent(status_virt);
+            
+            if status == VIRTIO_BLK_S_OK {
+                log::trace!("VirtIO-Blk: wrote {} bytes to sector {}", data.len(), sector);
+                Ok(data.len())
+            } else {
+                log::error!("VirtIO-Blk: write error, status={}", status);
+                Err(DriverError::IoError)
+            }
+        } else {
+            Err(DriverError::IoError)
+        }
     }
     
     fn sector_size(&self) -> usize {

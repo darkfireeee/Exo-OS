@@ -1,27 +1,64 @@
-//! Network subsystem for hybrid architecture
+//! High-Performance Network Subsystem
 //!
-//! Supports TCP/IP stack, UDP, Ethernet, and WireGuard VPN
+//! Production-grade TCP/IP stack optimized for AI workloads.
+//! 
+//! Performance targets:
+//! - 100Gbps+ throughput
+//! - <10μs latency
+//! - 10M+ concurrent connections
+//! - Zero-copy I/O paths
+//!
+//! Architecture:
+//! - Lock-free packet processing
+//! - Per-CPU queues (RSS/RPS)
+//! - Hardware offload (TSO/GSO/GRO)
+//! - Native io_uring integration
+//! - RDMA for AI workloads
 
 use alloc::vec::Vec;
 use crate::memory::MemoryError;
 
-/// Network core (sockets, devices, buffers)
-pub mod core;
+/// Network stack core
+pub mod stack;
 
-/// Ethernet layer
-pub mod ethernet;
+/// BSD Socket API (POSIX compatible)
+pub mod socket;
+
+/// TCP protocol (production grade)
+pub mod tcp;
 
 /// IP layer (IPv4/IPv6)
 pub mod ip;
 
-/// TCP protocol
-pub mod tcp;
+/// Ethernet layer
+pub mod ethernet;
 
-/// UDP protocol
-pub mod udp;
+/// Network core (sockets, devices, buffers)
+pub mod core;
+
+/// Protocol implementations (clean modular architecture)
+pub mod protocols;
 
 /// WireGuard VPN
 pub mod wireguard;
+
+/// Netfilter / Firewall
+pub mod netfilter;
+
+/// Network services (DHCP, DNS, NTP)
+pub mod services;
+
+/// QoS (Quality of Service)
+pub mod qos;
+
+/// Load Balancer
+pub mod loadbalancer;
+
+/// RDMA (Remote Direct Memory Access)
+pub mod rdma;
+
+/// Network Performance Monitoring
+pub mod monitoring;
 
 /// Network errors
 #[derive(Debug)]
