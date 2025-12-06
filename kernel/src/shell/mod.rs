@@ -20,9 +20,17 @@
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use alloc::format;
 use crate::fs::vfs;
+use spin::Mutex;
+use lazy_static::lazy_static;
 
 const VERSION: &str = "0.5.0";
+
+// Current working directory
+lazy_static! {
+    static ref CURRENT_DIR: Mutex<String> = Mutex::new(String::from("/"));
+}
 
 /// Affiche une string avec logger
 fn print(s: &str) {
@@ -194,8 +202,8 @@ fn cmd_exit() {
 }
 
 fn cmd_clear() {
-    // TODO: Implémenter clear screen
-    println("⚠️  clear not yet implemented");
+    // ANSI escape sequence: Clear screen (ESC[2J) + Move cursor to home (ESC[H)
+    print("\x1B[2J\x1B[H");
 }
 
 fn cmd_echo(args: &[&str]) {
@@ -213,19 +221,61 @@ fn cmd_echo(args: &[&str]) {
 }
 
 fn cmd_pwd() {
-    // TODO: Implémenter le current working directory
-    // Pour l'instant, hardcodé à "/"
-    println("/");
+    let cwd = CURRENT_DIR.lock();
+    println(&cwd);
 }
 
 fn cmd_cd(args: &[&str]) {
     if args.is_empty() {
-        println("❌ Usage: cd <directory>");
+        // cd sans argument → retour à /
+        *CURRENT_DIR.lock() = String::from("/");
         return;
     }
     
-    // TODO: Implémenter le changement de répertoire
-    println("⚠️  cd not yet implemented (working directory: /)");
+    let path = args[0];
+    
+    // Résoudre le chemin (absolu ou relatif)
+    let target_path = if path.starts_with('/') {
+        // Chemin absolu
+        String::from(path)
+    } else {
+        // Chemin relatif
+        let cwd = CURRENT_DIR.lock();
+        if cwd.as_str() == "/" {
+            format!("/{}", path)
+        } else {
+            format!("{}/{}", cwd, path)
+        }
+    };
+    
+    // Vérifier que le chemin existe et est un répertoire
+    if !vfs::exists(&target_path) {
+        print("❌ cd: ");
+        print(&target_path);
+        println(": No such directory");
+        return;
+    }
+    
+    // Vérifier que c'est un répertoire via stat
+    match vfs::stat(&target_path) {
+        Ok(metadata) => {
+            if !metadata.is_dir {
+                print("❌ cd: ");
+                print(&target_path);
+                println(": Not a directory");
+                return;
+            }
+        }
+        Err(_) => {
+            print("❌ cd: ");
+            print(&target_path);
+            println(": Cannot stat");
+            return;
+        }
+    }
+    
+    // Mettre à jour le répertoire courant
+    *CURRENT_DIR.lock() = target_path;
 }
 
 fn cmd_version() {
@@ -236,14 +286,21 @@ fn cmd_version() {
 }
 
 fn cmd_ls(args: &[&str]) {
-    let path = if args.is_empty() { "/" } else { args[0] };
+    let path = if args.is_empty() {
+        // Utiliser le répertoire courant si pas d'argument
+        let cwd = CURRENT_DIR.lock();
+        cwd.clone()
+    } else {
+        String::from(args[0])
+    };
+    let path_str = path.as_str();
     
     print("\n📁 Listing: ");
-    print(path);
+    print(path_str);
     println("\n");
     
     // Utiliser VFS pour lister le répertoire
-    match vfs::readdir(path) {
+    match vfs::readdir(path_str) {
         Ok(entries) => {
             if entries.is_empty() {
                 println("  (empty directory)");
