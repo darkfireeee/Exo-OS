@@ -7,6 +7,7 @@
 //! - Configuration des registres de contrôle
 
 // Core x86_64 modules (new arch)
+pub mod acpi;
 pub mod boot;
 pub mod context;
 pub mod cpu;
@@ -16,11 +17,13 @@ pub mod idt;
 pub mod interrupts;
 pub mod io_diagnostic;
 pub mod memory;
+pub mod percpu;
 pub mod pic_wrapper;
 pub mod pit;
 pub mod registers;
 pub mod serial;
 pub mod simd;
+pub mod smp;
 pub mod syscall;
 pub mod tss;
 pub mod usermode;

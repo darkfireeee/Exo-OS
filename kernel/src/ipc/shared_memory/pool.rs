@@ -296,14 +296,14 @@ impl SharedMemoryPool {
         
         // Try contiguous allocation first (better for large regions)
         let frames = if frame_count > 1 {
-            match physical::allocate_contiguous_frames(frame_count) {
-                Ok(start_frame) => {
+            match physical::allocate_contiguous_frames(frame_count, false) {
+                Ok(phys_addr) => {
                     // Zero the memory for security
                     unsafe {
-                        let ptr = start_frame.address().value() as *mut u8;
+                        let ptr = phys_addr as *mut u8;
                         core::ptr::write_bytes(ptr, 0, frame_count * FRAME_SIZE);
                     }
-                    FrameList::contiguous(start_frame.address(), frame_count)
+                    FrameList::contiguous(PhysicalAddress::new(phys_addr as usize), frame_count)
                 }
                 Err(_) => {
                     // Fall back to scattered allocation

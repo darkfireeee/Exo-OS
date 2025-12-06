@@ -20,6 +20,7 @@
 //! │  error.rs        Typed error handling with recovery hints  │
 //! │  metrics.rs      Lock-free performance metrics             │
 //! │  policy.rs       Scheduling policies (FIFO, RR, CFS, EDF)  │
+//! │  percpu_queue.rs Per-CPU run queues for SMP                │
 //! │  loadbalancer.rs Multi-CPU load balancing                  │
 //! │  affinity.rs     CPU affinity management                   │
 //! │  predictive.rs   EMA-based runtime prediction              │
@@ -132,6 +133,13 @@ pub use affinity::{CpuMask, ThreadAffinity};
 
 pub use statistics::SCHEDULER_STATS;
 pub use predictive::PredictiveScheduler;
+
+// ═══════════════════════════════════════════════════════════════
+// Per-CPU Queue Exports (Phase 2 SMP)
+// ═══════════════════════════════════════════════════════════════
+
+pub mod percpu_queue;
+pub use percpu_queue::{PER_CPU_QUEUES, PerCpuQueue, PerCpuQueueStats};
 
 // ═══════════════════════════════════════════════════════════════
 // V2 Legacy Exports (deprecated, for compatibility only)

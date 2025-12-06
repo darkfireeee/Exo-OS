@@ -1,31 +1,52 @@
 //! Filesystem subsystem for hybrid architecture
 //!
-//! Supports multiple filesystems: VFS, FAT32, ext4, tmpfs, devfs, procfs, sysfs
+//! Organized structure:
+//! - `vfs/`: Virtual File System core
+//! - `real_fs/`: Real filesystems (FAT32, ext4)
+//! - `pseudo_fs/`: Pseudo filesystems (devfs, procfs, sysfs, tmpfs)
+//! - `ipc_fs/`: IPC filesystems (pipes, sockets, symlinks)
+//! - `operations/`: Core operations (buffer, locks, fdtable, cache)
+//! - `advanced/`: Advanced features (io_uring, zero-copy, aio, mmap, quota, namespace, acl, notify)
 
 use crate::memory::MemoryError;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Virtual File System
+/// Virtual File System core
 pub mod vfs;
 
-/// FAT32 filesystem
-pub mod fat32;
+/// Real filesystems (FAT32, ext4)
+pub mod real_fs;
 
-/// ext4 filesystem  
-pub mod ext4;
+/// Pseudo filesystems (devfs, procfs, sysfs, tmpfs)
+pub mod pseudo_fs;
 
-/// TmpFS - Temporary filesystem (RAM)
-pub mod tmpfs;
+/// IPC filesystems (pipes, sockets, symlinks)
+pub mod ipc_fs;
 
-/// DevFS - Device filesystem
-pub mod devfs;
+/// Core operations (buffer, locks, fdtable, cache)
+pub mod operations;
 
-/// ProcFS - Process information
-pub mod procfs;
+/// Advanced features (io_uring, zero-copy, aio, mmap, quota, namespace, acl, notify)
+pub mod advanced;
 
-/// SysFS - System information
-pub mod sysfs;
+/// Page cache for filesystem I/O
+pub mod page_cache;
+
+/// Core filesystem types and traits
+pub mod core;
+
+/// Descriptor management
+pub mod descriptor;
+
+/// Filesystem initialization
+pub fn init() {
+    log::info!("Filesystem subsystem initialized (24 modules)");
+    log::info!("  Real FS: FAT32, ext4");
+    log::info!("  Pseudo FS: devfs, procfs, sysfs, tmpfs");
+    log::info!("  IPC FS: pipes, sockets, symlinks");
+    log::info!("  Advanced: io_uring, zero-copy, AIO, mmap, quota, ACL, inotify");
+}
 
 /// Filesystem errors
 #[derive(Debug)]
@@ -44,9 +65,11 @@ pub enum FsError {
     IoError,
     NotSupported,
     TooManyFiles,
+    TooManyOpenFiles,
     InvalidFd,
     ConnectionRefused,
     Again,
+    QuotaExceeded,
     Memory(MemoryError),
 }
 
@@ -67,9 +90,11 @@ impl FsError {
             FsError::IoError => 5,             // EIO
             FsError::NotSupported => 95,       // EOPNOTSUPP
             FsError::TooManyFiles => 24,       // EMFILE
+            FsError::TooManyOpenFiles => 24,   // EMFILE
             FsError::InvalidFd => 9,           // EBADF
             FsError::ConnectionRefused => 111, // ECONNREFUSED
             FsError::Again => 11,              // EAGAIN
+            FsError::QuotaExceeded => 122,     // EDQUOT
             FsError::Memory(_) => 12,          // ENOMEM (simplified)
         }
     }
@@ -97,9 +122,11 @@ impl From<FsError> for MemoryError {
             FsError::IoError => MemoryError::InternalError("IO Error"),
             FsError::NotSupported => MemoryError::InternalError("Not supported"),
             FsError::TooManyFiles => MemoryError::OutOfMemory,
+            FsError::TooManyOpenFiles => MemoryError::OutOfMemory,
             FsError::InvalidFd => MemoryError::InvalidParameter,
             FsError::ConnectionRefused => MemoryError::InternalError("Connection refused"),
             FsError::Again => MemoryError::InternalError("Try again"),
+            FsError::QuotaExceeded => MemoryError::InternalError("Quota exceeded"),
             FsError::Memory(e) => e,
         }
     }
@@ -123,9 +150,4 @@ pub trait File {
     fn metadata(&self) -> FsResult<FileMetadata>;
 }
 
-/// Initialize filesystem subsystem
-pub fn init() -> FsResult<()> {
-    log::info!("Initializing filesystem subsystem (hybrid architecture)");
-    vfs::init()?;
-    Ok(())
-}
+

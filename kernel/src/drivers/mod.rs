@@ -15,6 +15,7 @@ pub mod net;
 pub mod pci;
 pub mod usb;
 pub mod video;
+pub mod virtio;
 
 /// Error type for driver operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

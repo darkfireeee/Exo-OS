@@ -3,6 +3,7 @@
 pub mod address;
 pub mod cache;
 pub mod dma;
+pub mod dma_simple;
 pub mod heap;
 pub mod mmap;
 pub mod pat;

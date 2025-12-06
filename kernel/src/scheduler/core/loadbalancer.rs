@@ -224,6 +224,82 @@ impl LoadBalancer {
         busiest_cpu
     }
     
+    /// Balance load across CPUs (work stealing)
+    ///
+    /// This is called periodically to migrate threads from busy CPUs to idle CPUs.
+    pub fn balance(&self) {
+        use crate::scheduler::core::percpu_queue::PER_CPU_QUEUES;
+        use crate::arch::x86_64::interrupts::ipi;
+        
+        let online = self.online_cpus.load(Ordering::Relaxed);
+        if online <= 1 {
+            return; // Nothing to balance with only one CPU
+        }
+        
+        self.balance_iterations.fetch_add(1, Ordering::Relaxed);
+        
+        // 1. Collect load stats from all CPUs
+        let mut loads: Vec<(usize, usize)> = Vec::new();
+        for cpu in 0..online {
+            if !self.cpu_loads[cpu].online.load(Ordering::Relaxed) {
+                continue;
+            }
+            
+            if let Some(queue) = PER_CPU_QUEUES.get(cpu) {
+                let queue_len = queue.len();
+                loads.push((cpu, queue_len));
+            }
+        }
+        
+        if loads.is_empty() {
+            return;
+        }
+        
+        // 2. Sort by load (ascending)
+        loads.sort_by_key(|(_, len)| *len);
+        
+        // 3. Steal from busiest to give to idlest if difference > threshold
+        let idlest_idx = 0;
+        let busiest_idx = loads.len() - 1;
+        
+        if idlest_idx == busiest_idx {
+            return;
+        }
+        
+        let (idlest_cpu, idlest_len) = loads[idlest_idx];
+        let (busiest_cpu, busiest_len) = loads[busiest_idx];
+        
+        // Only balance if difference > 4 threads
+        if busiest_len <= idlest_len + 4 {
+            return;
+        }
+        
+        // 4. Steal half of the threads from busiest CPU
+        if let (Some(busiest_queue), Some(idlest_queue)) = 
+            (PER_CPU_QUEUES.get(busiest_cpu), PER_CPU_QUEUES.get(idlest_cpu)) {
+            
+            let stolen = busiest_queue.steal_half();
+            let steal_count = stolen.len();
+            
+            if steal_count == 0 {
+                return;
+            }
+            
+            // Migrate threads to idlest CPU
+            for thread in stolen {
+                idlest_queue.enqueue(thread);
+            }
+            
+            self.total_migrations.fetch_add(steal_count as u64, Ordering::Relaxed);
+            
+            log::debug!("Load balancer: Migrated {} threads from CPU {} to CPU {}", 
+                steal_count, busiest_cpu, idlest_cpu);
+            
+            // 5. Send reschedule IPI to idlest CPU so it picks up the new threads
+            ipi::send_reschedule_ipi(idlest_cpu);
+        }
+    }
+    
     /// Calculate load imbalance
     pub fn calculate_imbalance(&self) -> LoadImbalance {
         let online = self.online_cpus.load(Ordering::Relaxed);

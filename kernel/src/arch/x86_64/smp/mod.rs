@@ -8,6 +8,8 @@
 //! - Inter-processor interrupts (IPI)
 //! - CPU topology detection
 
+pub mod bootstrap;
+
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 /// Maximum supported CPUs
@@ -25,8 +27,10 @@ pub enum CpuState {
     Online = 2,
     /// CPU offline
     Offline = 3,
+    /// CPU halted
+    Halted = 4,
     /// CPU in error state
-    Error = 4,
+    Error = 5,
 }
 
 /// Per-CPU information
@@ -37,11 +41,11 @@ pub struct CpuInfo {
     /// CPU state
     pub state: AtomicU8,
     /// Is this the BSP (Bootstrap Processor)?
-    pub is_bsp: bool,
+    pub is_bsp: core::sync::atomic::AtomicBool,
     /// APIC ID
-    pub apic_id: u8,
+    pub apic_id: core::sync::atomic::AtomicU8,
     /// Local APIC base address
-    pub apic_base: usize,
+    pub apic_base: AtomicUsize,
     /// CPU features (CPUID)
     pub features: CpuFeatures,
     /// Number of context switches on this CPU
@@ -57,9 +61,9 @@ impl CpuInfo {
         Self {
             id,
             state: AtomicU8::new(CpuState::NotInitialized as u8),
-            is_bsp: false,
-            apic_id: 0,
-            apic_base: 0,
+            is_bsp: core::sync::atomic::AtomicBool::new(false),
+            apic_id: core::sync::atomic::AtomicU8::new(0),
+            apic_base: AtomicUsize::new(0),
             features: CpuFeatures::empty(),
             context_switches: AtomicUsize::new(0),
             idle_time_ns: AtomicUsize::new(0),
@@ -194,32 +198,150 @@ impl SmpSystem {
 /// Global SMP system
 pub static SMP_SYSTEM: SmpSystem = SmpSystem::new();
 
-/// Initialize SMP (Phase 4D - TODO)
+/// AP startup function (called from trampoline.asm)
+#[no_mangle]
+pub extern "C" fn ap_startup(cpu_id: u64) -> ! {
+    use crate::arch::x86_64::{interrupts, idt, percpu};
+    
+    log::info!("AP {} starting...", cpu_id);
+    
+    // 1. Initialize Local APIC for this CPU
+    if let Some(local_apic) = interrupts::apic::LOCAL_APIC.get() {
+        let mut apic = local_apic.lock();
+        apic.init();
+        let apic_id = apic.get_id();
+        
+        // Find this CPU in SMP_SYSTEM and update it
+        for i in 0..MAX_CPUS {
+            if let Some(cpu) = SMP_SYSTEM.cpu(i) {
+                if cpu.apic_id.load(Ordering::Acquire) == apic_id as u8 {
+                    cpu.set_state(CpuState::Initializing);
+                    break;
+                }
+            }
+        }
+        
+        log::debug!("AP {}: APIC ID {} initialized", cpu_id, apic_id);
+    }
+    
+    // 2. Load IDT (use same IDT as BSP)
+    // IDT already loaded by BSP during early_init
+    log::debug!("AP {}: Using BSP IDT", cpu_id);
+    
+    // 3. Setup per-CPU data
+    percpu::init(cpu_id as u32);
+    log::debug!("AP {}: Per-CPU data initialized", cpu_id);
+    
+    // 4. Mark CPU as online
+    if let Some(cpu) = SMP_SYSTEM.cpu(cpu_id as usize) {
+        cpu.set_state(CpuState::Online);
+    }
+    SMP_SYSTEM.online_count.fetch_add(1, Ordering::Release);
+    
+    log::info!("AP {} online!", cpu_id);
+    
+    // 5. Enable interrupts
+    unsafe {
+        core::arch::asm!("sti");
+    }
+    
+    // 6. Enter idle loop (pick tasks from scheduler when implemented)
+    loop {
+        // TODO: Call scheduler to pick next thread
+        // if let Some(thread) = SCHEDULER.pick_next_thread(cpu_id as usize) {
+        //     SCHEDULER.switch_to(thread);
+        // } else {
+        unsafe {
+            core::arch::asm!("hlt");
+        }
+        // }
+    }
+}
+
+/// Initialize SMP (Phase 2 - Full Implementation)
 pub fn init() -> Result<(), &'static str> {
-    crate::logger::info("[SMP] Detecting CPUs...");
+    use crate::arch::x86_64::{acpi, interrupts::ipi};
+    use core::time::Duration;
     
-    // TODO: Phase 4D
-    // 1. Parse ACPI MADT table to get CPU count and APIC IDs
-    // 2. Detect BSP (current CPU)
-    // 3. Initialize BSP APIC
-    // 4. For each AP:
-    //    a. Send INIT IPI
-    //    b. Wait 10ms
-    //    c. Send SIPI IPI with startup code address
-    //    d. Wait for AP to set its state to Online
-    // 5. Setup per-CPU run queues in scheduler
+    log::info!("Initializing SMP...");
     
-    // For now, just detect BSP
-    let cpu_count = detect_cpu_count();
+    // 1. Initialize ACPI
+    acpi::init()?;
+    
+    // 2. Parse MADT to get CPU information
+    let madt_info = acpi::madt::parse_madt()?;
+    
+    let cpu_count = madt_info.cpu_count;
     SMP_SYSTEM.cpu_count.store(cpu_count, Ordering::Release);
     
-    // Mark BSP as online
-    SMP_SYSTEM.cpus[0].set_state(CpuState::Online);
-    SMP_SYSTEM.cpus[0].is_bsp = true;
-    SMP_SYSTEM.online_count.store(1, Ordering::Release);
-    SMP_SYSTEM.initialized.store(true, Ordering::Release);
+    log::info!("Detected {} CPUs from MADT", cpu_count);
     
-    crate::logger::info(&alloc::format!("[SMP] Detected {} CPUs (1 online)", cpu_count));
+    // 3. Setup CPUs in SMP_SYSTEM
+    for (i, &apic_id) in madt_info.apic_ids.iter().enumerate() {
+        if i >= MAX_CPUS {
+            break;
+        }
+        
+        let cpu = &SMP_SYSTEM.cpus[i];
+        cpu.apic_id.store(apic_id as u8, Ordering::Release);
+        cpu.apic_base.store(madt_info.local_apic_address as usize, Ordering::Release);
+    }
+    
+    // 4. Detect BSP (current CPU) - it's always APIC ID in cpus[0] typically
+    let bsp_apic_id = madt_info.apic_ids[0];
+    SMP_SYSTEM.cpus[0].set_state(CpuState::Online);
+    SMP_SYSTEM.cpus[0].is_bsp.store(true, Ordering::Release);
+    SMP_SYSTEM.bsp_id.store(0, Ordering::Release);
+    SMP_SYSTEM.online_count.store(1, Ordering::Release);
+    
+    log::info!("BSP APIC ID: {}", bsp_apic_id);
+    
+    // 5. Bootstrap APs (Application Processors)
+    for i in 1..cpu_count {
+        if i >= MAX_CPUS {
+            break;
+        }
+        
+        let apic_id = madt_info.apic_ids[i];
+        
+        log::info!("Booting AP {} (APIC ID {})...", i, apic_id);
+        
+        // Allocate stack for AP
+        let stack_top = bootstrap::allocate_ap_stack(i)?;
+        
+        // Setup trampoline
+        let vector = bootstrap::setup_trampoline(i, stack_top, ap_startup as u64)?;
+        
+        // Send INIT IPI
+        ipi::send_init_ipi(apic_id);
+        
+        // Wait 10ms
+        crate::arch::x86_64::pit::sleep_ms(10);
+        
+        // Send SIPI (Startup IPI) with trampoline vector
+        ipi::send_startup_ipi(apic_id, vector);
+        
+        // Wait for AP to come online (timeout after 1 second)
+        let mut timeout = 100; // 100 * 10ms = 1 second
+        while timeout > 0 {
+            if SMP_SYSTEM.cpus[i].is_online() {
+                log::info!("AP {} online!", i);
+                break;
+            }
+            crate::arch::x86_64::pit::sleep_ms(10);
+            timeout -= 1;
+        }
+        
+        if timeout == 0 {
+            log::error!("AP {} failed to start (timeout)", i);
+            SMP_SYSTEM.cpus[i].set_state(CpuState::Error);
+        }
+    }
+    
+    let online_count = SMP_SYSTEM.online_count.load(Ordering::Acquire);
+    log::info!("SMP initialized: {} / {} CPUs online", online_count, cpu_count);
+    
+    SMP_SYSTEM.initialized.store(true, Ordering::Release);
     
     Ok(())
 }

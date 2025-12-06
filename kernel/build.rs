@@ -14,6 +14,39 @@ fn main() {
     
     println!("cargo:rerun-if-changed=src/arch/x86_64/boot/boot.asm");
     println!("cargo:rerun-if-changed=src/arch/x86_64/boot/boot.c");
+    println!("cargo:rerun-if-changed=src/arch/x86_64/boot/trampoline.asm");
+    
+    // Assemble trampoline.asm with nasm
+    let trampoline_asm = "src/arch/x86_64/boot/trampoline.asm";
+    let trampoline_obj = format!("{}/trampoline.o", out_dir);
+    
+    let nasm_status = Command::new("nasm")
+        .args(&[
+            "-f", "elf64",
+            "-o", &trampoline_obj,
+            trampoline_asm
+        ])
+        .status();
+    
+    match nasm_status {
+        Ok(s) if s.success() => {
+            println!("cargo:rustc-link-search=native={}", out_dir);
+            println!("cargo:rustc-link-lib=static:+whole-archive=trampoline");
+            
+            // Create static library from trampoline.o
+            let ar_status = Command::new("ar")
+                .args(&["crus", &format!("{}/libtrampoline.a", out_dir), &trampoline_obj])
+                .status();
+            
+            if !ar_status.map(|s| s.success()).unwrap_or(false) {
+                println!("cargo:warning=Failed to create libtrampoline.a");
+            }
+        }
+        _ => {
+            println!("cargo:warning=Failed to assemble trampoline.asm with nasm");
+            println!("cargo:warning=Install nasm: sudo apk add nasm");
+        }
+    }
     
     // Compile boot objects using link_boot.ps1 script
     let link_boot_status = Command::new("pwsh")

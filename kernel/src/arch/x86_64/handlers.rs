@@ -165,6 +165,68 @@ global_asm!(
     "1:  hlt",
     "    jmp 1b",
     "",
+    ".global ipi_reschedule_wrapper",
+    "ipi_reschedule_wrapper:",
+    "    push rax",
+    "    push rcx",
+    "    push rdx",
+    "    push rsi",
+    "    push rdi",
+    "    push r8",
+    "    push r9",
+    "    push r10",
+    "    push r11",
+    "    call ipi_reschedule_handler",
+    "    pop r11",
+    "    pop r10",
+    "    pop r9",
+    "    pop r8",
+    "    pop rdi",
+    "    pop rsi",
+    "    pop rdx",
+    "    pop rcx",
+    "    pop rax",
+    "    iretq",
+    "",
+    ".global ipi_tlb_flush_wrapper",
+    "ipi_tlb_flush_wrapper:",
+    "    push rax",
+    "    push rcx",
+    "    push rdx",
+    "    push rsi",
+    "    push rdi",
+    "    push r8",
+    "    push r9",
+    "    push r10",
+    "    push r11",
+    "    call ipi_tlb_flush_handler",
+    "    pop r11",
+    "    pop r10",
+    "    pop r9",
+    "    pop r8",
+    "    pop rdi",
+    "    pop rsi",
+    "    pop rdx",
+    "    pop rcx",
+    "    pop rax",
+    "    iretq",
+    "",
+    ".global ipi_halt_wrapper",
+    "ipi_halt_wrapper:",
+    "    push rax",
+    "    push rcx",
+    "    push rdx",
+    "    push rsi",
+    "    push rdi",
+    "    push r8",
+    "    push r9",
+    "    push r10",
+    "    push r11",
+    "    call ipi_halt_handler",
+    "    # Halt doesn't return",
+    "1:  hlt",
+    "    jmp 1b",
+    "",
     ".att_syntax prefix",
 );
 
@@ -176,6 +238,9 @@ extern "C" {
     pub fn breakpoint_wrapper();
     pub fn double_fault_wrapper();
     pub fn page_fault_wrapper();
+    pub fn ipi_reschedule_wrapper();
+    pub fn ipi_tlb_flush_wrapper();
+    pub fn ipi_halt_wrapper();
 }
 
 // ============================================================================
@@ -207,6 +272,68 @@ extern "C" fn breakpoint_handler(_stack_frame: &InterruptStackFrame) {
         }
     }
     // Reprendre l'exécution normalement
+}
+
+/// IPI Reschedule Handler
+#[no_mangle]
+extern "C" fn ipi_reschedule_handler() {
+    use crate::arch::x86_64::interrupts::apic;
+    
+    // Send EOI to APIC
+    if let Some(local_apic) = apic::LOCAL_APIC.get() {
+        local_apic.lock().send_eoi();
+    }
+    
+    // Trigger scheduler reschedule
+    // TODO: Call scheduler when per-CPU queues are implemented
+    // crate::scheduler::schedule();
+}
+
+/// IPI TLB Flush Handler
+#[no_mangle]
+extern "C" fn ipi_tlb_flush_handler() {
+    use crate::arch::x86_64::interrupts::apic;
+    
+    // Send EOI to APIC
+    if let Some(local_apic) = apic::LOCAL_APIC.get() {
+        local_apic.lock().send_eoi();
+    }
+    
+    // Flush TLB by reloading CR3
+    unsafe {
+        let cr3: u64;
+        asm!("mov {}, cr3", out(reg) cr3);
+        asm!("mov cr3, {}", in(reg) cr3);
+    }
+}
+
+/// IPI Halt Handler
+#[no_mangle]
+extern "C" fn ipi_halt_handler() {
+    use crate::arch::x86_64::interrupts::apic;
+    use crate::arch::x86_64::smp::{SMP_SYSTEM, CpuState};
+    
+    // Send EOI to APIC
+    if let Some(local_apic) = apic::LOCAL_APIC.get() {
+        let apic_id = local_apic.lock().get_id();
+        
+        // Mark this CPU as halted
+        for i in 0..crate::arch::x86_64::smp::MAX_CPUS {
+            if let Some(cpu) = SMP_SYSTEM.cpu(i) {
+                if cpu.apic_id.load(core::sync::atomic::Ordering::Acquire) == apic_id as u8 {
+                    cpu.set_state(CpuState::Halted);
+                    break;
+                }
+            }
+        }
+        
+        local_apic.lock().send_eoi();
+    }
+    
+    // Halt this CPU permanently
+    loop {
+        unsafe { asm!("cli; hlt"); }
+    }
 }
 
 /// Handler pour Double Fault (#DF) - CRITIQUE!
@@ -317,6 +444,29 @@ extern "C" fn timer_interrupt_handler(_stack_frame: &InterruptStackFrame) {
     // Préemption: Appeler le scheduler tous les 10 ticks (10ms à 100Hz)
     if ticks % 10 == 0 {
         crate::scheduler::SCHEDULER.schedule();
+    }
+    
+    // Load balancing: Toutes les 100ms (10 ticks)
+    if ticks % 10 == 0 {
+        periodic_load_balance();
+    }
+}
+
+/// Periodic load balancing (called from timer interrupt every 100ms)
+fn periodic_load_balance() {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    use crate::scheduler::core::loadbalancer::LOAD_BALANCER;
+    use crate::arch::x86_64::pit::get_uptime_ms;
+    
+    static LAST_BALANCE: AtomicU64 = AtomicU64::new(0);
+    const BALANCE_INTERVAL_MS: u64 = 100; // 100ms
+    
+    let now = get_uptime_ms();
+    let last = LAST_BALANCE.load(Ordering::Relaxed);
+    
+    if now - last >= BALANCE_INTERVAL_MS {
+        LOAD_BALANCER.balance();
+        LAST_BALANCE.store(now, Ordering::Relaxed);
     }
 }
 
@@ -438,6 +588,9 @@ pub struct HandlerAddresses {
     pub page_fault: usize,
     pub timer: usize,
     pub keyboard: usize,
+    pub ipi_reschedule: usize,
+    pub ipi_tlb_flush: usize,
+    pub ipi_halt: usize,
 }
 
 pub fn get_handler_addresses() -> HandlerAddresses {
@@ -448,5 +601,8 @@ pub fn get_handler_addresses() -> HandlerAddresses {
         page_fault: page_fault_wrapper as usize,
         timer: timer_wrapper as usize,
         keyboard: keyboard_wrapper as usize,
+        ipi_reschedule: ipi_reschedule_wrapper as usize,
+        ipi_tlb_flush: ipi_tlb_flush_wrapper as usize,
+        ipi_halt: ipi_halt_wrapper as usize,
     }
 }

@@ -29,6 +29,12 @@ pub mod cache;
 /// tmpfs - Temporary RAM filesystem
 pub mod tmpfs;
 
+/// File operations trait - Unified interface for all file types
+pub mod file_ops;
+
+/// Path resolution - Advanced path resolver with caching
+pub mod path;
+
 use inode::{Inode, InodeType};
 use tmpfs::{TmpFs, TmpfsInode};
 

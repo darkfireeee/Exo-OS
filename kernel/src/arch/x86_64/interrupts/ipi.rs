@@ -1,0 +1,194 @@
+//! IPI (Inter-Processor Interrupts) Support
+//!
+//! IPIs are used to signal other CPUs for:
+//! - AP (Application Processor) startup (INIT + SIPI)
+//! - Scheduler reschedule requests
+//! - TLB shootdown (flush TLB on other CPUs)
+//! - CPU halt/stop
+
+use crate::arch::x86_64::smp::SMP_SYSTEM;
+use core::arch::asm;
+use core::sync::atomic::Ordering;
+
+/// x2APIC MSR addresses
+const IA32_APIC_BASE: u32 = 0x1B;
+const X2APIC_ICR: u32 = 0x830; // Interrupt Command Register (64-bit in x2APIC)
+
+/// IPI Vector assignments
+pub const IPI_RESCHEDULE_VECTOR: u8 = 0xF0;
+pub const IPI_TLB_FLUSH_VECTOR: u8 = 0xF1;
+pub const IPI_HALT_VECTOR: u8 = 0xF2;
+
+/// IPI delivery modes (bits 8-10 of ICR)
+const DELIVERY_MODE_FIXED: u64 = 0b000 << 8;
+const DELIVERY_MODE_INIT: u64 = 0b101 << 8;
+const DELIVERY_MODE_STARTUP: u64 = 0b110 << 8;
+
+/// IPI destination shorthand (bits 18-19 of ICR)
+const DEST_SHORTHAND_NONE: u64 = 0b00 << 18;
+const DEST_SHORTHAND_SELF: u64 = 0b01 << 18;
+const DEST_SHORTHAND_ALL_INCLUDING_SELF: u64 = 0b10 << 18;
+const DEST_SHORTHAND_ALL_EXCLUDING_SELF: u64 = 0b11 << 18;
+
+/// ICR flags
+const LEVEL_ASSERT: u64 = 1 << 14;
+const LEVEL_DEASSERT: u64 = 0 << 14;
+const TRIGGER_EDGE: u64 = 0 << 15;
+const TRIGGER_LEVEL: u64 = 1 << 15;
+
+/// Read MSR
+#[inline]
+unsafe fn rdmsr(msr: u32) -> u64 {
+    let low: u32;
+    let high: u32;
+    asm!(
+        "rdmsr",
+        in("ecx") msr,
+        out("eax") low,
+        out("edx") high,
+        options(nomem, nostack, preserves_flags)
+    );
+    ((high as u64) << 32) | (low as u64)
+}
+
+/// Write MSR
+#[inline]
+unsafe fn wrmsr(msr: u32, value: u64) {
+    let low = value as u32;
+    let high = (value >> 32) as u32;
+    asm!(
+        "wrmsr",
+        in("ecx") msr,
+        in("eax") low,
+        in("edx") high,
+        options(nomem, nostack, preserves_flags)
+    );
+}
+
+/// Send INIT IPI to a specific APIC ID
+///
+/// INIT IPI resets the target CPU to its initial state (real mode, CS=F000h, IP=FFF0h).
+/// This is the first step in AP (Application Processor) startup.
+pub fn send_init_ipi(apic_id: u32) {
+    unsafe {
+        // ICR format for x2APIC:
+        // Bits 0-7:   Vector (ignored for INIT)
+        // Bits 8-10:  Delivery Mode (101 = INIT)
+        // Bit 14:     Level (1 = assert)
+        // Bit 15:     Trigger Mode (1 = level)
+        // Bits 18-19: Destination Shorthand (00 = use destination field)
+        // Bits 32-63: Destination (x2APIC ID)
+        
+        let icr_value = DELIVERY_MODE_INIT
+            | LEVEL_ASSERT
+            | TRIGGER_LEVEL
+            | DEST_SHORTHAND_NONE
+            | ((apic_id as u64) << 32);
+        
+        wrmsr(X2APIC_ICR, icr_value);
+        
+        log::debug!("Sent INIT IPI to APIC ID {}", apic_id);
+    }
+}
+
+/// Send SIPI (Startup IPI) to a specific APIC ID
+///
+/// SIPI starts the target CPU executing at physical address (vector * 4096).
+/// The vector is typically 0x08 for address 0x8000.
+pub fn send_startup_ipi(apic_id: u32, vector: u8) {
+    unsafe {
+        // ICR format for SIPI:
+        // Bits 0-7:   Vector (startup address / 4096)
+        // Bits 8-10:  Delivery Mode (110 = SIPI)
+        // Bit 14:     Level (1 = assert)
+        // Bits 18-19: Destination Shorthand (00 = use destination field)
+        // Bits 32-63: Destination (x2APIC ID)
+        
+        let icr_value = (vector as u64)
+            | DELIVERY_MODE_STARTUP
+            | LEVEL_ASSERT
+            | DEST_SHORTHAND_NONE
+            | ((apic_id as u64) << 32);
+        
+        wrmsr(X2APIC_ICR, icr_value);
+        
+        log::debug!("Sent SIPI (vector {:#x}) to APIC ID {}", vector, apic_id);
+    }
+}
+
+/// Send a fixed IPI to a specific APIC ID
+pub fn send_ipi(apic_id: u32, vector: u8) {
+    unsafe {
+        let icr_value = (vector as u64)
+            | DELIVERY_MODE_FIXED
+            | DEST_SHORTHAND_NONE
+            | ((apic_id as u64) << 32);
+        
+        wrmsr(X2APIC_ICR, icr_value);
+    }
+}
+
+/// Send reschedule IPI to a specific CPU
+pub fn send_reschedule_ipi(cpu_id: usize) {
+    if let Some(cpu) = SMP_SYSTEM.cpu(cpu_id) {
+        if cpu.is_online() {
+            send_ipi(cpu.apic_id.load(Ordering::Acquire) as u32, IPI_RESCHEDULE_VECTOR);
+        }
+    }
+}
+
+/// Send TLB flush IPI to a specific CPU
+pub fn send_tlb_flush_ipi(cpu_id: usize) {
+    if let Some(cpu) = SMP_SYSTEM.cpu(cpu_id) {
+        if cpu.is_online() {
+            send_ipi(cpu.apic_id.load(Ordering::Acquire) as u32, IPI_TLB_FLUSH_VECTOR);
+        }
+    }
+}
+
+/// Send halt IPI to a specific CPU
+pub fn send_halt_ipi(cpu_id: usize) {
+    if let Some(cpu) = SMP_SYSTEM.cpu(cpu_id) {
+        if cpu.is_online() {
+            send_ipi(cpu.apic_id.load(Ordering::Acquire) as u32, IPI_HALT_VECTOR);
+        }
+    }
+}
+
+/// Send IPI to all CPUs except self
+pub fn send_ipi_all_but_self(vector: u8) {
+    unsafe {
+        let icr_value = (vector as u64)
+            | DELIVERY_MODE_FIXED
+            | DEST_SHORTHAND_ALL_EXCLUDING_SELF;
+        
+        wrmsr(X2APIC_ICR, icr_value);
+    }
+}
+
+/// Send reschedule IPI to all CPUs except self
+pub fn send_reschedule_all_but_self() {
+    send_ipi_all_but_self(IPI_RESCHEDULE_VECTOR);
+}
+
+/// Send TLB flush IPI to all CPUs except self
+pub fn send_tlb_flush_all_but_self() {
+    send_ipi_all_but_self(IPI_TLB_FLUSH_VECTOR);
+}
+
+/// Wait for ICR to be idle (delivery status clear)
+///
+/// Note: In x2APIC mode, the delivery status is always 0 (idle),
+/// so this function is a no-op for compatibility.
+pub fn wait_for_ipi_idle() {
+    // In x2APIC mode, writes to ICR are guaranteed to be accepted immediately
+    // No need to poll for delivery status
+}
+
+/// Check if x2APIC is enabled
+pub fn is_x2apic_enabled() -> bool {
+    unsafe {
+        let apic_base = rdmsr(IA32_APIC_BASE);
+        (apic_base & (1 << 10)) != 0 // Bit 10 = x2APIC enable
+    }
+}

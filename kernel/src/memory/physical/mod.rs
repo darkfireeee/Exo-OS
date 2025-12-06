@@ -50,8 +50,30 @@ pub fn allocate_frame() -> MemoryResult<Frame> {
 }
 
 /// Alloue plusieurs frames contiguës
-pub fn allocate_contiguous_frames(count: usize) -> MemoryResult<Frame> {
-    bitmap_allocator::allocate_contiguous_frames(count)
+pub fn allocate_contiguous_frames(count: usize, below_4gb: bool) -> Result<u64, &'static str> {
+    match bitmap_allocator::allocate_contiguous_frames(count) {
+        Ok(frame) => {
+            let phys_addr = frame.start.value() as u64;
+            // Check 4GB constraint
+            if below_4gb && phys_addr >= 0x1_0000_0000 {
+                // Try to free and return error
+                let _ = bitmap_allocator::deallocate_frame(frame);
+                return Err("No memory available below 4GB");
+            }
+            Ok(phys_addr)
+        }
+        Err(_) => Err("Failed to allocate contiguous frames")
+    }
+}
+
+/// Deallocate contiguous frames by physical address
+pub fn deallocate_frames(phys_addr: u64, count: usize) {
+    let frame = Frame::new(PhysicalAddress::new(phys_addr as usize));
+    for i in 0..count {
+        let offset = i * FRAME_SIZE;
+        let f = Frame::new(PhysicalAddress::new(phys_addr as usize + offset));
+        let _ = bitmap_allocator::deallocate_frame(f);
+    }
 }
 
 /// Libère une frame physique

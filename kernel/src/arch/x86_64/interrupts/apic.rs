@@ -165,7 +165,7 @@ impl X2Apic {
 }
 
 /// Global Local APIC instance
-static LOCAL_APIC: spin::Once<spin::Mutex<LocalApic>> = spin::Once::new();
+pub static LOCAL_APIC: spin::Once<spin::Mutex<LocalApic>> = spin::Once::new();
 
 /// Initialize Local APIC
 pub fn init() {
