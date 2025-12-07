@@ -64,6 +64,6 @@ filesystem = ["userland/fs_service"]
 # libs = ["libs/exo_types", "libs/exo_std"]
 
 # (Optionnel) Dépendances communes verrouillables plus tard
-# [workspace.dependencies]
-# log = "0.4.20"
-# spin = "0.9.8"
+[workspace.dependencies]
+ log = "0.4.20"
+spin = "0.9.8"
