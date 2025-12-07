@@ -17,6 +17,17 @@ use crate::fs::vfs::{FileDescriptor, VfsError};
 pub mod epoll;
 pub mod poll;
 
+// High-level API modules
+pub mod api;
+pub mod bind;
+pub mod connect;
+pub mod listen;
+pub mod accept;
+pub mod send;
+pub mod recv;
+pub mod options;
+pub mod zerocopy;
+
 // ============================================================================
 // Socket Types & Domains
 // ============================================================================

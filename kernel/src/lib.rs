@@ -144,22 +144,6 @@ fn alloc_error(layout: core::alloc::Layout) -> ! {
     }
 }
 
-/// Test runner entry point for custom test frameworks
-// Tests disabled pending utils module recreation
-/*
-#[cfg(test)]
-pub fn test_runner(tests: &[&dyn utils::test_utils::Testable]) {
-    // utils::test_utils::test_runner(tests);
-}
-
-/// Panic handler for tests
-#[cfg(test)]
-pub fn test_panic_handler(info: &PanicInfo) -> ! {
-    // utils::test_utils::test_panic_handler(info)
-    loop {}
-}
-*/
-
 /// Point d'entrée du kernel Rust (appelé depuis kernel_stub.c)
 ///
 /// À ce stade:

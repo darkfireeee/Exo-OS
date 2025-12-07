@@ -7,7 +7,12 @@
 //! - Priority queues
 //! - Rate limiting
 //! - Traffic shaping
+//! - CBQ, RED, BLUE, CoDel algorithms
 //! - 10 Gbps throughput
+
+pub mod shaping;
+
+pub use shaping::{ClassBasedQueue, RandomEarlyDetection, BlueQueue, CoDelQueue};
 
 use alloc::vec::Vec;
 use alloc::collections::{VecDeque, BTreeMap};

@@ -10,6 +10,17 @@
 //! - DPDK-like fast path
 
 pub mod conntrack;
+pub mod nat;
+pub mod rules;
+pub mod tables;
+pub mod percpu_conntrack;
+pub mod fast_rules;
+
+pub use nat::{NatEngine, NatRule, NatType};
+pub use rules::{FirewallRule, RulesEngine, Chain, Action, MatchState};
+pub use tables::{NetfilterTables, TableType};
+pub use percpu_conntrack::{PerCpuConntrack, ConnKey, ConnState, ConntrackStats};
+pub use fast_rules::{FastRuleEngine, FiveTuple, Action as FastAction, RuleEngineStats};
 
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;

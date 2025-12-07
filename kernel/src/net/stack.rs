@@ -19,6 +19,7 @@ use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use spin::{Mutex, RwLock};
 
 use crate::net::{NetError, NetResult, IpAddress};
+use crate::net::ethernet::MacAddress;
 use crate::memory::PhysAddr;
 
 /// Network stack statistics (lock-free counters)
@@ -319,17 +320,6 @@ pub struct InterfaceCapabilities {
     pub rss: bool, // Receive Side Scaling
     pub scatter_gather: bool,
     pub jumbo_frames: bool,
-}
-
-/// MAC address (6 bytes)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MacAddress(pub [u8; 6]);
-
-impl core::fmt::Display for MacAddress {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        write!(f, "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-               self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5])
-    }
 }
 
 /// Socket address (IP + port)

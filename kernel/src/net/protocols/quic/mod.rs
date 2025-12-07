@@ -9,6 +9,12 @@
 //! - Loss recovery
 //! - Connection migration
 
+pub mod handshake;
+pub mod recovery;
+
+pub use handshake::{QuicHandshake, HandshakeState, CipherSuite};
+pub use recovery::{LossRecovery, SentPacket, RecoveryStats};
+
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 use crate::sync::SpinLock;

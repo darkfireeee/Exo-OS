@@ -9,6 +9,7 @@ use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
 use crate::sync::SpinLock;
 use super::netdev::{NetworkDevice, DeviceType};
 use super::skb::SocketBuffer;
+use crate::net::ip::{Ipv4Address as Ipv4Addr, Ipv6Address as Ipv6Addr};
 
 /// Configuration d'une interface
 #[derive(Debug, Clone)]
@@ -24,7 +25,6 @@ pub struct InterfaceConfig {
     
     /// Gateway par défaut
     pub default_gateway: Option<[u8; 16]>,
-    
     /// DNS servers
     pub dns_servers: Vec<[u8; 16]>,
     
@@ -37,17 +37,24 @@ pub struct InterfaceConfig {
     pub allmulti: bool,
 }
 
+/// IPv4 configuration with netmask
 #[derive(Debug, Clone, Copy)]
-pub struct Ipv4Address {
-    pub addr: [u8; 4],
+pub struct Ipv4Config {
+    pub addr: Ipv4Addr,
     pub netmask: [u8; 4],
     pub broadcast: [u8; 4],
 }
 
+/// IPv6 configuration with prefix length
 #[derive(Debug, Clone, Copy)]
-pub struct Ipv6Address {
-    pub addr: [u8; 16],
+pub struct Ipv6Config {
+    pub addr: Ipv6Addr,
     pub prefix_len: u8,
+}
+
+// Type aliases for backward compatibility
+pub type Ipv4Address = Ipv4Config;
+pub type Ipv6Address = Ipv6Config;   pub prefix_len: u8,
 }
 
 /// Interface réseau (couche au-dessus de NetworkDevice)

@@ -9,6 +9,11 @@
 //! - Connection draining
 //! - 10M+ connections/sec
 
+// New load balancing implementations
+pub mod algorithms;
+pub mod backend;
+pub mod health;
+
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;

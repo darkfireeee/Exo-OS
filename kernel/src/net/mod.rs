@@ -36,14 +36,23 @@ pub mod ethernet;
 /// Network core (sockets, devices, buffers)
 pub mod core;
 
+/// Network device drivers
+pub mod drivers;
+
 /// Protocol implementations (clean modular architecture)
 pub mod protocols;
 
 /// WireGuard VPN
 pub mod wireguard;
 
-/// Netfilter / Firewall
-pub mod netfilter;
+/// VPN subsystem (IPsec, OpenVPN)
+pub mod vpn;
+
+/// Time management for network stack
+pub mod time;
+
+/// Firewall (moved from netfilter for better naming)
+pub mod firewall;
 
 /// Network services (DHCP, DNS, NTP)
 pub mod services;
@@ -59,6 +68,10 @@ pub mod rdma;
 
 /// Network Performance Monitoring
 pub mod monitoring;
+
+/// Network tests (unit, integration, performance)
+#[cfg(test)]
+pub mod tests;
 
 /// Network errors
 #[derive(Debug)]

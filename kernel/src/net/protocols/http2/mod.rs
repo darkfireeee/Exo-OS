@@ -9,6 +9,10 @@
 //! - Server push
 //! - Flow control
 
+pub mod hpack;
+
+pub use hpack::{HpackCodec, HpackError};
+
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -239,19 +243,10 @@ impl Http2Connection {
         Ok((header, payload))
     }
     
-    /// Encode headers avec HPACK (simplifié)
+    /// Encode headers avec HPACK
     fn encode_headers(&self, headers: &[(String, String)]) -> Vec<u8> {
-        let mut encoded = Vec::new();
-        
-        for (name, value) in headers {
-            // Format simplifié : length + name + length + value
-            encoded.push(name.len() as u8);
-            encoded.extend_from_slice(name.as_bytes());
-            encoded.push(value.len() as u8);
-            encoded.extend_from_slice(value.as_bytes());
-        }
-        
-        encoded
+        let mut codec = hpack::HpackCodec::new(4096);
+        codec.encode(headers)
     }
     
     /// Request HTTP/2 GET

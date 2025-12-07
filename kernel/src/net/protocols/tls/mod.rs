@@ -9,6 +9,21 @@
 //! - X25519, P-256 ECDH
 //! - Hardware acceleration (AES-NI)
 
+pub mod crypto;
+pub mod aes_gcm;
+pub mod chacha20_poly1305;
+pub mod hkdf;
+
+pub use crypto::{
+    aes_gcm_encrypt, aes_gcm_decrypt,
+    chacha20_poly1305_encrypt, chacha20_poly1305_decrypt,
+    hkdf_extract, hkdf_expand, hkdf_expand_label,
+    CryptoError, CryptoResult,
+};
+pub use aes_gcm::{AesGcm, KeySize};
+pub use chacha20_poly1305::ChaCha20Poly1305;
+pub use hkdf::{Hkdf, HkdfError};
+
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 use crate::sync::SpinLock;
@@ -185,10 +200,10 @@ impl TlsContext {
         // Encrypt avec AES-GCM ou ChaCha20-Poly1305
         let ciphertext = match self.cipher_suite.unwrap() {
             CipherSuite::Aes128GcmSha256 | CipherSuite::Aes256GcmSha384 => {
-                Self::aes_gcm_encrypt(key, &nonce, plaintext)?
+                crypto::aes_gcm_encrypt(key, &nonce, plaintext)?
             }
             CipherSuite::Chacha20Poly1305Sha256 => {
-                Self::chacha20_poly1305_encrypt(key, &nonce, plaintext)?
+                crypto::chacha20_poly1305_encrypt(key, &nonce, plaintext)?
             }
         };
         
@@ -235,10 +250,10 @@ impl TlsContext {
         // Decrypt
         let plaintext = match self.cipher_suite.unwrap() {
             CipherSuite::Aes128GcmSha256 | CipherSuite::Aes256GcmSha384 => {
-                Self::aes_gcm_decrypt(key, &nonce, ciphertext)?
+                crypto::aes_gcm_decrypt(key, &nonce, ciphertext)?
             }
             CipherSuite::Chacha20Poly1305Sha256 => {
-                Self::chacha20_poly1305_decrypt(key, &nonce, ciphertext)?
+                crypto::chacha20_poly1305_decrypt(key, &nonce, ciphertext)?
             }
         };
         
@@ -247,29 +262,11 @@ impl TlsContext {
         Ok(plaintext)
     }
     
-    // Crypto stubs (à remplacer par vraie implémentation)
     fn generate_random() -> [u8; 32] {
-        [0u8; 32] // TODO: vraie génération random
-    }
-    
-    fn aes_gcm_encrypt(_key: &[u8], _nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, TlsError> {
-        // TODO: vraie implémentation AES-GCM
-        Ok(plaintext.to_vec())
-    }
-    
-    fn aes_gcm_decrypt(_key: &[u8], _nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, TlsError> {
-        // TODO: vraie implémentation AES-GCM
-        Ok(ciphertext.to_vec())
-    }
-    
-    fn chacha20_poly1305_encrypt(_key: &[u8], _nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, TlsError> {
-        // TODO: vraie implémentation ChaCha20-Poly1305
-        Ok(plaintext.to_vec())
-    }
-    
-    fn chacha20_poly1305_decrypt(_key: &[u8], _nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, TlsError> {
-        // TODO: vraie implémentation ChaCha20-Poly1305
-        Ok(ciphertext.to_vec())
+        let random_vec = crypto::random_bytes(32);
+        let mut array = [0u8; 32];
+        array.copy_from_slice(&random_vec);
+        array
     }
 }
 
@@ -321,6 +318,15 @@ pub enum TlsError {
     NoKey,
     DecryptFailed,
     EncryptFailed,
+}
+
+impl From<CryptoError> for TlsError {
+    fn from(e: CryptoError) -> Self {
+        match e {
+            CryptoError::AuthenticationFailed => TlsError::DecryptFailed,
+            _ => TlsError::EncryptFailed,
+        }
+    }
 }
 
 /// Socket TLS (wrapper autour d'un TCP socket)

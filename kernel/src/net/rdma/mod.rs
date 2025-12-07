@@ -10,6 +10,11 @@
 //! - <1μs latency
 //! - 100+ Gbps bandwidth
 
+// New InfiniBand verbs implementation
+pub mod verbs;
+pub mod qp;
+pub mod cq;
+
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
