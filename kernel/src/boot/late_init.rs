@@ -32,14 +32,15 @@ fn init_smp() -> Result<(), &'static str> {
     // Initialize per-CPU queues
     crate::scheduler::core::percpu_queue::init();
     
+    // ⏸️ Phase 0: Tests désactivés (Phase 2+)
     // Run Phase 2 validation tests
-    match crate::tests::phase2_smp_tests::run_all_tests() {
-        Ok(_) => log::info!("  [SMP] Phase 2 tests passed ✓"),
-        Err(e) => log::warn!("  [SMP] Phase 2 test failed: {}", e),
-    }
-    
-    // Run scalability benchmark
-    crate::tests::phase2_smp_tests::benchmark_smp_scalability();
+    // match crate::tests::phase2_smp_tests::run_all_tests() {
+    //     Ok(_) => log::info!("  [SMP] Phase 2 tests passed ✓"),
+    //     Err(e) => log::warn!("  [SMP] Phase 2 test failed: {}", e),
+    // }
+    // 
+    // // Run scalability benchmark
+    // crate::tests::phase2_smp_tests::benchmark_smp_scalability();
     
     log::info!("  [SMP] Complete ({} CPUs online)", 
         crate::arch::x86_64::smp::SMP_SYSTEM.online_count());

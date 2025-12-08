@@ -877,18 +877,20 @@ impl Scheduler {
                     thread.id()
                 ));
 
-                // Get action
+                // Get action (utiliser le stub Phase 0)
+                use crate::scheduler::signals_stub::SigAction;
+                
                 let action = thread
                     .get_signal_handler(sig)
-                    .unwrap_or(crate::posix_x::signals::SigAction::Default);
+                    .unwrap_or(SigAction::Default);
 
                 match action {
-                    crate::posix_x::signals::SigAction::Ignore => {
+                    SigAction::Ignore => {
                         logger::debug("Signal ignored");
                         thread.remove_pending_signal(sig);
                         return false;
                     }
-                    crate::posix_x::signals::SigAction::Default => {
+                    SigAction::Default => {
                         logger::info(&format!(
                             "Terminating thread {} due to signal {}",
                             thread.id(),
@@ -899,7 +901,7 @@ impl Scheduler {
                         thread.remove_pending_signal(sig);
                         return true;
                     }
-                    crate::posix_x::signals::SigAction::Handler { handler, mask: _ } => {
+                    SigAction::Handler { handler, mask: _ } => {
                         logger::info(&format!(
                             "Dispatching signal {} to handler {:#x}",
                             sig, handler

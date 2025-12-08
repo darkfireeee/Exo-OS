@@ -81,3 +81,14 @@ pub fn busy_sleep_us(us: u64) {
 pub fn busy_sleep_ms(ms: u64) {
     busy_sleep_ns(ms * 1_000_000)
 }
+
+// Aliases for compatibility
+/// Alias for monotonic_ns()
+pub fn monotonic_time() -> u64 {
+    monotonic_ns()
+}
+
+/// Get current time in seconds (UNIX timestamp)
+pub fn now_secs() -> u64 {
+    unix_timestamp()
+}

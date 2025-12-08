@@ -20,13 +20,11 @@ pub const MAP_ANONYMOUS: u32 = 0x20;
 
 /// Bridge for memory allocation (brk/sbrk)
 pub fn posix_brk(addr: VirtualAddress) -> Result<VirtualAddress, Errno> {
-    // Call Exo-OS memory allocator
-    // TODO: Implement actual memory allocator
-    // match crate::memory::allocator::set_program_break(addr) {
-    //     Ok(new_brk) => Ok(new_brk),
-    //     Err(e) => Err(memory_error_to_errno(e)),
-    // }
-    Ok(addr) // Placeholder
+    // Call Exo-OS syscall handler for brk
+    match crate::syscall::handlers::memory::sys_brk(addr) {
+        Ok(new_brk) => Ok(new_brk),
+        Err(e) => Err(memory_error_to_errno(e)),
+    }
 }
 
 /// Bridge for memory mapping (mmap)
@@ -38,78 +36,58 @@ pub fn posix_mmap(
     fd: i32,
     offset: i64,
 ) -> Result<VirtualAddress, Errno> {
-    // Convert POSIX prot flags to Exo-OS rights
-    let readable = (prot & PROT_READ) != 0;
-    let writable = (prot & PROT_WRITE) != 0;
-    let executable = (prot & PROT_EXEC) != 0;
-
-    // Convert POSIX flags to Exo-OS mapping type
-    let shared = (flags & MAP_SHARED) != 0;
-    let fixed = (flags & MAP_FIXED) != 0;
-    let anonymous = (flags & MAP_ANONYMOUS) != 0;
-
-    // Call Exo-OS mapper
-    // TODO: Implement actual memory mapper
-    /*
-    let result = if anonymous {
-        crate::memory::mapper::map_anonymous(
-            addr,
-            length,
-            readable,
-            writable,
-            executable,
-            shared,
-            fixed,
-        )
-    } else {
-        crate::memory::mapper::map_file(
-            addr,
-            length,
-            readable,
-            writable,
-            executable,
-            fd,
-            offset as usize,
-            fixed,
-        )
+    // Convert POSIX prot flags to ProtFlags
+    let prot_flags = crate::syscall::handlers::memory::ProtFlags {
+        read: (prot & PROT_READ) != 0,
+        write: (prot & PROT_WRITE) != 0,
+        exec: (prot & PROT_EXEC) != 0,
     };
 
-    match result {
+    // Convert POSIX flags to MapFlags
+    let map_flags = crate::syscall::handlers::memory::MapFlags {
+        shared: (flags & MAP_SHARED) != 0,
+        private: (flags & MAP_PRIVATE) != 0,
+        fixed: (flags & MAP_FIXED) != 0,
+        anonymous: (flags & MAP_ANONYMOUS) != 0,
+    };
+
+    // Call Exo-OS syscall handler
+    match crate::syscall::handlers::memory::sys_mmap(
+        addr,
+        length,
+        prot_flags,
+        map_flags,
+        fd as u64,
+        offset as usize,
+    ) {
         Ok(mapped_addr) => Ok(mapped_addr),
         Err(e) => Err(memory_error_to_errno(e)),
     }
-    */
-    Ok(addr) // Placeholder
 }
 
 /// Bridge for memory unmapping (munmap)
 pub fn posix_munmap(addr: VirtualAddress, length: usize) -> Result<(), Errno> {
-    // TODO: Implement actual unmapper
-    // match crate::memory::mapper::unmap(addr, length) {
-    //     Ok(()) => Ok(()),
-    //     Err(e) => Err(memory_error_to_errno(e)),
-    // }
-    Ok(()) // Placeholder
+    // Call Exo-OS syscall handler
+    match crate::syscall::handlers::memory::sys_munmap(addr, length) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(memory_error_to_errno(e)),
+    }
 }
 
 /// Bridge for memory protection (mprotect)
 pub fn posix_mprotect(addr: VirtualAddress, length: usize, prot: u32) -> Result<(), Errno> {
-    let _readable = (prot & PROT_READ) != 0;
-    let _writable = (prot & PROT_WRITE) != 0;
-    let _executable = (prot & PROT_EXEC) != 0;
+    // Convert POSIX prot flags to ProtFlags
+    let prot_flags = crate::syscall::handlers::memory::ProtFlags {
+        read: (prot & PROT_READ) != 0,
+        write: (prot & PROT_WRITE) != 0,
+        exec: (prot & PROT_EXEC) != 0,
+    };
 
-    // TODO: Implement actual protection change
-    // match crate::memory::mapper::change_protection(
-    //     addr,
-    //     length,
-    //     readable,
-    //     writable,
-    //     executable,
-    // ) {
-    //     Ok(()) => Ok(()),
-    //     Err(e) => Err(memory_error_to_errno(e)),
-    // }
-    Ok(()) // Placeholder
+    // Call Exo-OS syscall handler
+    match crate::syscall::handlers::memory::sys_mprotect(addr, length, prot_flags) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(memory_error_to_errno(e)),
+    }
 }
 
 /// Initialize memory bridge

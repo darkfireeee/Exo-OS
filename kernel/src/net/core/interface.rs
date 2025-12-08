@@ -54,8 +54,7 @@ pub struct Ipv6Config {
 
 // Type aliases for backward compatibility
 pub type Ipv4Address = Ipv4Config;
-pub type Ipv6Address = Ipv6Config;   pub prefix_len: u8,
-}
+pub type Ipv6Address = Ipv6Config;
 
 /// Interface réseau (couche au-dessus de NetworkDevice)
 pub struct NetworkInterface {

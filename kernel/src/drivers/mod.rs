@@ -1,21 +1,23 @@
-//! Hardware Drivers
+//! Hardware Drivers - Phase 0 (Minimal)
 //!
-//! This module contains all hardware drivers for Exo-OS:
-//! - PCI bus enumeration
-//! - Network drivers (E1000, RTL8139, VirtIO-Net)
-//! - Block device drivers
-//! - Character device drivers
-//! - Input device drivers
-//! - Video drivers
+//! Phase 0: VGA + Serial uniquement
+//! Phase 1+: PCI, Network, Block, USB, etc.
 
-pub mod block;
-pub mod char;
-pub mod input;
-pub mod net;
-pub mod pci;
-pub mod usb;
-pub mod video;
-pub mod virtio;
+// ═══════════════════════════════════════════════════════════
+//  PHASE 0 - Drivers essentiels
+// ═══════════════════════════════════════════════════════════
+pub mod char;   // ✅ Serial + Console
+pub mod video;  // ✅ VGA text mode
+
+// ═══════════════════════════════════════════════════════════
+//  PHASE 1+ - Drivers désactivés
+// ═══════════════════════════════════════════════════════════
+// pub mod block;   // ⏸️ Phase 2: ATA/AHCI/NVMe
+// pub mod input;   // ⏸️ Phase 2: Keyboard/Mouse
+// pub mod net;     // ⏸️ Phase 3: E1000, RTL8139, VirtIO-Net
+// pub mod pci;     // ⏸️ Phase 1: PCI bus enumeration
+// pub mod usb;     // ⏸️ Phase 3: USB stack
+// pub mod virtio;  // ⏸️ Phase 3: VirtIO devices
 
 /// Error type for driver operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,23 +54,15 @@ pub trait Driver {
     fn probe(&self) -> DriverResult<DeviceInfo>;
 }
 
-/// Initialize all hardware drivers
+/// Initialize hardware drivers (Phase 0: VGA + Serial uniquement)
 pub fn init() {
-    log::info!("Initializing hardware drivers...");
+    // Phase 0: VGA et Serial déjà initialisés dans boot
+    // Rien à faire ici pour l'instant
     
-    // Initialize PCI bus first (required for device detection)
-    pci::init();
-    
-    // Initialize network drivers
-    if net::e1000::init() {
-        log::info!("  E1000 network driver loaded");
-    }
-    if net::rtl8139::init() {
-        log::info!("  RTL8139 network driver loaded");
-    }
-    if net::virtio_net::init() {
-        log::info!("  VirtIO-Net driver loaded");
-    }
-    
-    log::info!("Hardware drivers initialized");
+    // ⏸️ Phase 1+: PCI, Network, Block, etc.
+    // log::info!("Initializing hardware drivers...");
+    // pci::init();
+    // net::e1000::init();
+    // net::rtl8139::init();
+    // net::virtio_net::init();
 }

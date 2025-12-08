@@ -9,11 +9,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use crate::posix_x::signals::types::SignalStackFrame;
-
-// Phase 11: Import signal types from kernel root
-type SigSet = crate::posix_x::signals::SigSet;
-type SigAction = crate::posix_x::signals::SigAction;
+// ✅ Phase 0: Utiliser les stubs temporaires pour signaux (sera posix_x en Phase 1)
+use crate::scheduler::signals_stub::{SignalStackFrame, SigSet, SigAction};
 
 /// Thread ID type
 pub type ThreadId = u64;
@@ -177,15 +174,15 @@ pub struct Thread {
     /// Exit status (for zombie reaping)
     exit_status: core::sync::atomic::AtomicI32,
 
-    // Phase 11: Signal handling
+    // Phase 0: Signal handling (stubs temporaires)
     /// Blocked signals mask
-    sigmask: spin::Mutex<crate::posix_x::signals::SigSet>,
+    sigmask: spin::Mutex<SigSet>,
 
     /// Pending signals
-    pending_signals: spin::Mutex<crate::posix_x::signals::SigSet>,
+    pending_signals: spin::Mutex<SigSet>,
 
     /// Signal handlers (indexed by signal number - 1)
-    signal_handlers: spin::Mutex<[crate::posix_x::signals::SigAction; 64]>,
+    signal_handlers: spin::Mutex<[SigAction; 64]>,
 }
 
 impl Thread {
@@ -225,9 +222,9 @@ impl Thread {
             exit_status: core::sync::atomic::AtomicI32::new(0),
 
             // Phase 11: Signal handling
-            sigmask: spin::Mutex::new(crate::posix_x::signals::SigSet::empty()),
-            pending_signals: spin::Mutex::new(crate::posix_x::signals::SigSet::empty()),
-            signal_handlers: spin::Mutex::new([crate::posix_x::signals::SigAction::Default; 64]),
+            sigmask: spin::Mutex::new(SigSet::empty()),
+            pending_signals: spin::Mutex::new(SigSet::empty()),
+            signal_handlers: spin::Mutex::new([SigAction::Default; 64]),
         }
     }
 
@@ -293,9 +290,9 @@ impl Thread {
             exit_status: core::sync::atomic::AtomicI32::new(0),
 
             // Phase 11: Signal handling
-            sigmask: spin::Mutex::new(crate::posix_x::signals::SigSet::empty()),
-            pending_signals: spin::Mutex::new(crate::posix_x::signals::SigSet::empty()),
-            signal_handlers: spin::Mutex::new([crate::posix_x::signals::SigAction::Default; 64]),
+            sigmask: spin::Mutex::new(SigSet::empty()),
+            pending_signals: spin::Mutex::new(SigSet::empty()),
+            signal_handlers: spin::Mutex::new([SigAction::Default; 64]),
         }
     }
 
@@ -413,12 +410,12 @@ impl Thread {
     // Phase 11: Signal handling methods
 
     /// Get current signal mask
-    pub fn get_sigmask(&self) -> crate::posix_x::signals::SigSet {
+    pub fn get_sigmask(&self) -> SigSet {
         *self.sigmask.lock()
     }
 
     /// Set signal mask
-    pub fn set_sigmask(&self, mask: crate::posix_x::signals::SigSet) {
+    pub fn set_sigmask(&self, mask: SigSet) {
         *self.sigmask.lock() = mask;
     }
 
@@ -446,14 +443,14 @@ impl Thread {
     }
 
     /// Set signal handler
-    pub fn set_signal_handler(&self, sig: u32, action: crate::posix_x::signals::SigAction) {
+    pub fn set_signal_handler(&self, sig: u32, action: SigAction) {
         if sig > 0 && sig <= 64 {
             self.signal_handlers.lock()[(sig - 1) as usize] = action;
         }
     }
 
     /// Get signal handler
-    pub fn get_signal_handler(&self, sig: u32) -> Option<crate::posix_x::signals::SigAction> {
+    pub fn get_signal_handler(&self, sig: u32) -> Option<SigAction> {
         if sig > 0 && sig <= 64 {
             Some(self.signal_handlers.lock()[(sig - 1) as usize])
         } else {
@@ -673,7 +670,7 @@ impl Thread {
             
             // Copy signal handling state
             sigmask: spin::Mutex::new(*parent.sigmask.lock()),
-            pending_signals: spin::Mutex::new(crate::posix_x::signals::SigSet::empty()),
+            pending_signals: spin::Mutex::new(SigSet::empty()),
             signal_handlers: spin::Mutex::new(*parent.signal_handlers.lock()),
         };
         

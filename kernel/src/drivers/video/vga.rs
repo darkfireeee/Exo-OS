@@ -1,6 +1,7 @@
 //! VGA text mode driver.
 
-use crate::drivers::{DeviceInfo, Driver, DriverError, DriverResult};
+// Phase 0: Types Driver désactivés
+// use crate::drivers::{DeviceInfo, Driver, DriverError, DriverResult};
 use core::fmt;
 use lazy_static::lazy_static;   
 use spin::Mutex;
@@ -138,24 +139,25 @@ impl VgaDriver {
     }
 }
 
-impl Driver for VgaDriver {
-    fn name(&self) -> &str {
-        "VGA Text Mode Driver"
-    }
-
-    fn init(&mut self) -> DriverResult<()> {
-        self.clear_screen();
-        Ok(())
-    }
-
-    fn probe(&self) -> DriverResult<DeviceInfo> {
-        Ok(DeviceInfo {
-            name: "VGA Controller",
-            vendor_id: 0, // Generic
-            device_id: 0,
-        })
-    }
-}
+// ⏸️ Phase 0: Trait Driver désactivé (Phase 1+)
+// impl Driver for VgaDriver {
+//     fn name(&self) -> &str {
+//         "VGA Text Mode Driver"
+//     }
+// 
+//     fn init(&mut self) -> DriverResult<()> {
+//         self.clear_screen();
+//         Ok(())
+//     }
+// 
+//     fn probe(&self) -> DriverResult<DeviceInfo> {
+//         Ok(DeviceInfo {
+//             name: "VGA Controller",
+//             vendor_id: 0, // Generic
+//             device_id: 0,
+//         })
+//     }
+// }
 
 impl fmt::Write for VgaDriver {
     fn write_str(&mut self, s: &str) -> fmt::Result {

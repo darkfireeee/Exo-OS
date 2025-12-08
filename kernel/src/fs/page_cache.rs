@@ -757,7 +757,6 @@ impl PageCache {
             if let Some(key) = clock_pro.evict(&self.pages) {
                 // Flush si dirty
                 {
-                {
                     let pages = self.pages.read();
                     if let Some(page) = pages.get(&key) {
                         if page.is_dirty() {

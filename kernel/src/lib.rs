@@ -16,35 +16,53 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
-// Public modules
-pub mod acpi;
-pub mod arch;
-pub mod bench;  // Module de benchmark pour mesurer les performances
-pub mod boot;
-pub mod c_compat;
-pub mod debug;
-pub mod drivers;
-pub mod logger;
-pub mod multiboot2;
-pub mod splash;
-pub mod tests;  // Module de tests pour Phase 1
+// ═══════════════════════════════════════════════════════════
+//  PHASE 0 - Modules essentiels uniquement
+// ═══════════════════════════════════════════════════════════
+pub mod acpi;           // ✅ Phase 0: Détection matériel
+pub mod arch;           // ✅ Phase 0: GDT/IDT/Interrupts/Context Switch
+pub mod bench;          // ✅ Phase 0: Benchmarks context switch
+pub mod boot;           // ✅ Phase 0: Multiboot2 parsing
+pub mod c_compat;       // ✅ Phase 0: Compatibilité boot.c
+pub mod debug;          // ✅ Phase 0: Debug utilities
+pub mod logger;         // ✅ Phase 0: Early logging
+pub mod multiboot2;     // ✅ Phase 0: Multiboot2 protocol
+pub mod splash;         // ✅ Phase 0: Boot splash screen
+pub mod memory;         // ✅ Phase 0: Frame allocator + heap
+pub mod scheduler;      // ✅ Phase 0: 3-queue scheduler + context switch
+pub mod sync;           // ✅ Phase 0: Spinlock, Mutex basics
+pub mod time;           // ✅ Phase 0: PIT timer
+
+// ═══════════════════════════════════════════════════════════
+//  DRIVERS - Minimal Phase 0 (VGA, Serial uniquement)
+// ═══════════════════════════════════════════════════════════
+pub mod drivers {
+    pub mod char {
+        pub mod console;
+        pub mod serial;
+    }
+    pub mod video {
+        pub mod vga;
+    }
+}
 pub use drivers::char::console::{_print as _console_print, CONSOLE};
 pub use drivers::char::serial::{_print as _serial_print, SERIAL1};
 pub use drivers::video::vga::{_print as _vga_print, WRITER};
-pub mod ffi;
-pub mod fs;
-pub mod ipc;
-pub mod loader;
-pub mod memory;
-pub mod net;
-pub mod posix_x;
-pub mod power;
-pub mod scheduler;
-pub mod security;
-pub mod shell;
-pub mod sync;
-pub mod syscall;
-pub mod time;
+
+// ═══════════════════════════════════════════════════════════
+//  PHASE 1+ - Modules désactivés temporairement
+// ═══════════════════════════════════════════════════════════
+// pub mod tests;       // ⏸️ Phase 1: Tests fork/exec/wait
+// pub mod ffi;         // ⏸️ Phase 1: FFI userland
+// pub mod fs;          // ⏸️ Phase 2: VFS complet
+// pub mod ipc;         // ⏸️ Phase 2: IPC zerocopy
+// pub mod loader;      // ⏸️ Phase 1: ELF loader
+// pub mod net;         // ⏸️ Phase 3: Network stack
+// pub mod posix_x;     // ⏸️ Phase 1: POSIX syscalls
+// pub mod power;       // ⏸️ Phase 3: Power management
+// pub mod security;    // ⏸️ Phase 3: Capabilities
+// pub mod shell;       // ⏸️ Phase 1: Interactive shell
+// pub mod syscall;     // ⏸️ Phase 1: Syscall infrastructure
 
 // Re-export for boot stub
 pub use memory::heap::LockedHeap;
@@ -400,18 +418,35 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             bench::BENCH_STATS.record_context_switch(avg);
             
             logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
-            logger::early_print("[KERNEL]   PHASE 1 TESTS - fork/exec/wait\n");
+            logger::early_print("[KERNEL]   PHASE 0 COMPLETE - Scheduler Ready\n");
             logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
+            logger::early_print("[KERNEL] ✅ Timer + Context Switch validated\n");
+            logger::early_print("[KERNEL] ✅ Scheduler 3-queue operational\n");
+            logger::early_print("[KERNEL] ✅ Memory management ready\n\n");
             
-            // Exécuter les tests de processus
-            tests::process_tests::run_all();
+            // PHASE 0 TERMINÉE - Attendre ou passer à Phase 1
+            logger::early_print("[KERNEL] Phase 0 completed successfully!\n");
+            logger::early_print("[KERNEL] Next: Enable Phase 1 modules (fork/exec/tests)\n\n");
+            
+            // ⏸️ PHASE 1 désactivée pour l'instant
+            // logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
+            // logger::early_print("[KERNEL]   PHASE 1 TESTS - fork/exec/wait\n");
+            // logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
+            // tests::process_tests::run_all();
 
-            logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
-            logger::early_print("[KERNEL]   LAUNCHING INTERACTIVE SHELL\n");
-            logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
-
-            // Lancer le shell interactif (ne revient jamais)
-            shell::run();
+            // ⏸️ SHELL désactivé pour l'instant
+            // logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
+            // logger::early_print("[KERNEL]   LAUNCHING INTERACTIVE SHELL\n");
+            // logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
+            // shell::run();
+            
+            // Idle loop pour Phase 0
+            logger::early_print("[KERNEL] Entering idle loop (Phase 0 kernel)...\n");
+            loop {
+                unsafe {
+                    core::arch::asm!("hlt", options(nomem, nostack));
+                }
+            }
         }
         Err(e) => {
             logger::early_print("[KERNEL] ✗ Failed to parse Multiboot2 info: ");

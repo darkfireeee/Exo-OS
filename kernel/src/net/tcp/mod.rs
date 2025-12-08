@@ -111,21 +111,22 @@ pub enum TcpFlags {
     CWR = 0x0080,
 }
 
-/// TCP connection state
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TcpState {
-    Closed,
-    Listen,
-    SynSent,
-    SynReceived,
-    Established,
-    FinWait1,
-    FinWait2,
-    CloseWait,
-    Closing,
-    LastAck,
-    TimeWait,
-}
+// TCP connection state - imported from state module (see line 42)
+// TCP connection state - imported from state module (see line 42: pub use state::TcpState)
+// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// pub enum TcpState {
+//     Closed,
+//     Listen,
+//     SynSent,
+//     SynReceived,
+//     Established,
+//     FinWait1,
+//     FinWait2,
+//     CloseWait,
+//     Closing,
+//     LastAck,
+//     TimeWait,
+// }
 
 /// TCP socket (connection)
 pub struct TcpSocket {

@@ -309,7 +309,8 @@ fn generate_process_stat(pid: u64) -> Vec<u8> {
         0, 0, 0, 0, // blocked, sigignore, sigcatch, wchan
         0, 0, 0, 0, // nswap, cnswap, exit_signal, processor
         0, 0, 0, 0, // rt_priority, policy, delayacct_blkio_ticks, guest_time
-        0, 0, 0, 0, 0 // cguest_time, start_data, end_data, start_brk, arg_start
+        0, 0, 0, 0, 0, // cguest_time, start_data, end_data, start_brk, arg_start
+        0, 0 // arg_end, env_start - AJOUT des 2 arguments manquants
     ).into_bytes()
 }
 

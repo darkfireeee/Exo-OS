@@ -1,7 +1,8 @@
 //! Serial driver (UART 16550).
 
 use crate::arch::x86_64::serial::SerialPort;
-use crate::drivers::{DeviceInfo, Driver, DriverError, DriverResult};
+// Phase 0: Types de drivers non utilisés
+// use crate::drivers::{DeviceInfo, Driver, DriverError, DriverResult};
 use core::fmt;
 use lazy_static::lazy_static;
 use spin::Mutex;
@@ -30,26 +31,32 @@ impl SerialDriver {
             self.write_byte(byte);
         }
     }
-}
 
-impl Driver for SerialDriver {
-    fn name(&self) -> &str {
-        "UART 16550 Serial Driver"
-    }
-
-    fn init(&mut self) -> DriverResult<()> {
+    /// Initialize the serial port (Phase 0: méthode directe)
+    pub fn init(&mut self) {
         self.port.init();
-        Ok(())
-    }
-
-    fn probe(&self) -> DriverResult<DeviceInfo> {
-        Ok(DeviceInfo {
-            name: "COM1",
-            vendor_id: 0, // Generic
-            device_id: 0x1655, // UART 16550
-        })
     }
 }
+
+// ⏸️ Phase 0: Trait Driver désactivé (sera activé en Phase 1+)
+// impl Driver for SerialDriver {
+//     fn name(&self) -> &str {
+//         "UART 16550 Serial Driver"
+//     }
+// 
+//     fn init(&mut self) -> DriverResult<()> {
+//         self.port.init();
+//         Ok(())
+//     }
+// 
+//     fn probe(&self) -> DriverResult<DeviceInfo> {
+//         Ok(DeviceInfo {
+//             name: "COM1",
+//             vendor_id: 0, // Generic
+//             device_id: 0x1655, // UART 16550
+//         })
+//     }
+// }
 
 impl fmt::Write for SerialDriver {
     fn write_str(&mut self, s: &str) -> fmt::Result {

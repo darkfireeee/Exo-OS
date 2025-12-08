@@ -27,9 +27,9 @@ pub mod alloc;
 use crate::drivers::block::BlockDevice;
 use crate::fs::core::{Inode, InodeType, InodePermissions, Timestamp, InodeStat};
 use crate::fs::{FsError, FsResult};
-use alloc::sync::Arc;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use ::alloc::sync::Arc;
+use ::alloc::string::{String, ToString};
+use ::alloc::vec::Vec;
 use spin::{RwLock, Mutex};
 
 pub use boot::*;
