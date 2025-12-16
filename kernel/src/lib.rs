@@ -792,6 +792,12 @@ fn test_fork_thread_entry() -> ! {
     // Run Phase 1a DevFS test
     test_devfs_basic();  // Re-enabled after fixing pipe buffering issue
     
+    // Run Phase 1a ProcFS test
+    test_procfs_basic();
+    
+    // Run Phase 1a DevFS Registry test
+    test_devfs_registry();
+    
     logger::early_print("[TEST_THREAD] All tests complete, exiting...\n");
     
     // Exit thread
@@ -1150,6 +1156,335 @@ fn test_devfs_basic() {
     logger::early_print("\n");
     logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
     logger::early_print("║           DEVFS TEST COMPLETE                           ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+}
+
+/// Phase 1a Test 3: ProcFS validation
+///
+/// Tests /proc filesystem entries:
+/// 1. /proc/cpuinfo - CPU information
+/// 2. /proc/meminfo - Memory information
+/// 3. /proc/[pid]/status - Process status
+///
+/// All reads should succeed and return formatted data
+fn test_procfs_basic() {
+    use crate::fs::pseudo_fs::procfs::{ProcEntry, ProcfsInode, generate_entry_data};
+    use crate::fs::core::Inode as VfsInode;
+    use alloc::string::String;
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           PHASE 1a - PROCFS TEST                        ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+    
+    // TEST 1: /proc/cpuinfo
+    {
+        logger::early_print("[TEST 1] Reading /proc/cpuinfo...\n");
+        
+        match generate_entry_data(&ProcEntry::CpuInfo) {
+            Ok(data) => {
+                if !data.is_empty() {
+                    let content = String::from_utf8_lossy(&data[..data.len().min(100)]);
+                    if content.contains("processor") && content.contains("vendor_id") {
+                        logger::early_print("[TEST 1] ✅ PASS: cpuinfo contains expected fields\n");
+                        let s = alloc::format!("[TEST 1] Preview: {}...\n", 
+                            content.lines().next().unwrap_or(""));
+                        logger::early_print(&s);
+                    } else {
+                        logger::early_print("[TEST 1] ❌ FAIL: Missing expected fields\n");
+                    }
+                } else {
+                    logger::early_print("[TEST 1] ❌ FAIL: Empty data\n");
+                }
+            }
+            Err(e) => {
+                logger::early_print("[TEST 1] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    // TEST 2: /proc/meminfo
+    {
+        logger::early_print("\n[TEST 2] Reading /proc/meminfo...\n");
+        
+        match generate_entry_data(&ProcEntry::MemInfo) {
+            Ok(data) => {
+                if !data.is_empty() {
+                    let content = String::from_utf8_lossy(&data);
+                    if content.contains("MemTotal") && content.contains("MemFree") && 
+                       content.contains("MemAvailable") {
+                        logger::early_print("[TEST 2] ✅ PASS: meminfo contains memory fields\n");
+                        
+                        // Extract MemTotal value
+                        for line in content.lines() {
+                            if line.starts_with("MemTotal:") {
+                                let s = alloc::format!("[TEST 2] {}\n", line);
+                                logger::early_print(&s);
+                                break;
+                            }
+                        }
+                    } else {
+                        logger::early_print("[TEST 2] ❌ FAIL: Missing expected fields\n");
+                    }
+                } else {
+                    logger::early_print("[TEST 2] ❌ FAIL: Empty data\n");
+                }
+            }
+            Err(e) => {
+                logger::early_print("[TEST 2] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    // TEST 3: /proc/[pid]/status
+    {
+        logger::early_print("\n[TEST 3] Reading /proc/1/status...\n");
+        
+        match generate_entry_data(&ProcEntry::ProcessStatus(1)) {
+            Ok(data) => {
+                if !data.is_empty() {
+                    let content = String::from_utf8_lossy(&data);
+                    if content.contains("Name:") && content.contains("Pid:") && 
+                       content.contains("State:") {
+                        logger::early_print("[TEST 3] ✅ PASS: status contains process fields\n");
+                        
+                        // Extract first few fields
+                        let lines: alloc::vec::Vec<_> = content.lines().take(5).collect();
+                        for line in lines {
+                            let s = alloc::format!("[TEST 3] {}\n", line);
+                            logger::early_print(&s);
+                        }
+                    } else {
+                        logger::early_print("[TEST 3] ❌ FAIL: Missing expected fields\n");
+                    }
+                } else {
+                    logger::early_print("[TEST 3] ❌ FAIL: Empty data\n");
+                }
+            }
+            Err(e) => {
+                logger::early_print("[TEST 3] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    // TEST 4: ProcfsInode read operation
+    {
+        logger::early_print("\n[TEST 4] Testing ProcfsInode read_at()...\n");
+        
+        let inode = ProcfsInode::new(100, ProcEntry::Version);
+        let mut buf = [0u8; 128];
+        
+        match inode.read_at(0, &mut buf) {
+            Ok(read) => {
+                if read > 0 {
+                    let content = String::from_utf8_lossy(&buf[..read]);
+                    if content.contains("Exo-OS") && content.contains("version") {
+                        logger::early_print("[TEST 4] ✅ PASS: ProcfsInode read successful\n");
+                        let s = alloc::format!("[TEST 4] Content: {}", content.trim());
+                        logger::early_print(&s);
+                        logger::early_print("\n");
+                    } else {
+                        logger::early_print("[TEST 4] ❌ FAIL: Unexpected content\n");
+                    }
+                } else {
+                    logger::early_print("[TEST 4] ❌ FAIL: No data read\n");
+                }
+            }
+            Err(e) => {
+                logger::early_print("[TEST 4] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    // TEST 5: /proc/uptime
+    {
+        logger::early_print("\n[TEST 5] Reading /proc/uptime...\n");
+        
+        match generate_entry_data(&ProcEntry::Uptime) {
+            Ok(data) => {
+                if !data.is_empty() {
+                    let content = String::from_utf8_lossy(&data);
+                    // Should contain two float numbers separated by space
+                    let parts: alloc::vec::Vec<_> = content.trim().split_whitespace().collect();
+                    if parts.len() == 2 {
+                        logger::early_print("[TEST 5] ✅ PASS: uptime format correct\n");
+                        let s = alloc::format!("[TEST 5] Uptime: {}\n", content.trim());
+                        logger::early_print(&s);
+                    } else {
+                        logger::early_print("[TEST 5] ❌ FAIL: Invalid format\n");
+                    }
+                } else {
+                    logger::early_print("[TEST 5] ❌ FAIL: Empty data\n");
+                }
+            }
+            Err(e) => {
+                logger::early_print("[TEST 5] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           PROCFS TEST COMPLETE                          ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+}
+
+/// Phase 1a Test 4: DevFS Registry validation
+///
+/// Tests device registration and lookup:
+/// 1. Create DeviceRegistry
+/// 2. Register test device
+/// 3. Lookup by name
+/// 4. Lookup by major/minor
+/// 5. Unregister device
+///
+/// Validates hotplug device management
+fn test_devfs_registry() {
+    use crate::fs::pseudo_fs::devfs::{DeviceRegistry, DeviceType, DeviceOps};
+    use crate::fs::FsResult;
+    use alloc::sync::Arc;
+    use alloc::string::String;
+    use spin::RwLock;
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           PHASE 1a - DEVFS REGISTRY TEST               ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+    
+    // Create a simple test device
+    struct TestDevice;
+    impl DeviceOps for TestDevice {
+        fn read(&self, _offset: u64, _buf: &mut [u8]) -> FsResult<usize> {
+            Ok(0) // EOF
+        }
+        fn write(&mut self, _offset: u64, buf: &[u8]) -> FsResult<usize> {
+            Ok(buf.len()) // Discard all
+        }
+    }
+    
+    // TEST 1: Create registry
+    {
+        logger::early_print("[TEST 1] Creating DeviceRegistry...\n");
+        let _registry = DeviceRegistry::new();
+        logger::early_print("[TEST 1] ✅ PASS: Registry created\n");
+    }
+    
+    // TEST 2: Register device
+    {
+        logger::early_print("\n[TEST 2] Registering test device...\n");
+        
+        let registry = DeviceRegistry::new();
+        let ops: Arc<RwLock<dyn DeviceOps>> = Arc::new(RwLock::new(TestDevice));
+        
+        match registry.register(42, 0, String::from("test_device"), DeviceType::Char, ops) {
+            Ok(ino) => {
+                logger::early_print("[TEST 2] ✅ PASS: Device registered\n");
+                let s = alloc::format!("[TEST 2] Assigned inode: {}\n", ino);
+                logger::early_print(&s);
+            }
+            Err(e) => {
+                logger::early_print("[TEST 2] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    // TEST 3: Lookup by name
+    {
+        logger::early_print("\n[TEST 3] Looking up device by name...\n");
+        
+        let registry = DeviceRegistry::new();
+        let ops: Arc<RwLock<dyn DeviceOps>> = Arc::new(RwLock::new(TestDevice));
+        
+        let _ = registry.register(42, 0, String::from("test_device"), DeviceType::Char, ops);
+        
+        let found = matches!(registry.lookup_by_name("test_device"), Some(_));
+        if found {
+            logger::early_print("[TEST 3] ✅ PASS: Device found by name\n");
+        } else {
+            logger::early_print("[TEST 3] ❌ FAIL: Device not found\n");
+        }
+    }
+    
+    // TEST 4: Lookup by major/minor
+    {
+        logger::early_print("\n[TEST 4] Looking up device by major/minor...\n");
+        
+        let registry = DeviceRegistry::new();
+        let ops: Arc<RwLock<dyn DeviceOps>> = Arc::new(RwLock::new(TestDevice));
+        
+        let _ = registry.register(42, 7, String::from("test_device"), DeviceType::Char, ops);
+        
+        let found = matches!(registry.lookup_by_devno(42, 7), Some(_));
+        if found {
+            logger::early_print("[TEST 4] ✅ PASS: Device found by devno (42:7)\n");
+        } else {
+            logger::early_print("[TEST 4] ❌ FAIL: Device not found\n");
+        }
+        
+        // Negative test: wrong devno
+        let not_found = matches!(registry.lookup_by_devno(99, 99), None);
+        if not_found {
+            logger::early_print("[TEST 4] ✅ PASS: Correct rejection of invalid devno\n");
+        } else {
+            logger::early_print("[TEST 4] ❌ FAIL: Found non-existent device\n");
+        }
+    }
+    
+    // TEST 5: Unregister device
+    {
+        logger::early_print("\n[TEST 5] Unregistering device...\n");
+        
+        let registry = DeviceRegistry::new();
+        let ops: Arc<RwLock<dyn DeviceOps>> = Arc::new(RwLock::new(TestDevice));
+        
+        let _ = registry.register(42, 0, String::from("test_device"), DeviceType::Char, ops);
+        
+        // Verify it exists
+        let exists_before = matches!(registry.lookup_by_name("test_device"), Some(_));
+        if exists_before {
+            logger::early_print("[TEST 5] Device exists before unregister\n");
+        }
+        
+        // Unregister
+        match registry.unregister(42, 0) {
+            Ok(()) => {
+                logger::early_print("[TEST 5] ✅ PASS: Device unregistered\n");
+                
+                // Verify it's gone
+                let gone = matches!(registry.lookup_by_name("test_device"), None);
+                if gone {
+                    logger::early_print("[TEST 5] ✅ PASS: Device no longer found\n");
+                } else {
+                    logger::early_print("[TEST 5] ❌ FAIL: Device still exists\n");
+                }
+            }
+            Err(e) => {
+                logger::early_print("[TEST 5] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           DEVFS REGISTRY TEST COMPLETE                  ║\n");
     logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
     logger::early_print("\n");
 }

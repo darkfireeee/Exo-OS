@@ -90,7 +90,7 @@ pub trait DeviceOps: Send + Sync {
 // ============================================================================
 
 /// Device entry in registry
-struct DeviceEntry {
+pub struct DeviceEntry {
     major: u32,
     minor: u32,
     name: String,
