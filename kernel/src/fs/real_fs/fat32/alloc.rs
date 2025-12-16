@@ -3,6 +3,7 @@
 //! Allocateur de clusters avec best-fit algorithm
 
 use crate::fs::{FsError, FsResult};
+use alloc::vec::Vec;
 
 /// Cluster Allocator
 ///

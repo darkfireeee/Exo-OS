@@ -282,11 +282,14 @@ impl UnixSocket {
         static BOUND_ADDRESSES: RwLock<Option<BTreeSet<u64>>> = RwLock::new(None);
         
         let addr_hash = match &addr {
-            SocketAddr::Path(p) => {
+            SocketAddr::Pathname(p) => {
                 // Hash simple du chemin
                 p.as_bytes().iter().fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64))
             }
-            SocketAddr::Abstract(id) => *id,
+            SocketAddr::Abstract(name) => {
+                // Hash du nom abstrait
+                name.as_bytes().iter().fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64))
+            }
             SocketAddr::Unnamed => return Err(FsError::InvalidArgument),
         };
         
@@ -361,10 +364,12 @@ impl UnixSocket {
         static LISTENING_SOCKETS: RwLock<Option<BTreeMap<u64, Arc<UnixSocket>>>> = RwLock::new(None);
         
         let addr_hash = match &addr {
-            SocketAddr::Path(p) => {
+            SocketAddr::Pathname(p) => {
                 p.as_bytes().iter().fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64))
             }
-            SocketAddr::Abstract(id) => *id,
+            SocketAddr::Abstract(name) => {
+                name.as_bytes().iter().fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64))
+            }
             SocketAddr::Unnamed => return Err(FsError::InvalidArgument),
         };
         
@@ -427,10 +432,12 @@ impl UnixSocket {
         static SOCKET_REGISTRY: RwLock<Option<BTreeMap<u64, Arc<UnixSocket>>>> = RwLock::new(None);
         
         let dest_hash = match &dest {
-            SocketAddr::Path(p) => {
+            SocketAddr::Pathname(p) => {
                 p.as_bytes().iter().fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64))
             }
-            SocketAddr::Abstract(id) => *id,
+            SocketAddr::Abstract(name) => {
+                name.as_bytes().iter().fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64))
+            }
             SocketAddr::Unnamed => return Err(FsError::InvalidArgument),
         };
         
@@ -501,7 +508,7 @@ impl SocketInode {
             ino,
             socket,
             created: Timestamp::now(),
-            permissions: InodePermissions::new(),
+            permissions: InodePermissions::new(0o644),
         }
     }
 }
@@ -545,8 +552,24 @@ impl VfsInode for SocketInode {
         Err(FsError::NotSupported)
     }
 
-    fn sync(&self) -> FsResult<()> {
+    fn sync(&mut self) -> FsResult<()> {
         Ok(()) // Sockets are in-memory
+    }
+    
+    fn list(&self) -> FsResult<Vec<String>> {
+        Err(FsError::NotDirectory)
+    }
+    
+    fn lookup(&self, _name: &str) -> FsResult<u64> {
+        Err(FsError::NotDirectory)
+    }
+    
+    fn create(&mut self, _name: &str, _inode_type: InodeType) -> FsResult<u64> {
+        Err(FsError::NotDirectory)
+    }
+    
+    fn remove(&mut self, _name: &str) -> FsResult<()> {
+        Err(FsError::NotDirectory)
     }
 }
 

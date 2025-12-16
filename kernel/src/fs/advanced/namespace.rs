@@ -232,6 +232,9 @@ pub struct MountNamespace {
     /// Prochain peer group ID à allouer
     next_peer_group: AtomicU64,
     
+    /// Peer groups pour propagation (group_id -> namespace IDs)
+    peer_groups: RwLock<BTreeMap<u64, Vec<u64>>>,
+    
     /// Statistiques
     stats: NamespaceStats,
 }
@@ -246,6 +249,7 @@ impl MountNamespace {
             parent: None,
             next_mount_id: AtomicU64::new(1),
             next_peer_group: AtomicU64::new(1),
+            peer_groups: RwLock::new(BTreeMap::new()),
             stats: NamespaceStats::new(),
         }
     }
@@ -259,6 +263,7 @@ impl MountNamespace {
             parent: Some(Arc::clone(&parent)),
             next_mount_id: AtomicU64::new(1),
             next_peer_group: AtomicU64::new(1),
+            peer_groups: RwLock::new(BTreeMap::new()),
             stats: NamespaceStats::new(),
         };
         
@@ -268,8 +273,18 @@ impl MountNamespace {
         
         for (path, mount) in parent_mounts.iter() {
             let new_mount_id = new_ns.next_mount_id.fetch_add(1, Ordering::Relaxed);
-            let mut new_mount = (*mount).clone();
-            new_mount.mount_id = new_mount_id;
+            let new_mount = MountPoint {
+                mount_id: new_mount_id,
+                path: mount.path.clone(),
+                fstype: mount.fstype.clone(),
+                source: mount.source.clone(),
+                flags: mount.flags,
+                options: mount.options.clone(),
+                propagation: mount.propagation,
+                peer_group: mount.peer_group,
+                master_group: mount.master_group,
+                parent_id: mount.parent_id,
+            };
             
             // Pour shared mounts, les garder dans le même peer group
             // Pour private mounts, ils restent private dans le nouveau namespace
@@ -411,18 +426,18 @@ impl MountNamespace {
         // Trouver le peer group de ce namespace
         let mut propagated = 0;
         for (group_id, members) in peer_groups.iter() {
-            if members.contains(&self.id) {
+            if members.contains(&self.ns_id) {
                 // Propager à tous les membres du groupe
                 for &peer_id in members.iter() {
-                    if peer_id != self.id {
-                        log::debug!("namespace {}: propagate mount {} to peer {}", self.id, mount_id, peer_id);
+                    if peer_id != self.ns_id {
+                        log::debug!("namespace {}: propagate mount {} to peer {}", self.ns_id, mount_id, peer_id);
                         propagated += 1;
                     }
                 }
             }
         }
         
-        log::debug!("namespace {}: propagated mount {} to {} peers", self.id, mount_id, propagated);
+        log::debug!("namespace {}: propagated mount {} to {} peers", self.ns_id, mount_id, propagated);
         Ok(())
     }
     
@@ -437,11 +452,11 @@ impl MountNamespace {
         let mut propagated = 0;
         
         for (group_id, members) in peer_groups.iter() {
-            if members.contains(&self.id) {
+            if members.contains(&self.ns_id) {
                 for &peer_id in members.iter() {
-                    if peer_id != self.id {
+                    if peer_id != self.ns_id {
                         log::debug!("namespace {}: propagate unmount of {} to peer {}", 
-                                    self.id, mount.target, peer_id);
+                                    self.ns_id, mount.path, peer_id);
                         propagated += 1;
                     }
                 }
@@ -449,7 +464,7 @@ impl MountNamespace {
         }
         
         log::debug!("namespace {}: propagated unmount to {} peers (flags=0x{:x})", 
-                    self.id, propagated, flags);
+                    self.ns_id, propagated, flags);
         Ok(())
     }
     

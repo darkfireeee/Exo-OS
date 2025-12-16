@@ -150,7 +150,7 @@ impl TmpfsInode {
             inode_type,
             size: AtomicU64::new(0),
             pages: RwLock::new(RadixTree::new()),
-            permissions: InodePermissions::new(),
+            permissions: InodePermissions::new(0o644),
             atime: AtomicU64::new(0),
             mtime: AtomicU64::new(0),
             ctime: AtomicU64::new(0),
@@ -262,34 +262,69 @@ impl VfsInode for TmpfsInode {
         self.permissions
     }
     
-    fn timestamps(&self) -> (Timestamp, Timestamp, Timestamp) {
-        let atime = Timestamp { sec: self.atime.load(Ordering::Acquire), nsec: 0 };
-        let mtime = Timestamp { sec: self.mtime.load(Ordering::Acquire), nsec: 0 };
-        let ctime = Timestamp { sec: self.ctime.load(Ordering::Acquire), nsec: 0 };
-        (atime, mtime, ctime)
-    }
-    
-    fn get_xattr(&self, name: &str) -> FsResult<Vec<u8>> {
-        self.xattrs
-            .read()
-            .get(name)
-            .cloned()
-            .ok_or(FsError::NotFound)
-    }
-    
-    fn set_xattr(&mut self, name: &str, value: &[u8]) -> FsResult<()> {
-        self.xattrs.write().insert(name.to_string(), value.to_vec());
+    fn truncate(&mut self, size: u64) -> FsResult<()> {
+        self.size.store(size, Ordering::Release);
+        self.mtime.store(0, Ordering::Release); // TODO: real timestamp
         Ok(())
     }
     
-    fn list_xattr(&self) -> FsResult<Vec<String>> {
-        Ok(self.xattrs.read().keys().cloned().collect())
+    fn list(&self) -> FsResult<Vec<String>> {
+        if self.inode_type != InodeType::Directory {
+            return Err(FsError::NotDirectory);
+        }
+        // TODO: Implement directory listing when tmpfs directories are supported
+        Ok(Vec::new())
     }
     
-    fn remove_xattr(&mut self, name: &str) -> FsResult<()> {
-        self.xattrs.write().remove(name).ok_or(FsError::NotFound)?;
-        Ok(())
+    fn lookup(&self, _name: &str) -> FsResult<u64> {
+        if self.inode_type != InodeType::Directory {
+            return Err(FsError::NotDirectory);
+        }
+        Err(FsError::NotFound) // TODO: Implement when directories supported
     }
+    
+    fn create(&mut self, _name: &str, _inode_type: InodeType) -> FsResult<u64> {
+        if self.inode_type != InodeType::Directory {
+            return Err(FsError::NotDirectory);
+        }
+        Err(FsError::NotSupported) // TODO: Implement when directories supported
+    }
+    
+    fn remove(&mut self, _name: &str) -> FsResult<()> {
+        if self.inode_type != InodeType::Directory {
+            return Err(FsError::NotDirectory);
+        }
+        Err(FsError::NotSupported) // TODO: Implement when directories supported
+    }
+    
+    // ⏸️ Phase 1c: fn timestamps(&self) -> (Timestamp, Timestamp, Timestamp) {
+    // ⏸️ Phase 1c: let atime = Timestamp { sec: self.atime.load(Ordering::Acquire), nsec: 0 };
+    // ⏸️ Phase 1c: let mtime = Timestamp { sec: self.mtime.load(Ordering::Acquire), nsec: 0 };
+    // ⏸️ Phase 1c: let ctime = Timestamp { sec: self.ctime.load(Ordering::Acquire), nsec: 0 };
+    // ⏸️ Phase 1c: (atime, mtime, ctime)
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn get_xattr(&self, name: &str) -> FsResult<Vec<u8>> {
+    // ⏸️ Phase 1c: self.xattrs
+    // ⏸️ Phase 1c: .read()
+    // ⏸️ Phase 1c: .get(name)
+    // ⏸️ Phase 1c: .cloned()
+    // ⏸️ Phase 1c: .ok_or(FsError::NotFound)
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn set_xattr(&mut self, name: &str, value: &[u8]) -> FsResult<()> {
+    // ⏸️ Phase 1c: self.xattrs.write().insert(name.to_string(), value.to_vec());
+    // ⏸️ Phase 1c: Ok(())
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn list_xattr(&self) -> FsResult<Vec<String>> {
+    // ⏸️ Phase 1c: Ok(self.xattrs.read().keys().cloned().collect())
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn remove_xattr(&mut self, name: &str) -> FsResult<()> {
+    // ⏸️ Phase 1c: self.xattrs.write().remove(name).ok_or(FsError::NotFound)?;
+    // ⏸️ Phase 1c: Ok(())
+    // ⏸️ Phase 1c: }
 }
 
 // ============================================================================

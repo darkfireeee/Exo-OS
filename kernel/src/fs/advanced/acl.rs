@@ -21,6 +21,7 @@
 use crate::fs::{FsError, FsResult};
 use alloc::vec::Vec;
 use alloc::string::String;
+use alloc::format;
 use core::fmt;
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -3,7 +3,7 @@
 pub mod ahci;
 pub mod nvme;
 pub mod ramdisk;
-pub mod virtio_blk;
+// pub mod virtio_blk;  // ⏸️ Phase 2: Requires crate::drivers::virtio
 
 use crate::drivers::{DriverError, DriverResult};
 
@@ -40,7 +40,7 @@ pub fn init() {
     log::info!("Block subsystem initialized");
     
     // Try to initialize VirtIO-Blk
-    if virtio_blk::init() {
-        log::info!("  VirtIO-Blk driver loaded");
-    }
+    // ⏸️ Phase 2: if virtio_blk::init() {
+    // ⏸️ Phase 2:     log::info!("  VirtIO-Blk driver loaded");
+    // ⏸️ Phase 2: }
 }

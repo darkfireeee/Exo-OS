@@ -5,8 +5,8 @@
 //! - unlink, unlinkat
 //! - rename, renameat
 
-use crate::fs::vfs::inode::InodeType;
-use crate::fs::{FsError, FsResult};
+// ⏸️ Phase 1b: use crate::fs::vfs::inode::InodeType;
+// ⏸️ Phase 1b: use crate::fs::{FsError, FsResult};
 use crate::posix_x::vfs_posix::{file_ops, path_resolver};
 use crate::syscall::utils::{copy_to_user, read_user_string};
 use alloc::string::ToString;

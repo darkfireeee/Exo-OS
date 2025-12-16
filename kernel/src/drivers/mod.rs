@@ -1,21 +1,22 @@
-//! Hardware Drivers - Phase 0 (Minimal)
+//! Hardware Drivers
 //!
-//! Phase 0: VGA + Serial uniquement
-//! Phase 1+: PCI, Network, Block, USB, etc.
+//! Phase 0: VGA + Serial
+//! Phase 1: Keyboard, PCI
+//! Phase 2+: Block, Network, USB
 
 // ═══════════════════════════════════════════════════════════
-//  PHASE 0 - Drivers essentiels
+//  PHASE 0-1 - Drivers actifs
 // ═══════════════════════════════════════════════════════════
-pub mod char;   // ✅ Serial + Console
-pub mod video;  // ✅ VGA text mode
+pub mod char;    // ✅ Serial + Console
+pub mod video;   // ✅ VGA text mode
+pub mod input;   // ✅ Phase 1: Keyboard
+pub mod pci;     // ✅ Phase 1: PCI bus enumeration
+pub mod block;   // ✅ Phase 1: Block devices (pour VFS)
 
 // ═══════════════════════════════════════════════════════════
-//  PHASE 1+ - Drivers désactivés
+//  PHASE 2+ - Drivers désactivés
 // ═══════════════════════════════════════════════════════════
-// pub mod block;   // ⏸️ Phase 2: ATA/AHCI/NVMe
-// pub mod input;   // ⏸️ Phase 2: Keyboard/Mouse
 // pub mod net;     // ⏸️ Phase 3: E1000, RTL8139, VirtIO-Net
-// pub mod pci;     // ⏸️ Phase 1: PCI bus enumeration
 // pub mod usb;     // ⏸️ Phase 3: USB stack
 // pub mod virtio;  // ⏸️ Phase 3: VirtIO devices
 

@@ -36,6 +36,8 @@ pub enum LockType {
     Shared,
     /// Exclusive lock (single writer)
     Exclusive,
+    /// Write lock (alias pour Exclusive)
+    Write,
 }
 
 /// Lock operation
@@ -117,7 +119,7 @@ impl RecordLock {
 // ============================================================================
 
 /// BSD flock - locks entire file
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FileLock {
     /// Lock type
     lock_type: LockType,
@@ -127,6 +129,17 @@ pub struct FileLock {
     refcount: AtomicU32,
     /// Is lock held?
     held: AtomicBool,
+}
+
+impl Clone for FileLock {
+    fn clone(&self) -> Self {
+        Self {
+            lock_type: self.lock_type,
+            pid: self.pid,
+            refcount: AtomicU32::new(self.refcount.load(core::sync::atomic::Ordering::Relaxed)),
+            held: AtomicBool::new(self.held.load(core::sync::atomic::Ordering::Relaxed)),
+        }
+    }
 }
 
 impl FileLock {
@@ -268,7 +281,7 @@ impl LockManager {
                 if !has_conflict {
                     drop(locks);
                     // Retry acquisition with write lock
-                    return self.lock_record(inode, start, length, lock_type, pid);
+                    return self.lock_record(inode, lock_type, start, length, pid, 0, true);
                 }
             }
         }
@@ -361,13 +374,13 @@ impl LockManager {
                         // Check if lock is now available
                         let file_locks = self.file_locks.read();
                         if let Some(flock) = file_locks.get(&inode) {
-                            if flock.pid == pid || (mode == LockMode::Shared && flock.mode == LockMode::Shared) {
+                            if flock.pid == pid || !flock.conflicts_with(lock_type, pid) {
                                 drop(file_locks);
-                                return self.lock_file(inode, mode, pid, non_blocking);
+                                return self.flock(inode, lock_type, pid, blocking);
                             }
                         } else {
                             drop(file_locks);
-                            return self.lock_file(inode, mode, pid, non_blocking);
+                            return self.flock(inode, lock_type, pid, blocking);
                         }
                     }
                     

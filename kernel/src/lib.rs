@@ -17,7 +17,7 @@ extern crate alloc;
 use core::panic::PanicInfo;
 
 // ═══════════════════════════════════════════════════════════
-//  PHASE 0 - Modules essentiels uniquement
+//  PHASE 0 - Modules essentiels
 // ═══════════════════════════════════════════════════════════
 pub mod acpi;           // ✅ Phase 0: Détection matériel
 pub mod arch;           // ✅ Phase 0: GDT/IDT/Interrupts/Context Switch
@@ -34,35 +34,35 @@ pub mod sync;           // ✅ Phase 0: Spinlock, Mutex basics
 pub mod time;           // ✅ Phase 0: PIT timer
 
 // ═══════════════════════════════════════════════════════════
-//  DRIVERS - Minimal Phase 0 (VGA, Serial uniquement)
+//  PHASE 1 - Syscalls + Process Management (MINIMAL)
 // ═══════════════════════════════════════════════════════════
-pub mod drivers {
-    pub mod char {
-        pub mod console;
-        pub mod serial;
-    }
-    pub mod video {
-        pub mod vga;
-    }
-}
+pub mod syscall;        // ✅ Phase 1: Syscall infrastructure
+pub mod posix_x;        // ✅ Phase 1: POSIX compatibility layer
+pub mod fs;             // 🔄 Phase 1c: VFS activation in progress
+// pub mod tests;       // ⏸️ Phase 1c: Tests (dépend de fs complet)
+
+// ═══════════════════════════════════════════════════════════
+//  PHASE 1b - À activer après correction fs
+// ═══════════════════════════════════════════════════════════
+// pub mod loader;      // ⏸️ Phase 1b: ELF loader
+// pub mod shell;       // ⏸️ Phase 1b: Interactive shell
+// pub mod ffi;         // ⏸️ Phase 1b: FFI userland
+
+// ═══════════════════════════════════════════════════════════
+//  DRIVERS - Phase 0 minimal + Phase 1 input
+// ═══════════════════════════════════════════════════════════
+pub mod drivers;
 pub use drivers::char::console::{_print as _console_print, CONSOLE};
 pub use drivers::char::serial::{_print as _serial_print, SERIAL1};
 pub use drivers::video::vga::{_print as _vga_print, WRITER};
 
 // ═══════════════════════════════════════════════════════════
-//  PHASE 1+ - Modules désactivés temporairement
+//  PHASE 2+ - Modules désactivés temporairement
 // ═══════════════════════════════════════════════════════════
-// pub mod tests;       // ⏸️ Phase 1: Tests fork/exec/wait
-// pub mod ffi;         // ⏸️ Phase 1: FFI userland
-// pub mod fs;          // ⏸️ Phase 2: VFS complet
 // pub mod ipc;         // ⏸️ Phase 2: IPC zerocopy
-// pub mod loader;      // ⏸️ Phase 1: ELF loader
 // pub mod net;         // ⏸️ Phase 3: Network stack
-// pub mod posix_x;     // ⏸️ Phase 1: POSIX syscalls
 // pub mod power;       // ⏸️ Phase 3: Power management
 // pub mod security;    // ⏸️ Phase 3: Capabilities
-// pub mod shell;       // ⏸️ Phase 1: Interactive shell
-// pub mod syscall;     // ⏸️ Phase 1: Syscall infrastructure
 
 // Re-export for boot stub
 pub use memory::heap::LockedHeap;
@@ -402,6 +402,11 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             scheduler::init();
             logger::early_print("[KERNEL] ✓ Scheduler initialized\n");
 
+            // Initialize syscall handlers
+            logger::early_print("[DEBUG] About to call syscall::handlers::init()\n");
+            syscall::handlers::init();
+            logger::early_print("[KERNEL] ✓ Syscall handlers initialized\n");
+
             // Activer les interrupts maintenant que tout est initialisé
             logger::early_print("[DEBUG] About to enable interrupts\n");
             arch::x86_64::enable_interrupts();
@@ -424,24 +429,50 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             logger::early_print("[KERNEL] ✅ Scheduler 3-queue operational\n");
             logger::early_print("[KERNEL] ✅ Memory management ready\n\n");
             
-            // PHASE 0 TERMINÉE - Attendre ou passer à Phase 1
-            logger::early_print("[KERNEL] Phase 0 completed successfully!\n");
-            logger::early_print("[KERNEL] Next: Enable Phase 1 modules (fork/exec/tests)\n\n");
+            logger::early_print("[KERNEL] Starting Phase 1b: fork/exec/wait tests\n\n");
             
-            // ⏸️ PHASE 1 désactivée pour l'instant
-            // logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
-            // logger::early_print("[KERNEL]   PHASE 1 TESTS - fork/exec/wait\n");
-            // logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
-            // tests::process_tests::run_all();
+            // ✅ PHASE 1b - Create test thread
+            logger::early_print("[KERNEL] Creating test thread for Phase 1b...\n");
+            
+            // Disable interrupts before adding thread
+            arch::x86_64::disable_interrupts();
+            
+            let test_thread = scheduler::thread::Thread::new_kernel(
+                1001, // TID
+                "phase1b_test",
+                test_fork_thread_entry,
+                32768, // 32KB stack for tests
+            );
+            
+            if let Err(e) = scheduler::SCHEDULER.add_thread(test_thread) {
+                logger::early_print("[ERROR] Failed to add test thread: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            } else {
+                logger::early_print("[KERNEL] ✅ Test thread added to scheduler\n");
+            }
+            
+            // Re-enable interrupts
+            arch::x86_64::enable_interrupts();
+            
+            // Give test thread time to run
+            logger::early_print("[KERNEL] Yielding to test thread...\n\n");
+            for _ in 0..1000 {
+                scheduler::yield_now();
+            }
+            
+            logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
+            logger::early_print("[KERNEL]   Phase 1b tests complete\n");
+            logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
 
-            // ⏸️ SHELL désactivé pour l'instant
+            // ⏸️ Shell nécessite VFS complet (Phase 1b)
             // logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
             // logger::early_print("[KERNEL]   LAUNCHING INTERACTIVE SHELL\n");
             // logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
             // shell::run();
             
-            // Idle loop pour Phase 0
-            logger::early_print("[KERNEL] Entering idle loop (Phase 0 kernel)...\n");
+            // Idle loop après tests
+            logger::early_print("[KERNEL] Entering idle loop after tests...\n");
             loop {
                 unsafe {
                     core::arch::asm!("hlt", options(nomem, nostack));
@@ -745,3 +776,87 @@ unsafe fn vga_show_system_info(magic: u32, multiboot_addr: u64, rsp: u64) {
     }
 }
 
+
+/// Thread entry point for Phase 1b tests
+fn test_fork_thread_entry() -> ! {
+    logger::early_print("[TEST_THREAD] Phase 1b test thread started!\n");
+    
+    // Run the fork test
+    test_fork_syscall();
+    
+    logger::early_print("[TEST_THREAD] Tests complete, exiting...\n");
+    
+    // Exit thread
+    syscall::handlers::process::sys_exit(0);
+}
+
+/// Test fork syscall implementation (Phase 1b)
+fn test_fork_syscall() {
+    use syscall::dispatch::syscall_numbers::*;
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           PHASE 1b - FORK/WAIT TEST                     ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+    
+    // Test 1: Simple fork
+    logger::early_print("[TEST 1] Testing sys_fork()...\n");
+    
+    unsafe {
+        let args = [0u64; 6];
+        let result = syscall::dispatch::dispatch_syscall(SYS_FORK as u64, &args);
+        
+        if result > 0 {
+            // Parent process
+            let child_pid = result as u64;
+            logger::early_print("[PARENT] fork() returned child PID: ");
+            let s = alloc::format!("{}\n", child_pid);
+            logger::early_print(&s);
+            
+            // Give child time to execute
+            logger::early_print("[PARENT] Yielding to let child run...\n");
+            for _ in 0..100 {
+                scheduler::yield_now();
+            }
+            
+            // Wait for child
+            logger::early_print("[PARENT] Waiting for child to exit...\n");
+            let mut wstatus: i32 = 0;
+            let wait_args = [
+                child_pid,
+                &mut wstatus as *mut i32 as u64,
+                0, // options (blocking wait)
+                0, 0, 0
+            ];
+            let wait_result = syscall::dispatch::dispatch_syscall(SYS_WAIT4 as u64, &wait_args);
+            
+            if wait_result > 0 {
+                logger::early_print("[PARENT] Child exited, status: ");
+                let exit_code = (wstatus >> 8) & 0xFF;
+                let s = alloc::format!("{}\n", exit_code);
+                logger::early_print(&s);
+                logger::early_print("[TEST 1] ✅ PASS: fork + wait successful\n");
+            } else if wait_result == 0 {
+                logger::early_print("[PARENT] wait4() returned 0 (child still running)\n");
+                logger::early_print("[TEST 1] ⚠️  PARTIAL: fork succeeded, child may still be running\n");
+            } else {
+                logger::early_print("[PARENT] wait4() failed with error: ");
+                let s = alloc::format!("{}\n", wait_result);
+                logger::early_print(&s);
+                logger::early_print("[TEST 1] ❌ FAIL: wait failed\n");
+            }
+        } else {
+            logger::early_print("[ERROR] fork() failed with error: ");
+            let s = alloc::format!("{}\n", result);
+            logger::early_print(&s);
+            logger::early_print("[TEST 1] ❌ FAIL: fork failed\n");
+        }
+    }
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           PHASE 1b TEST COMPLETE                        ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+}

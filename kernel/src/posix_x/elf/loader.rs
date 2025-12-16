@@ -6,7 +6,7 @@ use crate::memory::{MemoryError, MemoryResult};
 use crate::posix_x::elf::parser::{
     self, Elf64Header, Elf64ProgramHeader, PF_R, PF_W, PF_X, PT_LOAD,
 };
-use crate::posix_x::vfs_posix::file_ops;
+// ⏸️ Phase 1b: use crate::posix_x::vfs_posix::file_ops;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -18,7 +18,10 @@ pub struct LoadedElf {
 }
 
 /// Load an ELF binary from a file path
-pub fn load_elf_binary(path: &str, args: &[String], env: &[String]) -> MemoryResult<LoadedElf> {
+pub fn load_elf_binary(_path: &str, _args: &[String], _env: &[String]) -> MemoryResult<LoadedElf> {
+    // ⏸️ Phase 1b: VFS not loaded
+    Err(MemoryError::NotSupported)
+    /* Phase 1b implementation:
     log::info!("Loading ELF binary: {}", path);
 
     // 1. Read file from VFS
@@ -45,6 +48,7 @@ pub fn load_elf_binary(path: &str, args: &[String], env: &[String]) -> MemoryRes
         entry_point: header.e_entry,
         stack_top,
     })
+    */
 }
 
 /// Load a single ELF segment into memory

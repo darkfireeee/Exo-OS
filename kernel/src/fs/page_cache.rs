@@ -268,6 +268,16 @@ impl<V> RadixTree<V> {
         Self { root: BTreeMap::new() }
     }
     
+    pub fn len(&self) -> usize {
+        let mut count = 0;
+        for (_, level1) in self.root.iter() {
+            for (_, level2) in level1.nodes.iter() {
+                count += level2.leaves.len();
+            }
+        }
+        count
+    }
+    
     #[inline]
     fn key_to_indices(key: &PageKey) -> (u8, u8, u8) {
         let idx0 = (key.device_id & 0xFF) as u8;
@@ -394,7 +404,7 @@ impl ClockPro {
     /// 2. Si page non-active → evict
     /// 3. Si page active → move vers hot queue
     /// 4. Fallback sur hot queue si cold vide
-    pub fn evict(&mut self, pages: &RwLock<RadixTree<PageKey, Arc<Page>>>) -> Option<PageKey> {
+    pub fn evict(&mut self, pages: &RwLock<RadixTree<Arc<Page>>>) -> Option<PageKey> {
         // Essaie d'abord cold queue
         while let Some(key) = self.cold_queue.pop_front() {
             let pages_guard = pages.read();
@@ -610,7 +620,7 @@ impl Default for ReadAheadState {
 /// - Eviction: **< 100 cycles**
 pub struct PageCache {
     /// Pages indexées par (device, inode, page_index)
-    pages: RwLock<RadixTree<PageKey, Arc<Page>>>,
+    pages: RwLock<RadixTree<Arc<Page>>>,
     
     /// CLOCK-Pro pour eviction
     clock_pro: Mutex<ClockPro>,
@@ -629,13 +639,25 @@ pub struct PageCache {
 }
 
 /// Cache statistics
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Default)]
 pub struct CacheStats {
     pub hits: AtomicU64,
     pub misses: AtomicU64,
     pub evictions: AtomicU64,
     pub writebacks: AtomicU64,
     pub readaheads: AtomicU64,
+}
+
+impl Clone for CacheStats {
+    fn clone(&self) -> Self {
+        Self {
+            hits: AtomicU64::new(self.hits.load(Ordering::Relaxed)),
+            misses: AtomicU64::new(self.misses.load(Ordering::Relaxed)),
+            evictions: AtomicU64::new(self.evictions.load(Ordering::Relaxed)),
+            writebacks: AtomicU64::new(self.writebacks.load(Ordering::Relaxed)),
+            readaheads: AtomicU64::new(self.readaheads.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl CacheStats {
@@ -661,7 +683,7 @@ impl PageCache {
         let max_pages = (max_memory_mb * 1024 * 1024) / PAGE_SIZE;
         
         Self {
-            pages: RwLock::new(BTreeMap::new()),
+            pages: RwLock::new(RadixTree::new()),
             clock_pro: Mutex::new(ClockPro::new(max_pages)),
             writeback: Mutex::new(WriteBack::new(max_pages)),
             readahead: RwLock::new(BTreeMap::new()),
@@ -697,7 +719,7 @@ impl PageCache {
         
         // Charger depuis le disque via block layer
         // Simulation: créer une page vide et logger l'opération
-        log::trace!("page_cache: loading page from disk (ino={}, offset={})", key.ino, key.offset);
+        log::trace!("page_cache: loading page from disk (ino={}, page_idx={})", key.inode, key.page_index);
         
         let page = Arc::new(Page::new());
         
@@ -761,8 +783,8 @@ impl PageCache {
                     if let Some(page) = pages.get(&key) {
                         if page.is_dirty() {
                             // Flush vers le disque
-                            log::trace!("page_cache: flushing dirty page before eviction (ino={}, offset={})", 
-                                       key.ino, key.offset);
+                            log::trace!("page_cache: flushing dirty page before eviction (ino={}, page_idx={})", 
+                                       key.inode, key.page_index);
                             
                             // Dans un vrai système:
                             // 1. Récupérer l'inode et son filesystem
@@ -798,8 +820,8 @@ impl PageCache {
             if let Some(page) = pages.get(&key) {
                 if page.is_dirty() {
                     // Flush vers le disque
-                    log::debug!("page_cache: sync flushing dirty page (ino={}, offset={})", 
-                               key.ino, key.offset);
+                    log::debug!("page_cache: sync flushing dirty page (ino={}, page_idx={})", 
+                               key.inode, key.page_index);
                     
                     // Dans un vrai système:
                     // 1. Récupérer l'inode et son filesystem depuis le VFS
@@ -819,7 +841,7 @@ impl PageCache {
     
     /// Récupère les statistiques
     pub fn stats(&self) -> CacheStats {
-        self.stats
+        self.stats.clone()
     }
 }
 

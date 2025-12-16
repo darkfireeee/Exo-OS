@@ -88,7 +88,7 @@ pub fn sys_open(pathname: usize, flags: i32, mode: u32) -> i64 {
         }
         Err(fs_error) => {
             // Convert FsError to errno
-            use crate::fs::FsError;
+            // ⏸️ Phase 1b: use crate::fs::FsError;
             let errno = match fs_error {
                 FsError::NotFound => Errno::ENOENT,
                 FsError::PermissionDenied => Errno::EACCES,

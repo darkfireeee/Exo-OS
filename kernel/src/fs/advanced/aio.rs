@@ -165,7 +165,10 @@ pub enum AioNotify {
     /// Notify via thread callback
     Thread,
 }
-
+// SAFETY: AioControlBlock is used in kernel context where we control memory access
+// The raw pointer is only dereferenced in controlled contexts
+unsafe impl Send for AioControlBlock {}
+unsafe impl Sync for AioControlBlock {}
 // ============================================================================
 // AIO Context
 // ============================================================================
@@ -383,7 +386,7 @@ impl AioContext {
         // 2. Lire: inode.lock().read_at(aiocb.offset, buffer)
         // 3. Copier vers user space aiocb.buffer
         
-        let bytes_to_read = aiocb.nbytes;
+        let bytes_to_read = aiocb.length;
         log::trace!("aio_read: fd={} offset={} len={}", 
                     aiocb.fd, aiocb.offset, bytes_to_read);
         
@@ -399,7 +402,7 @@ impl AioContext {
         // 2. Obtenir inode: fd_table.get(aiocb.fd)?.inode
         // 3. Écrire: inode.lock().write_at(aiocb.offset, buffer)
         
-        let bytes_to_write = aiocb.nbytes;
+        let bytes_to_write = aiocb.length;
         log::trace!("aio_write: fd={} offset={} len={}", 
                     aiocb.fd, aiocb.offset, bytes_to_write);
         
@@ -445,10 +448,10 @@ impl AioContext {
             AioNotify::Signal(signo) => {
                 // Envoyer signal au processus
                 // Simulation: logger et marquer comme envoyé
-                log::debug!("AIO: sending signal {} to process {} for operation {}", 
-                           signo, aiocb.pid, aiocb.request_id);
+                log::debug!("AIO: sending signal {} for operation {}", 
+                           signo, aiocb.request_id);
                 
-                // Dans un vrai système: process_manager::send_signal(aiocb.pid, signo)
+                // Dans un vrai système: process_manager::send_signal(pid, signo)
                 // Pour l'instant, on simule l'envoi
             }
             AioNotify::Thread => {
@@ -537,6 +540,11 @@ impl AioStatsSnapshot {
         }
     }
 }
+
+// SAFETY: AioContext uses thread-safe interior mutability (RwLock, AtomicBool)
+// and only contains Arc<AioControlBlock> which we've marked as Send+Sync
+unsafe impl Send for AioContext {}
+unsafe impl Sync for AioContext {}
 
 // ============================================================================
 // Global AIO Context

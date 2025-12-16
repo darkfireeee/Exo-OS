@@ -6,8 +6,8 @@
 //! - Relative/absolute path handling
 //! - Mount point traversal
 
-use crate::fs::vfs::{inode::Inode, dentry::Dentry, cache as vfs_cache};
-use crate::fs::{FsError, FsResult};
+// ⏸️ Phase 1b: use crate::fs::vfs::{inode::Inode, dentry::Dentry, cache as vfs_cache};
+// ⏸️ Phase 1b: use crate::fs::{FsError, FsResult};
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;

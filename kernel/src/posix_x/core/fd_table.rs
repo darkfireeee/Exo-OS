@@ -2,11 +2,28 @@
 //!
 //! Manages per-process file descriptor allocations
 
-use crate::posix_x::vfs_posix::VfsHandle;
+// ⏸️ Phase 1b: use crate::posix_x::vfs_posix::VfsHandle;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::RwLock;
+
+// ⏸️ Phase 1b: Stub type until VFS is enabled
+pub struct VfsHandle;
+
+impl VfsHandle {
+    pub fn path(&self) -> &str {
+        "/dev/null"
+    }
+    pub fn flags(&self) -> VfsFlags {
+        VfsFlags { read: false, write: false }
+    }
+}
+
+pub struct VfsFlags {
+    pub read: bool,
+    pub write: bool,
+}
 
 /// FD table error type
 #[derive(Debug, Clone, Copy)]
@@ -308,23 +325,22 @@ impl Default for FdTable {
     }
 }
 
+// ⏸️ Phase 1b:
 /// Create stdin handle (FD 0)
 fn create_stdin_handle() -> Option<VfsHandle> {
-    // Try to open console or /dev/null
-    use crate::posix_x::vfs_posix::file_ops;
-
-    // Try console first, fallback to null
-    use crate::posix_x::vfs_posix::OpenFlags;
-    if let Ok(handle) = file_ops::open("/dev/console", OpenFlags::from_posix(0), 0, None) {
-        return Some(handle);
-    }
-
-    // Fallback: create a null/dummy handle
-    file_ops::open("/dev/null", OpenFlags::from_posix(0), 0, None).ok()
+    // VFS not loaded in Phase 1 minimal
+    None
 }
 
+// ⏸️ Phase 1b:
 /// Create stdout handle (FD 1)
 fn create_stdout_handle() -> Option<VfsHandle> {
+    // VFS not loaded in Phase 1 minimal
+    None
+}
+
+// ⏸️ Phase 1b: (original implementation uses vfs_posix::file_ops)
+/*fn create_stdout_handle() -> Option<VfsHandle> {
     use crate::posix_x::vfs_posix::file_ops;
 
     // Try console first
@@ -334,13 +350,16 @@ fn create_stdout_handle() -> Option<VfsHandle> {
         return Some(handle);
     }
 
-    file_ops::open("/dev/null", OpenFlags::from_posix(1), 0, None).ok()
+    // VFS not loaded in Phase 1 minimal
+    None
 }
+*/
 
+// ⏸️ Phase 1b:
 /// Create stderr handle (FD 2)
 fn create_stderr_handle() -> Option<VfsHandle> {
-    // stderr is same as stdout
-    create_stdout_handle()
+    // VFS not loaded in Phase 1 minimal
+    None
 }
 
 // TODO: Add tests for VFS-based FD table

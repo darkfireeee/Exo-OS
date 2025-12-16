@@ -3,7 +3,7 @@
 //! Handles file operations: open, close, read, write, seek, stat
 //! Uses the central VFS API from crate::fs::vfs
 
-use crate::fs::{vfs, FsError};
+// ⏸️ Phase 1b: use crate::fs::{vfs, FsError};
 use crate::memory::{MemoryError, MemoryResult};
 use alloc::string::String;
 use alloc::vec::Vec;

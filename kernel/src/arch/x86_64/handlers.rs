@@ -500,7 +500,7 @@ fn display_timer_count(seconds: u64) {
     }
 }
 
-/// Handler pour Clavier (IRQ 1) - Désactivé Phase 0
+/// Handler pour Clavier (IRQ 1) - Phase 1 activé
 #[no_mangle]
 extern "C" fn keyboard_interrupt_handler(_stack_frame: &InterruptStackFrame) {
     // Lire le scancode (obligatoire sinon le clavier se bloque)
@@ -509,11 +509,10 @@ extern "C" fn keyboard_interrupt_handler(_stack_frame: &InterruptStackFrame) {
         asm!("in al, 0x60", out("al") scancode, options(nomem, nostack));
     }
     
-    // ⏸️ Phase 0: Driver keyboard désactivé
-    // Phase 1: Activer input::keyboard
-    // if let Some(c) = crate::drivers::input::keyboard::process_scancode(scancode) {
-    //     display_typed_char(c);
-    // }
+    // ✅ Phase 1: Driver keyboard activé
+    if let Some(c) = crate::drivers::input::keyboard::process_scancode(scancode) {
+        display_typed_char(c);
+    }
     
     // EOI au PIC Master via le wrapper
     crate::arch::x86_64::pic_wrapper::send_eoi(1);  // IRQ 1 (Keyboard)

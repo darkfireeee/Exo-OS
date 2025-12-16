@@ -2,7 +2,7 @@
 //!
 //! Complete mapping of POSIX error codes to Exo-OS error types
 
-use crate::fs::FsError;
+// ⏸️ Phase 1b: use crate::fs::FsError;
 use crate::memory::MemoryError;
 
 /// POSIX errno codes
@@ -127,20 +127,20 @@ pub fn memory_error_to_errno(err: MemoryError) -> Errno {
     }
 }
 
-/// Convert FsError to errno
-pub fn fs_error_to_errno(err: FsError) -> Errno {
-    match err {
-        FsError::NotFound => Errno::ENOENT,
-        FsError::PermissionDenied => Errno::EACCES,
-        FsError::AlreadyExists => Errno::EEXIST,
-        FsError::InvalidFd => Errno::EBADF,
-        FsError::TooManyFiles => Errno::EMFILE,
-        // FsError::NameTooLong => Errno::ENAMETOOLONG,
-        // FsError::ReadOnlyFs => Errno::EROFS,
-        // FsError::NoSpace => Errno::ENOSPC,
-        _ => Errno::EIO,
-    }
-}
+// ⏸️ Phase 1b: /// Convert FsError to errno
+// ⏸️ Phase 1b: pub fn fs_error_to_errno(err: FsError) -> Errno {
+// ⏸️ Phase 1b:     match err {
+// ⏸️ Phase 1b:         FsError::NotFound => Errno::ENOENT,
+// ⏸️ Phase 1b:         FsError::PermissionDenied => Errno::EACCES,
+// ⏸️ Phase 1b:         FsError::AlreadyExists => Errno::EEXIST,
+// ⏸️ Phase 1b:         FsError::InvalidFd => Errno::EBADF,
+// ⏸️ Phase 1b:         FsError::TooManyFiles => Errno::EMFILE,
+// ⏸️ Phase 1b:         // FsError::NameTooLong => Errno::ENAMETOOLONG,
+// ⏸️ Phase 1b:         // FsError::ReadOnlyFs => Errno::EROFS,
+// ⏸️ Phase 1b:         // FsError::NoSpace => Errno::ENOSPC,
+// ⏸️ Phase 1b:         _ => Errno::EIO,
+// ⏸️ Phase 1b:     }
+// ⏸️ Phase 1b: }
 
 /// Get error string description
 pub fn strerror(errno: Errno) -> &'static str {

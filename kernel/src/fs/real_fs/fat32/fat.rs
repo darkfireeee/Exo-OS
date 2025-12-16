@@ -52,7 +52,7 @@ impl FatCache {
         let mut entries = Vec::with_capacity(total_entries);
         let mut buffer = alloc::vec![0u8; bytes_per_sector as usize];
         
-        let device_lock = device.lock();
+        let mut device_lock = device.lock();
         
         for sector_offset in 0..fat_size {
             device_lock.read(fat_start + sector_offset, &mut buffer)
@@ -121,7 +121,7 @@ impl FatCache {
         let entries_per_sector = self.bytes_per_sector as usize / 4;
         let mut buffer = alloc::vec![0u8; self.bytes_per_sector as usize];
         
-        let device_lock = device.lock();
+        let mut device_lock = device.lock();
         
         for sector_offset in 0..self.fat_size {
             let sector_start = sector_offset as usize * entries_per_sector;

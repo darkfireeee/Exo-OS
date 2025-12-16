@@ -18,6 +18,7 @@
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use alloc::format;
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use hashbrown::HashMap;
 use spin::RwLock;
@@ -73,7 +74,7 @@ impl Symlink {
             target,
             created: Timestamp::now(),
             accessed: AtomicU64::new(0),
-            permissions: InodePermissions::new(),
+            permissions: InodePermissions::new(0o777),
             cache: RwLock::new(None),
         }
     }
@@ -175,8 +176,24 @@ impl VfsInode for Symlink {
         Err(FsError::PermissionDenied)
     }
 
-    fn sync(&self) -> FsResult<()> {
+    fn sync(&mut self) -> FsResult<()> {
         Ok(()) // Symlinks are metadata-only
+    }
+    
+    fn list(&self) -> FsResult<Vec<String>> {
+        Err(FsError::NotDirectory)
+    }
+    
+    fn lookup(&self, _name: &str) -> FsResult<u64> {
+        Err(FsError::NotDirectory)
+    }
+    
+    fn create(&mut self, _name: &str, _inode_type: InodeType) -> FsResult<u64> {
+        Err(FsError::NotDirectory)
+    }
+    
+    fn remove(&mut self, _name: &str) -> FsResult<()> {
+        Err(FsError::NotDirectory)
     }
 }
 

@@ -2,7 +2,7 @@
 //!
 //! POSIX stat syscalls integrated with VFS adapter.
 
-use crate::fs::FsError;
+// ⏸️ Phase 1b: use crate::fs::FsError;
 use crate::posix_x::core::fd_table::GLOBAL_FD_TABLE;
 use crate::posix_x::vfs_posix::{file_ops, FileStat};
 use core::ffi::CStr;

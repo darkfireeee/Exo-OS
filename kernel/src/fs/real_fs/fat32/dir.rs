@@ -5,6 +5,7 @@ use crate::fs::{FsError, FsResult};
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::sync::Arc;
+use alloc::format;
 
 /// Directory Entry (32 bytes)
 #[repr(C, packed)]

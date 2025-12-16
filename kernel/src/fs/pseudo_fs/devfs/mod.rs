@@ -366,26 +366,46 @@ impl VfsInode for DevfsInode {
         InodePermissions::from_mode(0o666)
     }
     
-    fn timestamps(&self) -> (Timestamp, Timestamp, Timestamp) {
-        let now = Timestamp { sec: 0, nsec: 0 }; // TODO: real time
-        (now, now, now)
+    fn truncate(&mut self, _size: u64) -> FsResult<()> {
+        Err(FsError::NotSupported) // Device files cannot be truncated
     }
     
-    fn get_xattr(&self, _name: &str) -> FsResult<Vec<u8>> {
-        Err(FsError::NotSupported)
+    fn list(&self) -> FsResult<Vec<String>> {
+        Err(FsError::NotDirectory) // Device files are not directories
     }
     
-    fn set_xattr(&mut self, _name: &str, _value: &[u8]) -> FsResult<()> {
-        Err(FsError::NotSupported)
+    fn lookup(&self, _name: &str) -> FsResult<u64> {
+        Err(FsError::NotDirectory)
     }
     
-    fn list_xattr(&self) -> FsResult<Vec<String>> {
-        Ok(Vec::new())
+    fn create(&mut self, _name: &str, _inode_type: InodeType) -> FsResult<u64> {
+        Err(FsError::NotDirectory)
     }
     
-    fn remove_xattr(&mut self, _name: &str) -> FsResult<()> {
-        Err(FsError::NotSupported)
+    fn remove(&mut self, _name: &str) -> FsResult<()> {
+        Err(FsError::NotDirectory)
     }
+    
+    // ⏸️ Phase 1c: fn timestamps(&self) -> (Timestamp, Timestamp, Timestamp) {
+    // ⏸️ Phase 1c: let now = Timestamp { sec: 0, nsec: 0 }; // TODO: real time
+    // ⏸️ Phase 1c: (now, now, now)
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn get_xattr(&self, _name: &str) -> FsResult<Vec<u8>> {
+    // ⏸️ Phase 1c: Err(FsError::NotSupported)
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn set_xattr(&mut self, _name: &str, _value: &[u8]) -> FsResult<()> {
+    // ⏸️ Phase 1c: Err(FsError::NotSupported)
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn list_xattr(&self) -> FsResult<Vec<String>> {
+    // ⏸️ Phase 1c: Ok(Vec::new())
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn remove_xattr(&mut self, _name: &str) -> FsResult<()> {
+    // ⏸️ Phase 1c: Err(FsError::NotSupported)
+    // ⏸️ Phase 1c: }
 }
 
 // ============================================================================

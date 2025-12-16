@@ -45,7 +45,6 @@ pub const WRITE_BACK_DELAY_MS: u64 = 100;
 // ============================================================================
 
 /// Single buffer page (4KB)
-#[derive(Clone)]
 struct BufferPage {
     /// Page data
     data: Vec<u8>,
@@ -57,6 +56,18 @@ struct BufferPage {
     last_access: AtomicU64,
     /// Valid bytes in buffer
     valid_bytes: AtomicUsize,
+}
+
+impl Clone for BufferPage {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            offset: self.offset,
+            dirty: AtomicBool::new(self.dirty.load(core::sync::atomic::Ordering::Relaxed)),
+            last_access: AtomicU64::new(self.last_access.load(core::sync::atomic::Ordering::Relaxed)),
+            valid_bytes: AtomicUsize::new(self.valid_bytes.load(core::sync::atomic::Ordering::Relaxed)),
+        }
+    }
 }
 
 impl BufferPage {
@@ -351,7 +362,7 @@ impl FileBuffer {
         // Read from storage (implémenté via BlockDevice::read)
         let bytes_read = self.read_from_storage(aligned_offset, &mut page.data)?;
         page.valid_bytes.store(bytes_read, Ordering::Release);
-        self.stats.pages_loaded.fetch_add(1, Ordering::Relaxed);
+        self.stats.cache_misses.fetch_add(1, Ordering::Relaxed);
         page.touch(self.get_timestamp());
         
         // Add to cache

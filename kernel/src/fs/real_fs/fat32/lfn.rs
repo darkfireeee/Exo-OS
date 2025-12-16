@@ -4,6 +4,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::format;
 
 /// LFN Entry (Long Filename Entry)
 #[repr(C, packed)]
@@ -41,9 +42,13 @@ impl LfnEntry {
     /// Extrait les 13 caractères UTF-16
     pub fn extract_chars(&self) -> [u16; 13] {
         let mut chars = [0u16; 13];
-        chars[0..5].copy_from_slice(&self.name1);
-        chars[5..11].copy_from_slice(&self.name2);
-        chars[11..13].copy_from_slice(&self.name3);
+        // Copier depuis packed struct via copy locale
+        let name1 = self.name1;
+        let name2 = self.name2;
+        let name3 = self.name3;
+        chars[0..5].copy_from_slice(&name1);
+        chars[5..11].copy_from_slice(&name2);
+        chars[11..13].copy_from_slice(&name3);
         chars
     }
     

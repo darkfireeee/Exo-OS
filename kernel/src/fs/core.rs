@@ -57,6 +57,10 @@ impl InodePermissions {
         Self(mode & 0o7777)
     }
     
+    pub const fn from_mode(mode: u16) -> Self {
+        Self::new(mode)
+    }
+    
     pub const fn from_octal(octal: u16) -> Self {
         Self(octal & 0o7777)
     }
@@ -384,7 +388,6 @@ pub trait Inode: Send + Sync {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// File handle - Représente un fichier ouvert
-#[derive(Clone)]
 pub struct FileHandle {
     /// Inode number
     pub ino: u64,
@@ -396,6 +399,18 @@ pub struct FileHandle {
     pub path: String,
     /// File descriptor table entry (pour close-on-exec)
     pub cloexec: bool,
+}
+
+impl Clone for FileHandle {
+    fn clone(&self) -> Self {
+        Self {
+            ino: self.ino,
+            offset: AtomicU64::new(self.offset.load(core::sync::atomic::Ordering::Relaxed)),
+            flags: self.flags,
+            path: self.path.clone(),
+            cloexec: self.cloexec,
+        }
+    }
 }
 
 impl FileHandle {

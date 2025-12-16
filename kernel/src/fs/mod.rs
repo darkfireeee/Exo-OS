@@ -12,6 +12,9 @@ use crate::memory::MemoryError;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+// Phase 1c: Re-export format! macro from alloc
+pub use alloc::format;
+
 /// Virtual File System core
 pub mod vfs;
 
@@ -70,6 +73,9 @@ pub enum FsError {
     ConnectionRefused,
     Again,
     QuotaExceeded,
+    NoMemory,      // Phase 1c: Out of memory
+    NoSpace,       // Phase 1c: No space left on device
+    AddressInUse,  // Socket address already in use
     Memory(MemoryError),
 }
 
@@ -95,6 +101,9 @@ impl FsError {
             FsError::ConnectionRefused => 111, // ECONNREFUSED
             FsError::Again => 11,              // EAGAIN
             FsError::QuotaExceeded => 122,     // EDQUOT
+            FsError::NoMemory => 12,           // ENOMEM
+            FsError::NoSpace => 28,            // ENOSPC
+            FsError::AddressInUse => 98,       // EADDRINUSE
             FsError::Memory(_) => 12,          // ENOMEM (simplified)
         }
     }
@@ -127,6 +136,9 @@ impl From<FsError> for MemoryError {
             FsError::ConnectionRefused => MemoryError::InternalError("Connection refused"),
             FsError::Again => MemoryError::InternalError("Try again"),
             FsError::QuotaExceeded => MemoryError::InternalError("Quota exceeded"),
+            FsError::NoMemory => MemoryError::OutOfMemory,
+            FsError::NoSpace => MemoryError::InternalError("No space left on device"),
+            FsError::AddressInUse => MemoryError::InternalError("Address already in use"),
             FsError::Memory(e) => e,
         }
     }

@@ -275,7 +275,10 @@ pub fn sys_fork() -> MemoryResult<Pid> {
 
 /// Load executable file from filesystem
 /// Uses VFS read_file for actual file reading
-fn load_executable_file(path: &str) -> Result<Vec<u8>, &'static str> {
+fn load_executable_file(_path: &str) -> Result<Vec<u8>, &'static str> {
+    // ⏸️ Phase 1b: VFS not loaded
+    Err("VFS not loaded in Phase 1 minimal")
+    /* Phase 1b implementation:
     // Use VFS to read the file
     match crate::fs::vfs::read_file(path) {
         Ok(data) => {
@@ -287,6 +290,7 @@ fn load_executable_file(path: &str) -> Result<Vec<u8>, &'static str> {
             Err("Failed to read executable file")
         }
     }
+    */
 }
 
 /// Execute program (full implementation)

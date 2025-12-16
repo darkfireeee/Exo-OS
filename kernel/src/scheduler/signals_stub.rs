@@ -66,3 +66,13 @@ pub struct SignalStackFrame {
     pub sig: u32,
     pub ret_addr: u64,
 }
+
+// POSIX signal constants (stub Phase 0)
+pub const MAX_SIGNAL: u32 = 64;
+pub const SIGKILL: u32 = 9;
+pub const SIGSTOP: u32 = 19;
+
+// sigprocmask how values
+pub const SIG_BLOCK: i32 = 0;
+pub const SIG_UNBLOCK: i32 = 1;
+pub const SIG_SETMASK: i32 = 2;

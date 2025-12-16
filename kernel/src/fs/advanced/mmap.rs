@@ -372,6 +372,7 @@ impl MappedRegion {
         if flags & MS_SYNC != 0 {
             // Synchronous: attendre la complétion de tous les writes
             // Simulation avec spin-wait sur un flag de completion
+            let dirty_count = dirty_pages.len();
             log::debug!("mmap: sync waiting for {} pages to complete", dirty_count);
             
             const MAX_WAIT_MS: u32 = 5000;
@@ -640,7 +641,7 @@ impl MemoryMapManager {
             
             let region_start = region.addr;
             let region_end = region.addr + region.length as u64;
-            let region_prot = region.prot;
+            let region_prot = region.protection;
             let region_flags = region.flags;
             let region_fd = region.fd;
             let region_offset = region.offset;
@@ -656,7 +657,7 @@ impl MemoryMapManager {
                 regions.remove(&addr);
                 
                 // Create new region for tail
-                let tail_region = Arc::new(MmapRegion::new(
+                let tail_region = Arc::new(MappedRegion::new(
                     new_addr,
                     new_length,
                     region_fd,
@@ -673,7 +674,7 @@ impl MemoryMapManager {
                 
                 if let Some(r) = regions.get_mut(&region_start) {
                     // On ne peut pas modifier length directement sur Arc, on recrée
-                    let new_region = Arc::new(MmapRegion::new(
+                    let new_region = Arc::new(MappedRegion::new(
                         region_start,
                         new_length,
                         region_fd,
@@ -695,7 +696,7 @@ impl MemoryMapManager {
                 
                 // Modifier head
                 if let Some(r) = regions.get_mut(&region_start) {
-                    let new_head = Arc::new(MmapRegion::new(
+                    let new_head = Arc::new(MappedRegion::new(
                         region_start,
                         head_length,
                         region_fd,
@@ -707,7 +708,7 @@ impl MemoryMapManager {
                 }
                 
                 // Créer tail
-                let tail_region = Arc::new(MmapRegion::new(
+                let tail_region = Arc::new(MappedRegion::new(
                     tail_addr,
                     tail_length,
                     region_fd,

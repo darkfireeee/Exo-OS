@@ -195,6 +195,19 @@ pub struct WatchDescriptor {
     cookie_counter: AtomicU32,
 }
 
+impl Clone for WatchDescriptor {
+    fn clone(&self) -> Self {
+        Self {
+            wd: self.wd,
+            inode: self.inode,
+            path: self.path.clone(),
+            mask: self.mask,
+            flags: self.flags,
+            cookie_counter: AtomicU32::new(self.cookie_counter.load(core::sync::atomic::Ordering::Relaxed)),
+        }
+    }
+}
+
 impl WatchDescriptor {
     /// Créer un nouveau watch descriptor
     pub fn new(wd: i32, inode: u64, path: String, mask: u32, flags: u32) -> Self {

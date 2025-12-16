@@ -6,7 +6,12 @@
 //! - kill: Send signals to processes
 
 use crate::memory::MemoryResult;
-use crate::posix_x::signals::{
+// ⏸️ Phase 1b: Full signals from posix_x
+// use crate::posix_x::signals::{
+//     SigAction, SigSet, MAX_SIGNAL, SIGKILL, SIGSTOP, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK,
+// };
+// Phase 1: Use stub types from scheduler
+use crate::scheduler::signals_stub::{
     SigAction, SigSet, MAX_SIGNAL, SIGKILL, SIGSTOP, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK,
 };
 use crate::scheduler::SCHEDULER;

@@ -458,26 +458,46 @@ impl VfsInode for ProcfsInode {
         InodePermissions::from_mode(0o444) // r--r--r--
     }
     
-    fn timestamps(&self) -> (Timestamp, Timestamp, Timestamp) {
-        let now = Timestamp { sec: 0, nsec: 0 };
-        (now, now, now)
-    }
-    
-    fn get_xattr(&self, _name: &str) -> FsResult<Vec<u8>> {
+    fn truncate(&mut self, _size: u64) -> FsResult<()> {
         Err(FsError::NotSupported)
     }
     
-    fn set_xattr(&mut self, _name: &str, _value: &[u8]) -> FsResult<()> {
-        Err(FsError::NotSupported)
+    fn list(&self) -> FsResult<Vec<String>> {
+        Err(FsError::NotDirectory)
     }
     
-    fn list_xattr(&self) -> FsResult<Vec<String>> {
-        Ok(Vec::new())
+    fn lookup(&self, _name: &str) -> FsResult<u64> {
+        Err(FsError::NotDirectory)
     }
     
-    fn remove_xattr(&mut self, _name: &str) -> FsResult<()> {
-        Err(FsError::NotSupported)
+    fn create(&mut self, _name: &str, _inode_type: InodeType) -> FsResult<u64> {
+        Err(FsError::NotDirectory)
     }
+    
+    fn remove(&mut self, _name: &str) -> FsResult<()> {
+        Err(FsError::NotDirectory)
+    }
+    
+    // ⏸️ Phase 1c: fn timestamps(&self) -> (Timestamp, Timestamp, Timestamp) {
+    // ⏸️ Phase 1c: let now = Timestamp { sec: 0, nsec: 0 };
+    // ⏸️ Phase 1c: (now, now, now)
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn get_xattr(&self, _name: &str) -> FsResult<Vec<u8>> {
+    // ⏸️ Phase 1c: Err(FsError::NotSupported)
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn set_xattr(&mut self, _name: &str, _value: &[u8]) -> FsResult<()> {
+    // ⏸️ Phase 1c: Err(FsError::NotSupported)
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn list_xattr(&self) -> FsResult<Vec<String>> {
+    // ⏸️ Phase 1c: Ok(Vec::new())
+    // ⏸️ Phase 1c: }
+    
+    // ⏸️ Phase 1c: fn remove_xattr(&mut self, _name: &str) -> FsResult<()> {
+    // ⏸️ Phase 1c: Err(FsError::NotSupported)
+    // ⏸️ Phase 1c: }
 }
 
 // ============================================================================
@@ -523,17 +543,20 @@ fn parse_path(path: &str) -> FsResult<ProcEntry> {
             if let Some(pid_str) = path.split('/').next() {
                 if let Ok(pid) = pid_str.parse::<u64>() {
                     let rest = &path[pid_str.len()..].trim_start_matches('/');
-                    match rest {
-                        "status" => return Ok(ProcEntry::ProcessStatus(pid)),
-                        "stat" => return Ok(ProcEntry::ProcessStat(pid)),
-                        "cmdline" => return Ok(ProcEntry::ProcessCmdline(pid)),
-                        "environ" => return Ok(ProcEntry::ProcessEnviron(pid)),
-                        "maps" => return Ok(ProcEntry::ProcessMaps(pid)),
-                        _ => {}
+                    match *rest {
+                        "status" => Ok(ProcEntry::ProcessStatus(pid)),
+                        "stat" => Ok(ProcEntry::ProcessStat(pid)),
+                        "cmdline" => Ok(ProcEntry::ProcessCmdline(pid)),
+                        "environ" => Ok(ProcEntry::ProcessEnviron(pid)),
+                        "maps" => Ok(ProcEntry::ProcessMaps(pid)),
+                        _ => Err(FsError::NotFound)
                     }
+                } else {
+                    Err(FsError::NotFound)
                 }
+            } else {
+                Err(FsError::NotFound)
             }
-            Err(FsError::NotFound)
         }
     }
 }

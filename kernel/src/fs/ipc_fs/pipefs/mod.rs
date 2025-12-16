@@ -18,6 +18,7 @@
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use alloc::string::String;
 use core::sync::atomic::{AtomicU64, AtomicU32, AtomicU8, Ordering};
 use spin::RwLock;
 use crate::fs::core::{Inode as VfsInode, InodeType, InodePermissions, Timestamp};
@@ -432,7 +433,7 @@ impl PipeInode {
             buffer,
             end,
             created: Timestamp::now(),
-            permissions: InodePermissions::new(),
+            permissions: InodePermissions::new(0o644),
         }
     }
 }
@@ -488,8 +489,24 @@ impl VfsInode for PipeInode {
         Err(FsError::NotSupported)
     }
 
-    fn sync(&self) -> FsResult<()> {
+    fn sync(&mut self) -> FsResult<()> {
         Ok(()) // Pipes are in-memory, no sync needed
+    }
+    
+    fn list(&self) -> FsResult<Vec<String>> {
+        Err(FsError::NotDirectory)
+    }
+    
+    fn lookup(&self, _name: &str) -> FsResult<u64> {
+        Err(FsError::NotDirectory)
+    }
+    
+    fn create(&mut self, _name: &str, _inode_type: InodeType) -> FsResult<u64> {
+        Err(FsError::NotDirectory)
+    }
+    
+    fn remove(&mut self, _name: &str) -> FsResult<()> {
+        Err(FsError::NotDirectory)
     }
 }
 

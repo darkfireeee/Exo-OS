@@ -217,8 +217,8 @@ pub fn splice(
     let mut ctx = ZeroCopyContext::new();
 
     // Determine offsets
-    let in_offset = off_in.map(|o| *o).unwrap_or(0);
-    let out_offset = off_out.map(|o| *o).unwrap_or(0);
+    let in_offset = off_in.as_ref().map(|o| **o).unwrap_or(0);
+    let out_offset = off_out.as_ref().map(|o| **o).unwrap_or(0);
 
     // Get source pages
     let pages_needed = (len + 4095) / 4096;
@@ -488,8 +488,8 @@ pub fn copy_file_range(
     
     let mut ctx = ZeroCopyContext::new();
 
-    let in_offset = off_in.map(|o| *o).unwrap_or(0);
-    let out_offset = off_out.map(|o| *o).unwrap_or(0);
+    let in_offset = off_in.as_ref().map(|o| **o).unwrap_or(0);
+    let out_offset = off_out.as_ref().map(|o| **o).unwrap_or(0);
 
     // Get pages from source file
     let pages_needed = (len + 4095) / 4096;
@@ -572,7 +572,7 @@ pub fn sys_sendfile(
     offset: Option<&mut u64>,
     count: usize,
 ) -> FsResult<usize> {
-    let off = offset.map(|o| *o);
+    let off = offset.as_ref().map(|o| **o);
     let result = sendfile(out_fd, in_fd, off, count)?;
     
     if let Some(off_ptr) = offset {

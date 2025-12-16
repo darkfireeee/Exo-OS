@@ -28,8 +28,8 @@ use crate::drivers::block::BlockDevice;
 use crate::fs::core::{Inode, InodeType, InodePermissions, Timestamp, InodeStat};
 use crate::fs::{FsError, FsResult};
 use ::alloc::sync::Arc;
-use ::alloc::string::{String, ToString};
 use ::alloc::vec::Vec;
+use ::alloc::string::{String, ToString};
 use spin::{RwLock, Mutex};
 
 pub use boot::*;
@@ -165,9 +165,10 @@ impl Fat32Fs {
         
         let sector = self.cluster_to_sector(cluster);
         let cluster_size = self.sectors_per_cluster as usize * self.bytes_per_sector as usize;
-        let mut data = alloc::vec![0u8; cluster_size];
+        let mut data = Vec::with_capacity(cluster_size);
+        data.resize(cluster_size, 0u8);
         
-        let device = self.device.lock();
+        let mut device = self.device.lock();
         for i in 0..self.sectors_per_cluster {
             let offset = i as usize * self.bytes_per_sector as usize;
             device.read(sector + i as u64, &mut data[offset..offset + self.bytes_per_sector as usize])
@@ -190,7 +191,7 @@ impl Fat32Fs {
             return Err(FsError::InvalidArgument);
         }
         
-        let device = self.device.lock();
+        let mut device = self.device.lock();
         for i in 0..self.sectors_per_cluster {
             let offset = i as usize * self.bytes_per_sector as usize;
             device.write(sector + i as u64, &data[offset..offset + self.bytes_per_sector as usize])

@@ -137,9 +137,21 @@ impl PageCache {
             .collect();
         
         for key in keys {
-            if let Some(page) = self.pages.get_mut(&key) {
-                if page.dirty {
-                    self.write_page_to_device(key, &page.data);
+            // Copier les données avant de relâcher le verrou
+            let data_copy: Option<Vec<u8>> = 
+                self.pages.get(&key).and_then(|page| {
+                    if page.dirty {
+                        Some(page.data.clone())
+                    } else {
+                        None
+                    }
+                });
+            
+            if let Some(data) = data_copy {
+                self.write_page_to_device(key, &data);
+                
+                // Marquer comme non-dirty
+                if let Some(page) = self.pages.get_mut(&key) {
                     page.dirty = false;
                 }
             }

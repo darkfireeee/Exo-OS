@@ -30,12 +30,12 @@ pub mod file_ops;
 pub mod inode_cache;
 pub mod path_resolver;
 // pub mod pipe; // Moved to kernel_interface
-pub use crate::posix_x::kernel_interface::ipc_bridge as pipe;
+// pub use crate::posix_x::kernel_interface::ipc_bridge as pipe;  // ⏸️ Phase 2
 // pub mod fd_manager; // Moved to kernel_interface
 pub use crate::posix_x::core::fd_table as fd_manager;
 
-use crate::fs::vfs::inode::{Inode, InodeType};
-use crate::fs::{FsError, FsResult};
+// ⏸️ Phase 1b: use crate::fs::vfs::inode::{Inode, InodeType};
+// ⏸️ Phase 1b: use crate::fs::{FsError, FsResult};
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;

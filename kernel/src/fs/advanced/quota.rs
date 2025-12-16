@@ -58,7 +58,7 @@ impl QuotaType {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Limites de quota pour un utilisateur/groupe
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct QuotaLimits {
     /// Soft limit (blocks) - warning à cette limite
     pub blocks_soft: u64,
@@ -83,6 +83,23 @@ pub struct QuotaLimits {
     pub blocks_time: AtomicU64,
     /// Timestamp quand soft limit inodes dépassé (0 si non dépassé)
     pub inodes_time: AtomicU64,
+}
+
+impl Clone for QuotaLimits {
+    fn clone(&self) -> Self {
+        Self {
+            blocks_soft: self.blocks_soft,
+            blocks_hard: self.blocks_hard,
+            blocks_current: AtomicU64::new(self.blocks_current.load(core::sync::atomic::Ordering::Relaxed)),
+            inodes_soft: self.inodes_soft,
+            inodes_hard: self.inodes_hard,
+            inodes_current: AtomicU64::new(self.inodes_current.load(core::sync::atomic::Ordering::Relaxed)),
+            blocks_grace: self.blocks_grace,
+            inodes_grace: self.inodes_grace,
+            blocks_time: AtomicU64::new(self.blocks_time.load(core::sync::atomic::Ordering::Relaxed)),
+            inodes_time: AtomicU64::new(self.inodes_time.load(core::sync::atomic::Ordering::Relaxed)),
+        }
+    }
 }
 
 impl QuotaLimits {
