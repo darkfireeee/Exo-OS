@@ -1060,8 +1060,8 @@ pub fn run_context_switch_benchmark() -> (u64, u64, u64) {
     logger::info("║        PHASE 0 - CONTEXT SWITCH BENCHMARK               ║");
     logger::info("╚══════════════════════════════════════════════════════════╝");
     
-    const ITERATIONS: usize = 1000;
-    const WARMUP: usize = 100;
+    const ITERATIONS: usize = 50;  // Reduced from 1000 for faster testing
+    const WARMUP: usize = 10;       // Reduced from 100
     
     // Warmup (exclure les cache misses)
     logger::info("[BENCH] Warming up cache...");

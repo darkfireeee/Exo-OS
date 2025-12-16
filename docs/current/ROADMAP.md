@@ -1,35 +1,38 @@
 # 🚀 ROADMAP EXO-OS v1.0.0 "LINUX CRUSHER"
 
-**Date de création:** 3 décembre 2025  
+**Date de mise à jour:** 16 décembre 2025  
+**Version actuelle:** v0.6.0 (post-compilation-fixes)  
 **Licence:** GPL-2.0 (compatible avec drivers Linux)  
 **Objectif:** Kernel 100% fonctionnel, ZÉRO stub/placeholder  
 **Vision:** Écraser Linux sur les métriques de performance clés
 
 ---
 
-## 📊 ÉTAT ACTUEL vs OBJECTIF v1.0.0
+## 📊 ÉTAT ACTUEL vs OBJECTIF v1.0.0 (MAJ 16/12/2025)
 
 ### Analyse de Maturité par Composant
 
 | Composant | État Actuel | Objectif v1.0.0 | Gap | Priorité |
 |-----------|-------------|-----------------|-----|----------|
-| **Fusion Rings IPC** | 70% structure | 100% + 347 cycles | 30% | 🔴 P0 |
-| **Windowed Switch** | 80% ASM intégré | 100% + 304 cycles | 20% | 🔴 P0 |
-| **3-Level Allocator** | 60% structure | 100% + 8 cycles | 40% | 🔴 P0 |
-| **Scheduler EMA** | 75% 3-Queue | 100% + 87 cycles | 25% | 🔴 P0 |
-| **Memory Virtual** | 20% structures | 100% map/unmap | 80% | 🔴 P0 |
-| **VFS tmpfs/devfs** | 40% tmpfs basique | 100% complet | 60% | 🟠 P1 |
-| **POSIX-X Syscalls** | 30% I/O basique | 100% ~350 syscalls | 70% | 🟠 P1 |
-| **ELF Loader** | 70% parsing OK | 100% + spawn | 30% | 🟠 P1 |
-| **fork/exec/wait** | 5% stubs | 100% fonctionnel | 95% | 🟠 P1 |
-| **Network TCP/IP** | 10% structures | 100% stack complet | 90% | 🟡 P2 |
-| **Drivers (PCI/Net/Blk)** | 20% stubs | 100% + Linux compat | 80% | 🟡 P2 |
-| **Security/Capabilities** | 40% framework | 100% + TPM | 60% | 🟡 P2 |
-| **SMP Multi-core** | 0% single-core | 100% per-CPU | 100% | 🟠 P1 |
-| **Input (Keyboard/Mouse)** | 0% | 100% evdev | 100% | 🟡 P2 |
-| **Filesystems réels** | 0% | ext4/FAT32 | 100% | 🟢 P3 |
+| **Boot & Timer** | ✅ 100% validé QEMU | 100% | 0% | ✅ COMPLET |
+| **Scheduler 3-Queue** | ✅ 95% (context switch OK) | 100% + 87 cycles | 5% | 🟢 P0 |
+| **Memory Virtual** | ✅ 90% (map/unmap OK) | 100% + CoW | 10% | 🟢 P0 |
+| **VFS tmpfs/devfs** | 🟡 70% compile (tests manquants) | 100% validé | 30% | 🟠 P1 |
+| **POSIX-X Syscalls** | 🟡 40% (I/O code présent) | 100% ~350 syscalls | 60% | 🟠 P1 |
+| **fork/wait basique** | ✅ 50% (fonctionne sans CoW) | 100% avec CoW | 50% | 🟠 P1 |
+| **exec/ELF Loader** | 🟡 80% (parser OK, load non testé) | 100% + spawn | 20% | 🟠 P1 |
+| **Signals** | 🔴 10% (structures only) | 100% delivery | 90% | 🔴 P1 |
+| **Keyboard/Shell** | 🔴 0% | 100% interactif | 100% | 🔴 P1 |
+| **Fusion Rings IPC** | 70% structure | 100% + 347 cycles | 30% | 🟡 P2 |
+| **Windowed Switch** | 80% ASM intégré | 100% + 304 cycles | 20% | 🟡 P2 |
+| **3-Level Allocator** | 60% structure | 100% + 8 cycles | 40% | 🟡 P2 |
+| **Network TCP/IP** | 10% structures | 100% stack complet | 90% | 🟡 P3 |
+| **Drivers (PCI/Net/Blk)** | 20% stubs | 100% + Linux compat | 80% | 🟡 P3 |
+| **Security/Capabilities** | 40% framework | 100% + TPM | 60% | 🟡 P3 |
+| **SMP Multi-core** | 0% single-core | 100% per-CPU | 100% | 🟡 P4 |
+| **Filesystems réels** | 33% (FAT32 parser) | ext4/FAT32 complet | 67% | 🟢 P4 |
 
-**Progression globale estimée:** ~35%
+**Progression globale réelle:** ~40% (Phase 0: 100%, Phase 1: 40%)
 
 ---
 
@@ -49,35 +52,135 @@
 
 ---
 
-## 📅 PLANNING DE DÉVELOPPEMENT
+## 📅 PLANNING DE DÉVELOPPEMENT (MAJ 16/12/2025)
 
-### PHASE 0: Fondations Critiques (4 semaines)
+### ✅ PHASE 0: Fondations Critiques - COMPLÈTE (100%)
 **Objectif:** Kernel qui démarre et préempte correctement
 
-#### Semaine 1-2: Timer + Context Switch Réel
-```
-□ Timer preemption depuis IRQ0 → schedule()
-□ Benchmarks context switch (rdtsc)
-□ Validation <500 cycles
-□ 3+ threads qui alternent
-```
+#### ✅ Timer + Context Switch Réel
+- ✅ Timer preemption depuis IRQ0 → schedule()
+- ✅ Context switch fonctionnel (windowed_switch.S)
+- ⚠️ Benchmarks non mesurés (rdtsc à implémenter)
+- ✅ 3+ threads qui alternent (validé QEMU)
 
-#### Semaine 3-4: Mémoire Virtuelle
-```
-□ map_page() / unmap_page() fonctionnels
-□ TLB flush (invlpg)
-□ mmap() anonyme
-□ mprotect() pour permissions
-□ Page fault handler
-```
+#### ✅ Mémoire Virtuelle
+- ✅ map_page() / unmap_page() fonctionnels
+- ✅ TLB flush (invlpg)
+- ✅ mmap() anonyme
+- ✅ mprotect() pour permissions
+- ✅ Page fault handler
+- ⚠️ Copy-on-Write manquant (requis Phase 1b)
+
+**Status Phase 0:** ✅ **100% VALIDÉ** (boot QEMU stable)
 
 ---
 
-### PHASE 1: Kernel Fonctionnel (8 semaines)
-**Objectif:** Premier userspace + syscalls de base
+### 🟡 PHASE 1: Kernel Fonctionnel - EN COURS (40%)
+**Objectif:** Premier userspace + syscalls de base  
+**Délai restant estimé:** 4-6 semaines
 
-#### Mois 1 - Semaine 1-2: VFS Complet
+#### 🟡 Phase 1a: VFS Complet (70% - Semaine 1-2)
+**Status:** Code compile, tests runtime manquants
+
+##### ✅ Déjà implémenté
+- ✅ tmpfs structures complètes (VfsInode trait)
+- ✅ devfs structures (/dev/null, /dev/zero, /dev/console)
+- ✅ procfs structures (/proc/self, /proc/[pid]/)
+- ✅ sysfs basique
+- ✅ FAT32 parser complet
+- ✅ Page Cache avec RadixTree
+- ✅ Mount namespace support
+
+##### 🔴 À implémenter (Priorité CRITIQUE)
+```rust
+□ Test tmpfs: create/read/write/delete fichier
+□ Test devfs: /dev/null absorbe, /dev/zero produit 0x00
+□ Test procfs: lire /proc/self/status
+□ Mount syscall: mount("/dev/tmpfs", "/tmp", "tmpfs")
+□ Unmount syscall: umount("/tmp")
+□ FD table connectée au VFS (actuellement stubs)
 ```
+
+**Tâches restantes:**
+1. Implémenter `test_tmpfs_basic()` dans kernel/src/lib.rs
+2. Implémenter `test_devfs()` pour /dev/null et /dev/zero
+3. Implémenter `test_procfs()` pour /proc/self/status
+4. Connecter FD table (posix_x/core/fd_table.rs) au VFS
+5. Valider mount/unmount syscalls
+
+**Livrable Phase 1a:** Tests VFS PASS en QEMU
+
+---
+
+#### 🟡 Phase 1b: Process Management (50% - Semaine 3-4)
+**Status:** fork/wait basique OK, exec/CoW manquants
+
+##### ✅ Déjà validé
+- ✅ fork() basique (thread creation)
+- ✅ wait4() fonctionnel (1 child)
+- ✅ exit() avec cleanup partiel
+- ✅ Process state management
+- ✅ ELF parser complet
+
+##### 🔴 À implémenter (Priorité HAUTE)
+```rust
+□ Copy-on-Write pour fork() (clone address space)
+□ exec() loading depuis VFS (vfs::read_file)
+□ exec() mapping segments PT_LOAD
+□ exec() setup stack avec argv/envp
+□ Process table complète (credentials, limits)
+□ Test fork+exec+wait cycle complet
+```
+
+**Tâches restantes:**
+1. Dans memory/ : implémenter `clone_address_space_cow()`
+2. Dans syscall/handlers/process.rs : `sys_fork()` utilise CoW
+3. Dans `sys_execve()` : charger ELF depuis VFS path
+4. Parser ELF et mapper tous les segments PT_LOAD
+5. Setup stack userspace avec arguments et environment
+6. Jump to entry point avec registres corrects
+7. Créer test `test_fork_exec_wait()` avec programme réel
+8. Compléter process table avec uid/gid/groups
+
+**Livrable Phase 1b:** fork+exec+wait fonctionnel avec ELF
+
+---
+
+#### 🔴 Phase 1c: Signals + Premier Shell (0% - Semaine 5-8)
+**Status:** Structures définies, aucune implémentation
+
+##### 🔴 À implémenter (Priorité MOYENNE)
+```rust
+□ Signal delivery (SIGKILL, SIGTERM, SIGINT, SIGCHLD)
+□ sys_sigaction() - enregistrer handlers
+□ sys_signal() - API simplifiée
+□ sys_kill(pid, signal) - envoyer signal
+□ PS/2 keyboard driver (IRQ1)
+□ /dev/tty device (read stdin, write stdout)
+□ Shell basique (prompt, parse, fork+exec)
+□ Pipeline avec pipe() syscall
+```
+
+**Tâches restantes:**
+1. Dans posix_x/signals/ : implémenter `signal_deliver()`
+2. Créer signal queue par process
+3. Dans syscall/handlers/signals.rs : `sys_sigaction()` complet
+4. Implémenter `sys_kill()` avec permissions checks
+5. Dans arch/x86_64/drivers/ : créer `ps2_keyboard.rs`
+6. Gérer IRQ1 (keyboard interrupt)
+7. Scan codes → ASCII conversion avec layout US
+8. Dans fs/pseudo_fs/devfs/ : créer `tty.rs`
+9. Buffer input/output pour /dev/tty
+10. Dans userland/shell/ : créer shell minimal
+11. Read loop, parse commandes, fork+exec
+12. Implémenter pipe() pour pipelines
+
+**Livrable Phase 1c:** Shell interactif qui exécute des commandes
+
+---
+
+**Status Global Phase 1:** 🟡 **40%** (1a: 70%, 1b: 50%, 1c: 0%)  
+**Critère de succès:** Shell qui exécute "ls", "echo", avec fork+exec+wait
 □ tmpfs complet avec read/write/create/delete
 □ devfs avec /dev/null, /dev/zero, /dev/console
 □ procfs avec /proc/self, /proc/[pid]/

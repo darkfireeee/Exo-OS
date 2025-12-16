@@ -10,7 +10,7 @@ echo "=== Exo-OS Quick Test Script ==="
 echo ""
 
 # Check if ISO exists
-if [ ! -f "build/exo_os.iso" ]; then
+if [ ! -f "/build/exo_os.iso" ]; then
     echo "Error: build/exo_os.iso not found"
     echo "Run 'bash build.sh build' first"
     exit 1

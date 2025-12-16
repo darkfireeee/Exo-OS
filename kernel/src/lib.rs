@@ -784,7 +784,15 @@ fn test_fork_thread_entry() -> ! {
     // Run the fork test
     test_fork_syscall();
     
-    logger::early_print("[TEST_THREAD] Tests complete, exiting...\n");
+    logger::early_print("[TEST_THREAD] Phase 1b complete, starting Phase 1a tests...\n");
+    
+    // Run Phase 1a VFS tmpfs test
+    test_tmpfs_basic();
+    
+    // Run Phase 1a DevFS test
+    test_devfs_basic();  // Re-enabled after fixing pipe buffering issue
+    
+    logger::early_print("[TEST_THREAD] All tests complete, exiting...\n");
     
     // Exit thread
     syscall::handlers::process::sys_exit(0);
@@ -857,6 +865,291 @@ fn test_fork_syscall() {
     logger::early_print("\n");
     logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
     logger::early_print("║           PHASE 1b TEST COMPLETE                        ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+}
+
+// ═══════════════════════════════════════════════════════
+//  Phase 1a Tests - VFS tmpfs
+// ═══════════════════════════════════════════════════════
+
+fn test_tmpfs_basic() {
+    use crate::fs::pseudo_fs::tmpfs::TmpfsInode;
+    use crate::fs::core::{Inode as VfsInode, InodeType};
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           PHASE 1a - TMPFS TEST                         ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+    
+    // Test 1: Créer inode tmpfs
+    logger::early_print("[TEST 1] Creating tmpfs inode...\n");
+    let mut inode = TmpfsInode::new(1, InodeType::File);
+    logger::early_print("[TEST 1] ✅ Inode created (ino=1, type=File)\n");
+    
+    // Test 2: Écrire des données
+    logger::early_print("\n[TEST 2] Writing data to tmpfs...\n");
+    let write_data = b"Hello Exo-OS! This is a tmpfs test.";
+    match inode.write_at(0, write_data) {
+        Ok(written) => {
+            logger::early_print("[TEST 2] Written bytes: ");
+            let s = alloc::format!("{}\n", written);
+            logger::early_print(&s);
+            
+            if written == write_data.len() {
+                logger::early_print("[TEST 2] ✅ PASS: All bytes written\n");
+            } else {
+                logger::early_print("[TEST 2] ⚠️  Partial write: expected ");
+                let s = alloc::format!("{}, got {}\n", write_data.len(), written);
+                logger::early_print(&s);
+            }
+        }
+        Err(e) => {
+            logger::early_print("[TEST 2] ❌ FAIL: Write error: ");
+            let s = alloc::format!("{:?}\n", e);
+            logger::early_print(&s);
+        }
+    }
+    
+    // Test 3: Lire les données
+    logger::early_print("\n[TEST 3] Reading data from tmpfs...\n");
+    let mut read_buffer = [0u8; 64];
+    match inode.read_at(0, &mut read_buffer[..write_data.len()]) {
+        Ok(read) => {
+            logger::early_print("[TEST 3] Read bytes: ");
+            let s = alloc::format!("{}\n", read);
+            logger::early_print(&s);
+            
+            if read == write_data.len() {
+                // Vérifier le contenu
+                let read_slice = &read_buffer[..read];
+                if read_slice == write_data {
+                    logger::early_print("[TEST 3] ✅ PASS: Data matches!\n");
+                    logger::early_print("[TEST 3] Content: \"");
+                    if let Ok(s) = core::str::from_utf8(read_slice) {
+                        logger::early_print(s);
+                    }
+                    logger::early_print("\"\n");
+                } else {
+                    logger::early_print("[TEST 3] ❌ FAIL: Data mismatch\n");
+                    logger::early_print("[TEST 3] Expected: \"");
+                    if let Ok(s) = core::str::from_utf8(write_data) {
+                        logger::early_print(s);
+                    }
+                    logger::early_print("\"\n[TEST 3] Got: \"");
+                    if let Ok(s) = core::str::from_utf8(read_slice) {
+                        logger::early_print(s);
+                    }
+                    logger::early_print("\"\n");
+                }
+            } else {
+                logger::early_print("[TEST 3] ⚠️  Partial read\n");
+            }
+        }
+        Err(e) => {
+            logger::early_print("[TEST 3] ❌ FAIL: Read error: ");
+            let s = alloc::format!("{:?}\n", e);
+            logger::early_print(&s);
+        }
+    }
+    
+    // Test 4: Écrire à un offset
+    logger::early_print("\n[TEST 4] Writing at offset 100...\n");
+    let write_data2 = b"Offset write test";
+    match inode.write_at(100, write_data2) {
+        Ok(written) => {
+            if written == write_data2.len() {
+                logger::early_print("[TEST 4] ✅ PASS: Offset write OK\n");
+                
+                // Relire
+                let mut read_buffer2 = [0u8; 32];
+                if let Ok(read) = inode.read_at(100, &mut read_buffer2[..write_data2.len()]) {
+                    if &read_buffer2[..read] == write_data2 {
+                        logger::early_print("[TEST 4] ✅ Offset read matches\n");
+                    } else {
+                        logger::early_print("[TEST 4] ❌ Offset read mismatch\n");
+                    }
+                }
+            } else {
+                logger::early_print("[TEST 4] ⚠️  Partial write\n");
+            }
+        }
+        Err(e) => {
+            logger::early_print("[TEST 4] ❌ FAIL: ");
+            let s = alloc::format!("{:?}\n", e);
+            logger::early_print(&s);
+        }
+    }
+    
+    // Test 5: Vérifier size
+    logger::early_print("\n[TEST 5] Checking file size...\n");
+    let size = inode.size();
+    logger::early_print("[TEST 5] File size: ");
+    let s = alloc::format!("{} bytes\n", size);
+    logger::early_print(&s);
+    
+    let expected_size = 100 + write_data2.len() as u64;
+    if size == expected_size {
+        logger::early_print("[TEST 5] ✅ PASS: Size correct\n");
+    } else {
+        logger::early_print("[TEST 5] ❌ FAIL: Expected ");
+        let s = alloc::format!("{}, got {}\n", expected_size, size);
+        logger::early_print(&s);
+    }
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           TMPFS TEST COMPLETE                           ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+}
+// ═══════════════════════════════════════════════════════
+//  Phase 1a Tests - DevFS
+// ═══════════════════════════════════════════════════════
+
+fn test_devfs_basic() {
+    use crate::fs::pseudo_fs::devfs::{NullDevice, ZeroDevice, DeviceOps};
+    use crate::fs::core::Inode as VfsInode;
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           PHASE 1a - DEVFS TEST                         ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+    
+    // Test 1: /dev/null - discard writes
+    logger::early_print("[TEST 1] Testing /dev/null (discard writes)...\n");
+    {
+        let mut null_dev = NullDevice;
+        let test_data = b"This should be discarded";
+        
+        match null_dev.write(0, test_data) {
+            Ok(written) => {
+                if written == test_data.len() {
+                    logger::early_print("[TEST 1] ✅ PASS: /dev/null absorbed ");
+                    let s = alloc::format!("{} bytes\n", written);
+                    logger::early_print(&s);
+                } else {
+                    logger::early_print("[TEST 1] ⚠️  Partial write\n");
+                }
+            }
+            Err(e) => {
+                logger::early_print("[TEST 1] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    // Test 2: /dev/null - read returns EOF
+    logger::early_print("\n[TEST 2] Testing /dev/null (read EOF)...\n");
+    {
+        let null_dev = NullDevice;
+        let mut buf = [0u8; 64];
+        
+        match null_dev.read(0, &mut buf) {
+            Ok(read) => {
+                if read == 0 {
+                    logger::early_print("[TEST 2] ✅ PASS: /dev/null returns EOF (0 bytes)\n");
+                } else {
+                    logger::early_print("[TEST 2] ❌ FAIL: Expected EOF, got ");
+                    let s = alloc::format!("{} bytes\n", read);
+                    logger::early_print(&s);
+                }
+            }
+            Err(e) => {
+                logger::early_print("[TEST 2] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    // Test 3: /dev/zero - read zeros
+    logger::early_print("\n[TEST 3] Testing /dev/zero (read zeros)...\n");
+    {
+        let zero_dev = ZeroDevice;
+        let mut buf = [0xFFu8; 32]; // Fill with 0xFF
+        
+        match zero_dev.read(0, &mut buf) {
+            Ok(read) => {
+                logger::early_print("[TEST 3] Read ");
+                let s = alloc::format!("{} bytes\n", read);
+                logger::early_print(&s);
+                
+                // Verify all zeros
+                let all_zeros = buf.iter().all(|&b| b == 0);
+                if all_zeros && read == 32 {
+                    logger::early_print("[TEST 3] ✅ PASS: All bytes are 0x00\n");
+                } else if !all_zeros {
+                    logger::early_print("[TEST 3] ❌ FAIL: Buffer contains non-zero bytes\n");
+                } else {
+                    logger::early_print("[TEST 3] ⚠️  Partial read\n");
+                }
+            }
+            Err(e) => {
+                logger::early_print("[TEST 3] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    // Test 4: /dev/zero - write (discard)
+    logger::early_print("\n[TEST 4] Testing /dev/zero (discard writes)...\n");
+    {
+        let mut zero_dev = ZeroDevice;
+        let test_data = b"Written to /dev/zero";
+        
+        match zero_dev.write(0, test_data) {
+            Ok(written) => {
+                if written == test_data.len() {
+                    logger::early_print("[TEST 4] ✅ PASS: /dev/zero discarded ");
+                    let s = alloc::format!("{} bytes\n", written);
+                    logger::early_print(&s);
+                } else {
+                    logger::early_print("[TEST 4] ⚠️  Partial write\n");
+                }
+            }
+            Err(e) => {
+                logger::early_print("[TEST 4] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    // Test 5: /dev/zero - large read
+    logger::early_print("\n[TEST 5] Testing /dev/zero (large read 4096 bytes)...\n");
+    {
+        let zero_dev = ZeroDevice;
+        let mut large_buf = alloc::vec![0xAAu8; 4096];
+        
+        match zero_dev.read(0, &mut large_buf) {
+            Ok(read) => {
+                if read == 4096 {
+                    let all_zeros = large_buf.iter().all(|&b| b == 0);
+                    if all_zeros {
+                        logger::early_print("[TEST 5] ✅ PASS: 4096 bytes all zero\n");
+                    } else {
+                        logger::early_print("[TEST 5] ❌ FAIL: Buffer contains non-zero\n");
+                    }
+                } else {
+                    logger::early_print("[TEST 5] ⚠️  Partial read\n");
+                }
+            }
+            Err(e) => {
+                logger::early_print("[TEST 5] ❌ FAIL: ");
+                let s = alloc::format!("{:?}\n", e);
+                logger::early_print(&s);
+            }
+        }
+    }
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           DEVFS TEST COMPLETE                           ║\n");
     logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
     logger::early_print("\n");
 }

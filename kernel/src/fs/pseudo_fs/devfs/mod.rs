@@ -180,7 +180,7 @@ impl DeviceRegistry {
 // ============================================================================
 
 /// /dev/null - discards all writes, returns EOF on reads
-struct NullDevice;
+pub struct NullDevice;
 
 impl DeviceOps for NullDevice {
     #[inline(always)]
@@ -195,7 +195,7 @@ impl DeviceOps for NullDevice {
 }
 
 /// /dev/zero - returns zeros on read, discards writes
-struct ZeroDevice;
+pub struct ZeroDevice;
 
 impl DeviceOps for ZeroDevice {
     #[inline(always)]
