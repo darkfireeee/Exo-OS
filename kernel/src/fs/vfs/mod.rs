@@ -105,20 +105,39 @@ pub fn init() -> FsResult<()> {
 
 /// Load test binaries into tmpfs at boot
 fn load_test_binaries() -> FsResult<()> {
-    // Embed hello.elf binary at compile time
+    // Embed test binaries at compile time
     // Path is relative to workspace root (where Cargo.toml is)
-    const HELLO_ELF: &[u8] = include_bytes!("../../../../userland/hello.elf");
+    const HELLO_ELF: &[u8] = include_bytes!("../../../../userland/bin/hello.elf");
+    const TEST_HELLO_ELF: &[u8] = include_bytes!("../../../../userland/bin/test_hello.elf");
+    const TEST_FORK_ELF: &[u8] = include_bytes!("../../../../userland/bin/test_fork_exec.elf");
+    const TEST_PIPE_ELF: &[u8] = include_bytes!("../../../../userland/bin/test_pipe.elf");
     
-    // Write hello.elf to /tmp/hello.elf
-    match write_file("/tmp/hello.elf", HELLO_ELF) {
-        Ok(_) => {
-            log::info!("VFS: loaded /tmp/hello.elf ({} bytes)", HELLO_ELF.len());
-        }
-        Err(e) => {
-            log::warn!("VFS: failed to load hello.elf: {:?}", e);
+    // Create /bin directory
+    match create_dir("/bin") {
+        Ok(_) => log::info!("VFS: created /bin directory"),
+        Err(e) => log::warn!("VFS: /bin creation failed: {:?}", e),
+    }
+    
+    // Write binaries to /bin/
+    let binaries = [
+        ("/bin/hello", HELLO_ELF),
+        ("/bin/test_hello", TEST_HELLO_ELF),
+        ("/bin/test_fork", TEST_FORK_ELF),
+        ("/bin/test_pipe", TEST_PIPE_ELF),
+    ];
+    
+    for (path, data) in &binaries {
+        match write_file(path, data) {
+            Ok(_) => {
+                log::info!("VFS: loaded {} ({} bytes)", path, data.len());
+            }
+            Err(e) => {
+                log::warn!("VFS: failed to load {}: {:?}", path, e);
+            }
         }
     }
     
+    log::info!("VFS: {} test binaries loaded successfully", binaries.len());
     Ok(())
 }
 

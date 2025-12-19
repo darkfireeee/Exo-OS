@@ -39,7 +39,7 @@ pub mod time;           // ✅ Phase 0: PIT timer
 pub mod syscall;        // ✅ Phase 1: Syscall infrastructure
 pub mod posix_x;        // ✅ Phase 1: POSIX compatibility layer
 pub mod fs;             // 🔄 Phase 1c: VFS activation in progress
-// pub mod tests;       // ⏸️ Phase 1c: Tests (dépend de fs complet)
+pub mod tests;          // ✅ Phase 1c: Tests (keyboard + process)
 
 // ═══════════════════════════════════════════════════════════
 //  PHASE 1b - À activer après correction fs
@@ -435,6 +435,22 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             logger::early_print("[KERNEL] ✅ Scheduler 3-queue operational\n");
             logger::early_print("[KERNEL] ✅ Memory management ready\n\n");
             
+            // Initialize VFS with test binaries
+            logger::early_print("[KERNEL] Initializing VFS (Phase 1)...\n");
+            match fs::vfs::init() {
+                Ok(_) => {
+                    logger::early_print("[KERNEL] ✅ VFS initialized successfully\n");
+                    logger::early_print("[KERNEL]    • tmpfs mounted at /\n");
+                    logger::early_print("[KERNEL]    • devfs mounted at /dev\n");
+                    logger::early_print("[KERNEL]    • Test binaries loaded in /bin\n\n");
+                }
+                Err(e) => {
+                    logger::early_print("[KERNEL] ⚠️  VFS init failed: ");
+                    let s = alloc::format!("{:?}\n", e);
+                    logger::early_print(&s);
+                }
+            }
+            
             logger::early_print("[KERNEL] Starting Phase 1b: fork/exec/wait tests\n\n");
             
             // ✅ PHASE 1b - Create test thread
@@ -816,6 +832,14 @@ fn test_fork_thread_entry() -> ! {
     
     // Run Phase 1c Signal handling test
     test_signal_handling();
+    
+    // Run Phase 1c Keyboard tests
+    crate::tests::keyboard_test::test_keyboard_driver();
+    
+    logger::early_print("[TEST_THREAD] Phase 1c complete, starting exec() test...\n");
+    
+    // Test exec() with embedded binaries
+    crate::tests::exec_test::test_exec_binaries();
     
     logger::early_print("[TEST_THREAD] All Phase 1 tests complete, exiting...\n");
     

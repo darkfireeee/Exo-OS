@@ -318,6 +318,37 @@ impl DeviceOps for ConsoleDevice {
     }
 }
 
+/// /dev/tty - terminal device with keyboard input
+pub struct TtyDevice;
+
+impl DeviceOps for TtyDevice {
+    fn read(&self, _offset: u64, buf: &mut [u8]) -> FsResult<usize> {
+        // Lire depuis le buffer clavier
+        let mut bytes_read = 0;
+        
+        // Remplir le buffer avec les caractères disponibles
+        while bytes_read < buf.len() {
+            if let Some(c) = crate::drivers::input::keyboard::read_char() {
+                buf[bytes_read] = c as u8;
+                bytes_read += 1;
+            } else {
+                // Plus de caractères disponibles
+                break;
+            }
+        }
+        
+        Ok(bytes_read)
+    }
+    
+    fn write(&mut self, _offset: u64, buf: &[u8]) -> FsResult<usize> {
+        // Écrire sur le terminal (VGA ou serial)
+        if let Ok(s) = core::str::from_utf8(buf) {
+            log::info!("{}", s);
+        }
+        Ok(buf.len())
+    }
+}
+
 // ============================================================================
 // DevFS Inode
 // ============================================================================
@@ -465,6 +496,15 @@ pub fn init() -> FsResult<()> {
         "console".to_string(),
         DeviceType::Char,
         Arc::new(RwLock::new(ConsoleDevice)),
+    )?;
+    
+    // Register /dev/tty (terminal with keyboard input)
+    registry.register(
+        major::TTY,
+        0,
+        "tty".to_string(),
+        DeviceType::Char,
+        Arc::new(RwLock::new(TtyDevice)),
     )?;
     
     *DEVFS_REGISTRY.write() = Some(registry);
