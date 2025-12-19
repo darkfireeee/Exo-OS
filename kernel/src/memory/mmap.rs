@@ -94,8 +94,9 @@ impl MmapManager {
     pub fn new() -> Self {
         Self {
             mappings: BTreeMap::new(),
-            // Start anonymous mappings at 2GB
-            next_addr: 0x8000_0000,
+            // Start anonymous mappings at 8GB (after kernel huge pages)
+            // Boot.asm maps 0-8GB with 2MB huge pages
+            next_addr: 0x2_0000_0000,
         }
     }
     
@@ -352,12 +353,13 @@ impl MmapManager {
         let mut frames = Vec::new();
         
         for _ in 0..count {
-            match super::physical::buddy_allocator::alloc_frame() {
-                Ok(frame) => frames.push(frame),
+            match super::physical::allocate_frame() {
+                Ok(frame) => frames.push(frame.start),
                 Err(e) => {
                     // Free already allocated frames
-                    for frame in frames {
-                        let _ = super::physical::buddy_allocator::free_frame(frame);
+                    for frame_addr in frames {
+                        let frame = super::physical::Frame::new(frame_addr);
+                        let _ = super::physical::deallocate_frame(frame);
                     }
                     return Err(e);
                 }

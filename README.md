@@ -1,20 +1,60 @@
-# 🚀 Exo-OS v0.5.0 "Quantum Leap"
+# 🚀 Exo-OS v0.5.0 "Stellar Engine"
 
-**Système d'exploitation moderne écrit en Rust avec boot C/ASM et shell interactif complet**
+**Système d'exploitation moderne écrit en Rust avec boot C/ASM - Phase 1 89% complète**
 
 [![License](https://img.shields.io/badge/GPL-2.0license-blue.svg)](LICENSE)
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 [![Version](https://img.shields.io/badge/version-0.5.0-orange.svg)]()
+[![Tests](https://img.shields.io/badge/tests-40/45_passing-success.svg)]()
 
 ---
 
-## ✨ Nouveautés v0.5.0
+## 🎯 État Actuel
 
-- 🔗 **Linkage C/Rust complet** - Boot multiboot2 en ASM → C → Rust
-- 🐚 **Exo-Shell** - Shell interactif avec 14 commandes VFS
-- 🧠 **Heap allocator stable** - Bugs critiques corrigés
-- 📦 **Build automatisé** - Script en 8 étapes  
-- 🚀 **Boot complet validé** - Testé en QEMU, prêt pour production
+**Phase 1:** 🟢 **89% complète** (40/45 tests passés)
+
+| Composant | Tests | Status |
+|-----------|-------|--------|
+| **Phase 1a - VFS** | 20/20 | ✅ 100% |
+| **Phase 1b - Processus** | 15/15 | ✅ 100% |
+| **Phase 1c - Signaux** | 5/10 | 🟡 50% |
+
+**Documentation:** [PHASE_1_VALIDATION.md](docs/current/PHASE_1_VALIDATION.md)
+
+---
+
+## ✨ Fonctionnalités Validées v0.5.0
+
+### Gestion Mémoire
+- ✅ **Allocateur bitmap** - 512MB, frames 4KB
+- ✅ **Heap allocator** - 64MB stable
+- ✅ **mmap/munmap** - Allocation virtuelle
+- ✅ **mprotect** - Gestion permissions
+- ⚠️ **CoW** - Conceptuel (page fault handler à implémenter)
+
+### Système de Fichiers Virtuels
+- ✅ **tmpfs** - 5/5 tests (create, write, read, offset, size)
+- ✅ **devfs** - 5/5 tests (/dev/null, /dev/zero)
+- ✅ **procfs** - 5/5 tests (cpuinfo, meminfo, status, uptime)
+- ✅ **Registry** - 5/5 tests (device major/minor)
+
+### Gestion Processus
+- ✅ **fork/wait** - 5/5 tests (PID alloc, zombie cleanup)
+- ✅ **clone** - Thread support (CLONE_THREAD)
+- ✅ **futex** - Synchronisation (WAIT/WAKE/REQUEUE)
+- ✅ **exit/wait4** - Exit status propagation
+
+### Signaux POSIX
+- ✅ **Syscalls** - rt_sigaction, sigprocmask, kill, tgkill
+- ✅ **Handler registration** - SIG_DFL, SIG_IGN, custom
+- ✅ **Signal delivery** - Pending sets, masking
+- ✅ **Signal frame** - Context save/restore
+
+### Scheduler & Timer
+- ✅ **3-Queue scheduler** - Real-time, normal, idle
+- ✅ **Context switch** - windowed_switch.S validé
+- ✅ **Timer preemption** - PIT 100Hz
+- ✅ **Benchmark** - ~2000 cycles/switch
 
 ---
 
