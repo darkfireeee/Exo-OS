@@ -441,10 +441,9 @@ extern "C" fn timer_interrupt_handler(_stack_frame: &InterruptStackFrame) {
     // IMPORTANT: Envoyer EOI au PIC 8259
     crate::arch::x86_64::pic_wrapper::send_eoi(0);  // IRQ 0 = Timer
     
-    // Préemption: Appeler le scheduler tous les 10 ticks (10ms à 100Hz)
-    if ticks % 10 == 0 {
-        crate::scheduler::SCHEDULER.schedule();
-    }
+    // Préemption: Appeler le scheduler à CHAQUE tick (10ms à 100Hz)
+    // Ceci permet le vrai round-robin multitasking
+    crate::scheduler::SCHEDULER.schedule();
     
     // Load balancing: Toutes les 100ms (10 ticks)
     if ticks % 10 == 0 {

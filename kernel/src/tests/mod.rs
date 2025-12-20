@@ -6,3 +6,5 @@ pub mod keyboard_test;
 pub mod exec_test;
 pub mod benchmark_real_threads;
 pub mod signal_tests;
+pub mod simple_multithread;
+pub mod validation;

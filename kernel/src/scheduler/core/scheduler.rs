@@ -525,8 +525,17 @@ impl Scheduler {
                         old_ctx = core::ptr::null_mut();
                         switch_needed = true;
                     } else {
-                        // No more threads, keep terminated thread as current
-                        logger::warn("[SCHED] No threads left after termination!");
+                        // No more user threads - don't switch, just return
+                        // This will return to the interrupt handler, which will return to wherever
+                        // the timer interrupted (likely the kernel idle loop or test code)
+                        logger::warn("[SCHED] No threads left after termination - returning to interrupted context");
+                        
+                        // Add terminated thread to zombie list
+                        let tid = curr_thread.id();
+                        let terminated_thread = current.take().unwrap();
+                        zombie_to_add = Some((tid, terminated_thread));
+                        
+                        // No context switch needed - will return normally
                         switch_needed = false;
                         old_ctx = core::ptr::null_mut();
                         new_ctx = core::ptr::null();
@@ -636,6 +645,10 @@ impl Scheduler {
             }
             unsafe {
                 windowed::switch(old_ctx, new_ctx);
+                // CRITICAL: Re-enable interrupts after context switch
+                // The switch only restores RSP + callee-saved regs, not RFLAGS
+                // Without this, timer interrupts stop after first switch!
+                core::arch::asm!("sti", options(nomem, nostack));
             }
             // We return here after being switched back!
         }
@@ -766,6 +779,11 @@ impl Scheduler {
     /// Get atomic statistics reference (lock-free access)
     pub fn atomic_stats(&self) -> &AtomicSchedulerStats {
         &self.atomic_stats
+    }
+
+    /// Get zombie count (for test synchronization)
+    pub fn zombie_count(&self) -> usize {
+        self.atomic_stats.zombie_count.load(Ordering::Relaxed)
     }
 
     /// Get thread state by ID (Phase 9: for wait4 zombie detection)
