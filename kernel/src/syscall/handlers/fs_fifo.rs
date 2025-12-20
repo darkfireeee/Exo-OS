@@ -2,8 +2,8 @@
 //!
 //! Implements `mkfifo`, `mknod`.
 
-// ⏸️ Phase 1b: use crate::fs::vfs::inode::InodeType;
-// ⏸️ Phase 1b: use crate::fs::FsError;
+use crate::fs::vfs::inode::InodeType;
+use crate::fs::FsError;
 use crate::posix_x::vfs_posix::path_resolver;
 
 /// Create a FIFO (named pipe)

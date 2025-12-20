@@ -6,8 +6,8 @@
 //! - Reference counting
 //! - Thread-safe access
 
-// ⏸️ Phase 1b: use crate::fs::vfs::inode::Inode;
-// ⏸️ Phase 1b: use crate::fs::{FsError, FsResult};
+use crate::fs::vfs::inode::Inode;  // ✅ Phase 1
+use crate::fs::{FsError, FsResult};  // ✅ Phase 1
 use alloc::sync::Arc;
 use spin::RwLock;
 use hashbrown::HashMap;

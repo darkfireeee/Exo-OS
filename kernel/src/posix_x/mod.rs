@@ -10,9 +10,9 @@ pub mod signals;
 // ⏸️ Phase 1b: pub mod syscalls;
 pub mod tools;
 pub mod translation;
-// ⏸️ Phase 1b: pub mod vfs_posix;
+pub mod vfs_posix;         // ✅ Phase 1: VFS POSIX adapter
 
 // Documentation files (not a module)
 // pub mod doc;
 // pub mod vfs;  // TODO: Not yet implemented
-// ⏸️ Phase 1b: pub use vfs_posix::{file_ops, VfsHandle};
+pub use vfs_posix::{file_ops, VfsHandle};  // ✅ Phase 1

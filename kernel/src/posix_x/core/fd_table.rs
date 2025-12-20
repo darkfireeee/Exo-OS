@@ -2,28 +2,11 @@
 //!
 //! Manages per-process file descriptor allocations
 
-// ⏸️ Phase 1b: use crate::posix_x::vfs_posix::VfsHandle;
+use crate::posix_x::vfs_posix::{VfsHandle, OpenFlags as VfsFlags};  // ✅ Phase 1
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::RwLock;
-
-// ⏸️ Phase 1b: Stub type until VFS is enabled
-pub struct VfsHandle;
-
-impl VfsHandle {
-    pub fn path(&self) -> &str {
-        "/dev/null"
-    }
-    pub fn flags(&self) -> VfsFlags {
-        VfsFlags { read: false, write: false }
-    }
-}
-
-pub struct VfsFlags {
-    pub read: bool,
-    pub write: bool,
-}
 
 /// FD table error type
 #[derive(Debug, Clone, Copy)]

@@ -503,18 +503,10 @@ fn display_timer_count(seconds: u64) {
 /// Handler pour Clavier (IRQ 1) - Phase 1 activé
 #[no_mangle]
 extern "C" fn keyboard_interrupt_handler(_stack_frame: &InterruptStackFrame) {
-    // Lire le scancode (obligatoire sinon le clavier se bloque)
-    let scancode: u8;
-    unsafe {
-        asm!("in al, 0x60", out("al") scancode, options(nomem, nostack));
-    }
+    // Call PS/2 keyboard driver to handle the interrupt
+    crate::arch::x86_64::drivers::ps2_keyboard::handle_irq();
     
-    // ✅ Phase 1: Driver keyboard activé
-    if let Some(c) = crate::drivers::input::keyboard::process_scancode(scancode) {
-        display_typed_char(c);
-    }
-    
-    // EOI au PIC Master via le wrapper
+    // Send EOI to PIC Master
     crate::arch::x86_64::pic_wrapper::send_eoi(1);  // IRQ 1 (Keyboard)
 }
 

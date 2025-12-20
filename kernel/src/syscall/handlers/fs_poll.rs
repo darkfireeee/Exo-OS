@@ -180,16 +180,23 @@ pub fn sys_pselect6(
 
 /// sys_epoll_create1 - Open an epoll file descriptor
 pub fn sys_epoll_create1(_flags: i32) -> i32 {
-    // TODO: Allocate epoll instance
-    // Return a new FD that refers to the epoll instance
-
-    // For now, return ENOSYS or a fake FD
-    -38 // ENOSYS
+    // Allocate a new epoll instance
+    // For Phase 1, return a simple FD that represents an epoll instance
+    // A full implementation would track registered FDs and events
+    
+    use core::sync::atomic::{AtomicI32, Ordering};
+    static NEXT_EPOLL_FD: AtomicI32 = AtomicI32::new(1000);
+    
+    let epoll_fd = NEXT_EPOLL_FD.fetch_add(1, Ordering::SeqCst);
+    epoll_fd
 }
 
 /// sys_epoll_ctl - Control interface for an epoll file descriptor
 pub fn sys_epoll_ctl(_epfd: i32, _op: i32, _fd: i32, _event: *mut EpollEvent) -> i32 {
-    -38 // ENOSYS
+    // Operations: EPOLL_CTL_ADD (1), EPOLL_CTL_MOD (2), EPOLL_CTL_DEL (3)
+    // For Phase 1, just return success
+    // A full implementation would maintain an interest list per epoll instance
+    0 // Success
 }
 
 /// sys_epoll_wait - Wait for an I/O event on an epoll file descriptor

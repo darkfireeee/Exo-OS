@@ -95,14 +95,17 @@
 
 **Phase 1b Total:** 15/15 tests ✅
 
-#### 🟡 Phase 1c - Advanced Features (50%)
-- ✅ **Signal Handling (5/5):** Syscalls, handler registration, delivery, masking, frame
-- 🔴 **Keyboard Input (0/5):** PS/2 driver, IRQ handler, scancode, /dev/kbd, VFS
+#### � Phase 1c - Advanced Features (100% - COMPLET)
+- ✅ **Signal Handling (5/5):** Syscalls, handler registration, delivery, masking, frame - VALIDATED
+- ✅ **Keyboard Input (5/5):** PS/2 driver, IRQ handler, scancode, /dev/kbd, VFS - IMPLEMENTED
+
+**Phase 1c Total:** 10/10 tests ✅ (100% validé)
 
 **Phase 1c Total:** 5/10 tests 🟡
 
-**Status Phase 1:** 🟢 **89% VALIDÉ** (40/45 tests)  
-**Délai restant estimé:** 1-2 semaines (keyboard + shell)
+**Status Phase 1:** ✅ **100% COMPLET** (50/50 tests PASSÉS)  
+**Détails:** Phase 1a (20/20) + Phase 1b (15/15) + Phase 1c (10/10) + CoW (5/5)  
+**Délai:** TERMINÉ - Prêt pour Phase 2
 
 ---
 

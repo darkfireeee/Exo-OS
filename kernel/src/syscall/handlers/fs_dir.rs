@@ -5,8 +5,8 @@
 //! - getcwd, chdir, fchdir
 //! - getdents64
 
-// ⏸️ Phase 1b: use crate::fs::vfs::inode::InodeType;
-// ⏸️ Phase 1b: use crate::fs::{FsError, FsResult};
+use crate::fs::vfs::inode::InodeType;
+use crate::fs::{FsError, FsResult};
 use crate::posix_x::core::process_state::current_process_state;
 use crate::posix_x::vfs_posix::{file_ops, path_resolver, VfsHandle};
 use crate::syscall::utils::{copy_to_user, read_user_string, write_user_type};

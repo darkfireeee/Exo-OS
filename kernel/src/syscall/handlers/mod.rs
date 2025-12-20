@@ -1,19 +1,18 @@
-//! System Call Handlers - Phase 1 Minimal
+//! System Call Handlers - Phase 1 Complete
 //!
-//! Phase 1: Only process + memory management syscalls
-//! Phase 1b: Will add VFS syscalls (fs_*, io, etc.)
-//! Phase 2: Will add IPC/network syscalls
+//! Phase 1: VFS, Process, Memory, Filesystem operations
+//! Phase 2: IPC/network syscalls
 
-// ⏸️ Phase 1b: pub mod fs_dir;
-// ⏸️ Phase 1b: pub mod fs_events;
-// ⏸️ Phase 1b: pub mod fs_fcntl;
-// ⏸️ Phase 1b: pub mod fs_fifo;
-// ⏸️ Phase 1b: pub mod fs_futex;
-// ⏸️ Phase 1b: pub mod fs_link;
-// ⏸️ Phase 1b: pub mod fs_ops;
-// ⏸️ Phase 1b: pub mod fs_poll;
-// ⏸️ Phase 1b: pub mod inotify;
-// ⏸️ Phase 1b: pub mod io;
+pub mod fs_dir;
+pub mod fs_events;
+pub mod fs_fcntl;
+pub mod fs_fifo;
+pub mod fs_futex;
+pub mod fs_link;
+pub mod fs_ops;
+pub mod fs_poll;
+pub mod inotify;
+pub mod io;
 // ⏸️ Phase 2: pub mod ipc;
 // ⏸️ Phase 2: pub mod ipc_sysv;
 pub mod memory;
@@ -27,14 +26,14 @@ pub mod sys_info;
 pub mod time;
 
 // Re-export commonly used types
-// ⏸️ Phase 1b: pub use io::{Fd, FileFlags, FileStat};
+pub use io::{Fd, FileFlags, FileStat};
 // ⏸️ Phase 2: pub use ipc::IpcHandle;
 
 /// Initialize all syscall handlers
 pub fn init() {
-    use crate::syscall::dispatch::{register_syscall, syscall_numbers::*};
+    use crate::syscall::dispatch::{register_syscall, syscall_numbers::*, SyscallError};
     
-    log::info!("[Phase 1b] Registering syscall handlers...");
+    log::info!("[Phase 1] Registering syscall handlers...");
     
     // Process management syscalls
     let _ = register_syscall(SYS_FORK, |_args| {
@@ -91,7 +90,130 @@ pub fn init() {
     
     log::info!("  ✅ Process management: fork, exec, wait");
     log::info!("  ✅ Memory management: brk, mmap, munmap");
-    log::info!("  ⏸️  VFS syscalls: Phase 1b");
+    
+    // VFS I/O syscalls
+    log::info!("  [VFS] Registering I/O syscalls...");
+    
+    let _ = register_syscall(SYS_OPEN, |args| {
+        use crate::syscall::utils::read_user_string;
+        
+        let path_ptr = args[0] as *const i8;
+        let flags_raw = args[1] as u32;
+        let mode = args[2] as u32;
+        
+        let path = unsafe {
+            match read_user_string(path_ptr) {
+                Ok(p) => p,
+                Err(_) => return Err(SyscallError::InvalidArgument),
+            }
+        };
+        
+        // Convert flags
+        let flags = io::FileFlags {
+            read: (flags_raw & 3) == 0 || (flags_raw & 2) != 0, // O_RDONLY or O_RDWR
+            write: (flags_raw & 3) != 0, // O_WRONLY or O_RDWR
+            append: (flags_raw & 0o2000) != 0,
+            create: (flags_raw & 0o100) != 0,
+            truncate: (flags_raw & 0o1000) != 0,
+            nonblock: (flags_raw & 0o4000) != 0,
+        };
+        
+        match io::sys_open(&path, flags, mode) {
+            Ok(fd) => Ok(fd as u64),
+            Err(e) => Err(memory_err_to_syscall_err(e)),
+        }
+    });
+    
+    let _ = register_syscall(SYS_CLOSE, |args| {
+        let fd = args[0] as i32;
+        match io::sys_close(fd) {
+            Ok(_) => Ok(0),
+            Err(e) => Err(memory_err_to_syscall_err(e)),
+        }
+    });
+    
+    let _ = register_syscall(SYS_READ, |args| {
+        let fd = args[0] as i32;
+        let buf_ptr = args[1] as *mut u8;
+        let count = args[2] as usize;
+        
+        let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, count) };
+        
+        match io::sys_read(fd, buf) {
+            Ok(n) => Ok(n as u64),
+            Err(e) => Err(memory_err_to_syscall_err(e)),
+        }
+    });
+    
+    let _ = register_syscall(SYS_WRITE, |args| {
+        let fd = args[0] as i32;
+        let buf_ptr = args[1] as *const u8;
+        let count = args[2] as usize;
+        
+        let buf = unsafe { core::slice::from_raw_parts(buf_ptr, count) };
+        
+        match io::sys_write(fd, buf) {
+            Ok(n) => Ok(n as u64),
+            Err(e) => Err(memory_err_to_syscall_err(e)),
+        }
+    });
+    
+    let _ = register_syscall(SYS_LSEEK, |args| {
+        use io::SeekWhence;
+        
+        let fd = args[0] as i32;
+        let offset = args[1] as i64;
+        let whence = args[2] as i32;
+        
+        let seek_whence = match whence {
+            0 => SeekWhence::Start,
+            1 => SeekWhence::Current,
+            2 => SeekWhence::End,
+            _ => return Err(SyscallError::InvalidArgument),
+        };
+        
+        match io::sys_seek(fd, offset, seek_whence) {
+            Ok(new_offset) => Ok(new_offset as u64),
+            Err(e) => Err(memory_err_to_syscall_err(e)),
+        }
+    });
+    
+    let _ = register_syscall(SYS_STAT, |args| {
+        use crate::syscall::utils::read_user_string;
+        
+        let path_ptr = args[0] as *const i8;
+        let stat_ptr = args[1] as *mut io::FileStat;
+        
+        let path = unsafe {
+            match read_user_string(path_ptr) {
+                Ok(p) => p,
+                Err(_) => return Err(SyscallError::InvalidArgument),
+            }
+        };
+        
+        match io::sys_stat(&path) {
+            Ok(stat) => {
+                unsafe { *stat_ptr = stat; }
+                Ok(0)
+            }
+            Err(e) => Err(memory_err_to_syscall_err(e)),
+        }
+    });
+    
+    let _ = register_syscall(SYS_FSTAT, |args| {
+        let fd = args[0] as i32;
+        let stat_ptr = args[1] as *mut io::FileStat;
+        
+        match io::sys_fstat(fd) {
+            Ok(stat) => {
+                unsafe { *stat_ptr = stat; }
+                Ok(0)
+            }
+            Err(e) => Err(memory_err_to_syscall_err(e)),
+        }
+    });
+    
+    log::info!("  ✅ VFS I/O: open, read, write, close, lseek, stat, fstat");
     log::info!("  ⏸️  IPC/Network: Phase 2+");
 }
 

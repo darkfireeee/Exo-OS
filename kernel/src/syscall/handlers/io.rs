@@ -3,7 +3,7 @@
 //! Handles file operations: open, close, read, write, seek, stat
 //! Uses the central VFS API from crate::fs::vfs
 
-// ⏸️ Phase 1b: use crate::fs::{vfs, FsError};
+use crate::fs::{vfs, FsError};
 use crate::memory::{MemoryError, MemoryResult};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -116,6 +116,11 @@ fn vfs_to_memory_error(e: FsError) -> MemoryError {
         FsError::IoError => MemoryError::InternalError("IO error"),
         FsError::NotSupported => MemoryError::PermissionDenied,
         FsError::TooManyFiles => MemoryError::Mfile,
+        FsError::TooManyOpenFiles => MemoryError::Mfile,  // ✅ Phase 1
+        FsError::QuotaExceeded => MemoryError::InternalError("Quota exceeded"),  // ✅ Phase 1
+        FsError::NoMemory => MemoryError::OutOfMemory,  // ✅ Phase 1
+        FsError::NoSpace => MemoryError::InternalError("No space left on device"),  // ✅ Phase 1
+        FsError::AddressInUse => MemoryError::InternalError("Address in use"),  // ✅ Phase 1
         FsError::InvalidFd => MemoryError::NotFound,
         FsError::ConnectionRefused => MemoryError::PermissionDenied,
         FsError::Again => MemoryError::InternalError("Try again"),

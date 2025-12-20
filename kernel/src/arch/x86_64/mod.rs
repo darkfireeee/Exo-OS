@@ -11,6 +11,7 @@ pub mod acpi;
 pub mod boot;
 pub mod context;
 pub mod cpu;
+pub mod drivers; // Hardware drivers (PS/2 keyboard, etc.)
 pub mod gdt;
 pub mod handlers;
 pub mod idt;

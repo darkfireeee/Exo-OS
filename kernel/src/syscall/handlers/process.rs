@@ -275,10 +275,7 @@ pub fn sys_fork() -> MemoryResult<Pid> {
 
 /// Load executable file from filesystem
 /// Uses VFS read_file for actual file reading
-fn load_executable_file(_path: &str) -> Result<Vec<u8>, &'static str> {
-    // ⏸️ Phase 1b: VFS not loaded
-    Err("VFS not loaded in Phase 1 minimal")
-    /* Phase 1b implementation:
+fn load_executable_file(path: &str) -> Result<Vec<u8>, &'static str> {
     // Use VFS to read the file
     match crate::fs::vfs::read_file(path) {
         Ok(data) => {
@@ -290,7 +287,6 @@ fn load_executable_file(_path: &str) -> Result<Vec<u8>, &'static str> {
             Err("Failed to read executable file")
         }
     }
-    */
 }
 
 /// Execute program (full implementation)
@@ -622,7 +618,7 @@ pub fn sys_exit(code: ExitCode) -> ! {
         }
     }
     
-    // 7. Set thread state and yield
+    // 7. Set thread state to Terminated
     SCHEDULER.with_current_thread(|thread| {
         thread.set_exit_status(code);
         thread.set_state(ThreadState::Terminated);
@@ -630,10 +626,18 @@ pub fn sys_exit(code: ExitCode) -> ! {
     
     log::info!("Process {} exiting with code {} (zombie state)", current_pid, code);
 
-    // 8. Yield forever (thread is now zombie, scheduler won't run it again)
+    // 8. Switch to scheduler and never return
+    // Disabled interrupts ensure we don't get preempted mid-cleanup
+    crate::arch::x86_64::disable_interrupts();
+    
+    // Call schedule() directly - it will never return to this terminated thread
+    crate::scheduler::SCHEDULER.schedule();
+    
+    // Fallback halt (should never be reached if scheduler works correctly)
     loop {
-        crate::scheduler::yield_now();
-        unsafe { core::arch::asm!("pause") };
+        unsafe { 
+            core::arch::asm!("hlt", options(nomem, nostack));
+        }
     }
 }
 

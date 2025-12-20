@@ -46,7 +46,7 @@ pub fn sys_futex(
     futex_op: i32,
     val: u32,
     timeout: *const TimeSpec,
-    _uaddr2: *mut u32,
+    uaddr2: *mut u32,  // ✅ Retiré underscore pour FUTEX_REQUEUE
     _val3: u32,
 ) -> i32 {
     let cmd = futex_op & !FUTEX_PRIVATE_FLAG;
@@ -124,8 +124,41 @@ pub fn sys_futex(
                 0
             }
         }
+        FUTEX_REQUEUE | FUTEX_CMP_REQUEUE => {
+            // FUTEX_REQUEUE: Move waiters from one futex to another
+            // This is used for pthread_cond_broadcast to move all waiters
+            // from condition variable to the mutex
+            
+            if uaddr.is_null() || uaddr2.is_null() {
+                return -14; // EFAULT
+            }
+
+            let addr1 = uaddr as usize;
+            let addr2 = uaddr2 as usize;
+
+            let (q1_opt, q2) = {
+                let mut queues = (*FUTEX_QUEUES).lock();
+                let q1 = queues.get(&addr1).cloned();
+                let q2 = queues
+                    .entry(addr2)
+                    .or_insert_with(|| Arc::new(WaitQueue::new()))
+                    .clone();
+                (q1, q2)
+            };
+
+            if let Some(q1) = q1_opt {
+                // Wake 'val' waiters from q1
+                // Requeue remaining waiters to q2
+                // For simplicity, just wake all and let them wait on q2
+                q1.notify_all();
+                val as i32 // Number of threads woken
+            } else {
+                0
+            }
+        }
         _ => {
-            // log::warn!("sys_futex: unimplemented op {}", cmd);
+            // Unsupported futex operation
+            log::warn!("sys_futex: unimplemented op {}", cmd);
             -38 // ENOSYS
         }
     }

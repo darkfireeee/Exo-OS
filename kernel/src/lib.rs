@@ -38,15 +38,15 @@ pub mod time;           // ✅ Phase 0: PIT timer
 // ═══════════════════════════════════════════════════════════
 pub mod syscall;        // ✅ Phase 1: Syscall infrastructure
 pub mod posix_x;        // ✅ Phase 1: POSIX compatibility layer
-pub mod fs;             // 🔄 Phase 1c: VFS activation in progress
-pub mod tests;          // ✅ Phase 1c: Tests (keyboard + process)
+pub mod fs;             // ✅ Phase 1: VFS complete
+pub mod tests;          // ✅ Phase 1: Tests (keyboard + process)
 
 // ═══════════════════════════════════════════════════════════
-//  PHASE 1b - À activer après correction fs
+//  PHASE 1 - Userspace Support
 // ═══════════════════════════════════════════════════════════
-// pub mod loader;      // ⏸️ Phase 1b: ELF loader
-// pub mod shell;       // ⏸️ Phase 1b: Interactive shell
-// pub mod ffi;         // ⏸️ Phase 1b: FFI userland
+pub mod loader;         // ✅ Phase 1: ELF loader
+// pub mod shell;       // ⏸️ Phase 1c: Interactive shell (optional)
+// pub mod ffi;         // ⏸️ Phase 1c: FFI userland (optional)
 
 // ═══════════════════════════════════════════════════════════
 //  DRIVERS - Phase 0 minimal + Phase 1 input
@@ -422,7 +422,7 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             logger::early_print("[KERNEL]   PHASE 0 BENCHMARK - Context Switch\n");
             logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
             
-            // Exécuter benchmark context switch (Phase 0 validation)
+            // Exécuter benchmark context switch simple (Phase 0 validation)
             let (avg, min, max) = scheduler::run_context_switch_benchmark();
             
             // Sauvegarder dans les stats globales
