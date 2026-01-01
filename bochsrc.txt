@@ -1,0 +1,35 @@
+# Configuration Bochs pour Exo-OS SMP Testing
+# 4 CPUs, 128MB RAM, boot depuis ISO
+
+# === CPU Configuration ===
+cpu: count=4, ips=100000000, reset_on_triple_fault=0, ignore_bad_msrs=1
+
+# === Memory ===
+memory: guest=128, host=128
+
+# === Boot Media ===
+ata0-master: type=cdrom, path="build/exo_os.iso", status=inserted
+boot: cdrom
+
+# === Display ===
+display_library: term
+vga: extension=vbe, update_freq=10
+
+# === Logging ===
+log: /tmp/bochs.log
+debugger_log: /tmp/bochs_debug.log
+panic: action=report
+error: action=report
+info: action=report
+debug: action=ignore
+
+# === Port 0xE9 Hack (Debug Console) ===
+port_e9_hack: enabled=1
+
+# === Keyboard/Mouse ===
+keyboard: type=mf, serial_delay=200, paste_delay=100000
+mouse: enabled=0
+
+# === Other ===
+clock: sync=realtime
+magic_break: enabled=0

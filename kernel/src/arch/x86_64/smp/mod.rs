@@ -199,84 +199,205 @@ impl SmpSystem {
 pub static SMP_SYSTEM: SmpSystem = SmpSystem::new();
 
 /// AP startup function (called from trampoline.asm)
+/// 
+/// This function is called after the AP completes its bootstrap sequence:
+/// - 16-bit real mode → 32-bit protected mode → 64-bit long mode
+/// - FPU/SSE/AVX initialized
+/// - Paging enabled with BSP's page tables
+/// 
+/// Safety: Must be called exactly once per AP, only from trampoline code
 #[no_mangle]
 pub extern "C" fn ap_startup(cpu_id: u64) -> ! {
     use crate::arch::x86_64::{interrupts, idt, percpu};
     
-    log::info!("AP {} starting...", cpu_id);
+    // === STAGE 1: Early initialization (no logging yet) ===
     
-    // 1. Initialize Local APIC for this CPU
-    if let Some(local_apic) = interrupts::apic::LOCAL_APIC.get() {
+    // Verify CPU ID is valid
+    if cpu_id as usize >= MAX_CPUS {
+        // Invalid CPU ID - hang this processor
+        unsafe {
+            loop {
+                core::arch::asm!("cli; hlt");
+            }
+        }
+    }
+    
+    // === STAGE 2: Initialize critical CPU features ===
+    
+    // Double-check FPU/SSE are enabled (redundant but safe)
+    unsafe {
+        let mut cr0: u64;
+        core::arch::asm!("mov {}, cr0", out(reg) cr0);
+        cr0 &= !(1 << 2); // Clear EM
+        cr0 |= 1 << 1;    // Set MP
+        core::arch::asm!("mov cr0, {}", in(reg) cr0);
+        
+        let mut cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4);
+        cr4 |= (1 << 9) | (1 << 10); // OSFXSR | OSXMMEXCPT
+        
+        // Enable OSXSAVE for AVX if supported
+        let cpuid = core::arch::x86_64::__cpuid(1);
+        if (cpuid.ecx & (1 << 26)) != 0 { // XSAVE supported
+            cr4 |= 1 << 18; // Set CR4.OSXSAVE
+        }
+        core::arch::asm!("mov cr4, {}", in(reg) cr4);
+        
+        // Initialize XCR0 for AVX if OSXSAVE is set
+        if (cr4 & (1 << 18)) != 0 {
+            core::arch::asm!(
+                "xor ecx, ecx",      // XCR0 register
+                "mov eax, 0x7",      // X87 | SSE | AVX
+                "xor edx, edx",      // High 32 bits = 0
+                "xsetbv",            // Set XCR0
+                out("eax") _,
+                out("edx") _,
+                out("ecx") _,
+            );
+        }
+    }
+    
+    // === STAGE 3: Logging now safe ===
+    log::info!("[AP {}] Starting bootstrap sequence...", cpu_id);
+    
+    // === STAGE 4: Initialize Local APIC ===
+    let apic_id = if let Some(local_apic) = interrupts::apic::LOCAL_APIC.get() {
         let mut apic = local_apic.lock();
         apic.init();
-        let apic_id = apic.get_id();
+        let id = apic.get_id();
         
-        // Find this CPU in SMP_SYSTEM and update it
+        // Find this CPU in SMP_SYSTEM and update state
         for i in 0..MAX_CPUS {
             if let Some(cpu) = SMP_SYSTEM.cpu(i) {
-                if cpu.apic_id.load(Ordering::Acquire) == apic_id as u8 {
+                if cpu.apic_id.load(Ordering::Acquire) == id as u8 {
                     cpu.set_state(CpuState::Initializing);
+                    cpu.apic_base.store(0xFEE00000, Ordering::Release);
+                    log::debug!("[AP {}] Found in SMP table at index {}", cpu_id, i);
                     break;
                 }
             }
         }
         
-        log::debug!("AP {}: APIC ID {} initialized", cpu_id, apic_id);
+        log::info!("[AP {}] APIC initialized (APIC ID: {})", cpu_id, id);
+        id
+    } else {
+        log::error!("[AP {}] Failed to get LOCAL_APIC - hanging", cpu_id);
+        unsafe {
+            loop {
+                core::arch::asm!("cli; hlt");
+            }
+        }
+    };
+    
+    // === STAGE 5: Load IDT (use existing IDT from BSP) ===
+    log::info!("[AP {}] Loading IDT...", cpu_id);
+    unsafe {
+        let (idt_base, idt_limit) = crate::arch::x86_64::idt::get_idt_info();
+        
+        // Create IDTR structure
+        #[repr(C, packed)]
+        struct IdtPointer {
+            limit: u16,
+            base: u64,
+        }
+        
+        let idtr = IdtPointer {
+            limit: idt_limit,
+            base: idt_base,
+        };
+        
+        // Load IDT
+        core::arch::asm!("lidt [{0}]", in(reg) &idtr, options(readonly, nostack, preserves_flags));
+        
+        log::info!("[AP {}] IDT loaded: base={:#x}, limit={}", cpu_id, idt_base, idt_limit);
     }
     
-    // 2. Load IDT (use same IDT as BSP)
-    // IDT already loaded by BSP during early_init
-    log::debug!("AP {}: Using BSP IDT", cpu_id);
-    
-    // 3. Setup per-CPU data
+    // === STAGE 6: Setup per-CPU data structures ===
     percpu::init(cpu_id as u32);
-    log::debug!("AP {}: Per-CPU data initialized", cpu_id);
+    log::debug!("[AP {}] Per-CPU data initialized", cpu_id);
     
-    // 4. Mark CPU as online
+    // === STAGE 7: Configure APIC Timer for this CPU ===
+    interrupts::apic::setup_timer(32); // Timer interrupt vector
+    log::debug!("[AP {}] APIC Timer configured", cpu_id);
+    
+    // === STAGE 8: Mark CPU as online ===
     if let Some(cpu) = SMP_SYSTEM.cpu(cpu_id as usize) {
         cpu.set_state(CpuState::Online);
+        cpu.context_switches.store(0, Ordering::Release);
+        cpu.idle_time_ns.store(0, Ordering::Release);
+        cpu.busy_time_ns.store(0, Ordering::Release);
     }
-    SMP_SYSTEM.online_count.fetch_add(1, Ordering::Release);
     
-    log::info!("AP {} online!", cpu_id);
+    let online_count = SMP_SYSTEM.online_count.fetch_add(1, Ordering::AcqRel) + 1;
+    log::info!("✅ [AP {}] Online! ({} CPUs now active)", cpu_id, online_count);
     
-    // 5. Enable interrupts
+    // === STAGE 9: Enable interrupts ===
     unsafe {
         core::arch::asm!("sti");
     }
+    log::debug!("[AP {}] Interrupts enabled", cpu_id);
     
-    // 6. Enter idle loop (pick tasks from scheduler when implemented)
+    // === STAGE 10: Enter idle loop ===
+    // In production, this would call the scheduler to pick threads
+    log::debug!("[AP {}] Entering idle loop", cpu_id);
+    
     loop {
-        // TODO: Call scheduler to pick next thread
-        // if let Some(thread) = SCHEDULER.pick_next_thread(cpu_id as usize) {
-        //     SCHEDULER.switch_to(thread);
-        // } else {
+        // TODO: Integrate with scheduler when ready
+        // let thread = crate::scheduler::pick_next_thread(cpu_id as usize);
+        // if let Some(thread) = thread {
+        //     crate::scheduler::switch_to(thread);
+        // }
+        
+        // For now, just HLT until next interrupt
         unsafe {
             core::arch::asm!("hlt");
         }
-        // }
+        
+        // Update idle time statistics
+        if let Some(cpu) = SMP_SYSTEM.cpu(cpu_id as usize) {
+            cpu.idle_time_ns.fetch_add(1000000, Ordering::Relaxed); // ~1ms per HLT
+        }
     }
 }
 
 /// Bootstrap Application Processors using already-parsed ACPI info
 ///
-/// This version is called when ACPI/APIC have already been initialized.
-/// It only performs the AP startup sequence without re-initializing ACPI.
-pub fn bootstrap_aps(acpi_info: &crate::arch::x86_64::acpi::AcpiInfo) -> Result<(), &'static str> {
+/// This function orchestrates the entire AP boot sequence:
+/// 1. Parse MADT for CPU topology
+/// 2. Setup trampoline code and data structures
+/// 3. Send INIT-SIPI-SIPI sequence to each AP
+/// 4. Wait for APs to come online
+/// 5. Handle errors and timeouts gracefully
+///
+/// Returns: Ok(number_of_online_CPUs) or Err(description)
+pub fn bootstrap_aps(acpi_info: &crate::arch::x86_64::acpi::AcpiInfo) -> Result<usize, &'static str> {
     use crate::arch::x86_64::interrupts::ipi;
     use crate::arch::x86_64::acpi::madt;
     
-    log::info!("Bootstrapping Application Processors...");
+    log::info!("═══════════════════════════════════════");
+    log::info!("  SMP Bootstrap Sequence");
+    log::info!("═══════════════════════════════════════");
     
-    // Parse MADT to get CPU details
-    let madt_info = madt::parse_madt()?;
+    // === PHASE 1: Detect CPUs from MADT ===
+    let madt_info = madt::parse_madt().map_err(|e| {
+        log::error!("Failed to parse MADT: {}", e);
+        e
+    })?;
     
     let cpu_count = madt_info.cpu_count;
-    SMP_SYSTEM.cpu_count.store(cpu_count, Ordering::Release);
+    if cpu_count == 0 {
+        return Err("No CPUs detected in MADT");
+    }
+    if cpu_count > MAX_CPUS {
+        log::warn!("MADT reports {} CPUs, but MAX_CPUS is {}", cpu_count, MAX_CPUS);
+    }
     
-    log::info!("Detected {} CPUs from MADT", cpu_count);
+    SMP_SYSTEM.cpu_count.store(cpu_count.min(MAX_CPUS), Ordering::Release);
     
-    // Setup CPUs in SMP_SYSTEM
+    log::info!("✓ Detected {} CPUs from MADT", cpu_count);
+    log::info!("  Local APIC base: {:#x}", madt_info.local_apic_address);
+    
+    // === PHASE 2: Initialize CPU table ===
     for (i, &apic_id) in madt_info.apic_ids.iter().enumerate() {
         if i >= MAX_CPUS {
             break;
@@ -285,91 +406,129 @@ pub fn bootstrap_aps(acpi_info: &crate::arch::x86_64::acpi::AcpiInfo) -> Result<
         let cpu = &SMP_SYSTEM.cpus[i];
         cpu.apic_id.store(apic_id as u8, Ordering::Release);
         cpu.apic_base.store(madt_info.local_apic_address as usize, Ordering::Release);
+        
+        log::debug!("  CPU {}: APIC ID {}", i, apic_id);
     }
     
-    // Detect BSP (Bootstrap Processor) - always first CPU
+    // === PHASE 3: Identify BSP (Bootstrap Processor) ===
     let bsp_apic_id = madt_info.apic_ids[0];
     SMP_SYSTEM.cpus[0].set_state(CpuState::Online);
     SMP_SYSTEM.cpus[0].is_bsp.store(true, Ordering::Release);
     SMP_SYSTEM.bsp_id.store(0, Ordering::Release);
     SMP_SYSTEM.online_count.store(1, Ordering::Release);
     
-    log::info!("BSP APIC ID: {}", bsp_apic_id);
+    log::info!("✓ BSP identified: CPU 0 (APIC ID {})", bsp_apic_id);
     
-    // Bootstrap APs (Application Processors) - skip BSP (index 0)
-    for i in 1..cpu_count {
-        if i >= MAX_CPUS {
-            break;
-        }
-        
+    if cpu_count == 1 {
+        log::info!("Single-CPU system, SMP bootstrap complete");
+        return Ok(1);
+    }
+    
+    // === PHASE 4: Bootstrap APs ===
+    log::info!("Starting {} Application Processors...", cpu_count - 1);
+    
+    let mut successful_boots = 0;
+    let mut failed_boots = 0;
+    
+    for i in 1..cpu_count.min(MAX_CPUS) {
         let apic_id = madt_info.apic_ids[i];
         
+        log::info!("─────────────────────────────────────");
         log::info!("Booting AP {} (APIC ID {})...", i, apic_id);
         
-        // Allocate stack for AP
-        let stack_top = bootstrap::allocate_ap_stack(i)?;
+        // Try to boot this AP with retry logic
+        let result = boot_single_ap(i, apic_id);
         
-        // Setup trampoline
-        let vector = bootstrap::setup_trampoline(i, stack_top, ap_startup as u64)?;
+        match result {
+            Ok(()) => {
+                successful_boots += 1;
+                log::info!("✅ AP {} online!", i);
+            }
+            Err(e) => {
+                failed_boots += 1;
+                log::error!("❌ AP {} failed: {}", i, e);
+                SMP_SYSTEM.cpus[i].set_state(CpuState::Error);
+            }
+        }
+    }
+    
+    // === PHASE 5: Summary ===
+    log::info!("═══════════════════════════════════════");
+    log::info!("  SMP Bootstrap Complete");
+    log::info!("═══════════════════════════════════════");
+    log::info!("  Total CPUs:    {}", cpu_count);
+    log::info!("  Online:        {}", successful_boots + 1); // +1 for BSP
+    log::info!("  Failed:        {}", failed_boots);
+    log::info!("═══════════════════════════════════════");
+    
+    if failed_boots > 0 {
+        log::warn!("⚠️  {} AP(s) failed to start - continuing with {} CPU(s)", 
+                   failed_boots, successful_boots + 1);
+    }
+    
+    Ok(successful_boots + 1)
+}
+
+/// Boot a single AP with retry logic and timeout
+fn boot_single_ap(cpu_id: usize, apic_id: u32) -> Result<(), &'static str> {
+    use crate::arch::x86_64::interrupts::ipi;
+    
+    const MAX_RETRIES: usize = 2;
+    const BOOT_TIMEOUT_MS: u64 = 2000; // 2 seconds per attempt
+    
+    for attempt in 0..MAX_RETRIES {
+        if attempt > 0 {
+            log::info!("  Retry {}/{} for AP {}...", attempt, MAX_RETRIES - 1, cpu_id);
+        }
         
-        log::info!("✓ Trampoline setup OK, vector={:#x}. Sending INIT IPI to APIC {}...", vector, apic_id);
+        // === Step 1: Allocate resources ===
+        let stack_top = bootstrap::allocate_ap_stack(cpu_id)
+            .map_err(|_| "Failed to allocate stack")?;
         
-        // Send INIT IPI to reset AP
-        ipi::send_init_ipi(apic_id);
+        // === Step 2: Setup trampoline ===
+        let vector = bootstrap::setup_trampoline(cpu_id, stack_top, ap_startup as u64)
+            .map_err(|_| "Failed to setup trampoline")?;
         
-        log::info!("✓ INIT IPI sent to APIC {}", apic_id);
+        log::debug!("  Trampoline: vector={:#x}, stack={:#x}", vector, stack_top);
         
-        log::info!("DEBUG: Calling sleep_ms(10)...");
+        // === Step 3: Send INIT IPI ===
+        ipi::send_init_ipi(apic_id)
+            .map_err(|_| "INIT IPI failed")?;
+        log::debug!("  INIT IPI sent");
         
-        // Wait 10ms (INIT de-assert delay)
+        // === Step 4: Wait INIT de-assert delay (10ms per Intel spec) ===
         crate::arch::x86_64::pit::sleep_ms(10);
         
-        log::info!("DEBUG: sleep_ms(10) completed, sending 1st SIPI...");
+        // === Step 5: Send 1st SIPI ===
+        ipi::send_startup_ipi(apic_id, vector)
+            .map_err(|_| "1st SIPI failed")?;
+        log::debug!("  1st SIPI sent");
         
-        // Send SIPI (Startup IPI) with trampoline vector
-        ipi::send_startup_ipi(apic_id, vector);
+        // === Step 6: Wait 200us (Intel spec minimum) ===
+        crate::arch::x86_64::pit::sleep_us(200);
         
-        log::info!("DEBUG: 1st SIPI sent, waiting 1 second...");
+        // === Step 7: Send 2nd SIPI ===
+        ipi::send_startup_ipi(apic_id, vector)
+            .map_err(|_| "2nd SIPI failed")?;
+        log::debug!("  2nd SIPI sent");
         
-        // Wait 1 second before sending 2nd SIPI (debug: eliminate timing as factor)
-        crate::arch::x86_64::pit::sleep_ms(1000);
+        // === Step 8: Wait for AP to come online ===
+        let wait_step_ms = 10;
+        let max_iterations = BOOT_TIMEOUT_MS / wait_step_ms;
         
-        log::info!("DEBUG: Sending 2nd SIPI after 1s delay...");
-        
-        // Send 2nd SIPI
-        ipi::send_startup_ipi(apic_id, vector);
-        
-        log::info!("DEBUG: Both SIPIs sent, waiting for AP to come online...");
-        
-        // Wait for AP to come online (timeout after 1 second)
-        let mut timeout = 100; // 100 * 10ms = 1 second
-        while timeout > 0 {
-            if SMP_SYSTEM.cpus[i].is_online() {
-                log::info!("✓ AP {} online!", i);
-                break;
+        for iteration in 0..max_iterations {
+            if SMP_SYSTEM.cpus[cpu_id].is_online() {
+                log::debug!("  AP online after {}ms", iteration * wait_step_ms);
+                return Ok(());
             }
-            crate::arch::x86_64::pit::sleep_ms(10);
-            timeout -= 1;
+            crate::arch::x86_64::pit::sleep_ms(wait_step_ms);
         }
         
-        if timeout == 0 {
-            log::error!("✗ AP {} failed to start (timeout)", i);
-            SMP_SYSTEM.cpus[i].set_state(CpuState::Error);
-        }
+        // Timeout on this attempt
+        log::warn!("  Attempt {} timed out after {}ms", attempt + 1, BOOT_TIMEOUT_MS);
     }
     
-    let online_count = SMP_SYSTEM.online_count.load(Ordering::Acquire);
-    log::info!("SMP initialized: {} / {} CPUs online", online_count, cpu_count);
-    
-    // Réactiver les interruptions après le bootstrap
-    unsafe { 
-        core::arch::asm!("sti", options(nomem, nostack)); 
-        log::info!("STI: Interrupts re-enabled after AP bootstrap");
-    }
-    
-    SMP_SYSTEM.initialized.store(true, Ordering::Release);
-    
-    Ok(())
+    Err("All boot attempts failed")
 }
 
 /// Initialize SMP (Phase 2 - Full Implementation)

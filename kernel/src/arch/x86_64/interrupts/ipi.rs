@@ -96,8 +96,10 @@ fn use_xapic_mode() -> bool {
 ///
 /// INIT IPI resets the target CPU to its initial state (real mode, CS=F000h, IP=FFF0h).
 /// This is the first step in AP (Application Processor) startup.
-pub fn send_init_ipi(apic_id: u32) {
-    log::info!("[IPI] send_init_ipi() ENTERED for APIC {}", apic_id);
+///
+/// Returns: Ok(()) if IPI was sent and delivery confirmed, Err(_) on failure
+pub fn send_init_ipi(apic_id: u32) -> Result<(), &'static str> {
+    log::debug!("[IPI] Sending INIT to APIC {}", apic_id);
     
     unsafe {
         let icr_low = DELIVERY_MODE_INIT
@@ -106,20 +108,21 @@ pub fn send_init_ipi(apic_id: u32) {
             | DEST_SHORTHAND_NONE;
         
         if use_xapic_mode() {
-            log::info!("[IPI] Using xAPIC (MMIO) mode");
-            log::info!("[IPI] Writing ICR_HIGH = {:#010x} (dest = {})", apic_id << 24, apic_id);
-            write_xapic_reg(XAPIC_ICR_HIGH, apic_id << 24);  // Destination in bits 24-31
-            
-            log::info!("[IPI] Writing ICR_LOW = {:#010x}", icr_low as u32);
+            write_xapic_reg(XAPIC_ICR_HIGH, apic_id << 24);
             write_xapic_reg(XAPIC_ICR_LOW, icr_low as u32);
+            
+            // Wait for delivery
+            wait_for_delivery_xapic()?;
         } else {
             let icr_value = icr_low | ((apic_id as u64) << 32);
-            log::info!("[IPI] Using x2APIC (MSR) mode");
-            log::info!("[IPI] Writing ICR value {:#018x} to MSR {:#x}", icr_value, X2APIC_ICR);
             wrmsr(X2APIC_ICR, icr_value);
+            
+            // Wait for delivery
+            wait_for_delivery_x2apic()?;
         }
         
-        log::info!("[IPI] INIT IPI sent successfully");
+        log::debug!("[IPI] INIT sent to APIC {}", apic_id);
+        Ok(())
     }
 }
 
@@ -127,8 +130,10 @@ pub fn send_init_ipi(apic_id: u32) {
 ///
 /// SIPI starts the target CPU executing at physical address (vector * 4096).
 /// The vector is typically 0x08 for address 0x8000.
-pub fn send_startup_ipi(apic_id: u32, vector: u8) {
-    log::info!("[IPI] send_startup_ipi() ENTERED for APIC {}, vector {:#x}", apic_id, vector);
+///
+/// Returns: Ok(()) if IPI was sent and delivery confirmed, Err(_) on failure
+pub fn send_startup_ipi(apic_id: u32, vector: u8) -> Result<(), &'static str> {
+    log::debug!("[IPI] Sending SIPI to APIC {} (vector={:#x})", apic_id, vector);
     
     unsafe {
         let icr_low = (vector as u64)
@@ -137,21 +142,52 @@ pub fn send_startup_ipi(apic_id: u32, vector: u8) {
             | DEST_SHORTHAND_NONE;
         
         if use_xapic_mode() {
-            log::info!("[IPI] Using xAPIC (MMIO) mode for SIPI");
-            log::info!("[IPI] Writing ICR_HIGH = {:#010x} (dest = {})", apic_id << 24, apic_id);
             write_xapic_reg(XAPIC_ICR_HIGH, apic_id << 24);
-            
-            log::info!("[IPI] Writing ICR_LOW = {:#010x} (vector={:#x}, addr={:#x})", icr_low as u32, vector, (vector as u32) * 0x1000);
             write_xapic_reg(XAPIC_ICR_LOW, icr_low as u32);
+            
+            // Wait for delivery
+            wait_for_delivery_xapic()?;
         } else {
             let icr_value = icr_low | ((apic_id as u64) << 32);
-            log::info!("[IPI] Using x2APIC (MSR) mode for SIPI");
-            log::info!("[IPI] Writing SIPI ICR value {:#018x} to MSR {:#x}", icr_value, X2APIC_ICR);
             wrmsr(X2APIC_ICR, icr_value);
+            
+            // Wait for delivery
+            wait_for_delivery_x2apic()?;
         }
         
-        log::info!("[IPI] SIPI sent successfully");
+        log::debug!("[IPI] SIPI sent to APIC {}", apic_id);
+        Ok(())
     }
+}
+
+/// Wait for IPI delivery completion (xAPIC mode)
+unsafe fn wait_for_delivery_xapic() -> Result<(), &'static str> {
+    const MAX_WAIT: usize = 10000; // ~10ms timeout
+    
+    for _ in 0..MAX_WAIT {
+        let icr_low = read_xapic_reg(XAPIC_ICR_LOW);
+        if (icr_low & (1 << 12)) == 0 { // Delivery Status bit
+            return Ok(());
+        }
+        core::hint::spin_loop();
+    }
+    
+    Err("IPI delivery timeout")
+}
+
+/// Wait for IPI delivery completion (x2APIC mode)
+unsafe fn wait_for_delivery_x2apic() -> Result<(), &'static str> {
+    const MAX_WAIT: usize = 10000; // ~10ms timeout
+    
+    for _ in 0..MAX_WAIT {
+        let icr = rdmsr(X2APIC_ICR);
+        if (icr & (1 << 12)) == 0 { // Delivery Status bit
+            return Ok(());
+        }
+        core::hint::spin_loop();
+    }
+    
+    Err("IPI delivery timeout")
 }
 
 /// Send a fixed IPI to a specific APIC ID
