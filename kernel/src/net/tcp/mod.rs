@@ -34,6 +34,8 @@ pub mod window;
 pub mod options;
 pub mod state;
 pub mod timer;
+#[cfg(test)]
+pub mod handshake_tests; // Phase 2d: TCP handshake validation
 
 // Re-exports
 pub use segment::{TcpSegment, ReassemblyBuffer, SendBuffer, RecvBuffer};

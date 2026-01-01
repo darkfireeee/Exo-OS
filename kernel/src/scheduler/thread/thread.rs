@@ -592,6 +592,18 @@ impl Thread {
             crate::arch::x86_64::utils::fpu::restore(&self.fpu_state);
         }
     }
+    
+    // Phase 2d: CPU affinity methods
+    
+    /// Get CPU affinity (None = can run anywhere)
+    pub fn cpu_affinity(&self) -> Option<usize> {
+        self.cpu_affinity
+    }
+    
+    /// Set CPU affinity (None = can run anywhere)
+    pub fn set_cpu_affinity(&mut self, affinity: Option<usize>) {
+        self.cpu_affinity = affinity;
+    }
 }
 
 /// Thread statistics snapshot

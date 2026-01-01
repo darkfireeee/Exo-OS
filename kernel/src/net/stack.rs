@@ -283,9 +283,89 @@ impl NetworkStack {
         Ok(())
     }
     
-    fn process_icmp(&self, _data: &[u8]) -> NetResult<()> {
-        // TODO: ICMP processing (ping, etc.)
-        Ok(())
+    fn process_icmp(&self, data: &[u8]) -> NetResult<()> {
+        use crate::net::ip::icmp::{IcmpMessage, IcmpType};
+        
+        // Parse ICMP message
+        let msg = IcmpMessage::from_bytes(data)
+            .map_err(|_| NetError::InvalidPacket)?;
+        
+        // Update statistics
+        self.stats.rx_packets.fetch_add(1, Ordering::Relaxed);
+        
+        match IcmpType::from(msg.header.msg_type) {
+            IcmpType::EchoRequest => {
+                // Ping request - send Echo Reply
+                let identifier = ((msg.header.rest_of_header >> 16) & 0xFFFF) as u16;
+                let sequence = (msg.header.rest_of_header & 0xFFFF) as u16;
+                
+                crate::logger::info(&alloc::format!(
+                    "[ICMP] Echo Request received (id: {}, seq: {})",
+                    identifier,
+                    sequence
+                ));
+                
+                // Create Echo Reply with same payload
+                let mut reply = IcmpMessage::echo_reply(
+                    identifier,
+                    sequence,
+                    msg.payload.clone()
+                );
+                
+                let reply_bytes = reply.to_bytes();
+                
+                // TODO: Extract source IP from IPv4 header and send reply
+                // For now, just log
+                crate::logger::info(&alloc::format!(
+                    "[ICMP] Echo Reply sent (id: {}, seq: {}, {} bytes)",
+                    identifier,
+                    sequence,
+                    reply_bytes.len()
+                ));
+                
+                self.stats.tx_packets.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            
+            IcmpType::EchoReply => {
+                // Pong received
+                let identifier = ((msg.header.rest_of_header >> 16) & 0xFFFF) as u16;
+                let sequence = (msg.header.rest_of_header & 0xFFFF) as u16;
+                
+                crate::logger::info(&alloc::format!(
+                    "[ICMP] Echo Reply received (id: {}, seq: {}, {} bytes)",
+                    identifier,
+                    sequence,
+                    msg.payload.len()
+                ));
+                
+                Ok(())
+            }
+            
+            IcmpType::DestinationUnreachable => {
+                crate::logger::warn(&alloc::format!(
+                    "[ICMP] Destination Unreachable (code: {})",
+                    msg.header.code
+                ));
+                Ok(())
+            }
+            
+            IcmpType::TimeExceeded => {
+                crate::logger::warn(&alloc::format!(
+                    "[ICMP] Time Exceeded (code: {})",
+                    msg.header.code
+                ));
+                Ok(())
+            }
+            
+            _ => {
+                crate::logger::debug(&alloc::format!(
+                    "[ICMP] Unhandled ICMP type: {}",
+                    msg.header.msg_type
+                ));
+                Ok(())
+            }
+        }
     }
 }
 

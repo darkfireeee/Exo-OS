@@ -8,6 +8,7 @@
 pub mod fast_path;
 pub mod hybrid_path;
 pub mod legacy_path;
+pub mod scheduler; // Phase 2d: CPU affinity syscalls
 
 /// Syscall tier classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,3 +58,4 @@ impl TierStats {
 pub use fast_path::{sys_getpid, sys_gettid, sys_gettime};
 pub use hybrid_path::{sys_close, sys_open, sys_read, sys_write};
 pub use legacy_path::{sys_execve, sys_fork};
+pub use scheduler::{sys_sched_setaffinity, sys_sched_getaffinity}; // Phase 2d
