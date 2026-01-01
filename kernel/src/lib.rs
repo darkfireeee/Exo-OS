@@ -425,6 +425,14 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
                                     arch::x86_64::smp::get_online_count(),
                                     cpu_count
                                 ));
+                                
+                                // Phase 2.7: Initialize SMP Scheduler
+                                logger::early_print("[KERNEL] Initializing SMP Scheduler...\n");
+                                scheduler::smp_init::init_smp_scheduler();
+                                logger::early_print(&alloc::format!(
+                                    "[KERNEL] ✓ SMP Scheduler ready ({} CPUs)\n",
+                                    cpu_count
+                                ));
                             }
                             Err(e) => {
                                 logger::early_print(&alloc::format!(

@@ -29,11 +29,9 @@ pub fn init_smp_scheduler() {
 }
 
 /// Get the current CPU ID
-/// TODO: Implement proper per-CPU data access
+/// Uses per-CPU data from GS segment (fast, single instruction)
 pub fn current_cpu_id() -> usize {
-    // Temporary: always return 0 (BSP)
-    // TODO: Read from per-CPU structure or MSR
-    0
+    crate::arch::x86_64::percpu::cpu_id()
 }
 
 /// Schedule on current CPU

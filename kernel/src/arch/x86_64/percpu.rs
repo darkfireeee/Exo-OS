@@ -75,3 +75,25 @@ pub fn set_kernel_stack(stack_top: u64) {
         );
     }
 }
+
+/// Get current CPU ID
+/// 
+/// Reads from GS:24 (cpu_id field in PerCpuData)
+/// This is fast (single instruction) and safe to call from any context
+pub fn get_cpu_id() -> u32 {
+    unsafe {
+        let cpu_id: u32;
+        asm!(
+            "mov {:e}, gs:[24]",
+            out(reg) cpu_id,
+            options(nostack, preserves_flags, readonly)
+        );
+        cpu_id
+    }
+}
+
+/// Get CPU ID as usize for array indexing
+#[inline]
+pub fn cpu_id() -> usize {
+    get_cpu_id() as usize
+}
