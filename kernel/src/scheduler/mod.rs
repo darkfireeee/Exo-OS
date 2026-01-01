@@ -11,6 +11,8 @@ pub mod prediction;
 pub mod realtime;
 pub mod test_threads;
 pub mod signals_stub; // ✅ Phase 0: Stubs temporaires pour signaux POSIX
+pub mod per_cpu; // ✅ Phase 2: Per-CPU scheduler for SMP
+pub mod smp_init; // ✅ Phase 2: SMP scheduler integration
 
 // Re-exports
 pub use self::core::{SCHEDULER, init, start, SchedulerStats, yield_now, block_current, unblock, run_context_switch_benchmark};
