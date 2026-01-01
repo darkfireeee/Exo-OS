@@ -215,7 +215,7 @@ impl Thread {
         // v0.5.2: Allocate PCID for TLB optimization
         #[cfg(target_arch = "x86_64")]
         {
-            context.pcid = crate::arch::x86_64::pcid::alloc();
+            context.pcid = crate::arch::x86_64::utils::pcid::alloc();
         }
         
         unsafe {
@@ -611,7 +611,7 @@ impl Thread {
             rsp: captured_rsp,
             rip: 0,  // Will be set from return address on stack
             cr3: parent.context.cr3,
-            pcid: crate::arch::x86_64::pcid::alloc(),  // v0.5.2: Allocate new PCID
+            pcid: crate::arch::x86_64::utils::pcid::alloc(),  // v0.5.2: Allocate new PCID
             _pad: 0,
             _reserved: 0,
             rflags: 0x202,  // IF enabled

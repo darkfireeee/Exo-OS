@@ -173,7 +173,7 @@ fn alloc_error(layout: core::alloc::Layout) -> ! {
 pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
     // CRITICAL: Enable SSE/SIMD FIRST before any other code that might use it
     // The Rust compiler may generate SSE instructions for format!/log!/etc.
-    arch::x86_64::simd::init_early();
+    arch::x86_64::utils::simd::init_early();
     
     // Affichage VGA avec balayage d'écran et splash screen v0.5.0
     unsafe {
@@ -361,7 +361,7 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             arch::x86_64::memory::paging::map_apic_regions();
             
             // Désactiver l'I/O APIC pour forcer le mode PIC legacy
-            arch::x86_64::pic_wrapper::disable_ioapic();
+            arch::x86_64::utils::pic_wrapper::disable_ioapic();
 
             // Initialiser GDT (Global Descriptor Table)
             logger::early_print("[KERNEL] Initializing GDT...\n");
@@ -370,7 +370,7 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
 
             // Initialiser PCID (Process-Context Identifiers) pour TLB optimization
             logger::early_print("[KERNEL] Initializing PCID (TLB optimization)...\n");
-            arch::x86_64::pcid::init();
+            arch::x86_64::utils::pcid::init();
             logger::early_print("[KERNEL] ✓ PCID enabled\n");
 
             // Phase 2: Initialiser ACPI pour détecter les CPUs (SMP)
@@ -461,7 +461,7 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             // Configurer PIC/PIT en mode single-core, skip en mode SMP (APIC Timer)
             if !arch::x86_64::is_smp_mode() {
                 logger::early_print("[KERNEL] Configuring PIC 8259...\n");
-                arch::x86_64::pic_wrapper::init_pic();
+                arch::x86_64::utils::pic_wrapper::init_pic();
                 logger::early_print("[KERNEL] ✓ PIC configured (vectors 32-47)\n");
                 
                 logger::early_print("[KERNEL] Configuring PIT timer (100Hz)...\n");

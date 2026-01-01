@@ -6,29 +6,26 @@
 //! - Gestion des interruptions et exceptions CPU
 //! - Configuration des registres de contrôle
 
-// Core x86_64 modules (new arch)
+// Core x86_64 modules (organized)
 pub mod acpi;
 pub mod boot;
 pub mod context;
 pub mod cpu;
-pub mod drivers; // Hardware drivers (PS/2 keyboard, etc.)
+pub mod drivers;    // Hardware drivers (PS/2 keyboard, etc.)
 pub mod gdt;
 pub mod handlers;
 pub mod idt;
-pub mod interrupts;
-pub mod io_diagnostic;
-pub mod memory;
-pub mod pcid;  // v0.5.2: PCID for TLB optimization
-pub mod percpu;
-pub mod pic_wrapper;
-pub mod pit;
-pub mod registers;
-pub mod serial;
-pub mod simd;
-pub mod smp;
-pub mod syscall;
-pub mod tss;
-pub mod usermode;
+pub mod interrupts; // APIC, IOAPIC, IPI
+pub mod memory;     // Paging, allocation
+pub mod percpu;     // Per-CPU data structures
+pub mod pit;        // Programmable Interval Timer
+pub mod registers;  // CPU registers
+pub mod serial;     // Serial port (COM1)
+pub mod smp;        // Symmetric Multiprocessing
+pub mod syscall;    // System calls
+pub mod tss;        // Task State Segment
+pub mod usermode;   // User mode support
+pub mod utils;      // Utility modules (FPU, SIMD, PCID, diagnostics)
 
 // Constantes d'architecture
 pub const PAGE_SIZE: usize = 4096;

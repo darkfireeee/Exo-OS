@@ -200,21 +200,14 @@ pub static SMP_SYSTEM: SmpSystem = SmpSystem::new();
 
 /// AP startup function (called from trampoline.asm)
 /// 
-/// This function is called after the AP completes its bootstrap sequence:
-/// - 16-bit real mode → 32-bit protected mode → 64-bit long mode
-/// - FPU/SSE/AVX initialized
-/// - Paging enabled with BSP's page tables
-/// 
-/// Safety: Must be called exactly once per AP, only from trampoline code
+/// CRITICAL: Runs with interrupts DISABLED - uses port 0xE9 only for debug
+/// This avoids serial port lock contention with BSP
 #[no_mangle]
 pub extern "C" fn ap_startup(cpu_id: u64) -> ! {
-    use crate::arch::x86_64::{interrupts, idt, percpu};
+    use crate::arch::x86_64::{interrupts, percpu};
     
-    // === STAGE 1: Early initialization (no logging yet) ===
-    
-    // Verify CPU ID is valid
+    // === STAGE 1: Validate CPU ID ===
     if cpu_id as usize >= MAX_CPUS {
-        // Invalid CPU ID - hang this processor
         unsafe {
             loop {
                 core::arch::asm!("cli; hlt");
@@ -222,9 +215,7 @@ pub extern "C" fn ap_startup(cpu_id: u64) -> ! {
         }
     }
     
-    // === STAGE 2: Initialize critical CPU features ===
-    
-    // Double-check FPU/SSE are enabled (redundant but safe)
+    // === STAGE 2: Initialize FPU/SSE/AVX ===
     unsafe {
         let mut cr0: u64;
         core::arch::asm!("mov {}, cr0", out(reg) cr0);
@@ -257,31 +248,27 @@ pub extern "C" fn ap_startup(cpu_id: u64) -> ! {
         }
     }
     
-    // === STAGE 3: Logging now safe ===
-    log::info!("[AP {}] Starting bootstrap sequence...", cpu_id);
+    // === STAGE 3: Mark as initializing (no logging) ===
+    if let Some(cpu) = SMP_SYSTEM.cpu(cpu_id as usize) {
+        cpu.set_state(CpuState::Initializing);
+    }
     
     // === STAGE 4: Initialize Local APIC ===
-    let apic_id = if let Some(local_apic) = interrupts::apic::LOCAL_APIC.get() {
+    if let Some(local_apic) = interrupts::apic::LOCAL_APIC.get() {
         let mut apic = local_apic.lock();
         apic.init();
         let id = apic.get_id();
+        drop(apic);
         
-        // Find this CPU in SMP_SYSTEM and update state
         for i in 0..MAX_CPUS {
             if let Some(cpu) = SMP_SYSTEM.cpu(i) {
                 if cpu.apic_id.load(Ordering::Acquire) == id as u8 {
-                    cpu.set_state(CpuState::Initializing);
                     cpu.apic_base.store(0xFEE00000, Ordering::Release);
-                    log::debug!("[AP {}] Found in SMP table at index {}", cpu_id, i);
                     break;
                 }
             }
         }
-        
-        log::info!("[AP {}] APIC initialized (APIC ID: {})", cpu_id, id);
-        id
     } else {
-        log::error!("[AP {}] Failed to get LOCAL_APIC - hanging", cpu_id);
         unsafe {
             loop {
                 core::arch::asm!("cli; hlt");
@@ -289,8 +276,7 @@ pub extern "C" fn ap_startup(cpu_id: u64) -> ! {
         }
     };
     
-    // === STAGE 5: Load IDT (use existing IDT from BSP) ===
-    log::info!("[AP {}] Loading IDT...", cpu_id);
+    // === STAGE 5: Load IDT ===
     unsafe {
         let (idt_base, idt_limit) = crate::arch::x86_64::idt::get_idt_info();
         
@@ -308,17 +294,13 @@ pub extern "C" fn ap_startup(cpu_id: u64) -> ! {
         
         // Load IDT
         core::arch::asm!("lidt [{0}]", in(reg) &idtr, options(readonly, nostack, preserves_flags));
-        
-        log::info!("[AP {}] IDT loaded: base={:#x}, limit={}", cpu_id, idt_base, idt_limit);
     }
     
-    // === STAGE 6: Setup per-CPU data structures ===
+    // === STAGE 6: Setup per-CPU data ===
     percpu::init(cpu_id as u32);
-    log::debug!("[AP {}] Per-CPU data initialized", cpu_id);
     
-    // === STAGE 7: Configure APIC Timer for this CPU ===
-    interrupts::apic::setup_timer(32); // Timer interrupt vector
-    log::debug!("[AP {}] APIC Timer configured", cpu_id);
+    // === STAGE 7: Configure APIC Timer ===
+    interrupts::apic::setup_timer(32);
     
     // === STAGE 8: Mark CPU as online ===
     if let Some(cpu) = SMP_SYSTEM.cpu(cpu_id as usize) {
@@ -328,34 +310,28 @@ pub extern "C" fn ap_startup(cpu_id: u64) -> ! {
         cpu.busy_time_ns.store(0, Ordering::Release);
     }
     
-    let online_count = SMP_SYSTEM.online_count.fetch_add(1, Ordering::AcqRel) + 1;
-    log::info!("✅ [AP {}] Online! ({} CPUs now active)", cpu_id, online_count);
+    let _online_count = SMP_SYSTEM.online_count.fetch_add(1, Ordering::AcqRel) + 1;
     
-    // === STAGE 9: Enable interrupts ===
+    // === STAGE 9: Send success marker to port 0xE9 ===
     unsafe {
-        core::arch::asm!("sti");
+        // Output "AP<n>OK\n" to debug console
+        core::arch::asm!("out 0xE9, al", in("al") b'A');
+        core::arch::asm!("out 0xE9, al", in("al") b'P');
+        core::arch::asm!("out 0xE9, al", in("al") b'0' + (cpu_id as u8));
+        core::arch::asm!("out 0xE9, al", in("al") b'O');
+        core::arch::asm!("out 0xE9, al", in("al") b'K');
+        core::arch::asm!("out 0xE9, al", in("al") b'\n');
     }
-    log::debug!("[AP {}] Interrupts enabled", cpu_id);
     
-    // === STAGE 10: Enter idle loop ===
-    // In production, this would call the scheduler to pick threads
-    log::debug!("[AP {}] Entering idle loop", cpu_id);
+    // === STAGE 10: Idle loop (interrupts disabled) ===
     
     loop {
-        // TODO: Integrate with scheduler when ready
-        // let thread = crate::scheduler::pick_next_thread(cpu_id as usize);
-        // if let Some(thread) = thread {
-        //     crate::scheduler::switch_to(thread);
-        // }
-        
-        // For now, just HLT until next interrupt
         unsafe {
             core::arch::asm!("hlt");
         }
         
-        // Update idle time statistics
         if let Some(cpu) = SMP_SYSTEM.cpu(cpu_id as usize) {
-            cpu.idle_time_ns.fetch_add(1000000, Ordering::Relaxed); // ~1ms per HLT
+            cpu.idle_time_ns.fetch_add(1000000, Ordering::Relaxed);
         }
     }
 }

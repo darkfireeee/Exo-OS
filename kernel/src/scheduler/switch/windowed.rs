@@ -182,7 +182,7 @@ pub unsafe fn switch_full(
     {
         let new_cr3 = (*new_ctx).cr3;
         let new_pcid = (*new_ctx).pcid;
-        crate::arch::x86_64::pcid::load_cr3_with_pcid(new_cr3, new_pcid);
+        crate::arch::x86_64::utils::pcid::load_cr3_with_pcid(new_cr3, new_pcid);
     }
     
     windowed_context_switch_full(old_ctx, new_ctx);

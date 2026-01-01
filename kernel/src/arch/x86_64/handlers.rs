@@ -442,7 +442,7 @@ extern "C" fn timer_interrupt_handler(_stack_frame: &InterruptStackFrame) {
     if crate::arch::x86_64::is_smp_mode() {
         crate::arch::x86_64::interrupts::apic::send_eoi();
     } else {
-        crate::arch::x86_64::pic_wrapper::send_eoi(0);  // IRQ 0 = Timer
+        crate::arch::x86_64::utils::pic_wrapper::send_eoi(0);  // IRQ 0 = Timer
     }
     
     // Préemption: Appeler le scheduler à CHAQUE tick (10ms à 100Hz)
@@ -510,7 +510,7 @@ extern "C" fn keyboard_interrupt_handler(_stack_frame: &InterruptStackFrame) {
     crate::arch::x86_64::drivers::ps2_keyboard::handle_irq();
     
     // Send EOI to PIC Master
-    crate::arch::x86_64::pic_wrapper::send_eoi(1);  // IRQ 1 (Keyboard)
+    crate::arch::x86_64::utils::pic_wrapper::send_eoi(1);  // IRQ 1 (Keyboard)
 }
 
 /// Affiche les caractères tapés sur la ligne 17
