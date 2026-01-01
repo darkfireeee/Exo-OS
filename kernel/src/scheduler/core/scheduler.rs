@@ -463,6 +463,73 @@ impl Scheduler {
         current.as_mut().map(|t| f(t))
     }
 
+    /// Execute closure with reference to specific thread by ID
+    /// Phase 2c Week 3: Required for timer-based sleep and priority inheritance
+    ///
+    /// Searches in order:
+    /// 1. Current thread
+    /// 2. Run queues (Hot/Normal/Cold)
+    /// 3. Blocked threads
+    /// 4. Zombie threads
+    pub fn with_thread<F, R>(&self, tid: ThreadId, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut Thread) -> R,
+    {
+        // 1. Check current thread
+        {
+            let mut current = self.current_thread.lock();
+            if let Some(ref mut thread) = *current {
+                if thread.id() == tid {
+                    return Some(f(thread));
+                }
+            }
+        }
+
+        // 2. Check run queues
+        {
+            let mut run_queue = self.run_queue.lock();
+            
+            // Search Hot queue
+            for thread in run_queue.hot.iter_mut() {
+                if thread.id() == tid {
+                    return Some(f(thread));
+                }
+            }
+            
+            // Search Normal queue
+            for thread in run_queue.normal.iter_mut() {
+                if thread.id() == tid {
+                    return Some(f(thread));
+                }
+            }
+            
+            // Search Cold queue
+            for thread in run_queue.cold.iter_mut() {
+                if thread.id() == tid {
+                    return Some(f(thread));
+                }
+            }
+        }
+
+        // 3. Check blocked threads
+        {
+            let mut blocked = self.blocked_threads.lock();
+            if let Some(thread) = blocked.get_mut(&tid) {
+                return Some(f(thread));
+            }
+        }
+
+        // 4. Check zombie threads
+        {
+            let mut zombies = self.zombie_threads.lock();
+            if let Some(thread) = zombies.get_mut(&tid) {
+                return Some(f(thread));
+            }
+        }
+
+        None
+    }
+
     /// Schedule next thread (called by timer interrupt)
     ///
     /// This is the core scheduling algorithm:

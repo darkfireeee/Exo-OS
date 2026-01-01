@@ -432,17 +432,13 @@ pub fn futex_lock_pi(addr: *const AtomicU32, timeout_ms: Option<u64>) -> MemoryR
             continue;
         }
         
-        // Phase 2c Week 3: Priority inheritance (TODO: requires Scheduler.with_thread() API)
+        // Phase 2c Week 3: Priority inheritance to prevent priority inversion
         // Boost owner thread's priority to waiter's priority (if higher)
-        /*
         if owner_tid != 0 {
-            SCHEDULER.with_current_thread(|waiter| {
-                let waiter_priority = waiter.priority();
-                
-                // Boost owner to waiter's priority if needed
+            if let Some(waiter_priority) = SCHEDULER.with_current_thread(|waiter| waiter.priority()) {
                 SCHEDULER.with_thread(owner_tid as u64, |owner| {
                     let owner_priority = owner.priority();
-                    if waiter_priority as u8 > owner_priority as u8 {
+                    if (waiter_priority as u8) > (owner_priority as u8) {
                         log::trace!(
                             "PI: Boosting thread {} priority from {:?} to {:?} (waiter {})",
                             owner_tid, owner_priority, waiter_priority, thread_id
@@ -450,10 +446,8 @@ pub fn futex_lock_pi(addr: *const AtomicU32, timeout_ms: Option<u64>) -> MemoryR
                         owner.set_priority(waiter_priority);
                     }
                 });
-            });
+            }
         }
-        */
-        // TODO: Add Scheduler.with_thread(&tid, closure) method to enable PI
         
         // Wait for wake
         match futex_wait(addr, with_waiters, timeout_ms) {

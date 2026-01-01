@@ -129,7 +129,7 @@ pub fn sys_clock_getres(clock_id: ClockId) -> MemoryResult<TimeSpec> {
 }
 
 /// Sleep for specified time
-/// Phase 2c Week 3: Timer-based sleep (TODO: requires Scheduler.with_thread API)
+/// Phase 2c Week 3: Timer-based blocking sleep (NOT busy wait)
 pub fn sys_nanosleep(duration: TimeSpec) -> MemoryResult<()> {
     log::debug!("sys_nanosleep: duration={:?}", duration);
 
@@ -141,10 +141,33 @@ pub fn sys_nanosleep(duration: TimeSpec) -> MemoryResult<()> {
     // 2. Convert to nanoseconds
     let total_ns = duration.as_nanos() as u64;
 
-    // 3. Busy wait for now (proper timer-based sleep requires Scheduler.with_thread() API)
-    // TODO Week 3: Implement blocking sleep with ThreadState::Sleeping + timer callback
+    // 3. Block thread with timer (NOT busy wait)
     if total_ns > 0 {
-        crate::time::busy_sleep_ns(total_ns);
+        // Get current thread ID
+        if let Some(current_tid) = crate::scheduler::SCHEDULER.current_thread_id() {
+            use crate::scheduler::thread::state::ThreadState;
+            
+            // Set thread to Sleeping state
+            crate::scheduler::SCHEDULER.with_thread(current_tid, |thread| {
+                thread.set_state(ThreadState::Sleeping);
+            });
+            
+            // Schedule timer to wake thread
+            let wake_tid = current_tid;
+            crate::time::timer::schedule_oneshot(total_ns, move || {
+                // Timer callback: wake thread
+                crate::scheduler::SCHEDULER.with_thread(wake_tid, |thread| {
+                    thread.set_state(ThreadState::Ready);
+                });
+                log::trace!("Timer woke thread {} from sleep", wake_tid);
+            }).ok(); // Ignore timer creation errors
+            
+            // Yield CPU (scheduler will not run Sleeping threads)
+            crate::scheduler::yield_now();
+        } else {
+            // Fallback: busy wait if no current thread
+            crate::time::busy_sleep_ns(total_ns);
+        }
     }
 
     Ok(())
