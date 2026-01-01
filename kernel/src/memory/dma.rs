@@ -124,16 +124,30 @@ impl DmaPool {
     }
     
     /// Allocate a buffer from the pool
+    /// Phase 2c optimization: Recycle buffers to reduce allocations
     pub fn alloc(&self) -> MemoryResult<DmaRegion> {
-        // For now, just allocate a new region
-        // TODO: Implement actual pooling with recycling
+        // Try to get from pool first
+        let mut regions = self.regions.lock();
+        if let Some(region) = regions.pop() {
+            // Reuse existing buffer
+            return Ok(region);
+        }
+        drop(regions);
+        
+        // Pool empty, allocate new region
         DmaRegion::new(self.buffer_size)
     }
     
     /// Return a buffer to the pool
-    pub fn free(&self, _region: DmaRegion) {
-        // TODO: Implement buffer recycling
-        // For now, just drop it
+    /// Phase 2c optimization: Recycle for future use
+    pub fn free(&self, region: DmaRegion) {
+        let mut regions = self.regions.lock();
+        
+        // Limit pool size to prevent unbounded growth (max 128 buffers)
+        if regions.len() < 128 {
+            regions.push(region);
+        }
+        // else: drop region (let it be freed)
     }
 }
 

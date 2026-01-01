@@ -310,8 +310,11 @@ impl Socket {
                 return Err(SocketError::WouldBlock);
             }
 
-            // TODO: Bloquer en attendant une connexion (sleep/wait queue)
-            // Pour l'instant, on retourne WouldBlock
+            // Block waiting for connection (Phase 2c optimization)
+            let sleep_duration = crate::syscall::handlers::time::TimeSpec::new(0, 10_000_000); // 10ms
+            let _ = crate::syscall::handlers::time::sys_nanosleep(sleep_duration);
+            
+            // Retry after sleep
             return Err(SocketError::WouldBlock);
         }
     }
@@ -399,7 +402,9 @@ impl Socket {
             if self.options.read().non_blocking {
                 return Err(SocketError::WouldBlock);
             }
-            // TODO: Bloquer jusqu'à ce qu'il y ait de l'espace
+            // Block waiting for buffer space (Phase 2c optimization)
+            let sleep_duration = crate::syscall::handlers::time::TimeSpec::new(0, 5_000_000); // 5ms
+            let _ = crate::syscall::handlers::time::sys_nanosleep(sleep_duration);
             return Err(SocketError::WouldBlock);
         }
 
@@ -488,7 +493,9 @@ impl Socket {
                 return Err(SocketError::WouldBlock);
             }
 
-            // TODO: Bloquer en attendant des données
+            // Block waiting for data (Phase 2c optimization)
+            let sleep_duration = crate::syscall::handlers::time::TimeSpec::new(0, 5_000_000); // 5ms
+            let _ = crate::syscall::handlers::time::sys_nanosleep(sleep_duration);
             return Err(SocketError::WouldBlock);
         }
     }

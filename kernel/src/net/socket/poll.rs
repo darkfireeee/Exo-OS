@@ -169,8 +169,9 @@ pub fn sys_poll(fds: &mut [PollFd], timeout_ms: i32) -> Result<usize, PollError>
             return Ok(0); // Timeout
         }
 
-        // TODO: Sleep au lieu de spin
-        core::hint::spin_loop();
+        // Sleep 1ms to avoid busy waiting (Phase 2c optimization)
+        let sleep_duration = crate::syscall::handlers::time::TimeSpec::new(0, 1_000_000);
+        let _ = crate::syscall::handlers::time::sys_nanosleep(sleep_duration);
     }
 }
 
@@ -302,8 +303,9 @@ pub fn sys_select(
             return Ok(0); // Timeout
         }
 
-        // TODO: Sleep au lieu de spin
-        core::hint::spin_loop();
+        // Sleep 1ms to avoid busy waiting (Phase 2c optimization)
+        let sleep_duration = crate::syscall::handlers::time::TimeSpec::new(0, 1_000_000);
+        let _ = crate::syscall::handlers::time::sys_nanosleep(sleep_duration);
     }
 }
 

@@ -66,13 +66,13 @@ impl PhaseTimer {
     /// Start timing a phase
     pub fn start(name: &'static str) -> Self {
         log::info!("Starting phase: {}", name);
-        let start = 0; // TODO: crate::time::tsc::read_tsc();
+        let start = crate::time::tsc::read_tsc();
         PhaseTimer { name, start }
     }
 
     /// End timing and report
     pub fn end(self) {
-        let end: u64 = 0; // TODO: crate::time::tsc::read_tsc();
+        let end = crate::time::tsc::read_tsc();
         let cycles = end.saturating_sub(self.start);
         let ms = cycles / 3_000_000; // Approximation @ 3GHz
         log::info!("Phase '{}' completed in ~{}ms ({} cycles)", self.name, ms, cycles);

@@ -246,25 +246,62 @@ pub fn futex_wait_bitset(
 }
 
 /// Wait with timeout helper
-fn wait_with_timeout(waiter: &FutexWaiter, _timeout_ms: u64) -> MemoryResult<()> {
-    // TODO: Integrate with timer subsystem for proper timeout
-    // For now, do a limited spin + block cycle
+/// Integrated with timer subsystem for precise timeout (Phase 2c optimization)
+fn wait_with_timeout(waiter: &FutexWaiter, timeout_ms: u64) -> MemoryResult<()> {
+    use crate::scheduler::SCHEDULER;
+    use crate::scheduler::thread::state::ThreadState;
     
-    let max_iterations = 10000;
-    for i in 0..max_iterations {
-        if waiter.is_woken() {
-            return Ok(());
+    // Convert ms to ns
+    let timeout_ns = timeout_ms * 1_000_000;
+    
+    // Get current thread ID
+    let current_tid = match SCHEDULER.current_thread_id() {
+        Some(tid) => tid,
+        None => {
+            // No scheduler context, fallback to spinwait
+            let max_iterations = timeout_ms * 1000; // ~1μs per iteration
+            for _ in 0..max_iterations {
+                if waiter.is_woken() {
+                    return Ok(());
+                }
+                core::hint::spin_loop();
+            }
+            return if waiter.is_woken() {
+                Ok(())
+            } else {
+                Err(MemoryError::Timeout)
+            };
         }
-        
-        if i < 100 {
-            // Spin phase
-            core::hint::spin_loop();
-        } else {
-            // Block phase (yield)
-            yield_now();
-        }
+    };
+    
+    // Set thread to Blocked state
+    SCHEDULER.with_thread(current_tid, |thread| {
+        thread.set_state(ThreadState::Blocked);
+    });
+    
+    // Schedule timeout timer
+    let wake_tid = current_tid;
+    let timer_result = crate::time::timer::schedule_oneshot(timeout_ns, move || {
+        // Timeout expired - wake thread even if futex not signaled
+        SCHEDULER.with_thread(wake_tid, |thread| {
+            if matches!(thread.state(), ThreadState::Blocked) {
+                thread.set_state(ThreadState::Ready);
+            }
+        });
+    });
+    
+    if timer_result.is_err() {
+        // Timer creation failed, restore thread state
+        SCHEDULER.with_thread(current_tid, |thread| {
+            thread.set_state(ThreadState::Ready);
+        });
+        return Err(MemoryError::OutOfMemory);
     }
     
+    // Yield to scheduler (will not run until woken or timeout)
+    yield_now();
+    
+    // Woken - check if by futex or timeout
     if waiter.is_woken() {
         Ok(())
     } else {

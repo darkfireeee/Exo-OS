@@ -184,8 +184,9 @@ impl Epoll {
                 return Ok(0); // Timeout
             }
 
-            // TODO: Sleep ou wait queue au lieu de spin
-            core::hint::spin_loop();
+            // Sleep 1ms to avoid busy waiting (Phase 2c optimization)
+            let sleep_duration = crate::syscall::handlers::time::TimeSpec::new(0, 1_000_000);
+            let _ = crate::syscall::handlers::time::sys_nanosleep(sleep_duration);
         }
     }
 
