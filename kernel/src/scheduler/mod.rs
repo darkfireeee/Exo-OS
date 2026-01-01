@@ -11,7 +11,7 @@ pub mod prediction;
 pub mod realtime;
 pub mod test_threads;
 pub mod signals_stub; // ✅ Phase 0: Stubs temporaires pour signaux POSIX
-pub mod per_cpu; // ✅ Phase 2: Per-CPU scheduler for SMP
+// pub mod per_cpu; // ✅ Phase 2: Removed - using core::percpu_queue instead
 pub mod smp_init; // ✅ Phase 2: SMP scheduler integration
 
 // Re-exports

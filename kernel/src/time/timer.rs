@@ -260,3 +260,11 @@ where
 {
     set_timer_once(delay_ns, callback)
 }
+
+/// Alias for schedule_oneshot (Phase 2c Week 3 IPC-Timer integration)
+pub fn schedule_oneshot<F>(delay_ns: u64, callback: F) -> Result<TimerId, ()>
+where
+    F: FnMut() + Send + 'static,
+{
+    Ok(set_timer_once(delay_ns, callback))
+}

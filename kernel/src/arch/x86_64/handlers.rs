@@ -227,6 +227,30 @@ global_asm!(
     "1:  hlt",
     "    jmp 1b",
     "",
+    "# Phase 2c TODO #3: Device Not Available (#NM) handler for lazy FPU",
+    ".global device_not_available_wrapper",
+    "device_not_available_wrapper:",
+    "    push rax",
+    "    push rcx",
+    "    push rdx",
+    "    push rsi",
+    "    push rdi",
+    "    push r8",
+    "    push r9",
+    "    push r10",
+    "    push r11",
+    "    call device_not_available_handler",
+    "    pop r11",
+    "    pop r10",
+    "    pop r9",
+    "    pop r8",
+    "    pop rdi",
+    "    pop rsi",
+    "    pop rdx",
+    "    pop rcx",
+    "    pop rax",
+    "    iretq",
+    "",
     ".att_syntax prefix",
 );
 
@@ -241,6 +265,7 @@ extern "C" {
     pub fn ipi_reschedule_wrapper();
     pub fn ipi_tlb_flush_wrapper();
     pub fn ipi_halt_wrapper();
+    pub fn device_not_available_wrapper();  // Phase 2c: #NM for lazy FPU
 }
 
 // ============================================================================
@@ -446,13 +471,18 @@ extern "C" fn timer_interrupt_handler(_stack_frame: &InterruptStackFrame) {
     }
     
     // Préemption: Appeler le scheduler à CHAQUE tick (10ms à 100Hz)
-    // Ceci permet le vrai round-robin multitasking
-    crate::scheduler::SCHEDULER.schedule();
+    // En mode SMP, utiliser schedule_smp() pour le scheduling per-CPU
+    if crate::arch::x86_64::is_smp_mode() {
+        crate::scheduler::core::scheduler::schedule_smp();
+    } else {
+        crate::scheduler::SCHEDULER.schedule();
+    }
     
     // Load balancing: Toutes les 100ms (10 ticks)
     if ticks % 10 == 0 {
         periodic_load_balance();
     }
+
 }
 
 /// Periodic load balancing (called from timer interrupt every 100ms)
@@ -572,6 +602,33 @@ fn display_typed_char(c: char) {
 }
 
 // ============================================================================
+// Phase 2c TODO #3: Device Not Available (#NM) Handler
+// ============================================================================
+
+/// Handler pour Device Not Available (#NM) - Exception 7
+/// Déclenchée quand un thread essaie d'utiliser le FPU après context switch
+#[no_mangle]
+extern "C" fn device_not_available_handler() {
+    use crate::scheduler::SCHEDULER;
+    use crate::arch::x86_64::utils::fpu;
+    
+    // Get current thread ID and FPU state
+    if let Some(current_tid) = SCHEDULER.current_thread_id() {
+        SCHEDULER.with_current_thread(|thread| {
+            unsafe {
+                // Handle FPU ownership transfer and restore state
+                fpu::handle_device_not_available(current_tid as usize, thread.fpu_state_mut());
+            }
+            // Mark thread as having used FPU
+            thread.set_fpu_used(true);
+        });
+    } else {
+        // No current thread - should never happen
+        crate::logger::error("[#NM] No current thread!");
+    }
+}
+
+// ============================================================================
 // FONCTION PUBLIQUE POUR RÉCUPÉRER LES ADRESSES DES HANDLERS
 // ============================================================================
 
@@ -585,6 +642,7 @@ pub struct HandlerAddresses {
     pub ipi_reschedule: usize,
     pub ipi_tlb_flush: usize,
     pub ipi_halt: usize,
+    pub device_not_available: usize,  // Phase 2c: #NM for lazy FPU
 }
 
 pub fn get_handler_addresses() -> HandlerAddresses {
@@ -598,5 +656,6 @@ pub fn get_handler_addresses() -> HandlerAddresses {
         ipi_reschedule: ipi_reschedule_wrapper as usize,
         ipi_tlb_flush: ipi_tlb_flush_wrapper as usize,
         ipi_halt: ipi_halt_wrapper as usize,
+        device_not_available: device_not_available_wrapper as usize,  // Phase 2c
     }
 }

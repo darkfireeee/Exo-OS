@@ -430,9 +430,30 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
                                 logger::early_print("[KERNEL] Initializing SMP Scheduler...\n");
                                 scheduler::smp_init::init_smp_scheduler();
                                 logger::early_print(&alloc::format!(
-                                    "[KERNEL] ✓ SMP Scheduler ready ({} CPUs)\n",
+                                    "[KERNEL] ✓ SMP Scheduler ready ({} CPUs)\n\n",
                                     cpu_count
                                 ));
+                                
+                                // Phase 2.8: Run SMP Tests
+                                logger::early_print("[KERNEL] ═══════════════════════════════════════\n");
+                                logger::early_print("[KERNEL]   PHASE 2b - SMP SCHEDULER TESTS\n");
+                                logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
+                                tests::smp_tests::run_smp_tests();
+                                
+                                // Phase 2.9: Run SMP Benchmarks
+                                logger::early_print("\n");
+                                tests::smp_bench::run_all_benchmarks();
+                                
+                                // Phase 2c: Run Regression Tests
+                                logger::early_print("\n");
+                                logger::early_print("[KERNEL] ═══════════════════════════════════════\n");
+                                logger::early_print("[KERNEL]   PHASE 2c - REGRESSION TESTS\n");
+                                logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
+                                tests::smp_regression::run_all_regression_tests();
+                                
+                                logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
+                                logger::early_print("[KERNEL]   PHASE 2 COMPLETE - All Tests Passed\n");
+                                logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
                             }
                             Err(e) => {
                                 logger::early_print(&alloc::format!(

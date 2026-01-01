@@ -7,7 +7,7 @@ use crate::memory::address::VirtualAddress;
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 // ✅ Phase 0: Utiliser les stubs temporaires pour signaux (sera posix_x en Phase 1)
 use crate::scheduler::signals_stub::{SignalStackFrame, SigSet, SigAction};
@@ -191,6 +191,14 @@ pub struct Thread {
     /// Exit status (for zombie reaping)
     exit_status: core::sync::atomic::AtomicI32,
 
+    // Phase 2c: FPU/SIMD state management (lazy switching)
+    /// FPU/SSE state (512 bytes for FXSAVE/FXRSTOR)
+    fpu_state: crate::arch::x86_64::utils::fpu::FpuState,
+    
+    /// Has this thread used FPU instructions?
+    /// Determines if we need to save FPU state on context switch
+    fpu_used: core::sync::atomic::AtomicBool,
+
     // Phase 0: Signal handling (stubs temporaires)
     /// Blocked signals mask
     sigmask: spin::Mutex<SigSet>,
@@ -244,7 +252,13 @@ impl Thread {
             parent_id: AtomicU64::new(0),
             children: spin::Mutex::new(Vec::new()),
             exit_status: core::sync::atomic::AtomicI32::new(0),
-
+            // Phase 2c: FPU state (initialize to clean state)
+            fpu_state: {
+                let mut state = crate::arch::x86_64::utils::fpu::FpuState::new();
+                unsafe { crate::arch::x86_64::utils::fpu::init_state(&mut state); }
+                state
+            },
+            fpu_used: core::sync::atomic::AtomicBool::new(false),
             // Phase 11: Signal handling
             sigmask: spin::Mutex::new(SigSet::empty()),
             pending_signals: spin::Mutex::new(SigSet::empty()),
@@ -312,6 +326,14 @@ impl Thread {
             parent_id: AtomicU64::new(0),
             children: spin::Mutex::new(Vec::new()),
             exit_status: core::sync::atomic::AtomicI32::new(0),
+
+            // Phase 2c: FPU state (initialize to clean state)
+            fpu_state: {
+                let mut state = crate::arch::x86_64::utils::fpu::FpuState::new();
+                unsafe { crate::arch::x86_64::utils::fpu::init_state(&mut state); }
+                state
+            },
+            fpu_used: core::sync::atomic::AtomicBool::new(false),
 
             // Phase 11: Signal handling
             sigmask: spin::Mutex::new(SigSet::empty()),
@@ -534,6 +556,42 @@ impl Thread {
         // Note: This restores the context saved by setup_signal_context.
         // It effectively "returns" to the point where the signal was delivered.
     }
+
+    // Phase 2c: FPU/SIMD state management methods
+
+    /// Get mutable reference to FPU state (for saving/restoring)
+    pub fn fpu_state_mut(&mut self) -> &mut crate::arch::x86_64::utils::fpu::FpuState {
+        &mut self.fpu_state
+    }
+
+    /// Get immutable reference to FPU state
+    pub fn fpu_state(&self) -> &crate::arch::x86_64::utils::fpu::FpuState {
+        &self.fpu_state
+    }
+
+    /// Has this thread used FPU instructions?
+    pub fn fpu_used(&self) -> bool {
+        self.fpu_used.load(Ordering::Relaxed)
+    }
+
+    /// Mark thread as having used FPU
+    pub fn set_fpu_used(&self, used: bool) {
+        self.fpu_used.store(used, Ordering::Relaxed);
+    }
+
+    /// Save FPU state (if used)
+    pub unsafe fn save_fpu_if_used(&mut self) {
+        if self.fpu_used() {
+            crate::arch::x86_64::utils::fpu::save(&mut self.fpu_state);
+        }
+    }
+
+    /// Restore FPU state (if used)
+    pub unsafe fn restore_fpu_if_used(&mut self) {
+        if self.fpu_used() {
+            crate::arch::x86_64::utils::fpu::restore(&self.fpu_state);
+        }
+    }
 }
 
 /// Thread statistics snapshot
@@ -695,6 +753,15 @@ impl Thread {
             children: spin::Mutex::new(Vec::new()),
             exit_status: core::sync::atomic::AtomicI32::new(0),
             
+            // Phase 2c: FPU state (child inherits parent's FPU state)
+            fpu_state: {
+                let mut state = crate::arch::x86_64::utils::fpu::FpuState::new();
+                // Copy parent's FPU state
+                state.data.copy_from_slice(&parent.fpu_state.data);
+                state
+            },
+            fpu_used: core::sync::atomic::AtomicBool::new(parent.fpu_used.load(Ordering::Relaxed)),
+            
             // Copy signal handling state
             sigmask: spin::Mutex::new(*parent.sigmask.lock()),
             pending_signals: spin::Mutex::new(SigSet::empty()),
@@ -752,5 +819,41 @@ fn user_mode_trampoline() -> ! {
     
     unsafe {
         crate::arch::x86_64::usermode::jump_to_usermode(&context);
+    }
+}
+
+// =============================================================================
+// Phase 2c TODO #11: Resource Cleanup (Drop implementation)
+// =============================================================================
+
+impl Drop for Thread {
+    fn drop(&mut self) {
+        log::debug!("Thread {} ({}) cleanup started", self.id, self.name);
+        
+        // 1. Cleanup kernel stack (already managed by Box)
+        // kernel_stack: Box<[u8]> automatically freed
+        
+        // 2. Cleanup user stack if exists
+        if let Some(user_stack_box) = self.user_stack.take() {
+            log::trace!("Freeing user stack for thread {}", self.id);
+            drop(user_stack_box); // Explicit drop for clarity
+        }
+        
+        // 3. Free PCID (TLB tag)
+        #[cfg(target_arch = "x86_64")]
+        {
+            if self.context.pcid != 0 {
+                log::trace!("Freeing PCID {} for thread {}", self.context.pcid, self.id);
+                crate::arch::x86_64::utils::pcid::free(self.context.pcid);
+            }
+        }
+        
+        // 4. Cleanup signal handlers (Mutex auto-drops)
+        // 5. Cleanup sigmask, pending_signals (Mutex auto-drops)
+        // 6. Cleanup children list (Vec auto-drops)
+        
+        // 7. FPU state auto-dropped (FpuState implements Drop if needed)
+        
+        log::debug!("Thread {} ({}) cleanup complete", self.id, self.name);
     }
 }

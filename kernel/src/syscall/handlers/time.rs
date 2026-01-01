@@ -129,6 +129,7 @@ pub fn sys_clock_getres(clock_id: ClockId) -> MemoryResult<TimeSpec> {
 }
 
 /// Sleep for specified time
+/// Phase 2c Week 3: Timer-based sleep (TODO: requires Scheduler.with_thread API)
 pub fn sys_nanosleep(duration: TimeSpec) -> MemoryResult<()> {
     log::debug!("sys_nanosleep: duration={:?}", duration);
 
@@ -140,7 +141,8 @@ pub fn sys_nanosleep(duration: TimeSpec) -> MemoryResult<()> {
     // 2. Convert to nanoseconds
     let total_ns = duration.as_nanos() as u64;
 
-    // 3. Use busy sleep for now (proper implementation would block thread)
+    // 3. Busy wait for now (proper timer-based sleep requires Scheduler.with_thread() API)
+    // TODO Week 3: Implement blocking sleep with ThreadState::Sleeping + timer callback
     if total_ns > 0 {
         crate::time::busy_sleep_ns(total_ns);
     }

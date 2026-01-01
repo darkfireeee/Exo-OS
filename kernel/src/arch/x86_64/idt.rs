@@ -104,6 +104,9 @@ pub fn init() {
         // #BP (3) - Breakpoint (DPL=3 pour userspace)
         IDT.entries[3].set_handler(handlers.breakpoint, 0x08, 0, 0xEE);
         
+        // #NM (7) - Device Not Available (FPU lazy switching) - Phase 2c TODO #4
+        IDT.entries[7].set_handler(handlers.device_not_available, 0x08, 0, 0x8E);
+        
         // #DF (8) - Double Fault (IST=0 pour l'instant)
         IDT.entries[8].set_handler(handlers.double_fault, 0x08, 0, 0x8E);
         

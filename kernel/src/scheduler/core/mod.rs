@@ -144,6 +144,13 @@ pub mod percpu_queue;
 pub use percpu_queue::{PER_CPU_QUEUES, PerCpuQueue, PerCpuQueueStats};
 
 // ═══════════════════════════════════════════════════════════════
+// Unit Tests (Phase 2c)
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests;
+
+// ═══════════════════════════════════════════════════════════════
 // V2 Legacy Exports (deprecated, for compatibility only)
 // ═══════════════════════════════════════════════════════════════
 

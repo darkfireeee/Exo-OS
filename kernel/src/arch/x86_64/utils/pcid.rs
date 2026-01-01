@@ -145,3 +145,14 @@ pub fn invalidate_page(vaddr: u64) {
         );
     }
 }
+
+/// Free a PCID (Phase 2c TODO #11 - Thread cleanup)
+///
+/// In current implementation, PCIDs wrap around and get reused
+/// automatically via counter. Explicit freeing is optional.
+/// This is a no-op stub for API compatibility.
+#[inline]
+pub fn free(_pcid: u16) {
+    // No-op: PCIDs are reused via wrap-around
+    // Future: Could implement free-list for faster reuse
+}

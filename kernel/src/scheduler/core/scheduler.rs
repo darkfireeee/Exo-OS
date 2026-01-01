@@ -28,6 +28,7 @@ use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
+use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
@@ -591,8 +592,11 @@ impl Scheduler {
                         let old_thread = current.take().unwrap();
                         *current = Some(next_thread);
                         
-                        // Don't put blocked thread back in queue
-                        // TODO: Add to blocked list
+                        // Add blocked thread to blocked list
+                        let tid = old_thread.id();
+                        let mut blocked = self.blocked_threads.lock();
+                        blocked.insert(tid, old_thread);
+                        logger::debug(&format!("[SCHED] Thread {} blocked", tid));
                         
                         old_ctx = core::ptr::null_mut();
                         switch_needed = true;
@@ -914,8 +918,8 @@ impl Scheduler {
                             thread.id(),
                             sig
                         ));
-                        // TODO: Terminate thread properly
-                        // For now, just remove signal to avoid infinite loop
+                        // Terminate thread: mark as terminated, cleanup on zombie collection
+                        thread.set_state(ThreadState::Terminated);
                         thread.remove_pending_signal(sig);
                         return true;
                     }
@@ -1157,4 +1161,87 @@ pub fn run_context_switch_benchmark() -> (u64, u64, u64) {
     logger::info("╚══════════════════════════════════════════════════════════╝");
     
     (avg_per_switch, min_per_switch, max_per_switch)
+}
+
+/// Schedule on current CPU (SMP-aware)
+///
+/// Uses per-CPU queues for lock-free scheduling
+pub fn schedule_smp() {
+    use super::percpu_queue::PER_CPU_QUEUES;
+    use crate::scheduler::smp_init::current_cpu_id;
+    
+    let cpu_id = current_cpu_id();
+    
+    let queue = match PER_CPU_QUEUES.get(cpu_id) {
+        Some(q) => q,
+        None => {
+            crate::logger::error(&alloc::format!("[SCHED] Invalid CPU ID: {}", cpu_id));
+            return;
+        }
+    };
+    
+    // Get current thread for this CPU
+    let current_thread = queue.current_thread();
+    
+    // Get next thread from queue
+    let next_thread = match queue.dequeue() {
+        Some(t) => t,
+        None => {
+            // No threads in queue - current continues (or idle)
+            return;
+        }
+    };
+    
+    // Perform context switch
+    let old_ctx: *mut ThreadContext;
+    let new_ctx: *const ThreadContext;
+    let switch_needed: bool;
+    
+    if let Some(curr) = current_thread {
+        if curr.id() == next_thread.id() {
+            // Same thread, put it back
+            queue.enqueue(next_thread);
+            return;
+        }
+        
+        // Different thread - switch
+        // SAFETY: We need mutable access to context pointers for context switch
+        old_ctx = unsafe {
+            let curr_mut = &mut *(Arc::as_ptr(&curr) as *const Thread as *mut Thread);
+            curr_mut.context_ptr()
+        };
+        new_ctx = unsafe {
+            let next_mut = &mut *(Arc::as_ptr(&next_thread) as *const Thread as *mut Thread);
+            next_mut.context_ptr()
+        };
+        
+        // Put current back in queue
+        queue.enqueue(curr);
+        
+        // Set new as current
+        queue.set_current_thread(Some(next_thread));
+        queue.inc_context_switches();
+        
+        switch_needed = true;
+    } else {
+        // First switch on this CPU
+        old_ctx = core::ptr::null_mut();
+        new_ctx = unsafe {
+            let next_mut = &mut *(Arc::as_ptr(&next_thread) as *const Thread as *mut Thread);
+            next_mut.context_ptr()
+        };
+        
+        queue.set_current_thread(Some(next_thread));
+        queue.inc_context_switches();
+        
+        switch_needed = true;
+    }
+    
+    if switch_needed && !new_ctx.is_null() {
+        unsafe {
+            windowed::switch(old_ctx, new_ctx);
+            // Re-enable interrupts after switch
+            core::arch::asm!("sti");
+        }
+    }
 }
