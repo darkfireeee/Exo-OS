@@ -1,25 +1,31 @@
-# 🚀 Exo-OS v0.5.0 "Stellar Engine"
+# 🚀 Exo-OS v0.6.0 "Multicore Dawn"
 
-**Système d'exploitation moderne écrit en Rust avec boot C/ASM - Phase 1 89% complète**
+**Système d'exploitation moderne écrit en Rust avec SMP - Phase 1 100% complète, Phase 2 30%**
 
 [![License](https://img.shields.io/badge/GPL-2.0license-blue.svg)](LICENSE)
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
-[![Version](https://img.shields.io/badge/version-0.5.0-orange.svg)]()
-[![Tests](https://img.shields.io/badge/tests-40/45_passing-success.svg)]()
+[![Version](https://img.shields.io/badge/version-0.6.0-orange.svg)]()
+[![Tests](https://img.shields.io/badge/tests-50/50_passing-success.svg)]()
+[![CPUs](https://img.shields.io/badge/SMP-4_CPUs_online-blue.svg)]()
 
 ---
 
 ## 🎯 État Actuel
 
-**Phase 1:** 🟢 **89% complète** (40/45 tests passés)
+**Phase 1:** ✅ **100% complète** (50/50 tests passés)  
+**Phase 2:** 🟢 **30% en cours** (SMP Foundation complète, Scheduler integration en cours)
 
 | Composant | Tests | Status |
 |-----------|-------|--------|
 | **Phase 1a - VFS** | 20/20 | ✅ 100% |
 | **Phase 1b - Processus** | 15/15 | ✅ 100% |
-| **Phase 1c - Signaux** | 5/10 | 🟡 50% |
+| **Phase 1c - Signaux** | 10/10 | ✅ 100% |
+| **Phase 1d - CoW** | 5/5 | ✅ 100% |
+| **Phase 2a - SMP Bootstrap** | 8/8 | ✅ 100% |
+| **Phase 2b - SMP Scheduler** | 0/10 | 🟡 0% |
 
-**Documentation:** [PHASE_1_VALIDATION.md](docs/current/PHASE_1_VALIDATION.md)
+**Documentation Phase 1:** [PHASE_1_VALIDATION.md](docs/current/PHASE_1_VALIDATION.md)  
+**Documentation Phase 2:** [PHASE_2_SMP_COMPLETE.md](docs/current/phase/PHASE_2_SMP_COMPLETE.md)
 
 ---
 
@@ -55,6 +61,16 @@
 - ✅ **Context switch** - windowed_switch.S validé
 - ✅ **Timer preemption** - PIT 100Hz
 - ✅ **Benchmark** - ~2000 cycles/switch
+
+### SMP Multi-core (Nouveau! 🎉)
+- ✅ **4 CPUs online** - 1 BSP + 3 APs
+- ✅ **ACPI/MADT parsing** - Détection automatique
+- ✅ **APIC/IO-APIC** - Initialisation complète
+- ✅ **AP Bootstrap** - Trampoline 16→32→64 bit
+- ✅ **IPI messaging** - INIT/SIPI sequences
+- ✅ **SSE/FPU/AVX** - Init sur tous les cores
+- ✅ **Tests Bochs** - Validé 4 CPUs stable
+- 🟡 **Per-CPU scheduler** - En cours d'implémentation
 
 ---
 
@@ -148,22 +164,32 @@ GRUB → boot.asm (32→64bit) → boot.c (FFI) → rust_main() → Exo-Shell
 
 ## ��️ Roadmap
 
-### v0.6.0 (Prochain)
-- ⏳ Driver clavier PS/2
-- ⏳ Entrée shell interactive
-- ⏳ Montage VFS / FAT32
+### ✅ v0.6.0 "Multicore Dawn" (Actuel)
+- ✅ SMP Foundation - 4 CPUs online
+- ✅ ACPI/APIC/IPI complet
+- ✅ AP Bootstrap fonctionnel
+- ✅ Tests multi-core Bochs
 
-### v0.7.0 (Futur)
-- 📅 Processus userland
-- 📅 Syscalls (fork, exec, read, write)
-- 📅 ELF loader
+### v0.7.0 "Parallel Universe" (Prochain - 2-3 semaines)
+- 🟡 Per-CPU scheduler queues
+- 🟡 Load balancing (work stealing)
+- 🟡 Thread migration entre CPUs
+- 🟡 TLB shootdown
+- 🟡 Lock-free logging
+- 🟡 SMP stress tests
 
-### v1.0.0 (Vision)
-- 🎯 Network stack TCP/IP
-- 🎯 Filesystem ext2
-- 🎯 Multi-utilisateurs
+### v0.8.0 (2 mois)
+- 📌 Network stack TCP/IP
+- 📌 Socket API BSD
+- 📌 Drivers réseau (VirtIO, E1000)
 
-Voir [roadmap complet](docs/roadmap_v0.5.0.md)
+### v1.0.0 "Linux Crusher" (6-9 mois)
+- 🎯 Filesystem ext4
+- 🎯 Drivers Linux GPL-2.0
+- 🎯 Security (capabilities, TPM)
+- 🎯 Performance > Linux
+
+Voir [ROADMAP complet](docs/current/ROADMAP.md)
 
 ---
 
@@ -225,11 +251,14 @@ Voir [CONTRIBUTING.md](CONTRIBUTING.md) pour les guidelines.
 
 ## 📊 Statistiques
 
-- **Code** : ~60,000 lignes (Rust + C + ASM)
-- **Fichiers Rust** : 409 modules
-- **Kernel** : 22MB (avec debug)
-- **ISO** : 27MB bootable
-- **Boot time** : ~2s (QEMU)
+- **Code** : ~65,000 lignes (Rust + C + ASM)
+- **Fichiers Rust** : 420+ modules
+- **CPUs supportés** : 4 (SMP)
+- **Kernel** : 23MB (avec debug)
+- **ISO** : 28MB bootable
+- **Boot time** : ~2s (QEMU), ~400ms (SMP init)
+- **Phase 1** : 100% (50/50 tests)
+- **Phase 2** : 30% (SMP bootstrap OK)
 
 ---
 
@@ -249,11 +278,11 @@ Projet sous licence MIT. Voir [LICENSE](LICENSE).
 
 <div align="center">
 
-**Exo-OS v0.5.0 "Quantum Leap"**
+**Exo-OS v0.6.0 "Multicore Dawn"**
 
-*Making the impossible possible* 🚀
+*4 CPUs Strong, Performance Beyond* 🚀
 
-[Docs](docs/INDEX_COMPLET.md) • [Release](docs/v0.5.0_RELEASE_NOTES.md) • [Roadmap](docs/roadmap_v0.5.0.md)
+[Docs](docs/INDEX.md) • [Phase 1](docs/current/PHASE_1_VALIDATION.md) • [Phase 2 SMP](docs/current/phase/PHASE_2_SMP_COMPLETE.md) • [Roadmap](docs/current/ROADMAP.md)
 
 ⭐ **Star ce projet si vous l'aimez !** ⭐
 

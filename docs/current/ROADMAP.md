@@ -1,7 +1,7 @@
 # 🚀 ROADMAP EXO-OS v1.0.0 "LINUX CRUSHER"
 
-**Date de mise à jour:** 19 décembre 2025  
-**Version actuelle:** v0.5.0 "Stellar Engine"  
+**Date de mise à jour:** 1er janvier 2026  
+**Version actuelle:** v0.6.0 "Multicore Dawn"  
 **Licence:** GPL-2.0 (compatible avec drivers Linux)  
 **Objectif:** Kernel 100% fonctionnel, ZÉRO stub/placeholder  
 **Vision:** Écraser Linux sur les métriques de performance clés
@@ -29,24 +29,26 @@
 | **Network TCP/IP** | 10% structures | 100% stack complet | 90% | 🟡 P3 |
 | **Drivers (PCI/Net/Blk)** | 20% stubs | 100% + Linux compat | 80% | 🟡 P3 |
 | **Security/Capabilities** | 40% framework | 100% + TPM | 60% | 🟡 P3 |
-| **SMP Multi-core** | 0% single-core | 100% per-CPU | 100% | 🟡 P4 |
+| **SMP Multi-core** | 🟢 30% (4 CPUs online, scheduler pending) | 100% per-CPU | 70% | 🟢 P2 |
 | **Filesystems réels** | 33% (FAT32 parser) | ext4/FAT32 complet | 67% | 🟢 P4 |
 
-**Progression globale réelle:** ~52% (Phase 0: 100%, Phase 1: 89%)
+**Progression globale réelle:** ~58% (Phase 0: 100%, Phase 1: 100%, Phase 2: 30%)
 
 ---
 
 ## 🎯 OBJECTIFS DE PERFORMANCE "LINUX CRUSHER"
 
+> **⚠️ Philosophie des Métriques:** Les objectifs ci-dessous sont **ambitieux mais réalistes**. Ils visent des gains de **1.5-3x vs Linux**, pas des impossibilités. La priorité est la **stabilité**, puis la **performance mesurable**, puis les micro-optimisations. Mieux vaut un kernel stable à 2x Linux qu'un kernel qui crash à 10x.
+
 ### Métriques Cibles vs Linux
 
 | Métrique | Linux | Exo-OS Target | Ratio | Status |
 |----------|-------|---------------|-------|--------|
-| IPC Latence | 1247 cycles | **347 cycles** | 3.6x ✨ | 🟡 À valider |
-| Context Switch | 2134 cycles | **300 cycles** | 7x ✨ | 🟡 À valider |
-| Alloc Thread-Local | ~50 cycles | **8 cycles** | 6.25x ✨ | 🟡 À valider |
-| Scheduler Pick | ~200 cycles | **87 cycles** | 2.3x ✨ | 🟡 À valider |
-| Syscall Fast Path | ~150 cycles | **<50 cycles** | 3x ✨ | 🔴 Non mesuré |
+| IPC Latence | 1247 cycles | **500-700 cycles** | 2-2.5x ✨ | 🟡 À valider |
+| Context Switch | 2134 cycles | **500-800 cycles** | 3-4x ✨ | 🟡 À valider |
+| Alloc Thread-Local | ~50 cycles | **15-25 cycles** | 2-3x ✨ | 🟡 À valider |
+| Scheduler Pick | ~200 cycles | **100-150 cycles** | 1.3-2x ✨ | 🟡 À valider |
+| Syscall Fast Path | ~150 cycles | **80-100 cycles** | 1.5-2x ✨ | 🔴 Non mesuré |
 | Boot → Shell | ~15s | **<1s** | 15x ✨ | 🟡 ~2s actuel |
 | Memory Footprint | ~40MB min | **<15MB** | 2.7x ✨ | 🟡 ~22MB |
 
@@ -109,7 +111,8 @@
 
 ---
 
-### 🟡 PHASE 2: Performance & VFS Complet - PRÉPARATION (35%)
+### 🟡 PHASE 1 (Suite): Performance & VFS Complet - PRÉPARATION (35%)
+**Note:** Cette section était incorrectement nommée "Phase 2". Elle fait partie de Phase 1.
 
 #### 🟡 Phase 1a: VFS Complet (70% - Semaine 1-2)
 **Status:** Code compile, tests runtime manquants
@@ -250,25 +253,37 @@
 
 ---
 
-### PHASE 2: Multi-core + Networking (8 semaines)
-**Objectif:** SMP + Stack réseau fonctionnel
+### 🟢 PHASE 2: Multi-core + Networking - EN COURS (30%)
+**Objectif:** SMP + Stack réseau fonctionnel  
+**Status:** SMP Foundation COMPLÈTE (4 CPUs online), Scheduler Integration en cours  
+**Date début:** 27 décembre 2025  
+**Documentation:** [PHASE_2_SMP_COMPLETE.md](current/phase/PHASE_2_SMP_COMPLETE.md)
 
-#### Mois 3 - Semaine 1-2: SMP Foundation
+#### ✅ Mois 3 - Semaine 1-2: SMP Foundation (100% COMPLET)
 ```
-□ APIC local + I/O APIC
-□ BSP → AP bootstrap (trampoline)
-□ Per-CPU structures
-□ Per-CPU run queues
-□ Spinlocks SMP-safe
-□ IPI (Inter-Processor Interrupts)
+✅ APIC local + I/O APIC - Init fonctionnel, EOI correct
+✅ BSP → AP bootstrap (trampoline) - 16→32→64 bit transition
+✅ Per-CPU structures - CpuInfo isolé, 4 CPUs détectés
+✅ IPI (Inter-Processor Interrupts) - INIT/SIPI sequences
+✅ Trampoline réel - ap_trampoline.asm (512 bytes, NASM)
+✅ AP startup - 4/4 CPUs online (BSP + 3 APs)
+✅ SSE/FPU/AVX init - Sur tous les CPUs
+✅ Tests Bochs - Validé avec 4 CPUs
+□ Per-CPU run queues - EN COURS
+□ Spinlocks SMP-safe - À implémenter
 ```
 
-#### Mois 3 - Semaine 3-4: SMP Scheduler
+#### 🟡 Mois 3 - Semaine 3-4: SMP Scheduler (0% - EN ATTENTE)
+**Prochaine étape critique** - Voir [PHASE_2_TO_3_TRANSITION.md](current/phase/PHASE_2_TO_3_TRANSITION.md)
 ```
-□ Load balancing entre cores
-□ CPU affinity (sched_setaffinity)
-□ NUMA awareness (basique)
-□ Work stealing
+□ Interrupts sur APs - sti activé (en test)
+□ Per-CPU run queues - Structure à créer
+□ Load balancing entre cores - Algorithm work stealing
+□ CPU affinity (sched_setaffinity) - Syscall API
+□ NUMA awareness (basique) - Metrics
+□ Work stealing - Implementation
+□ Thread migration - IPI-based
+□ TLB shootdown - Synchronization
 ```
 
 #### Mois 4 - Semaine 1-2: Network Stack Core

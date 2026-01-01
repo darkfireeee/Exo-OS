@@ -323,10 +323,28 @@ pub extern "C" fn ap_startup(cpu_id: u64) -> ! {
         core::arch::asm!("out 0xE9, al", in("al") b'\n');
     }
     
-    // === STAGE 10: Idle loop (interrupts disabled) ===
+    // === STAGE 10: Enable interrupts ===
+    // Now that IDT, APIC, and per-CPU structures are ready,
+    // it's safe to enable interrupts for timer-based preemption
+    unsafe {
+        core::arch::asm!("sti");
+    }
+    
+    // Send "IRQON\n" to confirm interrupt enablement
+    unsafe {
+        core::arch::asm!("out 0xE9, al", in("al") b'I');
+        core::arch::asm!("out 0xE9, al", in("al") b'R');
+        core::arch::asm!("out 0xE9, al", in("al") b'Q');
+        core::arch::asm!("out 0xE9, al", in("al") b'O');
+        core::arch::asm!("out 0xE9, al", in("al") b'N');
+        core::arch::asm!("out 0xE9, al", in("al") b'\n');
+    }
+    
+    // === STAGE 11: Idle loop (interrupts enabled) ===
     
     loop {
         unsafe {
+            // hlt with interrupts enabled will wake on next interrupt
             core::arch::asm!("hlt");
         }
         
