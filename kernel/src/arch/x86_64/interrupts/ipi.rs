@@ -14,6 +14,11 @@ use core::sync::atomic::Ordering;
 const IA32_APIC_BASE: u32 = 0x1B;
 const X2APIC_ICR: u32 = 0x830; // Interrupt Command Register (64-bit in x2APIC)
 
+/// xAPIC MMIO addresses (relative to 0xFEE00000)
+const XAPIC_BASE: usize = 0xFEE00000;
+const XAPIC_ICR_LOW: usize = 0x300;  // ICR bits 0-31
+const XAPIC_ICR_HIGH: usize = 0x310; // ICR bits 32-63
+
 /// IPI Vector assignments
 pub const IPI_RESCHEDULE_VECTOR: u8 = 0xF0;
 pub const IPI_TLB_FLUSH_VECTOR: u8 = 0xF1;
@@ -65,29 +70,56 @@ unsafe fn wrmsr(msr: u32, value: u64) {
     );
 }
 
+/// Write to xAPIC register (MMIO)
+#[inline]
+unsafe fn write_xapic_reg(offset: usize, value: u32) {
+    let addr = (XAPIC_BASE + offset) as *mut u32;
+    core::ptr::write_volatile(addr, value);
+}
+
+/// Read from xAPIC register (MMIO)
+#[inline]
+unsafe fn read_xapic_reg(offset: usize) -> u32 {
+    let addr = (XAPIC_BASE + offset) as *const u32;
+    core::ptr::read_volatile(addr)
+}
+
+/// Check if we should use xAPIC mode (force for SMP debugging)
+#[inline]
+fn use_xapic_mode() -> bool {
+    // FORCE xAPIC for SMP debugging (QEMU compatibility)
+    true
+    // TODO: Change to `!is_x2apic_enabled()` once SMP works
+}
+
 /// Send INIT IPI to a specific APIC ID
 ///
 /// INIT IPI resets the target CPU to its initial state (real mode, CS=F000h, IP=FFF0h).
 /// This is the first step in AP (Application Processor) startup.
 pub fn send_init_ipi(apic_id: u32) {
+    log::info!("[IPI] send_init_ipi() ENTERED for APIC {}", apic_id);
+    
     unsafe {
-        // ICR format for x2APIC:
-        // Bits 0-7:   Vector (ignored for INIT)
-        // Bits 8-10:  Delivery Mode (101 = INIT)
-        // Bit 14:     Level (1 = assert)
-        // Bit 15:     Trigger Mode (1 = level)
-        // Bits 18-19: Destination Shorthand (00 = use destination field)
-        // Bits 32-63: Destination (x2APIC ID)
-        
-        let icr_value = DELIVERY_MODE_INIT
+        let icr_low = DELIVERY_MODE_INIT
             | LEVEL_ASSERT
             | TRIGGER_LEVEL
-            | DEST_SHORTHAND_NONE
-            | ((apic_id as u64) << 32);
+            | DEST_SHORTHAND_NONE;
         
-        wrmsr(X2APIC_ICR, icr_value);
+        if use_xapic_mode() {
+            log::info!("[IPI] Using xAPIC (MMIO) mode");
+            log::info!("[IPI] Writing ICR_HIGH = {:#010x} (dest = {})", apic_id << 24, apic_id);
+            write_xapic_reg(XAPIC_ICR_HIGH, apic_id << 24);  // Destination in bits 24-31
+            
+            log::info!("[IPI] Writing ICR_LOW = {:#010x}", icr_low as u32);
+            write_xapic_reg(XAPIC_ICR_LOW, icr_low as u32);
+        } else {
+            let icr_value = icr_low | ((apic_id as u64) << 32);
+            log::info!("[IPI] Using x2APIC (MSR) mode");
+            log::info!("[IPI] Writing ICR value {:#018x} to MSR {:#x}", icr_value, X2APIC_ICR);
+            wrmsr(X2APIC_ICR, icr_value);
+        }
         
-        log::debug!("Sent INIT IPI to APIC ID {}", apic_id);
+        log::info!("[IPI] INIT IPI sent successfully");
     }
 }
 
@@ -96,23 +128,29 @@ pub fn send_init_ipi(apic_id: u32) {
 /// SIPI starts the target CPU executing at physical address (vector * 4096).
 /// The vector is typically 0x08 for address 0x8000.
 pub fn send_startup_ipi(apic_id: u32, vector: u8) {
+    log::info!("[IPI] send_startup_ipi() ENTERED for APIC {}, vector {:#x}", apic_id, vector);
+    
     unsafe {
-        // ICR format for SIPI:
-        // Bits 0-7:   Vector (startup address / 4096)
-        // Bits 8-10:  Delivery Mode (110 = SIPI)
-        // Bit 14:     Level (1 = assert)
-        // Bits 18-19: Destination Shorthand (00 = use destination field)
-        // Bits 32-63: Destination (x2APIC ID)
-        
-        let icr_value = (vector as u64)
+        let icr_low = (vector as u64)
             | DELIVERY_MODE_STARTUP
             | LEVEL_ASSERT
-            | DEST_SHORTHAND_NONE
-            | ((apic_id as u64) << 32);
+            | DEST_SHORTHAND_NONE;
         
-        wrmsr(X2APIC_ICR, icr_value);
+        if use_xapic_mode() {
+            log::info!("[IPI] Using xAPIC (MMIO) mode for SIPI");
+            log::info!("[IPI] Writing ICR_HIGH = {:#010x} (dest = {})", apic_id << 24, apic_id);
+            write_xapic_reg(XAPIC_ICR_HIGH, apic_id << 24);
+            
+            log::info!("[IPI] Writing ICR_LOW = {:#010x} (vector={:#x}, addr={:#x})", icr_low as u32, vector, (vector as u32) * 0x1000);
+            write_xapic_reg(XAPIC_ICR_LOW, icr_low as u32);
+        } else {
+            let icr_value = icr_low | ((apic_id as u64) << 32);
+            log::info!("[IPI] Using x2APIC (MSR) mode for SIPI");
+            log::info!("[IPI] Writing SIPI ICR value {:#018x} to MSR {:#x}", icr_value, X2APIC_ICR);
+            wrmsr(X2APIC_ICR, icr_value);
+        }
         
-        log::debug!("Sent SIPI (vector {:#x}) to APIC ID {}", vector, apic_id);
+        log::info!("[IPI] SIPI sent successfully");
     }
 }
 

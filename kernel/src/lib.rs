@@ -368,6 +368,87 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             arch::x86_64::gdt::init();
             logger::early_print("[KERNEL] ✓ GDT loaded successfully\n");
 
+            // Initialiser PCID (Process-Context Identifiers) pour TLB optimization
+            logger::early_print("[KERNEL] Initializing PCID (TLB optimization)...\n");
+            arch::x86_64::pcid::init();
+            logger::early_print("[KERNEL] ✓ PCID enabled\n");
+
+            // Phase 2: Initialiser ACPI pour détecter les CPUs (SMP)
+            logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
+            logger::early_print("[KERNEL]   PHASE 2 - SMP INITIALIZATION\n");
+            logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
+            
+            match arch::x86_64::acpi::init() {
+                Ok(acpi_info) => {
+                    logger::early_print(&alloc::format!(
+                        "[KERNEL] ✓ ACPI initialized: {} CPU(s) detected\n",
+                        acpi_info.cpu_count
+                    ));
+                    logger::early_print(&alloc::format!(
+                        "[KERNEL]   LAPIC base: 0x{:X}\n",
+                        acpi_info.lapic_base
+                    ));
+                    
+                    if acpi_info.cpu_count > 1 {
+                        logger::early_print("[KERNEL] 🚀 SMP mode detected - Multi-core support\n");
+                        
+                        // Phase 2.2: Initialize APIC (Advanced Programmable Interrupt Controller)
+                        logger::early_print("[KERNEL] Initializing APIC for SMP...\n");
+                        arch::x86_64::interrupts::apic::init();
+                        logger::early_print("[KERNEL] ✓ Local APIC initialized\n");
+                        
+                        // Phase 2.3: Initialize I/O APIC for external IRQs
+                        logger::early_print("[KERNEL] Initializing I/O APIC...\n");
+                        arch::x86_64::interrupts::ioapic::init();
+                        logger::early_print("[KERNEL] ✓ I/O APIC initialized\n");
+                        
+                        // Phase 2.3.5: Map low memory for AP trampoline (BEFORE timer!)
+                        logger::early_print("[KERNEL] ★★★ UNIQUE MARKER 12345 ★★★\n");
+                        logger::early_print("[KERNEL] Mapping low memory...\n");
+                        arch::x86_64::memory::paging::map_low_memory();
+                        logger::early_print("[KERNEL] ✓ Low memory mapped\n");
+                        
+                        // Phase 2.4: Configure APIC Timer (replaces PIT in SMP mode)
+                        logger::early_print("[KERNEL] Configuring APIC Timer (100Hz)...\n");
+                        arch::x86_64::interrupts::apic::setup_timer(32); // IRQ 0 → vector 32
+                        logger::early_print("[KERNEL] ✓ APIC Timer configured\n");
+                        
+                        crate::arch::x86_64::set_smp_mode(true);
+                        
+                        // Phase 2.6: Bootstrap Application Processors
+                        logger::early_print("[KERNEL] Bootstrapping Application Processors...\n");
+                        match arch::x86_64::smp::bootstrap_aps(&acpi_info) {
+                            Ok(_) => {
+                                let cpu_count = arch::x86_64::smp::get_cpu_count();
+                                logger::early_print(&alloc::format!(
+                                    "[KERNEL] ✓ {} / {} CPUs online\n",
+                                    arch::x86_64::smp::get_online_count(),
+                                    cpu_count
+                                ));
+                            }
+                            Err(e) => {
+                                logger::early_print(&alloc::format!(
+                                    "[KERNEL] ⚠️  AP bootstrap failed: {}\n",
+                                    e
+                                ));
+                            }
+                        }
+                    } else {
+                        logger::early_print("[KERNEL] ℹ️  Single-core mode\n");
+                        crate::arch::x86_64::set_smp_mode(false);
+                    }
+                }
+                Err(e) => {
+                    logger::early_print(&alloc::format!(
+                        "[KERNEL] ⚠️  ACPI init failed: {}\n",
+                        e
+                    ));
+                    logger::early_print("[KERNEL] ℹ️  Falling back to single-core mode\n");
+                    crate::arch::x86_64::set_smp_mode(false);
+                }
+            }
+            logger::early_print("\n");
+
             // Initialiser IDT (Interrupt Descriptor Table)
             logger::early_print("[KERNEL] Initializing IDT...\n");
             arch::x86_64::idt::init();
@@ -377,14 +458,18 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)); }
             logger::early_print("[KERNEL] Interrupts disabled (CLI)\n");
             
-            // Configurer PIC et PIT (méthode legacy qui fonctionne)
-            logger::early_print("[KERNEL] Configuring PIC 8259...\n");
-            arch::x86_64::pic_wrapper::init_pic();
-            logger::early_print("[KERNEL] ✓ PIC configured (vectors 32-47)\n");
-            
-            logger::early_print("[KERNEL] Configuring PIT timer (100Hz)...\n");
-            arch::x86_64::pit::init(100);
-            logger::early_print("[KERNEL] ✓ PIT configured at 100Hz\n");
+            // Configurer PIC/PIT en mode single-core, skip en mode SMP (APIC Timer)
+            if !arch::x86_64::is_smp_mode() {
+                logger::early_print("[KERNEL] Configuring PIC 8259...\n");
+                arch::x86_64::pic_wrapper::init_pic();
+                logger::early_print("[KERNEL] ✓ PIC configured (vectors 32-47)\n");
+                
+                logger::early_print("[KERNEL] Configuring PIT timer (100Hz)...\n");
+                arch::x86_64::pit::init(100);
+                logger::early_print("[KERNEL] ✓ PIT configured at 100Hz\n");
+            } else {
+                logger::early_print("[KERNEL] ℹ️  Skipping PIC/PIT (using APIC in SMP mode)\n");
+            }
 
             // Afficher le statut du système avec splash
             splash::display_boot_progress("System Tables", 100);
@@ -433,18 +518,27 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
             logger::early_print("   • Thread switching confirmed\n");
             logger::early_print("   • Context switch functional\n\n");
             
-            // ⏸️ TEMPORARILY DISABLED: Benchmark needs active threads to work
-            // After simple_multithread test, all threads exit → no threads left
-            // TODO: Create dedicated benchmark threads that persist
-            // let (avg, _min, _max) = scheduler::run_context_switch_benchmark();
-            // bench::BENCH_STATS.record_context_switch(avg);
+            // Start production benchmark (thread persists for continuous measurement)
+            logger::early_print("[KERNEL] Starting production context switch benchmark...\n");
+            match bench::context_switch_prod::start_production_benchmark() {
+                Ok(_) => {
+                    logger::early_print("[KERNEL] ✅ Production benchmark active\n");
+                    logger::early_print("[KERNEL]    Reports every 100 context switches\n\n");
+                }
+                Err(e) => {
+                    logger::early_print("[KERNEL] ⚠️  Benchmark failed: ");
+                    logger::early_print(e);
+                    logger::early_print("\n");
+                }
+            }
             
             logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
             logger::early_print("[KERNEL]   PHASE 0 COMPLETE - Scheduler Ready\n");
             logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
             logger::early_print("[KERNEL] ✅ Timer + Context Switch validated\n");
             logger::early_print("[KERNEL] ✅ Scheduler 3-queue operational\n");
-            logger::early_print("[KERNEL] ✅ Memory management ready\n\n");
+            logger::early_print("[KERNEL] ✅ Memory management ready\n");
+            logger::early_print("[KERNEL] ✅ Production benchmark running\n\n");
             
             // Disable interrupts before VFS init to prevent test threads from interfering
             arch::x86_64::disable_interrupts();

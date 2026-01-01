@@ -91,6 +91,15 @@ struct GdtPointer {
 
 static mut GDT: GDT = GDT::new();
 
+/// Get GDT base address and limit for SMP
+pub fn get_gdt_info() -> (u64, u16) {
+    unsafe {
+        let base = &GDT as *const _ as u64;
+        let limit = (size_of::<GDT>() - 1) as u16;
+        (base, limit)
+    }
+}
+
 /// Initialize GDT
 pub fn init() {
     unsafe {

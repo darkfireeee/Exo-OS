@@ -80,6 +80,15 @@ static mut IDT: Idt = Idt {
     entries: [IdtEntry::empty(); IDT_ENTRIES],
 };
 
+/// Retourne l'adresse de base et la limite de l'IDT pour SMP
+pub fn get_idt_info() -> (u64, u16) {
+    unsafe {
+        let base = &IDT as *const _ as u64;
+        let limit = (core::mem::size_of::<Idt>() - 1) as u16;
+        (base, limit)
+    }
+}
+
 /// Initialise l'IDT et charge-la dans le CPU
 pub fn init() {
     unsafe {

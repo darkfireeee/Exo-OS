@@ -43,7 +43,7 @@
 | Métrique | Linux | Exo-OS Target | Ratio | Status |
 |----------|-------|---------------|-------|--------|
 | IPC Latence | 1247 cycles | **347 cycles** | 3.6x ✨ | 🟡 À valider |
-| Context Switch | 2134 cycles | **304 cycles** | 7x ✨ | 🟡 À valider |
+| Context Switch | 2134 cycles | **300 cycles** | 7x ✨ | 🟡 À valider |
 | Alloc Thread-Local | ~50 cycles | **8 cycles** | 6.25x ✨ | 🟡 À valider |
 | Scheduler Pick | ~200 cycles | **87 cycles** | 2.3x ✨ | 🟡 À valider |
 | Syscall Fast Path | ~150 cycles | **<50 cycles** | 3x ✨ | 🔴 Non mesuré |

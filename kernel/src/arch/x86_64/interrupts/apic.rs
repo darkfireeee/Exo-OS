@@ -3,6 +3,7 @@
 pub const APIC_BASE_MSR: u32 = 0x1B;
 
 use core::arch::x86_64::__cpuid;
+use alloc::format;
 
 #[inline]
 unsafe fn rdmsr(msr: u32) -> u64 {
@@ -62,28 +63,24 @@ impl LocalApic {
     }
     
     pub fn init(&mut self) {
-        // Force x2APIC mode - we use MSRs instead of MMIO to avoid memory mapping
-        log::info!("Forcing x2APIC mode (MSR-based, no MMIO needed)");
+        // FORCE xAPIC mode for SMP debugging (better QEMU compatibility)
+        crate::logger::early_print("[APIC] FORCING xAPIC mode for SMP debugging...\n");
+        log::info!("xAPIC mode enabled (MMIO at 0xFEE00000) - FORCED for SMP");
+        self.init_xapic();
+        self.x2apic_mode = false;
         
-        // Check if x2APIC is supported
-        crate::logger::early_print("[APIC] Checking x2APIC support...\n");
-        if X2Apic::is_supported() {
-            crate::logger::early_print("[APIC] x2APIC IS supported\n");
-        } else {
-            crate::logger::early_print("[APIC] x2APIC NOT supported - SKIPPING APIC (no MMIO mapping)\n");
-            // xAPIC requires MMIO at 0xFEE00000 which is not mapped
-            // Skip APIC initialization for now
-            return;
-        }
+        // TODO: Re-enable x2APIC once SMP works:
+        // if X2Apic::is_supported() {
+        //     X2Apic::enable();
+        //     self.x2apic_mode = true;
+        // }
         
-        crate::logger::early_print("[APIC] Enabling x2APIC...\n");
-        X2Apic::enable();
-        self.x2apic_mode = true;
-        
-        crate::logger::early_print("[APIC] Setting spurious interrupt vector...\n");
-        // Enable APIC via spurious interrupt vector
+        // Enable APIC via spurious interrupt vector (works for both modes)
         self.set_spurious_interrupt_vector(0xFF);
-        crate::logger::early_print("[APIC] APIC init complete\n");
+        
+        let apic_id = self.get_id();
+        crate::logger::early_print(&format!("[APIC] ✓ APIC initialized - ID = {}\n", apic_id));
+        log::info!("Local APIC initialized, ID = {}", apic_id);
     }
     
     fn init_xapic(&mut self) {
@@ -185,7 +182,7 @@ pub fn send_eoi() {
     }
 }
 
-/// Configure APIC Timer at 100Hz using x2APIC MSRs
+/// Configure APIC Timer at 100Hz using xAPIC or x2APIC
 /// This is called instead of PIT when using APIC mode
 pub fn setup_timer(vector: u8) {
     crate::logger::early_print("[APIC] Setting up APIC Timer...\n");
@@ -195,30 +192,51 @@ pub fn setup_timer(vector: u8) {
         let apic_base = rdmsr(IA32_APIC_BASE);
         let x2apic_enabled = (apic_base & (1 << 10)) != 0;
         
-        if !x2apic_enabled {
-            crate::logger::early_print("[APIC] x2APIC not enabled, enabling now...\n");
-            wrmsr(IA32_APIC_BASE, apic_base | (1 << 10) | (1 << 11));
+        if x2apic_enabled {
+            // Use x2APIC MSRs
+            // Set divide value to 16 (value 3 = divide by 16)
+            wrmsr(X2APIC_TIMER_DCR, 0x03);
+            
+            // Configure LVT Timer: periodic mode, vector number
+            // Bit 17 = 1 for periodic, bits 0-7 = vector
+            let lvt_timer = (1 << 17) | (vector as u64);
+            wrmsr(X2APIC_LVT_TIMER, lvt_timer);
+            
+            // Set initial count for ~100Hz
+            let initial_count: u64 = 62_500;
+            wrmsr(X2APIC_TIMER_ICR, initial_count);
+            
+            crate::logger::early_print(&alloc::format!(
+                "[APIC] ✓ APIC Timer configured (x2APIC MSR): vector={}, periodic, ICR={}\n", 
+                vector, initial_count
+            ));
+        } else {
+            // Use xAPIC MMIO
+            const APIC_LVT_TIMER: usize = 0x320;
+            const APIC_TIMER_DCR: usize = 0x3E0;
+            const APIC_TIMER_ICR: usize = 0x380;
+            const APIC_BASE_ADDR: usize = 0xFEE00000;
+            
+            let write_apic_reg = |offset: usize, value: u32| {
+                let addr = (APIC_BASE_ADDR + offset) as *mut u32;
+                core::ptr::write_volatile(addr, value);
+            };
+            
+            // Set divide value to 16
+            write_apic_reg(APIC_TIMER_DCR, 0x03);
+            
+            // Configure LVT Timer: periodic mode, vector number
+            let lvt_timer = (1 << 17) | (vector as u32);
+            write_apic_reg(APIC_LVT_TIMER, lvt_timer);
+            
+            // Set initial count for ~100Hz
+            let initial_count: u32 = 62_500;
+            write_apic_reg(APIC_TIMER_ICR, initial_count);
+            
+            crate::logger::early_print(&alloc::format!(
+                "[APIC] ✓ APIC Timer configured (xAPIC MMIO): vector={}, periodic, ICR={}\n", 
+                vector, initial_count
+            ));
         }
-        
-        // Set divide value to 16 (value 3 = divide by 16)
-        wrmsr(X2APIC_TIMER_DCR, 0x03);
-        
-        // Configure LVT Timer: periodic mode, vector number
-        // Bit 17 = 1 for periodic, bits 0-7 = vector
-        let lvt_timer = (1 << 17) | (vector as u64);
-        wrmsr(X2APIC_LVT_TIMER, lvt_timer);
-        
-        // Calibrate timer: we need to figure out the frequency
-        // For now, use a reasonable default that gives ~100Hz
-        // On modern CPUs, the bus frequency is typically around 100MHz-200MHz
-        // With divide by 16, we need initial_count = bus_freq / 16 / target_freq
-        // Assuming ~100MHz bus = 100,000,000 / 16 / 100 = 62,500
-        let initial_count: u64 = 62_500;
-        wrmsr(X2APIC_TIMER_ICR, initial_count);
-        
-        crate::logger::early_print(&alloc::format!(
-            "[APIC] ✓ APIC Timer configured: vector={}, periodic, ICR={}\n", 
-            vector, initial_count
-        ));
     }
 }

@@ -258,6 +258,120 @@ pub extern "C" fn ap_startup(cpu_id: u64) -> ! {
     }
 }
 
+/// Bootstrap Application Processors using already-parsed ACPI info
+///
+/// This version is called when ACPI/APIC have already been initialized.
+/// It only performs the AP startup sequence without re-initializing ACPI.
+pub fn bootstrap_aps(acpi_info: &crate::arch::x86_64::acpi::AcpiInfo) -> Result<(), &'static str> {
+    use crate::arch::x86_64::interrupts::ipi;
+    use crate::arch::x86_64::acpi::madt;
+    
+    log::info!("Bootstrapping Application Processors...");
+    
+    // Parse MADT to get CPU details
+    let madt_info = madt::parse_madt()?;
+    
+    let cpu_count = madt_info.cpu_count;
+    SMP_SYSTEM.cpu_count.store(cpu_count, Ordering::Release);
+    
+    log::info!("Detected {} CPUs from MADT", cpu_count);
+    
+    // Setup CPUs in SMP_SYSTEM
+    for (i, &apic_id) in madt_info.apic_ids.iter().enumerate() {
+        if i >= MAX_CPUS {
+            break;
+        }
+        
+        let cpu = &SMP_SYSTEM.cpus[i];
+        cpu.apic_id.store(apic_id as u8, Ordering::Release);
+        cpu.apic_base.store(madt_info.local_apic_address as usize, Ordering::Release);
+    }
+    
+    // Detect BSP (Bootstrap Processor) - always first CPU
+    let bsp_apic_id = madt_info.apic_ids[0];
+    SMP_SYSTEM.cpus[0].set_state(CpuState::Online);
+    SMP_SYSTEM.cpus[0].is_bsp.store(true, Ordering::Release);
+    SMP_SYSTEM.bsp_id.store(0, Ordering::Release);
+    SMP_SYSTEM.online_count.store(1, Ordering::Release);
+    
+    log::info!("BSP APIC ID: {}", bsp_apic_id);
+    
+    // Bootstrap APs (Application Processors) - skip BSP (index 0)
+    for i in 1..cpu_count {
+        if i >= MAX_CPUS {
+            break;
+        }
+        
+        let apic_id = madt_info.apic_ids[i];
+        
+        log::info!("Booting AP {} (APIC ID {})...", i, apic_id);
+        
+        // Allocate stack for AP
+        let stack_top = bootstrap::allocate_ap_stack(i)?;
+        
+        // Setup trampoline
+        let vector = bootstrap::setup_trampoline(i, stack_top, ap_startup as u64)?;
+        
+        log::info!("✓ Trampoline setup OK, vector={:#x}. Sending INIT IPI to APIC {}...", vector, apic_id);
+        
+        // Send INIT IPI to reset AP
+        ipi::send_init_ipi(apic_id);
+        
+        log::info!("✓ INIT IPI sent to APIC {}", apic_id);
+        
+        log::info!("DEBUG: Calling sleep_ms(10)...");
+        
+        // Wait 10ms (INIT de-assert delay)
+        crate::arch::x86_64::pit::sleep_ms(10);
+        
+        log::info!("DEBUG: sleep_ms(10) completed, sending 1st SIPI...");
+        
+        // Send SIPI (Startup IPI) with trampoline vector
+        ipi::send_startup_ipi(apic_id, vector);
+        
+        log::info!("DEBUG: 1st SIPI sent, waiting 1 second...");
+        
+        // Wait 1 second before sending 2nd SIPI (debug: eliminate timing as factor)
+        crate::arch::x86_64::pit::sleep_ms(1000);
+        
+        log::info!("DEBUG: Sending 2nd SIPI after 1s delay...");
+        
+        // Send 2nd SIPI
+        ipi::send_startup_ipi(apic_id, vector);
+        
+        log::info!("DEBUG: Both SIPIs sent, waiting for AP to come online...");
+        
+        // Wait for AP to come online (timeout after 1 second)
+        let mut timeout = 100; // 100 * 10ms = 1 second
+        while timeout > 0 {
+            if SMP_SYSTEM.cpus[i].is_online() {
+                log::info!("✓ AP {} online!", i);
+                break;
+            }
+            crate::arch::x86_64::pit::sleep_ms(10);
+            timeout -= 1;
+        }
+        
+        if timeout == 0 {
+            log::error!("✗ AP {} failed to start (timeout)", i);
+            SMP_SYSTEM.cpus[i].set_state(CpuState::Error);
+        }
+    }
+    
+    let online_count = SMP_SYSTEM.online_count.load(Ordering::Acquire);
+    log::info!("SMP initialized: {} / {} CPUs online", online_count, cpu_count);
+    
+    // Réactiver les interruptions après le bootstrap
+    unsafe { 
+        core::arch::asm!("sti", options(nomem, nostack)); 
+        log::info!("STI: Interrupts re-enabled after AP bootstrap");
+    }
+    
+    SMP_SYSTEM.initialized.store(true, Ordering::Release);
+    
+    Ok(())
+}
+
 /// Initialize SMP (Phase 2 - Full Implementation)
 pub fn init() -> Result<(), &'static str> {
     use crate::arch::x86_64::{acpi, interrupts::ipi};
@@ -344,6 +458,16 @@ pub fn init() -> Result<(), &'static str> {
     SMP_SYSTEM.initialized.store(true, Ordering::Release);
     
     Ok(())
+}
+
+/// Get total CPU count
+pub fn get_cpu_count() -> usize {
+    SMP_SYSTEM.cpu_count.load(Ordering::Acquire)
+}
+
+/// Get online CPU count
+pub fn get_online_count() -> usize {
+    SMP_SYSTEM.online_count.load(Ordering::Acquire)
 }
 
 /// ACPI MADT (Multiple APIC Description Table) structures

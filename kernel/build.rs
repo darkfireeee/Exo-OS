@@ -103,6 +103,11 @@ fn main() {
     // 4. Compile Syscall entry point (ASM)
     // ═══════════════════════════════════════════════════════════════
     compile_asm_file(&out_dir, "src/arch/x86_64/syscall_entry.asm", "syscall_entry");
+    
+    // ═══════════════════════════════════════════════════════════════
+    // 5. Compile AP (Application Processor) Trampoline for SMP
+    // ═══════════════════════════════════════════════════════════════
+    compile_asm_file(&out_dir, "src/arch/x86_64/smp/ap_trampoline.asm", "ap_trampoline");
 }
 
 /// Compile an assembly file with NASM

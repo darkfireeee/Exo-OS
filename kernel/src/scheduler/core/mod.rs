@@ -24,6 +24,7 @@
 //! │  loadbalancer.rs Multi-CPU load balancing                  │
 //! │  affinity.rs     CPU affinity management                   │
 //! │  predictive.rs   EMA-based runtime prediction              │
+//! │  lockfree_queue.rs  Atomic ring buffer (zero-mutex)        │
 //! │  statistics.rs   Legacy statistics (mutex-based)           │
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
@@ -42,6 +43,7 @@ pub mod loadbalancer;
 pub mod affinity;
 pub mod statistics;
 pub mod predictive;
+pub mod lockfree_queue;
 
 // ═══════════════════════════════════════════════════════════════
 // Main Scheduler Exports (V3 - Production)

@@ -55,6 +55,61 @@ const PAGE_HUGE: u64 = 1 << 7;        // 2MB page
 const PAGE_NO_CACHE: u64 = 1 << 4;    // Disable caching (important for MMIO)
 const PAGE_WRITE_THROUGH: u64 = 1 << 3;
 
+/// Map low memory (0 - 1MB) for AP bootstrap trampolineconst
+/// APs start in real mode and need access to memory below 1MB
+pub fn map_low_memory() {
+    crate::logger::early_print("[PAGING] Mapping low memory (0 - 1MB)...\n");
+    
+    unsafe {
+        // Get current CR3 (PML4 physical address)
+        let cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+        let pml4 = cr3 as *mut u64;
+        
+        // Low 1MB is in PML4[0] -> PDP[0] -> PD[0] -> PT[0..255]
+        // We'll map it using 2MB huge pages for simplicity
+        
+        // Get PML4[0] (should already exist from boot)
+        let pml4_entry = core::ptr::read_volatile(pml4);
+        if pml4_entry & PAGE_PRESENT == 0 {
+            crate::logger::early_print("[PAGING] ERROR: PML4[0] not present!\n");
+            return;
+        }
+        let pdp = (pml4_entry & 0x000F_FFFF_FFFF_F000) as *mut u64;
+        
+        // Get PDP[0] (covers 0 - 1GB)
+        let pdp_entry = core::ptr::read_volatile(pdp);
+        
+        let pd: *mut u64;
+        if pdp_entry & PAGE_PRESENT == 0 {
+            // Need to allocate Page Directory
+            static mut PD_FOR_LOW_MEM: [u64; 512] = [0; 512];
+            pd = PD_FOR_LOW_MEM.as_mut_ptr();
+            
+            let pd_phys = pd as u64;
+            core::ptr::write_volatile(pdp, pd_phys | PAGE_PRESENT | PAGE_WRITE);
+            crate::logger::early_print("[PAGING] Created PD for low memory\n");
+        } else if pdp_entry & PAGE_HUGE != 0 {
+            // Already a 1GB huge page - low memory is mapped
+            crate::logger::early_print("[PAGING] Low memory already mapped (1GB huge page)\n");
+            return;
+        } else {
+            pd = (pdp_entry & 0x000F_FFFF_FFFF_F000) as *mut u64;
+        }
+        
+        // Map first 1MB using a 2MB page at PD[0] (covers 0 - 2MB)
+        // Must be EXECUTABLE for trampoline code, WRITABLE for data
+        // Bit 63 = NX (No-Execute): we set it to 0 to allow execution
+        let low_mem_entry = 0x0 | PAGE_PRESENT | PAGE_WRITE | PAGE_HUGE;  // NX=0 (executable)
+        core::ptr::write_volatile(pd, low_mem_entry);
+        
+        // Flush TLB
+        core::arch::asm!("mov {tmp}, cr3", "mov cr3, {tmp}", tmp = out(reg) _, options(nostack));
+        
+        crate::logger::early_print("[PAGING] ✓ Low memory mapped (0 - 2MB)\n");
+    }
+}
+
 /// Map APIC and I/O APIC memory regions
 /// These are at 0xFEE00000 (Local APIC) and 0xFEC00000 (I/O APIC)
 /// Must be called early during boot before using APIC

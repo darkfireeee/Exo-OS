@@ -189,12 +189,32 @@ pub fn find_table(signature: &[u8; 4]) -> Result<usize, &'static str> {
     Err("Table not found")
 }
 
+/// ACPI initialization info
+#[derive(Debug, Clone, Copy)]
+pub struct AcpiInfo {
+    pub cpu_count: u32,
+    pub bsp_lapic_id: u32,
+    pub lapic_base: u64,
+    pub ioapic_base: u64,
+}
+
 /// Initialize ACPI subsystem
-pub fn init() -> Result<(), &'static str> {
+pub fn init() -> Result<AcpiInfo, &'static str> {
     let rsdp_addr = find_rsdp()?;
     let rsdp = unsafe { &*(rsdp_addr as *const Rsdp) };
     
     log::info!("ACPI initialized, revision {}", rsdp.revision);
     
-    Ok(())
+    // Parse MADT to get CPU information
+    let madt_info = madt::parse_madt()?;
+    
+    // Get BSP LAPIC ID (first CPU in list)
+    let bsp_lapic_id = madt_info.apic_ids.first().copied().unwrap_or(0);
+    
+    Ok(AcpiInfo {
+        cpu_count: madt_info.cpu_count as u32,
+        bsp_lapic_id,
+        lapic_base: madt_info.local_apic_address,
+        ioapic_base: madt_info.ioapic_address,
+    })
 }

@@ -18,6 +18,7 @@ pub mod idt;
 pub mod interrupts;
 pub mod io_diagnostic;
 pub mod memory;
+pub mod pcid;  // v0.5.2: PCID for TLB optimization
 pub mod percpu;
 pub mod pic_wrapper;
 pub mod pit;
@@ -143,4 +144,17 @@ pub unsafe fn inb(port: u16) -> u8 {
 #[inline(always)]
 pub unsafe fn outb(port: u16, value: u8) {
     core::arch::asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags));
+}
+
+/// Global SMP mode flag
+static SMP_MODE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Set SMP mode (multi-core with APIC)
+pub fn set_smp_mode(enabled: bool) {
+    SMP_MODE.store(enabled, core::sync::atomic::Ordering::SeqCst);
+}
+
+/// Check if running in SMP mode
+pub fn is_smp_mode() -> bool {
+    SMP_MODE.load(core::sync::atomic::Ordering::SeqCst)
 }

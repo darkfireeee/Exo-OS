@@ -226,3 +226,9 @@ pub fn run_basic_benchmarks() {
     
     log::info!("[BENCH] Basic benchmarks complete");
 }
+
+// ============================================================================
+// Production Context Switch Benchmark
+// ============================================================================
+
+pub mod context_switch_prod;

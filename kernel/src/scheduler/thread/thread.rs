@@ -26,7 +26,14 @@ pub enum ThreadPriority {
 }
 
 /// Saved thread context (windowed - minimal saves)
-#[repr(C)]
+/// 
+/// v0.5.1 OPTIMIZATION: Cache-aligned to 64 bytes (1 cache line)
+/// - Eliminates false sharing on SMP systems
+/// - Faster memory access (aligned loads/stores)
+/// 
+/// v0.5.2 OPTIMIZATION: PCID support
+/// - Process Context ID for TLB preservation
+#[repr(C, align(64))]
 #[derive(Debug, Clone, Copy)]
 pub struct ThreadContext {
     /// Stack pointer (RSP)
@@ -35,6 +42,12 @@ pub struct ThreadContext {
     pub rip: u64,
     /// Page table (CR3)
     pub cr3: u64,
+    /// Process Context ID (PCID) for TLB
+    pub pcid: u16,
+    /// Padding
+    _pad: u16,
+    /// Reserved
+    _reserved: u32,
     /// Flags register (RFLAGS)
     pub rflags: u64,
     
@@ -71,6 +84,9 @@ impl ThreadContext {
             rsp: 0,
             rip: 0,
             cr3: 0,
+            pcid: 0,
+            _pad: 0,
+            _reserved: 0,
             rflags: 0,
             rax: 0,
             rbx: 0,
@@ -93,27 +109,28 @@ impl ThreadContext {
     /// Capture full register context from current stack frame
     /// 
     /// This reads the registers saved by windowed_context_switch on the parent's stack.
-    /// Stack layout after windowed_context_switch:
+    /// Stack layout after windowed_context_switch (v0.5.1 - 4 regs):
     ///   [rsp+0]  = r15
     ///   [rsp+8]  = r14
     ///   [rsp+16] = r13
     ///   [rsp+24] = r12
-    ///   [rsp+32] = rbp
-    ///   [rsp+40] = rbx
-    ///   [rsp+48] = return address (RIP)
+    ///   [rsp+32] = return address (RIP)
     pub unsafe fn capture_from_stack(parent_rsp: u64) -> Self {
         let stack_ptr = parent_rsp as *const u64;
         
         Self {
             rsp: parent_rsp,
-            rip: *stack_ptr.offset(6),  // return address after callee-saved regs
+            rip: *stack_ptr.offset(4),  // return address after 4 callee-saved regs
             cr3: 0,  // Will be set by caller
+            pcid: 0, // Will be allocated by scheduler
+            _pad: 0,
+            _reserved: 0,
             rflags: 0x202,  // IF enabled
             rax: 0,  // Child gets 0 as return value from fork()
-            rbx: *stack_ptr.offset(5),
+            rbx: 0,  // Not saved in v0.5.1 (compiler handles if needed)
             rcx: 0,  // Caller-saved, not preserved
             rdx: 0,  // Caller-saved, not preserved
-            rbp: *stack_ptr.offset(4),
+            rbp: 0,  // Not saved in v0.5.1 (compiler handles if needed)
             rdi: 0,  // Caller-saved, not preserved
             rsi: 0,  // Caller-saved, not preserved
             r8: 0,   // Caller-saved, not preserved
@@ -194,6 +211,13 @@ impl Thread {
 
         // Setup initial context using windowed init (prepares stack for context switch)
         let mut context = ThreadContext::empty();
+        
+        // v0.5.2: Allocate PCID for TLB optimization
+        #[cfg(target_arch = "x86_64")]
+        {
+            context.pcid = crate::arch::x86_64::pcid::alloc();
+        }
+        
         unsafe {
             crate::scheduler::switch::windowed::init_context(
                 &mut context as *mut ThreadContext,
@@ -587,6 +611,9 @@ impl Thread {
             rsp: captured_rsp,
             rip: 0,  // Will be set from return address on stack
             cr3: parent.context.cr3,
+            pcid: crate::arch::x86_64::pcid::alloc(),  // v0.5.2: Allocate new PCID
+            _pad: 0,
+            _reserved: 0,
             rflags: 0x202,  // IF enabled
             rax: 0,  // fork() returns 0 in child
             rbx,

@@ -58,8 +58,36 @@ pub fn get_uptime_ms() -> u64 {
 
 /// Attend un certain nombre de millisecondes (busy wait)
 pub fn sleep_ms(ms: u64) {
-    let start = get_uptime_ms();
-    while get_uptime_ms() - start < ms {
+    log::info!("[SLEEP] sleep_ms({}) called", ms);
+    
+    // En mode SMP, le PIT n'est pas initialisé, on utilise RDTSC
+    // Approximation: 2.4 GHz CPU → 2_400_000 cycles/ms
+    const CYCLES_PER_MS: u64 = 2_400_000;
+    
+    let start = unsafe { core::arch::x86_64::_rdtsc() };
+    let target = start + (ms * CYCLES_PER_MS);
+    
+    log::info!("[SLEEP] RDTSC start={}, target={}", start, target);
+    
+    let mut iterations = 0u64;
+    while unsafe { core::arch::x86_64::_rdtsc() } < target {
+        unsafe {
+            core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
+        }
+        iterations += 1;
+        if iterations % 10_000_000 == 0 {
+            let now = unsafe { core::arch::x86_64::_rdtsc() };
+            log::info!("[SLEEP] Still waiting... now={}, target={}", now, target);
+        }
+    }
+    
+    log::info!("[SLEEP] sleep_ms({}) completed after {} iterations", ms, iterations);
+}
+
+/// Attend un certain nombre de microsecondes (busy wait)
+pub fn sleep_us(us: u64) {
+    // Simple busy loop with pause
+    for _ in 0..(us * 100) {
         unsafe {
             core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
         }

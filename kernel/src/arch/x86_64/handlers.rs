@@ -438,8 +438,12 @@ extern "C" fn timer_interrupt_handler(_stack_frame: &InterruptStackFrame) {
         crate::logger::early_print("[T]"); // Timer still running
     }
     
-    // IMPORTANT: Envoyer EOI au PIC 8259
-    crate::arch::x86_64::pic_wrapper::send_eoi(0);  // IRQ 0 = Timer
+    // IMPORTANT: Envoyer EOI (APIC en mode SMP, PIC sinon)
+    if crate::arch::x86_64::is_smp_mode() {
+        crate::arch::x86_64::interrupts::apic::send_eoi();
+    } else {
+        crate::arch::x86_64::pic_wrapper::send_eoi(0);  // IRQ 0 = Timer
+    }
     
     // Préemption: Appeler le scheduler à CHAQUE tick (10ms à 100Hz)
     // Ceci permet le vrai round-robin multitasking

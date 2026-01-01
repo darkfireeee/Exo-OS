@@ -107,10 +107,13 @@ pub fn init() -> FsResult<()> {
 fn load_test_binaries() -> FsResult<()> {
     // Embed test binaries at compile time
     // Path is relative to workspace root (where Cargo.toml is)
-    const HELLO_ELF: &[u8] = include_bytes!("../../../../userland/bin/hello.elf");
-    const TEST_HELLO_ELF: &[u8] = include_bytes!("../../../../userland/bin/test_hello.elf");
-    const TEST_FORK_ELF: &[u8] = include_bytes!("../../../../userland/bin/test_fork_exec.elf");
-    const TEST_PIPE_ELF: &[u8] = include_bytes!("../../../../userland/bin/test_pipe.elf");
+    
+    // ⏸️ Temporarily disabled: Binaries need to be built first with musl-gcc
+    // Run: ./scripts/build_test_binaries.sh
+    // const HELLO_ELF: &[u8] = include_bytes!("../../../../userland/bin/hello.elf");
+    // const TEST_HELLO_ELF: &[u8] = include_bytes!("../../../../userland/bin/test_hello.elf");
+    // const TEST_FORK_ELF: &[u8] = include_bytes!("../../../../userland/bin/test_fork_exec.elf");
+    // const TEST_PIPE_ELF: &[u8] = include_bytes!("../../../../userland/bin/test_pipe.elf");
     
     // Create /bin directory
     match create_dir("/bin") {
@@ -119,6 +122,8 @@ fn load_test_binaries() -> FsResult<()> {
     }
     
     // Write binaries to /bin/
+    // ⏸️ Temporarily disabled until binaries are built
+    /*
     let binaries = [
         ("/bin/hello", HELLO_ELF),
         ("/bin/test_hello", TEST_HELLO_ELF),
@@ -138,6 +143,9 @@ fn load_test_binaries() -> FsResult<()> {
     }
     
     log::info!("VFS: {} test binaries loaded successfully", binaries.len());
+    */
+    
+    log::info!("VFS: test binaries loading skipped (build with musl-gcc first)");
     Ok(())
 }
 
