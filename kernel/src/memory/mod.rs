@@ -2,6 +2,7 @@
 
 pub mod address;
 pub mod cache;
+pub mod cow_manager;
 pub mod dma;
 pub mod dma_simple;
 pub mod heap;
@@ -15,6 +16,7 @@ pub mod virtual_mem;
 
 // Re-exports
 pub use address::{PhysicalAddress, VirtualAddress};
+pub use cow_manager::{CowManager, CowError, mark_cow, is_cow, handle_cow_fault, free_cow_page, clone_address_space};
 pub use heap::LockedHeap;
 pub use physical::Frame;
 pub use physical::buddy_allocator::PAGE_SIZE;

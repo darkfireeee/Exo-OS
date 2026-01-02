@@ -29,7 +29,7 @@ use spin::Mutex;
 use crate::drivers::virtio::{VirtioPciDevice, VirtQueue, DeviceType, status, features};
 use crate::drivers::virtio::desc_flags;
 use crate::drivers::pci::PciDevice;
-use crate::memory::{PhysAddr, VirtAddr};
+use crate::memory::{PhysicalAddress, VirtualAddress};
 
 /// VirtIO-Block feature bits
 pub mod blk_features {

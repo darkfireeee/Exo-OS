@@ -73,6 +73,16 @@ impl UserPageFlags {
     pub const fn user_rodata() -> Self {
         Self::empty().present().user().no_execute()
     }
+    
+    /// Check if WRITABLE flag is set
+    pub fn contains_writable(&self) -> bool {
+        (self.0 & (1 << 1)) != 0
+    }
+
+    /// Remove WRITABLE flag (pour CoW)
+    pub fn remove_writable(self) -> Self {
+        Self(self.0 & !(1 << 1))
+    }
 }
 
 /// A page table entry (PTE)

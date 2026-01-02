@@ -29,7 +29,7 @@ use spin::Mutex;
 use crate::drivers::virtio::{VirtioPciDevice, VirtQueue, DeviceType};
 use crate::drivers::virtio::{desc_flags, status, features};
 use crate::drivers::pci::PciDevice;
-use crate::memory::{PhysAddr, VirtAddr};
+use crate::memory::{PhysicalAddress, VirtualAddress};
 use crate::net::ethernet::{EthernetFrame, MacAddress};
 use crate::net::EtherType;
 
