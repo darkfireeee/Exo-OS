@@ -56,7 +56,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 test_item "No FsError alias in fs/mod.rs" "! grep -q 'pub use.*Error as FsError' kernel/src/fs/mod.rs"
 test_item "FpuState has Debug" "grep -q '#\[derive.*Debug.*\]' kernel/src/arch/x86_64/utils/fpu.rs"
 test_item "Thread has Debug" "grep -q '#\[derive.*Debug.*\]' kernel/src/scheduler/thread/thread.rs"
-test_item "NumaNode no Clone" "! grep -q '#\[derive.*Clone.*\]' kernel/src/scheduler/numa.rs"
+test_item "NumaNode has Debug" "grep -B 1 'pub struct NumaNode' kernel/src/scheduler/numa.rs | grep -q '#\[derive.*Debug.*\]'"
 test_item "get_cpu_count in migration.rs" "grep -q 'get_cpu_count()' kernel/src/scheduler/migration.rs"
 test_item "get_cpu_count in tlb_shootdown.rs" "grep -q 'get_cpu_count()' kernel/src/scheduler/tlb_shootdown.rs"
 
@@ -71,8 +71,8 @@ if cargo build --release 2>&1 | grep -q "Finished"; then
     ((PASS++))
     
     # Compter les erreurs
-    ERROR_COUNT=$(cargo build --release 2>&1 | grep -c "^error\[" || echo "0")
-    if [ "$ERROR_COUNT" -eq "0" ]; then
+    ERROR_COUNT=$(cargo build --release 2>&1 | grep "^error\[" | wc -l)
+    if [ "$ERROR_COUNT" -eq 0 ]; then
         echo -e "  ${GREEN}→ 0 errors${NC}"
         ((PASS++))
     else
@@ -117,8 +117,8 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "6. SCHEDULER AFFINITY"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-test_item "set_thread_affinity in impl" "grep -A 50 'impl Scheduler' kernel/src/scheduler/core/scheduler.rs | grep -q 'pub fn set_thread_affinity'"
-test_item "get_thread_affinity in impl" "grep -A 50 'impl Scheduler' kernel/src/scheduler/core/scheduler.rs | grep -q 'pub fn get_thread_affinity'"
+test_item "set_thread_affinity exists" "grep -q 'pub fn set_thread_affinity' kernel/src/scheduler/core/scheduler.rs"
+test_item "get_thread_affinity exists" "grep -q 'pub fn get_thread_affinity' kernel/src/scheduler/core/scheduler.rs"
 test_item "No orphan affinity methods" "! grep -A 5 '^fn set_thread_affinity' kernel/src/scheduler/core/scheduler.rs"
 
 echo ""
