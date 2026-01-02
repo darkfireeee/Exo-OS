@@ -171,7 +171,7 @@ pub fn migrate_thread(thread: Arc<Thread>, target_cpu: usize) -> bool {
     }
     
     // Validate target CPU
-    let num_cpus = crate::arch::x86_64::smp::cpu_count();
+    let num_cpus = crate::arch::x86_64::smp::get_cpu_count();
     if target_cpu >= num_cpus {
         crate::logger::error(&alloc::format!(
             "[MIGRATE] Invalid target CPU: {} (max: {})",
@@ -227,7 +227,7 @@ fn get_apic_id_for_cpu(cpu_id: usize) -> u32 {
     use crate::arch::x86_64::smp::SMP_SYSTEM;
     use core::sync::atomic::Ordering;
     
-    if let Some(cpu_info) = SMP_SYSTEM.get_cpu(cpu_id) {
+    if let Some(cpu_info) = SMP_SYSTEM.cpu(cpu_id) {
         cpu_info.apic_id.load(Ordering::Acquire) as u32
     } else {
         crate::logger::warn(&alloc::format!(
@@ -250,7 +250,7 @@ pub fn process_current_cpu_migrations() {
 /// Get migration statistics for all CPUs
 pub fn migration_stats() -> alloc::vec::Vec<(usize, usize, usize)> {
     let mut stats = alloc::vec::Vec::new();
-    let num_cpus = crate::arch::x86_64::smp::cpu_count();
+    let num_cpus = crate::arch::x86_64::smp::get_cpu_count();
     
     for cpu_id in 0..num_cpus {
         if let Some(queue) = MIGRATION_QUEUES.get(cpu_id) {

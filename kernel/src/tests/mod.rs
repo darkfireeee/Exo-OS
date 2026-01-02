@@ -14,3 +14,5 @@ pub mod smp_regression;       // Phase 2c Week 1: Regression tests
 pub mod fpu_lazy_tests;       // Phase 2c Week 2: FPU lazy switching
 pub mod week3_timer_pi_tests; // Phase 2c Week 3: Timer sleep + Priority inheritance
 pub mod week4_hardware_tests; // Phase 2c Week 4: Hardware SMP validation
+pub mod phase2d_tests;
+pub mod phase2d_test_runner; // ✅ Phase 2d: Test runner intégré        // Phase 2d: CPU affinity, NUMA, IPI, TLB, ICMP, TCP, CUBIC

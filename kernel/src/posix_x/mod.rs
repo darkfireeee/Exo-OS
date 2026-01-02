@@ -7,7 +7,7 @@ pub mod elf;
 pub mod kernel_interface;
 pub mod optimization;
 pub mod signals;
-// ⏸️ Phase 1b: pub mod syscalls;
+pub mod syscalls;          // ✅ Phase 2d: Syscalls (scheduler, etc.)
 pub mod tools;
 pub mod translation;
 pub mod vfs_posix;         // ✅ Phase 1: VFS POSIX adapter

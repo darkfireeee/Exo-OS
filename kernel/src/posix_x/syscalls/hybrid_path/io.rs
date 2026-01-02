@@ -1,5 +1,6 @@
 //! I/O Syscalls - read/write/open/close with real VFS integration
 
+use crate::fs::FsError;
 use crate::posix_x::core::fd_table::GLOBAL_FD_TABLE;
 use crate::posix_x::translation::errno::Errno;
 use crate::posix_x::vfs_posix::file_ops;

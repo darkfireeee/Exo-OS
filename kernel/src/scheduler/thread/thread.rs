@@ -146,6 +146,7 @@ impl ThreadContext {
 }
 
 /// Thread Control Block (TCB)
+#[derive(Debug)]
 pub struct Thread {
     /// Unique thread ID
     id: ThreadId,

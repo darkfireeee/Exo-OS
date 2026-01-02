@@ -36,14 +36,17 @@ pub fn sys_vfork() -> i64 {
 /// clone - Create thread/process
 /// 
 /// Handles both thread creation (CLONE_THREAD) and process creation
-pub fn sys_clone(flags: u64, stack: usize, ptid: usize, ctid: usize, newtls: usize) -> i64 {
+pub fn sys_clone(flags: u64, stack: usize, _ptid: usize, _ctid: usize, _newtls: usize) -> i64 {
     // Check if this is thread creation or process creation
     const CLONE_THREAD: u64 = 0x00010000;
     const CLONE_VM: u64 = 0x00000100;
     
+    // Convert to correct signature for process::sys_clone(flags: u32, stack: Option<usize>)
+    let stack_opt = if stack == 0 { None } else { Some(stack) };
+    
     if (flags & CLONE_THREAD) != 0 {
         // Thread creation
-        match process::sys_clone(flags, stack as u64, ptid as u64, ctid as u64, newtls as u64) {
+        match process::sys_clone(flags as u32, stack_opt) {
             Ok(tid) => tid as i64,
             Err(e) => {
                 use crate::memory::MemoryError;
@@ -61,7 +64,7 @@ pub fn sys_clone(flags: u64, stack: usize, ptid: usize, ctid: usize, newtls: usi
         sys_fork()
     } else {
         // VM shared but not thread - unusual, treat as thread
-        match process::sys_clone(flags, stack as u64, ptid as u64, ctid as u64, newtls as u64) {
+        match process::sys_clone(flags as u32, stack_opt) {
             Ok(tid) => tid as i64,
             Err(e) => {
                 use crate::memory::MemoryError;

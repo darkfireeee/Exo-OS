@@ -11,11 +11,12 @@ pub mod prediction;
 pub mod realtime;
 pub mod test_threads;
 pub mod signals_stub; // ✅ Phase 0: Stubs temporaires pour signaux POSIX
-// pub mod per_cpu; // ✅ Phase 2: Removed - using core::percpu_queue instead
+pub mod per_cpu; // ✅ Phase 2d+: Per-CPU schedulers (true SMP, cache-optimized)
 pub mod smp_init; // ✅ Phase 2: SMP scheduler integration
 pub mod numa; // ✅ Phase 2d: NUMA awareness
 pub mod migration; // ✅ Phase 2d: IPI-based thread migration
 pub mod tlb_shootdown; // ✅ Phase 2d: TLB synchronization
+pub mod optimizations; // ✅ Phase 2d: Performance optimizations (NUMA, cache, fast paths)
 
 // Re-exports
 pub use self::core::{SCHEDULER, init, start, SchedulerStats, yield_now, block_current, unblock, run_context_switch_benchmark};

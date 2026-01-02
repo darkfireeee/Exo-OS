@@ -9,6 +9,9 @@
 #![feature(const_mut_refs)]
 #![feature(unsafe_attributes)]
 #![feature(naked_functions)]
+#![feature(custom_test_frameworks)] // Phase 2d: Enable tests
+#![test_runner(crate::test_runner)]
+#![reexport_test_harness_main = "test_main"]
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
@@ -25,6 +28,7 @@ pub mod bench;          // ✅ Phase 0: Benchmarks context switch
 pub mod boot;           // ✅ Phase 0: Multiboot2 parsing
 pub mod c_compat;       // ✅ Phase 0: Compatibilité boot.c
 pub mod debug;          // ✅ Phase 0: Debug utilities
+pub mod error;          // ✅ Phase 0: Error types
 pub mod logger;         // ✅ Phase 0: Early logging
 pub mod multiboot2;     // ✅ Phase 0: Multiboot2 protocol
 pub mod splash;         // ✅ Phase 0: Boot splash screen
@@ -60,7 +64,7 @@ pub use drivers::video::vga::{_print as _vga_print, WRITER};
 //  PHASE 2+ - Modules désactivés temporairement
 // ═══════════════════════════════════════════════════════════
 // pub mod ipc;         // ⏸️ Phase 2: IPC zerocopy
-// pub mod net;         // ⏸️ Phase 3: Network stack
+// pub mod net;         // ⏸️ Phase 2d: Network stack (ICMP, TCP) - Too many dependencies
 // pub mod power;       // ⏸️ Phase 3: Power management
 // pub mod security;    // ⏸️ Phase 3: Capabilities
 
@@ -450,6 +454,13 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
                                 logger::early_print("[KERNEL]   PHASE 2c - REGRESSION TESTS\n");
                                 logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
                                 tests::smp_regression::run_all_regression_tests();
+                                
+                                // Phase 2d: Run Integration Tests
+                                logger::early_print("\n");
+                                logger::early_print("[KERNEL] ═══════════════════════════════════════\n");
+                                logger::early_print("[KERNEL]   PHASE 2d - INTEGRATION TESTS\n");
+                                logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
+                                tests::phase2d_test_runner::run_all_phase2d_tests();
                                 
                                 logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
                                 logger::early_print("[KERNEL]   PHASE 2 COMPLETE - All Tests Passed\n");
@@ -1885,4 +1896,94 @@ fn test_signal_handling() {
     logger::early_print("[SIGNAL] ✅ Signal masking functional\n");
     logger::early_print("[SIGNAL] Note: Full signal testing requires userland\n");
     logger::early_print("\n");
+}
+
+// ═══════════════════════════════════════════════════════
+//  Test Runner for Phase 2d
+// ═══════════════════════════════════════════════════════
+
+#[cfg(test)]
+pub fn test_runner(tests: &[&dyn Fn()]) {
+    use crate::logger;
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           PHASE 2d - TEST RUNNER                        ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+    
+    logger::early_print(&alloc::format!("Running {} tests...\n\n", tests.len()));
+    
+    let mut passed = 0;
+    let mut failed = 0;
+    
+    for (i, test) in tests.iter().enumerate() {
+        logger::early_print(&alloc::format!("[TEST {}] Running test...\n", i + 1));
+        
+        // Try to run the test and catch any panics
+        let test_result = core::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+            test();
+        }));
+        
+        match test_result {
+            Ok(_) => {
+                logger::early_print(&alloc::format!("[TEST {}] ✅ PASS\n\n", i + 1));
+                passed += 1;
+            }
+            Err(_) => {
+                logger::early_print(&alloc::format!("[TEST {}] ❌ FAIL\n\n", i + 1));
+                failed += 1;
+            }
+        }
+    }
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║           TEST RESULTS                                  ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+    
+    logger::early_print(&alloc::format!(
+        "Total:  {} tests\n", 
+        passed + failed
+    ));
+    logger::early_print(&alloc::format!(
+        "Passed: {} tests ✅\n", 
+        passed
+    ));
+    
+    if failed > 0 {
+        logger::early_print(&alloc::format!(
+            "Failed: {} tests ❌\n", 
+            failed
+        ));
+    } else {
+        logger::early_print("Failed: 0 tests\n");
+    }
+    
+    let percentage = if passed + failed > 0 {
+        (passed * 100) / (passed + failed)
+    } else {
+        0
+    };
+    
+    logger::early_print(&alloc::format!(
+        "Success rate: {}%\n\n",
+        percentage
+    ));
+    
+    if failed == 0 {
+        logger::early_print("🎉 ALL TESTS PASSED! 🎉\n\n");
+    } else {
+        logger::early_print("⚠️  SOME TESTS FAILED\n\n");
+    }
+}
+
+#[cfg(test)]
+pub fn test_main() {
+    logger::early_print("[KERNEL] Test mode activated!\n");
+    
+    // Note: The actual test harness will collect all #[test] functions
+    // and pass them to test_runner()
+    logger::early_print("[KERNEL] Ready to run tests...\n");
 }

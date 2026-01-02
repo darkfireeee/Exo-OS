@@ -1073,6 +1073,128 @@ impl Scheduler {
         logger::info(&format!("Pending CAS retries: {}", atomic.pending_cas_retries.load(Ordering::Relaxed)));
         logger::info(&format!("Zombie count: {}", atomic.zombie_count.load(Ordering::Relaxed)));
     }
+
+    /// Set CPU affinity for a thread (Phase 2d)
+    ///
+    /// # Arguments
+    /// * `tid` - Thread ID
+    /// * `affinity` - CPU to pin to (None = can run anywhere)
+    ///
+    /// # Returns
+    /// Ok(()) on success
+    pub fn set_thread_affinity(&self, tid: ThreadId, affinity: Option<usize>) -> Result<(), SchedulerError> {
+        // Check in current thread
+        {
+            let mut current = self.current_thread.lock();
+            if let Some(ref mut thread) = *current {
+                if thread.id() == tid {
+                    thread.set_cpu_affinity(affinity);
+                    logger::info(&alloc::format!("[SCHED] Set affinity for thread {} to {:?}", tid, affinity));
+                    return Ok(());
+                }
+            }
+        }
+        
+        // Check in run queues
+        {
+            let mut run_queue = self.run_queue.lock();
+            
+            // Search in hot queue
+            for thread in run_queue.hot.iter_mut() {
+                if thread.id() == tid {
+                    thread.set_cpu_affinity(affinity);
+                    logger::info(&alloc::format!("[SCHED] Set affinity for thread {} to {:?}", tid, affinity));
+                    return Ok(());
+                }
+            }
+            
+            // Search in normal queue
+            for thread in run_queue.normal.iter_mut() {
+                if thread.id() == tid {
+                    thread.set_cpu_affinity(affinity);
+                    logger::info(&alloc::format!("[SCHED] Set affinity for thread {} to {:?}", tid, affinity));
+                    return Ok(());
+                }
+            }
+            
+            // Search in cold queue
+            for thread in run_queue.cold.iter_mut() {
+                if thread.id() == tid {
+                    thread.set_cpu_affinity(affinity);
+                    logger::info(&alloc::format!("[SCHED] Set affinity for thread {} to {:?}", tid, affinity));
+                    return Ok(());
+                }
+            }
+        }
+        
+        // Check in blocked threads
+        {
+            let mut blocked = self.blocked_threads.lock();
+            if let Some(thread) = blocked.get_mut(&tid) {
+                thread.set_cpu_affinity(affinity);
+                logger::info(&alloc::format!("[SCHED] Set affinity for blocked thread {} to {:?}", tid, affinity));
+                return Ok(());
+            }
+        }
+        
+        logger::warn(&alloc::format!("[SCHED] Thread {} not found for affinity set", tid));
+        Err(SchedulerError::ThreadNotFound)
+    }
+
+    /// Get CPU affinity for a thread (Phase 2d)
+    ///
+    /// # Arguments
+    /// * `tid` - Thread ID
+    ///
+    /// # Returns
+    /// CPU affinity (None = can run anywhere)
+    pub fn get_thread_affinity(&self, tid: ThreadId) -> Result<Option<usize>, SchedulerError> {
+        // Check in current thread
+        {
+            let current = self.current_thread.lock();
+            if let Some(ref thread) = *current {
+                if thread.id() == tid {
+                    return Ok(thread.cpu_affinity());
+                }
+            }
+        }
+        
+        // Check in run queues
+        {
+            let run_queue = self.run_queue.lock();
+            
+            // Search in hot queue
+            for thread in run_queue.hot.iter() {
+                if thread.id() == tid {
+                    return Ok(thread.cpu_affinity());
+                }
+            }
+            
+            // Search in normal queue
+            for thread in run_queue.normal.iter() {
+                if thread.id() == tid {
+                    return Ok(thread.cpu_affinity());
+                }
+            }
+            
+            // Search in cold queue
+            for thread in run_queue.cold.iter() {
+                if thread.id() == tid {
+                    return Ok(thread.cpu_affinity());
+                }
+            }
+        }
+        
+        // Check in blocked threads
+        {
+            let blocked = self.blocked_threads.lock();
+            if let Some(thread) = blocked.get(&tid) {
+                return Ok(thread.cpu_affinity());
+            }
+        }
+        
+        Err(SchedulerError::ThreadNotFound)
+    }
 }
 
 /// Scheduler statistics
@@ -1311,126 +1433,4 @@ pub fn schedule_smp() {
             core::arch::asm!("sti");
         }
     }
-}
-
-/// Set CPU affinity for a thread (Phase 2d)
-///
-/// # Arguments
-/// * `tid` - Thread ID
-/// * `affinity` - CPU to pin to (None = can run anywhere)
-///
-/// # Returns
-/// Ok(()) on success
-pub fn set_thread_affinity(&self, tid: ThreadId, affinity: Option<usize>) -> Result<(), SchedulerError> {
-    // Check in current thread
-    {
-        let mut current = self.current_thread.lock();
-        if let Some(ref mut thread) = *current {
-            if thread.id() == tid {
-                thread.set_cpu_affinity(affinity);
-                logger::info(&format!("[SCHED] Set affinity for thread {} to {:?}", tid, affinity));
-                return Ok(());
-            }
-        }
-    }
-    
-    // Check in run queues
-    {
-        let mut run_queue = self.run_queue.lock();
-        
-        // Search in hot queue
-        for thread in run_queue.hot.iter_mut() {
-            if thread.id() == tid {
-                thread.set_cpu_affinity(affinity);
-                logger::info(&format!("[SCHED] Set affinity for thread {} to {:?}", tid, affinity));
-                return Ok(());
-            }
-        }
-        
-        // Search in normal queue
-        for thread in run_queue.normal.iter_mut() {
-            if thread.id() == tid {
-                thread.set_cpu_affinity(affinity);
-                logger::info(&format!("[SCHED] Set affinity for thread {} to {:?}", tid, affinity));
-                return Ok(());
-            }
-        }
-        
-        // Search in cold queue
-        for thread in run_queue.cold.iter_mut() {
-            if thread.id() == tid {
-                thread.set_cpu_affinity(affinity);
-                logger::info(&format!("[SCHED] Set affinity for thread {} to {:?}", tid, affinity));
-                return Ok(());
-            }
-        }
-    }
-    
-    // Check in blocked threads
-    {
-        let mut blocked = self.blocked_threads.lock();
-        if let Some(thread) = blocked.get_mut(&tid) {
-            thread.set_cpu_affinity(affinity);
-            logger::info(&format!("[SCHED] Set affinity for blocked thread {} to {:?}", tid, affinity));
-            return Ok(());
-        }
-    }
-    
-    logger::warn(&format!("[SCHED] Thread {} not found for affinity set", tid));
-    Err(SchedulerError::ThreadNotFound)
-}
-
-/// Get CPU affinity for a thread (Phase 2d)
-///
-/// # Arguments
-/// * `tid` - Thread ID
-///
-/// # Returns
-/// CPU affinity (None = can run anywhere)
-pub fn get_thread_affinity(&self, tid: ThreadId) -> Result<Option<usize>, SchedulerError> {
-    // Check in current thread
-    {
-        let current = self.current_thread.lock();
-        if let Some(ref thread) = *current {
-            if thread.id() == tid {
-                return Ok(thread.cpu_affinity());
-            }
-        }
-    }
-    
-    // Check in run queues
-    {
-        let run_queue = self.run_queue.lock();
-        
-        // Search in hot queue
-        for thread in run_queue.hot.iter() {
-            if thread.id() == tid {
-                return Ok(thread.cpu_affinity());
-            }
-        }
-        
-        // Search in normal queue
-        for thread in run_queue.normal.iter() {
-            if thread.id() == tid {
-                return Ok(thread.cpu_affinity());
-            }
-        }
-        
-        // Search in cold queue
-        for thread in run_queue.cold.iter() {
-            if thread.id() == tid {
-                return Ok(thread.cpu_affinity());
-            }
-        }
-    }
-    
-    // Check in blocked threads
-    {
-        let blocked = self.blocked_threads.lock();
-        if let Some(thread) = blocked.get(&tid) {
-            return Ok(thread.cpu_affinity());
-        }
-    }
-    
-    Err(SchedulerError::ThreadNotFound)
 }

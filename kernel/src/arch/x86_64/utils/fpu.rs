@@ -16,6 +16,7 @@ use core::arch::asm;
 /// FPU state structure (512 bytes aligned to 16-byte boundary)
 /// Uses FXSAVE/FXRSTOR format (faster than FSAVE/FRSTOR)
 #[repr(C, align(16))]
+#[derive(Debug)]
 pub struct FpuState {
     pub data: [u8; 512],
 }

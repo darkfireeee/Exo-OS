@@ -240,7 +240,7 @@ impl TlbShootdown {
     /// Flush TLB on all CPUs except current
     pub fn flush_all_but_self(&self, addr: u64, cr3: u64, global: bool) {
         let current_cpu = current_cpu_id();
-        let num_cpus = crate::arch::x86_64::smp::cpu_count();
+        let num_cpus = crate::arch::x86_64::smp::get_cpu_count();
         
         let mut target_cpus = alloc::vec::Vec::new();
         for cpu in 0..num_cpus {
@@ -264,7 +264,7 @@ impl TlbShootdown {
     
     /// Get statistics
     pub fn stats(&self) -> TlbStats {
-        let num_cpus = crate::arch::x86_64::smp::cpu_count();
+        let num_cpus = crate::arch::x86_64::smp::get_cpu_count();
         let mut total_flushes = 0;
         
         for cpu in 0..num_cpus.min(MAX_CPUS) {
@@ -339,10 +339,9 @@ unsafe fn flush_tlb_all() {
     // Reload CR3 to flush TLB
     let cr3: u64;
     core::arch::asm!(
-        "mov {}, cr3",
-        "mov cr3, {}",
+        "mov {0}, cr3",
+        "mov cr3, {0}",
         out(reg) cr3,
-        in(reg) cr3,
         options(nostack, preserves_flags)
     );
 }
@@ -375,7 +374,7 @@ unsafe fn flush_tlb_cr3(cr3: u64) {
 fn get_apic_id_for_cpu(cpu_id: usize) -> u32 {
     use crate::arch::x86_64::smp::SMP_SYSTEM;
     
-    if let Some(cpu_info) = SMP_SYSTEM.get_cpu(cpu_id) {
+    if let Some(cpu_info) = SMP_SYSTEM.cpu(cpu_id) {
         cpu_info.apic_id.load(Ordering::Acquire) as u32
     } else {
         cpu_id as u32

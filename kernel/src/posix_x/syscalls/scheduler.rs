@@ -3,8 +3,16 @@
 //! Phase 2d: CPU affinity, priority, and scheduling policy syscalls
 
 use crate::scheduler::SCHEDULER;
+use crate::scheduler::thread::ThreadId;
 use crate::error::{Error, Result};
 use alloc::vec::Vec;
+
+// Temporary helper until scheduler exposes current_thread_id()
+fn current_thread_id() -> usize {
+    // For now return stub - will be replaced with real implementation
+    // when scheduler module exports this function
+    0  // Thread ID 0
+}
 
 /// CPU set type - bitset for CPU affinity (128 CPUs max)
 #[repr(C)]
@@ -89,9 +97,9 @@ pub fn sys_sched_setaffinity(pid: u64, cpusetsize: usize, mask: *const CpuSet) -
 
     // Get target thread ID (0 = current)
     let target_tid = if pid == 0 {
-        crate::scheduler::current_thread_id()
+        current_thread_id()
     } else {
-        pid
+        pid as usize
     };
 
     // Validate at least one CPU is set
@@ -100,7 +108,7 @@ pub fn sys_sched_setaffinity(pid: u64, cpusetsize: usize, mask: *const CpuSet) -
     }
 
     // Get number of online CPUs
-    let num_cpus = crate::arch::x86_64::smp::cpu_count();
+    let num_cpus = crate::arch::x86_64::smp::get_cpu_count();
 
     // Find first valid CPU in mask
     let mut affinity_cpu = None;
@@ -113,9 +121,11 @@ pub fn sys_sched_setaffinity(pid: u64, cpusetsize: usize, mask: *const CpuSet) -
 
     let affinity_cpu = affinity_cpu.ok_or(Error::InvalidArgument)?;
 
-    // Set affinity in scheduler
-    SCHEDULER.set_thread_affinity(target_tid, Some(affinity_cpu))
-        .map(|_| 0)
+    // Set affinity in scheduler (ThreadId is u64, so use target_tid directly)
+    SCHEDULER.set_thread_affinity(target_tid as u64, Some(affinity_cpu))
+        .map_err(|_| Error::NotFound)?;
+    
+    Ok(0)
 }
 
 /// sched_getaffinity - Get CPU affinity mask for a thread
@@ -139,13 +149,14 @@ pub fn sys_sched_getaffinity(pid: u64, cpusetsize: usize, mask: *mut CpuSet) -> 
 
     // Get target thread ID (0 = current)
     let target_tid = if pid == 0 {
-        crate::scheduler::current_thread_id()
+        current_thread_id()
     } else {
-        pid
+        pid as usize
     };
 
-    // Get affinity from scheduler
-    let affinity = SCHEDULER.get_thread_affinity(target_tid)?;
+    // Get affinity from scheduler (ThreadId is u64, so use target_tid directly)
+    let affinity = SCHEDULER.get_thread_affinity(target_tid as u64)
+        .map_err(|_| Error::NotFound)?;
 
     // Build CPU mask
     let mut cpu_mask = CpuSet::new();
@@ -154,8 +165,8 @@ pub fn sys_sched_getaffinity(pid: u64, cpusetsize: usize, mask: *mut CpuSet) -> 
         // Thread pinned to specific CPU
         cpu_mask.set(cpu);
     } else {
-        // Thread can run on any CPU
-        let num_cpus = crate::arch::x86_64::smp::cpu_count();
+        // Thread can run on any CPU (all CPUs available)
+        let num_cpus = crate::arch::x86_64::smp::get_cpu_count().min(128);
         for cpu in 0..num_cpus {
             cpu_mask.set(cpu);
         }

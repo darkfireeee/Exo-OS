@@ -23,7 +23,7 @@ pub const NUMA_DISTANCE_REMOTE: NumaDistance = 20; // Remote node (same socket)
 pub const NUMA_DISTANCE_FAR: NumaDistance = 30;    // Far node (different socket)
 
 /// NUMA node information
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct NumaNode {
     /// Node ID
     pub id: usize,
