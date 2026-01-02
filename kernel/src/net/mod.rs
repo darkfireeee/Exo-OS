@@ -25,11 +25,20 @@ pub mod device;
 /// Ethernet layer
 pub mod ethernet;
 
+/// IP layer (IPv4 + ICMP)
+pub mod ip;
+
 /// Network stack core (legacy - migrating)
 pub mod stack;
 
+/// TCP protocol
+pub mod tcp;
+
 /// UDP protocol
 pub mod udp;
+
+/// ARP protocol
+pub mod arp;
 
 // Legacy modules (to be migrated or removed)
 pub mod core;
