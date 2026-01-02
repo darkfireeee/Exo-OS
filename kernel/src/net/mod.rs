@@ -28,9 +28,6 @@ pub mod ethernet;
 /// IP layer (IPv4 + ICMP)
 pub mod ip;
 
-/// Network stack core (legacy - migrating)
-pub mod stack;
-
 /// TCP protocol
 pub mod tcp;
 
@@ -40,21 +37,8 @@ pub mod udp;
 /// ARP protocol
 pub mod arp;
 
-// Legacy modules (to be migrated or removed)
-pub mod core;
-pub mod protocols;
-pub mod wireguard;
-pub mod vpn;
-pub mod time;
-pub mod firewall;
-pub mod services;
-pub mod qos;
-pub mod loadbalancer;
-pub mod rdma;
-pub mod monitoring;
-
-/// Network drivers
-pub mod drivers;
+/// Network tests (always compiled for kernel testing)
+pub mod tests;
 
 // Re-exports for convenience
 pub use socket::{Socket, SocketAddr, SocketType, SocketDomain, IpAddr as IpAddress, Ipv4Addr, SOCKET_TABLE};
@@ -140,7 +124,4 @@ pub struct NetworkStats {
     pub total_bytes_received: u64,
     pub active_connections: u64,
     pub active_sockets: u64,
-}
-    core::init()?;
-    Ok(())
 }

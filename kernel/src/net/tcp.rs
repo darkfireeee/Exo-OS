@@ -320,6 +320,16 @@ impl TcpConnection {
         self.state
     }
     
+    /// Get send next sequence number
+    pub fn snd_nxt(&self) -> u32 {
+        self.snd_nxt
+    }
+    
+    /// Get receive next sequence number
+    pub fn rcv_nxt(&self) -> u32 {
+        self.rcv_nxt
+    }
+    
     /// Handle incoming packet
     pub fn handle_packet(&mut self, header: &TcpHeader, data: &[u8]) -> Result<(), TcpError> {
         match self.state {

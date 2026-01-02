@@ -5,6 +5,7 @@
 use super::buffer::PacketBuffer;
 use alloc::vec::Vec;
 use alloc::string::String;
+use alloc::boxed::Box;
 
 /// Network device trait
 pub trait NetworkDevice: Send + Sync {
@@ -166,7 +167,7 @@ impl DeviceRegistry {
     
     /// Register new device
     pub fn register(&self, device: Box<dyn NetworkDevice>) {
-        let name = device.name().to_string();
+        let name = String::from(device.name());
         let mut devices = self.devices.lock();
         devices.push(device);
         
@@ -185,7 +186,7 @@ impl DeviceRegistry {
     /// List all devices
     pub fn list(&self) -> Vec<String> {
         let devices = self.devices.lock();
-        devices.iter().map(|d| d.name().to_string()).collect()
+        devices.iter().map(|d| String::from(d.name())).collect()
     }
 }
 

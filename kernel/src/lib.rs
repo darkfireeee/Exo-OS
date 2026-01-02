@@ -64,7 +64,7 @@ pub use drivers::video::vga::{_print as _vga_print, WRITER};
 //  PHASE 2+ - Modules désactivés temporairement
 // ═══════════════════════════════════════════════════════════
 // pub mod ipc;         // ⏸️ Phase 2: IPC zerocopy
-// pub mod net;         // ⏸️ Phase 2d: Network stack (ICMP, TCP) - Too many dependencies
+pub mod net;         // ✅ Phase 2: Network stack complet (TCP/IP, UDP, ARP)
 // pub mod power;       // ⏸️ Phase 3: Power management
 // pub mod security;    // ⏸️ Phase 3: Capabilities
 
@@ -461,6 +461,26 @@ pub extern "C" fn rust_main(magic: u32, multiboot_info: u64) -> ! {
                                 logger::early_print("[KERNEL]   PHASE 2d - INTEGRATION TESTS\n");
                                 logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
                                 tests::phase2d_test_runner::run_all_phase2d_tests();
+                                
+                                // Phase 2 Network: Run Network Stack Tests
+                                logger::early_print("\n");
+                                logger::early_print("[KERNEL] ═══════════════════════════════════════\n");
+                                logger::early_print("[KERNEL]   PHASE 2 - NETWORK STACK TESTS\n");
+                                logger::early_print("[KERNEL] ═══════════════════════════════════════\n\n");
+                                {
+                                    let (passed, total) = net::tests::run_all_network_tests();
+                                    if passed == total {
+                                        logger::early_print(&alloc::format!(
+                                            "\n✅ All network tests passed ({}/{})\n",
+                                            passed, total
+                                        ));
+                                    } else {
+                                        logger::early_print(&alloc::format!(
+                                            "\n⚠️  Some network tests failed ({}/{})\n",
+                                            passed, total
+                                        ));
+                                    }
+                                }
                                 
                                 logger::early_print("\n[KERNEL] ═══════════════════════════════════════\n");
                                 logger::early_print("[KERNEL]   PHASE 2 COMPLETE - All Tests Passed\n");
