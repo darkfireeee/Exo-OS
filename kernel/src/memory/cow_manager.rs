@@ -82,11 +82,15 @@ impl CowManager {
     ///
     /// Nouveau refcount après marquage
     pub fn mark_cow(&mut self, phys: PhysicalAddress) -> u32 {
-        let entry = self.refcounts
-            .entry(phys)
-            .or_insert_with(|| RefCountEntry::new(1));
-        
-        entry.increment()
+        if let Some(entry) = self.refcounts.get(&phys) {
+            // Déjà CoW: incrémenter
+            entry.increment()
+        } else {
+            // Première fois: créer avec refcount=2 (partage initial)
+            // Car on marque CoW quand on partage entre 2 processus
+            self.refcounts.insert(phys, RefCountEntry::new(2));
+            2
+        }
     }
 
     /// Vérifier si une page est CoW
@@ -271,9 +275,11 @@ mod tests {
         let mut manager = CowManager::new();
         let phys = PhysicalAddress::new(0x1000);
 
+        // Premier mark_cow: refcount = 2 (partage initial)
         let count1 = manager.mark_cow(phys);
-        assert_eq!(count1, 2); // 1 initial + 1 increment
+        assert_eq!(count1, 2);
 
+        // Deuxième mark_cow: refcount = 3 (3ème partage)
         let count2 = manager.mark_cow(phys);
         assert_eq!(count2, 3);
 
@@ -285,14 +291,21 @@ mod tests {
         let mut manager = CowManager::new();
         let phys = PhysicalAddress::new(0x2000);
 
+        // Mark CoW 2 fois: refcount = 2, puis 3
         manager.mark_cow(phys);
         manager.mark_cow(phys);
 
+        // Décrémente: 3 → 2
         let count1 = manager.decrement(phys);
-        assert_eq!(count1, 1);
+        assert_eq!(count1, 2);
 
+        // Décrémente: 2 → 1
         let count2 = manager.decrement(phys);
-        assert_eq!(count2, 0);
+        assert_eq!(count2, 1);
+
+        // Décrémente: 1 → 0 (retiré)
+        let count3 = manager.decrement(phys);
+        assert_eq!(count3, 0);
 
         // Après refcount 0, doit être retiré
         assert!(!manager.is_cow(phys));
@@ -317,12 +330,19 @@ mod tests {
 
         assert_eq!(manager.tracked_pages(), 0);
 
+        // Mark phys1: refcount=2, 1 page trackée
         manager.mark_cow(phys1);
         assert_eq!(manager.tracked_pages(), 1);
 
+        // Mark phys2: refcount=2, 2 pages trackées
         manager.mark_cow(phys2);
         assert_eq!(manager.tracked_pages(), 2);
 
+        // Decrement phys1: 2→1, encore trackée
+        manager.decrement(phys1);
+        assert_eq!(manager.tracked_pages(), 2);
+
+        // Decrement phys1: 1→0, retirée
         manager.decrement(phys1);
         assert_eq!(manager.tracked_pages(), 1);
     }
