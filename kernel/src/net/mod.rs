@@ -1,79 +1,59 @@
-//! High-Performance Network Subsystem
+//! Network Stack - Core Module
 //!
-//! Production-grade TCP/IP stack optimized for AI workloads.
+//! Phase 2 - Mois 4: Network Stack Core
 //! 
-//! Performance targets:
-//! - 100Gbps+ throughput
-//! - <10μs latency
-//! - 10M+ concurrent connections
-//! - Zero-copy I/O paths
+//! Provides:
+//! - Socket abstraction (BSD-like API)
+//! - Packet buffers (sk_buff equivalent)
+//! - Network device interface
+//! - Ethernet, IP, TCP, UDP protocols
 //!
-//! Architecture:
-//! - Lock-free packet processing
-//! - Per-CPU queues (RSS/RPS)
-//! - Hardware offload (TSO/GSO/GRO)
-//! - Native io_uring integration
-//! - RDMA for AI workloads
+//! Status: Foundation complete, protocols in progress
 
 use alloc::vec::Vec;
 use crate::memory::MemoryError;
 
-/// Network stack core
-pub mod stack;
-
-/// BSD Socket API (POSIX compatible)
+/// Socket abstraction (BSD-like API)
 pub mod socket;
 
-/// TCP protocol (production grade)
-pub mod tcp;
+/// Packet buffers (sk_buff equivalent)
+pub mod buffer;
 
-/// IP layer (IPv4/IPv6)
-pub mod ip;
+/// Network device interface
+pub mod device;
 
 /// Ethernet layer
 pub mod ethernet;
 
-/// Network core (sockets, devices, buffers)
+/// Network stack core (legacy - migrating)
+pub mod stack;
+
+/// UDP protocol
+pub mod udp;
+
+// Legacy modules (to be migrated or removed)
 pub mod core;
-
-/// Network device drivers
-pub mod drivers;
-
-/// Protocol implementations (clean modular architecture)
 pub mod protocols;
-
-/// WireGuard VPN
 pub mod wireguard;
-
-/// VPN subsystem (IPsec, OpenVPN)
 pub mod vpn;
-
-/// Time management for network stack
 pub mod time;
-
-/// Firewall (moved from netfilter for better naming)
 pub mod firewall;
-
-/// Network services (DHCP, DNS, NTP)
 pub mod services;
-
-/// QoS (Quality of Service)
 pub mod qos;
-
-/// Load Balancer
 pub mod loadbalancer;
-
-/// RDMA (Remote Direct Memory Access)
 pub mod rdma;
-
-/// Network Performance Monitoring
 pub mod monitoring;
 
-/// Network tests (unit, integration, performance)
-#[cfg(test)]
-pub mod tests;
+/// Network drivers
+pub mod drivers;
 
-/// Network errors
+// Re-exports for convenience
+pub use socket::{Socket, SocketAddr, SocketType, SocketDomain, IpAddr as IpAddress, Ipv4Addr, SOCKET_TABLE};
+pub use buffer::{PacketBuffer, Protocol, PACKET_POOL};
+pub use device::{NetworkDevice, DeviceStats, DEVICE_REGISTRY};
+pub use ethernet::{EthernetHeader, MacAddr};
+
+/// Network errors (unified)
 #[derive(Debug)]
 pub enum NetError {
     InvalidAddress,
@@ -85,6 +65,9 @@ pub enum NetError {
     InvalidPacket,
     NotSupported,
     Memory(MemoryError),
+    Socket(socket::SocketError),
+    Device(device::DeviceError),
+    Ethernet(ethernet::EthernetError),
 }
 
 impl From<MemoryError> for NetError {
@@ -93,18 +76,62 @@ impl From<MemoryError> for NetError {
     }
 }
 
-pub type NetResult<T> = Result<T, NetError>;
-
-/// Network address (IPv4 or IPv6)
-#[derive(Debug, Clone, Copy)]
-pub enum IpAddress {
-    V4([u8; 4]),
-    V6([u8; 16]),
+impl From<socket::SocketError> for NetError {
+    fn from(e: socket::SocketError) -> Self {
+        NetError::Socket(e)
+    }
 }
+
+impl From<device::DeviceError> for NetError {
+    fn from(e: device::DeviceError) -> Self {
+        NetError::Device(e)
+    }
+}
+
+impl From<ethernet::EthernetError> for NetError {
+    fn from(e: ethernet::EthernetError) -> Self {
+        NetError::Ethernet(e)
+    }
+}
+
+pub type NetResult<T> = Result<T, NetError>;
 
 /// Initialize network subsystem
 pub fn init() -> NetResult<()> {
-    log::info!("Initializing network subsystem (hybrid architecture)");
+    crate::logger::info("[NET] Initializing Phase 2 network stack");
+    
+    // Initialize packet buffer pool
+    PACKET_POOL.init(256);
+    
+    // Initialize device registry (includes loopback)
+    device::init();
+    
+    crate::logger::info("[NET] Network stack initialized successfully");
+    Ok(())
+}
+
+/// Get network statistics
+pub fn stats() -> NetworkStats {
+    NetworkStats {
+        total_packets_sent: 0,
+        total_packets_received: 0,
+        total_bytes_sent: 0,
+        total_bytes_received: 0,
+        active_connections: 0,
+        active_sockets: 0,
+    }
+}
+
+/// Network statistics
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NetworkStats {
+    pub total_packets_sent: u64,
+    pub total_packets_received: u64,
+    pub total_bytes_sent: u64,
+    pub total_bytes_received: u64,
+    pub active_connections: u64,
+    pub active_sockets: u64,
+}
     core::init()?;
     Ok(())
 }
