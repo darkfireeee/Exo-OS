@@ -303,6 +303,16 @@ pub fn set_cow(virtual_addr: VirtualAddress) -> MemoryResult<()> {
     mapper::set_cow(virtual_addr)
 }
 
+/// Obtient les flags d'une page (pour CoW)
+pub fn get_page_flags(virtual_addr: VirtualAddress) -> MemoryResult<crate::memory::user_space::UserPageFlags> {
+    mapper::get_page_flags(virtual_addr)
+}
+
+/// Change les flags d'une page directement (pour CoW)
+pub fn update_page_flags(virtual_addr: VirtualAddress, flags: crate::memory::user_space::UserPageFlags) -> MemoryResult<()> {
+    mapper::update_page_flags(virtual_addr, flags)
+}
+
 /// Gère une faute de page
 pub fn handle_page_fault(virtual_addr: VirtualAddress, error_code: u64) -> MemoryResult<()> {
     // Incrémenter les statistiques

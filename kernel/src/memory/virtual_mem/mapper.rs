@@ -241,14 +241,6 @@ impl MemoryMapper {
         }
     }
     
-    /// Obtient les flags d'une page
-    pub fn get_page_flags(&self, virtual_addr: VirtualAddress) -> MemoryResult<Option<PageTableFlags>> {
-        match self.walker.walk(virtual_addr)? {
-            super::page_table::PageTableWalkResult::Present(_, flags) => Ok(Some(flags)),
-            _ => Ok(None),
-        }
-    }
-    
     /// Vérifie si une page est Copy-on-Write
     pub fn is_page_cow(&self, virtual_addr: VirtualAddress) -> MemoryResult<bool> {
         match self.walker.walk(virtual_addr)? {
@@ -272,6 +264,55 @@ impl MemoryMapper {
         } else {
             Err(MemoryError::InvalidAddress)
         }
+    }
+    
+    /// Obtient les flags UserPageFlags d'une page
+    pub fn get_page_flags(&self, virtual_addr: VirtualAddress) -> MemoryResult<crate::memory::user_space::UserPageFlags> {
+        use crate::memory::user_space::UserPageFlags;
+        
+        match self.walker.walk(virtual_addr)? {
+            super::page_table::PageTableWalkResult::Present(_, flags) => {
+                // Convertir PageTableFlags vers UserPageFlags
+                let mut user_flags = UserPageFlags::empty();
+                
+                if flags.is_present() {
+                    user_flags = user_flags | UserPageFlags::PRESENT;
+                }
+                if flags.is_writable() {
+                    user_flags = user_flags | UserPageFlags::WRITABLE;
+                }
+                if flags.is_user() {
+                    user_flags = user_flags | UserPageFlags::USER;
+                }
+                if flags.is_cow() {
+                    user_flags = user_flags | UserPageFlags::COW;
+                }
+                
+                Ok(user_flags)
+            },
+            _ => Err(MemoryError::InvalidAddress),
+        }
+    }
+    
+    /// Met à jour les flags UserPageFlags d'une page
+    pub fn update_page_flags(&mut self, virtual_addr: VirtualAddress, user_flags: crate::memory::user_space::UserPageFlags) -> MemoryResult<()> {
+        // Convertir UserPageFlags vers PageTableFlags
+        let mut flags = PageTableFlags::new();
+        
+        if user_flags.contains(crate::memory::user_space::UserPageFlags::PRESENT) {
+            flags = flags.present();
+        }
+        if user_flags.contains(crate::memory::user_space::UserPageFlags::WRITABLE) {
+            flags = flags.writable();
+        }
+        if user_flags.contains(crate::memory::user_space::UserPageFlags::USER) {
+            flags = flags.user();
+        }
+        if user_flags.contains(crate::memory::user_space::UserPageFlags::COW) {
+            flags = flags.cow();
+        }
+        
+        self.protect_page(virtual_addr, flags)
     }
     
     /// Retourne les statistiques du mapper
@@ -360,4 +401,16 @@ pub fn is_page_cow(virtual_addr: VirtualAddress) -> MemoryResult<bool> {
 pub fn set_cow(virtual_addr: VirtualAddress) -> MemoryResult<()> {
     let mut mapper = MemoryMapper::for_current_address_space()?;
     mapper.set_cow(virtual_addr)
+}
+
+/// Obtient les flags d'une page dans l'espace d'adressage actuel
+pub fn get_page_flags(virtual_addr: VirtualAddress) -> MemoryResult<crate::memory::user_space::UserPageFlags> {
+    let mapper = MemoryMapper::for_current_address_space()?;
+    mapper.get_page_flags(virtual_addr)
+}
+
+/// Met à jour les flags d'une page dans l'espace d'adressage actuel
+pub fn update_page_flags(virtual_addr: VirtualAddress, flags: crate::memory::user_space::UserPageFlags) -> MemoryResult<()> {
+    let mut mapper = MemoryMapper::for_current_address_space()?;
+    mapper.update_page_flags(virtual_addr, flags)
 }

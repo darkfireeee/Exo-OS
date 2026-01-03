@@ -9,13 +9,27 @@ use alloc::vec::Vec;
 use core::ptr;
 
 /// Page table entry flags
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserPageFlags(u64);
 
 impl UserPageFlags {
+    /// Bit flags as constants
+    pub const PRESENT: Self = Self(1 << 0);
+    pub const WRITABLE: Self = Self(1 << 1);
+    pub const USER: Self = Self(1 << 2);
+    pub const WRITE_THROUGH: Self = Self(1 << 3);
+    pub const CACHE_DISABLE: Self = Self(1 << 4);
+    pub const COW: Self = Self(1 << 9); // Using available bit 9 for CoW marker
+    pub const NO_EXECUTE: Self = Self(1 << 63);
+    
     /// No flags
     pub const fn empty() -> Self {
         Self(0)
+    }
+    
+    /// Check if flag is present
+    pub const fn contains(self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
     }
     
     /// Present bit
@@ -41,6 +55,11 @@ impl UserPageFlags {
     /// Cache disable bit
     pub const fn cache_disable(self) -> Self {
         Self(self.0 | (1 << 4))
+    }
+    
+    /// Copy-on-Write bit
+    pub const fn cow(self) -> Self {
+        Self(self.0 | (1 << 9))
     }
     
     /// No-execute bit (requires NX support)
@@ -82,6 +101,15 @@ impl UserPageFlags {
     /// Remove WRITABLE flag (pour CoW)
     pub fn remove_writable(self) -> Self {
         Self(self.0 & !(1 << 1))
+    }
+}
+
+/// Implement BitOr for combining flags
+impl core::ops::BitOr for UserPageFlags {
+    type Output = Self;
+    
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
     }
 }
 

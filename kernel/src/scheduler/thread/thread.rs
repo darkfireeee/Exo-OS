@@ -382,6 +382,16 @@ impl Thread {
     pub fn context_ptr(&mut self) -> *mut ThreadContext {
         &mut self.context as *mut ThreadContext
     }
+    
+    /// Get context (for fork)
+    pub fn context(&self) -> &ThreadContext {
+        &self.context
+    }
+    
+    /// Set RAX register (for fork return value)
+    pub fn set_rax(&mut self, value: u64) {
+        self.context.rax = value;
+    }
 
     /// Record runtime
     pub fn add_runtime(&self, ns: u64) {

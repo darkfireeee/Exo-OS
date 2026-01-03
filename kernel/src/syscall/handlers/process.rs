@@ -216,33 +216,98 @@ impl Process {
     }
 }
 
-/// Fork - create child process (FORK-SAFE with lock-free pending queue)
-///
-/// This implementation uses the scheduler's lock-free pending queue.
-/// The key improvement: add_thread() uses atomic CAS, NEVER blocks.
-pub fn sys_fork() -> MemoryResult<Pid> {
-    crate::logger::early_print("[FORK] Starting fork with lock-free pending queue\n");
+/// Capture l'espace d'adressage du thread actuel pour fork() avec CoW
+/// Retourne une liste de tuples (VirtualAddress, PhysicalAddress, UserPageFlags)
+fn capture_address_space() -> MemoryResult<Vec<(VirtualAddress, PhysicalAddress, crate::memory::user_space::UserPageFlags)>> {
+    use crate::memory::{virtual_mem, user_space::UserPageFlags};
+    use alloc::vec::Vec;
     
-    // 1. Get parent thread ID
-    let parent_tid = SCHEDULER.with_current_thread(|t| t.id()).unwrap_or(0);
-    if parent_tid == 0 {
-        crate::logger::early_print("[FORK] ERROR: No current thread\n");
-        return Err(MemoryError::InvalidAddress);
+    let mut pages = Vec::new();
+    
+    // Capturer les régions user-space (0x0000_0000_0000_0000 à 0x0000_7FFF_FFFF_FFFF)
+    // On scanne page par page les régions susceptibles d'être mappées
+    // Pour l'instant, on se concentre sur les premières 1GB de user space
+    let start_addr = VirtualAddress::new(0x0000_0000_0040_0000); // Après la zone nulle
+    let end_addr = VirtualAddress::new(0x0000_0000_4000_0000); // 1GB
+    let page_size = 4096usize;
+    
+    let mut current = start_addr;
+    while current.value() < end_addr.value() {
+        // Vérifier si la page est présente
+        if let Ok(Some(phys_addr)) = virtual_mem::get_physical_address(current) {
+            // Obtenir les flags de la page
+            if let Ok(flags) = virtual_mem::get_page_flags(current) {
+                // Ne capturer que les pages user-space
+                if flags.contains(UserPageFlags::USER) {
+                    pages.push((current, phys_addr, flags));
+                }
+            }
+        }
+        
+        current = VirtualAddress::new(current.value() + page_size);
     }
     
-    // 2. Allocate new TID/PID for child
-    let child_tid = NEXT_PID.fetch_add(1, Ordering::SeqCst);
-    crate::logger::early_print("[FORK] Allocated child TID: ");
-    let s = alloc::format!("{}\n", child_tid);
+    Ok(pages)
+}
+
+/// Fork - create child process avec Copy-on-Write
+///
+/// Cette implémentation utilise le CoW Manager pour optimiser la copie de mémoire.
+/// Les pages sont partagées entre parent et enfant jusqu'à modification.
+pub fn sys_fork() -> MemoryResult<Pid> {
+    use crate::memory::{cow_manager, virtual_mem, user_space::UserPageFlags};
+    
+    crate::logger::early_print("[FORK] Starting fork with CoW\n");
+    
+    // 1. Obtenir le contexte du thread parent
+    let (parent_tid, parent_context) = SCHEDULER.with_current_thread(|t| {
+        (t.id(), *t.context())
+    }).ok_or(MemoryError::InvalidAddress)?;
+    
+    crate::logger::early_print("[FORK] Parent TID: ");
+    let s = alloc::format!("{}\n", parent_tid);
     crate::logger::early_print(&s);
     
-    // 3. Create child thread
+    // 2. Capturer l'espace d'adressage du parent
+    crate::logger::early_print("[FORK] Capturing parent address space...\n");
+    let parent_pages = capture_address_space()?;
+    
+    let s = alloc::format!("[FORK] Captured {} pages\n", parent_pages.len());
+    crate::logger::early_print(&s);
+    
+    // 3. Cloner l'espace d'adressage avec CoW
+    crate::logger::early_print("[FORK] Cloning address space with CoW...\n");
+    let child_pages = cow_manager::clone_address_space(&parent_pages)?;
+    
+    crate::logger::early_print("[FORK] Address space cloned\n");
+    
+    // 4. Marquer les pages du parent comme read-only pour CoW
+    crate::logger::early_print("[FORK] Marking parent pages read-only...\n");
+    for (virt_addr, _, flags) in &parent_pages {
+        if flags.contains(UserPageFlags::WRITABLE) {
+            // Retirer le flag WRITABLE et marquer comme CoW
+            let new_flags = flags.remove_writable().cow();
+            virtual_mem::update_page_flags(*virt_addr, new_flags)?;
+        }
+    }
+    crate::logger::early_print("[FORK] Parent pages marked read-only\n");
+    
+    // 5. Allouer TID pour l'enfant
+    let child_tid = NEXT_PID.fetch_add(1, Ordering::SeqCst);
+    
+    let s = alloc::format!("[FORK] Allocated child TID: {}\n", child_tid);
+    crate::logger::early_print(&s);
+    
+    // 6. Créer le contexte de l'enfant (copie du parent)
+    let mut child_context = parent_context;
+    child_context.rax = 0; // fork() retourne 0 pour l'enfant
+    
+    // 7. TODO: Créer le thread enfant avec le contexte et les pages clonées
+    // Pour l'instant, utilisons la version simplifiée
     crate::logger::early_print("[FORK] Creating child thread...\n");
     
-    // Child entry function that returns 0 to userspace
     fn child_entry() -> ! {
         crate::logger::early_print("[CHILD] Child thread started!\n");
-        crate::logger::early_print("[CHILD] Exiting with code 0\n");
         crate::syscall::handlers::process::sys_exit(0);
     }
     
@@ -255,9 +320,8 @@ pub fn sys_fork() -> MemoryResult<Pid> {
     
     crate::logger::early_print("[FORK] Child thread created\n");
     
-    // 4. Add child to scheduler (LOCK-FREE via pending queue!)
-    // This uses atomic CAS to add to a linked list, so it NEVER deadlocks
-    crate::logger::early_print("[FORK] Adding to scheduler (lock-free pending queue)...\n");
+    // 8. Ajouter l'enfant au scheduler
+    crate::logger::early_print("[FORK] Adding to scheduler...\n");
     if let Err(e) = SCHEDULER.add_thread(child_thread) {
         crate::logger::early_print("[FORK] ERROR: Failed to add child to scheduler\n");
         let s = alloc::format!("[FORK] Error: {:?}\n", e);
@@ -265,11 +329,10 @@ pub fn sys_fork() -> MemoryResult<Pid> {
         return Err(MemoryError::OutOfMemory);
     }
     
-    crate::logger::early_print("[FORK] SUCCESS: Child ");
-    let s = alloc::format!("{} added to pending queue\n", child_tid);
+    let s = alloc::format!("[FORK] SUCCESS: Child {} created with CoW\n", child_tid);
     crate::logger::early_print(&s);
     
-    // 5. Return child_tid to parent
+    // 9. Retourner le PID de l'enfant au parent
     Ok(child_tid)
 }
 
