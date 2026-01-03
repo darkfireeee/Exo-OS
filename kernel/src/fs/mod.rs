@@ -19,7 +19,7 @@ pub use alloc::format;
 pub mod vfs;
 
 /// Real filesystems (FAT32, ext4)
-pub mod real_fs;
+// pub mod real_fs;  // ⏸️ TEMPORAIRE: Dépend de block driver
 
 /// Pseudo filesystems (devfs, procfs, sysfs, tmpfs)
 pub mod pseudo_fs;

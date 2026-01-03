@@ -227,7 +227,7 @@ pub fn init() -> MemoryResult<()> {
     mapper::init()?;
     
     // Initialiser le système Copy-on-Write
-    cow::init()?;
+    // cow::init()?;  // TODO: CoW Manager n'a pas besoin d'init
     
     log::info!("Virtual memory subsystem initialized");
     Ok(())
@@ -370,20 +370,26 @@ fn handle_cow_page_fault(virtual_addr: VirtualAddress) -> MemoryResult<()> {
     let mut mapper = mapper::MemoryMapper::for_current_address_space()?;
     
     // Obtenir les flags actuels
-    let mut flags = mapper.get_page_flags(virtual_addr)?
-        .ok_or(MemoryError::InvalidAddress)?;
+    let flags = mapper.get_page_flags(virtual_addr)?;
     
     // Retirer le flag CoW et ajouter le flag d'écriture
-    flags = page_table::PageTableFlags(flags.0 & !page_table::PageTableFlags::new().cow().0);
-    flags = flags.writable();
+    let mut page_flags = page_table::PageTableFlags::new();
+    if flags.contains(crate::memory::user_space::UserPageFlags::PRESENT) {
+        page_flags = page_flags.present();
+    }
+    if flags.contains(crate::memory::user_space::UserPageFlags::USER) {
+        page_flags = page_flags.user();
+    }
+    // Retirer CoW et ajouter writable
+    page_flags = page_flags.writable();
     
     if new_physical == current_physical {
         // Cas refcount==1: même adresse physique, juste changer les flags
-        mapper.protect_page(virtual_addr, flags)?;
+        mapper.protect_page(virtual_addr, page_flags)?;
     } else {
         // Cas refcount>1: nouvelle adresse physique, remapper
         mapper.unmap_page(virtual_addr)?;
-        mapper.map_page(virtual_addr, new_physical, flags)?;
+        mapper.map_page(virtual_addr, new_physical, page_flags)?;
     }
     
     // Invalider l'entrée TLB pour cette page

@@ -73,6 +73,16 @@ impl core::fmt::Display for MemoryError {
     }
 }
 
+// Conversion de CowError vers MemoryError
+impl From<CowError> for MemoryError {
+    fn from(err: CowError) -> Self {
+        match err {
+            CowError::OutOfMemory => MemoryError::OutOfMemory,
+            CowError::NotCowPage => MemoryError::InvalidParameter,
+        }
+    }
+}
+
 pub type MemoryResult<T> = Result<T, MemoryError>;
 
 /// Configuration de la mémoire pour l'initialisation

@@ -252,18 +252,13 @@ impl MemoryMapper {
     /// Marque une page comme Copy-on-Write
     pub fn set_cow(&mut self, virtual_addr: VirtualAddress) -> MemoryResult<()> {
         // Obtenir les flags actuels
-        let flags = self.get_page_flags(virtual_addr)?;
+        let user_flags = self.get_page_flags(virtual_addr)?;
         
-        if let Some(mut flags) = flags {
-            // Ajouter le flag COW et retirer le flag d'écriture
-            flags = flags.cow();
-            flags = PageTableFlags(flags.0 & !PageTableFlags::new().writable().0);
-            
-            // Appliquer les nouveaux flags
-            self.protect_page(virtual_addr, flags)
-        } else {
-            Err(MemoryError::InvalidAddress)
-        }
+        // Ajouter le flag COW et retirer le flag d'écriture
+        let new_flags = user_flags.cow().remove_writable();
+        
+        // Appliquer les nouveaux flags
+        self.update_page_flags(virtual_addr, new_flags)
     }
     
     /// Obtient les flags UserPageFlags d'une page

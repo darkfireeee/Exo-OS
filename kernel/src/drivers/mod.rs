@@ -12,9 +12,9 @@ pub mod video;   // ✅ VGA text mode
 pub mod input;   // ✅ Phase 1: Keyboard
 pub mod pci;     // ✅ Phase 3: PCI subsystem complet
 pub mod msi;     // ✅ Phase 3: MSI/MSI-X support
-pub mod virtio;  // ✅ Phase 3: VirtIO framework
-pub mod block;   // ✅ Phase 1: Block devices (pour VFS)
-pub mod compat;  // ✅ Phase 3: Linux driver compatibility
+// pub mod virtio;  // ⏸️ TEMPORAIRE: Erreurs compilation - à fixer
+// pub mod block;   // ⏸️ TEMPORAIRE: Dépend de virtio
+// pub mod compat;  // ⏸️ TEMPORAIRE: Dépend de virtio
 
 // ═══════════════════════════════════════════════════════════
 //  PHASE 2+ - Drivers désactivés
