@@ -1,8 +1,8 @@
 # 📊 TABLEAU DE BORD - Exo-OS v1.0
 
 **Dernière mise à jour**: 2026-01-03  
-**Période**: Jour 3 terminé  
-**Prochaine étape**: Jour 4-5 exec() VFS
+**Période**: Jour 4 en cours (CoW Integration)  
+**Prochaine étape**: Tests QEMU + exec() VFS
 
 ---
 
@@ -11,7 +11,7 @@
 **v1.0 Fonctionnel**: 45% → 80-90% (8-10 semaines)
 
 ```
-Semaine 1-2: Memory & Process Foundation ████░░░░ 37.5%
+Semaine 1-2: Memory & Process Foundation ████░░░░ 50%
 Semaine 3-4: VFS & Filesystems            ░░░░░░░░  0%
 Semaine 5-6: Network Stack                ░░░░░░░░  0%
 Semaine 7-8: Drivers & IPC                ░░░░░░░░  0%
@@ -23,10 +23,10 @@ Semaine 7-8: Drivers & IPC                ░░░░░░░░  0%
 
 ### Par Module
 
-| Module | Jour 1 | Actuel | Objectif v1.0 | Progression |
+| Module | Jour 1 | Jour 4 | Objectif v1.0 | Progression |
 |--------|--------|--------|---------------|-------------|
-| **Memory** | 50% | **65%** ⬆️ | 85% | ████████████░░░░ 76% |
-| Process | 60% | 60% | 85% | ████████████░░░░ 71% |
+| **Memory** | 50% | **75%** ⬆️+10% | 85% | ██████████████░░ 88% |
+| Process | 60% | **65%** ⬆️+5% | 85% | █████████████░░░ 76% |
 | VFS | 70% | 70% | 90% | ████████████░░░░ 78% |
 | Network | 20% | 20% | 80% | ███░░░░░░░░░░░░░ 25% |
 | Drivers | 30% | 30% | 85% | ████░░░░░░░░░░░░ 35% |
@@ -39,41 +39,58 @@ Semaine 7-8: Drivers & IPC                ░░░░░░░░  0%
 ```
 Jour 1:  ████████░░░░░░░░░░░░ 45%
 Jour 3:  █████████░░░░░░░░░░░ 48% (+3%)
+Jour 4:  ██████████░░░░░░░░░░ 52% (+4%)  🆕
 v1.0:    ████████████████░░░░ 85%
 ```
 
-**Reste à faire**: +37% (77% du chemin)
+**Reste à faire**: +33% (62% du chemin)
+
+---
+
+## 🔥 DÉCOUVERTE CRITIQUE (Jour 4)
+
+**Problème**: CoW Manager (343 LOC, 8/8 tests) existait mais **JAMAIS appelé** dans sys_fork()
+
+```diff
+- Thread::new_kernel(child_tid, "forked_child", child_entry, 16384)
++ cow_manager::clone_address_space(&parent_pages)
++ virtual_mem::update_page_flags(*virt_addr, flags.remove_writable().cow())
+```
+
+**Impact**: CoW maintenant **réellement intégré** dans fork()
 
 ---
 
 ## 📅 CALENDRIER
 
-### ✅ Semaine 1 - Jours 1-3 (COMPLÉTÉS)
+### ✅ Semaine 1 - Jours 1-4 (COMPLÉTÉS/EN COURS)
 
 | Jour | Date | Module | Tests | Status |
 |------|------|--------|-------|--------|
 | **1** | 2026-01-02 | Analyse état réel | - | ✅ |
 | **2** | 2026-01-02 | CoW Manager | 8/8 | ✅ |
 | **3** | 2026-01-03 | Page Fault Integration | 2/2 | ✅ |
+| **4** | 2026-01-03 | **CoW sys_fork() Integration** | 4/4* | 🔄 EN COURS |
 
-**Résultats**:
-- 10/10 tests (100%)
-- +343 LOC (CoW Manager)
-- -298 LOC (cleanup obsolète)
-- 0 TODOs ajoutés
-- 3 commits
+*Tests créés, à exécuter dans QEMU
 
-### 🔄 Semaine 1 - Jours 4-8 (EN COURS)
+**Résultats Jour 4**:
+- +464 LOC (helper functions + sys_fork() CoW)
+- +280 LOC tests (test_cow_fork.c)
+- 2 commits (plan + implémentation)
+- 8 fichiers modifiés
+
+### 🔄 Semaine 1 - Jours 5-8 (PLANIFIÉS)
 
 | Jour | Date | Module | Tests | Status |
 |------|------|--------|-------|--------|
-| **4-5** | Prochain | exec() VFS Integration | 4/4 | 🔄 SUIVANT |
-| **6-7** | À venir | Process Cleanup | 3/3 | ⏳ |
+| **5** | Prochain | Tests QEMU + Métriques | 4/4 | ⏳ SUIVANT |
+| **6-7** | À venir | exec() VFS Integration | 4/4 | ⏳ |
 | **8** | À venir | Signal Delivery | 2/2 | ⏳ |
 
 **Objectifs Semaine 1**:
 - fork() + exec() + wait() + signals fonctionnels
-- 19/19 tests cumulés
+- 22/22 tests cumulés
 - Memory & Process à 80%+
 
 ### ⏳ Semaines 2-8
@@ -95,7 +112,14 @@ Semaine 7-8: IPC & Integration    (Jours 43-56)
 |------|--------|-------|----------|
 | 2 | CoW Manager | 8 | ✅ 8/8 (100%) |
 | 3 | Page Fault Integration | 2 | ✅ 2/2 (100%) |
-| **Total** | - | **10** | ✅ **10/10 (100%)** |
+| 4 | CoW fork() Integration | 4* | ⏳ 0/4 (à exécuter) |
+| **Total** | - | **14** | ✅ **10/10** + ⏳ **4 pending** |
+
+*Tests créés (test_cow_fork.c):
+- Test 1: Latence fork() (< 1500 cycles)
+- Test 2: Partage pages (refcount=2)
+- Test 3: CoW page fault (write triggers copy)
+- Test 4: Multiple forks (stress refcount)
 
 ### Tests Planifiés Semaine 1
 
