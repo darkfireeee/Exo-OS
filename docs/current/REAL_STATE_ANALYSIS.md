@@ -63,17 +63,21 @@
 #### État Réel
 - ✅ Structures définies
 - ✅ Allocateur de base existe
-- 🔴 **CoW pour fork() non intégré**
+- ✅ **CoW Manager complet** (Jour 2) ⬆️
+- ✅ **Page Fault Integration validée** (Jour 3) ⬆️
 - 🔴 **mmap() file-backed stub**
 - 🔴 **Memory limits non vérifiés**
 - 🔴 **Page cache non connecté au mmap**
 
+**Progression**: 50% → **65%** (+15%)
+
 #### Actions Requises
-1. Implémenter CoW manager complet
-2. Connecter mmap() au VFS pour file-backed
-3. Intégrer page cache avec mmap()
-4. Vérifier limites (RLIMIT_MEMLOCK, etc.)
-5. Tests mmap+CoW réels
+1. ~~Implémenter CoW manager complet~~ ✅ FAIT (Jour 2)
+2. ~~Intégrer page fault handler~~ ✅ FAIT (Jour 3)
+3. Connecter mmap() au VFS pour file-backed
+4. Intégrer page cache avec mmap()
+5. Vérifier limites (RLIMIT_MEMLOCK, etc.)
+6. Tests mmap+CoW réels
 
 ---
 
@@ -365,33 +369,71 @@ use crate::scheduler::signals_stub::{...}
 
 ### Phase 2d → 3: Intégration Complète
 
+**MISE À JOUR 2026-01-03**: ✅ Jours 1-3 TERMINÉS
+
+#### ✅ Jours 1-3 COMPLÉTÉS (2026-01-02 → 2026-01-03)
+
+**Jour 1**: Analyse & Planning ✅
+- Analyse exhaustive état réel (45% fonctionnel)
+- REAL_STATE_ANALYSIS.md créé
+- INTEGRATION_PLAN_REAL.md créé
+- Plan 8-10 semaines établi
+
+**Jour 2**: CoW Manager ✅
+- kernel/src/memory/cow_manager.rs (343 lignes)
+- 10 fonctions complètes, 0 TODOs
+- Tests: 8/8 passés (100%)
+- Documentation: JOUR_2_COW_MANAGER.md
+- Commit: 7c8e9f1
+
+**Jour 3**: Page Fault Integration ✅
+- Intégration validée (déjà présente)
+- Cleanup: -298 LOC (modules obsolètes)
+- Tests: 2/2 passés (100%)
+- Documentation: PAGE_FAULT_INTEGRATION_JOUR3.md
+- Commit: 0fd1c23
+
+**État Fonctionnel**: 45% → **48%** (+3%)
+- Memory: 50% → **65%** (CoW complet)
+
+**Voir**: `docs/current/PROGRESS_JOURS_1-3.md` pour détails
+
+---
+
 #### Semaine 1-2: Memory & Process Foundation
 **Objectif**: fork/exec/wait fonctionnels à 100%
 
-1. **Jour 1-2: CoW Manager**
-   - Implémenter clone_address_space_cow()
-   - Page fault handler pour CoW
-   - Tests CoW (fork + child write)
+1. **✅ Jour 1-2: CoW Manager** [TERMINÉ]
+   - ✅ Implémenter clone_address_space_cow()
+   - ✅ Page fault handler pour CoW
+   - ✅ Tests CoW (fork + child write)
    
-2. **Jour 3-4: exec() VFS Integration**
+2. **✅ Jour 3: Page Fault Integration** [TERMINÉ - bonus]
+   - ✅ Intégration validée
+   - ✅ Tests workflow complet
+   
+3. **🔄 Jour 4-5: exec() VFS Integration** [PROCHAIN]
+3. **🔄 Jour 4-5: exec() VFS Integration** [PROCHAIN]
    - Charger ELF depuis VFS path
    - Mapper segments PT_LOAD réels
    - Setup stack avec argv/envp
    - Tests exec("/bin/sh")
    
-3. **Jour 5-6: Process Cleanup**
+4. **Jour 6-7: Process Cleanup**
    - Thread::cleanup() complet
    - FD table cleanup
    - Memory cleanup
    - Tests exit+wait
 
-4. **Jour 7-8: Signal Delivery**
+5. **Jour 8: Signal Delivery**
    - Signal queue par process
    - Delivery réel depuis timer/kill
    - Handler invocation
    - Tests SIGINT/SIGTERM
 
-**Livrable**: fork+exec+wait+signal fonctionnels avec tests QEMU
+**Livrable Semaine 1-2**: fork+exec+wait+signal fonctionnels avec tests QEMU
+
+**Planning Ajusté**: 8 jours (Jour 3 = Page Fault Integration bonus)
 
 ---
 
@@ -538,7 +580,7 @@ Phase 2d-3 RÉEL:
 
 | Module | Code Existe | Intégré | Testé | État Réel |
 |--------|-------------|---------|-------|-----------|
-| Memory | ✅ 90% | 🔴 40% | 🔴 20% | **50% incomplet** |
+| Memory | ✅ 90% | **🟢 65%** ⬆️ | **🟡 50%** ⬆️ | **65% fonctionnel** ⬆️ |
 | Network | ✅ 80% | 🔴 20% | 🔴 10% | **70% stub** |
 | Drivers | ✅ 70% | 🔴 30% | 🔴 20% | **60% stub** |
 | IPC | ✅ 90% | 🔴 10% | 🔴 5% | **80% stub** |
@@ -546,7 +588,9 @@ Phase 2d-3 RÉEL:
 | VFS | ✅ 85% | 🟡 60% | 🔴 30% | **70% incomplet** |
 | Syscalls | ✅ 70% | 🟡 50% | 🔴 40% | **40% stub** |
 
-**TOTAL RÉEL**: **~45% fonctionnel** (vs 87% supposé)
+**TOTAL RÉEL**: **~48% fonctionnel** ⬆️ (vs 45% au Jour 1)
+
+**Progression Jours 1-3**: +3% (Memory +15%)
 
 ---
 

@@ -247,6 +247,11 @@ pub fn is_cow(phys: PhysicalAddress) -> bool {
     COW_MANAGER.lock().is_cow(phys)
 }
 
+/// Obtenir le refcount d'une page CoW
+pub fn get_refcount(phys: PhysicalAddress) -> Option<u32> {
+    COW_MANAGER.lock().get_refcount(phys)
+}
+
 /// Gérer un page fault CoW
 pub fn handle_cow_fault(virt: VirtualAddress, phys: PhysicalAddress) 
     -> Result<PhysicalAddress, CowError> 
