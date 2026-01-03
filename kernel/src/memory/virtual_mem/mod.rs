@@ -209,7 +209,6 @@ impl VirtualMemoryStats {
 pub mod page_table;
 pub mod mapper;
 pub mod address_space;
-pub mod cow;
 
 use page_table::PageTable;
 
@@ -319,21 +318,66 @@ pub fn handle_page_fault(virtual_addr: VirtualAddress, error_code: u64) -> Memor
         // Page non présente
         if is_write {
             // Écriture sur une page non présente (probablement CoW)
-            cow::handle_cow_fault(virtual_addr)?;
+            handle_cow_page_fault(virtual_addr)?;
             stats.inc_minor_faults();
         } else {
             // Lecture sur une page non présente
-            // TODO: Gérer le chargement depuis le disque ou le swap
             return Err(MemoryError::InvalidAddress);
         }
     } else if is_write {
-        // Écriture sur une page présente mais protégée en écriture (CoW)
-        cow::handle_cow_fault(virtual_addr)?;
-        stats.inc_minor_faults();
+        // Vérifier si c'est une page CoW
+        let is_cow = mapper::MemoryMapper::for_current_address_space()?.is_page_cow(virtual_addr)?;
+        if is_cow {
+            // Écriture sur une page présente mais protégée en écriture (CoW)
+            handle_cow_page_fault(virtual_addr)?;
+            stats.inc_minor_faults();
+        } else {
+            // Violation de protection
+            crate::memory::protection::handle_protection_violation(virtual_addr)?;
+        }
     } else {
         // Violation de protection (ex: exécution sur page NX)
         crate::memory::protection::handle_protection_violation(virtual_addr)?;
     }
+    
+    Ok(())
+}
+
+/// Gère une faute de page Copy-on-Write
+fn handle_cow_page_fault(virtual_addr: VirtualAddress) -> MemoryResult<()> {
+    // Obtenir l'adresse physique actuelle
+    let current_physical = mapper::get_physical_address(virtual_addr)?
+        .ok_or(MemoryError::InvalidAddress)?;
+    
+    // Utiliser le nouveau CoW Manager pour gérer le fault
+    // handle_cow_fault retourne:
+    // - La même adresse physique si refcount==1 (juste retire CoW)
+    // - Une nouvelle adresse physique si refcount>1 (copie)
+    let new_physical = crate::memory::cow_manager::handle_cow_fault(virtual_addr, current_physical)
+        .map_err(|_| MemoryError::InvalidAddress)?;
+    
+    // Obtenir un mapper pour modifier les flags
+    let mut mapper = mapper::MemoryMapper::for_current_address_space()?;
+    
+    // Obtenir les flags actuels
+    let mut flags = mapper.get_page_flags(virtual_addr)?
+        .ok_or(MemoryError::InvalidAddress)?;
+    
+    // Retirer le flag CoW et ajouter le flag d'écriture
+    flags = page_table::PageTableFlags(flags.0 & !page_table::PageTableFlags::new().cow().0);
+    flags = flags.writable();
+    
+    if new_physical == current_physical {
+        // Cas refcount==1: même adresse physique, juste changer les flags
+        mapper.protect_page(virtual_addr, flags)?;
+    } else {
+        // Cas refcount>1: nouvelle adresse physique, remapper
+        mapper.unmap_page(virtual_addr)?;
+        mapper.map_page(virtual_addr, new_physical, flags)?;
+    }
+    
+    // Invalider l'entrée TLB pour cette page
+    invalidate_tlb(virtual_addr);
     
     Ok(())
 }
