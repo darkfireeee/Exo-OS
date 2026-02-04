@@ -59,7 +59,7 @@ gdt64:
     dq gdt64                                ; Adresse GDT
 
 ; Message de boot pour debug VGA
-boot_msg: db 'Exo-OS Booting...', 0
+boot_msg: db 'Exo-OS v0.7.0 Booting...', 0
 
 ; === SECTION CODE ===
 section .text

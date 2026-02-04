@@ -1,16 +1,16 @@
-//! Exo-OS v0.5.0 Splash Screen & Boot Display
+//! Exo-OS v0.7.0 Splash Screen & Boot Display
 //! 
-//! Système d'affichage amélioré pour la version 0.5.0
+//! Système d'affichage amélioré pour la version 0.7.0
 //! Affiche les informations de boot avec un design moderne
 
 use crate::logger;
 
 /// Version du kernel
-pub const VERSION: &str = "0.5.0";
+pub const VERSION: &str = "0.7.0";
 pub const VERSION_NAME: &str = "Linux Crusher";
-pub const BUILD_DATE: &str = "2025-12-04";
+pub const BUILD_DATE: &str = "2026-01-03";
 
-/// Affiche le splash screen principal v0.5.0
+/// Affiche le splash screen principal v0.7.0
 pub fn display_splash() {
     logger::early_print("\n\n");
     logger::early_print("╔══════════════════════════════════════════════════════════════════════╗\n");
@@ -22,7 +22,7 @@ pub fn display_splash() {
     logger::early_print("║     ███████╗██╔╝ ██╗╚██████╔╝      ╚██████╔╝███████║               ║\n");
     logger::early_print("║     ╚══════╝╚═╝  ╚═╝ ╚═════╝        ╚═════╝ ╚══════╝               ║\n");
     logger::early_print("║                                                                      ║\n");
-    logger::early_print("║                  🚀 Version 0.5.0 - Linux Crusher 🚀                 ║\n");
+    logger::early_print("║                  🚀 Version 0.7.0 - Linux Crusher 🚀                 ║\n");
     logger::early_print("║                                                                      ║\n");
     logger::early_print("╚══════════════════════════════════════════════════════════════════════╝\n");
     logger::early_print("\n");
@@ -31,7 +31,7 @@ pub fn display_splash() {
 /// Affiche la bannière compacte des nouvelles features v0.5.0
 pub fn display_features() {
     logger::early_print("┌─────────────────────────────────────────────────────────────────────┐\n");
-    logger::early_print("│  ✨ NOUVELLES FONCTIONNALITÉS v0.5.0                                │\n");
+    logger::early_print("│  ✨ NOUVELLES FONCTIONNALITÉS v0.7.0                                │\n");
     logger::early_print("├─────────────────────────────────────────────────────────────────────┤\n");
     logger::early_print("│  ✅ Gestion mémoire complète                                        │\n");
     logger::early_print("│     • mmap/munmap/mprotect/brk/madvise/mlock/mremap                │\n");

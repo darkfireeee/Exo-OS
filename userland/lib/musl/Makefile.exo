@@ -1,0 +1,77 @@
+# Makefile.exo - Exo-OS musl libc Build Configuration
+#
+# This Makefile compiles musl libc for Exo-OS, replacing Linux syscalls
+# with Exo-OS native syscalls via the bridge layer.
+
+# Compiler Configuration
+CC = clang
+AR = llvm-ar
+RANLIB = llvm-ranlib
+
+# Compiler Flags
+CFLAGS = -std=c99 -ffreestanding -fno-stack-protector \
+         -nostdinc -fno-builtin -fPIC -O2 \
+         -Wall -Wno-unused-function \
+         -I./include -I./arch/x86_64 \
+         -I../../../include \
+         -DEXO_OS
+
+# Output Directory
+LIBDIR = lib
+OBJDIR = obj
+
+# Target
+TARGET = $(LIBDIR)/libc.a
+
+# Source Files
+# Note: We only compile essential sources for now
+# Full musl has hundreds of files - start with basics
+
+CORE_SRCS = \
+	src/string/memcpy.c \
+	src/string/memset.c \
+	src/string/strlen.c \
+	src/string/strcmp.c \
+	src/stdio/printf.c \
+	src/stdio/vfprintf.c \
+	src/stdio/vsnprintf.c \
+	src/stdlib/atoi.c \
+	src/stdlib/strtol.c \
+	src/unistd/write.c \
+	src/unistd/read.c
+
+# Bridge Layer
+BRIDGE_SRCS = exo_syscall_bridge.c
+
+# All Sources
+SRCS = $(CORE_SRCS) $(BRIDGE_SRCS)
+
+# Object Files
+OBJS = $(SRCS:%.c=$(OBJDIR)/%.o)
+
+# Build Rules
+all: $(TARGET)
+
+$(TARGET): $(OBJS) | $(LIBDIR)
+	@echo "[AR] $@"
+	@$(AR) rcs $@ $^
+	@$(RANLIB) $@
+	@echo "musl libc build complete: $(TARGET)"
+
+$(OBJDIR)/%.o: %.c | $(OBJDIR)
+	@mkdir -p $(dir $@)
+	@echo "[CC] $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(LIBDIR):
+	@mkdir -p $(LIBDIR)
+
+$(OBJDIR):
+	@mkdir -p $(OBJDIR)
+
+clean:
+	@echo "Cleaning..."
+	@rm -rf $(OBJDIR) $(LIBDIR)
+	@echo "Clean complete"
+
+.PHONY: all clean

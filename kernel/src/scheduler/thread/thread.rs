@@ -209,6 +209,11 @@ pub struct Thread {
 
     /// Signal handlers (indexed by signal number - 1)
     signal_handlers: spin::Mutex<[SigAction; 64]>,
+
+    // ✅ Phase 1: CoW Integration - Process ownership
+    /// Process this thread belongs to (if any)
+    /// Kernel threads have None, user threads have Some(Process)
+    process: Option<alloc::sync::Arc<spin::Mutex<crate::process::Process>>>,
 }
 
 impl Thread {
@@ -264,6 +269,8 @@ impl Thread {
             sigmask: spin::Mutex::new(SigSet::empty()),
             pending_signals: spin::Mutex::new(SigSet::empty()),
             signal_handlers: spin::Mutex::new([SigAction::Default; 64]),
+            // Phase 1: CoW Integration - Kernel threads have no process
+            process: None,
         }
     }
 
@@ -340,6 +347,8 @@ impl Thread {
             sigmask: spin::Mutex::new(SigSet::empty()),
             pending_signals: spin::Mutex::new(SigSet::empty()),
             signal_handlers: spin::Mutex::new([SigAction::Default; 64]),
+            // Phase 1: CoW Integration - User threads have no process initially
+            process: None,
         }
     }
 
@@ -462,6 +471,23 @@ impl Thread {
     /// Remove child
     pub fn remove_child(&self, child_id: ThreadId) {
         self.children.lock().retain(|&id| id != child_id);
+    }
+
+    // Phase 1: CoW Integration - Process management
+
+    /// Get process this thread belongs to
+    pub fn process(&self) -> Option<alloc::sync::Arc<spin::Mutex<crate::process::Process>>> {
+        self.process.clone()
+    }
+
+    /// Set process this thread belongs to
+    pub fn set_process(&mut self, process: alloc::sync::Arc<spin::Mutex<crate::process::Process>>) {
+        self.process = Some(process);
+    }
+
+    /// Check if thread belongs to a process
+    pub fn has_process(&self) -> bool {
+        self.process.is_some()
     }
 
     // Phase 11: Signal handling methods
@@ -789,6 +815,8 @@ impl Thread {
             sigmask: spin::Mutex::new(*parent.sigmask.lock()),
             pending_signals: spin::Mutex::new(SigSet::empty()),
             signal_handlers: spin::Mutex::new(*parent.signal_handlers.lock()),
+            // Phase 1: CoW Integration - Child inherits parent's process
+            process: parent.process.clone(),
         };
         
         // Add child to parent's children list

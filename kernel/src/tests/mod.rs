@@ -15,4 +15,7 @@ pub mod fpu_lazy_tests;       // Phase 2c Week 2: FPU lazy switching
 pub mod week3_timer_pi_tests; // Phase 2c Week 3: Timer sleep + Priority inheritance
 pub mod week4_hardware_tests; // Phase 2c Week 4: Hardware SMP validation
 pub mod phase2d_tests;
-pub mod phase2d_test_runner; // ✅ Phase 2d: Test runner intégré        // Phase 2d: CPU affinity, NUMA, IPI, TLB, ICMP, TCP, CUBIC
+pub mod phase2d_test_runner;  // ✅ Phase 2d: Test runner intégré
+pub mod cow_fork_test;        // Jour 4: CoW fork() avec métriques réelles
+pub mod cow_advanced_tests;   // Jour 4 Phase 3B: Tests avancés CoW
+pub mod cow_real_tests;       // Jour 4 Phase 4: Tests RÉELS avec vraies pages
