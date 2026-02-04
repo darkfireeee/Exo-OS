@@ -955,6 +955,30 @@ unsafe fn vga_show_system_info(magic: u32, multiboot_addr: u64, rsp: u64) {
 /// Thread entry point for Phase 1b tests - CoW Edition
 fn test_fork_thread_entry() -> ! {
     logger::early_print("[TEST_THREAD] CoW test thread started!\n");
+    
+    // ═══════════════════════════════════════════════════════════════
+    // JOUR 2: Tests exec() REAL - Execute FIRST before CoW tests
+    // ═══════════════════════════════════════════════════════════════
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║         JOUR 2: Real ELF Binary Loading Tests           ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+    
+    // Test exec() with embedded binaries
+    crate::tests::exec_test::test_exec_binaries();
+    
+    log::info!("\n[JOUR 2] Testing load_elf_binary() with REAL compiled binary...\n");
+    
+    // JOUR 2: Test avec binaire compilé réel (test_exec_vfs.elf)
+    crate::tests::exec_tests_real::run_all_exec_tests();
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║         ✅ JOUR 2 TESTS COMPLETE                        ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+    
     logger::early_print("[TEST_THREAD] Skipping blocking tests, going directly to CoW...\n\n");
     
     // ⏸️ Skip fork/wait test (blocks on wait4)
@@ -984,9 +1008,6 @@ fn test_fork_thread_entry() -> ! {
     // crate::tests::exec_test::test_exec_binaries();
     
     logger::early_print("[TEST_THREAD] All CoW tests complete, exiting gracefully...\n");
-    
-    // Test exec() with embedded binaries
-    crate::tests::exec_test::test_exec_binaries();
     
     logger::early_print("[TEST_THREAD] All Phase 1 tests complete, exiting...\n");
     
