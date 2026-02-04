@@ -4,6 +4,7 @@ pub mod process_tests;
 pub mod phase2_smp_tests;
 pub mod keyboard_test;
 pub mod exec_test;
+pub mod exec_tests;           // JOUR 1: Tests RÉELS load_elf_binary()
 pub mod benchmark_real_threads;
 pub mod signal_tests;
 pub mod simple_multithread;
