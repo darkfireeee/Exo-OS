@@ -5,9 +5,11 @@
 
 extern crate alloc;
 use alloc::vec::Vec;
+use alloc::collections::BTreeMap;
 
 use crate::memory::{PhysicalAddress, VirtualAddress, MemoryResult, MemoryError};
 use crate::arch;
+use spin::Mutex;
 
 // Re-export PageTableFlags from parent module
 pub use super::PageTableFlags;
@@ -182,12 +184,19 @@ pub enum PageTableWalkResult {
 pub struct PageTableWalker {
     /// Racine de la hiérarchie des tables de pages (adresse physique du PML4)
     root_address: PhysicalAddress,
+    /// Cache des page tables créées lors de splits de huge pages
+    /// Clé: adresse virtuelle de base de la huge page (2MB-aligned)
+    /// Valeur: adresse physique de la PT créée
+    split_cache: Mutex<BTreeMap<usize, PhysicalAddress>>,
 }
 
 impl PageTableWalker {
     /// Crée un nouveau navigateur
     pub fn new(root_address: PhysicalAddress) -> Self {
-        Self { root_address }
+        Self { 
+            root_address,
+            split_cache: Mutex::new(BTreeMap::new()),
+        }
     }
     
     /// Navigue jusqu'à une adresse virtuelle
@@ -225,6 +234,9 @@ impl PageTableWalker {
     /// This is called when we need to map a 4KB page inside an existing 2MB huge page.
     /// The huge page is split transparently, preserving the existing mappings.
     ///
+    /// OPTIMIZATION: Uses a cache to avoid re-splitting the same huge page multiple times.
+    /// If the huge page at this virtual address was already split, return the cached PT.
+    ///
     /// # Arguments
     /// * `level` - Current page table level (should be 1 for 2MB huge pages in PD)
     /// * `huge_entry` - The huge page entry to split
@@ -253,8 +265,22 @@ impl PageTableWalker {
             return Err(MemoryError::InternalError("Entry is not a huge page"));
         }
         
+        // OPTIMIZATION 1: Check split cache first (avoid re-splitting)
+        let cache_key = virtual_base.value();
+        {
+            let cache = self.split_cache.lock();
+            if let Some(&cached_pt_phys) = cache.get(&cache_key) {
+                log::debug!(
+                    "[MMU] Cache hit: Huge page at {:#x} was already split, reusing PT at {:#x}",
+                    virtual_base.value(),
+                    cached_pt_phys.value()
+                );
+                return PageTable::from_physical(cached_pt_phys, 0);
+            }
+        }
+        
         log::info!(
-            "[MMU] Splitting 2MB huge page at {:#x} into 512×4KB pages",
+            "[MMU] Splitting 2MB huge page at {:#x} into 512×4KB pages (cache miss)",
             virtual_base.value()
         );
         
@@ -300,11 +326,23 @@ impl PageTableWalker {
         // Create a PageTable structure to return
         let split_pt = PageTable::from_physical(pt_phys, 0)?;
         
+        // OPTIMIZATION 2: Add to split cache before TLB flush
+        // This allows future splits of the same huge page to reuse this PT
+        {
+            let mut cache = self.split_cache.lock();
+            cache.insert(cache_key, pt_phys);
+            log::debug!(
+                "[MMU] Added PT {:#x} to split cache for virtual base {:#x}",
+                pt_phys.value(),
+                virtual_base.value()
+            );
+        }
+        
         // TLB flush: Use flush_all() which is faster than 512 individual INVLPGs
         // This flushes the entire TLB but is more efficient
         crate::arch::x86_64::memory::tlb::flush_all();
         
-        log::info!("[MMU] Split complete with TLB flush_all: {:#x}-{:#x}",
+        log::info!("[MMU] Split complete with TLB flush_all: {:#x}-{:#x} (cached)",
             virtual_base.value(),
             virtual_base.value() + arch::PAGE_SIZE * PAGE_TABLE_ENTRIES
         );
@@ -466,6 +504,31 @@ impl PageTableWalker {
     fn get_index(&self, virtual_addr: VirtualAddress, level: usize) -> usize {
         let shift = 12 + level * 9; // 12 bits pour l'offset, 9 bits par niveau
         (virtual_addr.value() >> shift) & 0x1FF
+    }
+    
+    /// Retourne le nombre d'entrées dans le cache de splits
+    /// 
+    /// Utile pour les statistiques et le débogage.
+    pub fn split_cache_size(&self) -> usize {
+        self.split_cache.lock().len()
+    }
+    
+    /// Vide le cache de splits
+    /// 
+    /// ATTENTION: Cela ne libère PAS la mémoire physique des PTs cachées.
+    /// À utiliser seulement lors d'un changement complet de contexte de page tables
+    /// (par exemple, switch de processus).
+    pub fn clear_split_cache(&mut self) {
+        let count = self.split_cache.lock().len();
+        self.split_cache.lock().clear();
+        log::debug!("[MMU] Split cache cleared ({} entries removed)", count);
+    }
+    
+    /// Vérifie si une huge page à cette adresse virtuelle a déjà été splitée
+    /// 
+    /// Retourne Some(physical_address) si elle existe dans le cache, None sinon.
+    pub fn check_split_cache(&self, virtual_base: VirtualAddress) -> Option<PhysicalAddress> {
+        self.split_cache.lock().get(&virtual_base.value()).copied()
     }
 }
 
