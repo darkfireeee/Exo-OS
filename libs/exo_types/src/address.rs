@@ -664,37 +664,400 @@ impl BitOps for u64 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
+    extern crate std;
+    use std::format;
+
+    // ===== PhysAddr Tests =====
 
     #[test]
-    fn test_phys_addr() {
+    fn test_phys_addr_new() {
         let addr = PhysAddr::new(0x1000);
         assert_eq!(addr.as_u64(), 0x1000);
-        assert!(addr.is_page_aligned());
-        assert!(!addr.is_null());
+        
+        let zero = PhysAddr::new(0);
+        assert_eq!(zero, PhysAddr::ZERO);
+        assert!(zero.is_null());
     }
 
     #[test]
-    fn test_virt_addr_canonical() {
-        // Low canonical range
+    fn test_phys_addr_try_new() {
+        assert!(PhysAddr::try_new(0).is_some());
+        assert!(PhysAddr::try_new(0x1000).is_some());
+        assert!(PhysAddr::try_new(MAX_PHYS_ADDR).is_some());
+        assert!(PhysAddr::try_new(MAX_PHYS_ADDR + 1).is_none());
+        assert!(PhysAddr::try_new(u64::MAX).is_none());
+    }
+
+    #[test]
+    fn test_phys_addr_alignment() {
+        let addr = PhysAddr::new(0x1234);
+        assert!(!addr.is_page_aligned());
+        assert!(!addr.is_huge_page_aligned());
+        
+        let page_aligned = PhysAddr::new(0x1000);
+        assert!(page_aligned.is_page_aligned());
+        assert!(!page_aligned.is_huge_page_aligned());
+        
+        let huge_aligned = PhysAddr::new(0x20_0000);
+        assert!(huge_aligned.is_page_aligned());
+        assert!(huge_aligned.is_huge_page_aligned());
+        assert!(!huge_aligned.is_giga_page_aligned());
+        
+        let giga_aligned = PhysAddr::new(0x4000_0000);
+        assert!(giga_aligned.is_page_aligned());
+        assert!(giga_aligned.is_huge_page_aligned());
+        assert!(giga_aligned.is_giga_page_aligned());
+    }
+
+    #[test]
+    fn test_phys_addr_align_down() {
+        let addr = PhysAddr::new(0x1234);
+        assert_eq!(addr.align_down(PAGE_SIZE_U64), PhysAddr::new(0x1000));
+        assert_eq!(addr.page_align_down(), PhysAddr::new(0x1000));
+        
+        let addr = PhysAddr::new(0x12_3456);
+        assert_eq!(addr.align_down(HUGE_PAGE_SIZE_U64), PhysAddr::new(0x0));
+        
+        let already_aligned = PhysAddr::new(0x1000);
+        assert_eq!(already_aligned.align_down(PAGE_SIZE_U64), already_aligned);
+    }
+
+    #[test]
+    fn test_phys_addr_align_up() {
+        let addr = PhysAddr::new(0x1234);
+        assert_eq!(addr.align_up(PAGE_SIZE_U64), PhysAddr::new(0x2000));
+        assert_eq!(addr.page_align_up(), PhysAddr::new(0x2000));
+        
+        let addr = PhysAddr::new(0x12_3456);
+        assert_eq!(addr.align_up(HUGE_PAGE_SIZE_U64), PhysAddr::new(0x20_0000));
+        
+        let already_aligned = PhysAddr::new(0x1000);
+        assert_eq!(already_aligned.align_up(PAGE_SIZE_U64), already_aligned);
+    }
+
+    #[test]
+    fn test_phys_addr_arithmetic() {
+        let addr = PhysAddr::new(0x1000);
+        
+        assert_eq!(addr + 0x100_u64, PhysAddr::new(0x1100));
+        assert_eq!(addr + 0x100_usize, PhysAddr::new(0x1100));
+        assert_eq!(addr - 0x100_u64, PhysAddr::new(0xf00));
+        assert_eq!(addr - 0x100_usize, PhysAddr::new(0xf00));
+        
+        let addr2 = PhysAddr::new(0x2000);
+        assert_eq!(addr2 - addr, 0x1000);
+    }
+
+    #[test]
+    fn test_phys_addr_arithmetic_assign() {
+        let mut addr = PhysAddr::new(0x1000);
+        addr += 0x100_u64;
+        assert_eq!(addr, PhysAddr::new(0x1100));
+        
+        addr -= 0x100_u64;
+        assert_eq!(addr, PhysAddr::new(0x1000));
+        
+        addr += 0x100_usize;
+        assert_eq!(addr, PhysAddr::new(0x1100));
+        
+        addr -= 0x100_usize;
+        assert_eq!(addr, PhysAddr::new(0x1000));
+    }
+
+    #[test]
+    fn test_phys_addr_checked_ops() {
+        let addr = PhysAddr::new(0x1000);
+        
+        assert_eq!(addr.checked_add(0x100), Some(PhysAddr::new(0x1100)));
+        assert_eq!(addr.checked_sub(0x100), Some(PhysAddr::new(0xf00)));
+        assert_eq!(addr.checked_sub(0x2000), None);
+        
+        let max_addr = PhysAddr::new(MAX_PHYS_ADDR);
+        assert_eq!(max_addr.checked_add(1), None);
+        assert_eq!(max_addr.checked_add(0), Some(max_addr));
+    }
+
+    #[test]
+    fn test_phys_addr_saturating_ops() {
+        let addr = PhysAddr::new(0x1000);
+        
+        assert_eq!(addr.saturating_add(0x100), PhysAddr::new(0x1100));
+        assert_eq!(addr.saturating_sub(0x100), PhysAddr::new(0xf00));
+        assert_eq!(addr.saturating_sub(0x2000), PhysAddr::ZERO);
+        
+        let max_addr = PhysAddr::new(MAX_PHYS_ADDR);
+        assert_eq!(max_addr.saturating_add(1000), max_addr);
+    }
+
+    #[test]
+    fn test_phys_addr_conversions() {
+        let addr = PhysAddr::new(0x1000);
+        
+        assert_eq!(addr.as_u64(), 0x1000);
+        assert_eq!(addr.as_usize(), 0x1000);
+        
+        let u64_val: u64 = addr.into();
+        assert_eq!(u64_val, 0x1000);
+        
+        let usize_val: usize = addr.into();
+        assert_eq!(usize_val, 0x1000);
+        
+        assert_eq!(PhysAddr::try_from(0x1000_u64).unwrap(), addr);
+        assert_eq!(PhysAddr::try_from(0x1000_usize).unwrap(), addr);
+        assert!(PhysAddr::try_from(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn test_phys_addr_pointer_conversions() {
+        let addr = PhysAddr::new(0x1000);
+        
+        let ptr: *const u8 = addr.as_ptr();
+        assert_eq!(ptr as u64, 0x1000);
+        
+        let mut_ptr: *mut u64 = addr.as_mut_ptr();
+        assert_eq!(mut_ptr as u64, 0x1000);
+    }
+
+    #[test]
+    fn test_phys_addr_display() {
+        let addr = PhysAddr::new(0x1234);
+        let display = format!("{}", addr);
+        assert!(display.contains("0x1234"));
+        
+        let debug = format!("{:?}", addr);
+        assert!(debug.contains("PhysAddr"));
+        assert!(debug.contains("0x1234"));
+        
+        let hex_lower = format!("{:x}", addr);
+        assert_eq!(hex_lower, "1234");
+        
+        let hex_upper = format!("{:X}", addr);
+        assert_eq!(hex_upper, "1234");
+    }
+
+    // ===== VirtAddr Tests =====
+
+    #[test]
+    fn test_virt_addr_canonical_boundaries() {
         assert!(VirtAddr::is_canonical(0x0));
         assert!(VirtAddr::is_canonical(0x0000_7fff_ffff_ffff));
         
-        // High canonical range
-        assert!(VirtAddr::is_canonical(0xffff_8000_0000_0000));
-        assert!(VirtAddr::is_canonical(0xffff_ffff_ffff_ffff));
-        
-        // Non-canonical
         assert!(!VirtAddr::is_canonical(0x0000_8000_0000_0000));
+        assert!(!VirtAddr::is_canonical(0x0000_8000_0000_0001));
+        assert!(!VirtAddr::is_canonical(0x7fff_ffff_ffff_ffff));
         assert!(!VirtAddr::is_canonical(0xffff_7fff_ffff_ffff));
+        
+        assert!(VirtAddr::is_canonical(0xffff_8000_0000_0000));
+        assert!(VirtAddr::is_canonical(0xffff_8000_0000_0001));
+        assert!(VirtAddr::is_canonical(0xffff_ffff_ffff_ffff));
     }
 
     #[test]
-    fn test_alignment() {
-        let addr = PhysAddr::new(0x1234);
-        assert_eq!(addr.align_down(PAGE_SIZE as u64), PhysAddr::new(0x1000));
-        assert_eq!(addr.align_up(PAGE_SIZE as u64), PhysAddr::new(0x2000));
+    fn test_virt_addr_new() {
+        let addr = VirtAddr::new(0x1000);
+        assert_eq!(addr.as_u64(), 0x1000);
+        
+        let zero = VirtAddr::ZERO;
+        assert!(zero.is_null());
+        assert_eq!(zero.as_u64(), 0);
+    }
+
+    #[test]
+    fn test_virt_addr_try_new() {
+        assert!(VirtAddr::try_new(0x0).is_some());
+        assert!(VirtAddr::try_new(0x0000_7fff_ffff_ffff).is_some());
+        assert!(VirtAddr::try_new(0xffff_8000_0000_0000).is_some());
+        assert!(VirtAddr::try_new(0xffff_ffff_ffff_ffff).is_some());
+        
+        assert!(VirtAddr::try_new(0x0000_8000_0000_0000).is_none());
+        assert!(VirtAddr::try_new(0xffff_7fff_ffff_ffff).is_none());
+    }
+
+    #[test]
+    fn test_virt_addr_canonicalize() {
+        let addr = VirtAddr::canonicalize(0x0000_1234_5678_9abc);
+        assert_eq!(addr.as_u64(), 0x0000_1234_5678_9abc);
+        assert!(VirtAddr::is_canonical(addr.as_u64()));
+        
+        let addr_high = VirtAddr::canonicalize(0x0000_8000_0000_0000);
+        assert!(VirtAddr::is_canonical(addr_high.as_u64()));
+        assert_eq!(addr_high.as_u64() & 0xffff_0000_0000_0000, 0xffff_0000_0000_0000);
+    }
+
+    #[test]
+    fn test_virt_addr_alignment() {
+        let addr = VirtAddr::new(0x1234);
+        assert!(!addr.is_page_aligned());
+        
+        let page_aligned = VirtAddr::new(0x1000);
+        assert!(page_aligned.is_page_aligned());
+        
+        let huge_aligned = VirtAddr::new(0x20_0000);
+        assert!(huge_aligned.is_huge_page_aligned());
+        
+        let giga_aligned = VirtAddr::new(0x4000_0000);
+        assert!(giga_aligned.is_giga_page_aligned());
+    }
+
+    #[test]
+    fn test_virt_addr_align_operations() {
+        let addr = VirtAddr::new(0x1234);
+        
+        let aligned_down = addr.align_down(PAGE_SIZE_U64);
+        assert_eq!(aligned_down.as_u64(), 0x1000);
+        assert!(VirtAddr::is_canonical(aligned_down.as_u64()));
+        
+        let aligned_up = addr.align_up(PAGE_SIZE_U64);
+        assert_eq!(aligned_up.as_u64(), 0x2000);
+        assert!(VirtAddr::is_canonical(aligned_up.as_u64()));
+        
+        assert_eq!(addr.page_align_down().as_u64(), 0x1000);
+        assert_eq!(addr.page_align_up().as_u64(), 0x2000);
+    }
+
+    #[test]
+    fn test_virt_addr_page_operations() {
+        let addr = VirtAddr::new(0x1234);
+        assert_eq!(addr.page_offset(), 0x234);
+        assert_eq!(addr.page_number(), 0x1);
+        
+        let addr2 = VirtAddr::new(0x1000);
+        assert_eq!(addr2.page_offset(), 0);
+        assert_eq!(addr2.page_number(), 0x1);
+    }
+
+    #[test]
+    fn test_virt_addr_arithmetic() {
+        let addr = VirtAddr::new(0x1000);
+        
+        assert_eq!(addr + 0x100_u64, VirtAddr::new(0x1100));
+        assert_eq!(addr + 0x100_usize, VirtAddr::new(0x1100));
+        assert_eq!(addr - 0x100_u64, VirtAddr::new(0xf00));
+        
+        let addr2 = VirtAddr::new(0x2000);
+        assert_eq!(addr2 - addr, 0x1000);
+    }
+
+    #[test]
+    fn test_virt_addr_checked_ops() {
+        let addr = VirtAddr::new(0x1000);
+        
+        assert_eq!(addr.checked_add(0x100), Some(VirtAddr::new(0x1100)));
+        assert_eq!(addr.checked_sub(0x100), Some(VirtAddr::new(0xf00)));
+        assert_eq!(addr.checked_sub(0x2000), None);
+        
+        let high_addr = VirtAddr::new(0xffff_ffff_ffff_f000);
+        assert!(high_addr.checked_add(0x1000).is_some());
+    }
+
+    #[test]
+    fn test_virt_addr_saturating_ops() {
+        let addr = VirtAddr::new(0x1000);
+        
+        let add_result = addr.saturating_add(0x100);
+        assert_eq!(add_result.as_u64(), 0x1100);
+        assert!(VirtAddr::is_canonical(add_result.as_u64()));
+        
+        let sub_result = addr.saturating_sub(0x2000);
+        assert!(VirtAddr::is_canonical(sub_result.as_u64()));
+    }
+
+    #[test]
+    fn test_virt_addr_conversions() {
+        let addr = VirtAddr::new(0x1000);
+        
+        assert_eq!(addr.as_u64(), 0x1000);
+        assert_eq!(addr.as_usize(), 0x1000);
+        
+        let u64_val: u64 = addr.into();
+        assert_eq!(u64_val, 0x1000);
+        
+        let usize_val: usize = addr.into();
+        assert_eq!(usize_val, 0x1000);
+        
+        assert_eq!(VirtAddr::try_from(0x1000_u64).unwrap(), addr);
+        assert_eq!(VirtAddr::try_from(0x1000_usize).unwrap(), addr);
+        assert!(VirtAddr::try_from(0x0000_8000_0000_0000_u64).is_err());
+    }
+
+    #[test]
+    fn test_virt_addr_from_pointers() {
+        let value: u64 = 0x1234;
+        let ptr: *const u64 = &value;
+        let addr = VirtAddr::from(ptr);
+        assert!(VirtAddr::is_canonical(addr.as_u64()));
+        
+        let mut mut_value: u64 = 0x5678;
+        let mut_ptr: *mut u64 = &mut mut_value;
+        let addr2 = VirtAddr::from(mut_ptr);
+        assert!(VirtAddr::is_canonical(addr2.as_u64()));
+    }
+
+    #[test]
+    fn test_virt_addr_pointer_conversions() {
+        let addr = VirtAddr::new(0x1000);
+        
+        let ptr: *const u8 = addr.as_ptr();
+        assert_eq!(ptr as u64, 0x1000);
+        
+        let mut_ptr: *mut u64 = addr.as_mut_ptr();
+        assert_eq!(mut_ptr as u64, 0x1000);
+    }
+
+    #[test]
+    fn test_virt_addr_display() {
+        let addr = VirtAddr::new(0x1234);
+        
+        let display = format!("{}", addr);
+        assert!(display.contains("0x1234"));
+        
+        let debug = format!("{:?}", addr);
+        assert!(debug.contains("VirtAddr"));
+        assert!(debug.contains("0x1234"));
+        
+        let hex_lower = format!("{:x}", addr);
+        assert_eq!(hex_lower, "1234");
+        
+        let hex_upper = format!("{:X}", addr);
+        assert_eq!(hex_upper, "1234");
+    }
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(PAGE_SIZE, 4096);
+        assert_eq!(HUGE_PAGE_SIZE, 2 * 1024 * 1024);
+        assert_eq!(GIGA_PAGE_SIZE, 1024 * 1024 * 1024);
+        assert_eq!(MAX_PHYS_ADDR_BITS, 52);
+        assert_eq!(MAX_PHYS_ADDR, (1u64 << 52) - 1);
+    }
+
+    #[test]
+    fn test_size_and_alignment() {
+        use core::mem::{size_of, align_of};
+        
+        assert_eq!(size_of::<PhysAddr>(), size_of::<u64>());
+        assert_eq!(align_of::<PhysAddr>(), align_of::<u64>());
+        
+        assert_eq!(size_of::<VirtAddr>(), size_of::<u64>());
+        assert_eq!(align_of::<VirtAddr>(), align_of::<u64>());
+    }
+
+    #[test]
+    fn test_ordering() {
+        let addr1 = PhysAddr::new(0x1000);
+        let addr2 = PhysAddr::new(0x2000);
+        let addr3 = PhysAddr::new(0x1000);
+        
+        assert!(addr1 < addr2);
+        assert!(addr2 > addr1);
+        assert_eq!(addr1, addr3);
+        assert_ne!(addr1, addr2);
+        
+        let vaddr1 = VirtAddr::new(0x1000);
+        let vaddr2 = VirtAddr::new(0x2000);
+        assert!(vaddr1 < vaddr2);
     }
 }
