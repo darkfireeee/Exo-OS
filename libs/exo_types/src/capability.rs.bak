@@ -11,6 +11,7 @@ bitflags! {
     ///
     /// Each bit represents a specific permission. Rights can be combined
     /// using bitwise operations (|, &, ^).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct Rights: u32 {
         const NONE        = 0b0000_0000;
         const READ        = 0b0000_0001;
@@ -27,16 +28,16 @@ bitflags! {
         const ADMIN       = 0b1000_0000_0000;
 
         /// Standard file permissions (read, write, metadata)
-        const FILE_STANDARD = Self::READ.bits | Self::WRITE.bits | Self::METADATA.bits;
+        const FILE_STANDARD = Self::READ.bits() | Self::WRITE.bits() | Self::METADATA.bits();
 
         /// Standard directory permissions (file + create)
-        const DIR_STANDARD = Self::FILE_STANDARD.bits | Self::CREATE_FILE.bits | Self::CREATE_DIR.bits;
+        const DIR_STANDARD = Self::FILE_STANDARD.bits() | Self::CREATE_FILE.bits() | Self::CREATE_DIR.bits();
 
         /// Standard socket permissions
-        const SOCKET_STANDARD = Self::READ.bits | Self::WRITE.bits | Self::NET_BIND.bits | Self::NET_CONNECT.bits;
+        const SOCKET_STANDARD = Self::READ.bits() | Self::WRITE.bits() | Self::NET_BIND.bits() | Self::NET_CONNECT.bits();
 
         /// IPC permissions (send + receive)
-        const IPC_STANDARD = Self::IPC_SEND.bits | Self::IPC_RECV.bits;
+        const IPC_STANDARD = Self::IPC_SEND.bits() | Self::IPC_RECV.bits();
 
         /// All permissions (for privileged operations)
         const ALL = u32::MAX;
@@ -47,25 +48,25 @@ impl Rights {
     /// Check if rights include read permission
     #[inline(always)]
     pub const fn can_read(self) -> bool {
-        self.bits() & Self::READ.bits != 0
+        self.bits() & Self::READ.bits() != 0
     }
 
     /// Check if rights include write permission
     #[inline(always)]
     pub const fn can_write(self) -> bool {
-        self.bits() & Self::WRITE.bits != 0
+        self.bits() & Self::WRITE.bits() != 0
     }
 
     /// Check if rights include execute permission
     #[inline(always)]
     pub const fn can_execute(self) -> bool {
-        self.bits() & Self::EXECUTE.bits != 0
+        self.bits() & Self::EXECUTE.bits() != 0
     }
 
     /// Check if rights include admin permission
     #[inline(always)]
     pub const fn is_admin(self) -> bool {
-        self.bits() & Self::ADMIN.bits != 0
+        self.bits() & Self::ADMIN.bits() != 0
     }
 
     /// Reduce rights (attenuation)
@@ -112,16 +113,16 @@ impl CapabilityType {
             Self::NetworkSocket => Rights::SOCKET_STANDARD,
             Self::IpcChannel => Rights::IPC_STANDARD,
             Self::Memory => Rights::from_bits_truncate(
-                Rights::READ.bits | Rights::WRITE.bits | Rights::EXECUTE.bits
+                Rights::READ.bits() | Rights::WRITE.bits() | Rights::EXECUTE.bits()
             ),
             Self::Process | Self::Thread => Rights::from_bits_truncate(
-                Rights::READ.bits | Rights::METADATA.bits
+                Rights::READ.bits() | Rights::METADATA.bits()
             ),
             Self::Device => Rights::from_bits_truncate(
-                Rights::READ.bits | Rights::WRITE.bits
+                Rights::READ.bits() | Rights::WRITE.bits()
             ),
             Self::Key => Rights::from_bits_truncate(
-                Rights::READ.bits | Rights::METADATA.bits
+                Rights::READ.bits() | Rights::METADATA.bits()
             ),
         }
     }
