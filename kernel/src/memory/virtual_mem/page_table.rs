@@ -300,14 +300,11 @@ impl PageTableWalker {
         // Create a PageTable structure to return
         let split_pt = PageTable::from_physical(pt_phys, 0)?;
         
-        // TODO: TLB flush causes system hang - needs investigation
-        // Possible causes: interrupt context, lock contention, or CR3 reload timing issue
-        // For now, skip TLB flush - correctness impact should be minimal as:
-        // 1. Huge page TLB entry will naturally be evicted eventually
-        // 2. New mappings use different addresses
-        // 3. Test shows split works without explicit flush
+        // TLB flush: Use flush_all() which is faster than 512 individual INVLPGs
+        // This flushes the entire TLB but is more efficient
+        crate::arch::x86_64::memory::tlb::flush_all();
         
-        log::info!("[MMU] Split complete: {:#x}-{:#x}",
+        log::info!("[MMU] Split complete with TLB flush_all: {:#x}-{:#x}",
             virtual_base.value(),
             virtual_base.value() + arch::PAGE_SIZE * PAGE_TABLE_ENTRIES
         );

@@ -974,6 +974,9 @@ fn test_fork_thread_entry() -> ! {
     //Test exec() with embedded binaries
     crate::tests::exec_test::test_exec_binaries();
     
+    log::info!("\n[TLB Investigation] Testing TLB flush operations...\n");
+    crate::tests::tlb_tests::run_all_tlb_tests();
+    
     log::info!("\n[JOUR 2] Testing load_elf_binary() with REAL compiled binary...\n");
     
     // JOUR 2: Test avec binaire compilé réel (test_exec_vfs.elf)

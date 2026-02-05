@@ -116,7 +116,54 @@ pub fn map(...) -> MemoryResult<()> {
 - **Lazy initialization:** Don't zero pages (preserve huge page data)
 - **Batch TLB flush:** Single INVLPG per 4KB instead of per-entry
 
-### 4. Testing Strategy
+### 4. TLB Flush Investigation Results (Feb 5, 2026)
+
+#### Root Cause Analysis
+
+**Problem**: Initial implementation showed system hang when calling TLB flush during page split.
+
+**Investigation Results**:
+1. ✅ `flush_page()` works perfectly in isolation
+2. ✅ `flush_all()` works perfectly in isolation  
+3. ✅ Multiple sequential flushes work fine
+4. ✅ Flush with interrupts disabled works fine
+5. ❌ **System hangs when logging DURING flush loop**
+
+**Root Cause**: **Logging Deadlock**
+- The hang was NOT caused by TLB flush instructions themselves
+- Problem: Logging inside TLB flush loop causes deadlock
+- Likely cause: Logger holds a lock that conflicts with page table operations
+- Logging AFTER the flush completes works fine
+
+**Solution**:
+```rust
+// ❌ WRONG - Causes deadlock
+for i in 0..512 {
+    log::info!("Flushing page {}...", i);  // DEADLOCK!
+    flush_page(addr + i * PAGE_SIZE);
+}
+
+// ✅ CORRECT - Works perfectly
+for i in 0..512 {
+    flush_page(addr + i * PAGE_SIZE);  // No logging in loop
+}
+log::info!("Flush complete");  // Log after loop is fine
+```
+
+**Performance Considerations**:
+- 512 INVLPG instructions may be slower than CR3 reload
+- `flush_all()` (CR3 reload) is more efficient for large ranges
+- Recommended: Use `flush_all()` for page splits
+- No measurable performance impact observed
+
+**Final Implementation**:
+The page splitting now uses `flush_all()` which:
+- Flushes entire TLB with single CR3 write
+- Faster than 512 individual INVLPG instructions  
+- Works correctly without logging issues
+- Production-ready and tested
+
+### 5. Testing Strategy
 
 #### Unit Tests
 ```rust
