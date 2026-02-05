@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 //! Time types for timestamps and durations
 //!
 //! Provides high-precision time types with nanosecond resolution.
@@ -215,11 +216,58 @@ impl Sub<Timestamp> for Timestamp {
     #[inline(always)]
     fn sub(self, rhs: Timestamp) -> Duration {
         Duration(self.0.wrapping_sub(rhs.0))
+=======
+//! Time-related types
+
+use core::fmt;
+use core::ops::{Add, Sub};
+
+/// Timestamp in nanoseconds since epoch
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct Timestamp(pub u64);
+
+impl Timestamp {
+    /// Create a new timestamp
+    pub const fn new(nanos: u64) -> Self {
+        Self(nanos)
+    }
+
+    /// Get nanoseconds since epoch
+    pub const fn as_nanos(self) -> u64 {
+        self.0
+    }
+
+    /// Get seconds since epoch
+    pub const fn as_secs(self) -> u64 {
+        self.0 / 1_000_000_000
+    }
+
+    /// Get milliseconds since epoch
+    pub const fn as_millis(self) -> u64 {
+        self.0 / 1_000_000
+    }
+
+    /// Get microseconds since epoch
+    pub const fn as_micros(self) -> u64 {
+        self.0 / 1_000
+    }
+
+    /// Create from seconds
+    pub const fn from_secs(secs: u64) -> Self {
+        Self(secs * 1_000_000_000)
+    }
+
+    /// Create from milliseconds
+    pub const fn from_millis(millis: u64) -> Self {
+        Self(millis * 1_000_000)
+>>>>>>> Stashed changes
     }
 }
 
 impl fmt::Display for Timestamp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+<<<<<<< Updated upstream
         let (secs, nanos) = self.as_secs_nanos();
         write!(f, "{}.{:09}s", secs, nanos)
     }
@@ -231,10 +279,45 @@ impl fmt::Display for Timestamp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Duration(u64);
+=======
+        write!(f, "{}s", self.as_secs())
+    }
+}
+
+impl Add<Duration> for Timestamp {
+    type Output = Self;
+
+    fn add(self, rhs: Duration) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl Sub<Duration> for Timestamp {
+    type Output = Self;
+
+    fn sub(self, rhs: Duration) -> Self::Output {
+        Self(self.0.saturating_sub(rhs.0))
+    }
+}
+
+impl Sub for Timestamp {
+    type Output = Duration;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Duration(self.0.saturating_sub(rhs.0))
+    }
+}
+
+/// Duration in nanoseconds
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct Duration(pub u64);
+>>>>>>> Stashed changes
 
 impl Duration {
     /// Zero duration
     pub const ZERO: Self = Self(0);
+<<<<<<< Updated upstream
     
     /// Maximum duration
     pub const MAX: Self = Self(u64::MAX);
@@ -426,10 +509,63 @@ impl SubAssign for Duration {
     fn sub_assign(&mut self, rhs: Self) {
         self.0 = self.0.wrapping_sub(rhs.0);
     }
+=======
+
+    /// Create a new duration
+    pub const fn new(nanos: u64) -> Self {
+        Self(nanos)
+    }
+
+    /// Get nanoseconds
+    pub const fn as_nanos(self) -> u64 {
+        self.0
+    }
+
+    /// Get seconds
+    pub const fn as_secs(self) -> u64 {
+        self.0 / 1_000_000_000
+    }
+
+    /// Get milliseconds
+    pub const fn as_millis(self) -> u64 {
+        self.0 / 1_000_000
+    }
+
+    /// Get microseconds
+    pub const fn as_micros(self) -> u64 {
+        self.0 / 1_000
+    }
+
+    /// Create from seconds
+    pub const fn from_secs(secs: u64) -> Self {
+        Self(secs * 1_000_000_000)
+    }
+
+    /// Create from milliseconds
+    pub const fn from_millis(millis: u64) -> Self {
+        Self(millis * 1_000_000)
+    }
+
+    /// Create from microseconds
+    pub const fn from_micros(micros: u64) -> Self {
+        Self(micros * 1_000)
+    }
+
+    /// Create from nanoseconds
+    pub const fn from_nanos(nanos: u64) -> Self {
+        Self(nanos)
+    }
+
+    /// Check if zero
+    pub const fn is_zero(self) -> bool {
+        self.0 == 0
+    }
+>>>>>>> Stashed changes
 }
 
 impl fmt::Display for Duration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+<<<<<<< Updated upstream
         if self.0 < Timestamp::NANOS_PER_MICRO {
             write!(f, "{}ns", self.0)
         } else if self.0 < Timestamp::NANOS_PER_MILLI {
@@ -692,5 +828,39 @@ mod tests {
         let d1 = Duration::from_secs(42);
         let d2 = d1;
         assert_eq!(d1.as_secs(), d2.as_secs());
+=======
+        let secs = self.as_secs();
+        let nanos = self.0 % 1_000_000_000;
+        write!(f, "{}.{:09}s", secs, nanos)
+    }
+}
+
+impl Add for Duration {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl Sub for Duration {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0.saturating_sub(rhs.0))
+    }
+}
+
+// Conversion from core::time::Duration
+impl From<core::time::Duration> for Duration {
+    fn from(d: core::time::Duration) -> Self {
+        Self::from_nanos(d.as_nanos() as u64)
+    }
+}
+
+impl From<Duration> for core::time::Duration {
+    fn from(d: Duration) -> Self {
+        core::time::Duration::from_nanos(d.0)
+>>>>>>> Stashed changes
     }
 }

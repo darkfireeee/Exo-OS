@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 //! File descriptor RAII wrapper
 //!
 //! Provides RAII semantics for file descriptors with automatic cleanup.
@@ -165,16 +166,64 @@ impl Drop for FileDescriptor {
         
         // For now, no-op (FD would leak in production)
         // This is acceptable for kernel development until syscall layer exists
+=======
+//! File descriptor types
+
+use core::fmt;
+
+/// File descriptor
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct FileDescriptor(pub i32);
+
+impl FileDescriptor {
+    /// Create a new file descriptor
+    pub const fn new(fd: i32) -> Self {
+        Self(fd)
+    }
+
+    /// Get the raw fd value
+    pub const fn as_i32(self) -> i32 {
+        self.0
+    }
+
+    /// Standard input
+    pub const STDIN: Self = Self(0);
+
+    /// Standard output
+    pub const STDOUT: Self = Self(1);
+
+    /// Standard error
+    pub const STDERR: Self = Self(2);
+
+    /// Invalid file descriptor
+    pub const INVALID: Self = Self(-1);
+
+    /// Check if valid
+    pub const fn is_valid(self) -> bool {
+        self.0 >= 0
+>>>>>>> Stashed changes
     }
 }
 
 impl fmt::Display for FileDescriptor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+<<<<<<< Updated upstream
         write!(f, "fd({})", self.as_raw())
+=======
+        write!(f, "fd({})", self.0)
+    }
+}
+
+impl From<i32> for FileDescriptor {
+    fn from(fd: i32) -> Self {
+        Self(fd)
+>>>>>>> Stashed changes
     }
 }
 
 impl From<FileDescriptor> for i32 {
+<<<<<<< Updated upstream
     /// Convert to i32 by leaking ownership
     ///
     /// WARNING: This prevents auto-close! Use carefully.
@@ -436,5 +485,31 @@ mod tests {
         let fd1 = BorrowedFd::new(42).unwrap();
         let fd2 = fd1;
         assert_eq!(fd1.as_raw(), fd2.as_raw());
+=======
+    fn from(fd: FileDescriptor) -> Self {
+        fd.0
+    }
+}
+
+/// Borrowed file descriptor (non-owning)
+#[derive(Debug, Clone, Copy)]
+pub struct BorrowedFd<'a> {
+    fd: FileDescriptor,
+    _phantom: core::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> BorrowedFd<'a> {
+    /// Create a borrowed file descriptor
+    pub const unsafe fn new(fd: FileDescriptor) -> Self {
+        Self {
+            fd,
+            _phantom: core::marker::PhantomData,
+        }
+    }
+
+    /// Get the underlying file descriptor
+    pub const fn as_fd(self) -> FileDescriptor {
+        self.fd
+>>>>>>> Stashed changes
     }
 }

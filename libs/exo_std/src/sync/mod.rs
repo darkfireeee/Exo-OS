@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 // libs/exo_std/src/sync/mod.rs
 //! Primitives de synchronisation optimisées et robustes
 //!
@@ -56,3 +57,25 @@ impl<T> PoisonError<T> {
 
 /// Type pour mutex potentiellement empoisonné
 pub type LockResult<Guard> = Result<Guard, PoisonError<Guard>>;
+=======
+//! Primitives de synchronisation pour environnements concurrents
+//!
+//! Module optimisé pour exo_std avec support multi-thread.
+
+pub mod mutex;
+pub mod rwlock;
+pub mod atomic;
+pub mod semaphore;
+pub mod barrier;
+pub mod condvar;
+pub mod once;
+
+// Réexportations
+pub use mutex::{Mutex, MutexGuard};
+pub use rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+pub use atomic::AtomicBool;
+pub use semaphore::Semaphore;
+pub use barrier::Barrier;
+pub use condvar::Condvar;
+pub use once::{Once, OnceCell};
+>>>>>>> Stashed changes

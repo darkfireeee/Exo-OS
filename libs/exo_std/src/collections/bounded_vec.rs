@@ -494,9 +494,40 @@ impl<T: fmt::Debug> fmt::Debug for BoundedVec<T> {
 }
 
 impl<T: Clone> Clone for BoundedVec<T> {
+<<<<<<< Updated upstream
     fn clone(&self) -> Self {
         // Note: nécessite un nouveau buffer externe
         unimplemented!("BoundedVec::clone requires external buffer allocation")
+=======
+    /// Clone le BoundedVec
+    ///
+    /// # Panics
+    ///
+    /// Panique toujours car BoundedVec ne peut pas allouer son propre buffer.
+    /// Pour cloner un BoundedVec, vous devez:
+    /// 1. Allouer manuellement un nouveau buffer de même capacité
+    /// 2. Créer un nouveau BoundedVec avec ce buffer
+    /// 3. Copier les éléments un par un avec extend_from_slice ou push
+    ///
+    /// # Exemple
+    ///
+    /// ```ignore
+    /// let mut backing1 = vec![0u32; 10];
+    /// let mut bv1 = unsafe { BoundedVec::new(backing1.as_mut_ptr(), 10) };
+    /// bv1.push(42).unwrap();
+    ///
+    /// // Pour cloner:
+    /// let mut backing2 = vec![0u32; 10];
+    /// let mut bv2 = unsafe { BoundedVec::new(backing2.as_mut_ptr(), 10) };
+    /// bv2.extend_from_slice(bv1.as_slice()).unwrap();
+    /// ```
+    fn clone(&self) -> Self {
+        panic!(
+            "BoundedVec::clone cannot allocate its own buffer. \
+             You must manually allocate a buffer and copy elements. \
+             See documentation for the Clone trait implementation."
+        )
+>>>>>>> Stashed changes
     }
 }
 

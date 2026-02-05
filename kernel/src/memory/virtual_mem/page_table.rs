@@ -269,39 +269,42 @@ impl PageTableWalker {
         virtual_base: VirtualAddress,
     ) -> MemoryResult<PageTable> {
         crate::logger::early_print("[SPLIT] Entered split_huge_page()\n");
+<<<<<<< Updated upstream
         
+=======
+>>>>>>> Stashed changes
         // Validate: must be at level 1 (PD - Page Directory) with huge flag
         // x86-64 hierarchy: PML4(3) -> PDPT(2) -> PD(1) -> PT(0)
         // 2MB huge pages are in PD entries (level 1)
         if level != 1 {
-            log::error!(
-                "[MMU] Invalid split level: {} (expected 1 for 2MB pages)",
-                level
-            );
+            crate::logger::early_print("[SPLIT] ERROR: wrong level\n");
             return Err(MemoryError::InternalError("Can only split 2MB huge pages at level 1 (PD)"));
         }
         
         if !huge_entry.is_huge() {
+            crate::logger::early_print("[SPLIT] ERROR: not a huge page\n");
             return Err(MemoryError::InternalError("Entry is not a huge page"));
         }
+        
+        crate::logger::early_print("[SPLIT] Validation OK\n");
         
         // OPTIMIZATION 1: Check split cache first (avoid re-splitting)
         let cache_key = virtual_base.value();
         {
             let cache = self.split_cache.lock();
             if let Some(&cached_pt_phys) = cache.get(&cache_key) {
-                log::debug!(
-                    "[MMU] Cache hit: Huge page at {:#x} was already split, reusing PT at {:#x}",
-                    virtual_base.value(),
-                    cached_pt_phys.value()
-                );
+                crate::logger::early_print("[SPLIT] Cache HIT, returning cached table\n");
                 return PageTable::from_physical(cached_pt_phys, 0);
             }
         }
         
+<<<<<<< Updated upstream
         // NO LOGGING IN CRITICAL SECTION TO AVOID DEADLOCK
         // See PAGE_SPLITTING_DESIGN.md section 4: TLB Flush Investigation
         // Logging can deadlock because logger needs memory operations
+=======
+        crate::logger::early_print("[SPLIT] Cache MISS, starting new split\n");
+>>>>>>> Stashed changes
         
         // Extract base physical address and flags from huge page
         let huge_phys_base = huge_entry.address();
@@ -417,6 +420,7 @@ impl PageTableWalker {
                 // La nouvelle table sera libérée qu elle n'est plus nécessaire
                 core::mem::forget(new_table);
             } else if entry.is_huge() {
+                crate::logger::early_print("[map()] *** HUGE PAGE DETECTED! ***\n");
                 // Split the huge page into 512 normal pages
                 // Calculate the base virtual address of the huge page
                 // For level 2 (PDE), each entry covers 2MB = 512 * 4KB
@@ -427,13 +431,19 @@ impl PageTableWalker {
                     (virtual_addr.value() / huge_page_size) * huge_page_size
                 );
                 
+<<<<<<< Updated upstream
                 // NO LOGGING HERE - can cause deadlock
                 // See PAGE_SPLITTING_DESIGN.md section 4
+=======
+                crate::logger::early_print("[map()] Calling split_huge_page...\n");
+>>>>>>> Stashed changes
                 
                 // Perform the split
                 crate::logger::early_print("[MAP] Calling split_huge_page()...\n");
                 let new_table = self.split_huge_page(level, entry, virtual_base)?;
                 crate::logger::early_print("[MAP] split_huge_page() returned\n");
+                
+                crate::logger::early_print("[map()] split_huge_page RETURNED!\n");
                 
                 // Replace the huge page entry with a pointer to the new PT
                 *entry = PageTableEntry::new_frame(

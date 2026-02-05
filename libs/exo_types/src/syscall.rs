@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 //! System call numbers and low-level syscall interface
 //!
 //! Provides type-safe syscall numbers and inline assembly wrappers
@@ -13,11 +14,23 @@ use core::fmt;
 #[repr(u64)]
 pub enum SyscallNumber {
     // Process management (0-19)
+=======
+//! Syscall numbers and types
+
+use core::fmt;
+
+/// Syscall number enumeration
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum SyscallNumber {
+    // Process management
+>>>>>>> Stashed changes
     Exit = 0,
     Fork = 1,
     Exec = 2,
     Wait = 3,
     GetPid = 4,
+<<<<<<< Updated upstream
     GetPPid = 5,
     Kill = 6,
     GetUid = 7,
@@ -157,10 +170,71 @@ pub enum SyscallNumber {
     
     // Custom/Reserved (1000+)
     Custom = 1000,
+=======
+    Kill = 5,
+
+    // Memory management
+    Mmap = 10,
+    Munmap = 11,
+    Mprotect = 12,
+    Brk = 13,
+
+    // I/O operations
+    Read = 20,
+    Write = 21,
+    Open = 22,
+    Close = 23,
+    Seek = 24,
+    Ioctl = 25,
+
+    // Thread management
+    ThreadCreate = 30,
+    ThreadExit = 31,
+    ThreadJoin = 32,
+    GetTid = 33,
+    Yield = 34,
+    Sleep = 35,
+
+    // Time
+    GetTime = 40,
+    SetTime = 41,
+
+    // IPC
+    IpcSend = 50,
+    IpcReceive = 51,
+    IpcCreateChannel = 52,
+    IpcCloseChannel = 53,
+
+    // Security
+    VerifyCapability = 60,
+    RequestCapability = 61,
+    RevokeCapability = 62,
+    DelegateCapability = 63,
+
+    // Filesystem
+    Stat = 70,
+    Fstat = 71,
+    Mkdir = 72,
+    Rmdir = 73,
+    Unlink = 74,
+    Rename = 75,
+    Chdir = 76,
+    Getcwd = 77,
+
+    // Network (reserved)
+    Socket = 100,
+    Bind = 101,
+    Listen = 102,
+    Accept = 103,
+    Connect = 104,
+    Send = 105,
+    Recv = 106,
+>>>>>>> Stashed changes
 }
 
 impl SyscallNumber {
     /// Convert to raw syscall number
+<<<<<<< Updated upstream
     #[inline(always)]
     pub const fn as_u64(self) -> u64 {
         self as u64
@@ -177,11 +251,21 @@ impl SyscallNumber {
     pub const fn from_u64(num: u64) -> Option<Self> {
         match num {
             // Process management
+=======
+    pub const fn as_usize(self) -> usize {
+        self as usize
+    }
+
+    /// Try to create from raw number
+    pub const fn from_usize(n: usize) -> Option<Self> {
+        match n {
+>>>>>>> Stashed changes
             0 => Some(Self::Exit),
             1 => Some(Self::Fork),
             2 => Some(Self::Exec),
             3 => Some(Self::Wait),
             4 => Some(Self::GetPid),
+<<<<<<< Updated upstream
             5 => Some(Self::GetPPid),
             6 => Some(Self::Kill),
             7 => Some(Self::GetUid),
@@ -328,6 +412,55 @@ impl SyscallNumber {
     
     /// Get syscall name as string
     #[inline(always)]
+=======
+            5 => Some(Self::Kill),
+            10 => Some(Self::Mmap),
+            11 => Some(Self::Munmap),
+            12 => Some(Self::Mprotect),
+            13 => Some(Self::Brk),
+            20 => Some(Self::Read),
+            21 => Some(Self::Write),
+            22 => Some(Self::Open),
+            23 => Some(Self::Close),
+            24 => Some(Self::Seek),
+            25 => Some(Self::Ioctl),
+            30 => Some(Self::ThreadCreate),
+            31 => Some(Self::ThreadExit),
+            32 => Some(Self::ThreadJoin),
+            33 => Some(Self::GetTid),
+            34 => Some(Self::Yield),
+            35 => Some(Self::Sleep),
+            40 => Some(Self::GetTime),
+            41 => Some(Self::SetTime),
+            50 => Some(Self::IpcSend),
+            51 => Some(Self::IpcReceive),
+            52 => Some(Self::IpcCreateChannel),
+            53 => Some(Self::IpcCloseChannel),
+            60 => Some(Self::VerifyCapability),
+            61 => Some(Self::RequestCapability),
+            62 => Some(Self::RevokeCapability),
+            63 => Some(Self::DelegateCapability),
+            70 => Some(Self::Stat),
+            71 => Some(Self::Fstat),
+            72 => Some(Self::Mkdir),
+            73 => Some(Self::Rmdir),
+            74 => Some(Self::Unlink),
+            75 => Some(Self::Rename),
+            76 => Some(Self::Chdir),
+            77 => Some(Self::Getcwd),
+            100 => Some(Self::Socket),
+            101 => Some(Self::Bind),
+            102 => Some(Self::Listen),
+            103 => Some(Self::Accept),
+            104 => Some(Self::Connect),
+            105 => Some(Self::Send),
+            106 => Some(Self::Recv),
+            _ => None,
+        }
+    }
+
+    /// Get syscall name
+>>>>>>> Stashed changes
     pub const fn name(self) -> &'static str {
         match self {
             Self::Exit => "exit",
@@ -335,6 +468,7 @@ impl SyscallNumber {
             Self::Exec => "exec",
             Self::Wait => "wait",
             Self::GetPid => "getpid",
+<<<<<<< Updated upstream
             Self::GetPPid => "getppid",
             Self::Kill => "kill",
             Self::GetUid => "getuid",
@@ -461,12 +595,57 @@ impl SyscallNumber {
             Self::GetRusage => "getrusage",
             
             Self::Custom => "custom",
+=======
+            Self::Kill => "kill",
+            Self::Mmap => "mmap",
+            Self::Munmap => "munmap",
+            Self::Mprotect => "mprotect",
+            Self::Brk => "brk",
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Open => "open",
+            Self::Close => "close",
+            Self::Seek => "seek",
+            Self::Ioctl => "ioctl",
+            Self::ThreadCreate => "thread_create",
+            Self::ThreadExit => "thread_exit",
+            Self::ThreadJoin => "thread_join",
+            Self::GetTid => "gettid",
+            Self::Yield => "yield",
+            Self::Sleep => "sleep",
+            Self::GetTime => "get_time",
+            Self::SetTime => "set_time",
+            Self::IpcSend => "ipc_send",
+            Self::IpcReceive => "ipc_receive",
+            Self::IpcCreateChannel => "ipc_create_channel",
+            Self::IpcCloseChannel => "ipc_close_channel",
+            Self::VerifyCapability => "verify_capability",
+            Self::RequestCapability => "request_capability",
+            Self::RevokeCapability => "revoke_capability",
+            Self::DelegateCapability => "delegate_capability",
+            Self::Stat => "stat",
+            Self::Fstat => "fstat",
+            Self::Mkdir => "mkdir",
+            Self::Rmdir => "rmdir",
+            Self::Unlink => "unlink",
+            Self::Rename => "rename",
+            Self::Chdir => "chdir",
+            Self::Getcwd => "getcwd",
+            Self::Socket => "socket",
+            Self::Bind => "bind",
+            Self::Listen => "listen",
+            Self::Accept => "accept",
+            Self::Connect => "connect",
+            Self::Send => "send",
+            Self::Recv => "recv",
+>>>>>>> Stashed changes
         }
     }
 }
 
 impl fmt::Display for SyscallNumber {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+<<<<<<< Updated upstream
         write!(f, "{}({})", self.name(), self.as_u64())
     }
 }
@@ -666,5 +845,8 @@ mod tests {
         let s1 = SyscallNumber::Exit;
         let s2 = s1;
         assert_eq!(s1, s2);
+=======
+        write!(f, "{}({})", self.name(), self.as_usize())
+>>>>>>> Stashed changes
     }
 }

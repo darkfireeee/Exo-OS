@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 //! Process ID type-safe wrapper
 //!
 //! Provides a type-safe wrapper around process IDs with compile-time
@@ -146,6 +147,33 @@ impl Pid {
             unsafe { Self::from_raw_unchecked(new_pid) }
         }
     }
+=======
+//! Process ID types
+
+use core::fmt;
+
+/// Process identifier
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct Pid(pub u32);
+
+impl Pid {
+    /// Create a new PID
+    pub const fn new(pid: u32) -> Self {
+        Self(pid)
+    }
+
+    /// Get the raw PID value
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    /// Special PID for init process
+    pub const INIT: Self = Self(1);
+
+    /// Invalid PID
+    pub const INVALID: Self = Self(0);
+>>>>>>> Stashed changes
 }
 
 impl fmt::Display for Pid {
@@ -154,6 +182,7 @@ impl fmt::Display for Pid {
     }
 }
 
+<<<<<<< Updated upstream
 impl fmt::LowerHex for Pid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::LowerHex::fmt(&self.0.get(), f)
@@ -163,10 +192,16 @@ impl fmt::LowerHex for Pid {
 impl fmt::UpperHex for Pid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::UpperHex::fmt(&self.0.get(), f)
+=======
+impl From<u32> for Pid {
+    fn from(pid: u32) -> Self {
+        Self(pid)
+>>>>>>> Stashed changes
     }
 }
 
 impl From<Pid> for u32 {
+<<<<<<< Updated upstream
     #[inline(always)]
     fn from(pid: Pid) -> u32 {
         pid.as_raw()
@@ -401,5 +436,9 @@ mod tests {
         set.insert(pid1);
         assert!(set.contains(&pid2));
         assert!(!set.contains(&pid3));
+=======
+    fn from(pid: Pid) -> Self {
+        pid.0
+>>>>>>> Stashed changes
     }
 }

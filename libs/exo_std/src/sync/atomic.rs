@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 // libs/exo_std/src/sync/atomic.rs
 //! Wrappers atomiques pour types simples
 //!
@@ -194,3 +195,15 @@ mod tests {
         assert_eq!(cell.load(), [2; 4]);
     }
 }
+=======
+//! Types atomiques et opérations
+
+pub use core::sync::atomic::{
+    AtomicBool, AtomicI8, AtomicI16, AtomicI32, AtomicI64,
+    AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize,
+    Ordering,
+};
+
+/// Fence mémoire
+pub use core::sync::atomic::{fence, compiler_fence};
+>>>>>>> Stashed changes

@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 // libs/exo_std/src/sync/barrier.rs
 //! Barrière de synchronisation pour coordination de threads
 //!
@@ -105,17 +106,65 @@ impl BarrierWaitResult {
     #[inline]
     pub fn is_leader(&self) -> bool {
         self.is_leader
+=======
+//! Barrière de synchronisation
+
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+/// Barrière pour synchroniser plusieurs threads
+pub struct Barrier {
+    count: usize,
+    waiting: AtomicUsize,
+    generation: AtomicUsize,
+}
+
+impl Barrier {
+    /// Crée une nouvelle barrière
+    pub const fn new(count: usize) -> Self {
+        Self {
+            count,
+            waiting: AtomicUsize::new(0),
+            generation: AtomicUsize::new(0),
+        }
+    }
+
+    /// Attend à la barrière
+    pub fn wait(&self) -> bool {
+        let gen = self.generation.load(Ordering::Acquire);
+        let waiting = self.waiting.fetch_add(1, Ordering::AcqRel) + 1;
+
+        if waiting == self.count {
+            // Dernier thread : libère tout le monde
+            self.waiting.store(0, Ordering::Release);
+            self.generation.fetch_add(1, Ordering::Release);
+            true // Leader
+        } else {
+            // Attend que le leader libère
+            while self.generation.load(Ordering::Acquire) == gen {
+                core::hint::spin_loop();
+            }
+            false // Follower
+        }
+>>>>>>> Stashed changes
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+<<<<<<< Updated upstream
     
     #[test]
     fn test_barrier() {
         let barrier = Barrier::new(1);
         let result = barrier.wait().unwrap();
         assert!(result.is_leader());
+=======
+
+    #[test]
+    fn test_barrier() {
+        let barrier = Barrier::new(1);
+        assert!(barrier.wait()); // Seul thread = leader
+>>>>>>> Stashed changes
     }
 }

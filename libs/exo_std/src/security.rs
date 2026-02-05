@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 // libs/exo_std/src/security.rs
 //! Primitives de sécurité basées sur capabilities
 //!
@@ -227,3 +228,10 @@ mod tests {
         assert!(verify_capability(123).is_ok());
     }
 }
+=======
+//! Module de sécurité principal
+//!
+//! Ce module réexporte les fonctionnalités du sous-module security/capability
+
+pub use crate::security::capability::*;
+>>>>>>> Stashed changes

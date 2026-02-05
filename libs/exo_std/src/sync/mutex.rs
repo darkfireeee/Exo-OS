@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 // libs/exo_std/src/sync/mutex.rs
 //! Mutex optimisé avec backoff exponentiel et poisoning
 //!
@@ -227,18 +228,91 @@ impl<'a, T: ?Sized> Deref for MutexGuard<'a, T> {
     #[inline]
     fn deref(&self) -> &T {
         // Safety: On a le lock, accès exclusif garanti
+=======
+//! Mutex (exclusion mutuelle)
+
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::ops::{Deref, DerefMut};
+
+/// Mutex basique avec spinlock
+pub struct Mutex<T> {
+    locked: AtomicBool,
+    data: UnsafeCell<T>,
+}
+
+unsafe impl<T: Send> Send for Mutex<T> {}
+unsafe impl<T: Send> Sync for Mutex<T> {}
+
+impl<T> Mutex<T> {
+    /// Crée un nouveau Mutex
+    pub const fn new(value: T) -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+            data: UnsafeCell::new(value),
+        }
+    }
+
+    /// Acquiert le mutex (bloquant avec spinlock)
+    pub fn lock(&self) -> MutexGuard<'_, T> {
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            core::hint::spin_loop();
+        }
+
+        MutexGuard { mutex: self }
+    }
+
+    /// Tente d'acquérir le mutex (non-bloquant)
+    pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
+        if self
+            .locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            Some(MutexGuard { mutex: self })
+        } else {
+            None
+        }
+    }
+
+    /// Déverrouille le mutex (interne)
+    fn unlock(&self) {
+        self.locked.store(false, Ordering::Release);
+    }
+}
+
+/// Guard pour Mutex
+pub struct MutexGuard<'a, T> {
+    mutex: &'a Mutex<T>,
+}
+
+impl<T> Deref for MutexGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+>>>>>>> Stashed changes
         unsafe { &*self.mutex.data.get() }
     }
 }
 
+<<<<<<< Updated upstream
 impl<'a, T: ?Sized> DerefMut for MutexGuard<'a, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut T {
         // Safety: On a le lock, accès exclusif garanti
+=======
+impl<T> DerefMut for MutexGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+>>>>>>> Stashed changes
         unsafe { &mut *self.mutex.data.get() }
     }
 }
 
+<<<<<<< Updated upstream
 impl<'a, T: ?Sized> Drop for MutexGuard<'a, T> {
     #[inline]
     fn drop(&mut self) {
@@ -331,12 +405,18 @@ impl Backoff {
     #[inline]
     fn next(&mut self) {
         self.iteration = self.iteration.saturating_add(1);
+=======
+impl<T> Drop for MutexGuard<'_, T> {
+    fn drop(&mut self) {
+        self.mutex.unlock();
+>>>>>>> Stashed changes
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+<<<<<<< Updated upstream
     
     #[test]
     fn test_mutex_basic() {
@@ -361,5 +441,16 @@ mod tests {
     fn test_mutex_into_inner() {
         let mutex = Mutex::new(42);
         assert_eq!(mutex.into_inner(), 42);
+=======
+
+    #[test]
+    fn test_mutex() {
+        let mutex = Mutex::new(0);
+        {
+            let mut guard = mutex.lock();
+            *guard = 42;
+        }
+        assert_eq!(*mutex.lock(), 42);
+>>>>>>> Stashed changes
     }
 }

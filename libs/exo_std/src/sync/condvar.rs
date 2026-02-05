@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 // libs/exo_std/src/sync/condvar.rs
 //! Variable de condition pour synchronisation complexe
 //!
@@ -156,12 +157,57 @@ impl Default for Condvar {
     #[inline]
     fn default() -> Self {
         Self::new()
+=======
+//! Variable conditionnelle
+
+use core::sync::atomic::{AtomicBool, Ordering};
+use super::mutex::{Mutex, MutexGuard};
+
+/// Variable conditionnelle (implémentation simplifiée)
+pub struct Condvar {
+    flag: AtomicBool,
+}
+
+impl Condvar {
+    /// Crée une nouvelle condvar
+    pub const fn new() -> Self {
+        Self {
+            flag: AtomicBool::new(false),
+        }
+    }
+
+    /// Attend sur la condvar (nécessite mutex)
+    pub fn wait<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
+        // Note: Implémentation simplifiée pour no_std
+        // Dans un vrai OS, on utiliserait futex ou équivalent
+        let mutex = unsafe { &*((&guard as *const MutexGuard<T>) as *const super::mutex::Mutex<T>) };
+        drop(guard);
+
+        // Attend le signal
+        while !self.flag.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+
+        // Réacquiert le mutex
+        mutex.lock()
+    }
+
+    /// Notifie un thread
+    pub fn notify_one(&self) {
+        self.flag.store(true, Ordering::Release);
+    }
+
+    /// Notifie tous les threads
+    pub fn notify_all(&self) {
+        self.flag.store(true, Ordering::Release);
+>>>>>>> Stashed changes
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+<<<<<<< Updated upstream
     
     #[test]
     fn test_condvar_basic() {
@@ -171,5 +217,13 @@ mod tests {
         let guard = mutex.lock().unwrap();
         condvar.notify_one();
         let _guard = condvar.wait_timeout(guard, Duration::from_millis(10)).unwrap();
+=======
+
+    #[test]
+    fn test_condvar_basic() {
+        let cv = Condvar::new();
+        cv.notify_one();
+        cv.notify_all();
+>>>>>>> Stashed changes
     }
 }

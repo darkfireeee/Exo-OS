@@ -59,6 +59,11 @@ pub enum IoErrorKind {
     StorageFull,
     /// Opération non supportée
     Unsupported,
+<<<<<<< Updated upstream
+=======
+    /// Écriture de zéro octet
+    WriteZero,
+>>>>>>> Stashed changes
     /// Autre erreur I/O
     Other,
 }
@@ -80,6 +85,11 @@ pub enum ProcessError {
     ExecFailed,
     /// Échec de wait
     WaitFailed,
+<<<<<<< Updated upstream
+=======
+    /// Échec de kill
+    KillFailed,
+>>>>>>> Stashed changes
     /// Autre erreur processus
     Other,
 }
@@ -140,6 +150,11 @@ pub enum SecurityError {
     PermissionDenied,
     /// Opération non autorisée
     Forbidden,
+<<<<<<< Updated upstream
+=======
+    /// Droits insuffisants
+    InsufficientRights,
+>>>>>>> Stashed changes
     /// Autre erreur sécurité
     Other,
 }
@@ -207,6 +222,10 @@ impl fmt::Display for IoErrorKind {
             IoErrorKind::BrokenPipe => write!(f, "broken pipe"),
             IoErrorKind::StorageFull => write!(f, "no storage space"),
             IoErrorKind::Unsupported => write!(f, "operation not supported"),
+<<<<<<< Updated upstream
+=======
+            IoErrorKind::WriteZero => write!(f, "write zero bytes"),
+>>>>>>> Stashed changes
             IoErrorKind::Other => write!(f, "other I/O error"),
         }
     }
@@ -222,6 +241,10 @@ impl fmt::Display for ProcessError {
             ProcessError::ForkFailed => write!(f, "fork failed"),
             ProcessError::ExecFailed => write!(f, "exec failed"),
             ProcessError::WaitFailed => write!(f, "wait failed"),
+<<<<<<< Updated upstream
+=======
+            ProcessError::KillFailed => write!(f, "kill failed"),
+>>>>>>> Stashed changes
             ProcessError::Other => write!(f, "other process error"),
         }
     }
@@ -270,6 +293,10 @@ impl fmt::Display for SecurityError {
             SecurityError::InvalidCapability => write!(f, "invalid capability"),
             SecurityError::PermissionDenied => write!(f, "permission denied"),
             SecurityError::Forbidden => write!(f, "operation forbidden"),
+<<<<<<< Updated upstream
+=======
+            SecurityError::InsufficientRights => write!(f, "insufficient rights"),
+>>>>>>> Stashed changes
             SecurityError::Other => write!(f, "other security error"),
         }
     }
@@ -369,3 +396,11 @@ impl<T, E> ResultExt<T> for core::result::Result<T, E> {
         self.map_err(|_| ExoStdError::Io(kind))
     }
 }
+<<<<<<< Updated upstream
+=======
+
+// Type aliases pour simplifier l'utilisation
+pub type IoError = IoErrorKind;
+pub type TimeError = SystemError;
+pub type MemoryError = SystemError;
+>>>>>>> Stashed changes

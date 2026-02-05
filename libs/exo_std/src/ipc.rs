@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 // libs/exo_std/src/ipc.rs
 //! Communication inter-processus (IPC)
 //!
@@ -27,6 +28,30 @@ pub fn send(dest: ChannelId, data: &[u8]) -> Result<()> {
         return Err(ExoStdError::Ipc(IpcError::InvalidDestination));
     }
     
+=======
+//! Inter-Process Communication (IPC)
+//!
+//! Ce module fournit les primitives pour la communication entre processus.
+
+pub use exo_ipc::*;
+
+/// Envoie un message à un processus
+///
+/// # Arguments
+///
+/// * `dest` - ID du processus destination
+/// * `data` - Données à envoyer
+///
+/// # Exemples
+///
+/// ```ignore
+/// use exo_std::ipc::send;
+///
+/// let data = b"Hello, process!";
+/// send(123, data).unwrap();
+/// ```
+pub fn send(dest: u32, data: &[u8]) -> crate::Result<()> {
+>>>>>>> Stashed changes
     #[cfg(feature = "test_mode")]
     {
         let _ = (dest, data);
@@ -34,6 +59,7 @@ pub fn send(dest: ChannelId, data: &[u8]) -> Result<()> {
     }
     
     #[cfg(not(feature = "test_mode"))]
+<<<<<<< Updated upstream
     {
         // TODO: Appel système réel pour envoyer via IPC
         // unsafe {
@@ -69,6 +95,36 @@ pub fn receive(buffer: &mut [u8]) -> Result<(ChannelId, usize)> {
         return Err(ExoStdError::Ipc(IpcError::MessageTooLarge));
     }
     
+=======
+    unsafe {
+        use crate::syscall::{syscall3, SyscallId};
+        
+        let result = syscall3(
+            SyscallId::Send,
+            dest as usize,
+            data.as_ptr() as usize,
+            data.len(),
+        );
+        
+        if result < 0 {
+            Err(crate::error::Error::Io(crate::error::IoError::BrokenPipe))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Reçoit un message
+///
+/// # Arguments
+///
+/// * `buffer` - Buffer pour recevoir les données
+///
+/// # Returns
+///
+/// Nombre d'octets reçus et ID du processus expéditeur
+pub fn recv(buffer: &mut [u8]) -> crate::Result<(usize, u32)> {
+>>>>>>> Stashed changes
     #[cfg(feature = "test_mode")]
     {
         let _ = buffer;
@@ -76,6 +132,7 @@ pub fn receive(buffer: &mut [u8]) -> Result<(ChannelId, usize)> {
     }
     
     #[cfg(not(feature = "test_mode"))]
+<<<<<<< Updated upstream
     {
         // TODO: Syscall pour recevoir
         let _ = buffer;
@@ -147,5 +204,24 @@ mod tests {
     fn test_send() {
         let result = send(1, b"test message");
         assert!(result.is_ok());
+=======
+    unsafe {
+        use crate::syscall::{syscall2, SyscallId};
+        
+        let result = syscall2(
+            SyscallId::Recv,
+            buffer.as_mut_ptr() as usize,
+            buffer.len(),
+        );
+        
+        if result < 0 {
+            Err(crate::error::Error::Io(crate::error::IoError::BrokenPipe))
+        } else {
+            // Les bits hauts contiennent le PID, les bits bas la taille
+            let size = (result & 0xFFFF) as usize;
+            let pid = ((result >> 16) & 0xFFFF) as u32;
+            Ok((size, pid))
+        }
+>>>>>>> Stashed changes
     }
 }

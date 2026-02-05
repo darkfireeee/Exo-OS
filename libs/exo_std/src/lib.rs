@@ -23,6 +23,7 @@
 
 extern crate alloc;
 
+<<<<<<< Updated upstream
 // Modules publics
 pub mod error;
 pub mod syscall;
@@ -32,8 +33,25 @@ pub mod io;
 pub mod ipc;
 pub mod process;
 pub mod security;
+=======
+// Modules de base
+pub mod error;
+pub mod syscall;
+
+// Primitives de synchronisation
+pub mod sync;
+
+// Collections optimisées
+pub mod collections;
+
+// Modules système
+pub mod io;
+pub mod ipc;
+pub mod process;
+>>>>>>> Stashed changes
 pub mod thread;
 pub mod time;
+pub mod security;
 
 // Réexportations pour l'API publique
 pub use error::{Result, ExoStdError};

@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 //! User and Group ID types
 //!
 //! Type-safe wrappers for Unix user and group IDs with zero runtime overhead.
@@ -29,10 +30,24 @@ impl Uid {
 
     /// Create new UID
     #[inline(always)]
+=======
+//! User and group ID types
+
+use core::fmt;
+
+/// User identifier
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct Uid(pub u32);
+
+impl Uid {
+    /// Create a new UID
+>>>>>>> Stashed changes
     pub const fn new(uid: u32) -> Self {
         Self(uid)
     }
 
+<<<<<<< Updated upstream
     /// Get raw u32 value
     #[inline(always)]
     pub const fn as_u32(self) -> u32 {
@@ -68,10 +83,20 @@ impl Uid {
     pub const fn is_nobody(self) -> bool {
         self.0 == 65534
     }
+=======
+    /// Get the raw UID value
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    /// Root user ID
+    pub const ROOT: Self = Self(0);
+>>>>>>> Stashed changes
 }
 
 impl fmt::Display for Uid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+<<<<<<< Updated upstream
         write!(f, "{}", self.0)
     }
 }
@@ -80,10 +105,14 @@ impl From<Uid> for u32 {
     #[inline(always)]
     fn from(uid: Uid) -> u32 {
         uid.as_u32()
+=======
+        write!(f, "uid:{}", self.0)
+>>>>>>> Stashed changes
     }
 }
 
 impl From<u32> for Uid {
+<<<<<<< Updated upstream
     #[inline(always)]
     fn from(uid: u32) -> Self {
         Self::new(uid)
@@ -115,10 +144,31 @@ impl Gid {
 
     /// Create new GID
     #[inline(always)]
+=======
+    fn from(uid: u32) -> Self {
+        Self(uid)
+    }
+}
+
+impl From<Uid> for u32 {
+    fn from(uid: Uid) -> Self {
+        uid.0
+    }
+}
+
+/// Group identifier
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct Gid(pub u32);
+
+impl Gid {
+    /// Create a new GID
+>>>>>>> Stashed changes
     pub const fn new(gid: u32) -> Self {
         Self(gid)
     }
 
+<<<<<<< Updated upstream
     /// Get raw u32 value
     #[inline(always)]
     pub const fn as_u32(self) -> u32 {
@@ -154,10 +204,20 @@ impl Gid {
     pub const fn is_nogroup(self) -> bool {
         self.0 == 65534
     }
+=======
+    /// Get the raw GID value
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    /// Root group ID
+    pub const ROOT: Self = Self(0);
+>>>>>>> Stashed changes
 }
 
 impl fmt::Display for Gid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+<<<<<<< Updated upstream
         write!(f, "{}", self.0)
     }
 }
@@ -166,10 +226,14 @@ impl From<Gid> for u32 {
     #[inline(always)]
     fn from(gid: Gid) -> u32 {
         gid.as_u32()
+=======
+        write!(f, "gid:{}", self.0)
+>>>>>>> Stashed changes
     }
 }
 
 impl From<u32> for Gid {
+<<<<<<< Updated upstream
     #[inline(always)]
     fn from(gid: u32) -> Self {
         Self::new(gid)
@@ -354,5 +418,15 @@ mod tests {
         let gid1 = Gid::new(1000);
         let gid2 = gid1;
         assert_eq!(gid1.as_u32(), gid2.as_u32());
+=======
+    fn from(gid: u32) -> Self {
+        Self(gid)
+    }
+}
+
+impl From<Gid> for u32 {
+    fn from(gid: Gid) -> Self {
+        gid.0
+>>>>>>> Stashed changes
     }
 }

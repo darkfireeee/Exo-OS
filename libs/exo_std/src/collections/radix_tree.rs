@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 // libs/exo_std/src/collections/radix_tree.rs
 //! Radix tree (compact prefix trie) for memory-efficient key-value storage
 
@@ -16,12 +17,35 @@ struct RadixNode<V> {
 
 impl<V> RadixNode<V> {
     fn new(prefix: Vec<u8>) -> Self {
+=======
+//! Radix tree pour recherche rapide avec préfixes
+//!
+//! Optimisé pour les clés de type string/bytes avec préfixes communs.
+
+use core::mem;
+
+extern crate alloc;
+use alloc::vec::Vec;
+use alloc::boxed::Box;
+use alloc::string::String;
+
+/// Nœud du radix tree
+struct RadixNode<V> {
+    prefix: String,
+    value: Option<V>,
+    children: Vec<Box<RadixNode<V>>>,
+}
+
+impl<V> RadixNode<V> {
+    fn new(prefix: String) -> Self {
+>>>>>>> Stashed changes
         Self {
             prefix,
             value: None,
             children: Vec::new(),
         }
     }
+<<<<<<< Updated upstream
     
     fn find_child(&self, byte: u8) -> Option<usize> {
         self.children.iter().position(|(b, _)| *b == byte)
@@ -29,19 +53,38 @@ impl<V> RadixNode<V> {
 }
 
 /// Radix tree for efficient prefix-based lookups
+=======
+
+    fn with_value(prefix: String, value: V) -> Self {
+        Self {
+            prefix,
+            value: Some(value),
+            children: Vec::new(),
+        }
+    }
+}
+
+/// Radix tree (arbre de préfixes compressé)
+>>>>>>> Stashed changes
 pub struct RadixTree<V> {
     root: Option<Box<RadixNode<V>>>,
     len: usize,
 }
 
 impl<V> RadixTree<V> {
+<<<<<<< Updated upstream
     /// Create new radix tree
     pub fn new() -> Self {
+=======
+    /// Crée un nouveau radix tree vide
+    pub const fn new() -> Self {
+>>>>>>> Stashed changes
         Self {
             root: None,
             len: 0,
         }
     }
+<<<<<<< Updated upstream
     
     /// Insert key-value pair
     pub fn insert(&mut self, key: &[u8], value: V) -> Option<V> {
@@ -164,6 +207,146 @@ impl<V> RadixTree<V> {
     }
     
     /// Clear tree
+=======
+
+    /// Retourne le nombre d'éléments
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Vérifie si vide
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Insère une clé-valeur
+    pub fn insert(&mut self, key: &str, value: V) -> Option<V> {
+        if key.is_empty() {
+            return None;
+        }
+
+        if self.root.is_none() {
+            self.root = Some(Box::new(RadixNode::with_value(
+                String::from(key),
+                value,
+            )));
+            self.len = 1;
+            return None;
+        }
+
+        let old = self.insert_recursive(self.root.as_mut().unwrap(), key, value);
+        if old.is_none() {
+            self.len += 1;
+        }
+        old
+    }
+
+    fn insert_recursive(
+        &mut self,
+        node: &mut Box<RadixNode<V>>,
+        key: &str,
+        value: V,
+    ) -> Option<V> {
+        let common = common_prefix(&node.prefix, key);
+
+        if common == 0 {
+            // Aucun préfixe commun, cherche dans enfants
+            let remaining = key;
+            for child in &mut node.children {
+                let child_common = common_prefix(&child.prefix, remaining);
+                if child_common > 0 {
+                    return self.insert_recursive(child, remaining, value);
+                }
+            }
+            // Ajouter nouveau comme enfant
+            node.children.push(Box::new(RadixNode::with_value(
+                String::from(key),
+                value,
+            )));
+            None
+        } else if common == node.prefix.len() && common == key.len() {
+            // Exact match
+            node.value.replace(value)
+        } else if common == node.prefix.len() {
+            // Le préfixe du nœud est entièrement dans la clé
+            let remaining = &key[common..];
+            for child in &mut node.children {
+                let child_common = common_prefix(&child.prefix, remaining);
+                if child_common > 0 {
+                    return self.insert_recursive(child, remaining, value);
+                }
+            }
+            // Ajouter comme nouvel enfant
+            node.children.push(Box::new(RadixNode::with_value(
+                String::from(remaining),
+                value,
+            )));
+            None
+        } else {
+            // Split du nœud
+            let old_prefix = mem::replace(&mut node.prefix, String::from(&key[..common]));
+            let old_value = node.value.take();
+            let old_children = mem::take(&mut node.children);
+
+            // Ancien enfant
+            let mut old_child = Box::new(RadixNode {
+                prefix: String::from(&old_prefix[common..]),
+                value: old_value,
+                children: old_children,
+            });
+
+            if common == key.len() {
+                // La nouvelle clé devient le nœud parent
+                node.value = Some(value);
+                node.children.push(old_child);
+                None
+            } else {
+                // Deux enfants : ancien + nouveau
+                let new_child = Box::new(RadixNode::with_value(
+                    String::from(&key[common..]),
+                    value,
+                ));
+                node.children.push(old_child);
+                node.children.push(new_child);
+                None
+            }
+        }
+    }
+
+    /// Récupère une valeur
+    pub fn get(&self, key: &str) -> Option<&V> {
+        if key.is_empty() || self.root.is_none() {
+            return None;
+        }
+
+        self.get_recursive(self.root.as_ref().unwrap(), key)
+    }
+
+    fn get_recursive<'a>(&'a self, node: &'a RadixNode<V>, key: &str) -> Option<&'a V> {
+        let common = common_prefix(&node.prefix, key);
+
+        if common == 0 {
+            return None;
+        }
+
+        if common == node.prefix.len() && common == key.len() {
+            return node.value.as_ref();
+        }
+
+        if common == node.prefix.len() {
+            let remaining = &key[common..];
+            for child in &node.children {
+                if let Some(value) = self.get_recursive(child, remaining) {
+                    return Some(value);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Supprime tous les éléments
+>>>>>>> Stashed changes
     pub fn clear(&mut self) {
         self.root = None;
         self.len = 0;
@@ -176,6 +359,7 @@ impl<V> Default for RadixTree<V> {
     }
 }
 
+<<<<<<< Updated upstream
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +388,38 @@ mod tests {
         assert_eq!(tree.insert(b"key", 2), Some(1));
         assert_eq!(tree.get(b"key"), Some(&2));
         assert_eq!(tree.len(), 1);
+=======
+/// Calcule la longueur du préfixe commun
+fn common_prefix(a: &str, b: &str) -> usize {
+    a.chars()
+        .zip(b.chars())
+        .take_while(|(ca, cb)| ca == cb)
+        .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_radix_tree() {
+        let mut tree = RadixTree::new();
+
+        tree.insert("test", 1);
+        tree.insert("testing", 2);
+        tree.insert("toast", 3);
+
+        assert_eq!(tree.get("test"), Some(&1));
+        assert_eq!(tree.get("testing"), Some(&2));
+        assert_eq!(tree.get("toast"), Some(&3));
+        assert_eq!(tree.get("tea"), None);
+    }
+
+    #[test]
+    fn test_common_prefix() {
+        assert_eq!(common_prefix("hello", "help"), 3);
+        assert_eq!(common_prefix("abc", "xyz"), 0);
+        assert_eq!(common_prefix("test", "test"), 4);
+>>>>>>> Stashed changes
     }
 }

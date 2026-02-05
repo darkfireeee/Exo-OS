@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 //! POSIX-compatible errno codes with Exo-OS extensions
 //!
 //! Complete implementation of standard POSIX error codes plus custom
@@ -229,5 +230,136 @@ define_errno! {
         ECORRUPTED = 1003, "Data corruption detected",
         EQUOTA = 1004, "Resource quota exceeded",
         EMICROKERNEL = 1005, "Microkernel IPC error",
+=======
+//! Error numbers (errno values)
+
+use core::fmt;
+
+/// Error number (POSIX-like errno)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct Errno(pub i32);
+
+impl Errno {
+    pub const SUCCESS: Self = Self(0);
+    pub const EPERM: Self = Self(1);         // Operation not permitted
+    pub const ENOENT: Self = Self(2);        // No such file or directory
+    pub const ESRCH: Self = Self(3);         // No such process
+    pub const EINTR: Self = Self(4);         // Interrupted system call
+    pub const EIO: Self = Self(5);           // I/O error
+    pub const ENXIO: Self = Self(6);         // No such device or address
+    pub const E2BIG: Self = Self(7);         // Argument list too long
+    pub const ENOEXEC: Self = Self(8);       // Exec format error
+    pub const EBADF: Self = Self(9);         // Bad file number
+    pub const ECHILD: Self = Self(10);       // No child processes
+    pub const EAGAIN: Self = Self(11);       // Try again
+    pub const ENOMEM: Self = Self(12);       // Out of memory
+    pub const EACCES: Self = Self(13);       // Permission denied
+    pub const EFAULT: Self = Self(14);       // Bad address
+    pub const ENOTBLK: Self = Self(15);      // Block device required
+    pub const EBUSY: Self = Self(16);        // Device or resource busy
+    pub const EEXIST: Self = Self(17);       // File exists
+    pub const EXDEV: Self = Self(18);        // Cross-device link
+    pub const ENODEV: Self = Self(19);       // No such device
+    pub const ENOTDIR: Self = Self(20);      // Not a directory
+    pub const EISDIR: Self = Self(21);       // Is a directory
+    pub const EINVAL: Self = Self(22);       // Invalid argument
+    pub const ENFILE: Self = Self(23);       // File table overflow
+    pub const EMFILE: Self = Self(24);       // Too many open files
+    pub const ENOTTY: Self = Self(25);       // Not a typewriter
+    pub const ETXTBSY: Self = Self(26);      // Text file busy
+    pub const EFBIG: Self = Self(27);        // File too large
+    pub const ENOSPC: Self = Self(28);       // No space left on device
+    pub const ESPIPE: Self = Self(29);       // Illegal seek
+    pub const EROFS: Self = Self(30);        // Read-only file system
+    pub const EMLINK: Self = Self(31);       // Too many links
+    pub const EPIPE: Self = Self(32);        // Broken pipe
+    pub const EDOM: Self = Self(33);         // Math argument out of domain
+    pub const ERANGE: Self = Self(34);       // Math result not representable
+    pub const EDEADLK: Self = Self(35);      // Resource deadlock would occur
+    pub const ENAMETOOLONG: Self = Self(36); // File name too long
+    pub const ENOLCK: Self = Self(37);       // No record locks available
+    pub const ENOSYS: Self = Self(38);       // Function not implemented
+    pub const ENOTEMPTY: Self = Self(39);    // Directory not empty
+
+    /// Create from raw errno value
+    pub const fn new(errno: i32) -> Self {
+        Self(errno)
+    }
+
+    /// Get raw errno value
+    pub const fn as_i32(self) -> i32 {
+        self.0
+    }
+
+    /// Check if this is a success (0)
+    pub const fn is_success(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Get error description
+    pub fn description(&self) -> &'static str {
+        match *self {
+            Self::SUCCESS => "Success",
+            Self::EPERM => "Operation not permitted",
+            Self::ENOENT => "No such file or directory",
+            Self::ESRCH => "No such process",
+            Self::EINTR => "Interrupted system call",
+            Self::EIO => "I/O error",
+            Self::ENXIO => "No such device or address",
+            Self::E2BIG => "Argument list too long",
+            Self::ENOEXEC => "Exec format error",
+            Self::EBADF => "Bad file number",
+            Self::ECHILD => "No child processes",
+            Self::EAGAIN => "Try again",
+            Self::ENOMEM => "Out of memory",
+            Self::EACCES => "Permission denied",
+            Self::EFAULT => "Bad address",
+            Self::ENOTBLK => "Block device required",
+            Self::EBUSY => "Device or resource busy",
+            Self::EEXIST => "File exists",
+            Self::EXDEV => "Cross-device link",
+            Self::ENODEV => "No such device",
+            Self::ENOTDIR => "Not a directory",
+            Self::EISDIR => "Is a directory",
+            Self::EINVAL => "Invalid argument",
+            Self::ENFILE => "File table overflow",
+            Self::EMFILE => "Too many open files",
+            Self::ENOTTY => "Not a typewriter",
+            Self::ETXTBSY => "Text file busy",
+            Self::EFBIG => "File too large",
+            Self::ENOSPC => "No space left on device",
+            Self::ESPIPE => "Illegal seek",
+            Self::EROFS => "Read-only file system",
+            Self::EMLINK => "Too many links",
+            Self::EPIPE => "Broken pipe",
+            Self::EDOM => "Math argument out of domain",
+            Self::ERANGE => "Math result not representable",
+            Self::EDEADLK => "Resource deadlock would occur",
+            Self::ENAMETOOLONG => "File name too long",
+            Self::ENOLCK => "No record locks available",
+            Self::ENOSYS => "Function not implemented",
+            Self::ENOTEMPTY => "Directory not empty",
+            _ => "Unknown error",
+        }
+    }
+}
+
+impl fmt::Display for Errno {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} (errno {})", self.description(), self.0)
+    }
+}
+
+impl From<i32> for Errno {
+    fn from(errno: i32) -> Self {
+        Self(errno)
+    }
+}
+
+impl From<Errno> for i32 {
+    fn from(errno: Errno) -> Self {
+        errno.0
+>>>>>>> Stashed changes
     }
 }

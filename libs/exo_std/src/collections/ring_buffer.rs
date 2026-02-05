@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 // libs/exo_std/src/collections/ring_buffer.rs
 //! Circular buffer (ring buffer) with fixed capacity
 
@@ -159,5 +160,210 @@ mod tests {
         assert_eq!(rb.pop(), Some(3));
         assert_eq!(rb.pop(), Some(4));
         assert!(rb.is_empty());
+=======
+//! Ring buffer (circular buffer) optimisé pour no_std
+//!
+//! Plusieurs variantes : SPSC, MPSC, MPMC
+
+use core::sync::atomic::{AtomicUsize, Ordering};
+use core::cell::UnsafeCell;
+
+/// Ring buffer générique
+pub struct RingBuffer<T> {
+    buffer: Box<[Option<T>]>,
+    head: AtomicUsize,
+    tail: AtomicUsize,
+    capacity: usize,
+}
+
+impl<T> RingBuffer<T> {
+    /// Crée un nouveau ring buffer
+    pub fn new(capacity: usize) -> Self {
+        let mut buffer = Vec::with_capacity(capacity);
+        for _ in 0..capacity {
+            buffer.push(None);
+        }
+
+        Self {
+            buffer: buffer.into_boxed_slice(),
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+            capacity,
+        }
+    }
+
+    /// Retourne la capacité
+    pub const fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Tente d'enqueue une valeur
+    pub fn try_push(&self, value: T) -> Result<(), T> {
+        let head = self.head.load(Ordering::Acquire);
+        let next_head = (head + 1) % self.capacity;
+        let tail = self.tail.load(Ordering::Acquire);
+
+        if next_head == tail {
+            return Err(value); // Full
+        }
+
+        unsafe {
+            let slot = &self.buffer[head] as *const Option<T> as *mut Option<T>;
+            *slot = Some(value);
+        }
+
+        self.head.store(next_head, Ordering::Release);
+        Ok(())
+    }
+
+    /// Tente de dequeue une valeur
+    pub fn try_pop(&self) -> Option<T> {
+        let tail = self.tail.load(Ordering::Acquire);
+        let head = self.head.load(Ordering::Acquire);
+
+        if tail == head {
+            return None; // Empty
+        }
+
+        let value = unsafe {
+            let slot = &self.buffer[tail] as *const Option<T> as *mut Option<T>;
+            (*slot).take()
+        };
+
+        let next_tail = (tail + 1) % self.capacity;
+        self.tail.store(next_tail, Ordering::Release);
+
+        value
+    }
+
+    /// Vérifie si vide
+    pub fn is_empty(&self) -> bool {
+        self.head.load(Ordering::Acquire) == self.tail.load(Ordering::Acquire)
+    }
+
+    /// Vérifie si plein
+    pub fn is_full(&self) -> bool {
+        let head = self.head.load(Ordering::Acquire);
+        let next_head = (head + 1) % self.capacity;
+        next_head == self.tail.load(Ordering::Acquire)
+    }
+}
+
+/// Ring buffer SPSC (Single Producer Single Consumer)
+pub struct RingBufferSPSC<T> {
+    inner: RingBuffer<T>,
+}
+
+impl<T> RingBufferSPSC<T> {
+    /// Crée un nouveau SPSC ring buffer
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: RingBuffer::new(capacity),
+        }
+    }
+
+    /// Push (producteur)
+    pub fn push(&self, value: T) -> Result<(), T> {
+        self.inner.try_push(value)
+    }
+
+    /// Pop (consommateur)
+    pub fn pop(&self) -> Option<T> {
+        self.inner.try_pop()
+    }
+
+    /// Capacité
+    pub fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+}
+
+/// Ring buffer MPSC (Multi Producer Single Consumer)
+pub struct RingBufferMPSC<T> {
+    inner: RingBuffer<T>,
+}
+
+impl<T> RingBufferMPSC<T> {
+    /// Crée un nouveau MPSC ring buffer
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: RingBuffer::new(capacity),
+        }
+    }
+
+    /// Push (plusieurs producteurs)
+    pub fn push(&self, value: T) -> Result<(), T> {
+        self.inner.try_push(value)
+    }
+
+    /// Pop (un seul consommateur)
+    pub fn pop(&self) -> Option<T> {
+        self.inner.try_pop()
+    }
+
+    /// Capacité
+    pub fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+}
+
+/// Ring buffer MPMC (Multi Producer Multi Consumer)
+pub struct RingBufferMPMC<T> {
+    inner: RingBuffer<T>,
+}
+
+impl<T> RingBufferMPMC<T> {
+    /// Crée un nouveau MPMC ring buffer
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: RingBuffer::new(capacity),
+        }
+    }
+
+    /// Push (plusieurs producteurs)
+    pub fn push(&self, value: T) -> Result<(), T> {
+        self.inner.try_push(value)
+    }
+
+    /// Pop (plusieurs consommateurs)
+    pub fn pop(&self) -> Option<T> {
+        self.inner.try_pop()
+    }
+
+    /// Capacité
+    pub fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+}
+
+// Implémentation basique de Box et Vec pour no_std
+extern crate alloc;
+use alloc::vec::Vec;
+use alloc::boxed::Box;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ring_buffer_spsc() {
+        let rb = RingBufferSPSC::new(4);
+        
+        assert_eq!(rb.push(1), Ok(()));
+        assert_eq!(rb.push(2), Ok(()));
+        
+        assert_eq!(rb.pop(), Some(1));
+        assert_eq!(rb.pop(), Some(2));
+        assert_eq!(rb.pop(), None);
+    }
+
+    #[test]
+    fn test_ring_buffer_full() {
+        let rb = RingBufferSPSC::new(3);
+        
+        assert_eq!(rb.push(1), Ok(()));
+        assert_eq!(rb.push(2), Ok(()));
+        assert!(rb.push(3).is_err()); // Full
+>>>>>>> Stashed changes
     }
 }
