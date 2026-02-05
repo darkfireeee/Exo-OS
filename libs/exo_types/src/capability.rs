@@ -136,6 +136,21 @@ impl CapabilityMetadata {
             extra_flags: if executable { 1 } else { 0 },
         }
     }
+
+    /// Retourne le chemin si présent
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Retourne la taille si présente
+    pub fn size(&self) -> Option<usize> {
+        self.size
+    }
+
+    /// Retourne les flags supplémentaires
+    pub fn extra_flags(&self) -> u32 {
+        self.extra_flags
+    }
 }
 
 impl fmt::Display for Capability {

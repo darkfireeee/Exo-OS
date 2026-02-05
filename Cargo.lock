@@ -232,12 +232,12 @@ dependencies = [
 name = "exo_crypto"
 version = "0.0.0"
 dependencies = [
- "log",
+ "cc",
 ]
 
 [[package]]
 name = "exo_ipc"
-version = "0.0.0"
+version = "0.2.0"
 
 [[package]]
 name = "exo_std"

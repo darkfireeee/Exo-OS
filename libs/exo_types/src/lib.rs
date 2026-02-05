@@ -5,25 +5,27 @@ extern crate alloc;
 pub mod address;
 pub mod capability;
 pub mod error;
-pub mod pid;
-pub mod fd;
 pub mod errno;
-pub mod time;
+pub mod fd;
+pub mod pid;
+pub mod signal;
 pub mod syscall;
-// pub mod signal; // TODO: Create signal module
+pub mod time;
 pub mod uid_gid;
 
 // Réexportations
-pub use address::{PhysAddr, VirtAddr};
+pub use address::{PhysAddr, VirtAddr, PAGE_SIZE, HUGE_PAGE_SIZE, GIGA_PAGE_SIZE};
 pub use capability::{Capability, CapabilityMetadata, CapabilityType, Rights};
-pub use error::{ExoError, ErrorCode, Result};
-pub use pid::Pid;
-pub use fd::{FileDescriptor, BorrowedFd};
+pub use error::{ErrorCode, ExoError};
 pub use errno::Errno;
-pub use time::{Timestamp, Duration};
+pub use fd::{BorrowedFd, FileDescriptor};
+pub use pid::Pid;
+pub use signal::Signal;
 pub use syscall::SyscallNumber;
+pub use time::{Duration, Timestamp};
 
-// Initialisation globale
-pub fn init() {
-    log::trace!("exo_types initialized");
-}
+/// Type Result standard utilisant Errno
+pub type Result<T> = core::result::Result<T, Errno>;
+
+/// Type Result utilisant ExoError
+pub type ExoResult<T> = core::result::Result<T, ExoError>;

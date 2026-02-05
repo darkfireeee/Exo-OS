@@ -23,4 +23,5 @@ pub mod cow_fork_test;        // Jour 4: CoW fork() avec métriques réelles
 pub mod cow_advanced_tests;   // Jour 4 Phase 3B: Tests avancés CoW
 pub mod cow_real_tests;       // Jour 4 Phase 4: Tests RÉELS avec vraies pages
 pub mod tlb_tests;            // TLB flush investigation tests
-pub mod page_split_tests;     // Page splitting comprehensive tests
+pub mod page_split_tests;     // Page split cache and performance tests
+pub mod split_minimal_test;   // Minimal test to validate split works     // Page splitting comprehensive tests

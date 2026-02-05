@@ -51,14 +51,14 @@ pub fn kyber_keypair(pk: &mut [u8; KYBER_PUBLICKEYBYTES], sk: &mut [u8; KYBER_SE
 ///
 /// # Retour
 /// `true` si l'encapsulation a réussi, `false` sinon
-pub fn kyber_encaps(ct: &mut [u8; KYBER_CIPHERTEXTBYTES], ss: &mut [u8; KYBER_BYTES], pk: &[u8; KYBER_PUBLICKEYBYTES]) -> bool {
+pub fn kyber_encaps(ct: &mut [u8; KYBER_CIPHERTEXTBYTES], ss: &mut [u8; KYBER_BYTES], _pk: &[u8; KYBER_PUBLICKEYBYTES]) -> bool {
     #[cfg(not(test))]
     {
         extern "C" {
             fn crypto_kem_enc(ct: *mut u8, ss: *mut u8, pk: *const u8) -> i32;
         }
         
-        let result = unsafe { crypto_kem_enc(ct.as_mut_ptr(), ss.as_mut_ptr(), pk.as_ptr()) };
+        let result = unsafe { crypto_kem_enc(ct.as_mut_ptr(), ss.as_mut_ptr(), _pk.as_ptr()) };
         result == 0
     }
     
@@ -80,7 +80,22 @@ pub fn kyber_encaps(ct: &mut [u8; KYBER_CIPHERTEXTBYTES], ss: &mut [u8; KYBER_BY
 ///
 /// # Retour
 /// `true` si la décapsulation a réussi, `false` sinon
-pub fn kyber_decaps(_ss: &mut [u8; KYBER_BYTES], _ct: &[u8; KYBER_CIPHERTEXTBYTES], _sk: &[u8; KYBER_SECRETKEYBYTES]) -> bool {
-    // TODO: Implémenter la décapsulation Kyber
-    false
+pub fn kyber_decaps(ss: &mut [u8; KYBER_BYTES], ct: &[u8; KYBER_CIPHERTEXTBYTES], sk: &[u8; KYBER_SECRETKEYBYTES]) -> bool {
+    #[cfg(not(test))]
+    {
+        extern "C" {
+            fn crypto_kem_dec(ss: *mut u8, ct: *const u8, sk: *const u8) -> i32;
+        }
+        
+        let result = unsafe { crypto_kem_dec(ss.as_mut_ptr(), ct.as_ptr(), sk.as_ptr()) };
+        result == 0
+    }
+    
+    #[cfg(test)]
+    {
+        // Simulation cohérente avec encaps pour les tests
+        // Devrait produire la même clé partagée que lors de l'encapsulation
+        ss.iter_mut().enumerate().for_each(|(i, b)| *b = ((i + 17) % 256) as u8);
+        true
+    }
 }

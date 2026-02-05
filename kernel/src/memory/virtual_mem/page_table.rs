@@ -79,6 +79,9 @@ pub struct PageTable {
     virtual_address: VirtualAddress,
     /// Niveau de cette table dans la hiérarchie (0 = PML4, 3 = PT)
     level: usize,
+    /// Si true, cette PageTable possède la frame et doit la libérer au Drop
+    /// Si false, c'est juste une référence à une table existante
+    owns_frame: bool,
 }
 
 impl PageTable {
@@ -99,19 +102,26 @@ impl PageTable {
             physical_address: frame.address(),
             virtual_address,
             level,
+            owns_frame: true,  // new() crée et possède la frame
         })
     }
     
     /// Crée une table de pages à partir d'une adresse physique existante
     pub fn from_physical(physical_address: PhysicalAddress, level: usize) -> MemoryResult<Self> {
         // Mapper cette frame dans l'espace d'adressage du noyau
+        crate::logger::early_print("[from_physical] Calling map_temporary\n");
         let virtual_address = VirtualAddress::from(arch::mmu::map_temporary(physical_address)?);
+        crate::logger::early_print("[from_physical] map_temporary returned\n");
         
-        Ok(Self {
+        crate::logger::early_print("[from_physical] Creating result struct\n");
+        let result = Self {
             physical_address,
             virtual_address,
             level,
-        })
+            owns_frame: false,  // from_physical() ne possède PAS la frame
+        };
+        crate::logger::early_print("[from_physical] Struct created, returning Ok\n");
+        Ok(result)
     }
     
     /// Retourne l'adresse physique de cette table
@@ -158,12 +168,20 @@ impl PageTable {
 
 impl Drop for PageTable {
     fn drop(&mut self) {
-        // Démapper la table de l'espace d'adressage du noyau
+        crate::logger::early_print("[PageTable::drop] START\n");
+        // Démap per la table de l'espace d'adressage du noyau
         arch::mmu::unmap_temporary(self.virtual_address);
+        crate::logger::early_print("[PageTable::drop] unmap done\n");
         
-        // Libérer la frame physique
-        let frame = crate::memory::physical::Frame::containing_address(self.physical_address);
-        let _ = crate::memory::physical::deallocate_frame(frame);
+        // Libérer la frame physique SEULEMENT si cette PageTable la possède
+        if self.owns_frame {
+            crate::logger::early_print("[PageTable::drop] Deallocating owned frame\n");
+            let frame = crate::memory::physical::Frame::containing_address(self.physical_address);
+            let _ = crate::memory::physical::deallocate_frame(frame);
+        } else {
+            crate::logger::early_print("[PageTable::drop] Not deallocating (not owned)\n");
+        }
+        crate::logger::early_print("[PageTable::drop] END\n");
     }
 }
 
@@ -250,6 +268,8 @@ impl PageTableWalker {
         huge_entry: &PageTableEntry,
         virtual_base: VirtualAddress,
     ) -> MemoryResult<PageTable> {
+        crate::logger::early_print("[SPLIT] Entered split_huge_page()\n");
+        
         // Validate: must be at level 1 (PD - Page Directory) with huge flag
         // x86-64 hierarchy: PML4(3) -> PDPT(2) -> PD(1) -> PT(0)
         // 2MB huge pages are in PD entries (level 1)
@@ -279,17 +299,15 @@ impl PageTableWalker {
             }
         }
         
-        log::info!(
-            "[MMU] Splitting 2MB huge page at {:#x} into 512×4KB pages (cache miss)",
-            virtual_base.value()
-        );
+        // NO LOGGING IN CRITICAL SECTION TO AVOID DEADLOCK
+        // See PAGE_SPLITTING_DESIGN.md section 4: TLB Flush Investigation
+        // Logging can deadlock because logger needs memory operations
         
         // Extract base physical address and flags from huge page
         let huge_phys_base = huge_entry.address();
         let huge_flags = huge_entry.flags();
         
         // Allocate PT frame directly without recursive mapping
-        // This avoids potential issues with map_temporary during a split operation
         let pt_frame = crate::memory::physical::allocate_frame()?;
         let pt_phys = pt_frame.address();
         
@@ -327,25 +345,20 @@ impl PageTableWalker {
         let split_pt = PageTable::from_physical(pt_phys, 0)?;
         
         // OPTIMIZATION 2: Add to split cache before TLB flush
-        // This allows future splits of the same huge page to reuse this PT
         {
             let mut cache = self.split_cache.lock();
             cache.insert(cache_key, pt_phys);
-            log::debug!(
-                "[MMU] Added PT {:#x} to split cache for virtual base {:#x}",
-                pt_phys.value(),
-                virtual_base.value()
-            );
         }
         
         // TLB flush: Use flush_all() which is faster than 512 individual INVLPGs
-        // This flushes the entire TLB but is more efficient
         crate::arch::x86_64::memory::tlb::flush_all();
         
-        log::info!("[MMU] Split complete with TLB flush_all: {:#x}-{:#x} (cached)",
-            virtual_base.value(),
-            virtual_base.value() + arch::PAGE_SIZE * PAGE_TABLE_ENTRIES
+        // End of critical section - safe to log now
+        crate::logger::early_print("[SPLIT] About to return\n");
+        log::info!("[MMU] Split complete: {:#x} → 512×4KB (cached)",
+            virtual_base.value()
         );
+        crate::logger::early_print("[SPLIT] Returning OK\n");
         
         Ok(split_pt)
     }
@@ -357,13 +370,35 @@ impl PageTableWalker {
         physical_addr: PhysicalAddress,
         flags: PageTableFlags,
     ) -> MemoryResult<()> {
+        crate::logger::early_print("[map()] START\n");
         let mut current_address = self.root_address;
+        crate::logger::early_print("[map()] Got root\n");
         
         for level in (0..PAGE_TABLE_LEVELS).rev() {
-            let mut table = PageTable::from_physical(current_address, level)?;
+            crate::logger::early_print("[map()] Creating table from_physical\n");
+            let table_result = PageTable::from_physical(current_address, level);
+            crate::logger::early_print("[map()] from_physical call completed\n");
             
+            crate::logger::early_print("[map()] Checking if Ok...\n");
+            if table_result.is_ok() {
+                crate::logger::early_print("[map()] Result is Ok!\n");
+            } else {
+                crate::logger::early_print("[map()] Result is Err!\n");
+            }
+            
+            crate::logger::early_print("[map()] About to extract table from Result\n");
+            let mut table = table_result?;
+            crate::logger::early_print("[map()] Unwrap completed!\n");
+            crate::logger::early_print("[map()] Table value received!\n");
+            crate::logger::early_print("[map()] Table extracted successfully\n");
+            
+            crate::logger::early_print("[map()] Getting index\n");
             let index = self.get_index(virtual_addr, level);
+            crate::logger::early_print("[map()] Index obtained\n");
+            
+            crate::logger::early_print("[map()] Getting entry_mut\n");
             let entry = table.entry_mut(index)?;
+            crate::logger::early_print("[map()] Entry obtained\n");
             
             if level == 0 {
                 // Niveau final, mapper la page
@@ -379,25 +414,26 @@ impl PageTableWalker {
                     PageTableFlags::new().present().writable().user(),
                 );
                 
-                // La nouvelle table sera libérée quand elle n'est plus nécessaire
+                // La nouvelle table sera libérée qu elle n'est plus nécessaire
                 core::mem::forget(new_table);
             } else if entry.is_huge() {
                 // Split the huge page into 512 normal pages
                 // Calculate the base virtual address of the huge page
                 // For level 2 (PDE), each entry covers 2MB = 512 * 4KB
+                crate::logger::early_print("[MAP] Computing huge_page_size...\n");
                 let huge_page_size = arch::PAGE_SIZE * PAGE_TABLE_ENTRIES; // 2MB
+                crate::logger::early_print("[MAP] Computing virtual_base...\n");
                 let virtual_base = VirtualAddress::new(
                     (virtual_addr.value() / huge_page_size) * huge_page_size
                 );
                 
-                log::debug!(
-                    "[MMU] Map request at {:#x} requires splitting huge page at {:#x}",
-                    virtual_addr.value(),
-                    virtual_base.value()
-                );
+                // NO LOGGING HERE - can cause deadlock
+                // See PAGE_SPLITTING_DESIGN.md section 4
                 
                 // Perform the split
+                crate::logger::early_print("[MAP] Calling split_huge_page()...\n");
                 let new_table = self.split_huge_page(level, entry, virtual_base)?;
+                crate::logger::early_print("[MAP] split_huge_page() returned\n");
                 
                 // Replace the huge page entry with a pointer to the new PT
                 *entry = PageTableEntry::new_frame(
@@ -408,10 +444,7 @@ impl PageTableWalker {
                 // Don't drop the new table - it's now part of the page table hierarchy
                 core::mem::forget(new_table);
                 
-                log::info!(
-                    "[MMU] Successfully split huge page at {:#x}, continuing with mapping",
-                    virtual_base.value()
-                );
+                // NO LOGGING HERE - can cause deadlock
             }
             
             current_address = entry.address();

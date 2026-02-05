@@ -12,31 +12,6 @@ pub use kyber::{kyber_keypair, kyber_encaps, kyber_decaps, KYBER_PUBLICKEYBYTES,
 pub use dilithium::{dilithium_keypair, dilithium_sign, dilithium_verify, DILITHIUM_PUBLICKEYBYTES, DILITHIUM_SECRETKEYBYTES, DILITHIUM_BYTES};
 pub use chacha20::{ChaCha20, XChaCha20, POLY1305_KEYBYTES, POLY1305_TAGBYTES};
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
-static INITIALIZED: AtomicBool = AtomicBool::new(false);
-
-/// Initialise la bibliothèque cryptographique
-pub fn init() {
-    if INITIALIZED.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-        // Initialiser les générateurs aléatoires
-        init_random();
-        log::info!("exo_crypto initialized");
-    }
-}
-
-/// Initialise le générateur aléatoire
-fn init_random() {
-    // Dans un vrai OS, cela utiliserait le TRNG matériel
-    // et le mélangerait avec des entropies système
-    #[cfg(test)]
-    {
-        // Pour les tests, utiliser un CSPRNG simple
-        use rand::{rngs::StdRng, SeedableRng};
-        let _ = StdRng::from_entropy();
-    }
-}
-
 /// Fonction de hash rapide pour les opérations internes
 /// ATTENTION: Pas pour une utilisation cryptographique directe
 pub fn fast_hash(data: &[u8]) -> u64 {
@@ -48,4 +23,23 @@ pub fn fast_hash(data: &[u8]) -> u64 {
     }
     
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_fast_hash() {
+        let data1 = b"hello";
+        let data2 = b"world";
+        let data3 = b"hello";
+        
+        let h1 = fast_hash(data1);
+        let h2 = fast_hash(data2);
+        let h3 = fast_hash(data3);
+        
+        assert_ne!(h1, h2);
+        assert_eq!(h1, h3);
+    }
 }

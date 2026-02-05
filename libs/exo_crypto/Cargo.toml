@@ -4,18 +4,22 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 license = "MIT OR Apache-2.0"
-description = "Stub cryptographic primitives for Exo-OS"
+description = "Post-quantum cryptography for Exo-OS"
 
 [lib]
 path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
-log = "0.4"
+# No dependencies - pure no_std crypto
+
+[build-dependencies]
+cc = "1.0"
 
 [features]
 default = []
 std = []
+stub_crypto = []  # Use stubs instead of real PQClean (for tests)
 
 [package.metadata.exo-os]
 role = "crypto"

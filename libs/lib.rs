@@ -3,18 +3,9 @@
 #![no_std]
 
 // Réexportations des bibliothèques principales
-pub use exo_types::{PhysAddr, VirtAddr, Capability, ExoError, Result};
+pub use exo_crypto::ChaCha20;
 pub use exo_ipc::{Channel, Message};
-pub use exo_crypto::{Kyber, Dilithium, ChaCha20};
+pub use exo_types::{Capability, ExoError, PhysAddr, Result, VirtAddr};
 
 // Versioning
 pub const EXO_LIBS_VERSION: &str = "0.3.0-alpha";
-
-// Initialisation des bibliothèques
-pub fn init() {
-    exo_types::init();
-    exo_crypto::init();
-    
-    // Logging initialisé après les autres modules
-    log::info!("Exo-OS libraries initialized (v{})", EXO_LIBS_VERSION);
-}

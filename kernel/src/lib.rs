@@ -957,6 +957,13 @@ fn test_fork_thread_entry() -> ! {
     logger::early_print("[TEST_THREAD] CoW test thread started!\n");
     
     // ═══════════════════════════════════════════════════════════════
+    // PRIORITY 0: Test minimal du page split AVANT tout le reste
+    // ═══════════════════════════════════════════════════════════════
+    logger::early_print("\n[PRIORITY] Testing page split FIRST...\n");
+    crate::tests::split_minimal_test::test_split_minimal();
+    logger::early_print("[PRIORITY] Page split test complete, continuing...\n\n");
+    
+    // ═══════════════════════════════════════════════════════════════
     // JOUR 2: Tests exec() REAL - Execute FIRST before CoW tests
     // ═══════════════════════════════════════════════════════════════
     logger::early_print("\n");
@@ -967,8 +974,12 @@ fn test_fork_thread_entry() -> ! {
     
     // JOUR 2.5: First, validate that VFS read/write works correctly
     logger::early_print("[JOUR 2.5] Validating VFS read/write integrity before exec tests...\n");
+    logger::early_print("[JOUR 2.5] Calling test_elf_scenario()...\n");
     crate::tests::vfs_readwrite_test::test_elf_scenario();
+    logger::early_print("[JOUR 2.5] test_elf_scenario() DONE\n");
+    logger::early_print("[JOUR 2.5] Calling test_vfs_readwrite_roundtrip()...\n");
     crate::tests::vfs_readwrite_test::test_vfs_readwrite_roundtrip();
+    logger::early_print("[JOUR 2.5] test_vfs_readwrite_roundtrip() DONE\n");
     logger::early_print("[VFS] ✅ VFS read/write validation PASSED\n\n");
     
     //Test exec() with embedded binaries
@@ -976,6 +987,9 @@ fn test_fork_thread_entry() -> ! {
     
     log::info!("\n[TLB Investigation] Testing TLB flush operations...\n");
     crate::tests::tlb_tests::run_all_tlb_tests();
+    
+    log::info!("\n[Page Split Tests] Testing page split cache and performance...\n");
+    crate::tests::page_split_tests::run_all_split_tests();
     
     log::info!("\n[JOUR 2] Testing load_elf_binary() with REAL compiled binary...\n");
     
