@@ -20,12 +20,14 @@ pub fn test_load_elf_basic() {
     // For now, create a minimal test ELF structure
     let test_elf = create_minimal_elf();
     
+    log::info!("[TEST] Created minimal ELF: {} bytes", test_elf.len());
+    
     // Write to VFS
     let test_path = "/bin/test_exec";
     match vfs::write_file(test_path, &test_elf) {
-        Ok(_) => log::info!("[TEST] Created test ELF at {}", test_path),
+        Ok(_) => log::info!("[TEST] Wrote test ELF to VFS: {} ({} bytes)", test_path, test_elf.len()),
         Err(e) => {
-            log::error!("[TEST] Failed to create test ELF: {:?}", e);
+            log::error!("[TEST] Failed to write test ELF: {:?}", e);
             panic!("Test setup failed");
         }
     }
@@ -149,8 +151,8 @@ fn create_minimal_elf() -> Vec<u8> {
     // Version (1)
     elf[20..24].copy_from_slice(&1u32.to_le_bytes());
 
-    // Entry point: 0x400000 (typical Linux entry)
-    elf[24..32].copy_from_slice(&0x400000u64.to_le_bytes());
+    // Entry point: 0x40000000 (1GB - user space, avoiding huge pages)
+    elf[24..32].copy_from_slice(&0x40000000u64.to_le_bytes());
 
     // Program header offset: 64 (right after ELF header)
     elf[32..40].copy_from_slice(&64u64.to_le_bytes());
@@ -191,11 +193,11 @@ fn create_minimal_elf() -> Vec<u8> {
     // Offset in file: 0x1000 (4KB)
     phdr[8..16].copy_from_slice(&0x1000u64.to_le_bytes());
 
-    // Virtual address: 0x400000
-    phdr[16..24].copy_from_slice(&0x400000u64.to_le_bytes());
+    // Virtual address: 0x40000000
+    phdr[16..24].copy_from_slice(&0x40000000u64.to_le_bytes());
 
-    // Physical address: 0x400000
-    phdr[24..32].copy_from_slice(&0x400000u64.to_le_bytes());
+    // Physical address: 0x40000000
+    phdr[24..32].copy_from_slice(&0x40000000u64.to_le_bytes());
 
     // File size: 16 bytes (minimal code)
     phdr[32..40].copy_from_slice(&16u64.to_le_bytes());
@@ -218,7 +220,7 @@ fn create_minimal_elf() -> Vec<u8> {
         0x48, 0xc7, 0xc0, 0x3c, 0x00, 0x00, 0x00, // mov rax, 60
         0x48, 0x31, 0xff, // xor rdi, rdi
         0x0f, 0x05, // syscall
-        0xf4, 0xf4, 0xf4, // hlt hlt hlt (padding)
+        0xf4, 0xf4, 0xf4, 0xf4, // hlt hlt hlt hlt (padding to 16 bytes)
     ];
     elf.extend_from_slice(&code);
 

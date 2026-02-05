@@ -6,6 +6,7 @@ pub mod keyboard_test;
 pub mod exec_test;
 pub mod exec_tests;           // JOUR 1: Tests RÉELS load_elf_binary()
 pub mod exec_tests_real;      // JOUR 2: Test avec binaire compilé réel
+pub mod vfs_readwrite_test;   // JOUR 2.5: Validation VFS read/write integrity
 pub mod benchmark_real_threads;
 pub mod signal_tests;
 pub mod simple_multithread;

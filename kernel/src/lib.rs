@@ -965,7 +965,13 @@ fn test_fork_thread_entry() -> ! {
     logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
     logger::early_print("\n");
     
-    // Test exec() with embedded binaries
+    // JOUR 2.5: First, validate that VFS read/write works correctly
+    logger::early_print("[JOUR 2.5] Validating VFS read/write integrity before exec tests...\n");
+    crate::tests::vfs_readwrite_test::test_elf_scenario();
+    crate::tests::vfs_readwrite_test::test_vfs_readwrite_roundtrip();
+    logger::early_print("[VFS] ✅ VFS read/write validation PASSED\n\n");
+    
+    //Test exec() with embedded binaries
     crate::tests::exec_test::test_exec_binaries();
     
     log::info!("\n[JOUR 2] Testing load_elf_binary() with REAL compiled binary...\n");

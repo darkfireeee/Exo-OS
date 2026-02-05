@@ -28,7 +28,7 @@ pub fn load_elf_binary(path: &str, args: &[String], env: &[String]) -> MemoryRes
             MemoryError::NotFound
         })?;
 
-    log::debug!("[EXEC] Read {} bytes from {}", file_data.len(), path);
+    log::info!("[EXEC] Read {} bytes from {}", file_data.len(), path);
 
     // 2. Parse ELF Header - REAL validation
     let header = parser::parse_elf_header(&file_data)
@@ -38,6 +38,8 @@ pub fn load_elf_binary(path: &str, args: &[String], env: &[String]) -> MemoryRes
         })?;
 
     log::info!("[EXEC] ELF entry point: {:#x}", header.e_entry);
+
+    log::info!("[EXEC] Starting segment loading...");
 
     // 3. Get Program Headers
     let program_headers = parser::get_program_headers(&file_data, &header)
@@ -52,6 +54,7 @@ pub fn load_elf_binary(path: &str, args: &[String], env: &[String]) -> MemoryRes
     let mut segment_count = 0;
     for ph in program_headers {
         if ph.p_type == PT_LOAD {
+            log::info!("[EXEC] Loading PT_LOAD segment {}: vaddr={:#x}", segment_count, ph.p_vaddr);
             load_segment(&file_data, &ph)?;
             segment_count += 1;
             log::debug!(
@@ -137,6 +140,8 @@ fn load_segment(file_data: &[u8], ph: &Elf64ProgramHeader) -> MemoryResult<()> {
 
     // Map anonymous memory (MAP_PRIVATE | MAP_ANONYMOUS)
     let mmap_flags = MmapFlags::new(0x22);
+
+    log::info!("[EXEC]   About to call mmap: addr={:#x}, size={:#x}", aligned_start, aligned_size);
 
     let mapped_addr = mmap(
         Some(VirtualAddress::new(aligned_start)),

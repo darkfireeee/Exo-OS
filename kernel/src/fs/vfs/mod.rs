@@ -421,16 +421,23 @@ pub fn read_file(path: &str) -> FsResult<Vec<u8>> {
 
 /// Write entire file contents
 pub fn write_file(path: &str, data: &[u8]) -> FsResult<()> {
+    log::debug!("VFS: write_file {}, input size {} bytes", path, data.len());
+    
     // Open or create file
     let handle = open(path, O_WRONLY | O_CREAT | O_TRUNC)?;
     
     // Write data
-    write(handle, data)?;
+    let bytes_written = write(handle, data)?;
     
     // Close
     close(handle)?;
     
-    log::debug!("VFS: write_file {} -> {} bytes", path, data.len());
+    log::debug!("VFS: write_file {} -> wrote {} of {} bytes", path, bytes_written, data.len());
+    
+    if bytes_written != data.len() {
+        log::error!("VFS: write_file incomplete! Wrote {} but expected {}", bytes_written, data.len());
+    }
+    
     Ok(())
 }
 
