@@ -6,16 +6,16 @@ set -e
 echo "=== Création d'une ISO bootable ==="
 
 # Vérifier que l'image kernel existe
-if [ ! -f "build/kernel.bin" ]; then
-    echo "Erreur: build/kernel.bin introuvable"
+if [ ! -f "build/kernel.elf" ]; then
+    echo "Erreur: build/kernel.elf introuvable"
     exit 1
 fi
 
 # Créer la structure de répertoires pour l'ISO
 mkdir -p build/iso/boot/grub
 
-# Copier le kernel
-cp build/kernel.bin build/iso/boot/
+# Copier le kernel ELF (contient multiboot2 header)
+cp build/kernel.elf build/iso/boot/
 
 # Copier le fichier grub.cfg depuis bootloader/
 if [ -f "bootloader/grub.cfg" ]; then

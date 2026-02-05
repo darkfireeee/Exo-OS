@@ -45,14 +45,14 @@ pub fn dilithium_keypair(pk: &mut [u8; DILITHIUM_PUBLICKEYBYTES], sk: &mut [u8; 
 ///
 /// # Retour
 /// `true` si la signature a réussi, `false` sinon
-pub fn dilithium_sign(sig: &mut [u8; DILITHIUM_BYTES], msg: &[u8], sk: &[u8; DILITHIUM_SECRETKEYBYTES]) -> bool {
+pub fn dilithium_sign(sig: &mut [u8; DILITHIUM_BYTES], _msg: &[u8], _sk: &[u8; DILITHIUM_SECRETKEYBYTES]) -> bool {
     #[cfg(not(test))]
     {
         extern "C" {
             fn crypto_sign_signature(sig: *mut u8, m: *const u8, mlen: usize, sk: *const u8) -> i32;
         }
         
-        let result = unsafe { crypto_sign_signature(sig.as_mut_ptr(), msg.as_ptr(), msg.len(), sk.as_ptr()) };
+        let result = unsafe { crypto_sign_signature(sig.as_mut_ptr(), _msg.as_ptr(), _msg.len(), _sk.as_ptr()) };
         result == 0
     }
     
@@ -86,7 +86,9 @@ pub fn dilithium_verify(sig: &[u8; DILITHIUM_BYTES], msg: &[u8], pk: &[u8; DILIT
     
     #[cfg(test)]
     {
-        // Simulation simplifiée pour les tests
-        true
+        // Vérification simplifiée pour les tests:
+        // Vérifie que la signature correspond aux données attendues du test
+        // (permet de tester la logique sans impl crypto complète)
+        sig.iter().enumerate().all(|(i, &byte)| byte == (i % 256) as u8)
     }
 }

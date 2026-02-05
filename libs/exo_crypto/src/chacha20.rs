@@ -1,8 +1,6 @@
 // libs/exo_crypto/src/chacha20.rs
 #![allow(non_snake_case)]
 
-use core::convert::TryInto;
-
 /// Taille de la clé pour Poly1305
 pub const POLY1305_KEYBYTES: usize = 32;
 /// Taille du tag d'authentification pour Poly1305
@@ -164,7 +162,8 @@ impl XChaCha20 {
         let mut poly1305_key = [0u8; POLY1305_KEYBYTES];
         cipher.process(&mut poly1305_key);
 
-        // 2. Chiffrer les données
+        // 2. Copier plaintext dans out puis chiffrer
+        out[..plaintext.len()].copy_from_slice(plaintext);
         cipher.process(&mut out[..plaintext.len()]);
 
         // 3. Calculer le tag Poly1305
@@ -280,7 +279,7 @@ fn hchacha20(key: &[u8; 32], nonce: &[u8]) -> [u8; 32] {
 }
 
 // Poly1305 (simplifié pour les tests)
-fn poly1305(m: &[u8], aad: &[u8], key: &[u8; POLY1305_KEYBYTES]) -> [u8; POLY1305_TAGBYTES] {
+fn poly1305(m: &[u8], _aad: &[u8], key: &[u8; POLY1305_KEYBYTES]) -> [u8; POLY1305_TAGBYTES] {
     #[cfg(not(test))]
     {
         // Appel à l'implémentation C/ASM optimisée
@@ -321,11 +320,14 @@ fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
 
-    let mut result = 0;
+    let mut result = 0u8;
     for (x, y) in a.iter().zip(b) {
         result |= x ^ y;
     }
 
-    result == 0
+    // Utiliser volatile pour empêcher l'optimisation du compilateur
+    // qui pourrait court-circuiter la comparaison
+    let result_vol = unsafe { core::ptr::read_volatile(&result) };
+    result_vol == 0
 }
 

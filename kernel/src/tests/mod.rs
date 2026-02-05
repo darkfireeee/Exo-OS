@@ -4,6 +4,9 @@ pub mod process_tests;
 pub mod phase2_smp_tests;
 pub mod keyboard_test;
 pub mod exec_test;
+pub mod exec_tests;           // JOUR 1: Tests RÉELS load_elf_binary()
+pub mod exec_tests_real;      // JOUR 2: Test avec binaire compilé réel
+pub mod vfs_readwrite_test;   // JOUR 2.5: Validation VFS read/write integrity
 pub mod benchmark_real_threads;
 pub mod signal_tests;
 pub mod simple_multithread;
@@ -19,3 +22,6 @@ pub mod phase2d_test_runner;  // ✅ Phase 2d: Test runner intégré
 pub mod cow_fork_test;        // Jour 4: CoW fork() avec métriques réelles
 pub mod cow_advanced_tests;   // Jour 4 Phase 3B: Tests avancés CoW
 pub mod cow_real_tests;       // Jour 4 Phase 4: Tests RÉELS avec vraies pages
+pub mod tlb_tests;            // TLB flush investigation tests
+pub mod page_split_tests;     // Page split cache and performance tests
+pub mod split_minimal_test;   // Minimal test to validate split works     // Page splitting comprehensive tests

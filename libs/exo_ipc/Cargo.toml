@@ -1,10 +1,13 @@
 [package]
 name = "exo_ipc"
-version = "0.0.0"
+version = "0.2.0"
 edition = "2021"
 publish = false
 license = "MIT OR Apache-2.0"
-description = "Inter-process communication primitives for Exo-OS"
+description = "Robust, performant, and secure inter-process communication for Exo-OS"
+authors = ["Exo-OS Contributors"]
+keywords = ["ipc", "message-passing", "channel", "lock-free", "zero-copy"]
+categories = ["no-std", "concurrency"]
 
 [lib]
 path = "src/lib.rs"

@@ -1,0 +1,36 @@
+[package]
+name = "exo_text"
+version = "0.1.0"
+edition = "2021"
+authors = ["Exo-OS Team"]
+license = "MIT OR Apache-2.0"
+description = "Text processing utilities for Exo-OS (JSON, TOML, Markdown, Diff)"
+repository = "https://github.com/darkfireeee/Exo-OS"
+
+[dependencies]
+# serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+# serde_json = { version = "1.0", default-features = false, features = ["alloc"], optional = true }
+# toml = { version = "0.8", default-features = false, optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.5"
+
+[[bench]]
+name = "json_bench"
+harness = false
+
+[[bench]]
+name = "toml_bench"
+harness = false
+
+[lib]
+name = "exo_text"
+path = "src/lib.rs"
+
+[features]
+default = []
+json = []
+toml_support = []
+markdown = []
+diff = []

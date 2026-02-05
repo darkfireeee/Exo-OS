@@ -155,7 +155,17 @@ pub fn get_segment_data<'a>(data: &'a [u8], ph: &Elf64ProgramHeader) -> Result<&
     // Check bounds
     let end = offset.checked_add(size).ok_or(ElfError::TooSmall)?;
 
+    // Debug logging for troubleshooting
+    log::debug!(
+        "[ELF] get_segment_data: offset={:#x}, size={:#x}, end={:#x}, data.len()={:#x}",
+        offset, size, end, data.len()
+    );
+
     if end > data.len() {
+        log::error!(
+            "[ELF] Segment data out of bounds: need {} bytes (offset {:#x} + size {:#x}), but file has only {} bytes",
+            end, offset, size, data.len()
+        );
         return Err(ElfError::TooSmall);
     }
 

@@ -955,6 +955,53 @@ unsafe fn vga_show_system_info(magic: u32, multiboot_addr: u64, rsp: u64) {
 /// Thread entry point for Phase 1b tests - CoW Edition
 fn test_fork_thread_entry() -> ! {
     logger::early_print("[TEST_THREAD] CoW test thread started!\n");
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PRIORITY 0: Test minimal du page split AVANT tout le reste
+    // ═══════════════════════════════════════════════════════════════
+    logger::early_print("\n[PRIORITY] Testing page split FIRST...\n");
+    crate::tests::split_minimal_test::test_split_minimal();
+    logger::early_print("[PRIORITY] Page split test complete, continuing...\n\n");
+    
+    // ═══════════════════════════════════════════════════════════════
+    // JOUR 2: Tests exec() REAL - Execute FIRST before CoW tests
+    // ═══════════════════════════════════════════════════════════════
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║         JOUR 2: Real ELF Binary Loading Tests           ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+    
+    // JOUR 2.5: First, validate that VFS read/write works correctly
+    logger::early_print("[JOUR 2.5] Validating VFS read/write integrity before exec tests...\n");
+    logger::early_print("[JOUR 2.5] Calling test_elf_scenario()...\n");
+    crate::tests::vfs_readwrite_test::test_elf_scenario();
+    logger::early_print("[JOUR 2.5] test_elf_scenario() DONE\n");
+    logger::early_print("[JOUR 2.5] Calling test_vfs_readwrite_roundtrip()...\n");
+    crate::tests::vfs_readwrite_test::test_vfs_readwrite_roundtrip();
+    logger::early_print("[JOUR 2.5] test_vfs_readwrite_roundtrip() DONE\n");
+    logger::early_print("[VFS] ✅ VFS read/write validation PASSED\n\n");
+    
+    //Test exec() with embedded binaries
+    crate::tests::exec_test::test_exec_binaries();
+    
+    log::info!("\n[TLB Investigation] Testing TLB flush operations...\n");
+    crate::tests::tlb_tests::run_all_tlb_tests();
+    
+    log::info!("\n[Page Split Tests] Testing page split cache and performance...\n");
+    crate::tests::page_split_tests::run_all_split_tests();
+    
+    log::info!("\n[JOUR 2] Testing load_elf_binary() with REAL compiled binary...\n");
+    
+    // JOUR 2: Test avec binaire compilé réel (test_exec_vfs.elf)
+    crate::tests::exec_tests_real::run_all_exec_tests();
+    
+    logger::early_print("\n");
+    logger::early_print("╔══════════════════════════════════════════════════════════╗\n");
+    logger::early_print("║         ✅ JOUR 2 TESTS COMPLETE                        ║\n");
+    logger::early_print("╚══════════════════════════════════════════════════════════╝\n");
+    logger::early_print("\n");
+    
     logger::early_print("[TEST_THREAD] Skipping blocking tests, going directly to CoW...\n\n");
     
     // ⏸️ Skip fork/wait test (blocks on wait4)
@@ -984,9 +1031,6 @@ fn test_fork_thread_entry() -> ! {
     // crate::tests::exec_test::test_exec_binaries();
     
     logger::early_print("[TEST_THREAD] All CoW tests complete, exiting gracefully...\n");
-    
-    // Test exec() with embedded binaries
-    crate::tests::exec_test::test_exec_binaries();
     
     logger::early_print("[TEST_THREAD] All Phase 1 tests complete, exiting...\n");
     

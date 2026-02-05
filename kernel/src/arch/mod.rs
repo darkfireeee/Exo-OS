@@ -22,14 +22,21 @@ pub mod mmu {
     /// Mappe temporairement une adresse physique dans l'espace virtuel
     /// Retourne une adresse virtuelle accessible
     pub fn map_temporary(phys: PhysicalAddress) -> Result<VirtualAddress, MemoryError> {
+        crate::logger::early_print("[map_temporary] Called\n");
         // Pour l'instant, on utilise l'identity mapping de boot.asm (0-8GB)
         // Les adresses physiques < 8GB sont déjà mappées à l'identique
         let phys_val = phys.value();
+        crate::logger::early_print("[map_temporary] phys_val obtained\n");
         
         if phys_val < 8 * 1024 * 1024 * 1024 {
+            crate::logger::early_print("[map_temporary] Using identity mapping\n");
             // Identity mapping disponible
-            Ok(VirtualAddress::new(phys_val))
+            crate::logger::early_print("[map_temporary] Creating VirtualAddress...\n");
+            let virt = VirtualAddress::new(phys_val);
+            crate::logger::early_print("[map_temporary] Returning Ok...\n");
+            Ok(virt)
         } else {
+            crate::logger::early_print("[map_temporary] Using temp map > 8GB\n");
             // Pour les adresses > 8GB, utiliser la zone temporaire
             let index = TEMP_MAP_INDEX.fetch_add(1, Ordering::SeqCst) % TEMP_MAP_SIZE;
             let virt = TEMP_MAP_BASE + index * super::PAGE_SIZE;

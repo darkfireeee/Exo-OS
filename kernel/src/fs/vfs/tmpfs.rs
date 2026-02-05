@@ -8,6 +8,7 @@
 
 use crate::fs::vfs::inode::{Inode, InodePermissions, InodeType};
 use crate::fs::{FsError, FsResult};
+use crate::scheduler::optimizations::{likely, unlikely};
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -225,19 +226,5 @@ impl TmpFs {
     }
 }
 
-/// Branch prediction hints
-#[inline(always)]
-fn likely(b: bool) -> bool {
-    if !b {
-        unsafe { core::hint::unreachable_unchecked() }
-    }
-    b
-}
-
-#[inline(always)]
-fn unlikely(b: bool) -> bool {
-    if b {
-        unsafe { core::hint::unreachable_unchecked() }
-    }
-    b
-}
+// Note: likely() and unlikely() imported from scheduler::optimizations
+// removed buggy local impl
