@@ -560,12 +560,10 @@ impl Registry {
 
     /// Retourne le timestamp actuel (secondes depuis epoch)
     ///
-    /// Note: Dans un environnement réel, on utiliserait std::time ou exo_types::Timestamp
-    /// Pour no_std, on retourne 0 (à adapter selon l'environnement)
+    /// Note: Utilise le timestamp monotonic via exo_types::Timestamp
     #[inline]
     fn current_timestamp(&self) -> u64 {
-        // TODO: Intégrer avec exo_types::Timestamp une fois disponible
-        0
+        crate::time_utils::current_timestamp_secs()
     }
 }
 

@@ -241,17 +241,27 @@ Activer les logs avec la feature `log`:
 - **Single-threaded** - Pas de RwLock interne (à ajouter si besoin parallel)
 - **No real persistence** - TOML backend simulé (pas de std::fs en no_std)
 - **No IPC** - Discovery client simulé (à intégrer avec exo_ipc)
-- **No timestamps** - current_timestamp() retourne 0 (à intégrer avec exo_types::Timestamp)
+- **Timestamps simulés** - current_timestamp() retourne 0 (syscall integration nécessaire)
+
+## ✅ Intégrations
+
+- ✅ **exo_types::Timestamp** - Infrastructure timestamp intégrée (v0.1.0)
+- 🔜 **exo_ipc** - IPC pour discovery client (v0.2.0 planifiée)
+- 📋 **exo_config** - Configuration système (future)
+- 📋 **exo_logger** - Logging structuré (future)
+
+Voir [INTEGRATION.md](INTEGRATION.md) pour détails complets.
 
 ## 🛣️ Roadmap
 
-- [ ] Intégration avec exo_types::Timestamp pour timestamps réels
-- [ ] IPC réel pour discovery client (via exo_ipc)
-- [ ] SQLite backend pour persistence (avec feature std)
-- [ ] RwLock pour multi-threading si besoin
-- [ ] Async support (tokio/async-std feature)
-- [ ] Service versioning et migration
-- [ ] Encryption des endpoints (feature security)
+- [x] ~~Intégration avec exo_types::Timestamp~~ ✅ **Fait (v0.1.0)**
+- [ ] IPC réel pour discovery client (via exo_ipc) - **v0.2.0**
+- [ ] Syscall clock_gettime pour timestamps réels - **v0.2.0**
+- [ ] SQLite backend pour persistence (avec feature std) - **v0.3.0**
+- [ ] RwLock pour multi-threading - **v0.3.0**
+- [ ] Async support (tokio/async-std feature) - **v0.4.0**
+- [ ] Service versioning et migration - **v0.4.0**
+- [ ] Encryption des endpoints (feature security) - **v0.5.0**
 
 ## 📄 License
 

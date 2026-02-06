@@ -54,6 +54,7 @@ mod types;
 mod registry;
 mod discovery;
 mod storage;
+mod time_utils;
 
 #[cfg(feature = "health_check")]
 mod health;

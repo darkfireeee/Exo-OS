@@ -9,6 +9,7 @@ repository = "https://github.com/darkfireeee/Exo-OS"
 
 [dependencies]
 exo_ipc = { path = "../exo_ipc" }
+exo_types = { path = "../exo_types" }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 
 [dev-dependencies]
