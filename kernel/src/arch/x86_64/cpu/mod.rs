@@ -11,3 +11,4 @@ pub mod cache;
 pub use cpuid::*;
 pub use msr::*;
 pub use features::*;
+pub use topology::{CpuTopology, CpuVendor, get_current_numa_node, get_cpu_numa_node};

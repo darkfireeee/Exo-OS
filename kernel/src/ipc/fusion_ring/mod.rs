@@ -1,15 +1,15 @@
-//! Fusion Ring - Zero-copy IPC révolutionnaire
+//! Fusion Ring - Revolutionary Zero-Copy IPC
 //!
-//! Performance exceptionnelle (Linux Crusher Edition):
-//! - Inline path (≤40B) : ~80-100 cycles (vs Linux 1200) = 12-15x plus rapide
-//! - Zero-copy path (>40B) : ~200-300 cycles = 4-6x plus rapide
-//! - Batch processing : ~25-35 cycles/msg amortized = 35-50x plus rapide
+//! Exceptional performance (Linux Crusher Edition):
+//! - Inline path (≤40B): ~80-100 cycles (vs Linux 1200) = 12-15x faster
+//! - Zero-copy path (>40B): ~200-300 cycles = 4-6x faster
+//! - Batch processing: ~25-35 cycles/msg amortized = 35-50x faster
 //!
-//! ## Intégration avec Advanced IPC
-//! - UltraFastRing pour le hot path critique
-//! - Coalescing adaptatif pour le batching intelligent
-//! - Flow control par crédits pour éviter la saturation
-//! - Préchargement cache pour prédiction
+//! ## Integration with Advanced IPC
+//! - UltraFastRing for critical hot path
+//! - Adaptive coalescing for intelligent batching
+//! - Credit-based flow control to prevent saturation
+//! - Cache prefetching for prediction
 
 pub mod ring;
 pub mod slot;

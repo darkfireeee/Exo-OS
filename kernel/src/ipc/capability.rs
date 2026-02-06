@@ -184,14 +184,14 @@ impl Capability {
     /// Create new capability
     pub fn new(owner_pid: u64, target_id: u64, flags: CapabilityFlags) -> Self {
         static NEXT_CAP_ID: AtomicU64 = AtomicU64::new(1);
-        
+
         Self {
             id: CapabilityId(NEXT_CAP_ID.fetch_add(1, Ordering::Relaxed)),
             owner_pid,
             target_id,
             flags,
             label: None,
-            created_at: 0, // TODO: Get actual timestamp
+            created_at: crate::time::timestamp::monotonic_cycles(),
             expires_at: 0,
         }
     }
@@ -306,10 +306,9 @@ fn get_or_create_table(pid: u64) -> CapabilityTable {
 /// Check if process has permission for IPC operation
 pub fn check_permission(pid: u64, target_id: u64, cap_type: CapabilityType) -> bool {
     let tables = CAPABILITY_TABLES.lock();
-    
+
     if let Some(table) = tables.get(&pid) {
-        // Get current timestamp (stub)
-        let current_time = 0;
+        let current_time = crate::time::timestamp::monotonic_cycles();
         table.has_permission(target_id, cap_type, current_time)
     } else {
         // No table = no permissions

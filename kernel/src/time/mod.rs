@@ -7,6 +7,7 @@ pub mod rtc;
 pub mod hpet;
 pub mod timer;
 pub mod clock;
+pub mod timestamp;
 
 // Re-exports
 pub use tsc::{Tsc, read_tsc, calibrate_tsc};

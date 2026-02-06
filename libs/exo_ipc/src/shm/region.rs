@@ -172,7 +172,7 @@ impl SharedRegion {
     }
     
     /// Crée un mapping en lecture seule (partagé entre processus)
-    pub fn map_readonly(&self) -> IpcResult<SharedMapping> {
+    pub fn map_readonly(&self) -> IpcResult<SharedMapping<'_>> {
         if !self.metadata.permissions.read {
             return Err(IpcError::PermissionDenied);
         }

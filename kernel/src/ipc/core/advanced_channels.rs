@@ -448,7 +448,18 @@ impl AnycastChannel {
                 active[(seed as usize) % active.len()]
             }
             AnycastPolicy::AffinityFirst => {
-                // TODO: NUMA awareness
+                // NUMA-aware selection: prefer receivers on same NUMA node
+                // Falls back to first active if topology unavailable
+                if let Some(current_numa) = crate::cpu::get_current_numa_node() {
+                    for &idx in active.iter() {
+                        if let Some(receiver_numa) = crate::cpu::get_cpu_numa_node(idx) {
+                            if receiver_numa == current_numa {
+                                return Ok(idx);
+                            }
+                        }
+                    }
+                }
+                // Fallback to first active receiver
                 active[0]
             }
         };
@@ -589,7 +600,9 @@ impl RequestReplyChannel {
         let corr_id = u64::from_le_bytes(temp[..8].try_into().unwrap());
         
         if corr_id != expected_corr_id {
-            // TODO: Queue for later / allow out-of-order
+            // Strict ordering: responses must arrive in request order
+            // This simplifies the implementation and avoids buffering overhead
+            // For out-of-order support, use separate channels or AnycastChannel
             return Err(MemoryError::NotFound);
         }
         

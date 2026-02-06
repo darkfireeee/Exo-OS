@@ -632,8 +632,19 @@ impl AnycastGroup {
                 Some((seed as usize) % count)
             }
             AnycastPolicy::AffinityFirst => {
-                // TODO: Check NUMA node of current CPU
-                // For now, fall back to round-robin
+                // NUMA-aware selection: prefer receivers on same NUMA node
+                // Falls back to round-robin if topology unavailable
+                if let Some(current_numa) = crate::cpu::get_current_numa_node() {
+                    // Try to find receiver on same NUMA node
+                    for (idx, _) in self.receiver_loads[..count].iter().enumerate() {
+                        if let Some(receiver_numa) = crate::cpu::get_cpu_numa_node(idx) {
+                            if receiver_numa == current_numa {
+                                return Some(idx);
+                            }
+                        }
+                    }
+                }
+                // Fallback to round-robin
                 let idx = self.next_receiver.fetch_add(1, Ordering::Relaxed);
                 Some((idx as usize) % count)
             }

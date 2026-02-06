@@ -37,7 +37,7 @@ pub use sequence::{Sequence, SequenceGroup, CacheLineCounter};
 pub use mpmc_ring::{MpmcRing, RingConfig, ProducerToken, ConsumerToken};
 pub use slot_v2::{SlotV2, SlotState, SlotHeader, SLOT_SIZE};
 pub use transfer::{TransferMode, TransferDescriptor, TransferResult};
-pub use wait_queue::{WaitQueue, WaitNode, WakeReason};
+pub use wait_queue::{WaitQueue, WaitNode, WakeReason, BlockingWait};
 pub use endpoint::{Endpoint, EndpointId, EndpointFlags};
 pub use futex::{FutexMutex, FutexCondvar, FutexSemaphore};
 pub use priority_queue::{BoundedPriorityQueue, priority};

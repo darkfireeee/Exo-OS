@@ -27,6 +27,7 @@ pub mod arch;           // ✅ Phase 0: GDT/IDT/Interrupts/Context Switch
 pub mod bench;          // ✅ Phase 0: Benchmarks context switch
 pub mod boot;           // ✅ Phase 0: Multiboot2 parsing
 pub mod c_compat;       // ✅ Phase 0: Compatibilité boot.c
+pub mod cpu;            // ✅ Architecture-independent CPU interface
 pub mod debug;          // ✅ Phase 0: Debug utilities
 pub mod error;          // ✅ Phase 0: Error types
 pub mod logger;         // ✅ Phase 0: Early logging
@@ -64,7 +65,7 @@ pub use drivers::video::vga::{_print as _vga_print, WRITER};
 // ═══════════════════════════════════════════════════════════
 //  PHASE 2+ - Modules désactivés temporairement
 // ═══════════════════════════════════════════════════════════
-// pub mod ipc;         // ⏸️ Phase 2: IPC zerocopy
+pub mod ipc;         // ⏸️ Phase 2: IPC zerocopy
 pub mod net;         // ✅ Phase 2: Network stack complet (TCP/IP, UDP, ARP)
 // pub mod power;       // ⏸️ Phase 3: Power management
 // pub mod security;    // ⏸️ Phase 3: Capabilities

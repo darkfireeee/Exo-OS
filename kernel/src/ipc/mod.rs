@@ -24,6 +24,11 @@ pub mod shared_memory;
 pub mod named;
 pub mod capability;
 pub mod descriptor;
+pub mod test_runtime;
+pub mod integration_test;
+
+#[cfg(test)]
+pub mod tests;
 
 // Core re-exports
 pub use self::core::{

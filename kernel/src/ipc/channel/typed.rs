@@ -103,7 +103,7 @@ where
         
         if len != mem::size_of::<T>() {
             log::error!("Size mismatch: expected {} bytes, got {} bytes", mem::size_of::<T>(), len);
-            return Err(MemoryError::OutOfMemory); // TODO: Create IpcError::InvalidMessageSize
+            return Err(MemoryError::InvalidSize);
         }
         
         // Désérialise
@@ -125,7 +125,7 @@ where
         let len = self.ring.recv_blocking(&mut buffer)?;
         
         if len != mem::size_of::<T>() {
-            return Err(MemoryError::OutOfMemory);
+            return Err(MemoryError::InvalidSize);
         }
         
         let msg = unsafe {

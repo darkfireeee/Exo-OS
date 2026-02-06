@@ -52,7 +52,7 @@ pub use types::{
     Message, MessageType, MessageFlags, MessageHeader,
     IpcError, IpcResult, RecvError, SendError,
     Endpoint, EndpointId, EndpointType,
-    Capability, CapabilityId, Permissions,
+    Capability, CapabilityId, Rights,
     MAX_INLINE_SIZE, MESSAGE_SIZE, PROTOCOL_VERSION,
 };
 

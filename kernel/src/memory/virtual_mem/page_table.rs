@@ -269,10 +269,7 @@ impl PageTableWalker {
         virtual_base: VirtualAddress,
     ) -> MemoryResult<PageTable> {
         crate::logger::early_print("[SPLIT] Entered split_huge_page()\n");
-<<<<<<< Updated upstream
         
-=======
->>>>>>> Stashed changes
         // Validate: must be at level 1 (PD - Page Directory) with huge flag
         // x86-64 hierarchy: PML4(3) -> PDPT(2) -> PD(1) -> PT(0)
         // 2MB huge pages are in PD entries (level 1)
@@ -298,13 +295,9 @@ impl PageTableWalker {
             }
         }
         
-<<<<<<< Updated upstream
         // NO LOGGING IN CRITICAL SECTION TO AVOID DEADLOCK
         // See PAGE_SPLITTING_DESIGN.md section 4: TLB Flush Investigation
         // Logging can deadlock because logger needs memory operations
-=======
-        crate::logger::early_print("[SPLIT] Cache MISS, starting new split\n");
->>>>>>> Stashed changes
         
         // Extract base physical address and flags from huge page
         let huge_phys_base = huge_entry.address();
@@ -431,12 +424,8 @@ impl PageTableWalker {
                     (virtual_addr.value() / huge_page_size) * huge_page_size
                 );
                 
-<<<<<<< Updated upstream
                 // NO LOGGING HERE - can cause deadlock
                 // See PAGE_SPLITTING_DESIGN.md section 4
-=======
-                crate::logger::early_print("[map()] Calling split_huge_page...\n");
->>>>>>> Stashed changes
                 
                 // Perform the split
                 crate::logger::early_print("[MAP] Calling split_huge_page()...\n");

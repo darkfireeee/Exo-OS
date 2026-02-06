@@ -291,24 +291,47 @@ impl Endpoint {
     }
     
     /// Send with timeout (microseconds)
-    pub fn send_timeout(&self, data: &[u8], _timeout_us: u64) -> MemoryResult<()> {
+    pub fn send_timeout(&self, data: &[u8], timeout_us: u64) -> MemoryResult<()> {
         self.check_can_send()?;
-        
+
         // Try non-blocking first
         if self.try_send(data).is_ok() {
             return Ok(());
         }
-        
-        // TODO: Implement proper timeout with timer integration
-        // For now, just do a limited spin
-        for _ in 0..1000 {
-            core::hint::spin_loop();
+
+        // Integrated timer-based timeout using TSC
+        let timeout_ns = timeout_us.saturating_mul(1000);
+        let timeout_cycles = crate::time::tsc::ns_to_cycles(timeout_ns);
+        let start_cycles = crate::time::tsc::read_tsc();
+
+        // Adaptive wait with timeout check
+        let mut backoff_count = 0u32;
+        loop {
+            // Check timeout
+            let elapsed = crate::time::tsc::read_tsc().saturating_sub(start_cycles);
+            if elapsed >= timeout_cycles {
+                return Err(MemoryError::Timeout);
+            }
+
+            // Try send
             if self.try_send(data).is_ok() {
                 return Ok(());
             }
+
+            // Adaptive backoff
+            if backoff_count < 64 {
+                for _ in 0..(1 << backoff_count.min(6)) {
+                    core::hint::spin_loop();
+                }
+                backoff_count += 1;
+            } else if backoff_count < 72 {
+                crate::scheduler::yield_now();
+                backoff_count += 1;
+            } else {
+                // Max backoff reached, check timeout more frequently
+                crate::scheduler::yield_now();
+            }
         }
-        
-        Err(MemoryError::Timeout)
     }
     
     // =========================================================================
@@ -369,23 +392,47 @@ impl Endpoint {
     }
     
     /// Receive with timeout
-    pub fn recv_timeout(&self, buffer: &mut [u8], _timeout_us: u64) -> MemoryResult<usize> {
+    pub fn recv_timeout(&self, buffer: &mut [u8], timeout_us: u64) -> MemoryResult<usize> {
         self.check_can_recv()?;
-        
+
         // Try non-blocking first
         if let Ok(size) = self.try_recv(buffer) {
             return Ok(size);
         }
-        
-        // TODO: Implement proper timeout
-        for _ in 0..1000 {
-            core::hint::spin_loop();
+
+        // Integrated timer-based timeout using TSC
+        let timeout_ns = timeout_us.saturating_mul(1000);
+        let timeout_cycles = crate::time::tsc::ns_to_cycles(timeout_ns);
+        let start_cycles = crate::time::tsc::read_tsc();
+
+        // Adaptive wait with timeout check
+        let mut backoff_count = 0u32;
+        loop {
+            // Check timeout
+            let elapsed = crate::time::tsc::read_tsc().saturating_sub(start_cycles);
+            if elapsed >= timeout_cycles {
+                return Err(MemoryError::Timeout);
+            }
+
+            // Try receive
             if let Ok(size) = self.try_recv(buffer) {
                 return Ok(size);
             }
+
+            // Adaptive backoff
+            if backoff_count < 64 {
+                for _ in 0..(1 << backoff_count.min(6)) {
+                    core::hint::spin_loop();
+                }
+                backoff_count += 1;
+            } else if backoff_count < 72 {
+                crate::scheduler::yield_now();
+                backoff_count += 1;
+            } else {
+                // Max backoff reached, check timeout more frequently
+                crate::scheduler::yield_now();
+            }
         }
-        
-        Err(MemoryError::Timeout)
     }
     
     // =========================================================================

@@ -195,7 +195,7 @@ impl ChannelEntry {
             flags,
             owner_pid,
             owner_gid,
-            created_at: super::core::benchmark::rdtsc(),
+            created_at: crate::time::timestamp::monotonic_cycles(),
             ref_count: AtomicU32::new(1),
             active: AtomicBool::new(true),
             ring: Arc::new(MpmcRing::new(1024)),
@@ -482,44 +482,48 @@ impl NamedChannelHandle {
     }
     
     /// Receive data from the channel
+    /// Uses a fixed-size stack buffer to reduce heap allocations
     pub fn recv(&self) -> Result<Vec<u8>, IpcError> {
         if !self.can_read {
             return Err(IpcError::PermissionDenied);
         }
-        
+
         if !self.entry.active.load(Ordering::Acquire) {
             return Err(IpcError::ChannelClosed);
         }
-        
-        let mut buffer = vec![0u8; 4096];
+
+        const MAX_INLINE_RECV: usize = 4096;
+        let mut buffer = [0u8; MAX_INLINE_RECV];
+
         match self.entry.ring.try_recv(&mut buffer) {
             Ok(size) => {
-                buffer.truncate(size);
                 self.entry.stats.messages_recv.fetch_add(1, Ordering::Relaxed);
                 self.entry.stats.bytes_recv.fetch_add(size as u64, Ordering::Relaxed);
-                Ok(buffer)
+                Ok(buffer[..size].to_vec())
             }
             Err(_) => Err(IpcError::WouldBlock),
         }
     }
-    
+
     /// Receive with blocking
+    /// Uses a fixed-size stack buffer to reduce heap allocations
     pub fn recv_blocking(&self) -> Result<Vec<u8>, IpcError> {
         if !self.can_read {
             return Err(IpcError::PermissionDenied);
         }
-        
+
         if !self.entry.active.load(Ordering::Acquire) {
             return Err(IpcError::ChannelClosed);
         }
-        
-        let mut buffer = vec![0u8; 4096];
+
+        const MAX_INLINE_RECV: usize = 4096;
+        let mut buffer = [0u8; MAX_INLINE_RECV];
+
         match self.entry.ring.recv_blocking(&mut buffer) {
             Ok(size) => {
-                buffer.truncate(size);
                 self.entry.stats.messages_recv.fetch_add(1, Ordering::Relaxed);
                 self.entry.stats.bytes_recv.fetch_add(size as u64, Ordering::Relaxed);
-                Ok(buffer)
+                Ok(buffer[..size].to_vec())
             }
             Err(_) => Err(IpcError::ChannelClosed),
         }
@@ -559,6 +563,22 @@ impl Drop for NamedChannelHandle {
 /// Global channel namespace
 static GLOBAL_NAMESPACE: ChannelNamespace = ChannelNamespace::new();
 
+/// Get current process credentials (PID, GID)
+/// Note: Currently uses thread ID as PID. Full process support in future.
+#[inline]
+fn current_credentials() -> (u64, u64) {
+    use crate::scheduler::SCHEDULER;
+
+    match SCHEDULER.current_thread_id() {
+        Some(tid) => {
+            // Use thread ID as PID for now
+            // GID defaults to 0 (root group)
+            (tid, 0)
+        }
+        None => (0, 0),
+    }
+}
+
 /// Create a named channel
 pub fn create_channel(
     name: &str,
@@ -566,27 +586,22 @@ pub fn create_channel(
     permissions: ChannelPermissions,
     flags: ChannelFlags,
 ) -> Result<NamedChannelHandle, IpcError> {
-    // TODO: Get real PID/GID from current process
-    let pid = 0;
-    let gid = 0;
-    
+    let (pid, gid) = current_credentials();
+
     GLOBAL_NAMESPACE.create(name, channel_type, permissions, flags, pid, gid)
 }
 
 /// Open a named channel
 pub fn open_channel(name: &str, read: bool, write: bool) -> Result<NamedChannelHandle, IpcError> {
-    // TODO: Get real PID/GID from current process
-    let pid = 0;
-    let gid = 0;
-    
+    let (pid, gid) = current_credentials();
+
     GLOBAL_NAMESPACE.open(name, read, write, pid, gid)
 }
 
 /// Unlink a named channel
 pub fn unlink_channel(name: &str) -> Result<(), IpcError> {
-    // TODO: Get real PID/GID from current process
-    let pid = 0;
-    
+    let (pid, _gid) = current_credentials();
+
     GLOBAL_NAMESPACE.unlink(name, pid)
 }
 

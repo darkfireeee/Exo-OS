@@ -19,6 +19,8 @@ use core::mem::MaybeUninit;
 use core::ptr;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use alloc::collections::BTreeMap;
+use spin::Mutex;
 use super::slot::Slot;
 
 /// Default ring size (must be power of 2)
@@ -26,6 +28,12 @@ pub const DEFAULT_RING_SIZE: usize = 256;
 
 /// Cache line size for alignment
 const CACHE_LINE: usize = 64;
+
+/// Global ring registry for lifecycle management
+static RING_REGISTRY: Mutex<BTreeMap<usize, &'static Ring>> = Mutex::new(BTreeMap::new());
+
+/// Ring ID counter
+static NEXT_RING_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Padded atomic for cache-line isolation
 #[repr(C, align(64))]
@@ -81,29 +89,32 @@ impl RingSlot {
 /// Multiple producers and consumers can operate concurrently without locks.
 /// Uses sequence numbers per slot to track state and prevent races.
 pub struct Ring {
+    /// Unique ring ID for lifecycle tracking
+    id: u64,
+
     /// Slots array (boxed to allow runtime sizing)
     slots: Box<[RingSlot]>,
-    
+
     /// Capacity (always power of 2)
     capacity: usize,
-    
+
     /// Mask for fast modulo (capacity - 1)
     mask: usize,
-    
+
     /// Head position (producer/write cursor)
     /// Cache-line aligned to prevent false sharing
     head: CacheLinePadded<AtomicU64>,
-    
+
     /// Tail position (consumer/read cursor)
     /// Cache-line aligned to prevent false sharing
     tail: CacheLinePadded<AtomicU64>,
-    
+
     /// Statistics: total messages enqueued
     enqueue_count: AtomicU64,
-    
+
     /// Statistics: total messages dequeued
     dequeue_count: AtomicU64,
-    
+
     /// Statistics: CAS retries (contention indicator)
     cas_retries: AtomicU64,
 }
@@ -119,20 +130,24 @@ impl Ring {
     /// * `capacity` - Must be power of 2, minimum 2
     ///
     /// # Returns
-    /// Static reference to ring (leaked for 'static lifetime)
+    /// Static reference to ring (managed via global registry)
     ///
     /// # Panics
     /// Panics if capacity is not power of 2 or less than 2
     pub fn new(capacity: usize) -> &'static Self {
         assert!(capacity.is_power_of_two(), "Ring capacity must be power of 2");
         assert!(capacity >= 2, "Ring capacity must be at least 2");
-        
+
+        // Allocate ring ID
+        let id = NEXT_RING_ID.fetch_add(1, Ordering::Relaxed);
+
         // Allocate slots with initial sequence = slot index
         let slots: Vec<RingSlot> = (0..capacity)
             .map(|i| RingSlot::new(i as u64))
             .collect();
-        
+
         let ring = Box::new(Self {
+            id,
             slots: slots.into_boxed_slice(),
             capacity,
             mask: capacity - 1,
@@ -142,10 +157,34 @@ impl Ring {
             dequeue_count: AtomicU64::new(0),
             cas_retries: AtomicU64::new(0),
         });
-        
-        // Leak to get 'static lifetime
-        // In production, use a proper allocator with cleanup
-        Box::leak(ring)
+
+        // Convert to static reference and register for lifecycle management
+        let ring_ref: &'static Ring = Box::leak(ring);
+
+        let mut registry = RING_REGISTRY.lock();
+        registry.insert(id as usize, ring_ref);
+
+        ring_ref
+    }
+
+    /// Destroy a ring (cleanup resources)
+    ///
+    /// # Safety
+    /// Caller must ensure no references to this ring exist
+    pub unsafe fn destroy(ring_id: u64) {
+        let mut registry = RING_REGISTRY.lock();
+        if let Some(ring_ref) = registry.remove(&(ring_id as usize)) {
+            // Reconstruct Box from leaked reference to properly drop
+            let ring_ptr = ring_ref as *const Ring as *mut Ring;
+            let _ring_box = Box::from_raw(ring_ptr);
+            // Box is dropped here, freeing memory
+        }
+    }
+
+    /// Get ring ID
+    #[inline]
+    pub fn id(&self) -> u64 {
+        self.id
     }
     
     /// Create ring from pre-existing slots (for shared memory scenarios)
@@ -155,13 +194,16 @@ impl Ring {
     pub unsafe fn from_slots(slots: &'static [Slot]) -> Self {
         let capacity = slots.len();
         assert!(capacity.is_power_of_two());
-        
+
+        let id = NEXT_RING_ID.fetch_add(1, Ordering::Relaxed);
+
         // Wrap into RingSlots
         let ring_slots: Vec<RingSlot> = (0..capacity)
             .map(|i| RingSlot::new(i as u64))
             .collect();
-        
+
         Self {
+            id,
             slots: ring_slots.into_boxed_slice(),
             capacity,
             mask: capacity - 1,

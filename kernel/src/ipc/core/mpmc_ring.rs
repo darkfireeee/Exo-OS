@@ -33,6 +33,40 @@ use super::slot_v2::{SlotV2, SlotState, SLOT_SIZE, MAX_INLINE_PAYLOAD};
 use super::config;
 use crate::memory::{MemoryResult, MemoryError};
 
+/// Adaptive backoff helper for reducing contention
+struct AdaptiveBackoff {
+    count: u32,
+}
+
+impl AdaptiveBackoff {
+    const MAX_SPINS: u32 = 64;
+    const MAX_YIELDS: u32 = 8;
+
+    #[inline]
+    const fn new() -> Self {
+        Self { count: 0 }
+    }
+
+    #[inline]
+    fn step(&mut self) {
+        if self.count <= Self::MAX_SPINS {
+            for _ in 0..(1 << self.count.min(6)) {
+                core::hint::spin_loop();
+            }
+        } else if self.count <= Self::MAX_SPINS + Self::MAX_YIELDS {
+            crate::scheduler::yield_now();
+        } else {
+            crate::scheduler::yield_now();
+        }
+        self.count = self.count.saturating_add(1);
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        self.count = 0;
+    }
+}
+
 /// Ring configuration
 #[repr(C, align(64))]
 pub struct RingConfig {
@@ -166,37 +200,34 @@ impl MpmcRing {
         if data.len() > MAX_INLINE_PAYLOAD {
             return Err(MemoryError::InvalidSize);
         }
-        
+
         // Try to claim a slot
         let seq = match self.sequences.try_claim_produce(self.config.capacity as u64) {
             Some(s) => s,
             None => return Err(MemoryError::OutOfMemory), // Ring full
         };
-        
+
         let slot = self.slot_at(seq);
         let expected_seq = (seq.0 as u32) & (self.config.capacity as u32 - 1);
-        
-        // Try to acquire slot for writing
-        // Use spin wait since we already claimed the sequence
-        let mut spins = 0;
+
+        // Try to acquire slot for writing with adaptive backoff
+        let mut backoff = AdaptiveBackoff::new();
         while !slot.try_begin_write(expected_seq) {
-            core::hint::spin_loop();
-            spins += 1;
-            if spins > 1000 {
-                // Something is very wrong
-                log::warn!("Slot acquisition timeout at seq {}", seq.0);
+            backoff.step();
+            if backoff.count > AdaptiveBackoff::MAX_SPINS + AdaptiveBackoff::MAX_YIELDS {
+                log::warn!("Slot acquisition timeout at seq {} after excessive backoff", seq.0);
                 return Err(MemoryError::Timeout);
             }
         }
-        
+
         // Write data to slot
         unsafe {
             slot.write_inline(data, 0);
         }
-        
+
         // Commit the sequence
         self.sequences.commit_produce(seq);
-        
+
         Ok(())
     }
     
@@ -207,20 +238,24 @@ impl MpmcRing {
             Some(s) => s,
             None => return Err(MemoryError::OutOfMemory),
         };
-        
+
         let slot = self.slot_at(seq);
         let expected_seq = (seq.0 as u32) & (self.config.capacity as u32 - 1);
-        
+
+        let mut backoff = AdaptiveBackoff::new();
         while !slot.try_begin_write(expected_seq) {
-            core::hint::spin_loop();
+            backoff.step();
+            if backoff.count > AdaptiveBackoff::MAX_SPINS + AdaptiveBackoff::MAX_YIELDS {
+                return Err(MemoryError::Timeout);
+            }
         }
-        
+
         unsafe {
             slot.write_zerocopy(phys_addr, size, 0);
         }
-        
+
         self.sequences.commit_produce(seq);
-        
+
         Ok(())
     }
     
@@ -235,7 +270,7 @@ impl MpmcRing {
         }
     }
     
-    /// Blocking send (spins then blocks thread)
+    /// Blocking send (spins then yields)
     pub fn send_blocking(&self, data: &[u8]) -> MemoryResult<()> {
         // Fast path: try non-blocking first
         match self.try_send_inline(data) {
@@ -243,20 +278,22 @@ impl MpmcRing {
             Err(MemoryError::OutOfMemory) => {} // Ring full, continue to blocking
             Err(e) => return Err(e),
         }
-        
-        // Spin phase
+
+        // Spin phase with adaptive backoff
+        let mut backoff = AdaptiveBackoff::new();
         for _ in 0..config::SPIN_ITERATIONS {
-            core::hint::spin_loop();
+            backoff.step();
             if let Ok(()) = self.try_send_inline(data) {
                 return Ok(());
             }
         }
-        
-        // Block phase - integrate with scheduler
+
+        // Yield phase: cooperative multitasking
+        // Note: MpmcRing is a low-level primitive. Higher-level abstractions
+        // like Endpoint provide wait_queue integration for efficient wakes.
         loop {
-            // TODO: Integrate with wait_queue for efficient blocking
             crate::scheduler::yield_now();
-            
+
             if let Ok(()) = self.try_send_inline(data) {
                 return Ok(());
             }
@@ -276,24 +313,23 @@ impl MpmcRing {
             Some(s) => s,
             None => return Err(MemoryError::NotFound), // Ring empty
         };
-        
+
         let slot = self.slot_at(seq);
         let expected_seq = (seq.0 as u32) & (self.config.capacity as u32 - 1);
-        
-        // Try to acquire slot for reading
-        let mut spins = 0;
+
+        // Try to acquire slot for reading with adaptive backoff
+        let mut backoff = AdaptiveBackoff::new();
         let (size, flags) = loop {
             if let Some(result) = slot.try_begin_read(expected_seq) {
                 break result;
             }
-            core::hint::spin_loop();
-            spins += 1;
-            if spins > 1000 {
-                log::warn!("Slot read timeout at seq {}", seq.0);
+            backoff.step();
+            if backoff.count > AdaptiveBackoff::MAX_SPINS + AdaptiveBackoff::MAX_YIELDS {
+                log::warn!("Slot read timeout at seq {} after excessive backoff", seq.0);
                 return Err(MemoryError::Timeout);
             }
         };
-        
+
         // Check if inline or zerocopy
         let result = if flags & super::slot_v2::flags::ZEROCOPY == 0 {
             // Inline message
@@ -302,7 +338,7 @@ impl MpmcRing {
                 self.sequences.commit_consume(seq);
                 return Err(MemoryError::InvalidSize);
             }
-            
+
             unsafe {
                 slot.read_inline(buffer, size);
             }
@@ -311,7 +347,7 @@ impl MpmcRing {
             // Zero-copy message - return physical address info
             // Caller needs to handle mapping
             let (phys_addr, zc_size) = unsafe { slot.read_zerocopy() };
-            
+
             // For now, copy physical address to buffer as bytes
             if buffer.len() >= 16 {
                 unsafe {
@@ -324,11 +360,11 @@ impl MpmcRing {
                 Err(MemoryError::InvalidSize)
             }
         };
-        
+
         // Release slot
         slot.finish_read(self.config.capacity as u32);
         self.sequences.commit_consume(seq);
-        
+
         result
     }
     

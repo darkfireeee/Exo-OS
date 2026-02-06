@@ -45,6 +45,24 @@ static mut TOPOLOGY: CpuTopology = CpuTopology {
     core_mask_width: 0,
 };
 
+/// Get current CPU's NUMA node
+/// Returns None if NUMA topology is not available
+pub fn get_current_numa_node() -> Option<u32> {
+    // NUMA support requires ACPI SRAT table parsing
+    // For now, return None (single-node fallback)
+    // TODO: Implement proper NUMA detection via ACPI
+    None
+}
+
+/// Get NUMA node for a specific CPU ID
+/// Returns None if NUMA topology is not available or CPU ID invalid
+pub fn get_cpu_numa_node(_cpu_id: usize) -> Option<u32> {
+    // NUMA support requires ACPI SRAT table parsing
+    // For now, return None (single-node fallback)
+    // TODO: Implement proper NUMA detection via ACPI
+    None
+}
+
 /// Detect CPU vendor
 fn detect_vendor() -> CpuVendor {
     unsafe {
