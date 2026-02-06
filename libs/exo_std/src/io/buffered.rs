@@ -153,7 +153,12 @@ impl<W: Write> BufWriter<W> {
     /// Consomme le BufWriter et retourne le writer interne
     pub fn into_inner(mut self) -> Result<W, IoError> {
         self.flush_buf()?;
-        Ok(self.inner)
+        // Utilise ptr::read + mem::forget pour extraire inner sans déclencher Drop
+        unsafe {
+            let inner = core::ptr::read(&self.inner);
+            core::mem::forget(self);  // Empêche Drop de s'exécuter
+            Ok(inner)
+        }
     }
 
     /// Retourne le buffer actuel

@@ -1,7 +1,7 @@
 // libs/exo_std/src/syscall/time.rs
 //! Syscalls relatifs au temps
 
-use super::{syscall1, SyscallNumber};
+use super::{syscall1, syscall2, SyscallNumber, check_syscall_result};
 use crate::Result;
 
 /// Type de clock

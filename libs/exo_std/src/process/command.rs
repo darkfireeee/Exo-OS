@@ -63,15 +63,56 @@ impl Command {
         #[cfg(not(feature = "test_mode"))]
         {
             use crate::syscall::process::{fork, exec};
-            
+
             unsafe {
                 let pid = fork()?;
-                
+
                 if pid == 0 {
                     // Enfant: exec
-                    // Convertir Vec<String> en Vec<&str>
-                    let args_strs: Vec<&str> = self.args.iter().map(|s| s.as_str()).collect();
-                    let _ = exec(self.program.as_str(), &args_strs);
+
+                    // Convertir program en C-string
+                    let mut program_bytes = self.program.as_bytes().to_vec();
+                    program_bytes.push(0); // null terminator
+
+                    // Convertir args en C-strings (argv[0] = program name par convention POSIX)
+                    let mut args_bytes: Vec<Vec<u8>> = Vec::new();
+                    args_bytes.push(program_bytes.clone());
+                    for arg in &self.args {
+                        let mut bytes = arg.as_bytes().to_vec();
+                        bytes.push(0);
+                        args_bytes.push(bytes);
+                    }
+
+                    // Créer tableau de pointeurs argv (terminé par NULL)
+                    let mut argv_ptrs: Vec<*const u8> = args_bytes.iter()
+                        .map(|v| v.as_ptr())
+                        .collect();
+                    argv_ptrs.push(core::ptr::null());
+
+                    // Convertir env en C-strings (format: "KEY=VALUE\0")
+                    let mut env_bytes: Vec<Vec<u8>> = Vec::new();
+                    for (k, v) in &self.env {
+                        let mut bytes = Vec::new();
+                        bytes.extend_from_slice(k.as_bytes());
+                        bytes.push(b'=');
+                        bytes.extend_from_slice(v.as_bytes());
+                        bytes.push(0);
+                        env_bytes.push(bytes);
+                    }
+
+                    // Créer tableau de pointeurs envp (terminé par NULL)
+                    let mut envp_ptrs: Vec<*const u8> = env_bytes.iter()
+                        .map(|v| v.as_ptr())
+                        .collect();
+                    envp_ptrs.push(core::ptr::null());
+
+                    // Appel exec avec raw pointers
+                    let _ = exec(
+                        program_bytes.as_ptr(),
+                        argv_ptrs.as_ptr(),
+                        envp_ptrs.as_ptr()
+                    );
+
                     // Si exec échoue, exit
                     crate::process::exit(-1);
                 } else {

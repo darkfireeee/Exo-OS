@@ -226,27 +226,29 @@ impl<T> BoundedVec<T> {
         R: RangeBounds<usize>,
     {
         use core::ops::Bound;
-        
+
+        let len = self.len; // Capturer len avant borrow
+
         let start = match range.start_bound() {
             Bound::Included(&n) => n,
             Bound::Excluded(&n) => n + 1,
             Bound::Unbounded => 0,
         };
-        
+
         let end = match range.end_bound() {
             Bound::Included(&n) => n + 1,
             Bound::Excluded(&n) => n,
-            Bound::Unbounded => self.len,
+            Bound::Unbounded => len,
         };
-        
-        assert!(start <= end && end <= self.len, "invalid range");
-        
+
+        assert!(start <= end && end <= len, "invalid range");
+
         Drain {
             vec: self,
             start,
             end,
             tail_start: end,
-            tail_len: self.len - end,
+            tail_len: len - end,
         }
     }
     
