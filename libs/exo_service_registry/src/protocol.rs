@@ -13,7 +13,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::types::{ServiceName, ServiceInfo, ServiceStatus, RegistryError, RegistryResult};
+use crate::types::{ServiceName, ServiceInfo, ServiceStatus, RegistryError};
 
 /// Version du protocole registry
 pub const REGISTRY_PROTOCOL_VERSION: u16 = 1;

@@ -5,6 +5,88 @@ All notable changes to exo_service_registry will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-02-06
+
+### Added - IPC Communication System (Phase 3.2)
+
+#### IPC Infrastructure
+- **Real IPC Integration** with exo_ipc MPSC channels
+  - `IpcServer` - Serveur IPC pour registry daemon
+  - `IpcClient` - Client IPC avec API complète
+  - MPSC channel integration (multi-producer, single-consumer)
+  - Message-based request/response protocol
+
+- **Binary Serialization** (`serialize.rs`)
+  - Custom binary format for efficient IPC (<100 bytes par message)
+  - `BinarySerialize` trait pour types registry
+  - Serialization de ServiceName, ServiceInfo, ServiceStatus
+  - Serialization de RegistryRequest et RegistryResponse
+  - Little-endian encoding, length-prefixed strings
+  - Version checking, type validation
+
+- **Protocol Layer** (`protocol.rs`)
+  - 8 types de requêtes: Register, Lookup, Unregister, Heartbeat, List, ListByStatus, GetStats, Ping
+  - 6 types de réponses: Ok, Found, NotFound, List, Stats, Pong, Error
+  - `RegistryRequest` et `RegistryResponse` builders
+  - Protocol versioning (v1)
+
+- **Registry Daemon** (`daemon.rs`)
+  - `RegistryDaemon` - Wrapper IPC autour du registry
+  - Request dispatcher avec 8 handlers
+  - Configuration avec `DaemonConfig`
+  - Request counting, stats tracking
+
+#### API Features
+- **IpcServer**:
+  - `new(daemon, capacity)` - Création avec daemon custom
+  - `add_client(sender)` - Ajout de clients
+  - `run()` - Boucle d'écoute bloquante
+  - `shutdown()` - Arrêt gracieux
+  - `handle_message()` - Traitement des requêtes IPC
+
+- **IpcClient**:
+  - `new(capacity)` - Création du client
+  - `register()`, `lookup()`, `unregister()` - Opérations registry
+  - `heartbeat()`, `list()`, `ping()` - Monitoring et health check
+  - Automatic serialization/deserialization
+  - Error conversion (IpcError ↔ RegistryError)
+
+#### Format Binaire
+
+Messages compacts optimisés pour IPC:
+```
+[Version:1] [Type:2] [Payload:variable]
+```
+
+Tailles typiques:
+- Lookup request: ~17 bytes
+- Found response: ~80 bytes (avec metadata)
+- Ping/Pong: 3 bytes each
+- List response: variable selon nombre de services
+
+#### Tests & Examples
+- 3 nouveaux tests IPC (création server/client, error conversion)
+- `ipc_example.rs` - Démonstration complète du workflow IPC
+- `daemon_example.rs` mis à jour pour montrer le daemon
+
+#### Integration
+- Full integration avec exo_ipc (channel, Message, MessageType)
+- Utilisation de `Message::with_inline_data()` pour messages <48 bytes
+- Support des erreurs IPC (InvalidMessage, SerializationError, etc.)
+- Compatible avec architecture zero-copy (préparation pour shared memory)
+
+### Modified
+- README.md: Ajout section IPC Communication avec exemples
+- README.md: Mise à jour liste de features (`ipc`)
+- README.md: Mise à jour architecture et structure
+- INTEGRATION.md: Marqué Phase 2 comme complète
+
+### Technical Notes
+- Compilation réussie sans erreurs (seulement warnings dead_code)
+- Binary serialization 100% custom (pas de dépendance serde pour IPC)
+- API conforme à l'implémentation exo_ipc (Message, MPSC channels)
+- Format binaire extensible avec versioning
+
 ## [0.1.0] - 2026-02-06
 
 ### Added - Complete Production-Ready Implementation

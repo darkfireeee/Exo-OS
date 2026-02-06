@@ -55,6 +55,7 @@ exo_service_registry = { path = "../exo_service_registry", features = ["health_c
 - `default = ["persistent"]` - Persistence TOML activée par défaut
 - `persistent` - Backend de stockage persistant (TOML)
 - `health_check` - Health monitoring et recovery automatique
+- `ipc` - Communication inter-processus via exo_ipc (serveur + client)
 
 ## 💻 Usage
 
@@ -126,6 +127,59 @@ match discovery.find_with_retry(&service_name) {
 }
 ```
 
+### IPC Communication (feature: ipc)
+
+Le registry peut fonctionner comme daemon IPC avec communication inter-processus:
+
+```rust
+use exo_service_registry::{
+    Registry, RegistryDaemon,
+    ipc::{IpcServer, IpcClient},
+};
+
+// Serveur (daemon)
+let registry = Box::new(Registry::new());
+let daemon = RegistryDaemon::with_registry(registry);
+let mut server = IpcServer::new(daemon, 64)?;
+
+// Lance le serveur (bloquant)
+server.run()?;
+
+// Client (dans un autre processus)
+let mut client = IpcClient::new(64)?;
+
+// Register via IPC
+let name = ServiceName::new("my_service")?;
+let info = ServiceInfo::new("/tmp/service.sock");
+client.register(name.clone(), info)?;
+
+// Lookup via IPC
+if let Some(info) = client.lookup(&name)? {
+    println!("Service at: {}", info.endpoint());
+}
+
+// Ping pour health check
+client.ping()?;
+```
+
+**Architecture IPC:**
+- **Binary Serialization**: Format compact custom (pas de serde overhead)
+- **MPSC Channels**: Utilise exo_ipc::channel pour zero-copy
+- **Message Protocol**: Request/Response avec versioning
+- **Type Safety**: Désérialisation validée avec checksums
+
+**Format binaire:**
+```
+[Version:1] [Type:2] [Payload:variable]
+```
+
+Exemple de tailles sérialisées:
+- Lookup request: ~17 bytes
+- Found response: ~80 bytes (endpoint + metadata)
+- Ping request: 3 bytes
+- Pong response: 3 bytes
+
+
 ## 📁 Structure
 
 ```
@@ -136,7 +190,12 @@ exo_service_registry/
 │   ├── registry.rs         # Registry principal (Cache + Bloom)
 │   ├── storage.rs          # Backends (InMemory, TOML)
 │   ├── discovery.rs        # Client de discovery
-│   └── health.rs           # Health checker (feature gated)
+│   ├── health.rs           # Health checker (feature gated)
+│   ├── time_utils.rs       # Intégration exo_types::Timestamp
+│   ├── protocol.rs         # IPC protocol (Request/Response)
+│   ├── daemon.rs           # Registry daemon pour IPC
+│   ├── serialize.rs        # Binary serialization
+│   └── ipc.rs              # IPC server et client
 │
 ├── tests/
 │   └── integration_tests.rs  # Tests d'intégration complets
@@ -146,10 +205,14 @@ exo_service_registry/
 │
 ├── examples/
 │   ├── basic_usage.rs      # Exemple basique
-│   └── advanced_usage.rs   # Exemple avancé avec health check
+│   ├── advanced_usage.rs   # Exemple avancé avec health check
+│   ├── daemon_example.rs   # Daemon IPC sans vraie comm
+│   └── ipc_example.rs      # Intégration IPC complète
 │
 ├── Cargo.toml
-└── README.md (ce fichier)
+├── README.md (ce fichier)
+├── ARCHITECTURE.md         # Documentation architecture
+└── INTEGRATION.md          # Guide d'intégration Exo-OS
 ```
 
 ## 🧪 Tests
