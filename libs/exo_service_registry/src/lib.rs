@@ -59,6 +59,12 @@ mod time_utils;
 #[cfg(feature = "health_check")]
 mod health;
 
+#[cfg(feature = "ipc")]
+pub mod protocol;
+
+#[cfg(feature = "ipc")]
+pub mod daemon;
+
 // Réexportations publiques
 pub use types::{
     ServiceName, ServiceInfo, ServiceMetadata, ServiceStatus,

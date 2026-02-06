@@ -27,3 +27,4 @@ path = "src/lib.rs"
 default = ["persistent"]
 persistent = []
 health_check = []
+ipc = []
