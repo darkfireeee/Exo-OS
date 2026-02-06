@@ -1,7 +1,13 @@
 // libs/exo_ipc/src/types/capability.rs
 //! Système de sécurité capability-based pour IPC
+//!
+//! Ce module fournit IpcDescriptor qui wrape exo_types::Capability
+//! avec des métadonnées temporelles pour la gestion d'expiration.
 
 use core::fmt;
+
+// Utilise le type canonical de exo_types
+pub use exo_types::capability::{Capability, Rights};
 
 /// Identifiant de capability unique
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -13,13 +19,13 @@ impl CapabilityId {
     pub const fn new(id: u64) -> Self {
         Self(id)
     }
-    
+
     /// Capability invalide
     pub const INVALID: Self = Self(0);
-    
+
     /// Capability système (privilèges complets)
     pub const SYSTEM: Self = Self(1);
-    
+
     /// Vérifie si la capability est valide
     pub fn is_valid(&self) -> bool {
         self.0 != 0
@@ -32,141 +38,102 @@ impl fmt::Display for CapabilityId {
     }
 }
 
-/// Permissions pour les opérations IPC
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Permissions(u32);
-
-impl Permissions {
-    /// Aucune permission
-    pub const NONE: Self = Self(0);
-    
-    /// Permission de lecture
-    pub const READ: Self = Self(1 << 0);
-    
-    /// Permission d'écriture
-    pub const WRITE: Self = Self(1 << 1);
-    
-    /// Permission d'exécution (pour RPC)
-    pub const EXECUTE: Self = Self(1 << 2);
-    
-    /// Permission de création de canaux
-    pub const CREATE: Self = Self(1 << 3);
-    
-    /// Permission de destruction
-    pub const DESTROY: Self = Self(1 << 4);
-    
-    /// Permission de délégation (transférer des capabilities)
-    pub const DELEGATE: Self = Self(1 << 5);
-    
-    /// Toutes les permissions
-    pub const ALL: Self = Self(0xFFFFFFFF);
-    
-    /// Crée un ensemble de permissions
-    pub const fn new() -> Self {
-        Self::NONE
-    }
-    
-    /// Ajoute une permission
-    pub const fn with(mut self, perm: Self) -> Self {
-        self.0 |= perm.0;
-        self
-    }
-    
-    /// Vérifie si une permission est présente
-    pub const fn has(&self, perm: Self) -> bool {
-        (self.0 & perm.0) == perm.0
-    }
-    
-    /// Vérifie si l'ensemble est vide
-    pub const fn is_empty(&self) -> bool {
-        self.0 == 0
-    }
-    
-    /// Intersection de permissions
-    pub const fn intersect(&self, other: Self) -> Self {
-        Self(self.0 & other.0)
-    }
-    
-    /// Union de permissions
-    pub const fn union(&self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-}
-
-impl Default for Permissions {
-    fn default() -> Self {
-        Self::NONE
-    }
-}
-
-/// Capability complète avec permissions
+/// Descripteur IPC avec capability et métadonnées temporelles
+///
+/// Ce type wrape une `Capability` (depuis exo_types) avec des timestamps
+/// pour gérer l'expiration et la révocation temporelle.
 #[derive(Debug, Clone, Copy)]
-pub struct Capability {
-    /// Identifiant unique
-    pub id: CapabilityId,
-    
-    /// Permissions associées
-    pub permissions: Permissions,
-    
+pub struct IpcDescriptor {
+    /// Capability sous-jacente (type canonical depuis exo_types)
+    pub capability: Capability,
+
     /// Timestamp de création (pour révocation)
     pub created_at: u64,
-    
+
     /// Timestamp d'expiration (0 = pas d'expiration)
     pub expires_at: u64,
 }
 
-impl Capability {
-    /// Crée une nouvelle capability
-    pub const fn new(id: CapabilityId, permissions: Permissions) -> Self {
+impl IpcDescriptor {
+    /// Crée un nouveau descripteur IPC
+    pub const fn new(capability: Capability) -> Self {
         Self {
-            id,
-            permissions,
+            capability,
             created_at: 0,
             expires_at: 0,
         }
     }
-    
-    /// Capability système avec permissions complètes
-    pub const fn system() -> Self {
-        Self::new(CapabilityId::SYSTEM, Permissions::ALL)
+
+    /// Crée depuis une capability existante avec timestamps
+    pub const fn with_times(capability: Capability, created_at: u64, expires_at: u64) -> Self {
+        Self {
+            capability,
+            created_at,
+            expires_at,
+        }
     }
-    
-    /// Vérifie si la capability est valide
+
+    /// Descripteur système avec permissions complètes
+    pub fn system() -> Self {
+        Self::new(Capability::system())
+    }
+
+    /// Vérifie si le descripteur est valide
     pub fn is_valid(&self) -> bool {
-        self.id.is_valid() && !self.permissions.is_empty()
+        self.capability.is_valid()
     }
-    
-    /// Vérifie si la capability a expiré
+
+    /// Vérifie si le descripteur a expiré
     pub fn is_expired(&self, current_time: u64) -> bool {
         self.expires_at != 0 && current_time >= self.expires_at
     }
-    
-    /// Vérifie si la capability autorise une opération
-    pub fn allows(&self, required: Permissions, current_time: u64) -> bool {
+
+    /// Vérifie si le descripteur autorise une opération
+    pub fn allows(&self, required: Rights, current_time: u64) -> bool {
         self.is_valid()
             && !self.is_expired(current_time)
-            && self.permissions.has(required)
+            && self.capability.has_rights(required)
     }
-    
+
     /// Définit l'expiration
     pub fn with_expiration(mut self, expires_at: u64) -> Self {
         self.expires_at = expires_at;
         self
     }
-    
+
     /// Définit le timestamp de création
     pub fn with_creation_time(mut self, created_at: u64) -> Self {
         self.created_at = created_at;
         self
     }
+
+    /// Récupère l'ID de la capability
+    pub fn id(&self) -> u64 {
+        self.capability.id()
+    }
+
+    /// Récupère les droits
+    pub fn rights(&self) -> Rights {
+        self.capability.rights()
+    }
 }
 
-impl fmt::Display for Capability {
+impl fmt::Display for IpcDescriptor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Capability {{ id: {}, perms: {:#x}, created: {}, expires: {} }}",
-            self.id, self.permissions.0, self.created_at, self.expires_at
+            "IpcDescriptor {{ cap: {:?}, created: {}, expires: {} }}",
+            self.capability, self.created_at, self.expires_at
         )
     }
 }
+
+impl From<Capability> for IpcDescriptor {
+    fn from(capability: Capability) -> Self {
+        Self::new(capability)
+    }
+}
+
+// Alias de compatibilité (deprecated)
+#[deprecated(since = "0.2.0", note = "Use exo_types::Rights directly")]
+pub type Permissions = Rights;

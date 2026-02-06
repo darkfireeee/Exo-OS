@@ -13,6 +13,9 @@ categories = ["no-std", "concurrency"]
 path = "src/lib.rs"
 crate-type = ["rlib"]
 
+[dependencies]
+exo_types = { path = "../exo_types" }
+
 [features]
 default = []
 fusion_rings = []

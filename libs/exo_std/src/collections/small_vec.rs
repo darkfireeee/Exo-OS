@@ -1,142 +1,66 @@
-<<<<<<< Updated upstream
 // libs/exo_std/src/collections/small_vec.rs
-//! SmallVec : Vector optimisé avec stockage inline pour petites tailles
+//! SmallVec: Vector optimized with inline storage for small sizes
 //!
-//! SmallVec évite les allocations heap pour les vecteurs de petite taille
-//! en les stockant directement dans la structure. Seulement si la taille
-//! dépasse N éléments, une allocation (via BoundedVec) est utilisée.
+//! SmallVec avoids heap allocations for small vectors by storing them
+//! directly in the structure. Only if the size exceeds N elements does
+//! it transition to heap allocation.
 
 use core::ops::{Deref, DerefMut, Index, IndexMut};
 use core::ptr;
-use core::mem::{self, MaybeUninit};
+use core::mem::{self, MaybeUninit, ManuallyDrop};
 use core::slice;
 use core::fmt;
 use super::bounded_vec::CapacityError;
 
-/// SmallVec avec stockage inline jusqu'à N éléments
-///
-/// # Exemple
-/// ```no_run
-/// use exo_std::collections::SmallVec;
-///
-/// // Peut stocker jusqu'à 8 éléments inline sans allocation
-/// let mut vec: SmallVec<u32, 8> = SmallVec::new();
-///
-/// vec.push(1).unwrap();
-/// vec.push(2).unwrap();
-/// // Pas d'allocation tant que <= 8 éléments
-/// ```
-pub struct SmallVec<T, const N: usize> {
-    /// Longueur actuelle
-    len: usize,
-    /// Stockage inline ou heap
-=======
-//! SmallVec : Vec qui utilise un buffer inline pour petites tailles
-//!
-//! Optimise les performances en évitant les allocations pour de petits vecteurs.
-
-use core::mem::{MaybeUninit, ManuallyDrop};
-use core::ptr;
-use core::ops::{Deref, DerefMut};
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-/// SmallVec avec buffer inline de taille N
+/// SmallVec with inline storage up to N elements
+///
+/// # Example
+/// ```no_run
+/// use exo_std::collections::SmallVec;
+///
+/// // Can store up to 8 elements inline without allocation
+/// let mut vec: SmallVec<u32, 8> = SmallVec::new();
+///
+/// vec.push(1);
+/// vec.push(2);
+/// // No allocation as long as <= 8 elements
+/// ```
 pub struct SmallVec<T, const N: usize> {
+    /// Current length
     len: usize,
->>>>>>> Stashed changes
+    /// Inline or heap storage
     data: SmallVecData<T, N>,
 }
 
 union SmallVecData<T, const N: usize> {
-<<<<<<< Updated upstream
-    /// Stockage inline pour <= N éléments
-    inline: MaybeUninit<[T; N]>,
-    /// Pointeur vers heap si > N éléments
-    /// Note: Dans un vrai système, on utiliserait un allocateur externe
-    heap: *mut T,
-}
-
-impl<T, const N: usize> SmallVec<T, N> {
-    /// Créé un nouveau SmallVec vide
-    #[inline]
-=======
+    /// Inline storage for <= N elements
     inline: ManuallyDrop<[MaybeUninit<T>; N]>,
+    /// Heap storage for > N elements
     heap: ManuallyDrop<Vec<T>>,
 }
 
 impl<T, const N: usize> SmallVec<T, N> {
-    /// Crée un nouveau SmallVec vide
->>>>>>> Stashed changes
+    /// Create new empty SmallVec
+    #[inline]
     pub const fn new() -> Self {
         Self {
             len: 0,
             data: SmallVecData {
-<<<<<<< Updated upstream
-                inline: MaybeUninit::uninit(),
-            },
-        }
-    }
-    
-    /// Crée un SmallVec avec une capacité spécifique
-    ///
-    /// Si capacity <= N, utilise inline storage
-    /// Sinon, nécessite buffer externe (similaire à BoundedVec)
-    ///
-    /// # Safety
-    /// Si capacity > N, `heap_buffer` doit pointer vers mémoire valide
-    #[inline]
-    pub unsafe fn with_capacity(capacity: usize, heap_buffer: *mut T) -> Self {
-=======
                 inline: ManuallyDrop::new(unsafe { MaybeUninit::uninit().assume_init() }),
             },
         }
     }
 
-    /// Crée avec capacité
+    /// Create with capacity
     pub fn with_capacity(capacity: usize) -> Self {
->>>>>>> Stashed changes
         if capacity <= N {
             Self::new()
         } else {
             Self {
                 len: 0,
-<<<<<<< Updated upstream
-                data: SmallVecData { heap: heap_buffer },
-            }
-        }
-    }
-    
-    /// Vérifie si utilise le stockage inline
-    #[inline]
-    pub const fn is_inline(&self) -> bool {
-        self.len <= N
-    }
-    
-    /// Ajoute un élément
-    ///
-    /// Retourne Err si la capacité maximale est atteinte
-    #[inline]
-    pub fn push(&mut self, value: T) -> Result<(), CapacityError> {
-        if self.len < N {
-            // Push inline
-            unsafe {
-                let ptr = self.data.inline.as_mut_ptr() as *mut T;
-                ptr::write(ptr.add(self.len), value);
-            }
-            self.len += 1;
-            Ok(())
-        } else {
-            // Pour l'instant, limite à N éléments
-            // Dans une vraie impl, gérerait l'allocation heap
-            Err(CapacityError)
-        }
-    }
-    
-    /// Retire et retourne le dernier élément
-    #[inline]
-=======
                 data: SmallVecData {
                     heap: ManuallyDrop::new(Vec::with_capacity(capacity)),
                 },
@@ -144,21 +68,28 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
-    /// Ajoute un élément
+    /// Check if using inline storage
+    #[inline]
+    pub const fn is_inline(&self) -> bool {
+        self.len <= N
+    }
+
+    /// Add an element
+    #[inline]
     pub fn push(&mut self, value: T) {
         if self.len < N {
-            // Inline
+            // Inline push
             unsafe {
                 (*self.data.inline)[self.len] = MaybeUninit::new(value);
             }
             self.len += 1;
         } else if self.len == N {
-            // Transition vers heap
+            // Transition to heap
             let mut vec = Vec::with_capacity(N * 2);
             unsafe {
                 for i in 0..N {
-                    let value = (*self.data.inline)[i].assume_init_read();
-                    vec.push(value);
+                    let val = (*self.data.inline)[i].assume_init_read();
+                    vec.push(val);
                 }
             }
             vec.push(value);
@@ -167,7 +98,7 @@ impl<T, const N: usize> SmallVec<T, N> {
             };
             self.len = N + 1;
         } else {
-            // Heap
+            // Heap push
             unsafe {
                 (*self.data.heap).push(value);
             }
@@ -175,264 +106,26 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
-    /// Retire le dernier élément
->>>>>>> Stashed changes
+    /// Try to push with capacity check (when transitioning would fail)
+    #[inline]
+    pub fn try_push(&mut self, value: T) -> Result<(), CapacityError> {
+        if self.len < N {
+            unsafe {
+                (*self.data.inline)[self.len] = MaybeUninit::new(value);
+            }
+            self.len += 1;
+            Ok(())
+        } else {
+            Err(CapacityError)
+        }
+    }
+
+    /// Remove and return the last element
+    #[inline]
     pub fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
             return None;
         }
-<<<<<<< Updated upstream
-        
-        self.len -= 1;
-        unsafe {
-            if self.is_inline() {
-                let ptr = self.data.inline.as_mut_ptr() as *mut T;
-                Some(ptr::read(ptr.add(self.len)))
-            } else {
-                Some(ptr::read(self.data.heap.add(self.len)))
-            }
-        }
-    }
-    
-    /// Insère à l'index donné
-    #[inline]
-    pub fn insert(&mut self, index: usize, value: T) -> Result<(), CapacityError> {
-        assert!(index <= self.len, "index out of bounds");
-        
-        if self.len >= N {
-            return Err(CapacityError);
-        }
-        
-        unsafe {
-            let ptr = if self.is_inline() {
-                self.data.inline.as_mut_ptr() as *mut T
-            } else {
-                self.data.heap
-            };
-            
-            let insert_ptr = ptr.add(index);
-            ptr::copy(insert_ptr, insert_ptr.add(1), self.len - index);
-            ptr::write(insert_ptr, value);
-        }
-        self.len += 1;
-        Ok(())
-    }
-    
-    /// Retire l'élément à l'index donné
-    #[inline]
-    pub fn remove(&mut self, index: usize) -> T {
-        assert!(index < self.len, "index out of bounds");
-        
-        unsafe {
-            let ptr = if self.is_inline() {
-                self.data.inline.as_mut_ptr() as *mut T
-            } else {
-                self.data.heap
-            };
-            
-            let remove_ptr = ptr.add(index);
-            let value = ptr::read(remove_ptr);
-            
-            ptr::copy(remove_ptr.add(1), remove_ptr, self.len - index - 1);
-            
-            self.len -= 1;
-            value
-        }
-    }
-    
-    /// Swap remove (plus rapide, ne préserve pas l'ordre)
-    #[inline]
-    pub fn swap_remove(&mut self, index: usize) -> T {
-        assert!(index < self.len, "index out of bounds");
-        
-        unsafe {
-            let ptr = if self.is_inline() {
-                self.data.inline.as_mut_ptr() as *mut T
-            } else {
-                self.data.heap
-            };
-            
-            let remove_ptr = ptr.add(index);
-            let value = ptr::read(remove_ptr);
-            
-            self.len -= 1;
-            if index != self.len {
-                ptr::copy(ptr.add(self.len), remove_ptr, 1);
-            }
-            
-            value
-        }
-    }
-    
-    /// Efface tous les éléments
-    #[inline]
-    pub fn clear(&mut self) {
-        unsafe {
-            let ptr = if self.is_inline() {
-                self.data.inline.as_mut_ptr() as *mut T
-            } else {
-                self.data.heap
-            };
-            
-            ptr::drop_in_place(ptr::slice_from_raw_parts_mut(ptr, self.len));
-            self.len = 0;
-        }
-    }
-    
-    /// Tronque à len éléments
-    #[inline]
-    pub fn truncate(&mut self, len: usize) {
-        if len < self.len {
-            unsafe {
-                let ptr = if self.is_inline() {
-                    self.data.inline.as_mut_ptr() as *mut T
-                } else {
-                    self.data.heap
-                };
-                
-                let drop_ptr = ptr.add(len);
-                let count = self.len - len;
-                ptr::drop_in_place(ptr::slice_from_raw_parts_mut(drop_ptr, count));
-                self.len = len;
-            }
-        }
-    }
-    
-    /// Étend depuis une slice
-    pub fn extend_from_slice(&mut self, other: &[T]) -> Result<(), CapacityError>
-    where
-        T: Clone,
-    {
-        if self.len + other.len() > N {
-            return Err(CapacityError);
-        }
-        
-        for item in other {
-            self.push(item.clone())?;
-        }
-        Ok(())
-    }
-    
-    /// Conserve uniquement les éléments satisfaisant le prédicat
-    pub fn retain<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&T) -> bool,
-    {
-        let mut i = 0;
-        while i < self.len {
-            if !f(&self[i]) {
-                self.remove(i);
-            } else {
-                i += 1;
-            }
-        }
-    }
-    
-    /// Déduplique les éléments consécutifs égaux
-    pub fn dedup(&mut self)
-    where
-        T: PartialEq,
-    {
-        let mut i = 1;
-        while i < self.len {
-            if self[i] == self[i - 1] {
-                self.remove(i);
-            } else {
-                i += 1;
-            }
-        }
-    }
-    
-    /// Accès à l'élément
-    #[inline]
-    pub fn get(&self, index: usize) -> Option<&T> {
-        if index < self.len {
-            Some(&self.as_slice()[index])
-        } else {
-            None
-        }
-    }
-    
-    /// Accès mutable
-    #[inline]
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
-        if index < self.len {
-            Some(&mut self.as_mut_slice()[index])
-        } else {
-            None
-        }
-    }
-    
-    /// Premier élément
-    #[inline]
-    pub fn first(&self) -> Option<&T> {
-        self.get(0)
-    }
-    
-    /// Dernier élément
-    #[inline]
-    pub fn last(&self) -> Option<&T> {
-        if self.len > 0 {
-            self.get(self.len - 1)
-        } else {
-            None
-        }
-    }
-    
-    /// Longueur
-    #[inline]
-    pub const fn len(&self) -> usize {
-        self.len
-    }
-    
-    /// Vérifie si vide
-    #[inline]
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-    
-    /// Capacité (inline capacity)
-    #[inline]
-    pub const fn capacity(&self) -> usize {
-        N
-    }
-    
-    /// Capacité restante
-    #[inline]
-    pub const fn remaining(&self) -> usize {
-        N - self.len
-    }
-    
-    /// Vérifie si plein
-    #[inline]
-    pub const fn is_full(&self) -> bool {
-        self.len >= N
-    }
-    
-    /// Convertit en slice
-    #[inline]
-    pub fn as_slice(&self) -> &[T] {
-        unsafe {
-            let ptr = if self.is_inline() {
-                self.data.inline.as_ptr() as *const T
-            } else {
-                self.data.heap as *const T
-            };
-            slice::from_raw_parts(ptr, self.len)
-        }
-    }
-    
-    /// Convertit en slice mutable
-    #[inline]
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
-        unsafe {
-            let ptr = if self.is_inline() {
-                self.data.inline.as_mut_ptr() as *mut T
-            } else {
-                self.data.heap
-            };
-            slice::from_raw_parts_mut(ptr, self.len)
-=======
 
         self.len -= 1;
 
@@ -448,26 +141,91 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
-    /// Retourne la longueur
-    pub const fn len(&self) -> usize {
-        self.len
-    }
+    /// Insert at given index
+    #[inline]
+    pub fn insert(&mut self, index: usize, value: T) {
+        assert!(index <= self.len, "index out of bounds");
 
-    /// Vérifie si vide
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    /// Capacité actuelle
-    pub fn capacity(&self) -> usize {
-        if self.len <= N {
-            N
+        if self.len < N {
+            // Inline insert
+            unsafe {
+                let ptr = (*self.data.inline).as_mut_ptr();
+                let insert_ptr = ptr.add(index);
+                ptr::copy(insert_ptr, insert_ptr.add(1), self.len - index);
+                (*insert_ptr) = MaybeUninit::new(value);
+            }
+            self.len += 1;
         } else {
-            unsafe { (*self.data.heap).capacity() }
+            // Heap or transition needed
+            if self.len == N {
+                // Need to transition to heap first
+                let mut vec = Vec::with_capacity(N * 2);
+                unsafe {
+                    for i in 0..N {
+                        let val = (*self.data.inline)[i].assume_init_read();
+                        vec.push(val);
+                    }
+                }
+                vec.insert(index, value);
+                self.data = SmallVecData {
+                    heap: ManuallyDrop::new(vec),
+                };
+                self.len = N + 1;
+            } else {
+                unsafe {
+                    (*self.data.heap).insert(index, value);
+                }
+                self.len += 1;
+            }
         }
     }
 
-    /// Supprime tous les éléments
+    /// Remove element at given index
+    #[inline]
+    pub fn remove(&mut self, index: usize) -> T {
+        assert!(index < self.len, "index out of bounds");
+
+        self.len -= 1;
+
+        if self.len < N {
+            unsafe {
+                let ptr = (*self.data.inline).as_mut_ptr() as *mut T;
+                let remove_ptr = ptr.add(index);
+                let value = ptr::read(remove_ptr);
+                ptr::copy(remove_ptr.add(1), remove_ptr, self.len - index);
+                value
+            }
+        } else {
+            unsafe { (*self.data.heap).remove(index) }
+        }
+    }
+
+    /// Swap remove (faster, doesn't preserve order)
+    #[inline]
+    pub fn swap_remove(&mut self, index: usize) -> T {
+        assert!(index < self.len, "index out of bounds");
+
+        self.len -= 1;
+
+        if self.len < N {
+            unsafe {
+                let ptr = (*self.data.inline).as_mut_ptr() as *mut T;
+                let remove_ptr = ptr.add(index);
+                let value = ptr::read(remove_ptr);
+
+                if index != self.len {
+                    ptr::copy(ptr.add(self.len), remove_ptr, 1);
+                }
+
+                value
+            }
+        } else {
+            unsafe { (*self.data.heap).swap_remove(index) }
+        }
+    }
+
+    /// Clear all elements
+    #[inline]
     pub fn clear(&mut self) {
         if self.len <= N {
             // Inline
@@ -485,7 +243,67 @@ impl<T, const N: usize> SmallVec<T, N> {
         self.len = 0;
     }
 
-    /// Accès par index
+    /// Truncate to len elements
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            if self.len <= N {
+                unsafe {
+                    for i in len..self.len {
+                        (*self.data.inline)[i].assume_init_drop();
+                    }
+                }
+            } else {
+                unsafe {
+                    (*self.data.heap).truncate(len);
+                }
+            }
+            self.len = len;
+        }
+    }
+
+    /// Extend from slice
+    pub fn extend_from_slice(&mut self, other: &[T])
+    where
+        T: Clone,
+    {
+        for item in other {
+            self.push(item.clone());
+        }
+    }
+
+    /// Keep only elements satisfying predicate
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        let mut i = 0;
+        while i < self.len {
+            if !f(&self[i]) {
+                self.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Deduplicate consecutive equal elements
+    pub fn dedup(&mut self)
+    where
+        T: PartialEq,
+    {
+        let mut i = 1;
+        while i < self.len {
+            if self[i] == self[i - 1] {
+                self.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Access element
+    #[inline]
     pub fn get(&self, index: usize) -> Option<&T> {
         if index >= self.len {
             return None;
@@ -502,7 +320,8 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
-    /// Accès mutable par index
+    /// Mutable access
+    #[inline]
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         if index >= self.len {
             return None;
@@ -519,11 +338,62 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
-    /// Convertit en slice
+    /// First element
+    #[inline]
+    pub fn first(&self) -> Option<&T> {
+        self.get(0)
+    }
+
+    /// Last element
+    #[inline]
+    pub fn last(&self) -> Option<&T> {
+        if self.len > 0 {
+            self.get(self.len - 1)
+        } else {
+            None
+        }
+    }
+
+    /// Length
+    #[inline]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Check if empty
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Capacity
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        if self.len <= N {
+            N
+        } else {
+            unsafe { (*self.data.heap).capacity() }
+        }
+    }
+
+    /// Remaining capacity
+    #[inline]
+    pub fn remaining(&self) -> usize {
+        self.capacity().saturating_sub(self.len)
+    }
+
+    /// Check if full (only for inline)
+    #[inline]
+    pub const fn is_full(&self) -> bool {
+        self.len >= N
+    }
+
+    /// Convert to slice
+    #[inline]
     pub fn as_slice(&self) -> &[T] {
         if self.len <= N {
             unsafe {
-                core::slice::from_raw_parts(
+                slice::from_raw_parts(
                     (*self.data.inline).as_ptr() as *const T,
                     self.len,
                 )
@@ -533,26 +403,25 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
-    /// Convertit en slice mutable
+    /// Convert to mutable slice
+    #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         if self.len <= N {
             unsafe {
-                core::slice::from_raw_parts_mut(
+                slice::from_raw_parts_mut(
                     (*self.data.inline).as_mut_ptr() as *mut T,
                     self.len,
                 )
             }
         } else {
             unsafe { (*self.data.heap).as_mut_slice() }
->>>>>>> Stashed changes
         }
     }
 }
 
-<<<<<<< Updated upstream
 impl<T, const N: usize> Deref for SmallVec<T, N> {
     type Target = [T];
-    
+
     #[inline]
     fn deref(&self) -> &[T] {
         self.as_slice()
@@ -568,7 +437,7 @@ impl<T, const N: usize> DerefMut for SmallVec<T, N> {
 
 impl<T, I: slice::SliceIndex<[T]>, const N: usize> Index<I> for SmallVec<T, N> {
     type Output = I::Output;
-    
+
     #[inline]
     fn index(&self, index: I) -> &Self::Output {
         &self.as_slice()[index]
@@ -585,6 +454,11 @@ impl<T, I: slice::SliceIndex<[T]>, const N: usize> IndexMut<I> for SmallVec<T, N
 impl<T, const N: usize> Drop for SmallVec<T, N> {
     fn drop(&mut self) {
         self.clear();
+        if self.capacity() > N {
+            unsafe {
+                ManuallyDrop::drop(&mut self.data.heap);
+            }
+        }
     }
 }
 
@@ -598,128 +472,116 @@ impl<T: Clone, const N: usize> Clone for SmallVec<T, N> {
     fn clone(&self) -> Self {
         let mut new = Self::new();
         for item in self.as_slice() {
-            new.push(item.clone()).expect("clone failed");
+            new.push(item.clone());
         }
         new
-=======
-impl<T, const N: usize> Drop for SmallVec<T, N> {
-    fn drop(&mut self) {
-        self.clear();
-        if self.capacity() > N {
-            unsafe {
-                ManuallyDrop::drop(&mut self.data.heap);
-            }
-        }
-    }
-}
-
-impl<T, const N: usize> Deref for SmallVec<T, N> {
-    type Target = [T];
-
-    fn deref(&self) -> &[T] {
-        self.as_slice()
-    }
-}
-
-impl<T, const N: usize> DerefMut for SmallVec<T, N> {
-    fn deref_mut(&mut self) -> &mut [T] {
-        self.as_mut_slice()
->>>>>>> Stashed changes
     }
 }
 
 impl<T, const N: usize> Default for SmallVec<T, N> {
-<<<<<<< Updated upstream
     #[inline]
-=======
->>>>>>> Stashed changes
     fn default() -> Self {
         Self::new()
     }
 }
 
-<<<<<<< Updated upstream
 unsafe impl<T: Send, const N: usize> Send for SmallVec<T, N> {}
 unsafe impl<T: Sync, const N: usize> Sync for SmallVec<T, N> {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_small_vec_inline() {
         let mut vec: SmallVec<u32, 8> = SmallVec::new();
-        
+
         assert!(vec.is_inline());
         assert!(vec.is_empty());
-        
-        vec.push(1).unwrap();
-        vec.push(2).unwrap();
-        vec.push(3).unwrap();
-        
+
+        vec.push(1);
+        vec.push(2);
+        vec.push(3);
+
         assert_eq!(vec.len(), 3);
         assert_eq!(vec[0], 1);
         assert_eq!(vec[1], 2);
         assert_eq!(vec[2], 3);
-        
+
         assert_eq!(vec.pop(), Some(3));
         assert_eq!(vec.len(), 2);
-    }
-    
-    #[test]
-    fn test_small_vec_capacity() {
-        let mut vec: SmallVec<u32, 3> = SmallVec::new();
-        
-        vec.push(1).unwrap();
-        vec.push(2).unwrap();
-        vec.push(3).unwrap();
-        
-        assert!(vec.is_full());
-        assert!(vec.push(4).is_err());
-    }
-    
-    #[test]
-    fn test_small_vec_swap_remove() {
-        let mut vec: SmallVec<u32, 8> = SmallVec::new();
-        vec.push(1).unwrap();
-        vec.push(2).unwrap();
-        vec.push(3).unwrap();
-        vec.push(4).unwrap();
-        
-        let removed = vec.swap_remove(1);
-        assert_eq!(removed, 2);
-        assert_eq!(vec.as_slice(), &[1, 4, 3]);
-=======
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_small_vec_inline() {
-        let mut sv: SmallVec<i32, 4> = SmallVec::new();
-        
-        sv.push(1);
-        sv.push(2);
-        sv.push(3);
-        
-        assert_eq!(sv.len(), 3);
-        assert_eq!(sv.get(0), Some(&1));
-        assert_eq!(sv.get(1), Some(&2));
-        assert_eq!(sv.pop(), Some(3));
-        assert_eq!(sv.len(), 2);
     }
 
     #[test]
     fn test_small_vec_transition() {
-        let mut sv: SmallVec<i32, 2> = SmallVec::new();
-        
-        sv.push(1);
-        sv.push(2);
-        sv.push(3); // Transition to heap
-        sv.push(4);
-        
-        assert_eq!(sv.len(), 4);
-        assert!(sv.capacity() > 2);
->>>>>>> Stashed changes
+        let mut vec: SmallVec<i32, 2> = SmallVec::new();
+
+        vec.push(1);
+        vec.push(2);
+        assert!(vec.is_inline());
+
+        vec.push(3); // Transition to heap
+        assert!(!vec.is_inline());
+        vec.push(4);
+
+        assert_eq!(vec.len(), 4);
+        assert!(vec.capacity() > 2);
+        assert_eq!(vec.get(0), Some(&1));
+        assert_eq!(vec.get(1), Some(&2));
+        assert_eq!(vec.get(2), Some(&3));
+        assert_eq!(vec.pop(), Some(4));
+        assert_eq!(vec.len(), 3);
+    }
+
+    #[test]
+    fn test_small_vec_swap_remove() {
+        let mut vec: SmallVec<u32, 8> = SmallVec::new();
+        vec.push(1);
+        vec.push(2);
+        vec.push(3);
+        vec.push(4);
+
+        let removed = vec.swap_remove(1);
+        assert_eq!(removed, 2);
+        assert_eq!(vec.as_slice(), &[1, 4, 3]);
+    }
+
+    #[test]
+    fn test_small_vec_insert_remove() {
+        let mut vec: SmallVec<u32, 8> = SmallVec::new();
+        vec.push(1);
+        vec.push(3);
+        vec.insert(1, 2);
+
+        assert_eq!(vec.as_slice(), &[1, 2, 3]);
+
+        let removed = vec.remove(1);
+        assert_eq!(removed, 2);
+        assert_eq!(vec.as_slice(), &[1, 3]);
+    }
+
+    #[test]
+    fn test_small_vec_retain() {
+        let mut vec: SmallVec<u32, 8> = SmallVec::new();
+        vec.push(1);
+        vec.push(2);
+        vec.push(3);
+        vec.push(4);
+
+        vec.retain(|&x| x % 2 == 0);
+        assert_eq!(vec.as_slice(), &[2, 4]);
+    }
+
+    #[test]
+    fn test_small_vec_dedup() {
+        let mut vec: SmallVec<u32, 8> = SmallVec::new();
+        vec.push(1);
+        vec.push(1);
+        vec.push(2);
+        vec.push(2);
+        vec.push(3);
+
+        vec.dedup();
+        assert_eq!(vec.as_slice(), &[1, 2, 3]);
     }
 }

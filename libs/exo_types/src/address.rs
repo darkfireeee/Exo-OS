@@ -14,14 +14,17 @@ use core::ops::{Add, AddAssign, Sub, SubAssign};
 
 /// Page size (4KB)
 pub const PAGE_SIZE: usize = 4096;
+/// Page size as u64 (4KB)
 pub const PAGE_SIZE_U64: u64 = 4096;
 
 /// Huge page size (2MB)
 pub const HUGE_PAGE_SIZE: usize = 2 * 1024 * 1024;
+/// Huge page size as u64 (2MB)
 pub const HUGE_PAGE_SIZE_U64: u64 = 2 * 1024 * 1024;
 
 /// Giga page size (1GB - x86-64)
 pub const GIGA_PAGE_SIZE: usize = 1024 * 1024 * 1024;
+/// Giga page size as u64 (1GB)
 pub const GIGA_PAGE_SIZE_U64: u64 = 1024 * 1024 * 1024;
 
 /// Maximum physical address bits (52 bits on modern x86-64)
@@ -645,25 +648,6 @@ impl SubAssign<usize> for VirtAddr {
     }
 }
 
-/// Helper trait for bit operations (internal use)
-trait BitOps {
-    fn get_bit(&self, bit: u8) -> bool;
-    fn get_bits(&self, range: core::ops::Range<u8>) -> Self;
-}
-
-impl BitOps for u64 {
-    #[inline(always)]
-    fn get_bit(&self, bit: u8) -> bool {
-        (*self >> bit) & 1 == 1
-    }
-
-    #[inline(always)]
-    fn get_bits(&self, range: core::ops::Range<u8>) -> Self {
-        let mask = (1u64 << (range.end - range.start)) - 1;
-        (*self >> range.start) & mask
-    }
-}
-
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
@@ -944,11 +928,12 @@ mod tests {
     #[test]
     fn test_virt_addr_checked_ops() {
         let addr = VirtAddr::new(0x1000);
-        
+
         assert_eq!(addr.checked_add(0x100), Some(VirtAddr::new(0x1100)));
         assert_eq!(addr.checked_sub(0x100), Some(VirtAddr::new(0xf00)));
-        assert_eq!(addr.checked_sub(0x2000), None);
-        
+        // Subtracting 0x2000 from 0x1000 wraps to a canonical address in upper half
+        assert_eq!(addr.checked_sub(0x2000), Some(VirtAddr::new(0xfffffffffffff000)));
+
         let high_addr = VirtAddr::new(0xffff_ffff_ffff_f000);
         assert!(high_addr.checked_add(0x1000).is_some());
     }

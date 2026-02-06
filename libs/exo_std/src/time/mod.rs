@@ -15,9 +15,9 @@ use crate::error::IoError;
 pub fn sleep(dur: core::time::Duration) {
     #[cfg(not(feature = "test_mode"))]
     unsafe {
-        crate::syscall::time::sleep_nanos(dur.as_nanos() as u64);
+        crate::syscall::thread::sleep_nanos(dur.as_nanos() as u64);
     }
-    
+
     #[cfg(feature = "test_mode")]
     {
         let _ = dur;

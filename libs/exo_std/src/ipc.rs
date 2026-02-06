@@ -1,4 +1,3 @@
-<<<<<<< Updated upstream
 // libs/exo_std/src/ipc.rs
 //! Communication inter-processus (IPC)
 //!
@@ -19,7 +18,7 @@ pub type ChannelId = u32;
 /// ```no_run
 /// use exo_std::ipc;
 ///
-/// let dest = 42; // PID destination
+/// let dest = 42;
 /// let message = b"Hello, process!";
 /// ipc::send(dest, message).unwrap();
 /// ```
@@ -27,53 +26,24 @@ pub fn send(dest: ChannelId, data: &[u8]) -> Result<()> {
     if data.is_empty() {
         return Err(ExoStdError::Ipc(IpcError::InvalidDestination));
     }
-    
-=======
-//! Inter-Process Communication (IPC)
-//!
-//! Ce module fournit les primitives pour la communication entre processus.
 
-pub use exo_ipc::*;
-
-/// Envoie un message à un processus
-///
-/// # Arguments
-///
-/// * `dest` - ID du processus destination
-/// * `data` - Données à envoyer
-///
-/// # Exemples
-///
-/// ```ignore
-/// use exo_std::ipc::send;
-///
-/// let data = b"Hello, process!";
-/// send(123, data).unwrap();
-/// ```
-pub fn send(dest: u32, data: &[u8]) -> crate::Result<()> {
->>>>>>> Stashed changes
     #[cfg(feature = "test_mode")]
     {
         let _ = (dest, data);
         Ok(())
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
-<<<<<<< Updated upstream
-    {
-        // TODO: Appel système réel pour envoyer via IPC
-        // unsafe {
-        //     extern "C" {
-        //         fn sys_ipc_send(dest: u32, data: *const u8, len: usize) -> i32;
-        //     }
-        //     let result = sys_ipc_send(dest, data.as_ptr(), data.len());
-        //     if result == 0 { 
-        //         Ok(()) 
-        //     } else { 
-        //         Err(ExoStdError::Ipc(IpcError::Other))
-        //     }
-        // }
-        let _ = (dest, data);
+    unsafe {
+        use crate::syscall::{syscall3, SyscallNumber, check_syscall_result};
+
+        let result = syscall3(
+            SyscallNumber::IpcSend,
+            dest as usize,
+            data.as_ptr() as usize,
+            data.len()
+        );
+        check_syscall_result(result)?;
         Ok(())
     }
 }
@@ -94,49 +64,28 @@ pub fn receive(buffer: &mut [u8]) -> Result<(ChannelId, usize)> {
     if buffer.is_empty() {
         return Err(ExoStdError::Ipc(IpcError::MessageTooLarge));
     }
-    
-=======
-    unsafe {
-        use crate::syscall::{syscall3, SyscallId};
-        
-        let result = syscall3(
-            SyscallId::Send,
-            dest as usize,
-            data.as_ptr() as usize,
-            data.len(),
-        );
-        
-        if result < 0 {
-            Err(crate::error::Error::Io(crate::error::IoError::BrokenPipe))
-        } else {
-            Ok(())
-        }
-    }
-}
 
-/// Reçoit un message
-///
-/// # Arguments
-///
-/// * `buffer` - Buffer pour recevoir les données
-///
-/// # Returns
-///
-/// Nombre d'octets reçus et ID du processus expéditeur
-pub fn recv(buffer: &mut [u8]) -> crate::Result<(usize, u32)> {
->>>>>>> Stashed changes
     #[cfg(feature = "test_mode")]
     {
         let _ = buffer;
         Ok((0, 0))
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
-<<<<<<< Updated upstream
-    {
-        // TODO: Syscall pour recevoir
-        let _ = buffer;
-        Ok((0, 0))
+    unsafe {
+        use crate::syscall::{syscall2, SyscallNumber, check_syscall_result};
+
+        let mut sender = 0u32;
+        let result = syscall2(
+            SyscallNumber::IpcRecv,
+            buffer.as_mut_ptr() as usize,
+            buffer.len()
+        );
+        let bytes_read = check_syscall_result(result)?;
+
+        sender = ((result as usize) >> 32) as u32;
+
+        Ok((sender, bytes_read))
     }
 }
 
@@ -149,12 +98,30 @@ pub fn try_receive(buffer: &mut [u8]) -> Result<Option<(ChannelId, usize)>> {
         let _ = buffer;
         Ok(None)
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
-    {
-        // TODO: Syscall non-bloquant
-        let _ = buffer;
-        Ok(None)
+    unsafe {
+        use crate::syscall::{syscall3, SyscallNumber};
+
+        const IPC_TRY_RECV: usize = 1;
+        let result = syscall3(
+            SyscallNumber::IpcRecv,
+            buffer.as_mut_ptr() as usize,
+            buffer.len(),
+            IPC_TRY_RECV
+        );
+
+        if result == -5 {
+            Ok(None)
+        } else if result < 0 {
+            use crate::syscall::check_syscall_result;
+            check_syscall_result(result)?;
+            Ok(None)
+        } else {
+            let sender = ((result as usize) >> 32) as u32;
+            let bytes_read = (result as usize) & 0xFFFFFFFF;
+            Ok(Some((sender, bytes_read)))
+        }
     }
 }
 
@@ -166,11 +133,14 @@ pub fn create_channel() -> Result<ChannelId> {
     {
         Ok(1)
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
-    {
-        // TODO: Syscall pour créer canal
-        Ok(1)
+    unsafe {
+        use crate::syscall::{syscall0, SyscallNumber, check_syscall_result};
+
+        let result = syscall0(SyscallNumber::IpcCreate);
+        let channel_id = check_syscall_result(result)?;
+        Ok(channel_id as ChannelId)
     }
 }
 
@@ -181,11 +151,13 @@ pub fn close_channel(channel: ChannelId) -> Result<()> {
         let _ = channel;
         Ok(())
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
-    {
-        // TODO: Syscall pour fermer
-        let _ = channel;
+    unsafe {
+        use crate::syscall::{syscall1, SyscallNumber, check_syscall_result};
+
+        let result = syscall1(SyscallNumber::Close, channel as usize);
+        check_syscall_result(result)?;
         Ok(())
     }
 }
@@ -204,24 +176,5 @@ mod tests {
     fn test_send() {
         let result = send(1, b"test message");
         assert!(result.is_ok());
-=======
-    unsafe {
-        use crate::syscall::{syscall2, SyscallId};
-        
-        let result = syscall2(
-            SyscallId::Recv,
-            buffer.as_mut_ptr() as usize,
-            buffer.len(),
-        );
-        
-        if result < 0 {
-            Err(crate::error::Error::Io(crate::error::IoError::BrokenPipe))
-        } else {
-            // Les bits hauts contiennent le PID, les bits bas la taille
-            let size = (result & 0xFFFF) as usize;
-            let pid = ((result >> 16) & 0xFFFF) as u32;
-            Ok((size, pid))
-        }
->>>>>>> Stashed changes
     }
 }

@@ -1,8 +1,7 @@
-<<<<<<< Updated upstream
 // libs/exo_std/src/sync/condvar.rs
-//! Variable de condition pour synchronisation complexe
+//! Condition variable for complex synchronization
 //!
-//! Permet aux threads d'attendre efficacement qu'une condition soit satisfaite.
+//! Allows threads to efficiently wait for a condition to be satisfied.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::time::Duration;
@@ -10,9 +9,9 @@ use super::mutex::{Mutex, MutexGuard};
 use crate::Result;
 use crate::error::SyncError;
 
-/// Variable de condition pour coordination entre threads
+/// Condition variable for thread coordination
 ///
-/// # Exemple
+/// # Example
 /// ```no_run
 /// use exo_std::sync::{Mutex, Condvar};
 ///
@@ -35,26 +34,26 @@ use crate::error::SyncError;
 /// }
 /// ```
 pub struct Condvar {
-    /// Compteur pour wake-ups
+    /// Counter for wake-ups
     seq: AtomicU32,
 }
 
 impl Condvar {
-    /// Crée une nouvelle Condvar
+    /// Create a new Condvar
     #[inline]
     pub const fn new() -> Self {
         Self {
             seq: AtomicU32::new(0),
         }
     }
-    
-    /// Attend que la condition soit signalée
+
+    /// Wait until the condition is signaled
     ///
-    /// Libère temporairement le mutex et attend. Le mutex est réacquis
-    /// avant de retourner.
+    /// Temporarily releases the mutex and waits. The mutex is reacquired
+    /// before returning.
     ///
     /// # Panics
-    /// Panique si le mutex est empoisonné au réveil
+    /// Panics if the mutex is poisoned on wakeup
     #[inline]
     pub fn wait<'a, T>(
         &self,
@@ -62,11 +61,11 @@ impl Condvar {
     ) -> Result<MutexGuard<'a, T>> {
         let mutex = guard.mutex;
         let seq = self.seq.load(Ordering::Acquire);
-        
-        // Libère le mutex
+
+        // Release the mutex
         drop(guard);
-        
-        // Attente active optimisée
+
+        // Optimized busy wait
         let mut backoff = super::mutex::Backoff::new();
         while self.seq.load(Ordering::Acquire) == seq {
             backoff.spin();
@@ -75,14 +74,14 @@ impl Condvar {
             }
             backoff.next();
         }
-        
-        // Réacquiert le mutex
+
+        // Reacquire the mutex
         mutex.lock().map_err(|_| SyncError::Poisoned.into())
     }
-    
-    /// Attend avec timeout
+
+    /// Wait with timeout
     ///
-    /// Retourne true si réveillé par notify, false si timeout
+    /// Returns true if woken by notify, false if timeout
     #[inline]
     pub fn wait_timeout<'a, T>(
         &self,
@@ -92,23 +91,23 @@ impl Condvar {
         let mutex = guard.mutex;
         let seq = self.seq.load(Ordering::Acquire);
         let start = crate::time::Instant::now();
-        
+
         drop(guard);
-        
+
         let mut backoff = super::mutex::Backoff::new();
         loop {
             if self.seq.load(Ordering::Acquire) != seq {
-                // Signal reçu
+                // Signal received
                 let guard = mutex.lock().map_err(|_| SyncError::Poisoned)?;
                 return Ok((guard, true));
             }
-            
+
             if start.elapsed() >= dur {
                 // Timeout
                 let guard = mutex.lock().map_err(|_| SyncError::Poisoned)?;
                 return Ok((guard, false));
             }
-            
+
             backoff.spin();
             if backoff.should_yield() {
                 crate::syscall::thread::yield_now();
@@ -116,10 +115,10 @@ impl Condvar {
             backoff.next();
         }
     }
-    
-    /// Attend tant qu'une condition est vraie
+
+    /// Wait while a condition is true
     ///
-    /// Équivalent à:
+    /// Equivalent to:
     /// ```ignore
     /// while !condition() {
     ///     guard = condvar.wait(guard)?;
@@ -139,14 +138,14 @@ impl Condvar {
         }
         Ok(guard)
     }
-    
-    /// Réveille un thread en attente
+
+    /// Wake one waiting thread
     #[inline]
     pub fn notify_one(&self) {
         self.seq.fetch_add(1, Ordering::Release);
     }
-    
-    /// Réveille tous les threads en attente
+
+    /// Wake all waiting threads
     #[inline]
     pub fn notify_all(&self) {
         self.seq.fetch_add(1, Ordering::Release);
@@ -157,73 +156,42 @@ impl Default for Condvar {
     #[inline]
     fn default() -> Self {
         Self::new()
-=======
-//! Variable conditionnelle
-
-use core::sync::atomic::{AtomicBool, Ordering};
-use super::mutex::{Mutex, MutexGuard};
-
-/// Variable conditionnelle (implémentation simplifiée)
-pub struct Condvar {
-    flag: AtomicBool,
-}
-
-impl Condvar {
-    /// Crée une nouvelle condvar
-    pub const fn new() -> Self {
-        Self {
-            flag: AtomicBool::new(false),
-        }
-    }
-
-    /// Attend sur la condvar (nécessite mutex)
-    pub fn wait<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
-        // Note: Implémentation simplifiée pour no_std
-        // Dans un vrai OS, on utiliserait futex ou équivalent
-        let mutex = unsafe { &*((&guard as *const MutexGuard<T>) as *const super::mutex::Mutex<T>) };
-        drop(guard);
-
-        // Attend le signal
-        while !self.flag.load(Ordering::Acquire) {
-            core::hint::spin_loop();
-        }
-
-        // Réacquiert le mutex
-        mutex.lock()
-    }
-
-    /// Notifie un thread
-    pub fn notify_one(&self) {
-        self.flag.store(true, Ordering::Release);
-    }
-
-    /// Notifie tous les threads
-    pub fn notify_all(&self) {
-        self.flag.store(true, Ordering::Release);
->>>>>>> Stashed changes
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-<<<<<<< Updated upstream
-    
-    #[test]
-    fn test_condvar_basic() {
-        let mutex = Mutex::new(false);
-        let condvar = Condvar::new();
-        
-        let guard = mutex.lock().unwrap();
-        condvar.notify_one();
-        let _guard = condvar.wait_timeout(guard, Duration::from_millis(10)).unwrap();
-=======
 
     #[test]
     fn test_condvar_basic() {
         let cv = Condvar::new();
         cv.notify_one();
         cv.notify_all();
->>>>>>> Stashed changes
+    }
+
+    #[test]
+    fn test_condvar_with_mutex() {
+        let mutex = Mutex::new(false);
+        let condvar = Condvar::new();
+
+        let guard = mutex.lock().unwrap();
+        condvar.notify_one();
+        let _result = condvar.wait_timeout(guard, Duration::from_millis(10)).unwrap();
+    }
+
+    #[test]
+    fn test_condvar_notify() {
+        let cv = Condvar::new();
+
+        // Test notify functions
+        cv.notify_one();
+        cv.notify_all();
+
+        // Verify seq counter increases
+        let seq1 = cv.seq.load(Ordering::Acquire);
+        cv.notify_one();
+        let seq2 = cv.seq.load(Ordering::Acquire);
+        assert!(seq2 > seq1);
     }
 }

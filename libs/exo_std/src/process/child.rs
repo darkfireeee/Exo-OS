@@ -25,13 +25,14 @@ impl Child {
         {
             Ok(ExitStatus::exited(0))
         }
-        
+
         #[cfg(not(feature = "test_mode"))]
         {
             use crate::syscall::process::wait;
-            
+
             unsafe {
-                let (_pid, status) = wait(self.pid)?;
+                let mut status: i32 = 0;
+                let _pid = wait(self.pid, &mut status as *mut i32)?;
                 Ok(ExitStatus::from_raw(status))
             }
         }
@@ -53,12 +54,12 @@ impl Child {
         {
             Ok(())
         }
-        
+
         #[cfg(not(feature = "test_mode"))]
         {
             use crate::syscall::process::kill;
             unsafe {
-                kill(self.pid, 9) // SIGKILL
+                kill(self.pid, 9).map_err(|e| e.into()) // SIGKILL
             }
         }
     }

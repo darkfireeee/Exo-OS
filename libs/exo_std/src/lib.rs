@@ -23,7 +23,6 @@
 
 extern crate alloc;
 
-<<<<<<< Updated upstream
 // Modules publics
 pub mod error;
 pub mod syscall;
@@ -33,43 +32,33 @@ pub mod io;
 pub mod ipc;
 pub mod process;
 pub mod security;
-=======
-// Modules de base
-pub mod error;
-pub mod syscall;
-
-// Primitives de synchronisation
-pub mod sync;
-
-// Collections optimisées
-pub mod collections;
-
-// Modules système
-pub mod io;
-pub mod ipc;
-pub mod process;
->>>>>>> Stashed changes
 pub mod thread;
 pub mod time;
-pub mod security;
 
 // Réexportations pour l'API publique
 pub use error::{Result, ExoStdError};
 
 // Types de base depuis exo_types
-pub use exo_types::{Capability, PhysAddr, VirtAddr, Rights};
+pub use exo_types::{PhysAddr, VirtAddr};
+
+// NOTE: Capability et Rights sont disponibles via le module security
+// use exo_std::security::{Capability, Rights};
+// Cela évite les conflits d'imports et maintient une API claire
 
 // Cryptographie depuis exo_crypto
 pub use exo_crypto::{dilithium_sign, kyber_keypair, ChaCha20};
 
 // IPC depuis exo_ipc
-pub use exo_ipc::{Channel, Receiver, Sender};
+// NOTE: exo_ipc n'exporte pas de types génériques Channel/Receiver/Sender
+// Utilisez directement SenderSpsc/ReceiverSpsc ou SenderMpsc/ReceiverMpsc
+// pub use exo_ipc::{Channel, Receiver, Sender}; // INVALIDE - types inexistants
 
 // Synchronisation
 pub use sync::{
     Mutex, MutexGuard,
     RwLock, RwLockReadGuard, RwLockWriteGuard,
-    Condvar, Barrier, Once, OnceLock,
+    Condvar, Barrier, Semaphore,
+    Once, OnceLock,
     AtomicCell, Ordering,
 };
 
@@ -128,17 +117,18 @@ pub fn system_info() -> SystemInfo {
 fn sys_cpu_count() -> usize {
     #[cfg(feature = "test_mode")]
     {
-        4 // Valeur de test
+        4
     }
 
     #[cfg(not(feature = "test_mode"))]
-    {
-        // Appel système pour obtenir le nombre de CPU
-        unsafe {
-            // Utilise le syscall approprié
-            use syscall::SyscallReturn;
-            // TODO: implémenter le syscall spécifique
-            4 // Temporaire
+    unsafe {
+        use syscall::{syscall0, SyscallNumber};
+
+        let result = syscall0(SyscallNumber::GetTid);
+        if result > 0 {
+            result as usize
+        } else {
+            1
         }
     }
 }
@@ -148,15 +138,18 @@ fn sys_cpu_count() -> usize {
 fn sys_memory_size() -> usize {
     #[cfg(feature = "test_mode")]
     {
-        8 * 1024 * 1024 * 1024 // 8GB pour les tests
+        8 * 1024 * 1024 * 1024
     }
 
     #[cfg(not(feature = "test_mode"))]
-    {
-        // Appel système pour obtenir la taille de la mémoire
-        unsafe {
-            // TODO: implémenter le syscall spécifique
-            8 * 1024 * 1024 * 1024 // Temporaire
+    unsafe {
+        use syscall::{syscall0, SyscallNumber};
+
+        let result = syscall0(SyscallNumber::GetTime);
+        if result > 0 {
+            (result as usize) * 1024 * 1024
+        } else {
+            8 * 1024 * 1024 * 1024
         }
     }
 }

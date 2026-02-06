@@ -1,7 +1,7 @@
 //! Entrées/sorties standard (stdin, stdout, stderr)
 
 use crate::error::IoError;
-use crate::syscall::io::{read, write};
+use crate::syscall::io::{read_slice, write_slice};
 use super::traits::{Read, Write};
 use core::fmt;
 
@@ -21,7 +21,7 @@ impl Stdin {
         let mut total = 0;
         for i in 0..buf.len() {
             let mut byte = [0u8];
-            match unsafe { read(0, &mut byte) } {
+            match read_slice(0, &mut byte) {
                 Ok(0) => break,
                 Ok(_) => {
                     buf[i] = byte[0];
@@ -30,7 +30,7 @@ impl Stdin {
                         break;
                     }
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Err(e.into()),
             }
         }
         Ok(total)
@@ -42,7 +42,7 @@ impl Read for Stdin {
         if buf.is_empty() {
             return Ok(0);
         }
-        unsafe { read(0, buf) }
+        read_slice(0, buf).map_err(|e| e.into())
     }
 }
 
@@ -63,7 +63,7 @@ impl Write for Stdout {
         if buf.is_empty() {
             return Ok(0);
         }
-        unsafe { write(1, buf) }
+        write_slice(1, buf).map_err(|e| e.into())
     }
 
     fn flush(&mut self) -> Result<(), IoError> {
@@ -94,7 +94,7 @@ impl Write for Stderr {
         if buf.is_empty() {
             return Ok(0);
         }
-        unsafe { write(2, buf) }
+        write_slice(2, buf).map_err(|e| e.into())
     }
 
     fn flush(&mut self) -> Result<(), IoError> {

@@ -67,7 +67,7 @@ exo_types/
 
 ### Phase 1: Foundation (Primitives + Errors)
 ```
-1. ✅ address.rs      - COMPLET avec tests exhaustifs
+1. ⏳ address.rs      - COMPLET avec tests exhaustifs
 2. ⏳ errno.rs       - Fusion error.rs, système unifié
 3. ⏳ pid.rs         - Correction bug KERNEL
 4. ⏳ fd.rs          - RAII robuste
@@ -135,14 +135,3 @@ Layer 0: primitives (NO dependencies)
 | Zero allocations | Oui | Non (capability) |
 | Doc coverage | 100% | 30% |
 | Benchmarks | All modules | 0% |
-
-## 🎓 État Actuel
-
-### ✅ TERMINÉ
-- address.rs: Structure de base optimisée
-
-### 🔄 EN COURS
-- address.rs: Tests exhaustifs
-
-### ⏳ À FAIRE
-- Tout le reste selon plan ci-dessus

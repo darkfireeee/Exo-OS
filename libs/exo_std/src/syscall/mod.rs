@@ -1,4 +1,3 @@
-<<<<<<< Updated upstream
 // libs/exo_std/src/syscall/mod.rs
 //! Couche d'abstraction pour les appels système
 //!
@@ -10,6 +9,7 @@ pub mod thread;
 pub mod memory;
 pub mod io;
 pub mod time;
+pub mod ipc;
 
 /// Numéros d'appels système
 #[repr(usize)]
@@ -66,80 +66,19 @@ pub type SyscallReturn = isize;
 pub unsafe fn syscall0(num: SyscallNumber) -> SyscallReturn {
     #[cfg(feature = "test_mode")]
     {
-        // Mode test: retourne succès simulé
         let _ = num;
-=======
-//! Couche d'abstraction des appels système
-//!
-//! Ce module fournit une interface sûre pour tous les appels système.
-
-pub mod io;
-pub mod process;
-pub mod thread;
-pub mod time;
-pub mod memory;
-pub mod ipc;
-
-// Réexportations
-pub use io::*;
-pub use process::*;
-pub use thread::*;
-pub use time::*;
-pub use memory::*;
-pub use ipc::*;
-
-/// ID d'appel système
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(usize)]
-pub enum SyscallId {
-    Read = 0,
-    Write = 1,
-    Open = 2,
-    Close = 3,
-    Fork = 4,
-    Exit = 5,
-    Wait = 6,
-    Kill = 7,
-    Sleep = 8,
-    GetTime = 9,
-    Mmap = 10,
-    Munmap = 11,
-    Send = 12,
-    Recv = 13,
-    GetPid = 14,
-    GetTid = 15,
-    ThreadCreate = 16,
-    ThreadExit = 17,
-    Yield = 18,
-    Exec = 19,
-    ThreadJoin = 20,
-    CapabilityVerify = 21,
-    CapabilityRequest = 22,
-    CapabilityRevoke = 23,
-    CapabilityDelegate = 24,
-}
-
-/// Résultat d'un appel système
-pub type SysResult<T> = Result<T, crate::error::SystemError>;
-
-/// Effectue un appel système brut
-#[inline]
-pub unsafe fn syscall0(id: SyscallId) -> isize {
-    #[cfg(feature = "test_mode")]
-    {
-        let _ = id;
->>>>>>> Stashed changes
         0
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
     {
-<<<<<<< Updated upstream
         let ret: isize;
         core::arch::asm!(
             "syscall",
             in("rax") num as usize,
             lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
             options(nostack, preserves_flags)
         );
         ret
@@ -152,37 +91,19 @@ pub unsafe fn syscall1(num: SyscallNumber, arg1: usize) -> SyscallReturn {
     #[cfg(feature = "test_mode")]
     {
         let _ = (num, arg1);
-=======
-        let result: isize;
-        core::arch::asm!(
-            "syscall",
-            in("rax") id as usize,
-            lateout("rax") result,
-            options(nostack)
-        );
-        result
-    }
-}
-
-/// Appel système avec 1 argument
-#[inline]
-pub unsafe fn syscall1(id: SyscallId, arg1: usize) -> isize {
-    #[cfg(feature = "test_mode")]
-    {
-        let _ = (id, arg1);
->>>>>>> Stashed changes
         0
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
     {
-<<<<<<< Updated upstream
         let ret: isize;
         core::arch::asm!(
             "syscall",
             in("rax") num as usize,
             in("rdi") arg1,
             lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
             options(nostack, preserves_flags)
         );
         ret
@@ -195,32 +116,11 @@ pub unsafe fn syscall2(num: SyscallNumber, arg1: usize, arg2: usize) -> SyscallR
     #[cfg(feature = "test_mode")]
     {
         let _ = (num, arg1, arg2);
-=======
-        let result: isize;
-        core::arch::asm!(
-            "syscall",
-            in("rax") id as usize,
-            in("rdi") arg1,
-            lateout("rax") result,
-            options(nostack)
-        );
-        result
-    }
-}
-
-/// Appel système avec 2 arguments
-#[inline]
-pub unsafe fn syscall2(id: SyscallId, arg1: usize, arg2: usize) -> isize {
-    #[cfg(feature = "test_mode")]
-    {
-        let _ = (id, arg1, arg2);
->>>>>>> Stashed changes
         0
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
     {
-<<<<<<< Updated upstream
         let ret: isize;
         core::arch::asm!(
             "syscall",
@@ -228,6 +128,8 @@ pub unsafe fn syscall2(id: SyscallId, arg1: usize, arg2: usize) -> isize {
             in("rdi") arg1,
             in("rsi") arg2,
             lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
             options(nostack, preserves_flags)
         );
         ret
@@ -240,33 +142,11 @@ pub unsafe fn syscall3(num: SyscallNumber, arg1: usize, arg2: usize, arg3: usize
     #[cfg(feature = "test_mode")]
     {
         let _ = (num, arg1, arg2, arg3);
-=======
-        let result: isize;
-        core::arch::asm!(
-            "syscall",
-            in("rax") id as usize,
-            in("rdi") arg1,
-            in("rsi") arg2,
-            lateout("rax") result,
-            options(nostack)
-        );
-        result
-    }
-}
-
-/// Appel système avec 3 arguments
-#[inline]
-pub unsafe fn syscall3(id: SyscallId, arg1: usize, arg2: usize, arg3: usize) -> isize {
-    #[cfg(feature = "test_mode")]
-    {
-        let _ = (id, arg1, arg2, arg3);
->>>>>>> Stashed changes
         0
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
     {
-<<<<<<< Updated upstream
         let ret: isize;
         core::arch::asm!(
             "syscall",
@@ -275,6 +155,8 @@ pub unsafe fn syscall3(id: SyscallId, arg1: usize, arg2: usize, arg3: usize) -> 
             in("rsi") arg2,
             in("rdx") arg3,
             lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
             options(nostack, preserves_flags)
         );
         ret
@@ -295,7 +177,7 @@ pub unsafe fn syscall4(
         let _ = (num, arg1, arg2, arg3, arg4);
         0
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
     {
         let ret: isize;
@@ -307,6 +189,8 @@ pub unsafe fn syscall4(
             in("rdx") arg3,
             in("r10") arg4,
             lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
             options(nostack, preserves_flags)
         );
         ret
@@ -328,7 +212,7 @@ pub unsafe fn syscall5(
         let _ = (num, arg1, arg2, arg3, arg4, arg5);
         0
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
     {
         let ret: isize;
@@ -341,6 +225,46 @@ pub unsafe fn syscall5(
             in("r10") arg4,
             in("r8") arg5,
             lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack, preserves_flags)
+        );
+        ret
+    }
+}
+
+/// Exécute un syscall avec 6 arguments
+#[inline]
+pub unsafe fn syscall6(
+    num: SyscallNumber,
+    arg1: usize,
+    arg2: usize,
+    arg3: usize,
+    arg4: usize,
+    arg5: usize,
+    arg6: usize,
+) -> SyscallReturn {
+    #[cfg(feature = "test_mode")]
+    {
+        let _ = (num, arg1, arg2, arg3, arg4, arg5, arg6);
+        0
+    }
+
+    #[cfg(not(feature = "test_mode"))]
+    {
+        let ret: isize;
+        core::arch::asm!(
+            "syscall",
+            in("rax") num as usize,
+            in("rdi") arg1,
+            in("rsi") arg2,
+            in("rdx") arg3,
+            in("r10") arg4,
+            in("r8") arg5,
+            in("r9") arg6,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
             options(nostack, preserves_flags)
         );
         ret
@@ -353,26 +277,16 @@ pub fn check_syscall_result(ret: SyscallReturn) -> crate::Result<usize> {
     if ret >= 0 {
         Ok(ret as usize)
     } else {
-        // Convertit le code d'erreur négatif en erreur appropriée
         match ret {
             -1 => Err(crate::error::SystemError::InvalidArgument.into()),
             -2 => Err(crate::error::IoErrorKind::NotFound.into()),
             -3 => Err(crate::error::IoErrorKind::PermissionDenied.into()),
             -4 => Err(crate::error::SystemError::ResourceExhausted.into()),
             -5 => Err(crate::error::IoErrorKind::WouldBlock.into()),
+            -12 => Err(crate::error::SystemError::NotImplemented.into()),
+            -22 => Err(crate::error::IoErrorKind::InvalidInput.into()),
             _ => Err(crate::error::SystemError::Other.into()),
-=======
-        let result: isize;
-        core::arch::asm!(
-            "syscall",
-            in("rax") id as usize,
-            in("rdi") arg1,
-            in("rsi") arg2,
-            in("rdx") arg3,
-            lateout("rax") result,
-            options(nostack)
-        );
-        result
+        }
     }
 }
 
@@ -383,9 +297,8 @@ mod tests {
     #[test]
     fn test_syscall() {
         unsafe {
-            let _ = syscall0(SyscallId::GetTime);
-            let _ = syscall1(SyscallId::Close, 0);
->>>>>>> Stashed changes
+            let _ = syscall0(SyscallNumber::GetTime);
+            let _ = syscall1(SyscallNumber::Close, 0);
         }
     }
 }

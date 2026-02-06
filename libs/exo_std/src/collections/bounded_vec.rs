@@ -494,11 +494,6 @@ impl<T: fmt::Debug> fmt::Debug for BoundedVec<T> {
 }
 
 impl<T: Clone> Clone for BoundedVec<T> {
-<<<<<<< Updated upstream
-    fn clone(&self) -> Self {
-        // Note: nécessite un nouveau buffer externe
-        unimplemented!("BoundedVec::clone requires external buffer allocation")
-=======
     /// Clone le BoundedVec
     ///
     /// # Panics
@@ -527,7 +522,6 @@ impl<T: Clone> Clone for BoundedVec<T> {
              You must manually allocate a buffer and copy elements. \
              See documentation for the Clone trait implementation."
         )
->>>>>>> Stashed changes
     }
 }
 

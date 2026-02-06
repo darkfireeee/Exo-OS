@@ -1,8 +1,11 @@
 //! Système de sécurité basé sur les capabilities
+//!
+//! Ce module réexporte les types de capabilities depuis exo_types
+//! pour fournir une API unifiée de sécurité.
 
-pub mod capability;
+// Réexportation des types canoniques depuis exo_types
+pub use exo_types::capability::{Capability, CapabilityType, Rights};
+pub use exo_types::capability::{CapabilityMetadata, MetadataFlags};
 
-// Réexportations
-pub use capability::{Capability, CapabilityType, Rights};
-pub use capability::{verify_capability, check_rights};
-pub use capability::{request_capability, revoke_capability, delegate_capability};
+// Note: Les fonctions verify_capability, request_capability, etc.
+// sont maintenant des syscalls dans exo_std::syscall::security

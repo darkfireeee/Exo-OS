@@ -49,12 +49,12 @@ impl<T> JoinHandle<T> {
         #[cfg(not(feature = "test_mode"))]
         {
             use crate::syscall::thread::thread_join;
-            
+
             // Appel du syscall pour attendre le thread
             unsafe {
-                thread_join(self.thread_id)?;
+                thread_join(self.thread_id, core::ptr::null_mut())?;
             }
-            
+
             // Note: Dans une implémentation complète, il faudrait:
             // 1. Un mécanisme pour stocker le résultat du thread (Box, TLS, etc.)
             // 2. Récupérer ce résultat après le join
@@ -88,19 +88,20 @@ where
 
 /// Yield le CPU au scheduler
 pub fn yield_now() {
-    crate::syscall::thread::thread_yield();
+    crate::syscall::thread::yield_now();
 }
 
 /// Dort pendant une durée
 pub fn sleep(dur: core::time::Duration) {
-    unsafe {
-        crate::syscall::thread::thread_sleep(dur.as_nanos() as u64);
+    #[cfg(not(feature = "test_mode"))]
+    {
+        crate::syscall::thread::sleep_nanos(dur.as_nanos() as u64);
     }
 }
 
 /// Retourne l'ID du thread courant
 pub fn current_id() -> ThreadId {
-    crate::syscall::thread::get_tid()
+    crate::syscall::thread::gettid()
 }
 
 /// Informations sur le thread courant

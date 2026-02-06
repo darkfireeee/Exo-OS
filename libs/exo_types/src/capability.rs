@@ -3,6 +3,8 @@
 //! Zero-allocation, high-performance capability system for Exo-OS.
 //! Implements object capabilities with fine-grained permissions.
 
+#![allow(missing_docs)]
+
 use bitflags::bitflags;
 use core::fmt;
 
@@ -26,6 +28,11 @@ bitflags! {
         const IPC_RECV    = 0b0100_0000_0000;
         const ADMIN       = 0b1000_0000_0000;
 
+        // Permissions IPC additionnelles (compatibilité exo_ipc)
+        const IPC_CREATE  = 0b0001_0000_0000_0000;  // Créer des canaux IPC
+        const IPC_DESTROY = 0b0010_0000_0000_0000;  // Détruire des canaux IPC
+        const IPC_DELEGATE= 0b0100_0000_0000_0000;  // Déléguer des capabilities
+
         /// Standard file permissions (read, write, metadata)
         const FILE_STANDARD = Self::READ.bits | Self::WRITE.bits | Self::METADATA.bits;
 
@@ -37,6 +44,9 @@ bitflags! {
 
         /// IPC permissions (send + receive)
         const IPC_STANDARD = Self::IPC_SEND.bits | Self::IPC_RECV.bits;
+
+        /// IPC permissions complètes (send, receive, create, destroy, delegate)
+        const IPC_FULL = Self::IPC_SEND.bits | Self::IPC_RECV.bits | Self::IPC_CREATE.bits | Self::IPC_DESTROY.bits | Self::IPC_DELEGATE.bits;
 
         /// All permissions (for privileged operations)
         const ALL = u32::MAX;
@@ -91,14 +101,23 @@ impl Rights {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum CapabilityType {
+    /// File capability
     File = 0,
+    /// Directory capability
     Directory = 1,
+    /// Memory region capability
     Memory = 2,
+    /// Process capability
     Process = 3,
+    /// Thread capability
     Thread = 4,
+    /// IPC channel capability
     IpcChannel = 5,
+    /// Network socket capability
     NetworkSocket = 6,
+    /// Device capability
     Device = 7,
+    /// Cryptographic key capability
     Key = 8,
 }
 
@@ -456,6 +475,20 @@ impl Capability {
         rights: Rights::NONE,
         metadata: CapabilityMetadata::EMPTY,
     };
+
+    /// System capability with all permissions
+    pub const SYSTEM: Self = Self {
+        id: 1,
+        cap_type: CapabilityType::Process,
+        rights: Rights::ALL,
+        metadata: CapabilityMetadata::EMPTY,
+    };
+
+    /// Create a system capability with all permissions
+    #[inline(always)]
+    pub const fn system() -> Self {
+        Self::SYSTEM
+    }
 }
 
 impl Default for Capability {

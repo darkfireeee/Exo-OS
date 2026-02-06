@@ -30,7 +30,7 @@ pub fn exit(code: i32) -> ! {
 
 /// ID du processus actuel
 pub fn id() -> Pid {
-    crate::syscall::process::get_pid()
+    crate::syscall::process::getpid()
 }
 
 /// Fork le processus actuel
@@ -39,10 +39,10 @@ pub fn fork() -> Result<Pid, ProcessError> {
     {
         Ok(0)
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
     unsafe {
-        syscall::fork().map(|pid| pid as Pid)
+        syscall::fork().map(|pid| pid as Pid).map_err(|e| e.into())
     }
 }
 
@@ -52,10 +52,11 @@ pub fn wait(pid: Pid) -> Result<(Pid, ExitStatus), ProcessError> {
     {
         Ok((pid, ExitStatus::exited(0)))
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
     unsafe {
-        let (waited_pid, status) = syscall::wait(pid)?;
+        let mut status: i32 = 0;
+        let waited_pid = syscall::wait(pid, &mut status as *mut i32)?;
         Ok((waited_pid as Pid, ExitStatus::from_raw(status)))
     }
 }
@@ -67,9 +68,9 @@ pub fn kill(pid: Pid, signal: i32) -> Result<(), ProcessError> {
         let _ = (pid, signal);
         Ok(())
     }
-    
+
     #[cfg(not(feature = "test_mode"))]
     unsafe {
-        syscall::kill(pid, signal)
+        syscall::kill(pid, signal).map_err(|e| e.into())
     }
 }

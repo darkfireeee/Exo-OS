@@ -25,7 +25,7 @@ impl Instant {
         #[cfg(not(feature = "test_mode"))]
         unsafe {
             use crate::syscall::time::{get_time, ClockType};
-            let nanos = get_time(ClockType::Monotonic).unwrap_or(0);
+            let nanos = get_time(ClockType::Monotonic);
             Self::from_nanos(nanos)
         }
     }

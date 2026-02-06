@@ -1,4 +1,3 @@
-<<<<<<< Updated upstream
 // libs/exo_std/src/sync/atomic.rs
 //! Wrappers atomiques pour types simples
 //!
@@ -50,7 +49,10 @@ impl<T: Copy> AtomicCell<T> {
     
     /// Charge la valeur
     #[inline]
-    pub fn load(&self) -> T {
+    pub fn load(&self) -> T
+    where
+        T: core::fmt::Debug,
+    {
         match &self.inner {
             AtomicCellInner::Small(cell) => {
                 // Pour petits types, lit avec acquire semantics
@@ -64,10 +66,13 @@ impl<T: Copy> AtomicCell<T> {
             }
         }
     }
-    
+
     /// Stocke une valeur
     #[inline]
-    pub fn store(&self, value: T) {
+    pub fn store(&self, value: T)
+    where
+        T: core::fmt::Debug,
+    {
         match &self.inner {
             AtomicCellInner::Small(cell) => {
                 // Pour petits types, écrit avec release semantics
@@ -81,10 +86,13 @@ impl<T: Copy> AtomicCell<T> {
             }
         }
     }
-    
+
     /// Swap atomique
     #[inline]
-    pub fn swap(&self, value: T) -> T {
+    pub fn swap(&self, value: T) -> T
+    where
+        T: core::fmt::Debug,
+    {
         match &self.inner {
             AtomicCellInner::Small(cell) => {
                 unsafe {
@@ -102,12 +110,12 @@ impl<T: Copy> AtomicCell<T> {
             }
         }
     }
-    
+
     /// Compare-and-swap
     #[inline]
     pub fn compare_and_swap(&self, current: T, new: T) -> T
     where
-        T: PartialEq,
+        T: PartialEq + core::fmt::Debug,
     {
         match &self.inner {
             AtomicCellInner::Small(cell) => {
@@ -195,15 +203,3 @@ mod tests {
         assert_eq!(cell.load(), [2; 4]);
     }
 }
-=======
-//! Types atomiques et opérations
-
-pub use core::sync::atomic::{
-    AtomicBool, AtomicI8, AtomicI16, AtomicI32, AtomicI64,
-    AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize,
-    Ordering,
-};
-
-/// Fence mémoire
-pub use core::sync::atomic::{fence, compiler_fence};
->>>>>>> Stashed changes

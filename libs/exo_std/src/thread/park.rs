@@ -4,6 +4,7 @@ use crate::sync::Mutex;
 use crate::thread::ThreadId;
 
 /// Parking state pour un thread
+#[derive(Debug)]
 struct ParkState {
     unparked: bool,
 }
@@ -23,46 +24,46 @@ impl Parker {
 
     /// Park le thread courant
     pub fn park(&self) {
-        let mut state = self.state.lock();
-        
+        let mut state = self.state.lock().unwrap();
+
         while !state.unparked {
             // En pratique, on devrait bloquer ici
             // Pour l'instant, spin
             drop(state);
             crate::thread::yield_now();
-            state = self.state.lock();
+            state = self.state.lock().unwrap();
         }
-        
+
         state.unparked = false;
     }
 
     /// Park avec timeout
-    /// 
+    ///
     /// Note: L'implémentation actuelle utilise un spin-wait avec yield.
     /// Une vraie implémentation nécessiterait un syscall de blocage avec timeout.
     pub fn park_timeout(&self, timeout: core::time::Duration) {
         use crate::time::Instant;
-        
+
         let start = Instant::now();
-        let mut state = self.state.lock();
-        
+        let mut state = self.state.lock().unwrap();
+
         while !state.unparked {
             if start.elapsed() >= timeout {
                 // Timeout atteint
                 return;
             }
-            
+
             drop(state);
             crate::thread::yield_now();
-            state = self.state.lock();
+            state = self.state.lock().unwrap();
         }
-        
+
         state.unparked = false;
     }
 
     /// Unpark le thread
     pub fn unpark(&self) {
-        let mut state = self.state.lock();
+        let mut state = self.state.lock().unwrap();
         state.unparked = true;
     }
 }

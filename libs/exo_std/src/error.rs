@@ -9,6 +9,9 @@ use core::fmt;
 /// Type Result avec erreur ExoStdError
 pub type Result<T> = core::result::Result<T, ExoStdError>;
 
+/// Type IoError comme alias vers IoErrorKind pour compatibilité
+pub type IoError = IoErrorKind;
+
 /// Erreur principale de exo_std
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExoStdError {
@@ -59,11 +62,8 @@ pub enum IoErrorKind {
     StorageFull,
     /// Opération non supportée
     Unsupported,
-<<<<<<< Updated upstream
-=======
-    /// Écriture de zéro octet
+    /// Tentative d'écriture de 0 octets
     WriteZero,
->>>>>>> Stashed changes
     /// Autre erreur I/O
     Other,
 }
@@ -85,11 +85,6 @@ pub enum ProcessError {
     ExecFailed,
     /// Échec de wait
     WaitFailed,
-<<<<<<< Updated upstream
-=======
-    /// Échec de kill
-    KillFailed,
->>>>>>> Stashed changes
     /// Autre erreur processus
     Other,
 }
@@ -150,11 +145,6 @@ pub enum SecurityError {
     PermissionDenied,
     /// Opération non autorisée
     Forbidden,
-<<<<<<< Updated upstream
-=======
-    /// Droits insuffisants
-    InsufficientRights,
->>>>>>> Stashed changes
     /// Autre erreur sécurité
     Other,
 }
@@ -222,10 +212,7 @@ impl fmt::Display for IoErrorKind {
             IoErrorKind::BrokenPipe => write!(f, "broken pipe"),
             IoErrorKind::StorageFull => write!(f, "no storage space"),
             IoErrorKind::Unsupported => write!(f, "operation not supported"),
-<<<<<<< Updated upstream
-=======
-            IoErrorKind::WriteZero => write!(f, "write zero bytes"),
->>>>>>> Stashed changes
+            IoErrorKind::WriteZero => write!(f, "write zero"),
             IoErrorKind::Other => write!(f, "other I/O error"),
         }
     }
@@ -241,10 +228,6 @@ impl fmt::Display for ProcessError {
             ProcessError::ForkFailed => write!(f, "fork failed"),
             ProcessError::ExecFailed => write!(f, "exec failed"),
             ProcessError::WaitFailed => write!(f, "wait failed"),
-<<<<<<< Updated upstream
-=======
-            ProcessError::KillFailed => write!(f, "kill failed"),
->>>>>>> Stashed changes
             ProcessError::Other => write!(f, "other process error"),
         }
     }
@@ -293,10 +276,6 @@ impl fmt::Display for SecurityError {
             SecurityError::InvalidCapability => write!(f, "invalid capability"),
             SecurityError::PermissionDenied => write!(f, "permission denied"),
             SecurityError::Forbidden => write!(f, "operation forbidden"),
-<<<<<<< Updated upstream
-=======
-            SecurityError::InsufficientRights => write!(f, "insufficient rights"),
->>>>>>> Stashed changes
             SecurityError::Other => write!(f, "other security error"),
         }
     }
@@ -384,6 +363,37 @@ impl From<SystemError> for ExoStdError {
     }
 }
 
+// Reverse conversions for extracting specific errors from ExoStdError
+impl From<ExoStdError> for ProcessError {
+    #[inline]
+    fn from(e: ExoStdError) -> Self {
+        match e {
+            ExoStdError::Process(p) => p,
+            _ => ProcessError::Other,
+        }
+    }
+}
+
+impl From<ExoStdError> for ThreadError {
+    #[inline]
+    fn from(e: ExoStdError) -> Self {
+        match e {
+            ExoStdError::Thread(t) => t,
+            _ => ThreadError::Other,
+        }
+    }
+}
+
+impl From<ExoStdError> for IoErrorKind {
+    #[inline]
+    fn from(e: ExoStdError) -> Self {
+        match e {
+            ExoStdError::Io(io) => io,
+            _ => IoErrorKind::Other,
+        }
+    }
+}
+
 /// Extension pour Result avec méthodes utilitaires
 pub trait ResultExt<T> {
     /// Convertit en Result I/O
@@ -396,11 +406,3 @@ impl<T, E> ResultExt<T> for core::result::Result<T, E> {
         self.map_err(|_| ExoStdError::Io(kind))
     }
 }
-<<<<<<< Updated upstream
-=======
-
-// Type aliases pour simplifier l'utilisation
-pub type IoError = IoErrorKind;
-pub type TimeError = SystemError;
-pub type MemoryError = SystemError;
->>>>>>> Stashed changes
