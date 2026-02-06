@@ -343,6 +343,20 @@ impl Default for RegistryStats {
     }
 }
 
+impl Clone for RegistryStats {
+    fn clone(&self) -> Self {
+        Self {
+            total_lookups: AtomicU64::new(self.total_lookups.load(Ordering::Relaxed)),
+            cache_hits: AtomicU64::new(self.cache_hits.load(Ordering::Relaxed)),
+            cache_misses: AtomicU64::new(self.cache_misses.load(Ordering::Relaxed)),
+            bloom_rejections: AtomicU64::new(self.bloom_rejections.load(Ordering::Relaxed)),
+            total_registrations: AtomicU64::new(self.total_registrations.load(Ordering::Relaxed)),
+            total_unregistrations: AtomicU64::new(self.total_unregistrations.load(Ordering::Relaxed)),
+            active_services: AtomicUsize::new(self.active_services.load(Ordering::Relaxed)),
+        }
+    }
+}
+
 /// Registry principal
 ///
 /// Thread-safe service registry avec cache LRU et bloom filter

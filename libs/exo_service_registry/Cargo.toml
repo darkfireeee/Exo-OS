@@ -1,6 +1,6 @@
 [package]
 name = "exo_service_registry"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
 authors = ["Exo-OS Team"]
 license = "MIT OR Apache-2.0"
@@ -11,6 +11,7 @@ repository = "https://github.com/darkfireeee/Exo-OS"
 exo_ipc = { path = "../exo_ipc" }
 exo_types = { path = "../exo_types" }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+spin = { version = "0.9", default-features = false, features = ["rwlock"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -5,6 +5,118 @@ All notable changes to exo_service_registry will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-02-06
+
+### Added - Optional Extensions (Production Complete)
+
+#### Configuration System (`src/config.rs`)
+- **TOML Parser** - No-std compatible configuration parser
+  - `SystemConfig` - Agrégation de toutes les configs
+  - `RegistryConfig`, `DaemonConfig`, `StorageConfig`, `IpcConfig`, `HealthConfig`
+  - `TomlParser` - Parser custom sans dépendances
+  - Support sections, key-value pairs, comments, types (int, bool, string)
+- **load_config_from_file()** - Chargement depuis fichier TOML
+- Tests complets avec parsing et validation
+
+#### Signal Handlers (`src/signals.rs`)
+- **POSIX Signal Support** - Gestion des signaux système
+  - `Signal` enum: SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2
+  - `SignalFlags` - Flags atomiques pour communication async-safe
+  - Global singleton accessible via `get_signal_flags()`
+  - `setup_signal_handlers()` - Installation des handlers OS
+  - `signal_handler()` - Handler C-compatible pour syscall
+- **Signal Actions**:
+  - SIGHUP: Reload configuration
+  - SIGTERM/SIGINT: Shutdown gracieux
+  - SIGUSR1: Dump statistics
+  - SIGUSR2: Toggle verbose mode
+- Tests avec simulation de signaux
+
+#### Multi-threading System (`src/threading.rs`)
+- **ThreadSafeRegistry** - Registry thread-safe avec RwLock
+  - `Arc<spin::RwLock<Registry>>` - Protection RwLock via spin crate
+  - Multiple readers concurrents (read lock)
+  - Single writer (write lock)
+  - `clone_handle()` - Partage entre threads
+  - Implémentation Send + Sync
+- **RegistryPool** - Pool de registries pour sharding
+  - Distribution via consistent hashing
+  - `by_hash()` - Routage déterministe par service name
+  - `next()` - Round-robin simple
+  - Agrégation stats (`total_services()`, `list_all()`)
+- Tests avec 4 instances et 1000 services
+
+#### Load Balancing (`src/loadbalancer.rs`)
+- **LoadBalancingStrategy** - 4 stratégies natives
+  - `RoundRobin`: Distribution circulaire équitable
+  - `ConsistentHash`: Sticky routing par hash du service name
+  - `LeastConnections`: Routage vers instance la moins chargée
+  - `WeightedRoundRobin`: Distribution selon poids pondérés
+- **RegistryInstance** - Instance avec métriques
+  - `ThreadSafeRegistry` interne
+  - Poids configurables (1-100)
+  - Active connections counter (AtomicUsize)
+  - Total requests counter (AtomicU64)
+  - Health status flag (AtomicBool)
+  - `increment_connections()`, `decrement_connections()`
+  - `set_healthy()`, `is_healthy()`
+- **LoadBalancer** - Gestionnaire d'instances
+  - `select_instance()` - Sélection selon stratégie
+  - Filtre automatique des instances unhealthy
+  - `lookup()`, `register()`, `unregister()`, `heartbeat()` - API complète
+  - `health_check()` - Statut de toutes les instances
+  - `healthy_instances()`, `total_instances()` - Métriques globales
+- Tests complets pour chaque stratégie
+
+#### Binary Daemon (`src/bin/exo_registry_daemon.rs`)
+- **Production Daemon** - Exécutable standalone
+  - Configuration via CLI args ou TOML
+  - `DaemonSettings` - Paramètres de lancement
+  - `from_args()` - Parsing arguments (extensible)
+  - `from_file()` - Chargement TOML
+- **Daemon Features**:
+  - IPC server automatique (si feature `ipc`)
+  - Signal handlers intégrés
+  - Boucle principale avec reload config
+  - Shutdown gracieux (flush registry)
+  - Logging verbose optionnel
+- **Signals supportés**:
+  - SIGHUP: Reload configuration
+  - SIGTERM/SIGINT: Shutdown propre
+  - SIGUSR1: Dump stats
+
+#### Core Improvements
+- **RegistryStats Clone** - Clone manuel pour types atomiques
+  - Clone via load/new sur tous les AtomicU64/AtomicUsize
+  - Permet `stats().clone()` dans ThreadSafeRegistry
+
+#### Dependencies
+- **spin = "0.9"** - RwLock pour no_std multi-threading
+  - Features: `rwlock` (sans mutex, sleeping, ticket_mutex)
+  - No-std compatible, zero allocations
+
+### Changed
+- **Version bump** - 0.2.0 → 0.4.0
+- **lib.rs** - Export des 4 nouveaux modules:
+  - `pub mod config`
+  - `pub mod signals`
+  - `pub mod threading`
+  - `pub mod loadbalancer`
+- **INTEGRATION.md** - Documentation complète des extensions
+  - Exemples d'utilisation pour chaque module
+  - Architecture globale mise à jour
+  - Diagramme avec toutes les phases
+- **ThreadSafeRegistry::lookup()** - Utilise write lock au lieu de read lock
+  - Nécessaire car `Registry::lookup()` modifie le cache LRU (&mut self)
+  - Note ajoutée dans la documentation
+
+### Statistics
+- **Total Lines**: ~7,500+ lignes de code Rust
+- **New Files**: 5 fichiers (config.rs, signals.rs, threading.rs, loadbalancer.rs, exo_registry_daemon.rs)
+- **Tests**: Tests complets pour tous les modules
+- **Compilation**: Success avec warnings (unused imports/dead code)
+- **Build Time**: ~40s en release mode
+
 ## [0.2.0] - 2026-02-06
 
 ### Added - IPC Communication System (Phase 3.2)

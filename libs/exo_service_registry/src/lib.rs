@@ -75,6 +75,12 @@ pub mod ipc;
 pub mod metrics;
 pub mod versioning;
 
+// Optional extensions
+pub mod config;
+pub mod signals;
+pub mod threading;
+pub mod loadbalancer;
+
 // Réexportations publiques
 pub use types::{
     ServiceName, ServiceInfo, ServiceMetadata, ServiceStatus,
