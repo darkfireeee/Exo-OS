@@ -26,7 +26,6 @@ use crate::scheduler::thread::{alloc_thread_id, Thread, ThreadContext, ThreadId,
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::format;
-use alloc::string::ToString;
 use alloc::vec::Vec;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -966,8 +965,8 @@ impl Scheduler {
                     thread.id()
                 ));
 
-                // Get action (utiliser le stub Phase 0)
-                use crate::scheduler::signals_stub::SigAction;
+                // Get signal action
+                use crate::scheduler::signals::SigAction;
                 
                 let action = thread
                     .get_signal_handler(sig)
@@ -990,7 +989,7 @@ impl Scheduler {
                         thread.remove_pending_signal(sig);
                         return true;
                     }
-                    SigAction::Handler { handler, mask: _ } => {
+                    SigAction::Handler { handler, mask: _, flags: _ } => {
                         logger::info(&format!(
                             "Dispatching signal {} to handler {:#x}",
                             sig, handler

@@ -239,8 +239,26 @@ impl PerCpuScheduler {
     #[inline(always)]
     pub fn record_context_switch(&self) {
         self.stats.context_switches.fetch_add(1, Ordering::Relaxed);
-        // TODO: Use real timestamp when time module exports current_ns()
-        self.hot.mark_scheduled(0);
+
+        // Get current timestamp from time module
+        #[cfg(feature = "time")]
+        {
+            if let Some(timestamp_ns) = crate::time::current_ns() {
+                self.hot.mark_scheduled(timestamp_ns);
+            } else {
+                self.hot.mark_scheduled(0);
+            }
+        }
+
+        #[cfg(not(feature = "time"))]
+        {
+            // Use approximation based on TSC if time module not available
+            use crate::bench::rdtsc;
+            let cycles = rdtsc();
+            // Approximate: 3GHz CPU = 3 cycles/ns
+            let approx_ns = cycles / 3;
+            self.hot.mark_scheduled(approx_ns);
+        }
     }
     
     /// Get statistics
@@ -270,7 +288,7 @@ pub struct PerCpuSchedulerStats {
 }
 
 /// Global per-CPU scheduler array
-struct PerCpuSchedulerArray {
+pub struct PerCpuSchedulerArray {
     cpus: [PerCpuScheduler; MAX_CPUS],
     num_cpus: AtomicUsize,
 }
@@ -292,16 +310,16 @@ impl PerCpuSchedulerArray {
     fn init(&self, num_cpus: usize) {
         self.num_cpus.store(num_cpus.min(MAX_CPUS), Ordering::Release);
     }
-    
-    fn get(&self, cpu_id: usize) -> Option<&PerCpuScheduler> {
+
+    pub fn get(&self, cpu_id: usize) -> Option<&PerCpuScheduler> {
         if cpu_id < self.num_cpus.load(Ordering::Acquire) {
             Some(&self.cpus[cpu_id])
         } else {
             None
         }
     }
-    
-    fn num_cpus(&self) -> usize {
+
+    pub fn num_cpus(&self) -> usize {
         self.num_cpus.load(Ordering::Acquire)
     }
 }
@@ -323,17 +341,28 @@ pub fn init_per_cpu_schedulers(num_cpus: usize) {
 #[inline]
 pub fn select_best_cpu_numa(thread_id: ThreadId, current_cpu: usize) -> usize {
     use crate::scheduler::optimizations::select_cpu_numa_aware;
-    
+    use crate::scheduler::core::SCHEDULER;
+
     // Get available CPUs
     let num_cpus = PER_CPU_SCHEDULERS.num_cpus();
     let available: alloc::vec::Vec<usize> = (0..num_cpus).collect();
-    
-    // TODO: Get thread object to read affinity/NUMA hints
-    // For now, select least loaded
-    
+
+    // Try to get thread object to read affinity/NUMA hints
+    let mut selected_cpu = current_cpu;
+
+    if let Some(()) = SCHEDULER.with_thread(thread_id, |thread| {
+        // Use NUMA-aware selection with thread preferences
+        if let Some(cpu) = select_cpu_numa_aware(thread, &available) {
+            selected_cpu = cpu;
+        }
+    }) {
+        return selected_cpu;
+    }
+
+    // Fallback: select least loaded CPU
     let mut best_cpu = current_cpu;
     let mut min_load = usize::MAX;
-    
+
     for cpu in 0..num_cpus {
         if let Some(sched) = PER_CPU_SCHEDULERS.get(cpu) {
             let load = sched.load();
@@ -343,7 +372,7 @@ pub fn select_best_cpu_numa(thread_id: ThreadId, current_cpu: usize) -> usize {
             }
         }
     }
-    
+
     best_cpu
 }
 

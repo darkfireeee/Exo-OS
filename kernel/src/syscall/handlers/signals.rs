@@ -6,12 +6,8 @@
 //! - kill: Send signals to processes
 
 use crate::memory::MemoryResult;
-// ⏸️ Phase 1b: Full signals from posix_x
-// use crate::posix_x::signals::{
-//     SigAction, SigSet, MAX_SIGNAL, SIGKILL, SIGSTOP, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK,
-// };
-// Phase 1: Use stub types from scheduler
-use crate::scheduler::signals_stub::{
+// Full POSIX signal implementation from scheduler
+use crate::scheduler::signals::{
     SigAction, SigSet, MAX_SIGNAL, SIGKILL, SIGSTOP, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK,
 };
 use crate::scheduler::SCHEDULER;
@@ -45,15 +41,15 @@ pub fn sys_sigaction(sig: u32, act: *const SigActionStruct, oldact: *mut SigActi
         // 1. Save old action if requested
         if !oldact.is_null() {
             if let Some(old) = thread.get_signal_handler(sig) {
-                let (handler, mask) = match old {
-                    SigAction::Default => (0, SigSet::empty()),
-                    SigAction::Ignore => (1, SigSet::empty()),
-                    SigAction::Handler { handler, mask } => (handler, mask),
+                let (handler, mask, flags) = match old {
+                    SigAction::Default => (0, SigSet::empty(), 0),
+                    SigAction::Ignore => (1, SigSet::empty(), 0),
+                    SigAction::Handler { handler, mask, flags } => (handler, mask, flags),
                 };
 
                 let old_struct = SigActionStruct {
                     sa_handler: handler,
-                    sa_flags: 0, // TODO: Store flags
+                    sa_flags: flags,
                     sa_restorer: 0,
                     sa_mask: mask,
                 };
@@ -76,6 +72,7 @@ pub fn sys_sigaction(sig: u32, act: *const SigActionStruct, oldact: *mut SigActi
                 SigAction::Handler {
                     handler: new_act.sa_handler,
                     mask: new_act.sa_mask,
+                    flags: new_act.sa_flags,
                 }
             };
 

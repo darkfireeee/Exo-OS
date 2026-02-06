@@ -9,8 +9,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-// ✅ Phase 0: Utiliser les stubs temporaires pour signaux (sera posix_x en Phase 1)
-use crate::scheduler::signals_stub::{SignalStackFrame, SigSet, SigAction};
+// Full POSIX signal implementation
+use crate::scheduler::signals::{SignalStackFrame, SigSet, SigAction};
+
+// Logging support
+use log::{debug, info, warn, trace};
 
 /// Thread ID type
 pub type ThreadId = u64;
@@ -175,6 +178,9 @@ pub struct Thread {
     /// CPU affinity (which CPU this thread prefers)
     cpu_affinity: Option<usize>,
 
+    /// NUMA node affinity (which memory node this thread prefers)
+    numa_node: Option<usize>,
+
     /// Runtime statistics
     total_runtime_ns: AtomicU64,
     context_switches: AtomicU64,
@@ -200,7 +206,7 @@ pub struct Thread {
     /// Determines if we need to save FPU state on context switch
     fpu_used: core::sync::atomic::AtomicBool,
 
-    // Phase 0: Signal handling (stubs temporaires)
+    // Full POSIX signal handling implementation
     /// Blocked signals mask
     sigmask: spin::Mutex<SigSet>,
 
@@ -250,6 +256,7 @@ impl Thread {
             kernel_stack_size: stack_size,
             user_stack: None,
             cpu_affinity: None,
+            numa_node: None,
             total_runtime_ns: AtomicU64::new(0),
             context_switches: AtomicU64::new(0),
             ema_runtime_ns: AtomicU64::new(0),
@@ -326,6 +333,7 @@ impl Thread {
             kernel_stack_size,
             user_stack: Some(user_stack_top),
             cpu_affinity: None,
+            numa_node: None,
             total_runtime_ns: AtomicU64::new(0),
             context_switches: AtomicU64::new(0),
             ema_runtime_ns: AtomicU64::new(0),
@@ -558,6 +566,10 @@ impl Thread {
             context: self.context,
             sig,
             ret_addr: 0, // Caller (musl trampoline) should handle return
+            si_signo: sig,
+            si_errno: 0,
+            si_code: 0,
+            _padding: 0,
         };
 
         // 4. Write frame to stack
@@ -636,10 +648,20 @@ impl Thread {
     pub fn cpu_affinity(&self) -> Option<usize> {
         self.cpu_affinity
     }
-    
+
     /// Set CPU affinity (None = can run anywhere)
     pub fn set_cpu_affinity(&mut self, affinity: Option<usize>) {
         self.cpu_affinity = affinity;
+    }
+
+    /// Set NUMA node affinity (None = can use any node)
+    pub fn set_numa_node(&mut self, node: Option<usize>) {
+        self.numa_node = node;
+    }
+
+    /// Get NUMA node affinity
+    pub fn numa_node(&self) -> Option<usize> {
+        self.numa_node
     }
 }
 
@@ -673,7 +695,7 @@ pub fn child_entry_point() -> ! {
     use crate::scheduler::{SCHEDULER, ThreadState};
     
     let tid = SCHEDULER.current_thread_id().unwrap_or(0);
-    log::debug!("Child thread {} started, becoming zombie", tid);
+    debug!("Child thread {} started, becoming zombie", tid);
     
     // Set thread state to Terminated (zombie)
     SCHEDULER.with_current_thread(|thread| {
@@ -681,7 +703,7 @@ pub fn child_entry_point() -> ! {
         thread.set_exit_status(0);
     });
     
-    log::info!("Process {} exiting with code 0 (zombie state)", tid);
+    info!("Process {} exiting with code 0 (zombie state)", tid);
     
     // Yield forever - scheduler won't schedule terminated threads
     loop {
@@ -704,7 +726,7 @@ impl Thread {
         child_pid: u64,
         captured_regs: (u64, u64, u64, u64, u64, u64, u64), // (rbx, rbp, r12-r15, rsp)
     ) -> Self {
-        log::debug!("Thread::fork_from: parent={}, child_id={}, copying full context", parent.id, child_id);
+        debug!("Thread::fork_from: parent={}, child_id={}, copying full context", parent.id, child_id);
         
         let (rbx, rbp, r12, r13, r14, r15, captured_rsp) = captured_regs;
         
@@ -768,11 +790,11 @@ impl Thread {
             // Adjust RSP to point to child's stack
             context.rsp = child_rsp;
             
-            log::debug!("fork_from: copied {} bytes of stack data, child_rsp={:#x}", 
+            debug!("fork_from: copied {} bytes of stack data, child_rsp={:#x}", 
                        parent_stack_used, child_rsp);
         } else {
             // Fallback: use child_entry_point if stack copy fails
-            log::warn!("fork_from: stack copy failed (used={}, size={}), using child_entry_point",
+            warn!("fork_from: stack copy failed (used={}, size={}), using child_entry_point",
                       parent_stack_used, stack_size);
             unsafe {
                 crate::scheduler::switch::windowed::init_context(
@@ -793,15 +815,16 @@ impl Thread {
             kernel_stack_size: stack_size,
             user_stack: parent.user_stack,
             cpu_affinity: parent.cpu_affinity,
+            numa_node: parent.numa_node,
             total_runtime_ns: AtomicU64::new(0),
             context_switches: AtomicU64::new(0),
             ema_runtime_ns: AtomicU64::new(0),
-            
+
             // Set parent-child relationship
             parent_id: AtomicU64::new(parent.id),
             children: spin::Mutex::new(Vec::new()),
             exit_status: core::sync::atomic::AtomicI32::new(0),
-            
+
             // Phase 2c: FPU state (child inherits parent's FPU state)
             fpu_state: {
                 let mut state = crate::arch::x86_64::utils::fpu::FpuState::new();
@@ -810,7 +833,7 @@ impl Thread {
                 state
             },
             fpu_used: core::sync::atomic::AtomicBool::new(parent.fpu_used.load(Ordering::Relaxed)),
-            
+
             // Copy signal handling state
             sigmask: spin::Mutex::new(*parent.sigmask.lock()),
             pending_signals: spin::Mutex::new(SigSet::empty()),
@@ -822,7 +845,7 @@ impl Thread {
         // Add child to parent's children list
         parent.add_child(child_id);
         
-        log::info!("Thread fork: parent={} -> child={}", parent.id, child_id);
+        info!("Thread fork: parent={} -> child={}", parent.id, child_id);
         
         child
     }
@@ -850,7 +873,7 @@ fn user_mode_trampoline() -> ! {
         );
     }
     
-    log::info!(
+    info!(
         "User mode trampoline: entry={:#x}, stack={:#x}",
         entry_point, user_stack
     );
@@ -879,14 +902,14 @@ fn user_mode_trampoline() -> ! {
 
 impl Drop for Thread {
     fn drop(&mut self) {
-        log::debug!("Thread {} ({}) cleanup started", self.id, self.name);
+        debug!("Thread {} ({}) cleanup started", self.id, self.name);
         
         // 1. Cleanup kernel stack (already managed by Box)
         // kernel_stack: Box<[u8]> automatically freed
         
         // 2. Cleanup user stack if exists
         if let Some(user_stack_box) = self.user_stack.take() {
-            log::trace!("Freeing user stack for thread {}", self.id);
+            trace!("Freeing user stack for thread {}", self.id);
             drop(user_stack_box); // Explicit drop for clarity
         }
         
@@ -894,7 +917,7 @@ impl Drop for Thread {
         #[cfg(target_arch = "x86_64")]
         {
             if self.context.pcid != 0 {
-                log::trace!("Freeing PCID {} for thread {}", self.context.pcid, self.id);
+                trace!("Freeing PCID {} for thread {}", self.context.pcid, self.id);
                 crate::arch::x86_64::utils::pcid::free(self.context.pcid);
             }
         }
@@ -905,6 +928,6 @@ impl Drop for Thread {
         
         // 7. FPU state auto-dropped (FpuState implements Drop if needed)
         
-        log::debug!("Thread {} ({}) cleanup complete", self.id, self.name);
+        debug!("Thread {} ({}) cleanup complete", self.id, self.name);
     }
 }

@@ -6,7 +6,7 @@ pub mod simd;
 pub mod benchmark;
 
 pub use windowed::{switch, switch_full, switch_to, init_context, init};
-// FPU/SIMD are stubs for now
+// Full FPU/SIMD state save/restore with lazy switching
 pub use fpu::{save_fpu_state, restore_fpu_state};
 pub use simd::{save_simd_state, restore_simd_state};
 pub use benchmark::{benchmark_switch, SwitchBenchmark};
