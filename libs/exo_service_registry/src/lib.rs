@@ -65,6 +65,9 @@ pub mod protocol;
 #[cfg(feature = "ipc")]
 pub mod daemon;
 
+#[cfg(feature = "ipc")]
+pub mod serialize;
+
 // Réexportations publiques
 pub use types::{
     ServiceName, ServiceInfo, ServiceMetadata, ServiceStatus,
