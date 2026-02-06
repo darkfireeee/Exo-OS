@@ -167,9 +167,8 @@ pub unsafe fn switch(
     };
     let new_rsp = (*new_ctx).rsp;
     windowed_context_switch(old_rsp_ptr, new_rsp);
-    
-    // Phase 2c TODO #2: Set CR0.TS to enable lazy FPU switching
-    // Next FPU instruction will trigger #NM exception
+
+    // Enable lazy FPU switching: Set CR0.TS to trigger #NM on next FPU instruction
     crate::arch::x86_64::utils::fpu::set_task_switched();
 }
 
@@ -190,8 +189,8 @@ pub unsafe fn switch_full(
     }
     
     windowed_context_switch_full(old_ctx, new_ctx);
-    
-    // Phase 2c TODO #2: Set CR0.TS to enable lazy FPU switching
+
+    // Enable lazy FPU switching
     crate::arch::x86_64::utils::fpu::set_task_switched();
 }
 
@@ -209,10 +208,10 @@ pub unsafe fn init_context(
 #[inline(always)]
 pub unsafe fn switch_to(new_ctx: *const ThreadContext) -> ! {
     windowed_context_switch(core::ptr::null_mut(), (*new_ctx).rsp);
-    
-    // Phase 2c TODO #2: Set CR0.TS to enable lazy FPU switching
+
+    // Enable lazy FPU switching
     crate::arch::x86_64::utils::fpu::set_task_switched();
-    
+
     core::hint::unreachable_unchecked()
 }
 

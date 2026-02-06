@@ -94,12 +94,23 @@ fn select_least_loaded_cpu(available_cpus: &[usize]) -> Option<usize> {
         return None;
     }
 
-    // For now, simple round-robin
-    // TODO: Use real CPU load metrics
-    static NEXT_CPU: AtomicUsize = AtomicUsize::new(0);
-    
-    let idx = NEXT_CPU.fetch_add(1, Ordering::Relaxed) % available_cpus.len();
-    Some(available_cpus[idx])
+    // Use real CPU load metrics from per-CPU schedulers
+    use crate::scheduler::per_cpu::PER_CPU_SCHEDULERS;
+
+    let mut best_cpu = available_cpus[0];
+    let mut min_load = usize::MAX;
+
+    for &cpu in available_cpus {
+        if let Some(sched) = PER_CPU_SCHEDULERS.get(cpu) {
+            let load = sched.load();
+            if load < min_load {
+                min_load = load;
+                best_cpu = cpu;
+            }
+        }
+    }
+
+    Some(best_cpu)
 }
 
 // ============================================================================
@@ -330,22 +341,19 @@ impl LoadBalancer {
 /// Check if current CPU is idle
 #[inline(always)]
 pub fn is_cpu_idle(cpu_id: usize) -> bool {
-    // TODO: Read from per-CPU idle flag
-    // For now, always return false
-    false
+    use crate::scheduler::idle::is_cpu_idle as check_idle;
+    check_idle(cpu_id as u32)
 }
 
 /// Get current CPU ID
 #[inline(always)]
 pub fn current_cpu() -> usize {
-    // Read from CPU-local storage
     #[cfg(target_arch = "x86_64")]
     {
-        // Use APIC ID or GS-based per-CPU data
-        // For now, stub to 0
-        0
+        use crate::scheduler::smp_init::current_cpu_id;
+        current_cpu_id()
     }
-    
+
     #[cfg(not(target_arch = "x86_64"))]
     {
         0
