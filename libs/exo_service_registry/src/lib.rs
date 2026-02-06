@@ -71,6 +71,10 @@ pub mod serialize;
 #[cfg(feature = "ipc")]
 pub mod ipc;
 
+// Advanced features (Phase 5)
+pub mod metrics;
+pub mod versioning;
+
 // Réexportations publiques
 pub use types::{
     ServiceName, ServiceInfo, ServiceMetadata, ServiceStatus,
