@@ -8,10 +8,13 @@ use alloc::boxed::Box;
 pub mod builder;
 pub mod local;
 pub mod park;
+pub mod tls;
+mod storage;
 
 // Réexportations
 pub use builder::Builder;
 pub use local::{LocalKey, AccessError};
+pub use tls::{TlsBlock, TlsTemplate, init_tls_template, get_tls_template, allocate_current_thread_tls};
 
 use crate::error::ThreadError;
 use core::any::Any;
@@ -37,15 +40,22 @@ impl<T> JoinHandle<T> {
     /// Attend que le thread se termine et retourne son résultat
     pub fn join(self) -> core::result::Result<T, ThreadError>
     where
-        T: 'static,
+        T: Send + 'static,
     {
         #[cfg(feature = "test_mode")]
         {
-            // En mode test, impossible de retourner T sans le stocker
-            // Cette limitation est acceptable car test_mode est pour les tests unitaires
-            panic!("JoinHandle::join not fully available in test mode - use integration tests");
+            // En mode test, utilise le système de stockage
+            use crate::syscall::thread::thread_join;
+
+            unsafe {
+                thread_join(self.thread_id, core::ptr::null_mut())?;
+            }
+
+            // Récupère le résultat depuis le stockage
+            storage::take_result::<T>(self.thread_id)
+                .ok_or(ThreadError::JoinFailed)
         }
-        
+
         #[cfg(not(feature = "test_mode"))]
         {
             use crate::syscall::thread::thread_join;
@@ -55,11 +65,9 @@ impl<T> JoinHandle<T> {
                 thread_join(self.thread_id, core::ptr::null_mut())?;
             }
 
-            // Note: Dans une implémentation complète, il faudrait:
-            // 1. Un mécanisme pour stocker le résultat du thread (Box, TLS, etc.)
-            // 2. Récupérer ce résultat après le join
-            // Pour l'instant, on ne peut pas retourner T de manière sûre
-            Err(ThreadError::JoinFailed)
+            // Récupère le résultat depuis le stockage global
+            storage::take_result::<T>(self.thread_id)
+                .ok_or(ThreadError::JoinFailed)
         }
     }
 

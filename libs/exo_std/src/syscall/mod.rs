@@ -30,7 +30,8 @@ pub enum SyscallNumber {
     GetTid = 13,
     ThreadYield = 14,
     ThreadSleep = 15,
-    
+    ArchPrctl = 158,  // Architecture-specific thread control
+
     // Memory
     Mmap = 20,
     Munmap = 21,

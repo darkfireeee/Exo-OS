@@ -16,10 +16,8 @@
 //! - **syscall**: Couche d'abstraction pour appels système
 
 #![no_std]
-#![feature(alloc_error_handler)]
 #![feature(min_specialization)]
 #![feature(const_trait_impl)]
-#![feature(const_mut_refs)]
 
 extern crate alloc;
 
@@ -34,6 +32,9 @@ pub mod process;
 pub mod security;
 pub mod thread;
 pub mod time;
+pub mod perf;
+pub mod async_rt;
+pub mod bench;
 
 // Réexportations pour l'API publique
 pub use error::{Result, ExoStdError};
@@ -64,7 +65,8 @@ pub use sync::{
 
 // Collections
 pub use collections::{
-    BoundedVec, SmallVec, RingBuffer,
+    BoundedVec, SmallVec,
+    RingBuffer, RingBufferMpsc, RingBufferMpmc,
     IntrusiveList, IntrusiveNode,
     RadixTree, CapacityError,
 };
@@ -161,13 +163,6 @@ fn sys_memory_size() -> usize {
 #[inline]
 pub fn init() {
     // Configuration initiale si nécessaire
-}
-
-/// Handler global pour les erreurs d'allocation
-#[cfg(not(test))]
-#[alloc_error_handler]
-fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
-    panic!("Allocation error: {:?}", layout);
 }
 
 /// Macro print! pour écrire sur stdout

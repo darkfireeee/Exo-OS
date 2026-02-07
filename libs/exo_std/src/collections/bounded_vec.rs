@@ -9,7 +9,6 @@ use core::ops::{Deref, DerefMut, Index, IndexMut, RangeBounds};
 use core::ptr;
 use core::slice::{self, SliceIndex};
 use core::fmt;
-use core::mem;
 
 /// Erreur quand la capacité est dépassée
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

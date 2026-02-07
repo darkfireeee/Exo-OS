@@ -38,16 +38,23 @@ impl Builder {
     {
         #[cfg(feature = "test_mode")]
         {
-            let _ = f;
-            Ok(JoinHandle::new(123))
+            use super::storage;
+
+            // Alloue un ID de thread et stocke le résultat immédiatement
+            let thread_id = storage::allocate_slot();
+            let result = f();
+            storage::store_result(thread_id, result);
+
+            Ok(JoinHandle::new(thread_id))
         }
-        
+
         #[cfg(not(feature = "test_mode"))]
         {
             extern crate alloc;
             use alloc::boxed::Box;
             use alloc::vec;
             use crate::syscall::thread::thread_create;
+            use super::storage;
 
             // Determine stack size
             const DEFAULT_STACK_SIZE: usize = 2 * 1024 * 1024; // 2 MB
@@ -60,18 +67,23 @@ impl Builder {
             // Leak the stack - kernel will manage it
             core::mem::forget(stack);
 
-            // Encapsuler la closure dans une Box pour la passer au thread
-            let boxed_closure = Box::new(f);
-            let closure_ptr = Box::into_raw(boxed_closure);
+            // Alloue un thread ID depuis le système de stockage
+            let thread_id = storage::allocate_slot();
+
+            // Encapsuler la closure ET le thread_id dans une Box
+            let boxed_data = Box::new((f, thread_id));
+            let data_ptr = Box::into_raw(boxed_data);
 
             unsafe {
-                let thread_id = thread_create(
+                let kernel_tid = thread_create(
                     wrapper::<F, T>,
-                    closure_ptr as *mut u8,
+                    data_ptr as *mut u8,
                     stack_ptr,
                     stack_size,
                 )? as ThreadId;
 
+                // Note: On utilise notre thread_id alloué, pas celui du kernel
+                // pour garantir l'unicité dans le système de stockage
                 Ok(JoinHandle::new(thread_id))
             }
         }
@@ -108,23 +120,20 @@ impl core::fmt::Debug for Builder {
 extern "C" fn wrapper<F, T>(arg: *mut u8) -> *mut u8
 where
     F: FnOnce() -> T,
+    T: Send + 'static,
 {
     extern crate alloc;
     use alloc::boxed::Box;
+    use super::storage;
 
     unsafe {
-        // Récupérer la closure depuis le pointeur
-        let closure_ptr = arg as *mut F;
-        let closure = Box::from_raw(closure_ptr);
+        // Récupérer le pointeur vers la paire (closure, thread_id)
+        let ptr = arg as *mut (F, super::ThreadId);
+        let (closure, thread_id) = *Box::from_raw(ptr);
 
-        // Exécuter la closure
-        let _result = (*closure)();
-
-        // Note: Le résultat est perdu ici car on ne peut pas le stocker de manière sûre
-        // sans un mécanisme de stockage dédié (TLS, structure globale, etc.)
-        // Une implémentation complète nécessiterait:
-        // - Un système de storage pour les résultats
-        // - Un mécanisme de récupération dans join()
+        // Exécuter la closure et stocker le résultat
+        let result = closure();
+        storage::store_result(thread_id, result);
 
         core::ptr::null_mut()
     }

@@ -7,7 +7,7 @@
 
 use core::ops::{Deref, DerefMut, Index, IndexMut};
 use core::ptr;
-use core::mem::{self, MaybeUninit, ManuallyDrop};
+use core::mem::{MaybeUninit, ManuallyDrop};
 use core::slice;
 use core::fmt;
 use super::bounded_vec::CapacityError;

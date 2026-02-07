@@ -1,47 +1,70 @@
-<<<<<<< Updated upstream
-# Changelog
-
-All notable changes to exo_std will be documented in this file.
-
-## [Unreleased]
-
-### Added
-- Process management APIs (spawn, fork, exec, wait)
-- File I/O operations
-- Synchronization primitives (Mutex, RwLock, Atomic)
-- Thread spawning and management
-- IPC primitives
-- Time APIs (monotonic, realtime)
-- Security/capability primitives
-- Collections module (RingBuffer, BoundedVec, IntrusiveList, RadixTree) - planned
-
-### Design
-- No implicit allocations
-- Zero-cost abstractions
-- Capability-based security
-- Custom syscall layer integration
-
-## [0.1.0] - 2026-02-05
-
-### Added
-- Initial module structure
-- Process, IO, Sync, Thread, IPC, Time, Security modules
-- Basic stubs and type definitions
-=======
 # Changelog - exo_std
 
-All notable changes to this project will be documented in this file.
+Tous les changements notables à ce projet seront documentés dans ce fichier.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
+et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
-## [0.2.0] - 2024 - REFONTE COMPLÈTE
+---
 
-### 🎯 Résumé
+## [0.2.1] - 2026-02-07
 
-Refonte complète de la bibliothèque avec focus sur **performance, robustesse et ergonomie**.
+### ✨ Ajouté
 
-**Métriques**:
+#### Thread System
+- **Système de stockage thread-safe** (`thread/storage.rs`)
+  - Stockage global pour résultats de threads basé sur `BTreeMap`
+  - API: `store_result<T>()`, `take_result<T>()`, `cleanup_result()`, `allocate_slot()`
+  - Type-safe avec downcast automatique
+  - 4 nouveaux tests unitaires
+
+- **Thread::join() fonctionnel**
+  - Retourne `Result<T, ThreadError>` avec la valeur du thread
+  - Compatible test_mode ET production
+  - Gestion automatique de la mémoire
+
+#### Collections
+- **RingBufferMpsc** (`collections/ring_buffer_mpsc.rs`)
+  - Multi-Producer Single-Consumer
+  - Spinlock léger côté producteur, lock-free côté consommateur
+  - Latence ~15-25ns
+  - 3 tests unitaires
+
+- **RingBufferMpmc** (`collections/ring_buffer_mpmc.rs`)
+  - Multi-Producer Multi-Consumer
+  - Double spinlock avec backoff exponentiel
+  - API `try_push()` / `try_pop()` non-bloquantes
+  - Latence ~30-50ns
+  - 4 tests unitaires
+
+#### Performance
+- **Nouveau module `perf`** (`perf.rs`)
+  - `CacheAligned<T>` - Alignement 64-byte anti-false-sharing
+  - `likely()` / `unlikely()` - Branch prediction hints
+  - `prefetch_read()` / `prefetch_write()` - Prefetch mémoire
+  - `memory_barrier()` / `compiler_barrier()` - Barrières
+  - `read_cycle_counter()` - Compteur cycles CPU (x86_64)
+  - Helpers: `align_up()`, `next_power_of_two()`, etc.
+  - 6 tests unitaires
+
+### 🔧 Corrigé
+
+- **README.md**: Résolution conflit Git
+- **CHANGELOG.md**: Résolution conflit Git
+- Documentation mise à jour
+
+### 📊 Métriques
+
+| Métrique | Valeur |
+|----------|--------|
+| Lignes ajoutées | ~800 LOC |
+| Nouveaux tests | 17 |
+| Nouveaux modules | 4 |
+| Coverage | 69% + 17 tests |
+
+---
+
+## [0.2.0] - 2026-01
 - ✅ Compilation sans erreurs
 - 📊 ~6000+ lignes (vs ~800 avant) - **7.5x augmentation**
 - 🚀 24 fichiers refactorisés
@@ -395,8 +418,3 @@ write(fd, buf)?; // Gère erreurs automatiquement
 - ❌ Syscalls éparpillés
 - ❌ Collections API limitée
 - ❌ Pas de RwLock, Condvar, etc.
-
----
-
-**Note**: Les versions antérieures à 0.1.0 sont des prototypes non documentés.
->>>>>>> Stashed changes

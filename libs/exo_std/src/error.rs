@@ -102,6 +102,14 @@ pub enum ThreadError {
     ResourceExhausted,
     /// Nom invalide
     InvalidName,
+    /// TLS non initialisé
+    TlsNotInitialized,
+    /// Template TLS invalide
+    TlsInvalid,
+    /// Échec d'allocation TLS
+    TlsAllocationFailed,
+    /// Échec de configuration TLS
+    TlsSetupFailed,
     /// Autre erreur thread
     Other,
 }
@@ -117,6 +125,12 @@ pub enum SyncError {
     WouldBlock,
     /// Deadlock détecté
     Deadlock,
+    /// Échec d'attente (futex wait failed)
+    WaitFailed,
+    /// Échec de verrouillage
+    LockFailed,
+    /// Échec de déverrouillage
+    UnlockFailed,
     /// Autre erreur sync
     Other,
 }
@@ -241,6 +255,10 @@ impl fmt::Display for ThreadError {
             ThreadError::Panicked => write!(f, "thread panicked"),
             ThreadError::ResourceExhausted => write!(f, "resource exhausted"),
             ThreadError::InvalidName => write!(f, "invalid thread name"),
+            ThreadError::TlsNotInitialized => write!(f, "TLS not initialized"),
+            ThreadError::TlsInvalid => write!(f, "invalid TLS template"),
+            ThreadError::TlsAllocationFailed => write!(f, "TLS allocation failed"),
+            ThreadError::TlsSetupFailed => write!(f, "TLS setup failed"),
             ThreadError::Other => write!(f, "other thread error"),
         }
     }
@@ -253,6 +271,9 @@ impl fmt::Display for SyncError {
             SyncError::Timeout => write!(f, "operation timed out"),
             SyncError::WouldBlock => write!(f, "operation would block"),
             SyncError::Deadlock => write!(f, "deadlock detected"),
+            SyncError::WaitFailed => write!(f, "wait operation failed"),
+            SyncError::LockFailed => write!(f, "lock operation failed"),
+            SyncError::UnlockFailed => write!(f, "unlock operation failed"),
             SyncError::Other => write!(f, "other sync error"),
         }
     }

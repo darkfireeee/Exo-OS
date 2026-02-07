@@ -12,6 +12,7 @@ pub mod barrier;
 pub mod once;
 pub mod atomic;
 pub mod semaphore;
+pub mod futex;
 
 pub use mutex::{Mutex, MutexGuard};
 pub use rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -20,6 +21,7 @@ pub use barrier::Barrier;
 pub use once::{Once, OnceLock};
 pub use atomic::{AtomicCell, Ordering};
 pub use semaphore::Semaphore;
+pub use futex::{FutexMutex, FutexCondvar, FutexSemaphore};
 
 /// Result pour les opérations de synchronisation
 pub type SyncResult<T> = Result<T, crate::error::SyncError>;

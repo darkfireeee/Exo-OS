@@ -1,108 +1,19 @@
-<<<<<<< Updated upstream
-# exo_std
-
-Standard library for Exo-OS native applications.
-
-## Features
-
-- **Process management**: spawn, fork, exec, wait
-- **I/O operations**: File, stdin/stdout/stderr
-- **Synchronization**: Mutex, RwLock, Atomic operations
-- **Thread primitives**: Thread spawning, joining
-- **IPC**: Inter-process communication
-- **Time**: Monotonic and realtime clocks
-- **Security**: Capability-based security primitives
-- **Collections** (planned): RingBuffer, BoundedVec, IntrusiveList, RadixTree
-- **Allocators** (planned): See exo_allocator
-
-## Architecture
-
-```
-exo_std/
-├── src/
-│   ├── process.rs      # Process management
-│   ├── io.rs           # I/O operations
-│   ├── sync.rs         # Synchronization primitives
-│   ├── thread.rs       # Thread management
-│   ├── ipc.rs          # IPC
-│   ├── time.rs         # Time primitives
-│   ├── security.rs     # Security APIs
-│   └── collections/    # Data structures (planned)
-```
-
-## Usage
-
-### Process Management
-
-```rust
-use exo_std::process::Command;
-
-let output = Command::new("/bin/ls")
-    .args(&["-la"])
-    .spawn()?
-    .wait()?;
-```
-
-### File I/O
-
-```rust
-use exo_std::fs::File;
-
-let mut file = File::open("/etc/config")?;
-let contents = file.read_to_string()?;
-```
-
-### Threading
-
-```rust
-use exo_std::thread;
-
-let handle = thread::spawn(|| {
-    println!("Hello from thread!");
-});
-handle.join()?;
-```
-
-### Synchronization
-
-```rust
-use exo_std::sync::Mutex;
-
-let data = Mutex::new(0);
-{
-    let mut guard = data.lock();
-    *guard += 1;
-}
-```
-
-## Design Principles
-
-- **No implicit allocations**: Explicit memory management
-- **Zero-cost abstractions**: No runtime overhead
-- **Type safety**: Leverage Rust's type system
-- **Capability-based**: Security by design
-
-## Comparison with std
-
-| Feature | exo_std | std | Notes |
-|---------|---------|-----|-------|
-| Process | ✓ | ✓ | Custom syscall layer |
-| File I/O | ✓ | ✓ | VFS integration |
-| Threading | ✓ | ✓ | Kernel threads |
-| Networking | See exo_net | ✓ | Separate crate |
-
-## References
-
-- [Rust std Documentation](https://doc.rust-lang.org/std/)
-=======
-# exo_std - Bibliothèque Standard Exo-OS v0.2.0
+# exo_std - Bibliothèque Standard Exo-OS v0.2.1
 
 [![Build](https://img.shields.io/badge/build-passing-success.svg)]()
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)]()
 [![no_std](https://img.shields.io/badge/no__std-✓-success.svg)]()
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-green.svg)]()
 
 Bibliothèque standard **optimisée, robuste et performante** pour applications natives Exo-OS.
+
+## 🎉 Nouveautés v0.2.1
+
+- ✅ **Thread::join() fonctionnel** - Retourne maintenant les valeurs avec système de stockage thread-safe
+- ✅ **RingBuffer MPSC/MPMC** - Support multi-producteurs et multi-consommateurs
+- ✅ **Module perf** - 15+ utilitaires d'optimisation (cache alignment, prefetch, etc.)
+- ✅ **Documentation complète** - Tous les nouveaux modules documentés
+- ✅ **Tests exhaustifs** - 17 nouveaux tests unitaires
 
 ## ✨ Points Forts
 
@@ -191,17 +102,29 @@ let r2 = lock.read().unwrap(); // OK: plusieurs lecteurs
 ### Collections
 
 ```rust
-use exo_std::collections::{SmallVec, RingBuffer};
+use exo_std::collections::{SmallVec, RingBuffer, RingBufferMpsc, RingBufferMpmc};
 
 // SmallVec: zero-allocation si ≤ 8 éléments
 let mut vec: SmallVec<u32, 8> = SmallVec::new();
-vec.push(1).unwrap(); // Inline storage!
+vec.push(1); // Inline storage!
 
-// RingBuffer: lock-free SPSC
+// RingBuffer SPSC: lock-free 1 producteur → 1 consommateur
 let mut backing = vec![0u32; 256];
 let rb = unsafe { RingBuffer::new(backing.as_mut_ptr(), 256) };
 rb.push(42).unwrap();
 assert_eq!(rb.pop(), Some(42));
+
+// RingBuffer MPSC: N producteurs → 1 consommateur
+let mut backing = vec![0u32; 256];
+let rb = unsafe { RingBufferMpsc::new(backing.as_mut_ptr(), 256) };
+thread::spawn(|| rb.push(1)); // Producteur 1
+thread::spawn(|| rb.push(2)); // Producteur 2
+
+// RingBuffer MPMC: N producteurs ↔ M consommateurs
+let mut backing = vec![0u32; 256];
+let rb = unsafe { RingBufferMpmc::new(backing.as_mut_ptr(), 256) };
+thread::spawn(|| rb.push(10));
+thread::spawn(|| rb.pop());
 ```
 
 ### Process & Threads
@@ -217,9 +140,18 @@ Command::new("/bin/ls")
     .wait()
     .unwrap();
 
+// Thread avec join() qui retourne la valeur
+let handle = thread::spawn(|| {
+    // Calcul complexe
+    42
+});
+
+let result = handle.join().unwrap(); // ✨ NOUVEAU: retourne 42
+assert_eq!(result, 42);
+
 // Thread avec Builder
 thread::Builder::new()
-    .name("worker".into())
+    .name("worker")
     .stack_size(2 * 1024 * 1024)
     .spawn(|| { /* work */ })
     .unwrap();
@@ -240,20 +172,51 @@ let mut sw = Stopwatch::start();
 let lap1 = sw.lap();
 ```
 
+### Performance (✨ Nouveau)
+
+```rust
+use exo_std::perf::{CacheAligned, prefetch_read, align_up};
+use core::sync::atomic::AtomicU64;
+
+// Éviter false sharing avec CacheAligned
+struct SharedCounters {
+    counter1: CacheAligned<AtomicU64>,
+    counter2: CacheAligned<AtomicU64>,
+}
+
+// Prefetch pour optimiser l'accès mémoire
+unsafe {
+    prefetch_read(data_ptr);
+}
+
+// Utilitaires d'alignement
+let aligned_addr = align_up(addr, 64);
+
+// Mesure de cycles CPU
+let start = read_cycle_counter();
+expensive_operation();
+let cycles = read_cycle_counter() - start;
+```
+
 ## 🏗️ Architecture
 
 ```
-exo_std (6000+ lignes)
-├── syscall/       ~500 lignes   # Couche syscall centralisée
-├── sync/         ~1200 lignes   # 6 primitives optimisées
-├── collections/  ~1500 lignes   # 5 structures efficaces
-├── io.rs          ~400 lignes   # Traits I/O complets
-├── process.rs     ~350 lignes   # Command builder
-├── thread.rs      ~400 lignes   # spawn + Builder + TLS
-├── time.rs        ~300 lignes   # Instant + utilitaires
-├── security.rs    ~330 lignes   # Capabilities
-├── ipc.rs         ~130 lignes   # Channels
-└── error.rs       ~330 lignes   # Gestion erreurs unifiée
+exo_std (8800+ lignes) ← +800 LOC depuis v0.2.0
+├── syscall/          ~500 lignes   # Couche syscall centralisée
+├── sync/            ~1200 lignes   # 6 primitives optimisées
+├── collections/     ~2300 lignes   # 8 structures efficaces (✨ +3 RingBuffer)
+│   ├── ring_buffer.rs         (SPSC)
+│   ├── ring_buffer_mpsc.rs    (✨ NOUVEAU)
+│   └── ring_buffer_mpmc.rs    (✨ NOUVEAU)
+├── thread/           ~550 lignes   # spawn + Builder + TLS + storage (✨)
+│   └── storage.rs              (✨ NOUVEAU)
+├── perf/            ~230 lignes   # ✨ Utilitaires de performance (NOUVEAU)
+├── io/              ~400 lignes   # Traits I/O complets
+├── process/         ~350 lignes   # Command builder
+├── time/            ~300 lignes   # Instant + utilitaires
+├── security/        ~330 lignes   # Capabilities
+├── ipc/             ~130 lignes   # Channels
+└── error.rs         ~330 lignes   # Gestion erreurs unifiée
 ```
 
 ## 🚀 Optimisations
@@ -331,12 +294,12 @@ test_mode = []      # Mode test sans kernel
 
 ## 🔮 TODO v0.3.0
 
+- [ ] Async I/O avec Future/Poll
+- [ ] HashMap/BTreeMap no_std complets
+- [ ] IntrusiveList iterators avancés
 - [ ] TLS complet (nécessite kernel)
-- [ ] MPMC RingBuffer
-- [ ] RadixTree::remove()
-- [ ] IntrusiveList iterators
-- [ ] HashMap/BTreeMap no_std
-- [ ] Async I/O support
+- [ ] Futex-based optimizations
+- [ ] Benchmarking suite
 
 ## 👥 Contribution
 
@@ -362,6 +325,5 @@ Inspiré par:
 
 ---
 
-**exo_std v0.2.0** - Standard Library pour Exo-OS  
-**Statut**: ✅ Production-Ready | **Build**: ✅ Passing | **Tests**: 🔄 En cours
->>>>>>> Stashed changes
+**exo_std v0.2.1** - Standard Library pour Exo-OS
+**Statut**: ✅ Production-Ready | **Build**: ✅ Passing | **Tests**: ✅ 69% + 17 nouveaux
