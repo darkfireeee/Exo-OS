@@ -7,7 +7,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use spin::RwLock;
 
-use crate::fs::vfs::inode::{Inode, InodePermissions, InodeType};
+use crate::fs::core::vfs::inode::{Inode, InodePermissions, InodeType};
 use crate::fs::{FsError, FsResult};
 use crate::ipc::fusion_ring::FusionRing;
 use crate::posix_x::core::fd_table::GLOBAL_FD_TABLE;

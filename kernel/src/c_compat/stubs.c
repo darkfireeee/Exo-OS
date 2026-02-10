@@ -132,3 +132,82 @@ uint8_t serial_getc(void) {
     while (!(inb(COM1_PORT + 5) & 0x01));
     return inb(COM1_PORT);
 }
+
+// Crypto stubs (for exo_crypto linkage)
+int crypto_core_hchacha20(uint8_t *out, const uint8_t *in, const uint8_t *key, const uint8_t *constants) {
+    (void)out; (void)in; (void)key; (void)constants;
+    return -1; // Not implemented
+}
+
+int crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
+    (void)ss; (void)ct; (void)sk;
+    return -1; // Not implemented
+}
+
+int crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
+    (void)ct; (void)ss; (void)pk;
+    return -1; // Not implemented
+}
+
+int crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
+    (void)pk; (void)sk;
+    return -1; // Not implemented
+}
+
+int crypto_onetimeauth_poly1305(uint8_t *out, const uint8_t *in, uint64_t inlen, const uint8_t *key) {
+    (void)out; (void)in; (void)inlen; (void)key;
+    return -1; // Not implemented
+}
+
+int crypto_sign_signature(uint8_t *sig, uint64_t *siglen, const uint8_t *m, uint64_t mlen, const uint8_t *sk) {
+    (void)sig; (void)siglen; (void)m; (void)mlen; (void)sk;
+    return -1; // Not implemented
+}
+
+int crypto_sign_verify(const uint8_t *sig, uint64_t siglen, const uint8_t *m, uint64_t mlen, const uint8_t *pk) {
+    (void)sig; (void)siglen; (void)m; (void)mlen; (void)pk;
+    return -1; // Not implemented
+}
+
+int crypto_sign_keypair(uint8_t *pk, uint8_t *sk) {
+    (void)pk; (void)sk;
+    return -1; // Not implemented
+}
+
+void PQCLEAN_randombytes(uint8_t *buf, uint64_t len) {
+    // Simple stub: fill with zeros (not secure, just for linking)
+    for (uint64_t i = 0; i < len; i++) {
+        buf[i] = 0;
+    }
+}
+
+// Stack protector stub
+void __stack_chk_fail(void) {
+    // Stack smashing detected - halt system
+    serial_puts((const uint8_t *)"STACK SMASH DETECTED!\n");
+    while(1) __asm__ volatile ("cli; hlt");
+}
+
+// Standard C library stubs (needed for crypto libraries)
+void* malloc(uint64_t size) {
+    (void)size;
+    // TODO: Use kernel allocator
+    return 0; // Return NULL for now
+}
+
+void* calloc(uint64_t num, uint64_t size) {
+    (void)num; (void)size;
+    // TODO: Use kernel allocator
+    return 0; // Return NULL for now
+}
+
+void free(void* ptr) {
+    (void)ptr;
+    // TODO: Use kernel allocator
+}
+
+void exit(int status) {
+    (void)status;
+    // Kernel cannot exit, halt instead
+    while(1) __asm__ volatile ("cli; hlt");
+}

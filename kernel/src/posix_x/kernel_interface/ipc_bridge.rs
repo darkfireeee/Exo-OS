@@ -2,7 +2,7 @@
 //!
 //! Bridges POSIX IPC (pipes, etc.) to Exo-OS Fusion Rings.
 
-use crate::fs::vfs::inode::{Inode, InodePermissions, InodeType};
+use crate::fs::core::vfs::inode::{Inode, InodePermissions, InodeType};
 use crate::fs::{FsError, FsResult};
 use crate::ipc::fusion_ring::FusionRing;
 use alloc::string::String;

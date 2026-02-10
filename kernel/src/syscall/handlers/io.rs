@@ -1,9 +1,10 @@
 //! I/O System Call Handlers
 //!
 //! Handles file operations: open, close, read, write, seek, stat
-//! Uses the central VFS API from crate::fs::vfs
+//! Uses the central VFS API from crate::fs::core::vfs
 
-use crate::fs::{vfs, FsError};
+use crate::fs::core::vfs;
+use crate::fs::FsError;
 use crate::memory::{MemoryError, MemoryResult};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -68,7 +69,7 @@ use spin::Mutex;
 #[derive(Debug, Clone)]
 struct FileDescriptor {
     fd: Fd,
-    vfs_handle: u64,      // VFS internal handle
+    vfs_handle: i32,      // VFS internal handle (file descriptor from VFS layer)
     path: String,         // Path for debugging/stat
     offset: usize,        // Current offset (managed here for seek)
     flags: FileFlags,
@@ -104,6 +105,7 @@ fn flags_to_vfs_flags(flags: &FileFlags) -> u32 {
 fn vfs_to_memory_error(e: FsError) -> MemoryError {
     match e {
         FsError::NotFound => MemoryError::NotFound,
+        FsError::NoSuchFileOrDirectory => MemoryError::NotFound,
         FsError::PermissionDenied => MemoryError::PermissionDenied,
         FsError::AlreadyExists | FsError::FileExists => MemoryError::AlreadyMapped,
         FsError::NotDirectory => MemoryError::InvalidAddress,
@@ -113,6 +115,7 @@ fn vfs_to_memory_error(e: FsError) -> MemoryError {
         FsError::InvalidArgument => MemoryError::InvalidParameter,
         FsError::TooManySymlinks => MemoryError::InvalidAddress,
         FsError::InvalidData => MemoryError::InvalidAddress,
+        FsError::Corrupted => MemoryError::InvalidAddress,
         FsError::IoError => MemoryError::InternalError("IO error"),
         FsError::NotSupported => MemoryError::PermissionDenied,
         FsError::TooManyFiles => MemoryError::Mfile,

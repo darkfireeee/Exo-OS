@@ -5,7 +5,7 @@
 //! - unlink, unlinkat
 //! - rename, renameat
 
-use crate::fs::vfs::inode::{Inode, InodeType};
+use crate::fs::core::types::{Inode, InodeType};
 use crate::fs::{FsError, FsResult};
 use crate::posix_x::vfs_posix::{file_ops, path_resolver};
 use crate::syscall::utils::{copy_to_user, read_user_string};

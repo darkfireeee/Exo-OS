@@ -3,7 +3,7 @@
 //! Tests that VFS correctly writes and reads back data
 //! Specifically for large files like ELF binaries
 
-use crate::fs::vfs;
+use crate::fs::core::vfs;
 use alloc::vec::Vec;
 
 /// Test VFS read/write round-trip with various sizes

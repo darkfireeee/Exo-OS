@@ -7,7 +7,7 @@
 ///
 /// Note: Full exec() requires ELF loader integration
 pub fn test_exec_binaries() {
-    use crate::fs::vfs;
+    use crate::fs::core::vfs;
     use crate::logger;
     
     logger::early_print("\n");

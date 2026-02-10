@@ -6,7 +6,9 @@
 //! - Relative/absolute path handling
 //! - Mount point traversal
 
-use crate::fs::vfs::{inode::Inode, dentry::Dentry, cache as vfs_cache};  // ✅ Phase 1
+use crate::fs::core::types::Inode;
+use crate::fs::core::dentry::Dentry;
+use crate::fs::core::vfs as vfs_module;  // For vfs::inode_cache()
 use crate::fs::{FsError, FsResult};  // ✅ Phase 1
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -115,11 +117,17 @@ fn resolve_components(
                 };
 
                 // Get inode from cache or VFS
-                let child_inode = vfs_cache::get_inode(ino_num)?;
+                // TODO: Fix type mismatch - inode_cache returns Arc<dyn Inode>, not Arc<RwLock<dyn Inode>>
+                let child_inode_raw = crate::fs::core::vfs::inode_cache().get(ino_num)
+                    .ok_or(FsError::NoSuchFileOrDirectory)?;
+
+                // For now, stub this - type mismatch needs architectural fix
+                return Err(FsError::NotSupported);
 
                 // Check if symlink
+                /* TODO: Re-enable when type mismatch is fixed
                 let inode_type = child_inode.read().inode_type();
-                if inode_type == crate::fs::vfs::inode::InodeType::Symlink {
+                if inode_type == crate::fs::core::types::InodeType::Symlink {
                     if !is_last || follow_last_symlink {
                         // Resolve symlink
                         let target = read_symlink(&child_inode)?;
@@ -142,6 +150,7 @@ fn resolve_components(
                 }
 
                 current = child_inode;
+                */
             }
         }
     }
@@ -177,7 +186,9 @@ fn normalize_path(path: &str) -> String {
 /// Get root inode
 fn get_root_inode() -> FsResult<Arc<RwLock<dyn Inode>>> {
     // Get root from VFS cache
-    vfs_cache::get_inode(1) // Assume root inode is 1
+    // TODO: Fix type mismatch - inode_cache  returns wrong type
+    Err(FsError::NotSupported) // Stub for now
+    // crate::fs::core::vfs::inode_cache().get(1).ok_or(FsError::NoSuchFileOrDirectory) // Assume root inode is 1
 }
 
 /// Read symlink target

@@ -39,6 +39,7 @@ virtio-drivers = "0.7.0"
 exo_types = { path = "../libs/exo_types" }
 exo_ipc = { path = "../libs/exo_ipc" }
 exo_crypto = { path = "../libs/exo_crypto" }
+exo_std = { path = "../libs/exo_std" }
 
 # Cryptographie pour l'audit sécurisé (optionnel)
 sha3 = { version = "0.10.8", default-features = false, optional = true }

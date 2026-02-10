@@ -25,3 +25,5 @@ pub mod cow_real_tests;       // Jour 4 Phase 4: Tests RÉELS avec vraies pages
 pub mod tlb_tests;            // TLB flush investigation tests
 pub mod page_split_tests;     // Page split cache and performance tests
 pub mod split_minimal_test;   // Minimal test to validate split works     // Page splitting comprehensive tests
+pub mod exo_std_tests;        // exo_std v0.3.0 integration tests and benchmarks
+pub mod fs_stress_tests;      // Phase 2: Filesystem stress tests (I/O, inodes, cache)

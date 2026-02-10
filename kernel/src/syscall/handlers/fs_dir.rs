@@ -5,7 +5,7 @@
 //! - getcwd, chdir, fchdir
 //! - getdents64
 
-use crate::fs::vfs::inode::InodeType;
+use crate::fs::core::types::InodeType;
 use crate::fs::{FsError, FsResult};
 use crate::posix_x::core::process_state::current_process_state;
 use crate::posix_x::vfs_posix::{file_ops, path_resolver, VfsHandle};

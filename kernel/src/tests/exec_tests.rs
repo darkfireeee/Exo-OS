@@ -7,7 +7,7 @@
 //! - Sets up stack with System V ABI
 
 use crate::posix_x::elf::loader::load_elf_binary;
-use crate::fs::vfs;
+use crate::fs::core::vfs;
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;

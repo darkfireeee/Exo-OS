@@ -89,7 +89,7 @@ pub fn _print(args: fmt::Arguments) {
 #[macro_export]
 macro_rules! serial_print {
     ($($arg:tt)*) => {
-        $crate::drivers::char::serial::_print(format_args!($($arg)*));
+        $crate::drivers::char::serial::_print(format_args!($($arg)*))
     };
 }
 

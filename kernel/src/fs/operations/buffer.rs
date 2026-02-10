@@ -313,24 +313,27 @@ impl FileBuffer {
             
             // Get or create page
             let mut pages = self.pages.write();
-            
-            let page = if let Some(pos) = pages.iter().position(|p| p.offset / BUFFER_SIZE as u64 == page_idx as u64) {
-                &mut pages[pos]
+
+            let page_idx_in_vec = if let Some(pos) = pages.iter().position(|p| p.offset / BUFFER_SIZE as u64 == page_idx as u64) {
+                pos
             } else {
                 // Create new page
+                let new_idx = pages.len();
                 pages.push(BufferPage::new(page_idx as u64 * BUFFER_SIZE as u64));
-                pages.last_mut().unwrap()
+                new_idx
             };
-            
+
+            let page = &mut pages[page_idx_in_vec];
+
             let was_dirty = page.is_dirty();
             let n = page.write(page_offset, &buf[total_written..total_written + remaining]);
-            
+
             if !was_dirty && page.is_dirty() {
                 self.dirty_count.fetch_add(1, Ordering::Relaxed);
             }
-            
+
             page.touch(self.get_timestamp());
-            
+
             total_written += n;
             current_offset += n as u64;
             remaining -= n;

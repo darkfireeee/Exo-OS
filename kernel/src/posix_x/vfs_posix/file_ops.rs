@@ -7,7 +7,7 @@
 //! - directory operations
 
 use super::{VfsHandle, OpenFlags, FileStat, path_resolver};
-use crate::fs::vfs::inode::{Inode, InodeType};  // ✅ Phase 1
+use crate::fs::core::types::{Inode, InodeType};  // ✅ Phase 1
 use crate::fs::{FsError, FsResult};  // ✅ Phase 1
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;

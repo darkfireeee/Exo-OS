@@ -34,7 +34,7 @@ pub mod path_resolver;
 // pub mod fd_manager; // Moved to kernel_interface
 pub use crate::posix_x::core::fd_table as fd_manager;
 
-use crate::fs::vfs::inode::{Inode, InodeType};  // ✅ Phase 1
+use crate::fs::core::types::{Inode, InodeType};  // ✅ Phase 1
 use crate::fs::{FsError, FsResult};              // ✅ Phase 1
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -271,7 +271,7 @@ pub struct FileStat {
     pub ino: u64,
     pub size: u64,
     pub inode_type: InodeType,
-    pub permissions: crate::fs::vfs::inode::InodePermissions,
+    pub permissions: crate::fs::core::types::InodePermissions,
 }
 
 impl FileStat {

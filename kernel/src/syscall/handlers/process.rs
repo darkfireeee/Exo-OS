@@ -291,23 +291,15 @@ fn sys_fork_with_logging(verbose: bool) -> MemoryResult<Pid> {
     }).ok_or(MemoryError::InvalidAddress)?;
     
     // 3. Fork the address space with CoW (if parent has one)
-    let child_address_space = if let Some(parent_proc_arc) = parent_process {
-        let parent_proc = parent_proc_arc.lock();
-        
+    let child_address_space = if let Some(_parent_proc_arc) = parent_process {
         if verbose {
-            let s = alloc::format!("[FORK] Calling fork_cow() on parent address space\n");
+            let s = alloc::format!("[FORK] Creating new address space for child (CoW not yet implemented)\n");
             crate::logger::early_print(&s);
         }
-        
-        // ✅ Call fork_cow() which walks pages and marks them CoW
-        let child_space = parent_proc.address_space.fork_cow()?;
-        
-        if verbose {
-            let s = alloc::format!("[FORK] fork_cow() complete\n");
-            crate::logger::early_print(&s);
-        }
-        
-        child_space
+
+        // TODO: Implement fork_cow() - for now just create new address space
+        // Should be: parent_proc.address_space.fork_cow()?
+        crate::memory::UserAddressSpace::new()?
     } else {
         // Parent is kernel thread - create empty address space
         crate::memory::UserAddressSpace::new()?
@@ -315,21 +307,23 @@ fn sys_fork_with_logging(verbose: bool) -> MemoryResult<Pid> {
     
     // 4. Allocate PID for child process
     let child_pid = allocate_pid();
-    
+
     // 5. Create child Process with forked address space
-    let parent_pid = SCHEDULER.with_current_thread(|t| t.id()).unwrap_or(0);
-    
-    let child_process = Process::new(
+    let parent_pid = SCHEDULER.with_current_thread(|t| t.id()).unwrap_or(0) as u32;
+
+    let mut child_process = Process::new(
         child_pid,
-        Some(parent_pid as u32),
+        parent_pid,
         "forked_child".to_string(),
-        child_address_space,
     );
-    
+
+    // Set address space for child (store PML4 virtual address)
+    child_process.address_space = Some(child_address_space.pml4_address());
+
     let child_process_arc = Arc::new(Mutex::new(child_process));
-    
+
     // 6. Insert child process into global ProcessTable
-    insert_process(child_pid, child_process_arc.clone());
+    insert_process(child_process_arc.clone());
     
     if verbose {
         let s = alloc::format!("[FORK] Created Process PID {} with CoW address space\n", child_pid);

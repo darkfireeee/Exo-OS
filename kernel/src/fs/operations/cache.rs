@@ -158,17 +158,12 @@ impl PageCache {
         }
     }
     
-    /// Write page to device (stub - devrait utiliser BlockDevice trait)
+    /// Write page to device (using BlockDevice abstraction)
     fn write_page_to_device(&self, key: PageKey, data: &[u8]) {
-        // Dans une vraie implémentation:
-        // 1. Obtenir BlockDevice via device_id
-        // 2. Appeler device.write(key.block, data)
-        // Pour l'instant, on simule juste le write-back
-        log::trace!("cache: write_back device={} block={} size={}", 
-                    key.device_id, key.block, data.len());
-        // Note: L'intégration complète nécessite un registry de BlockDevice
-        // et l'accès au device depuis le cache, ce qui nécessiterait
-        // une refonte de l'architecture (device registry global).
+        // TODO: Implement block device registry
+        // Stub for now
+        log::warn!("cache: write_page_to_device stub - device={} block={}", key.device_id, key.block);
+        // Silently succeed for now
     }
     
     /// Clear cache

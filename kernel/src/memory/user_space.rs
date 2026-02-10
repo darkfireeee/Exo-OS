@@ -706,6 +706,11 @@ impl UserAddressSpace {
     pub fn allocated_frame_count(&self) -> usize {
         self.allocated_frames.len()
     }
+
+    /// Get PML4 virtual address (for process address_space field)
+    pub fn pml4_address(&self) -> VirtualAddress {
+        VirtualAddress::new(self.pml4_virt as usize)
+    }
 }
 
 impl Drop for UserAddressSpace {

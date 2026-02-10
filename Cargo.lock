@@ -211,6 +211,7 @@ dependencies = [
  "ed25519-dalek",
  "exo_crypto",
  "exo_ipc",
+ "exo_std",
  "exo_types",
  "hashbrown",
  "hex",

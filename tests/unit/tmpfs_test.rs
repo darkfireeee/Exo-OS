@@ -2,8 +2,8 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::fs::vfs::inode::{Inode, InodeType};
-    use crate::fs::vfs::tmpfs::{TmpFs, TmpfsInode};
+    use crate::fs::core::vfs::inode::{Inode, InodeType};
+    use crate::fs::compatibility::tmpfs::{TmpFs, TmpfsInode};
 
     #[test]
     fn test_tmpfs_create() {

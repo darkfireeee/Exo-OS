@@ -10,7 +10,7 @@
 /// Validates complete keyboard input pipeline
 pub fn test_keyboard_driver() {
     use crate::drivers::input::keyboard::{self, KeyboardLayout};
-    use crate::fs::pseudo_fs::devfs;
+    use crate::fs::pseudo::devfs;
     use crate::logger;
     extern crate alloc;
     

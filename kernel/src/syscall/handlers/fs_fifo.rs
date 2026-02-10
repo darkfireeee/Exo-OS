@@ -2,7 +2,7 @@
 //!
 //! Implements `mkfifo`, `mknod`.
 
-use crate::fs::vfs::inode::InodeType;
+use crate::fs::core::types::InodeType;
 use crate::fs::FsError;
 use crate::posix_x::vfs_posix::path_resolver;
 
