@@ -1,0 +1,70 @@
+arborescence scheduler
+
+│   ├── scheduler/                      # 🔵 COUCHE 1 — SCHEDULER (→ memory/ uniquement)
+│   │   ├── mod.rs
+│   │   │
+│   │   ├── core/
+│   │   │   ├── mod.rs
+│   │   │   ├── task.rs                 # Task struct (TCB complet, cache-aligned 64B)
+│   │   │   ├── runqueue.rs             # Run queue per-CPU (3 files: RT/Normal/Idle)
+│   │   │   ├── pick_next.rs            # pick_next_task() — O(1), 100-150 cycles
+│   │   │   ├── switch.rs               # Dispatch → switch_asm
+│   │   │   └── preempt.rs              # PreemptGuard (RAII, jamais direct)
+│   │   │
+│   │   ├── asm/
+│   │   │   ├── switch_asm.s            # Context switch ASM — sauvegarde COMPLÈTE
+│   │   │   │                           # rbx,rbp,r12-r15,rsp + MXCSR + x87 FCW
+│   │   │   │                           # CR3 switché ICI pour KPTI (atomique)
+│   │   │   │                           # ✅ GARANTIE FORMELLE : r15 push AVANT tout appel C
+│   │   │   │                           # ext4plus/inode/ops.rs utilise r15 — garanti préservé
+│   │   │   └── fast_path.s             # Fast path scheduler (pas d'appel C)
+│   │   │
+│   │   ├── policies/
+│   │   │   ├── mod.rs
+│   │   │   ├── cfs.rs                  # CFS — Completely Fair Scheduler (normal)
+│   │   │   ├── realtime.rs             # RT — SCHED_FIFO / SCHED_RR
+│   │   │   ├── deadline.rs             # EDF — SCHED_DEADLINE (budget/période)
+│   │   │   ├── idle.rs                 # IDLE policy
+│   │   │   └── ai_guided.rs            # [IA] Politique guidée par profil de charge
+│   │   │                               # ⚠️ Dépend de ai_hints.rs (lecture seule, pas d'écriture)
+│   │   │                               # Fallback immédiat vers cfs.rs si hints absents
+│   │   │
+│   │   ├── smp/
+│   │   │   ├── mod.rs
+│   │   │   ├── load_balance.rs         # Load balancing inter-CPU (périodique)
+│   │   │   ├── migration.rs            # Thread migration (push/pull)
+│   │   │   ├── affinity.rs             # CPU affinity (cpumask)
+│   │   │   └── topology.rs             # Topologie SMP (NUMA-aware)
+│   │   │
+│   │   ├── sync/
+│   │   │   ├── mod.rs
+│   │   │   ├── wait_queue.rs           # WaitQueue — utilise EmergencyPool UNIQUEMENT
+│   │   │   ├── mutex.rs                # Kernel mutex (avec priority inheritance)
+│   │   │   ├── rwlock.rs               # RW lock (Reader-Writer)
+│   │   │   ├── spinlock.rs             # Spinlock (irq-safe variants)
+│   │   │   ├── condvar.rs              # Condition variable
+│   │   │   └── barrier.rs              # Synchronisation barrière SMP
+│   │   │
+│   │   ├── timer/
+│   │   │   ├── mod.rs
+│   │   │   ├── hrtimer.rs              # High-resolution timers (nanoseconde)
+│   │   │   ├── tick.rs                 # Scheduler tick (HZ=1000)
+│   │   │   ├── clock.rs                # Monotonic/realtime clock
+│   │   │   └── deadline_timer.rs       # Timer pour SCHED_DEADLINE
+│   │   │
+│   │   ├── fpu/                        # Logique d'état FPU (≠ arch/x86_64/cpu/fpu.rs)
+│   │   │   ├── mod.rs                  # arch/ = instructions ASM brutes
+│   │   │   ├── lazy.rs                 # scheduler/ = flag lazy_fpu_used dans TCB + policy
+│   │   │   ├── save_restore.rs         # Appelle arch/x86_64/cpu/fpu.rs (XSAVE/XRSTOR)
+│   │   │   └── state.rs                # FpuState par thread (512B aligné)
+│   │   │
+│   │   ├── energy/
+│   │   │   ├── mod.rs
+│   │   │   ├── c_states.rs             # CpuIdleGovernor — contrainte C-state par RT
+│   │   │   ├── frequency.rs            # Budget RT corrigé par fréquence CPU
+│   │   │   └── power_profile.rs        # Profile perf/économie
+│   │   │
+│   │   └── stats/
+│   │       ├── mod.rs
+│   │       ├── per_cpu.rs              # Stats par CPU (cycles, switches, migrations)
+│   │       └── latency.rs              # Mesures latence (p50/p99/p999)

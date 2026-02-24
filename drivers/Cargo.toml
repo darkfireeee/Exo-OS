@@ -1,0 +1,12 @@
+[package]
+name    = "exo-os-drivers"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name       = "exo_os_drivers"
+path       = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+spin = { version = "0.9", default-features = false, features = ["spin_mutex"] }

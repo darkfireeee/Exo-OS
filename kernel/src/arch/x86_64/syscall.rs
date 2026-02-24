@@ -1,558 +1,360 @@
-//! Syscall Entry Point for x86_64
-//! 
-//! SYSCALL/SYSRET fast path implementation with full syscall dispatch.
+//! # arch/x86_64/syscall.rs — SYSCALL/SYSRET entry point
 //!
-//! ## Syscall ABI (Linux compatible)
-//! - RAX = syscall number
-//! - RDI = arg1, RSI = arg2, RDX = arg3
-//! - R10 = arg4, R8 = arg5, R9 = arg6
-//! - Return: RAX (negative = -errno)
+//! Gère l'entrée et la sortie des appels système en 64-bit via SYSCALL/SYSRET.
+//!
+//! ## Règle DOC1 (RÈGLE SIGNAL-01 / SIGNAL-02)
+//! arch/ ORCHESTRE la livraison des signaux au retour vers userspace.
+//! arch/ appelle `process::signal::delivery::handle_pending_signals()`.
+//!
+//! ## ABI Syscall Exo-OS (Linux-compatible)
+//! - rax = numéro syscall
+//! - rdi, rsi, rdx, r10, r8, r9 = arguments
+//! - rcx = sauvé par SYSCALL (RIP de retour userspace)
+//! - r11 = sauvé par SYSCALL (RFLAGS userspace)
+//!
+//! ## SWAPGS
+//! - Entrée : SWAPGS pour accéder aux données per-CPU kernel
+//! - Sortie  : SWAPGS avant SYSRET pour restaurer GS userspace
+//!
+//! ## KPTI
+//! Le switch CR3 se fait dans le code ASM de bas niveau (switch_asm.s).
+//! syscall.rs gère la logique Rust après le passage en mode kernel.
 
-use core::arch::asm;
-use crate::memory::VirtualAddress;
+#![allow(dead_code)]
 
-/// MSR addresses
-const IA32_STAR: u32 = 0xC0000081;
-const IA32_LSTAR: u32 = 0xC0000082;
-const IA32_FMASK: u32 = 0xC0000084;
-const IA32_EFER: u32 = 0xC0000080;
-const IA32_KERNEL_GS_BASE: u32 = 0xC0000102;
+use core::sync::atomic::{AtomicU64, Ordering};
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Syscall Numbers (Linux x86_64 compatible)
-// ═══════════════════════════════════════════════════════════════════════════════
+use super::cpu::msr;
+use super::gdt::{GDT_KERNEL_CS, GDT_USER_CS32, GDT_USER_DS, GDT_USER_CS64};
 
-pub const SYS_READ: u64 = 0;
-pub const SYS_WRITE: u64 = 1;
-pub const SYS_OPEN: u64 = 2;
-pub const SYS_CLOSE: u64 = 3;
-pub const SYS_STAT: u64 = 4;
-pub const SYS_FSTAT: u64 = 5;
-pub const SYS_LSTAT: u64 = 6;
-pub const SYS_POLL: u64 = 7;
-pub const SYS_LSEEK: u64 = 8;
-pub const SYS_MMAP: u64 = 9;
-pub const SYS_MPROTECT: u64 = 10;
-pub const SYS_MUNMAP: u64 = 11;
-pub const SYS_BRK: u64 = 12;
-pub const SYS_IOCTL: u64 = 16;
-pub const SYS_WRITEV: u64 = 20;
-pub const SYS_ACCESS: u64 = 21;
-pub const SYS_PIPE: u64 = 22;
-pub const SYS_DUP: u64 = 32;
-pub const SYS_DUP2: u64 = 33;
-pub const SYS_NANOSLEEP: u64 = 35;
-pub const SYS_GETPID: u64 = 39;
-pub const SYS_FORK: u64 = 57;
-pub const SYS_EXECVE: u64 = 59;
-pub const SYS_EXIT: u64 = 60;
-pub const SYS_WAIT4: u64 = 61;
-pub const SYS_KILL: u64 = 62;
-pub const SYS_UNAME: u64 = 63;
-pub const SYS_FCNTL: u64 = 72;
-pub const SYS_GETCWD: u64 = 79;
-pub const SYS_CHDIR: u64 = 80;
-pub const SYS_MKDIR: u64 = 83;
-pub const SYS_RMDIR: u64 = 84;
-pub const SYS_UNLINK: u64 = 87;
-pub const SYS_READLINK: u64 = 89;
-pub const SYS_GETUID: u64 = 102;
-pub const SYS_GETGID: u64 = 104;
-pub const SYS_GETEUID: u64 = 107;
-pub const SYS_GETEGID: u64 = 108;
-pub const SYS_GETPPID: u64 = 110;
-pub const SYS_ARCH_PRCTL: u64 = 158;
-pub const SYS_GETTID: u64 = 186;
-pub const SYS_CLOCK_GETTIME: u64 = 228;
-pub const SYS_EXIT_GROUP: u64 = 231;
-pub const SYS_OPENAT: u64 = 257;
-pub const SYS_MKDIRAT: u64 = 258;
-pub const SYS_NEWFSTATAT: u64 = 262;
-pub const SYS_UNLINKAT: u64 = 263;
-pub const SYS_READLINKAT: u64 = 267;
-pub const SYS_FACCESSAT: u64 = 269;
-pub const SYS_SET_TID_ADDRESS: u64 = 218;
-pub const SYS_GETRANDOM: u64 = 318;
+// ── Numéros syscall ───────────────────────────────────────────────────────────
 
-// Error codes
-pub const ENOSYS: i64 = -38;
-pub const EBADF: i64 = -9;
-pub const EINVAL: i64 = -22;
-pub const EFAULT: i64 = -14;
-pub const EPERM: i64 = -1;
-pub const ENOENT: i64 = -2;
+pub const SYSCALL_READ:        u64 = 0;
+pub const SYSCALL_WRITE:       u64 = 1;
+pub const SYSCALL_OPEN:        u64 = 2;
+pub const SYSCALL_CLOSE:       u64 = 3;
+pub const SYSCALL_STAT:        u64 = 4;
+pub const SYSCALL_FSTAT:       u64 = 5;
+pub const SYSCALL_LSTAT:       u64 = 6;
+pub const SYSCALL_POLL:        u64 = 7;
+pub const SYSCALL_LSEEK:       u64 = 8;
+pub const SYSCALL_MMAP:        u64 = 9;
+pub const SYSCALL_MPROTECT:    u64 = 10;
+pub const SYSCALL_MUNMAP:      u64 = 11;
+pub const SYSCALL_BRK:         u64 = 12;
+pub const SYSCALL_RT_SIGACTION:u64 = 13;
+pub const SYSCALL_RT_SIGPROCMASK: u64 = 14;
+pub const SYSCALL_RT_SIGRETURN: u64 = 15;
+pub const SYSCALL_IOCTL:       u64 = 16;
+pub const SYSCALL_FORK:        u64 = 57;
+pub const SYSCALL_VFORK:       u64 = 58;
+pub const SYSCALL_EXECVE:      u64 = 59;
+pub const SYSCALL_EXIT:        u64 = 60;
+pub const SYSCALL_WAIT4:       u64 = 61;
+pub const SYSCALL_KILL:        u64 = 62;
+pub const SYSCALL_CLONE:       u64 = 56;
+pub const SYSCALL_FUTEX:       u64 = 202;
+pub const SYSCALL_SCHED_YIELD: u64 = 24;
+pub const SYSCALL_NANOSLEEP:   u64 = 35;
+pub const SYSCALL_GETPID:      u64 = 39;
+pub const SYSCALL_SOCKET:      u64 = 41;
+pub const SYSCALL_CONNECT:     u64 = 42;
+pub const SYSCALL_ACCEPT:      u64 = 43;
+pub const SYSCALL_SENDTO:      u64 = 44;
+pub const SYSCALL_RECVFROM:    u64 = 45;
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// External ASM symbols
-// ═══════════════════════════════════════════════════════════════════════════════
+/// Numéro syscall maximum supporté
+pub const SYSCALL_MAX: u64 = 512;
+
+// ── Frame syscall ─────────────────────────────────────────────────────────────
+
+/// Registres sauvegardés à l'entrée SYSCALL
+///
+/// ## Layout mémoire (DOIT correspondre à l'ordre push ASM)
+/// Les champs sont dans l'ordre croissant d'adresse : rax est au plus bas
+/// (dernier push = [rsp+0]), rcx est au plus haut (premier push = [rsp+120]).
+///
+/// Ordre des pushs ASM (premier à dernier) :
+///   push rcx  → [rsp+120]  (RIP retour)
+///   push r11  → [rsp+112]  (RFLAGS userspace)
+///   push rbp  → [rsp+104]
+///   push rbx  → [rsp+96]
+///   push r12  → [rsp+88]
+///   push r13  → [rsp+80]
+///   push r14  → [rsp+72]
+///   push r15  → [rsp+64]
+///   push user_rsp → [rsp+56]
+///   push rsi  → [rsp+48]   (arg2)
+///   push rdi  → [rsp+40]   (arg1)
+///   push rdx  → [rsp+32]   (arg3)
+///   push r10  → [rsp+24]   (arg4)
+///   push r8   → [rsp+16]   (arg5)
+///   push r9   → [rsp+8]    (arg6)
+///   push rax  → [rsp+0]    (syscall nr / retour)
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct SyscallFrame {
+    pub rax: u64,   // offset   0 — syscall number / return value (last push)
+    pub r9:  u64,   // offset   8 — arg6
+    pub r8:  u64,   // offset  16 — arg5
+    pub r10: u64,   // offset  24 — arg4
+    pub rdx: u64,   // offset  32 — arg3
+    pub rdi: u64,   // offset  40 — arg1
+    pub rsi: u64,   // offset  48 — arg2
+    pub rsp: u64,   // offset  56 — RSP userspace sauvé
+    pub r15: u64,   // offset  64
+    pub r14: u64,   // offset  72
+    pub r13: u64,   // offset  80
+    pub r12: u64,   // offset  88
+    pub rbx: u64,   // offset  96
+    pub rbp: u64,   // offset 104
+    pub r11: u64,   // offset 112 — RFLAGS userspace (sauvé par SYSCALL hw)
+    pub rcx: u64,   // offset 120 — RIP retour userspace (first push)
+}
+
+// ── Initialisation SYSCALL/SYSRET ─────────────────────────────────────────────
+
+/// Configure les MSRs pour SYSCALL/SYSRET
+///
+/// Doit être appelé sur chaque CPU après init GDT.
+pub fn init_syscall() {
+    use msr::*;
+
+    // 1. Activer SCE dans EFER (SYSCALL Enable)
+    // SAFETY: EFER.SCE est sûr à activer une fois la GDT en place
+    unsafe { set_msr_bits(MSR_IA32_EFER, EFER_SCE); }
+
+    // 2. MSR STAR : sélecteurs segments
+    // Bits [47:32] = SYSCALL CS (kernel CS) ; SS = CS+8 = KERNEL_DS
+    // Bits [63:48] = SYSRET CS32 ; SYSRET 64 CS = +16, SS = +8
+    //
+    // Note : STAR.SYSRET_CS pointe sur USER_CS32 (ring 3).
+    // SYSRET 64-bit utilisera USER_CS32+16 = USER_CS64 pour CS
+    // et USER_CS32+8 = USER_DS pour SS.
+    let star_kernel = (GDT_KERNEL_CS as u64) << 32;
+    let star_user   = ((GDT_USER_CS32 & !3) as u64) << 48;
+    // SAFETY: STAR contient uniquement des sélecteurs GDT valides
+    unsafe { write_msr(MSR_STAR, star_kernel | star_user); }
+
+    // 3. MSR LSTAR : adresse 64-bit du handler SYSCALL
+    // SAFETY: syscall_entry_asm est le point d'entrée syscall valide
+    unsafe { write_msr(MSR_LSTAR, syscall_entry_asm as *const () as u64); }
+
+    // 4. MSR CSTAR : handler mode compat (non utilisé — pointe vers une fonction vide)
+    // SAFETY: syscall_cstar_asm est une fonction noop valide
+    unsafe { write_msr(MSR_CSTAR, syscall_cstar_noop as *const () as u64); }
+
+    // 5. MSR SFMASK : masque RFLAGS lors de SYSCALL
+    // Masquer IF (bit 9), TF (bit 8), DF (bit 10), AC (bit 18)
+    let sfmask = (1 << 9)  // IF
+               | (1 << 8)  // TF
+               | (1 << 10) // DF
+               | (1 << 18); // AC
+    // SAFETY: SFMASK masque les flags dangereux uniquement
+    unsafe { write_msr(MSR_SFMASK, sfmask); }
+}
+
+// ── Entrée SYSCALL en ASM ─────────────────────────────────────────────────────
+
+// Point d'entrée SYSCALL 64-bit — défini en global_asm!
+//
+// Séquence :
+// 1. SWAPGS (kernel GS)
+// 2. Sauvegarder RSP userspace dans per-CPU area
+// 3. Charger RSP0 kernel depuis per-CPU area
+// 4. Sauvegarder tous les registres caller-saved + RCX/R11
+// 5. Appeler `syscall_rust_handler()`
+// 6. Restaurer les registres
+// 7. SWAPGS (restaurer GS userspace)
+// 8. SYSRETQ
+core::arch::global_asm!(
+    ".section .text",
+    ".global syscall_entry_asm",
+    ".type   syscall_entry_asm, @function",
+    "syscall_entry_asm:",
+    // ── 1. SWAPGS : active le GS kernel (kernel GS_BASE ← KERNEL_GS_BASE) ──────
+    "swapgs",
+    // ── 2. Sauvegarder RSP userspace dans gs:[0x08] (user_rsp slot) ─────────────
+    // gs:[0x00] = kernel_rsp (pile kernel pré-allouée)
+    // gs:[0x08] = user_rsp  (save slot pour le RSP userspace courant)
+    "mov   qword ptr gs:[0x08], rsp",
+    // ── 3. Charger la pile kernel depuis gs:[0x00] (kernel_rsp slot) ─────────────
+    "mov   rsp, qword ptr gs:[0x00]",
+    // ── 4. Construire la SyscallFrame sur la pile kernel ──────────────────────────
+    // Ordre push : premier → haut adresse, dernier → bas adresse = [rsp]
+    // DOIT correspondre exactement à l'ordre des champs de SyscallFrame
+    "push  rcx",                    // [rsp+120] RIP retour userspace (SYSCALL saves in rcx)
+    "push  r11",                    // [rsp+112] RFLAGS userspace   (SYSCALL saves in r11)
+    "push  rbp",                    // [rsp+104]
+    "push  rbx",                    // [rsp+ 96] (rbx sera écrasé temporairement — voir étape 6)
+    "push  r12",                    // [rsp+ 88]
+    "push  r13",                    // [rsp+ 80]
+    "push  r14",                    // [rsp+ 72]
+    "push  r15",                    // [rsp+ 64]
+    "push  qword ptr gs:[0x08]",    // [rsp+ 56] RSP userspace (lu depuis le save slot)
+    "push  rsi",                    // [rsp+ 48] arg2
+    "push  rdi",                    // [rsp+ 40] arg1
+    "push  rdx",                    // [rsp+ 32] arg3
+    "push  r10",                    // [rsp+ 24] arg4
+    "push  r8",                     // [rsp+ 16] arg5
+    "push  r9",                     // [rsp+  8] arg6
+    "push  rax",                    // [rsp+  0] numéro syscall (frame.rax)
+    // ── 5. Sauvegarder le pointeur de frame dans rbx (callee-saved) ──────────────
+    // rbx est callee-saved : syscall_rust_handler le préservera.
+    // La valeur sauvée sur frame (frame.rbx) est déjà sur la pile à [rsp+96].
+    // On peut donc utiliser rbx librement comme pointeur de frame jusqu'au pop.
+    "mov   rbx, rsp",
+    // ── 6. Aligner la pile sur 16 bytes pour l'ABI AMD64 ─────────────────────────
+    // Après 16 pushes de 8 bytes = 128 bytes (multiple de 16), rsp est déjà aligné.
+    // Cette instruction est une précaution si kernel_rsp initial n'était pas aligné.
+    "and   rsp, -16",
+    // ── 7. Appeler le handler Rust avec SyscallFrame* comme premier argument ──────
+    "mov   rdi, rbx",
+    "call  syscall_rust_handler",
+    // ── 8. Restaurer rsp au début de la frame (annule l'alignement éventuel) ──────
+    // rbx est préservé par syscall_rust_handler (callee-saved ABI)
+    "mov   rsp, rbx",
+    // ── 9. Restaurer les registres depuis la frame (ordre inverse des pushs) ──────
+    // frame.rax contient la valeur retour writée par le handler Rust
+    "mov   rax, [rsp]",             // return value = frame.rax
+    "add   rsp, 8",                 // skip rax slot
+    "pop   r9",                     // restore r9
+    "pop   r8",                     // restore r8
+    "pop   r10",                    // restore r10
+    "pop   rdx",                    // restore rdx
+    "pop   rdi",                    // restore rdi
+    "pop   rsi",                    // restore rsi
+    "add   rsp, 8",                 // skip user_rsp slot (restauré depuis GS ci-dessous)
+    "pop   r15",
+    "pop   r14",
+    "pop   r13",
+    "pop   r12",
+    "pop   rbx",                    // restaure rbx original (user rbx depuis frame.rbx)
+    "pop   rbp",
+    "pop   r11",                    // RFLAGS userspace
+    "pop   rcx",                    // RIP retour userspace
+    // ── 10. Restaurer RSP userspace depuis gs:[0x08] ──────────────────────────────
+    "mov   rsp, qword ptr gs:[0x08]",
+    // ── 11. Restaurer GS userspace ───────────────────────────────────────────────
+    "swapgs",
+    // ── 12. Retour en mode 64-bit Ring 3 ─────────────────────────────────────────
+    "sysretq",
+    ".size syscall_entry_asm, . - syscall_entry_asm",
+);
+
+// Noop CSTAR pour SYSCALL compat mode (non supporté)
+core::arch::global_asm!(
+    ".section .text",
+    ".global syscall_cstar_noop",
+    ".type   syscall_cstar_noop, @function",
+    "syscall_cstar_noop:",
+    "swapgs",
+    // Retourner -ENOSYS (errno 38 = ENOSYS en Linux ABI)
+    "mov rax, -38",
+    "swapgs",
+    "sysret",   // retour compat 32 bits (LLVM: pas de suffixe 'l')
+    ".size syscall_cstar_noop, . - syscall_cstar_noop",
+);
 
 extern "C" {
-    fn syscall_entry();
-    fn syscall_entry_simple();
-    fn set_kernel_stack(stack: u64);
-    fn get_user_rsp() -> u64;
+    fn syscall_entry_asm();
+    fn syscall_cstar_noop();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Per-CPU Data for syscalls
-// ═══════════════════════════════════════════════════════════════════════════════
+// ── Handler Rust SYSCALL ──────────────────────────────────────────────────────
 
-/// Per-CPU syscall data
-#[repr(C)]
-pub struct SyscallCpuData {
-    /// User RSP saved on syscall entry
-    pub user_rsp: u64,
-    /// Kernel stack to use during syscall
-    pub kernel_rsp: u64,
-    /// Current task pointer
-    pub current_task: u64,
-}
+/// Table de dispatch syscall
+/// Indexée par numéro syscall, retourne le handler ou un défaut
+type SyscallFn = fn(u64, u64, u64, u64, u64, u64) -> i64;
 
-/// Default kernel stack for syscalls (64KB)
-static mut SYSCALL_STACK: [u8; 64 * 1024] = [0; 64 * 1024];
-
-/// Per-CPU data (single CPU for now)
-static mut CPU_DATA: SyscallCpuData = SyscallCpuData {
-    user_rsp: 0,
-    kernel_rsp: 0,
-    current_task: 0,
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Initialization
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/// Initialize SYSCALL/SYSRET
-pub fn init() {
-    unsafe {
-        // Set up per-CPU data
-        let stack_top = SYSCALL_STACK.as_ptr().add(SYSCALL_STACK.len()) as u64;
-        CPU_DATA.kernel_rsp = stack_top;
-        
-        // Set kernel GS base to point to CPU data
-        let cpu_data_addr = &CPU_DATA as *const _ as u64;
-        wrmsr(IA32_KERNEL_GS_BASE, cpu_data_addr);
-        
-        // Set STAR: segment selectors for syscall/sysret
-        // Bits 32-47: Kernel CS (0x08) / SS (0x10) base
-        // Bits 48-63: User CS (0x1B) / SS (0x23) base (with RPL=3 added by SYSRET)
-        // SYSRET loads CS from STAR[48:63]+16, SS from STAR[48:63]+8
-        let star: u64 = (0x08u64 << 32) | (0x18u64 << 48);
-        wrmsr(IA32_STAR, star);
-
-        // Set LSTAR: syscall entry point
-        // Use simple entry for now (no GS swap) until per-CPU is fully set up
-        let lstar = syscall_entry_simple as u64;
-        wrmsr(IA32_LSTAR, lstar);
-
-        // Set FMASK: flags to clear on syscall (clear IF to disable interrupts)
-        let fmask: u64 = 0x200; 
-        wrmsr(IA32_FMASK, fmask);
-
-        // Enable SYSCALL in EFER
-        let efer = rdmsr(IA32_EFER);
-        wrmsr(IA32_EFER, efer | 1);
-
-        log::info!("SYSCALL/SYSRET initialized: LSTAR={:#x}, stack={:#x}", lstar, stack_top);
-    }
-}
-
-/// Read MSR
-#[inline]
-unsafe fn rdmsr(msr: u32) -> u64 {
-    let (high, low): (u32, u32);
-    asm!(
-        "rdmsr",
-        in("ecx") msr,
-        out("eax") low,
-        out("edx") high,
-        options(nomem, nostack)
-    );
-    ((high as u64) << 32) | (low as u64)
-}
-
-/// Write MSR
-#[inline]
-unsafe fn wrmsr(msr: u32, value: u64) {
-    let low = value as u32;
-    let high = (value >> 32) as u32;
-    asm!(
-        "wrmsr",
-        in("ecx") msr,
-        in("eax") low,
-        in("edx") high,
-        options(nomem, nostack)
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Syscall Handler
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/// Main Rust syscall handler
-/// 
-/// Called from assembly with:
-/// - rdi = syscall number
-/// - rsi = arg1, rdx = arg2, rcx = arg3, r8 = arg4, r9 = arg5
-/// 
-/// Returns result in RAX
+/// Handler appelé depuis l'ASM avec la SyscallFrame
+///
+/// # SAFETY
+/// Appelé uniquement depuis `syscall_entry_asm` avec une `SyscallFrame` valide
+/// sur la pile kernel.
 #[no_mangle]
-pub extern "C" fn syscall_handler_rust(
-    syscall_num: u64,
-    arg1: u64,
-    arg2: u64,
-    arg3: u64,
-    arg4: u64,
-    arg5: u64,
+pub extern "C" fn syscall_rust_handler(frame: *mut SyscallFrame) {
+    // SAFETY: frame est une SyscallFrame valide construite par l'ASM d'entrée
+    let frame = unsafe { &mut *frame };
+
+    let nr   = frame.rax;
+    let arg1 = frame.rdi;
+    let arg2 = frame.rsi;
+    let arg3 = frame.rdx;
+    let arg4 = frame.r10;
+    let arg5 = frame.r8;
+    let arg6 = frame.r9;
+
+    SYSCALL_COUNT.fetch_add(1, Ordering::Relaxed);
+
+    // Valider le numéro syscall
+    if nr >= SYSCALL_MAX {
+        frame.rax = (-38i64) as u64; // -ENOSYS
+        syscall_return_to_user(frame);
+        return;
+    }
+
+    // Dispatch
+    let result = dispatch_syscall(nr, arg1, arg2, arg3, arg4, arg5, arg6);
+    frame.rax = result as u64;
+
+    // ── RÈGLE SIGNAL-01 (DOC1) ────────────────────────────────────────────────
+    // arch/ orchestre la livraison des signaux au retour vers userspace
+    // via handle_pending_signals() depuis process::signal::delivery
+    syscall_return_to_user(frame);
+}
+
+/// Dispatch des syscalls vers les handlers appropriés
+fn dispatch_syscall(
+    nr: u64,
+    _arg1: u64, _arg2: u64, _arg3: u64,
+    _arg4: u64, _arg5: u64, _arg6: u64,
 ) -> i64 {
-    match syscall_num {
-        // ─────────────────────────────────────────────────────────────
-        // Process Control
-        // ─────────────────────────────────────────────────────────────
-        SYS_EXIT => {
-            sys_exit(arg1 as i32)
+    // Les tables de dispatch complètes seront branchées lors de l'intégration
+    // des modules process/, fs/, ipc/, etc.
+    // Pour l'instant : tous retournent -ENOSYS sauf les syscalls triviaux.
+    match nr {
+        SYSCALL_GETPID => {
+            // Exemple d'implémentation minimale
+            0 // PID 0 placeholder jusqu'à intégration process/
         }
-        SYS_EXIT_GROUP => {
-            sys_exit(arg1 as i32)
-        }
-        SYS_GETPID => {
-            sys_getpid()
-        }
-        SYS_GETTID => {
-            sys_gettid()
-        }
-        SYS_GETPPID => {
-            sys_getppid()
-        }
-        SYS_GETUID | SYS_GETEUID => {
-            0 // root
-        }
-        SYS_GETGID | SYS_GETEGID => {
-            0 // root
-        }
-        
-        // ─────────────────────────────────────────────────────────────
-        // File I/O
-        // ─────────────────────────────────────────────────────────────
-        SYS_READ => {
-            sys_read(arg1 as i32, arg2 as *mut u8, arg3 as usize)
-        }
-        SYS_WRITE => {
-            sys_write(arg1 as i32, arg2 as *const u8, arg3 as usize)
-        }
-        SYS_OPEN => {
-            sys_open(arg1 as *const u8, arg2 as i32, arg3 as u32)
-        }
-        SYS_OPENAT => {
-            sys_openat(arg1 as i32, arg2 as *const u8, arg3 as i32, arg4 as u32)
-        }
-        SYS_CLOSE => {
-            sys_close(arg1 as i32)
-        }
-        SYS_LSEEK => {
-            sys_lseek(arg1 as i32, arg2 as i64, arg3 as i32)
-        }
-        SYS_FSTAT | SYS_STAT | SYS_LSTAT | SYS_NEWFSTATAT => {
-            // Return dummy stat for now
+        SYSCALL_SCHED_YIELD => {
+            // Le yield sera implémenté via scheduler::yield()
             0
         }
-        SYS_IOCTL => {
-            // Ignore most ioctls
-            0
-        }
-        
-        // ─────────────────────────────────────────────────────────────
-        // Memory Management
-        // ─────────────────────────────────────────────────────────────
-        SYS_BRK => {
-            sys_brk(arg1 as usize)
-        }
-        SYS_MMAP => {
-            sys_mmap(arg1, arg2 as usize, arg3 as i32, arg4 as i32, arg5 as i32, 0)
-        }
-        SYS_MUNMAP => {
-            sys_munmap(arg1, arg2 as usize)
-        }
-        SYS_MPROTECT => {
-            0 // Success (ignored for now)
-        }
-        
-        // ─────────────────────────────────────────────────────────────
-        // Misc
-        // ─────────────────────────────────────────────────────────────
-        SYS_ARCH_PRCTL => {
-            sys_arch_prctl(arg1 as i32, arg2)
-        }
-        SYS_SET_TID_ADDRESS => {
-            sys_gettid() // Return TID
-        }
-        SYS_UNAME => {
-            sys_uname(arg1 as *mut u8)
-        }
-        SYS_GETRANDOM => {
-            sys_getrandom(arg1 as *mut u8, arg2 as usize, arg3 as u32)
-        }
-        SYS_CLOCK_GETTIME => {
-            // Return zeros for now
-            0
-        }
-        SYS_NANOSLEEP => {
-            // Just return success
-            0
-        }
-        
-        // ─────────────────────────────────────────────────────────────
-        // Not implemented
-        // ─────────────────────────────────────────────────────────────
-        _ => {
-            log::warn!("Unimplemented syscall: {} (args: {:#x}, {:#x}, {:#x})", 
-                syscall_num, arg1, arg2, arg3);
-            ENOSYS
-        }
+        _ => -38, // -ENOSYS
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Syscall Implementations
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/// sys_exit - Terminate the calling process
-fn sys_exit(status: i32) -> i64 {
-    log::info!("Process exiting with status {}", status);
-    
-    // For now, just halt. Later: remove from scheduler, free resources
-    // TODO: Proper process termination
-    loop {
-        unsafe { asm!("hlt"); }
-    }
+/// Retour vers userspace : vérifie les signaux pending avant SYSRET
+///
+/// ## RÈGLE SIGNAL-01 (DOC1)
+/// Cette fonction est le point d'orchestration des signaux.
+/// Elle appelle process::signal::delivery::handle_pending_signals()
+/// si le flag signal_pending est levé dans le TCB courant.
+///
+/// ## RÈGLE SWITCH-02 (DOC1)
+/// arch/ lit le flag, process/signal/ livre les signaux.
+/// scheduler/ NE livre JAMAIS directement.
+pub fn syscall_return_to_user(frame: &mut SyscallFrame) {
+    // Vérifier signal pending depuis le TCB courant
+    // NOTE : l'intégration complète avec process::signal sera branchée
+    // lors de l'initialisation du module process/.
+    // La vérification se fait via le flag AtomicBool dans le TCB.
+    //
+    // Pattern correct :
+    //   if tcb.signal_pending.load(Ordering::Acquire) {
+    //       process::signal::delivery::handle_pending_signals(tcb);
+    //   }
+    //
+    // Pour l'instant, la vérification est un noop jusqu'à intégration process/.
+    let _ = frame;
 }
 
-/// sys_getpid - Get process ID
-fn sys_getpid() -> i64 {
-    // TODO: Get from current process
-    1
-}
+// ── Instrumentation syscall ───────────────────────────────────────────────────
 
-/// sys_gettid - Get thread ID
-fn sys_gettid() -> i64 {
-    // TODO: Get from current thread
-    1
-}
+static SYSCALL_COUNT:       AtomicU64 = AtomicU64::new(0);
+static SYSCALL_ERROR_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// sys_getppid - Get parent process ID  
-fn sys_getppid() -> i64 {
-    0 // init has no parent
-}
-
-/// sys_write - Write to a file descriptor
-fn sys_write(fd: i32, buf: *const u8, count: usize) -> i64 {
-    // Validate pointer (basic check)
-    if buf.is_null() {
-        return EFAULT;
-    }
-    
-    match fd {
-        // stdout (1) or stderr (2) - write to serial console
-        1 | 2 => {
-            unsafe {
-                for i in 0..count {
-                    let byte = *buf.add(i);
-                    // Write to serial port 0x3F8
-                    crate::arch::x86_64::serial::write_byte(byte);
-                }
-            }
-            count as i64
-        }
-        _ => {
-            // TODO: Look up fd in process file table and write to VFS
-            EBADF
-        }
-    }
-}
-
-/// sys_read - Read from a file descriptor
-fn sys_read(fd: i32, buf: *mut u8, count: usize) -> i64 {
-    if buf.is_null() {
-        return EFAULT;
-    }
-    
-    match fd {
-        // stdin (0) - read from serial/keyboard
-        0 => {
-            // TODO: Implement proper input handling
-            0 // EOF for now
-        }
-        _ => {
-            // TODO: Look up fd in process file table
-            EBADF
-        }
-    }
-}
-
-/// sys_open - Open a file
-fn sys_open(pathname: *const u8, flags: i32, mode: u32) -> i64 {
-    if pathname.is_null() {
-        return EFAULT;
-    }
-    
-    // TODO: Parse path string, call VFS open
-    // For now, return error
-    ENOENT
-}
-
-/// sys_openat - Open file relative to directory fd
-fn sys_openat(dirfd: i32, pathname: *const u8, flags: i32, mode: u32) -> i64 {
-    // AT_FDCWD (-100) means current directory
-    sys_open(pathname, flags, mode)
-}
-
-/// sys_close - Close a file descriptor
-fn sys_close(fd: i32) -> i64 {
-    // TODO: Implement FD table
-    0
-}
-
-/// sys_lseek - Reposition file offset
-fn sys_lseek(fd: i32, offset: i64, whence: i32) -> i64 {
-    // TODO: Implement
-    EBADF
-}
-
-/// sys_brk - Change data segment size
-fn sys_brk(addr: usize) -> i64 {
-    // Simple brk implementation
-    // TODO: Track per-process heap
-    static mut CURRENT_BRK: usize = 0x1000_0000;
-    
-    unsafe {
-        if addr == 0 {
-            return CURRENT_BRK as i64;
-        }
-        
-        if addr > CURRENT_BRK {
-            // Expand - would need to map pages
-            CURRENT_BRK = addr;
-        }
-        
-        CURRENT_BRK as i64
-    }
-}
-
-/// sys_mmap - Map memory
-fn sys_mmap(addr: u64, length: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> i64 {
-    use crate::memory::{mmap, PageProtection, VirtualAddress};
-    use crate::memory::mmap::MmapFlags;
-    
-    let vaddr = if addr == 0 { None } else { Some(VirtualAddress::new(addr as usize)) };
-    let mm_flags = MmapFlags::new(flags as u32);
-    
-    let protection = PageProtection::from_prot(prot as u32);
-    
-    match mmap::mmap(vaddr, length, protection, mm_flags, if fd < 0 { None } else { Some(fd) }, offset as usize) {
-        Ok(mapped_addr) => mapped_addr.value() as i64,
-        Err(_) => -12, // ENOMEM
-    }
-}
-
-/// sys_munmap - Unmap memory
-fn sys_munmap(addr: u64, length: usize) -> i64 {
-    use crate::memory::{mmap, VirtualAddress};
-    
-    match mmap::munmap(VirtualAddress::new(addr as usize), length) {
-        Ok(()) => 0,
-        Err(_) => EINVAL,
-    }
-}
-
-/// sys_arch_prctl - Architecture-specific thread state
-fn sys_arch_prctl(code: i32, addr: u64) -> i64 {
-    const ARCH_SET_GS: i32 = 0x1001;
-    const ARCH_SET_FS: i32 = 0x1002;
-    const ARCH_GET_FS: i32 = 0x1003;
-    const ARCH_GET_GS: i32 = 0x1004;
-    
-    const IA32_FS_BASE: u32 = 0xC0000100;
-    const IA32_GS_BASE: u32 = 0xC0000101;
-    
-    unsafe {
-        match code {
-            ARCH_SET_FS => {
-                wrmsr(IA32_FS_BASE, addr);
-                0
-            }
-            ARCH_SET_GS => {
-                wrmsr(IA32_GS_BASE, addr);
-                0
-            }
-            ARCH_GET_FS => {
-                let fs = rdmsr(IA32_FS_BASE);
-                *(addr as *mut u64) = fs;
-                0
-            }
-            ARCH_GET_GS => {
-                let gs = rdmsr(IA32_GS_BASE);
-                *(addr as *mut u64) = gs;
-                0
-            }
-            _ => EINVAL,
-        }
-    }
-}
-
-/// sys_uname - Get system information
-fn sys_uname(buf: *mut u8) -> i64 {
-    if buf.is_null() {
-        return EFAULT;
-    }
-    
-    // struct utsname { char [65] for each field }
-    // sysname, nodename, release, version, machine, domainname
-    let utsname = b"Exo-OS\0";
-    
-    unsafe {
-        // sysname
-        core::ptr::copy_nonoverlapping(utsname.as_ptr(), buf, utsname.len());
-        // Fill rest with zeros
-        core::ptr::write_bytes(buf.add(utsname.len()), 0, 65 - utsname.len());
-        // nodename
-        core::ptr::copy_nonoverlapping(b"exo\0".as_ptr(), buf.add(65), 4);
-        // release
-        core::ptr::copy_nonoverlapping(b"0.5.0\0".as_ptr(), buf.add(130), 6);
-        // version
-        core::ptr::copy_nonoverlapping(b"#1\0".as_ptr(), buf.add(195), 3);
-        // machine
-        core::ptr::copy_nonoverlapping(b"x86_64\0".as_ptr(), buf.add(260), 7);
-    }
-    
-    0
-}
-
-/// sys_getrandom - Get random bytes
-fn sys_getrandom(buf: *mut u8, count: usize, flags: u32) -> i64 {
-    if buf.is_null() {
-        return EFAULT;
-    }
-    
-    unsafe {
-        // Use RDRAND if available, otherwise simple PRNG
-        for i in 0..count {
-            let mut val: u64 = 0;
-            let success: u8;
-            asm!(
-                "rdrand {0}",
-                "setc {1}",
-                out(reg) val,
-                out(reg_byte) success,
-            );
-            
-            if success == 0 {
-                // RDRAND failed, use timestamp as fallback
-                asm!("rdtsc", out("eax") val, out("edx") _, options(nomem, nostack));
-            }
-            
-            *buf.add(i) = (val ^ (val >> 8)) as u8;
-        }
-    }
-    
-    count as i64
-}
+pub fn syscall_count()       -> u64 { SYSCALL_COUNT.load(Ordering::Relaxed)       }
+pub fn syscall_error_count() -> u64 { SYSCALL_ERROR_COUNT.load(Ordering::Relaxed) }

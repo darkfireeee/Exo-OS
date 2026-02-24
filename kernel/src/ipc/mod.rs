@@ -1,127 +1,140 @@
-//! IPC (Inter-Process Communication) subsystem
-//!
-//! Ultra-high performance IPC designed to crush Linux performance.
-//!
-//! ## Architecture:
-//! - **Core**: Lock-free MPMC rings, futex, priority queues
-//! - **Fusion Rings**: Adaptive inline/zerocopy/batch paths
-//! - **Named Channels**: System-wide named pipes with permissions
-//! - **Shared Memory**: Zero-copy large transfers
-//! - **Advanced**: Multicast, anycast, priority lanes, request-reply
-//!
-//! ## Performance Targets (vs Linux):
-//! - Inline send (≤40B): ~80-100 cycles (Linux pipes: ~1200) = 12-15x faster
-//! - Zero-copy: ~200-300 cycles = 4-6x faster
-//! - Batch: ~25-35 cycles/msg amortized = 35-50x faster
-//! - Futex uncontended: ~20 cycles (Linux: ~50) = 2.5x faster
-//! - Multicast per-receiver: +40 cycles additional
+// ipc/mod.rs — Module racine IPC pour Exo-OS
+//
+// Ce module est le point d'entrée unique pour tout le sous-système IPC.
+// Il agrège tous les sous-modules et expose les primitives nécessaires
+// aux autres couches du noyau (process, scheduler, fs, drivers).
+//
+// Architecture du sous-système IPC :
+//
+//   core/          — types, constantes, séquences, transferts, fastcall asm
+//   ring/          — ring buffers SPSC, MPMC, zero-copy, batch, fusion
+//   capability_bridge/ — vérification et délégation de capabilities
+//   endpoint/      — descripteurs, registre, connexions, lifecycle
+//   channel/       — sync, async, mpmc, broadcast, typed, streaming
+//   shared_memory/ — pages, pool, descripteurs, mappings, allocateur, NUMA
+//   sync/          — futex, wait_queue, event, barrier, rendezvous
+//   stats/         — compteurs statistiques AtomicU64 globaux
+//   message/       — builder, serializer, router, priority
+//   rpc/           — protocol, server, client, timeout
+//
+// Initialisation :
+//   Appeler `ipc_init(base_phys, n_numa_nodes)` au boot.
+//
+// Ordre de verrouillage (regle_bonus.md) :
+//   IPC locks = niveau 1 (toujours acquis avant scheduler=2, memory=3, fs=4)
+//
+// RÈGLE IPC-ROOT-01 : ipc_init() doit être appelé AVANT toute opération IPC.
+// RÈGLE IPC-ROOT-02 : pas d'import de modules fs/ ou process/ depuis ce module.
+
+// ---------------------------------------------------------------------------
+// Sous-modules
+// ---------------------------------------------------------------------------
 
 pub mod core;
-pub mod message;
+pub mod ring;
+pub mod capability_bridge;
+pub mod endpoint;
 pub mod channel;
-pub mod fusion_ring;
 pub mod shared_memory;
-pub mod named;
-pub mod capability;
-pub mod descriptor;
-pub mod test_runtime;
-pub mod integration_test;
+pub mod sync;
+pub mod stats;
+pub mod message;
+pub mod rpc;
 
-#[cfg(test)]
-pub mod tests;
+// ---------------------------------------------------------------------------
+// Re-exports principaux pour usage externe depuis kernel/
+// ---------------------------------------------------------------------------
 
-// Core re-exports
-pub use self::core::{
-    MpmcRing, RingConfig, Sequence, SequenceGroup,
-    SlotV2, SlotState, SLOT_SIZE,
-    TransferMode, TransferDescriptor,
-    Endpoint, EndpointId, EndpointFlags,
-    WaitQueue, WaitNode, WakeReason,
-    FutexMutex, FutexCondvar, FutexSemaphore,
-    BoundedPriorityQueue, priority,
-    ChannelHandle, ChannelStats,
-    // Advanced IPC
-    CoalesceMode, CoalesceController, PriorityClass, LaneStats,
-    CreditController, AnycastPolicy, IpcPerfCounters, GLOBAL_PERF_COUNTERS,
-    UltraFastRing, UltraFastRingStats, FAST_INLINE_MAX,
-    PriorityChannel, PriorityChannelStats,
-    MulticastChannel, MulticastReceiverState,
-    AnycastChannel, AnycastReceiverState,
-    RequestReplyChannel,
-    prefetch_read, prefetch_write, rdtsc, rdtscp,
+// core/ — types fondamentaux
+pub use core::{
+    types::{
+        ChannelId, EndpointId, ProcessId, MessageFlags, MessageType, IpcError,
+    },
+    constants::{
+        IPC_VERSION, IPC_MAX_CHANNELS, IPC_MAX_ENDPOINTS, IPC_MAX_PROCESSES,
+    },
 };
 
-// Message re-exports
-pub use message::{Message, MessageHeader, MessageType, INLINE_THRESHOLD};
+// stats/ — compteurs globaux
+pub use stats::counters::{IPC_STATS, StatEvent, IpcStatsSnapshot};
 
-// Fusion ring re-exports
-pub use fusion_ring::{FusionRing, Ring, Slot};
-
-// Named channel re-exports
-pub use named::{
-    ChannelNamespace, NamedChannelHandle, ChannelInfo,
-    ChannelType, ChannelPermissions, ChannelFlags,
-    create_channel, open_channel, unlink_channel,
-    list_channels, stat_channel, pipe, mkfifo,
+// endpoint/ — API principale d'endpoint
+pub use endpoint::{
+    endpoint_create, endpoint_destroy, endpoint_listen, endpoint_close,
+    do_connect as endpoint_connect, do_accept as endpoint_accept,
 };
 
-use ::core::sync::atomic::{AtomicU64, Ordering};
+// channel/ — API channels
+pub use channel::{
+    sync::{sync_channel_create, sync_channel_send, sync_channel_recv, sync_channel_destroy},
+};
 
-/// Global channel ID counter
-static NEXT_CHANNEL_ID: AtomicU64 = AtomicU64::new(1);
+// shared_memory/ — API SHM
+pub use shared_memory::{
+    allocator::{shm_alloc, shm_free},
+    mapping::{shm_map, shm_unmap, register_map_hook, register_unmap_hook},
+    pool::init_shm_pool,
+    numa_aware::numa_init,
+};
 
-/// Allocate a new unique channel ID
-pub fn alloc_channel_id() -> u64 {
-    NEXT_CHANNEL_ID.fetch_add(1, Ordering::Relaxed)
+// sync/ — API synchronisation IPC
+pub use sync::{
+    futex::{futex_wait, futex_wake},
+    event::{event_create, event_set, event_wait, event_destroy},
+    barrier::{barrier_create, barrier_arrive_and_wait, barrier_destroy},
+};
+
+// message/ — API message
+pub use message::{
+    builder::{IpcMessage, IpcMessageBuilder, msg_data, msg_control, msg_signal},
+    router::{router_add, router_remove, router_dispatch},
+};
+
+// rpc/ — API RPC
+pub use rpc::{
+    protocol::{MethodId, RpcStatus, RPC_MAGIC},
+    server::{rpc_server_create, rpc_server_register, rpc_server_dispatch, rpc_server_destroy},
+    client::{rpc_client_create, rpc_call, rpc_client_destroy},
+    timeout::{RpcTimeout, install_time_fn},
+};
+
+// ---------------------------------------------------------------------------
+// Initialisation globale IPC
+// ---------------------------------------------------------------------------
+
+/// Initialise le sous-système IPC.
+///
+/// Doit être appelée une seule fois au boot, avant tout usage IPC.
+///
+/// # Paramètres
+/// - `shm_base_phys` : adresse physique de base du pool SHM (alignée 4K)
+/// - `n_numa_nodes` : nombre de nœuds NUMA disponibles (1..=8)
+///
+/// # Sécurité
+/// Doit être appelée en contexte de démarrage, core 0, interruptions désactivées.
+pub fn ipc_init(shm_base_phys: u64, n_numa_nodes: u32) {
+    // 1. Initialiser le pool de pages SHM
+    // SAFETY: shm_base_phys doit être aligné à 4K et pointe vers de la mémoire
+    //         physique réservée pour le SHM kernel (initialisé une seule fois).
+    unsafe {
+        shared_memory::pool::init_shm_pool(shm_base_phys);
+    }
+
+    // 2. Initialiser le gestionnaire NUMA
+    // SAFETY: appelé une seule fois, n_numa_nodes validé par numa_init()
+    unsafe {
+        shared_memory::numa_aware::numa_init(n_numa_nodes as usize);
+    }
+
+    // 3. Enregistrer les stats IPC (reset compteurs)
+    stats::counters::IPC_STATS.reset_all();
+
+    // 4. Log minimal d'initialisation (au niveau du kernel)
+    // Note : on ne peut pas utiliser log!/println! ici (no_std), mais un hook
+    // d'initialisation peut être fourni par l'arch layer via les callbacks.
 }
 
-/// IPC error types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IpcError {
-    /// Channel not found
-    NotFound,
-    /// Channel is full
-    Full,
-    /// Channel is empty
-    Empty,
-    /// Permission denied
-    PermissionDenied,
-    /// Invalid message size
-    InvalidSize,
-    /// Ring buffer overflow
-    Overflow,
-    /// Timeout
-    Timeout,
-    /// Resource temporarily unavailable
-    WouldBlock,
-    /// Channel already exists
-    AlreadyExists,
-    /// Invalid channel name
-    InvalidName,
-    /// Channel is closed
-    ChannelClosed,
-    /// Channel is busy
-    Busy,
-    /// Interrupted
-    Interrupted,
-}
-
-pub type IpcResult<T> = Result<T, IpcError>;
-
-/// Initialize IPC subsystem
-pub fn init() {
-    // Initialize global channel ID counter
-    NEXT_CHANNEL_ID.store(1, Ordering::Relaxed);
-    
-    // Initialize shared memory pool
-    shared_memory::pool::init();
-    
-    log::info!("IPC subsystem initialized - Linux Crusher Edition");
-    log::info!("  Performance targets vs Linux pipes (~1200 cycles):");
-    log::info!("    - Inline (≤40B): ~80-100 cycles (12-15x faster)");
-    log::info!("    - Zero-copy: ~200-300 cycles (4-6x faster)");
-    log::info!("    - Batch: ~25-35 cycles/msg (35-50x faster)");
-    log::info!("    - Futex: ~20 cycles uncontended (2.5x faster)");
-    log::info!("    - Multicast: +40 cycles/receiver");
-    log::info!("  Advanced features: Priority lanes, Anycast, Request-Reply");
+/// Retourne le snapshot des statistiques IPC globales.
+pub fn ipc_stats_snapshot() -> IpcStatsSnapshot {
+    IPC_STATS.snapshot()
 }

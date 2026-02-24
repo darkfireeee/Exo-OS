@@ -1,0 +1,70 @@
+arborescence security
+
+│   ├── security/                       # 🔐 TCB — SÉCURITÉ NOYAU (PREUVES FORMELLES)
+│   │   ├── mod.rs
+│   │   │
+│   │   ├── PROOF_SECURITY.md           # ⚠️ Ce module est soumis à preuve formelle
+│   │   │                               # Voir /proofs/kernel_security/
+│   │   │
+│   │   ├── tcb/
+│   │   │   ├── mod.rs
+│   │   │   ├── boundary.rs             # Frontières TCB (ce qui est de confiance)
+│   │   │   ├── invariants.rs           # Invariants de sécurité (vérifiés Coq)
+│   │   │   └── audit.rs                # Journal d'audit TCB (immutable log)
+│   │   │
+│   │   ├── capability/                 # 🔐 SYSTÈME DE CAPABILITY — TCB, périmètre prouvé
+│   │   │   ├── mod.rs                  # Déplacé depuis ipc/ → security/ pour preuve formelle
+│   │   │   │                           # ipc/ accède via ipc/capability_bridge/ UNIQUEMENT
+│   │   │   │                           # fs/ accède directement ici (pas via ipc/)
+│   │   │   ├── token.rs                # CapToken (128 bits: ObjectId + rights + generation)
+│   │   │   ├── rights.rs               # Rights: READ, WRITE, EXEC, GRANT, REVOKE
+│   │   │   ├── table.rs                # CapTable par processus (radix tree)
+│   │   │   ├── revocation.rs           # Révocation instantanée (génération++)
+│   │   │   ├── delegation.rs           # Délégation (subset des droits)
+│   │   │   └── namespace.rs            # Namespace capability
+│   │   │
+│   │   ├── zero_trust/
+│   │   │   ├── mod.rs
+│   │   │   ├── policy.rs               # Moteur de politique ZT
+│   │   │   ├── context.rs              # Security context par thread/process
+│   │   │   ├── verify.rs               # Vérification CHAQUE accès
+│   │   │   └── labels.rs               # Labels de sécurité (MLS-like)
+│   │   │
+│   │   ├── crypto/
+│   │   │   ├── mod.rs
+│   │   │   ├── xchacha20_poly1305.rs   # XChaCha20-Poly1305 AEAD
+│   │   │   │                           # Utilisé pour TOUS les canaux kernel
+│   │   │   ├── blake3.rs               # Blake3 (checksums, PRF)
+│   │   │   ├── x25519.rs               # ECDH X25519 (échange clés)
+│   │   │   ├── ed25519.rs              # Ed25519 (signatures)
+│   │   │   ├── rng.rs                  # CSPRNG (RDRAND + /dev/urandom kernel)
+│   │   │   ├── kdf.rs                  # Key derivation (HKDF-BLAKE3)
+│   │   │   └── aes_gcm.rs              # AES-256-GCM (accélération HW AES-NI)
+│   │   │
+│   │   ├── isolation/
+│   │   │   ├── mod.rs
+│   │   │   ├── domains.rs              # Security domains (kernel/driver/user)
+│   │   │   ├── namespaces.rs           # Isolation namespaces
+│   │   │   ├── sandbox.rs              # Sandbox kernel (seccomp-like)
+│   │   │   └── pledge.rs               # Pledge-style restrictions (OpenBSD-inspired)
+│   │   │
+│   │   ├── integrity_check/
+│   │   │   ├── mod.rs
+│   │   │   ├── code_signing.rs         # Signature modules + drivers
+│   │   │   ├── runtime_check.rs        # Vérif périodique sections kernel
+│   │   │   └── secure_boot.rs          # Chain of trust UEFI Secure Boot
+│   │   │
+│   │   ├── exploit_mitigations/
+│   │   │   ├── mod.rs
+│   │   │   ├── kaslr.rs                # KASLR (kernel ASLR)
+│   │   │   ├── stack_protector.rs      # Stack canaries + guard pages
+│   │   │   ├── cfg.rs                  # Control Flow Guard (CFI)
+│   │   │   ├── cet.rs                  # CET Shadow Stack (Intel)
+│   │   │   └── safe_stack.rs           # SafeStack séparation
+│   │   │
+│   │   └── audit/
+│   │       ├── mod.rs
+│   │       ├── logger.rs               # Audit logger (ring buffer non-blocking)
+│   │       ├── rules.rs                # Règles d'audit
+│   │       └── syscall_audit.rs        # Audit des syscalls sensibles
+│   │

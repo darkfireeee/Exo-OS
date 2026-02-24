@@ -1,0 +1,61 @@
+exo-boot/
+├── Cargo.toml               # crate no_std, target x86_64-unknown-uefi / i686-unknown-none
+├── build.rs                 # Génère le linker script selon la cible
+├── linker/
+│   ├── uefi.ld              # Linker script UEFI (PE32+ format)
+│   └── bios.ld              # Linker script BIOS MBR/GPT
+│
+└── src/
+    ├── main.rs              # Point d'entrée UEFI (efi_main) ou BIOS (_start)
+    │
+    ├── uefi/                # Chemin UEFI (machines modernes, sécurisé)
+    │   ├── mod.rs
+    │   ├── entry.rs         # EFI_MAIN_ENTRY — signature UEFI obligatoire
+    │   ├── services.rs      # Boot services (AllocatePages, GetMemoryMap, etc.)
+    │   ├── protocols/
+    │   │   ├── mod.rs
+    │   │   ├── graphics.rs  # GOP — Graphics Output Protocol (framebuffer)
+    │   │   ├── file.rs      # EFI_FILE_PROTOCOL — lecture FAT32/ESP
+    │   │   ├── loaded_image.rs # EFI_LOADED_IMAGE — infos sur le bootloader lui-même
+    │   │   └── rng.rs       # EFI_RNG_PROTOCOL — entropy initiale (KASLR)
+    │   ├── secure_boot.rs   # Vérification signature kernel (Secure Boot chain)
+    │   │                    # ⚠️ Ne charge JAMAIS un kernel non signé si Secure Boot actif
+    │   └── exit.rs          # ExitBootServices — point de non-retour UEFI
+    │
+    ├── bios/                # Chemin BIOS legacy (machines anciennes / VMs)
+    │   ├── mod.rs
+    │   ├── mbr.asm          # MBR 512 bytes (stage 1) — charge stage 2
+    │   ├── stage2.asm       # Stage 2 — active A20, passe en mode protégé
+    │   ├── vga.rs           # Sortie texte VGA 80×25 (debug boot)
+    │   └── disk.rs          # Lecture disque via BIOS INT 13h (CHS/LBA)
+    │
+    ├── memory/              # Gestion mémoire bootloader (avant kernel memory/)
+    │   ├── mod.rs
+    │   ├── map.rs           # Consolidation E820 + UEFI Memory Map → format unifié
+    │   │                    # ⚠️ Ce format est ce que kernel/arch/boot/early_init.rs reçoit
+    │   ├── paging.rs        # Setup paging identité + higher-half kernel mapping
+    │   │                    # PML4 initial (4 niveaux) — le kernel reprendra avec les siens
+    │   └── regions.rs       # Régions réservées (ACPI, MMIO, firmware)
+    │
+    ├── kernel_loader/       # Chargement du binaire kernel
+    │   ├── mod.rs
+    │   ├── elf.rs           # Parsing ELF64 — segments PT_LOAD uniquement
+    │   │                    # Vérification : magic, machine=x86_64, type=ET_EXEC ou ET_DYN
+    │   ├── verify.rs        # Vérification signature Ed25519 du kernel ELF
+    │   │                    # Clé publique embarquée dans le bootloader lui-même
+    │   ├── relocations.rs   # Application des relocations PIE (KASLR)
+    │   │                    # Randomisation de l'adresse de chargement
+    │   └── handoff.rs       # Transfert de contrôle → kernel _start
+    │                        # Passe : memory_map, framebuffer_info, acpi_rsdp, entropy
+    │
+    ├── config/
+    │   ├── mod.rs
+    │   ├── parser.rs        # Parser fichier exo-boot.cfg (format minimal clé=valeur)
+    │   └── defaults.rs      # Valeurs par défaut si cfg absent
+    │
+    ├── display/             # Affichage early boot (logo, progression)
+    │   ├── mod.rs
+    │   ├── framebuffer.rs   # Écriture directe dans GOP framebuffer
+    │   └── font.rs          # Police bitmap embarquée (PSF1/PSF2 subset)
+    │
+    └── panic.rs             # Handler panic bootloader (affiche erreur + halt)

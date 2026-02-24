@@ -1,316 +1,599 @@
-# 🚀 Exo-OS v0.6.0 "Multicore Dawn"
+<div align="center">
 
-**Système d'exploitation moderne écrit en Rust avec SMP - Phase 2b 100% complète!**
-
-[![License](https://img.shields.io/badge/GPL-2.0license-blue.svg)](LICENSE)
-[![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
-[![Version](https://img.shields.io/badge/version-0.6.0-orange.svg)]()
-[![Tests](https://img.shields.io/badge/tests-60/60_passing-success.svg)]()
-[![CPUs](https://img.shields.io/badge/SMP-8_CPUs_ready-blue.svg)]()
-[![TODOs](https://img.shields.io/badge/TODOs-84_(down_64%)-green.svg)]()
-
----
-
-## 🎯 État Actuel - v0.6.0 (2025-01-08)
-
-**Phase 1:** ✅ **100% complète** (50/50 tests passés)  
-**Phase 2b:** ✅ **100% complète** (10/10 tests passés) ⭐ **NOUVEAU!**
-
-| Composant | Tests | Status |
-|-----------|-------|--------|
-| **Phase 1a - VFS** | 20/20 | ✅ 100% |
-| **Phase 1b - Processus** | 15/15 | ✅ 100% |
-| **Phase 1c - Signaux** | 10/10 | ✅ 100% |
-| **Phase 1d - CoW** | 5/5 | ✅ 100% |
-| **Phase 2a - SMP Bootstrap** | 8/8 | ✅ 100% |
-| **Phase 2b - SMP Scheduler** | 10/10 | ✅ 100% ⭐ |
-
-**Documentation Phase 1:** [PHASE_1_VALIDATION.md](docs/current/PHASE_1_VALIDATION.md)  
-**Documentation Phase 2b:** ⭐ **[v0.6.0_RELEASE_SUMMARY.md](docs/current/v0.6.0_RELEASE_SUMMARY.md)**  
-**Quick Start:** [QUICKSTART_v0.6.0.md](QUICKSTART_v0.6.0.md)  
-**Status:** [STATUS_v0.6.0.md](STATUS_v0.6.0.md)
-
----
-
-## ✨ Nouveautés v0.6.0 (2025-01-08) ⭐
-
-### SMP Scheduler (Phase 2b - COMPLET!)
-- ✅ **Per-CPU Queues** - 8 queues lock-free (une par CPU)
-- ✅ **Work Stealing** - Load balancing automatique cross-CPU
-- ✅ **schedule_smp()** - Fonction de scheduling SMP
-- ✅ **Timer Integration** - Interrupts SMP-aware
-- ✅ **Statistics** - Tracking complet (enqueue/dequeue/steal)
-
-### Test Framework
-- ✅ **6 Tests Fonctionnels** - Validation complète (smp_tests.rs)
-- ✅ **4 Benchmarks** - Mesures de performance (smp_bench.rs)
-- ✅ **Auto-Execution** - Tests s'exécutent au boot (Phase 2.8-2.9)
-- ✅ **Performance Targets** - <10 cycles cpu_id, <100 enqueue/dequeue
-
-### Code Quality
-- ✅ **TODOs Réduits** - 234 → 84 (-64%!)
-- ✅ **Duplicates Supprimés** - -370 lignes de code dupliqué
-- ✅ **Build Clean** - 0 erreurs de compilation
-- ✅ **Documentation** - 1,550+ lignes créées
-
----
-
-## 📚 Fonctionnalités Validées (v0.6.0)
-
-### Gestion Mémoire
-- ✅ **Allocateur bitmap** - 512MB, frames 4KB
-- ✅ **Heap allocator** - 64MB stable
-- ✅ **mmap/munmap** - Allocation virtuelle
-- ✅ **mprotect** - Gestion permissions
-- ⚠️ **CoW** - Conceptuel (page fault handler à implémenter)
-
-### Système de Fichiers Virtuels
-- ✅ **tmpfs** - 5/5 tests (create, write, read, offset, size)
-- ✅ **devfs** - 5/5 tests (/dev/null, /dev/zero)
-- ✅ **procfs** - 5/5 tests (cpuinfo, meminfo, status, uptime)
-- ✅ **Registry** - 5/5 tests (device major/minor)
-
-### Gestion Processus
-- ✅ **fork/wait** - 5/5 tests (PID alloc, zombie cleanup)
-- ✅ **clone** - Thread support (CLONE_THREAD)
-- ✅ **futex** - Synchronisation (WAIT/WAKE/REQUEUE)
-- ✅ **exit/wait4** - Exit status propagation
-
-### Signaux POSIX
-- ✅ **Syscalls** - rt_sigaction, sigprocmask, kill, tgkill
-- ✅ **Handler registration** - SIG_DFL, SIG_IGN, custom
-- ✅ **Signal delivery** - Pending sets, masking
-- ✅ **Signal frame** - Context save/restore
-
-### Scheduler SMP (Nouveau! v0.6.0)
-- ✅ **Hybrid Scheduler** - Global + Per-CPU queues
-- ✅ **schedule_smp()** - Per-CPU scheduling logic
-- ✅ **Work Stealing** - steal_half() algorithm
-- ✅ **Statistics Tracking** - Complete counters
-- ✅ **Timer Integration** - SMP-aware preemption
-- ✅ **Benchmark** - <10 cycles cpu_id, <100 enqueue/dequeue
-
-### SMP Multi-core
-- ✅ **8 CPUs ready** - Support jusqu'à 8 cores
-- ✅ **ACPI/MADT parsing** - Détection automatique
-- ✅ **APIC/IO-APIC** - Initialisation complète
-- ✅ **AP Bootstrap** - Trampoline 16→32→64 bit
-- ✅ **IPI messaging** - INIT/SIPI sequences
-- ✅ **SSE/FPU/AVX** - Init sur tous les cores
-- ✅ **Per-CPU scheduler** - Production-ready!
-
----
-
-## 🚀 Quick Start
-
-### Compilation
-
-```bash
-# Clone et build
-git clone https://github.com/darkfireeee/Exo-OS.git
-cd Exo-OS
-./scripts/build_complete.sh
+```
+███████╗██╗  ██╗ ██████╗       ██████╗ ███████╗
+██╔════╝╚██╗██╔╝██╔═══██╗     ██╔═══██╗██╔════╝
+█████╗   ╚███╔╝ ██║   ██║     ██║   ██║███████╗
+██╔══╝   ██╔██╗ ██║   ██║     ██║   ██║╚════██║
+███████╗██╔╝ ██╗╚██████╔╝     ╚██████╔╝███████║
+╚══════╝╚═╝  ╚═╝ ╚═════╝       ╚═════╝ ╚══════╝
 ```
 
-### Test QEMU
+### Microkernel Hybride Haute Performance
 
-```bash
-qemu-system-x86_64 -cdrom build/exo_os.iso -m 128M -nographic -serial mon:stdio
-```
+[![Status](https://img.shields.io/badge/status-en%20développement-orange?style=flat-square)](.)
+[![Rust](https://img.shields.io/badge/Rust-no__std%20nightly-orange?style=flat-square&logo=rust)](.)
+[![Arch](https://img.shields.io/badge/cible-x86__64%20·%20aarch64-blue?style=flat-square)](.)
+[![Preuves](https://img.shields.io/badge/preuves-Coq%20·%20TLA%2B-8b5cf6?style=flat-square)](.)
+[![Crypto](https://img.shields.io/badge/crypto-XChaCha20--Poly1305-22c55e?style=flat-square)](.)
+[![Licence](https://img.shields.io/badge/licence-MIT-lightgrey?style=flat-square)](.)
 
-**Sortie attendue :**
-```
-[KERNEL] ✓ Multiboot2, Heap, Scheduler OK
-[SHELL] Exo-Shell v0.5.0 launched ✓
+<br>
 
-╔═══════════════════════════════════════╗
-║  🚀 Interactive Kernel Shell v0.5.0   ║
-╚═══════════════════════════════════════╝
+*"Make it work, make it right, make it fast."*
 
-exo-os:~$ _
-```
+<br>
 
----
-
-## 🎯 Fonctionnalités
-
-- ✅ **Boot multiboot2** avec GRUB (ASM→C→Rust)
-- ✅ **Mode 64-bit** avec paging identity 8GB
-- ✅ **Heap allocator** 10MB stable
-- ✅ **Scheduler** round-robin préemptif
-- ✅ **Exo-Shell** 14 commandes (ls, cat, mkdir, etc.)
-- ✅ **VFS** API filesystem unifiée
-- ⏳ **Keyboard** PS/2 (v0.6.0)
-- ⏳ **FAT32** Lecture ISO (v0.6.0)
+</div>
 
 ---
 
-## 🐚 Exo-Shell - Commandes
+## Qu'est-ce qu'Exo-OS ?
 
-```bash
-help            # Aide
-ls [path]       # Liste répertoire
-cat <file>      # Affiche fichier
-mkdir <dir>     # Crée répertoire
-touch <file>    # Crée fichier
-write <f> <txt> # Écrit dans fichier
-rm <file>       # Supprime fichier
-pwd / cd        # Navigation
-version / exit  # Système
-```
+**Exo-OS** est un noyau de système d'exploitation **microkernel hybride** écrit en Rust, conçu autour de trois piliers non-négociables :
+
+- 🔴 **Performance extrême** — context switch 500–800 cycles, IPC 500–700 cycles, allocateur thread-local 15–25 cycles
+- 🔐 **Sécurité prouvée mathématiquement** — TCB de ~500 lignes soumis à preuves formelles Coq + TLA+, Zero Trust intégral, XChaCha20-Poly1305 sur tous les canaux inter-domaines
+- 🏗️ **Architecture microkernel pure** — seul `fs/` reste en Ring 0, tous les drivers tournent en Ring 1 isolé
+
+> **Décision fondamentale :** un crash de driver ne fait **jamais** planter le noyau. Pile réseau, GPU, USB et audio opèrent en espace utilisateur privilégié avec isolation IOMMU complète.
 
 ---
 
-## 🏗️ Architecture
+## Table des matières
 
-### Boot Sequence
-```
-GRUB → boot.asm (32→64bit) → boot.c (FFI) → rust_main() → Exo-Shell
-```
-
-### Mémoire Layout
-```
-0x0000_0000 - 0x0010_0000 : BIOS, VGA
-0x0010_0000 - 0x0050_0000 : Kernel (4MB)
-0x0050_0000 - 0x0050_4000 : Bitmap (16KB)
-0x0080_0000 - 0x0120_0000 : Heap (10MB)
-```
+- [Architecture](#architecture)
+- [Modèle de sécurité](#modèle-de-sécurité)
+- [Métriques cibles](#métriques-cibles)
+- [Modules kernel](#modules-kernel)
+- [Preuves formelles](#preuves-formelles)
+- [Règles absolues](#règles-absolues)
+- [Ordre de boot](#ordre-de-boot)
+- [Structure du projet](#structure-du-projet)
+- [Stack technique](#stack-technique)
+- [Documentation](#documentation)
 
 ---
 
-## 📚 Documentation
+## Architecture
 
-- 📖 **[Index complet](docs/INDEX_COMPLET.md)** - Toute la documentation
-- 🔨 **[Build Guide](docs/BUILD_AND_TEST_GUIDE.md)** - Compilation et tests
-- 📋 **[Release Notes](docs/v0.5.0_RELEASE_NOTES.md)** - Nouveautés v0.5.0
-- 🔗 **[Linkage Report](docs/LINKAGE_SUCCESS_REPORT.md)** - Détails C/Rust
-- 🧠 **[Heap Fix](docs/HEAP_ALLOCATOR_FIX.md)** - Correction allocator
-- 🏗️ **[Architecture](docs/ARCHITECTURE_v0.5.0.md)** - Vue d'ensemble
+### Hiérarchie des couches
+
+**Règle absolue : aucune dépendance remontante n'est tolérée.** Toute violation est un bug architectural, pas un avertissement.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  RING 3 · Userland                                          │
+│  applications/   shell/   coreutils/   libs/                │
+├─────────────────────────────────────────────────────────────┤
+│  RING 1 · Serveurs système                                  │
+│  shield/   network_server/   device_server/   init_server/  │
+│  crypto_server/   ipc_router/   drivers/                    │
+├─────────────────────────────────────────────────────────────┤
+│  RING 0 · Kernel                                            │
+│  security/capability/   ipc/   fs/ ★   process/             │
+│  scheduler/   memory/                                       │
+├─────────────────────────────────────────────────────────────┤
+│  MATÉRIEL                                                   │
+│  x86_64/   APIC/   ACPI/   SMP/   IOMMU/                   │
+└─────────────────────────────────────────────────────────────┘
+
+  ★ seul module autorisé en Ring 0 hors TCB
+```
+
+### Chaîne de dépendances (règle inviolable)
+
+```
+memory/ (0) → scheduler/ (1) → process/ (1.5) → ipc/ (2a) → fs/ (3)
+```
+
+| Depuis ╲ Vers | `memory/` | `scheduler/` | `process/` | `ipc/` | `fs/` |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **`memory/`**    | —  | ✗  | ✗  | ✗  | ✗ |
+| **`scheduler/`** | ✅ | —  | ✗  | ✗  | ✗ |
+| **`process/`**   | ✅ | ✅ | —  | ✗  | ✗ † |
+| **`ipc/`**       | ✅ | ✅ | ✅ | —  | ✗ ‡ |
+| **`fs/`**        | ✅ | ✅ | ✅ | ✅ | — |
+
+> `†` `process/` accède à `fs/` uniquement via le **trait abstrait `ElfLoader`** enregistré au boot  
+> `‡` `ipc/` accède à `fs/` uniquement via le **shim `fs/ipc_fs/shim.rs`**
+
+### Résolution des cycles de dépendances
+
+Les dépendances circulaires apparentes sont résolues par des **traits abstraits enregistrés au boot** :
+
+```rust
+// Problème : memory/dma/ doit réveiller des threads (process/)
+//            mais memory/ ne peut pas importer process/
+// Solution : trait abstrait — process/ s'enregistre au boot
+
+pub trait DmaWakeupHandler: Send + Sync {
+    fn wakeup_thread(&self, id: ThreadId, result: Result<(), DmaError>);
+}
+
+// process/ enregistre l'implémentation concrète au boot
+// DMA reste sous memory/ → couche 0 respectée, zéro cycle
+```
+
+Le même pattern est appliqué pour `ElfLoader` (`process/` → `fs/`).
 
 ---
 
-## ��️ Roadmap
+## Modèle de sécurité
 
-### ✅ v0.6.0 "Multicore Dawn" (Actuel)
-- ✅ SMP Foundation - 4 CPUs online
-- ✅ ACPI/APIC/IPI complet
-- ✅ AP Bootstrap fonctionnel
-- ✅ Tests multi-core Bochs
+### 3 couches indépendantes
 
-### v0.7.0 "Parallel Universe" (Prochain - 2-3 semaines)
-- 🟡 Per-CPU scheduler queues
-- 🟡 Load balancing (work stealing)
-- 🟡 Thread migration entre CPUs
-- 🟡 TLB shootdown
-- 🟡 Lock-free logging
-- 🟡 SMP stress tests
+```
+┌─────────────────────────────────────────────────────────────┐
+│  COUCHE 1 · TCB Kernel (Preuves formelles Coq / TLA+)       │
+│  security/capability/ + security/crypto/                    │
+│  ~500 lignes · 4 propriétés prouvées mathématiquement       │
+├─────────────────────────────────────────────────────────────┤
+│  COUCHE 2 · Zero Trust (Vérification systématique)          │
+│  XChaCha20-Poly1305 · Capabilities gated · KPTI             │
+│  Retpoline · SSBD per-thread · KASLR · CET Shadow Stack     │
+├─────────────────────────────────────────────────────────────┤
+│  COUCHE 3 · Shield (Ring 1 · type Bitdefender)              │
+│  ML comportemental <100µs · 47 syscalls hookés              │
+│  Sandbox auto · Firewall stateful · DNS guard anti-C2        │
+└─────────────────────────────────────────────────────────────┘
+```
 
-### v0.8.0 (2 mois)
-- 📌 Network stack TCP/IP
-- 📌 Socket API BSD
-- 📌 Drivers réseau (VirtIO, E1000)
+### Système de capabilities
 
-### v1.0.0 "Linux Crusher" (6-9 mois)
-- 🎯 Filesystem ext4
-- 🎯 Drivers Linux GPL-2.0
-- 🎯 Security (capabilities, TPM)
-- 🎯 Performance > Linux
+Source de vérité **unique** dans `security/capability/`. Révocation **O(1)** par incrémentation de génération.
 
-Voir [ROADMAP complet](docs/current/ROADMAP.md)
+```
+CapToken · 128 bits · inforgeable
+├── object_id  : u64   identifiant objet unique cross-module
+├── rights     : u16   READ | WRITE | EXEC | GRANT | REVOKE | DELEGATE
+├── generation : u32   incrémentée à la révocation → invalidation instantanée
+└── tag        : u16   type d'objet (channel, file, shm, ...)
+```
 
----
+**Propriété garantie :** `revoke(oid)` rend immédiatement invalide **tout** token portant cet `object_id`, en O(1), sans parcours de tokens existants.
 
-## 🔨 Build manuel
+### XChaCha20-Poly1305
 
-```bash
-# Kernel
-cargo build --release --manifest-path kernel/Cargo.toml
+Chiffrement de **tous** les canaux inter-domaines :
+- Messages IPC entre domaines de sécurité distincts
+- Transferts DMA vers périphériques hors-TCB
+- Communication kernel ↔ drivers Ring 1
 
-# Boot objects
-nasm -f elf64 kernel/src/arch/x86_64/boot/boot.asm -o build/boot_objs/boot.o
-gcc -m64 -ffreestanding -c kernel/src/arch/x86_64/boot/boot.c -o build/boot_objs/boot_c.o
-ar rcs build/boot_objs/libboot_combined.a build/boot_objs/*.o
+### Shield — daemon anti-malware
 
-# Linkage
-ld -n -T linker.ld -o build/kernel.elf \
-   build/boot_objs/libboot_combined.a \
-   target/x86_64-unknown-none/release/libexo_kernel.a
+> ⚠️ **Shield est lui-même sandboxé.** Un daemon de sécurité non-isolé est une escalade de privilèges garantie pour un attaquant.
 
-# ISO
-strip build/kernel.elf -o build/kernel_stripped.elf
-mkdir -p build/iso/boot/grub
-cp build/kernel_stripped.elf build/iso/boot/kernel.elf
-cp bootloader/grub.cfg build/iso/boot/grub/
-grub-mkrescue -o build/exo_os.iso build/iso
+```rust
+fn self_isolate() {
+    syscall_filter::apply_shield_filter();      // restriction syscalls
+    capability::drop_all_except(&[             // least privilege strict
+        Cap::SYS_PTRACE,
+        Cap::NET_ADMIN,
+        Cap::AUDIT_WRITE,
+    ]);
+    watchdog::register(Duration::from_secs(30)); // redémarrage si crash
+}
 ```
 
 ---
 
-## 🧪 Tests
+## Métriques cibles
 
-```bash
-# QEMU standard
-qemu-system-x86_64 -cdrom build/exo_os.iso -m 128M -nographic -serial mon:stdio
+> Philosophie : **viser 2–3× Linux est ambitieux mais réaliste. Viser 10× est du marketing.**  
+> Calibrage sur : L4 microkernel, Solaris, FreeBSD ULE, jemalloc.
 
-# QEMU debug
-qemu-system-x86_64 -cdrom build/exo_os.iso -m 128M -nographic \
-  -serial mon:stdio -d int,cpu_reset -no-reboot
+| Métrique | Cible v1.0 | Linux référence | Gain |
+|:---|:---:|:---:|:---:|
+| Context switch | 500–800 cycles | ~2134 cycles | **3–4×** |
+| Latence IPC | 500–700 cycles | ~1247 cycles | **2–2.5×** |
+| Allocateur TLS | 15–25 cycles | ~50 cycles | **2–3×** |
+| Scheduler `pick_next` | 100–150 cycles | ~200 cycles | **1.3–2×** |
+| Syscall fast path | 80–100 cycles | ~150 cycles | **1.5–2×** |
+| Boot total | <1 s | ~2 s | **2×** |
+| SMP init | <300 ms | ~400 ms | — |
+| IPI latence | <10 µs | ~20–50 µs | — |
+| DMA submit | <500 ns | — | — |
+| NVMe 4K E2E | <10 µs | ~15 µs | — |
+| NVMe séquentiel | >12 GB/s | ~10 GB/s | — |
 
-# Tests Rust
-cd kernel && cargo test
+### Anti-objectifs (impossibles physiquement)
+
+| Objectif irréaliste | Raison |
+|:---|:---|
+| Context switch <200 cycles | Incompatible avec isolation mémoire |
+| Syscall <50 cycles | Minimum hardware ~60 cycles |
+| Boot <100 ms | ACPI parsing incompressible ~50 ms |
+| IPI <1 µs | Limite hardware APIC |
+
+---
+
+## Modules kernel
+
+### `memory/` — Couche 0 absolue
+
+> `memory/` n'importe **jamais** `scheduler/`, `ipc/`, `fs/` ou `process/`.
+
+| Composant | Rôle |
+|:---|:---|
+| Buddy allocator | O(log n), zones DMA / DMA32 / NORMAL / MOVABLE |
+| SLUB | Objets fixes, moins de fragmentation que slab classique |
+| Per-CPU pools | 512 frames/CPU, lock-free, zéro contention fast path |
+| **EmergencyPool** | 64 `WaitNode` statiques, initialisé **EN PREMIER** absolu |
+| **FutexTable** | **Unique** dans tout l'OS, indexée par adresse **physique** |
+| TLB shootdown | Synchrone avec barrière ACK — jamais de free avant ACK |
+| DMA Engine | Sous `memory/dma/`, wakeup via trait abstrait |
+| CoW | Fork duplique les VMAs, copie physique au premier write |
+
+**Anti-deadlock fondamental :**
+
+```
+Scénario deadlock évité :
+  Allocation → heap plein → reclaim → écriture swap → sleep
+  → wait_queue veut allouer WaitNode depuis heap → DEADLOCK
+
+Solution EmergencyPool :
+  wait_queue n'appelle JAMAIS le heap
+  → deadlock impossible même sous pression mémoire maximale
 ```
 
 ---
 
-## 🤝 Contributing
+### `scheduler/` — Couche 1
 
-Les contributions sont bienvenues !
+> `pick_next_task()` en **100–150 cycles**. Le hot path ne fait jamais d'allocation ni de sleep.
 
-1. Fork le repository
-2. Créer une branche (`git checkout -b feature/Amazing`)
-3. Commit (`git commit -m 'Add feature'`)
-4. Push (`git push origin feature/Amazing`)
-5. Ouvrir une Pull Request
+**`signal/` est ABSENT de `scheduler/`** — déplacé dans `process/signal/`. Le scheduler lit uniquement un `AtomicBool signal_pending` dans le TCB.
 
-Voir [CONTRIBUTING.md](CONTRIBUTING.md) pour les guidelines.
+| Composant | Détail |
+|:---|:---|
+| Run queues | 3 files simples RT / Normal / Idle, pop head = O(1) |
+| `switch_asm.s` | ASM pur : `rbx`, `rbp`, `r12–r15`, `rsp`, `MXCSR`, `x87 FCW` |
+| KPTI | CR3 switché **atomiquement** dans `switch_asm.s` avant restauration |
+| Lazy FPU | CR0.TS=1 au switch, `#NM` → `XSAVE/XRSTOR` avec détection AVX |
+| PreemptGuard | RAII obligatoire, jamais de `disable()`/`enable()` directs |
+| WaitQueue | Utilise `EmergencyPool` exclusivement — jamais le heap |
+| C-state governor | `fetch_min(latency)` à l'admission d'un thread RT |
+
+> ⚠️ **`r15` obligatoire dans `switch_asm.s`** — utilisé par `ext4plus/inode/ops.rs`. Son omission provoque une corruption silencieuse lors de préemptions en zone FS.
+
+```asm
+context_switch_asm:
+    push    %rbx
+    push    %rbp
+    push    %r12
+    push    %r13
+    push    %r14
+    push    %r15          # ← obligatoire (ext4plus/inode/ops.rs)
+    sub     $4,  %rsp
+    stmxcsr (%rsp)        # MXCSR — registre contrôle SSE
+    sub     $4,  %rsp
+    fstcw   (%rsp)        # x87 FCW — contrôle virgule flottante
+    mov     %rsp, (%rdi)  # sauvegarder rsp ancien thread
+    cmp     %rdx, %cr3
+    je      .skip_cr3
+    mov     %rdx, %cr3    # KPTI — switcher les page tables
+.skip_cr3:
+    mov     %rsi, %rsp    # charger rsp nouveau thread
+    # ... restauration symétrique ...
+    ret
+```
 
 ---
 
-## 📊 Statistiques
+### `process/` — Couche 1.5
 
-- **Code** : ~65,000 lignes (Rust + C + ASM)
-- **Fichiers Rust** : 420+ modules
-- **CPUs supportés** : 4 (SMP)
-- **Kernel** : 23MB (avec debug)
-- **ISO** : 28MB bootable
-- **Boot time** : ~2s (QEMU), ~400ms (SMP init)
-- **Phase 1** : 100% (50/50 tests)
-- **Phase 2** : 30% (SMP bootstrap OK)
-
----
-
-## 📄 License
-
-Projet sous licence MIT. Voir [LICENSE](LICENSE).
+| Fonctionnalité | Implémentation |
+|:---|:---|
+| `fork()` CoW | <1 µs — duplication VMAs, protection read-only, refcount frames |
+| `execve()` | Via trait abstrait `ElfLoader` enregistré par `fs/` au boot |
+| `signal/` | Livraison **uniquement** au retour userspace — pas depuis le hot path |
+| TCB | ≤128 bytes (2 cache lines) pour accès sans cache miss |
+| Namespaces | PID / mount / net / UTS / user |
+| Wakeup DMA | Impl `DmaWakeupHandler` enregistrée auprès de `memory/dma/` |
 
 ---
 
-## 🙏 Remerciements
+### `ipc/` — Couche 2a
 
-- OSDev Community
-- Rust Community  
-- GRUB & QEMU Projects
+| Composant | Règle critique |
+|:---|:---|
+| SPSC Ring | Head et tail sur **cache lines séparées** (`CachePadded`) — sans ça : false sharing → dégradation 10–100× |
+| Fusion Ring | Batching adaptatif anti-thundering herd, seuil ajusté dynamiquement |
+| SHM pages | `FrameFlags::NO_COW` **obligatoire** — un `fork()` ne copie pas les canaux IPC |
+| `futex.rs` | Délégation pure à `memory/utils/futex_table` — zéro logique locale |
+| `capability_bridge/` | Shim ~50 lignes vers `security/capability/` — zéro logique de droits locale |
+
+---
+
+### `fs/` — Couche 3 (seul en Ring 0)
+
+| Composant | Détail |
+|:---|:---|
+| VFS + ext4+ | io_uring natif, zero-copy DMA, fsync optimisé |
+| Intégrité | Blake3 checksums sur toutes les écritures, WAL avant métadonnées |
+| Anti-deadlock | Lock inode relâché **avant** tout sleep (`release-before-sleep`) |
+| EINTR | `IORING_OP_ASYNC_CANCEL` systématique si signal pendant wait |
+| Accès IPC | Uniquement via `fs/ipc_fs/shim.rs` — jamais d'import direct |
+
+---
+
+### `security/` — TCB prouvé formellement
+
+**Périmètre Coq/TLA+** : exactement 5 fichiers, ~500 lignes.  
+Toute modification requiert une mise à jour des preuves associées.
+
+```
+security/capability/
+├── model.rs        ← PÉRIMÈTRE PROUVÉ
+├── token.rs        ← PÉRIMÈTRE PROUVÉ
+├── rights.rs       ← PÉRIMÈTRE PROUVÉ
+├── revocation.rs   ← PÉRIMÈTRE PROUVÉ
+└── delegation.rs   ← PÉRIMÈTRE PROUVÉ
+```
+
+`ipc/capability_bridge/` est un shim **hors périmètre** qui délègue tout à `security/capability/`.
+
+---
+
+## Preuves formelles
+
+**Outils :** Coq 8.17 (propriétés fonctionnelles) + TLC model checker (propriétés de concurrence)
+
+**PROP-1 — Sûreté des capabilities**
+```
+∀ token : CapToken, table : CapTable,
+  verify(table, token) = Ok →
+    token.object_id ∈ table ∧
+    token.generation = table[token.object_id].generation
+```
+
+**PROP-2 — Révocation instantanée O(1)**
+```
+∀ token : CapToken, oid : ObjectId,
+  revoke(oid) ; verify(table', token) = Err(Revoked)
+    quand token.object_id = oid
+
+  Implémentation : génération++ uniquement — jamais de parcours de tokens
+```
+
+**PROP-3 — Confinement de la délégation**
+```
+∀ t_src t_child : CapToken,
+  delegate(t_src) = t_child  →  t_child.rights ⊆ t_src.rights
+
+  On ne peut jamais déléguer plus de droits qu'on en possède
+```
+
+**PROP-4 — Correction XChaCha20-Poly1305**
+```
+∀ p : Plaintext, k : Key, n : Nonce,
+  decrypt(k, n, encrypt(k, n, p)) = Ok(p) ∧ integrity_verified
+```
+
+---
+
+## Règles absolues
+
+### Dépendances (violations = bug architectural)
+
+```
+✗  memory/    →  scheduler/  ipc/  fs/  process/
+✗  scheduler/ →  ipc/  fs/
+✗  process/   →  fs/            (sauf trait ElfLoader)
+✗  ipc/       →  fs/            (sauf fs/ipc_fs/shim.rs)
+```
+
+### Hot path — zéro exception
+
+```
+✗  Allocation heap dans pick_next_task(), switch, IRQ handlers
+✗  Sleep ou wait dans le hot path scheduler
+✗  Appel vers une couche supérieure depuis le hot path
+```
+
+### Mémoire
+
+```
+✅  EmergencyPool initialisé EN PREMIER (étape 3 du boot)
+✅  FutexTable indexée par adresse PHYSIQUE, unique dans memory/
+✅  TLB shootdown synchrone + ACK avant tout free_pages()
+✅  FrameFlags::DMA_PINNED maintenu jusqu'à wait_dma_complete()
+✅  FrameFlags::NO_COW sur toutes les pages IPC / SHM
+✗   Split huge page si DMA_PINNED
+✗   Free frame DMA avant ACK de complétion
+```
+
+### Context switch
+
+```
+✅  Sauvegarder : rbx  rbp  r12  r13  r14  r15  rsp
+✅  Sauvegarder : MXCSR  x87 FCW
+✅  CR3 switché DANS switch_asm.s — avant restauration des registres
+✅  Lazy FPU sauvegardée AVANT l'appel à switch_asm
+✗   Oublier r15  →  corruption silencieuse inode/ext4
+✗   Switcher CR3 après restauration  →  race condition KPTI
+```
+
+### Sécurité
+
+```
+✅  security/capability/ = unique source de vérité pour verify()
+✅  XChaCha20-Poly1305 sur tout canal inter-domaines
+✅  Retpoline sur tout appel indirect dans le hot path
+✗   Dupliquer verify() dans un autre module
+✗   Canal inter-domaines non chiffré
+✗   Modifier security/capability/model.rs sans MAJ des preuves Coq
+```
+
+### Préemption (RAII obligatoire)
+
+```rust
+// ✅ CORRECT — préemption rétablie automatiquement au Drop
+let _guard = PreemptGuard::new();
+
+// ✗ INTERDIT — risque de déséquilibre si panic entre les deux
+preempt_disable();
+// ...
+preempt_enable();
+```
+
+---
+
+## Ordre de boot
+
+```
+ 1   arch::boot::early_init()                      GDT minimal, paging identité
+ 2   arch::boot::parse_memory_map()                E820 / UEFI memory map
+ 3   memory::frame::emergency_pool::init()         ← EN PREMIER ABSOLU
+ 4   memory::allocator::bitmap::bootstrap()        Allocateur minimal bootstrap
+ 5   memory::allocator::buddy::init()              Buddy complet actif
+ 6   memory::heap::global::init()                  #[global_allocator] opérationnel
+ 7   memory::utils::futex_table::init()            Table futex unique
+ 8   arch::x86_64::gdt::init()
+ 9   arch::x86_64::idt::init()
+10   arch::x86_64::tss::init_with_ist_stacks()     IST pour #DF / #NMI / #MCE
+11   arch::x86_64::apic::init()
+12   arch::x86_64::acpi::parser::init()            MADT → topologie SMP
+13   scheduler::core::init()
+14   scheduler::fpu::detect_xsave_size()           Détection AVX / AVX-512 / AMX
+15   scheduler::timer::tick::init(HZ=1000)
+16   scheduler::timer::hrtimer::init()
+17   security::capability::init()                  TCB capabilities opérationnel
+18   security::crypto::rng::init()                 CSPRNG (RDRAND + entropy pool)
+19   process::core::registry::init()
+20   process::state::wakeup::register_with_dma()   Enregistrer DmaWakeupHandler
+21   memory::dma::iommu::init()
+22   fs::core::vfs::init()
+23   fs::ext4plus::mount_root()
+24   ipc::core::init()
+25   security::exploit_mitigations::kaslr::verify()
+26   arch::x86_64::smp::start_aps()                Démarrer CPUs additionnels
+27   memory::frame::pool::init_percpu()            Per-CPU pools (après SMP)
+28   memory::utils::oom_killer::start_thread()
+29   process::lifecycle::spawn_pid1()              init_server (PID 1)
+30   # PID 1 démarre shield/  drivers/  network_server/  ...
+```
+
+> Chaque module vérifie en debug que ses dépendances sont initialisées. Une violation d'ordre provoque une `panic!` explicite, jamais un comportement indéfini.
+
+---
+
+## Structure du projet
+
+```
+exo-os/
+├── kernel/                         Ring 0 — Microkernel TCB minimal
+│   └── src/
+│       ├── arch/                   x86_64 (boot, GDT, IDT, TSS, APIC, ACPI, SMP)
+│       ├── memory/                 Couche 0 (buddy, slab, DMA, IOMMU, swap, CoW)
+│       ├── scheduler/              Couche 1 (CFS, RT, EDF, switch_asm.s, FPU lazy)
+│       ├── process/                Couche 1.5 (fork, exec, signal, namespaces)
+│       ├── ipc/                    Couche 2a (SPSC, Fusion Ring, SHM zero-copy, RPC)
+│       ├── fs/                     Couche 3 (VFS, ext4+, io_uring, WAL, Blake3)
+│       ├── security/               TCB (capability, crypto, zero_trust, mitigations)
+│       └── syscall/                Table + entry ASM + validation arguments
+│
+├── servers/                        Ring 1 — Services système isolés
+│   ├── shield/                     Protection anti-malware
+│   ├── network_server/             Pile TCP/IP userspace (io_uring async)
+│   ├── device_server/              Gestion périphériques + hotplug
+│   ├── crypto_server/              Service cryptographie centralisé
+│   └── init_server/                PID 1 — gestionnaire de services
+│
+├── drivers/                        Ring 1/2 — Pilotes isolés (IOMMU)
+│   ├── storage/nvme/
+│   ├── network/
+│   └── platform/pci/
+│
+├── userland/                       Ring 3
+│   ├── libc/                       Exo-libc (conformité POSIX)
+│   └── apps/
+│
+├── libs/                           Bibliothèques partagées (no_std)
+│   ├── exo_crypto/                 XChaCha20, Blake3, Ed25519, X25519
+│   ├── exo_collections/            rbtree, radixtree, structures lock-free
+│   └── exo_sync/                   spinlock, mutex, rwlock, seqlock
+│
+├── proofs/                         Preuves formelles
+│   ├── kernel_security/            Coq + TLA+ pour security/capability/
+│   └── capability_system/          Modèle formel capabilities
+│
+├── tests/                          Tests unitaires, intégration, stress, conformité POSIX
+├── bench/                          Benchmarks micro + système (lmbench-style)
+└── tools/                          exo-debug  exo-trace  exo-prof  ai_trainer/
+```
+
+---
+
+## Stack technique
+
+| Composant | Choix | Justification |
+|:---|:---|:---|
+| Langage principal | Rust nightly `no_std` | Sûreté mémoire, zéro runtime overhead |
+| ASM | AT&T syntax fichiers `.s` | Context switch, SYSCALL/SYSRET, SMP trampoline |
+| Preuves formelles | Coq 8.17 + TLA+ / TLC | Fonctionnel (Coq) + concurrence (TLC model checker) |
+| Crypto | XChaCha20-Poly1305 (RFC 8439) | AEAD, nonce 192-bit, résistant aux réutilisations |
+| Checksums FS | Blake3 | Vitesse + sécurité pour intégrité données |
+| I/O async | io_uring natif | Zero-copy, batch submissions, latence minimale |
+| IA kernel | Lookup tables `.rodata` + EMA O(1) | **Zéro inférence dynamique en Ring 0** |
+| Entraînement IA | `tools/ai_trainer/` offline | Tables compilées dans le binaire kernel |
+| Benchmarks | lmbench-style | Comparaison reproductible avec Linux 6.x |
+
+```toml
+# rust-toolchain.toml
+[toolchain]
+channel    = "nightly"
+components = ["rust-src", "llvm-tools-preview", "rustfmt", "clippy"]
+targets    = ["x86_64-unknown-none", "aarch64-unknown-none"]
+```
+
+### Intelligence artificielle embarquée
+
+L'IA dans le kernel est **strictement limitée** à des lookup tables compilées en `.rodata` et des heuristiques EMA O(1). Aucune inférence dynamique en Ring 0.
+
+| Module | Type | Overhead max |
+|:---|:---|:---:|
+| `memory/physical/allocator/ai_hints.rs` | Table NUMA 2 KB | ≤5 cycles |
+| `scheduler/policies/ai_guided.rs` | EMA classification thread | ≤10 cycles |
+| `fs/cache/prefetch.rs` | Prefetch adaptatif readahead | ≤100 cycles |
+| `tools/ai_trainer/` | Entraînement **offline** uniquement | — |
+
+---
+
+## Documentation
+
+| Document | Contenu |
+|:---|:---|
+| [`DOC1_CORRECTIONS_ARBORESCENCE.md`](docs/DOC1_CORRECTIONS_ARBORESCENCE.md) | Corrections C1 (signal→process), C2 (capability→security), C3 (IA) |
+| [`DOC2_MODULE_MEMORY.md`](docs/DOC2_MODULE_MEMORY.md) | Conception complète `memory/` avec code Rust annoté |
+| [`DOC3_MODULE_SCHEDULER.md`](docs/DOC3_MODULE_SCHEDULER.md) | Conception complète `scheduler/` avec `switch_asm.s` |
+| [`DOC4_TO_DOC9_MODULES.md`](docs/DOC4_TO_DOC9_MODULES.md) | Process, IPC, FS, Security, DMA, Shield + règles transversales |
+| [`EXO_OS_ARBORESCENCE_COMPLETE.md`](docs/EXO_OS_ARBORESCENCE_COMPLETE.md) | Arborescence annotée complète v1.0 |
+| [`proofs/kernel_security/`](proofs/kernel_security/) | Fichiers Coq `.v` et TLA+ `.tla` |
+| [`METRICS.md`](docs/METRICS.md) | Métriques détaillées, plan d'optimisation, anti-objectifs |
+
+---
+
+## Références de conception
+
+| Référence | Leçon intégrée |
+|:---|:---|
+| **L4 microkernel** | IPC ~600 cycles — architecture canaux + fast IPC path |
+| **seL4** | Périmètre TCB minimal pour preuves formelles réalistes |
+| **Solaris** | Context switch ~500 cycles avec register windows |
+| **FreeBSD ULE** | Scheduler pick ~120 cycles, 3 files simples suffisent |
+| **jemalloc** | ~20 cycles avec TLS magazine layer |
+| **Linux io_uring** | Zero-copy I/O, batch submissions |
 
 ---
 
 <div align="center">
 
-**Exo-OS v0.6.0 "Multicore Dawn"**
+```
+RING 0 · TCB MINIMAL · ZERO TRUST · PREUVES FORMELLES
+```
 
-*4 CPUs Strong, Performance Beyond* 🚀
-
-[Docs](docs/INDEX.md) • [Phase 1](docs/current/PHASE_1_VALIDATION.md) • [Phase 2 SMP](docs/current/phase/PHASE_2_SMP_COMPLETE.md) • [Roadmap](docs/current/ROADMAP.md)
-
-⭐ **Star ce projet si vous l'aimez !** ⭐
+*Exo-OS — Architecture v1.0 — Rust + ASM + Coq / TLA+*
 
 </div>

@@ -1,179 +1,180 @@
-//! Memory management subsystem
+// kernel/src/memory/mod.rs
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODULE MEMORY — Racine du sous-système mémoire Exo-OS  (Couche 0)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Hiérarchie complète :
+//
+//   memory/
+//   ├── core/         — types, constantes, layout, adresses
+//   ├── physical/     — buddy, zones, frame descriptors, SLUB, NUMA-aware
+//   ├── virt/         — page tables, VMA, address spaces, fault handler
+//   ├── heap/         — allocateur global, vmalloc, per-CPU magazine
+//   ├── dma/          — canaux DMA, IOMMU (VT-d / AMD-Vi), completion
+//   ├── swap/         — backend swap, politique d'éviction CLOCK
+//   ├── cow/          — tracker COW lock-free
+//   ├── huge_pages/   — THP 2 MiB
+//   ├── protection/   — NX, SMEP, SMAP, PKU
+//   ├── integrity/    — canary, guard pages, KASAN-lite
+//   ├── numa/         — nœuds, distances, politique, migration
+//   └── utils/        — futex table (UNIQUE), OOM killer, shrinker
+//
+// Règles d'architecture (docs/refonte/regle_bonus.md) :
+//   • COUCHE 0 : aucune dépendance scheduler/process/ipc/fs.
+//   • Ordonnancement des locks : IPC < Scheduler < Memory < FS.
+//   • RÈGLE IA-KERNEL-01 : tables .rodata statiques uniquement.
+//   • RÈGLE EMERGENCY-01 : EmergencyPool initialisé EN PREMIER.
+//   • DmaWakeupHandler trait : défini ici, implémenté par process/.
+//   • FutexTable : SINGLETON UNIQUE dans ce module.
+//
+// Ordre d'initialisation :
+//   Phase 1  — physical::allocator init_phase1..4  (buddy + SLUB + NUMA)
+//   Phase 2  — virtual address spaces  (KERNEL_AS.init() via arch/boot)
+//   Phase 3  — heap (#[global_allocator] déjà actif via static)
+//   Phase 4  — DMA subsystem
+//   Phase 5  — protection (NX/SMEP/SMAP/PKU)
+//   Phase 6  — integrity (canary/guard/KASAN)
+//   Phase 7  — utils (futex/OOM/shrinker)
+//   Phase 8  — numa
 
-pub mod address;
-pub mod cache;
-pub mod cow_manager;
-pub mod dma;
-pub mod dma_simple;
-pub mod heap;
-pub mod mmap;
-pub mod pat;
+#![allow(clippy::module_inception)]
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sous-modules
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub mod arch_iface;
+pub mod core;
 pub mod physical;
+// "virtual" est un mot-clé réservé Rust : le répertoire virtual/ est
+// déclaré comme module public `virt` via l'attribut #[path].
+#[path = "virtual/mod.rs"]
+pub mod virt;
+pub mod heap;
+pub mod dma;
+pub mod swap;
+pub mod cow;
+pub mod huge_pages;
 pub mod protection;
-pub mod shared;
-pub mod user_space;
-pub mod virtual_mem;
+pub mod integrity;
+pub mod numa;
+pub mod utils;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Re-exports de premier niveau (API publique du module)
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Re-exports
-pub use address::{PhysicalAddress, VirtualAddress};
-pub use cow_manager::{CowManager, CowError, mark_cow, is_cow, handle_cow_fault, free_cow_page, clone_address_space};
-pub use heap::LockedHeap;
-pub use physical::Frame;
-pub use physical::buddy_allocator::PAGE_SIZE;
-pub use protection::PageProtection;
-pub use pat::MemoryType;
-pub use user_space::{UserAddressSpace, UserPageFlags};
+// Core types — exportés en premier car tous les autres en dépendent.
+pub use self::core::{
+    PhysAddr, VirtAddr, Frame, Page, PageRange, FrameRange,
+    PageFlags, ZoneType, AllocFlags, AllocError,
+    PAGE_SIZE, HUGE_PAGE_SIZE, BUDDY_MAX_ORDER, BUDDY_ORDER_COUNT,
+    PER_CPU_POOL_SIZE, EMERGENCY_POOL_SIZE, DMA_RING_SIZE, FUTEX_HASH_BUCKETS,
+    PhysRange, VirtRange, phys_to_virt, virt_to_phys_physmap,
+    PHYS_MAP_BASE, VMALLOC_BASE, KERNEL_HEAP_START,
+};
 
-// Error type for memory operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MemoryError {
-    OutOfMemory,
-    InvalidAddress,
-    AlreadyMapped,
-    NotMapped,
-    PermissionDenied,
-    AlignmentError,
-    InvalidSize,
-    NotFound,
-    InvalidParameter,
-    Mfile,
-    InternalError(&'static str),
-    /// Operation would block
-    WouldBlock,
-    /// Operation timed out
-    Timeout,
-    /// Operation was interrupted
-    Interrupted,
-    /// Operation not supported
-    NotSupported,
-    /// Queue is full
-    QueueFull,
-}
+// Physical allocator — API d'allocation frames.
+// Note: alloc_zeroed_page n'existe pas dans physical — utiliser
+// alloc_page() + écriture manuelle ou heap_alloc_zeroed() pour la heap.
+pub use physical::{
+    alloc_page, alloc_pages, free_page, free_pages,
+};
 
-impl core::fmt::Display for MemoryError {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            MemoryError::OutOfMemory => write!(f, "Out of memory"),
-            MemoryError::InvalidAddress => write!(f, "Invalid address"),
-            MemoryError::AlreadyMapped => write!(f, "Already mapped"),
-            MemoryError::NotMapped => write!(f, "Not mapped"),
-            MemoryError::PermissionDenied => write!(f, "Permission denied"),
-            MemoryError::AlignmentError => write!(f, "Alignment error"),
-            MemoryError::InvalidSize => write!(f, "Invalid size"),
-            MemoryError::NotFound => write!(f, "Not found"),
-            MemoryError::InvalidParameter => write!(f, "Invalid parameter"),
-            MemoryError::Mfile => write!(f, "Too many open files"),
-            MemoryError::InternalError(msg) => write!(f, "Internal error: {}", msg),
-            MemoryError::WouldBlock => write!(f, "Would block"),
-            MemoryError::Timeout => write!(f, "Timeout"),
-            MemoryError::Interrupted => write!(f, "Interrupted"),
-            MemoryError::NotSupported => write!(f, "Not supported"),
-            MemoryError::QueueFull => write!(f, "Queue full"),
-        }
-    }
-}
+// Heap — allocateur global (SLUB / vmalloc).
+pub use heap::{
+    heap_alloc, heap_free,
+    drain_on_context_switch, drain_on_memory_pressure,
+};
 
-// Conversion de CowError vers MemoryError
-impl From<CowError> for MemoryError {
-    fn from(err: CowError) -> Self {
-        match err {
-            CowError::OutOfMemory => MemoryError::OutOfMemory,
-            CowError::NotCowPage => MemoryError::InvalidParameter,
-        }
-    }
-}
+// DMA — trait wakeup injecté par process/.
+pub use dma::DmaWakeupHandler;
 
-pub type MemoryResult<T> = Result<T, MemoryError>;
+// Swap.
+pub use swap::{SwapDevice, SwapSlot, SwapPte, should_swap, is_critical};
 
-/// Configuration de la mémoire pour l'initialisation
-pub struct MemoryConfig {
-    /// Adresse de début du heap
-    pub heap_start: usize,
-    /// Taille du heap
-    pub heap_size: usize,
-    /// Adresse du bitmap pour le frame allocator
-    pub bitmap_addr: usize,
-    /// Taille du bitmap
-    pub bitmap_size: usize,
-    /// Adresse physique de base
-    pub physical_base: usize,
-    /// Taille totale de la mémoire physique
-    pub total_memory: usize,
-}
+// COW.
+pub use cow::COW_TRACKER;
 
-impl MemoryConfig {
-    /// Configuration par défaut pour le démarrage
-    pub fn default_config() -> Self {
-        // Configuration pour mémoire identity-mapped (0-1GB)
-        // Le bootloader map les premiers 1GB avec huge pages
-        const HEAP_START: usize = 0x0080_0000; // 8MB (après le kernel à ~4MB)
-        const HEAP_SIZE: usize = 10 * 1024 * 1024; // 10MB de heap
-        const BITMAP_START: usize = 0x0050_0000; // 5MB (juste après le kernel)
-        const TOTAL_MEMORY: usize = 64 * 1024 * 1024; // 64MB utilisables
-        const BITMAP_SIZE: usize = TOTAL_MEMORY / 4096 / 8; // 1 bit par frame de 4KB = 2KB
+// Huge pages (THP 2 MiB).
+pub use huge_pages::{alloc_huge_page, free_huge_page, split_huge_page, try_promote_to_huge};
 
-        MemoryConfig {
-            heap_start: HEAP_START,
-            heap_size: HEAP_SIZE,
-            bitmap_addr: BITMAP_START,
-            bitmap_size: BITMAP_SIZE,
-            physical_base: 0,
-            total_memory: TOTAL_MEMORY,
-        }
-    }
-}
+// Protection matérielle (NX / SMEP / SMAP / PKU).
+pub use protection::{copy_from_user, copy_to_user, zero_user, nx_page_flags};
 
-/// Initialise le système de gestion de la mémoire
-///
-/// Cette fonction doit être appelée tôt dans le boot process.
-/// Elle initialise:
-/// - L'allocateur de frames physiques (bitmap)
-/// - Le heap allocator
-/// - Marque les régions utilisées (kernel, multiboot, etc.)
-pub fn init(config: MemoryConfig) -> MemoryResult<()> {
-    // 1. Initialiser le frame allocator
-    unsafe {
-        physical::init_frame_allocator(
-            config.bitmap_addr,
-            config.bitmap_size,
-            PhysicalAddress::new(config.physical_base),
-            config.total_memory,
-        );
-    }
+// Intégrité (canary / guard pages / KASAN-lite).
+pub use integrity::{
+    kasan_on_alloc, kasan_on_free, kasan_check_access,
+    cpu_canary, thread_canary, verify_thread_canary,
+};
 
-    // 2. Marquer les régions réservées
-    // Réserver les premiers 1MB (BIOS, VGA, etc.)
-    physical::mark_region_used(PhysicalAddress::new(0), 0x100000);
+// NUMA — politique depuis numa::policy (distinct de physical::allocator::NumaPolicy).
+pub use numa::{NUMA_NODES, numa_distance, closest_node};
+pub use numa::policy::NumaPolicy;
 
-    // Réserver le kernel (1MB - 4MB approximativement)
-    physical::mark_region_used(PhysicalAddress::new(0x100000), 3 * 1024 * 1024);
+// Utils (UNIQUE table futex + OOM killer + shrinker).
+pub use utils::{
+    FUTEX_TABLE, futex_wait, futex_wake, futex_wake_n, futex_cancel,
+    OomScorer, register_oom_kill_sender, oom_kill,
+    register_shrinker, run_shrinkers,
+};
 
-    // Réserver le bitmap
-    physical::mark_region_used(PhysicalAddress::new(config.bitmap_addr), config.bitmap_size);
+// ─────────────────────────────────────────────────────────────────────────────
+// Fonction d'initialisation globale
+// ─────────────────────────────────────────────────────────────────────────────
 
-    // Réserver le heap
-    physical::mark_region_used(PhysicalAddress::new(config.heap_start), config.heap_size);
-
-    // 3. Initialiser le heap allocator
-    unsafe {
-        crate::ALLOCATOR.init(config.heap_start, config.heap_size);
-    }
-
-    Ok(())
-}
-
-/// Initialise le heap avec une région mémoire spécifique
+/// Initialise l'intégralité du sous-système mémoire.
 ///
 /// # Safety
-/// La région [start, start + size) doit être valide et non utilisée
-pub unsafe fn init_heap(start: usize, size: usize) {
-    crate::ALLOCATOR.init(start, size);
-}
+/// - CPL 0.
+/// - RÈGLE EMERGENCY-01 : le kernel doit compiler avec le feature
+///   `emergency_pool` actif, qui pré-initialise l'EmergencyPool dans
+///   les statics avant même d'entrer dans cette fonction.
+/// - `phys_start` / `phys_end` : bornes de la mémoire physique totale
+///   (obtenues depuis BIOS E820 ou UEFI GetMemoryMap).
+/// - `regions` : tableau [(start_phys, size_bytes)] des plages libres.
+///
+/// # Note sur la phase 2 (virtual)
+/// `virt::address_space::kernel::KERNEL_AS.init(pml4_phys)` doit être
+/// appelé séparément par le code arch/ **après** que la PML4 de boot a
+/// été construite et que cette fonction a retourné.
+pub unsafe fn init(phys_start: PhysAddr, phys_end: PhysAddr, regions: &[(u64, u64)]) {
+    // ── Phase 1 : allocateur physique ────────────────────────────────────────
+    // Phase 1a — bitmap de démarrage (EmergencyPool activé en premier)
+    physical::init_phase1_bitmap(phys_start, phys_end);
+    // Phase 1b — libération des régions mémoire libres (une par une)
+    for &(start, size) in regions {
+        physical::init_phase2_free_region(
+            PhysAddr::new(start),
+            PhysAddr::new(start.wrapping_add(size)),
+        );
+    }
+    // Phase 1c — SLUB / slab
+    physical::init_phase3_slab_slub();
+    // Phase 1d — topologie NUMA (0xFF = tous les 8 nœuds actifs par défaut)
+    physical::init_phase4_numa(0xFF);
 
-/// Détecte la mémoire disponible depuis les informations multiboot
-pub fn detect_memory(_boot_info: *const u8) -> MemoryConfig {
-    // TODO: Parser les informations multiboot pour détecter la mémoire réelle
-    // Pour l'instant, retourner la configuration par défaut
-    MemoryConfig::default_config()
+    // ── Phase 2 : espaces d'adressage virtuels ────────────────────────────────
+    // Délégué à l'arch/ : virt::address_space::kernel::KERNEL_AS.init(pml4_phys)
+    // appelé depuis arch/x86_64/boot.rs après retour de cette fonction.
+
+    // ── Phase 3 : heap global ────────────────────────────────────────────────
+    // Le #[global_allocator] KernelAllocator est déjà lié statiquement.
+    // Il délègue automatiquement à SLUB (petites allocs) et vmalloc (grandes).
+
+    // ── Phase 4 : DMA ─────────────────────────────────────────────────────────
+    dma::init();
+
+    // ── Phase 5 : protection matérielle ──────────────────────────────────────
+    protection::init();
+
+    // ── Phase 6 : intégrité mémoire ──────────────────────────────────────────
+    integrity::init();
+
+    // ── Phase 7 : utilitaires ────────────────────────────────────────────────
+    utils::init();
+
+    // ── Phase 8 : NUMA ───────────────────────────────────────────────────────
+    numa::init();
 }

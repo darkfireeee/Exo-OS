@@ -1,0 +1,163 @@
+arborescence memory
+
+│   ├── memory/                         # 🟣 COUCHE 0 — MEMORY (dépend de RIEN)
+│   │   ├── mod.rs                      # API publique : alloc, map, free
+│   │   │
+│   │   ├── core/                       # Types fondamentaux
+│   │   │   ├── mod.rs
+│   │   │   ├── types.rs                # PhysAddr, VirtAddr, Page, Frame, PageFlags
+│   │   │   ├── address.rs              # Translations, alignements, vérifications
+│   │   │   ├── layout.rs               # Carte mémoire kernel (KERNEL_START, HEAP_START…)
+│   │   │   └── constants.rs            # PAGE_SIZE=4096, CACHE_LINE=64, HUGE_PAGE=2M
+│   │   │
+│   │   ├── physical/                   # RAM physique
+│   │   │   ├── mod.rs
+│   │   │   ├── allocator/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── buddy.rs            # Buddy allocator O(log n) — allocations paginées
+│   │   │   │   ├── slab.rs             # Slab allocator — petits objets fixes
+│   │   │   │   ├── slub.rs             # SLUB — slab amélioré (moins de fragmentation)
+│   │   │   │   ├── bitmap.rs           # Bitmap allocator (bootstrap uniquement)
+│   │   │   │   ├── numa_aware.rs       # NUMA-first policy (locality)
+│   │   │   │   └── ai_hints.rs         # [IA] Lookup table statique NUMA — hints préchargés
+│   │   │   │                           # ⚠️ Lookup statique UNIQUEMENT — zéro inférence runtime
+│   │   │   ├── frame/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── descriptor.rs       # FrameDesc: flags, refcount, zone, numa_node
+│   │   │   │   ├── ref_count.rs        # Atomic refcount + CoW support
+│   │   │   │   ├── pool.rs             # Per-CPU pools (512 frames, lock-free) + EmergencyPool
+│   │   │   │   └── reclaim.rs          # Éviction LRU, kswapd, PF_MEMALLOC flag
+│   │   │   ├── zone/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── dma.rs              # Zone DMA (<16 MB, 32-bit devices)
+│   │   │   │   ├── dma32.rs            # Zone DMA32 (<4 GB)
+│   │   │   │   ├── normal.rs           # Zone NORMAL (mémoire principale)
+│   │   │   │   ├── high.rs             # Zone HIGH (>896 MB, 32-bit uniquement)
+│   │   │   │   └── movable.rs          # Zone MOVABLE (défragmentation huge pages)
+│   │   │   └── numa/
+│   │   │       ├── mod.rs
+│   │   │       ├── node.rs             # NUMANode: CPUs, local memory, distance
+│   │   │       ├── distance.rs         # Matrice de distances NUMA
+│   │   │       ├── policy.rs           # NUMA policies (local, interleaved, bind)
+│   │   │       └── migration.rs        # Migration de pages entre nœuds
+│   │   │
+│   │   ├── virtual/                    # Espace d'adressage virtuel
+│   │   │   ├── mod.rs
+│   │   │   ├── address_space/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── kernel.rs           # Kernel address space global (fixe)
+│   │   │   │   ├── user.rs             # User address space par processus
+│   │   │   │   ├── mapper.rs           # map/unmap/remap — interface unifiée
+│   │   │   │   └── tlb.rs              # TLB flush local + IPI shootdown synchrone
+│   │   │   ├── page_table/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── x86_64.rs           # PML4 → PDPT → PD → PT (4 niveaux)
+│   │   │   │   ├── walker.rs           # Page table walker (générique)
+│   │   │   │   ├── builder.rs          # Constructeur progressif (init kernel)
+│   │   │   │   └── kpti_split.rs       # Tables scindées user_pt/kernel_pt (KPTI)
+│   │   │   ├── vma/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── descriptor.rs       # VMADesc: start, end, flags, file backing
+│   │   │   │   ├── tree.rs             # Arbre interval (rbtree) des VMAs
+│   │   │   │   ├── operations.rs       # mmap(), munmap(), mprotect(), mremap()
+│   │   │   │   └── cow.rs              # CoW: fork() duplique en lecture, copy on write
+│   │   │   └── fault/
+│   │   │       ├── mod.rs
+│   │   │       ├── handler.rs          # Page fault dispatcher (#PF handler)
+│   │   │       ├── cow.rs              # CoW fault — copy physique à la demande
+│   │   │       ├── demand_paging.rs    # Demand paging — map au premier accès
+│   │   │       └── swap_in.rs          # Swap-in — restaure depuis swap
+│   │   │
+│   │   ├── heap/                       # Allocateur dynamique kernel
+│   │   │   ├── mod.rs
+│   │   │   ├── allocator/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── hybrid.rs           # Hybride slab/buddy (dispatch par taille)
+│   │   │   │   ├── size_classes.rs     # Classes: 8B,16B,32B,...,2KB,4KB,large
+│   │   │   │   └── global.rs           # GlobalAllocator impl (#[global_allocator])
+│   │   │   ├── thread_local/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── cache.rs            # TLS cache par thread (hot path <25 cycles)
+│   │   │   │   ├── magazine.rs         # Magazine layer (batch alloc/free)
+│   │   │   │   └── drain.rs            # Drain TLS vers pool global
+│   │   │   └── large/
+│   │   │       ├── mod.rs
+│   │   │       └── vmalloc.rs          # vmalloc — grandes allocs non-contig
+│   │   │
+│   │   ├── dma/                        # DMA ENGINE — reste dans memory/ (couche 0)
+│   │   │   ├── mod.rs                  # ⚠️ dma/completion/wakeup.rs appelle process/ via
+│   │   │   │                           # trait WakeupHandler (inversion de dépendance)
+│   │   │   │                           # → zéro dépendance directe montante vers process/
+│   │   │   ├── core/
+│   │   │   │   ├── types.rs            # DmaAddr, DmaDesc, DmaChannel, DmaBuf
+│   │   │   │   ├── descriptor.rs       # DmaRing 512 entrées, page-aligned
+│   │   │   │   ├── mapping.rs          # DMA coherent / streaming mappings
+│   │   │   │   └── error.rs            # DmaError variants
+│   │   │   ├── iommu/
+│   │   │   │   ├── intel_vtd.rs        # Intel VT-d (DMAR)
+│   │   │   │   ├── amd_iommu.rs        # AMD-Vi
+│   │   │   │   ├── arm_smmu.rs         # ARM SMMU (ARM future)
+│   │   │   │   ├── domain.rs           # IOMMU domain isolation par device
+│   │   │   │   └── page_table.rs       # Page tables IOMMU 4 niveaux
+│   │   │   ├── channels/
+│   │   │   │   ├── manager.rs          # Pool de canaux DMA
+│   │   │   │   ├── channel.rs          # Canal (ring producer/consumer)
+│   │   │   │   ├── priority.rs         # RT vs best-effort
+│   │   │   │   └── affinity.rs         # Canal ↔ CPU NUMA affinity
+│   │   │   ├── engines/
+│   │   │   │   ├── ioat.rs             # Intel IOAT DMA Engine
+│   │   │   │   ├── idxd.rs             # Intel DSA
+│   │   │   │   ├── ahci_dma.rs         # AHCI / SATA
+│   │   │   │   ├── nvme_dma.rs         # NVMe PCIe natif
+│   │   │   │   └── virtio_dma.rs       # VirtIO (VM)
+│   │   │   ├── ops/
+│   │   │   │   ├── memcpy.rs           # DMA memcpy device↔RAM
+│   │   │   │   ├── memset.rs           # DMA memset
+│   │   │   │   ├── scatter_gather.rs   # Scatter-Gather lists
+│   │   │   │   ├── cyclic.rs           # Cyclic DMA (audio/streaming)
+│   │   │   │   └── interleaved.rs      # Interleaved RAID-like
+│   │   │   ├── completion/
+│   │   │   │   ├── handler.rs          # IRQ completion handler (<500ns)
+│   │   │   │   ├── polling.rs          # Polling haute fréquence
+│   │   │   │   └── wakeup.rs           # Wakeup via WakeupHandler trait (enregistré au boot)
+│   │   │   │                           # process::wakeup_thread() jamais appelé directement
+│   │   │   └── stats/
+│   │   │       └── counters.rs         # Throughput, latency, errors
+│   │   │
+│   │   ├── swap/
+│   │   │   ├── mod.rs
+│   │   │   ├── backend.rs              # Backend swap (fichier ou partition)
+│   │   │   ├── policy.rs               # Politique d'éviction (LRU/clock)
+│   │   │   ├── compress.rs             # Compression LZ4/ZSTD en RAM (zswap)
+│   │   │   └── cluster.rs              # Regroupement I/O swap
+│   │   │
+│   │   ├── cow/
+│   │   │   ├── mod.rs
+│   │   │   ├── tracker.rs              # Tracking des pages partagées
+│   │   │   └── breaker.rs              # CoW break — copy physique
+│   │   │
+│   │   ├── huge_pages/
+│   │   │   ├── mod.rs
+│   │   │   ├── thp.rs                  # Transparent Huge Pages (2MB)
+│   │   │   ├── hugetlbfs.rs            # Huge pages dédiées (1GB)
+│   │   │   └── split.rs                # Split huge page → pages 4KB
+│   │   │
+│   │   ├── protection/
+│   │   │   ├── mod.rs
+│   │   │   ├── nx.rs                   # NX/XD bit (No-Execute)
+│   │   │   ├── smep.rs                 # SMEP (Supervisor Mode Exec Prot)
+│   │   │   ├── smap.rs                 # SMAP (Supervisor Mode Access Prot)
+│   │   │   └── pku.rs                  # PKU — Protection Keys for Userspace (Intel)
+│   │   │
+│   │   ├── integrity/
+│   │   │   ├── mod.rs
+│   │   │   ├── canary.rs               # Stack canaries kernel
+│   │   │   ├── guard_pages.rs          # Pages garde (détection overflow)
+│   │   │   └── sanitizer.rs            # KASAN-like (debug builds)
+│   │   │
+│   │   └── utils/
+│   │       ├── mod.rs
+│   │       ├── futex_table.rs          # FUTEX TABLE UNIQUE — adresse physique
+│   │       │                           # (utilisée par scheduler/ ET ipc/ — jamais dupliquer)
+│   │       ├── oom_killer.rs           # OOM killer (thread dédié, emergency pool)
+│   │       └── shrinker.rs             # MemoryShrinker trait (fs/ et ipc/ s'enregistrent)

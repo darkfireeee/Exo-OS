@@ -1,0 +1,14 @@
+arborescence syscall
+
+│   └── syscall/                        # 🔵 INTERFACE SYSCALL
+│       ├── mod.rs
+│       ├── table.rs                    # Table des syscalls (array[512])
+│       ├── entry.s                     # Entrée syscall (SYSCALL/SYSRET + SWAPGS)
+│       ├── dispatch.rs                 # Dispatch vers handlers
+│       ├── validation.rs               # Validation args userspace → kernel
+│       ├── fast_path.rs                # Fast path getpid/gettid (<100 cycles)
+│       ├── compat/
+│       │   ├── linux.rs                # Compatibilité numéros Linux
+│       │   └── posix.rs                # POSIX syscalls
+│       └── numbers.rs                  # Numéros syscall Exo-OS
+

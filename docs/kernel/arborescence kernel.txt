@@ -1,0 +1,618 @@
+kernel/
+├── Cargo.toml                          # crate: exo-kernel (no_std)
+├── build.rs
+├── linker/
+│   ├── x86_64.ld                       # Linker script x86_64
+│   ├── aarch64.ld                      # Linker script ARM64 (futur)
+│   └── sections.ld                     # Sections communes (KERNEL_LOAD_ADDR)
+│
+├── src/
+│   ├── main.rs                         # _start → kmain()
+│   ├── lib.rs                          # Re-exports publics du kernel
+│   │
+│   ├── arch/                           # ⚙️ COUCHE ARCHITECTURE (x86_64 + ARM64)
+│   │   ├── mod.rs
+│   │   ├── x86_64/
+│   │   │   ├── mod.rs
+│   │   │   ├── boot/
+│   │   │   │   ├── multiboot2.rs       # Parsing Multiboot2 header
+│   │   │   │   ├── uefi.rs             # UEFI boot protocol
+│   │   │   │   ├── early_init.rs       # Init très bas niveau (avant paging)
+│   │   │   │   └── trampoline.s        # AP trampoline SMP (real mode → 64bit)
+│   │   │   ├── cpu/
+│   │   │   │   ├── features.rs         # CPUID, feature detection
+│   │   │   │   ├── msr.rs              # Model-Specific Registers
+│   │   │   │   ├── fpu.rs              # Instructions ASM brutes : XSAVE/XRSTOR/FXSAVE
+│   │   │   │   │                       # ⚠️ NE contient PAS la logique d'état (→ scheduler/fpu/)
+│   │   │   │   ├── tsc.rs              # TSC calibration, rdtsc wrapper
+│   │   │   │   └── topology.rs         # CPU topology (cores, HT, NUMA)
+│   │   │   ├── gdt.rs                  # GDT (Global Descriptor Table)
+│   │   │   ├── idt.rs                  # IDT (Interrupt Descriptor Table)
+│   │   │   ├── tss.rs                  # TSS (Task State Segment) + IST stacks
+│   │   │   ├── paging.rs               # Page tables x86_64 (4-level, CR3)
+│   │   │   ├── syscall.rs              # SYSCALL/SYSRET entry (MSR_STAR)
+│   │   │   ├── exceptions.rs           # #PF #GP #DF #NMI handlers
+│   │   │   ├── apic/
+│   │   │   │   ├── local_apic.rs       # Local APIC (timer, EOI, IPI send)
+│   │   │   │   ├── io_apic.rs          # I/O APIC (IRQ routing)
+│   │   │   │   ├── x2apic.rs           # x2APIC mode (>255 CPUs)
+│   │   │   │   └── ipi.rs              # IPI send/receive + batching
+│   │   │   ├── acpi/
+│   │   │   │   ├── parser.rs           # RSDP → RSDT/XSDT → MADT parser
+│   │   │   │   ├── madt.rs             # MADT (SMP topology)
+│   │   │   │   ├── hpet.rs             # HPET timer
+│   │   │   │   └── pm_timer.rs         # ACPI Power Management timer
+│   │   │   ├── smp/
+│   │   │   │   ├── init.rs             # AP startup sequence (INIT + SIPI)
+│   │   │   │   ├── percpu.rs           # Per-CPU data (GS segment)
+│   │   │   │   └── hotplug.rs          # CPU hotplug online/offline
+│   │   │   ├── spectre/
+│   │   │   │   ├── kpti.rs             # KPTI — split page tables user/kernel
+│   │   │   │   ├── retpoline.rs        # Retpoline macro pour indirect calls
+│   │   │   │   ├── ssbd.rs             # SSBD per-thread (Spectre v4)
+│   │   │   │   └── ibrs.rs             # IBRS / IBPB / STIBP mitigations
+│   │   │   └── virt/
+│   │   │       ├── detect.rs           # Hypervisor detect (KVM/VMware/Hyper-V)
+│   │   │       ├── paravirt.rs         # Paravirt ops (clock, TLB flush)
+│   │   │       └── stolen_time.rs      # Stolen time accounting (RT scheduler)
+│   │   │
+│   │   └── aarch64/                    # Placeholder ARM64 (future)
+│   │       └── mod.rs
+│   │
+│   ├── memory/                         # 🟣 COUCHE 0 — MEMORY (dépend de RIEN)
+│   │   ├── mod.rs                      # API publique : alloc, map, free
+│   │   │
+│   │   ├── core/                       # Types fondamentaux
+│   │   │   ├── mod.rs
+│   │   │   ├── types.rs                # PhysAddr, VirtAddr, Page, Frame, PageFlags
+│   │   │   ├── address.rs              # Translations, alignements, vérifications
+│   │   │   ├── layout.rs               # Carte mémoire kernel (KERNEL_START, HEAP_START…)
+│   │   │   └── constants.rs            # PAGE_SIZE=4096, CACHE_LINE=64, HUGE_PAGE=2M
+│   │   │
+│   │   ├── physical/                   # RAM physique
+│   │   │   ├── mod.rs
+│   │   │   ├── allocator/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── buddy.rs            # Buddy allocator O(log n) — allocations paginées
+│   │   │   │   ├── slab.rs             # Slab allocator — petits objets fixes
+│   │   │   │   ├── slub.rs             # SLUB — slab amélioré (moins de fragmentation)
+│   │   │   │   ├── bitmap.rs           # Bitmap allocator (bootstrap uniquement)
+│   │   │   │   ├── numa_aware.rs       # NUMA-first policy (locality)
+│   │   │   │   └── ai_hints.rs         # [IA] Lookup table statique NUMA — hints préchargés
+│   │   │   │                           # ⚠️ Lookup statique UNIQUEMENT — zéro inférence runtime
+│   │   │   ├── frame/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── descriptor.rs       # FrameDesc: flags, refcount, zone, numa_node
+│   │   │   │   ├── ref_count.rs        # Atomic refcount + CoW support
+│   │   │   │   ├── pool.rs             # Per-CPU pools (512 frames, lock-free) + EmergencyPool
+│   │   │   │   └── reclaim.rs          # Éviction LRU, kswapd, PF_MEMALLOC flag
+│   │   │   ├── zone/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── dma.rs              # Zone DMA (<16 MB, 32-bit devices)
+│   │   │   │   ├── dma32.rs            # Zone DMA32 (<4 GB)
+│   │   │   │   ├── normal.rs           # Zone NORMAL (mémoire principale)
+│   │   │   │   ├── high.rs             # Zone HIGH (>896 MB, 32-bit uniquement)
+│   │   │   │   └── movable.rs          # Zone MOVABLE (défragmentation huge pages)
+│   │   │   └── numa/
+│   │   │       ├── mod.rs
+│   │   │       ├── node.rs             # NUMANode: CPUs, local memory, distance
+│   │   │       ├── distance.rs         # Matrice de distances NUMA
+│   │   │       ├── policy.rs           # NUMA policies (local, interleaved, bind)
+│   │   │       └── migration.rs        # Migration de pages entre nœuds
+│   │   │
+│   │   ├── virtual/                    # Espace d'adressage virtuel
+│   │   │   ├── mod.rs
+│   │   │   ├── address_space/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── kernel.rs           # Kernel address space global (fixe)
+│   │   │   │   ├── user.rs             # User address space par processus
+│   │   │   │   ├── mapper.rs           # map/unmap/remap — interface unifiée
+│   │   │   │   └── tlb.rs              # TLB flush local + IPI shootdown synchrone
+│   │   │   ├── page_table/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── x86_64.rs           # PML4 → PDPT → PD → PT (4 niveaux)
+│   │   │   │   ├── walker.rs           # Page table walker (générique)
+│   │   │   │   ├── builder.rs          # Constructeur progressif (init kernel)
+│   │   │   │   └── kpti_split.rs       # Tables scindées user_pt/kernel_pt (KPTI)
+│   │   │   ├── vma/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── descriptor.rs       # VMADesc: start, end, flags, file backing
+│   │   │   │   ├── tree.rs             # Arbre interval (rbtree) des VMAs
+│   │   │   │   ├── operations.rs       # mmap(), munmap(), mprotect(), mremap()
+│   │   │   │   └── cow.rs              # CoW: fork() duplique en lecture, copy on write
+│   │   │   └── fault/
+│   │   │       ├── mod.rs
+│   │   │       ├── handler.rs          # Page fault dispatcher (#PF handler)
+│   │   │       ├── cow.rs              # CoW fault — copy physique à la demande
+│   │   │       ├── demand_paging.rs    # Demand paging — map au premier accès
+│   │   │       └── swap_in.rs          # Swap-in — restaure depuis swap
+│   │   │
+│   │   ├── heap/                       # Allocateur dynamique kernel
+│   │   │   ├── mod.rs
+│   │   │   ├── allocator/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── hybrid.rs           # Hybride slab/buddy (dispatch par taille)
+│   │   │   │   ├── size_classes.rs     # Classes: 8B,16B,32B,...,2KB,4KB,large
+│   │   │   │   └── global.rs           # GlobalAllocator impl (#[global_allocator])
+│   │   │   ├── thread_local/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── cache.rs            # TLS cache par thread (hot path <25 cycles)
+│   │   │   │   ├── magazine.rs         # Magazine layer (batch alloc/free)
+│   │   │   │   └── drain.rs            # Drain TLS vers pool global
+│   │   │   └── large/
+│   │   │       ├── mod.rs
+│   │   │       └── vmalloc.rs          # vmalloc — grandes allocs non-contig
+│   │   │
+│   │   ├── dma/                        # DMA ENGINE — reste dans memory/ (couche 0)
+│   │   │   ├── mod.rs                  # ⚠️ dma/completion/wakeup.rs appelle process/ via
+│   │   │   │                           # trait WakeupHandler (inversion de dépendance)
+│   │   │   │                           # → zéro dépendance directe montante vers process/
+│   │   │   ├── core/
+│   │   │   │   ├── types.rs            # DmaAddr, DmaDesc, DmaChannel, DmaBuf
+│   │   │   │   ├── descriptor.rs       # DmaRing 512 entrées, page-aligned
+│   │   │   │   ├── mapping.rs          # DMA coherent / streaming mappings
+│   │   │   │   └── error.rs            # DmaError variants
+│   │   │   ├── iommu/
+│   │   │   │   ├── intel_vtd.rs        # Intel VT-d (DMAR)
+│   │   │   │   ├── amd_iommu.rs        # AMD-Vi
+│   │   │   │   ├── arm_smmu.rs         # ARM SMMU (ARM future)
+│   │   │   │   ├── domain.rs           # IOMMU domain isolation par device
+│   │   │   │   └── page_table.rs       # Page tables IOMMU 4 niveaux
+│   │   │   ├── channels/
+│   │   │   │   ├── manager.rs          # Pool de canaux DMA
+│   │   │   │   ├── channel.rs          # Canal (ring producer/consumer)
+│   │   │   │   ├── priority.rs         # RT vs best-effort
+│   │   │   │   └── affinity.rs         # Canal ↔ CPU NUMA affinity
+│   │   │   ├── engines/
+│   │   │   │   ├── ioat.rs             # Intel IOAT DMA Engine
+│   │   │   │   ├── idxd.rs             # Intel DSA
+│   │   │   │   ├── ahci_dma.rs         # AHCI / SATA
+│   │   │   │   ├── nvme_dma.rs         # NVMe PCIe natif
+│   │   │   │   └── virtio_dma.rs       # VirtIO (VM)
+│   │   │   ├── ops/
+│   │   │   │   ├── memcpy.rs           # DMA memcpy device↔RAM
+│   │   │   │   ├── memset.rs           # DMA memset
+│   │   │   │   ├── scatter_gather.rs   # Scatter-Gather lists
+│   │   │   │   ├── cyclic.rs           # Cyclic DMA (audio/streaming)
+│   │   │   │   └── interleaved.rs      # Interleaved RAID-like
+│   │   │   ├── completion/
+│   │   │   │   ├── handler.rs          # IRQ completion handler (<500ns)
+│   │   │   │   ├── polling.rs          # Polling haute fréquence
+│   │   │   │   └── wakeup.rs           # Wakeup via WakeupHandler trait (enregistré au boot)
+│   │   │   │                           # process::wakeup_thread() jamais appelé directement
+│   │   │   └── stats/
+│   │   │       └── counters.rs         # Throughput, latency, errors
+│   │   │
+│   │   ├── swap/
+│   │   │   ├── mod.rs
+│   │   │   ├── backend.rs              # Backend swap (fichier ou partition)
+│   │   │   ├── policy.rs               # Politique d'éviction (LRU/clock)
+│   │   │   ├── compress.rs             # Compression LZ4/ZSTD en RAM (zswap)
+│   │   │   └── cluster.rs              # Regroupement I/O swap
+│   │   │
+│   │   ├── cow/
+│   │   │   ├── mod.rs
+│   │   │   ├── tracker.rs              # Tracking des pages partagées
+│   │   │   └── breaker.rs              # CoW break — copy physique
+│   │   │
+│   │   ├── huge_pages/
+│   │   │   ├── mod.rs
+│   │   │   ├── thp.rs                  # Transparent Huge Pages (2MB)
+│   │   │   ├── hugetlbfs.rs            # Huge pages dédiées (1GB)
+│   │   │   └── split.rs                # Split huge page → pages 4KB
+│   │   │
+│   │   ├── protection/
+│   │   │   ├── mod.rs
+│   │   │   ├── nx.rs                   # NX/XD bit (No-Execute)
+│   │   │   ├── smep.rs                 # SMEP (Supervisor Mode Exec Prot)
+│   │   │   ├── smap.rs                 # SMAP (Supervisor Mode Access Prot)
+│   │   │   └── pku.rs                  # PKU — Protection Keys for Userspace (Intel)
+│   │   │
+│   │   ├── integrity/
+│   │   │   ├── mod.rs
+│   │   │   ├── canary.rs               # Stack canaries kernel
+│   │   │   ├── guard_pages.rs          # Pages garde (détection overflow)
+│   │   │   └── sanitizer.rs            # KASAN-like (debug builds)
+│   │   │
+│   │   └── utils/
+│   │       ├── mod.rs
+│   │       ├── futex_table.rs          # FUTEX TABLE UNIQUE — adresse physique
+│   │       │                           # (utilisée par scheduler/ ET ipc/ — jamais dupliquer)
+│   │       ├── oom_killer.rs           # OOM killer (thread dédié, emergency pool)
+│   │       └── shrinker.rs             # MemoryShrinker trait (fs/ et ipc/ s'enregistrent)
+│   │
+│   ├── scheduler/                      # 🔵 COUCHE 1 — SCHEDULER (→ memory/ uniquement)
+│   │   ├── mod.rs
+│   │   │
+│   │   ├── core/
+│   │   │   ├── mod.rs
+│   │   │   ├── task.rs                 # Task struct (TCB complet, cache-aligned 64B)
+│   │   │   ├── runqueue.rs             # Run queue per-CPU (3 files: RT/Normal/Idle)
+│   │   │   ├── pick_next.rs            # pick_next_task() — O(1), 100-150 cycles
+│   │   │   ├── switch.rs               # Dispatch → switch_asm
+│   │   │   └── preempt.rs              # PreemptGuard (RAII, jamais direct)
+│   │   │
+│   │   ├── asm/
+│   │   │   ├── switch_asm.s            # Context switch ASM — sauvegarde COMPLÈTE
+│   │   │   │                           # rbx,rbp,r12-r15,rsp + MXCSR + x87 FCW
+│   │   │   │                           # CR3 switché ICI pour KPTI (atomique)
+│   │   │   │                           # ✅ GARANTIE FORMELLE : r15 push AVANT tout appel C
+│   │   │   │                           # ext4plus/inode/ops.rs utilise r15 — garanti préservé
+│   │   │   └── fast_path.s             # Fast path scheduler (pas d'appel C)
+│   │   │
+│   │   ├── policies/
+│   │   │   ├── mod.rs
+│   │   │   ├── cfs.rs                  # CFS — Completely Fair Scheduler (normal)
+│   │   │   ├── realtime.rs             # RT — SCHED_FIFO / SCHED_RR
+│   │   │   ├── deadline.rs             # EDF — SCHED_DEADLINE (budget/période)
+│   │   │   ├── idle.rs                 # IDLE policy
+│   │   │   └── ai_guided.rs            # [IA] Politique guidée par profil de charge
+│   │   │                               # ⚠️ Dépend de ai_hints.rs (lecture seule, pas d'écriture)
+│   │   │                               # Fallback immédiat vers cfs.rs si hints absents
+│   │   │
+│   │   ├── smp/
+│   │   │   ├── mod.rs
+│   │   │   ├── load_balance.rs         # Load balancing inter-CPU (périodique)
+│   │   │   ├── migration.rs            # Thread migration (push/pull)
+│   │   │   ├── affinity.rs             # CPU affinity (cpumask)
+│   │   │   └── topology.rs             # Topologie SMP (NUMA-aware)
+│   │   │
+│   │   ├── sync/
+│   │   │   ├── mod.rs
+│   │   │   ├── wait_queue.rs           # WaitQueue — utilise EmergencyPool UNIQUEMENT
+│   │   │   ├── mutex.rs                # Kernel mutex (avec priority inheritance)
+│   │   │   ├── rwlock.rs               # RW lock (Reader-Writer)
+│   │   │   ├── spinlock.rs             # Spinlock (irq-safe variants)
+│   │   │   ├── condvar.rs              # Condition variable
+│   │   │   └── barrier.rs              # Synchronisation barrière SMP
+│   │   │
+│   │   ├── timer/
+│   │   │   ├── mod.rs
+│   │   │   ├── hrtimer.rs              # High-resolution timers (nanoseconde)
+│   │   │   ├── tick.rs                 # Scheduler tick (HZ=1000)
+│   │   │   ├── clock.rs                # Monotonic/realtime clock
+│   │   │   └── deadline_timer.rs       # Timer pour SCHED_DEADLINE
+│   │   │
+│   │   ├── fpu/                        # Logique d'état FPU (≠ arch/x86_64/cpu/fpu.rs)
+│   │   │   ├── mod.rs                  # arch/ = instructions ASM brutes
+│   │   │   ├── lazy.rs                 # scheduler/ = flag lazy_fpu_used dans TCB + policy
+│   │   │   ├── save_restore.rs         # Appelle arch/x86_64/cpu/fpu.rs (XSAVE/XRSTOR)
+│   │   │   └── state.rs                # FpuState par thread (512B aligné)
+│   │   │
+│   │   ├── energy/
+│   │   │   ├── mod.rs
+│   │   │   ├── c_states.rs             # CpuIdleGovernor — contrainte C-state par RT
+│   │   │   ├── frequency.rs            # Budget RT corrigé par fréquence CPU
+│   │   │   └── power_profile.rs        # Profile perf/économie
+│   │   │
+│   │   └── stats/
+│   │       ├── mod.rs
+│   │       ├── per_cpu.rs              # Stats par CPU (cycles, switches, migrations)
+│   │       └── latency.rs              # Mesures latence (p50/p99/p999)
+│   │
+│   ├── ipc/                            # 🟢 COUCHE 2a — IPC (→ memory/ + scheduler/)
+│   │   ├── mod.rs
+│   │   │
+│   │   ├── core/
+│   │   │   ├── mod.rs
+│   │   │   ├── types.rs                # MessageId, ChannelId, EndpointId, Cookie
+│   │   │   ├── fastcall_asm.s          # Fast IPC inline ASM (évite syscall)
+│   │   │   ├── transfer.rs             # Message transfer engine
+│   │   │   ├── sequence.rs             # Numéros de séquence (ordering)
+│   │   │   └── constants.rs            # MAX_MSG_SIZE=4080B, RING_SIZE=4096
+│   │   │
+│   │   ├── channel/
+│   │   │   ├── mod.rs
+│   │   │   ├── sync.rs                 # Canal synchrone (fast, rendezvous)
+│   │   │   ├── async.rs                # Canal asynchrone (futures, waker)
+│   │   │   ├── mpmc.rs                 # Multi-Producer Multi-Consumer
+│   │   │   ├── broadcast.rs            # One-to-many
+│   │   │   ├── typed.rs                # Canaux type-safe (générique)
+│   │   │   └── streaming.rs            # Streaming (gros volumes, DMA)
+│   │   │
+│   │   ├── ring/
+│   │   │   ├── mod.rs
+│   │   │   ├── spsc.rs                 # SPSC ultra-fast (Release/Acquire barriers)
+│   │   │   ├── mpmc.rs                 # MPMC lock-free (séquence atomique)
+│   │   │   ├── fusion.rs               # Fusion Ring — adaptive batching
+│   │   │   ├── slot.rs                 # Slot management
+│   │   │   ├── batch.rs                # Transferts groupés
+│   │   │   └── zerocopy.rs             # Zero-copy (partage page physique)
+│   │   │
+│   │   ├── shared_memory/
+│   │   │   ├── mod.rs
+│   │   │   ├── pool.rs                 # Pool pré-alloué (alloc <100ns)
+│   │   │   ├── mapping.rs              # Mapping SHM dans espaces d'adressage
+│   │   │   ├── page.rs                 # Page-aligned allocations (NO_COW flag obligatoire)
+│   │   │   ├── descriptor.rs           # SHM descriptor (ID, taille, perms)
+│   │   │   ├── allocator.rs            # Lock-free alloc SHM
+│   │   │   └── numa_aware.rs           # NUMA locality pour SHM
+│   │   │
+│   │   ├── capability_bridge/          # Shim léger → délègue à security/capability/
+│   │   │   ├── mod.rs                  # ⚠️ Zéro logique ici — wrapper d'appels uniquement
+│   │   │   └── check.rs                # check_right() → security::capability::verify()
+│   │   │                               # ipc/ ne connaît PAS l'implémentation capability
+│   │   │
+│   │   ├── endpoint/
+│   │   │   ├── mod.rs
+│   │   │   ├── descriptor.rs           # EndpointDesc (ID, owners, queue)
+│   │   │   ├── registry.rs             # Registre nom→endpoint (radix tree)
+│   │   │   ├── connection.rs           # Établissement connexion + handshake
+│   │   │   └── lifecycle.rs            # Création/destruction + cleanup
+│   │   │
+│   │   ├── sync/
+│   │   │   ├── mod.rs
+│   │   │   ├── futex.rs                # Futex IPC (délègue à memory/utils/futex_table)
+│   │   │   ├── wait_queue.rs           # Wait IPC (délègue à scheduler/sync)
+│   │   │   ├── event.rs                # Event notification
+│   │   │   ├── barrier.rs              # Barrière de synchronisation
+│   │   │   └── rendezvous.rs           # Point de rendez-vous
+│   │   │
+│   │   ├── message/
+│   │   │   ├── mod.rs
+│   │   │   ├── builder.rs              # Constructeur fluent de messages
+│   │   │   ├── serializer.rs           # Sérialisation zero-copy (capnproto-like)
+│   │   │   ├── router.rs               # Routage multi-hop
+│   │   │   └── priority.rs             # Priorité messages (RT/normal)
+│   │   │
+│   │   ├── rpc/
+│   │   │   ├── mod.rs
+│   │   │   ├── server.rs               # RPC server (dispatcher)
+│   │   │   ├── client.rs               # RPC client (stub + await)
+│   │   │   ├── protocol.rs             # Protocole RPC binaire
+│   │   │   └── timeout.rs              # Timeout + retry
+│   │   │
+│   │   └── stats/
+│   │       └── counters.rs             # Throughput msgs/s, latences, drops
+│   │
+│   ├── fs/                             # 🟠 COUCHE 3 — FILESYSTEM (seul autorisé ring 0)
+│   │   ├── mod.rs
+│   │   │
+│   │   ├── core/
+│   │   │   ├── mod.rs
+│   │   │   ├── vfs.rs                  # VFS — interface unifiée (ops table)
+│   │   │   ├── inode.rs                # Inode (lock-free RCU read path)
+│   │   │   ├── dentry.rs               # Dentry cache (RCU)
+│   │   │   ├── descriptor.rs           # File descriptors + fdtable
+│   │   │   └── types.rs                # FileMode, Permissions, Stat, Dirent
+│   │   │
+│   │   ├── io/
+│   │   │   ├── mod.rs
+│   │   │   ├── uring.rs                # io_uring backend natif
+│   │   │   ├── zero_copy.rs            # Zero-copy sendfile/splice (DMA)
+│   │   │   ├── aio.rs                  # POSIX AIO compat layer
+│   │   │   ├── mmap.rs                 # Memory-mapped files
+│   │   │   ├── direct_io.rs            # O_DIRECT (bypass cache)
+│   │   │   └── completion.rs           # I/O completion queues
+│   │   │
+│   │   ├── cache/
+│   │   │   ├── mod.rs
+│   │   │   ├── page_cache.rs           # Page cache LRU + prefetch
+│   │   │   ├── dentry_cache.rs         # Dentry cache (hashmap + LRU)
+│   │   │   ├── inode_cache.rs          # Inode cache (metadata)
+│   │   │   ├── buffer.rs               # Buffer cache (bloc layer)
+│   │   │   ├── prefetch.rs             # Prefetch readahead adaptatif
+│   │   │   └── eviction.rs             # Éviction (shrinker callback)
+│   │   │
+│   │   ├── integrity/
+│   │   │   ├── mod.rs
+│   │   │   ├── checksum.rs             # Blake3 checksums (ultra-rapide)
+│   │   │   ├── journal.rs              # Write-Ahead Log (WAL)
+│   │   │   ├── recovery.rs             # Crash recovery (replay journal)
+│   │   │   ├── scrubbing.rs            # Background vérif données
+│   │   │   ├── healing.rs              # Auto-healing (Reed-Solomon)
+│   │   │   └── validator.rs            # Hooks validation intégrité
+│   │   │
+│   │   ├── ext4plus/
+│   │   │   ├── mod.rs
+│   │   │   ├── superblock.rs
+│   │   │   ├── group_desc.rs
+│   │   │   ├── inode/
+│   │   │   │   ├── ops.rs              # read/write/truncate — utilise r15 comme scratch
+│   │   │   │   │                       # ✅ r15 garanti préservé par switch_asm.s (callee-saved)
+│   │   │   │   ├── extent.rs           # Extent tree
+│   │   │   │   ├── xattr.rs
+│   │   │   │   └── acl.rs
+│   │   │   ├── directory/
+│   │   │   │   ├── htree.rs            # HTree O(log n)
+│   │   │   │   ├── linear.rs
+│   │   │   │   └── ops.rs
+│   │   │   └── allocation/
+│   │   │       ├── balloc.rs
+│   │   │       ├── mballoc.rs
+│   │   │       └── prealloc.rs
+│   │   │
+│   │   ├── pseudo/
+│   │   │   ├── mod.rs
+│   │   │   ├── procfs.rs               # /proc (info processus)
+│   │   │   ├── sysfs.rs                # /sys (devices, drivers)
+│   │   │   ├── devfs.rs                # /dev (périphériques)
+│   │   │   └── tmpfs.rs                # tmpfs (RAM filesystem)
+│   │   │
+│   │   ├── ipc_fs/                     # Shim fs/ipc (seul chemin autorisé)
+│   │   │   ├── mod.rs
+│   │   │   ├── pipefs.rs               # Pipe POSIX via fs
+│   │   │   └── socketfs.rs             # Socket FS
+│   │   │
+│   │   ├── block/
+│   │   │   ├── mod.rs
+│   │   │   ├── device.rs               # Block device abstraction
+│   │   │   ├── scheduler.rs            # I/O scheduler (deadline/mq-deadline)
+│   │   │   ├── queue.rs                # Request queue
+│   │   │   └── bio.rs                  # Block I/O structure
+│   │   │
+│   │   └── compatibility/
+│   │       ├── mod.rs
+│   │       ├── posix.rs                # POSIX 2024 compliance
+│   │       └── linux_compat.rs         # Compat syscalls Linux
+│   │
+│   ├── security/                       # 🔐 TCB — SÉCURITÉ NOYAU (PREUVES FORMELLES)
+│   │   ├── mod.rs
+│   │   │
+│   │   ├── PROOF_SECURITY.md           # ⚠️ Ce module est soumis à preuve formelle
+│   │   │                               # Voir /proofs/kernel_security/
+│   │   │
+│   │   ├── tcb/
+│   │   │   ├── mod.rs
+│   │   │   ├── boundary.rs             # Frontières TCB (ce qui est de confiance)
+│   │   │   ├── invariants.rs           # Invariants de sécurité (vérifiés Coq)
+│   │   │   └── audit.rs                # Journal d'audit TCB (immutable log)
+│   │   │
+│   │   ├── capability/                 # 🔐 SYSTÈME DE CAPABILITY — TCB, périmètre prouvé
+│   │   │   ├── mod.rs                  # Déplacé depuis ipc/ → security/ pour preuve formelle
+│   │   │   │                           # ipc/ accède via ipc/capability_bridge/ UNIQUEMENT
+│   │   │   │                           # fs/ accède directement ici (pas via ipc/)
+│   │   │   ├── token.rs                # CapToken (128 bits: ObjectId + rights + generation)
+│   │   │   ├── rights.rs               # Rights: READ, WRITE, EXEC, GRANT, REVOKE
+│   │   │   ├── table.rs                # CapTable par processus (radix tree)
+│   │   │   ├── revocation.rs           # Révocation instantanée (génération++)
+│   │   │   ├── delegation.rs           # Délégation (subset des droits)
+│   │   │   └── namespace.rs            # Namespace capability
+│   │   │
+│   │   ├── zero_trust/
+│   │   │   ├── mod.rs
+│   │   │   ├── policy.rs               # Moteur de politique ZT
+│   │   │   ├── context.rs              # Security context par thread/process
+│   │   │   ├── verify.rs               # Vérification CHAQUE accès
+│   │   │   └── labels.rs               # Labels de sécurité (MLS-like)
+│   │   │
+│   │   ├── crypto/
+│   │   │   ├── mod.rs
+│   │   │   ├── xchacha20_poly1305.rs   # XChaCha20-Poly1305 AEAD
+│   │   │   │                           # Utilisé pour TOUS les canaux kernel
+│   │   │   ├── blake3.rs               # Blake3 (checksums, PRF)
+│   │   │   ├── x25519.rs               # ECDH X25519 (échange clés)
+│   │   │   ├── ed25519.rs              # Ed25519 (signatures)
+│   │   │   ├── rng.rs                  # CSPRNG (RDRAND + /dev/urandom kernel)
+│   │   │   ├── kdf.rs                  # Key derivation (HKDF-BLAKE3)
+│   │   │   └── aes_gcm.rs              # AES-256-GCM (accélération HW AES-NI)
+│   │   │
+│   │   ├── isolation/
+│   │   │   ├── mod.rs
+│   │   │   ├── domains.rs              # Security domains (kernel/driver/user)
+│   │   │   ├── namespaces.rs           # Isolation namespaces
+│   │   │   ├── sandbox.rs              # Sandbox kernel (seccomp-like)
+│   │   │   └── pledge.rs               # Pledge-style restrictions (OpenBSD-inspired)
+│   │   │
+│   │   ├── integrity_check/
+│   │   │   ├── mod.rs
+│   │   │   ├── code_signing.rs         # Signature modules + drivers
+│   │   │   ├── runtime_check.rs        # Vérif périodique sections kernel
+│   │   │   └── secure_boot.rs          # Chain of trust UEFI Secure Boot
+│   │   │
+│   │   ├── exploit_mitigations/
+│   │   │   ├── mod.rs
+│   │   │   ├── kaslr.rs                # KASLR (kernel ASLR)
+│   │   │   ├── stack_protector.rs      # Stack canaries + guard pages
+│   │   │   ├── cfg.rs                  # Control Flow Guard (CFI)
+│   │   │   ├── cet.rs                  # CET Shadow Stack (Intel)
+│   │   │   └── safe_stack.rs           # SafeStack séparation
+│   │   │
+│   │   └── audit/
+│   │       ├── mod.rs
+│   │       ├── logger.rs               # Audit logger (ring buffer non-blocking)
+│   │       ├── rules.rs                # Règles d'audit
+│   │       └── syscall_audit.rs        # Audit des syscalls sensibles
+│   │
+│   ├── process/                        # 🟤 PROCESS/THREAD MANAGEMENT
+│   │   ├── mod.rs
+│   │   │
+│   │   ├── core/
+│   │   │   ├── mod.rs
+│   │   │   ├── pid.rs                  # PID allocator (IDR radix tree, lock-free)
+│   │   │   ├── pcb.rs                  # Process Control Block (cache-aligned)
+│   │   │   ├── tcb.rs                  # Thread Control Block
+│   │   │   └── registry.rs             # Registre global PID→PCB (RCU)
+│   │   │
+│   │   ├── lifecycle/
+│   │   │   ├── mod.rs
+│   │   │   ├── create.rs               # Création process/thread
+│   │   │   ├── fork.rs                 # fork() CoW <1µs
+│   │   │   ├── exec.rs                 # execve() <5µs
+│   │   │   ├── exit.rs                 # exit() cleanup RAII complet
+│   │   │   ├── wait.rs                 # waitpid/wait4
+│   │   │   └── reap.rs                 # Reaper zombie (kthread dédié)
+│   │   │
+│   │   ├── thread/
+│   │   │   ├── mod.rs
+│   │   │   ├── creation.rs             # Création thread <500ns
+│   │   │   ├── join.rs                 # Thread join (futex-based)
+│   │   │   ├── detach.rs               # Thread detach
+│   │   │   ├── local_storage.rs        # TLS (GS register, per-thread)
+│   │   │   └── pthread_compat.rs       # API pthread POSIX
+│   │   │
+│   │   ├── signal/                     # ✅ Déplacé depuis scheduler/ → process/
+│   │   │   ├── mod.rs                  # Signaux POSIX = cycle de vie processus, pas scheduling
+│   │   │   ├── delivery.rs             # Livraison signal (check à retour kernel)
+│   │   │   │                           # Seul point de contact avec scheduler/ (wakeup uniquement)
+│   │   │   ├── handler.rs              # Exécution handler utilisateur (sigaltstack)
+│   │   │   ├── mask.rs                 # Masque signal par thread (sigprocmask)
+│   │   │   ├── queue.rs                # File RT signals (POSIX.1b)
+│   │   │   └── default.rs              # Actions par défaut (TERM, CORE, IGN, STOP…)
+│   │   │
+│   │   ├── state/
+│   │   │   ├── mod.rs
+│   │   │   ├── transitions.rs          # State machine (Running/Sleep/Stop/Zombie)
+│   │   │   └── wakeup.rs               # wakeup_thread() — implémente WakeupHandler trait
+│   │   │                               # (enregistré au boot, appelé par DMA/IPC sans dépendance)
+│   │   │
+│   │   ├── group/
+│   │   │   ├── mod.rs
+│   │   │   ├── session.rs
+│   │   │   ├── pgrp.rs
+│   │   │   └── job_control.rs
+│   │   │
+│   │   ├── namespace/
+│   │   │   ├── mod.rs
+│   │   │   ├── pid_ns.rs
+│   │   │   ├── mount_ns.rs
+│   │   │   ├── net_ns.rs
+│   │   │   ├── uts_ns.rs
+│   │   │   └── user_ns.rs
+│   │   │
+│   │   └── resource/
+│   │       ├── mod.rs
+│   │       ├── rlimit.rs
+│   │       ├── usage.rs
+│   │       └── cgroup.rs               # cgroups v2
+│   │
+│   └── syscall/                        # 🔵 INTERFACE SYSCALL
+│       ├── mod.rs
+│       ├── table.rs                    # Table des syscalls (array[512])
+│       ├── entry.s                     # Entrée syscall (SYSCALL/SYSRET + SWAPGS)
+│       ├── dispatch.rs                 # Dispatch vers handlers
+│       ├── validation.rs               # Validation args userspace → kernel
+│       ├── fast_path.rs                # Fast path getpid/gettid (<100 cycles)
+│       ├── compat/
+│       │   ├── linux.rs                # Compatibilité numéros Linux
+│       │   └── posix.rs                # POSIX syscalls
+│       └── numbers.rs                  # Numéros syscall Exo-OS
+
+---
+## 📋 Changelog v5 — 4 corrections intégrées
+
+### ✅ Correction 1 — `signal/` déplacé de `scheduler/` vers `process/`
+Les signaux POSIX (SIGCHLD, SIGTERM, sigaltstack…) appartiennent au cycle de vie
+processus. Seule `delivery.rs` touche le scheduler (wakeup au retour kernel).
+`scheduler/` ne contient plus `signal/`.
+
+### ✅ Correction 2 — `capability/` déplacé vers `security/` + bridge dans `ipc/`
+- `security/capability/` : modèle formel complet, périmètre de preuve minimal
+- `ipc/capability_bridge/` : shim zéro-logique qui délègue à `security/capability/`
+- `fs/` appelle `security/capability/` directement, sans passer par `ipc/`
+
+### ✅ Correction 3 — Garantie formelle r15 dans `scheduler/asm/switch_asm.s`
+Le commentaire vague est remplacé par une garantie explicite : r15 est push/pop
+**avant tout appel C**, ce qui couvre l'usage de r15 dans `ext4plus/inode/ops.rs`.
+Le commentaire correspondant dans `ops.rs` est mis à jour en conséquence.
+
+### ✅ Correction 4 — Modules IA réintégrés
+- `memory/physical/allocator/ai_hints.rs` : lookup table statique NUMA, zéro inférence runtime
+- `scheduler/policies/ai_guided.rs` : politique guidée par profil de charge, fallback CFS si hints absents
+
+### ✅ Corrections antérieures (v4 → v5 conservées)
+- `pku.rs` : "Intel MPX" → "Protection Keys for Userspace (Intel)"
+- `aes_gcm.rs` : "fallback HW AES-NI" → "accélération HW AES-NI"
+- Séparation sémantique FPU clarifiée : `arch/` = ASM brut, `scheduler/fpu/` = logique état TCB
+- DMA conservé dans `memory/` — dépendance vers `process/` résolue via trait `WakeupHandler`
+  enregistré au boot dans `process/state/wakeup.rs`

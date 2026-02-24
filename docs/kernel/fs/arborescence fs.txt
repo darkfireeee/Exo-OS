@@ -1,0 +1,82 @@
+arborescence fs
+
+│   ├── fs/                             # 🟠 COUCHE 3 — FILESYSTEM (seul autorisé ring 0)
+│   │   ├── mod.rs
+│   │   │
+│   │   ├── core/
+│   │   │   ├── mod.rs
+│   │   │   ├── vfs.rs                  # VFS — interface unifiée (ops table)
+│   │   │   ├── inode.rs                # Inode (lock-free RCU read path)
+│   │   │   ├── dentry.rs               # Dentry cache (RCU)
+│   │   │   ├── descriptor.rs           # File descriptors + fdtable
+│   │   │   └── types.rs                # FileMode, Permissions, Stat, Dirent
+│   │   │
+│   │   ├── io/
+│   │   │   ├── mod.rs
+│   │   │   ├── uring.rs                # io_uring backend natif
+│   │   │   ├── zero_copy.rs            # Zero-copy sendfile/splice (DMA)
+│   │   │   ├── aio.rs                  # POSIX AIO compat layer
+│   │   │   ├── mmap.rs                 # Memory-mapped files
+│   │   │   ├── direct_io.rs            # O_DIRECT (bypass cache)
+│   │   │   └── completion.rs           # I/O completion queues
+│   │   │
+│   │   ├── cache/
+│   │   │   ├── mod.rs
+│   │   │   ├── page_cache.rs           # Page cache LRU + prefetch
+│   │   │   ├── dentry_cache.rs         # Dentry cache (hashmap + LRU)
+│   │   │   ├── inode_cache.rs          # Inode cache (metadata)
+│   │   │   ├── buffer.rs               # Buffer cache (bloc layer)
+│   │   │   ├── prefetch.rs             # Prefetch readahead adaptatif
+│   │   │   └── eviction.rs             # Éviction (shrinker callback)
+│   │   │
+│   │   ├── integrity/
+│   │   │   ├── mod.rs
+│   │   │   ├── checksum.rs             # Blake3 checksums (ultra-rapide)
+│   │   │   ├── journal.rs              # Write-Ahead Log (WAL)
+│   │   │   ├── recovery.rs             # Crash recovery (replay journal)
+│   │   │   ├── scrubbing.rs            # Background vérif données
+│   │   │   ├── healing.rs              # Auto-healing (Reed-Solomon)
+│   │   │   └── validator.rs            # Hooks validation intégrité
+│   │   │
+│   │   ├── ext4plus/
+│   │   │   ├── mod.rs
+│   │   │   ├── superblock.rs
+│   │   │   ├── group_desc.rs
+│   │   │   ├── inode/
+│   │   │   │   ├── ops.rs              # read/write/truncate — utilise r15 comme scratch
+│   │   │   │   │                       # ✅ r15 garanti préservé par switch_asm.s (callee-saved)
+│   │   │   │   ├── extent.rs           # Extent tree
+│   │   │   │   ├── xattr.rs
+│   │   │   │   └── acl.rs
+│   │   │   ├── directory/
+│   │   │   │   ├── htree.rs            # HTree O(log n)
+│   │   │   │   ├── linear.rs
+│   │   │   │   └── ops.rs
+│   │   │   └── allocation/
+│   │   │       ├── balloc.rs
+│   │   │       ├── mballoc.rs
+│   │   │       └── prealloc.rs
+│   │   │
+│   │   ├── pseudo/
+│   │   │   ├── mod.rs
+│   │   │   ├── procfs.rs               # /proc (info processus)
+│   │   │   ├── sysfs.rs                # /sys (devices, drivers)
+│   │   │   ├── devfs.rs                # /dev (périphériques)
+│   │   │   └── tmpfs.rs                # tmpfs (RAM filesystem)
+│   │   │
+│   │   ├── ipc_fs/                     # Shim fs/ipc (seul chemin autorisé)
+│   │   │   ├── mod.rs
+│   │   │   ├── pipefs.rs               # Pipe POSIX via fs
+│   │   │   └── socketfs.rs             # Socket FS
+│   │   │
+│   │   ├── block/
+│   │   │   ├── mod.rs
+│   │   │   ├── device.rs               # Block device abstraction
+│   │   │   ├── scheduler.rs            # I/O scheduler (deadline/mq-deadline)
+│   │   │   ├── queue.rs                # Request queue
+│   │   │   └── bio.rs                  # Block I/O structure
+│   │   │
+│   │   └── compatibility/
+│   │       ├── mod.rs
+│   │       ├── posix.rs                # POSIX 2024 compliance
+│   │       └── linux_compat.rs         # Compat syscalls Linux

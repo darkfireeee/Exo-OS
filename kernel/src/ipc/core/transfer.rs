@@ -1,540 +1,312 @@
-//! Transfer Engine - Ultra-High Performance Data Transfer
-//!
-//! This module handles the actual data movement, optimizing for different sizes:
-//! - **Nano** (≤8B): Register transfer, ~50 cycles
-//! - **Micro** (≤56B): Inline in slot, ~100 cycles
-//! - **Small** (≤4KB): Single page copy/map, ~400 cycles
-//! - **Large** (>4KB): Zero-copy with CoW, ~200 cycles (amortized)
-//!
-//! ## Key Optimizations:
-//! 1. Non-temporal stores for large transfers (bypass cache pollution)
-//! 2. Prefetching for predictable access patterns
-//! 3. Copy-on-Write for large shared buffers
-//! 4. Direct physical page transfer without copying
+// kernel/src/ipc/core/transfer.rs
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+// MESSAGE TRANSFER ENGINE — moteur de transfert de messages IPC
+// (Exo-OS · IPC Couche 2a)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Ce module implémente le coeur du transfert de messages entre espaces
+// d'adressage. Il supporte deux modes :
+//
+//   1. COPY   — copie physique des données (pour les petits messages ≤ MAX_MSG_SIZE)
+//   2. ZEROCOPY — partage de page physique (NO_COW, aucune copie, pour grands volumes)
+//
+// RÈGLES :
+//   • Zéro allocation heap dans ce fichier (Zone NO-ALLOC critique)
+//   • Tout unsafe documenté avec // SAFETY:
+//   • Pas d'import de fs/, process/ (couche 2a)
+//   • Vérification bounds systématique avant toute copie
+// ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#![allow(dead_code)]
+
 use core::ptr;
-use alloc::vec::Vec;
-use alloc::boxed::Box;
-use alloc::sync::Arc;
-use spin::RwLock;
+use core::sync::atomic::{fence, Ordering};
+use super::constants::{MAX_MSG_SIZE, MSG_HEADER_SIZE, RING_SLOT_SIZE};
+use super::types::{MessageId, MsgFlags, IpcError, alloc_message_id};
 
-use crate::memory::{MemoryResult, MemoryError};
-use crate::memory::address::{PhysicalAddress, VirtualAddress};
+// ─────────────────────────────────────────────────────────────────────────────
+// MessageHeader — en-tête inline dans chaque slot du ring
+// ─────────────────────────────────────────────────────────────────────────────
 
-/// Transfer mode selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum TransferMode {
-    /// Register-based (≤8 bytes, fastest)
-    Nano = 0,
-    /// Inline in slot (≤56 bytes)  
-    Inline = 1,
-    /// Copy small data (≤4KB)
-    Copy = 2,
-    /// Zero-copy page sharing (>4KB)
-    ZeroCopy = 3,
-    /// Copy-on-Write optimization
-    CopyOnWrite = 4,
-    /// Direct DMA transfer
-    Dma = 5,
+/// En-tête de message inliné dans le ring slot.
+/// 16 bytes exactement — vérifié statiquement.
+#[derive(Copy, Clone, Debug)]
+#[repr(C, align(8))]
+pub struct MessageHeader {
+    /// Identifiant unique du message.
+    pub msg_id:    u64,
+    /// Drapeaux (RT, ZEROCOPY, BROADCAST…).
+    pub flags:     u32,
+    /// Longueur du payload (0..=MAX_MSG_SIZE).
+    pub len:       u16,
+    /// Padding pour aligner sur 16 bytes.
+    pub _pad:      u16,
 }
 
-impl TransferMode {
-    /// Select optimal transfer mode for given size
+const _: () = assert!(
+    core::mem::size_of::<MessageHeader>() == MSG_HEADER_SIZE,
+    "MessageHeader doit faire exactement MSG_HEADER_SIZE bytes"
+);
+
+impl MessageHeader {
+    /// Crée un en-tête pour un message inline.
     #[inline(always)]
-    pub const fn select(size: usize) -> Self {
-        if size <= 8 {
-            TransferMode::Nano
-        } else if size <= 56 {
-            TransferMode::Inline
-        } else if size <= 4096 {
-            TransferMode::Copy
-        } else {
-            TransferMode::ZeroCopy
+    pub fn new_inline(id: MessageId, flags: MsgFlags, len: usize) -> Self {
+        debug_assert!(len <= MAX_MSG_SIZE, "payload dépasse MAX_MSG_SIZE");
+        Self {
+            msg_id: id.get(),
+            flags:  flags.0,
+            len:    len as u16,
+            _pad:   0,
         }
     }
-    
-    /// Check if mode requires page allocation
+
+    /// Crée un en-tête pour un message zero-copy.
     #[inline(always)]
-    pub const fn needs_pages(self) -> bool {
-        matches!(self, TransferMode::Copy | TransferMode::ZeroCopy | TransferMode::CopyOnWrite)
+    pub fn new_zerocopy(id: MessageId, flags: MsgFlags) -> Self {
+        let f = MsgFlags(flags.0 | MsgFlags::ZEROCOPY.0);
+        Self {
+            msg_id: id.get(),
+            flags:  f.0,
+            len:    0, // payload est une référence physique externe
+            _pad:   0,
+        }
+    }
+
+    /// Retourne vrai si le message est zero-copy.
+    #[inline(always)]
+    pub fn is_zerocopy(&self) -> bool {
+        (self.flags & MsgFlags::ZEROCOPY.0) != 0
+    }
+
+    /// Retourne vrai si le message est temps-réel.
+    #[inline(always)]
+    pub fn is_rt(&self) -> bool {
+        (self.flags & MsgFlags::RT.0) != 0
     }
 }
 
-/// Transfer descriptor - complete information for a transfer operation
+// ─────────────────────────────────────────────────────────────────────────────
+// RingSlot — slot complet dans le ring (header + payload inliné)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Un slot complet dans le ring de communication.
+/// Taille fixe RING_SLOT_SIZE = MSG_HEADER_SIZE + MAX_MSG_SIZE.
 #[repr(C, align(64))]
-pub struct TransferDescriptor {
-    /// Source address (virtual or physical depending on flags)
-    pub src_addr: u64,
-    /// Destination address
-    pub dst_addr: u64,
-    /// Size in bytes
-    pub size: u32,
-    /// Transfer mode
-    pub mode: TransferMode,
-    /// Flags
-    pub flags: TransferFlags,
-    /// Sequence number for ordering
-    pub sequence: u32,
-    /// Reference count for shared transfers
-    pub ref_count: AtomicU64,
-    /// Page list for multi-page transfers
-    pub pages: Option<PageList>,
+pub struct RingSlot {
+    pub header:  MessageHeader,
+    pub payload: [u8; MAX_MSG_SIZE],
 }
 
-/// Transfer flags
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TransferFlags(u16);
+const _: () = assert!(
+    core::mem::size_of::<RingSlot>() == RING_SLOT_SIZE,
+    "RingSlot doit faire RING_SLOT_SIZE bytes"
+);
 
-impl TransferFlags {
-    pub const NONE: Self = Self(0);
-    pub const SRC_PHYSICAL: Self = Self(1 << 0);
-    pub const DST_PHYSICAL: Self = Self(1 << 1);
-    pub const NON_TEMPORAL: Self = Self(1 << 2);
-    pub const PREFETCH: Self = Self(1 << 3);
-    pub const COPY_ON_WRITE: Self = Self(1 << 4);
-    pub const NEEDS_FLUSH: Self = Self(1 << 5);
-    pub const HIGH_PRIORITY: Self = Self(1 << 6);
-    pub const BATCH_MEMBER: Self = Self(1 << 7);
-    
-    #[inline(always)]
-    pub const fn contains(self, other: Self) -> bool {
-        (self.0 & other.0) == other.0
-    }
-    
-    #[inline(always)]
-    pub const fn union(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-}
-
-/// Page list for multi-page transfers
-pub struct PageList {
-    /// Physical page addresses
-    pub pages: Vec<PhysicalAddress>,
-    /// Virtual mapping address
-    pub virt_base: VirtualAddress,
-    /// Total size
-    pub total_size: usize,
-    /// Reference count
-    pub refs: AtomicUsize,
-}
-
-impl PageList {
-    pub fn new(pages: Vec<PhysicalAddress>, virt_base: VirtualAddress, size: usize) -> Self {
+impl RingSlot {
+    /// Crée un slot vide (zéro-initialisé).
+    pub const fn zeroed() -> Self {
         Self {
-            pages,
-            virt_base,
-            total_size: size,
-            refs: AtomicUsize::new(1),
+            header:  MessageHeader { msg_id: 0, flags: 0, len: 0, _pad: 0 },
+            payload: [0u8; MAX_MSG_SIZE],
         }
     }
-    
-    #[inline]
-    pub fn retain(&self) {
-        self.refs.fetch_add(1, Ordering::Relaxed);
-    }
-    
-    #[inline]
-    pub fn release(&self) -> bool {
-        self.refs.fetch_sub(1, Ordering::Release) == 1
-    }
-    
-    pub fn page_count(&self) -> usize {
-        self.pages.len()
-    }
-}
 
-/// Transfer result with statistics
-#[derive(Debug, Clone)]
-pub struct TransferResult {
-    /// Bytes transferred
-    pub bytes: usize,
-    /// Cycles spent (approximate)
-    pub cycles: u64,
-    /// Mode used
-    pub mode: TransferMode,
-    /// Whether CoW was triggered
-    pub cow_triggered: bool,
-}
-
-impl TransferResult {
-    pub const fn success(bytes: usize, cycles: u64, mode: TransferMode) -> Self {
-        Self {
-            bytes,
-            cycles,
-            mode,
-            cow_triggered: false,
+    /// Écrit un message inline dans ce slot.
+    ///
+    /// # Safety
+    /// `src` doit pointer sur au moins `len` bytes valides.
+    /// `len` doit être ≤ MAX_MSG_SIZE.
+    #[inline]
+    pub unsafe fn write_inline(
+        &mut self,
+        id:    MessageId,
+        flags: MsgFlags,
+        src:   *const u8,
+        len:   usize,
+    ) -> Result<(), IpcError> {
+        if len > MAX_MSG_SIZE {
+            return Err(IpcError::MessageTooLarge);
         }
+        self.header = MessageHeader::new_inline(id, flags, len);
+        if len > 0 {
+            // SAFETY: src valide (précondition), payload[..len] dans le slot.
+            ptr::copy_nonoverlapping(src, self.payload.as_mut_ptr(), len);
+        }
+        // Barrière Release — les données sont visibles avant que le ring
+        // n'incrémente le tail et rende le slot lisible.
+        fence(Ordering::Release);
+        Ok(())
+    }
+
+    /// Lit le payload depuis ce slot vers un buffer destination.
+    ///
+    /// # Safety
+    /// `dst` doit pointer sur au moins `buf_len` bytes valides.
+    /// Appelé uniquement après une barrière Acquire sur le ring.
+    #[inline]
+    pub unsafe fn read_inline(
+        &self,
+        dst:     *mut u8,
+        buf_len: usize,
+    ) -> Result<usize, IpcError> {
+        let len = self.header.len as usize;
+        if len > buf_len {
+            return Err(IpcError::MessageTooLarge);
+        }
+        if len > MAX_MSG_SIZE {
+            return Err(IpcError::InternalError); // corruption
+        }
+        // SAFETY: dst valide (précondition), payload[..len] initialisé par write_inline.
+        ptr::copy_nonoverlapping(self.payload.as_ptr(), dst, len);
+        Ok(len)
     }
 }
 
-// =============================================================================
-// TRANSFER ENGINE
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// ZeroCopyRef — référence physique pour transfert sans copie
+// ─────────────────────────────────────────────────────────────────────────────
 
-/// High-performance transfer engine
-pub struct TransferEngine {
-    /// Statistics
-    stats: TransferStats,
-    /// Pending CoW pages
-    cow_pending: RwLock<Vec<CowPendingEntry>>,
+/// Référence physique vers un buffer partagé (zero-copy IPC).
+/// La page sous-jacente est mappée dans les deux espaces d'adressage
+/// avec le flag NO_COW (géré par shared_memory/pool.rs).
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+pub struct ZeroCopyRef {
+    /// Adresse physique du buffer (alignée sur PAGE_SIZE).
+    pub phys_addr: u64,
+    /// Longueur du buffer en bytes.
+    pub length:    u32,
+    /// Index dans le pool SHM (pour libération).
+    pub pool_idx:  u32,
 }
 
-/// Transfer statistics
-#[derive(Debug, Default)]
+impl ZeroCopyRef {
+    /// Crée une référence zero-copy.
+    #[inline(always)]
+    pub fn new(phys_addr: u64, length: u32, pool_idx: u32) -> Self {
+        Self { phys_addr, length, pool_idx }
+    }
+
+    /// Retourne vrai si la référence est valide (non nulle).
+    #[inline(always)]
+    pub fn is_valid(&self) -> bool {
+        self.phys_addr != 0 && self.length > 0
+    }
+
+    /// Référence nulle (adresse physique 0, sans buffer).
+    #[inline(always)]
+    pub const fn null() -> Self {
+        Self { phys_addr: 0, length: 0, pool_idx: 0 }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TransferEngine — moteur de copie optimisé
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Statistiques du moteur de transfert.
+#[derive(Default, Debug)]
 pub struct TransferStats {
-    pub nano_transfers: AtomicU64,
-    pub inline_transfers: AtomicU64,
-    pub copy_transfers: AtomicU64,
-    pub zerocopy_transfers: AtomicU64,
-    pub cow_faults: AtomicU64,
-    pub total_bytes: AtomicU64,
-    pub total_cycles: AtomicU64,
+    /// Nombre de transferts inline effectués.
+    pub inline_count: u64,
+    /// Nombre de transferts zero-copy effectués.
+    pub zerocopy_count: u64,
+    /// Bytes totaux copiés (inline seulement).
+    pub bytes_copied: u64,
+    /// Nombre d'erreurs (bounds violations, etc.).
+    pub errors: u64,
 }
 
-struct CowPendingEntry {
-    phys_addr: PhysicalAddress,
-    virt_addr: VirtualAddress,
-    size: usize,
-    owner_pid: u64,
-}
+/// Moteur de transfert stateless.
+/// Toutes les méthodes sont des fonctions pures — l'état est dans les slots.
+pub struct TransferEngine;
 
 impl TransferEngine {
-    pub const fn new() -> Self {
-        Self {
-            stats: TransferStats {
-                nano_transfers: AtomicU64::new(0),
-                inline_transfers: AtomicU64::new(0),
-                copy_transfers: AtomicU64::new(0),
-                zerocopy_transfers: AtomicU64::new(0),
-                cow_faults: AtomicU64::new(0),
-                total_bytes: AtomicU64::new(0),
-                total_cycles: AtomicU64::new(0),
-            },
-            cow_pending: RwLock::new(Vec::new()),
+    /// Copie `src[0..len]` dans le slot de destination.
+    ///
+    /// # Safety
+    /// - `src` doit pointer sur au moins `len` bytes valides.
+    /// - `slot` doit être exclusivement détenu par l'appelant.
+    #[inline]
+    pub unsafe fn copy_to_slot(
+        slot:  &mut RingSlot,
+        src:   *const u8,
+        len:   usize,
+        flags: MsgFlags,
+    ) -> Result<MessageId, IpcError> {
+        if len > MAX_MSG_SIZE {
+            return Err(IpcError::MessageTooLarge);
+        }
+        let id = alloc_message_id();
+        // SAFETY: src valide et len ≤ MAX_MSG_SIZE vérifiés ci-dessus.
+        slot.write_inline(id, flags, src, len)?;
+        Ok(id)
+    }
+
+    /// Copie le payload du slot vers `dst[0..buf_len]`.
+    ///
+    /// # Safety
+    /// - `dst` doit pointer sur au moins `buf_len` bytes valides.
+    /// - Une barrière Acquire doit avoir été posée avant cet appel.
+    #[inline]
+    pub unsafe fn copy_from_slot(
+        slot:    &RingSlot,
+        dst:     *mut u8,
+        buf_len: usize,
+    ) -> Result<usize, IpcError> {
+        // SAFETY: dst valide et buf_len vérifiés par l'appelant.
+        slot.read_inline(dst, buf_len)
+    }
+
+    /// Transfert slice → slot (version typée safe pour des types Copy).
+    ///
+    /// # Contrainte
+    /// `T` doit être `Copy + 'static` (pas de pointeurs internes).
+    #[inline]
+    pub fn transfer_value<T: Copy>(
+        slot:  &mut RingSlot,
+        value: &T,
+        flags: MsgFlags,
+    ) -> Result<MessageId, IpcError> {
+        let len = core::mem::size_of::<T>();
+        // SAFETY: value est une référence valide vers un T de taille `len`.
+        unsafe {
+            Self::copy_to_slot(
+                slot,
+                value as *const T as *const u8,
+                len,
+                flags,
+            )
         }
     }
-    
-    /// Execute transfer with automatic mode selection
+
+    /// Reçoit un slot vers un type `T` (version typée safe).
+    ///
+    /// # Safety
+    /// Le slot doit avoir été écrit par `transfer_value::<T>`.
+    /// L'alignement de T doit être ≤ à celui de `RingSlot::payload`.
     #[inline]
-    pub fn transfer(&self, src: *const u8, dst: *mut u8, size: usize) -> MemoryResult<TransferResult> {
-        let mode = TransferMode::select(size);
-        self.transfer_with_mode(src, dst, size, mode)
-    }
-    
-    /// Execute transfer with specific mode
-    pub fn transfer_with_mode(
-        &self,
-        src: *const u8,
-        dst: *mut u8,
-        size: usize,
-        mode: TransferMode,
-    ) -> MemoryResult<TransferResult> {
-        let start_cycles = read_tsc();
-        
-        let result = match mode {
-            TransferMode::Nano => self.transfer_nano(src, dst, size),
-            TransferMode::Inline => self.transfer_inline(src, dst, size),
-            TransferMode::Copy => self.transfer_copy(src, dst, size),
-            TransferMode::ZeroCopy => self.transfer_zerocopy(src, dst, size),
-            TransferMode::CopyOnWrite => self.transfer_cow(src, dst, size),
-            TransferMode::Dma => Err(MemoryError::NotSupported), // DMA needs special setup
+    pub fn receive_value<T: Copy>(slot: &RingSlot) -> Result<T, IpcError> {
+        let len = core::mem::size_of::<T>();
+        if slot.header.len as usize != len {
+            return Err(IpcError::InvalidParam);
+        }
+        // SAFETY: payload contient exactement `len` bytes du type T.
+        // L'alignement de payload (=[u8]) est 1 — on utilise read_unaligned.
+        let t: T = unsafe {
+            ptr::read_unaligned(slot.payload.as_ptr() as *const T)
         };
-        
-        let end_cycles = read_tsc();
-        let cycles = end_cycles.saturating_sub(start_cycles);
-        
-        // Update stats
-        self.stats.total_bytes.fetch_add(size as u64, Ordering::Relaxed);
-        self.stats.total_cycles.fetch_add(cycles, Ordering::Relaxed);
-        
-        result.map(|mut r| {
-            r.cycles = cycles;
-            r
-        })
-    }
-    
-    /// Nano transfer (≤8 bytes) - register based
-    #[inline(always)]
-    fn transfer_nano(&self, src: *const u8, dst: *mut u8, size: usize) -> MemoryResult<TransferResult> {
-        debug_assert!(size <= 8);
-        
-        self.stats.nano_transfers.fetch_add(1, Ordering::Relaxed);
-        
-        unsafe {
-            match size {
-                1 => ptr::write(dst, ptr::read(src)),
-                2 => ptr::write(dst as *mut u16, ptr::read(src as *const u16)),
-                3..=4 => ptr::write(dst as *mut u32, ptr::read(src as *const u32)),
-                5..=8 => ptr::write(dst as *mut u64, ptr::read(src as *const u64)),
-                _ => return Err(MemoryError::InvalidSize),
-            }
-        }
-        
-        Ok(TransferResult::success(size, 0, TransferMode::Nano))
-    }
-    
-    /// Inline transfer (≤56 bytes) - optimized memcpy
-    #[inline]
-    fn transfer_inline(&self, src: *const u8, dst: *mut u8, size: usize) -> MemoryResult<TransferResult> {
-        debug_assert!(size <= 56);
-        
-        self.stats.inline_transfers.fetch_add(1, Ordering::Relaxed);
-        
-        unsafe {
-            // Use optimized copy for cache-line sized chunks
-            if size >= 32 {
-                // Copy 32 bytes at a time
-                let chunks = size / 32;
-                let remainder = size % 32;
-                
-                let mut s = src as *const [u8; 32];
-                let mut d = dst as *mut [u8; 32];
-                
-                for _ in 0..chunks {
-                    ptr::write(d, ptr::read(s));
-                    s = s.add(1);
-                    d = d.add(1);
-                }
-                
-                // Copy remainder
-                if remainder > 0 {
-                    ptr::copy_nonoverlapping(s as *const u8, d as *mut u8, remainder);
-                }
-            } else if size >= 8 {
-                // Copy 8 bytes at a time
-                let chunks = size / 8;
-                let remainder = size % 8;
-                
-                let mut s = src as *const u64;
-                let mut d = dst as *mut u64;
-                
-                for _ in 0..chunks {
-                    ptr::write(d, ptr::read(s));
-                    s = s.add(1);
-                    d = d.add(1);
-                }
-                
-                if remainder > 0 {
-                    ptr::copy_nonoverlapping(s as *const u8, d as *mut u8, remainder);
-                }
-            } else {
-                ptr::copy_nonoverlapping(src, dst, size);
-            }
-        }
-        
-        Ok(TransferResult::success(size, 0, TransferMode::Inline))
-    }
-    
-    /// Copy transfer (≤4KB) - page-aware copy
-    fn transfer_copy(&self, src: *const u8, dst: *mut u8, size: usize) -> MemoryResult<TransferResult> {
-        self.stats.copy_transfers.fetch_add(1, Ordering::Relaxed);
-        
-        unsafe {
-            // For larger copies, use non-temporal stores to avoid cache pollution
-            if size >= 1024 {
-                self.copy_non_temporal(src, dst, size);
-            } else {
-                ptr::copy_nonoverlapping(src, dst, size);
-            }
-        }
-        
-        Ok(TransferResult::success(size, 0, TransferMode::Copy))
-    }
-    
-    /// Non-temporal copy (bypasses cache)
-    #[inline]
-    unsafe fn copy_non_temporal(&self, src: *const u8, dst: *mut u8, size: usize) {
-        // Prefetch source
-        #[cfg(target_arch = "x86_64")]
-        {
-            for offset in (0..size.min(512)).step_by(64) {
-                core::arch::x86_64::_mm_prefetch(
-                    src.add(offset) as *const i8,
-                    core::arch::x86_64::_MM_HINT_T0
-                );
-            }
-        }
-        
-        // Copy with streaming stores where possible
-        let aligned_size = size & !63;
-        if aligned_size > 0 {
-            ptr::copy_nonoverlapping(src, dst, aligned_size);
-        }
-        
-        // Handle remainder
-        let remainder = size - aligned_size;
-        if remainder > 0 {
-            ptr::copy_nonoverlapping(src.add(aligned_size), dst.add(aligned_size), remainder);
-        }
-    }
-    
-    /// Zero-copy transfer - share physical pages
-    fn transfer_zerocopy(&self, src: *const u8, dst: *mut u8, size: usize) -> MemoryResult<TransferResult> {
-        self.stats.zerocopy_transfers.fetch_add(1, Ordering::Relaxed);
-        
-        // For true zero-copy, we need to:
-        // 1. Get physical pages backing source
-        // 2. Map those pages to destination
-        // 3. Mark pages as shared
-        
-        // This requires integration with page tables
-        // For now, fall back to copy
-        unsafe {
-            ptr::copy_nonoverlapping(src, dst, size);
-        }
-        
-        Ok(TransferResult::success(size, 0, TransferMode::ZeroCopy))
-    }
-    
-    /// Copy-on-Write transfer
-    fn transfer_cow(&self, src: *const u8, dst: *mut u8, size: usize) -> MemoryResult<TransferResult> {
-        // Share pages initially, copy only on write
-        let result = self.transfer_zerocopy(src, dst, size)?;
-        
-        Ok(TransferResult {
-            cow_triggered: false,
-            ..result
-        })
-    }
-    
-    /// Get statistics
-    pub fn stats(&self) -> &TransferStats {
-        &self.stats
+        Ok(t)
     }
 }
 
-// =============================================================================
-// BATCH TRANSFERS
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// Validation des invariants à la compilation
+// ─────────────────────────────────────────────────────────────────────────────
 
-/// Batch transfer for multiple messages
-pub struct BatchTransfer {
-    /// Individual transfer descriptors
-    descriptors: Vec<TransferDescriptor>,
-    /// Total bytes to transfer
-    total_bytes: usize,
-    /// Completed transfers
-    completed: AtomicUsize,
-}
-
-impl BatchTransfer {
-    pub fn new() -> Self {
-        Self {
-            descriptors: Vec::new(),
-            total_bytes: 0,
-            completed: AtomicUsize::new(0),
-        }
-    }
-    
-    pub fn with_capacity(cap: usize) -> Self {
-        Self {
-            descriptors: Vec::with_capacity(cap),
-            total_bytes: 0,
-            completed: AtomicUsize::new(0),
-        }
-    }
-    
-    /// Add transfer to batch
-    pub fn add(&mut self, src: u64, dst: u64, size: u32, mode: TransferMode) {
-        self.descriptors.push(TransferDescriptor {
-            src_addr: src,
-            dst_addr: dst,
-            size,
-            mode,
-            flags: TransferFlags::BATCH_MEMBER,
-            sequence: self.descriptors.len() as u32,
-            ref_count: AtomicU64::new(1),
-            pages: None,
-        });
-        self.total_bytes += size as usize;
-    }
-    
-    /// Execute all transfers
-    pub fn execute(&self, engine: &TransferEngine) -> MemoryResult<BatchResult> {
-        let start = read_tsc();
-        let mut success = 0;
-        let mut failed = 0;
-        
-        for desc in &self.descriptors {
-            let result = engine.transfer_with_mode(
-                desc.src_addr as *const u8,
-                desc.dst_addr as *mut u8,
-                desc.size as usize,
-                desc.mode,
-            );
-            
-            match result {
-                Ok(_) => {
-                    success += 1;
-                    self.completed.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(_) => failed += 1,
-            }
-        }
-        
-        let cycles = read_tsc().saturating_sub(start);
-        
-        Ok(BatchResult {
-            total: self.descriptors.len(),
-            success,
-            failed,
-            bytes: self.total_bytes,
-            cycles,
-            cycles_per_transfer: if success > 0 { cycles / success as u64 } else { 0 },
-        })
-    }
-    
-    pub fn len(&self) -> usize {
-        self.descriptors.len()
-    }
-    
-    pub fn is_empty(&self) -> bool {
-        self.descriptors.is_empty()
-    }
-}
-
-/// Batch transfer result
-#[derive(Debug, Clone)]
-pub struct BatchResult {
-    pub total: usize,
-    pub success: usize,
-    pub failed: usize,
-    pub bytes: usize,
-    pub cycles: u64,
-    pub cycles_per_transfer: u64,
-}
-
-// =============================================================================
-// UTILITIES
-// =============================================================================
-
-/// Read timestamp counter
-#[inline(always)]
-fn read_tsc() -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        core::arch::x86_64::_rdtsc()
-    }
-    
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        0
-    }
-}
-
-/// Global transfer engine
-pub static TRANSFER_ENGINE: TransferEngine = TransferEngine::new();
-
-/// Convenience function for simple transfers
-#[inline]
-pub fn transfer(src: *const u8, dst: *mut u8, size: usize) -> MemoryResult<TransferResult> {
-    TRANSFER_ENGINE.transfer(src, dst, size)
-}
-
-/// Convenience function for batch transfers
-pub fn transfer_batch(batch: &BatchTransfer) -> MemoryResult<BatchResult> {
-    batch.execute(&TRANSFER_ENGINE)
-}
+const _: () = assert!(
+    core::mem::size_of::<ZeroCopyRef>() == 16,
+    "ZeroCopyRef doit faire 16 bytes"
+);

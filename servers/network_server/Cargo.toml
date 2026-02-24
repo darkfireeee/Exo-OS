@@ -1,0 +1,14 @@
+[package]
+name              = "exo-network-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description       = "Exo-OS server: network_server (bare-metal no_std)"
+
+[[bin]]
+name = "exo-network-server"
+path = "src/main.rs"
+
+[dependencies]
+spin.workspace = true

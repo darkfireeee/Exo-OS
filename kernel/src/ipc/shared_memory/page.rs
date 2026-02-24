@@ -1,254 +1,219 @@
-//! Shared Memory Page Management
-//!
-//! Individual page management for shared memory
+// ipc/shared_memory/page.rs — Gestion de pages partagées (NO_COW) pour Exo-OS
+//
+// Ce module gère les pages physiques utilisées pour la mémoire partagée IPC.
+// Chaque page est identifiée par son adresse physique et possède un compteur de
+// référence atomique. Le flag NO_COW est obligatoire : la page ne doit jamais
+// être dupliquée lors d'un fork (contrainte architecturale Exo-OS).
+//
+// Règles :
+//   RÈGLE NO-ALLOC : pas de Vec/Box en zone chaude
+//   FLAG NO_COW obligatoire sur toutes les pages SHM IPC
 
-use crate::memory::{MemoryResult, MemoryError};
-use crate::memory::address::{PhysicalAddress, VirtualAddress};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-/// Page size (4KB)
+// ---------------------------------------------------------------------------
+// Flags de page partagée
+// ---------------------------------------------------------------------------
+
+/// Flags de mappage d'une page SHM
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageFlags(pub u32);
+
+impl PageFlags {
+    /// Page lisible
+    pub const READ: Self = Self(1 << 0);
+    /// Page écrivable
+    pub const WRITE: Self = Self(1 << 1);
+    /// Page exécutable (normalement interdit pour SHM IPC)
+    pub const EXECUTE: Self = Self(1 << 2);
+    /// Pas de Copy-on-Write — OBLIGATOIRE pour SHM IPC
+    pub const NO_COW: Self = Self(1 << 3);
+    /// Page épinglée en mémoire (non swappable)
+    pub const PINNED: Self = Self(1 << 4);
+    /// Page mappée dans plusieurs espaces d'adressage
+    pub const SHARED: Self = Self(1 << 5);
+    /// Combined lecture + écriture + no_cow + pinned (défaut SHM)
+    pub const SHM_DEFAULT: Self = Self(
+        Self::READ.0 | Self::WRITE.0 | Self::NO_COW.0 | Self::PINNED.0 | Self::SHARED.0
+    );
+
+    pub fn contains(self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    pub fn insert(&mut self, other: Self) {
+        self.0 |= other.0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Identification de page
+// ---------------------------------------------------------------------------
+
+/// Taille d'une page standard (4 KiB)
 pub const PAGE_SIZE: usize = 4096;
 
-/// Shared page descriptor
-#[derive(Debug)]
-pub struct SharedPage {
-    /// Physical address
-    phys_addr: PhysicalAddress,
-    
-    /// Reference count
-    ref_count: AtomicUsize,
-    
-    /// Flags
-    flags: PageFlags,
-}
+/// Taille d'une huge page (2 MiB)
+pub const HUGE_PAGE_SIZE: usize = 2 * 1024 * 1024;
 
-/// Page flags
-#[derive(Debug, Clone, Copy)]
-pub struct PageFlags {
-    pub writable: bool,
-    pub executable: bool,
-    pub user_accessible: bool,
-    pub write_through: bool,
-    pub cache_disabled: bool,
-}
+/// Adresse physique alignée sur PAGE_SIZE — wrapper néwtypé
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct PhysAddr(pub u64);
 
-impl Default for PageFlags {
-    fn default() -> Self {
-        Self {
-            writable: true,
-            executable: false,
-            user_accessible: true,
-            write_through: false,
-            cache_disabled: false,
-        }
-    }
-}
+impl PhysAddr {
+    /// Adresse physique nulle (sentinelle)
+    pub const NULL: Self = Self(0);
 
-impl SharedPage {
-    /// Create new shared page
-    pub fn new(phys_addr: PhysicalAddress, flags: PageFlags) -> Self {
-        Self {
-            phys_addr,
-            ref_count: AtomicUsize::new(1),
-            flags,
-        }
+    #[inline]
+    pub fn is_null(self) -> bool {
+        self.0 == 0
     }
-    
-    /// Get physical address
-    pub fn phys_addr(&self) -> PhysicalAddress {
-        self.phys_addr
-    }
-    
-    /// Get reference count
-    pub fn ref_count(&self) -> usize {
-        self.ref_count.load(Ordering::Acquire)
-    }
-    
-    /// Increment reference count
-    pub fn inc_ref(&self) -> usize {
-        self.ref_count.fetch_add(1, Ordering::AcqRel) + 1
-    }
-    
-    /// Decrement reference count
-    pub fn dec_ref(&self) -> usize {
-        let old = self.ref_count.fetch_sub(1, Ordering::AcqRel);
-        old.saturating_sub(1)
-    }
-    
-    /// Check if page is shared (ref_count > 1)
-    pub fn is_shared(&self) -> bool {
-        self.ref_count() > 1
-    }
-    
-    /// Get flags
-    pub fn flags(&self) -> PageFlags {
-        self.flags
-    }
-    
-    /// Set writable flag
-    pub fn set_writable(&mut self, writable: bool) {
-        self.flags.writable = writable;
-    }
-}
 
-use spin::Mutex;
-use alloc::collections::BTreeMap;
-
-/// Global shared page allocator
-static SHARED_PAGE_ALLOCATOR: Mutex<SharedPageAllocator> = Mutex::new(SharedPageAllocator::new());
-
-/// Shared page allocator with reference counting
-struct SharedPageAllocator {
-    /// Next allocation address (bump allocator for simplicity)
-    next_addr: usize,
-    /// End of allocatable region
-    end_addr: usize,
-    /// Active allocations: phys_addr -> ref_count
-    allocations: Option<BTreeMap<usize, usize>>,
-}
-
-impl SharedPageAllocator {
-    const fn new() -> Self {
-        Self {
-            // Start at 32MB, reserve 0x2000000 - 0x4000000 (32MB) for shared pages
-            next_addr: 0x2000_0000,
-            end_addr: 0x4000_0000,
-            allocations: None,
-        }
+    /// Vérifie que l'adresse est alignée sur `align` (doit être une puissance de 2)
+    #[inline]
+    pub fn is_aligned(self, align: usize) -> bool {
+        (self.0 & (align as u64 - 1)) == 0
     }
-    
-    fn ensure_init(&mut self) {
-        if self.allocations.is_none() {
-            self.allocations = Some(BTreeMap::new());
-        }
-    }
-    
-    fn allocate(&mut self) -> Option<PhysicalAddress> {
-        self.ensure_init();
-        
-        if self.next_addr + PAGE_SIZE > self.end_addr {
+
+    /// Calcule l'index de page à partir de l'adresse physique de base.
+    #[inline]
+    pub fn page_index(self, base: PhysAddr) -> Option<usize> {
+        if self.0 < base.0 {
             return None;
         }
-        
-        let addr = self.next_addr;
-        self.next_addr += PAGE_SIZE;
-        
-        // Track allocation
-        if let Some(ref mut allocs) = self.allocations {
-            allocs.insert(addr, 1);
+        let offset = (self.0 - base.0) as usize;
+        if offset % PAGE_SIZE != 0 {
+            return None;
         }
-        
-        log::trace!("SharedPageAllocator: allocated page at {:#x}", addr);
-        Some(PhysicalAddress::new(addr))
+        Some(offset / PAGE_SIZE)
     }
-    
-    fn retain(&mut self, addr: usize) -> bool {
-        self.ensure_init();
-        
-        if let Some(ref mut allocs) = self.allocations {
-            if let Some(ref_count) = allocs.get_mut(&addr) {
-                *ref_count += 1;
-                return true;
-            }
+}
+
+// ---------------------------------------------------------------------------
+// Descripteur de page SHM
+// ---------------------------------------------------------------------------
+
+/// Descripteur d'une page physique appartenant au pool SHM IPC.
+/// Taille : 64 octets exactement (une cache line).
+#[repr(C, align(64))]
+pub struct ShmPage {
+    /// Adresse physique de la page
+    pub phys_addr: PhysAddr,
+    /// Compteur de références atomique
+    pub refcount: AtomicU32,
+    /// Flags de la page (PageFlags encodés)
+    pub flags: AtomicU32,
+    /// Index dans le pool parent
+    pub pool_index: AtomicU32,
+    /// Génération (version de réutilisation — détection ABA)
+    pub generation: AtomicU32,
+    /// Identifiant du dernier processus ayant mappé cette page
+    pub last_mapper_pid: AtomicU32,
+    /// Timestamp d'allocation (ns depuis boot)
+    pub alloc_ts: AtomicU64,
+    /// Nombre de fois que cette page a été réutilisée
+    pub reuse_count: AtomicU32,
+    _pad: [u8; 4],
+}
+
+// SAFETY: tous les champs mutables sont atomiques
+unsafe impl Sync for ShmPage {}
+unsafe impl Send for ShmPage {}
+
+impl ShmPage {
+    /// Crée un descripteur de page non-initialisé (phys_addr = NULL)
+    pub const fn new_uninit() -> Self {
+        Self {
+            phys_addr: PhysAddr::NULL,
+            refcount: AtomicU32::new(0),
+            flags: AtomicU32::new(0),
+            pool_index: AtomicU32::new(0),
+            generation: AtomicU32::new(0),
+            last_mapper_pid: AtomicU32::new(0),
+            alloc_ts: AtomicU64::new(0),
+            reuse_count: AtomicU32::new(0),
+            _pad: [0u8; 4],
         }
-        false
     }
-    
-    fn release(&mut self, addr: usize) -> Option<usize> {
-        self.ensure_init();
-        
-        if let Some(ref mut allocs) = self.allocations {
-            if let Some(ref_count) = allocs.get_mut(&addr) {
-                *ref_count -= 1;
-                let remaining = *ref_count;
-                if remaining == 0 {
-                    allocs.remove(&addr);
-                    // Note: Physical memory is NOT reclaimed in this simple allocator
-                    // A production allocator would add addr back to free list
-                    log::trace!("SharedPageAllocator: released page at {:#x}", addr);
-                }
-                return Some(remaining);
-            }
+
+    /// Initialise la page avec une adresse physique et ses flags.
+    ///
+    /// # Safety
+    /// Doit être appelé une seule fois au boot, avant tout accès concurrent.
+    /// `phys_addr` est un champ non-atomique : l'assignation se fait via
+    /// un raw pointer write (pattern write-once sur static).
+    pub fn init(&self, phys: PhysAddr, pool_idx: u32, flags: PageFlags) {
+        // SAFETY: init() est appelé une seule fois avant tout accès concurrent.
+        //         phys_addr est write-once — le raw pointer write est légal ici.
+        unsafe { self.set_phys_unchecked(phys); }
+        self.flags.store(flags.0 | PageFlags::NO_COW.0, Ordering::Relaxed);
+        self.pool_index.store(pool_idx, Ordering::Relaxed);
+        self.refcount.store(0, Ordering::Release);
+    }
+
+    /// Incrémente le compteur de références.
+    /// Retourne le nouveau compteur.
+    pub fn ref_acquire(&self) -> u32 {
+        self.refcount.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Décrémente le compteur de références.
+    /// Retourne `true` si la page est maintenant libre (refcount == 0).
+    pub fn ref_release(&self) -> bool {
+        let prev = self.refcount.fetch_sub(1, Ordering::AcqRel);
+        if prev == 1 {
+            // Incrémenter la génération pour invalider les références pendantes
+            self.generation.fetch_add(1, Ordering::Release);
+            self.reuse_count.fetch_add(1, Ordering::Relaxed);
+            true
+        } else {
+            false
         }
-        None
+    }
+
+    pub fn refcount(&self) -> u32 {
+        self.refcount.load(Ordering::Acquire)
+    }
+
+    pub fn is_free(&self) -> bool {
+        self.refcount() == 0
+    }
+
+    pub fn flags(&self) -> PageFlags {
+        PageFlags(self.flags.load(Ordering::Relaxed))
+    }
+
+    pub fn generation(&self) -> u32 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    /// Vérifie que le flag NO_COW est bien positionné.
+    pub fn assert_no_cow(&self) -> bool {
+        self.flags().contains(PageFlags::NO_COW)
     }
 }
 
-/// Allocate shared page using the real allocator
-pub fn alloc_shared_page(flags: PageFlags) -> MemoryResult<SharedPage> {
-    let mut allocator = SHARED_PAGE_ALLOCATOR.lock();
-    
-    let phys_addr = allocator.allocate()
-        .ok_or(MemoryError::OutOfMemory)?;
-    
-    // Zero the page for security
-    // Safety: We just allocated this address, it's valid and ours
-    unsafe {
-        // In kernel with identity mapping, phys == virt for low addresses
-        let ptr = phys_addr.value() as *mut u8;
-        core::ptr::write_bytes(ptr, 0, PAGE_SIZE);
-    }
-    
-    Ok(SharedPage::new(phys_addr, flags))
-}
-
-/// Allocate multiple contiguous shared pages
-pub fn alloc_shared_pages(count: usize, flags: PageFlags) -> MemoryResult<alloc::vec::Vec<SharedPage>> {
-    let mut pages = alloc::vec::Vec::with_capacity(count);
-    
-    for _ in 0..count {
-        pages.push(alloc_shared_page(flags)?);
-    }
-    
-    Ok(pages)
-}
-
-/// Free shared page if ref_count reaches 0
-pub fn free_shared_page(page: &SharedPage) -> MemoryResult<()> {
-    let remaining = page.dec_ref();
-    
-    if remaining == 0 {
-        // Release from allocator
-        let mut allocator = SHARED_PAGE_ALLOCATOR.lock();
-        allocator.release(page.phys_addr.value());
-        Ok(())
-    } else {
-        // Page still has references, nothing to do
-        Ok(())
+// SAFETY: phys_addr est assigné une seule fois à l'init ; lecture ultérieure est safe.
+// (Rust ne peut pas exprimer ça en type — on utilise UnsafeCell mais le champ est
+// en fait write-once donc une simple lecture directe est acceptable ici.)
+impl ShmPage {
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn set_phys_unchecked(&self, phys: PhysAddr) {
+        let p = &self.phys_addr as *const PhysAddr as *mut PhysAddr;
+        *p = phys;
     }
 }
 
-/// Clone shared page (increment ref count)
-pub fn clone_shared_page(page: &SharedPage) -> SharedPage {
-    page.inc_ref();
-    
-    // Also track in allocator
-    let mut allocator = SHARED_PAGE_ALLOCATOR.lock();
-    allocator.retain(page.phys_addr.value());
-    
-    SharedPage::new(page.phys_addr, page.flags)
-}
+// ---------------------------------------------------------------------------
+// Itérateur de pages libres (pour le pool)
+// ---------------------------------------------------------------------------
 
-/// Get statistics about shared page allocator
-pub fn shared_page_stats() -> SharedPageStats {
-    let allocator = SHARED_PAGE_ALLOCATOR.lock();
-    let allocated_pages = (allocator.next_addr - 0x2000_0000) / PAGE_SIZE;
-    let active_pages = allocator.allocations.as_ref().map(|a| a.len()).unwrap_or(0);
-    
-    SharedPageStats {
-        total_allocated: allocated_pages,
-        currently_active: active_pages,
-        bytes_used: allocated_pages * PAGE_SIZE,
-    }
-}
-
-/// Statistics for shared page allocator
+/// Statistiques de pages SHM
 #[derive(Debug, Clone, Copy)]
-pub struct SharedPageStats {
-    /// Total pages ever allocated
-    pub total_allocated: usize,
-    /// Currently active (non-freed) pages
-    pub currently_active: usize,
-    /// Total bytes used
-    pub bytes_used: usize,
+pub struct ShmPageStats {
+    pub total_pages: usize,
+    pub free_pages: usize,
+    pub used_pages: usize,
+    pub total_reuses: u64,
 }

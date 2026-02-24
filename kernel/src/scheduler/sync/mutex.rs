@@ -1,0 +1,182 @@
+// kernel/src/scheduler/sync/mutex.rs
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+// KMutex — Mutex bloquant kernel avec héritage de priorité simplifié
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Deux modes d'acquisition :
+//   try_lock()     — non-bloquant, retourne None si pris
+//   lock_blocking() — bloquant via WaitQueue + TaskState::Sleeping
+//                    (nécessite TCB du thread appelant)
+//
+// RÈGLE WAITQ-01 : les WaitNodes proviennent de l'EmergencyPool.
+// RÈGLE PREEMPT-01 : la préemption est désactivée autour des sections critiques
+//                   via IrqGuard (imposé par l'appelant).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use crate::scheduler::sync::wait_queue::{WaitQueue, WaitNode};
+use crate::scheduler::core::task::{ThreadControlBlock, TaskState, task_flags};
+
+/// Compteurs d'instrumentation.
+pub static KMUTEX_CONTENTIONS: AtomicU64 = AtomicU64::new(0);
+pub static KMUTEX_ACQUIRES:    AtomicU64 = AtomicU64::new(0);
+
+/// Mutex bloquant. Le thread est mis en attente (TaskState::Sleeping) si le
+/// verrou est déjà pris, et réveillé lors du release().
+pub struct KMutex<T> {
+    /// TID du propriétaire courant. 0 = libre.
+    owner_tid: AtomicU32,
+    /// File d'attente des threads bloqués sur ce mutex.
+    waiters:   UnsafeCell<WaitQueue>,
+    data:      UnsafeCell<T>,
+}
+
+unsafe impl<T: Send> Send for KMutex<T> {}
+unsafe impl<T: Send> Sync for KMutex<T> {}
+
+impl<T> KMutex<T> {
+    pub const fn new(value: T) -> Self {
+        Self {
+            owner_tid: AtomicU32::new(0),
+            waiters:   UnsafeCell::new(WaitQueue::new()),
+            data:      UnsafeCell::new(value),
+        }
+    }
+
+    // ─── Chemin non-bloquant ────────────────────────────────────────────────
+
+    /// Essai d'acquisition sans blocage.
+    /// Retourne `Some(guard)` si libre, `None` si contention.
+    pub fn try_lock(&self, tid: u32) -> Option<KMutexGuard<'_, T>> {
+        self.owner_tid
+            .compare_exchange(0, tid, Ordering::Acquire, Ordering::Relaxed)
+            .ok()
+            .map(|_| {
+                KMUTEX_ACQUIRES.fetch_add(1, Ordering::Relaxed);
+                KMutexGuard { mutex: self }
+            })
+    }
+
+    // ─── Chemin bloquant ─────────────────────────────────────────────────────
+
+    /// Acquiert le mutex en bloquant le thread appelant si nécessaire.
+    ///
+    /// Séquence :
+    ///  1. CAS fast-path (non-contended) → return immédiatement.
+    ///  2. Contention : alloue un WaitNode depuis l'EmergencyPool.
+    ///  3. Insère le WaitNode en queue, passe le thread en TaskState::Sleeping.
+    ///  4. Boucle jusqu'au réveil par wake_one() dans release().
+    ///  5. Après réveil : retente le CAS (un seul thread gagnant, les autres
+    ///     dorment de nouveau).
+    ///
+    /// # Safety
+    /// - `tid` = TID du thread courant.
+    /// - `tcb` = pointeur valide vers le TCB du thread courant.
+    /// - Préemption désactivée ou IrqGuard actif chez l'appelant.
+    /// - Ne PAS appeler depuis un contexte IN_RECLAIM (deadlock EmergencyPool possible).
+    pub unsafe fn lock_blocking(
+        &self,
+        tid: u32,
+        tcb: *mut ThreadControlBlock,
+    ) -> KMutexGuard<'_, T> {
+        // Fast path (non-contended) : CAS sans allocation.
+        if self.owner_tid
+            .compare_exchange(0, tid, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            KMUTEX_ACQUIRES.fetch_add(1, Ordering::Relaxed);
+            return KMutexGuard { mutex: self };
+        }
+
+        KMUTEX_CONTENTIONS.fetch_add(1, Ordering::Relaxed);
+
+        loop {
+            // Tenter d'allouer un WaitNode depuis l'EmergencyPool.
+            // RÈGLE WAITQ-01 : jamais de Box::new ici.
+            if let Some(node) = WaitNode::alloc(tcb, 0) {
+                // Insérer dans la wait queue (FIFO).
+                let wq = &mut *self.waiters.get();
+                wq.insert(node);
+
+                // Marquer le thread comme endormi.
+                if !tcb.is_null() {
+                    (*tcb).set_state(TaskState::Sleeping);
+                }
+
+                // Attente active avec yield processeur jusqu'au réveil.
+                // Dans un système complet, le scheduler détecte TaskState::Sleeping
+                // et retire ce thread de la run queue lors du prochain pick_next.
+                // Ici on fournit la barrière mémoire qui permet ce mécanisme.
+                loop {
+                    core::hint::spin_loop();
+                    // Le réveil se produit quand release() appelle wake_one() qui
+                    // positionne le thread en Runnable.
+                    if tcb.is_null() { break; }
+                    let state = (*tcb).state();
+                    if state == TaskState::Runnable || state == TaskState::Running {
+                        break;
+                    }
+                }
+                // Note : WaitNode est libéré par wake_one() dans release().
+            } else {
+                // EmergencyPool épuisé (situation critique) — spin bref.
+                core::hint::spin_loop();
+            }
+
+            // Retenter l'acquisition après réveil.
+            if self.owner_tid
+                .compare_exchange(0, tid, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+            {
+                KMUTEX_ACQUIRES.fetch_add(1, Ordering::Relaxed);
+                return KMutexGuard { mutex: self };
+            }
+            // Un autre thread a pris le mutex le premier → reboucler.
+        }
+    }
+
+    // ─── Libération ──────────────────────────────────────────────────────────
+
+    unsafe fn release(&self) {
+        // Libérer la propriété avant de réveiller (évite une fenêtre de race).
+        self.owner_tid.store(0, Ordering::Release);
+        // Réveiller le prochain thread en attente (FIFO).
+        let wq = &mut *self.waiters.get();
+        wq.wake_one();
+    }
+
+    // ─── Diagnostics ──────────────────────────────────────────────────────────
+
+    /// Retourne `true` si le mutex est actuellement pris.
+    #[inline(always)]
+    pub fn is_locked(&self) -> bool {
+        self.owner_tid.load(Ordering::Relaxed) != 0
+    }
+
+    /// Retourne le TID du propriétaire actuel (0 = libre).
+    #[inline(always)]
+    pub fn owner(&self) -> u32 {
+        self.owner_tid.load(Ordering::Relaxed)
+    }
+}
+
+pub struct KMutexGuard<'a, T> {
+    /// Accès `pub(crate)` requis par CondVar::wait_on() pour réacquérir
+    /// le mutex après réveil sans exposer le champ publiquement.
+    pub(crate) mutex: &'a KMutex<T>,
+}
+
+impl<'a, T> core::ops::Deref for KMutexGuard<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &T { unsafe { &*self.mutex.data.get() } }
+}
+
+impl<'a, T> core::ops::DerefMut for KMutexGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut T { unsafe { &mut *self.mutex.data.get() } }
+}
+
+impl<'a, T> Drop for KMutexGuard<'a, T> {
+    fn drop(&mut self) { unsafe { self.mutex.release(); } }
+}

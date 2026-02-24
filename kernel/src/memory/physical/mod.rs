@@ -1,107 +1,43 @@
-//! Physical memory management
+// kernel/src/memory/physical/mod.rs
+//
+// Module physical — gestion de la mémoire physique.
+// Couche 0 — aucune dépendance externe sauf `spin`.
 
-pub mod bitmap_allocator;
-pub mod buddy_allocator;
+pub mod allocator;
 pub mod frame;
-pub mod numa;
 pub mod zone;
+pub mod numa;
 
-use crate::memory::{PhysicalAddress, MemoryError, MemoryResult};
+// ─────────────────────────────────────────────────────────────────────────────
+// RE-EXPORTS
+// ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille d'une frame physique (4KB)
-pub const FRAME_SIZE: usize = 4096;
+// Frames
+pub use frame::{
+    EmergencyPool, EmergencyPoolStats, WaitNode, EMERGENCY_POOL,
+    FrameDesc, FrameFlags,
+    FrameDescEntry, FrameDescriptorTable, FRAME_DESCRIPTORS, MAX_PHYS_FRAMES,
+    AtomicRefCount, RefCountDecResult,
+    PerCpuFramePool, PerCpuPoolTable, PER_CPU_POOLS,
+    PerCpuPoolStats,
+};
 
-/// Représente une frame de mémoire physique (4KB)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Frame {
-    pub start: PhysicalAddress,
-}
+// Zones
+pub use zone::{
+    ZoneDescriptor, ZoneStats,
+    zone_for_flags, addr_satisfies_flags,
+    DmaZone, Dma32Zone, NormalZone, HighZone, MovableZone,
+};
 
-impl Frame {
-    /// Crée une frame à partir d'une adresse physique
-    pub fn new(addr: PhysicalAddress) -> Self {
-        Frame { start: addr }
-    }
-    
-    /// Retourne la frame contenant l'adresse donnée
-    pub const fn containing_address(addr: PhysicalAddress) -> Self {
-        Frame { start: PhysicalAddress::new(addr.value() & !0xFFF) }
-    }
-    
-    /// Retourne l'adresse de début de la frame
-    pub const fn address(&self) -> PhysicalAddress {
-        self.start
-    }
-
-    /// Retourne l'adresse de fin de la frame (exclusive)
-    pub const fn end_address(&self) -> PhysicalAddress {
-        PhysicalAddress::new(self.start.value() + FRAME_SIZE)
-    }
-
-    /// Retourne un range d'adresses pour cette frame
-    pub const fn range(&self) -> core::ops::Range<usize> {
-        self.start.value()..(self.start.value() + FRAME_SIZE)
-    }
-}
-
-/// Alloue une frame physique
-pub fn allocate_frame() -> MemoryResult<Frame> {
-    bitmap_allocator::allocate_frame()
-}
-
-/// Alloue plusieurs frames contiguës
-pub fn allocate_contiguous_frames(count: usize, below_4gb: bool) -> Result<u64, &'static str> {
-    match bitmap_allocator::allocate_contiguous_frames(count) {
-        Ok(frame) => {
-            let phys_addr = frame.start.value() as u64;
-            // Check 4GB constraint
-            if below_4gb && phys_addr >= 0x1_0000_0000 {
-                // Try to free and return error
-                let _ = bitmap_allocator::deallocate_frame(frame);
-                return Err("No memory available below 4GB");
-            }
-            Ok(phys_addr)
-        }
-        Err(_) => Err("Failed to allocate contiguous frames")
-    }
-}
-
-/// Deallocate contiguous frames by physical address
-pub fn deallocate_frames(phys_addr: u64, count: usize) {
-    let frame = Frame::new(PhysicalAddress::new(phys_addr as usize));
-    for i in 0..count {
-        let offset = i * FRAME_SIZE;
-        let f = Frame::new(PhysicalAddress::new(phys_addr as usize + offset));
-        let _ = bitmap_allocator::deallocate_frame(f);
-    }
-}
-
-/// Libère une frame physique
-pub fn deallocate_frame(frame: Frame) -> MemoryResult<()> {
-    bitmap_allocator::deallocate_frame(frame)
-}
-
-/// Initialise l'allocateur de frames physiques
-/// 
-/// # Safety
-/// Doit être appelé une seule fois au démarrage avec des paramètres valides
-pub unsafe fn init_frame_allocator(
-    bitmap_addr: usize,
-    bitmap_size: usize,
-    base_addr: PhysicalAddress,
-    total_memory: usize,
-) {
-    bitmap_allocator::init_global_allocator(bitmap_addr, bitmap_size, base_addr, total_memory);
-}
-
-/// Marque une région de mémoire comme utilisée
-pub fn mark_region_used(start: PhysicalAddress, size: usize) {
-    if let Some(ref mut allocator) = *bitmap_allocator::FRAME_ALLOCATOR.lock() {
-        allocator.mark_region_used(start, size);
-    }
-}
-
-/// Retourne les statistiques de l'allocateur
-pub fn get_allocator_stats() -> Option<bitmap_allocator::AllocatorStats> {
-    bitmap_allocator::get_stats()
-}
+// Allocateurs
+pub use allocator::{
+    BOOTSTRAP_BITMAP, BitmapAllocator,
+    BUDDY, GlobalBuddyAllocator,
+    alloc_pages, free_pages, alloc_page, free_page,
+    SLAB_CACHES, slab_alloc, slab_free, slab_init_all,
+    SLUB_CACHES, slub_alloc, slub_free, slub_init_all,
+    NUMA_ALLOCATOR, NUMA_STATS, NumaPolicy, NumaAllocContext,
+    NumaNode, SizeClass, hint_numa_node,
+    init_phase1_bitmap, init_phase2_free_region,
+    init_phase3_slab_slub, init_phase4_numa,
+};

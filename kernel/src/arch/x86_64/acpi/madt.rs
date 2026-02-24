@@ -1,221 +1,203 @@
-//! MADT (Multiple APIC Description Table) Parsing
+//! # arch/x86_64/acpi/madt.rs — Multiple APIC Description Table
 //!
-//! The MADT contains information about:
-//! - Local APICs (one per CPU core)
-//! - I/O APICs (for external interrupts)
-//! - Interrupt source overrides
-//! - Non-maskable interrupts (NMI)
+//! Parse la MADT pour extraire :
+//! - Les LAPIC IDs de chaque CPU logique
+//! - Les I/O APIC (base MMIO + GSI base)
+//! - Les interruption source overrides (ISA IRQ → GSI)
+//! - L'adresse LAPIC override (si différente de 0xFEE00000)
+//!
+//! ## Format MADT
+//! Header SdtHeader + LAPIC_ADDR (32 bits) + FLAGS (32 bits)
+//! + liste de structures de longueur variable (type, length, ...)
 
-use super::SdtHeader;
-use alloc::vec::Vec;
+#![allow(dead_code)]
 
-/// MADT signature
-pub const MADT_SIGNATURE: &[u8; 4] = b"APIC";
+use core::ptr::read_volatile;
+use core::sync::atomic::{AtomicU32, Ordering};
 
-/// MADT table structure
+// ── Structures MADT ───────────────────────────────────────────────────────────
+
+/// En-tête MADT (après SdtHeader)
 #[repr(C, packed)]
-pub struct Madt {
-    pub header: SdtHeader,
-    pub local_apic_address: u32,
-    pub flags: u32,
-    // Followed by variable-length entries
+struct MadtHeader {
+    lapic_addr: u32,   // Adresse physique LAPIC (généralement 0xFEE00000)
+    flags:      u32,   // bit 0 = dual 8259 present
 }
 
-impl Madt {
-    /// Get slice of entry bytes
-    pub fn entries_bytes(&self) -> &[u8] {
-        let entries_start = unsafe { (self as *const Self).add(1) as *const u8 };
-        let entries_len = self.header.length as usize - core::mem::size_of::<Self>();
-        unsafe { core::slice::from_raw_parts(entries_start, entries_len) }
-    }
+/// Types d'entrées MADT
+const MADT_TYPE_LAPIC:          u8 = 0;
+const MADT_TYPE_IOAPIC:         u8 = 1;
+const MADT_TYPE_INT_SRC_OVER:   u8 = 2;
+const MADT_TYPE_NMI_SRC:        u8 = 3;
+const MADT_TYPE_LAPIC_NMI:      u8 = 4;
+const MADT_TYPE_LAPIC_ADDR_OVR: u8 = 5;
+const MADT_TYPE_X2APIC:         u8 = 9;
+const MADT_TYPE_X2APIC_NMI:     u8 = 10;
+
+/// Entrée LAPIC (type 0) — CPU logique
+#[repr(C, packed)]
+struct MadtLapic {
+    acpi_processor_id: u8,
+    apic_id:           u8,
+    flags:             u32,  // bit 0 = enabled, bit 1 = online capable
 }
 
-/// MADT entry header (common to all entry types)
+/// Entrée IOAPIC (type 1)
 #[repr(C, packed)]
+struct MadtIoApic {
+    ioapic_id:  u8,
+    _reserved:  u8,
+    ioapic_addr:u32,
+    gsi_base:   u32,
+}
+
+/// Interrupt Source Override (type 2) — remapping ISA IRQ → GSI
+#[repr(C, packed)]
+struct MadtIntSrcOvr {
+    bus:    u8,    // Bus source (0 = ISA)
+    source: u8,   // IRQ source (ISA IRQ 0–15)
+    gsi:    u32,  // GSI destination
+    flags:  u16,  // bit 0:1 = polarity, bit 2:3 = trigger mode
+}
+
+/// LAPIC Address Override (type 5) — 64-bit LAPIC address
+#[repr(C, packed)]
+struct MadtLapicAddrOvr {
+    _reserved: u16,
+    addr:      u64, // Nouvelle adresse physique LAPIC
+}
+
+/// Entrée x2APIC (type 9) — CPU avec UID > 255
+#[repr(C, packed)]
+struct MadtX2Apic {
+    _reserved:        u16,
+    x2apic_id:        u32,
+    flags:            u32,
+    acpi_processor_uid:u32,
+}
+
+// ── Résultats de parsing MADT ─────────────────────────────────────────────────
+
+/// Informations extraites de la MADT
 #[derive(Debug, Clone, Copy)]
-pub struct MadtEntryHeader {
-    pub entry_type: u8,
-    pub length: u8,
-}
-
-/// MADT Entry Type 0: Processor Local APIC
-#[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
-pub struct MadtLocalApic {
-    pub header: MadtEntryHeader,
-    pub acpi_processor_id: u8,
-    pub apic_id: u8,
-    pub flags: u32, // Bit 0: Processor Enabled, Bit 1: Online Capable
-}
-
-impl MadtLocalApic {
-    pub fn is_enabled(&self) -> bool {
-        (self.flags & 0x1) != 0
-    }
-    
-    pub fn is_online_capable(&self) -> bool {
-        (self.flags & 0x2) != 0
-    }
-}
-
-/// MADT Entry Type 1: I/O APIC
-#[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
-pub struct MadtIoApic {
-    pub header: MadtEntryHeader,
-    pub ioapic_id: u8,
-    pub reserved: u8,
-    pub ioapic_address: u32,
-    pub global_system_interrupt_base: u32,
-}
-
-/// MADT Entry Type 2: Interrupt Source Override
-#[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
-pub struct MadtInterruptOverride {
-    pub header: MadtEntryHeader,
-    pub bus: u8,
-    pub source: u8,
-    pub global_system_interrupt: u32,
-    pub flags: u16,
-}
-
-/// MADT Entry Type 4: NMI (Non-Maskable Interrupt)
-#[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
-pub struct MadtNmi {
-    pub header: MadtEntryHeader,
-    pub acpi_processor_id: u8,
-    pub flags: u16,
-    pub lint: u8, // Local APIC LINT# (0 or 1)
-}
-
-/// MADT Entry Type 9: Processor Local x2APIC
-#[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
-pub struct MadtLocalX2Apic {
-    pub header: MadtEntryHeader,
-    pub reserved: u16,
-    pub x2apic_id: u32,
-    pub flags: u32,
-    pub acpi_processor_uid: u32,
-}
-
-impl MadtLocalX2Apic {
-    pub fn is_enabled(&self) -> bool {
-        (self.flags & 0x1) != 0
-    }
-}
-
-/// Parsed MADT information
-#[derive(Debug, Clone)]
 pub struct MadtInfo {
-    pub local_apic_address: u64,
-    pub cpu_count: usize,
-    pub apic_ids: Vec<u32>,
-    pub ioapic_address: u64,
-    pub ioapic_id: u8,
-    pub ioapic_gsi_base: u32,
+    /// Nombre de CPUs logiques online
+    pub cpu_count: u32,
+    /// APIC IDs des CPUs (max 256)
+    pub apic_ids:  [u32; 256],
+    /// Adresse physique LAPIC (peut être override)
+    pub lapic_phys: u64,
+    /// Nombre d'I/O APICs
+    pub ioapic_count: u32,
+    /// GSI mappings pour les IRQ ISA (IRQ 0–15 → GSI)
+    pub isa_irq_gsi:  [u32; 16],
+    /// Flags de polarité/trigger ISA (1 bit polarity, 1 bit trigger par IRQ)
+    pub isa_irq_flags:[u16; 16],
 }
 
-/// Parse MADT table
-pub fn parse_madt() -> Result<MadtInfo, &'static str> {
-    // Find MADT table
-    let madt_addr = super::find_table(MADT_SIGNATURE)?;
-    let madt = unsafe { &*(madt_addr as *const Madt) };
-    
-    let local_apic_addr = madt.local_apic_address;
-    log::info!("MADT found at {:#x}", madt_addr);
-    log::info!("Local APIC address: {:#x}", local_apic_addr);
-    
-    let mut info = MadtInfo {
-        local_apic_address: local_apic_addr as u64,
-        cpu_count: 0,
-        apic_ids: Vec::new(),
-        ioapic_address: 0,
-        ioapic_id: 0,
-        ioapic_gsi_base: 0,
-    };
-    
-    // Parse entries
-    let entries = madt.entries_bytes();
-    let mut offset = 0;
-    
-    while offset < entries.len() {
-        let header = unsafe { &*(entries.as_ptr().add(offset) as *const MadtEntryHeader) };
-        
-        match header.entry_type {
-            0 => {
-                // Processor Local APIC
-                let entry = unsafe { &*(entries.as_ptr().add(offset) as *const MadtLocalApic) };
-                
-                if entry.is_enabled() || entry.is_online_capable() {
-                    let apic_id = entry.apic_id;
-                    let flags = entry.flags;
-                    info.cpu_count += 1;
-                    info.apic_ids.push(apic_id as u32);
-                    log::debug!("CPU {}: APIC ID {}, flags {:#x}", 
-                        info.cpu_count - 1, apic_id, flags);
-                }
-            }
-            1 => {
-                // I/O APIC
-                let entry = unsafe { &*(entries.as_ptr().add(offset) as *const MadtIoApic) };
-                
-                if info.ioapic_address == 0 {
-                    let ioapic_addr = entry.ioapic_address;
-                    let ioapic_id = entry.ioapic_id;
-                    let gsi_base = entry.global_system_interrupt_base;
-                    info.ioapic_address = ioapic_addr as u64;
-                    info.ioapic_id = ioapic_id;
-                    info.ioapic_gsi_base = gsi_base;
-                    log::info!("I/O APIC: ID {}, address {:#x}, GSI base {}", 
-                        ioapic_id, ioapic_addr, gsi_base);
-                }
-            }
-            2 => {
-                // Interrupt Source Override
-                let entry = unsafe { &*(entries.as_ptr().add(offset) as *const MadtInterruptOverride) };
-                let bus = entry.bus;
-                let source = entry.source;
-                let gsi = entry.global_system_interrupt;
-                log::debug!("IRQ Override: bus {} source {} -> GSI {}", 
-                    bus, source, gsi);
-            }
-            4 => {
-                // NMI
-                let entry = unsafe { &*(entries.as_ptr().add(offset) as *const MadtNmi) };
-                log::debug!("NMI: processor {} LINT{}", 
-                    entry.acpi_processor_id, entry.lint);
-            }
-            9 => {
-                // Processor Local x2APIC
-                let entry = unsafe { &*(entries.as_ptr().add(offset) as *const MadtLocalX2Apic) };
-                
-                if entry.is_enabled() {
-                    let x2apic_id = entry.x2apic_id;
-                    info.cpu_count += 1;
-                    info.apic_ids.push(x2apic_id);
-                    log::debug!("CPU {}: x2APIC ID {}", info.cpu_count - 1, x2apic_id);
-                }
-            }
-            _ => {
-                log::debug!("Unknown MADT entry type {}", header.entry_type);
-            }
+impl MadtInfo {
+    const fn default() -> Self {
+        Self {
+            cpu_count: 0,
+            apic_ids:  [0u32; 256],
+            lapic_phys: 0xFEE0_0000,
+            ioapic_count: 0,
+            isa_irq_gsi:  [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15], // ISA: GSI=IRQ par défaut
+            isa_irq_flags:[0u16; 16],
         }
-        
-        offset += header.length as usize;
     }
-    
-    log::info!("Detected {} CPUs", info.cpu_count);
-    
-    if info.cpu_count == 0 {
-        return Err("No CPUs detected in MADT");
+}
+
+static MADT_CPU_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Retourne le nombre de CPUs détectés dans la MADT
+pub fn madt_cpu_count() -> u32 {
+    MADT_CPU_COUNT.load(Ordering::Relaxed)
+}
+
+// ── Parseur principal ─────────────────────────────────────────────────────────
+
+/// Parse la MADT à partir de son adresse physique
+///
+/// Appelé par `init_acpi()` après avoir localisé la table.
+pub fn parse_madt(madt_phys: u64) -> MadtInfo {
+    let mut info = MadtInfo::default();
+    if madt_phys == 0 { return info; }
+
+    use super::parser::SdtHeader;
+    // SAFETY: adresse MADT validée par le parseur ACPI
+    let header = unsafe { &*(madt_phys as *const SdtHeader) };
+    if &header.signature != b"APIC" { return info; }
+
+    let madt_len = header.length as usize;
+    // Lire LAPIC addr par défaut (offset 36 = après SdtHeader 36 octets)
+    let madt_base_offset = core::mem::size_of::<SdtHeader>();
+    // SAFETY: offset validé par la longueur de la table
+    let lapic_addr = unsafe {
+        read_volatile((madt_phys as usize + madt_base_offset) as *const u32)
+    } as u64;
+    info.lapic_phys = lapic_addr;
+
+    // Itérer les entrées (offset 44 = SdtHeader(36) + lapic_addr(4) + flags(4))
+    let mut offset = madt_base_offset + 8;
+
+    while offset + 2 <= madt_len {
+        // SAFETY: offset dans la table MADT (longueur vérifiée)
+        let entry_type = unsafe { read_volatile((madt_phys as usize + offset) as *const u8) };
+        let entry_len  = unsafe { read_volatile((madt_phys as usize + offset + 1) as *const u8) } as usize;
+        if entry_len < 2 { break; }
+
+        let entry_base = madt_phys as usize + offset + 2;
+
+        match entry_type {
+            MADT_TYPE_LAPIC => {
+                // SAFETY: structure de taille connue, dans la table MADT
+                let lapic = unsafe { &*(entry_base as *const MadtLapic) };
+                // flags bit 0 = enabled
+                if lapic.flags & 3 != 0 && (info.cpu_count as usize) < 256 {
+                    info.apic_ids[info.cpu_count as usize] = lapic.apic_id as u32;
+                    info.cpu_count += 1;
+                }
+            }
+            MADT_TYPE_IOAPIC => {
+                // SAFETY: structure de taille connue, dans la table MADT
+                let ioapic = unsafe { &*(entry_base as *const MadtIoApic) };
+                info.ioapic_count += 1;
+                // Enregistrer l'IOAPIC dans le module apic/io_apic
+                super::super::apic::io_apic::register_ioapic(
+                    ioapic.ioapic_addr as u64,
+                    ioapic.gsi_base,
+                );
+            }
+            MADT_TYPE_INT_SRC_OVER => {
+                // SAFETY: structure de taille connue, dans la table MADT
+                let ovr = unsafe { &*(entry_base as *const MadtIntSrcOvr) };
+                if ovr.source < 16 {
+                    info.isa_irq_gsi[ovr.source as usize]   = ovr.gsi;
+                    info.isa_irq_flags[ovr.source as usize] = ovr.flags;
+                }
+            }
+            MADT_TYPE_LAPIC_ADDR_OVR => {
+                // SAFETY: structure de taille connue
+                let ovr = unsafe { &*(entry_base as *const MadtLapicAddrOvr) };
+                info.lapic_phys = ovr.addr;
+                // Mettre à jour la base LAPIC dans le module apic
+                super::super::apic::local_apic::set_lapic_base(ovr.addr);
+            }
+            MADT_TYPE_X2APIC => {
+                // SAFETY: entrée x2APIC de taille connue
+                let x2apic = unsafe { &*(entry_base as *const MadtX2Apic) };
+                if x2apic.flags & 3 != 0 && (info.cpu_count as usize) < 256 {
+                    info.apic_ids[info.cpu_count as usize] = x2apic.x2apic_id;
+                    info.cpu_count += 1;
+                }
+            }
+            _ => {}
+        }
+
+        offset += entry_len;
     }
-    
-    if info.ioapic_address == 0 {
-        log::warn!("No I/O APIC found in MADT");
-    }
-    
-    Ok(info)
+
+    MADT_CPU_COUNT.store(info.cpu_count, Ordering::Release);
+    info
 }

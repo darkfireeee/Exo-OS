@@ -1,0 +1,52 @@
+arborescence arch
+│   ├── arch/                           # ⚙️ COUCHE ARCHITECTURE (x86_64 + ARM64)
+│   │   ├── mod.rs
+│   │   ├── x86_64/
+│   │   │   ├── mod.rs
+│   │   │   ├── memory_iface.rs         # Pont arch/ ↔ memory/ (alloc_frame, free_frame, page_fault)
+│   │   │   ├── boot/
+│   │   │   │   ├── multiboot2.rs       # Parsing Multiboot2 header
+│   │   │   │   ├── uefi.rs             # UEFI boot protocol
+│   │   │   │   ├── early_init.rs       # Init très bas niveau (avant paging)
+│   │   │   │   ├── memory_map.rs       # Traduit E820/UEFI map → memory/ (RÈGLE EMERGENCY-01)
+│   │   │   │   └── trampoline_asm.rs   # AP trampoline SMP (real mode → 64bit)
+│   │   │   ├── cpu/
+│   │   │   │   ├── features.rs         # CPUID, feature detection
+│   │   │   │   ├── msr.rs              # Model-Specific Registers
+│   │   │   │   ├── fpu.rs              # Instructions ASM brutes : XSAVE/XRSTOR/FXSAVE
+│   │   │   │   │                       # ⚠️ NE contient PAS la logique d'état (→ scheduler/fpu/)
+│   │   │   │   ├── tsc.rs              # TSC calibration, rdtsc wrapper
+│   │   │   │   └── topology.rs         # CPU topology (cores, HT, NUMA)
+│   │   │   ├── gdt.rs                  # GDT (Global Descriptor Table)
+│   │   │   ├── idt.rs                  # IDT (Interrupt Descriptor Table)
+│   │   │   ├── tss.rs                  # TSS (Task State Segment) + IST stacks
+│   │   │   ├── paging.rs               # Page tables x86_64 (4-level, CR3)
+│   │   │   ├── syscall.rs              # SYSCALL/SYSRET entry (MSR_STAR)
+│   │   │   ├── exceptions.rs           # #PF #GP #DF #NMI handlers
+│   │   │   ├── apic/
+│   │   │   │   ├── local_apic.rs       # Local APIC (timer, EOI, IPI send)
+│   │   │   │   ├── io_apic.rs          # I/O APIC (IRQ routing)
+│   │   │   │   ├── x2apic.rs           # x2APIC mode (>255 CPUs)
+│   │   │   │   └── ipi.rs              # IPI send/receive + batching
+│   │   │   ├── acpi/
+│   │   │   │   ├── parser.rs           # RSDP → RSDT/XSDT → MADT parser
+│   │   │   │   ├── madt.rs             # MADT (SMP topology)
+│   │   │   │   ├── hpet.rs             # HPET timer
+│   │   │   │   └── pm_timer.rs         # ACPI Power Management timer
+│   │   │   ├── smp/
+│   │   │   │   ├── init.rs             # AP startup sequence (INIT + SIPI)
+│   │   │   │   ├── percpu.rs           # Per-CPU data (GS segment)
+│   │   │   │   └── hotplug.rs          # CPU hotplug online/offline
+│   │   │   ├── spectre/
+│   │   │   │   ├── kpti.rs             # KPTI — split page tables user/kernel
+│   │   │   │   ├── retpoline.rs        # Retpoline macro pour indirect calls
+│   │   │   │   ├── ssbd.rs             # SSBD per-thread (Spectre v4)
+│   │   │   │   └── ibrs.rs             # IBRS / IBPB / STIBP mitigations
+│   │   │   └── virt/
+│   │   │       ├── detect.rs           # Hypervisor detect (KVM/VMware/Hyper-V)
+│   │   │       ├── paravirt.rs         # Paravirt ops (clock, TLB flush)
+│   │   │       └── stolen_time.rs      # Stolen time accounting (RT scheduler)
+│   │   │
+│   │   └── aarch64/                    # Placeholder ARM64 (future)
+│   │       └── mod.rs
+│   │

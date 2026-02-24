@@ -1,551 +1,247 @@
-//! Shared Memory Pool Management
-//!
-//! High-performance global pool for shared memory regions.
-//! Integrates with the physical frame allocator for real memory allocation.
-//!
-//! Performance targets:
-//! - Allocation: ~100-200 cycles (vs Linux shmget ~2000+ cycles)
-//! - Lookup: O(log n) via BTreeMap
-//! - Attach/Detach: ~50 cycles (atomic refcount)
+// ipc/shared_memory/pool.rs — Pool de pages SHM pré-allouées pour Exo-OS
+//
+// Pool statique de SHM_POOL_PAGES (256) pages de 4 KiB chacune.
+// Allocations en O(1) via bitmap d'occupation (AtomicU64 × MAX_POOL_WORDS).
+// Invariant : toutes les pages ont le flag NO_COW positionné.
+//
+// Contrainte de performance : alloc < 100 ns (lock-free CAS sur bitmap)
 
-use alloc::collections::BTreeMap;
-use alloc::string::String;
-use alloc::vec::Vec;
-use spin::Mutex;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use crate::memory::{MemoryResult, MemoryError};
-use crate::memory::address::PhysicalAddress;
-use crate::memory::physical::{self, Frame, FRAME_SIZE};
 
-/// Shared memory ID - globally unique identifier
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ShmId(pub u64);
+use crate::ipc::core::constants::SHM_POOL_PAGES;
+use crate::ipc::shared_memory::page::{ShmPage, PhysAddr, PageFlags, ShmPageStats, PAGE_SIZE};
 
-impl ShmId {
-    /// Create new ID from raw value
-    pub const fn new(id: u64) -> Self {
-        Self(id)
+// ---------------------------------------------------------------------------
+// Bitmap d'allocation — 256 pages = 4 mots de 64 bits
+// ---------------------------------------------------------------------------
+
+/// Nombre de mots u64 dans le bitmap (SHM_POOL_PAGES / 64)
+pub const POOL_BITMAP_WORDS: usize = SHM_POOL_PAGES / 64;
+
+/// Adresse physique de base du pool (fixée au démarrage par init_shm_pool())
+static POOL_BASE_PHYS: AtomicU64 = AtomicU64::new(0);
+
+/// Bitmap des slots libres (bit=1 → libre, bit=0 → occupé)
+static POOL_BITMAP: [AtomicU64; POOL_BITMAP_WORDS] = [
+    AtomicU64::new(u64::MAX),
+    AtomicU64::new(u64::MAX),
+    AtomicU64::new(u64::MAX),
+    AtomicU64::new(u64::MAX),
+];
+
+/// Descripteurs de pages
+static POOL_PAGES: [ShmPage; SHM_POOL_PAGES] = {
+    const INIT: ShmPage = ShmPage::new_uninit();
+    [INIT; SHM_POOL_PAGES]
+};
+
+/// Compteur de pages libres (approximatif, pour diagnostic rapide)
+static POOL_FREE_COUNT: AtomicUsize = AtomicUsize::new(SHM_POOL_PAGES);
+
+// ---------------------------------------------------------------------------
+// Initialisation
+// ---------------------------------------------------------------------------
+
+/// Initialise le pool SHM avec une adresse physique de base.
+/// À appeler une seule fois au démarrage du noyau (depuis ipc_init()).
+///
+/// # SAFETY
+/// Doit être appelé AVANT toute allocation SHM. `base_phys` doit pointer
+/// sur une région physique de `SHM_POOL_PAGES * PAGE_SIZE` octets réservée
+/// par le memory manager.
+pub unsafe fn init_shm_pool(base_phys: u64) {
+    POOL_BASE_PHYS.store(base_phys, Ordering::Relaxed);
+
+    for i in 0..SHM_POOL_PAGES {
+        let phys = PhysAddr(base_phys + (i * PAGE_SIZE) as u64);
+        POOL_PAGES[i].init(phys, i as u32, PageFlags::SHM_DEFAULT);
     }
-    
-    /// Get raw ID value
-    pub const fn raw(&self) -> u64 {
-        self.0
+
+    // Marquer toutes les pages comme libres
+    for w in POOL_BITMAP.iter() {
+        w.store(u64::MAX, Ordering::Release);
+    }
+    POOL_FREE_COUNT.store(SHM_POOL_PAGES, Ordering::Release);
+}
+
+// ---------------------------------------------------------------------------
+// Allocation / libération de pages
+// ---------------------------------------------------------------------------
+
+/// Alloue une page SHM depuis le pool global.
+///
+/// Algorithme :
+///   1. Parcourir les 4 mots du bitmap
+///   2. Pour chaque mot non-zéro, isoler le bit le plus bas (trailing_zeros)
+///   3. CAS atomique pour réserver le bit (1 → 0)
+///   4. Retourner l'index de page = word * 64 + bit
+///
+/// Complexité : O(POOL_BITMAP_WORDS) = O(1)
+/// Garantie lock-free : pas de mutex, seul un CAS par allocation.
+pub fn shm_page_alloc() -> Option<usize> {
+    for (word_idx, word) in POOL_BITMAP.iter().enumerate() {
+        loop {
+            let v = word.load(Ordering::Acquire);
+            if v == 0 {
+                break; // ce mot est plein, passer au suivant
+            }
+            let bit = v.trailing_zeros() as usize;
+            let mask = 1u64 << bit;
+            // Tentative CAS : marquer le bit comme occupé (1 → 0)
+            match word.compare_exchange_weak(v, v & !mask, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => {
+                    let page_idx = word_idx * 64 + bit;
+                    if page_idx < SHM_POOL_PAGES {
+                        POOL_PAGES[page_idx].ref_acquire();
+                        POOL_FREE_COUNT.fetch_sub(1, Ordering::Relaxed);
+                        return Some(page_idx);
+                    }
+                    // Index hors limites (ne devrait pas arriver) — libérer
+                    word.fetch_or(mask, Ordering::Release);
+                    return None;
+                }
+                Err(_) => {
+                    // Contention : retour au début de la boucle
+                    core::hint::spin_loop();
+                    continue;
+                }
+            }
+        }
+    }
+    None // pool exhausted
+}
+
+/// Libère la page à l'index `page_idx` dans le pool global.
+/// Retourne `true` si la libération a réussi.
+pub fn shm_page_free(page_idx: usize) -> bool {
+    if page_idx >= SHM_POOL_PAGES {
+        return false;
+    }
+
+    let freed = POOL_PAGES[page_idx].ref_release();
+    if freed {
+        // Remettre le bit à 1 dans le bitmap
+        let word_idx = page_idx / 64;
+        let bit = page_idx % 64;
+        let mask = 1u64 << bit;
+        POOL_BITMAP[word_idx].fetch_or(mask, Ordering::Release);
+        POOL_FREE_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+    freed
+}
+
+/// Retourne la référence à la ShmPage pour `page_idx`.
+pub fn shm_page_ref(page_idx: usize) -> Option<&'static ShmPage> {
+    if page_idx < SHM_POOL_PAGES {
+        Some(&POOL_PAGES[page_idx])
+    } else {
+        None
     }
 }
 
-/// Shared memory permissions with UNIX-like semantics
+/// Retourne l'adresse physique de la page `page_idx`.
+pub fn shm_page_phys(page_idx: usize) -> Option<PhysAddr> {
+    if page_idx < SHM_POOL_PAGES {
+        Some(POOL_PAGES[page_idx].phys_addr)
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Statistiques du pool
+// ---------------------------------------------------------------------------
+
+/// Retourne un snapshot des statistiques du pool.
+pub fn shm_pool_stats() -> ShmPoolStats {
+    let free = POOL_FREE_COUNT.load(Ordering::Relaxed);
+    let mut total_reuses: u64 = 0;
+    for p in POOL_PAGES.iter() {
+        total_reuses += p.reuse_count.load(Ordering::Relaxed) as u64;
+    }
+
+    ShmPoolStats {
+        total_pages: SHM_POOL_PAGES,
+        free_pages: free,
+        used_pages: SHM_POOL_PAGES.saturating_sub(free),
+        base_phys: POOL_BASE_PHYS.load(Ordering::Relaxed),
+        total_reuses,
+    }
+}
+
+/// Snapshot des statistiques du pool SHM
 #[derive(Debug, Clone, Copy)]
-pub struct ShmPermissions {
-    pub read: bool,
-    pub write: bool,
-    pub execute: bool,
-    /// Owner UID (for access control)
-    pub owner_uid: u32,
-    /// Mode bits (like 0644)
-    pub mode: u16,
+pub struct ShmPoolStats {
+    pub total_pages: usize,
+    pub free_pages: usize,
+    pub used_pages: usize,
+    pub base_phys: u64,
+    pub total_reuses: u64,
 }
 
-impl ShmPermissions {
-    pub const READ_ONLY: Self = Self { 
-        read: true, write: false, execute: false, 
-        owner_uid: 0, mode: 0o444 
-    };
-    pub const READ_WRITE: Self = Self { 
-        read: true, write: true, execute: false,
-        owner_uid: 0, mode: 0o644
-    };
-    pub const READ_EXEC: Self = Self { 
-        read: true, write: false, execute: true,
-        owner_uid: 0, mode: 0o555
-    };
-    
-    /// Create with specific owner and mode
-    pub const fn with_owner(mut self, uid: u32, mode: u16) -> Self {
-        self.owner_uid = uid;
-        self.mode = mode;
-        self
-    }
-    
-    /// Check if user can read
-    pub fn can_read(&self, uid: u32) -> bool {
-        if uid == 0 { return true; } // root
-        if uid == self.owner_uid { return self.mode & 0o400 != 0; }
-        self.mode & 0o004 != 0
-    }
-    
-    /// Check if user can write
-    pub fn can_write(&self, uid: u32) -> bool {
-        if uid == 0 { return true; }
-        if uid == self.owner_uid { return self.mode & 0o200 != 0; }
-        self.mode & 0o002 != 0
-    }
-}
+// ---------------------------------------------------------------------------
+// Allocation de plages contigues (pour les gros buffers)
+// ---------------------------------------------------------------------------
 
-/// Physical frame list for a shared memory region
-struct FrameList {
-    /// Starting physical address
-    start_addr: PhysicalAddress,
-    /// Number of frames
-    frame_count: usize,
-    /// Whether frames are contiguous
-    contiguous: bool,
-    /// Individual frames (only used if not contiguous)
-    frames: Option<Vec<Frame>>,
-}
+/// Alloue `count` pages contiguës dans le pool.
+/// Retourne l'index de la première page, ou `None` si impossible.
+///
+/// Note : linéaire O(SHM_POOL_PAGES) — réservé aux allocations rares/init.
+pub fn shm_alloc_contiguous(count: usize) -> Option<usize> {
+    if count == 0 || count > SHM_POOL_PAGES {
+        return None;
+    }
 
-impl FrameList {
-    /// Create contiguous frame list
-    fn contiguous(start: PhysicalAddress, count: usize) -> Self {
-        Self {
-            start_addr: start,
-            frame_count: count,
-            contiguous: true,
-            frames: None,
+    // Recherche d'une plage de `count` bits consécutifs valorisés à 1 dans le bitmap
+    'outer: for start in 0..=(SHM_POOL_PAGES - count) {
+        // Vérifier que toutes les pages [start, start+count) sont libres
+        for i in 0..count {
+            let idx = start + i;
+            let word_idx = idx / 64;
+            let bit = idx % 64;
+            let v = POOL_BITMAP[word_idx].load(Ordering::Acquire);
+            if (v & (1u64 << bit)) == 0 {
+                continue 'outer;
+            }
         }
-    }
-    
-    /// Create non-contiguous frame list
-    fn scattered(frames: Vec<Frame>) -> Self {
-        let start = frames.first().map(|f| f.address()).unwrap_or(PhysicalAddress::new(0));
-        Self {
-            start_addr: start,
-            frame_count: frames.len(),
-            contiguous: false,
-            frames: Some(frames),
-        }
-    }
-    
-    /// Get physical address for offset
-    fn phys_for_offset(&self, offset: usize) -> Option<PhysicalAddress> {
-        let frame_idx = offset / FRAME_SIZE;
-        if frame_idx >= self.frame_count {
-            return None;
-        }
-        
-        if self.contiguous {
-            Some(PhysicalAddress::new(self.start_addr.value() + frame_idx * FRAME_SIZE))
-        } else {
-            self.frames.as_ref()?.get(frame_idx).map(|f| f.address())
-        }
-    }
-}
 
-/// Shared memory region descriptor
-pub struct ShmRegion {
-    /// Unique ID
-    pub id: ShmId,
-    
-    /// Physical frames backing this region
-    frames: FrameList,
-    
-    /// Size in bytes
-    pub size: usize,
-    
-    /// Permissions
-    pub perms: ShmPermissions,
-    
-    /// Owner process ID
-    pub owner_pid: usize,
-    
-    /// Reference count (atomic for lock-free attach/detach)
-    ref_count: AtomicUsize,
-    
-    /// Optional name for POSIX shm_open compatibility
-    pub name: Option<String>,
-    
-    /// Creation timestamp (TSC cycles)
-    pub created_at: u64,
-    
-    /// Last access timestamp
-    pub last_access: AtomicU64,
-}
+        // Toutes libres — essayer de les réserver atomiquement
+        // (on utilise des CAS individuels — acceptable pour une opération rare)
+        let mut reserved = 0usize;
+        for i in 0..count {
+            let idx = start + i;
+            let word_idx = idx / 64;
+            let bit = idx % 64;
+            let mask = 1u64 << bit;
+            let v = POOL_BITMAP[word_idx].load(Ordering::Acquire);
 
-impl ShmRegion {
-    /// Create new region with allocated physical memory
-    pub fn new(
-        id: ShmId, 
-        frames: FrameList, 
-        size: usize, 
-        perms: ShmPermissions, 
-        owner: usize
-    ) -> Self {
-        let now = read_tsc();
-        Self {
-            id,
-            frames,
-            size,
-            perms,
-            owner_pid: owner,
-            ref_count: AtomicUsize::new(1),
-            name: None,
-            created_at: now,
-            last_access: AtomicU64::new(now),
-        }
-    }
-    
-    /// Get starting physical address
-    pub fn phys_addr(&self) -> PhysicalAddress {
-        self.frames.start_addr
-    }
-    
-    /// Get physical address for offset into region
-    pub fn phys_for_offset(&self, offset: usize) -> Option<PhysicalAddress> {
-        self.frames.phys_for_offset(offset)
-    }
-    
-    /// Get frame count
-    pub fn frame_count(&self) -> usize {
-        self.frames.frame_count
-    }
-    
-    pub fn with_name(mut self, name: String) -> Self {
-        self.name = Some(name);
-        self
-    }
-    
-    /// Increment reference count (lock-free)
-    pub fn inc_ref(&self) -> usize {
-        self.last_access.store(read_tsc(), Ordering::Relaxed);
-        self.ref_count.fetch_add(1, Ordering::AcqRel) + 1
-    }
-    
-    /// Decrement reference count (lock-free), returns true if should be freed
-    pub fn dec_ref(&self) -> bool {
-        let prev = self.ref_count.fetch_sub(1, Ordering::AcqRel);
-        prev == 1
-    }
-    
-    /// Get current reference count
-    pub fn ref_count(&self) -> usize {
-        self.ref_count.load(Ordering::Acquire)
-    }
-    
-    /// Check if region is contiguous
-    pub fn is_contiguous(&self) -> bool {
-        self.frames.contiguous
-    }
-}
-
-/// Read TSC for timestamps
-#[inline]
-fn read_tsc() -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        core::arch::x86_64::_rdtsc()
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        0
-    }
-}
-
-/// Global shared memory pool
-pub struct SharedMemoryPool {
-    /// All regions indexed by ID
-    regions: BTreeMap<ShmId, ShmRegion>,
-    
-    /// Named regions for POSIX shm_open() compatibility
-    named: BTreeMap<String, ShmId>,
-    
-    /// Next available ID (atomic for potential concurrent allocation)
-    next_id: AtomicU64,
-    
-    /// Statistics
-    stats: PoolStats,
-}
-
-/// Pool statistics
-#[derive(Debug, Default)]
-pub struct PoolStats {
-    pub total_allocated: AtomicU64,
-    pub total_freed: AtomicU64,
-    pub current_regions: AtomicUsize,
-    pub total_bytes_allocated: AtomicU64,
-    pub allocation_failures: AtomicU64,
-}
-
-impl SharedMemoryPool {
-    pub const fn new() -> Self {
-        Self {
-            regions: BTreeMap::new(),
-            named: BTreeMap::new(),
-            next_id: AtomicU64::new(1),
-            stats: PoolStats {
-                total_allocated: AtomicU64::new(0),
-                total_freed: AtomicU64::new(0),
-                current_regions: AtomicUsize::new(0),
-                total_bytes_allocated: AtomicU64::new(0),
-                allocation_failures: AtomicU64::new(0),
-            },
-        }
-    }
-    
-    /// Generate next unique ID
-    fn next_id(&self) -> ShmId {
-        ShmId(self.next_id.fetch_add(1, Ordering::Relaxed))
-    }
-    
-    /// Allocate new shared memory region with REAL physical memory
-    pub fn allocate(&mut self, size: usize, perms: ShmPermissions, owner: usize) -> MemoryResult<ShmId> {
-        if size == 0 {
-            return Err(MemoryError::InvalidSize);
-        }
-        
-        // Round up to frame boundary
-        let frame_count = (size + FRAME_SIZE - 1) / FRAME_SIZE;
-        
-        // Try contiguous allocation first (better for large regions)
-        let frames = if frame_count > 1 {
-            match physical::allocate_contiguous_frames(frame_count, false) {
-                Ok(phys_addr) => {
-                    // Zero the memory for security
-                    unsafe {
-                        let ptr = phys_addr as *mut u8;
-                        core::ptr::write_bytes(ptr, 0, frame_count * FRAME_SIZE);
-                    }
-                    FrameList::contiguous(PhysicalAddress::new(phys_addr as usize), frame_count)
+            match POOL_BITMAP[word_idx].compare_exchange(v, v & !mask, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => {
+                    POOL_PAGES[idx].ref_acquire();
+                    POOL_FREE_COUNT.fetch_sub(1, Ordering::Relaxed);
+                    reserved += 1;
                 }
                 Err(_) => {
-                    // Fall back to scattered allocation
-                    self.allocate_scattered_frames(frame_count)?
-                }
-            }
-        } else {
-            // Single frame
-            let frame = physical::allocate_frame().map_err(|_| {
-                self.stats.allocation_failures.fetch_add(1, Ordering::Relaxed);
-                MemoryError::OutOfMemory
-            })?;
-            
-            // Zero the frame
-            unsafe {
-                let ptr = frame.address().value() as *mut u8;
-                core::ptr::write_bytes(ptr, 0, FRAME_SIZE);
-            }
-            
-            FrameList::contiguous(frame.address(), 1)
-        };
-        
-        let id = self.next_id();
-        let region = ShmRegion::new(id, frames, size, perms, owner);
-        
-        // Update statistics
-        self.stats.total_allocated.fetch_add(1, Ordering::Relaxed);
-        self.stats.current_regions.fetch_add(1, Ordering::Relaxed);
-        self.stats.total_bytes_allocated.fetch_add(size as u64, Ordering::Relaxed);
-        
-        self.regions.insert(id, region);
-        
-        log::debug!(
-            "Allocated shared memory region {}: {} bytes ({} frames)", 
-            id.0, size, frame_count
-        );
-        
-        Ok(id)
-    }
-    
-    /// Allocate scattered (non-contiguous) frames
-    fn allocate_scattered_frames(&mut self, count: usize) -> MemoryResult<FrameList> {
-        let mut frames = Vec::with_capacity(count);
-        
-        for _ in 0..count {
-            match physical::allocate_frame() {
-                Ok(frame) => {
-                    // Zero each frame
-                    unsafe {
-                        let ptr = frame.address().value() as *mut u8;
-                        core::ptr::write_bytes(ptr, 0, FRAME_SIZE);
+                    // Contention — annuler les réservations précédentes
+                    for j in 0..reserved {
+                        shm_page_free(start + j);
                     }
-                    frames.push(frame);
-                }
-                Err(_) => {
-                    // Rollback: free already allocated frames
-                    for f in frames {
-                        let _ = physical::deallocate_frame(f);
-                    }
-                    self.stats.allocation_failures.fetch_add(1, Ordering::Relaxed);
-                    return Err(MemoryError::OutOfMemory);
+                    continue 'outer;
                 }
             }
         }
-        
-        Ok(FrameList::scattered(frames))
+        return Some(start);
     }
-    
-    /// Create named shared memory (POSIX shm_open compatible)
-    pub fn create_named(
-        &mut self, 
-        name: String, 
-        size: usize, 
-        perms: ShmPermissions, 
-        owner: usize
-    ) -> MemoryResult<ShmId> {
-        // Check if name already exists
-        if self.named.contains_key(&name) {
-            return Err(MemoryError::AlreadyMapped);
-        }
-        
-        let id = self.allocate(size, perms, owner)?;
-        
-        if let Some(region) = self.regions.get_mut(&id) {
-            region.name = Some(name.clone());
-        }
-        
-        self.named.insert(name, id);
-        Ok(id)
-    }
-    
-    /// Open existing named shared memory
-    pub fn open_named(&mut self, name: &str) -> MemoryResult<ShmId> {
-        self.named.get(name)
-            .copied()
-            .ok_or(MemoryError::NotFound)
-    }
-    
-    /// Get region by ID (immutable)
-    pub fn get(&self, id: ShmId) -> Option<&ShmRegion> {
-        self.regions.get(&id)
-    }
-    
-    /// Get mutable region
-    pub fn get_mut(&mut self, id: ShmId) -> Option<&mut ShmRegion> {
-        self.regions.get_mut(&id)
-    }
-    
-    /// Attach to shared memory (lock-free refcount increment)
-    pub fn attach(&self, id: ShmId) -> MemoryResult<PhysicalAddress> {
-        let region = self.regions.get(&id)
-            .ok_or(MemoryError::NotFound)?;
-        
-        region.inc_ref();
-        Ok(region.phys_addr())
-    }
-    
-    /// Attach with permission check
-    pub fn attach_checked(&self, id: ShmId, uid: u32, need_write: bool) -> MemoryResult<PhysicalAddress> {
-        let region = self.regions.get(&id)
-            .ok_or(MemoryError::NotFound)?;
-        
-        // Permission check
-        if need_write && !region.perms.can_write(uid) {
-            return Err(MemoryError::PermissionDenied);
-        }
-        if !region.perms.can_read(uid) {
-            return Err(MemoryError::PermissionDenied);
-        }
-        
-        region.inc_ref();
-        Ok(region.phys_addr())
-    }
-    
-    /// Detach from shared memory (decrement ref, free if zero)
-    pub fn detach(&mut self, id: ShmId) -> MemoryResult<bool> {
-        let should_free = {
-            let region = self.regions.get(&id)
-                .ok_or(MemoryError::NotFound)?;
-            region.dec_ref()
-        };
-        
-        if should_free {
-            self.free_region(id)?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-    
-    /// Free a region and its physical memory
-    fn free_region(&mut self, id: ShmId) -> MemoryResult<()> {
-        if let Some(region) = self.regions.remove(&id) {
-            // Remove from named map if applicable
-            if let Some(name) = &region.name {
-                self.named.remove(name);
-            }
-            
-            // Free physical frames
-            if region.frames.contiguous {
-                // Free contiguous frames
-                for i in 0..region.frames.frame_count {
-                    let addr = PhysicalAddress::new(
-                        region.frames.start_addr.value() + i * FRAME_SIZE
-                    );
-                    let frame = Frame::new(addr);
-                    let _ = physical::deallocate_frame(frame);
-                }
-            } else if let Some(frames) = region.frames.frames {
-                // Free scattered frames
-                for frame in frames {
-                    let _ = physical::deallocate_frame(frame);
-                }
-            }
-            
-            // Update statistics
-            self.stats.total_freed.fetch_add(1, Ordering::Relaxed);
-            self.stats.current_regions.fetch_sub(1, Ordering::Relaxed);
-            
-            log::debug!("Freed shared memory region {}: {} bytes", id.0, region.size);
-        }
-        
-        Ok(())
-    }
-    
-    /// Get pool statistics
-    pub fn stats(&self) -> &PoolStats {
-        &self.stats
-    }
-    
-    /// List all regions (for debugging)
-    pub fn list_regions(&self) -> impl Iterator<Item = &ShmRegion> {
-        self.regions.values()
-    }
+    None
 }
 
-/// Global pool instance
-static GLOBAL_POOL: Mutex<SharedMemoryPool> = Mutex::new(SharedMemoryPool::new());
-
-/// Initialize shared memory subsystem
-pub fn init() {
-    log::info!("Shared memory pool initialized");
-}
-
-/// Allocate shared memory (global API)
-pub fn allocate(size: usize, perms: ShmPermissions, owner: usize) -> MemoryResult<ShmId> {
-    GLOBAL_POOL.lock().allocate(size, perms, owner)
-}
-
-/// Create named shared memory (POSIX shm_open)
-pub fn create_named(name: String, size: usize, perms: ShmPermissions, owner: usize) -> MemoryResult<ShmId> {
-    GLOBAL_POOL.lock().create_named(name, size, perms, owner)
-}
-
-/// Open named shared memory
-pub fn open_named(name: &str) -> MemoryResult<ShmId> {
-    GLOBAL_POOL.lock().open_named(name)
-}
-
-/// Attach to shared memory
-pub fn attach(id: ShmId) -> MemoryResult<PhysicalAddress> {
-    GLOBAL_POOL.lock().attach(id)
-}
-
-/// Attach with permission check
-pub fn attach_checked(id: ShmId, uid: u32, need_write: bool) -> MemoryResult<PhysicalAddress> {
-    GLOBAL_POOL.lock().attach_checked(id, uid, need_write)
-}
-
-/// Detach from shared memory
-pub fn detach(id: ShmId) -> MemoryResult<bool> {
-    GLOBAL_POOL.lock().detach(id)
-}
-
-/// Get pool statistics
-pub fn get_stats() -> (u64, u64, usize, u64) {
-    let pool = GLOBAL_POOL.lock();
-    let stats = pool.stats();
-    (
-        stats.total_allocated.load(Ordering::Relaxed),
-        stats.total_freed.load(Ordering::Relaxed),
-        stats.current_regions.load(Ordering::Relaxed),
-        stats.total_bytes_allocated.load(Ordering::Relaxed),
-    )
+/// Libère une plage de `count` pages contigues commençant à `start`.
+pub fn shm_free_contiguous(start: usize, count: usize) -> bool {
+    if start + count > SHM_POOL_PAGES {
+        return false;
+    }
+    for i in 0..count {
+        shm_page_free(start + i);
+    }
+    true
 }

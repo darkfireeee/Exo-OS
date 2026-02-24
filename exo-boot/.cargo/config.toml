@@ -1,0 +1,19 @@
+# exo-boot/.cargo/config.toml
+# Configuration de build pour le bootloader (UEFI + BIOS).
+#
+# UEFI : x86_64-unknown-uefi — désactive AVX/AVX2/SSE4 pour éviter les erreurs
+#         LLVM "Do not know how to split the result of this operator!" avec les
+#         crates crypto (sha2 / curve25519-dalek) sur ce target non-OS.
+# BIOS : x86_64-unknown-none (cible bare-metal custom)
+
+[target.x86_64-unknown-uefi]
+rustflags = [
+    # Désactive les extensions vectorielles avancées non supportées par le
+    # backend LLVM pour les cibles UEFI (sha2 / curve25519-dalek SIMD).
+    "-C", "target-feature=-avx2,-avx,-sse4.2,-sse4.1,-ssse3",
+    # Désactive la zone rouge pour les fonctions non-leaf (requis UEFI)
+    "-C", "no-redzone=yes",
+]
+
+[build]
+incremental = true

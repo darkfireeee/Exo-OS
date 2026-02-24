@@ -17,7 +17,6 @@
   "position-independent-executables": false,
   "pre-link-args": {
     "ld.lld": [
-      "-T", "linker.ld",
       "--no-pie"
     ]
   }

@@ -12,7 +12,9 @@ incremental = true
 # runner = "pwsh scripts/run-qemu-gui.ps1"
 
 rustflags = [
-  "-C", "link-arg=-Tlinker.ld",
+  # Le script linker est fourni par le build.rs du crate kernel (chemin absolu).
+  # Ne pas le mettre ici sans chemin absolu — le linker est invoqué depuis un
+  # répertoire temporaire et ne trouverait pas linker.ld sans chemin complet.
   "-C", "link-arg=--no-pie",
   "-C", "link-arg=--allow-multiple-definition",
   "-C", "relocation-model=static",

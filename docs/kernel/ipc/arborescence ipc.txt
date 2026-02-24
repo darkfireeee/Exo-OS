@@ -1,0 +1,77 @@
+arborescence ipc
+
+│   ├── ipc/                            # 🟢 COUCHE 2a — IPC (→ memory/ + scheduler/)
+│   │   ├── mod.rs
+│   │   │
+│   │   ├── core/
+│   │   │   ├── mod.rs
+│   │   │   ├── types.rs                # MessageId, ChannelId, EndpointId, Cookie
+│   │   │   ├── fastcall_asm.s          # Fast IPC inline ASM (évite syscall)
+│   │   │   ├── transfer.rs             # Message transfer engine
+│   │   │   ├── sequence.rs             # Numéros de séquence (ordering)
+│   │   │   └── constants.rs            # MAX_MSG_SIZE=4080B, RING_SIZE=4096
+│   │   │
+│   │   ├── channel/
+│   │   │   ├── mod.rs
+│   │   │   ├── sync.rs                 # Canal synchrone (fast, rendezvous)
+│   │   │   ├── async.rs                # Canal asynchrone (futures, waker)
+│   │   │   ├── mpmc.rs                 # Multi-Producer Multi-Consumer
+│   │   │   ├── broadcast.rs            # One-to-many
+│   │   │   ├── typed.rs                # Canaux type-safe (générique)
+│   │   │   └── streaming.rs            # Streaming (gros volumes, DMA)
+│   │   │
+│   │   ├── ring/
+│   │   │   ├── mod.rs
+│   │   │   ├── spsc.rs                 # SPSC ultra-fast (Release/Acquire barriers)
+│   │   │   ├── mpmc.rs                 # MPMC lock-free (séquence atomique)
+│   │   │   ├── fusion.rs               # Fusion Ring — adaptive batching
+│   │   │   ├── slot.rs                 # Slot management
+│   │   │   ├── batch.rs                # Transferts groupés
+│   │   │   └── zerocopy.rs             # Zero-copy (partage page physique)
+│   │   │
+│   │   ├── shared_memory/
+│   │   │   ├── mod.rs
+│   │   │   ├── pool.rs                 # Pool pré-alloué (alloc <100ns)
+│   │   │   ├── mapping.rs              # Mapping SHM dans espaces d'adressage
+│   │   │   ├── page.rs                 # Page-aligned allocations (NO_COW flag obligatoire)
+│   │   │   ├── descriptor.rs           # SHM descriptor (ID, taille, perms)
+│   │   │   ├── allocator.rs            # Lock-free alloc SHM
+│   │   │   └── numa_aware.rs           # NUMA locality pour SHM
+│   │   │
+│   │   ├── capability_bridge/          # Shim léger → délègue à security/capability/
+│   │   │   ├── mod.rs                  # ⚠️ Zéro logique ici — wrapper d'appels uniquement
+│   │   │   └── check.rs                # check_right() → security::capability::verify()
+│   │   │                               # ipc/ ne connaît PAS l'implémentation capability
+│   │   │
+│   │   ├── endpoint/
+│   │   │   ├── mod.rs
+│   │   │   ├── descriptor.rs           # EndpointDesc (ID, owners, queue)
+│   │   │   ├── registry.rs             # Registre nom→endpoint (radix tree)
+│   │   │   ├── connection.rs           # Établissement connexion + handshake
+│   │   │   └── lifecycle.rs            # Création/destruction + cleanup
+│   │   │
+│   │   ├── sync/
+│   │   │   ├── mod.rs
+│   │   │   ├── futex.rs                # Futex IPC (délègue à memory/utils/futex_table)
+│   │   │   ├── wait_queue.rs           # Wait IPC (délègue à scheduler/sync)
+│   │   │   ├── event.rs                # Event notification
+│   │   │   ├── barrier.rs              # Barrière de synchronisation
+│   │   │   └── rendezvous.rs           # Point de rendez-vous
+│   │   │
+│   │   ├── message/
+│   │   │   ├── mod.rs
+│   │   │   ├── builder.rs              # Constructeur fluent de messages
+│   │   │   ├── serializer.rs           # Sérialisation zero-copy (capnproto-like)
+│   │   │   ├── router.rs               # Routage multi-hop
+│   │   │   └── priority.rs             # Priorité messages (RT/normal)
+│   │   │
+│   │   ├── rpc/
+│   │   │   ├── mod.rs
+│   │   │   ├── server.rs               # RPC server (dispatcher)
+│   │   │   ├── client.rs               # RPC client (stub + await)
+│   │   │   ├── protocol.rs             # Protocole RPC binaire
+│   │   │   └── timeout.rs              # Timeout + retry
+│   │   │
+│   │   └── stats/
+│   │       └── counters.rs             # Throughput msgs/s, latences, drops
+│   │

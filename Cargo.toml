@@ -1,69 +1,45 @@
-# Workspace Cargo.toml - Exo-OS
-# Centralise les profils et les membres. Les crates vides sont des stubs à compléter.
+# Workspace racine Exo-OS
+# ──────────────────────────────────────────────────────────────────────────────
+# libs/ est un workspace séparé (dépendances std + no_std mixtes).
+# Il est exclu ici pour éviter l'erreur "workspaces cannot be nested".
+# Rust-analyzer peut ouvrir les deux roots simultanément.
+# ──────────────────────────────────────────────────────────────────────────────
 
 [workspace]
+resolver = "2"
 members = [
     "kernel",
-    "libs/exo_types",
-    "libs/exo_std",
-    "libs/exo_ipc",
-    "libs/exo_crypto"
+   # "drivers",
+    "servers/crypto_server",
+    "servers/device_server",
+    "servers/exo_shield",
+    "servers/init_server",
+    "servers/ipc_router",
+    "servers/memory_server",
+    "servers/network_server",
+    "servers/scheduler_server",
 ]
-default-members = ["kernel"]
-resolver = "2"
-
-# Modules exclus temporairement (non prêts):
-#   kernel/posix_x_lib
-#   tools/posix_x_tools
-#   userland/init
-#   userland/shell
-#   userland/net_service
-#   userland/fs_service
-#   userland/ai_core
-
+# libs/ gère son propre workspace Cargo.toml avec ses sous-crates std.
+exclude = ["libs"]
 
 [workspace.package]
-version = "0.7.0"
-edition = "2021"
-authors = ["ExoOS Team"]
-license = "MIT OR Apache-2.0"
+version   = "0.1.0"
+edition   = "2021"
+authors   = ["Exo-OS Team"]
+license   = "MIT OR Apache-2.0"
+
+# Dépendances communes (no_std) partagées entre kernel et drivers.
+[workspace.dependencies]
+spin = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock", "once"] }
 
 [profile.dev]
-panic = "abort"
-incremental = true
-codegen-units = 8
-lto = "thin"
-opt-level = 1
-debug = true
+opt-level = 0
+debug     = true
+panic     = "abort"
 
 [profile.release]
-panic = "abort"
+opt-level     = 3
+lto           = true
+panic         = "abort"
 codegen-units = 1
-lto = "fat"
-opt-level = "z" # Favorise la taille (changer en 3 pour vitesse)
-strip = true
-debug = false
-
-[profile.release-maxperf]
-inherits = "release"
-opt-level = 3
-lto = "fat"
-debug = false
-
-[workspace.metadata.exo-os]
-min-supported-rust = "nightly"
-primary-target = "x86_64-unknown-none"
-kernel-crate = "kernel"
-userland-entry = "(désactivé)"
-
-[workspace.metadata.exo-os.excluded]
-posix = ["kernel/posix_x_lib", "tools/posix_x_tools"]
-network = ["userland/net_service"]
-filesystem = ["userland/fs_service"]
-# userland = ["userland/init", "userland/shell", "userland/ai_core"]
-# libs = ["libs/exo_types", "libs/exo_std"]
-
-# (Optionnel) Dépendances communes verrouillables plus tard
-[workspace.dependencies]
- log = "0.4.20"
-spin = "0.9.8"
+strip         = "none"

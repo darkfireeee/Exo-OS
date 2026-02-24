@@ -1,0 +1,56 @@
+[package]
+name        = "exo-boot"
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["Exo-OS Team"]
+description = "Bootloader Exo-OS — UEFI/BIOS — no_std"
+license     = "MIT"
+build       = "build.rs"
+
+# ─── PROFIL RELEASE ───────────────────────────────────────────────────────────
+[profile.release]
+opt-level     = "s"      # Optimise pour la taille (bootloader)
+lto           = true
+codegen-units = 1
+panic         = "abort"  # Pas de stack unwinding en boot
+
+[profile.dev]
+panic         = "abort"
+
+# ─── FEATURES ─────────────────────────────────────────────────────────────────
+[features]
+default      = ["uefi-boot"]
+uefi-boot    = []
+bios-boot    = []
+kaslr        = []        # Active KASLR (randomisation adresse kernel)
+secure-boot  = ["dep:ed25519-dalek", "dep:sha2"]  # Active la vérification Ed25519 + SHA-512
+dev-skip-sig = []        # Développement uniquement : ignore la signature kernel
+
+# ─── DÉPENDANCES UEFI ─────────────────────────────────────────────────────────
+[dependencies]
+# UEFI runtime — fourni les types et protocoles UEFI standardisés
+uefi = { version = "0.26", features = ["alloc"] }
+
+# Fournit le #[entry] macro et l'allocateur UEFI
+uefi-services = "0.23"
+
+# Types x86_64 (PhysAddr, VirtAddr, page tables)
+x86_64 = { version = "0.15", default-features = false, features = ["instructions"] }
+
+# Spinlock no_std pour les sections critiques
+spinning_top = { version = "0.3", default-features = false }
+
+# Vérification signature Ed25519 (kernel signing) — actif seulement avec `secure-boot`
+ed25519-dalek = { version = "2", default-features = false, features = ["digest"], optional = true }
+sha2          = { version = "0.10", default-features = false, features = ["force-soft"], optional = true }
+
+# Configuration formatage minimal sans std
+arrayvec = { version = "0.7", default-features = false }
+
+# ─── DÉPENDANCES BUILD ────────────────────────────────────────────────────────
+[build-dependencies]
+# Récupère le chemin de la cible pour sélectionner le bon linker script
+# ─── WORKSPACE ────────────────────────────────────────────────────────────────
+# exo-boot est un workspace séparé (target UEFI/BIOS ≠ target kernel).
+# Empêche Cargo de le rattacher au workspace racine Exo-OS.
+[workspace]

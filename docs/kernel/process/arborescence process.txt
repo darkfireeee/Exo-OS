@@ -1,0 +1,63 @@
+arborescence process
+
+│   ├── process/                        # 🟤 PROCESS/THREAD MANAGEMENT
+│   │   ├── mod.rs
+│   │   │
+│   │   ├── core/
+│   │   │   ├── mod.rs
+│   │   │   ├── pid.rs                  # PID allocator (IDR radix tree, lock-free)
+│   │   │   ├── pcb.rs                  # Process Control Block (cache-aligned)
+│   │   │   ├── tcb.rs                  # Thread Control Block
+│   │   │   └── registry.rs             # Registre global PID→PCB (RCU)
+│   │   │
+│   │   ├── lifecycle/
+│   │   │   ├── mod.rs
+│   │   │   ├── create.rs               # Création process/thread
+│   │   │   ├── fork.rs                 # fork() CoW <1µs
+│   │   │   ├── exec.rs                 # execve() <5µs
+│   │   │   ├── exit.rs                 # exit() cleanup RAII complet
+│   │   │   ├── wait.rs                 # waitpid/wait4
+│   │   │   └── reap.rs                 # Reaper zombie (kthread dédié)
+│   │   │
+│   │   ├── thread/
+│   │   │   ├── mod.rs
+│   │   │   ├── creation.rs             # Création thread <500ns
+│   │   │   ├── join.rs                 # Thread join (futex-based)
+│   │   │   ├── detach.rs               # Thread detach
+│   │   │   ├── local_storage.rs        # TLS (GS register, per-thread)
+│   │   │   └── pthread_compat.rs       # API pthread POSIX
+│   │   │
+│   │   ├── signal/                     # ✅ Déplacé depuis scheduler/ → process/
+│   │   │   ├── mod.rs                  # Signaux POSIX = cycle de vie processus, pas scheduling
+│   │   │   ├── delivery.rs             # Livraison signal (check à retour kernel)
+│   │   │   │                           # Seul point de contact avec scheduler/ (wakeup uniquement)
+│   │   │   ├── handler.rs              # Exécution handler utilisateur (sigaltstack)
+│   │   │   ├── mask.rs                 # Masque signal par thread (sigprocmask)
+│   │   │   ├── queue.rs                # File RT signals (POSIX.1b)
+│   │   │   └── default.rs              # Actions par défaut (TERM, CORE, IGN, STOP…)
+│   │   │
+│   │   ├── state/
+│   │   │   ├── mod.rs
+│   │   │   ├── transitions.rs          # State machine (Running/Sleep/Stop/Zombie)
+│   │   │   └── wakeup.rs               # wakeup_thread() — implémente WakeupHandler trait
+│   │   │                               # (enregistré au boot, appelé par DMA/IPC sans dépendance)
+│   │   │
+│   │   ├── group/
+│   │   │   ├── mod.rs
+│   │   │   ├── session.rs
+│   │   │   ├── pgrp.rs
+│   │   │   └── job_control.rs
+│   │   │
+│   │   ├── namespace/
+│   │   │   ├── mod.rs
+│   │   │   ├── pid_ns.rs
+│   │   │   ├── mount_ns.rs
+│   │   │   ├── net_ns.rs
+│   │   │   ├── uts_ns.rs
+│   │   │   └── user_ns.rs
+│   │   │
+│   │   └── resource/
+│   │       ├── mod.rs
+│   │       ├── rlimit.rs
+│   │       ├── usage.rs
+│   │       └── cgroup.rs               # cgroups v2

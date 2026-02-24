@@ -1,0 +1,14 @@
+[package]
+name              = "exo-crypto-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description       = "Exo-OS server: crypto_server (bare-metal no_std)"
+
+[[bin]]
+name = "exo-crypto-server"
+path = "src/main.rs"
+
+[dependencies]
+spin.workspace = true

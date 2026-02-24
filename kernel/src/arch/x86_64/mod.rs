@@ -1,157 +1,322 @@
-//! Architecture x86_64 support for Exo-OS
+//! # arch/x86_64 — Implémentation architecture x86_64
 //!
-//! Ce module gère les spécificités de l'architecture x86_64:
-//! - GDT (Global Descriptor Table) pour la segmentation
-//! - IDT (Interrupt Descriptor Table) pour les interruptions
-//! - Gestion des interruptions et exceptions CPU
-//! - Configuration des registres de contrôle
+//! Point d'entrée de toute la logique spécifique à x86_64.
+//! Exporte les primitives utilisées par les couches supérieures.
 
-// Core x86_64 modules (organized)
+#![allow(dead_code)]
+
 pub mod acpi;
+pub mod apic;
 pub mod boot;
-pub mod context;
 pub mod cpu;
-pub mod drivers;    // Hardware drivers (PS/2 keyboard, etc.)
+pub mod exceptions;
 pub mod gdt;
-pub mod handlers;
 pub mod idt;
-pub mod interrupts; // APIC, IOAPIC, IPI
-pub mod memory;     // Paging, allocation
-pub mod percpu;     // Per-CPU data structures
-pub mod pit;        // Programmable Interval Timer
-pub mod registers;  // CPU registers
-pub mod serial;     // Serial port (COM1)
-pub mod smp;        // Symmetric Multiprocessing
-pub mod syscall;    // System calls
-pub mod tss;        // Task State Segment
-pub mod usermode;   // User mode support
-pub mod utils;      // Utility modules (FPU, SIMD, PCID, diagnostics)
+pub mod memory_iface;
+pub mod paging;
+pub mod sched_iface;   // Pont FFI arch → scheduler (C ABI exports)
+pub mod smp;
+pub mod spectre;
+pub mod syscall;
+pub mod tss;
+pub mod virt;
 
-// Constantes d'architecture
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use super::ArchInfo;
+
+// ── Constantes globales ───────────────────────────────────────────────────────
+
+/// Taille de page standard (4 KiB)
 pub const PAGE_SIZE: usize = 4096;
-pub const PAGE_SIZE_2MB: usize = 2 * 1024 * 1024;
-pub const PAGE_SIZE_1GB: usize = 1024 * 1024 * 1024;
 
-// Layout mémoire du kernel (identity mapped pour l'instant)
-pub const KERNEL_PHYSICAL_BASE: usize = 0x0010_0000; // 1MB (après GRUB)
-pub const KERNEL_VIRTUAL_BASE: usize = 0x0010_0000; // Identity mapped
-pub const KERNEL_STACK_SIZE: usize = 16 * 1024; // 16KB
+/// Adresse de base du noyau en espace virtuel
+pub const KERNEL_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 
-// Constantes legacy pour compatibilité avec le code existant
-pub const KERNEL_START_ADDRESS: usize = 0xFFFF_8000_0000_0000;
-pub const KERNEL_END_ADDRESS: usize = 0xFFFF_FFFF_FFFF_FFFF;
-pub const KERNEL_VIRTUAL_OFFSET: usize = 0xFFFF_8000_0000_0000;
-pub const KERNEL_CODE_START: usize = 0xFFFF_8000_0010_0000;
-pub const KERNEL_CODE_END: usize = 0xFFFF_8000_0020_0000;
-pub const KERNEL_BASE: usize = 0xFFFF_8000_0000_0000;
+/// Limite supérieure de la mémoire physique addressable (48 bits PA)
+pub const MAX_PHYS_ADDR: u64 = (1u64 << 48) - 1;
 
-// Adresses importantes
-pub const VGA_BUFFER_ADDR: usize = 0xB8000;
-pub const VGA_BUFFER_SIZE: usize = 80 * 25 * 2;
+/// Niveaux de page tables (PML4 → PDPT → PD → PT)
+pub const PAGE_TABLE_LEVELS: usize = 4;
 
-/// Initialise l'architecture x86_64
-///
-/// Cette fonction doit être appelée au démarrage du kernel.
-/// Elle configure:
-/// - La GDT (déjà configurée par le bootloader mais peut être reconfigurée)
-/// - L'IDT (table des interruptions)
-/// - Les interruptions CPU
-pub fn init() -> Result<(), &'static str> {
-    // Pour l'instant, le bootloader a déjà configuré la GDT
+// ── État global de l'architecture ────────────────────────────────────────────
 
-    // Initialiser l'IDT avec tous les handlers
-    idt::init();
+static ARCH_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-    // Note: On n'active PAS les interruptions ici car le PIC n'est pas encore configuré
-    // Les interruptions seront activées après la configuration du PIC
-
-    Ok(())
+/// Collecte les informations d'architecture post-init
+pub fn arch_info() -> ArchInfo {
+    ArchInfo {
+        cpu_count:  smp::percpu::cpu_count(),
+        has_apic:   cpu::features::CPU_FEATURES.has_apic(),
+        has_x2apic: cpu::features::CPU_FEATURES.has_x2apic(),
+        has_acpi:   acpi::parser::acpi_available(),
+        page_size:  PAGE_SIZE,
+    }
 }
 
-/// Halte le CPU (pour toujours)
-#[inline(always)]
-pub fn halt() -> ! {
+/// Arrête le CPU courant (halt irréversible)
+///
+/// # SAFETY
+/// Appelé uniquement depuis le kernel panic handler ou idle loop.
+#[inline(never)]
+pub fn halt_cpu() -> ! {
     loop {
+        // SAFETY: Instruction architecturale standard — désactive interruptions
+        // puis halte jusqu'à la prochaine interruption (ici : jamais car IF=0)
         unsafe {
-            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+            core::arch::asm!(
+                "cli",
+                "hlt",
+                options(nomem, nostack)
+            );
         }
     }
 }
 
-/// Désactive les interruptions
+/// Retard spin-loop courte (en nanosecondes approximatif)
+#[inline(always)]
+pub fn spin_delay_cycles(cycles: u64) {
+    let start = cpu::tsc::read_tsc();
+    while cpu::tsc::read_tsc().wrapping_sub(start) < cycles {
+        core::hint::spin_loop();
+    }
+}
+
+/// Barrière mémoire complète (mfence)
+#[inline(always)]
+pub fn memory_barrier() {
+    // SAFETY: instruction architecturale sans effet de bord dangereux
+    unsafe {
+        core::arch::asm!("mfence", options(nostack, preserves_flags));
+    }
+}
+
+/// Barrière lecture (lfence)
+#[inline(always)]
+pub fn load_fence() {
+    // SAFETY: idem
+    unsafe {
+        core::arch::asm!("lfence", options(nostack, preserves_flags));
+    }
+}
+
+/// Barrière écriture (sfence)
+#[inline(always)]
+pub fn store_fence() {
+    // SAFETY: idem
+    unsafe {
+        core::arch::asm!("sfence", options(nostack, preserves_flags));
+    }
+}
+
+/// Invalide une ligne TLB pour l'adresse virtuelle donnée
+#[inline(always)]
+pub fn invlpg(virt_addr: u64) {
+    // SAFETY: invlpg est sûr — ne fait qu'invalider une entrée TLB locale
+    unsafe {
+        core::arch::asm!(
+            "invlpg [{addr}]",
+            addr = in(reg) virt_addr,
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+/// Lit CR3 (Physical address de PML4 + flags PCID)
+#[inline(always)]
+pub fn read_cr3() -> u64 {
+    let val: u64;
+    // SAFETY: lecture de CR3 — privilège requis Ring 0 garanti par contexte noyau
+    unsafe {
+        core::arch::asm!("mov {val}, cr3", val = out(reg) val, options(nostack, nomem));
+    }
+    val
+}
+
+/// Écrit CR3 (déclenche TLB flush si PCID != 0 et bit 63 = 0)
+///
+/// # SAFETY
+/// L'appelant doit garantir que `cr3_val` pointe vers une PML4 valide
+/// et que l'adresse de retour reste mappée dans le nouveau table.
+#[inline(always)]
+pub unsafe fn write_cr3(cr3_val: u64) {
+    // SAFETY: vérification déléguée à l'appelant
+    unsafe {
+        core::arch::asm!("mov cr3, {val}", val = in(reg) cr3_val, options(nostack, nomem));
+    }
+}
+
+/// Lit CR2 (adresse de faute page)
+#[inline(always)]
+pub fn read_cr2() -> u64 {
+    let val: u64;
+    // SAFETY: lecture registre de contrôle — aucun effet de bord
+    unsafe {
+        core::arch::asm!("mov {val}, cr2", val = out(reg) val, options(nostack, nomem));
+    }
+    val
+}
+
+/// Lit CR4 (flags de contrôle avancés)
+#[inline(always)]
+pub fn read_cr4() -> u64 {
+    let val: u64;
+    // SAFETY: lecture registre de contrôle
+    unsafe {
+        core::arch::asm!("mov {val}, cr4", val = out(reg) val, options(nostack, nomem));
+    }
+    val
+}
+
+/// Écrit CR4
+///
+/// # SAFETY
+/// L'appelant est responsable de ne pas désactiver des protections critiques
+/// (SMEP, SMAP, PCIDE, etc.) sans les avoir correctement désactivées avant.
+#[inline(always)]
+pub unsafe fn write_cr4(cr4_val: u64) {
+    // SAFETY: délégué à l'appelant
+    unsafe {
+        core::arch::asm!("mov cr4, {val}", val = in(reg) cr4_val, options(nostack, nomem));
+    }
+}
+
+/// Active les interruptions (sti)
+///
+/// # SAFETY
+/// L'appelant doit s'assurer que IDT et pile IST sont correctement configurés.
+#[inline(always)]
+pub unsafe fn enable_interrupts() {
+    // SAFETY: délégué à l'appelant
+    unsafe {
+        core::arch::asm!("sti", options(nostack, nomem));
+    }
+}
+
+/// Désactive les interruptions (cli)
 #[inline(always)]
 pub fn disable_interrupts() {
+    // SAFETY: cli est sûr en Ring 0 — ne fait que modifier IF dans RFLAGS
     unsafe {
-        core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
+        core::arch::asm!("cli", options(nostack, nomem));
     }
 }
 
-/// Active les interruptions
+/// Lit RFLAGS
 #[inline(always)]
-pub fn enable_interrupts() {
-    unsafe {
-        core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
-    }
-}
-
-/// Vérifie si les interruptions sont activées
-#[inline(always)]
-pub fn interrupts_enabled() -> bool {
+pub fn read_rflags() -> u64 {
     let flags: u64;
+    // SAFETY: lecture registre d'état — aucun effet de bord
     unsafe {
-        core::arch::asm!("pushfq; pop {}", out(reg) flags, options(nomem, preserves_flags));
+        core::arch::asm!(
+            "pushfq",
+            "pop {flags}",
+            flags = out(reg) flags,
+            options(nostack)
+        );
     }
-    (flags & (1 << 9)) != 0 // IF flag (bit 9)
+    flags
 }
 
-/// Exécute une closure avec les interruptions désactivées
+/// Section critique : désactive les interruptions et retourne l'état RFLAGS précédent
+#[must_use]
+#[inline(always)]
+pub fn irq_save() -> u64 {
+    let flags = read_rflags();
+    disable_interrupts();
+    flags
+}
+
+/// Restaure l'état d'interruption depuis des RFLAGS sauvegardés
+#[inline(always)]
+pub fn irq_restore(flags: u64) {
+    // SAFETY: restauration d'un état RFLAGS précédemment sauvegardé — sûr
+    unsafe {
+        core::arch::asm!(
+            "push {flags}",
+            "popfq",
+            flags = in(reg) flags,
+            options(nostack)
+        );
+    }
+}
+
+/// Effectue un OUT byte vers un port I/O
 ///
-/// Cette fonction sauvegarde l'état actuel des interruptions,
-/// les désactive pendant l'exécution de la closure, puis
-/// restaure l'état original.
-#[inline]
-pub fn without_interrupts<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    let were_enabled = interrupts_enabled();
-    
-    if were_enabled {
-        disable_interrupts();
+/// # SAFETY
+/// L'appelant garantit que `port` est un port I/O valide et que
+/// l'écriture à cet instant est cohérente avec le driver.
+#[inline(always)]
+pub unsafe fn outb(port: u16, val: u8) {
+    // SAFETY: délégué à l'appelant
+    unsafe {
+        core::arch::asm!(
+            "out dx, al",
+            in("dx") port,
+            in("al") val,
+            options(nostack, nomem)
+        );
     }
-    
-    let result = f();
-    
-    if were_enabled {
-        enable_interrupts();
-    }
-    
-    result
 }
 
-/// Lit un byte depuis un port I/O
+/// Effectue un IN byte depuis un port I/O
+///
+/// # SAFETY
+/// L'appelant garantit que `port` est un port I/O valide.
 #[inline(always)]
 pub unsafe fn inb(port: u16) -> u8 {
-    let value: u8;
-    core::arch::asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack, preserves_flags));
-    value
+    let val: u8;
+    // SAFETY: délégué à l'appelant
+    unsafe {
+        core::arch::asm!(
+            "in al, dx",
+            in("dx") port,
+            out("al") val,
+            options(nostack, nomem)
+        );
+    }
+    val
 }
 
-/// Écrit un byte vers un port I/O
+/// OUT dword vers port I/O
+///
+/// # SAFETY
+/// Idem outb.
 #[inline(always)]
-pub unsafe fn outb(port: u16, value: u8) {
-    core::arch::asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags));
+pub unsafe fn outl(port: u16, val: u32) {
+    // SAFETY: délégué à l'appelant
+    unsafe {
+        core::arch::asm!(
+            "out dx, eax",
+            in("dx") port,
+            in("eax") val,
+            options(nostack, nomem)
+        );
+    }
 }
 
-/// Global SMP mode flag
-static SMP_MODE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-
-/// Set SMP mode (multi-core with APIC)
-pub fn set_smp_mode(enabled: bool) {
-    SMP_MODE.store(enabled, core::sync::atomic::Ordering::SeqCst);
+/// IN dword depuis port I/O
+///
+/// # SAFETY
+/// Idem inb.
+#[inline(always)]
+pub unsafe fn inl(port: u16) -> u32 {
+    let val: u32;
+    // SAFETY: délégué à l'appelant
+    unsafe {
+        core::arch::asm!(
+            "in eax, dx",
+            in("dx") port,
+            out("eax") val,
+            options(nostack, nomem)
+        );
+    }
+    val
 }
 
-/// Check if running in SMP mode
-pub fn is_smp_mode() -> bool {
-    SMP_MODE.load(core::sync::atomic::Ordering::SeqCst)
+/// Délai I/O (~1-4µs) — écriture sur port 0x80 (port debug POST)
+#[inline(always)]
+pub fn io_delay() {
+    // SAFETY: port 0x80 est le port debug BIOS/POST — écriture sans effet
+    unsafe { outb(0x80, 0x00); }
 }
