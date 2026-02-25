@@ -1,0 +1,20 @@
+[package]
+name    = "exo-os-driver-fs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name       = "exo_os_driver_fs"
+path       = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+spin = { version = "0.9", default-features = false, features = ["spin_mutex"] }
+
+[profile.dev]
+opt-level = 0
+panic     = "abort"
+
+[profile.release]
+opt-level = 3
+panic     = "abort"

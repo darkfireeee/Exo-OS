@@ -277,78 +277,18 @@ pub extern "C" fn syscall_rust_handler(frame: *mut SyscallFrame) {
     // SAFETY: frame est une SyscallFrame valide construite par l'ASM d'entrée
     let frame = unsafe { &mut *frame };
 
-    let nr   = frame.rax;
-    let arg1 = frame.rdi;
-    let arg2 = frame.rsi;
-    let arg3 = frame.rdx;
-    let arg4 = frame.r10;
-    let arg5 = frame.r8;
-    let arg6 = frame.r9;
-
     SYSCALL_COUNT.fetch_add(1, Ordering::Relaxed);
 
-    // Valider le numéro syscall
-    if nr >= SYSCALL_MAX {
-        frame.rax = (-38i64) as u64; // -ENOSYS
-        syscall_return_to_user(frame);
-        return;
-    }
-
-    // Dispatch
-    let result = dispatch_syscall(nr, arg1, arg2, arg3, arg4, arg5, arg6);
-    frame.rax = result as u64;
-
     // ── RÈGLE SIGNAL-01 (DOC1) ────────────────────────────────────────────────
-    // arch/ orchestre la livraison des signaux au retour vers userspace
-    // via handle_pending_signals() depuis process::signal::delivery
-    syscall_return_to_user(frame);
-}
+    // Le pipeline complet (fast-path → compat → table → signal delivery)
+    // est géré par crate::syscall::dispatch::dispatch().
+    // arch/ orchestre uniquement : le frame est passé par pointeur brut,
+    // dispatch() lit les arguments et écrit frame.rax.
+    // La livraison des signaux se fait dans post_dispatch() avant le retour.
 
-/// Dispatch des syscalls vers les handlers appropriés
-fn dispatch_syscall(
-    nr: u64,
-    _arg1: u64, _arg2: u64, _arg3: u64,
-    _arg4: u64, _arg5: u64, _arg6: u64,
-) -> i64 {
-    // Les tables de dispatch complètes seront branchées lors de l'intégration
-    // des modules process/, fs/, ipc/, etc.
-    // Pour l'instant : tous retournent -ENOSYS sauf les syscalls triviaux.
-    match nr {
-        SYSCALL_GETPID => {
-            // Exemple d'implémentation minimale
-            0 // PID 0 placeholder jusqu'à intégration process/
-        }
-        SYSCALL_SCHED_YIELD => {
-            // Le yield sera implémenté via scheduler::yield()
-            0
-        }
-        _ => -38, // -ENOSYS
-    }
-}
-
-/// Retour vers userspace : vérifie les signaux pending avant SYSRET
-///
-/// ## RÈGLE SIGNAL-01 (DOC1)
-/// Cette fonction est le point d'orchestration des signaux.
-/// Elle appelle process::signal::delivery::handle_pending_signals()
-/// si le flag signal_pending est levé dans le TCB courant.
-///
-/// ## RÈGLE SWITCH-02 (DOC1)
-/// arch/ lit le flag, process/signal/ livre les signaux.
-/// scheduler/ NE livre JAMAIS directement.
-pub fn syscall_return_to_user(frame: &mut SyscallFrame) {
-    // Vérifier signal pending depuis le TCB courant
-    // NOTE : l'intégration complète avec process::signal sera branchée
-    // lors de l'initialisation du module process/.
-    // La vérification se fait via le flag AtomicBool dans le TCB.
-    //
-    // Pattern correct :
-    //   if tcb.signal_pending.load(Ordering::Acquire) {
-    //       process::signal::delivery::handle_pending_signals(tcb);
-    //   }
-    //
-    // Pour l'instant, la vérification est un noop jusqu'à intégration process/.
-    let _ = frame;
+    // SAFETY: frame provient de syscall_rust_handler qui reçoit un pointeur
+    // valide depuis l'ASM. La durée de vie est bornée à cette stackframe.
+    crate::syscall::dispatch::dispatch(frame);
 }
 
 // ── Instrumentation syscall ───────────────────────────────────────────────────

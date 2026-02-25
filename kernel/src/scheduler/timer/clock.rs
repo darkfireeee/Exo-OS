@@ -106,3 +106,9 @@ pub fn realtime_ns() -> u64 {
     let offset = REALTIME_OFFSET_NS.load(Ordering::Relaxed);
     monotonic_ns().wrapping_add(offset)
 }
+
+/// Retourne le décalage epoch UNIX en nanosecondes (offset entre monotone et réel).
+#[inline]
+pub fn realtime_offset_ns() -> u64 {
+    REALTIME_OFFSET_NS.load(Ordering::Relaxed)
+}

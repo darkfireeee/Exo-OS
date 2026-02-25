@@ -244,7 +244,7 @@ unsafe impl Send for AsyncChannel {}
 
 impl AsyncChannel {
     pub fn new() -> Self {
-        let mut s = Self {
+        let s = Self {
             id: alloc_channel_id(),
             ring: SpscRing::new(),
             wakers: SpinLock::new(WakerTable::new()),

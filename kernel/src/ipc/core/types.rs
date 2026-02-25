@@ -489,3 +489,35 @@ impl From<IpcCapError> for IpcError {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Spectre v1 mitigation — array_index_nospec (RÈGLE IPC-08)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Mitige Spectre v1 lors des accès aux buffers indexés.
+///
+/// Retourne `index` si `index < size`, 0 sinon — en utilisant un masque
+/// calculé sans branchement sur le bit de signe du résultat `index - size`.
+///
+/// Le CPU ne peut pas spéculer au-delà des bornes du buffer car le masque
+/// force l'index hors-bornes à 0 avant l'accès mémoire.
+///
+/// UTILISATION OBLIGATOIRE (IPC-08) sur tout accès de type :
+///   `buffer[unsafe_index_from_user_or_ring]`
+///
+/// # Exemple
+/// ```no_run
+/// let safe_idx = array_index_nospec(user_idx, RING_SIZE);
+/// let cell = &buffer[safe_idx];
+/// ```
+#[inline(always)]
+pub fn array_index_nospec(index: usize, size: usize) -> usize {
+    // Technique Linux kernel : arithmetic right-shift du signe de (index - size).
+    // Si index < size  : index.wrapping_sub(size) → valeur négative (signed) → MSB=1
+    //                    → shift donne 0xFFFF...FF → mask est all-ones → index inchangé.
+    // Si index >= size : index.wrapping_sub(size) → ≥ 0 (signed) → MSB=0
+    //                    → shift donne 0x0000...00 → mask est all-zeros → résultat = 0.
+    let mask = (index.wrapping_sub(size) as isize >> (isize::BITS - 1)) as usize;
+    index & mask
+}
+

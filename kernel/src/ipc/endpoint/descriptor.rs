@@ -220,9 +220,9 @@ impl EndpointDesc {
         }
         // SAFETY: tail est dans [0, ENDPOINT_BACKLOG) et nous avons vérifié
         // qu'il reste de la place (next != head). Seul le producteur écrit ici.
+        // addr_of! évite de créer une &T intermédiaire (strict-aliasing UB).
         unsafe {
-            let slot = &self.backlog[tail as usize] as *const PendingConnection
-                as *mut PendingConnection;
+            let slot = core::ptr::addr_of!(self.backlog[tail as usize]) as *mut PendingConnection;
             core::ptr::write(slot, conn);
         }
         self.backlog_tail.store(next, Ordering::Release);

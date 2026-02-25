@@ -55,8 +55,8 @@ impl SdtHeader {
     /// Valide le checksum : somme de tous les octets = 0 mod 256
     pub fn valid_checksum(&self) -> bool {
         let len = self.length as usize;
+        // SAFETY: structure en mémoire ACPI, longueur validée par le parseur ACPI avant tout appel.
         let bytes = unsafe {
-            // SAFETY: structure en mémoire ACPI, longueur validée par le parseur
             core::slice::from_raw_parts(self as *const _ as *const u8, len)
         };
         bytes.iter().fold(0u8, |acc, b| acc.wrapping_add(*b)) == 0

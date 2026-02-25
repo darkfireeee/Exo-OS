@@ -18,7 +18,8 @@ path = "src/main.rs"
 
 [dependencies]
 # Spinlock simple no_std (pour les gardes dans arch/ en attendant scheduler/sync/)
-spin = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock", "once"] }
+spin     = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock", "once"] }
+bitflags = { version = "2",   default-features = false }
 
 # ── Configuration de profil ──────────────────────────────────────────────────
 

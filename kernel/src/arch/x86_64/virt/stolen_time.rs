@@ -81,6 +81,7 @@ pub fn read_steal_ns(cpu_id: u32) -> u64 {
             core::hint::spin_loop();
             continue;
         }
+        // SAFETY: même structure KVM partagée, seqlock : version paire garantit données cohérentes.
         let steal = unsafe { core::ptr::read_volatile(&st.steal) };
         let ver_after = unsafe { core::ptr::read_volatile(&st.version) };
         if ver_before == ver_after { return steal; }

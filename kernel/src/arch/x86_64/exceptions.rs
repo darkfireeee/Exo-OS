@@ -37,6 +37,12 @@ extern "C" {
     /// Positionne NEED_RESCHED sur le thread courant suite à un IPI reschedule.
     /// `tcb_ptr` = GS:[0x20] (current_tcb). Si null → ignoré.
     fn sched_ipi_reschedule(tcb_ptr: *mut u8);
+    /// Tick du scheduler timer : avance les quantum, décide préemption.
+    /// `cpu_id` = GS:[0x10], `current` = GS:[0x20].
+    fn scheduler_tick(cpu_id: u32, current: *mut u8);
+    /// Pont arch/→process/ : livraison signaux au retour exception Ring 3.
+    /// `tcb_ptr` = GS:[0x20], `excframe` = &mut ExceptionFrame courant.
+    fn proc_signal_on_exception_return(tcb_ptr: *mut u8, excframe: *mut u8);
 }
 
 // ── Frame d'exception ─────────────────────────────────────────────────────────
@@ -255,17 +261,26 @@ define_exception_handler_no_errcode!(ipi_panic_handler,          do_ipi_panic);
 /// Point d'orchestration des signaux après préemption ou exception.
 /// Vérifie `signal_pending` dans le TCB et orchestre la livraison.
 /// La livraison effective est déléguée à `process::signal::delivery`.
-fn exception_return_to_user(_frame: &mut ExceptionFrame) {
-    // NOTE : intégration avec process::signal sera branchée lors de l'init
-    // du module process/. Pattern exact (voir DOC1) :
-    //
-    //   let tcb = scheduler::current_tcb();
-    //   if tcb.signal_pending.load(Ordering::Acquire) {
-    //       process::signal::delivery::handle_pending_signals(tcb);
-    //   }
-    //
-    // arch/ lit le flag et appelle process::signal — jamais l'inverse.
-    // scheduler/ NE livre JAMAIS directement (RÈGLE SWITCH-02).
+fn exception_return_to_user(frame: &mut ExceptionFrame) {
+    // Lire le TCB courant depuis GS:[0x20] (PerCpuData::current_tcb).
+    let tcb_ptr: u64;
+    // SAFETY: GS initialisé par percpu::init() avant tout handler d'exception.
+    unsafe {
+        core::arch::asm!(
+            "mov {}, gs:[0x20]",
+            out(reg) tcb_ptr,
+            options(nostack, nomem),
+        );
+    }
+    if tcb_ptr == 0 { return; }
+    // SAFETY: proc_signal_on_exception_return est thread-safe pour ce CPU.
+    // L'exclusion est garantie par cli implicite dans un handler d'interruption/exception.
+    unsafe {
+        proc_signal_on_exception_return(
+            tcb_ptr as *mut u8,
+            frame as *mut ExceptionFrame as *mut u8,
+        );
+    }
 }
 
 /// Handler #DE — Division par zéro
@@ -278,8 +293,8 @@ extern "C" fn do_divide_error(frame: *mut ExceptionFrame) {
     EXC_COUNTERS[0].fetch_add(1, Ordering::Relaxed);
 
     if frame.from_userspace() {
-        // Envoyer SIGFPE au processus courant
-        // process::signal::deliver::send_signal(SIGFPE) — intégrée ulterieurement
+        // Envoyer SIGFPE au processus courant via exception_return_to_user
+        // (proc_signal_on_exception_return → process::signal::delivery — RÈGLE SIGNAL-01)
         exception_return_to_user(frame);
     } else {
         kernel_panic_exception("Division par zéro kernel", frame);
@@ -642,13 +657,30 @@ extern "C" fn do_irq_timer(frame: *mut ExceptionFrame) {
     super::idt::irq_counter_inc(32);
     TIMER_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
 
-    // 1. EOI APIC (acquitté avant tout traitement pour éviter retard)
-    //    super::apic::local_apic::eoi(); — branché lors de l'init apic
-    //
-    // 2. Tick scheduler
-    //    scheduler::timer::tick::do_tick(); — branché lors de l'init scheduler
-    //
-    // 3. Si retour vers Ring 3 : vérifier préemption + signaux
+    // 1. EOI APIC — acquitté en premier pour minimiser la latence APIC.
+    // SAFETY: LAPIC initialisé avant que les IRQ timer soient activées.
+    super::apic::local_apic::eoi();
+
+    // 2. Tick scheduler : avance les quantum CPU et décide des préemptions.
+    let cpu_id: u32;
+    let tcb_ptr: u64;
+    // SAFETY: GS initialisé par percpu::init() avant tout IRQ timer.
+    unsafe {
+        core::arch::asm!(
+            "mov {:e}, gs:[0x10]",
+            out(reg) cpu_id,
+            options(nostack, nomem),
+        );
+        core::arch::asm!(
+            "mov {}, gs:[0x20]",
+            out(reg) tcb_ptr,
+            options(nostack, nomem),
+        );
+    }
+    // SAFETY: scheduler_tick est thread-safe ; cli implicite dans handler IRQ.
+    unsafe { scheduler_tick(cpu_id, tcb_ptr as *mut u8); }
+
+    // 3. Si retour vers Ring 3 : vérifier préemption + signaux.
     if frame.from_userspace() {
         exception_return_to_user(frame);
     }
@@ -667,8 +699,22 @@ extern "C" fn do_irq_spurious(_frame: *mut ExceptionFrame) {
 #[no_mangle]
 extern "C" fn do_ipi_wakeup(_frame: *mut ExceptionFrame) {
     super::idt::irq_counter_inc(0xF0);
-    // scheduler::smp::wakeup_handler(); — branché lors de l'init scheduler
-    // EOI local APIC
+    // Réutiliser sched_ipi_reschedule : positionne NEED_RESCHED sur le thread
+    // courant (RÈGLE IPI-01) — le reschedule effectif a lieu à l'IRET.
+    let tcb_ptr: u64;
+    // SAFETY: GS initialisé par percpu::init() avant tout IPI.
+    unsafe {
+        core::arch::asm!(
+            "mov {}, gs:[0x20]",
+            out(reg) tcb_ptr,
+            options(nostack, nomem),
+        );
+    }
+    // SAFETY: sched_ipi_reschedule est thread-safe pour le CPU courant.
+    unsafe { sched_ipi_reschedule(tcb_ptr as *mut u8); }
+    // EOI Local APIC — acquitter l'IPI avant le retour d'interruption.
+    // SAFETY: LAPIC initialisé avant tout IPI SMP.
+    super::apic::local_apic::eoi();
 }
 
 /// IPI reschedule (0xF1)
@@ -737,7 +783,13 @@ extern "C" fn do_ipi_tlb_shootdown(_frame: *mut ExceptionFrame) {
 #[no_mangle]
 extern "C" fn do_ipi_cpu_hotplug(_frame: *mut ExceptionFrame) {
     super::idt::irq_counter_inc(0xF3);
-    // scheduler::smp::hotplug::handle_ipi(); — branché lors de l'init
+    // EOI avant halt pour que le BSP ne reste pas bloqué en attente.
+    // SAFETY: LAPIC initialisé avant tout IPI hotplug.
+    super::apic::local_apic::eoi();
+    // Identifier ce CPU et le mettre hors ligne (→ ! — ce CPU ne revient pas).
+    let cpu_id = super::smp::percpu::current_cpu_id();
+    // SAFETY: hotplug_cpu_halt est idempotent et -> ! (arrêt irréversible).
+    super::smp::hotplug::hotplug_cpu_halt(cpu_id);
 }
 
 /// IPI panic broadcast (0xFE)
@@ -760,15 +812,16 @@ extern "C" fn do_ipi_panic(_frame: *mut ExceptionFrame) {
 #[cold]
 #[inline(never)]
 fn kernel_panic_exception(msg: &str, frame: &ExceptionFrame) -> ! {
-    // Dans une implémentation complète : écrire sur un port série ou VGA buffer
-    // Pour l'instant : consommer les paramètres pour éviter les warnings
+    // Dans une implémentation complète : écrire sur un port série ou VGA buffer.
+    // Pour l'instant : consommer les paramètres pour éviter les warnings.
     let _ = msg;
     let _ = frame;
 
-    // Broadcast IPI panic vers les autres CPUs (si APIC disponible)
-    // super::apic::ipi::broadcast_panic(); — branché lors de l'init apic
+    // Broadcaster l'IPI panic vers tous les APs pour les arrêter.
+    // SAFETY: situation non-récupérable ; broadcast_ipi_panic() n'alloue pas.
+    super::apic::ipi::broadcast_ipi_panic();
 
-    // SAFETY: situation non-récupérable
+    // SAFETY: situation non-récupérable — HLT en boucle.
     super::halt_cpu()
 }
 

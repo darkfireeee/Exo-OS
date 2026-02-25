@@ -143,7 +143,7 @@ unsafe impl Send for MpmcChannel {}
 impl MpmcChannel {
     /// Crée un nouveau canal MPMC.
     pub fn new(policy: OverflowPolicy) -> Self {
-        let mut c = Self {
+        let c = Self {
             id: alloc_channel_id(),
             ring: MpmcRing::new_uninit(),
             stats: MpmcStats::new(),

@@ -70,3 +70,13 @@ impl<'a, T> core::ops::DerefMut for KWriteGuard<'a, T> {
 impl<'a, T> Drop for KWriteGuard<'a, T> {
     fn drop(&mut self) { self.rw.state.store(0, Ordering::Release); }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Alias de compatibilité (certains modules utilisent le nom générique RwLock)
+// ─────────────────────────────────────────────────────────────────────────────
+/// Alias public vers [`KRwLock`] pour les crates qui utilisent le nom générique.
+pub type RwLock<T> = KRwLock<T>;
+/// Alias vers [`KReadGuard`].
+pub type RwLockReadGuard<'a, T> = KReadGuard<'a, T>;
+/// Alias vers [`KWriteGuard`].
+pub type RwLockWriteGuard<'a, T> = KWriteGuard<'a, T>;

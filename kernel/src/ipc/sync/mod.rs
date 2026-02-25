@@ -17,8 +17,12 @@ pub mod rendezvous;
 pub use futex::{
     FutexKey,
     WaiterState,
+    FutexIpcStats,
     futex_wait,
     futex_wake,
+    futex_wake_all,
+    futex_cancel,
+    futex_requeue,
     futex_stats,
 };
 

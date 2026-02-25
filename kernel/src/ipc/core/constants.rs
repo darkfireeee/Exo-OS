@@ -14,15 +14,17 @@
 // Contraintes messages
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille maximale d'un message inline (données copiées dans le ring).
-/// 4080 = 4096 - 16 (header IPC) → un message tient dans une page 4 KiB.
-pub const MAX_MSG_SIZE: usize = 4_080;
+/// Taille maximale d'un message inline dans le ring (copie physique).
+/// 240 octets = 256 - 16 (header) → 1 slot tient dans 4 cache lines.
+/// Les messages > 240 octets doivent emprunter le chemin zero-copy SHM.
+pub const MAX_MSG_SIZE: usize = 240;
 
 /// Taille de l'en-tête de message (MessageHeader dans le ring).
 /// 16 bytes : msg_id(8) + flags(4) + len(2) + pad(2).
 pub const MSG_HEADER_SIZE: usize = 16;
 
 /// Taille totale d'un slot de ring = header + payload.
+/// 240 + 16 = 256 bytes = 4 cache lines de 64 bytes.
 pub const RING_SLOT_SIZE: usize = MSG_HEADER_SIZE + MAX_MSG_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,7 +33,9 @@ pub const RING_SLOT_SIZE: usize = MSG_HEADER_SIZE + MAX_MSG_SIZE;
 
 /// Nombre de slots dans un ring standard (SPSC/MPMC).
 /// Puissance de 2 — masque mod = RING_SIZE - 1.
-pub const RING_SIZE: usize = 4_096;
+/// 16 slots suffisent pour le chemin rapide ; les grands volumes passent
+/// par le ring zero-copy SHM (aucune copie inline dans les slots).
+pub const RING_SIZE: usize = 16;
 
 /// Masque de modulo pour un ring de RING_SIZE slots.
 /// N/A si RING_SIZE n'est pas une puissance de 2 (vérifié statiquement).

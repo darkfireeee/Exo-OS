@@ -200,8 +200,9 @@ impl ShmPage {
 impl ShmPage {
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn set_phys_unchecked(&self, phys: PhysAddr) {
-        let p = &self.phys_addr as *const PhysAddr as *mut PhysAddr;
-        *p = phys;
+        // SAFETY: addr_of! crée un *const sans référence intermédiaire — évite l'UB
+        // de mutation via &T. Écriture unique à l'init, le champ est write-once.
+        core::ptr::write(core::ptr::addr_of!(self.phys_addr) as *mut PhysAddr, phys);
     }
 }
 

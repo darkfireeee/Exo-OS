@@ -23,7 +23,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::cell::UnsafeCell;
-use crate::ipc::core::{IpcError, MsgFlags, alloc_message_id, RING_SIZE, RING_MASK};
+use crate::ipc::core::{IpcError, MsgFlags, alloc_message_id, RING_SIZE, RING_MASK, array_index_nospec};
 use crate::ipc::core::transfer::{MessageHeader, RingSlot};
 use super::slot::SlotCell;
 
@@ -91,10 +91,12 @@ impl MpmcRing {
     }
 
     /// Accède à la cellule à la position `pos`.
+    /// Utilise array_index_nospec (RÈGLE IPC-08 — Spectre v1).
     #[inline(always)]
     fn cell_at(&self, pos: u64) -> &SlotCell {
         let cells = unsafe { &*self.cells.get() };
-        &cells[(pos as usize) & RING_MASK]
+        let idx = array_index_nospec((pos as usize) & RING_MASK, RING_SIZE);
+        &cells[idx]
     }
 
     // ───────────────────────────── PUSH (producteur) ─────────────────────

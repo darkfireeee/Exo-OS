@@ -117,7 +117,7 @@ impl RegistryInner {
             return Err(IpcError::ResourceExhausted);
         }
         let mut pos  = (hash as usize) % MAX_ENDPOINTS;
-        let mut dist: RobinHoodDist = 0;
+        let dist: RobinHoodDist = 0;
         let mut cur_hash  = hash;
         let mut cur_ep_id = ep_id;
         let mut cur_dist  = dist;

@@ -101,6 +101,7 @@ fn ioapic_for_gsi(gsi: u32) -> Option<(usize, u32)> {
         let gsi_base = IOAPIC_GSI_BASE[i].load(Ordering::Relaxed) as u32;
         let base = IOAPIC_BASES[i].load(Ordering::Relaxed);
         if base != 0 && gsi >= gsi_base {
+            // SAFETY: base != 0 vérifié ci-dessus ; pointe vers le MMIO I/O APIC initialisé par init_ioapic().
             let max_redir = unsafe { (ioapic_read(base, IOAPIC_VER) >> 16) & 0xFF };
             if gsi < gsi_base + max_redir + 1 {
                 return Some((i, gsi - gsi_base));

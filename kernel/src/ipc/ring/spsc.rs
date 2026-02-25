@@ -25,6 +25,7 @@ use core::cell::UnsafeCell;
 use crate::ipc::core::{
     IpcError, MsgFlags, MessageId, alloc_message_id,
     RING_SIZE, RING_MASK,
+    array_index_nospec,
 };
 use crate::ipc::core::transfer::{RingSlot, MessageHeader};
 use crate::ipc::core::{IpcFastMsg};
@@ -95,10 +96,13 @@ impl SpscRing {
     }
 
     /// Retourne la cellule à la position `pos`.
+    /// Utilise array_index_nospec (RÈGLE IPC-08 — Spectre v1).
     #[inline(always)]
     fn cell_at(&self, pos: u64) -> &SlotCell {
         let cells = unsafe { &*self.cells.get() };
-        &cells[(pos as usize) & RING_MASK]
+        // array_index_nospec : empêche la spéculation CPU hors bornes (Spectre v1).
+        let idx = array_index_nospec((pos as usize) & RING_MASK, RING_SIZE);
+        &cells[idx]
     }
 
     // ───────────────────────── PRODUCTEUR ─────────────────────────────────
@@ -290,9 +294,11 @@ pub fn init_spsc_rings() {
 }
 
 /// Accède au ring correspondant à un channel_id.
+/// array_index_nospec (RÈGLE IPC-08) : empêche la spéculation hors-bornes.
 #[inline(always)]
 fn ring_for(channel_id: u64) -> &'static SpscRing {
-    &SPSC_RINGS[(channel_id as usize) % MAX_SPSC_RINGS]
+    let idx = array_index_nospec((channel_id as usize) % MAX_SPSC_RINGS, MAX_SPSC_RINGS);
+    &SPSC_RINGS[idx]
 }
 
 /// Écriture rapide pour fastcall_asm.s.

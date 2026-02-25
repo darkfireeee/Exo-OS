@@ -22,6 +22,7 @@ use core::mem::MaybeUninit;
 use core::cell::UnsafeCell;
 use crate::ipc::core::transfer::RingSlot;
 use crate::ipc::core::constants::RING_SIZE;
+use crate::ipc::core::types::array_index_nospec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SlotCell — cellule atomique d'un ring
@@ -114,10 +115,11 @@ impl RingBuffer {
     }
 
     /// Accède à la cellule à l'index `pos % RING_SIZE`.
+    /// Utilise array_index_nospec (RÈGLE IPC-08 — Spectre v1).
     #[inline(always)]
     pub fn cell_at(&self, pos: u64) -> &SlotCell {
-        // SAFETY: modulo RING_SIZE garantit un accès dans les bornes.
-        &self.cells[(pos as usize) & (RING_SIZE - 1)]
+        let idx = array_index_nospec((pos as usize) & (RING_SIZE - 1), RING_SIZE);
+        &self.cells[idx]
     }
 }
 

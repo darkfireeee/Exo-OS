@@ -27,7 +27,7 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 pub use crate::ipc::core::transfer::ZeroCopyRef;
-use crate::ipc::core::{IpcError, MsgFlags};
+use crate::ipc::core::{IpcError, MsgFlags, array_index_nospec};
 use super::spsc::SpscRing;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -175,9 +175,11 @@ impl ZeroCopyRing {
         core::sync::atomic::fence(Ordering::Release);
     }
 
+    /// Accès Spectre-safe (RÈGLE IPC-08).
     #[inline(always)]
     fn slot_at(&self, pos: u64) -> &ZcSlot {
-        &self.slots[(pos as usize) & ZC_RING_MASK]
+        let idx = array_index_nospec((pos as usize) & ZC_RING_MASK, ZC_RING_SIZE);
+        &self.slots[idx]
     }
 
     /// Envoie une référence zero-copy.
@@ -187,11 +189,14 @@ impl ZeroCopyRing {
         if slot.seq.load(Ordering::Acquire) != pos {
             return Err(IpcError::WouldBlock);
         }
-        // SAFETY: SPSC — seul producteur.
+        // SAFETY: SPSC — seul producteur. addr_of! évite de créer une &T intermédiaire,
+        // ce qui éviterait l'UB lié au strict-aliasing.
+        // SAFETY: addr_of! évite UB strict-aliasing ; array_index_nospec (IPC-08).
         unsafe {
-            let s = &self.slots[(pos as usize) & ZC_RING_MASK];
+            let safe_idx = array_index_nospec((pos as usize) & ZC_RING_MASK, ZC_RING_SIZE);
+            let s = core::ptr::addr_of!(self.slots[safe_idx]);
             core::ptr::write(
-                &(*s).zc as *const ZeroCopyRef as *mut ZeroCopyRef,
+                core::ptr::addr_of!((*s).zc) as *mut ZeroCopyRef,
                 zc,
             );
         }
@@ -209,7 +214,8 @@ impl ZeroCopyRing {
         }
         // SAFETY: séquence validée → données disponibles. SPSC → seul consommateur.
         let zc = unsafe {
-            core::ptr::read(&self.slots[(pos as usize) & ZC_RING_MASK].zc)
+            let safe_idx = array_index_nospec((pos as usize) & ZC_RING_MASK, ZC_RING_SIZE);
+            core::ptr::read(&self.slots[safe_idx].zc) // IPC-08: safe_idx borne par nospec
         };
         slot.seq.store(pos + ZC_RING_SIZE as u64, Ordering::Release);
         self.tail.store(pos + 1, Ordering::Relaxed);

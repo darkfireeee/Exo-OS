@@ -561,6 +561,12 @@ impl BuddyZone {
         self.free_frames.load(Ordering::Relaxed)
     }
 
+    /// Retourne le nombre total de frames gérées par cette zone.
+    #[inline(always)]
+    pub fn total_frames_count(&self) -> usize {
+        self.total_frames
+    }
+
     /// Retourne les statistiques de l'allocateur.
     pub fn stats(&self) -> BuddyZoneStats {
         let inner = self.inner.lock();
@@ -739,6 +745,14 @@ impl GlobalBuddyAllocator {
         self.zones.iter()
             .filter(|z| z.is_initialized())
             .map(|z| z.free_frames())
+            .sum()
+    }
+
+    /// Retourne le nombre total de frames physiques gérées (libres + utilisées).
+    pub fn total_frames(&self) -> usize {
+        self.zones.iter()
+            .filter(|z| z.is_initialized())
+            .map(|z| z.total_frames_count())
             .sum()
     }
 

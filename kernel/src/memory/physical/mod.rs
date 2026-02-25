@@ -7,6 +7,7 @@ pub mod allocator;
 pub mod frame;
 pub mod zone;
 pub mod numa;
+pub mod stats;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORTS

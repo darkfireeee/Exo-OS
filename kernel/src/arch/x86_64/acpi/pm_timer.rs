@@ -88,6 +88,7 @@ pub fn init_pm_timer(fadt_phys: u64) -> bool {
     };
     if pm_tmr_blk == 0 { return false; }
 
+    // SAFETY: même adresse FADT validée par le parseur ACPI, FADT_FLAGS_OFF est dans la table.
     let fadt_flags = unsafe {
         core::ptr::read_volatile((fadt_phys as usize + FADT_FLAGS_OFF) as *const u32)
     };

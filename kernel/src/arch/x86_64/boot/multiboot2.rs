@@ -124,6 +124,7 @@ pub fn parse_multiboot2(mb2_phys: u64) -> Multiboot2Info {
             }
             TAG_MMAP => {
                 // u32 entry_size + u32 entry_version + entries...
+                // SAFETY: data_addr est dans la zone de tag MB2 validée (tag_size > 8) ; lecture volatile de u32 alignée.
                 let entry_size = unsafe { core::ptr::read_volatile(data_addr as *const u32) } as usize;
                 if entry_size < core::mem::size_of::<MmapEntry>() { break; }
                 let entries_start = data_addr + 8;

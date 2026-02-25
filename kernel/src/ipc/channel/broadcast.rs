@@ -29,7 +29,8 @@ use crate::scheduler::sync::spinlock::SpinLock;
 // ---------------------------------------------------------------------------
 
 /// Nombre maximal d'abonnés par canal de broadcast
-pub const MAX_BROADCAST_SUBSCRIBERS: usize = 64;
+/// (limité pour contenir le budget mémoire statique — SpscRing par abonné).
+pub const MAX_BROADCAST_SUBSCRIBERS: usize = 16;
 
 /// Identifiant d'abonné : index dans le tableau des abonnés
 pub type SubscriberId = u32;
@@ -378,7 +379,7 @@ impl BroadcastChannel {
 // Table statique globale de canaux broadcast
 // ---------------------------------------------------------------------------
 
-pub const BROADCAST_CHANNEL_TABLE_SIZE: usize = 128;
+pub const BROADCAST_CHANNEL_TABLE_SIZE: usize = 16;
 
 struct BroadcastChannelTable {
     slots: [MaybeUninit<BroadcastChannel>; BROADCAST_CHANNEL_TABLE_SIZE],

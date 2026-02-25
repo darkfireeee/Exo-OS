@@ -5,6 +5,7 @@
 
 pub mod address_space;
 pub mod fault;
+pub mod mmap;
 pub mod page_table;
 pub mod vma;
 
@@ -35,4 +36,8 @@ pub use vma::{
 pub use fault::{
     FaultCause, FaultContext, FaultResult,
     handle_page_fault, FAULT_STATS, FaultAllocator,
+};
+pub use mmap::{
+    do_mmap, do_munmap, do_mprotect, do_brk,
+    MmapError, CurrentAsGetterFn, register_current_as_getter,
 };

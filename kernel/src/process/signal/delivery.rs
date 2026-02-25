@@ -247,3 +247,121 @@ fn deliver_one(
 fn clear_signal_pending(thread: &crate::process::core::tcb::ProcessThread) {
     thread.sched_tcb.signal_pending.store(false, Ordering::Release);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pont arch/ → process/ : livraison de signaux au retour d'exception
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Miroir exact de `arch::x86_64::exceptions::ExceptionFrame` (repr(C)).
+/// Utilisé pour accéder sans dépendance circulaire depuis ce module.
+/// INVARIANT : tout changement dans ExceptionFrame DOIT être répercuté ici.
+#[repr(C)]
+struct ExcFrame {
+    r15:        u64,
+    r14:        u64,
+    r13:        u64,
+    r12:        u64,
+    r11:        u64,
+    r10:        u64,
+    r9:         u64,
+    r8:         u64,
+    rbp:        u64,
+    rdi:        u64,
+    rsi:        u64,
+    rdx:        u64,
+    rcx:        u64,
+    rbx:        u64,
+    rax:        u64,
+    error_code: u64,
+    rip:        u64,
+    cs:         u64,
+    rflags:     u64,
+    rsp:        u64,
+    ss:         u64,
+}
+
+/// Pont ABI C pour la livraison de signaux au retour d'exception.
+///
+/// Appelé depuis `arch::x86_64::exceptions::exception_return_to_user()` via
+/// `extern "C"`. Le TCB courant est en `GS:[0x20]`, la frame d'exception est
+/// passée directement.
+///
+/// # Contrat RÈGLE SIGNAL-01
+/// - Ne s'exécute qu'au retour vers Ring 3 (from_userspace() vérifié par l'appelant).
+/// - `handle_pending_signals` n'est jamais appelé depuis le scheduler (RÈGLE SWITCH-02).
+///
+/// # NOTE multi-thread
+/// À ce stade (kernel monothread par processus), `main_thread_ptr()` EST le
+/// thread courant. En multi-thread futur, un registre per-CPU `current_thread_ptr`
+/// devra remplacer ce passage par le PCB.
+///
+/// # Safety
+/// - `tcb_ptr`      : pointeur vers le `ThreadControlBlock` courant (GS:[0x20]).
+/// - `excframe_ptr` : pointeur vers la `ExceptionFrame` sur la pile kernel.
+/// Les deux doivent pointer vers des structures valides et non partagées.
+#[no_mangle]
+pub unsafe extern "C" fn proc_signal_on_exception_return(
+    tcb_ptr:      *mut u8,
+    excframe_ptr: *mut u8,
+) {
+    if tcb_ptr.is_null() || excframe_ptr.is_null() { return; }
+
+    // Lecture rapide du flag signal_pending — évite le lookup PROCESS_REGISTRY
+    // si aucun signal n'est en attente.
+    let sched_tcb = &*(tcb_ptr as *const ThreadControlBlock);
+    if !sched_tcb.signal_pending.load(Ordering::Acquire) { return; }
+
+    // Lookup PCB par pid (nécessaire pour les handlers et le masque).
+    let pid = Pid(sched_tcb.pid.0);
+    let pcb = match PROCESS_REGISTRY.find_by_pid(pid) {
+        Some(p) => p,
+        None    => {
+            // Processus inconnu — effacer le flag orphelin et sortir.
+            sched_tcb.signal_pending.store(false, Ordering::Release);
+            return;
+        }
+    };
+
+    // Récupérer le ProcessThread principal.
+    // SAFETY: À ce stade le processus est monothread ; main_thread_ptr() == thread courant.
+    let thread_ptr = pcb.main_thread_ptr();
+    if thread_ptr.is_null() { return; }
+    let thread = &mut *thread_ptr;
+
+    // Construire un SyscallFrame depuis la ExceptionFrame pour réutiliser
+    // handle_pending_signals() (qui normalise les frames userspace).
+    let exc = &*(excframe_ptr as *const ExcFrame);
+    let mut frame = SyscallFrame {
+        user_rsp:    exc.rsp,
+        user_rip:    exc.rip,
+        user_rflags: exc.rflags,
+        user_rax:    exc.rax,
+        user_rdi:    exc.rdi,
+        user_rsi:    exc.rsi,
+        user_rdx:    exc.rdx,
+        user_rcx:    exc.rcx,
+        user_r8:     exc.r8,
+        user_r9:     exc.r9,
+        user_cs:     exc.cs,
+        user_ss:     exc.ss,
+    };
+
+    // Livraison effective — modifie frame si un handler utilisateur est installé.
+    handle_pending_signals(thread, &mut frame);
+
+    // Répercuter les registres potentiellement modifiés (ex. RIP redirigé vers
+    // le signal handler, RSP vers sigaltstack) dans la frame réelle.
+    let exc_mut      = &mut *(excframe_ptr as *mut ExcFrame);
+    exc_mut.rsp      = frame.user_rsp;
+    exc_mut.rip      = frame.user_rip;
+    exc_mut.rflags   = frame.user_rflags;
+    exc_mut.rax      = frame.user_rax;
+    exc_mut.rdi      = frame.user_rdi;
+    exc_mut.rsi      = frame.user_rsi;
+    exc_mut.rdx      = frame.user_rdx;
+    exc_mut.rcx      = frame.user_rcx;
+    exc_mut.r8       = frame.user_r8;
+    exc_mut.r9       = frame.user_r9;
+    exc_mut.cs       = frame.user_cs;
+    exc_mut.ss       = frame.user_ss;
+}

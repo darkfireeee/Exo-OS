@@ -56,6 +56,8 @@ pub struct UserAddressSpace {
     pml4_phys:  PhysAddr,
     /// ID de processus associé (pour le TLB shootdown ciblé).
     pub pid:    u64,
+    /// Break du heap utilisateur (0 = non initialisé, do_brk fixe la base au premier appel).
+    pub heap_end: AtomicU64,
 }
 
 struct UserAsInner {
@@ -83,6 +85,7 @@ impl UserAddressSpace {
             stats:     UserAsStats::new(),
             pml4_phys,
             pid,
+            heap_end:  AtomicU64::new(0),
         }
     }
 

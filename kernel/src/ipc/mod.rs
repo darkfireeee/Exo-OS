@@ -8,7 +8,6 @@
 //
 //   core/          — types, constantes, séquences, transferts, fastcall asm
 //   ring/          — ring buffers SPSC, MPMC, zero-copy, batch, fusion
-//   capability_bridge/ — vérification et délégation de capabilities
 //   endpoint/      — descripteurs, registre, connexions, lifecycle
 //   channel/       — sync, async, mpmc, broadcast, typed, streaming
 //   shared_memory/ — pages, pool, descripteurs, mappings, allocateur, NUMA
@@ -32,7 +31,6 @@
 
 pub mod core;
 pub mod ring;
-pub mod capability_bridge;
 pub mod endpoint;
 pub mod channel;
 pub mod shared_memory;
@@ -79,7 +77,7 @@ pub use shared_memory::{
 
 // sync/ — API synchronisation IPC
 pub use sync::{
-    futex::{futex_wait, futex_wake},
+    futex::{FutexKey, WaiterState, FutexIpcStats, futex_wait, futex_wake, futex_wake_all, futex_cancel, futex_requeue, futex_stats},
     event::{event_create, event_set, event_wait, event_destroy},
     barrier::{barrier_create, barrier_arrive_and_wait, barrier_destroy},
 };

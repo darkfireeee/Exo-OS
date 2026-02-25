@@ -11,6 +11,7 @@ pub use types::{
     MessageId, ChannelId, EndpointId, Cookie, ProcessId,
     MsgFlags, MessageFlags, MessageType, IpcError, IpcCapError,
     alloc_message_id, alloc_channel_id, alloc_endpoint_id,
+    array_index_nospec,
 };
 pub use constants::*;
 pub use sequence::{SeqSender, SeqReceiver, SeqPair, SeqCheck};
