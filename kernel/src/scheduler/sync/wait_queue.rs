@@ -160,11 +160,21 @@ impl WaitQueue {
 
             let tcb = (*node).tcb;
             if !tcb.is_null() {
-                (*tcb).try_transition(TaskState::Sleeping, TaskState::Runnable);
-                // Re-enqueuer dans la run queue home du thread.
-                let cpu_id = CpuId((*tcb).cpu.load(Ordering::Relaxed));
-                let rq = run_queue(cpu_id);
-                rq.enqueue(NonNull::new_unchecked(tcb));
+                // BUG-FIX K : vérifier que la transition CAS réussit.
+                // Si le thread n'est pas en état Sleeping (ex. déjà Runnable
+                // à cause d'un timeout ou signal concurrent), ne PAS l'enfiler
+                // dans la run queue : il y est peut-être déjà → double-scheduling.
+                let transitioned = (*tcb).try_transition(TaskState::Sleeping, TaskState::Runnable);
+                if transitioned {
+                    // BUG-FIX L : valider les bornes de cpu_id avant run_queue().
+                    // En release mode, debug_assert est no-op → UB si cpu hors limites.
+                    let cpu_raw = (*tcb).cpu.load(Ordering::Relaxed) as usize;
+                    if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
+                        let cpu_id = CpuId(cpu_raw as u32);
+                        let rq = run_queue(cpu_id);
+                        rq.enqueue(NonNull::new_unchecked(tcb));
+                    }
+                }
             }
             emergency_pool_free_wait_node(node);
             WAITQ_WAKEUPS.fetch_add(1, Ordering::Relaxed);

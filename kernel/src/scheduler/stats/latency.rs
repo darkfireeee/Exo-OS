@@ -100,10 +100,12 @@ impl LatencyHist {
 }
 
 /// Retourne le numéro de bucket pour une latence `ns`.
-/// Bucket k = floor(log2(ns + 1)).
+/// Bucket k couvre [bucket_floor(k), bucket_floor(k+1)) où bucket_floor(k) = 2^(k-1) pour k>=1.
+/// Formule : k = nombre de bits de `ns` = `u64::BITS - ns.leading_zeros()`.
+/// Exemples : ns=0→0, ns=1→1, ns=2..3→2, ns=4..7→3, ns=8..15→4.
 #[inline]
 fn bucket_for(ns: u64) -> usize {
-    if ns == 0 { 0 } else { (64 - (ns + 1).leading_zeros()) as usize }
+    if ns == 0 { 0 } else { (u64::BITS - ns.leading_zeros()) as usize }
 }
 
 /// Retourne la borne inférieure du bucket `k` (en ns).

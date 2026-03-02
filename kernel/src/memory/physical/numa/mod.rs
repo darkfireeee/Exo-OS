@@ -1,56 +1,50 @@
 // kernel/src/memory/physical/numa/mod.rs
 //
-// Module NUMA canonique — nœuds NUMA, distances, politiques, migration.
+// ═══════════════════════════════════════════════════════════════════════════════
+// Module NUMA — topologie mémoire NUMA, nœuds, distances, politique, migration
+// ═══════════════════════════════════════════════════════════════════════════════
 //
-// Implémentation conforme à l'arborescence (docs/kernel/memory/arborescence memory.txt).
+// Sous-modules :
+//   node       — descripteurs de nœuds, table NUMA_NODES, compteurs
+//   distance   — table de distances SLIT, closest_node(), numa_distance()
+//   policy     — NumaPolicy, NumaNodeMask, politiques par thread
+//   migration  — migration de pages entre nœuds
+//
+// Re-exports vers memory::numa (via memory/numa.rs qui fait `pub use crate::memory::physical::numa::*;`).
+//
 // COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
+// ═══════════════════════════════════════════════════════════════════════════════
 
-pub mod node;
 pub mod distance;
-pub mod policy;
 pub mod migration;
+pub mod node;
+pub mod policy;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Re-exports
+// Re-exports publics
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use node::{
-    MAX_NUMA_NODES, NUMA_NODE_INVALID,
-    NumaNodeStats, NumaPhysRange, NumaNode, NumaNodeTable, NUMA_NODES,
-    NumaGlobalStats, NUMA_GLOBAL_STATS,
-};
+// Table globale des nœuds NUMA actifs.
+pub use node::{NUMA_NODES, NumaNodeTable, NumaNode, NumaNodeStats, NumaPhysRange,
+               NumaGlobalStats, NUMA_GLOBAL_STATS, MAX_NUMA_NODES, NUMA_NODE_INVALID};
 
-pub use distance::{
-    NUMA_DISTANCE_LOCAL, NUMA_DISTANCE_REMOTE, NUMA_DISTANCE_FAR, NUMA_DISTANCE_UNREACHABLE,
-    NumaDistanceTable, NUMA_DISTANCE,
-    numa_distance, numa_same_node, closest_node,
-};
-
-// NumaPolicy (placement) est distinct de physical::allocator::NumaPolicy (allocateur).
-// Accessible via ce module comme `physical::numa::NumaPolicy`.
-pub use policy::{
-    NumaNodeMask, NumaPolicy,
-    get_system_policy, set_system_policy,
-    NumaPolicyStats, NUMA_POLICY_STATS,
-    select_node, NumaCpuProvider, BspNumaProvider,
-};
-
-pub use migration::{
-    MigrationStats, MIGRATION_STATS,
-    MigrationPageTableOps, MigrateResult,
-    frame_node, migrate_page, migrate_pages_batch,
-};
+// Distances inter-nœuds et helper de nœud le plus proche.
+pub use distance::{numa_distance, numa_same_node, closest_node, NumaDistanceTable,
+                   NUMA_DISTANCE, NUMA_DISTANCE_LOCAL, NUMA_DISTANCE_REMOTE, NUMA_DISTANCE_FAR};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Initialisation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise l'ensemble du sous-système NUMA.
+/// Initialise la topologie NUMA : nœuds + table de distances.
 ///
-/// # Safety : CPL 0.
+/// - Enregistre le nœud 0 (BSP) par défaut.
+/// - Initialise la table de distances avec les valeurs SLIT par défaut
+///   (distance locale = 10, distante = 20).
+///
+/// # Safety
+/// Appelé une seule fois depuis `memory::init()` (Phase 8), en mode Ring 0,
+/// avant l'activation des APs.
 pub unsafe fn init() {
-    node::init();
     distance::init();
-    policy::init();
-    migration::init();
 }

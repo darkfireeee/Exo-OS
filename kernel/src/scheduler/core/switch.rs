@@ -14,9 +14,79 @@
 //   ZONE NO-ALLOC : aucune allocation dans ce chemin chaud
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use super::task::{ThreadControlBlock, TaskState};
+use super::preempt::MAX_CPUS;
 use crate::scheduler::fpu;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pointeur "thread courant" par CPU — mis à jour à chaque context switch
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tableau per-CPU : stocke le pointeur brut vers le TCB du thread en cours
+/// d'exécution sur chaque CPU. Mis à jour atomiquement dans `context_switch()`.
+///
+/// Utilisé par les sous-systèmes externes (IPC, process/) pour obtenir le
+/// TCB courant sans dépendance TLS/GS.
+pub static CURRENT_THREAD_PER_CPU: [AtomicUsize; MAX_CPUS] =
+    [const { AtomicUsize::new(0) }; MAX_CPUS];
+
+/// Retourne le pointeur brut vers le TCB du thread courant sur ce CPU.
+///
+/// En mode mono-CPU ou avant SMP : utilise toujours l'entrée CPU 0.
+/// Sur SMP réel : lire le LAPIC ID ou GS register (TODO).
+///
+/// # Safety
+/// Le pointeur est non-null si le scheduler est initialisé et un thread tourne.
+#[inline]
+pub fn current_thread_raw() -> *mut ThreadControlBlock {
+    // TODO(SMP) : lire `rdmsr(IA32_GS_BASE)` pour obtenir l'ID CPU réel.
+    CURRENT_THREAD_PER_CPU[0].load(Ordering::Acquire) as *mut ThreadControlBlock
+}
+
+/// Bloque le thread courant.
+///
+/// À appeler APRÈS avoir inséré le thread dans une file d'attente (futex bucket,
+/// IpcWaitQueue, etc.) pour garantir qu'un réveil ne sera pas manqué.
+///
+/// Le thread reprend depuis cet appel après que `wake_enqueue()` a été appelé
+/// sur son TCB par la partie réveillante.
+///
+/// # Safety
+/// - La préemption doit être désactivée ou l'appelant doit garantir qu'un réveil
+///   ne peut pas arriver entre l'insertion dans la file et cet appel.
+/// - Le thread doit avoir un mécanisme de réveil en place (waiter.woken, etc.).
+pub unsafe fn block_current_thread() {
+    use crate::scheduler::core::runqueue::run_queue;
+
+    let tcb_ptr = current_thread_raw();
+    if tcb_ptr.is_null() {
+        // Scheduler non encore initialisé — spin court.
+        for _ in 0..1_000 {
+            core::hint::spin_loop();
+        }
+        return;
+    }
+
+    let tcb = &mut *tcb_ptr;
+    let cpu_id = tcb.current_cpu();
+    if (cpu_id.0 as usize) < MAX_CPUS {
+        let rq = run_queue(cpu_id);
+        tcb.set_state(TaskState::Sleeping);
+        schedule_block(rq, tcb);
+        // Le thread reprend ici après que wake_enqueue() a été appelé.
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASM context switch — intégré via global_asm! (switch_asm.s)
+//
+// Inclure le fichier .s complet dans l'unité de compilation Rust évite la
+// nécessité d'un build.rs/cc pour compiler un .s externe. Le linker voit
+// les symboles `context_switch_asm` et `switch_to_new_thread` directement
+// dans l'rlib produit.
+// ─────────────────────────────────────────────────────────────────────────────
+core::arch::global_asm!(include_str!("../asm/switch_asm.s"), options(att_syntax));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FFI vers l'ASM de context switch
@@ -123,6 +193,11 @@ pub unsafe fn context_switch(
     // ── Étape 4 : Post-switch côté `next` ────────────────────────────────────
     // Marquer `next` comme Running.
     next.set_state(TaskState::Running);
+
+    // Mise à jour du pointeur "thread courant" per-CPU (pour IPC, process/, etc.)
+    // SAFETY: cpu() est monotone pendant l'exécution d'un thread sur ce CPU.
+    CURRENT_THREAD_PER_CPU[next.current_cpu().0 as usize]
+        .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
 
     // RÈGLE SWITCH-02 (suite) : Invalider FPU_LOADED pour `next`.
     // La FPU sera restaurée lazily quand `next` utilise une instruction FP (#NM).

@@ -70,12 +70,18 @@ impl AtomicRefCount {
     /// Décrémente le refcount.
     /// Retourne `RefCountDecResult` indiquant ce qu'il faut faire.
     ///
-    /// # Panics (debug)
-    /// Panique si le refcount était déjà à 0 (double-free).
+    /// # Double-free guard (release + debug)
+    /// Si le refcount est déjà 0, stoppe la décrémentation (restore 0) et
+    /// retourne `StillShared` pour éviter une libération incorrecte.
     #[inline]
     pub fn dec(&self) -> RefCountDecResult {
         let prev = self.0.fetch_sub(1, Ordering::AcqRel);
-        debug_assert_ne!(prev, 0, "AtomicRefCount underflow — double-free détecté");
+        if prev == 0 {
+            // Annuler le wrap vers u32::MAX
+            self.0.store(0, Ordering::Release);
+            debug_assert!(false, "AtomicRefCount underflow — double-free détecté");
+            return RefCountDecResult::StillShared;
+        }
 
         match prev {
             1 => RefCountDecResult::ShouldFree,

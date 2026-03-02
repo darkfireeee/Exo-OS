@@ -167,10 +167,21 @@ impl FrameDesc {
 
     /// Décrémente le refcount de manière atomique.
     /// Retourne `true` si le frame doit être libéré (refcount atteint 0).
+    ///
+    /// # Safety – double-free guard
+    /// Si le refcount est déjà 0, la décrémentation serait un double-free.
+    /// On annule l'opération, on remet 0, et on retourne `false`.
+    /// En mode debug, panique immédiatement.
     #[inline(always)]
     pub fn dec_ref(&self) -> bool {
         let prev = self.refcount.fetch_sub(1, Ordering::AcqRel);
-        debug_assert_ne!(prev, 0, "dec_ref avec refcount déjà à 0 — double-free détecté");
+        if prev == 0 {
+            // Double-free : on remet le compteur à 0 pour éviter le wrap u32::MAX
+            self.refcount.store(0, Ordering::Release);
+            // En debug : panique pour faciliter la détection
+            debug_assert!(false, "dec_ref avec refcount déjà à 0 — double-free détecté");
+            return false;
+        }
         prev == 1
     }
 
@@ -267,10 +278,18 @@ impl FrameDesc {
     }
 
     /// Décrémente le mapcount. Retourne `true` si le mapcount atteint 0.
+    ///
+    /// # Safety – underflow guard
+    /// Si mapcount est déjà 0, annule la décrémentation (remet 0) et retourne `false`.
     #[inline(always)]
     pub fn dec_mapcount(&self) -> bool {
         let prev = self.mapcount.fetch_sub(1, Ordering::AcqRel);
-        debug_assert_ne!(prev, 0, "mapcount underflow");
+        if prev == 0 {
+            // Underflow : remet 0 pour éviter le wrap vers u16::MAX
+            self.mapcount.store(0, Ordering::Relaxed);
+            debug_assert!(false, "mapcount underflow");
+            return false;
+        }
         prev == 1
     }
 
@@ -318,10 +337,19 @@ impl FrameDesc {
 
     /// Marque le frame comme libre (remet les flags à FREE, refcount à 0).
     /// SAFETY: L'appelant doit garantir que plus aucune référence n'existe.
+    ///
+    /// # Safety – refcount guard
+    /// Si refcount != 0 en release, refuse de marquer le frame libre pour éviter
+    /// un use-after-free (retourne sans modifier les flags).
     #[inline]
     pub unsafe fn mark_free(&self) {
-        debug_assert_eq!(self.refcount.load(Ordering::Acquire), 0,
-            "mark_free avec refcount != 0");
+        let rc = self.refcount.load(Ordering::Acquire);
+        if rc != 0 {
+            // Use-after-free potentiel : refcount non nul alors qu'on tente
+            // de libérer le frame. On refuse l'opération.
+            debug_assert_eq!(rc, 0, "mark_free avec refcount != 0");
+            return;
+        }
         self.mapcount.store(0, Ordering::Relaxed);
         self.order.store(0, Ordering::Relaxed);
         self.lru_gen.store(0, Ordering::Relaxed);

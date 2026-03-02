@@ -81,7 +81,10 @@ pub struct SyncSlot {
     pub msg_id: AtomicU64,
     /// Horodatage de dépôt (ns depuis boot)
     pub timestamp_ns: AtomicU64,
-    _pad: [u8; 8],
+    /// TID de l'émetteur bloqué (pour le réveil par le récepteur)
+    pub sender_tid: AtomicU32,
+    /// TID du récepteur bloqué (pour le réveil par l'émetteur)
+    pub receiver_tid: AtomicU32,
 }
 
 // SAFETY: SyncSlot est une structure de données partagée entre threads mais
@@ -101,7 +104,8 @@ impl SyncSlot {
             data: UnsafeCell::new([0u8; SYNC_INLINE_SIZE]),
             msg_id: AtomicU64::new(0),
             timestamp_ns: AtomicU64::new(0),
-            _pad: [0u8; 8],
+            sender_tid: AtomicU32::new(0),
+            receiver_tid: AtomicU32::new(0),
         }
     }
 
@@ -112,6 +116,8 @@ impl SyncSlot {
         self.flags.store(0, Ordering::Relaxed);
         self.msg_id.store(0, Ordering::Relaxed);
         self.timestamp_ns.store(0, Ordering::Relaxed);
+        self.sender_tid.store(0, Ordering::Relaxed);
+        self.receiver_tid.store(0, Ordering::Relaxed);
         self.sequence.fetch_add(1, Ordering::Release);
         self.state.store(RendezVousState::Idle as u32, Ordering::Release);
     }
@@ -229,13 +235,15 @@ impl SyncChannel {
             return Err(IpcError::MessageTooLarge);
         }
 
-        // Vérifier que le slot est libre
+        // Attendre que le slot soit libre (pas d'émetteur précédent)
         let cur = self.slot.state.load(Ordering::Acquire);
         if RendezVousState::from_u32(cur) != RendezVousState::Idle {
             if flags.contains(MsgFlags::NOWAIT) {
                 return Err(IpcError::WouldBlock);
             }
-            // Spin-wait courte durée (pas de suspension — canal synchrone simple)
+            // Spin court, puis blocage réel via scheduler.
+            let my_tid = crate::ipc::sync::sched_hooks::current_tid();
+            self.slot.sender_tid.store(my_tid, Ordering::Relaxed);
             let mut spins: u32 = 0;
             loop {
                 core::hint::spin_loop();
@@ -246,6 +254,11 @@ impl SyncChannel {
                 if s == RendezVousState::Idle { break; }
                 if self.is_closed() {
                     return Err(IpcError::Closed);
+                }
+                if spins > 64 {
+                    // Blocage réel — sera réveillé quand l'émetteur précédent termine.
+                    unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
+                    spins = 0;
                 }
                 if spins > 1_000_000 {
                     self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
@@ -267,15 +280,20 @@ impl SyncChannel {
         }
 
         // Transition Idle → SenderWaiting (Release pour rendre les writes visibles)
+        // Enregistrer le TID de l'émetteur avant la transition pour que le
+        // récepteur puisse nous réveiller après avoir pris le message.
+        let my_tid = crate::ipc::sync::sched_hooks::current_tid();
+        self.slot.sender_tid.store(my_tid, Ordering::Relaxed);
         self.slot.state.store(
             RendezVousState::SenderWaiting as u32,
             Ordering::Release,
         );
 
-        // Attendre ReceiverAcked ou Cancelled
+        // Attendre ReceiverAcked ou Cancelled.
+        // Stratégie : spin court (≤ 64 tours) puis blocage réel via scheduler.
         let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
         let mut spins: u64 = 0;
-        let spin_max = if timeout_ns == 0 { u64::MAX } else { timeout_ns / 10 };
+        let spin_hard_limit = if timeout_ns == 0 { u64::MAX } else { timeout_ns / 10 };
 
         loop {
             core::hint::spin_loop();
@@ -285,7 +303,6 @@ impl SyncChannel {
             );
             match s {
                 RendezVousState::ReceiverAcked => {
-                    // Finaliser — remettre le slot à Idle
                     // SAFETY: slot.state == ReceiverAcked, seul l'émetteur reset ici
                     unsafe { self.slot.reset() };
                     self.stats.sends_ok.fetch_add(1, Ordering::Relaxed);
@@ -302,17 +319,12 @@ impl SyncChannel {
             }
 
             if self.is_closed() {
-                // SAFETY: slot.state != ReceiverAcked, on abandonne
-                self.slot.state.store(
-                    RendezVousState::Idle as u32,
-                    Ordering::Release,
-                );
+                self.slot.state.store(RendezVousState::Idle as u32, Ordering::Release);
                 self.stats.sends_cancelled.fetch_add(1, Ordering::Relaxed);
                 return Err(IpcError::Closed);
             }
 
-            if spins >= spin_max && timeout_ns != 0 {
-                // Annuler l'envoi
+            if spins >= spin_hard_limit && timeout_ns != 0 {
                 let _ = self.slot.state.compare_exchange(
                     RendezVousState::SenderWaiting as u32,
                     RendezVousState::Cancelled as u32,
@@ -321,6 +333,17 @@ impl SyncChannel {
                 );
                 self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
                 return Err(IpcError::Timeout);
+            }
+
+            // Après la phase de spin courte : blocage réel.
+            if spins == 64 {
+                // Vérifier une dernière fois avant de bloquer.
+                let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
+                if s2 == RendezVousState::ReceiverAcked || s2 == RendezVousState::Cancelled {
+                    continue; // Sera traité à la prochaine itération
+                }
+                unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
+                spins = 0;
             }
         }
     }
@@ -348,6 +371,9 @@ impl SyncChannel {
         // SAFETY: seul l'émetteur écrit zc_ref ici (état Idle)
         unsafe { *self.slot.zc_ref.get() = zc_ref; }
 
+        // Enregistrer le TID avant la transition pour le réveil par le récepteur.
+        let my_tid = crate::ipc::sync::sched_hooks::current_tid();
+        self.slot.sender_tid.store(my_tid, Ordering::Relaxed);
         self.slot.state.store(
             RendezVousState::SenderWaiting as u32,
             Ordering::Release,
@@ -367,9 +393,17 @@ impl SyncChannel {
                 return Ok(mid);
             }
             if s == RendezVousState::Cancelled || self.is_closed() {
-                // Remettre la ref zero-copy pour éviter la fuite
                 unsafe { self.slot.reset() };
                 return Err(IpcError::Closed);
+            }
+            // Blocage réel après 64 itérations de spin.
+            if spins == 64 {
+                let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
+                if s2 != RendezVousState::SenderWaiting {
+                    continue;
+                }
+                unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
+                spins = 0;
             }
             if spins > 2_000_000 {
                 let _ = self.slot.state.compare_exchange(
@@ -398,7 +432,8 @@ impl SyncChannel {
             return Err(IpcError::Closed);
         }
 
-        // Attendre qu'un émetteur soit là
+        // Attendre qu'un émetteur soit là.
+        // Stratégie : spin court (≤ 64) puis blocage réel.
         if flags.contains(MsgFlags::NOWAIT) {
             let s = RendezVousState::from_u32(
                 self.slot.state.load(Ordering::Acquire),
@@ -408,6 +443,8 @@ impl SyncChannel {
                 return Err(IpcError::WouldBlock);
             }
         } else {
+            let my_tid = crate::ipc::sync::sched_hooks::current_tid();
+            self.slot.receiver_tid.store(my_tid, Ordering::Relaxed);
             let mut spins: u32 = 0;
             loop {
                 let s = RendezVousState::from_u32(
@@ -419,6 +456,10 @@ impl SyncChannel {
                 }
                 core::hint::spin_loop();
                 spins += 1;
+                if spins == 64 {
+                    unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
+                    spins = 0;
+                }
                 if spins > 2_000_000 {
                     return Err(IpcError::Timeout);
                 }
@@ -438,12 +479,16 @@ impl SyncChannel {
 
         if msg_flags.contains(MsgFlags::ZEROCOPY) {
             // Mode zero-copy : retourner la référence sans copie de données
-            // (le récepteur lit le slot.zc_ref directement — len=0 dans buf)
             let copy_len = 0usize.min(buf.len());
+            let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
             self.slot.state.store(
                 RendezVousState::ReceiverAcked as u32,
                 Ordering::Release,
             );
+            // Réveiller l'émetteur s'il est bloqué.
+            if sender_tid != 0 {
+                crate::ipc::sync::sched_hooks::wake_thread(sender_tid);
+            }
             self.stats.recvs_ok.fetch_add(1, Ordering::Relaxed);
             IPC_STATS.record(StatEvent::MessageReceived);
             return Ok((mid, copy_len, msg_flags));
@@ -461,11 +506,16 @@ impl SyncChannel {
             }
         }
 
-        // Signaler l'émetteur
+        // Signaler l'émetteur — transition vers ReceiverAcked.
+        let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
         self.slot.state.store(
             RendezVousState::ReceiverAcked as u32,
             Ordering::Release,
         );
+        // Réveiller l'émetteur s'il est bloqué dans le scheduler.
+        if sender_tid != 0 {
+            crate::ipc::sync::sched_hooks::wake_thread(sender_tid);
+        }
 
         self.stats.recvs_ok.fetch_add(1, Ordering::Relaxed);
         self.stats

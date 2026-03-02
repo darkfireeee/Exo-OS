@@ -30,13 +30,13 @@ core::arch::global_asm!(
     ".long 0xE85250D6",
     // Architecture : 0 = i386 (protected mode — GRUB active le 64 bits après)
     ".long 0",
-    // Longueur du header (16 bytes minimum — magic + arch + length + checksum)
-    ".long 16",
-    // Checksum : -(magic + arch + length) doit valoir 0 mod 2^32
-    // = -(0xE85250D6 + 0 + 16) = -(0xE85250E6) mod 2^32 = 0x17ADAF1A
-    // Note: LLVM assembler n'accepte pas les expressions négatives dans .long
-    ".long 0x17ADAF1A",
-    // End tag (type=0, flags=0, size=8)
+    // Longueur du header : partie fixe (16) + end tag (8) = 24 bytes (spec Multiboot2)
+    // header_length couvre TOUT le header y compris les tags jusqu'à l'end tag inclus.
+    ".long 24",
+    // Checksum : -(magic + arch + header_length) mod 2^32 doit valoir 0
+    // = -(0xE85250D6 + 0 + 24) = -(0xE85250EE) mod 2^32 = 0x17ADAF12
+    ".long 0x17ADAF12",
+    // End tag (type=0, flags=0, size=8) — terminateur obligatoire (spec §3.1.2)
     ".short 0", ".short 0", ".long 8",
 );
 
@@ -85,6 +85,21 @@ core::arch::global_asm!(
     "jmp 0b",
 
     ".size _start, . - _start",
+);
+
+// ── Pile de boot BSP ──────────────────────────────────────────────────────────
+// Section .boot_stack : typ NOBITS (comme .bss, pas stockée dans l'image).
+// Le symbole `_exo_boot_stack_top` pointe APRÈS les 64 KiB, ce qui est
+// l'adresse initiale du RSP (la pile x86 croît vers le bas).
+// Alignement 4 KiB requis pour la page-protection future.
+core::arch::global_asm!(
+    ".section .boot_stack, \"aw\", @nobits",
+    ".balign 4096",
+    ".global _exo_boot_stack_bottom",
+    "_exo_boot_stack_bottom:",
+    ".space 65536",          // 64 KiB — réservé à l'exécution, non présent dans l'image
+    ".global _exo_boot_stack_top",
+    "_exo_boot_stack_top:",  // RSP initial du BSP dans _start
 );
 
 // ── Point d'entrée Rust principal ─────────────────────────────────────────────

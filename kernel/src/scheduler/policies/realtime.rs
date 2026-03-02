@@ -41,15 +41,27 @@ pub static RR_QUANTUM_EXPIRATIONS: AtomicU64 = AtomicU64::new(0);
 /// queue, ce qui déclencherait une préemption du thread courant.
 ///
 /// Retourne `true` si une préemption est nécessaire.
+///
+/// # BUG-FIX Q
+/// L'ancien code utilisait `rt_highest_prio()` qui retourne 0 (= priorité
+/// maximale RT) même quand la file RT est VIDE. Résultat : `highest_waiting (0)
+/// < running_prio` était vrai pour tout thread non-RT (prio > 0), déclenchant
+/// une préemption fantôme sans thread RT en attente.
+/// Correction : `rt_bitmap_highest_prio()` retourne `None` si la file est
+/// vide — la préemption n'est déclenchée que si un thread attend réellement.
 pub fn fifo_should_preempt(rq: &PerCpuRunQueue, running: &ThreadControlBlock) -> bool {
     let running_prio = running.priority.0;
-    let highest_waiting = rq.rt_highest_prio();
-    // RT bitmap: lower index = higher priority. A waiting thread at a lower index preempts.
-    if highest_waiting < running_prio {
-        RT_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
-        true
-    } else {
-        false
+    // rt_bitmap_highest_prio() retourne None si aucun thread RT n'est prêt.
+    match rq.rt_bitmap_highest_prio() {
+        None => false,
+        Some(highest_waiting) => {
+            if highest_waiting < running_prio {
+                RT_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        }
     }
 }
 

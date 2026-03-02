@@ -312,7 +312,7 @@ fn x25519_scalarmult(k_bytes: &[u8; 32], u_bytes: &[u8; 32]) -> [u8; 32] {
 
     let u = Fe::from_bytes(u_bytes);
 
-    let mut x1 = u;
+    let x1 = u;
     let mut x2 = Fe::ONE;
     let mut z2 = Fe::ZERO;
     let mut x3 = u;

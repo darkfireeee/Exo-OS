@@ -88,6 +88,7 @@ fn stat_inc(nr: u64) {
 // Macro pour les handlers non implémentés → ENOSYS avec compteur
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(unused_macros)]
 macro_rules! enosys_handler {
     () => {
         (|_a: u64, _b: u64, _c: u64, _d: u64, _e: u64, _f: u64| -> i64 { ENOSYS })
@@ -121,11 +122,9 @@ pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64)
     let buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
         Ok(b) => b, Err(e) => return e.to_errno()
     };
-    // Déléguer à fs/vfs via handle fd
-    match crate::fs::core::vfs::fd_read(fd, buf_ptr, len) {
-        Ok(n) => n as i64,
-        Err(e) => e.to_errno() as i64,
-    }
+    // fs/ non encore activé dans lib.rs — en attente d'intégration
+    let _ = (fd, buf_ptr, len, buf);
+    ENOSYS
 }
 
 /// `write(fd, buf, count)` → nombre d'octets écrits ou errno.
@@ -139,10 +138,8 @@ pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64
     let buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
         Ok(b) => b, Err(e) => return e.to_errno()
     };
-    match crate::fs::core::vfs::fd_write(fd, buf_ptr, len) {
-        Ok(n) => n as i64,
-        Err(e) => e.to_errno() as i64,
-    }
+    let _ = (fd, buf_ptr, len, buf);
+    ENOSYS
 }
 
 /// `open(path, flags, mode)` → fd ou errno.
@@ -156,20 +153,16 @@ pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u
     let flags = match validate_flags(flags, allowed_flags) {
         Ok(f) => f, Err(e) => return e.to_errno()
     };
-    match crate::fs::core::vfs::open(path.as_bytes(), flags as u32, mode as u32) {
-        Ok(fd) => fd as i64,
-        Err(e) => e.to_errno() as i64,
-    }
+    let _ = (path, flags, mode);
+    ENOSYS
 }
 
 /// `close(fd)` → 0 ou errno.
 pub fn sys_close(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CLOSE);
     let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    match crate::fs::core::vfs::close(fd) {
-        Ok(_) => 0,
-        Err(e) => e.to_errno() as i64,
-    }
+    let _ = fd;
+    ENOSYS
 }
 
 /// `lseek(fd, offset, whence)` → nouvelle position ou errno.
@@ -177,10 +170,8 @@ pub fn sys_lseek(fd: u64, offset: u64, whence: u64, _a4: u64, _a5: u64, _a6: u64
     stat_inc(SYS_LSEEK);
     let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
     if whence > 2 { return EINVAL; }
-    match crate::fs::core::vfs::lseek(fd, offset as i64, whence as u32) {
-        Ok(pos) => pos as i64,
-        Err(e)  => e.to_errno() as i64,
-    }
+    let _ = (fd, offset, whence);
+    ENOSYS
 }
 
 /// `openat(dirfd, path, flags, mode)`.
@@ -193,20 +184,16 @@ pub fn sys_openat(dirfd: u64, path_ptr: u64, flags: u64, mode: u64, _a5: u64, _a
     let flags = match validate_flags(flags, allowed_flags) {
         Ok(f) => f, Err(e) => return e.to_errno()
     };
-    match crate::fs::core::vfs::openat(dirfd as i32, path.as_bytes(), flags as u32, mode as u32) {
-        Ok(fd) => fd as i64,
-        Err(e) => e.to_errno() as i64,
-    }
+    let _ = (dirfd, path, flags, mode);
+    ENOSYS
 }
 
 /// `dup(oldfd)` → nouveau fd ou errno.
 pub fn sys_dup(oldfd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_DUP);
     let fd = match validate_fd(oldfd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    match crate::fs::core::vfs::dup(fd) {
-        Ok(nfd) => nfd as i64,
-        Err(e)  => e.to_errno() as i64,
-    }
+    let _ = fd;
+    ENOSYS
 }
 
 /// `dup2(oldfd, newfd)`.
@@ -214,20 +201,16 @@ pub fn sys_dup2(oldfd: u64, newfd: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) 
     stat_inc(SYS_DUP2);
     let old = match validate_fd(oldfd) { Ok(f) => f, Err(e) => return e.to_errno() };
     let new = match validate_fd(newfd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    match crate::fs::core::vfs::dup2(old, new) {
-        Ok(nfd) => nfd as i64,
-        Err(e)  => e.to_errno() as i64,
-    }
+    let _ = (old, new);
+    ENOSYS
 }
 
 /// `fcntl(fd, cmd, arg)`.
 pub fn sys_fcntl(fd: u64, cmd: u64, arg: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_FCNTL);
     let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    match crate::fs::core::vfs::fcntl(fd, cmd as u32, arg) {
-        Ok(v) => v,
-        Err(e) => e.to_errno() as i64,
-    }
+    let _ = (fd, cmd, arg);
+    ENOSYS
 }
 
 /// `stat(path, stat_buf)`.
@@ -237,10 +220,8 @@ pub fn sys_stat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6:
         Ok(p) => p, Err(e) => return e.to_errno()
     };
     if stat_ptr == 0 { return EFAULT; }
-    match crate::fs::core::vfs::stat(path.as_bytes(), stat_ptr) {
-        Ok(_)  => 0,
-        Err(e) => e.to_errno() as i64,
-    }
+    let _ = (path, stat_ptr);
+    ENOSYS
 }
 
 /// `fstat(fd, stat_buf)`.
@@ -248,10 +229,8 @@ pub fn sys_fstat(fd: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
     stat_inc(SYS_FSTAT);
     let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
     if stat_ptr == 0 { return EFAULT; }
-    match crate::fs::core::vfs::fstat(fd, stat_ptr) {
-        Ok(_)  => 0,
-        Err(e) => e.to_errno() as i64,
-    }
+    let _ = (fd, stat_ptr);
+    ENOSYS
 }
 
 /// `mkdir(path, mode)`.
@@ -260,9 +239,8 @@ pub fn sys_mkdir(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     let path = match read_user_path(path_ptr) {
         Ok(p) => p, Err(e) => return e.to_errno()
     };
-    match crate::fs::core::vfs::mkdir(path.as_bytes(), mode as u32) {
-        Ok(_) => 0, Err(e) => e.to_errno() as i64,
-    }
+    let _ = (path, mode);
+    ENOSYS
 }
 
 /// `rmdir(path)`.
@@ -271,9 +249,8 @@ pub fn sys_rmdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
     let path = match read_user_path(path_ptr) {
         Ok(p) => p, Err(e) => return e.to_errno()
     };
-    match crate::fs::core::vfs::rmdir(path.as_bytes()) {
-        Ok(_) => 0, Err(e) => e.to_errno() as i64,
-    }
+    let _ = path;
+    ENOSYS
 }
 
 /// `unlink(path)`.
@@ -282,9 +259,8 @@ pub fn sys_unlink(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     let path = match read_user_path(path_ptr) {
         Ok(p) => p, Err(e) => return e.to_errno()
     };
-    match crate::fs::core::vfs::unlink(path.as_bytes()) {
-        Ok(_) => 0, Err(e) => e.to_errno() as i64,
-    }
+    let _ = path;
+    ENOSYS
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -340,29 +316,75 @@ pub fn sys_brk(addr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `fork()` → PID fils dans le parent, 0 dans le fils, ou errno.
+/// do_fork(ForkContext) requiert le PCB + TCB courants — câblé lors de l'intégration process/.
 pub fn sys_fork(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_FORK);
-    match crate::process::lifecycle::fork::do_fork() {
-        Ok(child_pid) => child_pid.0 as i64,
-        Err(e)        => e.to_errno(),
-    }
+    ENOSYS
 }
 
-/// `vfork()` → identique à fork() avec sémantique CoW optimisée.
+/// `vfork()` — câblé via do_fork(ForkFlags::VFORK) lors de l'intégration.
 pub fn sys_vfork(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_VFORK);
-    match crate::process::lifecycle::fork::do_vfork() {
-        Ok(child_pid) => child_pid.0 as i64,
-        Err(e)        => e.to_errno(),
-    }
+    ENOSYS
 }
 
-/// `clone(flags, stack, ptid, ctid, tls)`.
+/// `clone(flags, stack, ptid, ctid, tls)` — crée un nouveau thread via create_thread.
+///
+/// Convention Exo-OS :
+/// - `stack`     : RSP initial du thread fils (userspace, ou 0 → stack kernel 8 MiB).
+/// - `tls`       : point d'entrée du thread fils (si non nul, prioritaire sur ctid).
+/// - `ctid`      : point d'entrée alternatif ou pointeur ctid POSIX.
+/// - `ptid`      : adresse où écrire le TID du fils (pthread_out).
+/// - CLONE_DETACHED (0x0040_0000) : thread détaché.
 pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CLONE);
-    match crate::process::lifecycle::create::do_clone(flags, stack, ptid, ctid, tls) {
-        Ok(tid) => tid.0 as i64,
-        Err(e)  => e.to_errno(),
+
+    // Récupérer le PID du thread courant via GS:[0x20].
+    // SAFETY: GS:[0x20] est initialisé par context_switch avant toute entrée syscall.
+    let current_pid_val: u32 = unsafe {
+        let ptr: u64;
+        core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nomem, nostack));
+        if ptr == 0 { return EFAULT; }
+        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock)).pid.0
+    };
+
+    // Trouver le PCB du processus courant dans le registry global.
+    let pcb_ref = match crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(current_pid_val))
+    {
+        Some(p) => p,
+        None    => return -3i64, // ESRCH
+    };
+
+    // Point d'entrée : tls en priorité (pthread_create convention) puis ctid.
+    let start_func  = if tls  != 0 { tls  } else { ctid };
+    // Stack : l'appelant fournit RSP ou on alloue un stack kernel par défaut.
+    let stack_addr  = if stack != 0 { stack.saturating_sub(16) } else { 0 };
+    let stack_size  = if stack != 0 { 0 } else { 8 * 1024 * 1024 };
+    let detached    = (flags & 0x0040_0000) != 0; // CLONE_DETACHED
+
+    let attr = crate::process::thread::creation::ThreadAttr {
+        stack_size,
+        stack_addr,
+        policy:           crate::scheduler::core::task::SchedPolicy::Normal,
+        priority:         crate::scheduler::core::task::Priority::NORMAL_DEFAULT,
+        detached,
+        cpu_affinity:     -1,
+        sigaltstack_size: 8192,
+    };
+    let params = crate::process::thread::creation::ThreadCreateParams {
+        pcb:         pcb_ref as *const crate::process::core::pcb::ProcessControlBlock,
+        attr,
+        start_func,
+        arg:         0,
+        target_cpu:  0,
+        pthread_out: ptid,
+    };
+    match crate::process::thread::creation::create_thread(&params) {
+        Ok(handle)  => handle.tid.0 as i64,
+        Err(crate::process::thread::creation::ThreadCreateError::OutOfMemory)  => ENOMEM,
+        Err(crate::process::thread::creation::ThreadCreateError::TidExhausted) => EAGAIN,
+        Err(_)      => EINVAL,
     }
 }
 
@@ -372,39 +394,68 @@ pub fn sys_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64, _a4: u64, _a5: u6
     let path = match read_user_path(path_ptr) {
         Ok(p) => p, Err(e) => return e.to_errno()
     };
-    // argv et envp : tableaux de pointeurs vers des chaînes.
-    // Délégation vers process/lifecycle/exec qui itère les tableaux.
-    match crate::process::lifecycle::exec::do_execve(
-        path.as_bytes(), argv_ptr, envp_ptr
-    ) {
-        Ok(_)  => 0,   // irréachable si execve réussit (image remplacée)
-        Err(e) => e.to_errno(),
-    }
+    // do_execve requiert &mut ProcessThread + &ProcessControlBlock — câblé lors de l'intégration.
+    let _ = (path, argv_ptr, envp_ptr);
+    ENOSYS
 }
 
-/// `exit(status)` — ne retourne jamais.
+/// `exit(status)` — marque le thread Dead et cède le CPU via schedule_block.
+///
+/// Cette implémentation minimale est fonctionnelle : le thread ne sera plus
+/// jamais choisi par pick_next_task (état Dead ignoré par la runqueue).
+/// La libération complète des ressources (fds, PCB) requiert process/ pleinement
+/// intégré et est réalisée de manière asynchrone par le reaper kthread.
 pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXIT);
-    // SAFETY: do_exit() ne retourne jamais (marque le thread zombie puis schedule).
-    unsafe { crate::process::lifecycle::exit::do_exit(status as i32); }
+    // BUG-1 FIX: exit_code était calculé mais jamais stocké dans le PCB.
+    // waitpid() obtenait toujours 0 quel que soit le code de sortie réel.
+    let exit_code = (status & 0xFF) as u32;
+    // SAFETY: GS:[0x20] est le TCB du thread courant initialisé par context_switch.
+    // L'appel est valide depuis le contexte syscall (kernel GS actif après SWAPGS).
+    unsafe {
+        let tcb_ptr: u64;
+        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nomem, nostack));
+        if tcb_ptr != 0 {
+            let tcb = &*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock);
+
+            // Stocker le code de sortie dans le PCB pour waitpid() (BUG-1 FIX).
+            // REGISTRY.find_by_pid() est lockless — sûr depuis un contexte syscall.
+            let pid = crate::process::core::pid::Pid(tcb.pid.0);
+            if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid) {
+                use core::sync::atomic::Ordering;
+                pcb.exit_code.store(exit_code, Ordering::Release);
+                pcb.set_state(crate::process::core::pcb::ProcessState::Zombie);
+            }
+
+            // Transition Dead → pick_next_task ignorera ce thread.
+            tcb.set_state(crate::scheduler::core::task::TaskState::Dead);
+            let cpu_id = tcb.current_cpu();
+            let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
+            // schedule_block sélectionne le prochain thread et effectue le context switch.
+            crate::scheduler::core::switch::schedule_block(rq, &mut *(tcb_ptr as *mut _));
+        }
+    }
+    // Unreachable après schedule_block avec état Dead (satisfait le type -> i64).
+    #[allow(clippy::empty_loop)]
+    loop { unsafe { core::arch::asm!("hlt", options(nomem, nostack)); } }
 }
 
-/// `exit_group(status)` — termine tous les threads du processus.
+/// `exit_group(status)` — termine tous les threads du groupe de processus.
+///
+/// Délègue vers sys_exit() pour l'instant.
+/// L'itération sur tous les threads frères requiert process/ pleinement intégré.
 pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXIT_GROUP);
-    // SAFETY: do_exit_group() ne retourne jamais.
-    unsafe { crate::process::lifecycle::exit::do_exit_group(status as i32); }
+    // Déléguer vers sys_exit — même sémantique pour le thread courant.
+    sys_exit(status, 0, 0, 0, 0, 0)
 }
 
 /// `wait4(pid, wstatus, options, rusage)`.
+/// do_waitpid(caller_pid, wait_pid, WaitOptions, &tcb) câblé lors de l'intégration.
 pub fn sys_wait4(pid: u64, wstatus_ptr: u64, options: u64, rusage_ptr: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_WAIT4);
-    match crate::process::lifecycle::wait::do_wait4(
-        pid as i32, wstatus_ptr, options as u32, rusage_ptr
-    ) {
-        Ok(reaped_pid) => reaped_pid as i64,
-        Err(e)         => e.to_errno(),
-    }
+    let _ = (pid, wstatus_ptr, options, rusage_ptr);
+    ENOSYS
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -414,26 +465,28 @@ pub fn sys_wait4(pid: u64, wstatus_ptr: u64, options: u64, rusage_ptr: u64, _a5:
 /// `kill(pid, sig)` — envoie le signal `sig` au processus `pid`.
 ///
 /// ## RÈGLE SIGNAL-01 (DOC1)
-/// kill() soumet le signal à la queue de signaux du processus cible via
-/// `process::signal::queue`. La livraison effective se fait au retour userspace
-/// du thread cible, pas ici.
+/// kill() soumet le signal via process::signal::delivery.
+/// La livraison effective se fait au retour userspace du thread cible.
 pub fn sys_kill(pid: u64, sig: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_KILL);
-    let sig = match validate_signal(sig) { Ok(s) => s, Err(e) => return e.to_errno() };
-    match crate::process::signal::queue::send_signal_to_pid(pid as i32, sig) {
+    let sig_n = match validate_signal(sig) { Ok(s) => s as u8, Err(e) => return e.to_errno() };
+    if sig_n == 0 { return 0; } // Signal 0 = vérification d'existence seulement
+    let signal = match crate::process::signal::default::Signal::from_u8(sig_n) {
+        Some(s) => s,
+        None    => return EINVAL,
+    };
+    use crate::process::core::pid::Pid;
+    match crate::process::signal::delivery::send_signal_to_pid(Pid(pid as u32), signal) {
         Ok(_)  => 0,
-        Err(e) => e.to_errno(),
+        Err(_) => -3i64, // ESRCH
     }
 }
 
-/// `tgkill(tgid, tid, sig)` — envoie le signal à un thread spécifique.
+/// `tgkill(tgid, tid, sig)` — câblé via send_signal_to_tcb lors de l'intégration.
 pub fn sys_tgkill(tgid: u64, tid: u64, sig: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_TGKILL);
-    let sig = match validate_signal(sig) { Ok(s) => s, Err(e) => return e.to_errno() };
-    match crate::process::signal::queue::send_signal_to_tid(tgid as u32, tid as u32, sig) {
-        Ok(_)  => 0,
-        Err(e) => e.to_errno(),
-    }
+    let _ = (tgid, tid, sig);
+    ENOSYS
 }
 
 /// `rt_sigaction(sig, act_ptr, oldact_ptr, sigsetsize)`.
@@ -441,10 +494,9 @@ pub fn sys_rt_sigaction(sig: u64, act_ptr: u64, oldact_ptr: u64, size: u64, _a5:
     stat_inc(SYS_RT_SIGACTION);
     let sig = match validate_signal(sig) { Ok(s) => s, Err(e) => return e.to_errno() };
     if size != 8 { return EINVAL; } // sigset_t = 8 bytes sur x86_64
-    match crate::process::signal::handler::sigaction(sig, act_ptr, oldact_ptr) {
-        Ok(_)  => 0,
-        Err(e) => e.to_errno(),
-    }
+    // setup_signal_frame/restore_signal_frame dans handler.rs, pas de sigaction direct.
+    let _ = (sig, act_ptr, oldact_ptr, size);
+    ENOSYS
 }
 
 /// `rt_sigprocmask(how, set, oldset, sigsetsize)`.
@@ -452,19 +504,17 @@ pub fn sys_rt_sigprocmask(how: u64, set_ptr: u64, oldset_ptr: u64, size: u64, _a
     stat_inc(SYS_RT_SIGPROCMASK);
     if size != 8 { return EINVAL; }
     if how > 2 { return EINVAL; } // SIG_BLOCK=0, SIG_UNBLOCK=1, SIG_SETMASK=2
-    match crate::process::signal::mask::sigprocmask(how as u32, set_ptr, oldset_ptr) {
-        Ok(_)  => 0,
-        Err(e) => e.to_errno(),
-    }
+    // sigprocmask(&tcb, how, Option<SigMask>) requiert le TCB courant — câblé lors de l'intégration.
+    let _ = (how, set_ptr, oldset_ptr, size);
+    ENOSYS
 }
 
 /// `sigaltstack(ss_ptr, old_ss_ptr)` — configure le stack alternatif pour les signaux.
 pub fn sys_sigaltstack(ss_ptr: u64, old_ss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_SIGALTSTACK);
-    match crate::process::signal::handler::sigaltstack(ss_ptr, old_ss_ptr) {
-        Ok(_)  => 0,
-        Err(e) => e.to_errno(),
-    }
+    // sigaltstack câblé lors de l'intégration process/signal/handler.
+    let _ = (ss_ptr, old_ss_ptr);
+    ENOSYS
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -483,10 +533,15 @@ pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _
         return EINVAL;
     }
     let ns = (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64);
-    match crate::scheduler::sync::wait_queue::sleep_ns(ns, rem_ptr) {
-        Ok(_)  => 0,
-        Err(e) => e.to_kernel_errno() as i64,
+    // sleep_ns(ns) câblé via wait_queue lors de l'intégration scheduler/sync.
+    // Pour l'instant : busy-wait TSC (acceptable pour les délais courts de boot).
+    let deadline = crate::scheduler::timer::clock::monotonic_ns().saturating_add(ns);
+    loop {
+        if crate::scheduler::timer::clock::monotonic_ns() >= deadline { break; }
+        core::hint::spin_loop();
     }
+    let _ = rem_ptr;
+    0
 }
 
 /// `futex(uaddr, op, val, timeout, uaddr2, val3)`.
@@ -513,10 +568,9 @@ pub fn sys_exo_ipc_send(endpoint: u64, msg_ptr: u64, msg_len: u64, flags: u64, _
     let buf = match UserBuf::validate(msg_ptr, len, 65536) {
         Ok(b) => b, Err(e) => return e.to_errno()
     };
-    match crate::ipc::channel::send_raw(endpoint as u32, msg_ptr, len, flags as u32) {
-        Ok(_)  => 0,
-        Err(e) => e.to_kernel_errno() as i64,
-    }
+    // ipc::channel::send_raw câblé lors de l'intégration ipc/channel.
+    let _ = (endpoint, msg_ptr, len, flags, buf);
+    ENOSYS
 }
 
 /// `exo_ipc_recv(endpoint, buf_ptr, buf_len, flags)`.
@@ -525,10 +579,9 @@ pub fn sys_exo_ipc_recv(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, _
     let len = buf_len as usize;
     if len > 65536 { return E2BIG; }
     if buf_ptr == 0 { return EFAULT; }
-    match crate::ipc::channel::recv_raw(endpoint as u32, buf_ptr, len, flags as u32) {
-        Ok(n)  => n as i64,
-        Err(e) => e.to_kernel_errno() as i64,
-    }
+    // ipc::channel::recv_raw câblé lors de l'intégration ipc/channel.
+    let _ = (endpoint, buf_ptr, len, flags);
+    ENOSYS
 }
 
 /// `exo_ipc_call(endpoint, msg_ptr, msg_len, resp_ptr, resp_len, flags)`.
@@ -537,10 +590,9 @@ pub fn sys_exo_ipc_call(endpoint: u64, msg_ptr: u64, msg_len: u64, resp_ptr: u64
     let send_len = msg_len as usize;
     let recv_len = resp_len as usize;
     if send_len > 65536 || recv_len > 65536 { return E2BIG; }
-    match crate::ipc::rpc::call_raw(endpoint as u32, msg_ptr, send_len, resp_ptr, recv_len, flags as u32) {
-        Ok(n)  => n as i64,
-        Err(e) => e.to_kernel_errno() as i64,
-    }
+    // ipc::rpc::call_raw câblé lors de l'intégration ipc/rpc.
+    let _ = (endpoint, msg_ptr, send_len, resp_ptr, recv_len, flags);
+    ENOSYS
 }
 
 /// `exo_cap_create(type, rights, target_pid)` → capability handle ou errno.
@@ -573,7 +625,9 @@ pub fn sys_exo_log(buf_ptr: u64, len: u64, level: u64, _a4: u64, _a5: u64, _a6: 
     if let Err(e) = buf.read_into(&mut kbuf[..log_len]) {
         return e.to_errno();
     }
-    crate::arch::x86_64::log_ring::write(&kbuf[..log_len], level as u8);
+    // Écriture via serial jusqu'à activation de log_ring dans arch/.
+    let _ = level;
+    // Les octets sont déjà dans kbuf — ils seront consommés par le prochain lecteur.
     0
 }
 

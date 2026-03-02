@@ -190,14 +190,20 @@ fn current_creds() -> Credentials {
         // Noyau sans processus courant (idle task ou boot)
         return Credentials::root();
     }
-    // Accès au registry process global (protégé RCU)
-    match crate::process::core::registry::PROCESS_REGISTRY.get_pcb(pid) {
-        Some(pcb) => Credentials {
-            uid:  pcb.uid.load(Ordering::Relaxed),
-            gid:  pcb.gid.load(Ordering::Relaxed),
-            euid: pcb.euid.load(Ordering::Relaxed),
-            egid: pcb.egid.load(Ordering::Relaxed),
-            ppid: pcb.parent_pid.load(Ordering::Relaxed),
+    // Accès au registry process global (protégé RCU).
+    // ProcessId (scheduler) → Pid (process) : même repr u32.
+    let process_pid = crate::process::core::pid::Pid(pid.0);
+    match crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(process_pid) {
+        Some(pcb) => {
+            // SAFETY: SpinLock<Credentials> — verrouillage court, pas d'alloc.
+            let creds = pcb.creds.lock();
+            Credentials {
+                uid:  creds.uid,
+                gid:  creds.gid,
+                euid: creds.euid,
+                egid: creds.egid,
+                ppid: pcb.ppid.load(Ordering::Relaxed),
+            }
         },
         None => Credentials::root(),
     }
@@ -222,6 +228,18 @@ impl Credentials {
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers fast-path — implémentation directe sans table de dispatch
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Retourne le PID du processus courant depuis GS:[0x20].
+///
+/// Expose la fonction privée `current_pid()` pour les autres modules syscall
+/// (notamment `compat/posix.rs`) qui ont besoin du PID sans passer par le handler.
+///
+/// Retourne 0 si appelé avant le premier context switch (boot).
+#[inline(always)]
+pub fn syscall_current_pid() -> u32 {
+    // SAFETY: appelé depuis le contexte kernel Ring-0, GS kernel actif.
+    unsafe { current_pid() }.0
+}
 
 /// `getpid()` — retourne le PID du processus courant.
 ///
@@ -347,14 +365,9 @@ pub fn sys_clock_gettime(clkid: u64, ts_ptr: u64) -> i64 {
         }
         // CLOCK_PROCESS_CPUTIME_ID / CLOCK_THREAD_CPUTIME_ID
         CLOCK_PROCESS_CPUTIME | CLOCK_THREAD_CPUTIME => {
-            // Temps CPU accumulé — lit depuis le TCB (sum_exec_runtime en ns).
-            let tcb_ptr = unsafe { current_tcb_ptr() };
-            if tcb_ptr.is_null() {
-                0u64
-            } else {
-                // SAFETY: TCB valide (non-null), aucune mutation ici.
-                unsafe { (*tcb_ptr).stats.sum_exec_runtime_ns }
-            }
+            // TaskStats est séparé du TCB (TCB = 128B fixe, pas de champ stats).
+            // Retourne 0 en attendant un pointeur TaskStats dans le TCB étendu.
+            0u64
         }
         _ => return super::numbers::EINVAL,
     };
@@ -405,10 +418,24 @@ pub fn sys_gettimeofday(tv_ptr: u64, tz_ptr: u64) -> i64 {
 /// Performance : ~500–800 cycles (identique au context switch normal).
 pub fn sys_sched_yield() -> i64 {
     FP_YIELD_COUNT.fetch_add(1, Ordering::Relaxed);
-    // SAFETY: schedule_yield est sûr à appeler depuis tout contexte kernel
-    // avec la préemption active et l'IRQ active.
-    // Il ne peut pas être appelé depuis un ISR (irq_depth > 0 → noop interne).
-    unsafe { crate::scheduler::schedule_yield(); }
+    // SAFETY: GS:[0x20] est le pointeur TCB du thread courant, invariant percpu.
+    // Non-nul dès que le scheduler est initialisé et qu'un thread tourne.
+    // run_queue() renvoie une référence statique valide (arène percpu).
+    // schedule_yield() est reentrance-safe : désactive la préemption en interne.
+    unsafe {
+        let tcb_ptr: u64;
+        core::arch::asm!(
+            "mov {0}, gs:[0x20]",
+            out(reg) tcb_ptr,
+            options(nomem, nostack, preserves_flags)
+        );
+        if tcb_ptr != 0 {
+            let tcb = &mut *(tcb_ptr as *mut crate::scheduler::ThreadControlBlock);
+            let cpu_id = tcb.current_cpu();
+            let rq = crate::scheduler::run_queue(cpu_id);
+            crate::scheduler::schedule_yield(rq, tcb);
+        }
+    }
     0
 }
 

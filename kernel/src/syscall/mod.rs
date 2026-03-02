@@ -49,6 +49,7 @@ pub mod fast_path;
 pub mod table;
 pub mod dispatch;
 pub mod compat;
+pub mod fs_bridge;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports publics
@@ -124,14 +125,7 @@ pub use crate::arch::x86_64::syscall::SyscallFrame;
 pub fn init() {
     // Remet les compteurs à zéro (au cas où le noyau serait rechargé en mémoire)
     reset_dispatch_stats();
-
-    // Journaliser l'initialisation
-    crate::exo_log!(
-        crate::exo_logger::Level::Info,
-        "syscall",
-        "module syscall prêt : {} entrées, fast-path activé",
-        SYSCALL_TABLE_SIZE
-    );
+    // Note : la journalisation sera activée lors de l'intégration du log ring.
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

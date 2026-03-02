@@ -96,27 +96,36 @@ impl<T> KMutex<T> {
             // Tenter d'allouer un WaitNode depuis l'EmergencyPool.
             // RÈGLE WAITQ-01 : jamais de Box::new ici.
             if let Some(node) = WaitNode::alloc(tcb, 0) {
-                // Insérer dans la wait queue (FIFO).
-                let wq = &mut *self.waiters.get();
-                wq.insert(node);
-
-                // Marquer le thread comme endormi.
+                // BUG-FIX T : marquer le thread comme endormi AVANT l'insertion
+                // dans la wait queue.
+                // Si on insère d'abord puis set_state(Sleeping), une fenêtre de
+                // race est ouverte : release() peut appeler wake_one() entre les
+                // deux opérations, tenter try_transition(Sleeping→Runnable) sur
+                // un thread encore Running → le CAS échoue → le thread n'est
+                // jamais réenfilé dans la run queue → gel définitif du thread.
                 if !tcb.is_null() {
                     (*tcb).set_state(TaskState::Sleeping);
                 }
 
-                // Attente active avec yield processeur jusqu'au réveil.
-                // Dans un système complet, le scheduler détecte TaskState::Sleeping
-                // et retire ce thread de la run queue lors du prochain pick_next.
-                // Ici on fournit la barrière mémoire qui permet ce mécanisme.
-                loop {
-                    core::hint::spin_loop();
-                    // Le réveil se produit quand release() appelle wake_one() qui
-                    // positionne le thread en Runnable.
-                    if tcb.is_null() { break; }
-                    let state = (*tcb).state();
-                    if state == TaskState::Runnable || state == TaskState::Running {
-                        break;
+                // Insérer dans la wait queue (FIFO) après le changement d'état.
+                let wq = &mut *self.waiters.get();
+                wq.insert(node);
+
+                // BUG-FIX P : utiliser schedule_block() au lieu d'une boucle active.
+                // La boucle active précédente causait deux problèmes critiques :
+                //   1. Brûlait 100% CPU pendant toute la durée de la contention.
+                //   2. Double-scheduling : release() appelait wake_one() → enqueue()
+                //      pendant que ce thread tournait encore sur son CPU, autorisant
+                //      une exécution simultanée sur deux CPUs différents.
+                // schedule_block() suspend proprement le thread sans le ré-enqueuer,
+                // et retourne uniquement quand le thread est réveillé par wake_one().
+                if !tcb.is_null() {
+                    let cpu_raw = (*tcb).cpu.load(Ordering::Relaxed) as usize;
+                    if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
+                        let cpu_id = crate::scheduler::core::task::CpuId(cpu_raw as u32);
+                        // SAFETY: cpu_raw < MAX_CPUS, run queue initialisée.
+                        let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
+                        crate::scheduler::core::switch::schedule_block(rq, &mut *tcb);
                     }
                 }
                 // Note : WaitNode est libéré par wake_one() dans release().

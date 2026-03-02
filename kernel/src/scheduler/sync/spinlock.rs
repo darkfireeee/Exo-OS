@@ -75,15 +75,24 @@ pub struct SpinLockGuard<'a, T> {
 
 impl<'a, T> Deref for SpinLockGuard<'a, T> {
     type Target = T;
-    fn deref(&self) -> &T { unsafe { &*self.lock.data.get() } }
+    fn deref(&self) -> &T {
+        // SAFETY: Le guard est vivant => le verrou est acquis => accès exclusif à data.
+        unsafe { &*self.lock.data.get() }
+    }
 }
 
 impl<'a, T> DerefMut for SpinLockGuard<'a, T> {
-    fn deref_mut(&mut self) -> &mut T { unsafe { &mut *self.lock.data.get() } }
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: &mut self garantit l'unicité; le verrou est acquis => exclusivité.
+        unsafe { &mut *self.lock.data.get() }
+    }
 }
 
 impl<'a, T> Drop for SpinLockGuard<'a, T> {
-    fn drop(&mut self) { unsafe { self.lock.unlock(); } }
+    fn drop(&mut self) {
+        // SAFETY: unlock() ne doit être appelé qu'une fois — garanti par Drop.
+        unsafe { self.lock.unlock(); }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,6 +160,8 @@ impl<'a, T> Drop for IrqSpinLockGuard<'a, T> {
 #[inline(always)]
 pub fn save_and_disable_irq() -> u64 {
     let rflags: u64;
+    // SAFETY: pushfq/pop lisent RFLAGS sans effets mémoire. cli désactive les IRQ
+    // de façon atomique; l'état est restauré dans restore_irq().
     unsafe {
         core::arch::asm!(
             "pushfq",
@@ -166,6 +177,8 @@ pub fn save_and_disable_irq() -> u64 {
 #[inline(always)]
 pub fn restore_irq(rflags: u64) {
     if rflags & (1 << 9) != 0 {
+        // SAFETY: sti restaure exactement l'état IRQ sauvegardé par save_and_disable_irq().
+        // Le bit IF était à 1 avant la désactivation — on le remet à 1.
         unsafe { core::arch::asm!("sti", options(nomem, nostack, preserves_flags)); }
     }
 }

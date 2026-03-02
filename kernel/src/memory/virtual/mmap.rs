@@ -205,6 +205,7 @@ pub fn do_mmap(
 /// Dé-mappe la région virtuelle débutant à `addr`.
 ///
 /// `addr` doit être aligné sur PAGE_SIZE.
+/// Démappe toutes les PTEs présentes dans la VMA et libère leurs frames physiques.
 pub fn do_munmap(addr: u64, _len: usize) -> Result<(), MmapError> {
     if addr == 0 || addr % PAGE_SIZE as u64 != 0 {
         return Err(MmapError::InvalidAddress);
@@ -219,10 +220,29 @@ pub fn do_munmap(addr: u64, _len: usize) -> Result<(), MmapError> {
     match user_as.remove_vma(VirtAddr::new(addr)) {
         None => Err(MmapError::NotMapped),
         Some(vma_ptr) => {
+            // Récupérer les bornes de la VMA avant de libérer le descripteur.
+            let (vma_start, vma_end) = unsafe {
+                let vma = &*vma_ptr;
+                (vma.start, vma.end)
+            };
+
             // Libérer le VmaDescriptor alloué par do_mmap / do_brk.
             // SAFETY: le pointeur est valide et nous sommes les propriétaires.
             let _ = unsafe { Box::from_raw(vma_ptr) };
             user_as.stats.vma_count.fetch_sub(1, Ordering::Relaxed);
+
+            // Démappe chaque page présente dans la table des pages et libère
+            // le frame physique associé.
+            // Les pages non encore faultées (demand paging) retournent None — ignoré.
+            let mut cursor = vma_start.as_u64();
+            while cursor < vma_end.as_u64() {
+                // SAFETY: adresses user canoniques ; flush_single est intégré dans unmap_page.
+                if let Some(frame) = unsafe { user_as.unmap_page(VirtAddr::new(cursor)) } {
+                    // SAFETY: frame retourné exclusivement par unmap_page — pas encore libéré.
+                    let _ = crate::memory::physical::allocator::buddy::free_page(frame);
+                }
+                cursor += PAGE_SIZE as u64;
+            }
             Ok(())
         }
     }
@@ -235,9 +255,13 @@ pub fn do_munmap(addr: u64, _len: usize) -> Result<(), MmapError> {
 /// Modifie les permissions d'une région mémoire existante.
 ///
 /// `addr` doit être aligné sur PAGE_SIZE et correspondre au début d'une VMA.
-pub fn do_mprotect(addr: u64, _len: usize, prot: u32) -> Result<(), MmapError> {
+/// Met à jour les PTEs déjà présentes en table de pages ET invalide le TLB.
+pub fn do_mprotect(addr: u64, len: usize, prot: u32) -> Result<(), MmapError> {
     if addr == 0 || addr % PAGE_SIZE as u64 != 0 {
         return Err(MmapError::InvalidAddress);
+    }
+    if len == 0 {
+        return Err(MmapError::InvalidLength);
     }
 
     let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
@@ -251,17 +275,40 @@ pub fn do_mprotect(addr: u64, _len: usize, prot: u32) -> Result<(), MmapError> {
     // SAFETY: La VMA est valide et protégée par le verrou de l'address space.
     let vma: &mut VmaDescriptor = unsafe { &mut *(vma_const_ptr as *mut VmaDescriptor) };
 
-    // Mettre à jour les flags de page
-    vma.page_flags = prot_to_page_flags(prot);
+    let new_page_flags = prot_to_page_flags(prot);
 
-    // Mettre à jour les flags VMA (READ/WRITE/EXEC uniquement)
+    // Mettre à jour les flags de page dans la VMA (pour les futurs demand-faults).
+    vma.page_flags = new_page_flags;
+
+    // Mettre à jour les flags VMA (READ/WRITE/EXEC uniquement).
     let perm_mask = VmaFlags::READ | VmaFlags::WRITE | VmaFlags::EXEC;
-    let keep      = VmaFlags(vma.flags.bits() & !perm_mask.bits());
+    let keep      = VmaFlags::from_bits(vma.flags.bits() & !perm_mask.bits());
     let mut new_perm = VmaFlags::NONE;
     if prot & PROT_READ  != 0 { new_perm = new_perm | VmaFlags::READ; }
     if prot & PROT_WRITE != 0 { new_perm = new_perm | VmaFlags::WRITE; }
     if prot & PROT_EXEC  != 0 { new_perm = new_perm | VmaFlags::EXEC; }
     vma.flags = keep | new_perm;
+
+    // Appliquer les nouveaux flags sur les PTEs déjà présentes dans la table.
+    // Les pages non encore faultées (demand paging) reçoivent une Err ignorée :
+    // elles hériteront des nouveaux flags lors de leur prochain fault via vma.page_flags.
+    let len_aligned = (len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let range_start = VirtAddr::new(addr);
+    let range_end   = VirtAddr::new(addr + len_aligned as u64);
+
+    let mut walker = crate::memory::virt::page_table::PageTableWalker::new(user_as.pml4_phys());
+    let mut cursor = range_start.as_u64();
+    while cursor < range_end.as_u64() {
+        // remap_flags → Err si page absente (demand paging) → ignoré intentionnellement.
+        let _ = walker.remap_flags(VirtAddr::new(cursor), new_page_flags);
+        cursor += PAGE_SIZE as u64;
+    }
+
+    // Invalider le TLB pour toute la plage modifiée.
+    // SAFETY: adresses user canoniques dans [range_start, range_end).
+    unsafe {
+        crate::memory::virt::address_space::tlb::flush_range(range_start, range_end);
+    }
 
     Ok(())
 }

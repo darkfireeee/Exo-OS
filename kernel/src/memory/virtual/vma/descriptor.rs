@@ -37,6 +37,8 @@ impl VmaFlags {
 
     pub const fn contains(self, other: VmaFlags) -> bool { (self.0 & other.0) == other.0 }
     pub const fn bits(self) -> u32 { self.0 }
+    /// Construit un VmaFlags depuis une valeur brute.
+    pub const fn from_bits(v: u32) -> Self { VmaFlags(v) }
 }
 
 impl core::ops::BitOr for VmaFlags {

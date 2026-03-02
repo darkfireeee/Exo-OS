@@ -33,6 +33,10 @@ use crate::syscall::validation::{
     SyscallError, write_user_typed, read_user_typed, read_user_path,
     validate_fd, validate_pid,
 };
+use crate::process::core::pid::Pid;
+use crate::process::core::registry::PROCESS_REGISTRY;
+use crate::process::core::pcb::process_flags;
+use crate::syscall::fast_path::syscall_current_pid;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteur
@@ -205,115 +209,191 @@ pub fn validate_lseek_whence(whence: u64) -> Result<u32, SyscallError> {
 // Handlers POSIX — Identité / groupes
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `setuid(uid)` — change l'UID réel et effectif.
+/// `setuid(uid)` — POSIX.1-2017 § setuid().
 pub fn sys_setuid(uid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    if uid > u32::MAX as u64 { return EINVAL; }
-    match crate::process::core::registry::PROCESS_REGISTRY.setuid(uid as u32) {
-        Ok(_)  => 0,
-        Err(e) => e.to_errno(),
+    let uid32 = uid as u32;
+    let caller = Pid(syscall_current_pid());
+    match PROCESS_REGISTRY.find_by_pid(caller) {
+        None => EINVAL,
+        Some(pcb) => {
+            let c = pcb.get_creds();
+            // Root : set uid partout ; sinon seulement si uid est dans {uid,euid,suid}.
+            if c.is_root() || uid32 == c.uid || uid32 == c.euid || uid32 == c.suid {
+                pcb.set_uid(uid32);
+                if c.is_root() { pcb.set_euid(uid32); }
+                0
+            } else {
+                EPERM
+            }
+        }
     }
 }
 
-/// `setgid(gid)`.
+/// `setgid(gid)` — POSIX.1-2017 § setgid().
 pub fn sys_setgid(gid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    if gid > u32::MAX as u64 { return EINVAL; }
-    match crate::process::core::registry::PROCESS_REGISTRY.setgid(gid as u32) {
-        Ok(_)  => 0,
-        Err(e) => e.to_errno(),
+    let gid32 = gid as u32;
+    let caller = Pid(syscall_current_pid());
+    match PROCESS_REGISTRY.find_by_pid(caller) {
+        None => EINVAL,
+        Some(pcb) => {
+            let c = pcb.get_creds();
+            if c.is_root() || gid32 == c.gid || gid32 == c.egid || gid32 == c.sgid {
+                pcb.set_gid(gid32);
+                if c.is_root() { pcb.set_egid(gid32); }
+                0
+            } else {
+                EPERM
+            }
+        }
     }
 }
 
-/// `setresuid(ruid, euid, suid)` — change les UIDs réel, effectif et sauvegardé.
+/// `setresuid(ruid, euid, suid)` — POSIX + Linux.
+/// Valeur -1 (u32::MAX) = ne pas modifier ce champ.
 pub fn sys_setresuid(ruid: u64, euid: u64, suid: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    match crate::process::core::registry::PROCESS_REGISTRY.setresuid(
-        ruid as i64, euid as i64, suid as i64
-    ) {
-        Ok(_)  => 0,
-        Err(e) => e.to_errno(),
+    let r32 = ruid as u32;
+    let e32 = euid as u32;
+    let s32 = suid as u32;
+    let caller = Pid(syscall_current_pid());
+    match PROCESS_REGISTRY.find_by_pid(caller) {
+        None => EINVAL,
+        Some(pcb) => {
+            let c = pcb.get_creds();
+            // Chaque valeur doit être u32::MAX (ne pas changer), ou l'un des IDs courants, ou 0 si root.
+            let ok_uid = |v: u32| v == u32::MAX || c.is_root()
+                || v == c.uid || v == c.euid || v == c.suid;
+            if ok_uid(r32) && ok_uid(e32) && ok_uid(s32) {
+                pcb.set_resuid(r32, e32, s32);
+                0
+            } else {
+                EPERM
+            }
+        }
     }
 }
 
-/// `getresuid(ruid_ptr, euid_ptr, suid_ptr)`.
+/// `getresuid(ruid_ptr, euid_ptr, suid_ptr)` — écrit les 3 UIDs en espace user.
 pub fn sys_getresuid(ruid_ptr: u64, euid_ptr: u64, suid_ptr: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    if ruid_ptr == 0 || euid_ptr == 0 || suid_ptr == 0 { return EFAULT; }
-    if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.current_pcb() {
-        let ruid = pcb.uid.load(Ordering::Relaxed);
-        let euid = pcb.euid.load(Ordering::Relaxed);
-        let suid = pcb.suid.load(Ordering::Relaxed);
-        let _ = write_user_typed::<u32>(ruid_ptr, ruid);
-        let _ = write_user_typed::<u32>(euid_ptr, euid);
-        let _ = write_user_typed::<u32>(suid_ptr, suid);
-        0
-    } else {
-        ESRCH
+    let caller = Pid(syscall_current_pid());
+    match PROCESS_REGISTRY.find_by_pid(caller) {
+        None => EINVAL,
+        Some(pcb) => {
+            let c = pcb.get_creds();
+            if write_user_typed(ruid_ptr, c.uid).is_err()
+                || write_user_typed(euid_ptr, c.euid).is_err()
+                || write_user_typed(suid_ptr, c.suid).is_err()
+            {
+                return EFAULT;
+            }
+            0
+        }
     }
 }
 
-/// `setresgid(rgid, egid, sgid)`.
+/// `setresgid(rgid, egid, sgid)` — POSIX + Linux.
+/// Valeur u32::MAX = ne pas modifier ce champ.
 pub fn sys_setresgid(rgid: u64, egid: u64, sgid: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    match crate::process::core::registry::PROCESS_REGISTRY.setresgid(
-        rgid as i64, egid as i64, sgid as i64
-    ) {
-        Ok(_)  => 0,
-        Err(e) => e.to_errno(),
+    let r32 = rgid as u32;
+    let e32 = egid as u32;
+    let s32 = sgid as u32;
+    let caller = Pid(syscall_current_pid());
+    match PROCESS_REGISTRY.find_by_pid(caller) {
+        None => EINVAL,
+        Some(pcb) => {
+            let c = pcb.get_creds();
+            let ok_gid = |v: u32| v == u32::MAX || c.is_root()
+                || v == c.gid || v == c.egid || v == c.sgid;
+            if ok_gid(r32) && ok_gid(e32) && ok_gid(s32) {
+                pcb.set_resgid(r32, e32, s32);
+                0
+            } else {
+                EPERM
+            }
+        }
     }
 }
 
-/// `getresgid(rgid_ptr, egid_ptr, sgid_ptr)`.
+/// `getresgid(rgid_ptr, egid_ptr, sgid_ptr)` — écrit les 3 GIDs en espace user.
 pub fn sys_getresgid(rgid_ptr: u64, egid_ptr: u64, sgid_ptr: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    if rgid_ptr == 0 || egid_ptr == 0 || sgid_ptr == 0 { return EFAULT; }
-    if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.current_pcb() {
-        let _ = write_user_typed::<u32>(rgid_ptr, pcb.gid.load(Ordering::Relaxed));
-        let _ = write_user_typed::<u32>(egid_ptr, pcb.egid.load(Ordering::Relaxed));
-        let _ = write_user_typed::<u32>(sgid_ptr, pcb.sgid.load(Ordering::Relaxed));
-        0
-    } else {
-        ESRCH
+    let caller = Pid(syscall_current_pid());
+    match PROCESS_REGISTRY.find_by_pid(caller) {
+        None => EINVAL,
+        Some(pcb) => {
+            let c = pcb.get_creds();
+            if write_user_typed(rgid_ptr, c.gid).is_err()
+                || write_user_typed(egid_ptr, c.egid).is_err()
+                || write_user_typed(sgid_ptr, c.sgid).is_err()
+            {
+                return EFAULT;
+            }
+            0
+        }
     }
 }
 
-/// Errno non défini dans numbers.rs : ESRCH (no such process)
-const ESRCH: i64 = -3;
-
-/// `setsid()` — crée une nouvelle session.
+/// `setsid()` — crée une nouvelle session pour le processus courant.
+/// Échoue si le processus est déjà leader de groupe (POSIX.1-2017).
 pub fn sys_setsid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    match crate::process::group::session::setsid() {
-        Ok(sid) => sid.0 as i64,
-        Err(e)  => e.to_errno(),
+    let caller = Pid(syscall_current_pid());
+    match PROCESS_REGISTRY.find_by_pid(caller) {
+        None => EINVAL,
+        Some(pcb) => {
+            if pcb.is_pgroup_leader() {
+                return EPERM; // Échec si déjà leader de groupe de processus
+            }
+            let new_sid = caller.0;
+            pcb.set_session_id(new_sid);
+            pcb.set_pgroup_id(new_sid);
+            // SAFETY: fetch_or sur AtomicU32 — pas d'alloc, pas de droits manquants.
+            pcb.flags.fetch_or(process_flags::SESSION_LEADER, Ordering::Release);
+            new_sid as i64
+        }
     }
 }
 
-/// `getsid(pid)`.
+/// `getsid(pid)` — retourne le SID du processus `pid` (ou du processus courant si pid=0).
 pub fn sys_getsid(pid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    match crate::process::group::session::getsid(pid as u32) {
-        Ok(sid) => sid.0 as i64,
-        Err(e)  => e.to_errno(),
+    let target = if pid == 0 {
+        Pid(syscall_current_pid())
+    } else {
+        Pid(pid as u32)
+    };
+    match PROCESS_REGISTRY.find_by_pid(target) {
+        None    => EINVAL,
+        Some(p) => p.session_id() as i64,
     }
 }
 
-/// `setpgid(pid, pgid)`.
+/// `setpgid(pid, pgid)` — délègue vers process::group::pgrp::setpgid.
 pub fn sys_setpgid(pid: u64, pgid: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    match crate::process::group::pgroup::setpgid(pid as u32, pgid as u32) {
+    use crate::process::core::pid::Pid;
+    use crate::process::group::pgrp::{PgId, setpgid};
+    match setpgid(Pid(pid as u32), PgId(pgid as u32)) {
         Ok(_)  => 0,
-        Err(e) => e.to_errno(),
+        Err(_) => EINVAL,
     }
 }
 
-/// `getpgid(pid)`.
+/// `getpgid(pid)` — retourne le PGID du processus `pid` (ou du processus courant si pid=0).
 pub fn sys_getpgid(pid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    match crate::process::group::pgroup::getpgid(pid as u32) {
-        Ok(pgid) => pgid.0 as i64,
-        Err(e)   => e.to_errno(),
+    let target = if pid == 0 {
+        Pid(syscall_current_pid())
+    } else {
+        Pid(pid as u32)
+    };
+    match PROCESS_REGISTRY.find_by_pid(target) {
+        None    => EINVAL,
+        Some(p) => p.pgroup_id() as i64,
     }
 }
 
@@ -321,70 +401,53 @@ pub fn sys_getpgid(pid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
 // Handlers POSIX — umask, times, getdents64
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `umask(mask)` — change le masque de création de fichiers.
+/// `umask(mask)` — modifie le masque de création de fichier.
+/// Note : le PCB ne stocke pas encore de champ `umask` dédié.
+/// Cette implémentation retourne le masque demandé (stub partiel, mieux que ENOSYS).
+/// TODO Task-5 : ajouter `umask: AtomicU32` dans PCB et stocker la valeur réelle.
 pub fn sys_umask(mask: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    let old = crate::process::core::registry::PROCESS_REGISTRY.set_umask((mask & 0o777) as u32);
-    old as i64
+    // Masque toujours limité aux 9 bits de permission fichier.
+    (mask & 0o777) as i64
 }
 
-/// `getdents64(fd, dirp, count)` — lit des entrées de répertoire en format 64-bit.
+/// `getdents64(fd, dirp, count)` — câblé lors de l'activation de fs/.
 pub fn sys_getdents64(fd: u64, dirp: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    let len = (count as usize).min(crate::syscall::validation::IO_BUF_MAX);
-    if dirp == 0 { return EFAULT; }
-    match crate::fs::core::vfs::getdents64(fd, dirp, len) {
-        Ok(n)  => n as i64,
-        Err(e) => e.to_errno() as i64,
-    }
+    let _ = (fd, dirp, count);
+    ENOSYS
 }
 
-/// `readlink(path, buf, bufsize)`.
+/// `readlink(path, buf, bufsize)` — câblé lors de l'activation de fs/.
 pub fn sys_readlink(path_ptr: u64, buf_ptr: u64, bufsize: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    let path = match read_user_path(path_ptr) {
-        Ok(p) => p, Err(e) => return e.to_errno()
-    };
-    let len = (bufsize as usize).min(crate::syscall::validation::PATH_MAX);
-    if buf_ptr == 0 { return EFAULT; }
-    match crate::fs::core::vfs::readlink(path.as_bytes(), buf_ptr, len) {
-        Ok(n)  => n as i64,
-        Err(e) => e.to_errno() as i64,
-    }
+    let _ = (path_ptr, buf_ptr, bufsize);
+    ENOSYS
 }
 
-/// `readlinkat(dirfd, path, buf, bufsize)`.
+/// `readlinkat(dirfd, path, buf, bufsize)` — câblé lors de l'activation de fs/.
 pub fn sys_readlinkat(dirfd: u64, path_ptr: u64, buf_ptr: u64, bufsize: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    let path = match read_user_path(path_ptr) {
-        Ok(p) => p, Err(e) => return e.to_errno()
-    };
-    let len = (bufsize as usize).min(crate::syscall::validation::PATH_MAX);
-    if buf_ptr == 0 { return EFAULT; }
-    match crate::fs::core::vfs::readlinkat(dirfd as i32, path.as_bytes(), buf_ptr, len) {
-        Ok(n)  => n as i64,
-        Err(e) => e.to_errno() as i64,
-    }
+    let _ = (dirfd, path_ptr, buf_ptr, bufsize);
+    ENOSYS
 }
 
 /// `times(tbuf)` — retourne les temps CPU consommés.
 pub fn sys_times(tbuf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    // struct tms { tms_utime, tms_stime, tms_cutime, tms_cstime : clock_t (i64) }
+    // struct tms { utime, stime, cutime, cstime : i64 }
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
     struct Tms { utime: i64, stime: i64, cutime: i64, cstime: i64 }
 
-    // Lire les temps du thread courant depuis le TCB
-    let tms = Tms::default(); // Rempli depuis TCB stats quand process/ sera complet
+    let tms = Tms::default();
     if tbuf_ptr != 0 {
         if let Err(e) = write_user_typed::<Tms>(tbuf_ptr, tms) {
             return e.to_errno();
         }
     }
-    // Retourne le nombre de ticks d'horloge depuis le boot
-    let ticks = crate::scheduler::timer::clock::monotonic_ns() / 1_000_000; // ms comme tick
+    // Ticks depuis le boot (ms comme approximation d'un tick HZ=1000)
+    let ticks = crate::scheduler::timer::clock::monotonic_ns() / 1_000_000;
     ticks as i64
 }
 
@@ -392,53 +455,32 @@ pub fn sys_times(tbuf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
 // Handlers POSIX — Identification de groupes
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `getgroups(size, list_ptr)` — retourne les groupes supplémentaires.
+/// `getgroups(size, list_ptr)` — câblé lors de l'intégration credentials.
 pub fn sys_getgroups(size: u64, list_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    if size == 0 {
-        // size=0 → retourne juste le nombre de groupes
-        return match crate::process::core::registry::PROCESS_REGISTRY.get_groups_count() {
-            Ok(n) => n as i64,
-            Err(e) => e.to_errno(),
-        };
-    }
-    if list_ptr == 0 { return EFAULT; }
-    match crate::process::core::registry::PROCESS_REGISTRY.get_groups(list_ptr, size as usize) {
-        Ok(n)  => n as i64,
-        Err(e) => e.to_errno(),
-    }
+    let _ = (size, list_ptr);
+    ENOSYS
 }
 
-/// `setgroups(size, list_ptr)` — remplace la liste de groupes supplémentaires.
+/// `setgroups(size, list_ptr)` — câblé lors de l'intégration credentials.
 pub fn sys_setgroups(size: u64, list_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    if size > 65536 { return E2BIG; }
-    if size > 0 && list_ptr == 0 { return EFAULT; }
-    match crate::process::core::registry::PROCESS_REGISTRY.set_groups(list_ptr, size as usize) {
-        Ok(_)  => 0,
-        Err(e) => e.to_errno(),
-    }
+    let _ = (size, list_ptr);
+    ENOSYS
 }
 
-/// `capget(hdrp, datap)` — lit les capabilities POSIX.1e.
+/// `capget(hdrp, datap)` — câblé lors de l'intégration security/capability.
 pub fn sys_capget(hdrp: u64, datap: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    if hdrp == 0 { return EFAULT; }
-    // Délégue à security/capability
-    match crate::security::capability::capget(hdrp, datap) {
-        Ok(_)  => 0,
-        Err(e) => e.to_kernel_errno() as i64,
-    }
+    let _ = (hdrp, datap);
+    ENOSYS
 }
 
-/// `capset(hdrp, datap)` — écrit les capabilities.
+/// `capset(hdrp, datap)` — câblé lors de l'intégration security/capability.
 pub fn sys_capset(hdrp: u64, datap: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    if hdrp == 0 || datap == 0 { return EFAULT; }
-    match crate::security::capability::capset(hdrp, datap) {
-        Ok(_)  => 0,
-        Err(e) => e.to_kernel_errno() as i64,
-    }
+    let _ = (hdrp, datap);
+    ENOSYS
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

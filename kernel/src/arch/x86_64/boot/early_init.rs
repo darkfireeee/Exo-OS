@@ -29,19 +29,25 @@
 
 // ── Pile de boot du BSP ───────────────────────────────────────────────────────
 
-/// Taille de la pile de boot initiale (64 KiB)
-const BOOT_STACK_SIZE: usize = 64 * 1024;
+// La pile de boot BSP (64 KiB) est définie dans main.rs via global_asm! sous
+// la section .boot_stack (type @nobits, non stockée dans l'image).
+// Le symbole `_exo_boot_stack_top` est le sommet (adresse de fin) de la pile ;
+// c'est l'adresse chargée dans RSP par `_start` au tout début du boot.
 
-/// Pile de boot statique (allouée dans la section .boot_stack dédiée).
-/// La section .boot_stack est placée par linker.ld AVANT .bss, garantissant
-/// que `_exo_boot_stack_top` pointe bien à la fin de cette pile.
-#[link_section = ".boot_stack"]
-#[used]
-static BOOT_STACK: [u8; BOOT_STACK_SIZE] = [0u8; BOOT_STACK_SIZE];
+extern "C" {
+    /// Sommet de la pile de boot BSP (adresse de fin + 1 de la section .boot_stack).
+    /// Défini par le global_asm! dans main.rs.
+    static _exo_boot_stack_top: u8;
+}
 
+/// Retourne l'adresse du sommet de la pile de boot BSP.
+///
+/// Utilisé pour initialiser RSP0 dans la TSS avant le premier task switch.
 pub fn boot_stack_top() -> u64 {
-    // SAFETY: adresse de la fin du tableau statique
-    unsafe { BOOT_STACK.as_ptr().add(BOOT_STACK_SIZE) as u64 }
+    // &raw const est stable depuis Rust 1.82 et ne requière pas unsafe.
+    // _exo_boot_stack_top est défini dans main.rs (global_asm!),
+    // jamais nul, valide pour toute la durée de vie du kernel.
+    &raw const _exo_boot_stack_top as u64
 }
 
 // ── Informations de boot passées au kernel principal ──────────────────────────

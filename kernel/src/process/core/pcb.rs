@@ -441,6 +441,75 @@ impl ProcessControlBlock {
         self.creds.lock().is_root()
     }
 
+    // ────────────────────────────────────────────────────────────────────────────
+    // Mutateurs de credentials POSIX
+    // ────────────────────────────────────────────────────────────────────────────
+
+    /// Retourne une copie des credentials courants.
+    #[inline]
+    pub fn get_creds(&self) -> Credentials {
+        *self.creds.lock()
+    }
+
+    /// `setuid(uid)` — met à jour uid et fsuid.
+    #[inline]
+    pub fn set_uid(&self, uid: u32) {
+        let mut c = self.creds.lock();
+        c.uid   = uid;
+        c.fsuid = uid;
+    }
+
+    /// `setgid(gid)` — met à jour gid et fsgid.
+    #[inline]
+    pub fn set_gid(&self, gid: u32) {
+        let mut c = self.creds.lock();
+        c.gid   = gid;
+        c.fsgid = gid;
+    }
+
+    /// `seteuid(euid)`.
+    #[inline]
+    pub fn set_euid(&self, euid: u32) {
+        self.creds.lock().euid = euid;
+    }
+
+    /// `setegid(egid)`.
+    #[inline]
+    pub fn set_egid(&self, egid: u32) {
+        self.creds.lock().egid = egid;
+    }
+
+    /// `setfsuid(fsuid)`.
+    #[inline]
+    pub fn set_fsuid(&self, fsuid: u32) {
+        self.creds.lock().fsuid = fsuid;
+    }
+
+    /// `setfsgid(fsgid)`.
+    #[inline]
+    pub fn set_fsgid(&self, fsgid: u32) {
+        self.creds.lock().fsgid = fsgid;
+    }
+
+    /// `setresuid(ruid, euid, suid)` — -1 signifie "ne pas changer".
+    #[inline]
+    pub fn set_resuid(&self, ruid: u32, euid: u32, suid: u32) {
+        let mut c = self.creds.lock();
+        // Convention POSIX : (u32::MAX) = ne pas modifier
+        if ruid != u32::MAX { c.uid  = ruid; c.fsuid = ruid; }
+        if euid != u32::MAX { c.euid = euid; }
+        if suid != u32::MAX { c.suid = suid; }
+    }
+
+    /// `setresgid(rgid, egid, sgid)` — u32::MAX signifie "ne pas changer".
+    #[inline]
+    pub fn set_resgid(&self, rgid: u32, egid: u32, sgid: u32) {
+        let mut c = self.creds.lock();
+        if rgid != u32::MAX { c.gid  = rgid; c.fsgid = rgid; }
+        if egid != u32::MAX { c.egid = egid; }
+        if sgid != u32::MAX { c.sgid = sgid; }
+    }
+
     /// Pointeur vers l'espace d'adressage (opaque).
     #[inline(always)]
     pub fn address_space_ptr(&self) -> *mut u8 {

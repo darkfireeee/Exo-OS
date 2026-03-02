@@ -125,7 +125,18 @@ pub unsafe fn pick_next_task(
             let final_next = if next.as_ref().policy == crate::scheduler::core::task::SchedPolicy::Normal
                 || next.as_ref().policy == crate::scheduler::core::task::SchedPolicy::Batch
             {
-                ai_guided::maybe_prefer(rq, next)
+                let preferred = ai_guided::maybe_prefer(rq, next);
+                // BUG-FIX A : si l'IA a choisi un thread alternatif (alt != candidate) :
+                //   – `next` (candidate) a été extrait par rq.pick_next() → le remettre.
+                //   – `preferred` (alt) est encore dans la queue CFS via cfs_peek_second
+                //     et doit être retiré avant d'être exécuté.
+                // Sans cette correction : `next` est perdu et `preferred` est
+                // double-schedulé (trong la queue ET en train de tourner).
+                if preferred != next {
+                    rq.enqueue(next);      // remettre le candidat original (+nr_running)
+                    rq.remove(preferred);  // retirer l'élu IA de la queue (-nr_running)
+                }
+                preferred
             } else {
                 next
             };

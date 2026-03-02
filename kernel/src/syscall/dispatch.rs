@@ -105,8 +105,7 @@ pub fn dispatch_stats() -> DispatchStats {
 #[no_mangle]
 pub fn dispatch(frame: &mut SyscallFrame) {
     // ── [0] Instrumentation début ──────────────────────────────────────────
-    // SAFETY: RDTSC est non-privilégié, aucun effet de bord.
-    let tsc_start = unsafe { read_tsc() };
+    let tsc_start = read_tsc();
     DISPATCH_TOTAL.fetch_add(1, Ordering::Relaxed);
 
     // ── [1] Extraction des arguments ───────────────────────────────────────
@@ -181,8 +180,7 @@ fn post_dispatch(frame: &mut SyscallFrame, tsc_start: u64) {
     check_and_deliver_signals(frame);
 
     // ── Instrumentation latence (échantillon 1/256) ───────────────────────
-    // SAFETY: RDTSC est non-privilégié, sans effet de bord.
-    let tsc_end = unsafe { read_tsc() };
+    let tsc_end = read_tsc();
     let elapsed = tsc_end.saturating_sub(tsc_start);
     // Échantillonnage : bit 7 de tsc_end pour éviter le modulo coûteux.
     if (tsc_end & 0xFF) == 0 {
@@ -261,9 +259,11 @@ fn check_and_deliver_signals(frame: &mut SyscallFrame) {
     // avec IRQs actives (les signaux peuvent potentiellement être ré-entrants
     // via SIGINT etc., mais handle_pending_signals() utilise un masque).
     let frame_ptr: *mut SyscallFrame = frame as *mut SyscallFrame;
-    unsafe {
-        crate::process::signal::delivery::handle_pending_signals(tcb_ptr as *mut _, frame_ptr as *mut _);
-    }
+    // CÂBLAGE DIFFÉRÉ : handle_pending_signals attend (&mut ProcessThread, &mut SyscallFrame).
+    // tcb_ptr ici est un *const ThreadControlBlock (scheduler), pas un ProcessThread.
+    // L'intégration complète se fera via un trampolineprocess/signal lors de l'unification
+    // du TCB scheduler↔process.
+    let _ = (tcb_ptr, frame_ptr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

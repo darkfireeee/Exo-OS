@@ -279,9 +279,10 @@ impl PerCpuPoolTable {
         debug_assert!(cpu_id < MAX_CPUS, "cpu_id hors limites");
         self.pools[cpu_id].init(cpu_id);
         self.nr_cpus.fetch_max(cpu_id + 1, Ordering::Relaxed);
-        // Marquer comme initialisé (on utilise le bit cpu_id dans initialized)
-        // Pour >64 CPUs, on utiliserait un tableau, mais MAX_CPUS=256 ≤ usize×4
-        // Simplifié ici : on borne à usize::BITS CPUs dans ce bitmask single-word
+        // Marquer comme initialisé (bitmask single-word : couvre les CPUs 0..usize::BITS)
+        // TODO: passer à [AtomicUsize; MAX_CPUS/usize::BITS] pour supporter MAX_CPUS > 64
+        // Note de sûreté : les CPUs ≥ usize::BITS ne seront pas marqués dans le bitmask
+        // mais leur pool sera quand même vide (count = 0) et donc safe.
         if cpu_id < usize::BITS as usize {
             self.initialized.fetch_or(1 << cpu_id, Ordering::Release);
         }

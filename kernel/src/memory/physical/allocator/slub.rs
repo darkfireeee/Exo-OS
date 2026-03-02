@@ -114,8 +114,7 @@ struct SlubCacheInner {
     empty_count:   usize,
     /// Nombre de slubs complets (sans pointeur — on ne les suit pas).
     full_count:    usize,
-    /// Curseur vmalloc pour les nouveaux mappings.
-    vmalloc_bump:  u64,
+    // Note : plus de vmalloc_bump — adresse virtuelle dérivée de phys via physmap
 }
 
 // SAFETY: SlubCache est protégé par son Mutex interne.
@@ -132,7 +131,6 @@ impl SlubCache {
                 empty:         core::ptr::null_mut(),
                 empty_count:   0,
                 full_count:    0,
-                vmalloc_bump:  crate::memory::core::layout::KERNEL_HEAP_START.as_u64() + 0x0020_0000_0000u64,
             }),
             stats:   SlubCacheStats::new(),
             enabled: AtomicBool::new(false),
@@ -246,9 +244,11 @@ impl SlubCache {
     }
 
     fn create_new_slub(&self, inner: &mut SlubCacheInner) -> Result<NonNull<u8>, AllocError> {
-        let _phys = SLAB_PAGE_PROVIDER.get_page()?;
-        let virt_base = inner.vmalloc_bump;
-        inner.vmalloc_bump += PAGE_SIZE as u64;
+        let phys = SLAB_PAGE_PROVIDER.get_page()?;
+        // Adresse virtuelle = physmap directe (PHYS_MAP_BASE + phys).
+        // La physmap couvre l'intégralité de la RAM physique sans mapping supplémentaire.
+        let virt_base = crate::memory::core::layout::PHYS_MAP_BASE.as_u64() + phys.as_u64();
+        let _ = phys; // phys est désormais encodé dans virt_base
 
         // Générer une clé XOR pseudo-aléatoire basée sur l'adresse virtuelle
         let key = (virt_base as usize).wrapping_mul(0x9e3779b97f4a7c15);

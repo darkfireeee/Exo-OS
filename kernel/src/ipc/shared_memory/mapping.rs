@@ -10,8 +10,9 @@
 //   3. Délègue le mappage réel au memory manager (interface opaque)
 //   4. Applique le flag NO_COW à toutes les pages mappées
 //
-// Note : memory/ n'est pas encore implémenté — les hooks de mappage réel
-// sont des stubs documentés qui seront connectés lors de l'intégration.
+// Les hooks de mappage (MapPageFn / UnmapPageFn) sont connectés au boot via
+// `ipc::ipc_install_vmm_hooks()`. Sans hook installé, shm_map() opère en
+// mode simulé (virt = phys) — acceptable en dev/test mono-processus.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use core::mem::MaybeUninit;

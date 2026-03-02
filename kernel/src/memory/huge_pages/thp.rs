@@ -113,17 +113,23 @@ pub unsafe fn free_huge_page(frame: Frame) {
 ///
 /// # Safety
 /// `frame` doit être un frame de base de huge page (aligné 2 MiB).
+///
+/// # Propriété mémoire
+/// Le bloc order-9 reste "alloué" dans le buddy ; l'appelant est responsable de
+/// libérer chaque frame individuel (order-0) quand il n'en a plus besoin.
+/// Le buddy coalesera progressivement les frames libérés — sans `free_pages`
+/// ici, donc pas de double-ownership entre l'appelant et le buddy.
 pub unsafe fn split_huge_page(frame: Frame) -> [Frame; 512] {
     THP_STATS.splits.fetch_add(1, Ordering::Relaxed);
-    // La huge page est physiquement contiguë — on retourne les 512 frames.
+    THP_STATS.current_huge.fetch_sub(1, Ordering::Relaxed);
+    // La huge page est physiquement contiguë — calculer les 512 frames de 4 KiB.
+    // NE PAS appeler free_pages : le bloc order-9 reste "en cours d'utilisation"
+    // du point de vue du buddy. L'appelant transfert la propriété en 512 frames.
     let base = frame.phys_addr().as_u64();
     let mut frames = [Frame::from_phys_addr(PhysAddr::new(0)); 512];
     for i in 0..512usize {
         frames[i] = Frame::from_phys_addr(PhysAddr::new(base + (i as u64 * PAGE_SIZE as u64)));
     }
-    // On re-libère la huge page dans le buddy et on ré-alloue chaque page.
-    let _ = free_pages(frame, HUGE_PAGE_ORDER as usize);
-    THP_STATS.current_huge.fetch_sub(1, Ordering::Relaxed);
     frames
 }
 

@@ -14,7 +14,7 @@
 //   6. Équilibrage de charge (tous les BALANCE_INTERVAL_TICKS ticks)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use core::ptr::NonNull;
 use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy, task_flags, CpuId};
 use crate::scheduler::core::runqueue;
@@ -32,6 +32,14 @@ pub const TICK_NS: u64 = 1_000_000_000 / HZ;
 // Temps accumulé sur le CPU courant depuis la dernière sélection du thread (par CPU).
 static ELAPSED_NS: [AtomicU64; 256] = {
     const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; 256]
+};
+
+/// Dernier pointeur TCB observé par CPU — permet de détecter un changement de thread
+/// et de remettre ELAPSED_NS à zéro pour ne pas imputer le temps de l'ancien thread
+/// au nouveau (BUG-FIX R).
+static LAST_TCB_PTR: [AtomicUsize; 256] = {
+    const ZERO: AtomicUsize = AtomicUsize::new(0);
     [ZERO; 256]
 };
 
@@ -65,6 +73,17 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
 
     // Accumuler l'elapsed sur ce CPU.
     let cpu_idx = (cpu_id as usize).min(255);
+
+    // BUG-FIX R : remettre ELAPSED_NS à zéro quand un nouveau thread est détecté.
+    // Sans ce correctif, un thread qui vient de prendre le CPU hérite du temps
+    // accumulé par le thread précédent (switch volontaire : yield, sleep, mutex)
+    // et peut être préempté dès son premier tick, indépendamment de son quantum CFS.
+    let current_ptr = current as usize;
+    if LAST_TCB_PTR[cpu_idx].load(Ordering::Relaxed) != current_ptr {
+        ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
+        LAST_TCB_PTR[cpu_idx].store(current_ptr, Ordering::Relaxed);
+    }
+
     let elapsed = ELAPSED_NS[cpu_idx].fetch_add(TICK_NS, Ordering::Relaxed) + TICK_NS;
 
     match tcb.policy {
@@ -91,11 +110,28 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
                 TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
             }
         }
+        SchedPolicy::Deadline => {
+            // ── 4b. Budget SCHED_DEADLINE ──────────────────────────────
+            // BUG-FIX S : vérifier l'épuisement du budget EDF à chaque tick.
+            // Sans ce correctif, les threads SCHED_DEADLINE n'appelaient jamais
+            // `deadline_tick()`, ignoraient leur `runtime_ns` et s'exécutaient
+            // indéfiniment sans respecter leur budget par période.
+            if crate::scheduler::policies::deadline::deadline_tick(tcb, elapsed) {
+                tcb.flags.fetch_or(task_flags::NEED_RESCHED, Ordering::Release);
+                ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
+                TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         _ => {}
     }
 
     // ── 5. Hrtimers ───────────────────────────────────────────────────────
     hrtimer::fire_expired(cpu_id as usize);
+
+    // ── 5b. Deadline miss check (BUG-FIX D) ──────────────────────────────
+    // Avant ce correctif, dl_tick() n'était jamais appelé : les threads
+    // SCHED_DEADLINE ne détectaient jamais leurs deadline misses.
+    crate::scheduler::timer::deadline_timer::dl_tick(cpu_id as usize);
 
     // ── 6. Équilibrage de charge ──────────────────────────────────────────
     if tick % BALANCE_INTERVAL_TICKS == 0 {

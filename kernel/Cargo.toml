@@ -25,9 +25,11 @@ bitflags = { version = "2",   default-features = false }
 
 [profile.dev]
 # Pas d'optimisation en dev mais pas de débogage avec info trop verbeuse
-opt-level = 0
-debug      = true
-panic      = "abort"          # pas de stack unwinding en no_std
+opt-level     = 0
+debug         = true
+panic         = "abort"          # pas de stack unwinding en no_std
+codegen-units = 1                # Empêche le splitting CGU (256 CGUs par défaut) qui orpheline
+                                 # les global_asm! (context_switch_asm, _exo_boot_stack_top)
 
 [profile.release]
 opt-level  = 3

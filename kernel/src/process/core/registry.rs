@@ -22,7 +22,7 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use super::pid::Pid;
-use super::pcb::ProcessControlBlock;
+use super::pcb::{ProcessControlBlock, Credentials};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -202,6 +202,25 @@ impl ProcessRegistry {
                 f(unsafe { &*raw });
             }
         }
+    }
+
+    /// Accède aux credentials d'un processus et applique une fermeture mutatrice.
+    ///
+    /// Retourne `Some(R)` si le processus existe, `None` sinon.
+    /// La fermeture reçoit `&mut Credentials` pour modification atomique.
+    ///
+    /// # Example
+    /// ```rust
+    /// PROCESS_REGISTRY.with_creds_mut_by_pid(pid, |c| { c.euid = 0; });
+    /// ```
+    pub fn with_creds_mut_by_pid<F, R>(&self, pid: Pid, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut Credentials) -> R,
+    {
+        let pcb = self.find_by_pid(pid)?;
+        // SAFETY: SpinLock<Credentials> — verrouillage court (quelques instructions),
+        // pas d'allocation ni d'appel système à l'intérieur.
+        Some(f(&mut *pcb.creds.lock()))
     }
 
     /// Statistiques de la registry pour le système de monitoring.

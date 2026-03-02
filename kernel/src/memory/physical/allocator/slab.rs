@@ -12,7 +12,7 @@ use spin::Mutex;
 use crate::memory::core::{
     AllocError, AllocFlags, Frame, PhysAddr, VirtAddr, PAGE_SIZE, CACHE_LINE_SIZE,
 };
-use crate::memory::core::layout::KERNEL_HEAP_START;
+use crate::memory::core::layout::PHYS_MAP_BASE;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLASSES DE TAILLE SLAB
@@ -143,7 +143,7 @@ struct SlabCacheInner {
     full_count:    usize,
     free_count:    usize,
     color_next:    usize, // Couleur actuelle pour le prochain slab
-    vmalloc_ptr:   u64,   // Pointeur de progression dans l'espace vmalloc (boot-time mapping)
+    // Note : plus de vmalloc_ptr — adresse virtuelle dérivée de phys via physmap
 }
 
 // SAFETY: SlabCache est protégé par son Mutex interne.
@@ -162,7 +162,6 @@ impl SlabCache {
                 full_count:    0,
                 free_count:    0,
                 color_next:    0,
-                vmalloc_ptr:   crate::memory::core::layout::KERNEL_HEAP_START.as_u64() + 0x0010_0000_0000u64, // offset réservé slab
             }),
             stats:   SlabCacheStats::new(),
             enabled: AtomicBool::new(false),
@@ -296,9 +295,9 @@ impl SlabCache {
         // par la couche parente via un pointeur de fonction statique.
         let phys = SLAB_PAGE_PROVIDER.get_page()?;
 
-        // Adresse virtuelle = bump pointer dans l'espace vmalloc réservé aux slabs
-        let virt_base  = inner.vmalloc_ptr;
-        inner.vmalloc_ptr += PAGE_SIZE as u64;
+        // Adresse virtuelle = physmap directe (PHYS_MAP_BASE + phys).
+        // La physmap couvre toute la RAM physique sans mapping supplémentaire.
+        let virt_base = PHYS_MAP_BASE.as_u64() + phys.as_u64();
 
         // Calculer la couleur de cache
         let color = if info.color_range > 0 {
@@ -346,7 +345,6 @@ impl SlabCache {
         }
 
         // Insérer dans la liste partielle
-        let _ = phys;
         unsafe { list_push_front(header_ptr, &mut inner.partial_list, &mut inner.partial_count); }
 
         // Allouer le premier objet

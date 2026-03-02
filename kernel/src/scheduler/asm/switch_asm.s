@@ -127,12 +127,17 @@ switch_to_new_thread:
     // Charger le nouveau stack pointer
     movq    %rsi, %rsp
 
-    // Pour un tout nouveau thread, le "stack" a été préparé avec :
-    //   [rsp+0]  = retour vers thread_entry_trampoline
-    //   [rsp+8]  = rbx initial (0)
-    //   [rsp+16] = rbp initial (0)
-    //   ...
-    // On fait simplement ret, qui va vers thread_entry_trampoline.
+    // Pour un tout nouveau thread, le "stack" a été préparé par le code Rust
+    // de création de thread avec le layout suivant (SANS la zone MXCSR+FCW) :
+    //   [kernel_rsp+ 0] = rbx initial (0)
+    //   [kernel_rsp+ 8] = rbp initial (0)
+    //   [kernel_rsp+16] = r12 initial (0)
+    //   [kernel_rsp+24] = r13 initial (0)
+    //   [kernel_rsp+32] = r14 initial (0)
+    //   [kernel_rsp+40] = r15 initial (0)
+    //   [kernel_rsp+48] = adresse de retour → thread_entry_trampoline
+    //
+    // On dépile les 6 registres (48 bytes), puis ret saute vers thread_entry_trampoline.
     popq    %rbx
     popq    %rbp
     popq    %r12

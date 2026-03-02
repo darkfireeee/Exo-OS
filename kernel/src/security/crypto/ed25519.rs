@@ -264,10 +264,12 @@ fn sqrt_minus1() -> Fe {
 
 /// Point de courbe en coordonnées étendues (X:Y:Z:T).
 #[derive(Clone, Copy)]
+#[allow(non_snake_case)]
 struct GeP3 { X: Fe, Y: Fe, Z: Fe, T: Fe }
 
 /// Point en coordonnées (p1p1) pour l'addition.
 #[derive(Clone, Copy)]
+#[allow(non_snake_case)]
 struct GeP1P1 { X: Fe, Y: Fe, Z: Fe, T: Fe }
 
 /// Point pré-calculé pour la base (multiplication rapide scalaire).
@@ -449,7 +451,7 @@ fn sc_reduce64(s: &mut [u8; 64]) {
     let s20 = 2097151 & (load4b(s, 52) >> 4);
     let s21 = 2097151 & (load3b(s, 55) >> 1);
     let s22 = 2097151 & (load4b(s, 57) >> 6);
-    let s23 =           (load4b(s, 60) >> 3);
+    let s23 =           load4b(s, 60) >> 3;
 
     // Réduction en place...
     let mut v = [s0,s1,s2,s3,s4,s5,s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16,s17,s18,s19,s20,s21,s22,s23];
@@ -541,7 +543,7 @@ fn sc_muladd(s: &mut [u8; 32], a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) {
     let a8  = m21 & load3b(a,21);
     let a9  = m21 & (load4b(a,23)>>5);
     let a10 = m21 & (load3b(a,26)>>2);
-    let a11 =       (load4b(a,28)>>7);
+    let a11 =       load4b(a,28)>>7;
     let b0  = m21 & load3b(b,0);
     let b1  = m21 & (load4b(b,2)>>5);
     let b2  = m21 & (load3b(b,5)>>2);
@@ -553,7 +555,7 @@ fn sc_muladd(s: &mut [u8; 32], a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) {
     let b8  = m21 & load3b(b,21);
     let b9  = m21 & (load4b(b,23)>>5);
     let b10 = m21 & (load3b(b,26)>>2);
-    let b11 =       (load4b(b,28)>>7);
+    let b11 =       load4b(b,28)>>7;
     let c0  = m21 & load3b(c,0);
     let c1  = m21 & (load4b(c,2)>>5);
     let c2  = m21 & (load3b(c,5)>>2);
@@ -565,7 +567,7 @@ fn sc_muladd(s: &mut [u8; 32], a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) {
     let c8  = m21 & load3b(c,21);
     let c9  = m21 & (load4b(c,23)>>5);
     let c10 = m21 & (load3b(c,26)>>2);
-    let c11 =       (load4b(c,28)>>7);
+    let c11 =       load4b(c,28)>>7;
     let _ = (m, load3b, load4b, &L);
 
     let mut t = [0i64; 23];

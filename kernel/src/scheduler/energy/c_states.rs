@@ -55,19 +55,37 @@ static CSTATE_MAX: [AtomicU8; MAX_CPUS] = {
     [INIT; MAX_CPUS]
 };
 
+/// BUG-FIX G : compteur du nombre de threads RT actifs par CPU.
+/// Avant ce correctif, `release_rt_constraint()` restaurait C3 immédiatement
+/// même si d'autres threads RT tournaient encore sur le même CPU.
+static RT_ACTIVE_COUNT: [AtomicU8; MAX_CPUS] = {
+    const ZERO: AtomicU8 = AtomicU8::new(0);
+    [ZERO; MAX_CPUS]
+};
+
 /// Applique la contrainte RT : force C1 maximum sur le CPU `cpu`.
 /// Utilise `fetch_min` pour respecter RÈGLE CSTATE-01.
 pub fn constrain_rt(cpu: usize) {
     if cpu < MAX_CPUS {
+        RT_ACTIVE_COUNT[cpu].fetch_add(1, Ordering::Relaxed);
         CSTATE_MAX[cpu].fetch_min(CState::C1 as u8, Ordering::AcqRel);
     }
 }
 
 /// Relâche la contrainte RT sur le CPU `cpu`.
-/// Appelé quand le dernier thread RT quitte le CPU.
+/// Ne restaure C3 que quand le dernier thread RT quitte le CPU.
 pub fn release_rt_constraint(cpu: usize) {
     if cpu < MAX_CPUS {
-        CSTATE_MAX[cpu].store(CState::C3 as u8, Ordering::Release);
+        // Décrémenter le compteur RT, saturation sur 0.
+        let prev = RT_ACTIVE_COUNT[cpu]
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+                Some(v.saturating_sub(1))
+            })
+            .unwrap_or(0);
+        // Restaurer C3 uniquement si c'était le dernier thread RT actif.
+        if prev <= 1 {
+            CSTATE_MAX[cpu].store(CState::C3 as u8, Ordering::Release);
+        }
     }
 }
 
@@ -147,5 +165,6 @@ pub unsafe fn enter_cstate(cs: CState) {
 pub unsafe fn init(nr_cpus: usize) {
     for cpu in 0..nr_cpus.min(MAX_CPUS) {
         CSTATE_MAX[cpu].store(CState::C3 as u8, Ordering::Relaxed);
+        RT_ACTIVE_COUNT[cpu].store(0, Ordering::Relaxed);
     }
 }

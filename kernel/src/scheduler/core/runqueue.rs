@@ -397,8 +397,17 @@ impl PerCpuRunQueue {
             SchedPolicy::Fifo | SchedPolicy::RoundRobin => {
                 self.rt.enqueue(tcb);
             }
-            SchedPolicy::Normal | SchedPolicy::Batch | SchedPolicy::Deadline => {
+            SchedPolicy::Normal | SchedPolicy::Batch => {
                 self.cfs.enqueue(tcb);
+            }
+            SchedPolicy::Deadline => {
+                // SCHED_DEADLINE → file EDF dédiée (échéance la plus proche en tête).
+                // SAFETY: préemption désactivée (INVARIANT), cpu.0 < MAX_CPUS garanti.
+                unsafe {
+                    crate::scheduler::timer::deadline_timer::dl_enqueue(
+                        self.cpu.0 as usize, tcb,
+                    );
+                }
             }
             SchedPolicy::Idle => { /* géré par idle_thread */ }
         }
@@ -440,6 +449,13 @@ impl PerCpuRunQueue {
                     if cur == RT_QUEUE_NONE { break false; }
                 }
             }
+            SchedPolicy::Deadline => {
+                // SCHED_DEADLINE → retirer de la file EDF dédiée.
+                // SAFETY: DL_QUEUES init, préemption désactivée.
+                unsafe {
+                    crate::scheduler::timer::deadline_timer::dl_remove(self.cpu.0 as usize, tcb)
+                }
+            }
             _ => self.cfs.remove(tcb),
         };
         if removed {
@@ -458,16 +474,36 @@ impl PerCpuRunQueue {
         // 1. Priorité absolue : file RT.
         if self.rt.count > 0 {
             self.stats.picks_rt.fetch_add(1, Ordering::Relaxed);
-            return self.rt.dequeue_highest();
+            let tcb = self.rt.dequeue_highest()?;
+            // BUG-FIX B : décrémenter nr_running — le thread passe Runnable → Running.
+            // Avant ce correctif, nr_running ne décrémentait jamais ici, causant un
+            // compteur toujours gonflé (load-balancing aveugle, inutilisable).
+            self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
+            return Some(tcb);
         }
 
-        // 2. File CFS (normal / batch / deadline proxi).
+        // 2. File DEADLINE (EDF — échéance la plus proche en tête).
+        // SAFETY: DL_QUEUES initialisé par scheduler::init() étape 8.
+        let dl_candidate = unsafe {
+            crate::scheduler::timer::deadline_timer::dl_pick_next(self.cpu.0 as usize)
+        };
+        if let Some(tcb) = dl_candidate {
+            self.stats.picks_cfs.fetch_add(1, Ordering::Relaxed); // comptabilisé avec CFS
+            // BUG-FIX B (DL) : décrémenter nr_running pour thread DEADLINE.
+            self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
+            return Some(tcb);
+        }
+
+        // 3. File CFS (normal / batch).
         if self.cfs.count > 0 {
             self.stats.picks_cfs.fetch_add(1, Ordering::Relaxed);
-            return self.cfs.dequeue_min();
+            let tcb = self.cfs.dequeue_min()?;
+            // BUG-FIX B (CFS) : décrémenter nr_running pour thread CFS.
+            self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
+            return Some(tcb);
         }
 
-        // 3. Thread idle (toujours présent).
+        // 4. Thread idle (toujours présent — non comptabilisé dans nr_running).
         self.stats.picks_idle.fetch_add(1, Ordering::Relaxed);
         self.idle_thread
     }
@@ -553,6 +589,12 @@ impl PerCpuRunQueue {
         }
         self.cfs.tasks[self.cfs.count - 1] = None;
         self.cfs.count -= 1;
+        // BUG-FIX C : mettre à jour weight_sum. Sans ce correctif, le calcul
+        // timeslice CFS devenait de plus en plus faux après chaque migration.
+        if let Some(t) = tcb {
+            let weight = unsafe { t.as_ref() }.priority.cfs_weight() as u64;
+            self.cfs.weight_sum = self.cfs.weight_sum.saturating_sub(weight);
+        }
         self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
         tcb
     }

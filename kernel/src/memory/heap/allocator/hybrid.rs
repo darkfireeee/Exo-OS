@@ -114,9 +114,12 @@ pub unsafe fn free(ptr: NonNull<u8>, size: usize) {
         let slab_idx = HEAP_SIZE_CLASSES[sc_entry].slab_idx;
         SLUB_CACHES[slab_idx].free(ptr);
         HEAP_STATS.small_frees.fetch_add(1, Ordering::Relaxed);
-        HEAP_STATS.current_inuse.fetch_sub(real_size.min(HEAP_STATS.current_inuse.load(Ordering::Relaxed) as usize) as u64, Ordering::Relaxed);
+        // Décrémenter de façon simple; la stat peut brièvement sous-estimer sous
+        // contention mais jamais provoquer de comportement incorrect.
+        HEAP_STATS.current_inuse.fetch_sub(real_size as u64, Ordering::Relaxed);
     } else {
         crate::memory::heap::large::vmalloc::kfree(ptr, real_size);
         HEAP_STATS.large_frees.fetch_add(1, Ordering::Relaxed);
+        HEAP_STATS.current_inuse.fetch_sub(real_size as u64, Ordering::Relaxed);
     }
 }

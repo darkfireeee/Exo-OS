@@ -125,6 +125,28 @@ pub unsafe fn dl_pick_next(cpu: usize) -> Option<NonNull<ThreadControlBlock>> {
     tcb_opt
 }
 
+/// Retire un thread SCHED_DEADLINE spécifique de la queue EDF du CPU `cpu`.
+/// Utilisé lors d'une migration ou d'une terminaison de thread.
+///
+/// # Safety
+/// Préemption désactivée requise.
+pub unsafe fn dl_remove(cpu: usize, target: NonNull<ThreadControlBlock>) -> bool {
+    let q = DL_QUEUES[cpu].assume_init_mut();
+    for i in 0..q.count {
+        if q.tasks[i] == Some(target) {
+            let mut j = i;
+            while j + 1 < q.count {
+                q.tasks[j] = q.tasks[j + 1];
+                j += 1;
+            }
+            q.tasks[q.count - 1] = None;
+            q.count -= 1;
+            return true;
+        }
+    }
+    false
+}
+
 /// Vérifie les miss d'échéance sur le CPU `cpu` à chaque tick.
 ///
 /// # Safety

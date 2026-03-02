@@ -1,29 +1,24 @@
-//! Script de build Cargo pour le kernel Exo-OS.
-//!
-//! Rôle :
-//! 1. Indiquer au linker d'utiliser `linker.ld` (chemin absolu depuis CARGO_MANIFEST_DIR)
-//! 2. Invalider le cache si le script de linker change
-//! 3. Définir des constantes de build accessibles via `env!()`
+// kernel/build.rs — Script de build du noyau Exo-OS
+//
+// Responsabilités :
+//  1. Passe le linker script `linker.ld` à rust-lld via cargo:rustc-link-arg.
+//  2. Déclare les fichiers qui, en cas de modification, déclenchent un rebuild.
+//
+// Pas besoin du crate `cc` : les fichiers .s sont inclus via `global_asm!(include_str!())`
+// directement dans les fichiers Rust concernés (switch.rs pour switch_asm.s).
 
 fn main() {
-    // ── Linker script ─────────────────────────────────────────────────────────
-    // Fournit le chemin absolu du script pour que rust-lld le trouve quel que
-    // soit le répertoire de travail au moment du linkage.
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .expect("CARGO_MANIFEST_DIR non défini");
-    let linker_script = format!("{}/linker.ld", manifest_dir);
+    // Répertoire du crate (chemin absolu fourni par Cargo)
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
 
-    // Passe le chemin absolu au linker
-    println!("cargo:rustc-link-arg=-T{}", linker_script);
-    println!("cargo:rustc-link-arg=--no-pie");
+    // Passer le linker script à rust-lld.
+    // Le chemin DOIT être absolu : le linker est invoqué depuis un répertoire temporaire.
+    println!("cargo:rustc-link-arg=-T{dir}/linker.ld");
 
-    // Reconstruire si le linker script ou ce fichier changent
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed={}", linker_script);
+    // Rebuild si le linker script change.
+    println!("cargo:rerun-if-changed={dir}/linker.ld");
 
-    // ── Constantes de build ───────────────────────────────────────────────────
-    println!(
-        "cargo:rustc-env=EXOOS_BUILD_PROFILE={}",
-        std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string())
-    );
+    // Rebuild si un fichier ASM change (les .s sont inclus via include_str!).
+    println!("cargo:rerun-if-changed={dir}/src/scheduler/asm/switch_asm.s");
+    println!("cargo:rerun-if-changed={dir}/src/scheduler/asm/fast_path.s");
 }

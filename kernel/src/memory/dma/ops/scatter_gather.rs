@@ -59,7 +59,7 @@ pub unsafe fn dma_sg_async(
 
     // Mapping IOVA pour chaque fragment src.
     let mut src_iovas = [IovaAddr::zero(); MAX_SG_ENTRIES];
-    let n_mapped = IOVA_ALLOCATOR.map_sg(
+    let n_src_mapped = IOVA_ALLOCATOR.map_sg(
         &desc.src_sg[..src_count],
         DmaDirection::FromDevice,
         DmaMapFlags::NONE,
@@ -68,14 +68,20 @@ pub unsafe fn dma_sg_async(
     )?;
 
     // Mapping IOVA pour chaque fragment dst.
+    // En cas d'échec, rollback de toutes les IOVAs src déjà allouées.
     let mut dst_iovas = [IovaAddr::zero(); MAX_SG_ENTRIES];
-    IOVA_ALLOCATOR.map_sg(
+    if let Err(e) = IOVA_ALLOCATOR.map_sg(
         &desc.dst_sg[..dst_count],
         DmaDirection::ToDevice,
         DmaMapFlags::NONE,
         IDENTITY_DOMAIN_ID,
         &mut dst_iovas[..dst_count],
-    )?;
+    ) {
+        for i in 0..n_src_mapped {
+            let _ = IOVA_ALLOCATOR.unmap(src_iovas[i], IDENTITY_DOMAIN_ID);
+        }
+        return Err(e);
+    }
 
     let txn_id = desc.txn_id;
     DMA_CHANNELS.channel(ch_id).ok_or(DmaError::NoChannel)?.enqueue(txn_id)?;

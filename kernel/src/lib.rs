@@ -56,8 +56,8 @@ pub mod ipc;
 /// Couche 2b : capabilities, isolation, intégrité
 pub mod security;
 
-/// Couche 3 : système de fichiers virtuel + ext4plus
-pub mod fs;
+/// Couche 3 : système de fichiers virtuel + exofs
+/// pub mod fs;
 
 /// Interface syscall → dispatch vers les couches supérieures
 pub mod syscall;
@@ -101,45 +101,145 @@ pub use arch::x86_64::cpu::{
 /// # Safety
 /// Doit être appelé une seule fois, depuis le BSP, après `arch_boot_init`.
 pub unsafe fn kernel_init() {
-    // Phase 2 : memory/ — EmergencyPool + buddy + slab
-    // memory::physical::frame::emergency_pool::init();   // PREMIER ABSOLU (RÈGLE EMERGENCY-01)
-    // memory::physical::allocator::buddy::init();
-    // memory::heap::allocator::global::init_heap();
+    // ── Phase 2a : EmergencyPool — PREMIER ABSOLU (RÈGLE EMERGENCY-01) ─────────
+    // Pool statique de 64 WaitNodes pré-alloués en .bss, aucune dépendance heap.
+    // Doit être init avant scheduler::sync::wait_queue (appelé par scheduler::init).
+    crate::memory::physical::frame::emergency_pool::init();
 
-    // Phase 3 : scheduler/
-    // scheduler::core::preempt::init();
-    // scheduler::core::runqueue::init_percpu();
-    // scheduler::fpu::save_restore::detect_xsave_size();
-    // scheduler::fpu::lazy::init();
-    // scheduler::timer::tick::init(1000);   // HZ = 1000 (RÈGLE SCHED DOC3)
-    // scheduler::timer::hrtimer::init();
-    // scheduler::sync::wait_queue::init();  // Vérifie que EmergencyPool est init
-    // scheduler::energy::c_states::init();
+    // ── Phase 2b : Allocateur heap (SLUB + large) ────────────────────────────
+    // Requiert le buddy allocator physique initialisé avec les données Multiboot2.
+    // Activé par arch_boot_init via memory::physical::allocator::init_phase1..4().
+    // Laisser commenté jusqu'à ce que arch_boot_init propage les plages mémoire.
+    // memory::heap::allocator::hybrid::init();  // active HYBRID_ENABLED → Box/Vec OK
 
-    // Phase 4 : process/
-    // process::state::wakeup::register_with_dma();  // DmaWakeupHandler (DOC4 RÈGLE PROC-02)
+    // ── Phase 3 : Scheduler ─────────────────────────────────────────────────
+    // scheduler::init() orchestre les 11 étapes : preempt, runqueues, FPU, TSC,
+    // tick (HZ=1000), hrtimer, deadline_timer, wait_queue, c_states, smp topology.
+    // SAFETY: EmergencyPool initialisé avant cet appel (étape 9 wait_queue en dépend).
+    crate::scheduler::init(&crate::scheduler::SchedInitParams::default());
 
-    // Phase 5 : security/
-    // security::capability::init();
+    // ── Phase 3b : Thread idle du BSP (CPU 0) ────────────────────────────────
+    // Requis pour que pick_next_task() ait un fallback lorsqu'aucun thread n'est prêt.
+    // TCB stocké dans la section .bss (static mut) — aucune allocation heap.
+    // SAFETY: appelé une seule fois depuis le BSP, après scheduler::init()
+    //         qui a déjà exécuté init_percpu() pour le CPU 0.
+    {
+        use core::mem::MaybeUninit;
+        use core::ptr::NonNull;
 
-    // Phase 6 : ipc/
-    // ipc::endpoint::registry::init();
+        static mut IDLE_TCB: MaybeUninit<crate::scheduler::ThreadControlBlock> =
+            MaybeUninit::uninit();
 
-    // Phase 7 : fs/
+        // Crée un TCB idle : pid=0, SchedPolicy::Normal, Priority::IDLE (140).
+        // cr3 = 0 → réutilise la table de pages courante (mapping identité kernel).
+        // kernel_rsp = sommet du stack BSP (défini dans .boot_stack par global_asm!).
+        // SAFETY: IDLE_TCB est dans .bss (durée de vie 'static).
+        //         write() est sûr car exécuté exactement une fois (mono-CPU au boot).
+        let idle = IDLE_TCB.write(
+            crate::scheduler::ThreadControlBlock::new(
+                crate::scheduler::ThreadId(0),
+                crate::scheduler::ProcessId(0),
+                crate::scheduler::SchedPolicy::Normal,
+                crate::scheduler::core::task::Priority::IDLE,
+                0u64, // cr3 : réutilise le CR3 courant (pas de switch de PGD)
+                crate::arch::x86_64::boot::early_init::boot_stack_top(),
+            )
+        );
+
+        // SAFETY: write() retourne &mut T non nul ; durée de vie = 'static.
+        let idle_ptr = NonNull::new_unchecked(idle as *mut _);
+        crate::scheduler::run_queue(crate::scheduler::CpuId(0))
+            .set_idle_thread(idle_ptr);
+    }
+
+    // ── Phase 4 : Process (reaper kthread) ──────────────────────────────────
+    // Nécessite l'allocateur heap (Box<ProcessThread> dans create_kthread).
+    // Activer après memory::heap::allocator::hybrid::init().
+    // process::lifecycle::reap::init_reaper();
+
+    // ── Phase 5 : Security ──────────────────────────────────────────────────
+    // init_capability_subsystem() = pur atomique, aucune alloc. Sûr maintenant.
+    crate::security::capability::init_capability_subsystem();
+    // access_control::checker::init() et integrity_check::runtime_check::init_runtime_integrity()
+    // référencent des symboles lieur (_text_start, _text_end, _rodata_*) définis dans linker.ld.
+    // Ces symboles ne sont disponibles que dans le binaire final baremetal.
+    // Activer uniquement lors du build final avec le linker script complet.
+    // crate::security::access_control::checker::init();
+    // crate::security::integrity_check::runtime_check::init_runtime_integrity();
+
+    // ── Phase 6 : IPC ────────────────────────────────────────────────────────
+    // Nécessite heap (structures de channels/registry). Activer après heap init.
+    // ipc::ring::spsc::init_spsc_rings();
+
+    // ── Phase 7 : FS ─────────────────────────────────────────────────────────
+    // fs/ non activé dans lib.rs — en attente d'intégration.
     // fs::core::vfs::init();
-    // process::lifecycle::exec::register_elf_loader(...);  // (DOC4 RÈGLE PROC-01)
 }
 
 #[panic_handler]
-fn kernel_panic(_info: &core::panic::PanicInfo) -> ! {
-    // SAFETY: CLI est toujours sûr depuis Ring 0.
-    unsafe { core::arch::asm!("cli", options(nostack, nomem)); }
+fn kernel_panic(info: &core::panic::PanicInfo) -> ! {
+    // BUG-5 FIX: l'ancien handler effectuait un halt silencieux sans aucun diagnostic.
+    // Tout unwrap()/expect() stoppait le système sans message → débogage impossible.
+    //
+    // Port 0xE9 = QEMU ISA debug device : sortie directe sans initialisation requise.
+    // Disponible dès le reset, même avant l'init des drivers série.
+    #[inline(always)]
+    unsafe fn debug_byte(b: u8) {
+        core::arch::asm!("out 0xE9, al", in("al") b, options(nomem, nostack));
+    }
+    #[inline(always)]
+    unsafe fn debug_str(s: &[u8]) {
+        for &b in s { debug_byte(b); }
+    }
+    #[inline(always)]
+    unsafe fn debug_u32(mut n: u32) {
+        let mut buf = [0u8; 10];
+        let mut len = 0usize;
+        if n == 0 { debug_byte(b'0'); return; }
+        while n > 0 { buf[len] = b'0' + (n % 10) as u8; len += 1; n /= 10; }
+        for i in (0..len).rev() { debug_byte(buf[i]); }
+    }
+    // SAFETY: CLI depuis Ring 0 — toujours sûr. debug_byte écrit sur le port 0xE9.
+    unsafe {
+        core::arch::asm!("cli", options(nostack, nomem));
+        debug_str(b"\n\x1B[1;31m*** KERNEL PANIC ***\x1B[0m ");
+        if let Some(loc) = info.location() {
+            debug_str(loc.file().as_bytes());
+            debug_byte(b':');
+            debug_u32(loc.line());
+            debug_byte(b':');
+            debug_u32(loc.column());
+        } else {
+            debug_str(b"<location inconnue>");
+        }
+        debug_byte(b'\n');
+    }
     loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
 }
 
 #[alloc_error_handler]
-fn alloc_error_handler(_layout: core::alloc::Layout) -> ! {
-    unsafe { core::arch::asm!("cli", options(nostack, nomem)); }
+fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
+    // BUG-5 FIX: même correction — affiche taille/alignement sur port 0xE9 QEMU.
+    #[inline(always)]
+    unsafe fn debug_byte(b: u8) {
+        core::arch::asm!("out 0xE9, al", in("al") b, options(nomem, nostack));
+    }
+    #[inline(always)]
+    unsafe fn debug_usize(mut n: usize) {
+        let mut buf = [0u8; 20];
+        let mut len = 0usize;
+        if n == 0 { debug_byte(b'0'); return; }
+        while n > 0 { buf[len] = b'0' + (n % 10) as u8; len += 1; n /= 10; }
+        for i in (0..len).rev() { debug_byte(buf[i]); }
+    }
+    unsafe {
+        core::arch::asm!("cli", options(nostack, nomem));
+        for &b in b"\n*** ALLOC ERROR size=" { debug_byte(b); }
+        debug_usize(layout.size());
+        for &b in b" align=" { debug_byte(b); }
+        debug_usize(layout.align());
+        debug_byte(b'\n');
+    }
     loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
 }
 

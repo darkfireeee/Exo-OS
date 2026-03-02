@@ -1,5 +1,6 @@
 // ipc/rpc/mod.rs — Module RPC IPC pour Exo-OS
 
+pub mod raw;
 pub mod protocol;
 pub mod timeout;
 pub mod server;
@@ -52,6 +53,12 @@ pub use server::{
     rpc_server_dispatch,
     rpc_server_destroy,
     rpc_server_stats,
+};
+
+// Re-exports : raw RPC (call_raw / parse_call / send_reply)
+pub use raw::{
+    call_raw, parse_call, send_reply, CallRequest,
+    MAX_CALL_PAYLOAD, CALL_MAGIC,
 };
 
 // Re-exports : client

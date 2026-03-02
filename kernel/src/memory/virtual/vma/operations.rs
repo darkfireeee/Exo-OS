@@ -129,10 +129,15 @@ pub fn split_vma(vma: &VmaDescriptor, split_point: VirtAddr) -> Result<SplitResu
         return Err(AllocError::InvalidParams);
     }
 
-    let left = VmaDescriptor::new(
+    let mut left = VmaDescriptor::new(
         vma.start, split_point,
         vma.flags, vma.page_flags, vma.backing,
     );
+    // Propager l'association fichier : left part depuis vma.start, donc
+    // son file_offset est identique à celui de la VMA d'origine.
+    left.inode_id    = vma.inode_id;
+    left.file_offset = vma.file_offset;
+
     let mut right = VmaDescriptor::new(
         split_point, vma.end,
         vma.flags, vma.page_flags, vma.backing,
@@ -168,16 +173,25 @@ pub fn mprotect_vma(
         return Err(AllocError::InvalidParams);
     }
 
+    // Calculer les offsets fichier pour chaque fragment.
     let before = if start.as_u64() > vma.start.as_u64() {
-        Some(VmaDescriptor::new(vma.start, start, vma.flags, vma.page_flags, vma.backing))
+        let mut d = VmaDescriptor::new(vma.start, start, vma.flags, vma.page_flags, vma.backing);
+        d.inode_id    = vma.inode_id;
+        d.file_offset = vma.file_offset;
+        Some(d)
     } else {
         None
     };
 
-    let middle = VmaDescriptor::new(start, end, vma.flags, new_flags, vma.backing);
+    let mut middle = VmaDescriptor::new(start, end, vma.flags, new_flags, vma.backing);
+    middle.inode_id    = vma.inode_id;
+    middle.file_offset = vma.file_offset + (start.as_u64() - vma.start.as_u64());
 
     let after = if end.as_u64() < vma.end.as_u64() {
-        Some(VmaDescriptor::new(end, vma.end, vma.flags, vma.page_flags, vma.backing))
+        let mut d = VmaDescriptor::new(end, vma.end, vma.flags, vma.page_flags, vma.backing);
+        d.inode_id    = vma.inode_id;
+        d.file_offset = vma.file_offset + (end.as_u64() - vma.start.as_u64());
+        Some(d)
     } else {
         None
     };

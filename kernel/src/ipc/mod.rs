@@ -136,3 +136,43 @@ pub fn ipc_init(shm_base_phys: u64, n_numa_nodes: u32) {
 pub fn ipc_stats_snapshot() -> IpcStatsSnapshot {
     IPC_STATS.snapshot()
 }
+
+// ---------------------------------------------------------------------------
+// Hooks d'intégration — scheduler et VMM
+// ---------------------------------------------------------------------------
+
+/// Connecte le hook de blocage réel du scheduler à l'IPC.
+///
+/// Doit être appelé UNE SEULE FOIS, après `scheduler::init()` et AVANT tout
+/// appel IPC bloquant (futex_wait, sync_channel_send/recv, wait_queue).
+///
+/// Sans cet appel, les primitives IPC tombent en mode spin-poll de secours
+/// (dégradé, acceptable en monocœur ou lors des tests unitaires).
+///
+/// `block_fn` : suspend le thread courant jusqu'à réveil explicite.
+///              Fournie par `scheduler::block_current_thread`.
+pub fn ipc_install_scheduler_hooks(block_fn: sync::sched_hooks::BlockFn) {
+    sync::sched_hooks::install_block_hook(block_fn);
+}
+
+/// Connecte les hooks VMM de mappage/démappage SHM à l'IPC.
+///
+/// Doit être appelé UNE SEULE FOIS, après que le gestionnaire de mémoire
+/// virtuelle est opérationnel et que les tables de pages des processus
+/// sont gérées.
+///
+/// Sans ces hooks, `shm_map()` opère en mode simulé (virt = phys) —
+/// acceptable en dev/test mono-processus sans isolation d'espace d'adressage.
+///
+/// - `map_page_fn`   : `unsafe fn(phys: u64, virt: u64, flags: u32, pid: u32) -> i32`
+///                     0 = succès, non-zéro = erreur.
+/// - `unmap_page_fn` : `unsafe fn(virt: u64, pid: u32) -> i32`
+pub fn ipc_install_vmm_hooks(
+    map_page_fn:   shared_memory::mapping::MapPageFn,
+    unmap_page_fn: shared_memory::mapping::UnmapPageFn,
+) {
+    shared_memory::mapping::register_map_hook(map_page_fn);
+    shared_memory::mapping::register_unmap_hook(unmap_page_fn);
+}
+
+

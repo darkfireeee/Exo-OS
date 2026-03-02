@@ -33,9 +33,10 @@ license   = "MIT OR Apache-2.0"
 spin = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock", "once"] }
 
 [profile.dev]
-opt-level = 0
-debug     = true
-panic     = "abort"
+opt-level     = 0
+debug         = true
+panic         = "abort"
+codegen-units = 1             # Empêche le splitting CGU → global_asm! reste dans le même objet
 
 [profile.release]
 opt-level     = 3

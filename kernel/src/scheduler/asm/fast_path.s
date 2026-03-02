@@ -25,7 +25,7 @@
 // Offsets dans ThreadControlBlock (doit rester synchronisé avec task.rs)
 .set TCB_FLAGS_OFFSET,        28    // AtomicU32 flags — cache line 1
 .set TCB_SIGNAL_PENDING_OFFSET, 48  // AtomicBool signal_pending
-.set NEED_RESCHED_BIT,         4    // bit dans flags (1 << 4)
+.set NEED_RESCHED_BIT,        16    // = 1 << 4 (task_flags::NEED_RESCHED)
 
 .global read_need_resched_flag
 .type read_need_resched_flag, @function
@@ -90,13 +90,12 @@ scheduler_ipi_handler_asm:
     call    scheduler_ipi_handler_c
 
     // EOI (End Of Interrupt) vers LAPIC.
-    // Adresse LAPIC EOI = 0xFEE000B0 (XAPIC mode).
-    movl    $0, 0xFEE000B0(%rip) // Note: en vrai usage, LAPIC_BASE est en mémoire mappée
-    // Alternative avec MSR x2APIC :
-    // movl $0x80B, %ecx
-    // xorl %eax, %eax
-    // xorl %edx, %edx
-    // wrmsr
+    // LAPIC EOI register = adresse physique absolue 0xFEE000B0 (xAPIC mode).
+    // ATTENTION : ne PAS utiliser l'adressage RIP-relatif ici — l'adresse LAPIC
+    // est fixe à 0xFEE000B0 et ne peut pas être atteinte avec un offset 32 bits
+    // depuis le RIP. On passe par un registre intermédiaire.
+    movabsq $0xFEE000B0, %rax
+    movl    $0, (%rax)
 
     popq    %r11
     popq    %r10

@@ -8,6 +8,7 @@
 //   - TypedChannel<T> : canal générique typé (T: Copy)
 //   - StreamChannel  : streaming zero-copy pour grands volumes
 
+pub mod raw;
 pub mod sync;
 pub mod r#async;
 pub mod mpmc;
@@ -18,6 +19,13 @@ pub mod streaming;
 // ---------------------------------------------------------------------------
 // Re-exports
 // ---------------------------------------------------------------------------
+
+// Canal brut (raw mailbox) — bridge syscall ↔ IPC
+pub use raw::{
+    send_raw, recv_raw, mailbox_open, mailbox_close,
+    mailbox_open_count, raw_stats_snapshot,
+    MAX_RAW_SLOTS, RawSlotStats,
+};
 
 // Canal synchrone (rendezvous)
 pub use sync::{

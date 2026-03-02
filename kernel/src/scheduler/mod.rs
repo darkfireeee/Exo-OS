@@ -35,7 +35,8 @@ pub use self::core::task::{ThreadControlBlock, ThreadId, ProcessId, CpuId, TaskS
 pub use self::core::preempt::{PreemptGuard, IrqGuard};
 pub use self::core::runqueue::{run_queue, init_percpu as rq_init_percpu};
 pub use self::core::pick_next::pick_next_task;
-pub use self::core::switch::{context_switch, schedule_yield, schedule_block, wake_enqueue};
+pub use self::core::switch::{context_switch, schedule_yield, schedule_block, wake_enqueue,
+                             block_current_thread, current_thread_raw};
 pub use self::timer::clock::monotonic_ns;
 pub use self::timer::tick::scheduler_tick;
 pub use self::policies::ai_guided::AI_HINTS_ENABLED;
@@ -68,7 +69,9 @@ impl Default for SchedInitParams {
 /// # Safety
 /// Appelé une seule fois, depuis le BSP, avant l'activation des APs.
 pub unsafe fn init(params: &SchedInitParams) {
-    let nr_cpus  = params.nr_cpus.max(1);
+    // BUG-FIX H : clamp nr_cpus à MAX_CPUS pour éviter des accès out-of-bounds
+    // sur PER_CPU_RQ (64 entrées) si l'appelant passe nr_cpus > 64.
+    let nr_cpus  = params.nr_cpus.clamp(1, crate::scheduler::core::preempt::MAX_CPUS);
     let nr_nodes = params.nr_nodes.max(1);
     let tsc_hz   = if params.tsc_hz == 0 { 3_000_000_000 } else { params.tsc_hz };
 

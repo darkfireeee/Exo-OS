@@ -54,6 +54,10 @@ pub fn handle_cow_fault<A: FaultAllocator>(
     let new_flags = vma.page_flags & !PageFlags::COW | PageFlags::WRITABLE;
     match alloc.map_page(page_addr, new_frame, new_flags) {
         Ok(_) => {
+            // Libérer l'ancien frame : le mapping a été remplacé, on doit
+            // décrémenter son compteur de références (ou le libérer s'il
+            // n'est plus référencé par aucun autre processus).
+            alloc.free_frame(old_frame);
             vma.record_cow_break();
             // SAFETY: adresse canonique.
             unsafe { flush_single(page_addr); }

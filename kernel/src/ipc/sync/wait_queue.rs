@@ -207,9 +207,13 @@ impl IpcWaitQueue {
     // Attente
     // -----------------------------------------------------------------------
 
-    /// Attend d'être réveillé (spin-wait).
+    /// Attend d'être réveillé en bloquant réellement le thread via le scheduler.
     ///
-    /// Le waiter doit être préalablement inscrit via `enqueue()`.
+    /// STRATÉGIE : spin court (≤ 64 tours) pour les réveils immédiats,
+    /// puis blocage réel via `sched_hooks::block_current()`.
+    ///
+    /// L'appelant doit avoir appelé `enqueue()` AVANT et avoir récupéré `waiter_idx`.
+    /// Après retour (Signaled ou erreur), le waiter est désenregistré.
     ///
     /// # Retour
     /// - `Ok(WakeReason)` — cause du réveil
@@ -224,38 +228,33 @@ impl IpcWaitQueue {
         }
 
         let w = &self.waiters[waiter_idx];
-        let timeout_ns = w.timeout_ns.load(Ordering::Relaxed);
-        let enqueued_at = w.enqueued_at.load(Ordering::Relaxed);
-        let mut spins: u64 = 0;
-        let spin_timeout = if timeout_ns == 0 { u64::MAX } else { timeout_ns / 10 };
+        let tid = w.thread_id.load(Ordering::Relaxed);
+        let timeout_ns  = w.timeout_ns.load(Ordering::Relaxed);
+        let mut spin_count: u32 = 0;
+        const SPIN_BEFORE_BLOCK: u32 = 64;
 
         loop {
-            core::hint::spin_loop();
-            spins += 1;
-
+            // 1. Vérifier le drapeau woken en priorité (évite le blocage si réveil rapide).
             if w.is_woken() {
                 let reason = w.wake_reason();
                 w.dequeue();
                 self.count.fetch_sub(1, Ordering::Relaxed);
 
-                match reason {
+                return match reason {
                     WakeReason::Signaled => {
                         self.total_woken.fetch_add(1, Ordering::Relaxed);
-                        return Ok(WakeReason::Signaled);
+                        Ok(WakeReason::Signaled)
                     }
-                    WakeReason::Closed => {
-                        return Err(IpcError::Closed);
-                    }
+                    WakeReason::Closed => Err(IpcError::Closed),
                     WakeReason::Timeout => {
                         self.total_timeouts.fetch_add(1, Ordering::Relaxed);
-                        return Err(IpcError::Timeout);
+                        Err(IpcError::Timeout)
                     }
-                    WakeReason::Interrupted => {
-                        return Err(IpcError::Closed);
-                    }
-                }
+                    WakeReason::Interrupted => Err(IpcError::Closed),
+                };
             }
 
+            // 2. Vérifier fermeture.
             if check_closed() {
                 w.wake(WakeReason::Closed);
                 w.dequeue();
@@ -263,13 +262,33 @@ impl IpcWaitQueue {
                 return Err(IpcError::Closed);
             }
 
-            if timeout_ns > 0 && spins >= spin_timeout {
-                w.wake(WakeReason::Timeout);
-                w.dequeue();
-                self.count.fetch_sub(1, Ordering::Relaxed);
-                self.total_timeouts.fetch_add(1, Ordering::Relaxed);
-                return Err(IpcError::Timeout);
+            // 3. Phase spin courte (≤ SPIN_BEFORE_BLOCK tours) pour les réveils rapides.
+            if spin_count < SPIN_BEFORE_BLOCK {
+                core::hint::spin_loop();
+                spin_count += 1;
+                continue;
             }
+
+            // 4. Vérifier timeout (uniquement si timeout activé).
+            if timeout_ns != 0 {
+                // NOTE : utiliser monotonic_ns() pour une vraie vérification temporelle.
+                // Pour l'instant : compteur de blocages comme proxy de durée.
+                // Chaque blocage = ~quantum scheduler (~1–10 ms).
+                // 1000 blocages ≈ 1–10 s ; valeur conservatrice.
+                let elapsed_proxy = (spin_count as u64).saturating_sub(SPIN_BEFORE_BLOCK as u64);
+                if elapsed_proxy > timeout_ns / 1_000_000 + 1 {
+                    w.wake(WakeReason::Timeout);
+                    w.dequeue();
+                    self.count.fetch_sub(1, Ordering::Relaxed);
+                    self.total_timeouts.fetch_add(1, Ordering::Relaxed);
+                    return Err(IpcError::Timeout);
+                }
+            }
+
+            // 5. Blocage réel via le scheduler.
+            // SAFETY: le waiter est actif dans la table, un réveil est attendu.
+            unsafe { super::sched_hooks::block_current(tid); }
+            spin_count += 1;
         }
     }
 
@@ -301,7 +320,10 @@ impl IpcWaitQueue {
             }
             let w = &self.waiters[i];
             if w.is_active() && !w.is_woken() {
+                let tid = w.thread_id.load(Ordering::Relaxed);
                 w.wake(reason);
+                // Réveiller le thread au niveau scheduler (si bloqué).
+                super::sched_hooks::wake_thread(tid);
                 woken += 1;
             }
         }
@@ -318,6 +340,7 @@ impl IpcWaitQueue {
                 && !w.is_woken()
             {
                 w.wake(reason);
+                super::sched_hooks::wake_thread(thread_id);
                 self.total_woken.fetch_add(1, Ordering::Relaxed);
                 return true;
             }

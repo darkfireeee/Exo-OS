@@ -53,8 +53,17 @@ pub struct ZoneDescriptor {
     /// Watermark haut : au-dessus, kswapd s'arrête.
     pub watermark_high: usize,
     /// Padding pour atteindre 128 bytes.
-    _pad1: [u8; 128 - 6 - 2 * 8 - 3 * 8 - 1 - 1 - 3 * 8],
+    /// Calcul : 128 - 1(zone_type) - 1(numa_node) - 6(_pad0)
+    ///          - 16(phys_start+phys_end) - 24(total+free+reserved frames)
+    ///          - 24(alloc_success+alloc_failures+free_count)
+    ///          - 24(watermark_low+min+high) = 128 - 96 = 32
+    _pad1: [u8; 32],
 }
+
+const _: () = assert!(
+    core::mem::size_of::<ZoneDescriptor>() == 128,
+    "ZoneDescriptor doit faire exactement 128 bytes (2 cache lines)"
+);
 
 impl ZoneDescriptor {
     /// Crée un descripteur de zone.
@@ -85,7 +94,7 @@ impl ZoneDescriptor {
             watermark_low:   wm_low,
             watermark_min:   wm_min,
             watermark_high:  wm_high,
-            _pad1: [0u8; 128 - 6 - 2 * 8 - 3 * 8 - 1 - 1 - 3 * 8],
+            _pad1: [0u8; 32],
         }
     }
 

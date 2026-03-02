@@ -97,6 +97,8 @@ pub fn nr_nodes() -> usize { NR_NODES.load(Ordering::Relaxed) as usize }
 /// Retourne le nœud NUMA du CPU `cpu`.
 pub fn cpu_node(cpu: CpuId) -> u8 {
     let idx = cpu.0 as usize;
+    // SAFETY: idx < MAX_CPUS garanti par le if; CPU_TO_NODE est un tableau statique
+    // initialisé par topology_init() avant tout appel à cpu_node().
     if idx < MAX_CPUS { unsafe { CPU_TO_NODE[idx] } }
     else { 0 }
 }
@@ -104,12 +106,16 @@ pub fn cpu_node(cpu: CpuId) -> u8 {
 /// Retourne le sibling HT du CPU `cpu`, ou `CPU_ABSENT`.
 pub fn cpu_sibling(cpu: CpuId) -> u32 {
     let idx = cpu.0 as usize;
+    // SAFETY: idx < MAX_CPUS garanti par le if; CPU_SIBLING est initialisé par
+    // topology_init() en lecture seule après le boot.
     if idx < MAX_CPUS { unsafe { CPU_SIBLING[idx] } }
     else { CPU_ABSENT }
 }
 
 /// Retourne la distance NUMA entre deux nœuds.
 pub fn numa_distance(a: usize, b: usize) -> u8 {
+    // SAFETY: a < MAX_NODES && b < MAX_NODES garantit que les indices sont dans
+    // les bornes du tableau 2D statique NUMA_DISTANCE.
     if a < MAX_NODES && b < MAX_NODES { unsafe { NUMA_DISTANCE[a][b] } }
     else { u8::MAX }
 }

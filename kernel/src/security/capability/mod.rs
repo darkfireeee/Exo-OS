@@ -71,9 +71,29 @@ pub use namespace::{
 // init_capability_subsystem — appelé au boot (étape séquencée)
 // ─────────────────────────────────────────────────────────────────────────────
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 static CAP_INIT_DONE: AtomicBool = AtomicBool::new(false);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Table de capabilities globale (kernel-context)
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::scheduler::sync::spinlock::SpinLock;
+
+/// Table de capabilities du noyau — utilisée pour les allocations syscall
+/// avant que le registre de processus soit disponible.
+/// Initialisée par `init_capability_subsystem()`.
+static KERNEL_CAP_TABLE: SpinLock<Option<table::CapTable>> = SpinLock::new(None);
+
+/// Générateur d'ObjectId unique, monotoniquement croissant.
+static OBJ_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Alloue un ObjectId frais, garanti unique pour la durée de vie du noyau.
+#[inline]
+fn alloc_object_id() -> token::ObjectId {
+    token::ObjectId::from_raw(OBJ_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
 
 /// Initialise le sous-système de capabilities.
 ///
@@ -85,8 +105,8 @@ pub fn init_capability_subsystem() {
         // Seconde initialisation — erreur architecturale
         panic!("capability: double initialization");
     }
-    // Vérifications statiques — compilées dans les assertions const des fichiers
-    // Pas de runtime setup nécessaire car tout est statique/atomique
+    // Initialiser la table kernel globale
+    *KERNEL_CAP_TABLE.lock() = Some(table::CapTable::new());
 }
 
 /// Retourne vrai si le sous-système est initialisé.
@@ -135,28 +155,44 @@ pub fn create(cap_type: u32, rights: u32, _target_pid: u32) -> Result<u32, Kerne
         return Err(KernelCapError::NotSupported);
     }
     // Validation du bitmask de droits
-    if Rights::from_bits(rights).is_none() {
+    let rights_val = Rights::from_bits(rights).ok_or(KernelCapError::InvalidArg)?;
+    // Validation et conversion du type d'objet
+    if cap_type > u16::MAX as u32 {
         return Err(KernelCapError::InvalidArg);
     }
-    // Validation du type d'objet (0..=6 défini dans ObjectKind)
-    if cap_type > 6 {
+    let obj_type = token::CapObjectType::from_u16(cap_type as u16);
+    if obj_type == token::CapObjectType::Invalid {
         return Err(KernelCapError::InvalidArg);
     }
-    // Stub — l'implémentation complète alloue dans la CapTable du processus cible.
-    // Pour l'instant : retourne un handle synthétique non nul basé sur cap_type.
-    Ok(cap_type.wrapping_add(1))
+
+    // Allouer un ObjectId frais et insérer dans la table kernel
+    let oid = alloc_object_id();
+    let mut guard = KERNEL_CAP_TABLE.lock();
+    let table = guard.as_mut().ok_or(KernelCapError::NotSupported)?;
+    match table.grant(oid, rights_val, obj_type) {
+        Ok(_token) => {
+            // Retourner les 32 bits bas de l'ObjectId comme handle opaque.
+            Ok(oid.as_u64() as u32)
+        }
+        Err(_) => Err(KernelCapError::InvalidArg),
+    }
 }
 
 /// Révoque une capability par handle opaque (syscall exo_cap_revoke).
 ///
-/// Wrapper compatible avec l'ancienne ABI `revoke(handle: u32)`.
-/// Traduit le handle en ObjectId puis appelle `revocation::revoke()`.
-pub fn revoke_handle(_handle: u32) -> Result<(), KernelCapError> {
+/// Traduit le handle (u32 = 32 bits bas de l'ObjectId) en ObjectId, puis
+/// incrémente atomiquement la génération dans la table kernel — tous les
+/// tokens capturant l'ancienne génération retourneront `Err(Revoked)`.
+///
+/// # Complexité : O(1) (incrément atomique Release, aucun parcours de liste).
+pub fn revoke_handle(handle: u32) -> Result<(), KernelCapError> {
     if !is_initialized() {
         return Err(KernelCapError::NotSupported);
     }
-    // Stub — l'implémentation complète résout le handle vers un ObjectId
-    // dans la CapTable du processus courant, puis appelle revoke().
+    let object_id = token::ObjectId::from_raw(handle as u64);
+    let guard = KERNEL_CAP_TABLE.lock();
+    let tbl = guard.as_ref().ok_or(KernelCapError::NotSupported)?;
+    revocation::revoke(tbl, object_id);
     Ok(())
 }
 

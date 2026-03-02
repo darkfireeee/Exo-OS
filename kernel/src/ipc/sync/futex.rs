@@ -92,9 +92,16 @@ pub struct FutexIpcStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonction de réveil no-op (avant injection par le scheduler)
+// Fonction de réveil IPC — délègue à sched_hooks::wake_thread (scheduler)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// WakeFn injectée dans FutexWaiter : réveille réellement le thread via scheduler.
+/// Signature : fn(tid: u64, code: i32) — compatible avec memory::utils::futex_table.
+fn ipc_futex_wake_fn(tid: u64, _code: i32) {
+    super::sched_hooks::wake_thread(tid as u32);
+}
+
+/// No-op de réveil (avant installation des hooks ou pour les callers sans scheduler).
 fn nop_wake_fn(_tid: u64, _code: i32) {}
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -127,13 +134,15 @@ pub unsafe fn futex_wait(
     spin_max:  u64,
     wake_fn:   Option<WakeFn>,
 ) -> Result<WaiterState, IpcError> {
-    let wfn = wake_fn.unwrap_or(nop_wake_fn);
+    // Utiliser ipc_futex_wake_fn par défaut : réveille réellement le thread.
+    // Si le caller fournit une wake_fn explicite, l'utiliser à la place.
+    let wfn = wake_fn.unwrap_or(ipc_futex_wake_fn);
 
-    // Allouer le FutexWaiter sur la pile — sa durée de vie = durée du spin-loop.
+    // Allouer le FutexWaiter sur la pile — sa durée de vie = durée du wait.
     let mut waiter = FutexWaiter::new(key.0, expected, thread_id as u64, wfn);
     let wptr = &mut waiter as *mut FutexWaiter;
 
-    // Déléguer l'enfilement à memory::utils::futex_table
+    // Déléguer l'enfilement à memory::utils::futex_table (RÈGLE IPC-02).
     let result = mem_futex_wait(key.0, expected, wptr, wfn);
 
     match result {
@@ -141,8 +150,10 @@ pub unsafe fn futex_wait(
 
         FutexWaitResult::Waiting => {
             // Le waiter est dans le bucket de memory/utils/futex_table.
-            // Spin-poll sur waiter.woken jusqu'à réveil ou timeout.
+            // Stratégie : spin court puis blocage réel via sched_hooks.
+            const SPIN_BEFORE_BLOCK: u64 = 64;
             let mut spins: u64 = 0;
+
             loop {
                 core::hint::spin_loop();
                 spins += 1;
@@ -151,10 +162,22 @@ pub unsafe fn futex_wait(
                     return Ok(WaiterState::Woken);
                 }
 
+                // Timeout explicite (spin_max non nul).
                 if spin_max != 0 && spins >= spin_max {
-                    // Timeout : retirer le waiter du bucket (évite dangling ptr).
                     mem_futex_cancel(wptr);
                     return Err(IpcError::Timeout);
+                }
+
+                // Après la phase de spin courte : bloquer via le scheduler.
+                if spins >= SPIN_BEFORE_BLOCK {
+                    // Vérifier à nouveau avant de bloquer (évite réveil manqué).
+                    if waiter.woken.load(Ordering::Acquire) {
+                        return Ok(WaiterState::Woken);
+                    }
+                    // Blocage réel — retourne après que ipc_futex_wake_fn a été appelée.
+                    super::sched_hooks::block_current(thread_id);
+                    // Réinitialiser le compteur pour la prochaine itération.
+                    spins = 0;
                 }
             }
         }

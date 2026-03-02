@@ -129,6 +129,8 @@ impl PageTableWalker {
     /// Démappate `virt`.
     ///
     /// Retourne le frame précédemment mappé, ou `None` si non mappé.
+    /// Retourne également `None` si une huge page est rencontrée en chemin
+    /// (utiliser un démappate spécifique huge page dans ce cas).
     pub fn unmap(&mut self, virt: VirtAddr) -> Option<Frame> {
         // SAFETY: pml4_phys est une PML4 valide.
         let pml4     = unsafe { phys_to_table_mut(self.pml4_phys) };
@@ -139,11 +141,15 @@ impl PageTableWalker {
         let pdpt     = unsafe { phys_to_table_mut(l4_entry.phys_addr()) };
         let l3_entry = pdpt[virt.p3_index()];
         if !l3_entry.is_present() { return None; }
+        // Une huge page 1 GiB : on ne peut pas décomposer en 4 KiB ici
+        if l3_entry.is_huge() { return None; }
 
         // SAFETY: l3_entry.phys_addr() est un PD valide.
         let pd       = unsafe { phys_to_table_mut(l3_entry.phys_addr()) };
         let l2_entry = pd[virt.p2_index()];
         if !l2_entry.is_present() { return None; }
+        // Une huge page 2 MiB : idem
+        if l2_entry.is_huge() { return None; }
 
         // SAFETY: l2_entry.phys_addr() est un PT valide.
         let pt       = unsafe { phys_to_table_mut(l2_entry.phys_addr()) };
@@ -164,10 +170,14 @@ impl PageTableWalker {
         let pdpt     = unsafe { phys_to_table_mut(l4_entry.phys_addr()) };
         let l3_entry = pdpt[virt.p3_index()];
         if !l3_entry.is_present() { return Err(AllocError::InvalidParams); }
+        // Huge page 1 GiB : cette fonction ne gère que les mappings 4 KiB
+        if l3_entry.is_huge() { return Err(AllocError::InvalidParams); }
 
         let pd       = unsafe { phys_to_table_mut(l3_entry.phys_addr()) };
         let l2_entry = pd[virt.p2_index()];
         if !l2_entry.is_present() { return Err(AllocError::InvalidParams); }
+        // Huge page 2 MiB : idem
+        if l2_entry.is_huge() { return Err(AllocError::InvalidParams); }
 
         let pt       = unsafe { phys_to_table_mut(l2_entry.phys_addr()) };
         let entry    = &mut pt[virt.p1_index()];
@@ -189,6 +199,11 @@ impl PageTableWalker {
     ) -> Result<PhysAddr, AllocError> {
         let entry = &mut parent[idx];
         if entry.is_present() {
+            // Si l'entrée pointe vers une huge page (2 MiB / 1 GiB),
+            // on ne peut pas la traiter comme une table intermédiaire.
+            if entry.is_huge() {
+                return Err(AllocError::InvalidParams);
+            }
             return Ok(entry.phys_addr());
         }
         // Allouer un nouveau frame pour la table intermédiaire

@@ -12,6 +12,7 @@ pub mod wait_queue;
 pub mod event;
 pub mod barrier;
 pub mod rendezvous;
+pub mod sched_hooks;
 
 // Re-exports : futex
 pub use futex::{
@@ -92,4 +93,14 @@ pub use rendezvous::{
     exchange_create,
     exchange_swap,
     exchange_destroy,
+};
+
+// Re-exports : sched_hooks
+pub use sched_hooks::{
+    install_block_hook,
+    block_current,
+    wake_thread,
+    hooks_installed,
+    current_tid as sched_current_tid,
+    BlockFn as SchedBlockFn,
 };

@@ -1,102 +1,89 @@
-/* ============================================================================
- * Exo-OS Kernel — Script de linker x86_64
+/* =============================================================================
+ * kernel/linker.ld — Script linker Exo-OS (x86_64 bare-metal, Multiboot2)
+ * =============================================================================
  *
- * Adresse de chargement physique : 1 MiB (standard Multiboot2 / GRUB).
- * Le kernel est un exécutable statique non-PIE (code-model=kernel, static).
+ * Adresse physique de chargement : 0x100000 (1 MiB — standard Multiboot2).
+ * Le kernel est compilé avec code-model=kernel + relocation-model=static.
  *
- * KERNEL_BASE (0xFFFF_FFFF_8000_0000) est un constant virtuel utilisé par le
- * kernel pour configurer son propre espace d'adressage APRÈS le boot ;
- * il n'est PAS l'adresse de linkage. Le kernel s'exécute en adressage physique
- * jusqu'à ce que le sous-système mémoire configure ses tables de pages finales.
- * ============================================================================ */
+ * Organisation des sections (ordre = ordre dans l'image ELF) :
+ *   .multiboot2   → header Multiboot2 (DOIT être dans les 32 premiers KiB)
+ *   .text.boot    → _start + début de l'exécution
+ *   .text         → code kernel complet
+ *   .rodata       → données lecture seule (code_model=kernel : addresses hautes)
+ *   .data         → données initialisées
+ *   .tdata/.tbss  → données thread-local (TLS) — kernel kthread
+ *   .bss          → données zéro-initialisées
+ *   .boot_stack   → pile de boot BSP (NOLOAD : absent de l'image)
+ * =============================================================================
+ */
 
 ENTRY(_start)
 
 SECTIONS
 {
-    /* ── Adresse de chargement physique ─────────────────────────────────── */
-    . = 1M;
+    /* ── Adresse de chargement physique ─────────────────────────────────────── */
+    . = 0x100000;
 
-    /* ── Header Multiboot2 (DOIT être dans les 32 premiers KiB après 1M) ─ */
-    .multiboot2 : ALIGN(8)
-    {
+    /* ── Header Multiboot2 ─────────────────────────────────────────────────── */
+    /* RÈGLE : doit figurer dans les 32 premiers KiB de l'image (GRUB exigence) */
+    .multiboot2 : {
         KEEP(*(.multiboot2))
-        KEEP(*(.multiboot))
     }
 
-    /* ── Code de démarrage (ASM _start → kernel_main) ─────────────────── */
-    .text.boot : ALIGN(4K)
-    {
+    /* ── Code d'entrée boot ─────────────────────────────────────────────────── */
+    .text.boot : {
         KEEP(*(.text.boot))
     }
 
-    /* ── Trampoline SMP (copié à 0x6000 par install_trampoline) ────────── */
-    . = ALIGN(4K);
-    __trampoline_start = .;
-    .trampoline : ALIGN(4K)
-    {
-        KEEP(*(.trampoline))
-    }
-    __trampoline_end = .;
-
-    /* ── Code exécutable kernel ──────────────────────────────────────────── */
-    . = ALIGN(4K);
-    __text_start = .;
-    .text : ALIGN(4K)
-    {
+    /* ── Section code principale ────────────────────────────────────────────── */
+    .text : ALIGN(16) {
+        _text_start = .;
         *(.text .text.*)
+        _text_end = .;
     }
-    __text_end = .;
 
-    /* ── Données en lecture seule ───────────────────────────────────────── */
-    . = ALIGN(4K);
-    __rodata_start = .;
-    .rodata : ALIGN(4K)
-    {
+    /* ── Données lecture seule ──────────────────────────────────────────────── */
+    .rodata : ALIGN(4096) {
+        _rodata_start = .;
         *(.rodata .rodata.*)
+        _rodata_end = .;
     }
-    __rodata_end = .;
 
-    /* ── Données initialisées ───────────────────────────────────────────── */
-    . = ALIGN(4K);
-    __data_start = .;
-    .data : ALIGN(4K)
-    {
+    /* ── Données initialisées ────────────────────────────────────────────────── */
+    .data : ALIGN(4096) {
+        _data_start = .;
         *(.data .data.*)
-    }
-    __data_end = .;
-
-    /* ── Pile de boot BSP (64 KiB, avant .bss pour garantir l'ordre) ────── */
-    . = ALIGN(4K);
-    .boot_stack : ALIGN(4K)
-    {
-        _exo_boot_stack_bottom = .;
-        KEEP(*(.boot_stack .boot_stack.*))
-        . = ALIGN(4K);
-        _exo_boot_stack_top = .;
+        _data_end = .;
     }
 
-    /* ── Données non initialisées ───────────────────────────────────────── */
-    . = ALIGN(4K);
-    __bss_start = .;
-    .bss (NOLOAD) : ALIGN(4K)
-    {
-        *(COMMON)
+    /* ── Thread-local storage (kernel kthreads) ─────────────────────────────── */
+    .tdata : ALIGN(4096) {
+        _tdata_start = .;
+        *(.tdata .tdata.*)
+        _tdata_end = .;
+    }
+
+    /* ── BSS (zéro-initialisé par le kernel ou le bootloader) ──────────────── */
+    .bss : ALIGN(4096) {
+        _bss_start = .;
         *(.bss .bss.*)
+        *(COMMON)
+        _bss_end = .;
     }
-    . = ALIGN(4K);
-    __bss_end = .;
 
-    /* ── Fin du kernel ──────────────────────────────────────────────────── */
-    . = ALIGN(4K);
-    __kernel_end = .;
+    /* ── Pile de boot BSP (NOLOAD — absent de l'image) ──────────────────────── */
+    /* Le contenu est défini par global_asm! dans main.rs (type @nobits).        */
+    /* Le linker réserve l'espace mémoire mais ne l'écrit PAS dans l'image ELF. */
+    .boot_stack (NOLOAD) : ALIGN(4096) {
+        *(.boot_stack)
+    }
 
-    /* ── Sections de débogage et métadonnées (éliminées) ──────────────── */
-    /DISCARD/ :
-    {
+    /* ── Sections à éliminer ────────────────────────────────────────────────── */
+    /DISCARD/ : {
+        *(.eh_frame)
+        *(.eh_frame_hdr)
+        *(.note.GNU-stack)
+        *(.gcc_except_table)
         *(.comment)
-        *(.note .note.*)
-        *(.eh_frame .eh_frame_hdr)
-        *(.gnu_debuglink)
     }
 }

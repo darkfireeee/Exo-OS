@@ -34,7 +34,8 @@ pub const CFS_WAKEUP_PREEMPT_NS: u64 = 1_000_000; // 1ms
 /// Compteur global de préemptions CFS (instrumentation).
 pub static CFS_PREEMPTIONS: AtomicU64 = AtomicU64::new(0);
 /// Compteur global de wakeup-preemptions (instrumentation).
-pub static CFS_WAKEUP_PREMPT_COUNT: AtomicU64 = AtomicU64::new(0);
+/// BUG-FIX I : correction de la typo (PREMPT → PREEMPT).
+pub static CFS_WAKEUP_PREEMPT_COUNT: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Logique CFS
@@ -76,7 +77,7 @@ pub fn should_preempt_on_wakeup(
 
     // Préempter si le thread réveillé a un vruntime significativement plus petit.
     if woken_vr + CFS_WAKEUP_PREEMPT_NS < running_vr {
-        CFS_WAKEUP_PREMPT_COUNT.fetch_add(1, Ordering::Relaxed);
+        CFS_WAKEUP_PREEMPT_COUNT.fetch_add(1, Ordering::Relaxed);
         return true;
     }
     false

@@ -97,8 +97,8 @@ impl CondVar {
     ) -> KMutexGuard<'a, T> {
         CONDVAR_WAITS.fetch_add(1, Ordering::Relaxed);
 
-        // Snapshot du numéro de séquence AVANT l'insertion (évite la perte de signal).
-        let seq_before = self.seq.load(Ordering::Acquire);
+        // Snapshot du numéro de séquence (conservé pour diagnostic / tests).
+        let _seq_before = self.seq.load(Ordering::Acquire);
 
         // Allouer un WaitNode depuis l'EmergencyPool (RÈGLE WAITQ-01).
         let node_opt: Option<NonNull<WaitNode>> = WaitNode::alloc(tcb, 0);
@@ -123,25 +123,23 @@ impl CondVar {
         // Relâcher le mutex (Drop du guard).
         drop(guard);
 
-        // Attente du signal : boucle active jusqu'au changement de séquence.
-        // Dans un système complet, le scheduler retire ce thread de la run queue
-        // dès qu'il détecte TaskState::Sleeping lors du prochain pick_next.
-        loop {
-            core::hint::spin_loop();
-
-            // Vérifier si un signal est arrivé (seq a changé).
-            let seq_now = self.seq.load(Ordering::Acquire);
-            if seq_now != seq_before {
-                break;
-            }
-
-            // Vérifier si le thread a été directement réveillé par wake_one/wake_all
-            // (TaskState est repassé à Runnable).
-            if !tcb.is_null() {
-                let state = (*tcb).state();
-                if state == TaskState::Runnable || state == TaskState::Running {
-                    break;
-                }
+        // BUG-FIX O : utiliser schedule_block() au lieu d'une boucle active.
+        // La boucle active précédente causait deux problèmes critiques :
+        //   1. Brûlait 100% CPU pendant toute la durée de l'attente.
+        //   2. Double-scheduling : notify_one() appelait rq.enqueue() pendant
+        //      que ce thread tournait encore sur son CPU, autorisant une exécution
+        //      simultanée du même TCB sur deux CPUs différents.
+        // schedule_block() suspend proprement le thread en appelant context_switch
+        // vers le prochain thread de la run queue, sans re-enqueuer le courant.
+        // Le thread sera repris uniquement quand notify_one()/notify_all() appelle
+        // wake_one() → try_transition(Sleeping, Runnable) + rq.enqueue().
+        if !tcb.is_null() {
+            let cpu_raw = (*tcb).cpu.load(Ordering::Relaxed) as usize;
+            if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
+                let cpu_id = crate::scheduler::core::task::CpuId(cpu_raw as u32);
+                // SAFETY: cpu_raw < MAX_CPUS, run queue initialisée par scheduler::init().
+                let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
+                crate::scheduler::core::switch::schedule_block(rq, &mut *tcb);
             }
         }
 

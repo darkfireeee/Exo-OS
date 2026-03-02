@@ -113,8 +113,17 @@ pub unsafe fn request_migration(tcb: NonNull<ThreadControlBlock>, target: CpuId)
     tcb_ref.flags.fetch_or(task_flags::MIGRATED, Ordering::Relaxed);
 
     if !MIGRATION_QUEUES[target_idx].push(tcb) {
-        // Queue pleine — ne pas perdre le thread ; garder le flag MIGRATED.
+        // Queue pleine. Le thread a DÉJÀ été retiré de la run queue source
+        // par cfs_dequeue_for_migration(). Sans réenfilage, il disparaît
+        // définitivement (le commentaire original était erroné).
+        // BUG-FIX J : réenfiler sur le CPU home pour ne pas perdre le thread.
         MIGRATIONS_DROPPED.fetch_add(1, Ordering::Relaxed);
+        let home_raw = tcb.as_ref().cpu.load(Ordering::Relaxed) as usize;
+        if home_raw < nr_cpus() {
+            // SAFETY: home_raw < nr_cpus() ≤ MAX_CPUS, run queue initialisée.
+            let home_cpu = CpuId(home_raw as u32);
+            crate::scheduler::core::runqueue::run_queue(home_cpu).enqueue(tcb);
+        }
         return;
     }
     MIGRATIONS_SENT.fetch_add(1, Ordering::Relaxed);

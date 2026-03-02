@@ -59,7 +59,13 @@ pub fn init() {
 pub unsafe fn xsave_current(tcb: &mut ThreadControlBlock) {
     let state_ptr = tcb.fpu_state_ptr as *mut FpuState;
     if state_ptr.is_null() {
-        // Premier accès FPU de ce thread : on ne sauvegarde pas (rien à sauvegarder).
+        // FpuState pas encore allouée — rien à sauvegarder.
+        // BUG-FIX N : marquer FPU comme non chargée même dans ce cas.
+        // Sans ce store, prev.fpu_loaded reste `true` après le context switch,
+        // créant une incohérence visible lors d'un éventuel accès concurrent
+        // (ex. migration). Le flag est corrigé par context_switch step-4 quand
+        // ce thread est reprogrammé comme `next`, mais l'expliciter ici est plus sûr.
+        tcb.set_fpu_loaded(false);
         return;
     }
 
@@ -131,17 +137,24 @@ unsafe fn init_fpu_registers() {
 /// RÈGLE : Utilise l'allocateur heap kernel (global_allocator). Ne peut PAS
 /// être appelé depuis un contexte IN_RECLAIM (deadlock potentiel).
 pub unsafe fn alloc_fpu_state(tcb: &mut ThreadControlBlock) -> bool {
-    use core::alloc::{GlobalAlloc, Layout};
+    use core::alloc::Layout;
+
+    // BUG-FIX F : interdire les allocations depuis un contexte IN_RECLAIM.
+    // Appeler l'allocateur heap depuis IN_RECLAIM peut créer un deadlock si
+    // l'allocateur lui-même attend l'EmergencyPool (RÈGLE FPU-03).
+    if tcb.flags.load(Ordering::Relaxed)
+        & crate::scheduler::core::task::task_flags::IN_RECLAIM != 0
+    {
+        return false;
+    }
 
     // Layout : 2688 bytes, aligné 64 bytes.
     let layout = Layout::new::<FpuState>();
 
-    // SAFETY: GlobalAlloc::alloc respecte le layout demandé.
-    // On utilise alloc::alloc directement pour rester indépendant de std.
-    extern "C" {
-        fn __rust_alloc(size: usize, align: usize) -> *mut u8;
-    }
-    let ptr = __rust_alloc(layout.size(), layout.align());
+    // Utilise l'API Rust standard (alloc::alloc::alloc) qui délègue au
+    // #[global_allocator] KernelAllocator — évite l'appel FFI direct à
+    // __rust_alloc qui n'est pas résolu sur cible bare-metal sans usage alloc.
+    let ptr = alloc::alloc::alloc(layout);
     if ptr.is_null() {
         return false;
     }

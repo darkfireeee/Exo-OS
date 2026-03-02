@@ -115,6 +115,19 @@ pub unsafe fn handle_nm_exception(tcb: &mut ThreadControlBlock) {
     // SAFETY: clts est sûr ici car on va immédiatement restaurer la FPU.
     cr0_clear_ts();
 
+    // BUG-FIX M : allouer FpuState avant la première utilisation FPU.
+    // Sans cette allocation, xrstor_for() initialise les registres x87/SSE
+    // par défaut mais il n'existe aucune zone de sauvegarde.
+    // À chaque context switch suivant, xsave_current() voit fpu_state_ptr == NULL
+    // et retourne SANS sauvegarder l'état → l'état FPU est perdu sans bruit
+    // jusqu'à ce qu'une allocation réussisse.
+    if tcb.fpu_state_ptr.is_null() {
+        super::save_restore::alloc_fpu_state(tcb);
+        // Si l'allocation échoue (IN_RECLAIM ou OOM), fpu_state_ptr reste NULL.
+        // xrstor_for() gérera ce cas : init par défaut, FPU_LOADED = true, mais
+        // l'état sera perdu au prochain switch (dégradation gracieuse).
+    }
+
     // Restaurer l'état FPU ou initialiser pour la première fois.
     super::save_restore::xrstor_for(tcb);
     // xrstor_for positionne déjà FPU_LOADED = true dans le TCB.

@@ -1,0 +1,91 @@
+// ExoFS — API publique du module
+// Ring 0, no_std
+// Responsabilités : exofs_init(), exofs_register_fs()
+
+pub mod core;
+pub mod objects;
+pub mod path;
+pub mod epoch;
+pub mod storage;
+pub mod gc;
+pub mod dedup;
+pub mod compress;
+pub mod crypto;
+pub mod snapshot;
+pub mod relation;
+pub mod quota;
+pub mod syscall;
+pub mod posix_bridge;
+pub mod io;
+pub mod cache;
+pub mod recovery;
+pub mod export;
+pub mod numa;
+pub mod observability;
+pub mod audit;
+
+use crate::fs::exofs::core::error::ExofsError;
+use crate::fs::exofs::storage::superblock::ExoSuperblockInMemory;
+use crate::fs::exofs::epoch::epoch_commit::commit_current_epoch;
+use crate::fs::exofs::recovery::boot_recovery::boot_recovery_sequence;
+use crate::fs::exofs::syscall::register_exofs_syscalls;
+
+use alloc::sync::Arc;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+/// État global du module ExoFS — initialisé une seule fois au boot
+static EXOFS_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// Référence globale au superblock actif (protégée par SpinLock dans ExoSuperblockInMemory)
+static mut EXOFS_SUPERBLOCK: Option<Arc<ExoSuperblockInMemory>> = None;
+
+/// Initialise ExoFS au boot du kernel.
+/// Appelée par le VFS dispatcher après montage de la racine.
+///
+/// # Erreurs
+/// - `ExofsError::AlreadyMounted` si appelée deux fois
+/// - `ExofsError::CorruptSuperblock` si le superblock disque est invalide
+/// - `ExofsError::RecoveryFailed` si la séquence de recovery échoue
+pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
+    if EXOFS_INITIALIZED.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return Err(ExofsError::AlreadyMounted);
+    }
+
+    // Phase 1 : Recovery boot — sélectionne l'Epoch valide
+    boot_recovery_sequence(disk_size_bytes)?;
+
+    // Phase 2 : Enregistrement des syscalls ExoFS 500-518
+    register_exofs_syscalls()?;
+
+    // Phase 3 : Démarrage threads background (GC, writeback)
+    gc::gc_thread::start_gc_thread()?;
+    io::writeback::start_writeback_thread()?;
+
+    log_kernel!("[exofs] initialisé — disk_size={} MB",
+        disk_size_bytes / (1024 * 1024));
+
+    Ok(())
+}
+
+/// Enregistre ExoFS dans la table VFS du kernel.
+/// Retourne le pointeur sur les opérations VFS.
+pub fn exofs_register_fs() -> Result<(), ExofsError> {
+    posix_bridge::vfs_compat::register_exofs_vfs_ops()
+}
+
+/// Démontage propre : flush epoch, attente GC, sync superblock.
+pub fn exofs_shutdown() -> Result<(), ExofsError> {
+    if !EXOFS_INITIALIZED.load(Ordering::Acquire) {
+        return Ok(());
+    }
+
+    // Commit l'epoch courant avant de s'arrêter
+    commit_current_epoch()?;
+
+    // Sync superblock miroirs
+    storage::superblock_backup::sync_all_mirrors()?;
+
+    EXOFS_INITIALIZED.store(false, Ordering::Release);
+    log_kernel!("[exofs] arrêt propre effectué");
+    Ok(())
+}

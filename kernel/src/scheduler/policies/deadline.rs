@@ -103,9 +103,18 @@ pub fn admit_thread(p: &DeadlineParams) -> Result<u64, DeadlineError> {
 }
 
 /// Libère la fraction d'utilisation lors de la terminaison/descheduling du thread.
+///
+/// # BUG-FIX E : utiliser fetch_update + saturating_sub pour éviter l'underflow
+/// silencieux sur u64. L'ancien `fetch_sub` pouvait faire passer
+/// ADMITTED_UTILIZATION et DEADLINE_THREADS_ADMITTED à u64::MAX≈1.8×10¹⁹ si
+/// `release_thread()` était appelé en excès (bug de double-libération).
 pub fn release_thread(fraction: u64) {
-    ADMITTED_UTILIZATION.fetch_sub(fraction, Ordering::AcqRel);
-    DEADLINE_THREADS_ADMITTED.fetch_sub(1, Ordering::Relaxed);
+    let _ = ADMITTED_UTILIZATION.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+        Some(v.saturating_sub(fraction))
+    });
+    let _ = DEADLINE_THREADS_ADMITTED.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+        Some(v.saturating_sub(1))
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
