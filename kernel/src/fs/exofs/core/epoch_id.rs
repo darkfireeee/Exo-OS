@@ -470,32 +470,3 @@ impl EpochWindow {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Utilitaires supplémentaires sur EpochId
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Retourne vrai si le candidat peut être GCé.
-///
-/// Un epoch peut être GCé si :
-///   1. Il existe une epoch confirmée plus récente (committed).
-///   2. Aucun snapshot ne pointe encore vers lui.
-///   3. Sa date de création est antérieure à la fenêtre de rétention.
-pub fn epoch_gc_eligible(
-    candidate:          u64,
-    oldest_pinned:      u64,
-    latest_committed:   u64,
-) -> bool {
-    candidate < oldest_pinned && candidate < latest_committed
-}
-
-/// Calcule le nombre d'epochs entre deux identifiants.
-///
-/// Retourne 0 si `later` ≤ `earlier` (pas de soustraction négative unsigned).
-pub fn epoch_distance(earlier: u64, later: u64) -> u64 {
-    later.saturating_sub(earlier)
-}
-
-/// Vrai si un epoch est à l'intérieur d'une plage inclusive.
-pub fn epoch_in_range(epoch: u64, start: u64, end_inclusive: u64) -> bool {
-    epoch >= start && epoch <= end_inclusive
-}
-

@@ -52,12 +52,16 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
     }
 
     // Phase 1 : Recovery boot — sélectionne l'Epoch valide
-    boot_recovery_sequence(disk_size_bytes)?;
+    boot_recovery_sequence(disk_size_bytes)
+        .map_err(|_| ExofsError::RecoveryFailed)?;
 
     // Phase 2 : Enregistrement des syscalls ExoFS 500-518
     register_exofs_syscalls()?;
 
-    // Phase 3 : Démarrage threads background (GC, writeback)
+    // Phase 3 : Initialisation de la couche de compatibilité POSIX
+    posix_bridge::posix_bridge_init()?;
+
+    // Phase 4 : Démarrage threads background (GC, writeback)
     gc::gc_thread::start_gc_thread()?;
     io::writeback::start_writeback_thread()?;
 

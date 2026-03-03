@@ -48,18 +48,23 @@ pub enum CapError {
     DelegationDenied,
     /// Violation d'invariant interne (ne devrait jamais se produire).
     InternalError,
+    /// Refus générique constant-time (CAP-05) : verify() retourne TOUJOURS
+    /// cette variante en cas d'échec — jamais ObjectNotFound ni Revoked.
+    /// Empêche l'énumération des ObjectIds valides par timing side-channel.
+    Denied,
 }
 
 impl core::fmt::Display for CapError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::ObjectNotFound      => write!(f, "capability: object not found"),
-            Self::Revoked             => write!(f, "capability: token revoked"),
-            Self::InsufficientRights  => write!(f, "capability: insufficient rights"),
-            Self::InvalidToken        => write!(f, "capability: invalid token"),
-            Self::TableFull           => write!(f, "capability: table full"),
-            Self::DelegationDenied    => write!(f, "capability: delegation denied"),
-            Self::InternalError       => write!(f, "capability: internal error"),
+            Self::ObjectNotFound     => write!(f, "capability: object not found"),
+            Self::Revoked            => write!(f, "capability: token revoked"),
+            Self::InsufficientRights => write!(f, "capability: insufficient rights"),
+            Self::InvalidToken       => write!(f, "capability: invalid token"),
+            Self::TableFull          => write!(f, "capability: table full"),
+            Self::DelegationDenied   => write!(f, "capability: delegation denied"),
+            Self::InternalError      => write!(f, "capability: internal error"),
+            Self::Denied             => write!(f, "capability: denied"),
         }
     }
 }
@@ -85,34 +90,56 @@ impl core::fmt::Display for CapError {
 /// directement — passer par `security::access_control::checker::check_access()`
 /// qui y ajoute le logging audit et un contexte d'erreur riche.
 /// Seul `access_control/` appelle cette fonction.
+/// Vérification d'un CapToken — **UNIQUE point de vérification dans tout l'OS**.
+///
+/// # Propriété CAP-05 — Constant-time (voir INVARIANTS.md)
+/// verify() effectue TOUJOURS la même séquence d'opérations quel que soit le
+/// résultat. Pas d'early return différentiel entre « objet absent » et « révoqué ».
+/// Retourne TOUJOURS `Err(Denied)` si quelque chose ne va pas — jamais
+/// `ObjectNotFound` ni `Revoked` — pour empêcher l'énumération des ObjectIds
+/// valides par mesure de temps côté attaquant.
+///
+/// # Algorithme (INV-1 — voir INVARIANTS.md)
+/// 1. Rejet immédiat du token INVALID (ne révèle rien sur la table).
+/// 2. Lookup O(1) dans la table par ObjectId haché — chemin identique si absent.
+/// 3. Comparaisons génération + droits effectuées MÊME si entrée absente
+///    (sentinel values u32::MAX / Rights::empty()).
+/// 4. Résultat combiné — un seul code d'erreur Denied.
+///
+/// # Règle d'utilisation (v6)
+/// Les modules ipc/, fs/, process/ ne doivent PAS appeler cette fonction
+/// directement — passer par `security::access_control::checker::check_access()`
+/// qui y ajoute le logging audit et un contexte d'erreur riche.
 #[inline]
 pub fn verify(
     table:           &CapTable,
     token:           CapToken,
     required_rights: Rights,
 ) -> Result<(), CapError> {
-    // 1. Rejet rapide des tokens manifestement invalides
+    // 1. Rejet immédiat : token structurellement invalide (ObjectId::INVALID).
+    //    Ce rejet ne révèle aucune information sur la table.
     if token.is_invalid() {
         stat_denied();
         return Err(CapError::InvalidToken);
     }
 
-    // 2. Lookup dans la table
-    let entry = table.get(token.object_id()).ok_or_else(|| {
-        stat_denied();
-        CapError::ObjectNotFound
-    })?;
+    // 2. Lookup — chemin identique qu'on trouve ou non l'entrée.
+    let entry_opt = table.get(token.object_id());
 
-    // 3. Vérification de génération — révocation O(1) (INV-2)
-    if entry.generation != token.generation() {
-        stat_denied();
-        return Err(CapError::Revoked);
-    }
+    // 3. Valeurs sentinelles : mêmes comparaisons si l'entrée est absente.
+    //    u32::MAX ne peut jamais être une génération valide (counter monotone).
+    //    Rights::empty() ne satisfera jamais contains(required) si required != 0.
+    let stored_gen    = entry_opt.as_ref().map(|e| e.generation).unwrap_or(u32::MAX);
+    let stored_rights = entry_opt.as_ref().map(|e| e.rights).unwrap_or(Rights::empty());
 
-    // 4. Vérification des droits (INV-3)
-    if !entry.rights.contains(required_rights) {
+    // 4. Les deux comparaisons sont TOUJOURS effectuées — pas d'évaluation courte.
+    let gen_ok    = stored_gen == token.generation();
+    let rights_ok = stored_rights.contains(required_rights);
+
+    // 5. Résultat unifié — Denied dans TOUS les cas d'échec (CAP-05).
+    if !gen_ok || !rights_ok || entry_opt.is_none() {
         stat_denied();
-        return Err(CapError::InsufficientRights);
+        return Err(CapError::Denied);
     }
 
     stat_verified();

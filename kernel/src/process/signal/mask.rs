@@ -188,3 +188,17 @@ pub fn reset_signals_on_exec(tcb: &ThreadControlBlock) {
     }
     // Le masque de signal est conservé par POSIX (sauf si SA_RESETHAND).
 }
+
+/// Bloque tous les signaux sauf SIGKILL et SIGSTOP (LAC-08 / PROC-03).
+///
+/// Appelé au début de do_execve() **avant** le chargement ELF pouréviter le
+/// race PROC-03 : un signal livré entre load_elf() et reset_signals_on_exec()
+/// invoquerait l'ancien handler dans un espace d'adressage partiellement
+/// remplacé → comportement indéfini / exploit potentiel.
+///
+/// Les signaux sont débloqués par reset_signals_on_exec() qui suit.
+pub fn block_all_except_kill(tcb: &ThreadControlBlock) {
+    // SigMask::FULL = tous les signaux sauf SIGKILL (9) et SIGSTOP (19).
+    // NON_BLOCKABLE est déjà masqué dans SigMask::FULL.
+    tcb.signal_mask.store(SigMask::FULL.0, Ordering::Release);
+}

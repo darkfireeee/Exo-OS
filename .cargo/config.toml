@@ -20,6 +20,10 @@ rustflags = [
   "-C", "relocation-model=static",
   "-C", "code-model=kernel",
   "-C", "debuginfo=1",
+  # Désactive les extensions CPU non disponibles en contexte kernel bare-metal.
+  # sha / aes : SHA-NI et AES-NI génèrent du code SIMD que LLVM ne peut pas baisser
+  # pour x86_64-unknown-none (LLVM ERROR: Do not know how to split the operator).
+  "-C", "target-feature=-sha,-aes,-avx512f,-avx512bw,-avx512dq,-avx512vl",
 ]
 
 [unstable]

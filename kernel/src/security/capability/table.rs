@@ -4,7 +4,7 @@
 // CAP TABLE — Table de capacités par processus (Exo-OS Security · Couche 2b)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// ⚠️  HORS périmètre de preuve formelle (Coq/TLA+).
+// ⚠️  HORS périmètre de vérification formelle (proptest + INVARIANTS.md uniquement).
 //     table.rs est l'implémentation concrète — non incluse dans la preuve.
 //     Le périmètre formel couvre : model.rs, token.rs, rights.rs,
 //     revocation.rs, delegation.rs (voir DOC7, RÈGLE CAP-02).
@@ -279,8 +279,8 @@ impl CapTable {
     /// La révocation est O(1) : on incrémente uniquement le compteur de génération.
     /// Les tokens existants avec l'ancienne génération retourneront Err(Revoked).
     ///
-    /// # PROPRIÉTÉ PROUVÉE (Coq)
-    /// ∀ token t, revoke(obj) → verify(t) = Err(Revoked)
+    /// # PROPRIÉTÉ VÉRIFIÉE (proptest + INVARIANTS.md — LAC-02)
+    /// ∀ token t, revoke(obj) → verify(t) = Err(Denied)
     pub fn revoke(&self, object_id: ObjectId) -> Result<(), CapError> {
         if let Some(idx) = self.find_slot(object_id) {
             // Incrément atomique de génération — invalide TOUS les tokens existants

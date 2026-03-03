@@ -1,267 +1,454 @@
-//! ContentHash — calcul d'empreintes de contenu pour la déduplication (no_std).
+//! ContentHash — calcul et registre d'empreintes de contenu (no_std).
 //!
 //! RÈGLE 11 : le BlobId d'un objet = Blake3(données AVANT compression/chiffrement).
 //! Le ContentHash est identique au BlobId pour les données brutes.
-//! RÈGLE 3  : tout unsafe → // SAFETY: <raison>
+//!
+//! OOM-02 / ARITH-02 / RECUR-01 respectés.
 
-use crate::fs::exofs::core::{BlobId, FsError};
-use crate::scheduler::sync::spinlock::SpinLock;
-use alloc::collections::BTreeMap;
+#![allow(dead_code)]
+
 use alloc::vec::Vec;
+use alloc::collections::BTreeMap;
 use core::sync::atomic::{AtomicU64, Ordering};
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
+use super::chunk_fingerprint::{blake3_hash, fnv1a64, xxhash64};
 
-/// Algorithme de hachage de contenu.
+// ─────────────────────────────────────────────────────────────────────────────
+// Constantes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Capacité maximale du cache interne de hashes.
+pub const CONTENT_HASH_CACHE_CAPACITY: usize = 8192;
+/// Seuil de données à partir duquel on utilise un double hash.
+pub const DOUBLE_HASH_THRESHOLD: usize = 4096;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Algorithme de hachage de contenu
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Algorithme de hachage de contenu sélectionné.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HashAlgorithm {
+    /// Blake3 seul (cryptographique, 256 bits).
     Blake3   = 0,
-    Xxhash64 = 1,   // Hachage rapide non-cryptographique pour la détection rapide.
+    /// XxHash64 (rapide, non-cryptographique).
+    XxHash64 = 1,
+    /// Double : FNV-1a (rapide) + Blake3 (validation).
+    Double   = 2,
 }
 
-/// Résultat d'un hachage de contenu.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl HashAlgorithm {
+    /// Retourne `true` si l'algorithme est adapté à la déduplication sécurisée.
+    pub fn is_secure(self) -> bool { !matches!(self, Self::XxHash64) }
+
+    /// Nom lisible.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Blake3   => "blake3",
+            Self::XxHash64 => "xxhash64",
+            Self::Double   => "double",
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ContentHashResult
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Résultat du calcul d'empreinte de contenu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContentHashResult {
-    pub blake3: [u8; 32],
-    pub xxhash: u64,
+    /// Empreinte Blake3 (256 bits).
+    pub blake3:    [u8; 32],
+    /// Hash rapide XxHash64.
+    pub xxhash:    u64,
+    /// Hash FNV-1a 64 bits.
+    pub fnv:       u64,
+    /// Algorithme utilisé pour le calcul.
+    pub algorithm: HashAlgorithm,
 }
 
 impl ContentHashResult {
+    /// Calcule les deux empreintes depuis des données brutes.
+    pub fn compute(data: &[u8]) -> Self {
+        let blake3 = blake3_hash(data);
+        let xxhash = xxhash64(data, 0);
+        let fnv    = fnv1a64(data);
+        let algo   = if data.len() >= DOUBLE_HASH_THRESHOLD {
+            HashAlgorithm::Double
+        } else {
+            HashAlgorithm::Blake3
+        };
+        Self { blake3, xxhash, fnv, algorithm: algo }
+    }
+
+    /// Retourne le BlobId correspondant (RÈGLE 11).
     pub fn blob_id(&self) -> BlobId {
         BlobId::from_raw(self.blake3)
     }
+
+    /// Retourne `true` si le fast_hash correspond (filtrage préliminaire rapide).
+    pub fn fast_hash_matches(&self, other: &Self) -> bool {
+        self.xxhash == other.xxhash && self.fnv == other.fnv
+    }
+
+    /// Comparaison à temps constant sur le blake3.
+    ///
+    /// ARITH-02 : XOR accumulé.
+    pub fn constant_time_eq(&self, other: &Self) -> bool {
+        let mut d: u8 = 0;
+        for (a, b) in self.blake3.iter().zip(other.blake3.iter()) {
+            d |= a ^ b;
+        }
+        d == 0
+    }
+
+    /// Retourne les 8 premiers octets du blake3 comme u64 (index de shard).
+    pub fn shard_key(&self) -> u64 {
+        u64::from_le_bytes(self.blake3[..8].try_into().unwrap_or([0u8; 8]))
+    }
 }
 
-/// Registre global de hashes de contenu connus.
-pub static CONTENT_HASH: ContentHash = ContentHash::new_const();
+// ─────────────────────────────────────────────────────────────────────────────
+// HashCacheEntry — entrée du cache
+// ─────────────────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone)]
+struct HashCacheEntry {
+    result:    ContentHashResult,
+    data_len:  usize,
+    accesses:  u32,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ContentHash — registre global (spinlock-free via UnsafeCell)
+// ─────────────────────────────────────────────────────────────────────────────
+
+use core::cell::UnsafeCell;
+
+/// Registre global de hashes de contenu.
+///
+/// Thread-safe via spinlock AtomicU64.
 pub struct ContentHash {
-    cache:          SpinLock<BTreeMap<BlobId, ContentHashResult>>,
-    computations:   AtomicU64,
-    cache_hits:     AtomicU64,
+    cache:        UnsafeCell<BTreeMap<[u8; 32], HashCacheEntry>>,
+    lock:         AtomicU64,
+    computations: AtomicU64,
+    cache_hits:   AtomicU64,
+    cache_misses: AtomicU64,
+    evictions:    AtomicU64,
+    total_bytes:  AtomicU64,
 }
+
+unsafe impl Sync for ContentHash {}
+unsafe impl Send for ContentHash {}
 
 impl ContentHash {
+    /// Constructeur `const` pour static.
     pub const fn new_const() -> Self {
         Self {
-            cache:        SpinLock::new(BTreeMap::new()),
+            cache:        UnsafeCell::new(BTreeMap::new()),
+            lock:         AtomicU64::new(0),
             computations: AtomicU64::new(0),
             cache_hits:   AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
+            evictions:    AtomicU64::new(0),
+            total_bytes:  AtomicU64::new(0),
         }
     }
 
-    /// Calcule le ContentHash d'un bloc de données.
-    pub fn compute(data: &[u8]) -> ContentHashResult {
-        let blake3 = blake3_hash(data);
-        let xxhash = xxhash64(data, 0);
-        ContentHashResult { blake3, xxhash }
+    // Spinlock acquire.
+    fn acquire(&self) {
+        while self.lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            core::hint::spin_loop();
+        }
     }
+    // Spinlock release.
+    fn release(&self) { self.lock.store(0, Ordering::Release); }
 
-    /// Calcule et met en cache le ContentHash.
-    pub fn compute_and_cache(&self, data: &[u8]) -> Result<ContentHashResult, FsError> {
-        let result = Self::compute(data);
-        let bid = result.blob_id();
-        {
-            let mut cache = self.cache.lock();
-            if !cache.contains_key(&bid) {
-                cache.try_reserve(1).map_err(|_| FsError::OutOfMemory)?;
-                cache.insert(bid, result);
+    /// Calcule ou retrouve l'empreinte d'un bloc de données.
+    ///
+    /// OOM-02 : éviction si cache plein avant insertion.
+    pub fn hash_data(&self, data: &[u8]) -> ExofsResult<ContentHashResult> {
+        let result = ContentHashResult::compute(data);
+        self.acquire();
+        // SAFETY: accès exclusif sous spinlock.
+        let cache = unsafe { &mut *self.cache.get() };
+        if let Some(entry) = cache.get_mut(&result.blake3) {
+            entry.accesses = entry.accesses.saturating_add(1);
+            let r = entry.result;
+            self.release();
+            self.cache_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(r);
+        }
+        self.cache_misses.fetch_add(1, Ordering::Relaxed);
+        // Éviction LRU simplifiée (supprime la première entrée).
+        if cache.len() >= CONTENT_HASH_CACHE_CAPACITY {
+            if let Some(&oldest) = cache.keys().next() {
+                cache.remove(&oldest);
+                self.evictions.fetch_add(1, Ordering::Relaxed);
             }
         }
+        cache.insert(result.blake3, HashCacheEntry {
+            result,
+            data_len: data.len(),
+            accesses: 1,
+        });
+        self.release();
         self.computations.fetch_add(1, Ordering::Relaxed);
+        self.total_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
         Ok(result)
     }
 
-    /// Consulte le cache par BlobId.
-    pub fn get_cached(&self, blob_id: &BlobId) -> Option<ContentHashResult> {
-        let cache = self.cache.lock();
-        cache.get(blob_id).copied()
+    /// Calcule le BlobId d'un blob (RÈGLE 11).
+    pub fn compute_blob_id(&self, data: &[u8]) -> ExofsResult<BlobId> {
+        Ok(self.hash_data(data)?.blob_id())
     }
 
-    /// Vérifie si un blob est déjà connu.
-    pub fn is_known(&self, blob_id: &BlobId) -> bool {
-        self.cache.lock().contains_key(blob_id)
+    /// Recherche par blake3 sans recalcul.
+    pub fn lookup_by_blake3(&self, blake3: &[u8; 32]) -> Option<ContentHashResult> {
+        self.acquire();
+        let cache = unsafe { &*self.cache.get() };
+        let r = cache.get(blake3).map(|e| e.result);
+        self.release();
+        r
+    }
+
+    /// Vérifie si un blob avec ce blake3 est déjà connu.
+    pub fn is_known(&self, blake3: &[u8; 32]) -> bool {
+        self.lookup_by_blake3(blake3).is_some()
     }
 
     /// Supprime une entrée du cache.
-    pub fn evict(&self, blob_id: &BlobId) {
-        self.cache.lock().remove(blob_id);
+    pub fn evict(&self, blake3: &[u8; 32]) {
+        self.acquire();
+        let cache = unsafe { &mut *self.cache.get() };
+        cache.remove(blake3);
+        self.release();
+        self.evictions.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn computations(&self) -> u64 { self.computations.load(Ordering::Relaxed) }
-    pub fn cache_hits(&self) -> u64 { self.cache_hits.load(Ordering::Relaxed) }
-    pub fn cache_size(&self) -> usize { self.cache.lock().len() }
+    /// Vide entièrement le cache.
+    pub fn clear(&self) {
+        self.acquire();
+        let cache = unsafe { &mut *self.cache.get() };
+        cache.clear();
+        self.release();
+    }
+
+    // Compteurs.
+    pub fn computation_count(&self) -> u64 { self.computations.load(Ordering::Relaxed) }
+    pub fn cache_hit_count(&self)    -> u64 { self.cache_hits.load(Ordering::Relaxed) }
+    pub fn cache_miss_count(&self)   -> u64 { self.cache_misses.load(Ordering::Relaxed) }
+    pub fn eviction_count(&self)     -> u64 { self.evictions.load(Ordering::Relaxed) }
+    pub fn total_bytes_hashed(&self) -> u64 { self.total_bytes.load(Ordering::Relaxed) }
+
+    /// Taille actuelle du cache.
+    pub fn cache_len(&self) -> usize {
+        self.acquire();
+        let l = unsafe { (*self.cache.get()).len() };
+        self.release();
+        l
+    }
+
+    /// Taux de hit (0..=100).
+    pub fn hit_rate_pct(&self) -> u64 {
+        let hits   = self.cache_hit_count();
+        let misses = self.cache_miss_count();
+        let total  = hits.saturating_add(misses);
+        if total == 0 { 0 } else { hits.saturating_mul(100) / total }
+    }
+
+    /// Vérifie l'intégrité d'un bloc en recalculant son empreinte.
+    pub fn verify_integrity(&self, data: &[u8], expected_blake3: &[u8; 32]) -> bool {
+        let computed = blake3_hash(data);
+        // Comparaison à temps constant.
+        let mut diff: u8 = 0;
+        for (a, b) in computed.iter().zip(expected_blake3.iter()) { diff |= a ^ b; }
+        diff == 0
+    }
+
+    /// Calcule les empreintes pour un batch de blocs.
+    ///
+    /// OOM-02 : try_reserve.
+    pub fn hash_batch(&self, items: &[&[u8]]) -> ExofsResult<Vec<ContentHashResult>> {
+        let mut out: Vec<ContentHashResult> = Vec::new();
+        out.try_reserve(items.len()).map_err(|_| ExofsError::NoMemory)?;
+        for &data in items {
+            out.push(self.hash_data(data)?);
+        }
+        Ok(out)
+    }
+
+    /// Détecte les doublons dans un batch (retourne les indices des doublons).
+    ///
+    /// OOM-02 : try_reserve.
+    /// RECUR-01 : O(n²) itératif.
+    pub fn find_duplicates_in_batch(&self, items: &[&[u8]]) -> ExofsResult<Vec<(usize, usize)>> {
+        let hashes = self.hash_batch(items)?;
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        pairs.try_reserve(items.len()).map_err(|_| ExofsError::NoMemory)?;
+        for i in 0..hashes.len() {
+            for j in (i + 1)..hashes.len() {
+                if hashes[i].constant_time_eq(&hashes[j]) {
+                    pairs.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                    pairs.push((i, j));
+                }
+            }
+        }
+        Ok(pairs)
+    }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Primitives de hachage
-// ──────────────────────────────────────────────────────────────────────────────
+/// Instance globale.
+pub static CONTENT_HASH: ContentHash = ContentHash::new_const();
 
-fn blake3_hash(data: &[u8]) -> [u8; 32] {
-    // Implémentation single-chunk Blake3 (≤ 1024 bytes par chunk, mode root).
-    const IV: [u32; 8] = [
-        0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-        0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19,
-    ];
-    const BLOCK_SIZE: usize = 64;
-    const FLAG_CHUNK_START: u32 = 1;
-    const FLAG_CHUNK_END:   u32 = 2;
-    const FLAG_ROOT:        u32 = 8;
+// ─────────────────────────────────────────────────────────────────────────────
+// HashSummary
+// ─────────────────────────────────────────────────────────────────────────────
 
-    let mut chaining_value = IV;
-    let mut offset:         u64 = 0;
-
-    let chunks: Vec<&[u8]> = data.chunks(1024).collect();
-    let n_chunks = chunks.len().max(1);
-
-    for (ci, chunk) in data.chunks(1024).enumerate() {
-        let is_first = ci == 0;
-        let is_last  = ci == n_chunks - 1;
-        let mut cv = if is_first { IV } else { chaining_value };
-
-        for (bi, block) in chunk.chunks(BLOCK_SIZE).enumerate() {
-            let is_block_first = bi == 0;
-            let is_block_last  = bi == (chunk.len() + BLOCK_SIZE - 1) / BLOCK_SIZE - 1;
-            let mut msg = [0u8; 64];
-            msg[..block.len()].copy_from_slice(block);
-            let words = bytes_to_words_64(&msg);
-            let mut flags: u32 = 0;
-            if is_first && is_block_first { flags |= FLAG_CHUNK_START; }
-            if is_last  && is_block_last  { flags |= FLAG_CHUNK_END; }
-            if is_last  && is_block_last  { flags |= FLAG_ROOT; }
-            let result = blake3_compress(&cv, &words, offset, block.len() as u32, flags);
-            cv[0] = result[0]; cv[1] = result[1]; cv[2] = result[2]; cv[3] = result[3];
-            cv[4] = result[4]; cv[5] = result[5]; cv[6] = result[6]; cv[7] = result[7];
-        }
-        chaining_value = cv;
-        offset = offset.wrapping_add(1024);
-    }
-
-    let mut out = [0u8; 32];
-    for (i, &w) in chaining_value.iter().enumerate() {
-        out[i*4..i*4+4].copy_from_slice(&w.to_le_bytes());
-    }
-    out
+/// Résumé des statistiques du registre.
+#[derive(Debug, Clone, Copy)]
+pub struct HashSummary {
+    pub computations:  u64,
+    pub cache_hits:    u64,
+    pub cache_misses:  u64,
+    pub evictions:     u64,
+    pub total_bytes:   u64,
+    pub hit_rate_pct:  u64,
+    pub cache_size:    usize,
 }
 
-fn bytes_to_words_64(b: &[u8; 64]) -> [u32; 16] {
-    let mut w = [0u32; 16];
-    for i in 0..16 {
-        w[i] = u32::from_le_bytes(b[i*4..i*4+4].try_into().unwrap());
-    }
-    w
-}
-
-fn blake3_compress(cv: &[u32; 8], msg: &[u32; 16], ctr: u64, blen: u32, flags: u32) -> [u32; 16] {
-    let iv = [0x6A09E667u32, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A];
-    let mut v: [u32; 16] = [
-        cv[0],cv[1],cv[2],cv[3],cv[4],cv[5],cv[6],cv[7],
-        iv[0],iv[1],iv[2],iv[3],
-        (ctr&0xFFFF_FFFF) as u32,(ctr>>32) as u32,blen,flags,
-    ];
-    const SIGMA:[[usize;16];7]=[
-        [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
-        [2,6,3,10,7,0,4,13,1,11,12,5,9,14,15,8],
-        [3,4,10,12,13,2,7,14,6,5,9,0,11,15,8,1],
-        [10,7,12,9,14,3,13,15,4,0,11,2,5,8,1,6],
-        [12,13,9,11,15,10,14,8,7,2,5,4,0,1,6,3],
-        [14,15,11,5,8,12,9,2,13,3,0,7,1,6,4,10],
-        [14,15,11,5,8,12,9,2,13,3,0,7,1,6,4,10],
-    ];
-    let mut g=|a:usize,b:usize,c:usize,d:usize,x:u32,y:u32|{
-        v[a]=v[a].wrapping_add(v[b]).wrapping_add(x);v[d]=(v[d]^v[a]).rotate_right(16);
-        v[c]=v[c].wrapping_add(v[d]);v[b]=(v[b]^v[c]).rotate_right(12);
-        v[a]=v[a].wrapping_add(v[b]).wrapping_add(y);v[d]=(v[d]^v[a]).rotate_right(8);
-        v[c]=v[c].wrapping_add(v[d]);v[b]=(v[b]^v[c]).rotate_right(7);
-    };
-    for r in 0..7{let s=&SIGMA[r];
-        g(0,4,8,12,msg[s[0]],msg[s[1]]);g(1,5,9,13,msg[s[2]],msg[s[3]]);
-        g(2,6,10,14,msg[s[4]],msg[s[5]]);g(3,7,11,15,msg[s[6]],msg[s[7]]);
-        g(0,5,10,15,msg[s[8]],msg[s[9]]);g(1,6,11,12,msg[s[10]],msg[s[11]]);
-        g(2,7,8,13,msg[s[12]],msg[s[13]]);g(3,4,9,14,msg[s[14]],msg[s[15]]);}
-    for i in 0..8{v[i]^=v[i+8];v[i+8]^=cv[i];}
-    v
-}
-
-/// xxHash-64 non-cryptographique (Knuth multiplier variant simplifié).
-fn xxhash64(data: &[u8], seed: u64) -> u64 {
-    const P1: u64 = 0x9E3779B185EBCA87;
-    const P2: u64 = 0xC2B2AE3D27D4EB4F;
-    const P3: u64 = 0x165667B19E3779F9;
-    const P4: u64 = 0x85EBCA77C2B2AE63;
-    const P5: u64 = 0x27D4EB2F165667C5;
-
-    let len = data.len();
-    let mut h: u64;
-
-    if len >= 32 {
-        let mut v1 = seed.wrapping_add(P1).wrapping_add(P2);
-        let mut v2 = seed.wrapping_add(P2);
-        let mut v3 = seed;
-        let mut v4 = seed.wrapping_sub(P1);
-        let mut p = 0usize;
-
-        while p + 32 <= len {
-            let lane = |off: usize| u64::from_le_bytes(data[p+off..p+off+8].try_into().unwrap());
-            v1 = v1.wrapping_add(lane(0).wrapping_mul(P2)).rotate_left(31).wrapping_mul(P1);
-            v2 = v2.wrapping_add(lane(8).wrapping_mul(P2)).rotate_left(31).wrapping_mul(P1);
-            v3 = v3.wrapping_add(lane(16).wrapping_mul(P2)).rotate_left(31).wrapping_mul(P1);
-            v4 = v4.wrapping_add(lane(24).wrapping_mul(P2)).rotate_left(31).wrapping_mul(P1);
-            p += 32;
-        }
-
-        h = v1.rotate_left(1)
-            .wrapping_add(v2.rotate_left(7))
-            .wrapping_add(v3.rotate_left(12))
-            .wrapping_add(v4.rotate_left(18));
-
-        h = (h ^ (v1.wrapping_mul(P2).rotate_left(31).wrapping_mul(P1))).wrapping_mul(P1).wrapping_add(P4);
-        h = (h ^ (v2.wrapping_mul(P2).rotate_left(31).wrapping_mul(P1))).wrapping_mul(P1).wrapping_add(P4);
-        h = (h ^ (v3.wrapping_mul(P2).rotate_left(31).wrapping_mul(P1))).wrapping_mul(P1).wrapping_add(P4);
-        h = (h ^ (v4.wrapping_mul(P2).rotate_left(31).wrapping_mul(P1))).wrapping_mul(P1).wrapping_add(P4);
-        h = h.wrapping_add(len as u64);
-
-        let mut p2 = p;
-        while p2 + 8 <= len {
-            let lane = u64::from_le_bytes(data[p2..p2+8].try_into().unwrap());
-            h ^= lane.wrapping_mul(P2).rotate_left(31).wrapping_mul(P1);
-            h = h.rotate_left(27).wrapping_mul(P1).wrapping_add(P4);
-            p2 += 8;
-        }
-        if p2 + 4 <= len {
-            let word = u32::from_le_bytes(data[p2..p2+4].try_into().unwrap()) as u64;
-            h ^= word.wrapping_mul(P1);
-            h = h.rotate_left(23).wrapping_mul(P2).wrapping_add(P3);
-            p2 += 4;
-        }
-        for &b in &data[p2..] {
-            h ^= (b as u64).wrapping_mul(P5);
-            h = h.rotate_left(11).wrapping_mul(P1);
-        }
-    } else {
-        h = seed.wrapping_add(P5).wrapping_add(len as u64);
-        let mut p = 0usize;
-        while p + 8 <= len {
-            let lane = u64::from_le_bytes(data[p..p+8].try_into().unwrap());
-            h ^= lane.wrapping_mul(P2).rotate_left(31).wrapping_mul(P1);
-            h = h.rotate_left(27).wrapping_mul(P1).wrapping_add(P4);
-            p += 8;
-        }
-        if p + 4 <= len {
-            let word = u32::from_le_bytes(data[p..p+4].try_into().unwrap()) as u64;
-            h ^= word.wrapping_mul(P1);
-            h = h.rotate_left(23).wrapping_mul(P2).wrapping_add(P3);
-            p += 4;
-        }
-        for &b in &data[p..] {
-            h ^= (b as u64).wrapping_mul(P5);
-            h = h.rotate_left(11).wrapping_mul(P1);
+impl ContentHash {
+    /// Produit un résumé statistique.
+    pub fn summary(&self) -> HashSummary {
+        HashSummary {
+            computations: self.computation_count(),
+            cache_hits:   self.cache_hit_count(),
+            cache_misses: self.cache_miss_count(),
+            evictions:    self.eviction_count(),
+            total_bytes:  self.total_bytes_hashed(),
+            hit_rate_pct: self.hit_rate_pct(),
+            cache_size:   self.cache_len(),
         }
     }
+}
 
-    h ^= h >> 33;
-    h  = h.wrapping_mul(P2);
-    h ^= h >> 29;
-    h  = h.wrapping_mul(P3);
-    h ^= h >> 32;
-    h
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ch() -> ContentHash { ContentHash::new_const() }
+
+    #[test] fn test_compute_deterministic() {
+        let r1 = ContentHashResult::compute(b"hello world");
+        let r2 = ContentHashResult::compute(b"hello world");
+        assert_eq!(r1.blake3, r2.blake3);
+        assert_eq!(r1.xxhash, r2.xxhash);
+    }
+
+    #[test] fn test_compute_different_data() {
+        let r1 = ContentHashResult::compute(b"aaa");
+        let r2 = ContentHashResult::compute(b"bbb");
+        assert_ne!(r1.blake3, r2.blake3);
+    }
+
+    #[test] fn test_blob_id_from_hash() {
+        let r = ContentHashResult::compute(b"data");
+        let id = r.blob_id();
+        assert_eq!(id.as_bytes(), &r.blake3);
+    }
+
+    #[test] fn test_fast_hash_matches() {
+        let r1 = ContentHashResult::compute(b"same");
+        let r2 = ContentHashResult::compute(b"same");
+        assert!(r1.fast_hash_matches(&r2));
+    }
+
+    #[test] fn test_constant_time_eq() {
+        let r1 = ContentHashResult::compute(b"x");
+        let r2 = ContentHashResult::compute(b"x");
+        assert!(r1.constant_time_eq(&r2));
+        let r3 = ContentHashResult::compute(b"y");
+        assert!(!r1.constant_time_eq(&r3));
+    }
+
+    #[test] fn test_hash_data_returns_result() {
+        let ch = ch();
+        let r  = ch.hash_data(b"test blob data").unwrap();
+        assert_ne!(r.blake3, [0u8; 32]);
+    }
+
+    #[test] fn test_cache_hit() {
+        let ch = ch();
+        ch.hash_data(b"cached").unwrap();
+        ch.hash_data(b"cached").unwrap();
+        assert!(ch.cache_hit_count() >= 1);
+    }
+
+    #[test] fn test_is_known() {
+        let ch = ch();
+        let r  = ch.hash_data(b"known data").unwrap();
+        assert!(ch.is_known(&r.blake3));
+        assert!(!ch.is_known(&[0u8; 32]));
+    }
+
+    #[test] fn test_verify_integrity_ok() {
+        let ch = ch();
+        let data = b"integrity check data";
+        let b3   = blake3_hash(data);
+        assert!(ch.verify_integrity(data, &b3));
+    }
+
+    #[test] fn test_verify_integrity_fail() {
+        let ch = ch();
+        let data = b"some data";
+        assert!(!ch.verify_integrity(data, &[0xFF; 32]));
+    }
+
+    #[test] fn test_hash_batch() {
+        let ch     = ch();
+        let items: &[&[u8]] = &[b"a", b"b", b"c"];
+        let results = ch.hash_batch(items).unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test] fn test_find_duplicates() {
+        let ch    = ch();
+        let items: &[&[u8]] = &[b"dup", b"unique", b"dup"];
+        let dups  = ch.find_duplicates_in_batch(items).unwrap();
+        assert_eq!(dups.len(), 1);
+        assert_eq!(dups[0], (0, 2));
+    }
+
+    #[test] fn test_evict() {
+        let ch = ch();
+        let r  = ch.hash_data(b"evict me").unwrap();
+        ch.evict(&r.blake3);
+        assert!(!ch.is_known(&r.blake3));
+    }
+
+    #[test] fn test_clear() {
+        let ch = ch();
+        ch.hash_data(b"x").unwrap();
+        ch.clear();
+        assert_eq!(ch.cache_len(), 0);
+    }
+
+    #[test] fn test_summary() {
+        let ch = ch();
+        ch.hash_data(b"summary test").unwrap();
+        let s = ch.summary();
+        assert!(s.computations >= 1);
+    }
+
+    #[test] fn test_shard_key() {
+        let r = ContentHashResult::compute(b"shard");
+        let k = r.shard_key();
+        assert_eq!(k, u64::from_le_bytes(r.blake3[..8].try_into().unwrap()));
+    }
 }

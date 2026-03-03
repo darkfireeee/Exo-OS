@@ -76,6 +76,13 @@ pub use flags::{
     ObjectFlags, ObjectFlagsBuilder,
     ExtentFlags, EpochFlags, SnapshotFlags, MigrationFlags, MountFlags,
 };
-pub use version::{FormatVersion, FeatureFlags, MountCompatibility, negotiate_mount};
+pub use version::{
+    FormatVersion, FeatureFlags, MountCompatibility, negotiate_mount,
+    FeatureDependency, FeatureFlagsBuilder, VersionNegotiationResult,
+    negotiate_mount_detailed, check_feature_dependencies,
+    feature_overhead_pct10, total_features_overhead_pct10,
+    version_history_entry, find_migration_path, validate_version_on_disk,
+    VersionHistoryEntry, MigrationDescriptor,
+};
 pub use stats::{ExofsStats, ExofsStatsSnapshot, ExofsStatsExtended, EXOFS_STATS};
 pub use config::{ExofsConfig, ConfigProfile, MountOptions, EXOFS_CONFIG};

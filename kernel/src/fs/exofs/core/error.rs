@@ -97,6 +97,12 @@ pub enum ExofsError {
     InvalidArgument,
     /// Erreur interne inattendue (bug kernel).
     InternalError,
+
+    // ── Montage / Boot ───────────────────────────────────────────────────────
+    /// ExoFS est déjà initialisé (double appel à exofs_init).
+    AlreadyMounted,
+    /// La séquence de recovery boot a échoué (aucun epoch récupérable).
+    RecoveryFailed,
 }
 
 impl fmt::Display for ExofsError {
@@ -133,6 +139,8 @@ impl fmt::Display for ExofsError {
             Self::NotSupported              => write!(f, "exofs: not supported"),
             Self::InvalidArgument           => write!(f, "exofs: invalid argument"),
             Self::InternalError             => write!(f, "exofs: internal error"),
+            Self::AlreadyMounted            => write!(f, "exofs: already mounted"),
+            Self::RecoveryFailed            => write!(f, "exofs: recovery failed"),
         }
     }
 }
@@ -172,6 +180,8 @@ impl From<ExofsError> for FsError {
             ExofsError::NotSupported              => FsError::NotSupported,
             ExofsError::InvalidArgument           => FsError::InvalidArgument,
             ExofsError::InternalError             => FsError::InternalError,
+            ExofsError::AlreadyMounted            => FsError::InvalidArgument,
+            ExofsError::RecoveryFailed            => FsError::Corrupt,
         }
     }
 }

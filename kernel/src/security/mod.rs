@@ -33,6 +33,32 @@ pub mod integrity_check;
 pub mod exploit_mitigations;
 pub mod audit;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECURITY_READY — flag BOOT-SEC (Z-AI CVE-EXO-001)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Flag atomique positionné à `true` à la fin de `security_init()`.
+///
+/// Les APs SMP DOIVENT spin-wait sur ce flag avant toute IPC ou accès ExoFS.
+/// Sans ce flag, entre l'init des capabilities et celle du checker d'accès,
+/// un AP peut effectuer des IPC non vérifiées (CVE-EXO-001 / BOOT-SEC).
+///
+/// # Utilisation dans arch/x86_64/smp/init.rs
+/// ```rust,ignore
+/// while !security::SECURITY_READY.load(Ordering::Acquire) {
+///     core::hint::spin_loop();
+/// }
+/// ```
+pub static SECURITY_READY: AtomicBool = AtomicBool::new(false);
+
+/// Retourne `true` si security_init() est terminé.
+#[inline]
+pub fn is_security_ready() -> bool {
+    SECURITY_READY.load(Ordering::Acquire)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports — capability
 // ─────────────────────────────────────────────────────────────────────────────
@@ -201,7 +227,10 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
 
     // ── 8. Access Control (v6) ────────────────────────────────────────────────
     access_control::init();
-}
+    // ── 9. SECURITY_READY — signal aux APs SMP (BOOT-SEC / CVE-EXO-001) ────────
+    // Les APs démarrés après ce point peuvent accéder aux capabilities et à ExoFS.
+    // Les APs démarrés AVANT (step 26) spin-wait jusqu'à ce flag.
+    SECURITY_READY.store(true, Ordering::Release);}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vérification périodique d'intégrité (appelée par le scheduler)

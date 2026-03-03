@@ -21,6 +21,18 @@ path = "src/main.rs"
 spin     = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock", "once"] }
 bitflags = { version = "2",   default-features = false }
 
+# ── Crypto no_std (RustCrypto — vecteurs IETF, pas d'implémentation from scratch)
+# S-08 / LAC-03 / CRYPTO-CRATES : toutes les primitives crypto via crates validées.
+# INTERDIT : libsodium (requiert std+libc), ring (trop de deps système)
+blake3           = { version = "1",    default-features = false }
+hkdf             = { version = "0.12", default-features = false }
+sha2             = { version = "0.10", default-features = false, features = ["force-soft"] }   # requis par hkdf — force-soft évite SHA-NI (LLVM crash x86_64-unknown-none)
+argon2           = { version = "0.5",  default-features = false, features = ["alloc"] }
+siphasher        = { version = "0.3",  default-features = false }
+lz4_flex         = { version = "0.11", default-features = false }
+# NOTE : chacha20poly1305 supprimé — XChaCha20Poly1305 est implémenté en natif dans
+# fs/exofs/crypto/xchacha20.rs (no_std, pas de SIMD, compatible bare-metal x86_64-unknown-none)
+
 # ── Configuration de profil ──────────────────────────────────────────────────
 
 [profile.dev]

@@ -279,21 +279,21 @@ impl FeatureFlagsBuilder {
     pub fn new() -> Self { Self(0) }
 
     /// Active la déduplication.
-    pub fn dedup(mut self) -> Self { self.0 |= FeatureFlags::DEDUP; self }
+    pub fn dedup(mut self) -> Self { self.0 |= FeatureFlags::DEDUP.0; self }
     /// Active la compression.
-    pub fn compression(mut self) -> Self { self.0 |= FeatureFlags::COMPRESSION; self }
+    pub fn compression(mut self) -> Self { self.0 |= FeatureFlags::COMPRESSION.0; self }
     /// Active le chiffrement.
-    pub fn encryption(mut self) -> Self { self.0 |= FeatureFlags::ENCRYPTION; self }
+    pub fn encryption(mut self) -> Self { self.0 |= FeatureFlags::ENCRYPTION.0; self }
     /// Active les snapshots.
-    pub fn snapshots(mut self) -> Self { self.0 |= FeatureFlags::SNAPSHOTS; self }
+    pub fn snapshots(mut self) -> Self { self.0 |= FeatureFlags::SNAPSHOTS.0; self }
     /// Active les relations.
-    pub fn relations(mut self) -> Self { self.0 |= FeatureFlags::RELATIONS; self }
+    pub fn relations(mut self) -> Self { self.0 |= FeatureFlags::RELATIONS.0; self }
     /// Active les quotas.
-    pub fn quotas(mut self) -> Self { self.0 |= FeatureFlags::QUOTAS; self }
+    pub fn quotas(mut self) -> Self { self.0 |= FeatureFlags::QUOTAS.0; self }
     /// Active les hints NUMA.
-    pub fn numa_hints(mut self) -> Self { self.0 |= FeatureFlags::NUMA_HINTS; self }
+    pub fn numa_hints(mut self) -> Self { self.0 |= FeatureFlags::NUMA_HINTS.0; self }
     /// Active le format de path v2.
-    pub fn path_v2(mut self) -> Self { self.0 |= FeatureFlags::PATH_V2; self }
+    pub fn path_v2(mut self) -> Self { self.0 |= FeatureFlags::PATH_V2.0; self }
 
     /// Construit le FeatureFlags final.
     pub fn build(self) -> FeatureFlags { FeatureFlags(self.0) }
@@ -307,9 +307,9 @@ impl FeatureFlagsBuilder {
 #[derive(Copy, Clone, Debug)]
 pub struct FeatureDependency {
     /// Feature dépendante.
-    pub feature:  u32,
+    pub feature:  FeatureFlags,
     /// Feature requise (prérequis).
-    pub requires: u32,
+    pub requires: FeatureFlags,
     /// Description lisible.
     pub desc:     &'static str,
 }
@@ -333,11 +333,15 @@ static FEATURE_DEPS: &[FeatureDependency] = &[
 /// Vérifie que les dépendances entre features sont satisfaites.
 ///
 /// Retourne la première dépendance non satisfaite, ou None si tout est OK.
+/// RECUR-01 : while uniquement.
 pub fn check_feature_dependencies(flags: FeatureFlags) -> Option<&'static FeatureDependency> {
-    for dep in FEATURE_DEPS {
+    let mut i = 0usize;
+    while i < FEATURE_DEPS.len() {
+        let dep = &FEATURE_DEPS[i];
         if flags.has(dep.feature) && !flags.has(dep.requires) {
             return Some(dep);
         }
+        i = i.wrapping_add(1);
     }
     None
 }
@@ -360,14 +364,21 @@ static VERSION_HISTORY: &[VersionHistoryEntry] = &[
     VersionHistoryEntry {
         version: FormatVersion { major: 1, minor: 0 },
         description: "Initial ExoFS format — blobs, code, config, secret, pathindex, relation",
-        added_features: FeatureFlags::DEDUP | FeatureFlags::COMPRESSION | FeatureFlags::SNAPSHOTS,
+        added_features: FeatureFlags::DEDUP.0 | FeatureFlags::COMPRESSION.0 | FeatureFlags::SNAPSHOTS.0,
         deprecated_features: 0,
     },
 ];
 
 /// Retourne l'entrée d'historique pour une version donnée, ou None.
+/// RECUR-01 : while.
 pub fn version_history_entry(v: FormatVersion) -> Option<&'static VersionHistoryEntry> {
-    VERSION_HISTORY.iter().find(|e| e.version.major == v.major && e.version.minor == v.minor)
+    let mut i = 0usize;
+    while i < VERSION_HISTORY.len() {
+        let e = &VERSION_HISTORY[i];
+        if e.version.major == v.major && e.version.minor == v.minor { return Some(e); }
+        i = i.wrapping_add(1);
+    }
+    None
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -414,30 +425,29 @@ pub fn find_migration_path(
 /// Overhead on-disk ajouté par une feature (pourcentage × 10).
 ///
 /// Exemple : DEDUP = 5 → 0.5% d'overhead de métadonnées.
+/// ARITH-02 : valeurs raw u32.
 pub fn feature_overhead_pct10(feature: u32) -> u32 {
-    match feature {
-        FeatureFlags::DEDUP        => 5,   // 0.5%
-        FeatureFlags::COMPRESSION  => 3,   // 0.3%
-        FeatureFlags::ENCRYPTION   => 10,  // 1.0%
-        FeatureFlags::SNAPSHOTS    => 8,   // 0.8%
-        FeatureFlags::RELATIONS    => 4,   // 0.4%
-        FeatureFlags::QUOTAS       => 2,   // 0.2%
-        FeatureFlags::NUMA_HINTS   => 1,   // 0.1%
-        FeatureFlags::PATH_V2      => 3,   // 0.3%
-        _                         => 0,
-    }
+    if feature == FeatureFlags::DEDUP.0       { return 5;  }
+    if feature == FeatureFlags::COMPRESSION.0 { return 3;  }
+    if feature == FeatureFlags::ENCRYPTION.0  { return 10; }
+    if feature == FeatureFlags::SNAPSHOTS.0   { return 8;  }
+    if feature == FeatureFlags::RELATIONS.0   { return 4;  }
+    if feature == FeatureFlags::QUOTAS.0      { return 2;  }
+    if feature == FeatureFlags::NUMA_HINTS.0  { return 1;  }
+    if feature == FeatureFlags::PATH_V2.0     { return 3;  }
+    0
 }
 
 /// Overhead total × 10 pour un ensemble de features activées.
+/// ARITH-02 : saturating_add. RECUR-01 : while.
 pub fn total_features_overhead_pct10(flags: FeatureFlags) -> u32 {
     let mut total = 0u32;
-    let known = FeatureFlags::KNOWN;
     let mut bit = 1u32;
-    while bit <= known {
-        if flags.has(bit) {
+    while bit <= FeatureFlags::KNOWN.0 {
+        if flags.has(FeatureFlags(bit)) {
             total = total.saturating_add(feature_overhead_pct10(bit));
         }
-        bit <<= 1;
+        bit = bit.wrapping_shl(1);
     }
     total
 }

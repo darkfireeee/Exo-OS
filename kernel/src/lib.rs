@@ -28,6 +28,8 @@
 #![allow(static_mut_refs)]
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
+#![feature(allocator_api)]
+#![feature(const_size_of_val)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_imports)]
@@ -57,7 +59,7 @@ pub mod ipc;
 pub mod security;
 
 /// Couche 3 : système de fichiers virtuel + exofs
-/// pub mod fs;
+pub mod fs;
 
 /// Interface syscall → dispatch vers les couches supérieures
 pub mod syscall;
@@ -172,8 +174,11 @@ pub unsafe fn kernel_init() {
     // ipc::ring::spsc::init_spsc_rings();
 
     // ── Phase 7 : FS ─────────────────────────────────────────────────────────
-    // fs/ non activé dans lib.rs — en attente d'intégration.
-    // fs::core::vfs::init();
+    // disk_size_bytes = 0 → ExoFS détecte un FS non initialisé et formate.
+    // TODO: passer la vraie taille issue de la table de partitions (multiboot2/ACPI).
+    // Erreur non fatale au stade actuel : heap non disponible → RecoveryFailed
+    // est attendu et ignoré jusqu'à l'activation complète de la heap.
+    let _ = crate::fs::exofs::exofs_init(0u64);
 }
 
 #[panic_handler]

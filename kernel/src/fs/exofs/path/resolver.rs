@@ -1,241 +1,407 @@
-// path/resolver.rs — Résolution itérative de chemins ExoFS
-// Ring 0, no_std
-//
-// RÈGLES :
-//   • PATH-07 : buffer per-CPU PATH_BUFFERS — jamais [u8;4096] sur stack kernel
-//   • RECUR-01 : résolution itérative, jamais récursive
-//   • SYS-01   : copy_from_user() pour tout pointeur userspace
+//! resolver.rs — Résolution itérative de chemins ExoFS
+//!
+//! Règles critiques appliquées :
+//!  - RECUR-01 : zéro récursion — boucle `while` explicite
+//!  - PATH-07  : ResolveContext alloué sur le tas (Vec<PathComponent>)
+//!  - OOM-02   : try_reserve avant tout push
+//!  - ARITH-02 : arithmétique vérifiée
 
-use crate::fs::exofs::core::{
-    ObjectId, EpochId, ExofsError,
-    PATH_MAX, NAME_MAX, SYMLINK_MAX_DEPTH,
-};
-use crate::fs::exofs::path::{
-    path_index::PathIndex,
-    path_component::{PathComponent, validate_component},
-    path_cache::PathCache,
-    canonicalize::canonicalize_in_place,
-    symlink::resolve_symlink_target,
-    mount_point::MOUNT_TABLE,
-};
-use crate::fs::exofs::cache::path_cache::GLOBAL_PATH_CACHE;
-use crate::scheduler::sync::spinlock::SpinLock;
+#![allow(dead_code)]
+
+extern crate alloc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicUsize, Ordering};
 
-// ─── Buffer per-CPU ───────────────────────────────────────────────────────────
+use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
+use crate::fs::exofs::path::path_component::{
+    PathComponent, PathParser, PATH_MAX,
+};
+use crate::fs::exofs::path::path_cache::{cached_lookup, CacheLookup, PATH_CACHE};
+use crate::fs::exofs::path::symlink::{SYMLINK_MAX_DEPTH, SYMLINK_STORE};
+use crate::fs::exofs::path::mount_point::MOUNT_TABLE;
+use crate::fs::exofs::path::canonicalize::canonicalize_to_vec;
 
-/// Nombre de CPUs maximum supportés
-const MAX_CPUS: usize = 256;
+// ─────────────────────────────────────────────────────────────────────────────
+// Trait PathResolver
+// ─────────────────────────────────────────────────────────────────────────────
 
-/// Pool de buffers per-CPU pour la résolution de chemins (règle PATH-07)
-/// Chaque CPU a son propre buffer — aucune contention
-struct PathBufferPool {
-    // Chaque entrée : buffer + flag "en cours d'utilisation"
-    buffers: [SpinLock<[u8; PATH_MAX]>; MAX_CPUS],
-    cpu_count: AtomicUsize,
+/// Interface que tout back-end de système de fichiers doit implémenter
+/// pour permettre la résolution de chemins.
+pub trait PathResolver {
+    /// Cherche `name` dans `dir_oid`.
+    ///
+    /// Retourne `(oid, is_symlink)` ou `None` si absent.
+    fn lookup_in_dir(
+        &self,
+        dir_oid:   &ObjectId,
+        name:      &PathComponent,
+    ) -> ExofsResult<Option<(ObjectId, bool)>>;
+
+    /// Lit la cible d'un lien symbolique.
+    fn symlink_target(&self, oid: &ObjectId) -> ExofsResult<Vec<u8>>;
+
+    /// OID racine du système de fichiers.
+    fn root_oid(&self) -> ObjectId;
+
+
 }
 
-static PATH_BUFFER_POOL: PathBufferPool = PathBufferPool {
-    // SAFETY: SpinLock<[u8; PATH_MAX]> est initialisable avec des zéros
-    buffers: unsafe { core::mem::zeroed() },
-    cpu_count: AtomicUsize::new(64), // valeur défaut, mise à jour au boot
-};
+// ─────────────────────────────────────────────────────────────────────────────
+// ResolveContext — état sur le tas (PATH-07)
+// ─────────────────────────────────────────────────────────────────────────────
 
-/// Contexte de résolution de chemin — alloué sur le heap, jamais sur la stack
+/// Contexte d'une résolution en cours.
+///
+/// Alloué sur le tas pour éviter `[u8; PATH_MAX]` sur la pile (PATH-07).
 pub struct ResolveContext {
-    /// Composants du chemin après parsing
-    components: Vec<PathComponent>,
-    /// Profondeur de résolution symlink courante
-    symlink_depth: usize,
-    /// ObjectId courant pendant la traversée
-    current_oid: ObjectId,
+    /// OID courant lors de la descente.
+    pub current_oid:    ObjectId,
+    /// Composants restants à résoudre (ordre LIFO — dépilé par pop).
+    pub remaining:      Vec<PathComponent>,
+    /// Profondeur de résolution de symlinks.
+    pub symlink_depth:  usize,
+    /// Chemin canonique original (pour le cache).
+    pub canonical_path: Vec<u8>,
+    /// Drapeaux de résolution.
+    pub flags:          ResolveFlags,
 }
 
 impl ResolveContext {
-    fn new() -> Result<Self, ExofsError> {
-        let mut components = Vec::new();
-        components.try_reserve(64).map_err(|_| ExofsError::NoMemory)?;
+    /// Crée un contexte depuis un chemin canonique.
+    pub fn new(
+        root:           ObjectId,
+        canonical:      Vec<u8>,
+        flags:          ResolveFlags,
+    ) -> ExofsResult<Self> {
+        let mut remaining: Vec<PathComponent> = Vec::new();
+        for cr in PathParser::new(&canonical) {
+            let c = cr?;
+            if c.as_bytes() == b"." { continue; }
+            if c.as_bytes() == b".." {
+                remaining.pop();
+                continue;
+            }
+            remaining.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+            remaining.push(c);
+        }
+        remaining.reverse(); // pop() donnera le prochain composant
         Ok(ResolveContext {
-            components,
+            current_oid:   root,
+            remaining,
             symlink_depth: 0,
-            current_oid: ObjectId::INVALID,
+            canonical_path: canonical,
+            flags,
         })
     }
+
+    /// `true` si tous les composants ont été consommés.
+    #[inline]
+    pub fn is_done(&self) -> bool { self.remaining.is_empty() }
 }
 
-// ─── API publique ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// ResolveFlags
+// ─────────────────────────────────────────────────────────────────────────────
 
-/// Résout un chemin absolu vers un ObjectId.
+/// Options de résolution.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ResolveFlags {
+    /// Ne pas suivre le symlink terminal.
+    pub no_follow_last: bool,
+    /// Ne pas traverser les points de montage.
+    pub no_cross_mount: bool,
+    /// Utiliser le cache.
+    pub use_cache:      bool,
+    /// Mettre en cache le résultat.
+    pub cache_result:   bool,
+}
+
+impl ResolveFlags {
+    /// Drapeaux par défaut (cache activé).
+    pub const fn default_flags() -> Self {
+        ResolveFlags {
+            no_follow_last: false,
+            no_cross_mount: false,
+            use_cache:      true,
+            cache_result:   true,
+        }
+    }
+
+    /// Résolution sans suivi de symlink final (pour `lstat`).
+    pub const fn lstat_flags() -> Self {
+        ResolveFlags {
+            no_follow_last: true,
+            no_cross_mount: false,
+            use_cache:      true,
+            cache_result:   true,
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ResolveResult
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Résultat enrichi d'une résolution.
+#[derive(Debug)]
+pub struct ResolveResult {
+    /// OID de l'objet résolu.
+    pub oid:          ObjectId,
+    /// `true` si l'objet terminal est un symlink (en mode `no_follow_last`).
+    pub is_symlink:   bool,
+    /// Nombre de symlinks suivis.
+    pub symlink_hops: usize,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolve_path — point d'entrée principal
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Résout `path` depuis la racine du `resolver`.
 ///
-/// # Arguments
-/// * `path_bytes` — chemin UTF-8 copié depuis userspace (via copy_from_user)
-/// * `epoch`      — epoch courante pour la cohérence des lookups
-/// * `root_oid`   — ObjectId de la racine du namespace
-///
-/// # Règles
-/// - Itératif (règle RECUR-01) — aucun appel récursif
-/// - Buffer per-CPU (règle PATH-07) — aucun tableau sur la stack kernel
-/// - MAX 40 niveaux de symlink (règle SYMLINK-01)
-pub fn resolve_path(
-    path_bytes: &[u8],
-    epoch: EpochId,
-    root_oid: ObjectId,
-) -> Result<ObjectId, ExofsError> {
-    if path_bytes.len() > PATH_MAX {
-        return Err(ExofsError::PathTooLong);
+/// Cette fonction est l'implémentation de référence :
+///   1. Canonicalise le chemin.
+///   2. Consulte le cache (si activé).
+///   3. Descend composant par composant (RECUR-01).
+///   4. Traverse les symlinks (itératif).
+///   5. Traverse les points de montage.
+///   6. Met en cache le résultat final (si activé).
+pub fn resolve_path<R: PathResolver>(
+    path:     &[u8],
+    resolver: &R,
+) -> ExofsResult<ObjectId> {
+    let result = resolve_path_full(path, resolver, ResolveFlags::default_flags())?;
+    Ok(result.oid)
+}
+
+/// Résout avec retour enrichi et drapeaux explicites.
+pub fn resolve_path_full<R: PathResolver>(
+    path:     &[u8],
+    resolver: &R,
+    flags:    ResolveFlags,
+) -> ExofsResult<ResolveResult> {
+    if path.len() > PATH_MAX { return Err(ExofsError::PathTooLong); }
+
+    // 1. Canonicalisation
+    let canonical = canonicalize_to_vec(path)?;
+
+    // 2. Lookup cache
+    if flags.use_cache {
+        if let CacheLookup::Hit(oid) = cached_lookup(&canonical) {
+            return Ok(ResolveResult {
+                oid,
+                is_symlink:   false,
+                symlink_hops: 0,
+            });
+        }
     }
-    if path_bytes.is_empty() {
-        return Err(ExofsError::InvalidMagic); // chemin vide
-    }
 
-    // Vérification du cache dentry avant toute résolution
-    let cache_key = compute_path_hash(path_bytes, root_oid);
-    if let Some(cached) = GLOBAL_PATH_CACHE.lookup(cache_key) {
-        return Ok(cached);
-    }
+    // 3. Préparer le contexte
+    let root = resolver.root_oid();
+    let mut ctx = ResolveContext::new(root, canonical.clone(), flags)?;
 
-    // Contexte alloué sur le heap — règle PATH-07
-    let mut ctx = ResolveContext::new()?;
+    // 4. Descente itérative (RECUR-01 — zéro récursion)
+    let mut iters:      usize = 0;
+    let     max_iters:  usize = 8192;
 
-    // Parsing itératif des composants
-    parse_path_components(path_bytes, &mut ctx.components)?;
+    loop {
+        if iters >= max_iters { return Err(ExofsError::InternalError); }
+        iters = iters.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
 
-    // La résolution commence toujours à la racine du namespace
-    ctx.current_oid = root_oid;
-
-    // Itération sur les composants — JAMAIS récursif
-    let mut idx = 0;
-    while idx < ctx.components.len() {
-        let comp = ctx.components[idx].clone();
-
-        match comp.as_bytes() {
-            b"." => {
-                // Composant courant — ne change pas l'OID
-                idx += 1;
-                continue;
+        if ctx.is_done() {
+            // 5. Points de montage
+            if !flags.no_cross_mount {
+                if let Some(mounted) = MOUNT_TABLE.lookup_mount(&ctx.current_oid) {
+                    ctx.current_oid = mounted;
+                }
             }
-            b".." => {
-                // Remonter au parent via PathIndex du répertoire courant
-                ctx.current_oid = lookup_parent(ctx.current_oid, epoch)?;
-                idx += 1;
-                continue;
+            break;
+        }
+
+        let comp = ctx.remaining.pop().unwrap(); // safe: !is_done()
+        let is_last = ctx.remaining.is_empty();
+
+        // Lookup dans le répertoire courant
+        let found = resolver.lookup_in_dir(&ctx.current_oid, &comp)?;
+        let (oid, is_symlink) = match found {
+            None        => return Err(ExofsError::ObjectNotFound),
+            Some(entry) => entry,
+        };
+
+        // Traversée du point de montage
+        let effective_oid = if !flags.no_cross_mount {
+            MOUNT_TABLE.lookup_mount(&oid).unwrap_or_else(|| oid.clone())
+        } else {
+            oid.clone()
+        };
+
+        if is_symlink && !(is_last && flags.no_follow_last) {
+            // Résolution du symlink
+            let new_depth = ctx.symlink_depth
+                .checked_add(1)
+                .ok_or(ExofsError::OffsetOverflow)?;
+            if new_depth > SYMLINK_MAX_DEPTH {
+                return Err(ExofsError::TooManySymlinks);
             }
-            name => {
-                // Lookup dans le PathIndex du répertoire courant
-                let child_oid = lookup_in_directory(
-                    ctx.current_oid,
-                    name,
-                    epoch,
-                )?;
+            ctx.symlink_depth = new_depth;
 
-                // Vérification si c'est un symlink
-                if is_symlink(child_oid, epoch)? {
-                    ctx.symlink_depth += 1;
-                    if ctx.symlink_depth > SYMLINK_MAX_DEPTH {
-                        return Err(ExofsError::SymlinkLoop);
-                    }
+            // Chercher d'abord dans le store local
+            let raw_target = if let Some(t) = SYMLINK_STORE.lookup(&oid) {
+                t
+            } else {
+                resolver.symlink_target(&oid)?
+            };
 
-                    // Résout la cible du symlink (itératif)
-                    let target_components = resolve_symlink_target(child_oid, epoch)?;
+            if raw_target.len() > PATH_MAX {
+                return Err(ExofsError::PathTooLong);
+            }
 
-                    // Insère les composants symlink à la position courante
-                    // (idx+1 pour sauter le composant symlink lui-même)
-                    let remaining = ctx.components.drain(idx + 1..).collect::<Vec<_>>();
-                    ctx.components.truncate(idx);
-                    ctx.components.try_reserve(target_components.len() + remaining.len())
-                        .map_err(|_| ExofsError::NoMemory)?;
-                    for c in target_components {
-                        ctx.components.push(c);
-                    }
-                    for c in remaining {
-                        ctx.components.push(c);
-                    }
+            // Préparer une nouvelle séquence de composants depuis la cible
+            let target_canonical = canonicalize_to_vec(&raw_target)?;
+            let new_root = if raw_target.first() == Some(&b'/') {
+                resolver.root_oid()
+            } else {
+                ctx.current_oid.clone()
+            };
 
-                    // Si symlink absolu, remettre à la racine
-                    // (géré par resolve_symlink_target — chemin absolu commence par /)
+            // Reconstruire la file de composants (remaining) depuis la cible
+            let mut new_remaining: Vec<PathComponent> = Vec::new();
+            for cr in PathParser::new(&target_canonical) {
+                let c = cr?;
+                if c.as_bytes() == b"." { continue; }
+                if c.as_bytes() == b".." {
+                    new_remaining.pop();
                     continue;
                 }
-
-                ctx.current_oid = child_oid;
-                idx += 1;
+                new_remaining.try_reserve(1)
+                    .map_err(|_| ExofsError::NoMemory)?;
+                new_remaining.push(c);
             }
-        }
-    }
+            // Ajouter les composants restants du chemin original
+            // (ils sont déjà en ordre LIFO dans ctx.remaining)
+            while let Some(old_comp) = ctx.remaining.pop() {
+                new_remaining.try_reserve(1)
+                    .map_err(|_| ExofsError::NoMemory)?;
+                new_remaining.push(old_comp);
+            }
+            new_remaining.reverse();
 
-    // Met en cache le résultat
-    GLOBAL_PATH_CACHE.insert(cache_key, ctx.current_oid);
-
-    Ok(ctx.current_oid)
-}
-
-// ─── Fonctions internes ───────────────────────────────────────────────────────
-
-/// Parse les composants d'un chemin dans un Vec alloué sur le heap
-fn parse_path_components(
-    path: &[u8],
-    out: &mut Vec<PathComponent>,
-) -> Result<(), ExofsError> {
-    // Skip le slash initial si chemin absolu
-    let path = if path.first() == Some(&b'/') { &path[1..] } else { path };
-
-    for component in path.split(|&b| b == b'/') {
-        if component.is_empty() {
-            // Double slash ignoré
+            ctx.current_oid = new_root;
+            ctx.remaining   = new_remaining;
             continue;
         }
-        let pc = validate_component(component)?;
-        out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-        out.push(pc);
-    }
-    Ok(())
-}
 
-/// Lookup d'un nom dans le PathIndex d'un répertoire
-fn lookup_in_directory(
-    dir_oid: ObjectId,
-    name: &[u8],
-    epoch: EpochId,
-) -> Result<ObjectId, ExofsError> {
-    // Vérifie d'abord la table de montage (mount_point.rs)
-    if let Some(mounted_oid) = MOUNT_TABLE.lookup_mount(dir_oid, name) {
-        return Ok(mounted_oid);
+        ctx.current_oid = effective_oid;
     }
 
-    // Charge le PathIndex du répertoire depuis le cache ou le disque
-    let path_index = PathIndex::load(dir_oid, epoch)?;
-    path_index.lookup(name)
-}
+    let result_oid = ctx.current_oid.clone();
 
-/// Remonte au répertoire parent
-fn lookup_parent(
-    oid: ObjectId,
-    epoch: EpochId,
-) -> Result<ObjectId, ExofsError> {
-    // Le parent est stocké dans le PathIndex de l'objet courant
-    let path_index = PathIndex::load(oid, epoch)?;
-    path_index.parent_oid()
-}
-
-/// Vérifie si un objet est un symlink via ses métadonnées
-fn is_symlink(oid: ObjectId, epoch: EpochId) -> Result<bool, ExofsError> {
-    use crate::fs::exofs::core::ObjectKind;
-    use crate::fs::exofs::objects::object_loader::quick_kind(oid, epoch);
-    let kind = quick_kind(oid, epoch)?;
-    Ok(kind == ObjectKind::Relation) // les symlinks sont des Relation::Symlink
-}
-
-/// Hash de chemin pour le dentry cache
-fn compute_path_hash(path: &[u8], root: ObjectId) -> u64 {
-    // FNV-1a pour vitesse en kernel
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for &b in path {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
+    // 6. Mise en cache
+    if flags.cache_result {
+        PATH_CACHE.insert_path(&canonical, result_oid.clone());
     }
-    for &b in root.as_bytes() {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
+
+    Ok(ResolveResult {
+        oid:          result_oid,
+        is_symlink:   false,
+        symlink_hops: ctx.symlink_depth,
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Résout le chemin sans suivre le symlink terminal (`lstat` semantics).
+pub fn resolve_no_follow<R: PathResolver>(
+    path:     &[u8],
+    resolver: &R,
+) -> ExofsResult<ResolveResult> {
+    resolve_path_full(path, resolver, ResolveFlags::lstat_flags())
+}
+
+/// Résout un chemin et vérifie qu'il existe.
+pub fn path_exists<R: PathResolver>(path: &[u8], resolver: &R) -> bool {
+    resolve_path(path, resolver).is_ok()
+}
+
+/// Résout le répertoire parent.
+pub fn resolve_parent<R: PathResolver>(
+    path:     &[u8],
+    resolver: &R,
+) -> ExofsResult<ObjectId> {
+    let canonical = canonicalize_to_vec(path)?;
+    let slash = canonical.iter().rposition(|&b| b == b'/');
+    let parent = match slash {
+        None | Some(0) => b"/" as &[u8],
+        Some(p)        => &canonical[..p],
+    };
+    resolve_path(parent, resolver)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn oid(b: u8) -> ObjectId { let mut a = [0u8; 32]; a[0] = b; ObjectId(a) }
+
+    struct MockResolver;
+    impl PathResolver for MockResolver {
+        fn lookup_in_dir(
+            &self,
+            _dir: &ObjectId,
+            comp: &PathComponent,
+        ) -> ExofsResult<Option<(ObjectId, bool)>> {
+            match comp.as_bytes() {
+                b"usr"  => Ok(Some((oid(10), false))),
+                b"bin"  => Ok(Some((oid(11), false))),
+                b"lnk"  => Ok(Some((oid(20), true))),
+                _       => Ok(None),
+            }
+        }
+        fn symlink_target(&self, _oid: &ObjectId) -> ExofsResult<Vec<u8>> {
+            let mut v = Vec::new(); v.extend_from_slice(b"/usr/bin"); Ok(v)
+        }
+        fn root_oid(&self) -> ObjectId { oid(1) }
     }
-    hash
+
+    #[test] fn test_resolve_simple() {
+        let r = MockResolver;
+        let res = resolve_path(b"/usr/bin", &r).unwrap();
+        assert_eq!(res.0[0], 11);
+    }
+
+    #[test] fn test_resolve_not_found() {
+        let r = MockResolver;
+        assert!(resolve_path(b"/usr/missing", &r).is_err());
+    }
+
+    #[test] fn test_resolve_symlink() {
+        let r = MockResolver;
+        // /lnk → /usr/bin
+        let res = resolve_path(b"/lnk", &r).unwrap();
+        assert_eq!(res.0[0], 11);
+    }
+
+    #[test] fn test_resolve_no_follow() {
+        let r = MockResolver;
+        let res = resolve_no_follow(b"/lnk", &r).unwrap();
+        // Avec no_follow_last, on doit rester sur le symlink lui-même
+        assert_eq!(res.oid.0[0], 20);
+    }
+
+    #[test] fn test_path_exists() {
+        let r = MockResolver;
+        assert!(path_exists(b"/usr", &r));
+        assert!(!path_exists(b"/nonexistent", &r));
+    }
+
+    #[test] fn test_resolve_parent() {
+        let r = MockResolver;
+        let p = resolve_parent(b"/usr/bin", &r).unwrap();
+        assert_eq!(p.0[0], 10);
+    }
 }

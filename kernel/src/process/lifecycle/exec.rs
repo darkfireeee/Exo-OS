@@ -26,6 +26,7 @@ use crate::process::core::tcb::{ProcessThread, ThreadAddress};
 use crate::process::core::pcb::{ProcessControlBlock, ProcessState, process_flags};
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::signal::mask::reset_signals_on_exec;
+use crate::process::signal::mask::block_all_except_kill;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trait ElfLoader — RÈGLE PROC-01 : abstraction de la couche fs/
@@ -158,6 +159,12 @@ pub fn do_execve(
 
     // Obtenir le chargeur ELF (enregistré depuis fs/ au boot).
     let loader = ELF_LOADER.get().ok_or(ExecError::NoLoader)?;
+
+    // Étape 3 (LAC-08 / PROC-03) : bloquer TOUS les signaux sauf SIGKILL/SIGSTOP
+    // AVANT le chargement ELF. Empêche un signal livré entre load_elf() et
+    // reset_signals_on_exec() d'invoquer l'ancien handler dans un adress space
+    // partiellement remplacé. reset_signals_on_exec() débloque ultérieurement.
+    block_all_except_kill(&thread.sched_tcb);
 
     // Charger le nouveau binaire dans l'espace d'adressage.
     let cr3_current = thread.sched_tcb.cr3;

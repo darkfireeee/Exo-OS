@@ -511,37 +511,3 @@ pub fn sort_blob_ids(ids: &mut [BlobId]) {
 pub fn search_sorted_blob_ids(sorted_ids: &[BlobId], target: &BlobId) -> Option<usize> {
     sorted_ids.binary_search_by(|id| compare_blob_ids(id, target)).ok()
 }
-
-/// Construit la racine Merkle d'un ensemble de BlobIds.
-///
-/// L'arbre est construit de façon itérative : on combine les paires successives
-/// jusqu'à obtenir un seul BlobId racine. Si le nombre d'éléments est impair,
-/// le dernier est combiné avec lui-même.
-///
-/// Retourne `None` si `ids` est vide.
-pub fn merkle_root(ids: &[BlobId]) -> Option<BlobId> {
-    if ids.is_empty() {
-        return None;
-    }
-    if ids.len() == 1 {
-        return Some(ids[0]);
-    }
-    // Buffer temporaire sur la pile (supporte jusqu'à BLOB_ID_SET_CAP éléments).
-    let mut buf = [[0u8; 32]; BLOB_ID_SET_CAP];
-    let n = ids.len().min(BLOB_ID_SET_CAP);
-    for i in 0..n { buf[i] = ids[i]; }
-    let mut len = n;
-    while len > 1 {
-        let mut next_len = 0usize;
-        let mut i = 0usize;
-        while i < len {
-            let a = buf[i];
-            let b = if i + 1 < len { buf[i + 1] } else { buf[i] };
-            buf[next_len] = merkle_combine(a, b);
-            next_len += 1;
-            i += 2;
-        }
-        len = next_len;
-    }
-    Some(buf[0])
-}

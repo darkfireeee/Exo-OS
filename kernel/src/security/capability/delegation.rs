@@ -4,10 +4,10 @@
 // DELEGATION — Subdélégation de capacités (Exo-OS Security · Couche 2b)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// ⚠️  PÉRIMÈTRE DE PREUVE FORMELLE — Toute modification ici IMPOSE une mise à
-//     jour des preuves Coq/TLA+ dans /proofs/kernel_security/.
+// ⚠️  PÉRIMÈTRE DE VÉRIFICATION FORMELLE — Toute modification ici IMPOSE une mise à
+//     jour des invariants dans INVARIANTS.md + réexécution de proptest.
 //
-// RÈGLE CAP-03 (prouvée Coq) :
+// RÈGLE CAP-03 (vérifiée proptest + INVARIANTS.md — LAC-02) :
 //   delegated_rights.is_subset_of(source_rights) TOUJOURS
 //   Il est INTERDIT d'accorder plus de droits que ce qu'on possède.
 //
@@ -42,7 +42,7 @@ use super::verify::{CapError, verify};
 /// # Retourne
 /// Un nouveau CapToken valide dans `target_table` avec `delegated_rights`.
 ///
-/// # RÈGLE CAP-03 (Coq)
+/// # RÈGLE CAP-03 (proptest + INVARIANTS.md — LAC-02)
 /// delegated.is_subset_of(source.rights) — vérifiée ici OBLIGATOIREMENT.
 pub fn delegate(
     source_table:    &CapTable,
