@@ -172,7 +172,7 @@ pub fn verify_boot_attestation(attestation: &BootAttestation) -> Result<(), Secu
     }
 
     let signed_data = attestation.signed_data();
-    ed25519_verify(&signed_data, &attestation.signature, &BOOTLOADER_PUBLIC_KEY)
+    ed25519_verify(&BOOTLOADER_PUBLIC_KEY, &signed_data, &attestation.signature)
         .map_err(|_| SecureBootError::InvalidBootloaderSignature)?;
 
     // Stocker l'état vérifié

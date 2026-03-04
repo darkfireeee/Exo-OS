@@ -12,118 +12,22 @@
 use crate::fs::exofs::core::types::BlobId;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Blake3 kernel — implémentation interne no_std
+// BLAKE3 — via crate blake3 (features = ["pure"])
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Blake3 est une fonction de hachage moderne avec:
-//   - Sécurité: 256 bits de résistance aux collisions
-//   - Performance: SIMD-friendly, parallélisable
-//   - Arbre Merkle interne: O(n/CHUNK_LEN) pour les grands inputs
-//
-// Nous utilisons une implémentation simplifiée de la fonction de compression
-// pour le kernel no_std, en attendant la crate blake3-no_std officielle.
+// RÈGLE CRYPTO-CRATES : JAMAIS d'implémentation from scratch.
+// Crate : blake3 v1.x, features = ["pure"] — implémentation 100% Rust validée.
+// Conforme BLAKE3 v1.3.1 (https://github.com/BLAKE3-team/BLAKE3-specs).
 
-/// Constantes Blake3 internes (IV = SHA-256 fractional parts).
-const BLAKE3_IV: [u32; 8] = [
-    0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-    0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19,
-];
-
-/// Sigma permutation table Blake3/Blake2.
-const SIGMA: [[usize; 16]; 10] = [
-    [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15],
-    [14,10, 4, 8, 9,15,13, 6, 1,12, 0, 2,11, 7, 5, 3],
-    [11, 8,12, 0, 5, 2,15,13,10,14, 3, 6, 7, 1, 9, 4],
-    [ 7, 9, 3, 1,13,12,11,14, 2, 6, 5,10, 4, 0,15, 8],
-    [ 9, 0, 5, 7, 2, 4,10,15,14, 1,11,12, 6, 8, 3,13],
-    [ 2,12, 6,10, 0,11, 8, 3, 4,13, 7, 5,15,14, 1, 9],
-    [12, 5, 1,15,14,13, 4,10, 0, 7, 6, 3, 9, 2, 8,11],
-    [13,11, 7,14,12, 1, 3, 9, 5, 0,15, 4, 8, 6, 2,10],
-    [ 6,15,14, 9,11, 3, 0, 8,12, 2,13, 7, 1, 4,10, 5],
-    [10, 2, 8, 4, 7, 6, 1, 5,15,11, 9,14, 3,12,13, 0],
-];
-
-/// Fonction G de mélange Blake (quart de round).
-#[inline(always)]
-fn g(v: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize, x: u32, y: u32) {
-    v[a] = v[a].wrapping_add(v[b]).wrapping_add(x);
-    v[d] = (v[d] ^ v[a]).rotate_right(16);
-    v[c] = v[c].wrapping_add(v[d]);
-    v[b] = (v[b] ^ v[c]).rotate_right(12);
-    v[a] = v[a].wrapping_add(v[b]).wrapping_add(y);
-    v[d] = (v[d] ^ v[a]).rotate_right(8);
-    v[c] = v[c].wrapping_add(v[d]);
-    v[b] = (v[b] ^ v[c]).rotate_right(7);
-}
-
-/// Compression Blake3 simplifiée sur un bloc de 64 octets.
+/// Calcule un hash BLAKE3 de 32 octets sur un buffer arbitraire.
 ///
-/// Utilisée pour les BlobIds et les ObjectIds Class1.
-/// Pour la production complète, une crate blake3 no_std dédiée devrait être liée.
-fn blake3_compress(input: &[u8; 64], chaining_value: &[u32; 8]) -> [u32; 8] {
-    let mut m = [0u32; 16];
-    for i in 0..16 {
-        let o = i * 4;
-        m[i] = u32::from_le_bytes([input[o], input[o+1], input[o+2], input[o+3]]);
-    }
-
-    let mut v = [0u32; 16];
-    v[0..8].copy_from_slice(chaining_value);
-    v[8..16].copy_from_slice(&BLAKE3_IV);
-
-    // 7 rounds Blake3.
-    for round in 0..7 {
-        let s = &SIGMA[round % 10];
-        g(&mut v, 0, 4,  8, 12, m[s[ 0]], m[s[ 1]]);
-        g(&mut v, 1, 5,  9, 13, m[s[ 2]], m[s[ 3]]);
-        g(&mut v, 2, 6, 10, 14, m[s[ 4]], m[s[ 5]]);
-        g(&mut v, 3, 7, 11, 15, m[s[ 6]], m[s[ 7]]);
-        g(&mut v, 0, 5, 10, 15, m[s[ 8]], m[s[ 9]]);
-        g(&mut v, 1, 6, 11, 12, m[s[10]], m[s[11]]);
-        g(&mut v, 2, 7,  8, 13, m[s[12]], m[s[13]]);
-        g(&mut v, 3, 4,  9, 14, m[s[14]], m[s[15]]);
-    }
-
-    let mut out = [0u32; 8];
-    for i in 0..8 {
-        out[i] = v[i] ^ v[i + 8] ^ chaining_value[i];
-    }
-    out
-}
-
-/// Calcule un hash Blake3 de 32 octets sur un buffer arbitraire.
+/// Utilise la crate blake3 officielle (pure Rust, no_std, aucun SIMD requis).
+/// Point central de hachage utilisé par tous les BlobIds du filesystem.
 ///
-/// Traite le buffer par blocs de 64 octets avec padding zéro final.
-/// Cette fonction est le point central de hachage — utilisée partout
-/// où un hash de 32 octets est necessaire.
+/// RÈGLE HASH-01 : appelé sur données BRUTES avant compression/chiffrement.
+#[inline]
 pub fn blake3_hash(data: &[u8]) -> [u8; 32] {
-    let mut cv = BLAKE3_IV;
-    let mut block = [0u8; 64];
-
-    // Traitement par blocs de 64 octets.
-    let chunks = data.len() / 64;
-    for i in 0..chunks {
-        block.copy_from_slice(&data[i*64..(i+1)*64]);
-        cv = blake3_compress(&block, &cv);
-    }
-
-    // Dernier bloc avec padding zéro.
-    let rem = data.len() % 64;
-    block = [0u8; 64];
-    if rem > 0 {
-        block[..rem].copy_from_slice(&data[chunks*64..]);
-    }
-    // Appliquer le padding de longueur (longueur totale en LE64 à l'offset 56).
-    let len_le = (data.len() as u64).to_le_bytes();
-    block[56..64].copy_from_slice(&len_le);
-    cv = blake3_compress(&block, &cv);
-
-    // Sérialisation de l'état final en 32 octets LE.
-    let mut out = [0u8; 32];
-    for i in 0..8 {
-        out[i*4..(i+1)*4].copy_from_slice(&cv[i].to_le_bytes());
-    }
-    out
+    *blake3::hash(data).as_bytes()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,60 +127,30 @@ impl BlobId {
 /// h.update(&chunk2);
 /// let id = h.finalize();
 /// ```
-pub struct BlobIdHasher {
-    cv:        [u32; 8],
-    block:     [u8; 64],
-    block_len: usize,
-    total_len: u64,
-}
+/// Wrapper autour de `blake3::Hasher` (crate blake3, features=["pure"]).
+pub struct BlobIdHasher(blake3::Hasher);
 
 impl BlobIdHasher {
-    /// Crée un nouveau hacheur avec la chaîne d'initialisation Blake3.
+    /// Crée un nouveau hacheur BLAKE3.
     pub fn new() -> Self {
-        Self { cv: BLAKE3_IV, block: [0u8; 64], block_len: 0, total_len: 0 }
+        Self(blake3::Hasher::new())
     }
 
     /// Ajoute des données au hacheur.
     pub fn update(&mut self, data: &[u8]) {
-        let mut pos = 0usize;
-        while pos < data.len() {
-            let space = 64 - self.block_len;
-            let take  = space.min(data.len() - pos);
-            self.block[self.block_len..self.block_len + take].copy_from_slice(&data[pos..pos + take]);
-            self.block_len += take;
-            self.total_len  = self.total_len.saturating_add(take as u64);
-            pos += take;
-            if self.block_len == 64 {
-                self.cv = blake3_compress(&self.block, &self.cv);
-                self.block     = [0u8; 64];
-                self.block_len = 0;
-            }
-        }
+        self.0.update(data);
     }
 
     /// Finalise le hachage et retourne le BlobId.
     ///
     /// RÈGLE HASH-01 : appeler sur les données BRUTES seulement.
-    pub fn finalize(mut self) -> BlobId {
-        // Padding de longueur (longueur totale en LE64 à l'offset 56).
-        let len_le = self.total_len.to_le_bytes();
-        // Si block_len <= 56, les octets 56..64 sont libres pour la longueur.
-        if self.block_len <= 56 {
-            self.block[56..64].copy_from_slice(&len_le);
-        } else {
-            // Bloc intermédiaire plein : on compresse puis on fait un bloc de padding.
-            self.cv = blake3_compress(&self.block, &self.cv);
-            let mut pad = [0u8; 64];
-            pad[56..64].copy_from_slice(&len_le);
-            self.cv = blake3_compress(&pad, &self.cv);
-        }
-        // Sérialisation de l'état final en 32 octets LE.
-        let mut out = [0u8; 32];
-        for i in 0..8 {
-            out[i * 4..(i + 1) * 4].copy_from_slice(&self.cv[i].to_le_bytes());
-        }
-        BlobId(out)
+    pub fn finalize(self) -> BlobId {
+        BlobId(*self.0.finalize().as_bytes())
     }
+}
+
+impl Default for BlobIdHasher {
+    fn default() -> Self { Self::new() }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

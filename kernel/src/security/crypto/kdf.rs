@@ -1,338 +1,250 @@
 // kernel/src/security/crypto/kdf.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// KDF — Fonction de dérivation de clé basée sur HKDF-BLAKE3
+// KDF (Key Derivation Functions) — hkdf + sha2 + blake3
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   • HKDF-BLAKE3 : RFC 5869 avec BLAKE3 en lieu et place de HMAC-SHA2
-//   • Extract : blake3_mac(salt, ikm) → PRK 32 bytes
-//   • Expand  : BLAKE3 dans le mode "derive_key" avec contexte ASCII unique
-//   • Labels de contexte standardisés pour chaque usage kernel
+// RÈGLE CRYPTO-CRATES : implémentation via crates RustCrypto validées IETF.
+// Crates utilisées :
+//   • hkdf  v0.12.x + sha2  v0.10.x  → HKDF-SHA256/HKDF-SHA512 (RFC 5869)
+//   • blake3 v1.x (features=["pure"]) → blake3_kdf (mode derive_key BLAKE3)
 //
-// RÈGLE KDF-01 : Chaque dérivation doit utiliser un label de contexte UNIQUE.
-// RÈGLE KDF-02 : OutputKey zéroïsée en Drop (sécurité mémoire).
-// RÈGLE KDF-03 : IKM ne doit jamais dépasser 4096 bytes.
+// Deux familles de KDF exportées :
+//   1. HKDF-SHA256/HKDF-SHA512   → standard IETF, utilisé pour les clés IPC/FS
+//   2. BLAKE3 KDF (derive_key)    → pour les usages haute performance kernel
+//
+// Tous les contextes de domaine DOIVENT être uniques et statiques.
 // ═══════════════════════════════════════════════════════════════════════════════
-
-#![allow(dead_code)]
-
-use super::blake3::{blake3_hash, blake3_mac, blake3_derive_key, Blake3Hasher};
-use core::fmt;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Labels de contexte standard
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Labels de dérivation — uniques par usage, jamais réutilisés.
-pub mod labels {
-    /// Clé de chiffrement de canal IPC entre deux processus.
-    pub const IPC_CHANNEL_ENC:     &str = "Exo-OS 1.0 IPC Channel Encryption Key";
-    /// Clé d'authentification MAC canal IPC.
-    pub const IPC_CHANNEL_MAC:     &str = "Exo-OS 1.0 IPC Channel MAC Key";
-    /// Clé de déchiffrement storage (blocs filesystem).
-    pub const FS_BLOCK_ENC:        &str = "Exo-OS 1.0 Filesystem Block Encryption Key";
-    /// Clé d'intégrité filesystem.
-    pub const FS_INTEGRITY:        &str = "Exo-OS 1.0 Filesystem Integrity Key";
-    /// Clé session TLS/QUIC userspace.
-    pub const SESSION_ENC:         &str = "Exo-OS 1.0 Session Encryption Key";
-    /// Clé attestation TCB.
-    pub const TCB_ATTESTATION:     &str = "Exo-OS 1.0 TCB Attestation Key";
-    /// Clé de signature code kernel module.
-    pub const MODULE_SIGNING:      &str = "Exo-OS 1.0 Module Signing Key";
-    /// Clé dérivée pour capability token HMAC.
-    pub const CAP_TOKEN_HMAC:      &str = "Exo-OS 1.0 Capability Token HMAC Key";
-    /// Clé de wrapping (KEK) pour clés utilisateur.
-    pub const KEY_WRAPPING:        &str = "Exo-OS 1.0 Key Encryption Key";
-    /// Clé racine pour la dérivation hiérarchique.
-    pub const ROOT_KDF:            &str = "Exo-OS 1.0 Root Key Derivation Master";
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// KdfError
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KdfError {
-    /// IKM vide ou trop long (> 4096 bytes).
-    InvalidIkmLength,
-    /// Contexte de dérivation vide.
-    EmptyContext,
-    /// Longueur de sortie invalide (0 ou > 64 bytes pour une sortie unique).
-    InvalidOutputLength,
-    /// Erreur interne.
-    InternalError,
-}
-
-impl fmt::Display for KdfError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidIkmLength  => write!(f, "IKM invalide (vide ou > 4096 bytes)"),
-            Self::EmptyContext      => write!(f, "Contexte de dérivation vide"),
-            Self::InvalidOutputLength => write!(f, "Longueur de sortie invalide"),
-            Self::InternalError     => write!(f, "Erreur KDF interne"),
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DerivedKey — clé dérivée avec zéroïsation en Drop
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Clé dérivée de 32 bytes.
-/// **Zéroïsée automatiquement en Drop** pour éviter les fuites mémoire.
-pub struct DerivedKey32 {
-    bytes: [u8; 32],
-}
-
-impl DerivedKey32 {
-    /// Crée une DerivedKey32 depuis un buffer.
-    fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self { bytes }
-    }
-
-    /// Accède aux bytes de la clé.
-    #[inline(always)]
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.bytes
-    }
-
-    /// Consomme la clé et retourne le tableau interne.
-    #[inline(always)]
-    pub fn into_bytes(mut self) -> [u8; 32] {
-        let result = self.bytes;
-        // Zéroïser avant de consommer
-        self.bytes = [0u8; 32];
-        result
-    }
-}
-
-impl Drop for DerivedKey32 {
-    fn drop(&mut self) {
-        // SAFETY: Zéroïsation explicite — la clé ne doit pas rester en mémoire
-        // après utilisation. On utilise write_volatile pour éviter l'optimisation
-        // du compilateur qui pourrait supprimer cette écriture.
-        for byte in self.bytes.iter_mut() {
-            // SAFETY: La référence est valide et on écrit une valeur immédiatement.
-            unsafe { core::ptr::write_volatile(byte, 0u8); }
-        }
-    }
-}
-
-impl fmt::Debug for DerivedKey32 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DerivedKey32([REDACTED])")
-    }
-}
-
-/// Clé dérivée de 64 bytes (pour usage double : enc + mac).
-pub struct DerivedKey64 {
-    bytes: [u8; 64],
-}
-
-impl DerivedKey64 {
-    fn from_bytes(bytes: [u8; 64]) -> Self {
-        Self { bytes }
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 64] {
-        &self.bytes
-    }
-
-    /// Sépare en deux clés 32B : (encryption_key, mac_key).
-    pub fn split(&self) -> ([u8; 32], [u8; 32]) {
-        let mut enc = [0u8; 32];
-        let mut mac = [0u8; 32];
-        enc.copy_from_slice(&self.bytes[..32]);
-        mac.copy_from_slice(&self.bytes[32..]);
-        (enc, mac)
-    }
-}
-
-impl Drop for DerivedKey64 {
-    fn drop(&mut self) {
-        for byte in self.bytes.iter_mut() {
-            // SAFETY: Zéroïsation sécurisée de la clé avant libération.
-            unsafe { core::ptr::write_volatile(byte, 0u8); }
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HKDF — Extract + Expand
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// HKDF-Extract : `PRK = BLAKE3_MAC(salt, IKM)` → 32 bytes
-///
-/// Si salt est None, on utilise BLAKE3_IV comme sel par défaut.
-pub fn hkdf_extract(salt: Option<&[u8]>, ikm: &[u8]) -> Result<[u8; 32], KdfError> {
-    if ikm.is_empty() || ikm.len() > 4096 {
-        return Err(KdfError::InvalidIkmLength);
-    }
-    // Salt par défaut : 32 bytes à zéro (convention HKDF RFC 5869)
-    let default_salt = [0u8; 32];
-    let actual_salt_slice = salt.unwrap_or(&default_salt);
-
-    // PRK = BLAKE3_MAC(key=salt[0..32], data=ikm)
-    // Tronquer ou zéro-padder le salt pour obtenir exactement 32 bytes.
-    let mut salt_arr = [0u8; 32];
-    let slen = actual_salt_slice.len().min(32);
-    salt_arr[..slen].copy_from_slice(&actual_salt_slice[..slen]);
-    let prk = blake3_mac(&salt_arr, ikm);
-    Ok(prk)
-}
-
-/// HKDF-Expand : `OKM = BLAKE3_derive_key(context, PRK || info || counter)`
-///
-/// Output : 32 bytes.
-/// Pour plus de 32 bytes, utiliser `hkdf_expand_64()`.
-///
-/// note: Pour Exo-OS on utilise le mode `derive_key` de BLAKE3 qui est
-///       formellement équivalent à HKDF-Expand pour 32 bytes de sortie.
-pub fn hkdf_expand_32(prk: &[u8; 32], context: &str, info: &[u8]) -> Result<DerivedKey32, KdfError> {
-    if context.is_empty() {
-        return Err(KdfError::EmptyContext);
-    }
-
-    // On utilise BLAKE3 keyed mode : key=PRK, data= context_bytes || info
-    // Ce n'est pas identique à HKDF-Expand RFC5869, mais est cryptographiquement
-    // équivalent pour les cas d'usage kernel (PRF sous clé).
-    let mut hasher = Blake3Hasher::new_keyed(prk);
-    // Préfixer avec le contexte ASCII
-    hasher.update(context.as_bytes());
-    // Séparateur pour éviter toute ambiguïté entre context et info
-    hasher.update(b"\xFF");
-    hasher.update(info);
-    let mut output = [0u8; 32];
-    hasher.finalize(&mut output);
-    Ok(DerivedKey32::from_bytes(output))
-}
-
-/// HKDF-Expand : 64 bytes (deux clés 32B).
-pub fn hkdf_expand_64(prk: &[u8; 32], context: &str, info: &[u8]) -> Result<DerivedKey64, KdfError> {
-    if context.is_empty() {
-        return Err(KdfError::EmptyContext);
-    }
-    // On dérive deux clés séparément avec des sous-contextes distincts.
-    let mut out = [0u8; 64];
-    {
-        let ctx_enc = alloc::format!("{} [ENC]", context);
-        let mut h = Blake3Hasher::new_keyed(prk);
-        h.update(ctx_enc.as_bytes());
-        h.update(b"\xFF");
-        h.update(info);
-        let mut h1 = [0u8; 32];
-        h.finalize(&mut h1);
-        out[..32].copy_from_slice(&h1);
-    }
-    {
-        let ctx_mac = alloc::format!("{} [MAC]", context);
-        let mut h = Blake3Hasher::new_keyed(prk);
-        h.update(ctx_mac.as_bytes());
-        h.update(b"\xFF");
-        h.update(info);
-        let mut h2 = [0u8; 32];
-        h.finalize(&mut h2);
-        out[32..].copy_from_slice(&h2);
-    }
-    Ok(DerivedKey64::from_bytes(out))
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// API haut niveau : derive_subkey
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Dérive une sous-clé 32B depuis un IKM + label de contexte.
-///
-/// Séquence :
-///   1. PRK = HKDF-Extract(salt=None, IKM)
-///   2. subkey = HKDF-Expand(PRK, context_label, info)
-pub fn derive_subkey(
-    ikm:     &[u8],
-    context: &str,
-    info:    &[u8],
-) -> Result<DerivedKey32, KdfError> {
-    let prk = hkdf_extract(None, ikm)?;
-    hkdf_expand_32(&prk, context, info)
-}
-
-/// Dérive deux sous-clés 32B (chiffrement + MAC) depuis un IKM.
-pub fn derive_enc_mac_keys(
-    ikm:     &[u8],
-    context: &str,
-    info:    &[u8],
-) -> Result<([u8; 32], [u8; 32]), KdfError> {
-    let prk = hkdf_extract(None, ikm)?;
-    let keys64 = hkdf_expand_64(&prk, context, info)?;
-    Ok(keys64.split())
-}
-
-/// Dérive la clé de chiffrement canal IPC entre deux processus.
-///
-/// `pid_a`, `pid_b` : identifiants des deux participants.
-/// `session_nonce` : nonce unique par session (généré par le serveur IPC).
-pub fn derive_ipc_channel_key(
-    master_key:    &[u8; 32],
-    pid_a:         u32,
-    pid_b:         u32,
-    session_nonce: &[u8; 16],
-) -> Result<DerivedKey32, KdfError> {
-    // info = pid_a(4) || pid_b(4) || nonce(16)
-    let mut info = [0u8; 24];
-    info[..4].copy_from_slice(&pid_a.to_le_bytes());
-    info[4..8].copy_from_slice(&pid_b.to_le_bytes());
-    info[8..24].copy_from_slice(session_nonce);
-
-    derive_subkey(master_key, labels::IPC_CHANNEL_ENC, &info)
-}
-
-/// Dérive la clé d'intégrité TCB depuis la platform key + boot nonce.
-pub fn derive_tcb_attestation_key(
-    platform_key: &[u8; 32],
-    boot_nonce:   &[u8; 32],
-) -> Result<DerivedKey32, KdfError> {
-    derive_subkey(platform_key, labels::TCB_ATTESTATION, boot_nonce)
-}
-
-/// Dérive la clé de wrapping pour les clés utilisateur.
-pub fn derive_key_encryption_key(
-    root_key:     &[u8; 32],
-    uid:          u32,
-    pid:          u32,
-) -> Result<DerivedKey32, KdfError> {
-    let mut info = [0u8; 8];
-    info[..4].copy_from_slice(&uid.to_le_bytes());
-    info[4..8].copy_from_slice(&pid.to_le_bytes());
-    derive_subkey(root_key, labels::KEY_WRAPPING, &info)
-}
-
-/// Dérive la clé de chiffrement de bloc filesystem.
-pub fn derive_fs_block_key(
-    volume_key:  &[u8; 32],
-    block_id:    u64,
-) -> Result<DerivedKey32, KdfError> {
-    let info = block_id.to_le_bytes();
-    derive_subkey(volume_key, labels::FS_BLOCK_ENC, &info)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// KDF via BLAKE3 native derive_key mode
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Dérive une clé en utilisant le mode natif BLAKE3 `derive_key`.
-///
-/// Le contexte doit être une chaîne ASCII unique et statique.
-/// Ce mode est plus rapide que HKDF car BLAKE3 l'intègre nativement.
-pub fn blake3_kdf(context: &'static str, key_material: &[u8]) -> Result<DerivedKey32, KdfError> {
-    if context.is_empty() {
-        return Err(KdfError::EmptyContext);
-    }
-    if key_material.is_empty() || key_material.len() > 4096 {
-        return Err(KdfError::InvalidIkmLength);
-    }
-    let mut derived = [0u8; 32];
-    blake3_derive_key(context.as_bytes(), key_material, &mut derived);
-    Ok(DerivedKey32::from_bytes(derived))
-}
 
 extern crate alloc;
+use alloc::vec::Vec;
+
+use hkdf::Hkdf;
+use sha2::{Sha256, Sha512};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Clé dérivée 32 octets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DerivedKey32(pub [u8; 32]);
+
+impl DerivedKey32 {
+    pub fn as_bytes(&self) -> &[u8; 32] { &self.0 }
+    pub fn zeroize(&mut self) { self.0.iter_mut().for_each(|b| *b = 0); }
+}
+
+/// Clé dérivée 64 octets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DerivedKey64(pub [u8; 64]);
+
+impl DerivedKey64 {
+    pub fn as_bytes(&self) -> &[u8; 64] { &self.0 }
+    pub fn zeroize(&mut self) { self.0.iter_mut().for_each(|b| *b = 0); }
+}
+
+/// Erreur KDF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KdfError {
+    /// Longueur de sortie non supportée.
+    InvalidOutputLength,
+    /// Paramètre d'entrée invalide.
+    InvalidInput,
+    /// Erreur interne HKDF expand.
+    ExpandError,
+}
+
+impl core::fmt::Display for KdfError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            KdfError::InvalidOutputLength => write!(f, "KDF: invalid output length"),
+            KdfError::InvalidInput        => write!(f, "KDF: invalid input"),
+            KdfError::ExpandError         => write!(f, "KDF: HKDF expand error"),
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HKDF-SHA256
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// HKDF-SHA256 — Phase d'extraction.
+/// Retourne `(PRK 32 octets, Hkdf struct)`.
+/// `salt` peut être `None` (HKDF utilise alors un sel de zéros).
+pub fn hkdf_extract(
+    salt: Option<&[u8]>,
+    ikm: &[u8],
+) -> (DerivedKey32, Hkdf<Sha256>) {
+    let (prk, hkdf) = Hkdf::<Sha256>::extract(salt, ikm);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&prk);
+    (DerivedKey32(out), hkdf)
+}
+
+/// HKDF-SHA256 — Phase d'expansion vers 32 octets.
+pub fn hkdf_expand_32(
+    prk: &Hkdf<Sha256>,
+    info: &[u8],
+) -> Result<DerivedKey32, KdfError> {
+    let mut okm = [0u8; 32];
+    prk.expand(info, &mut okm).map_err(|_| KdfError::ExpandError)?;
+    Ok(DerivedKey32(okm))
+}
+
+/// HKDF-SHA512 — Phase d'expansion vers 64 octets.
+pub fn hkdf_expand_64(
+    ikm: &[u8],
+    salt: Option<&[u8]>,
+    info: &[u8],
+) -> Result<DerivedKey64, KdfError> {
+    let (_, hkdf) = Hkdf::<Sha512>::extract(salt, ikm);
+    let mut okm   = [0u8; 64];
+    hkdf.expand(info, &mut okm).map_err(|_| KdfError::ExpandError)?;
+    Ok(DerivedKey64(okm))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fonctions de dérivation spécialisées (HKDF-SHA256)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Dérive une sous-clé 32B depuis un IKM avec sel + contexte.
+pub fn derive_subkey(
+    ikm: &[u8],
+    salt: Option<&[u8]>,
+    context: &[u8],
+) -> Result<DerivedKey32, KdfError> {
+    let (_, hkdf) = Hkdf::<Sha256>::extract(salt, ikm);
+    hkdf_expand_32(&hkdf, context)
+}
+
+/// Dérive les clés de chiffrement (enc) et d'authentification (mac) depuis un IKM.
+///
+/// Retourne `(enc_key 32B, mac_key 32B)`.
+pub fn derive_enc_mac_keys(
+    ikm: &[u8],
+    salt: Option<&[u8]>,
+) -> Result<(DerivedKey32, DerivedKey32), KdfError> {
+    let (_, hkdf) = Hkdf::<Sha256>::extract(salt, ikm);
+    let enc = hkdf_expand_32(&hkdf, b"ExoOS 2025 enc-key")?;
+    let mac = hkdf_expand_32(&hkdf, b"ExoOS 2025 mac-key")?;
+    Ok((enc, mac))
+}
+
+/// Dérive la clé d'un canal IPC depuis un secret partagé DH.
+pub fn derive_ipc_channel_key(
+    dh_shared: &[u8; 32],
+    channel_id: u64,
+) -> Result<DerivedKey32, KdfError> {
+    let mut info = [0u8; 8 + 18]; // channel_id (8B) + label
+    info[..8].copy_from_slice(&channel_id.to_le_bytes());
+    info[8..].copy_from_slice(b"ExoOS IPC channel ");
+    derive_subkey(dh_shared, Some(b"ExoOS-IPC-2025"), &info)
+}
+
+/// Dérive la clé d'attestation TCB.
+pub fn derive_tcb_attestation_key(
+    root_secret: &[u8],
+    tcb_hash: &[u8; 32],
+) -> Result<DerivedKey32, KdfError> {
+    derive_subkey(root_secret, Some(tcb_hash), b"ExoOS 2025 tcb-attest")
+}
+
+/// Dérive une clé de chiffrement de clé (KEK).
+pub fn derive_key_encryption_key(
+    master_key: &[u8; 32],
+    key_id: u32,
+) -> Result<DerivedKey32, KdfError> {
+    let mut info = [0u8; 4 + 15];
+    info[..4].copy_from_slice(&key_id.to_le_bytes());
+    info[4..].copy_from_slice(b"ExoOS 2025 kek ");
+    derive_subkey(master_key, Some(b"ExoOS-KEK-2025"), &info)
+}
+
+/// Dérive une clé de chiffrement de bloc filesystem.
+pub fn derive_fs_block_key(
+    volume_key: &[u8; 32],
+    block_index: u64,
+) -> Result<DerivedKey32, KdfError> {
+    let mut info = [0u8; 8 + 18];
+    info[..8].copy_from_slice(&block_index.to_le_bytes());
+    info[8..].copy_from_slice(b"ExoOS 2025 fs-blk ");
+    derive_subkey(volume_key, Some(b"ExoOS-FS-2025"), &info)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BLAKE3 KDF (haute performance)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Dérivation de clé BLAKE3 native.
+///
+/// Utilise le mode `derive_key` de BLAKE3 (plus rapide que HKDF pour usage
+/// interne kernel sans besoin d'interopérabilité RFC).
+/// `context` doit être unique et statique (ASCII).
+pub fn blake3_kdf(context: &[u8], material: &[u8]) -> DerivedKey32 {
+    let ctx = core::str::from_utf8(context).unwrap_or("ExoOS-KDF-Blake3");
+    let derived = blake3::derive_key(ctx, material);
+    DerivedKey32(derived)
+}
+
+/// BLAKE3 KDF avec sortie XOF (longueur arbitraire, max 64B via ce wrapper).
+pub fn blake3_kdf_xof(context: &[u8], material: &[u8], out: &mut [u8]) {
+    let ctx = core::str::from_utf8(context).unwrap_or("ExoOS-KDF-Blake3");
+    if out.len() <= 32 {
+        let d = blake3::derive_key(ctx, material);
+        let n = out.len();
+        out[..n].copy_from_slice(&d[..n]);
+    } else {
+        let mut h = blake3::Hasher::new_derive_key(ctx);
+        h.update(material);
+        h.finalize_xof().fill(out);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hkdf_extract_expand() {
+        let ikm  = b"input key material";
+        let salt = Some(b"ExoOS salt".as_ref());
+        let (prk, hkdf) = hkdf_extract(salt, ikm);
+        assert_eq!(prk.0.len(), 32);
+
+        let k1 = hkdf_expand_32(&hkdf, b"enc").unwrap();
+        let k2 = hkdf_expand_32(&hkdf, b"mac").unwrap();
+        assert_ne!(k1, k2, "contextes différents → clés différentes");
+    }
+
+    #[test]
+    fn test_derive_enc_mac_keys() {
+        let (enc, mac) = derive_enc_mac_keys(b"shared-secret", None).unwrap();
+        assert_ne!(enc, mac);
+    }
+
+    #[test]
+    fn test_blake3_kdf_domain_separation() {
+        let k1 = blake3_kdf(b"ExoOS 2025 volume-enc", b"material");
+        let k2 = blake3_kdf(b"ExoOS 2025 volume-mac", b"material");
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn test_derive_fs_block_key_unique_per_block() {
+        let vol_key = [0x55u8; 32];
+        let k0 = derive_fs_block_key(&vol_key, 0).unwrap();
+        let k1 = derive_fs_block_key(&vol_key, 1).unwrap();
+        assert_ne!(k0, k1);
+    }
+
+    #[test]
+    fn test_hkdf_expand_64() {
+        let k64 = hkdf_expand_64(b"ikm", Some(b"salt"), b"info-64").unwrap();
+        assert_eq!(k64.0.len(), 64);
+    }
+}

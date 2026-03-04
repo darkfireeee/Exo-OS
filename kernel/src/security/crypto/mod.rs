@@ -80,7 +80,7 @@ pub use kdf::{
     DerivedKey32,
     DerivedKey64,
     KdfError,
-    labels as kdf_labels,
+    // labels: supprimé (module absent du nouveau kdf.rs basé sur crates)
 };
 
 /// X25519

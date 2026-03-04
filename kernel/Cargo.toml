@@ -43,19 +43,29 @@ acpi       = { workspace = true }
 volatile   = { workspace = true }
 
 # ── Crypto no_std (RustCrypto — vecteurs IETF, pas d'implémentation from scratch)
-# S-08 / LAC-03 / CRYPTO-CRATES : toutes les primitives crypto via crates validées.
+# RÈGLE CRYPTO-CRATES  : JAMAIS d'implémentation maison. Toutes les primitives
+# crypto via crates RustCrypto validées IETF (doc ExoOS_Dependencies_Complete.md).
 # INTERDIT : libsodium (requiert std+libc), ring (trop de deps système)
-blake3        = { workspace = true }
-hkdf          = { workspace = true }
-sha2          = { version = "0.10", default-features = false, features = ["force-soft"] }
+#
+# CONTRAINTE TARGET x86_64-unknown-none (-sse2 dans target JSON) :
+#   poly1305  → LLVM ERROR: Do not know how to split (128-bit ops sans SSE2)
+#   polyval   → même erreur (dep transitif de ghash/aes-gcm)
+#   Conséquence : chacha20poly1305 ET aes-gcm NE COMPILENT PAS pour ce target.
+#   Alternative : chacha20 (stream) + blake3_mac pour l'authentification kernel.
+#   Les AEAD complets (chacha20poly1305, aes-gcm) sont réservés aux serveurs
+#   userspace (ring 3) où SSE2 est disponible et l'état FPU est sauvegardé.
+blake3           = { workspace = true }          # security/crypto/blake3.rs + exofs/core/blob_id.rs
+# chacha20 crate INCOMPATIBLE : déclenche LLVM ERROR split 128-bit sur x86_64-unknown-none
+#   → xchacha20.rs utilise l'algorithme RFC 8439 en arithmétique u32 pure (ChaCha20 keystream)
+#   + blake3 (ci-dessus) comme MAC AEAD — zéro dépendance SIMD/SSE2.
+# chacha20poly1305 : INCOMPATIBLE kernel (poly1305 LLVM ERROR: split 128-bit)
+# aes-gcm          : INCOMPATIBLE kernel (polyval LLVM ERROR: split 128-bit)
+hkdf             = { workspace = true }          # security/crypto/kdf.rs (RFC 5869)
+sha2             = { version = "0.10", default-features = false, features = ["force-soft"] }
   # requis par hkdf — force-soft évite SHA-NI (LLVM crash x86_64-unknown-none)
-argon2        = { workspace = true }
-# aes-gcm supprimé : implémentation native dans security/crypto/aes_gcm.rs (no_std pure-Rust)
-# polyval supprimé : dépendance transitoire de aes-gcm, causait LLVM ERROR sur x86_64-unknown-none
-x25519-dalek  = { workspace = true }
-ed25519-dalek = { workspace = true }
-# NOTE : chacha20poly1305 supprimé du kernel direct — XChaCha20Poly1305 est implémenté
-# en natif dans fs/exofs/crypto/xchacha20.rs (no_std, compatible bare-metal x86_64-unknown-none)
+argon2           = { workspace = true }          # exofs/crypto/key_derivation.rs
+x25519-dalek     = { workspace = true }          # security/crypto/x25519.rs
+ed25519-dalek    = { workspace = true }          # security/crypto/ed25519.rs + code_signing.rs
 
 [dev-dependencies]
 proptest          = { workspace = true }

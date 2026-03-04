@@ -167,10 +167,10 @@ pub fn verify_module_signature(
 
     // Vérifier la signature Ed25519
     let signed_data = header.signed_data();
-    ed25519_verify(&signed_data, &header.signature, pub_key)
+    ed25519_verify(pub_key, &signed_data, &header.signature)
         .map_err(|e| match e {
             Ed25519Error::InvalidSignature => CodeSignError::InvalidSignature,
-            Ed25519Error::InvalidPublicKey => CodeSignError::UnknownPublicKey,
+            Ed25519Error::InvalidKey => CodeSignError::UnknownPublicKey,
             _ => CodeSignError::InvalidSignature,
         })?;
 
