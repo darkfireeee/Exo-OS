@@ -261,9 +261,13 @@ impl ExoarReader {
         let hdr = ExoarHeader::from_bytes(&hdr_buf).ok_or(ExoarReadError::BadHeaderMagic)?;
         if !hdr.validate_version() { return Err(ExoarReadError::BadVersion); }
 
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let entry_count_declared: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.entry_count)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         report.header_epoch_base   = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_base)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         report.header_epoch_target = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_target)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         report.header_flags        = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.flags)) };
 
         let max_entries  = self.config.effective_max_entries().min(entry_count_declared);
@@ -288,6 +292,7 @@ impl ExoarReader {
             let ehdr = ExoarEntryHeader::from_bytes(&ehdr_buf)
                 .ok_or(ExoarReadError::BadEntryMagic)?;
 
+            // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
             let payload_size: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_size)) };
             if payload_size > max_payload {
                 return Err(ExoarReadError::PayloadTooLarge { entry_idx });
@@ -305,6 +310,7 @@ impl ExoarReader {
 
             // Vérifier CRC32C du payload
             if self.config.verify_crc && usize_payload > 0 {
+                // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
                 let declared_crc: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_crc32)) };
                 if !crc32c_verify(&payload, declared_crc) {
                     report.crc_errors = report.crc_errors.saturating_add(1);
@@ -353,10 +359,12 @@ impl ExoarReader {
         source.read_exact(&mut ftr_buf).map_err(|_| ExoarReadError::TruncatedArchive)?;
         let ftr = ExoarFooter::from_bytes(&ftr_buf).ok_or(ExoarReadError::BadFooterMagic)?;
 
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ftr_entry_count: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.entry_count)) };
         if ftr_entry_count != entry_count_declared {
             return Err(ExoarReadError::EntryCountMismatch);
         }
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         report.footer_global_crc32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.global_crc32)) };
         report.bytes_consumed = source.bytes_read();
         report.archive_valid  = !report.has_errors();
@@ -391,9 +399,13 @@ impl ExoarScanner {
         let hdr = ExoarHeader::from_bytes(&hdr_buf).ok_or(ExoarReadError::BadHeaderMagic)?;
         if !hdr.validate_version() { return Err(ExoarReadError::BadVersion); }
 
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let entry_count: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.entry_count)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         report.header_epoch_base   = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_base)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         report.header_epoch_target = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_target)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         report.header_flags        = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.flags)) };
 
         let max_entries = self.config.effective_max_entries().min(entry_count);
@@ -410,6 +422,7 @@ impl ExoarScanner {
             let ehdr = ExoarEntryHeader::from_bytes(&ehdr_buf)
                 .ok_or(ExoarReadError::BadEntryMagic)?;
 
+            // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
             let payload_size: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_size)) };
             if payload_size > max_payload {
                 return Err(ExoarReadError::PayloadTooLarge { entry_idx });
@@ -430,6 +443,7 @@ impl ExoarScanner {
             }
 
             if self.config.verify_crc && payload_size > 0 {
+                // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
                 let declared_crc: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_crc32)) };
                 if local_crc != declared_crc {
                     report.crc_errors = report.crc_errors.saturating_add(1);
@@ -451,10 +465,12 @@ impl ExoarScanner {
         source.read_exact(&mut ftr_buf).map_err(|_| ExoarReadError::TruncatedArchive)?;
         let ftr = ExoarFooter::from_bytes(&ftr_buf).ok_or(ExoarReadError::BadFooterMagic)?;
 
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ftr_count: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.entry_count)) };
         if ftr_count != entry_count {
             return Err(ExoarReadError::EntryCountMismatch);
         }
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         report.footer_global_crc32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.global_crc32)) };
         report.bytes_consumed = source.bytes_read();
         report.archive_valid  = !report.has_errors();

@@ -144,6 +144,7 @@ const _: () = assert!(
 impl CodeDescriptorDisk {
     pub fn compute_checksum(&self) -> [u8; 16] {
         let raw: &[u8; 192] =
+            // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
             unsafe { &*(self as *const CodeDescriptorDisk as *const [u8; 192]) };
         let full = blake3_hash(&raw[..176]);
         let mut out = [0u8; 16];

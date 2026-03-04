@@ -138,6 +138,7 @@ impl InodeEmulation {
     }
 
     fn get_or_alloc_inner(&self, object_id: u64, flags: u32, size: u64, uid: u64) -> ExofsResult<ObjectIno> {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         if let Some(idx) = Self::find_by_oid(table, object_id) {
             return Ok(table[idx].ino);
@@ -154,6 +155,7 @@ impl InodeEmulation {
     /// Retourne le object_id correspondant à un ino.
     pub fn ino_to_object(&self, ino: ObjectIno) -> Option<u64> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &*self.fwd.get() };
         let r = Self::find_by_ino(table, ino).map(|i| table[i].object_id);
         self.lock_release();
@@ -163,6 +165,7 @@ impl InodeEmulation {
     /// Retourne l'entrée complète pour un ino.
     pub fn get_entry(&self, ino: ObjectIno) -> Option<InodeEntry> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &*self.fwd.get() };
         let r = Self::find_by_ino(table, ino).map(|i| table[i]);
         self.lock_release();
@@ -172,6 +175,7 @@ impl InodeEmulation {
     /// Retourne l'entrée complète pour un object_id.
     pub fn get_entry_by_oid(&self, oid: u64) -> Option<InodeEntry> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &*self.fwd.get() };
         let r = Self::find_by_oid(table, oid).map(|i| table[i]);
         self.lock_release();
@@ -181,6 +185,7 @@ impl InodeEmulation {
     /// Met à jour la taille d'un inode.
     pub fn update_size(&self, ino: ObjectIno, new_size: u64) -> ExofsResult<()> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         let result = if let Some(idx) = Self::find_by_ino(table, ino) {
             table[idx].size = new_size;
@@ -196,6 +201,7 @@ impl InodeEmulation {
     /// ARITH-02 : saturating_add/sub.
     pub fn update_link_count(&self, ino: ObjectIno, delta: i64) -> ExofsResult<u32> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         let result = if let Some(idx) = Self::find_by_ino(table, ino) {
             let cur = table[idx].link_count as i64;
@@ -212,6 +218,7 @@ impl InodeEmulation {
     /// Met à jour les flags d'un inode.
     pub fn update_flags(&self, ino: ObjectIno, flags: u32) -> ExofsResult<()> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         let result = if let Some(idx) = Self::find_by_ino(table, ino) {
             table[idx].flags = flags; Ok(())
@@ -223,6 +230,7 @@ impl InodeEmulation {
     /// Met à jour l'epoch_id d'un inode.
     pub fn update_epoch(&self, ino: ObjectIno, epoch_id: u64) -> ExofsResult<()> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         let result = if let Some(idx) = Self::find_by_ino(table, ino) {
             table[idx].epoch_id = epoch_id; Ok(())
@@ -234,6 +242,7 @@ impl InodeEmulation {
     /// Invalide un inode (suppression du mapping).
     pub fn release(&self, object_id: u64) {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         if let Some(idx) = Self::find_by_oid(table, object_id) {
             table.remove(idx);
@@ -244,6 +253,7 @@ impl InodeEmulation {
     /// Invalide un inode par ino.
     pub fn release_ino(&self, ino: ObjectIno) {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         if let Some(idx) = Self::find_by_ino(table, ino) {
             table.remove(idx);
@@ -254,6 +264,7 @@ impl InodeEmulation {
     /// Vide toute la table (reset).
     pub fn clear(&self) {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         table.clear();
         self.lock_release();
@@ -262,6 +273,7 @@ impl InodeEmulation {
     /// Retourne le nombre d'inodes en cache.
     pub fn count(&self) -> usize {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let n = unsafe { (*self.fwd.get()).len() };
         self.lock_release();
         n
@@ -275,6 +287,7 @@ impl InodeEmulation {
     /// Retourne vrai si un ino est en cache.
     pub fn contains_ino(&self, ino: ObjectIno) -> bool {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &*self.fwd.get() };
         let r = Self::find_by_ino(table, ino).is_some();
         self.lock_release();
@@ -284,6 +297,7 @@ impl InodeEmulation {
     /// Retourne vrai si un object_id est en cache.
     pub fn contains_oid(&self, oid: u64) -> bool {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &*self.fwd.get() };
         let r = Self::find_by_oid(table, oid).is_some();
         self.lock_release();
@@ -294,6 +308,7 @@ impl InodeEmulation {
     /// OOM-02 : try_reserve. RECUR-01 : while.
     pub fn all_inos(&self) -> ExofsResult<Vec<ObjectIno>> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &*self.fwd.get() };
         let mut out: Vec<ObjectIno> = Vec::new();
         out.try_reserve(table.len()).map_err(|_| ExofsError::NoMemory)?;
@@ -309,6 +324,7 @@ impl InodeEmulation {
     /// Garantit que la racine est bien enregistrée.
     pub fn ensure_root(&self) -> ExofsResult<()> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         if Self::find_by_ino(table, INO_ROOT).is_none() {
             let entry = InodeEntry { ino: INO_ROOT, object_id: 1, flags: inode_flags::DIRECTORY, link_count: 2, size: 0, uid: 0, epoch_id: 0, access_ts: 0 };

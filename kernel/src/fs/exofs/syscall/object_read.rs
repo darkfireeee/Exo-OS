@@ -186,6 +186,7 @@ pub fn sys_exofs_object_read(
 
     // 2. Lire les ReadArgs optionnels.
     let (effective_offset, effective_count, use_cursor) = if args_ptr != 0 {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         match unsafe { super::validation::copy_struct_from_user::<ReadArgs>(args_ptr) } {
             Ok(a) => {
                 let off = if a.use_cursor != 0 { offset_val } else { a.offset };
@@ -391,6 +392,7 @@ pub fn scatter_read(
         let result = read_blob(blob_id, seg.offset, count, &mut tmp)?;
         if result.bytes_read > 0 {
             // Copier vers userspace (RÈGLE 9).
+            // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
             unsafe {
                 super::validation::copy_to_user(
                     seg.buf_ptr as *mut u8,

@@ -113,6 +113,7 @@ impl ObjectHeaderDisk {
 
     /// Vérifie le checksum de cet en-tête (HDR-03)
     pub fn verify_checksum(&self) -> bool {
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         let raw: [u8; OBJECT_HEADER_SIZE] = unsafe { core::mem::transmute_copy(self) };
         let mut raw124 = [0u8; 124];
         raw124.copy_from_slice(&raw[..124]);
@@ -122,6 +123,7 @@ impl ObjectHeaderDisk {
 
     /// Retourne les octets bruts
     pub fn as_bytes(&self) -> [u8; OBJECT_HEADER_SIZE] {
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         unsafe { core::mem::transmute_copy(self) }
     }
 }
@@ -757,6 +759,7 @@ mod tests {
 
         // Vérification en-tête sur disque
         let raw = &disk[hdr_offset.0 as usize..hdr_offset.0 as usize + OBJECT_HEADER_SIZE];
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let hdr: &ObjectHeaderDisk = unsafe { &*(raw.as_ptr() as *const ObjectHeaderDisk) };
         assert_eq!(hdr.magic, OBJECT_HEADER_MAGIC);
         assert!(hdr.verify_checksum());

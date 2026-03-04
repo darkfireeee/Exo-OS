@@ -10,7 +10,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::arch::time::read_ticks;
+use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::audit_entry::{AuditEntry, AuditEntryBuilder, AuditOp, AuditResult};
 use super::audit_log::AUDIT_LOG;
@@ -123,7 +123,7 @@ impl AuditWriter {
         result:    AuditResult,
     ) -> ExofsResult<()> {
         let entry = AuditEntryBuilder::new()
-            .tick(read_ticks())
+            .tick(exofs_ticks())
             .actor_uid(self.ctx.actor_uid)
             .actor_cap(self.ctx.actor_cap)
             .object_id(object_id)
@@ -274,7 +274,7 @@ pub fn write_security_event(
     op:        AuditOp,
     result:    AuditResult,
 ) {
-    let tick = read_ticks();
+    let tick = exofs_ticks();
     if let Ok(entry) = AuditEntryBuilder::new()
         .tick(tick)
         .actor_uid(actor_uid)

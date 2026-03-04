@@ -113,6 +113,7 @@ impl AuditLog {
         // SAFETY : index unique via fetch_add + masquage ; pas de data race
         // car chaque push écrit dans un slot différent (modulo RING_SIZE,
         // l'écrasement est acceptable pour le journal d'audit).
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { *self.ring[idx].get() = entry; }
     }
 

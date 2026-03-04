@@ -94,6 +94,7 @@ fn read_open_args(args_ptr: u64, flags_fallback: u32) -> Result<OpenArgs, i64> {
     }
     // RÈGLE 9 : copy_from_user pour structure userspace.
     let a = OpenArgs::defaults();
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
         super::validation::copy_struct_from_user::<OpenArgs>(args_ptr)
             .map_err(|_| EFAULT)

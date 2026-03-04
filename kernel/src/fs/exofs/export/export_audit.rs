@@ -317,6 +317,7 @@ impl ExportAuditLog {
         self.acquire();
         let head = self.head.load(Ordering::Relaxed);
         let idx = (head as usize) & RING_MASK;
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             let entries = &mut *self.entries.get();
             entries[idx] = entry;
@@ -356,6 +357,7 @@ impl ExportAuditLog {
     /// Retourne une copie des statistiques actuelles.
     pub fn stats(&self) -> ExportAuditStats {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let s = unsafe { *self.stats.get() };
         self.release();
         s
@@ -375,6 +377,7 @@ impl ExportAuditLog {
         let total = self.seq.load(Ordering::Relaxed) as usize;
         let available = total.min(EXPORT_AUDIT_RING);
         let n = out.len().min(available);
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries_ref = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < n {
@@ -392,6 +395,7 @@ impl ExportAuditLog {
         self.acquire();
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = (head.wrapping_sub(1)) & RING_MASK;
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entry = unsafe { (*self.entries.get())[idx] };
         self.release();
         Some(entry)
@@ -415,6 +419,7 @@ impl ExportAuditLog {
     /// Remet à zéro le journal et les statistiques.
     pub fn reset(&self) {
         self.acquire();
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             let entries = &mut *self.entries.get();
             let mut i = 0usize;

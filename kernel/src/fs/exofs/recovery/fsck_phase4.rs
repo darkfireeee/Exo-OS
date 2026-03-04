@@ -83,6 +83,7 @@ impl LostFoundHeaderDisk {
         };
         let stored = &buf[56..64];
         if &full_hash[0..8] != stored { return Err(ExofsError::ChecksumMismatch); }
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         Ok(unsafe { core::mem::transmute_copy(buf) })
     }
 
@@ -98,6 +99,7 @@ impl LostFoundHeaderDisk {
             _reserved: [0; 16],
             hdr_hash: [0; 8],
         };
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         let raw: [u8; LOST_FOUND_HDR_SIZE] = unsafe { core::mem::transmute_copy(&h) };
         let padded = {
             let mut p = [0u8; 224];
@@ -280,6 +282,7 @@ impl LostFoundTable {
         if buf.len() < LOST_FOUND_ENTRY_SIZE {
             return Err(ExofsError::InvalidArgument);
         }
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         let raw: [u8; LOST_FOUND_ENTRY_SIZE] = unsafe { core::mem::transmute_copy(entry) };
         buf[..LOST_FOUND_ENTRY_SIZE].copy_from_slice(&raw);
         // WRITE-02 : écrire et vérifier.
@@ -297,6 +300,7 @@ impl LostFoundTable {
             tick,
         );
         let mut buf = alloc::vec![0u8; block_size as usize];
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         let raw: [u8; LOST_FOUND_HDR_SIZE] = unsafe { core::mem::transmute_copy(&hdr) };
         buf[..LOST_FOUND_HDR_SIZE].copy_from_slice(&raw);
         device.write_block(self.base_lba, &buf)?;

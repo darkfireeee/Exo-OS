@@ -208,6 +208,7 @@ impl ContentHash {
     /// Recherche par blake3 sans recalcul.
     pub fn lookup_by_blake3(&self, blake3: &[u8; 32]) -> Option<ContentHashResult> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let cache = unsafe { &*self.cache.get() };
         let r = cache.get(blake3).map(|e| e.result);
         self.release();
@@ -222,6 +223,7 @@ impl ContentHash {
     /// Supprime une entrée du cache.
     pub fn evict(&self, blake3: &[u8; 32]) {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let cache = unsafe { &mut *self.cache.get() };
         cache.remove(blake3);
         self.release();
@@ -231,6 +233,7 @@ impl ContentHash {
     /// Vide entièrement le cache.
     pub fn clear(&self) {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let cache = unsafe { &mut *self.cache.get() };
         cache.clear();
         self.release();
@@ -246,6 +249,7 @@ impl ContentHash {
     /// Taille actuelle du cache.
     pub fn cache_len(&self) -> usize {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let l = unsafe { (*self.cache.get()).len() };
         self.release();
         l

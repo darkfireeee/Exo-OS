@@ -127,6 +127,7 @@ impl CheckpointHeaderDisk {
             _pad2:         [0; 32],
         };
         // Calculer le hash sur les 64 premiers octets (metadata scalaire).
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let raw = unsafe {
             core::slice::from_raw_parts(
                 &hdr as *const _ as *const u8,

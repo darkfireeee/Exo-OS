@@ -294,6 +294,7 @@ pub fn sys_exofs_object_set_meta(
         if vl > META_VALUE_MAX             { return EINVAL; }
         let mut kbuf: Vec<u8> = Vec::new();
         kbuf.try_reserve(kl).map_err(|_| -12i64).unwrap_or_default();
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             let src = key_ptr as *const u8;
             let mut i = 0usize;
@@ -302,6 +303,7 @@ pub fn sys_exofs_object_set_meta(
         let mut vbuf: Vec<u8> = Vec::new();
         if vl > 0 && val_ptr != 0 {
             vbuf.try_reserve(vl).map_err(|_| -12i64).unwrap_or_default();
+            // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
             unsafe {
                 let src = val_ptr as *const u8;
                 let mut i = 0usize;

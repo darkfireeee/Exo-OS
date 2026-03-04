@@ -95,12 +95,14 @@ impl RelationOnDisk {
         // Recopie manuelle (pas de transmute) pour éviter UB sur packed.
         let mut d: [u8; RELATION_ONDISK_SIZE] = [0u8; RELATION_ONDISK_SIZE];
         d.copy_from_slice(buf);
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         Ok(unsafe { core::ptr::read_unaligned(d.as_ptr() as *const RelationOnDisk) })
     }
 
     /// Sérialise dans un tableau de 96 octets.
     pub fn to_bytes(self) -> [u8; RELATION_ONDISK_SIZE] {
         let mut out = [0u8; RELATION_ONDISK_SIZE];
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             core::ptr::write_unaligned(out.as_mut_ptr() as *mut RelationOnDisk, self);
         }

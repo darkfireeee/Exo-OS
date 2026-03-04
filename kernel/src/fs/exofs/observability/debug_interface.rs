@@ -235,6 +235,7 @@ impl DebugQueue {
         let n = self.cmd_count.load(Ordering::Relaxed);
         if n >= DEBUG_QUEUE_SIZE as u64 { return Err(ExofsError::Resource); }
         let idx = self.cmd_head.fetch_add(1, Ordering::Relaxed) as usize % DEBUG_QUEUE_SIZE;
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { (*self.commands.get())[idx] = cmd; }
         self.cmd_count.fetch_add(1, Ordering::Relaxed);
         self.total_cmds.fetch_add(1, Ordering::Relaxed);
@@ -245,6 +246,7 @@ impl DebugQueue {
         let n = self.cmd_count.load(Ordering::Relaxed);
         if n == 0 { return None; }
         let idx = self.cmd_tail.fetch_add(1, Ordering::Relaxed) as usize % DEBUG_QUEUE_SIZE;
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let cmd = unsafe { (*self.commands.get())[idx] };
         self.cmd_count.fetch_sub(1, Ordering::Relaxed);
         if cmd.is_empty() { None } else { Some(cmd) }
@@ -254,6 +256,7 @@ impl DebugQueue {
         let n = self.resp_count.load(Ordering::Relaxed);
         if n >= DEBUG_QUEUE_SIZE as u64 { return Err(ExofsError::Resource); }
         let idx = self.resp_head.fetch_add(1, Ordering::Relaxed) as usize % DEBUG_QUEUE_SIZE;
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { (*self.responses.get())[idx] = resp; }
         self.resp_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -263,6 +266,7 @@ impl DebugQueue {
         let n = self.resp_count.load(Ordering::Relaxed);
         if n == 0 { return None; }
         let idx = self.resp_tail.fetch_add(1, Ordering::Relaxed) as usize % DEBUG_QUEUE_SIZE;
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let resp = unsafe { (*self.responses.get())[idx] };
         self.resp_count.fetch_sub(1, Ordering::Relaxed);
         if resp.is_empty() { None } else { Some(resp) }

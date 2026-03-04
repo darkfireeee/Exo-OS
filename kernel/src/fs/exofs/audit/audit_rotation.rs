@@ -13,7 +13,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::arch::time::read_ticks;
+use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::audit_entry::{AuditEntry, AUDIT_ENTRY_SIZE};
 use super::audit_log::{AuditLog, AuditLogStats, AUDIT_LOG, RING_SIZE};
@@ -184,7 +184,7 @@ impl AuditRotation {
         if stats.ring_fill_pct >= self.config.fill_threshold_pct {
             return Some(RotationReason::FillThreshold);
         }
-        let now = read_ticks();
+        let now = exofs_ticks();
         let age = now.saturating_sub(self.last_rotate_tick);
         if self.last_rotate_tick > 0 && age >= self.config.max_age_ticks {
             return Some(RotationReason::AgeExpired);
@@ -231,7 +231,7 @@ impl AuditRotation {
         &mut self,
         reason: RotationReason,
     ) -> ExofsResult<RotationReport> {
-        let started_at   = read_ticks();
+        let started_at   = exofs_ticks();
         let stats_before = AUDIT_LOG.stats();
         let avail        = AUDIT_LOG.available();
 
@@ -276,14 +276,14 @@ impl AuditRotation {
             AUDIT_LOG.reset_stats();
         }
 
-        self.last_rotate_tick = read_ticks();
+        self.last_rotate_tick = exofs_ticks();
         self.total_rotations  = self.total_rotations.wrapping_add(1);
 
         Ok(RotationReport {
             n_archived,
             n_segments:   self.segments.len(),
             started_at,
-            ended_at:     read_ticks(),
+            ended_at:     exofs_ticks(),
             stats_before,
             reason,
         })

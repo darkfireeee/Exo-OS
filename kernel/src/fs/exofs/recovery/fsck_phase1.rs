@@ -120,6 +120,7 @@ impl SuperblockDisk {
             return Err(ExofsError::ChecksumMismatch);
         }
 
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         Ok(unsafe { core::mem::transmute_copy(buf) })
     }
 
@@ -468,6 +469,7 @@ mod tests {
 
     #[test]
     fn test_superblock_fields_validation() {
+        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut sb: SuperblockDisk = unsafe { core::mem::zeroed() };
         sb.block_size   = 4096;
         sb.total_blocks = 1000;
@@ -481,6 +483,7 @@ mod tests {
 
     #[test]
     fn test_superblock_free_blocks_overflow() {
+        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut sb: SuperblockDisk = unsafe { core::mem::zeroed() };
         sb.total_blocks = 100;
         sb.free_blocks  = 200;
@@ -489,6 +492,7 @@ mod tests {
 
     #[test]
     fn test_superblock_invalid_block_size() {
+        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut sb: SuperblockDisk = unsafe { core::mem::zeroed() };
         sb.block_size = 600; // Non puissance de 2.
         assert!(!sb.block_size_valid());

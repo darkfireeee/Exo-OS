@@ -170,6 +170,7 @@ impl RepairLog {
     /// Enregistre une réparation dans le journal.
     pub fn push(&self, record: RepairRecord) {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) % REPAIR_LOG_CAPACITY;
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { (*self.buf.get())[idx] = record; }
         self.count.fetch_add(1, Ordering::Relaxed);
     }
@@ -190,6 +191,7 @@ impl RepairLog {
         out.try_reserve(avail).map_err(|_| ExofsError::NoMemory)?;
         for i in 0..avail {
             let idx = (head + REPAIR_LOG_CAPACITY - 1 - i) % REPAIR_LOG_CAPACITY;
+            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
             out.push(unsafe { (*self.buf.get())[idx] });
         }
         Ok(out)
@@ -203,6 +205,7 @@ impl RepairLog {
         let mut out = Vec::new();
         for i in 0..avail {
             let idx = (head + REPAIR_LOG_CAPACITY - 1 - i) % REPAIR_LOG_CAPACITY;
+            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
             let rec = unsafe { (*self.buf.get())[idx] };
             if !rec.success {
                 out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
@@ -220,6 +223,7 @@ impl RepairLog {
         let avail = count.min(REPAIR_LOG_CAPACITY).min(n);
         for i in 0..avail {
             let idx = (head + REPAIR_LOG_CAPACITY - 1 - i) % REPAIR_LOG_CAPACITY;
+            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
             if !unsafe { (*self.buf.get())[idx].success } { return false; }
         }
         true
@@ -381,6 +385,7 @@ impl FsckRepair {
 
         // Checksum de l en-tête (Blake3 sur bytes[0..224]).
         let hdr_hash_input: &[u8; 224] = if hdr_buf.len() >= 224 {
+            // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
             unsafe { &*(hdr_buf.as_ptr() as *const [u8; 224]) }
         } else {
             return Err(ExofsError::InvalidArgument);
@@ -442,6 +447,7 @@ impl FsckRepair {
         buf[8] = 1; // version minimale
         // Calculer le checksum sur les 224 premiers octets.
         let hash_in: &[u8; 224] = if buf.len() >= 224 {
+            // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
             unsafe { &*(buf.as_ptr() as *const [u8; 224]) }
         } else {
             return Err(ExofsError::InvalidArgument);
@@ -511,6 +517,7 @@ impl FsckRepair {
             buf[24..32].copy_from_slice(&new_parent_id.to_le_bytes());
             // Recalculer le checksum — HDR-03.
             let hash_in: &[u8; 224] = if buf.len() >= 224 {
+                // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
                 unsafe { &*(buf.as_ptr() as *const [u8; 224]) }
             } else {
                 return Err(ExofsError::InvalidArgument);

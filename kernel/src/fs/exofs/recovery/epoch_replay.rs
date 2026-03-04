@@ -160,11 +160,13 @@ impl EpochRecord {
         if magic != EPOCH_RECORD_MAGIC {
             return Err(ExofsError::InvalidMagic);
         }
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         Ok(unsafe { core::mem::transmute_copy(buf) })
     }
 
     /// Sérialise en 96 octets.
     pub fn to_bytes(&self) -> [u8; EPOCH_RECORD_SIZE] {
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         unsafe { core::mem::transmute_copy(self) }
     }
 
@@ -509,6 +511,7 @@ mod tests {
 
     #[test]
     fn test_epoch_record_roundtrip() {
+        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut rec: EpochRecord = unsafe { core::mem::zeroed() };
         rec.magic    = EPOCH_RECORD_MAGIC;
         rec.epoch_id = 7;

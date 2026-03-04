@@ -287,6 +287,7 @@ impl ObjectFdTable {
             return Err(ExofsError::InvalidArgument);
         }
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &mut *self.inner.get() }
             .open_slot(blob_id, flags, size, epoch_id, owner_uid, self.next_hint.load(Ordering::Relaxed));
         self.release();
@@ -300,6 +301,7 @@ impl ObjectFdTable {
     /// Ferme un fd. Retourne true si le fd existait.
     pub fn close(&self, fd: u32) -> bool {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let found = unsafe { &mut *self.inner.get() }.close_slot(fd);
         self.release();
         if found {
@@ -313,6 +315,7 @@ impl ObjectFdTable {
     /// Lit l'entrée d'un fd (snapshot copié).
     pub fn get(&self, fd: u32) -> ExofsResult<ObjectFdEntry> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &*self.inner.get() }.get_entry(fd);
         self.release();
         if r.is_err() {
@@ -329,6 +332,7 @@ impl ObjectFdTable {
     /// Met à jour le curseur d'un fd.
     pub fn set_cursor(&self, fd: u32, cursor: u64) -> ExofsResult<()> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &mut *self.inner.get() }.set_cursor(fd, cursor);
         self.release();
         r
@@ -337,6 +341,7 @@ impl ObjectFdTable {
     /// Met à jour la taille connue d'un fd.
     pub fn set_size(&self, fd: u32, size: u64) -> ExofsResult<()> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &mut *self.inner.get() }.set_size(fd, size);
         self.release();
         r
@@ -345,6 +350,7 @@ impl ObjectFdTable {
     /// Avance le curseur d'un fd de `n` octets.
     pub fn advance_cursor(&self, fd: u32, n: u64) -> ExofsResult<u64> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &mut *self.inner.get() };
         let idx = inner.slot_of_fd(fd).ok_or_else(|| {
             self.release();
@@ -364,6 +370,7 @@ impl ObjectFdTable {
     /// Duplique un fd.
     pub fn dup(&self, fd: u32) -> ExofsResult<u32> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &mut *self.inner.get() }.dup_fd(fd);
         self.release();
         r
@@ -372,6 +379,7 @@ impl ObjectFdTable {
     /// Nombre de fds actuellement ouverts.
     pub fn open_count(&self) -> u32 {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let n = unsafe { &*self.inner.get() }.open_count();
         self.release();
         n
@@ -407,6 +415,7 @@ impl ObjectFdTable {
     /// Remet toute la table à zéro (usage en tests ou shutdown propre).
     pub fn reset_all(&self) {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &mut *self.inner.get() };
         let mut i = 0usize;
         while i < MAX_FDS {
@@ -427,6 +436,7 @@ impl ObjectFdTable {
     /// Nombre de fd ouverts pour un BlobId donné.
     pub fn open_count_for(&self, id: &BlobId) -> usize {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &*self.inner.get() };
         let mut count = 0usize;
         let mut i = 0usize;

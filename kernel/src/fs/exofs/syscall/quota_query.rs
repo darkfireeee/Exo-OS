@@ -124,6 +124,7 @@ fn load_quota_entries(blob_id: BlobId) -> ExofsResult<Vec<QuotaEntry>> {
     while i < n {
         let off = QUOTA_HDR.saturating_add(i.saturating_mul(QUOTA_ENTRY_SIZE));
         let mut e = QuotaEntry::default();
+        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
         let dst = unsafe { core::slice::from_raw_parts_mut(&mut e as *mut QuotaEntry as *mut u8, QUOTA_ENTRY_SIZE) };
         let mut j = 0usize;
         while j < QUOTA_ENTRY_SIZE { dst[j] = data[off + j]; j = j.wrapping_add(1); }
@@ -148,6 +149,7 @@ fn save_quota_entries(blob_id: BlobId, entries: &[QuotaEntry]) -> ExofsResult<()
     while i < 4 { buf.push(cnt[i]); i = i.wrapping_add(1); }
     let mut i = 0usize;
     while i < n {
+        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
         let src = unsafe { core::slice::from_raw_parts(&entries[i] as *const QuotaEntry as *const u8, QUOTA_ENTRY_SIZE) };
         let mut j = 0usize;
         while j < QUOTA_ENTRY_SIZE { buf.push(src[j]); j = j.wrapping_add(1); }
@@ -290,6 +292,7 @@ pub fn sys_exofs_quota_query(
     _a3: u64, _a4: u64, _a5: u64, _a6: u64,
 ) -> i64 {
     if args_ptr == 0 { return EFAULT; }
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     let args = match unsafe { copy_struct_from_user::<QuotaQueryArgs>(args_ptr) } {
         Ok(a)  => a,
         Err(_) => return EFAULT,
@@ -298,6 +301,7 @@ pub fn sys_exofs_quota_query(
         return exofs_err_to_errno(ExofsError::InvalidArgument);
     }
     if args.flags & quota_flags::SET != 0 {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let set_args = match unsafe { copy_struct_from_user::<QuotaSetArgs>(args_ptr) } {
             Ok(s)  => s,
             Err(_) => return EFAULT,
@@ -310,6 +314,7 @@ pub fn sys_exofs_quota_query(
         Err(e) => return exofs_err_to_errno(e),
     };
     if result_ptr != 0 {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let bytes = unsafe {
             core::slice::from_raw_parts(&info as *const QuotaInfo as *const u8, core::mem::size_of::<QuotaInfo>())
         };

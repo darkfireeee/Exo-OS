@@ -156,6 +156,7 @@ fn load_journal(epoch_id: u64) -> ExofsResult<Vec<EpochJournalEntry>> {
     while i < n {
         let off = EPOCH_HDR_SIZE.saturating_add(i.saturating_mul(EPOCH_ENTRY_SIZE));
         let mut e = EpochJournalEntry::default();
+        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
         let dst = unsafe { core::slice::from_raw_parts_mut(&mut e as *mut EpochJournalEntry as *mut u8, EPOCH_ENTRY_SIZE) };
         let mut j = 0usize;
         while j < EPOCH_ENTRY_SIZE { dst[j] = data[off + j]; j = j.wrapping_add(1); }
@@ -190,6 +191,7 @@ fn save_journal(epoch_id: u64, entries: &[EpochJournalEntry], flags: u8) -> Exof
     buf.push(0); buf.push(0); buf.push(0); buf.push(0); // _pad2
     let mut i = 0usize;
     while i < n {
+        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
         let src = unsafe { core::slice::from_raw_parts(&entries[i] as *const EpochJournalEntry as *const u8, EPOCH_ENTRY_SIZE) };
         let mut j = 0usize;
         while j < EPOCH_ENTRY_SIZE { buf.push(src[j]); j = j.wrapping_add(1); }
@@ -293,6 +295,7 @@ pub fn sys_exofs_epoch_commit(
     _a3: u64, _a4: u64, _a5: u64, _a6: u64,
 ) -> i64 {
     if args_ptr == 0 { return EFAULT; }
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     let args = match unsafe { copy_struct_from_user::<EpochCommitArgs>(args_ptr) } {
         Ok(a)  => a,
         Err(_) => return EFAULT,
@@ -302,6 +305,7 @@ pub fn sys_exofs_epoch_commit(
         Err(e) => return exofs_err_to_errno(e),
     };
     if result_ptr != 0 {
+        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
         let bytes = unsafe { core::slice::from_raw_parts(&res as *const EpochCommitResult as *const u8, core::mem::size_of::<EpochCommitResult>()) };
         if let Err(e) = write_user_buf(result_ptr, bytes) { return e; }
     }

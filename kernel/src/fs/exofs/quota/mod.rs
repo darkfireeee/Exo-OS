@@ -174,12 +174,14 @@ impl QuotaModule {
     pub fn init(&self, config: QuotaConfig, tick: u64) -> ExofsResult<()> {
         config.validate()?;
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let state = unsafe { &mut *self.state.get() };
         if *state == QuotaModuleState::Ready {
             self.release();
             return Ok(());
         }
         *state = QuotaModuleState::Initializing;
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { *self.config.get() = config; }
         self.release();
 
@@ -189,6 +191,7 @@ impl QuotaModule {
             .unwrap_or_default(); // peut échouer si déjà initialisé
 
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         *unsafe { &mut *self.state.get() } = QuotaModuleState::Ready;
         self.release();
         Ok(())
@@ -196,6 +199,7 @@ impl QuotaModule {
 
     pub fn state(&self) -> QuotaModuleState {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let s = unsafe { *self.state.get() };
         self.release();
         s
@@ -203,6 +207,7 @@ impl QuotaModule {
 
     pub fn config(&self) -> QuotaConfig {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let c = unsafe { *self.config.get() };
         self.release();
         c

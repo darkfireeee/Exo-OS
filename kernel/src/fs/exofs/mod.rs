@@ -24,6 +24,10 @@ pub mod numa;
 pub mod observability;
 pub mod audit;
 
+/// Tests unitaires, intégration, fuzz (spec 2.0)
+#[cfg(test)]
+pub mod tests;
+
 use crate::fs::exofs::core::error::ExofsError;
 use crate::fs::exofs::storage::superblock::SuperblockInMemory;
 use crate::fs::exofs::recovery::boot_recovery::boot_recovery_sequence;

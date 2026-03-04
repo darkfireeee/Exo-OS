@@ -442,7 +442,9 @@ pub fn fnv1a_combine(a: &[u8], b: &[u8]) -> u64 {
 pub fn siphash_keyed(key: &[u8; 16], data: &[u8]) -> u64 {
     use siphasher::sip::SipHasher24;
     use core::hash::Hasher;
+    // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
     let k0 = u64::from_le_bytes(unsafe { *(key[0..8].as_ptr() as *const [u8; 8]) });
+    // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
     let k1 = u64::from_le_bytes(unsafe { *(key[8..16].as_ptr() as *const [u8; 8]) });
     let mut h = SipHasher24::new_with_keys(k0, k1);
     h.write(data);

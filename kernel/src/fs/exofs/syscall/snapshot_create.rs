@@ -177,6 +177,7 @@ pub fn sys_exofs_snapshot_create(
     };
 
     let args = if args_ptr != 0 {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         match unsafe { super::validation::copy_struct_from_user::<SnapshotCreateArgs>(args_ptr) } {
             Ok(a)  => a,
             Err(_) => return EFAULT,
@@ -196,6 +197,7 @@ pub fn sys_exofs_snapshot_create(
     if args.name_ptr != 0 && args.name_len > 0 {
         let nl = (args.name_len as usize).min(SNAPSHOT_NAME_MAX);
         name_buf.try_reserve(nl).unwrap_or(());
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             let src = args.name_ptr as *const u8;
             let mut i = 0usize;
@@ -209,6 +211,7 @@ pub fn sys_exofs_snapshot_create(
     };
 
     if out_ptr != 0 {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let bytes = unsafe {
             core::slice::from_raw_parts(
                 &result as *const SnapshotCreateResult as *const u8,
@@ -366,6 +369,7 @@ pub fn encode_snapshot_refs(refs: &[SnapshotRef]) -> ExofsResult<Vec<u8>> {
     buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < refs.len() {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let raw = unsafe {
             core::slice::from_raw_parts(&refs[i] as *const SnapshotRef as *const u8, entry_size)
         };
@@ -387,6 +391,7 @@ pub fn decode_snapshot_refs(data: &[u8]) -> ExofsResult<Vec<SnapshotRef>> {
     while i < count {
         let off = i.saturating_mul(entry_size);
         let mut r = SnapshotRef::default();
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let dst = unsafe {
             core::slice::from_raw_parts_mut(&mut r as *mut SnapshotRef as *mut u8, entry_size)
         };

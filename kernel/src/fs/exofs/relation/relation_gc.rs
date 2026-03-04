@@ -10,7 +10,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::arch::time::read_ticks;
+use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
 use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
 use super::relation_storage::RELATION_STORAGE;
 use super::relation_graph::RELATION_GRAPH;
@@ -138,9 +138,9 @@ impl RelationGc {
         checker: &dyn BlobExistsChecker,
         policy:  GcPolicy,
     ) -> ExofsResult<RelationGcReport> {
-        let started_at = read_ticks();
+        let started_at = exofs_ticks();
         let all = RELATION_STORAGE.load_all()?;
-        let now_ticks = read_ticks();
+        let now_ticks = exofs_ticks();
         let mut report = RelationGcReport {
             started_at,
             ..Default::default()
@@ -187,7 +187,7 @@ impl RelationGc {
             }
         }
 
-        report.ended_at = read_ticks();
+        report.ended_at = exofs_ticks();
         Ok(report)
     }
 
@@ -312,7 +312,7 @@ impl GcScheduler {
 
     /// `true` si un GC devrait être lancé maintenant.
     pub fn should_run(&self) -> bool {
-        let now      = read_ticks();
+        let now      = exofs_ticks();
         let n_rels   = RELATION_STORAGE.count();
         let interval = now.saturating_sub(self.last_gc_tick);
 
@@ -330,7 +330,7 @@ impl GcScheduler {
     ) -> ExofsResult<Option<RelationGcReport>> {
         if !self.should_run() { return Ok(None); }
         let report = RelationGc::run(checker, policy)?;
-        self.last_gc_tick  = read_ticks();
+        self.last_gc_tick  = exofs_ticks();
         self.total_gc_runs = self.total_gc_runs.wrapping_add(1);
         Ok(Some(report))
     }

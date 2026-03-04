@@ -228,6 +228,7 @@ impl IoOpRing {
         self.acquire();
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = head & IO_OP_RING_MASK;
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { (*self.entries.get())[idx] = rec; }
         self.head.store(head.wrapping_add(1) as u64, Ordering::Relaxed);
         self.release();
@@ -236,6 +237,7 @@ impl IoOpRing {
     /// Retourne les N dernières entrées (RECUR‑01 : boucle while).
     pub fn last_n(&self, n: usize) -> [IoOpRecord; IO_OP_RING_SIZE] {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let snapshot = unsafe { *self.entries.get() };
         self.release();
         let _ = n; // Pour usage futur (filtre)
@@ -245,6 +247,7 @@ impl IoOpRing {
     /// Compte les erreurs dans les N dernières entrées (RECUR-01 : boucle while).
     pub fn error_count_last_n(&self, n: usize) -> u32 {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let snapshot = unsafe { *self.entries.get() };
         self.release();
         let head = self.head.load(Ordering::Relaxed) as usize;

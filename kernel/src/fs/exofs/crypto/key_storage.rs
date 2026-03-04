@@ -183,6 +183,7 @@ impl KeyStorage {
     pub fn store_key_256(&self, key: &[u8; 32], kind: KeyKind) -> ExofsResult<KeySlotId> {
         let slot = KeySlotId(self.next_slot.fetch_add(1, Ordering::SeqCst));
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let result = unsafe { &mut *self.table.get() }.insert(slot, *key, kind);
         self.release();
         result?;
@@ -193,6 +194,7 @@ impl KeyStorage {
     /// Charge une clé depuis un slot.
     pub fn load_key_256(&self, slot: KeySlotId) -> ExofsResult<[u8; 32]> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let result = unsafe { &mut *self.table.get() }.get(slot);
         self.release();
         result
@@ -201,6 +203,7 @@ impl KeyStorage {
     /// Révoque un slot (zeroize + changement d'état).
     pub fn revoke_key(&self, slot: KeySlotId) -> ExofsResult<()> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let result = unsafe { &mut *self.table.get() }.revoke(slot);
         self.release();
         result
@@ -209,6 +212,7 @@ impl KeyStorage {
     /// Supprime définitivement un slot.
     pub fn remove_key(&self, slot: KeySlotId) -> ExofsResult<()> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let result = unsafe { &mut *self.table.get() }.remove(slot);
         self.release();
         if result.is_ok() { self.total_keys.fetch_sub(1, Ordering::Relaxed); }
@@ -218,6 +222,7 @@ impl KeyStorage {
     /// Retourne le type de clé d'un slot.
     pub fn key_kind(&self, slot: KeySlotId) -> ExofsResult<KeyKind> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &*self.table.get() }.kind_of(slot);
         self.release();
         r
@@ -226,6 +231,7 @@ impl KeyStorage {
     /// Retourne l'état d'un slot.
     pub fn slot_state(&self, slot: KeySlotId) -> ExofsResult<SlotState> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &*self.table.get() }.state_of(slot);
         self.release();
         r
@@ -236,6 +242,7 @@ impl KeyStorage {
     /// OOM-02.
     pub fn list_active_slots(&self) -> ExofsResult<Vec<(KeySlotId, KeyKind)>> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let list = unsafe { &*self.table.get() }.list_active();
         self.release();
         Ok(list)
@@ -342,6 +349,7 @@ impl KeyStorage {
     /// Utile pour l'interface d'administration.
     pub fn slot_info(&self, slot: KeySlotId) -> ExofsResult<SlotInfo> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let tbl = unsafe { &*self.table.get() };
         let entry = tbl.entries.get(&slot).ok_or_else(|| { self.release(); ExofsError::ObjectNotFound })?;
         let info = SlotInfo {
@@ -357,6 +365,7 @@ impl KeyStorage {
     /// Renomme le type d'un slot actif (utile après promotion de clé).
     pub fn retype_slot(&self, slot: KeySlotId, new_kind: KeyKind) -> ExofsResult<()> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let tbl = unsafe { &mut *self.table.get() };
         let entry = tbl.entries.get_mut(&slot)
             .ok_or_else(|| { ExofsError::ObjectNotFound })?;
@@ -372,6 +381,7 @@ impl KeyStorage {
     /// Expire un slot (transition Active → Expired).
     pub fn expire_slot(&self, slot: KeySlotId) -> ExofsResult<()> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let tbl = unsafe { &mut *self.table.get() };
         let entry = tbl.entries.get_mut(&slot)
             .ok_or_else(|| { ExofsError::ObjectNotFound })?;
@@ -386,6 +396,7 @@ impl KeyStorage {
     /// OOM-02 : try_reserve.
     pub fn list_by_kind(&self, kind: KeyKind) -> ExofsResult<Vec<KeySlotId>> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let tbl  = unsafe { &*self.table.get() };
         let list: Vec<KeySlotId> = tbl.entries.iter()
             .filter(|(_, e)| e.kind == kind && e.state == SlotState::Active)
@@ -398,6 +409,7 @@ impl KeyStorage {
     /// Purge tous les slots révoqués et expirés (libère la mémoire).
     pub fn purge_inactive(&self) -> ExofsResult<usize> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let tbl = unsafe { &mut *self.table.get() };
         let before = tbl.entries.len();
         tbl.entries.retain(|_, e| e.state == SlotState::Active);
@@ -413,6 +425,7 @@ impl KeyStorage {
     /// Retourne le nombre d'accès cumulé à un slot.
     pub fn access_count(&self, slot: KeySlotId) -> ExofsResult<u64> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let tbl = unsafe { &*self.table.get() };
         let cnt = tbl.entries.get(&slot)
             .ok_or_else(|| ExofsError::ObjectNotFound)

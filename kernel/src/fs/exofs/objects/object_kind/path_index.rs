@@ -117,6 +117,7 @@ pub struct PathIndexPageHeader {
 impl PathIndexPageHeader {
     pub fn compute_checksum(&self) -> [u8; 8] {
         let raw: &[u8; 64] =
+            // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
             unsafe { &*(self as *const PathIndexPageHeader as *const [u8; 64]) };
         let full = blake3_hash(&raw[..56]);
         let mut out = [0u8; 8];

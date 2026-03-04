@@ -108,6 +108,7 @@ impl ExoarHeader {
     /// Valide le magic — RÈGLE 8 : EN PREMIER.
     #[inline]
     pub fn validate_magic(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let m: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == EXOAR_MAGIC
     }
@@ -115,6 +116,7 @@ impl ExoarHeader {
     /// Valide la version du format (1 ≤ version ≤ EXOAR_VERSION).
     #[inline]
     pub fn validate_version(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let v: u16 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.version)) };
         v >= 1 && v <= EXOAR_VERSION
     }
@@ -123,6 +125,7 @@ impl ExoarHeader {
     pub fn validate(&self) -> bool {
         if !self.validate_magic() { return false; }
         if !self.validate_version() { return false; }
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ec: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.entry_count)) };
         ec <= EXOAR_MAX_ENTRIES
     }
@@ -130,12 +133,14 @@ impl ExoarHeader {
     /// Retourne true si l'archive est incrémentale.
     #[inline]
     pub fn is_incremental(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let f: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         f & ARCHIVE_FLAG_INCREMENTAL != 0
     }
 
     /// Sérialise en slice d'octets (pointeur vers self).
     pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             core::slice::from_raw_parts(
                 self as *const Self as *const u8,
@@ -147,6 +152,7 @@ impl ExoarHeader {
     /// Désérialise depuis un slice de bytes (magic EN PREMIER).
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
         if buf.len() < size_of::<Self>() { return None; }
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let hdr: Self = unsafe {
             core::ptr::read_unaligned(buf.as_ptr() as *const Self)
         };
@@ -195,6 +201,7 @@ impl ExoarEntryHeader {
     /// Valide le magic — RÈGLE 8.
     #[inline]
     pub fn validate_magic(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let m: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == EXOAR_ENTRY_MAGIC
     }
@@ -202,6 +209,7 @@ impl ExoarEntryHeader {
     /// Valide la taille payload ≤ EXOAR_MAX_PAYLOAD.
     #[inline]
     pub fn validate_size(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ps: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.payload_size)) };
         ps <= EXOAR_MAX_PAYLOAD
     }
@@ -214,6 +222,7 @@ impl ExoarEntryHeader {
 
     /// Sérialise en slice d'octets.
     pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             core::slice::from_raw_parts(
                 self as *const Self as *const u8,
@@ -225,6 +234,7 @@ impl ExoarEntryHeader {
     /// Désérialise depuis un slice (RÈGLE 8 : magic EN PREMIER).
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
         if buf.len() < size_of::<Self>() { return None; }
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let hdr: Self = unsafe {
             core::ptr::read_unaligned(buf.as_ptr() as *const Self)
         };
@@ -264,17 +274,20 @@ impl ExoarFooter {
     /// Valide le magic — RÈGLE 8.
     #[inline]
     pub fn validate_magic(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let m: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == EXOAR_FOOTER_MAGIC
     }
 
     pub fn validate(&self, expected_entries: u32) -> bool {
         if !self.validate_magic() { return false; }
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ec: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.entry_count)) };
         ec == expected_entries
     }
 
     pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             core::slice::from_raw_parts(
                 self as *const Self as *const u8,
@@ -285,6 +298,7 @@ impl ExoarFooter {
 
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
         if buf.len() < size_of::<Self>() { return None; }
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let ftr: Self = unsafe {
             core::ptr::read_unaligned(buf.as_ptr() as *const Self)
         };
@@ -321,7 +335,9 @@ impl ExoarSummary {
         if hdr.is_tombstone()  { self.tombstone_count  = self.tombstone_count.saturating_add(1); }
         if hdr.is_compressed() { self.compressed_count = self.compressed_count.saturating_add(1); }
         if hdr.is_encrypted()  { self.encrypted_count  = self.encrypted_count.saturating_add(1); }
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ps: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_size)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let os: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.original_size)) };
         self.total_payload_bytes  = self.total_payload_bytes.saturating_add(ps);
         self.total_original_bytes = self.total_original_bytes.saturating_add(os);
@@ -380,9 +396,13 @@ pub struct ExoarEntryInfo {
 
 impl ExoarEntryInfo {
     pub fn from_entry_header(hdr: &ExoarEntryHeader) -> Self {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let payload_size   = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_size)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let original_size  = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.original_size)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let declared_crc32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_crc32)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let epoch          = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch)) };
         Self {
             kind: ExoarEntryKind::from_flags(hdr.flags),
@@ -545,6 +565,7 @@ mod tests {
         let bytes = hdr.as_bytes();
         let parsed = ExoarEntryHeader::from_bytes(bytes).expect("parse ok");
         assert_eq!(parsed.blob_id, blob_id);
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         assert_eq!(unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(parsed.payload_size)) }, 256u64);
     }
 

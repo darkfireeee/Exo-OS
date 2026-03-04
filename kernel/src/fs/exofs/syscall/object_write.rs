@@ -174,6 +174,7 @@ pub fn sys_exofs_object_write(
 
     // Lire les WriteArgs optionnels.
     let (effective_offset, use_cursor, sync) = if args_ptr != 0 {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         match unsafe { super::validation::copy_struct_from_user::<WriteArgs>(args_ptr) } {
             Ok(a) => (if a.use_cursor != 0 { offset_val } else { a.offset }, a.use_cursor != 0, a.sync != 0),
             Err(_) => return EFAULT,
@@ -226,6 +227,7 @@ pub fn scatter_write(blob_id: BlobId, segments: &[WriteSegment]) -> ExofsResult<
         let mut tmp: Vec<u8> = Vec::new();
         tmp.try_reserve(count).map_err(|_| ExofsError::NoMemory)?;
         tmp.resize(count, 0u8);
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             super::validation::copy_from_user(tmp.as_mut_ptr(), seg.buf_ptr as *const u8, count)
                 .map_err(|_| ExofsError::IoError)?;

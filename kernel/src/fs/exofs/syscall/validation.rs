@@ -186,6 +186,7 @@ pub fn read_user_path_heap(ptr: u64, out: &mut Vec<u8>) -> Result<usize, i64> {
     out.clear();
     out.try_reserve(EXOFS_PATH_MAX).map_err(|_| ENOMEM)?;
     out.resize(EXOFS_PATH_MAX, 0u8);
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
         copy_from_user(out.as_mut_ptr(), ptr as *const u8, EXOFS_PATH_MAX)
             .map_err(|_| EFAULT)?;
@@ -210,6 +211,7 @@ pub fn read_user_name_heap(ptr: u64, max: usize, out: &mut Vec<u8>) -> Result<us
     out.clear();
     out.try_reserve(cap).map_err(|_| ENOMEM)?;
     out.resize(cap, 0u8);
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
         copy_from_user(out.as_mut_ptr(), ptr as *const u8, cap)
             .map_err(|_| EFAULT)?;
@@ -232,6 +234,7 @@ pub fn read_user_buf(ptr: u64, len: u64, out: &mut Vec<u8>) -> Result<(), i64> {
     out.clear();
     out.try_reserve(len).map_err(|_| ENOMEM)?;
     out.resize(len, 0u8);
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
         copy_from_user(out.as_mut_ptr(), ptr as *const u8, len)
             .map_err(|_| EFAULT)?;
@@ -243,6 +246,7 @@ pub fn read_user_buf(ptr: u64, len: u64, out: &mut Vec<u8>) -> Result<(), i64> {
 pub fn write_user_buf(dst: u64, src: &[u8]) -> Result<(), i64> {
     if dst == 0 { return Err(EFAULT); }
     if src.is_empty() { return Ok(()); }
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
         copy_to_user(dst as *mut u8, src.as_ptr(), src.len())
             .map_err(|_| EFAULT)?;

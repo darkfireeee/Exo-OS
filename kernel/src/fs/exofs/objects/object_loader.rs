@@ -284,6 +284,7 @@ mod tests {
             _pad2:        [0; 32],
         };
         d.checksum = d.compute_checksum();
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         unsafe { core::mem::transmute::<LogicalObjectDisk, [u8; 256]>(d) }
     }
 

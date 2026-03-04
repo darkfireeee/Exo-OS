@@ -151,6 +151,7 @@ pub fn sys_exofs_snapshot_mount(
 
     // Lire le snapshot_id[32] depuis userspace.
     let mut raw_id = [0u8; 32];
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
         let src = snap_id_ptr as *const u8;
         let mut i = 0usize;
@@ -159,6 +160,7 @@ pub fn sys_exofs_snapshot_mount(
     let snap_blob_id = BlobId(raw_id);
 
     let args = if args_ptr != 0 {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         match unsafe { super::validation::copy_struct_from_user::<SnapshotMountArgs>(args_ptr) } {
             Ok(a)  => a,
             Err(_) => return EFAULT,
@@ -173,6 +175,7 @@ pub fn sys_exofs_snapshot_mount(
     };
 
     if out_ptr != 0 {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let bytes = unsafe {
             core::slice::from_raw_parts(
                 &result as *const SnapshotMountResult as *const u8,
@@ -359,6 +362,7 @@ pub fn encode_mount_entries(entries: &[MountEntry]) -> ExofsResult<Vec<u8>> {
     buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < entries.len() {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let raw = unsafe {
             core::slice::from_raw_parts(&entries[i] as *const MountEntry as *const u8, esz)
         };

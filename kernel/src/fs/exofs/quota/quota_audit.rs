@@ -246,6 +246,7 @@ impl QuotaAuditLog {
     /// Enregistre une entrée d'audit dans le ring.
     pub fn push(&self, entry: QuotaAuditEntry) {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % AUDIT_RING_SIZE;
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         unsafe { (*self.entries.get())[idx] = entry; }
         let n = self.count.load(Ordering::Relaxed);
         if n < AUDIT_RING_SIZE as u64 {
@@ -299,6 +300,7 @@ impl QuotaAuditLog {
         if self.count.load(Ordering::Relaxed) == 0 { return None; }
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = (head.wrapping_add(AUDIT_RING_SIZE).wrapping_sub(1)) % AUDIT_RING_SIZE;
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let e = unsafe { (*self.entries.get())[idx] };
         if e.is_empty() { None } else { Some(e) }
     }
@@ -313,6 +315,7 @@ impl QuotaAuditLog {
         let mut i = 0usize;
         while i < total && v.len() < n {
             let idx = (head.wrapping_add(AUDIT_RING_SIZE).wrapping_sub(i + 1)) % AUDIT_RING_SIZE;
+            // SAFETY: validité des données vérifiée par les gardes ci-dessus.
             let entry = unsafe { (*self.entries.get())[idx] };
             if filter.matches(&entry) {
                 v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;

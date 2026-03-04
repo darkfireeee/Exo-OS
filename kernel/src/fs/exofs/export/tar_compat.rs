@@ -129,6 +129,7 @@ const _: () = assert!(core::mem::size_of::<TarHeader>() == TAR_BLOCK_SIZE);
 
 impl TarHeader {
     pub fn zero() -> Self {
+        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         unsafe { core::mem::zeroed() }
     }
 
@@ -210,6 +211,7 @@ impl TarHeader {
     }
 
     pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             core::slice::from_raw_parts(
                 self as *const Self as *const u8,
@@ -219,6 +221,7 @@ impl TarHeader {
     }
 
     pub fn from_block(block: &TarBlock) -> Self {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         unsafe { core::ptr::read_unaligned(block.0.as_ptr() as *const TarHeader) }
     }
 }
@@ -679,6 +682,7 @@ fn trim_nul(s: &[u8]) -> &[u8] {
 /// Copie un slice de 512 bytes dans un tableau [u8; 512].
 fn array_ref512(s: &[u8]) -> &[u8; 512] {
     debug_assert_eq!(s.len(), 512);
+    // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
     unsafe { &*(s.as_ptr() as *const [u8; 512]) }
 }
 

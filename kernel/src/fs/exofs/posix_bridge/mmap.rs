@@ -208,6 +208,7 @@ impl MmapTable {
     }
 
     fn mmap_inner(&self, object_id: u64, offset: u64, length: u64, prot: u32, flags: u32, pid: u32) -> ExofsResult<u64> {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let active = Self::count_active(entries);
         if active >= MMAP_MAX_MAPPINGS { return Err(ExofsError::QuotaExceeded); }
@@ -235,6 +236,7 @@ impl MmapTable {
     }
 
     fn munmap_inner(&self, virt_addr: u64, length: u64) -> ExofsResult<()> {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let mut found = false;
         let mut i = 0usize;
@@ -262,6 +264,7 @@ impl MmapTable {
     }
 
     fn msync_inner(&self, virt_addr: u64, length: u64) -> ExofsResult<()> {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let mut found = false;
         let mut i = 0usize;
@@ -280,6 +283,7 @@ impl MmapTable {
     /// Confirme la fin du flush (Dirty → Active).
     pub fn msync_complete(&self, virt_addr: u64) -> ExofsResult<()> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = Self::find_by_vaddr(entries, virt_addr) {
             entries[idx].state = MappingState::Active; Ok(())
@@ -293,6 +297,7 @@ impl MmapTable {
         let known_prot = map_prot::PROT_READ | map_prot::PROT_WRITE | map_prot::PROT_EXEC | map_prot::PROT_NONE;
         if prot & !known_prot != 0 { return Err(ExofsError::InvalidArgument); }
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = Self::find_exact(entries, virt_addr) {
             entries[idx].prot = prot;
@@ -306,6 +311,7 @@ impl MmapTable {
     /// Retourne une copie de l'entrée à une adresse virtuelle.
     pub fn find_mapping(&self, virt_addr: u64) -> Option<MmapEntry> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let r = Self::find_by_vaddr(entries, virt_addr).map(|i| entries[i]);
         self.lock_release();
@@ -316,6 +322,7 @@ impl MmapTable {
     /// OOM-02 : try_reserve. RECUR-01 : while.
     pub fn mappings_for_pid(&self, pid: u32) -> ExofsResult<Vec<MmapEntry>> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let mut out: Vec<MmapEntry> = Vec::new();
         out.try_reserve(entries.len()).map_err(|_| ExofsError::NoMemory)?;
@@ -333,6 +340,7 @@ impl MmapTable {
     /// Supprime tous les mappings d'un pid (appelé à la mort du processus).
     pub fn munmap_all_pid(&self, pid: u32) {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let mut i = 0usize;
         while i < entries.len() {
@@ -350,6 +358,7 @@ impl MmapTable {
     /// Nombre de mappings actifs.
     pub fn mapping_count(&self) -> usize {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let n = Self::count_active(entries);
         self.lock_release();
@@ -364,6 +373,7 @@ impl MmapTable {
     /// Marque un mapping comme Dirty (page fault write).
     pub fn mark_dirty(&self, virt_addr: u64) -> ExofsResult<()> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = Self::find_by_vaddr(entries, virt_addr) {
             if entries[idx].is_shared() && entries[idx].is_writable() {
@@ -378,6 +388,7 @@ impl MmapTable {
     /// Purge les entrées Removed.
     pub fn compact(&self) {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let mut i = 0usize;
         while i < entries.len() {
@@ -393,6 +404,7 @@ impl MmapTable {
     /// Vide entièrement la table.
     pub fn clear(&self) {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         entries.clear();
         self.total_mapped.store(0, Ordering::Relaxed);

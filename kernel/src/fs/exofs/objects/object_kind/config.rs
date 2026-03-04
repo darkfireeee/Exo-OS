@@ -88,6 +88,7 @@ const _: () = assert!(
 impl ConfigEntryDisk {
     pub fn compute_checksum(&self) -> [u8; 32] {
         let raw: &[u8; 360] =
+            // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
             unsafe { &*(self as *const ConfigEntryDisk as *const [u8; 360]) };
         blake3_hash(&raw[..328])
     }

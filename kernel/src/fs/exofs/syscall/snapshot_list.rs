@@ -205,6 +205,7 @@ pub fn sys_exofs_snapshot_list(
     };
 
     let args = if args_ptr != 0 {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         match unsafe { super::validation::copy_struct_from_user::<SnapshotListArgs>(args_ptr) } {
             Ok(a) => a,
             Err(_) => return EFAULT,

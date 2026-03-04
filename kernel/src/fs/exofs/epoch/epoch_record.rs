@@ -137,6 +137,7 @@ impl EpochRecord {
     pub fn zeroed() -> Self {
         // SAFETY: EpochRecord est #[repr(C, packed)] composé uniquement de types
         // primitifs. Un zéro binaire est un état "vide" valide (magic=0 ≠ EXOFS_MAGIC).
+        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         unsafe { core::mem::zeroed() }
     }
 
@@ -198,6 +199,7 @@ impl EpochRecord {
     /// 2. Checksum Blake3 en temps constant (RÈGLE SEC-08).
     pub fn verify(&self) -> ExofsResult<()> {
         // RÈGLE V-08 / CHAIN-01 : magic EN PREMIER.
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let magic = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) }; // Copie locale pour éviter unaligned read.
         if magic != EXOFS_MAGIC {
             return Err(ExofsError::InvalidMagic);
@@ -221,6 +223,7 @@ impl EpochRecord {
         let mut body = [0u8; EPOCH_RECORD_BODY_LEN];
         // SAFETY: self est #[repr(C, packed)], taille 104 B.
         // Les 72 premiers octets sont magic(4)+ver(2)+flags(2)+e(8)+ts(8)+roid(32)+ro(8)+ps(8).
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 self as *const Self as *const u8,
@@ -238,6 +241,7 @@ impl EpochRecord {
     /// EpochId du record (copie locale — évite unaligned read sur packed struct).
     #[inline]
     pub fn epoch_id(&self) -> EpochId {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         EpochId(unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.epoch_id)) })
     }
 
@@ -250,36 +254,42 @@ impl EpochRecord {
     /// Offset disque de l'EpochRoot.
     #[inline]
     pub fn root_offset(&self) -> DiskOffset {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         DiskOffset(unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.root_offset)) })
     }
 
     /// Offset du slot précédent.
     #[inline]
     pub fn prev_slot(&self) -> DiskOffset {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         DiskOffset(unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.prev_slot)) })
     }
 
     /// Flags de l'epoch.
     #[inline]
     pub fn flags(&self) -> EpochFlags {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         EpochFlags(unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) })
     }
 
     /// Timestamp TSC.
     #[inline]
     pub fn timestamp(&self) -> u64 {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.timestamp)) }
     }
 
     /// Version du format.
     #[inline]
     pub fn version(&self) -> u16 {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.version)) }
     }
 
     /// Vrai si l'epoch a le flag RECOVERING (crash précédent non terminé).
     #[inline]
     pub fn is_recovering(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let f = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         EpochFlags(f).contains(EpochFlags::RECOVERING)
     }
@@ -287,6 +297,7 @@ impl EpochRecord {
     /// Vrai si l'epoch a le flag COMMITTED (commit trois-barrières réussi).
     #[inline]
     pub fn is_committed(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let f = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         EpochFlags(f).contains(EpochFlags::COMMITTED)
     }
@@ -294,6 +305,7 @@ impl EpochRecord {
     /// Vrai si l'epoch est marqué comme snapshot permanent.
     #[inline]
     pub fn is_snapshot(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let f = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         EpochFlags(f).contains(EpochFlags::SNAPSHOT)
     }
@@ -301,6 +313,7 @@ impl EpochRecord {
     /// Vrai si l'epoch contient des suppressions d'objets.
     #[inline]
     pub fn has_deletions(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let f = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         EpochFlags(f).contains(EpochFlags::HAS_DELETIONS)
     }
@@ -311,6 +324,7 @@ impl EpochRecord {
 
     /// Compare deux EpochRecords par epoch_id (pour sélectionner le plus récent).
     pub fn is_newer_than(&self, other: &Self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let self_id = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.epoch_id)) };
         let other_id = { other.epoch_id };
         self_id > other_id
@@ -423,10 +437,15 @@ impl EpochRecordBuilder {
 
 impl fmt::Debug for EpochRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let epoch_id = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.epoch_id)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let magic = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let root_offset = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.root_offset)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let flags = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let timestamp = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.timestamp)) };
         f.debug_struct("EpochRecord")
             .field("magic",       &format_args!("0x{:08X}", magic))
@@ -440,6 +459,7 @@ impl fmt::Debug for EpochRecord {
 
 impl fmt::Display for EpochRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let epoch_id = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.epoch_id)) };
         let committed = if self.is_committed() { "C" } else { "-" };
         let recovering = if self.is_recovering() { "R" } else { "-" };

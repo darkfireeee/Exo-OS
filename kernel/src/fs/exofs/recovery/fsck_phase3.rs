@@ -130,6 +130,7 @@ impl SnapshotHeaderDisk {
         if computed != stored {
             return Err(ExofsError::ChecksumMismatch);
         }
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         Ok(unsafe { core::mem::transmute_copy(buf) })
     }
 
@@ -163,7 +164,9 @@ impl SnapshotHeaderDisk {
             hdr_hash: [0u8; 32],
         };
         // Calculer le checksum sur les 224 premiers octets.
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         let raw: &[u8; SNAPSHOT_HDR_SIZE] = unsafe { core::mem::transmute(&hdr) };
+        // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
         let body: &[u8; 224] = unsafe { &*(raw.as_ptr() as *const [u8; 224]) };
         hdr.hdr_hash = blake3_hash(body);
         hdr
@@ -171,6 +174,7 @@ impl SnapshotHeaderDisk {
 
     /// Sérialise en tableau d octets.
     pub fn to_bytes(&self) -> [u8; SNAPSHOT_HDR_SIZE] {
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         unsafe { core::mem::transmute_copy(self) }
     }
 
@@ -655,6 +659,7 @@ mod tests {
     /// Flag `is_deleted`.
     #[test]
     fn test_flag_deleted() {
+        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut h: SnapshotHeaderDisk = unsafe { core::mem::zeroed() };
         h.flags = 0x01;
         assert!(h.is_deleted());
@@ -664,6 +669,7 @@ mod tests {
     /// Flag `is_pinned`.
     #[test]
     fn test_flag_pinned() {
+        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut h: SnapshotHeaderDisk = unsafe { core::mem::zeroed() };
         h.flags = 0x08;
         assert!(h.is_pinned());

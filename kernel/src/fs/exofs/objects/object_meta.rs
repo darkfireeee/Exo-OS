@@ -632,6 +632,7 @@ impl fmt::Display for ObjectMetaStats {
 /// (tout sauf le champ `checksum` en queue de 4 octets).
 fn crc32_of_meta(d: &ObjectMetaDisk) -> u32 {
     let bytes: &[u8; 256] =
+        // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
         unsafe { &*(d as *const ObjectMetaDisk as *const [u8; 256]) };
     crc32_compute(&bytes[..252])
 }

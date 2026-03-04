@@ -87,6 +87,7 @@ impl BlobHeaderDisk {
         if buf[8] != 1 {
             return Err(ExofsError::InvalidMagic);
         }
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         Ok(unsafe { core::mem::transmute_copy(buf) })
     }
 
@@ -354,6 +355,7 @@ impl FsckPhase2 {
                 }
 
                 // Lire l'entrée.
+                // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
                 let entry: AllocEntry = unsafe { core::mem::transmute_copy(entry_bytes) };
 
                 // Lire l'en-tête du blob.
@@ -502,6 +504,7 @@ mod tests {
 
     #[test]
     fn test_blob_header_flags() {
+        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut hdr: BlobHeaderDisk = unsafe { core::mem::zeroed() };
         hdr.flags = 0x01;
         assert!(hdr.is_deleted());

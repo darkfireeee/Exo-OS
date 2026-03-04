@@ -163,6 +163,7 @@ pub fn sys_exofs_gc_trigger(
     _a3: u64, _a4: u64, _a5: u64, _a6: u64,
 ) -> i64 {
     if args_ptr == 0 { return EFAULT; }
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     let args = match unsafe { copy_struct_from_user::<GcArgs>(args_ptr) } {
         Ok(a)  => a,
         Err(_) => return EFAULT,
@@ -172,6 +173,7 @@ pub fn sys_exofs_gc_trigger(
         Err(e) => return exofs_err_to_errno(e),
     };
     if result_ptr != 0 {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let bytes = unsafe {
             core::slice::from_raw_parts(&res as *const GcResult as *const u8, core::mem::size_of::<GcResult>())
         };

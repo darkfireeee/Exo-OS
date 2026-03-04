@@ -51,6 +51,7 @@ fn epoch_record_body(record: &EpochRecord) -> [u8; EPOCH_RECORD_BODY_LEN] {
     let mut body = [0u8; EPOCH_RECORD_BODY_LEN];
     // SAFETY: EpochRecord est #[repr(C, packed)], Copy, taille 104 octets.
     // La copie des 72 premiers octets lit magic..prev_slot.
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
         core::ptr::copy_nonoverlapping(
             record as *const EpochRecord as *const u8,
@@ -82,6 +83,7 @@ pub fn verify_epoch_record_checksum(record: &EpochRecord) -> ExofsResult<()> {
     let expected = compute_epoch_record_checksum(record);
     // Lecture du checksum stocké (octets 72..104 du record).
     let ptr = record as *const EpochRecord as *const u8;
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     let stored: [u8; 32] = unsafe {
         let mut arr = [0u8; 32];
         core::ptr::copy_nonoverlapping(ptr.add(EPOCH_RECORD_BODY_LEN), arr.as_mut_ptr(), 32);

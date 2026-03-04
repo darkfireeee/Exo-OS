@@ -117,6 +117,7 @@ impl AffinityMap {
     pub fn register_node(&self, node: NumaNodeId, memory_mb: u64) -> ExofsResult<()> {
         if !node.is_valid() { return Err(ExofsError::InvalidArgument); }
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &mut *self.inner.get() };
         let entry = &mut inner.nodes[node.idx()];
         if !entry.active {
@@ -135,6 +136,7 @@ impl AffinityMap {
         if !cpu.is_valid()  { return Err(ExofsError::InvalidArgument); }
         if !node.is_valid() { return Err(ExofsError::InvalidArgument); }
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &mut *self.inner.get() };
         // Activer le nœud si besoin
         if !inner.nodes[node.idx()].active {
@@ -164,6 +166,7 @@ impl AffinityMap {
         if !a.is_valid() || !b.is_valid() { return Err(ExofsError::InvalidArgument); }
         if dist == 0 { return Err(ExofsError::InvalidArgument); }
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &mut *self.inner.get() };
         inner.dist_matrix[a.idx()][b.idx()] = dist;
         inner.dist_matrix[b.idx()][a.idx()] = dist;
@@ -177,6 +180,7 @@ impl AffinityMap {
     pub fn node_of_cpu(&self, cpu: CpuId) -> Option<NumaNodeId> {
         if !cpu.is_valid() { return None; }
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &*self.inner.get() };
         let n = inner.cpu_nodes[cpu.idx()];
         self.release();
@@ -187,6 +191,7 @@ impl AffinityMap {
     pub fn cpu_count_of_node(&self, node: NumaNodeId) -> u16 {
         if !node.is_valid() { return 0; }
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let c = unsafe { (*self.inner.get()).nodes[node.idx()].cpu_count };
         self.release();
         c
@@ -196,6 +201,7 @@ impl AffinityMap {
     pub fn node_entry(&self, node: NumaNodeId) -> Option<AffinityNodeEntry> {
         if !node.is_valid() { return None; }
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let e = unsafe { (*self.inner.get()).nodes[node.idx()] };
         self.release();
         if e.active { Some(e) } else { None }
@@ -205,6 +211,7 @@ impl AffinityMap {
     pub fn distance(&self, a: NumaNodeId, b: NumaNodeId) -> u8 {
         if !a.is_valid() || !b.is_valid() { return u8::MAX; }
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let d = unsafe { (*self.inner.get()).dist_matrix[a.idx()][b.idx()] };
         self.release();
         d
@@ -213,6 +220,7 @@ impl AffinityMap {
     /// Nombre de nœuds actifs.
     pub fn active_node_count(&self) -> usize {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let n = unsafe { (*self.inner.get()).active_nodes as usize };
         self.release();
         n
@@ -223,6 +231,7 @@ impl AffinityMap {
         let mut v = Vec::new();
         v.try_reserve(MAX_NUMA_NODES).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &*self.inner.get() };
         let mut i = 0usize;
         while i < MAX_NUMA_NODES {
@@ -242,6 +251,7 @@ impl AffinityMap {
         let mut v = Vec::new();
         v.try_reserve(64).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &*self.inner.get() };
         let mut i = 0usize;
         while i < MAX_CPUS {
@@ -259,6 +269,7 @@ impl AffinityMap {
     pub fn nearest_node(&self, from: NumaNodeId) -> Option<NumaNodeId> {
         if !from.is_valid() { return None; }
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &*self.inner.get() };
         let mut best_dist = u8::MAX;
         let mut best_node: Option<NumaNodeId> = None;
@@ -277,6 +288,7 @@ impl AffinityMap {
     /// Nœud avec la plus grande mémoire disponible (RECUR-01).
     pub fn largest_memory_node(&self) -> Option<NumaNodeId> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &*self.inner.get() };
         let mut best_mb  = 0u64;
         let mut best: Option<NumaNodeId> = None;
@@ -295,6 +307,7 @@ impl AffinityMap {
     /// Réinitialise toutes les associations.
     pub fn reset(&self) {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &mut *self.inner.get() };
         *inner = AffinityInner::new();
         self.release();

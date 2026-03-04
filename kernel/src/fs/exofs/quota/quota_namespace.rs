@@ -163,6 +163,7 @@ impl QuotaNamespace {
     fn release(&self) { self.lock.store(0, Ordering::Release); }
 
     fn find_idx(&self, id: NamespaceId) -> Option<usize> {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < NAMESPACE_MAX {
@@ -173,6 +174,7 @@ impl QuotaNamespace {
     }
 
     fn find_free_slot(&self) -> Option<usize> {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < NAMESPACE_MAX {
@@ -183,6 +185,7 @@ impl QuotaNamespace {
     }
 
     fn find_by_name(&self, name: &str) -> Option<usize> {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < NAMESPACE_MAX {
@@ -234,6 +237,7 @@ impl QuotaNamespace {
         }
         let slot = self.find_free_slot().ok_or(ExofsError::NoSpace)?;
         let id = self.alloc_id();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         entries[slot] = QuotaNamespaceEntry::new(id, parent_id, policy, name, tick);
         self.count.fetch_add(1, Ordering::Relaxed);
@@ -250,6 +254,7 @@ impl QuotaNamespace {
     }
 
     fn _remove_locked(&self, id: NamespaceId) -> ExofsResult<()> {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let idx = self.find_idx(id).ok_or(ExofsError::ObjectNotFound)?;
         if entries[idx].entity_count > 0 {
@@ -263,6 +268,7 @@ impl QuotaNamespace {
     /// Lit une entrée par id.
     pub fn get(&self, id: NamespaceId) -> Option<QuotaNamespaceEntry> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let r = self.find_idx(id).map(|i| entries[i]);
         self.release();
@@ -272,6 +278,7 @@ impl QuotaNamespace {
     /// Recherche par nom.
     pub fn lookup_by_name(&self, name: &str) -> Option<QuotaNamespaceEntry> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let r = self.find_by_name(name).map(|i| entries[i]);
         self.release();
@@ -282,6 +289,7 @@ impl QuotaNamespace {
     pub fn set_policy(&self, id: NamespaceId, policy: QuotaPolicy) -> ExofsResult<()> {
         policy.validate()?;
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(id) {
             if entries[idx].is_readonly() { Err(ExofsError::PermissionDenied) }
@@ -295,6 +303,7 @@ impl QuotaNamespace {
     pub fn set_flags(&self, id: NamespaceId, flags: NamespaceFlags) -> ExofsResult<()> {
         if id.is_root() { return Err(ExofsError::PermissionDenied); }
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(id) {
             entries[idx].flags = flags; Ok(())
@@ -306,6 +315,7 @@ impl QuotaNamespace {
     /// Incrémente le compteur d'entités d'un namespace.
     pub fn inc_entity(&self, id: NamespaceId) -> ExofsResult<()> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(id) {
             entries[idx].entity_count = entries[idx].entity_count.saturating_add(1);
@@ -318,6 +328,7 @@ impl QuotaNamespace {
     /// Décrémente le compteur d'entités d'un namespace.
     pub fn dec_entity(&self, id: NamespaceId) -> ExofsResult<()> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(id) {
             entries[idx].entity_count = entries[idx].entity_count.saturating_sub(1);
@@ -336,6 +347,7 @@ impl QuotaNamespace {
         let mut v = Vec::new();
         v.try_reserve(n).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < NAMESPACE_MAX {
@@ -354,6 +366,7 @@ impl QuotaNamespace {
         let mut v = Vec::new();
         v.try_reserve(8).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < NAMESPACE_MAX {
@@ -370,6 +383,7 @@ impl QuotaNamespace {
     /// Retourne les limites effectives (héritées si INHERITED flag).
     pub fn effective_limits(&self, id: NamespaceId) -> Option<QuotaLimits> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let result = if let Some(idx) = self.find_idx(id) {
             let e = &entries[idx];
@@ -392,6 +406,7 @@ impl QuotaNamespace {
     pub fn init_root(&self, policy: QuotaPolicy, tick: u64) -> ExofsResult<()> {
         policy.validate()?;
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         // Trouver un slot libre pour le root
         let slot = {

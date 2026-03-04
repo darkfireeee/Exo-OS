@@ -123,6 +123,7 @@ impl ChunkCache {
     fn release(&self) { self.lock.store(0, Ordering::Release); }
 
     fn map(&self) -> &mut BTreeMap<[u8; 32], ChunkCacheEntry> {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { &mut *self.entries.get() }
     }
 

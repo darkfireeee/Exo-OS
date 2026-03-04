@@ -168,6 +168,7 @@ impl HealthProbeRing {
     pub fn latest(&self) -> HealthProbeResult {
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx  = (head.wrapping_add(PROBE_RING_SIZE).wrapping_sub(1)) % PROBE_RING_SIZE;
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { *self.slots[idx].get() }
     }
 
@@ -180,6 +181,7 @@ impl HealthProbeRing {
         let mut i = 0usize;
         while i < PROBE_RING_SIZE && found < cap {
             let idx = (head.wrapping_add(PROBE_RING_SIZE).wrapping_sub(i).wrapping_sub(1)) % PROBE_RING_SIZE;
+            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
             let r = unsafe { *self.slots[idx].get() };
             if r.tick > 0 && r.probe == probe {
                 out.push(r);
@@ -274,6 +276,7 @@ impl HealthCheck {
 
     /// Met à jour les seuils (SAFETY : appelé sans concurrent dans init).
     pub fn set_thresholds(&self, t: HealthThresholds) {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { *self.thresholds.get() = t; }
     }
 

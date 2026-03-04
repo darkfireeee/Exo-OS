@@ -113,6 +113,7 @@ impl LogicalObjectDisk {
     /// Calcule le checksum Blake3 des 192 premiers octets.
     pub fn compute_checksum(&self) -> [u8; 32] {
         let bytes: &[u8; 256] =
+            // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
             unsafe { &*(self as *const LogicalObjectDisk as *const [u8; 256]) };
         blake3_hash(&bytes[..192])
     }

@@ -344,6 +344,7 @@ pub fn validate_chain_integrity(pages: &[Vec<u8>]) -> ExofsResult<ChainStats> {
         if page.len() < hdr_size {
             return Err(ExofsError::CorruptedStructure);
         }
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let hdr: EpochRootPageHeader = unsafe {
             core::ptr::read_unaligned(page.as_ptr() as *const EpochRootPageHeader)
         };

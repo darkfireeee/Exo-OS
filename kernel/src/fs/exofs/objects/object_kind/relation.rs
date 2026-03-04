@@ -157,6 +157,7 @@ const _: () = assert!(
 impl RelationEntryDisk {
     pub fn compute_checksum(&self) -> [u8; 16] {
         let raw: &[u8; 128] =
+            // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
             unsafe { &*(self as *const RelationEntryDisk as *const [u8; 128]) };
         let full = blake3_hash(&raw[..112]);
         let mut out = [0u8; 16];

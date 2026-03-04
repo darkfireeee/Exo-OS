@@ -163,6 +163,7 @@ pub fn write_primary_superblock(
     write_fn: &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
 ) -> ExofsResult<()> {
     let sb_size = size_of::<ExoSuperblockDisk>();
+    // SAFETY: validité des données vérifiée par les gardes ci-dessus.
     let bytes   = unsafe {
         core::slice::from_raw_parts(sb as *const ExoSuperblockDisk as *const u8, sb_size)
     };
@@ -183,6 +184,7 @@ pub fn sync_secondary_mirrors(
     write_fn:  &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
 ) -> ExofsResult<()> {
     let sb_size = size_of::<ExoSuperblockDisk>();
+    // SAFETY: validité des données vérifiée par les gardes ci-dessus.
     let bytes   = unsafe {
         core::slice::from_raw_parts(sb as *const ExoSuperblockDisk as *const u8, sb_size)
     };

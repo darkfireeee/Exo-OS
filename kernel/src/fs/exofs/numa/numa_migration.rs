@@ -168,6 +168,7 @@ impl MigrationQueue {
     /// Ajoute un blob en cours de migration.
     pub fn push(&self, blob_id: BlobId, from: usize, to: usize) -> ExofsResult<()> {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let slots = unsafe { &mut *self.slots.get() };
         let mut i = 0usize;
         while i < MIGRATION_QUEUE_MAX {
@@ -188,6 +189,7 @@ impl MigrationQueue {
     /// Retire un blob de la file de migration.
     pub fn remove(&self, blob_id: BlobId) {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let slots = unsafe { &mut *self.slots.get() };
         let mut i = 0usize;
         while i < MIGRATION_QUEUE_MAX {
@@ -204,6 +206,7 @@ impl MigrationQueue {
     /// Vrai si un blob est déjà en cours de migration.
     pub fn contains(&self, blob_id: BlobId) -> bool {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let slots = unsafe { &*self.slots.get() };
         let mut found = false;
         let mut i = 0usize;
@@ -258,6 +261,7 @@ impl NumaMigration {
     pub fn configure(&self, policy: MigrationPolicy) -> ExofsResult<()> {
         policy.validate()?;
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { *self.policy.get() = policy; }
         self.release();
         Ok(())
@@ -265,6 +269,7 @@ impl NumaMigration {
 
     pub fn policy(&self) -> MigrationPolicy {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let p = unsafe { *self.policy.get() };
         self.release();
         p

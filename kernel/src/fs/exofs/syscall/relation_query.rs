@@ -106,6 +106,7 @@ fn load_registry(reg_id: BlobId) -> ExofsResult<Vec<Relation>> {
     while i < n {
         let off = REL_HDR.saturating_add(i.saturating_mul(REL_ENTRY));
         let mut r = Relation::default();
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let dst = unsafe {
             core::slice::from_raw_parts_mut(&mut r as *mut Relation as *mut u8, REL_ENTRY)
         };
@@ -203,6 +204,7 @@ pub fn sys_exofs_relation_query(
     _a6:           u64,
 ) -> i64 {
     if args_ptr == 0 { return EFAULT; }
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     let args = match unsafe { super::validation::copy_struct_from_user::<RelationQueryArgs>(args_ptr) } {
         Ok(a)  => a,
         Err(_) => return EFAULT,

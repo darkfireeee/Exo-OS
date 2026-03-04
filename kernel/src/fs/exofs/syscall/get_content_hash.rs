@@ -118,6 +118,7 @@ fn verify_fd_hash(fd: u32, expected_ptr: u64) -> ExofsResult<ContentHashResult> 
     let data = BLOB_CACHE.get(&entry.blob_id)
         .ok_or(ExofsError::BlobNotFound)?;
     let mut expected = [0u8; HASH_SIZE];
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
         let src = expected_ptr as *const u8;
         let mut i = 0usize;
@@ -162,6 +163,7 @@ pub fn sys_exofs_get_content_hash(
         }
     };
 
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     let bytes = unsafe {
         core::slice::from_raw_parts(
             &result as *const ContentHashResult as *const u8,

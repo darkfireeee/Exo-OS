@@ -165,6 +165,7 @@ impl QuotaTracker {
     // ── Recherche linéaire (RECUR-01 : while) ─────────────────────────────
 
     fn find_idx(&self, key: QuotaKey) -> Option<usize> {
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < QUOTA_MAX_ENTRIES {
@@ -177,6 +178,7 @@ impl QuotaTracker {
     }
 
     fn find_free_slot(&self) -> Option<usize> {
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < QUOTA_MAX_ENTRIES {
@@ -198,6 +200,7 @@ impl QuotaTracker {
     }
 
     fn _set_limits_locked(&self, key: QuotaKey, limits: QuotaLimits) -> ExofsResult<()> {
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
         if let Some(idx) = self.find_idx(key) {
             entries[idx].limits = limits;
@@ -213,6 +216,7 @@ impl QuotaTracker {
     /// Retire une entité du tracker.
     pub fn remove(&self, key: QuotaKey) -> ExofsResult<()> {
         self.acquire();
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(key) {
             let e = &entries[idx];
@@ -232,6 +236,7 @@ impl QuotaTracker {
     /// Lit l'utilisation courante d'une entité.
     pub fn get_usage(&self, key: QuotaKey) -> Option<QuotaUsage> {
         self.acquire();
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &*self.entries.get() };
         let r = self.find_idx(key).map(|i| entries[i].usage);
         self.release();
@@ -241,6 +246,7 @@ impl QuotaTracker {
     /// Lit les limites d'une entité.
     pub fn get_limits(&self, key: QuotaKey) -> Option<QuotaLimits> {
         self.acquire();
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &*self.entries.get() };
         let r = self.find_idx(key).map(|i| entries[i].limits);
         self.release();
@@ -250,6 +256,7 @@ impl QuotaTracker {
     /// Lit l'entrée complète.
     pub fn get_entry(&self, key: QuotaKey) -> Option<QuotaEntry> {
         self.acquire();
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &*self.entries.get() };
         let r = self.find_idx(key).map(|i| entries[i]);
         self.release();
@@ -273,6 +280,7 @@ impl QuotaTracker {
     }
 
     fn _mutate_bytes_locked(&self, key: QuotaKey, n: u64, add: bool) -> ExofsResult<u64> {
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
         let idx = match self.find_idx(key) {
             Some(i) => i,
@@ -313,6 +321,7 @@ impl QuotaTracker {
     }
 
     fn _mutate_blobs_locked(&self, key: QuotaKey, n: u64, add: bool) -> ExofsResult<u64> {
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
         let idx = match self.find_idx(key) {
             Some(i) => i,
@@ -351,6 +360,7 @@ impl QuotaTracker {
     }
 
     fn _mutate_inodes_locked(&self, key: QuotaKey, n: u64, add: bool) -> ExofsResult<u64> {
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
         let idx = match self.find_idx(key) {
             Some(i) => i,
@@ -375,6 +385,7 @@ impl QuotaTracker {
     /// Enregistre le tick du premier dépassement soft.
     pub fn record_soft_breach(&self, key: QuotaKey, tick: u64) {
         self.acquire();
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
         if let Some(idx) = self.find_idx(key) {
             if entries[idx].soft_breach_tick == 0 {
@@ -387,6 +398,7 @@ impl QuotaTracker {
     /// Efface le tick de dépassement soft (grâce terminée ou quota libéré).
     pub fn clear_soft_breach(&self, key: QuotaKey) {
         self.acquire();
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
         if let Some(idx) = self.find_idx(key) {
             entries[idx].soft_breach_tick = 0;
@@ -408,6 +420,7 @@ impl QuotaTracker {
         let mut v = Vec::new();
         v.try_reserve(count).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < QUOTA_MAX_ENTRIES {
@@ -426,6 +439,7 @@ impl QuotaTracker {
         let mut v = Vec::new();
         v.try_reserve(16).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < QUOTA_MAX_ENTRIES {
@@ -442,6 +456,7 @@ impl QuotaTracker {
     /// Réinitialise l'usage d'une entité (conserve les limites).
     pub fn reset_usage(&self, key: QuotaKey) -> ExofsResult<()> {
         self.acquire();
+        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(key) {
             let old = entries[idx].usage;

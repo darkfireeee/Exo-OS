@@ -97,6 +97,7 @@ impl BlobHeaderDisk {
 
     /// Accès brut (pour calcul checksum)
     fn as_bytes(&self) -> [u8; BLOB_HEADER_SIZE] {
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         unsafe { core::mem::transmute(*self) }
     }
 }
@@ -433,6 +434,7 @@ impl BlobWriter {
 
         // Construction de l'en-tête (HDR-03)
         let header = Self::build_header(&ctx, blob_id, config)?;
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         let hdr_bytes: [u8; BLOB_HEADER_SIZE] = unsafe { core::mem::transmute(header) };
 
         // Écriture de l'en-tête (WRITE-02)
@@ -508,6 +510,7 @@ impl BlobWriter {
         };
 
         // Calcul du checksum sur les 60 premiers octets (avant injection)
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         let raw: [u8; BLOB_HEADER_SIZE] = unsafe { core::mem::transmute(hdr) };
         let mut raw60 = [0u8; 60];
         raw60.copy_from_slice(&raw[..60]);

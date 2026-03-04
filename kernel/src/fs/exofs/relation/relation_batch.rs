@@ -9,7 +9,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::arch::time::read_ticks;
+use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
 use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
 use super::relation::{Relation, RelationId};
 use super::relation_type::{RelationType, RelationKind};
@@ -209,7 +209,7 @@ impl RelationBatch {
     pub fn commit(self) -> BatchResult {
         let policy = self.policy;
         let mut res = BatchResult::default();
-        let tick    = read_ticks();
+        let tick    = exofs_ticks();
 
         for op in self.ops {
             let outcome = Self::execute_op(op, tick);

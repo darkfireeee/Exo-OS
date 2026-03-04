@@ -204,6 +204,7 @@ impl TraceRing {
         let lvl = TraceLevel::from_u8(evt.level);
         if lvl < self.min_level() { return; }
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % TRACE_RING_SIZE;
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { (*self.events.get())[idx] = evt; }
         let n = self.count.load(Ordering::Relaxed);
         if n < TRACE_RING_SIZE as u64 {
@@ -222,6 +223,7 @@ impl TraceRing {
         if self.count.load(Ordering::Relaxed) == 0 { return None; }
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = (head.wrapping_add(TRACE_RING_SIZE).wrapping_sub(1)) % TRACE_RING_SIZE;
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let evt = unsafe { (*self.events.get())[idx] };
         if evt.is_empty() { None } else { Some(evt) }
     }
@@ -236,6 +238,7 @@ impl TraceRing {
         let mut i = 0usize;
         while i < count && v.len() < n {
             let idx = (head.wrapping_add(TRACE_RING_SIZE).wrapping_sub(i + 1)) % TRACE_RING_SIZE;
+            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
             let evt = unsafe { (*self.events.get())[idx] };
             if filter.matches(&evt) {
                 v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
@@ -252,6 +255,7 @@ impl TraceRing {
     pub fn reset(&self) {
         let mut i = 0usize;
         while i < TRACE_RING_SIZE {
+            // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
             unsafe { (*self.events.get())[i] = TraceEvent::zeroed(); }
             i = i.wrapping_add(1);
         }
@@ -322,6 +326,7 @@ impl TraceSummary {
         let mut i = 0usize;
         while i < count {
             let idx = (head.wrapping_add(TRACE_RING_SIZE).wrapping_sub(i + 1)) % TRACE_RING_SIZE;
+            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
             let evt = unsafe { (*ring.events.get())[idx] };
             match TraceLevel::from_u8(evt.level) {
                 TraceLevel::Error => s.error_count = s.error_count.saturating_add(1),

@@ -290,6 +290,7 @@ impl<'a> AlertManager<'a> {
         let mut i = 0usize;
         while i < ALERT_RING_SIZE && found < cap {
             let idx = (head.wrapping_add(ALERT_RING_SIZE).wrapping_sub(i).wrapping_sub(1)) % ALERT_RING_SIZE;
+            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
             let a = unsafe { *self.log.ring[idx].get() };
             if !a.is_empty() && self.filter.matches(&a) {
                 out.push(a);

@@ -158,6 +158,7 @@ impl OpenFdTable {
 
     fn open_fd(&self, ino: ObjectIno, flags: u32, pid: u32) -> ExofsResult<u64> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let fds = unsafe { &mut *self.fds.get() };
         // Compte les actifs.
         let mut active_count = 0usize;
@@ -174,6 +175,7 @@ impl OpenFdTable {
 
     fn close_fd(&self, fd: u64) -> ExofsResult<()> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let fds = unsafe { &mut *self.fds.get() };
         let mut found = false;
         let mut i = 0usize;
@@ -187,6 +189,7 @@ impl OpenFdTable {
 
     fn get_fd(&self, fd: u64) -> Option<VfsFd> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let fds = unsafe { &*self.fds.get() };
         let mut r = None;
         let mut i = 0usize;
@@ -200,6 +203,7 @@ impl OpenFdTable {
 
     fn update_offset(&self, fd: u64, new_offset: u64) {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let fds = unsafe { &mut *self.fds.get() };
         let mut i = 0usize;
         while i < fds.len() {
@@ -211,6 +215,7 @@ impl OpenFdTable {
 
     fn close_all_pid(&self, pid: u32) {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let fds = unsafe { &mut *self.fds.get() };
         let mut i = 0usize;
         while i < fds.len() {
@@ -222,6 +227,7 @@ impl OpenFdTable {
 
     fn active_count(&self) -> usize {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let fds = unsafe { &*self.fds.get() };
         let mut n = 0usize;
         let mut i = 0usize;

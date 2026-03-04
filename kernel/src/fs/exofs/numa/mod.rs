@@ -159,11 +159,13 @@ impl NumaModule {
     pub fn init(&self, cfg: NumaConfig, tick: u64) -> ExofsResult<()> {
         cfg.validate()?;
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let state = unsafe { &mut *self.state.get() };
         if *state == NumaModuleState::Ready {
             self.release();
             return Ok(());
         }
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { *self.config.get() = cfg; }
         self.release();
 
@@ -183,6 +185,7 @@ impl NumaModule {
         }
 
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         *unsafe { &mut *self.state.get() } = NumaModuleState::Ready;
         self.release();
         Ok(())
@@ -190,6 +193,7 @@ impl NumaModule {
 
     pub fn state(&self) -> NumaModuleState {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let s = unsafe { *self.state.get() };
         self.release();
         s
@@ -197,6 +201,7 @@ impl NumaModule {
 
     pub fn config(&self) -> NumaConfig {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let c = unsafe { *self.config.get() };
         self.release();
         c

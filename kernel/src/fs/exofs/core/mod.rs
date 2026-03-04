@@ -21,6 +21,8 @@ pub mod flags;
 pub mod version;
 pub mod stats;
 pub mod config;
+// DAG-01 : abstraction horodatage interne (remplace arch::time)
+pub mod clock;
 
 // ── Re-exports fondamentaux ───────────────────────────────────────────────────
 

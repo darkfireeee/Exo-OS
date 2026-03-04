@@ -172,6 +172,7 @@ impl SlotHeaderDisk {
 
     /// Calcule et écrit le hash dans le champ `header_hash` (HDR-03).
     pub fn finalize_hash(&mut self) {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let raw = unsafe {
             core::slice::from_raw_parts(self as *const _ as *const u8, 96)
         };
@@ -231,6 +232,7 @@ impl SlotCandidate {
         Self {
             valid:   false,
             slot_id: SLOT_A,
+            // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
             header:  unsafe { core::mem::zeroed() },
             lba:     0,
         }
@@ -498,6 +500,7 @@ mod tests {
 
     #[test]
     fn test_slot_header_roundtrip() {
+        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut hdr: SlotHeaderDisk = unsafe { core::mem::zeroed() };
         hdr.magic   = SLOT_MAGIC;
         hdr.version = SLOT_FORMAT_VERSION;
@@ -521,6 +524,7 @@ mod tests {
 
     #[test]
     fn test_dirty_flag() {
+        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut hdr: SlotHeaderDisk = unsafe { core::mem::zeroed() };
         hdr.flags = 0x01;
         assert!(hdr.is_dirty());

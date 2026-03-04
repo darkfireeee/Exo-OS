@@ -184,6 +184,7 @@ pub fn sys_exofs_object_delete(
     };
 
     if out_ptr != 0 {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let bytes = unsafe {
             core::slice::from_raw_parts(
                 &result as *const DeleteResult as *const u8,
@@ -382,6 +383,7 @@ pub fn encode_tombstones(entries: &[TombstoneEntry]) -> ExofsResult<Vec<u8>> {
     buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < entries.len() {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         let raw = unsafe {
             core::slice::from_raw_parts(
                 &entries[i] as *const TombstoneEntry as *const u8,

@@ -249,6 +249,7 @@ pub fn read_tsc() -> u64 {
     // SAFETY: RDTSC disponible en Ring 0, aucun effet de bord.
     let lo: u32;
     let hi: u32;
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
         core::arch::asm!(
             "rdtsc",

@@ -172,6 +172,7 @@ impl FcntlLockTable {
     }
 
     fn acquire_inner(&self, lock: ByteRangeLock) -> ExofsResult<()> {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let slots = unsafe { &mut *self.slots.get() };
 
         if let Some(idx) = Self::find_slot(slots, lock.object_id) {
@@ -199,6 +200,7 @@ impl FcntlLockTable {
     /// RECUR-01 : while.
     pub fn release(&self, object_id: u64, pid: u64, tid: u64, start: u64, length: u64) -> ExofsResult<()> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let slots = unsafe { &mut *self.slots.get() };
         if let Some(idx) = Self::find_slot(slots, object_id) {
             let v = &mut slots[idx].locks;
@@ -227,6 +229,7 @@ impl FcntlLockTable {
     /// RECUR-01 : while.
     pub fn release_all_pid(&self, pid: u64) {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let slots = unsafe { &mut *self.slots.get() };
         let mut si = 0usize;
         while si < slots.len() {
@@ -248,6 +251,7 @@ impl FcntlLockTable {
     /// F_GETLK : teste si un verrou est possible, retourne le conflit s'il y en a un.
     pub fn test_lock(&self, candidate: &ByteRangeLock) -> ExofsResult<Option<LockInfo>> {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let slots = unsafe { &*self.slots.get() };
         let result = if let Some(idx) = Self::find_slot(slots, candidate.object_id) {
             match Self::has_conflict(&slots[idx].locks, candidate) {
@@ -276,6 +280,7 @@ impl FcntlLockTable {
     /// Supprime toutes les verrous.
     pub fn clear(&self) {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let slots = unsafe { &mut *self.slots.get() };
         slots.clear();
         self.count.store(0, core::sync::atomic::Ordering::Relaxed);
@@ -284,6 +289,7 @@ impl FcntlLockTable {
 
     pub fn locked_object_count(&self) -> usize {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let n = unsafe { (*self.slots.get()).len() };
         self.lock_release();
         n
@@ -292,6 +298,7 @@ impl FcntlLockTable {
     /// Retourne le nombre de verrous actifs sur un objet.
     pub fn lock_count_for(&self, object_id: u64) -> usize {
         self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let slots = unsafe { &*self.slots.get() };
         let n = if let Some(idx) = Self::find_slot(slots, object_id) { slots[idx].locks.len() } else { 0 };
         self.lock_release();

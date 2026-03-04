@@ -164,6 +164,7 @@ pub fn sys_exofs_object_stat(
         }
     };
 
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     let bytes = unsafe {
         core::slice::from_raw_parts(
             &result as *const ObjectStat as *const u8,
@@ -353,6 +354,7 @@ pub fn serialize_stat(s: &ObjectStat) -> ExofsResult<Vec<u8>> {
     let size = core::mem::size_of::<ObjectStat>();
     let mut buf: Vec<u8> = Vec::new();
     buf.try_reserve(size).map_err(|_| ExofsError::NoMemory)?;
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     let raw = unsafe {
         core::slice::from_raw_parts(s as *const ObjectStat as *const u8, size)
     };
@@ -369,6 +371,7 @@ pub fn deserialize_stat(bytes: &[u8]) -> ExofsResult<ObjectStat> {
     let size = core::mem::size_of::<ObjectStat>();
     if bytes.len() < size { return Err(ExofsError::InvalidArgument); }
     let mut s = ObjectStat::default();
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     let dst = unsafe {
         core::slice::from_raw_parts_mut(&mut s as *mut ObjectStat as *mut u8, size)
     };

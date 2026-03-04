@@ -151,24 +151,29 @@ impl ImportEntryHeader {
 
     /// Valide le magic EN PREMIER (RÈGLE 8).
     pub fn validate_magic(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let m: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == IMPORT_ENTRY_MAGIC
     }
 
     pub fn is_tombstone(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let f: u8 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         f & IMPORT_FLAG_TOMBSTONE != 0
     }
 
     pub fn data_size_unaligned(&self) -> u64 {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.data_size)) }
     }
 
     pub fn blob_id_unaligned(&self) -> [u8; 32] {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.blob_id)) }
     }
 
     pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             core::slice::from_raw_parts(
                 self as *const Self as *const u8,
@@ -389,6 +394,7 @@ impl StreamImporter {
             }
 
             // Reinterprétation sûre en ImportEntryHeader
+            // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
             let hdr: ImportEntryHeader = unsafe {
                 core::ptr::read_unaligned(hdr_buf.as_ptr() as *const ImportEntryHeader)
             };

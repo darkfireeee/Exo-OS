@@ -174,6 +174,7 @@ impl QuotaEnforcer {
 
     fn add_check(&self, result: &EnforcementResult) {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let s = unsafe { &mut *self.stats.get() };
         s.checks_total = s.checks_total.saturating_add(1);
         match result.action {
@@ -190,6 +191,7 @@ impl QuotaEnforcer {
 
     pub fn stats(&self) -> EnforcementStats {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let s = unsafe { *self.stats.get() };
         self.release();
         s
@@ -357,6 +359,7 @@ impl QuotaEnforcer {
     /// Réinitialise les statistiques d'enforcement.
     pub fn reset_stats(&self) {
         self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let s = unsafe { &mut *self.stats.get() };
         *s = EnforcementStats::zero();
         self.release();

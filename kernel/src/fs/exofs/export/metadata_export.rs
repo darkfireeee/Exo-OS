@@ -313,6 +313,7 @@ impl ManifestBlobEntry {
     }
 
     pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             core::slice::from_raw_parts(
                 self as *const Self as *const u8,
@@ -443,11 +444,13 @@ impl MetaBinaryHeader {
     }
 
     pub fn validate_magic(&self) -> bool {
+        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let m: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == META_BINARY_MAGIC
     }
 
     pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             core::slice::from_raw_parts(
                 self as *const Self as *const u8,

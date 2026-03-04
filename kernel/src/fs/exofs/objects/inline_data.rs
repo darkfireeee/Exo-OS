@@ -424,6 +424,7 @@ impl fmt::Display for InlineDataStats {
 /// Le champ `checksum` est aux bytes 4..8, donc on calcule sur [0..4] ++ [8..568].
 fn inline_crc32(d: &InlineDataDisk) -> u32 {
     let bytes: &[u8; 568] =
+        // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
         unsafe { &*(d as *const InlineDataDisk as *const [u8; 568]) };
     // On exclut les 4 octets du checksum (offset 4..8).
     let mut crc = crc32_compute(&bytes[0..4]);
