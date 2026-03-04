@@ -111,7 +111,7 @@ fn import_from_export(data: &[u8], flags: u32) -> ExofsResult<(BlobId, u64)> {
     if exists && flags & import_flags::OVERWRITE == 0 {
         return Err(ExofsError::ObjectAlreadyExists);
     }
-    BLOB_CACHE.insert(blob_id, payload.to_vec()).map_err(|_| ExofsError::NoSpace)?;;
+    BLOB_CACHE.insert(blob_id, payload.to_vec()).map_err(|_| ExofsError::NoSpace)?;
     Ok((blob_id, payload.len() as u64))
 }
 
@@ -123,7 +123,7 @@ fn import_raw(data: &[u8], flags: u32) -> ExofsResult<(BlobId, u64)> {
     if exists && flags & import_flags::OVERWRITE == 0 {
         return Err(ExofsError::ObjectAlreadyExists);
     }
-    BLOB_CACHE.insert(blob_id, data.to_vec()).map_err(|_| ExofsError::NoSpace)?;;
+    BLOB_CACHE.insert(blob_id, data.to_vec()).map_err(|_| ExofsError::NoSpace)?;
     Ok((blob_id, data.len() as u64))
 }
 

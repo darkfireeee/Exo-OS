@@ -241,7 +241,7 @@ pub fn meta_get(blob_id: BlobId, key: &[u8], out: &mut Vec<u8>) -> ExofsResult<u
 
 pub fn meta_delete(blob_id: BlobId, key: &[u8]) -> ExofsResult<()> {
     let meta_id = meta_blob_id(blob_id);
-    let mut entries = load_entries(meta_id)?;
+    let entries = load_entries(meta_id)?;
     let mut new_entries: Vec<MetaEntry> = Vec::new();
     new_entries.try_reserve(entries.len()).map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;

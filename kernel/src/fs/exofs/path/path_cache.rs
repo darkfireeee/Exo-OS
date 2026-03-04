@@ -275,7 +275,7 @@ pub struct CacheDumpEntry {
 /// # OOM-02
 pub fn dump_active_entries() -> alloc::vec::Vec<CacheDumpEntry> {
     use alloc::vec::Vec;
-    let mut out: Vec<CacheDumpEntry> = Vec::new();
+    let out: Vec<CacheDumpEntry> = Vec::new();
     let count = PATH_CACHE.active_count();
     // Fournit un nombre approximatif de slots valides sans accès interne.
     let _ = count;

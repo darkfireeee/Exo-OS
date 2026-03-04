@@ -155,7 +155,7 @@ fn list_snapshots(source: BlobId, args: &SnapshotListArgs) -> ExofsResult<Vec<Sn
                 continue;
             }
             let size = snapshot_source_size_from_blob(&data).unwrap_or(0);
-            let mut r = SnapshotRef {
+            let r = SnapshotRef {
                 snapshot_id: ids[i],
                 source_id:   *source.as_bytes(),
                 epoch_id:    epoch,

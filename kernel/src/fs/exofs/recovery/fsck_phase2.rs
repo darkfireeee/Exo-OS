@@ -314,7 +314,7 @@ impl FsckPhase2 {
         let mut blobs_walked:   u64 = 0;
         let mut blobs_ok:       u64 = 0;
         let mut blobs_hash_err: u64 = 0;
-        let mut orphans:        u64 = 0;
+        let orphans:        u64 = 0;
         let mut ref_counter = BlobRefCounter::new();
 
         // Parcourir la table d'allocation bloc par bloc.
@@ -421,7 +421,7 @@ impl FsckPhase2 {
 
                 // Incrémenter le compteur du parent si présent.
                 if let Some(parent) = hdr.parent_blob_id() {
-                    ref_counter.increment(&parent.0)?;;
+                    ref_counter.increment(&parent.0)?;
                 }
 
                 total_read += 1;

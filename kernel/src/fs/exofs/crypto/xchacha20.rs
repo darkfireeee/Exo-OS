@@ -314,7 +314,7 @@ fn poly1305_mac(r_b: &[u8; 16], s_b: &[u8; 16], aad: &[u8], msg: &[u8]) -> [u8; 
     let s = u128::from_le_bytes(*s_b);
     let mut acc: u128 = 0;
 
-    let mut process = |acc: &mut u128, block: &[u8], last: bool| {
+    let process = |acc: &mut u128, block: &[u8], last: bool| {
         let mut b = [0u8; 17];
         let n = block.len().min(16);
         b[..n].copy_from_slice(&block[..n]);

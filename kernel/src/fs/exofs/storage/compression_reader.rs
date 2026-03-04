@@ -182,7 +182,6 @@ fn lz4_decompress(input: &[u8], expected_size: usize) -> ExofsResult<Vec<u8>> {
             let llen      = llen.min(available);
             out.try_reserve(llen).map_err(|_| ExofsError::NoMemory)?;
             out.extend_from_slice(&input[ip..ip + llen]);
-            ip += llen;
             break;
         }
 

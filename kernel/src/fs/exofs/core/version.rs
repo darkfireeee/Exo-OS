@@ -490,8 +490,8 @@ pub fn validate_version_on_disk(
 /// Format : [minor_lo, minor_hi, major_lo, major_hi]
 pub fn version_to_le_bytes(v: FormatVersion) -> [u8; 4] {
     let [m0, m1] = v.minor.to_le_bytes();
-    let [M0, M1] = v.major.to_le_bytes();
-    [m0, m1, M0, M1]
+    let [maj0, maj1] = v.major.to_le_bytes();
+    [m0, m1, maj0, maj1]
 }
 
 /// Désérialise une FormatVersion depuis 4 octets little-endian.

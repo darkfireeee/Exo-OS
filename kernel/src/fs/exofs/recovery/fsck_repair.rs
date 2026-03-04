@@ -323,7 +323,7 @@ impl FsckRepair {
     /// Tronque un blob en écrivant un en-tête marqué invalide à son emplacement.
     fn truncate_blob(device: &mut dyn BlockDevice, hdr_lba: u64) -> ExofsResult<bool> {
         let block_size = device.block_size() as usize;
-        let mut buf = alloc::vec![0u8; block_size];
+        let buf = alloc::vec![0u8; block_size];
         // Marquer l en-tête comme invalide en effaçant le magic.
         // WRITE-02 : écrire et vérifier.
         device.write_block(hdr_lba, &buf)?;

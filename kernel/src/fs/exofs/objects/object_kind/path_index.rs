@@ -193,16 +193,16 @@ impl PathIndexEntry {
 
     /// Reconstruit depuis on-disk.
     pub fn from_disk(d: &PathIndexEntryDisk) -> ExofsResult<Self> {
-        let kind = ObjectKind::from_u8({ d.kind })
+        let kind = ObjectKind::from_u8(d.kind)
             .ok_or(ExofsError::InvalidObjectKind)?;
         Ok(Self {
-            hash:      { d.hash },
-            object_id: ObjectId({ d.object_id }),
-            parent_id: { d.parent_id },
+            hash:      d.hash,
+            object_id: ObjectId(d.object_id),
+            parent_id: d.parent_id,
             kind,
-            name:      { d.name },
-            name_len:  { d.name_len },
-            flags:     { d.flags },
+            name:      d.name,
+            name_len:  d.name_len,
+            flags:     d.flags,
         })
     }
 
@@ -297,7 +297,7 @@ impl PathIndexPage {
         entries: &[PathIndexEntryDisk],
     ) -> ExofsResult<Self> {
         header.verify()?;
-        let count = { header.entry_count } as usize;
+        let count = header.entry_count as usize;
         if count > PATH_INDEX_MAX_ENTRIES {
             return Err(ExofsError::Overflow);
         }
@@ -305,9 +305,9 @@ impl PathIndexPage {
             return Err(ExofsError::Corrupt);
         }
         let mut page = Self::new(
-            ObjectId({ header.page_id }),
-            { header.page_no },
-            EpochId({ header.epoch_modify }),
+            ObjectId(header.page_id),
+            header.page_no,
+            EpochId(header.epoch_modify),
         );
         page.entries.try_reserve(count).map_err(|_| ExofsError::NoMemory)?;
         for d in entries[..count].iter() {

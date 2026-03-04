@@ -29,7 +29,6 @@
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 #![feature(allocator_api)]
-#![feature(const_size_of_val)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_imports)]

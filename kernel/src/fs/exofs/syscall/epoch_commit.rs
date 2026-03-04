@@ -240,7 +240,7 @@ fn flush_dirty_blobs(entries: &[EpochJournalEntry]) {
     let mut i = 0usize;
     while i < entries.len() {
         let bid = BlobId(entries[i].blob_id);
-        BLOB_CACHE.mark_dirty(&bid);
+        BLOB_CACHE.mark_dirty(&bid).ok();
         i = i.wrapping_add(1);
     }
 }

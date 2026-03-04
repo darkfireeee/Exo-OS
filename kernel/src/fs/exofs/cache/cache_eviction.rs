@@ -154,7 +154,7 @@ impl EvictionPolicy {
     // ── CLOCK — rotation circulaire avec bit de référence ─────────────────────
 
     fn pick_clock(&mut self, limit: usize) -> Vec<BlobId> {
-        let mut keys: Vec<BlobId> = self.entries.keys().cloned().collect();
+        let keys: Vec<BlobId> = self.entries.keys().cloned().collect();
         let n = keys.len();
         if n == 0 { return Vec::new(); }
 

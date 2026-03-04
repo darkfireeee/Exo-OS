@@ -139,7 +139,7 @@ fn export_blob(blob_id: &BlobId, flags: u32) -> ExofsResult<Vec<u8>> {
 fn export_by_fd(fd: u32, flags: u32) -> ExofsResult<Vec<u8>> {
     let bid = OBJECT_TABLE.lock()
         .map_err(|_| ExofsError::InternalError)?
-        .blob_id_of(fd)?;;
+        .blob_id_of(fd)?;
     export_blob(&bid, flags)
 }
 

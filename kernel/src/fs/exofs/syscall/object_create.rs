@@ -340,7 +340,7 @@ mod tests {
 pub fn recreate_object(blob_id: BlobId) -> ExofsResult<()> {
     let empty: [u8; 0] = [];
     BLOB_CACHE.insert(blob_id, empty.to_vec())?;
-    BLOB_CACHE.mark_dirty(&blob_id);
+    BLOB_CACHE.mark_dirty(&blob_id).ok();
     Ok(())
 }
 

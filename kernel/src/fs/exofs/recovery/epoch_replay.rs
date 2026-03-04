@@ -424,7 +424,7 @@ impl EpochReplay {
         let n_records  = hdr.n_records as usize;
         let mut valid  = 0u32;
         let mut bad_magic = 0u32;
-        let mut bad_hash  = 0u32;
+        let bad_hash  = 0u32;
 
         for seq in 0..n_records.min(EPOCH_RECORD_MAX) {
             let block_idx = (seq * EPOCH_RECORD_SIZE) / device.block_size() as usize;

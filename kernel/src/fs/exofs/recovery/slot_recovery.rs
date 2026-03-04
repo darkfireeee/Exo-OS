@@ -230,14 +230,12 @@ impl SlotCandidate {
     const fn invalid() -> Self {
         Self {
             valid:   false,
-            slot_id: SlotA,
+            slot_id: SLOT_A,
             header:  unsafe { core::mem::zeroed() },
             lba:     0,
         }
     }
 }
-
-const SlotA: SlotId = SlotId(0);
 
 // ── SlotRecovery ──────────────────────────────────────────────────────────────
 

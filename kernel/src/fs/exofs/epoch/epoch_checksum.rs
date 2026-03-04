@@ -267,7 +267,7 @@ impl IncrementalChecksum {
     }
 
     /// Finalise le calcul et retourne le hash Blake3 de 32 octets.
-    pub fn finalize(mut self) -> [u8; 32] {
+    pub fn finalize(self) -> [u8; 32] {
         match self.intermediate {
             None => {
                 // Tout tient dans le buffer.

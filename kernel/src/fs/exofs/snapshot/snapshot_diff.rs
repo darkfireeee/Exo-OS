@@ -231,7 +231,7 @@ impl SnapshotDiff {
 
         let mut n_added:    u64 = 0;
         let mut n_removed:  u64 = 0;
-        let mut n_modified: u64 = 0;
+        let n_modified: u64 = 0;
         let mut n_unchanged: u64 = 0;
         let mut bytes_added:   u64 = 0;
         let mut bytes_removed: u64 = 0;

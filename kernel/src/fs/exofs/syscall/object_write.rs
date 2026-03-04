@@ -111,7 +111,7 @@ fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteRes
 
     // Insérer dans le cache.
     BLOB_CACHE.insert(blob_id, new_content.to_vec())?;
-    BLOB_CACHE.mark_dirty(&blob_id);
+    BLOB_CACHE.mark_dirty(&blob_id).ok();
 
     Ok(WriteResult {
         bytes_written: dlen,
@@ -383,7 +383,7 @@ pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
     }
 
     BLOB_CACHE.insert(blob_id, new_content.to_vec())?;
-    BLOB_CACHE.mark_dirty(&blob_id);
+    BLOB_CACHE.mark_dirty(&blob_id).ok();
     Ok(())
 }
 

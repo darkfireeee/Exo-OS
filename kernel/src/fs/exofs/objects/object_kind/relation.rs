@@ -169,7 +169,7 @@ impl RelationEntryDisk {
         if { self.checksum } != computed {
             return Err(ExofsError::Corrupt);
         }
-        if matches!(RelationKind::from_u8({ self.kind }), RelationKind::Unknown) {
+        if matches!(RelationKind::from_u8(self.kind), RelationKind::Unknown) {
             return Err(ExofsError::InvalidArgument);
         }
         Ok(())
@@ -249,16 +249,16 @@ impl RelationDescriptor {
     /// Reconstruit depuis on-disk (HDR-03 : verify() en premier).
     pub fn from_disk(d: &RelationEntryDisk) -> ExofsResult<Self> {
         d.verify()?;
-        let kind = RelationKind::from_u8({ d.kind });
+        let kind = RelationKind::from_u8(d.kind);
         Ok(Self {
-            src:          ObjectId({ d.src_id }),
-            dst:          ObjectId({ d.dst_id }),
-            epoch_create: EpochId({ d.epoch_create }),
+            src:          ObjectId(d.src_id),
+            dst:          ObjectId(d.dst_id),
+            epoch_create: EpochId(d.epoch_create),
             kind,
-            flags:        RelationFlags({ d.flags }),
-            label:        { d.label },
-            label_len:    { d.label_len },
-            weight:       { d.weight },
+            flags:        RelationFlags(d.flags),
+            label:        d.label,
+            label_len:    d.label_len,
+            weight:       d.weight,
         })
     }
 

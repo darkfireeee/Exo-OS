@@ -306,7 +306,7 @@ pub fn vfs_close(fd: u64) -> ExofsResult<()> { FD_TABLE.close_fd(fd) }
 /// En intégration complète, on irait lire dans BLOB_CACHE.
 pub fn vfs_read(fd: u64, buf: &mut [u8], count: usize) -> ExofsResult<usize> {
     if count == 0 { return Ok(0); }
-    let mut desc = FD_TABLE.get_fd(fd).ok_or(ExofsError::ObjectNotFound)?;
+    let desc = FD_TABLE.get_fd(fd).ok_or(ExofsError::ObjectNotFound)?;
     if desc.flags & open_flags::O_WRONLY != 0 { return Err(ExofsError::PermissionDenied); }
     let entry = INODE_EMULATION.get_entry(desc.ino).ok_or(ExofsError::ObjectNotFound)?;
     let readable = count.min(buf.len()).min(entry.size.saturating_sub(desc.offset) as usize);
@@ -391,7 +391,7 @@ pub fn vfs_rename(old_parent: ObjectIno, old_name: &[u8], new_parent: ObjectIno,
     if INODE_EMULATION.contains_oid(new_oid) { return Err(ExofsError::ObjectAlreadyExists); }
     // Effectue le rename : la table inode ne stocke pas le nom, donc on retire l'ancien
     // et crée le nouveau (avec le même ino = cas d'un déplacement de nom).
-    drop(op); drop(np);
+    let _ = (op, np);
     let flags = _src.flags;
     let size  = _src.size;
     let uid   = _src.uid;

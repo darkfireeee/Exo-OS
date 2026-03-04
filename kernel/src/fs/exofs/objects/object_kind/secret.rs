@@ -130,17 +130,17 @@ impl SecretDescriptorDisk {
     }
 
     pub fn verify(&self) -> ExofsResult<()> {
-        if { self.magic } != SECRET_DESCRIPTOR_MAGIC {
+        if self.magic != SECRET_DESCRIPTOR_MAGIC {
             return Err(ExofsError::Corrupt);
         }
-        if { self.version } != SECRET_DESCRIPTOR_VERSION {
+        if self.version != SECRET_DESCRIPTOR_VERSION {
             return Err(ExofsError::IncompatibleVersion);
         }
-        if matches!(SecretCipher::from_u8({ self.cipher }), SecretCipher::Unknown) {
+        if matches!(SecretCipher::from_u8(self.cipher), SecretCipher::Unknown) {
             return Err(ExofsError::InvalidArgument);
         }
         let computed = self.compute_checksum();
-        if { self.checksum } != computed {
+        if self.checksum != computed {
             return Err(ExofsError::Corrupt);
         }
         Ok(())
@@ -276,18 +276,18 @@ impl SecretDescriptor {
     /// Reconstruit depuis on-disk (HDR-03 : verify() en premier).
     pub fn from_disk(d: &SecretDescriptorDisk) -> ExofsResult<Self> {
         d.verify()?;
-        let cipher = SecretCipher::from_u8({ d.cipher });
+        let cipher = SecretCipher::from_u8(d.cipher);
         Ok(Self {
-            plaintext_bid:   BlobId({ d.plaintext_bid }),
-            object_id:       ObjectId({ d.object_id }),
-            disk_offset:     DiskOffset({ d.disk_offset }),
-            ciphertext_size: { d.ciphertext_size },
-            plaintext_size:  { d.plaintext_size },
-            nonce:           { d.nonce },
-            auth_tag:        { d.auth_tag },
-            key_id:          { d.key_id },
-            epoch_create:    EpochId({ d.epoch_create }),
-            flags:           { d.flags },
+            plaintext_bid:   BlobId(d.plaintext_bid),
+            object_id:       ObjectId(d.object_id),
+            disk_offset:     DiskOffset(d.disk_offset),
+            ciphertext_size: d.ciphertext_size,
+            plaintext_size:  d.plaintext_size,
+            nonce:           d.nonce,
+            auth_tag:        d.auth_tag,
+            key_id:          d.key_id,
+            epoch_create:    EpochId(d.epoch_create),
+            flags:           d.flags,
             cipher,
         })
     }

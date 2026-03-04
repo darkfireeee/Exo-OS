@@ -302,7 +302,6 @@ pub fn recover_active_epoch(params: RecoveryParams<'_>) -> ExofsResult<RecoveryR
 
     let valid_count = selector.valid_count();
     if valid_count == 0 {
-        diag.final_phase = RecoveryPhase::Failed;
         return Err(ExofsError::NoValidEpoch);
     }
 

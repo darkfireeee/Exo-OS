@@ -61,23 +61,6 @@ ed25519-dalek = { workspace = true }
 proptest          = { workspace = true }
 static_assertions = { workspace = true }
 
-# ── Configuration de profil ──────────────────────────────────────────────────
-
-[profile.dev]
-# Pas d'optimisation en dev mais pas de débogage avec info trop verbeuse
-opt-level     = 0
-debug         = true
-panic         = "abort"          # pas de stack unwinding en no_std
-codegen-units = 1                # Empêche le splitting CGU (256 CGUs par défaut) qui orpheline
-                                 # les global_asm! (context_switch_asm, _exo_boot_stack_top)
-
-[profile.release]
-opt-level  = 3
-lto        = true
-panic      = "abort"
-codegen-units = 1             # meilleure inlining cross-module
-strip      = "none"           # conserver les symboles pour le débogage QEMU/GDB
-
 # ── Cible par défaut (peut être surchargée en ligne de commande) ─────────────
 
 # Utiliser : cargo build --target ../x86_64-exo-os.json -Z build-std=core,alloc
