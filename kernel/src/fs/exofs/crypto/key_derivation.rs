@@ -253,21 +253,28 @@ impl KeyDerivation {
         passphrase: &[u8],
         salt:       &[u8; 32],
     ) -> ExofsResult<[u8; 32]> {
-        use argon2::{Argon2, Algorithm, Version, Params};
+        use argon2::{Argon2, Algorithm, Version, Params, Block};
 
         if passphrase.is_empty() { return Err(ExofsError::InvalidArgument); }
 
         // RFC 9106 §4 — paramètres interactifs recommandés.
+        let m_cost = 65536u32; // 64 MiB
         let params = Params::new(
-            65536, // m_cost : 64 MiB
-            3,     // t_cost : 3 passes
-            4,     // p_cost : 4 threads
+            m_cost, // m_cost : 64 MiB
+            3,      // t_cost : 3 passes
+            4,      // p_cost : 4 threads
             Some(32),
         ).map_err(|_| ExofsError::InvalidArgument)?;
 
         let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
         let mut output = [0u8; 32];
-        argon2.hash_password_into(passphrase, salt, &mut output)
+
+        // argon2 0.5.x : hash_password_into_with_memory requiert un buffer mémoire explicite.
+        let mut memory: Vec<Block> = Vec::new();
+        memory.try_reserve(m_cost as usize).map_err(|_| ExofsError::NoMemory)?;
+        memory.resize(m_cost as usize, Block::default());
+
+        argon2.hash_password_into_with_memory(passphrase, salt, &mut output, &mut memory)
             .map_err(|_| ExofsError::InternalError)?;
 
         Ok(output)

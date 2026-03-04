@@ -76,7 +76,6 @@ impl GraphInner {
             v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             v.push(edge);
         } else {
-            self.adj.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             let mut v = Vec::new();
             v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             v.push(edge);

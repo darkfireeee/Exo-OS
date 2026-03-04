@@ -112,9 +112,8 @@ impl PathWalker {
             return Err(ExofsError::PathTooLong);
         }
         let mut components: Vec<PathComponent> = Vec::new();
-        let parser = PathParser::new(path);
-        for comp_result in parser {
-            let comp = comp_result?;
+        let mut parser = PathParser::new(path)?;
+        while let Some(comp) = parser.next_component()? {
             // Ignorer les composants "."
             let bytes = comp.as_bytes();
             if bytes == b"." { continue; }
@@ -161,7 +160,13 @@ impl PathWalker {
                 let d = *depth;
                 // Remonte au contexte InDirectory reconstruit depuis le symlink.
                 let mut components: Vec<PathComponent> = Vec::new();
-                let parser = PathParser::new(&tgt);
+                let parser = match PathParser::new(&tgt) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.state = WalkerState::Failed(e.clone());
+                        return WalkerStepResult::Error(e);
+                    }
+                };
                 for cr in parser {
                     match cr {
                         Err(e) => {
@@ -319,8 +324,8 @@ pub fn walk_path<B: WalkerBackend>(
 /// Résout uniquement le composant final d'un chemin (basename).
 pub fn basename(path: &[u8]) -> ExofsResult<PathComponent> {
     let mut last: Option<PathComponent> = None;
-    for cr in PathParser::new(path) {
-        let c = cr?;
+    let mut parser = PathParser::new(path)?;
+    while let Some(c) = parser.next_component()? {
         if c.as_bytes() != b"." && c.as_bytes() != b".." {
             last = Some(c);
         }
@@ -341,11 +346,10 @@ pub fn walk_parent<B: WalkerBackend>(
     let slash_pos = normalized.iter().rposition(|&b| b == b'/');
     let (parent_path, child_bytes) = match slash_pos {
         None => (b"/" as &[u8], normalized.as_slice()),
-        Some(0) => (b"/", &normalized[1..]),
+        Some(0) => (b"/" as &[u8], &normalized[1..]),
         Some(p) => (&normalized[..p], &normalized[p + 1..]),
     };
-    validate_component(child_bytes)?;
-    let child = PathComponent::from_bytes(child_bytes)?;
+    let child = validate_component(child_bytes)?;
     let parent_oid = {
         let mut walker = PathWalker::new(root, parent_path)?;
         walker.collect_to_end(backend)?

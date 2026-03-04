@@ -114,8 +114,8 @@ impl SecretWriter {
         let mut buf: Vec<u8> = Vec::new();
         buf.try_reserve(plaintext.len()).map_err(|_| ExofsError::NoMemory)?;
         buf.extend_from_slice(plaintext);
-        let tag = XChaCha20Poly1305::encrypt(&self.key, &nonce, &mut buf)?;
-        build_payload(&nonce, &tag, &buf)
+        let (ciphertext, tag) = XChaCha20Poly1305::encrypt(&self.key, &nonce, &[], &buf)?;
+        build_payload(&nonce, &tag, &ciphertext)
     }
 
     /// Chiffre avec données additionnelles authentifiées (AAD).
@@ -130,8 +130,8 @@ impl SecretWriter {
         let mut buf: Vec<u8> = Vec::new();
         buf.try_reserve(plaintext.len()).map_err(|_| ExofsError::NoMemory)?;
         buf.extend_from_slice(plaintext);
-        let tag = XChaCha20Poly1305::encrypt_aad(&self.key, &nonce, &mut buf, aad)?;
-        build_payload(&nonce, &tag, &buf)
+        let (ciphertext, tag) = XChaCha20Poly1305::encrypt(&self.key, &nonce, aad, &buf)?;
+        build_payload(&nonce, &tag, &ciphertext)
     }
 
     /// Chiffre et retourne un `SecretWriteResult` avec métadonnées.
@@ -145,8 +145,8 @@ impl SecretWriter {
         let mut buf: Vec<u8> = Vec::new();
         buf.try_reserve(plain_len).map_err(|_| ExofsError::NoMemory)?;
         buf.extend_from_slice(plaintext);
-        let tag     = XChaCha20Poly1305::encrypt(&self.key, &nonce, &mut buf)?;
-        let payload = build_payload(&nonce, &tag, &buf)?;
+        let (ciphertext, tag) = XChaCha20Poly1305::encrypt(&self.key, &nonce, &[], &buf)?;
+        let payload = build_payload(&nonce, &tag, &ciphertext)?;
         Ok(SecretWriteResult { payload, nonce, tag, plain_len })
     }
 

@@ -193,7 +193,7 @@ fn load_entries(meta_id: BlobId) -> ExofsResult<Vec<MetaEntry>> {
 /// Enregistre les entrées dans le cache.
 fn save_entries(meta_id: BlobId, entries: &[MetaEntry]) -> ExofsResult<()> {
     let buf = serialize_entries(entries)?;
-    BLOB_CACHE.insert(meta_id, &buf)
+    BLOB_CACHE.insert(meta_id, buf.to_vec())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -327,7 +327,7 @@ mod tests {
 
     fn mk_blob(path: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, b"body").ok();
+        BLOB_CACHE.insert(id, b"body".to_vec()).ok();
         id
     }
 

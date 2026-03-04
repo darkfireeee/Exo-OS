@@ -182,7 +182,8 @@ impl ExtentWriter {
 
     /// Aligne un offset vers le bloc suivant.
     pub fn align_to_block(offset: u64) -> u64 {
-        align_up(offset, BLOCK_SIZE as u64)
+        let align = BLOCK_SIZE as u64;
+        offset.saturating_add(align - 1) / align * align
     }
 
     /// Découpe `data` en segments alignés sur BLOCK_SIZE.
@@ -387,7 +388,7 @@ impl ExtentWriter {
         write_fn: &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
     ) -> ExofsResult<u64> {
         let blk = BLOCK_SIZE as usize;
-        let zero_blk: Vec<u8> = vec![0u8; blk];
+        let zero_blk: Vec<u8> = alloc::vec![0u8; blk];
         let mut remaining = extent.size;
         let mut disk      = extent.offset.0;
         let mut total     = 0u64;

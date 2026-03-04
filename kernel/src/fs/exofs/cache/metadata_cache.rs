@@ -69,7 +69,7 @@ struct MetadataCacheInner {
 }
 
 impl MetadataCacheInner {
-    fn new(max: usize) -> Self { Self { map: BTreeMap::new(), max } }
+    const fn new(max: usize) -> Self { Self { map: BTreeMap::new(), max } }
 
     fn evict_one(&mut self) {
         // LRU approxé : retire l'entrée avec le tick le plus bas.
@@ -107,7 +107,6 @@ impl MetadataCache {
         meta.cached_tick = now;
         let inode_id = meta.inode_id;
         let mut inner = self.inner.lock();
-        inner.map.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         if inner.map.len() >= inner.max { inner.evict_one(); }
         inner.map.insert(inode_id, meta);
         CACHE_STATS.record_insert(core::mem::size_of::<MetaEntry>() as u64);

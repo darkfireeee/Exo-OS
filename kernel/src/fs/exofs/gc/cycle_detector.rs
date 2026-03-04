@@ -283,13 +283,17 @@ impl CycleDetector {
         stack.push(DfsFrame { blob_id: start, child_index: 0 });
 
         // RECUR-01 : boucle iterative.
-        while let Some(frame) = stack.last_mut() {
+        while !stack.is_empty() {
             if stack.len() > MAX_DFS_STACK_DEPTH {
                 stats.stack_overflows = stats.stack_overflows.saturating_add(1);
                 // Retailer la pile pour eviter le depassement.
                 stack.pop();
                 continue;
             }
+            let frame = match stack.last_mut() {
+                Some(f) => f,
+                None => break,
+            };
 
             let current = frame.blob_id;
 

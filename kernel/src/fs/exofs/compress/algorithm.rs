@@ -17,6 +17,7 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum CompressLevel {
+    None    = 0,
     Fast    = 1,
     Default = 3,
     Best    = 6,
@@ -46,6 +47,7 @@ impl CompressLevel {
     /// Retourne le niveau immédiatement supérieur (plafonné à Maximum).
     pub const fn next(self) -> Self {
         match self {
+            Self::None    => Self::Fast,
             Self::Fast    => Self::Default,
             Self::Default => Self::Best,
             Self::Best    => Self::Maximum,
@@ -56,7 +58,8 @@ impl CompressLevel {
     /// Retourne le niveau immédiatement inférieur (plancher à Fast).
     pub const fn prev(self) -> Self {
         match self {
-            Self::Fast    => Self::Fast,
+            Self::None    => Self::None,
+            Self::Fast    => Self::None,
             Self::Default => Self::Fast,
             Self::Best    => Self::Default,
             Self::Maximum => Self::Best,
@@ -66,6 +69,7 @@ impl CompressLevel {
     /// Nom lisible du niveau.
     pub const fn name(self) -> &'static str {
         match self {
+            Self::None    => "none",
             Self::Fast    => "fast",
             Self::Default => "default",
             Self::Best    => "best",
@@ -171,6 +175,12 @@ impl CompressionAlgorithm {
 
 impl Default for CompressionAlgorithm {
     fn default() -> Self { CompressionAlgorithm::None }
+}
+impl core::convert::TryFrom<u8> for CompressionAlgorithm {
+    type Error = ();
+    fn try_from(v: u8) -> Result<Self, Self::Error> {
+        Self::from_u8(v).ok_or(())
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

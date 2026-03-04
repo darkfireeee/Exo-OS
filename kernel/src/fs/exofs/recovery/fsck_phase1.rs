@@ -190,17 +190,19 @@ pub struct Phase1Error {
 #[derive(Clone, Debug)]
 pub struct Phase1Report {
     /// Erreurs détectées.
-    pub errors:          Vec<Phase1Error>,
+    pub errors:             Vec<Phase1Error>,
     /// Superbloc lu (si valide).
-    pub superblock:      Option<SuperblockDisk>,
+    pub superblock:         Option<SuperblockDisk>,
     /// `true` si le superbloc est valide.
-    pub superblock_ok:   bool,
+    pub superblock_ok:      bool,
+    /// `true` si le superbloc est corrompu (anté `superblock_ok`).
+    pub superblock_corrupt: bool,
     /// `true` si la table d'allocation est valide.
-    pub alloc_table_ok:  bool,
+    pub alloc_table_ok:     bool,
     /// `true` si la région blob est cohérente.
-    pub blob_region_ok:  bool,
+    pub blob_region_ok:     bool,
     /// Nombre de LBA vérifiés.
-    pub lbas_checked:    u64,
+    pub lbas_checked:       u64,
 }
 
 impl Phase1Report {
@@ -231,7 +233,25 @@ impl Phase1Report {
     }
 }
 
-// ── Exécuteur de la phase 1 ───────────────────────────────────────────────────
+// ── Alias de compatibilité pour recovery/mod.rs ───────────────────────────────────────
+
+/// LBA du superbloc (alias de `FsckPhase1::DEFAULT_SUPERBLOCK_LBA`).
+pub const SUPERBLOCK_LBA: u64 = 0x0800;
+/// Magic d'en-tête du superbloc (alias de `SUPERBLOCK_MAGIC`).
+pub const SUPERBLOCK_HDR_MAGIC: u64 = SUPERBLOCK_MAGIC;
+
+/// Options de configuration de la Phase 1 du fsck.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Phase1Options {
+    /// Nombre maximal d'erreurs avant abandon (0 = pas de limite).
+    pub max_errors:       usize,
+    /// Vérifier les checksums des blobs.
+    pub verify_checksums: bool,
+    /// LBA du superbloc à utiliser (0 = défaut = `SUPERBLOCK_LBA`).
+    pub override_lba:     u64,
+}
+
+// ── Exécuteur de la phase 1 ─────────────────────────────────────────────
 
 /// Exécuteur de la phase 1 du fsck.
 pub struct FsckPhase1;
@@ -252,6 +272,12 @@ impl FsckPhase1 {
     /// collectées dans `Phase1Report.errors`.
     pub fn run(device: &dyn BlockDevice) -> ExofsResult<Phase1Report> {
         Self::run_at(device, Self::DEFAULT_SUPERBLOCK_LBA)
+    }
+
+    /// Exécute la phase 1 avec options.
+    pub fn run_with_options(device: &dyn BlockDevice, opts: &Phase1Options) -> ExofsResult<Phase1Report> {
+        let lba = if opts.override_lba != 0 { opts.override_lba } else { Self::DEFAULT_SUPERBLOCK_LBA };
+        Self::run_at(device, lba)
     }
 
     /// Exécute la phase 1 avec LBA superbloc personnalisé.
@@ -277,11 +303,12 @@ impl FsckPhase1 {
                 // Pas de superbloc → arrêt de la phase 1.
                 let report = Phase1Report {
                     errors,
-                    superblock:     None,
-                    superblock_ok:  false,
-                    alloc_table_ok: false,
-                    blob_region_ok: false,
-                    lbas_checked:   0,
+                    superblock:        None,
+                    superblock_ok:     false,
+                    superblock_corrupt: true,
+                    alloc_table_ok:    false,
+                    blob_region_ok:    false,
+                    lbas_checked:      0,
                 };
                 RECOVERY_LOG.log_phase_done(1, 1);
                 return Ok(report);
@@ -410,7 +437,8 @@ impl FsckPhase1 {
         Ok(Phase1Report {
             errors,
             superblock,
-            superblock_ok:  superblock.is_some(),
+            superblock_ok:      superblock.is_some(),
+            superblock_corrupt: superblock.is_none(),
             alloc_table_ok,
             blob_region_ok,
             lbas_checked,
@@ -469,12 +497,13 @@ mod tests {
     #[test]
     fn test_phase1_report_clean() {
         let r = Phase1Report {
-            errors:         Vec::new(),
-            superblock:     None,
-            superblock_ok:  true,
-            alloc_table_ok: true,
-            blob_region_ok: true,
-            lbas_checked:   3,
+            errors:            Vec::new(),
+            superblock:        None,
+            superblock_ok:     true,
+            superblock_corrupt: false,
+            alloc_table_ok:    true,
+            blob_region_ok:    true,
+            lbas_checked:      3,
         };
         assert!(r.is_clean());
         assert_eq!(r.error_count(), 0);

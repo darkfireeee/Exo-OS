@@ -39,6 +39,16 @@ impl EpochRecoveryStats {
     #[inline] pub fn inc_epochs_replayed(&self)   { self.epochs_replayed.fetch_add(1, Ordering::Relaxed); }
 }
 
+/// Snapshot non-atomique des statistiques de recovery epoch.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EpochRecoveryStatsSnapshot {
+    pub slot_io_errors:    u64,
+    pub checksum_errors:   u64,
+    pub degraded_mounts:   u64,
+    pub slot_magic_errors: u64,
+    pub epochs_replayed:   u64,
+}
+
 // =============================================================================
 // Histogramme de latence de commit (buckets logarithmiques)
 // =============================================================================
@@ -316,6 +326,9 @@ impl EpochStats {
     #[inline] pub fn add_objects_committed(&self, n: u64)          { self.objects_committed.fetch_add(n, Ordering::Relaxed); }
     #[inline] pub fn add_objects_deleted(&self, n: u64)            { self.objects_deleted.fetch_add(n, Ordering::Relaxed); }
     #[inline] pub fn add_objects_created(&self, n: u64)            { self.objects_created.fetch_add(n, Ordering::Relaxed); }
+    #[inline] pub fn inc_objects_created(&self)                    { self.objects_created.fetch_add(1, Ordering::Relaxed); }
+    #[inline] pub fn inc_blobs_gc_eligible(&self)               { self.gc_objects_freed.fetch_add(1, Ordering::Relaxed); }
+    #[inline] pub fn inc_objects_read(&self)                       { /* no dedicated counter */ }
 
     // ── Increments EpochRoot ───────────────────────────────────────────────
     #[inline] pub fn inc_chained_root_pages(&self)                 { self.chained_root_pages.fetch_add(1, Ordering::Relaxed); }
@@ -383,6 +396,13 @@ impl EpochStats {
             snapshots_created:        self.snapshots_created.load(Ordering::Relaxed),
             pins_acquired:            self.pins_acquired.load(Ordering::Relaxed),
             commit_latency:           self.commit_latency.snapshot(),
+            recovery:                 EpochRecoveryStatsSnapshot {
+                slot_io_errors:    self.recovery.slot_io_errors.load(Ordering::Relaxed),
+                checksum_errors:   self.recovery.checksum_errors.load(Ordering::Relaxed),
+                degraded_mounts:   self.recovery.degraded_mounts.load(Ordering::Relaxed),
+                slot_magic_errors: self.recovery.slot_magic_errors.load(Ordering::Relaxed),
+                epochs_replayed:   self.recovery.epochs_replayed.load(Ordering::Relaxed),
+            },
         }
     }
 
@@ -433,6 +453,8 @@ pub struct EpochStatsSnapshot {
     pub snapshots_created:        u64,
     pub pins_acquired:            u64,
     pub commit_latency:           LatencyHistogramSnapshot,
+    /// Sous-snapshot de recovery (pour accès via `.recovery.xxx`).
+    pub recovery:                  EpochRecoveryStatsSnapshot,
 }
 
 impl fmt::Display for EpochStatsSnapshot {

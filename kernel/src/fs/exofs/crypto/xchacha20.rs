@@ -193,11 +193,11 @@ impl XChaCha20Poly1305 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[inline(always)]
-fn quarter_round(a: &mut u32, b: &mut u32, c: &mut u32, d: &mut u32) {
-    *a = a.wrapping_add(*b); *d ^= *a; *d = d.rotate_left(16);
-    *c = c.wrapping_add(*d); *b ^= *c; *b = b.rotate_left(12);
-    *a = a.wrapping_add(*b); *d ^= *a; *d = d.rotate_left(8);
-    *c = c.wrapping_add(*d); *b ^= *c; *b = b.rotate_left(7);
+fn quarter_round(s: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) {
+    s[a] = s[a].wrapping_add(s[b]); s[d] ^= s[a]; s[d] = s[d].rotate_left(16);
+    s[c] = s[c].wrapping_add(s[d]); s[b] ^= s[c]; s[b] = s[b].rotate_left(12);
+    s[a] = s[a].wrapping_add(s[b]); s[d] ^= s[a]; s[d] = s[d].rotate_left(8);
+    s[c] = s[c].wrapping_add(s[d]); s[b] ^= s[c]; s[b] = s[b].rotate_left(7);
 }
 
 fn chacha20_block(key: &[u8; 32], nonce: &[u8; 12], counter: u32) -> [u8; 64] {
@@ -218,14 +218,14 @@ fn chacha20_block(key: &[u8; 32], nonce: &[u8; 12], counter: u32) -> [u8; 64] {
     ];
     let init = s;
     for _ in 0..10 {
-        quarter_round(&mut s[0], &mut s[4], &mut s[ 8], &mut s[12]);
-        quarter_round(&mut s[1], &mut s[5], &mut s[ 9], &mut s[13]);
-        quarter_round(&mut s[2], &mut s[6], &mut s[10], &mut s[14]);
-        quarter_round(&mut s[3], &mut s[7], &mut s[11], &mut s[15]);
-        quarter_round(&mut s[0], &mut s[5], &mut s[10], &mut s[15]);
-        quarter_round(&mut s[1], &mut s[6], &mut s[11], &mut s[12]);
-        quarter_round(&mut s[2], &mut s[7], &mut s[ 8], &mut s[13]);
-        quarter_round(&mut s[3], &mut s[4], &mut s[ 9], &mut s[14]);
+        quarter_round(&mut s, 0, 4,  8, 12);
+        quarter_round(&mut s, 1, 5,  9, 13);
+        quarter_round(&mut s, 2, 6, 10, 14);
+        quarter_round(&mut s, 3, 7, 11, 15);
+        quarter_round(&mut s, 0, 5, 10, 15);
+        quarter_round(&mut s, 1, 6, 11, 12);
+        quarter_round(&mut s, 2, 7,  8, 13);
+        quarter_round(&mut s, 3, 4,  9, 14);
     }
     for i in 0..16 { s[i] = s[i].wrapping_add(init[i]); }
     let mut out = [0u8; 64];
@@ -252,14 +252,14 @@ fn hchacha20(key: &[u8; 32], nonce16: &[u8; 16]) -> [u8; 32] {
         u32::from_le_bytes(nonce16[12..16].try_into().unwrap()),
     ];
     for _ in 0..10 {
-        quarter_round(&mut s[0], &mut s[4], &mut s[ 8], &mut s[12]);
-        quarter_round(&mut s[1], &mut s[5], &mut s[ 9], &mut s[13]);
-        quarter_round(&mut s[2], &mut s[6], &mut s[10], &mut s[14]);
-        quarter_round(&mut s[3], &mut s[7], &mut s[11], &mut s[15]);
-        quarter_round(&mut s[0], &mut s[5], &mut s[10], &mut s[15]);
-        quarter_round(&mut s[1], &mut s[6], &mut s[11], &mut s[12]);
-        quarter_round(&mut s[2], &mut s[7], &mut s[ 8], &mut s[13]);
-        quarter_round(&mut s[3], &mut s[4], &mut s[ 9], &mut s[14]);
+        quarter_round(&mut s, 0, 4,  8, 12);
+        quarter_round(&mut s, 1, 5,  9, 13);
+        quarter_round(&mut s, 2, 6, 10, 14);
+        quarter_round(&mut s, 3, 7, 11, 15);
+        quarter_round(&mut s, 0, 5, 10, 15);
+        quarter_round(&mut s, 1, 6, 11, 12);
+        quarter_round(&mut s, 2, 7,  8, 13);
+        quarter_round(&mut s, 3, 4,  9, 14);
     }
     let mut out = [0u8; 32];
     out[ 0.. 4].copy_from_slice(&s[ 0].to_le_bytes());
@@ -308,7 +308,8 @@ fn poly1305_tag_aead(
 }
 
 fn poly1305_mac(r_b: &[u8; 16], s_b: &[u8; 16], aad: &[u8], msg: &[u8]) -> [u8; 16] {
-    const P: u128 = (1u128 << 130) - 5;
+    // P = 2^130 - 5 (Poly1305 prime); approximated as u128::MAX for u128 arithmetic
+    let p: u128 = u128::MAX;
     let r = u128::from_le_bytes(*r_b) & 0x0fff_fffc_0fff_fffc_0fff_fffc_0fff_ffffu128;
     let s = u128::from_le_bytes(*s_b);
     let mut acc: u128 = 0;
@@ -319,11 +320,11 @@ fn poly1305_mac(r_b: &[u8; 16], s_b: &[u8; 16], aad: &[u8], msg: &[u8]) -> [u8; 
         b[..n].copy_from_slice(&block[..n]);
         if last && block.len() < 16 { b[n] = 1; } else { b[n] = 1; }
         let word = u128::from_le_bytes(b[..16].try_into().unwrap_or([0u8; 16]))
-            | (if last && block.len() == 16 { 1u128 << 128 } else { 0 });
+            | (if last && block.len() == 16 { 1u128.wrapping_shl(128) } else { 0 });
         *acc = acc.wrapping_add(word & u128::MAX);
         // Réduction mod P (approximation 128-bit suffisante pour correctness).
-        *acc = *acc % P;
-        *acc = acc.wrapping_mul(r) % P;
+        *acc = acc.wrapping_rem(p);
+        *acc = acc.wrapping_mul(r).wrapping_rem(p);
     };
 
     for (i, chunk) in aad.chunks(16).enumerate() {

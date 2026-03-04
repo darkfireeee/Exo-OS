@@ -335,7 +335,7 @@ impl PathIndex {
 
         // Écrire l en-tête.
         let hdr = self.make_header();
-        buf.extend_from_slice(bytes_of_header(&hdr));
+        buf.extend_from_slice(&bytes_of_header(&hdr));
 
         // Trier par hash avant écriture.
         let mut sorted: Vec<&InMemoryEntry> = self.entries.iter().collect();
@@ -349,7 +349,7 @@ impl PathIndex {
                 kind:      e.kind,
                 _pad:      0,
             };
-            buf.extend_from_slice(bytes_of_entry(&raw));
+            buf.extend_from_slice(&bytes_of_entry(&raw));
             buf.extend_from_slice(e.name_bytes());
         }
 

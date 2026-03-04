@@ -49,6 +49,8 @@ pub const RIGHT_GC_TRIGGER:       u32 = 1 << 13;
 pub const RIGHT_EXPORT:           u32 = 1 << 14;
 /// Droit d'importer des blobs depuis une archive externe.
 pub const RIGHT_IMPORT:           u32 = 1 << 15;
+/// Droit d'administration — accès privilégié complet (format, reconfiguration).
+pub const RIGHT_ADMIN:            u32 = 1 << 16;
 
 /// Masque de tous les droits ExoFS définis.
 pub const ALL_RIGHTS: u32 = 0x0000_FFFF;

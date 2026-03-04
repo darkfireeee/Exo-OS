@@ -136,7 +136,6 @@ impl RelationWalker {
         let mut queue: VecDeque<(BlobId, u32)> = VecDeque::new();
         let mut result = WalkResult::default();
 
-        visited.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         visited.insert(*start.as_bytes(), 0);
         queue.push_back((*start, 0));
 
@@ -163,7 +162,6 @@ impl RelationWalker {
                     continue;
                 }
                 if !visited.contains_key(nbr.as_bytes()) {
-                    visited.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     visited.insert(*nbr.as_bytes(), next_depth);
                     queue.push_back((nbr, next_depth));
                     result.n_edges_traversed = result.n_edges_traversed
@@ -193,7 +191,6 @@ impl RelationWalker {
             let key = *node.as_bytes();
             if visited.contains_key(&key) { continue; }
 
-            visited.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             visited.insert(key, ());
 
             result.visited.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
@@ -241,7 +238,6 @@ impl RelationWalker {
         let mut queue: VecDeque<(BlobId, u32)> = VecDeque::new();
         let sentinel = [0xFFu8; 32]; // racine sans parent
 
-        parent.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         parent.insert(*start.as_bytes(), sentinel);
         queue.push_back((*start, 0));
 
@@ -268,7 +264,6 @@ impl RelationWalker {
 
             for nbr in self.collect_neighbors(&node) {
                 if !parent.contains_key(nbr.as_bytes()) {
-                    parent.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     parent.insert(*nbr.as_bytes(), *node.as_bytes());
                     queue.push_back((nbr, next_depth));
                 }
@@ -325,7 +320,6 @@ impl RelationStepWalker {
     pub fn new(start: BlobId, options: WalkOptions) -> ExofsResult<Self> {
         let mut visited: BTreeMap<[u8; 32], u32> = BTreeMap::new();
         let mut queue: VecDeque<(BlobId, u32)> = VecDeque::new();
-        visited.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         visited.insert(*start.as_bytes(), 0);
         queue.push_back((start, 0));
         Ok(RelationStepWalker {
@@ -368,9 +362,6 @@ impl RelationStepWalker {
             };
             for nbr in neighbors {
                 if !self.visited.contains_key(nbr.as_bytes()) {
-                    if self.visited.try_reserve(1).is_err() {
-                        return StepResult::Error(ExofsError::NoMemory);
-                    }
                     self.visited.insert(*nbr.as_bytes(), next_depth);
                     if self.queue.try_reserve(1).is_err() {
                         return StepResult::Error(ExofsError::NoMemory);
@@ -429,7 +420,6 @@ pub fn nodes_at_depth(start: &BlobId, depth: u32) -> ExofsResult<Vec<BlobId>> {
     current_layer.push(*start);
 
     let mut visited: BTreeMap<[u8; 32], ()> = BTreeMap::new();
-    visited.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
     visited.insert(*start.as_bytes(), ());
 
     let mut d = 0u32;
@@ -439,7 +429,6 @@ pub fn nodes_at_depth(start: &BlobId, depth: u32) -> ExofsResult<Vec<BlobId>> {
             let neighbors = RELATION_GRAPH.get_neighbors(node);
             for nbr in neighbors {
                 if !visited.contains_key(nbr.as_bytes()) {
-                    visited.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     visited.insert(*nbr.as_bytes(), ());
                     next_layer.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     next_layer.push(nbr);

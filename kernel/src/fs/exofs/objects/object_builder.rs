@@ -196,7 +196,7 @@ impl ObjectBuilder {
 
         // Génération de l'ObjectId selon la class.
         let object_id = match self.params.class {
-            ObjectClass::Class1 => new_class1(blob_id, &self.params.cap_bytes),
+            ObjectClass::Class1 => new_class1(&blob_id, &self.params.cap_bytes),
             ObjectClass::Class2 => new_class2(),
         };
 
@@ -209,9 +209,9 @@ impl ObjectBuilder {
         if is_inline {
             flags = ObjectFlags(flags.0 | ObjectFlags::INLINE_DATA.0);
             let inline = InlineData::from_slice(raw_data).map_err(BuildError::Exofs)?;
-            physical_ref = PhysicalRef::from_inline_data(inline);
+            physical_ref = PhysicalRef::from_inline_data(inline.as_slice());
         } else {
-            physical_ref = PhysicalRef::empty();
+            physical_ref = Ok(PhysicalRef::empty());
         }
 
         let now_tsc = epoch.0.wrapping_mul(1000);
@@ -248,7 +248,7 @@ impl ObjectBuilder {
             data_size:    data_len,
             generation:   0,
             meta,
-            physical_ref,
+            physical_ref: physical_ref?,
             extent_tree:  ExtentTree::new(),
         };
 
@@ -266,7 +266,7 @@ impl ObjectBuilder {
 
         let epoch = self.params.epoch;
         let object_id = match self.params.class {
-            ObjectClass::Class1 => new_class1(BlobId([0u8; 32]), &self.params.cap_bytes),
+            ObjectClass::Class1 => new_class1(&BlobId([0u8; 32]), &self.params.cap_bytes),
             ObjectClass::Class2 => new_class2(),
         };
 

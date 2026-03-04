@@ -19,6 +19,7 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId};
 use super::checkpoint::{CHECKPOINT_STORE, RecoveryPhase};
 use super::recovery_log::RECOVERY_LOG;
 use super::recovery_audit::RECOVERY_AUDIT;
+use super::fsck::FsckOptions;
 
 // ── Trait périphérique bloc ───────────────────────────────────────────────────
 
@@ -257,15 +258,16 @@ impl BootRecovery {
             RECOVERY_AUDIT.record_phase_started(0); // Phase globale.
 
             let fsck_opts = super::fsck::FsckOptions {
-                run_phase1:    true,
-                run_phase2:    true,
-                run_phase3:    true,
-                run_phase4:    true,
-                repair:        !options.dry_run,
-                max_errors:    options.max_fsck_errors,
+                run_phase1:       true,
+                run_phase2:       true,
+                run_phase3:       true,
+                run_phase4:       true,
+                auto_repair:      !options.dry_run,
+                max_total_errors: options.max_fsck_errors,
+                ..FsckOptions::default()
             };
 
-            let fsck_result = super::fsck::Fsck::run(device, &fsck_opts)
+            let fsck_result = super::fsck::Fsck::run_with_options(device, &fsck_opts)
                 .map_err(|e| {
                     RECOVERY_LOG.log_error(0x03, 0);
                     e

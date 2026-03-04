@@ -372,7 +372,7 @@ impl BlobWriter {
         } else if data.len() < COMPRESS_MIN_BYTES {
             CompressionType::None
         } else {
-            choose_compression(config.hint, data.len())
+            choose_compression(data, config.hint).algorithm
         };
 
         let (payload, effective_algo) = if algo == CompressionType::None {
@@ -387,12 +387,12 @@ impl BlobWriter {
             STORAGE_STATS.inc_compress_op();
             STORAGE_STATS.add_compress_bytes_in(data.len() as u64);
 
-            let compressed = CompressWriter::compress(data, algo)?;
+            let compressed = CompressWriter::new(algo).compress(data)?;
 
             // N'utiliser la compression que si elle réduit la taille
             if compressed.len() < data.len() {
                 STORAGE_STATS.add_compress_bytes_out(compressed.len() as u64);
-                (compressed, algo)
+                (compressed.data, algo)
             } else {
                 // Compression inefficace → stocker brut
                 let mut v = Vec::new();
@@ -425,7 +425,7 @@ impl BlobWriter {
         let total_raw = BLOB_HEADER_SIZE
             .checked_add(ctx.payload.len())
             .ok_or(ExofsError::Overflow)?;
-        let total_aligned = align_up(total_raw as u64, BLOCK_SIZE as u64);
+        let total_aligned = align_up(DiskOffset(total_raw as u64), BLOCK_SIZE as u64)?.0;
         let n_blocks = Self::size_to_blocks(total_aligned);
 
         // Allocation
@@ -531,7 +531,7 @@ impl BlobWriter {
     pub fn disk_size_for(original_size: usize) -> u64 {
         let total = BLOB_HEADER_SIZE
             .saturating_add(original_size);
-        align_up(total as u64, BLOCK_SIZE as u64)
+        align_up(DiskOffset(total as u64), BLOCK_SIZE as u64).map(|d| d.0).unwrap_or(u64::MAX)
     }
 }
 
@@ -635,7 +635,7 @@ pub fn write_padded<WriteFn>(
 where
     WriteFn: FnMut(DiskOffset, &[u8]) -> ExofsResult<usize>,
 {
-    let aligned = align_up(data.len() as u64, BLOCK_SIZE as u64) as usize;
+    let aligned = align_up(DiskOffset(data.len() as u64), BLOCK_SIZE as u64)?.0 as usize;
     if aligned == data.len() {
         // Déjà aligné
         let n = write_fn(offset, data)?;
@@ -676,7 +676,7 @@ pub fn verify_blob_header(raw: &[u8]) -> ExofsResult<&BlobHeaderDisk> {
 pub fn blob_total_disk_size(stored_size: u32) -> u64 {
     let raw = (BLOB_HEADER_SIZE as u64)
         .saturating_add(stored_size as u64);
-    align_up(raw, BLOCK_SIZE as u64)
+    align_up(DiskOffset(raw), BLOCK_SIZE as u64).map(|d| d.0).unwrap_or(u64::MAX)
 }
 
 // ─────────────────────────────────────────────────────────────

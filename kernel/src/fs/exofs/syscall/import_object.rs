@@ -111,7 +111,7 @@ fn import_from_export(data: &[u8], flags: u32) -> ExofsResult<(BlobId, u64)> {
     if exists && flags & import_flags::OVERWRITE == 0 {
         return Err(ExofsError::ObjectAlreadyExists);
     }
-    BLOB_CACHE.insert(blob_id, payload).map_err(|_| ExofsError::NoSpace)?;
+    BLOB_CACHE.insert(blob_id, payload.to_vec()).map_err(|_| ExofsError::NoSpace)?;;
     Ok((blob_id, payload.len() as u64))
 }
 
@@ -123,7 +123,7 @@ fn import_raw(data: &[u8], flags: u32) -> ExofsResult<(BlobId, u64)> {
     if exists && flags & import_flags::OVERWRITE == 0 {
         return Err(ExofsError::ObjectAlreadyExists);
     }
-    BLOB_CACHE.insert(blob_id, data).map_err(|_| ExofsError::NoSpace)?;
+    BLOB_CACHE.insert(blob_id, data.to_vec()).map_err(|_| ExofsError::NoSpace)?;;
     Ok((blob_id, data.len() as u64))
 }
 
@@ -131,10 +131,8 @@ fn import_raw(data: &[u8], flags: u32) -> ExofsResult<(BlobId, u64)> {
 /// Ouvre un fd si OPEN_FD.
 fn register_import(blob_id: BlobId, path: &[u8], flags: u32) -> ExofsResult<u32> {
     if flags & import_flags::OPEN_FD != 0 {
-        let fd = super::object_fd::OBJECT_TABLE.lock()
-            .map_err(|_| ExofsError::InternalError)?
-            .open(blob_id, 0o644, false)
-            .ok_or(ExofsError::NoMemory)?;
+        let fd = super::object_fd::OBJECT_TABLE
+            .open(blob_id, 0o644, 0, 0, 0)?;
         return Ok(fd);
     }
     Ok(0)
@@ -375,7 +373,7 @@ pub fn import_copy_with_salt(src: &BlobId, salt: &[u8]) -> ExofsResult<BlobId> {
     let mut i = 0usize;
     while i < salt.len() { combined.push(salt[i]); i = i.wrapping_add(1); }
     let new_bid = BlobId::from_bytes_blake3(&combined);
-    BLOB_CACHE.insert(new_bid, &data).map_err(|_| ExofsError::NoSpace)?;
+    BLOB_CACHE.insert(new_bid, data.to_vec()).map_err(|_| ExofsError::NoSpace)?;
     Ok(new_bid)
 }
 
@@ -428,7 +426,7 @@ mod tests_extra {
     #[test]
     fn test_import_copy_with_salt() {
         let src = BlobId::from_bytes_blake3(b"copy_src");
-        BLOB_CACHE.insert(src, b"original").ok();
+        BLOB_CACHE.insert(src, b"original".to_vec()).ok();
         let dst = import_copy_with_salt(&src, b"salt123").unwrap();
         assert_ne!(src.as_bytes(), dst.as_bytes());
     }

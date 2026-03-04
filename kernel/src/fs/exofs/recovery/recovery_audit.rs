@@ -331,6 +331,12 @@ impl RecoveryAudit {
     }
 
     /// Enregistre le début d'une séquence de récupération.
+    /// Enregistre l'initialisation du module de recovery.
+    pub fn record_init(&self) {
+        use crate::fs::exofs::core::types::EpochId;
+        self.record_recovery_started(EpochId(0));
+    }
+
     pub fn record_recovery_started(&self, epoch_id: EpochId) {
         self.record(AuditEntry::info(
             AuditEventKind::RecoveryStarted,

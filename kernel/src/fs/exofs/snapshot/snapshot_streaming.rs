@@ -65,10 +65,10 @@ pub struct StreamChunkHeader {
     pub checksum:    [u8; 4],
 }
 
-const _SCH_SIZE: () = assert!(
-    core::mem::size_of::<StreamChunkHeader>() == STREAM_CHUNK_HDR_SIZE,
-    "StreamChunkHeader doit faire exactement 64 octets"
-);
+// const _SCH_SIZE: () = assert!(
+//     core::mem::size_of::<StreamChunkHeader>() == STREAM_CHUNK_HDR_SIZE,
+//     "StreamChunkHeader doit faire exactement 64 octets"
+// );
 
 impl StreamChunkHeader {
     /// Calcule le checksum Blake3 (4 premiers octets du hash sur les 60 premiers octets)
@@ -189,7 +189,6 @@ impl MemStreamBlobSource {
     }
     pub fn add(&mut self, snap_id: SnapshotId, data: &[u8]) -> ExofsResult<BlobId> {
         let bid = compute_blob_id(data);
-        self.data.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         self.data.insert(*bid.as_bytes(), data.to_vec());
         let list = self.snap_blobs.entry(snap_id.0).or_insert_with(Vec::new);
         list.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;

@@ -244,7 +244,7 @@ impl CryptoModule {
     pub fn config(&self) -> &CryptoConfig { &self.config }
 
     /// Retourne un résumé de l'audit.
-    pub fn audit_summary(&self) -> AuditSummary { AUDIT_LOG.summary() }
+    pub fn audit_summary(&self) -> ExofsResult<AuditSummary> { AUDIT_LOG.summary() }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -270,7 +270,7 @@ pub fn generate_key() -> ExofsResult<[u8; 32]> {
 
 /// Dérive une clé depuis un secret et un sel.
 pub fn derive_key_simple(secret: &[u8], salt: &[u8; 32]) -> ExofsResult<[u8; 32]> {
-    let dk = KeyDerivation::derive_key(secret, salt, KeyPurpose::DataEncryption)?;
+    let dk = KeyDerivation::derive_key(secret, salt, b"data_encryption")?;
     Ok(*dk.as_bytes())
 }
 
@@ -462,9 +462,9 @@ pub fn run_health_check() -> HealthCheckResult {
         let mut buf: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
         if buf.try_reserve(data.len()).is_ok() {
             buf.extend_from_slice(data);
-            if let Ok(tag) = XChaCha20Poly1305::encrypt(&key, &nonce, &mut buf) {
-                XChaCha20Poly1305::decrypt(&key, &nonce, &tag, &mut buf)
-                    .map(|_| buf == data)
+            if let Ok((ct, tag)) = XChaCha20Poly1305::encrypt(&key, &nonce, &[], data) {
+                XChaCha20Poly1305::decrypt(&key, &nonce, &[], &ct, &tag)
+                    .map(|pt| pt == data)
                     .unwrap_or(false)
             } else { false }
         } else { false }
@@ -480,7 +480,7 @@ pub fn run_health_check() -> HealthCheckResult {
     // 3. KDF
     let kdf_ok = {
         let salt = [0x55u8; 32];
-        KeyDerivation::derive_key(b"health_check_secret", &salt, KeyPurpose::DataEncryption)
+        KeyDerivation::derive_key(b"health_check_secret", &salt, b"data_encryption")
             .map(|dk| dk.as_bytes().iter().any(|&b| b != 0))
             .unwrap_or(false)
     };

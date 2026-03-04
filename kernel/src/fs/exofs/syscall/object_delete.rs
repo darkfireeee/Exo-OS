@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn test_delete_by_path() {
         let path = b"/path/delete/obj";
-        BLOB_CACHE.insert(BlobId::from_bytes_blake3(path), b"x").unwrap();
+        BLOB_CACHE.insert(BlobId::from_bytes_blake3(path), b"x".to_vec()).unwrap();
         let r = delete_object_by_path(path, path.len(), 0).unwrap();
         assert_eq!(r.tombstoned, 1);
     }
@@ -494,7 +494,7 @@ mod advanced_tests {
         let id = BlobId::from_bytes_blake3(b"/dir/empty/del");
         let mut hdr = [0u8; 8];
         hdr[0] = 0xCA; hdr[1] = 0xFE; hdr[2] = 0xD0; hdr[3] = 0xD1;
-        BLOB_CACHE.insert(id, &hdr).unwrap();
+        BLOB_CACHE.insert(id, hdr.to_vec()).unwrap();
         let freed = delete_directory(id, 0).unwrap();
         assert_eq!(freed, 8);
         assert!(!object_exists(&id));

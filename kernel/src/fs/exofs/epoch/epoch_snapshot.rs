@@ -262,6 +262,7 @@ impl SnapshotRegistry {
             epoch_id,
             snapshot_id as u32,
             PinReason::Snapshot,
+            0,
         )?;
 
         // Pré-réserve pour éviter panic OOM (OOM-02).

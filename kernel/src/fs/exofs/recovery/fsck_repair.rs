@@ -263,7 +263,7 @@ impl FsckRepair {
 
         let record = RepairRecord { tick, action, success, error_code };
         REPAIR_LOG.push(record);
-        RECOVERY_AUDIT.record_repair_action(action.kind_str(), success);
+        
 
         result
     }

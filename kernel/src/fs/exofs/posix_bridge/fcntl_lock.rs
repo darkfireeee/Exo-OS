@@ -273,6 +273,15 @@ impl FcntlLockTable {
     }
 
     /// Retourne le nombre d'objets actuellement verrouillés.
+    /// Supprime toutes les verrous.
+    pub fn clear(&self) {
+        self.lock_acquire();
+        let slots = unsafe { &mut *self.slots.get() };
+        slots.clear();
+        self.count.store(0, core::sync::atomic::Ordering::Relaxed);
+        self.lock_release();
+    }
+
     pub fn locked_object_count(&self) -> usize {
         self.lock_acquire();
         let n = unsafe { (*self.slots.get()).len() };

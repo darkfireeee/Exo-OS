@@ -56,7 +56,7 @@ struct PathCacheInner {
 }
 
 impl PathCacheInner {
-    fn new(max: usize) -> Self { Self { map: BTreeMap::new(), max } }
+    const fn new(max: usize) -> Self { Self { map: BTreeMap::new(), max } }
 
     fn evict_one_lru(&mut self) {
         let oldest = self.map
@@ -137,7 +137,6 @@ impl PathCache {
         let entry = PathEntry::new(path_str, inode_id, flags, depth, now);
 
         let mut inner = self.inner.lock();
-        inner.map.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         if inner.map.len() >= inner.max { inner.evict_one_lru(); }
         inner.map.insert(key, entry);
         CACHE_STATS.record_insert(path.len() as u64);

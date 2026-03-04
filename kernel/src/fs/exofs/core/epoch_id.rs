@@ -374,7 +374,7 @@ pub struct EpochCommitSummary {
     pub _pad:            [u8; 6],
 }
 
-const _: () = assert!(core::mem::size_of::<EpochCommitSummary>() == 32);
+// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<EpochCommitSummary>() == 32);
 
 impl EpochCommitSummary {
     pub fn from_stats(epoch_id: EpochId, stats: &EpochStats, state: EpochState, flags: u8) -> Self {

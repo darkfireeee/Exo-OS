@@ -288,7 +288,7 @@ pub fn reclaim_with_report(
             f
         }
     };
-    CACHE_STATS.record_eviction();
+    CACHE_STATS.record_eviction(freed);
     let pressure_after = update_pressure();
     ReclaimReport {
         bytes_requested: bytes,

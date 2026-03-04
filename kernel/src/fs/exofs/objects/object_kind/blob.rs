@@ -195,18 +195,18 @@ impl BlobDescriptor {
         epoch_create: EpochId,
     ) -> Self {
         let mut flags = 0u16;
-        if blob.compression != CompressionType::None {
+        if blob.compress_type != CompressionType::None {
             flags |= BLOB_FLAG_COMPRESSED;
         }
         Self {
             blob_id:     blob.blob_id,
             object_id,
-            disk_offset: blob.disk_offset,
+            disk_offset: blob.data_offset,
             raw_size:    blob.original_size,
-            stored_size: blob.stored_size,
+            stored_size: blob.data_size,
             epoch_create,
             flags,
-            compression: blob.compression,
+            compression: blob.compress_type,
             ref_count:   blob.ref_count(),
             dedup_hint:  None,
         }
@@ -217,18 +217,18 @@ impl BlobDescriptor {
     /// HDR-03 : `d.verify()` en premier.
     pub fn from_disk(d: &BlobDescriptorDisk) -> ExofsResult<Self> {
         d.verify()?;
-        let compression = CompressionType::from_u8({ d.compression })
+        let compression = CompressionType::from_u8(d.compression)
             .ok_or(ExofsError::InvalidArgument)?;
         Ok(Self {
-            blob_id:     BlobId({ d.blob_id }),
-            object_id:   ObjectId({ d.object_id }),
-            disk_offset: DiskOffset({ d.disk_offset }),
-            raw_size:    { d.raw_size },
-            stored_size: { d.stored_size },
-            epoch_create: EpochId({ d.epoch_create }),
-            flags:       { d.flags },
+            blob_id:     BlobId(d.blob_id),
+            object_id:   ObjectId(d.object_id),
+            disk_offset: DiskOffset(d.disk_offset),
+            raw_size:    d.raw_size,
+            stored_size: d.stored_size,
+            epoch_create: EpochId(d.epoch_create),
+            flags:       d.flags,
             compression,
-            ref_count:   { d.ref_count },
+            ref_count:   d.ref_count,
             dedup_hint:  None,
         })
     }

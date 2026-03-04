@@ -443,7 +443,7 @@ impl MetaBinaryHeader {
     }
 
     pub fn validate_magic(&self) -> bool {
-        let m: u32 = unsafe { core::ptr::read_unaligned(&self.magic) };
+        let m: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == META_BINARY_MAGIC
     }
 

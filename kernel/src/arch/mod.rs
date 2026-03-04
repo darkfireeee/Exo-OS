@@ -24,6 +24,9 @@ pub mod x86_64;
 #[cfg(target_arch = "aarch64")]
 pub mod aarch64;
 
+/// Lecture du TSC (timestamp counter) — disponible sur toutes les architectures.
+pub mod time;
+
 // ── Re-exports publics ────────────────────────────────────────────────────────
 
 #[cfg(target_arch = "x86_64")]

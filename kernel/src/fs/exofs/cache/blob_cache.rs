@@ -130,10 +130,9 @@ impl BlobCache {
     pub fn get(&self, id: &BlobId) -> Option<Box<[u8]>> {
         let mut inner = self.inner.lock();
         let now = crate::arch::time::read_ticks();
-        if let Some(e) = inner.map.get_mut(id) {
-            e.touch(now);
+        if let Some(cloned_data) = inner.map.get_mut(id).map(|e| { e.touch(now); e.data.clone() }) {
             inner.eviction.touch(id);
-            let data: Box<[u8]> = e.data.clone().into_boxed_slice();
+            let data: Box<[u8]> = cloned_data.into_boxed_slice();
             self.hits.fetch_add(1, Ordering::Relaxed);
             CACHE_STATS.record_hit();
             Some(data)
@@ -159,10 +158,11 @@ impl BlobCache {
         let mut inner = self.inner.lock();
 
         // Si déjà présent, mettre à jour.
-        if let Some(existing) = inner.map.get_mut(&id) {
-            let old_size = existing.len();
+        if inner.map.contains_key(&id) {
+            let old_size = inner.map[&id].len();
             inner.used = inner.used.saturating_sub(old_size);
             inner.eviction.remove(&id);
+            let existing = inner.map.get_mut(&id).unwrap();
             existing.data = data;
             existing.dirty = false;
             existing.touch(now);
@@ -173,7 +173,6 @@ impl BlobCache {
         }
 
         // OOM-02 : réserver avant insertion.
-        inner.map.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         inner.evict_to_fit(size, max)?;
 
         let entry = BlobEntry::new(data, now);
@@ -244,6 +243,17 @@ impl BlobCache {
 
     pub fn n_entries(&self) -> usize {
         self.inner.lock().map.len()
+    }
+
+    /// Retourne la liste de tous les `BlobId` présents dans le cache.
+    pub fn list_keys(&self) -> ExofsResult<Vec<BlobId>> {
+        let inner = self.inner.lock();
+        let mut keys = Vec::new();
+        keys.try_reserve(inner.map.len()).map_err(|_| ExofsError::NoMemory)?;
+        for k in inner.map.keys() {
+            keys.push(*k);
+        }
+        Ok(keys)
     }
 
     pub fn hits(&self)   -> u64 { self.hits.load(Ordering::Relaxed) }

@@ -442,7 +442,7 @@ mod tests {
         snap.root_objects.push(RootObject {
             object_id:   oid(2),
             disk_offset: DiskOffset::zero(),
-            slot:        EpochSlot::SlotA,
+            slot:        EpochSlot::A,
             epoch_id:    1,
             is_deleted:  false,
         });

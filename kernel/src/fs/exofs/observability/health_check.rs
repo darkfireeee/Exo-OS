@@ -150,7 +150,12 @@ impl HealthProbeRing {
     };
 
     pub const fn new_const() -> Self {
-        const Z: UnsafeCell<HealthProbeResult> = UnsafeCell::new(Self::ZERO);
+        const Z: UnsafeCell<HealthProbeResult> = UnsafeCell::new(HealthProbeResult {
+            probe:  HealthProbeId::SpaceUsage,
+            status: HealthStatus::Healthy,
+            value:  0,
+            tick:   0,
+        });
         Self { slots: [Z; PROBE_RING_SIZE], head: AtomicU64::new(0) }
     }
 

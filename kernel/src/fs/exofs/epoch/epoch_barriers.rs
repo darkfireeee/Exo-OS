@@ -27,7 +27,7 @@ type NvmeFlushFn = fn() -> ExofsResult<()>;
 /// Pointeur atomique vers la fonction de flush enregistrée.
 ///
 /// Initialisé à `default_flush_stub` (no-op + log) jusqu'à l'enregistrement.
-static FLUSH_HOOK: AtomicUsize = AtomicUsize::new(default_flush_stub as usize);
+static FLUSH_HOOK: AtomicUsize = AtomicUsize::new(0);
 
 /// Stub par défaut : retourne immédiatement OK mais signale l'absence d'hook.
 ///
@@ -70,7 +70,7 @@ pub fn register_nvme_flush_fn(flush_fn: NvmeFlushFn) {
 /// Retourne vrai si un hook NVMe a été enregistré (différent du stub).
 #[inline]
 pub fn is_nvme_flush_registered() -> bool {
-    FLUSH_HOOK.load(Ordering::Relaxed) != (default_flush_stub as usize)
+    FLUSH_HOOK.load(Ordering::Relaxed) != 0
 }
 
 // =============================================================================
@@ -113,6 +113,9 @@ fn nvme_flush_impl(phase_idx: usize) -> ExofsResult<()> {
     // et mis à jour uniquement par `register_nvme_flush_fn` vers une autre fonction
     // valide. La conversion usize → fn() est donc sûre.
     let fn_ptr = FLUSH_HOOK.load(Ordering::Acquire);
+    if fn_ptr == 0 {
+        return default_flush_stub();
+    }
     let flush: NvmeFlushFn = unsafe { core::mem::transmute(fn_ptr) };
 
     let t0 = read_tsc();

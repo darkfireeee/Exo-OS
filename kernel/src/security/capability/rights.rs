@@ -177,6 +177,11 @@ impl Rights {
         self.0 == 0
     }
 
+    /// Retourne un Rights sans aucun droit (sentinel pour « entrée absente »).
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+
     /// Nombre de droits individuels activés (popcount).
     #[inline(always)]
     pub fn count(self) -> u32 {

@@ -131,7 +131,6 @@ impl SnapshotQuotaTable {
 
         let entry = SnapshotQuotaEntry::new(snap_id, max_bytes, max_blobs);
         let mut guard = self.entries.lock();
-        guard.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         guard.insert(snap_id.0, entry);
         // Flag QUOTA_SET dans le registre
         drop(guard);

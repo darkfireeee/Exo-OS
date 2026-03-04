@@ -177,10 +177,11 @@ impl OrphanCollector {
                 orphan_blobs.insert(bid);
             }
 
-            // Aussi les blobs atteignables via ce blobs (sous-blobs).
-            let reachable_blobs = REFERENCE_TRACKER.all_reachable_blobs(&blobs);
-            for bid in reachable_blobs {
-                orphan_blobs.insert(bid);
+            // Aussi les blobs atteignables via cet objet (sous-blobs).
+            if let Ok(reachable_blobs) = REFERENCE_TRACKER.all_reachable_blobs(&oid) {
+                for bid in reachable_blobs {
+                    orphan_blobs.insert(bid);
+                }
             }
         }
 
@@ -217,7 +218,7 @@ impl OrphanCollector {
                 // Decrementer et differer via BLOB_REFCOUNT (GC-01).
                 match BLOB_REFCOUNT.dec(&blob_id, current_epoch) {
                     Ok(deferred) => {
-                        if deferred {
+                        if deferred.0 == 0 {
                             result.blobs_deferred =
                                 result.blobs_deferred.saturating_add(1);
                             result.bytes_deferred =
@@ -302,7 +303,7 @@ impl OrphanCollector {
 
             match BLOB_REFCOUNT.dec(&blob_id, current_epoch) {
                 Ok(deferred) => {
-                    if deferred {
+                    if deferred.0 == 0 {
                         freed = freed.saturating_add(1);
                     }
                 }

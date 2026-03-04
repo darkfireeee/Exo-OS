@@ -268,12 +268,12 @@ impl Fsck {
             }
 
             if opts.save_checkpoints {
-                let _ = CHECKPOINT_STORE.save(1, RecoveryPhase::Phase1Superblock);
+                let _ = CHECKPOINT_STORE.save_phase(1, RecoveryPhase::Phase1Done);
             }
 
             if opts.stop_on_critical && p1.has_critical_errors() {
                 res.phase1 = Some(p1);
-                RECOVERY_LOG.log_event(super::recovery_log::RecoveryEvent::FsckCompleted);
+                RECOVERY_LOG.log_event(super::recovery_log::RecoveryEvent::FsckDone);
                 return Ok(res);
             }
             res.phase1 = Some(p1);
@@ -287,11 +287,11 @@ impl Fsck {
             let ec = p2.errors.len() as u32;
             res.phase2_errors = ec;
             res.total_errors  = res.total_errors.saturating_add(ec);
-            res.blobs_checked = p2.blobs_checked;
+            res.blobs_checked = p2.blobs_walked;
             res.phases_completed |= 0x02;
 
             if opts.save_checkpoints {
-                let _ = CHECKPOINT_STORE.save(2, RecoveryPhase::Phase2BlobTree);
+                let _ = CHECKPOINT_STORE.save_phase(2, RecoveryPhase::Phase2Done);
             }
 
             if opts.stop_on_critical && ec > 0 && p2.has_critical_errors() {
@@ -309,7 +309,7 @@ impl Fsck {
                 Some(p2) => &p2.ref_counter,
                 None => {
                     // Phase 2 non exécutée : on saute la phase 3.
-                    RECOVERY_LOG.log_event(super::recovery_log::RecoveryEvent::FsckCompleted);
+                    RECOVERY_LOG.log_event(super::recovery_log::RecoveryEvent::FsckDone);
                     res.phases_completed |= 0x04;
                     // Passer directement à la phase 4 avec un rapport vide.
                     let p3 = Phase3Report {
@@ -335,7 +335,7 @@ impl Fsck {
             res.phases_completed |= 0x04;
 
             if opts.save_checkpoints {
-                let _ = CHECKPOINT_STORE.save(3, RecoveryPhase::Phase3EpochScan);
+                let _ = CHECKPOINT_STORE.save_phase(3, RecoveryPhase::Phase3Done);
             }
 
             if opts.stop_on_critical && p3.has_criticals() {
@@ -353,7 +353,7 @@ impl Fsck {
                 Some(p) => p,
                 None => {
                     res.phases_completed |= 0x08;
-                    RECOVERY_LOG.log_event(super::recovery_log::RecoveryEvent::FsckCompleted);
+                    RECOVERY_LOG.log_event(super::recovery_log::RecoveryEvent::FsckDone);
                     return Ok(res);
                 }
             };
@@ -370,14 +370,14 @@ impl Fsck {
             res.phases_completed |= 0x08;
 
             if opts.save_checkpoints {
-                let _ = CHECKPOINT_STORE.save(4, RecoveryPhase::Phase4INodeRefresh);
+                let _ = CHECKPOINT_STORE.save_phase(4, RecoveryPhase::Phase4Done);
             }
 
             res.phase4 = Some(p4);
         }
 
-        RECOVERY_AUDIT.record_fsck_done(res.total_errors, res.phases_completed);
-        RECOVERY_LOG.log_event(super::recovery_log::RecoveryEvent::FsckCompleted);
+        RECOVERY_LOG.log_fsck_done(res.total_errors);
+        RECOVERY_LOG.log_event(super::recovery_log::RecoveryEvent::FsckDone);
 
         Ok(res)
     }
@@ -463,7 +463,7 @@ impl Phase2Report {
 
 impl super::checkpoint::CheckpointStore {
     /// Sauvegarde un checkpoint à la phase donnée.
-    pub fn save(&self, _phase_num: u8, phase: RecoveryPhase) -> ExofsResult<()> {
+    pub fn save_phase(&self, _phase_num: u8, phase: RecoveryPhase) -> ExofsResult<()> {
         let tick = crate::arch::time::read_ticks();
         let _ = self.save_checkpoint(tick, phase, 0);
         Ok(())

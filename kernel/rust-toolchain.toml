@@ -1,4 +1,4 @@
 [toolchain]
-channel = "nightly-x86_64-pc-windows-gnu"
+channel = "nightly-x86_64-unknown-linux-musl"
 components = ["rust-src", "rustfmt", "clippy"]
 targets = ["x86_64-unknown-none"]

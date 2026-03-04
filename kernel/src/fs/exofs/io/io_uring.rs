@@ -185,7 +185,7 @@ impl IoUringSq {
             if self.available() == 0 { return Err(ExofsError::Resource); }
             let tail = self.tail.load(Ordering::Relaxed) as usize % self.depth;
             // SAFETY : tail < depth, accès sous spinlock.
-            unsafe { (*self.ring.get())[tail] = sqe; }
+            unsafe { (&mut *self.ring.get())[tail] = sqe; }
             self.tail.fetch_add(1, Ordering::Relaxed);
             self.submitted.fetch_add(1, Ordering::Relaxed);
             Ok(())
@@ -202,7 +202,7 @@ impl IoUringSq {
         } else {
             let head = self.head.load(Ordering::Relaxed) as usize % self.depth;
             // SAFETY : head < depth, accès sous spinlock.
-            let sqe = unsafe { (*self.ring.get())[head] };
+            let sqe = unsafe { (&*self.ring.get())[head] };
             self.head.fetch_add(1, Ordering::Relaxed);
             Some(sqe)
         };
@@ -262,7 +262,7 @@ impl IoUringCq {
             if self.available() == 0 { return Err(ExofsError::Resource); }
             let tail = self.tail.load(Ordering::Relaxed) as usize % self.depth;
             // SAFETY : tail < depth, spinlock.
-            unsafe { (*self.ring.get())[tail] = cqe; }
+            unsafe { (&mut *self.ring.get())[tail] = cqe; }
             self.tail.fetch_add(1, Ordering::Relaxed);
             Ok(())
         })();
@@ -278,7 +278,7 @@ impl IoUringCq {
         } else {
             let head = self.head.load(Ordering::Relaxed) as usize % self.depth;
             // SAFETY : head < depth, spinlock.
-            let cqe = unsafe { (*self.ring.get())[head] };
+            let cqe = unsafe { (&*self.ring.get())[head] };
             self.head.fetch_add(1, Ordering::Relaxed);
             self.reaped.fetch_add(1, Ordering::Relaxed);
             Some(cqe)

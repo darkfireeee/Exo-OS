@@ -66,7 +66,6 @@ impl RelationStoreInner {
             return Err(ExofsError::NoSpace);
         }
         let on_disk = rel.to_on_disk();
-        self.store.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         self.store.insert(rel.id.0, on_disk);
         self.stats.total_persisted = self.stats.total_persisted.wrapping_add(1);
         self.stats.current_count = self.store.len();

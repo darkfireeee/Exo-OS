@@ -170,7 +170,6 @@ impl ChunkCache {
         if map.len() >= self.capacity {
             self.evict_one_locked(map);
         }
-        map.try_reserve(1).map_err(|_| { self.release(); ExofsError::NoMemory })?;
         map.insert(key, entry);
         self.release();
         self.total_bytes.fetch_add(data_len, Ordering::Relaxed);

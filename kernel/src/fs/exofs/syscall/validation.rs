@@ -94,6 +94,7 @@ pub fn exofs_err_to_errno(e: ExofsError) -> i64 {
         ExofsError::NotSupported           => ENOTSUP,
         ExofsError::InvalidArgument        => EINVAL,
         ExofsError::InternalError          => EIO,
+        _                                  => EIO,
     }
 }
 

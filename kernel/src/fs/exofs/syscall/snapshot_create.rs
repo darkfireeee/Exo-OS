@@ -147,7 +147,7 @@ fn create_snapshot(
     let snap_key = snapshot_id(source_blob, epoch_id, name);
     if BLOB_CACHE.get(&snap_key).is_some() { return Err(ExofsError::ObjectAlreadyExists); }
     let snap_blob = build_snapshot_blob(&source_data, epoch_id, flags, name)?;
-    BLOB_CACHE.insert(snap_key, &snap_blob)?;
+    BLOB_CACHE.insert(snap_key, snap_blob.to_vec())?;
     Ok(SnapshotCreateResult {
         snapshot_id: *snap_key.as_bytes(),
         blob_id:     *source_blob.as_bytes(),
@@ -245,7 +245,7 @@ mod tests {
 
     fn make_source(path: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, b"source data for snapshot").unwrap();
+        BLOB_CACHE.insert(id, b"source data for snapshot".to_vec()).unwrap();
         id
     }
 
@@ -436,7 +436,7 @@ mod advanced_tests {
 
     fn make_src(path: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, b"data").unwrap();
+        BLOB_CACHE.insert(id, b"data".to_vec()).unwrap();
         id
     }
 

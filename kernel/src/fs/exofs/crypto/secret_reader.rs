@@ -115,7 +115,7 @@ impl SecretReader {
         plaintext.try_reserve(ct_len).map_err(|_| ExofsError::NoMemory)?;
         plaintext.extend_from_slice(ciphertext);
         // Déchiffrement XChaCha20-Poly1305.
-        XChaCha20Poly1305::decrypt(&self.key, &header.nonce, &header.tag, &mut plaintext)?;
+        let plaintext = XChaCha20Poly1305::decrypt(&self.key, &header.nonce, &[], &plaintext, &header.tag)?;
         Ok(plaintext)
     }
 
@@ -134,7 +134,7 @@ impl SecretReader {
         let mut plaintext: Vec<u8> = Vec::new();
         plaintext.try_reserve(ct_len).map_err(|_| ExofsError::NoMemory)?;
         plaintext.extend_from_slice(ciphertext);
-        XChaCha20Poly1305::decrypt_aad(&self.key, &header.nonce, &header.tag, &mut plaintext, aad)?;
+        let plaintext = XChaCha20Poly1305::decrypt(&self.key, &header.nonce, aad, &plaintext, &header.tag)?;
         Ok(plaintext)
     }
 

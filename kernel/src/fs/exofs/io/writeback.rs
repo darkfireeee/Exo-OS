@@ -234,9 +234,6 @@ impl WritebackWorker {
         Ok(Self { config, stats: WritebackStats::new() })
     }
 
-    /// Trait-objet simplifié pour le sink : callback fn.
-    type WriteFn<'a> = &'a mut dyn FnMut(&[u8; 32], u32) -> ExofsResult<u64>;
-
     /// Traite une entrée depuis la queue.
     pub fn process_one(&mut self, queue: &WritebackQueue, write_fn: &mut dyn FnMut(&[u8; 32], u32) -> ExofsResult<u64>) -> ExofsResult<bool> {
         let entry = match queue.dequeue() {

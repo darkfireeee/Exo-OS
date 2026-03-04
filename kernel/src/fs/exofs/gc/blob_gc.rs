@@ -161,7 +161,7 @@ impl Default for BlobGcConfig {
             collect_orphans: true,
             collect_inline:  true,
             flush_deferred:  true,
-            current_epoch:   0,
+            current_epoch:   EpochId(0),
         }
     }
 }
@@ -194,7 +194,7 @@ impl BlobGc {
                     collect_orphans: true,
                     collect_inline:  true,
                     flush_deferred:  true,
-                    current_epoch:   0,
+                    current_epoch:   EpochId(0),
                 },
                 pass_count:  0,
                 last_result: None,
@@ -257,7 +257,7 @@ impl BlobGc {
                 snap
             }
             Err(e) => {
-                let _ = GC_STATE.abort_pass(Some("scan_phase_failed"));
+                let _ = GC_STATE.abort_pass("scan_phase_failed");
                 result.abort_reason = Some("scan_phase_failed");
                 result.success = false;
                 result.tick_end = GC_STATE.advance_tick();
@@ -272,7 +272,7 @@ impl BlobGc {
         let mut workspace = match self.run_mark_phase(&scan_snapshot, &lookup) {
             Ok(ws) => ws,
             Err(e) => {
-                let _ = GC_STATE.abort_pass(Some("mark_phase_oom"));
+                let _ = GC_STATE.abort_pass("mark_phase_oom");
                 result.abort_reason = Some("mark_phase_oom");
                 result.success = false;
                 result.tick_end = GC_STATE.advance_tick();
@@ -356,7 +356,7 @@ impl BlobGc {
 
         // Creer un GcPassStats a partir du resultat pour end_pass.
         let pass_stats = build_pass_stats(&result);
-        GC_STATE.end_pass(pass_stats);
+        GC_STATE.end_pass(pass_stats.blobs_swept, pass_stats.bytes_freed);
 
         // Metriques globales.
         GC_METRICS.inc_passes_completed();
@@ -398,7 +398,7 @@ impl BlobGc {
                 *blob_id,
                 phys_size,
                 1,
-                create_epoch,
+                create_epoch.0,
                 rc,
                 false,
             );
@@ -437,16 +437,18 @@ fn build_pass_stats(
     r: &GcPassResult,
 ) -> crate::fs::exofs::gc::gc_state::GcPassStats {
     crate::fs::exofs::gc::gc_state::GcPassStats {
-        blobs_scanned: r.scan_roots_found,
-        marked_live:   r.mark_nodes_black,
-        swept:         r.sweep_white_found,
-        bytes_freed:   r.total_bytes(),
-        orphans:       r.orphan_objects,
-        inline_gc:     r.inline_collected,
-        cycles:        r.cycles_detected,
-        ticks:         r.tick_duration(),
-        completed:     r.success,
-        abort_reason:  r.abort_reason,
+        blobs_scanned:     r.scan_roots_found,
+        blobs_marked_live: r.mark_nodes_black,
+        blobs_swept:       r.sweep_white_found,
+        bytes_freed:       r.total_bytes(),
+        orphans_collected: r.orphan_objects,
+        inline_gc_count:   r.inline_collected,
+        cycles_detected:   r.cycles_detected,
+        start_tick:        r.tick_duration(),
+        end_tick:          r.tick_duration(),
+        completed:         r.success,
+        abort_reason:      r.abort_reason,
+        epoch:             0,
     }
 }
 
@@ -498,8 +500,8 @@ mod tests {
     #[test]
     fn test_set_epoch() {
         let gc = BlobGc::new();
-        gc.set_epoch(42);
-        assert_eq!(gc.get_config().current_epoch, 42);
+        gc.set_epoch(EpochId(42));
+        assert_eq!(gc.get_config().current_epoch, EpochId(42));
     }
 
     #[test]

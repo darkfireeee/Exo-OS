@@ -102,7 +102,7 @@ impl Default for SweepConfig {
         Self {
             batch_size:    SWEEP_BATCH_SIZE,
             max_per_pass:  MAX_SWEEP_PER_PASS,
-            current_epoch: 0,
+            current_epoch: EpochId(0),
         }
     }
 }
@@ -133,7 +133,7 @@ impl Sweeper {
                 config: SweepConfig {
                     batch_size:    SWEEP_BATCH_SIZE,
                     max_per_pass:  MAX_SWEEP_PER_PASS,
-                    current_epoch: 0,
+                    current_epoch: EpochId(0),
                 },
                 total_result: SweeperResult {
                     white_blobs_found:  0,
@@ -291,7 +291,7 @@ impl Sweeper {
             // Si le count atteint zero, le blob sera mis en file differee (GC-01).
             match BLOB_REFCOUNT.dec(&blob_id, current_epoch) {
                 Ok(did_defer) => {
-                    if did_defer {
+                    if did_defer.0 == 0 {
                         br.blobs_deferred = br.blobs_deferred.saturating_add(1);
                         br.bytes_deferred = br.bytes_deferred
                             .saturating_add(phys_size);
@@ -316,9 +316,10 @@ impl Sweeper {
     ///
     /// GC-01 : seuls les blobs avec `min_epoch <= current_epoch` sont liberes.
     pub fn flush_deferred(&self, current_epoch: EpochId) -> ExofsResult<u64> {
-        let flushed = BLOB_REFCOUNT.flush_deferred(current_epoch)?;
-        GC_METRICS.add_deferred_flushed(flushed as u64);
-        Ok(flushed as u64)
+        let deferred_entries = BLOB_REFCOUNT.flush_deferred(current_epoch);
+        let flushed = deferred_entries.len() as u64;
+        GC_METRICS.add_deferred_flushed(flushed);
+        Ok(flushed)
     }
 
     // ── Accesseurs ──────────────────────────────────────────────────────────

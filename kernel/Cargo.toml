@@ -17,21 +17,49 @@ path = "src/main.rs"
 # ── Dépendances (no_std uniquement) ─────────────────────────────────────────
 
 [dependencies]
-# Spinlock simple no_std (pour les gardes dans arch/ en attendant scheduler/sync/)
-spin     = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock", "once"] }
-bitflags = { version = "2",   default-features = false }
+
+# ── Workspace partagé ────────────────────────────────────────────────────────
+spin                  = { workspace = true }
+bitflags              = { workspace = true }
+zerocopy              = { workspace = true }
+hashbrown             = { workspace = true }
+intrusive-collections = { workspace = true }
+log                   = { workspace = true }
+siphasher             = { workspace = true }
+lz4_flex              = { workspace = true }
+xmas-elf              = { workspace = true }
+postcard              = { workspace = true }
+
+# ── Architecture  arch/x86_64/ ───────────────────────────────────────────────
+# arch/x86_64/boot/multiboot2.rs
+multiboot2 = { workspace = true }
+# arch/x86_64/boot/uefi.rs — types UEFI (Memory map)
+uefi-raw   = { version = "0.6", default-features = false }
+# arch/x86_64/cpu/features.rs — CPUID
+raw-cpuid  = { workspace = true }
+# arch/x86_64/acpi/
+acpi       = { workspace = true }
+# arch/x86_64/apic/ + memory/dma/ — registres MMIO
+volatile   = { workspace = true }
 
 # ── Crypto no_std (RustCrypto — vecteurs IETF, pas d'implémentation from scratch)
 # S-08 / LAC-03 / CRYPTO-CRATES : toutes les primitives crypto via crates validées.
 # INTERDIT : libsodium (requiert std+libc), ring (trop de deps système)
-blake3           = { version = "1",    default-features = false }
-hkdf             = { version = "0.12", default-features = false }
-sha2             = { version = "0.10", default-features = false, features = ["force-soft"] }   # requis par hkdf — force-soft évite SHA-NI (LLVM crash x86_64-unknown-none)
-argon2           = { version = "0.5",  default-features = false, features = ["alloc"] }
-siphasher        = { version = "0.3",  default-features = false }
-lz4_flex         = { version = "0.11", default-features = false }
-# NOTE : chacha20poly1305 supprimé — XChaCha20Poly1305 est implémenté en natif dans
-# fs/exofs/crypto/xchacha20.rs (no_std, pas de SIMD, compatible bare-metal x86_64-unknown-none)
+blake3        = { workspace = true }
+hkdf          = { workspace = true }
+sha2          = { version = "0.10", default-features = false, features = ["force-soft"] }
+  # requis par hkdf — force-soft évite SHA-NI (LLVM crash x86_64-unknown-none)
+argon2        = { workspace = true }
+# aes-gcm supprimé : implémentation native dans security/crypto/aes_gcm.rs (no_std pure-Rust)
+# polyval supprimé : dépendance transitoire de aes-gcm, causait LLVM ERROR sur x86_64-unknown-none
+x25519-dalek  = { workspace = true }
+ed25519-dalek = { workspace = true }
+# NOTE : chacha20poly1305 supprimé du kernel direct — XChaCha20Poly1305 est implémenté
+# en natif dans fs/exofs/crypto/xchacha20.rs (no_std, compatible bare-metal x86_64-unknown-none)
+
+[dev-dependencies]
+proptest          = { workspace = true }
+static_assertions = { workspace = true }
 
 # ── Configuration de profil ──────────────────────────────────────────────────
 

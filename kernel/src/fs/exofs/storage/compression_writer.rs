@@ -101,6 +101,10 @@ impl CompressResult {
     pub fn is_effective(&self) -> bool {
         self.ratio_milli < 900 // ≥ 10% de gain
     }
+
+    /// Taille des données compressées.
+    pub fn len(&self) -> usize { self.data.len() }
+    pub fn is_empty(&self) -> bool { self.data.is_empty() }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

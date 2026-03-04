@@ -193,10 +193,10 @@ impl ObjectExtent {
     /// Construit depuis la représentation on-disk.
     pub fn from_disk(d: ObjectExtentDisk) -> Self {
         Self {
-            logical_offset: { d.logical_offset },
+            logical_offset: d.logical_offset,
             physical: Extent {
-                offset: DiskOffset({ d.disk_offset }),
-                len:    { d.len },
+                offset: DiskOffset(d.disk_offset),
+                len:    d.len,
             },
             flags: d.flags,
         }

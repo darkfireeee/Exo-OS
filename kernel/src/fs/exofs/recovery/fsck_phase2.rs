@@ -129,6 +129,12 @@ pub enum Phase2ErrorKind {
     CycleDetected         = 0x06,
     /// Données du blob illisibles (erreur I/O).
     IoError               = 0xFE,
+    /// Hash des données invalide (alias de DataChecksumInvalid).
+    DataHashMismatch      = 0x10,
+    /// Checksum de l'en-tête invalide.
+    HeaderBadChecksum     = 0x11,
+    /// Magic de l'en-tête invalide (alias de BlobHeaderBadMagic).
+    HeaderBadMagic        = 0x12,
 }
 
 /// Une entrée d'erreur de la phase 2.
@@ -143,6 +149,7 @@ pub struct Phase2Error {
 // ── Compteur de références ────────────────────────────────────────────────────
 
 /// Table de comptage de références blob : `BlobId → count`.
+#[derive(Clone, Debug)]
 pub struct BlobRefCounter {
     map: BTreeMap<[u8; 32], u32>,
 }
@@ -164,7 +171,6 @@ impl BlobRefCounter {
         if let Some(count) = self.map.get_mut(id) {
             *count = count.checked_add(1).unwrap_or(u32::MAX);
         } else {
-            self.map.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             self.map.insert(*id, 1);
         }
         Ok(())
@@ -246,12 +252,34 @@ pub struct AllocEntry {
 /// Taille d'un `AllocEntry` on-disk.
 pub const ALLOC_ENTRY_SIZE: usize = core::mem::size_of::<AllocEntry>();
 
-// ── Exécuteur de la phase 2 ───────────────────────────────────────────────────
+// ── Options de configuration ─────────────────────────────────────────────────────
+
+/// Options de configuration de la Phase 2 du fsck.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Phase2Options {
+    /// Nombre maximal d'erreurs avant abandon (0 = pas de limite).
+    pub max_errors:          usize,
+    /// Reconstruire la table de références si incohérente.
+    pub rebuild_ref_table:   bool,
+}
+
+// ── Exécuteur de la phase 2 ─────────────────────────────────────────────
 
 /// Exécuteur de la phase 2 du fsck.
 pub struct FsckPhase2;
 
 impl FsckPhase2 {
+    /// Exécute la phase 2 avec options (exécute la phase 1 en interne pour obtenir le superbloc).
+    pub fn run_with_options(
+        device: &dyn BlockDevice,
+        opts:   &Phase2Options,
+    ) -> ExofsResult<Phase2Report> {
+        use super::fsck_phase1::FsckPhase1;
+        let phase1  = FsckPhase1::run(device)?;
+        let max_blobs = if opts.max_errors == 0 { PHASE2_MAX_BLOBS } else { opts.max_errors };
+        Self::run(device, &phase1, max_blobs)
+    }
+
     /// Exécute la phase 2 : lit la table d'allocation et valide chaque blob.
     ///
     /// Requiert le rapport de la phase 1 pour obtenir le superbloc.
@@ -393,7 +421,7 @@ impl FsckPhase2 {
 
                 // Incrémenter le compteur du parent si présent.
                 if let Some(parent) = hdr.parent_blob_id() {
-                    ref_counter.increment(parent.0.as_ref())?;
+                    ref_counter.increment(&parent.0)?;;
                 }
 
                 total_read += 1;

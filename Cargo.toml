@@ -30,7 +30,48 @@ license   = "MIT OR Apache-2.0"
 
 # Dépendances communes (no_std) partagées entre kernel et drivers.
 [workspace.dependencies]
-spin = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock", "once"] }
+
+# Sync kernel
+spin = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock", "once", "barrier"] }
+
+# Structures de données
+bitflags              = { version = "2",    default-features = false }
+zerocopy              = { version = "0.7",  default-features = false, features = ["derive"] }
+hashbrown             = { version = "0.13", default-features = false }
+# NOTE: 0.14+ avec features=["alloc"] tire rustc-std-workspace-alloc → conflit E0464 avec -Z build-std
+intrusive-collections = { version = "0.9",  default-features = false }
+
+# Architecture
+multiboot2 = { version = "0.24",   default-features = false }
+raw-cpuid  = { version = "11",  default-features = false }
+acpi       = { version = "5",   default-features = false }
+volatile   = { version = "0.5", default-features = false }
+
+# Cryptographie (partagée kernel + exofs, versionnée une seule fois)
+blake3           = { version = "1",    default-features = false, features = ["pure"] }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["xchacha20"] }
+aes-gcm          = { version = "0.10", default-features = false }
+x25519-dalek     = { version = "2",    default-features = false, features = ["static_secrets"] }
+ed25519-dalek    = { version = "2",    default-features = false }
+hkdf             = { version = "0.12", default-features = false }
+argon2           = { version = "0.5",  default-features = false }
+siphasher        = { version = "0.3",  default-features = false }
+
+# Compression
+lz4_flex = { version = "0.11", default-features = false }
+
+# ELF
+xmas-elf = { version = "0.9", default-features = false }
+
+# IPC
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+
+# Logging
+log = { version = "0.4", default-features = false }
+
+# Tests
+proptest          = { version = "1", default-features = false, features = ["alloc"] }
+static_assertions = { version = "1" }
 
 [profile.dev]
 opt-level     = 0

@@ -524,7 +524,7 @@ impl ExoarToTarConverter {
         // RECUR-01 : boucle while
         while i < blobs.len() {
             let (blob_id, name, data) = blobs[i];
-            self.emitter.emit_blob(sink, blob_id, data, name, mtime)?;
+            self.emitter.emit_blob(sink, &blob_id, data, name, mtime)?;
             i = i.wrapping_add(1);
         }
         self.emitter.finalize(sink)?;

@@ -371,7 +371,7 @@ impl BlobIdSet {
     /// Crée un ensemble vide.
     pub const fn new() -> Self {
         Self {
-            ids:   [[0u8; 32]; BLOB_ID_SET_CAP],
+            ids:   [BlobId([0u8; 32]); BLOB_ID_SET_CAP],
             count: 0,
         }
     }
@@ -469,15 +469,15 @@ impl BlobIdMerkleNode {
 pub fn merkle_combine(a: BlobId, b: BlobId) -> BlobId {
     let mut out = [0u8; 32];
     for i in 0..32 {
-        out[i] = a[i] ^ b[(i + 13) % 32] ^ b[i] ^ a[(i + 7) % 32];
+        out[i] = a.0[i] ^ b.0[(i + 13) % 32] ^ b.0[i] ^ a.0[(i + 7) % 32];
     }
     // Mélange du CRC pour briser les symétries.
-    let crc_a = crc32c::crc32c(&a);
-    let crc_b = crc32c::crc32c(&b);
+    let crc_a = crc32c::crc32c(&a.0);
+    let crc_b = crc32c::crc32c(&b.0);
     let combined = crc_a.wrapping_add(crc_b).wrapping_mul(0x9e37_79b9);
     let cb = combined.to_le_bytes();
     out[0] ^= cb[0]; out[1] ^= cb[1]; out[2] ^= cb[2]; out[3] ^= cb[3];
-    out
+    BlobId::from_raw(out)
 }
 
 /// Retourne les 4 premiers octets d'un BlobId comme `u32` pour le bucketing.
@@ -485,7 +485,7 @@ pub fn merkle_combine(a: BlobId, b: BlobId) -> BlobId {
 /// Utile pour répartir les BlobIds dans des buckets de hash avant déduplication.
 #[inline]
 pub fn blob_id_prefix_u32(b: &BlobId) -> u32 {
-    u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+    u32::from_le_bytes([b.0[0], b.0[1], b.0[2], b.0[3]])
 }
 
 /// Comparaison lexicographique de deux BlobIds.

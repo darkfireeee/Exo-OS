@@ -255,7 +255,7 @@ impl BlobReader {
 
         // ── 5. Vérification BlobId (HASH-02) ──────────────────────
         let id_verified = if mode == BlobVerifyMode::Full {
-            if verify_blob_id(&data, &blob_id) {
+            if verify_blob_id(&blob_id, &data) {
                 BLOB_READER_STATS.blob_id_ok.fetch_add(1, Ordering::Relaxed);
                 true
             } else {
@@ -321,7 +321,7 @@ impl BlobReader {
                 Ok(data)
             }
             CompressionType::Lz4 | CompressionType::Zstd => {
-                let result = DecompressReader::decompress_block(payload, algo, original_size as usize);
+                let result = DecompressReader::decompress_raw(payload, algo, original_size as usize);
                 match result {
                     Ok(d) => Ok(d),
                     Err(e) => {

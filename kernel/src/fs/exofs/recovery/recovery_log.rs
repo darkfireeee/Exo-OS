@@ -516,6 +516,9 @@ pub enum RecoveryEvent {
     FsckStarted,
     FsckDone,
     RepairApplied(u32),
+    RecoveryModuleLoaded,
+    RecoveryModuleUnloaded,
+    RepairStarted,
 }
 
 impl RecoveryLog {
@@ -530,6 +533,9 @@ impl RecoveryLog {
             RecoveryEvent::FsckStarted         => self.log_fsck_started(),
             RecoveryEvent::FsckDone            => self.log_fsck_done(0),
             RecoveryEvent::RepairApplied(n)    => self.log_repair_applied(n, 0),
+            RecoveryEvent::RecoveryModuleLoaded   => self.log(RecoveryLogCategory::BootStart, 0),
+            RecoveryEvent::RecoveryModuleUnloaded => self.log(RecoveryLogCategory::BootDone, 0),
+            RecoveryEvent::RepairStarted          => self.log(RecoveryLogCategory::RepairApplied, 0),
         }
     }
 }

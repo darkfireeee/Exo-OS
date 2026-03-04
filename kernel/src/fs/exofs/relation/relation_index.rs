@@ -73,7 +73,6 @@ impl IndexInner {
             v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             v.push(id);
         } else {
-            map.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             let mut v = Vec::new();
             v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             v.push(id);

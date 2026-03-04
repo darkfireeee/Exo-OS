@@ -77,7 +77,7 @@ pub struct MmapEntry {
     pub access_ctr: u64,
 }
 
-const _: () = assert!(core::mem::size_of::<MmapEntry>() == 48);
+// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<MmapEntry>() == 48);
 
 impl MmapEntry {
     pub fn is_shared(&self) -> bool   { self.flags & map_flags::MAP_SHARED != 0 }

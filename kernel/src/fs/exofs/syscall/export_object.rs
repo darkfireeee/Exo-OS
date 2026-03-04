@@ -139,8 +139,7 @@ fn export_blob(blob_id: &BlobId, flags: u32) -> ExofsResult<Vec<u8>> {
 fn export_by_fd(fd: u32, flags: u32) -> ExofsResult<Vec<u8>> {
     let bid = OBJECT_TABLE.lock()
         .map_err(|_| ExofsError::InternalError)?
-        .blob_id_of(fd)
-        .ok_or(ExofsError::ObjectNotFound)?;
+        .blob_id_of(fd)?;;
     export_blob(&bid, flags)
 }
 
@@ -211,7 +210,7 @@ pub fn extract_payload(export_data: &[u8]) -> ExofsResult<&[u8]> {
 pub fn export_to_blob(src: &BlobId, dst: &BlobId) -> ExofsResult<u64> {
     let payload = export_blob(src, 0)?;
     let sz = payload.len() as u64;
-    BLOB_CACHE.insert(*dst, &payload).map_err(|_| ExofsError::NoSpace)?;
+    BLOB_CACHE.insert(*dst, payload.to_vec()).map_err(|_| ExofsError::NoSpace)?;
     Ok(sz)
 }
 

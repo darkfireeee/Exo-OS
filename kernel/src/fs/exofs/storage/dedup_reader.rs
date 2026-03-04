@@ -176,7 +176,7 @@ impl DedupReader {
         STORAGE_STATS.add_read(n as u64);
 
         // HDR-03 : vérifier l'intégrité via le BlobId.
-        if !verify_blob_id(&buf[..n], blob_id) {
+        if !verify_blob_id(blob_id, &buf[..n]) {
             self.verify_errors.fetch_add(1, Ordering::Relaxed);
             STORAGE_STATS.inc_io_error();
             return Err(ExofsError::ChecksumMismatch);
@@ -347,7 +347,7 @@ impl DedupReader {
 
 /// Vérifie l'intégrité d'un blob en mémoire par rapport à son BlobId.
 pub fn verify_blob_integrity(data: &[u8], blob_id: &BlobId) -> bool {
-    verify_blob_id(data, blob_id)
+    verify_blob_id(blob_id, data)
 }
 
 /// Résout et lit un blob en un seul appel.

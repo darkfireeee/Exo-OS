@@ -63,6 +63,11 @@ impl AlertLevel {
 pub struct AlertCode(pub u16);
 
 impl AlertCode {
+    /// Construit un code d'alerte.
+    pub const fn new(code: u16) -> Self { Self(code) }
+}
+
+impl AlertCode {
     pub const IO_ERR:        Self = Self(0x0100);
     pub const OOM:           Self = Self(0x0200);
     pub const CHECKSUM_FAIL: Self = Self(0x0300);

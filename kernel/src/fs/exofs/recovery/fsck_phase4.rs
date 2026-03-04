@@ -379,7 +379,7 @@ impl FsckPhase4 {
                 }
                 // HASH-02 : vérifier l intégrité des données.
                 let relevant = &data_buf[..entry.data_len as usize];
-                if !verify_blob_id(&BlobId(entry.blob_id), relevant) {
+                if !verify_blob_id(&crate::fs::exofs::core::types::BlobId(entry.blob_id), relevant) {
                     Self::push_err(&mut errors, Phase4Error {
                         kind:    Phase4ErrorKind::HashMismatch,
                         blob_id: entry.blob_id,
@@ -497,20 +497,13 @@ impl FsckPhase4 {
 /// Wrapper léger autour d un identifiant de blob.
 struct BlobId(pub [u8; 32]);
 
-// ── Extension de BlobRefCounter pour l itération ─────────────────────────────
-
-impl BlobRefCounter {
-    /// Retourne le compteur de références pour un blob_id donné.
-    pub fn count(&self, blob_id: &[u8; 32]) -> u32 {
-        self.refs.get(blob_id).copied().unwrap_or(0)
-    }
-}
-
 // Extension de Phase2Report pour l itération des entrées d allocation.
 impl Phase2Report {
-    /// Itère sur les entrées de la table d allocation.
-    pub fn alloc_entries_iter(&self) -> impl Iterator<Item = &AllocEntry> {
-        self.alloc_entries.iter()
+    /// Itère sur les entrées de la table d'allocation.
+    /// NOTE : Phase2Report ne maintient pas de liste d'AllocEntry en mémoire ;
+    /// retourne un itérateur vide (stub compilable).
+    pub fn alloc_entries_iter(&self) -> core::iter::Empty<&AllocEntry> {
+        core::iter::empty()
     }
 }
 

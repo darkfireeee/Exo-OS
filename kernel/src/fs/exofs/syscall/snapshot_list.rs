@@ -118,7 +118,7 @@ fn save_registry(reg_id: BlobId, ids: &[[u8; 32]]) -> ExofsResult<()> {
         while m < 32 { buf.push(ids[k][m]); m = m.wrapping_add(1); }
         k = k.wrapping_add(1);
     }
-    BLOB_CACHE.insert(reg_id, &buf)
+    BLOB_CACHE.insert(reg_id, buf.to_vec())
 }
 
 /// Enregistre un nouveau SnapshotId dans le registre du source.
@@ -262,7 +262,7 @@ mod tests {
 
     fn src(path: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, b"src").unwrap();
+        BLOB_CACHE.insert(id, b"src".to_vec()).unwrap();
         id
     }
 
@@ -275,7 +275,7 @@ mod tests {
         let ep = epoch.to_le_bytes();
         let mut i = 0usize;
         while i < 8 { data[8 + i] = ep[i]; i = i.wrapping_add(1); }
-        BLOB_CACHE.insert(sid, &data).unwrap();
+        BLOB_CACHE.insert(sid, data.to_vec()).unwrap();
         register_snapshot(source, sid.as_bytes()).unwrap();
     }
 
@@ -421,7 +421,7 @@ mod extra_tests {
 
     fn src(p: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(p);
-        BLOB_CACHE.insert(id, b"x").unwrap();
+        BLOB_CACHE.insert(id, b"x".to_vec()).unwrap();
         id
     }
 

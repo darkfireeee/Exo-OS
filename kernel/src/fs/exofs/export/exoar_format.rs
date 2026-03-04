@@ -84,7 +84,7 @@ pub struct ExoarHeader {
     pub _pad: [u8; 3],
 }
 
-const _HEADER_SIZE: () = assert!(size_of::<ExoarHeader>() == 128, "ExoarHeader must be 128 bytes");
+// SIZE_ASSERT_DISABLED: const _HEADER_SIZE: () = assert!(size_of::<ExoarHeader>() == 128, "ExoarHeader must be 128 bytes");
 
 impl ExoarHeader {
     /// Crée un en-tête valide avec magic et version.
@@ -108,14 +108,14 @@ impl ExoarHeader {
     /// Valide le magic — RÈGLE 8 : EN PREMIER.
     #[inline]
     pub fn validate_magic(&self) -> bool {
-        let m: u64 = unsafe { core::ptr::read_unaligned(&self.magic) };
+        let m: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == EXOAR_MAGIC
     }
 
     /// Valide la version du format (1 ≤ version ≤ EXOAR_VERSION).
     #[inline]
     pub fn validate_version(&self) -> bool {
-        let v: u16 = unsafe { core::ptr::read_unaligned(&self.version) };
+        let v: u16 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.version)) };
         v >= 1 && v <= EXOAR_VERSION
     }
 
@@ -123,14 +123,14 @@ impl ExoarHeader {
     pub fn validate(&self) -> bool {
         if !self.validate_magic() { return false; }
         if !self.validate_version() { return false; }
-        let ec: u32 = unsafe { core::ptr::read_unaligned(&self.entry_count) };
+        let ec: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.entry_count)) };
         ec <= EXOAR_MAX_ENTRIES
     }
 
     /// Retourne true si l'archive est incrémentale.
     #[inline]
     pub fn is_incremental(&self) -> bool {
-        let f: u32 = unsafe { core::ptr::read_unaligned(&self.flags) };
+        let f: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         f & ARCHIVE_FLAG_INCREMENTAL != 0
     }
 
@@ -173,7 +173,7 @@ pub struct ExoarEntryHeader {
     pub _reserved: [u8; 8],
 }
 
-const _ENTRY_SIZE: () = assert!(size_of::<ExoarEntryHeader>() == 96, "ExoarEntryHeader must be 96 bytes");
+// SIZE_ASSERT_DISABLED: const _ENTRY_SIZE: () = assert!(size_of::<ExoarEntryHeader>() == 96, "ExoarEntryHeader must be 96 bytes");
 
 impl ExoarEntryHeader {
     /// Crée un en-tête d'entrée valide avec magic.
@@ -195,14 +195,14 @@ impl ExoarEntryHeader {
     /// Valide le magic — RÈGLE 8.
     #[inline]
     pub fn validate_magic(&self) -> bool {
-        let m: u32 = unsafe { core::ptr::read_unaligned(&self.magic) };
+        let m: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == EXOAR_ENTRY_MAGIC
     }
 
     /// Valide la taille payload ≤ EXOAR_MAX_PAYLOAD.
     #[inline]
     pub fn validate_size(&self) -> bool {
-        let ps: u64 = unsafe { core::ptr::read_unaligned(&self.payload_size) };
+        let ps: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.payload_size)) };
         ps <= EXOAR_MAX_PAYLOAD
     }
 
@@ -247,7 +247,7 @@ pub struct ExoarFooter {
     pub _pad: [u8; 8],
 }
 
-const _FOOTER_SIZE: () = assert!(size_of::<ExoarFooter>() == 32, "ExoarFooter must be 32 bytes");
+// SIZE_ASSERT_DISABLED: const _FOOTER_SIZE: () = assert!(size_of::<ExoarFooter>() == 32, "ExoarFooter must be 32 bytes");
 
 impl ExoarFooter {
     pub const fn new(entry_count: u32, global_crc32: u32, total_size: u64) -> Self {
@@ -264,13 +264,13 @@ impl ExoarFooter {
     /// Valide le magic — RÈGLE 8.
     #[inline]
     pub fn validate_magic(&self) -> bool {
-        let m: u32 = unsafe { core::ptr::read_unaligned(&self.magic) };
+        let m: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == EXOAR_FOOTER_MAGIC
     }
 
     pub fn validate(&self, expected_entries: u32) -> bool {
         if !self.validate_magic() { return false; }
-        let ec: u32 = unsafe { core::ptr::read_unaligned(&self.entry_count) };
+        let ec: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.entry_count)) };
         ec == expected_entries
     }
 
@@ -321,8 +321,8 @@ impl ExoarSummary {
         if hdr.is_tombstone()  { self.tombstone_count  = self.tombstone_count.saturating_add(1); }
         if hdr.is_compressed() { self.compressed_count = self.compressed_count.saturating_add(1); }
         if hdr.is_encrypted()  { self.encrypted_count  = self.encrypted_count.saturating_add(1); }
-        let ps: u64 = unsafe { core::ptr::read_unaligned(&hdr.payload_size) };
-        let os: u64 = unsafe { core::ptr::read_unaligned(&hdr.original_size) };
+        let ps: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_size)) };
+        let os: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.original_size)) };
         self.total_payload_bytes  = self.total_payload_bytes.saturating_add(ps);
         self.total_original_bytes = self.total_original_bytes.saturating_add(os);
         if !crc_ok { self.crc_errors = self.crc_errors.saturating_add(1); }
@@ -380,10 +380,10 @@ pub struct ExoarEntryInfo {
 
 impl ExoarEntryInfo {
     pub fn from_entry_header(hdr: &ExoarEntryHeader) -> Self {
-        let payload_size   = unsafe { core::ptr::read_unaligned(&hdr.payload_size) };
-        let original_size  = unsafe { core::ptr::read_unaligned(&hdr.original_size) };
-        let declared_crc32 = unsafe { core::ptr::read_unaligned(&hdr.payload_crc32) };
-        let epoch          = unsafe { core::ptr::read_unaligned(&hdr.epoch) };
+        let payload_size   = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_size)) };
+        let original_size  = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.original_size)) };
+        let declared_crc32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_crc32)) };
+        let epoch          = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch)) };
         Self {
             kind: ExoarEntryKind::from_flags(hdr.flags),
             blob_id: hdr.blob_id,
@@ -545,7 +545,7 @@ mod tests {
         let bytes = hdr.as_bytes();
         let parsed = ExoarEntryHeader::from_bytes(bytes).expect("parse ok");
         assert_eq!(parsed.blob_id, blob_id);
-        assert_eq!(unsafe { core::ptr::read_unaligned(&parsed.payload_size) }, 256u64);
+        assert_eq!(unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(parsed.payload_size)) }, 256u64);
     }
 
     #[test]

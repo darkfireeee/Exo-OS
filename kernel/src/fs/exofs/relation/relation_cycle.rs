@@ -124,7 +124,6 @@ impl RelationCycleDetector {
         let mut n_explored: u32 = 0;
 
         // Initialisation
-        state.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         state.insert(*start.as_bytes(), VisitState::InStack);
         path.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         path.push(start);
@@ -184,7 +183,6 @@ impl RelationCycleDetector {
                             let new_depth = cur_depth
                                 .checked_add(1)
                                 .ok_or(ExofsError::OffsetOverflow)?;
-                            state.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                             state.insert(nbr_key, VisitState::InStack);
                             path.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                             path.push(nbr);
@@ -208,7 +206,6 @@ impl RelationCycleDetector {
 
         for (from, _) in all_edges {
             if seen.contains_key(from.as_bytes()) { continue; }
-            seen.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             seen.insert(*from.as_bytes(), ());
             let report = Self::detect_from(from, max_depth)?;
             if report.has_cycle { return Ok(report); }
@@ -227,7 +224,6 @@ impl RelationCycleDetector {
         let mut visited: BTreeMap<[u8; 32], ()> = BTreeMap::new();
         let mut queue: VecDeque<(BlobId, u32)> = VecDeque::new();
 
-        visited.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         visited.insert(*to.as_bytes(), ());
         queue.push_back((*to, 0));
 
@@ -245,7 +241,6 @@ impl RelationCycleDetector {
 
             for nbr in RELATION_GRAPH.get_neighbors(&node) {
                 if !visited.contains_key(nbr.as_bytes()) {
-                    visited.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     visited.insert(*nbr.as_bytes(), ());
                     queue.push_back((nbr, next_depth));
                 }
@@ -289,9 +284,7 @@ impl TopologicalSorter {
         let mut adj:       BTreeMap<[u8; 32], Vec<BlobId>> = BTreeMap::new();
 
         for n in nodes {
-            in_degree.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             in_degree.entry(*n.as_bytes()).or_insert(0);
-            adj.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             adj.entry(*n.as_bytes()).or_insert_with(Vec::new);
         }
 

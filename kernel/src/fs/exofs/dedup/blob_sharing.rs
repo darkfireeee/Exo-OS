@@ -135,7 +135,6 @@ impl BlobSharing {
                 return Err(ExofsError::NoMemory);
             }
             let entry = SharedChunkRef::new(chunk_blake3, blob_id)?;
-            map.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             map.insert(chunk_blake3, entry);
         }
         self.release();

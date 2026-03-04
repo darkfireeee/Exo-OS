@@ -266,7 +266,7 @@ impl ExtentTree {
         if self.count < 2 {
             return 0;
         }
-        let mut merged = 0;
+        let mut merged: usize = 0;
         // On collecte tous les extents, fusionne, puis on reconstruit.
         let mut all: Vec<ObjectExtent> = self.iter().cloned().collect();
         let mut i = 0;

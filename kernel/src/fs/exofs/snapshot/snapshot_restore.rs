@@ -206,7 +206,7 @@ impl SnapshotRestore {
 
         // HASH-02 : vérifier l'intégrité sur données RAW
         if opts.verify_integrity {
-            if !verify_blob_id(&data, &blob_id) {
+            if !verify_blob_id(&blob_id, &data) {
                 return Err(RestoreErrorKind::IntegrityFailed);
             }
         }
@@ -280,7 +280,6 @@ impl MemBlobSource {
 
     /// OOM-02 : try_reserve avant push
     pub fn add_blob(&mut self, snap_id: SnapshotId, blob_id: BlobId, data: Vec<u8>) -> ExofsResult<()> {
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         self.entries.insert(*blob_id.as_bytes(), data);
         let list = self.snap_blobs.entry(snap_id.0).or_insert_with(Vec::new);
         list.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;

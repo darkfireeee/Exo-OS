@@ -110,19 +110,11 @@ impl ObjectCacheInner {
         }
 
         // OOM-02 : tente d'insérer.
-        // BTreeMap::insert peut allouer. On ne peut pas détecter OOM proprement
-        // sans std, mais on évite via la politique d'éviction.
-        // Si le heap est saturé après éviction, on retourne NoMemory.
-        let result = core::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
-            self.map.insert(id.0, CacheEntry::new(obj, e));
-        }));
-        match result {
-            Ok(_) => {
-                self.stats.inserts = self.stats.inserts.saturating_add(1);
-                Ok(())
-            }
-            Err(_) => Err(ExofsError::NoMemory),
-        }
+        // core::panic::catch_unwind n'existe pas en no_std — insertion directe.
+        // Si OOM, l'alloc_error_handler du noyau sera déclenché.
+        self.map.insert(id.0, CacheEntry::new(obj, e));
+        self.stats.inserts = self.stats.inserts.saturating_add(1);
+        Ok(())
     }
 
     /// Retourne la référence à l'objet si présent (cache hit).

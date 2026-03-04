@@ -193,7 +193,7 @@ impl ObjectLoader {
         if let Some(inline) = obj.physical_ref.as_inline() {
             inline.validate()?;
             let computed = crate::fs::exofs::core::compute_blob_id(
-                inline.data_slice()
+                inline.as_slice()
             );
             if computed != obj.blob_id {
                 return Err(ExofsError::Corrupt);

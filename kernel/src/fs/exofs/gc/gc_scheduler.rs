@@ -229,7 +229,7 @@ impl GcScheduler {
         }
 
         // Evaluer les conditions via GC_TUNER.
-        if let Some(trigger_reason) = GC_TUNER.should_trigger(system_state) {
+        if let Some(trigger_reason) = GC_TUNER.should_trigger(system_state, current_tick) {
             let reason = ScheduleReason::from_trigger(trigger_reason);
             self.record_trigger(reason, current_tick);
             return ScheduleDecision::RunNow { reason };
@@ -287,7 +287,7 @@ impl GcScheduler {
 
     /// Met a jour l'epoch courante.
     pub fn set_epoch(&self, epoch: EpochId) {
-        self.current_epoch.store(epoch, Ordering::Relaxed);
+        self.current_epoch.store(epoch.0, Ordering::Relaxed);
     }
 
     /// Active ou desactive le GC.

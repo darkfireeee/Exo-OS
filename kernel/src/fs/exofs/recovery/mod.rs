@@ -222,10 +222,10 @@ pub fn shutdown() {
 /// Retourne un bilan de santé complet du module recovery.
 pub fn verify_health() -> RecoveryHealth {
     let repairs_ok = REPAIR_LOG.all_recent_ok(16);
-    let has_critical_audit = RECOVERY_AUDIT.has_critical_violations();
+    let has_critical_audit = RECOVERY_AUDIT.violation_count() > 0;
     RecoveryHealth {
-        log_events_total:    RECOVERY_LOG.total(),
-        audit_entries_total: RECOVERY_AUDIT.total(),
+        log_events_total:    RECOVERY_LOG.total_written() as usize,
+        audit_entries_total: RECOVERY_AUDIT.total() as usize as usize,
         checkpoint_count:    CHECKPOINT_STORE.count(),
         repairs_total:       REPAIR_LOG.total(),
         repairs_ok,
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_recovery_log_reexport() {
-        let total = RECOVERY_LOG.total();
+        let total = RECOVERY_LOG.total_written() as usize;
         assert!(total < usize::MAX);
     }
 
@@ -291,65 +291,5 @@ mod tests {
     fn test_checkpoint_store_reexport() {
         let count = CHECKPOINT_STORE.count();
         assert!(count < usize::MAX);
-    }
-}
-
-// ── Extensions de statics pour le bilan de santé ─────────────────────────────
-
-impl RecoveryLog {
-    /// Nombre total d événements enregistrés (peut dépasser la capacité).
-    pub fn total(&self) -> usize {
-        use core::sync::atomic::Ordering;
-        self.count.load(Ordering::Relaxed)
-    }
-}
-
-impl RecoveryAudit {
-    /// Nombre total d entrées enregistrées.
-    pub fn total(&self) -> usize {
-        use core::sync::atomic::Ordering;
-        self.count.load(Ordering::Relaxed)
-    }
-
-    /// Initialise l audit (enregistre un événement de démarrage).
-    pub fn record_init(&self) {
-        use super::recovery_audit::AuditEventKind;
-        self.record(AuditEventKind::RecoveryModuleInit, AuditSeverity::Info, 0, 0, 0);
-    }
-
-    /// `true` si des violations critiques ont été enregistrées.
-    pub fn has_critical_violations(&self) -> bool {
-        use super::recovery_audit::AuditSeverity;
-        self.read_violations(1)
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
-    }
-
-    /// Enregistre la fin d un fsck.
-    pub fn record_fsck_done(&self, errors: u32, phases_mask: u8) {
-        use super::recovery_audit::AuditEventKind;
-        let severity = if errors > 0 { AuditSeverity::Warning } else { AuditSeverity::Info };
-        self.record(AuditEventKind::FsckPhaseCompleted, severity, 0, errors as u64, phases_mask as u64);
-    }
-
-    /// Enregistre une action de réparation.
-    pub fn record_repair_action(&self, _kind: &str, success: bool) {
-        use super::recovery_audit::AuditEventKind;
-        let severity = if success { AuditSeverity::Info } else { AuditSeverity::Warning };
-        self.record(AuditEventKind::RepairActionApplied, severity, 0, success as u64, 0);
-    }
-
-    /// Enregistre la fin d une phase.
-    pub fn record_phase_done(&self, phase: u8, errors: u32) {
-        use super::recovery_audit::AuditEventKind;
-        let severity = if errors > 0 { AuditSeverity::Warning } else { AuditSeverity::Info };
-        self.record(AuditEventKind::FsckPhaseCompleted, severity, 0, phase as u64, errors as u64);
-    }
-}
-
-impl CheckpointStore {
-    /// Retourne le nombre de checkpoints stockés.
-    pub fn count(&self) -> usize {
-        self.len()
     }
 }

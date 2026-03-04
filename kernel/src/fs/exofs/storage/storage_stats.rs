@@ -181,6 +181,8 @@ impl StorageStats {
     }
 
     #[inline]
+    pub fn inc_io_batch(&self) { self.write_ops.fetch_add(1, Ordering::Relaxed); }
+
     pub fn inc_io_error(&self) {
         self.io_errors.fetch_add(1, Ordering::Relaxed);
     }
@@ -250,8 +252,16 @@ impl StorageStats {
     }
 
     #[inline]
+    pub fn inc_compress_op(&self) { self.compress_ops.fetch_add(1, Ordering::Relaxed); }
+
+    pub fn add_compress_bytes_in(&self, n: u64) { self.compress_bytes_in.fetch_add(n, Ordering::Relaxed); }
+
     pub fn inc_compress_error(&self) {
         self.compress_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn add_compress_bytes_out(&self, n: u64) {
+        self.compress_bytes_out.fetch_add(n, Ordering::Relaxed);
     }
 
     /// Ratio de compression en millièmes (1000 = aucune compression).

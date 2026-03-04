@@ -21,7 +21,7 @@ pub mod vfs_compat;
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use fcntl_lock::{
-    LOCK_TABLE,
+    FCNTL_LOCK_TABLE,
     LockKind,
     FcntlCmd,
     ByteRangeLock,
@@ -132,8 +132,8 @@ pub struct PosixBridgeStats {
 /// Collecte les statistiques de tous les sous-modules.
 pub fn posix_bridge_stats() -> PosixBridgeStats {
     PosixBridgeStats {
-        lock_count:       LOCK_TABLE.lock_count_for(0),       // placeholder — total via sum
-        locked_objects:   LOCK_TABLE.locked_object_count(),
+        lock_count:       FCNTL_LOCK_TABLE.lock_count_for(0),       // placeholder — total via sum
+        locked_objects:   FCNTL_LOCK_TABLE.locked_object_count(),
         inode_count:      INODE_EMULATION.count(),
         next_ino:         INODE_EMULATION.peek_next_ino(),
         mmap_count:       MMAP_TABLE.mapping_count(),
@@ -175,7 +175,7 @@ pub fn posix_bridge_init() -> ExofsResult<()> {
 pub fn posix_bridge_shutdown() {
     // Libère les tables dans l'ordre inverse de leur initialisation.
     MMAP_TABLE.clear();
-    LOCK_TABLE.clear();
+    FCNTL_LOCK_TABLE.clear();
     INODE_EMULATION.clear();
     BRIDGE_INITIALIZED.store(false, Ordering::Release);
     BRIDGE_SHUTDOWN_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -188,7 +188,7 @@ pub fn posix_bridge_shutdown() {
 /// - Ferme tous les fds du pid.
 pub fn posix_bridge_process_exit(pid: u32) {
     MMAP_TABLE.munmap_all_pid(pid);
-    LOCK_TABLE.release_all_pid(pid as u64);
+    FCNTL_LOCK_TABLE.release_all_pid(pid as u64);
     vfs_close_all_pid(pid);
 }
 
@@ -212,7 +212,7 @@ pub fn posix_bridge_check() -> usize {
 /// Retourne le nombre total de verrous actifs dans la table globale.
 /// Parcours RECUR-01 : while.
 pub fn total_lock_count() -> usize {
-    let object_count = LOCK_TABLE.locked_object_count();
+    let object_count = FCNTL_LOCK_TABLE.locked_object_count();
     // Somme les verrous objet par objet.
     // Ici on n'a pas d'accès direct à la liste des object_ids depuis l'extérieur,
     // donc on retourne une borne approximative via locked_object_count.

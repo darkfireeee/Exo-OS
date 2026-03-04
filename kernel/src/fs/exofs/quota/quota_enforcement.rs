@@ -223,16 +223,15 @@ impl QuotaEnforcer {
                 }).unwrap_or(0);
                 self._build(key, EnforcementAction::DenyGrace, used, limits.hard_bytes, request_bytes, tick)
             } else {
-                QUOTA_AUDIT.log_hard_denial(key.entity_id, used, limits.hard_bytes, tick);
+                QUOTA_AUDIT.log_hard_denial(key, used, limits.hard_bytes);
                 self._build(key, EnforcementAction::Deny, used, limits.hard_bytes, request_bytes, tick)
             }
         } else if limits.soft_bytes != u64::MAX && projected > limits.soft_bytes {
             // Soft breach
             if let Some(en) = entry { if en.soft_breach_tick == 0 {
-                QUOTA_TRACKER.record_soft_breach(key, tick)
-                    .unwrap_or_default();
+                QUOTA_TRACKER.record_soft_breach(key, tick);
             }}
-            QUOTA_AUDIT.log_soft_breach(key.entity_id, used, limits.soft_bytes, tick);
+            QUOTA_AUDIT.log_soft_breach(key, used, limits.soft_bytes);
             self._build(key, EnforcementAction::AllowWithWarning, used, limits.soft_bytes, request_bytes, tick)
         } else {
             self._make_allow(key)
@@ -255,10 +254,10 @@ impl QuotaEnforcer {
         let projected = used.saturating_add(request_blobs);
 
         let result = if limits.hard_blobs != u64::MAX && projected > limits.hard_blobs {
-            QUOTA_AUDIT.log_hard_denial(key.entity_id, used, limits.hard_blobs, tick);
+            QUOTA_AUDIT.log_hard_denial(key, used, limits.hard_blobs);
             self._build(key, EnforcementAction::Deny, used, limits.hard_blobs, request_blobs, tick)
         } else if limits.soft_blobs != u64::MAX && projected > limits.soft_blobs {
-            QUOTA_AUDIT.log_soft_breach(key.entity_id, used, limits.soft_blobs, tick);
+            QUOTA_AUDIT.log_soft_breach(key, used, limits.soft_blobs);
             self._build(key, EnforcementAction::AllowWithWarning, used, limits.soft_blobs, request_blobs, tick)
         } else {
             self._make_allow(key)
@@ -281,10 +280,10 @@ impl QuotaEnforcer {
         let projected = used.saturating_add(request_inodes);
 
         let result = if limits.hard_inodes != u64::MAX && projected > limits.hard_inodes {
-            QUOTA_AUDIT.log_hard_denial(key.entity_id, used, limits.hard_inodes, tick);
+            QUOTA_AUDIT.log_hard_denial(key, used, limits.hard_inodes);
             self._build(key, EnforcementAction::Deny, used, limits.hard_inodes, request_inodes, tick)
         } else if limits.soft_inodes != u64::MAX && projected > limits.soft_inodes {
-            QUOTA_AUDIT.log_soft_breach(key.entity_id, used, limits.soft_inodes, tick);
+            QUOTA_AUDIT.log_soft_breach(key, used, limits.soft_inodes);
             self._build(key, EnforcementAction::AllowWithWarning, used, limits.soft_inodes, request_inodes, tick)
         } else {
             self._make_allow(key)

@@ -23,7 +23,9 @@ rustflags = [
   # Désactive les extensions CPU non disponibles en contexte kernel bare-metal.
   # sha / aes : SHA-NI et AES-NI génèrent du code SIMD que LLVM ne peut pas baisser
   # pour x86_64-unknown-none (LLVM ERROR: Do not know how to split the operator).
-  "-C", "target-feature=-sha,-aes,-avx512f,-avx512bw,-avx512dq,-avx512vl",
+  "-C", "target-feature=-sha,-aes,-avx512f,-avx512bw,-avx512dq,-avx512vl,-avx2,-avx,-pclmul,-sse4.2,-sse4.1,-ssse3,-sse2",
+  "--cfg", "curve25519_dalek_backend=\"serial\"",
+  "--cfg", "curve25519_dalek_backend=\"serial\"",
 ]
 
 [unstable]

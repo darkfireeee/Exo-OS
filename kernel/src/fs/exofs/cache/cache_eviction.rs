@@ -64,7 +64,7 @@ pub struct EvictionPolicy {
 
 impl EvictionPolicy {
     /// Crée une politique avec l'algorithme donné.
-    pub fn new(algorithm: EvictionAlgorithm) -> Self {
+    pub const fn new(algorithm: EvictionAlgorithm) -> Self {
         EvictionPolicy {
             algorithm,
             entries:    BTreeMap::new(),
@@ -79,7 +79,6 @@ impl EvictionPolicy {
 
     /// Enregistre une nouvelle entrée.
     pub fn insert(&mut self, blob: BlobId, size: u64) -> ExofsResult<()> {
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         let clock = self.next_clock();
         self.entries.insert(blob, EntryMeta {
             access_order: clock,

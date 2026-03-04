@@ -348,16 +348,13 @@ impl Phase3Context {
         flags:  u8,
         depth:  u32,
     ) -> ExofsResult<()> {
-        self.seen.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         self.seen.insert(sid, (lba, flags));
-        self.depths.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         self.depths.insert(sid, depth);
         Ok(())
     }
 
     /// Incrémente le compteur d enfants du parent.
     fn add_child(&mut self, parent_id: u64) -> ExofsResult<()> {
-        self.children.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         let cnt = self.children.entry(parent_id).or_insert(0);
         *cnt = cnt.saturating_add(1);
         Ok(())
@@ -484,7 +481,6 @@ impl FsckPhase3 {
             // Snapshots supprimés : juste enregistrer pour la détection de références.
             if hdr.is_deleted() {
                 deleted_skipped = deleted_skipped.checked_add(1).unwrap_or(u64::MAX);
-                ctx.seen.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                 ctx.seen.insert(sid, (lba, hdr.flags));
                 continue;
             }

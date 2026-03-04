@@ -69,7 +69,6 @@ impl SnapshotList {
         let id_raw = snap.id.0;
         let snap_bytes = snap.total_bytes;
         let mut guard = self.inner.lock();
-        guard.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         if guard.contains_key(&id_raw) {
             return Err(ExofsError::InvalidState);
         }

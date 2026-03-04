@@ -23,7 +23,7 @@ use core::fmt;
 ///
 /// Classe 1 : Blake3(blob_id || owner_cap) — calculé UNE SEULE FOIS, immuable.
 /// Classe 2 : compteur u64 monotone — stable à vie après création.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 pub struct ObjectId(pub [u8; 32]);
 
@@ -77,7 +77,7 @@ impl fmt::Display for ObjectId {
 ///
 /// RÈGLE HASH-01 : BlobId = Blake3(données AVANT compression et AVANT
 /// chiffrement). Jamais calculé sur des données compressées.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 pub struct BlobId(pub [u8; 32]);
 
@@ -115,6 +115,10 @@ impl Default for BlobId {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct EpochId(pub u64);
+
+impl Default for EpochId {
+    fn default() -> Self { Self(0) }
+}
 
 impl EpochId {
     pub const INVALID: Self = Self(0);
@@ -159,6 +163,8 @@ pub struct DiskOffset(pub u64);
 
 impl DiskOffset {
     pub const INVALID: Self = Self(u64::MAX);
+    pub const ZERO: Self = Self(0);
+    pub fn zero() -> Self { Self(0) }
 
     /// Addition sûre : retourne None en cas d'overflow (règle ARITH-01).
     #[inline]

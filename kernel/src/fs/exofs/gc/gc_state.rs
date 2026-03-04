@@ -428,6 +428,7 @@ impl GcState {
             total_aborts:       g.total_aborts,
             total_bytes_freed:  g.total_bytes_freed,
             consecutive_passes: g.consecutive_passes,
+            is_running:         self.phase().is_active(),
         }
     }
 }
@@ -446,6 +447,8 @@ pub struct GcStateSnapshot {
     pub total_aborts:       u64,
     pub total_bytes_freed:  u64,
     pub consecutive_passes: u32,
+    /// `true` si le GC est en cours d'exécution (non Idle, non Aborted).
+    pub is_running:         bool,
 }
 
 impl fmt::Display for GcStateSnapshot {

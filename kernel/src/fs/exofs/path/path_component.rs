@@ -20,6 +20,10 @@
 
 extern crate alloc;
 use alloc::vec::Vec;
+
+/// Longueur maximale d'un chemin complet ExoFS (en octets, nul exclu).
+/// Conforme POSIX PATH_MAX = 4096.
+pub const PATH_MAX: usize = 4096;
 use core::fmt;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -286,6 +290,17 @@ impl<'a> PathParser<'a> {
     }
 }
 
+impl<'a> Iterator for PathParser<'a> {
+    type Item = crate::fs::exofs::core::ExofsResult<PathComponent>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next_component() {
+            Ok(Some(c)) => Some(Ok(c)),
+            Ok(None)    => None,
+            Err(e)      => Some(Err(e)),
+        }
+    }
+}
+
 // ── PathComponentBuf — vecteur de composants ──────────────────────────────────
 
 /// Vecteur de composants de chemin avec méthodes de manipulation.
@@ -414,6 +429,24 @@ pub fn fnv1a_combine(a: &[u8], b: &[u8]) -> u64 {
     h ^= b'/' as u64; h = h.wrapping_mul(0x100000001b3);
     for &x in b { h ^= x as u64; h = h.wrapping_mul(0x100000001b3); }
     h
+}
+
+/// Hash SipHash-2-4 avec clé de montage (LAC-05/PATH-01/S-12).
+///
+/// Utiliser à la place de `fnv1a_hash` pour toute indexation de chemins
+/// dans un volume monté — `key` provient du `mount_key` de `PathIndex`.
+///
+/// ⚠️ PATH-02 : `key` doit être généré de manière aléatoire au montage.
+/// Ne jamais utiliser `[0u8; 16]` en production.
+#[inline]
+pub fn siphash_keyed(key: &[u8; 16], data: &[u8]) -> u64 {
+    use siphasher::sip::SipHasher24;
+    use core::hash::Hasher;
+    let k0 = u64::from_le_bytes(unsafe { *(key[0..8].as_ptr() as *const [u8; 8]) });
+    let k1 = u64::from_le_bytes(unsafe { *(key[8..16].as_ptr() as *const [u8; 8]) });
+    let mut h = SipHasher24::new_with_keys(k0, k1);
+    h.write(data);
+    h.finish()
 }
 
 // ── Tests unitaires ───────────────────────────────────────────────────────────

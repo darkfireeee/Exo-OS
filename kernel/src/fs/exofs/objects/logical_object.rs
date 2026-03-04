@@ -205,9 +205,9 @@ impl LogicalObject {
         // HDR-03 : vérifier le checksum AVANT d'utiliser les champs.
         d.verify()?;
 
-        let kind = ObjectKind::from_u8({ d.kind })
+        let kind = ObjectKind::from_u8(d.kind)
             .ok_or(ExofsError::InvalidObjectKind)?;
-        let class = match { d.class } {
+        let class = match d.class {
             1 => ObjectClass::Class1,
             2 => ObjectClass::Class2,
             _ => return Err(ExofsError::InvalidObjectClass),
@@ -215,13 +215,13 @@ impl LogicalObject {
 
         // Construire les métadonnées minimales depuis les champs du disk.
         let meta = ObjectMeta {
-            mode:           { d.mode },
-            uid:            { d.uid },
-            gid:            { d.gid },
+            mode:           d.mode,
+            uid:            d.uid,
+            gid:            d.gid,
             nlink:          1,
             atime_tsc:      0,
-            mtime_tsc:      { d.epoch_modify }.saturating_mul(1000),
-            ctime_tsc:      { d.epoch_create }.saturating_mul(1000),
+            mtime_tsc:      d.epoch_modify.saturating_mul(1000),
+            ctime_tsc:      d.epoch_create.saturating_mul(1000),
             mime_type:      [0u8; 64],
             mime_len:       0,
             owner_cap_hash: [0u8; 32],
@@ -232,21 +232,21 @@ impl LogicalObject {
             xattr_count:    0,
         };
 
-        let epoch_last = { d.epoch_modify };
+        let epoch_last = d.epoch_modify;
 
         Ok(Self {
-            object_id:    ObjectId({ d.object_id }),
+            object_id:    ObjectId(d.object_id),
             kind,
             class,
-            flags:        ObjectFlags({ d.flags }),
-            ref_count:    AtomicU32::new({ d.ref_count }),
+            flags:        ObjectFlags(d.flags),
+            ref_count:    AtomicU32::new(d.ref_count),
             epoch_last:   AtomicU64::new(epoch_last),
             link_count:   AtomicU32::new(1),
-            blob_id:      BlobId({ d.blob_id }),
-            epoch_create: EpochId({ d.epoch_create }),
-            disk_offset:  DiskOffset({ d.blob_offset }),
-            data_size:    { d.data_size },
-            generation:   { d.generation },
+            blob_id:      BlobId(d.blob_id),
+            epoch_create: EpochId(d.epoch_create),
+            disk_offset:  DiskOffset(d.blob_offset),
+            data_size:    d.data_size,
+            generation:   d.generation,
             meta,
             physical_ref: PhysicalRef::empty(),
             extent_tree:  ExtentTree::new(),

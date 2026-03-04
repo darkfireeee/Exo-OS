@@ -6,7 +6,14 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::fmt;
-use crate::fs::core::types::FsError;
+// FsError — type VFS stub (crate::fs::core non encore créé)
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsError {
+    NoMemory, NoSpace, IoError, Corrupt, NotFound, AlreadyExists,
+    InvalidArgument, NameTooLong, Loop, NotEmpty, NotDir, PermissionDenied,
+    NotSupported, Busy, InternalError,
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ExofsError
@@ -95,6 +102,8 @@ pub enum ExofsError {
     NotSupported,
     /// Paramètre invalide passé à la fonction.
     InvalidArgument,
+    /// Objet trop volumineux (dépasse la limite du kind).
+    ObjectTooLarge,
     /// Erreur interne inattendue (bug kernel).
     InternalError,
 
@@ -103,6 +112,82 @@ pub enum ExofsError {
     AlreadyMounted,
     /// La séquence de recovery boot a échoué (aucun epoch récupérable).
     RecoveryFailed,
+
+    // ── Corruption / Intégrité ───────────────────────────────────────────────
+    /// Corruption générique détectée.
+    Corrupt,
+    /// Système de fichiers corrompu (niveau critique).
+    CorruptFilesystem,
+    /// Magic number invalide (variante générique).
+    BadMagic,
+    /// Magic number ne correspond pas.
+    MagicMismatch,
+    /// BlobId calculé ≠ BlobId stocké.
+    BlobIdMismatch,
+    /// Hachage de données invalide.
+    DataHashMismatch,
+
+    // ── Dépassements ─────────────────────────────────────────────────────────
+    /// Dépassement arithmétique générique (overflow).
+    Overflow,
+    /// Dépassement vers le bas (underflow).
+    Underflow,
+    /// Fin de fichier inattendue.
+    EndOfFile,
+    /// Fin de fichier inattendue lors d'une lecture.
+    UnexpectedEof,
+    /// Dépassement de la taille inline.
+    InlineTooLarge,
+    /// Taille invalide pour l'opération.
+    InvalidSize,
+    /// Écriture partielle trop courte.
+    ShortWrite,
+
+    // ── Objets / Type ────────────────────────────────────────────────────────
+    /// L'objet existe déjà.
+    AlreadyExists,
+    /// Type d'objet incompatible avec l'opération.
+    InvalidObjectKind,
+    /// Classe d'objet invalide.
+    InvalidObjectClass,
+    /// État interne invalide.
+    InvalidState,
+    /// Module ou composant déjà initialisé.
+    AlreadyInitialized,
+    /// Ressource non disponible.
+    Resource,
+    /// Objet introuvable (variante générique).
+    NotFound,
+    /// Concurrence / conflit d'accès.
+    Concurrency,
+    /// Tampon plein.
+    BufferFull,
+    /// Erreur I/O (alias de IoError).
+    IoFailed,
+    /// Erreur de décompression.
+    DecompressError,
+    /// Erreur logique (bug kernel).
+    Logic,
+    /// Arrêt du sous-système en cours.
+    Shutdown,
+    /// Nombre de pins dépassé.
+    TooManyPins,
+    /// Pin invalide.
+    InvalidPin,
+
+    // ── Epoch ────────────────────────────────────────────────────────────────
+    /// Numéro d'epoch invalide.
+    InvalidEpochId,
+    /// Débordement du compteur d'epoch.
+    EpochOverflow,
+    /// Violation de la séquence d'epoch.
+    EpochSequenceViolation,
+    /// Epoch dans le futur (horloge déréglée).
+    FutureEpoch,
+
+    // ── NVMe / Stockage ──────────────────────────────────────────────────────
+    /// Échec du flush NVMe.
+    NvmeFlushFailed,
 }
 
 impl fmt::Display for ExofsError {
@@ -138,9 +223,11 @@ impl fmt::Display for ExofsError {
             Self::RefCountUnderflow         => write!(f, "exofs: ref_count underflow (BUG)"),
             Self::NotSupported              => write!(f, "exofs: not supported"),
             Self::InvalidArgument           => write!(f, "exofs: invalid argument"),
+            Self::ObjectTooLarge            => write!(f, "exofs: object too large"),
             Self::InternalError             => write!(f, "exofs: internal error"),
             Self::AlreadyMounted            => write!(f, "exofs: already mounted"),
             Self::RecoveryFailed            => write!(f, "exofs: recovery failed"),
+            _ => write!(f, "exofs: error"),
         }
     }
 }
@@ -182,6 +269,7 @@ impl From<ExofsError> for FsError {
             ExofsError::InternalError             => FsError::InternalError,
             ExofsError::AlreadyMounted            => FsError::InvalidArgument,
             ExofsError::RecoveryFailed            => FsError::Corrupt,
+            _ => FsError::InternalError,
         }
     }
 }
@@ -258,6 +346,8 @@ impl ExofsError {
 
             Self::NoValidEpoch | Self::InternalError
                 => ErrorCategory::Internal,
+
+            _ => ErrorCategory::Internal,
         }
     }
 
@@ -361,6 +451,7 @@ impl ExofsError {
             Self::NotSupported              => -95, // EOPNOTSUPP
             Self::InvalidArgument           => -22, // EINVAL
             Self::InternalError             => -5,  // EIO (BUG)
+            _                               => -5,  // EIO (unknown)
         }
     }
 }
@@ -407,6 +498,7 @@ impl ExofsError {
             Self::NotSupported              => "not_supported",
             Self::InvalidArgument           => "invalid_argument",
             Self::InternalError             => "internal_error",
+            _                               => "unknown",
         }
     }
 

@@ -124,7 +124,6 @@ impl SnapshotProtect {
         let is_worm = entry.is_worm();
 
         let mut guard = self.entries.lock();
-        guard.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         guard.insert(snap_id.0, entry);
         drop(guard);
 

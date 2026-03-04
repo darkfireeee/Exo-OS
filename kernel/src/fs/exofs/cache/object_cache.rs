@@ -70,7 +70,7 @@ struct ObjectCacheInner {
 }
 
 impl ObjectCacheInner {
-    fn new(max: u64) -> Self {
+    const fn new(max: u64) -> Self {
         Self { map: BTreeMap::new(), eviction: EvictionPolicy::new(EvictionAlgorithm::Lru),
                used: 0, max }
     }
@@ -112,7 +112,6 @@ impl ObjectCache {
     pub fn insert(&self, obj: CachedObject) -> ExofsResult<()> {
         let id = obj.id; let size = obj.size();
         let mut inner = self.inner.lock();
-        inner.map.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         inner.evict_to_fit(size)?;
         inner.eviction.insert(id, size)?;
         inner.map.insert(id, obj);
@@ -124,16 +123,19 @@ impl ObjectCache {
     pub fn get(&self, id: &BlobId) -> Option<Box<[u8]>> {
         let mut inner = self.inner.lock();
         let now = crate::arch::time::read_ticks();
-        if let Some(obj) = inner.map.get_mut(id) {
+        // L'emprunt de map se termine avant d'accéder à eviction.
+        let hit_data = inner.map.get_mut(id).map(|obj| {
             obj.touch(now);
             obj.ref_count = obj.ref_count.saturating_add(1);
+            obj.data.clone()
+        });
+        if hit_data.is_some() {
             inner.eviction.touch(id);
             CACHE_STATS.record_hit();
-            Some(obj.data.clone())
         } else {
             CACHE_STATS.record_miss();
-            None
         }
+        hit_data
     }
 
     pub fn release(&self, id: &BlobId) {

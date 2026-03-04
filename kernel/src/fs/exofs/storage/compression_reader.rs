@@ -127,6 +127,26 @@ impl DecompressReader {
         let hdr = Self::read_header(framed)?;
         CompressionType::from_u8(hdr.algo)
     }
+
+    /// Décompresse un buffer brut (sans en-tête trame) avec algorithme et taille connus.
+    ///
+    /// Utilisé quand le header a déjà été parsé séparément (ex : BlobReader).
+    pub fn decompress_raw(
+        payload:       &[u8],
+        algo:          CompressionType,
+        expected_size: usize,
+    ) -> ExofsResult<Vec<u8>> {
+        match algo {
+            CompressionType::None => {
+                let mut v: Vec<u8> = Vec::new();
+                v.try_reserve(payload.len()).map_err(|_| ExofsError::NoMemory)?;
+                v.extend_from_slice(payload);
+                Ok(v)
+            }
+            CompressionType::Lz4  => lz4_decompress(payload, expected_size),
+            CompressionType::Zstd => zstd_decompress(payload, expected_size),
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

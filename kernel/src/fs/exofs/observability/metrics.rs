@@ -178,7 +178,7 @@ pub static EXOFS_METRICS: ExofsMetrics = ExofsMetrics::new_const();
 /// Snapshot immuable de tous les compteurs.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MetricsSnapshot {
-    values: [u64; MetricId::COUNT],
+    pub values: [u64; MetricId::COUNT],
 }
 
 impl MetricsSnapshot {

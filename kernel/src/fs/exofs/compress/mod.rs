@@ -67,7 +67,8 @@ pub use compress_stats::{
     COMPRESSION_STATS,
 };
 pub use compress_threshold::CompressionThreshold;
-pub use compress_writer::{CompressResult, CompressionPipeline, CompressWriter, crc32_simple};
+pub use compress_writer::{CompressResult, CompressionPipeline, CompressWriter};
+// crc32_simple est pub(crate) dans compress_writer — ne peut pas être re-exporté (E0364)
 pub use decompress_reader::{DecompressReader, DecompressStats};
 pub use lz4_wrapper::Lz4Compressor;
 pub use zstd_wrapper::{ZstdCompressor, ZstdConfig, ZstdDecoder, ZSTD_DEFAULT_LEVEL, ZSTD_MAX_LEVEL};
@@ -180,7 +181,7 @@ impl CompressModule {
 
     /// Retourne les statistiques globales de compression.
     pub fn stats_snapshot(&self) -> CompressionStatsSnapshot {
-        COMPRESSION_STATS.snapshot()
+        COMPRESSION_STATS.global_snapshot()
     }
 
     /// Retourne la configuration active.

@@ -229,7 +229,11 @@ impl GcMetrics {
     pub fn add_bytes_freed(&self, n: u64)      { self.bytes_freed.fetch_add(n, Ordering::Relaxed); }
     pub fn inc_grey_overflow(&self)            { self.grey_queue_overflows.fetch_add(1, Ordering::Relaxed); }
     pub fn inc_pinned_skipped(&self)           { self.pinned_skipped.fetch_add(1, Ordering::Relaxed); }
+    pub fn add_pinned_skipped(&self, n: u64)   { self.pinned_skipped.fetch_add(n, Ordering::Relaxed); }
     pub fn add_deferred_flushed(&self, n: u64) { self.deferred_flushed.fetch_add(n, Ordering::Relaxed); }
+    pub fn add_blobs_marked_live(&self, n: u64) { self.blobs_marked_live.fetch_add(n, Ordering::Relaxed); }
+    pub fn add_grey_queue_overflows(&self, n: u64) { self.grey_queue_overflows.fetch_add(n, Ordering::Relaxed); }
+    pub fn add_orphans_collected(&self, n: u64) { self.orphans_collected.fetch_add(n, Ordering::Relaxed); }
 
     // ── Snapshots ────────────────────────────────────────────────────────────
 

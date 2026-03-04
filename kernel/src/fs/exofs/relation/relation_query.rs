@@ -147,7 +147,6 @@ impl RelationQuery {
         let mut queue: VecDeque<(BlobId, u32)> = VecDeque::new();
         let mut out: Vec<BlobId> = Vec::new();
 
-        visited.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         visited.insert(*target.as_bytes(), 0);
         queue.push_back((*target, 0));
 
@@ -160,7 +159,6 @@ impl RelationQuery {
                         let new_depth = depth.checked_add(1)
                             .ok_or(ExofsError::OffsetOverflow)?;
                         if new_depth <= max_depth {
-                            visited.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                             visited.insert(*r.from.as_bytes(), new_depth);
                             out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                             out.push(r.from);

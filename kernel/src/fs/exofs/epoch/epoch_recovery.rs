@@ -342,7 +342,7 @@ pub fn recover_active_epoch(params: RecoveryParams<'_>) -> ExofsResult<RecoveryR
         diag.final_phase = RecoveryPhase::ReplayingRedoLog;
         let replayed = redo_log_replay(active_record, params.read_page, page_size)?;
         diag.redo_epochs_replayed = replayed;
-        EPOCH_STATS.inc_recovery_epochs_replayed(replayed as u64);
+        EPOCH_STATS.inc_recovery_epochs_replayed();
     }
 
     // ── Étape 5 : mise à jour du superblock in-memory ───────────────────────
@@ -436,7 +436,7 @@ fn redo_log_replay(
         };
         let next_offset = u64::from_le_bytes(next_offset_bytes);
 
-        const CHAIN_PLACEHOLDER: u64 = 0xDEAD_BEEP_DEAD_BEEP;
+        const CHAIN_PLACEHOLDER: u64 = 0xDEAD_BEEF_DEAD_BEEF;
         if next_offset == 0 || next_offset == CHAIN_PLACEHOLDER {
             break;
         }

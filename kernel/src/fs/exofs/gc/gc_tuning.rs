@@ -341,6 +341,16 @@ impl GcAutoTuner {
     pub fn tune_count(&self) -> u64 {
         self.inner.lock().tune_count
     }
+
+    /// Valide les paramètres actuels.
+    pub fn validate_params(&self) -> Result<(), ()> {
+        if self.inner.lock().params.validate() { Ok(()) } else { Err(()) }
+    }
+
+    /// Intervalle du timer en ticks.
+    pub fn timer_interval_ticks(&self) -> u64 {
+        self.inner.lock().params.timer_interval_ticks
+    }
 }
 
 // ==============================================================================

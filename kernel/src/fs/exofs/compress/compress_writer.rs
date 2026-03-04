@@ -35,6 +35,10 @@ impl CompressResult {
     /// Taille totale (en-tête inclus).
     pub fn total_size(&self) -> usize { self.payload.len() }
 
+    /// Longueur du payload (alias de total_size).
+    pub fn len(&self) -> usize { self.payload.len() }
+    pub fn is_empty(&self) -> bool { self.payload.is_empty() }
+
     /// Ratio de compression (0.0 = parfait, 1.0 = aucune compression).
     pub fn compression_ratio(&self) -> f32 {
         if self.original_size == 0 { return 0.0; }
@@ -81,7 +85,7 @@ impl CompressWriter {
                 compressed_size: 0,
             });
         }
-        let decision = self.choice.decide(data, &self.threshold);
+        let decision = self.choice.decide(data);
         match decision.algorithm {
             CompressionAlgorithm::None => self.store_raw(data),
             CompressionAlgorithm::Lz4  => self.compress_lz4(data, decision.level),
@@ -91,7 +95,7 @@ impl CompressWriter {
 
     /// Estime la taille de sortie maximale sans compression effective.
     pub fn estimate_output_size(&self, data: &[u8]) -> usize {
-        match self.choice.decide(data, &self.threshold).algorithm {
+        match self.choice.decide(data).algorithm {
             CompressionAlgorithm::Lz4  =>
                 Lz4Compressor::compress_bound(data.len()).saturating_add(COMPRESSION_HEADER_SIZE),
             CompressionAlgorithm::Zstd =>
@@ -124,13 +128,14 @@ impl CompressWriter {
             version:         HEADER_VERSION,
             algorithm:       CompressionAlgorithm::Lz4 as u8,
             level:           level as u8,
-            original_size:   data.len() as u32,
-            compressed_size: n as u32,
+            flags:           0,
+            original_size:   data.len() as u64,
+            compressed_size: n as u64,
             crc32:           crc32_simple(data),
-            _reserved:       [0u8; 15],
+            _reserved:       [0u8; 4],
         };
         let payload = build_payload(&header, &compressed[..n])?;
-        COMPRESSION_STATS.record_compress(CompressionAlgorithm::Lz4, data.len(), n);
+        COMPRESSION_STATS.lz4.record_compress(data.len() as u64, n as u64, true);
         Ok(CompressResult {
             payload,
             algorithm:       CompressionAlgorithm::Lz4,
@@ -141,10 +146,11 @@ impl CompressWriter {
 
     fn compress_zstd(&self, data: &[u8], level: CompressLevel) -> ExofsResult<CompressResult> {
         let zstd_level = match level {
+            CompressLevel::None    => 1,
             CompressLevel::Fast    => 1,
             CompressLevel::Default => 3,
             CompressLevel::Best    => 9,
-            CompressLevel::None    => 1,
+            CompressLevel::Maximum => 19,
         };
         let mut compressed = Vec::new();
         let n = ZstdCompressor::compress(data, &mut compressed, zstd_level)?;
@@ -155,13 +161,14 @@ impl CompressWriter {
             version:         HEADER_VERSION,
             algorithm:       CompressionAlgorithm::Zstd as u8,
             level:           level as u8,
-            original_size:   data.len() as u32,
-            compressed_size: n as u32,
+            flags:           0,
+            original_size:   data.len() as u64,
+            compressed_size: n as u64,
             crc32:           crc32_simple(data),
-            _reserved:       [0u8; 15],
+            _reserved:       [0u8; 4],
         };
         let payload = build_payload(&header, &compressed[..n])?;
-        COMPRESSION_STATS.record_compress(CompressionAlgorithm::Zstd, data.len(), n);
+        COMPRESSION_STATS.zstd.record_compress(data.len() as u64, n as u64, true);
         Ok(CompressResult {
             payload,
             algorithm:       CompressionAlgorithm::Zstd,

@@ -283,10 +283,10 @@ impl ExportModule {
         blob_ids: &[[u8; 32]],
     ) -> ExofsResult<Vec<u8>> {
         if self.config.audit_enabled {
-            EXPORT_AUDIT.log_event(ExportEvent::SessionStarted, 0);
+            EXPORT_AUDIT.log_event(0, ExportEvent::SessionStarted);
         }
 
-        let opts = ExoarWriteOptions::snapshot();
+        let opts = ExoarWriteOptions::snapshot(0);
         let mut writer = ExoarBufferedWriter::new(opts);
         writer.begin()?;
 
@@ -298,9 +298,9 @@ impl ExportModule {
             let blob_id = &blob_ids[i];
             match provider.provide_blob(blob_id) {
                 Ok(data) => {
-                    writer.write_blob(blob_id, data)?;
+                    writer.write_blob(blob_id, data, 0, 0)?;
                     if self.config.audit_enabled {
-                        EXPORT_AUDIT.log_blob_exported(blob_id, data.len() as u64);
+                        EXPORT_AUDIT.log_blob_exported(0, blob_id, data.len() as u64, 0);
                     }
                     self.summary.total_blobs_exported =
                         self.summary.total_blobs_exported.saturating_add(1);
@@ -313,7 +313,7 @@ impl ExportModule {
             i = i.wrapping_add(1);
         }
 
-        let buf = writer.finalize()?;
+        let (buf, _) = writer.finalize()?;
 
         self.summary.record_export(
             self.summary.total_blobs_exported,
@@ -321,7 +321,7 @@ impl ExportModule {
         );
 
         if self.config.audit_enabled {
-            EXPORT_AUDIT.log_event(ExportEvent::SessionCompleted, 0);
+            EXPORT_AUDIT.log_event(0, ExportEvent::SessionCompleted);
         }
         Ok(buf)
     }
@@ -334,10 +334,10 @@ impl ExportModule {
         deleted_blobs: &[[u8; 32]],
     ) -> ExofsResult<Vec<u8>> {
         if self.config.audit_enabled {
-            EXPORT_AUDIT.log_event(ExportEvent::IncrementalExport, 0);
+            EXPORT_AUDIT.log_event(0, ExportEvent::IncrementalExport);
         }
 
-        let opts = ExoarWriteOptions::incremental();
+        let opts = ExoarWriteOptions::incremental(0, 0);
         let mut writer = ExoarBufferedWriter::new(opts);
         writer.begin()?;
 
@@ -346,7 +346,7 @@ impl ExportModule {
         while i < added_blobs.len() {
             let blob_id = &added_blobs[i];
             if let Ok(data) = provider.provide_blob(blob_id) {
-                writer.write_blob(blob_id, data)?;
+                writer.write_blob(blob_id, data, 0, 0)?;
             }
             i = i.wrapping_add(1);
         }
@@ -354,11 +354,11 @@ impl ExportModule {
         // Phase 2 : tombstones (RECUR-01 : boucle while)
         let mut j = 0usize;
         while j < deleted_blobs.len() {
-            writer.write_tombstone(&deleted_blobs[j])?;
+            writer.write_tombstone(&deleted_blobs[j], 0)?;
             j = j.wrapping_add(1);
         }
 
-        let buf = writer.finalize()?;
+        let (buf, _) = writer.finalize()?;
         self.summary.record_export(added_blobs.len() as u64, buf.len() as u64);
         Ok(buf)
     }
@@ -370,7 +370,7 @@ impl ExportModule {
         writer: &mut W,
     ) -> ExofsResult<StreamImportReport> {
         if self.config.audit_enabled {
-            EXPORT_AUDIT.log_event(ExportEvent::SessionStarted, 0);
+            EXPORT_AUDIT.log_event(0, ExportEvent::SessionStarted);
         }
 
         // Utiliser le StreamImporter avec l'archive comme source
@@ -408,8 +408,8 @@ impl ExportModule {
 
         if self.config.audit_enabled {
             EXPORT_AUDIT.log_event(
-                if report.is_clean() { ExportEvent::SessionCompleted } else { ExportEvent::SessionFailed },
                 0,
+                if report.is_clean() { ExportEvent::SessionCompleted } else { ExportEvent::SessionFailed },
             );
         }
         Ok(report)
@@ -421,7 +421,7 @@ impl ExportModule {
         let reader = ExoarReader::new(config);
         let mut receiver = CollectingReceiver::new();
         let mut src = SliceSource::new(archive);
-        reader.read(&mut src, &mut receiver)
+        Ok(reader.read(&mut src, &mut receiver)?)
     }
 
     /// Retourne l'état de santé du module.
@@ -449,8 +449,10 @@ pub fn export_blob_to_archive(blob_id: &[u8; 32], data: &[u8]) -> ExofsResult<Ve
     let opts = ExoarWriteOptions::default();
     let mut writer = ExoarBufferedWriter::new(opts);
     writer.begin()?;
-    writer.write_blob(blob_id, data)?;
-    writer.finalize()
+    writer.write_blob(blob_id, data, 0, 0)?;
+    let (buf, _) = writer.finalize()
+        .map_err(|_| crate::fs::exofs::core::ExofsError::InternalError)?;
+    Ok(buf)
 }
 
 /// Importe le premier blob d'une archive ExoAR en mémoire.

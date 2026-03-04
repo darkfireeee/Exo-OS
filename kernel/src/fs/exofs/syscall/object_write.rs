@@ -110,7 +110,7 @@ fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteRes
     }
 
     // Insérer dans le cache.
-    BLOB_CACHE.insert(blob_id, &new_content)?;
+    BLOB_CACHE.insert(blob_id, new_content.to_vec())?;
     BLOB_CACHE.mark_dirty(&blob_id);
 
     Ok(WriteResult {
@@ -382,7 +382,7 @@ pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
         }
     }
 
-    BLOB_CACHE.insert(blob_id, &new_content)?;
+    BLOB_CACHE.insert(blob_id, new_content.to_vec())?;
     BLOB_CACHE.mark_dirty(&blob_id);
     Ok(())
 }
@@ -406,7 +406,7 @@ mod tests_trunc {
     fn test_truncate_blob_extend() {
         let b = BlobId::from_bytes_blake3(b"trunc_extend_test");
         let data = [0xAAu8; 64];
-        BLOB_CACHE.insert(b, &data).unwrap();
+        BLOB_CACHE.insert(b, data.to_vec()).unwrap();
         truncate_blob(b, 128).unwrap();
         let new_size = BLOB_CACHE.get(&b).map(|d| d.len()).unwrap_or(0);
         assert_eq!(new_size, 128);
@@ -416,7 +416,7 @@ mod tests_trunc {
     fn test_truncate_blob_shrink() {
         let b = BlobId::from_bytes_blake3(b"trunc_shrink_test");
         let data = [0xBBu8; 128];
-        BLOB_CACHE.insert(b, &data).unwrap();
+        BLOB_CACHE.insert(b, data.to_vec()).unwrap();
         truncate_blob(b, 32).unwrap();
         let new_size = BLOB_CACHE.get(&b).map(|d| d.len()).unwrap_or(0);
         assert_eq!(new_size, 32);
@@ -426,7 +426,7 @@ mod tests_trunc {
     fn test_clear_blob() {
         let b = BlobId::from_bytes_blake3(b"clear_test_blob");
         let data = [0xCCu8; 64];
-        BLOB_CACHE.insert(b, &data).unwrap();
+        BLOB_CACHE.insert(b, data.to_vec()).unwrap();
         clear_blob(b).unwrap();
         let new_size = BLOB_CACHE.get(&b).map(|d| d.len()).unwrap_or(0);
         assert_eq!(new_size, 0);

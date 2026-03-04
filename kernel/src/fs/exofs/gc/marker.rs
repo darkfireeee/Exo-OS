@@ -29,7 +29,7 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
+use crate::fs::exofs::core::{BlobId, EpochId, ExofsError, ExofsResult};
 use crate::fs::exofs::epoch::epoch_pin::is_epoch_pinned;
 use crate::fs::exofs::gc::gc_metrics::GC_METRICS;
 use crate::fs::exofs::gc::gc_state::GC_STATE;
@@ -302,7 +302,7 @@ impl Marker {
                 .unwrap_or(0);
 
             // GC-07 : Ne pas marquer si EPOCH_PINNED est actif.
-            if is_epoch_pinned(create_epoch) {
+            if is_epoch_pinned(EpochId(create_epoch)) {
                 br.pinned_skip = br.pinned_skip.saturating_add(1);
                 // Remettre en gris pour la prochaine passe.
                 match workspace.grey(blob_id) {

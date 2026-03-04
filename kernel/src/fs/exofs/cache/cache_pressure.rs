@@ -16,9 +16,10 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 /// Niveau de pression mémoire.
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum PressureLevel {
     /// Espace libre suffisant, aucune action requise.
+    #[default]
     Low      = 0,
     /// Premier seuil dépassé, surveiller.
     Medium   = 1,
@@ -163,6 +164,7 @@ impl CachePressure {
 
     pub fn is_critical(&self) -> bool { self.level() == PressureLevel::Critical }
     pub fn needs_eviction(&self) -> bool { self.level().needs_eviction() }
+    pub fn is_under_pressure(&self) -> bool { self.level().needs_eviction() }
     pub fn must_reject_inserts(&self) -> bool { self.level().must_reject_inserts() }
 
     pub fn reclaim_target(&self, target_pct: u8) -> u64 {

@@ -164,7 +164,6 @@ impl BlobRegistry {
                 return Err(ExofsError::NoMemory);
             }
             let entry = BlobEntry::new(blob_id, total_size, chunk_keys)?;
-            map.try_reserve(1).map_err(|_| { self.release(); ExofsError::NoMemory })?;
             map.insert(key, entry);
             true
         };

@@ -70,7 +70,7 @@ struct ExtentCacheInner {
 }
 
 impl ExtentCacheInner {
-    fn new(max: u64) -> Self {
+    const fn new(max: u64) -> Self {
         Self { map: BTreeMap::new(), eviction: EvictionPolicy::new(EvictionAlgorithm::Lru),
                used: 0, max }
     }
@@ -118,15 +118,19 @@ impl ExtentCache {
         let mut inner = self.inner.lock();
         let now = crate::arch::time::read_ticks();
         let key = ExtentKey { blob_id: *blob_id, offset };
-        if let Some(e) = inner.map.get_mut(&key) {
+        let eid = eviction_id(blob_id, offset);
+        // L'emprunt de map se termine avant d'accéder à eviction.
+        let hit_data = inner.map.get_mut(&key).map(|e| {
             e.touch(now);
-            inner.eviction.touch(&eviction_id(blob_id, offset));
+            e.data.iter().cloned().collect::<Vec<_>>().into_boxed_slice()
+        });
+        if hit_data.is_some() {
+            inner.eviction.touch(&eid);
             CACHE_STATS.record_hit();
-            Some(e.data.iter().cloned().collect::<Vec<_>>().into_boxed_slice())
         } else {
             CACHE_STATS.record_miss();
-            None
         }
+        hit_data
     }
 
     /// Cherche tous les extents couvrant `[offset, offset+len)`.
@@ -148,7 +152,6 @@ impl ExtentCache {
         let eid  = eviction_id(&blob_id, offset);
         let key  = ExtentKey { blob_id, offset };
         let mut inner = self.inner.lock();
-        inner.map.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         inner.evict_to_fit(size)?;
         inner.eviction.insert(eid, size)?;
         inner.map.insert(key, ExtentEntry::new(data.into_boxed_slice(), now));

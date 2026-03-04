@@ -125,7 +125,6 @@ impl SnapshotMountRegistry {
         };
 
         let mut guard = self.mounts.lock();
-        guard.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         guard.insert(mount_id.0, mp);
         drop(guard);
 

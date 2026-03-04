@@ -203,6 +203,15 @@ pub struct EpochSlotSelector {
     disk_size:   DiskOffset,
 }
 
+// Manual Debug impl for EpochSlotSelector
+impl core::fmt::Debug for EpochSlotSelector {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EpochSlotSelector")
+            .field("disk_size", &self.disk_size)
+            .finish()
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 struct SlotState {
     /// Vrai si le slot contient un EpochRecord valide.

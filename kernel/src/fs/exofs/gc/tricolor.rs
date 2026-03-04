@@ -197,6 +197,11 @@ impl TricolorWorkspace {
         self.nodes.insert(node.id, node);
     }
 
+    /// Retourne l'epoch de création d'un blob par son BlobId.
+    pub fn node_epoch(&self, id: &BlobId) -> Option<u64> {
+        self.nodes.get(id).map(|n| n.create_epoch)
+    }
+
     /// Combien de blobs sont dans l'index.
     pub fn len(&self) -> usize {
         self.nodes.len()

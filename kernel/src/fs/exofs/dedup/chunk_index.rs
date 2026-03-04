@@ -148,7 +148,6 @@ impl ChunkIndex {
                 self.release();
                 return Err(ExofsError::NoMemory);
             }
-            map.try_reserve(1).map_err(|_| { self.release(); ExofsError::NoMemory })?;
             map.insert(key, ChunkEntry::new(fingerprint, blob_id, size));
             true
         };

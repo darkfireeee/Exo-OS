@@ -25,19 +25,24 @@ pub mod observability;
 pub mod audit;
 
 use crate::fs::exofs::core::error::ExofsError;
-use crate::fs::exofs::storage::superblock::ExoSuperblockInMemory;
-use crate::fs::exofs::epoch::epoch_commit::commit_current_epoch;
+use crate::fs::exofs::storage::superblock::SuperblockInMemory;
 use crate::fs::exofs::recovery::boot_recovery::boot_recovery_sequence;
-use crate::fs::exofs::syscall::register_exofs_syscalls;
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicBool, Ordering};
+use ::core::sync::atomic::{AtomicBool, Ordering};
+
+/// Macro de log noyau — no-op en attendant le système de log Ring-0.
+#[allow(unused_macros)]
+macro_rules! log_kernel {
+    ($($arg:tt)*) => {};
+}
 
 /// État global du module ExoFS — initialisé une seule fois au boot
 static EXOFS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Référence globale au superblock actif (protégée par SpinLock dans ExoSuperblockInMemory)
-static mut EXOFS_SUPERBLOCK: Option<Arc<ExoSuperblockInMemory>> = None;
+/// Référence globale au superblock actif (protégée par SpinLock dans SuperblockInMemory)
+#[allow(dead_code)]
+static mut EXOFS_SUPERBLOCK: Option<Arc<SuperblockInMemory>> = None;
 
 /// Initialise ExoFS au boot du kernel.
 /// Appelée par le VFS dispatcher après montage de la racine.
@@ -55,15 +60,15 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
     boot_recovery_sequence(disk_size_bytes)
         .map_err(|_| ExofsError::RecoveryFailed)?;
 
-    // Phase 2 : Enregistrement des syscalls ExoFS 500-518
-    register_exofs_syscalls()?;
+    // Phase 2 : Enregistrement VFS (register_exofs_syscalls() — appelé via exofs_register_fs())
+    // Omis ici : enregistrement effectué après le boot via exofs_register_fs().
 
     // Phase 3 : Initialisation de la couche de compatibilité POSIX
     posix_bridge::posix_bridge_init()?;
 
-    // Phase 4 : Démarrage threads background (GC, writeback)
-    gc::gc_thread::start_gc_thread()?;
-    io::writeback::start_writeback_thread()?;
+    // Phase 4 : Threads background GC/writeback — TODO: implémenter gc_thread et writeback
+    // gc::gc_thread::start_gc_thread()?;
+    // io::writeback::start_writeback_thread()?;
 
     log_kernel!("[exofs] initialisé — disk_size={} MB",
         disk_size_bytes / (1024 * 1024));
@@ -84,10 +89,10 @@ pub fn exofs_shutdown() -> Result<(), ExofsError> {
     }
 
     // Commit l'epoch courant avant de s'arrêter
-    commit_current_epoch()?;
+    // commit_current_epoch() — TODO: passer CommitInput après refactoring epoch_commit
 
-    // Sync superblock miroirs
-    storage::superblock_backup::sync_all_mirrors()?;
+    // Sync superblock miroirs — TODO: implémenter sync_all_mirrors
+    // storage::superblock_backup::sync_all_mirrors()?;
 
     EXOFS_INITIALIZED.store(false, Ordering::Release);
     log_kernel!("[exofs] arrêt propre effectué");

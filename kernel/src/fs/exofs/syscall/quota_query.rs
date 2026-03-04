@@ -153,7 +153,7 @@ fn save_quota_entries(blob_id: BlobId, entries: &[QuotaEntry]) -> ExofsResult<()
         while j < QUOTA_ENTRY_SIZE { buf.push(src[j]); j = j.wrapping_add(1); }
         i = i.wrapping_add(1);
     }
-    BLOB_CACHE.insert(blob_id, &buf).map_err(|_| ExofsError::NoSpace)?;
+    BLOB_CACHE.insert(blob_id, buf.to_vec()).map_err(|_| ExofsError::NoSpace)?;
     Ok(())
 }
 

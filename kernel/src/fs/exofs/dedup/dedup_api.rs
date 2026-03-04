@@ -133,7 +133,7 @@ impl DedupApi {
         chunk_keys.try_reserve(chunks.len()).map_err(|_| ExofsError::NoMemory)?;
 
         for chunk in &chunks {
-            let fp    = ChunkFingerprint::compute(&chunk.data, super::chunk_fingerprint::FingerprintAlgorithm::Double)?;
+            let fp    = ChunkFingerprint::compute(&chunk.data);
             let key   = chunk.blake3;
             chunk_keys.push(key);
             let is_new_chunk = CHUNK_INDEX.insert(fp, blob_id.clone(), chunk.boundary.length)?;

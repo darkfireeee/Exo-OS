@@ -79,7 +79,7 @@ pub struct SlotScanResult {
 
 impl Default for EpochSlot {
     fn default() -> Self {
-        EpochSlot::SlotA
+        EpochSlot::A
     }
 }
 
@@ -312,7 +312,7 @@ impl EpochScanner {
 
             let ro = RootObject {
                 object_id:   oid,
-                disk_offset: entry.disk_offset,
+                disk_offset: DiskOffset(entry.disk_offset),
                 slot,
                 epoch_id:    root.epoch_id,
                 is_deleted:  false,

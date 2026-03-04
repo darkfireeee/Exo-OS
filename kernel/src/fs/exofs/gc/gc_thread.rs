@@ -135,14 +135,14 @@ impl GcThreadControl {
 
     /// Mise a jour de l'epoch.
     pub fn update_epoch(&self, epoch: EpochId) {
-        self.current_epoch.store(epoch, Ordering::Relaxed);
+        self.current_epoch.store(epoch.0, Ordering::Relaxed);
         GC_SCHEDULER.set_epoch(epoch);
         BLOB_GC.set_epoch(epoch);
     }
 
     /// Epoch courante.
     pub fn epoch(&self) -> EpochId {
-        self.current_epoch.load(Ordering::Relaxed)
+        EpochId(self.current_epoch.load(Ordering::Relaxed))
     }
 }
 

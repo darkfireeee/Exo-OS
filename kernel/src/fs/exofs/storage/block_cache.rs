@@ -42,7 +42,7 @@ pub enum CacheBlockState {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Entrée dans le cache de blocs.
-struct CacheBlock {
+pub(crate) struct CacheBlock {
     /// Offset disque de ce bloc.
     offset:    DiskOffset,
     /// Contenu du bloc (BLOCK_SIZE = 4096 octets).

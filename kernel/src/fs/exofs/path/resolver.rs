@@ -73,8 +73,8 @@ impl ResolveContext {
         flags:          ResolveFlags,
     ) -> ExofsResult<Self> {
         let mut remaining: Vec<PathComponent> = Vec::new();
-        for cr in PathParser::new(&canonical) {
-            let c = cr?;
+        let mut parser = PathParser::new(&canonical)?;
+        while let Some(c) = parser.next_component()? {
             if c.as_bytes() == b"." { continue; }
             if c.as_bytes() == b".." {
                 remaining.pop();
@@ -265,8 +265,8 @@ pub fn resolve_path_full<R: PathResolver>(
 
             // Reconstruire la file de composants (remaining) depuis la cible
             let mut new_remaining: Vec<PathComponent> = Vec::new();
-            for cr in PathParser::new(&target_canonical) {
-                let c = cr?;
+            let mut parser = PathParser::new(&target_canonical)?;
+            while let Some(c) = parser.next_component()? {
                 if c.as_bytes() == b"." { continue; }
                 if c.as_bytes() == b".." {
                     new_remaining.pop();

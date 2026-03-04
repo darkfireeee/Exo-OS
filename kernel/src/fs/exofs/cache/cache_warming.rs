@@ -292,8 +292,3 @@ impl CacheWarmer {
     }
 }
 
-use crate::fs::exofs::core::{BlobId, ExofsError};
-use super::blob_cache::BLOB_CACHE;
-use super::metadata_cache::METADATA_CACHE;
-
-/// Stratégie de préchauffage.

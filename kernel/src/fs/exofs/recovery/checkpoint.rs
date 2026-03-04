@@ -372,11 +372,17 @@ impl CheckpointStore {
         }
 
         // OOM-02 : try_reserve avant insert.
-        store.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         store.insert(id.0, cp);
 
         Ok(id)
     }
+
+    /// Sauvegarde un checkpoint rapide (tick, phase, nombre d'erreurs).
+    pub fn save_checkpoint(&self, tick: u64, phase: RecoveryPhase, error_count: u32) -> ExofsResult<CheckpointId> {
+        use crate::fs::exofs::core::types::EpochId;
+        self.save(phase, EpochId(tick), error_count, 0)
+    }
+
 
     /// Met à jour un checkpoint existant (ex. après réparation).
     ///

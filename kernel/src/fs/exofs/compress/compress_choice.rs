@@ -48,6 +48,13 @@ impl CompressPolicy {
     pub const fn is_compressing(self) -> bool {
         !matches!(self, Self::None)
     }
+
+    /// LZ4 à niveau par défaut (latence faible).
+    pub const fn lz4_default() -> Self { Self::AlwaysLz4 }
+    /// LZ4 à vitesse maximale.
+    pub const fn lz4_fast() -> Self { Self::AlwaysLz4 }
+    /// Zstd à niveau par défaut (bon ratio).
+    pub const fn zstd_default() -> Self { Self::AlwaysZstd }
 }
 
 impl Default for CompressPolicy {

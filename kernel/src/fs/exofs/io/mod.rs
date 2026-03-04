@@ -280,12 +280,13 @@ pub fn read_blob_quick<S: BlobStore>(
 ) -> ExofsResult<usize> {
     let size = store.blob_size(blob_id).ok_or(ExofsError::BlobNotFound)? as usize;
     buf.try_reserve(size).map_err(|_| ExofsError::NoMemory)?;
-    let mut config = ReadConfig::default_config();
+    let mut config = ReadConfig::fast();
     config.verify = VerifyMode::None;
-    let mut r = BlobReader::new(store, config)?;
-    let res = r.read(blob_id, buf)?;
-    IO_MODULE.record_op(res.bytes_read);
-    Ok(res.bytes_read as usize)
+    let mut r = BlobReader::new(config)?;
+    let (data, _) = r.read(store, blob_id)?;
+    buf.extend_from_slice(data);
+    IO_MODULE.record_op(data.len() as u64);
+    Ok(data.len())
 }
 
 /// Écriture rapide d'un blob dans un store mutable.
@@ -294,10 +295,10 @@ pub fn write_blob_quick<S: BlobStoreWrite>(
     blob_id: [u8; 32],
     data: &[u8],
 ) -> ExofsResult<()> {
-    let cfg = WriteConfig::default_config();
-    let mut w = BlobWriter::new(store, cfg)?;
-    w.write(blob_id, data)?;
-    w.flush()?;
+    let cfg = WriteConfig::default();
+    let mut w = BlobWriter::new(cfg)?;
+    w.write(store, blob_id, data)?;
+    w.flush(store)?;
     IO_MODULE.record_op(data.len() as u64);
     Ok(())
 }

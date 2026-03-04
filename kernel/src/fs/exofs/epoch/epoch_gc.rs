@@ -309,6 +309,13 @@ pub struct DeferredQueueStats {
 
 // =============================================================================
 // GcSafetyCheck — validation avant collection
+
+/// Jeton de validation sécurité avant déclenchement d'un cycle de GC.
+/// Produit par `gc_safety_check()` — doit être passé à `run_gc_cycle()`.
+pub struct GcSafetyCheck {
+    /// true si le GC peut procéder sans risque d'écraser des données actives.
+    pub safe: bool,
+}
 // =============================================================================
 
 /// Résultat d'une vérification de sécurité GC.

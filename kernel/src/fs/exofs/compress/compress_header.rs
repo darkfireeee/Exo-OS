@@ -36,7 +36,7 @@ pub const COMPRESSION_HEADER_SIZE: usize = 32;
 ///  5       1    level
 ///  6       1    version
 ///  7       1    flags
-///  8       8    uncompressed_size
+///  8       8    original_size
 /// 16       8    compressed_size
 /// 24       4    crc32
 /// 28       4    _reserved
@@ -55,7 +55,7 @@ pub struct CompressionHeader {
     /// Flags réservés pour usage futur.
     pub flags:             u8,
     /// Taille des données décompressées en bytes.
-    pub uncompressed_size: u64,
+    pub original_size: u64,
     /// Taille des données compressées (sans cet en-tête).
     pub compressed_size:   u64,
     /// Checksum CRC32 des données compressées.
@@ -75,7 +75,7 @@ impl CompressionHeader {
     pub fn new(
         algorithm:         CompressionAlgorithm,
         level:             u8,
-        uncompressed_size: u64,
+        original_size: u64,
         compressed_size:   u64,
         crc32:             u32,
     ) -> Self {
@@ -85,7 +85,7 @@ impl CompressionHeader {
             level,
             version:           HEADER_VERSION,
             flags:             0,
-            uncompressed_size,
+            original_size,
             compressed_size,
             crc32,
             _reserved:         [0; 4],
@@ -196,7 +196,7 @@ impl<'a> CompressedBlobView<'a> {
     }
 
     /// Taille originale des données (avant compression).
-    pub fn uncompressed_size(&self) -> u64 { self.header.uncompressed_size }
+    pub fn original_size(&self) -> u64 { self.header.original_size }
 
     /// Algorithme utilisé pour ce blob.
     pub fn algorithm(&self) -> CompressionAlgorithm { self.header.algorithm() }
@@ -242,7 +242,7 @@ mod tests {
         let h2    = CompressionHeader::from_bytes(&bytes).unwrap();
         assert_eq!(h.magic,             h2.magic);
         assert_eq!(h.algorithm,         h2.algorithm);
-        assert_eq!(h.uncompressed_size, h2.uncompressed_size);
+        assert_eq!(h.original_size, h2.original_size);
         assert_eq!(h.compressed_size,   h2.compressed_size);
         assert_eq!(h.crc32,             h2.crc32);
     }
@@ -305,7 +305,7 @@ mod tests {
         buf[..32].copy_from_slice(&h_bytes);
         let view = CompressedBlobView::parse(&buf).unwrap();
         assert_eq!(view.algorithm(), CompressionAlgorithm::Lz4);
-        assert_eq!(view.uncompressed_size(), 1000);
+        assert_eq!(view.original_size(), 1000);
     }
 
     #[test] fn test_blob_view_parse_bad_magic() {
@@ -331,7 +331,7 @@ mod tests {
 pub struct HeaderBuilder {
     algorithm:         CompressionAlgorithm,
     level:             u8,
-    uncompressed_size: u64,
+    original_size: u64,
     compressed_size:   u64,
     crc32:             u32,
 }
@@ -341,7 +341,7 @@ impl HeaderBuilder {
         Self {
             algorithm:         CompressionAlgorithm::None,
             level:             1,
-            uncompressed_size: 0,
+            original_size: 0,
             compressed_size:   0,
             crc32:             0,
         }
@@ -351,7 +351,7 @@ impl HeaderBuilder {
         self.algorithm = a; self
     }
     pub const fn level(mut self, l: u8) -> Self { self.level = l; self }
-    pub const fn uncompressed(mut self, n: u64) -> Self { self.uncompressed_size = n; self }
+    pub const fn uncompressed(mut self, n: u64) -> Self { self.original_size = n; self }
     pub const fn compressed(mut self, n: u64) -> Self { self.compressed_size = n; self }
     pub const fn crc32(mut self, c: u32) -> Self { self.crc32 = c; self }
 
@@ -359,7 +359,7 @@ impl HeaderBuilder {
         CompressionHeader::new(
             self.algorithm,
             self.level,
-            self.uncompressed_size,
+            self.original_size,
             self.compressed_size,
             self.crc32,
         )
@@ -383,7 +383,7 @@ mod header_builder_tests {
             .crc32(0xCAFE_BABE)
             .build();
         assert_eq!(h.algorithm(), CompressionAlgorithm::Zstd);
-        assert_eq!(h.uncompressed_size, 2048);
+        assert_eq!(h.original_size, 2048);
         assert_eq!(h.compressed_size, 512);
         assert_eq!(h.crc32, 0xCAFE_BABE);
     }

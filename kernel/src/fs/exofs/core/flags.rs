@@ -300,6 +300,8 @@ impl EpochFlags {
     // Bits 10-15 : réservés.
 
     pub const ALL_KNOWN: Self = Self(0x03FF);
+    /// Epoch commité de force (e.g., lors d'une urgence).
+    pub const FORCE_COMMITTED: Self = Self(1 << 10);
 
     pub fn from_bits_validated(bits: u16) -> Result<Self, ExofsError> {
         if bits & !Self::ALL_KNOWN.0 != 0 {
@@ -319,6 +321,9 @@ impl EpochFlags {
     pub fn is_stable(self) -> bool {
         self.contains(Self::COMMITTED) && !self.contains(Self::RECOVERING)
     }
+
+    /// Fusionne deux sets de flags (union).
+    pub fn merge(self, other: Self) -> Self { Self(self.0 | other.0) }
 }
 
 impl_flags_common!(EpochFlags, u16);

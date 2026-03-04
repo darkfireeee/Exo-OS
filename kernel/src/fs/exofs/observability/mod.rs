@@ -181,7 +181,7 @@ impl ObservabilityModule {
     /// Enregistre un événement interne (metrics + compteur).
     pub fn record_event(&self) {
         self.event_count.fetch_add(1, Ordering::Relaxed);
-        EXOFS_METRICS.inc_read(); // exemple d'instrumentation
+        EXOFS_METRICS.inc_read(1); // exemple d'instrumentation
     }
 
     /// Retourne le statut agrégé courant.
@@ -191,7 +191,7 @@ impl ObservabilityModule {
             has_critical_alert: ALERT_LOG.has_critical(),
             error_rate_ppt:     EXOFS_METRICS.error_rate_pct10().saturating_mul(100)
                                     .checked_div(10).unwrap_or(0),
-            space_usage_pct:    SPACE_TRACKER.usage_pct(),
+            space_usage_pct:    SPACE_TRACKER.usage_pct() as u64,
             throughput_bpt:     THROUGHPUT_TRACKER.avg_total_bpt(),
             trace_dropped:      TRACE_RING.dropped(),
         }
@@ -221,13 +221,13 @@ impl ObservabilityModule {
 
     /// Émet une alerte critique via les sous-modules.
     pub fn emit_critical(&self, tick: u64, msg: &str) {
-        ALERT_LOG.critical(tick, alert::AlertCode::new(0x0101), msg);
+        ALERT_LOG.critical(alert::AlertCode::new(0x0101), msg.as_bytes());
         TRACE_RING.emit(tick, ComponentId::OBSERVER, TraceLevel::Error, msg);
     }
 
     /// Émet une alerte warning.
     pub fn emit_warning(&self, tick: u64, msg: &str) {
-        ALERT_LOG.warning(tick, alert::AlertCode::new(0x0201), msg);
+        ALERT_LOG.warning(alert::AlertCode::new(0x0201), msg.as_bytes());
         TRACE_RING.emit(tick, ComponentId::OBSERVER, TraceLevel::Warn, msg);
     }
 

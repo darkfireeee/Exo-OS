@@ -196,7 +196,7 @@ fn save_journal(epoch_id: u64, entries: &[EpochJournalEntry], flags: u8) -> Exof
         i = i.wrapping_add(1);
     }
     let jid = journal_blob_id(epoch_id);
-    BLOB_CACHE.insert(jid, &buf).map_err(|_| ExofsError::NoSpace)?;
+    BLOB_CACHE.insert(jid, buf.to_vec()).map_err(|_| ExofsError::NoSpace)?;
     Ok(())
 }
 

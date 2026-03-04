@@ -419,6 +419,26 @@ impl ObjectFdTable {
         self.closes.store(0, Ordering::Relaxed);
         self.errors.store(0, Ordering::Relaxed);
     }
+
+    /// Pseudo-verrou : retourne `Ok(&self)` (ObjectFdTable est déjà thread-safe via UnsafeCell+acquire).
+    #[inline]
+    pub fn lock(&self) -> Result<&Self, ExofsError> { Ok(self) }
+
+    /// Nombre de fd ouverts pour un BlobId donné.
+    pub fn open_count_for(&self, id: &BlobId) -> usize {
+        self.acquire();
+        let inner = unsafe { &*self.inner.get() };
+        let mut count = 0usize;
+        let mut i = 0usize;
+        while i < MAX_FDS {
+            if !inner.slots[i].is_free() && inner.slots[i].blob_id == *id {
+                count = count.saturating_add(1);
+            }
+            i = i.wrapping_add(1);
+        }
+        self.release();
+        count
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

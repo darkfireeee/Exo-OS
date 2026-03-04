@@ -324,10 +324,24 @@ impl BlobRefcount {
         g.map.get(id).map(|e| e.count.load(Ordering::Acquire))
     }
 
+    /// Retourne le ref_count courant, ou 0 si le blob est inconnu.
+    pub fn get_count(&self, id: &BlobId) -> u32 {
+        self.get(id).unwrap_or(0)
+    }
+
     /// Retourne la taille physique d'un blob (None si inconnu).
     pub fn phys_size(&self, id: &BlobId) -> Option<u64> {
         let g = self.inner.lock();
         g.map.get(id).map(|e| e.phys_size)
+    }
+
+    /// Retourne l'epoch de création et la taille physique du blob.
+    /// Retourne (EpochId::INVALID, 0) si le blob est inconnu.
+    pub fn get_epoch_and_size(&self, id: &BlobId) -> (EpochId, u64) {
+        let g = self.inner.lock();
+        g.map.get(id)
+            .map(|e| (EpochId(e.create_epoch), e.phys_size))
+            .unwrap_or((EpochId::INVALID, 0))
     }
 
     /// Nombre total de blobs suivis.

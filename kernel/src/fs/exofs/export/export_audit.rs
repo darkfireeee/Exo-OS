@@ -73,6 +73,14 @@ pub enum ExportEvent {
     IntegrityFailed     = 18,
     /// Checkpoint de reprise enregistré.
     CheckpointSaved     = 19,
+    /// Session d'export/import démarrée (alias générique).
+    SessionStarted      = 20,
+    /// Session d'export/import terminée avec succès (alias générique).
+    SessionCompleted    = 21,
+    /// Session d'export/import interrompue par erreur (alias générique).
+    SessionFailed       = 22,
+    /// Export incrémental effectué.
+    IncrementalExport   = 23,
     /// Événement inconnu / réservé.
     Unknown             = 255,
 }

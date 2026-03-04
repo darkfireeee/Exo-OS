@@ -208,7 +208,7 @@ pub fn serialize_epoch_root_chain(root: &EpochRootInMemory) -> ExofsResult<Vec<V
 
 /// Valeur de remplacement pour `next_page` avant allocation disque.
 /// L'appelant doit remplacer toutes les occurrences par l'offset réel.
-pub const EPOCH_CHAIN_NEXT_PLACEHOLDER: u64 = 0xDEAD_BEEP_DEAD_BEEP;
+pub const EPOCH_CHAIN_NEXT_PLACEHOLDER: u64 = 0xDEAD_BEEF_DEAD_BEEF;
 
 // =============================================================================
 // rebuild_chain_offsets — mise à jour des next_page après allocation disque

@@ -287,16 +287,16 @@ impl CodeDescriptor {
     pub fn from_disk(d: &CodeDescriptorDisk) -> ExofsResult<Self> {
         d.verify()?;
         Ok(Self {
-            blob_id:      BlobId({ d.blob_id }),
-            object_id:    ObjectId({ d.object_id }),
-            disk_offset:  DiskOffset({ d.disk_offset }),
-            size:         { d.size },
-            epoch_create: EpochId({ d.epoch_create }),
-            flags:        { d.flags },
-            elf_class:    ElfClass::from_u8({ d.elf_class }),
-            elf_machine:  ElfMachine::from_u16({ d.elf_machine }),
-            pubkey_hash:  { d.pubkey_hash },
-            signature:    { d.signature },
+            blob_id:      BlobId(d.blob_id),
+            object_id:    ObjectId(d.object_id),
+            disk_offset:  DiskOffset(d.disk_offset),
+            size:         d.size,
+            epoch_create: EpochId(d.epoch_create),
+            flags:        d.flags,
+            elf_class:    ElfClass::from_u8(d.elf_class),
+            elf_machine:  ElfMachine::from_u16(d.elf_machine),
+            pubkey_hash:  d.pubkey_hash,
+            signature:    d.signature,
         })
     }
 

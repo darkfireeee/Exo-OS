@@ -140,7 +140,7 @@ impl PhysicalBlobDisk {
     /// Retourne le `BlobId` depuis le champ on-disk.
     #[inline]
     pub fn get_blob_id(&self) -> BlobId {
-        BlobId({ self.blob_id })
+        BlobId(self.blob_id)
     }
 
     /// Retourne `true` si le blob est logiquement supprimé.
@@ -198,18 +198,18 @@ impl PhysicalBlobInMemory {
 
     /// Reconstruit depuis la représentation on-disk.
     pub fn from_disk(d: &PhysicalBlobDisk) -> ExofsResult<Self> {
-        let compress_type = CompressionType::from_u8({ d.compress_type })
+        let compress_type = CompressionType::from_u8(d.compress_type)
             .ok_or(ExofsError::Corrupt)?;
 
         Ok(Self {
-            blob_id:       BlobId({ d.blob_id }),
-            data_offset:   DiskOffset({ d.data_offset }),
-            data_size:     { d.data_size },
-            original_size: { d.original_size },
-            ref_count:     AtomicU32::new({ d.ref_count }),
+            blob_id:       BlobId(d.blob_id),
+            data_offset:   DiskOffset(d.data_offset),
+            data_size:     d.data_size,
+            original_size: d.original_size,
+            ref_count:     AtomicU32::new(d.ref_count),
             compress_type,
-            epoch_create:  EpochId({ d.epoch_create }),
-            epoch_del:     { d.epoch_del },
+            epoch_create:  EpochId(d.epoch_create),
+            epoch_del:     d.epoch_del,
             hash_verified: false,
         })
     }
@@ -613,11 +613,3 @@ mod tests {
         assert!(CompressionType::from_u8(99).is_none());
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PhysicalBlobDisk — 80 octets, on-disk (types plain)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Structure on-disk d'un P-Blob (entrée dans la table de blobs).
-#[derive(Copy, Clone)]
-#[repr(C, packed)]

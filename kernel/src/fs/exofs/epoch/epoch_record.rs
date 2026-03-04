@@ -198,7 +198,7 @@ impl EpochRecord {
     /// 2. Checksum Blake3 en temps constant (RÈGLE SEC-08).
     pub fn verify(&self) -> ExofsResult<()> {
         // RÈGLE V-08 / CHAIN-01 : magic EN PREMIER.
-        let magic = { self.magic }; // Copie locale pour éviter unaligned read.
+        let magic = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) }; // Copie locale pour éviter unaligned read.
         if magic != EXOFS_MAGIC {
             return Err(ExofsError::InvalidMagic);
         }
@@ -238,7 +238,7 @@ impl EpochRecord {
     /// EpochId du record (copie locale — évite unaligned read sur packed struct).
     #[inline]
     pub fn epoch_id(&self) -> EpochId {
-        EpochId({ self.epoch_id })
+        EpochId(unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.epoch_id)) })
     }
 
     /// ObjectId de l'EpochRoot.
@@ -250,58 +250,58 @@ impl EpochRecord {
     /// Offset disque de l'EpochRoot.
     #[inline]
     pub fn root_offset(&self) -> DiskOffset {
-        DiskOffset({ self.root_offset })
+        DiskOffset(unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.root_offset)) })
     }
 
     /// Offset du slot précédent.
     #[inline]
     pub fn prev_slot(&self) -> DiskOffset {
-        DiskOffset({ self.prev_slot })
+        DiskOffset(unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.prev_slot)) })
     }
 
     /// Flags de l'epoch.
     #[inline]
     pub fn flags(&self) -> EpochFlags {
-        EpochFlags({ self.flags })
+        EpochFlags(unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) })
     }
 
     /// Timestamp TSC.
     #[inline]
     pub fn timestamp(&self) -> u64 {
-        { self.timestamp }
+        unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.timestamp)) }
     }
 
     /// Version du format.
     #[inline]
     pub fn version(&self) -> u16 {
-        { self.version }
+        unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.version)) }
     }
 
     /// Vrai si l'epoch a le flag RECOVERING (crash précédent non terminé).
     #[inline]
     pub fn is_recovering(&self) -> bool {
-        let f = { self.flags };
+        let f = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         EpochFlags(f).contains(EpochFlags::RECOVERING)
     }
 
     /// Vrai si l'epoch a le flag COMMITTED (commit trois-barrières réussi).
     #[inline]
     pub fn is_committed(&self) -> bool {
-        let f = { self.flags };
+        let f = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         EpochFlags(f).contains(EpochFlags::COMMITTED)
     }
 
     /// Vrai si l'epoch est marqué comme snapshot permanent.
     #[inline]
     pub fn is_snapshot(&self) -> bool {
-        let f = { self.flags };
+        let f = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         EpochFlags(f).contains(EpochFlags::SNAPSHOT)
     }
 
     /// Vrai si l'epoch contient des suppressions d'objets.
     #[inline]
     pub fn has_deletions(&self) -> bool {
-        let f = { self.flags };
+        let f = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         EpochFlags(f).contains(EpochFlags::HAS_DELETIONS)
     }
 
@@ -311,7 +311,7 @@ impl EpochRecord {
 
     /// Compare deux EpochRecords par epoch_id (pour sélectionner le plus récent).
     pub fn is_newer_than(&self, other: &Self) -> bool {
-        let self_id  = { self.epoch_id };
+        let self_id = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.epoch_id)) };
         let other_id = { other.epoch_id };
         self_id > other_id
     }
@@ -423,11 +423,11 @@ impl EpochRecordBuilder {
 
 impl fmt::Debug for EpochRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let epoch_id    = { self.epoch_id };
-        let magic       = { self.magic };
-        let root_offset = { self.root_offset };
-        let flags       = { self.flags };
-        let timestamp   = { self.timestamp };
+        let epoch_id = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.epoch_id)) };
+        let magic = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
+        let root_offset = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.root_offset)) };
+        let flags = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
+        let timestamp = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.timestamp)) };
         f.debug_struct("EpochRecord")
             .field("magic",       &format_args!("0x{:08X}", magic))
             .field("epoch_id",    &epoch_id)
@@ -440,7 +440,7 @@ impl fmt::Debug for EpochRecord {
 
 impl fmt::Display for EpochRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let epoch_id = { self.epoch_id };
+        let epoch_id = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.epoch_id)) };
         let committed = if self.is_committed() { "C" } else { "-" };
         let recovering = if self.is_recovering() { "R" } else { "-" };
         let snapshot = if self.is_snapshot() { "S" } else { "-" };
