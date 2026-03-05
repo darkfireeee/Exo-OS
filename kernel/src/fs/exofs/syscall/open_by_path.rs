@@ -77,29 +77,33 @@ fn open_by_path_inner(path_bytes: &[u8], path_len: usize, flags: u32, mode: u32)
 
 /// Handler de SYS_EXOFS_OPEN_BY_PATH (519).
 ///
-/// Signature : `(path_ptr: u64, path_len: u64, flags: u64, mode: u64) → fd ou errno`
+/// ## ABI musl-exo (LIB-01 / BUG-01)
+/// musl appelle `syscall(519, path_ptr, flags, mode)` — PAS de path_len séparé.
+/// Le chemin est null-terminated (lu via `read_user_path_heap`).
 ///
-/// musl-exo : `#define __NR_open 519` — redirige l'appel open() standard ici.
+/// Signature : `(path_ptr: u64, flags: u64, mode: u64) → fd ou -errno`
 ///
-/// RÈGLE 9 : copy_from_user via read_user_path_heap.
-/// SYS-05  : Valide path_len AVANT copie (0 → EINVAL, >MAX → E2BIG).
+/// RÈGLE 9 : copy_from_user via read_user_path_heap (null-terminated, heap).
+/// SYS-05  : Refuse ptr null. La longueur est inférée depuis le null-terminator.
 pub fn sys_exofs_open_by_path(
     path_ptr:  u64,
-    path_len:  u64,
-    flags:     u64,
-    mode:      u64,
+    flags:     u64,   // arg1 : musl envoie flags ici (pas path_len)
+    mode:      u64,   // arg2 : musl envoie mode ici
+    _a4: u64,
     _a5: u64,
     _a6: u64,
 ) -> i64 {
-    // SYS-05 : Valider longueur AVANT copy_from_user
-    if path_len == 0                      { return EINVAL; }
-    if path_len > EXOFS_PATH_MAX as u64   { return EINVAL; }
-    // SYS-01 : copy_from_user pour le chemin (API : (ptr, &mut Vec) → Result<len>)
+    // SYS-05 : Refuser pointeur null
+    if path_ptr == 0 { return EFAULT; }
+
+    // SYS-01 : copy_from_user — lit le chemin null-terminated sur le tas
     let mut path_bytes = Vec::new();
     let actual_len = match read_user_path_heap(path_ptr, &mut path_bytes) {
         Ok(n)  => n,
         Err(e) => return e,
     };
+    if actual_len == 0 { return ENOENT; }
+
     let flags32 = (flags & 0xFFFF_FFFF) as u32;
     let mode32  = (mode  & 0xFFFF_FFFF) as u32;
     match open_by_path_inner(&path_bytes, actual_len, flags32, mode32) {
