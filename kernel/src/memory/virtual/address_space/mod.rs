@@ -13,6 +13,6 @@ pub use mapper::Mapper;
 pub use tlb::{
     TlbFlushType, TlbStats, TlbShootdownQueue,
     flush_single, flush_range, flush_all, flush_all_including_global,
-    shootdown, register_tlb_ipi_sender, TLB_QUEUE, TLB_STATS,
+    shootdown, shootdown_sync, register_tlb_ipi_sender, TLB_QUEUE, TLB_STATS,
 };
 pub use user::{UserAddressSpace, UserAsStats, USER_MMAP_BASE, USER_STACK_SIZE};

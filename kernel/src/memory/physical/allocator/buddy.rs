@@ -26,6 +26,7 @@ use crate::memory::core::{
     PAGE_SIZE, BUDDY_MAX_ORDER, BUDDY_ORDER_COUNT,
     pages_to_bytes, is_aligned,
 };
+use crate::memory::physical::frame::descriptor::{FRAME_DESCRIPTORS, FrameFlags};
 use super::ai_hints;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -378,7 +379,13 @@ impl BuddyZone {
                     // SAFETY: Le frame vient d'être alloué, nous en sommes l'unique propriétaire.
                     unsafe { zero_pages(phys, order); }
                 }
-                Ok(Frame::containing(phys))
+                let frame = Frame::containing(phys);
+                // V-05 / MEM-05 : poser DMA_PINNED sur tous les frames DMA jusqu'à
+                // wait_dma_complete() — protège contre reclaim et swap.
+                if flags.contains(AllocFlags::DMA) || flags.contains(AllocFlags::DMA32) {
+                    FRAME_DESCRIPTORS.get(frame).set_flag(FrameFlags::DMA_PINNED);
+                }
+                Ok(frame)
             }
             Err(e) => {
                 self.fail_count.fetch_add(1, Ordering::Relaxed);

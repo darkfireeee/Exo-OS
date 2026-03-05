@@ -245,6 +245,8 @@ impl WaitQueue {
         }
 
         // 5. Bloquer — schedule_block ne revient que quand le thread est réveillé.
+        // V-38 / PREEMPT-BLOCK : INTERDIT de bloquer sous PreemptGuard actif.
+        crate::scheduler::core::preempt::assert_preempt_enabled();
         let cpu_id = CpuId((*tcb).cpu.load(Ordering::Relaxed));
         let rq = run_queue(cpu_id);
         crate::scheduler::core::switch::schedule_block(rq, &mut *tcb);

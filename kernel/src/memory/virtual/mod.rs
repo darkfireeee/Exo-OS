@@ -13,7 +13,7 @@ pub use address_space::{
     KernelAddressSpace, KERNEL_AS,
     Mapper,
     TlbFlushType, flush_single, flush_range, flush_all,
-    shootdown, register_tlb_ipi_sender,
+    shootdown, shootdown_sync, register_tlb_ipi_sender,
     TLB_QUEUE, TLB_STATS,
     UserAddressSpace, UserAsStats,
 };

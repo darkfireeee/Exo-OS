@@ -95,8 +95,8 @@ pub use arch::x86_64::cpu::{
 /// 2. memory/       — EmergencyPool EN PREMIER (RÈGLE EMERGENCY-01)
 /// 3. scheduler/    — après memory
 /// 4. process/      — après scheduler
-/// 5. ipc/          — après process + security
-/// 6. security/     — après memory
+/// 5. security/     — après memory (RÈGLE SEC-BOOT-GAP : avant IPC)
+/// 6. ipc/          — après process + security
 /// 7. fs/           — en dernier
 ///
 /// # Safety

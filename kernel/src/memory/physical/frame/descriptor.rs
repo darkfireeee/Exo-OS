@@ -52,6 +52,11 @@ impl FrameFlags {
     /// Frame de la liste LRU inactive.
     pub const LRU_INACTIVE: FrameFlags = FrameFlags(1 << 15);
 
+    /// Frame DMA verrouillé (combinaison DMA + PINNED — V-05 / MEM-05).
+    /// Doit être positionné sur tout frame alloué pour DMA et effacé après
+    /// `wait_dma_complete()`. Protège contre le reclaim et le swap.
+    pub const DMA_PINNED: FrameFlags = FrameFlags(Self::DMA.0 | Self::PINNED.0);
+
     pub const EMPTY: FrameFlags = FrameFlags(0);
 
     #[inline(always)]

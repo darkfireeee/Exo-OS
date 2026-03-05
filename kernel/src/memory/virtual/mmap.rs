@@ -206,6 +206,8 @@ pub fn do_mmap(
 ///
 /// `addr` doit être aligné sur PAGE_SIZE.
 /// Démappe toutes les PTEs présentes dans la VMA et libère leurs frames physiques.
+///
+/// V-04 : TLB shootdown synchrone (tous CPUs) AVANT free_page.
 pub fn do_munmap(addr: u64, _len: usize) -> Result<(), MmapError> {
     if addr == 0 || addr % PAGE_SIZE as u64 != 0 {
         return Err(MmapError::InvalidAddress);
@@ -231,17 +233,55 @@ pub fn do_munmap(addr: u64, _len: usize) -> Result<(), MmapError> {
             let _ = unsafe { Box::from_raw(vma_ptr) };
             user_as.stats.vma_count.fetch_sub(1, Ordering::Relaxed);
 
-            // Démappe chaque page présente dans la table des pages et libère
-            // le frame physique associé.
-            // Les pages non encore faultées (demand paging) retournent None — ignoré.
+            // V-04 : traiter les pages par lots pour limiter la taille du buffer.
+            //   1. Démappe les PTEs (flush TLB local intégré via unmap_page).
+            //   2. TLB shootdown synchrone vers tous les CPUs actifs.
+            //   3. Libère les frames physiques accumulés.
+            // Cette séparation garantit qu'aucun CPUs ne peut accéder à un frame
+            // après sa libération via un entrée TLB périmée (V-04).
+            const BATCH: usize = 64; // 64 × 4 KiB = 256 KiB par lot
+            let cpu_count = crate::arch::x86_64::acpi::madt::madt_cpu_count();
+
             let mut cursor = vma_start.as_u64();
             while cursor < vma_end.as_u64() {
-                // SAFETY: adresses user canoniques ; flush_single est intégré dans unmap_page.
-                if let Some(frame) = unsafe { user_as.unmap_page(VirtAddr::new(cursor)) } {
-                    // SAFETY: frame retourné exclusivement par unmap_page — pas encore libéré.
-                    let _ = crate::memory::physical::allocator::buddy::free_page(frame);
+                let mut frames = [crate::memory::core::types::Frame::containing(
+                    crate::memory::core::types::PhysAddr::new(0)); BATCH];
+                let mut count = 0usize;
+
+                // Phase 1 : démappe jusqu'à BATCH pages (flush local intégré).
+                while cursor < vma_end.as_u64() && count < BATCH {
+                    // SAFETY: adresses user canoniques.
+                    if let Some(f) = unsafe {
+                        user_as.unmap_page(VirtAddr::new(cursor))
+                    } {
+                        frames[count] = f;
+                        count += 1;
+                    }
+                    cursor += PAGE_SIZE as u64;
                 }
-                cursor += PAGE_SIZE as u64;
+
+                if count == 0 { continue; }
+
+                // Phase 2 : TLB shootdown synchrone (tous CPUs) — V-04.
+                let batch_start = VirtAddr::new(
+                    vma_start.as_u64().max(cursor - (count as u64 * PAGE_SIZE as u64))
+                );
+                let batch_end = VirtAddr::new(cursor);
+                // SAFETY: plage canonique user, appelé hors IRQ.
+                unsafe {
+                    crate::memory::virt::shootdown_sync(
+                        crate::memory::virt::TlbFlushType::Range {
+                            start: batch_start,
+                            end:   batch_end,
+                        },
+                        cpu_count,
+                    );
+                }
+
+                // Phase 3 : libérer les frames (TLBs déjà invalidés partout).
+                for i in 0..count {
+                    let _ = crate::memory::physical::allocator::buddy::free_page(frames[i]);
+                }
             }
             Ok(())
         }

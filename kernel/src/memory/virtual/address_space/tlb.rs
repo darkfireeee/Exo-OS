@@ -197,6 +197,11 @@ impl TlbShootdownQueue {
                 TlbFlushType::Global                => flush_all_including_global(),
             }
         }
+        // V-04 — Signaler que ce CPU a complété son flush (pour shootdown_sync).
+        let seq = TLB_SHOOTDOWN_SEQ.load(Ordering::Acquire);
+        if (cpu_id as usize) < 64 {
+            TLB_SHOOTDOWN_ACK[cpu_id as usize].store(seq, Ordering::Release);
+        }
     }
 
     unsafe fn send_tlb_ipi(cpu_mask: u64) {
@@ -210,6 +215,19 @@ impl TlbShootdownQueue {
 
 static TLB_IPI_SENDER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// V-04 — COMPLETION TRACKING POUR SHOOTDOWN SYNCHRONE
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Numéro de séquence global de shootdown TLB (monotone croissant).
+pub static TLB_SHOOTDOWN_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// ACK par CPU — chaque CPU écrit la dernière séquence traitée.
+pub static TLB_SHOOTDOWN_ACK: [AtomicU64; 64] = {
+    const A: AtomicU64 = AtomicU64::new(0);
+    [A; 64]
+};
+
 /// Enregistre la fonction d'envoi d'IPI TLB (fournie par le sous-système APIC).
 ///
 /// SAFETY: `func` doit être une fonction valide prenant un cpu_mask en paramètre.
@@ -220,9 +238,37 @@ pub unsafe fn register_tlb_ipi_sender(func: unsafe fn(u64)) {
 /// File de TLB shootdown globale.
 pub static TLB_QUEUE: TlbShootdownQueue = TlbShootdownQueue::new();
 
-/// Performe un TLB shootdown global sur les CPUs donnés.
+/// Performe un TLB shootdown asynchrone sur les CPUs donnés (fire-and-forget).
 ///
 /// SAFETY: `cpu_mask` est un masque valide, interruptions non désactivées.
 pub unsafe fn shootdown(flush_type: TlbFlushType, cpu_mask: u64) {
     TLB_QUEUE.request(flush_type, cpu_mask);
+}
+
+/// Performe un TLB shootdown SYNCHRONE sur tous les CPUs actifs.
+///
+/// Avance le numéro de séquence, envoie les IPIs, puis attend que chaque CPU
+/// cible ait mis à jour son ACK (V-04 : TLB shootdown complété avant free_pages).
+///
+/// SAFETY: Ne pas appeler depuis un contexte IRQ. `cpu_count` doit refléter le
+///         nombre réel de CPUs actifs (max 64).
+pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
+    if cpu_count == 0 { return; }
+    let n = cpu_count.min(64) as usize;
+    let all_mask: u64 = if n >= 64 { !0u64 } else { (1u64 << n) - 1 };
+
+    // Avancer la séquence — les CPUs devront ACK avec >= target_seq.
+    let target_seq = TLB_SHOOTDOWN_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+
+    // Envoyer les IPIs aux CPUs cibles.
+    TLB_QUEUE.request(flush_type, all_mask);
+
+    // Attendre que tous les CPUs cibles aient complété leur flush.
+    for cpu_id in 0..n {
+        loop {
+            let ack = TLB_SHOOTDOWN_ACK[cpu_id].load(Ordering::Acquire);
+            if ack >= target_seq { break; }
+            core::hint::spin_loop();
+        }
+    }
 }
