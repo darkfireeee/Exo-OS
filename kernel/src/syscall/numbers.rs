@@ -28,8 +28,9 @@
 // Taille totale de la table de dispatch
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille de la table syscall (un slot par numéro possible)
-pub const SYSCALL_TABLE_SIZE: usize = 512;
+/// Taille de la table syscall (un slot par numéro possible).
+/// 521 = couvre POSIX (0–499) + ExoFS (500–518) + open_by_path(519) + readdir(520).
+pub const SYSCALL_TABLE_SIZE: usize = 521;
 
 /// Numéro invalide (retourne -ENOSYS)
 pub const SYSCALL_INVALID: u64 = u64::MAX;
@@ -312,6 +313,77 @@ pub const SYS_EXO_LOG:           u64 = 350;
 pub const SYS_EXO_BPF:           u64 = 360;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Bloc 500–518 : ExoFS natif (filesystem objet ExoOS)
+// ─────────────────────────────────────────────────────────────────────────────
+// RÈGLE SYS-10 : Syscalls 0-499 = POSIX standard. Syscalls 500-518 = ExoFS natif.
+// Ces constantes sont PUBLIQUES — utilisées par exo-libc ET exo-rt.
+
+/// ExoFS : résolution de chemin → ObjectId   (path → BlobId + ObjectId)
+pub const SYS_EXOFS_PATH_RESOLVE:     u64 = 500;
+/// ExoFS : ouverture d'un objet existant      (ObjectId + droits → fd)
+pub const SYS_EXOFS_OBJECT_OPEN:      u64 = 501;
+/// ExoFS : lecture d'un objet                 (fd, offset, buf, len)
+pub const SYS_EXOFS_OBJECT_READ:      u64 = 502;
+/// ExoFS : écriture dans un objet             (fd, offset, buf, len)
+pub const SYS_EXOFS_OBJECT_WRITE:     u64 = 503;
+/// ExoFS : création d'un nouvel objet
+pub const SYS_EXOFS_OBJECT_CREATE:    u64 = 504;
+/// ExoFS : suppression d'un objet
+pub const SYS_EXOFS_OBJECT_DELETE:    u64 = 505;
+/// ExoFS : métadonnées d'un objet (stat-like)
+pub const SYS_EXOFS_OBJECT_STAT:      u64 = 506;
+/// ExoFS : mise à jour des métadonnées
+pub const SYS_EXOFS_OBJECT_SET_META:  u64 = 507;
+/// ExoFS : hash du contenu (audité SEC-09 — copy_from_user obligatoire)
+pub const SYS_EXOFS_GET_CONTENT_HASH: u64 = 508;
+/// ExoFS : création d'un snapshot
+pub const SYS_EXOFS_SNAPSHOT_CREATE:  u64 = 509;
+/// ExoFS : liste des snapshots disponibles
+pub const SYS_EXOFS_SNAPSHOT_LIST:    u64 = 510;
+/// ExoFS : montage d'un snapshot en lecture seule
+pub const SYS_EXOFS_SNAPSHOT_MOUNT:   u64 = 511;
+/// ExoFS : création d'une relation entre objets
+pub const SYS_EXOFS_RELATION_CREATE:  u64 = 512;
+/// ExoFS : requête sur les relations
+pub const SYS_EXOFS_RELATION_QUERY:   u64 = 513;
+/// ExoFS : déclenchement manuel du GC (garbage collector)
+pub const SYS_EXOFS_GC_TRIGGER:       u64 = 514;
+/// ExoFS : requête de quota capability
+pub const SYS_EXOFS_QUOTA_QUERY:      u64 = 515;
+/// ExoFS : export d'un objet vers userspace
+pub const SYS_EXOFS_EXPORT_OBJECT:    u64 = 516;
+/// ExoFS : import d'un objet depuis userspace
+pub const SYS_EXOFS_IMPORT_OBJECT:    u64 = 517;
+/// ExoFS : commit d'une epoch (3 barrières NVMe — atomicité garantie)
+pub const SYS_EXOFS_EPOCH_COMMIT:     u64 = 518;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bloc 519–520 : Extensions ExoFS — correctifs BUG-01/BUG-02
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// FIX BUG-01 : open() POSIX combiné Ring0 — enchaîne path_resolve() + object_open()
+/// atomiquement. Utilisé par musl-exo : #define __NR_open 519
+/// Signature : (path_ptr, path_len, flags, mode) → fd
+pub const SYS_EXOFS_OPEN_BY_PATH:     u64 = 519;
+
+/// FIX BUG-02 : getdents64 ExoFS — list le contenu d'un répertoire.
+/// Utilisé par ls, find, opendir(). Sans ce syscall : ls/find/opendir() impossibles.
+/// Signature : (fd, buf_ptr, buf_len) → octets remplis
+pub const SYS_EXOFS_READDIR:          u64 = 520;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX BUG-03 : Aliases process pour exo-rt
+// ─────────────────────────────────────────────────────────────────────────────
+// exo-rt référence SYS_PROC_CLONE et SYS_PROC_EXEC mais numbers.rs listait
+// fork=57 et execve=59 sans alias. Ces constantes sont OBLIGATOIRES pour que
+// exo-rt compile.
+
+/// Alias exo-rt pour fork() avec CoW kernel — identique à SYS_FORK (57).
+pub const SYS_PROC_CLONE: u64 = SYS_FORK;
+/// Alias exo-rt pour execve() — identique à SYS_EXECVE (59).
+pub const SYS_PROC_EXEC:  u64 = SYS_EXECVE;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Codes d'erreur Exo-OS (compatibles Linux errno)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -374,6 +446,12 @@ pub const fn is_exoos_native(nr: u64) -> bool {
 #[inline(always)]
 pub const fn is_valid_syscall(nr: u64) -> bool {
     (nr as usize) < SYSCALL_TABLE_SIZE
+}
+
+/// Vérifie si un numéro syscall est ExoFS natif (500–520)
+#[inline(always)]
+pub const fn is_exofs_syscall(nr: u64) -> bool {
+    nr >= SYS_EXOFS_PATH_RESOLVE && nr <= SYS_EXOFS_READDIR
 }
 
 /// Numéros de syscall candidats au fast-path (<100 cycles, pas d'alloc, no-lock)

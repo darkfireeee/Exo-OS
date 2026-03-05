@@ -8,6 +8,7 @@ pub mod delivery;
 pub mod handler;
 pub mod mask;
 pub mod queue;
+pub mod tcb;
 
 pub use default::{Signal, SigAction, SigActionKind, DEFAULT_ACTIONS};
 pub use delivery::{handle_pending_signals, send_signal_to_pid, send_signal_to_tcb};

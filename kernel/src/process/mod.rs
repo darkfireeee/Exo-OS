@@ -48,6 +48,7 @@ pub mod signal;
 pub mod state;
 pub mod group;
 pub mod namespace;
+pub mod auxv;
 pub mod resource;
 
 // ─────────────────────────────────────────────────────────────────────────────

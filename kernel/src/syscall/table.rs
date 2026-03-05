@@ -33,6 +33,29 @@ use crate::syscall::validation::{
     PATH_MAX, STRING_MAX, IO_BUF_MAX,
 };
 use crate::syscall::fast_path::Timespec;
+use crate::fs::exofs::syscall::{
+    sys_exofs_path_resolve,
+    sys_exofs_object_open,
+    sys_exofs_object_read,
+    sys_exofs_object_write,
+    sys_exofs_object_create,
+    sys_exofs_object_delete,
+    sys_exofs_object_stat,
+    sys_exofs_object_set_meta,
+    sys_exofs_get_content_hash,
+    sys_exofs_snapshot_create,
+    sys_exofs_snapshot_list,
+    sys_exofs_snapshot_mount,
+    sys_exofs_relation_create,
+    sys_exofs_relation_query,
+    sys_exofs_gc_trigger,
+    sys_exofs_quota_query,
+    sys_exofs_export_object,
+    sys_exofs_import_object,
+    sys_exofs_epoch_commit,
+    sys_exofs_open_by_path,
+    sys_exofs_readdir,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Type handler
@@ -689,6 +712,29 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXO_CAP_CREATE => sys_exo_cap_create,
         SYS_EXO_CAP_REVOKE => sys_exo_cap_revoke,
         SYS_EXO_LOG        => sys_exo_log,
+        // ── ExoFS (500–518) ────────────────────────────────────────────────
+        SYS_EXOFS_PATH_RESOLVE     => sys_exofs_path_resolve,
+        SYS_EXOFS_OBJECT_OPEN      => sys_exofs_object_open,
+        SYS_EXOFS_OBJECT_READ      => sys_exofs_object_read,
+        SYS_EXOFS_OBJECT_WRITE     => sys_exofs_object_write,
+        SYS_EXOFS_OBJECT_CREATE    => sys_exofs_object_create,
+        SYS_EXOFS_OBJECT_DELETE    => sys_exofs_object_delete,
+        SYS_EXOFS_OBJECT_STAT      => sys_exofs_object_stat,
+        SYS_EXOFS_OBJECT_SET_META  => sys_exofs_object_set_meta,
+        SYS_EXOFS_GET_CONTENT_HASH => sys_exofs_get_content_hash,
+        SYS_EXOFS_SNAPSHOT_CREATE  => sys_exofs_snapshot_create,
+        SYS_EXOFS_SNAPSHOT_LIST    => sys_exofs_snapshot_list,
+        SYS_EXOFS_SNAPSHOT_MOUNT   => sys_exofs_snapshot_mount,
+        SYS_EXOFS_RELATION_CREATE  => sys_exofs_relation_create,
+        SYS_EXOFS_RELATION_QUERY   => sys_exofs_relation_query,
+        SYS_EXOFS_GC_TRIGGER       => sys_exofs_gc_trigger,
+        SYS_EXOFS_QUOTA_QUERY      => sys_exofs_quota_query,
+        SYS_EXOFS_EXPORT_OBJECT    => sys_exofs_export_object,
+        SYS_EXOFS_IMPORT_OBJECT    => sys_exofs_import_object,
+        SYS_EXOFS_EPOCH_COMMIT     => sys_exofs_epoch_commit,
+        // ── ExoFS extensions (519–520) — FIX BUG-01 + BUG-02 ───────────────
+        SYS_EXOFS_OPEN_BY_PATH     => sys_exofs_open_by_path,
+        SYS_EXOFS_READDIR          => sys_exofs_readdir,
         // ── Catch-all ──────────────────────────────────────────────────────
         _             => sys_enosys,
     }

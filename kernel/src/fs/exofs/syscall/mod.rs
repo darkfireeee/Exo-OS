@@ -29,6 +29,9 @@ pub mod quota_query;
 pub mod export_object;
 pub mod import_object;
 pub mod epoch_commit;
+// FIX BUG-01 + BUG-02 : nouveaux syscalls ExoFS
+pub mod open_by_path;
+pub mod readdir;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Ré-exports publics des handlers
@@ -53,6 +56,9 @@ pub use quota_query::sys_exofs_quota_query;
 pub use export_object::sys_exofs_export_object;
 pub use import_object::sys_exofs_import_object;
 pub use epoch_commit::sys_exofs_epoch_commit;
+// BUG-01/BUG-02 handlers
+pub use open_by_path::sys_exofs_open_by_path;
+pub use readdir::sys_exofs_readdir;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Numéros de syscalls ExoFS
@@ -77,9 +83,13 @@ pub const SYS_EXOFS_QUOTA_QUERY:       u64 = 515;
 pub const SYS_EXOFS_EXPORT_OBJECT:     u64 = 516;
 pub const SYS_EXOFS_IMPORT_OBJECT:     u64 = 517;
 pub const SYS_EXOFS_EPOCH_COMMIT:      u64 = 518;
+/// FIX BUG-01 : open() POSIX atomique Ring0
+pub const SYS_EXOFS_OPEN_BY_PATH:     u64 = 519;
+/// FIX BUG-02 : getdents64 ExoFS
+pub const SYS_EXOFS_READDIR:          u64 = 520;
 
 pub const SYS_EXOFS_FIRST: u64 = SYS_EXOFS_PATH_RESOLVE;
-pub const SYS_EXOFS_LAST:  u64 = SYS_EXOFS_EPOCH_COMMIT;
+pub const SYS_EXOFS_LAST:  u64 = SYS_EXOFS_READDIR;
 pub const SYS_EXOFS_COUNT: u64 = SYS_EXOFS_LAST - SYS_EXOFS_FIRST + 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,6 +167,12 @@ pub fn dispatch_exofs_syscall(args: ExofsSyscallArgs) -> i64 {
             sys_exofs_import_object(args.a1, args.a2, args.a3, args.a4, args.a5, args.a6),
         SYS_EXOFS_EPOCH_COMMIT =>
             sys_exofs_epoch_commit(args.a1, args.a2, args.a3, args.a4, args.a5, args.a6),
+        // FIX BUG-01 : open() POSIX atomique
+        SYS_EXOFS_OPEN_BY_PATH =>
+            sys_exofs_open_by_path(args.a1, args.a2, args.a3, args.a4, args.a5, args.a6),
+        // FIX BUG-02 : getdents64 ExoFS
+        SYS_EXOFS_READDIR =>
+            sys_exofs_readdir(args.a1, args.a2, args.a3, args.a4, args.a5, args.a6),
         _ => ENOSYS,
     }
 }

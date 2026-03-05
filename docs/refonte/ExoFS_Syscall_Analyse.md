@@ -1,8 +1,10 @@
-EXO-OS · ExoFS v3
-Couche Syscall — Extraction & Analyse Critique
-ABI · Dispatch · Handlers · Libc · Erreurs silencieuses
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Ce document contient les règles EXTRAITES + les BUGS identifiés par analyse à froid
+EXO-OS · ExoFS v3 — Module Syscall
+Analyse Complète & Intégration Kernel
+ABI · Dispatch · Handlers · ExoFS · Libc Redox-inspirée · Sécurité
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Document basé sur l'implémentation réelle du kernel (kernel/src/syscall/)
+Adapté des libs Redox OS (redox-rt, relibc) pour Exo-OS
+Date : 2026-03-04 · Version : v4.0 — remplace ExoFS_Syscall_Analyse v3
 
 1 — Architecture de la Couche Syscall
 La couche syscall Exo-OS est structurée en trois niveaux distincts. Cette séparation est non-négociable.

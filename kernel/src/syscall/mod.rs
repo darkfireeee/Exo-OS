@@ -50,6 +50,10 @@ pub mod table;
 pub mod dispatch;
 pub mod compat;
 pub mod fs_bridge;
+// Nouveaux modules — correctifs BUG-01..BUG-09
+pub mod errno;
+pub mod abi;
+pub mod handlers;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports publics
@@ -72,12 +76,29 @@ pub use numbers::{
     // Numéros Exo-OS natifs
     SYS_EXO_IPC_SEND, SYS_EXO_IPC_RECV, SYS_EXO_IPC_CALL,
     SYS_EXO_CAP_CREATE, SYS_EXO_CAP_REVOKE, SYS_EXO_LOG,
+    // ExoFS 500-520
+    SYS_EXOFS_PATH_RESOLVE, SYS_EXOFS_OBJECT_OPEN, SYS_EXOFS_OBJECT_READ,
+    SYS_EXOFS_OBJECT_WRITE, SYS_EXOFS_OBJECT_CREATE, SYS_EXOFS_OBJECT_DELETE,
+    SYS_EXOFS_OBJECT_STAT, SYS_EXOFS_OBJECT_SET_META, SYS_EXOFS_GET_CONTENT_HASH,
+    SYS_EXOFS_SNAPSHOT_CREATE, SYS_EXOFS_SNAPSHOT_LIST, SYS_EXOFS_SNAPSHOT_MOUNT,
+    SYS_EXOFS_RELATION_CREATE, SYS_EXOFS_RELATION_QUERY, SYS_EXOFS_GC_TRIGGER,
+    SYS_EXOFS_QUOTA_QUERY, SYS_EXOFS_EXPORT_OBJECT, SYS_EXOFS_IMPORT_OBJECT,
+    SYS_EXOFS_EPOCH_COMMIT,
+    SYS_EXOFS_OPEN_BY_PATH, SYS_EXOFS_READDIR,
+    // Aliases exo-rt (BUG-03)
+    SYS_PROC_CLONE, SYS_PROC_EXEC,
     // Errno
     EINVAL, EFAULT, ENOMEM, EAGAIN, EPERM, ENOSYS, EBADF, ENOENT,
     EACCES, EEXIST, ENOTDIR, EISDIR, ENOSPC, ENOTSUP,
     // Classificateurs
-    is_valid_syscall, is_linux_compat, is_exoos_native,
+    is_valid_syscall, is_linux_compat, is_exoos_native, is_exofs_syscall,
 };
+
+/// Mapping KernelError/ExofsError → errno (BUG fix ERRNO-MISSING).
+pub use errno::{kernel_err_to_errno, exofs_err_to_errno, result_to_retval};
+
+/// Types ABI : SyscallArgs, SyscallResult, check adresse canonique (BUG-05).
+pub use abi::{SyscallArgs, SyscallResult, is_canonical_address};
 
 /// Types de validation des arguments userspaces.
 pub use validation::{
