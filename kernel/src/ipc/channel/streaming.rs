@@ -433,6 +433,7 @@ impl StreamChannelTable {
 
     fn free(&mut self, idx: usize) -> bool {
         if idx < STREAM_CHANNEL_TABLE_SIZE && self.used[idx] {
+            // SAFETY: used[idx] garantit que slots[idx] est initialisé; used → false empêche double-drop.
             unsafe { self.slots[idx].assume_init_drop() };
             self.used[idx] = false;
             self.count -= 1;

@@ -126,6 +126,7 @@ pub fn current_tid() -> u32 {
     if tcb_ptr.is_null() {
         return 0;
     }
+    // SAFETY: tcb_ptr non-null (vérifié ci-dessus); pointe dans le pool statique de TCBs.
     unsafe { (*tcb_ptr).tid.0 }
 }
 
@@ -181,7 +182,7 @@ pub fn wake_thread(tid: u32) {
         // Thread non enregistré — réveil déjà effectué ou pas encore dormant.
         return;
     }
-
+    // SAFETY: tcb_ptr non-null (testé ci-dessus); TCB dans pool statique, non libéré pendant l'exécution.
     unsafe {
         let tcb = &mut *tcb_ptr;
         let cpu_id = tcb.current_cpu();

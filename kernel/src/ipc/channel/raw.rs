@@ -19,6 +19,9 @@ use crate::ipc::core::types::{EndpointId, IpcError, MessageId, alloc_message_id}
 use crate::ipc::core::constants::MAX_MSG_SIZE;
 use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
 use crate::scheduler::sync::spinlock::SpinLock;
+// IPC-04 (v6) : vérification capability via security::access_control
+use crate::security::capability::{CapTable, CapToken, Rights};
+use crate::security::access_control::{check_access, ObjectKind, AccessError};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Dimensionnement
@@ -355,4 +358,49 @@ pub fn raw_stats_snapshot() -> [Option<RawSlotStats>; MAX_RAW_SLOTS] {
         }
     }
     out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API capability-checked — IPC-04 (v6) : appel direct security/access_control/
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Envoie dans la mailbox de `ep_id` avec vérification capability (RÈGLE IPC-04 v6).
+///
+/// Identique à `send_raw()` mais vérifie `Rights::IPC_SEND` via
+/// `security::access_control::check_access()` avant toute opération.
+/// Utilisé par la couche syscall (appels depuis l'espace utilisateur).
+/// Les appels kernel-internes peuvent utiliser `send_raw()` directement.
+pub fn send_raw_checked(
+    ep_id: EndpointId,
+    data:  &[u8],
+    flags: u32,
+    table: &CapTable,
+    token: CapToken,
+) -> Result<MessageId, IpcError> {
+    // IPC-04 (v6) : vérification capability — security::access_control
+    check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_SEND, "ipc::channel::raw")
+        .map_err(|e| match e {
+            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+            _ => IpcError::PermissionDenied,
+        })?;
+    send_raw(ep_id, data, flags)
+}
+
+/// Reçoit depuis la mailbox de `ep_id` avec vérification capability (RÈGLE IPC-04 v6).
+///
+/// # Droits requis : `Rights::IPC_RECV`
+pub fn recv_raw_checked(
+    ep_id: EndpointId,
+    buf:   &mut [u8],
+    flags: u32,
+    table: &CapTable,
+    token: CapToken,
+) -> Result<usize, IpcError> {
+    // IPC-04 (v6) : vérification capability — security::access_control
+    check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_RECV, "ipc::channel::raw")
+        .map_err(|e| match e {
+            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+            _ => IpcError::PermissionDenied,
+        })?;
+    recv_raw(ep_id, buf, flags)
 }

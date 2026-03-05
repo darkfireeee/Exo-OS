@@ -248,6 +248,7 @@ pub fn shm_map(
     let virt_base = if hint_virt.is_null() {
         let phys = {
             let dir = SHM_DESC_DIR.lock();
+            // SAFETY: desc_idx alloué par alloc() dans SHM_DESC_DIR; verrou tenu pendant l'accès.
             unsafe { dir.get(desc_idx) }
                 .and_then(|d| d.page_phys(0))
                 .unwrap_or(PhysAddr::NULL)
@@ -280,6 +281,7 @@ pub fn shm_map(
                             if let Some(unmap_fn) = *UNMAP_PAGE_HOOK.lock() {
                                 for j in 0..i {
                                     let v = virt_base.0 + (j * PAGE_SIZE) as u64;
+                                    // SAFETY: unmap_fn est un hook validé; v est dans la région mappée (j < i < n_pages).
                                     unsafe { unmap_fn(v, pid.0) };
                                 }
                             }

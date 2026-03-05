@@ -218,9 +218,7 @@ impl EndpointDesc {
             self.total_refused.fetch_add(1, Ordering::Relaxed);
             return Err(IpcError::WouldBlock);
         }
-        // SAFETY: tail est dans [0, ENDPOINT_BACKLOG) et nous avons vérifié
-        // qu'il reste de la place (next != head). Seul le producteur écrit ici.
-        // addr_of! évite de créer une &T intermédiaire (strict-aliasing UB).
+        // SAFETY: tail ∈ [0,ENDPOINT_BACKLOG), place vérifiée (next != head), producteur unique.
         unsafe {
             let slot = core::ptr::addr_of!(self.backlog[tail as usize]) as *mut PendingConnection;
             core::ptr::write(slot, conn);

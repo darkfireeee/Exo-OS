@@ -34,6 +34,7 @@ impl VmaFlags {
     pub const KERNEL:      VmaFlags = VmaFlags(1 << 13); // VMA kernel
     pub const DONTEXPAND:  VmaFlags = VmaFlags(1 << 14); // Non-expandable
     pub const WIPEONFORK:  VmaFlags = VmaFlags(1 << 15); // Effacer au fork
+    pub const DONTCOPY:    VmaFlags = VmaFlags(1 << 16); // Non copié au fork (SignalTcb)
 
     pub const fn contains(self, other: VmaFlags) -> bool { (self.0 & other.0) == other.0 }
     pub const fn bits(self) -> u32 { self.0 }

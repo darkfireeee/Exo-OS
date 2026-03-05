@@ -304,8 +304,8 @@ impl IpcBarrierTable {
                     Ordering::AcqRel,
                     Ordering::Relaxed,
                 ).is_ok() {
-                    // SAFETY: slot exclusif
                     let ptr = self.slots[i].barrier.as_ptr() as *mut IpcBarrier;
+                    // SAFETY: CAS AcqRel garantit l'exclusivité du slot; MaybeUninit<IpcBarrier> write-once.
                     unsafe { ptr.write(IpcBarrier::new(id, parties)) }
                     self.count.fetch_add(1, Ordering::Relaxed);
                     return Some(i);

@@ -187,6 +187,7 @@ pub fn poll_long(txn_id: DmaTransactionId) -> PollResult {
 #[inline(always)]
 fn read_tsc() -> u64 {
     #[cfg(target_arch = "x86_64")]
+    // SAFETY: rdtsc disponible sur tout x86_64; options(nostack, nomem) correctes.
     unsafe {
         let lo: u32;
         let hi: u32;
@@ -206,6 +207,7 @@ fn read_tsc() -> u64 {
 #[inline(always)]
 fn cpu_pause() {
     #[cfg(target_arch = "x86_64")]
+    // SAFETY: pause disponible sur x86_64; réduit la contention de cohérence cache.
     unsafe {
         core::arch::asm!("pause", options(nostack, nomem, preserves_flags));
     }

@@ -98,9 +98,7 @@ pub fn do_exit(
 
     // 9. Appeler schedule_block() — ce thread ne sera plus jamais choisi par pick_next_task()
     //    car son état est Dead. schedule_block ne le ré-enfile pas.
-    // SAFETY: thread.sched_tcb est le TCB du thread courant ; la déréférence Box est valide
-    //         car thread reste en mémoire jusqu'au reap. schedule_block ne retourne jamais
-    //         quand l'état est Dead.
+    // SAFETY: sched_tcb = TCB courant; thread en mémoire jusqu'au reap; schedule_block ne retourne pas (Dead).
     unsafe {
         let _preempt = PreemptGuard::new();
         let cpu_id = thread.sched_tcb.current_cpu();
@@ -143,8 +141,7 @@ pub fn do_exit_thread(
         let tid = thread.tid;
         let pid = thread.pid;
         REAPER_QUEUE.enqueue(pid, tid);
-        // SAFETY: thread.sched_tcb est le TCB du thread courant ; sched_tcb valide car thread
-        //         n'est libéré que par le reaper après cet appel. schedule_block ne retourne pas.
+        // SAFETY: sched_tcb = TCB courant; thread libéré par reaper après cet appel; schedule_block no-return.
         unsafe {
             let _preempt = PreemptGuard::new();
             let cpu_id = thread.sched_tcb.current_cpu();

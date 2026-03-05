@@ -30,8 +30,7 @@ pub fn phys_to_virt(phys: PhysAddr) -> VirtAddr {
         phys.as_u64(),
         PHYS_MAP_SIZE
     );
-    // SAFETY: La physmap est initialisée au boot avant tout accès. L'offset
-    // arithmétique est dans l'espace d'adressage canonique du noyau.
+    // SAFETY: physmap initialisée au boot; offset dans l'espace canonique kernel.
     unsafe { VirtAddr::new_unchecked(PHYS_MAP_BASE.as_u64() + phys.as_u64()) }
 }
 

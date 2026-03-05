@@ -262,8 +262,7 @@ pub fn record_error_ctx(ctx: &DmaErrorContext) {
 #[inline(always)]
 fn read_tsc() -> u64 {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: RDTSC disponible sur tout x86_64. Peut lire légèrement dans le futur
-    // à cause du réordonnancement OOO, mais suffisant pour un timestamp de diagnostic.
+    // SAFETY: RDTSC disponible sur x86_64; non-sérialisé suffisant pour diagnostic.
     unsafe {
         let lo: u32;
         let hi: u32;

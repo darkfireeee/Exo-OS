@@ -27,6 +27,9 @@ use crate::process::core::pcb::{ProcessControlBlock, ProcessState, process_flags
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::signal::mask::reset_signals_on_exec;
 use crate::process::signal::mask::block_all_except_kill;
+use crate::memory::virt::UserAddressSpace;
+use crate::memory::virt::VmaFlags;
+use crate::memory::VirtAddr;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trait ElfLoader — RÈGLE PROC-01 : abstraction de la couche fs/
@@ -49,6 +52,8 @@ pub struct ElfLoadResult {
     pub cr3:               u64,
     /// Pointeur opaque vers le UserAddressSpace créé par fs/.
     pub addr_space_ptr:    usize,
+    /// Adresse virtuelle du SignalTcb mappé (0 si absent) — pour PROC-VMA/V-17.
+    pub signal_tcb_vaddr:  u64,
 }
 
 /// Erreurs renvoyées par ElfLoader.
@@ -171,6 +176,18 @@ pub fn do_execve(
     let elf_result = loader
         .load_elf(path, argv, envp, cr3_current)
         .map_err(ExecError::ElfLoadFailed)?;
+
+    // PROC-VMA (V-17) : marquer la VMA SignalTcb DONTCOPY | DONTEXPAND.
+    // Empêche un attaquant d'utiliser mmap(MAP_FIXED) pour écraser le SignalTcb.
+    if elf_result.signal_tcb_vaddr != 0 {
+        // SAFETY: addr_space_ptr créé par ElfLoader::load_elf() comme Box<UserAddressSpace>;
+        // on est le seul détenteur de cet AS (l'ancien AS a été remplacé).
+        let addr_space = unsafe { &*(elf_result.addr_space_ptr as *const UserAddressSpace) };
+        addr_space.set_vma_flags(
+            VirtAddr::new(elf_result.signal_tcb_vaddr),
+            VmaFlags::DONTCOPY | VmaFlags::DONTEXPAND,
+        );
+    }
 
     // Fermer les fds O_CLOEXEC.
     let closed_handles = {

@@ -355,8 +355,7 @@ impl ThreadControlBlock {
     /// Lit l'état courant du thread.
     #[inline(always)]
     pub fn state(&self) -> TaskState {
-        // SAFETY: l'AtomicU8 contient toujours une valeur de TaskState valide
-        // (invariant maintenu par set_state uniquement).
+        // SAFETY: AtomicU8 contient toujours une valeur TaskState valide (invariant: seul set_state écrit).
         unsafe { core::mem::transmute(self.state.load(Ordering::Acquire)) }
     }
 

@@ -217,6 +217,7 @@ unsafe fn write_cr4(val: u64) {
 #[inline]
 pub fn pku_supported() -> bool {
     let ecx: u32;
+    // SAFETY: CPUID disponible sur x86_64; xchg préserve rbx réservé par LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -356,6 +357,7 @@ impl PkuAccessGuard {
 
 impl Drop for PkuAccessGuard {
     fn drop(&mut self) {
+        // SAFETY: wrpkru restaure la valeur PKRU sauvegardée dans new(); CPL 0 requis.
         unsafe { wrpkru(self.saved_pkru) };
     }
 }

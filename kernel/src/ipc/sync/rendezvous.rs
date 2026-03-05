@@ -320,14 +320,15 @@ impl ExchangeSlot {
                         // SAFETY: A a initialisé offer_buf sous OfferPending
                         let offer_size = self.data_size.load(Ordering::Relaxed) as usize;
                         let recv_len = offer_size.min(out.len());
+                        // SAFETY: offer_buf initialisé par A sous OfferPending (Acquire/Release sur state).
                         unsafe {
                             let src = self.offer_buf.as_ptr();
                             core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), recv_len);
                         }
 
                         // Écrire notre réponse dans reply_buf
-                        // SAFETY: reply_buf exclusif en état Completing
                         let write_len = data.len().min(MAX_EXCHANGE_SIZE);
+                        // SAFETY: reply_buf exclusif en état Completing — seul B écrit ici.
                         unsafe {
                             let dst = self.reply_buf.as_ptr() as *mut u8;
                             core::ptr::copy_nonoverlapping(data.as_ptr(), dst, write_len);
@@ -385,6 +386,7 @@ impl IpcRendezvousTable {
                 if self.slots[i].occupied.compare_exchange(
                     false, true, Ordering::AcqRel, Ordering::Relaxed,
                 ).is_ok() {
+                    // SAFETY: CAS AcqRel garantit l'exclusivité du slot; rdv MaybeUninit write-once.
                     unsafe {
                         (self.slots[i].rdv.as_ptr() as *mut IpcRendezvous)
                             .write(IpcRendezvous::new(id, parties));
@@ -441,6 +443,7 @@ impl ExchangeTable {
                 if self.occupied[i].compare_exchange(
                     false, true, Ordering::AcqRel, Ordering::Relaxed,
                 ).is_ok() {
+                    // SAFETY: CAS AcqRel garantit l'exclusivité; slots[i] MaybeUninit<ExchangeSlot> write-once.
                     unsafe {
                         (self.slots[i].as_ptr() as *mut ExchangeSlot)
                             .write(ExchangeSlot::new());

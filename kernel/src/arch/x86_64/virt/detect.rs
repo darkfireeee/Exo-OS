@@ -93,9 +93,8 @@ pub fn detect_hypervisor() -> HypervisorType {
 #[inline]
 fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     let (eax, ebx, ecx, edx): (u32, u32, u32, u32);
-    // SAFETY: CPUID est une instruction non-privilégiée, toujours sûre
-    // xchg pour préserver rbx réservé par LLVM
     let ebx_r: u64;
+    // SAFETY: CPUID non-privilégiée; xchg préserve rbx réservé par LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",

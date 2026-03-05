@@ -19,7 +19,7 @@
 //
 // SÉCURITÉ :
 //   • Le mapping NO_COW interdit au CoW de créer des copies transparentes.
-//   • Les droits d'accès sont validés via capability_bridge avant le mapping.
+//   • Les droits d'accès sont validés via security::access_control::check_access() avant le mapping.
 //   • La page est immutable côté consommateur (R/O mapping).
 // ═══════════════════════════════════════════════════════════════════════════════
 

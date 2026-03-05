@@ -401,6 +401,7 @@ impl RpcClientTable {
                 if self.slots[i].occupied.compare_exchange(
                     false, true, Ordering::AcqRel, Ordering::Relaxed,
                 ).is_ok() {
+                    // SAFETY: CAS AcqRel garantit l'exclusivité; client MaybeUninit<RpcClient> write-once.
                     unsafe {
                         (self.slots[i].client.as_ptr() as *mut RpcClient)
                             .write(RpcClient::new(id));

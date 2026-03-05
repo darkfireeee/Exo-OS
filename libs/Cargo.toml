@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    # Bibliothèques kernel-space internes
     "exo_std",
     "exo_crypto",
     "exo_types",
@@ -10,6 +11,17 @@ members = [
     "exo_logger",
     "exo_metrics",
     "exo_service_registry",
+    # Bibliothèques Ring3 — compatibilité POSIX / runtime userspace
+    "exo-rt",
+    "exo-alloc",
+    "generic-rt",
+    # exo-libc exclu : fork de relibc avec son propre workspace
+    # musl-exo exclu : projet C (pas Cargo)
+]
+exclude = [
+    "exo-libc",
+    "musl-exo",
+    "vendors",
 ]
 resolver = "2"
 

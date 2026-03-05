@@ -133,7 +133,7 @@ const _: () = assert!(
 impl SlotHeaderDisk {
     /// Sérialise en buffer de 128 octets.
     pub fn to_bytes(&self) -> [u8; SLOT_HEADER_SIZE] {
-        // SAFETY : repr(C) 128B.
+        // SAFETY: repr(C) 128B.
         unsafe { core::mem::transmute_copy(self) }
     }
 
@@ -166,7 +166,7 @@ impl SlotHeaderDisk {
             return Err(ExofsError::ChecksumMismatch);
         }
 
-        // SAFETY : buf est aligné, taille 128B vérifiée.
+        // SAFETY: buf est aligné, taille 128B vérifiée.
         Ok(unsafe { core::mem::transmute_copy(buf) })
     }
 

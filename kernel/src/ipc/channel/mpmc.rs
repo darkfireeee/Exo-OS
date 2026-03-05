@@ -479,8 +479,8 @@ impl MpmcChannelTable {
     }
 }
 
-// SAFETY: SpinLock<MpmcChannelTable> tout-zéro est valide.
 static MPMC_CHANNEL_TABLE: SpinLock<MpmcChannelTable> =
+    // SAFETY: SpinLock<MpmcChannelTable> tout-zéro valide: AtomicBool false = déverrouillé, table vide.
     unsafe { core::mem::zeroed() };
 
 // ---------------------------------------------------------------------------

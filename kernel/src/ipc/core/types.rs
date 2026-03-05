@@ -462,7 +462,7 @@ impl MessageType {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IpcCapError — variante IPC de CapError (pour capability_bridge)
+// IpcCapError — variante IPC de CapError (v6 — accès via security::access_control)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Erreur de capability spécifique à IPC.

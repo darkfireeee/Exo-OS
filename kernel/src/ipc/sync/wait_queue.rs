@@ -286,6 +286,11 @@ impl IpcWaitQueue {
             }
 
             // 5. Blocage réel via le scheduler.
+            // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock garanti.
+            debug_assert!(
+                crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
+                "IpcWaitQueue::wait: block_current() appelé avec PreemptGuard actif — deadlock garanti"
+            );
             // SAFETY: le waiter est actif dans la table, un réveil est attendu.
             unsafe { super::sched_hooks::block_current(tid); }
             spin_count += 1;

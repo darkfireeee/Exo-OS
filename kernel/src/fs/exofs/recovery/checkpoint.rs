@@ -143,7 +143,7 @@ impl CheckpointHeaderDisk {
     /// # WRITE-02
     /// L'appelant doit vérifier que le buffer de destination fait bien 128B.
     pub fn to_bytes(&self) -> [u8; CHECKPOINT_HEADER_SIZE] {
-        // SAFETY : repr(C) 128B, copie directe.
+        // SAFETY: repr(C) 128B, copie directe.
         unsafe { core::mem::transmute_copy(self) }
     }
 
@@ -173,7 +173,7 @@ impl CheckpointHeaderDisk {
             return Err(ExofsError::ChecksumMismatch);
         }
 
-        // SAFETY : buf est repr(C) aligné 1B, taille vérifiée ci-dessus.
+        // SAFETY: buf est repr(C) aligné 1B, taille vérifiée ci-dessus.
         Ok(unsafe { core::mem::transmute_copy(buf) })
     }
 

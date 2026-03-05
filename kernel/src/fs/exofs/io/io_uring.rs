@@ -102,7 +102,7 @@ impl IoUringSqe {
     }
 
     pub fn zeroed() -> Self {
-        // SAFETY : IoUringSqe est repr(C), tous les champs sont des entiers.
+        // SAFETY: IoUringSqe est repr(C), tous les champs sont des entiers.
         unsafe { core::mem::zeroed() }
     }
 
@@ -141,7 +141,7 @@ pub struct IoUringSq {
     submitted: AtomicU64,
 }
 
-// SAFETY : accès sous spinlock exclusif.
+// SAFETY: accès sous spinlock exclusif.
 unsafe impl Sync for IoUringSq {}
 unsafe impl Send for IoUringSq {}
 
@@ -184,7 +184,7 @@ impl IoUringSq {
         let result = (|| {
             if self.available() == 0 { return Err(ExofsError::Resource); }
             let tail = self.tail.load(Ordering::Relaxed) as usize % self.depth;
-            // SAFETY : tail < depth, accès sous spinlock.
+            // SAFETY: tail < depth, accès sous spinlock.
             unsafe { (&mut *self.ring.get())[tail] = sqe; }
             self.tail.fetch_add(1, Ordering::Relaxed);
             self.submitted.fetch_add(1, Ordering::Relaxed);
@@ -201,7 +201,7 @@ impl IoUringSq {
             None
         } else {
             let head = self.head.load(Ordering::Relaxed) as usize % self.depth;
-            // SAFETY : head < depth, accès sous spinlock.
+            // SAFETY: head < depth, accès sous spinlock.
             let sqe = unsafe { (&*self.ring.get())[head] };
             self.head.fetch_add(1, Ordering::Relaxed);
             Some(sqe)
@@ -261,7 +261,7 @@ impl IoUringCq {
         let result = (|| {
             if self.available() == 0 { return Err(ExofsError::Resource); }
             let tail = self.tail.load(Ordering::Relaxed) as usize % self.depth;
-            // SAFETY : tail < depth, spinlock.
+            // SAFETY: tail < depth, spinlock.
             unsafe { (&mut *self.ring.get())[tail] = cqe; }
             self.tail.fetch_add(1, Ordering::Relaxed);
             Ok(())
@@ -277,7 +277,7 @@ impl IoUringCq {
             None
         } else {
             let head = self.head.load(Ordering::Relaxed) as usize % self.depth;
-            // SAFETY : head < depth, spinlock.
+            // SAFETY: head < depth, spinlock.
             let cqe = unsafe { (&*self.ring.get())[head] };
             self.head.fetch_add(1, Ordering::Relaxed);
             self.reaped.fetch_add(1, Ordering::Relaxed);

@@ -406,6 +406,7 @@ impl PriorityQueueTable {
                 if self.slots[i].occupied.compare_exchange(
                     false, true, Ordering::AcqRel, Ordering::Relaxed,
                 ).is_ok() {
+                    // SAFETY: CAS AcqRel garantit l'exclusivité; queue MaybeUninit<PriorityQueue> write-once.
                     unsafe {
                         (self.slots[i].queue.as_ptr() as *mut PriorityQueue)
                             .write(PriorityQueue::new(id));

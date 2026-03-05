@@ -158,9 +158,8 @@ unsafe impl Sync for CapTable {}
 // Nécessaire car CapEntry n'est pas Copy.
 macro_rules! init_cap_entries {
     () => {{
-        // SAFETY: On initialise chaque entrée avec new_free().
-        // AtomicU64/AtomicU32 sont valides pour zero-init par construction.
         let mut arr: [core::mem::MaybeUninit<CapEntry>; CAP_TABLE_CAPACITY] =
+            // SAFETY: MaybeUninit array uninit valide; chaque slot est écrasé par new_free() ensuite.
             unsafe { core::mem::MaybeUninit::uninit().assume_init() };
         let mut i = 0usize;
         while i < CAP_TABLE_CAPACITY {

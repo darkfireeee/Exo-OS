@@ -170,10 +170,8 @@ impl IrqGuard {
     #[must_use]
     pub fn new() -> Self {
         let rflags: u64;
-        // SAFETY: pushfq + popq lisent RFLAGS sans effets de bord. cli coupe
-        // les interruptions matérielles pour la durée de la section critique.
-        // L'ordre est important : sauvegarder avant de couper.
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: pushfq/popq lisent RFLAGS; cli coupe les IRQ; ordre correct (sauvegarder avant couper).
         unsafe {
             core::arch::asm!(
                 "pushfq",
@@ -201,10 +199,9 @@ impl Drop for IrqGuard {
     #[inline(always)]
     fn drop(&mut self) {
         preempt_enable_raw();
-        // SAFETY: on restaure RFLAGS à l'état exact d'avant le guard.
-        // La restauration du bit IF via popfq est atomique vis-à-vis des IRQ.
         if self.rflags & (1 << 9) != 0 {
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: sti restaure le bit IF; rflags provient de pushfq/popq dans new(); restauration atomique.
             unsafe {
                 core::arch::asm!("sti", options(nomem, nostack));
             }

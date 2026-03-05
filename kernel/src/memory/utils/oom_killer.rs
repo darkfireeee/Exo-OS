@@ -148,6 +148,7 @@ pub fn set_tsc_hz(hz: u64) {
 fn rdtsc() -> u64 {
     let lo: u32;
     let hi: u32;
+    // SAFETY: rdtsc disponible sur x86_64; non-sérialisé suffisant pour timestamp OOM.
     unsafe {
         core::arch::asm!(
             "rdtsc",

@@ -231,8 +231,7 @@ pub fn setup_signal_frame(
     };
 
     // Écrire le frame sur la pile utilisateur.
-    // SAFETY : sig_rsp pointe vers une adresse utilisateur validée ci-dessus ;
-    // l'écriture est un effet de bord voulu (livraison signal POSIX).
+    // SAFETY: sig_rsp pointe vers adresse userspace validée ci-dessus; écriture = livraison signal POSIX.
     unsafe {
         let ptr = sig_rsp as *mut SignalFrame;
         ptr.write(sig_frame);

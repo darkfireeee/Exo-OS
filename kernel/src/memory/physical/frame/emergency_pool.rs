@@ -198,10 +198,9 @@ impl EmergencyPool {
             return None;
         }
 
-        // SAFETY: Après init(), tous les WaitNode sont initialisés.
-        // Le pool est accessible en lecture après la barrière Release de init().
         let nodes_ptr = self.nodes.get();
         let nodes: &[MaybeUninit<WaitNode>; EMERGENCY_POOL_SIZE] =
+            // SAFETY: Après init(), tous les WaitNode sont initialisés (barrière Release).
             unsafe { &*nodes_ptr };
 
         for node_uninit in nodes.iter() {
@@ -297,6 +296,7 @@ impl EmergencyPool {
         let nodes_ptr = self.nodes.get();
         // SAFETY: Après init(), tous les nœuds sont initialisés.
         let nodes: &[MaybeUninit<WaitNode>; EMERGENCY_POOL_SIZE] =
+            // SAFETY: nodes_ptr valide post-init(); accès immutable.
             unsafe { &*nodes_ptr };
         nodes.iter()
             .map(|n| unsafe { n.assume_init_ref() })

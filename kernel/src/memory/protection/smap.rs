@@ -83,6 +83,7 @@ unsafe fn write_cr4(val: u64) {
 #[inline]
 pub fn smap_supported() -> bool {
     let ebx_r: u64;
+    // SAFETY: CPUID disponible sur x86_64; xchg préserve rbx réservé par LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -199,6 +200,7 @@ impl SmapAccessGuard {
 impl Drop for SmapAccessGuard {
     #[inline]
     fn drop(&mut self) {
+        // SAFETY: clac() rétablit EFLAGS.AC à 0; protège SMAP après la section critic.
         unsafe { clac() };
     }
 }

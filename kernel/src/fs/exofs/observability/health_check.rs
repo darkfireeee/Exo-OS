@@ -138,7 +138,7 @@ pub struct HealthProbeRing {
     head:  AtomicU64,
 }
 
-// SAFETY : accès par index atomique tournant.
+// SAFETY: accès par index atomique tournant.
 unsafe impl Sync for HealthProbeRing {}
 unsafe impl Send for HealthProbeRing {}
 
@@ -161,7 +161,7 @@ impl HealthProbeRing {
 
     pub fn push(&self, r: HealthProbeResult) {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % PROBE_RING_SIZE;
-        // SAFETY : index atomique tournant.
+        // SAFETY: index atomique tournant.
         unsafe { *self.slots[idx].get() = r; }
     }
 
@@ -281,7 +281,7 @@ impl HealthCheck {
     }
 
     fn thresholds(&self) -> &HealthThresholds {
-        // SAFETY : lecture seule après init.
+        // SAFETY: lecture seule après init.
         unsafe { &*self.thresholds.get() }
     }
 

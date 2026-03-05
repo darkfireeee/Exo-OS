@@ -197,6 +197,7 @@ impl PerCpuCache {
         }
         // Vide prev.
         while let Some(ptr) = self.magazines[class_idx].prev.pop() {
+            // SAFETY: ptr alloqué par SLUB_CACHES[slub_idx] (magazine prev).
             unsafe { SLUB_CACHES[slub_idx].free(ptr); }
         }
         self.stats.drains.fetch_add(1, Ordering::Relaxed);
@@ -253,7 +254,7 @@ impl PerCpuCacheTable {
                 // @rustc: `core::mem::MaybeUninit::zeroed().assume_init()` n'est pas const stable.
                 // On utilise donc une initialisation runtime déportée dans `init_cpu()`.
                 //
-                // Déclaration d'un placeholder de taille correcte; init_cpu() surécrit ensuite.
+                // SAFETY: zeros valides pour AtomicXxx et primitifs; init_cpu() surcharge ensuite.
                 unsafe { core::mem::MaybeUninit::zeroed().assume_init() }
             },
             init_lock: spin::Mutex::new(false),

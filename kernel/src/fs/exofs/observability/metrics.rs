@@ -89,7 +89,7 @@ pub struct ExofsMetrics {
     counters: [AtomicU64; MetricId::COUNT],
 }
 
-// SAFETY : AtomicU64 est Sync+Send.
+// SAFETY: AtomicU64 est Sync+Send.
 unsafe impl Sync for ExofsMetrics {}
 unsafe impl Send for ExofsMetrics {}
 
@@ -246,7 +246,7 @@ pub struct MetricsHistorySlot {
     pub snapshot: MetricsSnapshot,
 }
 
-// SAFETY : accès par index tournant atomique.
+// SAFETY: accès par index tournant atomique.
 unsafe impl Sync for MetricsHistory {}
 
 impl MetricsHistory {
@@ -260,7 +260,7 @@ impl MetricsHistory {
     /// Enregistre le snapshot courant (tick fourni en paramètre).
     pub fn record(&self, tick: u64, snap: MetricsSnapshot) {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % METRICS_HISTORY_SIZE;
-        // SAFETY : index tournant exclusif.
+        // SAFETY: index tournant exclusif.
         unsafe {
             let ptr = &self.slots[idx] as *const MetricsHistorySlot as *mut MetricsHistorySlot;
             (*ptr).tick     = tick;

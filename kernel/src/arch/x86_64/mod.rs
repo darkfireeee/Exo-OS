@@ -61,8 +61,7 @@ pub fn arch_info() -> ArchInfo {
 #[inline(never)]
 pub fn halt_cpu() -> ! {
     loop {
-        // SAFETY: Instruction architecturale standard — désactive interruptions
-        // puis halte jusqu'à la prochaine interruption (ici : jamais car IF=0)
+        // SAFETY: cli+hlt atomique; IF=0 donc jamais réveillé — boucle infinie intentionnelle.
         unsafe {
             core::arch::asm!(
                 "cli",

@@ -284,13 +284,13 @@ impl AuditEntry {
 
     /// Sérialise l'entrée en un tableau d'octets bruts.
     pub fn as_bytes(&self) -> &[u8; AUDIT_ENTRY_SIZE] {
-        // SAFETY : AuditEntry est repr(C,packed), taille = AUDIT_ENTRY_SIZE.
+        // SAFETY: AuditEntry est repr(C,packed), taille = AUDIT_ENTRY_SIZE.
         unsafe { &*(self as *const Self as *const [u8; AUDIT_ENTRY_SIZE]) }
     }
 
     /// Désérialise depuis un tableau d'octets bruts.
     pub fn from_bytes(bytes: &[u8; AUDIT_ENTRY_SIZE]) -> Self {
-        // SAFETY : même layout, copie bit-à-bit d'une structure Pod.
+        // SAFETY: même layout, copie bit-à-bit d'une structure Pod.
         unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) }
     }
 

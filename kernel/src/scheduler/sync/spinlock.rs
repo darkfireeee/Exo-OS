@@ -160,8 +160,7 @@ impl<'a, T> Drop for IrqSpinLockGuard<'a, T> {
 #[inline(always)]
 pub fn save_and_disable_irq() -> u64 {
     let rflags: u64;
-    // SAFETY: pushfq/pop lisent RFLAGS sans effets mémoire. cli désactive les IRQ
-    // de façon atomique; l'état est restauré dans restore_irq().
+    // SAFETY: pushfq/pop lisent RFLAGS; cli désactive les IRQ atomiquement; état restauré par restore_irq().
     unsafe {
         core::arch::asm!(
             "pushfq",
@@ -177,8 +176,7 @@ pub fn save_and_disable_irq() -> u64 {
 #[inline(always)]
 pub fn restore_irq(rflags: u64) {
     if rflags & (1 << 9) != 0 {
-        // SAFETY: sti restaure exactement l'état IRQ sauvegardé par save_and_disable_irq().
-        // Le bit IF était à 1 avant la désactivation — on le remet à 1.
+        // SAFETY: sti restaure l'état IRQ sauvegardé; bit IF était 1, on le remet à 1.
         unsafe { core::arch::asm!("sti", options(nomem, nostack, preserves_flags)); }
     }
 }

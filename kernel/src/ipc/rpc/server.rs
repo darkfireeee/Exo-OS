@@ -382,6 +382,7 @@ impl RpcServerTable {
                 if self.slots[i].occupied.compare_exchange(
                     false, true, Ordering::AcqRel, Ordering::Relaxed,
                 ).is_ok() {
+                    // SAFETY: CAS AcqRel garantit l'exclusivité; server MaybeUninit<RpcServer> write-once.
                     unsafe {
                         (self.slots[i].server.as_ptr() as *mut RpcServer)
                             .write(RpcServer::new(id));

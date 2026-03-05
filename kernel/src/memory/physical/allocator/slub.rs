@@ -193,6 +193,7 @@ impl SlubCache {
 
         let r = &mut *inner;
         if inuse == 0 {
+            // SAFETY: header ptr valide; listes manipulées sous verrou cache.
             unsafe {
                 slub_list_remove(header, &mut r.partial, &mut r.partial_count);
                 slub_list_push_front(header, &mut r.empty, &mut r.empty_count);
@@ -202,6 +203,7 @@ impl SlubCache {
         } else if inuse + 1 == total {
             // Était plein (sans liste), maintenant partiel
             r.full_count = r.full_count.saturating_sub(1);
+            // SAFETY: header ptr valide; slub était plein, passage vers partiel sous verrou.
             unsafe { slub_list_push_front(header, &mut r.partial, &mut r.partial_count); }
             self.stats.current_inuse.fetch_sub(1, Ordering::Relaxed);
             self.stats.frees.fetch_add(1, Ordering::Relaxed);
@@ -227,6 +229,7 @@ impl SlubCache {
 
         if header.inuse == header.total {
             let h = inner.partial as *mut SlubHeader;
+            // SAFETY: h = partial non-null (inuse == total); retrait de la liste partielle.
             unsafe { slub_list_remove(h, &mut inner.partial, &mut inner.partial_count); }
             inner.full_count += 1;
         }
@@ -236,6 +239,7 @@ impl SlubCache {
     fn reactivate_empty(&self, inner: &mut SlubCacheInner) -> Option<NonNull<u8>> {
         if inner.empty.is_null() { return None; }
         let h = inner.empty;
+        // SAFETY: empty non-null (vérifié); déplacement vers partial sous verrou.
         unsafe {
             slub_list_remove(h, &mut inner.empty, &mut inner.empty_count);
             slub_list_push_front(h, &mut inner.partial, &mut inner.partial_count);

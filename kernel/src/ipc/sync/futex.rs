@@ -175,6 +175,11 @@ pub unsafe fn futex_wait(
                         return Ok(WaiterState::Woken);
                     }
                     // Blocage réel — retourne après que ipc_futex_wake_fn a été appelée.
+                    // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock garanti.
+                    debug_assert!(
+                        crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
+                        "futex_wait: block_current() appelé avec PreemptGuard actif — deadlock garanti"
+                    );
                     super::sched_hooks::block_current(thread_id);
                     // Réinitialiser le compteur pour la prochaine itération.
                     spins = 0;

@@ -76,13 +76,13 @@ fn drain_class_inner(cpu_id: usize, class_idx: usize, policy: DrainPolicy) -> us
                 unsafe { SLUB_CACHES[slub_idx].free(ptr); }
                 count += 1;
             }
-            while let Some(ptr) = cache.magazines[class_idx].prev.pop() {
-                unsafe { SLUB_CACHES[slub_idx].free(ptr); }
+            while let Some(ptr) = cache.magazines[class_idx].prev.pop() {                // SAFETY: ptr alloqué par SLUB_CACHES[slub_idx].                unsafe { SLUB_CACHES[slub_idx].free(ptr); }
                 count += 1;
             }
         }
         DrainPolicy::Partial => {
             while let Some(ptr) = cache.magazines[class_idx].prev.pop() {
+                // SAFETY: ptr alloqu\u00e9 par SLUB_CACHES[slub_idx] (drain partial).
                 unsafe { SLUB_CACHES[slub_idx].free(ptr); }
                 count += 1;
             }

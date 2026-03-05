@@ -231,7 +231,7 @@ impl SlabCache {
 
         let r = &mut *inner;
         if inuse == 0 {
-            // Slab entièrement libre → déplacer de partial/full vers free
+            // SAFETY: header ptr valide (slab actif); listes manipulées sous verrou.
             unsafe {
                 list_remove(header, &mut r.partial_list, &mut r.partial_count);
                 list_remove(header, &mut r.full_list,    &mut r.full_count);
@@ -240,7 +240,7 @@ impl SlabCache {
             self.stats.current_inuse.fetch_sub(1, Ordering::Relaxed);
             self.stats.frees.fetch_add(1, Ordering::Relaxed);
         } else if inuse + 1 == (*header).total {
-            // Était plein → passer de full vers partial
+            // SAFETY: header ptr valide; cache verrouillé lors de cet appel.
             unsafe {
                 list_remove(header, &mut r.full_list, &mut r.full_count);
                 list_push_front(header, &mut r.partial_list, &mut r.partial_count);
@@ -279,6 +279,7 @@ impl SlabCache {
     fn activate_free_slab(inner: &mut SlabCacheInner, info: &SizeClassInfo) -> Option<NonNull<u8>> {
         if inner.free_list.is_null() { return None; }
         let header = inner.free_list;
+        // SAFETY: free_list non-null (vérifié ci-dessus); manipulation de liste sous verrou.
         unsafe {
             list_remove(header, &mut inner.free_list, &mut inner.free_count);
             list_push_front(header, &mut inner.partial_list, &mut inner.partial_count);
@@ -318,6 +319,7 @@ impl SlabCache {
         let objs_in_page = (PAGE_SIZE - (first_obj - virt_base as usize)) / info.size;
         let objs_in_page = objs_in_page.min(info.objs_per_slab);
 
+        // SAFETY: virt_base = page physique valide et mappée; header_ptr aligné 64 octets.
         unsafe {
             // Construire la freelist en chaîne
             let mut current = first_obj as *mut u8;
@@ -344,7 +346,7 @@ impl SlabCache {
             });
         }
 
-        // Insérer dans la liste partielle
+        // SAFETY: header_ptr initialisé ci-dessus (page fraîche); liste partielle sous verrou.
         unsafe { list_push_front(header_ptr, &mut inner.partial_list, &mut inner.partial_count); }
 
         // Allouer le premier objet
@@ -412,6 +414,7 @@ impl SlabPageProvider for DefaultProvider {
         let fat: *const dyn SlabPageProvider = unsafe {
             core::mem::transmute((data as *const (), vtable as *const ()))
         };
+        // SAFETY: fat pointer reconstruit depuis data/vtable enregistrés; fat est valide.
         unsafe { (*fat).get_page() }
     }
     fn put_page(&self, phys: PhysAddr) {
@@ -421,6 +424,7 @@ impl SlabPageProvider for DefaultProvider {
         let fat: *const dyn SlabPageProvider = unsafe {
             core::mem::transmute((data as *const (), vtable as *const ()))
         };
+        // SAFETY: fat pointer reconstruit depuis data/vtable enregistrés; fat valide.
         unsafe { (*fat).put_page(phys) }
     }
 }

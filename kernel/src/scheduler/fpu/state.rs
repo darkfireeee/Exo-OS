@@ -43,9 +43,7 @@ pub fn detect_xsave_size() {
     {
         // CPUID.(EAX=0Dh, ECX=0):EBX retourne la taille de la zone XSAVE.
         let size: usize;
-        // SAFETY: CPUID est disponible sur tout x86_64, aucun effet de bord mémoire.
-        // rbx ne peut pas être utilisé directement comme opérande inline asm dans LLVM,
-        // on le sauvegarde/restaure manuellement autour de CPUID.
+        // SAFETY: CPUID disponible sur x86_64; rbx sauvegardé/restauré (LLVM ne le supporte pas comme opérande direct).
         unsafe {
             let cpuid_eax: u32;
             let cpuid_ebx: u32;

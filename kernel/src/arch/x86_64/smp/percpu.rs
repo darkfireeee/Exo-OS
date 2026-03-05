@@ -94,11 +94,7 @@ struct PerCpuTable([PerCpuData; MAX_CPUS]);
 unsafe impl Sync for PerCpuTable {}
 
 static PER_CPU_TABLE: PerCpuTable = PerCpuTable(
-    // Rust ne permet pas [T::zeroed(); N] pour N > 32 avec const non-Copy,
-    // donc on initialise via transmute de tous-zéros : conforme car #[repr(C, align(64))]
-    // avec tous les champs initialisables à zéros.
-    // SAFETY: [0u8; size_of::<[PerCpuData; MAX_CPUS]>()] est un séquence d'octets nuls
-    // valide pour [PerCpuData; MAX_CPUS] dont tous les champs acceptent la représentation 0.
+    // SAFETY: [0u8; size_of::<[PerCpuData; MAX_CPUS]>] valide pour #[repr(C,align(64))] zeros-init.
     unsafe { core::mem::transmute([0u8; core::mem::size_of::<[PerCpuData; MAX_CPUS]>()]) }
 );
 

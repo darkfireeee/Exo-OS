@@ -37,6 +37,7 @@ pub unsafe fn init(tsc_hz: u64) {
 pub fn rdtsc() -> u64 {
     let lo: u32;
     let hi: u32;
+    // SAFETY: rdtsc disponible sur tout x86_64; options(nomem, nostack) correctes.
     unsafe { core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack)); }
     ((hi as u64) << 32) | lo as u64
 }
@@ -47,6 +48,7 @@ pub fn rdtscp() -> u64 {
     let lo: u32;
     let hi: u32;
     let _aux: u32;
+    // SAFETY: rdtscp disponible sur x86_64 moderne; sérialisé côté lecture; options(nomem, nostack) correctes.
     unsafe { core::arch::asm!("rdtscp", out("eax") lo, out("edx") hi, out("ecx") _aux, options(nomem, nostack)); }
     ((hi as u64) << 32) | lo as u64
 }

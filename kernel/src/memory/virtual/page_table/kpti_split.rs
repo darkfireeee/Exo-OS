@@ -126,8 +126,7 @@ pub static KPTI: KptiTable = KptiTable::new();
 /// Retourne false si Meltdown n'affecte pas ce CPU (AMD, post-2018 Intel).
 pub fn should_enable_kpti() -> bool {
     // Vérification par CPUID
-    // SAFETY: CPUID est une instruction lecture seule.
-    // xchg pour préserver rbx réservé par LLVM.
+    // SAFETY: CPUID lecture seule; xchg préserve rbx réservé par LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",

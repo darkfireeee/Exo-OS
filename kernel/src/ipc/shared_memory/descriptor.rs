@@ -318,6 +318,7 @@ impl ShmDescDirectory {
         if idx < MAX_SHM_REGIONS && self.entries[idx].used {
             // SAFETY: used est true → desc est initialisé
             unsafe { self.entries[idx].desc.assume_init_ref() }.destroy();
+            // SAFETY: desc initialisé (used true); used → false immédiatement après, empêche double-drop.
             unsafe { self.entries[idx].desc.assume_init_drop() };
             self.entries[idx].used = false;
             self.count -= 1;

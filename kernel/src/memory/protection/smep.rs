@@ -98,6 +98,7 @@ unsafe fn write_cr4(val: u64) {
 #[inline]
 pub fn smep_supported() -> bool {
     let ebx_r: u64;
+    // SAFETY: CPUID disponible sur x86_64; xchg préserve rbx réservé par LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -203,6 +204,7 @@ impl SmepGuard {
 
 impl Drop for SmepGuard {
     fn drop(&mut self) {
+        // SAFETY: restore_smep restaure CR4.SMEP; was_active provient de smep_enable().
         unsafe { restore_smep(self.was_active) };
     }
 }

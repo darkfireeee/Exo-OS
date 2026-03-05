@@ -273,8 +273,7 @@ fn exception_return_to_user(frame: &mut ExceptionFrame) {
         );
     }
     if tcb_ptr == 0 { return; }
-    // SAFETY: proc_signal_on_exception_return est thread-safe pour ce CPU.
-    // L'exclusion est garantie par cli implicite dans un handler d'interruption/exception.
+    // SAFETY: proc_signal_on_exception_return thread-safe; exclu par cli implicite dans handler.
     unsafe {
         proc_signal_on_exception_return(
             tcb_ptr as *mut u8,
@@ -393,8 +392,7 @@ extern "C" fn do_device_not_avail(frame: *mut ExceptionFrame) {
     // Lire le TCB courant depuis la donnée per-CPU partagée.
     // GS:[0x20] = `current_tcb: u64` dans la structure PerCpuData (percpu.rs).
     let tcb_ptr: u64;
-    // SAFETY: le segment GS est initialisé par arch::smp::percpu::init()
-    //         avant tout traitement d'interruption.
+    // SAFETY: GS initialisé par percpu::init() avant tout traitement d'interruption.
     unsafe {
         core::arch::asm!(
             "mov {}, gs:[0x20]",
@@ -768,8 +766,7 @@ extern "C" fn do_ipi_tlb_shootdown(_frame: *mut ExceptionFrame) {
     let cpu_id = super::smp::percpu::current_cpu_id() as u8;
 
     // Exécuter le flush TLB demandé par l'émetteur du shootdown.
-    // SAFETY: Appelé depuis le handler d'interruption — CLI implicite,
-    //         TLB_QUEUE est thread-safe par spinlock interne.
+    // SAFETY: appelé depuis handler IRQ (cli implicite); TLB_QUEUE thread-safe par spinlock.
     unsafe {
         crate::memory::virt::address_space::tlb::TLB_QUEUE.handle_remote(cpu_id);
     }

@@ -265,8 +265,7 @@ impl SyncChannel {
                         "SyncChannel::send: block_current() appelé avec PreemptGuard actif"
                     );
                     // Blocage réel — sera réveillé quand l'émetteur précédent termine.
-                    // SAFETY: block_current() est sûr si PreemptGuard::depth() == 0
-                    // (vérifié par le debug_assert ci-dessus). my_tid est valide.
+                    // SAFETY: block_current() sûr si depth()==0 (debug_assert ci-dessus), my_tid valide.
                     unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
                     spins = 0;
                 }
@@ -426,8 +425,7 @@ impl SyncChannel {
                     crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
                     "SyncChannel::send_zerocopy: block_current() avec PreemptGuard actif"
                 );
-                // SAFETY: block_current() sûr si PreemptGuard::depth() == 0
-                // (vérifié par debug_assert ci-dessus, send_zerocopy path).
+                // SAFETY: block_current() sûr si depth()==0 (debug_assert ci-dessus, send_zerocopy).
                 unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
                 spins = 0;
             }
@@ -488,8 +486,7 @@ impl SyncChannel {
                         crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
                         "SyncChannel::recv: block_current() appelé avec PreemptGuard actif"
                     );
-                    // SAFETY: block_current() sûr si PreemptGuard::depth() == 0
-                    // (vérifié par debug_assert ci-dessus, recv path).
+                    // SAFETY: block_current() sûr si depth()==0 (debug_assert ci-dessus, recv path).
                     unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
                     spins = 0;
                 }
@@ -530,9 +527,7 @@ impl SyncChannel {
         // Copie inline
         let copy_len = len.min(buf.len());
         if copy_len > 0 {
-            // SAFETY: l'émetteur a terminé l'écriture avant la transition
-            // SenderWaiting (Release/Acquire). Le récepteur est le seul
-            // à lire ici (protocole à un seul récepteur).
+            // SAFETY: émetteur terminé avant transition SenderWaiting (Release/Acquire); récepteur unique.
             unsafe {
                 let src = self.slot.data.get() as *const u8;
                 core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), copy_len);

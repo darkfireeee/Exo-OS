@@ -133,8 +133,7 @@ impl SpscRing {
         }
 
         let id = alloc_message_id();
-        // SAFETY: Nous sommes le seul producteur (SPSC).
-        // seq == pos prouve que le consommateur a libéré ce slot.
+        // SAFETY: seul producteur (SPSC); seq == pos prouve que le consommateur a libéré ce slot.
         unsafe {
             let slot = (*cell.slot.get()).assume_init_mut();
             slot.header = MessageHeader::new_inline(id, flags, src.len());

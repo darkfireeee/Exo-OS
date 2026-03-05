@@ -25,6 +25,8 @@ pub use raw::{
     send_raw, recv_raw, mailbox_open, mailbox_close,
     mailbox_open_count, raw_stats_snapshot,
     MAX_RAW_SLOTS, RawSlotStats,
+    // IPC-04 (v6) — variantes cap-checked pour la couche syscall
+    send_raw_checked, recv_raw_checked,
 };
 
 // Canal synchrone (rendezvous)
@@ -33,6 +35,8 @@ pub use sync::{
     SYNC_CHANNEL_TABLE_SIZE, SYNC_INLINE_SIZE,
     sync_channel_create, sync_channel_send, sync_channel_recv,
     sync_channel_close, sync_channel_destroy, sync_channel_count,
+    // IPC-04 (v6) — variantes cap-checked pour la couche syscall
+    sync_channel_send_checked, sync_channel_recv_checked,
 };
 
 // Canal asynchrone
@@ -50,6 +54,8 @@ pub use mpmc::{
     MPMC_CHANNEL_TABLE_SIZE,
     mpmc_channel_create, mpmc_channel_send, mpmc_channel_recv,
     mpmc_channel_destroy, mpmc_channel_count,
+    // IPC-04 (v6) — variantes cap-checked pour la couche syscall
+    mpmc_channel_send_checked, mpmc_channel_recv_checked,
 };
 
 // Canal broadcast
@@ -59,6 +65,8 @@ pub use broadcast::{
     MAX_BROADCAST_SUBSCRIBERS,
     broadcast_create, broadcast_subscribe, broadcast_unsubscribe,
     broadcast_publish, broadcast_recv, broadcast_destroy,
+    // IPC-04 (v6) — variantes cap-checked pour la couche syscall
+    broadcast_publish_checked, broadcast_subscribe_checked, broadcast_recv_checked,
 };
 
 // Canal typé générique

@@ -23,7 +23,7 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 /// Un segment virtuel pour Scatter-Gather.
 ///
-/// SAFETY : `ptr` doit pointer vers une mémoire valide pendant toute
+/// SAFETY: `ptr` doit pointer vers une mémoire valide pendant toute
 /// la durée de vie de `SgFragment`.
 #[derive(Debug, Clone, Copy)]
 pub struct SgFragment {
@@ -31,7 +31,7 @@ pub struct SgFragment {
     pub len: usize,
 }
 
-// SAFETY : les pointeurs SgFragment sont transmis entre threads sous
+// SAFETY: les pointeurs SgFragment sont transmis entre threads sous
 // contrôle exclusif du moteur DMA — aucun accès concurrent.
 unsafe impl Send for SgFragment {}
 unsafe impl Sync for SgFragment {}
@@ -39,16 +39,16 @@ unsafe impl Sync for SgFragment {}
 impl SgFragment {
     /// Crée un fragment à partir d'un slice mutable.
     ///
-    /// SAFETY : le slice doit rester valide aussi longtemps que ce fragment.
+    /// SAFETY: le slice doit rester valide aussi longtemps que ce fragment.
     pub fn from_slice(s: &mut [u8]) -> Self {
         Self { ptr: s.as_mut_ptr(), len: s.len() }
     }
 
     /// Crée un fragment en lecture seule (ptr const casté en mut).
     ///
-    /// SAFETY : ce fragment ne doit pas être utilisé pour scatter_write.
+    /// SAFETY: ce fragment ne doit pas être utilisé pour scatter_write.
     pub fn from_const_slice(s: &[u8]) -> Self {
-        // SAFETY : utilisé uniquement en lecture — jamais écrit via ce ptr.
+        // SAFETY: utilisé uniquement en lecture — jamais écrit via ce ptr.
         Self { ptr: s.as_ptr() as *mut u8, len: s.len() }
     }
 
@@ -56,11 +56,11 @@ impl SgFragment {
 
     /// Lit `buf.len()` octets depuis ce fragment.
     ///
-    /// SAFETY : `ptr` doit pointer vers au moins `self.len` octets valides.
+    /// SAFETY: `ptr` doit pointer vers au moins `self.len` octets valides.
     pub fn read_into(&self, buf: &mut [u8]) -> ExofsResult<usize> {
         let n = buf.len().min(self.len);
         if n == 0 { return Ok(0); }
-        // SAFETY : n ≤ self.len, la mémoire est valide par invariant de struct.
+        // SAFETY: n ≤ self.len, la mémoire est valide par invariant de struct.
         unsafe {
             core::ptr::copy_nonoverlapping(self.ptr, buf.as_mut_ptr(), n);
         }
@@ -69,11 +69,11 @@ impl SgFragment {
 
     /// Écrit `src` dans ce fragment.
     ///
-    /// SAFETY : même invariant que `read_into`.
+    /// SAFETY: même invariant que `read_into`.
     pub fn write_from(&self, src: &[u8]) -> ExofsResult<usize> {
         let n = src.len().min(self.len);
         if n == 0 { return Ok(0); }
-        // SAFETY : n ≤ self.len.
+        // SAFETY: n ≤ self.len.
         unsafe {
             core::ptr::copy_nonoverlapping(src.as_ptr(), self.ptr, n);
         }
@@ -106,7 +106,7 @@ impl SgList {
 
     /// Gather : lit toutes les données des fragments vers `sink` (RECUR-01 : while).
     ///
-    /// SAFETY : chaque fragment doit pointer vers une mémoire valide.
+    /// SAFETY: chaque fragment doit pointer vers une mémoire valide.
     pub fn gather_read(&self, sink: &mut Vec<u8>) -> ExofsResult<u64> {
         sink.try_reserve(self.total_bytes as usize).map_err(|_| ExofsError::NoMemory)?;
         let mut i = 0usize;
@@ -128,7 +128,7 @@ impl SgList {
 
     /// Scatter : écrit `src` dans les fragments (RECUR-01 : while).
     ///
-    /// SAFETY : chaque fragment doit pointer vers une mémoire valide.
+    /// SAFETY: chaque fragment doit pointer vers une mémoire valide.
     pub fn scatter_write(&self, src: &[u8]) -> ExofsResult<u64> {
         if src.len() as u64 > self.total_bytes {
             return Err(ExofsError::InvalidArgument);

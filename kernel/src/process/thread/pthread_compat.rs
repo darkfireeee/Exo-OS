@@ -96,8 +96,7 @@ pub fn PTHREAD_CREATE(
         Ok(handle) => {
             // Écrire le TID dans la struct pthread_t (offset 0).
             if pthread_out != 0 {
-                // SAFETY: pthread_out = adresse valide en espace userspace
-                // validée par syscall avant cet appel.
+                // SAFETY: pthread_out = adresse userspace validée par le syscall avant cet appel.
                 unsafe {
                     let p = pthread_out as *mut u32;
                     *p = handle.tid.0;
@@ -240,8 +239,7 @@ pub unsafe fn PTHREAD_MUTEX_LOCK(
             m.waiters.fetch_sub(1, Ordering::Relaxed);
             return ESUCCESS;
         }
-        // SAFETY: MUTEX_WQ utilise l'EmergencyPool (RÈGLE WAITQ-01).
-        // caller_tcb est le TCB courant, pas d'alias &mut actif.
+        // SAFETY: MUTEX_WQ EmergencyPool (WAITQ-01); caller_tcb TCB courant, pas d'alias &mut actif.
         unsafe { MUTEX_WQ.wait_interruptible(caller_tcb as *const _ as *mut _); }
     }
 }

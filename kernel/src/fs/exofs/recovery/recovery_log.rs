@@ -185,7 +185,7 @@ impl LogSlot {
     }
 }
 
-// SAFETY : accès contrôlé par l'index atomique `head` (séquence monotone).
+// SAFETY: accès contrôlé par l'index atomique `head` (séquence monotone).
 unsafe impl Sync for LogSlot {}
 
 // ── Structure principale ──────────────────────────────────────────────────────
@@ -232,7 +232,7 @@ impl RecoveryLog {
         // Réserver un slot via l'index monotone.
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize & CAPACITY_MASK;
 
-        // SAFETY : idx est dans [0, CAPACITY_MASK] par masquage.
+        // SAFETY: idx est dans [0, CAPACITY_MASK] par masquage.
         unsafe { self.ring[idx].write(entry); }
 
         self.total.fetch_add(1, Ordering::Relaxed);
@@ -409,7 +409,7 @@ impl RecoveryLog {
                 .wrapping_sub(n)
                 .wrapping_add(i)
                 & CAPACITY_MASK;
-            // SAFETY : slot_idx est dans [0, CAPACITY_MASK].
+            // SAFETY: slot_idx est dans [0, CAPACITY_MASK].
             let entry = unsafe { self.ring[slot_idx].read() };
             out.push(entry);
         }

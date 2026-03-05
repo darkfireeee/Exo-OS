@@ -92,7 +92,7 @@ pub struct WritebackQueue {
     pending: AtomicU64,
 }
 
-// SAFETY : accès sous spinlock exclusif.
+// SAFETY: accès sous spinlock exclusif.
 unsafe impl Sync for WritebackQueue {}
 unsafe impl Send for WritebackQueue {}
 
@@ -129,7 +129,7 @@ impl WritebackQueue {
         let result = (|| {
             if self.is_full() { return Err(ExofsError::Resource); }
             let tail = self.tail.load(Ordering::Relaxed) as usize % WRITEBACK_QUEUE_DEPTH;
-            // SAFETY : tail < WRITEBACK_QUEUE_DEPTH, sous spinlock.
+            // SAFETY: tail < WRITEBACK_QUEUE_DEPTH, sous spinlock.
             unsafe { (*self.slots.get())[tail] = entry; }
             self.tail.fetch_add(1, Ordering::Relaxed);
             self.pending.fetch_add(1, Ordering::Relaxed);
@@ -146,7 +146,7 @@ impl WritebackQueue {
             None
         } else {
             let head = self.head.load(Ordering::Relaxed) as usize % WRITEBACK_QUEUE_DEPTH;
-            // SAFETY : head < WRITEBACK_QUEUE_DEPTH, sous spinlock.
+            // SAFETY: head < WRITEBACK_QUEUE_DEPTH, sous spinlock.
             let e = unsafe { (*self.slots.get())[head] };
             self.head.fetch_add(1, Ordering::Relaxed);
             self.pending.fetch_sub(1, Ordering::Relaxed);
@@ -163,7 +163,7 @@ impl WritebackQueue {
             None
         } else {
             let head = self.head.load(Ordering::Relaxed) as usize % WRITEBACK_QUEUE_DEPTH;
-            // SAFETY : head < WRITEBACK_QUEUE_DEPTH, sous spinlock.
+            // SAFETY: head < WRITEBACK_QUEUE_DEPTH, sous spinlock.
             let e = unsafe { (*self.slots.get())[head] };
             Some(e)
         };
@@ -181,7 +181,7 @@ impl WritebackQueue {
             let mut i = 0usize;
             while i < count {
                 let idx = head.wrapping_add(i) % WRITEBACK_QUEUE_DEPTH;
-                // SAFETY : idx en range, sous spinlock.
+                // SAFETY: idx en range, sous spinlock.
                 let e = unsafe { (*self.slots.get())[idx] };
                 if e.age_ticks(now) > threshold_us {
                     out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
@@ -235,11 +235,17 @@ impl WritebackWorker {
     }
 
     /// Traite une entrée depuis la queue.
+    ///
+    /// V-28 / LOCK-05 : `dequeue()` libère le spinlock FS (N4) avant de retourner ;
+    /// `write_fn` est donc appelée sans aucun lock FS tenu → aucun risque
+    /// d'inversion N4→N3 lors d'une éventuelle allocation de frames physiques.
     pub fn process_one(&mut self, queue: &WritebackQueue, write_fn: &mut dyn FnMut(&[u8; 32], u32) -> ExofsResult<u64>) -> ExofsResult<bool> {
+        // V-28 / LOCK-05 : déqueue hors lock, puis appel write_fn hors lock FS.
         let entry = match queue.dequeue() {
             Some(e) => e,
             None => return Ok(false),
         };
+        // Aucun lock FS n'est tenu à partir d'ici — conforme LOCK-05 / FS-PREALLOC.
         self.stats.entries_processed = self.stats.entries_processed.saturating_add(1);
         match write_fn(&entry.blob_id, entry.size) {
             Ok(bytes) => {
@@ -262,6 +268,11 @@ impl WritebackWorker {
     }
 
     /// Flush un lot complet (RECUR-01 : while).
+    ///
+    /// V-28 / LOCK-05 / FS-PREALLOC : aucun lock FS n'est acquis dans cette
+    /// fonction avant les appels `write_fn`; la queue spinlock est obtenu et
+    /// relâché uniquement le temps de `dequeue()`. La politique est donc :
+    /// "pré-libération du lock FS avant toute allocation de frames physiques".
     pub fn flush_batch(&mut self, queue: &WritebackQueue, write_fn: &mut dyn FnMut(&[u8; 32], u32) -> ExofsResult<u64>) -> ExofsResult<u32> {
         let mut done = 0u32;
         let batch = self.config.flush_batch_size;

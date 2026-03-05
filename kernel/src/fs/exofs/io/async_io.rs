@@ -208,7 +208,7 @@ pub struct AsyncIoQueue {
     cancelled:  AtomicU64,
 }
 
-// SAFETY : accès sous spinlock exclusif.
+// SAFETY: accès sous spinlock exclusif.
 unsafe impl Sync for AsyncIoQueue {}
 unsafe impl Send for AsyncIoQueue {}
 
@@ -249,7 +249,7 @@ impl AsyncIoQueue {
             }
             let op_id = self.alloc_id();
             let tail = self.tail.load(Ordering::Relaxed) as usize % ASYNC_IO_QUEUE_DEPTH;
-            // SAFETY : accès sous spinlock exclusif, tail en range.
+            // SAFETY: accès sous spinlock exclusif, tail en range.
             unsafe {
                 let slots = &mut *self.slots.get();
                 slots[tail] = AsyncIoSlot { op_id, kind: kind as u8,
@@ -273,7 +273,7 @@ impl AsyncIoQueue {
             let mut i = 0usize;
             while i < count {
                 let idx = head.wrapping_add(i) % ASYNC_IO_QUEUE_DEPTH;
-                // SAFETY : sous spinlock, idx en range.
+                // SAFETY: sous spinlock, idx en range.
                 unsafe {
                     let slots = &mut *self.slots.get();
                     if slots[idx].op_id == op_id {
@@ -298,7 +298,7 @@ impl AsyncIoQueue {
             let mut i = 0usize;
             while i < count {
                 let idx = head.wrapping_add(i) % ASYNC_IO_QUEUE_DEPTH;
-                // SAFETY : sous spinlock, idx en range.
+                // SAFETY: sous spinlock, idx en range.
                 unsafe {
                     let slots = &mut *self.slots.get();
                     if slots[idx].op_id == op_id {
@@ -325,7 +325,7 @@ impl AsyncIoQueue {
             let mut i = 0usize;
             while i < count {
                 let idx = head.wrapping_add(i) % ASYNC_IO_QUEUE_DEPTH;
-                // SAFETY : sous spinlock, idx en range.
+                // SAFETY: sous spinlock, idx en range.
                 unsafe {
                     let slots = &mut *self.slots.get();
                     if slots[idx].op_id == op_id {
@@ -352,7 +352,7 @@ impl AsyncIoQueue {
             let mut i = 0usize;
             while i < count {
                 let idx = head.wrapping_add(i) % ASYNC_IO_QUEUE_DEPTH;
-                // SAFETY : sous spinlock, idx en range.
+                // SAFETY: sous spinlock, idx en range.
                 unsafe {
                     let slots = &mut *self.slots.get();
                     if slots[idx].op_id == op_id
@@ -380,7 +380,7 @@ impl AsyncIoQueue {
             let mut i = 0usize;
             while i < count {
                 let idx = head.wrapping_add(i) % ASYNC_IO_QUEUE_DEPTH;
-                // SAFETY : sous spinlock, idx en range.
+                // SAFETY: sous spinlock, idx en range.
                 let (op_id, state, bytes) = unsafe {
                     let slots = &*self.slots.get();
                     (slots[idx].op_id, AsyncState::from_u8(slots[idx].state), slots[idx].bytes)

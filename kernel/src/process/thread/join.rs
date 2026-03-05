@@ -65,8 +65,7 @@ pub fn thread_join(
             return Err(JoinError::Interrupted);
         }
         // Bloquer sur la wait queue.
-        // SAFETY: JOIN_WAIT utilise l'EmergencyPool (RÈGLE WAITQ-01).
-        // caller_tcb est le TCB courant, pas d'alias &mut actif.
+        // SAFETY: JOIN_WAIT EmergencyPool (WAITQ-01); caller_tcb TCB courant, pas d'alias &mut actif.
         unsafe {
             JOIN_WAIT.wait_interruptible(caller_tcb as *const _ as *mut _);
         }

@@ -284,8 +284,7 @@ pub fn configure_pat() {
         | (PAT_UCM << 48)
         | (PAT_WC  << 56);
 
-    // SAFETY: PAT supporté sur tous les CPU x86_64. Modification cohérente avec
-    // l'absence de tlb shootdown (PAT est CPU-local, pas de mappings WC actifs).
+    // SAFETY: PAT supporté sur tout x86_64; CPU-local, aucun tlb shootdown nécessaire.
     unsafe { write_msr(MSR_IA32_PAT, pat); }
 }
 

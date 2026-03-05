@@ -174,8 +174,7 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
         if cpu_id as usize >= MAX_CPUS {
             // CPU invalide — nettoyer et retourner erreur.
             let _ = PROCESS_REGISTRY.remove(pid);
-            // SAFETY: thread_ptr a été créé via Box::into_raw() ci-dessus et n'a pas encore été
-            //         passé à la run queue ; drop via Box::from_raw() est la seule reprise valide.
+            // SAFETY: thread_ptr créé par Box::into_raw(), non passé à la runqueue; Box::from_raw seul reclaim valide.
             unsafe { drop(Box::from_raw(thread_ptr)); }
             PID_ALLOCATOR.free(pid_raw);
             TID_ALLOCATOR.free(tid_raw);

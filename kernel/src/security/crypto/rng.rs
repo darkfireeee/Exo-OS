@@ -45,9 +45,8 @@ fn rdrand64() -> Result<u64, RngError> {
     {
         let mut val: u64 = 0;
         let mut success: u8;
-        // SAFETY: RDRAND instruction — peut échouer légitimement (retourne 0 + CF=0).
-        // On tente 10 fois avant de déclarer l'échec.
         for _ in 0..10 {
+            // SAFETY: rdrand peut échouer légitimement (CF=0); val = 0 si échec, retry jusqu'à 10.
             unsafe {
                 core::arch::asm!(
                     "rdrand {val}",
@@ -168,6 +167,7 @@ impl KernelRng {
         if rdrand_fill(&mut seed).is_err() {
             // Fallback : utiliser TSC + adresse de pile comme entropie minimale
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: rdtsc fallback seed; combiné avec adresse de pile pour entropie minimale.
             unsafe {
                 let tsc: u64;
                 core::arch::asm!("rdtsc; shl rdx, 32; or rax, rdx",

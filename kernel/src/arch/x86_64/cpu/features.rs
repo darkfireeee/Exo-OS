@@ -26,8 +26,7 @@ fn cpuid(leaf: u32) -> (u32, u32, u32, u32) {
 fn cpuid_ex(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     let (eax, ecx, edx): (u32, u32, u32);
     let ebx_result: u64;
-    // SAFETY: CPUID est une instruction non-privilégiée x86_64 — aucun effet de bord.
-    // On utilise xchg pour sauvegarder/restaurer rbx (réservé par LLVM en mode PIC).
+    // SAFETY: CPUID non-privilégiée; xchg préserve rbx réservé par LLVM (mode PIC).
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",   // sauvegarde rbx dans tmp, met 0 dans rbx
@@ -411,8 +410,7 @@ impl CpuFeaturesCell {
     pub fn init(&self) {
         if self.initialized.compare_exchange(false, true, Ordering::Release, Ordering::Relaxed).is_ok() {
             let features = CpuFeatures::detect();
-            // SAFETY: nous sommes le seul thread à écrire (BSP, avant APs)
-            // et compare_exchange garantit l'unicité
+            // SAFETY: seul écrivain (BSP avant APs); compare_exchange garantit l'unicité.
             unsafe { *self.inner.get() = features; }
         }
     }

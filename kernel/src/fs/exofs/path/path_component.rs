@@ -87,7 +87,7 @@ impl PathComponent {
     /// Vue `&str` du composant (garanti UTF-8 après validation).
     #[inline]
     pub fn as_str(&self) -> &str {
-        // SAFETY : `validate_component` garantit UTF-8 valide.
+        // SAFETY: `validate_component` garantit UTF-8 valide.
         unsafe { core::str::from_utf8_unchecked(self.as_bytes()) }
     }
 

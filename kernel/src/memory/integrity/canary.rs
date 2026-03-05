@@ -100,8 +100,7 @@ macro_rules! canary_table_init {
     () => {
         CanaryTable {
             slots: {
-                // SAFETY : CanarySlot est #[repr(C)] sans padding invalide.
-                // La valeur initiale CANARY_UNINIT est choisie explicitement.
+                // SAFETY: CanarySlot #[repr(C)] sans padding invalide; zeros = CANARY_UNINIT initial.
                 unsafe { core::mem::transmute::<[u8; MAX_CPUS * 64], [CanarySlot; MAX_CPUS]>([0u8; MAX_CPUS * 64]) }
             }
         }

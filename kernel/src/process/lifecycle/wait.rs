@@ -165,8 +165,7 @@ pub fn do_waitpid(
             return Err(WaitError::Interrupted);
         }
         // Se mettre en attente sur WAIT_TABLE.
-        // SAFETY: WaitQueue protégé par EmergencyPool (RÈGLE WAITQ-01).
-        // caller_tcb est le TCB courant, pas d'alias &mut actif.
+        // SAFETY: WaitQueue EmergencyPool (WAITQ-01); caller_tcb TCB courant, pas d'alias &mut actif.
         unsafe {
             WAIT_TABLE.wait_interruptible(caller_tcb as *const _ as *mut _);
         }

@@ -53,7 +53,7 @@ pub struct AuditLog {
     n_errors:      AtomicU64,
 }
 
-// SAFETY : accès au ring uniquement via `fetch_add` atomique sur `head`.
+// SAFETY: accès au ring uniquement via `fetch_add` atomique sur `head`.
 unsafe impl Sync for AuditLog {}
 
 impl AuditLog {
@@ -110,7 +110,7 @@ impl AuditLog {
             self.n_errors.fetch_add(1, Ordering::Relaxed);
         }
 
-        // SAFETY : index unique via fetch_add + masquage ; pas de data race
+        // SAFETY: index unique via fetch_add + masquage ; pas de data race
         // car chaque push écrit dans un slot différent (modulo RING_SIZE,
         // l'écrasement est acceptable pour le journal d'audit).
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
@@ -122,7 +122,7 @@ impl AuditLog {
     /// Lit l'entrée à la position absolue `pos` (modulo RING_SIZE).
     pub fn read_at(&self, pos: usize) -> AuditEntry {
         let idx = pos & RING_MASK;
-        // SAFETY : lecture diagnostique, pas de garantie stricte.
+        // SAFETY: lecture diagnostique, pas de garantie stricte.
         unsafe { *self.ring[idx].get() }
     }
 

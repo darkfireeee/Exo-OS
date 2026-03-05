@@ -101,7 +101,7 @@ impl ObjectLoader {
         // Lecture via la fonction injectée (DAG-01).
         (params.read_fn)(params.disk_offset, &mut buf)?;
 
-        // SAFETY : LogicalObjectDisk est #[repr(C, packed)], buf est aligné.
+        // SAFETY: LogicalObjectDisk est #[repr(C, packed)], buf est aligné.
         let lod: LogicalObjectDisk = unsafe {
             core::ptr::read_unaligned(buf.as_ptr() as *const LogicalObjectDisk)
         };
@@ -136,7 +136,7 @@ impl ObjectLoader {
         disk_offset: DiskOffset,
         verify_content: bool,
     ) -> ExofsResult<LogicalObjectRef> {
-        // SAFETY : LogicalObjectDisk est #[repr(C, packed)], même taille.
+        // SAFETY: LogicalObjectDisk est #[repr(C, packed)], même taille.
         let lod: LogicalObjectDisk = unsafe {
             core::ptr::read_unaligned(buf.as_ptr() as *const LogicalObjectDisk)
         };
@@ -210,7 +210,7 @@ impl ObjectLoader {
     pub fn serialize(obj_ref: &LogicalObjectRef) -> [u8; 256] {
         let obj  = obj_ref.read();
         let disk = obj.to_disk();
-        // SAFETY : même size, même layout.
+        // SAFETY: même size, même layout.
         unsafe {
             core::mem::transmute::<LogicalObjectDisk, [u8; 256]>(disk)
         }

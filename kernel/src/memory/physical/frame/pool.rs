@@ -124,9 +124,9 @@ impl PerCpuFramePool {
             return false;
         }
 
-        // SAFETY: count < PER_CPU_POOL_SIZE → head - tail < SIZE, accès exclusif.
         let frames_ptr = self.frames.get();
         let head = self.head.load(Ordering::Relaxed);
+        // SAFETY: count < PER_CPU_POOL_SIZE ⇒ accès dans [0,SIZE); pas d'autre producteur.
         unsafe {
             (*frames_ptr)[head % PER_CPU_POOL_SIZE] = frame.pfn();
         }

@@ -142,8 +142,7 @@ impl CgroupTable {
         let _guard = self.lock.lock();
         for (idx, slot) in self.slots.iter().enumerate() {
             if slot.valid.load(Ordering::Acquire) == 0 && idx > 0 {
-                // SAFETY : on tient le write_lock exclusif ; le slot est libre (valid==0)
-                // et ne sera accessible qu'après store(valid, 1). Mutation unique.
+                // SAFETY: write_lock exclusif; slot libre (valid==0), accessible seulement après store(valid,1).
                 unsafe {
                     let s = slot as *const Cgroup as *mut Cgroup;
                     (*s).id        = idx as u32;

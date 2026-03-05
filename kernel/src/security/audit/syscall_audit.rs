@@ -130,6 +130,7 @@ static ORPHAN_EXITS:    AtomicU64 = AtomicU64::new(0);
 #[inline]
 fn rdtsc() -> u64 {
     let lo: u32; let hi: u32;
+    // SAFETY: rdtsc disponible sur x86_64; non-sérialisé suffisant pour timestamp d'audit.
     unsafe {
         core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi);
     }

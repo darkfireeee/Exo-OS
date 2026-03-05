@@ -174,7 +174,7 @@ impl RTRing {
             return false;
         }
         let tail = self.tail.load(Ordering::Acquire);
-        // SAFETY : accès exclusif garanti par contexte d'appel (verrou PCB).
+        // SAFETY: accès exclusif garanti par contexte d'appel (verrou PCB).
         unsafe {
             (*self.entries.get())[tail % SIGQUEUE_DEPTH] = RTEntry { info, valid: true };
         }

@@ -74,7 +74,7 @@ impl SessionTable {
         let _guard = self.lock.lock();
         for slot in &self.slots {
             if slot.valid.load(Ordering::Acquire) == 0 {
-                // SAFETY : write_lock exclusif + slot libre (valid==0), acc\u00e8s unique.
+                // SAFETY: write_lock exclusif; slot libre (valid==0), accès unique.
                 unsafe {
                     (*(slot as *const Session as *mut Session)).sid = SessionId(leader.0);
                 }

@@ -85,6 +85,7 @@ impl VmaTree {
 
     /// Trouve la VMA qui précède immédiatement `addr` (le plus grand `end` <= `addr`).
     pub fn find_prev(&self, addr: VirtAddr) -> Option<&VmaDescriptor> {
+        // SAFETY: root pointe dans le pool statique de VmaDescriptor; pas d'alias &mut actif.
         unsafe { Self::find_prev_node(self.root, addr) }
     }
 

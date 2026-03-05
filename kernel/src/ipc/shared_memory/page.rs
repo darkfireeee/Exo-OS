@@ -144,8 +144,7 @@ impl ShmPage {
     /// `phys_addr` est un champ non-atomique : l'assignation se fait via
     /// un raw pointer write (pattern write-once sur static).
     pub fn init(&self, phys: PhysAddr, pool_idx: u32, flags: PageFlags) {
-        // SAFETY: init() est appelé une seule fois avant tout accès concurrent.
-        //         phys_addr est write-once — le raw pointer write est légal ici.
+        // SAFETY: init() appelé une seule fois avant tout accès concurrent; phys write-once sur static.
         unsafe { self.set_phys_unchecked(phys); }
         self.flags.store(flags.0 | PageFlags::NO_COW.0, Ordering::Relaxed);
         self.pool_index.store(pool_idx, Ordering::Relaxed);

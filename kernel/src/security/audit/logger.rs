@@ -203,6 +203,7 @@ static EVENTS_CRITICAL:  AtomicU64 = AtomicU64::new(0);
 fn rdtsc() -> u64 {
     let lo: u32;
     let hi: u32;
+    // SAFETY: rdtsc disponible sur x86_64; non-sérialisé suffisant pour timestamp de log.
     unsafe {
         core::arch::asm!(
             "rdtsc",

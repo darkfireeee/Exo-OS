@@ -112,8 +112,7 @@ pub use rpc::{
 /// Doit être appelée en contexte de démarrage, core 0, interruptions désactivées.
 pub fn ipc_init(shm_base_phys: u64, n_numa_nodes: u32) {
     // 1. Initialiser le pool de pages SHM
-    // SAFETY: shm_base_phys doit être aligné à 4K et pointe vers de la mémoire
-    //         physique réservée pour le SHM kernel (initialisé une seule fois).
+    // SAFETY: shm_base_phys aligné 4K, mémoire physique réservée SHM, appelé une seule fois au boot.
     unsafe {
         shared_memory::pool::init_shm_pool(shm_base_phys);
     }

@@ -27,8 +27,7 @@
 #[macro_export]
 macro_rules! retpoline_call {
     ($target:expr) => {
-        // SAFETY: $target est un pointeur de fonction valide ; la retpoline
-        // empêche la prédiction spéculative de l'adresse de retour.
+        // SAFETY: $target = ptr de fonction valide; retpoline empêche la prédiction spéculative.
         unsafe {
             core::arch::asm!(
                 "call 2f",

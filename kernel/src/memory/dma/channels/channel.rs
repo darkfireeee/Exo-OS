@@ -195,9 +195,8 @@ impl DmaChannelRing {
             return Err(DmaError::OutOfMemory);
         }
 
-        // SAFETY: head % SIZE est dans [0, SIZE), aucun consommateur n'y accède
-        // (tail != head + 1 garanti par le test ci-dessus).
         let slot = (head as usize) & RING_MASK;
+        // SAFETY: head % SIZE ∈ [0,SIZE); pas de consommateur concurrent (tail != head+1 vérifié).
         unsafe {
             (*self.ring.get())[slot] = cmd;
         }
@@ -227,7 +226,7 @@ impl DmaChannelRing {
         // SAFETY: tail < head, producteur n'écrit plus à `tail`.
         let cmd = unsafe { (*self.ring.get())[slot] };
 
-        // Release : nettoyage du slot visible avant l'incrément de tail.
+        // SAFETY: slot nettoyé visible avant incrément tail (Release); consommateur unique.
         unsafe {
             (*self.ring.get())[slot] = DmaCommand::EMPTY;
         }

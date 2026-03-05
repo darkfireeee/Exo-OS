@@ -208,8 +208,7 @@ impl IovaAllocator {
                     let rc = m.dec_ref();
                     if rc == 0 {
                         // Invalider le TLB IOMMU pour cette IOVA dans le domaine.
-                        // SAFETY: appelé en contexte kernel CPL 0, VT-d potentiellement
-                        // non initialisé (flush_iotlb_domain vérifie sa propre garde).
+                        // SAFETY: CPL 0; flush_iotlb_domain vérifie sa propre garde VT-d.
                         unsafe {
                             crate::memory::dma::iommu::intel_vtd::INTEL_VTD
                                 .flush_iotlb_domain(domain.0 as u16, iova.0);

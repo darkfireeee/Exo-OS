@@ -216,8 +216,7 @@ fn deliver_one(
             // Bloquer le thread jusqu'à SIGCONT (POSIX SIGSTOP sémantique).
             // Le thread sera réveillé par deliver_one(SIGCONT) via PCB::set_state(Running).
             thread.sched_tcb.set_state(crate::scheduler::core::task::TaskState::Sleeping);
-            // SAFETY: thread.sched_tcb est le TCB du thread courant ; la déréférence &mut *
-            //         est sûre car on est le seul détenteur sur ce CPU (préemption désactivée).
+            // SAFETY: sched_tcb est le TCB courant; seul détenteur sur ce CPU (préemption désactivée).
             unsafe {
                 let cpu_id = thread.sched_tcb.current_cpu();
                 let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);

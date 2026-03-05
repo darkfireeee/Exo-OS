@@ -354,8 +354,8 @@ impl IpcEventTable {
                     Ordering::AcqRel,
                     Ordering::Relaxed,
                 ).is_ok() {
-                    // SAFETY: slot exclusif après CAS
                     let ptr = self.slots[i].event.as_ptr() as *mut IpcEvent;
+                    // SAFETY: CAS AcqRel garantit l'exclusivité; MaybeUninit<IpcEvent> write-once.
                     unsafe {
                         ptr.write(IpcEvent::new(id, mode));
                     }

@@ -81,7 +81,7 @@ impl PGroupTable {
         // Créer un nouveau groupe.
         for slot in &self.slots {
             if slot.valid.load(Ordering::Acquire) == 0 {
-                // SAFETY : write_lock exclusif + slot libre, mutation unique.
+                // SAFETY: write_lock exclusif; slot libre (valid==0), mutation unique.
                 unsafe {
                     (*(slot as *const ProcessGroup as *mut ProcessGroup)).pgid = pgid;
                 }

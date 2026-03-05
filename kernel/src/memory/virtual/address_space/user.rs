@@ -135,6 +135,17 @@ impl UserAddressSpace {
         inner.vma_tree.find(addr).map(|v| v as *const _)
     }
 
+    /// Ajoute des flags à la VMA contenant `addr` (PROC-VMA / V-17).
+    pub fn set_vma_flags(&self, addr: VirtAddr, extra: VmaFlags) -> bool {
+        let mut inner = self.inner.lock();
+        if let Some(vma) = inner.vma_tree.find_mut(addr) {
+            vma.flags |= extra;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Enregistre une nouvelle VMA dans l'espace d'adressage.
     ///
     /// SAFETY: Le descripteur doit avoir été alloué par le slab et l'appelant

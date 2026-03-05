@@ -315,7 +315,7 @@ impl RecoveryAudit {
     /// Enregistre un événement d'audit dans le ring buffer.
     pub fn record(&self, entry: AuditEntry) {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize & AUDIT_MASK;
-        // SAFETY : idx est dans [0, AUDIT_MASK].
+        // SAFETY: idx est dans [0, AUDIT_MASK].
         unsafe { self.ring[idx].write(entry); }
         self.total.fetch_add(1, Ordering::Relaxed);
 
@@ -532,7 +532,7 @@ impl RecoveryAudit {
         let head = self.head.load(Ordering::Relaxed) as usize;
         for i in 0..n {
             let slot_idx = head.wrapping_sub(n).wrapping_add(i) & AUDIT_MASK;
-            // SAFETY : slot_idx dans [0, AUDIT_MASK].
+            // SAFETY: slot_idx dans [0, AUDIT_MASK].
             let entry = unsafe { self.ring[slot_idx].read() };
             out.push(entry);
         }

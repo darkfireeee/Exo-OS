@@ -410,8 +410,7 @@ unsafe impl Send for AsyncChannelTable {}
 
 impl AsyncChannelTable {
     const fn new() -> Self {
-        // SAFETY: MaybeUninit<AsyncChannel> à zéro est valide (jamais lu avant init).
-        // mem::zeroed() évite la limite mémoire du const-eval sur les grands tableaux.
+        // SAFETY: MaybeUninit zeros valides + AtomicBool false = table vide; jamais lu avant init.
         unsafe { core::mem::zeroed() }
     }
 
@@ -429,6 +428,7 @@ impl AsyncChannelTable {
 
     fn free(&mut self, idx: usize) -> bool {
         if idx < ASYNC_CHANNEL_TABLE_SIZE && self.used[idx] {
+            // SAFETY: used[idx] garantit que slots[idx] est initialisé; used → false empêche double-drop.
             unsafe { self.slots[idx].assume_init_drop() };
             self.used[idx] = false;
             self.count -= 1;
@@ -447,10 +447,8 @@ impl AsyncChannelTable {
     }
 }
 
-// SAFETY: SpinLock<AsyncChannelTable> tout-zéro est valide :
-//   AtomicBool(false) = déverrouillé, AsyncChannelTable zeros = table vide.
-// mem::zeroed() évite la limite const-eval sur les grands tableaux (~4 GB).
 static ASYNC_CHANNEL_TABLE: SpinLock<AsyncChannelTable> =
+        // SAFETY: SpinLock<AsyncChannelTable> tout-zéro valide: AtomicBool false = déverrouillé, table vide.
     unsafe { core::mem::zeroed() };
 
 // ---------------------------------------------------------------------------

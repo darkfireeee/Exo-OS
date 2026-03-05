@@ -142,7 +142,7 @@ pub struct AlertLog {
     n_critical: AtomicU64,
 }
 
-// SAFETY : accès géré par index atomique tournant.
+// SAFETY: accès géré par index atomique tournant.
 unsafe impl Sync for AlertLog {}
 unsafe impl Send for AlertLog {}
 
@@ -167,7 +167,7 @@ impl AlertLog {
         let t   = self.next_tick();
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % ALERT_RING_SIZE;
         let entry = Alert::new(t, level, code, msg);
-        // SAFETY : index tournant atomique — pas de double écriture simultanée.
+        // SAFETY: index tournant atomique — pas de double écriture simultanée.
         unsafe { *self.ring[idx].get() = entry; }
         match level {
             AlertLevel::Info     => { self.n_info.fetch_add(1, Ordering::Relaxed); }
@@ -199,7 +199,7 @@ impl AlertLog {
     pub fn latest(&self) -> Alert {
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx  = (head.wrapping_add(ALERT_RING_SIZE).wrapping_sub(1)) % ALERT_RING_SIZE;
-        // SAFETY : lecture diagnostic.
+        // SAFETY: lecture diagnostic.
         unsafe { *self.ring[idx].get() }
     }
 
@@ -212,7 +212,7 @@ impl AlertLog {
         let mut i = 0usize;
         while i < ALERT_RING_SIZE && found < cap {
             let idx = (head.wrapping_add(ALERT_RING_SIZE).wrapping_sub(i).wrapping_sub(1)) % ALERT_RING_SIZE;
-            // SAFETY : lecture diagnostic.
+            // SAFETY: lecture diagnostic.
             let a = unsafe { *self.ring[idx].get() };
             if a.is_empty() { i = i.wrapping_add(1); continue; }
             let pass = match filter {

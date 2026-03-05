@@ -143,6 +143,7 @@ pub struct ContextTable {
 
 impl ContextTable {
     pub fn zero(&mut self) {
+        // SAFETY: self.entries est un tableau contigu de 256 ContextEntry; write_bytes écrase proprement.
         unsafe { core::ptr::write_bytes(self.entries.as_mut_ptr(), 0, 256); }
     }
 }
