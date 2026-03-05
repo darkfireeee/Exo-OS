@@ -23,6 +23,9 @@ use crate::ipc::core::transfer::{MessageHeader, TransferEngine};
 use crate::ipc::ring::zerocopy::ZeroCopyRef;
 use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
 use crate::scheduler::sync::spinlock::SpinLock;
+// IPC-04 (v6) : vérification capability via security::access_control (appel direct)
+use crate::security::capability::{CapTable, CapToken, Rights};
+use crate::security::access_control::{check_access, ObjectKind, AccessError};
 
 // ---------------------------------------------------------------------------
 // États internes d'un rendez-vous en cours
@@ -256,7 +259,14 @@ impl SyncChannel {
                     return Err(IpcError::Closed);
                 }
                 if spins > 64 {
+                    // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock garanti.
+                    debug_assert!(
+                        crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
+                        "SyncChannel::send: block_current() appelé avec PreemptGuard actif"
+                    );
                     // Blocage réel — sera réveillé quand l'émetteur précédent termine.
+                    // SAFETY: block_current() est sûr si PreemptGuard::depth() == 0
+                    // (vérifié par le debug_assert ci-dessus). my_tid est valide.
                     unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
                     spins = 0;
                 }
@@ -311,6 +321,7 @@ impl SyncChannel {
                     return Ok(mid);
                 }
                 RendezVousState::Cancelled => {
+                    // SAFETY: état Cancelled — seul l'émetteur réinitialise ici.
                     unsafe { self.slot.reset() };
                     self.stats.sends_cancelled.fetch_add(1, Ordering::Relaxed);
                     return Err(IpcError::Closed);
@@ -342,6 +353,12 @@ impl SyncChannel {
                 if s2 == RendezVousState::ReceiverAcked || s2 == RendezVousState::Cancelled {
                     continue; // Sera traité à la prochaine itération
                 }
+                // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock.
+                debug_assert!(
+                    crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
+                    "SyncChannel::send (attente ack): block_current() avec PreemptGuard actif"
+                );
+                // SAFETY: block_current() sûr si PreemptGuard::depth() == 0.
                 unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
                 spins = 0;
             }
@@ -387,12 +404,14 @@ impl SyncChannel {
                 self.slot.state.load(Ordering::Acquire),
             );
             if s == RendezVousState::ReceiverAcked {
+                // SAFETY: ReceiverAcked — seul l'émetteur réinitialise (protocole 1-émetteur).
                 unsafe { self.slot.reset() };
                 self.stats.sends_ok.fetch_add(1, Ordering::Relaxed);
                 IPC_STATS.record(StatEvent::MessageSent);
                 return Ok(mid);
             }
             if s == RendezVousState::Cancelled || self.is_closed() {
+                // SAFETY: Cancelled / closed — même invariant propriétaire que ci-dessus.
                 unsafe { self.slot.reset() };
                 return Err(IpcError::Closed);
             }
@@ -402,6 +421,13 @@ impl SyncChannel {
                 if s2 != RendezVousState::SenderWaiting {
                     continue;
                 }
+                // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock.
+                debug_assert!(
+                    crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
+                    "SyncChannel::send_zerocopy: block_current() avec PreemptGuard actif"
+                );
+                // SAFETY: block_current() sûr si PreemptGuard::depth() == 0
+                // (vérifié par debug_assert ci-dessus, send_zerocopy path).
                 unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
                 spins = 0;
             }
@@ -457,6 +483,13 @@ impl SyncChannel {
                 core::hint::spin_loop();
                 spins += 1;
                 if spins == 64 {
+                    // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock.
+                    debug_assert!(
+                        crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
+                        "SyncChannel::recv: block_current() appelé avec PreemptGuard actif"
+                    );
+                    // SAFETY: block_current() sûr si PreemptGuard::depth() == 0
+                    // (vérifié par debug_assert ci-dessus, recv path).
                     unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
                     spins = 0;
                 }
@@ -571,6 +604,53 @@ impl SyncChannel {
             recvs_would_block: self.stats.recvs_would_block.load(Ordering::Relaxed),
             total_bytes: self.stats.total_bytes.load(Ordering::Relaxed),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // ENVOI CAP-CHECKED — IPC-04 (v6) : appel direct security::access_control
+    // -----------------------------------------------------------------------
+
+    /// Envoie avec vérification capability (RÈGLE IPC-04 v6).
+    ///
+    /// Appelle `security::access_control::check_access()` avant le vrai envoi.
+    /// Points d'entrée syscall utilisent cette variante.
+    ///
+    /// # Droits requis : `Rights::IPC_SEND`
+    #[inline]
+    pub fn send_checked(
+        &self,
+        data:   &[u8],
+        flags:  MsgFlags,
+        table:  &CapTable,
+        token:  CapToken,
+    ) -> Result<MessageId, IpcError> {
+        // IPC-04 (v6) : vérification capability — appel direct security/access_control/
+        check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_SEND, "ipc::channel")
+            .map_err(|e| match e {
+                AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+                _ => IpcError::PermissionDenied,
+            })?;
+        self.send(data, flags)
+    }
+
+    /// Reçoit avec vérification capability (RÈGLE IPC-04 v6).
+    ///
+    /// # Droits requis : `Rights::IPC_RECV`
+    #[inline]
+    pub fn recv_checked(
+        &self,
+        buf:   &mut [u8],
+        flags: MsgFlags,
+        table: &CapTable,
+        token: CapToken,
+    ) -> Result<(MessageId, usize, MsgFlags), IpcError> {
+        // IPC-04 (v6) : vérification capability — appel direct security/access_control/
+        check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_RECV, "ipc::channel")
+            .map_err(|e| match e {
+                AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+                _ => IpcError::PermissionDenied,
+            })?;
+        self.recv(buf, flags)
     }
 }
 
@@ -688,9 +768,12 @@ pub fn sync_channel_recv(idx: usize, buf: &mut [u8], flags: MsgFlags)
     if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
         return Err(IpcError::InvalidHandle);
     }
+    // SAFETY: used[idx] vérifié sous spinlock ci-dessus.
     let chan_ptr: *const SyncChannel = unsafe { tbl.get_unchecked(idx) as *const SyncChannel };
     drop(tbl);
 
+    // SAFETY: chan_ptr vit dans SYNC_CHANNEL_TABLE statique ('static).
+    // Le canal ne peut pas être libéré pendant recv() car free() requiert le SpinLock.
     let chan_ref: &'static SyncChannel = unsafe { &*chan_ptr };
     chan_ref.recv(buf, flags)
 }
@@ -701,6 +784,7 @@ pub fn sync_channel_close(idx: usize) -> Result<(), IpcError> {
     if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
         return Err(IpcError::InvalidHandle);
     }
+    // SAFETY: used[idx] vérifié sous spinlock ci-dessus.
     let chan = unsafe { tbl.get_unchecked(idx) };
     chan.close();
     drop(tbl);
@@ -719,4 +803,45 @@ pub fn sync_channel_destroy(idx: usize) -> Result<(), IpcError> {
 /// Retourne le nombre de canaux synchrones actifs.
 pub fn sync_channel_count() -> usize {
     SYNC_CHANNEL_TABLE.lock().count()
+}
+
+/// Envoie sur le canal synchrone `idx` avec vérification capability (IPC-04 v6).
+///
+/// Utilisé par la couche syscall. Les appels kernel-interne peuvent utiliser
+/// `sync_channel_send()` directement.
+pub fn sync_channel_send_checked(
+    idx:   usize,
+    data:  &[u8],
+    flags: MsgFlags,
+    table: &CapTable,
+    token: CapToken,
+) -> Result<MessageId, IpcError> {
+    let tbl = SYNC_CHANNEL_TABLE.lock();
+    if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
+        return Err(IpcError::InvalidHandle);
+    }
+    let chan_ptr: *const SyncChannel = unsafe { tbl.get_unchecked(idx) as *const SyncChannel };
+    drop(tbl);
+    // SAFETY: même garanties que sync_channel_send().
+    let chan_ref: &'static SyncChannel = unsafe { &*chan_ptr };
+    chan_ref.send_checked(data, flags, table, token)
+}
+
+/// Reçoit depuis le canal synchrone `idx` avec vérification capability (IPC-04 v6).
+pub fn sync_channel_recv_checked(
+    idx:   usize,
+    buf:   &mut [u8],
+    flags: MsgFlags,
+    table: &CapTable,
+    token: CapToken,
+) -> Result<(MessageId, usize, MsgFlags), IpcError> {
+    let tbl = SYNC_CHANNEL_TABLE.lock();
+    if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
+        return Err(IpcError::InvalidHandle);
+    }
+    let chan_ptr: *const SyncChannel = unsafe { tbl.get_unchecked(idx) as *const SyncChannel };
+    drop(tbl);
+    // SAFETY: même garanties que sync_channel_recv().
+    let chan_ref: &'static SyncChannel = unsafe { &*chan_ptr };
+    chan_ref.recv_checked(buf, flags, table, token)
 }

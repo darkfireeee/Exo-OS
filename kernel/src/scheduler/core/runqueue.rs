@@ -130,6 +130,9 @@ impl RtRunQueue {
 
     /// Enfile un thread RT à la fin de sa file de priorité (FIFO dans le niveau).
     fn enqueue(&mut self, tcb: NonNull<ThreadControlBlock>) -> bool {
+        // SAFETY: tcb est un NonNull<ThreadControlBlock> valide fourni par
+        // pick_next / enqueue — la run queue est l'unique propriétaire.
+        // La préemption est désactivée (invariant PerCpuRunQueue).
         let prio = unsafe { tcb.as_ref() }.priority.0 as usize;
         debug_assert!(prio < RT_LEVELS);
 
@@ -237,6 +240,7 @@ impl CfsRunQueue {
             return;
         }
 
+        // SAFETY: tcb est un NonNull valide — même invariant que enqueue().
         let vr = unsafe { tcb.as_ref() }.vruntime.load(Ordering::Relaxed);
         let weight = unsafe { tcb.as_ref() }.priority.cfs_weight();
 
@@ -246,6 +250,7 @@ impl CfsRunQueue {
             let mut hi = self.count;
             while lo < hi {
                 let mid = (lo + hi) / 2;
+                // SAFETY: tasks[mid] est Some car mid < self.count.
                 let mv = unsafe {
                     self.tasks[mid].unwrap().as_ref().vruntime.load(Ordering::Relaxed)
                 };
@@ -271,11 +276,13 @@ impl CfsRunQueue {
         self.tasks[self.count - 1] = None;
         self.count -= 1;
 
+        // SAFETY: tcb est un NonNull valide — même invariant que enqueue().
         let weight = unsafe { tcb.as_ref() }.priority.cfs_weight() as u64;
         self.weight_sum = self.weight_sum.saturating_sub(weight);
 
         // Actualiser min_vruntime.
         if self.count > 0 {
+            // SAFETY: tasks[0] est Some car self.count > 0.
             let new_min = unsafe {
                 self.tasks[0].unwrap().as_ref().vruntime.load(Ordering::Relaxed)
             };
@@ -289,6 +296,7 @@ impl CfsRunQueue {
     fn remove(&mut self, target: NonNull<ThreadControlBlock>) -> bool {
         for i in 0..self.count {
             if self.tasks[i] == Some(target) {
+                // SAFETY: target est un NonNull valide — même invariant que enqueue().
                 let weight = unsafe { target.as_ref() }.priority.cfs_weight() as u64;
                 self.tasks.copy_within(i + 1..self.count, i);
                 self.tasks[self.count - 1] = None;
@@ -392,6 +400,7 @@ impl PerCpuRunQueue {
     ///
     /// INVARIANT : appelé avec préemption désactivée.
     pub fn enqueue(&mut self, tcb: NonNull<ThreadControlBlock>) {
+        // SAFETY: tcb est un NonNull valide, préemption désactivée (invariant).
         let policy = unsafe { tcb.as_ref() }.policy;
         match policy {
             SchedPolicy::Fifo | SchedPolicy::RoundRobin => {
@@ -417,10 +426,12 @@ impl PerCpuRunQueue {
 
     /// Retire un thread spécifique de la queue (migration, signal mort).
     pub fn remove(&mut self, tcb: NonNull<ThreadControlBlock>) -> bool {
+        // SAFETY: tcb est un NonNull valide, préemption désactivée (invariant).
         let policy = unsafe { tcb.as_ref() }.policy;
         let removed = match policy {
             SchedPolicy::Fifo | SchedPolicy::RoundRobin => {
                 // Recherche dans les slots RT — O(RT_QUEUE_CAPACITY)
+                // SAFETY: même invariant que pour policy.
                 let prio = unsafe { tcb.as_ref() }.priority.0 as usize;
                 let head = self.rt.heads[prio];
                 if head == RT_QUEUE_NONE { return false; }
@@ -516,6 +527,7 @@ impl PerCpuRunQueue {
 
     /// Calcule le quantum pour le thread courant (CFS).
     pub fn timeslice_for(&self, tcb: NonNull<ThreadControlBlock>) -> u64 {
+        // SAFETY: tcb est un NonNull valide, appelé avec préemption désactivée.
         let weight = unsafe { tcb.as_ref() }.priority.cfs_weight();
         self.cfs.timeslice_ns(weight)
     }
@@ -544,6 +556,7 @@ impl PerCpuRunQueue {
         let mut total = 0u64;
         for i in 0..self.cfs.count {
             if let Some(tcb) = self.cfs.tasks[i] {
+                // SAFETY: tasks[i] est Some et valide (invariant CfsRunQueue).
                 let w = unsafe { tcb.as_ref() }.priority.cfs_weight() as u64;
                 total = total.saturating_add(w);
             }
@@ -573,6 +586,7 @@ impl PerCpuRunQueue {
         let mut found_idx = None;
         for i in (0..self.cfs.count).rev() {
             if let Some(tcb) = self.cfs.tasks[i] {
+                // SAFETY: tasks[i] est Some et valide (invariant CfsRunQueue).
                 if unsafe { tcb.as_ref() }.allowed_on(dst_cpu) {
                     found_idx = Some(i);
                     break;
@@ -592,6 +606,7 @@ impl PerCpuRunQueue {
         // BUG-FIX C : mettre à jour weight_sum. Sans ce correctif, le calcul
         // timeslice CFS devenait de plus en plus faux après chaque migration.
         if let Some(t) = tcb {
+            // SAFETY: t est un NonNull valide sorti de tasks[idx].
             let weight = unsafe { t.as_ref() }.priority.cfs_weight() as u64;
             self.cfs.weight_sum = self.cfs.weight_sum.saturating_sub(weight);
         }

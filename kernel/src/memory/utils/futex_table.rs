@@ -5,9 +5,10 @@
 // ──────────────────────────────────────────────────────────────────────────────
 //
 // Architecture :
-//   • FUTEX_HASH_BUCKETS = 256 buckets (constante de core/constants.rs).
-//   • Hash = FNV-1a 64 bits appliqué à l'adresse virtuelle physmap,
-//     tronqué à 8 bits (mod 256).
+//   • FUTEX_HASH_BUCKETS = 4096 buckets (constante de core/constants.rs).
+//     RÈGLE MEM-FUTEX (V-34) : ≥ 4096 + SipHash-keyed — anti-DoS par collision.
+//   • Hash = SipHash-1-3 keyed (graine initialisée depuis security::crypto::rng
+//     au boot step 18, via init_futex_seed()). Fallback FNV avant init.
 //   • Chaque bucket est une liste chaînée intrusive de FutexWaiter.
 //   • Le lock de bucket est un spin::Mutex<BucketInner>.
 //
@@ -27,7 +28,7 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::constants::FUTEX_HASH_BUCKETS;
@@ -262,59 +263,108 @@ pub static FUTEX_STATS: FutexStats = FutexStats::new();
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// La table de hash des futex — singleton global.
-/// `FUTEX_HASH_BUCKETS = 256` (core/constants.rs).
+/// `FUTEX_HASH_BUCKETS = 4096` (core/constants.rs) — R\u00c8GLE MEM-FUTEX (V-34).
 pub struct FutexHashTable {
     buckets: [FutexBucket; FUTEX_HASH_BUCKETS],
-}
-
-// Le tableau de 256 buckets est const-initialisable.
-// Rust ne dispose pas encore de `[FutexBucket::new(); N]` pour N > 32 avec
-// des types non-Copy.  On génère les 256 éléments via une macro de répétition.
-macro_rules! repeat_256 {
-    ($e:expr) => { [
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-        $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e, $e,
-    ] };
 }
 
 /// # SAFETY : buckets sont des Mutex protégeant des listes — Sync inhérent.
 unsafe impl Sync for FutexHashTable {}
 
-pub static FUTEX_TABLE: FutexHashTable = FutexHashTable {
-    buckets: repeat_256!(FutexBucket::new()),
-};
+// SAFETY: FutexBucket = Mutex<BucketInner>. spin::Mutex all-zeros = déverrouillé
+// (AtomicBool(0)). BucketInner all-zeros : head = None (0), count = 0 — état
+// initial valide identique à FutexBucket::new(). Rust ne supporte pas
+// [non_copy_expr; 4096] sans Copy, d'où l'initialisation par zeroed().
+pub static FUTEX_TABLE: FutexHashTable = unsafe { core::mem::zeroed() };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hash
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// FNV-1a 64-bit hash d'une adresse virtuelle → index bucket [0, 256).
+// ─────────────────────────────────────────────────────────────────────────────
+// Hash — SipHash-1-3 keyed (RÈGLE MEM-FUTEX / V-34)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Graine de hash — 16 octets atomiques (2 × u64).
+// Initialisée à 0 ; set_futex_hash_seed() est appelé au boot step 18.
+// Avant l'init, le hash est SipHash avec clé = 0 (sous-optimal mais sûr au boot).
+static FUTEX_SEED_K0: AtomicU64 = AtomicU64::new(0);
+static FUTEX_SEED_K1: AtomicU64 = AtomicU64::new(0);
+
+/// Indicateur : graine initialisée (atomique 8-bit — pas de dépendance spin::Once).
+static FUTEX_SEED_SET: AtomicU8 = AtomicU8::new(0);
+
+/// Initialise la graine SipHash depuis security::crypto::rng (boot step 18).
+/// DOIT être appelée une seule fois, depuis le BSP, AVANT le démarrage des APs.
+/// Après cet appel, bucket_index() utilise SipHash-1-3 keyed.
+pub fn init_futex_seed(key: [u8; 16]) {
+    let k0 = u64::from_le_bytes(key[0..8].try_into().unwrap_or([0u8; 8]));
+    let k1 = u64::from_le_bytes(key[8..16].try_into().unwrap_or([0u8; 8]));
+    FUTEX_SEED_K0.store(k0, Ordering::Release);
+    FUTEX_SEED_K1.store(k1, Ordering::Release);
+    FUTEX_SEED_SET.store(1, Ordering::Release);
+}
+
+/// SipHash-1-3 pour un seul bloc de 8 octets (une adresse physique/virtuelle).
+/// Pas de dépendance externe — implémentation inline (no_std).
+#[inline]
+fn siphash13(k0: u64, k1: u64, data: u64) -> u64 {
+    macro_rules! sipround {
+        ($v0:expr, $v1:expr, $v2:expr, $v3:expr) => {
+            $v0 = $v0.wrapping_add($v1); $v1 = $v1.rotate_left(13); $v1 ^= $v0;
+            $v0 = $v0.rotate_left(32);
+            $v2 = $v2.wrapping_add($v3); $v3 = $v3.rotate_left(16); $v3 ^= $v2;
+            $v0 = $v0.wrapping_add($v3); $v3 = $v3.rotate_left(21); $v3 ^= $v0;
+            $v2 = $v2.wrapping_add($v1); $v1 = $v1.rotate_left(17); $v1 ^= $v2;
+            $v2 = $v2.rotate_left(32);
+        };
+    }
+    let mut v0 = k0 ^ 0x736f6d6570736575u64;
+    let mut v1 = k1 ^ 0x646f72616e646f6du64;
+    let mut v2 = k0 ^ 0x6c7967656e657261u64;
+    let mut v3 = k1 ^ 0x7465646279746573u64;
+
+    // Compression — 1 round sur le seul bloc de 8 octets
+    let m = data;
+    v3 ^= m;
+    sipround!(v0, v1, v2, v3);
+    v0 ^= m;
+
+    // Bloc final : (len % 256) << 56 = 0x0800000000000000 (len == 8)
+    let b: u64 = 0x0800_0000_0000_0000;
+    v3 ^= b;
+    sipround!(v0, v1, v2, v3);
+    v0 ^= b;
+
+    // Finalisation — 3 rounds
+    v2 ^= 0xff;
+    sipround!(v0, v1, v2, v3);
+    sipround!(v0, v1, v2, v3);
+    sipround!(v0, v1, v2, v3);
+
+    v0 ^ v1 ^ v2 ^ v3
+}
+
+/// Hash d'une adresse virtuelle → index bucket [0, FUTEX_HASH_BUCKETS).
+/// Utilise SipHash-1-3 keyed si la graine est initialisée, FNV sinon (boot).
 #[inline]
 fn bucket_index(virt_addr: u64) -> usize {
-    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME:  u64 = 0x0000_0100_0000_01B3;
-    let mut h = FNV_OFFSET;
-    let bytes = virt_addr.to_le_bytes();
-    for b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(FNV_PRIME);
+    if FUTEX_SEED_SET.load(Ordering::Acquire) != 0 {
+        // SipHash-1-3 keyed — anti-DoS (RÈGLE MEM-FUTEX / V-34)
+        let k0 = FUTEX_SEED_K0.load(Ordering::Relaxed);
+        let k1 = FUTEX_SEED_K1.load(Ordering::Relaxed);
+        (siphash13(k0, k1, virt_addr) as usize) & (FUTEX_HASH_BUCKETS - 1)
+    } else {
+        // Fallback FNV-1a (avant init_futex_seed, pendant le boot early)
+        const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const FNV_PRIME:  u64 = 0x0000_0100_0000_01B3;
+        let mut h = FNV_OFFSET;
+        for b in virt_addr.to_le_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(FNV_PRIME);
+        }
+        h as usize & (FUTEX_HASH_BUCKETS - 1)
     }
-    // Prendre les bits [7:0] pour les 256 buckets.
-    (h & 0xFF) as usize
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

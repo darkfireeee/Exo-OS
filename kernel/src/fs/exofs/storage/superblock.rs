@@ -60,11 +60,23 @@ pub const VOLUME_NAME_LEN: usize = 64;
 // Flags de compatibilité
 // ─────────────────────────────────────────────────────────────
 
-/// Flags incompatibles (empêchent le montage si non supportés)
+/// Flags incompatibles (empêchent le montage si non supportés).
+/// RÈGLE FS-10 (V-31) : EXO_BLAKE3 | EXO_DELAYED | EXO_REFLINK obligatoires.
 pub mod incompat_flags {
+    /// Compression activée sur le volume.
     pub const COMPRESSION: u64 = 1 << 0;
+    /// Déduplication activée sur le volume.
     pub const DEDUP:        u64 = 1 << 1;
+    /// Chiffrement activé sur le volume.
     pub const ENCRYPTION:   u64 = 1 << 2;
+    /// RÈGLE FS-10 : checksums Blake3 sur toutes les écritures ExoFS.
+    pub const EXO_BLAKE3:   u64 = 1 << 3;
+    /// RÈGLE FS-10 : allocation différée (blocs alloués au writeback, jamais au write).
+    pub const EXO_DELAYED:  u64 = 1 << 4;
+    /// RÈGLE FS-10 : reflink (copy-on-write partagé de blocs).
+    pub const EXO_REFLINK:  u64 = 1 << 5;
+    /// Combinaison obligatoire pour tout nouveau volume ExoFS (FS-10).
+    pub const REQUIRED: u64 = EXO_BLAKE3 | EXO_DELAYED | EXO_REFLINK;
 }
 
 /// Flags compatibles (montage R/O autorisé si non supportés)
@@ -193,7 +205,7 @@ impl ExoSuperblockDisk {
             magic: EXOFS_MAGIC,
             version_major: FORMAT_VERSION_MAJOR,
             version_minor: FORMAT_VERSION_MINOR,
-            incompat_flags: 0,
+            incompat_flags: incompat_flags::REQUIRED, // FS-10: EXO_BLAKE3|EXO_DELAYED|EXO_REFLINK obligatoires
             compat_flags: 0,
             disk_size_bytes,
             heap_start: HEAP_START_OFFSET as u64,

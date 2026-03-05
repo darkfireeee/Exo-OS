@@ -99,7 +99,8 @@ pub const PER_CPU_DRAIN_THRESHOLD: usize = (PER_CPU_POOL_SIZE * 3) / 4;
 
 /// Nombre de WaitNodes pré-alloués au boot dans l'EmergencyPool
 /// DOIT être initialisé AVANT tout autre module noyau (RÈGLE EMERGENCY-01)
-pub const EMERGENCY_POOL_SIZE: usize = 64;
+/// RÈGLE SCHED-POOL (V-12) : ≥ 256 — sinon DoS par épuisement trivial.
+pub const EMERGENCY_POOL_SIZE: usize = 256;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TLB SHOOTDOWN
@@ -178,8 +179,9 @@ pub const STACK_CANARY_INITIAL: u64 = 0x_DEAD_BEEF_CAFE_BABE;
 // FUTEX
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de buckets dans la futex hash table (doit être puissance de 2)
-pub const FUTEX_HASH_BUCKETS: usize = 256;
+/// Nombre de buckets dans la futex hash table (doit être puissance de 2).
+/// RÈGLE MEM-FUTEX (V-34) : ≥ 4096 + SipHash-keyed — anti-DoS par collision.
+pub const FUTEX_HASH_BUCKETS: usize = 4096;
 
 /// Masque pour le hash de la futex table
 pub const FUTEX_HASH_MASK: usize = FUTEX_HASH_BUCKETS - 1;
@@ -197,7 +199,7 @@ const _: () = assert!(IPC_RING_SIZE.is_power_of_two(), "IPC_RING_SIZE doit être
 const _: () = assert!(FUTEX_HASH_BUCKETS.is_power_of_two(), "FUTEX_HASH_BUCKETS doit être une puissance de 2");
 const _: () = assert!(PAGE_SHIFT == 12, "PAGE_SHIFT doit être 12 pour x86_64");
 const _: () = assert!(HUGE_PAGE_SHIFT == 21, "HUGE_PAGE_SHIFT doit être 21 (2MiB)");
-const _: () = assert!(EMERGENCY_POOL_SIZE >= 64, "EmergencyPool trop petit — risque deadlock");
+const _: () = assert!(EMERGENCY_POOL_SIZE >= 256, "EmergencyPool trop petit (< 256) — risque DoS par épuisement (SCHED-POOL)");
 const _: () = assert!(BUDDY_MAX_ORDER <= 20, "BUDDY_MAX_ORDER excessif");
 const _: () = assert!(MAX_CPUS <= 4096, "MAX_CPUS dépasse la limite x2APIC");
 const _: () = assert!(ZONE_DMA_END == 16 * 1024 * 1024, "Zone DMA doit se terminer à 16MiB");

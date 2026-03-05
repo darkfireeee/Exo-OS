@@ -143,6 +143,12 @@ pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: 
     core::ptr::write_volatile((TRAMPOLINE_PHYS + HANDSHAKE_OFFSET) as *mut u32, AP_ALIVE_MAGIC);
     ONLINE_CPU_COUNT.fetch_add(1, Ordering::Release);
 
+    // 8b. RÈGLE BOOT-SEC (V-26) : attendre que le sous-système de sécurité
+    //     soit initialisé (SECURITY_READY) avant toute IPC.
+    while !crate::security::is_security_ready() {
+        core::hint::spin_loop();
+    }
+
     // 9. Activer les interruptions et entrer dans la boucle idle scheduler
     // SAFETY: toutes les structures sont initialisées sur cet AP
     core::arch::asm!("sti", options(nostack, nomem));

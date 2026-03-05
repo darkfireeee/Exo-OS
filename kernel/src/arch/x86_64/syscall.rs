@@ -261,6 +261,17 @@ extern "C" {
     fn syscall_cstar_noop();
 }
 
+// ── Vérification adresse canonique x86_64 (RÈGLE ARCH-SYSRET / V-35) ─────────
+
+/// Retourne `true` si l'adresse est canonique (bits 63..47 identiques).
+/// Une adresse non-canonique dans RCX au moment de SYSRET cause un kernel fault
+/// sur certains CPUs Intel/AMD — on l'intercepte ici pour l'envoyer en Ring 3.
+#[inline(always)]
+fn is_canonical(addr: u64) -> bool {
+    let sign_bits = addr >> 47;
+    sign_bits == 0 || sign_bits == 0x1FFFF
+}
+
 // ── Handler Rust SYSCALL ──────────────────────────────────────────────────────
 
 /// Table de dispatch syscall
@@ -289,6 +300,15 @@ pub extern "C" fn syscall_rust_handler(frame: *mut SyscallFrame) {
     // SAFETY: frame provient de syscall_rust_handler qui reçoit un pointeur
     // valide depuis l'ASM. La durée de vie est bornée à cette stackframe.
     crate::syscall::dispatch::dispatch(frame);
+
+    // ── ARCH-SYSRET (V-35) : vérification canonique de l'adresse de retour ──
+    // Si frame.rcx (RIP retour userspace) n'est pas canonique, SYSRETQ causera
+    // un fault en Ring 0 (errata Intel/AMD).
+    // On force frame.rcx = 0 → processus faultera en Ring 3 à @0 (SIGSEGV),
+    // jamais en Ring 0. Solution minimale sans dépendance process::signal ici.
+    if !is_canonical(frame.rcx) {
+        frame.rcx = 0;  // adresse 0 = non-mappée → #PF userspace, pas kernel
+    }
 }
 
 // ── Instrumentation syscall ───────────────────────────────────────────────────

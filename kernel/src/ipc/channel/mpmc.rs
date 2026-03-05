@@ -19,6 +19,9 @@ use crate::ipc::core::constants::{MAX_MSG_SIZE, MAX_CHANNELS};
 use crate::ipc::ring::mpmc::{MpmcRing, MPMC_RING_SIZE};
 use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
 use crate::scheduler::sync::spinlock::SpinLock;
+// IPC-04 (v6) : vérification capability via security::access_control
+use crate::security::capability::{CapTable, CapToken, Rights};
+use crate::security::access_control::{check_access, ObjectKind, AccessError};
 
 // ---------------------------------------------------------------------------
 // Politique de débordement
@@ -375,6 +378,50 @@ impl MpmcChannel {
     pub fn snapshot_stats(&self) -> MpmcStatsSnapshot {
         self.stats.snapshot()
     }
+
+    // -----------------------------------------------------------------------
+    // ENVOI/RÉCEPTION CAP-CHECKED — IPC-04 (v6)
+    // -----------------------------------------------------------------------
+
+    /// Envoie avec vérification capability (RÈGLE IPC-04 v6).
+    ///
+    /// Appelle `security::access_control::check_access()` avant le vrai envoi.
+    /// # Droits requis : `Rights::IPC_SEND`
+    #[inline]
+    pub fn send_checked(
+        &self,
+        data:  &[u8],
+        flags: MsgFlags,
+        table: &CapTable,
+        token: CapToken,
+    ) -> Result<MessageId, IpcError> {
+        // IPC-04 (v6) : vérification capability — appel direct security/access_control/
+        check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_SEND, "ipc::mpmc")
+            .map_err(|e| match e {
+                AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+                _ => IpcError::PermissionDenied,
+            })?;
+        self.send(data, flags)
+    }
+
+    /// Reçoit avec vérification capability (RÈGLE IPC-04 v6).
+    /// # Droits requis : `Rights::IPC_RECV`
+    #[inline]
+    pub fn recv_checked(
+        &self,
+        buf:   &mut [u8],
+        flags: MsgFlags,
+        table: &CapTable,
+        token: CapToken,
+    ) -> Result<(usize, MsgFlags), IpcError> {
+        // IPC-04 (v6) : vérification capability — appel direct security/access_control/
+        check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_RECV, "ipc::mpmc")
+            .map_err(|e| match e {
+                AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+                _ => IpcError::PermissionDenied,
+            })?;
+        self.recv(buf, flags)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +496,10 @@ pub fn mpmc_channel_create(policy: OverflowPolicy) -> Result<usize, IpcError> {
 /// Envoie un message dans le canal MPMC identifié par `idx`.
 pub fn mpmc_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<MessageId, IpcError> {
     let tbl = MPMC_CHANNEL_TABLE.lock();
+    // SAFETY: tbl.get() interne vérifie used[idx] < TABLE_SIZE avant de retourner.
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
+    // SAFETY: chan vit dans MPMC_CHANNEL_TABLE statique ('static).
+    // free() requiert le SpinLock, donc le canal n'est pas détruit pendant send().
     let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
     drop(tbl);
     chan_ref.send(data, flags)
@@ -460,7 +510,9 @@ pub fn mpmc_channel_recv(idx: usize, buf: &mut [u8], flags: MsgFlags)
     -> Result<(usize, MsgFlags), IpcError>
 {
     let tbl = MPMC_CHANNEL_TABLE.lock();
+    // SAFETY: tbl.get() vérifie used[idx] avant de retourner.
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
+    // SAFETY: même invariant 'static que mpmc_channel_send().
     let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
     drop(tbl);
     chan_ref.recv(buf, flags)
@@ -469,6 +521,7 @@ pub fn mpmc_channel_recv(idx: usize, buf: &mut [u8], flags: MsgFlags)
 /// Ferme et détruit le canal MPMC identifié par `idx`.
 pub fn mpmc_channel_destroy(idx: usize) -> Result<(), IpcError> {
     let tbl = MPMC_CHANNEL_TABLE.lock();
+    // SAFETY: tbl.get() vérifie used[idx].
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     chan.close();
     drop(tbl);
@@ -483,4 +536,38 @@ pub fn mpmc_channel_destroy(idx: usize) -> Result<(), IpcError> {
 /// Retourne le nombre de canaux MPMC actifs.
 pub fn mpmc_channel_count() -> usize {
     MPMC_CHANNEL_TABLE.lock().count
+}
+
+/// Envoie dans le canal MPMC `idx` avec vérification capability (IPC-04 v6).
+pub fn mpmc_channel_send_checked(
+    idx:   usize,
+    data:  &[u8],
+    flags: MsgFlags,
+    table: &CapTable,
+    token: CapToken,
+) -> Result<MessageId, IpcError> {
+    let tbl = MPMC_CHANNEL_TABLE.lock();
+    // SAFETY: tbl.get() vérifie used[idx] avant de retourner.
+    let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
+    // SAFETY: même invariant 'static que les autres fonctions send/recv.
+    let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
+    drop(tbl);
+    chan_ref.send_checked(data, flags, table, token)
+}
+
+/// Reçoit depuis le canal MPMC `idx` avec vérification capability (IPC-04 v6).
+pub fn mpmc_channel_recv_checked(
+    idx:   usize,
+    buf:   &mut [u8],
+    flags: MsgFlags,
+    table: &CapTable,
+    token: CapToken,
+) -> Result<(usize, MsgFlags), IpcError> {
+    let tbl = MPMC_CHANNEL_TABLE.lock();
+    // SAFETY: tbl.get() vérifie used[idx] avant de retourner.
+    let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
+    // SAFETY: même invariant 'static que les autres fonctions send/recv.
+    let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
+    drop(tbl);
+    chan_ref.recv_checked(buf, flags, table, token)
 }
