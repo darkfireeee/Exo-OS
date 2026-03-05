@@ -84,52 +84,37 @@ fn hpet_write(offset: u64, val: u64) {
 /// Initialise le HPET depuis la table ACPI
 ///
 /// Appelé par `init_acpi()` après avoir localisé la table HPET.
+/// Lors du boot précoce, on enregistre seulement l'adresse MMIO sans
+/// accéder aux registres (le MMIO HPET à 0xFED00000 dépasse notre
+/// identity map de 1 GiB — l'accès MMIO aura lieu après init mémoire).
 pub fn init_hpet(hpet_table_phys: u64) -> Option<HpetInfo> {
-    if hpet_table_phys == 0 { return None; }
+    if hpet_table_phys == 0 || hpet_table_phys >= 0x4000_0000 { return None; }
 
     use super::parser::SdtHeader;
-    // SAFETY: adresse passée par le parseur ACPI
+    // SAFETY: adresse passée par le parseur ACPI (dans notre identity map)
     let header = unsafe { &*(hpet_table_phys as *const SdtHeader) };
-    if &header.signature != b"HPET" { return None; }
+    let sig = unsafe { core::ptr::read_unaligned(&raw const (*header).signature) };
+    if &sig != b"HPET" { return None; }
 
-    // L'adresse MMIO est dans le GAS à offset 44 (SdtHeader=36 + block_id=4 + GAS...)
-    // Structure GAS : address_space_id(1) + bit_width(1) + bit_offset(1) + access_size(1) + address(8)
-    let gas_addr_offset = core::mem::size_of::<SdtHeader>() + 4 + 4; // +4 block_id, +4 padding GAS header
-    // SAFETY: offset dans la table ACPI HPET
+    // GAS base address : offset SdtHeader(36) + block_id(4) + GAS header(4) = 44
+    // Dans la GAS (Generic Address Structure) l'adresse 64 bits est aux derniers 8 octets
+    let gas_addr_offset = core::mem::size_of::<SdtHeader>() + 4 + 4;
+    // read_unaligned : la table HPET peut être à une adresse non-alignée sur 8 octets
     let mmio_base = unsafe {
-        read_volatile((hpet_table_phys as usize + gas_addr_offset) as *const u64)
+        core::ptr::read_unaligned((hpet_table_phys as usize + gas_addr_offset) as *const u64)
     };
 
+    // Enregistrer la base MMIO HPET pour utilisation future (après init mémoire)
+    // Ne PAS accéder aux registres HPET ici : 0xFED00000 > 1 GiB (hors identity map boot)
     HPET_BASE.store(mmio_base, Ordering::Release);
 
-    // Lire GCAP_ID
-    let gcap = hpet_read(HPET_GCAP_ID);
-    let clock_period_fs = (gcap >> 32) as u32;
-    if clock_period_fs == 0 { return None; }
-
-    // Fréquence = 1e15 fs/s / période_fs
-    let freq_hz: u64 = 1_000_000_000_000_000u64 / (clock_period_fs as u64);
-    let n_timers = (((gcap >> 8) & 0x1F) as u8) + 1;
-    let is_64bit = (gcap & (1 << 13)) != 0;
-
-    HPET_PERIOD_FS.store(clock_period_fs, Ordering::Release);
-    HPET_FREQ_HZ.store(freq_hz, Ordering::Release);
-
-    // Désactiver le HPET avant configuration
-    hpet_write(HPET_GEN_CFG, 0);
-
-    // Réinitialiser le compteur principal
-    hpet_write(HPET_MAIN_CTR, 0);
-
-    // Activer sans Legacy Replacement (ne pas interférer avec les IRQ ISA)
-    hpet_write(HPET_GEN_CFG, HPET_ENABLE);
-
+    // Retourner des infos minimales — fréquence et n_timers seront lus plus tard
     Some(HpetInfo {
         mmio_base,
-        clock_period_fs,
-        freq_hz,
-        n_timers,
-        is_64bit,
+        clock_period_fs: 0, // rempli lors de l'init post-mémoire
+        freq_hz: 0,
+        n_timers: 0,
+        is_64bit: false,
     })
 }
 

@@ -82,15 +82,15 @@ const FADT_TMR_VAL_EXT:    u32   = 1 << 8;
 pub fn init_pm_timer(fadt_phys: u64) -> bool {
     if fadt_phys == 0 { return false; }
 
-    // SAFETY: adresse FADT validée par le parseur ACPI
+    if fadt_phys >= 0x4000_0000 { return false; } // hors identity map
+    // read_unaligned : table FADT potentiellement non-alignée sur 4 octets
     let pm_tmr_blk = unsafe {
-        core::ptr::read_volatile((fadt_phys as usize + FADT_PM_TMR_BLK_OFF) as *const u32)
+        core::ptr::read_unaligned((fadt_phys as usize + FADT_PM_TMR_BLK_OFF) as *const u32)
     };
     if pm_tmr_blk == 0 { return false; }
 
-    // SAFETY: même adresse FADT validée par le parseur ACPI, FADT_FLAGS_OFF est dans la table.
     let fadt_flags = unsafe {
-        core::ptr::read_volatile((fadt_phys as usize + FADT_FLAGS_OFF) as *const u32)
+        core::ptr::read_unaligned((fadt_phys as usize + FADT_FLAGS_OFF) as *const u32)
     };
 
     PM_TMR_PORT.store(pm_tmr_blk, Ordering::Release);

@@ -153,6 +153,7 @@ pub fn find_rsdp() -> Option<u64> {
 ///
 /// Appelé depuis `boot::early_init` avec l'adresse RSDP fournie par Multiboot2 / UEFI.
 pub fn init_acpi_from_rsdp(rsdp_phys: u64) {
+    if rsdp_phys < 0x1000 || rsdp_phys > 0x3FFF_FFFF { return; } // adresse invalide
     // SAFETY: ACPI_INFO est une UnsafeCell statique, initialisée une seule fois lors du boot
     // (pas de reentrée possible : appelé un seul fois avant tout SMP).
     let info = unsafe { &mut *ACPI_INFO.0.get() };
@@ -160,14 +161,18 @@ pub fn init_acpi_from_rsdp(rsdp_phys: u64) {
 
     // SAFETY: adresse passée par le bootloader — validée par le parseur BIOS/UEFI
     let rsdp = unsafe { &*(rsdp_phys as *const Rsdp) };
-    info.acpi_version = rsdp.revision;
+    // Lecture des champs packed via ptr::read_unaligned pour éviter UB
+    let revision = unsafe { core::ptr::read_unaligned(&raw const (*rsdp).revision) };
+    let rsdt_addr = unsafe { core::ptr::read_unaligned(&raw const (*rsdp).rsdt_addr) };
+    let xsdt_addr = unsafe { core::ptr::read_unaligned(&raw const (*rsdp).xsdt_addr) };
+    info.acpi_version = revision;
 
-    if rsdp.revision >= 2 && rsdp.xsdt_addr != 0 {
-        info.xsdt_phys = rsdp.xsdt_addr;
-        parse_xsdt(rsdp.xsdt_addr, info);
-    } else if rsdp.rsdt_addr != 0 {
-        info.rsdt_phys = rsdp.rsdt_addr;
-        parse_rsdt(rsdp.rsdt_addr as u64, info);
+    if revision >= 2 && xsdt_addr != 0 {
+        info.xsdt_phys = xsdt_addr;
+        parse_xsdt(xsdt_addr, info);
+    } else if rsdt_addr != 0 {
+        info.rsdt_phys = rsdt_addr;
+        parse_rsdt(rsdt_addr as u64, info);
     }
 
     ACPI_INFO_ADDR.store(rsdp_phys, Ordering::Release);
@@ -183,39 +188,63 @@ pub fn init_acpi() -> Option<AcpiInfo> {
 // ── Parseur XSDT ─────────────────────────────────────────────────────────────
 
 fn parse_xsdt(xsdt_phys: u64, info: &mut AcpiInfo) {
+    if xsdt_phys < 0x1000 || xsdt_phys >= 0x4000_0000 { return; }
     // SAFETY: adresse XSDT validée par le RSDP
     let header = unsafe { &*(xsdt_phys as *const SdtHeader) };
-    if &header.signature != b"XSDT" { return; }
+    let length = unsafe { core::ptr::read_unaligned(&raw const (*header).length) };
+    let sig = unsafe { core::ptr::read_unaligned(&raw const (*header).signature) };
+    if &sig != b"XSDT" { return; }
 
-    let n_entries = (header.length as usize - core::mem::size_of::<SdtHeader>()) / 8;
-    let entries_base = xsdt_phys as usize + core::mem::size_of::<SdtHeader>();
+    let header_size = core::mem::size_of::<SdtHeader>();
+    if (length as usize) <= header_size || length > 4096 { return; }
+    let n_entries = (length as usize - header_size) / 8;
+    if n_entries > 64 { return; }
+    let entries_base = xsdt_phys as usize + header_size;
 
     for i in 0..n_entries {
-        // SAFETY: index dans la table XSDT (longueur validée)
-        let entry_addr = unsafe { read_volatile((entries_base + i * 8) as *const u64) };
+        let ptr = (entries_base + i * 8) as *const u64;
+        // Guard : l'adresse du pointeur lui-même doit être dans notre map
+        if (ptr as u64) >= 0x4000_0000 { break; }
+        // read_unaligned : XSDT peut être à adresse non-alignée sur 8 octets
+        let entry_addr = unsafe { core::ptr::read_unaligned(ptr) };
         classify_table(entry_addr, info);
     }
 }
 
 fn parse_rsdt(rsdt_phys: u64, info: &mut AcpiInfo) {
+    // Adresse doit être dans notre identity map (0..1 GiB) pour éviter les page faults
+    if rsdt_phys < 0x1000 || rsdt_phys >= 0x4000_0000 { return; }
     // SAFETY: adresse RSDT validée par le RSDP
     let header = unsafe { &*(rsdt_phys as *const SdtHeader) };
-    if &header.signature != b"RSDT" { return; }
+    // read_unaligned : table RSDT potentiellement non-alignée sur 4 octets
+    // (read_volatile panic en debug Rust ≥ 1.82 sur adresse non-alignée)
+    let length = unsafe { core::ptr::read_unaligned(&raw const (*header).length) };
+    let sig    = unsafe { core::ptr::read_unaligned(&raw const (*header).signature) };
+    if &sig != b"RSDT" { return; }
 
-    let n_entries = (header.length as usize - core::mem::size_of::<SdtHeader>()) / 4;
-    let entries_base = rsdt_phys as usize + core::mem::size_of::<SdtHeader>();
+    let header_size = core::mem::size_of::<SdtHeader>();
+    // Guard contre underflow (debug mode) et tables corrompues
+    if (length as usize) <= header_size || length > 4096 { return; }
+    let n_entries = (length as usize - header_size) / 4;
+    if n_entries > 64 { return; }
+
+    let entries_base = rsdt_phys as usize + header_size;
 
     for i in 0..n_entries {
-        // SAFETY: index dans la table RSDT (longueur validée)
-        let entry_addr32 = unsafe { read_volatile((entries_base + i * 4) as *const u32) };
+        let addr = (entries_base + i * 4) as *const u32;
+        if (addr as u64) >= 0x4000_0000 { break; }
+        // read_unaligned : entrées RSDT peuvent être à une adresse non-alignée sur 4 octets
+        let entry_addr32 = unsafe { core::ptr::read_unaligned(addr) };
         classify_table(entry_addr32 as u64, info);
     }
 }
 
 fn classify_table(phys: u64, info: &mut AcpiInfo) {
-    if phys == 0 { return; }
-    // SAFETY: adresse dans les tables ACPI — identity-mapped ou mappée par le boot
-    let sig = unsafe { read_volatile(phys as *const [u8; 4]) };
+    // Filtre : adresse doit être dans notre identity map (1 KiB … 1 GiB)
+    if phys < 0x1000 || phys >= 0x4000_0000 { return; }
+    // Lire la signature 4 octets via read_unaligned (adresse ACPI potentiellement non-alignée)
+    // [u8; 4] a un alignement de 1 donc read_unaligned == read ici, mais cohérence avec le reste
+    let sig = unsafe { core::ptr::read_unaligned(phys as *const [u8; 4]) };
     match &sig {
         b"APIC" => info.madt_phys = phys,
         b"HPET" => info.hpet_phys = phys,

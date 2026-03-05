@@ -180,11 +180,26 @@ pub fn calibrate_tsc_with_pit() -> u64 {
     let tsc_start = read_tsc_begin();
 
     // 4. Attendre que le PIT expire (OUTPUT bit 5 du port 0x61 = 0 → 1)
-    // SAFETY: lecture port 0x61 sans effet de bord
+    // Timeout de secours via compteur d'itérations (n'utilise pas le TSC pour ne
+    // pas dépendre de sa fréquence inconnue à ce stade).
+    // À ~1 ns/iter (séquence inb + test + jmp ≈ 10 cycles à 10 GHz), 10M iter ≈ 10ms.
+    // À 100 pico-s/iter, 10M iters = 1ms. Au total, 200M iters offre un safety margin.
+    // En pratique : si le PIT fonctionne, on sort après ~10ms réels.
+    //              Sinon on sort après au plus ~2ms @ 10 GHz / ~200ms @ 1 GHz emulé.
+    let _ = tsc_start; // sera utilisé en dessous si pit_ok
+    let mut pit_ok = false;
+    let mut counter: u32 = 0;
+    const MAX_ITER: u32 = 200_000_000; // ~100-200ms max, conservative
     loop {
         let val = unsafe { inb(PIT_GATE) };
-        if val & 0x20 != 0 { break; }
+        if val & 0x20 != 0 { pit_ok = true; break; }
+        counter = counter.wrapping_add(1);
+        if counter == 0 || counter >= MAX_ITER { break; } // timeout
         core::hint::spin_loop();
+    }
+    if !pit_ok {
+        // PIT canal 2 non fonctionnel — signaler l'échec au caller
+        return 0;
     }
 
     // 5. Lire TSC de fin
@@ -276,9 +291,17 @@ pub fn init_tsc(cpu_logical_id: u32) {
     let invariant = (edx_ext7 & (1 << 8)) != 0;
     TSC_INVARIANT.store(invariant, Ordering::Release);
 
-    // Calibrer la fréquence TSC
+    // Calibrer la fréquence TSC : CPUID 0x15 en priorité, puis 1GHz fallback.
+    // NOTE: la calibration via PIT canal 2 (calibrate_tsc_with_pit) est désactivée
+    // au démarrage car elle bloque si les callbacks timer QEMU/VM ne s'exécutent
+    // pas pendant la boucle d'attente busy-poll (comportement fréquent en TCG/KVM
+    // avant init APIC). Elle pourra être réactivée post-boot une fois le timer APIC
+    // ou HPET initialisé, via recalibrate_tsc_with_hpet().
+    unsafe { core::arch::asm!("mov al, 0x70", "out 0xe9, al", options(nostack, nomem)); } // probe 'p'
     let hz = calibrate_tsc_cpuid()
-        .unwrap_or_else(calibrate_tsc_with_pit);
+        .unwrap_or(1_000_000_000); // 1 GHz : fallback sûr ; sera recalibré post-APIC
+
+    unsafe { core::arch::asm!("mov al, 0x73", "out 0xe9, al", options(nostack, nomem)); } // 's'
 
     // Arrondir à multiple de 100 kHz pour stabilité
     let hz_rounded = (hz + 50_000) / 100_000 * 100_000;

@@ -92,7 +92,15 @@ pub unsafe fn arch_boot_init(
     mb2_info:  u64,
     rsdp_phys: u64,
 ) -> BootInfo {
+    // Sonde de debug inline pour chaque étape (port 0xE9)
+    macro_rules! probe {
+        ($b:expr) => {
+            core::arch::asm!("out 0xe9, al", in("al") $b as u8, options(nostack, nomem));
+        }
+    }
+
     // ── Étape 1 : Détecter fonctionnalités CPU ────────────────────────────────
+    probe!(b'1');
     super::super::cpu::features::init_cpu_features();
     let features = super::super::cpu::features::cpu_features();
 
@@ -101,10 +109,12 @@ pub unsafe fn arch_boot_init(
     assert!(features.has_syscall(), "SYSCALL requis");
 
     // ── Étape 2 : GDT per-CPU BSP ────────────────────────────────────────────
+    probe!(b'2');
     let kernel_stack_top = boot_stack_top();
     super::super::gdt::init_gdt_for_cpu(0, kernel_stack_top);
 
     // ── Étape 3 : IDT ─────────────────────────────────────────────────────────
+    probe!(b'3');
     super::super::idt::init_idt();
     super::super::idt::load_idt();
 
@@ -112,20 +122,25 @@ pub unsafe fn arch_boot_init(
     // (déjà fait dans init_gdt_for_cpu qui appelle init_tss_for_cpu + load_tss)
 
     // ── Étape 5 : Per-CPU data / GS ───────────────────────────────────────────
+    probe!(b'5');
     let lapic_id_bsp = 0; // BSP est CPU 0 ; LAPIC ID sera mis à jour après init APIC
     super::super::smp::percpu::init_percpu_for_bsp(kernel_stack_top, lapic_id_bsp);
 
     // ── Étape 6 : TSC ──────────────────────────────────────────────────────────
+    probe!(b'6');
     super::super::cpu::tsc::init_tsc(0);
 
     // ── Étape 7 : FPU / SSE / AVX ────────────────────────────────────────────
+    probe!(b'7');
     super::super::cpu::fpu::init_fpu_for_cpu();
 
     // ── Étape 8 : Détection hyperviseur ──────────────────────────────────────
+    probe!(b'8');
     let hv = super::super::virt::detect::detect_hypervisor();
     let _ = hv;
 
     // ── Étape 9 : ACPI ────────────────────────────────────────────────────────
+    probe!(b'9');
     let mut boot_info = BootInfo::zeroed();
 
     let rsdp = if rsdp_phys != 0 {
@@ -157,26 +172,30 @@ pub unsafe fn arch_boot_init(
     }
 
     // ── Étape 10 : APIC ──────────────────────────────────────────────────────
+    probe!(b'a');
     super::super::apic::init_apic_system();
     if acpi.madt_phys != 0 {
         super::super::apic::io_apic::init_all_ioapics();
     }
 
     // Recalibrer le timer LAPIC après le TSC
+    probe!(b'b');
     super::super::apic::local_apic::calibrate_lapic_timer();
 
     // ── Intégration arch ↔ memory : enregistrement sender IPI TLB ──────────────
-    // Doit être appelé après init APIC et avant le boot des APs.
-    // (règle TLB-01 DOC2 : flush_local → IPI synchrone ACK → free_pages)
+    probe!(b'c');
     super::super::memory_iface::init_memory_integration();
 
     // ── Étape 11 : Init SYSCALL interface ────────────────────────────────────
+    probe!(b'd');
     super::super::syscall::init_syscall();
 
     // ── Étape 12 : Mitigations Spectre/Meltdown ──────────────────────────────
+    probe!(b'e');
     super::super::spectre::apply_mitigations_bsp();
 
     // ── Étape 13 : Multiboot2 / UEFI ─────────────────────────────────────────
+    probe!(b'f');
     if mb2_magic == 0x36d76289 && mb2_info != 0 {
         boot_info.multiboot2_magic = mb2_magic;
         boot_info.multiboot2_addr  = mb2_info;
@@ -231,6 +250,7 @@ pub unsafe fn arch_boot_init(
         crate::memory::protection::init();    }
 
     // ── Étape 14 : SMP — boot des APs ────────────────────────────────────────
+    probe!(b'g');
     if let Some(ref madt) = madt_info {
         if madt.cpu_count > 1 {
             super::trampoline_asm::install_trampoline();
@@ -240,5 +260,6 @@ pub unsafe fn arch_boot_init(
         }
     }
 
+    probe!(b'Z'); // arch_boot_init terminé
     boot_info
 }

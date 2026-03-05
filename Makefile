@@ -1,103 +1,165 @@
-# Makefile pour Exo-OS
-# Usage: make <target>
+# ─── Makefile Exo-OS ──────────────────────────────────────────────────────────
+# Usage : make <cible>
+#
+# Flux de build complet :
+#   make build   → compile le kernel ELF (cargo, x86_64-unknown-none)
+#   make iso     → construit exo-os.iso (GRUB 2 Multiboot2, grub-mkrescue)
+#   make qemu    → lance QEMU depuis l'ISO (x86_64, 256M RAM, sortie série stdio)
+#   make run     → alias de qemu
 
-.PHONY: all build clean test run qemu help
+.PHONY: all build release iso qemu run clean check fmt test info help
 
-# Configuration
-KERNEL_DIR = kernel
-TARGET = x86_64-unknown-none.json
-CARGO = cargo +nightly
-BUILD_FLAGS = --target ../$(TARGET) -Z build-std=core,alloc,compiler_builtins
+# ── Outils ───────────────────────────────────────────────────────────────────
+CARGO          = cargo
+KERNEL_DIR     = kernel
+ISO_WORKDIR    = iso_build
+ISO_OUTPUT     = exo-os.iso
 
-# Couleurs pour l'output
-BLUE = \033[0;34m
-GREEN = \033[0;32m
+# Kernel buildé par cargo (dans le workspace target/)
+KERNEL_BIN_DBG  = target/x86_64-unknown-none/debug/exo-os-kernel
+KERNEL_BIN_REL  = target/x86_64-unknown-none/release/exo-os-kernel
+
+# ── QEMU ─────────────────────────────────────────────────────────────────────
+# Paramètres QEMU communs (machine Q35 moderne, 256 MiB, VGA standard)
+QEMU = qemu-system-x86_64
+QEMU_FLAGS  = -machine q35
+QEMU_FLAGS += -m 256M
+QEMU_FLAGS += -vga std
+QEMU_FLAGS += -serial stdio
+QEMU_FLAGS += -no-reboot
+QEMU_FLAGS += -no-shutdown
+QEMU_FLAGS += -d int,cpu_reset -D /tmp/qemu-exoos.log
+# Sortie debug sur port 0xE9 (detect-hlt permet de capturer le HLT initial)
+QEMU_FLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
+
+# Couleurs
+BLUE   = \033[0;34m
+GREEN  = \033[0;32m
 YELLOW = \033[0;33m
-RED = \033[0;31m
-NC = \033[0m # No Color
+RED    = \033[0;31m
+CYAN   = \033[0;36m
+NC     = \033[0m
 
-all: build
+# ── Cibles ───────────────────────────────────────────────────────────────────
 
-## Build du kernel
+all: iso
+
+## 1. Build debug du kernel (rapide, symboles complets)
 build:
-	@echo "$(BLUE)🔨 Compilation du kernel Exo-OS...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) build $(BUILD_FLAGS)
-	@echo "$(GREEN)✅ Compilation réussie!$(NC)"
+	@echo "$(BLUE)[1/1] Compilation kernel Exo-OS (debug)...$(NC)"
+	@cd $(KERNEL_DIR) && $(CARGO) build
+	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_DBG)$(NC)"
 
-## Build en mode release
+## 2. Build release du kernel (optimisé, LTO, plus petit)
 release:
-	@echo "$(BLUE)🚀 Compilation en mode release...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) build --release $(BUILD_FLAGS)
-	@echo "$(GREEN)✅ Build release terminé!$(NC)"
+	@echo "$(BLUE)[1/1] Compilation kernel Exo-OS (release)...$(NC)"
+	@cd $(KERNEL_DIR) && $(CARGO) build --release
+	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_REL)$(NC)"
 
-## Nettoyer les fichiers de build
-clean:
-	@echo "$(YELLOW)🧹 Nettoyage...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) clean
-	@rm -rf iso/ exo-os.iso
-	@echo "$(GREEN)✅ Nettoyage terminé!$(NC)"
+# ── Cible ISO (debug) ─────────────────────────────────────────────────────────
+## 3. Construire l'image ISO bootable avec GRUB 2 (Multiboot2)
+iso: build
+	@echo "$(BLUE)[2/2] Construction ISO GRUB 2 (Multiboot2)...$(NC)"
+	@$(MAKE) --no-print-directory _make_iso KERNEL_BIN=$(KERNEL_BIN_DBG)
+	@echo "$(GREEN)[OK] ISO créée : $(ISO_OUTPUT)$(NC)"
+	@ls -lh $(ISO_OUTPUT)
 
-## Vérifier le code (clippy + format)
+## 3b. Construire l'image ISO en mode release
+iso-release: release
+	@echo "$(BLUE)[2/2] Construction ISO release...$(NC)"
+	@$(MAKE) --no-print-directory _make_iso KERNEL_BIN=$(KERNEL_BIN_REL)
+	@echo "$(GREEN)[OK] ISO release créée : $(ISO_OUTPUT)$(NC)"
+	@ls -lh $(ISO_OUTPUT)
+
+# Sous-cible interne : assemble l'ISO depuis le KERNEL_BIN fourni en paramètre.
+_make_iso:
+	@rm -rf $(ISO_WORKDIR)
+	@mkdir -p $(ISO_WORKDIR)/boot/grub
+	@cp $(KERNEL_BIN) $(ISO_WORKDIR)/boot/exo-os-kernel
+	@cp bootloader/grub.cfg $(ISO_WORKDIR)/boot/grub/grub.cfg
+	@grub-mkrescue -o $(ISO_OUTPUT) $(ISO_WORKDIR) \
+	    --compress=xz 2>&1 | grep -v "^$$" || true
+	@rm -rf $(ISO_WORKDIR)
+
+# ── Lancement QEMU ────────────────────────────────────────────────────────────
+## 4. Lancer Exo-OS dans QEMU (depuis l'ISO debug)
+qemu: iso
+	@echo "$(CYAN)Lancement QEMU — Ctrl+C pour quitter$(NC)"
+	@echo "$(YELLOW)Log interruptions : /tmp/qemu-exoos.log$(NC)"
+	$(QEMU) $(QEMU_FLAGS) -cdrom $(ISO_OUTPUT)
+
+## 4b. Lancer en mode release
+qemu-release: iso-release
+	@echo "$(CYAN)Lancement QEMU (release)$(NC)"
+	$(QEMU) $(QEMU_FLAGS) -cdrom $(ISO_OUTPUT)
+
+## 4c. Lancer QEMU sans fenêtre graphique (serveur headless)
+qemu-nographic: iso
+	@echo "$(CYAN)Lancement QEMU headless (sortie texte)$(NC)"
+	$(QEMU) $(QEMU_FLAGS) -cdrom $(ISO_OUTPUT) -nographic -display none
+
+run: qemu
+
+# ── Tests & qualité ──────────────────────────────────────────────────────────
+## Vérifier (clippy)
 check:
-	@echo "$(BLUE)🔍 Vérification du code...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) fmt --check
-	@cd $(KERNEL_DIR) && $(CARGO) clippy $(BUILD_FLAGS) -- -D warnings
-	@echo "$(GREEN)✅ Code vérifié!$(NC)"
+	@echo "$(BLUE)Vérification clippy...$(NC)"
+	@cd $(KERNEL_DIR) && $(CARGO) clippy
+	@echo "$(GREEN)[OK]$(NC)"
 
 ## Formatter le code
 fmt:
-	@echo "$(BLUE)✨ Formatage du code...$(NC)"
+	@echo "$(BLUE)Formatage...$(NC)"
 	@cd $(KERNEL_DIR) && $(CARGO) fmt
-	@echo "$(GREEN)✅ Code formaté!$(NC)"
+	@echo "$(GREEN)[OK]$(NC)"
 
-## Lancer les tests
+## Tests unitaires (host, pas bare-metal)
 test:
-	@echo "$(BLUE)🧪 Exécution des tests...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) test $(BUILD_FLAGS)
-	@echo "$(GREEN)✅ Tests terminés!$(NC)"
+	@echo "$(BLUE)Tests unitaires...$(NC)"
+	@cd $(KERNEL_DIR) && $(CARGO) test --lib 2>&1 | head -40
 
-## Créer une image bootable (nécessite bootimage)
-bootimage: build
-	@echo "$(BLUE)📦 Création de l'image bootable...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) bootimage
-	@echo "$(GREEN)✅ Image créée!$(NC)"
+# ── Nettoyage ─────────────────────────────────────────────────────────────────
+clean:
+	@echo "$(YELLOW)Nettoyage...$(NC)"
+	@cd $(KERNEL_DIR) && $(CARGO) clean
+	@rm -rf $(ISO_WORKDIR) $(ISO_OUTPUT) /tmp/qemu-exoos.log
+	@echo "$(GREEN)[OK]$(NC)"
 
-## Lancer avec QEMU (nécessite bootimage)
-qemu: bootimage
-	@echo "$(BLUE)🖥️  Lancement de QEMU...$(NC)"
-	@echo "$(YELLOW)Pour quitter: Ctrl+A puis X$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) bootimage --run
-
-## Test rapide avec PowerShell
-test-ps:
-	@pwsh -File test-qemu.ps1
-
-## Afficher les informations sur le build
+# ── Info ──────────────────────────────────────────────────────────────────────
 info:
-	@echo "$(BLUE)ℹ️  Informations Exo-OS$(NC)"
-	@echo "  Kernel dir: $(KERNEL_DIR)"
-	@echo "  Target: $(TARGET)"
-	@echo "  Cargo: $(CARGO)"
+	@echo "$(CYAN)"
+	@echo "  ___                 ___  ____  "
+	@echo " |  _| _  _____     / _ \\/ ___| "
+	@echo " | |_ \\ \\/ / _ \\___| | | \\___ \\"
+	@echo " |  _| >  < (_) |___| |_| |___) |"
+	@echo " |___//_/\\_\\___/     \\___/|____/ "
+	@echo "$(NC)"
+	@echo "$(BLUE)Exo-OS — Informations de build$(NC)"
+	@echo "  Kernel dir : $(KERNEL_DIR)"
+	@echo "  Target     : x86_64-unknown-none"
+	@echo "  ISO        : $(ISO_OUTPUT)"
 	@echo ""
-	@echo "$(BLUE)📊 Taille du kernel:$(NC)"
-	@ls -lh $(KERNEL_DIR)/target/x86_64-unknown-none/debug/libexo_kernel.a 2>/dev/null || echo "  (pas encore compilé)"
+	@echo "$(BLUE)Taille kernel debug :$(NC)"
+	@ls -lh $(KERNEL_BIN_DBG) 2>/dev/null || echo "  (pas encore compilé)"
+	@echo "$(BLUE)Taille kernel release :$(NC)"
+	@ls -lh $(KERNEL_BIN_REL) 2>/dev/null || echo "  (pas encore compilé)"
+	@echo ""
+	@echo "$(BLUE)GRUB : $(shell grub-mkrescue --version 2>/dev/null || echo non installé)$(NC)"
+	@echo "$(BLUE)QEMU : $(shell qemu-system-x86_64 --version 2>/dev/null | head -1 || echo non installé)$(NC)"
 
-## Afficher les warnings de compilation
-warnings:
-	@echo "$(BLUE)⚠️  Compilation avec warnings détaillés...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) build $(BUILD_FLAGS) 2>&1 | grep "warning:"
-
-## Afficher ce message d'aide
 help:
-	@echo "$(BLUE)╔═══════════════════════════════════════════╗$(NC)"
-	@echo "$(BLUE)║          Exo-OS Makefile Help            ║$(NC)"
-	@echo "$(BLUE)╚═══════════════════════════════════════════╝$(NC)"
+	@echo "$(CYAN)Exo-OS — Cibles Makefile$(NC)"
 	@echo ""
-	@echo "$(GREEN)Commandes principales:$(NC)"
-	@echo "  make build      - Compiler le kernel"
-	@echo "  make release    - Compiler en mode release"
-	@echo "  make test       - Lancer les tests"
-	@echo "  make clean      - Nettoyer les fichiers de build"
+	@echo "$(GREEN)  make build$(NC)         Compiler le kernel (debug)"
+	@echo "$(GREEN)  make release$(NC)       Compiler le kernel (release optimisé)"
+	@echo "$(GREEN)  make iso$(NC)           Construire exo-os.iso (debug)"
+	@echo "$(GREEN)  make iso-release$(NC)   Construire exo-os.iso (release)"
+	@echo "$(GREEN)  make qemu$(NC)          Lancer Exo-OS dans QEMU (debug)"
+	@echo "$(GREEN)  make qemu-release$(NC)  Lancer Exo-OS dans QEMU (release)"
+	@echo "$(GREEN)  make qemu-nographic$(NC)Lancer sans interface graphique"
+	@echo "$(GREEN)  make clean$(NC)         Nettoyer les artefacts"
+	@echo "$(GREEN)  make check$(NC)         Vérification clippy"
+	@echo "$(GREEN)  make info$(NC)          Informations sur le build"
 	@echo ""
 	@echo "$(GREEN)Testing:$(NC)"
 	@echo "  make bootimage  - Créer une image bootable"

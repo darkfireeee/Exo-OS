@@ -122,19 +122,25 @@ pub fn madt_cpu_count() -> u32 {
 /// Appelé par `init_acpi()` après avoir localisé la table.
 pub fn parse_madt(madt_phys: u64) -> MadtInfo {
     let mut info = MadtInfo::default();
-    if madt_phys == 0 { return info; }
+    if madt_phys == 0 || madt_phys >= 0x4000_0000 { return info; } // hors identity map
 
     use super::parser::SdtHeader;
     // SAFETY: adresse MADT validée par le parseur ACPI
     let header = unsafe { &*(madt_phys as *const SdtHeader) };
-    if &header.signature != b"APIC" { return info; }
+    let sig = unsafe { core::ptr::read_unaligned(&raw const (*header).signature) };
+    if &sig != b"APIC" { return info; }
 
-    let madt_len = header.length as usize;
-    // Lire LAPIC addr par défaut (offset 36 = après SdtHeader 36 octets)
+    let madt_len_raw = unsafe { core::ptr::read_unaligned(&raw const (*header).length) };
+    let madt_len = madt_len_raw as usize;
+
     let madt_base_offset = core::mem::size_of::<SdtHeader>();
-    // SAFETY: offset validé par la longueur de la table
+    // Sanity : besoin d'au moins SdtHeader + lapic_addr(4) + flags(4) = 44 octets
+    if madt_len < madt_base_offset + 8 || madt_len > 65536 { return info; }
+
+    // Lire LAPIC addr (offset 36, u32, potentiellement non-aligné)
+    // read_unaligned obligatoire : Rust ≥1.82 vérifie l'alignement dans read_volatile
     let lapic_addr = unsafe {
-        read_volatile((madt_phys as usize + madt_base_offset) as *const u32)
+        core::ptr::read_unaligned((madt_phys as usize + madt_base_offset) as *const u32)
     } as u64;
     info.lapic_phys = lapic_addr;
 
@@ -142,53 +148,64 @@ pub fn parse_madt(madt_phys: u64) -> MadtInfo {
     let mut offset = madt_base_offset + 8;
 
     while offset + 2 <= madt_len {
-        // SAFETY: offset dans la table MADT (longueur vérifiée)
+        // u8 reads — alignment 1, read_volatile OK ici
         let entry_type = unsafe { read_volatile((madt_phys as usize + offset) as *const u8) };
         let entry_len  = unsafe { read_volatile((madt_phys as usize + offset + 1) as *const u8) } as usize;
-        if entry_len < 2 { break; }
+        if entry_len < 2 || offset + entry_len > madt_len { break; }
 
         let entry_base = madt_phys as usize + offset + 2;
 
         match entry_type {
             MADT_TYPE_LAPIC => {
-                // SAFETY: structure de taille connue, dans la table MADT
-                let lapic = unsafe { &*(entry_base as *const MadtLapic) };
-                // flags bit 0 = enabled
-                if lapic.flags & 3 != 0 && (info.cpu_count as usize) < 256 {
-                    info.apic_ids[info.cpu_count as usize] = lapic.apic_id as u32;
+                if entry_len < 2 + core::mem::size_of::<MadtLapic>() { offset += entry_len; continue; }
+                // Lecture des champs packed via ptr::read pour éviter UB sur références non-alignées
+                let base = entry_base as *const u8;
+                let _acpi_proc_id = unsafe { *base };
+                let apic_id       = unsafe { *base.add(1) };
+                let flags         = unsafe { core::ptr::read_unaligned(base.add(2) as *const u32) };
+                if flags & 3 != 0 && (info.cpu_count as usize) < 256 {
+                    info.apic_ids[info.cpu_count as usize] = apic_id as u32;
                     info.cpu_count += 1;
                 }
             }
             MADT_TYPE_IOAPIC => {
-                // SAFETY: structure de taille connue, dans la table MADT
-                let ioapic = unsafe { &*(entry_base as *const MadtIoApic) };
+                if entry_len < 2 + core::mem::size_of::<MadtIoApic>() { offset += entry_len; continue; }
+                let base = entry_base as *const u8;
+                let ioapic_id   = unsafe { *base };
+                let _reserved   = unsafe { *base.add(1) };
+                let ioapic_addr = unsafe { core::ptr::read_unaligned(base.add(2) as *const u32) };
+                let gsi_base    = unsafe { core::ptr::read_unaligned(base.add(6) as *const u32) };
+                let _ = ioapic_id; let _ = _reserved;
                 info.ioapic_count += 1;
-                // Enregistrer l'IOAPIC dans le module apic/io_apic
-                super::super::apic::io_apic::register_ioapic(
-                    ioapic.ioapic_addr as u64,
-                    ioapic.gsi_base,
-                );
+                super::super::apic::io_apic::register_ioapic(ioapic_addr as u64, gsi_base);
             }
             MADT_TYPE_INT_SRC_OVER => {
-                // SAFETY: structure de taille connue, dans la table MADT
-                let ovr = unsafe { &*(entry_base as *const MadtIntSrcOvr) };
-                if ovr.source < 16 {
-                    info.isa_irq_gsi[ovr.source as usize]   = ovr.gsi;
-                    info.isa_irq_flags[ovr.source as usize] = ovr.flags;
+                if entry_len < 2 + core::mem::size_of::<MadtIntSrcOvr>() { offset += entry_len; continue; }
+                let base = entry_base as *const u8;
+                let _bus   = unsafe { *base };
+                let source = unsafe { *base.add(1) };
+                let gsi    = unsafe { core::ptr::read_unaligned(base.add(2) as *const u32) };
+                let flags  = unsafe { core::ptr::read_unaligned(base.add(6) as *const u16) };
+                if source < 16 {
+                    info.isa_irq_gsi[source as usize]   = gsi;
+                    info.isa_irq_flags[source as usize] = flags;
                 }
             }
             MADT_TYPE_LAPIC_ADDR_OVR => {
-                // SAFETY: structure de taille connue
-                let ovr = unsafe { &*(entry_base as *const MadtLapicAddrOvr) };
-                info.lapic_phys = ovr.addr;
-                // Mettre à jour la base LAPIC dans le module apic
-                super::super::apic::local_apic::set_lapic_base(ovr.addr);
+                if entry_len < 2 + core::mem::size_of::<MadtLapicAddrOvr>() { offset += entry_len; continue; }
+                let base = entry_base as *const u8;
+                let addr = unsafe { core::ptr::read_unaligned(base.add(2) as *const u64) };
+                info.lapic_phys = addr;
+                super::super::apic::local_apic::set_lapic_base(addr);
             }
             MADT_TYPE_X2APIC => {
-                // SAFETY: entrée x2APIC de taille connue
-                let x2apic = unsafe { &*(entry_base as *const MadtX2Apic) };
-                if x2apic.flags & 3 != 0 && (info.cpu_count as usize) < 256 {
-                    info.apic_ids[info.cpu_count as usize] = x2apic.x2apic_id;
+                if entry_len < 2 + core::mem::size_of::<MadtX2Apic>() { offset += entry_len; continue; }
+                let base = entry_base as *const u8;
+                let _reserved   = unsafe { core::ptr::read_unaligned(base as *const u16) };
+                let x2apic_id   = unsafe { core::ptr::read_unaligned(base.add(2) as *const u32) };
+                let flags       = unsafe { core::ptr::read_unaligned(base.add(6) as *const u32) };
+                if flags & 3 != 0 && (info.cpu_count as usize) < 256 {
+                    info.apic_ids[info.cpu_count as usize] = x2apic_id;
                     info.cpu_count += 1;
                 }
             }

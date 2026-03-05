@@ -170,7 +170,7 @@ pub unsafe fn kernel_init() {
 
     // ── Phase 6 : IPC ────────────────────────────────────────────────────────
     // Nécessite heap (structures de channels/registry). Activer après heap init.
-    // ipc::ring::spsc::init_spsc_rings();
+    ipc::ring::spsc::init_spsc_rings();
 
     // ── Phase 7 : FS ─────────────────────────────────────────────────────────
     // disk_size_bytes = 0 → ExoFS détecte un FS non initialisé et formate.
