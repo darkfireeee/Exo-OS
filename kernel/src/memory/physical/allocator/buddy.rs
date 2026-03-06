@@ -27,7 +27,6 @@ use crate::memory::core::{
     pages_to_bytes, is_aligned,
 };
 use crate::memory::physical::frame::descriptor::{FRAME_DESCRIPTORS, FrameFlags};
-use super::ai_hints;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FREE LIST NODE — nœud de liste chaînée dans un buddy bloc libre
@@ -357,13 +356,6 @@ impl BuddyZone {
         if !self.initialized.load(Ordering::Acquire) {
             return Err(AllocError::NotInitialized);
         }
-
-        // Consulter les hints IA NUMA (O(1) — lecture seule)
-        let _numa_hint = if flags.contains(AllocFlags::DMA) {
-            None
-        } else {
-            ai_hints::hint_numa_node(order as u8, self.numa_node)
-        };
 
         // RÈGLE NO-ALLOC : pas d'allocation, tout se passe sous le lock.
         let result = {

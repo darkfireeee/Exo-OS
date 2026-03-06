@@ -8,7 +8,7 @@ use core::sync::atomic::{AtomicU8, AtomicU64, AtomicBool, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::{AllocError, AllocFlags, Frame};
-use crate::memory::physical::allocator::ai_hints::{NumaNode, hint_numa_node, numa_distance};
+use crate::memory::physical::allocator::numa_hints::{NumaNode, numa_distance};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POLITIQUES D'ALLOCATION NUMA
@@ -193,9 +193,8 @@ impl NumaAllocator {
 
         match ctx.policy {
             NumaPolicy::LocalFirst => {
-                // Utiliser le hint IA pour le nœud local
-                let node = hint_numa_node(order, current_cpu)
-                    .unwrap_or(NumaNode::LOCAL);
+                // Allocation locale — nœud du CPU courant par défaut
+                let node = NumaNode::LOCAL;
                 self.alloc_with_fallback(allocator, order, node, flags, active_mask, n_nodes, true)
             }
             NumaPolicy::Bind => {

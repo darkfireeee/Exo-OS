@@ -3,7 +3,7 @@
 // Module allocator — regroupe tous les allocateurs de pages physiques.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-pub mod ai_hints;
+pub mod numa_hints;
 pub mod bitmap;
 pub mod buddy;
 pub mod numa_aware;
@@ -14,11 +14,10 @@ pub mod slub;
 // RE-EXPORTS PRINCIPAUX
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use ai_hints::{
+pub use numa_hints::{
     NumaNode, SizeClass,
-    hint_numa_node, set_hints_enabled, numa_distance, cpu_numa_node,
-    set_numa_topology, stats as ai_hint_stats,
-    HINT_STATS,
+    numa_distance, cpu_numa_node,
+    set_numa_topology,
 };
 
 pub use bitmap::{BitmapAllocator, BOOTSTRAP_BITMAP};

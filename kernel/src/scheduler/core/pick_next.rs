@@ -21,7 +21,6 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use super::preempt::assert_preempt_disabled;
 use super::runqueue::{PerCpuRunQueue, run_queue, MAX_TASKS_PER_CPU};
 use super::task::{ThreadControlBlock, CpuId, TaskState};
-use crate::scheduler::policies::ai_guided;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteurs globaux d'instrumentation
@@ -119,27 +118,8 @@ pub unsafe fn pick_next_task(
                 return PickResult::GoIdle;
             }
 
-            // Appliquer le hint IA pour potentiellement préférer un autre thread CFS.
-            // RÈGLE IA-KERNEL-02 : si hint = None → fallback déterministe.
-            // IA ne concerne que CFS — jamais RT.
-            let final_next = if next.as_ref().policy == crate::scheduler::core::task::SchedPolicy::Normal
-                || next.as_ref().policy == crate::scheduler::core::task::SchedPolicy::Batch
-            {
-                let preferred = ai_guided::maybe_prefer(rq, next);
-                // BUG-FIX A : si l'IA a choisi un thread alternatif (alt != candidate) :
-                //   – `next` (candidate) a été extrait par rq.pick_next() → le remettre.
-                //   – `preferred` (alt) est encore dans la queue CFS via cfs_peek_second
-                //     et doit être retiré avant d'être exécuté.
-                // Sans cette correction : `next` est perdu et `preferred` est
-                // double-schedulé (trong la queue ET en train de tourner).
-                if preferred != next {
-                    rq.enqueue(next);      // remettre le candidat original (+nr_running)
-                    rq.remove(preferred);  // retirer l'élu IA de la queue (-nr_running)
-                }
-                preferred
-            } else {
-                next
-            };
+            // Sélection déterministe CFS pure — aucun ajustement heuristique.
+            let final_next = next;
 
             if current == Some(final_next) {
                 PICK_SAME_CURRENT.fetch_add(1, Ordering::Relaxed);

@@ -39,7 +39,6 @@ pub use self::core::switch::{context_switch, schedule_yield, schedule_block, wak
                              block_current_thread, current_thread_raw};
 pub use self::timer::clock::monotonic_ns;
 pub use self::timer::tick::scheduler_tick;
-pub use self::policies::ai_guided::AI_HINTS_ENABLED;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Séquence d'initialisation globale

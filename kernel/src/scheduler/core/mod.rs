@@ -10,7 +10,7 @@ pub mod switch;
 
 pub use task::{
     ThreadControlBlock, ThreadId, ProcessId, CpuId, Priority,
-    SchedPolicy, TaskState, ThreadAiState, DeadlineParams,
+    SchedPolicy, TaskState, DeadlineParams,
     TaskStats, task_flags,
 };
 pub use preempt::{PreemptGuard, IrqGuard, assert_preempt_disabled, assert_preempt_enabled, MAX_CPUS};

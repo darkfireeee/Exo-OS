@@ -38,7 +38,7 @@ pub use allocator::{
     SLAB_CACHES, slab_alloc, slab_free, slab_init_all,
     SLUB_CACHES, slub_alloc, slub_free, slub_init_all,
     NUMA_ALLOCATOR, NUMA_STATS, NumaPolicy, NumaAllocContext,
-    NumaNode, SizeClass, hint_numa_node,
+    NumaNode, SizeClass,
     init_phase1_bitmap, init_phase2_free_region,
     init_phase3_slab_slub, init_phase4_numa,
 };

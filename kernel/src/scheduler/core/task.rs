@@ -132,47 +132,6 @@ pub enum TaskState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ThreadAiState — 8 bytes inline dans TCB, zéro allocation
-// Règle IA-KERNEL-01 : EMA O(1), zéro modèle dynamique en Ring 0
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Historique AI compact — 8 bytes, inline dans le TCB.
-#[derive(Copy, Clone, Default)]
-#[repr(C)]
-pub struct ThreadAiState {
-    /// EMA du burst CPU (cycles/256).
-    pub cpu_burst_ema:    u16,
-    /// EMA du temps de sommeil (µs/16).
-    pub sleep_ema:        u16,
-    /// Nombre de blocages I/O récents.
-    pub io_block_count:   u16,
-    /// Préemptions involontaires récentes.
-    pub involuntary_ctx:  u16,
-}
-
-impl ThreadAiState {
-    /// Mise à jour EMA avec α=1/8 (rapide et cache-friendly).
-    /// Formule : ema = (ema * 7 + new_val) >> 3
-    #[inline(always)]
-    pub fn update_cpu_burst(&mut self, measured_cycles: u32) {
-        let val = (measured_cycles / 256).min(u16::MAX as u32) as u16;
-        self.cpu_burst_ema = ((self.cpu_burst_ema as u32 * 7 + val as u32) >> 3) as u16;
-    }
-
-    #[inline(always)]
-    pub fn update_sleep(&mut self, sleep_us: u32) {
-        let val = (sleep_us / 16).min(u16::MAX as u32) as u16;
-        self.sleep_ema = ((self.sleep_ema as u32 * 7 + val as u32) >> 3) as u16;
-    }
-
-    /// Retourne vrai si le thread est probablement CPU-bound.
-    #[inline(always)]
-    pub fn is_cpu_bound(&self) -> bool {
-        self.cpu_burst_ema > 200 && self.io_block_count < 10
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // DeadlineParams — paramètres SCHED_DEADLINE (EDF)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -209,7 +168,7 @@ impl Default for DeadlineParams {
 ///    = 4+4+4+4+8+1+1+1+1+4+8+8+1+1+14 = 64 ✓
 ///
 ///  Cache line 2 [64..128]  — CONTEXT SWITCH / COLD
-///    kernel_rsp(8)+cr3(8)+fpu_ptr(8)+signal_mask(8)+ai_state(8)+deadline_params(24)
+///    kernel_rsp(8)+cr3(8)+fpu_ptr(8)+signal_mask(8)+_pad2(8)+deadline_params(24)
 ///    = 8+8+8+8+8+24 = 64 ✓
 #[repr(C, align(64))]
 pub struct ThreadControlBlock {
@@ -260,8 +219,8 @@ pub struct ThreadControlBlock {
     pub fpu_state_ptr:         *mut u8,
     /// Bitmask signaux bloqués (sigprocmask).             [+88] 8B
     pub signal_mask:           AtomicU64,
-    /// Hints IA inline (8 bytes, zéro alloc).             [+96] 8B
-    pub ai_state:              ThreadAiState,
+    /// Réservé (remà profil thread) — 8 octets.           [+96] 8B
+    _pad2:                     [u8; 8],
     /// Paramètres EDF (runtime/deadline/period, ns).      [+104] 24B → CL2=64
     pub deadline_params:       DeadlineParams,
 }
@@ -335,7 +294,7 @@ impl ThreadControlBlock {
             cr3,
             fpu_state_ptr:         core::ptr::null_mut(),
             signal_mask:           AtomicU64::new(0),
-            ai_state:              ThreadAiState::default(),
+            _pad2:                 [0u8; 8],
             deadline_params:       DeadlineParams::default(),
         }
     }
