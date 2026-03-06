@@ -74,6 +74,41 @@ pub fn init_phase2_free_region(start: PhysAddr, end: PhysAddr) {
     unsafe { BOOTSTRAP_BITMAP.add_free_region(start, end); }
 }
 
+/// Initialise la zone DMA32 du buddy allocator (couvre la RAM < 4 GiB).
+///
+/// Doit être appelé APRÈS init_phase1_bitmap+init_phase2_free_region,
+/// et AVANT init_phase3_slab_slub. La physmap doit être mappée.
+///
+/// `bitmap_buf` / `bitmap_words` : buffer statique fourni par l'appelant
+/// pour stocker le bitmap de disponibilité (1 bit par page de la zone).
+/// Pour couvrir 4 GiB : 16384 u64 × 8 = 128 KiB.
+///
+/// # Safety
+/// - Single-CPU, physmap opérationnelle, appelé une seule fois.
+pub unsafe fn init_phase2b_buddy_zone(
+    phys_start:   PhysAddr,
+    phys_end:     PhysAddr,
+    bitmap_buf:   *mut u64,
+    bitmap_words: usize,
+) {
+    use crate::memory::core::ZoneType;
+    use crate::memory::core::constants::ZONE_DMA32_END;
+    // Clamp à la limite DMA32 (< 4 GiB)
+    let dma32_end = PhysAddr::new(phys_end.as_u64().min(ZONE_DMA32_END as u64));
+    if phys_start >= dma32_end { return; }
+    BUDDY.init_zone(ZoneType::Dma32, phys_start, dma32_end, bitmap_buf, bitmap_words);
+    BUDDY.mark_initialized();
+}
+
+/// Ajoute une région de RAM libre au buddy allocator (phase 2b).
+/// Appeler pour chaque région E820/UEFI utilisable, après init_phase2b_buddy_zone.
+///
+/// # Safety
+/// - Zone buddy initialisée, physmap opérationnelle, single-CPU.
+pub unsafe fn init_phase2b_buddy_free_region(start: PhysAddr, end: PhysAddr) {
+    BUDDY.add_free_zone_region(start, end);
+}
+
 /// Initialise le SLUB/Slab après que le buddy soit opérationnel.
 pub fn init_phase3_slab_slub() {
     slab_init_all();

@@ -64,7 +64,7 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
     boot_recovery_sequence(disk_size_bytes)
         .map_err(|_| ExofsError::RecoveryFailed)?;
 
-    // Phase 2 : Enregistrement VFS (register_exofs_syscalls() — appelé via exofs_register_fs())
+    // Phase 2 : Enregistrement VFS (register_exofs_syscalls() — appelé via exofs_register_fs()).
     // Omis ici : enregistrement effectué après le boot via exofs_register_fs().
 
     // Phase 3 : Initialisation de la couche de compatibilité POSIX

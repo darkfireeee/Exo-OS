@@ -23,10 +23,55 @@
 
 use crate::arch::x86_64::boot::multiboot2::{MmapEntry, Multiboot2Info, MMAP_AVAILABLE};
 use crate::arch::x86_64::boot::uefi::UefiMemoryMap;
-use crate::memory::core::{PhysAddr, PAGE_SIZE};
+use crate::memory::core::{PhysAddr, Frame, PAGE_SIZE};
 use crate::memory::physical::allocator::{
-    init_phase1_bitmap, init_phase2_free_region, init_phase3_slab_slub, init_phase4_numa,
+    init_phase1_bitmap, init_phase2_free_region,
+    init_phase2b_buddy_zone, init_phase2b_buddy_free_region,
+    init_phase3_slab_slub, init_phase4_numa,
+    register_slab_page_provider, SlabPageProvider, BOOTSTRAP_BITMAP,
 };
+use crate::memory::core::AllocError;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BITMAP STATIQUE POUR LE BUDDY ALLOCATOR (zone DMA32 — <4 GiB)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Couvre jusqu'à 4 GiB de RAM :
+//   - Pages max : 4 GiB / 4 KiB = 1 048 576 pages
+//   - Mots u64  : ceil(1 048 576 / 64) = 16 384 → 128 KiB en .bss
+//
+// Alloué en .bss (zero-init par le bootloader). BuddyZone::init() le
+// réinitialise à 0xFF…FF (all-allocated) puis add_free_range() efface
+// les bits des pages réellement libres.
+static mut BUDDY_DMA32_BITMAP: [u64; 16384] = [0u64; 16384];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FOURNISSEUR DE PAGES PHYSIQUES POUR LE SLAB (bootstrap)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Implémentation de SlabPageProvider utilisant le BitmapAllocator de boot.
+///
+/// Utilisé pendant la phase de boot avant qu'un allocateur physique plus
+/// sophistiqué (buddy) soit opérationnel. Délègue vers BOOTSTRAP_BITMAP.
+struct BitmapSlabProvider;
+
+// SAFETY: BitmapSlabProvider est un ZST ; BOOTSTRAP_BITMAP est thread-safe.
+unsafe impl Sync for BitmapSlabProvider {}
+
+impl SlabPageProvider for BitmapSlabProvider {
+    fn get_page(&self) -> Result<PhysAddr, AllocError> {
+        let frame = BOOTSTRAP_BITMAP.alloc_frame(crate::memory::core::AllocFlags::NONE)?;
+        Ok(frame.start_address())
+    }
+
+    fn put_page(&self, phys: PhysAddr) {
+        let frame = Frame::containing(phys);
+        BOOTSTRAP_BITMAP.free_frame(frame);
+    }
+}
+
+/// Instance statique du provider (durée de vie 'static requise par slab).
+static BITMAP_SLAB_PROVIDER: BitmapSlabProvider = BitmapSlabProvider;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LIMITES PHYSIQUES DU SYSTÈME
@@ -170,6 +215,39 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
         init_phase2_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
     }
 
+    // ── Phase 2b : Initialiser le buddy allocator (zone DMA32, < 4 GiB) ──────
+    // Requis par vmalloc/kalloc (allocations > 2 KiB : stacks kernel, etc.).
+    // La physmap doit être opérationnelle (mappée dans main.rs trampoline).
+    // SAFETY: Single-CPU. BUDDY_DMA32_BITMAP est 'static (BSS, durée de vie infinie).
+    //         init_phase2b_buddy_zone initialise la zone puis mark_initialized().
+    init_phase2b_buddy_zone(
+        phys_start_pa, phys_end_pa,
+        // SAFETY: mutable static dans BSS, durée de vie 'static ≥ celle du buddy.
+        BUDDY_DMA32_BITMAP.as_mut_ptr(),
+        BUDDY_DMA32_BITMAP.len(),
+    );
+    // Peupler le buddy avec les mêmes régions libres que le bitmap.
+    for entry in entries {
+        if entry.entry_type != MMAP_AVAILABLE { continue; }
+
+        let base = entry.base_addr;
+        let end  = base + entry.length;
+        if end <= PHYS_MEMORY_START { continue; }
+
+        let base_adj = align_up(base.max(PHYS_MEMORY_START), PAGE_SIZE as u64);
+        let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
+        if base_adj >= end_adj { continue; }
+
+        init_phase2b_buddy_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
+    }
+
+    // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ─────────
+    // SAFETY: BOOTSTRAP_BITMAP initialisé (phases 1+2 ci-dessus).
+    //         BITMAP_SLAB_PROVIDER est 'static et Sync.
+    //         Doit être appelé AVANT init_phase3_slab_slub().
+    register_slab_page_provider(
+        &BITMAP_SLAB_PROVIDER as *const dyn SlabPageProvider
+    );
     // ── Phase 3 : Slab / SLUB ─────────────────────────────────────────────────
     init_phase3_slab_slub();
 
@@ -237,7 +315,26 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
 
         init_phase2_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
     }
-
+    // ── Phase 2b : Buddy allocator (zone DMA32, < 4 GiB) ─────────────────────
+    init_phase2b_buddy_zone(
+        phys_start_pa, phys_end_pa,
+        BUDDY_DMA32_BITMAP.as_mut_ptr(),
+        BUDDY_DMA32_BITMAP.len(),
+    );
+    for desc in uefi_map.iter() {
+        if !desc.is_usable() { continue; }
+        let base = desc.physical_start;
+        let end  = base + desc.number_of_pages * PAGE_SIZE as u64;
+        if end <= PHYS_MEMORY_START { continue; }
+        let base_adj = align_up(base.max(PHYS_MEMORY_START), PAGE_SIZE as u64);
+        let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
+        if base_adj >= end_adj { continue; }
+        init_phase2b_buddy_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
+    }
+    // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ─────────
+    register_slab_page_provider(
+        &BITMAP_SLAB_PROVIDER as *const dyn SlabPageProvider
+    );
     // ── Phase 3 & 4 ──────────────────────────────────────────────────────────
     init_phase3_slab_slub();
     init_phase4_numa(0b0000_0001);
@@ -428,6 +525,35 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
 
         init_phase2_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
     }
+
+    // ── Phase 2b : Buddy allocator (zone DMA32, < 4 GiB) ─────────────────────
+    init_phase2b_buddy_zone(
+        phys_start_pa, phys_end_pa,
+        BUDDY_DMA32_BITMAP.as_mut_ptr(),
+        BUDDY_DMA32_BITMAP.len(),
+    );
+    for i in 0..count {
+        let r = &bi.memory_regions[i];
+        if r.length == 0 { continue; }
+        match exo_kind_to_region_type(r.kind) {
+            MemoryRegionType::Usable | MemoryRegionType::AcpiReclaimable => {}
+            _ => continue,
+        }
+        let base = r.base;
+        let end  = base + r.length;
+        if end <= PHYS_MEMORY_START { continue; }
+        let base_adj = align_up(base.max(PHYS_MEMORY_START), PAGE_SIZE as u64);
+        let end_adj  = align_down(end.min(PHYS_MEMORY_MAX),  PAGE_SIZE as u64);
+        if base_adj >= end_adj { continue; }
+        init_phase2b_buddy_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
+    }
+
+    // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ───────
+    // SAFETY: BOOTSTRAP_BITMAP initialisé (phases 1+2 ci-dessus).
+    //         BITMAP_SLAB_PROVIDER est 'static et Sync.
+    register_slab_page_provider(
+        &BITMAP_SLAB_PROVIDER as *const dyn SlabPageProvider
+    );
 
     // ── Phase 3 : Slab / SLUB ─────────────────────────────────────────────────
     init_phase3_slab_slub();

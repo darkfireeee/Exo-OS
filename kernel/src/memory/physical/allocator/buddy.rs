@@ -694,6 +694,16 @@ impl GlobalBuddyAllocator {
             }
         }
 
+        // Fallback vers zone inférieure (Normal → DMA32 sur systèmes avec < 4 GiB RAM).
+        // Standard x86_64 : Normal est vide quand toute la RAM est < 4 GiB.
+        // Ne descend pas en-dessous de DMA32 (idx=1) pour les allocations non-DMA.
+        if result.is_err() && zone_idx > 1 {
+            for fallback_idx in (1..zone_idx).rev() {
+                let r = self.zones[fallback_idx].alloc_pages(order, flags);
+                if r.is_ok() { return r; }
+            }
+        }
+
         result
     }
 
@@ -766,6 +776,51 @@ impl GlobalBuddyAllocator {
     /// Marque l'allocateur comme initialisé.
     pub fn mark_initialized(&self) {
         self.initialized.store(true, Ordering::Release);
+    }
+
+    /// Initialise une zone de l'allocateur (appelé au boot, single-CPU).
+    ///
+    /// `zone_type` détermine l'index de la zone (0=DMA, 1=DMA32, 2=Normal, 3=Movable).
+    /// `bitmap_buf` doit pointer vers un buffer statique de `bitmap_words` u64.
+    ///
+    /// # Safety
+    /// - Doit être appelé UNE SEULE FOIS par zone, avant SMP.
+    /// - `bitmap_buf` doit être valide pour `bitmap_words` × 8 bytes.
+    pub unsafe fn init_zone(
+        &self,
+        zone_type:    ZoneType,
+        phys_start:   PhysAddr,
+        phys_end:     PhysAddr,
+        bitmap_buf:   *mut u64,
+        bitmap_words: usize,
+    ) {
+        let idx = (zone_type.index()).min(3);
+        self.zones[idx].init(zone_type, 0 /* NUMA node 0 */,
+            phys_start, phys_end, bitmap_buf, bitmap_words);
+    }
+
+    /// Ajoute une plage de frames libres aux zones initialisées qui couvrent cette plage.
+    ///
+    /// Appelé pour chaque région E820/UEFI utilisable, après `init_zone()`.
+    ///
+    /// # Safety
+    /// - Zones concernées doivent être initialisées.
+    /// - La plage ne doit pas contenir de mémoire kernel active.
+    pub unsafe fn add_free_zone_region(&self, start: PhysAddr, end: PhysAddr) {
+        for zone in &self.zones {
+            if !zone.is_initialized() { continue; }
+            let zs = zone.phys_start.as_u64();
+            let ze = zone.phys_end.as_u64();
+            let rs = start.as_u64();
+            let re = end.as_u64();
+            if rs >= ze || re <= zs { continue; }    // pas d'overlap
+            let cs = rs.max(zs);
+            let ce = re.min(ze);
+            if cs >= ce { continue; }
+            let first_pfn = ((cs - zs) / PAGE_SIZE as u64) as usize;
+            let last_pfn  = ((ce - zs) / PAGE_SIZE as u64) as usize;
+            zone.add_free_range(first_pfn, last_pfn);
+        }
     }
 
     /// Retourne une référence à la zone pour un type donné.

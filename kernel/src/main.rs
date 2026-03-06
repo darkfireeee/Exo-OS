@@ -56,10 +56,10 @@ core::arch::global_asm!(
 core::arch::global_asm!(
     ".section .bss",
     ".balign 4096",
-    ".global _boot_pml4",     "_boot_pml4:",     ".space 4096",
-    ".global _boot_pdpt",     "_boot_pdpt:",     ".space 4096",
-    ".global _boot_pd",       "_boot_pd:",       ".space 4096",
-    ".global _boot_pd_high",  "_boot_pd_high:",  ".space 4096",
+    ".global _boot_pml4",          "_boot_pml4:",          ".space 4096",
+    ".global _boot_pdpt",          "_boot_pdpt:",          ".space 4096",
+    ".global _boot_pd",            "_boot_pd:",            ".space 4096",
+    ".global _boot_pd_high",       "_boot_pd_high:",       ".space 4096",
     // Sauvegarde des args Multiboot2 (EAX/EBX) pendant la transition 32→64
     ".global _mb2_saved_magic", "_mb2_saved_magic:", ".long 0",
     ".global _mb2_saved_info",  "_mb2_saved_info:",  ".quad 0",
@@ -159,16 +159,17 @@ core::arch::global_asm!(
     //   Note : 0xFEC00000 | 0x83 = 0xFEC00083 (lower 32 bits; upper = 0)
     //          0xFEE00000 | 0x83 = 0xFEE00083
 
-    // Écrire PD_high[502] = 0xFEC00083 (IOAPIC 2 MiB page) ; offset = 502×8 = 4016
+    // Écrire PD_high[502] = 0xFEC0009B (IOAPIC 2 MiB page, P+R/W+PS+PWT+PCD → UC)
+    // 0x9B = 0x83 | 0x08 (PWT) | 0x10 (PCD) : sélectionne PAT[3]=UC (défaut Intel)
     "lea edi, [_boot_pd_high]",
     "add edi, 4016",
-    "mov dword ptr [edi],     0xFEC00083",
+    "mov dword ptr [edi],     0xFEC0009B",
     "mov dword ptr [edi + 4], 0",
 
-    // Écrire PD_high[503] = 0xFEE00083 (LAPIC 2 MiB page) ; offset = 503×8 = 4024
+    // Écrire PD_high[503] = 0xFEE0009B (LAPIC 2 MiB page, P+R/W+PS+PWT+PCD → UC)
     "lea edi, [_boot_pd_high]",
     "add edi, 4024",
-    "mov dword ptr [edi],     0xFEE00083",
+    "mov dword ptr [edi],     0xFEE0009B",
     "mov dword ptr [edi + 4], 0",
 
     // ── PDPT[3] → _boot_pd_high (MMIO APIC region) ; offset = 3×8 = 24 ───────
@@ -176,6 +177,16 @@ core::arch::global_asm!(
     "or  eax, 0x03",            // P + R/W
     "mov dword ptr [_boot_pdpt + 24],     eax",
     "mov dword ptr [_boot_pdpt + 28], 0",
+
+    // ── PML4[256] → _boot_pdpt (physmap 0xFFFF_8000_0000_0000) ──────────────────
+    // Réutilise _boot_pdpt existant (2 MiB pages via _boot_pd).
+    // CPUID.PDPE1GB non requis — pages 1 GiB non supportées universellement.
+    // Couvre 0..1 GiB physique via PDPT[0]→_boot_pd — suffisant pour -m 256M.
+    // PML4 index 256 = bits[47:39] de 0xFFFF_8000_0000_0000 ; offset = 2048.
+    "lea eax, [_boot_pdpt]",
+    "or  eax, 0x03",            // P + R/W
+    "mov dword ptr [_boot_pml4 + 2048],     eax",
+    "mov dword ptr [_boot_pml4 + 2052], 0",
 
     // ── PML4[0] → PDPT ────────────────────────────────────────────────────────
     "lea eax, [_boot_pdpt]",

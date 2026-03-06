@@ -219,6 +219,23 @@ pub fn do_execve(
     thread.tls_gs_base.store(elf_result.tls_base, Ordering::Release);
     thread.tls_size = elf_result.tls_size;
 
+    // BUG-04 / PROC-01 fix: écrire IA32_FS_BASE MSR immédiatement.
+    // do_execve() s'exécute en contexte kernel sur le CPU courant du thread ;
+    // le nouveau TLS base doit être actif avant la première instruction userspace.
+    // Sans cet WRMSR, %fs pointe vers l'ancienne base → crash userspace dès le
+    // premier accès TLS (thread_local!, pthread_self…).
+    if elf_result.tls_base != 0 {
+        // SAFETY: WRMSR sur MSR_FS_BASE = 0xC000_0100 est toujours défini sur
+        // x86_64 (AMD64 v0), et le MSR est writable depuis Ring 0. Le contexte
+        // est celui du thread courant sur ce CPU — effet local, aucune contention.
+        unsafe {
+            crate::arch::x86_64::cpu::msr::write_msr(
+                crate::arch::x86_64::cpu::msr::MSR_FS_BASE,
+                elf_result.tls_base,
+            );
+        }
+    }
+
     // Mettre à jour le PCB avec le nouvel espace d'adressage.
     pcb.cr3.store(elf_result.cr3, Ordering::Release);
     pcb.address_space.store(elf_result.addr_space_ptr, Ordering::Release);

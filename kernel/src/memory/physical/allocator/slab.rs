@@ -409,7 +409,7 @@ impl SlabPageProvider for DefaultProvider {
     fn get_page(&self) -> Result<PhysAddr, AllocError> {
         let data   = self.data.load(Ordering::Acquire);
         let vtable = self.vtable.load(Ordering::Acquire);
-        if data == 0 { return Err(AllocError::NotInitialized); }
+        if data == 0 || vtable == 0 { return Err(AllocError::NotInitialized); }
         // SAFETY: data+vtable forment un fat pointer réenregistré par register_slab_page_provider.
         let fat: *const dyn SlabPageProvider = unsafe {
             core::mem::transmute((data as *const (), vtable as *const ()))
@@ -420,7 +420,7 @@ impl SlabPageProvider for DefaultProvider {
     fn put_page(&self, phys: PhysAddr) {
         let data   = self.data.load(Ordering::Acquire);
         let vtable = self.vtable.load(Ordering::Acquire);
-        if data == 0 { return; }
+        if data == 0 || vtable == 0 { return; }
         let fat: *const dyn SlabPageProvider = unsafe {
             core::mem::transmute((data as *const (), vtable as *const ()))
         };
@@ -443,6 +443,12 @@ pub unsafe fn register_slab_page_provider(provider: *const dyn SlabPageProvider)
     let (data, vtable): (usize, usize) = core::mem::transmute(provider);
     SLAB_PAGE_PROVIDER.data.store(data, Ordering::SeqCst);
     SLAB_PAGE_PROVIDER.vtable.store(vtable, Ordering::SeqCst);
+}
+
+/// Retourne true si un fournisseur de pages a été enregistré (data != 0).
+#[inline]
+pub fn is_slab_provider_registered() -> bool {
+    SLAB_PAGE_PROVIDER.data.load(Ordering::Acquire) != 0
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

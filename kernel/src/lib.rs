@@ -103,20 +103,12 @@ pub use arch::x86_64::cpu::{
 /// Doit être appelé une seule fois, depuis le BSP, après `arch_boot_init`.
 pub unsafe fn kernel_init() {
     // ── Phase 2a : EmergencyPool — PREMIER ABSOLU (RÈGLE EMERGENCY-01) ─────────
-    // Pool statique de 64 WaitNodes pré-alloués en .bss, aucune dépendance heap.
-    // Doit être init avant scheduler::sync::wait_queue (appelé par scheduler::init).
     crate::memory::physical::frame::emergency_pool::init();
 
     // ── Phase 2b : Allocateur heap (SLUB + large) ────────────────────────────
-    // Requiert le buddy allocator physique initialisé avec les données Multiboot2.
-    // Activé par arch_boot_init via memory::physical::allocator::init_phase1..4().
-    // Laisser commenté jusqu'à ce que arch_boot_init propage les plages mémoire.
-    // memory::heap::allocator::hybrid::init();  // active HYBRID_ENABLED → Box/Vec OK
+    crate::memory::heap::allocator::hybrid::init();
 
     // ── Phase 3 : Scheduler ─────────────────────────────────────────────────
-    // scheduler::init() orchestre les 11 étapes : preempt, runqueues, FPU, TSC,
-    // tick (HZ=1000), hrtimer, deadline_timer, wait_queue, c_states, smp topology.
-    // SAFETY: EmergencyPool initialisé avant cet appel (étape 9 wait_queue en dépend).
     crate::scheduler::init(&crate::scheduler::SchedInitParams::default());
 
     // ── Phase 3b : Thread idle du BSP (CPU 0) ────────────────────────────────
@@ -131,11 +123,6 @@ pub unsafe fn kernel_init() {
         static mut IDLE_TCB: MaybeUninit<crate::scheduler::ThreadControlBlock> =
             MaybeUninit::uninit();
 
-        // Crée un TCB idle : pid=0, SchedPolicy::Normal, Priority::IDLE (140).
-        // cr3 = 0 → réutilise la table de pages courante (mapping identité kernel).
-        // kernel_rsp = sommet du stack BSP (défini dans .boot_stack par global_asm!).
-        // SAFETY: IDLE_TCB est dans .bss (durée de vie 'static).
-        //         write() est sûr car exécuté exactement une fois (mono-CPU au boot).
         let idle = IDLE_TCB.write(
             crate::scheduler::ThreadControlBlock::new(
                 crate::scheduler::ThreadId(0),
@@ -154,29 +141,28 @@ pub unsafe fn kernel_init() {
     }
 
     // ── Phase 4 : Process (reaper kthread) ──────────────────────────────────
-    // Nécessite l'allocateur heap (Box<ProcessThread> dans create_kthread).
-    // Activer après memory::heap::allocator::hybrid::init().
-    // process::lifecycle::reap::init_reaper();
+    // TEMPORAIREMENT DÉSACTIVÉ : crash GPF f000ff53f000ff53 pendant create_kthread
+    // crate::process::lifecycle::reap::init_reaper();
 
     // ── Phase 5 : Security ──────────────────────────────────────────────────
-    // init_capability_subsystem() = pur atomique, aucune alloc. Sûr maintenant.
     crate::security::capability::init_capability_subsystem();
-    // access_control::checker::init() et integrity_check::runtime_check::init_runtime_integrity()
-    // référencent des symboles lieur (_text_start, _text_end, _rodata_*) définis dans linker.ld.
-    // Ces symboles ne sont disponibles que dans le binaire final baremetal.
-    // Activer uniquement lors du build final avec le linker script complet.
-    // crate::security::access_control::checker::init();
-    // crate::security::integrity_check::runtime_check::init_runtime_integrity();
+
+    // Phase 5b : Crypto — RDRAND-based CSPRNG (requis avant futex seed + IPC auth).
+    // TODO: crypto_init() — vérifier compatibilité RDRAND au boot
+    // crate::security::crypto::crypto_init();
+
+    // ERR-05 fix: Init graine SipHash de la table futex (anti-DoS hash collision).
+    {
+        let mut seed = [0u8; 16];
+        if crate::security::crypto::rng_fill(&mut seed).is_ok() {
+            crate::memory::utils::futex_table::init_futex_seed(seed);
+        }
+    }
 
     // ── Phase 6 : IPC ────────────────────────────────────────────────────────
-    // Nécessite heap (structures de channels/registry). Activer après heap init.
     ipc::ring::spsc::init_spsc_rings();
 
     // ── Phase 7 : FS ─────────────────────────────────────────────────────────
-    // disk_size_bytes = 0 → ExoFS détecte un FS non initialisé et formate.
-    // TODO: passer la vraie taille issue de la table de partitions (multiboot2/ACPI).
-    // Erreur non fatale au stade actuel : heap non disponible → RecoveryFailed
-    // est attendu et ignoré jusqu'à l'activation complète de la heap.
     let _ = crate::fs::exofs::exofs_init(0u64);
 }
 
