@@ -310,6 +310,9 @@ pub unsafe extern "C" fn kernel_main(
     // Debug : marqueur de début kernel_main sur port 0xE9 ('K' = 0x4B)
     core::arch::asm!("mov al, 0x4B", "out 0xe9, al", options(nostack, nomem));
 
+    // Affichage VGA texte — visible dans la fenêtre QEMU dès le début du boot
+    kernel::arch::x86_64::vga_early::boot_screen();
+
     // ── Phase 1 : Architecture (GDT, IDT, TSS, per-CPU, TSC, FPU, ACPI, APIC,
     //              SYSCALL, Spectre, SMP boot des APs)
     // SAFETY: arch_boot_init doit être le PREMIER code Rust exécuté en Ring 0.
@@ -326,6 +329,9 @@ pub unsafe extern "C" fn kernel_main(
 
     // Debug : kernel_init terminé ('I' = 0x49)
     core::arch::asm!("mov al, 0x49", "out 0xe9, al", options(nostack, nomem));
+
+    // Mise à jour écran VGA : Phase 1 complète
+    kernel::arch::x86_64::vga_early::boot_complete();
 
     // Debug : boot complet → '\n', 'O', 'K', '\n'
     core::arch::asm!(

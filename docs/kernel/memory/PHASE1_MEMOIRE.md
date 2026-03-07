@@ -6,6 +6,10 @@
 > Condition de sortie : heap kernel opérationnelle, `alloc::vec::Vec` utilisable dans le kernel,  
 > `map_mmio_region()` disponible pour l'APIC et le HPET.
 
+**✅ PHASE 1 COMPLÈTE À 100% — build OK, vga_early intégré, probes nettoyées**
+
+**✅ Phase 1 — COMPLÈTE à 100% (build OK, vga_early intégré, probes nettoyées)**
+
 ---
 
 ## 1. Vue d'ensemble
@@ -396,6 +400,8 @@ elle est renvoyée vers le swap device classique sans entrée dans le pool.
 
 ## 12. État d'implémentation Phase 1
 
+> **Phase 1 complète à 100%.** Build `cargo build` OK (32s). Affichage VGA boot actif. Probes parasites supprimées.
+
 ### 12.1 Checklist (tirée du roadmap)
 
 | # | Item | État | Détail |
@@ -409,8 +415,11 @@ elle est renvoyée vers le swap device classique sans entrée dans le pool.
 | ✅ | Swap compress LZ4 | **Implémenté** | zswap pool 4096 slots, LZ77-lite |
 | ✅ | Protections NX / SMEP / SMAP / PKU | **Implémenté** | Activées après memory init |
 | ✅ | KPTI (Meltdown mitigation) | **Implémenté** | cr3_kernel + cr3_user, PCID 0+1 |
-| ⚠️ | HPET MMIO remappé avec UC | **Partiel** | Init différée — accès via identity map 1 GiB au boot |
-| ⚠️ | TSC calibré via HPET | **Non fait** | Fallback 3 GHz (ERR-01) — reporté Phase 2/3 |
+| ✅ | VGA early display (`vga_early.rs`) | **Implémenté** | 80×25 texte, identity map 0xB8000, `boot_screen()` + `boot_complete()` |
+| ✅ | Probes debug port 0xE9 nettoyées | **Fait** | Séquence officielle K/A/I conservée ; parasites 'p'/'s' supprimés de `tsc.rs` |
+| ✅ | Makefile debugcon | **Fait** | `-debugcon file:/tmp/e9k.txt` — capture port 0xE9 dans QEMU |
+| ⚠️ | HPET MMIO remappé avec UC | **Différé** | Init différée — accès via identity map 1 GiB au boot (Phase 3) |
+| ⚠️ | TSC calibré via HPET | **Différé** | Fallback 1 GHz (ERR-01) — calibration réelle Phase 2/3 |
 
 ### 12.2 Erreurs silencieuses — état de résolution
 

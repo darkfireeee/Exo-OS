@@ -297,11 +297,8 @@ pub fn init_tsc(cpu_logical_id: u32) {
     // pas pendant la boucle d'attente busy-poll (comportement fréquent en TCG/KVM
     // avant init APIC). Elle pourra être réactivée post-boot une fois le timer APIC
     // ou HPET initialisé, via recalibrate_tsc_with_hpet().
-    unsafe { core::arch::asm!("mov al, 0x70", "out 0xe9, al", options(nostack, nomem)); } // probe 'p'
     let hz = calibrate_tsc_cpuid()
         .unwrap_or(1_000_000_000); // 1 GHz : fallback sûr ; sera recalibré post-APIC
-
-    unsafe { core::arch::asm!("mov al, 0x73", "out 0xe9, al", options(nostack, nomem)); } // 's'
 
     // Arrondir à multiple de 100 kHz pour stabilité
     let hz_rounded = (hz + 50_000) / 100_000 * 100_000;

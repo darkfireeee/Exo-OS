@@ -19,6 +19,7 @@ pub mod smp;
 pub mod spectre;
 pub mod syscall;
 pub mod tss;
+pub mod vga_early;
 pub mod virt;
 
 use core::sync::atomic::{AtomicBool, Ordering};

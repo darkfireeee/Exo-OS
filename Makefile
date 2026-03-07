@@ -29,7 +29,9 @@ QEMU_FLAGS += -serial stdio
 QEMU_FLAGS += -no-reboot
 QEMU_FLAGS += -no-shutdown
 QEMU_FLAGS += -d int,cpu_reset -D /tmp/qemu-exoos.log
-# Sortie debug sur port 0xE9 (detect-hlt permet de capturer le HLT initial)
+# Sortie debug sur port 0xE9 → fichier /tmp/e9k.txt (debugcon QEMU)
+QEMU_FLAGS += -debugcon file:/tmp/e9k.txt
+# isa-debug-exit : permet à l'OS de signaler le code de sortie à QEMU
 QEMU_FLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 # Couleurs
