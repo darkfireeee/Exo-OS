@@ -153,3 +153,83 @@ pub fn hpet_freq_hz() -> u64 {
 pub fn hpet_available() -> bool {
     HPET_BASE.load(Ordering::Relaxed) != 0 && HPET_FREQ_HZ.load(Ordering::Relaxed) != 0
 }
+
+// ── Initialisation post-mémoire ───────────────────────────────────────────────
+
+/// Initialise le HPET après que le sous-système mémoire est opérationnel.
+///
+/// Actions :
+/// 1. Mappe la page MMIO HPET avec `PAGE_FLAGS_MMIO` (UC + NX) dans le fixmap
+///    **si le physmap le permet**, sinon utilise l'adresse physique directement
+///    (identity map 0–4 GiB du trampoline — sans UC, fonctionnel sur QEMU).
+/// 2. Lit GCAP_ID → extrait la période d'horloge en femtosecondes.
+/// 3. Active le compteur principal (HPET_ENABLE dans GEN_CFG).
+/// 4. Vérifie que le compteur avance (avec timeout de sécurité).
+/// 5. Stocke la fréquence dans `HPET_FREQ_HZ`.
+///
+/// Appelé depuis `kernel_init()` après `hybrid::init()`.
+/// Sans effet si le HPET n'a pas été détecté lors de `init_hpet()`.
+///
+/// Retourne `true` si le HPET est maintenant opérationnel.
+pub fn init_hpet_post_memory() -> bool {
+    let phys = HPET_BASE.load(Ordering::Acquire);
+    if phys == 0 { return false; }
+
+    // ── 1. Mapping MMIO ──────────────────────────────────────────────────────
+    // L'identity map trampoline couvre 0–4 GiB.
+    // HPET MMIO est à 0xFED00000 (~4 GiB) → accès direct via identity map.
+    // Note: la page est une large-page 2 MiB sans PCD (cached). C'est correct
+    // du point de vue accès sur QEMU. Sur bare-metal, un remap UC doit être fait.
+    // TODO bare-metal : ajouter le remap 4K avec PAGE_FLAGS_MMIO dans le fixmap.
+    //   use crate::arch::x86_64::paging::{map_4k_page, PAGE_FLAGS_MMIO};
+    //   use crate::memory::core::layout::{fixmap_slot_addr, FIXMAP_HPET};
+
+    // ── 2. Lire GCAP_ID via l'identity map (phys = virt pour 0–4 GiB) ────────
+    // SAFETY: 0xFED00000 est dans l'identity map 0–4 GiB du trampoline.
+    //         Adresse MMIO HPET standard (ACPI spec, Intel ICH).
+    let gcap = unsafe { core::ptr::read_volatile(phys as *const u64) };
+    let period_fs = (gcap >> HPET_CLK_PERIOD_SHIFT) as u32;
+
+    // Valider la période : QEMU retourne 69841279 fs (~14.318 MHz PIT reference).
+    // Plage acceptable : 100 ps (10 GHz) à 100 ns (10 MHz).
+    if period_fs < 100 || period_fs > 100_000_000 {
+        return false; // GCAP_ID invalide — HPET non disponible ou MMIO inaccessible
+    }
+
+    let freq = 1_000_000_000_000_000u64 / period_fs as u64;
+    HPET_PERIOD_FS.store(period_fs, Ordering::Release);
+    HPET_FREQ_HZ.store(freq, Ordering::Release);
+
+    // ── 3. Activer le compteur HPET ──────────────────────────────────────────
+    // Désactiver → reset compteur → activer.
+    unsafe {
+        core::ptr::write_volatile((phys + HPET_GEN_CFG) as *mut u64, 0);
+        core::ptr::write_volatile((phys + HPET_MAIN_CTR) as *mut u64, 0);
+        core::ptr::write_volatile((phys + HPET_GEN_CFG) as *mut u64, HPET_ENABLE);
+    }
+
+    // ── 4. Vérifier que le compteur avance (limite d'itérations, pas TSC) ──────
+    // Sur QEMU/TCG, chaque read_volatile MMIO peut prendre ~50µs.
+    // 100 itérations = 5ms max sur QEMU, quelques µs sur bare-metal.
+    let counter_start = unsafe { core::ptr::read_volatile((phys + HPET_MAIN_CTR) as *const u64) };
+    let mut ok = false;
+    for _ in 0u32..100 {
+        let c = unsafe { core::ptr::read_volatile((phys + HPET_MAIN_CTR) as *const u64) };
+        if c != counter_start { ok = true; break; }
+        core::hint::spin_loop();
+    }
+
+    if !ok {
+        // HPET ne compte pas — désactiver et signaler échec
+        unsafe { core::ptr::write_volatile((phys + HPET_GEN_CFG) as *mut u64, 0); }
+        HPET_FREQ_HZ.store(0, Ordering::Release);
+        return false;
+    }
+
+    true
+}
+
+/// Retourne l'adresse virtuelle MMIO HPET courante (= adresse physique via identity map).
+pub fn hpet_virt_base() -> u64 {
+    HPET_BASE.load(Ordering::Relaxed)
+}

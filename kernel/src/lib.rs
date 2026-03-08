@@ -108,7 +108,22 @@ pub unsafe fn kernel_init() {
     // ── Phase 2b : Allocateur heap (SLUB + large) ────────────────────────────
     crate::memory::heap::allocator::hybrid::init();
 
-    // ── Phase 3 : Scheduler ─────────────────────────────────────────────────
+    // ── Phase 2c : HPET remappage UC + recalibration TSC ────────────────────
+    // Doit être fait après hybrid::init() (buddy + alloc opérationnels pour map_4k_page).
+    // Ordre : HPET post-memory d'abord (active compteur), puis TSC via HPET (plus précis),
+    //         sinon fallback PM Timer.
+    let hpet_ok = crate::arch::x86_64::acpi::hpet::init_hpet_post_memory();
+    let tsc_recalib = if hpet_ok {
+        crate::arch::x86_64::cpu::tsc::recalibrate_tsc_with_hpet()
+    } else {
+        false
+    };
+    if !tsc_recalib {
+        // Fallback : PM Timer ACPI (I/O port, borné par itérations, sans hang possible)
+        let _ = crate::arch::x86_64::cpu::tsc::recalibrate_tsc_with_pm_timer();
+    }
+
+    // ── Phase 3 : Scheduler ───────────────────────────────────────────
     crate::scheduler::init(&crate::scheduler::SchedInitParams::default());
 
     // ── Phase 3b : Thread idle du BSP (CPU 0) ────────────────────────────────

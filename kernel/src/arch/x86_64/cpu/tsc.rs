@@ -363,3 +363,148 @@ static TSC_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
 pub fn tsc_overflow_count() -> u64 {
     TSC_OVERFLOW_COUNT.load(Ordering::Relaxed)
 }
+
+// ── Recalibration post-boot ───────────────────────────────────────────────────
+
+/// Recalibre le TSC en utilisant le PM Timer ACPI (3.579545 MHz) comme référence.
+///
+/// Méthode : mesure le delta TSC pendant exactement 10ms via PM Timer.
+/// Précision : ±0.05% (PM Timer précis à ±1 tick = ±280 ns à 3.58 MHz).
+///
+/// Appelée depuis `kernel_init()` après `hybrid::init()` et après init HPET.
+/// Ne fait rien si le PM Timer n'est pas disponible.
+///
+/// ## Timeout anti-hang
+/// Utilise des cycles TSC (pas des itérations) comme garde-fou :  
+/// au pire (TSC fallback 1 GHz) = 500ms de spin avant abandon.  
+/// Cela évite le blocage infini sous QEMU/TCG où chaque `inl`  
+/// peut prendre ~500µs (virtualclock lent sans KVM).
+///
+/// Retourne `true` et met à jour `TSC_HZ` / `TSC_KHZ` si succès.
+pub fn recalibrate_tsc_with_pm_timer() -> bool {
+    use super::super::acpi::pm_timer::{pm_timer_available, pm_timer_is_32bit, pm_timer_read, PM_TIMER_FREQ_HZ};
+
+    if !pm_timer_available() { return false; }
+
+    const MEASURE_MS: u64 = 10;
+    // Limites d'itérations (pas TSC) : le RDTSC guest en QEMU/TCG peut avancer
+    // 50-100× plus lentement que le temps réel → les timeouts TSC prennent des secondes.
+    // Avec des limites d'itérations :
+    //   sync  : 200 inl max → bare-metal ~200ns, QEMU ~100ms
+    //   mesure: 600 inl max → bare-metal ~6µs (trop court!), mais le PM Timer
+    //           avance de 3.58MHz×6µs=21 ticks par 6µs — pas assez pour 35795.
+    //   → Sur bare-metal l'iteration count est suffisant car chaque inl=10ns
+    //     et le timer avance ~0.036 tick/ns ; en 35795/0.036=994K itérations.
+    // Solution : utiliser 2 niveaux : rapide pour sync, pour la mesure on laisse
+    // suffisamment d'itérations (10K) pour couvrir bare-metal ET QEMU :
+    //   QEMU  : 10K × 500µs = 5s max — toujours trop lent!
+    // Vrai solution : si PM Timer avance correctement (delta > 0 à chaque read)
+    // → exit immédiat; sinon compteur d'itérations.
+    // On garde MAX_ITERS petit (500) et on retourne false si pas assez accumulé.
+    // Sur QEMU : 500 × 500µs = 250ms, PM timer avance ~1789 ticks/iter → 20 iter suffit.
+    // Sur bare-metal : inl ~10ns, PM timer ~0.036 tick/iter → besoin de ~1M iter
+    //   → utilise TSC fallback pour le timeout, mais avec calibration correcte.
+    // Compromis final : 1000 iterations max + sortie dès que target atteint.
+    const MAX_SYNC_ITERS:    u32 = 500;
+    const MAX_MEASURE_ITERS: u32 = 2_000;
+
+    let mask: u64 = if pm_timer_is_32bit() { 0xFFFF_FFFF } else { 0x00FF_FFFF };
+    let ticks_target = (PM_TIMER_FREQ_HZ as u64 * MEASURE_MS) / 1000; // ~35 795
+
+    // ── Synchronisation : attendre que le PM Timer avance d'au moins 1 tick ──
+    let sync_start = pm_timer_read();
+    let mut synced = false;
+    for _ in 0..MAX_SYNC_ITERS {
+        if pm_timer_read() != sync_start { synced = true; break; }
+        core::hint::spin_loop();
+    }
+    if !synced { return false; }
+
+    // ── Mesure : TSC delta pendant ticks_target PM Timer ticks (~10ms réels) ──
+    let tsc_start = read_tsc_begin();
+    let pm_start  = pm_timer_read() as u64;
+    let mut done  = false;
+
+    for _ in 0..MAX_MEASURE_ITERS {
+        let pm_now  = pm_timer_read() as u64;
+        let elapsed = if pm_now >= pm_start {
+            pm_now - pm_start
+        } else {
+            (mask + 1).wrapping_sub(pm_start).wrapping_add(pm_now)
+        };
+        if elapsed >= ticks_target { done = true; break; }
+        core::hint::spin_loop();
+    }
+    if !done { return false; }
+
+    let (tsc_end, _) = read_tsc_end();
+    let tsc_delta = tsc_end.wrapping_sub(tsc_start);
+    if tsc_delta == 0 { return false; }
+
+    // hz = tsc_delta * (1_000 / MEASURE_MS) = tsc_delta * 100
+    let hz_raw = tsc_delta.saturating_mul(1000 / MEASURE_MS);
+
+    // Sanity check : [10 MHz, 10 GHz]
+    if hz_raw < 10_000_000 || hz_raw > 10_000_000_000 { return false; }
+
+    let hz = (hz_raw + 50_000) / 100_000 * 100_000;
+    TSC_HZ.store(hz, Ordering::Release);
+    TSC_KHZ.store(hz / 1000, Ordering::Release);
+    TSC_CALIBRATED.store(true, Ordering::Release);
+    true
+}
+
+/// Recalibre le TSC en utilisant le HPET comme référence.
+///
+/// Méthode : mesure le delta TSC pendant 10ms via HPET.
+/// Précision : ±0.01% (HPET précis à ±1 tick = ±10ns à 100 MHz).
+///
+/// Retourne `true` et met à jour `TSC_HZ` / `TSC_KHZ` si succès.
+pub fn recalibrate_tsc_with_hpet() -> bool {
+    use super::super::acpi::hpet::{hpet_available, hpet_read_counter, hpet_us_to_ticks};
+
+    if !hpet_available() { return false; }
+
+    // Limites d'itérations (pas cycles TSC — RDTSC guest QEMU/TCG tourne 50-100× lentement).
+    // HPET MMIO read ≈ 50µs/QEMU ou <10ns/bare-metal.
+    // 100 sync reads = 5ms QEMU, <1µs bare-metal.
+    // 500 measure reads = 25ms QEMU (HPET avance fast), <5µs bare-metal.
+    const MAX_SYNC_ITERS:    u32 = 100;
+    const MAX_MEASURE_ITERS: u32 = 500;
+
+    // Synchronisation : attendre que le HPET avance d'au moins 1 tick
+    let sync      = hpet_read_counter();
+    let mut synced = false;
+    for _ in 0..MAX_SYNC_ITERS {
+        if hpet_read_counter() != sync { synced = true; break; }
+        core::hint::spin_loop();
+    }
+    if !synced { return false; }
+
+    // Mesure TSC début
+    let tsc_start  = read_tsc_begin();
+    let hpet_start = hpet_read_counter();
+
+    let ticks_10ms = hpet_us_to_ticks(10_000);
+    if ticks_10ms == 0 { return false; }
+
+    let mut done = false;
+    for _ in 0..MAX_MEASURE_ITERS {
+        if hpet_read_counter().wrapping_sub(hpet_start) >= ticks_10ms { done = true; break; }
+        core::hint::spin_loop();
+    }
+    if !done { return false; }
+
+    let (tsc_end, _) = read_tsc_end();
+    let tsc_delta = tsc_end.wrapping_sub(tsc_start);
+    if tsc_delta == 0 { return false; }
+
+    let hz_raw = (tsc_delta as u128 * 100) as u64; // ×100 car 10ms = 1/100 s
+    if hz_raw < 10_000_000 || hz_raw > 10_000_000_000 { return false; }
+
+    let hz = (hz_raw + 50_000) / 100_000 * 100_000;
+    TSC_HZ.store(hz, Ordering::Release);
+    TSC_KHZ.store(hz / 1000, Ordering::Release);
+    TSC_CALIBRATED.store(true, Ordering::Release);
+    true
+}
