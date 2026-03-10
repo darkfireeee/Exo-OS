@@ -22,6 +22,13 @@
 use alloc::boxed::Box;
 use core::ptr::NonNull;
 use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR, TID_ALLOCATOR, PidAllocError};
+
+// Trampoline de démarrage kthread — défini dans scheduler/asm/switch_asm.s.
+// Appelé lors du premier context_switch vers un nouveau kthread.
+// À l'entrée : r12 = entry_fn, r13 = arg. Place arg dans rdi puis jmp *r12.
+extern "C" {
+    fn kthread_trampoline();
+}
 use crate::process::core::pcb::{ProcessControlBlock, Credentials};
 use crate::process::core::tcb::{ProcessThread, KSTACK_SIZE};
 use crate::process::core::registry::PROCESS_REGISTRY;
@@ -235,15 +242,34 @@ pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
     // Configurer le point d'entrée dans la stack kernel.
     // SAFETY: thread_ptr valide, kernel_stack alloué dedans.
     unsafe {
+        // Frame attendu par switch_to_new_thread lors du PREMIER switch vers ce kthread.
+        // switch_to_new_thread restaure dans cet ordre (SANS MXCSR/FCW) :
+        //   popq %rbx           → rbx     [rsp+ 0]
+        //   popq %rbp           → rbp     [rsp+ 8]
+        //   popq %r12           → r12     [rsp+16]  ← entry_fn
+        //   popq %r13           → r13     [rsp+24]  ← arg
+        //   popq %r14           → r14     [rsp+32]
+        //   popq %r15           → r15     [rsp+40]
+        //   ret                 → rip     [rsp+48]  ← kthread_trampoline
+        //
+        // kthread_trampoline fait : mov r13, rdi ; jmp *r12
+        // (arg → rdi, puis saute à entry_fn(arg))
+        //
+        // NOTE: context_switch_asm utilise un frame de 72 octets AVEC MXCSR+FCW.
+        //       switch_to_new_thread utilise un frame de 56 octets SANS MXCSR+FCW.
+        //       create_kthread() doit utiliser le format switch_to_new_thread (première activation).
         let stack_top = (*thread_ptr).kernel_stack.top_addr();
-        // Écrire l'argument et l'adresse d'entrée sur le stack kernel
-        // pour que le premier context switch démarre bien à entry(arg).
-        let rsp_ptr = (stack_top - 16) as *mut u64;
-        // Structure sur stack : [entry, arg] (convention Exo-OS kthread_trampoline).
-        *rsp_ptr.add(0) = params.entry as u64;
-        *rsp_ptr.add(1) = params.arg as u64;
-        // Pointer le RSP du TCB sur ce frame.
-        (*thread_ptr).sched_tcb.kernel_rsp = stack_top - 16;
+        const FRAME: u64 = 7 * 8; // 56 bytes — format switch_to_new_thread
+        let kernel_rsp = stack_top - FRAME;
+        let frame = kernel_rsp as *mut u64;
+        *frame.add(0) = 0;                             // rbx
+        *frame.add(1) = 0;                             // rbp
+        *frame.add(2) = params.entry as u64;           // r12 → entry_fn
+        *frame.add(3) = params.arg as u64;             // r13 → arg
+        *frame.add(4) = 0;                             // r14
+        *frame.add(5) = 0;                             // r15
+        *frame.add(6) = kthread_trampoline as u64;     // return address → trampoline
+        (*thread_ptr).sched_tcb.kernel_rsp = kernel_rsp;
     }
 
     // Enregistrer dans la run queue.

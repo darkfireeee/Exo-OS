@@ -84,6 +84,27 @@ pub const PHYS_MEMORY_START: u64 = 0x0010_0000; // 1 MiB
 /// Adresse physique maximale supportée (48 bits x86_64 PA).
 pub const PHYS_MEMORY_MAX: u64 = (1u64 << 48) - 1;
 
+// ── Fin physique du kernel (binaire + pile de boot) ───────────────────────────
+/// Retourne l'adresse physique page-alignée juste après la pile de boot du BSP.
+///
+/// **Le kernel occupe physiquement** `PHYS_MEMORY_START .. kernel_physical_end()`.
+/// Aucune de ces pages ne doit être déclarée libre au bitmap/buddy.
+///
+/// Utilise le symbole linker `_exo_boot_stack_top` (défini dans main.rs).
+/// Ce symbole marque la fin de la section `.boot_stack` (la mémoire la plus haute
+/// utilisée par le kernel binaire + sa pile d'amorçage).
+#[inline]
+fn kernel_physical_end() -> u64 {
+    extern "C" {
+        static _exo_boot_stack_top: u8;
+    }
+    // &raw const ne déréférence pas le pointeur — pas d'accès à la valeur.
+    // SAFETY: symbole défini par le linker, toujours résolu avant le premier appel.
+    let top = unsafe { &raw const _exo_boot_stack_top as u64 };
+    // Arrondir au-dessus à la prochaine page (garde une marge de sécurité).
+    (top + PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CARTE MÉMOIRE RAPPORTÉE AU KERNEL
 // ─────────────────────────────────────────────────────────────────────────────
@@ -208,7 +229,7 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
         let end  = base + entry.length;
         if end <= PHYS_MEMORY_START { continue; }
 
-        let base_adj = align_up(base.max(PHYS_MEMORY_START), PAGE_SIZE as u64);
+        let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
 
@@ -234,7 +255,7 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
         let end  = base + entry.length;
         if end <= PHYS_MEMORY_START { continue; }
 
-        let base_adj = align_up(base.max(PHYS_MEMORY_START), PAGE_SIZE as u64);
+        let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
 
@@ -309,7 +330,7 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
         let end  = base + desc.number_of_pages * PAGE_SIZE as u64;
         if end <= PHYS_MEMORY_START { continue; }
 
-        let base_adj = align_up(base.max(PHYS_MEMORY_START), PAGE_SIZE as u64);
+        let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
 
@@ -326,7 +347,7 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
         let base = desc.physical_start;
         let end  = base + desc.number_of_pages * PAGE_SIZE as u64;
         if end <= PHYS_MEMORY_START { continue; }
-        let base_adj = align_up(base.max(PHYS_MEMORY_START), PAGE_SIZE as u64);
+        let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
         init_phase2b_buddy_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
@@ -519,7 +540,7 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
         let end  = base + r.length;
         if end <= PHYS_MEMORY_START { continue; }
 
-        let base_adj = align_up(base.max(PHYS_MEMORY_START), PAGE_SIZE as u64);
+        let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX),  PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
 
@@ -542,7 +563,7 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
         let base = r.base;
         let end  = base + r.length;
         if end <= PHYS_MEMORY_START { continue; }
-        let base_adj = align_up(base.max(PHYS_MEMORY_START), PAGE_SIZE as u64);
+        let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX),  PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
         init_phase2b_buddy_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));

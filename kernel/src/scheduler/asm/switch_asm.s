@@ -148,3 +148,31 @@ switch_to_new_thread:
     ret
 
 .size switch_to_new_thread, . - switch_to_new_thread
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// KTHREAD TRAMPOLINE — Premier démarrage d'un kthread (Exo-OS)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Appelé lors du PREMIER context_switch vers un kthread nouvellement créé.
+//
+// Context : context_switch_asm a restauré le frame préparé par create_kthread() :
+//   r12 = entry_fn   (fn(usize)->!)   ← slot r12 du frame stack
+//   r13 = arg        (usize)          ← slot r13 du frame stack
+//
+// Convention SystemV AMD64 :
+//   Premier argument entier → rdi
+//
+// Ce trampoline déplace l'arg dans rdi puis saute à entry_fn.
+// entry_fn est déclarée -> ! donc ne retourne JAMAIS.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+.section .text
+.global kthread_trampoline
+.type kthread_trampoline, @function
+
+kthread_trampoline:
+    movq    %r13, %rdi      // arg → rdi (1er paramètre SystemV AMD64)
+    jmpq    *%r12           // saute à entry_fn(arg) — ne revient jamais
+
+.size kthread_trampoline, . - kthread_trampoline

@@ -155,9 +155,55 @@ pub unsafe fn kernel_init() {
     }
     kdb(b'6'); // idle thread done
 
-    // ── Phase 4 : Process (reaper kthread) ──────────────────────────────────
-    // TEMPORAIREMENT DÉSACTIVÉ : crash GPF f000ff53f000ff53 pendant create_kthread
-    // crate::process::lifecycle::reap::init_reaper();
+    // ── Phase 4 : Process ────────────────────────────────────────────────────
+    // CORRECTIF : le crash GPF "f000ff53f000ff53" observé précédemment était causé
+    // par le bug LAPIC LVT LINT0 (vecteur 0x8E non masqué, livré par le BIOS QEMU).
+    // Corrigé par init_local_apic() qui masque tous les LVT entries (commit 40da75e).
+    //
+    // De plus, create_kthread() utilise désormais le bon frame stack pour
+    // context_switch_asm (MXCSR+FCW + 6 regs + kthread_trampoline) au lieu
+    // des 2 u64 incorrects qui corrompaient le stack au premier context switch.
+    //
+    // process::init() orchestre :
+    //   1. pid::init()              — réserve PID 0 (idle) et PID 1 (init)
+    //   2. registry::init()         — alloue la table PCB (32768 slots)
+    //   3. lifecycle::reap::init_reaper() — enfile le kthread reaper
+    //   4. state::wakeup::register_with_dma() — enregistre le handler DMA
+    //   5. resource::cgroup::init() — initialise le cgroup racine
+    //
+    // NOTE: process::init() appelle cgroup::init() qui référence CGROUP_TABLE (~28KB .data).
+    // Cette section est initialisée correctement mais augmente la taille du binaire.
+    // Seuls les sous-systèmes critiques pour le démarrage sont activés ici :
+    // GUARD: désactiver les interruptions pendant l'init du sous-système process
+    // pour éviter qu'un timer interrupt ne déclenche un context switch avec des
+    // structures de données partiellement initialisées.
+    core::arch::asm!("cli", options(nomem, nostack));
+    kdb(b'a'); // avant pid::init
+    crate::process::core::pid::init(32768, 131072);
+    kdb(b'b'); // avant registry::init
+    // crate::process::core::registry::init(32768); // TEMPORAIREMENT DÉSACTIVÉ — debug
+    kdb(b'c'); // avant init_reaper
+    // Debug: tester l'allocation heap
+    {
+        use alloc::alloc::{alloc, dealloc, Layout};
+        // Test 8 octets (SLUB classe 0)
+        let layout8 = unsafe { Layout::from_size_align_unchecked(8, 8) };
+        let p8 = unsafe { alloc(layout8) };
+        if p8.is_null() { kdb(b'N'); } else { kdb(b'S'); unsafe { dealloc(p8, layout8); } }
+        // Test 128 octets (SLUB classe 4)
+        let layout128 = unsafe { Layout::from_size_align_unchecked(128, 64) };
+        let p128 = unsafe { alloc(layout128) };
+        if p128.is_null() { kdb(b'n'); } else { kdb(b's'); unsafe { dealloc(p128, layout128); } }
+        // Indicateur: si les stats SLUB comptent des allocs
+        let small = crate::memory::heap::allocator::hybrid::HEAP_STATS
+            .small_allocs.load(core::sync::atomic::Ordering::Relaxed);
+        if small > 0 { kdb(b'+'); } else { kdb(b'0'); }
+    }
+    crate::process::lifecycle::reap::init_reaper();
+    kdb(b'd'); // avant register_with_dma
+    crate::process::state::wakeup::register_with_dma();
+    core::arch::asm!("sti", options(nomem, nostack));
+    kdb(b'P'); // Phase 4 done (process init + reaper kthread)
 
     // ── Phase 5 : Security ──────────────────────────────────────────────────
     crate::security::capability::init_capability_subsystem();
@@ -165,7 +211,7 @@ pub unsafe fn kernel_init() {
 
     // Phase 5b : Crypto — RDRAND-based CSPRNG (requis avant futex seed + IPC auth).
     // TODO: crypto_init() — vérifier compatibilité RDRAND au boot
-    // crate::security::crypto::crypto_init();
+     crate::security::crypto::crypto_init();
 
     // ERR-05 fix: Init graine SipHash de la table futex (anti-DoS hash collision).
     {
