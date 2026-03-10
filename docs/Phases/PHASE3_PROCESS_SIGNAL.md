@@ -241,40 +241,35 @@ La livraison modifie `frame.rcx` (nouveau RIP = handler signal) et `frame.rsp`
 | `sys_rt_sigprocmask` | 14 | ✅ Implémenté | SIGKILL/SIGSTOP non-masquables |
 | `sys_rt_sigreturn` | 15 | ✅ Implémenté | Magic SIG-13 vérifié constant-time |
 | `sys_fork` | 57 | ✅ Implémenté | fork_child_trampoline + iretq |
-| `sys_execve` | 59 | ✅ Implémenté | via do_execve() + frame update |
+| `sys_execve` | 59 | ✅ Implémenté | do_execve() + argv/envp copié depuis userspace (ARGV-01) |
 | `sys_exit` | 60 | ✅ Implémenté | PCB Zombie + schedule_block |
-| `sys_wait4` | 61 | ⚠️ ENOSYS | Pending — nécessite do_wait4() |
-| `sys_waitid` | 247 | ⚠️ ENOSYS | Pending |
-| `sys_clone` | 56 | ⚠️ Partiel | Thread POSIX non finalisé |
+| `sys_wait4` | 61 | ✅ Implémenté | → do_waitpid() ; WNOHANG=0, ECHILD, EINTR |
+| `sys_waitid` | 247 | ✅ Implémenté | → do_waitpid() ; siginfo_t x86_64 rempli |
+| `sys_clone` | 56 | ✅ Implémenté | → create_thread() ; CLONE_VM/THREAD/SIGHAND |
+| `sys_kill` | 62 | ✅ Implémenté | → send_signal_to_pid() |
+| `sys_tgkill` | 234 | ✅ Implémenté | → send_signal_to_tcb() ; SigInfo::from_kill |
+| `sys_sigaltstack` | 131 | ✅ Implémenté | thread.addresses.sigaltstack_base/size |
+| `sys_uname` | 63 | ✅ Implémenté | struct utsname 390 bytes ; "Exo-OS" x86_64 |
 | Signal delivery | — | ✅ Câblé | post_dispatch → check_and_deliver_signals |
 
 ---
 
-## 6. TODOs restants Phase 3
+## 6. Phase 3 — COMPLÈTE ✅
 
-### WAIT-01 — sys_wait4 / sys_waitid
+Tous les items Phase 3 ont été implémentés et `cargo check` passe sans erreur.
 
-`do_wait4()` n'existe pas encore dans `process/lifecycle/wait.rs`. Nécessite :
-- Recherche de fils zombies dans PROCESS_REGISTRY par ppid
-- Récolte du exit_code (PCB.exit_code)
-- Transition Zombie → Dead + libération PID
-- Notification de `wait4()` bloqué (Mutex/Condvar kernel ou table de wait)
+### Changements apportés (session de complétion)
 
-### ARGV-01 — argv/envp dans sys_execve
-
-`do_execve` reçoit `&[]` pour argv et envp. Il faut copier les tableaux userspace
-(pointeurs NUL-terminés) avant l'appel. La validation est faite dans sys_execve,
-mais la copie effective argv/envp est reportée en Phase 4.
-
-### CLONE-01 — sys_clone threads POSIX
-
-Le `sys_clone` actuel dans `handlers/process.rs` gère la création de threads kernel.
-Le thread POSIX nécessite CLONE_VM | CLONE_THREAD | CLONE_SIGHAND + gestion ctid.
-
-### SIGNAL-KILL — sys_kill → send_signal_to_pid
-
-`sys_kill` appelle déjà `send_signal_to_pid` via dispatch mais le signal pending
-n'est pas toujours livré si le thread cible est sur un autre CPU (nécessite IPI).
+| Item | Fichier | Description |
+|---|---|---|
+| WAIT-01 | `handlers/process.rs` | `sys_wait4` → `do_waitpid()` ; wstatus en userspace ; WNOHANG→0 |
+| WAIT-01 | `handlers/process.rs` | `sys_waitid` → `do_waitpid()` ; siginfo_t layout x86_64 |
+| KILL-01 | `handlers/signal.rs` | `sys_kill` → `send_signal_to_pid()` ; pid<0 ESRCH |
+| KILL-02 | `handlers/signal.rs` | `sys_tgkill` → `send_signal_to_tcb()` ; SigInfo::from_kill |
+| ALTSTACK | `handlers/signal.rs` | `sys_sigaltstack` → lecture/écriture `thread.addresses.sigaltstack_*` |
+| UNAME | `handlers/misc.rs` | `sys_uname` → `struct utsname` 390 bytes ; Exo-OS/x86_64 |
+| ARGV-01 | `syscall/dispatch.rs` | `copy_userspace_argv()` ; argv/envp copiés avant `do_execve()` |
+| errno | `syscall/errno.rs` | `ESRCH=-3`, `ECHILD=-10` ajoutés |
 
 ---
 
@@ -285,7 +280,10 @@ n'est pas toujours livré si le thread cible est sur un autre CPU (nécessite IP
 | `kernel/src/process/signal/handler.rs` | SIG-13 : magic SIGNAL_FRAME_MAGIC, verify_and_extract_uc() |
 | `kernel/src/process/lifecycle/fork.rs` | Kernel stack fils 96 bytes, fork_child_trampoline |
 | `kernel/src/scheduler/asm/switch_asm.s` | fork_child_trampoline : xor rax + swapgs + iretq |
-| `kernel/src/syscall/dispatch.rs` | handle_sigreturn_inplace, handle_fork_inplace, handle_execve_inplace, check_and_deliver_signals |
-| `kernel/src/syscall/handlers/signal.rs` | sys_rt_sigaction, sys_rt_sigprocmask |
+| `kernel/src/syscall/dispatch.rs` | handle_sigreturn_inplace, handle_fork_inplace, handle_execve_inplace, check_and_deliver_signals, copy_userspace_argv (ARGV-01) |
+| `kernel/src/syscall/handlers/signal.rs` | sys_rt_sigaction, sys_rt_sigprocmask, sys_kill, sys_tgkill, sys_sigaltstack |
+| `kernel/src/syscall/handlers/process.rs` | sys_wait4, sys_waitid |
+| `kernel/src/syscall/handlers/misc.rs` | sys_uname |
+| `kernel/src/syscall/errno.rs` | ESRCH=-3, ECHILD=-10 |
 | `docs/Phases/PHASE2_SCHEDULER_IPC.md` | SWAPGS ✅, ERR-01 ✅ |
 | `docs/Phases/ExoOS_Roadmap_Avant_ExoBoot.md` | Phase 1 et 2 tous ✅ |

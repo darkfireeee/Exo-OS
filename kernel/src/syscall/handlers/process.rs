@@ -9,7 +9,7 @@
 #![allow(dead_code)]
 
 use crate::syscall::validation::{read_user_path, validate_pid, validate_signal, USER_ADDR_MAX};
-use crate::syscall::errno::{EINVAL, EFAULT, ENOMEM, ENOSYS, EAGAIN};
+use crate::syscall::errno::{EINVAL, EFAULT, ENOMEM, ENOSYS, EAGAIN, ECHILD, EINTR, ESRCH};
 use crate::syscall::numbers::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -110,17 +110,123 @@ pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: 
 
 /// `wait4(pid, status, options, rusage)` → PID collecté ou errno.
 pub fn sys_wait4(pid: u64, status_ptr: u64, options: u64, _rusage: u64, _a5: u64, _a6: u64) -> i64 {
-    let _ = (pid, options);
+    use crate::process::lifecycle::wait::{do_waitpid, WaitOptions, WaitError};
+    use crate::process::core::pid::Pid;
+    use crate::scheduler::core::task::ThreadControlBlock;
+
     if status_ptr != 0 && status_ptr >= USER_ADDR_MAX { return EFAULT; }
-    // Délègue → process::lifecycle::wait::do_wait4()
-    ENOSYS
+
+    // Lire le TCB du thread courant depuis gs:[0x20].
+    // SAFETY: GS kernel actif dans le contexte syscall.
+    let tcb_ptr: u64 = unsafe {
+        let p: u64;
+        core::arch::asm!("mov {}, gs:[0x20]", out(reg) p, options(nostack, nomem));
+        p
+    };
+    if tcb_ptr == 0 { return EFAULT; }
+
+    // SAFETY: tcb_ptr depuis gs:[0x20] est toujours valide pendant un syscall.
+    let tcb = unsafe { &*(tcb_ptr as *const ThreadControlBlock) };
+    let caller_pid = Pid(tcb.pid.0);
+    let wait_pid   = pid as i32;
+    let opts       = WaitOptions(options as u32);
+
+    match do_waitpid(caller_pid, wait_pid, opts, tcb) {
+        Ok(result) => {
+            // Écrire wstatus dans l'espace userspace si status_ptr non-null.
+            if status_ptr != 0 {
+                // SAFETY: status_ptr est une adresse userspace validée ci-dessus.
+                unsafe {
+                    core::ptr::write_volatile(status_ptr as *mut u32, result.wstatus);
+                }
+            }
+            result.pid.0 as i64
+        }
+        // WNOHANG positionné, fils existent mais pas zombie : retourne 0 (POSIX).
+        Err(WaitError::WouldBlock)  => 0,
+        Err(WaitError::NoChild)     => ECHILD,
+        Err(WaitError::Interrupted) => EINTR,
+        Err(WaitError::InvalidPid)  => EINVAL,
+    }
 }
 
 /// `waitid(idtype, id, infop, options, rusage)`.
 pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, _a6: u64) -> i64 {
+    use crate::process::lifecycle::wait::{do_waitpid, WaitOptions, WaitError, WaitReason};
+    use crate::process::core::pid::Pid;
+    use crate::scheduler::core::task::ThreadControlBlock;
+
     if infop != 0 && infop >= USER_ADDR_MAX { return EFAULT; }
-    let _ = (idtype, id, options);
-    ENOSYS
+
+    // Lire le TCB du thread courant depuis gs:[0x20].
+    // SAFETY: GS kernel actif dans le contexte syscall.
+    let tcb_ptr: u64 = unsafe {
+        let p: u64;
+        core::arch::asm!("mov {}, gs:[0x20]", out(reg) p, options(nostack, nomem));
+        p
+    };
+    if tcb_ptr == 0 { return EFAULT; }
+
+    // SAFETY: tcb_ptr depuis gs:[0x20] est toujours valide pendant un syscall.
+    let tcb = unsafe { &*(tcb_ptr as *const ThreadControlBlock) };
+    let caller_pid = Pid(tcb.pid.0);
+
+    // idtype : P_ALL=0, P_PID=1, P_PGID=2
+    let wait_pid: i32 = match idtype {
+        0 => -1,                   // P_ALL  : n'importe quel fils
+        1 => id as i32,            // P_PID  : fils spécifique
+        2 => -(id as i32),         // P_PGID : groupe de processus (approx.)
+        _ => return EINVAL,
+    };
+
+    // Conversion des flags waitid → WaitOptions.
+    // WNOHANG=1, WSTOPPED=2, WEXITED=4, WCONTINUED=8
+    let mut wo = WaitOptions(0);
+    if options & 0x1 != 0 { wo.0 |= WaitOptions::WNOHANG;    }  // WNOHANG
+    if options & 0x2 != 0 { wo.0 |= WaitOptions::WUNTRACED;  }  // WSTOPPED
+    if options & 0x8 != 0 { wo.0 |= WaitOptions::WCONTINUED; }  // WCONTINUED
+    // WEXITED=4 est l'équivalent du mode normal (pas de flag supplémentaire).
+
+    match do_waitpid(caller_pid, wait_pid, wo, tcb) {
+        Ok(result) => {
+            if infop != 0 {
+                // Remplir siginfo_t (layout x86_64 musl/Linux) :
+                // [0]  si_signo (int32) = SIGCHLD = 17
+                // [4]  si_errno (int32) = 0
+                // [8]  si_code  (int32) = CLD_EXITED=1 ou CLD_KILLED=2
+                // [12] si_pid   (int32) = PID du fils
+                // [16] si_uid   (uint32) = 0
+                // [20] si_status(int32) = code brut (non décalé)
+                // [24..128] = zéros
+                const SIGCHLD:    i32 = 17;
+                const CLD_EXITED: i32 = 1;
+                const CLD_KILLED: i32 = 2;
+
+                let (si_code, si_status) = match result.reason {
+                    WaitReason::Exited   => (CLD_EXITED, (result.wstatus >> 8) as i32),
+                    _                    => (CLD_KILLED, (result.wstatus & 0x7F) as i32),
+                };
+
+                // SAFETY: infop est une adresse userspace validée ci-dessus.
+                unsafe {
+                    let p = infop as *mut u8;
+                    core::ptr::write_bytes(p, 0u8, 128);
+                    core::ptr::write_volatile(p.add( 0) as *mut i32, SIGCHLD);
+                    core::ptr::write_volatile(p.add( 4) as *mut i32, 0i32);
+                    core::ptr::write_volatile(p.add( 8) as *mut i32, si_code);
+                    core::ptr::write_volatile(p.add(12) as *mut i32, result.pid.0 as i32);
+                    core::ptr::write_volatile(p.add(16) as *mut u32, 0u32);
+                    core::ptr::write_volatile(p.add(20) as *mut i32, si_status);
+                }
+            }
+            0 // waitid retourne 0 en succès (contrairement à wait4)
+        }
+        // WNOHANG, fils présents mais pas zombie : succès avec si_pid=0.
+        Err(WaitError::WouldBlock)  => 0,
+        Err(WaitError::NoChild)     => ECHILD,
+        Err(WaitError::Interrupted) => EINTR,
+        Err(WaitError::InvalidPid)  => EINVAL,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -69,11 +69,35 @@ pub fn sys_getegid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
 }
 
 /// `uname(utsname_ptr)` → 0 ou errno.
+///
+/// Remplit `struct utsname` (6 × 65 bytes = 390 bytes) :
+///   sysname[65], nodename[65], release[65], version[65], machine[65], domainname[65]
 pub fn sys_uname(buf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     if buf_ptr == 0 || buf_ptr >= USER_ADDR_MAX { return EFAULT; }
-    // Délègue → misc::uname::fill_utsname(buf_ptr)
-    let _ = buf_ptr;
-    ENOSYS
+
+    // SAFETY: buf_ptr est une adresse userspace validée ci-dessus.
+    // On écrit 390 bytes (6 × 65) : d'abord tout à zéro puis les champs.
+    unsafe {
+        let p = buf_ptr as *mut u8;
+        core::ptr::write_bytes(p, 0u8, 390);
+
+        // Macro locale : copie au plus 64 octets (+ null déjà positionné).
+        macro_rules! write_field {
+            ($off:expr, $s:expr) => {{
+                let src: &[u8] = $s;
+                let len = src.len().min(64);
+                core::ptr::copy_nonoverlapping(src.as_ptr(), p.add($off), len);
+            }};
+        }
+
+        write_field!(  0, b"Exo-OS");        // sysname
+        write_field!( 65, b"exo-os");        // nodename
+        write_field!(130, b"1.0.0");         // release
+        write_field!(195, b"#1 SMP 2026");   // version
+        write_field!(260, b"x86_64");        // machine
+        write_field!(325, b"(none)");        // domainname
+    }
+    0
 }
 
 /// `sysinfo(info_ptr)` → 0 ou errno.

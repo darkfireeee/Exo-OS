@@ -32,8 +32,12 @@ use crate::fs::exofs::core::ExofsError;
 pub const EPERM:       i64 = -1;
 /// Objet ou chemin absent (ENOENT)
 pub const ENOENT:      i64 = -2;
+/// Processus cible inexistant (ESRCH)
+pub const ESRCH:       i64 = -3;
 /// Signal reçu pendant sleep (EINTR)
 pub const EINTR:       i64 = -4;
+/// Pas de processus fils (ECHILD)
+pub const ECHILD:      i64 = -10;
 /// Erreur I/O physique (EIO)
 pub const EIO:         i64 = -5;
 /// Argument trop grand — len > MAX (E2BIG)

@@ -305,7 +305,13 @@ Phase 3 — Process + Signal (obligatoire)
 •	☑️ sys_rt_sigaction câblé — lecture/écriture PCB.sig_handlers
 •	☑️ sys_rt_sigprocmask câblé — masque TCB, SIGKILL/SIGSTOP non-masquables
 •	☑️ Signal delivery câblée — post_dispatch → handle_pending_signals
-
+•	☑️ sys_wait4 câblé → do_waitpid() ; wstatus POSIX ; WNOHANG/ECHILD/EINTR
+•	☑️ sys_waitid câblé → do_waitpid() ; siginfo_t x86_64 rempli
+•	☑️ sys_kill câblé → send_signal_to_pid() ; ESRCH/EPERM
+•	☑️ sys_tgkill câblé → send_signal_to_tcb() ; SigInfo::from_kill
+•	☑️ sys_sigaltstack câblé → thread.addresses.sigaltstack_base/size
+•	☑️ sys_uname câblé → struct utsname 390 bytes ; "Exo-OS" x86_64
+•	☑️ sys_execve argv/envp copiés depuis userspace (ARGV-01)
 Phase 4 — ExoFS (obligatoire)
 •	☐ Pipeline crypto : Blake3→compression→XChaCha20 dans cet ordre (CRYPTO-02)
 •	☐ Nonce XChaCha20 : AtomicU64 + HKDF (jamais RDRAND seul) — ERR-08

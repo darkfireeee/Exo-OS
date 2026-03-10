@@ -503,6 +503,60 @@ fn handle_fork_inplace(frame: &SyscallFrame) -> i64 {
 // Traitement spécial execve (SYS_EXECVE = 59)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Copie un tableau de chaînes null-terminé depuis l'espace utilisateur.
+///
+/// `argv_ptr` pointe vers un tableau de pointeurs `char*` terminé par NULL.
+/// Retourne `Some(Vec<String>)` ou `None` si une adresse est invalide.
+///
+/// EXEC-01 : seule fonction autorisée à lire argv/envp depuis userspace.
+fn copy_userspace_argv(
+    argv_ptr: u64,
+    max_args: usize,
+) -> Option<alloc::vec::Vec<alloc::string::String>> {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    use crate::syscall::validation::USER_ADDR_MAX;
+
+    if argv_ptr == 0 { return Some(Vec::new()); }
+    if argv_ptr >= USER_ADDR_MAX { return None; }
+
+    let mut result: Vec<String> = Vec::new();
+
+    for i in 0..max_args {
+        // Lire le i-ème pointeur (u64) du tableau.
+        let ptr_addr = match argv_ptr.checked_add(i as u64 * 8) {
+            Some(a) if a < USER_ADDR_MAX => a,
+            _ => return None,
+        };
+
+        // SAFETY: ptr_addr est une adresse userspace validée.
+        let str_ptr: u64 = unsafe {
+            core::ptr::read_volatile(ptr_addr as *const u64)
+        };
+
+        if str_ptr == 0 { break; }              // terminateur NULL du tableau
+        if str_ptr >= USER_ADDR_MAX { return None; }
+
+        // Lire la chaîne C octet par octet dans un vecteur heap.
+        let mut bytes: alloc::vec::Vec<u8> = Vec::new();
+        for j in 0..4095usize {
+            let byte_addr = match str_ptr.checked_add(j as u64) {
+                Some(a) if a < USER_ADDR_MAX => a,
+                _ => return None,
+            };
+            // SAFETY: byte_addr est une adresse userspace validée.
+            let byte = unsafe { core::ptr::read_volatile(byte_addr as *const u8) };
+            if byte == 0 { break; }
+            bytes.push(byte);
+        }
+
+        // Conversion UTF-8 permissive (remplace les octets invalides par U+FFFD).
+        result.push(String::from_utf8_lossy(&bytes).into_owned());
+    }
+
+    Some(result)
+}
+
 /// Traite `SYS_EXECVE` directement depuis la frame arch.
 ///
 /// En cas de succès, `do_execve()` remplace l'image du processus mais retourne
@@ -566,10 +620,24 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
     // SAFETY: thread_ptr maintenu par pcb.
     let thread = unsafe { &mut *thread_ptr };
 
-    // ARGV-01 : argv/envp vides pour l'instant — Phase 4 implémentera copy_from_user.
-    let empty: &[&str] = &[];
+    // ARGV-01 (EXEC-01) : copier argv/envp depuis userspace avant do_execve().
+    // frame.rsi = argv_ptr (tableau de char* null-terminé)
+    // frame.rdx = envp_ptr (tableau de char* null-terminé)
+    let argv_strings = match copy_userspace_argv(frame.rsi, 1024) {
+        Some(v) => v,
+        None    => { frame.rax = EFAULT as u64; return; }
+    };
+    let argv_refs: alloc::vec::Vec<&str> =
+        argv_strings.iter().map(|s| s.as_str()).collect();
 
-    match do_execve(thread, pcb, &path, empty, empty) {
+    let envp_strings = match copy_userspace_argv(frame.rdx, 4096) {
+        Some(v) => v,
+        None    => { frame.rax = EFAULT as u64; return; }
+    };
+    let envp_refs: alloc::vec::Vec<&str> =
+        envp_strings.iter().map(|s| s.as_str()).collect();
+
+    match do_execve(thread, pcb, &path, &argv_refs, &envp_refs) {
         Ok(()) => {
             // Succès : lire le nouveau point d'entrée depuis le ProcessThread mis à jour.
             let new_rip = thread.addresses.entry_point;

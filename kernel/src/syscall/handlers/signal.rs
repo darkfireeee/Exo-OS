@@ -11,7 +11,7 @@
 #![allow(dead_code)]
 
 use crate::syscall::validation::{validate_signal, USER_ADDR_MAX};
-use crate::syscall::errno::{EINVAL, EFAULT, EPERM, ENOSYS};
+use crate::syscall::errno::{EINVAL, EFAULT, EPERM, ENOSYS, ESRCH};
 use crate::process::signal::default::{SigAction, SigActionKind};
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::core::pid::Pid;
@@ -199,29 +199,145 @@ pub fn sys_rt_sigreturn(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
 
 /// `kill(pid, sig)` → 0 ou errno.
 pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    use crate::process::signal::delivery::{send_signal_to_pid, SendError};
+    use crate::process::signal::Signal;
+
     let sig = match validate_signal(signum) {
         Ok(s) => s,
         Err(e) => return e.to_errno(),
     };
-    // Délègue → process::signal::delivery::send_signal_to_pid()
-    let _ = (pid as i32, sig);
-    ENOSYS
+    let signal = match Signal::from_u8(sig as u8) {
+        Some(s) => s,
+        None    => return EINVAL,
+    };
+
+    let target_pid = pid as i32;
+    let real_pid: u32 = if target_pid <= 0 {
+        // pid==0 : envoyer au groupe courant → approx. avec le PID courant.
+        // pid<0  : groupes de processus — non implémenté.
+        if target_pid == 0 {
+            unsafe {
+                let ptr: u64;
+                core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr,
+                    options(nostack, nomem));
+                if ptr == 0 { return EFAULT; }
+                (*(ptr as *const ThreadControlBlock)).pid.0
+            }
+        } else {
+            return ESRCH;
+        }
+    } else {
+        target_pid as u32
+    };
+
+    match send_signal_to_pid(Pid(real_pid), signal) {
+        Ok(())                           => 0,
+        Err(SendError::PermissionDenied) => EPERM,
+        Err(_)                           => ESRCH,
+    }
 }
 
 /// `tgkill(tgid, tid, sig)` → 0 ou errno.
+///
+/// Envoie un signal à un thread spécifique (tid) dans le groupe (tgid).
+/// Phase 3 : cible le thread principal du processus.
 pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    use crate::process::signal::delivery::send_signal_to_tcb;
+    use crate::process::signal::queue::SigInfo;
+
     let sig = match validate_signal(signum) {
         Ok(s) => s,
         Err(e) => return e.to_errno(),
     };
-    let _ = (tgid, tid, sig);
-    ENOSYS
+
+    if tgid == 0 || tgid >= 4_194_304 { return ESRCH; }
+    if tid  == 0 || tid  >= 4_194_304 { return ESRCH; }
+
+    // Lire le PID de l'appelant pour remplir le SigInfo.
+    // SAFETY: GS kernel actif dans le contexte syscall.
+    let sender_pid: u32 = unsafe {
+        let ptr: u64;
+        core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nostack, nomem));
+        if ptr == 0 { return EFAULT; }
+        (*(ptr as *const ThreadControlBlock)).pid.0
+    };
+
+    let pcb = match PROCESS_REGISTRY.find_by_pid(Pid(tgid as u32)) {
+        Some(p) => p,
+        None    => return ESRCH,
+    };
+
+    let thread_ptr = pcb.main_thread_ptr();
+    if thread_ptr.is_null() { return ESRCH; }
+
+    // SAFETY: thread_ptr maintenu par le PCB.
+    let thread = unsafe { &*thread_ptr };
+    let info = SigInfo::from_kill(sig as u8, sender_pid, 0);
+    send_signal_to_tcb(thread, sig as u8, info);
+    0
 }
 
 /// `sigaltstack(ss, oss)` → 0 ou errno.
+///
+/// Lit/écrit le sigaltstack du thread courant.
+/// Layout `struct stack_t` x86_64 (24 bytes) :
+///   [0]  ss_sp    (u64) — adresse de base de la pile alternative
+///   [8]  ss_flags (i32) — SS_ONSTACK=1, SS_DISABLE=2
+///   [12] _pad     (u32)
+///   [16] ss_size  (u64) — taille en octets
 pub fn sys_sigaltstack(ss_ptr: u64, oss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    use crate::process::signal::handler::{SigAltStack, SS_DISABLE};
+
     if ss_ptr  != 0 && ss_ptr  >= USER_ADDR_MAX { return EFAULT; }
     if oss_ptr != 0 && oss_ptr >= USER_ADDR_MAX { return EFAULT; }
-    let _ = (ss_ptr, oss_ptr);
-    ENOSYS
+
+    // Lire la TCB courante depuis gs:[0x20].
+    // SAFETY: GS kernel actif pendant un syscall.
+    let tcb_ptr = unsafe { current_tcb_ptr() };
+    if tcb_ptr.is_null() { return ENOSYS; }
+
+    let pid = unsafe { Pid((*tcb_ptr).pid.0) };
+    let pcb = match PROCESS_REGISTRY.find_by_pid(pid) {
+        Some(p) => p,
+        None    => return EFAULT,
+    };
+
+    let thread_ptr = pcb.main_thread_ptr();
+    if thread_ptr.is_null() { return EFAULT; }
+
+    // SAFETY: thread_ptr maintenu par le PCB ; appelant = thread courant.
+    let thread = unsafe { &mut *thread_ptr };
+
+    // Exporter l'ancien sigaltstack si oss_ptr est fourni.
+    if oss_ptr != 0 {
+        let old = SigAltStack {
+            ss_sp:    thread.addresses.sigaltstack_base,
+            ss_flags: if thread.addresses.sigaltstack_size == 0 { SS_DISABLE } else { 0 },
+            _pad:     0,
+            ss_size:  thread.addresses.sigaltstack_size,
+        };
+        // SAFETY: oss_ptr est une adresse userspace validée ci-dessus.
+        unsafe { core::ptr::write_volatile(oss_ptr as *mut SigAltStack, old); }
+    }
+
+    // Installer le nouveau sigaltstack si ss_ptr est fourni.
+    if ss_ptr != 0 {
+        // SAFETY: ss_ptr est une adresse userspace validée ci-dessus.
+        let ss = unsafe { core::ptr::read_volatile(ss_ptr as *const SigAltStack) };
+        const MINSIGSTKSZ: u64 = 2048;
+
+        if ss.ss_flags & SS_DISABLE != 0 {
+            // SS_DISABLE : désactiver le sigaltstack courant.
+            thread.addresses.sigaltstack_base = 0;
+            thread.addresses.sigaltstack_size = 0;
+        } else if ss.ss_flags != 0 {
+            return EINVAL; // flags inconnus
+        } else {
+            if ss.ss_size < MINSIGSTKSZ { return EINVAL; }
+            thread.addresses.sigaltstack_base = ss.ss_sp;
+            thread.addresses.sigaltstack_size = ss.ss_size;
+        }
+    }
+
+    0
 }
