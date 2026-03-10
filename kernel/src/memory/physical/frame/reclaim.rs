@@ -47,6 +47,7 @@ pub const MAX_SWAP_PER_PASS: usize = 64;
 /// Bit PF_MEMALLOC dans le flags per-CPU (bit 0).
 const PF_MEMALLOC_BIT: u32 = 1 << 0;
 /// Bit PF_KSWAPD dans le flags per-CPU (bit 1).
+#[allow(dead_code)]
 const PF_KSWAPD_BIT:   u32 = 1 << 1;
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -127,6 +127,7 @@ impl MigrationPolicy {
 /// Registre des migrations en cours (tableau plat, max 64 entrées).
 pub const MIGRATION_QUEUE_MAX: usize = 64;
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 struct MigrationSlot {
     blob_id: BlobId,

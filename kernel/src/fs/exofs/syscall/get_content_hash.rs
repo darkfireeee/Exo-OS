@@ -104,6 +104,7 @@ fn hash_by_fd(fd: u32, flags: u32) -> ExofsResult<ContentHashResult> {
     hash_blob(entry.blob_id, flags)
 }
 
+#[allow(dead_code)]
 fn hash_by_blob_id(blob_id: BlobId, flags: u32) -> ExofsResult<ContentHashResult> {
     hash_blob(blob_id, flags)
 }

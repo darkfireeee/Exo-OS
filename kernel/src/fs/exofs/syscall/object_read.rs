@@ -46,6 +46,7 @@ pub struct ReadArgs {
 const _: () = assert!(core::mem::size_of::<ReadArgs>() == 24);
 
 impl ReadArgs {
+    #[allow(dead_code)]
     fn defaults(offset: u64, count: u64) -> Self {
         Self { offset, count, use_cursor: 0, flags: 0 }
     }

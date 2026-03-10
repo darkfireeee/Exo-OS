@@ -37,6 +37,7 @@ struct KernelAsInner {
     stats:       KernelAsStats,
 }
 
+#[allow(dead_code)]
 #[derive(Default)]
 struct KernelAsStats {
     vmalloc_allocs: u64,

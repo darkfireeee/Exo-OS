@@ -47,6 +47,7 @@ pub const RPC_BACKOFF_FACTOR: u64 = 2;
 pub type TimeFn = fn() -> u64;
 
 /// Fonction de temps par défaut : retourne 0 (utilisable avant init de l'horloge)
+#[allow(dead_code)]
 fn time_zero() -> u64 { 0 }
 
 /// Pointeur de fonction de temps configurable

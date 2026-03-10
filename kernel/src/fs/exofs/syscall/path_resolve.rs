@@ -47,6 +47,7 @@ pub struct PathResolveResult {
 // SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<PathResolveResult>() == 104);
 
 impl PathResolveResult {
+    #[allow(dead_code)]
     fn zeroed() -> Self {
         Self {
             blob_id:     [0u8; 32],

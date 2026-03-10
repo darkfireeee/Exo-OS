@@ -3,6 +3,7 @@
 // Moteur DMA NVMe PCIe (NVM Express 1.4).
 // Ref : NVM Express Base Specification, Revision 1.4c.
 // Couche 0 — no_std, accès MMIO BAR0 via raw pointers.
+#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;

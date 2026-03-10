@@ -109,9 +109,9 @@ pub fn translate_linux_nr(nr: u64) -> Option<u64> {
 
     // ── Traductions spécifiques ─────────────────────────────────────────
     // DESIGN NOTE: ce match est conçu pour être étendu avec de vraies traductions.
-    // Quand un bras non-return sera ajouté, `translated` recevra une valeur et
+    // Quand un bras non-return sera ajouté, `_translated` recevra une valeur et
     // COMPAT_TRANSLATED sera incrémenté. Actuellement tous les bras font return.
-    let translated = match nr {
+    let _translated = match nr {
 
         // time(tloc) → clock_gettime(CLOCK_REALTIME, tloc) via wrapper dans table
         // Note : le dispatch utilisera le même handler clock_gettime,
@@ -136,7 +136,7 @@ pub fn translate_linux_nr(nr: u64) -> Option<u64> {
     };
 
     COMPAT_TRANSLATED.fetch_add(1, Ordering::Relaxed);
-    Some(translated)
+    Some(_translated)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

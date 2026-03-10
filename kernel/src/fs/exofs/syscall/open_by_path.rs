@@ -28,13 +28,21 @@ use super::object_fd::OBJECT_TABLE;
 // Constantes flags open()
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 const O_RDONLY: u32 = 0x0000;
+#[allow(dead_code)]
 const O_WRONLY: u32 = 0x0001;
+#[allow(dead_code)]
 const O_RDWR:   u32 = 0x0002;
+#[allow(dead_code)]
 const O_CREAT:  u32 = 0x0040;
+#[allow(dead_code)]
 const O_TRUNC:  u32 = 0x0200;
+#[allow(dead_code)]
 const O_APPEND: u32 = 0x0400;
+#[allow(dead_code)]
 const O_NONBLOCK: u32 = 0x0800;
+#[allow(dead_code)]
 const O_CLOEXEC:  u32 = 0x0008_0000;
 
 // ─────────────────────────────────────────────────────────────────────────────

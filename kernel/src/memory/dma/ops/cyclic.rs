@@ -100,6 +100,7 @@ impl CyclicConfig {
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
+#[allow(dead_code)]
 enum CyclicState {
     Idle    = 0,
     Running = 1,
@@ -108,6 +109,7 @@ enum CyclicState {
 }
 
 /// Descripteur interne d'une période cyclique.
+#[allow(dead_code)]
 #[derive(Copy, Clone)]
 struct PeriodDesc {
     /// Adresse physique de début de la période dans le tampon.
@@ -232,6 +234,7 @@ impl CyclicTransfer {
 // TABLE DES TRANSFERTS CYCLIQUES
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 struct CyclicTable {
     slots: [CyclicTransfer; MAX_CYCLIC_CHANNELS],
     count: usize,

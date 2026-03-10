@@ -64,6 +64,7 @@ impl DeadlineQueue {
     }
 
     /// Retourne (sans extraire) le thread avec l'échéance la plus proche.
+    #[allow(dead_code)]
     fn peek_earliest(&self) -> Option<NonNull<ThreadControlBlock>> {
         self.tasks[0]
     }

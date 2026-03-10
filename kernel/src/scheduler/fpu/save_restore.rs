@@ -27,6 +27,7 @@ extern "C" {
     fn arch_fxsave64(area: *mut u8);
     fn arch_fxrstor64(area: *const u8);
     fn arch_has_xsave() -> u8;
+    #[allow(dead_code)]
     fn arch_has_avx() -> u8;
 }
 

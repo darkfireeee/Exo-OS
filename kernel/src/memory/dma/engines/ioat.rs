@@ -3,6 +3,7 @@
 // Intel I/OAT DMA Engine (Crystal Beach / Xeon series).
 // Ref : Intel I/OAT DMA Engine User Guide, Doc #322931.
 // Couche 0 — no_std kernel, accès MMIO via raw pointers.
+#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;

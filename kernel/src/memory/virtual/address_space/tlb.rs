@@ -123,6 +123,7 @@ struct TlbShootdownInner {
     tail:     usize,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 struct TlbShootdownEntry {
     active:     bool,

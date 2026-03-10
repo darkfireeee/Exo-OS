@@ -93,7 +93,9 @@ impl ChannelQueue {
         Some(txn)
     }
 
+    #[allow(dead_code)]
     fn is_empty(&self) -> bool { self.count == 0 }
+    #[allow(dead_code)]
     fn is_full(&self)  -> bool { self.count >= CHANNEL_QUEUE_DEPTH }
     fn len(&self)      -> usize { self.count }
 }

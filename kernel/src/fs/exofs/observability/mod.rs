@@ -154,6 +154,7 @@ impl ObservabilityStatus {
 // ─── ObservabilityModule ─────────────────────────────────────────────────────
 
 /// Facade principale du module d'observabilité.
+#[allow(dead_code)]
 pub struct ObservabilityModule {
     config:      ObservabilityConfig,
     init_tick:   AtomicU64,

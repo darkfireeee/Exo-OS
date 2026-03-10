@@ -46,6 +46,7 @@ struct CompletionSlot {
 }
 
 impl CompletionSlot {
+    #[allow(dead_code)]
     const fn new() -> Self {
         CompletionSlot {
             txn_id:       DmaTransactionId::INVALID,

@@ -39,6 +39,7 @@ pub const ZSWAP_SLOT_SIZE:  usize = 3072;
 pub const MAX_ZSWAP_SLOTS:  usize = 4096;
 
 /// Taille du hash de validation (CRC32-like XOR fold).
+#[allow(dead_code)]
 const CHECKSUM_SIZE: usize = 4;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -154,6 +155,7 @@ pub enum ZswapLoadResult {
     DecompressError,
 }
 
+#[allow(dead_code)]
 struct ZswapPoolInner {
     slots: &'static mut [ZswapSlot],
     count: usize,

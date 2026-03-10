@@ -3,6 +3,7 @@
 // Intel Data Streaming Accelerator (DSA) / Intel Analytics Accelerator (IAX).
 // Ref : Intel Architecture Specification for Intel DSA, Document 341204.
 // Couche 0 — no_std kernel, accès MMIO via raw pointers + ENQCMD instruction.
+#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;

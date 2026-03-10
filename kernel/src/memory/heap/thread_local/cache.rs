@@ -222,6 +222,7 @@ impl PerCpuCache {
 /// Table globale : un cache par CPU.
 /// L'accès est protégé par le fait qu'un seul CPU accède à son propre cache.
 /// On utilise un `Mutex<()>` uniquement pour l'initialisation (une seule fois).
+#[allow(dead_code)]
 pub struct PerCpuCacheTable {
     caches: [PerCpuCache; MAX_CPUS],
     init_lock: spin::Mutex<bool>,

@@ -457,6 +457,7 @@ struct BroadcastChannelTable {
 unsafe impl Send for BroadcastChannelTable {}
 
 impl BroadcastChannelTable {
+    #[allow(dead_code)]
     const fn new() -> Self {
         // SAFETY: mem::zeroed() évite la limite mémoire du const-eval pour grands tableaux.
         unsafe { core::mem::zeroed() }

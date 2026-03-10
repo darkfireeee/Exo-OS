@@ -441,6 +441,7 @@ struct MpmcChannelTable {
 unsafe impl Send for MpmcChannelTable {}
 
 impl MpmcChannelTable {
+    #[allow(dead_code)]
     const fn new() -> Self {
         // SAFETY: mem::zeroed() évite la limite mémoire du const-eval pour grands tableaux.
         unsafe { core::mem::zeroed() }

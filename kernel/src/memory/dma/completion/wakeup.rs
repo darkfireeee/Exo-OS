@@ -123,6 +123,7 @@ impl WaiterSlot {
         self.state.store(WaiterState::Free as u8, Ordering::Release);
     }
 
+    #[allow(dead_code)]
     fn result(&self) -> Result<usize, DmaError> {
         if self.result_ok.load(Ordering::Acquire) {
             Ok(self.result_val.load(Ordering::Relaxed) as usize)

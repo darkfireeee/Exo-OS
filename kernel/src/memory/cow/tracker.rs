@@ -34,6 +34,7 @@ struct CowEntry {
 }
 
 impl CowEntry {
+    #[allow(dead_code)]
     const fn new() -> Self {
         CowEntry {
             frame_idx: AtomicU64::new(0),

@@ -58,6 +58,7 @@ pub struct UserAddressSpace {
     pub heap_end: AtomicU64,
 }
 
+#[allow(dead_code)]
 struct UserAsInner {
     vma_tree:     VmaTree,
     mmap_hint:    VirtAddr,      // Hint pour mmap (bump)

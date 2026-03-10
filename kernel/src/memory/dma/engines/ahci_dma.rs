@@ -3,6 +3,7 @@
 // Moteur DMA SATA AHCI (Advanced Host Controller Interface).
 // Ref : AHCI 1.3.1 Specification.
 // Couche 0 — no_std, accès MMIO uniquement via raw pointers.
+#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;

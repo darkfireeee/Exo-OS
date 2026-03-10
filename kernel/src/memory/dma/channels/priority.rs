@@ -51,6 +51,7 @@ impl PrioEntry {
         age_passes: 0,
     };
 
+    #[allow(dead_code)]
     fn is_valid(self) -> bool {
         self.txn_id.0 != DmaTransactionId::INVALID.0
     }
@@ -100,7 +101,9 @@ impl PrioQueue {
     }
 
     fn len(&self) -> usize { self.count }
+    #[allow(dead_code)]
     fn is_full(&self)  -> bool { self.count >= PRIORITY_QUEUE_DEPTH }
+    #[allow(dead_code)]
     fn is_empty(&self) -> bool { self.count == 0 }
 
     /// Incrémente l'âge de toutes les entrées (anti-famine).

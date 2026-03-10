@@ -46,6 +46,7 @@ pub struct WriteArgs {
 const _: () = assert!(core::mem::size_of::<WriteArgs>() == 32);
 
 impl WriteArgs {
+    #[allow(dead_code)]
     fn defaults(offset: u64, count: u64) -> Self {
         Self { offset, count, use_cursor: 0, sync: 0, flags: 0 }
     }

@@ -96,6 +96,7 @@ impl MetaEntry {
 // MetaRaw : key_len(2) + val_len(2) + key + value
 
 /// En-tête sérialisée d'un bloc de métadonnées.
+#[allow(dead_code)]
 struct MetaBlockHeader {
     magic: u32,
     count: u32,

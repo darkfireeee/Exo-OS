@@ -63,6 +63,7 @@ pub struct InodeEmulation {
     fwd:      UnsafeCell<Vec<InodeEntry>>,
     spinlock: AtomicU64,
     next_ino: AtomicU64,
+    #[allow(dead_code)]
     evict_cursor: AtomicU64,
 }
 

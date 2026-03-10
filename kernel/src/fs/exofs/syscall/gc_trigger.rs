@@ -19,6 +19,7 @@ use super::object_fd::OBJECT_TABLE;
 pub const GC_MAX_BLOBS_PER_RUN:  usize = 4096;
 pub const GC_TOMBSTONE_MAGIC:    u32   = 0x54_4F_4D_42; // "TOMB"
 const     GC_QUEUE_FLAG_RUNNING: u32   = 0x0001;
+#[allow(dead_code)]
 const     GC_QUEUE_FLAG_DRY:     u32   = 0x0002;
 
 // ─────────────────────────────────────────────────────────────────────────────

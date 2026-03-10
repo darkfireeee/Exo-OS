@@ -142,6 +142,7 @@ pub struct SnapshotDescriptor {
     /// ObjectId de l'objet racine snapshotté.
     pub root_object_id: ObjectId,
     /// Pin RAII — maintient l'epoch vivant tant que le snapshot existe.
+    #[allow(dead_code)]
     pin:                EpochPin,
 }
 

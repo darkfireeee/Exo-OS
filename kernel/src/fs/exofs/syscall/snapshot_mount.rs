@@ -351,6 +351,7 @@ pub const MAX_MOUNTS: usize = 64;
 
 /// Table plate de montages actifs (kernel-side bookkeeping).
 /// Les entrées avec fd==0 sont libres.
+#[allow(dead_code)]
 static MOUNT_TABLE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Sérialise une liste de MountEntry vers userspace.

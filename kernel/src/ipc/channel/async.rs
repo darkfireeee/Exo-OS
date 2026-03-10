@@ -409,6 +409,7 @@ struct AsyncChannelTable {
 unsafe impl Send for AsyncChannelTable {}
 
 impl AsyncChannelTable {
+    #[allow(dead_code)]
     const fn new() -> Self {
         // SAFETY: MaybeUninit zeros valides + AtomicBool false = table vide; jamais lu avant init.
         unsafe { core::mem::zeroed() }

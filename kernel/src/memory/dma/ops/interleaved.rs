@@ -188,6 +188,7 @@ impl InterleavedXfer {
         self.state.load(Ordering::Acquire) == IxferState::Free as u8
     }
 
+    #[allow(dead_code)]
     fn is_done(&self) -> bool {
         let done  = self.chunks_done.load(Ordering::Acquire) as usize;
         let total = self.config.chunk_count;

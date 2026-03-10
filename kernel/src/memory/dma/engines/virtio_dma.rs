@@ -2,6 +2,7 @@
 //
 // Moteur DMA VirtIO (virtqueue split ring, spécification VirtIO 1.1, §2.6).
 // Couche 0 — no_std, aucun heap, statique uniquement.
+#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;

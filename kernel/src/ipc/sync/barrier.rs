@@ -30,6 +30,7 @@ pub const MAX_IPC_BARRIERS: usize = 64;
 /// États de phase de la barrière
 mod phase_state {
     pub const WAITING: u32 = 0;
+    #[allow(dead_code)]
     pub const RELEASING: u32 = 1;
 }
 
