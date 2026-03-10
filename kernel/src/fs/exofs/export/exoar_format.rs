@@ -10,7 +10,6 @@
 //! ARITH-02 : saturating_* / checked_* sur tous les compteurs.
 //! RECUR-01 : pas de récursion.
 
-#![allow(dead_code)]
 
 use core::mem::size_of;
 

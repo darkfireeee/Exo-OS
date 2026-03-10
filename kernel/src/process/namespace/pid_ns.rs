@@ -3,11 +3,11 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 // Espace de noms PID (CLONE_NEWPID) — Exo-OS Couche 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use crate::scheduler::sync::spinlock::SpinLock;
 
+#[allow(dead_code)]
 const MAX_PID_NS: usize = 64;
 /// PIDs max par namespace : 1..32767.
 const NS_PID_MAX: u32 = 32767;

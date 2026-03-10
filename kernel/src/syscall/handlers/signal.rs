@@ -8,7 +8,6 @@
 //! RÈGLE SIG-14 : INTERDIT sigreturn sans vérifier magic — injection de faux contexte.
 //! RÈGLE SIG-18 : INTERDIT écriture signal frame sans copy_to_user().
 
-#![allow(dead_code)]
 
 use crate::syscall::validation::{validate_signal, USER_ADDR_MAX};
 use crate::syscall::errno::{EINVAL, EFAULT, EPERM, ENOSYS, ESRCH};

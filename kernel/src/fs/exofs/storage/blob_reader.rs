@@ -8,7 +8,6 @@
 //!   OOM-02   : try_reserve avant tout Vec::push / resize
 //!   ARITH-02 : checked_add pour toute arithmétique sur offsets
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -35,6 +34,7 @@ use crate::fs::exofs::storage::blob_writer::{
 const MAX_DECOMPRESSED_SIZE: usize = 512 * 1024 * 1024;
 
 /// Taille minimale d'un blob valide sur disque
+#[allow(dead_code)]
 const MIN_BLOB_DISK_SIZE: usize = BLOB_HEADER_SIZE;
 
 // ─────────────────────────────────────────────────────────────

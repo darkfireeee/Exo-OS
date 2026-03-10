@@ -26,7 +26,6 @@
 //
 // COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use spin::Mutex;
@@ -43,6 +42,7 @@ use crate::memory::core::constants::FUTEX_HASH_BUCKETS;
 pub type WakeFn = fn(tid: u64, code: i32);
 
 /// Implémentation no-op utilisée avant que le scheduler ne soit initialisé.
+#[allow(dead_code)]
 fn nop_wake(_tid: u64, _code: i32) {}
 
 // ─────────────────────────────────────────────────────────────────────────────

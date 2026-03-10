@@ -4,7 +4,6 @@
 //! clock_gettime CLOCK_MONOTONIC → VDSO fast path (150 cycles, pas de syscall).
 //! Délègue à time:: pour les autres clocks.
 
-#![allow(dead_code)]
 
 use crate::syscall::validation::USER_ADDR_MAX;
 use crate::syscall::errno::{EINVAL, EFAULT, ENOSYS};

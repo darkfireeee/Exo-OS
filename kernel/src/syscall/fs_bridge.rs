@@ -21,7 +21,6 @@
 //   La valeur `Err(...)` est convertie en errno par le syscall handler.
 // RÈGLE FS-BRIDGE-03 : `FS_READY.load()` doit retourner `true` avant tout appel.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

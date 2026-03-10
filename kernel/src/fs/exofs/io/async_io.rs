@@ -11,7 +11,6 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use core::sync::atomic::{AtomicU8, AtomicU64, AtomicI32, Ordering};
@@ -175,9 +174,11 @@ pub const ASYNC_IO_QUEUE_DEPTH: usize = 256;
 #[derive(Clone, Copy)]
 struct AsyncIoSlot {
     op_id: u64,
+    #[allow(dead_code)]
     kind:  u8,
     state: u8,
     bytes: u64,
+    #[allow(dead_code)]
     blob_id: [u8; 32],
     result: i32,
 }

@@ -8,7 +8,6 @@
 //! Via un port I/O 32 bits (PMTMR_BLKX dans la FADT, offset variable).
 //! Compteur 24 bits ou 32 bits selon le chipset (bit 8 du FADT flags).
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
 
@@ -26,6 +25,7 @@ static PM_TMR_32BIT: AtomicBool = AtomicBool::new(false);
 
 /// FADT (Fixed ACPI Description Table) — champs minimaux pour pm_timer_blk
 #[repr(C, packed)]
+#[allow(dead_code)]
 struct FadtMinimal {
     // SdtHeader (36 octets) + champs FADT
     // _header (36 bytes) — on lit directement après le header

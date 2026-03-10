@@ -12,7 +12,6 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

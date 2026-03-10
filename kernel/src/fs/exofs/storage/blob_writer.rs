@@ -9,7 +9,6 @@
 //!   OOM-02   : try_reserve(1) avant chaque Vec::push
 //!   ARITH-02 : checked_add/mul pour toute arithmétique
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -207,6 +206,7 @@ impl BlobWriteResult {
 
 /// Contexte intermédiaire après compression
 struct WriteContext {
+    #[allow(dead_code)]
     blob_id: BlobId,
     original_size: u32,
     stored_size: u32,

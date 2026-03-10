@@ -8,7 +8,6 @@
 //!   ARITH-02 : checked_add pour compteurs et stats
 //!   ONDISK-03: pas de AtomicXxx dans les structs repr(C)
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::collections::BTreeMap;

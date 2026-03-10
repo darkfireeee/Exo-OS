@@ -15,7 +15,6 @@
 //! OOM-02   : try_reserve avant tout push.
 //! ARITH-02 : saturating_* / checked_* sur tous les compteurs.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

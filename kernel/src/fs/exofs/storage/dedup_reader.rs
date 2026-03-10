@@ -216,6 +216,7 @@ impl Default for DedupReader { fn default() -> Self { Self::new() } }
 
 pub struct DedupReadPipeline<'a> {
     reader:  &'a DedupReader,
+    #[allow(dead_code)]
     writer:  &'a DedupWriter,
 }
 

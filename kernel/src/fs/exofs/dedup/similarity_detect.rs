@@ -7,7 +7,6 @@
 //! OOM-02   : try_reserve.
 //! ARITH-02 : saturating / checked / wrapping.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};

@@ -12,7 +12,6 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::cell::UnsafeCell;

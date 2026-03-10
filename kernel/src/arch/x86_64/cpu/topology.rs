@@ -5,7 +5,6 @@
 //!
 //! Supporte jusqu'à 512 CPUs logiques (MAX_CPUS).
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
 
@@ -85,6 +84,7 @@ static CPU_COUNT_ONLINE: AtomicU32 = AtomicU32::new(0);
 static PACKAGE_COUNT: AtomicU32 = AtomicU32::new(1);
 
 /// Nombre de cores physiques par package (maximum)
+#[allow(dead_code)]
 static CORES_PER_PACKAGE: AtomicU32 = AtomicU32::new(1);
 
 /// SMT actif (Hyper-Threading)

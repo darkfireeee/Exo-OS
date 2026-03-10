@@ -37,7 +37,6 @@
 //     scheduler/energy/frequency.rs (arch_set_cpu_pstate)
 // ═════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use super::apic;
 use super::smp::percpu;
@@ -53,6 +52,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 const MSR_IA32_PERF_CTL: u32 = 0x0000_0199;
 
 /// Intel MSR IA32_PERF_STATUS — bits [15:8] = P-state courant
+#[allow(dead_code)]
 const MSR_IA32_PERF_STATUS: u32 = 0x0000_0198;
 
 /// Masque du P-state dans PERF_CTL (bits [7:0])

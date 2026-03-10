@@ -7,7 +7,6 @@
 //! RÈGLE MAGIC-01  : vérification du magic EN PREMIER dans tout parsing on-disk.
 
 
-#![allow(dead_code)]
 
 use crate::fs::exofs::compress::algorithm::CompressionAlgorithm;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};

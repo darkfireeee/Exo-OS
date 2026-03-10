@@ -7,7 +7,6 @@
 //   ARITH-02  : checked_add / saturating_* partout
 //   HDR-03    : verify() AVANT tout accès au payload
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::mem;

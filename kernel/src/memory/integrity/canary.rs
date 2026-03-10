@@ -15,7 +15,6 @@
 //
 // COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -28,6 +27,7 @@ const MAX_CPUS: usize = 256;
 /// Valeur sentinelle indiquant que la table n'est pas encore initialisée.
 const CANARY_UNINIT: u64 = 0xDEAD_BEEF_CAFE_BABE;
 /// Poison pour détecter une réutilisation de stack après violation.
+#[allow(dead_code)]
 const CANARY_POISON: u64 = 0x0000_0000_0000_0000;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,6 +75,7 @@ struct CanarySlot {
 }
 
 impl CanarySlot {
+    #[allow(dead_code)]
     const fn uninit() -> Self {
         Self {
             value:       AtomicU64::new(CANARY_UNINIT),

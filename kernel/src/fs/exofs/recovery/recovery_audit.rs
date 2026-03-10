@@ -9,7 +9,6 @@
 //! - **ARITH-02** : `checked_add` / `wrapping_add` pour les index.
 //! - **ONDISK-03** : pas d'`AtomicU64` dans les structs `repr(C)`.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

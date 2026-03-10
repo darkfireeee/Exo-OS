@@ -9,14 +9,13 @@
 //! - **OOM-02**   : try_reserve(1) avant push.
 //! - **ARITH-02** : checked_add sur tous les calculs d offset.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
 use crate::scheduler::sync::spinlock::SpinLock;
-use super::path_component::{PathComponent, PathParser, NAME_MAX};
+use super::path_component::{PathComponent, PathParser};
 
 // -- Constantes ---------------------------------------------------------------
 

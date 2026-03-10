@@ -5,11 +5,9 @@
 //! RÈGLE SYS-05 : Valider longueurs AVANT copy_from_user.
 //! RÈGLE SYS-07 : verify_cap() appelé dans le handler AVANT délégation.
 
-#![allow(dead_code)]
 
 use crate::syscall::validation::{UserBuf, read_user_path, validate_fd, validate_flags, IO_BUF_MAX};
-use crate::syscall::errno::{EINVAL, EFAULT, E2BIG, ENOSYS, EBADF};
-use crate::syscall::numbers::*;
+use crate::syscall::errno::{EINVAL, EFAULT, E2BIG, ENOSYS};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteurs d'appels (instrumentation)

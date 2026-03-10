@@ -7,7 +7,6 @@
 //! OOM-02   : try_reserve sur tous les Vec.
 //! ARITH-02 : saturating / checked / wrapping.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;

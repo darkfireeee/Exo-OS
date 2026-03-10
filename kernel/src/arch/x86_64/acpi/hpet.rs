@@ -11,26 +11,31 @@
 //! - 0x0F0 : MAIN_CTR — compteur principal 64 bits
 //! - 0x100+N*0x20 : Timer N comparateurs
 
-#![allow(dead_code)]
 
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 
 // ── Offsets registres HPET ────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 const HPET_GCAP_ID:   u64 = 0x000; // capabilities (64 bits)
 const HPET_GEN_CFG:   u64 = 0x010; // config globale (64 bits)
+#[allow(dead_code)]
 const HPET_GINTR_STA: u64 = 0x020; // interrupt status
 const HPET_MAIN_CTR:  u64 = 0x0F0; // compteur principal (64 bits)
+#[allow(dead_code)]
 const HPET_T0_CFG:    u64 = 0x100; // Timer 0 config (64 bits)
+#[allow(dead_code)]
 const HPET_T0_CMP:    u64 = 0x108; // Timer 0 comparateur (64 bits)
 
 // Bits GEN_CFG
 const HPET_ENABLE:    u64 = 1 << 0;
+#[allow(dead_code)]
 const HPET_LEG_RT:    u64 = 1 << 1; // Legacy Replacement Mapping
 
 // GCAP_ID champs
 const HPET_CLK_PERIOD_SHIFT: u32 = 32;  // bits 63:32 = période en femtosecondes
+#[allow(dead_code)]
 const HPET_NUM_TIMERS_SHIFT: u32 = 8;   // bits 12:8 = nombre de timers - 1
 
 // ── État HPET ─────────────────────────────────────────────────────────────────
@@ -53,6 +58,7 @@ static HPET_FREQ_HZ:   AtomicU64 = AtomicU64::new(0);
 
 /// Table ACPI HPET (après SdtHeader)
 #[repr(C, packed)]
+#[allow(dead_code)]
 struct AcpiHpetTable {
     event_timer_block_id: u32,
     base_address:         [u8; 12], // Generic Address Structure (GAS)
@@ -73,6 +79,7 @@ fn hpet_read(offset: u64) -> u64 {
 
 /// Écrit un registre HPET 64 bits
 #[inline]
+#[allow(dead_code)]
 fn hpet_write(offset: u64, val: u64) {
     let base = HPET_BASE.load(Ordering::Relaxed);
     // SAFETY: base HPET validée lors de l'init

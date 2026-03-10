@@ -10,7 +10,6 @@
 //! Header SdtHeader + LAPIC_ADDR (32 bits) + FLAGS (32 bits)
 //! + liste de structures de longueur variable (type, length, ...)
 
-#![allow(dead_code)]
 
 use core::ptr::read_volatile;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -19,6 +18,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 /// En-tête MADT (après SdtHeader)
 #[repr(C, packed)]
+#[allow(dead_code)]
 struct MadtHeader {
     lapic_addr: u32,   // Adresse physique LAPIC (généralement 0xFEE00000)
     flags:      u32,   // bit 0 = dual 8259 present
@@ -28,10 +28,13 @@ struct MadtHeader {
 const MADT_TYPE_LAPIC:          u8 = 0;
 const MADT_TYPE_IOAPIC:         u8 = 1;
 const MADT_TYPE_INT_SRC_OVER:   u8 = 2;
+#[allow(dead_code)]
 const MADT_TYPE_NMI_SRC:        u8 = 3;
+#[allow(dead_code)]
 const MADT_TYPE_LAPIC_NMI:      u8 = 4;
 const MADT_TYPE_LAPIC_ADDR_OVR: u8 = 5;
 const MADT_TYPE_X2APIC:         u8 = 9;
+#[allow(dead_code)]
 const MADT_TYPE_X2APIC_NMI:     u8 = 10;
 
 /// Entrée LAPIC (type 0) — CPU logique

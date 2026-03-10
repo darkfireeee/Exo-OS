@@ -20,7 +20,6 @@
 //   No-write-up  : sujet ne peut écrire dans un objet d'intégrité supérieure
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ConfidentialityLevel

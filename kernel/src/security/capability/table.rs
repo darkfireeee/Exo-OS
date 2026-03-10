@@ -24,7 +24,6 @@
 //   CAP_TABLE_CAPACITY × size_of::<CapEntry>() = 512 × 24 = 12 288 bytes ≈ 12 KiB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -82,6 +81,7 @@ impl CapEntry {
 
     /// Retourne (rights, generation, type_tag) si l'ObjectId correspond.
     #[inline(always)]
+    #[allow(dead_code)]
     fn load_for_verify(&self, expected_oid: ObjectId) -> Option<(Rights, u32, CapObjectType)> {
         let oid = self.object_id.load(Ordering::Acquire);
         if oid != expected_oid.0 {

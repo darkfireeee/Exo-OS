@@ -16,7 +16,6 @@
 //! ## Flags de page
 //! Conforme aux bits de l'entrée PT x86_64
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -208,6 +207,7 @@ pub fn compose_virt_addr(pml4: usize, pdpt: usize, pd: usize, pt: usize, off: us
 // ── PML4 noyau statique (table racine kernel) ─────────────────────────────────
 
 /// PML4 kernel statique (utilisé jusqu'à la fin du boot)
+#[allow(dead_code)]
 static mut KERNEL_PML4: PageTable = PageTable::empty();
 
 /// Mappage brut : installe une entrée dans la hiérarchie existante

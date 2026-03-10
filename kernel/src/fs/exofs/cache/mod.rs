@@ -5,7 +5,6 @@
 //! statistiques agrégées globales.
 //! Règles : RECUR-01, OOM-02, ARITH-02.
 
-#![allow(dead_code)]
 
 pub mod blob_cache;
 pub mod cache_eviction;

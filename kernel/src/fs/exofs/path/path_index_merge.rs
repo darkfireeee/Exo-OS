@@ -8,7 +8,6 @@
 //! - **ARITH-02** : `checked_add` sur les calculs de taille/count.
 //! - **OOM-02** : `try_reserve(1)` avant les insertions.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

@@ -3,7 +3,6 @@
 // Intel I/OAT DMA Engine (Crystal Beach / Xeon series).
 // Ref : Intel I/OAT DMA Engine User Guide, Doc #322931.
 // Couche 0 — no_std kernel, accès MMIO via raw pointers.
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -16,6 +15,7 @@ use crate::memory::dma::stats::counters::{DMA_STATS, dma_stat_submit, dma_stat_c
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Offsets des registres I/OAT channel 0 (CB3+).
+#[allow(dead_code)]
 mod regs {
     pub const CHANCMD:        usize = 0x04;  // Channel Command (u8)
     pub const XFERCAP:        usize = 0x06;  // Transfer Capability (u8)
@@ -34,6 +34,7 @@ mod regs {
 }
 
 /// Bits du Channel Status Register.
+#[allow(dead_code)]
 mod chansts {
     pub const ACTIVE:    u64 = 0x0; // Canal actif (bits 4:0)
     pub const DONE:      u64 = 0x1; // Dernier descripteur complété
@@ -44,6 +45,7 @@ mod chansts {
 }
 
 /// Bits du Channel Control Register.
+#[allow(dead_code)]
 mod chanctrl {
     pub const INT_DISABLE: u16 = 1 << 0;  // Désactive les interruptions
     pub const ERR_INT:     u16 = 1 << 2;  // Erreur → interruption
@@ -129,6 +131,7 @@ pub const IOAT_RING_SIZE: usize = 256;
 struct IoatRing {
     descs:   [IoatDescriptor; IOAT_RING_SIZE],
     /// Completion records (un par slot, 64-bit aligned).
+    #[allow(dead_code)]
     cmp:     [u64; IOAT_RING_SIZE],
     head:    u16,  // prochain slot à écrire
     tail:    u16,  // prochain slot à compléter
@@ -150,6 +153,7 @@ impl IoatRing {
         }
     }
 
+    #[allow(dead_code)]
     fn available(&self) -> usize {
         IOAT_RING_SIZE - self.count as usize - 1
     }
@@ -194,6 +198,7 @@ impl IoatEngine {
     }
 
     /// Lit un registre 16 bits.
+    #[allow(dead_code)]
     unsafe fn read16(&self, offset: usize) -> u16 {
         let base = self.mmio_base.load(Ordering::Relaxed) as *const u16;
         base.add(offset / 2).read_volatile()
@@ -212,6 +217,7 @@ impl IoatEngine {
     }
 
     /// Écrit un registre 32 bits.
+    #[allow(dead_code)]
     unsafe fn write32(&self, offset: usize, val: u32) {
         let base = self.mmio_base.load(Ordering::Relaxed) as *mut u32;
         base.add(offset / 4).write_volatile(val);

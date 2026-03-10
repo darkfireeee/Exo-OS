@@ -11,7 +11,6 @@
 //! - **ARITH-02** : `checked_add` pour l'arithmétique sur les IDs.
 //! - **WRITE-02** : vérification `bytes_written == expected` après sérialisation.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::collections::BTreeMap;

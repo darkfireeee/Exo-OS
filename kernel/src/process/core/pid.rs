@@ -16,7 +16,6 @@
 // RÈGLE : Aucune allocation heap dans ce fichier (zone NO-ALLOC partielle).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use core::fmt;
@@ -164,6 +163,7 @@ impl<const N: usize> PidBitmap<N> {
 pub struct PidAllocator {
     bitmap:        &'static PidBitmapPid,
     first_usable:  u32,
+    #[allow(dead_code)]
     total_capacity: u32,
     /// Nombre d'allocations réussies depuis le boot.
     alloc_count:   AtomicU64,

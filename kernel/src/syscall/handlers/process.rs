@@ -6,11 +6,9 @@
 //! RÈGLE BUG-04  : do_exec() doit initialiser %fs (TLS) avant jump_to_entry.
 //! RÈGLE BUG-09  : block_all_except_kill() durant exec pour éviter signal inter-exec.
 
-#![allow(dead_code)]
 
-use crate::syscall::validation::{read_user_path, validate_pid, validate_signal, USER_ADDR_MAX};
-use crate::syscall::errno::{EINVAL, EFAULT, ENOMEM, ENOSYS, EAGAIN, ECHILD, EINTR, ESRCH};
-use crate::syscall::numbers::*;
+use crate::syscall::validation::{read_user_path, USER_ADDR_MAX};
+use crate::syscall::errno::{EINVAL, EFAULT, ENOMEM, ENOSYS, EAGAIN, ECHILD, EINTR};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fork() — Ring3 → kernel CoW

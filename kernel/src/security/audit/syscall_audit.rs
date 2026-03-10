@@ -16,7 +16,6 @@
 // RÈGLE SAU-03 : Syscalls privés du kernel (nr > MAX_USER_SYSCALL) non audités ici.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use super::logger::{log_event, log_security_violation, AuditCategory, AuditOutcome};
@@ -50,7 +49,9 @@ struct SyscallContext {
     pid:        u32,
     uid:        u16,
     syscall_nr: u32,
+    #[allow(dead_code)]
     entry_tsc:  u64,
+    #[allow(dead_code)]
     verdict:    AuditVerdict,
     active:     bool,
 }

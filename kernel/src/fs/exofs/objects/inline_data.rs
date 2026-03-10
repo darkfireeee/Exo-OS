@@ -6,7 +6,6 @@
 //   ONDISK-01 : InlineDataDisk → #[repr(C, packed)], types plain uniquement
 //   HASH-01   : BlobId calculé sur données brutes (méthode seal())
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::mem;

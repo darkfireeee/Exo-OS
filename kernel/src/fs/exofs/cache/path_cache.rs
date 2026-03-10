@@ -8,7 +8,6 @@
 //! Clé = FNV-1a 64-bit du chemin + vérification anti-collision.
 //! Règles : OOM-02, ARITH-02, RECUR-01.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::collections::BTreeMap;

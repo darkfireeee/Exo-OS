@@ -8,7 +8,6 @@
 //   ARITH-02 : checked_add / saturating_* partout
 //   OOM-02   : try_reserve partout
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::mem;

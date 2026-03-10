@@ -21,7 +21,6 @@
 // COMPLEXITÉ : O(1) — lookup haché + 3 lectures atomiques
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use super::token::{CapToken, CapObjectType, stat_verified, stat_denied};
 use super::rights::Rights;

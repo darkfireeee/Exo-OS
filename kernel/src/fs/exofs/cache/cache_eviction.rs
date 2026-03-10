@@ -3,7 +3,6 @@
 //! Implémente LRU, LFU, CLOCK et ARC (simplifié) de façon itérative.
 //! Règles : RECUR-01 (zéro récursion), OOM-02 (try_reserve), ARITH-02.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -40,6 +39,7 @@ struct EntryMeta {
     /// Taille en octets.
     size:         u64,
     /// Ticks d'insertion.
+    #[allow(dead_code)]
     inserted_at:  u64,
 }
 

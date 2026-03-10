@@ -7,7 +7,6 @@
 //!   OOM-02   : try_reserve avant chaque push
 //!   ARITH-02 : checked_add pour compteurs
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -60,6 +59,7 @@ impl DiffEntry {
     fn removed(blob: BlobId, size: u64) -> Self {
         Self { blob_left: Some(blob), blob_right: None, kind: DiffKind::Removed, size_left: size, size_right: 0 }
     }
+    #[allow(dead_code)]
     fn modified(left: BlobId, right: BlobId, sl: u64, sr: u64) -> Self {
         Self { blob_left: Some(left), blob_right: Some(right), kind: DiffKind::Modified, size_left: sl, size_right: sr }
     }

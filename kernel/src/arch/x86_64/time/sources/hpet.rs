@@ -37,7 +37,6 @@
 //   Typiquement ≥ 100 ticks HPET (≈ 7 µs à 14.318 MHz).
 // ════════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
 use super::ClockSource;
@@ -46,7 +45,9 @@ use crate::arch::x86_64::acpi::hpet as hpet_acpi;
 // ── Offsets registres HPET ────────────────────────────────────────────────────
 
 const HPET_REG_CAP_ID:    u64 = 0x000; // Capabilities and ID (RO)
+#[allow(dead_code)]
 const HPET_REG_CONFIG:    u64 = 0x010; // General Configuration (RW)
+#[allow(dead_code)]
 const HPET_REG_INT_STATUS:u64 = 0x020; // General Interrupt Status (RW)
 const HPET_REG_COUNTER:   u64 = 0x0F0; // Main Counter Value (RO)
 
@@ -336,6 +337,7 @@ fn mmio_read64(addr: u64) -> u64 {
 
 /// Écriture MMIO 64-bit non-cacheable (volatile write).
 #[inline(always)]
+#[allow(dead_code)]
 fn mmio_write64(addr: u64, val: u64) {
     unsafe {
         (addr as *mut u64).write_volatile(val)

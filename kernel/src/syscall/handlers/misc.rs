@@ -3,7 +3,6 @@
 //! RÈGLE SYS-03 : THIN WRAPPERS UNIQUEMENT.
 //! ABI-03 : INTERDIT de retourner un pointeur kernel dans rax.
 
-#![allow(dead_code)]
 
 use crate::syscall::validation::USER_ADDR_MAX;
 use crate::syscall::errno::{EFAULT, ENOSYS, EINVAL};

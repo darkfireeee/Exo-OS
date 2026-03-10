@@ -4,7 +4,6 @@
 //! `CACHE_PRESSURE` : instance globale lock-free.
 //! Règles : ARITH-02, ONDISK-03, RECUR-01.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 

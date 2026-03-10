@@ -17,7 +17,6 @@
 //   REFCNT-01: ref_count check avant tout acces objet
 // ==============================================================================
 
-#![allow(dead_code)]
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;

@@ -10,15 +10,14 @@
 //! - **HDR-03** : magic de chaque en-tête de blob vérifié EN PREMIER.
 //! - **ARITH-02** : `checked_add` pour les offsets et compteurs.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId, EpochId};
-use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};
+use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
+use crate::fs::exofs::core::blob_id::verify_blob_id;
 use super::boot_recovery::BlockDevice;
-use super::fsck_phase1::{Phase1Report, SuperblockDisk};
+use super::fsck_phase1::Phase1Report;
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 

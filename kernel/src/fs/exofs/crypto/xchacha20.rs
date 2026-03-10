@@ -107,6 +107,7 @@ impl Tag {
 /// Contexte AEAD réutilisable (clé + compteur de nonce).
 pub struct AeadContext {
     key:     XChaCha20Key,
+    #[allow(dead_code)]
     counter: u64,
 }
 

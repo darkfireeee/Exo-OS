@@ -12,7 +12,6 @@
 //! ## Routage
 //! Délégué vers x2APIC (MSR ICR) ou xAPIC (MMIO ICR) selon le mode actif.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use super::super::idt::{

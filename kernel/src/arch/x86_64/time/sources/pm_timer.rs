@@ -29,7 +29,6 @@
 //   Plus lent à lire que HPET (I/O port vs MMIO) mais toujours disponible.
 // ════════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
 use super::ClockSource;
@@ -39,14 +38,17 @@ use super::ClockSource;
 /// Fréquence PM Timer en Hz (ACPI spec, valeur exacte).
 pub const PM_TIMER_FREQ_HZ: u64 = 3_579_545;
 /// Fréquence en milliers de Hz pour calculs intermédiaires.
+#[allow(dead_code)]
 const PM_TIMER_FREQ_KHZ: u64 = 3_580; // arrondi pour guard
 
 /// Masque valeur 24-bit.
 const PM_TIMER_MASK_24:   u32 = 0x00FF_FFFF;
 /// Masque valeur 32-bit.
+#[allow(dead_code)]
 const PM_TIMER_MASK_32:   u32 = 0xFFFF_FFFF;
 
 /// Femtosecondes par tick PM Timer : 10^15 / 3_579_545 ≈ 279_365 fs/tick.
+#[allow(dead_code)]
 const PM_TIMER_FEMTOS_PER_TICK: u64 = 10_000_000_000_000_00 / PM_TIMER_FREQ_HZ;
 
 // ── État PM Timer ─────────────────────────────────────────────────────────────

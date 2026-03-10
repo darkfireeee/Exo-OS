@@ -17,7 +17,6 @@
 //   Si aucune règle ne matche → accès refusé.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

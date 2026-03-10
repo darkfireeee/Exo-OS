@@ -14,7 +14,6 @@
 //! 2. (Alternative) Réveiller depuis la boucle halt via IPI wakeup
 //!    si le CPU était juste en veille légère
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use super::super::cpu::tsc;

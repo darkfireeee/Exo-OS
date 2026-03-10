@@ -17,7 +17,6 @@
 //   DAG-01 : pas d'import de arch/, ipc/, process/
 // ==============================================================================
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};

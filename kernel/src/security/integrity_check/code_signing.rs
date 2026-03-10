@@ -15,7 +15,6 @@
 // RÈGLE CSIGN-03 : Chaque module a ses propres métadonnées vérifiées (name, version).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use super::super::crypto::ed25519::{ed25519_verify, Ed25519Error};
@@ -185,6 +184,7 @@ pub fn verify_module_signature(
 const MAX_LOADED_MODULES: usize = 64;
 
 struct LoadedModule {
+    #[allow(dead_code)]
     name_hash: [u8; 32],
     code_hash: [u8; 32],
 }

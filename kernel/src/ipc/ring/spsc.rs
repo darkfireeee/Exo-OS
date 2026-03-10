@@ -18,7 +18,6 @@
 // PERFORMANCE CIBLE : > 50 millions de msgs/s en SPSC par canal @ 3 GHz.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering, fence};
 use core::cell::UnsafeCell;

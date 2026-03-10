@@ -25,7 +25,6 @@
 //   Convergence si dérive = 5000 ppm : 10 cycles × 30s = 5 minutes
 // ════════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicI64, AtomicU64, AtomicBool, Ordering};
 
@@ -42,6 +41,7 @@ const FILTER_COEFF_MILLI: u64 = 750;
 
 /// Nombre de mesures consécutives concordantes requis pour activer la correction.
 /// Évite les corrections sur des mesures aberrantes isolées.
+#[allow(dead_code)]
 const CONVERGENCE_THRESHOLD: u32 = 2;
 
 // ── État PLL ──────────────────────────────────────────────────────────────────
@@ -51,8 +51,10 @@ struct PllState {
     /// Fréquence de référence courante (Hz) — base du calcul de correction.
     current_hz:       AtomicU64,
     /// Erreur de phase accumulée (en nano-ppm, signé) — intégration PI controller.
+    #[allow(dead_code)]
     phase_error_nppm: AtomicI64,
     /// Nombre de mesures concordantes consécutives observées.
+    #[allow(dead_code)]
     converge_count:   AtomicU64,
     /// Somme des N dernières mesures pour calcul de moyenne glissante.
     measure_sum:      AtomicU64,

@@ -10,7 +10,6 @@
 //! ## Précision cible
 //! Calibration à ±0.01% (< 100 ppm)
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 

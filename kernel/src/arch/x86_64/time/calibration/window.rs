@@ -22,7 +22,6 @@
 //   RDTSCP sérialise + fournit coreid → mesure ancrée au bon cœur.
 // ════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
 use super::super::sources::hpet as hpet_src;

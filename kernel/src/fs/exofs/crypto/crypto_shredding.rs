@@ -9,7 +9,6 @@
 //!
 //! OOM-02 / ARITH-02 / RECUR-01 respectés.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -330,6 +329,7 @@ use alloc::collections::BTreeMap;
 /// Entrée du planificateur de destruction.
 #[derive(Debug, Clone)]
 struct ShredEntry {
+    #[allow(dead_code)]
     blob_id:         u64,
     blob_size:       u64,
     policy:          ShredPolicy,
@@ -344,6 +344,7 @@ struct ShredEntry {
 /// quels blobs doivent être shredés.
 pub struct ShredScheduler {
     entries:   BTreeMap<u64, ShredEntry>,  // blob_id → entrée
+    #[allow(dead_code)]
     next_seq:  u64,
     max_items: usize,
 }

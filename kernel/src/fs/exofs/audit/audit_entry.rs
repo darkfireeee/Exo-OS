@@ -5,7 +5,6 @@
 //!  - ONDISK-03 : structure on-disk sans AtomicU64
 //!  - Zéro récursion (RECUR-01)
 
-#![allow(dead_code)]
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 

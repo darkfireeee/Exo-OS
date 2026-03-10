@@ -5,7 +5,6 @@
 //!
 //! OOM-02 / ARITH-02 / RECUR-01 respectés.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
@@ -83,6 +82,7 @@ struct StorageTable {
 }
 
 impl StorageTable {
+    #[allow(dead_code)]
     fn new() -> Self { Self { entries: BTreeMap::new() } }
 
     fn insert(&mut self, slot: KeySlotId, key: [u8; 32], kind: KeyKind) -> ExofsResult<()> {
@@ -131,6 +131,7 @@ impl StorageTable {
             .collect()
     }
 
+    #[allow(dead_code)]
     fn total(&self) -> usize { self.entries.len() }
 }
 

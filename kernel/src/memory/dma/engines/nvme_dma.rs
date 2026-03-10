@@ -3,7 +3,6 @@
 // Moteur DMA NVMe PCIe (NVM Express 1.4).
 // Ref : NVM Express Base Specification, Revision 1.4c.
 // Couche 0 — no_std, accès MMIO BAR0 via raw pointers.
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -15,6 +14,7 @@ use crate::memory::dma::stats::counters::{DMA_STATS, dma_stat_submit, dma_stat_c
 // REGISTRES CONTROLLER MMIO
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 mod regs {
     /// Controller Capabilities (64 bits).
     pub const CAP:    usize = 0x00;
@@ -163,11 +163,13 @@ const NVME_QUEUE_DEPTH: usize = 64;
 struct NvmeSQ {
     entries: [NvmeSqe; NVME_QUEUE_DEPTH],
     tail:    u16,
+    #[allow(dead_code)]
     head:    u16,
     count:   u16,
 }
 
 impl NvmeSQ {
+    #[allow(dead_code)]
     fn new() -> Self {
         NvmeSQ {
             entries: [NvmeSqe::default(); NVME_QUEUE_DEPTH],

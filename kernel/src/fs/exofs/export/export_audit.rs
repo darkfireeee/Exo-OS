@@ -13,7 +13,6 @@
 //! RECUR-01 : pas de récursion — boucles while/for.
 //! ARITH-02 : saturating_* / wrapping_* sur les compteurs.
 
-#![allow(dead_code)]
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};

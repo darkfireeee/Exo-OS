@@ -41,7 +41,6 @@
 //   Si le PIT ne répond pas après 200M iters → retourner None (QEMU TCG).
 // ════════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use super::ClockSource;
@@ -49,6 +48,7 @@ use super::ClockSource;
 // ── Ports PIT ─────────────────────────────────────────────────────────────────
 
 const PIT_CHANNEL0: u16 = 0x40; // Canal 0 (timer système, IRQ0)
+#[allow(dead_code)]
 const PIT_CHANNEL1: u16 = 0x41; // Canal 1 (DRAM refresh, ignoré)
 const PIT_CHANNEL2: u16 = 0x42; // Canal 2 (speaker / calibration)
 const PIT_CONTROL:  u16 = 0x43; // Register de contrôle (OCW)
@@ -76,6 +76,7 @@ pub const PIT_FREQ_HZ: u64 = 1_193_182;
 /// Ticks PIT pour ≈10ms de mesure (PIT_FREQ_HZ / 100 = 11931).
 const PIT_COUNT_10MS: u16 = 11_931;
 /// Timeout max pour attendre la fin du one-shot (iterations spin_loop).
+#[allow(dead_code)]
 const PIT_MAX_ITER: u32 = 200_000_000;
 
 // ── État PIT ──────────────────────────────────────────────────────────────────

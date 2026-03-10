@@ -9,7 +9,6 @@
 //   ARITH-02 : checked_add / saturating_* partout
 //   DAG-01   : pas d'import storage/, ipc/, process/, arch/
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::sync::atomic::{AtomicU32, AtomicU64};

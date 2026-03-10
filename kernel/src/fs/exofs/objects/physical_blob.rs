@@ -8,7 +8,6 @@
 //   ARITH-02  : checked_add pour tout calcul d'offset
 //   SEC-04    : jamais de contenu de blob Secret dans les stats/logs
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::mem;

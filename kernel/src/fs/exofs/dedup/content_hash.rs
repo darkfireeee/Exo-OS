@@ -5,7 +5,6 @@
 //!
 //! OOM-02 / ARITH-02 / RECUR-01 respectés.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
@@ -117,6 +116,7 @@ impl ContentHashResult {
 #[derive(Debug, Clone)]
 struct HashCacheEntry {
     result:    ContentHashResult,
+    #[allow(dead_code)]
     data_len:  usize,
     accesses:  u32,
 }

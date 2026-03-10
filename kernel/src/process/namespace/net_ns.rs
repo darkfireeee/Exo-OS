@@ -2,7 +2,6 @@
 //
 // Espace de noms réseau (CLONE_NEWNET) — Exo-OS Couche 1.5
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 

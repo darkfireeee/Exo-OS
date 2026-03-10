@@ -12,7 +12,6 @@
 //!
 //! OOM-02 / ARITH-02 / RECUR-01 respectés partout.
 
-#![allow(dead_code)]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Déclarations de sous-modules

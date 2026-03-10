@@ -12,7 +12,6 @@
 // join() est CONSIDÉRÉ INTERRUPTIBLE par les signaux.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
 use crate::process::core::tcb::ProcessThread;

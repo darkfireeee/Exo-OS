@@ -3,7 +3,6 @@
 //! Définit `CacheConfig`, `CachePolicy` et les seuils dynamiques (watermarks).
 //! Règles : ARITH-02 (arithmétique vérifiée), RECUR-01 (zéro récursion).
 
-#![allow(dead_code)]
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 

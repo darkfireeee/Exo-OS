@@ -4,7 +4,6 @@
 //!  - ARITH-02 : arithmétique vérifiée sur les poids
 //!  - ONDISK-03: aucun AtomicU64 dans les structs repr(C)
 
-#![allow(dead_code)]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RelationKind

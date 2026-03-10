@@ -12,22 +12,27 @@
 //! - Tags de longueur variable, alignés sur 8 octets
 //! - Tag type 0 = fin de liste
 
-#![allow(dead_code)]
 
 // ── Types de tags Multiboot2 ──────────────────────────────────────────────────
 
 const TAG_END:         u32 = 0;
 const TAG_CMDLINE:     u32 = 1;
 const TAG_BOOTLOADER:  u32 = 2;
+#[allow(dead_code)]
 const TAG_MODULE:      u32 = 3;
 const TAG_BASIC_MEMINFO:u32 = 4;
 const TAG_MMAP:        u32 = 6;
+#[allow(dead_code)]
 const TAG_FRAMEBUFFER: u32 = 8;
+#[allow(dead_code)]
 const TAG_ELF_SECTIONS:u32 = 9;
+#[allow(dead_code)]
 const TAG_APM_TABLE:   u32 = 10;
 const TAG_RSDP_V1:     u32 = 14;  // ACPI 1.0 RSDP
 const TAG_RSDP_V2:     u32 = 15;  // ACPI 2.0+ RSDP
+#[allow(dead_code)]
 const TAG_EFI_MMAP:    u32 = 17;
+#[allow(dead_code)]
 const TAG_EFI64_IMAGE: u32 = 18;
 
 // ── Memory map entry types ────────────────────────────────────────────────────

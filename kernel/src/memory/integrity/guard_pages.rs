@@ -16,7 +16,6 @@
 //
 // COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
@@ -107,6 +106,7 @@ pub struct GuardRegion {
 }
 
 impl GuardRegion {
+    #[allow(dead_code)]
     const fn inactive() -> Self {
         Self {
             low_guard:    0,

@@ -10,7 +10,6 @@
 //! - INDEX (base + 0x00) : numéro de registre
 //! - DATA  (base + 0x10) : données 32 bits
 
-#![allow(dead_code)]
 
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicUsize, AtomicU8, Ordering};
@@ -27,6 +26,7 @@ const IOAPIC_IOWIN:    u32 = 0x10;
 /// Registre IOREGSEL : numéros de registres internes
 const IOAPIC_ID:    u8 = 0x00;
 const IOAPIC_VER:   u8 = 0x01;
+#[allow(dead_code)]
 const IOAPIC_ARB:   u8 = 0x02;
 const IOAPIC_REDTBL:u8 = 0x10; // Début table de redirection (24 entrées × 2 registres)
 
@@ -51,6 +51,7 @@ pub const IOAPIC_DEST_LOGICAL:  u64 = 1 << 11;
 
 const MAX_IOAPICS: usize = 8;
 
+#[allow(dead_code)]
 struct IoApicEntry {
     base:          usize,
     gsi_base:      u32,

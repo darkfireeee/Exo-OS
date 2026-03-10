@@ -3,7 +3,6 @@
 // Moteur DMA SATA AHCI (Advanced Host Controller Interface).
 // Ref : AHCI 1.3.1 Specification.
 // Couche 0 — no_std, accès MMIO uniquement via raw pointers.
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -15,6 +14,7 @@ use crate::memory::dma::stats::counters::{DMA_STATS, dma_stat_submit, dma_stat_c
 // REGISTRES AHCI HBA
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 mod hba_regs {
     /// Host Capabilities.
     pub const CAP:    usize = 0x00;
@@ -32,6 +32,7 @@ mod hba_regs {
     pub const PORT_STRIDE: usize = 0x80;
 }
 
+#[allow(dead_code)]
 mod port_regs {
     /// Command List Base Address (low 32 bits).
     pub const CLB:   usize = 0x00;
@@ -238,6 +239,7 @@ struct AhciState {
 }
 
 impl AhciState {
+    #[allow(dead_code)]
     fn new() -> Self {
         // SAFETY: tous les champs représentés avec 0.
         unsafe {

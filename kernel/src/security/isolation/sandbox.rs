@@ -16,7 +16,6 @@
 // RÈGLE SAND-03 : Héritage : le fils reçoit une policy ⊆ père.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

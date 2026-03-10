@@ -19,7 +19,6 @@
 //   5. KernelAddressSpace::init()      — PML4 kernel
 //   6. memory_iface::init_memory_integration() — IPI TLB sender
 
-#![allow(dead_code)]
 
 use crate::arch::x86_64::boot::multiboot2::{MmapEntry, Multiboot2Info, MMAP_AVAILABLE};
 use crate::arch::x86_64::boot::uefi::UefiMemoryMap;

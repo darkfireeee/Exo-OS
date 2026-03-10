@@ -26,8 +26,6 @@
 //! Activée via la feature `linux_compat` (par défaut ON pour Exo-OS).
 //! Peut être désactivée pour un kernel minimal (test ou embedded).
 
-#![allow(dead_code)]
-
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::syscall::numbers::*;
 

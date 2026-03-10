@@ -13,7 +13,6 @@
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 //! SAFETY   : chaque bloc `unsafe` est documenté avec sa justification.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

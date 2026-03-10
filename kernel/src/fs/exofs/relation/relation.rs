@@ -5,7 +5,6 @@
 //!  - HDR-03   : magic vérifié en premier lors du parse on-disk
 //!  - ARITH-02 : arithmétique vérifiée sur toutes les offsets
 
-#![allow(dead_code)]
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
 use super::relation_type::{RelationKind, RelationType, RelationWeight, RelationFlags};

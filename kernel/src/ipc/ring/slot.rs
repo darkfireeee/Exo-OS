@@ -15,7 +15,6 @@
 // attend seq == pos + 1.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::mem::MaybeUninit;

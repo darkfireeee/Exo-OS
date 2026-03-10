@@ -7,7 +7,6 @@
 //   NO-STD-07 : pas de HashMap — BTreeMap ou tableau fixe
 //   SEC-04    : jamais de contenu secret dans dumps / Display
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::mem;

@@ -13,7 +13,6 @@
 //   déclenche une alerte immédiate vers le security monitor (Ring 1).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use super::context::SecurityContext;
 use super::labels::SecurityLabel;

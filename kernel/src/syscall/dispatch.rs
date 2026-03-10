@@ -30,13 +30,12 @@
 //! ## RÈGLE CONTRAT UNSAFE (regle_bonus.md)
 //! Tout `unsafe {}` est précédé d'un commentaire `// SAFETY:`.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::arch::x86_64::cpu::tsc::read_tsc;
 use crate::arch::x86_64::syscall::SyscallFrame;
-use crate::syscall::numbers::{SYSCALL_TABLE_SIZE, ENOSYS, is_valid_syscall};
+use crate::syscall::numbers::{ENOSYS, is_valid_syscall};
 use crate::syscall::fast_path::try_fast_path;
 use crate::syscall::table::get_handler;
 use crate::syscall::compat::linux::translate_linux_nr;

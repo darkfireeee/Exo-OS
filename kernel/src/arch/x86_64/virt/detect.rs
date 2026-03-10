@@ -9,7 +9,6 @@
 //!   - "XenVMMXenVMM" = Xen
 //!   - "VBoxVBoxVBox" = VirtualBox
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -117,6 +116,7 @@ fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
 const KVM_CPUID_FEATURES: u32 = 0x4000_0001;
 
 // Bits des features KVM
+#[allow(dead_code)]
 const KVM_FEATURE_CLOCKSOURCE2:   u32 = 1 << 3;
 const KVM_FEATURE_STEAL_TIME:     u32 = 1 << 5;
 const KVM_FEATURE_PV_EOI:         u32 = 1 << 6;

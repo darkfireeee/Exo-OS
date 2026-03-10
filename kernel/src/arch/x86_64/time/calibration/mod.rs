@@ -43,7 +43,6 @@
 //   ```
 // ════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 pub mod window;
 pub mod cpuid_nominal;
@@ -583,6 +582,7 @@ fn e9_tag(tag: &[u8]) {
 /// Compatibilité avec l'ancien code qui appelait `debug_log_source(tag)`.
 /// Redirige vers `e9_tag()`.
 #[inline(always)]
+#[allow(dead_code)]
 fn debug_log_source(tag: &[u8]) {
     e9_tag(tag);
 }

@@ -4,7 +4,6 @@
 //!  - OOM-02   : try_reserve avant tout push
 //!  - ARITH-02 : arithmétique vérifiée
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -120,6 +119,7 @@ pub struct BatchStats {
 }
 
 impl BatchStats {
+    #[allow(dead_code)]
     fn record(&mut self, res: &BatchResult) {
         self.total_batches  = self.total_batches.wrapping_add(1);
         self.total_inserted = self.total_inserted.wrapping_add(res.inserted as u64);

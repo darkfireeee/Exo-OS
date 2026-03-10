@@ -3,7 +3,6 @@
 //! Compteurs atomiques par algorithme, globalaux, et snapshots point-in-time.
 //! Les compteurs AtomicU64 sont en mémoire uniquement (ONDISK-03 : interdit dans repr(C)).
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

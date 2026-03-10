@@ -20,7 +20,6 @@
 // COUCHE : ipc/ dépend de scheduler/ (autorisé — voir DOC5).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::ptr::NonNull;
 

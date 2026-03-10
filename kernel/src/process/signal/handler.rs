@@ -14,7 +14,6 @@
 //      +128 : UContext      (ucontext_t, 936 octets)
 //      +... : restorer stub (8 octets optionnel)
 
-#![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
 use super::delivery::SyscallFrame;

@@ -35,7 +35,6 @@
 // ## Précision : ±0.01% si cristal référence fourni, ±1% si ECX=0 et fallback 24 MHz
 // ════════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 // ── Constantes cristaux de référence Intel ────────────────────────────────────
 

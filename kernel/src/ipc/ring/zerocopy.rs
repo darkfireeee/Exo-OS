@@ -23,7 +23,6 @@
 //   • La page est immutable côté consommateur (R/O mapping).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 pub use crate::ipc::core::transfer::ZeroCopyRef;

@@ -22,12 +22,9 @@
 //! ## RÈGLE CONTRAT UNSAFE (regle_bonus.md)
 //! Tout `unsafe {}` est précédé d'un commentaire `// SAFETY:`.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use core::mem::MaybeUninit;
 
-use crate::arch::x86_64::cpu::tsc::read_tsc;
 use crate::arch::x86_64::smp::percpu::current_cpu_id;
 use crate::scheduler::core::task::{ThreadControlBlock, ThreadId, ProcessId};
 use crate::scheduler::timer::clock::monotonic_ns;
@@ -38,6 +35,7 @@ use crate::scheduler::timer::clock::monotonic_ns;
 
 /// Masque RFLAGS — seuls les flags autorisés sont restaurables depuis userspace.
 /// IF(9), DF(10), TF(8), AC(18) sont filtrés par SFMASK (voir arch/syscall.rs).
+#[allow(dead_code)]
 const RFLAGS_USER_MASK: u64 = 0x003F_FFFF;
 
 /// POSIX CLOCK IDs

@@ -15,7 +15,6 @@
 // RÈGLE RUNTIME-03 : Les adresses .text/.rodata viennent du linker script (externs).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use super::super::crypto::blake3::blake3_hash;

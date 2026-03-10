@@ -29,7 +29,6 @@
 //   Disponible depuis Intel Nehalem / AMD Barcelona.
 // ════════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use super::ClockSource;
@@ -37,10 +36,12 @@ use super::ClockSource;
 // ── MSR addresses ────────────────────────────────────────────────────────────
 
 const MSR_IA32_TSC_ADJUST: u32 = 0x0000_003B;
+#[allow(dead_code)]
 const MSR_IA32_TSC_AUX:    u32 = 0xC000_0103;
 /// Max leaf pour CPUID standard (feuille 0).
 const CPUID_MAX_STD_LEAF:  u32 = 0x0000_0000;
 /// CPUID extended features.
+#[allow(dead_code)]
 const CPUID_EXTENDED_FEAT: u32 = 0x8000_0007;
 
 // ── Capacités TSC ─────────────────────────────────────────────────────────────

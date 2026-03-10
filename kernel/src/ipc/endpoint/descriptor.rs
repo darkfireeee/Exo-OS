@@ -14,7 +14,6 @@
 // RÈGLE : zéro allocation heap ici — structures à taille fixe (Zone NO-ALLOC).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use crate::ipc::core::types::{EndpointId, IpcError};

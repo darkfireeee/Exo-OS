@@ -10,10 +10,8 @@
 //! - **ARITH-02** : `checked_add` pour les compteurs.
 //! - **WRITE-02** : vérification des écritures dans les sous-modules.
 
-#![allow(dead_code)]
 
 extern crate alloc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId};
 use super::checkpoint::{CHECKPOINT_STORE, RecoveryPhase};
@@ -123,6 +121,7 @@ impl BootRecoveryResult {
 
 /// Avancement interne de la séquence boot recovery (pour checkpoints progressifs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 enum BootStep {
     Init,
     SlotSelected,

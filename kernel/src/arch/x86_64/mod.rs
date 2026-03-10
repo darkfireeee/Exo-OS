@@ -3,7 +3,6 @@
 //! Point d'entrée de toute la logique spécifique à x86_64.
 //! Exporte les primitives utilisées par les couches supérieures.
 
-#![allow(dead_code)]
 
 pub mod acpi;
 pub mod apic;
@@ -43,6 +42,7 @@ pub const PAGE_TABLE_LEVELS: usize = 4;
 
 // ── État global de l'architecture ────────────────────────────────────────────
 
+#[allow(dead_code)]
 static ARCH_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Collecte les informations d'architecture post-init

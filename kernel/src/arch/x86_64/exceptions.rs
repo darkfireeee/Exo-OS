@@ -16,7 +16,6 @@
 //! 5. SWAPGS si Ring 3
 //! 6. IRETQ
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

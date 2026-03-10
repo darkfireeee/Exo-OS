@@ -16,7 +16,6 @@
 //   via le trait abstrait AddressSpaceCloner (injection de dépendance).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
 use alloc::boxed::Box;

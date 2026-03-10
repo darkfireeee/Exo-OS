@@ -5,7 +5,6 @@
 //!
 //! OOM-02 / ARITH-02 / RECUR-01 respectés.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

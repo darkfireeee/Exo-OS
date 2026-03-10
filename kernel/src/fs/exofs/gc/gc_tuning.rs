@@ -14,7 +14,6 @@
 //   ARITH-02 : saturation sur tous les calculs
 // ==============================================================================
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};

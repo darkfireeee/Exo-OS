@@ -15,7 +15,6 @@
 //   6. Enqueuer dans la run queue.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering;

@@ -41,7 +41,6 @@
 //!   chaque `unsafe` précédé de `// SAFETY:`.
 //! - **NO-ALLOC** sur les chemins chauds (`fast_path`, dispatch fast branch).
 
-#![allow(unused_imports)]
 
 pub mod numbers;
 pub mod validation;

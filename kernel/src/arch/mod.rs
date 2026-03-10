@@ -16,7 +16,6 @@
 //! - arch/ ne contient PAS la logique d'état scheduler (→ scheduler/fpu/)
 //! - Tout bloc `unsafe` doit être précédé d'un commentaire `// SAFETY: ...`
 
-#![allow(dead_code)]
 
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;

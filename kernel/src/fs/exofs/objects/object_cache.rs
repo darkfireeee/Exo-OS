@@ -8,7 +8,6 @@
 //   DAG-01  : pas d'import storage/, ipc/, process/, arch/
 //   LOCK-04 : SpinLock léger — pas d'I/O dans la section critique
 
-#![allow(dead_code)]
 
 use core::fmt;
 use alloc::collections::BTreeMap;

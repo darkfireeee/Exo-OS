@@ -27,7 +27,6 @@
 //                jamais recalculée après. La vérification compare.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};

@@ -7,7 +7,6 @@
 //! Les primitives ci-dessous permettent de compiler le kernel pour aarch64
 //! sans erreur de symbole manquant.
 
-#![allow(dead_code)]
 
 // ── Primitives de base ────────────────────────────────────────────────────────
 

@@ -2,7 +2,6 @@
 //
 // Moteur DMA VirtIO (virtqueue split ring, spécification VirtIO 1.1, §2.6).
 // Couche 0 — no_std, aucun heap, statique uniquement.
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -18,6 +17,7 @@ use crate::memory::dma::stats::counters::{DMA_STATS, dma_stat_submit, dma_stat_c
 pub const VIRTQ_SIZE: usize = 256;
 
 // Flags de descripteur (VirtIO §2.6.5).
+#[allow(dead_code)]
 mod desc_flags {
     /// Descripteur en lecture seule pour le device (write = 0 par défaut).
     pub const NEXT:     u16 = 1 << 0;  // Chaîn next.
@@ -26,6 +26,7 @@ mod desc_flags {
 }
 
 // Flags de l'available ring.
+#[allow(dead_code)]
 mod avail_flags {
     pub const NO_INTERRUPT: u16 = 1;
 }
@@ -97,6 +98,7 @@ struct VirtqState {
 }
 
 impl VirtqState {
+    #[allow(dead_code)]
     fn new() -> Self {
         let avail = VirtqAvail {
             flags: 0, idx: 0,
@@ -191,6 +193,7 @@ impl VirtqState {
 // MMIO VIRTIO
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 mod virtio_mmio {
     /// Magic Value (0x74726976 = "virt").
     pub const MAGIC:         usize = 0x000;
@@ -221,6 +224,7 @@ mod virtio_mmio {
 }
 
 /// Bits de status (§3.1).
+#[allow(dead_code)]
 mod status {
     pub const ACKNOWLEDGE: u32 = 1;
     pub const DRIVER:      u32 = 2;

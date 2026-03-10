@@ -12,7 +12,6 @@
 //
 // Couche 0 : aucune dépendance scheduler/process/ipc/fs.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 

@@ -19,7 +19,6 @@
 //   DAG-01 : pas d'import de ipc/, process/, arch/
 // ==============================================================================
 
-#![allow(dead_code)]
 
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;

@@ -16,7 +16,6 @@
 // RÈGLE PLEDGE-03 : Le processus init ne peut pas appeler pledge().
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use super::sandbox::{SandboxPolicy, syscall_nr};

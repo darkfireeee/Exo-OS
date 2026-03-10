@@ -11,7 +11,6 @@
 //! - ARITH-02 : arithmétique wrapping/checked.
 //! - RECUR-01 : aucune récursivité.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};

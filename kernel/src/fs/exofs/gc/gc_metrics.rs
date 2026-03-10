@@ -13,7 +13,6 @@
 //   ARITH-02 : saturating_add partout
 // ==============================================================================
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};

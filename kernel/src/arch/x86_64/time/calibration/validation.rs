@@ -36,7 +36,6 @@
 //   RÈGLE CAL-VALIDATE-04 : plage absolue [500 MHz, 10 GHz] — rejet immédiat
 // ════════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use super::cpuid_nominal;

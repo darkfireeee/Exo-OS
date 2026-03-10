@@ -9,7 +9,6 @@
 //! RÈGLE ARITH-02 : arithmétique checked/saturating.
 //! RÈGLE RECUR-01 : aucune récursivité.
 
-#![allow(dead_code)]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes

@@ -15,7 +15,6 @@
 //     enregistrés as handle — pas de type concret fs/.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, AtomicPtr, Ordering};
 use alloc::vec::Vec;

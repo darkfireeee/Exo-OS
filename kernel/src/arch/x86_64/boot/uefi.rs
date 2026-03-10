@@ -4,7 +4,6 @@
 //! comme GRUB2 EFI ou Limine). Dans ce cas, la memory map est fournie par
 //! ExitBootServices() sous forme d'une table de descripteurs EFI.
 
-#![allow(dead_code)]
 
 // ── Types mémoire EFI ─────────────────────────────────────────────────────────
 

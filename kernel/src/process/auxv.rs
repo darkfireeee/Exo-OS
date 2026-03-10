@@ -16,7 +16,6 @@
 //! AT_SIGNAL_TCB (51) doit être inclus pour que exo-rt puisse localiser le
 //! SignalTcb sans adresse fixe (SIG-18 : jamais d'adresse fixe, ASLR).
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 

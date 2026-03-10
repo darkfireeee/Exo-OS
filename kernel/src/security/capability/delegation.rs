@@ -21,7 +21,6 @@
 //   de regrantiquer à son tour. Sans GRANT, la chaîne s'arrête.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use super::token::{CapToken, ObjectId};
 use super::rights::Rights;

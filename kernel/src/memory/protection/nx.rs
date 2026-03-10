@@ -10,7 +10,6 @@
 //   Tous les accès MSRL passent par `asm!` inline.
 //   Pas de std ; spin = "0.9" uniquement pour les locks.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 

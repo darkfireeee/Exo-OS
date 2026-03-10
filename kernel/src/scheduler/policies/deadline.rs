@@ -17,7 +17,6 @@
 // La run queue EDF trie par `deadline_abs` croissant.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::scheduler::core::task::{ThreadControlBlock, DeadlineParams, SchedPolicy};

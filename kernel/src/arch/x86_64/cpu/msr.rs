@@ -7,7 +7,6 @@
 //! Ces fonctions sont `unsafe` — l'appelant garantit que le MSR existe
 //! sur le CPU cible et que la valeur écrite ne viole aucun invariant.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
 

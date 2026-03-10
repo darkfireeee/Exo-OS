@@ -8,7 +8,6 @@
 //!   ARITH-02 : checked_add pour timestamps
 //!   OOM-02   : try_reserve avant chaque push
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

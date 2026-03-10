@@ -4,7 +4,6 @@
 //!  - RECUR-01 : aucune récursion
 //!  - OOM-02   : try_reserve avant tout push
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -34,6 +33,7 @@ impl QueryResult {
         QueryResult { relations: rels, n_total: n, truncated: false }
     }
 
+    #[allow(dead_code)]
     fn empty() -> Self { Self::default() }
 
     /// Filtre les relations du résultat selon un prédicat.

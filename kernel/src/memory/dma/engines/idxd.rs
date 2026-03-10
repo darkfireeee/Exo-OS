@@ -3,7 +3,6 @@
 // Intel Data Streaming Accelerator (DSA) / Intel Analytics Accelerator (IAX).
 // Ref : Intel Architecture Specification for Intel DSA, Document 341204.
 // Couche 0 — no_std kernel, accès MMIO via raw pointers + ENQCMD instruction.
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -15,6 +14,7 @@ use crate::memory::dma::stats::counters::{DMA_STATS, dma_stat_submit, dma_stat_c
 // REGISTRES MMIO IDXD
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 mod regs {
     /// Registre GCAP — capacités globales (u64).
     pub const GCAP:       usize = 0x00;
@@ -37,6 +37,7 @@ mod regs {
 }
 
 /// Bits GCAP.
+#[allow(dead_code)]
 mod gcap {
     pub const MAX_WQS_MASK:   u64 = 0xF;       // Bits 3:0
     pub const MAX_ENG_MASK:   u64 = 0xF << 4;  // Bits 7:4
@@ -193,6 +194,7 @@ impl IdxdWqState {
     }
 
     fn is_full(&self) -> bool { self.count as usize >= IDXD_WQ_DEPTH }
+    #[allow(dead_code)]
     fn available(&self) -> usize { IDXD_WQ_DEPTH - self.count as usize }
 }
 

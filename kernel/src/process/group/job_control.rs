@@ -4,7 +4,6 @@
 // Contrôle de tache POSIX (tcsetpgrp / SIGTTIN / SIGTTOU) — Exo-OS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use crate::process::core::pid::Pid;
@@ -64,6 +63,7 @@ impl CttyTable {
         None
     }
 
+    #[allow(dead_code)]
     fn find_free(&self) -> Option<&ControlTerminal> {
         for slot in &self.slots {
             if slot.owner_sid.load(Ordering::Acquire) == 0 {

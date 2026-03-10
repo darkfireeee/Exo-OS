@@ -20,7 +20,6 @@
 //! Le switch CR3 se fait dans le code ASM de bas niveau (switch_asm.s).
 //! syscall.rs gère la logique Rust après le passage en mode kernel.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -276,6 +275,7 @@ fn is_canonical(addr: u64) -> bool {
 
 /// Table de dispatch syscall
 /// Indexée par numéro syscall, retourne le handler ou un défaut
+#[allow(dead_code)]
 type SyscallFn = fn(u64, u64, u64, u64, u64, u64) -> i64;
 
 /// Handler appelé depuis l'ASM avec la SyscallFrame

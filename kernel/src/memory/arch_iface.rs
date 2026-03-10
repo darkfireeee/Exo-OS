@@ -25,7 +25,6 @@
 //   MEM-02 : EmergencyPool initialisé EN PREMIER (avant cet appel).
 //   MEM-04 : free_pages() n'est JAMAIS appelé avant TLB shootdown complet.
 
-#![allow(dead_code)]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES D'INTÉGRATION

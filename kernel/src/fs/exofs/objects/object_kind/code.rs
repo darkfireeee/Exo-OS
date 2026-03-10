@@ -8,7 +8,6 @@
 //   ONDISK-01: CodeDescriptorDisk #[repr(C, packed)]
 //   ARITH-02 : checked_add / saturating_* partout
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::mem;

@@ -16,7 +16,6 @@
 //   ARITH-02 : saturating_*
 // ==============================================================================
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};

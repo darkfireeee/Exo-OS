@@ -6,7 +6,6 @@
 //   OOM-02    : try_reserve(1) avant tout push
 //   RECUR-01  : itératif uniquement, jamais de récursion
 
-#![allow(dead_code)]
 
 use core::fmt;
 use alloc::vec::Vec;

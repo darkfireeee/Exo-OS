@@ -7,7 +7,6 @@
 //! Les registres LAPIC sont accédés via MSR 0x800–0x8FF.
 //! Chaque registre MMIO offset 0xXY0 devient MSR 0x800 + (0xXY0 >> 4).
 
-#![allow(dead_code)]
 
 use super::super::cpu::msr;
 

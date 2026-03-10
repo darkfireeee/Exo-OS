@@ -42,7 +42,6 @@
 //! | **BACKUP-01** | 3 miroirs superblock écrits à chaque commit |
 //! | **BACKUP-02** | Recovery sélectionne le miroir avec epoch_current max |
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

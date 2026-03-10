@@ -23,7 +23,6 @@
 // résident EXCLUSIVEMENT dans memory::utils::futex_table.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -102,6 +101,7 @@ fn ipc_futex_wake_fn(tid: u64, _code: i32) {
 }
 
 /// No-op de réveil (avant installation des hooks ou pour les callers sans scheduler).
+#[allow(dead_code)]
 fn nop_wake_fn(_tid: u64, _code: i32) {}
 
 // ─────────────────────────────────────────────────────────────────────────────

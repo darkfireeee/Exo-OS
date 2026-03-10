@@ -9,7 +9,6 @@
 //! 2. Lire la version : ACPI 1.0 → RSDT (32 bits), ACPI 2.0+ → XSDT (64 bits)
 //! 3. Itérer les entrées pour localiser chaque table par signature 4-octet
 
-#![allow(dead_code)]
 
 use core::ptr::read_volatile;
 use core::sync::atomic::{AtomicU64, Ordering};

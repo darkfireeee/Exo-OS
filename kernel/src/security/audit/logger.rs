@@ -16,7 +16,6 @@
 // RÈGLE AUDIT-03 : Le buffer plein → événements les plus anciens écrasés (ring).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 

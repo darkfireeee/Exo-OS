@@ -14,7 +14,6 @@
 // RÈGLE : zéro allocation heap — canaux créés depuis un pool statique.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use crate::ipc::core::types::{EndpointId, ChannelId, Cookie, IpcError, alloc_channel_id};

@@ -9,7 +9,6 @@
 //!   WRITE-02 : vérifier bytes_written == expected
 //!   OOM-02   : try_reserve avant chaque push
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

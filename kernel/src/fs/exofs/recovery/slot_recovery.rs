@@ -11,7 +11,6 @@
 //! - **ARITH-02** : `checked_add` pour les calculs d'offset.
 //! - **WRITE-02** : vérification `bytes_written == 128` après écriture slot.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -224,6 +223,7 @@ struct SlotCandidate {
     valid:  bool,
     slot_id: SlotId,
     header: SlotHeaderDisk,
+    #[allow(dead_code)]
     lba:    u64,
 }
 

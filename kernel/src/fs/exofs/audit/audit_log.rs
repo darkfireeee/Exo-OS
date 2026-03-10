@@ -10,7 +10,6 @@
 //!  - ARITH-02  : arithmetic overflow via wrapping
 //!  - RECUR-01  : zéro récursion
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use super::audit_entry::{AuditEntry, AuditResult, AuditSeverity, AUDIT_ENTRY_SIZE};

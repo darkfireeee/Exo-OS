@@ -6,7 +6,6 @@
 //   SEC-04    : jamais de contenu secret dans les logs/stats
 //   ARITH-02  : checked_add / saturating_*
 
-#![allow(dead_code)]
 
 use core::fmt;
 use alloc::sync::Arc;

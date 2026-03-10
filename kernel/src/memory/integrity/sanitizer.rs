@@ -19,7 +19,6 @@
 //
 // COUCHE 0 — pas de dépendance scheduler/process/ipc/fs.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -35,6 +34,7 @@ const KASAN_HEAP_SIZE: u64 = 256 * 1024 * 1024 * 1024;
 /// Placée juste avant le heap pour un calcul d'adresse sans division à runtime.
 const KASAN_SHADOW_OFFSET: u64 = KERNEL_HEAP_START.as_u64().wrapping_sub(KASAN_HEAP_SIZE / 8);
 /// Taille shadow totale : 32 GiB.
+#[allow(dead_code)]
 const KASAN_SHADOW_SIZE: u64 = KASAN_HEAP_SIZE / 8;
 
 // ─────────────────────────────────────────────────────────────────────────────

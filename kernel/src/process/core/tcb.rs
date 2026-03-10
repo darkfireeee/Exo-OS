@@ -17,7 +17,6 @@
 //   • PROC-04 : signal_pending est ÉCRIT ici (process/signal/), LU par scheduler.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, AtomicBool};
 use alloc::boxed::Box;

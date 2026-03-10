@@ -11,16 +11,14 @@
 //! - **ARITH-02** : `checked_add` / `checked_mul` sur tous les calculs d offset.
 //! - **WRITE-02** : vérification que `bytes_written == expected` après chaque écriture.
 
-#![allow(dead_code)]
 
 extern crate alloc;
-use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};
 use super::boot_recovery::BlockDevice;
-use super::fsck_phase2::{BlobRefCounter, AllocEntry, Phase2Report};
+use super::fsck_phase2::{AllocEntry, Phase2Report};
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 
@@ -499,6 +497,7 @@ impl FsckPhase4 {
 // ── Type local BlobId pour la vérification hash ───────────────────────────────
 
 /// Wrapper léger autour d un identifiant de blob.
+#[allow(dead_code)]
 struct BlobId(pub [u8; 32]);
 
 // Extension de Phase2Report pour l itération des entrées d allocation.

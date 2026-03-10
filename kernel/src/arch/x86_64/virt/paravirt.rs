@@ -3,7 +3,6 @@
 //! Remplace certaines opérations coûteuses (EOI, TLB flush) par des versions
 //! paravirtualisées plus efficaces quand disponibles (principalement KVM).
 
-#![allow(dead_code)]
 
 use super::detect::{hypervisor_type, HypervisorType, kvm_has_pv_eoi, kvm_has_pv_tlb_flush};
 use super::super::cpu::msr;

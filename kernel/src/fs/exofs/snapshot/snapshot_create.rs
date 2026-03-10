@@ -10,7 +10,6 @@
 //!   ARITH-02 : checked_add / checked_mul pour tailles
 //!   WRITE-02 : vérifier bytes_written == expected après chaque écriture
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

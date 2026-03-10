@@ -8,7 +8,6 @@
 //! - Les accès ultérieurs lisent depuis `CPU_FEATURES` (static)
 //! - Aucune allocation dynamique
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -73,34 +72,50 @@ pub struct CpuFeatureFlags {
 const LEAF1_ECX_SSE3:    u32 = 1 << 0;
 const LEAF1_ECX_PCLMUL:  u32 = 1 << 1;
 const LEAF1_ECX_SSSE3:   u32 = 1 << 9;
+#[allow(dead_code)]
 const LEAF1_ECX_FMA:     u32 = 1 << 12;
 const LEAF1_ECX_SSE41:   u32 = 1 << 19;
 const LEAF1_ECX_SSE42:   u32 = 1 << 20;
 const LEAF1_ECX_X2APIC:  u32 = 1 << 21;
+#[allow(dead_code)]
 const LEAF1_ECX_MOVBE:   u32 = 1 << 22;
+#[allow(dead_code)]
 const LEAF1_ECX_POPCNT:  u32 = 1 << 23;
 const LEAF1_ECX_TSCD:    u32 = 1 << 24; // TSC deadline
 const LEAF1_ECX_AES:     u32 = 1 << 25;
 const LEAF1_ECX_XSAVE:   u32 = 1 << 26;
+#[allow(dead_code)]
 const LEAF1_ECX_OSXSAVE: u32 = 1 << 27;
 const LEAF1_ECX_AVX:     u32 = 1 << 28;
+#[allow(dead_code)]
 const LEAF1_ECX_F16C:    u32 = 1 << 29;
 const LEAF1_ECX_RDRAND:  u32 = 1 << 30;
 const LEAF1_ECX_HYPERVISOR: u32 = 1 << 31;
 
 // ── Bits d'intérêt dans Leaf 1 EDX ───────────────────────────────────────────
 const LEAF1_EDX_FPU:     u32 = 1 << 0;
+#[allow(dead_code)]
 const LEAF1_EDX_MSR:     u32 = 1 << 5;
+#[allow(dead_code)]
 const LEAF1_EDX_PAE:     u32 = 1 << 6;
 const LEAF1_EDX_APIC:    u32 = 1 << 9;
+#[allow(dead_code)]
 const LEAF1_EDX_SEP:     u32 = 1 << 11; // SYSENTER/SYSEXIT
+#[allow(dead_code)]
 const LEAF1_EDX_MTRR:    u32 = 1 << 12;
+#[allow(dead_code)]
 const LEAF1_EDX_PGE:     u32 = 1 << 13; // Global pages
+#[allow(dead_code)]
 const LEAF1_EDX_MCA:     u32 = 1 << 14;
+#[allow(dead_code)]
 const LEAF1_EDX_CMOV:    u32 = 1 << 15;
+#[allow(dead_code)]
 const LEAF1_EDX_PAT:     u32 = 1 << 16;
+#[allow(dead_code)]
 const LEAF1_EDX_CLFLUSH: u32 = 1 << 19;
+#[allow(dead_code)]
 const LEAF1_EDX_DS:      u32 = 1 << 21;
+#[allow(dead_code)]
 const LEAF1_EDX_MMX:     u32 = 1 << 23;
 const LEAF1_EDX_FXSR:    u32 = 1 << 24;
 const LEAF1_EDX_SSE:     u32 = 1 << 25;
@@ -109,30 +124,46 @@ const LEAF1_EDX_HTT:     u32 = 1 << 28; // Hyper-Threading
 
 // ── Bits d'intérêt dans Leaf 7 EBX ───────────────────────────────────────────
 const LEAF7_EBX_FSGSBASE: u32 = 1 << 0;
+#[allow(dead_code)]
 const LEAF7_EBX_TSC_ADJ:  u32 = 1 << 1;
+#[allow(dead_code)]
 const LEAF7_EBX_SGX:       u32 = 1 << 2;
+#[allow(dead_code)]
 const LEAF7_EBX_BMI1:      u32 = 1 << 3;
+#[allow(dead_code)]
 const LEAF7_EBX_HLE:       u32 = 1 << 4;
 const LEAF7_EBX_AVX2:      u32 = 1 << 5;
 const LEAF7_EBX_SMEP:      u32 = 1 << 7;
+#[allow(dead_code)]
 const LEAF7_EBX_BMI2:      u32 = 1 << 8;
+#[allow(dead_code)]
 const LEAF7_EBX_ERMS:      u32 = 1 << 9;
 const LEAF7_EBX_INVPCID:   u32 = 1 << 10;
+#[allow(dead_code)]
 const LEAF7_EBX_RTM:       u32 = 1 << 11;
+#[allow(dead_code)]
 const LEAF7_EBX_MPX:       u32 = 1 << 14;
 const LEAF7_EBX_AVX512F:   u32 = 1 << 16;
+#[allow(dead_code)]
 const LEAF7_EBX_AVX512DQ:  u32 = 1 << 17;
 const LEAF7_EBX_RDSEED:    u32 = 1 << 18;
+#[allow(dead_code)]
 const LEAF7_EBX_ADX:       u32 = 1 << 19;
 const LEAF7_EBX_SMAP:      u32 = 1 << 20;
+#[allow(dead_code)]
 const LEAF7_EBX_AVX512IFMA:u32 = 1 << 21;
 const LEAF7_EBX_CLFLUSHOPT:u32 = 1 << 23;
 const LEAF7_EBX_CLWB:      u32 = 1 << 24;
+#[allow(dead_code)]
 const LEAF7_EBX_AVX512PF:  u32 = 1 << 26;
+#[allow(dead_code)]
 const LEAF7_EBX_AVX512ER:  u32 = 1 << 27;
+#[allow(dead_code)]
 const LEAF7_EBX_AVX512CD:  u32 = 1 << 28;
 const LEAF7_EBX_SHA:       u32 = 1 << 29;
+#[allow(dead_code)]
 const LEAF7_EBX_AVX512BW:  u32 = 1 << 30;
+#[allow(dead_code)]
 const LEAF7_EBX_AVX512VL:  u32 = 1 << 31;
 
 // ── Bits d'intérêt dans Leaf 1 ECX (suite) ─────────────────────────────────
@@ -141,7 +172,9 @@ const LEAF1_ECX_PCID:      u32 = 1 << 17; // Process-Context Identifiers
 // ── Bits d'intérêt dans Leaf 7 ECX ───────────────────────────────────────────
 const LEAF7_ECX_UMIP:      u32 = 1 << 2;
 const LEAF7_ECX_PKU:       u32 = 1 << 3;
+#[allow(dead_code)]
 const LEAF7_ECX_OSPKE:     u32 = 1 << 4;
+#[allow(dead_code)]
 const LEAF7_ECX_CET_SS:    u32 = 1 << 7;
 const LEAF7_ECX_LA57:      u32 = 1 << 16; // 5-level paging
 
@@ -158,6 +191,7 @@ const EXT1_EDX_SYSCALL:   u32 = 1 << 11;
 const EXT1_EDX_NX:        u32 = 1 << 20;
 const EXT1_EDX_PDPE1GB:   u32 = 1 << 26; // 1 GB huge pages
 const EXT1_EDX_RDTSCP:    u32 = 1 << 27;
+#[allow(dead_code)]
 const EXT1_EDX_LM:        u32 = 1 << 29; // Long Mode (64-bit)
 
 // ── Bits d'intérêt dans Extended Leaf 80000001 ECX (AMD) ─────────────────────

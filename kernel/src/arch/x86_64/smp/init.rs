@@ -11,7 +11,6 @@
 //! Le code assembleur du trampoline est dans `boot/trampoline_asm.rs`.
 //! Il est copié à l'adresse 0x6000 (page trampoline = 6).
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
 use super::super::cpu::tsc;

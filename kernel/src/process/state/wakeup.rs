@@ -12,7 +12,6 @@
 //   process/ l'implémente ici (ProcessWakeupHandler).
 //   process/mod.rs::init() appelle register_with_dma() pour s'enregistrer.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
 use crate::memory::dma::core::wakeup_iface::DmaWakeupHandler;

@@ -12,7 +12,6 @@
 //
 // Couche 0 — pas de dépendance scheduler/process/ipc/fs.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::AtomicBool;
 
@@ -39,6 +38,7 @@ pub const NUMA_DISTANCE_UNREACHABLE: u8 = u8::MAX;
 pub struct NumaDistanceTable {
     /// Valeurs : `dist[from][to]`.
     dist: [[u8; MAX_NUMA_NODES]; MAX_NUMA_NODES],
+    #[allow(dead_code)]
     initialized: AtomicBool,
 }
 

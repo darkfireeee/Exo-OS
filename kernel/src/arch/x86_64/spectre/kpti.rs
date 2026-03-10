@@ -8,7 +8,6 @@
 //! Le changement de CR3 se fait dans `switch_asm.s` (entre PUSH/POP des registres).
 //! Ce module gère uniquement la détection, l'état global, et les helpers de switch.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 

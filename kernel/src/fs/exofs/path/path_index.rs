@@ -16,7 +16,6 @@
 //! - **ARITH-02** : `checked_add` / `checked_mul` sur tous les offsets.
 //! - **OOM-02** : `try_reserve(1)` avant chaque `Vec::push`.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -24,7 +23,7 @@ use alloc::vec::Vec;
 use core::mem::size_of;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
-use super::path_component::{PathComponent, validate_component, fnv1a_hash, siphash_keyed, NAME_MAX};
+use super::path_component::{PathComponent, validate_component, siphash_keyed, NAME_MAX};
 use super::path_index_tree::PathIndexTree;
 
 // ── Constantes ────────────────────────────────────────────────────────────────

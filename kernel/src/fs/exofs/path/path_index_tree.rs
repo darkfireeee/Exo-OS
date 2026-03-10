@@ -14,7 +14,6 @@
 //! - **ARITH-02** : `checked_add` / `wrapping_add` sur tous les calculs d index.
 //! - **OOM-02** : pas d allocation heap — tous les buckets sont inline.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

@@ -15,7 +15,6 @@
 //   • TLS dynamique (dlopen / __tls_get_addr) : hors scope noyau.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::cell::UnsafeCell;
@@ -172,8 +171,10 @@ impl TlsRegistry {
 /// MSR_FS_BASE (0xC0000100) = base du segment FS (libc utilise FS pour TLS).
 const MSR_FS_BASE: u32 = 0xC0000100;
 /// MSR_GS_BASE (0xC0000101) = base du segment GS.
+#[allow(dead_code)]
 const MSR_GS_BASE: u32 = 0xC0000101;
 /// MSR_KERNEL_GS_BASE (0xC0000102) = GS backup (swapgs).
+#[allow(dead_code)]
 const MSR_KERNEL_GS_BASE: u32 = 0xC0000102;
 
 /// Écrit MSR_FS_BASE avec l'adresse de base TLS (appelé lors du context switch).

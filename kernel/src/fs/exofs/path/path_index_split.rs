@@ -14,13 +14,12 @@
 //! - **ARITH-02** : `checked_add` sur les calculs de taille.
 //! - **OOM-02** : `try_reserve(1)` avant les insertions.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
-use super::path_index::{PathIndex, InMemoryEntry, PATH_INDEX_SPLIT_THRESHOLD};
+use super::path_index::{PathIndex, InMemoryEntry};
 use super::path_component::validate_component;
 
 // ── SplitResult ───────────────────────────────────────────────────────────────

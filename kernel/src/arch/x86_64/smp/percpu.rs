@@ -17,7 +17,6 @@
 //! gs:[0x40]  = *   — réservé (futur)
 //! ```
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use crate::arch::x86_64::cpu::msr;
@@ -69,6 +68,7 @@ pub struct PerCpuData {
 }
 
 impl PerCpuData {
+    #[allow(dead_code)]
     const fn zeroed() -> Self {
         Self {
             kernel_rsp: 0, user_rsp: 0, cpu_id: 0, lapic_id: 0,

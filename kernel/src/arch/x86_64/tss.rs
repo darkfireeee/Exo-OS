@@ -14,7 +14,6 @@
 //! - IST3 : Machine Check (#MC) — pile dédiée
 //! - IST4-7 : disponibles
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

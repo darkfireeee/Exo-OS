@@ -21,16 +21,13 @@
 //! ## RÈGLE CONTRAT UNSAFE (regle_bonus.md)
 //! Tout `unsafe {}` est précédé d'un commentaire `// SAFETY:`.
 
-#![allow(dead_code)]
-#![allow(unused_variables)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::syscall::numbers::*;
 use crate::syscall::validation::{
-    SyscallError, UserPtr, UserBuf, UserStr,
-    read_user_path, read_user_typed, write_user_typed,
-    validate_fd, validate_flags, validate_pid, validate_signal,
-    PATH_MAX, STRING_MAX, IO_BUF_MAX,
+    UserBuf,
+    read_user_path, read_user_typed,
+    validate_fd, validate_flags, validate_signal, IO_BUF_MAX,
 };
 use crate::syscall::fast_path::Timespec;
 use crate::fs::exofs::syscall::{
@@ -295,7 +292,7 @@ pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -
     stat_inc(SYS_MMAP);
     // Longueur doit être > 0 et multiple de PAGE_SIZE
     if len == 0 { return EINVAL; }
-    let len_pages = (len as usize + 4095) / 4096;
+    let _len_pages = (len as usize + 4095) / 4096;
     // Déléguer à memory/virtual/mmap.rs
     match crate::memory::virt::mmap::do_mmap(
         addr, len as usize, prot as u32, flags as u32, fd as i32, off

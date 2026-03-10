@@ -11,7 +11,6 @@
 //
 // COUCHE 0 — pas de dépendance scheduler/process/ipc/fs.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
@@ -72,6 +71,7 @@ impl OomScorer for DefaultOomScorer {
 /// Returns `true` si le signal a pu être envoyé.
 pub type OomKillSendFn = fn(pid: u64) -> bool;
 
+#[allow(dead_code)]
 fn nop_oom_kill(_pid: u64) -> bool { false }
 
 /// Pointeur fonction vers le handler OOM de process/ — write-once.

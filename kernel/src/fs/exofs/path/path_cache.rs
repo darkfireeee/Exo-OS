@@ -13,10 +13,9 @@
 //! - **PATH-07** : pas de buffer sur la pile kernel de taille PATH_MAX.
 //! - **OOM-02** : pas d allocation dynamique.
 
-#![allow(dead_code)]
 extern crate alloc;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
+use crate::fs::exofs::core::ObjectId;
 use crate::scheduler::sync::spinlock::SpinLock;
 use super::path_component::fnv1a_hash;
 

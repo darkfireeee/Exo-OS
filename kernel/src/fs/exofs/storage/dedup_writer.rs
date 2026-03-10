@@ -89,6 +89,7 @@ struct DedupBucket {
 }
 
 impl DedupBucket {
+    #[allow(dead_code)]
     const fn new() -> Self { Self { entries: Vec::new() } }
 
     fn find(&self, id: &BlobId) -> Option<&DedupEntry> {

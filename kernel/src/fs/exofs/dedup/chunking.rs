@@ -7,7 +7,6 @@
 //! OOM-02   : try_reserve sur tous les Vec.
 //! ARITH-02 : checked/saturating/wrapping sur toutes les arithmétiques.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};

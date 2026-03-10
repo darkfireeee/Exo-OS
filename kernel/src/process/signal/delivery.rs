@@ -5,7 +5,6 @@
 // RÈGLE SIGNAL-01 : handle_pending_signals appelé UNIQUEMENT au retour syscall.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
 use crate::scheduler::core::task::ThreadControlBlock;

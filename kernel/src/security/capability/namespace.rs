@@ -17,7 +17,6 @@
 //   namespaces source et cible diffèrent → isolation garantie.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 

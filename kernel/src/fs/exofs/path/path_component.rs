@@ -16,7 +16,6 @@
 //! - **OOM-02** : `try_reserve(1)` avant tout `Vec::push`.
 //! - **ARITH-02** : `checked_add` sur les offsets de lecture.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

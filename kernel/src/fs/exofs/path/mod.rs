@@ -26,7 +26,6 @@
 //! | HDR-03    | Magic vérifié en premier dans tout parse on-disk  |
 //! | ONDISK-03 | Pas d AtomicU64 dans les structs repr(C)          |
 
-#![allow(unused_imports)]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sous-modules

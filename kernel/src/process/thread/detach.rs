@@ -4,7 +4,6 @@
 // Un thread détaché libère ses ressources automatiquement à la terminaison.
 // Aucun join() n'est possible après detach().
 
-#![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
 use crate::process::core::tcb::ProcessThread;

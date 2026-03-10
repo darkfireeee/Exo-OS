@@ -22,10 +22,8 @@
 //! ## RÈGLE CONTRAT UNSAFE (regle_bonus.md)
 //! Tout bloc `unsafe {}` est précédé d'un commentaire `// SAFETY:`.
 
-#![allow(dead_code)]
 
 use core::mem;
-use core::slice;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::fmt;
 

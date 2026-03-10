@@ -16,7 +16,6 @@
 // RÈGLE IPC-CALL-01 : call_raw est TOUJOURS synchrone (pas de callback).
 // RÈGLE IPC-CALL-02 : les mailboxes éphémères sont libérées après chaque appel.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

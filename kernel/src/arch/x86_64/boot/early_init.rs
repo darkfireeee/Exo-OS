@@ -25,7 +25,6 @@
 //! 12. Boot des APs (SMP)
 //! 13. Retourner → kernel_main()
 
-#![allow(dead_code)]
 
 // ── Pile de boot du BSP ───────────────────────────────────────────────────────
 

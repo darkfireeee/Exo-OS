@@ -20,7 +20,6 @@
 // INSTRUMENTATION : stats séparées dans TaskStats pour ne pas polluer le TCB.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use core::mem::size_of;
 

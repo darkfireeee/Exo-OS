@@ -18,7 +18,6 @@
 //   • Thread-safe pour un seul producteur et un seul consommateur.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use crate::ipc::core::{IpcError, MsgFlags};

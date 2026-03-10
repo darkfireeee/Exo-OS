@@ -102,6 +102,7 @@ impl CacheState {
         self.entries.iter_mut().find(|b| b.offset == offset)
     }
 
+    #[allow(dead_code)]
     fn find_ref(&self, offset: DiskOffset) -> Option<&CacheBlock> {
         self.entries.iter().find(|b| b.offset == offset)
     }

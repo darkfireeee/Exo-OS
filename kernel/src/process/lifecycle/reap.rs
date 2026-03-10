@@ -14,7 +14,6 @@
 //     et libère toutes les ressources.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR};

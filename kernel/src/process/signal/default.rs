@@ -4,7 +4,6 @@
 // Définitions POSIX des signaux et actions par défaut (Exo-OS Couche 1.5)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::fmt;
 

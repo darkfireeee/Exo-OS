@@ -6,11 +6,9 @@
 //! RÈGLE LIB-05 : INTERDIT d'exposer ObjectId dans l'API POSIX.
 //! BUG-02 FIX   : SYS_EXOFS_READDIR (520) utilisé pour getdents64.
 
-#![allow(dead_code)]
 
-use crate::syscall::validation::{UserBuf, read_user_path, validate_fd, USER_ADDR_MAX};
+use crate::syscall::validation::{read_user_path, validate_fd, USER_ADDR_MAX};
 use crate::syscall::errno::{EINVAL, EFAULT, ENOSYS};
-use crate::syscall::numbers::*;
 use crate::fs::exofs::syscall;
 
 // ─────────────────────────────────────────────────────────────────────────────

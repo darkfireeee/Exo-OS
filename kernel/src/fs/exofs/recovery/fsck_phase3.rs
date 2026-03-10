@@ -13,7 +13,6 @@
 //! - **ARITH-02** : `checked_add` / `checked_mul` sur tous les calculs d offset.
 //! - **ONDISK-03** : pas d `AtomicU64` dans les structs `repr(C)`.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::collections::BTreeMap;

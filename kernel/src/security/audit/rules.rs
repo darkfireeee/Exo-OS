@@ -14,7 +14,6 @@
 // RÈGLE ARULE-02 : Pas de règle ne peut désactiver SecurityViolation.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use super::logger::AuditCategory;

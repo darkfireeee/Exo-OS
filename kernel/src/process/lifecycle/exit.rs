@@ -16,7 +16,6 @@
 // RÈGLE PROC-07 : zombie reaper = kthread dédié, jamais inline exit.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
 use crate::process::core::pid::{Pid, TID_ALLOCATOR};

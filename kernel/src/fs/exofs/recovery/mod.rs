@@ -34,8 +34,6 @@
 //! - [`verify_health()`] : retourne un bilan de santé du module.
 //! - [`boot_recovery_sequence()`] : exécute la récupération complète au boot.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
 
 // ── Déclarations de sous-modules ──────────────────────────────────────────────
 

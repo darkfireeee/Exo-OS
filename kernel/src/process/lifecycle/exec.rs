@@ -18,7 +18,6 @@
 //   8. Retourner vers userspace.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
 use spin::Once;

@@ -12,7 +12,6 @@
 //   DEAD-01: jamais EPOCH_COMMIT_LOCK depuis le GC
 // ==============================================================================
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
@@ -195,6 +194,7 @@ struct GcStateInner {
     /// Compteur de passes consecutives.
     consecutive_passes: u32,
     /// Tick logique global (incremente par gc_thread a chaque iteration).
+    #[allow(dead_code)]
     logical_tick:       u64,
     /// Nombre total de passes effectuees depuis le boot.
     total_passes:       u64,

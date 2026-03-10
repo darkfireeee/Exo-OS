@@ -17,7 +17,6 @@
 //              ou FUSION_MAX_DELAY_TICKS ticks de scheduler).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::ipc::core::{IpcError, MsgFlags};

@@ -28,7 +28,6 @@
 //! 0x30/0x38 = TSS   (2 descripteurs × 8 bytes)
 //! ```
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

@@ -16,7 +16,6 @@
 //! let retval: i64 = kernel_err_to_errno(KernelError::NotFound);  // → -2 (ENOENT)
 //! ```
 
-#![allow(dead_code)]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Import des types d'erreur kernel

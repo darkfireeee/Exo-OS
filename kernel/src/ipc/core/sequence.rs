@@ -14,7 +14,6 @@
 // CONTRAINTE : zéro allocation heap (conforme Zone NO-ALLOC).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use super::constants::SEQ_WINDOW_SIZE;

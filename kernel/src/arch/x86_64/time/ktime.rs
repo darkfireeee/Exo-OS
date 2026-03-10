@@ -18,7 +18,6 @@
 //   Si drift correction baisse tsc_hz, ns_base est ajusté en compensation.
 // ════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 

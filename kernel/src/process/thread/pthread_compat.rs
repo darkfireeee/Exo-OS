@@ -20,7 +20,6 @@
 //   EDEADLK   = détection de deadlock
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use crate::process::core::pcb::ProcessControlBlock;

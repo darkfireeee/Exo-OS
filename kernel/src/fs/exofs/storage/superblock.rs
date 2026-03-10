@@ -8,7 +8,6 @@
 //!   WRITE-02  : vérification bytes_written après chaque écriture disque
 //!   ARITH-02  : checked_add avant tout calcul d'offset
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

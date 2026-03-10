@@ -8,7 +8,6 @@
 //   SEC-04   : jamais de logging du contenu binaire
 //   ARITH-02 : checked_add / saturating_* partout
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::mem;

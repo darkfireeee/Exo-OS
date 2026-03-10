@@ -11,7 +11,6 @@
 // RÈGLE IPC-RAW-01 : auto-open à la première écriture (send_raw crée le slot).
 // RÈGLE IPC-RAW-02 : un dépassement de ring (slot plein) incrémente drop_count.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -104,6 +103,7 @@ impl InnerRing {
     }
 
     #[inline(always)]
+    #[allow(dead_code)]
     fn is_empty(&self) -> bool { self.count == 0 }
 
     #[inline(always)]

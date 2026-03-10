@@ -6,7 +6,6 @@
 //!  - PATH-07  : pas de [u8; PATH_MAX] sur la pile
 //!  - ARITH-02 : arithmétique vérifiée sur toutes les offsets
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

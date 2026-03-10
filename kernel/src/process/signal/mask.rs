@@ -8,7 +8,6 @@
 // Bit i = signal (i+1) est bloqué.
 // SIGKILL (bit 8) et SIGSTOP (bit 18) ne peuvent être bloqués : ignorés.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::scheduler::core::task::ThreadControlBlock;

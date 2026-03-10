@@ -17,7 +17,6 @@
 //   ARITH-02 : checked_add sur les compteurs
 // ==============================================================================
 
-#![allow(dead_code)]
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -86,6 +85,7 @@ struct ReferenceTrackerInner {
 }
 
 impl ReferenceTrackerInner {
+    #[allow(dead_code)]
     fn new() -> Self {
         Self {
             obj_to_blobs: BTreeMap::new(),

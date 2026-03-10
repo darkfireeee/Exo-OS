@@ -22,7 +22,6 @@
 //! r11 = RFLAGS (sauvé par SYSCALL hardware)
 //! ```
 
-#![allow(dead_code)]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Taille totale de la table de dispatch

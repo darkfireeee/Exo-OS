@@ -9,7 +9,6 @@
 //   ARITH-02 : checked_add / saturating_* partout
 //   RECUR-01 : itératif seulement (recherche binaire en boucle)
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::mem;

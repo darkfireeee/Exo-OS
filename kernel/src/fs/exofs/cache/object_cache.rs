@@ -7,7 +7,6 @@
 //! `OBJECT_CACHE` : instance globale statique.
 //! Règles : OOM-02, ARITH-02, RECUR-01.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::collections::BTreeMap;

@@ -6,7 +6,6 @@
 //!   Doit être émis lors du passage kernel → userspace (process différent).
 //! - **STIBP** (Single Thread Indirect Branch Predictors) : isole les HyperThreads.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use super::super::cpu::msr::{

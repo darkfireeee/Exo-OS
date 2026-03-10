@@ -4,7 +4,6 @@
 // Note : l'arbre de montage réel est implémenté dans fs/ (Couche 3).
 // Ce module conserve uniquement l'identité et les références.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 

@@ -27,7 +27,6 @@
 //! - **ABI-08** : pt_regs complet sauvegardé — accessible pour ptrace.
 //! - **BUG-05** : verify_rcx_canonical() obligatoire avant SYSRETQ (errata Intel/AMD).
 
-#![allow(dead_code)]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SyscallArgs — vue typée des 6 arguments syscall

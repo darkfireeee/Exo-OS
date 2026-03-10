@@ -4,7 +4,6 @@
 //! `BLOB_CACHE`  : instance globale statique.
 //! Règles : OOM-02, ARITH-02, RECUR-01.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -35,6 +34,7 @@ struct BlobEntry {
     /// `true` si l'entrée a été modifiée et n'a pas encore été écrite sur disque.
     dirty:         bool,
     /// Ticks d'insertion.
+    #[allow(dead_code)]
     inserted_at:   u64,
     /// Ticks du dernier accès.
     last_accessed: u64,

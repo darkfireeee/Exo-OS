@@ -45,7 +45,6 @@
 //   - À NE PAS utiliser pour des buffers larges (overhead copie côté lecteur)
 // ═════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};

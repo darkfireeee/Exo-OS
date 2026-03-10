@@ -8,7 +8,6 @@
 //!   HDR-03    : magic vérifié EN PREMIER, puis checksum Blake3
 //!   ARITH-02  : checked_add pour toute arithmétique
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

@@ -16,7 +16,6 @@
 //   ne peut pas être libéré tant qu'il y a des références (refcounting).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use alloc::boxed::Box;

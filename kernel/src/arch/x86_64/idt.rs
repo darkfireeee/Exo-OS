@@ -12,7 +12,6 @@
 //! - #MC (vecteur 18) → IST3 (Machine Check)
 //! - #DB (vecteur 1)  → IST4 (Debug)
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

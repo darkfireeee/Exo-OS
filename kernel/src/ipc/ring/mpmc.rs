@@ -19,7 +19,6 @@
 // USAGE : Canal MPMC pour event dispatching, worker pools.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::cell::UnsafeCell;

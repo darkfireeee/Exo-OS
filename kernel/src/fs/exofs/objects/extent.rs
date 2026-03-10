@@ -6,7 +6,6 @@
 //   ARITH-02  : checked_add / saturating_* pour tout calcul d'offset
 //   NO-STD-01 : core::fmt pour Display/Debug
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::mem;

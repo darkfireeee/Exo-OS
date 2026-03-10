@@ -13,10 +13,8 @@
 //! - **WRITE-02** : délégué à `FsckRepair::apply`.
 //! - **ONDISK-03** : pas d `AtomicU64` dans `repr(C)`.
 
-#![allow(dead_code)]
 
 extern crate alloc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -25,9 +23,8 @@ use super::fsck_phase1::{FsckPhase1, Phase1Options, Phase1Report};
 use super::fsck_phase2::{FsckPhase2, Phase2Options, Phase2Report};
 use super::fsck_phase3::{FsckPhase3, Phase3Options, Phase3Report};
 use super::fsck_phase4::{FsckPhase4, Phase4Options, Phase4Report};
-use super::fsck_repair::{FsckRepair, RepairAction, REPAIR_LOG};
+use super::fsck_repair::{FsckRepair, RepairAction};
 use super::checkpoint::{CHECKPOINT_STORE, RecoveryPhase};
-use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 
 // ── Garde d exécution ─────────────────────────────────────────────────────────

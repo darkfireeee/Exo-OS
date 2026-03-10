@@ -12,7 +12,6 @@
 //   Zombie   → Dead    (via reaper)
 //   Dead     → (terminal)
 
-#![allow(dead_code)]
 
 use crate::process::core::pcb::{ProcessControlBlock, ProcessState};
 

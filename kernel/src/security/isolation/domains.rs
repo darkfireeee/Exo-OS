@@ -17,7 +17,6 @@
 //   Sandbox(3) : processus sandboxés — anneau 3, syscalls filtrés
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 

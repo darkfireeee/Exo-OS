@@ -6,7 +6,6 @@
 //!
 //! OOM-02 / ARITH-02 / RECUR-01 respectés.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -170,6 +169,7 @@ impl SecretWriter {
     }
 
     /// Retourne la clé brute (pour audit de sécurité interne uniquement).
+    #[allow(dead_code)]
     pub(crate) fn raw_key(&self) -> &[u8; 32] { &self.key.0 }
 }
 

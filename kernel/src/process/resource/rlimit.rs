@@ -4,7 +4,6 @@
 // Limites de ressources POSIX (getrlimit/setrlimit) — Exo-OS Couche 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 /// Valeur infinie (illimité).
 pub const RLIM_INFINITY: u64 = u64::MAX;

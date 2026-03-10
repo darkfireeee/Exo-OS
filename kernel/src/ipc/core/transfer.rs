@@ -18,7 +18,6 @@
 //   • Vérification bounds systématique avant toute copie
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::ptr;
 use core::sync::atomic::{fence, Ordering};

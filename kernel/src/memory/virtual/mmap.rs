@@ -10,7 +10,6 @@
 //
 // COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
 
-#![allow(dead_code)]
 
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicPtr, Ordering};
@@ -99,6 +98,7 @@ const PROT_EXEC:   u32 = 4;
 /// Mapping partagé (MAP_SHARED).
 const MAP_SHARED:  u32 = 0x01;
 /// Mapping privé (MAP_PRIVATE).
+#[allow(dead_code)]
 const MAP_PRIVATE: u32 = 0x02;
 /// Adresse fixée (MAP_FIXED).
 const MAP_FIXED:   u32 = 0x10;

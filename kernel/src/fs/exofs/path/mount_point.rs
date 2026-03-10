@@ -5,7 +5,6 @@
 //!  - ONDISK-03: pas d'AtomicU64 dans les structs repr(C)
 //!  - ARITH-02 : arithmétique vérifiée
 
-#![allow(dead_code)]
 
 extern crate alloc;
 

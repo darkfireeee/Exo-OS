@@ -24,14 +24,11 @@
 //! ## Référence POSIX
 //! POSIX.1-2017 (IEEE Std 1003.1-2017)
 
-#![allow(dead_code)]
-#![allow(unused_variables)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::syscall::numbers::*;
 use crate::syscall::validation::{
-    SyscallError, write_user_typed, read_user_typed, read_user_path,
-    validate_fd, validate_pid,
+    SyscallError, write_user_typed,
 };
 use crate::process::core::pid::Pid;
 use crate::process::core::registry::PROCESS_REGISTRY;

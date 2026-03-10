@@ -4,7 +4,6 @@
 // Groupes de processus POSIX (PGID) — Exo-OS Couche 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use crate::scheduler::sync::spinlock::SpinLock;

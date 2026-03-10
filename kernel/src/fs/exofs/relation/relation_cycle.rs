@@ -5,7 +5,6 @@
 //!  - OOM-02   : try_reserve systématique
 //!  - ARITH-02 : arithmétique vérifiée
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::collections::BTreeMap;

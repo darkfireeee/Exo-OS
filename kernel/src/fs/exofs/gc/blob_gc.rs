@@ -24,7 +24,6 @@
 //   DAG-01 : PAS d'import de arch/, ipc/, process/
 // ==============================================================================
 
-#![allow(dead_code)]
 
 use core::fmt;
 

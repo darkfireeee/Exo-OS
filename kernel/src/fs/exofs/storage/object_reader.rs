@@ -9,7 +9,6 @@
 //!   OOM-02  : try_reserve avant tout Vec::push / extend
 //!   ARITH-02: checked_add systématique sur offsets
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

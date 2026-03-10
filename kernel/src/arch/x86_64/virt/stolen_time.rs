@@ -7,7 +7,6 @@
 //! KVM implémente via une structure partagée par page (MSR_KVM_STEAL_TIME).
 //! La VM lit `steal` (u64, nanoseconds cumulées) pour estimer l'overhead hyperviseur.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use super::super::cpu::msr;
@@ -28,6 +27,7 @@ pub struct KvmStealTime {
 }
 
 impl KvmStealTime {
+    #[allow(dead_code)]
     const fn zeroed() -> Self {
         Self { steal: 0, version: 0, flags: 0, preempted: 0, _pad: [0u8; 47] }
     }

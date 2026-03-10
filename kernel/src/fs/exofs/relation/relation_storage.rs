@@ -5,7 +5,6 @@
 //!  - ONDISK-03: AtomicU64 uniquement dans les structs non-repr(C)
 //!  - ARITH-02 : arithmétique vérifiée
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::collections::BTreeMap;

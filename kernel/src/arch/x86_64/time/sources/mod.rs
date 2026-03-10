@@ -40,7 +40,6 @@
 //   RÈGLE PIT-QEMU-01 : PIT non disponible marqué Degraded sur QEMU TCG.
 // ════════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicBool, AtomicU64, Ordering};
 

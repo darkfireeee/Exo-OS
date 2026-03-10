@@ -8,12 +8,11 @@
 //! - **ARITH-02** : checked_add sur tous les calculs doffset.
 //! - **OOM-02** : try_reserve(1) avant push.
 
-#![allow(dead_code)]
 extern crate alloc;
 use alloc::vec::Vec;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use super::path_component::{PathComponent, PathParser, validate_component, NAME_MAX};
+use super::path_component::{PathComponent, PathParser, validate_component};
 
 /// Longueur maximale dun chemin (4096 octets, POSIX PATH_MAX).
 pub const PATH_MAX: usize = 4096;

@@ -29,7 +29,6 @@
 //   TLB-01 : flush_local → IPI synchrone ACK → free_pages (jamais l'inverse).
 //   MEM-04 : Les frames NE sont JAMAIS libérées avant ACK de tous les CPUs cibles.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

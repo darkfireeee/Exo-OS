@@ -11,7 +11,6 @@
 //! - ARITH-02: arithmétique `wrapping_*` / `checked_*` / `saturating_*`.
 //! - RECUR-01: aucune récursivité.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};

@@ -13,7 +13,6 @@
 //! - **ARITH-02** : `checked_add` / `checked_mul` sur tous les calculs d offset.
 //! - **ONDISK-03** : pas d `AtomicU64` dans les structs `repr(C)`.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -23,7 +22,6 @@ use core::cell::UnsafeCell;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::blob_id::blake3_hash;
 use super::boot_recovery::BlockDevice;
-use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 
 // ── Constantes ────────────────────────────────────────────────────────────────

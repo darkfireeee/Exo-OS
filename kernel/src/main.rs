@@ -21,8 +21,6 @@
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt)]
-#![allow(dead_code)]
-#![allow(unused_variables)]
 
 use exo_os_kernel as kernel;
 

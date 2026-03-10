@@ -22,7 +22,6 @@
 //! 0x0080 : code 64 bits
 //! ```
 
-#![allow(dead_code)]
 
 use super::super::smp::init::TRAMPOLINE_PHYS;
 

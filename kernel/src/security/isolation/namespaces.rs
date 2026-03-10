@@ -16,7 +16,6 @@
 // RÈGLE NS-03 : Un namespace est détruit quand son refcount atteint 0.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;

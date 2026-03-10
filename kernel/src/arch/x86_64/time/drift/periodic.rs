@@ -28,7 +28,6 @@
 //   À terme (Phase 4+) : kthread dédié avec HLT/MWAIT en idle.
 // ════════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicBool, AtomicU32, Ordering};
 use super::pll;
@@ -51,6 +50,7 @@ const IDLE_THRESHOLD_PERMIL:     u32 =  200; // 20%
 const HEAVY_THRESHOLD_PERMIL:    u32 =  800; // 80%
 
 /// Taille de l'historique de mesures (FIFO circulaire pour détection d'anomalie).
+#[allow(dead_code)]
 const HISTORY_SIZE: usize = 8;
 
 // ── État du thread de recalibration ──────────────────────────────────────────

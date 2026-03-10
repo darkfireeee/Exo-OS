@@ -13,7 +13,6 @@
 //!   ARITH-02 : checked_add / checked_mul systématiques
 //!   OOM-02   : try_reserve avant tout Vec::push
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

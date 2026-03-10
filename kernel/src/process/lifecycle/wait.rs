@@ -11,7 +11,6 @@
 //   • Retour du PID terminé + code de sortie.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
 use crate::process::core::pid::Pid;
@@ -104,6 +103,7 @@ use crate::scheduler::sync::wait_queue::WaitQueue;
 use crate::scheduler::sync::spinlock::SpinLock;
 
 /// Entrée dans la table d'attente des parents.
+#[allow(dead_code)]
 struct WaitEntry {
     /// PID du parent attendant.
     parent_pid:  u32,
@@ -115,6 +115,7 @@ struct WaitEntry {
 }
 
 /// Table des wait en cours — max 512 entrees simultanées.
+#[allow(dead_code)]
 struct WaitTable {
     entries: SpinLock<[Option<WaitEntry>; 512]>,
     queue:   WaitQueue,

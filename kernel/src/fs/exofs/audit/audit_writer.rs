@@ -5,7 +5,6 @@
 //!  - ARITH-02 : arithmétique vérifiée
 //!  - RECUR-01 : zéro récursion
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

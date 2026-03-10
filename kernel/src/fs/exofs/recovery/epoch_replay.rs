@@ -11,11 +11,9 @@
 //! - **WRITE-02** : vérification implicite via `BlockDevice::write_block`.
 //! - **RÈGLE 7** : barrière `SeqCst` entre les trois phases data→root→record.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec;
-use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId, BlobId};
 use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};

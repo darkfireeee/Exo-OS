@@ -58,6 +58,7 @@ impl CompressResult {
 /// Écrivain de blob ExoFS compressé.
 pub struct CompressWriter {
     choice:    CompressionChoice,
+    #[allow(dead_code)]
     threshold: CompressionThreshold,
 }
 

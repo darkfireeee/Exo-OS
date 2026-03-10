@@ -7,7 +7,6 @@
 //! Via `MSR_IA32_SPEC_CTRL` bit 2 (SSBD) ou via AMD VIRT_SPEC_CTRL.
 //! Configuré per-thread (certains processus n'en ont pas besoin → performance).
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use super::super::cpu::msr::{

@@ -21,7 +21,6 @@
 //! `SigactionEntry` = 32 bytes × 64 = 2048 bytes + header ≈ 2112 bytes.
 //! Respecte la limite de 4096 bytes par TCB implicite dans le document.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 

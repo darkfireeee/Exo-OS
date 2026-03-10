@@ -4,7 +4,6 @@
 //! `WarmingStrategy` : politique de prélecture.
 //! Règles : RECUR-01, OOM-02, ARITH-02.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

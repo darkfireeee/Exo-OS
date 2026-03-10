@@ -16,7 +16,6 @@
 //
 // Couche 0 — pas de dépendance scheduler/process/ipc/fs.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
@@ -342,6 +341,7 @@ pub const fn pte_get_pkey(pte: u64) -> u8 {
 /// Guard RAII qui autorise l'accès à `key` pendant sa durée de vie,
 /// puis restaure l'état PKRU précédent au drop.
 pub struct PkuAccessGuard {
+    #[allow(dead_code)]
     key:       u8,
     saved_pkru: u32,
 }

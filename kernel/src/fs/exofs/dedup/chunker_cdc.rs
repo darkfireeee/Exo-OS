@@ -9,7 +9,6 @@
 //! OOM-02   : try_reserve sur tous les Vec.
 //! ARITH-02 : checked / saturating / wrapping + mulmod61 pour Rabin.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -25,6 +24,7 @@ pub const CDC_MIN_SIZE:  usize = 2048;   // 2 KiB minimum.
 pub const CDC_AVG_SIZE:  usize = 8192;   // 8 KiB cible.
 pub const CDC_MAX_SIZE:  usize = 65536;  // 64 KiB maximum.
 /// Masque déclenchant une coupure (log2(avg_size) bits à 0).
+#[allow(dead_code)]
 const CDC_MASK: u64 = (CDC_AVG_SIZE as u64) - 1; // = 0x1FFF
 /// Base du polynôme de Rabin.
 const RABIN_BASE: u64 = 257;
@@ -97,6 +97,7 @@ impl RollingHash {
     }
 
     /// Remet la fenêtre à zéro.
+    #[allow(dead_code)]
     fn reset(&mut self) {
         self.window = [0u8; WINDOW_SIZE];
         self.wpos   = 0;

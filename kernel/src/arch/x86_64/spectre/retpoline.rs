@@ -18,7 +18,6 @@
 //! En pratique, avec Rust/LLVM ≥ 15 : `-Ztarget-feature=+retpoline-indirect-calls`
 //! ce module expose uniquement les macros et helpers pour les cas manuels (ASM).
 
-#![allow(dead_code)]
 
 /// Appel indirect via retpoline vers un pointeur de fonction
 ///

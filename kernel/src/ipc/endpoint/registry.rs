@@ -18,7 +18,6 @@
 // RÈGLE ZONE NO-ALLOC : zéro Vec/Box/Arc dans ce fichier.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::ipc::core::types::{EndpointId, IpcError};
@@ -81,6 +80,7 @@ impl RegistryEntry {
     }
 
     #[inline(always)]
+    #[allow(dead_code)]
     fn is_occupied(&self) -> bool {
         self.hash != Self::EMPTY && self.hash != Self::TOMBSTONE
     }

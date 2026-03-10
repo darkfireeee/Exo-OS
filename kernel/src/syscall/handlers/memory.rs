@@ -3,10 +3,8 @@
 //! RÈGLE SYS-03 : THIN WRAPPERS UNIQUEMENT.
 //! Délègue à memory::virtual::mmap (déjà intégré dans table.rs).
 
-#![allow(dead_code)]
 
 use crate::syscall::errno::{EINVAL, ENOMEM};
-use crate::syscall::numbers::*;
 
 /// `mmap(addr, len, prot, flags, fd, off)` → adresse mappée ou errno.
 pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -> i64 {

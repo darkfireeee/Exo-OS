@@ -10,7 +10,6 @@
 //! - `xsaveopt`           : optimisé (ne sauvegarde que les composants dirty)
 //! - `xsavec`             : compacté (ne sauvegarde que les composants actifs)
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 

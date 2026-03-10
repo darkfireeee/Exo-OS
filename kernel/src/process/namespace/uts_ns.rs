@@ -2,7 +2,6 @@
 //
 // Espace de noms UTS (nom d'hôte) — Exo-OS Couche 1.5
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::cell::UnsafeCell;

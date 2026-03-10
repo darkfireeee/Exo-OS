@@ -14,7 +14,6 @@
 // RÈGLE RNG-03 : En cas d'échec RDRAND après 10 tentatives → fallback ChaCha20.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;

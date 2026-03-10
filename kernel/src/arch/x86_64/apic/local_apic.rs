@@ -6,7 +6,6 @@
 //! ## Registres LAPIC (offset depuis LAPIC_BASE)
 //! Les registres sont tous 32 bits, alignés sur 16 octets.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use core::ptr::{read_volatile, write_volatile};
@@ -105,6 +104,7 @@ pub fn lapic_write(reg: u32, val: u32) {
 // ── MSR IA32_APICBASE ─────────────────────────────────────────────────────────
 
 const MSR_IA32_APICBASE: u32 = 0x001B;
+#[allow(dead_code)]
 const APICBASE_BSP:      u64 = 1 << 8;
 const APICBASE_EXTD:     u64 = 1 << 10; // x2APIC
 const APICBASE_ENABLE:   u64 = 1 << 11;

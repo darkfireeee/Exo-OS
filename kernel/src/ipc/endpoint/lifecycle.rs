@@ -17,7 +17,6 @@
 //         Une période de drain est obligatoire.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::ipc::core::types::{EndpointId, IpcError, alloc_endpoint_id};
@@ -34,6 +33,7 @@ use super::registry::{register_endpoint, unregister_endpoint};
 /// État d'un slot dans le pool.
 #[derive(Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
+#[allow(dead_code)]
 enum SlotState {
     Free  = 0,
     InUse = 1,
@@ -116,6 +116,7 @@ impl EndpointDescBox {
         self.0.assume_init_ref()
     }
     /// # Safety : appelé uniquement quand le slot est In Use.
+    #[allow(dead_code)]
     unsafe fn as_mut(&mut self) -> &mut EndpointDesc {
         self.0.assume_init_mut()
     }

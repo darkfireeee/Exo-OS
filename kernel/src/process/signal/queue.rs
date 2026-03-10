@@ -8,7 +8,6 @@
 // mis en file. On utilise un tableau fixe par signal (max SIGQUEUE_DEPTH = 32
 // entrées) + compteur atomique, sans alloc dynamique.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use core::cell::UnsafeCell;

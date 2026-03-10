@@ -17,7 +17,6 @@
 // RÈGLE SECBOOT-03 : Le kernel ne fait confiance qu'à UNE seule clé bootloader.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use super::super::crypto::ed25519::ed25519_verify;

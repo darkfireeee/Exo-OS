@@ -8,7 +8,6 @@
 //   ARITH-02  : checked_add / saturating_* partout
 //   RECUR-01  : détection de cycle itérative (DFS itératif)
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::mem;

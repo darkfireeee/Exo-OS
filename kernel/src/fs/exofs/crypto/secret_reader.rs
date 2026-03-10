@@ -6,7 +6,6 @@
 //!
 //! OOM-02 / ARITH-02 / RECUR-01 respectés.
 
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -171,6 +170,7 @@ impl SecretReader {
     }
 
     /// Retourne la clé brute (pour inspection de sécurité interne uniquement).
+    #[allow(dead_code)]
     pub(crate) fn raw_key(&self) -> &[u8; 32] { &self.key.0 }
 }
 
@@ -346,6 +346,7 @@ use alloc::collections::BTreeMap;
 
 /// Entrée du cache de déchiffrement.
 struct CacheEntry {
+    #[allow(dead_code)]
     payload_hash: u64,
     plaintext:    Vec<u8>,
 }

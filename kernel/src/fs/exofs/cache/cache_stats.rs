@@ -4,7 +4,6 @@
 //! `CacheStatsSnapshot` : copie cohérente pour inspection.
 //! Règles : ONDISK-03 (pas d'AtomicU64 dans repr(C)), ARITH-02.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

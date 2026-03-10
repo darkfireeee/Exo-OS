@@ -10,11 +10,10 @@
 //! - **OOM-02** : `try_reserve(1)` avant tout `Vec::push`.
 //! - **ARITH-02** : `checked_add` sur les offsets et compteurs.
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId};
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::blob_id::blake3_hash;
 use super::boot_recovery::BlockDevice;
 use super::recovery_audit::RECOVERY_AUDIT;

@@ -15,7 +15,6 @@
 // RÈGLE ZT-03 : Les contexts fils héritent d'un sous-ensemble du contexte parent.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use super::labels::SecurityLabel;

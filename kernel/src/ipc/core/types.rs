@@ -13,7 +13,6 @@
 // RÈGLE NO-ALLOC : ce fichier — zéro Vec/Box/Arc (types de base uniquement)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};

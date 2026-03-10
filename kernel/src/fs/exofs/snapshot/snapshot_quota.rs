@@ -7,7 +7,6 @@
 //!   ARITH-02 : checked_add pour accumulateurs
 //!   OOM-02   : try_reserve avant push
 
-#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::vec::Vec;

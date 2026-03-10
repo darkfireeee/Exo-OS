@@ -18,7 +18,6 @@
 //   Les bits 16..=31 sont réservés aux extensions futures.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use core::fmt;
 use core::ops::{BitAnd, BitOr, BitOrAssign, BitAndAssign, Not, Sub};

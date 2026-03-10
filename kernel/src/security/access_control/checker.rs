@@ -22,7 +22,6 @@
 //       → security::audit  [log_event ou log_security_violation]
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#![allow(dead_code)]
 
 use crate::security::capability::verify::{verify as cap_verify, CapError};
 use crate::security::capability::{CapTable, CapToken, Rights};

@@ -5,7 +5,6 @@
 //! RÈGLE ARITH-02 : arithmétique checked/saturating.
 //! RÈGLE ONDISK-03 : aucun AtomicU64 dans les types #[repr(C)].
 
-#![allow(dead_code)]
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 

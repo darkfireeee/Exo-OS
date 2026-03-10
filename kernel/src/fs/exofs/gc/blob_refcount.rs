@@ -17,7 +17,6 @@
 //   ARITH-02  : checked_add / saturating_* partout
 // ==============================================================================
 
-#![allow(dead_code)]
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -67,6 +66,7 @@ impl RefEntry {
         }
     }
 
+    #[allow(dead_code)]
     fn load_count(&self) -> u32 {
         self.count.load(Ordering::Acquire)
     }
