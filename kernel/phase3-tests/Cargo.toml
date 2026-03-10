@@ -1,0 +1,13 @@
+[package]
+name    = "phase3-tests"
+version = "0.1.0"
+edition = "2021"
+# Crate de test autonome — hors workspace, utilise std, pas de build-std.
+# Teste la logique pure Phase 3 du kernel Exo-OS en re-implémentant les parties
+# testables sans dépendances hardware (gs:[], MSR, PROCESS_REGISTRY…).
+
+# Déclarer un workspace vide pour éviter d'hériter du workspace parent
+# (et de son [unstable] build-std = ["core",...] qui empêche cargo test).
+[workspace]
+
+[dependencies]
