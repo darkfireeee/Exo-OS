@@ -19,18 +19,16 @@
 
 #![allow(dead_code)]
 
-use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::fs::exofs::core::{EpochId, ExofsResult};
-use crate::fs::exofs::gc::blob_gc::{BlobGcConfig, GcPassResult, BLOB_GC};
-use crate::fs::exofs::gc::gc_metrics::GC_METRICS;
+use crate::fs::exofs::core::EpochId;
+use crate::fs::exofs::gc::blob_gc::BLOB_GC;
 use crate::fs::exofs::gc::gc_scheduler::{
-    GcScheduler, ScheduleDecision, ScheduleReason, GC_SCHEDULER,
+    ScheduleDecision, ScheduleReason, GC_SCHEDULER,
 };
 use crate::fs::exofs::gc::gc_state::GC_STATE;
-use crate::fs::exofs::gc::gc_tuning::{GcSystemState, GC_TUNER};
+use crate::fs::exofs::gc::gc_tuning::GcSystemState;
 
 // ==============================================================================
 // Constantes
@@ -238,7 +236,7 @@ impl GcThread {
     }
 
     /// Lance une seule passe GC.
-    fn run_one_pass(&self, reason: ScheduleReason) {
+    fn run_one_pass(&self, _reason: ScheduleReason) {
         self.passes_launched.fetch_add(1, Ordering::Relaxed);
 
         let epoch = self.control.epoch();

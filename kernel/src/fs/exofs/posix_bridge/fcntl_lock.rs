@@ -9,7 +9,6 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes

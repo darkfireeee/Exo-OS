@@ -16,8 +16,8 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::core::task::{ThreadControlBlock, TaskState, SchedPolicy};
-use crate::scheduler::core::runqueue::{PerCpuRunQueue, CFS_TARGET_LATENCY_MS, CFS_MIN_GRANULARITY_US};
+use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy};
+use crate::scheduler::core::runqueue::{CFS_TARGET_LATENCY_MS, CFS_MIN_GRANULARITY_US};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes CFS
@@ -67,7 +67,7 @@ pub fn timeslice_for(tcb: &ThreadControlBlock, nr_tasks: usize, total_weight: u6
 pub fn should_preempt_on_wakeup(
     running:  &ThreadControlBlock,
     woken:    &ThreadControlBlock,
-    min_vruntime: u64,
+    _min_vruntime: u64,
 ) -> bool {
     // Ne préempter que si le thread actuel n'est pas RT.
     if running.priority.is_realtime() { return false; }

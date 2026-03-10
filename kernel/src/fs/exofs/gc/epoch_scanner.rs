@@ -17,7 +17,6 @@
 
 #![allow(dead_code)]
 
-use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::fmt;
@@ -25,9 +24,8 @@ use core::fmt;
 use crate::fs::exofs::core::{
     BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId,
 };
-use crate::fs::exofs::epoch::epoch_root::{EpochRootEntry, EpochRootInMemory};
+use crate::fs::exofs::epoch::epoch_root::EpochRootInMemory;
 use crate::fs::exofs::epoch::epoch_slots::EpochSlot;
-use crate::fs::exofs::epoch::epoch_gc::GcEpochWindow;
 use crate::fs::exofs::gc::tricolor::TricolorWorkspace;
 use crate::scheduler::sync::spinlock::SpinLock;
 

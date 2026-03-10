@@ -13,9 +13,8 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use spin::RwLock;
 
-use crate::memory::core::types::{PhysAddr, VirtAddr, PageFlags};
+use crate::memory::core::types::PageFlags;
 use crate::memory::core::constants::PAGE_SIZE;
 use crate::memory::core::layout::{PHYS_MAP_BASE, PHYS_MAP_END, VMALLOC_BASE, VMALLOC_END, KERNEL_HEAP_START};
 

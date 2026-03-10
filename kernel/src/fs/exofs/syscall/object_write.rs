@@ -12,8 +12,7 @@ use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     read_user_buf, exofs_err_to_errno,
-    validate_fd, validate_count, validate_offset,
-    EINVAL, EFAULT, ENOMEM, ERANGE, EBADF,
+    validate_fd, validate_count, validate_offset, EFAULT,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -126,7 +125,7 @@ fn write_fd(
     offset:     u64,
     data:       &[u8],
     use_cursor: bool,
-    sync:       bool,
+    _sync:       bool,
 ) -> ExofsResult<WriteResult> {
     OBJECT_TABLE.check_writable(fd)?;
     let entry = OBJECT_TABLE.get(fd)?;

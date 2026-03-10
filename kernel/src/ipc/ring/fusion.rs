@@ -22,7 +22,6 @@
 
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use crate::ipc::core::{IpcError, MsgFlags};
-use crate::ipc::core::constants::{FUSION_RING_SIZE, FUSION_BATCH_THRESHOLD};
 use super::spsc::SpscRing;
 use super::batch::BatchBuffer;
 

@@ -25,7 +25,6 @@ use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::fmt;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::fs::exofs::core::{EpochId, ExofsError, ExofsResult, ObjectId};
 use crate::fs::exofs::epoch::epoch_pin::is_epoch_pinned;

@@ -159,7 +159,6 @@ pub use block_allocator::{BlockAllocator, ExtentHandle, ExtentState};
 
 // Block cache
 pub use block_cache::BlockCache;
-pub(crate) use block_cache::CacheBlock;
 
 // I/O batch
 pub use io_batch::{IoBatch, IoBatchReport, BatchStats, IoBatchQueue};

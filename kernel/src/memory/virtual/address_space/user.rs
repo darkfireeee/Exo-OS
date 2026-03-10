@@ -3,21 +3,19 @@
 // Espace d'adressage utilisateur — un par processus.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::{
-    VirtAddr, PhysAddr, Frame, PageFlags, AllocFlags, AllocError, PAGE_SIZE,
+    VirtAddr, PhysAddr, Frame, PageFlags, AllocError, PAGE_SIZE,
     layout::{USER_END, USER_STACK_TOP},
 };
 use crate::memory::virt::page_table::{
     PageTableWalker, FrameAllocatorForWalk, WalkResult,
-    builder::PageTableBuilder,
 };
-use crate::memory::virt::address_space::tlb::{flush_single, flush_range, flush_all};
+use crate::memory::virt::address_space::tlb::flush_single;
 use crate::memory::virt::vma::{
-    VmaDescriptor, VmaFlags, VmaBacking, VmaTree,
-    VmaAllocParams, find_gap, validate_vma,
+    VmaDescriptor, VmaFlags, VmaTree, find_gap,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -25,8 +25,7 @@ use core::mem::size_of;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
 use crate::fs::exofs::storage::layout::{
     superblock_mirror_offsets, superblock_primary, superblock_mirror_12k,
-    superblock_mirror_end, SUPERBLOCK_SIZE, SB_PRIMARY_OFFSET,
-    SB_MIRROR_12K_OFFSET, SB_MIRROR_END_FROM_END,
+    superblock_mirror_end,
 };
 use crate::fs::exofs::storage::superblock::ExoSuperblockDisk;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;

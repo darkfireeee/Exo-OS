@@ -22,8 +22,7 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::exoar_format::{
     ExoarHeader, ExoarEntryHeader, ExoarFooter, ExoarSummary,
-    EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD,
-    crc32c_compute, crc32c_update, crc32c_verify,
+    EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD, crc32c_update, crc32c_verify,
 };
 use core::mem::size_of;
 
@@ -50,7 +49,7 @@ pub trait BlobReceiver {
     fn receive_blob(&mut self, blob_id: &[u8; 32], data: &[u8], flags: u8) -> bool;
 
     /// Reçoit un tombstone (entrée de suppression).
-    fn receive_tombstone(&mut self, blob_id: &[u8; 32]) {}
+    fn receive_tombstone(&mut self, _blob_id: &[u8; 32]) {}
 }
 
 // ─── Erreurs spécifiques à la lecture ────────────────────────────────────────

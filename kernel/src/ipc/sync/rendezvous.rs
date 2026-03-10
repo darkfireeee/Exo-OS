@@ -12,7 +12,7 @@
 // RÈGLE RNDV-02 : exchange atomique via CAS à deux phases (offer/take).
 // RÈGLE RNDV-03 : spin-wait borné. Timeout → désinscription propre.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use core::mem::MaybeUninit;
 
 use crate::ipc::core::types::IpcError;

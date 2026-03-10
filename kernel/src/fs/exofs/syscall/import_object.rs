@@ -8,7 +8,7 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    exofs_err_to_errno, copy_struct_from_user, read_user_path_heap, write_user_buf,
+    exofs_err_to_errno, copy_struct_from_user, write_user_buf,
     EFAULT, EINVAL,
 };
 use super::export_object::{
@@ -130,7 +130,7 @@ fn import_raw(data: &[u8], flags: u32) -> ExofsResult<(BlobId, u64)> {
 
 /// Enregistre un blob importé sous un chemin (via OBJECT_TABLE).
 /// Ouvre un fd si OPEN_FD.
-fn register_import(blob_id: BlobId, path: &[u8], flags: u32) -> ExofsResult<u32> {
+fn register_import(blob_id: BlobId, _path: &[u8], flags: u32) -> ExofsResult<u32> {
     if flags & import_flags::OPEN_FD != 0 {
         let fd = super::object_fd::OBJECT_TABLE
             .open(blob_id, 0o644, 0, 0, 0)?;

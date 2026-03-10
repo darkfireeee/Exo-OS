@@ -5,7 +5,6 @@
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 
 /// Taille d'un magazine (objets en cache par CPU).
 pub const MAGAZINE_SIZE: usize = 64;

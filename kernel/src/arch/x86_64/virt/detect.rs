@@ -92,7 +92,7 @@ pub fn detect_hypervisor() -> HypervisorType {
 
 #[inline]
 fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
-    let (eax, ebx, ecx, edx): (u32, u32, u32, u32);
+    let (eax, _ebx, ecx, edx): (u32, u32, u32, u32);
     let ebx_r: u64;
     // SAFETY: CPUID non-privilégiée; xchg préserve rbx réservé par LLVM.
     unsafe {

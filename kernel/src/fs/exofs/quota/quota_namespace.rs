@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use super::quota_policy::{QuotaPolicy, QuotaLimits, QuotaKind, PolicyFlags};
+use super::quota_policy::{QuotaPolicy, QuotaLimits, QuotaKind};
 use super::quota_tracker::QuotaKey;
 
 // ─── Constants ────────────────────────────────────────────────────────────────

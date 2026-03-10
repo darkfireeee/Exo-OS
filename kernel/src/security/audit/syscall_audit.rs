@@ -18,7 +18,7 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use super::logger::{log_event, log_security_violation, AuditCategory, AuditOutcome};
 use super::rules::{evaluate_global, RuleAction};
 

@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::scheduler::sync::spinlock::SpinLock;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId, EpochId};
+use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
 use super::snapshot::{Snapshot, SnapshotRef, SNAPSHOT_MAX_COUNT, SNAPSHOT_NAME_LEN};
 
 // ─────────────────────────────────────────────────────────────

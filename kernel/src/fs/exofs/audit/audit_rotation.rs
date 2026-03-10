@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::audit_entry::{AuditEntry, AUDIT_ENTRY_SIZE};
-use super::audit_log::{AuditLog, AuditLogStats, AUDIT_LOG, RING_SIZE};
+use super::audit_log::{AuditLogStats, AUDIT_LOG};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RotationConfig

@@ -20,7 +20,6 @@
 
 use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use alloc::boxed::Box;
-use alloc::vec::Vec;
 use super::pid::Pid;
 use super::pcb::{ProcessControlBlock, Credentials};
 use crate::scheduler::sync::spinlock::SpinLock;

@@ -4,8 +4,7 @@
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
 use crate::memory::core::{VirtAddr, PageFlags, PAGE_SIZE};
-use crate::memory::physical::frame::ref_count::AtomicRefCount;
-use crate::memory::virt::vma::{VmaDescriptor, VmaFlags};
+use crate::memory::virt::vma::VmaDescriptor;
 use crate::memory::virt::address_space::tlb::flush_single;
 use super::{FaultContext, FaultResult};
 use super::handler::FaultAllocator;

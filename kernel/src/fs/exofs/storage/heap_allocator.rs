@@ -19,7 +19,7 @@ use crate::scheduler::sync::spinlock::SpinLock;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
 use crate::fs::exofs::storage::heap_free_map::HeapFreeMap;
 use crate::fs::exofs::storage::heap_coalesce::{HeapCoalescer, CoalesceOptions};
-use crate::fs::exofs::storage::layout::{BLOCK_SIZE, HEAP_ALLOC_ALIGN};
+use crate::fs::exofs::storage::layout::BLOCK_SIZE;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 
 // ─────────────────────────────────────────────────────────────────────────────

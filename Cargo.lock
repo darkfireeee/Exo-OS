@@ -298,6 +298,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-vfs-server"
+version = "0.1.0"
+dependencies = [
+ "spin",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

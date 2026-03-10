@@ -9,9 +9,8 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use super::validation::{
-    read_user_path_heap, write_user_u64_opt, exofs_err_to_errno,
-    validate_open_flags, validate_user_ptr,
-    EINVAL, EFAULT, ENOMEM, ERANGE, EBADF,
+    read_user_path_heap, exofs_err_to_errno,
+    validate_open_flags, EFAULT,
 };
 use super::object_fd::{OBJECT_TABLE, open_flags};
 
@@ -93,7 +92,7 @@ fn read_open_args(args_ptr: u64, flags_fallback: u32) -> Result<OpenArgs, i64> {
         return Ok(a);
     }
     // RÈGLE 9 : copy_from_user pour structure userspace.
-    let a = OpenArgs::defaults();
+    let _a = OpenArgs::defaults();
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
         super::validation::copy_struct_from_user::<OpenArgs>(args_ptr)
@@ -115,7 +114,7 @@ fn read_open_args(args_ptr: u64, flags_fallback: u32) -> Result<OpenArgs, i64> {
 /// - Retourne     : fd (≥ 4) en cas de succès, errno négatif sinon.
 pub fn sys_exofs_object_open(
     path_ptr:   u64,
-    path_len:   u64,
+    _path_len:   u64,
     flags:      u64,
     out_fd_ptr: u64,
     args_ptr:   u64,

@@ -16,7 +16,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use crate::scheduler::core::task::{ThreadControlBlock, TaskState};
 use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::task::CpuId;

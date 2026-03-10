@@ -7,7 +7,7 @@
 use crate::memory::core::{
     PhysAddr, VirtAddr, Frame, PageFlags, AllocFlags, AllocError, PAGE_SIZE,
 };
-use crate::memory::virt::page_table::x86_64::{PageTableEntry, PageTable, phys_to_table_mut, read_cr3};
+use crate::memory::virt::page_table::x86_64::{phys_to_table_mut, read_cr3};
 use crate::memory::virt::page_table::walker::{PageTableWalker, FrameAllocatorForWalk};
 
 // ─────────────────────────────────────────────────────────────────────────────

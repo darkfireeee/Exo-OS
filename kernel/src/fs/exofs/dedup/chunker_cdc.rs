@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::chunking::{Chunker, ChunkBoundary, DedupChunk, ChunkStats, CHUNK_MAX_PER_BLOB,
                      CHUNK_MIN_SIZE, CHUNK_MAX_SIZE};
-use super::chunk_fingerprint::{ChunkFingerprint, blake3_hash, fnv1a64};
+use super::chunk_fingerprint::{blake3_hash, fnv1a64};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes CDC

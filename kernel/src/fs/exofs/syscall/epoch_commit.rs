@@ -286,6 +286,18 @@ fn do_commit(args: &EpochCommitArgs) -> ExofsResult<EpochCommitResult> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// API interne — utilisée par exofs_shutdown() (pas de validation userspace)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Commit synchrone de l'epoch courante venant du kernel (shutdown path).
+///
+/// Évite le copy_from_user / write_user_buf — appelé directement depuis
+/// `exofs_shutdown()` sans frame syscall.
+pub fn do_shutdown_commit(args: &EpochCommitArgs) -> ExofsResult<EpochCommitResult> {
+    do_commit(args)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Handler SYS_EXOFS_EPOCH_COMMIT (518)
 // ─────────────────────────────────────────────────────────────────────────────
 

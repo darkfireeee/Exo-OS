@@ -17,8 +17,7 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use core::mem::MaybeUninit;
 
-use crate::ipc::core::types::{ChannelId, IpcError};
-use crate::scheduler::sync::spinlock::SpinLock;
+use crate::ipc::core::types::IpcError;
 
 // ---------------------------------------------------------------------------
 // IpcEvent — événement binaire

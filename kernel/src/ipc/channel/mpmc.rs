@@ -15,8 +15,8 @@ use core::sync::atomic::{AtomicU64, AtomicU32, AtomicUsize, Ordering};
 use core::mem::MaybeUninit;
 
 use crate::ipc::core::types::{ChannelId, IpcError, MsgFlags, MessageId, alloc_channel_id, alloc_message_id};
-use crate::ipc::core::constants::{MAX_MSG_SIZE, MAX_CHANNELS};
-use crate::ipc::ring::mpmc::{MpmcRing, MPMC_RING_SIZE};
+use crate::ipc::core::constants::MAX_MSG_SIZE;
+use crate::ipc::ring::mpmc::MpmcRing;
 use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
 use crate::scheduler::sync::spinlock::SpinLock;
 // IPC-04 (v6) : vérification capability via security::access_control

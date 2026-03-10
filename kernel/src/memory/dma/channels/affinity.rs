@@ -14,7 +14,6 @@
 // COUCHE 0 — aucune dépendance externe.
 
 use core::sync::atomic::{AtomicU8, AtomicU64, AtomicU32, Ordering};
-use spin::Mutex;
 
 use crate::memory::dma::core::types::DmaChannelId;
 use crate::memory::dma::channels::manager::MAX_DMA_CHANNELS;

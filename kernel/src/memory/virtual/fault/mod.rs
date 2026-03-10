@@ -9,7 +9,7 @@ pub mod handler;
 pub mod swap_in;
 
 use crate::memory::core::VirtAddr;
-use crate::memory::virt::vma::{VmaDescriptor, VmaBacking};
+use crate::memory::virt::vma::VmaDescriptor;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES PARTAGÉS

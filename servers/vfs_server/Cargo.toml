@@ -1,0 +1,14 @@
+[package]
+name              = "exo-vfs-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description       = "Exo-OS server: vfs_server — namespaces /proc /sys /dev (bare-metal no_std)"
+
+[[bin]]
+name = "exo-vfs-server"
+path = "src/main.rs"
+
+[dependencies]
+spin.workspace = true

@@ -14,7 +14,7 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use spin::{Mutex, Once};
+use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trait OomScorer — fourni par process/

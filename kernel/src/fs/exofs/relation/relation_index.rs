@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
 use crate::scheduler::sync::spinlock::SpinLock;
 use super::relation::{Relation, RelationId};
-use super::relation_type::{RelationKind, RelationDirection};
+use super::relation_type::RelationDirection;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes

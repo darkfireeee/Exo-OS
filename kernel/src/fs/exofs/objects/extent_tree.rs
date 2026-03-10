@@ -11,9 +11,9 @@
 use core::fmt;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::objects::extent::{
-    ObjectExtent, ObjectExtentDisk, EXTENT_FLAG_SPARSE,
+    ObjectExtent, ObjectExtentDisk,
 };
 
 // ── Constantes ─────────────────────────────────────────────────────────────────

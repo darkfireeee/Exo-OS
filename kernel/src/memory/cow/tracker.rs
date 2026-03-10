@@ -6,7 +6,7 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
-use crate::memory::core::types::{PhysAddr, Frame};
+use crate::memory::core::types::Frame;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TABLE DE COMPTAGE CoW

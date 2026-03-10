@@ -11,7 +11,7 @@ pub mod movable;
 
 use core::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use crate::memory::core::{
-    PhysAddr, Frame, AllocFlags, AllocError, ZoneType,
+    PhysAddr, Frame, AllocFlags, ZoneType,
     ZONE_DMA_END, ZONE_DMA32_END,
 };
 

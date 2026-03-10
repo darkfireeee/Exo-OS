@@ -7,8 +7,7 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    read_user_path_heap, write_user_buf, write_user_u64_opt, exofs_err_to_errno,
-    validate_open_flags, EINVAL, EFAULT, ENOMEM, ERANGE, EEXIST,
+    read_user_path_heap, write_user_buf, exofs_err_to_errno, EFAULT,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -108,7 +107,7 @@ pub struct CreateResult {
 /// OOM-02 : try_reserve pour le buffer initial.
 fn create_object(path_bytes: &[u8], path_len: usize, args: &CreateArgs) -> ExofsResult<CreateResult> {
     if args.flags & !0x07FF != 0 { return Err(ExofsError::InvalidArgument); }
-    let kind = ObjectKind::from_u8(args.kind).ok_or(ExofsError::InvalidArgument)?;
+    let _kind = ObjectKind::from_u8(args.kind).ok_or(ExofsError::InvalidArgument)?;
 
     // Dériver le BlobId du chemin.
     let blob_id = BlobId::from_bytes_blake3(&path_bytes[..path_len]);
@@ -166,7 +165,7 @@ fn create_object(path_bytes: &[u8], path_len: usize, args: &CreateArgs) -> Exofs
 /// `exofs_object_create(path_ptr, path_len, flags, out_ptr, args_ptr, _) → fd ou errno`
 pub fn sys_exofs_object_create(
     path_ptr: u64,
-    path_len: u64,
+    _path_len: u64,
     flags:    u64,
     out_ptr:  u64,
     args_ptr: u64,

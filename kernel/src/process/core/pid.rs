@@ -18,7 +18,7 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use core::fmt;
 
 // ─────────────────────────────────────────────────────────────────────────────

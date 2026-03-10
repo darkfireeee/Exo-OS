@@ -5,7 +5,7 @@
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
 use crate::memory::core::{
-    PhysAddr, VirtAddr, Frame, PageFlags, AllocFlags, AllocError, PAGE_SIZE,
+    PhysAddr, VirtAddr, Frame, PageFlags, AllocFlags, AllocError,
 };
 use crate::memory::virt::page_table::x86_64::{
     PageTableEntry, PageTable, PageTableLevel,

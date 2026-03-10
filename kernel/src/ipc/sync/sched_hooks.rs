@@ -23,7 +23,6 @@
 #![allow(dead_code)]
 
 use core::ptr::NonNull;
-use core::sync::atomic::Ordering;
 
 use crate::scheduler::sync::spinlock::SpinLock;
 use crate::scheduler::core::task::{ThreadControlBlock, TaskState};

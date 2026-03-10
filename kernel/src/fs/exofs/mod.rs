@@ -31,6 +31,9 @@ pub mod tests;
 use crate::fs::exofs::core::error::ExofsError;
 use crate::fs::exofs::storage::superblock::SuperblockInMemory;
 use crate::fs::exofs::recovery::boot_recovery::boot_recovery_sequence;
+use crate::fs::exofs::syscall::epoch_commit::{do_shutdown_commit, EpochCommitArgs, epoch_flags};
+use crate::process::lifecycle::create::{create_kthread, KthreadParams};
+use crate::scheduler::core::task::Priority;
 
 use alloc::sync::Arc;
 use ::core::sync::atomic::{AtomicBool, Ordering};
@@ -70,14 +73,39 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
     // Phase 3 : Initialisation de la couche de compatibilité POSIX
     posix_bridge::posix_bridge_init()?;
 
-    // Phase 4 : Threads background GC/writeback — TODO: implémenter gc_thread et writeback
-    // gc::gc_thread::start_gc_thread()?;
-    // io::writeback::start_writeback_thread()?;
+    // Phase 4 : Threads background GC/writeback
+    // Le kthread GC tourne en priorité basse — il appelle run_gc_two_phase() en boucle.
+    // Le scheduler l'interrompt entre les cycles.
+    let gc_params = KthreadParams {
+        name:       "exofs-gc",
+        entry:      exofs_gc_kthread,
+        arg:        0,
+        target_cpu: 0,
+        priority:   Priority::IDLE,  // priorité basse — GC ne doit pas bloquer les I/O
+    };
+    // Ignorer l'erreur si le scheduler n'est pas encore actif au boot
+    let _ = create_kthread(&gc_params);
 
     log_kernel!("[exofs] initialisé — disk_size={} MB",
         disk_size_bytes / (1024 * 1024));
 
     Ok(())
+}
+
+/// Fonction d'entrée du kthread GC ExoFS.
+///
+/// S'exécute en boucle au niveau de priorité basse.
+/// À chaque passage : récupère les blobs orphelins d'au moins 2 epochs de retard.
+fn exofs_gc_kthread(_arg: usize) -> ! {
+    loop {
+        // Lance un cycle GC complet (scan + collect) pour les epochs âgées de > 2.
+        let epoch_threshold = crate::fs::exofs::syscall::epoch_commit::current_epoch()
+            .saturating_sub(2);
+        let _ = crate::fs::exofs::syscall::gc_trigger::run_gc_two_phase(epoch_threshold);
+
+        // Yield le CPU via sys_sched_yield (fast-path) pour ne pas monopoliser le scheduler.
+        crate::syscall::fast_path::sys_sched_yield();
+    }
 }
 
 /// Enregistre ExoFS dans la table VFS du kernel.
@@ -92,11 +120,20 @@ pub fn exofs_shutdown() -> Result<(), ExofsError> {
         return Ok(());
     }
 
-    // Commit l'epoch courant avant de s'arrêter
-    // commit_current_epoch() — TODO: passer CommitInput après refactoring epoch_commit
-
-    // Sync superblock miroirs — TODO: implémenter sync_all_mirrors
-    // storage::superblock_backup::sync_all_mirrors()?;
+    // Commit l'epoch courante (force=true, flush tous les blobs en attente).
+    // Utilise l'API interne do_shutdown_commit() qui ne passe pas par userspace.
+    let commit_args = EpochCommitArgs {
+        flags:    epoch_flags::FORCE,
+        _pad:     0,
+        epoch_id: 0,  // 0 = epoch courante
+        checksum: 0,  // pas de vérification checksum au shutdown
+        hints:    0,
+    };
+    // Ignorer une erreur CommitInProgress (un commit concourant finira le travail).
+    match do_shutdown_commit(&commit_args) {
+        Ok(_) | Err(ExofsError::CommitInProgress) => {}
+        Err(e) => return Err(e),
+    }
 
     EXOFS_INITIALIZED.store(false, Ordering::Release);
     log_kernel!("[exofs] arrêt propre effectué");

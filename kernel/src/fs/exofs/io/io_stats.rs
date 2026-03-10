@@ -16,7 +16,6 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::cell::UnsafeCell;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─── Instance statique globale ────────────────────────────────────────────────
 

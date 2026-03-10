@@ -3,8 +3,7 @@
 // Types fondamentaux DMA — partagés par tous les sous-modules DMA.
 // COUCHE 0 — zéro dépendance externe.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
-use crate::memory::core::types::{PhysAddr, VirtAddr};
+use core::sync::atomic::{AtomicU64, Ordering};
 use crate::memory::core::constants::PAGE_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────

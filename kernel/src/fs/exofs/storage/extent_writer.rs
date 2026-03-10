@@ -17,7 +17,7 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
-use crate::fs::exofs::storage::layout::{BLOCK_SIZE, align_up};
+use crate::fs::exofs::storage::layout::BLOCK_SIZE;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 use crate::fs::exofs::storage::block_cache::BlockCache;
 

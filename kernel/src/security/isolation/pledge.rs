@@ -19,7 +19,7 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use super::sandbox::{SandboxPolicy, SandboxAction, syscall_nr};
+use super::sandbox::{SandboxPolicy, syscall_nr};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pledges disponibles

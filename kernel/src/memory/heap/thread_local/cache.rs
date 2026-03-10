@@ -7,15 +7,14 @@
 // COUCHE 0 — aucune dépendance externe.
 
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use spin::Mutex;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::memory::heap::thread_local::magazine::{CpuMagazinePair, MAGAZINE_SIZE};
 use crate::memory::heap::allocator::size_classes::{
-    HEAP_SIZE_CLASSES, NUM_HEAP_SIZE_CLASSES, heap_size_class_for,
+    HEAP_SIZE_CLASSES, heap_size_class_for,
 };
 use crate::memory::physical::allocator::slub::SLUB_CACHES;
-use crate::memory::core::types::{AllocError, AllocFlags};
+use crate::memory::core::types::AllocFlags;
 
 /// Nombre maximum de CPUs supportés.
 pub const MAX_CPUS: usize = 256;
@@ -155,7 +154,7 @@ impl PerCpuCache {
     }
 
     /// Chemin lent : recharge le magazine depuis le SLUB puis sert l'allocation.
-    pub fn alloc_slow(&mut self, size: usize, class_idx: usize) -> Option<NonNull<u8>> {
+    pub fn alloc_slow(&mut self, _size: usize, class_idx: usize) -> Option<NonNull<u8>> {
         // Remplit le magazine loaded depuis le SLUB (batch de MAGAZINE_SIZE/2).
         let batch = MAGAZINE_SIZE / 2;
         let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx as usize;

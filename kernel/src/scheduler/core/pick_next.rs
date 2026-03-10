@@ -19,8 +19,8 @@
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
 use super::preempt::assert_preempt_disabled;
-use super::runqueue::{PerCpuRunQueue, run_queue, MAX_TASKS_PER_CPU};
-use super::task::{ThreadControlBlock, CpuId, TaskState};
+use super::runqueue::PerCpuRunQueue;
+use super::task::{ThreadControlBlock, TaskState};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteurs globaux d'instrumentation

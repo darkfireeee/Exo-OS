@@ -156,7 +156,7 @@ impl NumaModule {
     }
 
     /// Initialise le module NUMA.
-    pub fn init(&self, cfg: NumaConfig, tick: u64) -> ExofsResult<()> {
+    pub fn init(&self, cfg: NumaConfig, _tick: u64) -> ExofsResult<()> {
         cfg.validate()?;
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.

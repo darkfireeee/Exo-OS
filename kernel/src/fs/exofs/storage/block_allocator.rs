@@ -21,7 +21,6 @@ use alloc::vec::Vec;
 use crate::scheduler::sync::spinlock::SpinLock;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
 use crate::fs::exofs::storage::heap_allocator::{Extent, HeapAllocator, AllocationPolicy};
-use crate::fs::exofs::storage::layout::BLOCK_SIZE;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 
 // ─────────────────────────────────────────────────────────────────────────────

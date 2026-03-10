@@ -17,7 +17,6 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 extern crate alloc;
-use alloc::vec::Vec;
 
 use hkdf::Hkdf;
 use sha2::{Sha256, Sha512};

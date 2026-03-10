@@ -6,7 +6,7 @@
 //
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::types::PhysAddr;

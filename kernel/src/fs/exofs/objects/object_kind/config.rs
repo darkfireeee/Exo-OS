@@ -13,7 +13,6 @@
 use core::fmt;
 use core::mem;
 use alloc::vec::Vec;
-use alloc::string::String;
 
 use crate::fs::exofs::core::{
     ObjectId, EpochId, ExofsError, ExofsResult, blake3_hash,

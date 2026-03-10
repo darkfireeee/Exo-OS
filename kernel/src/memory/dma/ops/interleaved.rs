@@ -19,9 +19,8 @@ use core::sync::atomic::{AtomicU64, AtomicU32, AtomicU8, Ordering};
 use spin::Mutex;
 
 use crate::memory::dma::core::types::{
-    DmaChannelId, DmaTransactionId, DmaDirection, DmaError,
+    DmaChannelId, DmaTransactionId, DmaError,
 };
-use crate::memory::dma::channels::manager::DMA_CHANNELS;
 use crate::memory::core::types::PhysAddr;
 use crate::memory::core::layout::PHYS_MAP_BASE;
 

@@ -10,7 +10,7 @@
 //
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
 use crate::memory::dma::core::types::{DmaChannelId, DmaTransactionId, DmaPriority, DmaError};

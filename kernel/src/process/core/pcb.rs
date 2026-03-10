@@ -20,8 +20,8 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, AtomicPtr, Ordering};
 use alloc::vec::Vec;
 use alloc::boxed::Box;
-use super::pid::{Pid, Tid};
-use crate::scheduler::core::task::{ProcessId, ThreadId};
+use super::pid::Pid;
+use crate::scheduler::core::task::ThreadId;
 use crate::scheduler::sync::spinlock::SpinLock;
 use crate::process::signal::default::SigHandlerTable;
 

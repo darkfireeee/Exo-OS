@@ -19,7 +19,7 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 use crate::arch::x86_64::cpu::msr;
 
 pub const MAX_CPUS: usize = 512;

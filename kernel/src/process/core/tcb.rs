@@ -19,13 +19,13 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, AtomicBool};
 use alloc::boxed::Box;
 use crate::scheduler::core::task::{
-    ThreadControlBlock, ThreadId, ProcessId, Priority, SchedPolicy, CpuId,
-    TaskState, task_flags,
+    ThreadControlBlock, ThreadId, ProcessId, Priority, SchedPolicy,
+    TaskState,
 };
-use super::pid::{Pid, Tid, TID_ALLOCATOR, PID_ALLOCATOR};
+use super::pid::{Pid, Tid};
 use crate::process::signal::queue::{SigQueue, RTSigQueue};
 
 /// Taille du stack kernel par thread (4 pages × 4096 = 16 384 bytes).

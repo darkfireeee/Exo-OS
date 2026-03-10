@@ -24,7 +24,6 @@ use core::sync::atomic::Ordering;
 use spin::Once;
 use crate::process::core::tcb::{ProcessThread, ThreadAddress};
 use crate::process::core::pcb::{ProcessControlBlock, ProcessState, process_flags};
-use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::signal::mask::reset_signals_on_exec;
 use crate::process::signal::mask::block_all_except_kill;
 use crate::memory::virt::UserAddressSpace;

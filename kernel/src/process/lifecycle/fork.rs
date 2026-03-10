@@ -23,9 +23,9 @@ use alloc::boxed::Box;
 use spin::Once;
 use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR, TID_ALLOCATOR};
 use crate::process::core::pcb::{ProcessControlBlock, ProcessState, process_flags};
-use crate::process::core::tcb::{ProcessThread, ThreadAddress};
+use crate::process::core::tcb::ProcessThread;
 use crate::process::core::registry::PROCESS_REGISTRY;
-use crate::scheduler::core::task::{SchedPolicy, Priority, ThreadId, ProcessId, CpuId};
+use crate::scheduler::core::task::{ThreadId, CpuId};
 use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::preempt::{PreemptGuard, MAX_CPUS};
 

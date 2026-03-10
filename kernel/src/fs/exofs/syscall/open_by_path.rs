@@ -20,12 +20,9 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use super::validation::{
-    read_user_path_heap, exofs_err_to_errno,
-    validate_open_flags, validate_user_ptr,
-    EINVAL, EFAULT, ENOMEM, ERANGE, ENOENT, EBADF,
-    EXOFS_PATH_MAX, EXOFS_FD_MAX,
+    read_user_path_heap, exofs_err_to_errno, EFAULT, ENOENT,
 };
-use super::object_fd::{OBJECT_TABLE, open_flags};
+use super::object_fd::OBJECT_TABLE;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes flags open()

@@ -13,8 +13,7 @@ use crate::process::core::pid::Pid;
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::core::pcb::ProcessState;
 use super::default::{Signal, SigAction, SigActionKind, default_action};
-use super::queue::{SigInfo, SigQueue, RTSigQueue};
-use super::mask::SigMask;
+use super::queue::SigInfo;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Erreurs
@@ -127,7 +126,7 @@ pub fn handle_pending_signals(
     frame:  &mut SyscallFrame,
 ) {
     use crate::process::core::pid::Pid;
-    use super::handler::setup_signal_frame;
+    
 
     // Pas de signal_pending ? Sortie rapide.
     if !thread.sched_tcb.signal_pending.load(Ordering::Acquire) { return; }

@@ -17,7 +17,7 @@ use alloc::string::String;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::audit_entry::{AuditEntry, AuditOp, AuditResult, AuditSeverity, AUDIT_ENTRY_SIZE};
 use super::audit_filter::AuditFilter;
-use super::audit_log::{AuditLog, AUDIT_LOG, RING_SIZE};
+use super::audit_log::{AuditLog, AUDIT_LOG};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes

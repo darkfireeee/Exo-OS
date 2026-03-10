@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicUsize, AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::{
-    AllocError, AllocFlags, Frame, PhysAddr, VirtAddr, PAGE_SIZE, CACHE_LINE_SIZE,
+    AllocError, AllocFlags, PhysAddr, PAGE_SIZE, CACHE_LINE_SIZE,
 };
 use crate::memory::core::layout::PHYS_MAP_BASE;
 

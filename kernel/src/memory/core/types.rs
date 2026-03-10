@@ -6,8 +6,7 @@
 
 use core::fmt;
 use core::ops::{Add, AddAssign, Sub, SubAssign, BitAnd, BitOr, Not};
-use core::cmp::Ordering;
-use super::constants::{PAGE_SIZE, PAGE_SHIFT, PAGE_MASK, HUGE_PAGE_SIZE, HUGE_PAGE_SHIFT};
+use super::constants::{PAGE_SHIFT, PAGE_MASK, HUGE_PAGE_SIZE};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PHYSADDR — Adresse physique

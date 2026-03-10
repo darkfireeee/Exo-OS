@@ -27,8 +27,7 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 pub use crate::ipc::core::transfer::ZeroCopyRef;
-use crate::ipc::core::{IpcError, MsgFlags, array_index_nospec};
-use super::spsc::SpscRing;
+use crate::ipc::core::{IpcError, array_index_nospec};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ZeroCopyBuffer — buffer SHM avec compteur de références

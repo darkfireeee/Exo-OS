@@ -15,7 +15,7 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::scheduler::sync::spinlock::SpinLock;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
-use super::snapshot::{flags, SNAPSHOT_NAME_LEN};
+use super::snapshot::flags;
 use super::snapshot_list::SNAPSHOT_LIST;
 
 // ─────────────────────────────────────────────────────────────

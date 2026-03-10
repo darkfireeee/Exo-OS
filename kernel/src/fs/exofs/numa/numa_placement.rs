@@ -229,7 +229,7 @@ impl NumaPlacement {
     // ── Statistiques ──────────────────────────────────────────────────────────
 
     /// Distribution des placements par nœud (RECUR-01).
-    pub fn node_distribution(&self, n_samples: usize)
+    pub fn node_distribution(&self, _n_samples: usize)
         -> ExofsResult<Vec<(NumaNodeId, u64)>>
     {
         let n = self.n_nodes.load(Ordering::Relaxed) as usize;

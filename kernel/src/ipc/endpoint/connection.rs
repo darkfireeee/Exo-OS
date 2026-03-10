@@ -18,13 +18,11 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use crate::ipc::core::types::{EndpointId, ChannelId, Cookie, IpcError, alloc_channel_id};
-use crate::ipc::core::constants::{MAX_CHANNELS, RPC_PROTOCOL_VERSION};
+use crate::ipc::core::constants::RPC_PROTOCOL_VERSION;
 use crate::scheduler::core::task::ThreadId;
-use crate::scheduler::sync::spinlock::SpinLock;
 use crate::security::capability::{CapToken, Rights, CapTable};
 use crate::security::access_control::{check_access, ObjectKind};
 use super::descriptor::{EndpointDesc, PendingConnection};
-use super::registry::lookup_endpoint;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ConnectionState — état d'une connexion établie
@@ -209,7 +207,7 @@ pub struct AcceptResult {
 /// # Retour
 /// `Ok(ConnectResult)` avec le ChannelId alloué pour recevoir la réponse.
 pub fn do_connect(
-    ep_id:  EndpointId,
+    _ep_id:  EndpointId,
     ep:     &EndpointDesc,
     client: ThreadId,
     table:  &CapTable,

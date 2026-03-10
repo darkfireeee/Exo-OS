@@ -179,7 +179,7 @@ impl NumaAllocator {
         order:     u8,
         ctx:       NumaAllocContext,
         flags:     AllocFlags,
-        current_cpu: u8,
+        _current_cpu: u8,
     ) -> Result<Frame, AllocError> {
         if !self.enabled.load(Ordering::Acquire) {
             // Fallback non-NUMA simple
@@ -235,7 +235,7 @@ impl NumaAllocator {
         preferred:    NumaNode,
         flags:        AllocFlags,
         active_mask:  u8,
-        n_nodes:      usize,
+        _n_nodes:      usize,
         do_fallback:  bool,
     ) -> Result<Frame, AllocError> {
         // Essai 1 : nœud préféré

@@ -23,7 +23,7 @@ pub mod tss;
 pub mod vga_early;
 pub mod virt;
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
 
 use super::ArchInfo;
 

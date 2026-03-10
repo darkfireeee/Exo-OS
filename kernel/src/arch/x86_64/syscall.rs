@@ -25,7 +25,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::cpu::msr;
-use super::gdt::{GDT_KERNEL_CS, GDT_USER_CS32, GDT_USER_DS, GDT_USER_CS64};
+use super::gdt::{GDT_KERNEL_CS, GDT_USER_CS32};
 
 // ── Numéros syscall ───────────────────────────────────────────────────────────
 

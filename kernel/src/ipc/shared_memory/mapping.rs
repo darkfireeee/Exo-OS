@@ -15,10 +15,9 @@
 // mode simulé (virt = phys) — acceptable en dev/test mono-processus.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use core::mem::MaybeUninit;
 
 use crate::ipc::core::types::{IpcError, ProcessId};
-use crate::ipc::shared_memory::descriptor::{ShmDescriptor, ShmId, ShmPermissions, SHM_DESC_DIR};
+use crate::ipc::shared_memory::descriptor::{ShmPermissions, SHM_DESC_DIR};
 use crate::ipc::shared_memory::page::{PhysAddr, PageFlags, PAGE_SIZE};
 use crate::scheduler::sync::spinlock::SpinLock;
 

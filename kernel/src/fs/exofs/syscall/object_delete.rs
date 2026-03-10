@@ -7,7 +7,7 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    read_user_path_heap, exofs_err_to_errno, EFAULT, EINVAL,
+    read_user_path_heap, exofs_err_to_errno, EFAULT,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -164,7 +164,7 @@ pub fn delete_by_fd(fd: u32, flags: u32) -> ExofsResult<DeleteResult> {
 /// `exofs_object_delete(path_ptr, path_len, flags, out_ptr, _, _) → 0 ou errno`
 pub fn sys_exofs_object_delete(
     path_ptr: u64,
-    path_len: u64,
+    _path_len: u64,
     flags:    u64,
     out_ptr:  u64,
     _a5:      u64,
@@ -409,7 +409,7 @@ pub fn encode_tombstones(entries: &[TombstoneEntry]) -> ExofsResult<Vec<u8>> {
 ///
 /// Format répertoire : magic[4] + count[4] + entry_blob_id[32] * count.
 /// RECUR-01 : while, pas de récursion.
-pub fn delete_directory(dir_blob: BlobId, flags: u32) -> ExofsResult<u64> {
+pub fn delete_directory(dir_blob: BlobId, _flags: u32) -> ExofsResult<u64> {
     let data = BLOB_CACHE.get(&dir_blob)
         .ok_or(ExofsError::BlobNotFound)?;
 

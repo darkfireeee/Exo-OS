@@ -99,8 +99,8 @@ fn kernel_physical_end() -> u64 {
         static _exo_boot_stack_top: u8;
     }
     // &raw const ne déréférence pas le pointeur — pas d'accès à la valeur.
-    // SAFETY: symbole défini par le linker, toujours résolu avant le premier appel.
-    let top = unsafe { &raw const _exo_boot_stack_top as u64 };
+    // Pas de unsafe nécessaire : l'opération ne lit pas la mémoire.
+    let top = &raw const _exo_boot_stack_top as u64;
     // Arrondir au-dessus à la prochaine page (garde une marge de sécurité).
     (top + PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1)
 }

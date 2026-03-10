@@ -19,14 +19,11 @@
 // - ONDISK-03 : ce module est purement RAM.
 
 use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
-use crate::scheduler::sync::spinlock::SpinLock;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
 use crate::fs::exofs::storage::heap_allocator::{HeapAllocator, Extent, AllocationPolicy};
-use crate::fs::exofs::storage::heap_coalesce::{HeapCoalescer, CoalesceOptions, CoalesceReport};
 use crate::fs::exofs::storage::layout::{
-    BLOCK_SIZE, HEAP_START_OFFSET, LayoutMap, heap_zone, blocks_for_bytes
+    BLOCK_SIZE, LayoutMap, blocks_for_bytes
 };
-use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HeapConfig — configuration du heap

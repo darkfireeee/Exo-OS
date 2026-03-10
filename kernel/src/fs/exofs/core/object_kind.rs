@@ -566,7 +566,7 @@ pub fn minimum_rights_for_kind_op(
     use crate::fs::exofs::core::rights::{
         RIGHT_READ, RIGHT_WRITE, RIGHT_EXEC, RIGHT_DELETE,
         RIGHT_LIST, RIGHT_CREATE, RIGHT_SNAPSHOT_CREATE,
-        RIGHT_STAT, RIGHT_SETMETA,
+        RIGHT_STAT,
     };
     match (kind, op) {
         (_, KindOperation::Stat)               => RIGHT_STAT,

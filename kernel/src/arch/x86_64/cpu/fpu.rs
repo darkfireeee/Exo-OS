@@ -259,7 +259,7 @@ pub unsafe fn write_xcr0(val: u64) {
 /// - Configure XCR0 avec x87 + SSE (+ AVX si disponible)
 /// - Exécute FINIT pour nettoyer l'état x87
 pub fn init_fpu_for_cpu() {
-    use super::msr;
+    
 
     // Lecture CR0 courant
     let cr0 = super::super::read_cr4();

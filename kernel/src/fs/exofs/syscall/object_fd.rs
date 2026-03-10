@@ -160,7 +160,7 @@ impl ObjectFdTableInner {
         size:      u64,
         epoch_id:  u64,
         owner_uid: u64,
-        next_fd:   u32,
+        _next_fd:   u32,
     ) -> ExofsResult<u32> {
         let idx = self.find_free_slot().ok_or(ExofsError::NoSpace)?;
         let fd = FD_RESERVED.saturating_add(idx as u32);

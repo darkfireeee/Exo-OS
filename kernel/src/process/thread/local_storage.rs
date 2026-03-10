@@ -17,10 +17,9 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicU32, AtomicUsize, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 use core::cell::UnsafeCell;
 use alloc::boxed::Box;
-use alloc::vec::Vec;
 
 /// Taille maximale d'un bloc TLS statique (64 KiB).
 pub const TLS_MAX_SIZE: usize = 65536;

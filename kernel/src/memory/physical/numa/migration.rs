@@ -21,9 +21,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::memory::core::types::{Frame, PhysAddr, AllocFlags};
 use crate::memory::core::constants::PAGE_SIZE;
 use crate::memory::core::address::phys_to_virt;
-use crate::memory::physical::allocator::buddy::alloc_pages;
 use crate::memory::physical::allocator::buddy::free_pages;
-use super::node::{NUMA_NODES, NUMA_NODE_INVALID, NumaNode};
+use super::node::NUMA_NODES;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Statistiques

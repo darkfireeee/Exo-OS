@@ -22,7 +22,7 @@ use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     write_user_buf, exofs_err_to_errno,
     validate_user_ptr, validate_fd,
-    EINVAL, EFAULT, ENOMEM, EBADF, ENODIR,
+    EINVAL,
     EXOFS_LIST_MAX, EXOFS_NAME_MAX,
 };
 use super::object_fd::OBJECT_TABLE;

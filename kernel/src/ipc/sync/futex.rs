@@ -127,7 +127,7 @@ fn nop_wake_fn(_tid: u64, _code: i32) {}
 /// - La durée de vie du waiter alloué sur la pile est garantie par le
 ///   spin-loop : la fonction ne retourne pas tant que le waiter est actif.
 pub unsafe fn futex_wait(
-    addr:      &AtomicU32,
+    _addr:      &AtomicU32,
     key:       FutexKey,
     expected:  u32,
     thread_id: u32,

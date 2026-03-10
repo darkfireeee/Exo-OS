@@ -23,7 +23,6 @@
 extern crate alloc;
 use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use super::incremental_export::EpochId;
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 

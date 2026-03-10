@@ -17,7 +17,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use super::io_stats::{IoOpKind, IoOpRecord, IO_STATS};
+use super::io_stats::IO_STATS;
 
 // ─── Trait d'accès au store ───────────────────────────────────────────────────
 

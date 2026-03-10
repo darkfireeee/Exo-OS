@@ -20,7 +20,7 @@ use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy, task_flags, 
 use crate::scheduler::core::runqueue;
 use crate::scheduler::policies::{tick_check_preempt, rr_tick, timeslice_for};
 use crate::scheduler::smp::load_balance::{balance_cpu, BALANCE_INTERVAL_TICKS};
-use super::{hrtimer, clock};
+use super::hrtimer;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes

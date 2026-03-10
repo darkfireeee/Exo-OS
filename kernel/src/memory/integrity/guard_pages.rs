@@ -22,7 +22,6 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::constants::PAGE_SIZE;
-use crate::memory::core::types::VirtAddr;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes

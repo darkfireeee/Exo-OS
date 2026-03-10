@@ -22,7 +22,6 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::export_audit::{EXPORT_AUDIT, ExportEvent, ExportSession};
 use super::exoar_writer::{ExoarWriter, ExoarWriteOptions, ArchiveSink};
-use super::exoar_format::ARCHIVE_FLAG_INCREMENTAL;
 
 // ─── Identifiant d'epoch ─────────────────────────────────────────────────────
 

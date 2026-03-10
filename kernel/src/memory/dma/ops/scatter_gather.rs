@@ -3,12 +3,10 @@
 // Opération DMA Scatter-Gather — transfert depuis/vers plusieurs fragments.
 // COUCHE 0 — aucune dépendance externe.
 
-use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::{
-    DmaDirection, DmaMapFlags, DmaCapabilities, DmaPriority, DmaError,
-    DmaTransactionId, IovaAddr,
+    DmaDirection, DmaMapFlags, DmaCapabilities, DmaPriority, DmaError, IovaAddr,
 };
-use crate::memory::dma::core::descriptor::{SgEntry, DmaDescriptor, DMA_DESCRIPTOR_TABLE, MAX_SG_ENTRIES};
+use crate::memory::dma::core::descriptor::{SgEntry, DMA_DESCRIPTOR_TABLE, MAX_SG_ENTRIES};
 use crate::memory::dma::core::mapping::IOVA_ALLOCATOR;
 use crate::memory::dma::channels::manager::DMA_CHANNELS;
 use crate::memory::dma::iommu::domain::IDENTITY_DOMAIN_ID;

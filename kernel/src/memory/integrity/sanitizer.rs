@@ -24,7 +24,6 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::memory::core::layout::KERNEL_HEAP_START;
-use crate::memory::core::constants::PAGE_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration shadow

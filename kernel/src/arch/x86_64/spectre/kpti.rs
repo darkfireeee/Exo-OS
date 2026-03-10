@@ -11,7 +11,6 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use super::super::cpu::msr;
 
 // ── État global KPTI ──────────────────────────────────────────────────────────
 

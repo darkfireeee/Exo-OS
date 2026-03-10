@@ -181,7 +181,7 @@ pub fn sys_sched_yield(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
 }
 
 /// `getcpu(cpu_ptr, node_ptr, tcache)`.
-pub fn sys_getcpu(cpu_ptr: u64, node_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_getcpu(cpu_ptr: u64, _node_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     if cpu_ptr != 0 && cpu_ptr >= USER_ADDR_MAX { return EFAULT; }
     ENOSYS
 }

@@ -2,7 +2,6 @@
 //
 // Profil de puissance — table .rodata de coût énergétique par P-state/C-state.
 
-use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Coût énergétique normalisé par P-state (P0 = 1000 = référence).
 /// Valeurs indicatives ; calibrage réel via RAPL/ACPI.

@@ -8,8 +8,8 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    exofs_err_to_errno, write_user_buf, read_user_path_heap,
-    EFAULT, EINVAL, EXOFS_NAME_MAX,
+    exofs_err_to_errno, write_user_buf,
+    EFAULT,
 };
 use super::object_fd::OBJECT_TABLE;
 

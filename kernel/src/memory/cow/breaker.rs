@@ -17,7 +17,7 @@
 
 use core::sync::atomic::Ordering;
 
-use crate::memory::core::types::{Frame, PhysAddr, AllocFlags, AllocError};
+use crate::memory::core::types::{Frame, AllocFlags, AllocError};
 use crate::memory::core::constants::PAGE_SIZE;
 use crate::memory::core::layout::PHYS_MAP_BASE;
 use crate::memory::physical::allocator::{alloc_page, free_page};

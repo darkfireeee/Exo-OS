@@ -5,7 +5,7 @@
 //
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::memory::heap::thread_local::cache::{CPU_CACHES, MAX_CPUS, CACHED_SIZE_CLASSES};
 use crate::memory::heap::allocator::size_classes::HEAP_SIZE_CLASSES;
@@ -76,7 +76,7 @@ fn drain_class_inner(cpu_id: usize, class_idx: usize, policy: DrainPolicy) -> us
                 unsafe { SLUB_CACHES[slub_idx].free(ptr); }
                 count += 1;
             }
-            while let Some(ptr) = cache.magazines[class_idx].prev.pop() {                // SAFETY: ptr alloqué par SLUB_CACHES[slub_idx].                unsafe { SLUB_CACHES[slub_idx].free(ptr); }
+            while let Some(_ptr) = cache.magazines[class_idx].prev.pop() {                // SAFETY: ptr alloqué par SLUB_CACHES[slub_idx].                unsafe { SLUB_CACHES[slub_idx].free(ptr); }
                 count += 1;
             }
         }

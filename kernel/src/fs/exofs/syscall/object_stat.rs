@@ -135,7 +135,7 @@ fn stat_by_path(path_bytes: &[u8], path_len: usize, flags: u32) -> ExofsResult<O
 /// Sinon : `fd_or_path` est un pointeur userspace vers une chaîne de chemin.
 pub fn sys_exofs_object_stat(
     fd_or_path: u64,
-    length:     u64,
+    _length:     u64,
     flags:      u64,
     out_ptr:    u64,
     _a5:        u64,

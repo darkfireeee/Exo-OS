@@ -19,9 +19,8 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use core::mem::MaybeUninit;
 
-use crate::ipc::core::types::{IpcError, MessageFlags};
-use crate::ipc::message::builder::{IpcMessage, MAX_MSG_INLINE};
-use crate::ipc::ring::spsc::{SpscRing, SPSC_CAPACITY};
+use crate::ipc::core::types::IpcError;
+use crate::ipc::message::builder::IpcMessage;
 use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
 
 // ---------------------------------------------------------------------------

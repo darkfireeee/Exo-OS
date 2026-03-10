@@ -315,7 +315,7 @@ pub fn sys_getrusage_compat(who: u64, rusage_ptr: u64, _a3: u64, _a4: u64, _a5: 
 }
 
 /// `prctl(option, arg2, arg3, arg4, arg5)` — contrôle du processus.
-pub fn sys_prctl_compat(option: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64, _a6: u64) -> i64 {
+pub fn sys_prctl_compat(option: u64, arg2: u64, _arg3: u64, _arg4: u64, _arg5: u64, _a6: u64) -> i64 {
     match option {
         1  => { /* PR_SET_DUMPABLE */ 0 }
         2  => { /* PR_GET_DUMPABLE */ 1 }
@@ -323,7 +323,7 @@ pub fn sys_prctl_compat(option: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64,
         15 => { /* PR_SET_NAME : fixe le nom du thread dans le commslab */
             // arg2 = pointeur vers chaîne null-terminée (16 bytes max)
             match crate::syscall::validation::UserStr::from_user(arg2, 16) {
-                Ok(name) => {
+                Ok(_name) => {
                     // Écriture du nom dans le TCB via scheduler
                     // (implémentation dans scheduler/core/task.rs)
                     0

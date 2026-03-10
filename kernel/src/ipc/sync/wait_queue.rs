@@ -9,10 +9,8 @@
 // Ce module ne duplique pas la logique — il délègue au scheduler.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
-use core::mem::MaybeUninit;
 
 use crate::ipc::core::types::{ChannelId, IpcError};
-use crate::scheduler::sync::spinlock::SpinLock;
 
 // ---------------------------------------------------------------------------
 // Politique de réveil

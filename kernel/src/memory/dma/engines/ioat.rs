@@ -7,7 +7,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
-use crate::memory::core::{PhysAddr, PAGE_SIZE};
+use crate::memory::core::PhysAddr;
 use crate::memory::dma::stats::counters::{DMA_STATS, dma_stat_submit, dma_stat_complete, dma_stat_error};
 
 // ─────────────────────────────────────────────────────────────────────────────

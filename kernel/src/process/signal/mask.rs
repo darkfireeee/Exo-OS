@@ -177,7 +177,7 @@ pub fn sigprocmask(
 pub fn reset_signals_on_exec(tcb: &ThreadControlBlock) {
     // Acquérir le pointeur vers le PCB pour réinitialiser la table des handlers.
     // Le PCB contient le champ `sig_handlers: SpinLock<SigHandlerTable>`.
-    use crate::process::core::pcb::ProcessControlBlock;
+    
     use crate::process::core::registry::PROCESS_REGISTRY;
     use crate::process::core::pid::Pid;
 

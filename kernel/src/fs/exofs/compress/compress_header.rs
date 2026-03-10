@@ -9,7 +9,6 @@
 
 #![allow(dead_code)]
 
-use alloc::vec;
 use crate::fs::exofs::compress::algorithm::CompressionAlgorithm;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 

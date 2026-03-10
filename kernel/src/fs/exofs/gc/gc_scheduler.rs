@@ -21,8 +21,7 @@
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
-use crate::fs::exofs::core::{EpochId, ExofsError, ExofsResult};
-use crate::fs::exofs::gc::gc_metrics::GC_METRICS;
+use crate::fs::exofs::core::EpochId;
 use crate::fs::exofs::gc::gc_state::GC_STATE;
 use crate::fs::exofs::gc::gc_tuning::{GcSystemState, GcTriggerReason, GC_TUNER};
 use crate::scheduler::sync::spinlock::SpinLock;

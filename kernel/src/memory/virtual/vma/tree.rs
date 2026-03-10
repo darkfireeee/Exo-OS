@@ -5,7 +5,6 @@
 // Taille maximale : MAX_VMAS_PER_PROCESS VMAs par processus.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-use core::ptr::NonNull;
 use crate::memory::core::VirtAddr;
 use super::descriptor::VmaDescriptor;
 

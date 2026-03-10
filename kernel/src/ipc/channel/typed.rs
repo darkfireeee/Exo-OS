@@ -20,7 +20,6 @@ use core::mem::{size_of, MaybeUninit};
 use core::marker::PhantomData;
 
 use crate::ipc::core::types::{ChannelId, IpcError, MsgFlags, MessageId, alloc_channel_id, alloc_message_id};
-use crate::ipc::core::constants::MAX_MSG_SIZE;
 use crate::ipc::ring::spsc::SpscRing;
 use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
 

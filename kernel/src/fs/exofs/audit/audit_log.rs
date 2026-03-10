@@ -13,7 +13,7 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use super::audit_entry::{AuditEntry, AuditOp, AuditResult, AuditSeverity, AUDIT_ENTRY_SIZE};
+use super::audit_entry::{AuditEntry, AuditResult, AuditSeverity, AUDIT_ENTRY_SIZE};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes du ring-buffer

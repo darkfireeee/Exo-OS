@@ -8,7 +8,6 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::memory::core::{AllocError, AllocFlags};
-use crate::memory::physical::allocator::slab::{size_class_for, SLAB_CACHES};
 use crate::memory::physical::allocator::slub::{SLUB_CACHES};
 use super::size_classes::{heap_size_class_for, HEAP_LARGE_THRESHOLD, HEAP_SIZE_CLASSES};
 

@@ -25,7 +25,7 @@ use super::chunk_index::CHUNK_INDEX;
 use super::blob_registry::BLOB_REGISTRY;
 use super::blob_sharing::BLOB_SHARING;
 use super::dedup_stats::DEDUP_STATS;
-use super::dedup_policy::{DedupPolicy, DedupMode};
+use super::dedup_policy::DedupPolicy;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DedupResult — résultat d'une opération de déduplication

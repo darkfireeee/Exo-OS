@@ -225,7 +225,7 @@ struct SlotState {
 impl EpochSlotSelector {
     /// Crée un sélecteur avec tous les slots marqués invalides.
     pub fn new(disk_size: DiskOffset) -> Self {
-        let slots = EpochSlot::all();
+        let _slots = EpochSlot::all();
         let slot_states = [
             SlotState { valid: false, epoch_id: 0, offset: DiskOffset(EPOCH_SLOT_A_OFFSET) },
             SlotState { valid: false, epoch_id: 0, offset: DiskOffset(EPOCH_SLOT_B_OFFSET) },
@@ -394,7 +394,7 @@ pub fn read_and_classify_slot(data: &[u8; 104]) -> SlotReadResult {
 /// - `reason`   : raison de la dégradation (log seulement).
 pub fn recovery_write_slot(
     selector: &EpochSlotSelector,
-    reason:   RecoverySlotReason,
+    _reason:   RecoverySlotReason,
 ) -> ExofsResult<(EpochSlot, DiskOffset)> {
     // En recovery, on priorise toujours le slot invalide.
     selector.select_write_slot()

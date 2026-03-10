@@ -20,7 +20,6 @@ use crate::fs::exofs::core::{
 };
 use crate::fs::exofs::core::blob_id::blake3_hash;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
-use crate::fs::exofs::storage::layout::BLOCK_SIZE;
 use crate::fs::exofs::storage::blob_reader::{BlobReader, BlobVerifyMode};
 use crate::fs::exofs::storage::object_writer::{
     ObjectHeaderDisk, ObjectType, BlobRef,
@@ -179,7 +178,7 @@ impl ObjectReader {
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
         // ── 1. Lecture + vérif en-tête ────────────────────────────
-        let (meta, disk_hdr) = Self::read_header(header_offset, &read_fn, mode)?;
+        let (meta, _disk_hdr) = Self::read_header(header_offset, &read_fn, mode)?;
 
         if mode == ObjectVerifyMode::HeaderOnly {
             return Ok(ObjectReadResult {

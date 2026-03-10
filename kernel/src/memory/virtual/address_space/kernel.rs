@@ -3,18 +3,17 @@
 // Espace d'adressage kernel — singleton partagé par tous les processus.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::{
-    VirtAddr, PhysAddr, Frame, PageFlags, AllocFlags, AllocError, PAGE_SIZE,
-    layout::{PHYS_MAP_BASE, VMALLOC_BASE, KERNEL_HEAP_START, KERNEL_START},
+    VirtAddr, PhysAddr, Frame, PageFlags, AllocError, PAGE_SIZE,
+    layout::VMALLOC_BASE,
 };
 use crate::memory::virt::page_table::{
-    PageTableWalker, FrameAllocatorForWalk, read_cr3, write_cr3,
+    PageTableWalker, FrameAllocatorForWalk,
 };
-use crate::memory::virt::address_space::mapper::Mapper;
-use crate::memory::virt::address_space::tlb::{flush_all, flush_single};
+use crate::memory::virt::address_space::tlb::flush_single;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ESPACE D'ADRESSAGE KERNEL

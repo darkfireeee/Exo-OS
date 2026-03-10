@@ -14,7 +14,6 @@
 
 extern crate alloc;
 use alloc::vec::Vec;
-use core::sync::atomic::Ordering;
 
 use crate::fs::exofs::core::{
     ExofsError, ExofsResult, BlobId, EpochId, SnapshotId, DiskOffset,
@@ -272,7 +271,7 @@ impl SnapshotCreator {
         name:       &[u8],
         created_at: u64,
     ) -> ExofsResult<SnapshotCreateResult> {
-        let parent = SNAPSHOT_LIST.get(parent_id)?;
+        let _parent = SNAPSHOT_LIST.get(parent_id)?;
 
         let params = SnapshotParams {
             name: make_snapshot_name(name),

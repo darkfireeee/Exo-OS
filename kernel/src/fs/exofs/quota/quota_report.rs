@@ -4,9 +4,9 @@
 
 use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use super::quota_tracker::{QuotaKey, QuotaUsage, QUOTA_TRACKER, QUOTA_MAX_ENTRIES};
+use super::quota_tracker::{QuotaKey, QuotaUsage, QUOTA_TRACKER};
 use super::quota_audit::{QUOTA_AUDIT, AuditSummary, audit_tick};
-use super::quota_policy::{QuotaLimits, QuotaKind};
+use super::quota_policy::QuotaLimits;
 
 // ─── Seuils de sévérité (‰) ──────────────────────────────────────────────────
 

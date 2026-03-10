@@ -26,7 +26,6 @@ use crate::fs::exofs::core::{
     ExofsError, ExofsResult, EpochId, DiskOffset,
     EPOCH_ROOT_MAGIC,
 };
-use crate::fs::exofs::core::flags::EpochFlags;
 use crate::fs::exofs::epoch::epoch_root::{
     EpochRootInMemory, EpochRootEntry, EpochRootPageHeader,
     verify_epoch_root_page,

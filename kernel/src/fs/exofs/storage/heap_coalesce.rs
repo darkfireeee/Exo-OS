@@ -20,7 +20,7 @@
 
 use alloc::vec::Vec;
 use crate::fs::exofs::core::ExofsError;
-use crate::fs::exofs::storage::heap_free_map::{HeapFreeMap, FreeRun};
+use crate::fs::exofs::storage::heap_free_map::HeapFreeMap;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -282,7 +282,7 @@ impl HeapCoalescer {
             // Les deux sont libres → fusionner (marquer le buddy comme "occupé" puis
             // laisser le nouveau super-bloc libre).
             // En pratique on aligne sur l'aîné.
-            let size   = 1u64 << order;
+            let _size   = 1u64 << order;
             let parent = current.min(buddy);
 
             // Re-marquer les deux blocs puis le parent libre (déjà dans la carte).

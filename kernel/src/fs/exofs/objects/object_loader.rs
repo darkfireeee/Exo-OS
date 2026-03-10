@@ -12,22 +12,14 @@
 
 use core::fmt;
 use core::mem;
-use core::sync::atomic::{AtomicU32, AtomicU64};
 use alloc::sync::Arc;
 
 use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, ObjectId, BlobId, EpochId, DiskOffset,
+    ExofsError, ExofsResult, DiskOffset,
 };
 use crate::fs::exofs::objects::logical_object::{
     LogicalObject, LogicalObjectDisk, LogicalObjectRef,
 };
-use crate::fs::exofs::objects::object_meta::ObjectMeta;
-use crate::fs::exofs::objects::inline_data::InlineData;
-use crate::fs::exofs::objects::physical_ref::PhysicalRef;
-use crate::fs::exofs::objects::extent_tree::ExtentTree;
-use crate::fs::exofs::core::object_kind::ObjectKind;
-use crate::fs::exofs::core::object_class::ObjectClass;
-use crate::fs::exofs::core::flags::ObjectFlags;
 use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
 use crate::scheduler::sync::rwlock::RwLock;
 
@@ -133,7 +125,7 @@ impl ObjectLoader {
     /// HDR-03 : `verify()` est appelé en premier sur le buffer.
     pub fn load_from_buf(
         buf:         &[u8; 256],
-        disk_offset: DiskOffset,
+        _disk_offset: DiskOffset,
         verify_content: bool,
     ) -> ExofsResult<LogicalObjectRef> {
         // SAFETY: LogicalObjectDisk est #[repr(C, packed)], même taille.

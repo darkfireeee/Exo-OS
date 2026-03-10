@@ -18,6 +18,7 @@ members = [
     "servers/memory_server",
     "servers/network_server",
     "servers/scheduler_server",
+    "servers/vfs_server",
 ]
 # libs/ gère son propre workspace Cargo.toml avec ses sous-crates std.
 exclude = ["libs"]

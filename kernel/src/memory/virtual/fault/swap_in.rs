@@ -15,8 +15,8 @@
 
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
-use crate::memory::core::{VirtAddr, PageFlags, Frame, AllocError, PAGE_SIZE};
-use crate::memory::virt::vma::{VmaDescriptor, VmaFlags};
+use crate::memory::core::{VirtAddr, Frame, AllocError, PAGE_SIZE};
+use crate::memory::virt::vma::VmaDescriptor;
 use super::{FaultContext, FaultResult};
 use super::handler::FaultAllocator;
 

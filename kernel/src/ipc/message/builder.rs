@@ -13,7 +13,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ipc::core::types::{
-    ChannelId, EndpointId, ProcessId, IpcError, MessageFlags, MessageType,
+    EndpointId, ProcessId, IpcError, MessageFlags, MessageType,
 };
 use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
 

@@ -13,9 +13,7 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
-use spin::RwLock;
 
-use crate::memory::core::types::PhysAddr;
 use crate::memory::core::constants::PAGE_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────

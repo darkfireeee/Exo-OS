@@ -27,7 +27,6 @@ use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 use crate::fs::exofs::storage::layout::{BLOCK_SIZE, align_up};
 use crate::fs::exofs::storage::blob_writer::{BlobWriter, BlobWriterConfig, BlobWriteResult};
 use crate::fs::exofs::storage::compression_choice::{CompressionType, ContentHint};
-use crate::fs::exofs::storage::extent_writer::{Extent, ExtentWriter};
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -552,7 +551,7 @@ impl UpdateObjectWriter {
     /// Réécrit les chunks affectés par un patch
     pub fn apply_patch<RewriteFn>(
         patch: &ObjectPatch,
-        old_blobs: &[BlobRef],
+        _old_blobs: &[BlobRef],
         chunk_size: usize,
         full_data: &mut Vec<u8>,
         rewrite_fn: RewriteFn,

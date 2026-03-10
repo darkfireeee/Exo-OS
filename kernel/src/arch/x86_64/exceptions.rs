@@ -516,7 +516,7 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     // bit 5 = PK (protection key violation)
     let is_present     = error_code & 1 != 0;
     let is_write       = error_code & 2 != 0;
-    let is_user        = error_code & 4 != 0;
+    let _is_user        = error_code & 4 != 0;
     let is_instr_fetch = error_code & 16 != 0;
     let _ = is_present; // Utilisé implicitement via FaultCause + FaultContext
 

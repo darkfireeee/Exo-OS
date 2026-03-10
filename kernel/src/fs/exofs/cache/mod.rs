@@ -31,7 +31,6 @@ pub use metadata_cache::{MetadataCache, METADATA_CACHE};
 pub use object_cache::{ObjectCache, CachedObject, OBJECT_CACHE};
 pub use path_cache::{PathCache, PATH_CACHE};
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CacheHealthReport

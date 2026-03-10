@@ -9,10 +9,9 @@
 //
 // Couche 0 — aucune dépendance scheduler/process/ipc/fs.
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use core::ptr::NonNull;
+use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::memory::core::{VirtAddr, PhysAddr, PageFlags, Frame, AllocFlags, PAGE_SIZE};
+use crate::memory::core::{VirtAddr, PageFlags, Frame, PAGE_SIZE};
 use crate::memory::virt::vma::{VmaDescriptor, VmaFlags, VmaBacking};
 use super::{FaultContext, FaultResult};
 use super::handler::FaultAllocator;

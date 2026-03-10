@@ -12,8 +12,7 @@ use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     write_user_buf, exofs_err_to_errno,
-    validate_fd, validate_count, validate_offset,
-    EINVAL, EFAULT, ENOMEM, ERANGE, EBADF,
+    validate_fd, validate_count, validate_offset, EFAULT, ENOMEM,
 };
 use super::object_fd::OBJECT_TABLE;
 

@@ -27,7 +27,6 @@ use spin::Mutex;
 use lz4_flex::block::{compress_into, decompress_into};
 
 use crate::memory::core::constants::PAGE_SIZE;
-use crate::memory::core::types::PhysAddr;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES

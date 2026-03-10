@@ -23,7 +23,7 @@
 
 #![allow(dead_code)]
 
-use super::token::{CapToken, ObjectId, CapObjectType, stat_verified, stat_denied};
+use super::token::{CapToken, CapObjectType, stat_verified, stat_denied};
 use super::rights::Rights;
 use super::table::CapTable;
 

@@ -21,11 +21,9 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::ipc::core::types::{EndpointId, IpcError, alloc_endpoint_id};
+use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::ipc::core::constants::MAX_ENDPOINTS;
 use crate::scheduler::sync::spinlock::SpinLock;
-use crate::scheduler::core::task::ThreadId;
-use super::descriptor::{EndpointDesc, EndpointName};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hash FNV-1a 64 bits

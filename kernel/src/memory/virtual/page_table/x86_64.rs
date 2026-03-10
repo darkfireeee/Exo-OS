@@ -5,7 +5,6 @@
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
 use core::ops::{Index, IndexMut};
-use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::memory::core::{
     PhysAddr, VirtAddr, Frame, PageFlags, PAGE_SIZE, PHYS_MAP_BASE,

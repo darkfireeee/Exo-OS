@@ -17,7 +17,7 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use crate::scheduler::sync::wait_queue::{WaitQueue, WaitNode};
-use crate::scheduler::core::task::{ThreadControlBlock, TaskState, task_flags};
+use crate::scheduler::core::task::{ThreadControlBlock, TaskState};
 
 /// Compteurs d'instrumentation.
 pub static KMUTEX_CONTENTIONS: AtomicU64 = AtomicU64::new(0);

@@ -9,7 +9,7 @@
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::ipc::core::constants::SHM_POOL_PAGES;
-use crate::ipc::shared_memory::page::{ShmPage, PhysAddr, PageFlags, ShmPageStats, PAGE_SIZE};
+use crate::ipc::shared_memory::page::{ShmPage, PhysAddr, PageFlags, PAGE_SIZE};
 
 // ---------------------------------------------------------------------------
 // Bitmap d'allocation — 256 pages = 4 mots de 64 bits

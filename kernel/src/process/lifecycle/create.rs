@@ -30,9 +30,9 @@ extern "C" {
     fn kthread_trampoline();
 }
 use crate::process::core::pcb::{ProcessControlBlock, Credentials};
-use crate::process::core::tcb::{ProcessThread, KSTACK_SIZE};
+use crate::process::core::tcb::ProcessThread;
 use crate::process::core::registry::PROCESS_REGISTRY;
-use crate::scheduler::core::task::{SchedPolicy, Priority, ThreadId, ProcessId, CpuId};
+use crate::scheduler::core::task::{SchedPolicy, Priority, ThreadId, CpuId};
 use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::preempt::{PreemptGuard, MAX_CPUS};
 
@@ -268,7 +268,7 @@ pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
         *frame.add(3) = params.arg as u64;             // r13 → arg
         *frame.add(4) = 0;                             // r14
         *frame.add(5) = 0;                             // r15
-        *frame.add(6) = kthread_trampoline as u64;     // return address → trampoline
+        *frame.add(6) = kthread_trampoline as *const () as u64;     // return address → trampoline
         (*thread_ptr).sched_tcb.kernel_rsp = kernel_rsp;
     }
 

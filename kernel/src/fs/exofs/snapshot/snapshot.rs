@@ -12,7 +12,6 @@
 
 extern crate alloc;
 use alloc::vec::Vec;
-use core::sync::atomic::AtomicU64;
 
 use crate::fs::exofs::core::{
     ExofsError, ExofsResult, BlobId, EpochId, SnapshotId, DiskOffset,

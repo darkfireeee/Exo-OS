@@ -17,13 +17,11 @@ use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use crate::ipc::core::types::{IpcError, ProcessId};
 use crate::ipc::core::constants::SHM_POOL_PAGES;
-use crate::ipc::shared_memory::page::{PhysAddr, PageFlags, PAGE_SIZE};
 use crate::ipc::shared_memory::pool::{
-    shm_page_alloc, shm_page_free, shm_page_phys, POOL_BITMAP_WORDS,
+    shm_page_alloc, shm_page_free,
 };
 use crate::ipc::shared_memory::descriptor::{ShmPermissions, shm_create};
 use crate::ipc::shared_memory::allocator::{ShmHandle, ShmSizeClass};
-use crate::scheduler::sync::spinlock::SpinLock;
 
 // ---------------------------------------------------------------------------
 // Configuration NUMA

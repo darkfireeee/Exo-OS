@@ -8,14 +8,12 @@
 // Centralise les appels à blake3_hash pour les structures epoch.
 // Chaque utilisation documente PRÉCISÉMENT quels octets sont hachés.
 
-use core::mem::size_of;
 
 use crate::fs::exofs::core::{
     ExofsError, ExofsResult, blake3_hash,
     EPOCH_ROOT_MAGIC, EXOFS_MAGIC,
 };
 use crate::fs::exofs::epoch::epoch_record::EpochRecord;
-use crate::fs::exofs::epoch::epoch_root::EpochRootPageHeader;
 
 // =============================================================================
 // Checksum d'un EpochRecord (104 octets, body = 72 B, checksum = 32 B)

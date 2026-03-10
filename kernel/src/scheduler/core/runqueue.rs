@@ -20,10 +20,10 @@
 // LOCK ORDERING (regle_bonus.md) : Scheduler locks < Memory locks
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use core::ptr::NonNull;
-use super::task::{ThreadControlBlock, CpuId, Priority, SchedPolicy, TaskState};
-use super::preempt::{IrqGuard, MAX_CPUS};
+use super::task::{ThreadControlBlock, CpuId, SchedPolicy};
+use super::preempt::MAX_CPUS;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes

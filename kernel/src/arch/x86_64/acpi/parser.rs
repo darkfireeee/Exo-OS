@@ -120,7 +120,7 @@ fn find_rsdp_in_range(start: u64, end: u64) -> Option<u64> {
         if &sig == RSDP_SIGNATURE {
             // SAFETY: addr est aligné 16 B et dans Low Memory identity-mapped ;
             // on vient de vérifier la signature, la structure Rsdp commence ici.
-            let rsdp = unsafe { &*(addr as *const Rsdp) };
+            let _rsdp = unsafe { &*(addr as *const Rsdp) };
             // Valider le checksum des 20 premiers octets
             // SAFETY: même invariant — 20 B dès `addr` sont lisibles (addr+20 <= end vérifié).
             let bytes20 = unsafe { core::slice::from_raw_parts(addr as *const u8, 20) };

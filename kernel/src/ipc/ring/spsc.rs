@@ -27,7 +27,7 @@ use crate::ipc::core::{
     RING_SIZE, RING_MASK,
     array_index_nospec,
 };
-use crate::ipc::core::transfer::{RingSlot, MessageHeader};
+use crate::ipc::core::transfer::MessageHeader;
 use crate::ipc::core::{IpcFastMsg};
 use super::slot::SlotCell;
 

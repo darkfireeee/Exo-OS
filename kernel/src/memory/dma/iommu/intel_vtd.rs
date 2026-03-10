@@ -7,16 +7,9 @@
 // Référence : Intel VT-d Architecture Specification, Rev 3.4.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
-use spin::Mutex;
 
 use crate::memory::core::types::PhysAddr;
-use crate::memory::core::constants::PAGE_SIZE;
-use crate::memory::dma::core::types::{IovaAddr, DmaError};
-use crate::memory::dma::iommu::page_table::{
-    IommuPageTable, IommuFrameAlloc, iommu_map, iommu_unmap, iommu_walk
-};
-use crate::memory::dma::core::types::IommuDomainId;
-use crate::memory::dma::iommu::domain::{IDENTITY_DOMAIN_ID, IOMMU_DOMAINS};
+use crate::memory::dma::core::types::DmaError;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REGISTRES VT-d (offsets dans le MMIO DMAR)

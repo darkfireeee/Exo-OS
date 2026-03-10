@@ -6,7 +6,6 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::quota_tracker::{QuotaKey, QuotaUsage, QUOTA_TRACKER};
 use super::quota_audit::{QuotaEvent, QUOTA_AUDIT};
-use super::quota_policy::QuotaKind;
 
 // ─── EnforcementAction ────────────────────────────────────────────────────────
 
@@ -220,7 +219,7 @@ impl QuotaEnforcer {
             } else { false };
 
             if grace_ok {
-                let remaining_grace = entry.map(|e| {
+                let _remaining_grace = entry.map(|e| {
                     e.soft_breach_tick.saturating_add(limits.grace_ticks).saturating_sub(tick)
                 }).unwrap_or(0);
                 self._build(key, EnforcementAction::DenyGrace, used, limits.hard_bytes, request_bytes, tick)
@@ -329,8 +328,8 @@ impl QuotaEnforcer {
         &self,
         key:       QuotaKey,
         action:    EnforcementAction,
-        used:      u64,
-        limit:     u64,
+        _used:      u64,
+        _limit:     u64,
         requested: u64,
         _tick:     u64,
     ) -> EnforcementResult {

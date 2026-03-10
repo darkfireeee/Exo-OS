@@ -14,7 +14,7 @@
 // RÈGLE SER-02 : pas d'allocation heap.
 // RÈGLE SER-03 : les offsets sont en octets depuis le début du buffer.
 
-use core::mem::{size_of, align_of};
+use core::mem::size_of;
 use core::num::NonZeroU64;
 
 use crate::ipc::core::types::{EndpointId, MessageType, MessageFlags, IpcError};

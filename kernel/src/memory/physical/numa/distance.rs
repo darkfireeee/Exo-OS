@@ -14,8 +14,7 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use spin::Once;
+use core::sync::atomic::AtomicBool;
 
 use super::node::{MAX_NUMA_NODES, NUMA_NODES};
 

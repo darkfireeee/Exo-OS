@@ -19,16 +19,14 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::Ordering;
-use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR, TID_ALLOCATOR};
-use crate::process::core::pcb::{ProcessControlBlock, ProcessState, process_flags};
+use crate::process::core::pid::{Pid, TID_ALLOCATOR};
+use crate::process::core::pcb::{ProcessControlBlock, ProcessState};
 use crate::process::core::tcb::ProcessThread;
-use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::signal::delivery::send_signal_to_pid;
 use crate::process::signal::default::Signal;
 use crate::scheduler::core::task::TaskState;
 use crate::scheduler::core::preempt::PreemptGuard;
 use crate::scheduler::core::runqueue::run_queue;
-use crate::scheduler::core::task::CpuId;
 use crate::scheduler::schedule_block;
 use super::reap::REAPER_QUEUE;
 

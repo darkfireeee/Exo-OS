@@ -17,7 +17,7 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use crate::ipc::core::types::{EndpointId, ChannelId, IpcError};
+use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::ipc::core::constants::{MAX_ENDPOINT_OWNERS, ENDPOINT_BACKLOG, MAX_ENDPOINT_NAME_LEN};
 use crate::scheduler::core::task::ThreadId;
 

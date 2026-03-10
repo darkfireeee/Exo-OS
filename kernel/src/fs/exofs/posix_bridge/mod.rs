@@ -85,7 +85,7 @@ pub use vfs_compat::{
     vfs_open_count,
 };
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::fs::exofs::core::ExofsResult;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // État global du pont

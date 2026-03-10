@@ -18,7 +18,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy, TaskState};
+use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy};
 use crate::scheduler::core::runqueue::PerCpuRunQueue;
 
 // ─────────────────────────────────────────────────────────────────────────────

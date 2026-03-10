@@ -12,10 +12,9 @@
 
 use core::fmt;
 use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ObjectId, EpochId, ExofsError, ExofsResult};
+use crate::fs::exofs::core::{ObjectId, ExofsResult};
 use crate::fs::exofs::objects::logical_object::LogicalObjectRef;
 use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
 use crate::scheduler::sync::spinlock::SpinLock;

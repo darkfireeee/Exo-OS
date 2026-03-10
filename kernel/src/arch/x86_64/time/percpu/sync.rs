@@ -38,7 +38,7 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicU64, AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use crate::arch::x86_64::time::ktime;
 
 // ── Constantes ────────────────────────────────────────────────────────────────

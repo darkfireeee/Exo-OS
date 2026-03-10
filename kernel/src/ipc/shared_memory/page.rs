@@ -9,7 +9,7 @@
 //   RÈGLE NO-ALLOC : pas de Vec/Box en zone chaude
 //   FLAG NO_COW obligatoire sur toutes les pages SHM IPC
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
 // Flags de page partagée

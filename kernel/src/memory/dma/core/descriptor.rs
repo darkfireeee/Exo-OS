@@ -5,7 +5,7 @@
 //
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU8, AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::{
     DmaTransactionId, DmaTransactionState, DmaDirection,

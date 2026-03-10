@@ -16,7 +16,7 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use spin::RwLock;
 
 use super::node::{NUMA_NODES, NUMA_NODE_INVALID, MAX_NUMA_NODES};

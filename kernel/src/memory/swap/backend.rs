@@ -5,10 +5,8 @@
 // L'intégration avec le FS se fait via le trait `SwapDevice`.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
-use spin::Mutex;
 
-use crate::memory::core::types::{PhysAddr, AllocError};
-use crate::memory::core::constants::PAGE_SIZE;
+use crate::memory::core::types::PhysAddr;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TRAIT D'ABSTRACTION DU DISPOSITIF SWAP

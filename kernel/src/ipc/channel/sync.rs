@@ -17,9 +17,8 @@ use core::mem::MaybeUninit;
 
 use crate::ipc::core::types::{ChannelId, IpcError, MsgFlags, MessageId, alloc_channel_id, alloc_message_id};
 use crate::ipc::core::constants::{
-    MAX_MSG_SIZE, MSG_HEADER_MAGIC, SYNC_CHANNEL_TIMEOUT_NS,
+    MAX_MSG_SIZE, SYNC_CHANNEL_TIMEOUT_NS,
 };
-use crate::ipc::core::transfer::{MessageHeader, TransferEngine};
 use crate::ipc::ring::zerocopy::ZeroCopyRef;
 use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
 use crate::scheduler::sync::spinlock::SpinLock;

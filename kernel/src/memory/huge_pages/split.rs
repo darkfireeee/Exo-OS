@@ -10,7 +10,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::memory::core::{
-    PhysAddr, VirtAddr, Frame, PageFlags, PAGE_SIZE, HUGE_PAGE_SIZE,
+    PhysAddr, Frame, PAGE_SIZE, HUGE_PAGE_SIZE,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

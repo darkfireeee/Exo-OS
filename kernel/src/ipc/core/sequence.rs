@@ -17,7 +17,7 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use super::constants::{SEQ_WINDOW_BITS, SEQ_WINDOW_SIZE};
+use super::constants::SEQ_WINDOW_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SeqSender — côté émetteur (monotone croissant)

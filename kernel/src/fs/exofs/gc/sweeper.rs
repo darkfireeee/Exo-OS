@@ -28,7 +28,7 @@ use crate::fs::exofs::epoch::epoch_pin::is_epoch_pinned;
 use crate::fs::exofs::gc::blob_refcount::BLOB_REFCOUNT;
 use crate::fs::exofs::gc::gc_metrics::GC_METRICS;
 use crate::fs::exofs::gc::gc_state::GC_STATE;
-use crate::fs::exofs::gc::tricolor::{SweepResult, TricolorWorkspace};
+use crate::fs::exofs::gc::tricolor::TricolorWorkspace;
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ==============================================================================

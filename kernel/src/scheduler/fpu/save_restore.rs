@@ -14,8 +14,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::Ordering;
-use super::state::{FpuState, XSAVE_AREA_SIZE, FPU_STATE_MAX_SIZE};
-use super::lazy::is_fpu_used;
+use super::state::{FpuState, XSAVE_AREA_SIZE};
 use crate::scheduler::core::task::ThreadControlBlock;
 
 // ─────────────────────────────────────────────────────────────────────────────

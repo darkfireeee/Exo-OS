@@ -34,7 +34,6 @@ use crate::fs::exofs::epoch::epoch_pin::is_epoch_pinned;
 use crate::fs::exofs::gc::gc_metrics::GC_METRICS;
 use crate::fs::exofs::gc::gc_state::GC_STATE;
 use crate::fs::exofs::gc::reference_tracker::REFERENCE_TRACKER;
-use crate::fs::exofs::gc::relation_walker::RELATION_WALKER;
 use crate::fs::exofs::gc::tricolor::{TricolorWorkspace, GC_MARK_BATCH_SIZE};
 use crate::scheduler::sync::spinlock::SpinLock;
 

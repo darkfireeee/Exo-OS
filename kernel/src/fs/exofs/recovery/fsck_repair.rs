@@ -533,7 +533,7 @@ impl FsckRepair {
     fn apply_custom(
         device: &mut dyn BlockDevice,
         code:   u64,
-        param:  u64,
+        _param:  u64,
     ) -> ExofsResult<bool> {
         // Code 0 = NOP (test).
         if code == 0 { return Ok(true); }

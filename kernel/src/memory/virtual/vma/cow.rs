@@ -5,7 +5,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::memory::core::{
-    VirtAddr, Frame, PhysAddr, PageFlags, AllocFlags, AllocError, PAGE_SIZE,
+    Frame, PageFlags, AllocError, PAGE_SIZE,
 };
 use crate::memory::physical::frame::ref_count::{AtomicRefCount, RefCountDecResult};
 use super::descriptor::{VmaDescriptor, VmaFlags};

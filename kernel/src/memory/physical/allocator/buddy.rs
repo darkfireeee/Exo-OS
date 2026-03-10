@@ -17,14 +17,13 @@
 //   - Jamais de fragmentation externe au-delà de 1 bloc de chaque ordre.
 
 use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
-use core::ptr::{NonNull, null_mut};
+use core::ptr::null_mut;
 
 use spin::Mutex;
 
 use crate::memory::core::{
     Frame, PhysAddr, AllocFlags, AllocError, ZoneType,
-    PAGE_SIZE, BUDDY_MAX_ORDER, BUDDY_ORDER_COUNT,
-    pages_to_bytes, is_aligned,
+    PAGE_SIZE, BUDDY_MAX_ORDER, BUDDY_ORDER_COUNT, is_aligned,
 };
 use crate::memory::physical::frame::descriptor::{FRAME_DESCRIPTORS, FrameFlags};
 

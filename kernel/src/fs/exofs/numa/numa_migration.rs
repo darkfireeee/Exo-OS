@@ -5,7 +5,7 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
-use super::numa_affinity::{MAX_NUMA_NODES, NumaNodeId};
+use super::numa_affinity::MAX_NUMA_NODES;
 use super::numa_stats::NUMA_STATS;
 
 // ─── MigrationStatus ─────────────────────────────────────────────────────────

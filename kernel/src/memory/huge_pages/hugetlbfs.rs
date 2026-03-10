@@ -17,8 +17,8 @@ use core::sync::atomic::{AtomicU64, AtomicBool, AtomicU32, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::{
-    Frame, PhysAddr, AllocFlags, AllocError,
-    PAGE_SIZE, HUGE_PAGE_SIZE,
+    Frame, PhysAddr, AllocFlags,
+    PAGE_SIZE,
 };
 use crate::memory::physical::allocator::buddy::{alloc_pages, free_pages};
 

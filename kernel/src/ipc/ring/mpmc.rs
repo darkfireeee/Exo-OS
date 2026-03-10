@@ -24,7 +24,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::cell::UnsafeCell;
 use crate::ipc::core::{IpcError, MsgFlags, alloc_message_id, RING_SIZE, RING_MASK, array_index_nospec};
-use crate::ipc::core::transfer::{MessageHeader, RingSlot};
+use crate::ipc::core::transfer::MessageHeader;
 use super::slot::SlotCell;
 
 /// Nombre de slots dans un ring MPMC (= RING_SIZE).

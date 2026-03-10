@@ -12,16 +12,14 @@
 // Chaque niveau maintient une freelist de descripteurs réutilisables.
 // L'allocation tente le niveau exact, puis remonte si nécessaire.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ipc::core::types::{IpcError, ProcessId};
 use crate::ipc::shared_memory::descriptor::{
-    ShmDescriptor, ShmPermissions, ShmId,
+    ShmPermissions, ShmId,
     shm_create, shm_destroy, shm_region_count, MAX_SHM_REGIONS,
 };
-use crate::ipc::shared_memory::pool::{
-    shm_page_alloc, shm_page_free, shm_pool_stats,
-};
+use crate::ipc::shared_memory::pool::shm_pool_stats;
 
 // ---------------------------------------------------------------------------
 // Niveaux de taille

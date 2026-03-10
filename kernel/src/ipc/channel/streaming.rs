@@ -17,8 +17,8 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use core::mem::MaybeUninit;
 
-use crate::ipc::core::types::{ChannelId, IpcError, MsgFlags, MessageId, alloc_channel_id, alloc_message_id};
-use crate::ipc::core::constants::{PAGE_SIZE, SHM_POOL_PAGES};
+use crate::ipc::core::types::{ChannelId, IpcError, MessageId, alloc_channel_id, alloc_message_id};
+use crate::ipc::core::constants::SHM_POOL_PAGES;
 use crate::ipc::ring::zerocopy::{ZeroCopyRing, ZeroCopyBuffer, ZeroCopyRef};
 use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
 use crate::scheduler::sync::spinlock::SpinLock;

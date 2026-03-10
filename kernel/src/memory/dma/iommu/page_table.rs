@@ -7,11 +7,9 @@
 // Format : 4 niveaux (L4/L3/L2/L1), 512 entrées par niveau, 4096 octets par table.
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU64, Ordering};
 use crate::memory::core::types::PhysAddr;
 use crate::memory::core::address::phys_to_virt;
-use crate::memory::core::constants::PAGE_SIZE;
-use crate::memory::dma::core::types::{IovaAddr, DmaError, IommuDomainId};
+use crate::memory::dma::core::types::{IovaAddr, DmaError};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ENTRÉE DE TABLE IOMMU

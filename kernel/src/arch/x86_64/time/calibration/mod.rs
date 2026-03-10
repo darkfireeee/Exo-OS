@@ -52,7 +52,6 @@ pub mod validation;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use super::sources;
 use crate::arch::x86_64::cpu::tsc as cpu_tsc;
-use crate::arch::x86_64::acpi::hpet as acpi_hpet;
 
 // Ré-exports publics pour les modules consommateurs (drift, percpu, ktime).
 pub use window::{CalibrationResult, CalibrationSample, CalibrationSource, mean_and_variance};
@@ -346,23 +345,9 @@ fn run_calibration_chain() -> CalibratedTsc {
             };
         }
         e9_tag(b"CAL:PIT-DRV-FAIL");
-        // ── Détection QEMU TCG / I/O lent ─────────────────────────────────
-        // PIT-DRV-FAIL est un signal fort : port I/O très lent (QEMU TCG).
-        // Les tentatives 5-7 (PIT window, HPET MMIO, PM-Timer) bloqueraient
-        // des dizaines de secondes. On saute directement au fallback 3 GHz.
-        // Sera ré-affiné post-APIC par recalibrate_tsc() si disponible.
-        let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
-        e9_tag(b"CAL:FB3G");
-        return CalibratedTsc {
-            tsc_hz: 3_000_000_000u64,
-            source: CalibSource::Fallback3G,
-            confidence: 10,
-            variance_hz2: 0,
-            valid_samples: 0,
-            duration_tsc_cycles: duration,
-            tsc_invariant,
-            seq,
-        };
+        // PIT-DRV-FAIL : PIT I/O trop lent (QEMU TCG probable).
+        // On continue vers les tentatives suivantes ; le fallback final
+        // à 3 GHz sera atteint si toutes échouent.
     }
 
     // ── Tentative 5 : PIT window multi-sample (version window.rs) ─────────

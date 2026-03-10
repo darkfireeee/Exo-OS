@@ -10,9 +10,8 @@
 
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy};
-use crate::scheduler::policies::deadline::{refresh_deadline, check_deadline_miss, release_thread};
-use crate::scheduler::timer::clock::monotonic_ns;
+use crate::scheduler::core::task::ThreadControlBlock;
+use crate::scheduler::policies::deadline::{refresh_deadline, check_deadline_miss};
 use crate::scheduler::smp::topology::MAX_CPUS;
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
+use crate::fs::exofs::core::{ExofsResult, BlobId};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EvictionAlgorithm

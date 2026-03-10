@@ -10,7 +10,7 @@
 //                    TSC via crate::arch::tsc::rdtsc() (ou une function pointer).
 // RÈGLE TIMEOUT-02 : backoff exponentiel borné par RPC_MAX_BACKOFF_NS.
 
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ipc::core::types::IpcError;
 

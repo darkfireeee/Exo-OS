@@ -18,7 +18,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::scheduler::core::task::CpuId;
 use crate::scheduler::core::runqueue;
-use super::topology::{nr_cpus, numa_distance, cpu_node};
+use super::topology::{nr_cpus, cpu_node};
 use super::affinity::cpu_allowed;
 use super::migration::request_migration;
 

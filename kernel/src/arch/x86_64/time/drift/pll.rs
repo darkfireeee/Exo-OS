@@ -115,7 +115,7 @@ pub fn pll_init(initial_hz: u64) {
 /// `(ns_anchor_corrigé, new_tsc_hz)` à passer à `update_ktime_anchor()`.
 ///
 /// RÈGLE DRIFT-CIRCULAR-01 : N'appelle PAS ktime_get_ns() ici.
-pub fn pll_update(measured_hz: u64, tsc_now: u64, ref_ns_anchor: u64) -> (u64, u64) {
+pub fn pll_update(measured_hz: u64, _tsc_now: u64, ref_ns_anchor: u64) -> (u64, u64) {
     // ── Mise à jour moyenne glissante ──────────────────────────────────────────
     let old_sum   = PLL.measure_sum.load(Ordering::Relaxed);
     let old_count = PLL.measure_count.load(Ordering::Relaxed).min(MOVING_AVG_WINDOW);

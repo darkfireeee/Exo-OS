@@ -3,13 +3,12 @@
 // Opération DMA memcpy — copie physique src → dst via un canal DMA.
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::Ordering;
 use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::{
     DmaDirection, DmaMapFlags, DmaCapabilities, DmaPriority, DmaError,
     DmaTransactionId,
 };
-use crate::memory::dma::core::descriptor::{DMA_DESCRIPTOR_TABLE, DmaDescriptor};
+use crate::memory::dma::core::descriptor::DMA_DESCRIPTOR_TABLE;
 use crate::memory::dma::core::mapping::IOVA_ALLOCATOR;
 use crate::memory::dma::channels::manager::DMA_CHANNELS;
 use crate::memory::dma::iommu::domain::IDENTITY_DOMAIN_ID;

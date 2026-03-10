@@ -20,10 +20,10 @@
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering;
 use alloc::boxed::Box;
-use crate::process::core::pid::{Tid, TID_ALLOCATOR, PidAllocError};
+use crate::process::core::pid::{Tid, TID_ALLOCATOR};
 use crate::process::core::pcb::ProcessControlBlock;
 use crate::process::core::tcb::{ProcessThread, ThreadAddress};
-use crate::scheduler::core::task::{SchedPolicy, Priority, ProcessId, CpuId};
+use crate::scheduler::core::task::{SchedPolicy, Priority, CpuId};
 use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::preempt::{PreemptGuard, MAX_CPUS};
 

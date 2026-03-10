@@ -23,8 +23,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
-use crate::memory::swap::backend::{SwapSlot, SWAP_BACKEND};
-use crate::memory::core::types::PhysAddr;
+use crate::memory::swap::backend::SwapSlot;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES

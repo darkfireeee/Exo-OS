@@ -26,10 +26,9 @@
 
 #![allow(dead_code)]
 
-use alloc::vec::Vec;
 use core::fmt;
 
-use crate::fs::exofs::core::{BlobId, EpochId, ExofsError, ExofsResult, ObjectId};
+use crate::fs::exofs::core::{EpochId, ExofsResult};
 use crate::fs::exofs::epoch::epoch_root::EpochRootInMemory;
 use crate::fs::exofs::gc::blob_refcount::BLOB_REFCOUNT;
 use crate::fs::exofs::gc::cycle_detector::CYCLE_DETECTOR;
@@ -38,7 +37,6 @@ use crate::fs::exofs::gc::epoch_scanner::{
 };
 use crate::fs::exofs::gc::gc_metrics::GC_METRICS;
 use crate::fs::exofs::gc::gc_state::{GcPhase, GC_STATE};
-use crate::fs::exofs::gc::gc_tuning::GC_TUNER;
 use crate::fs::exofs::gc::inline_gc::INLINE_GC;
 use crate::fs::exofs::gc::marker::MARKER;
 use crate::fs::exofs::gc::orphan_collector::ORPHAN_COLLECTOR;
@@ -227,7 +225,7 @@ impl BlobGc {
         &self,
         epoch_roots: &[Option<&EpochRootInMemory>],
     ) -> GcPassResult {
-        let (config, pass_num) = {
+        let (config, _pass_num) = {
             let mut g = self.inner.lock();
             g.pass_count = g.pass_count.saturating_add(1);
             (g.config.clone(), g.pass_count)
@@ -256,7 +254,7 @@ impl BlobGc {
                 result.scan_roots_found   = snap.stats.roots_extracted;
                 snap
             }
-            Err(e) => {
+            Err(_e) => {
                 let _ = GC_STATE.abort_pass("scan_phase_failed");
                 result.abort_reason = Some("scan_phase_failed");
                 result.success = false;
@@ -271,7 +269,7 @@ impl BlobGc {
         let lookup = EmptyBlobLookup;
         let mut workspace = match self.run_mark_phase(&scan_snapshot, &lookup) {
             Ok(ws) => ws,
-            Err(e) => {
+            Err(_e) => {
                 let _ = GC_STATE.abort_pass("mark_phase_oom");
                 result.abort_reason = Some("mark_phase_oom");
                 result.success = false;

@@ -14,7 +14,6 @@
 #![allow(dead_code)]
 
 extern crate alloc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU64, AtomicI32, Ordering};
 use core::cell::UnsafeCell;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};

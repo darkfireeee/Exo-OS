@@ -19,8 +19,8 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use super::super::crypto::ed25519::{ed25519_verify, Ed25519Error};
+use core::sync::atomic::{AtomicBool, Ordering};
+use super::super::crypto::ed25519::ed25519_verify;
 use super::super::crypto::blake3::blake3_hash;
 
 // ─────────────────────────────────────────────────────────────────────────────

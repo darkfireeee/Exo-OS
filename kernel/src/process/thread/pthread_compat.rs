@@ -22,15 +22,13 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 use crate::process::core::pcb::ProcessControlBlock;
 use crate::process::core::tcb::ProcessThread;
 use crate::process::thread::creation::{create_thread, ThreadCreateParams, ThreadAttr};
 use crate::process::thread::join::thread_join;
 use crate::process::thread::detach::thread_detach;
 use crate::scheduler::sync::wait_queue::WaitQueue;
-use crate::scheduler::sync::spinlock::SpinLock;
-use crate::scheduler::core::preempt::PreemptGuard;
 
 /// File d'attente globale pour les mutex pthread (slow path).
 static MUTEX_WQ: WaitQueue = WaitQueue::new();

@@ -12,7 +12,7 @@ use super::validation::{
     exofs_err_to_errno, write_user_buf, EFAULT, EINVAL,
 };
 use super::object_fd::OBJECT_TABLE;
-use super::snapshot_create::{SnapshotRef, SNAPSHOT_MAGIC, check_snapshot_magic, snapshot_epoch_from_blob, snapshot_source_size_from_blob};
+use super::snapshot_create::{SnapshotRef, check_snapshot_magic, snapshot_epoch_from_blob, snapshot_source_size_from_blob};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes

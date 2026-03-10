@@ -8,15 +8,12 @@
 // Seule dépendance interne : physical::allocator::buddy, core::layout, core::types.
 
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
-use spin::Mutex;
+use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::memory::core::types::{PhysAddr, VirtAddr, Frame, AllocFlags, AllocError};
-use crate::memory::core::layout::VMALLOC_BASE;
+use crate::memory::core::types::{PhysAddr, Frame, AllocFlags, AllocError};
 use crate::memory::core::address::phys_to_virt;
 use crate::memory::core::constants::PAGE_SIZE;
 use crate::memory::physical::allocator::buddy::{alloc_pages, free_pages};
-use crate::memory::virt::address_space::kernel::KERNEL_AS;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HEADER DE CHAQUE ALLOCATION VMALLOC

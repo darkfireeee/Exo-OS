@@ -17,7 +17,6 @@
 use core::sync::atomic::Ordering;
 use crate::memory::dma::core::wakeup_iface::DmaWakeupHandler;
 use crate::memory::dma::core::types::{DmaTransactionId, DmaError};
-use crate::process::core::pid::Tid;
 use crate::scheduler::sync::wait_queue::WaitQueue;
 
 // ─────────────────────────────────────────────────────────────────────────────

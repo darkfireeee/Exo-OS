@@ -6,7 +6,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::memory::core::{VirtAddr, PageFlags, AllocError};
-use crate::memory::virt::vma::{VmaDescriptor, VmaFlags, VmaBacking};
+use crate::memory::virt::vma::{VmaFlags, VmaBacking};
 use super::{FaultCause, FaultContext, FaultResult};
 
 // ─────────────────────────────────────────────────────────────────────────────

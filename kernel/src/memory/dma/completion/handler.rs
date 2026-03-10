@@ -5,9 +5,8 @@
 // COUCHE 0 — aucune dépendance externe.
 
 use core::sync::atomic::{AtomicU8, AtomicU64, AtomicBool, Ordering};
-use spin::Mutex;
 
-use crate::memory::dma::core::types::{DmaTransactionId, DmaTransactionState, DmaError};
+use crate::memory::dma::core::types::{DmaTransactionId, DmaError};
 use crate::memory::dma::core::wakeup_iface::wake_on_completion;
 
 // ─────────────────────────────────────────────────────────────────────────────

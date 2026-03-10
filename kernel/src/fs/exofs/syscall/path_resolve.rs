@@ -12,8 +12,7 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use super::validation::{
-    read_user_path_heap, write_user_buf, exofs_err_to_errno,
-    EINVAL, EFAULT, ENOMEM, ERANGE, ENOENT,
+    read_user_path_heap, write_user_buf, exofs_err_to_errno, EFAULT, ERANGE,
     EXOFS_PATH_MAX, EXOFS_NAME_MAX,
 };
 

@@ -12,10 +12,10 @@
 //
 // COUCHE 0 — aucune dépendance externe. Pas de scheduler::sleep().
 
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::memory::dma::core::types::{DmaTransactionId, DmaChannelId, DmaError};
-use crate::memory::dma::completion::handler::{DMA_COMPLETION, MAX_PENDING_COMPLETIONS};
+use crate::memory::dma::core::types::{DmaTransactionId, DmaError};
+use crate::memory::dma::completion::handler::DMA_COMPLETION;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES

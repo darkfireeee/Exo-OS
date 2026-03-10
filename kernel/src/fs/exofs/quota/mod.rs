@@ -251,7 +251,7 @@ impl QuotaModule {
     pub fn set_limits(&self, key: QuotaKey, limits: QuotaLimits) -> ExofsResult<()> {
         limits.validate()?;
         QUOTA_TRACKER.set_limits(key, limits)?;
-        let tick = audit_tick();
+        let _tick = audit_tick();
         QUOTA_AUDIT.log_limit_set(key, limits.hard_bytes);
         Ok(())
     }
@@ -259,7 +259,7 @@ impl QuotaModule {
     /// Supprime le quota d'une entité.
     pub fn remove_entity(&self, key: QuotaKey) -> ExofsResult<()> {
         QUOTA_TRACKER.remove(key)?;
-        let tick = audit_tick();
+        let _tick = audit_tick();
         QUOTA_AUDIT.log_entity_removed(key);
         Ok(())
     }

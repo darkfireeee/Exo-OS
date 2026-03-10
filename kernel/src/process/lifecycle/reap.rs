@@ -17,8 +17,7 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use alloc::boxed::Box;
-use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR, TID_ALLOCATOR};
+use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR};
 use crate::process::core::pcb::ProcessState;
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::lifecycle::create::{create_kthread, KthreadParams};
@@ -132,7 +131,7 @@ fn reaper_loop(_arg: usize) -> ! {
 /// Libère les ressources associées à une entrée reaper.
 fn reap_entry(entry: ReaperEntry) {
     let pid = Pid(entry.pid);
-    let tid = Tid(entry.tid);
+    let _tid = Tid(entry.tid);
 
     // Vérifier si c'est le dernier thread du processus.
     let is_last_thread = PROCESS_REGISTRY

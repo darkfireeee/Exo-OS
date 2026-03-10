@@ -12,11 +12,11 @@
 #![allow(dead_code)]
 
 use core::fmt;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64};
 use alloc::sync::Arc;
 
 use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, ObjectId, BlobId, EpochId, DiskOffset,
+    ExofsError, BlobId, EpochId, DiskOffset,
     compute_blob_id, new_class1, new_class2,
     INLINE_DATA_MAX,
 };

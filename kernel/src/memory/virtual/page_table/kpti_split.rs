@@ -7,12 +7,9 @@
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
 use core::sync::atomic::{AtomicBool, Ordering};
-use spin::Mutex;
 
-use crate::memory::core::{PhysAddr, VirtAddr, PAGE_SIZE};
-use crate::memory::virt::page_table::x86_64::{
-    PageTableEntry, PageTable, phys_to_table_mut, write_cr3, invlpg,
-};
+use crate::memory::core::PhysAddr;
+use crate::memory::virt::page_table::x86_64::write_cr3;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ÉTAT KPTI

@@ -23,7 +23,7 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::fs::exofs::core::{BlobId, ObjectId, ExofsError, ExofsResult};
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ==============================================================================
 // Constantes

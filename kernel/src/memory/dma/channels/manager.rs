@@ -8,9 +8,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 use crate::memory::dma::core::types::{
-    DmaChannelId, DmaCapabilities, DmaPriority, DmaError, DmaDirection, DmaMapFlags,
+    DmaChannelId, DmaCapabilities, DmaPriority, DmaError,
 };
-use crate::memory::dma::core::descriptor::{DmaDescriptor, DMA_DESCRIPTOR_TABLE};
 use crate::memory::dma::core::types::DmaTransactionId;
 
 // ─────────────────────────────────────────────────────────────────────────────

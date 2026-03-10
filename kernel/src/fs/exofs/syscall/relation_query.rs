@@ -8,13 +8,10 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    exofs_err_to_errno, write_user_buf, EFAULT, EINVAL,
+    exofs_err_to_errno, write_user_buf, EFAULT,
 };
 use super::relation_create::{
-    Relation, RELATION_MAX, RELATION_NAME_MAX, RELATION_MAGIC,
-    relation_count, encode_relations,
-    delete_relation, relation_exists, clear_relations,
-    rel_kind, rel_flags,
+    Relation, RELATION_MAX, RELATION_MAGIC, encode_relations,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

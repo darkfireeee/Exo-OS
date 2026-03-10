@@ -22,9 +22,7 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::exoar_format::{
     ExoarHeader, ExoarEntryHeader, ExoarFooter,
-    EXOAR_MAGIC, EXOAR_ENTRY_MAGIC, EXOAR_VERSION,
-    ARCHIVE_FLAG_INCREMENTAL, ARCHIVE_FLAG_VERIFIED,
-    ENTRY_FLAG_COMPRESSED, ENTRY_FLAG_ENCRYPTED, ENTRY_FLAG_TOMBSTONE,
+    ARCHIVE_FLAG_INCREMENTAL, ENTRY_FLAG_TOMBSTONE,
     EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD,
     crc32c_update, crc32c_compute,
 };

@@ -3,12 +3,10 @@
 // Politique de swapping — décide quelles pages évincer (LRU / CLOCK-Pro).
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU64, AtomicU32, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
-use crate::memory::core::types::{PhysAddr, Frame};
-use crate::memory::physical::frame::descriptor::{FrameDesc, FrameFlags};
-use crate::memory::swap::backend::{SWAP_BACKEND, SwapSlot, SwapError};
+use crate::memory::core::types::PhysAddr;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ALGORITHME LRU-CLOCK (approximation LRU par bit Accessed)

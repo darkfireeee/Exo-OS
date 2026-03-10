@@ -13,8 +13,7 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use core::mem::MaybeUninit;
 
 use crate::ipc::core::types::{IpcError, ProcessId};
-use crate::ipc::core::constants::SHM_POOL_PAGES;
-use crate::ipc::shared_memory::page::{PhysAddr, PageFlags, PAGE_SIZE};
+use crate::ipc::shared_memory::page::{PhysAddr, PAGE_SIZE};
 use crate::ipc::shared_memory::pool::{shm_page_alloc, shm_page_free, shm_page_phys};
 
 // ---------------------------------------------------------------------------

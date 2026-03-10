@@ -15,15 +15,13 @@
 //
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 use crate::memory::dma::core::types::{
-    DmaChannelId, DmaTransactionId, DmaDirection, DmaError, DmaCapabilities,
+    DmaChannelId, DmaTransactionId, DmaDirection, DmaError,
 };
-use crate::memory::dma::channels::manager::DMA_CHANNELS;
 use crate::memory::core::types::PhysAddr;
-use crate::memory::core::constants::PAGE_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES

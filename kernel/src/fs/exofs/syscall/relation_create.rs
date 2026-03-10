@@ -9,9 +9,8 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    exofs_err_to_errno, write_user_buf, EFAULT, EINVAL,
+    exofs_err_to_errno, write_user_buf, EFAULT,
 };
-use super::object_fd::OBJECT_TABLE;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes

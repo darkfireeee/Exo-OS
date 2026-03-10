@@ -19,10 +19,9 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use crate::ipc::core::{IpcError, MsgFlags, RING_SIZE};
+use core::sync::atomic::{AtomicU64, Ordering};
+use crate::ipc::core::{IpcError, MsgFlags};
 use crate::ipc::core::constants::FUSION_BATCH_THRESHOLD;
-use crate::ipc::core::transfer::{MessageHeader, RingSlot};
 use super::spsc::SpscRing;
 
 // ─────────────────────────────────────────────────────────────────────────────

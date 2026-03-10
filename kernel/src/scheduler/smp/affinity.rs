@@ -4,7 +4,7 @@
 // Affinité CPU — gestion des masques de CPU autorisés pour chaque thread
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::AtomicU64;
 use crate::scheduler::core::task::CpuId;
 use super::topology::{MAX_CPUS, nr_cpus};
 

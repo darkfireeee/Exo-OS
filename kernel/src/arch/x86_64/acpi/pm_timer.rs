@@ -181,4 +181,3 @@ pub fn pm_timer_is_32bit() -> bool {
 // ── Port I/O (accès depuis pm_timer) ─────────────────────────────────────────
 // Petit shim inline plutôt que d'appeler super::super::x86_64::inl directement
 
-use super::super::inl;

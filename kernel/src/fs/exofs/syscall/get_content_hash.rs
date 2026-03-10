@@ -87,7 +87,7 @@ pub fn verify_hash(data: &[u8], expected: &[u8; HASH_SIZE]) -> bool {
 // Opérations principales
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn hash_blob(blob_id: BlobId, flags: u32) -> ExofsResult<ContentHashResult> {
+fn hash_blob(blob_id: BlobId, _flags: u32) -> ExofsResult<ContentHashResult> {
     let data = BLOB_CACHE.get(&blob_id)
         .ok_or(ExofsError::BlobNotFound)?;
     let h = hash_data(&data);

@@ -13,7 +13,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
-use super::snapshot::{Snapshot, flags};
+use super::snapshot::Snapshot;
 use super::snapshot_list::SNAPSHOT_LIST;
 
 // ─────────────────────────────────────────────────────────────

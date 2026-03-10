@@ -10,9 +10,9 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, AtomicU64, AtomicBool, Ordering};
 use spin::Mutex;
 
-use crate::memory::core::{AllocError, AllocFlags, PhysAddr, PAGE_SIZE, CACHE_LINE_SIZE};
+use crate::memory::core::{AllocError, AllocFlags, PAGE_SIZE};
 use crate::memory::physical::allocator::slab::{
-    SlabPageProvider, SLAB_PAGE_PROVIDER, size_class_for, N_SIZE_CLASSES, SIZE_CLASSES, SizeClassInfo,
+    SlabPageProvider, SLAB_PAGE_PROVIDER, size_class_for, N_SIZE_CLASSES, SizeClassInfo,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

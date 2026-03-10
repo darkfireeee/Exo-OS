@@ -19,7 +19,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─── AlertLevel ───────────────────────────────────────────────────────────────

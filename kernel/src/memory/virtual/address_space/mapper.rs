@@ -5,12 +5,12 @@
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
 use crate::memory::core::{
-    VirtAddr, PhysAddr, Frame, PageFlags, AllocFlags, AllocError, PAGE_SIZE,
+    VirtAddr, PhysAddr, Frame, PageFlags, AllocError, PAGE_SIZE,
 };
 use crate::memory::virt::page_table::{
     PageTableWalker, FrameAllocatorForWalk, WalkResult,
 };
-use crate::memory::virt::address_space::tlb::{flush_single, flush_range, flush_all};
+use crate::memory::virt::address_space::tlb::{flush_single, flush_range};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAPPER

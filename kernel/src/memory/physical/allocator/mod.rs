@@ -53,7 +53,7 @@ pub use slub::{
 // INIT GLOBALE DES ALLOCATEURS
 // ─────────────────────────────────────────────────────────────────────────────
 
-use crate::memory::core::{AllocFlags, AllocError, Frame, PhysAddr};
+use crate::memory::core::PhysAddr;
 
 /// Ordre d'initialisation des allocateurs (appelé depuis memory::init()).
 ///

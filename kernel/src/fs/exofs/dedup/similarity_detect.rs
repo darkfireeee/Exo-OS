@@ -47,7 +47,7 @@ fn compute_minhash(data: &[u8], n_hashes: usize) -> ExofsResult<Vec<u64>> {
     }
     let mut sig: Vec<u64> = Vec::new();
     sig.try_reserve(n_hashes).map_err(|_| ExofsError::NoMemory)?;
-    for i in 0..n_hashes { sig.push(u64::MAX); }
+    for _i in 0..n_hashes { sig.push(u64::MAX); }
 
     let end = data.len() - SHINGLE_SIZE + 1;
     for pos in 0..end {
