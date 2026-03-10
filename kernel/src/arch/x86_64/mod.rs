@@ -18,6 +18,7 @@ pub mod sched_iface;   // Pont FFI arch → scheduler (C ABI exports)
 pub mod smp;
 pub mod spectre;
 pub mod syscall;
+pub mod time;
 pub mod tss;
 pub mod vga_early;
 pub mod virt;

@@ -172,6 +172,12 @@ pub fn pm_timer_available() -> bool {
     PM_TMR_PORT.load(Ordering::Relaxed) != 0
 }
 
+/// Retourne `true` si le PM Timer est en mode 32 bits (sinon 24 bits).
+#[inline]
+pub fn pm_timer_is_32bit() -> bool {
+    PM_TMR_32BIT.load(Ordering::Relaxed)
+}
+
 // ── Port I/O (accès depuis pm_timer) ─────────────────────────────────────────
 // Petit shim inline plutôt que d'appeler super::super::x86_64::inl directement
 

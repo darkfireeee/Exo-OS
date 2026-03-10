@@ -102,29 +102,28 @@ pub use arch::x86_64::cpu::{
 /// # Safety
 /// Doit être appelé une seule fois, depuis le BSP, après `arch_boot_init`.
 pub unsafe fn kernel_init() {
+    #[inline(always)] unsafe fn kdb(b: u8) {
+        core::arch::asm!("out 0xE9, al", in("al") b, options(nomem, nostack));
+    }
     // ── Phase 2a : EmergencyPool — PREMIER ABSOLU (RÈGLE EMERGENCY-01) ─────────
     crate::memory::physical::frame::emergency_pool::init();
+    kdb(b'2'); // Phase 2a done
 
     // ── Phase 2b : Allocateur heap (SLUB + large) ────────────────────────────
     crate::memory::heap::allocator::hybrid::init();
+    kdb(b'3'); // Phase 2b done
 
-    // ── Phase 2c : HPET remappage UC + recalibration TSC ────────────────────
-    // Doit être fait après hybrid::init() (buddy + alloc opérationnels pour map_4k_page).
-    // Ordre : HPET post-memory d'abord (active compteur), puis TSC via HPET (plus précis),
-    //         sinon fallback PM Timer.
-    let hpet_ok = crate::arch::x86_64::acpi::hpet::init_hpet_post_memory();
-    let tsc_recalib = if hpet_ok {
-        crate::arch::x86_64::cpu::tsc::recalibrate_tsc_with_hpet()
-    } else {
-        false
-    };
-    if !tsc_recalib {
-        // Fallback : PM Timer ACPI (I/O port, borné par itérations, sans hang possible)
-        let _ = crate::arch::x86_64::cpu::tsc::recalibrate_tsc_with_pm_timer();
-    }
+    // ── Phase 2c : Time subsystem (HPET + calibration TSC + ktime seqlock) ────────
+    // Remplace les 3 appels directs par time_init() qui orchestre :
+    //   init_hpet_post_memory() → calibrate_tsc() → pll_init → init_ktime() → clock::init()
+    // FIX TIME-02/03 : calibration par fenêtre temporelle réelle (loop = ticks HPET).
+    // FIX TIME-01    : ktime protegé par seqlock ISR-safe.
+    crate::arch::x86_64::time::time_init();
+    kdb(b'4'); // Phase 2c done
 
     // ── Phase 3 : Scheduler ───────────────────────────────────────────
     crate::scheduler::init(&crate::scheduler::SchedInitParams::default());
+    kdb(b'5'); // Phase 3 done
 
     // ── Phase 3b : Thread idle du BSP (CPU 0) ────────────────────────────────
     // Requis pour que pick_next_task() ait un fallback lorsqu'aucun thread n'est prêt.
@@ -154,6 +153,7 @@ pub unsafe fn kernel_init() {
         crate::scheduler::run_queue(crate::scheduler::CpuId(0))
             .set_idle_thread(idle_ptr);
     }
+    kdb(b'6'); // idle thread done
 
     // ── Phase 4 : Process (reaper kthread) ──────────────────────────────────
     // TEMPORAIREMENT DÉSACTIVÉ : crash GPF f000ff53f000ff53 pendant create_kthread
@@ -161,6 +161,7 @@ pub unsafe fn kernel_init() {
 
     // ── Phase 5 : Security ──────────────────────────────────────────────────
     crate::security::capability::init_capability_subsystem();
+    kdb(b'7'); // security done
 
     // Phase 5b : Crypto — RDRAND-based CSPRNG (requis avant futex seed + IPC auth).
     // TODO: crypto_init() — vérifier compatibilité RDRAND au boot
@@ -173,12 +174,15 @@ pub unsafe fn kernel_init() {
             crate::memory::utils::futex_table::init_futex_seed(seed);
         }
     }
+    kdb(b'8'); // futex seed done
 
     // ── Phase 6 : IPC ────────────────────────────────────────────────────────
     ipc::ring::spsc::init_spsc_rings();
+    kdb(b'9'); // IPC done
 
     // ── Phase 7 : FS ─────────────────────────────────────────────────────────
     let _ = crate::fs::exofs::exofs_init(0u64);
+    kdb(b'!'); // FS done
 }
 
 #[panic_handler]

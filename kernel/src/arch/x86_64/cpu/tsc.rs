@@ -180,21 +180,19 @@ pub fn calibrate_tsc_with_pit() -> u64 {
     let tsc_start = read_tsc_begin();
 
     // 4. Attendre que le PIT expire (OUTPUT bit 5 du port 0x61 = 0 → 1)
-    // Timeout de secours via compteur d'itérations (n'utilise pas le TSC pour ne
-    // pas dépendre de sa fréquence inconnue à ce stade).
-    // À ~1 ns/iter (séquence inb + test + jmp ≈ 10 cycles à 10 GHz), 10M iter ≈ 10ms.
-    // À 100 pico-s/iter, 10M iters = 1ms. Au total, 200M iters offre un safety margin.
-    // En pratique : si le PIT fonctionne, on sort après ~10ms réels.
-    //              Sinon on sort après au plus ~2ms @ 10 GHz / ~200ms @ 1 GHz emulé.
-    let _ = tsc_start; // sera utilisé en dessous si pit_ok
+    //
+    // Timeout conservateur : 10 000 itérations max.
+    // Justification : sur bare-metal à 1GHz+, CPUID 0x15/16 fonctionne déjà
+    //   et on n'arrive pas ici. Sur QEMU TCG, inb() est lente (225µs/iter) donc
+    //   10K iters = 2.25s max. Si PIT ne répond pas dans ce délai, c'est QEMU.
     let mut pit_ok = false;
     let mut counter: u32 = 0;
-    const MAX_ITER: u32 = 200_000_000; // ~100-200ms max, conservative
+    const MAX_ITER: u32 = 10_000;
     loop {
         let val = unsafe { inb(PIT_GATE) };
         if val & 0x20 != 0 { pit_ok = true; break; }
         counter = counter.wrapping_add(1);
-        if counter == 0 || counter >= MAX_ITER { break; } // timeout
+        if counter >= MAX_ITER { break; }
         core::hint::spin_loop();
     }
     if !pit_ok {
@@ -354,6 +352,16 @@ pub fn tsc_us_to_cycles(us: u64) -> u64 {
 
 /// Retourne `true` si la calibration TSC est terminée
 #[inline(always)] pub fn tsc_calibrated() -> bool { TSC_CALIBRATED.load(Ordering::Relaxed) }
+
+/// Écrit la fréquence TSC calibrée (appelé par le module calibration/).
+/// Met à jour TSC_HZ, TSC_KHZ et TSC_CALIBRATED en Release.
+/// `hz` DOIT être dans [100 MHz, 10 GHz] — aucune vérification effectuée ici.
+#[inline]
+pub fn set_tsc_hz(hz: u64) {
+    TSC_HZ.store(hz, Ordering::Release);
+    TSC_KHZ.store(hz / 1000, Ordering::Release);
+    TSC_CALIBRATED.store(true, Ordering::Release);
+}
 
 // ── Instrumentation ───────────────────────────────────────────────────────────
 

@@ -73,6 +73,26 @@ pub fn x2apic_write_icr(val: u64) {
 
 // ── Activation x2APIC ─────────────────────────────────────────────────────────
 
+/// Masque tous les LVT en mode x2APIC.
+///
+/// Doit être appelé juste après `enable_x2apic()` pour s'assurer que les
+/// entrées LVT laissées par le BIOS (ex. LINT0 avec vecteur 0x8E) ne peuvent
+/// pas livrer d'interruptions vers des vecteurs IDT non-enregistrés → #GP.
+pub fn mask_all_lvt_x2apic() {
+    const MASKED: u32 = 0x0001_0000; // bit 16 = mask
+    x2apic_write32(X2APIC_LVT_THERMAL, MASKED);
+    x2apic_write32(X2APIC_LVT_PERF,    MASKED);
+    x2apic_write32(X2APIC_LVT_CMCI,    MASKED);
+    x2apic_write32(X2APIC_LVT_LINT0,   MASKED);
+    x2apic_write32(X2APIC_LVT_LINT1,   0x0000_0400); // NMI, non masqué
+    x2apic_write32(X2APIC_LVT_ERROR,   0x0000_00FE); // vecteur 0xFE, non masqué
+    // Effacer ESR
+    x2apic_write32(X2APIC_ESR, 0);
+    x2apic_write32(X2APIC_ESR, 0);
+    // Task Priority : accepter toutes les interruptions
+    x2apic_write32(X2APIC_TPR, 0);
+}
+
 /// Active le mode x2APIC (bits 10+11 du MSR IA32_APICBASE)
 ///
 /// Transition : xAPIC (bit 11 seul) → x2APIC (bits 11+10)

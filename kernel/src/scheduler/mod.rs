@@ -50,13 +50,13 @@ pub struct SchedInitParams {
     pub nr_cpus: usize,
     /// Nombre de nœuds NUMA.
     pub nr_nodes: usize,
-    /// Fréquence TSC en Hz (0 = utiliser la valeur par défaut 3GHz).
-    pub tsc_hz: u64,
+    // RÈGLE SCHED-INIT-01 : tsc_hz supprimé — vient de ktime_get_ns() via time_init().
+    // scheduler::init() est appelé APRÈS time::time_init().
 }
 
 impl Default for SchedInitParams {
     fn default() -> Self {
-        Self { nr_cpus: 1, nr_nodes: 1, tsc_hz: 3_000_000_000 }
+        Self { nr_cpus: 1, nr_nodes: 1 }
     }
 }
 
@@ -72,7 +72,7 @@ pub unsafe fn init(params: &SchedInitParams) {
     // sur PER_CPU_RQ (64 entrées) si l'appelant passe nr_cpus > 64.
     let nr_cpus  = params.nr_cpus.clamp(1, crate::scheduler::core::preempt::MAX_CPUS);
     let nr_nodes = params.nr_nodes.max(1);
-    let tsc_hz   = if params.tsc_hz == 0 { 3_000_000_000 } else { params.tsc_hz };
+    // tsc_hz vient de ktime_get_ns() (time_init() appelé avant) — RÈGLE SCHED-INIT-01.
 
     // Étape 1 — Compteurs de préemption.
     self::core::preempt::init();
@@ -86,10 +86,8 @@ pub unsafe fn init(params: &SchedInitParams) {
     // Étape 4 — Lazy FPU (CR0.TS=1 sur le BSP).
     self::fpu::lazy::init();
 
-    // Étape 5 — Horloge TSC.
-    self::timer::clock::init(tsc_hz);
-
-    // Étape 6 — Tick handler.
+    // Étape 5 — Horloge scheduler (délègue à ktime_get_ns — ARCH-TIME-01).
+    self::timer::clock::init(0);
     self::timer::tick::init(nr_cpus);
 
     // Étape 7 — HRTimers.

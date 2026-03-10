@@ -36,9 +36,14 @@ pub fn init_apic_system() {
 
     if features.has_x2apic() {
         x2apic::enable_x2apic();
+        // Masquer tous les LVT entries x2APIC (état BIOS peut laisser LINT0/LVT indéfinis)
+        x2apic::mask_all_lvt_x2apic();
         X2APIC_ACTIVE.store(true, Ordering::Release);
     } else {
-        local_apic::enable_xapic();
+        // init_local_apic() : active xAPIC + masque TOUS les LVT (LINT0, THERMAL, PERF, CMCI,
+        // ERROR). Sans cela, le BIOS QEMU peut laisser LINT0 avec vecteur 0x8E non-masqué :
+        // quand le PIC envoie une IRQ, LINT0 délivre vecteur 0x8E → IDT[0x8E] absent → #GP.
+        local_apic::init_local_apic();
         X2APIC_ACTIVE.store(false, Ordering::Release);
     }
 
