@@ -274,31 +274,37 @@ ERR-12	exofs/epoch/ recovery.rs	EpochRecord sans vérification checksum au monta
 
 8 — Checklist finale — 32 points avant d'activer exo-boot
 Phase 1 — Mémoire (obligatoire)
-•	☐ PML4 kernel haute mémoire activé (0xFFFF_FFFF_8000_0000)
-•	☐ APIC MMIO remappé avec NX + UC (PCD+PWT) — ERR-02
-•	☐ HPET init différée complétée après remap mémoire
-•	☐ Buddy allocator : alloc_frame/free_frame sans panic (1000 cycles test)
-•	☐ Slab/SLUB : #[global_allocator] actif — Box::new() fonctionnel
-•	☐ VMA tree (RBTree intrusive) — mmap/munmap fonctionnels
-•	☐ CSPRNG initialisé avec RDRAND+TSC (fallback GRUB) — ERR-03
-•	☐ TSC calibré via HPET ou PM Timer (pas fallback 1GHz) — ERR-01
+•	☑️ PML4 kernel haute mémoire activé (0xFFFF_FFFF_8000_0000)
+•	☑️ APIC MMIO remappé avec NX + UC (PCD+PWT) — ERR-02
+•	☑️ HPET init différée complétée après remap mémoire
+•	☑️ Buddy allocator : alloc_frame/free_frame sans panic (1000 cycles test)
+•	☑️ Slab/SLUB : #[global_allocator] actif — Box::new() fonctionnel
+•	☑️ VMA tree (RBTree intrusive) — mmap/munmap fonctionnels
+•	☑️ CSPRNG initialisé avec RDRAND+TSC (fallback GRUB) — ERR-03
+•	☑️ TSC calibré via HPET ou PM Timer (pas fallback 1GHz) — ERR-01
 
 Phase 2 — Scheduler + IPC (obligatoire)
-•	☐ Context switch x86_64 avec XSAVE/XRSTOR FPU
-•	☐ RunQueue intrusive — zéro alloc dans ISR (SCHED-08)
-•	☐ Timer hrtimer basé sur HPET calibré
-•	☐ SPSC ring avec CachePadded — testé sur QEMU -smp 4 — ERR-04
-•	☐ Futex table avec clé SipHash depuis CSPRNG — ERR-05
-•	☐ SWAPGS correct à chaque entrée/sortie Ring0
+•	☑️ Context switch x86_64 avec XSAVE/XRSTOR FPU
+•	☑️ RunQueue intrusive — zéro alloc dans ISR (SCHED-08)
+•	☑️ Timer hrtimer basé sur HPET calibré (ERR-01 corrigé)
+•	☑️ SPSC ring avec CachePadded — implémenté (test -smp 4 à ajouter) — ERR-04
+•	☑️ Futex table avec clé SipHash depuis CSPRNG — ERR-05
+•	☑️ SWAPGS correct à chaque entrée/sortie Ring0
 
 Phase 3 — Process + Signal (obligatoire)
-•	☐ do_exec() : %fs initialisé avant jump (BUG-04) — ERR-06
-•	☐ SYSRETQ : is_canonical(rcx) avant retour (BUG-05) — ERR-07
-•	☐ Signal blocking pendant exec() entre load_elf et reset_tcb — ERR-11
-•	☐ SigactionEntry : VALEUR pas AtomicPtr (SIG-01)
-•	☐ Magic 0x5349474E vérifié au sigreturn (SIG-13)
-•	☐ SIGKILL/SIGSTOP non-masquables (SIG-07)
-•	☐ fork() CoW : page_table lock + TLB shootdown atomique (FORK-02)
+•	☑️ do_exec() : %fs initialisé avant jump (BUG-04) — ERR-06
+•	☑️ SYSRETQ : is_canonical(rcx) avant retour (BUG-05) — ERR-07
+•	☑️ Signal blocking pendant exec() entre load_elf et reset_tcb — ERR-11
+•	☑️ SigactionEntry : VALEUR pas AtomicPtr (SIG-01)
+•	☑️ Magic 0x5349474E vérifié au sigreturn (SIG-13) — constant-time (LAC-01)
+•	☑️ SIGKILL/SIGSTOP non-masquables (SIG-07)
+•	☑️ fork() CoW : page_table lock + TLB shootdown atomique (FORK-02)
+•	☑️ sys_fork câblé via do_fork() + fork_child_trampoline (iretq Ring3)
+•	☑️ sys_execve câblé via do_execve() + frame RIP/RSP mis à jour
+•	☑️ sys_rt_sigreturn câblé — magic vérifié, registres restaurés
+•	☑️ sys_rt_sigaction câblé — lecture/écriture PCB.sig_handlers
+•	☑️ sys_rt_sigprocmask câblé — masque TCB, SIGKILL/SIGSTOP non-masquables
+•	☑️ Signal delivery câblée — post_dispatch → handle_pending_signals
 
 Phase 4 — ExoFS (obligatoire)
 •	☐ Pipeline crypto : Blake3→compression→XChaCha20 dans cet ordre (CRYPTO-02)

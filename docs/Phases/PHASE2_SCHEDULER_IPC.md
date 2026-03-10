@@ -289,15 +289,15 @@ pub struct FutexWaiter {
 | ✅ | SPSC ring avec `CachePadded` | **Implémenté** | `ipc/ring/spsc.rs` — `CachePad(AtomicU64, [u8;56])` |
 | ✅ | Futex table avec clé SipHash depuis CSPRNG | **Implémenté** | `ERR-05` corrigé — `init_futex_seed()` dans `kernel_init()` |
 | ✅ | CFS déterministe (sans heuristiques IA) | **Implémenté** | Modules IA supprimés — commit 9e7fc65 |
-| ⚠️ | Timer hrtimer basé sur HPET calibré | **Partiel** | TSC à 3 GHz fallback (`ERR-01`) — calibration HPET non faite |
-| ⚠️ | SPSC testé sur QEMU `-smp 4` | **Non vérifié** | Tests unitaires multicore à ajouter |
-| ❌ | SWAPGS correct à chaque entrée/sortie Ring 0 | **Non implémenté** | Requis avant activation SMP/APs |
+| ✅ | Timer hrtimer basé sur HPET calibré | **Implémenté** | Chaîne HPET→PM→CPUID→PIT→3GHz dans `arch/x86_64/time/calibration/mod.rs` (FIX TIME-02 / ERR-01 corrigé) |
+| ⚠️ | SPSC testé sur QEMU `-smp 4` | **Non vérifié** | Tests unitaires multicore à ajouter (non bloquant mono-CPU) |
+| ✅ | SWAPGS correct à chaque entrée/sortie Ring 0 | **Implémenté** | `arch/x86_64/syscall.rs` — `swapgs` à l'entrée (ligne 176) et sortie (ligne 239) |
 
 ### 5.2 Erreurs silencieuses — état de résolution
 
 | ID | Description | État |
 |---|---|---|
-| `ERR-01` | TSC calibré à 3 GHz fallback sur hardware réel | ⚠️ Toujours actif — calibration HPET Phase 2 manquante |
+| `ERR-01` | TSC calibré à 3 GHz fallback sur hardware réel | ✅ Corrigé — chaîne complète HPET→PM→CPUID→PIT→3GHz dans `arch/x86_64/time/calibration/` |
 | `ERR-04` | SPSC sans CachePadded → false sharing multicore | ✅ Corrigé — `CachePad` aligné 64 bytes |
 | `ERR-05` | Futex SipHash avec clé nulle (HashDoS) | ✅ Corrigé — graine depuis `rng_fill()` au boot |
 
@@ -323,7 +323,7 @@ Phase 4 (ExoFS) — scheduler requis pour GC thread / writeback thread
 
 | Priorité | Action | Module | Règle |
 |---|---|---|---|
-| 🔴 Bloquant SMP | Implémenter SWAPGS à l'entrée/sortie Ring 0 | `arch/x86_64/syscall/trampoline.asm` | Requis avant multi-CPU |
-| 🔴 Bloquant SMP | Lire `rdmsr(IA32_GS_BASE)` pour `current_thread_raw()` | `scheduler/core/switch.rs` | `TODO(SMP)` existant |
-| ⚠️ Correctness hw | Calibration TSC via HPET ou PM Timer ACPI | `scheduler/timer/clock.rs` + `arch/x86_64/acpi/` | `ERR-01` |
-| ⚠️ Test | SPSC ring testé sur QEMU `-smp 4` minimum | `ipc/ring/spsc.rs` | `ERR-04` vérification |
+| ✅ Résolu | SWAPGS à l'entrée/sortie Ring 0 | `arch/x86_64/syscall.rs` | Implémenté |
+| ✅ Résolu | Calibration TSC via HPET ou PM Timer ACPI | `arch/x86_64/time/calibration/mod.rs` | `ERR-01` corrigé |
+| 🔵 SMP futur | Lire `rdmsr(IA32_GS_BASE)` pour `current_thread_raw()` | `scheduler/core/switch.rs` | `TODO(SMP)` — non bloquant mono-CPU |
+| 🔵 Test futur | SPSC ring testé sur QEMU `-smp 4` minimum | `ipc/ring/spsc.rs` | `ERR-04` vérification multicore |

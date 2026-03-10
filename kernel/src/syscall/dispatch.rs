@@ -145,11 +145,36 @@ pub fn dispatch(frame: &mut SyscallFrame) {
         None => nr,
     };
 
-    // ── [5] Slow-path : lookup dans la table ───────────────────────────────
+    // ── [5] Cas spécial rt_sigreturn — besoin d'accéder à la frame arch ────
+    // SYS_RT_SIGRETURN (15) doit restaurer les registres directement dans frame
+    // avant le retour SYSRETQ. Il ne peut pas passer par un handler normal.
+    if effective_nr == crate::syscall::numbers::SYS_RT_SIGRETURN {
+        handle_sigreturn_inplace(frame);
+        post_dispatch(frame, tsc_start);
+        return;
+    }
+
+    // ── [5b] Cas spécial fork — besoin de frame.rcx (child RIP) et frame.rsp ──
+    if effective_nr == crate::syscall::numbers::SYS_FORK {
+        let result = handle_fork_inplace(frame);
+        frame.rax = result as u64;
+        post_dispatch(frame, tsc_start);
+        return;
+    }
+
+    // ── [5c] Cas spécial execve — modifie frame pour sauter au nouveau binaire ──
+    if effective_nr == crate::syscall::numbers::SYS_EXECVE {
+        handle_execve_inplace(frame);
+        // frame.rax et frame.rcx sont déjà mis à jour par handle_execve_inplace.
+        // Pas de post_dispatch après execve réussi (nouveau processus).
+        return;
+    }
+
+    // ── [6] Slow-path : lookup dans la table ───────────────────────────────
     DISPATCH_SLOW_PATH.fetch_add(1, Ordering::Relaxed);
     let handler = get_handler(effective_nr);
 
-    // ── [6] Exécution du handler ───────────────────────────────────────────
+    // ── [7] Exécution du handler ───────────────────────────────────────────
     let result = handler(arg1, arg2, arg3, arg4, arg5, arg6);
 
     // ── [7] Comptabilisation d'une erreur ENOSYS ───────────────────────────
@@ -162,6 +187,85 @@ pub fn dispatch(frame: &mut SyscallFrame) {
 
     // ── [9] Post-dispatch : signal pending + instrumentation ──────────────
     post_dispatch(frame, tsc_start);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Traitement spécial rt_sigreturn (SIG-13 / SIG-14)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Traite `SYS_RT_SIGRETURN` directement depuis la frame arch.
+///
+/// Contrairement aux autres syscalls, `rt_sigreturn` doit modifier les registres
+/// userspace (RIP, RSP, RFLAGS, RAX…) retournés par SYSRETQ. Le handler normal
+/// n'a pas accès à la `SyscallFrame` — ce traitement spécial le permet.
+///
+/// ## Protocole (POSIX / SIG-13)
+/// 1. RSP userspace au moment de SYSRETQ = sig_rsp + 8 (le `ret` du handler a
+///    consommé `pretcode`).
+/// 2. `sig_rsp = frame.user_rsp - 8`.
+/// 3. UContext à `sig_rsp + SIGNAL_FRAME_UC_OFFSET`.
+/// 4. Magic `0x5349_474E` vérifié constant-time (LAC-01 / SIG-14).
+/// 5. Si magic OK : registres + signal_mask restaurés.
+/// 6. RSP userspace mis à jour dans `gs:[0x08]` pour SYSRETQ.
+///
+/// En cas d'échec (magic invalide, adresse invalide) : le processus reçoit SIGSEGV
+/// au retour vers userspace (RIP sera 0, qui est non-mappé).
+fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
+    use crate::process::signal::handler::{verify_and_extract_uc, SIGNAL_FRAME_UC_OFFSET};
+    use crate::scheduler::core::task::ThreadControlBlock;
+
+    // Le `ret` du handler a popped `pretcode` → RSP userspace = sig_rsp + 8.
+    let sig_rsp = frame.rsp.wrapping_sub(8);
+    let uc_ptr  = sig_rsp + SIGNAL_FRAME_UC_OFFSET;
+
+    let regs = match verify_and_extract_uc(uc_ptr) {
+        Some(r) => r,
+        None => {
+            // Magic invalide ou adresse corrompue : déclencher SIGSEGV.
+            // On met RIP = 0 (non-mappé) → #PF Ring3 → SIGSEGV au processus.
+            // On ne crashe jamais en Ring0 (ARCH-SYSRET V-35 respecté).
+            frame.rcx = 0;
+            frame.rax = (-crate::syscall::errno::EFAULT) as u64;
+            return;
+        }
+    };
+
+    // Restaurer les registres dans la frame arch (lus par SYSRETQ).
+    // RIP de retour = rcx pour SYSRETQ.
+    frame.rcx      = regs.rip;
+    // RFLAGS userspace = r11 pour SYSRETQ.
+    frame.r11      = regs.rflags & !0x100; // Clear TF (Trap Flag) par sécurité.
+    frame.rax      = regs.rax;
+    frame.rdi      = regs.rdi;
+    frame.rsi      = regs.rsi;
+    frame.rdx      = regs.rdx;
+    frame.r8       = regs.r8;
+    frame.r9       = regs.r9;
+    // RSP userspace mis à jour dans gs:[0x08] ET dans frame.rsp.
+    // SAFETY: GS kernel actif, gs:[0x08] = user_rsp slot du PerCpuData.
+    unsafe {
+        core::arch::asm!(
+            "mov qword ptr gs:[0x08], {rsp}",
+            rsp = in(reg) regs.rsp,
+            options(nostack, nomem)
+        );
+    }
+    frame.rsp = regs.rsp;
+
+    // Restaurer le masque de signal dans le TCB.
+    // SAFETY: gs:[0x20] = pointeur TCB courant (PerCpuData layout).
+    let tcb_ptr: u64;
+    unsafe {
+        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
+    }
+    if tcb_ptr != 0 {
+        // Masque SIGKILL (bit 8) et SIGSTOP (bit 18) non-masquables (SIG-07).
+        const NON_MASKABLE: u64 = (1u64 << 8) | (1u64 << 18);
+        let safe_mask = regs.signal_mask & !NON_MASKABLE;
+        // SAFETY: tcb_ptr est non-nul et valide (maintenu par le scheduler).
+        let tcb = unsafe { &*(tcb_ptr as *const ThreadControlBlock) };
+        tcb.signal_mask.store(safe_mask, core::sync::atomic::Ordering::Release);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -259,11 +363,249 @@ fn check_and_deliver_signals(frame: &mut SyscallFrame) {
     // avec IRQs actives (les signaux peuvent potentiellement être ré-entrants
     // via SIGINT etc., mais handle_pending_signals() utilise un masque).
     let frame_ptr: *mut SyscallFrame = frame as *mut SyscallFrame;
-    // CÂBLAGE DIFFÉRÉ : handle_pending_signals attend (&mut ProcessThread, &mut SyscallFrame).
-    // tcb_ptr ici est un *const ThreadControlBlock (scheduler), pas un ProcessThread.
-    // L'intégration complète se fera via un trampolineprocess/signal lors de l'unification
-    // du TCB scheduler↔process.
-    let _ = (tcb_ptr, frame_ptr);
+    // ── Conversion arch::SyscallFrame → delivery::SyscallFrame ───────────────
+    // Les deux structs ont des noms de champs différents mais les mêmes valeurs.
+    use crate::process::signal::delivery::{
+        handle_pending_signals,
+        SyscallFrame as DeliveryFrame,
+    };
+    use crate::process::core::pid::Pid;
+    use crate::process::core::registry::PROCESS_REGISTRY;
+
+    let pid = Pid(tcb.pid.0);
+    let pcb = match PROCESS_REGISTRY.find_by_pid(pid) {
+        Some(p) => p,
+        None    => return,
+    };
+
+    let thread_ptr = pcb.main_thread_ptr();
+    if thread_ptr.is_null() { return; }
+
+    let mut d_frame = DeliveryFrame {
+        user_rip:    frame.rcx,     // RIP de retour (sauvé par SYSCALL hw dans RCX)
+        user_rflags: frame.r11,     // RFLAGS (sauvé par SYSCALL hw dans R11)
+        user_rsp:    frame.rsp,     // RSP userspace
+        user_rax:    frame.rax,     // valeur de retour syscall
+        user_rdi:    frame.rdi,
+        user_rsi:    frame.rsi,
+        user_rdx:    frame.rdx,
+        user_rcx:    frame.rcx,     // userspace RCX = même que RIP retour (SYSCALL)
+        user_r8:     frame.r8,
+        user_r9:     frame.r9,
+        user_cs:     0x1B,          // CS ring3 (non sauvé par SYSCALL mais requis)
+        user_ss:     0x23,          // SS ring3
+    };
+
+    // SAFETY: thread_ptr maintenu par pcb, valide dans ce contexte.
+    handle_pending_signals(unsafe { &mut *thread_ptr }, &mut d_frame);
+
+    // Répercuter les modifications potentielles (ex. RIP redirigé, RSP vers sigaltstack).
+    frame.rcx = d_frame.user_rip;
+    frame.r11 = d_frame.user_rflags;
+    frame.rax = d_frame.user_rax;
+    frame.rdi = d_frame.user_rdi;
+    frame.rsi = d_frame.user_rsi;
+    frame.rdx = d_frame.user_rdx;
+    frame.r8  = d_frame.user_r8;
+    frame.r9  = d_frame.user_r9;
+
+    // RSP userspace : mettre à jour gs:[0x08] si modifié (sigaltstack / setup_signal_frame).
+    if d_frame.user_rsp != frame.rsp {
+        let new_rsp = d_frame.user_rsp;
+        // SAFETY: GS kernel actif, gs:[0x08] = user_rsp slot du PerCpuData.
+        unsafe {
+            core::arch::asm!(
+                "mov qword ptr gs:[0x08], {rsp}",
+                rsp = in(reg) new_rsp,
+                options(nostack, nomem)
+            );
+        }
+        frame.rsp = new_rsp;
+    }
+
+    let _ = frame_ptr; // silence warning
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Traitement spécial fork (SYS_FORK = 57)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Traite `SYS_FORK` directement depuis la frame arch.
+///
+/// Fork a besoin de `frame.rcx` (RIP de retour = point de bifurcation) et
+/// `frame.rsp` (RSP userspace). Ces valeurs ne transitent pas dans les arguments
+/// syscall normaux (rdi..r9), donc le handler normal ne peut pas les lire.
+///
+/// ## Protocole (POSIX fork)
+/// 1. Lit TCB courant via `gs:[0x20]` → PID → PCB.
+/// 2. Récupère le `ProcessThread` via `pcb.main_thread_ptr()`.
+/// 3. Construit `ForkContext { child_rip: frame.rcx, child_rsp: frame.rsp }`.
+/// 4. Appelle `do_fork()` — crée PCB/TCB fils, CoW, TLB flush, enqueue RunQueue.
+/// 5. Retourne `child_pid` au parent (fils démarre via `fork_child_trampoline`).
+fn handle_fork_inplace(frame: &SyscallFrame) -> i64 {
+    use crate::scheduler::core::task::ThreadControlBlock;
+    use crate::process::core::pid::Pid;
+    use crate::process::core::registry::PROCESS_REGISTRY;
+    use crate::process::lifecycle::fork::{do_fork, ForkContext, ForkFlags, ForkError};
+    use crate::syscall::errno::{EAGAIN, ENOMEM, EFAULT};
+
+    // Lire TCB courant.
+    // SAFETY: GS kernel actif, gs:[0x20] = pointeur TCB (PerCpuData).
+    let tcb_ptr: u64;
+    unsafe {
+        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
+    }
+    if tcb_ptr == 0 {
+        return EAGAIN;
+    }
+
+    // SAFETY: tcb_ptr non-nul et maintenu par le scheduler.
+    let tcb = unsafe { &*(tcb_ptr as *const ThreadControlBlock) };
+    let pid = Pid(tcb.pid.0);
+
+    let pcb = match PROCESS_REGISTRY.find_by_pid(pid) {
+        Some(p) => p,
+        None    => return EAGAIN,
+    };
+
+    let thread_ptr = pcb.main_thread_ptr();
+    if thread_ptr.is_null() {
+        return EAGAIN;
+    }
+
+    // SAFETY: thread_ptr maintenu par pcb, valide tant que pcb est dans PROCESS_REGISTRY.
+    let thread = unsafe { &*thread_ptr };
+
+    let ctx = ForkContext {
+        parent_thread: thread,
+        parent_pcb:    pcb,
+        flags:         ForkFlags::default(),
+        target_cpu:    tcb.current_cpu().0,
+        child_rip:     frame.rcx,   // RIP de retour sauvé par SYSCALL hw
+        child_rsp:     frame.rsp,   // RSP userspace sauvé au stub ASM
+    };
+
+    match do_fork(&ctx) {
+        Ok(result)  => result.child_pid.0 as i64,
+        Err(e) => match e {
+            ForkError::PidExhausted |
+            ForkError::TidExhausted |
+            ForkError::RegistryError |
+            ForkError::InvalidCpu    => EAGAIN,
+            ForkError::OutOfMemory |
+            ForkError::AddressSpaceCloneFailed => ENOMEM,
+            ForkError::NoAddrCloner  => EFAULT,
+        },
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Traitement spécial execve (SYS_EXECVE = 59)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Traite `SYS_EXECVE` directement depuis la frame arch.
+///
+/// En cas de succès, `do_execve()` remplace l'image du processus mais retourne
+/// normalement en Rust. Ce handler met alors à jour la frame arch pour que
+/// SYSRETQ saute directement au nouveau point d'entrée ELF.
+///
+/// ## Protocole
+/// 1. Lit path depuis userspace via `frame.rdi`.
+/// 2. Récupère TCB → PCB → ProcessThread.
+/// 3. Appelle `do_execve()`.
+/// 4. Succès : `frame.rcx = entry_point`, `frame.rsp = initial_rsp`, `frame.rax = 0`.
+/// 5. Échec : `frame.rax = -errno`.
+///
+/// ## Note : argv/envp
+/// Pour l'instant argv et envp sont transmis vides au `ElfLoader`.
+/// Le câblage complet copy_from_user(argv/envp) est prévu en Phase 4 (ARGV-01).
+fn handle_execve_inplace(frame: &mut SyscallFrame) {
+    use crate::scheduler::core::task::ThreadControlBlock;
+    use crate::process::core::pid::Pid;
+    use crate::process::core::registry::PROCESS_REGISTRY;
+    use crate::process::lifecycle::exec::{do_execve, ExecError, ElfLoadError};
+    use crate::syscall::validation::read_user_path;
+    use crate::syscall::errno::*;
+
+    // Lire le chemin depuis userspace.
+    let user_path = match read_user_path(frame.rdi) {
+        Ok(p)  => p,
+        Err(e) => { frame.rax = e.to_errno() as u64; return; },
+    };
+    let path = match user_path.as_str() {
+        Ok(s)  => s,
+        Err(_) => { frame.rax = EFAULT as u64; return; },
+    };
+
+    // Lire TCB courant.
+    // SAFETY: GS kernel actif.
+    let tcb_ptr: u64;
+    unsafe {
+        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
+    }
+    if tcb_ptr == 0 {
+        frame.rax = EFAULT as u64;
+        return;
+    }
+
+    // SAFETY: tcb_ptr maintenu par le scheduler.
+    let tcb = unsafe { &*(tcb_ptr as *const ThreadControlBlock) };
+    let pid = Pid(tcb.pid.0);
+
+    let pcb = match PROCESS_REGISTRY.find_by_pid(pid) {
+        Some(p) => p,
+        None    => { frame.rax = EFAULT as u64; return; },
+    };
+
+    let thread_ptr = pcb.main_thread_ptr();
+    if thread_ptr.is_null() {
+        frame.rax = EAGAIN as u64;
+        return;
+    }
+
+    // SAFETY: thread_ptr maintenu par pcb.
+    let thread = unsafe { &mut *thread_ptr };
+
+    // ARGV-01 : argv/envp vides pour l'instant — Phase 4 implémentera copy_from_user.
+    let empty: &[&str] = &[];
+
+    match do_execve(thread, pcb, &path, empty, empty) {
+        Ok(()) => {
+            // Succès : lire le nouveau point d'entrée depuis le ProcessThread mis à jour.
+            let new_rip = thread.addresses.entry_point;
+            let new_rsp = thread.addresses.initial_rsp;
+
+            // Mettre à jour la frame pour SYSRETQ.
+            frame.rcx = new_rip;            // RIP → nouveau point d'entrée ELF
+            frame.rsp = new_rsp;            // RSP → nouvelle pile userspace
+            frame.r11 = 0x0202;             // RFLAGS : IF=1, bit réservé=1
+            frame.rax = 0;                  // "succès" (non retourné — SYSRETQ saute)
+
+            // SYSRETQ lit gs:[0x08] pour restaurer le RSP userspace (stub ASM).
+            // SAFETY: GS kernel actif, gs:[0x08] = user_rsp slot du PerCpuData.
+            unsafe {
+                core::arch::asm!(
+                    "mov qword ptr gs:[0x08], {rsp}",
+                    rsp = in(reg) new_rsp,
+                    options(nostack, nomem)
+                );
+            }
+        }
+        Err(e) => {
+            let errno: i64 = match e {
+                ExecError::ElfLoadFailed(ElfLoadError::NotFound)  => ENOENT,
+                ExecError::ElfLoadFailed(ElfLoadError::PermissionDenied)
+                | ExecError::PermissionDenied                     => EACCES,
+                ExecError::ElfLoadFailed(ElfLoadError::OutOfMemory) => ENOMEM,
+                ExecError::ElfLoadFailed(ElfLoadError::InvalidElf) => EINVAL,
+                ExecError::ArgListTooLong                          => E2BIG,
+                ExecError::NameTooLong                             => EINVAL,
+                ExecError::NoLoader                                => ENOSYS,
+                _                                                  => ENOSYS,
+            };
+            frame.rax = errno as u64;
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

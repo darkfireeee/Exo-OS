@@ -198,18 +198,34 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     unsafe {
         let child_tcb = (*child_thread_ptr).tcb_mut();
         // Le fils retourne 0 via la convention de syscall (rax=0 dans le frame).
-        // Ici on fixe le kernel RSP pour démarrer dans le trampoline fork_child_return.
-        // L'architecture gère le retour userspace via iretq.
+        // switch_to_new_thread restaure le stack puis ret vers fork_child_trampoline.
+        // fork_child_trampoline : xor eax,eax ; swapgs ; iretq → userspace.
+        // SAFETY: fork_child_trampoline est défini dans switch_asm.s, lié statiquement.
+        extern "C" { fn fork_child_trampoline(); }
+
         let kstack_top = (*child_thread_ptr).kernel_stack.top_addr();
-        // Frame minimal sur le stack kernel fils.
-        let frame_ptr = (kstack_top - 48) as *mut u64;
-        // [rip, cs, rflags, rsp, ss] — frame iretq.
-        *frame_ptr.add(0) = ctx.child_rip;     // RIP  fils
-        *frame_ptr.add(1) = 0x1B;              // CS   userspace (ring 3)
-        *frame_ptr.add(2) = 0x0202;            // RFLAGS (IF=1, reserved=1)
-        *frame_ptr.add(3) = ctx.child_rsp;     // RSP  userspace fils
-        *frame_ptr.add(4) = 0x23;              // SS   userspace
-        child_tcb.kernel_rsp = (kstack_top - 48) - 8; // retour via fork_child_trampoline
+        // Frame complet : 12 × u64 = 96 bytes.
+        // Layout (indices depuis kernel_rsp = kstack_top - 96) :
+        //   [0..48)  = 6 callee-saved regs = 0       ← format switch_to_new_thread
+        //   [48]     = fork_child_trampoline          ← adresse ret après 6 pops
+        //   [56..96) = iretq frame (RIP, CS, RFLAGS, RSP, SS)
+        let frame_ptr = (kstack_top - 96) as *mut u64;
+        // Callee-saved registers. switch_to_new_thread les dépile avant le ret.
+        *frame_ptr.add(0) = 0;                              // rbx
+        *frame_ptr.add(1) = 0;                              // rbp
+        *frame_ptr.add(2) = 0;                              // r12
+        *frame_ptr.add(3) = 0;                              // r13
+        *frame_ptr.add(4) = 0;                              // r14
+        *frame_ptr.add(5) = 0;                              // r15
+        // Adresse de retour : fork_child_trampoline (exécuté après les 6 pops).
+        *frame_ptr.add(6) = fork_child_trampoline as *const () as u64;
+        // iretq frame (RSP pointe ici à l'entrée fork_child_trampoline).
+        *frame_ptr.add(7)  = ctx.child_rip;                 // RIP  userspace
+        *frame_ptr.add(8)  = 0x1B;                          // CS   ring3 (code64)
+        *frame_ptr.add(9)  = 0x0202;                        // RFLAGS (IF=1, reserved=1)
+        *frame_ptr.add(10) = ctx.child_rsp;                 // RSP  userspace
+        *frame_ptr.add(11) = 0x23;                          // SS   ring3
+        child_tcb.kernel_rsp = kstack_top - 96;
     }
 
     // Copier les adresses utilisateur.

@@ -176,3 +176,36 @@ kthread_trampoline:
     jmpq    *%r12           // saute à entry_fn(arg) — ne revient jamais
 
 .size kthread_trampoline, . - kthread_trampoline
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FORK CHILD TRAMPOLINE — Premier démarrage d'un processus fils (fork)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Appelé par switch_to_new_thread lors du PREMIER ordonnancement d'un processus
+// créé via do_fork(). Le stack kernel du fils a été préparé par do_fork() :
+//
+//   [kernel_rsp + 0..48)  = 6 registres callee-saved = 0 (format switch_to_new_thread)
+//   [kernel_rsp + 48]     = fork_child_trampoline  ← adresse de retour switch_to_new_thread
+//   [kernel_rsp + 56]     = child_rip  ← RSP pointe ici à l'entrée du trampoline
+//   [kernel_rsp + 64]     = 0x1B      (CS ring3)
+//   [kernel_rsp + 72]     = 0x0202    (RFLAGS : IF=1)
+//   [kernel_rsp + 80]     = child_rsp (RSP userspace)
+//   [kernel_rsp + 88]     = 0x23      (SS ring3)
+//
+// Invariant : GS = kernel GS (le scheduler n'a PAS fait SWAPGS).
+//             On doit faire SWAPGS avant IRETQ pour restaurer GS userspace.
+//
+// RÈGLE PROC-08 : TLB parent flushé dans do_fork() — aucun flush ici nécessaire.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+.section .text
+.global fork_child_trampoline
+.type fork_child_trampoline, @function
+
+fork_child_trampoline:
+    xor     %eax, %eax      // rax = 0 : le fils retourne 0 de fork()
+    swapgs                  // restaurer GS userspace (noyau avait GS kernel)
+    iretq                   // dépile RIP, CS, RFLAGS, RSP, SS → retour Ring3
+
+.size fork_child_trampoline, . - fork_child_trampoline

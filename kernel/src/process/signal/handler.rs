@@ -20,6 +20,7 @@ use core::sync::atomic::Ordering;
 use super::delivery::SyscallFrame;
 use super::queue::SigInfo;
 use super::default::SigAction;
+use super::tcb::SIGNAL_FRAME_MAGIC;
 use crate::process::core::tcb::ProcessThread;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -152,6 +153,73 @@ const _ASSERT_FRAME_SIZE: () = {
     ();
 };
 
+/// Offset du champ `uc` (UContext) dans `SignalFrame`, en octets.
+///
+/// Layout : pretcode(8) + signo(8) + pinfo(8) + puc(8) + info(SigInfoC=128) = 160.
+/// Utilisé par `dispatch.rs` pour calculer `uc_ptr` lors du sigreturn.
+pub const SIGNAL_FRAME_UC_OFFSET: u64 = 160;
+
+/// Registres restaurés depuis le UContext au sigreturn.
+///
+/// Retourné par `verify_and_extract_uc()` après vérification du magic SIG-13.
+#[derive(Copy, Clone, Default)]
+pub struct UContextRegs {
+    pub rip:      u64,
+    pub rsp:      u64,
+    pub rax:      u64,
+    pub rdi:      u64,
+    pub rsi:      u64,
+    pub rdx:      u64,
+    pub rcx:      u64,
+    pub r8:       u64,
+    pub r9:       u64,
+    pub rflags:   u64,
+    pub signal_mask: u64,
+}
+
+/// Vérifie le magic SIG-13 et extrait les registres du UContext userspace.
+///
+/// ## Sécurité (LAC-01 / SIG-13 / SIG-14)
+/// - CONSTANT-TIME : toutes les données sont lues AVANT la vérification du magic.
+///   Aucun chemin ne permet un timing oracle sur la validité du magic.
+/// - Retourne `None` si l'adresse est invalide ou si `uc_flags != SIGNAL_FRAME_MAGIC`.
+///
+/// # Safety
+/// `uc_ptr` doit être une adresse userspace valide (vérifiée en interne).
+pub fn verify_and_extract_uc(uc_ptr: u64) -> Option<UContextRegs> {
+    const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
+    if uc_ptr < 0x1000 || uc_ptr >= USER_SPACE_TOP {
+        return None;
+    }
+    // SAFETY: adresse userspace validée ci-dessus.
+    let uc = unsafe { &*(uc_ptr as *const UContext) };
+    let mc = &uc.uc_mcontext;
+
+    // Extraire TOUTES les données avant de vérifier le magic (LAC-01 constant-time).
+    let regs = UContextRegs {
+        rip:         mc.rip,
+        rsp:         mc.rsp,
+        rax:         mc.rax,
+        rdi:         mc.rdi,
+        rsi:         mc.rsi,
+        rdx:         mc.rdx,
+        rcx:         mc.rcx,
+        r8:          mc.r8,
+        r9:          mc.r9,
+        rflags:      mc.eflags,
+        signal_mask: uc.uc_sigmask,
+    };
+
+    // Vérification magic constant-time : XOR puis test (pas de brèche prédicteur).
+    // SIG-13 / SIG-14 : si le magic est faux, le sigreturn est rejeté.
+    let magic_diff = uc.uc_flags ^ (SIGNAL_FRAME_MAGIC as u64);
+    if magic_diff != 0 {
+        return None;
+    }
+
+    Some(regs)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // setup_signal_frame — construit le frame sur la pile utilisateur
 // ─────────────────────────────────────────────────────────────────────────────
@@ -201,7 +269,8 @@ pub fn setup_signal_frame(
         puc:      sig_rsp + offset_of_uc(),
         info:     SigInfoC::from_queue(info),
         uc: UContext {
-            uc_flags:   0,
+            // SIG-13 : stocker SIGNAL_FRAME_MAGIC dans uc_flags pour vérification au sigreturn.
+            uc_flags:   SIGNAL_FRAME_MAGIC as u64,
             uc_link:    0,
             uc_stack:   SigAltStack {
                 ss_sp:    thread.addresses.sigaltstack_top()
@@ -269,21 +338,39 @@ pub fn restore_signal_frame(
     let uc = unsafe { &*(uc_ptr as *const UContext) };
     let mc = &uc.uc_mcontext;
 
+    // SIG-13 (constant-time) : extraire les données AVANT de vérifier le magic.
+    let rip_saved    = mc.rip;
+    let rsp_saved    = mc.rsp;
+    let rax_saved    = mc.rax;
+    let rdi_saved    = mc.rdi;
+    let rsi_saved    = mc.rsi;
+    let rdx_saved    = mc.rdx;
+    let rcx_saved    = mc.rcx;
+    let r8_saved     = mc.r8;
+    let r9_saved     = mc.r9;
+    let rflags_saved = mc.eflags;
+    let mask_saved   = uc.uc_sigmask;
+
+    // Vérification magic constant-time (SIG-13 / SIG-14).
+    // Si le magic est invalide, on ne restaure rien (attaque de sigframe).
+    let magic_diff = uc.uc_flags ^ (SIGNAL_FRAME_MAGIC as u64);
+    if magic_diff != 0 { return; }
+
     // Restaurer les registres.
-    frame.user_rip    = mc.rip;
-    frame.user_rsp    = mc.rsp;
-    frame.user_rax    = mc.rax;
-    frame.user_rdi    = mc.rdi;
-    frame.user_rsi    = mc.rsi;
-    frame.user_rdx    = mc.rdx;
-    frame.user_rcx    = mc.rcx;
-    frame.user_r8     = mc.r8;
-    frame.user_r9     = mc.r9;
-    frame.user_rflags = mc.eflags;
+    frame.user_rip    = rip_saved;
+    frame.user_rsp    = rsp_saved;
+    frame.user_rax    = rax_saved;
+    frame.user_rdi    = rdi_saved;
+    frame.user_rsi    = rsi_saved;
+    frame.user_rdx    = rdx_saved;
+    frame.user_rcx    = rcx_saved;
+    frame.user_r8     = r8_saved;
+    frame.user_r9     = r9_saved;
+    frame.user_rflags = rflags_saved;
 
     // Restaurer le masque de signal sauvegardé (sans SIGKILL/SIGSTOP).
     use super::mask::SigMask;
-    let restored_mask = SigMask::from(uc.uc_sigmask);
+    let restored_mask = SigMask::from(mask_saved);
     thread.sched_tcb.signal_mask.store(restored_mask.0, Ordering::Release);
 }
 
