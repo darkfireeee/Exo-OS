@@ -8,12 +8,48 @@
 
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::xchacha20::{XChaCha20Key, XChaCha20Poly1305, Nonce, Tag};
 use super::entropy::ENTROPY_POOL;
+use super::key_derivation::KeyDerivation;
 use super::secret_reader::SECRET_MAGIC;
 
 pub use super::secret_reader::SECRET_HEADER_SIZE;
+
+/// Compteur monotone global des nonces `SecretWriter` (CRYPTO-03 / S-06).
+static SECRET_WRITER_NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Dérive un nonce XChaCha20 (24B) via HKDF-SHA256 à partir d'un compteur atomique.
+///
+/// Construction :
+/// - `ikm = counter_le64`
+/// - `salt = entropy_pool.random_32()`
+/// - `info = "ExoFS-SecretWriter-Nonce-v1"`
+fn derive_nonce_hkdf() -> ExofsResult<Nonce> {
+    let counter = loop {
+        let cur = SECRET_WRITER_NONCE_COUNTER.load(Ordering::SeqCst);
+        if cur == u64::MAX {
+            return Err(ExofsError::OffsetOverflow);
+        }
+        if SECRET_WRITER_NONCE_COUNTER
+            .compare_exchange(cur, cur.wrapping_add(1), Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            break cur;
+        }
+        core::hint::spin_loop();
+    };
+    let ikm = counter.to_le_bytes();
+    let salt = ENTROPY_POOL.random_32();
+    let nonce_vec = KeyDerivation::hkdf(&salt, &ikm, b"ExoFS-SecretWriter-Nonce-v1", 24)?;
+    if nonce_vec.len() != 24 {
+        return Err(ExofsError::InternalError);
+    }
+    let mut nonce = [0u8; 24];
+    nonce.copy_from_slice(&nonce_vec);
+    Ok(Nonce(nonce))
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -107,8 +143,7 @@ impl SecretWriter {
         if plaintext.is_empty() {
             return Err(ExofsError::InvalidArgument);
         }
-        let nonce_bytes = ENTROPY_POOL.random_nonce_24();
-        let nonce       = Nonce(nonce_bytes);
+        let nonce = derive_nonce_hkdf()?;
         // Buffer de travail (copie du plaintext pour chiffrement en place).
         let mut buf: Vec<u8> = Vec::new();
         buf.try_reserve(plaintext.len()).map_err(|_| ExofsError::NoMemory)?;
@@ -124,8 +159,7 @@ impl SecretWriter {
         if plaintext.is_empty() {
             return Err(ExofsError::InvalidArgument);
         }
-        let nonce_bytes = ENTROPY_POOL.random_nonce_24();
-        let nonce       = Nonce(nonce_bytes);
+        let nonce = derive_nonce_hkdf()?;
         let mut buf: Vec<u8> = Vec::new();
         buf.try_reserve(plaintext.len()).map_err(|_| ExofsError::NoMemory)?;
         buf.extend_from_slice(plaintext);
@@ -138,8 +172,7 @@ impl SecretWriter {
         if plaintext.is_empty() {
             return Err(ExofsError::InvalidArgument);
         }
-        let nonce_bytes = ENTROPY_POOL.random_nonce_24();
-        let nonce       = Nonce(nonce_bytes);
+        let nonce = derive_nonce_hkdf()?;
         let plain_len   = plaintext.len();
         let mut buf: Vec<u8> = Vec::new();
         buf.try_reserve(plain_len).map_err(|_| ExofsError::NoMemory)?;

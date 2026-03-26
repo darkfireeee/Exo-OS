@@ -286,7 +286,7 @@ pub enum ListConsistencyError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::exofs::core::{BlobId, DiskOffset};
+    use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId};
     use super::super::snapshot::make_snapshot_name;
 
     fn make_snap(id: u64, bytes: u64, parent: Option<u64>) -> Snapshot {

@@ -57,6 +57,9 @@ pub const MSR_TSC_AUX: u32 = 0xC000_0103;
 /// MSR IA32_TSC_DEADLINE : deadline timer LAPIC TSC
 pub const MSR_TSC_DEADLINE: u32 = 0x0000_06E0;
 
+/// MSR IA32_PKRS : Supervisor Protection Keys Rights for User pages
+pub const MSR_IA32_PKRS: u32 = 0x0000_06E1;
+
 /// MSR IA32_PMC0..7 : compteurs performances
 pub const MSR_IA32_PMC0: u32 = 0x0000_00C1;
 

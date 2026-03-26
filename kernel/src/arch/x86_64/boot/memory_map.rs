@@ -30,6 +30,7 @@ use crate::memory::physical::allocator::{
     register_slab_page_provider, SlabPageProvider, BOOTSTRAP_BITMAP,
 };
 use crate::memory::core::AllocError;
+use crate::exophoenix::ssr;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BITMAP STATIQUE POUR LE BUDDY ALLOCATOR (zone DMA32 — <4 GiB)
@@ -232,7 +233,9 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
 
-        init_phase2_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
+        for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
+            init_phase2_free_region(PhysAddr::new(s), PhysAddr::new(e));
+        });
     }
 
     // ── Phase 2b : Initialiser le buddy allocator (zone DMA32, < 4 GiB) ──────
@@ -258,7 +261,9 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
 
-        init_phase2b_buddy_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
+        for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
+            init_phase2b_buddy_free_region(PhysAddr::new(s), PhysAddr::new(e));
+        });
     }
 
     // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ─────────
@@ -333,7 +338,9 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
 
-        init_phase2_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
+        for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
+            init_phase2_free_region(PhysAddr::new(s), PhysAddr::new(e));
+        });
     }
     // ── Phase 2b : Buddy allocator (zone DMA32, < 4 GiB) ─────────────────────
     init_phase2b_buddy_zone(
@@ -349,7 +356,9 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
         let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
-        init_phase2b_buddy_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
+        for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
+            init_phase2b_buddy_free_region(PhysAddr::new(s), PhysAddr::new(e));
+        });
     }
     // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ─────────
     register_slab_page_provider(
@@ -400,6 +409,41 @@ const fn align_up(n: u64, align: u64) -> u64 {
 #[inline]
 const fn align_down(n: u64, align: u64) -> u64 {
     n & !(align - 1)
+}
+
+/// Applique `f(start, end)` sur les sous-ranges utilisables, en excluant
+/// explicitement la SSR ExoPhoenix [SSR_BASE, SSR_BASE + SSR_SIZE).
+///
+/// Règle doc: cette exclusion doit s'appliquer AVANT toute insertion dans
+/// les allocateurs bitmap/buddy pour éviter l'allocation accidentelle de la SSR.
+#[inline]
+fn for_each_usable_subrange_excluding_ssr(
+    start: u64,
+    end: u64,
+    mut f: impl FnMut(u64, u64),
+) {
+    if start >= end {
+        return;
+    }
+
+    let ssr_start = ssr::SSR_BASE;
+    let ssr_end = ssr::SSR_BASE + ssr::SSR_SIZE as u64;
+
+    // Pas de recouvrement avec SSR
+    if end <= ssr_start || start >= ssr_end {
+        f(start, end);
+        return;
+    }
+
+    // Partie basse avant SSR
+    if start < ssr_start {
+        f(start, ssr_start);
+    }
+
+    // Partie haute après SSR
+    if end > ssr_end {
+        f(ssr_end, end);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -543,7 +587,9 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX),  PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
 
-        init_phase2_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
+        for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
+            init_phase2_free_region(PhysAddr::new(s), PhysAddr::new(e));
+        });
     }
 
     // ── Phase 2b : Buddy allocator (zone DMA32, < 4 GiB) ─────────────────────
@@ -565,7 +611,9 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
         let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
         let end_adj  = align_down(end.min(PHYS_MEMORY_MAX),  PAGE_SIZE as u64);
         if base_adj >= end_adj { continue; }
-        init_phase2b_buddy_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
+        for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
+            init_phase2b_buddy_free_region(PhysAddr::new(s), PhysAddr::new(e));
+        });
     }
 
     // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ───────

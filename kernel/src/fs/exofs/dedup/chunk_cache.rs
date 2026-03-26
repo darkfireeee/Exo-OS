@@ -298,10 +298,10 @@ pub static CHUNK_CACHE: ChunkCache = ChunkCache::new_const(CHUNK_CACHE_DEFAULT_C
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::chunk_fingerprint::{ChunkFingerprint, FingerprintAlgorithm};
+    use super::super::chunk_fingerprint::ChunkFingerprint;
 
     fn make_fp(data: &[u8]) -> ChunkFingerprint {
-        ChunkFingerprint::compute(data, FingerprintAlgorithm::Double).unwrap()
+        ChunkFingerprint::compute(data)
     }
 
     #[test] fn test_cache_insert_get() {

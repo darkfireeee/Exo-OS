@@ -7,7 +7,8 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    read_user_path_heap, exofs_err_to_errno, EFAULT,
+    read_user_path_heap, exofs_err_to_errno,
+    verify_cap, CapabilityType, EFAULT,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -86,11 +87,8 @@ fn delete_blob(blob_id: BlobId, flags: u32) -> ExofsResult<DeleteResult> {
     // Refuser si des fd sont ouverts et que FORCE est absent.
     let open = OBJECT_TABLE.open_count();
     if open > 0 && flags & delete_flags::FORCE == 0 {
-        // Vérifier si *ce* blob est ouvert.
-        // On parcourt en utilisant une clef de présence via open_count.
-        // En l'absence d'API directe, on se base sur l'existence d'un fd portant ce blob_id.
-        let has_open_fd = object_has_open_fd(&blob_id);
-        if has_open_fd {
+        // Vérification dédiée via table FD (évite un scan externe manuel coûteux).
+        if OBJECT_TABLE.open_count_for(&blob_id) > 0 {
             return Err(ExofsError::PermissionDenied);
         }
     }
@@ -103,30 +101,6 @@ fn delete_blob(blob_id: BlobId, flags: u32) -> ExofsResult<DeleteResult> {
         tombstoned:  1,
         _pad:        0,
     })
-}
-
-/// Vérifie si un blob donné possède au moins un fd ouvert dans OBJECT_TABLE.
-/// RECUR-01 : while, no for.
-fn object_has_open_fd(blob_id: &BlobId) -> bool {
-    let target = blob_id.as_bytes();
-    // On tente FD_RESERVED..=FD_MAX de façon linéaire.
-    let start = super::object_fd::FD_RESERVED as u32;
-    let end   = super::object_fd::FD_MAX   as u32;
-    let mut fd = start;
-    while fd <= end {
-        if let Ok(entry) = OBJECT_TABLE.get(fd) {
-            let bid = entry.blob_id.as_bytes();
-            let mut eq = true;
-            let mut i = 0usize;
-            while i < 32 {
-                if bid[i] != target[i] { eq = false; break; }
-                i = i.wrapping_add(1);
-            }
-            if eq { return true; }
-        }
-        fd = fd.saturating_add(1);
-    }
-    false
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,7 +142,7 @@ pub fn sys_exofs_object_delete(
     flags:    u64,
     out_ptr:  u64,
     _a5:      u64,
-    _a6:      u64,
+    cap_rights: u64,
 ) -> i64 {
     if path_ptr == 0 { return EFAULT; }
 
@@ -177,6 +151,11 @@ pub fn sys_exofs_object_delete(
         Ok(l)  => l,
         Err(e) => return e,
     };
+
+    // Phase 2 (TOCTOU-safe): verify_cap sur copie noyau du chemin.
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectDelete) {
+        return e;
+    }
 
     let result = match delete_object_by_path(&path_buf, actual_len, flags as u32) {
         Ok(r)  => r,
@@ -244,7 +223,7 @@ mod tests {
 
     fn make_blob(path: &[u8], data: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, data).unwrap();
+        BLOB_CACHE.insert(id, data.to_vec()).unwrap();
         id
     }
 

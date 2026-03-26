@@ -345,13 +345,13 @@ impl GcScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::relation::{Relation, RelationId};
-    use super::super::relation_type::{RelationType, RelationKind};
-    use super::super::relation_storage::RelationStorage;
-    use super::super::relation_index::RelationIndex;
-    use super::super::relation_graph::RelationGraph;
+    // use super::super::relation::{Relation, RelationId};
+    // use super::super::relation_type::{RelationType, RelationKind};
+    // use super::super::relation_storage::RelationStorage;
+    // use super::super::relation_index::RelationIndex;
+    // use super::super::relation_graph::RelationGraph;
 
-    fn blob(b: u8) -> BlobId { BlobId([b; 32]) }
+    #[allow(dead_code)] fn blob(b: u8) -> BlobId { BlobId([b; 32]) }
 
     /// Checker qui marque tous les blobs comme existants.
     struct AllExist;
@@ -360,7 +360,7 @@ mod tests {
     }
 
     /// Checker qui marque tous les blobs comme supprimés.
-    struct NoneExist;
+    #[allow(dead_code)] struct NoneExist;
     impl BlobExistsChecker for NoneExist {
         fn exists(&self, _key: &[u8; 32]) -> bool { false }
     }

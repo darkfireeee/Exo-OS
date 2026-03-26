@@ -63,6 +63,9 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
         return Err(ExofsError::AlreadyMounted);
     }
 
+    // Phase de montage du driver block virtio
+    crate::fs::exofs::storage::virtio_adapter::init_global_disk();
+
     // Phase 1 : Recovery boot — sélectionne l'Epoch valide
     boot_recovery_sequence(disk_size_bytes)
         .map_err(|_| ExofsError::RecoveryFailed)?;

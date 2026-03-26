@@ -478,7 +478,7 @@ pub fn compute_blob_id(data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::exoar_reader::{ExoarReader, ExoarReaderConfig, SliceSource, CollectingReceiver};
+    use super::super::exoar_reader::{ExoarReader, SliceSource, CollectingReceiver};
 
     fn make_blob_id(tag: u8) -> [u8; 32] {
         let mut id = [0u8; 32];

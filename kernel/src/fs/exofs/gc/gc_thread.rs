@@ -371,8 +371,8 @@ mod tests {
     #[test]
     fn test_control_epoch() {
         let ctrl = GcThreadControl::new();
-        ctrl.update_epoch(42);
-        assert_eq!(ctrl.epoch(), 42);
+        ctrl.update_epoch(EpochId(42));
+        assert_eq!(ctrl.epoch(), EpochId(42));
     }
 
     #[test]
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn test_set_epoch() {
         let t = GcThread::new();
-        t.set_epoch(99);
-        assert_eq!(t.control.epoch(), 99);
+        t.set_epoch(EpochId(99));
+        assert_eq!(t.control.epoch(), EpochId(99));
     }
 }

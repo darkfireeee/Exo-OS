@@ -344,97 +344,22 @@ fn run_calibration_chain() -> CalibratedTsc {
             };
         }
         e9_tag(b"CAL:PIT-DRV-FAIL");
-        // PIT-DRV-FAIL : PIT I/O trop lent (QEMU TCG probable).
-        // On continue vers les tentatives suivantes ; le fallback final
-        // à 3 GHz sera atteint si toutes échouent.
-    }
 
-    // ── Tentative 5 : PIT window multi-sample (version window.rs) ─────────
-    // Atteinte uniquement si PIT-DRV a réussi (I/O port rapide).
-    // Alternative plus précise avec N_SAMPLES mesures.
-    if let Some(hz) = window::calibrate_tsc_via_pit() {
-        if validation::hz_in_range(hz) {
-            let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
-            e9_tag(b"CAL:PIT");
-            return CalibratedTsc {
-                tsc_hz: round_hz(hz),
-                source: CalibSource::Pit,
-                confidence: 40, // PIT peu fiable en VM
-                variance_hz2: 0,
-                valid_samples: window::N_SAMPLES as u8,
-                duration_tsc_cycles: duration,
-                tsc_invariant,
-                seq,
-            };
-        }
-        e9_tag(b"CAL:PIT-FAIL");
-    }
-
-    // ── Tentative 6 : HPET window (MMIO 14.318 MHz) ────────────────────────
-    // Gardé après CPUID/PIT car MMIO HPET est lent sur QEMU TCG (~1-5s/read).
-    // Sur bare-metal, le HPET sera très rapide → bonne précision ici.
-    // La garde N_MAX_POLL_MMIO = 2000 garantit un abort rapide sur QEMU TCG.
-    let hpet_freq = sources::hpet::freq_hz();
-    if sources::hpet::available() && hpet_freq > 0 {
-        if let Some(hz) = window::calibrate_tsc_via_hpet(hpet_freq) {
-            if validation::hz_in_range(hz) {
-                let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
-                let detail = validation::validate_full(hz);
-                let confidence = detail.confidence().min(100) as u8;
-                e9_tag(b"CAL:HPET");
-                return CalibratedTsc {
-                    tsc_hz: round_hz(hz),
-                    source: CalibSource::Hpet,
-                    confidence,
-                    variance_hz2: 0,
-                    valid_samples: window::N_SAMPLES as u8,
-                    duration_tsc_cycles: duration,
-                    tsc_invariant,
-                    seq,
-                };
-            }
-        }
-        e9_tag(b"CAL:HPET-FAIL");
-    }
-
-    // ── Tentative 7 : PM Timer window (I/O 3.579 MHz) ──────────────────────
-    if sources::pm_timer::available() {
-        if let Some(hz) = window::calibrate_tsc_via_pm_timer() {
-            if validation::hz_in_range(hz) {
-                let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
-                let detail = validation::validate_full(hz);
-                let confidence = (detail.confidence() as u8).saturating_sub(5);
-                e9_tag(b"CAL:PMT");
-                return CalibratedTsc {
-                    tsc_hz: round_hz(hz),
-                    source: CalibSource::PmTimer,
-                    confidence,
-                    variance_hz2: 0,
-                    valid_samples: window::N_SAMPLES as u8,
-                    duration_tsc_cycles: duration,
-                    tsc_invariant,
-                    seq,
-                };
-            }
-        }
-        e9_tag(b"CAL:PMT-FAIL");
-    }
-
-    // ── Fallback final : 3 GHz ──────────────────────────────────────────────
-    // RÈGLE CAL-FALLBACK-01 : logguer chaque fallback.
-    // 3 GHz est une valeur raisonnable pour x86_64 moderne en QEMU TCG.
-    // Sera re-calibré par recalibrate_tsc() post-APIC.
-    e9_tag(b"CAL:FB3G");
-    let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
-    CalibratedTsc {
-        tsc_hz: 3_000_000_000u64,
-        source: CalibSource::Fallback3G,
-        confidence: 10,
-        variance_hz2: 0,
-        valid_samples: 0,
-        duration_tsc_cycles: duration,
-        tsc_invariant,
-        seq,
+        // Bring-up pragmatique : si PIT driver échoue, on évite les chemins
+        // de calibration coûteux/fragiles restants et on bascule immédiatement
+        // sur le fallback 3 GHz pour ne pas bloquer le boot.
+        e9_tag(b"CAL:FB3G");
+        let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
+        return CalibratedTsc {
+            tsc_hz: 3_000_000_000u64,
+            source: CalibSource::Fallback3G,
+            confidence: 10,
+            variance_hz2: 0,
+            valid_samples: 0,
+            duration_tsc_cycles: duration,
+            tsc_invariant,
+            seq,
+        };
     }
 }
 

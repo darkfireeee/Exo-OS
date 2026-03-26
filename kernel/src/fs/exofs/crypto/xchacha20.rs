@@ -35,6 +35,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::entropy::ENTROPY_POOL;
+use super::key_derivation::KeyDerivation;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteur global de nonces (S-06 / LAC-04)
@@ -119,7 +120,7 @@ impl AeadContext {
 
     /// Chiffre et retourne (ciphertext, tag). Le nonce est généré automatiquement.
     pub fn seal(&mut self, aad: &[u8], plaintext: &[u8]) -> ExofsResult<(Vec<u8>, Nonce, Tag)> {
-        let nonce = self.next_nonce();
+        let nonce = self.next_nonce()?;
         let (ct, tag) = XChaCha20Poly1305::encrypt(&self.key, &nonce, aad, plaintext)?;
         Ok((ct, nonce, tag))
     }
@@ -135,19 +136,32 @@ impl AeadContext {
         XChaCha20Poly1305::decrypt(&self.key, nonce, aad, ciphertext, tag)
     }
 
-    fn next_nonce(&mut self) -> Nonce {
-        // S-06 / LAC-04 : compteur GLOBAL monotone + RDRAND comme diversifiant.
-        // Le compteur global garantit l'unicité même si deux AeadContext
-        // partagent la même clé ou si RDRAND est faible.
-        let counter  = GLOBAL_NONCE_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let entropy  = ENTROPY_POOL.random_u64(); // ChaCha20-DRNG + TSC
-        let mut n    = [0u8; 24];
-        n[0..8].copy_from_slice(&counter.to_le_bytes());
-        n[8..16].copy_from_slice(&entropy.to_le_bytes());
-        // Bytes 16-23 = XOR des deux pour mélanger sans répétition
-        let mixed = counter.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(entropy);
-        n[16..24].copy_from_slice(&mixed.to_le_bytes());
-        Nonce(n)
+    fn next_nonce(&mut self) -> ExofsResult<Nonce> {
+        // S-06 / LAC-04 : compteur GLOBAL monotone + HKDF.
+        // Le compteur garantit l'unicité stricte ; HKDF fournit une diffusion
+        // cryptographique vers 24 octets de nonce XChaCha20.
+        let counter = loop {
+            let cur = GLOBAL_NONCE_COUNTER.load(Ordering::SeqCst);
+            if cur == u64::MAX {
+                return Err(ExofsError::OffsetOverflow);
+            }
+            if GLOBAL_NONCE_COUNTER
+                .compare_exchange(cur, cur.wrapping_add(1), Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                break cur;
+            }
+            core::hint::spin_loop();
+        };
+        let ikm = counter.to_le_bytes();
+        let salt = ENTROPY_POOL.random_32();
+        let nonce_vec = KeyDerivation::hkdf(&salt, &ikm, b"ExoFS-XChaCha20-Nonce-v1", 24)?;
+        if nonce_vec.len() != 24 {
+            return Err(ExofsError::InternalError);
+        }
+        let mut nonce = [0u8; 24];
+        nonce.copy_from_slice(&nonce_vec);
+        Ok(Nonce(nonce))
     }
 }
 

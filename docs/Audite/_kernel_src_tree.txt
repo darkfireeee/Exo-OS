@@ -1,0 +1,810 @@
+﻿├── arch
+│   ├── aarch64
+│   │   └── mod.rs
+│   ├── mod.rs
+│   ├── time.rs
+│   └── x86_64
+│       ├── acpi
+│       │   ├── hpet.rs
+│       │   ├── madt.rs
+│       │   ├── mod.rs
+│       │   ├── parser.rs
+│       │   └── pm_timer.rs
+│       ├── apic
+│       │   ├── io_apic.rs
+│       │   ├── ipi.rs
+│       │   ├── local_apic.rs
+│       │   ├── mod.rs
+│       │   └── x2apic.rs
+│       ├── boot
+│       │   ├── early_init.rs
+│       │   ├── memory_map.rs
+│       │   ├── mod.rs
+│       │   ├── multiboot2.rs
+│       │   ├── trampoline_asm.rs
+│       │   └── uefi.rs
+│       ├── cpu
+│       │   ├── features.rs
+│       │   ├── fpu.rs
+│       │   ├── mod.rs
+│       │   ├── msr.rs
+│       │   ├── topology.rs
+│       │   └── tsc.rs
+│       ├── exceptions.rs
+│       ├── gdt.rs
+│       ├── idt.rs
+│       ├── memory_iface.rs
+│       ├── mod.rs
+│       ├── paging.rs
+│       ├── sched_iface.rs
+│       ├── smp
+│       │   ├── hotplug.rs
+│       │   ├── init.rs
+│       │   ├── mod.rs
+│       │   └── percpu.rs
+│       ├── spectre
+│       │   ├── ibrs.rs
+│       │   ├── kpti.rs
+│       │   ├── mod.rs
+│       │   ├── retpoline.rs
+│       │   └── ssbd.rs
+│       ├── syscall.rs
+│       ├── time
+│       │   ├── calibration
+│       │   │   ├── cpuid_nominal.rs
+│       │   │   ├── mod.rs
+│       │   │   ├── validation.rs
+│       │   │   └── window.rs
+│       │   ├── drift
+│       │   │   ├── mod.rs
+│       │   │   ├── periodic.rs
+│       │   │   └── pll.rs
+│       │   ├── ktime.rs
+│       │   ├── mod.rs
+│       │   ├── percpu
+│       │   │   ├── mod.rs
+│       │   │   └── sync.rs
+│       │   └── sources
+│       │       ├── hpet.rs
+│       │       ├── mod.rs
+│       │       ├── pit.rs
+│       │       ├── pm_timer.rs
+│       │       └── tsc.rs
+│       ├── tss.rs
+│       ├── vga_early.rs
+│       └── virt
+│           ├── detect.rs
+│           ├── mod.rs
+│           ├── paravirt.rs
+│           └── stolen_time.rs
+├── exophoenix
+│   ├── forge.rs
+│   ├── handoff.rs
+│   ├── interrupts.rs
+│   ├── isolate.rs
+│   ├── mod.rs
+│   ├── sentinel.rs
+│   ├── ssr.rs
+│   └── stage0.rs
+├── fs
+│   ├── exofs
+│   │   ├── audit
+│   │   │   ├── audit_entry.rs
+│   │   │   ├── audit_export.rs
+│   │   │   ├── audit_filter.rs
+│   │   │   ├── audit_log.rs
+│   │   │   ├── audit_reader.rs
+│   │   │   ├── audit_rotation.rs
+│   │   │   ├── audit_writer.rs
+│   │   │   └── mod.rs
+│   │   ├── cache
+│   │   │   ├── blob_cache.rs
+│   │   │   ├── cache_eviction.rs
+│   │   │   ├── cache_policy.rs
+│   │   │   ├── cache_pressure.rs
+│   │   │   ├── cache_shrinker.rs
+│   │   │   ├── cache_stats.rs
+│   │   │   ├── cache_warming.rs
+│   │   │   ├── extent_cache.rs
+│   │   │   ├── metadata_cache.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── object_cache.rs
+│   │   │   └── path_cache.rs
+│   │   ├── compress
+│   │   │   ├── algorithm.rs
+│   │   │   ├── compress_benchmark.rs
+│   │   │   ├── compress_choice.rs
+│   │   │   ├── compress_header.rs
+│   │   │   ├── compress_stats.rs
+│   │   │   ├── compress_threshold.rs
+│   │   │   ├── compress_writer.rs
+│   │   │   ├── decompress_reader.rs
+│   │   │   ├── lz4_wrapper.rs
+│   │   │   ├── mod.rs
+│   │   │   └── zstd_wrapper.rs
+│   │   ├── core
+│   │   │   ├── blob_id.rs
+│   │   │   ├── clock.rs
+│   │   │   ├── config.rs
+│   │   │   ├── constants.rs
+│   │   │   ├── epoch_id.rs
+│   │   │   ├── error.rs
+│   │   │   ├── flags.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── object_class.rs
+│   │   │   ├── object_id.rs
+│   │   │   ├── object_kind.rs
+│   │   │   ├── rights.rs
+│   │   │   ├── stats.rs
+│   │   │   ├── types.rs
+│   │   │   └── version.rs
+│   │   ├── crypto
+│   │   │   ├── crypto_audit.rs
+│   │   │   ├── crypto_shredding.rs
+│   │   │   ├── entropy.rs
+│   │   │   ├── key_derivation.rs
+│   │   │   ├── key_rotation.rs
+│   │   │   ├── key_storage.rs
+│   │   │   ├── master_key.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── object_key.rs
+│   │   │   ├── secret_reader.rs
+│   │   │   ├── secret_writer.rs
+│   │   │   ├── volume_key.rs
+│   │   │   └── xchacha20.rs
+│   │   ├── dedup
+│   │   │   ├── blob_registry.rs
+│   │   │   ├── blob_sharing.rs
+│   │   │   ├── chunk_cache.rs
+│   │   │   ├── chunk_fingerprint.rs
+│   │   │   ├── chunk_index.rs
+│   │   │   ├── chunker_cdc.rs
+│   │   │   ├── chunker_fixed.rs
+│   │   │   ├── chunking.rs
+│   │   │   ├── content_hash.rs
+│   │   │   ├── dedup_api.rs
+│   │   │   ├── dedup_policy.rs
+│   │   │   ├── dedup_stats.rs
+│   │   │   ├── mod.rs
+│   │   │   └── similarity_detect.rs
+│   │   ├── epoch
+│   │   │   ├── epoch_barriers.rs
+│   │   │   ├── epoch_checksum.rs
+│   │   │   ├── epoch_commit.rs
+│   │   │   ├── epoch_commit_lock.rs
+│   │   │   ├── epoch_delta.rs
+│   │   │   ├── epoch_gc.rs
+│   │   │   ├── epoch_id.rs
+│   │   │   ├── epoch_pin.rs
+│   │   │   ├── epoch_record.rs
+│   │   │   ├── epoch_recovery.rs
+│   │   │   ├── epoch_root.rs
+│   │   │   ├── epoch_root_chain.rs
+│   │   │   ├── epoch_slots.rs
+│   │   │   ├── epoch_snapshot.rs
+│   │   │   ├── epoch_stats.rs
+│   │   │   ├── epoch_writeback.rs
+│   │   │   └── mod.rs
+│   │   ├── export
+│   │   │   ├── exoar_format.rs
+│   │   │   ├── exoar_reader.rs
+│   │   │   ├── exoar_writer.rs
+│   │   │   ├── export_audit.rs
+│   │   │   ├── incremental_export.rs
+│   │   │   ├── metadata_export.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── stream_export.rs
+│   │   │   ├── stream_import.rs
+│   │   │   └── tar_compat.rs
+│   │   ├── gc
+│   │   │   ├── blob_gc.rs
+│   │   │   ├── blob_refcount.rs
+│   │   │   ├── cycle_detector.rs
+│   │   │   ├── epoch_scanner.rs
+│   │   │   ├── gc_metrics.rs
+│   │   │   ├── gc_scheduler.rs
+│   │   │   ├── gc_state.rs
+│   │   │   ├── gc_thread.rs
+│   │   │   ├── gc_tuning.rs
+│   │   │   ├── inline_gc.rs
+│   │   │   ├── marker.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── orphan_collector.rs
+│   │   │   ├── reference_tracker.rs
+│   │   │   ├── relation_walker.rs
+│   │   │   ├── sweeper.rs
+│   │   │   └── tricolor.rs
+│   │   ├── io
+│   │   │   ├── async_io.rs
+│   │   │   ├── buffered_io.rs
+│   │   │   ├── direct_io.rs
+│   │   │   ├── io_batch.rs
+│   │   │   ├── io_stats.rs
+│   │   │   ├── io_uring.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── prefetch.rs
+│   │   │   ├── readahead.rs
+│   │   │   ├── reader.rs
+│   │   │   ├── scatter_gather.rs
+│   │   │   ├── writeback.rs
+│   │   │   ├── writer.rs
+│   │   │   └── zero_copy.rs
+│   │   ├── lib.rs
+│   │   ├── mod.rs
+│   │   ├── numa
+│   │   │   ├── mod.rs
+│   │   │   ├── numa_affinity.rs
+│   │   │   ├── numa_migration.rs
+│   │   │   ├── numa_placement.rs
+│   │   │   ├── numa_stats.rs
+│   │   │   └── numa_tuning.rs
+│   │   ├── objects
+│   │   │   ├── extent.rs
+│   │   │   ├── extent_tree.rs
+│   │   │   ├── inline_data.rs
+│   │   │   ├── logical_object.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── object_builder.rs
+│   │   │   ├── object_cache.rs
+│   │   │   ├── object_kind
+│   │   │   │   ├── blob.rs
+│   │   │   │   ├── code.rs
+│   │   │   │   ├── config.rs
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── path_index.rs
+│   │   │   │   ├── relation.rs
+│   │   │   │   └── secret.rs
+│   │   │   ├── object_loader.rs
+│   │   │   ├── object_meta.rs
+│   │   │   ├── physical_blob.rs
+│   │   │   └── physical_ref.rs
+│   │   ├── observability
+│   │   │   ├── alert.rs
+│   │   │   ├── debug_interface.rs
+│   │   │   ├── health_check.rs
+│   │   │   ├── latency_histogram.rs
+│   │   │   ├── metrics.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── perf_counters.rs
+│   │   │   ├── space_tracker.rs
+│   │   │   ├── throughput_tracker.rs
+│   │   │   └── tracing.rs
+│   │   ├── path
+│   │   │   ├── canonicalize.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── mount_point.rs
+│   │   │   ├── namespace.rs
+│   │   │   ├── path_cache.rs
+│   │   │   ├── path_component.rs
+│   │   │   ├── path_index.rs
+│   │   │   ├── path_index_merge.rs
+│   │   │   ├── path_index_split.rs
+│   │   │   ├── path_index_tree.rs
+│   │   │   ├── path_walker.rs
+│   │   │   ├── resolver.rs
+│   │   │   └── symlink.rs
+│   │   ├── posix_bridge
+│   │   │   ├── fcntl_lock.rs
+│   │   │   ├── inode_emulation.rs
+│   │   │   ├── mmap.rs
+│   │   │   ├── mod.rs
+│   │   │   └── vfs_compat.rs
+│   │   ├── quota
+│   │   │   ├── mod.rs
+│   │   │   ├── quota_audit.rs
+│   │   │   ├── quota_enforcement.rs
+│   │   │   ├── quota_namespace.rs
+│   │   │   ├── quota_policy.rs
+│   │   │   ├── quota_report.rs
+│   │   │   └── quota_tracker.rs
+│   │   ├── recovery
+│   │   │   ├── boot_recovery.rs
+│   │   │   ├── checkpoint.rs
+│   │   │   ├── epoch_replay.rs
+│   │   │   ├── fsck.rs
+│   │   │   ├── fsck_phase1.rs
+│   │   │   ├── fsck_phase2.rs
+│   │   │   ├── fsck_phase3.rs
+│   │   │   ├── fsck_phase4.rs
+│   │   │   ├── fsck_repair.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── recovery_audit.rs
+│   │   │   ├── recovery_log.rs
+│   │   │   └── slot_recovery.rs
+│   │   ├── relation
+│   │   │   ├── mod.rs
+│   │   │   ├── relation.rs
+│   │   │   ├── relation_batch.rs
+│   │   │   ├── relation_cycle.rs
+│   │   │   ├── relation_gc.rs
+│   │   │   ├── relation_graph.rs
+│   │   │   ├── relation_index.rs
+│   │   │   ├── relation_query.rs
+│   │   │   ├── relation_storage.rs
+│   │   │   ├── relation_type.rs
+│   │   │   └── relation_walker.rs
+│   │   ├── snapshot
+│   │   │   ├── mod.rs
+│   │   │   ├── snapshot.rs
+│   │   │   ├── snapshot_create.rs
+│   │   │   ├── snapshot_delete.rs
+│   │   │   ├── snapshot_diff.rs
+│   │   │   ├── snapshot_gc.rs
+│   │   │   ├── snapshot_list.rs
+│   │   │   ├── snapshot_mount.rs
+│   │   │   ├── snapshot_protect.rs
+│   │   │   ├── snapshot_quota.rs
+│   │   │   ├── snapshot_restore.rs
+│   │   │   └── snapshot_streaming.rs
+│   │   ├── storage
+│   │   │   ├── blob_reader.rs
+│   │   │   ├── blob_writer.rs
+│   │   │   ├── block_allocator.rs
+│   │   │   ├── block_cache.rs
+│   │   │   ├── checksum_reader.rs
+│   │   │   ├── checksum_writer.rs
+│   │   │   ├── compression_choice.rs
+│   │   │   ├── compression_reader.rs
+│   │   │   ├── compression_writer.rs
+│   │   │   ├── dedup_reader.rs
+│   │   │   ├── dedup_writer.rs
+│   │   │   ├── extent_reader.rs
+│   │   │   ├── extent_writer.rs
+│   │   │   ├── heap.rs
+│   │   │   ├── heap_allocator.rs
+│   │   │   ├── heap_coalesce.rs
+│   │   │   ├── heap_free_map.rs
+│   │   │   ├── io_batch.rs
+│   │   │   ├── layout.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── object_reader.rs
+│   │   │   ├── object_writer.rs
+│   │   │   ├── storage_stats.rs
+│   │   │   ├── superblock.rs
+│   │   │   ├── superblock_backup.rs
+│   │   │   └── virtio_adapter.rs
+│   │   ├── syscall
+│   │   │   ├── epoch_commit.rs
+│   │   │   ├── export_object.rs
+│   │   │   ├── gc_trigger.rs
+│   │   │   ├── get_content_hash.rs
+│   │   │   ├── import_object.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── object_create.rs
+│   │   │   ├── object_delete.rs
+│   │   │   ├── object_fd.rs
+│   │   │   ├── object_open.rs
+│   │   │   ├── object_read.rs
+│   │   │   ├── object_set_meta.rs
+│   │   │   ├── object_stat.rs
+│   │   │   ├── object_write.rs
+│   │   │   ├── open_by_path.rs
+│   │   │   ├── path_resolve.rs
+│   │   │   ├── quota_query.rs
+│   │   │   ├── readdir.rs
+│   │   │   ├── relation_create.rs
+│   │   │   ├── relation_query.rs
+│   │   │   ├── snapshot_create.rs
+│   │   │   ├── snapshot_list.rs
+│   │   │   ├── snapshot_mount.rs
+│   │   │   └── validation.rs
+│   │   └── tests
+│   │       ├── integration
+│   │       │   ├── mod.rs
+│   │       │   ├── tier_1_simple.rs
+│   │       │   ├── tier_2_moyen.rs
+│   │       │   ├── tier_3_stress.rs
+│   │       │   ├── tier_4_pipeline.rs
+│   │       │   ├── tier_5_comprehensive.rs
+│   │       │   └── tier_6_virtio_vfs.rs
+│   │       ├── mod.rs
+│   │       └── unit
+│   │           ├── mod.rs
+│   │           ├── test_blob_id.rs
+│   │           ├── test_core.rs
+│   │           ├── test_epoch_record.rs
+│   │           └── test_xchacha20.rs
+│   └── mod.rs
+├── ipc
+│   ├── channel
+│   │   ├── async.rs
+│   │   ├── broadcast.rs
+│   │   ├── mod.rs
+│   │   ├── mpmc.rs
+│   │   ├── raw.rs
+│   │   ├── streaming.rs
+│   │   ├── sync.rs
+│   │   └── typed.rs
+│   ├── core
+│   │   ├── constants.rs
+│   │   ├── mod.rs
+│   │   ├── sequence.rs
+│   │   ├── transfer.rs
+│   │   └── types.rs
+│   ├── endpoint
+│   │   ├── connection.rs
+│   │   ├── descriptor.rs
+│   │   ├── lifecycle.rs
+│   │   ├── mod.rs
+│   │   └── registry.rs
+│   ├── message
+│   │   ├── builder.rs
+│   │   ├── mod.rs
+│   │   ├── priority.rs
+│   │   ├── router.rs
+│   │   └── serializer.rs
+│   ├── mod.rs
+│   ├── ring
+│   │   ├── batch.rs
+│   │   ├── fusion.rs
+│   │   ├── mod.rs
+│   │   ├── mpmc.rs
+│   │   ├── slot.rs
+│   │   ├── spsc.rs
+│   │   └── zerocopy.rs
+│   ├── rpc
+│   │   ├── client.rs
+│   │   ├── mod.rs
+│   │   ├── protocol.rs
+│   │   ├── raw.rs
+│   │   ├── server.rs
+│   │   └── timeout.rs
+│   ├── shared_memory
+│   │   ├── allocator.rs
+│   │   ├── descriptor.rs
+│   │   ├── mapping.rs
+│   │   ├── mod.rs
+│   │   ├── numa_aware.rs
+│   │   ├── page.rs
+│   │   └── pool.rs
+│   ├── stats
+│   │   ├── counters.rs
+│   │   └── mod.rs
+│   └── sync
+│       ├── barrier.rs
+│       ├── event.rs
+│       ├── futex.rs
+│       ├── mod.rs
+│       ├── rendezvous.rs
+│       ├── sched_hooks.rs
+│       └── wait_queue.rs
+├── lib.rs
+├── main.rs
+├── memory
+│   ├── arch_iface.rs
+│   ├── core
+│   │   ├── address.rs
+│   │   ├── constants.rs
+│   │   ├── layout.rs
+│   │   ├── mod.rs
+│   │   └── types.rs
+│   ├── cow
+│   │   ├── breaker.rs
+│   │   ├── mod.rs
+│   │   └── tracker.rs
+│   ├── dma
+│   │   ├── channels
+│   │   │   ├── affinity.rs
+│   │   │   ├── channel.rs
+│   │   │   ├── manager.rs
+│   │   │   ├── mod.rs
+│   │   │   └── priority.rs
+│   │   ├── completion
+│   │   │   ├── handler.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── polling.rs
+│   │   │   └── wakeup.rs
+│   │   ├── core
+│   │   │   ├── descriptor.rs
+│   │   │   ├── error.rs
+│   │   │   ├── mapping.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── types.rs
+│   │   │   └── wakeup_iface.rs
+│   │   ├── engines
+│   │   │   ├── ahci_dma.rs
+│   │   │   ├── idxd.rs
+│   │   │   ├── ioat.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── nvme_dma.rs
+│   │   │   └── virtio_dma.rs
+│   │   ├── iommu
+│   │   │   ├── amd_iommu.rs
+│   │   │   ├── arm_smmu.rs
+│   │   │   ├── domain.rs
+│   │   │   ├── intel_vtd.rs
+│   │   │   ├── mod.rs
+│   │   │   └── page_table.rs
+│   │   ├── mod.rs
+│   │   ├── ops
+│   │   │   ├── cyclic.rs
+│   │   │   ├── interleaved.rs
+│   │   │   ├── memcpy.rs
+│   │   │   ├── memset.rs
+│   │   │   ├── mod.rs
+│   │   │   └── scatter_gather.rs
+│   │   └── stats
+│   │       ├── counters.rs
+│   │       └── mod.rs
+│   ├── heap
+│   │   ├── allocator
+│   │   │   ├── global.rs
+│   │   │   ├── hybrid.rs
+│   │   │   ├── mod.rs
+│   │   │   └── size_classes.rs
+│   │   ├── large
+│   │   │   ├── mod.rs
+│   │   │   └── vmalloc.rs
+│   │   ├── mod.rs
+│   │   └── thread_local
+│   │       ├── cache.rs
+│   │       ├── drain.rs
+│   │       ├── magazine.rs
+│   │       └── mod.rs
+│   ├── huge_pages
+│   │   ├── hugetlbfs.rs
+│   │   ├── mod.rs
+│   │   ├── split.rs
+│   │   └── thp.rs
+│   ├── integrity
+│   │   ├── canary.rs
+│   │   ├── guard_pages.rs
+│   │   ├── mod.rs
+│   │   └── sanitizer.rs
+│   ├── mod.rs
+│   ├── numa.rs
+│   ├── physical
+│   │   ├── allocator
+│   │   │   ├── bitmap.rs
+│   │   │   ├── buddy.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── numa_aware.rs
+│   │   │   ├── numa_hints.rs
+│   │   │   ├── slab.rs
+│   │   │   └── slub.rs
+│   │   ├── frame
+│   │   │   ├── descriptor.rs
+│   │   │   ├── emergency_pool.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── pool.rs
+│   │   │   ├── reclaim.rs
+│   │   │   └── ref_count.rs
+│   │   ├── mod.rs
+│   │   ├── numa
+│   │   │   ├── distance.rs
+│   │   │   ├── migration.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── node.rs
+│   │   │   └── policy.rs
+│   │   ├── stats.rs
+│   │   └── zone
+│   │       ├── dma.rs
+│   │       ├── dma32.rs
+│   │       ├── high.rs
+│   │       ├── mod.rs
+│   │       ├── movable.rs
+│   │       └── normal.rs
+│   ├── protection
+│   │   ├── mod.rs
+│   │   ├── nx.rs
+│   │   ├── pku.rs
+│   │   ├── smap.rs
+│   │   └── smep.rs
+│   ├── swap
+│   │   ├── backend.rs
+│   │   ├── cluster.rs
+│   │   ├── compress.rs
+│   │   ├── mod.rs
+│   │   └── policy.rs
+│   ├── utils
+│   │   ├── futex_table.rs
+│   │   ├── mod.rs
+│   │   ├── oom_killer.rs
+│   │   └── shrinker.rs
+│   └── virtual
+│       ├── address_space
+│       │   ├── kernel.rs
+│       │   ├── mapper.rs
+│       │   ├── mod.rs
+│       │   ├── tlb.rs
+│       │   └── user.rs
+│       ├── fault
+│       │   ├── cow.rs
+│       │   ├── demand_paging.rs
+│       │   ├── handler.rs
+│       │   ├── mod.rs
+│       │   └── swap_in.rs
+│       ├── mmap.rs
+│       ├── mod.rs
+│       ├── page_table
+│       │   ├── builder.rs
+│       │   ├── kpti_split.rs
+│       │   ├── mod.rs
+│       │   ├── walker.rs
+│       │   └── x86_64.rs
+│       └── vma
+│           ├── cow.rs
+│           ├── descriptor.rs
+│           ├── mod.rs
+│           ├── operations.rs
+│           └── tree.rs
+├── process
+│   ├── auxv.rs
+│   ├── core
+│   │   ├── mod.rs
+│   │   ├── pcb.rs
+│   │   ├── pid.rs
+│   │   ├── registry.rs
+│   │   └── tcb.rs
+│   ├── group
+│   │   ├── job_control.rs
+│   │   ├── mod.rs
+│   │   ├── pgrp.rs
+│   │   └── session.rs
+│   ├── lifecycle
+│   │   ├── create.rs
+│   │   ├── exec.rs
+│   │   ├── exit.rs
+│   │   ├── fork.rs
+│   │   ├── mod.rs
+│   │   ├── reap.rs
+│   │   └── wait.rs
+│   ├── mod.rs
+│   ├── namespace
+│   │   ├── mod.rs
+│   │   ├── mount_ns.rs
+│   │   ├── net_ns.rs
+│   │   ├── pid_ns.rs
+│   │   ├── user_ns.rs
+│   │   └── uts_ns.rs
+│   ├── resource
+│   │   ├── cgroup.rs
+│   │   ├── mod.rs
+│   │   ├── rlimit.rs
+│   │   └── usage.rs
+│   ├── signal
+│   │   ├── default.rs
+│   │   ├── delivery.rs
+│   │   ├── handler.rs
+│   │   ├── mask.rs
+│   │   ├── mod.rs
+│   │   ├── queue.rs
+│   │   └── tcb.rs
+│   ├── state
+│   │   ├── mod.rs
+│   │   ├── transitions.rs
+│   │   └── wakeup.rs
+│   └── thread
+│       ├── creation.rs
+│       ├── detach.rs
+│       ├── join.rs
+│       ├── local_storage.rs
+│       ├── mod.rs
+│       └── pthread_compat.rs
+├── scheduler
+│   ├── core
+│   │   ├── mod.rs
+│   │   ├── pick_next.rs
+│   │   ├── preempt.rs
+│   │   ├── runqueue.rs
+│   │   ├── switch.rs
+│   │   └── task.rs
+│   ├── energy
+│   │   ├── c_states.rs
+│   │   ├── frequency.rs
+│   │   ├── mod.rs
+│   │   └── power_profile.rs
+│   ├── fpu
+│   │   ├── lazy.rs
+│   │   ├── mod.rs
+│   │   ├── save_restore.rs
+│   │   └── state.rs
+│   ├── mod.rs
+│   ├── policies
+│   │   ├── cfs.rs
+│   │   ├── deadline.rs
+│   │   ├── idle.rs
+│   │   ├── mod.rs
+│   │   └── realtime.rs
+│   ├── smp
+│   │   ├── affinity.rs
+│   │   ├── load_balance.rs
+│   │   ├── migration.rs
+│   │   ├── mod.rs
+│   │   └── topology.rs
+│   ├── stats
+│   │   ├── latency.rs
+│   │   ├── mod.rs
+│   │   └── per_cpu.rs
+│   ├── sync
+│   │   ├── barrier.rs
+│   │   ├── condvar.rs
+│   │   ├── mod.rs
+│   │   ├── mutex.rs
+│   │   ├── rwlock.rs
+│   │   ├── seqlock.rs
+│   │   ├── spinlock.rs
+│   │   └── wait_queue.rs
+│   └── timer
+│       ├── clock.rs
+│       ├── deadline_timer.rs
+│       ├── hrtimer.rs
+│       ├── mod.rs
+│       └── tick.rs
+├── security
+│   ├── access_control
+│   │   ├── checker.rs
+│   │   ├── mod.rs
+│   │   └── object_types.rs
+│   ├── audit
+│   │   ├── logger.rs
+│   │   ├── mod.rs
+│   │   ├── rules.rs
+│   │   └── syscall_audit.rs
+│   ├── capability
+│   │   ├── delegation.rs
+│   │   ├── mod.rs
+│   │   ├── namespace.rs
+│   │   ├── revocation.rs
+│   │   ├── rights.rs
+│   │   ├── table.rs
+│   │   ├── token.rs
+│   │   └── verify.rs
+│   ├── crypto
+│   │   ├── aes_gcm.rs
+│   │   ├── blake3.rs
+│   │   ├── ed25519.rs
+│   │   ├── kdf.rs
+│   │   ├── mod.rs
+│   │   ├── rng.rs
+│   │   ├── x25519.rs
+│   │   └── xchacha20_poly1305.rs
+│   ├── exploit_mitigations
+│   │   ├── cet.rs
+│   │   ├── cfg.rs
+│   │   ├── kaslr.rs
+│   │   ├── mod.rs
+│   │   ├── safe_stack.rs
+│   │   └── stack_protector.rs
+│   ├── integrity_check
+│   │   ├── code_signing.rs
+│   │   ├── mod.rs
+│   │   ├── runtime_check.rs
+│   │   └── secure_boot.rs
+│   ├── isolation
+│   │   ├── domains.rs
+│   │   ├── mod.rs
+│   │   ├── namespaces.rs
+│   │   ├── pledge.rs
+│   │   └── sandbox.rs
+│   ├── mod.rs
+│   └── zero_trust
+│       ├── context.rs
+│       ├── labels.rs
+│       ├── mod.rs
+│       ├── policy.rs
+│       └── verify.rs
+└── syscall
+    ├── abi.rs
+    ├── compat
+    │   ├── linux.rs
+    │   ├── mod.rs
+    │   └── posix.rs
+    ├── dispatch.rs
+    ├── entry_asm.rs
+    ├── errno.rs
+    ├── fast_path.rs
+    ├── fs_bridge.rs
+    ├── handlers
+    │   ├── fd.rs
+    │   ├── fs_posix.rs
+    │   ├── memory.rs
+    │   ├── misc.rs
+    │   ├── mod.rs
+    │   ├── process.rs
+    │   ├── signal.rs
+    │   └── time.rs
+    ├── mod.rs
+    ├── numbers.rs
+    ├── table.rs
+    └── validation.rs

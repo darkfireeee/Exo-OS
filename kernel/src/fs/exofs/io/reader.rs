@@ -16,6 +16,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::fs::exofs::core::blob_id::blake3_hash;
 use super::io_stats::IO_STATS;
 
 // ─── Trait d'accès au store ───────────────────────────────────────────────────
@@ -354,31 +355,11 @@ impl BlobStore for VecStore {
     }
 }
 
-// ─── blake3 inline minimal ────────────────────────────────────────────────────
+// ─── blake3 wrapper (source unique HASH-01) ───────────────────────────────────
 
 pub(crate) fn inline_blake3(data: &[u8]) -> [u8; 32] {
-    let mut state = [
-        0x6b08_c647u32, 0xbb67_ae85, 0x3c6e_f372, 0xa54f_f53a,
-        0x510e_527f, 0x9b05_688c, 0x1f83_d9ab, 0x5be0_cd19,
-    ];
-    let mut i = 0usize;
-    while i < data.len() {
-        let b = data[i] as u32;
-        state[i & 7] = state[i & 7].wrapping_add(b).rotate_left(13);
-        i = i.wrapping_add(1);
-    }
-    state[0] ^= data.len() as u32;
-    let mut out = [0u8; 32];
-    let mut k = 0usize;
-    while k < 8 {
-        let w = state[k].to_le_bytes();
-        out[k.wrapping_mul(4)] = w[0];
-        out[k.wrapping_mul(4) + 1] = w[1];
-        out[k.wrapping_mul(4) + 2] = w[2];
-        out[k.wrapping_mul(4) + 3] = w[3];
-        k = k.wrapping_add(1);
-    }
-    out
+    // RÈGLE HASH-01 : BlobId = BLAKE3 officiel des données brutes.
+    blake3_hash(data)
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

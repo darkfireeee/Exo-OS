@@ -242,7 +242,7 @@ pub fn check_magic(buf: &[u8]) -> ExofsResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::secret_writer::{SecretWriter, build_payload};
+    use super::super::secret_writer::SecretWriter;
 
     fn key32() -> [u8; 32] { [0xAB; 32] }
     fn writer() -> SecretWriter { SecretWriter::new(&key32()) }

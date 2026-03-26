@@ -9,6 +9,7 @@ use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     exofs_err_to_errno, copy_struct_from_user, write_user_buf,
+    verify_cap, CapabilityType,
     EFAULT, EINVAL,
 };
 use super::export_object::{
@@ -146,7 +147,7 @@ fn register_import(blob_id: BlobId, _path: &[u8], flags: u32) -> ExofsResult<u32
 pub fn sys_exofs_import_object(
     args_ptr:   u64,
     result_ptr: u64,
-    _a3: u64, _a4: u64, _a5: u64, _a6: u64,
+    _a3: u64, _a4: u64, _a5: u64, cap_rights: u64,
 ) -> i64 {
     if args_ptr == 0 { return EFAULT; }
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
@@ -156,6 +157,10 @@ pub fn sys_exofs_import_object(
     };
     if args.flags & !import_flags::VALID_MASK != 0 { return EINVAL; }
     if args.data_ptr == 0 { return EFAULT; }
+
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsImportObject) {
+        return e;
+    }
 
     let data = match read_user_buf(args.data_ptr, args.data_len) {
         Ok(v)  => v,
@@ -253,12 +258,12 @@ mod tests {
     use super::*;
     use super::super::export_object;
 
-    fn payload() -> &'static [u8] { b"hello exofs import payload" }
+    #[allow(dead_code)] fn payload() -> &'static [u8] { b"hello exofs import payload" }
 
-    fn make_export() -> Vec<u8> {
+    #[allow(dead_code)] fn make_export() -> Vec<u8> {
         let content = payload();
         let bid = BlobId::from_bytes_blake3(content);
-        BLOB_CACHE.insert(bid, content).ok();
+        BLOB_CACHE.insert(bid, content.to_vec()).ok();
         export_object::export_blob_pub(&bid, 0).unwrap()
     }
 

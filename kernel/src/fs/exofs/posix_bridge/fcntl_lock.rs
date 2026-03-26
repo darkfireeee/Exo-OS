@@ -303,6 +303,21 @@ impl FcntlLockTable {
         self.lock_release();
         n
     }
+
+    /// Retourne le nombre total de verrous actifs tous objets confondus.
+    pub fn total_lock_count(&self) -> usize {
+        self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let slots = unsafe { &*self.slots.get() };
+        let mut total = 0usize;
+        let mut i = 0usize;
+        while i < slots.len() {
+            total = total.saturating_add(slots[i].locks.len());
+            i = i.wrapping_add(1);
+        }
+        self.lock_release();
+        total
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

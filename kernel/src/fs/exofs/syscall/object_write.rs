@@ -12,7 +12,8 @@ use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     read_user_buf, exofs_err_to_errno,
-    validate_fd, validate_count, validate_offset, EFAULT,
+    validate_fd, validate_count, validate_offset,
+    verify_cap, CapabilityType, EFAULT,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -113,6 +114,32 @@ fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteRes
     BLOB_CACHE.insert(blob_id, new_content.to_vec())?;
     BLOB_CACHE.mark_dirty(&blob_id).ok();
 
+    // ── Phase 6 : Persistance Block Device ─────────────────────────
+    // Dépassement du comportement exclusif en RAM pour initier les
+    // écritures réelles sur pointeur virtio_blk (NVMe/Qemu emulé).
+    if let Some(dev) = crate::fs::exofs::storage::virtio_adapter::GLOBAL_DISK.lock().as_mut() {
+        use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
+        let block_size = dev.block_size() as usize; 
+        let dlen = new_content.len();
+        let mut idx = 0;
+        let mut base_lba = (blob_id.0[0] as u64) * 100; // Naive LBA routing
+        
+        while idx < dlen {
+            let chunk_size = core::cmp::min(block_size, dlen - idx);
+            let mut block_buf = alloc::vec![0u8; block_size];
+            let mut i = 0;
+            while i < chunk_size {
+                block_buf[i] = new_content[idx.wrapping_add(i)];
+                i = i.wrapping_add(1);
+            }
+            let _ = dev.write_block(base_lba, &block_buf);
+            base_lba = base_lba.wrapping_add(1);
+            idx = idx.wrapping_add(chunk_size);
+        }
+        let _ = dev.flush();
+    }
+    // ───────────────────────────────────────────────────────────────
+
     Ok(WriteResult {
         bytes_written: dlen,
         new_offset:    write_end,
@@ -156,7 +183,7 @@ pub fn sys_exofs_object_write(
     count:    u64,
     offset:   u64,
     args_ptr: u64,
-    _a6:      u64,
+    cap_rights: u64,
 ) -> i64 {
     let fd_u32 = match validate_fd(fd) {
         Ok(f)  => f,
@@ -186,6 +213,11 @@ pub fn sys_exofs_object_write(
     // Lire le buffer depuis userspace (RÈGLE 9, heap allocation).
     let mut data_buf: Vec<u8> = Vec::new();
     if let Err(e) = read_user_buf(buf_ptr, count_usize as u64, &mut data_buf) {
+        return e;
+    }
+
+    // Phase 2 (TOCTOU-safe): vérification capability sur paramètres déjà copiés.
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectWrite) {
         return e;
     }
 
@@ -260,6 +292,7 @@ pub fn new_write_offset(offset: u64, written: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::validation::{EBADF, ERANGE};
 
     #[test]
     fn test_write_args_size() {
@@ -386,6 +419,31 @@ pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
 
     BLOB_CACHE.insert(blob_id, new_content.to_vec())?;
     BLOB_CACHE.mark_dirty(&blob_id).ok();
+
+    // ── Phase 6 : Persistance Block Device (Truncate) ─────────────
+    if let Some(dev) = crate::fs::exofs::storage::virtio_adapter::GLOBAL_DISK.lock().as_mut() {
+        use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
+        let block_size = dev.block_size() as usize; 
+        let dlen = new_content.len();
+        let mut idx = 0;
+        let mut base_lba = (blob_id.0[0] as u64) * 100;
+        
+        while idx < dlen {
+            let chunk_size = core::cmp::min(block_size, dlen - idx);
+            let mut block_buf = alloc::vec![0u8; block_size];
+            let mut i = 0;
+            while i < chunk_size {
+                block_buf[i] = new_content[idx.wrapping_add(i)];
+                i = i.wrapping_add(1);
+            }
+            let _ = dev.write_block(base_lba, &block_buf);
+            base_lba = base_lba.wrapping_add(1);
+            idx = idx.wrapping_add(chunk_size);
+        }
+        let _ = dev.flush();
+    }
+    // ──────────────────────────────────────────────────────────────
+
     Ok(())
 }
 

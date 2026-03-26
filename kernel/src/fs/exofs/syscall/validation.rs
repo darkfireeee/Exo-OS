@@ -11,6 +11,23 @@
 use alloc::vec::Vec;
 use core::mem;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::fs::exofs::core::rights::{
+    ALL_RIGHTS,
+    RIGHT_ADMIN,
+    RIGHT_CREATE,
+    RIGHT_DELETE,
+    RIGHT_EXPORT,
+    RIGHT_GC_TRIGGER,
+    RIGHT_IMPORT,
+    RIGHT_INSPECT_CONTENT,
+    RIGHT_LIST,
+    RIGHT_READ,
+    RIGHT_RELATION_CREATE,
+    RIGHT_SETMETA,
+    RIGHT_SNAPSHOT_CREATE,
+    RIGHT_STAT,
+    RIGHT_WRITE,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes de bornage
@@ -95,6 +112,84 @@ pub fn exofs_err_to_errno(e: ExofsError) -> i64 {
         ExofsError::InvalidArgument        => EINVAL,
         ExofsError::InternalError          => EIO,
         _                                  => EIO,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Capability checks (Phase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Type de capability attendu par un handler ExoFS.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapabilityType {
+    ExoFsPathResolve,
+    ExoFsOpenRead,
+    ExoFsOpenWrite,
+    ExoFsObjectRead,
+    ExoFsObjectWrite,
+    ExoFsObjectCreate,
+    ExoFsObjectDelete,
+    ExoFsObjectStat,
+    ExoFsObjectSetMeta,
+    ExoFsGetContentHash,
+    ExoFsSnapshotCreate,
+    ExoFsSnapshotList,
+    ExoFsSnapshotMount,
+    ExoFsRelationCreate,
+    ExoFsRelationQuery,
+    ExoFsGcTrigger,
+    ExoFsQuotaQuery,
+    ExoFsQuotaSet,
+    ExoFsExportObject,
+    ExoFsImportObject,
+    ExoFsEpochCommit,
+    ExoFsOpenByPathRead,
+    ExoFsOpenByPathWrite,
+    ExoFsReaddir,
+}
+
+#[inline]
+const fn required_right_for(cap: CapabilityType) -> u32 {
+    match cap {
+        CapabilityType::ExoFsPathResolve     => RIGHT_READ,
+        CapabilityType::ExoFsOpenRead        => RIGHT_READ,
+        CapabilityType::ExoFsOpenWrite       => RIGHT_WRITE,
+        CapabilityType::ExoFsObjectRead      => RIGHT_READ,
+        CapabilityType::ExoFsObjectWrite     => RIGHT_WRITE,
+        CapabilityType::ExoFsObjectCreate    => RIGHT_CREATE,
+        CapabilityType::ExoFsObjectDelete    => RIGHT_DELETE,
+        CapabilityType::ExoFsObjectStat      => RIGHT_STAT,
+        CapabilityType::ExoFsObjectSetMeta   => RIGHT_SETMETA,
+        CapabilityType::ExoFsGetContentHash  => RIGHT_INSPECT_CONTENT,
+        CapabilityType::ExoFsSnapshotCreate  => RIGHT_SNAPSHOT_CREATE,
+        CapabilityType::ExoFsSnapshotList    => RIGHT_READ,
+        CapabilityType::ExoFsSnapshotMount   => RIGHT_READ,
+        CapabilityType::ExoFsRelationCreate  => RIGHT_RELATION_CREATE,
+        CapabilityType::ExoFsRelationQuery   => RIGHT_READ,
+        CapabilityType::ExoFsGcTrigger       => RIGHT_GC_TRIGGER,
+        CapabilityType::ExoFsQuotaQuery      => RIGHT_READ,
+        CapabilityType::ExoFsQuotaSet        => RIGHT_ADMIN,
+        CapabilityType::ExoFsExportObject    => RIGHT_EXPORT,
+        CapabilityType::ExoFsImportObject    => RIGHT_IMPORT,
+        CapabilityType::ExoFsEpochCommit     => RIGHT_WRITE,
+        CapabilityType::ExoFsOpenByPathRead  => RIGHT_READ,
+        CapabilityType::ExoFsOpenByPathWrite => RIGHT_WRITE,
+        CapabilityType::ExoFsReaddir         => RIGHT_LIST,
+    }
+}
+
+/// Vérifie les droits capability ExoFS.
+///
+/// `cap_rights_raw` est interprété comme un bitmask de droits ExoFS (u32).
+/// Retourne `EPERM` si le droit requis est absent.
+#[inline]
+pub fn verify_cap(cap_rights_raw: u64, cap: CapabilityType) -> Result<(), i64> {
+    let effective = (cap_rights_raw as u32) & ALL_RIGHTS;
+    let required = required_right_for(cap);
+    if effective & required == required {
+        Ok(())
+    } else {
+        Err(EPERM)
     }
 }
 
@@ -568,5 +663,18 @@ mod tests {
     fn test_validate_meta_len_bad() {
         assert_eq!(validate_meta_len(0).unwrap_err(), EINVAL);
         assert_eq!(validate_meta_len(EXOFS_META_MAX as u64 + 1).unwrap_err(), ERANGE);
+    }
+
+    #[test]
+    fn test_verify_cap_ok() {
+        assert!(verify_cap(RIGHT_READ as u64, CapabilityType::ExoFsObjectRead).is_ok());
+    }
+
+    #[test]
+    fn test_verify_cap_denied() {
+        assert_eq!(
+            verify_cap(0, CapabilityType::ExoFsObjectRead).unwrap_err(),
+            EPERM
+        );
     }
 }

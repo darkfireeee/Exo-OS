@@ -407,9 +407,9 @@ fn zeroed_superblock_disk() -> ExoSuperblockDisk {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::exofs::storage::layout::HEAP_START_OFFSET;
+    // use crate::fs::exofs::storage::layout::HEAP_START_OFFSET;
 
-    fn make_valid_sb(epoch: u64) -> ExoSuperblockDisk {
+    #[allow(dead_code)] fn make_valid_sb(epoch: u64) -> ExoSuperblockDisk {
         ExoSuperblockDisk::new_volume(
             64 * 1024 * 1024,
             b"test",

@@ -244,7 +244,7 @@ mod integration_tests {
 
     #[test] fn test_compress_decompress_roundtrip_lz4() {
         let data = uniform(4096, 0xAA);
-        let blob = compress_blob(&data, CompressPolicy::aggressive_lz4()).unwrap();
+        let blob = compress_blob(&data, CompressPolicy::lz4_fast()).unwrap();
         let dec  = decompress_blob(&blob).unwrap();
         // Si compressé : roundtrip exact. Si brut : identique.
         assert!(dec.len() == data.len() || dec == data);
@@ -259,14 +259,14 @@ mod integration_tests {
 
     #[test] fn test_is_compressed_after_compress() {
         let data = uniform(1024, 0x11);
-        let blob = compress_blob(&data, CompressPolicy::aggressive_lz4()).unwrap();
+        let blob = compress_blob(&data, CompressPolicy::lz4_fast()).unwrap();
         // Peut être compressé ou brut selon la décision adaptative.
         let _ = is_compressed_blob(&blob);
     }
 
     #[test] fn test_compress_validated_ok() {
         let data = uniform(2048, 0x33);
-        let blob = compress_validated(&data, CompressPolicy::aggressive_lz4()).unwrap();
+        let blob = compress_validated(&data, CompressPolicy::lz4_fast()).unwrap();
         assert!(!blob.is_empty() || data.is_empty());
     }
 
@@ -373,7 +373,7 @@ mod integration_tests {
     }
     #[test] fn test_compress_validated_non_empty() {
         let data = vec![0x11u8; 512];
-        let b = compress_validated(&data, CompressPolicy::aggressive_lz4()).unwrap();
+        let b = compress_validated(&data, CompressPolicy::lz4_fast()).unwrap();
         assert!(b.len() > 0);
     }
     #[test] fn test_compressor_config_dense_validate_crc() {
@@ -382,11 +382,12 @@ mod integration_tests {
     }
     #[test] fn test_algo_capabilities_lz4_supported() {
         let caps = AlgorithmCapabilities::for_algorithm(CompressionAlgorithm::Lz4);
-        assert!(caps.supported);
+        assert_eq!(caps.algorithm, CompressionAlgorithm::Lz4);
+        assert!(caps.compress_mbps > 0);
     }
     #[test] fn test_algo_capabilities_none_not_really_compressing() {
         let caps = AlgorithmCapabilities::for_algorithm(CompressionAlgorithm::None);
-        assert!(!caps.compresses);
+        assert!(!caps.algorithm.is_compressed());
     }
     #[test] fn test_compress_blob_zstd_policy() { let data = vec![0xBBu8; 256]; let b = compress_blob(&data, CompressPolicy::zstd_default()).unwrap(); assert!(!b.is_empty()); }
     #[test] fn test_is_compressed_blob_false_for_random() { let d: Vec<u8> = (0u8..32).collect(); assert!(!is_compressed_blob(&d)); }

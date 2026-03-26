@@ -11,7 +11,7 @@
 //! │  Couche objet  │  object_writer / object_reader                     │
 //! ├─────────────────────────────────────────────────────────────────────┤
 //! │  Couche blob   │  blob_writer / blob_reader                         │
-//! │                │  (pipeline : raw→BlobId→dédup→compress→checksum)   │
+//! │                │  (pipeline : raw→BlobId→dédup→compress→encrypt→checksum) │
 //! ├───────────────────────────────────────────────────────────────────-─┤
 //! │  Extent / I/O  │  extent_writer / extent_reader / io_batch          │
 //! ├─────────────────────────────────────────────────────────────────────┤
@@ -122,6 +122,7 @@ pub mod object_reader;
 
 /// Statistiques globales du module storage
 pub mod storage_stats;
+pub mod virtio_adapter;
 
 // ─────────────────────────────────────────────────────────────
 // Re-exports principaux
@@ -345,7 +346,7 @@ impl StorageHealthReport {
 mod tests {
     use super::*;
     use alloc::vec;
-    use crate::fs::exofs::core::{DiskOffset, ExofsResult, ExofsError, EpochId, ObjectId};
+    use crate::fs::exofs::core::{DiskOffset, EpochId, ObjectId};
 
     const DISK_SZ: u64 = 32 * 1024 * 1024;
 

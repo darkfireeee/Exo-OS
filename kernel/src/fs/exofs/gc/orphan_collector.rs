@@ -347,11 +347,11 @@ mod tests {
     use crate::fs::exofs::core::{BlobId, ObjectId};
     use crate::fs::exofs::gc::epoch_scanner::EpochScanSnapshot;
 
-    fn oid(b: u8) -> ObjectId {
+    #[allow(dead_code)] fn oid(b: u8) -> ObjectId {
         let mut a = [0u8; 32]; a[0] = b; ObjectId(a)
     }
 
-    fn bid(b: u8) -> BlobId {
+    #[allow(dead_code)] fn bid(b: u8) -> BlobId {
         let mut a = [0u8; 32]; a[0] = b; BlobId(a)
     }
 
@@ -359,7 +359,7 @@ mod tests {
     fn test_empty_scan_no_objects() {
         let collector = OrphanCollector::new();
         let scan = EpochScanSnapshot::empty();
-        let result = collector.collect_orphans(&scan, 5).unwrap();
+        let result = collector.collect_orphans(&scan, EpochId(5)).unwrap();
         assert_eq!(result.objects_analyzed, 0);
         assert_eq!(result.objects_orphaned, 0);
     }

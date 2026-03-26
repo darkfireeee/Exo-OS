@@ -394,19 +394,20 @@ mod preset_tests {
     #[test] fn test_decision_has_reason() {
         let choice = CompressionChoice::new(CompressPolicy::default());
         let data   = b"hello world test data";
-        let thresh = CompressionThreshold::default();
-        let dec    = choice.decide(data, &thresh);
+        let dec    = choice.decide(data);
         // La décision doit avoir un reason valide.
         let _ = dec.reason;
     }
 
     #[test] fn test_preset_adaptive_default_is_lz4() {
         let p = PolicyPresets::adaptive_default();
-        assert_eq!(p.preferred_algorithm, CompressionAlgorithm::Lz4);
+        let d = p.decide(&compressible(10_000));
+        assert_eq!(d.algorithm, CompressionAlgorithm::Lz4);
     }
 
     #[test] fn test_preset_archival_is_zstd() {
         let p = PolicyPresets::archival();
-        assert_eq!(p.preferred_algorithm, CompressionAlgorithm::Zstd);
+        let d = p.decide(&compressible(10_000));
+        assert_eq!(d.algorithm, CompressionAlgorithm::Zstd);
     }
 }

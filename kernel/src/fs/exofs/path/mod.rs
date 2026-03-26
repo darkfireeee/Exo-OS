@@ -197,6 +197,7 @@ pub use path_index_merge::{PathIndexMerger, MergeConflictPolicy, MergeResult, Me
 /// À appeler une seule fois au démarrage du noyau, après que l allocateur
 /// est opérationnel.
 pub fn init(fs_root_oid: crate::fs::exofs::core::ObjectId) {
+    path_index::ensure_mount_key_initialized();
     init_path_cache();
     let _ = init_namespaces(fs_root_oid);
 }

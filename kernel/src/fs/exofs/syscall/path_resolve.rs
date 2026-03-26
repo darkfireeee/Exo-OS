@@ -13,6 +13,7 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use super::validation::{
     read_user_path_heap, write_user_buf, exofs_err_to_errno, EFAULT, ERANGE,
+    verify_cap, CapabilityType,
     EXOFS_PATH_MAX, EXOFS_NAME_MAX,
 };
 
@@ -209,7 +210,7 @@ pub fn sys_exofs_path_resolve(
     flags:    u64,
     out_ptr:  u64,
     _a5: u64,
-    _a6: u64,
+    cap_rights: u64,
 ) -> i64 {
     // 1. Valider les arguments.
     if path_ptr == 0 { return EFAULT; }
@@ -222,6 +223,11 @@ pub fn sys_exofs_path_resolve(
         Ok(l)  => l,
         Err(e) => return e,
     };
+
+    // Phase 2 (TOCTOU-safe): verify_cap après copie immuable du chemin.
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsPathResolve) {
+        return e;
+    }
 
     // 3. Résoudre le chemin.
     let result = match resolve_path_to_blob(&path_buf[..path_len_actual], flags as u32) {
@@ -345,7 +351,7 @@ mod tests {
     #[test]
     fn test_name_too_long_rejected() {
         // Composant de 256 octets → PathTooLong.
-        let mut long_component = [b'a'; 256];
+        let long_component = [b'a'; 256];
         let mut path: Vec<u8> = Vec::new();
         path.try_reserve(260).unwrap();
         path.push(b'/');

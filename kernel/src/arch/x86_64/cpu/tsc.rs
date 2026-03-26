@@ -12,6 +12,7 @@
 
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use super::features::CPU_FEATURES;
 
 // ── TSC globals ───────────────────────────────────────────────────────────────
 
@@ -72,20 +73,39 @@ pub fn read_tsc_begin() -> u64 {
 /// Retourne `(tsc_value, cpu_aux)` — cpu_aux = CPU ID logique si configuré.
 #[inline(always)]
 pub fn read_tsc_end() -> (u64, u32) {
-    let lo: u32; let hi: u32; let aux: u32;
-    // SAFETY: RDTSCP est sérialisante pour les loads précédents
-    unsafe {
-        core::arch::asm!(
-            "rdtscp",
-            out("eax") lo,
-            out("edx") hi,
-            out("ecx") aux,
-            options(nostack, nomem)
-        );
-        // Barrière post pour empêcher les instructions suivantes de remonter
-        core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
+    let lo: u32;
+    let hi: u32;
+    let aux: u32;
+
+    if CPU_FEATURES.has_rdtscp() {
+        // SAFETY: RDTSCP supporté matériellement.
+        unsafe {
+            core::arch::asm!(
+                "rdtscp",
+                out("eax") lo,
+                out("edx") hi,
+                out("ecx") aux,
+                options(nostack, nomem)
+            );
+            // Barrière post pour empêcher les instructions suivantes de remonter.
+            core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
+        }
+        (((hi as u64) << 32) | (lo as u64), aux)
+    } else {
+        // Fallback sûr sur RDTSC pour éviter #UD sur plateformes sans RDTSCP.
+        // SAFETY: LFENCE+RDTSC+LFENCE est valide sur x86_64.
+        unsafe {
+            core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
+            core::arch::asm!(
+                "rdtsc",
+                out("eax") lo,
+                out("edx") hi,
+                options(nostack, nomem)
+            );
+            core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
+        }
+        (((hi as u64) << 32) | (lo as u64), 0)
     }
-    (((hi as u64) << 32) | (lo as u64), aux)
 }
 
 /// Délai TSC en nanosecondes

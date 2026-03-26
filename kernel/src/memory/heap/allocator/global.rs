@@ -69,5 +69,5 @@ unsafe impl GlobalAlloc for KernelAllocator {
 }
 
 /// Instance globale de l'allocateur kernel.
-#[global_allocator]
+#[cfg_attr(not(test), global_allocator)]
 pub static KERNEL_ALLOCATOR: KernelAllocator = KernelAllocator;

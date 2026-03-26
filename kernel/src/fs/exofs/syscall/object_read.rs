@@ -12,7 +12,8 @@ use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     write_user_buf, exofs_err_to_errno,
-    validate_fd, validate_count, validate_offset, EFAULT, ENOMEM,
+    validate_fd, validate_count, validate_offset,
+    verify_cap, CapabilityType, EFAULT, ENOMEM,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -167,7 +168,7 @@ pub fn sys_exofs_object_read(
     count:    u64,
     offset:   u64,
     args_ptr: u64,
-    _a6:      u64,
+    cap_rights: u64,
 ) -> i64 {
     // 1. Valider les arguments de base.
     let fd_u32 = match validate_fd(fd) {
@@ -200,6 +201,10 @@ pub fn sys_exofs_object_read(
     };
 
     if effective_count == 0 { return 0; }
+
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectRead) {
+        return e;
+    }
 
     // 3. Allouer le buffer de lecture sur le tas (RÈGLE 10, OOM-02).
     let mut read_buf: Vec<u8> = Vec::new();
@@ -255,6 +260,7 @@ pub fn align_up(offset: u64, align: u64) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::validation::{EBADF, EINVAL, ERANGE};
 
     #[test]
     fn test_bytes_remaining_normal() {

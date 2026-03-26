@@ -10,10 +10,13 @@
 fn main() {
     // Répertoire du crate (chemin absolu fourni par Cargo)
     let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let target = std::env::var("TARGET").unwrap_or_default();
 
-    // Passer le linker script à rust-lld.
+    // Passer le linker script à rust-lld uniquement pour les cibles bare-metal.
     // Le chemin DOIT être absolu : le linker est invoqué depuis un répertoire temporaire.
-    println!("cargo:rustc-link-arg=-T{dir}/linker.ld");
+    if target.contains("none") || target.contains("exo") {
+        println!("cargo:rustc-link-arg=-T{dir}/linker.ld");
+    }
 
     // Rebuild si le linker script change.
     println!("cargo:rerun-if-changed={dir}/linker.ld");

@@ -73,6 +73,7 @@ impl FreeNode {
 
     #[inline]
     unsafe fn is_empty(list_head: *const FreeNode) -> bool {
+        if list_head.is_null() { return true; }
         (*list_head).next == list_head as *mut FreeNode
     }
 

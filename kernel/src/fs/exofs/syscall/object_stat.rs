@@ -7,7 +7,8 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    read_user_path_heap, write_user_buf, exofs_err_to_errno, EFAULT, EINVAL,
+    read_user_path_heap, write_user_buf, exofs_err_to_errno,
+    verify_cap, CapabilityType, EFAULT, EINVAL,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -139,13 +140,16 @@ pub fn sys_exofs_object_stat(
     flags:      u64,
     out_ptr:    u64,
     _a5:        u64,
-    _a6:        u64,
+    cap_rights: u64,
 ) -> i64 {
     if out_ptr == 0 { return EFAULT; }
     let f = flags as u32;
     if f & !stat_flags::VALID_MASK != 0 { return EINVAL; }
 
     let result = if f & stat_flags::USE_FD != 0 {
+        if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectStat) {
+            return e;
+        }
         let fd = fd_or_path as u32;
         match stat_by_fd(fd, f) {
             Ok(s)  => s,
@@ -158,6 +162,9 @@ pub fn sys_exofs_object_stat(
             Ok(l)  => l,
             Err(e) => return e,
         };
+        if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectStat) {
+            return e;
+        }
         match stat_by_path(&path_buf, actual_len, f) {
             Ok(s)  => s,
             Err(e) => return exofs_err_to_errno(e),
@@ -225,7 +232,7 @@ mod tests {
 
     fn insert(path: &[u8], data: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, data).unwrap();
+        BLOB_CACHE.insert(id, data.to_vec()).unwrap();
         id
     }
 
@@ -443,7 +450,7 @@ mod advanced_tests {
 
     fn insert(path: &[u8], data: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, data).unwrap();
+        BLOB_CACHE.insert(id, data.to_vec()).unwrap();
         id
     }
 

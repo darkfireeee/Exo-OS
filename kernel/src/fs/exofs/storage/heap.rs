@@ -343,6 +343,7 @@ pub fn check_heap_space(heap: &ExofsHeap, size: u64) -> ExofsResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::exofs::storage::layout::HEAP_START_OFFSET;
 
     const DISK_SIZE: u64 = 64 * 1024 * 1024;   // 64 MB
 

@@ -591,8 +591,8 @@ fn blake3_hash_simple(data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::exoar_format::{ExoarHeader, ExoarEntryHeader, ExoarFooter, ARCHIVE_FLAG_SNAPSHOT};
-    use alloc::vec;
+    use super::super::exoar_format::{ExoarHeader, ExoarEntryHeader, ExoarFooter};
+    use super::super::exoar_format::crc32c_compute;
 
     fn build_archive(blobs: &[(&[u8; 32], &[u8])], flags: u32) -> Vec<u8> {
         let mut out: Vec<u8> = Vec::new();

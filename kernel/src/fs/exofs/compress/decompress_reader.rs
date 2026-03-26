@@ -219,7 +219,7 @@ mod tests {
     fn uniform(n: usize) -> Vec<u8> { let mut v = Vec::new(); v.resize(n, 0x33); v }
 
     fn roundtrip_lz4(data: &[u8]) -> Vec<u8> {
-        let writer = CompressWriter::new(CompressPolicy::aggressive_lz4());
+        let writer = CompressWriter::new(CompressPolicy::lz4_fast());
         let blob   = writer.compress(data).unwrap();
         let mut reader = DecompressReader::new();
         reader.decompress(&blob.payload).unwrap()
@@ -247,7 +247,7 @@ mod tests {
     }
 
     #[test] fn test_is_compressed_true() {
-        let writer = CompressWriter::new(CompressPolicy::aggressive_lz4());
+        let writer = CompressWriter::new(CompressPolicy::lz4_fast());
         let blob   = writer.compress(&uniform(2048)).unwrap();
         if blob.algorithm != CompressionAlgorithm::None {
             assert!(DecompressReader::is_compressed(&blob.payload));
@@ -258,7 +258,7 @@ mod tests {
         let data = uniform(4096);
         let dec  = roundtrip_lz4(&data);
         // Si compressé, le roundtrip doit être identique.
-        let writer = CompressWriter::new(CompressPolicy::aggressive_lz4());
+        let writer = CompressWriter::new(CompressPolicy::lz4_fast());
         let blob   = writer.compress(&data).unwrap();
         if blob.algorithm == CompressionAlgorithm::Lz4 {
             assert_eq!(dec, data);
@@ -323,7 +323,7 @@ mod tests {
 
     #[test] fn test_stats_lz4_increments() {
         let data   = uniform(4096);
-        let writer = CompressWriter::new(CompressPolicy::aggressive_lz4());
+        let writer = CompressWriter::new(CompressPolicy::lz4_fast());
         let blob   = writer.compress(&data).unwrap();
         if blob.algorithm == CompressionAlgorithm::Lz4 {
             let mut r = DecompressReader::new();
@@ -385,7 +385,7 @@ mod tests {
         assert_eq!(r.stats().crc_errors, 0);
     }
     #[test] fn test_roundtrip_many_small_blobs() {
-        let w = CompressWriter::new(CompressPolicy::aggressive_lz4());
+        let w = CompressWriter::new(CompressPolicy::lz4_fast());
         let mut reader = DecompressReader::new();
         for i in 0u8..10 {
             let data = vec![i; 128];

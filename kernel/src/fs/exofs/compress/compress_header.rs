@@ -249,18 +249,27 @@ mod tests {
     #[test] fn test_from_bytes_bad_magic() {
         let mut buf = make_valid_header_bytes(400);
         buf[0] = 0xFF;
-        assert_eq!(CompressionHeader::from_bytes(&buf), Err(ExofsError::InvalidMagic));
+        assert!(matches!(
+            CompressionHeader::from_bytes(&buf),
+            Err(ExofsError::InvalidMagic)
+        ));
     }
 
     #[test] fn test_from_bytes_bad_algorithm() {
         let mut buf = make_valid_header_bytes(400);
         buf[4] = 0xFF;
-        assert_eq!(CompressionHeader::from_bytes(&buf), Err(ExofsError::NotSupported));
+        assert!(matches!(
+            CompressionHeader::from_bytes(&buf),
+            Err(ExofsError::NotSupported)
+        ));
     }
 
     #[test] fn test_from_bytes_too_short() {
         let buf = [0u8; 10];
-        assert_eq!(CompressionHeader::from_bytes(&buf), Err(ExofsError::CorruptedStructure));
+        assert!(matches!(
+            CompressionHeader::from_bytes(&buf),
+            Err(ExofsError::CorruptedStructure)
+        ));
     }
 
     #[test] fn test_algorithm_accessor() {
@@ -310,10 +319,10 @@ mod tests {
     #[test] fn test_blob_view_parse_bad_magic() {
         let mut buf = vec![0u8; 32];
         buf[0] = 0xAA;
-        assert_eq!(
-            CompressedBlobView::parse(&buf).unwrap_err(),
-            ExofsError::InvalidMagic
-        );
+        match CompressedBlobView::parse(&buf) {
+            Err(e) => assert_eq!(e, ExofsError::InvalidMagic),
+            Ok(_)  => panic!("expected InvalidMagic"),
+        }
     }
 
     #[test] fn test_default_header_none_algo() {

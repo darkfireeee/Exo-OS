@@ -679,7 +679,7 @@ mod tests {
     fn format_and_mount_roundtrip() {
         let mut disk = make_disk(TEST_DISK as usize);
 
-        let _mgr = SuperblockManager::format(
+        let mgr = SuperblockManager::format(
             TEST_DISK,
             b"RoundtripVol",
             [0xAB; 16],

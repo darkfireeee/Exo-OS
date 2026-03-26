@@ -382,7 +382,7 @@ mod tests {
     #[test] fn test_remove_existing() {
         let c = MetadataCache::new_const();
         c.insert(mk(1)).unwrap();
-        c.remove(1);
+        c.invalidate(1);
         assert!(c.get(1).is_none());
     }
 

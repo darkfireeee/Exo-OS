@@ -10,6 +10,7 @@ use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     exofs_err_to_errno, write_user_buf, EFAULT,
+    verify_cap, CapabilityType,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,7 +253,7 @@ pub fn sys_exofs_relation_create(
     _a3:      u64,
     _a4:      u64,
     _a5:      u64,
-    _a6:      u64,
+    cap_rights: u64,
 ) -> i64 {
     if args_ptr == 0 { return EFAULT; }
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
@@ -270,6 +271,9 @@ pub fn sys_exofs_relation_create(
             let mut i = 0usize;
             while i < nl { name_buf.push(*src.add(i)); i = i.wrapping_add(1); }
         }
+    }
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsRelationCreate) {
+        return e;
     }
     let rel = match create_relation(&args.source_id, &args.target_id, args.kind, args.flags, &name_buf) {
         Ok(r)  => r,
@@ -491,14 +495,14 @@ mod advanced_tests {
     #[test]
     fn test_quota_exceeded() {
         let s = id(b"/rq/s");
-        let mut ok = true;
+        let mut _ok = true;
         let mut i = 0usize;
         while i < RELATION_MAX {
             let t_bytes = (i as u64).to_le_bytes();
             let mut tid = [0u8; 32];
             let mut j = 0usize;
             while j < 8 { tid[j] = t_bytes[j]; j = j.wrapping_add(1); }
-            if create_relation(&s, &tid, rel_kind::CHILD, 0, b"").is_err() { ok = false; break; }
+            if create_relation(&s, &tid, rel_kind::CHILD, 0, b"").is_err() { _ok = false; break; }
             i = i.wrapping_add(1);
         }
         assert!(create_relation(&s, &[0xFF; 32], rel_kind::CHILD, 0, b"").is_err());

@@ -398,7 +398,6 @@ mod tests {
     }
 
     #[test] fn test_segment_is_empty_on_empty_log() {
-        let log  = AuditLog::new_const();
         // Ring vide → segment à 0 entrées.
         // On teste via entry_at hors bornes.
         let seg = AuditSegment {

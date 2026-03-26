@@ -262,7 +262,7 @@ impl SnapshotDeleter {
 mod tests {
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId};
-    use super::super::snapshot::make_snapshot_name;
+    use super::super::snapshot::{flags, make_snapshot_name};
     use super::super::snapshot_list::SnapshotList;
 
     fn push_snap(list: &SnapshotList, id: u64, bytes: u64, parent: Option<u64>, flags: u32) {

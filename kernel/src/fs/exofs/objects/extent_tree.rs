@@ -548,6 +548,8 @@ impl fmt::Display for ExtentTreeStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::exofs::core::DiskOffset;
+    use crate::fs::exofs::objects::extent::EXTENT_FLAG_SPARSE;
 
     fn mk_extent(lo: u64, len: u64) -> ObjectExtent {
         ObjectExtent::new(lo, DiskOffset(lo + 0x10000), len, 0)

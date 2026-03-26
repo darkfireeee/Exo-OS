@@ -17,6 +17,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
+use crate::arch::x86_64::cpu::features::CPU_FEATURES;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RdrandError
@@ -42,6 +43,11 @@ pub enum RngError {
 fn rdrand64() -> Result<u64, RngError> {
     #[cfg(target_arch = "x86_64")]
     {
+        // Évite #UD si l'instruction RDRAND n'est pas supportée par le CPU/VM.
+        if !CPU_FEATURES.has_rdrand() {
+            return Err(RngError::RdrandExhausted);
+        }
+
         let mut val: u64 = 0;
         let mut success: u8;
         for _ in 0..10 {

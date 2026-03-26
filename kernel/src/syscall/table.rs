@@ -125,6 +125,20 @@ pub fn sys_enosys(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
     ENOSYS
 }
 
+/// Wrapper ABI pour SYS_EXOFS_OBJECT_SET_META.
+///
+/// Nouveau contrat: a1=args_ptr(SetMetaArgs), a2=cap_token, a3..a6 ignorés.
+pub fn sys_exofs_object_set_meta_abi(
+    args_ptr: u64,
+    cap_token: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    sys_exofs_object_set_meta(args_ptr, cap_token)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers I/O (délégués vers fs/)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -717,7 +731,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXOFS_OBJECT_CREATE    => sys_exofs_object_create,
         SYS_EXOFS_OBJECT_DELETE    => sys_exofs_object_delete,
         SYS_EXOFS_OBJECT_STAT      => sys_exofs_object_stat,
-        SYS_EXOFS_OBJECT_SET_META  => sys_exofs_object_set_meta,
+        SYS_EXOFS_OBJECT_SET_META  => sys_exofs_object_set_meta_abi,
         SYS_EXOFS_GET_CONTENT_HASH => sys_exofs_get_content_hash,
         SYS_EXOFS_SNAPSHOT_CREATE  => sys_exofs_snapshot_create,
         SYS_EXOFS_SNAPSHOT_LIST    => sys_exofs_snapshot_list,

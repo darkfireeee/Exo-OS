@@ -251,7 +251,7 @@ fn ct_eq_32(a:&[u8;32],b:&[u8;32])->bool{ let mut d=0u8; for i in 0..32{d|=a[i]^
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::master_key::MasterKey;
+    // use super::super::master_key::MasterKey;
 
     fn mk() -> MasterKey { MasterKey::generate().unwrap() }
 
@@ -392,7 +392,7 @@ impl ObjectKeyCache {
 #[cfg(test)]
 mod cache_tests {
     use super::*;
-    use super::super::master_key::MasterKey;
+    // use super::super::master_key::MasterKey;
 
     #[test] fn test_cache_basic() {
         let vk  = VolumeKey::generate(VolumeId(1)).unwrap();

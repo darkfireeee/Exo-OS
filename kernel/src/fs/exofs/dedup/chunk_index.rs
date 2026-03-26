@@ -285,14 +285,14 @@ pub static CHUNK_INDEX: ChunkIndex = ChunkIndex::new_const();
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::chunk_fingerprint::{ChunkFingerprint, FingerprintAlgorithm};
+    use super::super::chunk_fingerprint::ChunkFingerprint;
 
     fn blob() -> BlobId {
         BlobId::from_raw([0x42u8; 32])
     }
 
     fn fp(data: &[u8]) -> ChunkFingerprint {
-        ChunkFingerprint::compute(data, FingerprintAlgorithm::Double).unwrap()
+        ChunkFingerprint::compute(data)
     }
 
     #[test] fn test_insert_new_chunk() {
@@ -406,11 +406,11 @@ impl ChunkIndex {
 #[cfg(test)]
 mod tests_snapshot {
     use super::*;
-    use super::super::chunk_fingerprint::{ChunkFingerprint, FingerprintAlgorithm};
+    use super::super::chunk_fingerprint::ChunkFingerprint;
 
     fn blob() -> BlobId { BlobId::from_raw([0xBBu8; 32]) }
     fn fp(d: &[u8]) -> ChunkFingerprint {
-        ChunkFingerprint::compute(d, FingerprintAlgorithm::Double).unwrap()
+        ChunkFingerprint::compute(d)
     }
 
     #[test] fn test_snapshot_empty() {

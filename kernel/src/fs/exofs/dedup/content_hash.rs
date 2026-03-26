@@ -105,7 +105,9 @@ impl ContentHashResult {
 
     /// Retourne les 8 premiers octets du blake3 comme u64 (index de shard).
     pub fn shard_key(&self) -> u64 {
-        u64::from_le_bytes(self.blake3[..8].try_into().unwrap_or([0u8; 8]))
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&self.blake3[..8]);
+        u64::from_le_bytes(b)
     }
 }
 

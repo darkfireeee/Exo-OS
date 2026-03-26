@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test] fn test_shrink_order_by_priority() {
-        static ORDER: core::sync::atomic::AtomicU8 =
+        #[allow(dead_code)] static ORDER: core::sync::atomic::AtomicU8 =
             core::sync::atomic::AtomicU8::new(0);
 
         fn shrink_a(b: u64) -> ShrinkResult {

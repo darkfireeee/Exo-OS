@@ -1,0 +1,37 @@
+﻿├── bios
+│   ├── disk.rs
+│   ├── mod.rs
+│   └── vga.rs
+├── config
+│   ├── defaults.rs
+│   ├── mod.rs
+│   └── parser.rs
+├── display
+│   ├── font.rs
+│   ├── framebuffer.rs
+│   └── mod.rs
+├── kernel_loader
+│   ├── elf.rs
+│   ├── handoff.rs
+│   ├── mod.rs
+│   ├── relocations.rs
+│   └── verify.rs
+├── main.rs
+├── memory
+│   ├── map.rs
+│   ├── mod.rs
+│   ├── paging.rs
+│   └── regions.rs
+├── panic.rs
+└── uefi
+    ├── entry.rs
+    ├── exit.rs
+    ├── mod.rs
+    ├── protocols
+    │   ├── file.rs
+    │   ├── graphics.rs
+    │   ├── loaded_image.rs
+    │   ├── mod.rs
+    │   └── rng.rs
+    ├── secure_boot.rs
+    └── services.rs

@@ -214,7 +214,7 @@ pub fn hashes_match(a: &[u8], b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::exofs::storage::checksum_writer::{ChecksumWriter, append_checksum};
+    use crate::fs::exofs::storage::checksum_writer::ChecksumWriter;
 
     fn make_framed(data: &[u8]) -> Vec<u8> {
         let mut w = ChecksumWriter::new();

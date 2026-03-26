@@ -11,6 +11,8 @@
 //! RÈGLE RECUR-01 : aucune récursivité.
 
 use alloc::vec::Vec;
+use alloc::alloc::{alloc, dealloc, Layout};
+use core::ffi::c_void;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 /// Niveau de compression par défaut (conforme zstd).
@@ -19,6 +21,64 @@ pub const ZSTD_DEFAULT_LEVEL: i32 = 3;
 pub const ZSTD_MAX_LEVEL: i32 = 22;
 /// Magic number Zstd (RFC 8878 §3.1.1).
 const ZSTD_MAGIC: u32 = 0xFD2FB528;
+
+#[repr(C)]
+struct ZstdAllocHeader {
+    size: usize,
+}
+
+#[inline]
+fn zstd_alloc_layout(size: usize) -> Option<Layout> {
+    let hdr = core::mem::size_of::<ZstdAllocHeader>();
+    let total = hdr.checked_add(size)?;
+    Layout::from_size_align(total, core::mem::align_of::<usize>()).ok()
+}
+
+/// Shim `ZSTD_malloc` pour environnements noyau `no_std`.
+///
+/// Signature attendue par `zstd-sys` : `(opaque, size) -> ptr`.
+#[no_mangle]
+pub extern "C" fn ZSTD_malloc(_opaque: *mut c_void, size: usize) -> *mut c_void {
+    let layout = match zstd_alloc_layout(size) {
+        Some(l) => l,
+        None => return core::ptr::null_mut(),
+    };
+    // SAFETY: layout validé ci-dessus.
+    let base = unsafe { alloc(layout) };
+    if base.is_null() {
+        return core::ptr::null_mut();
+    }
+
+    let header_ptr = base as *mut ZstdAllocHeader;
+    // SAFETY: header_ptr pointe vers une zone allouée de taille >= header.
+    unsafe { (*header_ptr).size = size; }
+
+    let payload = base.wrapping_add(core::mem::size_of::<ZstdAllocHeader>());
+    payload as *mut c_void
+}
+
+/// Shim `ZSTD_free` pour environnements noyau `no_std`.
+///
+/// Signature attendue par `zstd-sys` : `(opaque, address)`.
+#[no_mangle]
+pub extern "C" fn ZSTD_free(_opaque: *mut c_void, address: *mut c_void) {
+    if address.is_null() {
+        return;
+    }
+    let payload = address as *mut u8;
+    let base = payload.wrapping_sub(core::mem::size_of::<ZstdAllocHeader>());
+    let header_ptr = base as *mut ZstdAllocHeader;
+
+    // SAFETY: base a été produit par ZSTD_malloc, header valide.
+    let size = unsafe { (*header_ptr).size };
+    let layout = match zstd_alloc_layout(size) {
+        Some(l) => l,
+        None => return,
+    };
+
+    // SAFETY: base/layout correspondent à l'allocation effectuée dans ZSTD_malloc.
+    unsafe { dealloc(base, layout) };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration

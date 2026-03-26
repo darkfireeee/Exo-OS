@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn test_direct_io_buffer_write_read() {
         let mut buf = DirectIoBuffer::new(2, BlockSize::B512).expect("ok");
-        let data = b"hello_direct_io_test_data_here____________padding_to_1024__" ;
+        let _data = b"hello_direct_io_test_data_here____________padding_to_1024__" ;
         // on écrit exactement 512 bytes
         let mut src = [0x55u8; 512];
         src[..5].copy_from_slice(b"hello");

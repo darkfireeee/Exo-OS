@@ -5,24 +5,30 @@
 //!
 //! ## Structure mémoire
 //! - TSS 104 bytes (AMD64 ABI)
-//! - 7 piles IST (Interrupt Stack Table) — 8 KiB chacune
+//! - 7 piles IST (Interrupt Stack Table) — 16 KiB chacune
 //! - RSP0 : pile kernel (entrée Ring 3 → Ring 0)
 //!
 //! ## IST Assignments (Exo-OS)
-//! - IST1 : Double Fault (#DF) — pile dédiée obligatoire
-//! - IST2 : NMI — pile dédiée (NMI n'est pas ré-entrant)
-//! - IST3 : Machine Check (#MC) — pile dédiée
-//! - IST4-7 : disponibles
+//! - IST1 : ExoPhoenix IPIs (0xF1/0xF2/0xF3)
+//! - IST2 : #PF (durcissement)
+//! - IST3 : NMI fallback
+//! - IST4 : Double Fault (#DF)
+//! - IST5 : Machine Check (#MC)
+//! - IST6 : Debug (#DB)
+//! - IST7 : réserve
 
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::cpu::topology::MAX_CPUS;
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
-/// Taille d'une pile IST (8 KiB = 2 pages)
-pub const IST_STACK_SIZE: usize = 8192;
+/// Taille d'une pile IST (16 KiB = 4 pages)
+pub const IST_STACK_SIZE: usize = 16 * 1024;
+
+/// Taille d'une guard page IST (4 KiB = 1 page)
+const IST_GUARD_SIZE: usize = 4096;
 
 /// Taille de la pile kernel RSP0 (16 KiB)
 pub const KERNEL_STACK_SIZE: usize = 16384;
@@ -30,17 +36,33 @@ pub const KERNEL_STACK_SIZE: usize = 16384;
 /// Nombre de piles IST dans le TSS
 pub const IST_COUNT: usize = 7;
 
-/// Index IST pour Double Fault
-pub const IST_DOUBLE_FAULT: usize = 0; // IST1 (1-indexed dans IDT, 0-indexed ici)
+/// Index IST pour IPIs critiques ExoPhoenix (0xF1/0xF2/0xF3)
+pub const IST_EXOPHOENIX_IPI: usize = 0; // IST1
+
+/// Index IST pour #PF (durcissement contre pile corrompue)
+pub const IST_PAGE_FAULT: usize = 1; // IST2
 
 /// Index IST pour NMI
-pub const IST_NMI: usize = 1;
+pub const IST_NMI: usize = 2; // IST3
+
+/// Index IST pour Double Fault
+pub const IST_DOUBLE_FAULT: usize = 3; // IST4
 
 /// Index IST pour Machine Check
-pub const IST_MACHINE_CHECK: usize = 2;
+pub const IST_MACHINE_CHECK: usize = 4; // IST5
 
 /// Index IST pour Debug (#DB)
-pub const IST_DEBUG: usize = 3;
+pub const IST_DEBUG: usize = 5; // IST6
+
+/// Nombre de piles IST Kernel B allouées via le pool early.
+const GUARDED_IST_STACKS_PER_CPU: usize = 3; // ExoPhoenix + #PF + NMI fallback
+
+/// Taille d'un slot : 1 guard page + 1 pile IST.
+const GUARDED_IST_SLOT_SIZE: usize = IST_GUARD_SIZE + IST_STACK_SIZE;
+
+/// Taille totale du pool early pour toutes les piles IST Kernel B.
+const EARLY_IST_POOL_SIZE: usize =
+    MAX_CPUS * GUARDED_IST_STACKS_PER_CPU * GUARDED_IST_SLOT_SIZE;
 
 // ── Structure TSS ─────────────────────────────────────────────────────────────
 
@@ -117,7 +139,40 @@ static mut CPU_STACKS: [PerCpuStacks;    MAX_CPUS] = const {
     arr
 };
 
+#[repr(C, align(4096))]
+struct EarlyIstPool {
+    bytes: [u8; EARLY_IST_POOL_SIZE],
+}
+
+static mut EARLY_IST_POOL: EarlyIstPool = EarlyIstPool {
+    bytes: [0u8; EARLY_IST_POOL_SIZE],
+};
+static EARLY_IST_NEXT: AtomicUsize = AtomicUsize::new(0);
+
 static TSS_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// Alloue une pile IST gardée depuis le pool early (sans heap).
+///
+/// Layout du slot : [guard page 4 KiB][stack 16 KiB]
+/// La guard page est réservée et jamais utilisée comme pile.
+fn alloc_guarded_stack(cpu_id: usize, purpose: &'static str) -> u64 {
+    let slot = EARLY_IST_NEXT.fetch_add(GUARDED_IST_SLOT_SIZE, Ordering::AcqRel);
+    assert!(
+        slot + GUARDED_IST_SLOT_SIZE <= EARLY_IST_POOL_SIZE,
+        "TSS: EARLY_IST_POOL épuisé (cpu={}, purpose={})",
+        cpu_id,
+        purpose,
+    );
+
+    // SAFETY: `slot` est unique (fetch_add) et borné par l'assert ci-dessus.
+    // Le pool est statique, aligné 4 KiB, et vit toute la durée du kernel.
+    let stack_base = unsafe {
+        let base = core::ptr::addr_of_mut!(EARLY_IST_POOL.bytes) as *mut u8;
+        base.add(slot + IST_GUARD_SIZE) as u64
+    };
+
+    stack_base + IST_STACK_SIZE as u64
+}
 
 // ── Initialisation ────────────────────────────────────────────────────────────
 
@@ -140,21 +195,24 @@ pub fn init_tss_for_cpu(cpu_id: usize, kernel_rsp0: u64) {
     // RSP0 : pile kernel pour les exceptions depuis userspace
     tss.rsp[0] = kernel_rsp0;
 
+    // Kernel B (Phase 3.1) : 3 IST critiques allouées depuis un pool early,
+    // sans heap, avec guard page logique (slot dédié non utilisé).
+    let exophoenix_top   = alloc_guarded_stack(cpu_id, "exophoenix");
+    let page_fault_top   = alloc_guarded_stack(cpu_id, "page_fault");
+    let nmi_fallback_top = alloc_guarded_stack(cpu_id, "nmi_fallback");
+
     // IST1–7 : sommet des piles dédiées (la pile croît vers le bas)
     let df_top  = stacks.df_stack.as_ptr()   as u64 + IST_STACK_SIZE as u64;
-    let nmi_top = stacks.nmi_stack.as_ptr()  as u64 + IST_STACK_SIZE as u64;
     let mc_top  = stacks.mc_stack.as_ptr()   as u64 + IST_STACK_SIZE as u64;
     let db_top  = stacks.db_stack.as_ptr()   as u64 + IST_STACK_SIZE as u64;
-    let ist5_top = stacks.ist5_stack.as_ptr() as u64 + IST_STACK_SIZE as u64;
-    let ist6_top = stacks.ist6_stack.as_ptr() as u64 + IST_STACK_SIZE as u64;
     let ist7_top = stacks.ist7_stack.as_ptr() as u64 + IST_STACK_SIZE as u64;
 
+    tss.ist[IST_EXOPHOENIX_IPI] = exophoenix_top;
+    tss.ist[IST_PAGE_FAULT]     = page_fault_top;
+    tss.ist[IST_NMI]            = nmi_fallback_top;
     tss.ist[IST_DOUBLE_FAULT]   = df_top;
-    tss.ist[IST_NMI]            = nmi_top;
     tss.ist[IST_MACHINE_CHECK]  = mc_top;
     tss.ist[IST_DEBUG]          = db_top;
-    tss.ist[4]                  = ist5_top;
-    tss.ist[5]                  = ist6_top;
     tss.ist[6]                  = ist7_top;
 
     // IOPB : pointé au-delà du TSS → accès I/O interdit depuis Ring 3

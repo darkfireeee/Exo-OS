@@ -9,6 +9,7 @@ use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     exofs_err_to_errno, write_user_buf, EFAULT, EINVAL,
+    verify_cap, CapabilityType,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -146,11 +147,15 @@ pub fn sys_exofs_get_content_hash(
     expected_ptr: u64,
     flags:        u64,
     _a5:          u64,
-    _a6:          u64,
+    cap_rights:   u64,
 ) -> i64 {
     if out_hash_ptr == 0 { return EFAULT; }
     let f = flags as u32;
     if f & !hash_flags::VALID_MASK != 0 { return EINVAL; }
+
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsGetContentHash) {
+        return e;
+    }
 
     let result = if f & hash_flags::VERIFY != 0 && expected_ptr != 0 {
         match verify_fd_hash(fd as u32, expected_ptr) {
@@ -266,7 +271,7 @@ mod tests {
 
     fn insert(path: &[u8], data: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, data).unwrap();
+        BLOB_CACHE.insert(id, data.to_vec()).unwrap();
         id
     }
 

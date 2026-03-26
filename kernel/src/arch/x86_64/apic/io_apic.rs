@@ -150,6 +150,12 @@ pub fn write_rte(gsi: u32, rte: u64) -> bool {
 /// - `active_low` : polarité active-low (ISA = false, PCI = true le plus souvent)
 /// - `level`      : sensibilité level (PCI = true, ISA = false)
 pub fn route_irq(gsi: u32, vector: u8, dest_apic: u8, active_low: bool, level: bool) -> bool {
+    assert!(
+        !super::super::idt::is_exophoenix_reserved_vector(vector),
+        "route_irq: vecteur {:#x} réservé ExoPhoenix (0xF1/0xF2/0xF3)",
+        vector,
+    );
+
     let mut rte: u64 = IOAPIC_DM_FIXED | IOAPIC_DEST_PHYSICAL | (vector as u64);
     if active_low { rte |= IOAPIC_RTE_ACTIVE_LO; }
     if level      { rte |= IOAPIC_RTE_LEVEL; }

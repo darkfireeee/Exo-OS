@@ -220,7 +220,7 @@ impl PathIndexTree {
     /// - [`ExofsError::ObjectNotFound`] si l entrée n existe pas.
     pub fn update_oid(&mut self, comp: &PathComponent, new_oid: ObjectId) -> ExofsResult<()> {
         let name = comp.as_bytes();
-        let hash = Self::safe_hash(comp.fnv1a());
+        let hash = Self::safe_hash(siphash_keyed(&self.key, name));
         let start = (hash as usize) & (TREE_BUCKETS - 1);
         let mut idx = start;
         for _ in 0..TREE_BUCKETS {
@@ -259,7 +259,7 @@ impl PathIndexTree {
     ///
     /// Crée une nouvelle table et réinsère toutes les entrées valides.
     pub fn compact(&mut self) -> ExofsResult<()> {
-        let mut fresh = PathIndexTree::new();
+        let mut fresh = PathIndexTree::new_with_key(self.key);
         for b in &self.buckets {
             if b.is_occupied() {
                 let comp = PathComponent::from_validated(b.name_bytes());

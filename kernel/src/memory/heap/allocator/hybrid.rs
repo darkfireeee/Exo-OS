@@ -77,9 +77,21 @@ pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8
                 HEAP_STATS.current_inuse.fetch_add(real_size as u64, Ordering::Relaxed);
                 Ok(ptr)
             }
-            Err(e) => {
-                HEAP_STATS.oom_count.fetch_add(1, Ordering::Relaxed);
-                Err(e)
+            Err(_e) => {
+                // Fallback de robustesse: si SLUB n'est pas encore prêt ou échoue
+                // ponctuellement, tenter l'allocateur large pour éviter un panic
+                // précoce durant le boot.
+                match crate::memory::heap::large::vmalloc::kalloc(real_size, flags) {
+                    Ok(ptr) => {
+                        HEAP_STATS.large_allocs.fetch_add(1, Ordering::Relaxed);
+                        HEAP_STATS.current_inuse.fetch_add(real_size as u64, Ordering::Relaxed);
+                        Ok(ptr)
+                    }
+                    Err(e2) => {
+                        HEAP_STATS.oom_count.fetch_add(1, Ordering::Relaxed);
+                        Err(e2)
+                    }
+                }
             }
         }
     } else {
@@ -104,6 +116,15 @@ pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8
 ///         Ne plus être utilisé après cet appel.
 pub unsafe fn free(ptr: NonNull<u8>, size: usize) {
     let real_size = if size == 0 { 8 } else { size };
+
+    // Si le pointeur correspond à un bloc vmalloc (incluant fallback small->large),
+    // il doit être libéré via kfree indépendamment de la taille demandée.
+    if let Some(usable) = crate::memory::heap::large::vmalloc::kalloc_usable_size(ptr) {
+        crate::memory::heap::large::vmalloc::kfree(ptr, usable);
+        HEAP_STATS.large_frees.fetch_add(1, Ordering::Relaxed);
+        HEAP_STATS.current_inuse.fetch_sub(usable as u64, Ordering::Relaxed);
+        return;
+    }
 
     if real_size <= HEAP_LARGE_THRESHOLD {
         let sc_entry = match heap_size_class_for(real_size) {

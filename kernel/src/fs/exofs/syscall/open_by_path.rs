@@ -20,7 +20,9 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use super::validation::{
-    read_user_path_heap, exofs_err_to_errno, EFAULT, ENOENT,
+    read_user_path_heap, exofs_err_to_errno,
+    verify_cap, CapabilityType,
+    EFAULT, ENOENT,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -96,7 +98,7 @@ pub fn sys_exofs_open_by_path(
     mode:      u64,   // arg2 : musl envoie mode ici
     _a4: u64,
     _a5: u64,
-    _a6: u64,
+    cap_rights: u64,
 ) -> i64 {
     // SYS-05 : Refuser pointeur null
     if path_ptr == 0 { return EFAULT; }
@@ -111,6 +113,17 @@ pub fn sys_exofs_open_by_path(
 
     let flags32 = (flags & 0xFFFF_FFFF) as u32;
     let mode32  = (mode  & 0xFFFF_FFFF) as u32;
+
+    let needs_write = (flags32 & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) != 0;
+    let cap = if needs_write {
+        CapabilityType::ExoFsOpenByPathWrite
+    } else {
+        CapabilityType::ExoFsOpenByPathRead
+    };
+    if let Err(e) = verify_cap(cap_rights, cap) {
+        return e;
+    }
+
     match open_by_path_inner(&path_bytes, actual_len, flags32, mode32) {
         Ok(fd)  => fd as i64,
         Err(e)  => exofs_err_to_errno(e),

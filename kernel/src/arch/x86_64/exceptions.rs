@@ -17,6 +17,7 @@
 //! 6. IRETQ
 
 
+use core::concat;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ── Ponts C ABI vers le scheduler (RÈGLE FPU-02 + RÈGLE IPI-01 DOC3) ─────────
@@ -656,7 +657,7 @@ extern "C" fn do_irq_timer(frame: *mut ExceptionFrame) {
 
     // 1. EOI APIC — acquitté en premier pour minimiser la latence APIC.
     // SAFETY: LAPIC initialisé avant que les IRQ timer soient activées.
-    super::apic::local_apic::eoi();
+    super::apic::eoi();
 
     // 2. Tick scheduler : avance les quantum CPU et décide des préemptions.
     let cpu_id: u32;
@@ -711,7 +712,7 @@ extern "C" fn do_ipi_wakeup(_frame: *mut ExceptionFrame) {
     unsafe { sched_ipi_reschedule(tcb_ptr as *mut u8); }
     // EOI Local APIC — acquitter l'IPI avant le retour d'interruption.
     // SAFETY: LAPIC initialisé avant tout IPI SMP.
-    super::apic::local_apic::eoi();
+    super::apic::eoi();
 }
 
 /// IPI reschedule (0xF1)
@@ -719,6 +720,12 @@ extern "C" fn do_ipi_wakeup(_frame: *mut ExceptionFrame) {
 extern "C" fn do_ipi_reschedule(frame: *mut ExceptionFrame) {
     let _ = frame;
     super::idt::irq_counter_inc(0xF1);
+
+    // Mode ExoPhoenix : 0xF1 = Freeze coopératif lock-free.
+    if crate::exophoenix::stage0::exophoenix_vectors_active() {
+        // SAFETY: handler dédié no-alloc/no-lock, peut diverger volontairement.
+        unsafe { crate::exophoenix::interrupts::handle_freeze_ipi() };
+    }
 
     // Lire le TCB courant (GS:[0x20] = current_tcb dans PerCpuData).
     let tcb_ptr: u64;
@@ -740,7 +747,7 @@ extern "C" fn do_ipi_reschedule(frame: *mut ExceptionFrame) {
 
     // EOI Local APIC — acquitter l'IPI avant le retour d'interruption.
     // SAFETY: LAPIC initialisé avant tout IPI SMP.
-    super::apic::local_apic::eoi();
+    super::apic::eoi();
 }
 
 /// IPI TLB shootdown (0xF2)
@@ -761,6 +768,13 @@ extern "C" fn do_ipi_tlb_shootdown(_frame: *mut ExceptionFrame) {
     super::idt::irq_counter_inc(0xF2);
     super::paging::inc_tlb_shootdown();
 
+    // Mode ExoPhoenix : 0xF2 = snapshot PMC lock-free.
+    if crate::exophoenix::stage0::exophoenix_vectors_active() {
+        // SAFETY: handler dédié no-alloc/no-lock.
+        unsafe { crate::exophoenix::interrupts::handle_pmc_snapshot_ipi() };
+        return;
+    }
+
     // Identifiant logique du CPU courant (0-based).
     let cpu_id = super::smp::percpu::current_cpu_id() as u8;
 
@@ -772,16 +786,24 @@ extern "C" fn do_ipi_tlb_shootdown(_frame: *mut ExceptionFrame) {
 
     // EOI Local APIC — signale la fin du traitement de l'interruption.
     // SAFETY: LAPIC initialisé avant tout IPI ; EOI est idempotent à ce stade.
-    super::apic::local_apic::eoi();
+    super::apic::eoi();
 }
 
 /// IPI hotplug CPU (0xF3)
 #[no_mangle]
 extern "C" fn do_ipi_cpu_hotplug(_frame: *mut ExceptionFrame) {
     super::idt::irq_counter_inc(0xF3);
+
+    // Mode ExoPhoenix : 0xF3 = TLB flush + ACK lock-free.
+    if crate::exophoenix::stage0::exophoenix_vectors_active() {
+        // SAFETY: handler dédié no-alloc/no-lock.
+        unsafe { crate::exophoenix::interrupts::handle_tlb_flush_ipi() };
+        return;
+    }
+
     // EOI avant halt pour que le BSP ne reste pas bloqué en attente.
     // SAFETY: LAPIC initialisé avant tout IPI hotplug.
-    super::apic::local_apic::eoi();
+    super::apic::eoi();
     // Identifier ce CPU et le mettre hors ligne (→ ! — ce CPU ne revient pas).
     let cpu_id = super::smp::percpu::current_cpu_id();
     // SAFETY: hotplug_cpu_halt est idempotent et -> ! (arrêt irréversible).

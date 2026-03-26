@@ -307,7 +307,7 @@ pub fn index_health() -> IndexStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::relation_type::RelationType;
+    use super::super::relation_type::{RelationKind, RelationType};
 
     fn blob(b: u8) -> BlobId { BlobId([b; 32]) }
 
@@ -394,7 +394,7 @@ mod tests {
         let idx = RelationIndex::new_const();
         idx.insert(&rel(12, blob(60), blob(61))).unwrap();
         let s = idx.stats();
-        assert!(s.n_from_entries > 0 || s.n_to_entries > 0);
+        assert!(s.n_from_keys > 0 || s.n_to_keys > 0);
     }
 
     #[test] fn test_ids_from_filtered() {

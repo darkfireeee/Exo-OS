@@ -1,0 +1,546 @@
+# Audit complémentaire des fichiers secondaires `security` (Exo-OS)
+
+Date: 2026-03-22
+Périmètre: `kernel/src/security/**` (fichiers secondaires et intégrations transverses)
+Objectif: compléter l’audit principal via une couverture approfondie des interactions capability/access_control/zero-trust/crypto/audit
+
+---
+
+## 1) Cadrage secondaire
+
+Ce document complète `AUDIT_SECURITY_2026-03-22.md`.
+Il cible la robustesse des fichiers secondaires qui conditionnent la sûreté opérationnelle, les refus d’accès, les traces d’audit et les chemins de repli crypto.
+
+---
+
+## 2) Inventaire secondaire priorisé (security)
+
+- `kernel/src/security/mod.rs`
+- `kernel/src/security/access_control/checker.rs`
+- `kernel/src/security/access_control/mod.rs`
+- `kernel/src/security/access_control/object_types.rs`
+- `kernel/src/security/audit/logger.rs`
+- `kernel/src/security/audit/mod.rs`
+- `kernel/src/security/audit/rules.rs`
+- `kernel/src/security/audit/syscall_audit.rs`
+- `kernel/src/security/capability/delegation.rs`
+- `kernel/src/security/capability/mod.rs`
+- `kernel/src/security/capability/namespace.rs`
+- `kernel/src/security/capability/revocation.rs`
+- `kernel/src/security/capability/rights.rs`
+- `kernel/src/security/capability/table.rs`
+- `kernel/src/security/capability/token.rs`
+- `kernel/src/security/capability/verify.rs`
+- `kernel/src/security/crypto/aes_gcm.rs`
+- `kernel/src/security/crypto/blake3.rs`
+- `kernel/src/security/crypto/ed25519.rs`
+- `kernel/src/security/crypto/kdf.rs`
+- `kernel/src/security/crypto/mod.rs`
+- `kernel/src/security/crypto/rng.rs`
+- `kernel/src/security/crypto/x25519.rs`
+- `kernel/src/security/crypto/xchacha20_poly1305.rs`
+- `kernel/src/security/exploit_mitigations/cet.rs`
+- `kernel/src/security/exploit_mitigations/cfg.rs`
+- `kernel/src/security/exploit_mitigations/kaslr.rs`
+- `kernel/src/security/exploit_mitigations/mod.rs`
+- `kernel/src/security/exploit_mitigations/safe_stack.rs`
+- `kernel/src/security/exploit_mitigations/stack_protector.rs`
+- `kernel/src/security/integrity_check/code_signing.rs`
+- `kernel/src/security/integrity_check/mod.rs`
+- `kernel/src/security/integrity_check/runtime_check.rs`
+- `kernel/src/security/integrity_check/secure_boot.rs`
+- `kernel/src/security/isolation/domains.rs`
+- `kernel/src/security/isolation/mod.rs`
+- `kernel/src/security/isolation/namespaces.rs`
+- `kernel/src/security/isolation/pledge.rs`
+- `kernel/src/security/isolation/sandbox.rs`
+- `kernel/src/security/zero_trust/context.rs`
+- `kernel/src/security/zero_trust/labels.rs`
+- `kernel/src/security/zero_trust/mod.rs`
+- `kernel/src/security/zero_trust/policy.rs`
+- `kernel/src/security/zero_trust/verify.rs`
+
+---
+
+## 3) Checklist d’intégration secondaire (SEC-S2-INT)
+
+- SEC-S2-INT-001 valider `mod.rs` ordre init integrity->capability->crypto->audit->ready.
+- SEC-S2-INT-002 valider `SECURITY_READY` publication Release.
+- SEC-S2-INT-003 valider consommation Acquire côté modules clients.
+- SEC-S2-INT-004 valider `access_control/checker.rs` sur chemin unique verify.
+- SEC-S2-INT-005 valider `capability/verify.rs` wrappers read/write/ipc.
+- SEC-S2-INT-006 valider `capability/table.rs` lock discipline.
+- SEC-S2-INT-007 valider `capability/revocation.rs` propagation complète.
+- SEC-S2-INT-008 valider `capability/delegation.rs` subset rights.
+- SEC-S2-INT-009 valider `capability/token.rs` validation anti-replay.
+- SEC-S2-INT-010 valider `capability/namespace.rs` crossing controls.
+- SEC-S2-INT-011 valider `access_control/object_types.rs` mapping droits.
+- SEC-S2-INT-012 valider `zero_trust/policy.rs` règles Bell-LaPadula/Biba.
+- SEC-S2-INT-013 valider `zero_trust/verify.rs` déterminisme.
+- SEC-S2-INT-014 valider `zero_trust/context.rs` labels cohérents.
+- SEC-S2-INT-015 valider `audit/logger.rs` ring overflow policy.
+- SEC-S2-INT-016 valider `audit/rules.rs` évaluation stable.
+- SEC-S2-INT-017 valider `audit/syscall_audit.rs` pairing entry/exit.
+- SEC-S2-INT-018 valider `crypto/rng.rs` readiness avant usage.
+- SEC-S2-INT-019 valider `crypto/blake3.rs` vectors connus.
+- SEC-S2-INT-020 valider `crypto/kdf.rs` domain separation.
+- SEC-S2-INT-021 valider `crypto/x25519.rs` key agreement.
+- SEC-S2-INT-022 valider `crypto/ed25519.rs` sign/verify.
+- SEC-S2-INT-023 valider `crypto/aes_gcm.rs` stub explicite.
+- SEC-S2-INT-024 valider `crypto/xchacha20_poly1305.rs` stub explicite.
+- SEC-S2-INT-025 valider `integrity_check/runtime_check.rs` fréquence stable.
+- SEC-S2-INT-026 valider `integrity_check/secure_boot.rs` chain trust.
+- SEC-S2-INT-027 valider `integrity_check/code_signing.rs` placeholders tracés.
+- SEC-S2-INT-028 valider `exploit_mitigations/kaslr.rs` offset set once.
+- SEC-S2-INT-029 valider `exploit_mitigations/cfg.rs` contrôle calls indirects.
+- SEC-S2-INT-030 valider `exploit_mitigations/stack_protector.rs` canary checks.
+- SEC-S2-INT-031 valider `exploit_mitigations/safe_stack.rs` lifecycle thread.
+- SEC-S2-INT-032 valider `exploit_mitigations/cet.rs` feature gating.
+- SEC-S2-INT-033 valider `isolation/namespaces.rs` registry cohérent.
+- SEC-S2-INT-034 valider `isolation/sandbox.rs` deny-by-default.
+- SEC-S2-INT-035 valider `isolation/pledge.rs` mapping restrictions.
+- SEC-S2-INT-036 valider `isolation/domains.rs` transitions sûres.
+- SEC-S2-INT-037 valider intégration security<->IPC capability check.
+- SEC-S2-INT-038 valider intégration security<->FS capability check.
+- SEC-S2-INT-039 valider intégration security<->process identité sujet.
+- SEC-S2-INT-040 valider intégration security<->scheduler coûts bornés.
+- SEC-S2-INT-041 valider intégration security<->memory protections actives.
+- SEC-S2-INT-042 valider `audit/mod.rs` init unique.
+- SEC-S2-INT-043 valider `access_control/mod.rs` exports minimaux.
+- SEC-S2-INT-044 valider `capability/mod.rs` wrappers notsupported explicites.
+- SEC-S2-INT-045 valider `crypto/mod.rs` surface API stable.
+- SEC-S2-INT-046 valider `integrity_check/mod.rs` contrats.
+- SEC-S2-INT-047 valider `exploit_mitigations/mod.rs` orchestration.
+- SEC-S2-INT-048 valider `isolation/mod.rs` hiérarchie.
+- SEC-S2-INT-049 valider `zero_trust/mod.rs` cohérence imports.
+- SEC-S2-INT-050 valider compilation warnings secondary files security.
+- SEC-S2-INT-051 valider codes erreur security->errno.
+- SEC-S2-INT-052 valider audit denials sur capability reject.
+- SEC-S2-INT-053 valider audit denials sur zero-trust reject.
+- SEC-S2-INT-054 valider audit denials sur sandbox reject.
+- SEC-S2-INT-055 valider audit denials sur pledge reject.
+- SEC-S2-INT-056 valider robustesse lock ordering global.
+- SEC-S2-INT-057 valider robustesse atomics ordering.
+- SEC-S2-INT-058 valider robustesse paths panic-safe.
+- SEC-S2-INT-059 valider robustesse no_std sans `std`.
+- SEC-S2-INT-060 valider robustesse release/debug cohérente.
+- SEC-S2-INT-061 valider robustesse ready SMP.
+- SEC-S2-INT-062 valider robustesse double init refuse.
+- SEC-S2-INT-063 valider robustesse table capability saturation.
+- SEC-S2-INT-064 valider robustesse audit ring saturation.
+- SEC-S2-INT-065 valider robustesse rules update concurrent.
+- SEC-S2-INT-066 valider robustesse namespace churn.
+- SEC-S2-INT-067 valider robustesse sandbox filter churn.
+- SEC-S2-INT-068 valider robustesse trust label transitions.
+- SEC-S2-INT-069 valider robustesse signature verification fail.
+- SEC-S2-INT-070 valider robustesse rng entropy fallback.
+- SEC-S2-INT-071 valider robustesse mitigations absent feature.
+- SEC-S2-INT-072 valider robustesse secure boot state transitions.
+- SEC-S2-INT-073 valider robustesse policy compiler future-proof.
+- SEC-S2-INT-074 valider robustesse ownership des fichiers secondaires.
+- SEC-S2-INT-075 valider robustesse dette technique stubs crypto.
+- SEC-S2-INT-076 valider robustesse traçabilité incidents sécurité.
+- SEC-S2-INT-077 valider robustesse playbook incident response.
+- SEC-S2-INT-078 valider robustesse export logs forensic.
+- SEC-S2-INT-079 valider robustesse privacy dans logs.
+- SEC-S2-INT-080 valider robustesse clôture lot secondaire sécurité.
+
+---
+
+## 4) Registre risques secondaires (SEC-S2-RSK)
+
+- SEC-S2-RSK-001 risque de fail-open sur erreur vérification.
+- SEC-S2-RSK-002 risque de fail-close trop agressif en boot.
+- SEC-S2-RSK-003 risque de race sur readiness SMP.
+- SEC-S2-RSK-004 risque de dérive rights mapping object types.
+- SEC-S2-RSK-005 risque de revocation incomplète.
+- SEC-S2-RSK-006 risque de delegation escalation.
+- SEC-S2-RSK-007 risque de token replay.
+- SEC-S2-RSK-008 risque de audit logs overflow silencieux.
+- SEC-S2-RSK-009 risque de rules non déterministes.
+- SEC-S2-RSK-010 risque de crypto stub utilisé hors garde-fou.
+- SEC-S2-RSK-011 risque de rng faible entropie.
+- SEC-S2-RSK-012 risque de zero_trust policy incohérente.
+- SEC-S2-RSK-013 risque de sandbox bypass.
+- SEC-S2-RSK-014 risque de namespace crossing non contrôlé.
+- SEC-S2-RSK-015 risque de secure_boot état divergent.
+- SEC-S2-RSK-016 risque de mitigation partielle non tracée.
+- SEC-S2-RSK-017 risque de side-channel timing check.
+- SEC-S2-RSK-018 risque de fuite informations en logs.
+- SEC-S2-RSK-019 risque de lock contention tables globales.
+- SEC-S2-RSK-020 risque de non-régression sécurité secondaire non couverte.
+- SEC-S2-RSK-021 risque de code-signing placeholder non résolu.
+- SEC-S2-RSK-022 risque de policy drift docs/code.
+- SEC-S2-RSK-023 risque de bloat API publique security.
+- SEC-S2-RSK-024 risque de coûts runtime non bornés.
+- SEC-S2-RSK-025 risque de playbook incident incomplet.
+- SEC-S2-RSK-026 risque de retard remédiation stubs.
+- SEC-S2-RSK-027 risque de tests fuzz insuffisants.
+- SEC-S2-RSK-028 risque de corruption audit ring.
+- SEC-S2-RSK-029 risque de stale capabilities.
+- SEC-S2-RSK-030 risque de clôture partielle lot secondaire.
+
+---
+
+## 5) Campagne validations secondaires (SEC-S2-VAL)
+
+- SEC-S2-VAL-001 vérifier init ordering complet security_init.
+- SEC-S2-VAL-002 vérifier readiness SMP et waiters.
+- SEC-S2-VAL-003 vérifier capability grant/revoke/delegate.
+- SEC-S2-VAL-004 vérifier verify wrappers read/write/ipc.
+- SEC-S2-VAL-005 vérifier access control allow/deny.
+- SEC-S2-VAL-006 vérifier zero-trust labels/policies.
+- SEC-S2-VAL-007 vérifier audit entry/exit syscall.
+- SEC-S2-VAL-008 vérifier audit denials security events.
+- SEC-S2-VAL-009 vérifier rule evaluation under load.
+- SEC-S2-VAL-010 vérifier ring overflow behavior.
+- SEC-S2-VAL-011 vérifier rng ready + fallback.
+- SEC-S2-VAL-012 vérifier blake3/kdf/x25519/ed25519 vectors.
+- SEC-S2-VAL-013 vérifier stubs crypto correctement signalés.
+- SEC-S2-VAL-014 vérifier secure boot chain checks.
+- SEC-S2-VAL-015 vérifier runtime integrity periodic.
+- SEC-S2-VAL-016 vérifier cfg/cet/safe_stack/stack protector.
+- SEC-S2-VAL-017 vérifier sandbox deny-by-default.
+- SEC-S2-VAL-018 vérifier pledge restrictions.
+- SEC-S2-VAL-019 vérifier namespace isolation.
+- SEC-S2-VAL-020 vérifier domains transitions.
+- SEC-S2-VAL-021 vérifier interactions IPC capability gating.
+- SEC-S2-VAL-022 vérifier interactions FS capability gating.
+- SEC-S2-VAL-023 vérifier interactions process identity.
+- SEC-S2-VAL-024 vérifier interactions memory protections.
+- SEC-S2-VAL-025 vérifier interactions scheduler overhead.
+- SEC-S2-VAL-026 vérifier lock ordering global.
+- SEC-S2-VAL-027 vérifier no_std sur secondaires.
+- SEC-S2-VAL-028 vérifier warnings/clippy secondaires.
+- SEC-S2-VAL-029 vérifier stabilité 3 runs successifs.
+- SEC-S2-VAL-030 vérifier clôture risques secondaires critiques.
+
+---
+
+## 6) Synthèse actionnable
+
+Le périmètre secondaire sécurité met en avant la nécessité de verrouiller les chemins d’autorisation et la qualité des audits de refus.
+Les priorités sont `capability/*`, `access_control/*`, `zero_trust/*`, `audit/*` et la stratégie explicite autour des stubs crypto.
+Cette annexe constitue la base d’acceptation pour les prochains lots de hardening sécurité.
+
+---
+
+## 7) Addendum complémentaire secondaire A
+
+- GEN-S2-EXTA-001 intégration: confirmer le contrat d’appel inter-module secondaire.
+- GEN-S2-EXTA-002 intégration: confirmer l’ordre d’initialisation des dépendances secondaires.
+- GEN-S2-EXTA-003 intégration: confirmer la symétrie init/stop des composants secondaires.
+- GEN-S2-EXTA-004 intégration: confirmer le fallback en absence de backend.
+- GEN-S2-EXTA-005 intégration: confirmer le fallback en absence de hook.
+- GEN-S2-EXTA-006 intégration: confirmer la gestion de saturation côté file secondaire.
+- GEN-S2-EXTA-007 intégration: confirmer la gestion de saturation côté mémoire secondaire.
+- GEN-S2-EXTA-008 intégration: confirmer la gestion de contention côté locks secondaires.
+- GEN-S2-EXTA-009 intégration: confirmer la gestion des timeouts secondaires.
+- GEN-S2-EXTA-010 intégration: confirmer la gestion des retries secondaires.
+- GEN-S2-EXTA-011 intégration: confirmer l’absence d’allocation en section critique.
+- GEN-S2-EXTA-012 intégration: confirmer l’absence de lock long sur I/O.
+- GEN-S2-EXTA-013 intégration: confirmer la granularité des sections critiques.
+- GEN-S2-EXTA-014 intégration: confirmer la publication d’état avec ordering correct.
+- GEN-S2-EXTA-015 intégration: confirmer la consommation d’état avec ordering correct.
+- GEN-S2-EXTA-016 intégration: confirmer les bornes des tableaux secondaires.
+- GEN-S2-EXTA-017 intégration: confirmer les conversions taille/offset sans overflow.
+- GEN-S2-EXTA-018 intégration: confirmer les conversions index sans underflow.
+- GEN-S2-EXTA-019 intégration: confirmer les codes retour négatifs stables.
+- GEN-S2-EXTA-020 intégration: confirmer les erreurs intermédiaires propagées proprement.
+- GEN-S2-EXTA-021 intégration: confirmer les chemins cleanup post-erreur.
+- GEN-S2-EXTA-022 intégration: confirmer les chemins rollback post-erreur.
+- GEN-S2-EXTA-023 intégration: confirmer les chemins reprise progressive.
+- GEN-S2-EXTA-024 intégration: confirmer les chemins dégradation contrôlée.
+- GEN-S2-EXTA-025 intégration: confirmer les chemins arrêt d’urgence.
+- GEN-S2-EXTA-026 intégration: confirmer la cohérence des métriques secondaires.
+- GEN-S2-EXTA-027 intégration: confirmer la cohérence des logs secondaires.
+- GEN-S2-EXTA-028 intégration: confirmer la cohérence des alertes secondaires.
+- GEN-S2-EXTA-029 intégration: confirmer la cohérence des seuils secondaires.
+- GEN-S2-EXTA-030 intégration: confirmer la cohérence des garde-fous secondaires.
+- GEN-S2-EXTA-031 intégration: confirmer la robustesse sur données partielles.
+- GEN-S2-EXTA-032 intégration: confirmer la robustesse sur données corrompues.
+- GEN-S2-EXTA-033 intégration: confirmer la robustesse sur topologie atypique.
+- GEN-S2-EXTA-034 intégration: confirmer la robustesse sur mode virtualisé.
+- GEN-S2-EXTA-035 intégration: confirmer la robustesse sur mode bare-metal.
+- GEN-S2-EXTA-036 intégration: confirmer la robustesse sans feature CPU optionnelle.
+- GEN-S2-EXTA-037 intégration: confirmer la robustesse sans périphérique optionnel.
+- GEN-S2-EXTA-038 intégration: confirmer la robustesse sans extension optionnelle.
+- GEN-S2-EXTA-039 intégration: confirmer la robustesse sous charge nominale.
+- GEN-S2-EXTA-040 intégration: confirmer la robustesse sous charge extrême.
+- GEN-S2-EXTA-041 intégration: confirmer la robustesse sous contention extrême.
+- GEN-S2-EXTA-042 intégration: confirmer la robustesse sous pression mémoire.
+- GEN-S2-EXTA-043 intégration: confirmer la robustesse sous pression CPU.
+- GEN-S2-EXTA-044 intégration: confirmer la robustesse sous pression I/O.
+- GEN-S2-EXTA-045 intégration: confirmer la robustesse en migration CPU.
+- GEN-S2-EXTA-046 intégration: confirmer la robustesse en changement de mode.
+- GEN-S2-EXTA-047 intégration: confirmer la robustesse en reconfiguration runtime.
+- GEN-S2-EXTA-048 intégration: confirmer la robustesse des chemins froids.
+- GEN-S2-EXTA-049 intégration: confirmer la robustesse des chemins chauds.
+- GEN-S2-EXTA-050 intégration: confirmer la robustesse des chemins de bordure.
+- GEN-S2-EXTA-051 risque: tracer les risques de contention critiques.
+- GEN-S2-EXTA-052 risque: tracer les risques de deadlock potentiels.
+- GEN-S2-EXTA-053 risque: tracer les risques de starvation potentiels.
+- GEN-S2-EXTA-054 risque: tracer les risques de fuite mémoire potentiels.
+- GEN-S2-EXTA-055 risque: tracer les risques de fuite d’état global.
+- GEN-S2-EXTA-056 risque: tracer les risques de corruption de file.
+- GEN-S2-EXTA-057 risque: tracer les risques de corruption de table.
+- GEN-S2-EXTA-058 risque: tracer les risques de corruption de métriques.
+- GEN-S2-EXTA-059 risque: tracer les risques de corruption de logs.
+- GEN-S2-EXTA-060 risque: tracer les risques de corruption de config.
+- GEN-S2-EXTA-061 risque: qualifier les risques de fallback non testé.
+- GEN-S2-EXTA-062 risque: qualifier les risques de placeholder actif.
+- GEN-S2-EXTA-063 risque: qualifier les risques de TODO non clôturé.
+- GEN-S2-EXTA-064 risque: qualifier les risques d’ordering atomique faible.
+- GEN-S2-EXTA-065 risque: qualifier les risques d’ordering atomique excessif.
+- GEN-S2-EXTA-066 risque: qualifier les risques de logs trop verbeux.
+- GEN-S2-EXTA-067 risque: qualifier les risques de logs insuffisants.
+- GEN-S2-EXTA-068 risque: qualifier les risques de seuils mal calibrés.
+- GEN-S2-EXTA-069 risque: qualifier les risques de timeouts mal calibrés.
+- GEN-S2-EXTA-070 risque: qualifier les risques de retries mal calibrés.
+- GEN-S2-EXTA-071 risque: qualifier les risques de compatibilité incomplète.
+- GEN-S2-EXTA-072 risque: qualifier les risques de non-régression incomplète.
+- GEN-S2-EXTA-073 risque: qualifier les risques de couverture de test incomplète.
+- GEN-S2-EXTA-074 risque: qualifier les risques de couverture doc incomplète.
+- GEN-S2-EXTA-075 risque: qualifier les risques de dépendance cachée.
+- GEN-S2-EXTA-076 risque: qualifier les risques de dépendance circulaire.
+- GEN-S2-EXTA-077 risque: qualifier les risques de divergence docs/code.
+- GEN-S2-EXTA-078 risque: qualifier les risques de divergence debug/release.
+- GEN-S2-EXTA-079 risque: qualifier les risques de divergence host/target.
+- GEN-S2-EXTA-080 risque: qualifier les risques de divergence VM/bare-metal.
+- GEN-S2-EXTA-081 risque: prioriser les risques P0 secondaires.
+- GEN-S2-EXTA-082 risque: prioriser les risques P1 secondaires.
+- GEN-S2-EXTA-083 risque: prioriser les risques P2 secondaires.
+- GEN-S2-EXTA-084 risque: prioriser les risques P3 secondaires.
+- GEN-S2-EXTA-085 risque: lier chaque risque à une preuve de validation.
+- GEN-S2-EXTA-086 risque: lier chaque risque à un propriétaire technique.
+- GEN-S2-EXTA-087 risque: lier chaque risque à un horizon de correction.
+- GEN-S2-EXTA-088 risque: lier chaque risque à un plan rollback.
+- GEN-S2-EXTA-089 risque: lier chaque risque à un plan containment.
+- GEN-S2-EXTA-090 risque: lier chaque risque à un plan revalidation.
+- GEN-S2-EXTA-091 risque: confirmer la lisibilité du registre de risques.
+- GEN-S2-EXTA-092 risque: confirmer la maintenabilité du registre de risques.
+- GEN-S2-EXTA-093 risque: confirmer la cohérence du registre de risques.
+- GEN-S2-EXTA-094 risque: confirmer la couverture du registre de risques.
+- GEN-S2-EXTA-095 risque: confirmer la clôture des risques obsolètes.
+- GEN-S2-EXTA-096 risque: confirmer l’escalade des risques critiques.
+- GEN-S2-EXTA-097 risque: confirmer le suivi hebdomadaire des risques.
+- GEN-S2-EXTA-098 risque: confirmer la revue croisée des risques.
+- GEN-S2-EXTA-099 risque: confirmer l’alignement risques/roadmap.
+- GEN-S2-EXTA-100 risque: confirmer l’alignement risques/backlog.
+- GEN-S2-EXTA-101 validation: exécuter un scénario nominal reproductible.
+- GEN-S2-EXTA-102 validation: exécuter un scénario surcharge reproductible.
+- GEN-S2-EXTA-103 validation: exécuter un scénario contention reproductible.
+- GEN-S2-EXTA-104 validation: exécuter un scénario timeout reproductible.
+- GEN-S2-EXTA-105 validation: exécuter un scénario fallback reproductible.
+- GEN-S2-EXTA-106 validation: exécuter un scénario erreur intermédiaire.
+- GEN-S2-EXTA-107 validation: exécuter un scénario rollback complet.
+- GEN-S2-EXTA-108 validation: exécuter un scénario reprise progressive.
+- GEN-S2-EXTA-109 validation: exécuter un scénario dégradation contrôlée.
+- GEN-S2-EXTA-110 validation: exécuter un scénario arrêt d’urgence.
+- GEN-S2-EXTA-111 validation: vérifier la reproductibilité des résultats.
+- GEN-S2-EXTA-112 validation: vérifier la reproductibilité des traces.
+- GEN-S2-EXTA-113 validation: vérifier la reproductibilité des métriques.
+- GEN-S2-EXTA-114 validation: vérifier la reproductibilité des alertes.
+- GEN-S2-EXTA-115 validation: vérifier la reproductibilité des décisions.
+- GEN-S2-EXTA-116 validation: vérifier les critères d’entrée de test.
+- GEN-S2-EXTA-117 validation: vérifier les critères de sortie de test.
+- GEN-S2-EXTA-118 validation: vérifier les critères de succès L1.
+- GEN-S2-EXTA-119 validation: vérifier les critères de succès L2.
+- GEN-S2-EXTA-120 validation: vérifier les critères de succès L3.
+- GEN-S2-EXTA-121 validation: vérifier les critères de succès L4.
+- GEN-S2-EXTA-122 validation: vérifier les critères de succès L5.
+- GEN-S2-EXTA-123 validation: vérifier les critères d’échec bloquant.
+- GEN-S2-EXTA-124 validation: vérifier les critères d’échec non bloquant.
+- GEN-S2-EXTA-125 validation: vérifier les critères d’acceptation temporaire.
+- GEN-S2-EXTA-126 validation: vérifier les critères d’acceptation finale.
+- GEN-S2-EXTA-127 validation: vérifier la couverture des interactions critiques.
+- GEN-S2-EXTA-128 validation: vérifier la couverture des fichiers critiques.
+- GEN-S2-EXTA-129 validation: vérifier la couverture des scénarios critiques.
+- GEN-S2-EXTA-130 validation: vérifier la couverture des erreurs critiques.
+- GEN-S2-EXTA-131 validation: vérifier la couverture des chemins de reprise.
+- GEN-S2-EXTA-132 validation: vérifier la couverture des chemins de fallback.
+- GEN-S2-EXTA-133 validation: vérifier la couverture des chemins de rollback.
+- GEN-S2-EXTA-134 validation: vérifier la couverture des chemins de cleanup.
+- GEN-S2-EXTA-135 validation: vérifier la couverture des chemins de dégradation.
+- GEN-S2-EXTA-136 validation: vérifier la cohérence des preuves collectées.
+- GEN-S2-EXTA-137 validation: vérifier la complétude des preuves collectées.
+- GEN-S2-EXTA-138 validation: vérifier la lisibilité des preuves collectées.
+- GEN-S2-EXTA-139 validation: vérifier la pérennité des preuves collectées.
+- GEN-S2-EXTA-140 validation: vérifier la disponibilité des preuves collectées.
+- GEN-S2-EXTA-141 validation: confirmer la préparation du lot secondaire suivant.
+- GEN-S2-EXTA-142 validation: confirmer la préparation de la revue finale.
+- GEN-S2-EXTA-143 validation: confirmer la préparation de la release.
+- GEN-S2-EXTA-144 validation: confirmer la préparation du runbook incident.
+- GEN-S2-EXTA-145 validation: confirmer la préparation du plan de rollback.
+- GEN-S2-EXTA-146 validation: confirmer la préparation du plan de revalidation.
+- GEN-S2-EXTA-147 validation: confirmer la clôture des écarts documentaires.
+- GEN-S2-EXTA-148 validation: confirmer la clôture des écarts techniques.
+- GEN-S2-EXTA-149 validation: confirmer la clôture des écarts de test.
+- GEN-S2-EXTA-150 validation: confirmer la clôture opérationnelle de l’addendum A.
+
+---
+
+## 8) Addendum complémentaire secondaire B1
+
+- SEC-S2-EXTB-001 cartographier les dépendances secondaires encore sensibles.
+- SEC-S2-EXTB-002 confirmer les points de contrôle inter-modules prioritaires.
+- SEC-S2-EXTB-003 confirmer la liste des invariants non négociables.
+- SEC-S2-EXTB-004 confirmer la matrice des chemins d’erreur critiques.
+- SEC-S2-EXTB-005 confirmer la matrice des chemins fallback critiques.
+- SEC-S2-EXTB-006 confirmer la matrice des chemins rollback critiques.
+- SEC-S2-EXTB-007 confirmer la matrice des chemins reprise critiques.
+- SEC-S2-EXTB-008 confirmer la matrice de contention des ressources.
+- SEC-S2-EXTB-009 confirmer la matrice de saturation des files.
+- SEC-S2-EXTB-010 confirmer la matrice de saturation mémoire.
+- SEC-S2-EXTB-011 confirmer la matrice de saturation CPU.
+- SEC-S2-EXTB-012 confirmer la matrice de timeouts significatifs.
+- SEC-S2-EXTB-013 confirmer la matrice de retries bornés.
+- SEC-S2-EXTB-014 confirmer la matrice de priorisation des risques.
+- SEC-S2-EXTB-015 confirmer la matrice de priorisation des validations.
+- SEC-S2-EXTB-016 confirmer la matrice de preuves exigées.
+- SEC-S2-EXTB-017 confirmer la matrice des propriétaires techniques.
+- SEC-S2-EXTB-018 confirmer la matrice des délais de remédiation.
+- SEC-S2-EXTB-019 confirmer la matrice des critères de succès.
+- SEC-S2-EXTB-020 confirmer la matrice des critères d’échec.
+- SEC-S2-EXTB-021 confirmer la traçabilité risque -> test -> preuve.
+- SEC-S2-EXTB-022 confirmer la traçabilité fichier -> contrôle -> statut.
+- SEC-S2-EXTB-023 confirmer la traçabilité incident -> correction -> validation.
+- SEC-S2-EXTB-024 confirmer la traçabilité backlog -> lot -> clôture.
+- SEC-S2-EXTB-025 confirmer la cohérence doc/code après compléments.
+- SEC-S2-EXTB-026 confirmer la lisibilité opérationnelle du lot secondaire.
+- SEC-S2-EXTB-027 confirmer la maintenabilité des checklists additionnelles.
+- SEC-S2-EXTB-028 confirmer la préparation de la revue finale.
+- SEC-S2-EXTB-029 confirmer la préparation du lot suivant.
+- SEC-S2-EXTB-030 confirmer la clôture opérationnelle de l’addendum B1.
+
+## 9) Addendum complémentaire secondaire B2
+
+- SEC-S2-EXTB-031 cartographier les dépendances secondaires encore sensibles.
+- SEC-S2-EXTB-032 confirmer les points de contrôle inter-modules prioritaires.
+- SEC-S2-EXTB-033 confirmer la liste des invariants non négociables.
+- SEC-S2-EXTB-034 confirmer la matrice des chemins d’erreur critiques.
+- SEC-S2-EXTB-035 confirmer la matrice des chemins fallback critiques.
+- SEC-S2-EXTB-036 confirmer la matrice des chemins rollback critiques.
+- SEC-S2-EXTB-037 confirmer la matrice des chemins reprise critiques.
+- SEC-S2-EXTB-038 confirmer la matrice de contention des ressources.
+- SEC-S2-EXTB-039 confirmer la matrice de saturation des files.
+- SEC-S2-EXTB-040 confirmer la matrice de saturation mémoire.
+- SEC-S2-EXTB-041 confirmer la matrice de saturation CPU.
+- SEC-S2-EXTB-042 confirmer la matrice de timeouts significatifs.
+- SEC-S2-EXTB-043 confirmer la matrice de retries bornés.
+- SEC-S2-EXTB-044 confirmer la matrice de priorisation des risques.
+- SEC-S2-EXTB-045 confirmer la matrice de priorisation des validations.
+- SEC-S2-EXTB-046 confirmer la matrice de preuves exigées.
+- SEC-S2-EXTB-047 confirmer la matrice des propriétaires techniques.
+- SEC-S2-EXTB-048 confirmer la matrice des délais de remédiation.
+- SEC-S2-EXTB-049 confirmer la matrice des critères de succès.
+- SEC-S2-EXTB-050 confirmer la matrice des critères d’échec.
+- SEC-S2-EXTB-051 confirmer la traçabilité risque -> test -> preuve.
+- SEC-S2-EXTB-052 confirmer la traçabilité fichier -> contrôle -> statut.
+- SEC-S2-EXTB-053 confirmer la traçabilité incident -> correction -> validation.
+- SEC-S2-EXTB-054 confirmer la traçabilité backlog -> lot -> clôture.
+- SEC-S2-EXTB-055 confirmer la cohérence doc/code après compléments.
+- SEC-S2-EXTB-056 confirmer la lisibilité opérationnelle du lot secondaire.
+- SEC-S2-EXTB-057 confirmer la maintenabilité des checklists additionnelles.
+- SEC-S2-EXTB-058 confirmer la préparation de la revue finale.
+- SEC-S2-EXTB-059 confirmer la préparation du lot suivant.
+- SEC-S2-EXTB-060 confirmer la clôture opérationnelle de l’addendum B2.
+
+## 10) Addendum complémentaire secondaire B3
+
+- SEC-S2-EXTB-061 cartographier les dépendances secondaires encore sensibles.
+- SEC-S2-EXTB-062 confirmer les points de contrôle inter-modules prioritaires.
+- SEC-S2-EXTB-063 confirmer la liste des invariants non négociables.
+- SEC-S2-EXTB-064 confirmer la matrice des chemins d’erreur critiques.
+- SEC-S2-EXTB-065 confirmer la matrice des chemins fallback critiques.
+- SEC-S2-EXTB-066 confirmer la matrice des chemins rollback critiques.
+- SEC-S2-EXTB-067 confirmer la matrice des chemins reprise critiques.
+- SEC-S2-EXTB-068 confirmer la matrice de contention des ressources.
+- SEC-S2-EXTB-069 confirmer la matrice de saturation des files.
+- SEC-S2-EXTB-070 confirmer la matrice de saturation mémoire.
+- SEC-S2-EXTB-071 confirmer la matrice de saturation CPU.
+- SEC-S2-EXTB-072 confirmer la matrice de timeouts significatifs.
+- SEC-S2-EXTB-073 confirmer la matrice de retries bornés.
+- SEC-S2-EXTB-074 confirmer la matrice de priorisation des risques.
+- SEC-S2-EXTB-075 confirmer la matrice de priorisation des validations.
+- SEC-S2-EXTB-076 confirmer la matrice de preuves exigées.
+- SEC-S2-EXTB-077 confirmer la matrice des propriétaires techniques.
+- SEC-S2-EXTB-078 confirmer la matrice des délais de remédiation.
+- SEC-S2-EXTB-079 confirmer la matrice des critères de succès.
+- SEC-S2-EXTB-080 confirmer la matrice des critères d’échec.
+- SEC-S2-EXTB-081 confirmer la traçabilité risque -> test -> preuve.
+- SEC-S2-EXTB-082 confirmer la traçabilité fichier -> contrôle -> statut.
+- SEC-S2-EXTB-083 confirmer la traçabilité incident -> correction -> validation.
+- SEC-S2-EXTB-084 confirmer la traçabilité backlog -> lot -> clôture.
+- SEC-S2-EXTB-085 confirmer la cohérence doc/code après compléments.
+- SEC-S2-EXTB-086 confirmer la lisibilité opérationnelle du lot secondaire.
+- SEC-S2-EXTB-087 confirmer la maintenabilité des checklists additionnelles.
+- SEC-S2-EXTB-088 confirmer la préparation de la revue finale.
+- SEC-S2-EXTB-089 confirmer la préparation du lot suivant.
+- SEC-S2-EXTB-090 confirmer la clôture opérationnelle de l’addendum B3.
+
+## 11) Addendum complémentaire secondaire B4
+
+- SEC-S2-EXTB-091 cartographier les dépendances secondaires encore sensibles.
+- SEC-S2-EXTB-092 confirmer les points de contrôle inter-modules prioritaires.
+- SEC-S2-EXTB-093 confirmer la liste des invariants non négociables.
+- SEC-S2-EXTB-094 confirmer la matrice des chemins d’erreur critiques.
+- SEC-S2-EXTB-095 confirmer la matrice des chemins fallback critiques.
+- SEC-S2-EXTB-096 confirmer la matrice des chemins rollback critiques.
+- SEC-S2-EXTB-097 confirmer la matrice des chemins reprise critiques.
+- SEC-S2-EXTB-098 confirmer la matrice de contention des ressources.
+- SEC-S2-EXTB-099 confirmer la matrice de saturation des files.
+- SEC-S2-EXTB-100 confirmer la matrice de saturation mémoire.
+- SEC-S2-EXTB-101 confirmer la matrice de saturation CPU.
+- SEC-S2-EXTB-102 confirmer la matrice de timeouts significatifs.
+- SEC-S2-EXTB-103 confirmer la matrice de retries bornés.
+- SEC-S2-EXTB-104 confirmer la matrice de priorisation des risques.
+- SEC-S2-EXTB-105 confirmer la matrice de priorisation des validations.
+- SEC-S2-EXTB-106 confirmer la matrice de preuves exigées.
+- SEC-S2-EXTB-107 confirmer la matrice des propriétaires techniques.
+- SEC-S2-EXTB-108 confirmer la matrice des délais de remédiation.
+- SEC-S2-EXTB-109 confirmer la matrice des critères de succès.
+- SEC-S2-EXTB-110 confirmer la matrice des critères d’échec.
+- SEC-S2-EXTB-111 confirmer la traçabilité risque -> test -> preuve.
+- SEC-S2-EXTB-112 confirmer la traçabilité fichier -> contrôle -> statut.
+- SEC-S2-EXTB-113 confirmer la traçabilité incident -> correction -> validation.
+- SEC-S2-EXTB-114 confirmer la traçabilité backlog -> lot -> clôture.
+- SEC-S2-EXTB-115 confirmer la cohérence doc/code après compléments.
+- SEC-S2-EXTB-116 confirmer la lisibilité opérationnelle du lot secondaire.
+- SEC-S2-EXTB-117 confirmer la maintenabilité des checklists additionnelles.
+- SEC-S2-EXTB-118 confirmer la préparation de la revue finale.
+- SEC-S2-EXTB-119 confirmer la préparation du lot suivant.
+- SEC-S2-EXTB-120 confirmer la clôture opérationnelle de l’addendum B4.
+
+## 12) Addendum complémentaire secondaire B5
+
+- SEC-S2-EXTB-121 cartographier les dépendances secondaires encore sensibles.
+- SEC-S2-EXTB-122 confirmer les points de contrôle inter-modules prioritaires.
+- SEC-S2-EXTB-123 confirmer la liste des invariants non négociables.
+- SEC-S2-EXTB-124 confirmer la matrice des chemins d’erreur critiques.
+- SEC-S2-EXTB-125 confirmer la matrice des chemins fallback critiques.
+- SEC-S2-EXTB-126 confirmer la matrice des chemins rollback critiques.
+- SEC-S2-EXTB-127 confirmer la matrice des chemins reprise critiques.
+- SEC-S2-EXTB-128 confirmer la matrice de contention des ressources.
+- SEC-S2-EXTB-129 confirmer la matrice de saturation des files.
+- SEC-S2-EXTB-130 confirmer la matrice de saturation mémoire.
+- SEC-S2-EXTB-131 confirmer la matrice de saturation CPU.
+- SEC-S2-EXTB-132 confirmer la matrice de timeouts significatifs.
+- SEC-S2-EXTB-133 confirmer la matrice de retries bornés.
+- SEC-S2-EXTB-134 confirmer la matrice de priorisation des risques.
+- SEC-S2-EXTB-135 confirmer la matrice de priorisation des validations.
+- SEC-S2-EXTB-136 confirmer la matrice de preuves exigées.
+- SEC-S2-EXTB-137 confirmer la matrice des propriétaires techniques.
+- SEC-S2-EXTB-138 confirmer la matrice des délais de remédiation.
+- SEC-S2-EXTB-139 confirmer la matrice des critères de succès.
+- SEC-S2-EXTB-140 confirmer la matrice des critères d’échec.
+- SEC-S2-EXTB-141 confirmer la traçabilité risque -> test -> preuve.
+- SEC-S2-EXTB-142 confirmer la traçabilité fichier -> contrôle -> statut.
+- SEC-S2-EXTB-143 confirmer la traçabilité incident -> correction -> validation.
+- SEC-S2-EXTB-144 confirmer la traçabilité backlog -> lot -> clôture.
+- SEC-S2-EXTB-145 confirmer la cohérence doc/code après compléments.
+- SEC-S2-EXTB-146 confirmer la lisibilité opérationnelle du lot secondaire.
+- SEC-S2-EXTB-147 confirmer la maintenabilité des checklists additionnelles.
+- SEC-S2-EXTB-148 confirmer la préparation de la revue finale.
+- SEC-S2-EXTB-149 confirmer la préparation du lot suivant.
+- SEC-S2-EXTB-150 confirmer la clôture opérationnelle de l’addendum B5.

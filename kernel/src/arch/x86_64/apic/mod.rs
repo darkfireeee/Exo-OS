@@ -13,16 +13,30 @@ pub mod io_apic;
 pub mod x2apic;
 pub mod ipi;
 
-pub use local_apic::{eoi, init_local_apic, lapic_id, ApicMode};
+pub use local_apic::{init_local_apic, lapic_id, ApicMode};
 pub use ipi::{
     send_ipi_wakeup, send_ipi_reschedule, send_ipi_tlb_shootdown,
     send_ipi_cpu_hotplug, broadcast_ipi_panic,
 };
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 /// Mode APIC courant du système
-static X2APIC_ACTIVE: AtomicBool = AtomicBool::new(false);
+static APIC_MODE: AtomicU8 = AtomicU8::new(local_apic::ApicMode::XApic as u8);
+
+#[inline(always)]
+fn detect_apic_mode() -> ApicMode {
+    let features = super::cpu::features::cpu_features();
+    // SAFETY: IA32_APIC_BASE MSR est lisible en ring0.
+    let apic_base = unsafe { super::cpu::msr::read_msr(super::cpu::msr::MSR_IA32_APIC_BASE) };
+    let x2apic_enabled = (apic_base & (1 << 10)) != 0;
+
+    if features.has_x2apic() && x2apic_enabled {
+        ApicMode::X2Apic
+    } else {
+        ApicMode::XApic
+    }
+}
 
 /// Initialise l'APIC system complet (BSP only — appelé depuis boot/early_init)
 ///
@@ -34,17 +48,19 @@ static X2APIC_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub fn init_apic_system() {
     let features = super::cpu::features::cpu_features();
 
-    if features.has_x2apic() {
-        x2apic::enable_x2apic();
-        // Masquer tous les LVT entries x2APIC (état BIOS peut laisser LINT0/LVT indéfinis)
-        x2apic::mask_all_lvt_x2apic();
-        X2APIC_ACTIVE.store(true, Ordering::Release);
-    } else {
+    match detect_apic_mode() {
+        ApicMode::X2Apic => {
+            // Déjà en x2APIC (firmware) : on normalise l'état LVT.
+            x2apic::mask_all_lvt_x2apic();
+            APIC_MODE.store(ApicMode::X2Apic as u8, Ordering::Release);
+        }
+        ApicMode::XApic => {
         // init_local_apic() : active xAPIC + masque TOUS les LVT (LINT0, THERMAL, PERF, CMCI,
         // ERROR). Sans cela, le BIOS QEMU peut laisser LINT0 avec vecteur 0x8E non-masqué :
         // quand le PIC envoie une IRQ, LINT0 délivre vecteur 0x8E → IDT[0x8E] absent → #GP.
-        local_apic::init_local_apic();
-        X2APIC_ACTIVE.store(false, Ordering::Release);
+            local_apic::init_local_apic();
+            APIC_MODE.store(ApicMode::XApic as u8, Ordering::Release);
+        }
     }
 
     // Configurer vecteur spurious (0xFF) + soft-enable LAPIC
@@ -60,16 +76,38 @@ pub fn init_apic_system() {
 
 /// Initialise le LAPIC de l'AP courant (appelé depuis smp/init)
 pub fn init_ap_local_apic() {
-    if X2APIC_ACTIVE.load(Ordering::Acquire) {
-        x2apic::enable_x2apic();
-    } else {
-        local_apic::enable_xapic();
+    match apic_mode() {
+        ApicMode::X2Apic => {
+            // AP déjà en x2APIC si le mode global est x2APIC.
+            x2apic::mask_all_lvt_x2apic();
+        }
+        ApicMode::XApic => {
+            local_apic::enable_xapic();
+        }
     }
     local_apic::set_spurious_vector(super::idt::VEC_SPURIOUS);
+}
+
+#[inline(always)]
+pub fn apic_mode() -> ApicMode {
+    match APIC_MODE.load(Ordering::Acquire) {
+        x if x == ApicMode::X2Apic as u8 => ApicMode::X2Apic,
+        _ => ApicMode::XApic,
+    }
 }
 
 /// Retourne `true` si x2APIC est actif
 #[inline(always)]
 pub fn is_x2apic() -> bool {
-    X2APIC_ACTIVE.load(Ordering::Relaxed)
+    apic_mode() == ApicMode::X2Apic
+}
+
+/// EOI avec dispatch automatique xAPIC/x2APIC
+#[inline(always)]
+pub fn eoi() {
+    if is_x2apic() {
+        x2apic::eoi_x2apic();
+    } else {
+        local_apic::eoi();
+    }
 }

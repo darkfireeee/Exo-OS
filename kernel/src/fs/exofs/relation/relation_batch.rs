@@ -425,7 +425,7 @@ mod tests {
 
     #[test] fn test_batch_max_ops() {
         let mut b = RelationBatch::new();
-        for i in 0..BATCH_MAX_OPS {
+        for _i in 0..BATCH_MAX_OPS {
             b.add_insert(blob(0), blob(1), RelationType::new(RelationKind::Parent)).unwrap();
         }
         // La prochaine doit échouer.

@@ -10,6 +10,7 @@ use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     exofs_err_to_errno, write_user_buf, EFAULT, EINVAL,
+    verify_cap, CapabilityType,
 };
 use super::object_fd::OBJECT_TABLE;
 use super::snapshot_create::{SnapshotRef, check_snapshot_magic, snapshot_epoch_from_blob, snapshot_source_size_from_blob};
@@ -149,12 +150,18 @@ fn list_snapshots(source: BlobId, args: &SnapshotListArgs) -> ExofsResult<Vec<Sn
         let snap_blob_id = BlobId(ids[i]);
         if let Some(data) = BLOB_CACHE.get(&snap_blob_id) {
             if !check_snapshot_magic(&data) { i = i.wrapping_add(1); continue; }
-            let epoch = snapshot_epoch_from_blob(&data).unwrap_or(0);
+            let epoch = match snapshot_epoch_from_blob(&data) {
+                Ok(v)  => v,
+                Err(_) => { i = i.wrapping_add(1); continue; }
+            };
             if epoch < args.epoch_min || epoch > args.epoch_max {
                 i = i.wrapping_add(1);
                 continue;
             }
-            let size = snapshot_source_size_from_blob(&data).unwrap_or(0);
+            let size = match snapshot_source_size_from_blob(&data) {
+                Ok(v)  => v,
+                Err(_) => { i = i.wrapping_add(1); continue; }
+            };
             let r = SnapshotRef {
                 snapshot_id: ids[i],
                 source_id:   *source.as_bytes(),
@@ -197,7 +204,7 @@ pub fn sys_exofs_snapshot_list(
     out_count_ptr: u64,
     args_ptr:      u64,
     _a5:           u64,
-    _a6:           u64,
+    cap_rights:    u64,
 ) -> i64 {
     let blob_id = match OBJECT_TABLE.blob_id_of(fd as u32) {
         Ok(id) => id,
@@ -220,6 +227,10 @@ pub fn sys_exofs_snapshot_list(
     };
 
     if args.flags & !list_flags::VALID_MASK != 0 { return EINVAL; }
+
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsSnapshotList) {
+        return e;
+    }
 
     let snapshots = match list_snapshots(blob_id, &args) {
         Ok(v)  => v,
@@ -259,7 +270,7 @@ pub fn snapshot_count(source: BlobId) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::snapshot_create::{create_snapshot as snap_create, snap_flags};
+    use super::super::snapshot_create::SNAPSHOT_MAGIC;
 
     fn src(path: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
@@ -370,11 +381,11 @@ mod tests {
     #[test]
     fn test_register_quota() {
         let s = src(b"/list/quota");
-        let mut ok = true;
+        let mut _ok = true;
         let mut i = 0usize;
         while i < SNAPSHOT_LIST_MAX {
             let id = [i as u8; 32];
-            if register_snapshot(s, &id).is_err() { ok = false; break; }
+            if register_snapshot(s, &id).is_err() { _ok = false; break; }
             i = i.wrapping_add(1);
         }
         // La prochaine insertion doit échouer

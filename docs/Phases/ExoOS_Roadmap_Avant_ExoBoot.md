@@ -313,21 +313,21 @@ Phase 3 — Process + Signal (obligatoire)
 •	☑️ sys_uname câblé → struct utsname 390 bytes ; "Exo-OS" x86_64
 •	☑️ sys_execve argv/envp copiés depuis userspace (ARGV-01)
 Phase 4 — ExoFS (obligatoire)
-•	☐ Pipeline crypto : Blake3→compression→XChaCha20 dans cet ordre (CRYPTO-02)
-•	☐ Nonce XChaCha20 : AtomicU64 + HKDF (jamais RDRAND seul) — ERR-08
-•	☐ verify() constant-time (LAC-01) — pas de return early
-•	☐ SYS_EXOFS_OPEN_BY_PATH=519 implémenté (BUG-01)
-•	☐ __NR_getdents64=520 défini dans musl-exo (BUG-02)
-•	☐ mount_secret_key initialisée depuis CSPRNG au montage — ERR-10
-•	☐ EpochRecord checksum Blake3 vérifié au montage — ERR-12
-•	☐ zstd-safe : shims ZSTD_malloc/ZSTD_free implémentés — ERR-09
-•	☐ verify_cap() présent dans TOUS les handlers 500-519 (SYS-07)
+•	☑️ Pipeline crypto : Blake3→compression→XChaCha20 dans cet ordre (CRYPTO-02)
+•	☑️ Nonce XChaCha20 : AtomicU64 + HKDF (jamais RDRAND seul) — ERR-08
+•	☑️ verify() constant-time (LAC-01) — pas de return early
+•	☑️ SYS_EXOFS_OPEN_BY_PATH=519 implémenté (BUG-01)
+•	☑️ __NR_getdents64=520 défini dans musl-exo (BUG-02)
+•	☑️ mount_secret_key initialisée depuis CSPRNG au montage — ERR-10
+•	☑️ EpochRecord checksum Blake3 vérifié au montage — ERR-12
+•	☑️ zstd-safe : shims ZSTD_malloc/ZSTD_free implémentés — ERR-09
+•	☑️ verify_cap() présent dans TOUS les handlers 500-519 (SYS-07)
 
 Phase 5 — Servers Ring 1 (obligatoire)
 •	☐ ipc_broker démarre en PID 2
 •	☐ init démarre en PID 1 avec supervision SIGCHLD
 •	☐ vfs_server monte ExoFS
-•	☐ crypto_server est le SEUL service avec imports RustCrypto (SRV-04)
+•	☑️ crypto_server est le SEUL service avec imports RustCrypto (SRV-04) — audit dépendances servers/* (2026-03-20)
 
 Phase 6 — Prérequis exo-boot lui-même (activer quand vert)
 •	☐ kernel.elf compilé en ET_DYN (PIE) pour apply_pie_relocations()

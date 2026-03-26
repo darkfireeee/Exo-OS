@@ -144,7 +144,7 @@ pub fn dispatch_exofs_syscall(args: ExofsSyscallArgs) -> i64 {
         SYS_EXOFS_OBJECT_STAT =>
             sys_exofs_object_stat(args.a1, args.a2, args.a3, args.a4, args.a5, args.a6),
         SYS_EXOFS_OBJECT_SET_META =>
-            sys_exofs_object_set_meta(args.a1, args.a2, args.a3, args.a4, args.a5, args.a6),
+            sys_exofs_object_set_meta(args.a1, args.a2),
         SYS_EXOFS_GET_CONTENT_HASH =>
             sys_exofs_get_content_hash(args.a1, args.a2, args.a3, args.a4, args.a5, args.a6),
         SYS_EXOFS_SNAPSHOT_CREATE =>

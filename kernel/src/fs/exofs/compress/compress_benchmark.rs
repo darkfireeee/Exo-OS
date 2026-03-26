@@ -363,13 +363,38 @@ mod history_tests {
     // ── Tests supplémentaires ─────────────────────────────────────────────────
 
     #[test] fn test_bench_summary_is_compressible_flag() {
-        let s = BenchSummary { lz4: BenchResult { algo: BenchAlgo::Lz4, compressed_size: 10, original_size: 100, ticks: 50 }, zstd: BenchResult { algo: BenchAlgo::Zstd, compressed_size: 8, original_size: 100, ticks: 200 }, is_compressible: true };
+        let s = BenchSummary {
+            lz4: BenchResult {
+                algorithm: CompressionAlgorithm::Lz4,
+                compressed_size: 10,
+                compress_ticks: 50,
+                decompress_ticks: 10,
+                ratio_percent: 10,
+                original_size: 100,
+            },
+            zstd: BenchResult {
+                algorithm: CompressionAlgorithm::Zstd,
+                compressed_size: 8,
+                compress_ticks: 200,
+                decompress_ticks: 20,
+                ratio_percent: 8,
+                original_size: 100,
+            },
+            is_compressible: true,
+        };
         assert!(s.is_compressible);
     }
 
     #[test] fn test_bench_result_ratio() {
-        let r = BenchResult { algo: BenchAlgo::Lz4, compressed_size: 50, original_size: 100, ticks: 10 };
-        assert!((r.ratio() - 0.5).abs() < 0.01);
+        let r = BenchResult {
+            algorithm: CompressionAlgorithm::Lz4,
+            compressed_size: 50,
+            compress_ticks: 10,
+            decompress_ticks: 5,
+            ratio_percent: 50,
+            original_size: 100,
+        };
+        assert_eq!(r.ratio_percent, 50);
     }
 
     #[test] fn test_history_majority_empty() {
@@ -380,24 +405,38 @@ mod history_tests {
 
     #[test] fn test_history_majority_lz4_wins() {
         let mut h = BenchHistory::new();
-        h.push(BenchAlgo::Lz4);
-        h.push(BenchAlgo::Lz4);
-        h.push(BenchAlgo::Zstd);
-        assert_eq!(h.majority_vote(), Some(BenchAlgo::Lz4));
+        h.push(CompressionAlgorithm::Lz4);
+        h.push(CompressionAlgorithm::Lz4);
+        h.push(CompressionAlgorithm::Zstd);
+        assert_eq!(h.majority_vote(), CompressionAlgorithm::Lz4);
     }
 
     #[test] fn test_history_len_saturates_at_capacity() {
         let mut h = BenchHistory::new();
-        for _ in 0..20 { h.push(BenchAlgo::Lz4); }
+        for _ in 0..20 { h.push(CompressionAlgorithm::Lz4); }
         assert!(h.len() <= 8);
     }
 
     #[test] fn test_bench_result_saved_bytes() {
-        let r = BenchResult { algo: BenchAlgo::Lz4, compressed_size: 40, original_size: 100, ticks: 5 };
-        assert_eq!(r.saved_bytes(), 60);
+        let r = BenchResult {
+            algorithm: CompressionAlgorithm::Lz4,
+            compressed_size: 40,
+            compress_ticks: 5,
+            decompress_ticks: 2,
+            ratio_percent: 40,
+            original_size: 100,
+        };
+        assert_eq!(r.bytes_saved(), 60);
     }
     #[test] fn test_bench_result_is_beneficial() {
-        let r = BenchResult { algo: BenchAlgo::Zstd, compressed_size: 80, original_size: 100, ticks: 5 };
+        let r = BenchResult {
+            algorithm: CompressionAlgorithm::Zstd,
+            compressed_size: 80,
+            compress_ticks: 5,
+            decompress_ticks: 2,
+            ratio_percent: 80,
+            original_size: 100,
+        };
         assert!(r.is_beneficial());
     }
 }

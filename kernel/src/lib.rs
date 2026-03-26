@@ -22,18 +22,19 @@
 //! - capability/ ∈ security/ uniquement (DOC1 RÈGLE CAP-01)
 //! - futex ∈ memory/utils/futex_table.rs (DOC3 RÈGLE SCHED-03)
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![allow(binary_asm_labels)]
 #![allow(unexpected_cfgs)]
 #![allow(static_mut_refs)]
-#![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
-#![feature(allocator_api)]
 
 
 // ── Crates externes (no_std) ──────────────────────────────────────────────────
 
 extern crate alloc;
+
+#[cfg(test)]
+extern crate std;
 
 // ── Modules kernel ────────────────────────────────────────────────────────────
 
@@ -57,6 +58,9 @@ pub mod security;
 
 /// Couche 3 : système de fichiers virtuel + exofs
 pub mod fs;
+
+/// ExoPhoenix (Kernel B) : état partagé SSR + orchestration sentinelle.
+pub mod exophoenix;
 
 /// Interface syscall → dispatch vers les couches supérieures
 pub mod syscall;
@@ -179,24 +183,8 @@ pub unsafe fn kernel_init() {
     kdb(b'a'); // avant pid::init
     crate::process::core::pid::init(32768, 131072);
     kdb(b'b'); // avant registry::init
-    // crate::process::core::registry::init(32768); // TEMPORAIREMENT DÉSACTIVÉ — debug
+    crate::process::core::registry::init(32768);
     kdb(b'c'); // avant init_reaper
-    // Debug: tester l'allocation heap
-    {
-        use alloc::alloc::{alloc, dealloc, Layout};
-        // Test 8 octets (SLUB classe 0)
-        let layout8 = unsafe { Layout::from_size_align_unchecked(8, 8) };
-        let p8 = unsafe { alloc(layout8) };
-        if p8.is_null() { kdb(b'N'); } else { kdb(b'S'); unsafe { dealloc(p8, layout8); } }
-        // Test 128 octets (SLUB classe 4)
-        let layout128 = unsafe { Layout::from_size_align_unchecked(128, 64) };
-        let p128 = unsafe { alloc(layout128) };
-        if p128.is_null() { kdb(b'n'); } else { kdb(b's'); unsafe { dealloc(p128, layout128); } }
-        // Indicateur: si les stats SLUB comptent des allocs
-        let small = crate::memory::heap::allocator::hybrid::HEAP_STATS
-            .small_allocs.load(core::sync::atomic::Ordering::Relaxed);
-        if small > 0 { kdb(b'+'); } else { kdb(b'0'); }
-    }
     crate::process::lifecycle::reap::init_reaper();
     kdb(b'd'); // avant register_with_dma
     crate::process::state::wakeup::register_with_dma();
@@ -209,7 +197,7 @@ pub unsafe fn kernel_init() {
 
     // Phase 5b : Crypto — RDRAND-based CSPRNG (requis avant futex seed + IPC auth).
     // TODO: crypto_init() — vérifier compatibilité RDRAND au boot
-     crate::security::crypto::crypto_init();
+    crate::security::crypto::crypto_init();
 
     // ERR-05 fix: Init graine SipHash de la table futex (anti-DoS hash collision).
     {
@@ -229,6 +217,7 @@ pub unsafe fn kernel_init() {
     kdb(b'!'); // FS done
 }
 
+#[cfg(not(test))]
 #[panic_handler]
 fn kernel_panic(info: &core::panic::PanicInfo) -> ! {
     // BUG-5 FIX: l'ancien handler effectuait un halt silencieux sans aucun diagnostic.
@@ -270,6 +259,7 @@ fn kernel_panic(info: &core::panic::PanicInfo) -> ! {
     loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
 }
 
+#[cfg(not(test))]
 #[alloc_error_handler]
 fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
     // BUG-5 FIX: même correction — affiche taille/alignement sur port 0xE9 QEMU.

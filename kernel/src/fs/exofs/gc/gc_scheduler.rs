@@ -353,7 +353,7 @@ mod tests {
     use super::*;
     use crate::fs::exofs::gc::gc_tuning::GcSystemState;
 
-    fn state(free_pct: u8, lag: u32) -> GcSystemState {
+    fn state(free_pct: u32, lag: u64) -> GcSystemState {
         GcSystemState {
             free_space_pct:   free_pct,
             gc_lag_epochs:    lag,

@@ -9,7 +9,8 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    exofs_err_to_errno, copy_struct_from_user, write_user_buf, EFAULT,
+    exofs_err_to_errno, copy_struct_from_user, write_user_buf,
+    verify_cap, CapabilityType, EFAULT,
 };
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 
@@ -304,7 +305,7 @@ pub fn do_shutdown_commit(args: &EpochCommitArgs) -> ExofsResult<EpochCommitResu
 pub fn sys_exofs_epoch_commit(
     args_ptr:   u64,
     result_ptr: u64,
-    _a3: u64, _a4: u64, _a5: u64, _a6: u64,
+    _a3: u64, _a4: u64, _a5: u64, cap_rights: u64,
 ) -> i64 {
     if args_ptr == 0 { return EFAULT; }
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
@@ -312,6 +313,10 @@ pub fn sys_exofs_epoch_commit(
         Ok(a)  => a,
         Err(_) => return EFAULT,
     };
+    // Phase 2 (TOCTOU-safe): verify_cap après copie immuable des args.
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsEpochCommit) {
+        return e;
+    }
     let res = match do_commit(&args) {
         Ok(r)  => r,
         Err(e) => return exofs_err_to_errno(e),

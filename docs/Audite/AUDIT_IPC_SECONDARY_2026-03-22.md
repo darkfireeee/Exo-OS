@@ -1,0 +1,533 @@
+# Audit complémentaire des fichiers secondaires `ipc` (Exo-OS)
+
+Date: 2026-03-22
+Périmètre: `kernel/src/ipc/**` (fichiers secondaires et points de couplage)
+Objectif: renforcer la couverture des intégrations IPC avec scheduler/memory/security, en ciblant les zones de contention et de repli
+
+---
+
+## 1) Cadrage secondaire
+
+Ce document complète `AUDIT_IPC_2026-03-22.md`.
+Le focus porte sur les fichiers secondaires qui déterminent la robustesse runtime: hooks, SHM mapping, rings lock-free, protocole RPC et observabilité.
+
+---
+
+## 2) Inventaire secondaire priorisé (ipc)
+
+- `kernel/src/ipc/mod.rs`
+- `kernel/src/ipc/channel/async.rs`
+- `kernel/src/ipc/channel/broadcast.rs`
+- `kernel/src/ipc/channel/mod.rs`
+- `kernel/src/ipc/channel/mpmc.rs`
+- `kernel/src/ipc/channel/raw.rs`
+- `kernel/src/ipc/channel/streaming.rs`
+- `kernel/src/ipc/channel/sync.rs`
+- `kernel/src/ipc/channel/typed.rs`
+- `kernel/src/ipc/core/constants.rs`
+- `kernel/src/ipc/core/fastcall_asm.s`
+- `kernel/src/ipc/core/mod.rs`
+- `kernel/src/ipc/core/sequence.rs`
+- `kernel/src/ipc/core/transfer.rs`
+- `kernel/src/ipc/core/types.rs`
+- `kernel/src/ipc/endpoint/connection.rs`
+- `kernel/src/ipc/endpoint/descriptor.rs`
+- `kernel/src/ipc/endpoint/lifecycle.rs`
+- `kernel/src/ipc/endpoint/mod.rs`
+- `kernel/src/ipc/endpoint/registry.rs`
+- `kernel/src/ipc/message/builder.rs`
+- `kernel/src/ipc/message/mod.rs`
+- `kernel/src/ipc/message/priority.rs`
+- `kernel/src/ipc/message/router.rs`
+- `kernel/src/ipc/message/serializer.rs`
+- `kernel/src/ipc/ring/batch.rs`
+- `kernel/src/ipc/ring/fusion.rs`
+- `kernel/src/ipc/ring/mod.rs`
+- `kernel/src/ipc/ring/mpmc.rs`
+- `kernel/src/ipc/ring/slot.rs`
+- `kernel/src/ipc/ring/spsc.rs`
+- `kernel/src/ipc/ring/zerocopy.rs`
+- `kernel/src/ipc/rpc/client.rs`
+- `kernel/src/ipc/rpc/mod.rs`
+- `kernel/src/ipc/rpc/protocol.rs`
+- `kernel/src/ipc/rpc/raw.rs`
+- `kernel/src/ipc/rpc/server.rs`
+- `kernel/src/ipc/rpc/timeout.rs`
+- `kernel/src/ipc/shared_memory/allocator.rs`
+- `kernel/src/ipc/shared_memory/descriptor.rs`
+- `kernel/src/ipc/shared_memory/mapping.rs`
+- `kernel/src/ipc/shared_memory/mod.rs`
+- `kernel/src/ipc/shared_memory/numa_aware.rs`
+- `kernel/src/ipc/shared_memory/page.rs`
+- `kernel/src/ipc/shared_memory/pool.rs`
+- `kernel/src/ipc/stats/counters.rs`
+- `kernel/src/ipc/stats/mod.rs`
+- `kernel/src/ipc/sync/barrier.rs`
+- `kernel/src/ipc/sync/event.rs`
+- `kernel/src/ipc/sync/futex.rs`
+- `kernel/src/ipc/sync/mod.rs`
+- `kernel/src/ipc/sync/rendezvous.rs`
+- `kernel/src/ipc/sync/sched_hooks.rs`
+- `kernel/src/ipc/sync/wait_queue.rs`
+
+---
+
+## 3) Checklist d’intégration secondaire (IPC-S2-INT)
+
+- IPC-S2-INT-001 valider `sync/sched_hooks.rs` avec block/wake scheduler.
+- IPC-S2-INT-002 valider `shared_memory/mapping.rs` avec hooks VMM installés.
+- IPC-S2-INT-003 valider `sync/futex.rs` avec table futex memory unique.
+- IPC-S2-INT-004 valider `ring/spsc.rs` ordering atomique head/tail.
+- IPC-S2-INT-005 valider `ring/mpmc.rs` sequence ABA-safe.
+- IPC-S2-INT-006 valider `ring/zerocopy.rs` ownership buffers.
+- IPC-S2-INT-007 valider `message/serializer.rs` bornes et endian.
+- IPC-S2-INT-008 valider `message/router.rs` suppression route en course.
+- IPC-S2-INT-009 valider `rpc/protocol.rs` compat version.
+- IPC-S2-INT-010 valider `rpc/server.rs` dispatch méthodes inconnues.
+- IPC-S2-INT-011 valider `rpc/client.rs` retries bornés.
+- IPC-S2-INT-012 valider `rpc/timeout.rs` annulation propre.
+- IPC-S2-INT-013 valider `endpoint/registry.rs` collisions ID.
+- IPC-S2-INT-014 valider `endpoint/lifecycle.rs` transitions stables.
+- IPC-S2-INT-015 valider `endpoint/connection.rs` handshake robuste.
+- IPC-S2-INT-016 valider `channel/sync.rs` rendezvous strict.
+- IPC-S2-INT-017 valider `channel/async.rs` backpressure.
+- IPC-S2-INT-018 valider `channel/broadcast.rs` fanout borné.
+- IPC-S2-INT-019 valider `channel/typed.rs` type safety.
+- IPC-S2-INT-020 valider `channel/raw.rs` garde-fous taille/pointeur.
+- IPC-S2-INT-021 valider `channel/mpmc.rs` concurrence multi-producteurs.
+- IPC-S2-INT-022 valider `channel/streaming.rs` contrôle de flux.
+- IPC-S2-INT-023 valider `core/fastcall_asm.s` ABI asm/rust.
+- IPC-S2-INT-024 valider `core/transfer.rs` routes copy/zerocopy.
+- IPC-S2-INT-025 valider `core/sequence.rs` monotonicité.
+- IPC-S2-INT-026 valider `core/constants.rs` limites capacité.
+- IPC-S2-INT-027 valider `shared_memory/pool.rs` fragmentation.
+- IPC-S2-INT-028 valider `shared_memory/allocator.rs` classes taille.
+- IPC-S2-INT-029 valider `shared_memory/descriptor.rs` droits d’accès.
+- IPC-S2-INT-030 valider `shared_memory/page.rs` flags mémoire.
+- IPC-S2-INT-031 valider `shared_memory/numa_aware.rs` fallback global.
+- IPC-S2-INT-032 valider `sync/event.rs` auto/manual reset.
+- IPC-S2-INT-033 valider `sync/barrier.rs` génération + reset.
+- IPC-S2-INT-034 valider `sync/rendezvous.rs` participants max.
+- IPC-S2-INT-035 valider `sync/wait_queue.rs` timeout/cancel.
+- IPC-S2-INT-036 valider `stats/counters.rs` overhead et ordering.
+- IPC-S2-INT-037 valider `stats/mod.rs` snapshot cohérent.
+- IPC-S2-INT-038 valider `message/priority.rs` anti-starvation.
+- IPC-S2-INT-039 valider `message/builder.rs` validation stricte.
+- IPC-S2-INT-040 valider `ring/batch.rs` latence batch contrôlée.
+- IPC-S2-INT-041 valider `ring/fusion.rs` fusion non bloquante.
+- IPC-S2-INT-042 valider `ring/slot.rs` cycle de vie complet.
+- IPC-S2-INT-043 valider `rpc/raw.rs` framing malformed-safe.
+- IPC-S2-INT-044 valider `mod.rs` exports publics minimaux.
+- IPC-S2-INT-045 valider interactions IPC-security capability checks.
+- IPC-S2-INT-046 valider interactions IPC-memory pressure.
+- IPC-S2-INT-047 valider interactions IPC-scheduler wake storms.
+- IPC-S2-INT-048 valider interactions IPC-process lifecycle.
+- IPC-S2-INT-049 valider interactions IPC-fs si pont éventuel.
+- IPC-S2-INT-050 valider no_std et imports secondaires.
+- IPC-S2-INT-051 valider `endpoint/descriptor.rs` ownership stable.
+- IPC-S2-INT-052 valider `endpoint/mod.rs` API cohérente.
+- IPC-S2-INT-053 valider `rpc/mod.rs` versioning interne.
+- IPC-S2-INT-054 valider `channel/mod.rs` signatures stables.
+- IPC-S2-INT-055 valider `sync/mod.rs` hiérarchie lock documentée.
+- IPC-S2-INT-056 valider `shared_memory/mod.rs` init unique.
+- IPC-S2-INT-057 valider `core/mod.rs` init/fallback.
+- IPC-S2-INT-058 valider `message/mod.rs` typage strict.
+- IPC-S2-INT-059 valider `ring/mod.rs` sélection implémentation.
+- IPC-S2-INT-060 valider `stats/mod.rs` reset contrôlé.
+- IPC-S2-INT-061 valider `rpc/server.rs` clean shutdown.
+- IPC-S2-INT-062 valider `rpc/client.rs` reconnect path.
+- IPC-S2-INT-063 valider `message/router.rs` loop prevention.
+- IPC-S2-INT-064 valider `message/serializer.rs` taille max enforce.
+- IPC-S2-INT-065 valider `shared_memory/mapping.rs` mode stub identifié.
+- IPC-S2-INT-066 valider `shared_memory/mapping.rs` mode réel privilégié.
+- IPC-S2-INT-067 valider `sync/futex.rs` requeue lock ordering.
+- IPC-S2-INT-068 valider `sync/event.rs` wake all si destroy.
+- IPC-S2-INT-069 valider `ring/zerocopy.rs` fallback copy path.
+- IPC-S2-INT-070 valider `core/fastcall_asm.s` chemins d’erreur.
+- IPC-S2-INT-071 valider ordering atomique sur indicateurs queue.
+- IPC-S2-INT-072 valider isolation namespace endpoint.
+- IPC-S2-INT-073 valider token/capability attach messages.
+- IPC-S2-INT-074 valider policy deny-by-default sur endpoints.
+- IPC-S2-INT-075 valider audit des denials IPC.
+- IPC-S2-INT-076 valider contrôle quotas par channel.
+- IPC-S2-INT-077 valider contrôle quotas par endpoint.
+- IPC-S2-INT-078 valider contrôle quotas SHM.
+- IPC-S2-INT-079 valider gestion saturation route table.
+- IPC-S2-INT-080 valider gestion saturation ring buffers.
+- IPC-S2-INT-081 valider gestion saturation rpc server.
+- IPC-S2-INT-082 valider gestion saturation broadcast.
+- IPC-S2-INT-083 valider gestion saturation rendezvous.
+- IPC-S2-INT-084 valider cohérence codes erreur IpcError.
+- IPC-S2-INT-085 valider cohérence codes erreur IpcCapError.
+- IPC-S2-INT-086 valider mapping errno stable.
+- IPC-S2-INT-087 valider traces corrélées par message id.
+- IPC-S2-INT-088 valider statistiques p50/p95/p99 latence.
+- IPC-S2-INT-089 valider statistiques throughput par voie.
+- IPC-S2-INT-090 valider compilation warnings secondary files.
+
+---
+
+## 4) Registre risques secondaires (IPC-S2-RSK)
+
+- IPC-S2-RSK-001 risque de lost wakeup entre hooks scheduler et IPC.
+- IPC-S2-RSK-002 risque de race head/tail dans ring lock-free.
+- IPC-S2-RSK-003 risque de queue full mal gérée.
+- IPC-S2-RSK-004 risque de queue empty mal gérée.
+- IPC-S2-RSK-005 risque de loop routing.
+- IPC-S2-RSK-006 risque de starvation priorité.
+- IPC-S2-RSK-007 risque d’overflow séquence message.
+- IPC-S2-RSK-008 risque de régression ABI fastcall asm.
+- IPC-S2-RSK-009 risque de pointer invalide en zerocopy.
+- IPC-S2-RSK-010 risque d’ownership SHM ambigu.
+- IPC-S2-RSK-011 risque de mapping SHM mode stub en production.
+- IPC-S2-RSK-012 risque de lock ordering violé (IPC<Sched<Mem<FS).
+- IPC-S2-RSK-013 risque de contention endpoint registry.
+- IPC-S2-RSK-014 risque de contention route table.
+- IPC-S2-RSK-015 risque de timeout RPC non borné.
+- IPC-S2-RSK-016 risque de retry RPC infini.
+- IPC-S2-RSK-017 risque de malformed frame non rejeté.
+- IPC-S2-RSK-018 risque de désérialisation permissive.
+- IPC-S2-RSK-019 risque d’incohérence droits capability.
+- IPC-S2-RSK-020 risque de denial non audité.
+- IPC-S2-RSK-021 risque de pollution métriques sous charge.
+- IPC-S2-RSK-022 risque de fuite waiter nodes.
+- IPC-S2-RSK-023 risque d’event/barrier état invalide.
+- IPC-S2-RSK-024 risque de cancellation non idempotente.
+- IPC-S2-RSK-025 risque de requeue non atomique.
+- IPC-S2-RSK-026 risque de saturation SHM non signalée.
+- IPC-S2-RSK-027 risque de fragmentation SHM chronique.
+- IPC-S2-RSK-028 risque d’absence fallback copy path.
+- IPC-S2-RSK-029 risque de no_std regression.
+- IPC-S2-RSK-030 risque de non-régression insuffisamment couverte.
+
+---
+
+## 5) Campagne validations secondaires (IPC-S2-VAL)
+
+- IPC-S2-VAL-001 vérifier stress SPSC/MPMC avec millions de messages.
+- IPC-S2-VAL-002 vérifier stress contention endpoints multiclients.
+- IPC-S2-VAL-003 vérifier stress routing table dynamique.
+- IPC-S2-VAL-004 vérifier stress broadcast fanout.
+- IPC-S2-VAL-005 vérifier stress streaming long-run.
+- IPC-S2-VAL-006 vérifier RPC timeout/retry bounded.
+- IPC-S2-VAL-007 vérifier RPC malformed input rejection.
+- IPC-S2-VAL-008 vérifier SHM alloc/map/unmap/free cycles.
+- IPC-S2-VAL-009 vérifier SHM exhaustion + recovery.
+- IPC-S2-VAL-010 vérifier mode fallback sans hooks VMM.
+- IPC-S2-VAL-011 vérifier hooks scheduler install/uninstall.
+- IPC-S2-VAL-012 vérifier futex wait/wake/requeue/cancel via IPC.
+- IPC-S2-VAL-013 vérifier event auto/manual reset.
+- IPC-S2-VAL-014 vérifier barrier générations successives.
+- IPC-S2-VAL-015 vérifier rendezvous pairings.
+- IPC-S2-VAL-016 vérifier zerocopy + fallback copy.
+- IPC-S2-VAL-017 vérifier fastcall ASM vs path standard.
+- IPC-S2-VAL-018 vérifier priorité messages et anti-starvation.
+- IPC-S2-VAL-019 vérifier quotas channels/endpoints/shm.
+- IPC-S2-VAL-020 vérifier capability deny/allow paths.
+- IPC-S2-VAL-021 vérifier audit IPC denials.
+- IPC-S2-VAL-022 vérifier metrics snapshot cohérent.
+- IPC-S2-VAL-023 vérifier latence p50/p95/p99 en charge.
+- IPC-S2-VAL-024 vérifier throughput mono-core et multi-core.
+- IPC-S2-VAL-025 vérifier robustesse déconnexion brutale pair.
+- IPC-S2-VAL-026 vérifier robustesse crash server RPC.
+- IPC-S2-VAL-027 vérifier robustesse crash client RPC.
+- IPC-S2-VAL-028 vérifier robustesse pause/reprise VM.
+- IPC-S2-VAL-029 vérifier robustesse memory pressure.
+- IPC-S2-VAL-030 vérifier clôture des risques secondaires IPC critiques.
+
+---
+
+## 6) Synthèse actionnable
+
+Le périmètre secondaire IPC est dominé par les risques de contention et d’ordering.
+La priorité opérationnelle est de verrouiller `sched_hooks`, `shared_memory/mapping`, `ring/*` et `rpc/*` avec des campagnes de charge reproductibles.
+Cette annexe fournit la base de validation avant lot de correction IPC.
+
+---
+
+## 7) Addendum complémentaire secondaire A
+
+- GEN-S2-EXTA-001 intégration: confirmer le contrat d’appel inter-module secondaire.
+- GEN-S2-EXTA-002 intégration: confirmer l’ordre d’initialisation des dépendances secondaires.
+- GEN-S2-EXTA-003 intégration: confirmer la symétrie init/stop des composants secondaires.
+- GEN-S2-EXTA-004 intégration: confirmer le fallback en absence de backend.
+- GEN-S2-EXTA-005 intégration: confirmer le fallback en absence de hook.
+- GEN-S2-EXTA-006 intégration: confirmer la gestion de saturation côté file secondaire.
+- GEN-S2-EXTA-007 intégration: confirmer la gestion de saturation côté mémoire secondaire.
+- GEN-S2-EXTA-008 intégration: confirmer la gestion de contention côté locks secondaires.
+- GEN-S2-EXTA-009 intégration: confirmer la gestion des timeouts secondaires.
+- GEN-S2-EXTA-010 intégration: confirmer la gestion des retries secondaires.
+- GEN-S2-EXTA-011 intégration: confirmer l’absence d’allocation en section critique.
+- GEN-S2-EXTA-012 intégration: confirmer l’absence de lock long sur I/O.
+- GEN-S2-EXTA-013 intégration: confirmer la granularité des sections critiques.
+- GEN-S2-EXTA-014 intégration: confirmer la publication d’état avec ordering correct.
+- GEN-S2-EXTA-015 intégration: confirmer la consommation d’état avec ordering correct.
+- GEN-S2-EXTA-016 intégration: confirmer les bornes des tableaux secondaires.
+- GEN-S2-EXTA-017 intégration: confirmer les conversions taille/offset sans overflow.
+- GEN-S2-EXTA-018 intégration: confirmer les conversions index sans underflow.
+- GEN-S2-EXTA-019 intégration: confirmer les codes retour négatifs stables.
+- GEN-S2-EXTA-020 intégration: confirmer les erreurs intermédiaires propagées proprement.
+- GEN-S2-EXTA-021 intégration: confirmer les chemins cleanup post-erreur.
+- GEN-S2-EXTA-022 intégration: confirmer les chemins rollback post-erreur.
+- GEN-S2-EXTA-023 intégration: confirmer les chemins reprise progressive.
+- GEN-S2-EXTA-024 intégration: confirmer les chemins dégradation contrôlée.
+- GEN-S2-EXTA-025 intégration: confirmer les chemins arrêt d’urgence.
+- GEN-S2-EXTA-026 intégration: confirmer la cohérence des métriques secondaires.
+- GEN-S2-EXTA-027 intégration: confirmer la cohérence des logs secondaires.
+- GEN-S2-EXTA-028 intégration: confirmer la cohérence des alertes secondaires.
+- GEN-S2-EXTA-029 intégration: confirmer la cohérence des seuils secondaires.
+- GEN-S2-EXTA-030 intégration: confirmer la cohérence des garde-fous secondaires.
+- GEN-S2-EXTA-031 intégration: confirmer la robustesse sur données partielles.
+- GEN-S2-EXTA-032 intégration: confirmer la robustesse sur données corrompues.
+- GEN-S2-EXTA-033 intégration: confirmer la robustesse sur topologie atypique.
+- GEN-S2-EXTA-034 intégration: confirmer la robustesse sur mode virtualisé.
+- GEN-S2-EXTA-035 intégration: confirmer la robustesse sur mode bare-metal.
+- GEN-S2-EXTA-036 intégration: confirmer la robustesse sans feature CPU optionnelle.
+- GEN-S2-EXTA-037 intégration: confirmer la robustesse sans périphérique optionnel.
+- GEN-S2-EXTA-038 intégration: confirmer la robustesse sans extension optionnelle.
+- GEN-S2-EXTA-039 intégration: confirmer la robustesse sous charge nominale.
+- GEN-S2-EXTA-040 intégration: confirmer la robustesse sous charge extrême.
+- GEN-S2-EXTA-041 intégration: confirmer la robustesse sous contention extrême.
+- GEN-S2-EXTA-042 intégration: confirmer la robustesse sous pression mémoire.
+- GEN-S2-EXTA-043 intégration: confirmer la robustesse sous pression CPU.
+- GEN-S2-EXTA-044 intégration: confirmer la robustesse sous pression I/O.
+- GEN-S2-EXTA-045 intégration: confirmer la robustesse en migration CPU.
+- GEN-S2-EXTA-046 intégration: confirmer la robustesse en changement de mode.
+- GEN-S2-EXTA-047 intégration: confirmer la robustesse en reconfiguration runtime.
+- GEN-S2-EXTA-048 intégration: confirmer la robustesse des chemins froids.
+- GEN-S2-EXTA-049 intégration: confirmer la robustesse des chemins chauds.
+- GEN-S2-EXTA-050 intégration: confirmer la robustesse des chemins de bordure.
+- GEN-S2-EXTA-051 risque: tracer les risques de contention critiques.
+- GEN-S2-EXTA-052 risque: tracer les risques de deadlock potentiels.
+- GEN-S2-EXTA-053 risque: tracer les risques de starvation potentiels.
+- GEN-S2-EXTA-054 risque: tracer les risques de fuite mémoire potentiels.
+- GEN-S2-EXTA-055 risque: tracer les risques de fuite d’état global.
+- GEN-S2-EXTA-056 risque: tracer les risques de corruption de file.
+- GEN-S2-EXTA-057 risque: tracer les risques de corruption de table.
+- GEN-S2-EXTA-058 risque: tracer les risques de corruption de métriques.
+- GEN-S2-EXTA-059 risque: tracer les risques de corruption de logs.
+- GEN-S2-EXTA-060 risque: tracer les risques de corruption de config.
+- GEN-S2-EXTA-061 risque: qualifier les risques de fallback non testé.
+- GEN-S2-EXTA-062 risque: qualifier les risques de placeholder actif.
+- GEN-S2-EXTA-063 risque: qualifier les risques de TODO non clôturé.
+- GEN-S2-EXTA-064 risque: qualifier les risques d’ordering atomique faible.
+- GEN-S2-EXTA-065 risque: qualifier les risques d’ordering atomique excessif.
+- GEN-S2-EXTA-066 risque: qualifier les risques de logs trop verbeux.
+- GEN-S2-EXTA-067 risque: qualifier les risques de logs insuffisants.
+- GEN-S2-EXTA-068 risque: qualifier les risques de seuils mal calibrés.
+- GEN-S2-EXTA-069 risque: qualifier les risques de timeouts mal calibrés.
+- GEN-S2-EXTA-070 risque: qualifier les risques de retries mal calibrés.
+- GEN-S2-EXTA-071 risque: qualifier les risques de compatibilité incomplète.
+- GEN-S2-EXTA-072 risque: qualifier les risques de non-régression incomplète.
+- GEN-S2-EXTA-073 risque: qualifier les risques de couverture de test incomplète.
+- GEN-S2-EXTA-074 risque: qualifier les risques de couverture doc incomplète.
+- GEN-S2-EXTA-075 risque: qualifier les risques de dépendance cachée.
+- GEN-S2-EXTA-076 risque: qualifier les risques de dépendance circulaire.
+- GEN-S2-EXTA-077 risque: qualifier les risques de divergence docs/code.
+- GEN-S2-EXTA-078 risque: qualifier les risques de divergence debug/release.
+- GEN-S2-EXTA-079 risque: qualifier les risques de divergence host/target.
+- GEN-S2-EXTA-080 risque: qualifier les risques de divergence VM/bare-metal.
+- GEN-S2-EXTA-081 risque: prioriser les risques P0 secondaires.
+- GEN-S2-EXTA-082 risque: prioriser les risques P1 secondaires.
+- GEN-S2-EXTA-083 risque: prioriser les risques P2 secondaires.
+- GEN-S2-EXTA-084 risque: prioriser les risques P3 secondaires.
+- GEN-S2-EXTA-085 risque: lier chaque risque à une preuve de validation.
+- GEN-S2-EXTA-086 risque: lier chaque risque à un propriétaire technique.
+- GEN-S2-EXTA-087 risque: lier chaque risque à un horizon de correction.
+- GEN-S2-EXTA-088 risque: lier chaque risque à un plan rollback.
+- GEN-S2-EXTA-089 risque: lier chaque risque à un plan containment.
+- GEN-S2-EXTA-090 risque: lier chaque risque à un plan revalidation.
+- GEN-S2-EXTA-091 risque: confirmer la lisibilité du registre de risques.
+- GEN-S2-EXTA-092 risque: confirmer la maintenabilité du registre de risques.
+- GEN-S2-EXTA-093 risque: confirmer la cohérence du registre de risques.
+- GEN-S2-EXTA-094 risque: confirmer la couverture du registre de risques.
+- GEN-S2-EXTA-095 risque: confirmer la clôture des risques obsolètes.
+- GEN-S2-EXTA-096 risque: confirmer l’escalade des risques critiques.
+- GEN-S2-EXTA-097 risque: confirmer le suivi hebdomadaire des risques.
+- GEN-S2-EXTA-098 risque: confirmer la revue croisée des risques.
+- GEN-S2-EXTA-099 risque: confirmer l’alignement risques/roadmap.
+- GEN-S2-EXTA-100 risque: confirmer l’alignement risques/backlog.
+- GEN-S2-EXTA-101 validation: exécuter un scénario nominal reproductible.
+- GEN-S2-EXTA-102 validation: exécuter un scénario surcharge reproductible.
+- GEN-S2-EXTA-103 validation: exécuter un scénario contention reproductible.
+- GEN-S2-EXTA-104 validation: exécuter un scénario timeout reproductible.
+- GEN-S2-EXTA-105 validation: exécuter un scénario fallback reproductible.
+- GEN-S2-EXTA-106 validation: exécuter un scénario erreur intermédiaire.
+- GEN-S2-EXTA-107 validation: exécuter un scénario rollback complet.
+- GEN-S2-EXTA-108 validation: exécuter un scénario reprise progressive.
+- GEN-S2-EXTA-109 validation: exécuter un scénario dégradation contrôlée.
+- GEN-S2-EXTA-110 validation: exécuter un scénario arrêt d’urgence.
+- GEN-S2-EXTA-111 validation: vérifier la reproductibilité des résultats.
+- GEN-S2-EXTA-112 validation: vérifier la reproductibilité des traces.
+- GEN-S2-EXTA-113 validation: vérifier la reproductibilité des métriques.
+- GEN-S2-EXTA-114 validation: vérifier la reproductibilité des alertes.
+- GEN-S2-EXTA-115 validation: vérifier la reproductibilité des décisions.
+- GEN-S2-EXTA-116 validation: vérifier les critères d’entrée de test.
+- GEN-S2-EXTA-117 validation: vérifier les critères de sortie de test.
+- GEN-S2-EXTA-118 validation: vérifier les critères de succès L1.
+- GEN-S2-EXTA-119 validation: vérifier les critères de succès L2.
+- GEN-S2-EXTA-120 validation: vérifier les critères de succès L3.
+- GEN-S2-EXTA-121 validation: vérifier les critères de succès L4.
+- GEN-S2-EXTA-122 validation: vérifier les critères de succès L5.
+- GEN-S2-EXTA-123 validation: vérifier les critères d’échec bloquant.
+- GEN-S2-EXTA-124 validation: vérifier les critères d’échec non bloquant.
+- GEN-S2-EXTA-125 validation: vérifier les critères d’acceptation temporaire.
+- GEN-S2-EXTA-126 validation: vérifier les critères d’acceptation finale.
+- GEN-S2-EXTA-127 validation: vérifier la couverture des interactions critiques.
+- GEN-S2-EXTA-128 validation: vérifier la couverture des fichiers critiques.
+- GEN-S2-EXTA-129 validation: vérifier la couverture des scénarios critiques.
+- GEN-S2-EXTA-130 validation: vérifier la couverture des erreurs critiques.
+- GEN-S2-EXTA-131 validation: vérifier la couverture des chemins de reprise.
+- GEN-S2-EXTA-132 validation: vérifier la couverture des chemins de fallback.
+- GEN-S2-EXTA-133 validation: vérifier la couverture des chemins de rollback.
+- GEN-S2-EXTA-134 validation: vérifier la couverture des chemins de cleanup.
+- GEN-S2-EXTA-135 validation: vérifier la couverture des chemins de dégradation.
+- GEN-S2-EXTA-136 validation: vérifier la cohérence des preuves collectées.
+- GEN-S2-EXTA-137 validation: vérifier la complétude des preuves collectées.
+- GEN-S2-EXTA-138 validation: vérifier la lisibilité des preuves collectées.
+- GEN-S2-EXTA-139 validation: vérifier la pérennité des preuves collectées.
+- GEN-S2-EXTA-140 validation: vérifier la disponibilité des preuves collectées.
+- GEN-S2-EXTA-141 validation: confirmer la préparation du lot secondaire suivant.
+- GEN-S2-EXTA-142 validation: confirmer la préparation de la revue finale.
+- GEN-S2-EXTA-143 validation: confirmer la préparation de la release.
+- GEN-S2-EXTA-144 validation: confirmer la préparation du runbook incident.
+- GEN-S2-EXTA-145 validation: confirmer la préparation du plan de rollback.
+- GEN-S2-EXTA-146 validation: confirmer la préparation du plan de revalidation.
+- GEN-S2-EXTA-147 validation: confirmer la clôture des écarts documentaires.
+- GEN-S2-EXTA-148 validation: confirmer la clôture des écarts techniques.
+- GEN-S2-EXTA-149 validation: confirmer la clôture des écarts de test.
+- GEN-S2-EXTA-150 validation: confirmer la clôture opérationnelle de l’addendum A.
+
+---
+
+## 8) Addendum complémentaire secondaire B1
+
+- IPC-S2-EXTB-001 cartographier les dépendances secondaires encore sensibles.
+- IPC-S2-EXTB-002 confirmer les points de contrôle inter-modules prioritaires.
+- IPC-S2-EXTB-003 confirmer la liste des invariants non négociables.
+- IPC-S2-EXTB-004 confirmer la matrice des chemins d’erreur critiques.
+- IPC-S2-EXTB-005 confirmer la matrice des chemins fallback critiques.
+- IPC-S2-EXTB-006 confirmer la matrice des chemins rollback critiques.
+- IPC-S2-EXTB-007 confirmer la matrice des chemins reprise critiques.
+- IPC-S2-EXTB-008 confirmer la matrice de contention des ressources.
+- IPC-S2-EXTB-009 confirmer la matrice de saturation des files.
+- IPC-S2-EXTB-010 confirmer la matrice de saturation mémoire.
+- IPC-S2-EXTB-011 confirmer la matrice de saturation CPU.
+- IPC-S2-EXTB-012 confirmer la matrice de timeouts significatifs.
+- IPC-S2-EXTB-013 confirmer la matrice de retries bornés.
+- IPC-S2-EXTB-014 confirmer la matrice de priorisation des risques.
+- IPC-S2-EXTB-015 confirmer la matrice de priorisation des validations.
+- IPC-S2-EXTB-016 confirmer la matrice de preuves exigées.
+- IPC-S2-EXTB-017 confirmer la matrice des propriétaires techniques.
+- IPC-S2-EXTB-018 confirmer la matrice des délais de remédiation.
+- IPC-S2-EXTB-019 confirmer la matrice des critères de succès.
+- IPC-S2-EXTB-020 confirmer la matrice des critères d’échec.
+- IPC-S2-EXTB-021 confirmer la traçabilité risque -> test -> preuve.
+- IPC-S2-EXTB-022 confirmer la traçabilité fichier -> contrôle -> statut.
+- IPC-S2-EXTB-023 confirmer la traçabilité incident -> correction -> validation.
+- IPC-S2-EXTB-024 confirmer la traçabilité backlog -> lot -> clôture.
+- IPC-S2-EXTB-025 confirmer la cohérence doc/code après compléments.
+- IPC-S2-EXTB-026 confirmer la lisibilité opérationnelle du lot secondaire.
+- IPC-S2-EXTB-027 confirmer la maintenabilité des checklists additionnelles.
+- IPC-S2-EXTB-028 confirmer la préparation de la revue finale.
+- IPC-S2-EXTB-029 confirmer la préparation du lot suivant.
+- IPC-S2-EXTB-030 confirmer la clôture opérationnelle de l’addendum B1.
+
+## 9) Addendum complémentaire secondaire B2
+
+- IPC-S2-EXTB-031 cartographier les dépendances secondaires encore sensibles.
+- IPC-S2-EXTB-032 confirmer les points de contrôle inter-modules prioritaires.
+- IPC-S2-EXTB-033 confirmer la liste des invariants non négociables.
+- IPC-S2-EXTB-034 confirmer la matrice des chemins d’erreur critiques.
+- IPC-S2-EXTB-035 confirmer la matrice des chemins fallback critiques.
+- IPC-S2-EXTB-036 confirmer la matrice des chemins rollback critiques.
+- IPC-S2-EXTB-037 confirmer la matrice des chemins reprise critiques.
+- IPC-S2-EXTB-038 confirmer la matrice de contention des ressources.
+- IPC-S2-EXTB-039 confirmer la matrice de saturation des files.
+- IPC-S2-EXTB-040 confirmer la matrice de saturation mémoire.
+- IPC-S2-EXTB-041 confirmer la matrice de saturation CPU.
+- IPC-S2-EXTB-042 confirmer la matrice de timeouts significatifs.
+- IPC-S2-EXTB-043 confirmer la matrice de retries bornés.
+- IPC-S2-EXTB-044 confirmer la matrice de priorisation des risques.
+- IPC-S2-EXTB-045 confirmer la matrice de priorisation des validations.
+- IPC-S2-EXTB-046 confirmer la matrice de preuves exigées.
+- IPC-S2-EXTB-047 confirmer la matrice des propriétaires techniques.
+- IPC-S2-EXTB-048 confirmer la matrice des délais de remédiation.
+- IPC-S2-EXTB-049 confirmer la matrice des critères de succès.
+- IPC-S2-EXTB-050 confirmer la matrice des critères d’échec.
+- IPC-S2-EXTB-051 confirmer la traçabilité risque -> test -> preuve.
+- IPC-S2-EXTB-052 confirmer la traçabilité fichier -> contrôle -> statut.
+- IPC-S2-EXTB-053 confirmer la traçabilité incident -> correction -> validation.
+- IPC-S2-EXTB-054 confirmer la traçabilité backlog -> lot -> clôture.
+- IPC-S2-EXTB-055 confirmer la cohérence doc/code après compléments.
+- IPC-S2-EXTB-056 confirmer la lisibilité opérationnelle du lot secondaire.
+- IPC-S2-EXTB-057 confirmer la maintenabilité des checklists additionnelles.
+- IPC-S2-EXTB-058 confirmer la préparation de la revue finale.
+- IPC-S2-EXTB-059 confirmer la préparation du lot suivant.
+- IPC-S2-EXTB-060 confirmer la clôture opérationnelle de l’addendum B2.
+
+## 10) Addendum complémentaire secondaire B3
+
+- IPC-S2-EXTB-061 cartographier les dépendances secondaires encore sensibles.
+- IPC-S2-EXTB-062 confirmer les points de contrôle inter-modules prioritaires.
+- IPC-S2-EXTB-063 confirmer la liste des invariants non négociables.
+- IPC-S2-EXTB-064 confirmer la matrice des chemins d’erreur critiques.
+- IPC-S2-EXTB-065 confirmer la matrice des chemins fallback critiques.
+- IPC-S2-EXTB-066 confirmer la matrice des chemins rollback critiques.
+- IPC-S2-EXTB-067 confirmer la matrice des chemins reprise critiques.
+- IPC-S2-EXTB-068 confirmer la matrice de contention des ressources.
+- IPC-S2-EXTB-069 confirmer la matrice de saturation des files.
+- IPC-S2-EXTB-070 confirmer la matrice de saturation mémoire.
+- IPC-S2-EXTB-071 confirmer la matrice de saturation CPU.
+- IPC-S2-EXTB-072 confirmer la matrice de timeouts significatifs.
+- IPC-S2-EXTB-073 confirmer la matrice de retries bornés.
+- IPC-S2-EXTB-074 confirmer la matrice de priorisation des risques.
+- IPC-S2-EXTB-075 confirmer la matrice de priorisation des validations.
+- IPC-S2-EXTB-076 confirmer la matrice de preuves exigées.
+- IPC-S2-EXTB-077 confirmer la matrice des propriétaires techniques.
+- IPC-S2-EXTB-078 confirmer la matrice des délais de remédiation.
+- IPC-S2-EXTB-079 confirmer la matrice des critères de succès.
+- IPC-S2-EXTB-080 confirmer la matrice des critères d’échec.
+- IPC-S2-EXTB-081 confirmer la traçabilité risque -> test -> preuve.
+- IPC-S2-EXTB-082 confirmer la traçabilité fichier -> contrôle -> statut.
+- IPC-S2-EXTB-083 confirmer la traçabilité incident -> correction -> validation.
+- IPC-S2-EXTB-084 confirmer la traçabilité backlog -> lot -> clôture.
+- IPC-S2-EXTB-085 confirmer la cohérence doc/code après compléments.
+- IPC-S2-EXTB-086 confirmer la lisibilité opérationnelle du lot secondaire.
+- IPC-S2-EXTB-087 confirmer la maintenabilité des checklists additionnelles.
+- IPC-S2-EXTB-088 confirmer la préparation de la revue finale.
+- IPC-S2-EXTB-089 confirmer la préparation du lot suivant.
+- IPC-S2-EXTB-090 confirmer la clôture opérationnelle de l’addendum B3.
+
+## 11) Addendum complémentaire secondaire B4
+
+- IPC-S2-EXTB-091 cartographier les dépendances secondaires encore sensibles.
+- IPC-S2-EXTB-092 confirmer les points de contrôle inter-modules prioritaires.
+- IPC-S2-EXTB-093 confirmer la liste des invariants non négociables.
+- IPC-S2-EXTB-094 confirmer la matrice des chemins d’erreur critiques.
+- IPC-S2-EXTB-095 confirmer la matrice des chemins fallback critiques.
+- IPC-S2-EXTB-096 confirmer la matrice des chemins rollback critiques.
+- IPC-S2-EXTB-097 confirmer la matrice des chemins reprise critiques.
+- IPC-S2-EXTB-098 confirmer la matrice de contention des ressources.
+- IPC-S2-EXTB-099 confirmer la matrice de saturation des files.
+- IPC-S2-EXTB-100 confirmer la matrice de saturation mémoire.
+- IPC-S2-EXTB-101 confirmer la matrice de saturation CPU.
+- IPC-S2-EXTB-102 confirmer la matrice de timeouts significatifs.
+- IPC-S2-EXTB-103 confirmer la matrice de retries bornés.
+- IPC-S2-EXTB-104 confirmer la matrice de priorisation des risques.
+- IPC-S2-EXTB-105 confirmer la matrice de priorisation des validations.
+- IPC-S2-EXTB-106 confirmer la matrice de preuves exigées.
+- IPC-S2-EXTB-107 confirmer la matrice des propriétaires techniques.
+- IPC-S2-EXTB-108 confirmer la matrice des délais de remédiation.
+- IPC-S2-EXTB-109 confirmer la matrice des critères de succès.
+- IPC-S2-EXTB-110 confirmer la matrice des critères d’échec.
+- IPC-S2-EXTB-111 confirmer la traçabilité risque -> test -> preuve.
+- IPC-S2-EXTB-112 confirmer la traçabilité fichier -> contrôle -> statut.
+- IPC-S2-EXTB-113 confirmer la traçabilité incident -> correction -> validation.
+- IPC-S2-EXTB-114 confirmer la traçabilité backlog -> lot -> clôture.
+- IPC-S2-EXTB-115 confirmer la cohérence doc/code après compléments.
+- IPC-S2-EXTB-116 confirmer la lisibilité opérationnelle du lot secondaire.
+- IPC-S2-EXTB-117 confirmer la maintenabilité des checklists additionnelles.
+- IPC-S2-EXTB-118 confirmer la préparation de la revue finale.
+- IPC-S2-EXTB-119 confirmer la préparation du lot suivant.
+- IPC-S2-EXTB-120 confirmer la clôture opérationnelle de l’addendum B4.

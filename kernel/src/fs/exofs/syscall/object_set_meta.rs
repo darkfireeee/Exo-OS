@@ -8,7 +8,9 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    exofs_err_to_errno, EFAULT, EINVAL,
+    exofs_err_to_errno,
+    copy_struct_from_user,
+    verify_cap, CapabilityType, EFAULT, EINVAL,
     EXOFS_META_MAX,
 };
 use super::object_fd::OBJECT_TABLE;
@@ -38,6 +40,19 @@ pub mod meta_flags {
     pub const CLEAR_ALL: u32 = 0x0010;
     pub const VALID_MASK:u32 = SET | GET | DELETE | LIST | CLEAR_ALL;
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SetMetaArgs {
+    pub fd:      u64,
+    pub key_ptr: u64,
+    pub key_len: u64,
+    pub val_ptr: u64,
+    pub val_len: u64,
+    pub flags:   u64,
+}
+
+const _: () = assert!(core::mem::size_of::<SetMetaArgs>() == 48);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Struct d'une entrée de métadonnées (format en-mémoire)
@@ -263,15 +278,19 @@ pub fn meta_clear(blob_id: BlobId) -> ExofsResult<()> {
 // Handler SYS_EXOFS_OBJECT_SET_META (507)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `exofs_object_set_meta(fd, key_ptr, key_len, val_ptr, val_len, flags) → 0 ou errno`
+/// `exofs_object_set_meta(args_ptr, cap_token) → 0 ou errno`
 pub fn sys_exofs_object_set_meta(
-    fd:      u64,
-    key_ptr: u64,
-    key_len: u64,
-    val_ptr: u64,
-    val_len: u64,
-    flags:   u64,
+    args_ptr:  u64,
+    cap_token: u64,
 ) -> i64 {
+    if args_ptr == 0 { return EFAULT; }
+    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
+    let args = match unsafe { copy_struct_from_user::<SetMetaArgs>(args_ptr) } {
+        Ok(a)  => a,
+        Err(_) => return EFAULT,
+    };
+
+    let SetMetaArgs { fd, key_ptr, key_len, val_ptr, val_len, flags } = args;
     let f = flags as u32;
     if f & !meta_flags::VALID_MASK != 0 { return EINVAL; }
 
@@ -281,6 +300,9 @@ pub fn sys_exofs_object_set_meta(
     };
 
     if f & meta_flags::CLEAR_ALL != 0 {
+        if let Err(e) = verify_cap(cap_token, CapabilityType::ExoFsObjectSetMeta) {
+            return e;
+        }
         return match meta_clear(blob_id) {
             Ok(_)  => 0,
             Err(e) => exofs_err_to_errno(e),
@@ -310,6 +332,9 @@ pub fn sys_exofs_object_set_meta(
                 let mut i = 0usize;
                 while i < vl { vbuf.push(*src.add(i)); i = i.wrapping_add(1); }
             }
+        }
+        if let Err(e) = verify_cap(cap_token, CapabilityType::ExoFsObjectSetMeta) {
+            return e;
         }
         return match meta_set(blob_id, &kbuf, &vbuf) {
             Ok(_)  => 0,
@@ -430,12 +455,28 @@ mod tests {
 
     #[test]
     fn test_sys_null_fd_invalid() {
-        let r = sys_exofs_object_set_meta(9999, 0, 0, 0, 0, meta_flags::SET as u64);
+        let args = SetMetaArgs {
+            fd: 9999,
+            key_ptr: 0,
+            key_len: 0,
+            val_ptr: 0,
+            val_len: 0,
+            flags: meta_flags::SET as u64,
+        };
+        let r = sys_exofs_object_set_meta(&args as *const SetMetaArgs as u64, 0);
         assert!(r < 0);
     }
 
     #[test]
     fn test_sys_bad_flags() {
-        assert_eq!(sys_exofs_object_set_meta(0, 0, 0, 0, 0, 0xDEAD), EINVAL);
+        let args = SetMetaArgs {
+            fd: 0,
+            key_ptr: 0,
+            key_len: 0,
+            val_ptr: 0,
+            val_len: 0,
+            flags: 0xDEAD,
+        };
+        assert_eq!(sys_exofs_object_set_meta(&args as *const SetMetaArgs as u64, 0), EINVAL);
     }
 }

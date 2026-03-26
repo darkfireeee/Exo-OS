@@ -398,7 +398,7 @@ mod tests {
     }
 
     fn entry(b: u8, size: u32) -> InlineObjectEntry {
-        let mut e = InlineObjectEntry::new(oid(b), size, 0);
+        let mut e = InlineObjectEntry::new(oid(b), size, EpochId(0));
         e.ref_count = 0; // Orphelin dès le départ pour les tests.
         e
     }
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn test_register_and_count() {
         let gc = InlineGc::new();
-        let mut e = InlineObjectEntry::new(oid(1), 64, 0);
+        let e = InlineObjectEntry::new(oid(1), 64, EpochId(0));
         gc.register(e).unwrap();
         assert_eq!(gc.count(), 1);
     }
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn test_collect_skips_reachable() {
         let gc = InlineGc::new();
-        let mut e = InlineObjectEntry::new(oid(2), 64, 0);
+        let mut e = InlineObjectEntry::new(oid(2), 64, EpochId(0));
         e.ref_count = 0;
         gc.register(e).unwrap();
 
@@ -441,7 +441,7 @@ mod tests {
             object_id:   oid(2),
             disk_offset: DiskOffset::zero(),
             slot:        EpochSlot::A,
-            epoch_id:    1,
+            epoch_id:    EpochId(1),
             is_deleted:  false,
         });
 
@@ -454,7 +454,7 @@ mod tests {
     #[test]
     fn test_inc_dec_ref() {
         let gc = InlineGc::new();
-        gc.register(InlineObjectEntry::new(oid(3), 32, 0)).unwrap();
+        gc.register(InlineObjectEntry::new(oid(3), 32, EpochId(0))).unwrap();
         assert_eq!(gc.ref_count_of(&oid(3)), Some(1));
 
         gc.inc_ref(&oid(3)).unwrap();
@@ -467,7 +467,7 @@ mod tests {
     #[test]
     fn test_data_size_threshold() {
         // size = 512 est OK.
-        let e = InlineObjectEntry::new(oid(5), 512, 0);
+        let e = InlineObjectEntry::new(oid(5), 512, EpochId(0));
         assert_eq!(e.data_size, 512);
     }
 }

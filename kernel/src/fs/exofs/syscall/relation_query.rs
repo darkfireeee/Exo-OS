@@ -9,6 +9,7 @@ use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     exofs_err_to_errno, write_user_buf, EFAULT,
+    verify_cap, CapabilityType,
 };
 use super::relation_create::{
     Relation, RELATION_MAX, RELATION_MAGIC, encode_relations,
@@ -198,7 +199,7 @@ pub fn sys_exofs_relation_query(
     out_count_ptr: u64,
     _a4:           u64,
     _a5:           u64,
-    _a6:           u64,
+    cap_rights:    u64,
 ) -> i64 {
     if args_ptr == 0 { return EFAULT; }
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
@@ -206,6 +207,10 @@ pub fn sys_exofs_relation_query(
         Ok(a)  => a,
         Err(_) => return EFAULT,
     };
+
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsRelationQuery) {
+        return e;
+    }
 
     let rels = match query_relations(&args) {
         Ok(v)  => v,
@@ -270,7 +275,7 @@ pub fn relations_of_kind(source: &[u8; 32], kind: u8) -> ExofsResult<Vec<Relatio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::relation_create::create_relation;
+    use super::super::relation_create::{create_relation, rel_kind};
 
     fn id(s: &[u8]) -> [u8; 32] { *BlobId::from_bytes_blake3(s).as_bytes() }
 

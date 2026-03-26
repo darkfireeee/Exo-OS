@@ -279,7 +279,7 @@ mod tests {
 
     fn blob(b: u8) -> BlobId { BlobId([b; 32]) }
 
-    fn setup_rel(
+    #[allow(dead_code)] fn setup_rel(
         store: &RelationStorage,
         idx:   &RelationIndex,
         graph: &RelationGraph,
@@ -320,9 +320,9 @@ mod tests {
     }
 
     #[test] fn test_builder_executes() {
-        let store = RelationStorage::new_const();
-        let idx   = RelationIndex::new_const();
-        let graph = RelationGraph::new_const();
+        let _store = RelationStorage::new_const();
+        let _idx   = RelationIndex::new_const();
+        let _graph = RelationGraph::new_const();
         // Pas de données : résultat vide.
         let qr = QueryBuilder::new(blob(50))
             .kind(RelationKind::Parent)
@@ -359,13 +359,13 @@ mod tests {
     }
 
     #[test] fn test_reachable_from_empty_graph() {
-        let qr = RelationQuery::reachable_from(&blob(200), 4).unwrap();
-        assert_eq!(qr.n_total, 0);
+        let ids = RelationQuery::reachable_from(&blob(200), 4).unwrap();
+        assert_eq!(ids.len(), 0);
     }
 
     #[test] fn test_ancestors_of_empty_graph() {
-        let qr = RelationQuery::ancestors_of(&blob(201), 4).unwrap();
-        assert_eq!(qr.n_total, 0);
+        let ids = RelationQuery::ancestors_of(&blob(201), 4).unwrap();
+        assert_eq!(ids.len(), 0);
     }
 
     #[test] fn test_all_of_kind_empty() {
@@ -382,7 +382,7 @@ mod tests {
 
     #[test] fn test_builder_max_depth() {
         let qr = QueryBuilder::new(blob(251))
-            .max_depth(2)
+            .limit(2)
             .execute().unwrap();
         let _ = qr;
     }

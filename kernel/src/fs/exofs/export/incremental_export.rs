@@ -503,7 +503,7 @@ impl IncrementalBlobSource for MockBlobSource {
 mod tests {
     use super::*;
     use super::super::exoar_writer::SinkVec;
-    use super::super::exoar_reader::{ExoarReader, ExoarReaderConfig, SliceSource, CollectingReceiver};
+    use super::super::exoar_reader::{ExoarReader, SliceSource, CollectingReceiver};
 
     fn make_id(tag: u8) -> [u8; 32] {
         let mut id = [0u8; 32];

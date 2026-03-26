@@ -423,10 +423,10 @@ mod tests {
         sweeper.set_config(SweepConfig {
             batch_size:    16,
             max_per_pass:  100,
-            current_epoch: 5,
+            current_epoch: EpochId(5),
         });
         let cfg = sweeper.get_config();
         assert_eq!(cfg.batch_size, 16);
-        assert_eq!(cfg.current_epoch, 5);
+        assert_eq!(cfg.current_epoch, EpochId(5));
     }
 }

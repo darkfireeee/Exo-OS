@@ -7,13 +7,13 @@
 // RÈGLES D'ARCHITECTURE (docs/refonte/DOC1 + DOC3 + DOC4) :
 //   • signal_pending = AtomicBool ÉCRIT par process/signal/, LU par scheduler (hot path)
 //   • signal_mask    = AtomicU64  — bitmask 64 signaux standard (POSIX)
-//   • TCB = 128 bytes EXACT (2 cache lines) — vérifié statiquement
+//   • TCB = 256 bytes EXACT (4 cache lines) — vérifié statiquement
 //   • ThreadAiState inline (8 bytes) — zéro allocation heap (Règle IA-KERNEL-01)
 //   • NO_ALLOC — aucun Vec/Box/Arc dans ce fichier (Zone NO-ALLOC)
 //   • dma_completion_result : AtomicU8 (requis par process/state/wakeup.rs)
 //   • UNSAFE : tout bloc unsafe documenté par // SAFETY:
 //
-// LAYOUT CACHE (128 bytes = 2 × 64 bytes) — optimisé pour pick_next_task() :
+// LAYOUT CACHE (256 bytes = 4 × 64 bytes) — optimisé pour pick_next_task() :
 //   CL1 [0..64]   : champs lus par le scheduler à chaque tick
 //   CL2 [64..128] : champs utilisés lors du context switch (cold)
 //
@@ -153,12 +153,47 @@ impl Default for DeadlineParams {
     }
 }
 
+/// Contexte CPU inline dans le TCB.
+///
+/// Réserve explicitement l'espace pour les registres principaux sauvegardés
+/// lors des transitions scheduler/interruptions, sans allocation dynamique.
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+pub struct CpuContext {
+    /// Registres généraux (snapshot compact).
+    pub gpr:     [u64; 8],
+    /// Instruction pointer.
+    pub rip:     u64,
+    /// Stack userspace.
+    pub rsp_usr: u64,
+    /// RFLAGS.
+    pub rflags:  u64,
+    /// CS/SS compactés.
+    pub cs_ss:   u64,
+    /// CR2 (dernière adresse de page fault).
+    pub cr2:     u64,
+}
+
+impl Default for CpuContext {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            gpr: [0u64; 8],
+            rip: 0,
+            rsp_usr: 0,
+            rflags: 0,
+            cs_ss: 0,
+            cr2: 0,
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ThreadControlBlock — structure centrale du scheduler
-// INVARIANT : size_of::<ThreadControlBlock>() <= 128 bytes
+// INVARIANT : size_of::<ThreadControlBlock>() == 256 bytes
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Thread Control Block — 128 bytes exactement (2 cache lines), aligné 64 bytes.
+/// Thread Control Block — 256 bytes exactement (4 cache lines), aligné 64 bytes.
 ///
 /// Layout:
 ///  Cache line 1 [0..64]   — HOT PATH pick_next_task() (100-150 cycles cible)
@@ -222,12 +257,27 @@ pub struct ThreadControlBlock {
     _pad2:                     [u8; 8],
     /// Paramètres EDF (runtime/deadline/period, ns).      [+104] 24B → CL2=64
     pub deadline_params:       DeadlineParams,
+
+    // ═══════════════════════════════════════════════════════
+    // Cache lines 3-4 — contexte étendu (bytes 128..256)
+    // ═══════════════════════════════════════════════════════
+
+    /// FS base userspace (TLS).
+    pub fs_base:               u64,
+    /// GS base userspace.
+    pub gs_base:               u64,
+    /// PKRS sauvegardé/restauré au context switch (si support matériel).
+    pub pkrs:                  u32,
+    /// Padding d'alignement vers 8 bytes.
+    _pad_pkrs:                 u32,
+    /// Contexte CPU inline (évite les pointeurs/allocs annexes).
+    pub cpu_ctx:               CpuContext,
 }
 
 // Vérifications statiques du layout TCB.
 const _: () = assert!(
-    size_of::<ThreadControlBlock>() == 128,
-    "TCB doit faire exactement 128 bytes (2 cache lines)"
+    size_of::<ThreadControlBlock>() == 256,
+    "TCB doit faire exactement 256 bytes (4 cache lines)"
 );
 const _: () = assert!(
     core::mem::align_of::<ThreadControlBlock>() == 64,
@@ -295,6 +345,11 @@ impl ThreadControlBlock {
             signal_mask:           AtomicU64::new(0),
             _pad2:                 [0u8; 8],
             deadline_params:       DeadlineParams::default(),
+            fs_base:               0,
+            gs_base:               0,
+            pkrs:                  0,
+            _pad_pkrs:             0,
+            cpu_ctx:               CpuContext::default(),
         }
     }
 

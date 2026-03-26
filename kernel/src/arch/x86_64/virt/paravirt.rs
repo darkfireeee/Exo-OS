@@ -20,9 +20,9 @@ pub fn paravirt_eoi() {
         // PV EOI : écrire 0 dans la page partagée KVM
         // (intégration complète lors de l'init KVM steal-time page)
         // Pour l'instant : fallback EOI LAPIC
-        super::super::apic::local_apic::eoi();
+        super::super::apic::eoi();
     } else {
-        super::super::apic::local_apic::eoi();
+        super::super::apic::eoi();
     }
 }
 

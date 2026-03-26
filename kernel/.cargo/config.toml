@@ -1,0 +1,12 @@
+# kernel/.cargo/config.toml
+# ------------------------------------------------------------------
+# Surcharge locale au crate kernel uniquement.
+# Objectif: éviter l'erreur E0152 "duplicate lang item in crate core"
+# lors des `cargo test` no_std + build-std.
+#
+# Cause: sans panic-abort-tests, cargo test peut mixer des artefacts
+# avec stratégie de panic différente (abort/unwind), ce qui amène deux
+# versions de `core` dans le même graphe de compilation.
+
+[unstable]
+panic-abort-tests = true

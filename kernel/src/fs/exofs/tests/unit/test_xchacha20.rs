@@ -1,7 +1,7 @@
 //! Tests unitaires — XChaCha20-BLAKE3 AEAD (spec crypto/).
 #[cfg(test)]
 mod tests {
-    use crate::fs::exofs::crypto::xchacha20::{XChaCha20Key, XChaCha20Poly1305, Nonce, Tag};
+    use crate::fs::exofs::crypto::xchacha20::{XChaCha20Key, XChaCha20Poly1305, Nonce};
 
     #[test]
     fn test_encrypt_decrypt_roundtrip() {

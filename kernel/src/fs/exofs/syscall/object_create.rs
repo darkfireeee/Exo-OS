@@ -7,7 +7,8 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    read_user_path_heap, write_user_buf, exofs_err_to_errno, EFAULT,
+    read_user_path_heap, write_user_buf, exofs_err_to_errno,
+    verify_cap, CapabilityType, EFAULT,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -169,7 +170,7 @@ pub fn sys_exofs_object_create(
     flags:    u64,
     out_ptr:  u64,
     args_ptr: u64,
-    _a6:      u64,
+    cap_rights: u64,
 ) -> i64 {
     if path_ptr == 0 { return EFAULT; }
 
@@ -190,6 +191,10 @@ pub fn sys_exofs_object_create(
         a.flags = flags as u32;
         a
     };
+
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectCreate) {
+        return e;
+    }
 
     let result = match create_object(&path_buf, actual_len, &create_args) {
         Ok(r)  => r,

@@ -300,7 +300,7 @@ pub fn record_perm_denied(actor_uid: u64, object_id: u64, op: AuditOp) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::audit_log::AuditLog;
+    // use super::super::audit_log::AuditLog;
 
     fn writer() -> AuditWriter {
         AuditWriter::new(WriterContext::new(42, 0xFF), WritePolicy::Immediate)

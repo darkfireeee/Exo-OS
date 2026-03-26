@@ -20,7 +20,6 @@
 
 #![no_std]
 #![no_main]
-#![feature(abi_x86_interrupt)]
 
 use exo_os_kernel as kernel;
 

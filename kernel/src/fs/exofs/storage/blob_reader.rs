@@ -17,12 +17,13 @@ use crate::fs::exofs::core::{
     ExofsError, ExofsResult, BlobId, DiskOffset,
 };
 use crate::fs::exofs::core::blob_id::verify_blob_id;
+use crate::fs::exofs::crypto::secret_reader::SecretReader;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 use crate::fs::exofs::storage::layout::BLOCK_SIZE;
 use crate::fs::exofs::storage::compression_choice::CompressionType;
 use crate::fs::exofs::storage::compression_reader::DecompressReader;
 use crate::fs::exofs::storage::blob_writer::{
-    BlobHeaderDisk, BLOB_HEADER_MAGIC, BLOB_HEADER_SIZE,
+    BlobHeaderDisk, BlobWriter, BLOB_HEADER_MAGIC, BLOB_HEADER_SIZE,
     verify_blob_header, blob_total_disk_size,
 };
 
@@ -32,6 +33,9 @@ use crate::fs::exofs::storage::blob_writer::{
 
 /// Taille maximale autorisée pour un payload décompressé (512 MiB)
 const MAX_DECOMPRESSED_SIZE: usize = 512 * 1024 * 1024;
+
+/// Flag header : payload chiffré.
+const BLOB_FLAG_ENCRYPTED: u8 = 0b0000_0100;
 
 /// Taille minimale d'un blob valide sur disque
 #[allow(dead_code)]
@@ -250,8 +254,18 @@ impl BlobReader {
             .checked_add(stored_size as usize)
             .ok_or(ExofsError::Overflow)? as u64;
 
-        // ── 4. Décompression ──────────────────────────────────────
-        let data = Self::decompress_payload(&payload[..stored_size as usize], algo, original_size)?;
+        // ── 4. Déchiffrement (si activé) puis décompression ───────
+        let mut clear_payload: Vec<u8> = Vec::new();
+        let payload_slice = &payload[..stored_size as usize];
+        if (hdr.flags & BLOB_FLAG_ENCRYPTED) != 0 {
+            let key = BlobWriter::payload_key_for(&blob_id)?;
+            clear_payload = SecretReader::new(&key).decrypt(payload_slice)?;
+        } else {
+            clear_payload.try_reserve(payload_slice.len()).map_err(|_| ExofsError::NoMemory)?;
+            clear_payload.extend_from_slice(payload_slice);
+        }
+
+        let data = Self::decompress_payload(&clear_payload, algo, original_size)?;
 
         // ── 5. Vérification BlobId (HASH-02) ──────────────────────
         let id_verified = if mode == BlobVerifyMode::Full {

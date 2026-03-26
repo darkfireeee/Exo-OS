@@ -395,7 +395,7 @@ impl SnapshotStreamer {
 mod tests {
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
-    use crate::fs::exofs::core::blob_id::compute_blob_id;
+    // use crate::fs::exofs::core::blob_id::compute_blob_id;
     use super::super::snapshot::{Snapshot, make_snapshot_name};
     use super::super::snapshot_list::SnapshotList;
 

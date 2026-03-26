@@ -7,15 +7,22 @@
 //! - Vecteurs 48+  : interruptions logicielles et IPIs
 //!
 //! ## IST Assignments (voir tss.rs)
-//! - #DF (vecteur 8)  → IST1 (Double Fault)
-//! - #NMI(vecteur 2)  → IST2
-//! - #MC (vecteur 18) → IST3 (Machine Check)
-//! - #DB (vecteur 1)  → IST4 (Debug)
+//! - #DF (vecteur 8)  → IST4 (Double Fault)
+//! - #NMI(vecteur 2)  → IST3 (NMI fallback)
+//! - #PF (vecteur 14) → IST2 (#PF dédié)
+//! - 0xF1/0xF2/0xF3   → IST1 (ExoPhoenix critiques)
 
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use super::tss::{IST_DOUBLE_FAULT, IST_NMI, IST_MACHINE_CHECK, IST_DEBUG};
+use super::tss::{
+    IST_DOUBLE_FAULT,
+    IST_NMI,
+    IST_MACHINE_CHECK,
+    IST_DEBUG,
+    IST_EXOPHOENIX_IPI,
+    IST_PAGE_FAULT,
+};
 use super::gdt::GDT_KERNEL_CS;
 
 // ── Vecteurs d'exception ──────────────────────────────────────────────────────
@@ -54,14 +61,29 @@ pub const VEC_IRQ_TIMER:        u8  = 0x20;
 /// Vecteur IPI wakeup (scheduler)
 pub const VEC_IPI_WAKEUP:       u8  = 0xF0;
 
-/// Vecteur IPI reschedule
-pub const VEC_IPI_RESCHEDULE:   u8  = 0xF1;
+/// Vecteur ExoPhoenix Freeze (réservé)
+pub const VEC_EXOPHOENIX_FREEZE: u8 = 0xF1;
 
-/// Vecteur IPI TLB shootdown
-pub const VEC_IPI_TLB_SHOOTDOWN: u8 = 0xF2;
+/// Vecteur ExoPhoenix PMC snapshot (réservé)
+pub const VEC_EXOPHOENIX_PMC: u8 = 0xF2;
 
-/// Vecteur IPI hotplug CPU online/offline
-pub const VEC_IPI_CPU_HOTPLUG:  u8  = 0xF3;
+/// Vecteur ExoPhoenix TLB flush (réservé)
+pub const VEC_EXOPHOENIX_TLB: u8 = 0xF3;
+
+/// Retourne `true` si `vector` appartient aux vecteurs réservés ExoPhoenix.
+#[inline(always)]
+pub const fn is_exophoenix_reserved_vector(vector: u8) -> bool {
+    vector == VEC_EXOPHOENIX_FREEZE
+        || vector == VEC_EXOPHOENIX_PMC
+        || vector == VEC_EXOPHOENIX_TLB
+}
+
+/// Alias de compatibilité scheduler (utilisation historique)
+pub const VEC_IPI_RESCHEDULE:   u8  = VEC_EXOPHOENIX_FREEZE;
+/// Alias de compatibilité memory shootdown (utilisation historique)
+pub const VEC_IPI_TLB_SHOOTDOWN: u8 = VEC_EXOPHOENIX_PMC;
+/// Alias de compatibilité hotplug (utilisation historique)
+pub const VEC_IPI_CPU_HOTPLUG:  u8  = VEC_EXOPHOENIX_TLB;
 
 /// Vecteur IPI panic broadcast
 pub const VEC_IPI_PANIC:        u8  = 0xFE;
@@ -168,6 +190,13 @@ impl InterruptDescriptorTable {
     fn set_handler(&mut self, vector: u8, handler: u64, ist: u8, flags: IdtEntryFlags) {
         self.entries[vector as usize] = IdtEntry::new(handler, GDT_KERNEL_CS, ist, flags);
     }
+
+    /// Met à jour l'index IST d'une entrée existante.
+    ///
+    /// `ist` est l'index matériel 1..=7 (0 = pas d'IST).
+    fn set_stack_index(&mut self, vector: u8, ist: u8) {
+        self.entries[vector as usize].ist = ist & 0x7;
+    }
 }
 
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
@@ -235,7 +264,7 @@ pub fn init_idt() {
     idt.set_handler(EXC_SEGMENT_NOT_PRES, exc_segment_not_present_handler as *const () as u64, 0, IdtEntryFlags::TRAP_GATE);
     idt.set_handler(EXC_STACK_FAULT,      exc_stack_fault_handler as *const () as u64,      0, IdtEntryFlags::TRAP_GATE);
     idt.set_handler(EXC_GENERAL_PROT,     exc_general_protection_handler as *const () as u64, 0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_PAGE_FAULT,       exc_page_fault_handler as *const () as u64,       0, IdtEntryFlags::TRAP_GATE);
+    idt.set_handler(EXC_PAGE_FAULT,       exc_page_fault_handler as *const () as u64,       IST_PAGE_FAULT as u8 + 1, IdtEntryFlags::TRAP_GATE);
     idt.set_handler(EXC_X87_FP,           exc_x87_fp_handler as *const () as u64,           0, IdtEntryFlags::TRAP_GATE);
     idt.set_handler(EXC_ALIGNMENT_CHECK,  exc_alignment_check_handler as *const () as u64,  0, IdtEntryFlags::TRAP_GATE);
     idt.set_handler(EXC_MACHINE_CHECK,    exc_machine_check_handler as *const () as u64,    IST_MACHINE_CHECK as u8 + 1, IdtEntryFlags::TRAP_GATE);
@@ -247,10 +276,13 @@ pub fn init_idt() {
     idt.set_handler(IRQ_BASE,     irq_timer_handler as *const () as u64,    0, IdtEntryFlags::INTERRUPT_GATE);
 
     // ── IPIs ──────────────────────────────────────────────────────────────────
-    idt.set_handler(VEC_IPI_WAKEUP,        ipi_wakeup_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(VEC_IPI_RESCHEDULE,    ipi_reschedule_handler as *const () as u64,    0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(VEC_IPI_TLB_SHOOTDOWN, ipi_tlb_shootdown_handler as *const () as u64, 0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(VEC_IPI_CPU_HOTPLUG,   ipi_cpu_hotplug_handler as *const () as u64,   0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(VEC_IPI_WAKEUP,           ipi_wakeup_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(VEC_EXOPHOENIX_FREEZE,    ipi_reschedule_handler as *const () as u64,    0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(VEC_EXOPHOENIX_PMC,       ipi_tlb_shootdown_handler as *const () as u64, 0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(VEC_EXOPHOENIX_TLB,       ipi_cpu_hotplug_handler as *const () as u64,   0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_stack_index(VEC_EXOPHOENIX_FREEZE, IST_EXOPHOENIX_IPI as u8 + 1);
+    idt.set_stack_index(VEC_EXOPHOENIX_PMC,    IST_EXOPHOENIX_IPI as u8 + 1);
+    idt.set_stack_index(VEC_EXOPHOENIX_TLB,    IST_EXOPHOENIX_IPI as u8 + 1);
     idt.set_handler(VEC_IPI_PANIC,         ipi_panic_handler as *const () as u64,         0, IdtEntryFlags::INTERRUPT_GATE);
     idt.set_handler(VEC_SPURIOUS,          irq_spurious_handler as *const () as u64,      0, IdtEntryFlags::INTERRUPT_GATE);
 

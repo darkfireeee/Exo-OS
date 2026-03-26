@@ -24,6 +24,10 @@ pub fn sys_fork(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i
     // Délègue → process::lifecycle::fork::do_fork()
     // do_fork() : clone PCB, CoW page tables, caps, TLB shootdown, TCB child.
     // NOTE: exo-rt setup_child_stack + TCB + atfork handlers sont Ring3.
+    // NOTE IMPORTANTE (2026-03): le chemin syscall actif pour fork passe par
+    // `syscall::dispatch::handle_fork_inplace()` (cas spécial SYS_FORK), car
+    // il nécessite l'accès direct à `frame.rcx`/`frame.rsp`. Ce wrapper legacy
+    // est conservé pour compatibilité de table, mais n'est pas le chemin primaire.
     ENOSYS
 }
 
@@ -61,6 +65,10 @@ pub fn sys_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64, _a4: u64, _a5: u6
     //   8. setup_initial_stack + push_auxv
     //   9. set_fs_base(tls_initial_addr) ← BUG-04 fix, PROC-10
     //  10. jump_to_entry (jamais de retour)
+    // NOTE IMPORTANTE (2026-03): le chemin syscall actif pour execve passe par
+    // `syscall::dispatch::handle_execve_inplace()` (cas spécial SYS_EXECVE),
+    // afin de mettre à jour directement la SyscallFrame (RIP/RSP userspace).
+    // Ce wrapper legacy reste volontairement en fallback non-câblé.
     let _ = (path, argv_ptr, envp_ptr);
     ENOSYS
 }

@@ -71,6 +71,7 @@ pub struct CpuFeatureFlags {
 // ── Bits d'intérêt dans Leaf 1 ECX ───────────────────────────────────────────
 const LEAF1_ECX_SSE3:    u32 = 1 << 0;
 const LEAF1_ECX_PCLMUL:  u32 = 1 << 1;
+const LEAF1_ECX_VMX:     u32 = 1 << 5;
 const LEAF1_ECX_SSSE3:   u32 = 1 << 9;
 #[allow(dead_code)]
 const LEAF1_ECX_FMA:     u32 = 1 << 12;
@@ -177,6 +178,7 @@ const LEAF7_ECX_OSPKE:     u32 = 1 << 4;
 #[allow(dead_code)]
 const LEAF7_ECX_CET_SS:    u32 = 1 << 7;
 const LEAF7_ECX_LA57:      u32 = 1 << 16; // 5-level paging
+const LEAF7_ECX_PKS:       u32 = 1 << 31; // Protection Keys for Supervisor
 
 // ── Bits d'intérêt dans Leaf 7 EDX ───────────────────────────────────────────
 const LEAF7_EDX_ARCH_CAP:  u32 = 1 << 29;
@@ -341,12 +343,14 @@ impl CpuFeatures {
     #[inline(always)] pub fn has_fpu(&self)        -> bool { self.flags.leaf1_edx & LEAF1_EDX_FPU     != 0 }
     #[inline(always)] pub fn has_aes(&self)        -> bool { self.flags.leaf1_ecx & LEAF1_ECX_AES     != 0 }
     #[inline(always)] pub fn has_pclmul(&self)     -> bool { self.flags.leaf1_ecx & LEAF1_ECX_PCLMUL  != 0 }
+    #[inline(always)] pub fn has_vmx(&self)        -> bool { self.flags.leaf1_ecx & LEAF1_ECX_VMX     != 0 }
     #[inline(always)] pub fn has_rdrand(&self)     -> bool { self.flags.leaf1_ecx & LEAF1_ECX_RDRAND  != 0 }
     #[inline(always)] pub fn has_rdseed(&self)     -> bool { self.flags.leaf7_ebx & LEAF7_EBX_RDSEED  != 0 }
     #[inline(always)] pub fn has_smep(&self)       -> bool { self.flags.leaf7_ebx & LEAF7_EBX_SMEP    != 0 }
     #[inline(always)] pub fn has_smap(&self)       -> bool { self.flags.leaf7_ebx & LEAF7_EBX_SMAP    != 0 }
     #[inline(always)] pub fn has_umip(&self)       -> bool { self.flags.leaf7_ecx & LEAF7_ECX_UMIP    != 0 }
     #[inline(always)] pub fn has_pku(&self)        -> bool { self.flags.leaf7_ecx & LEAF7_ECX_PKU     != 0 }
+    #[inline(always)] pub fn has_pks(&self)        -> bool { self.flags.leaf7_ecx & LEAF7_ECX_PKS     != 0 }
     #[inline(always)] pub fn has_fsgsbase(&self)   -> bool { self.flags.leaf7_ebx & LEAF7_EBX_FSGSBASE!= 0 }
     #[inline(always)] pub fn has_invpcid(&self)    -> bool { self.flags.leaf7_ebx & LEAF7_EBX_INVPCID != 0 }
     #[inline(always)] pub fn has_nx(&self)         -> bool { self.flags.extleaf1_edx & EXT1_EDX_NX    != 0 }

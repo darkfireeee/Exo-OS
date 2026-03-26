@@ -10,6 +10,7 @@ use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     exofs_err_to_errno, write_user_buf, EFAULT,
+    verify_cap, CapabilityType,
 };
 use super::object_fd::{OBJECT_TABLE, open_flags};
 use super::snapshot_create::{check_snapshot_magic, snapshot_epoch_from_blob, snapshot_source_size_from_blob};
@@ -92,10 +93,10 @@ fn mount_snapshot(snap_blob_id: BlobId, args: &SnapshotMountArgs) -> ExofsResult
         .ok_or(ExofsError::BlobNotFound)?;
     if !check_snapshot_magic(&snap_data) { return Err(ExofsError::InvalidMagic); }
 
-    let epoch = snapshot_epoch_from_blob(&snap_data).unwrap_or(0);
+    let epoch = snapshot_epoch_from_blob(&snap_data)?;
     if args.epoch_id != 0 && epoch != args.epoch_id { return Err(ExofsError::NoValidEpoch); }
 
-    let size_src = snapshot_source_size_from_blob(&snap_data).unwrap_or(0);
+    let size_src = snapshot_source_size_from_blob(&snap_data)?;
 
     // Déterminer le BlobId cible pour le fd.
     let target_blob_id = if args.flags & mount_flags::COPY_ON_USE != 0 {
@@ -145,7 +146,7 @@ pub fn sys_exofs_snapshot_mount(
     args_ptr:    u64,
     _a4:         u64,
     _a5:         u64,
-    _a6:         u64,
+    cap_rights:  u64,
 ) -> i64 {
     if snap_id_ptr == 0 { return EFAULT; }
 
@@ -168,6 +169,10 @@ pub fn sys_exofs_snapshot_mount(
     } else {
         SnapshotMountArgs { flags: mount_flags::READ_ONLY, _pad: 0, epoch_id: 0 }
     };
+
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsSnapshotMount) {
+        return e;
+    }
 
     let result = match mount_snapshot(snap_blob_id, &args) {
         Ok(r)  => r,

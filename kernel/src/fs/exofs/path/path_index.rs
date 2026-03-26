@@ -21,8 +21,10 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use core::mem::size_of;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
+use crate::fs::exofs::crypto::ENTROPY_POOL;
 use super::path_component::{PathComponent, validate_component, siphash_keyed, NAME_MAX};
 use super::path_index_tree::PathIndexTree;
 
@@ -36,6 +38,69 @@ pub const PATH_INDEX_VERSION: u16 = 1;
 pub const PATH_INDEX_SPLIT_THRESHOLD: u32 = 192;
 /// Seuil de merge : si entry_count est inférieur, merge envisageable.
 pub const PATH_INDEX_MERGE_THRESHOLD: u32 = 48;
+
+// Clé de montage SipHash globale (PATH-01 / S-12)
+static MOUNT_KEY_READY: AtomicBool = AtomicBool::new(false);
+static MOUNT_KEY_INIT_LOCK: AtomicBool = AtomicBool::new(false);
+static MOUNT_KEY_LO: AtomicU64 = AtomicU64::new(0);
+static MOUNT_KEY_HI: AtomicU64 = AtomicU64::new(0);
+
+/// Initialise la clé de montage SipHash depuis le CSPRNG si nécessaire.
+pub fn ensure_mount_key_initialized() {
+    if MOUNT_KEY_READY.load(Ordering::Acquire) {
+        return;
+    }
+
+    while MOUNT_KEY_INIT_LOCK
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        if MOUNT_KEY_READY.load(Ordering::Acquire) {
+            return;
+        }
+        core::hint::spin_loop();
+    }
+
+    if MOUNT_KEY_READY.load(Ordering::Acquire) {
+        MOUNT_KEY_INIT_LOCK.store(false, Ordering::Release);
+        return;
+    }
+
+    let mut key = ENTROPY_POOL.random_16();
+    if key == [0u8; 16] {
+        key[0] = 0xA5;
+        key[7] = 0x5A;
+        key[15] = 0xC3;
+    }
+
+    let mut lo_b = [0u8; 8];
+    let mut hi_b = [0u8; 8];
+    lo_b.copy_from_slice(&key[0..8]);
+    hi_b.copy_from_slice(&key[8..16]);
+    let lo = u64::from_le_bytes(lo_b);
+    let hi = u64::from_le_bytes(hi_b);
+
+    MOUNT_KEY_LO.store(lo, Ordering::Release);
+    MOUNT_KEY_HI.store(hi, Ordering::Release);
+    MOUNT_KEY_READY.store(true, Ordering::Release);
+    MOUNT_KEY_INIT_LOCK.store(false, Ordering::Release);
+}
+
+/// Retourne la clé de montage active (initialisée à la demande).
+pub fn mount_secret_key() -> [u8; 16] {
+    ensure_mount_key_initialized();
+    let lo = MOUNT_KEY_LO.load(Ordering::Acquire).to_le_bytes();
+    let hi = MOUNT_KEY_HI.load(Ordering::Acquire).to_le_bytes();
+    let mut key = [0u8; 16];
+    key[0..8].copy_from_slice(&lo);
+    key[8..16].copy_from_slice(&hi);
+    if key == [0u8; 16] {
+        key[0] = 0xA5;
+        key[7] = 0x5A;
+        key[15] = 0xC3;
+    }
+    key
+}
 
 // ── PathIndexHeader ────────────────────────────────────────────────────────────
 
@@ -194,7 +259,7 @@ impl PathIndex {
 
     /// Crée un index vide avec clé nulle (⚠️ tests uniquement — PATH-02).
     pub fn new(parent_oid: ObjectId) -> Self {
-        Self::new_with_key(parent_oid, [0u8; 16])
+        Self::new_with_key(parent_oid, mount_secret_key())
     }
 
     /// Nombre d entrées dans l index.
@@ -251,7 +316,8 @@ impl PathIndex {
 
         // ── 4. Lecture des entrées ────────────────────────────────────────────
         let mut entries: Vec<InMemoryEntry> = Vec::new();
-        let mut tree = PathIndexTree::new_with_key([0u8; 16]); // revu par set_mount_key()
+        let active_key = mount_secret_key();
+        let mut tree = PathIndexTree::new_with_key(active_key);
 
         let mut offset = size_of::<PathIndexHeader>();
         for i in 0..entry_count {
@@ -306,8 +372,7 @@ impl PathIndex {
             entries,
             dirty: false,
             split_threshold: split_thr,
-            mount_key: [0u8; 16], // clé initialisée à zéro lors du from_bytes
-            // ⚠️ Appeler set_mount_key() après from_bytes() pour activer PATH-01.
+            mount_key: active_key,
         })
     }
 

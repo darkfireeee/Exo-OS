@@ -24,19 +24,19 @@ pub struct HeapSizeClass {
 pub const HEAP_SIZE_CLASSES: &[HeapSizeClass] = &[
     HeapSizeClass { max_size:    8, align:  8, slab_idx: 0 },
     HeapSizeClass { max_size:   16, align: 16, slab_idx: 1 },
-    HeapSizeClass { max_size:   24, align:  8, slab_idx: 1 }, // → classe 16 slab
+    HeapSizeClass { max_size:   24, align:  8, slab_idx: 2 }, // → classe 32 slab
     HeapSizeClass { max_size:   32, align: 16, slab_idx: 2 },
-    HeapSizeClass { max_size:   48, align: 16, slab_idx: 2 }, // → classe 32 slab
+    HeapSizeClass { max_size:   48, align: 16, slab_idx: 3 }, // → classe 64 slab
     HeapSizeClass { max_size:   64, align: 64, slab_idx: 3 },
-    HeapSizeClass { max_size:   96, align: 64, slab_idx: 3 }, // → classe 64 slab
+    HeapSizeClass { max_size:   96, align: 64, slab_idx: 4 }, // → classe 128 slab
     HeapSizeClass { max_size:  128, align: 64, slab_idx: 4 },
-    HeapSizeClass { max_size:  192, align: 64, slab_idx: 4 }, // → classe 128 slab
+    HeapSizeClass { max_size:  192, align: 64, slab_idx: 5 }, // → classe 256 slab
     HeapSizeClass { max_size:  256, align: 64, slab_idx: 5 },
-    HeapSizeClass { max_size:  384, align: 64, slab_idx: 5 }, // → classe 256 slab
+    HeapSizeClass { max_size:  384, align: 64, slab_idx: 6 }, // → classe 512 slab
     HeapSizeClass { max_size:  512, align: 64, slab_idx: 6 },
-    HeapSizeClass { max_size:  768, align: 64, slab_idx: 6 }, // → classe 512 slab
+    HeapSizeClass { max_size:  768, align: 64, slab_idx: 7 }, // → classe 1024 slab
     HeapSizeClass { max_size: 1024, align: 64, slab_idx: 7 },
-    HeapSizeClass { max_size: 1536, align: 64, slab_idx: 7 }, // → classe 1024 slab
+    HeapSizeClass { max_size: 1536, align: 64, slab_idx: 8 }, // → classe 2048 slab
     HeapSizeClass { max_size: 2048, align: 64, slab_idx: 8 },
 ];
 

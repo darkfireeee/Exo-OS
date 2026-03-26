@@ -18,6 +18,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use super::task::{ThreadControlBlock, TaskState};
 use super::preempt::MAX_CPUS;
 use crate::scheduler::fpu;
+use crate::arch::x86_64::cpu::{features::CPU_FEATURES, msr};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pointeur "thread courant" par CPU — mis à jour à chaque context switch
@@ -164,6 +165,12 @@ pub unsafe fn context_switch(
         // (Si un IRQ arrive entre step 1 et step 3, la FPU est déjà sauvée.)
     }
 
+    // Sauvegarde PKRS (S6) si le CPU supporte PKS.
+    if CPU_FEATURES.has_pks() {
+        // SAFETY: accès MSR ring0, capability vérifiée via CPUID.
+        prev.pkrs = unsafe { msr::read_msr(msr::MSR_IA32_PKRS) as u32 };
+    }
+
     // ── Étape 2 : Transition d'état de prev ──────────────────────────────────
     // Si le thread sortant était Running → il redevient Runnable (sera ré-enfilé).
     // Si il était dans un état bloquant (Sleeping, Uninterruptible) → on ne change pas.
@@ -189,6 +196,12 @@ pub unsafe fn context_switch(
     // ──── À PARTIR D'ICI : on est dans le contexte de `next` ────────────────
     // (context_switch_asm a restauré la pile et les registres de `next`)
     // ─────────────────────────────────────────────────────────────────────────
+
+    // Restauration PKRS (S6) côté thread entrant.
+    if CPU_FEATURES.has_pks() {
+        // SAFETY: accès MSR ring0, capability vérifiée via CPUID.
+        unsafe { msr::write_msr(msr::MSR_IA32_PKRS, next.pkrs as u64) };
+    }
 
     // ── Étape 4 : Post-switch côté `next` ────────────────────────────────────
     // Marquer `next` comme Running.

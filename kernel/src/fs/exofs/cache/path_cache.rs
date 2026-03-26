@@ -389,13 +389,13 @@ mod tests {
     #[test] fn test_remove_existing_path() {
         let c = PathCache::new_const();
         c.insert(b"/rem", 2, 0).unwrap();
-        c.remove(b"/rem");
+        c.invalidate_path(b"/rem");
         assert!(!c.contains(b"/rem"));
     }
 
     #[test] fn test_get_miss() {
         let c = PathCache::new_const();
-        assert!(c.get(b"/nonexistent").is_none());
+        assert!(c.lookup(b"/nonexistent").is_none());
     }
 
     #[test] fn test_n_entries_after_inserts() {

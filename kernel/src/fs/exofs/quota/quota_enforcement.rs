@@ -373,7 +373,7 @@ pub static QUOTA_ENFORCER: QuotaEnforcer = QuotaEnforcer::new_const();
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::exofs::quota::quota_policy::{QuotaLimits, PolicyPresets, QuotaKind};
+    use crate::fs::exofs::quota::quota_policy::{QuotaLimits, QuotaKind};
     use crate::fs::exofs::quota::quota_tracker::QUOTA_TRACKER;
 
     fn setup_key(entity_id: u64, hard_bytes: u64) -> QuotaKey {

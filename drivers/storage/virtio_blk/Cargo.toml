@@ -1,0 +1,17 @@
+[package]
+name = "exo-virtio-blk"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+
+[dependencies]
+virtio-drivers = { version = "0.7.2", default-features = false }
+spin = { version = "0.9.8", default-features = false, features = ["spin_mutex", "once"] }
+log = { version = "0.4" }
+
+[features]
+default = []

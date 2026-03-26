@@ -275,7 +275,7 @@ impl DedupBatchReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::dedup_policy::DedupPolicy;
+    // use super::super::dedup_policy::DedupPolicy;
 
     fn api() -> DedupApi { DedupApi::with_default_policy().unwrap() }
 

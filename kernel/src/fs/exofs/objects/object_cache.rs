@@ -368,6 +368,7 @@ impl fmt::Display for ObjectCacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::sync::Arc;
     use crate::fs::exofs::objects::logical_object::{LogicalObject, LogicalObjectDisk, LOGICAL_OBJECT_VERSION};
 
     fn make_obj(id_byte: u8) -> (ObjectId, LogicalObjectRef) {

@@ -21,6 +21,7 @@ use crate::fs::exofs::path::path_index::PathIndex;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     write_user_buf, exofs_err_to_errno,
+    verify_cap, CapabilityType,
     validate_user_ptr, validate_fd,
     EINVAL,
     EXOFS_LIST_MAX, EXOFS_NAME_MAX,
@@ -107,8 +108,10 @@ fn list_dir_entries(fd: u32, max_entries: usize) -> ExofsResult<Vec<ExofsDirEntr
             name_vec.push(name_bytes[j]);
             j = j.saturating_add(1);
         }
-        // Tronquer l'ObjectId (32 bytes) en u64 pour d_ino
-        let ino = u64::from_le_bytes(e.oid.0[..8].try_into().unwrap_or([0u8; 8]));
+        // Tronquer l'ObjectId (32 bytes) en u64 pour d_ino.
+        let mut ino_bytes = [0u8; 8];
+        ino_bytes.copy_from_slice(&e.oid.0[..8]);
+        let ino = u64::from_le_bytes(ino_bytes);
         result.push(ExofsDirEntry { ino, kind: e.kind, name_vec });
         i = i.saturating_add(1);
     }
@@ -191,7 +194,7 @@ pub fn sys_exofs_readdir(
     buf_len: u64,
     _a4: u64,
     _a5: u64,
-    _a6: u64,
+    cap_rights: u64,
 ) -> i64 {
     // SYS-05 : valider longueur AVANT toute opération
     if buf_len == 0 { return EINVAL; }
@@ -202,6 +205,11 @@ pub fn sys_exofs_readdir(
         Ok(f)  => f,
         Err(e) => return e,
     };
+
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsReaddir) {
+        return e;
+    }
+
     // Calculer le nombre max d'entrées (borné par EXOFS_LIST_MAX)
     let buf_limit = (buf_len as usize).min(EXOFS_LIST_MAX);
     let max_entries = buf_limit / (HEADER_SIZE.saturating_add(2)); // estimation minimale

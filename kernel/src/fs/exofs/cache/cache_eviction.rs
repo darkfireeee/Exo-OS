@@ -278,7 +278,7 @@ mod tests {
         // Après insertion, clock_ref = true → second chance.
         let v = p.pick_eviction_candidates(1);
         // Après un scan, le bit est effacé mais pas encore évincé.
-        assert!(v.is_empty() || v.len() >= 0);
+        assert!(v.is_empty() || v.len() > 0);
     }
 
     #[test] fn test_n_entries_track() {

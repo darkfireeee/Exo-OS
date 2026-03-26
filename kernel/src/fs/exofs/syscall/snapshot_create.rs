@@ -9,7 +9,7 @@ use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
     exofs_err_to_errno, write_user_buf,
-    EFAULT,
+    verify_cap, CapabilityType, EFAULT,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -101,7 +101,10 @@ fn build_snapshot_blob(
     flags:       u32,
     name:        &[u8],
 ) -> ExofsResult<Vec<u8>> {
-    let nl = name.len().min(SNAPSHOT_NAME_MAX);
+    if name.len() > SNAPSHOT_NAME_MAX {
+        return Err(ExofsError::PathTooLong);
+    }
+    let nl = name.len();
     let header_size = 4 + 1 + 1 + 2 + 8 + 8 + 2 + nl;
     let total = header_size.saturating_add(source_data.len());
     let mut buf: Vec<u8> = Vec::new();
@@ -134,13 +137,14 @@ fn build_snapshot_blob(
 // Logique principale
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn create_snapshot(
+pub(crate) fn create_snapshot(
     source_blob: BlobId,
     epoch_id:    u64,
     flags:       u32,
     name:        &[u8],
 ) -> ExofsResult<SnapshotCreateResult> {
     if flags & !snap_flags::VALID_MASK != 0 { return Err(ExofsError::InvalidArgument); }
+    if name.len() > SNAPSHOT_NAME_MAX { return Err(ExofsError::PathTooLong); }
     let source_data = BLOB_CACHE.get(&source_blob)
         .ok_or(ExofsError::BlobNotFound)?;
     let size = source_data.len() as u64;
@@ -169,7 +173,7 @@ pub fn sys_exofs_snapshot_create(
     args_ptr:u64,
     _a4:     u64,
     _a5:     u64,
-    _a6:     u64,
+    cap_rights: u64,
 ) -> i64 {
     let blob_id = match OBJECT_TABLE.blob_id_of(fd as u32) {
         Ok(id) => id,
@@ -195,14 +199,24 @@ pub fn sys_exofs_snapshot_create(
 
     let mut name_buf: Vec<u8> = Vec::new();
     if args.name_ptr != 0 && args.name_len > 0 {
-        let nl = (args.name_len as usize).min(SNAPSHOT_NAME_MAX);
-        name_buf.try_reserve(nl).unwrap_or(());
+        let req_nl = args.name_len as usize;
+        if req_nl > SNAPSHOT_NAME_MAX {
+            return exofs_err_to_errno(ExofsError::PathTooLong);
+        }
+        let nl = req_nl;
+        if name_buf.try_reserve(nl).is_err() {
+            return exofs_err_to_errno(ExofsError::NoMemory);
+        }
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             let src = args.name_ptr as *const u8;
             let mut i = 0usize;
             while i < nl { name_buf.push(*src.add(i)); i = i.wrapping_add(1); }
         }
+    }
+
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsSnapshotCreate) {
+        return e;
     }
 
     let result = match create_snapshot(blob_id, args.epoch_id, args.flags, &name_buf) {

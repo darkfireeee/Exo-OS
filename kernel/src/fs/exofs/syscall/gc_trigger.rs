@@ -8,7 +8,8 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    exofs_err_to_errno, copy_struct_from_user, write_user_buf, EFAULT,
+    exofs_err_to_errno, copy_struct_from_user, write_user_buf,
+    verify_cap, CapabilityType, EFAULT,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -161,7 +162,7 @@ fn run_gc(args: &GcArgs) -> ExofsResult<GcResult> {
 pub fn sys_exofs_gc_trigger(
     args_ptr:   u64,
     result_ptr: u64,
-    _a3: u64, _a4: u64, _a5: u64, _a6: u64,
+    _a3: u64, _a4: u64, _a5: u64, cap_rights: u64,
 ) -> i64 {
     if args_ptr == 0 { return EFAULT; }
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
@@ -169,6 +170,9 @@ pub fn sys_exofs_gc_trigger(
         Ok(a)  => a,
         Err(_) => return EFAULT,
     };
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsGcTrigger) {
+        return e;
+    }
     let res = match run_gc(&args) {
         Ok(r)  => r,
         Err(e) => return exofs_err_to_errno(e),

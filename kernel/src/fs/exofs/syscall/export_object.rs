@@ -8,7 +8,8 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use super::validation::{
-    exofs_err_to_errno, copy_struct_from_user, write_user_buf, EFAULT, EINVAL, ERANGE,
+    exofs_err_to_errno, copy_struct_from_user, write_user_buf,
+    verify_cap, CapabilityType, EFAULT, EINVAL, ERANGE,
 };
 use super::object_fd::OBJECT_TABLE;
 
@@ -135,6 +136,11 @@ fn export_blob(blob_id: &BlobId, flags: u32) -> ExofsResult<Vec<u8>> {
     Ok(out)
 }
 
+/// Wrapper public de compatibilité pour les tests/imports inter-modules.
+pub fn export_blob_pub(blob_id: &BlobId, flags: u32) -> ExofsResult<Vec<u8>> {
+    export_blob(blob_id, flags)
+}
+
 /// Exporte un blob identifié par fd.
 fn export_by_fd(fd: u32, flags: u32) -> ExofsResult<Vec<u8>> {
     let bid = OBJECT_TABLE.lock()
@@ -150,7 +156,7 @@ fn export_by_fd(fd: u32, flags: u32) -> ExofsResult<Vec<u8>> {
 pub fn sys_exofs_export_object(
     args_ptr:   u64,
     result_ptr: u64,
-    _a3: u64, _a4: u64, _a5: u64, _a6: u64,
+    _a3: u64, _a4: u64, _a5: u64, cap_rights: u64,
 ) -> i64 {
     if args_ptr == 0 { return EFAULT; }
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
@@ -160,6 +166,10 @@ pub fn sys_exofs_export_object(
     };
     if args.flags & !export_flags::VALID_MASK != 0 { return EINVAL; }
     if args.out_ptr == 0 { return EFAULT; }
+
+    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsExportObject) {
+        return e;
+    }
 
     let payload = if args.flags & export_flags::BY_FD != 0 {
         match export_by_fd(args.fd, args.flags) { Ok(v) => v, Err(e) => return exofs_err_to_errno(e) }
@@ -301,7 +311,7 @@ mod tests {
     fn test_export_round_trip_with_cache() {
         let bid = make_bid(b"export_rtrip_data");
         let content = b"Hello ExoFS export!";
-        BLOB_CACHE.insert(bid, content).ok();
+        BLOB_CACHE.insert(bid, content.to_vec()).ok();
         let exported = export_blob(&bid, 0).unwrap();
         assert!(exported.len() > EXPORT_HDR_SIZE);
         let payload = extract_payload(&exported).unwrap();
@@ -447,7 +457,7 @@ mod tests_batch {
     fn test_export_integrity_cached() {
         let bid = make_bid(b"export_integ_test");
         let content = b"ExoFS integrity check";
-        BLOB_CACHE.insert(bid, content).ok();
+        BLOB_CACHE.insert(bid, content.to_vec()).ok();
         let exported = super::export_blob(&bid, 0).unwrap();
         // La vérification peut ne pas matcher le BlobId car le BlobId de l'en-tête
         // est celui du blob source, pas le hash du payload — comportement attendu.

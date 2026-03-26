@@ -427,7 +427,7 @@ mod tests {
     }
 
     fn zero_blob() -> BlobId { BlobId([0u8; 32]) }
-    fn one_blob()  -> BlobId { BlobId([1u8; 32]) }
+    #[allow(dead_code)] fn one_blob()  -> BlobId { BlobId([1u8; 32]) }
 
     #[test]
     fn test_migrate_success() {
@@ -454,7 +454,7 @@ mod tests {
         let m = NumaMigration::new_const();
         let r = m.migrate_blob(&NoneLocator, zero_blob(), 1, 0);
         assert_eq!(r.status, MigrationStatus::NotFound);
-        assert!(r.is_error());
+        assert!(r.status.is_error());
     }
 
     #[test]

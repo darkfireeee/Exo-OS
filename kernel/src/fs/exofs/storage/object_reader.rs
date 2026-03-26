@@ -179,6 +179,17 @@ impl ObjectReader {
         // ── 1. Lecture + vérif en-tête ────────────────────────────
         let (meta, _disk_hdr) = Self::read_header(header_offset, &read_fn, mode)?;
 
+        // Garde-fous de cohérence structurelle.
+        if meta.content_size > MAX_OBJECT_SIZE as u64 {
+            return Err(ExofsError::InvalidSize);
+        }
+        if meta.has_extent_map() && meta.blob_count == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if !meta.has_extent_map() && meta.blob_count > 1 {
+            return Err(ExofsError::InvalidArgument);
+        }
+
         if mode == ObjectVerifyMode::HeaderOnly {
             return Ok(ObjectReadResult {
                 meta,
@@ -391,11 +402,14 @@ impl ObjectReader {
     where
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
-        if blob_refs.is_empty() {
-            return Ok((Vec::new(), 0, Vec::new()));
+        if expected_size > MAX_OBJECT_SIZE {
+            return Err(ExofsError::InvalidSize);
         }
 
-        if expected_size > MAX_OBJECT_SIZE {
+        if blob_refs.is_empty() {
+            if expected_size == 0 {
+                return Ok((Vec::new(), 0, Vec::new()));
+            }
             return Err(ExofsError::InvalidSize);
         }
 
@@ -409,6 +423,15 @@ impl ObjectReader {
         // Trier par chunk_index pour assembler dans le bon ordre
         let mut sorted: Vec<&BlobRef> = blob_refs.iter().collect();
         sorted.sort_by_key(|b| b.chunk_index);
+
+        // Détecter gaps/duplicates de chunks (ordre attendu: 0..N-1).
+        let mut expected_chunk_index = 0u32;
+        for bref in &sorted {
+            if bref.chunk_index != expected_chunk_index {
+                return Err(ExofsError::InvalidArgument);
+            }
+            expected_chunk_index = expected_chunk_index.saturating_add(1);
+        }
 
         for bref in &sorted {
             let res = BlobReader::read_blob(
@@ -442,6 +465,11 @@ impl ObjectReader {
         // Tronquer à la taille attendue si nécessaire (alignement blocs)
         if assembled.len() > expected_size {
             assembled.truncate(expected_size);
+        }
+
+        // Refuser une reconstruction incomplète silencieuse.
+        if assembled.len() < expected_size {
+            return Err(ExofsError::InvalidSize);
         }
 
         Ok((assembled, total_disk, retrieved))
@@ -486,6 +514,13 @@ impl ObjectRangeReader {
     where
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
+        if chunk_size == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if range.length == 0 {
+            return Ok(Vec::new());
+        }
+
         let meta = ObjectReader::read_meta(header_offset, |o, sz| read_fn(o, sz))?;
 
         // Vérification des bornes
@@ -498,29 +533,25 @@ impl ObjectRangeReader {
 
         // Récupérer les refs blobs
         let blob_refs = if meta.has_extent_map() {
-            let emap_raw = read_fn(meta.extent_map_offset, 65536)
-                .map_err(|_| ExofsError::InvalidState)?;
-            if emap_raw.len() < 4 { return Err(ExofsError::InvalidSize); }
-            let cnt = u32::from_le_bytes([emap_raw[0], emap_raw[1], emap_raw[2], emap_raw[3]]) as usize;
-            let mut refs = Vec::new();
-            refs.try_reserve(cnt).map_err(|_| ExofsError::NoMemory)?;
-            let mut pos = 4;
-            for i in 0..cnt {
-                if pos + 44 > emap_raw.len() { break; }
-                let mut bid = [0u8; 32];
-                bid.copy_from_slice(&emap_raw[pos..pos+32]);
-                let off = u64::from_le_bytes(emap_raw[pos+32..pos+40].try_into().unwrap_or([0u8;8]));
-                let sz = u32::from_le_bytes(emap_raw[pos+40..pos+44].try_into().unwrap_or([0u8;4]));
-                refs.push(BlobRef { blob_id: BlobId(bid), offset: DiskOffset(off), size: sz, chunk_index: i as u32 });
-                pos += 44;
-            }
-            refs
+            ObjectReader::read_extent_map(
+                meta.extent_map_offset,
+                meta.blob_count as usize,
+                &read_fn,
+            )?
         } else {
             let blob_off = DiskOffset(
                 header_offset.0.checked_add(OBJECT_HEADER_SIZE as u64).ok_or(ExofsError::Overflow)?
             );
             alloc::vec![BlobRef { blob_id: BlobId([0u8;32]), offset: blob_off, size: meta.content_size as u32, chunk_index: 0 }]
         };
+
+        if blob_refs.is_empty() {
+            return Err(ExofsError::InvalidSize);
+        }
+
+        // Assembler en ordre de chunk_index de manière déterministe.
+        let mut sorted_refs: Vec<&BlobRef> = blob_refs.iter().collect();
+        sorted_refs.sort_by_key(|b| b.chunk_index);
 
         // Identifier les chunks couvrant le range
         let first_chunk = range.logical_offset as usize / chunk_size;
@@ -529,7 +560,7 @@ impl ObjectRangeReader {
         let mut result = Vec::new();
         result.try_reserve(range.length).map_err(|_| ExofsError::NoMemory)?;
 
-        for bref in &blob_refs {
+        for bref in &sorted_refs {
             let ci = bref.chunk_index as usize;
             if ci < first_chunk || ci > last_chunk { continue; }
 
@@ -546,7 +577,6 @@ impl ObjectRangeReader {
             } else {
                 0
             };
-            let chunk_end_logical = chunk_start_logical + blob_res.data.len();
             let in_chunk_end = if ci == last_chunk {
                 ((end as usize).saturating_sub(chunk_start_logical)).min(blob_res.data.len())
             } else {
@@ -557,7 +587,11 @@ impl ObjectRangeReader {
                 result.try_reserve(in_chunk_end - in_chunk_start).map_err(|_| ExofsError::NoMemory)?;
                 result.extend_from_slice(&blob_res.data[in_chunk_start..in_chunk_end]);
             }
-            let _ = chunk_end_logical;
+        }
+
+        // Évite un succès silencieux partiel sur metadata incohérente.
+        if result.len() != range.length {
+            return Err(ExofsError::InvalidSize);
         }
 
         Ok(result)
@@ -628,11 +662,29 @@ where
 
     for &off in header_offsets {
         report.checked = report.checked.saturating_add(1);
+
+        // 1) Valider d'abord strictement l'en-tête pour classifier les erreurs.
+        match ObjectReader::read_meta(off, |o, sz| read_fn(o, sz)) {
+            Ok(_) => {}
+            Err(ExofsError::BadMagic) | Err(ExofsError::ChecksumMismatch) => {
+                report.bad_header = report.bad_header.saturating_add(1);
+                continue;
+            }
+            Err(_) => {
+                report.read_errors = report.read_errors.saturating_add(1);
+                continue;
+            }
+        }
+
+        // 2) Vérification complète (inclut content_hash).
         match ObjectReader::read_object(off, |o, sz| read_fn(o, sz), ObjectVerifyMode::Full) {
             Ok(_) => {
                 report.ok = report.ok.saturating_add(1);
             }
-            Err(ExofsError::BadMagic) | Err(ExofsError::ChecksumMismatch) => {
+            Err(ExofsError::ChecksumMismatch) => {
+                report.bad_content_hash = report.bad_content_hash.saturating_add(1);
+            }
+            Err(ExofsError::BadMagic) => {
                 report.bad_header = report.bad_header.saturating_add(1);
             }
             Err(_) => {
@@ -653,7 +705,7 @@ mod tests {
     use super::*;
     use alloc::vec;
     use crate::fs::exofs::core::{EpochId, ObjectId};
-    use crate::fs::exofs::storage::compression_choice::CompressionType;
+    use crate::fs::exofs::storage::layout::BLOCK_SIZE;
     use crate::fs::exofs::storage::object_writer::{
         ObjectWriter, ObjectWriterConfig, ObjectType,
     };

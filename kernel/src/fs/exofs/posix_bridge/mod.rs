@@ -132,7 +132,7 @@ pub struct PosixBridgeStats {
 /// Collecte les statistiques de tous les sous-modules.
 pub fn posix_bridge_stats() -> PosixBridgeStats {
     PosixBridgeStats {
-        lock_count:       FCNTL_LOCK_TABLE.lock_count_for(0),       // placeholder — total via sum
+        lock_count:       FCNTL_LOCK_TABLE.total_lock_count(),
         locked_objects:   FCNTL_LOCK_TABLE.locked_object_count(),
         inode_count:      INODE_EMULATION.count(),
         next_ino:         INODE_EMULATION.peek_next_ino(),
@@ -212,11 +212,7 @@ pub fn posix_bridge_check() -> usize {
 /// Retourne le nombre total de verrous actifs dans la table globale.
 /// Parcours RECUR-01 : while.
 pub fn total_lock_count() -> usize {
-    let object_count = FCNTL_LOCK_TABLE.locked_object_count();
-    // Somme les verrous objet par objet.
-    // Ici on n'a pas d'accès direct à la liste des object_ids depuis l'extérieur,
-    // donc on retourne une borne approximative via locked_object_count.
-    object_count
+    FCNTL_LOCK_TABLE.total_lock_count()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

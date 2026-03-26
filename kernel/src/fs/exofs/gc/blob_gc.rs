@@ -463,7 +463,7 @@ pub static BLOB_GC: BlobGc = BlobGc::new();
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::exofs::gc::blob_gc::{BlobGc, BlobGcConfig};
+    use crate::fs::exofs::gc::blob_gc::BlobGc;
 
     #[test]
     fn test_pass_empty_roots() {

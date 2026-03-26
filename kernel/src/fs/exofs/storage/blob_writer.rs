@@ -1,6 +1,6 @@
 //! blob_writer.rs — Pipeline complet d'écriture de blobs ExoFS
 //!
-//! Pipeline : raw_data → BlobId(Blake3) → dédup → compression → checksum → disque
+//! Pipeline : raw_data → BlobId(Blake3) → dédup → compression → chiffrement(XChaCha20) → checksum → disque
 //!
 //! Règles spec :
 //!   HASH-02 : BlobId calculé sur données RAW, AVANT toute compression
@@ -18,6 +18,8 @@ use crate::fs::exofs::core::{
     ExofsError, ExofsResult, BlobId, DiskOffset, EpochId,
 };
 use crate::fs::exofs::core::blob_id::compute_blob_id;
+use crate::fs::exofs::crypto::key_derivation::KeyDerivation;
+use crate::fs::exofs::crypto::secret_writer::SecretWriter;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 use crate::fs::exofs::storage::layout::{BLOCK_SIZE, align_up};
 use crate::fs::exofs::storage::compression_choice::{
@@ -43,6 +45,9 @@ const COMPRESS_MIN_BYTES: usize = 256;
 
 /// Taille maximale d'un blob (512 MiB)
 pub const BLOB_MAX_SIZE: usize = 512 * 1024 * 1024;
+
+/// Flag header : payload chiffré.
+const BLOB_FLAG_ENCRYPTED: u8 = 0b0000_0100;
 
 // ─────────────────────────────────────────────────────────────
 // Structures disque (repr C, pas d'AtomicXxx — ONDISK-03)
@@ -212,6 +217,7 @@ struct WriteContext {
     stored_size: u32,
     algo: CompressionType,
     payload: Vec<u8>,
+    encrypted: bool,
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -404,9 +410,39 @@ impl BlobWriter {
             }
         };
 
-        let stored_size = payload.len() as u32;
+        // CRYPTO-02 : chiffrement APRÈS compression, AVANT écriture disque.
+        let encrypted_payload = Self::encrypt_payload(&blob_id, &payload)?;
+        let stored_size = encrypted_payload.len() as u32;
 
-        Ok(WriteContext { blob_id, original_size, stored_size, algo: effective_algo, payload })
+        Ok(WriteContext {
+            blob_id,
+            original_size,
+            stored_size,
+            algo: effective_algo,
+            payload: encrypted_payload,
+            encrypted: true,
+        })
+    }
+
+    fn derive_blob_payload_key(blob_id: &BlobId) -> ExofsResult<[u8; 32]> {
+        let dk = KeyDerivation::derive_key(
+            &blob_id.0,
+            b"exofs-blob-payload-salt-v1",
+            b"exofs-blob-payload-key-v1",
+        )?;
+        Ok(*dk.as_bytes())
+    }
+
+    fn encrypt_payload(blob_id: &BlobId, payload: &[u8]) -> ExofsResult<Vec<u8>> {
+        let key = Self::derive_blob_payload_key(blob_id)?;
+        SecretWriter::new(&key).encrypt(payload)
+    }
+
+    /// Dérive la clé utilisée pour chiffrer le payload d'un blob.
+    ///
+    /// Exposée pour la symétrie avec le pipeline de lecture (`BlobReader`).
+    pub(crate) fn payload_key_for(blob_id: &BlobId) -> ExofsResult<[u8; 32]> {
+        Self::derive_blob_payload_key(blob_id)
     }
 
     // ── Étape écriture disque ───────────────────────────────────────────
@@ -492,7 +528,10 @@ impl BlobWriter {
             CompressionType::Zstd => 2,
         };
 
-        let flags: u8 = 0b0000_0011; // checksum présent, dédup possible
+        let mut flags: u8 = 0b0000_0011; // checksum présent, dédup possible
+        if ctx.encrypted {
+            flags |= BLOB_FLAG_ENCRYPTED;
+        }
         let epoch = config.epoch.0;
 
         // Construit les 60 premiers octets pour le checksum d'en-tête
@@ -756,7 +795,7 @@ mod tests {
     #[test]
     fn dedup_hit_returns_existing_offset() {
         let data = make_data(128, 0x11);
-        let id = compute_blob_id(&data);
+        let _id = compute_blob_id(&data);
         let config = BlobWriterConfig::new(EpochId(1));
         let existing = DiskOffset(4096);
 
