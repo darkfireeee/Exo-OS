@@ -12,6 +12,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExoError {
     // ─── Succès ──────────────────────────────────────────────────────────
+    /// Pas d'erreur.
     Ok              =    0,
 
     // ─── POSIX standard ──────────────────────────────────────────────────

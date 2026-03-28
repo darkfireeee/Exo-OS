@@ -27,23 +27,35 @@ use subtle::ConstantTimeEq;
 pub struct Rights(pub u32);
 
 impl Rights {
+    /// Droit de lecture.
     pub const READ:    Self = Rights(0x01);
+    /// Droit d'écriture.
     pub const WRITE:   Self = Rights(0x02);
+    /// Droit d'exécution.
     pub const EXEC:    Self = Rights(0x04);
-    pub const INSPECT: Self = Rights(0x08); // SYS_EXOFS_GET_CONTENT_HASH : voir le hash
-    pub const GRANT:   Self = Rights(0x10); // Déléguer ce token à un autre processus
+    /// Droit d'inspection (SYS_EXOFS_GET_CONTENT_HASH).
+    pub const INSPECT: Self = Rights(0x08);
+    /// Droit de délégation — transmettre ce token à un autre processus.
+    pub const GRANT:   Self = Rights(0x10);
+    /// Tous les droits (READ | WRITE | EXEC | INSPECT | GRANT).
     pub const ALL:     Self = Rights(0x1F);
+    /// Aucun droit.
     pub const NONE:    Self = Rights(0x00);
 
+    /// `true` si lecture autorisée.
     #[inline(always)]
     pub fn can_read(self)   -> bool { self.0 & Self::READ.0   != 0 }
+    /// `true` si écriture autorisée.
     #[inline(always)]
     pub fn can_write(self)  -> bool { self.0 & Self::WRITE.0  != 0 }
+    /// `true` si exécution autorisée.
     #[inline(always)]
     pub fn can_exec(self)   -> bool { self.0 & Self::EXEC.0   != 0 }
+    /// `true` si inspection autorisée.
     #[inline(always)]
     pub fn can_inspect(self)-> bool { self.0 & Self::INSPECT.0!= 0 }
 
+    /// `true` si `self` contient tous les droits de `other`.
     #[inline(always)]
     pub fn contains(self, other: Rights) -> bool {
         self.0 & other.0 == other.0

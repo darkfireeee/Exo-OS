@@ -16,7 +16,7 @@
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use core::ptr::NonNull;
-use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy, task_flags, CpuId, SCHED_NEED_RESCHED_BIT};
+use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy, CpuId, SCHED_NEED_RESCHED_BIT};
 use crate::scheduler::core::runqueue;
 use crate::scheduler::policies::{tick_check_preempt, rr_tick, timeslice_for};
 use crate::scheduler::smp::load_balance::{balance_cpu, BALANCE_INTERVAL_TICKS};

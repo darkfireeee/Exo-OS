@@ -67,6 +67,7 @@ impl IoVirtAddr {
     ///
     /// ❌ `pub(crate)` : empêche toute construction depuis un driver Ring 1.
     ///    Un driver Ring 1 ne peut obtenir un IoVirtAddr QUE via SYS_DMA_MAP.
+    #[allow(dead_code)]
     pub(crate) fn from_raw(v: u64) -> Self {
         IoVirtAddr(v)
     }

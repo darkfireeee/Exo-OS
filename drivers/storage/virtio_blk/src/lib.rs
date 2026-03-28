@@ -4,10 +4,7 @@ extern crate alloc;
 pub mod hal;
 
 use alloc::vec::Vec;
-use virtio_drivers::{transport::Transport, device::blk::VirtIOBlk};
 use spin::Mutex;
-use hal::ExoHal;
-use alloc::boxed::Box;
 
 // ExoHal is a hardware abstraction layer we'll need for virtio-drivers
 // But since this is a complex integration, let's create a simpler abstract API 

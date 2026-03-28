@@ -23,11 +23,18 @@ const _: () = assert!(core::mem::size_of::<PollFd>() == 8);
 
 // ─── Constantes événements poll standard ─────────────────────────────────────
 impl PollFd {
+    /// Donnée disponible en lecture.
     pub const POLLIN:   u16 = 0x0001;
+    /// Donnée urgente disponible (OOB).
     pub const POLLPRI:  u16 = 0x0002;
+    /// Prêt à l'écriture.
     pub const POLLOUT:  u16 = 0x0004;
+    /// Condition d'erreur.
     pub const POLLERR:  u16 = 0x0008;
+    /// Connexion fermée.
     pub const POLLHUP:  u16 = 0x0010;
+    /// Descripteur invalide.
     pub const POLLNVAL: u16 = 0x0020;
+    /// Pair a fermé le socket (lecture seule).
     pub const POLLRDHUP:u16 = 0x2000;
 }

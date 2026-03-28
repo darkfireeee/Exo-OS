@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use exo_virtio_blk::ExoVirtioBlkDevice;
 use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
 use crate::fs::exofs::core::ExofsResult;

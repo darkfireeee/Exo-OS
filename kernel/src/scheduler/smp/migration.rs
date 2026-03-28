@@ -14,7 +14,7 @@
 
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use crate::scheduler::core::task::{ThreadControlBlock, CpuId, task_flags};
+use crate::scheduler::core::task::{ThreadControlBlock, CpuId};
 use super::topology::{MAX_CPUS, nr_cpus};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -109,7 +109,6 @@ pub unsafe fn request_migration(tcb: NonNull<ThreadControlBlock>, target: CpuId)
     let target_idx = target.0 as usize;
     if target_idx >= nr_cpus() { return; }
 
-    let tcb_ref = tcb.as_ref();
     // MIGRATED flag: encodé dans sched_state si nécessaire — no-op pour les stats seules.
 
     if !MIGRATION_QUEUES[target_idx].push(tcb) {

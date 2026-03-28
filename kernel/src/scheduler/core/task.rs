@@ -338,7 +338,7 @@ impl ThreadControlBlock {
 
     /// Thread kernel (pid=0, flag KTHREAD dans sched_state).
     pub fn new_kthread(tid: ThreadId, cr3_phys: u64, kernel_stack_top: u64) -> Self {
-        let mut tcb = Self::new(
+        let tcb = Self::new(
             tid, ProcessId(0), SchedPolicy::Normal,
             Priority::NORMAL_DEFAULT, cr3_phys, kernel_stack_top,
         );

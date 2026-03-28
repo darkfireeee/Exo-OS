@@ -69,19 +69,31 @@ impl EpollEventAbi {
 }
 
 // ─── Constantes epoll ─────────────────────────────────────────────────────────
+/// Donnée disponible en lecture.
 pub const EPOLLIN:      u32 = 0x0000_0001;
+/// Donnée urgente disponible.
 pub const EPOLLPRI:     u32 = 0x0000_0002;
+/// Prêt à l'écriture.
 pub const EPOLLOUT:     u32 = 0x0000_0004;
+/// Condition d'erreur.
 pub const EPOLLERR:     u32 = 0x0000_0008;
+/// Accrochage (connexion fermée).
 pub const EPOLLHUP:     u32 = 0x0000_0010;
+/// Pair a fermé le socket (lecture seule).
 pub const EPOLLRDHUP:   u32 = 0x0000_2000;
-pub const EPOLLET:      u32 = 0x8000_0000; // Edge Triggered
+/// Mode Edge Triggered.
+pub const EPOLLET:      u32 = 0x8000_0000;
+/// Désarmé après le premier événement.
 pub const EPOLLONESHOT: u32 = 0x4000_0000;
 
+/// Ajouter un descripteur à l'instance epoll.
 pub const EPOLL_CTL_ADD: u32 = 1;
+/// Supprimer un descripteur de l'instance epoll.
 pub const EPOLL_CTL_DEL: u32 = 2;
+/// Modifier les événements surveillés d'un descripteur.
 pub const EPOLL_CTL_MOD: u32 = 3;
-pub const EPOLL_CLOEXEC: i32 = 0o2000000; // O_CLOEXEC Linux
+/// Flag O_CLOEXEC pour epoll_create1.
+pub const EPOLL_CLOEXEC: i32 = 0o2000000;
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]

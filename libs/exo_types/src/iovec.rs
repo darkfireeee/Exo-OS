@@ -74,8 +74,18 @@ impl IoVec {
 /// Erreurs de validation IoVec.
 #[derive(Debug)]
 pub enum IoVecError {
+    /// Le tableau dépasse `IOV_MAX` (1024 entrées).
     TooManyVectors,
-    InvalidAddress { index: usize },
-    AddressOverflow { index: usize },
+    /// L'adresse de base du vecteur `index` est nulle ou non alignée.
+    InvalidAddress {
+        /// Indice du vecteur invalide.
+        index: usize
+    },
+    /// Addition `base + len` déborde un `u64`.
+    AddressOverflow {
+        /// Indice du vecteur en débordement.
+        index: usize
+    },
+    /// La somme des `len` dépasse `usize::MAX`.
     TotalLengthExceeded,
 }
