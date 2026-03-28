@@ -341,7 +341,7 @@ fn check_and_deliver_signals(frame: &mut SyscallFrame) {
 
     // Vérifier le flag avec Acquire pour synchroniser avec l'écriture signal_pending
     // effectuée par process/signal/ (Ordering::Release s'y applique).
-    if !tcb.signal_pending.load(core::sync::atomic::Ordering::Acquire) {
+    if !tcb.has_signal_pending() {
         return;
     }
 

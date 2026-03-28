@@ -391,8 +391,8 @@ impl PerCpuRunQueue {
     /// Enregistre le thread idle de ce CPU (appelé une seule fois au boot).
     pub fn set_idle_thread(&mut self, idle: NonNull<ThreadControlBlock>) {
         // SAFETY: idle est valide, la run queue en est propriétaire.
-        unsafe { idle.as_ref() }.flags
-            .fetch_or(super::task::task_flags::IS_IDLE, Ordering::Relaxed);
+        unsafe { idle.as_ref() }.sched_state
+            .fetch_or(super::task::SCHED_IDLE_BIT, Ordering::Relaxed);
         self.idle_thread = Some(idle);
     }
 

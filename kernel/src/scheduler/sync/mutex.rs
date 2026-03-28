@@ -120,7 +120,7 @@ impl<T> KMutex<T> {
                 // schedule_block() suspend proprement le thread sans le ré-enqueuer,
                 // et retourne uniquement quand le thread est réveillé par wake_one().
                 if !tcb.is_null() {
-                    let cpu_raw = (*tcb).cpu.load(Ordering::Relaxed) as usize;
+                    let cpu_raw = (*tcb).cpu_id.load(Ordering::Relaxed) as usize;
                     if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
                         let cpu_id = crate::scheduler::core::task::CpuId(cpu_raw as u32);
                         // SAFETY: cpu_raw < MAX_CPUS, run queue initialisée.

@@ -11,6 +11,8 @@ members = [
     "exo_logger",
     "exo_metrics",
     "exo_service_registry",
+    # Bibliothèque SSR ExoPhoenix (GI-01 Étape 10)
+    "exo-phoenix-ssr",
     # Bibliothèques Ring3 — compatibilité POSIX / runtime userspace
     "exo-rt",
     "exo-alloc",

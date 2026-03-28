@@ -202,7 +202,7 @@ impl ProcessThread {
         let stack_top = kstack.top_addr();
 
         let sched_tcb = Box::new(ThreadControlBlock::new(
-            ThreadId(tid.0),
+            ThreadId(tid.0 as u64),
             ProcessId(pid.0),
             policy,
             prio,

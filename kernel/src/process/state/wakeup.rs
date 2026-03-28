@@ -191,7 +191,7 @@ pub fn wait_for_dma(
             return result;
         }
         // Vérifier signal avant de se bloquer.
-        if tcb.signal_pending.load(Ordering::Acquire) {
+        if tcb.has_signal_pending() {
             return -4; // -EINTR
         }
         // SAFETY: tcb pointe vers le TCB courant, pas d'alias &mut actif.

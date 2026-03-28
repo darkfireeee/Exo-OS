@@ -101,8 +101,8 @@ extern "C" {
     /// le contexte du thread `new`.
     ///
     /// # Arguments (System V ABI)
-    /// - `old_kernel_rsp` : `*mut u64` pointant vers `TCB::kernel_rsp` du thread sortant
-    /// - `new_kernel_rsp` : valeur du `TCB::kernel_rsp` du thread entrant
+    /// - `old_kernel_rsp` : `*mut u64` pointant vers `TCB::kstack_ptr` du thread sortant
+    /// - `new_kernel_rsp` : valeur du `TCB::kstack_ptr` du thread entrant
     /// - `new_cr3`        : registre CR3 du thread entrant (0 = pas de switch CR3)
     fn context_switch_asm(
         old_kernel_rsp: *mut u64,
@@ -127,7 +127,7 @@ extern "C" {
 /// de vue sera établie par l'Acquire au retour userspace dans arch/.
 #[inline(always)]
 pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
-    tcb.signal_pending.load(Ordering::Relaxed)
+    tcb.has_signal_pending()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -141,7 +141,7 @@ pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
 /// 2. Marquer `prev` comme non-Running → Runnable (sauf si en train de mourir/dormir).
 /// 3. Appeler `context_switch_asm(prev_rsp_ptr, next_rsp, next_cr3)`.
 ///    La fonction ASM sauvegarde/restaure les callee-saved + MXCSR + x87 FCW.
-///    CR3 est switché atomiquement si `prev.cr3 != next.cr3`.
+///    CR3 est switché atomiquement si `prev.cr3_phys != next.cr3_phys`.
 /// 4. De retour côté `next` (après restauration par ASM) :
 ///    marquer `next` comme Running.
 ///    Invalider le flag FPU_LOADED pour `next` (lazy restore).
@@ -181,14 +181,14 @@ pub unsafe fn context_switch(
 
     // ── Étape 3 : ASM context switch ─────────────────────────────────────────
     // CR3 switch uniquement si les espaces d'adressage diffèrent (KPTI-aware).
-    let new_cr3 = if prev.cr3 != next.cr3 { next.cr3 } else { 0 };
+    let new_cr3 = if prev.cr3_phys != next.cr3_phys { next.cr3_phys } else { 0 };
 
-    // SAFETY: prev.kernel_rsp et next.kernel_rsp pointent vers des stacks kernel
+    // SAFETY: prev.kstack_ptr et next.kstack_ptr pointent vers des stacks kernel
     // valides, alloués au boot et jamais libérés pendant la durée de vie du thread.
     // context_switch_asm garantit la sauvegarde complète des callee-saved ABI.
     context_switch_asm(
-        &mut prev.kernel_rsp as *mut u64,
-        next.kernel_rsp,
+        &mut prev.kstack_ptr as *mut u64,
+        next.kstack_ptr,
         new_cr3,
     );
 

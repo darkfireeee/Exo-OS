@@ -128,7 +128,7 @@ pub fn handle_pending_signals(
     
 
     // Pas de signal_pending ? Sortie rapide.
-    if !thread.sched_tcb.signal_pending.load(Ordering::Acquire) { return; }
+    if !thread.sched_tcb.has_signal_pending() { return; }
 
     let mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
     let pid  = Pid(thread.sched_tcb.pid.0);
@@ -242,7 +242,7 @@ fn deliver_one(
 
 #[inline(always)]
 fn clear_signal_pending(thread: &crate::process::core::tcb::ProcessThread) {
-    thread.sched_tcb.signal_pending.store(false, Ordering::Release);
+    thread.sched_tcb.clear_signal_pending();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -306,7 +306,7 @@ pub unsafe extern "C" fn proc_signal_on_exception_return(
     // Lecture rapide du flag signal_pending — évite le lookup PROCESS_REGISTRY
     // si aucun signal n'est en attente.
     let sched_tcb = &*(tcb_ptr as *const ThreadControlBlock);
-    if !sched_tcb.signal_pending.load(Ordering::Acquire) { return; }
+    if !sched_tcb.has_signal_pending() { return; }
 
     // Lookup PCB par pid (nécessaire pour les handlers et le masque).
     let pid = Pid(sched_tcb.pid.0);
@@ -314,7 +314,7 @@ pub unsafe extern "C" fn proc_signal_on_exception_return(
         Some(p) => p,
         None    => {
             // Processus inconnu — effacer le flag orphelin et sortir.
-            sched_tcb.signal_pending.store(false, Ordering::Release);
+            sched_tcb.clear_signal_pending();
             return;
         }
     };

@@ -121,7 +121,7 @@ pub unsafe fn handle_nm_exception(tcb: &mut ThreadControlBlock) {
     // À chaque context switch suivant, xsave_current() voit fpu_state_ptr == NULL
     // et retourne SANS sauvegarder l'état → l'état FPU est perdu sans bruit
     // jusqu'à ce qu'une allocation réussisse.
-    if tcb.fpu_state_ptr.is_null() {
+    if tcb.fpu_state_ptr == 0 {
         super::save_restore::alloc_fpu_state(tcb);
         // Si l'allocation échoue (IN_RECLAIM ou OOM), fpu_state_ptr reste NULL.
         // xrstor_for() gérera ce cas : init par défaut, FPU_LOADED = true, mais

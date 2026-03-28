@@ -157,7 +157,7 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
         pid,
         params.ppid,
         pid,  // tgid = pid pour le thread principal
-        ThreadId(tid_raw),
+        ThreadId(tid_raw as u64),
         params.creds,
         params.fd_limit,
         params.cr3,
@@ -268,7 +268,7 @@ pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
         *frame.add(4) = 0;                             // r14
         *frame.add(5) = 0;                             // r15
         *frame.add(6) = kthread_trampoline as *const () as u64;     // return address → trampoline
-        (*thread_ptr).sched_tcb.kernel_rsp = kernel_rsp;
+        (*thread_ptr).sched_tcb.kstack_ptr = kernel_rsp;
     }
 
     // Enregistrer dans la run queue.

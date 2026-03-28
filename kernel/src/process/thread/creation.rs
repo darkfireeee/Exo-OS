@@ -141,7 +141,7 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
         let rdi_slot = (kstack_top - 56) as *mut u64;
         *rdi_slot = params.arg;
 
-        (*thread_ptr).sched_tcb.kernel_rsp = kstack_top - 56;
+        (*thread_ptr).sched_tcb.kstack_ptr = kstack_top - 56;
 
         // Adresses userspace.
         (*thread_ptr).addresses = ThreadAddress {

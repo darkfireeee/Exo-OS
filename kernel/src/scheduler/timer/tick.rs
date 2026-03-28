@@ -16,7 +16,7 @@
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use core::ptr::NonNull;
-use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy, task_flags, CpuId};
+use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy, task_flags, CpuId, SCHED_NEED_RESCHED_BIT};
 use crate::scheduler::core::runqueue;
 use crate::scheduler::policies::{tick_check_preempt, rr_tick, timeslice_for};
 use crate::scheduler::smp::load_balance::{balance_cpu, BALANCE_INTERVAL_TICKS};
@@ -97,7 +97,7 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
 
             // ── 3. Préemption CFS ───────────────────────────────────────
             if tick_check_preempt(tcb, elapsed, slice, nr) {
-                tcb.flags.fetch_or(task_flags::NEED_RESCHED, Ordering::Release);
+                tcb.sched_state.fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
                 ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
                 TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
             }
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
         SchedPolicy::RoundRobin => {
             // ── 4. Quantum RR ──────────────────────────────────────────
             if rr_tick(tcb, elapsed) {
-                tcb.flags.fetch_or(task_flags::NEED_RESCHED, Ordering::Release);
+                tcb.sched_state.fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
                 ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
                 TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
             }
@@ -117,7 +117,7 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
             // `deadline_tick()`, ignoraient leur `runtime_ns` et s'exécutaient
             // indéfiniment sans respecter leur budget par période.
             if crate::scheduler::policies::deadline::deadline_tick(tcb, elapsed) {
-                tcb.flags.fetch_or(task_flags::NEED_RESCHED, Ordering::Release);
+                tcb.sched_state.fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
                 ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
                 TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
             }
@@ -177,6 +177,6 @@ pub unsafe extern "C" fn sched_ipi_reschedule(tcb_ptr: *mut u8) {
         Some(p) => &mut *p.as_ptr(),
         None    => return,  // boot ou idle sans TCB — ignorer
     };
-    tcb.flags.fetch_or(task_flags::NEED_RESCHED, Ordering::Release);
+    tcb.sched_state.fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
     TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
 }

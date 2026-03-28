@@ -17,6 +17,8 @@ path = "src/main.rs"
 # ── Dépendances (no_std uniquement) ─────────────────────────────────────────
 
 [dependencies]
+exo-types        = { path = "../libs/exo_types" }
+exo-phoenix-ssr  = { path = "../libs/exo-phoenix-ssr" }
 exo-virtio-blk = { path = "../drivers/storage/virtio_blk" }
 
 # ── Workspace partagé ────────────────────────────────────────────────────────

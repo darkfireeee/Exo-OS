@@ -36,11 +36,11 @@ pub fn sys_getppid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
 
 /// `gettid()` → TID du thread courant.
 pub fn sys_gettid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    let tid_val: u32 = unsafe {
+    let tid_val: u64 = unsafe {
         let ptr: u64;
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nomem, nostack));
         if ptr == 0 { return 1; }
-        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock)).tid.0
+        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock)).tid
     };
     tid_val as i64
 }

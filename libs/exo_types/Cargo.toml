@@ -1,16 +1,28 @@
 [package]
-name = "exo_types"
-version = "0.1.0"
-edition = "2021"
-description = "Common types for Exo-OS kernel and user space"
-license = "MIT OR Apache-2.0"
-
-[dependencies]
-bitflags = "1.3"
-
-[features]
-default = []
-std = []
+name        = "exo-types"
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["Exo-OS Team"]
+license     = "MIT OR Apache-2.0"
+description = "Types partagés ExoOS — no_std · Ring 0/1/3 (GI-01)"
 
 [lib]
-doctest = false
+name = "exo_types"
+path = "src/lib.rs"
+
+[dependencies]
+# SRV-02 : AUCUNE dépendance blake3 ou chacha20poly1305 ici.
+# Vérification CI : grep -r 'blake3\|chacha20' libs/exo_types/ && exit 1
+
+# Comparaison constant-time pour verify_cap_token() (LAC-01 / CORR-52)
+# no_std compatible : pas d'allocation, pas de std
+subtle = { version = "2.6", default-features = false }
+
+[features]
+# Activer uniquement dans les tests CI côté host (blake3_zero_4k_correct)
+# Ne PAS activer pour la compilation kernel / no_std
+test-blake3 = []
+
+[dev-dependencies]
+# Uniquement pour le test blake3_zero_4k_correct (CI host, PAS dans le kernel)
+blake3 = { version = "1", default-features = false, features = ["pure"] }

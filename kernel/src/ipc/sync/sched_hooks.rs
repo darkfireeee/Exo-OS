@@ -125,7 +125,7 @@ pub fn current_tid() -> u32 {
         return 0;
     }
     // SAFETY: tcb_ptr non-null (vérifié ci-dessus); pointe dans le pool statique de TCBs.
-    unsafe { (*tcb_ptr).tid.0 }
+    unsafe { (*tcb_ptr).tid as u32 }
 }
 
 /// Bloque le thread courant identifié par `tid`.

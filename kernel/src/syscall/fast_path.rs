@@ -126,7 +126,7 @@ unsafe fn current_tid() -> ThreadId {
     if tcb.is_null() {
         return ThreadId(0);
     }
-    (*tcb).tid
+    ThreadId((*tcb).tid)
 }
 
 /// Retourne le `ProcessId` du thread courant.

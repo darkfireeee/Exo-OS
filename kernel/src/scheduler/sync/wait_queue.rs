@@ -168,7 +168,7 @@ impl WaitQueue {
                 if transitioned {
                     // BUG-FIX L : valider les bornes de cpu_id avant run_queue().
                     // En release mode, debug_assert est no-op → UB si cpu hors limites.
-                    let cpu_raw = (*tcb).cpu.load(Ordering::Relaxed) as usize;
+                    let cpu_raw = (*tcb).cpu_id.load(Ordering::Relaxed) as usize;
                     if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
                         let cpu_id = CpuId(cpu_raw as u32);
                         let rq = run_queue(cpu_id);
@@ -237,7 +237,7 @@ impl WaitQueue {
         self.insert(node);
 
         // 4. Vérification du signal (APRÈS insertion — fenêtre de réveil manqué évitée).
-        if (*tcb).signal_pending.load(Ordering::Acquire) {
+        if (*tcb).has_signal_pending() {
             self.remove(node);
             WaitNode::free(node);
             (*tcb).set_state(TaskState::Runnable);
@@ -247,12 +247,12 @@ impl WaitQueue {
         // 5. Bloquer — schedule_block ne revient que quand le thread est réveillé.
         // V-38 / PREEMPT-BLOCK : INTERDIT de bloquer sous PreemptGuard actif.
         crate::scheduler::core::preempt::assert_preempt_enabled();
-        let cpu_id = CpuId((*tcb).cpu.load(Ordering::Relaxed));
+        let cpu_id = CpuId((*tcb).cpu_id.load(Ordering::Relaxed) as u32);
         let rq = run_queue(cpu_id);
         crate::scheduler::core::switch::schedule_block(rq, &mut *tcb);
 
         // 6. Après réveil : nœud déjà libéré par le waker.
-        !(*tcb).signal_pending.load(Ordering::Acquire)
+        !(*tcb).has_signal_pending()
     }
 }
 

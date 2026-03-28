@@ -17,7 +17,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::core::task::{ThreadControlBlock, task_flags};
+use crate::scheduler::core::task::{ThreadControlBlock, SCHED_IDLE_BIT};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Métriques idle
@@ -36,12 +36,12 @@ pub static IDLE_WAKEUPS: AtomicU64 = AtomicU64::new(0);
 
 /// Marque un TCB comme étant la tâche idle de son CPU.
 pub fn mark_idle_thread(tcb: &mut ThreadControlBlock) {
-    tcb.flags.fetch_or(task_flags::IS_IDLE, Ordering::Relaxed);
+    tcb.sched_state.fetch_or(SCHED_IDLE_BIT, Ordering::Relaxed);
 }
 
 /// Retourne `true` si le TCB est la tâche idle.
 pub fn is_idle_thread(tcb: &ThreadControlBlock) -> bool {
-    tcb.flags.load(Ordering::Relaxed) & task_flags::IS_IDLE != 0
+    tcb.is_idle()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

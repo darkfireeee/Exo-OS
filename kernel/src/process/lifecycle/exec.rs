@@ -170,7 +170,7 @@ pub fn do_execve(
     block_all_except_kill(&thread.sched_tcb);
 
     // Charger le nouveau binaire dans l'espace d'adressage.
-    let cr3_current = thread.sched_tcb.cr3;
+    let cr3_current = thread.sched_tcb.cr3_phys;
     let elf_result = loader
         .load_elf(path, argv, envp, cr3_current)
         .map_err(ExecError::ElfLoadFailed)?;
@@ -201,7 +201,7 @@ pub fn do_execve(
     reset_signals_on_exec(&thread.sched_tcb);
 
     // Mettre à jour l'espace d'adressage dans le TCB scheduler.
-    thread.sched_tcb.cr3 = elf_result.cr3;
+    thread.sched_tcb.cr3_phys = elf_result.cr3;
 
     // Mettre à jour les adresses du thread.
     thread.addresses = ThreadAddress {

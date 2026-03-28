@@ -106,7 +106,7 @@ impl CondVar {
         // Extraire le mutex et le TID du thread avant de relâcher le guard.
         // SAFETY: Le guard contient une référence au mutex — on récupère le TID
         // via le TCB (tid est dans la CL1, lecture seule ici).
-        let tid = if !tcb.is_null() { (*tcb).tid.0 } else { 1 };
+        let tid = if !tcb.is_null() { (*tcb).tid as u32 } else { 1u32 };
         let mutex_ref = guard.mutex;
 
         if let Some(node) = node_opt {
@@ -134,7 +134,7 @@ impl CondVar {
         // Le thread sera repris uniquement quand notify_one()/notify_all() appelle
         // wake_one() → try_transition(Sleeping, Runnable) + rq.enqueue().
         if !tcb.is_null() {
-            let cpu_raw = (*tcb).cpu.load(Ordering::Relaxed) as usize;
+            let cpu_raw = (*tcb).cpu_id.load(Ordering::Relaxed) as usize;
             if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
                 let cpu_id = crate::scheduler::core::task::CpuId(cpu_raw as u32);
                 // SAFETY: cpu_raw < MAX_CPUS, run queue initialisée par scheduler::init().

@@ -80,7 +80,7 @@ impl HandshakeMsg {
             _pad:    0,
             cookie:  cookie.get(),
             ep_id:   ep_id.get(),
-            tid:     tid.0,
+            tid:     tid.0 as u32,
             _pad2:   0,
         }
     }
@@ -93,7 +93,7 @@ impl HandshakeMsg {
             _pad:    0,
             cookie:  cookie.get(),
             ep_id:   ep_id.get(),
-            tid:     server_tid.0,
+            tid:     server_tid.0 as u32,
             _pad2:   0,
         }
     }

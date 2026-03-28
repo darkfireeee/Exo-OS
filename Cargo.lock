@@ -287,6 +287,8 @@ dependencies = [
  "bitflags",
  "blake3",
  "ed25519-dalek",
+ "exo-phoenix-ssr",
+ "exo-types",
  "exo-virtio-blk",
  "hashbrown",
  "hkdf",
@@ -310,10 +312,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-phoenix-ssr"
+version = "0.1.0"
+
+[[package]]
 name = "exo-scheduler-server"
 version = "0.1.0"
 dependencies = [
  "spin",
+]
+
+[[package]]
+name = "exo-types"
+version = "0.1.0"
+dependencies = [
+ "subtle",
 ]
 
 [[package]]

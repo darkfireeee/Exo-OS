@@ -165,7 +165,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         ForkError::NoAddrCloner
     })?;
 
-    let parent_cr3       = parent.sched_tcb.cr3;
+    let parent_cr3       = parent.sched_tcb.cr3_phys;
     let parent_space_ptr = parent_pcb.address_space.load(Ordering::Acquire);
 
     let cloned_as = cloner.clone_cow(parent_cr3, parent_space_ptr)
@@ -224,7 +224,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         *frame_ptr.add(9)  = 0x0202;                        // RFLAGS (IF=1, reserved=1)
         *frame_ptr.add(10) = ctx.child_rsp;                 // RSP  userspace
         *frame_ptr.add(11) = 0x23;                          // SS   ring3
-        child_tcb.kernel_rsp = kstack_top - 96;
+        child_tcb.kstack_ptr = kstack_top - 96;
     }
 
     // Copier les adresses utilisateur.
@@ -242,7 +242,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         child_pid,
         parent_pcb.pid,      // ppid = parent pid
         child_pid,           // tgid = child pid (nouveau process group leader thread)
-        ThreadId(child_tid_raw),
+        ThreadId(child_tid_raw as u64),
         parent_creds,
         {
         let f = parent_pcb.files.lock();

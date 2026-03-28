@@ -1,116 +1,43 @@
-//! Exo-OS Type Library
-//!
-//! Production-grade type definitions for Exo-OS kernel and userspace.
-//!
-//! # Architecture
-//!
-//! This library follows a layered architecture:
-//!
-//! - **Layer 0 (Primitives)**: Fundamental types with no dependencies
-//!   - Address types (PhysAddr, VirtAddr)
-//!   - Process/thread IDs (Pid, Tid)
-//!   - File descriptors (Fd)
-//!   - User/Group IDs (Uid, Gid)
-//!
-//! - **Layer 1 (Error & Time)**: Types with minimal dependencies
-//!   - Error codes (Errno)
-//!   - Time types (Timestamp, Duration)
-//!
-//! - **Layer 2 (IPC & Security)**: Communication and security primitives
-//!   - Signals (Signal, SignalSet)
-//!   - Capabilities (Capability, Rights)
-//!
-//! - **Layer 3 (Syscalls)**: System call interface
-//!   - Syscall numbers
-//!   - Assembly wrappers
-//!
-//! # Features
-//!
-//! - `std`: Enable standard library support (default: disabled)
-//!
-//! # Examples
-//!
-//! ```rust
-//! use exo_types::prelude::*;
-//!
-//! // Create a physical address
-//! let paddr = PhysAddr::new(0x1000);
-//! assert!(paddr.is_page_aligned());
-//!
-//! // Create a process ID
-//! let pid = Pid::new(123);
-//! assert!(!pid.is_kernel());
-//!
-//! // Create a capability
-//! let cap = Capability::new(1, CapabilityType::File, Rights::READ);
-//! assert!(cap.has_rights(Rights::READ));
-//! ```
+// libs/exo-types/src/lib.rs
+//
+// Fichier : libs/exo_types/src/lib.rs
+// Rôle    : Crate no_std de types partagés ExoOS — GI-01 Étape 1.
+//
+// DÉPENDANCES : aucune (types fondamentaux)
+//
+// INVARIANTS :
+//   - SRV-02 : AUCUN import blake3 ou chacha20poly1305 dans ce crate.
+//   - IPC-02 : Tous les types protocol.rs sont Sized et taille fixe.
+//   - CI     : grep -r 'blake3\|chacha20' libs/exo_types/ && exit 1
+//
+// SOURCE DE VÉRITÉ :
+//   ExoOS_Kernel_Types_v10.md §1-2, ExoOS_Architecture_v7.md §1.3,
+//   ExoOS_Arborescence_V3.md §2, GI-01_Types_TCB_SSR.md
 
 #![no_std]
-#![cfg_attr(not(test), deny(warnings))]
-#![deny(unsafe_op_in_unsafe_fn)]
-#![deny(missing_docs)]
+#![deny(unsafe_op_in_unsafe_fn)] // Chaque unsafe fn doit justifier ses blocs unsafe
+#![warn(missing_docs)]
+#![allow(clippy::new_without_default)] // const fn new() ne peut pas impl Default
 
-// Allow std in tests
-#[cfg(all(test, feature = "std"))]
-extern crate std;
+pub mod addr;
+pub mod cap;
+pub mod constants;
+pub mod epoll;
+pub mod error;
+pub mod fixed_string;
+pub mod iovec;
+pub mod ipc_msg;
+pub mod object_id;
+pub mod pollfd;
 
-// Re-export core for use in macros
-#[doc(hidden)]
-pub use core;
-
-// ===== Core Modules (Layer 0-3) =====
-
-/// Physical and virtual address types
-pub mod address;
-
-/// Error numbers (errno)
-pub mod errno;
-
-/// Capability-based security
-pub mod capability;
-
-/// Primitive types (Layer 0)
-pub mod primitives;
-
-/// Time types (Layer 1)
-pub mod time;
-
-/// IPC types (Layer 2)
-pub mod ipc;
-
-/// System call interface (Layer 3)
-pub mod syscall;
-
-// ===== Prelude =====
-
-/// Prelude module with commonly used types
-pub mod prelude;
-
-// ===== Top-level Re-exports =====
-
-// Primitives
-pub use address::{PhysAddr, VirtAddr, PAGE_SIZE, HUGE_PAGE_SIZE, GIGA_PAGE_SIZE};
-pub use primitives::{
-    Pid, Fd, Uid, Gid,
-    KERNEL_PID, INIT_PID,
-    STDIN, STDOUT, STDERR,
-    ROOT_UID, ROOT_GID, NOBODY_UID, NOBODY_GID,
-};
-
-// Errors
-pub use errno::Errno;
-
-// Time
-pub use time::{Timestamp, TimestampKind, Duration};
-
-// IPC
-pub use ipc::{Signal, SignalSet, SignalAction, SignalHandler};
-
-// Capability
-pub use capability::{
-    Capability, CapabilityType, CapabilityMetadata, Rights, MetadataFlags,
-};
-
-// Syscalls
-pub use syscall::{SyscallNumber, syscall0, syscall1, syscall2, syscall3, syscall4, syscall5, syscall6};
+// ─── Réexports publics ────────────────────────────────────────────────────────
+pub use addr::{IoVirtAddr, PhysAddr, VirtAddr};
+pub use cap::{CapToken, CapabilityType, Rights, verify_cap_token};
+pub use constants::{EXOFS_PAGE_SIZE, ZERO_BLOB_ID_4K};
+pub use epoll::EpollEventAbi;
+pub use error::ExoError;
+pub use fixed_string::{FixedString, PathBuf, ServiceName};
+pub use iovec::IoVec;
+pub use ipc_msg::{IpcEndpoint, IpcMessage};
+pub use object_id::ObjectId;
+pub use pollfd::PollFd;

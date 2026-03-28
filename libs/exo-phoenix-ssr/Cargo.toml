@@ -1,0 +1,12 @@
+[package]
+name = "exo-phoenix-ssr"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "exo_phoenix_ssr"
+
+# Pas de dépendances externes : crate kernel-space no_std autonome.
+[dependencies]

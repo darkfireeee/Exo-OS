@@ -142,8 +142,8 @@ pub unsafe fn alloc_fpu_state(tcb: &mut ThreadControlBlock) -> bool {
     // BUG-FIX F : interdire les allocations depuis un contexte IN_RECLAIM.
     // Appeler l'allocateur heap depuis IN_RECLAIM peut créer un deadlock si
     // l'allocateur lui-même attend l'EmergencyPool (RÈGLE FPU-03).
-    if tcb.flags.load(Ordering::Relaxed)
-        & crate::scheduler::core::task::task_flags::IN_RECLAIM != 0
+    if tcb.sched_state.load(Ordering::Relaxed)
+        & crate::scheduler::core::task::SCHED_IN_RECLAIM_BIT != 0
     {
         return false;
     }
@@ -164,6 +164,6 @@ pub unsafe fn alloc_fpu_state(tcb: &mut ThreadControlBlock) -> bool {
     core::ptr::write(fpu, FpuState::new());
     fpu.active_size = XSAVE_AREA_SIZE.load(Ordering::Relaxed);
 
-    tcb.fpu_state_ptr = ptr;
+    tcb.fpu_state_ptr = ptr as u64;
     true
 }

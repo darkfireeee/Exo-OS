@@ -125,7 +125,7 @@ pub fn release_thread(fraction: u64) {
 /// EDF : upon activation, deadline_abs = now + deadline_params.deadline_ns
 pub fn refresh_deadline(tcb: &mut ThreadControlBlock) {
     let now = monotonic_ns();
-    let deadline_ns = tcb.deadline_params.deadline_ns;
+    let deadline_ns = tcb.dl_period;
     tcb.deadline_abs.store(now.saturating_add(deadline_ns), Ordering::Release);
 }
 
