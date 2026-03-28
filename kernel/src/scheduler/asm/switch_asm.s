@@ -2,15 +2,21 @@
 // CONTEXT SWITCH ASM — Exo-OS Scheduler (x86_64)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE SWITCH-ASM (DOC3) :
-//   • Sauvegarder tous les registres callee-saved ABI System V :
-//     rbx, rbp, r12, r13, r14, r15, rsp
-//   • Sauvegarder MXCSR + x87 FCW EXPLICITEMENT (pas via XSAVE)
-//     Raison : du code Rust compilé avec optimisations SSE peut corrompre MXCSR
-//              entre deux threads si on ne le sauvegarde pas dans switch_asm.
+// RÈGLE SWITCH-ASM (V7-C-02 + CORR-18) :
+//   • Sauvegarder les 6 registres callee-saved ABI System V UNIQUEMENT :
+//     rbx, rbp, r12, r13, r14, r15   (6 × 8 = 48B + rip implicite = 56B)
+//   • NE PAS toucher MXCSR ni x87 FCW :
+//     Le kernel est compilé avec -mmx,-sse,-sse2,+soft-float → pas d'instructions
+//     SSE générées par le compilateur → MXCSR ne peut pas être corrompu par le
+//     kernel. L'état FPU complet (MXCSR, FCW, registres x87/SSE/AVX) est géré
+//     exclusivement par scheduler/fpu/save_restore.rs via XSAVE/XRSTOR.
+//   • NE PAS toucher FS/GS base : géré par switch.rs via rdmsr/wrmsr (CORR-11).
 //   • CR3 switché ICI, AVANT la restauration des registres (KPTI atomique)
-//   • GARANTIE FORMELLE r15 : push AVANT tout appel C
-//     (ext4plus/inode/ops.rs utilise r15 — doit être préservé)
+//
+// NB : Le TCB contient 15 GPRs pour le cas d'une préemption par IRQ (le handler
+//      IRQ empile tous les GPRs). switch_asm.s est optimisé pour le yield
+//      coopératif uniquement (6 GPRs callee-saved). Ces deux chemins sont
+//      distincts et compatibles — voir CORR-18 pour l'explication complète.
 //
 // Signature (System V ABI) :
 //   context_switch_asm(
@@ -26,24 +32,18 @@
 .type context_switch_asm, @function
 
 context_switch_asm:
-    // ── Sauvegarder les registres callee-saved du thread SORTANT ──────────────
-    // ORDRE OBLIGATOIRE : r15 EN PREMIER (GARANTIE FORMELLE pour ext4plus/inode/ops.rs)
+    // ── Sauvegarder les 6 registres callee-saved du thread SORTANT ───────────
+    // (V7-C-02 : SANS MXCSR ni x87 FCW — gérés par XSAVE/XRSTOR dans fpu/)
     pushq   %r15
     pushq   %r14
     pushq   %r13
     pushq   %r12
     pushq   %rbp
     pushq   %rbx
+    // Total : 6 × 8 = 48B sur pile (+ rip implicite = 56B)
 
-    // Sauvegarder MXCSR (contrôle SSE) — 4 bytes via stmxcsr
-    subq    $16, %rsp               // Réserver 16 bytes (alignement 16B requis)
-    stmxcsr 0(%rsp)
-
-    // Sauvegarder x87 FCW (contrôle FP) — 2 bytes via fstcw
-    fstcw   8(%rsp)
-
-    // Sauvegarder le stack pointer kernel du thread SORTANT dans son TCB.
-    // rdi = pointeur vers TCB::kernel_rsp du thread sortant
+    // Sauvegarder RSP du thread SORTANT dans son TCB (champ kstack_ptr).
+    // rdi = &TCB::kstack_ptr du thread sortant
     movq    %rsp, (%rdi)
 
     // ── Switch CR3 si nécessaire (KPTI) ──────────────────────────────────────
@@ -56,16 +56,11 @@ context_switch_asm:
     movq    %rdx, %cr3
 
 .L_skip_cr3:
-    // ── Charger le stack pointer kernel du thread ENTRANT ────────────────────
-    // rsi = new_kernel_rsp
+    // ── Charger RSP du thread ENTRANT depuis son TCB (champ kstack_ptr) ───────
+    // rsi = TCB::kstack_ptr du thread entrant
     movq    %rsi, %rsp
 
-    // ── Restaurer x87 FCW et MXCSR du thread ENTRANT ────────────────────────
-    fldcw   8(%rsp)                 // Restaurer x87 FCW en premier
-    ldmxcsr 0(%rsp)                 // Restaurer MXCSR
-    addq    $16, %rsp               // Libérer les 16 bytes réservés
-
-    // ── Restaurer les registres callee-saved du thread ENTRANT ───────────────
+    // ── Restaurer les 6 registres callee-saved du thread ENTRANT ─────────────
     popq    %rbx
     popq    %rbp
     popq    %r12
@@ -74,8 +69,8 @@ context_switch_asm:
     popq    %r15
 
     // Retour — continue dans le contexte du nouveau thread.
-    // Le ret consomme l'adresse de retour qui fut pushée lors de l'appel
-    // context_switch_asm() du thread ENTRANT (la fois où il était sortant).
+    // Le ret consomme l'adresse de retour pushée lors de l'appel précédent
+    // context_switch_asm() de ce thread (quand il était lui-même le sortant).
     ret
 
 .size context_switch_asm, . - context_switch_asm

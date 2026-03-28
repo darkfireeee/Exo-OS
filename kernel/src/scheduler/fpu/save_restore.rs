@@ -4,13 +4,13 @@
 // XSAVE/XRSTOR — Sauvegarde/Restauration FPU (Exo-OS Scheduler · Couche 1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE FPU-01 (DOC3) :
+// RÈGLE FPU-01 (V7-C-02 + GI-02) :
 //   Ce module gère LA LOGIQUE — les instructions ASM brutes (xsave/xrstor/fxsave)
 //   sont dans arch/x86_64/cpu/fpu.rs. NE PAS dupliquer les instructions ici.
 //   Les appels vers arch/ sont via FFI extern "C".
 //
-//   Exception : MXCSR et x87 FCW sont sauvegardés EXPLICITEMENT dans switch_asm.s
-//   (pas via XSAVE) car le switch_asm les intègre dans le context switch standard.
+//   MXCSR et x87 FCW sont gérés EXCLUSIVEMENT par XSAVE/XRSTOR ici.
+//   switch_asm.s ne touche PAS MXCSR ni FCW (V7-C-02 — kernel compilé sans SSE).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::Ordering;

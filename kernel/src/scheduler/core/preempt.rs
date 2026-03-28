@@ -26,7 +26,9 @@ use core::sync::atomic::{AtomicI32, Ordering};
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Nombre maximal de CPUs supportés.
-pub const MAX_CPUS: usize = 64;
+/// CORR-27 : doit être ≥ SSR_MAX_CORES_LAYOUT (256) — Phase 0 obligatoire.
+/// ÉTAIT : 64 — CORRIGÉ : 256
+pub const MAX_CPUS: usize = 256;
 
 /// Compteurs de préemption per-CPU — un compteur par CPU logique.
 ///

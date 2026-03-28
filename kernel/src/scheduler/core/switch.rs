@@ -4,13 +4,16 @@
 // CONTEXT SWITCH — Dispatch vers switch_asm.s (Exo-OS Scheduler · Couche 1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLES (DOC1 + DOC3) :
+// RÈGLES (GI-02 + Corrections) :
 //   RÈGLE SWITCH-01 : check_signal_pending() LIT uniquement — jamais de livraison
-//   RÈGLE SWITCH-02 : Lazy FPU AVANT le switch, mark APRÈS
+//   RÈGLE SWITCH-02 : Lazy FPU AVANT le switch, CR0.TS=1 APRÈS (V7-C-02)
 //   RÈGLE SIGNAL-01 : scheduler/ NE connaît PAS process::signal::*
 //                     Il lit seulement le flag AtomicBool signal_pending du TCB
-//   RÈGLE SWITCH-ASM : switch_asm.s sauvegarde rbx,rbp,r12-r15,rsp + MXCSR + x87 FCW
+//   RÈGLE SWITCH-ASM : switch_asm.s sauvegarde rbx,rbp,r12-r15 UNIQUEMENT (V7-C-02)
+//                      PAS de MXCSR/FCW — gérés par XSAVE/XRSTOR dans fpu/
 //                      CR3 switché dans switch_asm AVANT restauration des registres (KPTI)
+//   CORR-11 : FS/GS base sauvegardés via rdmsr/wrmsr dans context_switch()
+//   V7-C-03 : TSS.RSP0 mis à jour après chaque switch (sinon IRQ sur mauvaise pile)
 //   ZONE NO-ALLOC : aucune allocation dans ce chemin chaud
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -18,7 +21,10 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use super::task::{ThreadControlBlock, TaskState};
 use super::preempt::MAX_CPUS;
 use crate::scheduler::fpu;
-use crate::arch::x86_64::cpu::{features::CPU_FEATURES, msr};
+use crate::arch::x86_64::{
+    cpu::{features::CPU_FEATURES, msr::{self, MSR_FS_BASE, MSR_KERNEL_GS_BASE}},
+    tss,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pointeur "thread courant" par CPU — mis à jour à chaque context switch
@@ -136,15 +142,18 @@ pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
 
 /// Effectue le context switch de `prev` vers `next`.
 ///
-/// # Séquence
-/// 1. Lazy FPU : si `prev` a utilisé la FPU → la sauvegarder (XSAVE/FXSAVE).
-/// 2. Marquer `prev` comme non-Running → Runnable (sauf si en train de mourir/dormir).
-/// 3. Appeler `context_switch_asm(prev_rsp_ptr, next_rsp, next_cr3)`.
-///    La fonction ASM sauvegarde/restaure les callee-saved + MXCSR + x87 FCW.
-///    CR3 est switché atomiquement si `prev.cr3_phys != next.cr3_phys`.
-/// 4. De retour côté `next` (après restauration par ASM) :
-///    marquer `next` comme Running.
-///    Invalider le flag FPU_LOADED pour `next` (lazy restore).
+/// # Séquence (GI-02 complète)
+/// 1. Lazy FPU : si `prev` a utilisé la FPU → XSAVE (sans toucher MXCSR/FCW V7-C-02).
+/// 2. Sauvegarder PKRS (Intel PKS).
+/// 3. Sauvegarder FS.base et user_gs_base via rdmsr (CORR-11).
+/// 4. Marquer `prev` → Runnable.
+/// 5. Appeler `context_switch_asm(prev_rsp_ptr, next_rsp, next_cr3)`.
+///    L'ASM sauvegarde/restaure 6 callee-saved GPRs. CR3 switché si différent.
+/// 6. Restaurer PKRS de `next`.
+/// 7. Marquer `next` → Running. Mettre à jour CURRENT_THREAD_PER_CPU.
+/// 8. Mettre CR0.TS = 1 (Lazy FPU — V7-C-02). set_fpu_loaded(false).
+/// 9. Mettre à jour TSS.RSP0 ← next.kstack_ptr (V7-C-03 OBLIGATOIRE).
+/// 10. Restaurer FS.base et user_gs_base de `next` via wrmsr (CORR-11).
 ///
 /// # Sécurité
 /// - Appelé avec préemption désactivée (IrqGuard ou PreemptGuard).
@@ -157,12 +166,13 @@ pub unsafe fn context_switch(
     prev: &mut ThreadControlBlock,
     next: &mut ThreadControlBlock,
 ) {
-    // ── Étape 1 : Lazy FPU save ──────────────────────────────────────────────
-    // RÈGLE SWITCH-02 : sauvegarder FPU du thread sortant si elle était chargée.
+    // ── Étape 1 : Lazy FPU save (RÈGLE SWITCH-02) ─────────────────────────────
+    // Sauvegarder l'état FPU du thread sortant si elle était chargée (CR0.TS=0).
+    // Note : CR0.TS sera remis à 1 après le switch (step 7 ci-dessous).
     if prev.fpu_loaded() {
         fpu::save_restore::xsave_current(prev);
-        // On ne mark pas FPU_LOADED = false ici — c'est fait dans step 4.
-        // (Si un IRQ arrive entre step 1 et step 3, la FPU est déjà sauvée.)
+        // FPU_LOADED reste true jusqu'à step 9 (set_fpu_loaded(false) pour next).
+        // Si un IRQ arrive entre step 1 et step 5, la FPU est déjà sauvée.
     }
 
     // Sauvegarde PKRS (S6) si le CPU supporte PKS.
@@ -171,7 +181,21 @@ pub unsafe fn context_switch(
         prev.pkrs = unsafe { msr::read_msr(msr::MSR_IA32_PKRS) as u32 };
     }
 
-    // ── Étape 2 : Transition d'état de prev ──────────────────────────────────
+    // ── Étape 2 : Sauvegarder FS/GS base du thread sortant (CORR-11) ─────────
+    //
+    // On est en Ring 0 → SWAPGS a été effectué à l'entrée kernel.
+    //   MSR_FS_BASE       (0xC0000100) = FS.base courant (TLS userspace prev)
+    //   MSR_KERNEL_GS_BASE (0xC0000102) = GS.base caché (valeur userspace prev)
+    //     [GS.base actuel (0xC0000101) = per-CPU kernel data — ne pas sauvegarder]
+    //
+    // ERREUR SILENCIEUSE S-06 : sauvegarder 0xC0000101 au lieu de 0xC0000102
+    //   → TLS Ring 3 corrompu après chaque context switch entre threads différents.
+    //
+    // SAFETY: rdmsr en Ring 0 sur MSR valides et supportés (x86_64 requis).
+    prev.fs_base       = unsafe { msr::read_msr(MSR_FS_BASE) };
+    prev.gs_base       = unsafe { msr::read_msr(MSR_KERNEL_GS_BASE) };
+
+    // ── Étape 3 : Transition d'état de prev ──────────────────────────────────
     // Si le thread sortant était Running → il redevient Runnable (sera ré-enfilé).
     // Si il était dans un état bloquant (Sleeping, Uninterruptible) → on ne change pas.
     let prev_state = prev.state();
@@ -179,7 +203,7 @@ pub unsafe fn context_switch(
         prev.set_state(TaskState::Runnable);
     }
 
-    // ── Étape 3 : ASM context switch ─────────────────────────────────────────
+    // ── Étape 4 : ASM context switch ─────────────────────────────────────────
     // CR3 switch uniquement si les espaces d'adressage diffèrent (KPTI-aware).
     let new_cr3 = if prev.cr3_phys != next.cr3_phys { next.cr3_phys } else { 0 };
 
@@ -203,7 +227,7 @@ pub unsafe fn context_switch(
         unsafe { msr::write_msr(msr::MSR_IA32_PKRS, next.pkrs as u64) };
     }
 
-    // ── Étape 4 : Post-switch côté `next` ────────────────────────────────────
+    // ── Étape 5 : Post-switch côté `next` ────────────────────────────────────
     // Marquer `next` comme Running.
     next.set_state(TaskState::Running);
 
@@ -212,10 +236,36 @@ pub unsafe fn context_switch(
     CURRENT_THREAD_PER_CPU[next.current_cpu().0 as usize]
         .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
 
-    // RÈGLE SWITCH-02 (suite) : Invalider FPU_LOADED pour `next`.
-    // La FPU sera restaurée lazily quand `next` utilise une instruction FP (#NM).
-    // Cela évite une XRSTOR coûteuse si `next` n'utilise pas la FPU cette tranche.
+    // ── Étape 6 : CR0.TS = 1 — Lazy FPU (V7-C-02) ───────────────────────────
+    // Déclenche #NM si `next` utilise une instruction FPU/SSE sans l'avoir
+    // chargée. Le handler #NM (lazy.rs) fera XRSTOR et remettra CR0.TS=0.
+    // SAFETY: cr0_set_ts modifie CR0.TS en Ring 0 — opération sûre au boot
+    // et lors de chaque context switch.
+    unsafe { fpu::lazy::cr0_set_ts(); }
     next.set_fpu_loaded(false);
+
+    // ── Étape 7 : TSS.RSP0 obligatoire (V7-C-03) ─────────────────────────────
+    // Met à jour TSS.RSP0 avec le haut de pile kernel de `next`.
+    //
+    // ERREUR SILENCIEUSE S-08 : si oublié, la prochaine interruption Ring 3→0
+    // empilera sur la pile de l'ANCIEN thread → corruption silencieuse.
+    //
+    // SAFETY: next.current_cpu().0 < MAX_CPUS et next.kstack_ptr est valide.
+    unsafe {
+        tss::update_rsp0(next.current_cpu().0 as usize, next.kstack_ptr);
+    }
+
+    // ── Étape 8 : Restaurer FS/GS base de `next` (CORR-11) ──────────────────
+    //
+    // Restaurer FS.base (TLS userspace) et user GS.base (valeur Ring 3).
+    // Écrire user_gs_base dans MSR_KERNEL_GS_BASE (0xC0000102) : lors du
+    // SWAPGS à IRETQ vers Ring 3, cette valeur deviendra GS.base.
+    //
+    // SAFETY: wrmsr en Ring 0 sur MSR valides et supportés.
+    unsafe {
+        msr::write_msr(MSR_FS_BASE, next.fs_base);
+        msr::write_msr(MSR_KERNEL_GS_BASE, next.gs_base);
+    }
 
     // Vérifier signal pending (lecture pure, pas de livraison).
     // La livraison effective sera faite par arch/syscall.rs au retour userspace.
