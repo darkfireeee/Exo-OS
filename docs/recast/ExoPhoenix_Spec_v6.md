@@ -92,58 +92,88 @@ IMPORTANT : ces constantes doivent être dans un crate partagé compilé identiq
 
 
  
-3. TCB Layout v6 — Spécification finale à figer
+3. TCB Layout GI-01 — Spécification amendée (Mars 2026)
 
-TCB révisé de 192 à 256 bytes (4 cache lines). Raison : FS.base + GS.base (MSRs TLS) obligatoires pour context switch correct en userspace x86_64. Journal des décisions mis à jour : révision justifiée.
+> **Amendement** : le layout v6 original (capability_token[0], GPRs inline [64..191]) a été
+> remplacé par le layout GI-01 lors de l'implémentation. Justification détaillée dans CORR-01.
+> Le protocole d'introspection Kernel B est défini ci-dessous (§3.1) — il ne requiert
+> pas de GPRs inline dans le TCB.
 
-Champ	Offset	Taille	Rôle et justification
-── Cache Line 1 (bytes 0-63) : données chaudes scheduler ──		64 total	Accès fréquent par B (runqueue walk) et par le scheduler de A
-capability_token	[0]	8	Token de capacité ExoOS du thread
-kstack_ptr	[8]	8	Pointeur RSP Ring 0 (top of kernel stack)
-tid	[16]	8	Thread ID global unique
-sched_state	[24]	8	État scheduler : RUNNING / BLOCKED / ZOMBIE / ...
-fs_base	[32]	8	MSR 0xC0000100 — FS.base du thread. Obligatoire pour TLS userspace (pthread, Rust std). Sauvegardé via rdmsr/wrmsr au context switch.
-gs_base	[40]	8	MSR 0xC0000101 — GS.base du thread. Valeur userspace (kernel utilise SWAPGS). Sauvegardé au context switch.
-pkrs	[48]	4	Protection Key Rights Supervisor (Intel PKS uniquement, conditionnel CPUID). Zéro sur AMD.
-_padding_cl1	[52]	12	Padding pour aligner la cache line 1 à 64 bytes exactement.
-── Cache Lines 2-4 (bytes 64-255) : cpu_ctx inline ──		192 total	Sauvegardé/restauré uniquement lors d'un context switch effectif
-rax..r15 (16 GPR)	[64]	128	16 registres généraux × 8 bytes. Sauvegardés par pusha équivalent dans switch_context.S
-rip	[192]	8	Instruction pointer — point de reprise du thread
-rsp	[200]	8	Stack pointer userspace (distinct de kstack_ptr)
-rflags	[208]	8	Flags CPU (EFLAGS étendu)
-cs / ss	[216]	8	Segment selectors (cs << 32 | ss, compact)
-cr2	[224]	8	Page fault linear address — utile pour gestion #PF dans A
-_padding_cpu_ctx	[232]	24	Padding pour aligner cpu_ctx à 192 bytes. Réservé pour extensions futures (x87 fpu tag, rbp snapshot…)
-TOTAL TCB	[0..255]	256 bytes	4 cache lines de 64 bytes. #[repr(C, align(64))]. Décision locked révisée : 256 bytes vs 128 initial.
+Layout TCB GI-01 (256 bytes, 4 cache lines, align 64) :
 
-Structure Rust
-#[repr(C, align(64))]
-pub struct ThreadControlBlock {
-    // Cache Line 1 — données chaudes scheduler
-    pub capability_token: u64,    // [0]  Token ExoOS
-    pub kstack_ptr:       u64,    // [8]  RSP Ring 0
-    pub tid:              u64,    // [16] Thread ID
-    pub sched_state:      u64,    // [24] Scheduler state
-    pub fs_base:          u64,    // [32] MSR FSBASE (TLS userspace)
-    pub gs_base:          u64,    // [40] MSR GSBASE (userspace value)
-    pub pkrs:             u32,    // [48] Intel PKS (0 sur AMD)
-    _pad1:                [u8;12],// [52] padding → 64 bytes
-    // Cache Lines 2-4 — contexte CPU complet
-    pub cpu_ctx:          CpuContext, // [64] 192 bytes inline
-}
+Champ	Offset	Taille	Rôle
+── Cache Line 1 (bytes 0-63) : HOT PATH scheduler ──
+tid	[0]	8	Thread ID — hot path IPC/syslog, identifiant principal
+kstack_ptr	[8]	8	RSP Ring 0 — HARDCODÉ switch_asm.s + protocole kstack ExoPhoenix
+priority	[16]	1	Priorité scheduler (Priority newtype)
+policy	[17]	1	Politique (Normal/Fifo/RR/Deadline/Idle)
+_pad0	[18]	6	Alignement
+sched_state	[24]	8	AtomicU64 : état(8b)|signal|KTHREAD|FPU|RESCHED|EXITING|IDLE|IN_RECLAIM
+vruntime	[32]	8	vruntime CFS (ns) — AtomicU64
+deadline_abs	[40]	8	Deadline EDF absolue (ns depuis boot) — AtomicU64
+cpu_affinity	[48]	8	Bitmask affinité CPU — AtomicU64
+cr3_phys	[56]	8	PML4 physique — HARDCODÉ switch_asm.s
+── Cache Line 2 (bytes 64-127) : WARM context switch ──
+cpu_id	[64]	8	CPU courant — AtomicU64
+fs_base	[72]	8	MSR_FS_BASE (TLS userspace) — sauvegardé/restauré CORR-11
+gs_base	[80]	8	MSR_KERNEL_GS_BASE (GS user) — sauvegardé/restauré CORR-11
+pkrs	[88]	4	Intel PKS (0 sur AMD)
+pid	[92]	4	ProcessId (compat PCB)
+signal_mask	[96]	8	Bitmask signaux bloqués — AtomicU64
+dl_runtime	[104]	8	Budget EDF (ns/période)
+dl_period	[112]	8	Période EDF (ns)
+_pad2	[120]	8	Alignement
+── Cache Lines 3-4 (bytes 128-255) : COLD + HARDCODÉS ──
+run_time_acc	[128]	8	Temps CPU cumulé (ns)
+switch_count	[136]	8	Nombre context switches
+_cold_reserve	[144]	88	Réservé (144+88=232)
+fpu_state_ptr	[232]	8	*mut XSaveArea — null si FPU jamais utilisée — HARDCODÉ ExoPhoenix
+rq_next	[240]	8	RunQueue intrusive next — null si BLOCKED
+rq_prev	[248]	8	RunQueue intrusive prev — null si BLOCKED
+TOTAL	[0..255]	256 bytes	4 cache lines. #[repr(C, align(64))].
 
-#[repr(C)]
-pub struct CpuContext {
-    pub gpr: [u64; 16],   // [0]   rax,rbx,rcx,rdx,rsi,rdi,rbp,rsp,r8..r15
-    pub rip: u64,         // [128] return address
-    pub rsp_user: u64,    // [136] stack userspace
-    pub rflags: u64,      // [144] EFLAGS
-    pub cs_ss: u64,       // [152] cs<<32|ss
-    pub cr2: u64,         // [160] page fault addr
-    _pad: [u8; 24],       // [168] → total 192
-}
+Offsets immuables (hardcodés dans switch_asm.s et ExoPhoenix) :
+  [8]   kstack_ptr    → RSP context switch
+  [56]  cr3_phys      → MOV CR3 (KPTI)
+  [232] fpu_state_ptr → XSaveArea introspection
+  [240] rq_next       → RunQueue walk
+  [248] rq_prev       → RunQueue walk
 
-static_assert: size_of::<ThreadControlBlock>() == 256. Ajouter dans tests/layout.rs.
+§3.1 — Protocole d'introspection Kernel B (remplace GPRs inline)
+
+Kernel B n'utilise PAS de GPRs inline dans le TCB. Il lit l'état d'un thread gelé
+via le protocole kstack (précédent Linux pt_regs) :
+
+  1. tcb.tid [0]          → identifier le thread
+  2. tcb.kstack_ptr [8]   → sommet pile kernel (RSP sauvegardé par switch_asm.s)
+  3. tcb.cr3_phys [56]    → espace d'adressage (pour MOV CR3 si inspection mémoire)
+  4. tcb.fpu_state_ptr [232] → état FPU complet (XSaveArea)
+  5. tcb.sched_state [24] → distinguer yielded vs preempted (bit KTHREAD, état)
+
+  GPRs callee-saved (thread gelé par yield coopératif) — lire depuis kstack :
+    [kstack_ptr + 0]  = r15  (dernier push dans switch_asm.s)
+    [kstack_ptr + 8]  = r14
+    [kstack_ptr + 16] = r13
+    [kstack_ptr + 24] = r12
+    [kstack_ptr + 32] = rbp
+    [kstack_ptr + 40] = rbx
+    [kstack_ptr + 48] = rip  (adresse de reprise du thread)
+
+  GPRs complets (thread préempté par IRQ) :
+    La kstack contient en plus le frame ISR :
+    [kstack_ptr + 56]  = rax (poussé par handler ISR)
+    ... (selon séquence pusha du handler)
+    → Kernel B lit tcb.sched_state pour détecter ce cas.
+
+  cap_table_ptr — lire depuis le PCB (pas depuis le TCB) :
+    Le PCB (ProcessControlBlock) est partagé par tous les threads du processus.
+    Kernel B accède à PROCESS_TABLE[pid].cap_table_ptr.
+    Avantage : une seule copie par processus, cohérence garantie entre threads.
+
+static_assert: size_of::<ThreadControlBlock>() == 256.
+static_assert: offset_of!(kstack_ptr) == 8.
+static_assert: offset_of!(cr3_phys) == 56.
+static_assert: offset_of!(fpu_state_ptr) == 232.
 
 
 4. Validation AXE 1 — Toutes corrections v4→v5 confirmées

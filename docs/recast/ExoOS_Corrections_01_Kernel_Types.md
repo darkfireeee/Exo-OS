@@ -4,129 +4,119 @@
 
 ---
 
-## CORR-01 🔴 — TCB Layout : Architecture v7 est canonique
+## CORR-01 🔴 — TCB Layout : GI-01 est canonique (amendement post-implémentation)
 
-### Problème
-Architecture v7 et ExoPhoenix v6 définissent deux TCB 256B incompatibles.  
+### Problème initial
+Architecture v7 et ExoPhoenix v6 définissaient deux TCB 256B incompatibles.  
 Kernel B introspecte les structures de Kernel A → les deux doivent être **identiques**.
 
 **Champs manquants dans ExoPhoenix v6 §3 :**
 - `cr3_phys` [56] — adresse PML4 physique lue par switch_asm.s
 - `fpu_state_ptr` [232] — pointeur XSaveArea (Lazy FPU)
 - `rq_next` [240] / `rq_prev` [248] — chaînage intrusive RunQueue
-- `_pad` [52] : 4B dans v7, 12B dans v6 → décalage de 8 octets sur tout le reste
 
-**Décision** : Architecture v7 est la source canonique (plus complet, plus récent).
+### Amendement GI-01 (Mars 2026)
 
-### Correction — `kernel/src/scheduler/core/task.rs`
+**Décision** : Le layout implémenté dans `GI-01_Types_TCB_SSR.md §7` remplace le layout
+initial de cette correction. Justifications :
+
+1. **Performance hot-path** : `tid[0]` > `cap_table_ptr[0]` — TID est accédé à chaque
+   tick IPC/syslog/debug. `cap_table_ptr` n'est lu qu'à la vérification de permission
+   (cold path security).
+
+2. **GPRs hors TCB** : précédent Linux (`pt_regs` sur kstack). Évite une double copie.
+   ExoPhoenix lit les GPRs via le protocole kstack (`tcb.kstack_ptr`) — voir §4 ci-dessous.
+
+3. **`cap_table_ptr` dans le PCB** : partagé entre threads du même processus —
+   c'est naturellement une propriété du `ProcessControlBlock`, pas du `ThreadControlBlock`.
+
+4. **`sched_state: AtomicU64`** unifie état + 7 flags en un mot atomique (vs AtomicU8
+   + 3 AtomicBool séparés nécessitant des lectures composées non atomiques).
+
+### Layout TCB canonique GI-01 — `kernel/src/scheduler/core/task.rs`
 
 ```rust
-// TCB LAYOUT CANONIQUE v8 — SOURCE UNIQUE DE VÉRITÉ
-// Valide pour Kernel A et Kernel B (introspection ExoPhoenix)
-// Double-vérifié par : Z-AI INCOH-01, Kimi §1, Grok4 SYN-05, Claude
+// TCB LAYOUT CANONIQUE GI-01 — SOURCE UNIQUE DE VÉRITÉ (amendé Mars 2026)
+// Valide pour Kernel A et Kernel B (introspection ExoPhoenix — voir protocole kstack)
 
 #[repr(C, align(64))]
 pub struct ThreadControlBlock {
-    // ═══════════════════════════════════════════════════════
-    // CACHE LINE 1 [0..63] — Données chaudes scheduler
-    // ═══════════════════════════════════════════════════════
+    // ═══ Cache-line 1 [0..64] — HOT PATH pick_next_task() ═══════════════════
+    pub tid:          u64,         // [0]   Thread ID — accès IPC/syslog/debug
+    pub kstack_ptr:   u64,         // [8]   RSP Ring 0 ← switch_asm.s HARDCODÉ
+    pub priority:     Priority,    // [16]
+    pub policy:       SchedPolicy, // [17]
+    _pad0:            [u8; 6],     // [18]
+    pub sched_state:  AtomicU64,   // [24]  état|signal|KTHREAD|FPU|RESCHED|...
+    pub vruntime:     AtomicU64,   // [32]  vruntime CFS (ns)
+    pub deadline_abs: AtomicU64,   // [40]  deadline EDF absolue (ns depuis boot)
+    pub cpu_affinity: AtomicU64,   // [48]  bitmask affinité CPU
+    pub cr3_phys:     u64,         // [56]  PML4 phys ← switch_asm.s HARDCODÉ
 
-    /// [0]  8B — Pointeur vers la CapTable partagée du processus.
-    /// PARTAGÉ entre tous les threads du même processus.
-    /// Kernel B : lire pour valider region, NE PAS déréférencer depuis B.
-    pub cap_table_ptr:  u64, // *const CapTable (stocké en u64 pour #[repr(C)])
+    // ═══ Cache-line 2 [64..128] — WARM context switch ════════════════════════
+    pub cpu_id:       AtomicU64,   // [64]
+    pub fs_base:      u64,         // [72]  MSR_FS_BASE (TLS) — CORR-11
+    pub gs_base:      u64,         // [80]  MSR_KERNEL_GS_BASE (user) — CORR-11
+    pub pkrs:         u32,         // [88]  Intel PKS
+    pub pid:          ProcessId,   // [92]
+    pub signal_mask:  AtomicU64,   // [96]
+    pub dl_runtime:   u64,         // [104] budget EDF (ns/période)
+    pub dl_period:    u64,         // [112] période EDF (ns)
+    _pad2:            [u8; 8],     // [120]
 
-    /// [8]  8B — RSP Ring 0, source de vérité pour TSS.RSP0 (V7-C-03).
-    pub kstack_ptr:     u64,
-
-    /// [16] 8B — Thread ID global unique.
-    pub tid:            u64,
-
-    /// [24] 8B — AtomicU8 logiquement : RUNNING(0)/BLOCKED(1)/ZOMBIE(2)/DEAD(3).
-    /// Stocké en u64 pour alignement cache line.
-    pub sched_state:    u64,
-
-    /// [32] 8B — MSR 0xC0000100 (FS.base) — TLS userspace.
-    /// Sauvegardé via RDMSR / restauré via WRMSR dans switch.rs (pas switch_asm.s).
-    pub fs_base:        u64,
-
-    /// [40] 8B — MSR 0xC0000101 (GS.base) — valeur USERSPACE uniquement.
-    /// Le kernel utilise SWAPGS ; cette valeur est restaurée au retour Ring 3.
-    /// Nommé user_gs_base pour éviter la confusion avec GS.base kernel.
-    pub user_gs_base:   u64,
-
-    /// [48] 4B — Intel PKS 32b (zéro sur AMD).
-    pub pkrs:           u32,
-
-    /// [52] 4B — Alignement cache line 1.
-    pub _pad_cl1:       [u8; 4],
-
-    /// [56] 8B — Adresse physique PML4 — lu par switch_asm.s pour MOV CR3.
-    /// CRITIQUE : absent de ExoPhoenix v6 → KPTI impossible.
-    pub cr3_phys:       u64,
-
-    // ═══════════════════════════════════════════════════════
-    // CACHE LINES 2-3 [64..191] — GPRs (128B = 16×8)
-    // ═══════════════════════════════════════════════════════
-
-    /// [64..183] — 15 GPRs × 8B : rax, rbx, rcx, rdx, rsi, rdi, rbp, r8..r14.
-    /// NB : switch_asm.s (yield coopératif) sauvegarde uniquement les 6 callee-saved
-    /// (rbx, rbp, r12..r15). Les caller-saved sont dans le frame du caller.
-    /// En context préemptif (IRQ), TOUS les GPRs sont empilés par le CPU/handler.
-    /// Ce champ représente l'état COMPLET pour restore depuis contexte IRQ/preempt.
-    pub gpr:            [u64; 15], // rax, rbx, rcx, rdx, rsi, rdi, rbp, r8..r14
-
-    /// [184] 8B — Alignement zone GPR (r15 logiquement [176], padding [184]).
-    pub _pad_gpr:       [u8; 8],
-
-    // ═══════════════════════════════════════════════════════
-    // CACHE LINE 4 [192..255] — Registres Ring 3
-    // ═══════════════════════════════════════════════════════
-
-    /// [192] 8B — Instruction pointer Ring 3.
-    pub rip:            u64,
-
-    /// [200] 8B — Stack pointer Ring 3 (distinct de kstack_ptr).
-    pub rsp_user:       u64,
-
-    /// [208] 8B — EFLAGS étendu.
-    pub rflags:         u64,
-
-    /// [216] 8B — cs<<32 | ss (segment selectors compactés).
-    pub cs_ss:          u64,
-
-    /// [224] 8B — Page fault address — DIAGNOSTIC ExoPhoenix UNIQUEMENT.
-    /// Jamais restauré via MOV CR2 (non supporté par CPU x86_64).
-    pub cr2:            u64,
-
-    /// [232] 8B — Pointeur vers XSaveArea allouée dynamiquement.
-    /// null si le thread n'a jamais utilisé la FPU (Lazy FPU).
-    /// Libéré dans release_thread_resources() ET dans do_exit().
-    pub fpu_state_ptr:  u64, // *mut XSaveArea
-
-    /// [240] 8B — RunQueue intrusive : next. null si thread BLOCKED.
-    pub rq_next:        u64, // *mut ThreadControlBlock
-
-    /// [248] 8B — RunQueue intrusive : prev. null si thread BLOCKED.
-    pub rq_prev:        u64, // *mut ThreadControlBlock
+    // ═══ Cache-lines 3-4 [128..256] — COLD + HARDCODÉS ═══════════════════════
+    pub run_time_acc:  u64,        // [128]
+    pub switch_count:  u64,        // [136]
+    _cold_reserve:    [u8; 88],    // [144]  (144+88=232)
+    pub fpu_state_ptr: u64,        // [232]  ← ExoPhoenix HARDCODÉ
+    pub rq_next:       u64,        // [240]  intrusive RunQueue
+    pub rq_prev:       u64,        // [248]  intrusive RunQueue
 }
 
-// Vérifications compile-time obligatoires
 const _: () = assert!(core::mem::size_of::<ThreadControlBlock>() == 256);
 const _: () = assert!(core::mem::align_of::<ThreadControlBlock>() == 64);
-
-// Vérification des offsets critiques (doit correspondre à switch_asm.s)
-const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, kstack_ptr)  == 8);
-const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, cr3_phys)    == 56);
-const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, rip)         == 192);
+const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, kstack_ptr)   == 8);
+const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, cr3_phys)     == 56);
 const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, fpu_state_ptr) == 232);
-const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, rq_next)     == 240);
-const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, rq_prev)     == 248);
+const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, rq_next)      == 240);
+const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, rq_prev)      == 248);
 ```
 
-### Fichiers à corriger
-- `kernel/src/scheduler/core/task.rs` — remplacer le TCB par le layout ci-dessus
-- `ExoPhoenix_Spec_v6.docx §3` — remplacer intégralement par ce layout
+### §4 — Protocole ExoPhoenix pour lecture d'un thread gelé (remplace GPRs inline)
+
+Kernel B n'a **pas** besoin de GPRs inline dans le TCB. Il utilise le protocole kstack :
+
+```
+Lecture état complet d'un thread gelé par Kernel B :
+
+1. tcb.tid          [offset  0]  → identifier le thread
+2. tcb.kstack_ptr   [offset  8]  → sommet pile kernel (RSP sauvegardé)
+3. tcb.cr3_phys     [offset 56]  → espace d'adressage (MOV CR3 pour inspection)
+4. tcb.fpu_state_ptr[offset 232] → état FPU (XSaveArea)
+
+5. GPRs callee-saved (yield coopératif) — lire depuis kstack :
+   [kstack_ptr + 0]  = r15  (dernier push switch_asm.s)
+   [kstack_ptr + 8]  = r14
+   [kstack_ptr + 16] = r13
+   [kstack_ptr + 24] = r12
+   [kstack_ptr + 32] = rbp
+   [kstack_ptr + 40] = rbx
+   [kstack_ptr + 48] = rip  (adresse de retour : où reprend le thread)
+
+6. cap_table_ptr → lire depuis PROCESS_TABLE[pid].cap_table_ptr (PCB)
+   Le PCB est la structure partagée par tous les threads du processus.
+   Kernel B lit le PCB, pas le TCB individuel, pour les capabilities.
+
+Note : si le thread était préempté par IRQ au moment du gel, la kstack
+contient en plus le frame ISR (rip/cs/rflags/rsp/ss poussés par le CPU,
+puis tous les GPRs caller-saved poussés par le handler). Kernel B doit
+lire tcb.sched_state pour distinguer yielded vs preempted.
+```
+
+### Fichiers mis à jour
+- `kernel/src/scheduler/core/task.rs` — layout GI-01 implémenté ✅
+- `ExoPhoenix_Spec_v6.md §3` — amendé (voir ce fichier)
+- `ExoOS_Architecture_v7.md §3.2` — amendé (voir ce fichier)
 
 ---
 

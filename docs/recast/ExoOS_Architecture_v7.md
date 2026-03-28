@@ -244,32 +244,44 @@ context_switch_asm:          // (prev_kstack_ptr*, next_kstack, next_cr3)
        xrstor64(ptr)      // restaurer état précédent
 ```
 
-#### TCB Layout v7 — 256 octets (inchangé depuis v6)
+#### TCB Layout GI-01 — 256 octets (amendé Mars 2026 — remplace layout v7)
+
+> **Note** : le layout initial de cette section (v7) a été amendé lors de l'implémentation GI-01.
+> Le layout GI-01 est la **source canonique**. Voir `CORR-01` et `GI-01_Types_TCB_SSR.md §7`.
+> Justification : optimisation hot-path CFS/EDF, GPRs sur kstack (précédent Linux `pt_regs`),
+> `cap_table_ptr` dans le PCB (partagé entre threads). Protocole kstack pour ExoPhoenix GI-05.
 
 | Champ | Offset | Taille | Rôle |
 |-------|--------|--------|------|
-| `cap_table_ptr` | [0] | 8 B | `*const CapTable` du processus (PARTAGÉ par threads) — CL1 |
-| `kstack_ptr` | [8] | 8 B | RSP Ring 0 — source de vérité pour `TSS.RSP0` (V7-C-03) |
-| `tid` | [16] | 8 B | Thread ID global unique |
-| `sched_state` | [24] | 8 B | AtomicU8 : RUNNING/BLOCKED/ZOMBIE/DEAD |
-| `fs_base` | [32] | 8 B | MSR `0xC0000100` — TLS userspace |
-| `user_gs_base` | [40] | 8 B | MSR `0xC0000101` userspace sauvegardé AVANT `SWAPGS` |
-| `pkrs` | [48] | 4 B | Intel PKS 32b |
-| `_pad` | [52] | 4 B | Alignement |
-| `cr3_phys` | [56] | 8 B | Adresse physique PML4 — lu par `switch_asm.s` |
-| `rax..r14` (14 GPRs) | [64] | 112 B | `rax,rbx,rcx,rdx,rsi,rdi,rbp,r8..r14` — 14×8B |
-| `r15` | [176] | 8 B | 15ème GPR — callee-saved ABI SysV |
-| `[pad align]` | [184] | 8 B | Alignement — zone GPR = 128B total |
-| `rip` | [192] | 8 B | Instruction pointer Ring 3 |
-| `rsp_user` | [200] | 8 B | Stack pointer Ring 3 |
-| `rflags` | [208] | 8 B | EFLAGS étendu |
-| `cs/ss` | [216] | 8 B | Segment selectors |
-| `cr2` | [224] | 8 B | Page fault addr — **diagnostic ExoPhoenix UNIQUEMENT, JAMAIS restauré** |
-| `fpu_state_ptr` | [232] | 8 B | `*mut XSaveArea` — null si jamais utilisé. Libéré via `release_thread_resources()`. |
+| `tid` | [0] | 8 B | Thread ID — hot path IPC/syslog/debug |
+| `kstack_ptr` | [8] | 8 B | RSP Ring 0 — source de vérité pour `TSS.RSP0` (V7-C-03) **HARDCODÉ switch_asm.s** |
+| `priority` | [16] | 1 B | Priorité scheduler |
+| `policy` | [17] | 1 B | Politique CFS/RT/EDF/IDLE |
+| `_pad0` | [18] | 6 B | Alignement |
+| `sched_state` | [24] | 8 B | `AtomicU64` : état (8b) + signal + KTHREAD + FPU + RESCHED + EXITING + IDLE + IN_RECLAIM |
+| `vruntime` | [32] | 8 B | vruntime CFS (ns) — comparé à chaque tick |
+| `deadline_abs` | [40] | 8 B | Deadline EDF absolue (ns depuis boot) |
+| `cpu_affinity` | [48] | 8 B | Bitmask affinité CPU |
+| `cr3_phys` | [56] | 8 B | Adresse physique PML4 — **HARDCODÉ switch_asm.s** |
+| `cpu_id` | [64] | 8 B | CPU courant (`AtomicU64`) |
+| `fs_base` | [72] | 8 B | MSR `0xC0000100` — TLS userspace (CORR-11) |
+| `gs_base` | [80] | 8 B | MSR `0xC0000102` — GS userspace sauvegardé (CORR-11) |
+| `pkrs` | [88] | 4 B | Intel PKS 32b |
+| `pid` | [92] | 4 B | ProcessId (compat PCB) |
+| `signal_mask` | [96] | 8 B | Bitmask signaux bloqués |
+| `dl_runtime` | [104] | 8 B | Budget EDF (ns/période) |
+| `dl_period` | [112] | 8 B | Période EDF (ns) |
+| `_pad2` | [120] | 8 B | Alignement |
+| `run_time_acc` | [128] | 8 B | Temps CPU cumulé (ns) |
+| `switch_count` | [136] | 8 B | Nombre de context switches |
+| `_cold_reserve` | [144] | 88 B | Réservé extensions futures (144+88=232) |
+| `fpu_state_ptr` | [232] | 8 B | `*mut XSaveArea` — null si FPU jamais utilisée **HARDCODÉ ExoPhoenix** |
 | `rq_next` | [240] | 8 B | RunQueue intrusive — null si BLOCKED |
 | `rq_prev` | [248] | 8 B | RunQueue intrusive — null si BLOCKED |
 
-> **Vérification** : CL1=[0..63]=64B ✓, CL2+3=[64..191]=128B ✓, CL4=[192..255]=64B ✓, **Total=256B** ✓
+> **Offsets hardcodés immuables** : `[8]` kstack\_ptr, `[56]` cr3\_phys, `[232]` fpu\_state\_ptr, `[240]` rq\_next, `[248]` rq\_prev  
+> **GPRs** : sur kstack uniquement (précédent Linux `pt_regs`). ExoPhoenix les lit via protocole kstack depuis `tcb.kstack_ptr`. Voir CORR-01 §4.  
+> **cap\_table\_ptr** : dans `ProcessControlBlock` (partagé entre threads). Kernel B accède au PCB, pas au TCB individuel.
 
 ---
 
