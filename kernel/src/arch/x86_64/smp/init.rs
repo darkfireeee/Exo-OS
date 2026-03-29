@@ -126,6 +126,10 @@ pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: 
     // 3. IDT (partagée — juste LIDT)
     super::super::idt::load_idt();
 
+    // 3b. SYSCALL/SYSRET MSRs (STAR/LSTAR/SFMASK) sur chaque AP.
+    // Doit être fait avant STI pour éviter un CPU AP sans chemin syscall configuré.
+    super::super::syscall::init_syscall();
+
     // 4. LAPIC AP
     super::super::apic::init_ap_local_apic();
 

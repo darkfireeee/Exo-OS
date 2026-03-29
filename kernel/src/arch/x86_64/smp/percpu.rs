@@ -156,6 +156,71 @@ pub fn current_per_cpu() -> &'static PerCpuData {
     per_cpu(current_cpu_id() as usize)
 }
 
+/// Écrit le pointeur TCB courant dans `gs:[0x20]`.
+///
+/// Appelé par le scheduler juste après un context switch, afin que le
+/// chemin syscall/exception retrouve toujours le bon thread courant.
+#[inline(always)]
+pub fn set_current_tcb(tcb: *mut crate::scheduler::core::task::ThreadControlBlock) {
+    let tcb_ptr = tcb as u64;
+    // SAFETY: GS pointe sur une zone per-CPU valide initialisée au boot.
+    // L'offset 0x20 correspond au champ `current_tcb` du layout PerCpuData.
+    unsafe {
+        core::arch::asm!(
+            "mov gs:[0x20], {}",
+            in(reg) tcb_ptr,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// Lit la valeur courante du slot `gs:[0x20]` (`current_tcb`).
+///
+/// Utile pour instrumentation/debug et tests P2-7.
+///
+/// # Safety
+/// GS doit déjà pointer sur une zone per-CPU valide.
+#[inline(always)]
+pub unsafe fn read_current_tcb() -> u64 {
+    let tcb: u64;
+    core::arch::asm!(
+        "mov {}, gs:[0x20]",
+        out(reg) tcb,
+        options(nostack, preserves_flags),
+    );
+    tcb
+}
+
+/// Met à jour le slot `gs:[0x00]` avec la pile kernel du thread entrant.
+///
+/// INVARIANT P1-5 : appelé dans `context_switch()` après chaque sélection
+/// du thread suivant, avant reprise d'exécution userspace/syscall.
+///
+/// # Safety
+/// `kstack_top` doit être une adresse de pile kernel valide pour le thread
+/// courant (alignement ABI, mapping kernel présent).
+#[inline(always)]
+pub unsafe fn set_kernel_rsp(kstack_top: u64) {
+    core::arch::asm!(
+        "mov gs:[0x00], {}",
+        in(reg) kstack_top,
+        options(nostack, preserves_flags),
+    );
+}
+
+/// Lit la valeur courante du slot `gs:[0x00]`.
+///
+/// Utile pour instrumentation/debug et préparation des tests P2-7.
+///
+/// # Safety
+/// GS doit déjà pointer sur une zone per-CPU valide.
+#[inline(always)]
+pub unsafe fn read_kernel_rsp() -> u64 {
+    let rsp: u64;
+    core::arch::asm!("mov {}, gs:[0x00]", out(reg) rsp, options(nostack, preserves_flags));
+    rsp
+}
+
 // ── Initialisation ────────────────────────────────────────────────────────────
 
 /// Initialise les données per-CPU pour le BSP (CPU 0)
@@ -166,6 +231,9 @@ pub fn init_percpu_for_bsp(kernel_stack_top: u64, lapic_id: u32) {
     let data = unsafe { per_cpu_mut(0) };
     data.cpu_id    = 0;
     data.lapic_id  = lapic_id as u64;
+    // NOTE P1-5: initialisation du thread de boot uniquement.
+    // Après le premier context switch, `set_kernel_rsp()` maintient
+    // l'invariant gs:[0x00] == pile kernel du thread courant.
     data.kernel_rsp = kernel_stack_top;
     data.online    = true;
     data.bsp       = true;
@@ -190,6 +258,8 @@ pub fn init_percpu_for_ap(cpu_id: u32, kernel_stack_top: u64, lapic_id: u32) {
     let data = unsafe { per_cpu_mut(cpu_id as usize) };
     data.cpu_id    = cpu_id as u64;
     data.lapic_id  = lapic_id as u64;
+    // NOTE P1-5: valeur initiale pour le thread AP d'amorçage.
+    // Le scheduler rafraîchit ensuite ce slot via `set_kernel_rsp()`.
     data.kernel_rsp = kernel_stack_top;
     data.online    = true;
     data.bsp       = false;
@@ -227,4 +297,73 @@ pub fn preempt_is_disabled() -> bool {
     // SAFETY: lecture GS:[0x30]
     unsafe { core::arch::asm!("mov {}, gs:[0x30]", out(reg) count, options(nostack, nomem)); }
     count != 0
+}
+
+// ── Préparation P2-7 : test gabarit kernel_rsp ──────────────────────────────
+
+#[cfg(test)]
+mod p2_7_gs_tests {
+    use super::*;
+
+    /// P2-7 / Test 1 — gs:[0x20] current_tcb : écriture puis relecture.
+    ///
+    /// Nécessite Ring 0 + GS per-CPU initialisé → ignoré sur host.
+    /// Exécuter sous QEMU via le harness kernel.
+    #[test]
+    #[cfg_attr(not(target_os = "none"), ignore = "P2-7: Ring 0 + GS requis")]
+    fn current_tcb_write_read_roundtrip() {
+        let fake_tcb_a: u64 = 0xFFFF_8000_DEAD_0000;
+        let fake_tcb_b: u64 = 0xFFFF_8000_BEEF_0000;
+
+        unsafe {
+            set_current_tcb(fake_tcb_a as *mut crate::scheduler::core::task::ThreadControlBlock);
+            assert_eq!(
+                read_current_tcb(),
+                fake_tcb_a,
+                "gs:[0x20] doit refléter la valeur écrite (TCB thread A)"
+            );
+
+            set_current_tcb(fake_tcb_b as *mut crate::scheduler::core::task::ThreadControlBlock);
+            assert_eq!(
+                read_current_tcb(),
+                fake_tcb_b,
+                "gs:[0x20] doit changer après switch vers thread B"
+            );
+        }
+    }
+
+    /// P2-7 / Test 2 — gs:[0x00] kernel_rsp : invariant mis à jour au switch.
+    ///
+    /// Nécessite Ring 0 + GS per-CPU initialisé → ignoré sur host.
+    #[test]
+    #[cfg_attr(not(target_os = "none"), ignore = "P2-7: Ring 0 + GS requis")]
+    fn kernel_rsp_updated_on_switch() {
+        let kstack_a: u64 = 0xFFFF_8000_0000_0000;
+        let kstack_b: u64 = 0xFFFF_8000_0001_0000;
+        let fake_tcb: u64 = 0xFFFF_8000_ABCD_0000;
+
+        unsafe {
+            set_kernel_rsp(kstack_a);
+            assert_eq!(
+                read_kernel_rsp(),
+                kstack_a,
+                "gs:[0x00] doit refléter kstack du thread A"
+            );
+
+            set_kernel_rsp(kstack_b);
+            assert_eq!(
+                read_kernel_rsp(),
+                kstack_b,
+                "gs:[0x00] doit changer après switch vers thread B"
+            );
+
+            // Vérifie que les deux slots sont indépendants
+            set_current_tcb(fake_tcb as *mut crate::scheduler::core::task::ThreadControlBlock);
+            assert_ne!(
+                read_kernel_rsp(),
+                read_current_tcb(),
+                "gs:[0x00] et gs:[0x20] sont des slots distincts"
+            );
+        }
+    }
 }

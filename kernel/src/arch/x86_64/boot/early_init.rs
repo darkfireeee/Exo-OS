@@ -248,6 +248,21 @@ pub unsafe fn arch_boot_init(
         // Protections mémoire hardware (NX / SMEP / SMAP)
         crate::memory::protection::init();    }
 
+    // ── Étape 13b : Security init (SECURITY_READY) ─────────────────────────
+    // Libère les APs du spin-wait BOOT-SEC dans smp/init.rs.
+    // L'appel est idempotent côté boot flow: kernel_init() vérifie aussi ce flag.
+    probe!(b'h');
+    if !crate::security::is_security_ready() {
+        let kaslr_entropy = super::super::cpu::tsc::read_tsc()
+            ^ ((mb2_magic as u64) << 32)
+            ^ mb2_info
+            ^ rsdp;
+        crate::security::security_init(
+            kaslr_entropy,
+            crate::memory::core::layout::KERNEL_LOAD_PHYS_ADDR,
+        );
+    }
+
     // ── Étape 14 : SMP — boot des APs ────────────────────────────────────────
     probe!(b'g');
     if let Some(ref madt) = madt_info {

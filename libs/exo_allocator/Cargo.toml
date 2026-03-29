@@ -8,7 +8,7 @@ description = "Custom memory allocators for Exo-OS (slab, bump, mimalloc)"
 repository = "https://github.com/darkfireeee/Exo-OS"
 
 [dependencies]
-exo_types = { path = "../exo_types" }
+exo_types = { package = "exo-types", path = "../exo_types" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

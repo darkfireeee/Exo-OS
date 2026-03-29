@@ -63,12 +63,18 @@ impl ObjectId {
     /// **CORR-07** : Exception explicite pour `ZERO_BLOB_ID_4K`.
     ///
     /// # Règle de validation
+    /// - Si l'ObjectId == `ObjectId::ZERO` → `false` (sentinelle invalide).
     /// - Si l'ObjectId == `ZERO_BLOB_ID_4K` → `true` (hash Blake3 valide).
     /// - Sinon : `bytes[8..32]` doivent tous être zéro (format standard).
     ///
     /// ❌ PIÈGE : `is_valid()` ne garantit PAS l'authenticité (forgeable) —
     ///    utiliser les capabilities pour l'autorisation, pas ce test.
     pub fn is_valid(&self) -> bool {
+        // Sentinelle nulle : invalide.
+        if *self == Self::ZERO {
+            return false;
+        }
+
         // CORR-07 : ZERO_BLOB_ID_4K est un P-Blob valide (hash Blake3, pas format standard)
         if *self == crate::constants::ZERO_BLOB_ID_4K {
             return true;

@@ -1,38 +1,48 @@
 //! SSR — Shared State Region ExoPhoenix (A <-> B)
 
-use core::sync::atomic::AtomicU64;
+use core::sync::atomic::{AtomicU32, AtomicU64};
 
-pub const SSR_BASE: u64 = 0x100_0000;
-pub const SSR_SIZE: usize = 0x10000;
-pub const MAX_CORES: usize = 64;
+pub use exo_phoenix_ssr::{
+    SSR_BASE_PHYS as SSR_BASE,
+    SSR_SIZE,
+    SSR_MAX_CORES_LAYOUT as MAX_CORES,
+    SSR_HANDOFF_FLAG_OFFSET as SSR_HANDOFF_FLAG,
+    SSR_CMD_B2A_OFFSET as SSR_CMD_B2A,
+    SSR_FREEZE_ACK_OFFSET as SSR_FREEZE_ACK,
+    SSR_PMC_OFFSET as SSR_PMC_SNAPSHOT,
+    SSR_LOG_AUDIT_OFFSET as SSR_LOG_AUDIT,
+    SSR_METRICS_OFFSET as SSR_METRICS_PUSH,
+};
 
-// Offsets SSR
-pub const SSR_HANDOFF_FLAG: usize = 0x0000;
-pub const SSR_LIVENESS_NONCE: usize = 0x0008;
-pub const SSR_SEQLOCK: usize = 0x0010;
-pub const SSR_CMD_B2A: usize = 0x0040;
-pub const SSR_FREEZE_ACK: usize = 0x0080;
-pub const SSR_PMC_SNAPSHOT: usize = 0x1080;
-pub const SSR_LOG_AUDIT: usize = 0x8000;
-pub const SSR_METRICS_PUSH: usize = 0xC000;
+// Champs SSR internes au protocole ExoPhoenix (non exposés dans la crate partagée).
+pub const SSR_LIVENESS_NONCE: usize = 0x0010;
+pub const SSR_SEQLOCK: usize = 0x0018;
 
-pub const FREEZE_ACK_DONE: u64 = 0xACED_0001;
-pub const TLB_ACK_DONE: u64 = 0xACED_0002;
+pub const FREEZE_ACK_DONE: u32 = 0xACED_0001;
+pub const TLB_ACK_DONE: u32 = 0xACED_0002;
 
 #[inline(always)]
 pub fn freeze_ack_offset(slot_index: usize) -> usize {
-    SSR_FREEZE_ACK + slot_index * 64
+    exo_phoenix_ssr::freeze_ack_offset(slot_index as u32)
 }
 
 #[inline(always)]
 pub fn pmc_snapshot_offset(slot_index: usize) -> usize {
-    SSR_PMC_SNAPSHOT + slot_index * 64
+    exo_phoenix_ssr::pmc_snapshot_offset(slot_index as u32)
 }
 
-/// Accès atomique à une case SSR.
+/// Accès atomique 64-bit à une case SSR (flags/nonce/compteurs 64-bit).
 ///
 /// # Safety
 /// L'appelant doit fournir un offset valide et s'assurer que la SSR est mappée.
 pub unsafe fn ssr_atomic(offset: usize) -> &'static AtomicU64 {
     &*((SSR_BASE as usize + offset) as *const AtomicU64)
+}
+
+/// Accès atomique 32-bit à une case SSR (freeze ACK layout partagé: u32 × N).
+///
+/// # Safety
+/// L'appelant doit fournir un offset valide et s'assurer que la SSR est mappée.
+pub unsafe fn ssr_atomic_u32(offset: usize) -> &'static AtomicU32 {
+    &*((SSR_BASE as usize + offset) as *const AtomicU32)
 }

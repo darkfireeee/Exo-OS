@@ -23,6 +23,7 @@ use super::preempt::MAX_CPUS;
 use crate::scheduler::fpu;
 use crate::arch::x86_64::{
     cpu::{features::CPU_FEATURES, msr::{self, MSR_FS_BASE, MSR_KERNEL_GS_BASE}},
+    smp::percpu,
     tss,
 };
 
@@ -235,6 +236,15 @@ pub unsafe fn context_switch(
     // SAFETY: cpu() est monotone pendant l'exécution d'un thread sur ce CPU.
     CURRENT_THREAD_PER_CPU[next.current_cpu().0 as usize]
         .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
+
+    // Mettre à jour aussi le slot GS per-CPU courant (gs:[0x20]).
+    // Le chemin syscall/exceptions lit ce slot pour retrouver le TCB actif.
+    percpu::set_current_tcb(next as *mut ThreadControlBlock);
+
+    // P1-5: rafraîchir le slot GS:[0x00] avec la pile kernel du thread entrant.
+    // L'entrée syscall (`mov rsp, gs:[0x00]`) doit toujours pointer sur le
+    // contexte kernel du thread courant pour éviter toute corruption silencieuse.
+    unsafe { percpu::set_kernel_rsp(next.kstack_ptr); }
 
     // ── Étape 6 : CR0.TS = 1 — Lazy FPU (V7-C-02) ───────────────────────────
     // Déclenche #NM si `next` utilise une instruction FPU/SSE sans l'avoir

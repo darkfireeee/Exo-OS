@@ -119,7 +119,7 @@ fn reset_freeze_acks_for_targets(self_slot: Option<usize>) {
         seen_slots |= bit;
         // SAFETY: offset borné par slot map stage0.
         unsafe {
-            ssr::ssr_atomic(ssr::freeze_ack_offset(slot)).store(0, Ordering::Release);
+            ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).store(0, Ordering::Release);
         }
     });
 }
@@ -145,7 +145,7 @@ fn all_freeze_acks_observed(self_slot: Option<usize>) -> bool {
         }
         seen_slots |= bit;
         // SAFETY: offset borné par slot map stage0.
-        let ack = unsafe { ssr::ssr_atomic(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
+        let ack = unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
         if ack != ssr::FREEZE_ACK_DONE {
             all_ok = false;
         }
@@ -239,7 +239,7 @@ fn send_init_ipi_to_resistant_cores(self_slot: Option<usize>) {
             return;
         }
         // SAFETY: offset borné par slot map stage0.
-        let ack = unsafe { ssr::ssr_atomic(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
+        let ack = unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
         if ack != ssr::FREEZE_ACK_DONE {
             send_init_ipi_to_apic(apic_id);
         }

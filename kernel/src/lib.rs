@@ -192,12 +192,16 @@ pub unsafe fn kernel_init() {
     kdb(b'P'); // Phase 4 done (process init + reaper kthread)
 
     // ── Phase 5 : Security ──────────────────────────────────────────────────
-    crate::security::capability::init_capability_subsystem();
+    // Si la sécurité a déjà été initialisée en early boot (SECURITY_READY=true),
+    // ne pas réinitialiser capability/crypto (double init -> panic).
+    if !crate::security::is_security_ready() {
+        let kaslr_entropy = crate::arch::x86_64::cpu::tsc::read_tsc();
+        crate::security::security_init(
+            kaslr_entropy,
+            crate::memory::core::layout::KERNEL_LOAD_PHYS_ADDR,
+        );
+    }
     kdb(b'7'); // security done
-
-    // Phase 5b : Crypto — RDRAND-based CSPRNG (requis avant futex seed + IPC auth).
-    // TODO: crypto_init() — vérifier compatibilité RDRAND au boot
-    crate::security::crypto::crypto_init();
 
     // ERR-05 fix: Init graine SipHash de la table futex (anti-DoS hash collision).
     {

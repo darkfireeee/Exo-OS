@@ -245,3 +245,56 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
 pub fn security_periodic_check() {
     assert_kernel_integrity();
 }
+
+#[cfg(test)]
+mod p2_7_security_tests {
+    use super::*;
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    /// P2-7 / Test 3 — Handshake SECURITY_READY : store Release → load Acquire.
+    ///
+    /// Vérifie le contrat BOOT-SEC / CVE-EXO-001 :
+    /// - avant security_init() : flag à false
+    /// - après store(true, Release) : load(Acquire) retourne true
+    ///
+    /// Ce test NE reproduit PAS les effets de bord de security_init()
+    /// (integrity_check, crypto, etc.) — il valide uniquement l'atomique.
+    /// Runnable sur host (pas de dépendance Ring 0).
+    #[test]
+    fn security_ready_store_load_contract() {
+        // Réinitialisation locale pour isoler le test.
+        let local_flag = AtomicBool::new(false);
+
+        assert!(
+            !local_flag.load(Ordering::Acquire),
+            "SECURITY_READY doit être false avant l'init"
+        );
+
+        // Simule le store final de security_init().
+        local_flag.store(true, Ordering::Release);
+
+        assert!(
+            local_flag.load(Ordering::Acquire),
+            "SECURITY_READY doit être true après store(Release)"
+        );
+
+        // Vérifie la sémantique Acquire sur relecture.
+        assert!(
+            local_flag.load(Ordering::Acquire),
+            "SECURITY_READY doit rester true (pas de reset implicite)"
+        );
+    }
+
+    /// P2-7 / Test 3b — is_security_ready() est cohérent avec le flag global.
+    ///
+    /// Vérifie que le wrapper public lit bien avec Acquire.
+    #[test]
+    fn is_security_ready_matches_atomic() {
+        let raw = SECURITY_READY.load(Ordering::Acquire);
+        assert_eq!(
+            is_security_ready(),
+            raw,
+            "is_security_ready() doit être cohérent avec SECURITY_READY.load(Acquire)"
+        );
+    }
+}

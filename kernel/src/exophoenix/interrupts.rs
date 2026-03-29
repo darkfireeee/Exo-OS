@@ -68,7 +68,7 @@ pub unsafe fn handle_freeze_ipi() -> ! {
     if let Some(slot) = current_slot() {
         // SAFETY: SSR physique fixée/réservée ; offset borné via slot map.
         unsafe {
-            ssr::ssr_atomic(ssr::freeze_ack_offset(slot))
+            ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot))
                 .store(ssr::FREEZE_ACK_DONE, Ordering::Release);
             core::arch::asm!("sfence", options(nostack, preserves_flags));
         }
@@ -128,7 +128,7 @@ pub unsafe fn handle_tlb_flush_ipi() {
     if let Some(slot) = current_slot() {
         // SAFETY: SSR physique fixée/réservée ; offset borné via slot map.
         unsafe {
-            ssr::ssr_atomic(ssr::freeze_ack_offset(slot))
+            ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot))
                 .store(ssr::TLB_ACK_DONE, Ordering::Release);
         }
     }
