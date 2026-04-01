@@ -28,8 +28,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Taille de la table syscall (un slot par numéro possible).
-/// 521 = couvre POSIX (0–499) + ExoFS (500–518) + open_by_path(519) + readdir(520).
-pub const SYSCALL_TABLE_SIZE: usize = 521;
+/// 547 = couvre POSIX (0–499) + ExoFS (500–520) + GI-03 drivers (530–546).
+pub const SYSCALL_TABLE_SIZE: usize = 547;
 
 /// Numéro invalide (retourne -ENOSYS)
 pub const SYSCALL_INVALID: u64 = u64::MAX;
@@ -369,6 +369,45 @@ pub const SYS_EXOFS_OPEN_BY_PATH:     u64 = 519;
 /// Utilisé par ls, find, opendir(). Sans ce syscall : ls/find/opendir() impossibles.
 /// Signature : (fd, buf_ptr, buf_len) → octets remplis
 pub const SYS_EXOFS_READDIR:          u64 = 520;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bloc 530–546 : GI-03 Drivers (IRQ / DMA / PCI / IOMMU)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// GI-03 : enregistrement d'un routage IRQ canonique.
+pub const SYS_IRQ_REGISTER:           u64 = 530;
+/// GI-03 : acquittement d'une IRQ traitée.
+pub const SYS_IRQ_ACK:                u64 = 531;
+/// GI-03 : mapping MMIO (PID appelant, claim requis).
+pub const SYS_MMIO_MAP:               u64 = 532;
+/// GI-03 : unmapping MMIO (PID appelant).
+pub const SYS_MMIO_UNMAP:             u64 = 533;
+/// GI-03 : allocation DMA (retourne IOVA, virt CPU optionnel via out ptr).
+pub const SYS_DMA_ALLOC:              u64 = 534;
+/// GI-03 : libération DMA allouée.
+pub const SYS_DMA_FREE:               u64 = 535;
+/// GI-03 : synchronisation DMA CPU/device.
+pub const SYS_DMA_SYNC:               u64 = 536;
+/// GI-03 : lecture config PCI (device claimé par PID appelant).
+pub const SYS_PCI_CFG_READ:           u64 = 537;
+/// GI-03 : écriture config PCI (device claimé par PID appelant).
+pub const SYS_PCI_CFG_WRITE:          u64 = 538;
+/// GI-03 : contrôle Bus Master PCI (device claimé par PID appelant).
+pub const SYS_PCI_BUS_MASTER:         u64 = 539;
+/// GI-03 : claim PCI sécurisé (CORR-32).
+pub const SYS_PCI_CLAIM:              u64 = 540;
+/// GI-03 : map DMA d'un buffer vers IOVA.
+pub const SYS_DMA_MAP:                u64 = 541;
+/// GI-03 : unmap DMA IOVA.
+pub const SYS_DMA_UNMAP:              u64 = 542;
+/// GI-03 : allocation MSI/MSI-X (handle opaque).
+pub const SYS_MSI_ALLOC:              u64 = 543;
+/// GI-03 : configuration MSI par index de vecteur.
+pub const SYS_MSI_CONFIG:             u64 = 544;
+/// GI-03 : libération d'un handle MSI.
+pub const SYS_MSI_FREE:               u64 = 545;
+/// GI-03 : association topologie PCI (owner/parenting).
+pub const SYS_PCI_SET_TOPOLOGY:       u64 = 546;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FIX BUG-03 : Aliases process pour exo-rt

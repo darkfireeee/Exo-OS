@@ -4,6 +4,8 @@
 **Prérequis** : Workspace Cargo configuré (GI-00 §2)  
 **Produit** : `libs/exo-types/`, `libs/exo-phoenix-ssr/`, TCB dans `kernel/`
 
+**Traçabilité CORR (vérifiée, mars 2026)** : `CORR-07` (01), `CORR-10` (02), `CORR-05`/`CORR-17` (06), `CORR-40`/`CORR-41` (07).
+
 ---
 
 ## 1. Ordre d'Implémentation

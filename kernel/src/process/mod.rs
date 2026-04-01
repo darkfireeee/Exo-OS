@@ -100,3 +100,16 @@ pub unsafe fn init(params: &ProcessInitParams) {
     self::state::wakeup::register_with_dma();
     self::resource::cgroup::init();
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Utilitaires de processus
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Check if a process with given PID is alive (registered and not reaped).
+///
+/// Used by IRQ handler purge logic (CORR-51) and watchdog.
+/// Returns true if PID exists in PROCESS_REGISTRY.
+#[inline]
+pub fn is_alive(pid: u32) -> bool {
+    PROCESS_REGISTRY.find_by_pid(crate::process::core::pid::Pid(pid)).is_some()
+}

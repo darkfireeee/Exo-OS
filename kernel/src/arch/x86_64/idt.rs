@@ -231,6 +231,21 @@ extern "C" {
 
     // IRQ hardware (timer, clavier, etc.)
     fn irq_timer_handler();
+    fn irq_1_handler();
+    fn irq_2_handler();
+    fn irq_3_handler();
+    fn irq_4_handler();
+    fn irq_5_handler();
+    fn irq_6_handler();
+    fn irq_7_handler();
+    fn irq_8_handler();
+    fn irq_9_handler();
+    fn irq_10_handler();
+    fn irq_11_handler();
+    fn irq_12_handler();
+    fn irq_13_handler();
+    fn irq_14_handler();
+    fn irq_15_handler();
     fn irq_spurious_handler();
 
     // IPI handlers
@@ -274,6 +289,21 @@ pub fn init_idt() {
 
     // ── IRQ hardware (vecteurs 32+) ───────────────────────────────────────────
     idt.set_handler(IRQ_BASE,     irq_timer_handler as *const () as u64,    0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 1,  irq_1_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 2,  irq_2_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 3,  irq_3_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 4,  irq_4_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 5,  irq_5_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 6,  irq_6_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 7,  irq_7_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 8,  irq_8_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 9,  irq_9_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 10, irq_10_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 11, irq_11_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 12, irq_12_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 13, irq_13_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 14, irq_14_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(IRQ_BASE + 15, irq_15_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
 
     // ── IPIs ──────────────────────────────────────────────────────────────────
     idt.set_handler(VEC_IPI_WAKEUP,           ipi_wakeup_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);

@@ -1,7 +1,7 @@
-//! # syscall/table.rs — Table de dispatch syscall [512 entrées]
+//! # syscall/table.rs — Table de dispatch syscall [SYSCALL_TABLE_SIZE entrées]
 //!
 //! Définit la table statique qui mappe chaque numéro syscall vers son
-//! handler Rust. La table est un tableau de 512 pointeurs de fonctions
+//! handler Rust. La table est un tableau de `SYSCALL_TABLE_SIZE` pointeurs de fonctions
 //! initialisé à la compilation (pas de build-time procedure nécessaire).
 //!
 //! ## Organisation
@@ -27,9 +27,29 @@ use crate::syscall::numbers::*;
 use crate::syscall::validation::{
     UserBuf,
     read_user_path, read_user_typed,
+    write_user_typed,
     validate_fd, validate_flags, validate_signal, IO_BUF_MAX,
 };
 use crate::syscall::fast_path::Timespec;
+// GI-03 IRQ types et fonctions
+use crate::arch::x86_64::irq::{
+    IrqOwnerPid,
+    IrqRouteRegistration,
+    IrqVector,
+    parse_irq_source_kind,
+    irq_error_to_errno,
+};
+// GI-03 Driver types
+use crate::drivers::{ClaimError, MmioError, MsiError, PciCfgError, TopoError};
+
+use crate::memory::core::types::PhysAddr;
+use crate::memory::dma::core::types::{
+    DmaDirection,
+    DmaError,
+    DmaMapFlags,
+    IommuDomainId,
+    IovaAddr,
+};
 use crate::fs::exofs::syscall::{
     sys_exofs_path_resolve,
     sys_exofs_object_open,
@@ -53,6 +73,7 @@ use crate::fs::exofs::syscall::{
     sys_exofs_open_by_path,
     sys_exofs_readdir,
 };
+use pci_types::PciAddress;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Type handler
@@ -666,6 +687,580 @@ pub fn sys_exo_log(buf_ptr: u64, len: u64, level: u64, _a4: u64, _a5: u64, _a6: 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ROLLBACK : Handlers GI-03 Drivers (530–546) — à réimplémenter
+// ─────────────────────────────────────────────────────────────────────────────
+
+/*
+#[inline]
+fn parse_irq_source_kind(raw: u64) -> Option<IrqSourceKind> {
+    match raw {
+        0 => Some(IrqSourceKind::IoApicEdge),
+        1 => Some(IrqSourceKind::IoApicLevel),
+        2 => Some(IrqSourceKind::Msi),
+        3 => Some(IrqSourceKind::MsiX),
+        _ => None,
+    }
+}
+
+#[inline]
+fn irq_error_to_errno(err: IrqError) -> i64 {
+    match err {
+        IrqError::InvalidVector | IrqError::OwnerPidDead => EINVAL,
+        IrqError::AlreadyRegistered => EBUSY,
+        IrqError::RouteFailed => EACCES,
+    }
+}
+*/
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers pour DMA/PCI (réutilisables)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[inline]
+fn parse_dma_direction(raw: u64) -> Option<DmaDirection> {
+    match raw {
+        0 => Some(DmaDirection::ToDevice),
+        1 => Some(DmaDirection::FromDevice),
+        2 => Some(DmaDirection::Bidirection),
+        3 => Some(DmaDirection::None),
+        _ => None,
+    }
+}
+
+/// Encode/decode ABI simplifié BDF sur 32 bits :
+/// - bits 31..16 : segment
+/// - bits 15..8  : bus
+/// - bits 7..3   : device
+/// - bits 2..0   : function
+#[inline]
+fn parse_pci_address(raw: u64) -> PciAddress {
+    let v = raw as u32;
+    let segment = (v >> 16) as u16;
+    let bus = ((v >> 8) & 0xFF) as u8;
+    let device = ((v >> 3) & 0x1F) as u8;
+    let function = (v & 0x07) as u8;
+    PciAddress::new(segment, bus, device, function)
+}
+
+#[inline]
+fn dma_error_to_errno(err: DmaError) -> i64 {
+    match err {
+        DmaError::OutOfMemory => ENOMEM,
+        DmaError::NoChannel
+        | DmaError::Timeout
+        | DmaError::NotInitialized
+        | DmaError::AlreadySubmitted
+        | DmaError::Cancelled => EAGAIN,
+        DmaError::HardwareError | DmaError::IommuFault => EFAULT,
+        DmaError::InvalidParams
+        | DmaError::MisalignedBuffer
+        | DmaError::WrongZone
+        | DmaError::NotSupported => EINVAL,
+    }
+}
+
+/*
+// ROLLBACK: Error conversion functions for GI-03 driver syscalls
+// These will be reimplemented when GI-03 modules are properly completed
+*/
+
+#[inline]
+fn claim_error_to_errno(err: ClaimError) -> i64 {
+    match err {
+        ClaimError::PermissionDenied => EACCES,
+        ClaimError::AlreadyClaimed => EBUSY,
+        ClaimError::NotInHardwareRegion | ClaimError::PhysIsRam => EINVAL,
+        ClaimError::TableFull => ENOMEM,
+    }
+}
+
+#[inline]
+fn topo_error_to_errno(err: TopoError) -> i64 {
+    match err {
+        TopoError::TopologyTableFull => ENOMEM,
+    }
+}
+
+#[inline]
+fn pci_cfg_error_to_errno(err: PciCfgError) -> i64 {
+    match err {
+        PciCfgError::NotClaimed => EPERM,
+        PciCfgError::PermissionDenied => EACCES,
+    }
+}
+
+#[inline]
+fn mmio_error_to_errno(err: MmioError) -> i64 {
+    match err {
+        MmioError::PermissionDenied => EACCES,
+        MmioError::AlreadyMapped => EBUSY,
+        MmioError::OutOfMemory => ENOMEM,
+    }
+}
+
+#[inline]
+fn msi_error_to_errno(err: MsiError) -> i64 {
+    match err {
+        MsiError::NotFound => ENOENT,
+        MsiError::TableFull | MsiError::NoSpace => ENOMEM,
+        MsiError::AmbiguousClaim => EINVAL,
+    }
+}
+
+/// ABI GI-03 (adaptation réaliste):
+/// `sys_irq_register(vector, owner_pid, gsi, dest_apic, route_flags, source_kind)`
+/// `route_flags`: bit0=active_low, bit1=level.
+pub fn sys_irq_register(
+    vector: u64,
+    owner_pid: u64,
+    gsi: u64,
+    dest_apic: u64,
+    route_flags: u64,
+    source_kind: u64,
+) -> i64 {
+    stat_inc(SYS_IRQ_REGISTER);
+
+    if vector > u8::MAX as u64
+        || owner_pid == 0
+        || owner_pid > u32::MAX as u64
+        || gsi > u32::MAX as u64
+        || dest_apic > u8::MAX as u64
+    {
+        return EINVAL;
+    }
+
+    let vector = IrqVector(vector as u8);
+    if !vector.is_valid() {
+        return EINVAL;
+    }
+
+    let source_kind = match parse_irq_source_kind(source_kind) {
+        Some(kind) => kind,
+        None => return EINVAL,
+    };
+
+    let route = IrqRouteRegistration::new(
+        gsi as u32,
+        dest_apic as u8,
+        (route_flags & 0x1) != 0,
+        (route_flags & 0x2) != 0,
+        source_kind,
+    );
+
+    match crate::arch::x86_64::irq::sys_irq_register(
+        vector,
+        IrqOwnerPid(owner_pid as u32),
+        route,
+    ) {
+        Ok(generation) => generation as i64,
+        Err(err) => irq_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 simplifiée : `sys_irq_ack(vector, ...)`.
+/// Les paramètres supplémentaires sont actuellement ignorés dans l'adaptateur.
+pub fn sys_irq_ack(
+    vector: u64,
+    _reg_id: u64,
+    _handler_gen: u64,
+    _wave_gen: u64,
+    _result: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_IRQ_ACK);
+    if vector > u8::MAX as u64 {
+        return EINVAL;
+    }
+
+    let vector = IrqVector(vector as u8);
+    if !vector.is_valid() {
+        return EINVAL;
+    }
+
+    let _ = crate::arch::x86_64::irq::ack_irq(vector);
+    0
+}
+
+/// ABI GI-03 : `sys_mmio_map(phys_addr, size)` pour le PID appelant.
+pub fn sys_mmio_map(phys_addr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_MMIO_MAP);
+
+    if size == 0 || size > usize::MAX as u64 {
+        return EINVAL;
+    }
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    match crate::drivers::sys_mmio_map_for_pid(caller_pid, PhysAddr::new(phys_addr), size as usize) {
+        Ok(virt) => virt as i64,
+        Err(err) => mmio_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 : `sys_mmio_unmap(virt_addr, size)` pour le PID appelant.
+pub fn sys_mmio_unmap(virt_addr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_MMIO_UNMAP);
+
+    if size == 0 || size > usize::MAX as u64 {
+        return EINVAL;
+    }
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    match crate::drivers::sys_mmio_unmap_for_pid(caller_pid, virt_addr, size as usize) {
+        Ok(()) => 0,
+        Err(err) => mmio_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 (adaptation réaliste):
+/// `sys_dma_alloc(size, direction, map_flags, domain_id, user_virt_out)`
+/// retourne l'IOVA dans RAX et écrit l'adresse virtuelle CPU dans `*user_virt_out` si non nul.
+pub fn sys_dma_alloc(
+    size: u64,
+    direction: u64,
+    map_flags: u64,
+    domain_id: u64,
+    user_virt_out: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_DMA_ALLOC);
+
+    if size == 0 || size > usize::MAX as u64 || domain_id > u32::MAX as u64 {
+        return EINVAL;
+    }
+
+    let direction = match parse_dma_direction(direction) {
+        Some(v) => v,
+        None => return EINVAL,
+    };
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    let requested_domain = IommuDomainId(domain_id as u32);
+    let effective_domain = match crate::drivers::iommu::ensure_domain_for_pid(caller_pid) {
+        Ok(domain) => domain,
+        Err(_) if requested_domain.0 != 0 => requested_domain,
+        Err(_) => return EAGAIN,
+    };
+
+    match crate::drivers::sys_dma_alloc_for_pid(
+        caller_pid,
+        size as usize,
+        direction,
+        DmaMapFlags(map_flags as u32),
+        effective_domain,
+    ) {
+        Ok((virt, iova)) => {
+            if user_virt_out != 0 {
+                if let Err(e) = write_user_typed::<u64>(user_virt_out, virt) {
+                    let _ = crate::drivers::sys_dma_free_for_pid(caller_pid, iova, effective_domain);
+                    return e.to_errno();
+                }
+            }
+            iova.0 as i64
+        }
+        Err(err) => dma_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 (adaptation réaliste): `sys_dma_free(iova, domain_id)`.
+pub fn sys_dma_free(iova: u64, domain_id: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_DMA_FREE);
+
+    if domain_id > u32::MAX as u64 {
+        return EINVAL;
+    }
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    let requested_domain = IommuDomainId(domain_id as u32);
+    let effective_domain = crate::drivers::iommu::domain_of_pid(caller_pid).unwrap_or(requested_domain);
+
+    match crate::drivers::sys_dma_free_for_pid(caller_pid, IovaAddr(iova), effective_domain) {
+        Ok(()) => 0,
+        Err(err) => dma_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 (adaptation réaliste): `sys_dma_sync(iova, size, direction)`.
+pub fn sys_dma_sync(iova: u64, size: u64, direction: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_DMA_SYNC);
+
+    if size == 0 || size > usize::MAX as u64 {
+        return EINVAL;
+    }
+
+    let direction = match parse_dma_direction(direction) {
+        Some(v) => v,
+        None => return EINVAL,
+    };
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    match crate::drivers::sys_dma_sync_for_pid(caller_pid, IovaAddr(iova), size as usize, direction) {
+        Ok(()) => 0,
+        Err(err) => dma_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 : `sys_pci_cfg_read(offset)` pour le device claimé du PID appelant.
+pub fn sys_pci_cfg_read(offset: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_PCI_CFG_READ);
+
+    if offset > u16::MAX as u64 {
+        return EINVAL;
+    }
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    match crate::drivers::sys_pci_cfg_read_for_pid(caller_pid, offset as u16) {
+        Ok(value) => value as i64,
+        Err(err) => pci_cfg_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 : `sys_pci_cfg_write(offset, value)` pour le device claimé du PID appelant.
+pub fn sys_pci_cfg_write(offset: u64, value: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_PCI_CFG_WRITE);
+
+    if offset > u16::MAX as u64 || value > u32::MAX as u64 {
+        return EINVAL;
+    }
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    match crate::drivers::sys_pci_cfg_write_for_pid(caller_pid, offset as u16, value as u32) {
+        Ok(()) => 0,
+        Err(err) => pci_cfg_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 : `sys_pci_bus_master(enable)` pour le device claimé du PID appelant.
+pub fn sys_pci_bus_master(enable: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_PCI_BUS_MASTER);
+
+    if enable > 1 {
+        return EINVAL;
+    }
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    match crate::drivers::sys_pci_bus_master_for_pid(caller_pid, enable != 0) {
+        Ok(()) => 0,
+        Err(err) => pci_cfg_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 (adaptation réaliste): `sys_pci_claim(bdf_raw, owner_pid, ...)`.
+pub fn sys_pci_claim(
+    bdf_raw: u64,
+    owner_pid: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_PCI_CLAIM);
+    if owner_pid == 0 || owner_pid > u32::MAX as u64 {
+        return EINVAL;
+    }
+
+    let owner_pid = owner_pid as u32;
+    let address = parse_pci_address(bdf_raw);
+    match crate::drivers::sys_pci_claim(address, owner_pid) {
+        Ok(()) => {
+            if crate::drivers::iommu::ensure_domain_for_pid(owner_pid).is_err() {
+                let _ = crate::drivers::release_claim_for_owner(owner_pid);
+                return EAGAIN;
+            }
+            0
+        }
+        Err(err) => claim_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 (adaptation réaliste):
+/// `sys_dma_map(phys_addr, size, direction, map_flags, domain_id)`.
+pub fn sys_dma_map(
+    phys_addr: u64,
+    size: u64,
+    direction: u64,
+    map_flags: u64,
+    domain_id: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_DMA_MAP);
+
+    if size == 0 || size > usize::MAX as u64 || domain_id > u32::MAX as u64 {
+        return EINVAL;
+    }
+
+    let direction = match parse_dma_direction(direction) {
+        Some(v) => v,
+        None => return EINVAL,
+    };
+
+    let requested_domain = IommuDomainId(domain_id as u32);
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    let effective_domain = if caller_pid != 0 {
+        match crate::drivers::iommu::ensure_domain_for_pid(caller_pid) {
+            Ok(domain) => domain,
+            Err(_) if requested_domain.0 != 0 => requested_domain,
+            Err(_) => return EAGAIN,
+        }
+    } else {
+        requested_domain
+    };
+
+    match crate::drivers::sys_dma_map(
+        PhysAddr::new(phys_addr),
+        size as usize,
+        direction,
+        DmaMapFlags(map_flags as u32),
+        effective_domain,
+    ) {
+        Ok(iova) => iova.0 as i64,
+        Err(err) => dma_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 : `sys_dma_unmap(domain_id, iova)`.
+pub fn sys_dma_unmap(
+    domain_id: u64,
+    iova: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_DMA_UNMAP);
+    if domain_id > u32::MAX as u64 {
+        return EINVAL;
+    }
+
+    let requested_domain = IommuDomainId(domain_id as u32);
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    let effective_domain = if caller_pid != 0 {
+        crate::drivers::iommu::domain_of_pid(caller_pid).unwrap_or(requested_domain)
+    } else {
+        requested_domain
+    };
+
+    match crate::drivers::sys_dma_unmap(IovaAddr(iova), effective_domain) {
+        Ok(()) => 0,
+        Err(err) => dma_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 : `sys_msi_alloc(count)`.
+pub fn sys_msi_alloc(count: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_MSI_ALLOC);
+
+    if count == 0 || count > u16::MAX as u64 {
+        return EINVAL;
+    }
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    match crate::drivers::sys_msi_alloc_for_pid(caller_pid, count as u16) {
+        Ok(handle) => handle as i64,
+        Err(err) => msi_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 : `sys_msi_config(handle, vector_idx)`.
+pub fn sys_msi_config(handle: u64, vector_idx: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_MSI_CONFIG);
+
+    if vector_idx > u16::MAX as u64 {
+        return EINVAL;
+    }
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    match crate::drivers::sys_msi_config_for_pid(caller_pid, handle, vector_idx as u16) {
+        Ok(_vector) => 0,
+        Err(err) => msi_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 : `sys_msi_free(handle)`.
+pub fn sys_msi_free(handle: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_MSI_FREE);
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    match crate::drivers::sys_msi_free_for_pid(caller_pid, handle) {
+        Ok(()) => 0,
+        Err(err) => msi_error_to_errno(err),
+    }
+}
+
+/// ABI GI-03 (adaptation réaliste):
+/// `sys_pci_set_topology(bdf_raw, owner_pid, parent_bdf_raw, has_parent)`.
+///
+/// Compatibilité ascendante : si `has_parent == 0`, `parent_bdf_raw` est ignoré.
+pub fn sys_pci_set_topology(
+    bdf_raw: u64,
+    owner_pid: u64,
+    parent_bdf_raw: u64,
+    has_parent: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_PCI_SET_TOPOLOGY);
+    if owner_pid == 0 || owner_pid > u32::MAX as u64 {
+        return EINVAL;
+    }
+
+    let address = parse_pci_address(bdf_raw);
+    let parent_bridge = if has_parent != 0 {
+        Some(parse_pci_address(parent_bdf_raw))
+    } else {
+        None
+    };
+
+    match crate::drivers::sys_pci_set_topology(address, owner_pid as u32, parent_bridge) {
+        Ok(()) => 0,
+        Err(err) => topo_error_to_errno(err),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Construction de la table
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -746,6 +1341,30 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         // ── ExoFS extensions (519–520) — FIX BUG-01 + BUG-02 ───────────────
         SYS_EXOFS_OPEN_BY_PATH     => sys_exofs_open_by_path,
         SYS_EXOFS_READDIR          => sys_exofs_readdir,
+        // ── GI-03 Drivers (530–546) ──────────────────────────────────────────
+        // GI-03 Framework Integration : Désactivés temporairement en attente des phases userspace
+        // SYS_IRQ_REGISTER           => sys_irq_register,
+        // SYS_IRQ_ACK                => sys_irq_ack,
+        // SYS_MMIO_MAP               => sys_mmio_map,
+        // SYS_MMIO_UNMAP             => sys_mmio_unmap,
+        // SYS_DMA_ALLOC              => sys_dma_alloc,
+        // SYS_DMA_FREE               => sys_dma_free,
+        // SYS_DMA_SYNC               => sys_dma_sync,
+        // SYS_PCI_CFG_READ           => sys_pci_cfg_read,
+        // SYS_PCI_CFG_WRITE          => sys_pci_cfg_write,
+        // SYS_PCI_BUS_MASTER         => sys_pci_bus_master,
+        // SYS_PCI_CLAIM              => sys_pci_claim,
+        // SYS_DMA_MAP                => sys_dma_map,
+        // SYS_DMA_UNMAP              => sys_dma_unmap,
+        // SYS_MSI_ALLOC              => sys_msi_alloc,
+        // SYS_MSI_CONFIG             => sys_msi_config,
+        // SYS_MSI_FREE               => sys_msi_free,
+        // SYS_PCI_SET_TOPOLOGY       => sys_pci_set_topology,
+        SYS_IRQ_REGISTER | SYS_IRQ_ACK | SYS_MMIO_MAP | SYS_MMIO_UNMAP |
+        SYS_DMA_ALLOC | SYS_DMA_FREE | SYS_DMA_SYNC | SYS_PCI_CFG_READ |
+        SYS_PCI_CFG_WRITE | SYS_PCI_BUS_MASTER | SYS_PCI_CLAIM |
+        SYS_DMA_MAP | SYS_DMA_UNMAP | SYS_MSI_ALLOC | SYS_MSI_CONFIG |
+        SYS_MSI_FREE | SYS_PCI_SET_TOPOLOGY => sys_enosys,
         // ── Catch-all ──────────────────────────────────────────────────────
         _             => sys_enosys,
     }

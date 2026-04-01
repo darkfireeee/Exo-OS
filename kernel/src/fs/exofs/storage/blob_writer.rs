@@ -730,7 +730,7 @@ mod tests {
     use super::*;
 
     fn make_data(n: usize, fill: u8) -> Vec<u8> {
-        let mut v = alloc::vec![fill; n];
+        let v = alloc::vec![fill; n];
         v
     }
 

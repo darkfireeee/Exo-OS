@@ -297,6 +297,7 @@ dependencies = [
  "lz4_flex",
  "multiboot2",
  "num-traits",
+ "pci_types",
  "postcard",
  "proptest",
  "raw-cpuid",
@@ -465,6 +466,16 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
  "libm",
+]
+
+[[package]]
+name = "pci_types"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0c2a105c657261a938ff68ee231c199a3d80eef33976004829de761ef5b1a9b"
+dependencies = [
+ "bit_field",
+ "bitflags",
 ]
 
 [[package]]

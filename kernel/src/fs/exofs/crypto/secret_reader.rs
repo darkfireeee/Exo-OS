@@ -580,7 +580,7 @@ mod tests_extended {
     }
 
     #[test] fn test_streaming_finalize_before_ready() {
-        let mut sr = StreamingSecretReader::new(&key32(), 4096);
+        let sr = StreamingSecretReader::new(&key32(), 4096);
         assert!(sr.finalize().is_err());
     }
 

@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_reset_stats() {
-        let mut device = [0u8; 4096];
+        let device = [0u8; 4096];
         let mut dio = DirectIo::default_512();
         let mut buf = DirectIoBuffer::new(1, BlockSize::B512).expect("ok");
         dio.read_aligned(&device, 0, &mut buf).expect("ok");

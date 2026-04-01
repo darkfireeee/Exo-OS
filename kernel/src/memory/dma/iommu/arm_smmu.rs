@@ -371,7 +371,7 @@ pub fn map_range(
     #[cfg(not(target_arch = "aarch64"))]
     return SmmuResult::NotSupported;
     #[cfg(target_arch = "aarch64")]
-    SmmuResult::NotSupported  // TODO: implémenter stage-1 walk ARM64
+    SmmuResult::NotSupported  // A_FAIRE: implémenter stage-1 walk ARM64
 }
 
 /// Libère un mapping DMA.

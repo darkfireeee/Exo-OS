@@ -7,6 +7,9 @@
 
 [workspace]
 resolver = "2"
+default-members = [
+    "kernel",
+]
 members = [
     "kernel",
    # "drivers",

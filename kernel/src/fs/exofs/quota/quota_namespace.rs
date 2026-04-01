@@ -468,7 +468,7 @@ impl NamespaceStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::exofs::quota::quota_policy::{PolicyPresets, QuotaKind};
+    use crate::fs::exofs::quota::quota_policy::PolicyPresets;
 
     fn default_policy() -> QuotaPolicy { PolicyPresets::standard_user() }
 

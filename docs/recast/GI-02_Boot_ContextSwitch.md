@@ -4,6 +4,8 @@
 **Prérequis** : GI-01 (types partagés compilant sans erreur)  
 **Produit** : `kernel/src/arch/x86_64/boot/`, `scheduler/core/switch.rs`, `switch_asm.s`
 
+**Traçabilité des IDs (vérifiée, mars 2026)** : `CORR-34` est défini dans `ExoOS_Corrections_07_Critiques_Majeures_v2.md`. `FIX-100` et `FIX-103` sont des IDs **FIX** historiques (v8/v10), documentés dans `ExoOS_Driver_Framework_v10.md` / `ExoOS_Kernel_Types_v10.md` (hors numérotation `CORR-*`).
+
 ---
 
 ## 1. Ordre d'Implémentation
@@ -502,11 +504,11 @@ pub fn early_init() {
     init_iommu_vtd(); // VT-d si disponible
 
     // ─── Étape 11 : IOMMU Fault Queue AVANT interrupts ────────────────
-    // OBLIGATOIRE AVANT enable_interrupts() (FIX-100)
+    // OBLIGATOIRE AVANT enable_interrupts() (FIX-100, ID FIX v8 — hors CORR)
     IOMMU_FAULT_QUEUE.init();
 
     // ─── Étape 12 : Calibrer TSC AVANT enable_interrupts() ────────────
-    // OBLIGATOIRE AVANT enable_interrupts() (FIX-103)
+    // OBLIGATOIRE AVANT enable_interrupts() (FIX-103, ID FIX v10 — hors CORR)
     calibrate_tsc_khz();
 
     // ─── Étape 13 : Activer les interruptions ─────────────────────────

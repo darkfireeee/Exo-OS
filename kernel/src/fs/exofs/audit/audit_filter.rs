@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[test] fn test_filter_tick_range() {
-        let mut e = entry(AuditOp::Read, AuditResult::Success, 1);
+        let e = entry(AuditOp::Read, AuditResult::Success, 1);
         // e.tick est fixé à 100 dans entry()
         let c = FilterCriteria::tick_range(50, 200);
         let f = AuditFilter::new(c);

@@ -246,6 +246,21 @@ define_exception_handler_errcode!(   exc_ctrl_protection_handler,  do_ctrl_prote
 
 // IRQ et IPI
 define_exception_handler_no_errcode!(irq_timer_handler,          do_irq_timer);
+define_exception_handler_no_errcode!(irq_1_handler,              do_irq_1);
+define_exception_handler_no_errcode!(irq_2_handler,              do_irq_2);
+define_exception_handler_no_errcode!(irq_3_handler,              do_irq_3);
+define_exception_handler_no_errcode!(irq_4_handler,              do_irq_4);
+define_exception_handler_no_errcode!(irq_5_handler,              do_irq_5);
+define_exception_handler_no_errcode!(irq_6_handler,              do_irq_6);
+define_exception_handler_no_errcode!(irq_7_handler,              do_irq_7);
+define_exception_handler_no_errcode!(irq_8_handler,              do_irq_8);
+define_exception_handler_no_errcode!(irq_9_handler,              do_irq_9);
+define_exception_handler_no_errcode!(irq_10_handler,             do_irq_10);
+define_exception_handler_no_errcode!(irq_11_handler,             do_irq_11);
+define_exception_handler_no_errcode!(irq_12_handler,             do_irq_12);
+define_exception_handler_no_errcode!(irq_13_handler,             do_irq_13);
+define_exception_handler_no_errcode!(irq_14_handler,             do_irq_14);
+define_exception_handler_no_errcode!(irq_15_handler,             do_irq_15);
 define_exception_handler_no_errcode!(irq_spurious_handler,       do_irq_spurious);
 define_exception_handler_no_errcode!(ipi_wakeup_handler,         do_ipi_wakeup);
 define_exception_handler_no_errcode!(ipi_reschedule_handler,     do_ipi_reschedule);
@@ -646,6 +661,46 @@ extern "C" fn do_ctrl_protection(frame: *mut ExceptionFrame) {
 }
 
 // ── IRQ Handlers ──────────────────────────────────────────────────────────────
+
+#[inline(always)]
+fn do_irq_generic(frame: *mut ExceptionFrame, vector: u8) {
+    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    let frame = unsafe { &mut *frame };
+    super::idt::irq_counter_inc(vector);
+
+    // Routage vers l'architecture GI-03
+    crate::arch::x86_64::irq::routing::dispatch_irq(vector, None);
+
+    // Conserver la même sémantique de retour userspace que les autres handlers.
+    if frame.from_userspace() {
+        exception_return_to_user(frame);
+    }
+}
+
+macro_rules! define_generic_irq_handler {
+    ($name:ident, $vector:expr) => {
+        #[no_mangle]
+        extern "C" fn $name(frame: *mut ExceptionFrame) {
+            do_irq_generic(frame, $vector);
+        }
+    };
+}
+
+define_generic_irq_handler!(do_irq_1, 33);
+define_generic_irq_handler!(do_irq_2, 34);
+define_generic_irq_handler!(do_irq_3, 35);
+define_generic_irq_handler!(do_irq_4, 36);
+define_generic_irq_handler!(do_irq_5, 37);
+define_generic_irq_handler!(do_irq_6, 38);
+define_generic_irq_handler!(do_irq_7, 39);
+define_generic_irq_handler!(do_irq_8, 40);
+define_generic_irq_handler!(do_irq_9, 41);
+define_generic_irq_handler!(do_irq_10, 42);
+define_generic_irq_handler!(do_irq_11, 43);
+define_generic_irq_handler!(do_irq_12, 44);
+define_generic_irq_handler!(do_irq_13, 45);
+define_generic_irq_handler!(do_irq_14, 46);
+define_generic_irq_handler!(do_irq_15, 47);
 
 /// Handler IRQ timer (vecteur 32, APIC timer)
 #[no_mangle]

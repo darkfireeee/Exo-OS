@@ -110,7 +110,7 @@ impl FsBridgeError {
 pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() { return Err(FsBridgeError::NotReady); }
     let _ = (fd, buf_ptr, count, pid);
-    // TODO: crate::fs::vfs::sys_read(fd, buf_ptr, count, pid)
+    // A_FAIRE: crate::fs::vfs::sys_read(fd, buf_ptr, count, pid)
     Err(FsBridgeError::NotReady)
 }
 
@@ -119,7 +119,7 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
 pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() { return Err(FsBridgeError::NotReady); }
     let _ = (fd, buf_ptr, count, pid);
-    // TODO: crate::fs::vfs::sys_write(fd, buf_ptr, count, pid)
+    // A_FAIRE: crate::fs::vfs::sys_write(fd, buf_ptr, count, pid)
     Err(FsBridgeError::NotReady)
 }
 
@@ -128,7 +128,7 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
 pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() { return Err(FsBridgeError::NotReady); }
     let _ = (path, flags, mode, pid);
-    // TODO: crate::fs::vfs::sys_open(path, flags, mode, pid)
+    // A_FAIRE: crate::fs::vfs::sys_open(path, flags, mode, pid)
     Err(FsBridgeError::NotReady)
 }
 
@@ -137,7 +137,7 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
 pub fn fs_close(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() { return Err(FsBridgeError::NotReady); }
     let _ = (fd, pid);
-    // TODO: crate::fs::vfs::sys_close(fd, pid)
+    // A_FAIRE: crate::fs::vfs::sys_close(fd, pid)
     Err(FsBridgeError::NotReady)
 }
 

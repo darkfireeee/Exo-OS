@@ -197,7 +197,11 @@ unsafe fn reap_children() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub extern "C" fn _start(boot_info_virt: usize) -> ! {
+    // Note: boot_info_virt contient l'adresse virtuelle du BootInfo.
+    // L'implémentation complète n'est pas encore requise ici, on évite
+    // juste que le compilateur lève un avertissement d'unused param.
+    let _ = boot_info_virt;
     // ── 1. Installer les handlers de signaux ──────────────────────────────
     // Structure sigaction : handler(u64) + flags(u64) + mask(u64)[2]
     // (layout simplifié — doit correspondre au kernel SigactionEntry)

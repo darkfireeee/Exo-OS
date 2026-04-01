@@ -312,7 +312,6 @@ mod tests {
     }
 
     #[test] fn test_pool_double_revoke_ok() {
-        let vk = vk();
         let mut pool = ObjectKeyPool::new();
         pool.revoke(BlobKeyId(99)).unwrap();
         pool.revoke(BlobKeyId(99)).unwrap(); // idempotent

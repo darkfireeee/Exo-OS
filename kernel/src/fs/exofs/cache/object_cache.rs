@@ -330,7 +330,7 @@ mod tests {
         c.insert(mk(1, 64)).unwrap();
         c.insert(mk(2, 64)).unwrap();
         let freed = c.evict_n(1);
-        // assert!(freed >= 0);
+        assert!(freed <= 128);
     }
 
     #[test] fn test_mark_dirty_absent() {

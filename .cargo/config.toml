@@ -4,7 +4,12 @@
 # Il force la cible bare-metal et applique des rustflags adaptés OS dev.
 
 [build]
-target = "x86_64-unknown-none"
+# IMPORTANT: ne PAS forcer de target global au niveau workspace racine.
+# Sinon `cargo test` lancé depuis la racine tente de builder tous les membres
+# (y compris serveurs std) sur une cible bare-metal no_std, ce qui provoque
+# une avalanche d'erreurs (test/std introuvables, macros derive/assert absentes).
+# La cible bare-metal est passée explicitement dans les commandes kernel
+# (Makefile, run_tests.sh) et/ou dans la config locale `kernel/.cargo/config.toml`.
 incremental = true
 
 [target.x86_64-unknown-none]
@@ -32,6 +37,7 @@ rustflags = [
 # Raison: son activation globale casse la matrice de tests (duplicate core,
 # libtest absent selon cible). Les flags build-std sont appliqués uniquement
 # sur les builds bare-metal via le Makefile.
+panic-abort-tests = true
 
 [env]
 # Active la sortie QEMU auto via feature bench_auto_exit si défini != 0

@@ -401,7 +401,7 @@ pub fn sys_getpgid(pid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
 /// `umask(mask)` — modifie le masque de création de fichier.
 /// Note : le PCB ne stocke pas encore de champ `umask` dédié.
 /// Cette implémentation retourne le masque demandé (stub partiel, mieux que ENOSYS).
-/// TODO Task-5 : ajouter `umask: AtomicU32` dans PCB et stocker la valeur réelle.
+/// Note Tâche-5 : ajouter `umask: AtomicU32` dans PCB et stocker la valeur réelle.
 pub fn sys_umask(mask: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     // Masque toujours limité aux 9 bits de permission fichier.

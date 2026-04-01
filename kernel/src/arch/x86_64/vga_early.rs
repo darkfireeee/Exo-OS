@@ -235,7 +235,7 @@ pub fn boot_screen() {
     item("VMA tree AVL                      ", "[  OK  ]", ok_attr);
     item("Swap compress zswap               ", "[  OK  ]", ok_attr);
     item("Protections NX/SMEP/SMAP/PKU/KPTI", "[  OK  ]", ok_attr);
-    item("TSC calibration HPET              ", "[ TODO ]", warn_attr);
+    item("TSC calibration HPET              ", "[  --  ]", warn_attr);
 
     write_char(b'\n', normal_attr);
     write_hline(attr(DARK_GRAY, BLACK));

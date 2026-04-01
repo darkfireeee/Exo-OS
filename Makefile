@@ -14,6 +14,7 @@ CARGO          = cargo
 KERNEL_DIR     = kernel
 ISO_WORKDIR    = iso_build
 ISO_OUTPUT     = exo-os.iso
+BAREMETAL_TARGET ?= x86_64-unknown-none
 CARGO_TEST_FLAGS = -Z panic-abort-tests
 CARGO_BAREMETAL_FLAGS = -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
 HOST_TEST_TARGET ?= x86_64-unknown-linux-gnu
@@ -69,13 +70,13 @@ all: iso
 ## 1. Build debug du kernel (rapide, symboles complets)
 build:
 	@echo "$(BLUE)[1/1] Compilation kernel Exo-OS (debug)...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) build $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && $(CARGO) build --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_DBG)$(NC)"
 
 ## 2. Build release du kernel (optimisé, LTO, plus petit)
 release:
 	@echo "$(BLUE)[1/1] Compilation kernel Exo-OS (release)...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) build --release $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_REL)$(NC)"
 
 # ── Cible ISO (debug) ─────────────────────────────────────────────────────────
@@ -134,7 +135,7 @@ run: qemu
 ## Vérifier (clippy)
 check:
 	@echo "$(BLUE)Vérification clippy...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) clippy $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && $(CARGO) clippy --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK]$(NC)"
 
 ## Formatter le code

@@ -417,7 +417,6 @@ impl DedupWriter {
 #[cfg(test)]
 mod tests_extra {
     use super::*;
-    use crate::fs::exofs::core::blob_id::compute_blob_id;
 
     #[test]
     fn test_gc_removes_zero_ref() {

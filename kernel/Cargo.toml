@@ -13,6 +13,11 @@ crate-type = ["staticlib", "rlib"]
 [[bin]]
 name = "exo-os-kernel"
 path = "src/main.rs"
+# Le binaire noyau no_std définit ses propres handlers panic/alloc.
+# Désactiver le harness de test/bench sur ce bin évite les conflits
+# (`panic_impl` / `alloc_error_handler`) lors d'un `cargo test` accidentel.
+test = false
+bench = false
 
 # ── Dépendances (no_std uniquement) ─────────────────────────────────────────
 
@@ -44,6 +49,9 @@ raw-cpuid  = { workspace = true }
 acpi       = { workspace = true }
 # arch/x86_64/apic/ + memory/dma/ — registres MMIO
 volatile   = { workspace = true }
+
+# PCI no_std (rust-osdev) — types PCI canoniques (PciAddress, DeviceFunction...)
+pci_types  = { version = "0.10.1", default-features = false }
 
 # ── Crypto no_std (RustCrypto — vecteurs IETF, pas d'implémentation from scratch)
 # RÈGLE CRYPTO-CRATES  : JAMAIS d'implémentation maison. Toutes les primitives

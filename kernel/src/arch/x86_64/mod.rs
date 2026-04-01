@@ -11,6 +11,7 @@ pub mod cpu;
 pub mod exceptions;
 pub mod gdt;
 pub mod idt;
+pub mod irq;
 pub mod memory_iface;
 pub mod paging;
 pub mod sched_iface;   // Pont FFI arch → scheduler (C ABI exports)

@@ -22,18 +22,29 @@
 //! - capability/ ∈ security/ uniquement (DOC1 RÈGLE CAP-01)
 //! - futex ∈ memory/utils/futex_table.rs (DOC3 RÈGLE SCHED-03)
 
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(any(not(test), target_os = "none"), no_std)]
 #![allow(binary_asm_labels)]
 #![allow(unexpected_cfgs)]
 #![allow(static_mut_refs)]
-#![feature(alloc_error_handler)]
+#![cfg_attr(not(test), feature(alloc_error_handler))]
+
+// Garde-fou anti-piège: les tests unitaires du crate kernel doivent être
+// compilés sur une cible host (std), pas sur la cible bare-metal no_std.
+// Sans ce garde-fou, `cargo test --target x86_64-unknown-none` produit une
+// avalanche d'erreurs secondaires (`std`/prelude/macros introuvables).
+#[cfg(all(test, target_os = "none"))]
+compile_error!(
+    "exo-os-kernel: `cargo test` sur cible bare-metal est non supporté. \
+Utiliser une cible hôte pour les tests (ex: --target x86_64-unknown-linux-gnu), \
+ou utiliser le check bare-metal via run_tests.sh/Makefile."
+);
 
 
 // ── Crates externes (no_std) ──────────────────────────────────────────────────
 
 extern crate alloc;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "none")))]
 extern crate std;
 
 // ── Modules kernel ────────────────────────────────────────────────────────────
@@ -58,6 +69,9 @@ pub mod security;
 
 /// Couche 3 : système de fichiers virtuel + exofs
 pub mod fs;
+
+/// GI-03 : wrappers canoniques IRQ/DMA/PCI/IOMMU (stub — to be reimplemented)
+pub mod drivers;
 
 /// ExoPhoenix (Kernel B) : état partagé SSR + orchestration sentinelle.
 pub mod exophoenix;

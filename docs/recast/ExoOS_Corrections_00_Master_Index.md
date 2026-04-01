@@ -22,6 +22,15 @@
 
 ---
 
+## Errata de traçabilité GI-01 / GI-02 (Mars 2026)
+
+- `CORR-34` est défini dans `ExoOS_Corrections_07_Critiques_Majeures_v2.md` (`## CORR-34 — TSC overflow : calcul différentiel pour current_time_ms()`).
+- `CORR-40` est défini dans `ExoOS_Corrections_07_Critiques_Majeures_v2.md` (`## CORR-40 — IpcEndpoint : garantie Copy + assertion compile-time`).
+- `CORR-41` est défini dans `ExoOS_Corrections_07_Critiques_Majeures_v2.md` (`## CORR-41 — verify_cap_token() : fermer le TODO constant-time`).
+- `FIX-100` / `FIX-103` sont des identifiants **FIX** (v8/v10), pas des identifiants `CORR-*`.
+
+---
+
 ## Tableau complet des 52 corrections + SRV-05
 
 ### 🔴 Critiques (9)
@@ -36,7 +45,7 @@
 | CORR-06 | EpollEventAbi packed → UB Rust E0793 | 04 |
 | CORR-07 | ObjectId::is_valid() exception ZERO_BLOB | 01 |
 | CORR-32 | Double Claim PCI + TOCTOU sys_pci_claim | **07** |
-| CORR-41 | IOMMU ABA race ISR → pid_at_fault snapshot | **08** |
+| CORR-41 | verify_cap_token() : fermer le TODO constant-time | **07** |
 
 ### 🟠 Majeures (23)
 
@@ -56,10 +65,10 @@
 | CORR-19 | spin_count reset par tentative | 03 |
 | CORR-31 | IpcMessage ABI payload 48B guide | **07** |
 | CORR-33 | verify_cap_token règle no-cache | **07** |
-| CORR-34 | FPU multi-thread cleanup do_exit | **08** |
+| CORR-34 | TSC overflow : calcul différentiel pour `current_time_ms()` | **07** |
 | CORR-36 | Panic Handler Ring 1 + SRV-01 | **08** |
 | CORR-37 | Phoenix freeze timeout Kernel A | **08** |
-| CORR-40 | Phoenix restore → ordre redémarrage | **08** |
+| CORR-40 | IpcEndpoint : garantie Copy + assertion compile-time | **07** |
 | CORR-42 | current_time_ms saturating_sub | **08** |
 | CORR-44 | copy_file_range quota bypass reflink | **07** |
 | CORR-46 | fd_table post-restore stale ObjectIds | **08** |
@@ -108,10 +117,23 @@
 04_ExoFS.md                  — CORR-06,20,22
 05_ExoPhoenix.md             — CORR-12,13,14,15
 06_Servers_Arborescence.md   — CORR-05,17,21,25,26,28
-07_IPC_Cap_Security.md       — CORR-31,32,33,35,43,44,45,51,52 + SRV-05
-08_Phoenix_Runtime.md        — CORR-34,36,37,40,41,42,46,49
+07_IPC_Cap_Security.md       — CORR-31,32,33,34,35,40,41,43,44,45,51,52 + SRV-05
+08_Phoenix_Runtime.md        — CORR-36,37,42,46,49
 09_IRQ_DMA_Misc.md           — CORR-38,39,47,48,50
 ```
 
 ---
 *ExoOS Corrections Index v2.0 — Mars 2026*
+
+---
+
+## Suivi Implémentation GI-03 (P0/P1/P2)
+*Ajouté le 2026-04-01 suite à GI-03 P0 Normalisation Audit*
+
+- **P0.1** : IOMMU_DOMAIN_REGISTRY complété (kernel/src/drivers/iommu/mod.rs).
+- **P0.2** : argv[1] remplacé par boot_info_virt dans init_server (_start) et passage paramétré via registre (rdi/rax). Résout le conflit documentaire CORR-09.
+- **P0.3** : Synchronisation de FINAL_v3 (CORR-49 à CORR-54) dans cet index. (Correction CORR-51 pour purge IRQ, CORR-49 IPC panic simplif, CORR-50 FD stale vs close).
+- **P1.1** : ISR lock-free (zéro allocation dynamique) sans vec/box.
+- **P1.2** : Chaîne do_exit complète (10 étapes de cleanup device).
+- **P2.x** : Tests de stress pour structures IRQ, Watchdog et IOMMU registry couverts (arch/x86_64/irq/stress_tests.rs).
+
