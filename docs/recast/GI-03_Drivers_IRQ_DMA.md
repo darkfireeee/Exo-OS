@@ -611,3 +611,20 @@ impl PciTopology {
 ---
 
 *ExoOS — Guide d'Implémentation GI-03 : Drivers IRQ DMA PCI — Mars 2026*
+
+---
+
+## 11. ⚠️ AVERTISSEMENT CRITIQUE POUR L'IA SUIVANTE (HANDOFF) ⚠️
+
+Si vous reprenez ce projet après la phase GI-03, **ATTENTION** : 
+Le noyau (Ring 0) a été préparé avec un framework robuste (lock-free queue, TOCTOU claims, do_exit strict), mais les **I/O physiques et la Configuration PCI n'y sont pas encore connectés !**
+
+Dans le fichier kernel/src/drivers/mod.rs, les fonctions suivantes ont été volontairement laissées en forme de STUB (renvoyant Ok(()) ou Err(NotClaimed)) :
+* sys_pci_cfg_read_for_pid / sys_pci_cfg_write_for_pid
+* sys_pci_bus_master_for_pid
+* Les branchements matériels dans sys_dma_map
+* sys_secondary_bus_reset_for_pid
+
+**Ce N'EST PAS UNE ERREUR.** L'architecture Exokernel dicte que ces accès réels doivent être modélisés lors de l'implémentation du **Device Server (Ring 1)** (Phase 6 / Phase 8 matérielle). 
+
+**DIRECTIVE ABSOLUE :** Lors de la phase d'implémentation matérielle PCI/ECAM ou du Device Server, l'IA en charge DOIT revenir dans kernel/src/drivers/mod.rs (et pci_link.rs) pour remplacer ces stubs par les véritables accès in/out (ports 0xCF8/0xCFC) ou mémoire (ECAM), et relier les structures isolées que le GI-03 a mises en place.
