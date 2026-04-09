@@ -194,7 +194,7 @@ pub unsafe fn context_switch(
     //
     // SAFETY: rdmsr en Ring 0 sur MSR valides et supportés (x86_64 requis).
     prev.fs_base       = unsafe { msr::read_msr(MSR_FS_BASE) };
-    prev.gs_base       = unsafe { msr::read_msr(MSR_KERNEL_GS_BASE) };
+    prev.user_gs_base  = unsafe { msr::read_msr(MSR_KERNEL_GS_BASE) };
 
     // ── Étape 3 : Transition d'état de prev ──────────────────────────────────
     // Si le thread sortant était Running → il redevient Runnable (sera ré-enfilé).
@@ -274,7 +274,7 @@ pub unsafe fn context_switch(
     // SAFETY: wrmsr en Ring 0 sur MSR valides et supportés.
     unsafe {
         msr::write_msr(MSR_FS_BASE, next.fs_base);
-        msr::write_msr(MSR_KERNEL_GS_BASE, next.gs_base);
+        msr::write_msr(MSR_KERNEL_GS_BASE, next.user_gs_base);
     }
 
     // Vérifier signal pending (lecture pure, pas de livraison).

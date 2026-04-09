@@ -227,7 +227,7 @@ pub mod task_flags {
 // Cache-line 2 [64..128]  — warm (context switch)
 //   [64]  cpu_id:      AtomicU64  CPU courant
 //   [72]  fs_base:     u64        FS base (TLS)
-//   [80]  gs_base:     u64        GS base
+//   [80]  user_gs_base:u64        GS base userspace
 //   [88]  pkrs:        u32        PKRS
 //   [92]  _pad1:       [u8; 4]
 //   [96]  signal_mask: AtomicU64  bitmask signaux bloqués
@@ -259,7 +259,7 @@ pub struct ThreadControlBlock {
     // ═══ Cache-line 2 [64..128] ══════════════════════════════════════════════
     pub cpu_id:       AtomicU64,   // [64]
     pub fs_base:      u64,         // [72]
-    pub gs_base:      u64,         // [80]
+    pub user_gs_base: u64,         // [80]
     pub pkrs:         u32,         // [88]
     pub pid:          ProcessId,   // [92]  champ direct (compat)
     pub signal_mask:  AtomicU64,   // [96]
@@ -320,7 +320,7 @@ impl ThreadControlBlock {
             cr3_phys,
             cpu_id:        AtomicU64::new(0),
             fs_base:       0,
-            gs_base:       0,
+            user_gs_base:  0,
             pkrs:          0,
             pid,
             signal_mask:   AtomicU64::new(0),

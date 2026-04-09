@@ -6,10 +6,11 @@
 //! DRV-45 : Lock d'écriture avec garantie IRQ_SAVE.
 //! 0 STUB, 0 TODO.
 
-use alloc::vec::Vec;
 use spin::RwLock;
 
 use crate::arch::x86_64::irq_save;
+
+const MAX_TOPOLOGY_ENTRIES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PciBdf {
@@ -23,14 +24,30 @@ pub enum PciError {
     TopologyTableFull,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct TopologyEntry {
+    child: PciBdf,
+    parent: PciBdf,
+}
+
+struct TopologyEntries {
+    slots: [Option<TopologyEntry>; MAX_TOPOLOGY_ENTRIES],
+}
+
+impl TopologyEntries {
+    const fn new() -> Self {
+        Self { slots: [None; MAX_TOPOLOGY_ENTRIES] }
+    }
+}
+
 pub struct PciTopology {
-    pub entries: RwLock<Vec<(PciBdf, PciBdf)>>,
+    entries: RwLock<TopologyEntries>,
 }
 
 impl PciTopology {
     pub const fn new() -> Self {
         Self {
-            entries: RwLock::new(Vec::new()),
+            entries: RwLock::new(TopologyEntries::new()),
         }
     }
 
@@ -40,17 +57,32 @@ impl PciTopology {
     pub fn register(&self, child: PciBdf, parent: PciBdf) -> Result<(), PciError> {
         let _irq_guard = irq_save();
         let mut table = self.entries.write();
-        
-        table.push((child, parent));
+
+        if let Some(slot) = table
+            .slots
+            .iter_mut()
+            .find(|slot| slot.map(|entry| entry.child == child).unwrap_or(false))
+        {
+            *slot = Some(TopologyEntry { child, parent });
+            return Ok(());
+        }
+
+        let Some(slot) = table.slots.iter_mut().find(|slot| slot.is_none()) else {
+            return Err(PciError::TopologyTableFull);
+        };
+
+        *slot = Some(TopologyEntry { child, parent });
         Ok(())
     }
 
     /// Retourne le parent d'un device PCI avec un lock READ thread-safe.
     pub fn parent_bridge(&self, child: PciBdf) -> Option<PciBdf> {
         let table = self.entries.read();
-        table.iter()
-            .find(|(c, _)| *c == child)
-            .map(|(_, p)| *p)
+        table.slots
+            .iter()
+            .flatten()
+            .find(|entry| entry.child == child)
+            .map(|entry| entry.parent)
     }
 }
 

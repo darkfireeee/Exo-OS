@@ -12,7 +12,7 @@ Contrairement aux dires passés, le noyau accomplit ses tâches de bas niveau sa
 *   **Architecture x86_64 (`kernel/src/arch/`)** : Le `GS_BASE` est validé et fonctionnel en SMP concurrent, les timers PIT, PM Timer, HPET et la calibration croisée (leaf CPUID 0x15/0x16) fonctionnent sans mock. Les stubs ASM de contexte sont de vrais stubs assembleur (trampolines), pas des omissions logicielles.
     *   **UNIQUE OMISSION / TODO** : Dans `acpi/hpet.rs:190`, un re-mappage strict 4K de l'adresse HPET (avec flag `PAGE_FLAGS_MMIO` dans la *fixmap*) doit être ajouté pour tourner sur un bare-metal hardware (le code actuel profitant de l'Identity Map QEMU).
 *   **Mémoire (`kernel/src/memory/`)** : Le demand-paging, OOM killer (par pointeur de fonction inter-couches isolé), le DMA Intel/AMD, le swap avec clustering/compression (zRAM) sont pleinement codés.
-    *   **UNIQUE OMISSION / TODO** : Dans `allocator/numa_aware.rs:288`, la gestion de `CURRENT_POLICY` NUMA est globale via un simple `AtomicU8` (`/// Stub — en production, utiliser une table par CPU`). Elle devra être localisée par CPU.
+    `*   **UNIQUE OMISSION / TODO** : Dans `allocator/numa_aware.rs:288`, la gestion de `CURRENT_POLICY` NUMA est globale via un simple `AtomicU8` (`/// Stub — en production, utiliser une table par CPU`). Elle devra être localisée par CPU.
 *   **Signaux & Syscalls** : Le trampoline user des signaux (`sys_rt_sigreturn`) et le validateur de contexte (`SIGNAL_FRAME_MAGIC` contre les attaques TOCTOU d'injection de contexte) protègent parfaitement le noyau selon la logique Posix stricte (Règles SIG-13 / SIG-14). 0 stub.
 
 ---

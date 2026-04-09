@@ -9,7 +9,9 @@
 use spin::RwLock;
 use alloc::vec::Vec;
 
+use crate::arch::x86_64::boot::memory_map::{MemoryRegionType, MEMORY_MAP, MEMORY_REGION_COUNT};
 use crate::memory::core::types::PhysAddr;
+use crate::process::PROCESS_REGISTRY;
 use crate::process::core::pid::Pid;
 use crate::arch::x86_64::irq_save;
 
@@ -54,21 +56,60 @@ impl DeviceClaim {
 
 pub static DEVICE_CLAIMS: RwLock<Vec<DeviceClaim>> = RwLock::new(Vec::new());
 
-// Mock des fonctions de vérifications système pour que la logique TOCTOU brille
-fn check_sys_admin_capability(_pid: Pid) -> bool {
-    true // Sécurité : à associer au manager de capacités réel
+fn checked_range(base: PhysAddr, size: usize) -> Option<(u64, u64)> {
+    if size == 0 {
+        return None;
+    }
+
+    let start = base.as_u64();
+    let end = start.checked_add(size as u64)?;
+    Some((start, end))
 }
 
-fn md_mmio_whitelist_contains(_base: PhysAddr, _size: usize) -> bool {
-    true // Tout autorisé par défaut si hors RAM
+fn check_sys_admin_capability(pid: Pid) -> bool {
+    if pid.0 == 0 {
+        return true;
+    }
+
+    PROCESS_REGISTRY
+        .find_by_pid(pid)
+        .map(|pcb| pcb.is_root())
+        .unwrap_or(false)
 }
 
-fn md_is_ram_region(_base: PhysAddr, _size: usize) -> bool {
-    false // Simplifie le mock, la RAM n'est pas autorisée
+fn md_mmio_whitelist_contains(base: PhysAddr, size: usize) -> bool {
+    let Some((start, end)) = checked_range(base, size) else {
+        return false;
+    };
+
+    unsafe {
+        MEMORY_MAP[..MEMORY_REGION_COUNT].iter().any(|region| {
+            start >= region.base
+                && end <= region.end()
+                && matches!(region.region_type, MemoryRegionType::Reserved)
+        })
+    }
 }
 
-fn get_process_generation(_pid: Pid) -> u64 {
-    1
+fn md_is_ram_region(base: PhysAddr, size: usize) -> bool {
+    let Some((start, end)) = checked_range(base, size) else {
+        return false;
+    };
+
+    unsafe {
+        MEMORY_MAP[..MEMORY_REGION_COUNT].iter().any(|region| {
+            matches!(region.region_type, MemoryRegionType::Usable | MemoryRegionType::KernelImage)
+                && start < region.end()
+                && region.base < end
+        })
+    }
+}
+
+fn get_process_generation(pid: Pid) -> u64 {
+    PROCESS_REGISTRY
+        .find_by_pid(pid)
+        .map(|pcb| pcb.main_thread.0)
+        .unwrap_or(pid.0 as u64)
 }
 
 /// `sys_pci_claim` - TOCTOU Protection. (CORR-32)
@@ -127,4 +168,29 @@ pub fn revoke_claims_for_pid(pid: u32) {
     let _irq = irq_save();
     let mut claims = DEVICE_CLAIMS.write();
     claims.retain(|c| c.owner_pid.0 != pid);
+}
+
+pub fn bdf_of_pid(pid: u32) -> Option<PciBdf> {
+    let claims = DEVICE_CLAIMS.read();
+    claims
+        .iter()
+        .find(|claim| claim.owner_pid.0 == pid)
+        .and_then(|claim| claim.bdf)
+}
+
+pub fn claim_contains(pid: u32, phys_base: PhysAddr, size: usize) -> bool {
+    let Some((start, end)) = checked_range(phys_base, size) else {
+        return false;
+    };
+
+    let claims = DEVICE_CLAIMS.read();
+    claims.iter().any(|claim| {
+        if claim.owner_pid.0 != pid {
+            return false;
+        }
+
+        let claim_start = claim.phys_base.as_u64();
+        let claim_end = claim_start.saturating_add(claim.size as u64);
+        start >= claim_start && end <= claim_end
+    })
 }

@@ -50,7 +50,7 @@ pub fn sys_irq_register_syscall(
     owner_pid: IrqOwnerPid,
     reg_params: IrqRouteRegistration,
 ) -> Result<u64, IrqError> {
-    let endpoint = IpcEndpoint { pid: 0, channel: 0 };
+    let endpoint = IpcEndpoint { pid: owner_pid.0, chan_idx: 0, generation: 0, _pad: 0 };
     sys_irq_register_full(owner_pid, irq_vector, reg_params, endpoint)
 }
 
@@ -391,7 +391,7 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
     // ÉTAPE 5: Dispatch notifications (en ISR c'est un push non bloquant dans la MQ)
     for i in 0..n_eps {
         if let Some(ep) = eps[i] {
-            let endpoint_code = ((ep.pid as u64) << 32) | (ep.channel as u64);
+            let endpoint_code = ((ep.pid as u64) << 32) | (ep.chan_idx as u64);
             if let Some(endpoint_id) = EndpointId::new(endpoint_code) {
                 let payload = [irq_vector.as_u8(), (wg & 0xFF) as u8];
                 let _ = send_raw(endpoint_id, &payload, 0);
@@ -406,4 +406,6 @@ fn clock_ms() -> u64 {
 }
 
 
-pub fn revoke_all_irq_for_pid(target_pid: u32) { let mut table = crate::arch::x86_64::irq::types::IRQ_TABLE.write(); for (_, route) in table.iter_mut() { if let Some(r) = route { let mut guards = r.handlers.write(); guards.retain(|h| h.endpoint.pid != target_pid); } } }
+pub fn revoke_all_irq_for_pid(target_pid: u32) {
+    let _ = revoke_all_irq(IrqOwnerPid(target_pid));
+}

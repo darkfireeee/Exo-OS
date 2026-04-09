@@ -8,6 +8,7 @@
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+pub use exo_types::IpcEndpoint;
 use spin::RwLock;
 
 /// Constantes ISR critiques (GI-03 §2.4, CORR-04, FIX-109)
@@ -110,12 +111,6 @@ pub struct IrqHandler {
     pub generation: u64,
     pub owner_pid: IrqOwnerPid,
     pub endpoint: IpcEndpoint,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct IpcEndpoint {
-    pub pid: u32,
-    pub channel: u32,
 }
 
 #[derive(Debug)]

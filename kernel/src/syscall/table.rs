@@ -795,6 +795,8 @@ fn mmio_error_to_errno(err: MmioError) -> i64 {
         MmioError::PermissionDenied => EACCES,
         MmioError::AlreadyMapped => EBUSY,
         MmioError::OutOfMemory => ENOMEM,
+        MmioError::NotMapped => EFAULT,
+        MmioError::InvalidParams => EINVAL,
     }
 }
 
@@ -804,6 +806,7 @@ fn msi_error_to_errno(err: MsiError) -> i64 {
         MsiError::NotFound => ENOENT,
         MsiError::TableFull | MsiError::NoSpace => ENOMEM,
         MsiError::AmbiguousClaim => EINVAL,
+        MsiError::InvalidParams => EINVAL,
     }
 }
 
@@ -1076,23 +1079,29 @@ pub fn sys_pci_bus_master(enable: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _
     }
 }
 
-/// ABI GI-03 (adaptation réaliste): `sys_pci_claim(bdf_raw, owner_pid, ...)`.
+/// ABI GI-03 : `sys_pci_claim(phys_addr, size, owner_pid, bdf_raw, has_bdf)`.
 pub fn sys_pci_claim(
-    bdf_raw: u64,
+    phys_addr: u64,
+    size: u64,
     owner_pid: u64,
-    _a3: u64,
-    _a4: u64,
-    _a5: u64,
+    bdf_raw: u64,
+    has_bdf: u64,
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_PCI_CLAIM);
-    if owner_pid == 0 || owner_pid > u32::MAX as u64 {
+    if size == 0 || size > usize::MAX as u64 || owner_pid == 0 || owner_pid > u32::MAX as u64 {
         return EINVAL;
     }
 
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     let owner_pid = owner_pid as u32;
-    let address = parse_pci_address(bdf_raw);
-    match crate::drivers::sys_pci_claim(address, owner_pid) {
+    let bdf = if has_bdf != 0 {
+        Some(parse_pci_address(bdf_raw))
+    } else {
+        None
+    };
+
+    match crate::drivers::sys_pci_claim(PhysAddr::new(phys_addr), size as usize, owner_pid, bdf, caller_pid) {
         Ok(()) => {
             if crate::drivers::iommu::ensure_domain_for_pid(owner_pid).is_err() {
                 let _ = crate::drivers::release_claim_for_owner(owner_pid);
@@ -1104,19 +1113,18 @@ pub fn sys_pci_claim(
     }
 }
 
-/// ABI GI-03 (adaptation réaliste):
-/// `sys_dma_map(phys_addr, size, direction, map_flags, domain_id)`.
+/// ABI GI-03 : `sys_dma_map(vaddr, size, direction)`.
 pub fn sys_dma_map(
-    phys_addr: u64,
+    vaddr: u64,
     size: u64,
     direction: u64,
-    map_flags: u64,
-    domain_id: u64,
+    _a4: u64,
+    _a5: u64,
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_DMA_MAP);
 
-    if size == 0 || size > usize::MAX as u64 || domain_id > u32::MAX as u64 {
+    if size == 0 || size > usize::MAX as u64 || vaddr > usize::MAX as u64 {
         return EINVAL;
     }
 
@@ -1125,24 +1133,16 @@ pub fn sys_dma_map(
         None => return EINVAL,
     };
 
-    let requested_domain = IommuDomainId(domain_id as u32);
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
-    let effective_domain = if caller_pid != 0 {
-        match crate::drivers::iommu::ensure_domain_for_pid(caller_pid) {
-            Ok(domain) => domain,
-            Err(_) if requested_domain.0 != 0 => requested_domain,
-            Err(_) => return EAGAIN,
-        }
-    } else {
-        requested_domain
-    };
+    if caller_pid == 0 {
+        return EACCES;
+    }
 
     match crate::drivers::sys_dma_map(
-        PhysAddr::new(phys_addr),
+        caller_pid,
+        vaddr as usize,
         size as usize,
         direction,
-        DmaMapFlags(map_flags as u32),
-        effective_domain,
     ) {
         Ok(iova) => iova.0 as i64,
         Err(err) => dma_error_to_errno(err),
@@ -1171,7 +1171,7 @@ pub fn sys_dma_unmap(
         requested_domain
     };
 
-    match crate::drivers::sys_dma_unmap(IovaAddr(iova), effective_domain) {
+    match crate::drivers::sys_dma_unmap(caller_pid, IovaAddr(iova), effective_domain) {
         Ok(()) => 0,
         Err(err) => dma_error_to_errno(err),
     }
@@ -1230,22 +1230,16 @@ pub fn sys_msi_free(handle: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     }
 }
 
-/// ABI GI-03 (adaptation réaliste):
-/// `sys_pci_set_topology(bdf_raw, owner_pid, parent_bdf_raw, has_parent)`.
-///
-/// Compatibilité ascendante : si `has_parent == 0`, `parent_bdf_raw` est ignoré.
+/// ABI GI-03 : `sys_pci_set_topology(child_bdf_raw, parent_bdf_raw, has_parent)`.
 pub fn sys_pci_set_topology(
     bdf_raw: u64,
-    owner_pid: u64,
     parent_bdf_raw: u64,
     has_parent: u64,
+    _a4: u64,
     _a5: u64,
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_PCI_SET_TOPOLOGY);
-    if owner_pid == 0 || owner_pid > u32::MAX as u64 {
-        return EINVAL;
-    }
 
     let address = parse_pci_address(bdf_raw);
     let parent_bridge = if has_parent != 0 {
@@ -1254,7 +1248,7 @@ pub fn sys_pci_set_topology(
         None
     };
 
-    match crate::drivers::sys_pci_set_topology(address, owner_pid as u32, parent_bridge) {
+    match crate::drivers::sys_pci_set_topology(address, parent_bridge) {
         Ok(()) => 0,
         Err(err) => topo_error_to_errno(err),
     }
@@ -1342,29 +1336,23 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXOFS_OPEN_BY_PATH     => sys_exofs_open_by_path,
         SYS_EXOFS_READDIR          => sys_exofs_readdir,
         // ── GI-03 Drivers (530–546) ──────────────────────────────────────────
-        // GI-03 Framework Integration : Désactivés temporairement en attente des phases userspace
-        // SYS_IRQ_REGISTER           => sys_irq_register,
-        // SYS_IRQ_ACK                => sys_irq_ack,
-        // SYS_MMIO_MAP               => sys_mmio_map,
-        // SYS_MMIO_UNMAP             => sys_mmio_unmap,
-        // SYS_DMA_ALLOC              => sys_dma_alloc,
-        // SYS_DMA_FREE               => sys_dma_free,
-        // SYS_DMA_SYNC               => sys_dma_sync,
-        // SYS_PCI_CFG_READ           => sys_pci_cfg_read,
-        // SYS_PCI_CFG_WRITE          => sys_pci_cfg_write,
-        // SYS_PCI_BUS_MASTER         => sys_pci_bus_master,
-        // SYS_PCI_CLAIM              => sys_pci_claim,
-        // SYS_DMA_MAP                => sys_dma_map,
-        // SYS_DMA_UNMAP              => sys_dma_unmap,
-        // SYS_MSI_ALLOC              => sys_msi_alloc,
-        // SYS_MSI_CONFIG             => sys_msi_config,
-        // SYS_MSI_FREE               => sys_msi_free,
-        // SYS_PCI_SET_TOPOLOGY       => sys_pci_set_topology,
-        SYS_IRQ_REGISTER | SYS_IRQ_ACK | SYS_MMIO_MAP | SYS_MMIO_UNMAP |
-        SYS_DMA_ALLOC | SYS_DMA_FREE | SYS_DMA_SYNC | SYS_PCI_CFG_READ |
-        SYS_PCI_CFG_WRITE | SYS_PCI_BUS_MASTER | SYS_PCI_CLAIM |
-        SYS_DMA_MAP | SYS_DMA_UNMAP | SYS_MSI_ALLOC | SYS_MSI_CONFIG |
-        SYS_MSI_FREE | SYS_PCI_SET_TOPOLOGY => sys_enosys,
+        SYS_IRQ_REGISTER        => sys_irq_register,
+        SYS_IRQ_ACK             => sys_irq_ack,
+        SYS_MMIO_MAP            => sys_mmio_map,
+        SYS_MMIO_UNMAP          => sys_mmio_unmap,
+        SYS_DMA_ALLOC           => sys_dma_alloc,
+        SYS_DMA_FREE            => sys_dma_free,
+        SYS_DMA_SYNC            => sys_dma_sync,
+        SYS_PCI_CFG_READ        => sys_pci_cfg_read,
+        SYS_PCI_CFG_WRITE       => sys_pci_cfg_write,
+        SYS_PCI_BUS_MASTER      => sys_pci_bus_master,
+        SYS_PCI_CLAIM           => sys_pci_claim,
+        SYS_DMA_MAP             => sys_dma_map,
+        SYS_DMA_UNMAP           => sys_dma_unmap,
+        SYS_MSI_ALLOC           => sys_msi_alloc,
+        SYS_MSI_CONFIG          => sys_msi_config,
+        SYS_MSI_FREE            => sys_msi_free,
+        SYS_PCI_SET_TOPOLOGY    => sys_pci_set_topology,
         // ── Catch-all ──────────────────────────────────────────────────────
         _             => sys_enosys,
     }

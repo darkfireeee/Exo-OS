@@ -8,6 +8,7 @@
 //! ou la terminaison de PIDs corrompus.
 
 use super::fault_queue::IOMMU_FAULT_QUEUE;
+use super::pid_of_domain;
 
 /// Scanne la file d'erreurs IOMMU collectées en ISR et applique les politiques.
 /// Doit être appelé régulièrement (ex: via le timer tick).
@@ -29,8 +30,8 @@ pub fn process_iommu_faults() {
         // Implémentation GI-03 §4: Lier domain_id au PID propriétaire
         // et envoyer un SIGKILL (corruption DMA).
         // On effectue ici un mapping 1:1 entre le domaine IOMMU et le PID du processus.
-        if dom > 0 {
-            let malicious_pid = crate::process::core::pid::Pid(dom);
+        if let Some(pid) = pid_of_domain(crate::memory::dma::core::types::IommuDomainId(dom)) {
+            let malicious_pid = crate::process::core::pid::Pid(pid);
             if let Err(_e) = crate::process::signal::send_signal_to_pid(
                 malicious_pid, 
                 crate::process::signal::Signal::SIGKILL

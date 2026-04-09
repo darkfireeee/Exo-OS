@@ -21,33 +21,33 @@ pub fn do_exit(_thread: &mut crate::process::core::ProcessThread, pcb: &crate::p
 
     // ─── 3. Secondary Bus Reset si necessaire ─────────────────────────
     if needs_reset {
-        if let Ok(_) = drivers::sys_secondary_bus_reset_for_pid(pid) {
-            let _ = drivers::sys_wait_link_retraining_for_pid(pid, 200);
+        if let Ok(true) = drivers::sys_secondary_bus_reset_for_pid(pid) {
+            match drivers::sys_wait_link_retraining_for_pid(pid, 200) {
+                Ok(true) => {}
+                Ok(false) | Err(_) => {
+                    if let Ok(domain) = drivers::iommu::domain_of_pid(pid) {
+                        drivers::iommu::force_disable_domain(domain);
+                    }
+                }
+            }
         }
     }
 
-    // ─── 4. Revoquer mappings DMA temporaires ─────────────────────────
-    drivers::release_all_dma_for_pid(pid);
-
-    // ─── 5. Revoquer buffers DMA alloues (SYS_DMA_ALLOC) ─────────────
+    // ─── 4-5. Revoquer tous les mappings/buffers DMA ─────────────────
     drivers::release_all_dma_for_pid(pid);
 
     // ─── 6. Revoquer mappings MMIO ───────────────────────────────────
     drivers::release_all_mmio_for_pid(pid);
 
     // ─── 7. Desenregistrer handlers IRQ (et MSI) ─────────────────────
-    // Mock / Empty call since irq router might be missing
-    // crate::arch::x86_64::irq::routing::revoke_all_irq_for_pid(pid);
+    crate::arch::x86_64::irq::routing::revoke_all_irq_for_pid(pid);
     drivers::release_all_msi_for_pid(pid);
 
     // ─── 8. Liberer claims PCI ────────────────────────────────────────
     drivers::release_claims_for_pid(pid);
 
     // ─── 9. Liberer domaine IOMMU ────────────────────────────────────
-    if let Ok(domain) = drivers::iommu::domain_of_pid(pid) {
-        // mock for missing release
-        // drivers::iommu::release_domain(domain);
-    }
+    drivers::iommu::release_domain_for_pid(pid);
 }
 
 pub fn do_exit_thread(thread: &mut crate::process::core::ProcessThread, _pcb: &crate::process::core::ProcessControlBlock, _retval: u64) -> ! {
