@@ -69,7 +69,7 @@ siphasher        = { version = "0.3",  default-features = false }
 lz4_flex = { version = "0.11", default-features = false }
 
 # ELF
-xmas-elf = { version = "0.9", default-features = false }
+xmas-elf = { version = "0.10", default-features = false }
 
 # IPC
 postcard = { version = "1", default-features = false, features = ["alloc"] }
