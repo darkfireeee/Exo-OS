@@ -9,8 +9,30 @@
 
 set -o pipefail
 
-export PATH="/opt/tlaplus:${PATH}"
-export JAVA_HOME="/usr/lib/jvm/java-11-openjdk"
+# Detect and setup JAVA_HOME dynamically
+detect_java_home() {
+    if [[ -n "${JAVA_HOME}" ]] && [[ -d "${JAVA_HOME}" ]]; then
+        return 0
+    fi
+    
+    # Try common locations
+    for java_path in \
+        $(which java 2>/dev/null | xargs dirname | xargs dirname 2>/dev/null) \
+        /usr/lib/jvm/java-11-openjdk \
+        /usr/lib/jvm/java \
+        /usr/local/openjdk-11 \
+        /opt/java; do
+        if [[ -f "${java_path}/bin/java" ]]; then
+            echo "${java_path}"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+export JAVA_HOME="$(detect_java_home 2>/dev/null || echo '/usr/lib/jvm/java-11-openjdk')"
+export PATH="/opt/tlaplus:${JAVA_HOME}/bin:${PATH}"
 export TLATOOLS="/opt/tlaplus/tla2tools.jar"
 
 # Colors for output
@@ -97,6 +119,8 @@ install_packages() {
 install_java() {
     if command -v java &> /dev/null; then
         print_success "Java already installed"
+        # Update JAVA_HOME after finding java
+        export JAVA_HOME="$(detect_java_home 2>/dev/null || echo '/usr/lib/jvm/java-11-openjdk')"
         return 0
     fi
     
@@ -105,22 +129,44 @@ install_java() {
     
     case "$pm" in
         apk)
-            install_packages openjdk11-jre openjdk11-jdk
+            print_status "Running: apk update"
+            apk update 2>&1 | tail -5 || true
+            print_status "Running: apk add openjdk11..."
+            if ! apk add --no-cache openjdk11-jre openjdk11-jdk 2>&1 | tail -10; then
+                print_warning "Initial apk install failed, trying with sudo..."
+                sudo apk update 2>&1 | tail -5 || true
+                sudo apk add --no-cache openjdk11-jre openjdk11-jdk 2>&1 | tail -10 || {
+                    print_error "Failed to install Java with apk"
+                    return 1
+                }
+            fi
             ;;
         apt)
-            install_packages openjdk-11-jre openjdk-11-jdk
+            apt-get update
+            apt-get install -y openjdk-11-jre openjdk-11-jdk
             ;;
         yum)
-            install_packages java-11-openjdk java-11-openjdk-devel
+            yum install -y java-11-openjdk java-11-openjdk-devel
             ;;
         brew)
-            install_packages openjdk@11
+            brew install openjdk@11
             ;;
         *)
             print_error "Unknown package manager"
             return 1
             ;;
     esac
+    
+    # Verify installation and update JAVA_HOME
+    if command -v java &> /dev/null; then
+        export JAVA_HOME="$(detect_java_home 2>/dev/null || echo '/usr/lib/jvm/java-11-openjdk')"
+        export PATH="${JAVA_HOME}/bin:${PATH}"
+        print_success "Java installed successfully at: ${JAVA_HOME}"
+        return 0
+    else
+        print_error "Failed to install Java"
+        return 1
+    fi
 }
 
 # Download and install TLA+ tools
@@ -133,10 +179,19 @@ install_tlaplus() {
     print_status "TLA+ toolbox not found. Installing..."
     
     # Create directory structure
-    mkdir -p /opt/tlaplus || {
-        print_error "Cannot create /opt/tlaplus directory"
-        return 1
-    }
+    if ! mkdir -p /opt/tlaplus 2>/dev/null; then
+        print_status "Trying with elevated privileges..."
+        if ! sudo mkdir -p /opt/tlaplus 2>/dev/null; then
+            print_error "Cannot create /opt/tlaplus directory (even with sudo)"
+            # Try alternative location
+            export TLATOOLS="${HOME}/.local/opt/tla2tools.jar"
+            mkdir -p "${HOME}/.local/opt" || {
+                print_error "Cannot create ${HOME}/.local/opt directory"
+                return 1
+            }
+            print_info "Using alternative location: $TLATOOLS"
+        fi
+    fi
     
     # Download TLA+ (use specific version v1.8.0)
     local tlaplus_url="https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar"
@@ -144,27 +199,47 @@ install_tlaplus() {
     
     print_status "Downloading TLA+ from: $tlaplus_url"
     
+    # Use curl if available, fall back to wget
     if command -v curl &> /dev/null; then
-        curl -L -o "$temp_file" "$tlaplus_url" 2>/dev/null
+        curl -L --max-time 120 -o "$temp_file" "$tlaplus_url" 2>&1 | grep -E 'Could not resolve|Connection refused' && return 1
     elif command -v wget &> /dev/null; then
-        wget -O "$temp_file" "$tlaplus_url" 2>/dev/null
+        wget --timeout=120 -O "$temp_file" "$tlaplus_url" 2>&1 | grep -E 'unable to resolve|Connection refused' && return 1
     else
         print_error "curl or wget is required to download TLA+. Installing..."
         install_packages curl
-        curl -L -o "$temp_file" "$tlaplus_url" 2>/dev/null
+        curl -L --max-time 120 -o "$temp_file" "$tlaplus_url" 2>&1 | grep -E 'Could not resolve|Connection refused' && return 1
     fi
     
-    if [[ ! -f "$temp_file" ]]; then
-        print_error "Failed to download TLA+ toolbox"
+    if [[ ! -f "$temp_file" ]] || [[ ! -s "$temp_file" ]]; then
+        print_error "Failed to download TLA+ toolbox (file missing or empty)"
+        rm -f "$temp_file"
         return 1
     fi
     
     # Move to final location
-    if command -v sudo &> /dev/null && [[ $EUID -ne 0 ]]; then
-        sudo mv "$temp_file" "$TLATOOLS" || {
-            print_error "Failed to move TLA+ toolbox to $TLATOOLS"
-            return 1
-        }
+    print_status "Installing TLA+ toolbox..."
+    local dest_dir=$(dirname "$TLATOOLS")
+    
+    if [[ "$dest_dir" == "/opt/tlaplus" ]] && [[ ! -w "$dest_dir" ]]; then
+        # Try sudo if we don't have write permissions to /opt/tlaplus
+        if command -v sudo &> /dev/null; then
+            sudo install -D -m 644 "$temp_file" "$TLATOOLS" || {
+                print_error "Failed to install TLA+ toolbox to $TLATOOLS (even with sudo)"
+                # Fall back to home directory
+                export TLATOOLS="${HOME}/.local/opt/tla2tools.jar"
+                mkdir -p "${HOME}/.local/opt" || return 1
+                mv "$temp_file" "$TLATOOLS" || return 1
+                print_info "Installed to alternative location: $TLATOOLS"
+            }
+        else
+            mv "$temp_file" "$TLATOOLS" 2>/dev/null || {
+                # Fall back to home directory
+                export TLATOOLS="${HOME}/.local/opt/tla2tools.jar"
+                mkdir -p "${HOME}/.local/opt" || return 1
+                mv "$temp_file" "$TLATOOLS" || return 1
+                print_info "Installed to alternative location: $TLATOOLS"
+            }
+        fi
     else
         mv "$temp_file" "$TLATOOLS" || {
             print_error "Failed to move TLA+ toolbox to $TLATOOLS"
@@ -172,8 +247,13 @@ install_tlaplus() {
         }
     fi
     
-    print_success "TLA+ toolbox installed at $TLATOOLS"
-    return 0
+    if [[ -f "$TLATOOLS" ]]; then
+        print_success "TLA+ toolbox installed at $TLATOOLS"
+        return 0
+    else
+        print_error "TLA+ toolbox installation failed"
+        return 1
+    fi
 }
 
 # Install system dependencies
@@ -361,9 +441,6 @@ setup_tla_environment() {
         return 1
     fi
 }
-
-# Create alias for easier testing
-alias run_tlc='run_tlc'
 
 # Print environment info if "testing" argument is passed
 if [[ "$1" == "setup" ]] || [[ "$1" == "install" ]]; then
