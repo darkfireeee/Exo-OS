@@ -91,65 +91,70 @@ Full TLA+ specifications and verification outputs are in [`docs/Exo-OS-TLA+/`](d
 
 ## Repository Structure
 
-```
-Exo-OS/
-├── kernel/               # Ring 0 — microkernel core (Rust no_std)
-│   ├── src/
-│   │   ├── boot/         # 18-step boot sequence, SMP init
-│   │   ├── memory/       # Buddy allocator, PhysAddr/VirtAddr/IoVirtAddr
-│   │   ├── scheduler/    # TCB GI-01, context switch (switch.rs)
-│   │   ├── security/     # ExoShield: ExoSeal, ExoCage, ExoKairos
-│   │   ├── ipc/          # SpscRing, CapTokens, reply_nonce
-│   │   ├── drivers/      # Driver framework v10, syscalls 530–546
-│   │   └── exophoenix/      # ExoPhoenix v6 dual-kernel handoff
-├── ring1/                # Ring 1 — system servers
-│   ├── ipc_broker/       # PID 2, ExoCordon DAG enforcement
-│   ├── memory_server/    # Physical memory management
-│   ├── vfs_server/       # PID 3, ExoFS Translation Layer v5
-│   ├── crypto_server/    # PID 4, ChaCha20, Blake3
-│   ├── device_server/    # Driver host
-│   └── exo_shield/       # Phase 3 AI containment module
-├── docs/
-│   ├── Exo-OS-TLA+/      # 12 TLA+ modules + verification outputs (FR)
-│   ├── recast/           # Architecture v7 specifications + cORR-01..54 audit corpus (FR)
-│   └── old/              # all first code used before recast (FR)
-└── Cargo.toml
-```
+| Path | Description |
+|------|-------------|
+| `Exo-OS/` | Root of the OS project |
+| `Exo-OS/kernel/` | Ring 0 – microkernel core (Rust no_std) |
+| `Exo-OS/kernel/src/boot/` | 18-step boot sequence, SMP init |
+| `Exo-OS/kernel/src/memory/` | Buddy allocator, PhysAddr/VirtAddr/IoVirtAddr |
+| `Exo-OS/kernel/src/scheduler/` | TCB GI-01, context switch (switch.rs) |
+| `Exo-OS/kernel/src/security/` | ExoShield: ExoSeal, ExoCage, ExoKairos |
+| `Exo-OS/kernel/src/ipc/` | SpscRing, CapTokens, reply_nonce |
+| `Exo-OS/kernel/src/drivers/` | Driver framework v10, syscalls 530–546 |
+| `Exo-OS/kernel/src/exophoenix/` | ExoPhoenix v6 dual-kernel handoff |
+| `Exo-OS/ring1/` | Ring 1 – system servers |
+| `Exo-OS/ring1/ipc_broker/` | PID 2, ExoCordon DAG enforcement |
+| `Exo-OS/ring1/memory_server/` | Physical memory management |
+| `Exo-OS/ring1/vfs_server/` | PID 3, ExoFS Translation Layer v5 |
+| `Exo-OS/ring1/crypto_server/` | PID 4, ChaCha20, Blake3 |
+| `Exo-OS/ring1/device_server/` | Driver host |
+| `Exo-OS/ring1/exo_shield/` | Phase 3 AI containment module |
+| `Exo-OS/docs/` | Documentation root |
+| `Exo-OS/docs/Exo-OS-TLA+/` | 12 TLA+ modules + verification outputs (FR) |
+| `Exo-OS/docs/recast/` | Architecture v7 specs + CORR-01..54 audit corpus (FR) |
+| `Exo-OS/docs/old/` | First code used before recast (FR) |
+| `Exo-OS/Cargo.toml` | Workspace manifest |
+
+
+
+
 
 ---
 
 ## ExoShield — AI Containment Module
+ExoShield v1.0 is designed for enhanced security within ExoOS. It relies on three main validated modules:
 
-ExoShield v1.0 is designed to safely contain Mythos-class AI workloads within ExoOS. It is built on three verified core modules:
+- **ExoSeal** — Reverse boot order: Kernel B boots first and locks the IOMMU policy before Kernel A, preventing any policy changes after boot.
 
-- **ExoSeal** — Inverted boot order: Kernel B starts first, seals IOMMU policy before Kernel A, preventing any post-boot policy modification.
-- **ExoCage** — Intel CET hardware-enforced control flow integrity. Shadow stack tokens prevent SROP attacks. Any `#CP` exception triggers an immediate ExoPhoenix handoff.
-- **ExoKairos** — Inline capability budgets with hidden deadlines stored in Ring 0 only. `calls_left` is an `AtomicU32` decremented on each use. Deadline MAC (HMAC-Blake3) is inaccessible to Ring 1 code.
+- **ExoCage** — Control flow integrity ensured by Intel CET hardware. Shadow stack tokens prevent SROP attacks. Any `#CP` exception triggers an immediate transfer to ExoPhoenix.
 
-Static IOMMU NIC whitelist locked by Kernel B at boot — physical network exfiltration is provably impossible post-seal (TLA+ property S40).
+- **ExoKairos** — Integrated capacity budgets with masked expiration dates, stored only in ring 0. `calls_left` is an `AtomicU32` that is decremented with each use. The expiration MAC address (HMAC-Blake3) is inaccessible to ring 1 code.
 
-Six security properties formally specified and verified in TLA+: `S33`–`S40`.
+The static whitelist of IOMMU network adapters is locked by Kernel B at boot. Physical exfiltration from the network is impossible after locking (TLA+ property S40).
+
+Six security properties are formally specified and verified in TLA+: `S33` through `S40`.
 
 ---
-
 ## Ring 1 Startup Order (V4 Canonical)
 
 ```
-PID 2  ipc_broker       → ExoCordon DAG enforcement
-       memory_server    → Physical memory
-PID 1  init_server      → Process lifecycle, ChildDied handler
-PID 3  vfs_server       → ExoFS TL v5, ~95% POSIX
-PID 4  crypto_server    → ChaCha20, Blake3, nonce management
-       device_server    → Driver host
-       virtio-block     → Storage
-       virtio-net       → Network
-       virtio-console   → Console
-       network_server   → TCP/IP stack
-       scheduler_server → Userspace scheduling
-       exo_shield       → Phase 3 only — AI containment
-```
+| PID | Server / Component     | Description                               |
+|-----|------------------------|-------------------------------------------|
+| 2   | ipc_broker             | ExoCordon DAG enforcement                 |
+| —   | memory_server          | Physical memory                           |
+| 1   | init_server            | Process lifecycle, ChildDied handler      |
+| 3   | vfs_server             | ExoFS TL v5, ~95% POSIX                   |
+| 4   | crypto_server          | ChaCha20, Blake3, nonce management        |
+| —   | device_server          | Driver host                               |
+| —   | virtio-block           | Storage                                   |
+| —   | virtio-net             | Network                                   |
+| —   | virtio-console         | Console                                   |
+| —   | network_server         | TCP/IP stack                              |
+| —   | scheduler_server       | Userspace scheduling                      |
+| —   | exo_shield             | Phase 3 only — AI containment             |
 
-Governing rules: `SRV-01/02/04`, `CAP-01`, `IPC-01/02/03`, `PHX-01/02/03`.
+| Governing Rules | `SRV-01/02/04`, `CAP-01`, `IPC-01/02/03`, `PHX-01/02/03` |
+
 
 ---
 
