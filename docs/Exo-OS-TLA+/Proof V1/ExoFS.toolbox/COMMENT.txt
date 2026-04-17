@@ -1,0 +1,83 @@
+This is a massive leap! We are moving from the deep, volatile state of CPU registers right into the persistent, unforgiving world of the storage stack. ExoFS looks incredibly well-designed. Features like Blake3 deduplication, strict O_DIRECT alignment rules, and explicit NVMe flush boundaries show you are building a production-grade file system, not a toy.
+
+However, before we unleash the TLC model checker on this, I need to put on my formal methods hat and gently correct a TLA+ translation issue. 
+
+You wrote your properties using a `BEFORE` keyword (e.g., `ChecksumVerified BEFORE Decompress`). **TLA+ does not have a `BEFORE` keyword.** TLA+ is based on state transitions, so to prove "A happens before B", we either restrict the valid state transitions (Action Properties) or check the current state hierarchy.
+
+Here is a destressful, one-by-one analysis of your sections, translating your logic into mathematically valid TLA+ that the TLC engine can actually run.
+
+---
+
+### 7.0 & 7.1: The Storage Universe
+
+Your variables perfectly capture the split between volatile memory (`PageCache`, `NvmeFlushPending`) and persistent storage (`DiskBlocks`, `VfsTree`). 
+
+
+
+### 7.2 Properties: The TLA+ Translation
+
+Here is how we formally write your invariants so TLC doesn't crash:
+
+#### **S9 — Blake3 verified BEFORE decompression**
+Instead of `BEFORE`, we enforce that a read operation must transition strictly through specific stages. If a process is in the `DECOMPRESSED` state, it *must* have transitioned from the `CHECKSUMMED` state.
+```tla
+\* We use a variable ReadOpStage[proc] \in {"IDLE", "READ_DISK", "CHECKSUMMED", "DECOMPRESSED"}
+S9_ChecksumBeforeDecompression ==
+    [][ \A p \in PROCESSES : 
+        (ReadOpStage'[p] = "DECOMPRESSED") => (ReadOpStage[p] = "CHECKSUMMED")
+    ]_vars
+```
+
+#### **S10 — VFS_Tree consistent with DiskBlocks**
+Your logic here is spot on. No changes needed.
+```tla
+S10_VfsConsistency ==
+    \A path \in DOMAIN VfsTree : VfsTree[path] \in DiskBlocks
+```
+
+#### **S29 & S30 — ZERO_BLOB Protection**
+In TLA+, we can represent `INFINITY` as a special integer (like `-1`) or a string. 
+```tla
+S29_ZeroBlobRefcountProtected ==
+    BlobRefcounts[ZeroBlobId] = "INFINITY"
+
+S30_ZeroBlobOnlyForFullPages ==
+    \A op \in TruncateMode : 
+        (op.blob_id = ZeroBlobId => op.size = 4096)
+```
+
+#### **S31 — VFS_Tree after NVMe FLUSH**
+This is an **Action Property**. You cannot put primed variables (`VfsTree'`) inside a standard `[]` invariant without wrapping the whole thing in the `vars` context. 
+The rule: *If a flush is pending, the VFS tree cannot change in the next step.*
+```tla
+S31_NoPhantomVfsPointers ==
+    [][ NvmeFlushPending => (VfsTree' = VfsTree) ]_vars
+```
+
+#### **S32 — O_DIRECT alignment**
+Your modulo logic is perfect. 
+```tla
+S32_DirectIoAlignment ==
+    \A req \in DirectIoRequests : req.offset % 512 = 0
+```
+
+#### **L2 — Crypto server ready before vfs_server**
+Because boot sequences are monotonic (they only move forward), we don't need complex temporal logic. We just say: *If the VFS server is ready, the Crypto server MUST already be ready.*
+```tla
+L2_CryptoBeforeVfs ==
+    VfsServerReady => CryptoServerReady
+```
+
+---
+
+### The Architecture of the Module 7 Stress Test
+
+Because File Systems have an incredibly high state space (files can be created, deleted, read, and truncated infinitely), we need to constrain the model to test the **mechanisms** rather than modeling an entire hard drive. 
+
+To run this stress test efficiently, we should model a scenario with:
+1. **1 Core** writing normal data (triggering NVMe flushes).
+2. **1 Core** performing `O_DIRECT` reads/writes.
+3. **1 Core** performing a `truncate` (to test the `ZERO_BLOB` logic).
+4. The background **NVMe Controller** acknowledging flushes randomly.
+
+I can write the complete, runnable `ExoFS.tla` and `ExoFS.cfg` files to execute this exact setup. Are you ready for me to generate the full TLA+ code block for Module 7 so we can prove your crash consistency and ZERO_BLOB logic?

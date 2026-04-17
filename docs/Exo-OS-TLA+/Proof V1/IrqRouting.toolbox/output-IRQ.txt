@@ -1,0 +1,33 @@
+PS C:\Users\xavie\Downloads\IrqRouting.toolbox> java -Xmx4g -XX:+UseParallelGC -jar tla2tools.jar -workers auto IrqRouting.tla
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 91 and seed -4837447866315508201 with 8 workers on 8 cores with 3641MB heap and 64MB offheap memory [pid: 18488] (Windows 11 10.0 amd64, Eclipse Adoptium 25.0.2 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file C:\Users\xavie\Downloads\IrqRouting.toolbox\IrqRouting.tla
+Parsing file C:\Users\xavie\AppData\Local\Temp\Naturals.tla
+Parsing file C:\Users\xavie\AppData\Local\Temp\FiniteSets.tla
+Parsing file C:\Users\xavie\AppData\Local\Temp\Sequences.tla
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module IrqRouting
+Starting... (2026-04-15 19:35:54)
+Warning: Declaring state or action constraints during liveness checking is dangerous: Please read section 14.3.5 on page 247 of Specifying Systems (https://lamport.azurewebsites.net/tla/book.html) and optionally the discussion at https://discuss.tlapl.us/msg00994.html for more details.
+(Use the -nowarning option to disable this warning.)
+Implied-temporal checking--satisfiability problem has 1 branches.
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-04-15 19:35:54.
+Checking temporal properties for the current state space with 69026 total distinct states at (2026-04-15 19:35:57)
+Finished checking temporal properties in 02s at 2026-04-15 19:35:59
+Progress(14) at 2026-04-15 19:35:59: 438?396 states generated (438?396 s/min), 69?026 distinct states found (69?026 ds/min), 20?166 states left on queue.
+Progress(40) at 2026-04-15 19:36:20: 4?620?289 states generated, 524?288 distinct states found, 0 states left on queue.
+Checking temporal properties for the complete state space with 524288 total distinct states at (2026-04-15 19:36:20)
+Finished checking temporal properties in 25s at 2026-04-15 19:36:46
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 1.2E-7
+  based on the actual fingerprints:  val = 2.5E-8
+4620289 states generated, 524288 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 40.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 13 and the 95th percentile is 4).
+Finished in 52s at (2026-04-15 19:36:46)
+PS C:\Users\xavie\Downloads\IrqRouting.toolbox>
