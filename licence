@@ -1,0 +1,44 @@
+Exo‑OS License Agreement
+Version 1.0 — 2026
+
+Copyright (c) 2026, Oria Koudi Eric Xavier.
+All rights reserved.
+
+1. Grant of Permission  
+   The author grants permission to any individual or organization to use,
+   view, and study the source code contained in this repository for personal,
+   academic, or research purposes.
+
+2. Restrictions  
+   Unless explicit written permission is granted by the author, the following
+   actions are strictly prohibited:
+   - Redistributing the software, in whole or in part, in any form.
+   - Modifying the software for the purpose of redistribution.
+   - Using the software in commercial products or services.
+   - Incorporating any part of the software into another project intended
+     for public release.
+   - Removing or altering copyright notices.
+
+3. Derivative Works  
+   Derivative works may be created for private or internal use only.
+   Any derivative work intended for publication, distribution, or commercial
+   use requires prior written authorization from the author.
+
+4. Liability  
+   The software is provided “as is”, without warranty of any kind, express
+   or implied. The author shall not be held liable for any damages arising
+   from the use, misuse, or inability to use the software.
+
+5. Security & Compliance  
+   Components related to system security, capability enforcement, isolation,
+   or AI containment must not be reused or adapted in any context where
+   safety, compliance, or regulatory guarantees are required, unless explicit
+   authorization is granted by the author.
+
+6. Termination  
+   Any violation of this license immediately terminates all granted rights.
+   Upon termination, all copies of the software must be destroyed.
+
+7. Contact  
+   For licensing inquiries, commercial use, or redistribution requests,
+   please contact the author directly.

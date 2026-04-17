@@ -111,7 +111,7 @@ Exo-OS/
 │   └── exo_shield/       # Phase 3 AI containment module
 ├── docs/
 │   ├── Exo-OS-TLA+/      # 12 TLA+ modules + verification outputs (FR)
-│   ├── recast/           # Architecture v7 specifications + cgit ORR-01..54 audit corpus (FR)
+│   ├── recast/           # Architecture v7 specifications + cORR-01..54 audit corpus (FR)
 │   └── old/              # all first code used before recast (FR)
 └── Cargo.toml
 ```
