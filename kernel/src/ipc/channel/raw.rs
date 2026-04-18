@@ -286,6 +286,44 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
     }
 }
 
+/// Variante strictement non bloquante de `send_raw`.
+///
+/// Contraintes :
+/// - ne spin jamais sur le verrou d'anneau ;
+/// - retourne `WouldBlock` si le slot est occupé ou si l'anneau est plein ;
+/// - adaptée aux contextes IRQ/ISR qui doivent rester bornés.
+pub fn try_send_raw_nowait(ep_id: EndpointId, data: &[u8]) -> Result<MessageId, IpcError> {
+    if data.len() > MAX_MSG_SIZE {
+        return Err(IpcError::MessageTooLarge);
+    }
+
+    let id = ep_id.get();
+    if id == 0 {
+        return Err(IpcError::NullEndpoint);
+    }
+
+    if find_slot(id).is_none() && !mailbox_open(ep_id) {
+        return Err(IpcError::OutOfResources);
+    }
+
+    let idx = find_slot(id).ok_or(IpcError::NotFound)?;
+    let slot = &RAW_TABLE[idx];
+    let Some(mut ring) = slot.ring.try_lock() else {
+        slot.drop_count.fetch_add(1, Ordering::Relaxed);
+        return Err(IpcError::WouldBlock);
+    };
+
+    if !ring.is_full() {
+        ring.enqueue(data);
+        slot.send_count.fetch_add(1, Ordering::Relaxed);
+        IPC_STATS.record(StatEvent::MessageSent);
+        return Ok(alloc_message_id());
+    }
+
+    slot.drop_count.fetch_add(1, Ordering::Relaxed);
+    Err(IpcError::WouldBlock)
+}
+
 /// Reçoit un message de la mailbox de `ep_id` dans `buf`.
 ///
 /// `flags` :

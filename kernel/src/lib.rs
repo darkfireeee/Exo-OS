@@ -70,7 +70,7 @@ pub mod security;
 /// Couche 3 : système de fichiers virtuel + exofs
 pub mod fs;
 
-/// GI-03 : wrappers canoniques IRQ/DMA/PCI/IOMMU (stub — to be reimplemented)
+/// GI-03 : wrappers canoniques IRQ/DMA/PCI/IOMMU
 pub mod drivers;
 
 /// ExoPhoenix (Kernel B) : état partagé SSR + orchestration sentinelle.
@@ -136,6 +136,10 @@ pub unsafe fn kernel_init() {
     // FIX TIME-01    : ktime protegé par seqlock ISR-safe.
     crate::arch::x86_64::time::time_init();
     kdb(b'4'); // Phase 2c done
+
+    // ── Phase 2d : drivers GI-03 (IOMMU queues + notifications kernel) ────────
+    crate::drivers::init();
+    kdb(b'D'); // Phase 2d done
 
     // ── Phase 3 : Scheduler ───────────────────────────────────────────
     crate::scheduler::init(&crate::scheduler::SchedInitParams::default());

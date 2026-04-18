@@ -4,6 +4,9 @@ pub mod smp_tests {
     use std::thread;
     use std::sync::Arc;
     use std::time::Instant;
+    use crate::arch::x86_64::boot::memory_map::{
+        MemoryRegion, MemoryRegionType, MEMORY_MAP, MEMORY_REGION_COUNT,
+    };
     use crate::drivers::iommu::fault_queue::{IommuFaultQueue, IommuFaultEvent};
     use crate::drivers::device_claims::{sys_pci_claim, DEVICE_CLAIMS, PciBdf, ClaimError};
     use crate::memory::core::types::PhysAddr;
@@ -66,12 +69,50 @@ pub mod smp_tests {
     }
 
     #[test]
+    fn test_03_iommu_domain_registry_lifecycle() {
+        println!("\n[TEST 3] IOMMU domain registry lifecycle");
+
+        crate::drivers::init();
+
+        let pid = 4_242u32;
+        crate::drivers::iommu::release_domain_for_pid(pid);
+
+        let first = crate::drivers::iommu::ensure_domain_for_pid(pid)
+            .expect("premiere allocation domaine");
+        assert_ne!(first.0, 0);
+        assert_eq!(crate::drivers::iommu::domain_of_pid(pid).ok(), Some(first));
+        assert_eq!(crate::drivers::iommu::pid_of_domain(first), Some(pid));
+
+        crate::drivers::iommu::release_domain_for_pid(pid);
+        assert!(crate::drivers::iommu::domain_of_pid(pid).is_err());
+
+        let second = crate::drivers::iommu::ensure_domain_for_pid(pid)
+            .expect("reallocation domaine");
+        assert_eq!(second.0, first.0, "le slot domaine doit etre recyclable");
+
+        crate::drivers::iommu::release_domain_for_pid(pid);
+    }
+
+    #[test]
     fn test_02_toctou_pci_claim() {
         println!("\n[TEST 2] TOCTOU System PCI Claim Stress Test");
         // Simulation d'une attaque TOCTOU : 50 threads tentent d'enregistrer le BDF 0x01.00.0 simultanement
         let phys_base = PhysAddr::new(0xA000_0000);
         let size = 4096;
         let bdf = Some(PciBdf { bus: 1, dev: 0, func: 0 });
+
+        let old_count;
+        let old_region0;
+        unsafe {
+            old_count = MEMORY_REGION_COUNT;
+            old_region0 = MEMORY_MAP[0];
+            MEMORY_MAP[0] = MemoryRegion {
+                base: phys_base.as_u64(),
+                size: size as u64,
+                region_type: MemoryRegionType::Reserved,
+            };
+            MEMORY_REGION_COUNT = 1;
+        }
 
         let mut handles = std::vec::Vec::new();
         let start = Instant::now();
@@ -102,5 +143,9 @@ pub mod smp_tests {
         
         // Cleanup test environment
         DEVICE_CLAIMS.write().clear();
+        unsafe {
+            MEMORY_MAP[0] = old_region0;
+            MEMORY_REGION_COUNT = old_count;
+        }
     }
 }

@@ -281,11 +281,20 @@ pub struct DmaAllocRecord {
     pub domain: IommuDomainId,
     pub iova: IovaAddr,
     pub virt: u64,
+    pub size: usize,
     pub frame: Frame,
     pub order: usize,
 }
 
 pub static DMA_ALLOC_TABLE: RwLock<Vec<DmaAllocRecord>> = RwLock::new(Vec::new());
+
+pub fn dma_alloc_size_for_pid(pid: u32, iova: IovaAddr) -> Option<usize> {
+    DMA_ALLOC_TABLE
+        .read()
+        .iter()
+        .find(|record| record.pid == pid && record.iova == iova)
+        .map(|record| record.size)
+}
 
 fn rollback_pinned_pages(pinned: &[PinnedPage]) {
     for page in pinned {
@@ -559,6 +568,7 @@ pub fn sys_dma_alloc_for_pid(
                 domain,
                 iova,
                 virt,
+                size,
                 frame,
                 order,
             });

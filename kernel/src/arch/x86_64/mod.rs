@@ -223,6 +223,15 @@ pub fn read_rflags() -> u64 {
 /// Section critique : désactive les interruptions et retourne l'état RFLAGS précédent
 #[must_use]
 #[inline(always)]
+#[cfg(all(test, not(target_os = "none")))]
+pub fn irq_save() -> u64 {
+    0
+}
+
+/// Section critique : désactive les interruptions et retourne l'état RFLAGS précédent
+#[must_use]
+#[inline(always)]
+#[cfg(not(all(test, not(target_os = "none"))))]
 pub fn irq_save() -> u64 {
     let flags = read_rflags();
     disable_interrupts();
@@ -231,6 +240,12 @@ pub fn irq_save() -> u64 {
 
 /// Restaure l'état d'interruption depuis des RFLAGS sauvegardés
 #[inline(always)]
+#[cfg(all(test, not(target_os = "none")))]
+pub fn irq_restore(_flags: u64) {}
+
+/// Restaure l'état d'interruption depuis des RFLAGS sauvegardés
+#[inline(always)]
+#[cfg(not(all(test, not(target_os = "none"))))]
 pub fn irq_restore(flags: u64) {
     // SAFETY: restauration d'un état RFLAGS précédemment sauvegardé — sûr
     unsafe {

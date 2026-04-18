@@ -1,16 +1,17 @@
 //! # drivers/iommu/domain_registry.rs
 //!
 //! Registre bidirectionnel PID <-> domaine IOMMU.
-//! Implémentation fixe, sans allocation, conforme à CORR-16/CORR-23.
-
-use core::sync::atomic::{AtomicU32, Ordering};
+//! Implémentation fixe, sans allocation côté registre, conforme à CORR-16/CORR-23.
 
 use spin::Mutex;
 
 use crate::memory::dma::core::types::IommuDomainId;
+use crate::memory::dma::iommu::{DomainType, IOMMU_DOMAINS};
 
 const MAX_IOMMU_DOMAINS: usize = 256;
 const MAX_DRIVER_DOMAINS: usize = MAX_IOMMU_DOMAINS - 1;
+const DOMAIN_IOVA_BASE: u64 = 0x0001_0000_0000;
+const DOMAIN_IOVA_SLICE_SIZE: u64 = 0x0000_0100_0000;
 
 #[derive(Clone, Copy, Debug)]
 struct DomainSlot {
@@ -34,14 +35,12 @@ impl DomainRegistryInner {
 
 pub struct IommuDomainRegistry {
     inner: Mutex<DomainRegistryInner>,
-    next_domain_id: AtomicU32,
 }
 
 impl IommuDomainRegistry {
     pub const fn new() -> Self {
         Self {
             inner: Mutex::new(DomainRegistryInner::new()),
-            next_domain_id: AtomicU32::new(1),
         }
     }
 
@@ -56,18 +55,33 @@ impl IommuDomainRegistry {
             return Ok(slot.domain);
         }
 
-        let domain_raw = self.next_domain_id.fetch_add(1, Ordering::Relaxed);
-        if domain_raw == 0 || domain_raw as usize >= MAX_IOMMU_DOMAINS {
+        let Some((slot_idx, slot)) = inner
+            .pid_to_domain
+            .iter_mut()
+            .enumerate()
+            .find(|(_, slot)| slot.is_none())
+        else {
+            return Err(());
+        };
+        let iova_base = DOMAIN_IOVA_BASE.saturating_add((slot_idx as u64) * DOMAIN_IOVA_SLICE_SIZE);
+        let iova_limit = iova_base.saturating_add(DOMAIN_IOVA_SLICE_SIZE);
+
+        let domain = IOMMU_DOMAINS
+            .create_domain(
+                DomainType::Translated,
+                iova_base,
+                iova_limit,
+            )
+            .map_err(|_| ())?;
+        let _ = IOMMU_DOMAINS.with_domain_mut(domain, |dom| dom.activate());
+
+        if domain.0 == 0 || domain.0 as usize >= MAX_IOMMU_DOMAINS {
+            let _ = IOMMU_DOMAINS.with_domain_mut(domain, |dom| dom.deactivate());
             return Err(());
         }
 
-        let Some(slot) = inner.pid_to_domain.iter_mut().find(|slot| slot.is_none()) else {
-            return Err(());
-        };
-
-        let domain = IommuDomainId(domain_raw);
         *slot = Some(DomainSlot { pid, domain });
-        inner.domain_to_pid[domain_raw as usize] = Some(pid);
+        inner.domain_to_pid[domain.0 as usize] = Some(pid);
         Ok(domain)
     }
 
@@ -107,6 +121,8 @@ impl IommuDomainRegistry {
             if (slot.domain.0 as usize) < MAX_IOMMU_DOMAINS {
                 inner.domain_to_pid[slot.domain.0 as usize] = None;
             }
+            let _ = IOMMU_DOMAINS.with_domain_mut(slot.domain, |dom| dom.deactivate());
+            let _ = IOMMU_DOMAINS.destroy_domain(slot.domain);
         }
     }
 }

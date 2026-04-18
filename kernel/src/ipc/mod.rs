@@ -96,6 +96,22 @@ pub use rpc::{
     timeout::{RpcTimeout, install_time_fn},
 };
 
+/// Envoie une notification IRQ bornée et non bloquante à un endpoint driver.
+///
+/// Payload canonique :
+/// - octet 0  : numéro IRQ
+/// - octets 1..8 : wave generation little-endian
+pub fn send_irq_notification(endpoint: &exo_types::IpcEndpoint, irq: u8, wave_gen: u64) -> Result<(), IpcError> {
+    let endpoint_code = ((endpoint.pid as u64) << 32) | endpoint.chan_idx as u64;
+    let endpoint_id = EndpointId::new(endpoint_code).ok_or(IpcError::NullEndpoint)?;
+
+    let mut payload = [0u8; 9];
+    payload[0] = irq;
+    payload[1..].copy_from_slice(&wave_gen.to_le_bytes());
+
+    channel::raw::try_send_raw_nowait(endpoint_id, &payload).map(|_| ())
+}
+
 // ---------------------------------------------------------------------------
 // Initialisation globale IPC
 // ---------------------------------------------------------------------------
@@ -173,5 +189,4 @@ pub fn ipc_install_vmm_hooks(
     shared_memory::mapping::register_map_hook(map_page_fn);
     shared_memory::mapping::register_unmap_hook(unmap_page_fn);
 }
-
 

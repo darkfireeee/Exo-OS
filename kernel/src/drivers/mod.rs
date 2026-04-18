@@ -12,8 +12,10 @@ use spin::RwLock;
 pub mod iommu;
 pub mod dma;
 pub mod device_claims;
+pub mod device_server_ipc;
 pub mod pci_topology;
 mod pci_cfg;
+mod pci_link;
 
 #[cfg(test)]
 pub mod tests;
@@ -24,6 +26,11 @@ pub use iommu::{ensure_domain_for_pid, domain_of_pid, iommu_init, pid_of_domain,
 pub use crate::memory::dma::core::types::IommuDomainId;
 pub use device_claims::ClaimError;
 pub use pci_topology::PciError as TopoError;
+
+pub fn init() {
+    iommu::iommu_init();
+    device_server_ipc::init();
+}
 
 // Error type s (to be unified with real driver errors eventually)
 #[derive(Clone, Copy, Debug)]
@@ -135,7 +142,7 @@ pub fn sys_secondary_bus_reset_for_pid(pid: u32) -> Result<bool, PciCfgError> {
 }
 
 pub fn sys_wait_link_retraining_for_pid(pid: u32, timeout: u64) -> Result<bool, PciCfgError> {
-    pci_cfg::sys_wait_link_retraining_for_pid(pid, timeout)
+    pci_link::wait_link_retraining_for_pid(pid, timeout)
 }
 
 pub fn sys_pci_claim(
@@ -218,7 +225,7 @@ pub fn sys_msi_free_for_pid(pid: u32, handle: u64) -> Result<(), MsiError> {
 
 pub fn sys_pci_set_topology(
     bdf: pci_types::PciAddress,
-    parent: Option<pci_types::PciAddress>,
+    parent: pci_types::PciAddress,
 ) -> Result<(), TopoError> {
     let custom_child = pci_topology::PciBdf {
         bus: bdf.bus(),
@@ -226,12 +233,10 @@ pub fn sys_pci_set_topology(
         func: bdf.function(),
     };
 
-    let Some(custom_parent) = parent.map(|p| pci_topology::PciBdf {
-        bus: p.bus(),
-        dev: p.device(),
-        func: p.function(),
-    }) else {
-        return Ok(());
+    let custom_parent = pci_topology::PciBdf {
+        bus: parent.bus(),
+        dev: parent.device(),
+        func: parent.function(),
     };
 
     pci_topology::register_bridge_link(custom_child, custom_parent)

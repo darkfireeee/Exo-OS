@@ -16,8 +16,10 @@ pub use types::{
 
 // Réexporte les fonctions de routage
 pub use routing::{
-    sys_irq_register_syscall as sys_irq_register,  // Alias pour compatibilité syscall
-    ack_irq_syscall as ack_irq,  // Version syscall simplifiée
+    sys_irq_register_canonical as sys_irq_register,
+    sys_irq_register_syscall,
+    ack_irq_canonical as ack_irq,
+    ack_irq_syscall,
     revoke_all_irq, dispatch_irq,
     parse_irq_source_kind, irq_error_to_errno,  // Helpers syscall
 };

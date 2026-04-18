@@ -11,10 +11,10 @@ use core::sync::atomic::Ordering;
 // Dépendances de l'OS (process, IPC, APIC, IOAPIC)
 use crate::arch::x86_64::apic::local_apic;
 use crate::arch::x86_64::apic::io_apic;
+use crate::drivers::device_server_ipc;
+use crate::ipc;
 use crate::process::PROCESS_REGISTRY;
 use crate::process::core::pid::Pid;
-use crate::ipc::core::types::EndpointId;
-use crate::ipc::channel::raw::send_raw;
 use crate::scheduler::timer::clock::monotonic_ns;
 
 pub fn parse_irq_source_kind(flags: u64) -> Option<IrqSourceKind> {
@@ -51,14 +51,41 @@ pub fn sys_irq_register_syscall(
     reg_params: IrqRouteRegistration,
 ) -> Result<u64, IrqError> {
     let endpoint = IpcEndpoint { pid: owner_pid.0, chan_idx: 0, generation: 0, _pad: 0 };
-    sys_irq_register_full(owner_pid, irq_vector, reg_params, endpoint)
+    sys_irq_register_common(
+        owner_pid,
+        irq_vector,
+        reg_params.source_kind,
+        endpoint,
+        Some(reg_params.gsi),
+        None,
+        Some(reg_params),
+    )
 }
 
-fn sys_irq_register_full(
+pub fn sys_irq_register_canonical(
+    irq_vector: IrqVector,
+    endpoint: IpcEndpoint,
+    source_kind: IrqSourceKind,
+    pci_bdf: Option<u64>,
+) -> Result<u64, IrqError> {
+    let owner_pid = IrqOwnerPid(endpoint.pid);
+    let gsi = if source_kind.needs_ioapic_mask() {
+        Some(irq_vector.as_u8() as u32)
+    } else {
+        None
+    };
+
+    sys_irq_register_common(owner_pid, irq_vector, source_kind, endpoint, gsi, pci_bdf, None)
+}
+
+fn sys_irq_register_common(
     owner_pid: IrqOwnerPid,
     irq_vector: IrqVector,
-    reg_params: IrqRouteRegistration,
+    source_kind: IrqSourceKind,
     endpoint: IpcEndpoint,
+    gsi: Option<u32>,
+    pci_bdf: Option<u64>,
+    ioapic_route: Option<IrqRouteRegistration>,
 ) -> Result<u64, IrqError> {
     if !irq_vector.is_valid() {
         return Err(IrqError::InvalidVector);
@@ -74,17 +101,38 @@ fn sys_irq_register_full(
     let is_new = table.get(irq_vector).is_none();
     
     let route = table.get_mut(irq_vector).get_or_insert_with(|| {
-        IrqRoute::new(irq_vector, reg_params.source_kind, Some(reg_params.gsi), None)
+        IrqRoute::new(irq_vector, source_kind, gsi, pci_bdf)
     });
 
     if !is_new {
-        if route.source_kind != reg_params.source_kind {
+        if route.source_kind != source_kind {
             return Err(IrqError::KindMismatch {
                 existing: route.source_kind,
-                requested: reg_params.source_kind,
+                requested: source_kind,
             });
         }
         route.overflow_count.store(0, Ordering::Relaxed);
+
+        if route.pending_acks.load(Ordering::Acquire) == 0 {
+            route.handled_count.store(0, Ordering::Relaxed);
+        }
+
+        if route.masked.load(Ordering::Acquire)
+            && route.pending_acks.load(Ordering::Relaxed) == 0
+            && route.source_kind.needs_ioapic_mask()
+        {
+            if let Some(existing_gsi) = route.gsi {
+                io_apic::unmask_irq(existing_gsi);
+            }
+            route.masked.store(false, Ordering::Release);
+        }
+
+        if route.gsi.is_none() {
+            route.gsi = gsi;
+        }
+        if let Some(raw_bdf) = pci_bdf {
+            route.pci_bdf = Some(raw_bdf);
+        }
     }
 
     // CORR-51: Purger les handlers de PIDs morts
@@ -132,7 +180,7 @@ fn sys_irq_register_full(
     }
 
     // Configuration de l'IOAPIC matérielle selon le type
-    if route.source_kind.needs_ioapic_mask() {
+    if let Some(reg_params) = ioapic_route.filter(|_| route.source_kind.needs_ioapic_mask()) {
         if !io_apic::route_irq(
             reg_params.gsi,
             irq_vector.as_u8(),
@@ -175,29 +223,28 @@ pub fn ack_irq_syscall(vector: IrqVector) -> Result<(), IrqError> {
     Ok(())
 }
 
-pub fn ack_irq_full(reg_id: u64, owner_pid: IrqOwnerPid, wave_gen: u64, result: IrqAckResult) -> Result<(), IrqError> {
+pub fn ack_irq_canonical(
+    irq_vector: IrqVector,
+    reg_id: u64,
+    handler_gen: u64,
+    owner_pid: IrqOwnerPid,
+    wave_gen: u64,
+    result: IrqAckResult,
+) -> Result<(), IrqError> {
     if !owner_pid.is_valid() {
         return Err(IrqError::OwnerPidDead);
     }
 
-    let mut vector_opt = None;
-    {
-        let table = IRQ_TABLE.read();
-        for (i, route_opt) in table.iter() {
-            if let Some(route) = route_opt {
-                let handlers = route.handlers.read();
-                if handlers.iter().any(|h| h.reg_id == reg_id && h.owner_pid == owner_pid) {
-                    vector_opt = Some(IrqVector(i));
-                    break;
-                }
-            }
-        }
-    }
-
-    let vector = vector_opt.ok_or(IrqError::NotRegistered)?;
-    
     let table = IRQ_TABLE.read();
-    let route = table.get(vector).as_ref().ok_or(IrqError::NotRegistered)?;
+    let route = table.get(irq_vector).as_ref().ok_or(IrqError::NotRegistered)?;
+
+    {
+        let handlers = route.handlers.read();
+        handlers
+            .iter()
+            .find(|h| h.reg_id == reg_id && h.generation == handler_gen && h.owner_pid == owner_pid)
+            .ok_or(IrqError::NotOwner)?;
+    }
 
     let current_wave = route.dispatch_generation.load(Ordering::Acquire);
     let is_stale = wave_gen != current_wave;
@@ -213,7 +260,12 @@ pub fn ack_irq_full(reg_id: u64, owner_pid: IrqOwnerPid, wave_gen: u64, result: 
     let prev = route.pending_acks.fetch_sub(1, Ordering::AcqRel);
     if prev == 0 {
         route.pending_acks.store(0, Ordering::Release);
-        log::warn!("IRQ {} ack_irq underflow", vector.as_u8());
+        log::warn!(
+            "IRQ {} ack_irq underflow (reg_id={}, wave={})",
+            irq_vector.as_u8(),
+            reg_id,
+            wave_gen
+        );
         return Ok(());
     }
 
@@ -223,16 +275,28 @@ pub fn ack_irq_full(reg_id: u64, owner_pid: IrqOwnerPid, wave_gen: u64, result: 
 
     let remaining = prev - 1;
     if remaining == 0 {
+        let all_not_mine = route.handled_count.load(Ordering::Acquire) == 0;
+
         route.handled_count.store(0, Ordering::Release);
+        route.overflow_count.store(0, Ordering::Relaxed);
         route.masked_since.store(0, Ordering::Release);
-        route.soft_alarmed.store(false, Ordering::Release);
-        
+
+        if all_not_mine && route.source_kind == IrqSourceKind::IoApicLevel {
+            local_apic::eoi();
+            device_server_ipc::notify_unhandled_irq(irq_vector.as_u8());
+            route.soft_alarmed.store(false, Ordering::Relaxed);
+            return Ok(());
+        }
+
         if route.source_kind == IrqSourceKind::IoApicLevel {
-            route.masked.store(false, Ordering::Release);
+            local_apic::eoi();
             if let Some(gsi) = route.gsi {
                 io_apic::unmask_irq(gsi);
             }
         }
+
+        route.masked.store(false, Ordering::Release);
+        route.soft_alarmed.store(false, Ordering::Relaxed);
     }
 
     Ok(())
@@ -304,9 +368,6 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
                 0, now, Ordering::Release, Ordering::Relaxed
             );
             route.masked.store(true, Ordering::Release);
-            // On ne fait PAS d'EOI LAPIC immédiat? Le doc indique OUI pour FIX-108 : 
-            // "FIX-108 v10 : EOI LAPIC OBLIGATOIRE pour TOUS types (Level ET Edge/MSI)."
-            local_apic::eoi();
         }
         IrqSourceKind::IoApicEdge | IrqSourceKind::Msi | IrqSourceKind::MsiX => {
             local_apic::eoi();
@@ -332,6 +393,23 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
     }
     let n = n_eps as u32;
 
+    if n == 0 {
+        route.pending_acks.store(0, Ordering::Release);
+        route.handled_count.store(0, Ordering::Release);
+        route.masked_since.store(0, Ordering::Release);
+        route.soft_alarmed.store(false, Ordering::Release);
+        device_server_ipc::notify_unhandled_irq(irq_vector.as_u8());
+
+        if route.source_kind == IrqSourceKind::IoApicLevel {
+            local_apic::eoi();
+            route.masked.store(false, Ordering::Release);
+            if let Some(gsi) = route.gsi {
+                io_apic::unmask_irq(gsi);
+            }
+        }
+        return;
+    }
+
     let wg = route.dispatch_generation.fetch_add(1, Ordering::AcqRel) + 1;
 
     // ÉTAPE 4: Mise à jour pending acks et détection storm
@@ -356,8 +434,10 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
                                 io_apic::mask_irq(gsi);
                             }
                             route.pending_acks.store(0, Ordering::Release);
+                            device_server_ipc::notify_irq_blacklisted(irq_vector.as_u8());
                             return;
                         }
+                        device_server_ipc::notify_driver_stall(irq_vector.as_u8());
                         break;
                     }
                     Err(actual) => {
@@ -391,11 +471,7 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
     // ÉTAPE 5: Dispatch notifications (en ISR c'est un push non bloquant dans la MQ)
     for i in 0..n_eps {
         if let Some(ep) = eps[i] {
-            let endpoint_code = ((ep.pid as u64) << 32) | (ep.chan_idx as u64);
-            if let Some(endpoint_id) = EndpointId::new(endpoint_code) {
-                let payload = [irq_vector.as_u8(), (wg & 0xFF) as u8];
-                let _ = send_raw(endpoint_id, &payload, 0);
-            }
+            let _ = ipc::send_irq_notification(&ep, irq_vector.as_u8(), wg);
         }
     }
 }

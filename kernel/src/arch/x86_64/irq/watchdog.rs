@@ -11,6 +11,7 @@ use crate::arch::x86_64::irq::types::{
     IRQ_TABLE, SOFT_WATCHDOG_MS, HARD_WATCHDOG_MS, IrqSourceKind,
 };
 use crate::arch::x86_64::apic::{io_apic, local_apic};
+use crate::drivers::device_server_ipc;
 use crate::scheduler::timer::clock::monotonic_ns;
 
 #[inline]
@@ -77,6 +78,8 @@ pub fn watchdog_tick() {
                     io_apic::unmask_irq(gsi);
                 }
             }
+
+            device_server_ipc::notify_driver_stall(route.irq_line.as_u8());
         }
     }
 }

@@ -116,14 +116,12 @@ unsafe impl Send for IovaAllocator {}
 
 impl IovaAllocator {
     const fn new() -> Self {
+        const EMPTY_MAPPING: Option<DmaMapping> = None;
+
         IovaAllocator {
             inner: Mutex::new(IovaAllocatorInner {
                 next:   IOVA_BASE,
-                // SAFETY: Option<DmaMapping> se zero-initialise en None
-                // si DmaMapping n'implémente pas Default on ne peut pas écrire
-                // [None; N] directement car DmaMapping n'est pas Copy.
-                // On utilise transmute d'un tableau de zéros (None=0 bits en repr C).
-                active: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
+                active: [EMPTY_MAPPING; MAX_DMA_MAPPINGS],
                 count:  0,
             }),
             passthrough:  AtomicUsize::new(1), // passthrough par défaut (avant IOMMU init)

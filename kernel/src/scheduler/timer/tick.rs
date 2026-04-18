@@ -28,6 +28,7 @@ use super::hrtimer;
 
 pub const HZ: u64 = 1000;
 pub const TICK_NS: u64 = 1_000_000_000 / HZ;
+const GI03_DEFERRED_TICK_INTERVAL: u64 = 10;
 
 // Temps accumulé sur le CPU courant depuis la dernière sélection du thread (par CPU).
 static ELAPSED_NS: [AtomicU64; 256] = {
@@ -132,6 +133,13 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
     // Avant ce correctif, dl_tick() n'était jamais appelé : les threads
     // SCHED_DEADLINE ne détectaient jamais leurs deadline misses.
     crate::scheduler::timer::deadline_timer::dl_tick(cpu_id as usize);
+
+    // ── 5c. Maintenance GI-03 (BSP, 100 Hz) ───────────────────────────────
+    // Watchdog IRQ + drainage des fautes IOMMU hors ISR matériel dédié.
+    if cpu_id == 0 && tick % GI03_DEFERRED_TICK_INTERVAL == 0 {
+        crate::arch::x86_64::irq::watchdog::watchdog_tick();
+        crate::drivers::iommu::fault_handler::process_iommu_faults();
+    }
 
     // ── 6. Équilibrage de charge ──────────────────────────────────────────
     if tick % BALANCE_INTERVAL_TICKS == 0 {

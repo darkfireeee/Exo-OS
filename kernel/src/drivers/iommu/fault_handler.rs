@@ -9,10 +9,16 @@
 
 use super::fault_queue::IOMMU_FAULT_QUEUE;
 use super::pid_of_domain;
+use crate::drivers::device_server_ipc;
 
 /// Scanne la file d'erreurs IOMMU collectées en ISR et applique les politiques.
 /// Doit être appelé régulièrement (ex: via le timer tick).
 pub fn process_iommu_faults() {
+    let dropped = IOMMU_FAULT_QUEUE.drain_dropped();
+    if dropped > 0 {
+        log::error!("IOMMU fault queue overflow: {} event(s) dropped", dropped);
+    }
+
     let mut count = 0;
     while let Some(fault) = IOMMU_FAULT_QUEUE.pop() {
         count += 1;
@@ -31,6 +37,7 @@ pub fn process_iommu_faults() {
         // et envoyer un SIGKILL (corruption DMA).
         // On effectue ici un mapping 1:1 entre le domaine IOMMU et le PID du processus.
         if let Some(pid) = pid_of_domain(crate::memory::dma::core::types::IommuDomainId(dom)) {
+            device_server_ipc::notify_iommu_fault_kill(pid, fa, ftype);
             let malicious_pid = crate::process::core::pid::Pid(pid);
             if let Err(_e) = crate::process::signal::send_signal_to_pid(
                 malicious_pid, 

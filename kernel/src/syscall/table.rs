@@ -33,8 +33,9 @@ use crate::syscall::validation::{
 use crate::syscall::fast_path::Timespec;
 // GI-03 IRQ types et fonctions
 use crate::arch::x86_64::irq::{
+    IpcEndpoint,
+    IrqAckResult,
     IrqOwnerPid,
-    IrqRouteRegistration,
     IrqVector,
     parse_irq_source_kind,
     irq_error_to_errno,
@@ -687,30 +688,8 @@ pub fn sys_exo_log(buf_ptr: u64, len: u64, level: u64, _a4: u64, _a5: u64, _a6: 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ROLLBACK : Handlers GI-03 Drivers (530–546) — à réimplémenter
+// Handlers GI-03 Drivers (530–546)
 // ─────────────────────────────────────────────────────────────────────────────
-
-/*
-#[inline]
-fn parse_irq_source_kind(raw: u64) -> Option<IrqSourceKind> {
-    match raw {
-        0 => Some(IrqSourceKind::IoApicEdge),
-        1 => Some(IrqSourceKind::IoApicLevel),
-        2 => Some(IrqSourceKind::Msi),
-        3 => Some(IrqSourceKind::MsiX),
-        _ => None,
-    }
-}
-
-#[inline]
-fn irq_error_to_errno(err: IrqError) -> i64 {
-    match err {
-        IrqError::InvalidVector | IrqError::OwnerPidDead => EINVAL,
-        IrqError::AlreadyRegistered => EBUSY,
-        IrqError::RouteFailed => EACCES,
-    }
-}
-*/
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers pour DMA/PCI (réutilisables)
@@ -724,6 +703,25 @@ fn parse_dma_direction(raw: u64) -> Option<DmaDirection> {
         2 => Some(DmaDirection::Bidirection),
         3 => Some(DmaDirection::None),
         _ => None,
+    }
+}
+
+#[inline]
+fn parse_irq_ack_result(raw: u64) -> Option<IrqAckResult> {
+    match raw {
+        0 => Some(IrqAckResult::Handled),
+        1 => Some(IrqAckResult::NotMine),
+        _ => None,
+    }
+}
+
+#[inline]
+fn parse_ipc_endpoint_packed(lo: u64, hi: u64) -> IpcEndpoint {
+    IpcEndpoint {
+        pid: lo as u32,
+        chan_idx: (lo >> 32) as u32,
+        generation: hi as u32,
+        _pad: (hi >> 32) as u32,
     }
 }
 
@@ -758,11 +756,6 @@ fn dma_error_to_errno(err: DmaError) -> i64 {
         | DmaError::NotSupported => EINVAL,
     }
 }
-
-/*
-// ROLLBACK: Error conversion functions for GI-03 driver syscalls
-// These will be reimplemented when GI-03 modules are properly completed
-*/
 
 #[inline]
 fn claim_error_to_errno(err: ClaimError) -> i64 {
@@ -810,29 +803,30 @@ fn msi_error_to_errno(err: MsiError) -> i64 {
     }
 }
 
-/// ABI GI-03 (adaptation réaliste):
-/// `sys_irq_register(vector, owner_pid, gsi, dest_apic, route_flags, source_kind)`
-/// `route_flags`: bit0=active_low, bit1=level.
+/// ABI GI-03 canonique.
+/// Encodage registre noyau :
+/// `sys_irq_register(irq, endpoint_lo, endpoint_hi, source_kind, bdf_raw, has_bdf)`.
+/// `endpoint_lo = pid | (chan_idx << 32)`, `endpoint_hi = generation | (_pad << 32)`.
 pub fn sys_irq_register(
-    vector: u64,
-    owner_pid: u64,
-    gsi: u64,
-    dest_apic: u64,
-    route_flags: u64,
+    irq: u64,
+    endpoint_lo: u64,
+    endpoint_hi: u64,
     source_kind: u64,
+    bdf_raw: u64,
+    has_bdf: u64,
 ) -> i64 {
     stat_inc(SYS_IRQ_REGISTER);
 
-    if vector > u8::MAX as u64
-        || owner_pid == 0
-        || owner_pid > u32::MAX as u64
-        || gsi > u32::MAX as u64
-        || dest_apic > u8::MAX as u64
-    {
+    if irq > u8::MAX as u64 {
         return EINVAL;
     }
 
-    let vector = IrqVector(vector as u8);
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    let vector = IrqVector(irq as u8);
     if !vector.is_valid() {
         return EINVAL;
     }
@@ -842,46 +836,58 @@ pub fn sys_irq_register(
         None => return EINVAL,
     };
 
-    let route = IrqRouteRegistration::new(
-        gsi as u32,
-        dest_apic as u8,
-        (route_flags & 0x1) != 0,
-        (route_flags & 0x2) != 0,
-        source_kind,
-    );
+    let mut endpoint = parse_ipc_endpoint_packed(endpoint_lo, endpoint_hi);
+    endpoint.pid = caller_pid;
 
-    match crate::arch::x86_64::irq::sys_irq_register(
-        vector,
-        IrqOwnerPid(owner_pid as u32),
-        route,
-    ) {
-        Ok(generation) => generation as i64,
+    let bdf = if has_bdf != 0 { Some(bdf_raw) } else { None };
+
+    match crate::arch::x86_64::irq::sys_irq_register(vector, endpoint, source_kind, bdf) {
+        Ok(reg_id) => reg_id as i64,
         Err(err) => irq_error_to_errno(err),
     }
 }
 
-/// ABI GI-03 simplifiée : `sys_irq_ack(vector, ...)`.
-/// Les paramètres supplémentaires sont actuellement ignorés dans l'adaptateur.
+/// ABI GI-03 canonique :
+/// `sys_irq_ack(irq, reg_id, handler_gen, wave_gen, result)`.
 pub fn sys_irq_ack(
-    vector: u64,
-    _reg_id: u64,
-    _handler_gen: u64,
-    _wave_gen: u64,
-    _result: u64,
+    irq: u64,
+    reg_id: u64,
+    handler_gen: u64,
+    wave_gen: u64,
+    result_raw: u64,
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_IRQ_ACK);
-    if vector > u8::MAX as u64 {
+    if irq > u8::MAX as u64 {
         return EINVAL;
     }
 
-    let vector = IrqVector(vector as u8);
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    let vector = IrqVector(irq as u8);
     if !vector.is_valid() {
         return EINVAL;
     }
 
-    let _ = crate::arch::x86_64::irq::ack_irq(vector);
-    0
+    let result = match parse_irq_ack_result(result_raw) {
+        Some(result) => result,
+        None => return EINVAL,
+    };
+
+    match crate::arch::x86_64::irq::ack_irq(
+        vector,
+        reg_id,
+        handler_gen,
+        IrqOwnerPid(caller_pid),
+        wave_gen,
+        result,
+    ) {
+        Ok(()) => 0,
+        Err(err) => irq_error_to_errno(err),
+    }
 }
 
 /// ABI GI-03 : `sys_mmio_map(phys_addr, size)` pour le PID appelant.
@@ -922,20 +928,23 @@ pub fn sys_mmio_unmap(virt_addr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _
     }
 }
 
-/// ABI GI-03 (adaptation réaliste):
-/// `sys_dma_alloc(size, direction, map_flags, domain_id, user_virt_out)`
-/// retourne l'IOVA dans RAX et écrit l'adresse virtuelle CPU dans `*user_virt_out` si non nul.
+/// ABI GI-03 canonique :
+/// `sys_dma_alloc(size, direction) -> (virt, iova)`.
+/// Réalisation registre noyau :
+/// - `rax` retourne l'IOVA
+/// - `arg3` (`user_virt_out`) reçoit l'adresse CPU virtuelle si non nul
+/// - `arg4`/`arg5` restent des extensions de compatibilité (`map_flags`, `domain_hint`)
 pub fn sys_dma_alloc(
     size: u64,
     direction: u64,
-    map_flags: u64,
-    domain_id: u64,
     user_virt_out: u64,
+    map_flags: u64,
+    domain_hint: u64,
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_DMA_ALLOC);
 
-    if size == 0 || size > usize::MAX as u64 || domain_id > u32::MAX as u64 {
+    if size == 0 || size > usize::MAX as u64 || domain_hint > u32::MAX as u64 {
         return EINVAL;
     }
 
@@ -949,7 +958,7 @@ pub fn sys_dma_alloc(
         return EACCES;
     }
 
-    let requested_domain = IommuDomainId(domain_id as u32);
+    let requested_domain = IommuDomainId(domain_hint as u32);
     let effective_domain = match crate::drivers::iommu::ensure_domain_for_pid(caller_pid) {
         Ok(domain) => domain,
         Err(_) if requested_domain.0 != 0 => requested_domain,
@@ -976,11 +985,13 @@ pub fn sys_dma_alloc(
     }
 }
 
-/// ABI GI-03 (adaptation réaliste): `sys_dma_free(iova, domain_id)`.
-pub fn sys_dma_free(iova: u64, domain_id: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+/// ABI GI-03 canonique :
+/// `sys_dma_free(iova, size)`.
+/// `arg3` reste un hint de domaine pour le noyau tant que la couche userland n'est pas finalisée.
+pub fn sys_dma_free(iova: u64, size: u64, domain_hint: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_DMA_FREE);
 
-    if domain_id > u32::MAX as u64 {
+    if size == 0 || size > usize::MAX as u64 || domain_hint > u32::MAX as u64 {
         return EINVAL;
     }
 
@@ -989,7 +1000,11 @@ pub fn sys_dma_free(iova: u64, domain_id: u64, _a3: u64, _a4: u64, _a5: u64, _a6
         return EACCES;
     }
 
-    let requested_domain = IommuDomainId(domain_id as u32);
+    if crate::drivers::dma::dma_alloc_size_for_pid(caller_pid, IovaAddr(iova)) != Some(size as usize) {
+        return EINVAL;
+    }
+
+    let requested_domain = IommuDomainId(domain_hint as u32);
     let effective_domain = crate::drivers::iommu::domain_of_pid(caller_pid).unwrap_or(requested_domain);
 
     match crate::drivers::sys_dma_free_for_pid(caller_pid, IovaAddr(iova), effective_domain) {
@@ -998,7 +1013,7 @@ pub fn sys_dma_free(iova: u64, domain_id: u64, _a3: u64, _a4: u64, _a5: u64, _a6
     }
 }
 
-/// ABI GI-03 (adaptation réaliste): `sys_dma_sync(iova, size, direction)`.
+/// ABI GI-03 canonique : `sys_dma_sync(iova, size, direction)`.
 pub fn sys_dma_sync(iova: u64, size: u64, direction: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_DMA_SYNC);
 
@@ -1230,7 +1245,7 @@ pub fn sys_msi_free(handle: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     }
 }
 
-/// ABI GI-03 : `sys_pci_set_topology(child_bdf_raw, parent_bdf_raw, has_parent)`.
+/// ABI GI-03 canonique : `sys_pci_set_topology(child_bdf_raw, parent_bdf_raw)`.
 pub fn sys_pci_set_topology(
     bdf_raw: u64,
     parent_bdf_raw: u64,
@@ -1241,12 +1256,12 @@ pub fn sys_pci_set_topology(
 ) -> i64 {
     stat_inc(SYS_PCI_SET_TOPOLOGY);
 
+    if has_parent == 0 {
+        return EINVAL;
+    }
+
     let address = parse_pci_address(bdf_raw);
-    let parent_bridge = if has_parent != 0 {
-        Some(parse_pci_address(parent_bdf_raw))
-    } else {
-        None
-    };
+    let parent_bridge = parse_pci_address(parent_bdf_raw);
 
     match crate::drivers::sys_pci_set_topology(address, parent_bridge) {
         Ok(()) => 0,

@@ -217,8 +217,7 @@ pub struct IommuDomainTable {
 }
 
 struct IommuDomainTableInner {
-    slots:   [Option<IommuDomain>; MAX_DOMAINS],
-    next_id: u32,
+    slots: [Option<IommuDomain>; MAX_DOMAINS],
 }
 
 // SAFETY: IommuDomainTable est protégé par Mutex.
@@ -227,11 +226,11 @@ unsafe impl Send for IommuDomainTable {}
 
 impl IommuDomainTable {
     const fn new() -> Self {
+        const EMPTY_DOMAIN_SLOT: Option<IommuDomain> = None;
+
         IommuDomainTable {
             domains: Mutex::new(IommuDomainTableInner {
-                // SAFETY: Option<IommuDomain> = None au niveau bits zéros.
-                slots:   unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
-                next_id: 1, // 0 = domaine identité réservé
+                slots: [EMPTY_DOMAIN_SLOT; MAX_DOMAINS],
             }),
             count: AtomicU32::new(0),
         }
@@ -255,14 +254,40 @@ impl IommuDomainTable {
         if self.count.load(Ordering::Relaxed) >= MAX_DOMAINS as u32 {
             return Err(DmaError::OutOfMemory);
         }
-        let id = IommuDomainId(inner.next_id);
-        inner.next_id += 1;
 
-        let slot = inner.slots.iter_mut().find(|s| s.is_none())
+        // Réutiliser l'index de slot comme DomainId garantit un identifiant borné
+        // et recyclable, compatible avec les tables statiques indexées par domain_id.
+        let (slot_idx, slot) = inner
+            .slots
+            .iter_mut()
+            .enumerate()
+            .skip(1)
+            .find(|(_, slot)| slot.is_none())
             .ok_or(DmaError::OutOfMemory)?;
+
+        let id = IommuDomainId(slot_idx as u32);
         *slot = Some(IommuDomain::new(id, domain_type, iova_base, iova_limit));
         self.count.fetch_add(1, Ordering::Relaxed);
         Ok(id)
+    }
+
+    /// Détruit un domaine traduit et libère son slot pour réutilisation.
+    pub fn destroy_domain(&self, id: IommuDomainId) -> bool {
+        if id == IDENTITY_DOMAIN_ID || id.0 as usize >= MAX_DOMAINS {
+            return false;
+        }
+
+        let mut inner = self.domains.lock();
+        let Some(slot) = inner.slots.get_mut(id.0 as usize) else {
+            return false;
+        };
+        if slot.is_none() {
+            return false;
+        }
+
+        *slot = None;
+        self.count.fetch_sub(1, Ordering::Relaxed);
+        true
     }
 
     /// Accès en lecture seule à un domaine.

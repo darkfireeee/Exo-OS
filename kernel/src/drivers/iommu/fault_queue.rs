@@ -69,6 +69,9 @@ impl IommuFaultQueue {
     }
 
     pub fn init(&self) {
+        self.head.store(0, Ordering::Relaxed);
+        self.tail.store(0, Ordering::Relaxed);
+        self.dropped.store(0, Ordering::Relaxed);
         for (i, slot) in self.slots.iter().enumerate() {
             slot.seq.store(i as u32, Ordering::Release);
         }
@@ -145,6 +148,10 @@ impl IommuFaultQueue {
                 spin_loop();
             }
         }
+    }
+
+    pub fn drain_dropped(&self) -> u32 {
+        self.dropped.swap(0, Ordering::AcqRel)
     }
 }
 
