@@ -8,6 +8,7 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 use spin::{Mutex, RwLock};
 
 use crate::memory::{
@@ -28,6 +29,20 @@ use crate::process::PROCESS_REGISTRY;
 use super::{device_claims, MmioError};
 
 const PAGE_SIZE: usize = 4096;
+
+pub static BOOT_TSC_KHZ: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+pub fn init_boot_tsc_khz() -> u64 {
+    let khz = crate::arch::x86_64::cpu::tsc::tsc_khz();
+    BOOT_TSC_KHZ.store(khz, Ordering::Release);
+    khz
+}
+
+#[inline]
+pub fn boot_tsc_khz() -> u64 {
+    BOOT_TSC_KHZ.load(Ordering::Acquire)
+}
 
 /// Page physique verrouillée en mémoire (empêche le swap).
 pub struct PinnedPage {

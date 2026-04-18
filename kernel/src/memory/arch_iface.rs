@@ -40,7 +40,7 @@ pub const IPI_RESCHEDULE_VECTOR: u8 = 0xF1;
 pub const MAX_NUMA_NODES: usize = 8;
 
 /// CPUs maximaux supportés.
-pub const MAX_CPUS: usize = 512;
+pub const MAX_CPUS: usize = 256;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES DE RÉGIONS MÉMOIRE

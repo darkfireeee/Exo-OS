@@ -942,6 +942,10 @@ pub fn arm_apic_watchdog(ms: u64) -> u64 {
 
 /// Orchestrateur strict des étapes 1→12.
 pub fn stage0_init_all_steps() -> Stage0Summary {
+    // SAFETY: Stage0 s'exécute sur Kernel B avant la prise de contrôle normale
+    // de Kernel A ; ExoSeal phase 0 est idempotent.
+    unsafe { crate::security::exoseal::exoseal_boot_phase0(); }
+
     // 1) Page tables de B
     let b_cr3 = install_b_page_tables();
 
@@ -976,6 +980,7 @@ pub fn stage0_init_all_steps() -> Stage0Summary {
 
     // 9) IOMMU + ACS root-ports + IOTLB flush
     setup_iommu_stage0(pool_r3_size);
+    crate::security::exoseal::configure_nic_iommu_policy();
 
     // 10) FACS en RO + hash MADT
     let _ = mark_facs_ro_in_a_pts(acpi.facs_phys);
@@ -1001,6 +1006,11 @@ pub fn stage0_init_all_steps() -> Stage0Summary {
 /// Stage0 complet (1→13): bascule Normal, SIPI one-shot, puis boucle sentinelle.
 pub fn stage0_init() -> ! {
     let _summary = stage0_init_all_steps();
+    
+    // BUG-GX-05 FIX: synchroniser le count de cœurs dans la SSR
+    let n_cores = crate::arch::x86_64::smp::init::smp_cpu_count();
+    exo_phoenix_ssr::init_core_count(n_cores.min(exo_phoenix_ssr::SSR_MAX_CORES_LAYOUT as u32));
+
     PHOENIX_STATE.store(PhoenixState::Normal as u8, Ordering::Release);
     let _ = send_sipi_once(CORE_A_SLOT, A_ENTRY_VECTOR);
     sentinel::run_forever()

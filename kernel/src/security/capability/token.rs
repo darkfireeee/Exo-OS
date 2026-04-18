@@ -200,7 +200,7 @@ impl CapToken {
     /// Construit un token — RÉSERVÉ à `CapTable::grant()`.
     /// Appelé uniquement depuis ce module (visibility `pub(super)`).
     #[inline(always)]
-    pub(super) fn new(
+    pub(crate) fn new(
         object_id:  ObjectId,
         rights:     Rights,
         generation: u32,

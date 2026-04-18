@@ -29,6 +29,7 @@ pub use pci_topology::PciError as TopoError;
 
 pub fn init() {
     iommu::iommu_init();
+    dma::init_boot_tsc_khz();
     device_server_ipc::init();
 }
 
@@ -170,6 +171,71 @@ pub fn release_claim_for_owner(pid: u32) -> usize {
     device_claims::revoke_claims_for_pid(pid);
     iommu::release_domain_for_pid(pid);
     0
+}
+
+#[inline]
+fn bus_master_disable(pid: u32) {
+    let _ = sys_pci_bus_master_for_pid(pid, false);
+}
+
+#[inline]
+fn quiescence(pid: u32) {
+    let needs_reset = match wait_bus_master_quiesced_for_pid(pid, 100) {
+        Ok(true) => false,
+        Ok(false) | Err(_) => true,
+    };
+
+    if !needs_reset {
+        return;
+    }
+
+    if let Ok(true) = sys_secondary_bus_reset_for_pid(pid) {
+        match sys_wait_link_retraining_for_pid(pid, 200) {
+            Ok(true) => {}
+            Ok(false) | Err(_) => {
+                if let Ok(domain) = iommu::domain_of_pid(pid) {
+                    iommu::force_disable_domain(domain);
+                }
+            }
+        }
+    }
+}
+
+#[inline]
+fn revoke_dma(pid: u32) {
+    dma::revoke_all_map_for_pid(pid);
+}
+
+#[inline]
+fn revoke_alloc(pid: u32) {
+    dma::revoke_all_alloc_for_pid(pid);
+}
+
+#[inline]
+fn revoke_mmio(pid: u32) {
+    dma::revoke_all_mmio(pid);
+}
+
+#[inline]
+fn revoke_irq(pid: u32) {
+    crate::arch::x86_64::irq::routing::revoke_all_irq_for_pid(pid);
+    let _ = release_all_msi_for_pid(pid);
+}
+
+#[inline]
+fn revoke_claims(pid: u32) {
+    device_claims::revoke_claims_for_pid(pid);
+}
+
+pub fn driver_do_exit(pid: u32) {
+    bus_master_disable(pid);
+    quiescence(pid);
+    revoke_dma(pid);
+    revoke_alloc(pid);
+    revoke_mmio(pid);
+    revoke_irq(pid);
+    revoke_claims(pid);
+    iommu::release_domain_for_pid(pid);
 }
 
 pub fn sys_msi_alloc_for_pid(pid: u32, count: u16) -> Result<u64, MsiError> {

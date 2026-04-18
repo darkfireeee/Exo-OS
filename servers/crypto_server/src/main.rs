@@ -63,6 +63,9 @@ const CRYPTO_HASH:       u32 = 4;
 const CRYPTO_OK:         u32 = 0;
 const CRYPTO_ERR_ARGS:   u32 = 1;
 const CRYPTO_ERR_BUSY:   u32 = 2;
+const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
+const IPC_FLAG_TIMEOUT: u64 = 0x0001;
+const ETIMEDOUT: i64 = -110;
 
 /// Message IPC entrant (128 bytes).
 #[repr(C)]
@@ -87,6 +90,7 @@ struct CryptoReply {
 static KEY_TABLE_LEN: AtomicU32 = AtomicU32::new(0);
 /// Chaque "clé" est représentée par 32 octets (256 bits).
 static mut KEY_TABLE: [[u8; 32]; 32] = [[0u8; 32]; 32];
+static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 
 /// Dérivation de clé minimaliste : XOR+hash de l'input sur 32 octets.
 /// En production ceci sera remplacé par HKDF-Blake3 via libs/exo_crypto.
@@ -185,10 +189,14 @@ pub extern "C" fn _start() -> ! {
                 syscall::SYS_IPC_RECV,
                 &mut req as *mut CryptoRequest as u64,
                 core::mem::size_of::<CryptoRequest>() as u64,
-                0,
+                IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,
             )
         };
 
+        if r == ETIMEDOUT {
+            IPC_RECV_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
         if r < 0 { continue; }
 
         let reply = handle_request(&req);

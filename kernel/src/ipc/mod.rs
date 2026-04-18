@@ -20,7 +20,11 @@
 //   Appeler `ipc_init(base_phys, n_numa_nodes)` au boot.
 //
 // Ordre de verrouillage (regle_bonus.md) :
-//   IPC locks = niveau 1 (toujours acquis avant scheduler=2, memory=3, fs=4)
+//   IPC locks = niveau 4 (après Memory→Scheduler→Security)
+// IPC locks — niveau 4 dans l'ordre canonique ExoOS :
+// Memory(1) → Scheduler(2) → Security(3) → IPC(4) → FS(5)
+// NE JAMAIS acquérir un lock Memory/Scheduler dans un contexte IPC verrouillé.
+//
 //
 // RÈGLE IPC-ROOT-01 : ipc_init() doit être appelé AVANT toute opération IPC.
 // RÈGLE IPC-ROOT-02 : pas d'import de modules fs/ ou process/ depuis ce module.
@@ -189,4 +193,3 @@ pub fn ipc_install_vmm_hooks(
     shared_memory::mapping::register_map_hook(map_page_fn);
     shared_memory::mapping::register_unmap_hook(unmap_page_fn);
 }
-

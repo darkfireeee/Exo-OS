@@ -13,11 +13,16 @@
 //   ├── isolation/       Domaines de sécurité, sandbox, namespaces, pledge
 //   ├── integrity_check/ Signature de modules, hash runtime .text/.rodata, Secure Boot
 //   ├── exploit_mitigations/ KASLR, stack canaries, CFG, CET, SafeStack
-//   └── audit/           Logger ring-buffer, règles d'audit, intégration syscall
+//   ├── audit/           Logger ring-buffer, règles d'audit, intégration syscall
+//   ├── exocage/         CET Shadow Stack + IBT — handler #CP, intégration TCB (ExoShield v1.0)
+//   ├── exoveil/         PKS domains — révocation O(1), isolation mémoire (ExoShield v1.0)
+//   ├── exoledger/       Audit chaîné Blake3, zone P0 immuable (ExoShield v1.0)
+//   └── exokairos/       Capabilities temporelles, deadline cachée, budgets (ExoShield v1.0)
 //
-// Ordre d'initialisation v6 (security_init) :
+// Ordre d'initialisation v7 (security_init) — ExoShield v1.0 :
 //   integrity_check → capability → access_control → zero_trust → crypto
-//   → isolation → exploit_mitigations → audit
+//   → isolation → exploit_mitigations → audit → exoledger → exokairos_init
+//   → exoveil_restore → SECURITY_READY
 //
 // RÈGLE SEC-INIT-01 : Aucun sous-système ne doit être utilisé avant security_init().
 // RÈGLE SEC-INIT-02 : integrity_check::integrity_init() doit être le premier
@@ -32,6 +37,11 @@ pub mod isolation;
 pub mod integrity_check;
 pub mod exploit_mitigations;
 pub mod audit;
+pub mod exocage;
+pub mod exoveil;
+pub mod exoledger;
+pub mod exokairos;
+pub mod exoseal;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -183,6 +193,68 @@ pub use audit::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Re-exports — ExoShield v1.0 modules
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub use exocage::{
+    cp_handler,
+    enable_cet_for_thread,
+    disable_cet_for_thread,
+    exocage_global_enable,
+    is_cet_global_enabled,
+    is_ibt_global_enabled,
+    validate_thread_cet,
+    exocage_stats,
+    ExoCageError,
+    ExoCageStats,
+};
+
+pub use exoveil::{
+    PksDomain,
+    PksPermission,
+    revoke_domain,
+    restore_domain,
+    restore_domain_with_permission,
+    exoveil_init,
+    pks_restore_for_normal_ops,
+    exoveil_revoke_all_on_handoff,
+    pks_available,
+    exoveil_initialized,
+    exoveil_stats,
+    ExoVeilStats,
+};
+
+pub use exoledger::{
+    exo_ledger_append_p0,
+    exo_ledger_append,
+    exo_ledger_init,
+    verify_p0_integrity,
+    verify_ring_integrity,
+    ActionTag,
+    LedgerEntry,
+    LedgerIntegrityError,
+    ExoLedgerStats,
+    exoledger_stats,
+};
+
+pub use exokairos::{
+    TemporalCap,
+    CapError as TemporalCapError,
+    ttl_for_right,
+    exokairos_stats,
+    ExoKairosStats,
+};
+
+pub use exoseal::{
+    configure_nic_iommu_policy,
+    exoseal_boot_phase0,
+    exoseal_boot_complete,
+    nic_iommu_locked,
+    nic_domain_id,
+    nic_dma_window,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Initialisation orchestrée
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -204,6 +276,11 @@ pub use audit::{
 /// - `kaslr_entropy` : entropie fournie par le bootloader (RDRAND + TSC)
 /// - `phys_base`     : adresse physique réelle de chargement du kernel
 pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
+    // ── 0. ExoSeal phase 0 — CET + PKS default-deny + watchdog boot ─────────
+    // SAFETY: security_init() est appelé au boot, avant toute concurrence
+    // significative des sous-systèmes de sécurité.
+    unsafe { exoseal::exoseal_boot_phase0(); }
+
     // ── 1. Intégrité ──────────────────────────────────────────────────────────
     integrity_init();
 
@@ -227,10 +304,27 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
 
     // ── 8. Access Control (v6) ────────────────────────────────────────────────
     access_control::init();
-    // ── 9. SECURITY_READY — signal aux APs SMP (BOOT-SEC / CVE-EXO-001) ────────
-    // Les APs démarrés après ce point peuvent accéder aux capabilities et à ExoFS.
-    // Les APs démarrés AVANT (step 26) spin-wait jusqu'à ce flag.
-    SECURITY_READY.store(true, Ordering::Release);}
+
+    // ── 9. ExoLedger — Audit chaîné Blake3 + zone P0 (ExoShield v1.0) ────────
+    //    Initialise le journal d'audit chaîné avec la zone P0 immuable.
+    //    Doit être avant SECURITY_READY pour capturer les événements de boot.
+    exoledger::exo_ledger_init();
+
+    // ── 10. ExoKairos — Kernel secret (ExoShield v1.0) ──────────────────────
+    //    Initialise le KERNEL_SECRET pour les capabilities temporelles.
+    //    Le secret est dérivé du CSPRNG (déjà initialisé à l'étape 4).
+    {
+        let mut secret = [0u8; 32];
+        let _ = rng_fill(&mut secret);
+        // SAFETY: security_init() est appelé une seule fois au boot,
+        //         avant que Kernel A ne soit actif.
+        unsafe { exokairos::init_kernel_secret(&secret); }
+    }
+
+    // ── 11. ExoSeal complete — PKS ops normales + SECURITY_READY + watchdog ──
+    // SAFETY: Ring 0, séquence finale de boot des modules de sécurité.
+    unsafe { exoseal::exoseal_boot_complete(); }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vérification périodique d'intégrité (appelée par le scheduler)

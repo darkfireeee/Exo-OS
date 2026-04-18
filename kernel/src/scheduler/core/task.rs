@@ -239,6 +239,12 @@ pub mod task_flags {
 //   [128] run_time_acc:  u64
 //   [136] switch_count:  u64
 //   [144] _cold_reserve: [u8; 88]  (144+88=232)
+//     ExoShield v1.0 extensions within _cold_reserve :
+//       [144] shadow_stack_token : u64   (PKS domain TcbHot)
+//       [152] cet_flags          : u8    (bit 0=CET_EN, bit 1=IBT, bit 2=TOKEN_VALID)
+//       [153] threat_score_u8    : u8    (0..=100)
+//       [160] pt_buffer_phys     : u64   (Phase 4, LBR/PT futur)
+//       [168..232] réservé
 //   [232] fpu_state_ptr: u64       ← ExoPhoenix OFFSET HARDCODÉ
 //   [240] rq_next:       u64       intrusive RunQueue
 //   [248] rq_prev:       u64       intrusive RunQueue
@@ -269,7 +275,7 @@ pub struct ThreadControlBlock {
     // ═══ Cache-lines 3-4 [128..256] ══════════════════════════════════════════
     pub run_time_acc:  u64,        // [128]
     pub switch_count:  u64,        // [136]
-    _cold_reserve:    [u8; 88],    // [144]  (144+88=232)
+    pub(crate) _cold_reserve: [u8; 88], // [144]  (144+88=232)
     pub fpu_state_ptr: u64,        // [232]  ExoPhoenix HARDCODED
     pub rq_next:       u64,        // [240]  intrusive runqueue
     pub rq_prev:       u64,        // [248]  intrusive runqueue
@@ -294,6 +300,35 @@ const _: () = assert!(offset_of!(ThreadControlBlock, rq_next) == 240,
     "TCB: rq_next doit être à l'offset 240");
 const _: () = assert!(offset_of!(ThreadControlBlock, rq_prev) == 248,
     "TCB: rq_prev doit être à l'offset 248");
+
+// ─── Assertions layout ExoShield v1.0 — extensions _cold_reserve ──────────
+//
+// Les champs ExoShield dans _cold_reserve utilisent des offsets relatifs au
+// début du champ _cold_reserve (offset TCB 144). Les accès se font via
+// les helpers unsafe tcb_write_cold_u64 / tcb_read_cold_u64 dans exocage.rs.
+//
+// Ces assertions garantissent que :
+// 1. _cold_reserve commence bien à l'offset 144
+// 2. Le sous-champ shadow_stack_token (_cold_reserve[0..7]) = TCB offset 144
+// 3. Le sous-champ cet_flags          (_cold_reserve[8])    = TCB offset 152
+// 4. Le sous-champ threat_score_u8    (_cold_reserve[9])    = TCB offset 153
+// 5. Le sous-champ pt_buffer_phys     (_cold_reserve[16..23])= TCB offset 160
+// 6. Les offsets hardcodés du TCB restent inchangés
+
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) == 144,
+    "TCB: _cold_reserve doit commencer à l'offset 144 (ExoShield shadow_stack_token)");
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 0  == 144,
+    "TCB ExoShield: shadow_stack_token doit être à l'offset absolu 144");
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 8  == 152,
+    "TCB ExoShield: cet_flags doit être à l'offset absolu 152");
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 9  == 153,
+    "TCB ExoShield: threat_score_u8 doit être à l'offset absolu 153");
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 16 == 160,
+    "TCB ExoShield: pt_buffer_phys doit être à l'offset absolu 160");
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 88 == 232,
+    "TCB ExoShield: _cold_reserve se termine à l'offset 232 (fpu_state_ptr)");
+const _: () = assert!(size_of::<ThreadControlBlock>() == 256,
+    "TCB: taille doit rester 256 bytes (ExoShield extensions ne dépassent pas)");
 
 // ─── impl ThreadControlBlock ─────────────────────────────────────────────────
 

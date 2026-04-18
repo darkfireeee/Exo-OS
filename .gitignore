@@ -22,6 +22,8 @@ build/kernel_stripped.elf
 *.tmp
 /tmp/
 /ssh/
+.rule_dor_exit.txt
+.sixth
 
 # macOS
 .DS_Store

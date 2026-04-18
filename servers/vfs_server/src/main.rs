@@ -92,6 +92,7 @@ impl MountEntry {
 
 static MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
 static mut MOUNTS: [MountEntry; 32] = [MountEntry::empty(); 32];
+static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 
 fn fnv32(s: &[u8]) -> u32 {
     let mut h: u32 = 2166136261;
@@ -105,6 +106,9 @@ const VFS_MOUNT:   u32 = 0;
 const VFS_UMOUNT:  u32 = 1;
 const VFS_RESOLVE: u32 = 2;
 const VFS_OPEN:    u32 = 3;
+const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
+const IPC_FLAG_TIMEOUT: u64 = 0x0001;
+const ETIMEDOUT: i64 = -110;
 
 #[repr(C)]
 struct VfsRequest {
@@ -267,10 +271,14 @@ pub extern "C" fn _start() -> ! {
                 syscall::SYS_IPC_RECV,
                 &mut req as *mut VfsRequest as u64,
                 core::mem::size_of::<VfsRequest>() as u64,
-                0,
+                IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,
             )
         };
 
+        if r == ETIMEDOUT {
+            IPC_RECV_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
         if r < 0 { continue; }
 
         let reply = handle_request(&req);

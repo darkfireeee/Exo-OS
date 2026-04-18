@@ -172,6 +172,10 @@ pub unsafe fn kernel_init() {
         let idle_ptr = NonNull::new_unchecked(idle as *mut _);
         crate::scheduler::run_queue(crate::scheduler::CpuId(0))
             .set_idle_thread(idle_ptr);
+        
+        // BUG-01 FIX: initialiser gs:[0x20] avec le TCB idle AVANT tout syscall
+        // SAFETY: idle_ptr est non-nul, durée de vie 'static, GS per-CPU initialisé
+        crate::arch::x86_64::smp::percpu::set_current_tcb(idle_ptr.as_ptr());
     }
     kdb(b'6'); // idle thread done
 
@@ -232,11 +236,28 @@ pub unsafe fn kernel_init() {
 
     // ── Phase 6 : IPC ────────────────────────────────────────────────────────
     ipc::ring::spsc::init_spsc_rings();
+    // BUG-C2B FIX: réserver un pool SHM physique dédié avant l'initialisation IPC.
+    const SHM_POOL_ORDER: usize = 8; // 2^8 pages = 256 pages = 1 MiB
+    let shm_pool = crate::memory::alloc_pages(
+        SHM_POOL_ORDER,
+        crate::memory::AllocFlags::ZEROED,
+    ).expect("ipc shm pool allocation failed");
+    crate::ipc::ipc_init(
+        shm_pool.start_address().as_u64(),
+        1, // nr_numa_nodes — à lire depuis ACPI NUMA si disponible
+    );
+    crate::ipc::ipc_install_scheduler_hooks(
+        crate::scheduler::core::switch::block_current_thread,
+    );
     kdb(b'9'); // IPC done
 
     // ── Phase 7 : FS ─────────────────────────────────────────────────────────
-    let _ = crate::fs::exofs::exofs_init(0u64);
-    kdb(b'!'); // FS done
+     let _ = crate::fs::exofs::exofs_init(0u64);
+
+    // BUG-02 FIX: activer le bridge syscall→fs après exofs_init
+    // SAFETY: exofs_init() terminé, appelé une seule fois depuis BSP
+    unsafe { crate::syscall::fs_bridge::fs_bridge_init(); }
+    kdb(b'@'); // fs_bridge actif
 }
 
 #[cfg(not(test))]

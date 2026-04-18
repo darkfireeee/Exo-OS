@@ -41,15 +41,16 @@ pub static CURRENT_THREAD_PER_CPU: [AtomicUsize; MAX_CPUS] =
 
 /// Retourne le pointeur brut vers le TCB du thread courant sur ce CPU.
 ///
-/// En mode mono-CPU ou avant SMP : utilise toujours l'entrée CPU 0.
-/// Sur SMP réel : lire le LAPIC ID ou GS register (Évolution SMP).
+/// Lit le slot per-CPU canonique `gs:[0x20]` initialisé par `percpu::set_current_tcb()`.
 ///
 /// # Safety
 /// Le pointeur est non-null si le scheduler est initialisé et un thread tourne.
 #[inline]
 pub fn current_thread_raw() -> *mut ThreadControlBlock {
-    // Évolution SMP : lire `rdmsr(IA32_GS_BASE)` pour obtenir l'ID CPU réel.
-    CURRENT_THREAD_PER_CPU[0].load(Ordering::Acquire) as *mut ThreadControlBlock
+    // BUG-C2A FIX: lire depuis gs:[0x20] per-CPU, pas l'index 0
+    // SAFETY: GS per-CPU initialisé avant tout appel à cette fonction
+    let tcb_ptr = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
+    tcb_ptr as *mut ThreadControlBlock
 }
 
 /// Bloque le thread courant.

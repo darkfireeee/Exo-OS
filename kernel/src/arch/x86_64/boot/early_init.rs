@@ -270,9 +270,10 @@ pub unsafe fn arch_boot_init(
             super::trampoline_asm::install_trampoline();
             let bsp_lapic = super::super::apic::local_apic::lapic_id();
             super::super::smp::init::smp_boot_aps(madt, bsp_lapic as u32);
-            boot_info.cpu_count = super::super::smp::init::smp_cpu_count();
         }
     }
+    boot_info.cpu_count = super::super::smp::init::smp_cpu_count();
+    assert!(boot_info.cpu_count as usize <= 256, "Trop de CPUs pour MAX_CPUS");
 
     probe!(b'Z'); // arch_boot_init terminé
     boot_info

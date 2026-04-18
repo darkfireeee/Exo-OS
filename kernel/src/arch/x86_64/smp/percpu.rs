@@ -21,7 +21,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use crate::arch::x86_64::cpu::msr;
 
-pub const MAX_CPUS: usize = 512;
+pub const MAX_CPUS: usize = 256;
 
 // ── Compteur de CPUs en ligne ─────────────────────────────────────────────────
 

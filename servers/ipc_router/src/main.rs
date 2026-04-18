@@ -25,6 +25,8 @@
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
 
+mod exocordon;
+
 mod syscall {
     /// Appel système nu via SYSCALL/SYSRET x86_64.
     ///
@@ -129,9 +131,13 @@ struct IpcMessage {
 const IPC_MSG_REGISTER:   u32 = 0;
 const IPC_MSG_ROUTE:      u32 = 1;
 const IPC_MSG_HEARTBEAT:  u32 = 2;
+const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
+const IPC_FLAG_TIMEOUT: u64 = 0x0001;
+const ETIMEDOUT: i64 = -110;
 
 // --- Globals no_std (pas de heap) ---
 static RUNNING: AtomicBool = AtomicBool::new(true);
+static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -158,10 +164,14 @@ pub extern "C" fn _start() -> ! {
                 syscall::SYS_IPC_RECV,
                 &mut msg as *mut IpcMessage as u64,
                 core::mem::size_of::<IpcMessage>() as u64,
-                0,  // flags = 0 (bloquant)
+                IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,
             )
         };
 
+        if r == ETIMEDOUT {
+            IPC_RECV_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
         if r < 0 { continue; } // EINTR ou erreur temporaire
 
         match msg.msg_type {
@@ -185,6 +195,9 @@ pub extern "C" fn _start() -> ! {
                         msg.payload[0], msg.payload[1],
                         msg.payload[2], msg.payload[3],
                     ]);
+                    if exocordon::check_ipc(msg.sender_pid, dest).is_err() {
+                        continue;
+                    }
                     // Forward via SYS_IPC_SEND vers l'endpoint de destination.
                     let _ = unsafe {
                         syscall::syscall6(

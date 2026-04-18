@@ -2,6 +2,8 @@
 //!
 //! Ce crate re-implémente la logique pure (sans syscalls, sans hardware) des
 //! quatre servers Ring 1 implémentés en Phase 5, et vérifie leur comportement.
+#![allow(dead_code)]
+#![allow(private_interfaces)]
 //!
 //! ## Modules testés
 //!   - `ipc_router`    : Registry FNV-32, register/resolve, routing messages
@@ -1023,5 +1025,217 @@ mod tests_integration {
         for svc in &services {
             assert_eq!(svc.delay(), 4);
         }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ── init_server V4 + ExoCordon — validation pure ────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+
+mod init_server_v4 {
+    pub const SERVICES: [&str; 9] = [
+        "ipc_router",
+        "memory_server",
+        "vfs_server",
+        "crypto_server",
+        "device_server",
+        "network_server",
+        "scheduler_server",
+        "virtio_drivers",
+        "exo_shield",
+    ];
+
+    pub fn deps(name: &str) -> &'static [&'static str] {
+        match name {
+            "ipc_router" => &[],
+            "memory_server" => &["ipc_router"],
+            "vfs_server" => &["ipc_router", "memory_server"],
+            "crypto_server" => &["vfs_server"],
+            "device_server" => &["ipc_router", "memory_server"],
+            "network_server" => &["device_server", "virtio_drivers"],
+            "scheduler_server" => &["init_server"],
+            "virtio_drivers" => &["device_server"],
+            "exo_shield" => &[
+                "ipc_router",
+                "memory_server",
+                "vfs_server",
+                "crypto_server",
+                "device_server",
+                "network_server",
+                "scheduler_server",
+                "virtio_drivers",
+            ],
+            _ => &[],
+        }
+    }
+}
+
+mod exocordon_logic {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ServiceId {
+        Init,
+        Memory,
+        Vfs,
+        Crypto,
+        Device,
+        Network,
+        VirtioBlock,
+        VirtioNet,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum IpcError {
+        UnknownService,
+        UnauthorizedPath,
+        QuotaExhausted,
+    }
+
+    pub struct AuthEdge {
+        src: ServiceId,
+        dst: ServiceId,
+        quota_default: u64,
+        quota_left: AtomicU64,
+    }
+
+    impl AuthEdge {
+        pub const fn new(src: ServiceId, dst: ServiceId, quota_default: u64) -> Self {
+            Self {
+                src,
+                dst,
+                quota_default,
+                quota_left: AtomicU64::new(quota_default),
+            }
+        }
+
+        fn consume(&self) -> Result<(), IpcError> {
+            let mut current = self.quota_left.load(Ordering::Acquire);
+            loop {
+                if current == 0 {
+                    return Err(IpcError::QuotaExhausted);
+                }
+                match self.quota_left.compare_exchange_weak(
+                    current,
+                    current - 1,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => return Ok(()),
+                    Err(next) => current = next,
+                }
+            }
+        }
+    }
+
+    pub static AUTHORIZED_GRAPH: [AuthEdge; 6] = [
+        AuthEdge::new(ServiceId::Init, ServiceId::Memory, 10_000),
+        AuthEdge::new(ServiceId::Init, ServiceId::Vfs, 10_000),
+        AuthEdge::new(ServiceId::Vfs, ServiceId::Crypto, 50_000),
+        AuthEdge::new(ServiceId::Network, ServiceId::Vfs, 100_000),
+        AuthEdge::new(ServiceId::Device, ServiceId::VirtioBlock, 1_000_000),
+        AuthEdge::new(ServiceId::Device, ServiceId::VirtioNet, 1_000_000),
+    ];
+
+    fn map_service(id: u32) -> Option<ServiceId> {
+        match id {
+            1 => Some(ServiceId::Init),
+            3 => Some(ServiceId::Vfs),
+            4 => Some(ServiceId::Crypto),
+            5 => Some(ServiceId::Memory),
+            6 => Some(ServiceId::Device),
+            7 => Some(ServiceId::Network),
+            9 => Some(ServiceId::VirtioBlock),
+            10 => Some(ServiceId::VirtioNet),
+            _ => None,
+        }
+    }
+
+    pub fn reset() {
+        for edge in &AUTHORIZED_GRAPH {
+            edge.quota_left.store(edge.quota_default, Ordering::Release);
+        }
+    }
+
+    pub fn check_ipc(src: u32, dst: u32) -> Result<(), IpcError> {
+        let src = map_service(src).ok_or(IpcError::UnknownService)?;
+        let dst = map_service(dst).ok_or(IpcError::UnknownService)?;
+        let edge = AUTHORIZED_GRAPH
+            .iter()
+            .find(|edge| edge.src == src && edge.dst == dst)
+            .ok_or(IpcError::UnauthorizedPath)?;
+        edge.consume()
+    }
+}
+
+#[cfg(test)]
+mod tests_init_server_v4 {
+    use super::init_server_v4::{deps, SERVICES};
+
+    #[test]
+    fn test_ring1_v4_order_contains_nine_services() {
+        assert_eq!(SERVICES.len(), 9);
+        assert_eq!(SERVICES[0], "ipc_router");
+        assert_eq!(SERVICES[1], "memory_server");
+        assert_eq!(SERVICES[8], "exo_shield");
+    }
+
+    #[test]
+    fn test_ring1_v4_dependencies_are_canonical() {
+        assert_eq!(deps("memory_server"), &["ipc_router"]);
+        assert_eq!(deps("vfs_server"), &["ipc_router", "memory_server"]);
+        assert_eq!(deps("crypto_server"), &["vfs_server"]);
+        assert_eq!(deps("device_server"), &["ipc_router", "memory_server"]);
+        assert_eq!(deps("virtio_drivers"), &["device_server"]);
+        assert_eq!(
+            deps("exo_shield"),
+            &[
+                "ipc_router",
+                "memory_server",
+                "vfs_server",
+                "crypto_server",
+                "device_server",
+                "network_server",
+                "scheduler_server",
+                "virtio_drivers",
+            ],
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_exocordon {
+    use super::exocordon_logic::{check_ipc, reset, IpcError};
+    use std::sync::Mutex;
+
+    static EXOCORDON_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_exocordon_blocks_network_to_crypto_direct() {
+        let _guard = EXOCORDON_TEST_LOCK.lock().unwrap();
+        reset();
+        assert_eq!(check_ipc(7, 4), Err(IpcError::UnauthorizedPath));
+    }
+
+    #[test]
+    fn test_exocordon_allows_vfs_to_crypto() {
+        let _guard = EXOCORDON_TEST_LOCK.lock().unwrap();
+        reset();
+        assert_eq!(check_ipc(3, 4), Ok(()));
+    }
+
+    #[test]
+    fn stress_exocordon_quota_exhaustion_is_isolated() {
+        let _guard = EXOCORDON_TEST_LOCK.lock().unwrap();
+        reset();
+
+        for _ in 0..10_000 {
+            assert_eq!(check_ipc(1, 5), Ok(()));
+            assert_eq!(check_ipc(1, 3), Ok(()));
+        }
+
+        assert_eq!(check_ipc(1, 5), Err(IpcError::QuotaExhausted));
+        assert_eq!(check_ipc(1, 3), Err(IpcError::QuotaExhausted));
+        assert_eq!(check_ipc(3, 4), Ok(()), "VFS -> Crypto doit rester utilisable");
     }
 }

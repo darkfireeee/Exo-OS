@@ -5,8 +5,8 @@
 //!
 //! Rôle : processus racine de l'espace utilisateur.
 //!   1. Démarre ipc_router (PID 2) en premier.
-//!   2. Démarre vfs_server (PID 3) après ipc_router.
-//!   3. Démarre crypto_server (PID 4) après vfs_server.
+//!   2. Démarre ensuite la chaîne Ring1 canonique complète.
+//!   3. Respecte l'ordre SRV-01/SRV-02/SRV-04 jusqu'à exo_shield en dernier.
 //!   4. Supervise tous les services : relance automatique si crash (SIGCHLD).
 //!   5. Gère l'arrêt propre du système (SIGTERM → arrêt ordonné).
 //!
@@ -17,6 +17,10 @@
 
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+mod boot_sequence;
+mod boot_info;
+mod dependency;
 
 mod syscall {
     #[inline(always)]
@@ -55,6 +59,7 @@ mod syscall {
 
     pub const SYS_FORK:       u64 =  57;
     pub const SYS_EXECVE:     u64 =  59;
+    pub const SYS_EXIT:       u64 =  60;
     pub const SYS_WAIT4:      u64 =  61;
     pub const SYS_KILL:       u64 =  62;
     pub const SYS_SIGACTION:  u64 =  13;
@@ -102,17 +107,34 @@ impl Service {
 
 // ── Table des services supervisés ────────────────────────────────────────────
 // Note: null-terminated pour passation à execve via copy_userspace_argv
-static IPC_ROUTER_BIN:   &[u8] = b"/sbin/exo-ipc-router\0";
-static VFS_SERVER_BIN:   &[u8] = b"/sbin/exo-vfs-server\0";
-static CRYPTO_SERVER_BIN:&[u8] = b"/sbin/exo-crypto-server\0";
+static IPC_ROUTER_BIN:      &[u8] = b"/sbin/exo-ipc-router\0";
+static MEMORY_SERVER_BIN:   &[u8] = b"/sbin/exo-memory-server\0";
+static VFS_SERVER_BIN:      &[u8] = b"/sbin/exo-vfs-server\0";
+static CRYPTO_SERVER_BIN:   &[u8] = b"/sbin/exo-crypto-server\0";
+static DEVICE_SERVER_BIN:   &[u8] = b"/sbin/exo-device-server\0";
+static NETWORK_SERVER_BIN:  &[u8] = b"/sbin/exo-network-server\0";
+static SCHEDULER_SERVER_BIN:&[u8] = b"/sbin/exo-scheduler-server\0";
+static VIRTIO_DRIVERS_BIN:  &[u8] = b"/sbin/exo-virtio-drivers\0";
+static EXO_SHIELD_BIN:      &[u8] = b"/sbin/exo-shield\0";
 
-static SERVICES: [Service; 3] = [
-    Service::new("ipc_router",   IPC_ROUTER_BIN),
-    Service::new("vfs_server",   VFS_SERVER_BIN),
-    Service::new("crypto_server",CRYPTO_SERVER_BIN),
+// Séquence Ring1 V4 canonique — SRV-01, SRV-02, SRV-04
+static SERVICES: [Service; 9] = [
+    Service::new("ipc_router",       IPC_ROUTER_BIN),      // SRV-01 : PREMIER
+    Service::new("memory_server",    MEMORY_SERVER_BIN),   // SRV-02 : avant tout alloc
+    Service::new("vfs_server",       VFS_SERVER_BIN),
+    Service::new("crypto_server",    CRYPTO_SERVER_BIN),
+    Service::new("device_server",    DEVICE_SERVER_BIN),
+    Service::new("network_server",   NETWORK_SERVER_BIN),
+    Service::new("scheduler_server", SCHEDULER_SERVER_BIN),
+    Service::new("virtio_drivers",   VIRTIO_DRIVERS_BIN),  // virtio-block/net/console
+    Service::new("exo_shield",       EXO_SHIELD_BIN),      // SRV-04 : DERNIER
 ];
-
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+#[inline(always)]
+fn halt_forever() -> ! {
+    loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trampoline SIGCHLD
@@ -128,41 +150,6 @@ extern "C" fn sigchld_handler(_sig: i32) {
 
 extern "C" fn sigterm_handler(_sig: i32) {
     SHUTDOWN.store(true, Ordering::Release);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Démarrage d'un service
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Lance un service via fork + execve.
-/// Retourne le PID du fils ou 0 en cas d'erreur.
-unsafe fn spawn_service(bin_path: &[u8]) -> u32 {
-    // Les arguments : [path, NULL]
-    let argv: [u64; 2] = [
-        bin_path.as_ptr() as u64,
-        0, // NULL terminator
-    ];
-    let envp: [u64; 1] = [0]; // pas d'env
-
-    let child_pid = syscall::syscall0(syscall::SYS_FORK);
-    if child_pid < 0 { return 0; } // fork échoué
-
-    if child_pid == 0 {
-        // Processus fils : exécuter le binaire
-        let r = syscall::syscall3(
-            syscall::SYS_EXECVE,
-            bin_path.as_ptr() as u64,
-            argv.as_ptr() as u64,
-            envp.as_ptr() as u64,
-        );
-        // execve ne revient que si erreur → exit(127)
-        if r < 0 {
-            syscall::syscall1(60 /* SYS_EXIT */, 127);
-        }
-        loop { core::arch::asm!("hlt", options(nostack, nomem)); }
-    }
-
-    child_pid as u32
 }
 
 /// Attends tous les fils zombies (WNOHANG) et met à jour la table de services.
@@ -198,10 +185,13 @@ unsafe fn reap_children() {
 
 #[no_mangle]
 pub extern "C" fn _start(boot_info_virt: usize) -> ! {
-    // Note: boot_info_virt contient l'adresse virtuelle du BootInfo.
-    // L'implémentation complète n'est pas encore requise ici, on évite
-    // juste que le compilateur lève un avertissement d'unused param.
-    let _ = boot_info_virt;
+    let boot_info = unsafe { boot_info::BootInfo::from_virt(boot_info_virt) };
+    if let Some(info) = boot_info {
+        if !info.validate() {
+            halt_forever();
+        }
+    }
+
     // ── 1. Installer les handlers de signaux ──────────────────────────────
     // Structure sigaction : handler(u64) + flags(u64) + mask(u64)[2]
     // (layout simplifié — doit correspondre au kernel SigactionEntry)
@@ -238,16 +228,7 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
     }
 
     // ── 2. Démarrer tous les services dans l'ordre ────────────────────────
-    // Ordre : ipc_router → vfs_server → crypto_server
-    let mut i = 0usize;
-    while i < SERVICES.len() {
-        let pid = unsafe { spawn_service(SERVICES[i].bin_path) };
-        if pid != 0 { SERVICES[i].set_pid(pid); }
-        // Petite pause entre lancements (1ms simulée par des ticks vides)
-        let mut count = 0u64;
-        while count < 1000 { count = count.wrapping_add(1); }
-        i += 1;
-    }
+    let _ = unsafe { boot_sequence::boot_services(&SERVICES) };
 
     // ── 3. Boucle de supervision ──────────────────────────────────────────
     loop {
@@ -277,8 +258,18 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
                 // Service mort : attendre le délai de backoff avant relance
                 let delay = SERVICES[i].restart_delay_ticks.load(Ordering::Relaxed);
                 if delay == 0 || delay == 1 {
-                    let pid = unsafe { spawn_service(SERVICES[i].bin_path) };
-                    if pid != 0 { SERVICES[i].set_pid(pid); }
+                    let pid = unsafe {
+                        boot_sequence::spawn_service(SERVICES[i].name, SERVICES[i].bin_path)
+                    };
+                    if pid != 0 {
+                        SERVICES[i].set_pid(pid);
+                        let _ = unsafe {
+                            boot_sequence::wait_for_ipc_ready(
+                                pid,
+                                dependency::ready_timeout_ms(SERVICES[i].name),
+                            )
+                        };
+                    }
                 } else {
                     // Décrémenter le compteur de délai
                     SERVICES[i].restart_delay_ticks.fetch_sub(1, Ordering::Relaxed);
@@ -302,11 +293,11 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
 
     // Arrêt propre terminé : attendre les derniers zombies et halt
     unsafe { reap_children(); }
-    loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
+    halt_forever();
 }
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     // Init ne peut pas mourir — boucle. Le kernel le relancera via SIGCHLD du parent (inexistant).
-    loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
+    halt_forever();
 }

@@ -3,7 +3,7 @@
 //! Détecte la topologie physique du système via CPUID et ACPI.
 //! Structure : Package → Core → Thread (SMT)
 //!
-//! Supporte jusqu'à 512 CPUs logiques (MAX_CPUS).
+//! Supporte jusqu'à 256 CPUs logiques (MAX_CPUS).
 
 
 use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
@@ -11,7 +11,7 @@ use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
 // ── Constantes ────────────────────────────────────────────────────────────────
 
 /// Nombre maximum de CPUs logiques supportés
-pub const MAX_CPUS: usize = 512;
+pub const MAX_CPUS: usize = 256;
 
 /// Nombre maximum de packages NUMA
 pub const MAX_PACKAGES: usize = 16;
