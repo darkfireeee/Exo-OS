@@ -6,7 +6,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::fmt;
-// FsError — type VFS stub (crate::fs::core non encore créé)
+// FsError — type VFS de transition (crate::fs::core non encore créé)
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsError {

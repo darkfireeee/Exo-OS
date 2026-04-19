@@ -1,0 +1,521 @@
+////KIMI-AI
+
+
+
+
+
+1. Architecture Mémoire - Analyse Critique
+1.1 Le Buddy Allocator : Fondation Instable ?
+Le README indique l'utilisation d'un Buddy Allocator pour la gestion des frames physiques. Cependant, cette choix est questionnable pour un microkernel capability-based de cette envergure :
+Problèmes identifiés :
+Table
+Problème	Sévérité	Justification
+Fragmentation externe	Moyenne	Le buddy allocator souffre de la fragmentation externe lors d'allocations de tailles non-puissances-de-2.Or, Exo-OS alloue des capabilities de tailles variables.
+Complexité O(log n)	Faible	La recherche d'un buddy libre nécessite une traversée d'arbre binaire, coûteuse en cycles CPU.
+Absence de slab allocator	Haute	Pour des capabilities de tailles fixes, un slab allocator serait plus approprié (comme dans seL4).
+Recommandation : Le buddy devrait être hybride - allouer des blocs de base avec buddy, puis sous-allouer avec slab pour les capabilities.
+1.2 Mapping Physique/Virtuel - Incohérence Architecturelle
+Le README mentionne PhysAddr/VirtAddr/IoVirtAddr mais omet la spécification critique pour ExoPhoenix :
+plain
+Copy
+Espace d'adressage Kernel A (Primary)    Espace d'adressage Kernel B (Sentinel)
+           ↓                                      ↓
+    [0x0000_0000_0000 - 0xFFFF_FFFF_FFFF]    [0x0000_0000_0000 - 0x0000_0FFF_FFFF] (exemple)
+           ↓                                      ↓
+    Tables de pages 4 niveaux (CR3)              Tables de pages 2 niveaux minimales
+           ↓                                      ↓
+    Mémoire physique partagée via IOMMU ?    Mémoire isolée avec accès DMA restreint ?
+Faille majeure : Comment Kernel B accède-t-il à la mémoire physique pour surveiller Kernel A sans passer par l'IOMMU (qui est sous contrôle de Kernel A) ?
+2. Architecture ExoPhoenix - Dual-Kernel Fault Tolerance
+2.1 L'Isolation Physique : Un Mythe
+Le README claim : "Kernel B runs on Core 0 with no shared mutable state with Kernel A"
+Réalité matérielle x86_64 :
+Tous les cores partagent le Cache L3 (dernier niveau)
+Le TLB est global par défaut
+Les MSR (Model Specific Registers) affectent tous les cores
+Incohérence : La "formal verification" TLA+ ne modélise pas la cohérence cache (protocole MESI/MOESI). C'est une omission critique pour un système prétendant être "vérifié".
+2.2 Le Mécanisme de Gel (Freeze) - Latence Inacceptable ?
+Le processus décrit :
+Kernel B détecte anomalie
+Envoie IPI (Inter-Processor Interrupt) à tous les cores
+Gel des cores exécutant Kernel A
+Snapshot de la RAM
+Restauration d'environnement propre
+Calcul de latence approximatif :
+plain
+Copy
+Détection anomalie          : ~100-500 cycles
+Génération IPI            : ~1000 cycles  
+Arrêt des cores (IPI)   : ~2000 cycles  
+Snapshot RAM (8GB)       : ~10-50 ms (trop lent !)
+Restauration contexte     : ~5-20 ms
+Total : 15-70 ms - Inacceptable pour du temps réel critique.
+2.3 Gestion des Capabilities - Race Condition Non Résolue
+Scénario problématique :
+plain
+Copy
+1. Kernel A possède Capability C (accès à ressource R)
+2. Kernel B détecte compromission dans A
+3. Kernel B doit révoquer C
+4. MAIS : Si A utilise C pendant la révocation → Race condition !
+Le README ne spécifie aucun mécanisme pour :
+La migration atomique de capabilities entre A et B
+La synchronisation des états de capabilities
+La prévention des "capability leaks" pendant le handoff
+3. ExoShield - AI Containment : Sécurité par Obscurité ?
+3.1 ExoKairos - Side-Channel Temporel
+L'architecture : "Integrated capacity budgets with masked expiration dates"
+Vulnérabilité identifiée :
+Stocké en Ring 0 (accessible)
+Décrémenté à chaque appel système
+Canal side-channel : La vitesse de décrément révèle la charge système
+Attaque DoS : Épuisement artificiel du budget par appels répétés
+3.2 ExoCage - Conflit d'Isolation
+Utilise Intel CET (Control-flow Enforcement Technology) :
+Shadow stack pour retour d'appel
+Problème : CET nécessite un OS support natif. Exo-OS doit implémentER son propre gestionnaire de shadow stack en Ring 0, ce qui est extrêmement complexe (nécessite de sauvegarder/restaurer les pointeurs de shadow stack lors des context switches).
+3.3 ExoSeal - Boot Order Inversé
+Séquence : Kernel B → Lock IOMMU → Kernel A
+Risque majeur : Si Kernel B est compromis avant le lock de l'IOMMU, il peut :
+Configurer l'IOMMU avec des politiques malveillantes
+Bloquer l'accès DMA légitime de Kernel A
+Aucun mécanisme de recovery décrit si B est corrompu.
+4. Synthèse des Failles d'Architecture
+4.1 Tableau Récapitulatif des Failles
+Table
+Module	Faille	Impact	Probabilité
+Memory/Buddy	Fragmentation externe	Échec allocation capabilities grandes	Moyenne
+ExoPhoenix/Isolation	Pas de modèle cohérence cache	Fautes mémoire silencieuses	Haute
+ExoPhoenix/Latence	Snapshot > 10ms	Non-utilisable temps réel	Certaine
+ExoShield/ExoKairos	Side-channel temporel	Fuite information sensible	Moyenne
+ExoShield/ExoSeal	Single point of failure (B)	Compromission totale possible	Moyenne
+Global/TLA+	Monte Carlo ≠ preuve formelle	Bugs dans implémentation Rust	Élevée
+4.2 Questions Non Résolues pour le Mainteneur
+Quel est le modèle de cohérence cache utilisé ? (MESI/MOESI/Autre ?)
+Quelle est la latence garantie du mécanisme de gel/restauration ?
+Comment les capabilities migrent-elles entre A et B atomiquement ?
+Où est stocké physiquement l'ExoLedger ? (NVRAM ? TPM ?)
+Le "18-step ordered boot" est-il prouvé formellement ou testé empiriquement ?
+5. Recommandations Professionnelles
+5.1 Actions Immédiates
+A. Demande de Documentation :
+Spécifications TLA+ complètes incluant :
+Modèle de cohérence mémoire (cache)
+Bornes temporelles des opérations (latence max)
+Protocole de migration des capabilities
+B. Audit de Code :
+Vérifier l'implémentation Rust du buddy allocator (risque de fragmentation)
+Auditer le mécanisme de snapshot (utilise-t-il les instructions VMX/SMX ?)
+Vérifier la gestion des shadow stacks CET (si présent)
+C. Tests Empiriques :
+Tests de stress multi-core avec charge élevée
+Fuzzing ciblant spécifiquement :
+Transitions A/B
+Épuisement budgets ExoKairos
+Accès concurrents IOMMU
+5.2 Alternatives Architecturales à Considérer
+Si la complexité d'ExoPhoenix s'avère trop élevée :
+Table
+Alternative	Avantage	Inconvénient
+Monokernel + Hot-reload	Simplicité, pas de split brain	Pas de isolation forte, redémarrage nécessaire
+Enclaves SGX/SEV	Isolation matérielle vérifiée	Dépend d'Intel/AMD, pas de contrôle total
+Kernel Unikernel	Performance, simplicité	Pas de multi-processus traditionnel
+Conclusion
+Exo-OS présente une architecture ambitieuse avec des claims impressionnants (12 modules TLA+, dual-kernel fault-tolerant). Cependant, mon analyse révèle des incohérences fondamentales entre :
+Les prétentions d'isolation physique (impossibles sur x86_64 standard)
+Les mécanismes de fault-tolerance (latence non quantifiée)
+La gestion des capabilities en dual-kernel (non spécifiée)
+Verdict : Le projet nécessite une clarification urgente de la part du mainteneur sur les points identifiés, ou un audit de sécurité approfondi avant toute utilisation en production.
+fait une verification approfondie afin de confirmer ou d'infirmer toute les autres point et de rechercher de nouvelle erreurs
+Edit
+Copy
+Share
+Analyse ciblée des pièges Rust no_std et IOMMU
+Je vais approfondir l'investigation technique, vérifier point par point mes hypothèses précédentes, et explorer des zones critiques non couvertes (boot sequence, TCB, syscalls, IOMMU, Rust safety). Commençons par rassembler des données techniques sur les patterns de failles dans les systèmes similaires.
+Search
+seL4 capability implementation bugs vulnerabilities Rust no_std bare metal kernel memory safety issues aliasing x86_64 IOMMU static policy hotplug limitations security microkernel POSIX layer implementation bugs L4 seL4 Intel CET shadow stack kernel implementation complexity
+46 results
+Évaluer IPC FS
+Excellent, j'ai obtenu des données cruciales. Je vais maintenant approfondir les zones non explorées : boot sequence, TCB layout, syscall numbering, et vérifier les hypothèses précédentes avec des preuves techniques.
+Search
+microkernel boot sequence security vulnerabilities stages hardcoded memory offsets kernel TCB exploitation syscall number conflict Linux compatibility microkernel TLA+ model checker limitations implementation bugs
+38 results
+Rapport Python
+Parfait, j'ai maintenant des preuves techniques solides. Je vais structurer une analyse exhaustive qui vérifie/infirme mes hypothèses précédentes et découvre de nouvelles failles critiques.
+Execute Python code
+Création d’une synthèse finale et tableau récapitulatif en Python
+Execute Python code
+Analyse structurée
+Voici le résultat de ma vérification approfondie. J'ai confronté chaque hypothèse précédente à des preuves techniques et découvert 7 nouvelles failles critiques non identifiées lors du premier passage.
+Méthodologie d'Audit
+J'ai croisé les claims du README avec :
+Les vulnérabilités documentées de seL4 (microkernel le plus vérifié au monde)  
+Les limitations du model checker TLA+ 
+La complexité d'implémentation de l'Intel CET dans Xen/Linux  
+Les patterns de failles des bootloaders UEFI 
+Les classiques d'architecture L4  
+Volet 1 : Vérification / Infirmation des Hypothèses Précédentes
+Hypothèse 1 : Isolation physique A/B impossible sur x86_64
+STATUT : CONFIRMÉE - Preuves accablantes
+Le port x86 de seL4 (vérifié formellement comme Exo-OS) souffre de vulnérabilités matérielles non mitigables : Zenbleed, Inception, Downfall (attaques d'exécution spéculative) . Pire, seL4 n'implémente pas le interrupt remapping sur x86, permettant à un driver de crash le système. Si seL4 échoue à isoler le hardware x86, Exo-OS n'y parviendra pas avec son dual-kernel. Le claim "no shared mutable state" est faux : le cache L3 est global à tous les cores.
+Hypothèse 2 : Syscalls 530-546 à risque
+STATUT : CONFIRMÉE - Nombres magiques dangereux
+Linux x86_64 utilise actuellement les numéros jusqu'à ~450. La plage 530-546 est arbitraire, sans justification architecturale. Si ExoOS charge un binaire Linux via son ExoFS POSIX TL, ces numéros entreront en conflit avec les futures extensions Linux. C'est une violation du principe de compatibilité POSIX .
+Hypothèse 3 : CET Shadow Stack trop complexe
+STATUT : CONFIRMÉE - Complexité industrielle démontrée
+Intel a publié un document spécifique sur les "Complex Shadow-Stack Updates" décrivant des bugs hardware des "prematurely busy shadow stacks" . Xen (hypervisor mature) a rencontré des triple faults et des conflits Ring 0/3 lors de son implémentation CET-SS . ExoCage prétend utiliser CET sans mentionner ces mitigations hardware. Si Xen a galéré, un projet solo va se heurter aux mêmes écueils.
+Hypothèse 4 : TLA+ ≠ Absence de bugs dans le code
+STATUT : CONFIRMÉE - Écart spécification/implémentation documenté
+seL4 a trouvé 160 bugs dans son implémentation C après la vérification formelle (144 pendant la vérification, 16 avant) . La vérification TLA+ de Exo-OS utilise du Monte Carlo (565M états), ce qui est une exploration aléatoire, pas une preuve exhaustive . L'écart sémantique entre le modèle TLA+ et le code Rust no_std bare-metal est non couvert.
+Volet 2 : 7 Nouvelles Failles Critiques Identifiées
+[CRITIQUE] Faille 1 : 18-Step Boot Sequence - Surface d'attaque ×18
+Sévérité : CRITIQUE
+Les séquences de boot multi-étapes sont la source de 30.8% des CVEs dans les firmwares . Exo-OS en a 18. SECURITY_READY n'est atteint qu'à l'étape 18, signifiant que les étapes 1-17 s'exécutent sans protection complète. Chaque étape intermédiaire compromise hérite la compromission aux étapes suivantes.
+[CRITIQUE] Faille 2 : TCB GI-01 - 256 Bytes Hardcoded Offsets
+Sévérité : HAUTE
+Les offsets hardcodés dans les TCB sont une source classique de type confusion et buffer overflow dans les kernels. 256 bytes sur x86_64 = 32 pointeurs maximum. C'est insuffisant pour stocker : capabilities (16-24 bytes), état FPU (512 bytes AVX-512, même si stocké ailleurs), infos scheduling, pointeurs de pile. La taille fixe interdit l'extensibilité.
+[CRITIQUE] Faille 3 : SSR Layout [0x1000000..0x110000] - Trop Petit
+Sévérité : HAUTE
+La plage fait 64 KB (0x10000 bytes) pour le System Status Region d'un dual-kernel multi-core. Contenu nécessaire : état santé A+B, table capabilities partagée, audit trail, buffer handoff. 64 KB est ridiculement petit. Le P0 blocker SSR_MAX_CORES_LAYOUT constant divergence confirme une incohérence dans la gestion multi-core de cette zone.
+[CRITIQUE] Faille 4 : Driver Framework v10 - 55 Silent Errors Catalogués
+Sévérité : HAUTE
+Le README mentionne lui-même : "55 DRV-* silent errors catalogued". Un silent error signifie que le framework échoue silencieusement sans notifier l'appelant. Dans un microkernel où les drivers sont en Ring 1, ces erreurs masquent des compromissions de sécurité. Aucun silent error n'est acceptable en production.
+[CRITIQUE] Faille 5 : P0 Blockers = Preuves de Fondations Manquantes
+Sévérité : CRITIQUE
+Les 4 P0 blockers sont révélateurs :
+SSR_MAX_CORES_LAYOUT : Divergence entre shared crate et kernel local = comportement indéfini selon la cible
+security_init() boot wiring : Le module sécurité n'est PAS câblé. Les étapes 1-17 s'exécutent sans sécurité.
+init_syscall() BSP only : Seul le Bootstrap Processor a les syscalls. Les autres cores sont muets.
+gs:[0x20] write : Écriture directe en offset fixe = corruption mémoire si l'offset est faux.
+Ces blockers prouvent que le système est en phase pré-alpha, pas en phase de "security patches".
+[HAUTE] Faille 6 : Lock Ordering Incomplet
+L'ordre annoncé est : Memory → Scheduler → Security → IPC → FS. Problèmes :
+Device Lock absent : les drivers (syscalls 530-546) ne sont pas dans l'ordre
+Ordre inverse non défini : si IPC a besoin de Memory → deadlock
+Dual-kernel : si A détient Memory et B détient Scheduler → deadlock garanti
+L4 a abandonné le "lazy scheduling" à cause de problèmes de WCET . Exo-OS n'a pas résolu ce problème fondamental.
+[MOYENNE] Faille 7 : ExoFS 36 TL-Rules - Over-Engineering
+36 règles de traduction pour "95% POSIX". C'est un indicateur d'over-engineering. L4 a abandonné le "long IPC" car trop complexe et source de bugs . Le claim "Wine target" (faire tourner des binaires Windows) sur un microkernel from-scratch en Rust est techniquement quasi-impossible sans couche de compatibilité massive.
+Volet 3 : 4 Incohérences Architecturales Comportementales
+Table
+Incohérence	Description
+Dual-Kernel vs Capability	Si Kernel B peut geler A, B possède une ambient authority sur A. Cela viole le modèle capability qui interdit toute autorité ambiante. Les deux paradigmes sont mutuellement exclusifs.
+95% POSIX vs Ring 0/1	POSIX suppose des appels système performants. Un microkernel strict les isole via IPC coûteux. seL4/L4 ont montré que POSIX > 50% nécessite un serveur monolithique (L4Linux) qui n'est plus vraiment un microkernel.
+Formal Verification vs P0 Blockers	On ne peut pas prétendre 60 propriétés vérifiées si security_init() n'est même pas câblé au boot. Les preuves TLA+ ont été faites sur une spécification, pas sur le code qui ne suit pas la spec.
+ExoLedger Append-Only vs Performance	À 1M ops/sec × 64 bytes = 64 MB/sec de logs. En 1 minute = 3.8 GB. Le README ne mentionne ni stockage (NVRAM ? TPM ?), ni rotation, ni taille max. C'est soit inutilisable, soit non append-only.
+Volet 4 : Matrice de Risque et Score Card
+Table
+Composant	Sévérité	Confiance	Impact	Recommandation
+Boot 18-step	CRITIQUE	Élevée	Surface d'attaque ×18	Réduire à 5 étapes
+Isolation A/B	CRITIQUE	Élevée	Impossible matériellement	Modèle cohérence cache
+P0 Blockers	CRITIQUE	Certaine	Système non fonctionnel	Bloquer release
+TCB 256 bytes	HAUTE	Élevée	Buffer overflow probable	Struct dynamique
+SSR 64KB	HAUTE	Élevée	Débordement garanti	Augmenter à 1MB+
+55 Silent Errors	HAUTE	Certaine	Masquage failures	Tolérance zéro
+CET Shadow Stack	HAUTE	Modérée	Triple faults	Simplifier
+Syscalls 530-546	Moyenne	Élevée	Conflit futur Linux	Documenter
+Lock Ordering	Moyenne	Modérée	Deadlock A/B	Graphe complet
+ExoFS 36 rules	Moyenne	Modérée	Over-engineering	Simplifier
+ExoLedger	Moyenne	Élevée	Saturation mémoire	Limiter scope
+TLA+ vs Rust	Moyenne	Certaine	Écart spec/code	Vérification binaire
+Score Card par Module (sur 10)
+Table
+Module	Sécurité	Fiabilité	Maintenabilité	Documentation	Moyenne
+Memory/Buddy	3	4	3	2	3.0
+ExoPhoenix	2	2	2	4	2.5
+ExoShield	4	3	3	5	3.8
+Boot Sequence	1	2	2	4	2.3
+Driver Framework	2	2	1	3	2.0
+ExoFS	3	3	2	3	2.8
+IPC/CapTokens	4	4	4	3	3.8
+Scheduler/TCB	3	3	2	2	2.5
+GLOBAL	2.8	2.9	2.4	3.3	2.9
+Conclusion Professionnelle et Recommandations
+Score de maturité sécurité : 2.9/10 (Prototype instable)
+Exo-OS est un projet ambitieux avec une documentation impressionnante mais une base technique fragile. Les 12 modules TLA+ et les claims de vérification forment un "voile de complexité" qui masque des fondations instables.
+Recommandations stratégiques :
+ABANDONNER l'architecture dual-kernel pour un monokernel capability-based (similaire à seL4). L'isolation promise est matériellement impossible sur x86_64 standard.
+RÉSOUDRE les 4 P0 blockers avant tout audit de sécurité. Un système où security_init() n'est pas câblé n'est pas auditable.
+RÉÉCRIRE le TCB avec des structs Rust dynamiques. Les offsets hardcodés de 256 bytes sont une vulnérabilité structurelle.
+IMPLÉMENTER une vérification binaire (comme seL4 ARM/RISC-V) plutôt que de se contenter de TLA+ Monte Carlo. Le gap entre spec et code est documenté comme source de 160 bugs dans seL4 .
+SIMPLIFIER drastiquement : x86_64 + Rust + Dual-kernel + CET + ExoPhoenix + ExoShield + 18-step boot = un empilement de complexités qui garantit l'instabilité, pas la sécurité.
+L'approche actuelle ressemble à une sommation de buzzwords techniques (Rust, TLA+, CET, IOMMU, dual-kernel) sans résolution des problèmes fondamentaux de cohérence matérielle et de complexité cyclomatique.
+
+
+
+
+/////CLAUDE2
+
+
+
+
+RAPPORT D'AUDIT EXHAUSTIF — ExoOS kernel/ · memory/ · arch/ · ExoPhoenix
+Voici l'ensemble des erreurs, incohérences, stubs et calibrations défectueuses identifiées après lecture complète des modules ciblés :
+
+🔴 CRITIQUES — Bugs architecturaux bloquants
+[CRIT-01] forge.rs : hashes réels non renseignés (image nulle)
+ruststatic A_IMAGE_HASH: [u8; 32] = [0u8; 32]; // [ADAPT] hash réel ici
+static A_MERKLE_ROOT: [u8; 32] = [0u8; 32]; // [ADAPT] hash réel ici
+reconstruct_kernel_a() compare le hash Blake3 de .text/.rodata contre une racine Merkle de 32 zéros. En production, tout hash sera rejeté (MerkleVerifyFailed) → reconstruction impossible → PhoenixState::Degraded systématique. Les marqueurs [ADAPT] n'ont jamais été substitués.
+
+[CRIT-02] isolate.rs : mark_a_pages_not_present() vide — cage mémoire inexistante
+rustfn mark_a_pages_not_present() {
+    // [ADAPT] : walk_and_clear_present(a_cr3)
+    // Fonction TOTALEMENT VIDE
+}
+isolate_kernel_a_memory() est appelé depuis le chemin handoff critique. La fonction censée marquer les pages de Kernel A comme !PRESENT est un corps vide — l'isolation mémoire n'est pas réalisée. Le TLB shootdown ensuite (0xF3) n'a donc aucun effet utile. Kernel A garde un accès complet à sa mémoire pendant la phase de "cage".
+
+[CRIT-03] isolate.rs : override_a_idt_with_b_handlers() vide — IDT de A non protégée
+rustfn override_a_idt_with_b_handlers() {
+    // [ADAPT] : write_idt_entry(a_idtr, 0xF1, b_handler...)
+    // Fonction TOTALEMENT VIDE
+}
+Même problème : les vecteurs ExoPhoenix F1/F2/F3 dans l'IDT de Kernel A ne sont pas écrasés. Si A reprend, il peut supprimer/remplacer ces vecteurs.
+
+[CRIT-04] handoff.rs : mask_all_msi_msix() — commentaire + fence() uniquement
+rustfn mask_all_msi_msix() {
+    // "Best-effort temporaire : l'infra PCIe capability MSI/MSI-X globale n'est pas encore exposée"
+    core::sync::atomic::fence(Ordering::SeqCst);
+}
+La doc exige G2: masquer MSI/MSI-X avant INIT IPI. Une fence() ne masque aucun MSI. Les interruptions hardware peuvent donc continuer à arriver sur les cores de A pendant le gel → violation de la garantie d'isolation G2.
+
+[CRIT-05] forge.rs : pci_function_level_reset() vide — reset drivers Ring 1 fictif
+rustfn pci_function_level_reset(bus: u8, device: u8, func: u8) -> Result<(), ForgeError> {
+    // [ADAPT] : pci::config_write16(...)
+    let _ = (bus, device, func);
+    Ok(())
+}
+Et reload_driver_binary_from_exofs() idem. La séquence G3 (FLR → drain → IOTLB → reload) est entièrement fictive — Ok(()) systématique. Les drivers Ring 1 ne sont jamais réinitialisés, ce qui invalide la reconstruction propre de Kernel A.
+
+[CRIT-06] ssr.rs : SSR_BASE est une adresse physique utilisée comme virtuelle
+rust// ssr.rs
+pub use SSR_BASE_PHYS as SSR_BASE;  // = 0x0100_0000 (physique)
+
+// Utilisation directe :
+&*((SSR_BASE as usize + offset) as *const AtomicU64)
+SSR_BASE_PHYS = 0x0100_0000 est une adresse physique. Elle est utilisée comme pointeur virtuel dans ssr_atomic() et ssr_atomic_u32(). Sur un kernel avec physmap à 0xFFFF_8000_0000_0000, accéder à 0x0100_0000 directement est un accès mémoire arbitraire hors physmap → UB garanti / page fault au premier accès SSR. La bonne adresse est PHYS_MAP_BASE + SSR_BASE_PHYS.
+Dans sentinel.rs, le même problème :
+rustconst SSR_CMD_PHYS_START: u64 = ssr::SSR_BASE + ssr::SSR_CMD_B2A as u64;
+// SSR_BASE = 0x0100_0000 — adresse physique brute
+
+[CRIT-07] sentinel.rs : A_LIVENESS_MIRROR_PHYS — offset hardcodé arbitraire
+rustconst A_LIVENESS_MIRROR_PHYS: u64 = KERNEL_LOAD_PHYS_ADDR + 0x280;
+// = 0x100000 + 0x280 = 0x100280
+Ce "miroir de nonce" à l'offset +0x280 de l'image kernel A est arbitraire et non documenté. Kernel A devrait écrire à cet offset précis pour acquitter le nonce. Si l'offset n'est pas connu et respecté par Kernel A (aucune interface définie), la détection de liveness donnera toujours SCORE_LIVENESS = 50 → faux positifs → escalades non fondées vers Threat.
+
+🟠 MAJEURES — Incohérences logiques graves
+[MAJ-01] handoff.rs : collision entre FREEZE_ACK_DONE et TLB_ACK_DONE sur le même offset
+Dans interrupts.rs :
+rustpub unsafe fn handle_tlb_flush_ipi() {
+    // Écrit TLB_ACK_DONE sur freeze_ack_offset(slot)
+    ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot))
+        .store(ssr::TLB_ACK_DONE, Ordering::Release);
+}
+Et dans forge.rs, checklist_tlb_shootdown() attend 100µs puis n'attend aucun ACK spécifique. Mais all_freeze_acks_observed() dans le handoff vérifie FREEZE_ACK_DONE (0xACED_0001). Si un IPI TLB arrive après le freeze, il écrit TLB_ACK_DONE (0xACED_0002) sur le même slot → all_freeze_acks_observed() voit la mauvaise valeur → timeout artificiel → escalade en begin_isolation_hard().
+
+[MAJ-02] security/exocage.rs : alloc/free shadow stack = return 0 / no-op
+rustfn alloc_shadow_stack_pages(...) -> u64 {
+    0 // TODO: brancher sur phys_alloc::alloc_pages(order, AllocFlags::ZEROED)
+}
+fn free_shadow_stack_pages(_base: u64, _count: usize) {
+    // TODO: brancher sur phys_alloc::free_pages()
+}
+CET (Control-flow Enforcement Technology) shadow stack est activée par enable_cet_for_thread() qui appelle ces fonctions. La shadow stack est à l'adresse physique 0x0 → crash immédiat à la première RET dans un thread CET-enabled.
+
+[MAJ-03] security/exoledger.rs : OID placeholder (PID uniquement)
+rust// TODO: extraire l'OID depuis le CapToken du thread courant.
+let mut oid = [0u8; 32];
+// oid[0..8] = pid (placeholder)
+L'ExoLedger utilise des OIDs dans ses entrées d'audit. En production, tous les OIDs sont des tableaux de zéros sauf les 8 premiers bytes (PID). Les lookups d'audit par OID ne fonctionnent donc pas.
+
+[MAJ-04] security/exokairos.rs : HMAC simplifié ≠ HMAC (mauvaise construction)
+rust// TODO: brancher sur crypto::blake3::blake3_mac(key, msg) quand disponible.
+// Pour l'instant, on hash (key || msg) — HMAC simplifié mais suffisant
+let mut input = [0u8; 48]; // 32 (key) + 16 (msg)
+input[0..32].copy_from_slice(&key);
+input[32..48].copy_from_slice(&msg);
+Le commentaire dit "HMAC simplifié mais suffisant" — c'est faux. hash(key || msg) est vulnérable à des attaques par extension de longueur. Utilisé dans un module de security policy (ExoKairos), c'est un vecteur d'attaque direct.
+
+[MAJ-05] arch/x86_64/acpi/hpet.rs:190 : HPET MMIO non mappé en fixmap
+rust// TODO bare-metal : ajouter le remap 4K avec PAGE_FLAGS_MMIO dans le fixmap.
+Le driver HPET accède au MMIO sans avoir mappé la page en fixmap. En physmap directe, ça peut fonctionner en QEMU (identité parfois fortuite) mais plantera sur bare-metal si la page HPET n'est pas dans la physmap initiale.
+
+[MAJ-06] vfs_server/src/main.rs:219 : démontage VFS Phase 6 absent
+rust// TODO: Phase 6 — démonter proprement (flush + ExoFS sync)
+Le VFS server ne flush/synce pas ExoFS au démontage. Perte de données garantie sur arrêt propre ou restart du VFS server.
+
+🟡 MINEURES — Calibrations et cohérences
+[MIN-01] sentinel.rs : apic_elapsed_us() soustraction inversée probable
+rustfn apic_elapsed_us(start_ticks: u32, end_ticks: u32) -> u64 {
+    // APIC timer est DOWN-counter (décroissant)
+    let elapsed_ticks = start_ticks.wrapping_sub(end_ticks) as u64;
+    elapsed_ticks / ticks_per_us
+}
+Le timer APIC est décroissant donc start_ticks > end_ticks normalement → start.wrapping_sub(end) correct. Mais dans handoff.rs, la fonction apic_elapsed_us(start_ticks, now_ticks, ...) a l'ordre identique. Cohérent. ✓ — mais wait_until_next_detection_window() dans sentinel n'utilise pas cet elapsed, il utilise ktime_get_ns() → double source de temps, risque de désynchronisation SMI.
+
+[MIN-02] forge.rs : checklist_tlb_shootdown() n'attend pas les ACK TLB
+rustfn checklist_tlb_shootdown() {
+    // IPI 0xF3 broadcast
+    // Attendre les ACK TLB dans la SSR
+    let deadline = ...;
+    while (read_apic_ticks() as u64) < deadline {
+        core::hint::spin_loop();
+    }
+    // AUCUN check SSR — juste un timeout aveugle
+}
+Le commentaire dit "attendre les ACK TLB dans la SSR" mais le code fait un busy-wait aveugle de 100µs sans lire la SSR. Si un core met plus de 100µs à flusher son TLB (possible sous charge), la checklist passe quand même → TLB stale.
+
+[MIN-03] forge.rs : timer deadline incorrect (< vs <= et direction APIC)
+rustlet deadline = (read_apic_ticks() as u64)
+    .saturating_add(ticks_per_us.saturating_mul(100));
+while (read_apic_ticks() as u64) < deadline {
+Timer APIC est décroissant — read_apic_ticks() diminue avec le temps. start + 100*ticks_per_us va donc être une valeur supérieure au start. La condition current < deadline sera vraie au début mais le timer va descendre… la boucle peut se terminer immédiatement si l'APIC counter est wrapping, ou boucler indéfiniment selon la calibration. Il faut start.wrapping_sub(current) < timeout.
+
+[MIN-04] stage0.rs : SIPI_SENT_BIT chevauchement avec A_ENTRY_VECTOR
+rustconst A_ENTRY_VECTOR: u8 = TRAMPOLINE_PAGE;
+const SIPI_SENT_BIT: u64 = 1;
+A_ENTRY_VECTOR est utilisé comme vecteur SIPI (page d'entrée en physique, donc vector << 12 = adresse physique). Si TRAMPOLINE_PAGE = 0x01, le SIPI envoie le CPU à 0x1000. C'est standard. Mais si TRAMPOLINE_PAGE != 1, ce serait un bug — la valeur n'est pas vérifiée statiquement.
+
+[MIN-05] libs/generic-rt/src/lib.rs:102 : panic handler silencieux
+rust// TODO: actually print _msg, perhaps by having panic_notls take a `T: DebugBackend`
+En no-std, le handler de panic n'affiche rien. Tout panic en early boot est silencieux, rendant le débogage impossible.
+
+📊 RÉSUMÉ DES PRIORITÉS
+IDSévéritéModuleImpactCRIT-06🔴 BLOQUANTssr.rsCrash au premier accès SSR (physique vs virtuel)CRIT-01🔴 BLOQUANTforge.rsReconstruction Kernel A systématiquement impossibleCRIT-02🔴 BLOQUANTisolate.rsCage mémoire inexistanteCRIT-03🔴 BLOQUANTisolate.rsIDT de A non protégéeCRIT-04🔴 MAJEURhandoff.rsMSI non masqués → violation G2CRIT-05🔴 MAJEURforge.rsDrivers Ring 1 non réinitialisésCRIT-07🔴 MAJEURsentinel.rsLiveness mirror arbitraire → faux positifsMAJ-01🟠 GRAVEhandoff.rs + interrupts.rsCollision ACK freeze/TLB sur même slotMAJ-02🟠 GRAVEexocage.rsCET shadow stack allouée à 0x0 → crashMAJ-04🟠 GRAVEexokairos.rsHMAC vulnérable extension longueurMAJ-03🟠 MOYENexoledger.rsOIDs audit non fonctionnelsMAJ-05🟠 MOYENacpi/hpet.rsHPET MMIO non mappé bare-metalMAJ-06🟠 MOYENvfs_serverPas de flush ExoFS au démontageMIN-03🟡 BUGforge.rsTimer APIC décroissant — deadline inverséeMIN-02🟡 BUGforge.rsTLB shootdown ack non attendus
+
+Priorité absolue : corriger CRIT-06 (SSR physmap), puis CRIT-01/02/03 (forge + isolate stubs réels), puis MAJ-01 (collision ACK slots). Sans ces 5 corrections, ExoPhoenix ne peut pas fonctionner sur bare-metal.
+
+
+
+
+
+COMPLÉMENT D'AUDIT — Deuxième passe exhaustive
+Voici les nouvelles anomalies découvertes, classées par domaine :
+
+🔴 CRITIQUES supplémentaires
+[CRIT-08] fastcall_asm.s jamais inclus — linker error garanti
+Le fichier kernel/src/ipc/core/fastcall_asm.s définit ipc_fast_send, ipc_fast_recv et ipc_fast_call mais aucun global_asm!(include_str!(...)) ne le référence dans tout le codebase. Le build.rs n'enregistre que switch_asm.s et fast_path.s. Résultat : les symboles extern "C" déclarés dans ipc/core/mod.rs sont des références non résolues → link failure garantie.
+
+[CRIT-09] arch_cpu_relax — symbole externe indéfini dans spsc.rs
+Dans spsc_wait_reply() :
+rustextern "C" { fn arch_cpu_relax(); }
+arch_cpu_relax();
+Ce symbole n'est défini nulle part dans le codebase (ni .s, ni .rs avec #[no_mangle]). Linker error dès que spsc_wait_reply est utilisée, c'est-à-dire dès le premier ipc_fast_call bloquant.
+
+[CRIT-10] KPTI activé mais user_pml4 jamais allouée — kernel panique au premier retour userspace
+init_kpti() appelle KPTI_ENABLED.store(true, …) mais ne crée jamais la shadow PML4 user. kpti_split::KPTI.register_cpu() n'est appelé nulle part dans tout le codebase. Résultat : kpti_switch_to_user() lit CURRENT_CR3_USER = 0, skip le switch (guard if cr3_user == 0 { return }), mais le KptiTable::switch_to_user() lit states[cpu_id].user_pml4 = PhysAddr::NULL et appelle write_cr3(PhysAddr::NULL) → écriture de CR3=0 → triple fault immédiat au premier IRETQ vers Ring 3.
+
+[CRIT-11] Deux ONLINE_CPU_COUNT indépendants — comptage incohérent des CPUs
+Il existe deux AtomicU32 distincts avec le même nom sémantique :
+
+smp/init.rs::ONLINE_CPU_COUNT initialisé à 1 (BSP inclus)
+smp/percpu.rs::ONLINE_CPU_COUNT initialisé à 0
+
+Les APs incrémentent les deux lors du boot (init.rs:147 et percpu.rs:249/274). smp_cpu_count() lit init.rs, percpu::cpu_count() lit percpu.rs. exo_phoenix_ssr::init_core_count() dans stage0_init() appelle smp::init::smp_cpu_count(). Ces deux compteurs divergent dès le premier AP → init_core_count(n) stocke une valeur possiblement double (BSP compté deux fois dans init.rs si un AP appelle les deux fetch_add).
+En plus : hotplug.rs::online_cpu_count() utilise un troisième mécanisme (bitmask 64 bits) → limité à 64 CPUs alors que la constante MAX_CPUS = 256.
+
+[CRIT-12] Swap provider jamais enregistré — panic silencieux au swap-in
+register_swap_provider() n'est appelé nulle part dans le codebase. swap_provider_present() retourne toujours false. Quand une page est swappée (possible via memory/swap/), le handler handle_swap_in() tombera sur no_provider → zero-fill silencieux au lieu de restaurer les données → corruption de données sans erreur visible.
+
+🟠 MAJEURES supplémentaires
+[MAJ-07] calibrate_apic_timer_via_pit_ch2() : pit_count erroné — calibration ~10% inexacte
+rustlet measure_us = (pit_count as u64).saturating_mul(1_000_000) / pit::PIT_FREQ_HZ;
+// pit_count = 11_931, PIT_FREQ_HZ = 1_193_182
+// measure_us = 11_931 * 1_000_000 / 1_193_182 = 9999 µs ≈ 10ms ✓
+OK en théorie. Mais le code divise elapsed / measure_us en entier. Avec elapsed en ticks et measure_us = 9999, le résultat perd le .9999 → ticks_per_us est systématiquement arrondi à l'entier inférieur → erreur relative de ~0.01%, acceptable. Ce n'est pas un bug majeur. ✓ (fausse alerte sur ce point).
+[MAJ-07] calibrate_apic_timer_via_pit_ch2() : wait_ch2_done() — timeout basé sur itérations, violant CAL-WINDOW-01
+rustpub fn wait_ch2_done() -> bool {
+    for _ in 0..10_000u32 {  // itérations fixes — VIOLE CAL-WINDOW-01
+        ...
+    }
+    false
+}
+La règle CAL-WINDOW-01 exige que la condition de sortie soit basée sur le temps réel, pas sur des itérations. Sur un hyperviseur lent (TCG QEMU), 10 000 itérations peuvent durer 2.25 secondes (225µs/iter) alors que le PIT finit en 10ms → wait_ch2_done() retourne true bien après la fin du PIT, donnant une mesure elapsed potentiellement au maximum (u32::MAX - CCR au retour) → ticks_per_us massivement sur-estimé → tous les timeouts TSC du système deviennent trop courts.
+
+[MAJ-08] exocage.rs : commentaire TCB layout erroné ([144] mais _cold_reserve = array [u8;88] indexé [0])
+Dans exocage.rs :
+rust//   _cold_reserve[144]   shadow_stack_token : u64
+_cold_reserve est un tableau [u8; 88] commençant à l'offset TCB 144. L'index [144] dans ce commentaire est l'offset absolu dans le TCB, pas l'index dans le tableau. Le code utilise OFF_SHADOW_STACK_TOKEN = 0 (correct), mais le commentaire en-tête (_cold_reserve[144]) est trompeur et pourrait induire un futur développeur en erreur sur le bon offset à utiliser.
+
+[MAJ-09] stage0.rs : send_sipi_once() envoie seulement UN SIPI — spec Intel viole
+rustpub fn send_sipi_once(core_slot: u8, entry_vector: u8) -> Result<(), SendSipiError> {
+    ...
+    ipi::send_startup_ipi(apic_id, entry_vector); // UNE SEULE FOIS
+    Ok(())
+}
+La spec Intel MP (section B.4) et le code smp/init.rs::boot_ap() envoient deux SIPIs (avec délai 1ms entre les deux) car certains chipsets nécessitent deux SIPIs pour démarrer un AP. send_sipi_once n'envoie qu'un seul SIPI → Kernel A peut ne pas démarrer sur certains hardware physiques.
+
+[MAJ-10] ktime_get_ns() : TSC offset soustrait via wrapping_sub mais l'offset peut être négatif encodé en u64
+rustlet tsc_adjusted = tsc_now.wrapping_sub(
+    super::percpu::tsc_offset(coreid as usize)
+);
+tsc_offset est stocké comme u64 mais représente un delta signé (un AP en retard a un offset négatif). Or store_tsc_offset() stocke directement un u64. Si l'AP est en retard (offset négatif), la valeur stockée est u64::MAX - |offset| (valeur énorme), et wrapping_sub donnera tsc_now - (u64::MAX - |offset|) = tsc_now + |offset| + 1 — soit un résultat encore plus grand, pas plus petit. Le calcul de ns_delta explose → temps négatifs ou overflow. La méthode correcte est soit un i64, soit un wrapping_add avec deux cas.
+
+[MAJ-11] hotplug.rs::online_cpu_count() : limité à 64 CPUs avec AtomicU64 bitmask
+ruststatic CPU_ONLINE_MASK: AtomicU64 = AtomicU64::new(1);
+
+pub fn cpu_is_online(cpu_id: u32) -> bool {
+    if cpu_id >= 64 { return false; }  // 64 CPUs MAX
+    ...
+}
+MAX_CPUS = 256 partout, mais le hotplug ne supporte que 64 CPUs. Les CPUs 64–255 sont toujours vus comme offline par hotplug.rs. Si le scheduler utilise hotplug::cpu_is_online() pour les décisions d'affinité, les CPUs >63 ne reçoivent jamais de tâches.
+
+[MAJ-12] ipc/ring/spsc.rs : ring_for(channel_id) — collision de canaux par modulo
+rustconst MAX_SPSC_RINGS: usize = 256;
+fn ring_for(channel_id: u64) -> &'static SpscRing {
+    let idx = array_index_nospec((channel_id as usize) % MAX_SPSC_RINGS, MAX_SPSC_RINGS);
+    &SPSC_RINGS[idx]
+}
+channel_id % 256 : les canaux 0 et 256 partagent le même ring physique. Si un processus ouvre le canal 0 et un autre le canal 256, leurs messages sont mélangés dans le même SPSC ring → corruption IPC inter-processus. Avec seulement 256 rings et des channel_ids potentiellement alloués séquentiellement sur 64 bits, les collisions arrivent dès le 257ème canal.
+
+[MAJ-13] emergency_pool.rs : commentaire dit "64 WaitNodes" mais EMERGENCY_POOL_SIZE = 256
+rust// EmergencyPool — 64 WaitNodes pré-alloués au BOOT.
+// ...
+use crate::memory::core::constants::EMERGENCY_POOL_SIZE; // = 256
+Incohérence entre commentaire (64) et constante (256). L'assert dans constants.rs force EMERGENCY_POOL_SIZE >= 256 (règle SCHED-POOL). La valeur correcte est 256 et le commentaire est erroné — source de confusion lors du dimensionnement mémoire boot.
+
+🟡 MINEURES supplémentaires
+[MIN-06] stage0.rs : update_iommu_protected_regions() stocke SSR_BASE physique dans un atomique "base"
+rustIOMMU_PROTECT_SSR_BASE.store(super::ssr::SSR_BASE, Ordering::Release);
+SSR_BASE = 0x0100_0000 est une adresse physique. Les "protected regions" IOMMU sont en physique → cohérent ici. Mais SSR_BASE dans ssr.rs est réexporté depuis SSR_BASE_PHYS et utilisé aussi dans des contextes virtuels (CRIT-06). La dualité de contexte (physique ici, virtuel ailleurs) sans renommage est une source permanente d'erreur.
+
+[MIN-07] CFS : timeslice_for() — division par zéro si nr_tasks > 0 mais total_weight = 0
+rustpub fn timeslice_for(tcb: &ThreadControlBlock, nr_tasks: usize, total_weight: u64) -> u64 {
+    if nr_tasks == 0 { return CFS_TARGET_PERIOD_NS; }
+    let weight = tcb.priority.cfs_weight() as u64;
+    let raw_slice = if total_weight == 0 {
+        CFS_TARGET_PERIOD_NS / nr_tasks as u64   // OK — mais...
+    } else {
+        CFS_TARGET_PERIOD_NS.saturating_mul(weight) / total_weight  // OK
+    };
+Correct en surface. Mais si nr_tasks > 0 et total_weight == 0, on divise CFS_TARGET_PERIOD_NS / nr_tasks. Si nr_tasks = 0 aussi (race condition entre le if check et un dequeue) → division par zéro. Le guard if nr_tasks == 0 est lu une seule fois sans lock.
+
+[MIN-08] sentinel.rs : pmc_anomaly_score() lit 8 slots PMC mais le snapshot stocke 4 PMCs × 2 champs = 8 u64
+rustfor idx in 0..8usize {  // 8 lectures
+    let ptr = (base + idx * 8) as *const u64;
+    let v = unsafe { read_volatile(ptr) };
+    if v != 0 { non_zero += 1; }
+}
+if non_zero >= 6 { SCORE_PMC_ANOMALY }
+Le snapshot PMC par slot contient 4 PMCs × 2 valeurs (evtsel + ctr) = 8 u64 sur 64 bytes. La logique détecte ≥6 valeurs non-nulles sur 8. Mais evtsel (la configuration du registre PMC) est non-nul par définition si un PMC est programmé — même sans activité. Le score sera donc SCORE_PMC_ANOMALY = 10 dès que ≥3 PMCs sont configurés dans Kernel A, même sans anomalie. Faux positif systématique si le profiler de A est actif.
+
+[MIN-09] stage0.rs : POOL_R3_SIZE_BYTES lue avant d'être écrite
+rust// 5.5) PCI + taille pool R3
+let pci_device_count = enumerate_pci_devices();
+let pool_r3_size = POOL_R3_SIZE_BYTES.load(Ordering::Acquire);  // ← lue ici
+
+// 11) Pool R3
+let _ = init_pool_r3_from_stage0_size(pool_r3_size);
+POOL_R3_SIZE_BYTES est écrite par enumerate_pci_devices() (étape 5.5) et immédiatement relue. L'ordre est correct mais non atomique : si un AP parallèle interagit (possible sur certains appareils hotplug ACPI), il y a une race. Plus important : POOL_R3_SIZE_BYTES commence à 0 si enumerate_pci_devices() ne trouve aucun device Ring 1 → init_pool_r3_from_stage0_size(0) retourne false immédiatement → pool R3 non initialisé → les drivers Ring 1 n'ont pas de mémoire DMA.
+
+[MIN-10] forge.rs : deadline timer APIC DOWN-counter — condition while current < deadline erronée
+rust// Dans checklist_tlb_shootdown() :
+let deadline = (read_apic_ticks() as u64)
+    .saturating_add(ticks_per_us.saturating_mul(100));
+while (read_apic_ticks() as u64) < deadline {
+    core::hint::spin_loop();
+}
+APIC timer est décroissant. start_ticks (ex: 300_000) + 100 * ticks_per_us donne une valeur encore plus grande (ex: 400_000). read_apic_ticks() va descendre de 300_000 → 0. La condition current < deadline (400_000) est toujours vraie jusqu'au wrap-around — la boucle tourne jusqu'à débordement APIC timer soit ~5 secondes sur un système calibré à 1 tick/µs. Identique dans drain_dma_queues() dans le même fichier.
+
+📊 TABLE DE SYNTHÈSE COMPLÈTE (toutes passes confondues)
+IDSévéritéModuleCatégorieCRIT-01🔴forge.rsHash nul — reconstruction impossibleCRIT-02🔴isolate.rsCage mémoire videCRIT-03🔴isolate.rsOverride IDT absentCRIT-04🔴handoff.rsMSI non masquésCRIT-05🔴forge.rsDrivers Ring 1 non resetCRIT-06🔴ssr.rsAdresse physique utilisée comme virtuelleCRIT-07🔴sentinel.rsLiveness mirror offset arbitraireCRIT-08🔴fastcall_asm.sFichier ASM jamais inclus → link errorCRIT-09🔴spsc.rsarch_cpu_relax indéfini → link errorCRIT-10🔴kpti_split.rsuser_pml4 jamais allouée → triple faultCRIT-11🔴smp/init+percpuDouble ONLINE_CPU_COUNT — comptage incohérentCRIT-12🔴swap_in.rsSwap provider jamais enregistréMAJ-01🟠handoff+interruptsCollision ACK freeze/TLB même slotMAJ-02🟠exocage.rsShadow stack allouée à 0x0MAJ-03🟠exoledger.rsOID audit = zérosMAJ-04🟠exokairos.rsHMAC vulnérableMAJ-05🟠acpi/hpet.rsHPET MMIO non mappéMAJ-06🟠vfs_serverExoFS non flushé au démontageMAJ-07🟠stage0/pit.rswait_ch2_done timeout par itérationsMAJ-08🟠exocage.rsCommentaire offset TCB trompeurMAJ-09🟠stage0.rsUn seul SIPI au lieu de deuxMAJ-10🟠ktime.rsTSC offset signé stocké en u64MAJ-11🟠hotplug.rsCPU mask 64 bits, MAX_CPUS=256MAJ-12🟠spsc.rsCollision IPC par modulo 256MAJ-13🟠emergency_pool.rsCommentaire "64" mais constante 256MIN-01🟡sentinel.rsDouble source temps (APIC + ktime)MIN-02🟡forge.rsTLB ack non vérifiésMIN-03🟡forge.rsTimer APIC deadline inversée (CRIT sur bare-metal)MIN-05🟡generic-rtPanic handler silencieuxMIN-06🟡stage0.rsSSR_BASE dualité physique/virtuelMIN-07🟡scheduler/cfs.rsRace nr_tasks/total_weightMIN-08🟡sentinel.rsPMC score faux positif si profiler actifMIN-09🟡stage0.rsPOOL_R3_SIZE=0 si aucun device détectéMIN-10🟡forge.rsDeadline APIC DOWN-counter inversée (double occurrence)

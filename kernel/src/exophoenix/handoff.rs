@@ -146,7 +146,7 @@ fn all_freeze_acks_observed(self_slot: Option<usize>) -> bool {
         seen_slots |= bit;
         // SAFETY: offset borné par slot map stage0.
         let ack = unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
-        if ack != ssr::FREEZE_ACK_DONE {
+        if ack != ssr::FREEZE_ACK_DONE && ack != ssr::TLB_ACK_DONE {
             all_ok = false;
         }
     });

@@ -2,6 +2,8 @@
 //
 // Module core IPC — réexporte les types fondamentaux, constantes et moteur de transfert.
 
+core::arch::global_asm!(include_str!("fastcall_asm.s"), options(att_syntax));
+
 pub mod types;
 pub mod constants;
 pub mod sequence;

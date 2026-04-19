@@ -50,6 +50,7 @@ const MSR_IA32_PKRS: u32 = 0x6E1;
 const MAX_PKS_KEYS: usize = 16;
 
 /// Valeur PKRS par défaut : tout accessible (tous les domaines = RWX = 0b00).
+#[allow(dead_code)]
 const PKRS_DEFAULT_ALL_ACCESS: u64 = 0x0000_0000_0000_0000;
 
 /// Valeur PKRS tous révoqués : tous les domaines = 0b11 (Access Disabled).

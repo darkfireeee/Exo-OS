@@ -46,10 +46,13 @@ const MSR_IA32_PL0_SSP: u32 = 0x6A4;
 /// MSR IA32_PL1_SSP — Ring 1 Shadow Stack Pointer.
 const MSR_IA32_PL1_SSP: u32 = 0x6A5;
 /// MSR IA32_PL2_SSP — Ring 2 Shadow Stack Pointer.
+#[allow(dead_code)]
 const MSR_IA32_PL2_SSP: u32 = 0x6A6;
 /// MSR IA32_PL3_SSP — Ring 3 Shadow Stack Pointer (userspace).
+#[allow(dead_code)]
 const MSR_IA32_PL3_SSP: u32 = 0x6A7;
 /// MSR IA32_INTERRUPT_SSP_TABLE — SSP table pour interrupt shadow stack.
+#[allow(dead_code)]
 const MSR_IA32_INTERRUPT_SSP_TABLE: u32 = 0x6A8;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,10 +66,13 @@ const CET_WR_SHSTK_EN: u64 = 1 << 1;
 /// Bit 2 — ENDBRANCH enforcement (IBT).
 const CET_ENDBR_EN:    u64 = 1 << 2;
 /// Bit 3 — Legacy Shadow Stack compatibility (IBT only when set).
+#[allow(dead_code)]
 const CET_LEG_IW_EN:   u64 = 1 << 3;
 /// Bit 4 — No Track for indirect CALL/JMP (suppress IBT when set).
+#[allow(dead_code)]
 const CET_NO_TRACK_EN: u64 = 1 << 4;
 /// Bit 5 — Suppress Shadow Stack error on WRSS.
+#[allow(dead_code)]
 const CET_SUPPRESS_DIS: u64 = 1 << 5;
 
 // ─────────────────────────────────────────────────────────────────────────────

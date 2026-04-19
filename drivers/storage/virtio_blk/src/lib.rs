@@ -61,4 +61,13 @@ impl ExoVirtioBlkDevice {
         storage[offset..offset+bs].copy_from_slice(buf);
         Ok(())
     }
+
+    /// Flush persistant du backend bloc.
+    ///
+    /// Le backend actuel est un disque mock en mémoire, donc les écritures sont
+    /// déjà visibles de manière synchrone. La fonction reste explicite pour que
+    /// les couches supérieures disposent d'un vrai point d'accroche de flush.
+    pub fn flush(&self) -> Result<(), &'static str> {
+        Ok(())
+    }
 }

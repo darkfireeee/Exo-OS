@@ -54,6 +54,7 @@ mod syscall {
     pub const SYS_IPC_SEND:           u64 = 302;
     pub const SYS_EXOFS_PATH_RESOLVE: u64 = 500;
     pub const SYS_EXOFS_OBJECT_OPEN:  u64 = 501;
+    pub const SYS_EXOFS_EPOCH_COMMIT: u64 = 518;
 
     // Flags pour SYS_EXOFS_OBJECT_OPEN (O_RDONLY = 0, O_RDWR = 2)
     pub const O_RDONLY: u64 = 0;
@@ -91,7 +92,8 @@ impl MountEntry {
 }
 
 static MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
-static mut MOUNTS: [MountEntry; 32] = [MountEntry::empty(); 32];
+const MAX_MOUNTS: usize = 32;
+static mut MOUNTS: [MountEntry; MAX_MOUNTS] = [MountEntry::empty(); MAX_MOUNTS];
 static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 
 fn fnv32(s: &[u8]) -> u32 {
@@ -125,6 +127,75 @@ struct VfsReply {
     _pad:    [u8; 40],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct EpochCommitArgs {
+    flags:    u32,
+    _pad:     u32,
+    epoch_id: u64,
+    checksum: u64,
+    hints:    u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct EpochCommitResult {
+    new_epoch:    u64,
+    sealed_epoch: u64,
+    blobs_sealed: u64,
+    bytes_sealed: u64,
+    flags:        u32,
+    _pad:         u32,
+}
+
+const _: () = assert!(core::mem::size_of::<EpochCommitArgs>() == 32);
+const _: () = assert!(core::mem::size_of::<EpochCommitResult>() == 40);
+
+fn parse_c_string(payload: &[u8]) -> &[u8] {
+    let len = payload.iter().position(|&b| b == 0).unwrap_or(payload.len());
+    &payload[..len]
+}
+
+fn mount_slot_by_hash(path_hash: u32) -> Option<usize> {
+    unsafe {
+        let mut idx = 0usize;
+        while idx < MAX_MOUNTS {
+            let entry = MOUNTS[idx];
+            if entry.active && entry.path_hash == path_hash {
+                return Some(idx);
+            }
+            idx += 1;
+        }
+    }
+    None
+}
+
+fn alloc_mount_slot() -> Option<usize> {
+    unsafe {
+        let mut idx = 0usize;
+        while idx < MAX_MOUNTS {
+            if !MOUNTS[idx].active {
+                return Some(idx);
+            }
+            idx += 1;
+        }
+    }
+    None
+}
+
+fn flush_exofs_mount() -> i64 {
+    let args = EpochCommitArgs::default();
+    let mut result = EpochCommitResult::default();
+    unsafe {
+        syscall::syscall3(
+            syscall::SYS_EXOFS_EPOCH_COMMIT,
+            &args as *const _ as u64,
+            &mut result as *mut _ as u64,
+            0,
+        )
+    }
+}
+
 fn handle_mount(payload: &[u8]) -> VfsReply {
     // payload[0] = fstype u8, payload[1..5] = flags u32 LE,
     // payload[5..13] = root_blob u64 LE, payload[13..] = chemin null-terminated
@@ -136,16 +207,11 @@ fn handle_mount(payload: &[u8]) -> VfsReply {
         payload[5], payload[6], payload[7], payload[8],
         payload[9], payload[10], payload[11], payload[12],
     ]);
-    let path = &payload[13..];
-    // Trouver le null terminator
-    let path_len = path.iter().position(|&b| b == 0).unwrap_or(path.len());
-    let path_hash = fnv32(&path[..path_len]);
-
-    let idx = MOUNT_COUNT.fetch_add(1, Ordering::AcqRel) as usize;
-    if idx >= 32 {
-        MOUNT_COUNT.fetch_sub(1, Ordering::Relaxed);
-        return VfsReply { status: -28, blob_id: 0, fd: -1, _pad: [0; 40] }; // -ENOSPC
+    let path = parse_c_string(&payload[13..]);
+    if path.is_empty() {
+        return VfsReply { status: -22, blob_id: 0, fd: -1, _pad: [0; 40] };
     }
+    let path_hash = fnv32(path);
 
     let fs = match fstype {
         1 => FsType::ExoFs,
@@ -155,9 +221,18 @@ fn handle_mount(payload: &[u8]) -> VfsReply {
         _ => return VfsReply { status: -22, blob_id: 0, fd: -1, _pad: [0; 40] },
     };
 
+    if mount_slot_by_hash(path_hash).is_some() {
+        return VfsReply { status: -17, blob_id: 0, fd: -1, _pad: [0; 40] }; // -EEXIST
+    }
+
+    let Some(idx) = alloc_mount_slot() else {
+        return VfsReply { status: -28, blob_id: 0, fd: -1, _pad: [0; 40] }; // -ENOSPC
+    };
+
     unsafe {
         MOUNTS[idx] = MountEntry { fs_type: fs, path_hash, root_blob, active: true };
     }
+    MOUNT_COUNT.fetch_add(1, Ordering::AcqRel);
 
     VfsReply { status: 0, blob_id: root_blob, fd: idx as i64, _pad: [0; 40] }
 }
@@ -210,15 +285,39 @@ fn handle_open(payload: &[u8]) -> VfsReply {
     }
 }
 
+fn handle_umount(payload: &[u8]) -> VfsReply {
+    let path = parse_c_string(payload);
+    if path.is_empty() {
+        return VfsReply { status: -22, blob_id: 0, fd: -1, _pad: [0; 40] };
+    }
+
+    let path_hash = fnv32(path);
+    let Some(idx) = mount_slot_by_hash(path_hash) else {
+        return VfsReply { status: -2, blob_id: 0, fd: -1, _pad: [0; 40] }; // -ENOENT
+    };
+
+    let entry = unsafe { MOUNTS[idx] };
+    if entry.fs_type == FsType::ExoFs {
+        let status = flush_exofs_mount();
+        if status < 0 {
+            return VfsReply { status, blob_id: entry.root_blob, fd: -1, _pad: [0; 40] };
+        }
+    }
+
+    unsafe {
+        MOUNTS[idx] = MountEntry::empty();
+    }
+    MOUNT_COUNT.fetch_sub(1, Ordering::AcqRel);
+
+    VfsReply { status: 0, blob_id: entry.root_blob, fd: idx as i64, _pad: [0; 40] }
+}
+
 fn handle_request(req: &VfsRequest) -> VfsReply {
     match req.msg_type {
         VFS_MOUNT   => handle_mount(&req.payload),
         VFS_RESOLVE => handle_resolve(&req.payload),
         VFS_OPEN    => handle_open(&req.payload),
-        VFS_UMOUNT  => {
-            // TODO: Phase 6 — démonter proprement (flush + ExoFS sync)
-            VfsReply { status: 0, blob_id: 0, fd: 0, _pad: [0; 40] }
-        }
+        VFS_UMOUNT  => handle_umount(&req.payload),
         _ => VfsReply { status: -22, blob_id: 0, fd: -1, _pad: [0; 40] },
     }
 }

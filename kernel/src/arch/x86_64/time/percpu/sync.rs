@@ -159,12 +159,10 @@ pub unsafe fn measure_tsc_offset_for_ap(ap_cpu_id: u32) {
         log_tsc_skew_warning(ap_cpu_id, offset_median);
     }
 
-    // Stocker l'offset (signé, en cycles) dans ktime.
-    // ktime::ktime_get_ns() soustrait l'offset si AP en avance :
-    //   effective_tsc = rdtscp_value - tsc_offset[coreid]
-    // Si AP en avance (offset > 0) → soustraire → correct.
-    // Stockage en u64 (two's complement) : wrapping_sub dans ktime_get_ns() gère les offsets négatifs.
-    ktime::store_tsc_offset(ap_cpu_id as usize, offset_median as u64);
+    // Stocker l'offset signé (cycles TSC).
+    // offset > 0  : l'AP est en avance → ktime soustrait ce delta.
+    // offset < 0  : l'AP est en retard  → ktime ajoute |delta|.
+    ktime::store_tsc_offset(ap_cpu_id as usize, offset_median);
 }
 
 // ── Côté AP ───────────────────────────────────────────────────────────────────
@@ -208,7 +206,7 @@ pub fn init_bsp_percpu() {
 
 /// Vérifie si la synchronisation TSC a été effectuée pour un CPU donné.
 pub fn tsc_synced(cpu_id: u32) -> bool {
-    ktime::tsc_offset(cpu_id as usize) != 0 || cpu_id == 0
+    cpu_id == 0 || ktime::tsc_offset_valid(cpu_id as usize)
 }
 
 // ── Utilitaires ───────────────────────────────────────────────────────────────

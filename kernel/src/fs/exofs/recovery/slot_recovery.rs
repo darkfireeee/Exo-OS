@@ -17,6 +17,7 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId};
 use crate::fs::exofs::core::blob_id::blake3_hash;
 use super::boot_recovery::BlockDevice;
+use super::block_io::{read_array, write_array};
 use super::recovery_audit::RECOVERY_AUDIT;
 
 // ── Constantes ────────────────────────────────────────────────────────────────
@@ -265,13 +266,15 @@ impl SlotRecovery {
         for i in 0..SLOT_COUNT {
             let slot_id = SlotId(i as u8);
             let lba = SLOT_DEFAULT_LBAS[i];
-            let mut buf = [0u8; SLOT_HEADER_SIZE];
 
             // Lecture — erreur I/O → slot invalide, on continue.
-            if device.read_block(lba, &mut buf).is_err() {
-                RECOVERY_AUDIT.record_invalid_magic(lba, 0);
-                continue;
-            }
+            let buf = match read_array::<SLOT_HEADER_SIZE>(device, lba) {
+                Ok(buf) => buf,
+                Err(_) => {
+                    RECOVERY_AUDIT.record_invalid_magic(lba, 0);
+                    continue;
+                }
+            };
 
             match SlotHeaderDisk::from_bytes(&buf) {
                 Ok(hdr) => {
@@ -323,8 +326,7 @@ impl SlotRecovery {
             return Err(ExofsError::InvalidArgument);
         }
         let lba = SLOT_DEFAULT_LBAS[slot_id.0 as usize];
-        let mut buf = [0u8; SLOT_HEADER_SIZE];
-        device.read_block(lba, &mut buf)?;
+        let buf = read_array::<SLOT_HEADER_SIZE>(device, lba)?;
         SlotHeaderDisk::from_bytes(&buf)
     }
 
@@ -357,7 +359,7 @@ impl SlotRecovery {
 
         // Barrière avant écriture (RÈGLE 7).
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        device.write_block(lba, &buf)?;
+        write_array(device, lba, &buf)?;
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
         // Flush NVMe.
@@ -376,7 +378,7 @@ impl SlotRecovery {
         let buf = [0u8; SLOT_HEADER_SIZE];
         let lba = SLOT_DEFAULT_LBAS[slot_id.0 as usize];
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        device.write_block(lba, &buf)?;
+        write_array(device, lba, &buf)?;
         device.flush()
     }
 
@@ -393,18 +395,8 @@ impl SlotRecovery {
         for i in 0..SLOT_COUNT {
             let slot_id = SlotId(i as u8);
             let lba = SLOT_DEFAULT_LBAS[i];
-            let mut buf = [0u8; SLOT_HEADER_SIZE];
 
-            let info = if device.read_block(lba, &mut buf).is_err() {
-                SlotValidationInfo {
-                    slot_id,
-                    lba,
-                    valid:      false,
-                    epoch_id:   0,
-                    dirty:      false,
-                    io_error:   true,
-                }
-            } else {
+            let info = if let Ok(buf) = read_array::<SLOT_HEADER_SIZE>(device, lba) {
                 match SlotHeaderDisk::from_bytes(&buf) {
                     Ok(hdr) => SlotValidationInfo {
                         slot_id,
@@ -422,6 +414,15 @@ impl SlotRecovery {
                         dirty:    false,
                         io_error: false,
                     },
+                }
+            } else {
+                SlotValidationInfo {
+                    slot_id,
+                    lba,
+                    valid:      false,
+                    epoch_id:   0,
+                    dirty:      false,
+                    io_error:   true,
                 }
             };
 

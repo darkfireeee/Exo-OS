@@ -294,9 +294,13 @@ pub fn init_spsc_rings() {
 /// Accède au ring correspondant à un channel_id.
 /// array_index_nospec (RÈGLE IPC-08) : empêche la spéculation hors-bornes.
 #[inline(always)]
-fn ring_for(channel_id: u64) -> &'static SpscRing {
-    let idx = array_index_nospec((channel_id as usize) % MAX_SPSC_RINGS, MAX_SPSC_RINGS);
-    &SPSC_RINGS[idx]
+fn ring_for(channel_id: u64) -> Result<&'static SpscRing, IpcError> {
+    let raw_idx = usize::try_from(channel_id).map_err(|_| IpcError::InvalidParam)?;
+    if raw_idx >= MAX_SPSC_RINGS {
+        return Err(IpcError::InvalidParam);
+    }
+    let idx = array_index_nospec(raw_idx, MAX_SPSC_RINGS);
+    Ok(&SPSC_RINGS[idx])
 }
 
 /// Écriture rapide pour fastcall_asm.s.
@@ -307,7 +311,10 @@ pub unsafe fn spsc_fast_write(msg: *const IpcFastMsg, channel_id: u64) -> u64 {
     let m = &*msg;
     let len = m.len as usize;
     let flags = MsgFlags(m.flags);
-    let ring = ring_for(channel_id);
+    let ring = match ring_for(channel_id) {
+        Ok(ring) => ring,
+        Err(err) => return err as u64,
+    };
 
     match ring.push_copy(&m.data[..len.min(64)], flags) {
         Ok(_)  => 0,
@@ -321,7 +328,10 @@ pub unsafe fn spsc_fast_write(msg: *const IpcFastMsg, channel_id: u64) -> u64 {
 /// `dst` doit être un pointeur valide vers une `IpcFastMsg`.
 pub unsafe fn spsc_fast_read(dst: *mut IpcFastMsg, channel_id: u64) -> u64 {
     let m = &mut *dst;
-    let ring = ring_for(channel_id);
+    let ring = match ring_for(channel_id) {
+        Ok(ring) => ring,
+        Err(err) => return err as u64,
+    };
     let buf = &mut m.data[..];
 
     match ring.pop_into(buf) {
@@ -341,7 +351,10 @@ pub unsafe fn spsc_wait_reply(
 ) -> u64 {
     // Polling avec compteur de spin avant yield.
     const SPIN_LIMIT: u64 = 10_000;
-    let ring = ring_for(channel_id);
+    let ring = match ring_for(channel_id) {
+        Ok(ring) => ring,
+        Err(err) => return err as u64,
+    };
     let m    = &mut *dst;
     let buf  = &mut m.data[..];
 
@@ -367,5 +380,49 @@ pub unsafe fn spsc_wait_reply(
             }
         }
         core::hint::spin_loop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{init_spsc_rings, spsc_fast_read, spsc_fast_write, MAX_SPSC_RINGS};
+    use crate::ipc::core::{IpcError, IpcFastMsg};
+
+    #[test]
+    fn test_invalid_channel_id_returns_error() {
+        init_spsc_rings();
+
+        let mut msg = IpcFastMsg::zeroed();
+        msg.len = 1;
+        msg.data[0] = 0xAB;
+
+        let write_status = unsafe { spsc_fast_write(&msg as *const _, MAX_SPSC_RINGS as u64) };
+        let read_status = unsafe { spsc_fast_read(&mut msg as *mut _, MAX_SPSC_RINGS as u64) };
+
+        assert_eq!(write_status, IpcError::InvalidParam as u64);
+        assert_eq!(read_status, IpcError::InvalidParam as u64);
+    }
+
+    #[test]
+    fn test_invalid_channel_ids_do_not_alias_stress() {
+        init_spsc_rings();
+
+        let mut seed = IpcFastMsg::zeroed();
+        seed.len = 3;
+        seed.data[0..3].copy_from_slice(&[1, 2, 3]);
+
+        let ok = unsafe { spsc_fast_write(&seed as *const _, 0) };
+        assert_eq!(ok, 0);
+
+        for channel_id in MAX_SPSC_RINGS as u64..(MAX_SPSC_RINGS as u64 + 4096) {
+            let write_status = unsafe { spsc_fast_write(&seed as *const _, channel_id) };
+            assert_eq!(write_status, IpcError::InvalidParam as u64);
+        }
+
+        let mut recv = IpcFastMsg::zeroed();
+        let read_ok = unsafe { spsc_fast_read(&mut recv as *mut _, 0) };
+        assert_eq!(read_ok, 0);
+        assert_eq!(recv.len, 3);
+        assert_eq!(&recv.data[0..3], &[1, 2, 3]);
     }
 }

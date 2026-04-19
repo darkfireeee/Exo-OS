@@ -74,11 +74,10 @@ pub const PATH_INDEX_MERGE_THRESHOLD: usize = 4096;
 /// Taille d'un chunk fixe pour déduplication.
 pub const DEDUP_CHUNK_SIZE_FIXED: usize = 4 * 1024;
 
-/// Taille maximale des données inline dans un LogicalObject.
-pub const INLINE_DATA_MAX: usize = 512;
-
-/// Délai GC minimum en epochs avant suppression effective d'un P-Blob.
-pub const GC_MIN_EPOCH_DELAY: u64 = 2;
+/// Valeur canonique du délai GC minimum en epochs avant suppression effective.
+///
+/// Toujours lire la valeur active via `EXOFS_CONFIG.gc_min_epoch_delay()`.
+pub const GC_MIN_EPOCH_DELAY_DEFAULT: u64 = 2;
 
 /// Taille maximale de la file grise GC (règle GC-03).
 pub const GC_MAX_GREY_QUEUE: usize = 1_000_000;
@@ -324,8 +323,9 @@ pub const GC_PRESSURE_HIGH_BLOBS:   u64 = 100;
 /// Seuil de pression GC « critique » — GC immédiat obligatoire.
 pub const GC_PRESSURE_CRITICAL_BLOBS: u64 = 500;
 
-/// Délai minimal entre deux passes GC (secondes).
-pub const GC_MIN_EPOCH_DELAY_SECS: u64 = 2;
+/// Alias de compatibilité de l'ancienne constante compile-time.
+#[deprecated(note = "use GC_MIN_EPOCH_DELAY_DEFAULT and EXOFS_CONFIG.gc_min_epoch_delay()")]
+pub const GC_MIN_EPOCH_DELAY_SECS: u64 = GC_MIN_EPOCH_DELAY_DEFAULT;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Limites de taille par ObjectKind
@@ -464,8 +464,15 @@ pub const GC_QUEUE_MAX_BLOBS: u32 = 65536;
 // Limites d'inline data
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille maximale des données inline dans les métadonnées d'un objet (octets).
+/// Taille maximale canonique des données inline dans les métadonnées d'un objet.
 pub const INLINE_DATA_MAX_BYTES: usize = 256;
+
+/// Taille du buffer inline alloué dans les structures in-memory.
+pub const INLINE_DATA_BUFFER_SIZE: usize = INLINE_DATA_MAX_BYTES;
+
+/// Alias de compatibilité de l'ancienne constante non canonique.
+#[deprecated(note = "use INLINE_DATA_MAX_BYTES")]
+pub const INLINE_DATA_MAX: usize = INLINE_DATA_MAX_BYTES;
 
 /// Seuil de promotion inline→extent : si les données dépassent ce seuil,
 /// elles sont déplacées vers un extent dédié.

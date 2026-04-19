@@ -193,9 +193,16 @@ impl ExtentCache {
     pub fn max_bytes(&self)  -> u64   { self.inner.lock().max }
 
     pub fn flush_all(&self) {
+        let _ = self.drop_all();
+    }
+
+    pub fn drop_all(&self) -> u64 {
         let mut inner = self.inner.lock();
+        let freed = inner.used;
         inner.map.clear();
         inner.used = 0;
+        inner.eviction = EvictionPolicy::new(EvictionAlgorithm::Lru);
+        freed
     }
 }
 

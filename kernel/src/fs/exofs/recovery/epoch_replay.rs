@@ -18,6 +18,7 @@ use core::sync::atomic::Ordering;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId, BlobId};
 use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};
 use super::boot_recovery::BlockDevice;
+use super::block_io::{read_array, read_bytes, read_bytes_at, write_bytes};
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 
@@ -268,8 +269,7 @@ impl EpochReplay {
         RECOVERY_LOG.log_replay_start(epoch_id.0);
 
         // ── Phase 0 : lecture de l'en-tête du journal ──────────────────────
-        let mut hdr_buf = [0u8; EPOCH_JOURNAL_HDR_SIZE];
-        device.read_block(opts.journal_lba, &mut hdr_buf)
+        let hdr_buf = read_array::<EPOCH_JOURNAL_HDR_SIZE>(device, opts.journal_lba)
             .map_err(|_| ExofsError::IoError)?;
 
         let journal_hdr = EpochJournalHeaderDisk::from_bytes(&hdr_buf)
@@ -299,17 +299,11 @@ impl EpochReplay {
         let first_record_lba = journal_hdr.first_lba;
 
         for seq in 0..n_records {
-            // ARITH-02 : checked_add pour le LBA.
-            let rec_block_idx = (seq * EPOCH_RECORD_SIZE)
-                .checked_div(device.block_size() as usize)
-                .ok_or(ExofsError::OffsetOverflow)?;
-            let record_lba = first_record_lba
-                .checked_add(rec_block_idx as u64)
-                .ok_or(ExofsError::OffsetOverflow)?;
-
-            // Lire le bloc contenant l'enregistrement.
             let mut rec_buf = [0u8; EPOCH_RECORD_SIZE];
-            if device.read_block(record_lba, &mut rec_buf).is_err() {
+            let record_byte_offset = seq
+                .checked_mul(EPOCH_RECORD_SIZE)
+                .ok_or(ExofsError::OffsetOverflow)?;
+            if read_bytes_at(device, first_record_lba, record_byte_offset, &mut rec_buf).is_err() {
                 result.n_io_error = result.n_io_error.saturating_add(1);
                 if opts.stop_on_invalid { break; }
                 continue;
@@ -343,7 +337,7 @@ impl EpochReplay {
             // Lire les données source.
             let data_len = rec.data_len as usize;
             let mut data_buf = vec![0u8; data_len];
-            if device.read_block(rec.data_lba, &mut data_buf).is_err() {
+            if read_bytes(device, rec.data_lba, &mut data_buf).is_err() {
                 result.n_io_error = result.n_io_error.saturating_add(1);
                 if opts.stop_on_invalid { break; }
                 continue;
@@ -376,7 +370,7 @@ impl EpochReplay {
             core::sync::atomic::fence(Ordering::SeqCst);
 
             // Écriture des données.
-            if device.write_block(rec.data_lba, &data_buf).is_err() {
+            if write_bytes(device, rec.data_lba, &data_buf).is_err() {
                 result.n_io_error = result.n_io_error.saturating_add(1);
                 if opts.stop_on_invalid { break; }
                 continue;
@@ -411,8 +405,7 @@ impl EpochReplay {
         epoch_id:    EpochId,
         journal_lba: u64,
     ) -> ExofsResult<JournalValidationReport> {
-        let mut hdr_buf = [0u8; EPOCH_JOURNAL_HDR_SIZE];
-        device.read_block(journal_lba, &mut hdr_buf)
+        let hdr_buf = read_array::<EPOCH_JOURNAL_HDR_SIZE>(device, journal_lba)
             .map_err(|_| ExofsError::IoError)?;
 
         let hdr = EpochJournalHeaderDisk::from_bytes(&hdr_buf)?;
@@ -427,13 +420,11 @@ impl EpochReplay {
         let bad_hash  = 0u32;
 
         for seq in 0..n_records.min(EPOCH_RECORD_MAX) {
-            let block_idx = (seq * EPOCH_RECORD_SIZE) / device.block_size() as usize;
-            let rec_lba = hdr.first_lba
-                .checked_add(block_idx as u64)
-                .unwrap_or(u64::MAX);
-
             let mut buf = [0u8; EPOCH_RECORD_SIZE];
-            if device.read_block(rec_lba, &mut buf).is_err() {
+            let rec_byte_offset = seq
+                .checked_mul(EPOCH_RECORD_SIZE)
+                .ok_or(ExofsError::OffsetOverflow)?;
+            if read_bytes_at(device, hdr.first_lba, rec_byte_offset, &mut buf).is_err() {
                 break;
             }
 

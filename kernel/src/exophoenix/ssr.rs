@@ -2,6 +2,8 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64};
 
+use crate::memory::{phys_to_virt, PhysAddr};
+
 pub use exo_phoenix_ssr::{
     SSR_BASE_PHYS as SSR_BASE,
     SSR_SIZE,
@@ -36,7 +38,9 @@ pub fn pmc_snapshot_offset(slot_index: usize) -> usize {
 /// # Safety
 /// L'appelant doit fournir un offset valide et s'assurer que la SSR est mappée.
 pub unsafe fn ssr_atomic(offset: usize) -> &'static AtomicU64 {
-    &*((SSR_BASE as usize + offset) as *const AtomicU64)
+    debug_assert!(offset + core::mem::size_of::<AtomicU64>() <= SSR_SIZE);
+    let base = phys_to_virt(PhysAddr::new(SSR_BASE)).as_u64() as usize;
+    &*((base + offset) as *const AtomicU64)
 }
 
 /// Accès atomique 32-bit à une case SSR (freeze ACK layout partagé: u32 × N).
@@ -44,5 +48,7 @@ pub unsafe fn ssr_atomic(offset: usize) -> &'static AtomicU64 {
 /// # Safety
 /// L'appelant doit fournir un offset valide et s'assurer que la SSR est mappée.
 pub unsafe fn ssr_atomic_u32(offset: usize) -> &'static AtomicU32 {
-    &*((SSR_BASE as usize + offset) as *const AtomicU32)
+    debug_assert!(offset + core::mem::size_of::<AtomicU32>() <= SSR_SIZE);
+    let base = phys_to_virt(PhysAddr::new(SSR_BASE)).as_u64() as usize;
+    &*((base + offset) as *const AtomicU32)
 }

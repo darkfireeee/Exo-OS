@@ -181,10 +181,19 @@ impl ObjectCache {
         self.inner.lock().map.iter().filter(|(_, o)| o.dirty).map(|(k, _)| *k).collect()
     }
 
-    pub fn flush_all(&self) { let mut inner = self.inner.lock(); inner.map.clear(); inner.used = 0; }
+    pub fn flush_all(&self) { let _ = self.drop_all(); }
     pub fn n_entries(&self)  -> usize { self.inner.lock().map.len() }
     pub fn used_bytes(&self) -> u64   { self.inner.lock().used }
     pub fn max_bytes(&self)  -> u64   { self.inner.lock().max }
+
+    pub fn drop_all(&self) -> u64 {
+        let mut inner = self.inner.lock();
+        let freed = inner.used;
+        inner.map.clear();
+        inner.used = 0;
+        inner.eviction = EvictionPolicy::new(EvictionAlgorithm::Lru);
+        freed
+    }
 
     pub fn evict_n(&self, n: usize) -> u64 {
         let mut inner = self.inner.lock();

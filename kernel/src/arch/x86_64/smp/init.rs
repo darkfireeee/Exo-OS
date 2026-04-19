@@ -11,8 +11,7 @@
 //! Le code assembleur du trampoline est dans `boot/trampoline_asm.rs`.
 //! Il est copié à l'adresse 0x6000 (page trampoline = 6).
 
-
-use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 use super::super::cpu::tsc;
 use super::super::apic::ipi;
 use super::super::acpi::madt;
@@ -29,14 +28,11 @@ const INIT_IPI_DELAY_MS:    u64 = 10;   // 10ms après INIT IPI
 const STARTUP_IPI_DELAY_MS: u64 = 1;    // 1ms entre les deux SIPI
 const AP_STARTUP_TIMEOUT_MS:u64 = 100;  // timeout d'attente par AP
 
-// ── Compteur de CPUs online ───────────────────────────────────────────────────
-
-static ONLINE_CPU_COUNT: AtomicU32 = AtomicU32::new(1); // BSP = 1
 static SMP_BOOT_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Retourne le nombre de CPUs logical online
 pub fn smp_cpu_count() -> u32 {
-    ONLINE_CPU_COUNT.load(Ordering::Acquire)
+    percpu::cpu_count()
 }
 
 // ── Handshake BSP ↔ AP ───────────────────────────────────────────────────────
@@ -144,7 +140,6 @@ pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: 
 
     // 8. Signaler au BSP que l'AP est prêt
     core::ptr::write_volatile((TRAMPOLINE_PHYS + HANDSHAKE_OFFSET) as *mut u32, AP_ALIVE_MAGIC);
-    ONLINE_CPU_COUNT.fetch_add(1, Ordering::Release);
 
     // 8b. RÈGLE BOOT-SEC (V-26) : attendre que le sous-système de sécurité
     //     soit initialisé (SECURITY_READY) avant toute IPC.

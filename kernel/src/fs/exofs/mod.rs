@@ -65,16 +65,34 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
 
     // Phase de montage du driver block virtio
     crate::fs::exofs::storage::virtio_adapter::init_global_disk();
+    crate::fs::exofs::epoch::register_nvme_flush_fn(
+        crate::fs::exofs::storage::virtio_adapter::flush_global_disk,
+    );
+    let effective_disk_size = if disk_size_bytes >= crate::fs::exofs::storage::superblock::MIN_DISK_SIZE {
+        disk_size_bytes
+    } else {
+        crate::fs::exofs::storage::virtio_adapter::global_disk_size_bytes()
+            .unwrap_or(crate::fs::exofs::storage::virtio_adapter::default_global_disk_size_bytes())
+    };
+    if effective_disk_size < crate::fs::exofs::storage::superblock::MIN_DISK_SIZE {
+        EXOFS_INITIALIZED.store(false, Ordering::Release);
+        return Err(ExofsError::InvalidSize);
+    }
 
     // Phase 1 : Recovery boot — sélectionne l'Epoch valide
-    boot_recovery_sequence(disk_size_bytes)
-        .map_err(|_| ExofsError::RecoveryFailed)?;
+    if boot_recovery_sequence(effective_disk_size).is_err() {
+        EXOFS_INITIALIZED.store(false, Ordering::Release);
+        return Err(ExofsError::RecoveryFailed);
+    }
 
     // Phase 2 : Enregistrement VFS (register_exofs_syscalls() — appelé via exofs_register_fs()).
     // Omis ici : enregistrement effectué après le boot via exofs_register_fs().
 
     // Phase 3 : Initialisation de la couche de compatibilité POSIX
-    posix_bridge::posix_bridge_init()?;
+    if let Err(err) = posix_bridge::posix_bridge_init() {
+        EXOFS_INITIALIZED.store(false, Ordering::Release);
+        return Err(err);
+    }
 
     // Phase 4 : Threads background GC/writeback
     // Le kthread GC tourne en priorité basse — il appelle run_gc_two_phase() en boucle.
@@ -90,7 +108,7 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
     let _ = create_kthread(&gc_params);
 
     log_kernel!("[exofs] initialisé — disk_size={} MB",
-        disk_size_bytes / (1024 * 1024));
+        effective_disk_size / (1024 * 1024));
 
     Ok(())
 }

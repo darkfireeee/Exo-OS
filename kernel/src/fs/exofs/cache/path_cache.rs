@@ -17,6 +17,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::fs::exofs::core::constants::PATH_CACHE_CAPACITY;
 use crate::scheduler::sync::spinlock::SpinLock;
 use super::cache_stats::CACHE_STATS;
 
@@ -80,7 +81,7 @@ pub static PATH_CACHE: PathCache = PathCache::new_const();
 impl PathCache {
     pub const fn new_const() -> Self {
         Self {
-            inner:         SpinLock::new(PathCacheInner::new(16384)),
+            inner:         SpinLock::new(PathCacheInner::new(PATH_CACHE_CAPACITY)),
             hits:          AtomicU64::new(0),
             misses:        AtomicU64::new(0),
             invalidations: AtomicU64::new(0),
@@ -198,7 +199,27 @@ impl PathCache {
     pub fn hits(&self)          -> u64   { self.hits.load(Ordering::Relaxed) }
     pub fn misses(&self)        -> u64   { self.misses.load(Ordering::Relaxed) }
     pub fn invalidations(&self) -> u64   { self.invalidations.load(Ordering::Relaxed) }
-    pub fn flush_all(&self)              { self.inner.lock().map.clear(); }
+    pub fn flush_all(&self)              { let _ = self.drop_all(); }
+
+    pub fn drop_all(&self) -> u64 {
+        let mut inner = self.inner.lock();
+        let freed = inner.map.values().fold(0u64, |acc, entry| {
+            acc.saturating_add(
+                core::mem::size_of::<PathEntry>() as u64 + entry.path.len() as u64
+            )
+        });
+        inner.map.clear();
+        freed
+    }
+
+    pub fn estimated_bytes(&self) -> u64 {
+        let inner = self.inner.lock();
+        inner.map.values().fold(0u64, |acc, entry| {
+            acc.saturating_add(
+                core::mem::size_of::<PathEntry>() as u64 + entry.path.len() as u64
+            )
+        })
+    }
 }
 
 // ── Extensions PathCache ───────────────────────────────────────────────────────

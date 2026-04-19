@@ -198,6 +198,28 @@ impl InodeEmulation {
         result
     }
 
+    /// Rebind un inode existant vers un nouvel object_id sans changer son ino.
+    ///
+    /// Utilisé notamment par `rename()` pour préserver la stabilité de `ino_t`.
+    pub fn rebind_object(&self, ino: ObjectIno, new_object_id: u64) -> ExofsResult<()> {
+        self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let table = unsafe { &mut *self.fwd.get() };
+        let result = if let Some(idx) = Self::find_by_ino(table, ino) {
+            match Self::find_by_oid(table, new_object_id) {
+                Some(existing_idx) if existing_idx != idx => Err(ExofsError::ObjectAlreadyExists),
+                _ => {
+                    table[idx].object_id = new_object_id;
+                    Ok(())
+                }
+            }
+        } else {
+            Err(ExofsError::ObjectNotFound)
+        };
+        self.lock_release();
+        result
+    }
+
     /// Met à jour le link_count d'un inode.
     /// ARITH-02 : saturating_add/sub.
     pub fn update_link_count(&self, ino: ObjectIno, delta: i64) -> ExofsResult<u32> {
@@ -478,5 +500,14 @@ mod tests {
         e.get_or_alloc(6).unwrap();
         let inos = e.all_inos().unwrap();
         assert_eq!(inos.len(), 2);
+    }
+
+    #[test]
+    fn test_rebind_object_keeps_same_ino() {
+        let e = emu();
+        let ino = e.get_or_alloc(7).unwrap();
+        e.rebind_object(ino, 70).unwrap();
+        assert_eq!(e.ino_to_object(ino), Some(70));
+        assert!(e.get_entry_by_oid(7).is_none());
     }
 }

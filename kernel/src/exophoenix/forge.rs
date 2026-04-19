@@ -13,7 +13,7 @@ use core::sync::atomic::Ordering;
 use crate::arch::x86_64::apic::{self, local_apic, x2apic};
 use crate::arch::x86_64::cpu::msr;
 use crate::arch::x86_64::idt;
-use crate::exophoenix::stage0;
+use crate::exophoenix::{ssr, stage0};
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
@@ -179,12 +179,7 @@ fn drain_dma_queues(bus: u8, device: u8, func: u8) {
     // Attendre que les DMA en vol se terminent
     // [ADAPT] : utiliser l'API DMA existante du codebase si disponible
     // Fallback : busy-wait 200µs (timeout drain par device class)
-    let deadline = stage0::ticks_per_us()
-        .saturating_mul(200)
-        .saturating_add(read_apic_ticks() as u64);
-    while (read_apic_ticks() as u64) < deadline {
-        core::hint::spin_loop();
-    }
+    let _ = wait_apic_timeout_us(200);
     let _ = (bus, device, func);
 }
 
@@ -195,6 +190,95 @@ fn read_apic_ticks() -> u32 {
             msr::read_msr(x2apic::X2APIC_TIMER_CCR) as u32
         },
         stage0::BootApicMode::XApic => local_apic::timer_current_count(),
+    }
+}
+
+#[inline(always)]
+fn apic_elapsed_ticks(start: u32, current: u32) -> u64 {
+    start.wrapping_sub(current) as u64
+}
+
+fn wait_apic_timeout_us(timeout_us: u64) -> bool {
+    let ticks_per_us = stage0::ticks_per_us();
+    if ticks_per_us == 0 {
+        return false;
+    }
+    let timeout_ticks = ticks_per_us.saturating_mul(timeout_us);
+    let start = read_apic_ticks();
+    loop {
+        let current = read_apic_ticks();
+        if apic_elapsed_ticks(start, current) >= timeout_ticks {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+#[inline(always)]
+fn current_apic_id() -> u32 {
+    match stage0::B_FEATURES.apic_mode() {
+        stage0::BootApicMode::X2Apic => x2apic::x2apic_id(),
+        stage0::BootApicMode::XApic => local_apic::lapic_id(),
+    }
+}
+
+#[inline(always)]
+fn current_slot() -> Option<usize> {
+    stage0::apic_slot(current_apic_id())
+}
+
+fn for_each_target_slot(self_slot: Option<usize>, mut f: impl FnMut(usize)) {
+    let mut seen_slots = 0u64;
+    for apic_id in 0u16..=255u16 {
+        let Some(slot) = stage0::apic_slot(apic_id as u32) else { continue };
+        if Some(slot) == self_slot || slot >= 64 {
+            continue;
+        }
+        let bit = 1u64 << slot;
+        if seen_slots & bit != 0 {
+            continue;
+        }
+        seen_slots |= bit;
+        f(slot);
+    }
+}
+
+fn reset_tlb_acks(self_slot: Option<usize>) {
+    for_each_target_slot(self_slot, |slot| unsafe {
+        ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).store(0, Ordering::Release);
+    });
+}
+
+fn all_tlb_acks_observed(self_slot: Option<usize>) -> bool {
+    let mut all_ok = true;
+    for_each_target_slot(self_slot, |slot| {
+        if !all_ok {
+            return;
+        }
+        let ack = unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
+        if ack != ssr::TLB_ACK_DONE {
+            all_ok = false;
+        }
+    });
+    all_ok
+}
+
+fn wait_for_tlb_acks(self_slot: Option<usize>, timeout_us: u64) -> bool {
+    let ticks_per_us = stage0::ticks_per_us();
+    if ticks_per_us == 0 {
+        return false;
+    }
+    let timeout_ticks = ticks_per_us.saturating_mul(timeout_us);
+    let start = read_apic_ticks();
+    loop {
+        if all_tlb_acks_observed(self_slot) {
+            return true;
+        }
+        let current = read_apic_ticks();
+        if apic_elapsed_ticks(start, current) >= timeout_ticks {
+            return all_tlb_acks_observed(self_slot);
+        }
+        core::hint::spin_loop();
     }
 }
 
@@ -283,18 +367,15 @@ fn checklist_madt_hash() -> Result<(), ForgeError> {
 
 fn checklist_tlb_shootdown() {
     // IPI 0xF3 broadcast — invalider TLB de tous les cores de A
+    let self_slot = current_slot();
+    reset_tlb_acks(self_slot);
     if apic::is_x2apic() {
         x2apic::broadcast_ipi_except_self_x2apic(idt::VEC_EXOPHOENIX_TLB);
     } else {
         local_apic::broadcast_ipi_except_self(idt::VEC_EXOPHOENIX_TLB);
     }
     // Attendre les ACK TLB dans la SSR
-    let ticks_per_us = stage0::ticks_per_us();
-    let deadline = (read_apic_ticks() as u64)
-        .saturating_add(ticks_per_us.saturating_mul(100));
-    while (read_apic_ticks() as u64) < deadline {
-        core::hint::spin_loop();
-    }
+    let _ = wait_for_tlb_acks(self_slot, 100);
 }
 
 fn checklist_idt_has_exophoenix_vectors() -> Result<(), ForgeError> {

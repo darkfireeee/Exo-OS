@@ -185,18 +185,22 @@ pub fn setup_ch2_oneshot(count: u16) {
 /// Attend la fin du one-shot canal 2 (bit 5 du port 0x61 = OUT2 = HIGH).
 /// Retourne `true` si la fin est détectée, `false` si timeout (QEMU TCG).
 ///
-/// Timeout : 10 000 itérations max.
-/// Sur QEMU TCG (inb lent ~225µs/iter) × 10K = 2.25s max avant abandon.
-/// Sur bare-metal : CPUID 0x15/16 aura déjà fourni la fréquence avant d'arriver ici.
+/// Timeout : fenêtre temporelle bornée à ~20 ms via le TSC.
 pub fn wait_ch2_done() -> bool {
-    for _ in 0..10_000u32 {
+    let timeout_cycles = crate::arch::x86_64::cpu::tsc::tsc_us_to_cycles(20_000)
+        .max(20_000_000);
+    let start_tsc = crate::arch::x86_64::cpu::tsc::read_tsc();
+
+    loop {
         let val = unsafe { inb_raw(PIT_GATE) };
         if val & PIT_GATE61_OUT2 != 0 {
             return true;
         }
+        if crate::arch::x86_64::cpu::tsc::read_tsc().wrapping_sub(start_tsc) >= timeout_cycles {
+            return false;
+        }
         core::hint::spin_loop();
     }
-    false
 }
 
 /// Désactive le canal 2 (gate bas + speaker muet).

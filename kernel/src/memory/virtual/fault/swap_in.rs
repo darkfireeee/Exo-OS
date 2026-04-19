@@ -16,6 +16,7 @@
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
 use crate::memory::core::{VirtAddr, Frame, AllocError, PAGE_SIZE};
+use crate::memory::swap::{SwapError, SwapSlot, SWAP_BACKEND};
 use crate::memory::virt::vma::VmaDescriptor;
 use super::{FaultContext, FaultResult};
 use super::handler::FaultAllocator;
@@ -42,6 +43,45 @@ pub trait SwapInProvider: Sync {
         swap_block:  u64,
         dest_frame:  Frame,
     ) -> Result<(), AllocError>;
+}
+
+struct BackendSwapInProvider;
+
+impl SwapInProvider for BackendSwapInProvider {
+    fn read_swap_page(
+        &self,
+        swap_device: u8,
+        swap_block: u64,
+        dest_frame: Frame,
+    ) -> Result<(), AllocError> {
+        unsafe {
+            SWAP_BACKEND.read_page(
+                swap_device as usize,
+                SwapSlot(swap_block),
+                dest_frame.start_address(),
+            )
+        }
+        .map_err(map_swap_error)
+    }
+}
+
+static BACKEND_SWAP_IN_PROVIDER: BackendSwapInProvider = BackendSwapInProvider;
+
+fn map_swap_error(err: SwapError) -> AllocError {
+    match err {
+        SwapError::NoSlot | SwapError::DeviceFull => AllocError::OutOfMemory,
+        SwapError::NoDevice | SwapError::InvalidSlot | SwapError::NotEnabled => AllocError::InvalidParams,
+        SwapError::IoError | SwapError::Corrupted => AllocError::WouldBlock,
+    }
+}
+
+pub fn register_backend_swap_provider() {
+    let provider: &'static dyn SwapInProvider = &BACKEND_SWAP_IN_PROVIDER;
+    // SAFETY: conversion stable d'un fat pointer `&dyn Trait` vers (data, vtable)
+    // utilisée uniquement pour remplir le registre global du provider.
+    let (data_ptr, vtable_ptr): (*const (), *const ()) = unsafe { core::mem::transmute(provider) };
+    // SAFETY: `provider` est statique et reste valide pendant toute la vie du noyau.
+    unsafe { register_swap_provider(data_ptr, vtable_ptr); }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

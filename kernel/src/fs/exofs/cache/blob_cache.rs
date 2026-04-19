@@ -286,9 +286,17 @@ impl BlobCache {
 
     /// Vide entièrement le cache.
     pub fn flush_all(&self) {
+        let _ = self.drop_all();
+    }
+
+    /// Vide entièrement le cache sans writeback préalable.
+    pub fn drop_all(&self) -> u64 {
         let mut inner = self.inner.lock();
+        let freed = inner.used;
         inner.map.clear();
         inner.used = 0;
+        inner.eviction = EvictionPolicy::new(EvictionAlgorithm::Arc);
+        freed
     }
 }
 

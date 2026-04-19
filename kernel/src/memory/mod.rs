@@ -165,6 +165,7 @@ pub unsafe fn init(phys_start: PhysAddr, phys_end: PhysAddr, regions: &[(u64, u6
 
     // ── Phase 4 : DMA ─────────────────────────────────────────────────────────
     dma::init();
+    virt::fault::swap_in::register_backend_swap_provider();
 
     // ── Phase 5 : protection matérielle ──────────────────────────────────────
     protection::init();

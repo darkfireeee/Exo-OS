@@ -19,7 +19,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
 // ── KtimeState ────────────────────────────────────────────────────────────────
 
@@ -67,6 +67,23 @@ static KTIME_STATE: KtimeState = KtimeState::new();
 /// RÈGLE ARCH-TIME-02 : Seule source de temps autorisée depuis le kernel.
 /// RÈGLE TIME-SEQLOCK-01 : Garantit la cohérence même entre ISR et thread.
 #[inline(always)]
+fn apply_tsc_offset(tsc_now: u64, tsc_offset: i64) -> u64 {
+    if tsc_offset >= 0 {
+        tsc_now.wrapping_sub(tsc_offset as u64)
+    } else {
+        tsc_now.wrapping_add(tsc_offset.unsigned_abs())
+    }
+}
+
+/// Retourne le temps monotone en nanosecondes depuis le boot.
+///
+/// ISR-safe : wait-free, pas de lock, pas d'alloc.
+/// Seqlock : retry si un write est en cours (rare — < 100ns).
+/// Cycles typiques : 15-50 cycles sur CPU moderne.
+///
+/// RÈGLE ARCH-TIME-02 : Seule source de temps autorisée depuis le kernel.
+/// RÈGLE TIME-SEQLOCK-01 : Garantit la cohérence même entre ISR et thread.
+#[inline(always)]
 pub fn ktime_get_ns() -> u64 {
     loop {
         // 1. Lire seq AVANT — doit être pair (état stable).
@@ -97,9 +114,8 @@ pub fn ktime_get_ns() -> u64 {
         if tsc_hz == 0 { return 0; }
 
         // Appliquer l'offset per-CPU si SMP est initialisé.
-        let tsc_adjusted = tsc_now.wrapping_sub(
-            super::percpu::tsc_offset(coreid as usize)
-        );
+        let tsc_offset = super::percpu::tsc_offset(coreid as usize);
+        let tsc_adjusted = apply_tsc_offset(tsc_now, tsc_offset);
 
         let tsc_delta = tsc_adjusted.wrapping_sub(tsc_base);
         // ns = tsc_delta * 1_000_000_000 / tsc_hz — u128 pour éviter l'overflow.
@@ -285,8 +301,8 @@ const MAX_CPUS: usize = 256;
 /// TSC offset de chaque CPU logique, mesuré depuis le BSP au boot SMP.
 /// offset[cpu] = TSC_AP_au_boot - TSC_BSP_au_boot (delta de synchronisation).
 /// ktime_get_ns() applique : tsc_adj = rdtscp() - offset[coreid].
-static TSC_OFFSETS: [AtomicU64; MAX_CPUS] = {
-    const ZERO: AtomicU64 = AtomicU64::new(0);
+static TSC_OFFSETS: [AtomicI64; MAX_CPUS] = {
+    const ZERO: AtomicI64 = AtomicI64::new(0);
     [ZERO; MAX_CPUS]
 };
 
@@ -300,7 +316,7 @@ static TSC_OFFSET_VALID: [AtomicBool; MAX_CPUS] = {
 ///
 /// # Safety
 /// `cpu_id` doit être dans [1, MAX_CPUS). Appelé une seule fois par CPU au boot SMP.
-pub unsafe fn store_tsc_offset(cpu_id: usize, offset: u64) {
+pub unsafe fn store_tsc_offset(cpu_id: usize, offset: i64) {
     if cpu_id == 0 || cpu_id >= MAX_CPUS { return; }
     TSC_OFFSETS[cpu_id].store(offset, Ordering::Release);
     TSC_OFFSET_VALID[cpu_id].store(true, Ordering::Release);
@@ -308,7 +324,7 @@ pub unsafe fn store_tsc_offset(cpu_id: usize, offset: u64) {
 
 /// Retourne l'offset TSC d'un CPU (0 si BSP ou non encore mesuré).
 #[inline(always)]
-pub fn tsc_offset(cpu_id: usize) -> u64 {
+pub fn tsc_offset(cpu_id: usize) -> i64 {
     if cpu_id >= MAX_CPUS { return 0; }
     if TSC_OFFSET_VALID[cpu_id].load(Ordering::Relaxed) {
         TSC_OFFSETS[cpu_id].load(Ordering::Relaxed)
@@ -358,7 +374,7 @@ pub struct KtimeSnapshot {
     pub tsc_hz:    u64,
     pub retries:   u64,
     pub wall_off:  u64,
-    pub offsets_cpu0: u64,
+    pub offsets_cpu0: i64,
 }
 
 pub fn ktime_snapshot() -> KtimeSnapshot {
@@ -370,6 +386,42 @@ pub fn ktime_snapshot() -> KtimeSnapshot {
         retries:      KTIME_RETRIES.load(Ordering::Relaxed),
         wall_off:     WALL_STATE.rtoffset_ns.load(Ordering::Relaxed),
         offsets_cpu0: TSC_OFFSETS[0].load(Ordering::Relaxed),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_tsc_offset;
+
+    #[test]
+    fn test_apply_tsc_offset_signed_direction() {
+        assert_eq!(apply_tsc_offset(1_000, 25), 975);
+        assert_eq!(apply_tsc_offset(1_000, -25), 1_025);
+        assert_eq!(apply_tsc_offset(1_000, 0), 1_000);
+    }
+
+    #[test]
+    fn test_apply_tsc_offset_stress_roundtrip() {
+        let cases = [
+            (0u64, 0i64),
+            (17, 9),
+            (17, -9),
+            (u64::MAX - 32, 64),
+            (u64::MAX - 32, -64),
+        ];
+
+        for &(tsc, offset) in &cases {
+            let adjusted = apply_tsc_offset(tsc, offset);
+            let restored = apply_tsc_offset(adjusted, -offset);
+            assert_eq!(restored, tsc);
+        }
+
+        for raw in -10_000i64..=10_000 {
+            let tsc = 0x1234_5678_9ABC_DEF0u64.wrapping_add(raw.unsigned_abs());
+            let adjusted = apply_tsc_offset(tsc, raw);
+            let restored = apply_tsc_offset(adjusted, -raw);
+            assert_eq!(restored, tsc);
+        }
     }
 }
 

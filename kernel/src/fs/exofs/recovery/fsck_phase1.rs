@@ -16,6 +16,7 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::blob_id::blake3_hash;
 use super::boot_recovery::BlockDevice;
+use super::block_io::read_array;
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 
@@ -291,8 +292,7 @@ impl FsckPhase1 {
         let mut lbas_checked: u64 = 0;
 
         // ── Étape 1 : lecture du superbloc ─────────────────────────────────
-        let mut sb_buf = [0u8; SUPERBLOCK_SIZE];
-        match device.read_block(sb_lba, &mut sb_buf) {
+        let sb_buf = match read_array::<SUPERBLOCK_SIZE>(device, sb_lba) {
             Err(_) => {
                 errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                 errors.push(Phase1Error {
@@ -313,8 +313,8 @@ impl FsckPhase1 {
                 RECOVERY_LOG.log_phase_done(1, 1);
                 return Ok(report);
             }
-            Ok(()) => {}
-        }
+            Ok(buf) => buf,
+        };
         lbas_checked = lbas_checked.checked_add(1).unwrap_or(u64::MAX);
 
         // ── Étape 2 : validation du superbloc (HDR-03) ─────────────────────
@@ -377,8 +377,7 @@ impl FsckPhase1 {
                 } else {
                     // ── Étape 4 : valider la table d'allocation ─────────────
                     let alloc_lba = sb.alloc_lba;
-                    let mut alloc_buf = [0u8; 64];
-                    if device.read_block(alloc_lba, &mut alloc_buf).is_ok() {
+                    if let Ok(alloc_buf) = read_array::<64>(device, alloc_lba) {
                         lbas_checked = lbas_checked.checked_add(1).unwrap_or(u64::MAX);
                         let magic = u64::from_le_bytes(alloc_buf[0..8].try_into().unwrap_or([0; 8]));
                         if magic != ALLOC_TABLE_MAGIC {
@@ -403,8 +402,7 @@ impl FsckPhase1 {
 
                     // ── Étape 5 : valider l'en-tête de la région blob ───────
                     let region_lba = sb.blob_region_start;
-                    let mut region_buf = [0u8; 64];
-                    if device.read_block(region_lba, &mut region_buf).is_ok() {
+                    if let Ok(region_buf) = read_array::<64>(device, region_lba) {
                         lbas_checked = lbas_checked.checked_add(1).unwrap_or(u64::MAX);
                         let magic = u64::from_le_bytes(region_buf[0..8].try_into().unwrap_or([0; 8]));
                         if magic != BLOB_REGION_MAGIC {

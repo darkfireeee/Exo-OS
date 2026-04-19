@@ -329,7 +329,7 @@ impl CowPolicy {
 }
 
 /// Seuil inline-data pour la sélection de politique CoW.
-const COW_INLINE_MAX: u64 = crate::fs::exofs::core::constants::INLINE_DATA_MAX as u64;
+const COW_INLINE_MAX: u64 = crate::fs::exofs::core::constants::INLINE_DATA_MAX_BYTES as u64;
 /// Seuil partiel : si delta/total < 20%, on fait un CoW partiel.
 const COW_PARTIAL_PCT: u64 = 20;
 

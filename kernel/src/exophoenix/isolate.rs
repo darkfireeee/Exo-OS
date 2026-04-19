@@ -8,7 +8,7 @@ use core::sync::atomic::Ordering;
 use crate::arch::x86_64::apic::{self, local_apic, x2apic};
 use crate::arch::x86_64::cpu::msr;
 use crate::arch::x86_64::idt;
-use crate::exophoenix::stage0;
+use crate::exophoenix::{ssr, stage0};
 use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
 
 // ── MARQUEURS POUR GPT-5.3-CODEX ─────────────────────────────────────────
@@ -24,6 +24,60 @@ fn read_apic_ticks() -> u32 {
         },
         stage0::BootApicMode::XApic => local_apic::timer_current_count(),
     }
+}
+
+#[inline(always)]
+fn apic_elapsed_ticks(start: u32, current: u32) -> u64 {
+    start.wrapping_sub(current) as u64
+}
+
+#[inline(always)]
+fn current_apic_id() -> u32 {
+    match stage0::B_FEATURES.apic_mode() {
+        stage0::BootApicMode::X2Apic => x2apic::x2apic_id(),
+        stage0::BootApicMode::XApic => local_apic::lapic_id(),
+    }
+}
+
+#[inline(always)]
+fn current_slot() -> Option<usize> {
+    stage0::apic_slot(current_apic_id())
+}
+
+fn for_each_target_slot(self_slot: Option<usize>, mut f: impl FnMut(usize)) {
+    let mut seen_slots = 0u64;
+    for apic_id in 0u16..=255u16 {
+        let Some(slot) = stage0::apic_slot(apic_id as u32) else { continue };
+        if Some(slot) == self_slot || slot >= 64 {
+            continue;
+        }
+        let bit = 1u64 << slot;
+        if seen_slots & bit != 0 {
+            continue;
+        }
+        seen_slots |= bit;
+        f(slot);
+    }
+}
+
+fn reset_tlb_acks(self_slot: Option<usize>) {
+    for_each_target_slot(self_slot, |slot| unsafe {
+        ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).store(0, Ordering::Release);
+    });
+}
+
+fn all_tlb_acks_observed(self_slot: Option<usize>) -> bool {
+    let mut all_ok = true;
+    for_each_target_slot(self_slot, |slot| {
+        if !all_ok {
+            return;
+        }
+        let ack = unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
+        if ack != ssr::TLB_ACK_DONE {
+            all_ok = false;
+        }
+    });
+    all_ok
 }
 
 // ── 1. Marquer les pages de A comme !PRESENT ─────────────────────────────
@@ -43,6 +97,8 @@ fn mark_a_pages_not_present() {
 fn tlb_shootdown_all_a_cores() {
     // S8 : INVPCID invalide seulement le core local.
     // Seul un IPI 0xF3 broadcast invalide les TLBs des cores de A.
+    let self_slot = current_slot();
+    reset_tlb_acks(self_slot);
     if apic::is_x2apic() {
         x2apic::broadcast_ipi_except_self_x2apic(idt::VEC_EXOPHOENIX_TLB);
     } else {
@@ -50,9 +106,19 @@ fn tlb_shootdown_all_a_cores() {
     }
     // Attendre les ACK TLB dans la SSR (timeout 100µs)
     let ticks_per_us = stage0::ticks_per_us();
-    let start = read_apic_ticks() as u64;
-    let deadline = start.saturating_add(ticks_per_us.saturating_mul(100));
-    while (read_apic_ticks() as u64) < deadline {
+    if ticks_per_us == 0 {
+        return;
+    }
+    let timeout_ticks = ticks_per_us.saturating_mul(100);
+    let start = read_apic_ticks();
+    loop {
+        if all_tlb_acks_observed(self_slot) {
+            return;
+        }
+        let current = read_apic_ticks();
+        if apic_elapsed_ticks(start, current) >= timeout_ticks {
+            return;
+        }
         core::hint::spin_loop();
     }
 }

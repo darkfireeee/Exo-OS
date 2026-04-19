@@ -15,7 +15,7 @@
 // L'implémentation fournit :
 //   - None → copie directe.
 //   - Lz4  → LZ4 block format simplifié (compatible lz4 block spec).
-//   - Zstd → table zstd simple (stub documenté, à remplacer par la crate
+//   - Zstd → table zstd simple (implémentation minimale documentée, à remplacer par la crate
 //              zstd-sys quand disponible dans le noyau).
 
 use alloc::vec::Vec;

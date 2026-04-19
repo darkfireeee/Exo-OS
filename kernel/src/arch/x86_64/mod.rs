@@ -337,3 +337,12 @@ pub fn io_delay() {
     // SAFETY: port 0x80 est le port debug BIOS/POST — écriture sans effet
     unsafe { outb(0x80, 0x00); }
 }
+
+/// Primitive de pause CPU utilisée par les boucles lock-free / fast IPC.
+#[no_mangle]
+pub extern "C" fn arch_cpu_relax() {
+    // SAFETY: `pause` est une instruction hint sans effet de bord architectural.
+    unsafe {
+        core::arch::asm!("pause", options(nostack, nomem, preserves_flags));
+    }
+}

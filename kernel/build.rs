@@ -24,4 +24,5 @@ fn main() {
     // Rebuild si un fichier ASM change (les .s sont inclus via include_str!).
     println!("cargo:rerun-if-changed={dir}/src/scheduler/asm/switch_asm.s");
     println!("cargo:rerun-if-changed={dir}/src/scheduler/asm/fast_path.s");
+    println!("cargo:rerun-if-changed={dir}/src/ipc/core/fastcall_asm.s");
 }

@@ -252,7 +252,9 @@ pub unsafe fn kernel_init() {
     kdb(b'9'); // IPC done
 
     // ── Phase 7 : FS ─────────────────────────────────────────────────────────
-     let _ = crate::fs::exofs::exofs_init(0u64);
+     let _ = crate::fs::exofs::exofs_init(
+        crate::fs::exofs::storage::virtio_adapter::default_global_disk_size_bytes()
+    );
 
     // BUG-02 FIX: activer le bridge syscall→fs après exofs_init
     // SAFETY: exofs_init() terminé, appelé une seule fois depuis BSP

@@ -18,7 +18,7 @@ use crate::arch::x86_64;
 use crate::arch::x86_64::acpi::{madt, parser};
 use crate::arch::x86_64::apic::{ipi, x2apic};
 use crate::arch::x86_64::apic::local_apic;
-use crate::arch::x86_64::cpu::{features::CPU_FEATURES, msr};
+use crate::arch::x86_64::cpu::{features::CPU_FEATURES, msr, tsc};
 use crate::arch::x86_64::smp::init::TRAMPOLINE_PAGE;
 use crate::arch::x86_64::time::sources::pit;
 use crate::exophoenix::{sentinel, PHOENIX_STATE, PhoenixState};
@@ -1126,6 +1126,8 @@ pub fn send_sipi_once(core_slot: u8, entry_vector: u8) -> Result<(), SendSipiErr
     }
 
     let apic_id = resolve_apic_id_for_slot(core_slot).ok_or(SendSipiError::TargetNotFound)?;
+    ipi::send_startup_ipi(apic_id, entry_vector);
+    tsc::tsc_delay_ms(1);
     ipi::send_startup_ipi(apic_id, entry_vector);
     Ok(())
 }

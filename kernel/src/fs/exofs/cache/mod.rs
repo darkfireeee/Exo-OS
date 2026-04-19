@@ -99,11 +99,11 @@ pub fn init() {
 /// du appelant (layer VFS).
 pub fn shutdown() {
     // Marquer comme propre et vider chaque cache.
-    BLOB_CACHE.flush_all();
-    OBJECT_CACHE.flush_all();
-    EXTENT_CACHE.flush_all();
-    METADATA_CACHE.flush_all();
-    PATH_CACHE.flush_all();
+    let _ = BLOB_CACHE.drop_all();
+    let _ = OBJECT_CACHE.drop_all();
+    let _ = EXTENT_CACHE.drop_all();
+    let _ = METADATA_CACHE.drop_all();
+    let _ = PATH_CACHE.drop_all();
     CACHE_STATS.reset();
 }
 
@@ -112,32 +112,22 @@ pub fn shutdown() {
 /// Stratégie : d'abord path, puis metadata, puis extent, blob, objet.
 pub fn reclaim_bytes(bytes: u64) -> u64 {
     let mut freed = 0u64;
-    let targets = [
-        bytes / 5,          // path = 20 %
-        bytes / 5,          // meta = 20 %
-        bytes * 3 / 10,     // extent = 30 %
-        bytes * 3 / 10,     // blob = 30 %
-    ];
-
-    // Étape 1 : path cache (le plus remplaçable).
-    PATH_CACHE.flush_all();
-    freed = freed.saturating_add(targets[0]);
-
-    // Étape 2 : metadata.
-    METADATA_CACHE.flush_all();
-    freed = freed.saturating_add(targets[1]);
-
+    freed = freed.saturating_add(PATH_CACHE.drop_all());
     if freed >= bytes { return freed; }
 
-    // Étape 3 : extent.
+    freed = freed.saturating_add(METADATA_CACHE.drop_all());
+    if freed >= bytes { return freed; }
+
     let e = EXTENT_CACHE.evict_n(64);
     freed = freed.saturating_add(e);
-
     if freed >= bytes { return freed; }
 
-    // Étape 4 : blob.
     let b = BLOB_CACHE.evict_n(64);
     freed = freed.saturating_add(b);
+    if freed >= bytes { return freed; }
+
+    let o = OBJECT_CACHE.evict_n(64);
+    freed = freed.saturating_add(o);
 
     freed
 }
@@ -277,11 +267,15 @@ pub fn reclaim_with_report(
         ReclaimAggression::Conservative => reclaim_bytes(bytes / 2),
         ReclaimAggression::Moderate     => reclaim_bytes(bytes),
         ReclaimAggression::Aggressive   => {
-            let f = reclaim_bytes(bytes);
-            // Flush supplémentaire si insuffisant.
+            let mut f = reclaim_bytes(bytes);
             if f < bytes {
-                EXTENT_CACHE.flush_all();
-                BLOB_CACHE.flush_all();
+                f = f.saturating_add(OBJECT_CACHE.evict_n(128));
+            }
+            if f < bytes {
+                f = f.saturating_add(EXTENT_CACHE.evict_n(128));
+            }
+            if f < bytes {
+                f = f.saturating_add(BLOB_CACHE.evict_n(128));
             }
             f
         }
