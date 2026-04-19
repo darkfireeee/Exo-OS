@@ -14,11 +14,13 @@
 //   • Handler #CP : toute violation = compromission confirmée = HANDOFF immédiat
 //
 // INTÉGRATION TCB GI-01 :
-//   _cold_reserve[144]   shadow_stack_token : u64   (PKS domain TcbHot)
-//   _cold_reserve[152]   cet_flags          : u8    (bit 0 = CET_EN)
-//   _cold_reserve[153]   threat_score_u8    : u8    (0..=100)
-//   _cold_reserve[160]   pt_buffer_phys     : u64   (Phase 4, LBR/PT futur)
-//   _cold_reserve[168..232] réservé
+//   Layout _cold_reserve (offset absolu TCB → offset relatif _cold_reserve)
+//   TCB offset 144 → _cold_reserve[0..7]   : shadow_stack_token : u64
+//   TCB offset 152 → _cold_reserve[8]      : cet_flags          : u8
+//   TCB offset 153 → _cold_reserve[9]      : threat_score_u8    : u8
+//   TCB offset 160 → _cold_reserve[16..23] : pt_buffer_phys     : u64
+//   TCB offset 231 → _cold_reserve[87]     : dernier byte (88 bytes total)
+//   RÈGLE : index 0 de _cold_reserve correspond à l'offset absolu TCB 144.
 //
 // CONTRAINTE ABSOLUE : size_of::<TCB>() == 256 bytes — ZÉRO impact offsets hardcodés.
 //
@@ -31,6 +33,8 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::arch::x86_64::cpu::msr;
+use crate::memory::core::{AllocFlags, Frame, PhysAddr};
+use crate::memory::physical::allocator::buddy;
 use crate::scheduler::core::task::ThreadControlBlock;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,31 +224,44 @@ const OFF_PT_BUFFER_PHYS:     usize = 16;  // [160] u64
 const HANDOFF_FREEZE_REQ: u64 = 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Allocation Shadow Stack (placeholder — dépend du memory manager)
+// Allocation Shadow Stack
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Alloue `count` pages physiques contiguës pour la shadow stack.
 ///
 /// Retourne l'adresse physique de base, ou 0 si l'allocation échoue.
 ///
-/// # Note
-/// L'implémentation complète dépend du buddy allocator. En Phase 3.1,
-/// cette fonction est un placeholder qui sera relié à `phys_alloc::alloc_pages()`
-/// une fois le memory manager initialisé. Pour le boot, les shadow stacks
-/// BSP sont allouées statiquement.
 #[inline]
 fn alloc_shadow_stack_pages(count: usize) -> u64 {
-    // Phase 3.1 : allocation statique pour BSP via le memory manager.
-    // Le caller (enable_cet_for_thread) fournit l'adresse pré-allouée.
-    // Cette fonction est un fallback pour les threads créés dynamiquement.
-    let _ = count;
-    0 // TODO: brancher sur phys_alloc::alloc_pages(order, AllocFlags::ZEROED)
+    if count == 0 {
+        return 0;
+    }
+
+    let mut order = 0usize;
+    while (1usize << order) < count {
+        order += 1;
+    }
+
+    match buddy::alloc_pages(order, AllocFlags::ZEROED | AllocFlags::PIN) {
+        Ok(frame) => frame.start_address().as_u64(),
+        Err(_) => 0,
+    }
 }
 
 /// Libère les pages shadow stack d'un thread (appelé à la mort du thread).
 #[inline]
-fn free_shadow_stack_pages(_base: u64, _count: usize) {
-    // TODO: brancher sur phys_alloc::free_pages()
+fn free_shadow_stack_pages(base: u64, count: usize) {
+    if base == 0 || count == 0 {
+        return;
+    }
+
+    let mut order = 0usize;
+    while (1usize << order) < count {
+        order += 1;
+    }
+
+    let frame = Frame::containing(PhysAddr::new(base));
+    let _ = buddy::free_pages(frame, order);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

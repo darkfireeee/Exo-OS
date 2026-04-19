@@ -1,6 +1,7 @@
 // kernel/src/memory/physical/frame/emergency_pool.rs
 //
-// EmergencyPool — 64 WaitNodes pré-alloués au BOOT.
+// EmergencyPool — EMERGENCY_POOL_SIZE (≥256) WaitNodes pré-alloués au BOOT.
+// Taille canonique: memory::core::constants::EMERGENCY_POOL_SIZE = 256.
 // RÈGLE EMERGENCY-01 : Initialisé AVANT tout autre module noyau.
 //
 // Raison d'être :

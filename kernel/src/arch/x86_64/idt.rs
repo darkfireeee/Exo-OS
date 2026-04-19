@@ -352,6 +352,21 @@ pub fn get_handler_addr(vector: u8) -> Option<u64> {
     if entry.is_present() { Some(entry.handler_addr()) } else { None }
 }
 
+#[inline(always)]
+pub fn exophoenix_freeze_handler_addr() -> u64 {
+    get_handler_addr(VEC_EXOPHOENIX_FREEZE).unwrap_or(0)
+}
+
+#[inline(always)]
+pub fn exophoenix_pmc_handler_addr() -> u64 {
+    get_handler_addr(VEC_EXOPHOENIX_PMC).unwrap_or(0)
+}
+
+#[inline(always)]
+pub fn exophoenix_tlb_handler_addr() -> u64 {
+    get_handler_addr(VEC_EXOPHOENIX_TLB).unwrap_or(0)
+}
+
 // ── Instrumentation IDT ───────────────────────────────────────────────────────
 
 /// Compteurs d'interruptions par vecteur (256 entrées)

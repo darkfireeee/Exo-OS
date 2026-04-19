@@ -41,6 +41,12 @@ pub const KERNEL_B_APIC_ID: u32 = 0;
 /// Taille d'un snapshot PMC par cœur (octets).
 pub const SSR_PMC_SNAPSHOT_SIZE: usize = 64;
 
+/// Offset physique contractuel dans l'image Kernel A pour le miroir de liveness.
+///
+/// Kernel A doit écrire le nonce lu dans `SSR_LIVENESS_NONCE` à
+/// `KERNEL_LOAD_PHYS_ADDR + A_LIVENESS_MIRROR_OFFSET`.
+pub const A_LIVENESS_MIRROR_OFFSET: u64 = 0x0100;
+
 // ─── Offsets SSR ─────────────────────────────────────────────────────────────
 
 /// `[0x0000]` Magic / version SSR (u64).

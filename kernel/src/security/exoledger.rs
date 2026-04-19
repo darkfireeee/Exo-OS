@@ -360,6 +360,11 @@ fn current_actor_oid() -> [u8; 32] {
     let mut oid = [0u8; 32];
     let tcb_ptr = crate::scheduler::core::switch::current_thread_raw();
     if tcb_ptr.is_null() {
+        // Fallback early-boot: éviter un OID tout-zéro pour garder l'audit exploitable.
+        let tsc = rdtsc();
+        let cpu = crate::arch::x86_64::smp::percpu::current_cpu_id();
+        oid[0..8].copy_from_slice(&tsc.to_le_bytes());
+        oid[8..12].copy_from_slice(&cpu.to_le_bytes());
         return oid;
     }
     // SAFETY: current_thread_raw() retourne le TCB actif du CPU courant tant que

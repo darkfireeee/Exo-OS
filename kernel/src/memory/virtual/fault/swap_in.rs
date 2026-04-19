@@ -47,6 +47,12 @@ pub trait SwapInProvider: Sync {
 
 struct BackendSwapInProvider;
 
+#[repr(C)]
+struct FatPtr {
+    data: *const (),
+    vtable: *const (),
+}
+
 impl SwapInProvider for BackendSwapInProvider {
     fn read_swap_page(
         &self,
@@ -77,11 +83,11 @@ fn map_swap_error(err: SwapError) -> AllocError {
 
 pub fn register_backend_swap_provider() {
     let provider: &'static dyn SwapInProvider = &BACKEND_SWAP_IN_PROVIDER;
-    // SAFETY: conversion stable d'un fat pointer `&dyn Trait` vers (data, vtable)
-    // utilisée uniquement pour remplir le registre global du provider.
-    let (data_ptr, vtable_ptr): (*const (), *const ()) = unsafe { core::mem::transmute(provider) };
+    // SAFETY: représentation [data, vtable] des fat pointers `&dyn Trait`
+    // utilisée uniquement pour sérialiser le provider dans le registre global.
+    let fat: FatPtr = unsafe { core::mem::transmute(provider) };
     // SAFETY: `provider` est statique et reste valide pendant toute la vie du noyau.
-    unsafe { register_swap_provider(data_ptr, vtable_ptr); }
+    unsafe { register_swap_provider(fat.data, fat.vtable); }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -240,7 +246,10 @@ pub fn handle_swap_in<A: FaultAllocator>(
 
     // Reconstruire le fat pointer et appeler read_swap_page.
     // SAFETY : fat pointer enregistré par `register_swap_provider`, 'static.
-    let fat: (*const (), *const ()) = (data_ptr as *const (), vtable as *const ());
+    let fat = FatPtr {
+        data: data_ptr as *const (),
+        vtable: vtable as *const (),
+    };
     let provider: &dyn SwapInProvider = unsafe { core::mem::transmute(fat) };
 
     match provider.read_swap_page(swap_device, swap_block, frame) {

@@ -34,12 +34,19 @@ pub enum ForgeError {
 }
 
 // Hash Blake3 connu de l'image propre de A — établi au Stage 0
-// [ADAPT] : remplacer par la vraie constante ou statique du codebase
-static A_IMAGE_HASH: [u8; 32] = [0u8; 32]; // [ADAPT] hash réel ici
+// Injecté par build.rs dans OUT_DIR (fichier binaire de 32 bytes).
+static A_IMAGE_HASH: [u8; 32] =
+    *include_bytes!(concat!(env!("OUT_DIR"), "/kernel_a_image_hash.bin"));
 
 // Racine Merkle connue de .text + .rodata de A
-// [ADAPT] : remplacer par la vraie constante ou statique du codebase  
-static A_MERKLE_ROOT: [u8; 32] = [0u8; 32]; // [ADAPT] hash réel ici
+// Injecté par build.rs dans OUT_DIR (fichier binaire de 32 bytes).
+static A_MERKLE_ROOT: [u8; 32] =
+    *include_bytes!(concat!(env!("OUT_DIR"), "/kernel_a_merkle_root.bin"));
+
+#[inline(always)]
+pub fn kernel_a_hash_is_zero() -> bool {
+    A_IMAGE_HASH == [0u8; 32] || A_MERKLE_ROOT == [0u8; 32]
+}
 
 // ── Étape 1 : charger l'image de A depuis ExoFS ───────────────────────────
 
@@ -166,12 +173,81 @@ fn validate_elf_layout(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
 
 // ── Étape 4 : reset drivers Ring 1 (G3) ──────────────────────────────────
 
+const PCI_CAP_ID_EXP: u8 = 0x10;
+const PCI_CFG_ADDR: u16 = 0xCF8;
+const PCI_CFG_DATA: u16 = 0xCFC;
+
+#[inline(always)]
+unsafe fn pci_cfg_read_dword_forge(bus: u8, device: u8, func: u8, offset: u8) -> u32 {
+    let addr = 0x8000_0000u32
+        | ((bus as u32) << 16)
+        | ((device as u32) << 11)
+        | ((func as u32) << 8)
+        | ((offset as u32) & 0xFC);
+    crate::arch::x86_64::outl(PCI_CFG_ADDR, addr);
+    crate::arch::x86_64::inl(PCI_CFG_DATA)
+}
+
+#[inline(always)]
+unsafe fn pci_cfg_write_word_forge(bus: u8, device: u8, func: u8, offset: u8, value: u16) {
+    let aligned = offset & 0xFC;
+    let shift = ((offset & 0x2) * 8) as u32;
+    let addr = 0x8000_0000u32
+        | ((bus as u32) << 16)
+        | ((device as u32) << 11)
+        | ((func as u32) << 8)
+        | (aligned as u32);
+
+    crate::arch::x86_64::outl(PCI_CFG_ADDR, addr);
+    let mut dword = crate::arch::x86_64::inl(PCI_CFG_DATA);
+    dword &= !(0xFFFF << shift);
+    dword |= (value as u32) << shift;
+    crate::arch::x86_64::outl(PCI_CFG_ADDR, addr);
+    crate::arch::x86_64::outl(PCI_CFG_DATA, dword);
+}
+
+unsafe fn find_pcie_cap_in_forge(bus: u8, dev: u8, func: u8, cap_id: u8) -> Option<u8> {
+    let status = (pci_cfg_read_dword_forge(bus, dev, func, 0x04) >> 16) as u16;
+    if status & 0x10 == 0 {
+        return None;
+    }
+
+    let mut ptr = (pci_cfg_read_dword_forge(bus, dev, func, 0x34) & 0xFF) as u8;
+    let mut walked = 0usize;
+    while ptr >= 0x40 && walked < 48 {
+        let cap = pci_cfg_read_dword_forge(bus, dev, func, ptr);
+        if (cap & 0xFF) as u8 == cap_id {
+            return Some(ptr);
+        }
+        let next = ((cap >> 8) & 0xFF) as u8;
+        if next == 0 || next == ptr {
+            break;
+        }
+        ptr = next;
+        walked += 1;
+    }
+
+    None
+}
+
 fn pci_function_level_reset(bus: u8, device: u8, func: u8) -> Result<(), ForgeError> {
-    // FLR : écrire bit 15 du PCI Express Device Control Register
-    // [ADAPT] : utiliser l'API PCI existante du codebase
-    // Pattern attendu :
-    //   pci::config_write16(bus, device, func, PCI_EXP_DEVCTL, PCI_EXP_DEVCTL_BCR_FLR)
-    let _ = (bus, device, func);
+    const DEVCTL_BCR_FLR: u16 = 1 << 15;
+
+    // SAFETY: accès CF8/CFC en ring0 dans le chemin ExoPhoenix.
+    let pcie_cap = unsafe { find_pcie_cap_in_forge(bus, device, func, PCI_CAP_ID_EXP) }
+        .ok_or(ForgeError::DriverResetFailed)?;
+
+    let devctl_offset = pcie_cap + 8;
+
+    // SAFETY: lecture/écriture PCI config 16-bit sur fonction valide.
+    unsafe {
+        let raw = pci_cfg_read_dword_forge(bus, device, func, pcie_cap);
+        let current = ((raw >> 16) & 0xFFFF) as u16;
+        pci_cfg_write_word_forge(bus, device, func, devctl_offset, current | DEVCTL_BCR_FLR);
+    }
+
+    // Spéc PCIe: délai max de complétion FLR = 100ms.
+    let _ = wait_apic_timeout_us(100_000);
     Ok(())
 }
 
@@ -294,11 +370,13 @@ fn iotlb_flush_after_flr() {
 fn reload_driver_binary_from_exofs(
     bus: u8, device: u8, func: u8,
 ) -> Result<(), ForgeError> {
-    // [ADAPT] : charger le binaire du driver depuis ExoFS par son hash connu
-    // Pattern attendu :
-    //   let hash = DRIVER_HASH_TABLE.get(bus, device, func)?;
-    //   exofs::load_and_map_driver(hash)
-    let _ = (bus, device, func);
+    let bdf_key = ((bus as u32) << 16) | ((device as u32) << 8) | func as u32;
+    let blob_id = stage0::driver_blob_id(bdf_key).ok_or(ForgeError::DriverResetFailed)?;
+
+    // Vérifie la disponibilité du binaire dans ExoFS cache (phase actuelle).
+    let _data = BLOB_CACHE.get(&blob_id).ok_or(ForgeError::DriverResetFailed)?;
+
+    // TODO ExoPhoenix Phase suivante: mapper le binaire Ring1 + signaler redémarrage driver.
     Ok(())
 }
 

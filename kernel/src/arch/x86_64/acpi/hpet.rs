@@ -15,6 +15,11 @@
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 
+use crate::arch::x86_64::memory_iface::KERNEL_FAULT_ALLOC;
+use crate::memory::core::{fixmap_slot_addr, Frame, PageFlags, PhysAddr, FIXMAP_HPET};
+use crate::memory::virt::address_space::kernel::KERNEL_AS;
+use crate::memory::virt::address_space::tlb;
+
 // ── Offsets registres HPET ────────────────────────────────────────────────────
 
 #[allow(dead_code)]
@@ -179,22 +184,36 @@ pub fn hpet_available() -> bool {
 ///
 /// Retourne `true` si le HPET est maintenant opérationnel.
 pub fn init_hpet_post_memory() -> bool {
-    let phys = HPET_BASE.load(Ordering::Acquire);
-    if phys == 0 { return false; }
+    let hpet_phys = HPET_BASE.load(Ordering::Acquire);
+    if hpet_phys == 0 { return false; }
 
-    // ── 1. Mapping MMIO ──────────────────────────────────────────────────────
-    // L'identity map trampoline couvre 0–4 GiB.
-    // HPET MMIO est à 0xFED00000 (~4 GiB) → accès direct via identity map.
-    // Note: la page est une large-page 2 MiB sans PCD (cached). C'est correct
-    // du point de vue accès sur QEMU. Sur bare-metal, un remap UC doit être fait.
-    // TODO bare-metal : ajouter le remap 4K avec PAGE_FLAGS_MMIO dans le fixmap.
-    //   use crate::arch::x86_64::paging::{map_4k_page, PAGE_FLAGS_MMIO};
-    //   use crate::memory::core::layout::{fixmap_slot_addr, FIXMAP_HPET};
+    // ── 1. Mapping MMIO fixmap ───────────────────────────────────────────────
+    let hpet_page_phys = PhysAddr::new(hpet_phys & !0xFFF);
+    let hpet_page_off = hpet_phys & 0xFFF;
+    let hpet_fix_virt = fixmap_slot_addr(FIXMAP_HPET);
 
-    // ── 2. Lire GCAP_ID via l'identity map (phys = virt pour 0–4 GiB) ────────
-    // SAFETY: 0xFED00000 est dans l'identity map 0–4 GiB du trampoline.
-    //         Adresse MMIO HPET standard (ACPI spec, Intel ICH).
-    let gcap = unsafe { core::ptr::read_volatile(phys as *const u64) };
+    // MMIO: PRESENT|WRITABLE|NX|NO_CACHE|GLOBAL
+    let flags = PageFlags::PRESENT
+        | PageFlags::WRITABLE
+        | PageFlags::NO_EXECUTE
+        | PageFlags::NO_CACHE
+        | PageFlags::GLOBAL;
+
+    if KERNEL_AS.translate(hpet_fix_virt).is_none() {
+        let frame = Frame::containing(hpet_page_phys);
+        // SAFETY: mapping fixmap noyau en ring0 avec allocateur noyau valide.
+        if unsafe { KERNEL_AS.map(hpet_fix_virt, frame, flags, &KERNEL_FAULT_ALLOC) }.is_err() {
+            return false;
+        }
+        // SAFETY: invalidation locale de l'entrée fixmap nouvellement mappée.
+        unsafe { tlb::flush_single(hpet_fix_virt); }
+    }
+
+    let virt = hpet_fix_virt.as_u64().saturating_add(hpet_page_off);
+    HPET_BASE.store(virt, Ordering::Release);
+
+    // ── 2. Lire GCAP_ID via la fixmap MMIO ───────────────────────────────────
+    let gcap = unsafe { core::ptr::read_volatile(virt as *const u64) };
     let period_fs = (gcap >> HPET_CLK_PERIOD_SHIFT) as u32;
 
     // Valider la période : QEMU retourne 69841279 fs (~14.318 MHz PIT reference).
@@ -210,25 +229,25 @@ pub fn init_hpet_post_memory() -> bool {
     // ── 3. Activer le compteur HPET ──────────────────────────────────────────
     // Désactiver → reset compteur → activer.
     unsafe {
-        core::ptr::write_volatile((phys + HPET_GEN_CFG) as *mut u64, 0);
-        core::ptr::write_volatile((phys + HPET_MAIN_CTR) as *mut u64, 0);
-        core::ptr::write_volatile((phys + HPET_GEN_CFG) as *mut u64, HPET_ENABLE);
+        core::ptr::write_volatile((virt + HPET_GEN_CFG) as *mut u64, 0);
+        core::ptr::write_volatile((virt + HPET_MAIN_CTR) as *mut u64, 0);
+        core::ptr::write_volatile((virt + HPET_GEN_CFG) as *mut u64, HPET_ENABLE);
     }
 
     // ── 4. Vérifier que le compteur avance (limite d'itérations, pas TSC) ──────
     // Sur QEMU/TCG, chaque read_volatile MMIO peut prendre ~50µs.
     // 100 itérations = 5ms max sur QEMU, quelques µs sur bare-metal.
-    let counter_start = unsafe { core::ptr::read_volatile((phys + HPET_MAIN_CTR) as *const u64) };
+    let counter_start = unsafe { core::ptr::read_volatile((virt + HPET_MAIN_CTR) as *const u64) };
     let mut ok = false;
     for _ in 0u32..100 {
-        let c = unsafe { core::ptr::read_volatile((phys + HPET_MAIN_CTR) as *const u64) };
+        let c = unsafe { core::ptr::read_volatile((virt + HPET_MAIN_CTR) as *const u64) };
         if c != counter_start { ok = true; break; }
         core::hint::spin_loop();
     }
 
     if !ok {
         // HPET ne compte pas — désactiver et signaler échec
-        unsafe { core::ptr::write_volatile((phys + HPET_GEN_CFG) as *mut u64, 0); }
+        unsafe { core::ptr::write_volatile((virt + HPET_GEN_CFG) as *mut u64, 0); }
         HPET_FREQ_HZ.store(0, Ordering::Release);
         return false;
     }

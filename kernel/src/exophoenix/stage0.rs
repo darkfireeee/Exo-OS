@@ -22,6 +22,7 @@ use crate::arch::x86_64::cpu::{features::CPU_FEATURES, msr, tsc};
 use crate::arch::x86_64::smp::init::TRAMPOLINE_PAGE;
 use crate::arch::x86_64::time::sources::pit;
 use crate::exophoenix::{sentinel, PHOENIX_STATE, PhoenixState};
+use crate::fs::exofs::core::types::BlobId;
 use crate::memory::core::{AllocFlags, PageFlags, VirtAddr, PAGE_SIZE};
 use crate::memory::dma::iommu::domain::{DomainType, IOMMU_DOMAINS, PciBdf};
 use crate::memory::dma::iommu::{AMD_IOMMU, IDENTITY_DOMAIN_ID, INTEL_VTD};
@@ -204,8 +205,13 @@ const EMPTY_PCI_DEVICE: PciDeviceRecord = PciDeviceRecord {
 struct DeviceTableCell(UnsafeCell<[PciDeviceRecord; MAX_B_DEVICES]>);
 unsafe impl Sync for DeviceTableCell {}
 
+struct DriverBlobTableCell(UnsafeCell<[BlobId; MAX_B_DEVICES]>);
+unsafe impl Sync for DriverBlobTableCell {}
+
 static B_DEVICE_TABLE: DeviceTableCell =
     DeviceTableCell(UnsafeCell::new([EMPTY_PCI_DEVICE; MAX_B_DEVICES]));
+static B_DRIVER_BLOB_TABLE: DriverBlobTableCell =
+    DriverBlobTableCell(UnsafeCell::new([BlobId::ZERO; MAX_B_DEVICES]));
 static B_DEVICE_COUNT: AtomicU16 = AtomicU16::new(0);
 static B_DEVICE_BAR_COUNT: AtomicU32 = AtomicU32::new(0);
 
@@ -536,6 +542,7 @@ pub fn enumerate_pci_devices() -> usize {
                             prog_if,
                             bar_bitmap,
                         };
+                        (*B_DRIVER_BLOB_TABLE.0.get())[count] = BlobId::ZERO;
                     }
                 }
 
@@ -966,7 +973,11 @@ pub fn stage0_init_all_steps() -> Stage0Summary {
 
     // 5.5) PCI + taille pool R3
     let pci_device_count = enumerate_pci_devices();
-    let pool_r3_size = POOL_R3_SIZE_BYTES.load(Ordering::Acquire);
+    const POOL_R3_MIN_SIZE: u64 = 8 * 1024 * 1024;
+    let pool_r3_size = POOL_R3_SIZE_BYTES
+        .load(Ordering::Acquire)
+        .max(POOL_R3_MIN_SIZE);
+    POOL_R3_SIZE_BYTES.store(pool_r3_size, Ordering::Release);
 
     // 6) APIC->slot depuis MADT réel
     let apic_slots_mapped = build_apic_to_slot_from_real_madt(acpi.madt_phys);
@@ -1006,6 +1017,14 @@ pub fn stage0_init_all_steps() -> Stage0Summary {
 /// Stage0 complet (1→13): bascule Normal, SIPI one-shot, puis boucle sentinelle.
 pub fn stage0_init() -> ! {
     let _summary = stage0_init_all_steps();
+
+    if crate::exophoenix::forge::kernel_a_hash_is_zero() {
+        log::error!("FORGE: hash Kernel A non initialisé — ExoPhoenix désactivé (degraded)");
+        PHOENIX_STATE.store(PhoenixState::Degraded as u8, Ordering::Release);
+        loop {
+            unsafe { core::arch::asm!("hlt", options(nostack, nomem)); }
+        }
+    }
     
     // BUG-GX-05 FIX: synchroniser le count de cœurs dans la SSR
     let n_cores = crate::arch::x86_64::smp::init::smp_cpu_count();
@@ -1030,6 +1049,26 @@ pub fn b_device(index: usize) -> Option<PciDeviceRecord> {
     }
     // SAFETY: table statique ; écritures uniquement au boot stage0.
     Some(unsafe { (*B_DEVICE_TABLE.0.get())[index] })
+}
+
+/// Retourne le BlobId driver associé à un BDF (clé 0x00BB_DDFF), si présent.
+pub fn driver_blob_id(bdf_key: u32) -> Option<BlobId> {
+    let count = b_device_count();
+    let mut idx = 0usize;
+    while idx < count {
+        let dev = b_device(idx)?;
+        let key = ((dev.bus as u32) << 16) | ((dev.device as u32) << 8) | dev.function as u32;
+        if key == bdf_key {
+            // SAFETY: écritures uniquement au boot stage0 ; lecture en RO ensuite.
+            let blob = unsafe { (*B_DRIVER_BLOB_TABLE.0.get())[idx] };
+            if blob == BlobId::ZERO {
+                return None;
+            }
+            return Some(blob);
+        }
+        idx += 1;
+    }
+    None
 }
 
 pub fn ticks_per_us() -> u64 {

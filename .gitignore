@@ -21,6 +21,7 @@ build/kernel_stripped.elf
 *.log
 *.tmp
 /tmp/
+/rustc-ice-*.txt
 /ssh/
 .rule_dor_exit.txt
 .sixth

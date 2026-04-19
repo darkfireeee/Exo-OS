@@ -214,10 +214,99 @@ fn wait_freeze_ack_and_drain_timeout_100us(self_slot: Option<usize>) -> bool {
     }
 }
 
+const PCI_CAP_ID_MSI: u8 = 0x05;
+const PCI_CAP_ID_MSIX: u8 = 0x11;
+const PCI_CFG_ADDR: u16 = 0xCF8;
+const PCI_CFG_DATA: u16 = 0xCFC;
+
+#[inline(always)]
+unsafe fn pci_read_dword_handoff(bus: u8, dev: u8, func: u8, offset: u8) -> u32 {
+    let addr = 0x8000_0000u32
+        | ((bus as u32) << 16)
+        | ((dev as u32) << 11)
+        | ((func as u32) << 8)
+        | ((offset & 0xFC) as u32);
+    crate::arch::x86_64::outl(PCI_CFG_ADDR, addr);
+    crate::arch::x86_64::inl(PCI_CFG_DATA)
+}
+
+#[inline(always)]
+unsafe fn pci_write_word_handoff(bus: u8, dev: u8, func: u8, offset: u8, value: u16) {
+    let aligned = offset & 0xFC;
+    let shift = ((offset & 0x2) * 8) as u32;
+    let addr = 0x8000_0000u32
+        | ((bus as u32) << 16)
+        | ((dev as u32) << 11)
+        | ((func as u32) << 8)
+        | (aligned as u32);
+    crate::arch::x86_64::outl(PCI_CFG_ADDR, addr);
+    let mut dword = crate::arch::x86_64::inl(PCI_CFG_DATA);
+    dword &= !(0xFFFF << shift);
+    dword |= (value as u32) << shift;
+    crate::arch::x86_64::outl(PCI_CFG_ADDR, addr);
+    crate::arch::x86_64::outl(PCI_CFG_DATA, dword);
+}
+
+unsafe fn find_pci_cap(bus: u8, dev: u8, func: u8, cap_id: u8) -> Option<u8> {
+    let status = (pci_read_dword_handoff(bus, dev, func, 0x04) >> 16) as u16;
+    if status & 0x10 == 0 {
+        return None;
+    }
+
+    let mut ptr = (pci_read_dword_handoff(bus, dev, func, 0x34) & 0xFF) as u8;
+    let mut walked = 0usize;
+    while ptr >= 0x40 && walked < 48 {
+        let cap = pci_read_dword_handoff(bus, dev, func, ptr);
+        if (cap & 0xFF) as u8 == cap_id {
+            return Some(ptr);
+        }
+        let next = ((cap >> 8) & 0xFF) as u8;
+        if next == 0 || next == ptr {
+            break;
+        }
+        ptr = next;
+        walked += 1;
+    }
+
+    None
+}
+
 fn mask_all_msi_msix() {
-    // Best-effort temporaire : l'infra PCIe capability MSI/MSI-X globale n'est
-    // pas encore exposée ici. L'isolation est renforcée ensuite par hard revoke
-    // IOMMU + flush IOTLB avant sortie de la phase hard.
+    for i in 0..stage0::b_device_count() {
+        let Some(dev) = stage0::b_device(i) else { continue };
+
+        // SAFETY: accès PCI config space en ring0 pour les devices Stage0.
+        unsafe {
+            // MSI : bit0 du MSI Control
+            if let Some(msi_cap) = find_pci_cap(dev.bus, dev.device, dev.function, PCI_CAP_ID_MSI) {
+                let ctrl_offset = msi_cap + 2;
+                let raw = pci_read_dword_handoff(dev.bus, dev.device, dev.function, msi_cap);
+                let ctrl = ((raw >> 16) & 0xFFFF) as u16;
+                pci_write_word_handoff(
+                    dev.bus,
+                    dev.device,
+                    dev.function,
+                    ctrl_offset,
+                    ctrl & !0x0001,
+                );
+            }
+
+            // MSI-X : bit14 Function Mask du MSI-X Control
+            if let Some(msix_cap) = find_pci_cap(dev.bus, dev.device, dev.function, PCI_CAP_ID_MSIX) {
+                let ctrl_offset = msix_cap + 2;
+                let raw = pci_read_dword_handoff(dev.bus, dev.device, dev.function, msix_cap);
+                let ctrl = ((raw >> 16) & 0xFFFF) as u16;
+                pci_write_word_handoff(
+                    dev.bus,
+                    dev.device,
+                    dev.function,
+                    ctrl_offset,
+                    ctrl | 0x4000,
+                );
+            }
+        }
+    }
+
     core::sync::atomic::fence(Ordering::SeqCst);
 }
 
@@ -240,7 +329,7 @@ fn send_init_ipi_to_resistant_cores(self_slot: Option<usize>) {
         }
         // SAFETY: offset borné par slot map stage0.
         let ack = unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
-        if ack != ssr::FREEZE_ACK_DONE {
+        if ack != ssr::FREEZE_ACK_DONE && ack != ssr::TLB_ACK_DONE {
             send_init_ipi_to_apic(apic_id);
         }
     });

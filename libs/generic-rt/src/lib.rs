@@ -98,9 +98,38 @@ impl<Os> GenericTcb<Os> {
         unsafe { Some(&mut *Self::current_ptr()?) }
     }
 }
-pub fn panic_notls(_msg: impl core::fmt::Display) -> ! {
-    // TODO: actually print _msg, perhaps by having panic_notls take a `T: DebugBackend` that can
-    // propagate until called by e.g. relibc start
+
+#[inline(always)]
+fn debug_port_e9_putc(byte: u8) {
+    #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+    unsafe {
+        asm!(
+            "out dx, al",
+            in("dx") 0xE9u16,
+            in("al") byte,
+            options(nostack, nomem),
+        );
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+    let _ = byte;
+}
+
+pub fn panic_notls(msg: impl core::fmt::Display) -> ! {
+    struct E9Writer;
+    impl core::fmt::Write for E9Writer {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            for b in s.bytes() {
+                debug_port_e9_putc(b);
+            }
+            Ok(())
+        }
+    }
+
+    let mut w = E9Writer;
+    let _ = core::fmt::Write::write_str(&mut w, "PANIC: ");
+    let _ = core::fmt::write(&mut w, format_args!("{msg}"));
+    let _ = core::fmt::Write::write_str(&mut w, "\n");
+
     core::intrinsics::abort();
 }
 

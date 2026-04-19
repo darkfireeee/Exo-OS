@@ -112,5 +112,31 @@ pub fn init_kpti() {
         unsafe { core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, nomem)); }
     }
 
-    KPTI_ENABLED.store(true, Ordering::Release);
+    let cpu_id = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
+    let kernel_pml4_phys = crate::memory::virt::page_table::read_cr3();
+    let trampoline_phys = crate::memory::core::PhysAddr::new(
+        crate::arch::x86_64::smp::init::TRAMPOLINE_PHYS,
+    );
+
+    let user_shadow = unsafe {
+        crate::memory::virt::page_table::kpti_split::build_user_shadow_pml4(kernel_pml4_phys)
+    };
+
+    match user_shadow {
+        Ok(user_pml4_phys) => {
+            unsafe {
+                crate::memory::virt::page_table::kpti_split::KPTI.register_cpu(
+                    cpu_id,
+                    kernel_pml4_phys,
+                    user_pml4_phys,
+                    trampoline_phys,
+                );
+            }
+            crate::memory::virt::page_table::kpti_split::KPTI.enable();
+            KPTI_ENABLED.store(true, Ordering::Release);
+        }
+        Err(_) => {
+            log::warn!("KPTI: impossible d'allouer la user_pml4 shadow sur CPU {}", cpu_id);
+        }
+    }
 }

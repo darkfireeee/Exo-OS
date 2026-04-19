@@ -50,9 +50,10 @@ pub static CFS_WAKEUP_PREEMPT_COUNT: AtomicU64 = AtomicU64::new(0);
 ///   slice = target_period / nr_tasks  (≥ min_granularity)
 pub fn timeslice_for(tcb: &ThreadControlBlock, nr_tasks: usize, total_weight: u64) -> u64 {
     if nr_tasks == 0 { return CFS_TARGET_PERIOD_NS; }
+    let nr = nr_tasks.max(1);
     let weight = tcb.priority.cfs_weight() as u64;
     let raw_slice = if total_weight == 0 {
-        CFS_TARGET_PERIOD_NS / nr_tasks as u64
+        CFS_TARGET_PERIOD_NS / nr as u64
     } else {
         CFS_TARGET_PERIOD_NS.saturating_mul(weight) / total_weight
     };

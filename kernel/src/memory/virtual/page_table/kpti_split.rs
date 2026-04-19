@@ -8,8 +8,10 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::memory::core::PhysAddr;
+use crate::memory::core::{AllocError, AllocFlags, PhysAddr};
+use crate::memory::physical::allocator::buddy;
 use crate::memory::virt::page_table::x86_64::write_cr3;
+use crate::memory::virt::page_table::{phys_to_table_mut, phys_to_table_ref};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ÉTAT KPTI
@@ -114,6 +116,34 @@ impl KptiTable {
 
 /// Table KPTI globale.
 pub static KPTI: KptiTable = KptiTable::new();
+
+/// Construit une PML4 user shadow à partir de la PML4 kernel courante.
+///
+/// La table user conserve:
+/// - la moitié user (entrées PML4 0..255)
+/// - l'entrée PML4[511] pour les stubs noyau nécessaires au retour d'exception/syscall
+///
+/// Le reste de la moitié kernel n'est pas copié.
+///
+/// # Safety
+/// Doit être appelé en ring0 quand `kernel_pml4_phys` référence une PML4 valide.
+pub unsafe fn build_user_shadow_pml4(kernel_pml4_phys: PhysAddr) -> Result<PhysAddr, AllocError> {
+    let frame = buddy::alloc_page(AllocFlags::ZEROED)?;
+    let user_pml4_phys = frame.start_address();
+
+    let kernel_pml4 = phys_to_table_ref(kernel_pml4_phys);
+    let user_pml4 = phys_to_table_mut(user_pml4_phys);
+
+    // Copier les entrées user-space (0..255)
+    for i in 0..256 {
+        user_pml4[i] = kernel_pml4[i];
+    }
+
+    // Copier PML4[511] (stubs noyau hautes adresses / retour d'exception)
+    user_pml4[511] = kernel_pml4[511];
+
+    Ok(user_pml4_phys)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER : Vérification CPU KPTI

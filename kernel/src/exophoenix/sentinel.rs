@@ -7,7 +7,7 @@
 //! - PMC: contribution positive uniquement (S5), jamais de score négatif.
 
 use core::ptr::read_volatile;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::arch::x86_64::apic::{local_apic, x2apic};
 use crate::arch::x86_64::cpu::{features::CPU_FEATURES, msr};
@@ -37,11 +37,19 @@ const SSR_CMD_PHYS_END: u64 = SSR_CMD_PHYS_START + 64;
 /// Zone connue côté mémoire A (PULL) pour miroir du nonce SSR.
 ///
 /// Prototype actuel: offset fixe dans l'image kernel A chargée en physique.
-const A_LIVENESS_MIRROR_PHYS: u64 = KERNEL_LOAD_PHYS_ADDR + 0x280;
+const A_LIVENESS_MIRROR_PHYS: u64 =
+    KERNEL_LOAD_PHYS_ADDR + exo_phoenix_ssr::A_LIVENESS_MIRROR_OFFSET;
 
 static SMI_COUNTER: AtomicU64 = AtomicU64::new(0);
 static THREAT_COUNTER: AtomicU64 = AtomicU64::new(0);
 static LIVENESS_FALLBACK_COUNTER: AtomicU64 = AtomicU64::new(1);
+static PMC_BASELINE: [AtomicU64; 4] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+static PMC_BASELINE_SET: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 fn read_apic_timestamp_ticks() -> u32 {
@@ -247,23 +255,41 @@ fn check_liveness_nonce() -> u32 {
 }
 
 fn pmc_anomaly_score() -> u32 {
+    if !stage0::B_FEATURES.pmc_available() {
+        return 0;
+    }
+
     let base = ssr::SSR_BASE as usize + ssr::pmc_snapshot_offset(0);
-    let mut non_zero = 0u32;
+    let mut ctrs = [0u64; 4];
 
-    for idx in 0..8usize {
-        let ptr = (base + idx * 8) as *const u64;
+    // Layout snapshot PMC: [evtsel0, ctr0, evtsel1, ctr1, ...]
+    // On ne score que les compteurs CTR (offset +8 dans chaque paire de 16 bytes).
+    for i in 0..4usize {
+        let ptr = (base + i * 16 + 8) as *const u64;
         // SAFETY: lecture volatile dans SSR slot 0.
-        let v = unsafe { read_volatile(ptr) };
-        if v != 0 {
-            non_zero = non_zero.saturating_add(1);
-        }
+        ctrs[i] = unsafe { read_volatile(ptr) };
     }
 
-    if non_zero >= 6 {
-        SCORE_PMC_ANOMALY
-    } else {
-        0
+    if !PMC_BASELINE_SET.load(Ordering::Acquire) {
+        for i in 0..4 {
+            PMC_BASELINE[i].store(ctrs[i], Ordering::Relaxed);
+        }
+        PMC_BASELINE_SET.store(true, Ordering::Release);
+        return 0;
     }
+
+    const PMC_DELTA_THRESHOLD: u64 = 1_000_000;
+    let mut anomalies = 0u32;
+    for i in 0..4 {
+        let baseline = PMC_BASELINE[i].load(Ordering::Relaxed);
+        let delta = ctrs[i].wrapping_sub(baseline);
+        if delta > PMC_DELTA_THRESHOLD {
+            anomalies = anomalies.saturating_add(1);
+        }
+        PMC_BASELINE[i].store(ctrs[i], Ordering::Relaxed);
+    }
+
+    if anomalies >= 3 { SCORE_PMC_ANOMALY } else { 0 }
 }
 
 fn run_introspection_cycle() -> u32 {
