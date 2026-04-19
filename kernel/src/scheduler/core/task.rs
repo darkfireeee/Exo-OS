@@ -514,12 +514,12 @@ impl ThreadControlBlock {
 
     #[inline(always)]
     pub fn current_cpu(&self) -> CpuId {
-        CpuId(self.cpu_id.load(Ordering::Relaxed) as u32)
+        CpuId(self.cpu_id.load(Ordering::Acquire) as u32)
     }
 
     #[inline(always)]
     pub fn assign_cpu(&self, cpu: CpuId) {
-        self.cpu_id.store(cpu.0 as u64, Ordering::Relaxed);
+        self.cpu_id.store(cpu.0 as u64, Ordering::Release);
     }
 
     /// Vrai si le thread peut tourner sur le CPU donné.
