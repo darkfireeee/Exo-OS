@@ -17,7 +17,13 @@ use crate::memory::physical::allocator::slub::SLUB_CACHES;
 use crate::memory::core::types::AllocFlags;
 
 /// Nombre maximum de CPUs supportés.
-pub const MAX_CPUS: usize = 256;
+pub use crate::memory::core::constants::MAX_CPUS;
+
+/// Assertion compile-time.
+const _: () = assert!(
+    MAX_CPUS == crate::memory::core::constants::MAX_CPUS,
+    "heap cache MAX_CPUS doit correspondre à memory::core::constants::MAX_CPUS"
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATISTIQUES PAR CPU
@@ -234,8 +240,8 @@ unsafe impl Send for PerCpuCacheTable {}
 
 impl PerCpuCacheTable {
     const fn new() -> Self {
-        // Initialise les 256 caches statiquement.
-        // Rust ne permet pas encore `[expr; 256]` avec des types non-Copy complexes,
+        // Initialise les MAX_CPUS caches statiquement.
+        // Rust ne permet pas encore `[expr; MAX_CPUS]` avec des types non-Copy complexes,
         // on utilise une macro répétitive.
         PerCpuCacheTable {
             caches: {
@@ -245,7 +251,7 @@ impl PerCpuCacheTable {
                 //
                 // En Rust stable, on ne peut pas [PerCpuCache::new_uninit(); 256] si PerCpuCache
                 // n'est pas Copy. On l'initialise via MaybeUninit à l'init runtime.
-                // Pour contourner ce problème en const, on encode les 256 entrées explicitement
+                // Pour contourner ce problème en const, on encode les MAX_CPUS entrées explicitement
                 // en déléguant à un helper qui retourne le tableau.
                 //
                 // Astuce: const { ... } + unsafe transmute d'un tableau de zéros.

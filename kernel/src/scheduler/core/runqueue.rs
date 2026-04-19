@@ -241,7 +241,7 @@ impl CfsRunQueue {
         }
 
         // SAFETY: tcb est un NonNull valide — même invariant que enqueue().
-        let vr = unsafe { tcb.as_ref() }.vruntime.load(Ordering::Relaxed);
+        let vr = unsafe { tcb.as_ref() }.vruntime.load(Ordering::Acquire);
         let weight = unsafe { tcb.as_ref() }.priority.cfs_weight();
 
         // Bisection pour trouver la position d'insertion.
@@ -252,7 +252,7 @@ impl CfsRunQueue {
                 let mid = (lo + hi) / 2;
                 // SAFETY: tasks[mid] est Some car mid < self.count.
                 let mv = unsafe {
-                    self.tasks[mid].unwrap().as_ref().vruntime.load(Ordering::Relaxed)
+                    self.tasks[mid].unwrap().as_ref().vruntime.load(Ordering::Acquire)
                 };
                 if mv < vr { lo = mid + 1; } else { hi = mid; }
             }
@@ -286,6 +286,8 @@ impl CfsRunQueue {
             let new_min = unsafe {
                 self.tasks[0].unwrap().as_ref().vruntime.load(Ordering::Relaxed)
             };
+            // Intentionnel: min_vruntime est une borne approximative CFS.
+            // La cohérence stricte de décision est garantie par insert_sorted() en Acquire.
             self.min_vruntime.store(new_min, Ordering::Relaxed);
         }
 

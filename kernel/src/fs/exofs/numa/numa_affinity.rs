@@ -6,13 +6,22 @@ use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::scheduler::smp::topology::MAX_CPUS as SCHED_MAX_CPUS;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 pub const MAX_NUMA_NODES: usize = 8;
-pub const MAX_CPUS:       usize = 256;
+/// Nombre maximum de CPUs supportés par le sous-système NUMA.
+/// Doit rester identique à `scheduler::smp::topology::MAX_CPUS`.
+pub const MAX_CPUS:       usize = SCHED_MAX_CPUS;
 /// Sentinel : CPU non assigné à un nœud.
 pub const CPU_NODE_NONE:  u8    = u8::MAX;
+
+/// Assertion compile-time : cohérence avec la constante canonique scheduler.
+const _: () = assert!(
+    MAX_CPUS == crate::scheduler::smp::topology::MAX_CPUS,
+    "numa_affinity::MAX_CPUS doit correspondre à scheduler::topology::MAX_CPUS"
+);
 
 // ─── NumaNodeId ───────────────────────────────────────────────────────────────
 
@@ -335,7 +344,7 @@ mod tests {
     fn test_cpu_id_valid() {
         assert!(CpuId(0).is_valid());
         assert!(CpuId(255).is_valid());
-        assert!(!CpuId(256).is_valid());
+        assert!(!CpuId(MAX_CPUS as u32).is_valid());
     }
 
     #[test]
@@ -366,7 +375,7 @@ mod tests {
     #[test]
     fn test_register_cpu_invalid_cpu() {
         let m = AffinityMap::new_const();
-        assert!(m.register_cpu(CpuId(256), NumaNodeId(0)).is_err());
+        assert!(m.register_cpu(CpuId(MAX_CPUS as u32), NumaNodeId(0)).is_err());
     }
 
     #[test]
