@@ -621,6 +621,9 @@ pub fn sys_exo_ipc_send(endpoint: u64, msg_ptr: u64, msg_len: u64, flags: u64, _
     stat_inc(SYS_EXO_IPC_SEND);
     let len = msg_len as usize;
     if len > 65536 { return E2BIG; }
+    if let Err(errno) = enforce_direct_ipc_policy(endpoint) {
+        return errno;
+    }
     let buf = match UserBuf::validate(msg_ptr, len, 65536) {
         Ok(b) => b, Err(e) => return e.to_errno()
     };
@@ -646,9 +649,48 @@ pub fn sys_exo_ipc_call(endpoint: u64, msg_ptr: u64, msg_len: u64, resp_ptr: u64
     let send_len = msg_len as usize;
     let recv_len = resp_len as usize;
     if send_len > 65536 || recv_len > 65536 { return E2BIG; }
+    if let Err(errno) = enforce_direct_ipc_policy(endpoint) {
+        return errno;
+    }
     // ipc::rpc::call_raw câblé lors de l'intégration ipc/rpc.
     let _ = (endpoint, msg_ptr, send_len, resp_ptr, recv_len, flags);
     ENOSYS
+}
+
+#[inline(always)]
+fn exo_ipc_endpoint_pid(endpoint: u64) -> u32 {
+    (endpoint >> 32) as u32
+}
+
+fn enforce_direct_ipc_policy(endpoint: u64) -> Result<(), i64> {
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return Err(EACCES);
+    }
+
+    let dst_pid = exo_ipc_endpoint_pid(endpoint);
+    if dst_pid == 0 {
+        return Err(EINVAL);
+    }
+
+    let verdict = crate::security::check_direct_ipc(
+        crate::process::core::pid::Pid(caller_pid),
+        crate::process::core::pid::Pid(dst_pid),
+    );
+
+    match verdict {
+        crate::security::IpcPolicyResult::Allowed => Ok(()),
+        crate::security::IpcPolicyResult::Denied
+        | crate::security::IpcPolicyResult::UnknownService => {
+            crate::security::exoledger::exo_ledger_append(
+                crate::security::exoledger::ActionTag::IpcUnauthorized {
+                    src_pid: caller_pid,
+                    dst_pid,
+                },
+            );
+            Err(EACCES)
+        }
+    }
 }
 
 /// `exo_cap_create(type, rights, target_pid)` → capability handle ou errno.

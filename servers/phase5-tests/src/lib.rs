@@ -1076,13 +1076,13 @@ mod exocordon_logic {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum ServiceId {
         Init,
+        IpcBroker,
         Memory,
         Vfs,
         Crypto,
         Device,
         Network,
-        VirtioBlock,
-        VirtioNet,
+        VirtioDrivers,
     }
 
     #[derive(Debug, PartialEq, Eq)]
@@ -1128,25 +1128,24 @@ mod exocordon_logic {
         }
     }
 
-    pub static AUTHORIZED_GRAPH: [AuthEdge; 6] = [
+    pub static AUTHORIZED_GRAPH: [AuthEdge; 5] = [
         AuthEdge::new(ServiceId::Init, ServiceId::Memory, 10_000),
         AuthEdge::new(ServiceId::Init, ServiceId::Vfs, 10_000),
         AuthEdge::new(ServiceId::Vfs, ServiceId::Crypto, 50_000),
         AuthEdge::new(ServiceId::Network, ServiceId::Vfs, 100_000),
-        AuthEdge::new(ServiceId::Device, ServiceId::VirtioBlock, 1_000_000),
-        AuthEdge::new(ServiceId::Device, ServiceId::VirtioNet, 1_000_000),
+        AuthEdge::new(ServiceId::Device, ServiceId::VirtioDrivers, 1_000_000),
     ];
 
     fn map_service(id: u32) -> Option<ServiceId> {
         match id {
             1 => Some(ServiceId::Init),
-            3 => Some(ServiceId::Vfs),
-            4 => Some(ServiceId::Crypto),
-            5 => Some(ServiceId::Memory),
+            2 => Some(ServiceId::IpcBroker),
+            3 => Some(ServiceId::Memory),
+            4 => Some(ServiceId::Vfs),
+            5 => Some(ServiceId::Crypto),
             6 => Some(ServiceId::Device),
             7 => Some(ServiceId::Network),
-            9 => Some(ServiceId::VirtioBlock),
-            10 => Some(ServiceId::VirtioNet),
+            9 => Some(ServiceId::VirtioDrivers),
             _ => None,
         }
     }
@@ -1160,6 +1159,9 @@ mod exocordon_logic {
     pub fn check_ipc(src: u32, dst: u32) -> Result<(), IpcError> {
         let src = map_service(src).ok_or(IpcError::UnknownService)?;
         let dst = map_service(dst).ok_or(IpcError::UnknownService)?;
+        if src == ServiceId::IpcBroker {
+            return Ok(());
+        }
         let edge = AUTHORIZED_GRAPH
             .iter()
             .find(|edge| edge.src == src && edge.dst == dst)
@@ -1214,14 +1216,14 @@ mod tests_exocordon {
     fn test_exocordon_blocks_network_to_crypto_direct() {
         let _guard = EXOCORDON_TEST_LOCK.lock().unwrap();
         reset();
-        assert_eq!(check_ipc(7, 4), Err(IpcError::UnauthorizedPath));
+        assert_eq!(check_ipc(7, 5), Err(IpcError::UnauthorizedPath));
     }
 
     #[test]
     fn test_exocordon_allows_vfs_to_crypto() {
         let _guard = EXOCORDON_TEST_LOCK.lock().unwrap();
         reset();
-        assert_eq!(check_ipc(3, 4), Ok(()));
+        assert_eq!(check_ipc(4, 5), Ok(()));
     }
 
     #[test]
@@ -1230,12 +1232,12 @@ mod tests_exocordon {
         reset();
 
         for _ in 0..10_000 {
-            assert_eq!(check_ipc(1, 5), Ok(()));
             assert_eq!(check_ipc(1, 3), Ok(()));
+            assert_eq!(check_ipc(1, 4), Ok(()));
         }
 
-        assert_eq!(check_ipc(1, 5), Err(IpcError::QuotaExhausted));
         assert_eq!(check_ipc(1, 3), Err(IpcError::QuotaExhausted));
-        assert_eq!(check_ipc(3, 4), Ok(()), "VFS -> Crypto doit rester utilisable");
+        assert_eq!(check_ipc(1, 4), Err(IpcError::QuotaExhausted));
+        assert_eq!(check_ipc(4, 5), Ok(()), "VFS -> Crypto doit rester utilisable");
     }
 }

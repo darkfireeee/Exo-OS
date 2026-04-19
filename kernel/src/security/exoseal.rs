@@ -77,6 +77,7 @@ pub unsafe fn exoseal_boot_phase0() {
         return;
     }
 
+    configure_nic_iommu_policy();
     // SAFETY: ExoSeal phase 0 s'exécute au boot en ring 0, avant usage normal
     // des domaines PKS.
     unsafe { exoveil::exoveil_init(); }
@@ -84,7 +85,6 @@ pub unsafe fn exoseal_boot_phase0() {
     let _ = unsafe { exocage::exocage_global_enable() };
     let _ = stage0::arm_apic_watchdog(BOOT_PHASE0_WATCHDOG_MS);
     exoledger::exo_ledger_append(exoledger::ActionTag::BootEvent { step: 0 });
-    configure_nic_iommu_policy();
 }
 
 pub unsafe fn exoseal_boot_complete() {

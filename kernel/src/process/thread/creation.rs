@@ -158,8 +158,8 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
         // Afficité CPU.
         if params.attr.cpu_affinity >= 0 {
             let cpu = params.attr.cpu_affinity as u32;
-            if cpu < 64 {
-                (*thread_ptr).sched_tcb.cpu_affinity.store(1u64 << cpu, Ordering::Relaxed);
+            if cpu < MAX_CPUS as u32 {
+                (*thread_ptr).sched_tcb.set_cpu_affinity_single(CpuId(cpu));
             }
         }
 

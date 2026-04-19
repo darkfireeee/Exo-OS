@@ -23,6 +23,7 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
+use crate::memory::core::constants::MAX_CPUS;
 use crate::memory::core::types::{Frame, PhysAddr};
 use crate::memory::physical::frame::descriptor::{FrameFlags, FRAME_DESCRIPTORS};
 use crate::memory::physical::allocator::free_page;
@@ -38,8 +39,15 @@ pub const LRU_LIST_SIZE: usize = 8192;
 /// Seuil au-delà duquel on commence à dégrader des frames active → inactive.
 pub const HIGH_WATER_ACTIVE: usize = LRU_LIST_SIZE * 3 / 4;
 
-/// Nombre maximal de CPUs (doit correspondre à `crate::arch::percpu::MAX_CPUS`).
-const MAX_CPUS: usize = 512;
+/// Taille de la table RECLAIM_FLAGS.
+///
+/// Gardée au-dessus de la constante canonique pour conserver une marge hôte/test
+/// tout en forçant une relation explicite avec le MAX_CPUS réel du noyau.
+const RECLAIM_MAX_CPUS: usize = 512;
+const _: () = assert!(
+    RECLAIM_MAX_CPUS >= MAX_CPUS,
+    "RECLAIM_MAX_CPUS doit rester >= MAX_CPUS canonique"
+);
 
 /// Nombre max de frames à écrire en swap par cycle de reclaim.
 pub const MAX_SWAP_PER_PASS: usize = 64;
@@ -55,16 +63,16 @@ const PF_KSWAPD_BIT:   u32 = 1 << 1;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Table de flags per-CPU pour les threads de reclaim.
-static RECLAIM_FLAGS: [AtomicU32; MAX_CPUS] = {
+static RECLAIM_FLAGS: [AtomicU32; RECLAIM_MAX_CPUS] = {
     // SAFETY: AtomicU32::new(0) est une const.
     const INIT: AtomicU32 = AtomicU32::new(0);
-    [INIT; MAX_CPUS]
+    [INIT; RECLAIM_MAX_CPUS]
 };
 
 /// Marque le CPU courant comme étant en cours de reclaim (antirecursion).
 #[inline]
 pub fn enter_memalloc(cpu_id: usize) {
-    if cpu_id < MAX_CPUS {
+    if cpu_id < RECLAIM_MAX_CPUS {
         RECLAIM_FLAGS[cpu_id].fetch_or(PF_MEMALLOC_BIT, Ordering::Relaxed);
     }
 }
@@ -72,7 +80,7 @@ pub fn enter_memalloc(cpu_id: usize) {
 /// Enlève le marqueur PF_MEMALLOC du CPU courant.
 #[inline]
 pub fn leave_memalloc(cpu_id: usize) {
-    if cpu_id < MAX_CPUS {
+    if cpu_id < RECLAIM_MAX_CPUS {
         RECLAIM_FLAGS[cpu_id].fetch_and(!PF_MEMALLOC_BIT, Ordering::Relaxed);
     }
 }
@@ -80,7 +88,7 @@ pub fn leave_memalloc(cpu_id: usize) {
 /// Retourne `true` si le CPU courant est en train de reclaimer.
 #[inline]
 pub fn in_memalloc(cpu_id: usize) -> bool {
-    if cpu_id >= MAX_CPUS { return false; }
+    if cpu_id >= RECLAIM_MAX_CPUS { return false; }
     RECLAIM_FLAGS[cpu_id].load(Ordering::Relaxed) & PF_MEMALLOC_BIT != 0
 }
 
@@ -319,12 +327,12 @@ fn frame_clear_accessed(pfn: u64) {
 pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
     let mut result = ReclaimResult { freed: 0, swapped: 0, promoted: 0, skipped: 0 };
 
-    if cpu_id < MAX_CPUS && in_memalloc(cpu_id) {
+    if cpu_id < RECLAIM_MAX_CPUS && in_memalloc(cpu_id) {
         // Récursion détectée — ne pas reclaimer.
         return result;
     }
 
-    if cpu_id < MAX_CPUS {
+    if cpu_id < RECLAIM_MAX_CPUS {
         enter_memalloc(cpu_id);
     }
 
@@ -399,7 +407,7 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
         }
     }
 
-    if cpu_id < MAX_CPUS {
+    if cpu_id < RECLAIM_MAX_CPUS {
         leave_memalloc(cpu_id);
     }
 

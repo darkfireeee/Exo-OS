@@ -244,7 +244,10 @@ pub mod task_flags {
 //       [152] cet_flags          : u8    (bit 0=CET_EN, bit 1=IBT, bit 2=TOKEN_VALID)
 //       [153] threat_score_u8    : u8    (0..=100)
 //       [160] pt_buffer_phys     : u64   (Phase 4, LBR/PT futur)
-//       [168..232] réservé
+//       [168] affinity_hi[0]     : u64   (CPUs 64..127)
+//       [176] affinity_hi[1]     : u64   (CPUs 128..191)
+//       [184] affinity_hi[2]     : u64   (CPUs 192..255)
+//       [192..232] réservé
 //   [232] fpu_state_ptr: u64       ← ExoPhoenix OFFSET HARDCODÉ
 //   [240] rq_next:       u64       intrusive RunQueue
 //   [248] rq_prev:       u64       intrusive RunQueue
@@ -325,6 +328,12 @@ const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 9  == 153,
     "TCB ExoShield: threat_score_u8 doit être à l'offset absolu 153");
 const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 16 == 160,
     "TCB ExoShield: pt_buffer_phys doit être à l'offset absolu 160");
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 24 == 168,
+    "TCB scheduler: affinity_hi[0] doit être à l'offset absolu 168");
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 32 == 176,
+    "TCB scheduler: affinity_hi[1] doit être à l'offset absolu 176");
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 40 == 184,
+    "TCB scheduler: affinity_hi[2] doit être à l'offset absolu 184");
 const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 88 == 232,
     "TCB ExoShield: _cold_reserve se termine à l'offset 232 (fpu_state_ptr)");
 const _: () = assert!(size_of::<ThreadControlBlock>() == 256,
@@ -342,6 +351,10 @@ impl ThreadControlBlock {
         cr3_phys:         u64,
         kernel_stack_top: u64,
     ) -> Self {
+        let mut cold_reserve = [0u8; 88];
+        cold_reserve[24..32].copy_from_slice(&u64::MAX.to_le_bytes());
+        cold_reserve[32..40].copy_from_slice(&u64::MAX.to_le_bytes());
+        cold_reserve[40..48].copy_from_slice(&u64::MAX.to_le_bytes());
         Self {
             tid:           tid.0,
             kstack_ptr:    kernel_stack_top,
@@ -364,7 +377,7 @@ impl ThreadControlBlock {
             _pad2:         [0u8; 8],
             run_time_acc:  0,
             switch_count:  0,
-            _cold_reserve: [0u8; 88],
+            _cold_reserve: cold_reserve,
             fpu_state_ptr: 0,
             rq_next:       0,
             rq_prev:       0,
@@ -512,8 +525,43 @@ impl ThreadControlBlock {
     /// Vrai si le thread peut tourner sur le CPU donné.
     #[inline(always)]
     pub fn allowed_on(&self, cpu: CpuId) -> bool {
-        if cpu.0 >= 64 { return false; }
-        self.cpu_affinity.load(Ordering::Relaxed) & (1u64 << cpu.0) != 0
+        self.cpu_affinity_mask().contains(cpu)
+    }
+
+    #[inline(always)]
+    fn affinity_ext_word(&self, word_index: usize) -> &AtomicU64 {
+        let offset = match word_index {
+            1 => 24,
+            2 => 32,
+            3 => 40,
+            _ => panic!("affinity_ext_word: word_index hors plage"),
+        };
+        // SAFETY: ces offsets 8-alignés de `_cold_reserve` sont réservés aux
+        // trois mots d'affinité CPU supplémentaires du scheduler.
+        unsafe { &*(self._cold_reserve.as_ptr().add(offset) as *const AtomicU64) }
+    }
+
+    #[inline(always)]
+    pub fn cpu_affinity_mask(&self) -> crate::scheduler::smp::affinity::CpuSet {
+        crate::scheduler::smp::affinity::CpuSet::new([
+            self.cpu_affinity.load(Ordering::Acquire),
+            self.affinity_ext_word(1).load(Ordering::Acquire),
+            self.affinity_ext_word(2).load(Ordering::Acquire),
+            self.affinity_ext_word(3).load(Ordering::Acquire),
+        ])
+    }
+
+    #[inline(always)]
+    pub fn set_cpu_affinity_mask(&self, mask: crate::scheduler::smp::affinity::CpuSet) {
+        self.cpu_affinity.store(mask.bits[0], Ordering::Release);
+        self.affinity_ext_word(1).store(mask.bits[1], Ordering::Release);
+        self.affinity_ext_word(2).store(mask.bits[2], Ordering::Release);
+        self.affinity_ext_word(3).store(mask.bits[3], Ordering::Release);
+    }
+
+    #[inline(always)]
+    pub fn set_cpu_affinity_single(&self, cpu: CpuId) {
+        self.set_cpu_affinity_mask(crate::scheduler::smp::affinity::CpuSet::single(cpu));
     }
 
     /// Avance le vruntime CFS (delta_ns, weight = priority.cfs_weight()).
@@ -522,7 +570,7 @@ impl ThreadControlBlock {
         const NICE_0_LOAD: u64 = 1024;
         let weighted = if weight == 0 { delta_ns }
             else { delta_ns.saturating_mul(NICE_0_LOAD) / weight as u64 };
-        self.vruntime.fetch_add(weighted, Ordering::Relaxed);
+        self.vruntime.fetch_add(weighted, Ordering::Release);
     }
 }
 

@@ -19,7 +19,6 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::scheduler::core::task::CpuId;
 use crate::scheduler::core::runqueue;
 use super::topology::{nr_cpus, cpu_node};
-use super::affinity::cpu_allowed;
 use super::migration::request_migration;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,7 +141,7 @@ unsafe fn do_pull(dst_cpu: CpuId, src_cpu: CpuId, count: usize) {
 
         let tcb_ref = tcb.as_ref();
         // Vérifier l'affinité.
-        if !cpu_allowed(tcb_ref.cpu_affinity.load(Ordering::Relaxed), dst_cpu) {
+        if !tcb_ref.allowed_on(dst_cpu) {
             // Réinsérer sur le CPU source si l'affinité ne permet pas la migration.
             src_rq.enqueue(tcb);
             break;

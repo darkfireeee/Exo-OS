@@ -36,6 +36,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes ExoLedger
@@ -310,6 +311,7 @@ static LAST_HASH: [core::sync::atomic::AtomicU8; 32] = {
     const INIT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
     [INIT; 32]
 };
+static P0_CHAIN_LOCK: Mutex<()> = Mutex::new(());
 
 /// ExoLedger initialisé.
 static EXOLEDGER_INITIALIZED: core::sync::atomic::AtomicBool =
@@ -352,12 +354,19 @@ fn rdtsc() -> u64 {
 }
 
 /// Retourne l'ObjectId de l'acteur courant (thread actif).
-/// En Phase 3.1, on utilise le TID comme base — sera amélioré avec CapToken OID.
+/// En l'absence d'un OID canonique câblé partout, on encode `(pid, tid)` dans
+/// les 16 premiers octets pour conserver un acteur stable dans l'audit.
 fn current_actor_oid() -> [u8; 32] {
-    // TODO: extraire l'OID depuis le CapToken du thread courant.
-    // En attendant, on met le PID dans les 8 premiers bytes.
     let mut oid = [0u8; 32];
-    // oid[0..8] = pid (placeholder)
+    let tcb_ptr = crate::scheduler::core::switch::current_thread_raw();
+    if tcb_ptr.is_null() {
+        return oid;
+    }
+    // SAFETY: current_thread_raw() retourne le TCB actif du CPU courant tant que
+    // l'appelant reste dans ce contexte d'exécution.
+    let tcb = unsafe { &*tcb_ptr };
+    oid[0..8].copy_from_slice(&(tcb.pid.0 as u64).to_le_bytes());
+    oid[8..16].copy_from_slice(&tcb.tid.to_le_bytes());
     oid
 }
 
@@ -382,6 +391,7 @@ fn current_actor_oid() -> [u8; 32] {
 /// - ExoPhoenix HANDOFF pour les déclenchements de handoff
 /// - ExoSeal pour les violations de boot seal
 pub fn exo_ledger_append_p0(action: ActionTag) {
+    let _guard = P0_CHAIN_LOCK.lock();
     let idx = P0_USED.fetch_add(1, Ordering::AcqRel);
 
     if idx >= P0_ZONE_ENTRIES {

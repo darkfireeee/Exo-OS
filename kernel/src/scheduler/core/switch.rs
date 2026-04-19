@@ -31,11 +31,12 @@ use crate::arch::x86_64::{
 // Pointeur "thread courant" par CPU — mis à jour à chaque context switch
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tableau per-CPU : stocke le pointeur brut vers le TCB du thread en cours
-/// d'exécution sur chaque CPU. Mis à jour atomiquement dans `context_switch()`.
+/// Tableau cross-CPU : publie le TCB courant de chaque CPU après un switch.
 ///
-/// Utilisé par les sous-systèmes externes (IPC, process/) pour obtenir le
-/// TCB courant sans dépendance TLS/GS.
+/// Contrat :
+/// - lecture locale : préférer `percpu::read_current_tcb()` via GS:[0x20]
+/// - lecture distante : utiliser ce tableau avec la paire Release/Acquire
+/// - publication : effectuée APRÈS mise à jour des slots GS locaux
 pub static CURRENT_THREAD_PER_CPU: [AtomicUsize; MAX_CPUS] =
     [const { AtomicUsize::new(0) }; MAX_CPUS];
 
@@ -233,19 +234,20 @@ pub unsafe fn context_switch(
     // Marquer `next` comme Running.
     next.set_state(TaskState::Running);
 
-    // Mise à jour du pointeur "thread courant" per-CPU (pour IPC, process/, etc.)
-    // SAFETY: cpu() est monotone pendant l'exécution d'un thread sur ce CPU.
-    CURRENT_THREAD_PER_CPU[next.current_cpu().0 as usize]
-        .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
-
-    // Mettre à jour aussi le slot GS per-CPU courant (gs:[0x20]).
-    // Le chemin syscall/exceptions lit ce slot pour retrouver le TCB actif.
+    // Mettre à jour d'abord les slots GS locaux : c'est la source de vérité
+    // pour le CPU courant pendant les entrées syscall/exception.
     percpu::set_current_tcb(next as *mut ThreadControlBlock);
 
     // P1-5: rafraîchir le slot GS:[0x00] avec la pile kernel du thread entrant.
     // L'entrée syscall (`mov rsp, gs:[0x00]`) doit toujours pointer sur le
     // contexte kernel du thread courant pour éviter toute corruption silencieuse.
     unsafe { percpu::set_kernel_rsp(next.kstack_ptr); }
+
+    // Publier ensuite l'état `next` aux autres CPUs.
+    core::sync::atomic::fence(Ordering::SeqCst);
+    // SAFETY: cpu() est monotone pendant l'exécution d'un thread sur ce CPU.
+    CURRENT_THREAD_PER_CPU[next.current_cpu().0 as usize]
+        .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
 
     // ── Étape 6 : CR0.TS = 1 — Lazy FPU (V7-C-02) ───────────────────────────
     // Déclenche #NM si `next` utilise une instruction FPU/SSE sans l'avoir

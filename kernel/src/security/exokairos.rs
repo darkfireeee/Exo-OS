@@ -44,6 +44,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use spin::Once;
 
 use crate::security::capability::token::CapToken;
 use crate::security::capability::rights::Rights;
@@ -214,13 +215,27 @@ impl TemporalCap {
         //    fetch_sub retourne la valeur AVANT décrémentation.
         //    Si calls_left était 0, on retourne BudgetExhausted.
         //    Mais on décrémente quand même pour maintenir le temps constant.
-        let prev_calls = self.calls_left.fetch_sub(1, Ordering::AcqRel);
-        let calls_result = if prev_calls == 0 {
-            // Remettre à 0 (était 0, fetch_sub a fait 0 - 1 = underflow)
-            self.calls_left.store(0, Ordering::Release);
-            Err(CapError::BudgetExhausted)
-        } else {
-            Ok(())
+        let calls_result = {
+            let mut result = Err(CapError::BudgetExhausted);
+            let mut current = self.calls_left.load(Ordering::Acquire);
+            loop {
+                if current == 0 {
+                    break;
+                }
+                match self.calls_left.compare_exchange_weak(
+                    current,
+                    current - 1,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        result = Ok(());
+                        break;
+                    }
+                    Err(actual) => current = actual,
+                }
+            }
+            result
         };
 
         // 5. Vérifier le volume restant (lecture seule — décrémenté par le caller)
@@ -491,22 +506,7 @@ fn ct_u64_eq(a: u64, b: u64) -> u64 {
 /// Utilise la technique du bit de signe de (a - b) quand il n'y a pas d'overflow.
 #[inline(always)]
 fn ct_u64_gte(a: u64, b: u64) -> bool {
-    // Approche simplifiée : en pratique, le compilateur peut optimiser
-    // les branchements. Pour une véritable garantie constant-time,
-    // on devrait utiliser des intrinsèques ou du code assembly.
-    //
-    // En Phase 3.1, cette implémentation est suffisante — les canaux
-    // auxiliaires de timing sont atténués par KASLR + CET + IOMMU.
-    //
-    // Version constant-time correcte :
-    // Si a >= b, alors (a - b) ne déborde pas et le bit 63 de (a - b) est 0.
-    // Si a < b, alors (a - b) déborde et le bit 63 est 1.
-    let diff = a.wrapping_sub(b);
-    let sign_bit = (diff >> 63) & 1;
-    // a >= b si sign_bit == 0 ET (a >= b ou a - b ne déborde pas)
-    // Simplification : on utilise aussi le fait que si a == b, diff == 0
-    let is_eq = ct_u64_eq(a, b);
-    sign_bit == 0 || is_eq != 0
+    (a.wrapping_sub(b) >> 63) == 0
 }
 
 /// Comparaison constant-time de deux tableaux de 16 bytes.
@@ -536,18 +536,8 @@ fn compute_deadline_mac(oid: crate::security::capability::token::ObjectId, deadl
     msg[0..8].copy_from_slice(&oid.as_u64().to_le_bytes());
     msg[8..16].copy_from_slice(&deadline_tsc.to_le_bytes());
 
-    // HMAC-Blake3 : Blake3(key || message)
-    // En Phase 3.1, on utilise blake3_mac() de crypto/blake3.rs
-    // avec KERNEL_SECRET comme clé.
-    //
-    // TODO: brancher sur crypto::blake3::blake3_mac(key, msg) quand disponible.
-    // Pour l'instant, on hash (key || msg) — HMAC simplifié mais suffisant.
     let key = get_kernel_secret();
-    let mut input = [0u8; 48]; // 32 (key) + 16 (msg)
-    input[0..32].copy_from_slice(&key);
-    input[32..48].copy_from_slice(&msg);
-
-    let full_hash = crate::security::crypto::blake3::blake3_hash(&input);
+    let full_hash = crate::security::crypto::blake3::blake3_mac(&key, &msg);
 
     // Tronquer à 16 bytes (128 bits de sécurité)
     let mut mac = [0u8; 16];
@@ -557,18 +547,15 @@ fn compute_deadline_mac(oid: crate::security::capability::token::ObjectId, deadl
 
 /// KERNEL_SECRET — clé secrète initialisée par ExoSeal au boot.
 /// 32 bytes, stocké en mémoire statique (sera en PKS Credentials en Phase 3.2).
-static mut KERNEL_SECRET: [u8; 32] = [0u8; 32];
-static KERNEL_SECRET_INITIALIZED: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
+static KERNEL_SECRET: Once<[u8; 32]> = Once::new();
 
 /// Initialise le KERNEL_SECRET (appelé par ExoSeal au boot).
 ///
 /// # Safety
 /// Doit être appelé UNE SEULE FOIS au boot, avant que Kernel A ne démarre.
 /// Le secret doit provenir d'une source CSPRNG (RDRAND + ChaCha20).
-pub unsafe fn init_kernel_secret(secret: &[u8; 32]) {
-    KERNEL_SECRET.copy_from_slice(secret);
-    KERNEL_SECRET_INITIALIZED.store(true, core::sync::atomic::Ordering::Release);
+pub fn init_kernel_secret(secret: &[u8; 32]) {
+    KERNEL_SECRET.call_once(|| *secret);
 }
 
 /// Lit le KERNEL_SECRET (Ring 0 uniquement).
@@ -577,8 +564,8 @@ pub unsafe fn init_kernel_secret(secret: &[u8; 32]) {
 /// Ne doit jamais être appelé depuis Ring 1 ou Ring 3.
 /// En Phase 3.2, cette lecture sera protégée par PKS Credentials.
 fn get_kernel_secret() -> [u8; 32] {
-    // SAFETY: lecture Ring 0 uniquement, Pas de concurrent write après init.
-    unsafe { KERNEL_SECRET }
+    *KERNEL_SECRET.get()
+        .expect("KERNEL_SECRET non initialisé — exoseal_boot_phase0 doit précéder verify()")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -622,6 +609,6 @@ pub struct ExoKairosStats {
 pub fn exokairos_stats() -> ExoKairosStats {
     ExoKairosStats {
         deadline_table_used: cap_deadline_table::used_count(),
-        secret_initialized: KERNEL_SECRET_INITIALIZED.load(Ordering::Relaxed),
+        secret_initialized: KERNEL_SECRET.get().is_some(),
     }
 }

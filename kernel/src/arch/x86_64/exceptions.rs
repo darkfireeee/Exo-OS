@@ -652,11 +652,15 @@ extern "C" fn do_ctrl_protection(frame: *mut ExceptionFrame) {
     // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[21].fetch_add(1, Ordering::Relaxed);
+    crate::security::exocage::cp_handler(
+        frame as *mut ExceptionFrame as usize,
+        frame.error_code,
+    );
+
     if frame.from_userspace() {
-        // CET violation en userspace → SIGSEGV+SEGV_CPERR
         exception_return_to_user(frame);
     } else {
-        kernel_panic_exception("#CP Control Protection kernel", frame);
+        kernel_panic_exception("#CP Control Protection kernel (post ExoCage)", frame);
     }
 }
 

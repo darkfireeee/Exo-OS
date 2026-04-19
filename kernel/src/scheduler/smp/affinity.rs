@@ -16,15 +16,23 @@ const MASK_WORDS: usize = 4;  // 4 × 64 = 256 bits
 
 /// Masque de CPUs autorisés.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct CpuMask {
-    bits: [u64; MASK_WORDS],
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CpuSet {
+    pub(crate) bits: [u64; MASK_WORDS],
 }
 
-impl CpuMask {
+impl CpuSet {
+    pub const EMPTY: Self = Self { bits: [0; MASK_WORDS] };
+    pub const ALL: Self = Self { bits: [u64::MAX; MASK_WORDS] };
+
     /// Masque vide.
     pub const fn empty() -> Self {
-        Self { bits: [0; MASK_WORDS] }
+        Self::EMPTY
+    }
+
+    #[inline(always)]
+    pub const fn new(bits: [u64; MASK_WORDS]) -> Self {
+        Self { bits }
     }
 
     /// Masque avec tous les CPUs actifs (jusqu'à `nr_cpus()`).
@@ -54,6 +62,11 @@ impl CpuMask {
 
     /// Retourne `true` si le CPU `cpu` est dans le masque.
     pub fn test(&self, cpu: CpuId) -> bool {
+        self.contains(cpu)
+    }
+
+    #[inline(always)]
+    pub fn contains(&self, cpu: CpuId) -> bool {
         let cpu = cpu.0 as usize;
         if cpu < MAX_CPUS { self.bits[cpu / 64] & (1u64 << (cpu % 64)) != 0 }
         else { false }
@@ -61,6 +74,10 @@ impl CpuMask {
 
     /// Retourne le premier CPU du masque, ou `None` si le masque est vide.
     pub fn first(&self) -> Option<CpuId> {
+        self.first_cpu()
+    }
+
+    pub fn first_cpu(&self) -> Option<CpuId> {
         for (word_idx, &word) in self.bits.iter().enumerate() {
             if word != 0 {
                 return Some(CpuId((word_idx * 64 + word.trailing_zeros() as usize) as u32));
@@ -85,39 +102,38 @@ impl CpuMask {
     pub fn is_empty(&self) -> bool {
         self.bits.iter().all(|&w| w == 0)
     }
+
+    /// Retourne un masque avec un seul CPU autorisé.
+    pub fn single(cpu: CpuId) -> Self {
+        let mut out = Self::EMPTY;
+        out.set(cpu);
+        out
+    }
 }
+
+pub type CpuMask = CpuSet;
+
+const _: () = assert!(core::mem::size_of::<CpuSet>() == 32, "CpuSet doit faire 32 bytes");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vérification d'affinité
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne `true` si le thread peut tourner sur `cpu`.
-pub fn cpu_allowed(affinity: u64, cpu: CpuId) -> bool {
-    // Le champ `affinity` du TCB est un masque 64 bits (CPUs 0–63).
-    if (cpu.0 as usize) < 64 {
-        affinity & (1u64 << cpu.0) != 0
-    } else {
-        // Pour les CPUs > 63, toujours autorisé (compatibilité).
-        true
-    }
+/// Alias de compatibilité pour les call-sites migrés progressivement.
+pub fn cpu_allowed(affinity: &CpuSet, cpu: CpuId) -> bool {
+    affinity.contains(cpu)
 }
 
-/// Construit le masque `u64` d'affinité (CPUs 0–63 uniquement).
-pub fn affinity_mask_from_cpu_mask(mask: &CpuMask) -> u64 {
-    mask.bits[0]
+/// Retourne un masque d'affinité stable depuis un CpuMask.
+pub fn affinity_mask_from_cpu_mask(mask: &CpuMask) -> CpuSet {
+    *mask
 }
 
 /// Vérifie qu'au moins un CPU actif est dans l'affinité du thread.
 /// Retourne l'affinité inchangée si valide, ou un masque avec TOUS les CPUs
 /// si le masque résultant est vide (protection anti-deadlock).
-pub fn sanitize_affinity(affinity: u64) -> u64 {
-    if affinity == 0 {
-        // Masque invalide → autorise tous les CPUs en dessous de nr_cpus().
-        let n = nr_cpus().min(64);
-        if n == 64 { u64::MAX } else { (1u64 << n) - 1 }
-    } else {
-        affinity
-    }
+pub fn sanitize_affinity(affinity: CpuSet) -> CpuSet {
+    if affinity.is_empty() { CpuSet::full() } else { affinity }
 }
 
 /// Métriques.

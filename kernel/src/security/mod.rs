@@ -42,6 +42,7 @@ pub mod exoveil;
 pub mod exoledger;
 pub mod exokairos;
 pub mod exoseal;
+pub mod ipc_policy;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -254,6 +255,8 @@ pub use exoseal::{
     nic_dma_window,
 };
 
+pub use ipc_policy::{check_direct_ipc, IpcPolicyResult};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Initialisation orchestrée
 // ─────────────────────────────────────────────────────────────────────────────
@@ -316,9 +319,7 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
     {
         let mut secret = [0u8; 32];
         let _ = rng_fill(&mut secret);
-        // SAFETY: security_init() est appelé une seule fois au boot,
-        //         avant que Kernel A ne soit actif.
-        unsafe { exokairos::init_kernel_secret(&secret); }
+        exokairos::init_kernel_secret(&secret);
     }
 
     // ── 11. ExoSeal complete — PKS ops normales + SECURITY_READY + watchdog ──

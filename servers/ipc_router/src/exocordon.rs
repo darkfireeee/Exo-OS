@@ -13,14 +13,14 @@ pub enum IpcError {
 #[repr(u8)]
 enum ServiceId {
     Init = 1,
-    Memory = 2,
-    Vfs = 3,
-    Crypto = 4,
-    Device = 5,
-    Network = 6,
-    Scheduler = 7,
-    VirtioBlock = 8,
-    VirtioNet = 9,
+    IpcBroker = 2,
+    Memory = 3,
+    Vfs = 4,
+    Crypto = 5,
+    Device = 6,
+    Network = 7,
+    Scheduler = 8,
+    VirtioDrivers = 9,
     ExoShield = 10,
 }
 
@@ -63,27 +63,34 @@ impl AuthEdge {
     }
 }
 
-static AUTHORIZED_GRAPH: [AuthEdge; 6] = [
+static AUTHORIZED_GRAPH: [AuthEdge; 5] = [
     AuthEdge::new(ServiceId::Init, ServiceId::Memory, 4, 10_000),
     AuthEdge::new(ServiceId::Init, ServiceId::Vfs, 4, 10_000),
     AuthEdge::new(ServiceId::Vfs, ServiceId::Crypto, 2, 50_000),
     AuthEdge::new(ServiceId::Network, ServiceId::Vfs, 2, 100_000),
-    AuthEdge::new(ServiceId::Device, ServiceId::VirtioBlock, 1, 1_000_000),
-    AuthEdge::new(ServiceId::Device, ServiceId::VirtioNet, 1, 1_000_000),
+    AuthEdge::new(ServiceId::Device, ServiceId::VirtioDrivers, 1, 1_000_000),
 ];
+
+const _: () = assert!(
+    ServiceId::ExoShield as u8 == 10,
+    "ExoShield doit rester le dernier service Ring1 actuel"
+);
+
+static LAST_REFILL_TSC: AtomicU64 = AtomicU64::new(0);
+const REFILL_INTERVAL_TSC: u64 = 3_000_000_000;
 
 fn service_id_of(raw: Pid) -> Option<ServiceId> {
     match raw {
         1 => Some(ServiceId::Init),
-        3 => Some(ServiceId::Vfs),
-        4 => Some(ServiceId::Crypto),
-        5 => Some(ServiceId::Memory),
+        2 => Some(ServiceId::IpcBroker),
+        3 => Some(ServiceId::Memory),
+        4 => Some(ServiceId::Vfs),
+        5 => Some(ServiceId::Crypto),
         6 => Some(ServiceId::Device),
         7 => Some(ServiceId::Network),
         8 => Some(ServiceId::Scheduler),
-        9 => Some(ServiceId::VirtioBlock),
-        10 => Some(ServiceId::VirtioNet),
-        11 => Some(ServiceId::ExoShield),
+        9 => Some(ServiceId::VirtioDrivers),
+        10 => Some(ServiceId::ExoShield),
         _ => None,
     }
 }
@@ -94,16 +101,58 @@ fn find_edge(src: ServiceId, dst: ServiceId) -> Option<&'static AuthEdge> {
         .find(|edge| edge.src == src && edge.dst == dst && edge.depth_max != 0)
 }
 
+#[inline(always)]
+fn read_tsc() -> u64 {
+    let lo: u32;
+    let hi: u32;
+    // SAFETY: lecture TSC locale, sans effet de bord mémoire.
+    unsafe {
+        core::arch::asm!(
+            "rdtsc",
+            out("eax") lo,
+            out("edx") hi,
+            options(nostack, nomem),
+        );
+    }
+    ((hi as u64) << 32) | lo as u64
+}
+
+fn maybe_refill_quotas() {
+    let now = read_tsc();
+    let last = LAST_REFILL_TSC.load(Ordering::Relaxed);
+    if now.wrapping_sub(last) < REFILL_INTERVAL_TSC {
+        return;
+    }
+    if LAST_REFILL_TSC
+        .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+
+    for edge in AUTHORIZED_GRAPH.iter() {
+        let current = edge.quota_left.load(Ordering::Acquire);
+        let refill = (edge.quota_default / 10).max(1);
+        let new_val = current.saturating_add(refill).min(edge.quota_default);
+        edge.quota_left.store(new_val, Ordering::Release);
+    }
+}
+
 pub fn check_ipc(src: Pid, dst: Pid) -> Result<(), IpcError> {
+    maybe_refill_quotas();
     let src = service_id_of(src).ok_or(IpcError::UnknownService)?;
     let dst = service_id_of(dst).ok_or(IpcError::UnknownService)?;
+    if src == ServiceId::IpcBroker {
+        return Ok(());
+    }
     let edge = find_edge(src, dst).ok_or(IpcError::UnauthorizedPath)?;
     edge.consume_quota()
 }
 
 #[cfg(test)]
 pub fn reset_quotas() {
-    for edge in AUTHORIZED_GRAPH {
+    LAST_REFILL_TSC.store(0, Ordering::Release);
+    for edge in AUTHORIZED_GRAPH.iter() {
         edge.quota_left.store(edge.quota_default, Ordering::Release);
     }
 }

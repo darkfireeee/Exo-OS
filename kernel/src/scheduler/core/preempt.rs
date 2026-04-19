@@ -231,7 +231,7 @@ pub fn init() {
 /// Utilisé pour vérifier les invariants dans le scheduler.
 #[inline(always)]
 pub fn assert_preempt_disabled() {
-    debug_assert!(
+    assert!(
         PreemptGuard::is_preempted_disabled(),
         "Assertion préemption désactivée : ÉCHEC — appel hors section protégée"
     );
@@ -240,7 +240,7 @@ pub fn assert_preempt_disabled() {
 /// Panique si la préemption est désactivée (pour vérifier dormance autorisée).
 #[inline(always)]
 pub fn assert_preempt_enabled() {
-    debug_assert!(
+    assert!(
         !PreemptGuard::is_preempted_disabled(),
         "Assertion préemption activée : ÉCHEC — can_sleep() hors section dormable"
     );

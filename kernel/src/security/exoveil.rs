@@ -300,6 +300,7 @@ pub unsafe fn exoveil_init() {
         "pop rbx",
         out("ecx") ecx,
         lateout("eax") _,
+        lateout("edx") _,
     );
     let pks_supported = ecx & (1 << 6) != 0;
 

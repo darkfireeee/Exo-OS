@@ -115,12 +115,9 @@ pub fn verify(
     token:           CapToken,
     required_rights: Rights,
 ) -> Result<(), CapError> {
-    // 1. Rejet immédiat : token structurellement invalide (ObjectId::INVALID).
-    //    Ce rejet ne révèle aucune information sur la table.
-    if token.is_invalid() {
-        stat_denied();
-        return Err(CapError::InvalidToken);
-    }
+    // 1. Le cas "token invalide" suit désormais le même chemin que les autres
+    //    refus pour uniformiser le timing (CAP-05).
+    let token_invalid = token.is_invalid();
 
     // 2. Lookup — chemin identique qu'on trouve ou non l'entrée.
     let entry_opt = table.get(token.object_id());
@@ -130,13 +127,15 @@ pub fn verify(
     //    Rights::empty() ne satisfera jamais contains(required) si required != 0.
     let stored_gen    = entry_opt.as_ref().map(|e| e.generation).unwrap_or(u32::MAX);
     let stored_rights = entry_opt.as_ref().map(|e| e.rights).unwrap_or(Rights::empty());
+    let entry_found   = entry_opt.is_some();
 
     // 4. Les deux comparaisons sont TOUJOURS effectuées — pas d'évaluation courte.
     let gen_ok    = stored_gen == token.generation();
     let rights_ok = stored_rights.contains(required_rights);
+    let access_ok = entry_found & gen_ok & rights_ok;
 
     // 5. Résultat unifié — Denied dans TOUS les cas d'échec (CAP-05).
-    if !gen_ok || !rights_ok || entry_opt.is_none() {
+    if token_invalid | !access_ok {
         stat_denied();
         return Err(CapError::Denied);
     }

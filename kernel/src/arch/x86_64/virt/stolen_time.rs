@@ -10,6 +10,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use super::super::cpu::msr;
+use crate::scheduler::smp::topology::MAX_CPUS;
 
 /// MSR KVM Steal Time
 const MSR_KVM_STEAL_TIME: u32 = 0x4b564d03;
@@ -33,16 +34,28 @@ impl KvmStealTime {
     }
 }
 
-/// Per-CPU steal time structures (une par CPU)
-const MAX_CPUS: usize = 512;
+/// Taille de la table stolen-time KVM.
+///
+/// Gardée au-dessus de la valeur canonique du scheduler pour conserver une
+/// marge d'enregistrement côté hyperviseur sans désaligner silencieusement
+/// l'architecture SMP du noyau.
+const STOLEN_TIME_MAX_CPUS: usize = 512;
+const _: () = assert!(
+    STOLEN_TIME_MAX_CPUS >= MAX_CPUS,
+    "STOLEN_TIME_MAX_CPUS doit rester >= MAX_CPUS canonique"
+);
 
 #[repr(align(64))]
-struct StealTimeTable([KvmStealTime; MAX_CPUS]);
+struct StealTimeTable([KvmStealTime; STOLEN_TIME_MAX_CPUS]);
 unsafe impl Sync for StealTimeTable {}
 
 static STEAL_TIME_TABLE: StealTimeTable = StealTimeTable(
     // SAFETY: KvmStealTime est composé de types primitifs, tous-zéros est valide
-    unsafe { core::mem::transmute([0u8; core::mem::size_of::<[KvmStealTime; MAX_CPUS]>()]) }
+    unsafe {
+        core::mem::transmute(
+            [0u8; core::mem::size_of::<[KvmStealTime; STOLEN_TIME_MAX_CPUS]>()]
+        )
+    }
 );
 
 static TOTAL_STOLEN_NS: AtomicU64 = AtomicU64::new(0);
@@ -56,7 +69,7 @@ static LAST_STEAL_NS:   AtomicU64 = AtomicU64::new(0);
 pub fn init_steal_time_for_cpu(cpu_id: u32) {
     use super::detect::{hypervisor_type, HypervisorType, kvm_has_steal_time};
     if !(hypervisor_type() == HypervisorType::Kvm && kvm_has_steal_time()) { return; }
-    if cpu_id as usize >= MAX_CPUS { return; }
+    if cpu_id as usize >= STOLEN_TIME_MAX_CPUS { return; }
 
     let phys_addr = &STEAL_TIME_TABLE.0[cpu_id as usize] as *const KvmStealTime as u64;
     // L'adresse doit être physique et alignée 64 octets (garantie par #[repr(align(64))])
@@ -70,7 +83,7 @@ pub fn init_steal_time_for_cpu(cpu_id: u32) {
 ///
 /// Utilise une lecture atomique stable (version field pair = données cohérentes).
 pub fn read_steal_ns(cpu_id: u32) -> u64 {
-    if cpu_id as usize >= MAX_CPUS { return 0; }
+    if cpu_id as usize >= STOLEN_TIME_MAX_CPUS { return 0; }
     let st = &STEAL_TIME_TABLE.0[cpu_id as usize];
 
     // Lire version paire (host a terminé l'update)
@@ -104,7 +117,7 @@ pub fn stolen_time_ns() -> u64 {
 
 /// Retourne `true` si le vCPU courant est actuellement préempté par l'hyperviseur
 pub fn is_preempted(cpu_id: u32) -> bool {
-    if cpu_id as usize >= MAX_CPUS { return false; }
+    if cpu_id as usize >= STOLEN_TIME_MAX_CPUS { return false; }
     // SAFETY: lecture volatile du champ preempted
     unsafe { core::ptr::read_volatile(&STEAL_TIME_TABLE.0[cpu_id as usize].preempted) != 0 }
 }
