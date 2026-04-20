@@ -21,6 +21,8 @@
 //! - RECUR-01: aucune récursivité.
 
 use alloc::vec::Vec;
+use hkdf::Hkdf;
+use sha2::Sha256;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -28,11 +30,9 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::security::crypto::{
-    hkdf_extract,       // hkdf_extract(salt, ikm) → [u8; 32]
-    hkdf_expand_32,     // hkdf_expand_32(prk, info) → Result<DerivedKey32>
+    hkdf_extract as security_hkdf_extract,
     blake3_kdf,         // blake3_kdf(context, material) → DerivedKey32
     derive_fs_block_key, // derive_fs_block_key(vk, block_id) → DerivedKey32
-    KdfError,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -133,7 +133,8 @@ impl KeyDerivation {
     ///
     /// Délègue à `security::crypto::kdf::hkdf_extract` (BLAKE3).
     pub fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; 32] {
-        hkdf_extract(salt, ikm)
+        let (prk, _) = security_hkdf_extract(Some(salt), ikm);
+        *prk.as_bytes()
     }
 
     /// HKDF-Expand : étend la PRK en `length` octets.
@@ -144,21 +145,13 @@ impl KeyDerivation {
         if length > HKDF_MAX_OUTPUT { return Err(ExofsError::InvalidArgument); }
 
         let mut out = Vec::new();
-        out.try_reserve(length).map_err(|_| ExofsError::OutOfMemory)?;
+        out.try_reserve(length).map_err(|_| ExofsError::NoMemory)?;
+        out.resize(length, 0u8);
 
-        // Utiliser des passes HKDF-Expand avec BLAKE3
-        // Chaque passe produit 32 octets : T(i) = BLAKE3-MAC(prk, T(i-1) || info || i)
-        let n_blocks = length.div_ceil(32);
-        let mut ti = [0u8; 32];
-        for i in 1..=n_blocks {
-            let mut hasher = blake3::Hasher::new_keyed(prk);
-            if i > 1 { hasher.update(&ti); }
-            hasher.update(info);
-            hasher.update(&[i as u8]);
-            ti.copy_from_slice(hasher.finalize().as_bytes());
-            let take = (length - out.len()).min(32);
-            out.extend_from_slice(&ti[..take]);
-        }
+        let hkdf = Hkdf::<Sha256>::from_prk(prk)
+            .map_err(|_| ExofsError::InvalidArgument)?;
+        hkdf.expand(info, &mut out)
+            .map_err(|_| ExofsError::InvalidArgument)?;
         Ok(out)
     }
 
@@ -178,7 +171,7 @@ impl KeyDerivation {
     pub fn derive_key(secret: &[u8], salt: &[u8], context: &[u8]) -> ExofsResult<DerivedKey> {
         // Matériel = secret || salt
         let mut material = Vec::new();
-        material.try_reserve(secret.len() + salt.len()).map_err(|_| ExofsError::OutOfMemory)?;
+        material.try_reserve(secret.len() + salt.len()).map_err(|_| ExofsError::NoMemory)?;
         material.extend_from_slice(secret);
         material.extend_from_slice(salt);
 
@@ -205,7 +198,7 @@ impl KeyDerivation {
         infos:  &[&[u8]],
     ) -> ExofsResult<Vec<DerivedKey>> {
         let mut result = Vec::new();
-        result.try_reserve(infos.len()).map_err(|_| ExofsError::OutOfMemory)?;
+        result.try_reserve(infos.len()).map_err(|_| ExofsError::NoMemory)?;
         for info in infos {
             result.push(Self::derive_key(secret, salt, info)?);
         }
@@ -238,7 +231,7 @@ impl KeyDerivation {
             iterations as u32, // t_cost
             4,                 // p_cost
             Some(32),          // output length
-        ).map_err(|_| ExofsError::CryptoError)?;
+        ).map_err(|_| ExofsError::InvalidArgument)?;
 
         let argon2 = argon2::Argon2::new(
             argon2::Algorithm::Argon2id,
@@ -247,8 +240,15 @@ impl KeyDerivation {
         );
 
         let mut output = [0u8; 32];
-        argon2.hash_password_into(passphrase, salt, &mut output)
-            .map_err(|_| ExofsError::CryptoError)?;
+        let mut memory = Vec::new();
+        memory
+            .try_reserve(argon2.params().block_count())
+            .map_err(|_| ExofsError::NoMemory)?;
+        memory.resize_with(argon2.params().block_count(), argon2::Block::default);
+
+        argon2
+            .hash_password_into_with_memory(passphrase, salt, &mut output, memory.as_mut_slice())
+            .map_err(|_| ExofsError::InvalidArgument)?;
 
         Ok(DerivedKey::from_bytes(output))
     }
@@ -278,7 +278,8 @@ impl KeyDerivation {
     ///
     /// Utilise `security::crypto::kdf::derive_fs_block_key` avec blob_id comme index.
     pub fn derive_object_key(volume_key: &[u8; 32], blob_id: u64) -> ExofsResult<DerivedKey> {
-        let dk = derive_fs_block_key(volume_key, blob_id);
+        let dk = derive_fs_block_key(volume_key, blob_id)
+            .map_err(|_| ExofsError::InvalidArgument)?;
         Ok(DerivedKey::from_bytes(*dk.as_bytes()))
     }
 

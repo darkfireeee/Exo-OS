@@ -308,6 +308,10 @@ pub unsafe fn enable_cet_for_thread(tcb: &mut ThreadControlBlock) -> Result<(), 
         return Err(ExoCageError::NotGloballyEnabled);
     }
 
+    if tcb_read_cold_u8(tcb, OFF_CET_FLAGS) & CET_FLAG_ENABLED != 0 {
+        return Ok(());
+    }
+
     // 3. Allouer 4 pages pour la shadow stack
     let ss_base = alloc_shadow_stack_pages(SHADOW_STACK_PAGES);
     if ss_base == 0 {
@@ -343,6 +347,7 @@ pub unsafe fn enable_cet_for_thread(tcb: &mut ThreadControlBlock) -> Result<(), 
     //    SAFETY: MSR existants, CET globalement activé, ring 0 uniquement.
     msr::write_msr(MSR_IA32_PL0_SSP, token_addr as u64);
     msr::write_msr(MSR_IA32_PL1_SSP, token_addr as u64);
+    tcb.set_pl0_ssp(token_addr as u64);
 
     // 7. Sauvegarder dans le TCB _cold_reserve
     //    [144] shadow_stack_token : u64
@@ -393,6 +398,7 @@ pub unsafe fn disable_cet_for_thread(tcb: &mut ThreadControlBlock) {
     }
 
     // Effacer les champs ExoShield dans le TCB
+    tcb.set_pl0_ssp(0);
     tcb_write_cold_u64(tcb, OFF_SHADOW_STACK_TOKEN, 0);
     tcb_write_cold_u8(tcb, OFF_CET_FLAGS, 0);
     tcb_write_cold_u8(tcb, OFF_THREAT_SCORE, 0);

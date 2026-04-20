@@ -211,7 +211,7 @@ pub fn do_execve(
     
     let stack_top  = elf_result.initial_stack_top;
     let stack_base = (stack_top.saturating_sub(DEFAULT_STACK_SIZE)) & !(PAGE_SIZE_U64 - 1);
-    let stack_size = stack_top.saturating_sub(stack_base) as usize;
+    let stack_size = stack_top.saturating_sub(stack_base);
     
     thread.addresses = ThreadAddress {
         stack_base,                           // CORRECTION P2-03

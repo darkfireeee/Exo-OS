@@ -583,7 +583,7 @@ pub fn aes_gcm_open(
 
     // 3. Vérifier le tag AVANT de déchiffrer
     let expected_tag = compute_gcm_tag(&cipher, h, j0, aad, ciphertext);
-    if !expected_tag.ct_eq(tag).into() {
+    if !bool::from(expected_tag.ct_eq(tag)) {
         // Nettoyer les données sensibles
         h_block = [0u8; 16];
         return Err(AesGcmError::AuthenticationFailed);

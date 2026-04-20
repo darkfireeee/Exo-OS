@@ -24,6 +24,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::syscall::numbers::*;
+use crate::syscall::errno::{EIO, ETIMEDOUT};
 use crate::syscall::validation::{
     UserBuf,
     read_user_path, read_user_typed,
@@ -235,8 +236,9 @@ pub fn sys_lseek(fd: u64, offset: u64, whence: u64, _a4: u64, _a5: u64, _a6: u64
     stat_inc(SYS_LSEEK);
     let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
     if whence > 2 { return EINVAL; }
-    let _ = (fd, offset, whence);
-    ENOSYS
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_lseek(fd as u32, offset as i64, whence as u32, pid))
 }
 
 /// `openat(dirfd, path, flags, mode)`.
@@ -625,12 +627,106 @@ pub fn sys_futex(uaddr: u64, op: u64, val: u64, timeout: u64, uaddr2: u64, val3:
 // Handlers IPC natifs Exo-OS (bloc 300+)
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[inline]
+fn ipc_error_to_errno(err: crate::ipc::core::IpcError) -> i64 {
+    match err {
+        crate::ipc::core::IpcError::QueueEmpty
+        | crate::ipc::core::IpcError::QueueFull
+        | crate::ipc::core::IpcError::WouldBlock
+        | crate::ipc::core::IpcError::Retry => EAGAIN,
+        crate::ipc::core::IpcError::Timeout => ETIMEDOUT,
+        crate::ipc::core::IpcError::PermissionDenied => EACCES,
+        crate::ipc::core::IpcError::MessageTooLarge => E2BIG,
+        crate::ipc::core::IpcError::ResourceExhausted
+        | crate::ipc::core::IpcError::OutOfResources
+        | crate::ipc::core::IpcError::ShmPoolFull => ENOMEM,
+        crate::ipc::core::IpcError::EndpointNotFound
+        | crate::ipc::core::IpcError::NotFound => ENOENT,
+        crate::ipc::core::IpcError::InvalidParam
+        | crate::ipc::core::IpcError::InvalidArgument
+        | crate::ipc::core::IpcError::InvalidEndpoint
+        | crate::ipc::core::IpcError::NullEndpoint
+        | crate::ipc::core::IpcError::Invalid => EINVAL,
+        _ => EIO,
+    }
+}
+
+#[inline]
+fn ipc_status_to_errno(code: u64) -> i64 {
+    match code as u32 {
+        x if x == crate::ipc::core::IpcError::WouldBlock as u32
+            || x == crate::ipc::core::IpcError::QueueEmpty as u32
+            || x == crate::ipc::core::IpcError::QueueFull as u32
+            || x == crate::ipc::core::IpcError::Retry as u32 => EAGAIN,
+        x if x == crate::ipc::core::IpcError::Timeout as u32 => ETIMEDOUT,
+        x if x == crate::ipc::core::IpcError::PermissionDenied as u32 => EACCES,
+        x if x == crate::ipc::core::IpcError::MessageTooLarge as u32 => E2BIG,
+        x if x == crate::ipc::core::IpcError::ResourceExhausted as u32
+            || x == crate::ipc::core::IpcError::OutOfResources as u32
+            || x == crate::ipc::core::IpcError::ShmPoolFull as u32 => ENOMEM,
+        x if x == crate::ipc::core::IpcError::EndpointNotFound as u32
+            || x == crate::ipc::core::IpcError::NotFound as u32 => ENOENT,
+        x if x == crate::ipc::core::IpcError::InvalidParam as u32
+            || x == crate::ipc::core::IpcError::InvalidArgument as u32
+            || x == crate::ipc::core::IpcError::InvalidEndpoint as u32
+            || x == crate::ipc::core::IpcError::NullEndpoint as u32
+            || x == crate::ipc::core::IpcError::Invalid as u32 => EINVAL,
+        _ => EIO,
+    }
+}
+
+fn read_endpoint_name(name_ptr: u64, name_len: u64) -> Result<([u8; crate::ipc::core::MAX_ENDPOINT_NAME_LEN], usize), i64> {
+    let len = name_len as usize;
+    if len == 0 || len >= crate::ipc::core::MAX_ENDPOINT_NAME_LEN {
+        return Err(EINVAL);
+    }
+
+    let name_buf = match UserBuf::validate(name_ptr, len, crate::ipc::core::MAX_ENDPOINT_NAME_LEN) {
+        Ok(buf) => buf,
+        Err(e) => return Err(e.to_errno()),
+    };
+
+    let mut name = [0u8; crate::ipc::core::MAX_ENDPOINT_NAME_LEN];
+    if let Err(err) = name_buf.read_into(&mut name[..len]) {
+        return Err(err.to_errno());
+    }
+    Ok((name, len))
+}
+
+fn register_named_endpoint_for_pid(pid: u32, name: &[u8], requested_local_ep: u32) -> Result<u64, i64> {
+    if pid == 0 || name.is_empty() {
+        return Err(EINVAL);
+    }
+    if crate::ipc::endpoint::lookup_endpoint(name).is_some() {
+        return Err(EEXIST);
+    }
+
+    let local_ep = if requested_local_ep == 0 {
+        crate::ipc::core::alloc_endpoint_id().get() as u32
+    } else {
+        requested_local_ep
+    };
+    let composite = ((pid as u64) << 32) | local_ep as u64;
+    let endpoint = crate::ipc::core::EndpointId::new(composite).ok_or(EINVAL)?;
+    crate::ipc::endpoint::register_endpoint(name, endpoint)
+        .map_err(ipc_error_to_errno)?;
+    Ok(composite)
+}
+
+fn unregister_named_endpoint(name: &[u8]) -> Result<(), i64> {
+    if crate::ipc::endpoint::unregister_endpoint(name) {
+        Ok(())
+    } else {
+        Err(ENOENT)
+    }
+}
+
 /// `exo_ipc_send(endpoint, msg_ptr, msg_len, flags)`.
 pub fn sys_exo_ipc_send(endpoint: u64, msg_ptr: u64, msg_len: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_IPC_SEND);
     let len = msg_len as usize;
     if len > 65536 { return E2BIG; }
-    if len > core::mem::size_of::<crate::ipc::core::IpcFastMsg>() {
+    if len > crate::ipc::core::IpcFastMsg::zeroed().data.len() {
         return EINVAL;
     }
     if let Err(errno) = enforce_direct_ipc_policy(endpoint) {
@@ -670,16 +766,15 @@ pub fn sys_exo_ipc_recv(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, _
     };
     if rc != 0 {
         // Aucun message disponible
-        return EAGAIN;
+        return ipc_status_to_errno(rc);
     }
     let copy_len = (fast_msg.len as usize).min(len).min(fast_msg.data.len());
-    // SAFETY: buf_ptr accessible (validé implicitement par règles buffer)
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            fast_msg.data.as_ptr(),
-            buf_ptr as *mut u8,
-            copy_len,
-        );
+    let out = match UserBuf::validate(buf_ptr, copy_len, 65536) {
+        Ok(buf) => buf,
+        Err(e) => return e.to_errno(),
+    };
+    if let Err(err) = out.write_from(&fast_msg.data[..copy_len]) {
+        return err.to_errno();
     }
     copy_len as i64
 }
@@ -693,9 +788,81 @@ pub fn sys_exo_ipc_call(endpoint: u64, msg_ptr: u64, msg_len: u64, resp_ptr: u64
     if let Err(errno) = enforce_direct_ipc_policy(endpoint) {
         return errno;
     }
-    // ipc::rpc::call_raw câblé lors de l'intégration ipc/rpc.
-    let _ = (endpoint, msg_ptr, send_len, resp_ptr, recv_len, flags);
-    ENOSYS
+    if send_len > crate::ipc::core::IpcFastMsg::zeroed().data.len() {
+        return EINVAL;
+    }
+
+    let req_buf = match UserBuf::validate(msg_ptr, send_len, 65536) {
+        Ok(buf) => buf,
+        Err(e) => return e.to_errno(),
+    };
+    let resp_buf = match UserBuf::validate(resp_ptr, recv_len, 65536) {
+        Ok(buf) => buf,
+        Err(e) => return e.to_errno(),
+    };
+
+    let mut req = crate::ipc::core::IpcFastMsg::zeroed();
+    req.flags = flags as u32;
+    req.len = send_len as u16;
+    if let Err(err) = req_buf.read_into(&mut req.data[..send_len]) {
+        return err.to_errno();
+    }
+
+    let mut reply = crate::ipc::core::IpcFastMsg::zeroed();
+    let timeout_ns = crate::ipc::core::RPC_DEFAULT_TIMEOUT_NS;
+    let rc = unsafe {
+        crate::ipc::core::ipc_fast_call(
+            &req as *const _,
+            &mut reply as *mut _,
+            endpoint,
+            timeout_ns,
+        )
+    };
+    if rc != 0 {
+        return ipc_status_to_errno(rc);
+    }
+
+    let copy_len = (reply.len as usize).min(recv_len).min(reply.data.len());
+    if let Err(err) = resp_buf.write_from(&reply.data[..copy_len]) {
+        return err.to_errno();
+    }
+    copy_len as i64
+}
+
+/// `exo_ipc_recv_nb(endpoint, buf_ptr, buf_len, flags)` — lecture non bloquante.
+pub fn sys_exo_ipc_recv_nb(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EXO_IPC_RECV_NB);
+    sys_exo_ipc_recv(endpoint, buf_ptr, buf_len, flags, 0, 0)
+}
+
+/// `exo_ipc_create(name_ptr, name_len, local_ep)` → endpoint composite ou errno.
+pub fn sys_exo_ipc_create(name_ptr: u64, name_len: u64, local_ep: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EXO_IPC_CREATE);
+    let (name, len) = match read_endpoint_name(name_ptr, name_len) {
+        Ok(v) => v,
+        Err(errno) => return errno,
+    };
+    let pid = crate::syscall::fast_path::syscall_current_pid();
+    if pid == 0 {
+        return EACCES;
+    }
+    match register_named_endpoint_for_pid(pid, &name[..len], local_ep as u32) {
+        Ok(endpoint) => endpoint as i64,
+        Err(errno) => errno,
+    }
+}
+
+/// `exo_ipc_destroy(name_ptr, name_len)` → 0 ou errno.
+pub fn sys_exo_ipc_destroy(name_ptr: u64, name_len: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EXO_IPC_DESTROY);
+    let (name, len) = match read_endpoint_name(name_ptr, name_len) {
+        Ok(v) => v,
+        Err(errno) => return errno,
+    };
+    match unregister_named_endpoint(&name[..len]) {
+        Ok(()) => 0,
+        Err(errno) => errno,
+    }
 }
 
 #[inline(always)]
@@ -1416,7 +1583,10 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         // ── IPC Exo-OS ─────────────────────────────────────────────────────
         SYS_EXO_IPC_SEND => sys_exo_ipc_send,
         SYS_EXO_IPC_RECV => sys_exo_ipc_recv,
+        SYS_EXO_IPC_RECV_NB => sys_exo_ipc_recv_nb,
         SYS_EXO_IPC_CALL => sys_exo_ipc_call,
+        SYS_EXO_IPC_CREATE => sys_exo_ipc_create,
+        SYS_EXO_IPC_DESTROY => sys_exo_ipc_destroy,
         SYS_EXO_CAP_CREATE => sys_exo_cap_create,
         SYS_EXO_CAP_REVOKE => sys_exo_cap_revoke,
         SYS_EXO_LOG        => sys_exo_log,
@@ -1463,5 +1633,42 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_PCI_SET_TOPOLOGY    => sys_pci_set_topology,
         // ── Catch-all ──────────────────────────────────────────────────────
         _             => sys_enosys,
+    }
+}
+
+#[cfg(test)]
+mod kernel_fix_tests {
+    use super::{register_named_endpoint_for_pid, unregister_named_endpoint};
+
+    #[test]
+    fn test_register_named_endpoint_for_pid_roundtrip() {
+        let name = b"kernel_fix_ep";
+        let endpoint = register_named_endpoint_for_pid(42, name, 7).unwrap();
+        assert_eq!(endpoint, (42u64 << 32) | 7);
+        assert!(crate::ipc::endpoint::lookup_endpoint(name).is_some());
+        unregister_named_endpoint(name).unwrap();
+        assert!(crate::ipc::endpoint::lookup_endpoint(name).is_none());
+    }
+
+    #[test]
+    fn test_register_named_endpoint_duplicate_rejected() {
+        let name = b"kernel_fix_dup";
+        let first = register_named_endpoint_for_pid(7, name, 11).unwrap();
+        assert_eq!(first, (7u64 << 32) | 11);
+        assert!(register_named_endpoint_for_pid(7, name, 11).is_err());
+        unregister_named_endpoint(name).unwrap();
+    }
+
+    #[test]
+    fn test_register_named_endpoint_stress() {
+        for idx in 0..512u32 {
+            let mut name = [0u8; 24];
+            name[..10].copy_from_slice(b"kernel_ep_");
+            name[10..14].copy_from_slice(&idx.to_le_bytes());
+            let slice = &name[..14];
+            let endpoint = register_named_endpoint_for_pid(99, slice, idx + 1).unwrap();
+            assert_eq!(endpoint, (99u64 << 32) | (idx + 1) as u64);
+            unregister_named_endpoint(slice).unwrap();
+        }
     }
 }

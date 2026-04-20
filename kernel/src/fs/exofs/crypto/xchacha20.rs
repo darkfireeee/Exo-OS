@@ -36,9 +36,8 @@ use crate::security::crypto::{
     xchacha20_poly1305_seal,
     xchacha20_poly1305_open,
     XCHACHA20_TAG_SIZE,
-    XCHACHA20_NONCE_SIZE,
-    XCHACHA20_KEY_SIZE,
 };
+use crate::security::crypto::xchacha20_poly1305::AeadError;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteur global de nonces (S-06 / LAC-04)
@@ -108,35 +107,22 @@ impl XChaCha20Poly1305 {
         aad:       &[u8],
         plaintext: &[u8],
     ) -> ExofsResult<(Vec<u8>, Tag)> {
-        // Allouer le buffer de sortie : ciphertext + tag
-        let ct_len = plaintext.len() + XCHACHA20_TAG_SIZE;
-        let mut out = Vec::new();
-        out.try_reserve(ct_len).map_err(|_| ExofsError::OutOfMemory)?;
-        out.resize(ct_len, 0u8);
+        let mut ciphertext = Vec::new();
+        ciphertext
+            .try_reserve(plaintext.len())
+            .map_err(|_| ExofsError::NoMemory)?;
+        ciphertext.extend_from_slice(plaintext);
 
-        // Déléguer au module security::crypto
-        xchacha20_poly1305_seal(
-            &key.0,
-            &nonce.0,
-            plaintext,
-            aad,
-            &mut out,
-        ).map_err(|_| ExofsError::CryptoError)?;
+        let mut tag = [0u8; XCHACHA20_TAG_SIZE];
+        xchacha20_poly1305_seal(&key.0, &nonce.0, &mut ciphertext, aad, &mut tag)
+            .map_err(map_encrypt_error)?;
 
-        // Séparer ciphertext et tag
-        let tag_bytes: [u8; 16] = out[plaintext.len()..plaintext.len() + 16]
-            .try_into()
-            .map_err(|_| ExofsError::CryptoError)?;
-        out.truncate(plaintext.len());
-
-        Ok((out, Tag(tag_bytes)))
+        Ok((ciphertext, Tag(tag)))
     }
 
     /// Déchiffre et vérifie `ciphertext` avec tag d'authentification.
     ///
     /// Retourne le plaintext si l'authentification réussit.
-    /// Retourne `ExofsError::AuthenticationFailed` si le tag est invalide.
-    ///
     /// OOM-02 : allocation via `try_reserve`.
     pub fn decrypt(
         key:        &XChaCha20Key,
@@ -145,28 +131,34 @@ impl XChaCha20Poly1305 {
         ciphertext: &[u8],
         tag:        &Tag,
     ) -> ExofsResult<Vec<u8>> {
-        // Reconstruire ciphertext || tag pour l'API security::crypto
-        let combined_len = ciphertext.len() + XCHACHA20_TAG_SIZE;
-        let mut combined = Vec::new();
-        combined.try_reserve(combined_len).map_err(|_| ExofsError::OutOfMemory)?;
-        combined.extend_from_slice(ciphertext);
-        combined.extend_from_slice(&tag.0);
-
-        // Buffer de sortie
-        let pt_len = ciphertext.len();
         let mut plaintext = Vec::new();
-        plaintext.try_reserve(pt_len).map_err(|_| ExofsError::OutOfMemory)?;
-        plaintext.resize(pt_len, 0u8);
+        plaintext
+            .try_reserve(ciphertext.len())
+            .map_err(|_| ExofsError::NoMemory)?;
+        plaintext.extend_from_slice(ciphertext);
 
-        xchacha20_poly1305_open(
-            &key.0,
-            &nonce.0,
-            &combined,
-            aad,
-            &mut plaintext,
-        ).map_err(|_| ExofsError::AuthenticationFailed)?;
+        xchacha20_poly1305_open(&key.0, &nonce.0, &mut plaintext, aad, &tag.0)
+            .map_err(map_decrypt_error)?;
 
         Ok(plaintext)
+    }
+}
+
+fn map_encrypt_error(err: AeadError) -> ExofsError {
+    match err {
+        AeadError::InvalidParameter => ExofsError::InvalidArgument,
+        AeadError::BufferTooSmall => ExofsError::InvalidSize,
+        AeadError::NotAvailableOnThisTarget => ExofsError::NotSupported,
+        AeadError::AuthenticationFailed => ExofsError::InternalError,
+    }
+}
+
+fn map_decrypt_error(err: AeadError) -> ExofsError {
+    match err {
+        AeadError::AuthenticationFailed => ExofsError::ChecksumMismatch,
+        AeadError::InvalidParameter => ExofsError::InvalidArgument,
+        AeadError::BufferTooSmall => ExofsError::InvalidSize,
+        AeadError::NotAvailableOnThisTarget => ExofsError::NotSupported,
     }
 }
 

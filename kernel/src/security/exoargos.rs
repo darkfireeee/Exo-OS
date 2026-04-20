@@ -181,6 +181,27 @@ static ANOMALY_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Total snapshots captured.
 static SNAPSHOT_COUNT: AtomicU64 = AtomicU64::new(0);
+const PMC_TCB_MISMATCH_TAG: u64 = 0x504d_435f_4d49_534d;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotSubjectError {
+    CurrentThreadUnavailable,
+    TcbMismatch,
+}
+
+#[inline(always)]
+fn validate_snapshot_subject_ptrs(
+    current: *const ThreadControlBlock,
+    candidate: *const ThreadControlBlock,
+) -> Result<(), SnapshotSubjectError> {
+    if current.is_null() {
+        return Err(SnapshotSubjectError::CurrentThreadUnavailable);
+    }
+    if current != candidate {
+        return Err(SnapshotSubjectError::TcbMismatch);
+    }
+    Ok(())
+}
 
 /// Inner storage for the baseline snapshot using individual atomics
 /// (ISR-safe: no locks, no allocation).
@@ -239,22 +260,7 @@ impl PmcSnapshotInner {
 /// Must be called from Ring 0, exactly once at boot.
 pub unsafe fn exoargos_init() {
     // 1. Check PMU support via CPUID leaf 0xA
-    let (eax_a, _, _, _): (u32, u32, u32, u32);
-    unsafe {
-        let ebx_r: u64;
-        core::arch::asm!(
-            "xchg {tmp:r}, rbx",
-            "mov eax, 0x0A",
-            "xor ecx, ecx",
-            "cpuid",
-            "xchg {tmp:r}, rbx",
-            inout("eax") _ => eax_a,
-            inout("ecx") 0u32 => _,
-            lateout("edx") _,
-            tmp = inout(reg) 0u64 => ebx_r,
-            options(nostack, nomem)
-        );
-    }
+    let eax_a = unsafe { core::arch::x86_64::__cpuid(0x0A) }.eax;
 
     // Version ID (bits [7:0] of EAX) : 0 = no PMU
     let pmu_version = eax_a & 0xFF;
@@ -317,11 +323,20 @@ pub unsafe fn init_pmu() {
 /// to capture the outgoing thread's PMU state. The ThreadControlBlock
 /// reference is provided for future per-thread PMC tracking.
 pub fn pmc_snapshot(tcb: &ThreadControlBlock) -> PmcSnapshot {
-    // Touch the TCB to acknowledge the parameter — future per-thread
-    // PMC extensions will read/write PMC state through the TCB.
-    let _tid = tcb.tid;
-
     if !PMU_INITIALIZED.load(Ordering::Acquire) {
+        return PmcSnapshot::default();
+    }
+
+    let current = crate::scheduler::core::switch::current_thread_raw() as *const ThreadControlBlock;
+    if let Err(err) = validate_snapshot_subject_ptrs(current, tcb as *const ThreadControlBlock) {
+        if matches!(err, SnapshotSubjectError::TcbMismatch) {
+            crate::security::exoledger::exo_ledger_append(
+                crate::security::exoledger::ActionTag::Custom {
+                    tag: PMC_TCB_MISMATCH_TAG,
+                    data: tcb.pid.0 as u64,
+                },
+            );
+        }
         return PmcSnapshot::default();
     }
 
@@ -528,5 +543,40 @@ pub fn exoargos_stats() -> ExoArgosStats {
         anomaly_count:       ANOMALY_COUNT.load(Ordering::Relaxed),
         snapshot_count:      SNAPSHOT_COUNT.load(Ordering::Relaxed),
         baseline_established: BASELINE_ESTABLISHED.load(Ordering::Relaxed),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_snapshot_subject_ptrs, SnapshotSubjectError};
+    use crate::scheduler::core::task::{
+        Priority, ProcessId, SchedPolicy, ThreadControlBlock, ThreadId,
+    };
+
+    fn make_tcb(id: u64, pid: u32) -> ThreadControlBlock {
+        ThreadControlBlock::new(
+            ThreadId(id),
+            ProcessId(pid),
+            SchedPolicy::Normal,
+            Priority::NORMAL_DEFAULT,
+            0,
+            0x1000,
+        )
+    }
+
+    #[test]
+    fn test_validate_snapshot_subject_ptrs_rejects_mismatch() {
+        let current = make_tcb(1, 7);
+        let foreign = make_tcb(2, 8);
+        assert_eq!(
+            validate_snapshot_subject_ptrs(&current, &foreign),
+            Err(SnapshotSubjectError::TcbMismatch)
+        );
+    }
+
+    #[test]
+    fn test_validate_snapshot_subject_ptrs_accepts_current_thread() {
+        let current = make_tcb(3, 9);
+        assert_eq!(validate_snapshot_subject_ptrs(&current, &current), Ok(()));
     }
 }

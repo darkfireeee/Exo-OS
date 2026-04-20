@@ -301,6 +301,7 @@ pub use exoseal::{
     configure_nic_iommu_policy,
     exoseal_boot_phase0,
     exoseal_boot_complete,
+    verify_p0_fixes,
     nic_iommu_locked,
     nic_domain_id,
     nic_dma_window,
@@ -416,6 +417,14 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
     // ── 12. ExoNmi — Progressive NMI Watchdog (ExoShield v1.0 Module 9) ───────
     //    Initialise le watchdog (LAPIC virt base, timer masqué).
     exonmi::exonmi_init();
+
+    // ── 12b. ExoCage per-thread — thread bootstrap courant ──────────────────
+    let current_tcb = crate::scheduler::core::switch::current_thread_raw();
+    if !current_tcb.is_null() && exocage::is_cet_global_enabled() {
+        // SAFETY: on agit sur le TCB courant du BSP pendant l'init sécurité,
+        // avant l'ouverture normale du système.
+        let _ = unsafe { exocage::enable_cet_for_thread(&mut *current_tcb) };
+    }
 
     // ── 13. ExoSeal complete — PKS ops normales + SECURITY_READY + watchdog ──
     // SAFETY: Ring 0, séquence finale de boot des modules de sécurité.

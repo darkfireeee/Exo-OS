@@ -46,3 +46,11 @@ pub fn init_global_disk() {
     let mut disk = GLOBAL_DISK.lock();
     *disk = Some(VirtioBlockAdapter::new(0x1000_0000, 1024 * 1024 * 512));
 }
+
+pub fn default_global_disk_size_bytes() -> u64 {
+    GLOBAL_DISK
+        .lock()
+        .as_ref()
+        .map(|disk| disk.total_blocks().saturating_mul(disk.block_size() as u64))
+        .unwrap_or(1024 * 1024 * 512)
+}

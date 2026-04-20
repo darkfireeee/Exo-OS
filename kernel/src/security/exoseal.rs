@@ -24,6 +24,79 @@ static NIC_DOMAIN_ID: AtomicU32 = AtomicU32::new(0);
 static NIC_DMA_BASE: AtomicU64 = AtomicU64::new(0);
 static NIC_DMA_END: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum P0VerifyError {
+    NicIommuUnlocked,
+    CetGlobalDisabled,
+    DefaultDomainRevoked,
+    CapsDomainExposed,
+    CredentialsDomainExposed,
+    TcbHotDomainExposed,
+}
+
+fn validate_phase0_state(
+    nic_locked: bool,
+    cet_supported: bool,
+    cet_enabled: bool,
+    pks_supported: bool,
+    default_revoked: bool,
+    caps_revoked: bool,
+    credentials_revoked: bool,
+    tcb_hot_revoked: bool,
+) -> Result<(), P0VerifyError> {
+    if !nic_locked {
+        return Err(P0VerifyError::NicIommuUnlocked);
+    }
+    if cet_supported && !cet_enabled {
+        return Err(P0VerifyError::CetGlobalDisabled);
+    }
+    if pks_supported && default_revoked {
+        return Err(P0VerifyError::DefaultDomainRevoked);
+    }
+    if pks_supported && !caps_revoked {
+        return Err(P0VerifyError::CapsDomainExposed);
+    }
+    if pks_supported && !credentials_revoked {
+        return Err(P0VerifyError::CredentialsDomainExposed);
+    }
+    if pks_supported && !tcb_hot_revoked {
+        return Err(P0VerifyError::TcbHotDomainExposed);
+    }
+    Ok(())
+}
+
+pub fn verify_p0_fixes() -> Result<(), P0VerifyError> {
+    let (cet_supported, _) = exocage::cpuid_cet_available();
+    let result = validate_phase0_state(
+        nic_iommu_locked(),
+        cet_supported,
+        exocage::is_cet_global_enabled(),
+        exoveil::pks_available(),
+        exoveil::is_domain_revoked(exoveil::PksDomain::Default),
+        exoveil::is_domain_revoked(exoveil::PksDomain::Caps),
+        exoveil::is_domain_revoked(exoveil::PksDomain::Credentials),
+        exoveil::is_domain_revoked(exoveil::PksDomain::TcbHot),
+    );
+
+    if let Err(error) = result {
+        let step = match error {
+            P0VerifyError::NicIommuUnlocked => 0,
+            P0VerifyError::CetGlobalDisabled => 1,
+            P0VerifyError::DefaultDomainRevoked => 2,
+            P0VerifyError::CapsDomainExposed => 3,
+            P0VerifyError::CredentialsDomainExposed => 4,
+            P0VerifyError::TcbHotDomainExposed => 5,
+        };
+        exoledger::exo_ledger_append_p0(exoledger::ActionTag::BootSealViolation { step });
+        unsafe {
+            ssr::ssr_atomic(ssr::SSR_HANDOFF_FLAG).store(1, Ordering::Release);
+        }
+        return Err(error);
+    }
+
+    Ok(())
+}
+
 pub fn configure_nic_iommu_policy() {
     if NIC_POLICY_LOCKED.load(Ordering::Acquire) {
         return;
@@ -84,11 +157,18 @@ pub unsafe fn exoseal_boot_phase0() {
     // SAFETY: l'activation CET globale est un prérequis ring 0 du boot ExoShield.
     let _ = unsafe { exocage::exocage_global_enable() };
     let _ = stage0::arm_apic_watchdog(BOOT_PHASE0_WATCHDOG_MS);
+    if verify_p0_fixes().is_err() {
+        return;
+    }
     exoledger::exo_ledger_append(exoledger::ActionTag::BootEvent { step: 0 });
 }
 
 pub unsafe fn exoseal_boot_complete() {
     if EXOSEAL_COMPLETE_DONE.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    if verify_p0_fixes().is_err() {
         return;
     }
 
@@ -121,4 +201,33 @@ pub fn nic_dma_window() -> (u64, u64) {
         NIC_DMA_BASE.load(Ordering::Acquire),
         NIC_DMA_END.load(Ordering::Acquire),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_phase0_state, P0VerifyError};
+
+    #[test]
+    fn test_validate_phase0_state_accepts_hardened_state() {
+        assert_eq!(
+            validate_phase0_state(true, true, true, true, false, true, true, true),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn test_validate_phase0_state_detects_missing_nic_lock() {
+        assert_eq!(
+            validate_phase0_state(false, true, true, true, false, true, true, true),
+            Err(P0VerifyError::NicIommuUnlocked)
+        );
+    }
+
+    #[test]
+    fn test_validate_phase0_state_detects_exposed_caps_domain() {
+        assert_eq!(
+            validate_phase0_state(true, true, true, true, false, false, true, true),
+            Err(P0VerifyError::CapsDomainExposed)
+        );
+    }
 }

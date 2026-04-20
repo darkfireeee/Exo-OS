@@ -53,6 +53,8 @@ volatile   = { version = "0.5", default-features = false }
 
 # Cryptographie (partagée kernel + exofs, versionnée une seule fois)
 blake3           = { version = "1",    default-features = false, features = ["pure"] }
+aes              = { version = "0.8",  default-features = false }
+subtle           = { version = "2.5",  default-features = false }
 # chacha20 (stream cipher seul) : compatible x86_64-unknown-none, pas de poly1305/SIMD
 chacha20         = { version = "0.9",  default-features = false }
 # chacha20poly1305 : INCOMPATIBLE kernel (poly1305 → SSE2 → LLVM ERROR x86_64-unknown-none)

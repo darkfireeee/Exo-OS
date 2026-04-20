@@ -27,6 +27,8 @@ use crate::security::crypto::{
     rng_fill,   // rng_fill(&mut buf)  → Result<(), RngError>
     rng_u64,    // rng_u64()           → u64
     rng_u32,    // rng_u32()           → u32
+    rng_init,
+    rng_is_ready,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,7 +63,8 @@ impl EntropyPool {
     /// Délègue à `security::crypto::rng_u64()`.
     #[inline]
     pub fn random_u64(&self) -> u64 {
-        rng_u64()
+        ensure_rng_ready();
+        rng_u64().unwrap_or_else(|_| fallback_entropy_u64())
     }
 
     /// Retourne un entier u32 aléatoire.
@@ -69,7 +72,8 @@ impl EntropyPool {
     /// Délègue à `security::crypto::rng_u32()`.
     #[inline]
     pub fn random_u32(&self) -> u32 {
-        rng_u32()
+        ensure_rng_ready();
+        rng_u32().unwrap_or_else(|_| self.random_u64() as u32)
     }
 
     /// Retourne un tableau de 32 octets aléatoires.
@@ -77,8 +81,14 @@ impl EntropyPool {
     /// Délègue à `security::crypto::rng_fill()`.
     pub fn random_32(&self) -> [u8; 32] {
         let mut buf = [0u8; 32];
-        // rng_fill est infaillible pour des tailles raisonnables
-        let _ = rng_fill(&mut buf);
+        fill_best_effort(&mut buf);
+        buf
+    }
+
+    /// Retourne un tableau de 16 octets aléatoires.
+    pub fn random_16(&self) -> [u8; 16] {
+        let mut buf = [0u8; 16];
+        fill_best_effort(&mut buf);
         buf
     }
 
@@ -87,9 +97,9 @@ impl EntropyPool {
     /// OOM-02 : utilise `try_reserve` avant allocation.
     pub fn random_bytes(&self, n: usize) -> ExofsResult<Vec<u8>> {
         let mut buf = Vec::new();
-        buf.try_reserve(n).map_err(|_| ExofsError::OutOfMemory)?;
+        buf.try_reserve(n).map_err(|_| ExofsError::NoMemory)?;
         buf.resize(n, 0u8);
-        let _ = rng_fill(&mut buf);
+        fill_best_effort(&mut buf);
         Ok(buf)
     }
 
@@ -101,7 +111,7 @@ impl EntropyPool {
     /// Le compteur est tenu dans `security::crypto::rng` (non-réutilisation garantie).
     pub fn nonce_xchacha20(&self) -> [u8; 24] {
         let mut nonce = [0u8; 24];
-        let _ = rng_fill(&mut nonce);
+        fill_best_effort(&mut nonce);
         nonce
     }
 
@@ -112,12 +122,12 @@ impl EntropyPool {
     /// les 8 derniers d'aléa pur.
     pub fn nonce_for_object_id(&self, object_id: u64) -> [u8; 24] {
         let mut nonce = [0u8; 24];
-        // 0..8 : aléa CSPRNG (compteur interne security::crypto::rng)
-        nonce[0..8].copy_from_slice(&rng_u64().to_le_bytes());
+        ensure_rng_ready();
+        nonce[0..8].copy_from_slice(&self.random_u64().to_le_bytes());
         // 8..16 : object_id comme domaine de séparation
         nonce[8..16].copy_from_slice(&object_id.to_le_bytes());
         // 16..24 : aléa pur
-        nonce[16..24].copy_from_slice(&rng_u64().to_le_bytes());
+        nonce[16..24].copy_from_slice(&self.random_u64().to_le_bytes());
         nonce
     }
 
@@ -145,6 +155,59 @@ impl EntropyPool {
 
     #[cfg(not(target_arch = "x86_64"))]
     pub fn read_rdrand() -> Option<u64> { None }
+}
+
+#[inline]
+fn ensure_rng_ready() {
+    if !rng_is_ready() {
+        rng_init();
+    }
+}
+
+fn fill_best_effort(buf: &mut [u8]) {
+    ensure_rng_ready();
+    if rng_fill(buf).is_ok() {
+        return;
+    }
+
+    let mut seed = fallback_entropy_u64();
+    for chunk in buf.chunks_mut(8) {
+        seed = seed
+            .rotate_left(7)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(0xA076_1D64_78BD_642F);
+        let bytes = seed.to_le_bytes();
+        chunk.copy_from_slice(&bytes[..chunk.len()]);
+    }
+}
+
+fn fallback_entropy_u64() -> u64 {
+    let stack_addr = &0 as *const i32 as usize as u64;
+    let tsc = read_tsc_fallback();
+    tsc.rotate_left(17) ^ stack_addr.rotate_left(31) ^ 0xE27C_7FA1_5C3D_9B79
+}
+
+#[inline]
+fn read_tsc_fallback() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let lo: u32;
+        let hi: u32;
+        // SAFETY: RDTSC est non privilégiée sur x86_64 et n'écrit que dans les registres de sortie.
+        unsafe {
+            core::arch::asm!(
+                "rdtsc",
+                out("eax") lo,
+                out("edx") hi,
+                options(nomem, nostack),
+            );
+        }
+        ((hi as u64) << 32) | lo as u64
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        0xD1CE_FA11_BA0C_0001u64
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

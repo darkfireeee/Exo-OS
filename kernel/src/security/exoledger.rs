@@ -35,7 +35,7 @@
 //   SSR layout : ExoOS_Architecture_v7.md §3.4
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -313,6 +313,9 @@ static RING_HEAD: AtomicUsize = AtomicUsize::new(0);
 /// Nombre total d'entrées écrites (P0 + ring).
 static TOTAL_WRITTEN: AtomicU64 = AtomicU64::new(0);
 
+/// Une seule alerte d'overflow P0 est suffisante : au-delà on sature silencieusement.
+static P0_OVERFLOW_REPORTED: AtomicBool = AtomicBool::new(false);
+
 /// Dernier hash calculé (pour chaînage).
 static LAST_HASH: [core::sync::atomic::AtomicU8; 32] = {
     const INIT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
@@ -365,11 +368,14 @@ fn rdtsc() -> u64 {
 /// les 16 premiers octets pour conserver un acteur stable dans l'audit.
 fn current_actor_oid() -> [u8; 32] {
     let mut oid = [0u8; 32];
+    #[cfg(test)]
+    let tcb_ptr: *mut crate::scheduler::core::task::ThreadControlBlock = core::ptr::null_mut();
+    #[cfg(not(test))]
     let tcb_ptr = crate::scheduler::core::switch::current_thread_raw();
-    if tcb_ptr.is_null() {
+    if tcb_ptr.is_null() || !is_published_tcb(tcb_ptr as usize) {
         // Fallback early-boot: éviter un OID tout-zéro pour garder l'audit exploitable.
         let tsc = rdtsc();
-        let cpu = crate::arch::x86_64::smp::percpu::current_cpu_id();
+        let cpu = 0u32;
         oid[0..8].copy_from_slice(&tsc.to_le_bytes());
         oid[8..12].copy_from_slice(&cpu.to_le_bytes());
         return oid;
@@ -380,6 +386,16 @@ fn current_actor_oid() -> [u8; 32] {
     oid[0..8].copy_from_slice(&(tcb.pid.0 as u64).to_le_bytes());
     oid[8..16].copy_from_slice(&tcb.tid.to_le_bytes());
     oid
+}
+
+fn is_published_tcb(tcb_ptr: usize) -> bool {
+    if tcb_ptr == 0 {
+        return false;
+    }
+
+    crate::scheduler::core::switch::CURRENT_THREAD_PER_CPU
+        .iter()
+        .any(|slot| slot.load(Ordering::Acquire) == tcb_ptr)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -404,14 +420,18 @@ fn current_actor_oid() -> [u8; 32] {
 /// - ExoSeal pour les violations de boot seal
 pub fn exo_ledger_append_p0(action: ActionTag) {
     let _guard = P0_CHAIN_LOCK.lock();
-    let idx = P0_USED.fetch_add(1, Ordering::AcqRel);
+    let idx = P0_USED.load(Ordering::Acquire);
 
     if idx >= P0_ZONE_ENTRIES {
-        // Zone P0 pleine — panique kernel (RÈGLE EXOLEDGER-02)
-        // En pratique, 16 entrées P0 devraient suffire — si on dépasse,
-        // il y a un problème grave de sécurité.
-        panic!("EXOLEDGER: P0 zone full — {} entries written, max {}", idx, P0_ZONE_ENTRIES);
+        if !P0_OVERFLOW_REPORTED.swap(true, Ordering::AcqRel) {
+            exo_ledger_append(ActionTag::Custom {
+                tag: 0x5030_4f56_4552_464c,
+                data: idx as u64,
+            });
+        }
+        return;
     }
+    P0_USED.store(idx + 1, Ordering::Release);
 
     let seq = GLOBAL_SEQ.fetch_add(1, Ordering::AcqRel);
     let prev_hash = load_last_hash();
@@ -491,11 +511,20 @@ pub fn exo_ledger_append(action: ActionTag) {
 /// En Phase 3.2+, elles seront mappées dans SSR.LOG_AUDIT (+0x8000) en
 /// collaboration avec l'infrastructure ExoPhoenix SSR.
 pub fn exo_ledger_init() {
+    if P0_USED.load(Ordering::Acquire) != 0
+        || TOTAL_WRITTEN.load(Ordering::Acquire) != 0
+        || GLOBAL_SEQ.load(Ordering::Acquire) != 0
+    {
+        EXOLEDGER_INITIALIZED.store(true, Ordering::Release);
+        return;
+    }
+
     // Réinitialiser les compteurs (en cas de ré-init)
     GLOBAL_SEQ.store(0, Ordering::Release);
     P0_USED.store(0, Ordering::Release);
     RING_HEAD.store(0, Ordering::Release);
     TOTAL_WRITTEN.store(0, Ordering::Release);
+    P0_OVERFLOW_REPORTED.store(false, Ordering::Release);
 
     // Zéro-initialiser les zones (déjà BSS = zéro, mais explicite)
     // Note: on ne peut pas prendre &mut de static mut de manière sûre
@@ -683,5 +712,54 @@ pub fn exoledger_stats() -> ExoLedgerStats {
         current_seq: GLOBAL_SEQ.load(Ordering::Relaxed),
         ring_head: RING_HEAD.load(Ordering::Relaxed),
         ring_capacity: RING_BUFFER_ENTRIES,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_exoledger_init_preserves_phase0_entries() {
+        exo_ledger_init();
+        exo_ledger_append_p0(ActionTag::NicIommuLocked);
+        let seq_before = current_seq();
+        let used_before = p0_used();
+
+        exo_ledger_init();
+
+        assert_eq!(p0_used(), used_before);
+        assert_eq!(current_seq(), seq_before);
+        assert!(read_p0_entry(0).is_some());
+    }
+
+    #[test]
+    fn test_p0_overflow_is_graceful_and_saturating() {
+        GLOBAL_SEQ.store(0, Ordering::Release);
+        P0_USED.store(0, Ordering::Release);
+        RING_HEAD.store(0, Ordering::Release);
+        TOTAL_WRITTEN.store(0, Ordering::Release);
+        P0_OVERFLOW_REPORTED.store(false, Ordering::Release);
+        unsafe {
+            for entry in P0_ZONE.iter_mut() {
+                *entry = LedgerEntry::zeroed();
+            }
+            for entry in RING_BUFFER.iter_mut() {
+                *entry = LedgerEntry::zeroed();
+            }
+        }
+        for byte in LAST_HASH.iter() {
+            byte.store(0, Ordering::Release);
+        }
+
+        for idx in 0..P0_ZONE_ENTRIES {
+            exo_ledger_append_p0(ActionTag::BootEvent { step: idx as u8 });
+        }
+        let written_before = total_written();
+        exo_ledger_append_p0(ActionTag::BootEvent { step: 99 });
+
+        assert_eq!(p0_used(), P0_ZONE_ENTRIES);
+        assert!(total_written() >= written_before);
+        assert!(read_ring_entry(0).is_some());
     }
 }

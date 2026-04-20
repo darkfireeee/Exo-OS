@@ -62,6 +62,8 @@ const APIC_TIMER_DIV_1: u32 = 0x0B;
 
 /// Default watchdog vector (last user-available vector).
 const WATCHDOG_VECTOR: u32 = 0xFE;
+const WATCHDOG_TIMEOUT_MIN_MS: u64 = 500;
+const WATCHDOG_TIMEOUT_MAX_MS: u64 = 30_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Global ExoNmi state — atomics only (ISR-safe)
@@ -94,6 +96,11 @@ static CACHED_INITIAL_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Cached APIC timer frequency in Hz (0 = not yet determined).
 /// Computed once on first arm_watchdog() call, reused thereafter.
 static CACHED_APIC_FREQ_HZ: AtomicU64 = AtomicU64::new(0);
+
+#[inline(always)]
+fn normalize_timeout_ms(timeout_ms: u64) -> u64 {
+    timeout_ms.clamp(WATCHDOG_TIMEOUT_MIN_MS, WATCHDOG_TIMEOUT_MAX_MS)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Statistics
@@ -356,6 +363,8 @@ pub fn arm_watchdog(timeout_ms: u64) {
         return;
     }
 
+    let timeout_ms = normalize_timeout_ms(timeout_ms);
+
     // Compute the APIC timer initial count for the requested timeout
     let initial_count = compute_initial_count(timeout_ms);
     if initial_count == 0 {
@@ -456,4 +465,24 @@ pub fn is_armed() -> bool {
 #[inline(always)]
 pub fn configured_timeout_ms() -> u64 {
     CONFIGURED_TIMEOUT_MS.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_timeout_ms;
+
+    #[test]
+    fn test_normalize_timeout_ms_clamps_low_values() {
+        assert_eq!(normalize_timeout_ms(1), 500);
+    }
+
+    #[test]
+    fn test_normalize_timeout_ms_clamps_high_values() {
+        assert_eq!(normalize_timeout_ms(u64::MAX), 30_000);
+    }
+
+    #[test]
+    fn test_normalize_timeout_ms_preserves_in_range_values() {
+        assert_eq!(normalize_timeout_ms(5_000), 5_000);
+    }
 }

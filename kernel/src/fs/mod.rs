@@ -6,3 +6,4 @@
 
 /// ExoFS — système de fichiers natif Exo-OS (journalisé par epoch)
 pub mod exofs;
+pub mod elf_loader_impl;
