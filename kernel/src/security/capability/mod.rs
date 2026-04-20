@@ -198,8 +198,10 @@ pub fn revoke_handle(handle: u32) -> Result<(), KernelCapError> {
 
 /// Lecture des capabilities POSIX.1e (syscall capget — compat Linux).
 ///
-/// Implémentation stub : retourne NotSupported car ExoOS utilise son propre
-/// modèle de capabilities, non POSIX.1e.
+/// ExoOS utilise son propre modèle de capabilities (CapToken/Rights/CapTable),
+/// incompatible avec POSIX.1e capget/capset. Le retour ENOSYS est
+/// le comportement correct et documenté — les applications ExoOS
+/// doivent utiliser les syscalls exo_cap_create/exo_cap_revoke à la place.
 #[inline]
 pub fn capget(_hdrp: u64, _datap: u64) -> Result<(), KernelCapError> {
     Err(KernelCapError::NotSupported)

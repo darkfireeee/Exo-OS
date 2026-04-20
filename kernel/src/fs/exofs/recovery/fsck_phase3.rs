@@ -21,7 +21,6 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::blob_id::blake3_hash;
 use super::boot_recovery::BlockDevice;
-use super::block_io::read_array;
 use super::fsck_phase2::BlobRefCounter;
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
@@ -435,10 +434,11 @@ impl FsckPhase3 {
                 .and_then(|o| opts.region_lba.checked_add(o))
                 .ok_or(ExofsError::OffsetOverflow)?;
 
-            let buf = match read_array::<SNAPSHOT_HDR_SIZE>(device, lba) {
-                Ok(buf) => buf,
+            let mut buf = [0u8; SNAPSHOT_HDR_SIZE];
+            match device.read_block(lba, &mut buf) {
+                Ok(()) => {}
                 Err(_) => break 'scan,
-            };
+            }
 
             // Heuristique : slot nul → fin de région allouée.
             if buf.iter().all(|&b| b == 0) { break 'scan; }

@@ -345,14 +345,8 @@ impl SuperblockManager {
     where
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
-        if disk_size < MIN_DISK_SIZE {
-            return Err(ExofsError::InvalidSize);
-        }
         let offsets = Self::compute_mirror_offsets(disk_size);
         let best = Self::recover_best_mirror(&offsets, &read_fn)?;
-        if best.disk_size_bytes < MIN_DISK_SIZE || best.disk_size_bytes > disk_size {
-            return Err(ExofsError::CorruptedStructure);
-        }
 
         let mgr = SuperblockManager {
             inner: SuperblockInMemory::new(best, offsets),

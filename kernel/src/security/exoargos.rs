@@ -360,9 +360,9 @@ fn write_snapshot_to_ssr(snap: &PmcSnapshot) {
         0 // Fallback: CPU 0
     };
 
-    let offset = exo_phoenix_ssr::pmc_snapshot_offset(cpu_id);
+    let offset = crate::exophoenix::ssr::pmc_snapshot_offset(cpu_id as usize);
     let ssr_base = crate::memory::phys_to_virt(
-        crate::memory::core::PhysAddr::new(exo_phoenix_ssr::SSR_BASE_PHYS)
+        crate::memory::core::PhysAddr::new(crate::exophoenix::ssr::SSR_BASE)
     ).as_u64() as usize;
 
     // SAFETY: The snapshot is exactly 64 bytes (SSR_PMC_SNAPSHOT_SIZE)

@@ -158,7 +158,7 @@ fn hchacha20(key: &[u8; KEY_LEN], nonce: &[u8; 16]) -> [u8; KEY_LEN] {
     out
 }
 
-fn chacha20_block(key: &[u8; KEY_LEN], nonce: &[u8; 12], counter: u32) -> [u8; 64] {
+pub(crate) fn chacha20_block(key: &[u8; KEY_LEN], nonce: &[u8; 12], counter: u32) -> [u8; 64] {
     let mut state = [0u32; 16];
     state[0] = 0x6170_7865;
     state[1] = 0x3320_646e;

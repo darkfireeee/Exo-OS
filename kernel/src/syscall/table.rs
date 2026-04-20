@@ -178,9 +178,10 @@ pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64)
     let buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
         Ok(b) => b, Err(e) => return e.to_errno()
     };
-    // fs/ non encore activé dans lib.rs — en attente d'intégration
-    let _ = (fd, buf_ptr, len, buf);
-    ENOSYS
+    // CORRECTION P0-04 : câbler vers fs_bridge
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_read(fd as u32, buf_ptr, len, pid))
 }
 
 /// `write(fd, buf, count)` → nombre d'octets écrits ou errno.
@@ -194,8 +195,10 @@ pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64
     let buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
         Ok(b) => b, Err(e) => return e.to_errno()
     };
-    let _ = (fd, buf_ptr, len, buf);
-    ENOSYS
+    // CORRECTION P0-04 : câbler vers fs_bridge
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_write(fd as u32, buf_ptr, len, pid))
 }
 
 /// `open(path, flags, mode)` → fd ou errno.
@@ -209,16 +212,22 @@ pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u
     let flags = match validate_flags(flags, allowed_flags) {
         Ok(f) => f, Err(e) => return e.to_errno()
     };
-    let _ = (path, flags, mode);
-    ENOSYS
+    // CORRECTION P0-04 : câbler vers fs_bridge
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(
+        fs_bridge::fs_open(path.as_bytes(), flags as u32, mode as u32, pid)
+    )
 }
 
 /// `close(fd)` → 0 ou errno.
 pub fn sys_close(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CLOSE);
     let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    let _ = fd;
-    ENOSYS
+    // CORRECTION P0-04 : câbler vers fs_bridge
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_close(fd as u32, pid))
 }
 
 /// `lseek(fd, offset, whence)` → nouvelle position ou errno.
@@ -621,15 +630,31 @@ pub fn sys_exo_ipc_send(endpoint: u64, msg_ptr: u64, msg_len: u64, flags: u64, _
     stat_inc(SYS_EXO_IPC_SEND);
     let len = msg_len as usize;
     if len > 65536 { return E2BIG; }
+    if len > core::mem::size_of::<crate::ipc::core::IpcFastMsg>() {
+        return EINVAL;
+    }
     if let Err(errno) = enforce_direct_ipc_policy(endpoint) {
         return errno;
     }
     let buf = match UserBuf::validate(msg_ptr, len, 65536) {
         Ok(b) => b, Err(e) => return e.to_errno()
     };
-    // ipc::channel::send_raw câblé lors de l'intégration ipc/channel.
-    let _ = (endpoint, msg_ptr, len, flags, buf);
-    ENOSYS
+    // CORRECTION P0-05 : câbler vers ipc::ring::spsc
+    let mut fast_msg = crate::ipc::core::IpcFastMsg::zeroed();
+    fast_msg.flags = flags as u32;
+    fast_msg.len = len as u16;
+    // SAFETY: buf_ptr accessible (validé par UserBuf::validate)
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            msg_ptr as *const u8,
+            fast_msg.data.as_mut_ptr(),
+            len.min(fast_msg.data.len()),
+        );
+    }
+    let rc = unsafe {
+        crate::ipc::ring::spsc::spsc_fast_write(&fast_msg as *const _, endpoint)
+    };
+    if rc == 0 { 0 } else { EAGAIN }
 }
 
 /// `exo_ipc_recv(endpoint, buf_ptr, buf_len, flags)`.
@@ -638,9 +663,25 @@ pub fn sys_exo_ipc_recv(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, _
     let len = buf_len as usize;
     if len > 65536 { return E2BIG; }
     if buf_ptr == 0 { return EFAULT; }
-    // ipc::channel::recv_raw câblé lors de l'intégration ipc/channel.
-    let _ = (endpoint, buf_ptr, len, flags);
-    ENOSYS
+    // CORRECTION P0-05 : câbler vers ipc::ring::spsc
+    let mut fast_msg = crate::ipc::core::IpcFastMsg::zeroed();
+    let rc = unsafe {
+        crate::ipc::ring::spsc::spsc_fast_read(&mut fast_msg as *mut _, endpoint)
+    };
+    if rc != 0 {
+        // Aucun message disponible
+        return EAGAIN;
+    }
+    let copy_len = (fast_msg.len as usize).min(len).min(fast_msg.data.len());
+    // SAFETY: buf_ptr accessible (validé implicitement par règles buffer)
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            fast_msg.data.as_ptr(),
+            buf_ptr as *mut u8,
+            copy_len,
+        );
+    }
+    copy_len as i64
 }
 
 /// `exo_ipc_call(endpoint, msg_ptr, msg_len, resp_ptr, resp_len, flags)`.
@@ -660,6 +701,16 @@ pub fn sys_exo_ipc_call(endpoint: u64, msg_ptr: u64, msg_len: u64, resp_ptr: u64
 #[inline(always)]
 fn exo_ipc_endpoint_pid(endpoint: u64) -> u32 {
     (endpoint >> 32) as u32
+}
+
+#[inline(always)]
+fn current_pid_u32() -> u32 {
+    let tcb_ptr: u64;
+    unsafe {
+        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
+    }
+    if tcb_ptr == 0 { return 0; }
+    unsafe { (*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock)).pid.0 }
 }
 
 fn enforce_direct_ipc_policy(endpoint: u64) -> Result<(), i64> {

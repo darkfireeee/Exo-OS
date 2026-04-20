@@ -22,7 +22,6 @@ use core::cell::UnsafeCell;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::blob_id::blake3_hash;
 use super::boot_recovery::BlockDevice;
-use super::block_io::read_bytes;
 use super::recovery_log::RECOVERY_LOG;
 
 // ── Constantes ────────────────────────────────────────────────────────────────
@@ -357,7 +356,7 @@ impl FsckRepair {
             .ok_or(ExofsError::OffsetOverflow)? as usize;
 
         let mut data_buf = alloc::vec![0u8; read_len];
-        read_bytes(device, data_lba, &mut data_buf)?;
+        device.read_block(data_lba, &mut data_buf)?;
 
         // HASH-02 : calculer un hash de 224 octets (padding si data < 224).
         let hash_input = if data_buf.len() >= 224 {

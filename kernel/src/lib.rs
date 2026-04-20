@@ -179,6 +179,15 @@ pub unsafe fn kernel_init() {
     }
     kdb(b'6'); // idle thread done
 
+    // ── Phase 3c : Enregistrement du cloner d'espace d'adressage ───────────────
+    // CORRECTION P0-01 : register le cloner pour fork() AVANT process::init()
+    {
+        use crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER;
+        use crate::process::lifecycle::fork::register_addr_space_cloner;
+        register_addr_space_cloner(&KERNEL_AS_CLONER);
+    }
+    kdb(b'F'); // fork cloner registered
+
     // ── Phase 4 : Process ────────────────────────────────────────────────────
     // CORRECTIF : le crash GPF "f000ff53f000ff53" observé précédemment était causé
     // par le bug LAPIC LVT LINT0 (vecteur 0x8E non masqué, livré par le BIOS QEMU).
@@ -255,6 +264,14 @@ pub unsafe fn kernel_init() {
      let _ = crate::fs::exofs::exofs_init(
         crate::fs::exofs::storage::virtio_adapter::default_global_disk_size_bytes()
     );
+
+    // CORRECTION P0-02 : enregistrer le chargeur ELF après exofs_init
+    {
+        use crate::fs::elf_loader_impl::EXO_ELF_LOADER;
+        use crate::process::lifecycle::exec::register_elf_loader;
+        register_elf_loader(&EXO_ELF_LOADER);
+    }
+    kdb(b'E'); // ELF loader registered
 
     // BUG-02 FIX: activer le bridge syscall→fs après exofs_init
     // SAFETY: exofs_init() terminé, appelé une seule fois depuis BSP

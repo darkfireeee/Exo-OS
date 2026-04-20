@@ -11,7 +11,7 @@ pub enum IpcError {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-enum ServiceId {
+pub enum ServiceId {
     Init = 1,
     IpcBroker = 2,
     Memory = 3,
@@ -24,13 +24,14 @@ enum ServiceId {
     ExoShield = 10,
 }
 
+#[repr(C)]
 pub struct AuthEdge {
-    src: ServiceId,
-    dst: ServiceId,
-    depth_max: u8,
+    pub src: ServiceId,
+    pub dst: ServiceId,
+    pub depth_max: u8,
     #[allow(dead_code)]
-    quota_default: u64,
-    quota_left: AtomicU64,
+    pub quota_default: u64,
+    pub quota_left: AtomicU64,
 }
 
 impl AuthEdge {
@@ -79,7 +80,7 @@ const _: () = assert!(
 static LAST_REFILL_TSC: AtomicU64 = AtomicU64::new(0);
 const REFILL_INTERVAL_TSC: u64 = 3_000_000_000;
 
-fn service_id_of(raw: Pid) -> Option<ServiceId> {
+pub fn service_id_of(raw: Pid) -> Option<ServiceId> {
     match raw {
         1 => Some(ServiceId::Init),
         2 => Some(ServiceId::IpcBroker),
@@ -95,14 +96,14 @@ fn service_id_of(raw: Pid) -> Option<ServiceId> {
     }
 }
 
-fn find_edge(src: ServiceId, dst: ServiceId) -> Option<&'static AuthEdge> {
+pub fn find_edge(src: ServiceId, dst: ServiceId) -> Option<&'static AuthEdge> {
     AUTHORIZED_GRAPH
         .iter()
         .find(|edge| edge.src == src && edge.dst == dst && edge.depth_max != 0)
 }
 
 #[inline(always)]
-fn read_tsc() -> u64 {
+pub fn read_tsc() -> u64 {
     let lo: u32;
     let hi: u32;
     // SAFETY: lecture TSC locale, sans effet de bord mémoire.

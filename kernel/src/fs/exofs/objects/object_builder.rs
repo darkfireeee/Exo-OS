@@ -17,7 +17,7 @@ use alloc::sync::Arc;
 use crate::fs::exofs::core::{
     ExofsError, BlobId, EpochId, DiskOffset,
     compute_blob_id, new_class1, new_class2,
-    INLINE_DATA_MAX_BYTES,
+    INLINE_DATA_MAX,
 };
 use crate::fs::exofs::core::object_kind::ObjectKind;
 use crate::fs::exofs::core::object_class::ObjectClass;
@@ -200,7 +200,7 @@ impl ObjectBuilder {
         };
 
         // Détermine si les données tiennent en inline.
-        let is_inline = data_len <= INLINE_DATA_MAX_BYTES as u64;
+        let is_inline = data_len <= INLINE_DATA_MAX as u64;
 
         let mut flags = ObjectFlags(self.params.extra_flags.0);
         let physical_ref;

@@ -12,6 +12,10 @@
 //              aucune dépendance AES-NI / SIMD → compatible x86_64-unknown-none.
 //   - Conforme BLAKE3 v1.3.1 (https://github.com/BLAKE3-team/BLAKE3-specs)
 //
+// Crate : subtle v2.x (RustCrypto) — constant-time comparisons
+//   - Remplace l'implémentation maison de constant_time_eq()
+//   - Conforme aux meilleures pratiques crypto (résistance timing attacks)
+//
 // Usages dans Exo-OS :
 //   • Checksums d'intégrité kernel (superblock, blob headers)
 //   • PRF dans le KDF (blake3_kdf / HKDF-BLAKE3)
@@ -21,6 +25,8 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 extern crate alloc;
+
+use subtle::ConstantTimeEq;
 
 /// Wrapper autour de `blake3::Hasher`.
 ///
@@ -132,17 +138,18 @@ pub fn blake3_derive_key(context: &[u8], material: &[u8], out: &mut [u8]) {
 
 /// Comparaison de deux digests en temps constant (résistance aux timing attacks).
 /// Retourne `true` ssi `a == b` octet par octet.
+///
+/// Utilise la crate `subtle` (RustCrypto) pour garantir un temps d'exécution
+/// indépendant des données comparées — remplace l'implémentation maison précédente.
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    let mut diff: u8 = 0;
-    let mut i = 0;
-    while i < a.len() {
-        diff |= a[i] ^ b[i];
-        i = i.wrapping_add(1);
+    let mut acc = subtle::Choice::from(1);
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        acc &= x.ct_eq(&y);
     }
-    diff == 0
+    bool::from(acc)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

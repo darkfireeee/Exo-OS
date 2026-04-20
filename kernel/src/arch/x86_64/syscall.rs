@@ -247,11 +247,21 @@ core::arch::global_asm!(
     ".global syscall_cstar_noop",
     ".type   syscall_cstar_noop, @function",
     "syscall_cstar_noop:",
+    // Activer GS kernel pour accéder à la zone per-CPU.
     "swapgs",
-    // Retourner -ENOSYS (errno 38 = ENOSYS en Linux ABI)
-    "mov rax, -38",
+    // Sauvegarder le RSP userspace dans gs:[0x08] (save slot standard).
+    // RSP n'a PAS encore été changé (SYSCALL compat ne touche pas RSP).
+    "mov qword ptr gs:[0x08], rsp",
+    // Charger le RSP kernel depuis gs:[0x00] pour éviter tout travail sur la pile user.
+    "mov rsp, qword ptr gs:[0x00]",
+    // Retourner -ENOSYS (errno 38 = ENOSYS en Linux ABI).
+    "mov eax, -38",
+    // Restaurer RSP userspace depuis le save slot.
+    "mov rsp, qword ptr gs:[0x08]",
+    // Restaurer GS userspace.
     "swapgs",
-    "sysret",   // retour compat 32 bits (LLVM: pas de suffixe 'l')
+    // sysretq = retour 64-bit (ou sysretl pour compat 32-bit, mais ExoOS ne supporte pas compat)
+    "sysretq",
     ".size syscall_cstar_noop, . - syscall_cstar_noop",
 );
 

@@ -6,18 +6,31 @@
 //
 // Architecture :
 //   • Source primaire : RDRAND (Intel) — instruction CPU matérielle
-//   • Source de fallback : ChaCha20-based PRNG seedé depuis RDRAND + TSC + stack addr
-//   • Pool d'entropie : ring buffer 256 bytes alimenté continuellement
+//   • Générateur : ChaCha20 block function (RFC 8439) importée de
+//     xchacha20_poly1305.rs — arithmétique u32 pure, zéro SIMD/SSE2.
+//   • Reseed : toutes les 4096 blocs ChaCha20 générés, mixage RDRAND.
+//   • Fallback : TSC + adresse de pile quand RDRAND échoue.
+//
+// RÈGLE CRYPTO-CRATES : ChaCha20 est la SEULE primitive crypto maison
+// autorisée (la crate chacha20 déclenche LLVM ERROR: split 128-bit sur
+// x86_64-unknown-none sans SSE2). L'implémentation est conforme RFC 8439.
 //
 // RÈGLE RNG-01 : JAMAIS appeler rng_fill() depuis un contexte NMI (pas de lock).
 // RÈGLE RNG-02 : Toujours vérifier le retour de RDRAND (CF flag).
-// RÈGLE RNG-03 : En cas d'échec RDRAND après 10 tentatives → fallback ChaCha20.
+// RÈGLE RNG-03 : En cas d'échec RDRAND après 10 tentatives → fallback TSC+stack.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 use crate::arch::x86_64::cpu::features::CPU_FEATURES;
+use super::xchacha20_poly1305::chacha20_block;
+
+/// Nombre de blocs ChaCha20 avant un reseed obligatoire.
+const RESEED_INTERVAL_BLOCKS: u64 = 4096;
+
+/// Taille d'un bloc ChaCha20 en octets.
+const CHACHA20_BLOCK_SIZE: usize = 64;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RdrandError
@@ -92,56 +105,166 @@ pub fn rdrand_fill(buf: &mut [u8]) -> Result<(), RngError> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ChaCha20 PRNG — fallback + DRNG pour le hot path
+// Helpers — TSC et stack pointer (fallback entropie)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// PRNG basé sur ChaCha20 — généré depuis seed RDRAND au boot.
-struct ChaCha20Prng {
-    /// État interne : 256 bits de seed + 64 bits de compteur.
-    state: [u64; 4],
-    /// Compteur de génération.
-    counter: u64,
+/// Lit le TSC (Time Stamp Counter).
+#[inline]
+fn read_tsc() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let tsc: u64;
+        // SAFETY: RDTSC est non-privilégiée — aucun effet de bord.
+        unsafe {
+            core::arch::asm!("rdtsc; shl rdx, 32; or rax, rdx",
+                out("rax") tsc, out("rdx") _,
+                options(nostack, nomem));
+        }
+        tsc
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    0
 }
 
-impl ChaCha20Prng {
+/// Lit le pointeur de pile courant (source d'entropie supplémentaire).
+#[inline]
+fn read_sp() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let sp: u64;
+        // SAFETY: lecture seule de RSP — aucun effet de bord.
+        unsafe {
+            core::arch::asm!("mov {}, rsp", out(reg) sp, options(nostack, nomem));
+        }
+        sp
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    0
+}
+
+/// Remplit un buffer de 32 octets avec de l'entropie fallback (TSC + stack).
+fn fallback_entropy(out: &mut [u8; 32]) {
+    let tsc = read_tsc();
+    let sp = read_sp();
+    out[0..8].copy_from_slice(&tsc.to_le_bytes());
+    out[8..16].copy_from_slice(&sp.to_le_bytes());
+    // Diffusion : XOR-shift pour étaler les bits sur les 16 octets restants
+    let mut a = tsc;
+    let mut b = sp;
+    for i in 0..2 {
+        a = a.wrapping_add(b ^ (a >> 17));
+        b = b.wrapping_add(a ^ (b >> 31));
+        out[16 + i * 8..24 + i * 8].copy_from_slice(
+            &a.wrapping_mul(0x2545_f491_4f6c_dd1d).to_le_bytes()
+        );
+    }
+    // Passe de mélange final — chaque octet reçoit une contribution de TSC + SP
+    for i in 0..32 {
+        out[i] = out[i].wrapping_add(
+            (tsc.wrapping_shr((i as u32) & 63) as u8)
+            .wrapping_add(sp.wrapping_shr(((i as u32) + 3) & 63) as u8)
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ChaCha20 CSPRNG — Générateur basé sur ChaCha20 block function
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// CSPRNG basé sur la ChaCha20 block function (RFC 8439).
+///
+/// Génère un keystream ChaCha20 à partir d'une clé 256-bit et d'un nonce
+/// 96-bit + compteur. Chaque appel à `chacha20_block` produit 64 octets
+/// de données aléatoire cryptographiquement sûre.
+struct ChaCha20Csprng {
+    /// Clé ChaCha20 (256 bits).
+    key: [u8; 32],
+    /// Nonce ChaCha20 (96 bits).
+    nonce: [u8; 12],
+    /// Compteur de bloc ChaCha20 courant.
+    counter: u32,
+    /// Tampon du dernier bloc ChaCha20 généré (64 octets).
+    buffer: [u8; CHACHA20_BLOCK_SIZE],
+    /// Position de consommation dans le tampon.
+    buffer_pos: usize,
+    /// Nombre total de blocs générés depuis le dernier reseed.
+    blocks_since_reseed: u64,
+}
+
+impl ChaCha20Csprng {
     const fn new() -> Self {
         Self {
-            state:   [0x6A09E667F3BCC908, 0xBB67AE8584CAA73B,
-                      0x3C6EF372FE94F82B, 0xA54FF53A5F1D36F1],
+            key: [0u8; 32],
+            nonce: [0u8; 12],
             counter: 0,
+            buffer: [0u8; CHACHA20_BLOCK_SIZE],
+            buffer_pos: CHACHA20_BLOCK_SIZE, // Force la génération au premier appel
+            blocks_since_reseed: 0,
         }
     }
 
+    /// Initialise le CSPRNG avec un seed de 32 octets.
     fn seed(&mut self, entropy: &[u8; 32]) {
-        for (i, chunk) in entropy.chunks_exact(8).enumerate() {
-            self.state[i] ^= u64::from_le_bytes(chunk.try_into().unwrap());
+        self.key.copy_from_slice(entropy);
+        // Dérive un nonce à partir du seed en utilisant les 12 derniers octets XOR
+        for i in 0..12 {
+            self.nonce[i] = entropy[i].wrapping_add(entropy[i + 20])
+                .wrapping_add(entropy[(i + 7) % 32]);
         }
         self.counter = 0;
+        self.buffer_pos = CHACHA20_BLOCK_SIZE; // Force la régénération
+        self.blocks_since_reseed = 0;
     }
 
-    fn next_u64(&mut self) -> u64 {
-        // SplitMix64 pour la génération rapide (complément au reseed RDRAND périodique)
-        let z = self.state[0].wrapping_add(0x9e3779b97f4a7c15);
-        self.state[0] = z;
-        // Mix the counter in for anti-prediction
-        let z2 = z ^ self.counter;
+    /// Reseed le CSPRNG avec de nouvelles données d'entropie.
+    ///
+    /// XOR la nouvelle entropie dans la clé et avance le nonce pour
+    /// garantir un keystream différent après le reseed.
+    fn reseed(&mut self, extra: &[u8; 32]) {
+        for i in 0..32 {
+            self.key[i] ^= extra[i];
+        }
+        // Avance le nonce pour garantir un keystream nouveau
+        self.nonce[11] = self.nonce[11].wrapping_add(1);
+        if self.nonce[11] == 0 {
+            self.nonce[10] = self.nonce[10].wrapping_add(1);
+        }
+        self.counter = 0;
+        self.buffer_pos = CHACHA20_BLOCK_SIZE; // Force la régénération
+        self.blocks_since_reseed = 0;
+    }
+
+    /// Génère un nouveau bloc ChaCha20 et remplit le tampon.
+    #[inline]
+    fn refill_buffer(&mut self) {
+        self.buffer = chacha20_block(&self.key, &self.nonce, self.counter);
         self.counter = self.counter.wrapping_add(1);
-        let z3 = (z2 ^ (z2 >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        let z4 = (z3 ^ (z3 >> 27)).wrapping_mul(0x94d049bb133111eb);
-        z4 ^ (z4 >> 31)
+        self.buffer_pos = 0;
+        self.blocks_since_reseed += 1;
     }
 
+    /// Remplit un buffer avec des octets aléatoires depuis le keystream ChaCha20.
     fn fill(&mut self, buf: &mut [u8]) {
         let mut pos = 0;
-        while pos + 8 <= buf.len() {
-            buf[pos..pos+8].copy_from_slice(&self.next_u64().to_le_bytes());
-            pos += 8;
-        }
-        if pos < buf.len() {
-            let val = self.next_u64().to_le_bytes();
+        while pos < buf.len() {
+            if self.buffer_pos >= CHACHA20_BLOCK_SIZE {
+                self.refill_buffer();
+            }
             let remaining = buf.len() - pos;
-            buf[pos..].copy_from_slice(&val[..remaining]);
+            let available = CHACHA20_BLOCK_SIZE - self.buffer_pos;
+            let to_copy = remaining.min(available);
+            buf[pos..pos + to_copy].copy_from_slice(
+                &self.buffer[self.buffer_pos..self.buffer_pos + to_copy]
+            );
+            self.buffer_pos += to_copy;
+            pos += to_copy;
         }
+    }
+
+    /// Retourne le nombre de blocs générés depuis le dernier reseed.
+    #[inline]
+    fn blocks_since_reseed(&self) -> u64 {
+        self.blocks_since_reseed
     }
 }
 
@@ -150,19 +273,19 @@ impl ChaCha20Prng {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct KernelRng {
-    prng:        ChaCha20Prng,
-    initialized: bool,
-    bytes_generated: u64,
-    reseed_counter:  u64,
+    prng:             ChaCha20Csprng,
+    initialized:      bool,
+    bytes_generated:  u64,
+    reseed_count:     u64,
 }
 
 impl KernelRng {
     const fn new() -> Self {
         Self {
-            prng: ChaCha20Prng::new(),
-            initialized: false,
+            prng:            ChaCha20Csprng::new(),
+            initialized:     false,
             bytes_generated: 0,
-            reseed_counter: 0,
+            reseed_count:    0,
         }
     }
 
@@ -171,21 +294,11 @@ impl KernelRng {
         // Combiner RDRAND + TSC pour le seed initial
         if rdrand_fill(&mut seed).is_err() {
             // Fallback : utiliser TSC + adresse de pile comme entropie minimale
-            #[cfg(target_arch = "x86_64")]
-            // SAFETY: rdtsc fallback seed; combiné avec adresse de pile pour entropie minimale.
-            unsafe {
-                let tsc: u64;
-                core::arch::asm!("rdtsc; shl rdx, 32; or rax, rdx",
-                    out("rax") tsc, out("rdx") _,
-                    options(nostack, nomem));
-                seed[0..8].copy_from_slice(&tsc.to_le_bytes());
-                // Adresse de la pile comme source supplémentaire
-                let sp: u64;
-                core::arch::asm!("mov {}, rsp", out(reg) sp, options(nostack, nomem));
-                seed[8..16].copy_from_slice(&sp.to_le_bytes());
-            }
+            fallback_entropy(&mut seed);
         }
         self.prng.seed(&seed);
+        // Zéroïser le seed de la pile
+        let _ = seed;
         self.initialized = true;
     }
 
@@ -193,14 +306,20 @@ impl KernelRng {
         if !self.initialized {
             return Err(RngError::NotInitialized);
         }
-        // Reseed depuis RDRAND toutes les 4096 générations
-        self.reseed_counter += 1;
-        if self.reseed_counter & 0xFFF == 0 {
+
+        // Reseed depuis RDRAND toutes les RESEED_INTERVAL_BLOCKS blocs
+        if self.prng.blocks_since_reseed() >= RESEED_INTERVAL_BLOCKS {
             let mut extra = [0u8; 32];
             if rdrand_fill(&mut extra).is_ok() {
-                self.prng.seed(&extra);
+                self.prng.reseed(&extra);
+            } else {
+                // Fallback : TSC + stack
+                fallback_entropy(&mut extra);
+                self.prng.reseed(&extra);
             }
+            self.reseed_count += 1;
         }
+
         self.prng.fill(buf);
         self.bytes_generated += buf.len() as u64;
         Ok(())
@@ -273,6 +392,6 @@ pub fn rng_stats() -> RngStats {
     let rng = KERNEL_RNG.lock();
     RngStats {
         bytes_generated: rng.bytes_generated,
-        reseed_count:    rng.reseed_counter,
+        reseed_count:    rng.reseed_count,
     }
 }

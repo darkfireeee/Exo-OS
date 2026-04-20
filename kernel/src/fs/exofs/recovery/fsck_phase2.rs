@@ -17,7 +17,6 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
 use crate::fs::exofs::core::blob_id::verify_blob_id;
 use super::boot_recovery::BlockDevice;
-use super::block_io::read_bytes;
 use super::fsck_phase1::Phase1Report;
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
@@ -222,8 +221,6 @@ pub struct Phase2Report {
     pub orphans:        u64,
     /// Table de comptage de référence construite.
     pub ref_counter:    BlobRefCounter,
-    /// Entrées d'allocation observées pendant le scan.
-    pub alloc_entries:  Vec<AllocEntry>,
 }
 
 impl Phase2Report {
@@ -234,12 +231,6 @@ impl Phase2Report {
     /// Nombre d'erreurs.
     #[inline]
     pub fn error_count(&self) -> usize { self.errors.len() }
-
-    /// Itère sur les entrées d'allocation observées par la phase 2.
-    #[inline]
-    pub fn alloc_entries_iter(&self) -> core::slice::Iter<'_, AllocEntry> {
-        self.alloc_entries.iter()
-    }
 }
 
 // ── Entrée de la table d'allocation ──────────────────────────────────────────
@@ -310,7 +301,6 @@ impl FsckPhase2 {
                     blobs_hash_err: 0,
                     orphans:        0,
                     ref_counter:    BlobRefCounter::new(),
-                    alloc_entries:  Vec::new(),
                 };
                 RECOVERY_LOG.log_phase_done(2, 0);
                 return Ok(report);
@@ -324,8 +314,8 @@ impl FsckPhase2 {
         let mut blobs_walked:   u64 = 0;
         let mut blobs_ok:       u64 = 0;
         let mut blobs_hash_err: u64 = 0;
+        let orphans:        u64 = 0;
         let mut ref_counter = BlobRefCounter::new();
-        let mut alloc_entries = Vec::new();
 
         // Parcourir la table d'allocation bloc par bloc.
         let entries_per_block = (device.block_size() as usize)
@@ -366,12 +356,10 @@ impl FsckPhase2 {
                 // Lire l'entrée.
                 // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
                 let entry: AllocEntry = unsafe { core::mem::transmute_copy(entry_bytes) };
-                alloc_entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-                alloc_entries.push(entry);
 
                 // Lire l'en-tête du blob.
                 let mut hdr_buf = [0u8; BLOB_HEADER_SIZE];
-                if read_bytes(device, entry.hdr_lba, &mut hdr_buf).is_err() {
+                if device.read_block(entry.hdr_lba, &mut hdr_buf).is_err() {
                     errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     errors.push(Phase2Error {
                         kind:    Phase2ErrorKind::IoError,
@@ -404,11 +392,13 @@ impl FsckPhase2 {
                     }
                 };
 
+                blobs_walked = blobs_walked.checked_add(1).unwrap_or(u64::MAX);
+
                 // Lire les données pour HASH-02.
                 let data_len = hdr.data_len as usize;
                 if data_len > 0 && data_len <= 64 * 1024 * 1024 {
                     let mut data_buf = alloc::vec![0u8; data_len];
-                    if read_bytes(device, hdr.data_lba, &mut data_buf).is_ok() {
+                    if device.read_block(hdr.data_lba, &mut data_buf).is_ok() {
                         // HASH-02 : verify_blob_id sur données RAW.
                         let blob_id = hdr.blob_id();
                         if verify_blob_id(&blob_id, &data_buf) {
@@ -453,15 +443,6 @@ impl FsckPhase2 {
         RECOVERY_LOG.log_phase_done(2, error_count);
         RECOVERY_AUDIT.record_phase_done(2, error_count);
 
-        let mut orphans = 0u64;
-        let mut idx = 0usize;
-        while idx < alloc_entries.len() {
-            if ref_counter.count(&alloc_entries[idx].blob_id) == 0 {
-                orphans = orphans.checked_add(1).unwrap_or(u64::MAX);
-            }
-            idx = idx.wrapping_add(1);
-        }
-
         Ok(Phase2Report {
             errors,
             blobs_walked,
@@ -469,7 +450,6 @@ impl FsckPhase2 {
             blobs_hash_err,
             orphans,
             ref_counter,
-            alloc_entries,
         })
     }
 }
@@ -517,31 +497,8 @@ mod tests {
             blobs_hash_err: 0,
             orphans:        0,
             ref_counter:    BlobRefCounter::new(),
-            alloc_entries:  Vec::new(),
         };
         assert!(r.is_clean());
-    }
-
-    #[test]
-    fn test_alloc_entries_iter_exposes_entries() {
-        let entry = AllocEntry {
-            blob_id: [0xAA; 32],
-            hdr_lba: 1,
-            data_lba: 2,
-            data_len: 3,
-        };
-        let r = Phase2Report {
-            errors:         Vec::new(),
-            blobs_walked:   1,
-            blobs_ok:       1,
-            blobs_hash_err: 0,
-            orphans:        0,
-            ref_counter:    BlobRefCounter::new(),
-            alloc_entries:  alloc::vec![entry],
-        };
-        let collected: Vec<AllocEntry> = r.alloc_entries_iter().copied().collect();
-        assert_eq!(collected.len(), 1);
-        assert_eq!(collected[0].hdr_lba, 1);
     }
 
     #[test]

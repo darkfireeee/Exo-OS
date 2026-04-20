@@ -81,6 +81,8 @@ pub enum ActionTag {
     HandoffTriggered { reason: u32 },
     /// Violation du boot seal (réseau/FS actifs avant SECURITY_READY).
     BootSealViolation { step: u8 },
+    /// Watchdog expiré (ExoNmi — strikes dépassés).
+    WatchdogExpired { strikes: u32 },
 
     // ── Actions normales (ring buffer) ──────────────────────────────────────
     /// Capability révoquée.
@@ -110,6 +112,7 @@ impl ActionTag {
                 | ActionTag::IommuFault { .. }
                 | ActionTag::HandoffTriggered { .. }
                 | ActionTag::BootSealViolation { .. }
+                | ActionTag::WatchdogExpired { .. }
         )
     }
 
@@ -134,6 +137,10 @@ impl ActionTag {
             ActionTag::BootSealViolation { step } => {
                 buf[0..8].copy_from_slice(&4u64.to_le_bytes());
                 buf[8] = *step;
+            }
+            ActionTag::WatchdogExpired { strikes } => {
+                buf[0..8].copy_from_slice(&5u64.to_le_bytes());
+                buf[8..12].copy_from_slice(&strikes.to_le_bytes());
             }
             ActionTag::CapabilityRevoked { oid } => {
                 buf[0..8].copy_from_slice(&10u64.to_le_bytes());

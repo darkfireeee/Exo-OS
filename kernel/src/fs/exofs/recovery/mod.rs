@@ -41,7 +41,6 @@ pub mod recovery_log;
 pub mod recovery_audit;
 pub mod checkpoint;
 pub mod boot_recovery;
-pub(crate) mod block_io;
 pub mod slot_recovery;
 pub mod epoch_replay;
 pub mod fsck_phase1;

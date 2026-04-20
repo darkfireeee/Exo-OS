@@ -482,6 +482,7 @@ fn handle_fork_inplace(frame: &SyscallFrame) -> i64 {
         target_cpu:    tcb.current_cpu().0,
         child_rip:     frame.rcx,   // RIP de retour sauvé par SYSCALL hw
         child_rsp:     frame.rsp,   // RSP userspace sauvé au stub ASM
+        parent_rflags: frame.r11,   // RFLAGS sauvés par SYSCALL hw — CORRECTION P2-02
     };
 
     match do_fork(&ctx) {

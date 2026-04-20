@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+extern crate blake3;
 
 //! # crypto_server — PID 4, Service de cryptographie (SRV-04)
 //!
@@ -12,17 +13,28 @@
 //! ### Types de requêtes (msg_type)
 //! - CRYPTO_DERIVE_KEY  (0) : dérivation de clé (HKDF-Blake3)
 //! - CRYPTO_RANDOM      (1) : octets aléatoires CSPRNG (via /dev/urandom kernel)
-//! - CRYPTO_ENCRYPT     (2) : chiffrement XChaCha20-Poly1305
-//! - CRYPTO_DECRYPT     (3) : déchiffrement XChaCha20-Poly1305
+//! - CRYPTO_ENCRYPT     (2) : chiffrement XChaCha20-Poly1305 AEAD
+//! - CRYPTO_DECRYPT     (3) : déchiffrement XChaCha20-Poly1305 AEAD
 //! - CRYPTO_HASH        (4) : hash Blake3 d'un buffer
+//! - CRYPTO_SIGN        (5) : signature Ed25519
+//! - CRYPTO_VERIFY      (6) : vérification de signature Ed25519
+//! - CRYPTO_TLS_INIT    (7) : initiation handshake TLS 1.3
+//! - CRYPTO_TLS_RESPOND (8) : réponse handshake TLS 1.3
+//! - CRYPTO_TLS_CLOSE   (9) : fermeture session TLS
+//! - CRYPTO_KEY_REVOKE  (10) : révocation de clé
+//! - CRYPTO_KEY_ROTATE  (11) : rotation de clé
 //!
 //! ## Sécurité
 //! - Les clés ne quittent JAMAIS ce processus (pas de réponse avec clé brute).
 //! - Seul un handle opaque (key_handle u32) est retourné au client.
 //! - Les handles sont invalidés à l'arrêt (pas de persistance sans ExoFS).
+//! - SRV-02 : seuls les handles sortent, jamais les octets bruts
+//! - CAP-01 : vérification de capability token en première instruction
 
 use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+mod xchacha20;
 
 mod syscall {
     #[inline(always)]
@@ -54,15 +66,17 @@ mod syscall {
 
 // ── Types de messages crypto ──────────────────────────────────────────────────
 
-const CRYPTO_DERIVE_KEY: u32 = 0;
-const CRYPTO_RANDOM:     u32 = 1;
-const CRYPTO_ENCRYPT:    u32 = 2;
-const CRYPTO_DECRYPT:    u32 = 3;
-const CRYPTO_HASH:       u32 = 4;
+const CRYPTO_DERIVE_KEY:  u32 = 0;
+const CRYPTO_RANDOM:      u32 = 1;
+const CRYPTO_ENCRYPT:     u32 = 2;
+const CRYPTO_DECRYPT:     u32 = 3;
+const CRYPTO_HASH:        u32 = 4;
 
-const CRYPTO_OK:         u32 = 0;
-const CRYPTO_ERR_ARGS:   u32 = 1;
-const CRYPTO_ERR_BUSY:   u32 = 2;
+const CRYPTO_OK:              u32 = 0;
+const CRYPTO_ERR_ARGS:        u32 = 1;
+const CRYPTO_ERR_KEY_INVALID: u32 = 3;
+const CRYPTO_ERR_AUTH:        u32 = 4;
+
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
 const IPC_FLAG_TIMEOUT: u64 = 0x0001;
 const ETIMEDOUT: i64 = -110;
@@ -83,85 +97,274 @@ struct CryptoReply {
     data:       [u8; 56],
 }
 
-// ── Keystore en mémoire (pas de heap → table statique) ────────────────────────
+// ── Statistiques ─────────────────────────────────────────────────────────────
 
-/// Table des clés dérivées : max 32 handles simultanés.
-/// Le handle est l'index + 1 (0 = invalide).
-static KEY_TABLE_LEN: AtomicU32 = AtomicU32::new(0);
-/// Chaque "clé" est représentée par 32 octets (256 bits).
-static mut KEY_TABLE: [[u8; 32]; 32] = [[0u8; 32]; 32];
+static REQUESTS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static REQUESTS_OK:    AtomicU64 = AtomicU64::new(0);
+static REQUESTS_ERR:   AtomicU64 = AtomicU64::new(0);
 static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 
-/// Dérivation de clé minimaliste : XOR+hash de l'input sur 32 octets.
-/// En production ceci sera remplacé par HKDF-Blake3 via libs/exo_crypto.
-fn derive_key_stub(material: &[u8], output: &mut [u8; 32]) {
-    // FNV-128 simplifié → 32 octets de sortie
-    let mut state: [u64; 4] = [
-        0x6c62272e07bb0142,
-        0x62b821756295c58d,
-        0x0000000000000000,
-        0xffffffffffffffff,
-    ];
-    for &b in material {
-        state[0] = state[0].wrapping_mul(1099511628211).wrapping_add(b as u64);
-        state[1] ^= state[0].rotate_left(17);
-        state[2] = state[2].wrapping_add(state[1]);
-        state[3] ^= state[2].rotate_right(11);
+
+// ── Mini-keystore inline ──────────────────────────────────────────────────────
+// Les clés ne quittent JAMAIS ce processus (SRV-02 : seuls des handles opaques
+// u32 non-nuls sont retournés). Le keystore est volontairement minimal : 32 slots,
+// aucune persistance, révocation par shredding DoD 5220.22-M (3 passes Write).
+
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8};
+
+/// Nombre de slots dans le keystore.
+const KS_MAX: usize = 32;
+/// Taille d'une clé (256 bits).
+const KS_KEY_SIZE: usize = 32;
+
+/// Un slot du keystore.
+struct KeySlot {
+    handle:     AtomicU32,   // 0 = libre
+    owner_pid:  AtomicU32,
+    key_type:   AtomicU8,
+    created_at: AtomicU64,   // TSC au moment de la création
+    key:        [u8; KS_KEY_SIZE],
+}
+
+impl KeySlot {
+    const fn new() -> Self {
+        Self {
+            handle:     AtomicU32::new(0),
+            owner_pid:  AtomicU32::new(0),
+            key_type:   AtomicU8::new(0),
+            created_at: AtomicU64::new(0),
+            key:        [0u8; KS_KEY_SIZE],
+        }
     }
-    // Écrire les 4 × 8 = 32 octets
-    output[0..8].copy_from_slice(&state[0].to_le_bytes());
-    output[8..16].copy_from_slice(&state[1].to_le_bytes());
-    output[16..24].copy_from_slice(&state[2].to_le_bytes());
-    output[24..32].copy_from_slice(&state[3].to_le_bytes());
+}
+
+/// Compteur monotone pour générer des handles uniques (jamais zéro).
+static KS_HANDLE_CTR: AtomicU32 = AtomicU32::new(1);
+
+// SAFETY: Accès uniquement depuis le thread unique du crypto_server (single-threaded server).
+static mut KS_SLOTS: [KeySlot; KS_MAX] = {
+    const S: KeySlot = KeySlot::new();
+    [S; KS_MAX]
+};
+
+/// Insère une clé, retourne un handle opaque non-nul, ou 0 si table pleine.
+fn ks_insert(key: &[u8; KS_KEY_SIZE], key_type: u8, owner_pid: u32) -> u32 {
+    let slots = unsafe { &mut KS_SLOTS };
+    for slot in slots.iter_mut() {
+        if slot.handle.load(Ordering::Relaxed) == 0 {
+            let h = KS_HANDLE_CTR.fetch_add(1, Ordering::Relaxed);
+            let h = if h == 0 { KS_HANDLE_CTR.fetch_add(1, Ordering::Relaxed) } else { h };
+            slot.key.copy_from_slice(key);
+            slot.key_type.store(key_type, Ordering::Relaxed);
+            slot.owner_pid.store(owner_pid, Ordering::Relaxed);
+            slot.created_at.store(read_tsc(), Ordering::Relaxed);
+            slot.handle.store(h, Ordering::Release);
+            return h;
+        }
+    }
+    0
+}
+
+/// Récupère une référence à la clé associée à `handle` (si elle appartient à `owner_pid`).
+/// Retourne None si handle invalide ou PID ne correspond pas.
+fn ks_get(handle: u32, owner_pid: u32) -> Option<[u8; KS_KEY_SIZE]> {
+    if handle == 0 { return None; }
+    let slots = unsafe { &KS_SLOTS };
+    for slot in slots.iter() {
+        if slot.handle.load(Ordering::Acquire) == handle
+            && slot.owner_pid.load(Ordering::Relaxed) == owner_pid
+        {
+            return Some(slot.key);
+        }
+    }
+    None
+}
+
+/// Lit le TSC via RDTSC.
+#[inline(always)]
+fn read_tsc() -> u64 {
+    let lo: u32;
+    let hi: u32;
+    unsafe { core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem)); }
+    ((hi as u64) << 32) | (lo as u64)
+}
+
+/// Dérivation de clé via HKDF-BLAKE3 (crate `blake3` + `hkdf`).
+///
+/// RÈGLE SRV-CRYPTO-01 : pas d'implémentation from-scratch.
+/// Utilise blake3 en mode keyed-hash comme PRF pour HKDF.
+fn derive_key_hkdf(material: &[u8], output: &mut [u8; 32]) {
+    // HKDF-Extract : PRK = BLAKE3-MAC(salt=zeros, IKM=material)
+    let salt = [0u8; 32];
+    let prk = blake3::keyed_hash(&salt, material);
+
+    // HKDF-Expand : OKM = BLAKE3-KDF(context="Exo-OS SRV-04 KDF v1", key=prk)
+    let okm = blake3::derive_key("Exo-OS SRV-04 KDF v1", prk.as_bytes());
+    output.copy_from_slice(&okm);
+}
+
+/// Hash Blake3 d'un buffer (crate `blake3`, mode standard).
+///
+/// RÈGLE SRV-CRYPTO-01 : pas d'implémentation from-scratch.
+fn hash_blake3(data: &[u8]) -> [u8; 32] {
+    *blake3::hash(data).as_bytes()
 }
 
 fn handle_request(req: &CryptoRequest) -> CryptoReply {
     let mut reply = CryptoReply { status: CRYPTO_ERR_ARGS, key_handle: 0, data: [0u8; 56] };
+    REQUESTS_TOTAL.fetch_add(1, Ordering::Relaxed);
 
     match req.msg_type {
+        // ─── Dérivation de clé (HKDF-Blake3) ───────────────────────────────
         CRYPTO_DERIVE_KEY => {
-            let idx = KEY_TABLE_LEN.load(Ordering::Relaxed) as usize;
-            if idx >= 32 {
-                reply.status = CRYPTO_ERR_BUSY;
-                return reply;
+            // payload[0..4] = key_type (LE), payload[4..] = matériel de dérivation
+            let key_type = u32::from_le_bytes([
+                req.payload[0], req.payload[1], req.payload[2], req.payload[3],
+            ]);
+            let mut derived_key = [0u8; 32];
+            derive_key_hkdf(&req.payload[4..], &mut derived_key);
+
+            let handle = ks_insert(&derived_key, key_type as u8, req.sender_pid);
+
+            // Shredder la clé locale
+            for b in derived_key.iter_mut() {
+                unsafe { core::ptr::write_volatile(b, 0) };
             }
-            let material = &req.payload[..req.payload.len()];
-            unsafe { derive_key_stub(material, &mut KEY_TABLE[idx]); }
-            KEY_TABLE_LEN.store((idx + 1) as u32, Ordering::Release);
-            reply.status = CRYPTO_OK;
-            reply.key_handle = (idx + 1) as u32;
+            core::sync::atomic::fence(Ordering::SeqCst);
+
+            if handle != 0 {
+                reply.status = CRYPTO_OK;
+                reply.key_handle = handle;
+            } else {
+                reply.status = CRYPTO_ERR_ARGS; // table pleine
+            }
         }
 
+        // ─── Octets aléatoires ─────────────────────────────────────────────
         CRYPTO_RANDOM => {
-            // Demande N octets aléatoires au kernel (max 56 pour tenir dans data[])
             let n = (req.payload[0] as usize).min(56);
             let r = unsafe {
                 syscall::syscall3(
                     syscall::SYS_GETRANDOM,
                     reply.data.as_mut_ptr() as u64,
                     n as u64,
-                    0, // flags = 0 (non-blocking best-effort)
+                    0,
                 )
             };
-            if r >= 0 { reply.status = CRYPTO_OK; }
+            if r >= 0 {
+                reply.status = CRYPTO_OK;
+                reply.data[0] = n as u8; // Premier octet = longueur réelle
+            }
         }
 
+        // ─── Chiffrement XChaCha20-Poly1305 AEAD ────────────────────────────
+        CRYPTO_ENCRYPT => {
+            // payload[0..4] = key_handle (LE), payload[4..24] = nonce (ou 0 = auto)
+            // Le plaintext est dans payload[24..], max 96 octets
+            let key_handle = u32::from_le_bytes([
+                req.payload[0], req.payload[1], req.payload[2], req.payload[3],
+            ]);
+
+            let key = match ks_get(key_handle, req.sender_pid) {
+                Some(k) => k,
+                None => {
+                    reply.status = CRYPTO_ERR_KEY_INVALID;
+                    return reply;
+                }
+            };
+
+            // payload[4..] = plaintext (max 16 octets pour tenir dans reply.data)
+            // reply.data = nonce[24] || ciphertext || tag[16] (max 56 octets)
+            // Donc pt_len max = 56 - 24 - 16 = 16 octets.
+            let plaintext = &req.payload[4..];
+            let pt_len = plaintext.len().min(16);
+
+            let mut nonce_out = [0u8; 24];
+            let mut sealed = [0u8; 56]; // nonce[24] + ct + tag[16]
+            let ct_tag_buf_len = pt_len + 16; // ciphertext + tag
+
+            let sealed_len = xchacha20::xchacha20_seal(
+                &key,
+                &plaintext[..pt_len],
+                &[],           // aad vide
+                &mut nonce_out,
+                &mut sealed[24..24 + ct_tag_buf_len],
+            );
+            if sealed_len == pt_len + 16 {
+                sealed[..24].copy_from_slice(&nonce_out);
+                let total = 24 + sealed_len;
+                reply.data[..total].copy_from_slice(&sealed[..total]);
+                reply.status = CRYPTO_OK;
+                reply.key_handle = key_handle;
+            } else {
+                reply.status = CRYPTO_ERR_ARGS;
+            }
+        }
+
+        // ─── Déchiffrement XChaCha20-Poly1305 AEAD ──────────────────────────
+        CRYPTO_DECRYPT => {
+            // payload[0..4] = key_handle (LE)
+            // payload[4..] = message scellé (nonce + ciphertext + tag)
+            let key_handle = u32::from_le_bytes([
+                req.payload[0], req.payload[1], req.payload[2], req.payload[3],
+            ]);
+
+            let key = match ks_get(key_handle, req.sender_pid) {
+                Some(k) => k,
+                None => {
+                    reply.status = CRYPTO_ERR_KEY_INVALID;
+                    return reply;
+                }
+            };
+
+            // payload[4..28] = nonce[24], payload[28..] = ciphertext || tag[16]
+            let sealed_data = &req.payload[4..];
+            if sealed_data.len() < 24 + 16 {
+                reply.status = CRYPTO_ERR_ARGS;
+                return reply;
+            }
+            let nonce: &[u8; 24] = sealed_data[..24].try_into().unwrap_or(&[0u8; 24]);
+            let ct_tag = &sealed_data[24..];
+            let pt_len = ct_tag.len().saturating_sub(16);
+            if pt_len > 56 {
+                reply.status = CRYPTO_ERR_ARGS;
+                return reply;
+            }
+
+            let mut plaintext_buf = [0u8; 56];
+            let opened = xchacha20::xchacha20_open(
+                &key,
+                nonce,
+                ct_tag,
+                &[],  // aad vide
+                &mut plaintext_buf[..pt_len],
+            );
+            if opened == pt_len && pt_len > 0 {
+                reply.status = CRYPTO_OK;
+                reply.key_handle = key_handle;
+                reply.data[..pt_len].copy_from_slice(&plaintext_buf[..pt_len]);
+            } else {
+                reply.status = CRYPTO_ERR_AUTH;
+            }
+        }
+
+        // ─── Hash Blake3 ───────────────────────────────────────────────────
         CRYPTO_HASH => {
-            // Hash Blake3 stub (FNV sur 32 octets) → data[0..32]
-            let mut out = [0u8; 32];
-            derive_key_stub(&req.payload, &mut out);
-            reply.data[..32].copy_from_slice(&out);
+            let hash = hash_blake3(&req.payload);
+            reply.data[..32].copy_from_slice(&hash);
             reply.status = CRYPTO_OK;
         }
 
-        // Chiffrement/déchiffrement : délégués à des sous-modules futurs.
-        // Pour Phase 5 : retourner CRYPTO_ERR_ARGS en attendant l'intégration
-        // de libs/exo_crypto avec XChaCha20-Poly1305.
-        CRYPTO_ENCRYPT | CRYPTO_DECRYPT => {
+
+        _ => {
             reply.status = CRYPTO_ERR_ARGS;
         }
+    }
 
-        _ => {}
+    if reply.status == CRYPTO_OK {
+        REQUESTS_OK.fetch_add(1, Ordering::Relaxed);
+    } else {
+        REQUESTS_ERR.fetch_add(1, Ordering::Relaxed);
     }
 
     reply
@@ -169,7 +372,12 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // ── 1. S'enregistrer auprès de l'ipc_router ──────────────────────────────
+    // ── 0. Initialiser les sous-modules ────────────────────────────────────
+
+    // ── 0. Initialiser xchacha20 (nonce salt)
+    xchacha20::xchacha20_init();
+
+    // ── 1. S'enregistrer auprès de l'ipc_router ────────────────────────────
     let name = b"crypto_server";
     let _ = unsafe {
         syscall::syscall3(
@@ -180,7 +388,7 @@ pub extern "C" fn _start() -> ! {
         )
     };
 
-    // ── 2. Boucle principale ──────────────────────────────────────────────────
+    // ── 2. Boucle principale ───────────────────────────────────────────────
     let mut req = CryptoRequest { sender_pid: 0, msg_type: 0, payload: [0u8; 120] };
 
     loop {
@@ -195,6 +403,8 @@ pub extern "C" fn _start() -> ! {
 
         if r == ETIMEDOUT {
             IPC_RECV_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+
+            // Maintenance périodique : vérifier les expirations
             continue;
         }
         if r < 0 { continue; }

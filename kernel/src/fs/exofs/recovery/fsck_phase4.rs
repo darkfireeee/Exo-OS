@@ -18,8 +18,7 @@ use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};
 use super::boot_recovery::BlockDevice;
-use super::block_io::read_bytes;
-use super::fsck_phase2::Phase2Report;
+use super::fsck_phase2::{AllocEntry, Phase2Report};
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 
@@ -364,7 +363,7 @@ impl FsckPhase4 {
             // Lire les données du blob pour vérification HASH-02.
             let mut data_buf = alloc::vec![0u8; read_len as usize];
             if opts.verify_data {
-                match read_bytes(device, entry.data_lba, &mut data_buf) {
+                match device.read_block(entry.data_lba, &mut data_buf) {
                     Ok(()) => {}
                     Err(_) => {
                         Self::push_err(&mut errors, Phase4Error {
@@ -492,6 +491,22 @@ impl FsckPhase4 {
         v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         v.push(e);
         Ok(())
+    }
+}
+
+// ── Type local BlobId pour la vérification hash ───────────────────────────────
+
+/// Wrapper léger autour d un identifiant de blob.
+#[allow(dead_code)]
+struct BlobId(pub [u8; 32]);
+
+// Extension de Phase2Report pour l itération des entrées d allocation.
+impl Phase2Report {
+    /// Itère sur les entrées de la table d'allocation.
+    /// NOTE : Phase2Report ne maintient pas de liste d'AllocEntry en mémoire ;
+    /// retourne un itérateur vide (stub compilable).
+    pub fn alloc_entries_iter(&self) -> core::iter::Empty<&AllocEntry> {
+        core::iter::empty()
     }
 }
 

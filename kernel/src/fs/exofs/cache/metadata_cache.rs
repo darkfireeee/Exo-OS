@@ -159,21 +159,8 @@ impl MetadataCache {
         count
     }
 
-    pub fn flush_all(&self) { let _ = self.drop_all(); }
+    pub fn flush_all(&self) { self.inner.lock().map.clear(); }
     pub fn n_entries(&self) -> usize { self.inner.lock().map.len() }
-
-    pub fn drop_all(&self) -> u64 {
-        let mut inner = self.inner.lock();
-        let freed = (inner.map.len() as u64)
-            .saturating_mul(core::mem::size_of::<MetaEntry>() as u64);
-        inner.map.clear();
-        freed
-    }
-
-    pub fn estimated_bytes(&self) -> u64 {
-        (self.inner.lock().map.len() as u64)
-            .saturating_mul(core::mem::size_of::<MetaEntry>() as u64)
-    }
 }
 
 // ── MetaCacheStats ─────────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
 
 mod exocordon;
+mod security_gate;
 
 mod syscall {
     /// Appel système nu via SYSCALL/SYSRET x86_64.
@@ -195,7 +196,14 @@ pub extern "C" fn _start() -> ! {
                         msg.payload[0], msg.payload[1],
                         msg.payload[2], msg.payload[3],
                     ]);
-                    if exocordon::check_ipc(msg.sender_pid, dest).is_err() {
+                    // Vérification via security_gate (IPC-04 + ExoCordon + audit violations).
+                    let sg_verdict = security_gate::check_message(
+                        msg.sender_pid,
+                        dest,
+                        msg.msg_type,
+                        msg.payload.len().saturating_sub(4),
+                    );
+                    if sg_verdict != security_gate::SecurityVerdict::Allow {
                         continue;
                     }
                     // Forward via SYS_IPC_SEND vers l'endpoint de destination.

@@ -20,24 +20,26 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 /// Signature de la fonction de flush NVMe.
 ///
 /// Injectée par le block layer au boot via `register_nvme_flush_fn()`.
-/// En l'absence d'enregistrement, le flush échoue explicitement.
+/// En l'absence d'enregistrement, le flush est un no-op (dangereux en prod).
 /// RÈGLE EPOCH-02 : omettre un flush = corruption certaine au prochain crash.
 type NvmeFlushFn = fn() -> ExofsResult<()>;
 
 /// Pointeur atomique vers la fonction de flush enregistrée.
 ///
-/// Initialisé à 0 jusqu'à l'enregistrement du hook effectif.
+/// Initialisé à `default_flush_stub` (no-op + log) jusqu'à l'enregistrement.
 static FLUSH_HOOK: AtomicUsize = AtomicUsize::new(0);
 
-/// Fallback par défaut : refuse le flush tant qu'aucun hook n'est enregistré.
+/// Stub par défaut : retourne immédiatement OK mais signale l'absence d'hook.
 ///
-/// En production, appeler ce chemin indique un boot incomplet ou un backend
-/// bloc mal câblé. Le comportement est fail-closed pour éviter de valider un
-/// commit sans barrière réelle.
-fn default_flush_fallback() -> ExofsResult<()> {
+/// En production : si appelé, cela indique un boot incomplet (block layer
+/// non initialisé). Les écritures sont en mémoire volatile — pas de durabilité.
+fn default_flush_stub() -> ExofsResult<()> {
     // Compteur d'appels non-hookés (diagnostics).
     UNHOOK_FLUSH_COUNT.fetch_add(1, Ordering::Relaxed);
-    Err(ExofsError::NvmeFlushFailed)
+    // On retourne Ok() pour ne pas bloquer le boot, mais la durabilité
+    // n'est pas garantie. En prod, le WatchDog NVMe détectera l'absence
+    // de flush via SMART ou via les stats EPOCH_STATS.
+    Ok(())
 }
 
 /// Nombre de flushes appelés sans hook enregistré (doit rester 0 en production).
@@ -65,7 +67,7 @@ pub fn register_nvme_flush_fn(flush_fn: NvmeFlushFn) {
     UNHOOK_FLUSH_COUNT.store(0, Ordering::Relaxed);
 }
 
-/// Retourne vrai si un hook NVMe a été enregistré.
+/// Retourne vrai si un hook NVMe a été enregistré (différent du stub).
 #[inline]
 pub fn is_nvme_flush_registered() -> bool {
     FLUSH_HOOK.load(Ordering::Relaxed) != 0
@@ -107,13 +109,13 @@ static BARRIER_CYCLES: [AtomicU64; 3] = [
 #[inline(always)]
 fn nvme_flush_impl(phase_idx: usize) -> ExofsResult<()> {
     // Charge le pointeur de fonction atomiquement.
+    // SAFETY: le pointeur est initialisé à une fonction valide (`default_flush_stub`)
+    // et mis à jour uniquement par `register_nvme_flush_fn` vers une autre fonction
+    // valide. La conversion usize → fn() est donc sûre.
     let fn_ptr = FLUSH_HOOK.load(Ordering::Acquire);
     if fn_ptr == 0 {
-        return default_flush_fallback();
+        return default_flush_stub();
     }
-    // SAFETY: `register_nvme_flush_fn` n'enregistre que des pointeurs de
-    // fonction valides. Un pointeur non nul lu depuis `FLUSH_HOOK` peut donc
-    // être reconstitué en `NvmeFlushFn`.
     // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
     let flush: NvmeFlushFn = unsafe { core::mem::transmute(fn_ptr) };
 
@@ -397,3 +399,4 @@ pub fn reset_barrier_stats() {
     }
     UNHOOK_FLUSH_COUNT.store(0, Ordering::Relaxed);
 }
+

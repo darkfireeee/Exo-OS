@@ -7,15 +7,15 @@
 // Sous-modules :
 //   • blake3             : Hash BLAKE3 — 256 bits, mode keyed + derive_key
 //   • xchacha20_poly1305 : AEAD XChaCha20-Poly1305
-//   • rng                : CSPRNG (RDRAND + BLAKE3 mixing)
+//   • rng                : CSPRNG (RDRAND + ChaCha20 block function)
 //   • kdf                : HKDF-BLAKE3 — dérivation de clés
 //   • x25519             : ECDH X25519
 //   • ed25519            : Signatures Ed25519
-//   • aes_gcm            : AES-256-GCM avec AES-NI
+//   • aes_gcm            : AES-256-GCM (software T-tables + AES-NI runtime detection)
 //
 // Règles de sécurité (RÈGLE CRYPTO-*) :
 //   • CRYPTO-01 : Toutes les primitives sont pure-Rust no_std.
-//   • CRYPTO-02 : Aucune crate externe sauf `spin`.
+//   • CRYPTO-02 : Crates RustCrypto validées IETF uniquement (sauf ChaCha20 custom).
 //   • CRYPTO-03 : Les clés sont zéroïsées en Drop quand elles sont wrappées.
 //   • CRYPTO-04 : Jamais de réutilisation de nonce/IV.
 //   • CRYPTO-05 : constant-time pour toutes les comparaisons de tags/clés.
@@ -105,6 +105,9 @@ pub use aes_gcm::{
     aes_gcm_seal,
     aes_gcm_open,
     AesGcmError,
+    AES_KEY_LEN,
+    AES_GCM_NONCE_LEN,
+    AES_GCM_TAG_LEN,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

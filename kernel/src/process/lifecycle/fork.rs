@@ -84,6 +84,12 @@ pub trait AddressSpaceCloner: Send + Sync {
 
     /// Flush le TLB d'un espace d'adressage après marquage CoW.
     fn flush_tlb_after_fork(&self, cr3: u64);
+
+    /// Libère un espace d'adressage cloné (appelé sur erreur post-clone).
+    /// 
+    /// CORRECTION P0-01 : évite les fuites mémoire du PML4 en cas d'erreur
+    /// dans un chemin d'erreur tardif de do_fork() (RegistryError, InvalidCpu).
+    fn free_addr_space(&self, addr_space_ptr: usize);
 }
 
 static ADDR_SPACE_CLONER: Once<&'static dyn AddressSpaceCloner> = Once::new();
@@ -126,6 +132,9 @@ pub struct ForkContext<'a> {
     pub child_rip:     u64,
     /// RSP utilisateur du fils.
     pub child_rsp:     u64,
+    /// RFLAGS du parent au moment du fork (depuis frame.r11 sauvé par SYSCALL).
+    /// CORRECTION P2-02 : propagé au fils avec masquage sécurisé.
+    pub parent_rflags: u64,
 }
 
 /// Résultat de fork() pour le parent.
@@ -221,7 +230,24 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         // iretq frame (RSP pointe ici à l'entrée fork_child_trampoline).
         *frame_ptr.add(7)  = ctx.child_rip;                 // RIP  userspace
         *frame_ptr.add(8)  = 0x1B;                          // CS   ring3 (code64)
-        *frame_ptr.add(9)  = 0x0202;                        // RFLAGS (IF=1, reserved=1)
+        
+        // CORRECTION P2-02 : propager les RFLAGS du parent avec masquage sécurisé.
+        // Masque des flags sûrs à hériter (POSIX + sécurité kernel).
+        // - Conserver : CF(0), PF(2), AF(4), ZF(6), SF(7), OF(11), DF(10), AC(18), ID(21)
+        // - Forcer  : IF=1 (bit 9) — le fils doit accepter les interruptions
+        // - Effacer : TF=0 (bit 8) — ne pas tracer le fils si le parent était en trace
+        //             NT=0 (bit 14) — Nested Task flag — jamais hérité
+        //             RF=0 (bit 16) — Resume Flag — jamais hérité
+        //             VM=0 (bit 17) — Virtual 8086 — non supporté
+        const RFLAGS_SAFE_MASK:  u64 = 0x0000_0000_0020_0CD5; // CF,PF,AF,ZF,SF,DF,OF,AC,ID
+        const RFLAGS_FORCE_SET:  u64 = 0x0000_0000_0000_0200; // IF=1
+        const RFLAGS_FORCE_CLR:  u64 = 0x0000_0000_0004_0100; // TF=0, NT=0, RF=0, VM=0
+        
+        let child_rflags = ((ctx.parent_rflags & RFLAGS_SAFE_MASK) | RFLAGS_FORCE_SET) & !RFLAGS_FORCE_CLR;
+        // Garantir que le bit réservé 1 est toujours à 1.
+        let child_rflags = child_rflags | 0x0002;
+        
+        *frame_ptr.add(9)  = child_rflags;                  // RFLAGS (hérités du parent avec masquage)
         *frame_ptr.add(10) = ctx.child_rsp;                 // RSP  userspace
         *frame_ptr.add(11) = 0x23;                          // SS   ring3
         child_tcb.kstack_ptr = kstack_top - 96;
@@ -280,6 +306,10 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     PROCESS_REGISTRY.insert(child_pcb).map_err(|_| {
         // SAFETY: child_thread_ptr valide.
         unsafe { drop(Box::from_raw(child_thread_ptr)); }
+        // CORRECTION P0-01 : libérer l'espace d'adressage cloné pour éviter la fuite mémoire
+        if let Some(cl) = ADDR_SPACE_CLONER.get() {
+            cl.free_addr_space(cloned_as.addr_space_ptr);
+        }
         PID_ALLOCATOR.free(child_pid_raw);
         TID_ALLOCATOR.free(child_tid_raw);
         ForkError::RegistryError
@@ -292,6 +322,10 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
             let _ = PROCESS_REGISTRY.remove(child_pid);
             // SAFETY: child_thread_ptr créé via Box::into_raw() ci-dessus, pas encore enfilé.
             unsafe { drop(Box::from_raw(child_thread_ptr)); }
+            // CORRECTION P0-01 : libérer l'espace d'adressage cloné pour éviter la fuite mémoire
+            if let Some(cl) = ADDR_SPACE_CLONER.get() {
+                cl.free_addr_space(cloned_as.addr_space_ptr);
+            }
             PID_ALLOCATOR.free(child_pid_raw);
             TID_ALLOCATOR.free(child_tid_raw);
             return Err(ForkError::InvalidCpu);

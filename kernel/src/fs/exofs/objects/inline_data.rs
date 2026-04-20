@@ -10,14 +10,14 @@
 use core::fmt;
 use core::mem;
 use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, INLINE_DATA_BUFFER_SIZE, INLINE_DATA_MAX_BYTES, BlobId, blake3_hash,
+    ExofsError, ExofsResult, INLINE_DATA_MAX, BlobId, blake3_hash,
 };
 use crate::fs::exofs::objects::object_meta::crc32_compute;
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
-/// Taille maximale canonique des données inline.
-const INLINE_BUF_SIZE: usize = INLINE_DATA_BUFFER_SIZE;
+/// Taille maximale des données inline (512 octets).
+const INLINE_BUF_SIZE: usize = INLINE_DATA_MAX; // 512
 
 /// Taille on-disk d'`InlineDataDisk`.
 pub const INLINE_DATA_DISK_SIZE: usize = mem::size_of::<InlineDataDisk>();
@@ -28,19 +28,19 @@ pub const INLINE_DATA_DISK_SIZE: usize = mem::size_of::<InlineDataDisk>();
 ///
 /// Règle ONDISK-01 : `#[repr(C, packed)]`, types plain uniquement.
 ///
-/// Layout (312 octets) :
+/// Layout (568 octets) :
 /// ```text
 ///   0..  1   len          u16  — longueur réelle des données
 ///   2..  3   _pad0        [u8;2]
 ///   4..  7   checksum     u32  — CRC32 du buffer [buf, len]
-///   8..263   buf          [u8;256]
-/// 264..295   content_hash [u8;32] — Blake3 du contenu brut (HASH-01)
-/// 296..311   _pad1        [u8;16]
+///   8..519   buf          [u8;512]
+/// 520..551   content_hash [u8;32] — Blake3 du contenu brut (HASH-01)
+/// 552..567   _pad1        [u8;16]
 /// ```
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct InlineDataDisk {
-    /// Longueur réelle des données (≤ 256).
+    /// Longueur réelle des données (≤ 512).
     pub len:          u16,
     pub _pad0:        [u8; 2],
     /// CRC32 du buffer.
@@ -54,13 +54,13 @@ pub struct InlineDataDisk {
 
 // Vérification de taille en compile-time.
 const _: () = assert!(
-    mem::size_of::<InlineDataDisk>() == INLINE_DATA_DISK_SIZE,
-    "InlineDataDisk doit rester cohérent avec INLINE_DATA_DISK_SIZE (ONDISK-01)"
+    mem::size_of::<InlineDataDisk>() == 568,
+    "InlineDataDisk doit faire 568 octets (ONDISK-01)"
 );
 
 // ── InlineData in-memory ───────────────────────────────────────────────────────
 
-/// Données inlinées dans un `LogicalObject` (< 256 octets).
+/// Données inlinées dans un `LogicalObject` (< 512 octets).
 ///
 /// Quand la taille d'un objet est inférieure à `INLINE_DATA_MAX`,
 /// ses données sont stockées directement dans ce tampon plutôt que
@@ -95,7 +95,7 @@ impl InlineData {
     ///
     /// Retourne `ExofsError::InlineTooLarge` si `data.len() > INLINE_DATA_MAX`.
     pub fn from_slice(data: &[u8]) -> ExofsResult<Self> {
-        if data.len() > INLINE_DATA_MAX_BYTES {
+        if data.len() > INLINE_DATA_MAX {
             return Err(ExofsError::InlineTooLarge);
         }
         let mut buf = [0u8; INLINE_BUF_SIZE];
@@ -419,14 +419,17 @@ impl fmt::Display for InlineDataStats {
 
 // ── Helpers internes ───────────────────────────────────────────────────────────
 
-/// Calcule le CRC32 d'un `InlineDataDisk` hors champ checksum.
+/// Calcule le CRC32 d'un `InlineDataDisk` (bytes [0..564], hors champ checksum).
+/// Le champ `checksum` est aux bytes 4..8, donc on calcule sur [0..4] ++ [8..568].
 fn inline_crc32(d: &InlineDataDisk) -> u32 {
-    let bytes: &[u8; INLINE_DATA_DISK_SIZE] =
+    let bytes: &[u8; 568] =
         // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
-        unsafe { &*(d as *const InlineDataDisk as *const [u8; INLINE_DATA_DISK_SIZE]) };
+        unsafe { &*(d as *const InlineDataDisk as *const [u8; 568]) };
     // On exclut les 4 octets du checksum (offset 4..8).
     let mut crc = crc32_compute(&bytes[0..4]);
-    crc = crc32_continue(crc, &bytes[8..INLINE_DATA_DISK_SIZE]);
+    // Pour simplifier le chaînage on refait le calcul complet en excluant le champ.
+    // Implémentation correcte : on skeep bytes[4..8] et on continue sur [8..568].
+    crc = crc32_continue(crc, &bytes[8..568]);
     crc
 }
 
@@ -454,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_from_slice_too_large() {
-        let big = [0u8; INLINE_DATA_MAX_BYTES + 1];
+        let big = [0u8; INLINE_DATA_MAX + 1];
         assert!(InlineData::from_slice(&big).is_err());
     }
 
@@ -504,7 +507,7 @@ mod tests {
     #[test]
     fn test_overflow_protection() {
         let mut d = InlineData::empty();
-        let big = [0u8; INLINE_DATA_MAX_BYTES];
+        let big = [0u8; INLINE_DATA_MAX];
         d.update(&big).unwrap();
         assert!(d.append(b"x").is_err()); // Dépasse capacité.
     }

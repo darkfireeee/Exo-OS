@@ -10,10 +10,6 @@
 
 use core::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use crate::fs::exofs::core::error::ExofsError;
-use crate::fs::exofs::core::constants::{
-    COMPRESS_MIN_SIZE, GC_FREE_THRESHOLD_PCT, GC_MIN_EPOCH_DELAY_DEFAULT,
-    GC_TIMER_INTERVAL_SECS, PATH_CACHE_CAPACITY, WRITEBACK_INTERVAL_MS,
-};
 
 /// Configuration runtime ExoFS — fixée au montage, immuable après.
 pub struct ExofsConfig {
@@ -72,15 +68,15 @@ impl ExofsConfig {
         Self {
             object_cache_size:  AtomicUsize::new(4096),
             blob_cache_size:    AtomicUsize::new(8192),
-            path_cache_size:    AtomicUsize::new(PATH_CACHE_CAPACITY),
+            path_cache_size:    AtomicUsize::new(10_000),
             extent_cache_size:  AtomicUsize::new(4096),
-            gc_free_threshold_pct: AtomicU64::new(GC_FREE_THRESHOLD_PCT),
-            gc_timer_secs:      AtomicU64::new(GC_TIMER_INTERVAL_SECS),
-            gc_min_epoch_delay: AtomicU64::new(GC_MIN_EPOCH_DELAY_DEFAULT),
+            gc_free_threshold_pct: AtomicU64::new(20),
+            gc_timer_secs:      AtomicU64::new(60),
+            gc_min_epoch_delay: AtomicU64::new(2),
             gc_max_objects_per_cycle: AtomicU64::new(1000),
-            writeback_interval_ms: AtomicU64::new(WRITEBACK_INTERVAL_MS),
+            writeback_interval_ms: AtomicU64::new(1),
             writeback_dirty_max:   AtomicUsize::new(500),
-            compress_min_size:  AtomicUsize::new(COMPRESS_MIN_SIZE),
+            compress_min_size:  AtomicUsize::new(512),
             compress_level:     AtomicUsize::new(3),
             dedup_min_size:     AtomicUsize::new(4096),
             io_queue_depth:     AtomicUsize::new(32),
@@ -92,36 +88,36 @@ impl ExofsConfig {
 
     // ── Accesseurs ────────────────────────────────────────────────────────────
 
-    #[inline] pub fn object_cache_size(&self)  -> usize { self.object_cache_size.load(Ordering::Acquire) }
-    #[inline] pub fn blob_cache_size(&self)    -> usize { self.blob_cache_size.load(Ordering::Acquire) }
-    #[inline] pub fn path_cache_size(&self)    -> usize { self.path_cache_size.load(Ordering::Acquire) }
-    #[inline] pub fn extent_cache_size(&self)  -> usize { self.extent_cache_size.load(Ordering::Acquire) }
-    #[inline] pub fn gc_free_threshold_pct(&self) -> u64 { self.gc_free_threshold_pct.load(Ordering::Acquire) }
-    #[inline] pub fn gc_timer_secs(&self)      -> u64 { self.gc_timer_secs.load(Ordering::Acquire) }
-    #[inline] pub fn gc_min_epoch_delay(&self) -> u64 { self.gc_min_epoch_delay.load(Ordering::Acquire) }
-    #[inline] pub fn gc_max_objects_per_cycle(&self) -> u64 { self.gc_max_objects_per_cycle.load(Ordering::Acquire) }
-    #[inline] pub fn writeback_interval_ms(&self) -> u64 { self.writeback_interval_ms.load(Ordering::Acquire) }
-    #[inline] pub fn writeback_dirty_max(&self) -> usize { self.writeback_dirty_max.load(Ordering::Acquire) }
-    #[inline] pub fn compress_min_size(&self)  -> usize { self.compress_min_size.load(Ordering::Acquire) }
-    #[inline] pub fn compress_level(&self)     -> usize { self.compress_level.load(Ordering::Acquire) }
-    #[inline] pub fn dedup_min_size(&self)     -> usize { self.dedup_min_size.load(Ordering::Acquire) }
-    #[inline] pub fn io_queue_depth(&self)     -> usize { self.io_queue_depth.load(Ordering::Acquire) }
-    #[inline] pub fn readahead_size(&self)     -> u64   { self.readahead_size.load(Ordering::Acquire) }
-    #[inline] pub fn verify_checksums(&self)   -> bool  { self.verify_checksums_on_read.load(Ordering::Acquire) != 0 }
+    #[inline] pub fn object_cache_size(&self)  -> usize { self.object_cache_size.load(Ordering::Relaxed) }
+    #[inline] pub fn blob_cache_size(&self)    -> usize { self.blob_cache_size.load(Ordering::Relaxed) }
+    #[inline] pub fn path_cache_size(&self)    -> usize { self.path_cache_size.load(Ordering::Relaxed) }
+    #[inline] pub fn extent_cache_size(&self)  -> usize { self.extent_cache_size.load(Ordering::Relaxed) }
+    #[inline] pub fn gc_free_threshold_pct(&self) -> u64 { self.gc_free_threshold_pct.load(Ordering::Relaxed) }
+    #[inline] pub fn gc_timer_secs(&self)      -> u64 { self.gc_timer_secs.load(Ordering::Relaxed) }
+    #[inline] pub fn gc_min_epoch_delay(&self) -> u64 { self.gc_min_epoch_delay.load(Ordering::Relaxed) }
+    #[inline] pub fn gc_max_objects_per_cycle(&self) -> u64 { self.gc_max_objects_per_cycle.load(Ordering::Relaxed) }
+    #[inline] pub fn writeback_interval_ms(&self) -> u64 { self.writeback_interval_ms.load(Ordering::Relaxed) }
+    #[inline] pub fn writeback_dirty_max(&self) -> usize { self.writeback_dirty_max.load(Ordering::Relaxed) }
+    #[inline] pub fn compress_min_size(&self)  -> usize { self.compress_min_size.load(Ordering::Relaxed) }
+    #[inline] pub fn compress_level(&self)     -> usize { self.compress_level.load(Ordering::Relaxed) }
+    #[inline] pub fn dedup_min_size(&self)     -> usize { self.dedup_min_size.load(Ordering::Relaxed) }
+    #[inline] pub fn io_queue_depth(&self)     -> usize { self.io_queue_depth.load(Ordering::Relaxed) }
+    #[inline] pub fn readahead_size(&self)     -> u64   { self.readahead_size.load(Ordering::Relaxed) }
+    #[inline] pub fn verify_checksums(&self)   -> bool  { self.verify_checksums_on_read.load(Ordering::Relaxed) != 0 }
     #[inline] pub fn require_encryption_for_secrets(&self) -> bool {
-        self.require_encryption_for_secrets.load(Ordering::Acquire) != 0
+        self.require_encryption_for_secrets.load(Ordering::Relaxed) != 0
     }
 
     // ── Setters ────────────────────────────────────────────────────────────────
 
-    pub fn set_object_cache_size(&self, n: usize)  { self.object_cache_size.store(n, Ordering::Release); }
-    pub fn set_blob_cache_size(&self, n: usize)    { self.blob_cache_size.store(n, Ordering::Release); }
-    pub fn set_path_cache_size(&self, n: usize)    { self.path_cache_size.store(n, Ordering::Release); }
-    pub fn set_gc_timer_secs(&self, n: u64)        { self.gc_timer_secs.store(n, Ordering::Release); }
-    pub fn set_gc_free_threshold_pct(&self, n: u64) { self.gc_free_threshold_pct.store(n, Ordering::Release); }
-    pub fn set_writeback_interval_ms(&self, n: u64) { self.writeback_interval_ms.store(n, Ordering::Release); }
-    pub fn set_compress_level(&self, n: usize)     { self.compress_level.store(n, Ordering::Release); }
-    pub fn set_readahead_size(&self, n: u64)       { self.readahead_size.store(n, Ordering::Release); }
+    pub fn set_object_cache_size(&self, n: usize)  { self.object_cache_size.store(n, Ordering::Relaxed); }
+    pub fn set_blob_cache_size(&self, n: usize)    { self.blob_cache_size.store(n, Ordering::Relaxed); }
+    pub fn set_path_cache_size(&self, n: usize)    { self.path_cache_size.store(n, Ordering::Relaxed); }
+    pub fn set_gc_timer_secs(&self, n: u64)        { self.gc_timer_secs.store(n, Ordering::Relaxed); }
+    pub fn set_gc_free_threshold_pct(&self, n: u64) { self.gc_free_threshold_pct.store(n, Ordering::Relaxed); }
+    pub fn set_writeback_interval_ms(&self, n: u64) { self.writeback_interval_ms.store(n, Ordering::Relaxed); }
+    pub fn set_compress_level(&self, n: usize)     { self.compress_level.store(n, Ordering::Relaxed); }
+    pub fn set_readahead_size(&self, n: u64)       { self.readahead_size.store(n, Ordering::Relaxed); }
 
     /// Valide la configuration — retourne une erreur si un paramètre est hors limites.
     pub fn validate(&self) -> Result<(), ExofsError> {
@@ -173,7 +169,7 @@ impl ConfigProfile {
                 cfg.set_gc_free_threshold_pct(10);
                 cfg.set_writeback_interval_ms(5);
                 cfg.set_readahead_size(1_048_576); // 1 MiB
-                cfg.verify_checksums_on_read.store(0, Ordering::Release);
+                cfg.verify_checksums_on_read.store(0, Ordering::Relaxed);
             }
             ConfigProfile::Safety => {
                 cfg.set_object_cache_size(2048);
@@ -181,8 +177,8 @@ impl ConfigProfile {
                 cfg.set_gc_timer_secs(30);
                 cfg.set_gc_free_threshold_pct(30);
                 cfg.set_writeback_interval_ms(1);
-                cfg.verify_checksums_on_read.store(1, Ordering::Release);
-                cfg.require_encryption_for_secrets.store(1, Ordering::Release);
+                cfg.verify_checksums_on_read.store(1, Ordering::Relaxed);
+                cfg.require_encryption_for_secrets.store(1, Ordering::Relaxed);
                 cfg.set_compress_level(6);
             }
             ConfigProfile::Development => {
@@ -192,7 +188,7 @@ impl ConfigProfile {
                 cfg.set_gc_timer_secs(3600);
                 cfg.set_gc_free_threshold_pct(5);
                 cfg.set_readahead_size(0); // pas de readahead
-                cfg.verify_checksums_on_read.store(1, Ordering::Release);
+                cfg.verify_checksums_on_read.store(1, Ordering::Relaxed);
             }
         }
     }
@@ -352,12 +348,12 @@ impl ConfigBuilder {
         Self {
             object_cache_size:     4096,
             blob_cache_size:       8192,
-            path_cache_size:       PATH_CACHE_CAPACITY,
+            path_cache_size:       2048,
             gc_free_threshold_pct: 20,
-            gc_timer_secs:         GC_TIMER_INTERVAL_SECS,
-            gc_min_epoch_delay:    GC_MIN_EPOCH_DELAY_DEFAULT,
-            writeback_interval_ms: WRITEBACK_INTERVAL_MS,
-            compress_min_size:     COMPRESS_MIN_SIZE,
+            gc_timer_secs:         30,
+            gc_min_epoch_delay:    2,
+            writeback_interval_ms: 500,
+            compress_min_size:     4096,
             dedup_min_size:        4096,
         }
     }

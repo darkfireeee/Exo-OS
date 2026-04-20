@@ -273,7 +273,10 @@ impl SpscRing {
 /// Table globale de rings SPSC actifs (indexée par channel_id % MAX_SPSC_RINGS).
 /// En production, remplacée par une structure allouée dynamiquement depuis
 /// le pool SHM. Ici : table statique pour le bootstrap et les tests.
-const MAX_SPSC_RINGS: usize = 256;
+// CORRECTION P1-04 : augmenter MAX_SPSC_RINGS pour supporter plus de canaux IPC.
+// 4096 rings × ~200 bytes/ring ≈ 800 KiB .bss — acceptable pour le kernel.
+// Aspirationnel : 65536 (MAX_CHANNELS) — sera revisité avec allocation dynamique.
+const MAX_SPSC_RINGS: usize = 4096;
 
 static SPSC_RINGS: [SpscRing; MAX_SPSC_RINGS] = {
     const ZERO: SpscRing = SpscRing::new();

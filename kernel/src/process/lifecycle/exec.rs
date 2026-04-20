@@ -204,9 +204,18 @@ pub fn do_execve(
     thread.sched_tcb.cr3_phys = elf_result.cr3;
 
     // Mettre à jour les adresses du thread.
+    // CORRECTION P2-03 : calculer et propager stack_base et stack_size au lieu de 0
+    const DEFAULT_STACK_PAGES: u64 = 8;
+    const PAGE_SIZE_U64:       u64 = crate::memory::core::PAGE_SIZE as u64;
+    const DEFAULT_STACK_SIZE:  u64 = DEFAULT_STACK_PAGES * PAGE_SIZE_U64;
+    
+    let stack_top  = elf_result.initial_stack_top;
+    let stack_base = (stack_top.saturating_sub(DEFAULT_STACK_SIZE)) & !(PAGE_SIZE_U64 - 1);
+    let stack_size = stack_top.saturating_sub(stack_base) as usize;
+    
     thread.addresses = ThreadAddress {
-        stack_base:       0,  // fourni par ELF_LOADER dans initial_stack_top
-        stack_size:       0,
+        stack_base,                           // CORRECTION P2-03
+        stack_size,                           // CORRECTION P2-03
         entry_point:      elf_result.entry_point,
         initial_rsp:      elf_result.initial_stack_top,
         tls_base:         elf_result.tls_base,

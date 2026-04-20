@@ -43,6 +43,8 @@ pub mod exoledger;
 pub mod exokairos;
 pub mod exoseal;
 pub mod ipc_policy;
+pub mod exonmi;
+pub mod exoargos;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -76,12 +78,39 @@ pub fn is_security_ready() -> bool {
 
 pub use capability::{
     CapToken,
+    ObjectId,
+    CapObjectType,
+    TokenStats,
+    token_stats,
     Rights,
+    CapTable,
+    CapTableSnapshot,
+    CAP_TABLE_CAPACITY,
     CapError,
     verify,
+    verify_and_get_rights,
+    verify_typed,
+    verify_read,
+    verify_read_write,
+    verify_ipc_send,
+    verify_ipc_recv,
     revoke,
+    revoke_token,
     delegate,
+    delegate_all,
+    delegate_read_only,
+    can_delegate,
+    DelegationChain,
+    DelegationEntry,
+    CapNamespace,
+    NamespaceId,
+    alloc_namespace_id,
+    cross_namespace_verify,
     init_capability_subsystem,
+    is_initialized,
+    KernelCapError,
+    create as cap_create,
+    revoke_handle as cap_revoke_handle,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -206,6 +235,12 @@ pub use exocage::{
     is_ibt_global_enabled,
     validate_thread_cet,
     exocage_stats,
+    cpuid_cet_available,
+    cp_violation_count,
+    cet_thread_count,
+    CET_FLAG_ENABLED,
+    CET_FLAG_IBT,
+    CET_FLAG_TOKEN_VALID,
     ExoCageError,
     ExoCageStats,
 };
@@ -222,6 +257,11 @@ pub use exoveil::{
     pks_available,
     exoveil_initialized,
     exoveil_stats,
+    current_pkrs,
+    is_domain_revoked,
+    revoke_count,
+    save_pkrs_to_tcb,
+    restore_pkrs_from_tcb,
     ExoVeilStats,
 };
 
@@ -233,16 +273,27 @@ pub use exoledger::{
     verify_ring_integrity,
     ActionTag,
     LedgerEntry,
+    AuditHeader,
     LedgerIntegrityError,
     ExoLedgerStats,
     exoledger_stats,
+    P0_ZONE_ENTRIES,
+    SSR_LOG_AUDIT_OFFSET,
+    SSR_LOG_AUDIT_SIZE,
+    p0_used,
+    total_written,
+    current_seq,
+    read_p0_entry,
+    read_ring_entry,
 };
 
 pub use exokairos::{
     TemporalCap,
     CapError as TemporalCapError,
+    init_kernel_secret,
     ttl_for_right,
     exokairos_stats,
+    MAX_DELEGATION_DEPTH,
     ExoKairosStats,
 };
 
@@ -256,6 +307,41 @@ pub use exoseal::{
 };
 
 pub use ipc_policy::{check_direct_ipc, IpcPolicyResult};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Re-exports — ExoShield v1.0 Module 9 : ExoNmi
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub use exonmi::{
+    exonmi_init,
+    exonmi_stats,
+    ping,
+    tick,
+    arm_watchdog,
+    current_strikes,
+    is_armed,
+    configured_timeout_ms,
+    ExoNmiStats,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Re-exports — ExoShield v1.0 Module 8 : ExoArgos
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub use exoargos::{
+    exoargos_init,
+    init_pmu,
+    exoargos_stats,
+    pmc_snapshot,
+    compute_discordance,
+    check_anomaly,
+    update_baseline,
+    get_baseline,
+    baseline_established,
+    PmcSnapshot,
+    ExoArgosStats,
+    DECEPTION_THRESHOLD,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Initialisation orchestrée
@@ -322,7 +408,16 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
         exokairos::init_kernel_secret(&secret);
     }
 
-    // ── 11. ExoSeal complete — PKS ops normales + SECURITY_READY + watchdog ──
+    // ── 11. ExoArgos — PMC Monitoring (ExoShield v1.0 Module 8) ──────────────
+    //    Initialise les compteurs PMU pour le monitoring de comportement.
+    //    SAFETY: Ring 0, MSR write — appelé une seule fois au boot.
+    unsafe { exoargos::exoargos_init(); }
+
+    // ── 12. ExoNmi — Progressive NMI Watchdog (ExoShield v1.0 Module 9) ───────
+    //    Initialise le watchdog (LAPIC virt base, timer masqué).
+    exonmi::exonmi_init();
+
+    // ── 13. ExoSeal complete — PKS ops normales + SECURITY_READY + watchdog ──
     // SAFETY: Ring 0, séquence finale de boot des modules de sécurité.
     unsafe { exoseal::exoseal_boot_complete(); }
 }

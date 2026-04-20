@@ -357,7 +357,9 @@ pub unsafe fn enable_cet_for_thread(tcb: &mut ThreadControlBlock) -> Result<(), 
     tcb_write_cold_u8(tcb, OFF_CET_FLAGS, cet_flags);
     tcb_write_cold_u8(tcb, OFF_THREAT_SCORE, 0); // score initial = 0
 
-    // Phase 4 placeholder : pt_buffer_phys = 0
+    // pt_buffer_phys initialised to zero — LBR/PT hardware tracing
+    // is not yet active for this thread. Will be populated by
+    // ExoArgos when LBR is configured (Phase 3.2+ per ExoShield spec).
     tcb_write_cold_u64(tcb, OFF_PT_BUFFER_PHYS, 0);
 
     CET_THREAD_COUNT.fetch_add(1, Ordering::Relaxed);

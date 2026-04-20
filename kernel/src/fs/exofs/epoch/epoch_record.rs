@@ -514,4 +514,4 @@ pub fn count_valid_records(
 // EpochRecord — 104 octets, struct on-disk
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Enregistrement d'un Epoch committé — écrit dans un Slot (A/B/C).
+// Enregistrement d'un Epoch committé — écrit dans un Slot (A/B/C). [TODO: struct tronquée]

@@ -7,6 +7,7 @@ pub mod kernel;
 pub mod mapper;
 pub mod tlb;
 pub mod user;
+pub mod fork_impl;
 
 pub use kernel::{KernelAddressSpace, KERNEL_AS};
 pub use mapper::Mapper;
