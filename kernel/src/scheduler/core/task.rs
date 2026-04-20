@@ -339,6 +339,12 @@ const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 88 == 232,
 const _: () = assert!(size_of::<ThreadControlBlock>() == 256,
     "TCB: taille doit rester 256 bytes (ExoShield extensions ne dépassent pas)");
 
+// FIX-CET-01: pl0_ssp utilise _cold_reserve[48..56] = offset absolu 192..200 < 232.
+const _: () = assert!(
+    offset_of!(ThreadControlBlock, _cold_reserve) + 48 + 8 <= 232,
+    "FIX-CET-01: pl0_ssp doit tenir dans _cold_reserve avant fpu_state_ptr (232)"
+);
+
 // ─── impl ThreadControlBlock ─────────────────────────────────────────────────
 
 impl ThreadControlBlock {
@@ -501,6 +507,35 @@ impl ThreadControlBlock {
     #[inline(always)]
     pub fn request_preemption(&self) {
         self.sched_state.fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
+    }
+
+    // ── FIX-CET-01 : CET Shadow Stack Pointer per-thread ─────────────────────
+    //
+    // Utilise _cold_reserve[48..56] (offset TCB absolu = 144 + 48 = 192).
+    // Non-overlapping avec les champs ExoShield documentés (0..40).
+    // Valeur initiale = 0 (CET non activé pour ce thread).
+
+    /// Lit MSR_IA32_PL0_SSP sauvegardé dans ce TCB.
+    #[inline(always)]
+    pub fn pl0_ssp(&self) -> u64 {
+        // SAFETY: _cold_reserve est [u8; 88], offset 48..56 < 88.
+        unsafe {
+            core::ptr::read_unaligned(
+                self._cold_reserve.as_ptr().add(48) as *const u64
+            )
+        }
+    }
+
+    /// Sauvegarde MSR_IA32_PL0_SSP dans ce TCB (_cold_reserve[48..56]).
+    #[inline(always)]
+    pub fn set_pl0_ssp(&mut self, ssp: u64) {
+        // SAFETY: offset 48..56 dans _cold_reserve[88], non-overlapping ExoShield (0..40).
+        unsafe {
+            core::ptr::write_unaligned(
+                self._cold_reserve.as_mut_ptr().add(48) as *mut u64,
+                ssp,
+            )
+        }
     }
 
     /// Lit et efface NEED_RESCHED atomiquement.

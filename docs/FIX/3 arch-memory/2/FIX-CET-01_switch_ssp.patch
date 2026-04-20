@@ -1,0 +1,172 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX-CET-01 — Sauvegarde/Restauration MSR_IA32_PL0_SSP dans context_switch()
+//
+// PROBLÈME :
+//   context_switch() ne sauvegarde/restaure jamais MSR_IA32_PL0_SSP (0x6A4).
+//   Dès que CET Shadow Stack est activé sur un CPU, le premier switch entre
+//   deux threads provoque un #CP (Control Protection Exception) ou une corruption
+//   silencieuse de la shadow stack du thread sortant.
+//
+// SOLUTION :
+//   - Ajouter MSR_IA32_PL0_SSP dans msr.rs
+//   - Ajouter has_cet_ss() dans cpu/features.rs  
+//   - Ajouter pl0_ssp: u64 dans le TCB (réutilisation d'octets dans _cold_reserve)
+//   - Sauvegarder/restaurer via rdmsr/wrmsr dans context_switch(), même pattern que PKRS
+//
+// FICHIERS MODIFIÉS :
+//   1. kernel/src/arch/x86_64/cpu/msr.rs              (ajouter la constante MSR)
+//   2. kernel/src/arch/x86_64/cpu/features.rs         (ajouter has_cet_ss())
+//   3. kernel/src/scheduler/core/task.rs               (champ pl0_ssp dans TCB)
+//   4. kernel/src/scheduler/core/switch.rs             (save/restore dans context_switch)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FICHIER 1 : kernel/src/arch/x86_64/cpu/msr.rs
+//
+// Ajouter après MSR_IA32_PKRS (ligne ~61) :
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// MSR IA32_PL0_SSP — Ring 0 Shadow Stack Pointer (CET, Intel SDM Vol.4 §2.1)
+/// Contient le SSP du thread courant en mode Ring 0.
+/// Doit être sauvegardé/restauré à chaque context switch si CET-SS est actif.
+pub const MSR_IA32_PL0_SSP: u32 = 0x0000_06A4;
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FICHIER 2 : kernel/src/arch/x86_64/cpu/features.rs
+//
+// Ajouter dans le bloc impl CpuFeatures, après has_flush_cmd() :
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Dans la section des constantes de feature bits (vers ligne ~179) :
+// const LEAF7_ECX_CET_SS: u32 = 1 << 7;   ← DÉJÀ PRÉSENT, vérifier
+
+// Ajouter la méthode publique dans impl CpuFeatures :
+    #[inline(always)]
+    pub fn has_cet_ss(&self) -> bool {
+        // CPUID leaf 7, sub-leaf 0, ECX bit 7 = CET Shadow Stack
+        self.flags.leaf7_ecx & (1 << 7) != 0
+    }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FICHIER 3 : kernel/src/scheduler/core/task.rs
+//
+// Le TCB est à 256 bytes, _cold_reserve = [u8; 88] commence à l'offset 144.
+// ExoShield utilise les octets 0..40 de _cold_reserve.
+// On peut utiliser _cold_reserve[48..55] (offset TCB 192) pour pl0_ssp.
+// C'est safe car _cold_reserve[40..87] n'est pas documenté comme utilisé.
+//
+// ALTERNATIVE PLUS PROPRE (recommandée) :
+//   Remplacer l'accès raw par une méthode sur TCB qui lit/écrit ces bytes.
+//   Cela évite d'augmenter la taille du TCB au-delà de 256B.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Dans impl ThreadControlBlock, ajouter ces deux méthodes d'accès CET :
+
+    /// Retourne le MSR_IA32_PL0_SSP sauvegardé pour ce thread.
+    /// Utilise _cold_reserve[48..55] (offset TCB absolu = 144 + 48 = 192).
+    /// Non utilisé avant l'activation de CET — valeur initiale = 0.
+    #[inline(always)]
+    pub fn pl0_ssp(&self) -> u64 {
+        // SAFETY: _cold_reserve est [u8; 88], on lit 8 octets à l'offset 48,
+        // soit offset 48..56 < 88. Alignement u64 garanti par la disposition C.
+        unsafe {
+            core::ptr::read_unaligned(
+                self._cold_reserve.as_ptr().add(48) as *const u64
+            )
+        }
+    }
+
+    /// Sauvegarde MSR_IA32_PL0_SSP dans _cold_reserve[48..55] du TCB.
+    #[inline(always)]
+    pub fn set_pl0_ssp(&mut self, ssp: u64) {
+        // SAFETY: offset 48..56 dans _cold_reserve[88], non-overlapping avec
+        // les champs ExoShield documentés (0..40).
+        unsafe {
+            core::ptr::write_unaligned(
+                self._cold_reserve.as_mut_ptr().add(48) as *mut u64,
+                ssp,
+            )
+        }
+    }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FICHIER 4 : kernel/src/scheduler/core/switch.rs
+//
+// DIFF : dans la fonction context_switch(), ajouter après la sauvegarde PKRS
+// et avant context_switch_asm(), puis restaurer après context_switch_asm().
+//
+// IMPORTS à ajouter dans la section use :
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::arch::x86_64::cpu::msr::{self, MSR_FS_BASE, MSR_KERNEL_GS_BASE, MSR_IA32_PL0_SSP};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DANS context_switch() — section AVANT context_switch_asm() :
+//
+// Insérer après le bloc PKRS (après la ligne `prev.pkrs = ...`) :
+// ─────────────────────────────────────────────────────────────────────────────
+
+    // ── Étape 2b : Sauvegarder MSR_IA32_PL0_SSP si CET Shadow Stack actif ───
+    //
+    // CET (Control-flow Enforcement Technology) maintient un Shadow Stack
+    // Pointer par thread. Le MSR_IA32_PL0_SSP (0x6A4) contient le SSP Ring 0
+    // du thread courant et DOIT être traité comme état par-thread.
+    //
+    // Intel SDM Vol.1 §8.3.3 : "The SSP is saved and restored as part of the
+    // hardware task switching mechanism." En mode software switch (comme ici),
+    // la sauvegarde est à la charge du noyau.
+    //
+    // Si CET n'est pas actif (ou CPU non supporté), le MSR n'existe pas →
+    // le rdmsr provoquerait #GP. On garde la vérification has_cet_ss().
+    if CPU_FEATURES.has_cet_ss() {
+        // SAFETY: MSR 0x6A4 garanti existant si has_cet_ss() == true.
+        // Accès MSR en Ring 0, CPU_FEATURES initialisé avant tout switch.
+        let ssp = unsafe { msr::read_msr(MSR_IA32_PL0_SSP) };
+        prev.set_pl0_ssp(ssp);
+    }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DANS context_switch() — section APRÈS context_switch_asm() :
+//
+// Insérer après la restauration PKRS (après `write_msr(MSR_IA32_PKRS, ...)`),
+// AVANT la mise à jour du state :
+// ─────────────────────────────────────────────────────────────────────────────
+
+    // ── Restaurer MSR_IA32_PL0_SSP de `next` si CET Shadow Stack actif ──────
+    //
+    // On est maintenant dans le contexte de `next`. Restaurer son SSP Ring 0
+    // avant tout retour vers userspace ou appel de fonction Ring 3.
+    //
+    // Note : si `next` n'a jamais utilisé CET (pl0_ssp() == 0), écrire 0
+    // dans le MSR est safe — cela désactive le shadow stack pour ce thread
+    // jusqu'à sa prochaine activation CET explicite via exocage.
+    if CPU_FEATURES.has_cet_ss() {
+        let ssp = next.pl0_ssp();
+        // SAFETY: MSR 0x6A4 existant si has_cet_ss(), Ring 0, valeur par thread.
+        unsafe { msr::write_msr(MSR_IA32_PL0_SSP, ssp) };
+    }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSERTION À AJOUTER dans task.rs pour documenter et protéger l'offset :
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _: () = assert!(
+    core::mem::offset_of!(ThreadControlBlock, _cold_reserve) + 48 + 8 <= 232,
+    "FIX-CET-01: pl0_ssp doit tenir dans _cold_reserve avant fpu_state_ptr à 232"
+);
+// → 144 + 48 + 8 = 200 ≤ 232 ✓
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTE SUR switch_asm.s :
+//
+// Aucune modification requise dans switch_asm.s pour CET.
+// MSR_IA32_PL0_SSP n'est pas un registre général → non sauvé par push/pop.
+// La sauvegarde se fait exclusivement via rdmsr/wrmsr en Rust (comme PKRS).
+//
+// En revanche, les instructions SAVEPREVSSP / RSTORSSP sont nécessaires
+// si et seulement si un token de shadow stack est utilisé (Ring 3 CET).
+// Pour le Ring 0 (mode kernel), MSR_IA32_PL0_SSP suffit (Intel SDM §8.3.4).
+// ─────────────────────────────────────────────────────────────────────────────

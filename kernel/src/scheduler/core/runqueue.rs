@@ -359,6 +359,11 @@ impl RunQueueStats {
 }
 
 /// Run queue complète pour un CPU logique.
+///
+/// FIX-RQ-ALIGN-01 : #[repr(C, align(64))] garantit que deux PerCpuRunQueue
+/// adjacentes dans PER_CPU_RQ[MAX_CPUS] ne partagent pas de cache lines sur
+/// leurs champs hot (cpu, stats, current) → pas de false sharing SMP.
+#[repr(C, align(64))]
 pub struct PerCpuRunQueue {
     /// Identifiant du CPU propriétaire.
     pub cpu: CpuId,
@@ -375,6 +380,12 @@ pub struct PerCpuRunQueue {
     /// Clock vruntime — temps monotone utilisé pour le lag CFS.
     pub clock_task_ns: u64,
 }
+
+// FIX-RQ-ALIGN-01 : vérification compile-time de l'alignement.
+const _: () = assert!(
+    core::mem::align_of::<PerCpuRunQueue>() >= 64,
+    "FIX-RQ-ALIGN-01: PerCpuRunQueue doit être aligné sur 64 octets minimum"
+);
 
 impl PerCpuRunQueue {
     /// Crée une run queue pour le CPU `cpu`.

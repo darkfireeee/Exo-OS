@@ -22,7 +22,7 @@ use super::task::{ThreadControlBlock, TaskState};
 use super::preempt::MAX_CPUS;
 use crate::scheduler::fpu;
 use crate::arch::x86_64::{
-    cpu::{features::CPU_FEATURES, msr::{self, MSR_FS_BASE, MSR_KERNEL_GS_BASE}},
+    cpu::{features::CPU_FEATURES, msr::{self, MSR_FS_BASE, MSR_KERNEL_GS_BASE, MSR_IA32_PL0_SSP}},
     smp::percpu,
     tss,
 };
@@ -184,6 +184,17 @@ pub unsafe fn context_switch(
         prev.pkrs = unsafe { msr::read_msr(msr::MSR_IA32_PKRS) as u32 };
     }
 
+    // ── FIX-CET-01 : Sauvegarder MSR_IA32_PL0_SSP si CET Shadow Stack actif ──
+    //
+    // Intel SDM Vol.1 §8.3.3 : en mode software task switch, la sauvegarde du
+    // Shadow Stack Pointer est à la charge du noyau. Si CET n'est pas actif,
+    // le MSR 0x6A4 n'existe pas → on court-circuite via has_cet_ss().
+    if CPU_FEATURES.has_cet_ss() {
+        // SAFETY: MSR 0x6A4 existant si has_cet_ss() == true. Ring 0.
+        let ssp = unsafe { msr::read_msr(MSR_IA32_PL0_SSP) };
+        prev.set_pl0_ssp(ssp);
+    }
+
     // ── Étape 2 : Sauvegarder FS/GS base du thread sortant (CORR-11) ─────────
     //
     // On est en Ring 0 → SWAPGS a été effectué à l'entrée kernel.
@@ -224,10 +235,29 @@ pub unsafe fn context_switch(
     // (context_switch_asm a restauré la pile et les registres de `next`)
     // ─────────────────────────────────────────────────────────────────────────
 
+    // FIX-KPTI-01 : rafraîchir le slot CR3 per-CPU après le switch.
+    // Sans cette mise à jour, kpti_switch_to_user/kernel peut relire un couple
+    // stale sur ce CPU après migration/changement d'espace d'adressage.
+    if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
+        crate::arch::x86_64::spectre::kpti::set_current_cr3(next.cr3_phys, next.cr3_phys);
+    }
+
     // Restauration PKRS (S6) côté thread entrant.
     if CPU_FEATURES.has_pks() {
         // SAFETY: accès MSR ring0, capability vérifiée via CPUID.
         unsafe { msr::write_msr(msr::MSR_IA32_PKRS, next.pkrs as u64) };
+    }
+
+    // ── FIX-CET-01 : Restaurer MSR_IA32_PL0_SSP de `next` si CET actif ───────
+    //
+    // On est maintenant dans le contexte de `next`. Restaurer son SSP Ring 0
+    // avant tout retour vers userspace. Si next n'a jamais utilisé CET
+    // (pl0_ssp() == 0), écrire 0 est safe — désactive le shadow stack pour ce
+    // thread jusqu'à activation explicite via ExoCage.
+    if CPU_FEATURES.has_cet_ss() {
+        let ssp = next.pl0_ssp();
+        // SAFETY: MSR 0x6A4 existant si has_cet_ss(), Ring 0, valeur par-thread.
+        unsafe { msr::write_msr(MSR_IA32_PL0_SSP, ssp) };
     }
 
     // ── Étape 5 : Post-switch côté `next` ────────────────────────────────────

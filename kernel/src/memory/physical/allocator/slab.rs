@@ -99,7 +99,9 @@ const _: () = assert!(mem::size_of::<SlabHeader>() <= 64);
 // CACHE SLAB
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques d'un cache slab.
+/// Statistiques d'un cache slab — sur leur propre cache line.
+/// FIX-SLABCACHE-01 : #[repr(C, align(64))] évite le false sharing avec `inner`.
+#[repr(C, align(64))]
 pub struct SlabCacheStats {
     pub allocs:       AtomicU64,
     pub frees:        AtomicU64,
@@ -122,15 +124,27 @@ impl SlabCacheStats {
     }
 }
 
+/// Newtype forçant son contenu sur une frontière de cache line (64 octets).
+/// FIX-SLABCACHE-01 : sépare `inner` et `stats` sur des lignes distinctes.
+#[repr(C, align(64))]
+struct CacheLineAligned<T>(T);
+
 /// Cache slab pour une classe de taille fixe.
 ///
 /// Maintient trois listes de slabs :
 /// - `partial` : slabs avec des objets libres et des objets occupés
 /// - `full`    : slabs entièrement occupés
 /// - `free`    : slabs entièrement libres (prêts à être restitués au buddy)
+///
+/// FIX-SLABCACHE-01 : #[repr(C, align(64))] + _cache_line_separator garantissent
+/// que `inner` (mutex contesté) et `stats` (atomiques lus depuis d'autres CPUs)
+/// sont sur des cache lines distinctes → pas de false sharing SMP.
+#[repr(C, align(64))]
 pub struct SlabCache {
     info:    SizeClassInfo,
     inner:   Mutex<SlabCacheInner>,
+    /// Séparateur : force `stats` sur une cache line dédiée.
+    _cache_line_separator: CacheLineAligned<()>,
     pub stats:   SlabCacheStats,
     enabled: AtomicBool,
 }
@@ -163,6 +177,7 @@ impl SlabCache {
                 free_count:    0,
                 color_next:    0,
             }),
+            _cache_line_separator: CacheLineAligned(()),
             stats:   SlabCacheStats::new(),
             enabled: AtomicBool::new(false),
         }

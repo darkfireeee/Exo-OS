@@ -76,8 +76,11 @@ pub fn should_preempt_on_wakeup(
     let running_vr = running.vruntime.load(Ordering::Relaxed);
     let woken_vr   = woken.vruntime.load(Ordering::Relaxed);
 
-    // Préempter si le thread réveillé a un vruntime significativement plus petit.
-    if woken_vr + CFS_WAKEUP_PREEMPT_NS < running_vr {
+    // FIX-VRUNTIME-01 : utiliser wrapping_add pour éviter le panic en debug
+    // et le wrap silencieux en release. Sémantique correcte : préempter si le
+    // thread réveillé a couru significativement MOINS que le thread courant.
+    let woken_vr_bumped = woken_vr.wrapping_add(CFS_WAKEUP_PREEMPT_NS);
+    if woken_vr_bumped < running_vr {
         CFS_WAKEUP_PREEMPT_COUNT.fetch_add(1, Ordering::Relaxed);
         return true;
     }

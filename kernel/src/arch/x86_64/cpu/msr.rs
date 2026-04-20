@@ -60,6 +60,12 @@ pub const MSR_TSC_DEADLINE: u32 = 0x0000_06E0;
 /// MSR IA32_PKRS : Supervisor Protection Keys Rights for User pages
 pub const MSR_IA32_PKRS: u32 = 0x0000_06E1;
 
+/// MSR IA32_PL0_SSP — Ring 0 Shadow Stack Pointer (CET, Intel SDM Vol.4 §2.1)
+/// Contient le SSP du thread courant en mode Ring 0.
+/// Doit être sauvegardé/restauré à chaque context switch si CET-SS est actif.
+/// FIX-CET-01
+pub const MSR_IA32_PL0_SSP: u32 = 0x0000_06A4;
+
 /// MSR IA32_PMC0..7 : compteurs performances
 pub const MSR_IA32_PMC0: u32 = 0x0000_00C1;
 

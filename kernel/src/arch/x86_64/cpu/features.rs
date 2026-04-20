@@ -370,6 +370,13 @@ impl CpuFeatures {
     #[inline(always)] pub fn has_arch_cap(&self)   -> bool { self.flags.leaf7_edx & LEAF7_EDX_ARCH_CAP != 0 }
     #[inline(always)] pub fn is_hypervisor(&self)  -> bool { self.flags.leaf1_ecx & LEAF1_ECX_HYPERVISOR != 0 }
 
+    /// CET Shadow Stack — CPUID leaf 7, sub-leaf 0, ECX bit 7.
+    /// FIX-CET-01 : requis pour conditionner la sauvegarde de MSR_IA32_PL0_SSP.
+    #[inline(always)]
+    pub fn has_cet_ss(&self) -> bool {
+        self.flags.leaf7_ecx & (1 << 7) != 0
+    }
+
     // ── Méthodes spécifiques Spectre / MDS ───────────────────────────────────
     /// PCID (Process-Context Identifiers) — nécessaire pour KPTI no-flush
     #[inline(always)] pub fn has_pcid(&self)       -> bool { self.flags.leaf1_ecx & LEAF1_ECX_PCID != 0 }

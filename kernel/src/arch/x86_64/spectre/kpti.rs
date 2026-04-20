@@ -10,6 +10,8 @@
 
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use crate::arch::x86_64::smp::percpu;
+use crate::arch::x86_64::smp::percpu::MAX_CPUS;
 
 // ── État global KPTI ──────────────────────────────────────────────────────────
 
@@ -22,59 +24,78 @@ pub fn kpti_enabled() -> bool {
 
 // ── Bit PCID ─────────────────────────────────────────────────────────────────
 
-/// Bit 12 de CR3 = PCID (Process Context Identifier)
-/// Bit 63 de CR3 (avec INVPCID support) = no-flush bit
 const CR3_PCID_MASK:    u64 = 0xFFF;
 const CR3_NO_FLUSH_BIT: u64 = 1u64 << 63;
 
-/// PCID réservé pour le kernel (0 = pas de PCID kernel dédié)
 pub const PCID_KERNEL: u64 = 0;
-/// PCID réservé pour le shadow user (1 = page tables user KPTI)
 pub const PCID_USER:   u64 = 1;
 
-// ── CR3 per-thread ────────────────────────────────────────────────────────────
+// ── CR3 per-CPU — FIX-KPTI-01 : remplace les deux AtomicU64 globaux ──────────
+//
+// AVANT (BUG) :
+//   static CURRENT_CR3_KERNEL: AtomicU64 = AtomicU64::new(0); // 1 seul pour tous
+//   static CURRENT_CR3_USER:   AtomicU64 = AtomicU64::new(0); // 1 seul pour tous
+//
+// APRÈS : un slot de 128 octets par CPU → pas de false sharing, pas de race SMP.
 
-/// CR3 kernel de la tâche courante (adresse physique du PML4 kernel)
-static CURRENT_CR3_KERNEL: AtomicU64 = AtomicU64::new(0);
-/// CR3 user shadow (page table allégée)
-static CURRENT_CR3_USER:   AtomicU64 = AtomicU64::new(0);
+#[repr(C, align(128))]
+struct Cr3Slot {
+    kernel: AtomicU64,
+    user:   AtomicU64,
+    _pad:   [u8; 112],
+}
 
-/// Enregistre le couple (cr3_kernel, cr3_user) pour la tâche courante
+impl Cr3Slot {
+    const fn new() -> Self {
+        Self { kernel: AtomicU64::new(0), user: AtomicU64::new(0), _pad: [0u8; 112] }
+    }
+}
+
+unsafe impl Sync for Cr3Slot {}
+
+static CR3_PER_CPU: [Cr3Slot; MAX_CPUS] = {
+    const SLOT: Cr3Slot = Cr3Slot::new();
+    [SLOT; MAX_CPUS]
+};
+
+#[inline(always)]
+fn current_cpu_slot() -> &'static Cr3Slot {
+    let cpu_id = percpu::current_cpu_id() as usize;
+    &CR3_PER_CPU[cpu_id.min(MAX_CPUS - 1)]
+}
+
+/// Enregistre le couple (cr3_kernel, cr3_user) pour le thread courant sur CE CPU.
+/// Doit être appelé après chaque context switch (FIX-KPTI-01).
 pub fn set_current_cr3(cr3_kernel: u64, cr3_user: u64) {
-    CURRENT_CR3_KERNEL.store(cr3_kernel, Ordering::Release);
-    CURRENT_CR3_USER.store(cr3_user, Ordering::Release);
+    let slot = current_cpu_slot();
+    slot.kernel.store(cr3_kernel, Ordering::Release);
+    slot.user.store(cr3_user,   Ordering::Release);
 }
 
 // ── Switch Kernel → User CR3 ─────────────────────────────────────────────────
 
 /// Bascule vers les tables de pages user (à exécuter avant IRETQ vers Ring 3)
-///
-/// ## RÈGLE DOC1 — KPTI
-/// Appelé depuis `switch_context_asm.s` juste avant la restauration des registres.
-/// NE PAS appeler depuis du code Rust arbitraire.
 #[inline]
 pub unsafe fn kpti_switch_to_user() {
     if !KPTI_ENABLED.load(Ordering::Relaxed) { return; }
-    let cr3_user = CURRENT_CR3_USER.load(Ordering::Acquire);
+    let slot     = current_cpu_slot();
+    let cr3_user = slot.user.load(Ordering::Acquire);
     if cr3_user == 0 { return; }
-    // Chargement CR3 avec no-flush bit si PCID disponible
     let features = super::super::cpu::features::cpu_features();
     let cr3 = if features.has_pcid() {
         cr3_user | PCID_USER | CR3_NO_FLUSH_BIT
     } else {
         cr3_user & !CR3_PCID_MASK
     };
-    // SAFETY: cr3_user est validé par set_current_cr3
     core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nostack, nomem));
 }
 
 /// Bascule vers les tables de pages kernel (au retour vers Ring 0)
-///
-/// Appelé depuis le stub d'entrée exception/syscall.
 #[inline]
 pub unsafe fn kpti_switch_to_kernel() {
     if !KPTI_ENABLED.load(Ordering::Relaxed) { return; }
-    let cr3_kernel = CURRENT_CR3_KERNEL.load(Ordering::Acquire);
+    let slot       = current_cpu_slot();
+    let cr3_kernel = slot.kernel.load(Ordering::Acquire);
     if cr3_kernel == 0 { return; }
     let features = super::super::cpu::features::cpu_features();
     let cr3 = if features.has_pcid() {
@@ -82,7 +103,6 @@ pub unsafe fn kpti_switch_to_kernel() {
     } else {
         cr3_kernel & !CR3_PCID_MASK
     };
-    // SAFETY: cr3_kernel est le CR3 kernel courant validé
     core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nostack, nomem));
 }
 
@@ -132,7 +152,8 @@ pub fn init_kpti() {
                     trampoline_phys,
                 );
             }
-            crate::memory::virt::page_table::kpti_split::KPTI.enable();
+            // FIX-KPTI-01 : initialiser le slot per-CPU lors de l'activation.
+            set_current_cr3(kernel_pml4_phys.as_u64(), user_pml4_phys.as_u64());
             KPTI_ENABLED.store(true, Ordering::Release);
         }
         Err(_) => {

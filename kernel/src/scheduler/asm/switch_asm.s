@@ -101,15 +101,16 @@ switch_to_new_thread:
     testq   %rdi, %rdi
     jz      .L_no_save
 
+    // FIX-SWITCH-ASM-01 : sauvegarder UNIQUEMENT les 6 registres callee-saved,
+    // SANS les 16 octets MXCSR+FCW (V7-C-02 : gérés par XSAVE/XRSTOR).
+    // Layout identique à context_switch_asm → restauration compatible.
     pushq   %r15
     pushq   %r14
     pushq   %r13
     pushq   %r12
     pushq   %rbp
     pushq   %rbx
-    subq    $16, %rsp
-    stmxcsr 0(%rsp)
-    fstcw   8(%rsp)
+    // Total : 6 × 8 = 48B sur pile (+ rip implicite = 56B)
     movq    %rsp, (%rdi)
 
 .L_no_save:

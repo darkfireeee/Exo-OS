@@ -1,0 +1,230 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX-SLABCACHE-01 — False sharing dans SlabCache
+//
+// FICHIER : kernel/src/memory/physical/allocator/slab.rs
+//
+// PROBLÈME :
+//   pub struct SlabCache {              // ← aucun #[repr(align(64))]
+//       inner:   Mutex<SlabCacheInner>,  // lock contesté fréquemment
+//       pub stats: SlabCacheStats,       // atomiques de monitoring
+//   }
+//
+//   SlabHeader est bien aligné (#[repr(C, align(64))]), mais SlabCache ne l'est pas.
+//   inner et stats partagent probablement la même cache line de 64 octets.
+//   Chaque alloc/free (qui acquiert `inner`) invalide la cache line des `stats`
+//   sur les CPUs voisins → false sharing entre threads de monitoring et threads
+//   d'allocation.
+//
+// CORRECTION :
+//   1. Séparer inner et stats sur des cache lines distinctes via padding.
+//   2. Ajouter #[repr(C, align(64))] sur SlabCache.
+//   3. Insérer un champ _pad entre inner et stats.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// REMPLACEMENT de struct SlabCache et SlabCacheStats dans slab.rs :
+
+/// Statistiques du slab cache — sur sa propre cache line (FIX-SLABCACHE-01).
+/// Séparées de `inner` pour éviter le false sharing lors des alloc/free.
+#[repr(C, align(64))]
+pub struct SlabCacheStats {
+    pub alloc_count:  AtomicU64,
+    pub free_count:   AtomicU64,
+    pub cache_hits:   AtomicU64,
+    pub cache_misses: AtomicU64,
+    pub slab_creates: AtomicU64,
+    pub slab_frees:   AtomicU64,
+    // Padding pour remplir la cache line (6 × 8 = 48 octets, pad = 16)
+    _pad: [u8; 16],
+}
+
+// Note : si SlabCacheStats a plus ou moins de 6 champs AtomicU64,
+// ajuster _pad pour que sizeof(SlabCacheStats) == 64.
+
+/// SlabCache aligné sur cache line — inner et stats sur des lignes séparées.
+///
+/// Layout mémoire :
+///   [  0 ..  ? ] = Mutex<SlabCacheInner>  (taille variable selon Mutex impl)
+///   [ 64 ..128 ] = SlabCacheStats          (forcé sur cache line suivante via _separator)
+///
+/// FIX-SLABCACHE-01 : #[repr(C, align(64))] garantit que deux SlabCache
+/// adjacents dans un tableau ne partagent pas de cache lines.
+#[repr(C, align(64))]
+pub struct SlabCache {
+    /// État interne protégé par un mutex.
+    /// Données hot : liste de slabs partiels/pleins/libres.
+    inner: Mutex<SlabCacheInner>,
+
+    /// Séparateur cache line : force stats sur une ligne dédiée.
+    /// Empêche le false sharing entre les acquisitions du lock inner
+    /// et les lectures de compteurs depuis d'autres CPUs.
+    ///
+    /// Taille : 64 - sizeof(Mutex<SlabCacheInner>) % 64.
+    /// Si sizeof(Mutex) >= 64, ce padding est 0 et l'alignement suivant
+    /// (dû à align(64) sur SlabCacheStats) gère la séparation.
+    ///
+    /// Solution robuste : utiliser un wrapper newtype aligné.
+    _cache_line_separator: CacheLineAligned<()>,
+
+    /// Statistiques — sur leur propre cache line.
+    pub stats: SlabCacheStats,
+}
+
+/// Newtype qui force son contenu sur une frontière de cache line.
+#[repr(C, align(64))]
+struct CacheLineAligned<T>(T);
+
+// SAFETY: SlabCache protégé par Mutex interne.
+unsafe impl Sync for SlabCache {}
+unsafe impl Send for SlabCache {}
+
+impl SlabCache {
+    pub fn new(info: SizeClassInfo) -> Self {
+        SlabCache {
+            inner: Mutex::new(SlabCacheInner {
+                partial_list: core::ptr::null_mut(),
+                full_list:    core::ptr::null_mut(),
+                free_list:    core::ptr::null_mut(),
+                info,
+            }),
+            _cache_line_separator: CacheLineAligned(()),
+            stats: SlabCacheStats::new(),
+        }
+    }
+    // ... reste de l'implémentation inchangé
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX-RQ-ALIGN-01 — False sharing dans PerCpuRunQueue
+//
+// FICHIER : kernel/src/scheduler/core/runqueue.rs
+//
+// PROBLÈME :
+//   pub struct PerCpuRunQueue {   // ← aucun #[repr(align(64))] ni #[repr(C)]
+//       pub cpu: CpuId,
+//       rt:      RtRunQueue,      // struct massive ~8 KB
+//       cfs:     CfsRunQueue,     // struct massive ~4 KB
+//       ...
+//   }
+//
+//   static mut PER_CPU_RQ: [MaybeUninit<PerCpuRunQueue>; MAX_CPUS]
+//
+//   Si sizeof(PerCpuRunQueue) n'est pas un multiple de 64 octets, les queues de
+//   CPU0 et CPU1 se chevauchent sur une cache line en fin/début. Sur 256 CPUs,
+//   la contention peut affecter n'importe quelle paire adjacente.
+//
+// CORRECTION :
+//   1. Ajouter #[repr(C, align(64))] sur PerCpuRunQueue.
+//      → Garantit que chaque instance commence sur une frontière de 64 octets.
+//   2. S'assurer que sizeof(PerCpuRunQueue) est un multiple de 64.
+//      → Rust garantit le padding de fin si align(64) > alignement naturel.
+//
+// NOTE IMPORTANTE : RtRunQueue (~8KB) et CfsRunQueue (~4KB) sont déjà bien
+// plus grands que 64 octets, donc l'alignement de 64 est suffisant.
+// Pour une séparation totale, il faudrait align(sizeof(PerCpuRunQueue) arrondi
+// à la prochaine puissance de 2) — excessif pour du noyau, align(64) suffit
+// pour éviter le false sharing sur les champs hot (cpu, stats, current).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// MODIFICATION dans runqueue.rs — ajouter l'attribut repr :
+
+/// Run queue complète pour un CPU logique.
+///
+/// FIX-RQ-ALIGN-01 : #[repr(C, align(64))] garantit que deux PerCpuRunQueue
+/// adjacentes dans PER_CPU_RQ[MAX_CPUS] ne partagent pas de cache lines sur
+/// leurs champs de début (cpu, stats, current) qui sont accédés depuis d'autres
+/// CPUs lors du load balancing.
+#[repr(C, align(64))]
+pub struct PerCpuRunQueue {
+    /// Identifiant du CPU propriétaire.
+    pub cpu: CpuId,
+    /// File temps-réel.
+    rt:      RtRunQueue,
+    /// File CFS (ordonnancement équitable).
+    cfs:     CfsRunQueue,
+    /// Thread idle de ce CPU (toujours présent, non compté dans nr_running).
+    pub idle_thread: Option<NonNull<ThreadControlBlock>>,
+    /// Thread courant (en train de tourner).
+    pub current: Option<NonNull<ThreadControlBlock>>,
+    /// Statistiques.
+    pub stats: RunQueueStats,
+    /// Clock vruntime — temps monotone utilisé pour le lag CFS.
+    pub clock_task_ns: u64,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Assertion compile-time de cohérence :
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Vérifier que l'alignement est effectivement 64 octets.
+// (Utile si des modifications futures retirent accidentellement l'attribut.)
+const _: () = assert!(
+    core::mem::align_of::<PerCpuRunQueue>() >= 64,
+    "FIX-RQ-ALIGN-01: PerCpuRunQueue doit être aligné sur 64 octets minimum"
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX-CANARY-01 — canary.rs::MAX_CPUS local au lieu d'importer le canonique
+//
+// FICHIER : kernel/src/memory/integrity/canary.rs
+//
+// PROBLÈME :
+//   const MAX_CPUS: usize = 256;  // ← redéfini localement
+//   // ...
+//   unsafe { core::mem::transmute::<[u8; MAX_CPUS * 64], [CanarySlot; MAX_CPUS]>(...) }
+//
+//   Si memory::core::constants::MAX_CPUS change (ex: passage à 512 CPUs pour
+//   ExoPhoenix Spec v7), canary.rs reste silencieusement à 256.
+//   Le transmute devient UB : la source a 256*64 octets mais la destination
+//   attend 512 slots → lecture hors-bounds au démarrage.
+//
+// CORRECTION :
+//   Importer MAX_CPUS depuis la source canonique.
+//   Ajouter une assertion compile-time pour détecter toute divergence résiduelle.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// MODIFICATIONS dans canary.rs :
+
+// SUPPRIMER :
+//   const MAX_CPUS: usize = 256;
+
+// AJOUTER en tête du fichier, dans la section use :
+use crate::memory::core::constants::MAX_CPUS;
+// Note : si une ambiguïté avec un MAX_CPUS d'un autre module se produit,
+// utiliser un alias : use crate::memory::core::constants::MAX_CPUS as CANARY_MAX_CPUS;
+// et remplacer les occurrences dans ce fichier.
+
+// AJOUTER après la déclaration de CANARY_TABLE, l'assertion suivante :
+
+/// Vérification compile-time : CANARY_TABLE doit avoir exactement MAX_CPUS slots
+/// de 64 octets chacun. Si MAX_CPUS change dans constants.rs, cette assertion
+/// détecte la divergence et empêche un UB silencieux dans le transmute.
+const _: () = {
+    // sizeof([CanarySlot; N]) == N * 64 (car CanarySlot est align(64), taille=64)
+    // sizeof([u8; N * 64]) == N * 64
+    // → les deux côtés du transmute ont la même taille par construction.
+    // On vérifie que CanarySlot fait bien exactement 64 octets :
+    assert!(
+        core::mem::size_of::<CanarySlot>() == 64,
+        "FIX-CANARY-01: CanarySlot doit faire exactement 64 octets (cache line)"
+    );
+    // Et que le tableau global est cohérent :
+    assert!(
+        core::mem::size_of::<CanaryTable>() == MAX_CPUS * 64,
+        "FIX-CANARY-01: CanaryTable doit faire MAX_CPUS * 64 octets"
+    );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTE SUR LE TRANSMUTE :
+//
+// Le transmute actuel est un raccourci correct mais fragile.
+// Une alternative plus robuste (et 0-unsafe supplémentaire) :
+//
+//   static CANARY_TABLE: CanaryTable = CanaryTable {
+//       slots: [const { CanarySlot::uninit() }; MAX_CPUS],
+//   };
+//
+// Cela nécessite que CanarySlot::uninit() soit const, ce qui est déjà le cas
+// dans le code actuel. Cette approche évite complètement le transmute.
+// ─────────────────────────────────────────────────────────────────────────────

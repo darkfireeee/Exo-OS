@@ -17,13 +17,14 @@
 
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+// FIX-CANARY-01 : importer MAX_CPUS depuis la source canonique.
+// Évite une divergence silencieuse si MAX_CPUS change dans constants.rs.
+use crate::memory::core::constants::MAX_CPUS;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximal de CPUs supportés.
-const MAX_CPUS: usize = 256;
 /// Valeur sentinelle indiquant que la table n'est pas encore initialisée.
 const CANARY_UNINIT: u64 = 0xDEAD_BEEF_CAFE_BABE;
 /// Poison pour détecter une réutilisation de stack après violation.
@@ -109,6 +110,17 @@ macro_rules! canary_table_init {
 }
 
 static CANARY_TABLE: CanaryTable = canary_table_init!();
+
+// FIX-CANARY-01 : assertions compile-time — détectent toute divergence
+// si MAX_CPUS ou CanarySlot changent.
+const _: () = assert!(
+    core::mem::size_of::<CanarySlot>() == 64,
+    "FIX-CANARY-01: CanarySlot doit faire exactement 64 octets (cache line)"
+);
+const _: () = assert!(
+    core::mem::size_of::<CanaryTable>() == MAX_CPUS * 64,
+    "FIX-CANARY-01: CanaryTable doit faire MAX_CPUS * 64 octets"
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Génération pseudo-aléatoire via RDTSC

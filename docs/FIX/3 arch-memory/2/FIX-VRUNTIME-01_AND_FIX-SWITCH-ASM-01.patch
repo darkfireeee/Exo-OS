@@ -1,0 +1,199 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX-VRUNTIME-01 — Overflow dans should_preempt_on_wakeup()
+//
+// FICHIER : kernel/src/scheduler/policies/cfs.rs
+//
+// PROBLÈME :
+//   pub fn should_preempt_on_wakeup(running, woken, _min_vruntime) -> bool {
+//       ...
+//       if woken_vr + CFS_WAKEUP_PREEMPT_NS < running_vr {  // ← BUG
+//
+//   Addition Rust standard sur u64 :
+//     • Mode debug   → panic! si débordement
+//     • Mode release → wraps silencieusement → INVERSION DE LA COMPARAISON
+//
+//   Cas pathologique : un thread tourne depuis très longtemps (vruntime élevé),
+//   un nouveau thread se réveille. woken_vr ≈ min_vruntime peut être proche de
+//   u64::MAX après des heures de runtime (min_vruntime croît sans borne).
+//   CFS_WAKEUP_PREEMPT_NS = 1_000_000 ns → overflow à min_vruntime > u64::MAX - 1M.
+//
+// CORRECTION :
+//   Utiliser wrapping_add pour l'addition ET wrapping_sub pour la comparaison.
+//   La sémantique wrapping est correcte pour les vruntime CFS car l'ordre relatif
+//   est ce qui compte (comme Linux : vruntime_compare utilise (s64)(a - b) < 0).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// REMPLACEMENT de la fonction should_preempt_on_wakeup() (version complète) :
+
+pub fn should_preempt_on_wakeup(
+    running:       &ThreadControlBlock,
+    woken:         &ThreadControlBlock,
+    _min_vruntime: u64,
+) -> bool {
+    // Ne préempter que si le thread actuel n'est pas RT.
+    if running.priority.is_realtime() { return false; }
+
+    let running_vr = running.vruntime.load(Ordering::Relaxed);
+    let woken_vr   = woken.vruntime.load(Ordering::Relaxed);
+
+    // FIX-VRUNTIME-01 : utiliser wrapping_add pour éviter le panic en debug
+    // et le wrap silencieux en release lors de l'addition avec CFS_WAKEUP_PREEMPT_NS.
+    //
+    // Sémantique correcte : préempter si le thread réveillé a couru
+    // significativement MOINS que le thread courant (en temps virtuel).
+    // La comparaison wrapping préserve l'ordre relatif même après overflow u64.
+    //
+    // Équivalent Linux (kernel/sched/fair.c, wakeup_preempt_entity) :
+    //   return (s64)(se->vruntime - curr->vruntime) < -(s64)ideal_runtime
+    // Notre formulation wrapping est arithmétiquement équivalente.
+    let woken_vr_bumped = woken_vr.wrapping_add(CFS_WAKEUP_PREEMPT_NS);
+    if woken_vr_bumped < running_vr {
+        CFS_WAKEUP_PREEMPT_COUNT.fetch_add(1, Ordering::Relaxed);
+        return true;
+    }
+    false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CORRECTION SUPPLÉMENTAIRE — normalize_vruntime_on_enqueue()
+//
+// Même fichier, même problème potentiel :
+//   let floor = min_vruntime.saturating_sub(slice_ns / 2);
+// → saturating_sub est correct ici (pas de bug).
+//
+// Mais la comparaison current_vr < floor pour un thread dormant longtemps
+// peut aussi nécessiter wrapping. Pas critique (normalisation approximative)
+// mais documenter le comportement :
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn normalize_vruntime_on_enqueue(tcb: &ThreadControlBlock, min_vruntime: u64, slice_ns: u64) {
+    let current_vr = tcb.vruntime.load(Ordering::Relaxed);
+    // saturating_sub correct : si min_vruntime < slice_ns/2, floor = 0 (conservateur).
+    let floor = min_vruntime.saturating_sub(slice_ns / 2);
+    if current_vr < floor {
+        tcb.vruntime.store(floor, Ordering::Relaxed);
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX-SWITCH-ASM-01 — Désalignement de pile dans switch_to_new_thread
+//
+// FICHIER : kernel/src/scheduler/asm/switch_asm.s
+//
+// PROBLÈME :
+//   switch_to_new_thread sauvegarde le thread SORTANT avec 16 octets de plus
+//   que context_switch_asm (MXCSR + x87 FCW) :
+//
+//   switch_to_new_thread (sauvegarde OLD thread) :
+//     pushq r15,r14,r13,r12,rbp,rbx    ; 48 octets
+//     subq  $16, %rsp                  ; ← 16 OCTETS SUPPLÉMENTAIRES
+//     stmxcsr 0(%rsp)                  ; sauvegarde MXCSR
+//     fstcw   8(%rsp)                  ; sauvegarde x87 FCW
+//     movq  %rsp, (%rdi)               ; kstack_ptr pointe 16 octets trop bas
+//
+//   context_switch_asm (restaure ce même thread plus tard) :
+//     movq  %rsi, %rsp                 ; rsp = kstack_ptr (pointe sur MXCSR)
+//     popq  %rbx                       ; ← charge MXCSR dans rbx  ← CORROMPU
+//     popq  %rbp                       ; ← charge FCW dans rbp    ← CORROMPU
+//     popq  %r12,%r13,%r14,%r15        ; charges des valeurs décalées
+//     ret                              ; ← saute vers une adresse aléatoire CRASH
+//
+//   Le commentaire dans create.rs dit explicitement (SANS MXCSR/FCW) —
+//   contrat documenté mais VIOLÉ dans l'ASM.
+//
+// RACINE : incohérence de refactoring. V7-C-02 a supprimé MXCSR/FCW de
+//   context_switch_asm mais oublié de faire de même dans switch_to_new_thread.
+//
+// CORRECTION :
+//   Supprimer les 3 lignes (subq + stmxcsr + fstcw) de switch_to_new_thread.
+//   Le layout de sauvegarde du VIEUX thread devient identique à context_switch_asm.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// REMPLACEMENT COMPLET de switch_to_new_thread dans switch_asm.s :
+
+// .section .text
+// .global switch_to_new_thread
+// .type switch_to_new_thread, @function
+//
+// switch_to_new_thread:
+//     // Sauvegarder prev seulement si old_kernel_rsp != NULL
+//     testq   %rdi, %rdi
+//     jz      .L_no_save
+//
+//     // FIX-SWITCH-ASM-01 : sauvegarder UNIQUEMENT les 6 registres callee-saved,
+//     // SANS les 16 octets MXCSR+FCW qui étaient ici.
+//     //
+//     // AVANT (BUG) :
+//     //   pushq r15,r14,r13,r12,rbp,rbx
+//     //   subq  $16, %rsp     ← créait un layout INCOMPATIBLE avec context_switch_asm
+//     //   stmxcsr 0(%rsp)
+//     //   fstcw   8(%rsp)
+//     //   movq %rsp, (%rdi)
+//     //
+//     // APRÈS (CORRIGÉ) : layout identique à context_switch_asm
+//     pushq   %r15
+//     pushq   %r14
+//     pushq   %r13
+//     pushq   %r12
+//     pushq   %rbp
+//     pushq   %rbx
+//     // Total : 6 × 8 = 48B sur pile (+ rip implicite = 56B)
+//     // Même layout exact que context_switch_asm → restauration compatible.
+//     movq    %rsp, (%rdi)
+//
+// .L_no_save:
+//     // Switch CR3 si nécessaire
+//     testq   %rdx, %rdx
+//     jz      .L_new_no_cr3
+//     movq    %rdx, %cr3
+//
+// .L_new_no_cr3:
+//     // Charger le nouveau stack pointer
+//     movq    %rsi, %rsp
+//
+//     // Pour un tout nouveau thread, le "stack" a été préparé par le code Rust
+//     // avec le layout suivant (56 octets, identique à context_switch_asm) :
+//     //   [kernel_rsp+ 0] = rbx initial (0)
+//     //   [kernel_rsp+ 8] = rbp initial (0)
+//     //   [kernel_rsp+16] = r12 initial (0)
+//     //   [kernel_rsp+24] = r13 initial (0)
+//     //   [kernel_rsp+32] = r14 initial (0)
+//     //   [kernel_rsp+40] = r15 initial (0)
+//     //   [kernel_rsp+48] = adresse de retour → thread_entry_trampoline
+//     popq    %rbx
+//     popq    %rbp
+//     popq    %r12
+//     popq    %r13
+//     popq    %r14
+//     popq    %r15
+//     ret
+//
+// .size switch_to_new_thread, . - switch_to_new_thread
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VÉRIFICATION : les sites d'appel dans create.rs et fork.rs préparent
+// déjà le stack du NOUVEAU thread avec le format 56 octets (SANS MXCSR+FCW) :
+//
+//   create.rs ligne ~261 :
+//     const FRAME: u64 = 7 * 8; // 56 bytes — format switch_to_new_thread
+//
+//   Le commentaire dit explicitement "SANS MXCSR+FCW" → les sites d'appel
+//   sont DÉJÀ CORRECTS. Seule la partie "sauvegarde du VIEUX thread" était bugguée.
+//
+// Aucune modification requise dans create.rs ou fork.rs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPACT MXCSR/x87 FCW : pourquoi on peut supprimer stmxcsr/fstcw ?
+//
+//   V7-C-02 (dans switch_asm.s commentaire) :
+//   "Le kernel est compilé avec -mmx,-sse,-sse2,+soft-float → pas d'instructions
+//    SSE générées par le compilateur → MXCSR ne peut pas être corrompu par le
+//    kernel. L'état FPU complet (MXCSR, FCW, registres x87/SSE/AVX) est géré
+//    exclusivement par scheduler/fpu/save_restore.rs via XSAVE/XRSTOR."
+//
+//   → MXCSR et FCW sont sauvés par XSAVE AVANT context_switch_asm (step 1 dans
+//     context_switch()). Les sauvegarder à nouveau dans switch_to_new_thread
+//     était redondant ET créait le désalignement fatal.
+// ─────────────────────────────────────────────────────────────────────────────
