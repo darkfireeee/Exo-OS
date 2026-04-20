@@ -112,10 +112,26 @@ impl KptiTable {
         let s = &self.states[cpu_id];
         if s.kernel_pml4.as_u64() == 0 { None } else { Some((s.kernel_pml4, s.user_pml4)) }
     }
+
+    /// Retourne le CR3 user (physique) pour un CPU donné.
+    #[inline]
+    pub fn user_cr3_for_cpu(&self, cpu_id: usize) -> Option<u64> {
+        if cpu_id >= 256 {
+            return None;
+        }
+        let user = self.states[cpu_id].user_pml4.as_u64();
+        if user == 0 { None } else { Some(user) }
+    }
 }
 
 /// Table KPTI globale.
 pub static KPTI: KptiTable = KptiTable::new();
+
+/// Helper public: retourne le CR3 user (physique) du CPU donné.
+#[inline]
+pub fn user_cr3_for_cpu(cpu_id: usize) -> Option<u64> {
+    KPTI.user_cr3_for_cpu(cpu_id)
+}
 
 /// Construit une PML4 user shadow à partir de la PML4 kernel courante.
 ///

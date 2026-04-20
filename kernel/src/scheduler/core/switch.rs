@@ -26,6 +26,7 @@ use crate::arch::x86_64::{
     smp::percpu,
     tss,
 };
+use crate::memory::virt::page_table::kpti_split::user_cr3_for_cpu;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pointeur "thread courant" par CPU — mis à jour à chaque context switch
@@ -239,7 +240,9 @@ pub unsafe fn context_switch(
     // Sans cette mise à jour, kpti_switch_to_user/kernel peut relire un couple
     // stale sur ce CPU après migration/changement d'espace d'adressage.
     if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
-        crate::arch::x86_64::spectre::kpti::set_current_cr3(next.cr3_phys, next.cr3_phys);
+        let cpu_id = percpu::current_cpu_id() as usize;
+        let user_cr3 = user_cr3_for_cpu(cpu_id).unwrap_or(next.cr3_phys);
+        crate::arch::x86_64::spectre::kpti::set_current_cr3(next.cr3_phys, user_cr3);
     }
 
     // Restauration PKRS (S6) côté thread entrant.
