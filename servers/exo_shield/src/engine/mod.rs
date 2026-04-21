@@ -1,10 +1,3 @@
-//! # ExoShield Engine — Module Re-exports
-//!
-//! Provides unified access to all engine sub-modules:
-//! - `core`     — Threat detection engine, scoring, and record management
-//! - `scanner`  — Signature and heuristic scanning
-//! - `realtime` — Real-time event monitoring and alerting
-
 pub mod core;
 pub mod scanner;
 pub mod realtime;

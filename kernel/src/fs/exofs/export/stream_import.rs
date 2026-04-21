@@ -110,7 +110,7 @@ impl TombstoneHandler {
 
 /// En-tête de chaque entrée lue depuis un flux de données binaires.
 ///
-/// Structure binaire compacte : 48 bytes (pas de padding).
+/// Structure binaire compacte : 52 bytes.
 #[derive(Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct ImportEntryHeader {
@@ -124,9 +124,14 @@ pub struct ImportEntryHeader {
     pub blob_id: [u8; 32],
     /// Taille des données qui suivent (0 pour tombstone).
     pub data_size: u64,
+    /// Réservé pour extensions de protocole.
+    pub _pad2: [u8; 4],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<ImportEntryHeader>() == 52);
+const _: () = assert!(
+    core::mem::size_of::<ImportEntryHeader>() == 52,
+    "ImportEntryHeader ABI size changed — verifier import stream ExoAR"
+);
 
 /// Magic de l'en-tête d'import.
 pub const IMPORT_ENTRY_MAGIC: u32 = 0x4558_494D; // "EXIM"
@@ -138,13 +143,20 @@ pub const IMPORT_FLAG_VERIFIED: u8 = 0x02;
 
 impl ImportEntryHeader {
     pub fn new_blob(blob_id: [u8; 32], data_size: u64) -> Self {
-        Self { magic: IMPORT_ENTRY_MAGIC, flags: 0, _pad: [0u8; 3], blob_id, data_size }
+        Self {
+            magic: IMPORT_ENTRY_MAGIC,
+            flags: 0,
+            _pad: [0u8; 3],
+            blob_id,
+            data_size,
+            _pad2: [0u8; 4],
+        }
     }
 
     pub fn new_tombstone(blob_id: [u8; 32]) -> Self {
         Self {
             magic: IMPORT_ENTRY_MAGIC, flags: IMPORT_FLAG_TOMBSTONE,
-            _pad: [0u8; 3], blob_id, data_size: 0,
+            _pad: [0u8; 3], blob_id, data_size: 0, _pad2: [0u8; 4],
         }
     }
 

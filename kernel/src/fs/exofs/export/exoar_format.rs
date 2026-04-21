@@ -80,10 +80,13 @@ pub struct ExoarHeader {
     pub compress_algo: u8,
     pub cipher_algo: u8,
     pub header_hash: [u8; 32],
-    pub _pad: [u8; 3],
+    pub _pad: [u8; 36],
 }
 
-// SIZE_ASSERT_DISABLED: const _HEADER_SIZE: () = assert!(size_of::<ExoarHeader>() == 128, "ExoarHeader must be 128 bytes");
+const _HEADER_SIZE: () = assert!(
+    size_of::<ExoarHeader>() == 128,
+    "ExoarHeader ABI size changed — verifier compatibilite ExoAR"
+);
 
 impl ExoarHeader {
     /// Crée un en-tête valide avec magic et version.
@@ -100,7 +103,7 @@ impl ExoarHeader {
             compress_algo: COMPRESS_NONE,
             cipher_algo: CIPHER_NONE,
             header_hash: [0u8; 32],
-            _pad: [0u8; 3],
+            _pad: [0u8; 36],
         }
     }
 
@@ -175,10 +178,13 @@ pub struct ExoarEntryHeader {
     pub payload_crc32: u32,
     pub epoch: u64,
     pub name: [u8; 8],
-    pub _reserved: [u8; 8],
+    pub _reserved: [u8; 22],
 }
 
-// SIZE_ASSERT_DISABLED: const _ENTRY_SIZE: () = assert!(size_of::<ExoarEntryHeader>() == 96, "ExoarEntryHeader must be 96 bytes");
+const _ENTRY_SIZE: () = assert!(
+    size_of::<ExoarEntryHeader>() == 96,
+    "ExoarEntryHeader ABI size changed — verifier compatibilite ExoAR"
+);
 
 impl ExoarEntryHeader {
     /// Crée un en-tête d'entrée valide avec magic.
@@ -193,7 +199,7 @@ impl ExoarEntryHeader {
             payload_crc32: 0,
             epoch: 0,
             name: [0u8; 8],
-            _reserved: [0u8; 8],
+            _reserved: [0u8; 22],
         }
     }
 
@@ -253,10 +259,13 @@ pub struct ExoarFooter {
     pub global_crc32: u32,
     pub total_size: u64,
     pub archive_hash: [u8; 8],
-    pub _pad: [u8; 8],
+    pub _pad: [u8; 4],
 }
 
-// SIZE_ASSERT_DISABLED: const _FOOTER_SIZE: () = assert!(size_of::<ExoarFooter>() == 32, "ExoarFooter must be 32 bytes");
+const _FOOTER_SIZE: () = assert!(
+    size_of::<ExoarFooter>() == 32,
+    "ExoarFooter ABI size changed — verifier compatibilite ExoAR"
+);
 
 impl ExoarFooter {
     pub const fn new(entry_count: u32, global_crc32: u32, total_size: u64) -> Self {
@@ -266,7 +275,7 @@ impl ExoarFooter {
             global_crc32,
             total_size,
             archive_hash: [0u8; 8],
-            _pad: [0u8; 8],
+            _pad: [0u8; 4],
         }
     }
 

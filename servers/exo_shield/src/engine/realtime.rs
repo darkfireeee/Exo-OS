@@ -28,7 +28,7 @@ const MAX_EVENT_FILTERS: usize = 64;
 const MAX_RATE_ENTRIES: usize = 128;
 
 /// Maximum alerts stored.
-const MAX_ALERTS: usize = 128;
+pub const MAX_ALERTS: usize = 128;
 
 /// Maximum alert description length.
 const MAX_ALERT_DESC: usize = 48;
@@ -45,7 +45,7 @@ const DEFAULT_ANOMALY_RATE_LIMIT: u32 = 100;
 // ── Event Types ─────────────────────────────────────────────────────────────
 
 /// Types of events the monitor can observe.
-#[repr(C)]
+#[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EventType {
     Syscall      = 0,
@@ -585,6 +585,14 @@ impl EventMonitor {
 
     /// Update rate tracking for a process event.
     fn update_rate(&mut self, pid: u32, event_type: EventType, tick: u64) -> RateResult {
+        let (sysc_limit, net_limit, fs_limit, anom_limit) =
+            self.get_proc_limits(pid).unwrap_or((
+                DEFAULT_SYSCALL_RATE_LIMIT,
+                DEFAULT_NET_RATE_LIMIT,
+                DEFAULT_FS_RATE_LIMIT,
+                DEFAULT_ANOMALY_RATE_LIMIT,
+            ));
+
         // Find or create rate entry
         let mut entry_idx = usize::MAX;
         for i in 0..MAX_RATE_ENTRIES {
@@ -655,15 +663,6 @@ impl EventMonitor {
                 entry.anomaly_count += 1;
             }
         }
-
-        // Check rate against process limits
-        let (sysc_limit, net_limit, fs_limit, anom_limit) =
-            self.get_proc_limits(pid).unwrap_or((
-                DEFAULT_SYSCALL_RATE_LIMIT,
-                DEFAULT_NET_RATE_LIMIT,
-                DEFAULT_FS_RATE_LIMIT,
-                DEFAULT_ANOMALY_RATE_LIMIT,
-            ));
 
         let (current_rate, limit) = match event_type {
             EventType::Syscall | EventType::Signal => {
@@ -742,7 +741,7 @@ impl EventMonitor {
         }
 
         // Step 3: Rate exceeded escalation
-        if rate_result.exceeded && best_action as u8 < FilterAction::Alert as u8 {
+        if rate_result.exceeded && (best_action as u8) < (FilterAction::Alert as u8) {
             best_action = FilterAction::Alert;
         }
 

@@ -336,9 +336,14 @@ pub struct OpenResult {
     pub flags:     u32,
     /// Padding.
     pub _pad2:     u32,
+    /// Réservé pour extensions ABI futures.
+    pub _reserved: [u8; 8],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<OpenResult>() == 72);
+const _: () = assert!(
+    core::mem::size_of::<OpenResult>() == 72,
+    "OpenResult ABI size changed — verifier syscall object_open"
+);
 
 /// Ouvre un fd et remplit un `OpenResult`.
 pub fn open_object_full(
@@ -357,6 +362,7 @@ pub fn open_object_full(
         epoch_id:args.epoch_id,
         flags:   args.flags,
         _pad2:   0,
+        _reserved: [0u8; 8],
     })
 }
 

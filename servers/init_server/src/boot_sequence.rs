@@ -1,4 +1,4 @@
-use super::{dependency, syscall, Service};
+use super::{dependency, service_manager, supervisor, syscall, Service};
 
 const POLL_INTERVAL_MS: u64 = 5;
 const IPC_READY_SETTLE_MS: u64 = 10;
@@ -28,15 +28,6 @@ fn sleep_ms(ms: u64) {
 #[inline]
 fn pid_alive(pid: u32) -> bool {
     unsafe { syscall::syscall2(syscall::SYS_KILL, pid as u64, 0) == 0 }
-}
-
-#[inline]
-fn service_started(services: &[Service], name: &str) -> bool {
-    services
-        .iter()
-        .find(|service| service.name == name)
-        .map(|service| service.current_pid() != 0)
-        .unwrap_or(false)
 }
 
 /// Démarre un serveur Ring1 via fork + execve.
@@ -101,28 +92,38 @@ pub unsafe fn wait_for_ipc_ready(pid: u32, timeout_ms: u64) -> bool {
 /// La dépendance est volontairement stricte : chaque service doit être vivant
 /// et stabilisé avant le lancement du suivant.
 pub unsafe fn boot_services(services: &[Service]) -> usize {
-    let mut started = 0usize;
+    let mut progress = true;
+    while progress {
+        progress = false;
 
-    while started < services.len() {
-        let service = &services[started];
-        if !dependency::dependencies_satisfied(service.name, |dep| service_started(services, dep)) {
-            break;
+        let mut idx = 0usize;
+        while idx < services.len() {
+            let service = &services[idx];
+            if service.current_pid() != 0 {
+                idx += 1;
+                continue;
+            }
+            if !supervisor::can_start(services, service.name) {
+                idx += 1;
+                continue;
+            }
+
+            let pid = spawn_service(service.name, service.bin_path);
+            if pid == 0 {
+                idx += 1;
+                continue;
+            }
+
+            service.set_pid(pid);
+            if wait_for_ipc_ready(pid, dependency::ready_timeout_ms(service.name)) {
+                progress = true;
+            } else {
+                let _ = syscall::syscall2(syscall::SYS_KILL, pid as u64, 15);
+                service.mark_dead();
+            }
+            idx += 1;
         }
-
-        let pid = spawn_service(service.name, service.bin_path);
-        if pid == 0 {
-            break;
-        }
-
-        service.set_pid(pid);
-
-        if !wait_for_ipc_ready(pid, dependency::ready_timeout_ms(service.name)) {
-            service.mark_dead();
-            break;
-        }
-
-        started += 1;
     }
 
-    started
+    service_manager::running_count(services)
 }

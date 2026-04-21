@@ -19,45 +19,11 @@
 //! ## Syscalls utilisés
 //! - SYS_EXOFS_PATH_RESOLVE = 500 (résolution chemin → blob_id)
 //! - SYS_EXOFS_OBJECT_OPEN  = 501 (open blob → fd)
-//! - SYS_IPC_REGISTER = 300, SYS_IPC_RECV = 301, SYS_IPC_SEND = 302
+//! - SYS_IPC_REGISTER = 304, SYS_IPC_RECV = 301, SYS_IPC_SEND = 300
 
+use exo_syscall_abi as syscall;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, Ordering};
-
-mod syscall {
-    #[inline(always)]
-    pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> i64 {
-        let ret: i64;
-        core::arch::asm!(
-            "syscall",
-            in("rax") nr,
-            in("rdi") a1, in("rsi") a2, in("rdx") a3,
-            in("r10") a4, in("r8")  a5, in("r9")  a6,
-            lateout("rax") ret,
-            out("rcx") _, out("r11") _,
-            options(nostack),
-        );
-        ret
-    }
-
-    #[inline(always)]
-    pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> i64 {
-        syscall6(nr, a1, a2, a3, 0, 0, 0)
-    }
-    #[inline(always)]
-    pub unsafe fn syscall2(nr: u64, a1: u64, a2: u64) -> i64 {
-        syscall6(nr, a1, a2, 0, 0, 0, 0)
-    }
-
-    pub const SYS_IPC_REGISTER:       u64 = 300;
-    pub const SYS_IPC_RECV:           u64 = 301;
-    pub const SYS_IPC_SEND:           u64 = 302;
-    pub const SYS_EXOFS_PATH_RESOLVE: u64 = 500;
-    pub const SYS_EXOFS_OBJECT_OPEN:  u64 = 501;
-
-    // Flags pour SYS_EXOFS_OBJECT_OPEN (O_RDONLY = 0, O_RDWR = 2)
-    pub const O_RDONLY: u64 = 0;
-}
 
 // ── Table de montages ─────────────────────────────────────────────────────────
 
@@ -107,8 +73,8 @@ const VFS_UMOUNT:  u32 = 1;
 const VFS_RESOLVE: u32 = 2;
 const VFS_OPEN:    u32 = 3;
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
-const IPC_FLAG_TIMEOUT: u64 = 0x0001;
-const ETIMEDOUT: i64 = -110;
+const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
+const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
 
 #[repr(C)]
 struct VfsRequest {
@@ -141,12 +107,6 @@ fn handle_mount(payload: &[u8]) -> VfsReply {
     let path_len = path.iter().position(|&b| b == 0).unwrap_or(path.len());
     let path_hash = fnv32(&path[..path_len]);
 
-    let idx = MOUNT_COUNT.fetch_add(1, Ordering::AcqRel) as usize;
-    if idx >= 32 {
-        MOUNT_COUNT.fetch_sub(1, Ordering::Relaxed);
-        return VfsReply { status: -28, blob_id: 0, fd: -1, _pad: [0; 40] }; // -ENOSPC
-    }
-
     let fs = match fstype {
         1 => FsType::ExoFs,
         2 => FsType::ProcFs,
@@ -155,9 +115,28 @@ fn handle_mount(payload: &[u8]) -> VfsReply {
         _ => return VfsReply { status: -22, blob_id: 0, fd: -1, _pad: [0; 40] },
     };
 
+    let mut free_idx = None;
+    unsafe {
+        for i in 0..MOUNTS.len() {
+            if MOUNTS[i].active && MOUNTS[i].path_hash == path_hash {
+                MOUNTS[i] = MountEntry { fs_type: fs, path_hash, root_blob, active: true };
+                return VfsReply { status: 0, blob_id: root_blob, fd: i as i64, _pad: [0; 40] };
+            }
+            if free_idx.is_none() && !MOUNTS[i].active {
+                free_idx = Some(i);
+            }
+        }
+    }
+
+    let idx = match free_idx {
+        Some(i) => i,
+        None => return VfsReply { status: -28, blob_id: 0, fd: -1, _pad: [0; 40] },
+    };
+
     unsafe {
         MOUNTS[idx] = MountEntry { fs_type: fs, path_hash, root_blob, active: true };
     }
+    MOUNT_COUNT.fetch_add(1, Ordering::AcqRel);
 
     VfsReply { status: 0, blob_id: root_blob, fd: idx as i64, _pad: [0; 40] }
 }
@@ -210,15 +189,34 @@ fn handle_open(payload: &[u8]) -> VfsReply {
     }
 }
 
+fn handle_umount(payload: &[u8]) -> VfsReply {
+    let path_len = payload.iter().position(|&b| b == 0).unwrap_or(payload.len());
+    if path_len == 0 {
+        return VfsReply { status: -22, blob_id: 0, fd: -1, _pad: [0; 40] };
+    }
+
+    let path_hash = fnv32(&payload[..path_len]);
+    unsafe {
+        for i in 0..MOUNTS.len() {
+            if MOUNTS[i].active && MOUNTS[i].path_hash == path_hash {
+                MOUNTS[i] = MountEntry::empty();
+                MOUNT_COUNT.fetch_update(Ordering::AcqRel, Ordering::Relaxed, |count| {
+                    Some(count.saturating_sub(1))
+                }).ok();
+                return VfsReply { status: 0, blob_id: 0, fd: i as i64, _pad: [0; 40] };
+            }
+        }
+    }
+
+    VfsReply { status: -2, blob_id: 0, fd: -1, _pad: [0; 40] }
+}
+
 fn handle_request(req: &VfsRequest) -> VfsReply {
     match req.msg_type {
         VFS_MOUNT   => handle_mount(&req.payload),
         VFS_RESOLVE => handle_resolve(&req.payload),
         VFS_OPEN    => handle_open(&req.payload),
-        VFS_UMOUNT  => {
-            // TODO: Phase 6 — démonter proprement (flush + ExoFS sync)
-            VfsReply { status: 0, blob_id: 0, fd: 0, _pad: [0; 40] }
-        }
+        VFS_UMOUNT  => handle_umount(&req.payload),
         _ => VfsReply { status: -22, blob_id: 0, fd: -1, _pad: [0; 40] },
     }
 }

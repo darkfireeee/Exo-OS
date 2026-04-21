@@ -242,7 +242,7 @@ impl Baseline {
 
         // Score = (diff / sigma) * 10
         let score = (diff * 10) / sigma;
-        score.min(MAX_DEVIATION_SCORE) as u32
+        score.min(MAX_DEVIATION_SCORE as u64) as u32
     }
 }
 
@@ -441,8 +441,9 @@ pub fn observe(metric_id: usize, value: u64, pid: u32) -> Option<AlertLevel> {
         };
 
         // Stocker l'alerte (buffer circulaire)
-        det.alerts[det.alert_head] = alert;
-        det.alert_head = (det.alert_head + 1) % MAX_ALERTS;
+        let alert_idx = det.alert_head;
+        det.alerts[alert_idx] = alert;
+        det.alert_head = (alert_idx + 1) % MAX_ALERTS;
         if det.alert_count < MAX_ALERTS {
             det.alert_count += 1;
         }

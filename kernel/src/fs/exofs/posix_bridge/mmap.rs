@@ -70,14 +70,17 @@ pub struct MmapEntry {
     pub offset:     u64,
     pub prot:       u32,
     pub flags:      u32,
+    pub pid:        u32,
     pub state:      MappingState,
     pub promoted:   u8,
     pub cow_active: u8,
-    pub pid:        u32,
-    pub access_ctr: u64,
+    pub access_ctr: u8,
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<MmapEntry>() == 48);
+const _: () = assert!(
+    core::mem::size_of::<MmapEntry>() == 48,
+    "MmapEntry ABI size changed — verifier mmap bridge ExoFS"
+);
 
 impl MmapEntry {
     pub fn is_shared(&self) -> bool   { self.flags & map_flags::MAP_SHARED != 0 }
@@ -217,7 +220,11 @@ impl MmapTable {
         let virt_addr  = self.alloc_virt(length);
         let entry = MmapEntry {
             virt_addr, length, object_id, offset, prot, flags,
-            state: MappingState::Active, promoted, cow_active, pid, access_ctr: 0,
+            pid,
+            state: MappingState::Active,
+            promoted,
+            cow_active,
+            access_ctr: 0,
         };
         entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         entries.push(entry);
@@ -272,7 +279,7 @@ impl MmapTable {
             let e = &mut entries[i];
             if e.state != MappingState::Removed && e.overlaps_range(virt_addr, length) {
                 if e.is_writable() && e.is_shared() { e.state = MappingState::Dirty; }
-                e.access_ctr = e.access_ctr.wrapping_add(1);
+                e.access_ctr = e.access_ctr.saturating_add(1);
                 found = true;
             }
             i = i.wrapping_add(1);

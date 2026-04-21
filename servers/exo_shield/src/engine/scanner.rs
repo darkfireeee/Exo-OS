@@ -1001,7 +1001,10 @@ pub fn scanner_init() {
     {
         let mut store = SCAN_PROFILES.lock();
         let default_profile = ScanProfile {
-            name:            *b"standard\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+            name:            [
+                b's', b't', b'a', b'n', b'd', b'a', b'r', b'd',
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ],
             name_len:        8,
             scan_memory:     true,
             scan_syscalls:   true,

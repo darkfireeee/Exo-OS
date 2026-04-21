@@ -244,10 +244,12 @@ pub mod task_flags {
 //       [152] cet_flags          : u8    (bit 0=CET_EN, bit 1=IBT, bit 2=TOKEN_VALID)
 //       [153] threat_score_u8    : u8    (0..=100)
 //       [160] pt_buffer_phys     : u64   (Phase 4, LBR/PT futur)
-//       [168] affinity_hi[0]     : u64   (CPUs 64..127)
-//       [176] affinity_hi[1]     : u64   (CPUs 128..191)
-//       [184] affinity_hi[2]     : u64   (CPUs 192..255)
-//       [192..232] réservé
+//       [168] creation_tsc       : u64   (anti-réutilisation PID / audit)
+//       [176..200] réservé
+//       [200] affinity_hi[0]     : u64   (CPUs 64..127)
+//       [208] affinity_hi[1]     : u64   (CPUs 128..191)
+//       [216] affinity_hi[2]     : u64   (CPUs 192..255)
+//       [224..232] réservé
 //   [232] fpu_state_ptr: u64       ← ExoPhoenix OFFSET HARDCODÉ
 //   [240] rq_next:       u64       intrusive RunQueue
 //   [248] rq_prev:       u64       intrusive RunQueue
@@ -329,11 +331,13 @@ const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 9  == 153,
 const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 16 == 160,
     "TCB ExoShield: pt_buffer_phys doit être à l'offset absolu 160");
 const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 24 == 168,
-    "TCB scheduler: affinity_hi[0] doit être à l'offset absolu 168");
-const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 32 == 176,
-    "TCB scheduler: affinity_hi[1] doit être à l'offset absolu 176");
-const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 40 == 184,
-    "TCB scheduler: affinity_hi[2] doit être à l'offset absolu 184");
+    "TCB audit: creation_tsc doit être à l'offset absolu 168");
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 56 == 200,
+    "TCB scheduler: affinity_hi[0] doit être à l'offset absolu 200");
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 64 == 208,
+    "TCB scheduler: affinity_hi[1] doit être à l'offset absolu 208");
+const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 72 == 216,
+    "TCB scheduler: affinity_hi[2] doit être à l'offset absolu 216");
 const _: () = assert!(offset_of!(ThreadControlBlock, _cold_reserve) + 88 == 232,
     "TCB ExoShield: _cold_reserve se termine à l'offset 232 (fpu_state_ptr)");
 const _: () = assert!(size_of::<ThreadControlBlock>() == 256,
@@ -358,9 +362,11 @@ impl ThreadControlBlock {
         kernel_stack_top: u64,
     ) -> Self {
         let mut cold_reserve = [0u8; 88];
-        cold_reserve[24..32].copy_from_slice(&u64::MAX.to_le_bytes());
-        cold_reserve[32..40].copy_from_slice(&u64::MAX.to_le_bytes());
-        cold_reserve[40..48].copy_from_slice(&u64::MAX.to_le_bytes());
+        let creation_tsc = crate::arch::x86_64::cpu::tsc::read_tsc();
+        cold_reserve[24..32].copy_from_slice(&creation_tsc.to_le_bytes());
+        cold_reserve[56..64].copy_from_slice(&u64::MAX.to_le_bytes());
+        cold_reserve[64..72].copy_from_slice(&u64::MAX.to_le_bytes());
+        cold_reserve[72..80].copy_from_slice(&u64::MAX.to_le_bytes());
         Self {
             tid:           tid.0,
             kstack_ptr:    kernel_stack_top,
@@ -538,6 +544,27 @@ impl ThreadControlBlock {
         }
     }
 
+    /// TSC de création du thread, stocké dans `_cold_reserve[24..32]`.
+    #[inline(always)]
+    pub fn creation_tsc(&self) -> u64 {
+        unsafe {
+            core::ptr::read_unaligned(
+                self._cold_reserve.as_ptr().add(24) as *const u64
+            )
+        }
+    }
+
+    /// Met à jour le TSC de création du thread.
+    #[inline(always)]
+    pub fn set_creation_tsc(&mut self, creation_tsc: u64) {
+        unsafe {
+            core::ptr::write_unaligned(
+                self._cold_reserve.as_mut_ptr().add(24) as *mut u64,
+                creation_tsc,
+            )
+        }
+    }
+
     /// Lit et efface NEED_RESCHED atomiquement.
     #[inline(always)]
     pub fn take_need_resched(&self) -> bool {
@@ -566,9 +593,9 @@ impl ThreadControlBlock {
     #[inline(always)]
     fn affinity_ext_word(&self, word_index: usize) -> &AtomicU64 {
         let offset = match word_index {
-            1 => 24,
-            2 => 32,
-            3 => 40,
+            1 => 56,
+            2 => 64,
+            3 => 72,
             _ => panic!("affinity_ext_word: word_index hors plage"),
         };
         // SAFETY: ces offsets 8-alignés de `_cold_reserve` sont réservés aux

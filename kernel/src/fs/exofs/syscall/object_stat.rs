@@ -30,7 +30,7 @@ pub mod stat_flags {
 
 /// Rapport complet sur un objet ExoFS — compatible ABI C.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct ObjectStat {
     /// Identifiant blob (clés du cache).
     pub blob_id:      [u8; 32],
@@ -52,9 +52,32 @@ pub struct ObjectStat {
     pub content_hash: [u8; 32],
     /// UID propriétaire.
     pub owner_uid:    u64,
+    /// Réservé pour extensions ABI futures.
+    pub _reserved:    [u8; 40],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<ObjectStat>() == 176);
+const _: () = assert!(
+    core::mem::size_of::<ObjectStat>() == 176,
+    "ObjectStat ABI size changed — verifier syscall object_stat"
+);
+
+impl Default for ObjectStat {
+    fn default() -> Self {
+        Self {
+            blob_id: [0; 32],
+            object_id: [0; 32],
+            size: 0,
+            epoch_id: 0,
+            link_count: 0,
+            access_flags: 0,
+            kind: 0,
+            _pad: [0; 7],
+            content_hash: [0; 32],
+            owner_uid: 0,
+            _reserved: [0; 40],
+        }
+    }
+}
 
 impl ObjectStat {
     /// Construit un stat depuis un BlobId + données du cache.

@@ -184,6 +184,13 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
             ForkError::AddressSpaceCloneFailed
         })?;
 
+    if cloned_as.addr_space_ptr != 0 {
+        let child_as = unsafe {
+            &mut *(cloned_as.addr_space_ptr as *mut crate::memory::virt::UserAddressSpace)
+        };
+        child_as.pid = child_pid.0 as u64;
+    }
+
     // RÈGLE PROC-08 : Flush TLB parent AVANT retour (pages devenues read-only CoW).
     cloner.flush_tlb_after_fork(parent_cr3);
 

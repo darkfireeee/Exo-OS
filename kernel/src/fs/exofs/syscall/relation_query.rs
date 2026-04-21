@@ -46,9 +46,13 @@ pub struct RelationQueryArgs {
     pub _pad:        [u8; 3],
     pub max_results: u32,
     pub _pad2:       u32,
+    pub _reserved:   [u8; 8],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<RelationQueryArgs>() == 56);
+const _: () = assert!(
+    core::mem::size_of::<RelationQueryArgs>() == 56,
+    "RelationQueryArgs ABI size changed — verifier syscall relation_query"
+);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -246,6 +250,7 @@ pub fn outgoing_targets(source: &[u8; 32]) -> ExofsResult<Vec<[u8; 32]>> {
         _pad:        [0; 3],
         max_results: QUERY_MAX_RESULTS as u32,
         _pad2:       0,
+        _reserved:   [0; 8],
     };
     let rels = query_relations(&args)?;
     let mut out: Vec<[u8; 32]> = Vec::new();
@@ -264,6 +269,7 @@ pub fn relations_of_kind(source: &[u8; 32], kind: u8) -> ExofsResult<Vec<Relatio
         _pad:        [0; 3],
         max_results: QUERY_MAX_RESULTS as u32,
         _pad2:       0,
+        _reserved:   [0; 8],
     };
     query_relations(&args)
 }
@@ -329,6 +335,7 @@ mod tests {
             _pad:        [0; 3],
             max_results: 10,
             _pad2:       0,
+            _reserved:   [0; 8],
         };
         let rels = query_relations(&args).unwrap();
         if rels.len() >= 2 {
@@ -346,6 +353,7 @@ mod tests {
             _pad:        [0; 3],
             max_results: 10,
             _pad2:       0,
+            _reserved:   [0; 8],
         };
         assert!(query_relations(&args).is_err());
     }
@@ -359,6 +367,7 @@ mod tests {
             _pad:        [0; 3],
             max_results: 10,
             _pad2:       0,
+            _reserved:   [0; 8],
         };
         let rels = query_relations(&args).unwrap();
         assert!(rels.is_empty());
@@ -392,6 +401,7 @@ mod tests {
             _pad:        [0; 3],
             max_results: 0xFFFF_FFFF,
             _pad2:       0,
+            _reserved:   [0; 8],
         };
         let rels = query_relations(&args).unwrap();
         assert!(rels.len() <= QUERY_MAX_RESULTS);
@@ -453,6 +463,7 @@ pub fn incoming_sources(target: &[u8; 32]) -> ExofsResult<Vec<[u8; 32]>> {
         _pad:        [0; 3],
         max_results: QUERY_MAX_RESULTS as u32,
         _pad2:       0,
+        _reserved:   [0; 8],
     };
     let rels = query_relations(&args)?;
     let mut out: Vec<[u8; 32]> = Vec::new();

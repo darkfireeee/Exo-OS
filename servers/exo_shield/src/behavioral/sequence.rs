@@ -662,13 +662,14 @@ pub fn submit_event(event: &BehaviorEvent) -> usize {
 
     // 1. Vérifier les timeouts des séquences actives
     for i in 0..det.state_count {
-        let state = &mut det.active_states[i];
+        let mut state = det.active_states[i];
         if !state.active {
             continue;
         }
-        let def = &det.definitions[state.def_index];
+        let def = det.definitions[state.def_index];
         if state.is_timed_out(now_tsc, def.global_timeout_tsc) {
             state.active = false;
+            det.active_states[i] = state;
             TOTAL_SEQUENCES_TIMEOUT.fetch_add(1, Ordering::Relaxed);
             continue;
         }
@@ -678,19 +679,23 @@ pub fn submit_event(event: &BehaviorEvent) -> usize {
             let step = &def.steps[state.current_step as usize];
             if now_tsc.wrapping_sub(state.last_event_tsc) > step.timeout_tsc {
                 state.active = false;
+                det.active_states[i] = state;
                 TOTAL_SEQUENCES_TIMEOUT.fetch_add(1, Ordering::Relaxed);
+                continue;
             }
         }
+
+        det.active_states[i] = state;
     }
 
     // 2. Essayer de faire progresser les séquences actives
     for i in 0..det.state_count {
-        let state = &mut det.active_states[i];
+        let mut state = det.active_states[i];
         if !state.active {
             continue;
         }
 
-        let def = &det.definitions[state.def_index];
+        let def = det.definitions[state.def_index];
         if !def.enabled {
             continue;
         }
@@ -726,8 +731,9 @@ pub fn submit_event(event: &BehaviorEvent) -> usize {
                     _reserved: [0; 3],
                 };
 
-                det.alerts[det.alert_head] = alert;
-                det.alert_head = (det.alert_head + 1) % MAX_SEQUENCE_ALERTS;
+                let alert_idx = det.alert_head;
+                det.alerts[alert_idx] = alert;
+                det.alert_head = (alert_idx + 1) % MAX_SEQUENCE_ALERTS;
                 if det.alert_count < MAX_SEQUENCE_ALERTS {
                     det.alert_count += 1;
                 }
@@ -739,12 +745,14 @@ pub fn submit_event(event: &BehaviorEvent) -> usize {
 
                 TOTAL_SEQUENCES_COMPLETED.fetch_add(1, Ordering::Relaxed);
             }
+
+            det.active_states[i] = state;
         }
     }
 
     // 3. Essayer de démarrer de nouvelles séquences avec cet événement
     for def_idx in 0..det.def_count {
-        let def = &det.definitions[def_idx];
+        let def = det.definitions[def_idx];
         if !def.enabled || def.step_count == 0 {
             continue;
         }
@@ -768,14 +776,15 @@ pub fn submit_event(event: &BehaviorEvent) -> usize {
         let first_step = &def.steps[0];
         if first_step.matches(event, event.pid) {
             if let Some(state_idx) = find_or_create_state(&mut det, def_idx, event.pid, now_tsc) {
-                det.active_states[state_idx].current_step = 1;
-                det.active_states[state_idx].last_event_tsc = now_tsc;
-                det.active_states[state_idx].last_pid = event.pid;
+                let mut state = det.active_states[state_idx];
+                state.current_step = 1;
+                state.last_event_tsc = now_tsc;
+                state.last_pid = event.pid;
                 progressed += 1;
 
                 // Vérifier si la séquence est déjà complète (1 seul step)
-                if det.active_states[state_idx].current_step >= det.active_states[state_idx].total_steps {
-                    let duration = now_tsc.wrapping_sub(det.active_states[state_idx].start_tsc);
+                if state.current_step >= state.total_steps {
+                    let duration = now_tsc.wrapping_sub(state.start_tsc);
                     let alert = SequenceAlert {
                         def_index: def_idx,
                         pid: event.pid,
@@ -787,18 +796,21 @@ pub fn submit_event(event: &BehaviorEvent) -> usize {
                         _reserved: [0; 3],
                     };
 
-                    det.alerts[det.alert_head] = alert;
-                    det.alert_head = (det.alert_head + 1) % MAX_SEQUENCE_ALERTS;
+                    let alert_idx = det.alert_head;
+                    det.alerts[alert_idx] = alert;
+                    det.alert_head = (alert_idx + 1) % MAX_SEQUENCE_ALERTS;
                     if det.alert_count < MAX_SEQUENCE_ALERTS {
                         det.alert_count += 1;
                     }
 
-                    det.active_states[state_idx].completion_count = 1;
-                    det.active_states[state_idx].current_step = 0;
-                    det.active_states[state_idx].start_tsc = now_tsc;
+                    state.completion_count = 1;
+                    state.current_step = 0;
+                    state.start_tsc = now_tsc;
 
                     TOTAL_SEQUENCES_COMPLETED.fetch_add(1, Ordering::Relaxed);
                 }
+
+                det.active_states[state_idx] = state;
             }
         }
     }
@@ -867,21 +879,25 @@ pub fn cleanup_expired() -> u32 {
     let mut cleaned = 0u32;
 
     for i in 0..det.state_count {
-        let state = &mut det.active_states[i];
+        let mut state = det.active_states[i];
         if !state.active {
             continue;
         }
 
-        let def = &det.definitions[state.def_index];
+        let def = det.definitions[state.def_index];
         if state.is_timed_out(now_tsc, def.global_timeout_tsc) {
             state.active = false;
+            det.active_states[i] = state;
             cleaned += 1;
         } else if state.current_step > 0 && state.current_step < state.total_steps {
             let step = &def.steps[state.current_step as usize];
             if now_tsc.wrapping_sub(state.last_event_tsc) > step.timeout_tsc {
                 state.active = false;
+                det.active_states[i] = state;
                 cleaned += 1;
             }
+        } else {
+            det.active_states[i] = state;
         }
     }
 

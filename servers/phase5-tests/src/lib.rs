@@ -1039,9 +1039,9 @@ mod init_server_v4 {
         "vfs_server",
         "crypto_server",
         "device_server",
+        "virtio_drivers",
         "network_server",
         "scheduler_server",
-        "virtio_drivers",
         "exo_shield",
     ];
 
@@ -1179,6 +1179,9 @@ mod tests_init_server_v4 {
         assert_eq!(SERVICES.len(), 9);
         assert_eq!(SERVICES[0], "ipc_router");
         assert_eq!(SERVICES[1], "memory_server");
+        assert_eq!(SERVICES[5], "virtio_drivers");
+        assert_eq!(SERVICES[6], "network_server");
+        assert_eq!(SERVICES[7], "scheduler_server");
         assert_eq!(SERVICES[8], "exo_shield");
     }
 

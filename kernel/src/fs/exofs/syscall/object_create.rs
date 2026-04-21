@@ -94,9 +94,13 @@ pub struct CreateResult {
     pub blob_id:   [u8; 32],
     pub object_id: [u8; 32],
     pub epoch_id:  u64,
+    pub _reserved: [u8; 8],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<CreateResult>() == 88);
+const _: () = assert!(
+    core::mem::size_of::<CreateResult>() == 88,
+    "CreateResult ABI size changed — verifier syscall object_create"
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Logique de création
@@ -156,6 +160,7 @@ fn create_object(path_bytes: &[u8], path_len: usize, args: &CreateArgs) -> Exofs
         blob_id:   *bid_bytes,
         object_id: obj_bytes,
         epoch_id:  args.epoch_id,
+        _reserved: [0u8; 8],
     })
 }
 

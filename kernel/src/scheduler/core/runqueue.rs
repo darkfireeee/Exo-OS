@@ -20,7 +20,7 @@
 // LOCK ORDERING (regle_bonus.md) : Scheduler locks < Memory locks
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use core::ptr::NonNull;
 use super::task::{ThreadControlBlock, CpuId, SchedPolicy};
 use super::preempt::MAX_CPUS;
@@ -658,6 +658,8 @@ static mut PER_CPU_RQ: [MaybeUninit<PerCpuRunQueue>; MAX_CPUS] = {
     // SAFETY: MaybeUninit::uninit() est valide pour zéro-initialisation.
     unsafe { MaybeUninit::uninit().assume_init() }
 };
+static RUNQUEUE_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static RUNQUEUE_NR_CPUS: AtomicU32 = AtomicU32::new(0);
 
 /// Retourne un pointeur mutable vers la run queue du CPU donné.
 ///
@@ -667,18 +669,37 @@ static mut PER_CPU_RQ: [MaybeUninit<PerCpuRunQueue>; MAX_CPUS] = {
 /// avec la préemption désactivée, OU qu'il tient le lock de migration.
 #[inline(always)]
 pub unsafe fn run_queue(cpu: CpuId) -> &'static mut PerCpuRunQueue {
-    // SAFETY: init_percpu() garantit que toutes les run queues sont initialisées.
-    debug_assert!((cpu.0 as usize) < MAX_CPUS, "CPU id hors limites");
+    assert!(
+        (cpu.0 as usize) < MAX_CPUS,
+        "run_queue: cpu {} hors limites (MAX_CPUS={})",
+        cpu.0,
+        MAX_CPUS,
+    );
+    assert!(
+        RUNQUEUE_INITIALIZED.load(Ordering::Acquire),
+        "run_queue: appele avant init_percpu()",
+    );
+    let configured_cpus = RUNQUEUE_NR_CPUS.load(Ordering::Acquire);
+    assert!(
+        cpu.0 < configured_cpus,
+        "run_queue: cpu {} non initialise (nr_cpus={})",
+        cpu.0,
+        configured_cpus,
+    );
     PER_CPU_RQ[cpu.0 as usize].assume_init_mut()
 }
 
 /// Initialise les run queues pour tous les CPUs.
 /// Appelé depuis `scheduler::init()` — step 2 de la séquence.
 pub fn init_percpu(nr_cpus: usize) {
+    RUNQUEUE_INITIALIZED.store(false, Ordering::Release);
+    let configured_cpus = nr_cpus.min(MAX_CPUS);
     // SAFETY: init appelé une seule fois, avant tout thread utilisateur.
     unsafe {
-        for i in 0..nr_cpus.min(MAX_CPUS) {
+        for i in 0..configured_cpus {
             PER_CPU_RQ[i].write(PerCpuRunQueue::new(CpuId(i as u32)));
         }
     }
+    RUNQUEUE_NR_CPUS.store(configured_cpus as u32, Ordering::Release);
+    RUNQUEUE_INITIALIZED.store(true, Ordering::Release);
 }

@@ -365,16 +365,19 @@ pub fn epoch_clamp(id: EpochId, lo: EpochId, hi: EpochId) -> EpochId {
 #[derive(Copy, Clone, Debug, Default)]
 pub struct EpochCommitSummary {
     pub epoch_id:        u64,
-    pub objects_delta:   i32,   // = created - deleted (peut être négatif)
     pub bytes_written:   u64,
+    pub objects_delta:   i32,   // = created - deleted (peut être négatif)
     pub blobs_freed:     u32,
     pub commit_duration: u32,   // ticks (saturé à u32::MAX)
     pub state:           u8,    // EpochState as u8
     pub flags:           u8,    // EpochFlags
-    pub _pad:            [u8; 6],
+    pub _pad:            [u8; 2],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<EpochCommitSummary>() == 32);
+const _: () = assert!(
+    core::mem::size_of::<EpochCommitSummary>() == 32,
+    "EpochCommitSummary ABI size changed — verifier resume/commit epoch"
+);
 
 impl EpochCommitSummary {
     pub fn from_stats(epoch_id: EpochId, stats: &EpochStats, state: EpochState, flags: u8) -> Self {
@@ -384,13 +387,13 @@ impl EpochCommitSummary {
             .min(u32::MAX as u64) as u32;
         Self {
             epoch_id: epoch_id.0,
-            objects_delta,
             bytes_written: stats.bytes_written,
+            objects_delta,
             blobs_freed:   stats.blobs_freed,
             commit_duration,
             state: state as u8,
             flags,
-            _pad: [0; 6],
+            _pad: [0; 2],
         }
     }
 

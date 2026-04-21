@@ -43,9 +43,14 @@ pub struct PathResolveResult {
     pub link_count: u32,
     /// Flags de l'objet.
     pub flags:      u32,
+    /// Réservé pour extensions ABI futures.
+    pub _reserved:  [u8; 8],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<PathResolveResult>() == 104);
+const _: () = assert!(
+    core::mem::size_of::<PathResolveResult>() == 104,
+    "PathResolveResult ABI size changed — verifier syscall path_resolve"
+);
 
 impl PathResolveResult {
     #[allow(dead_code)]
@@ -59,6 +64,7 @@ impl PathResolveResult {
             epoch_id:    0,
             link_count:  0,
             flags:       0,
+            _reserved:   [0u8; 8],
         }
     }
 }
@@ -191,6 +197,7 @@ fn resolve_path_to_blob(path_bytes: &[u8], _flags: u32) -> ExofsResult<PathResol
         epoch_id:    0,
         link_count:  1,
         flags:       0,
+        _reserved:   [0u8; 8],
     })
 }
 

@@ -16,56 +16,17 @@
 //! L'ipc_router forwarder le message vers l'endpoint enregistré.
 //!
 //! ## Numéros de syscall utilisés
-//! - SYS_IPC_REGISTER  = 300 (enregistre cet endpoint)
+//! - SYS_IPC_REGISTER  = 304 (enregistre cet endpoint)
 //! - SYS_IPC_RECV      = 301 (reçoit un message)
-//! - SYS_IPC_SEND      = 302 (envoie un message)
-//! - SYS_IPC_HEARTBEAT = 303 (ping d'un peer)
+//! - SYS_IPC_SEND      = 300 (envoie un message)
 //! - SYS_GETPID        = 39  (récupère notre PID)
 
+use exo_syscall_abi as syscall;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
 
 mod exocordon;
 mod security_gate;
-
-mod syscall {
-    /// Appel système nu via SYSCALL/SYSRET x86_64.
-    ///
-    /// SAFETY: Arguments transmis directement aux registres.
-    /// Le kernel valide tous les pointeurs côté Ring-0.
-    #[inline(always)]
-    pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> i64 {
-        let ret: i64;
-        core::arch::asm!(
-            "syscall",
-            in("rax") nr,
-            in("rdi") a1,
-            in("rsi") a2,
-            in("rdx") a3,
-            in("r10") a4,
-            in("r8")  a5,
-            in("r9")  a6,
-            lateout("rax") ret,
-            out("rcx") _, out("r11") _,
-            options(nostack),
-        );
-        ret
-    }
-
-    #[inline(always)]
-    pub unsafe fn syscall0(nr: u64) -> i64 { syscall6(nr, 0, 0, 0, 0, 0, 0) }
-    #[inline(always)]
-    pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> i64 {
-        syscall6(nr, a1, a2, a3, 0, 0, 0)
-    }
-
-    // Numéros de syscall
-    pub const SYS_GETPID:        u64 = 39;
-    pub const SYS_IPC_REGISTER:  u64 = 300;
-    pub const SYS_IPC_RECV:      u64 = 301;
-    pub const SYS_IPC_SEND:      u64 = 302;
-
-}
 
 /// Registre d'endpoints : max 64 services simultanés.
 /// Chaque entrée = (nom hash 32-bit, endpoint_id 32-bit).
@@ -133,8 +94,8 @@ const IPC_MSG_REGISTER:   u32 = 0;
 const IPC_MSG_ROUTE:      u32 = 1;
 const IPC_MSG_HEARTBEAT:  u32 = 2;
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
-const IPC_FLAG_TIMEOUT: u64 = 0x0001;
-const ETIMEDOUT: i64 = -110;
+const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
+const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
 
 // --- Globals no_std (pas de heap) ---
 static RUNNING: AtomicBool = AtomicBool::new(true);

@@ -268,7 +268,8 @@ pub fn add_signature(pattern: &[u8], severity: Severity, category: Category) -> 
     }
 
     let id = NEXT_SIG_ID.fetch_add(1, Ordering::AcqRel);
-    db.entries[db.count] = SignatureEntry::new(id, pattern, severity, category);
+    let idx = db.count;
+    db.entries[idx] = SignatureEntry::new(id, pattern, severity, category);
     db.count += 1;
     ACTIVE_SIG_COUNT.fetch_add(1, Ordering::Relaxed);
     id
@@ -548,7 +549,8 @@ pub fn restore(entries: &[SignatureEntry]) -> usize {
         if db.count >= MAX_SIGNATURES {
             break;
         }
-        db.entries[db.count] = *entry;
+        let idx = db.count;
+        db.entries[idx] = *entry;
         db.count += 1;
         restored += 1;
     }

@@ -385,6 +385,7 @@ fn current_actor_oid() -> [u8; 32] {
     let tcb = unsafe { &*tcb_ptr };
     oid[0..8].copy_from_slice(&(tcb.pid.0 as u64).to_le_bytes());
     oid[8..16].copy_from_slice(&tcb.tid.to_le_bytes());
+    oid[16..24].copy_from_slice(&tcb.creation_tsc().to_le_bytes());
     oid
 }
 

@@ -7,7 +7,7 @@
 //! RECUR-01 / OOM-02 / ARITH-02 — ExofsError exclusivement.
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicBool, AtomicUsize, Ordering};
 use core::cell::UnsafeCell;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::posix_bridge::inode_emulation::{INODE_EMULATION, ObjectIno, InodeEntry, inode_flags};
@@ -86,7 +86,7 @@ impl VfsInode {
 }
 
 /// Entrée de répertoire.
-#[repr(C)]
+#[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct VfsDirent {
     pub ino:      ObjectIno,
@@ -96,7 +96,10 @@ pub struct VfsDirent {
     pub name:     [u8; VFS_NAME_MAX],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<VfsDirent>() == 271);
+const _: () = assert!(
+    core::mem::size_of::<VfsDirent>() == 271,
+    "VfsDirent ABI size changed — verifier les appels readdir() userspace"
+);
 
 impl VfsDirent {
     pub fn get_name(&self) -> &[u8] {
@@ -107,10 +110,13 @@ impl VfsDirent {
 
 impl core::fmt::Debug for VfsDirent {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let ino = self.ino;
+        let kind = self.kind;
+        let name_len = self.name_len;
         f.debug_struct("VfsDirent")
-            .field("ino",      &self.ino)
-            .field("kind",     &self.kind)
-            .field("name_len", &self.name_len)
+            .field("ino",      &ino)
+            .field("kind",     &kind)
+            .field("name_len", &name_len)
             .finish()
     }
 }
@@ -132,7 +138,8 @@ pub struct VfsFd {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct OpenFdTable {
-    fds:      UnsafeCell<Vec<VfsFd>>,
+    fds:      UnsafeCell<[Option<VfsFd>; VFS_OPEN_MAX]>,
+    fd_count: AtomicUsize,
     spinlock: AtomicU64,
     next_fd:  AtomicU64,
 }
@@ -143,7 +150,8 @@ unsafe impl Send for OpenFdTable {}
 impl OpenFdTable {
     const fn new() -> Self {
         Self {
-            fds:      UnsafeCell::new(Vec::new()),
+            fds:      UnsafeCell::new([None; VFS_OPEN_MAX]),
+            fd_count: AtomicUsize::new(0),
             spinlock: AtomicU64::new(0),
             next_fd:  AtomicU64::new(3), // 0=stdin,1=stdout,2=stderr
         }
@@ -160,15 +168,18 @@ impl OpenFdTable {
         self.lock_acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let fds = unsafe { &mut *self.fds.get() };
-        // Compte les actifs.
-        let mut active_count = 0usize;
-        let mut i = 0usize;
-        while i < fds.len() { if fds[i].active { active_count = active_count.wrapping_add(1); } i = i.wrapping_add(1); }
-        if active_count >= VFS_OPEN_MAX { self.lock_release(); return Err(ExofsError::QuotaExceeded); }
+        if self.fd_count.load(Ordering::Relaxed) >= VFS_OPEN_MAX {
+            self.lock_release();
+            return Err(ExofsError::QuotaExceeded);
+        }
+        let Some(slot_idx) = fds.iter().position(|entry| entry.is_none()) else {
+            self.lock_release();
+            return Err(ExofsError::QuotaExceeded);
+        };
         let fd = self.next_fd.fetch_add(1, Ordering::Relaxed);
         let entry = VfsFd { fd, ino, flags, offset: 0, pid, active: true };
-        fds.try_reserve(1).map_err(|_| { self.lock_release(); ExofsError::NoMemory })?;
-        fds.push(entry);
+        fds[slot_idx] = Some(entry);
+        self.fd_count.fetch_add(1, Ordering::Relaxed);
         self.lock_release();
         Ok(fd)
     }
@@ -180,7 +191,14 @@ impl OpenFdTable {
         let mut found = false;
         let mut i = 0usize;
         while i < fds.len() {
-            if fds[i].fd == fd && fds[i].active { fds[i].active = false; found = true; break; }
+            if let Some(entry) = fds[i] {
+                if entry.fd == fd && entry.active {
+                    fds[i] = None;
+                    self.fd_count.fetch_sub(1, Ordering::Relaxed);
+                    found = true;
+                    break;
+                }
+            }
             i = i.wrapping_add(1);
         }
         self.lock_release();
@@ -194,7 +212,12 @@ impl OpenFdTable {
         let mut r = None;
         let mut i = 0usize;
         while i < fds.len() {
-            if fds[i].fd == fd && fds[i].active { r = Some(fds[i]); break; }
+            if let Some(entry) = fds[i] {
+                if entry.fd == fd && entry.active {
+                    r = Some(entry);
+                    break;
+                }
+            }
             i = i.wrapping_add(1);
         }
         self.lock_release();
@@ -207,7 +230,13 @@ impl OpenFdTable {
         let fds = unsafe { &mut *self.fds.get() };
         let mut i = 0usize;
         while i < fds.len() {
-            if fds[i].fd == fd && fds[i].active { fds[i].offset = new_offset; break; }
+            if let Some(mut entry) = fds[i] {
+                if entry.fd == fd && entry.active {
+                    entry.offset = new_offset;
+                    fds[i] = Some(entry);
+                    break;
+                }
+            }
             i = i.wrapping_add(1);
         }
         self.lock_release();
@@ -219,21 +248,19 @@ impl OpenFdTable {
         let fds = unsafe { &mut *self.fds.get() };
         let mut i = 0usize;
         while i < fds.len() {
-            if fds[i].pid == pid { fds[i].active = false; }
+            if let Some(entry) = fds[i] {
+                if entry.pid == pid && entry.active {
+                    fds[i] = None;
+                    self.fd_count.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
             i = i.wrapping_add(1);
         }
         self.lock_release();
     }
 
     fn active_count(&self) -> usize {
-        self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        let fds = unsafe { &*self.fds.get() };
-        let mut n = 0usize;
-        let mut i = 0usize;
-        while i < fds.len() { if fds[i].active { n = n.wrapping_add(1); } i = i.wrapping_add(1); }
-        self.lock_release();
-        n
+        self.fd_count.load(Ordering::Acquire)
     }
 }
 
@@ -541,8 +568,10 @@ mod tests {
     #[test]
     fn test_make_dirent() {
         let d = make_dirent(42, b"hello", 8);
-        assert_eq!(d.ino, 42);
-        assert_eq!(d.name_len, 5);
+        let ino = d.ino;
+        let name_len = d.name_len;
+        assert_eq!(ino, 42);
+        assert_eq!(name_len, 5);
         assert_eq!(&d.name[..5], b"hello");
     }
 

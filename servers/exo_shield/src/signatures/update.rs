@@ -336,7 +336,7 @@ impl Point {
     }
 
     /// Décode un point depuis 32 octets (format Ed25519 : Y avec bit de signe de X).
-    fn from_bytes(bytes: &[u8; 32]) Option<Point> {
+    fn from_bytes(bytes: &[u8; 32]) -> Option<Point> {
         // Le bit de poids fort du dernier octet encode le signe de X
         let mut y_bytes = *bytes;
         let x_sign = (y_bytes[31] >> 7) & 1;
@@ -749,6 +749,7 @@ pub enum UpdateStatus {
 // ── Snapshot pour rollback ───────────────────────────────────────────────────
 
 /// Snapshot de la base de signatures pour rollback.
+#[derive(Clone, Copy)]
 struct RollbackSnapshot {
     entries: [database::SignatureEntry; database::MAX_SIGNATURES],
     count: usize,
@@ -939,7 +940,8 @@ pub fn add_trusted_key(key: &[u8; ED25519_PUBLIC_KEY_SIZE]) -> bool {
         }
     }
 
-    mgr.trusted_keys[mgr.trusted_key_count] = *key;
+    let idx = mgr.trusted_key_count;
+    mgr.trusted_keys[idx] = *key;
     mgr.trusted_key_count += 1;
     true
 }
@@ -958,7 +960,8 @@ pub fn remove_trusted_key(key: &[u8; ED25519_PUBLIC_KEY_SIZE]) -> bool {
                 mgr.trusted_keys[k] = mgr.trusted_keys[k + 1];
             }
             mgr.trusted_key_count -= 1;
-            mgr.trusted_keys[mgr.trusted_key_count] = [0u8; ED25519_PUBLIC_KEY_SIZE];
+            let last_idx = mgr.trusted_key_count;
+            mgr.trusted_keys[last_idx] = [0u8; ED25519_PUBLIC_KEY_SIZE];
             return true;
         }
     }
@@ -1159,7 +1162,8 @@ pub fn rollback() -> bool {
     }
 
     mgr.rollback_depth -= 1;
-    let snapshot = &mgr.rollback_stack[mgr.rollback_depth];
+    let snapshot_idx = mgr.rollback_depth;
+    let snapshot = mgr.rollback_stack[snapshot_idx];
 
     if !snapshot.valid {
         mgr.rollback_depth += 1;
@@ -1171,7 +1175,7 @@ pub fn rollback() -> bool {
     mgr.current_version = snapshot.version;
 
     // Invalider le snapshot
-    mgr.rollback_stack[mgr.rollback_depth].valid = false;
+    mgr.rollback_stack[snapshot_idx].valid = false;
 
     CURRENT_VERSION.store(snapshot.version.to_u64(), Ordering::Release);
     LAST_UPDATE_TSC.store(read_tsc(), Ordering::Release);

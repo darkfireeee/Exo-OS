@@ -48,9 +48,13 @@ pub struct SnapshotMountResult {
     pub snapshot_id: [u8; 32],
     pub size_bytes:  u64,
     pub epoch_id:    u64,
+    pub _reserved:   [u8; 8],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<SnapshotMountResult>() == 64);
+const _: () = assert!(
+    core::mem::size_of::<SnapshotMountResult>() == 64,
+    "SnapshotMountResult ABI size changed — verifier syscall snapshot_mount"
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Extraction du contenu d'un snapshot
@@ -132,6 +136,7 @@ fn mount_snapshot(snap_blob_id: BlobId, args: &SnapshotMountArgs) -> ExofsResult
         snapshot_id: *snap_blob_id.as_bytes(),
         size_bytes:  size_src,
         epoch_id:    epoch,
+        _reserved:   [0u8; 8],
     })
 }
 
@@ -347,9 +352,13 @@ pub struct MountEntry {
     pub epoch_id:    u64,
     pub flags:       u32,
     pub _pad2:       u32,
+    pub _reserved:   [u8; 8],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<MountEntry>() == 64);
+const _: () = assert!(
+    core::mem::size_of::<MountEntry>() == 64,
+    "MountEntry ABI size changed — verifier table de montage snapshot"
+);
 
 /// Nombre maximum de montages simultanés.
 pub const MAX_MOUNTS: usize = 64;

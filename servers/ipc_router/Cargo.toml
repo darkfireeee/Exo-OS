@@ -12,3 +12,4 @@ path = "src/main.rs"
 
 [dependencies]
 spin.workspace = true
+exo-syscall-abi = { path = "../syscall_abi" }

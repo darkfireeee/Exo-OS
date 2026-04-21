@@ -1,0 +1,12 @@
+[package]
+name              = "exo-syscall-abi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description       = "Exo-OS shared syscall ABI for Ring1 servers"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

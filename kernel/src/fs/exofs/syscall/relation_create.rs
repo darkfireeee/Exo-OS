@@ -242,9 +242,13 @@ pub struct RelationCreateArgs {
     pub name_ptr:  u64,
     pub name_len:  u32,
     pub _pad3:     u32,
+    pub _reserved: [u8; 8],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<RelationCreateArgs>() == 104);
+const _: () = assert!(
+    core::mem::size_of::<RelationCreateArgs>() == 104,
+    "RelationCreateArgs ABI size changed — verifier syscall relation_create"
+);
 
 /// `exofs_relation_create(args_ptr, out_ptr, _, _, _, _) → 0 ou errno`
 pub fn sys_exofs_relation_create(

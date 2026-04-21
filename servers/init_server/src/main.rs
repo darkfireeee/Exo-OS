@@ -21,6 +21,13 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 mod boot_sequence;
 mod boot_info;
 mod dependency;
+mod isolation;
+mod protocol;
+mod service_manager;
+mod service_table;
+mod sigchld_handler;
+mod supervisor;
+mod watchdog;
 
 mod syscall {
     #[inline(always)]
@@ -64,11 +71,21 @@ mod syscall {
     pub const SYS_KILL:       u64 =  62;
     pub const SYS_SIGACTION:  u64 =  13;
     pub const SYS_NANOSLEEP:  u64 =  35;
+    pub const SYS_GETPID:     u64 =  39;
+    pub const SYS_IPC_SEND:   u64 = 300;
+    pub const SYS_IPC_RECV:   u64 = 301;
+    pub const SYS_IPC_REGISTER: u64 = 304;
 
     // Flags wait4
     pub const WNOHANG: u64 = 1;
     // Flags sigaction
     pub const SA_RESTART: u64 = 0x10000000;
+    pub const IPC_FLAG_TIMEOUT: u64 = 0x0001;
+    pub const EAGAIN: i64 = -11;
+    pub const EIO: i64 = -5;
+    pub const EINVAL: i64 = -22;
+    pub const ENOENT: i64 = -2;
+    pub const ETIMEDOUT: i64 = -110;
 }
 
 /// Descripteur d'un service supervisé.
@@ -78,6 +95,7 @@ struct Service {
     bin_path:  &'static [u8],  // chemin u8 null-terminated vers le binaire
     pid:       AtomicU32,      // PID courant (0 = non démarré)
     restart_delay_ticks: AtomicU32,  // délai avant relance (backoff exponentiel)
+    disabled:  AtomicBool,
 }
 
 impl Service {
@@ -87,13 +105,27 @@ impl Service {
             bin_path: bin,
             pid:      AtomicU32::new(0),
             restart_delay_ticks: AtomicU32::new(1),
+            disabled: AtomicBool::new(false),
         }
     }
 
     fn current_pid(&self) -> u32 { self.pid.load(Ordering::Acquire) }
 
+    fn is_disabled(&self) -> bool { self.disabled.load(Ordering::Acquire) }
+
     fn set_pid(&self, pid: u32) {
         self.pid.store(pid, Ordering::Release);
+        self.disabled.store(false, Ordering::Release);
+        self.restart_delay_ticks.store(1, Ordering::Relaxed);
+    }
+
+    fn enable(&self) {
+        self.disabled.store(false, Ordering::Release);
+    }
+
+    fn disable(&self) {
+        self.disabled.store(true, Ordering::Release);
+        self.pid.store(0, Ordering::Release);
         self.restart_delay_ticks.store(1, Ordering::Relaxed);
     }
 
@@ -105,55 +137,28 @@ impl Service {
     }
 }
 
-// ── Table des services supervisés ────────────────────────────────────────────
-// Note: null-terminated pour passation à execve via copy_userspace_argv
-static IPC_ROUTER_BIN:      &[u8] = b"/sbin/exo-ipc-router\0";
-static MEMORY_SERVER_BIN:   &[u8] = b"/sbin/exo-memory-server\0";
-static VFS_SERVER_BIN:      &[u8] = b"/sbin/exo-vfs-server\0";
-static CRYPTO_SERVER_BIN:   &[u8] = b"/sbin/exo-crypto-server\0";
-static DEVICE_SERVER_BIN:   &[u8] = b"/sbin/exo-device-server\0";
-static NETWORK_SERVER_BIN:  &[u8] = b"/sbin/exo-network-server\0";
-static SCHEDULER_SERVER_BIN:&[u8] = b"/sbin/exo-scheduler-server\0";
-static VIRTIO_DRIVERS_BIN:  &[u8] = b"/sbin/exo-virtio-drivers\0";
-static EXO_SHIELD_BIN:      &[u8] = b"/sbin/exo-shield\0";
+type ServiceWatchdog = watchdog::InitWatchdog<{ service_table::SERVICE_COUNT }>;
 
-// Séquence Ring1 V4 canonique — SRV-01, SRV-02, SRV-04
-static SERVICES: [Service; 9] = [
-    Service::new("ipc_router",       IPC_ROUTER_BIN),      // SRV-01 : PREMIER
-    Service::new("memory_server",    MEMORY_SERVER_BIN),   // SRV-02 : avant tout alloc
-    Service::new("vfs_server",       VFS_SERVER_BIN),
-    Service::new("crypto_server",    CRYPTO_SERVER_BIN),
-    Service::new("device_server",    DEVICE_SERVER_BIN),
-    Service::new("network_server",   NETWORK_SERVER_BIN),
-    Service::new("scheduler_server", SCHEDULER_SERVER_BIN),
-    Service::new("virtio_drivers",   VIRTIO_DRIVERS_BIN),  // virtio-block/net/console
-    Service::new("exo_shield",       EXO_SHIELD_BIN),      // SRV-04 : DERNIER
+// Séquence Ring1 canonique issue des docs de création/correction.
+static SERVICES: [Service; service_table::SERVICE_COUNT] = [
+    Service::new("ipc_router", service_table::IPC_ROUTER_BIN),
+    Service::new("memory_server", service_table::MEMORY_SERVER_BIN),
+    Service::new("vfs_server", service_table::VFS_SERVER_BIN),
+    Service::new("crypto_server", service_table::CRYPTO_SERVER_BIN),
+    Service::new("device_server", service_table::DEVICE_SERVER_BIN),
+    Service::new("virtio_drivers", service_table::VIRTIO_DRIVERS_BIN),
+    Service::new("network_server", service_table::NETWORK_SERVER_BIN),
+    Service::new("scheduler_server", service_table::SCHEDULER_SERVER_BIN),
+    Service::new("exo_shield", service_table::EXO_SHIELD_BIN),
 ];
-static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 fn halt_forever() -> ! {
     loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Trampoline SIGCHLD
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Handler SIGCHLD : marque qu'au moins un fils est mort.
-/// La détection précise se fait dans la boucle via wait4(WNOHANG).
-static SIGCHLD_RECEIVED: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn sigchld_handler(_sig: i32) {
-    SIGCHLD_RECEIVED.store(true, Ordering::Release);
-}
-
-extern "C" fn sigterm_handler(_sig: i32) {
-    SHUTDOWN.store(true, Ordering::Release);
-}
-
 /// Attends tous les fils zombies (WNOHANG) et met à jour la table de services.
-unsafe fn reap_children() {
+unsafe fn reap_children(service_watchdog: &mut ServiceWatchdog) {
     loop {
         let mut wstatus: u32 = 0;
         let pid = syscall::syscall4(
@@ -168,15 +173,160 @@ unsafe fn reap_children() {
 
         // Trouver quel service a crashé et le marquer mort
         let dead_pid = pid as u32;
-        let mut i = 0usize;
-        while i < SERVICES.len() {
-            if SERVICES[i].current_pid() == dead_pid {
-                SERVICES[i].mark_dead();
-                break;
-            }
-            i += 1;
+        if let Some(idx) = supervisor::note_child_exit(&SERVICES, dead_pid) {
+            service_watchdog.observe_stop(idx);
         }
     }
+}
+
+#[inline]
+fn kill_service(pid: u32, signal: u64) {
+    unsafe {
+        let _ = syscall::syscall2(syscall::SYS_KILL, pid as u64, signal);
+    }
+}
+
+fn start_service(idx: usize, service_watchdog: &mut ServiceWatchdog) -> i64 {
+    let service = &SERVICES[idx];
+    if service.current_pid() != 0 {
+        return service.current_pid() as i64;
+    }
+    service.enable();
+    if !supervisor::can_start(&SERVICES, service.name) {
+        return syscall::EAGAIN;
+    }
+
+    let pid = unsafe { boot_sequence::spawn_service(service.name, service.bin_path) };
+    if pid == 0 {
+        return syscall::EIO;
+    }
+
+    service.set_pid(pid);
+    service_watchdog.observe_spawn(idx);
+    if unsafe { boot_sequence::wait_for_ipc_ready(pid, dependency::ready_timeout_ms(service.name)) } {
+        pid as i64
+    } else {
+        kill_service(pid, 15);
+        service.mark_dead();
+        service_watchdog.observe_stop(idx);
+        syscall::ETIMEDOUT
+    }
+}
+
+fn stop_service(idx: usize, service_watchdog: &mut ServiceWatchdog) -> i64 {
+    let pid = SERVICES[idx].current_pid();
+    SERVICES[idx].disable();
+    if pid != 0 {
+        kill_service(pid, 15);
+    }
+    service_watchdog.observe_stop(idx);
+    0
+}
+
+fn restart_service(idx: usize, service_watchdog: &mut ServiceWatchdog) -> i64 {
+    let _ = stop_service(idx, service_watchdog);
+    start_service(idx, service_watchdog)
+}
+
+fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
+    let mut request = protocol::InitRequest::zeroed();
+    let reply = match protocol::recv_request(&mut request) {
+        Ok(false) => return,
+        Err(_) => return,
+        Ok(true) => match request.msg_type {
+            protocol::INIT_MSG_HEARTBEAT => {
+                let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
+                if pid < 0 {
+                    protocol::InitReply::error(pid)
+                } else {
+                    protocol::heartbeat_reply(
+                        pid as u32,
+                        service_manager::running_count(&SERVICES) as u32,
+                        supervisor::running_mask(&SERVICES),
+                    )
+                }
+            }
+            protocol::INIT_MSG_STATUS => {
+                match protocol::read_service_name(&request.payload)
+                    .and_then(|service_name| supervisor::runtime_index_by_name(&SERVICES, service_name))
+                {
+                    Some(idx) => protocol::status_reply(
+                        idx as u32,
+                        SERVICES[idx].current_pid(),
+                        supervisor::restart_delay_ticks(&SERVICES[idx]),
+                        SERVICES[idx].current_pid() != 0,
+                        dependency::is_critical(SERVICES[idx].name),
+                    ),
+                    None => protocol::InitReply::error(syscall::ENOENT),
+                }
+            }
+            protocol::INIT_MSG_START => {
+                match protocol::read_service_name(&request.payload)
+                    .and_then(|service_name| supervisor::runtime_index_by_name(&SERVICES, service_name))
+                {
+                    Some(idx) => {
+                        let rc = start_service(idx, service_watchdog);
+                        if rc < 0 {
+                            protocol::InitReply::error(rc)
+                        } else {
+                            protocol::lifecycle_reply(rc as u32, supervisor::running_mask(&SERVICES))
+                        }
+                    }
+                    None => protocol::InitReply::error(syscall::ENOENT),
+                }
+            }
+            protocol::INIT_MSG_STOP => {
+                match protocol::read_service_name(&request.payload)
+                    .and_then(|service_name| supervisor::runtime_index_by_name(&SERVICES, service_name))
+                {
+                    Some(idx) => {
+                        let rc = stop_service(idx, service_watchdog);
+                        if rc < 0 {
+                            protocol::InitReply::error(rc)
+                        } else {
+                            protocol::lifecycle_reply(0, supervisor::running_mask(&SERVICES))
+                        }
+                    }
+                    None => protocol::InitReply::error(syscall::ENOENT),
+                }
+            }
+            protocol::INIT_MSG_RESTART => {
+                match protocol::read_service_name(&request.payload)
+                    .and_then(|service_name| supervisor::runtime_index_by_name(&SERVICES, service_name))
+                {
+                    Some(idx) => {
+                        let rc = restart_service(idx, service_watchdog);
+                        if rc < 0 {
+                            protocol::InitReply::error(rc)
+                        } else {
+                            protocol::lifecycle_reply(rc as u32, supervisor::running_mask(&SERVICES))
+                        }
+                    }
+                    None => protocol::InitReply::error(syscall::ENOENT),
+                }
+            }
+            protocol::INIT_MSG_CHILD_DIED => {
+                match protocol::read_u32(&request.payload, 0) {
+                    Ok(pid) => {
+                        let _ = protocol::read_i32(&request.payload, 4);
+                        if let Some(idx) = supervisor::note_child_exit(&SERVICES, pid) {
+                            if SERVICES[idx].is_disabled() {
+                                SERVICES[idx].disable();
+                            } else {
+                                service_watchdog.observe_stop(idx);
+                            }
+                        }
+                        protocol::lifecycle_reply(pid, supervisor::running_mask(&SERVICES))
+                    }
+                    Err(err) => protocol::InitReply::error(err),
+                }
+            }
+            protocol::INIT_MSG_PREPARE_ISOLATION => isolation::prepare_isolation_reply(&SERVICES),
+            _ => protocol::InitReply::error(syscall::EINVAL),
+        },
+    };
+
+    let _ = protocol::send_reply(request.sender_pid, &reply);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -192,54 +342,31 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
         }
     }
 
-    // ── 1. Installer les handlers de signaux ──────────────────────────────
-    // Structure sigaction : handler(u64) + flags(u64) + mask(u64)[2]
-    // (layout simplifié — doit correspondre au kernel SigactionEntry)
-    #[repr(C)]
-    struct Sigaction {
-        handler: u64,
-        flags:   u64,
-        mask:    [u64; 2],
-    }
-    let chld_sa = Sigaction {
-        handler: sigchld_handler as *const () as u64,
-        flags:   syscall::SA_RESTART,
-        mask:    [0; 2],
-    };
-    let term_sa = Sigaction {
-        handler: sigterm_handler as *const () as u64,
-        flags:   syscall::SA_RESTART,
-        mask:    [0; 2],
-    };
-    unsafe {
-        // SIGCHLD = 17, SIGTERM = 15
-        syscall::syscall3(
-            syscall::SYS_SIGACTION,
-            17,
-            &chld_sa as *const Sigaction as u64,
-            0,
-        );
-        syscall::syscall3(
-            syscall::SYS_SIGACTION,
-            15,
-            &term_sa as *const Sigaction as u64,
-            0,
-        );
-    }
+    let mut service_watchdog = ServiceWatchdog::new();
+
+    protocol::register_endpoint();
+    unsafe { sigchld_handler::install_handlers(); }
 
     // ── 2. Démarrer tous les services dans l'ordre ────────────────────────
     let _ = unsafe { boot_sequence::boot_services(&SERVICES) };
+    let mut idx = 0usize;
+    while idx < SERVICES.len() {
+        if SERVICES[idx].current_pid() != 0 {
+            service_watchdog.observe_spawn(idx);
+        }
+        idx += 1;
+    }
 
     // ── 3. Boucle de supervision ──────────────────────────────────────────
     loop {
         // Vérifier l'arrêt demandé
-        if SHUTDOWN.load(Ordering::Acquire) {
+        if sigchld_handler::shutdown_requested() {
             // Envoyer SIGTERM à tous les enfants
             let mut i = 0usize;
             while i < SERVICES.len() {
                 let pid = SERVICES[i].current_pid();
                 if pid != 0 {
-                    unsafe { syscall::syscall2(syscall::SYS_KILL, pid as u64, 15); }
+                    kill_service(pid, 15);
                 }
                 i += 1;
             }
@@ -247,29 +374,35 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
         }
 
         // Si SIGCHLD reçu, recueillir les tombés
-        if SIGCHLD_RECEIVED.swap(false, Ordering::AcqRel) {
-            unsafe { reap_children(); }
+        if sigchld_handler::take_sigchld() {
+            unsafe { reap_children(&mut service_watchdog); }
+        }
+
+        let mut check_idx = 0usize;
+        while check_idx < SERVICES.len() {
+            if !service_watchdog.check(check_idx, &SERVICES[check_idx]) {
+                SERVICES[check_idx].mark_dead();
+                service_watchdog.observe_stop(check_idx);
+            }
+            check_idx += 1;
         }
 
         // Relancer les services morts
         let mut i = 0usize;
         while i < SERVICES.len() {
             if SERVICES[i].current_pid() == 0 {
+                if SERVICES[i].is_disabled() {
+                    i += 1;
+                    continue;
+                }
+                if !supervisor::can_start(&SERVICES, SERVICES[i].name) {
+                    i += 1;
+                    continue;
+                }
                 // Service mort : attendre le délai de backoff avant relance
                 let delay = SERVICES[i].restart_delay_ticks.load(Ordering::Relaxed);
                 if delay == 0 || delay == 1 {
-                    let pid = unsafe {
-                        boot_sequence::spawn_service(SERVICES[i].name, SERVICES[i].bin_path)
-                    };
-                    if pid != 0 {
-                        SERVICES[i].set_pid(pid);
-                        let _ = unsafe {
-                            boot_sequence::wait_for_ipc_ready(
-                                pid,
-                                dependency::ready_timeout_ms(SERVICES[i].name),
-                            )
-                        };
-                    }
+                    let _ = start_service(i, &mut service_watchdog);
                 } else {
                     // Décrémenter le compteur de délai
                     SERVICES[i].restart_delay_ticks.fetch_sub(1, Ordering::Relaxed);
@@ -278,21 +411,11 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
             i += 1;
         }
 
-        // Attendre un signal ou un timeout (~10ms avec nanosleep)
-        #[repr(C)]
-        struct Timespec { tv_sec: i64, tv_nsec: i64 }
-        let ts = Timespec { tv_sec: 0, tv_nsec: 10_000_000 }; // 10ms
-        unsafe {
-            syscall::syscall2(
-                syscall::SYS_NANOSLEEP,
-                &ts as *const Timespec as u64,
-                0,
-            );
-        }
+        handle_control_plane(&mut service_watchdog);
     }
 
     // Arrêt propre terminé : attendre les derniers zombies et halt
-    unsafe { reap_children(); }
+    unsafe { reap_children(&mut service_watchdog); }
     halt_forever();
 }
 

@@ -4,6 +4,7 @@
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
 use crate::memory::core::{VirtAddr, PageFlags, PAGE_SIZE};
+use crate::memory::cow::tracker::COW_TRACKER;
 use crate::memory::virt::vma::VmaDescriptor;
 use crate::memory::virt::address_space::tlb::flush_single;
 use super::{FaultContext, FaultResult};
@@ -53,10 +54,10 @@ pub fn handle_cow_fault<A: FaultAllocator>(
     let new_flags = vma.page_flags & !PageFlags::COW | PageFlags::WRITABLE;
     match alloc.map_page(page_addr, new_frame, new_flags) {
         Ok(_) => {
-            // Libérer l'ancien frame : le mapping a été remplacé, on doit
-            // décrémenter son compteur de références (ou le libérer s'il
-            // n'est plus référencé par aucun autre processus).
-            alloc.free_frame(old_frame);
+            let remaining = COW_TRACKER.dec(old_frame);
+            if remaining == 0 {
+                alloc.free_frame(old_frame);
+            }
             vma.record_cow_break();
             // SAFETY: adresse canonique.
             unsafe { flush_single(page_addr); }

@@ -61,7 +61,7 @@ impl AuditLog {
         const ZERO_ENTRY: AuditEntry = AuditEntry {
             tick: 0, actor_uid: 0, actor_cap: 0, object_id: 0,
             blob_id: [0; 32], op: 0, result: 0, severity: 0, flags: 0,
-            seq: 0, magic: 0, _pad: [0; 4],
+            seq: 0, magic: 0, _pad: [0; 16],
         };
         const ZERO: core::cell::UnsafeCell<AuditEntry> =
             core::cell::UnsafeCell::new(ZERO_ENTRY);

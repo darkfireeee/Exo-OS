@@ -29,13 +29,11 @@ pub mod audit;
 pub mod tests;
 
 use crate::fs::exofs::core::error::ExofsError;
-use crate::fs::exofs::storage::superblock::SuperblockInMemory;
 use crate::fs::exofs::recovery::boot_recovery::boot_recovery_sequence;
 use crate::fs::exofs::syscall::epoch_commit::{do_shutdown_commit, EpochCommitArgs, epoch_flags};
 use crate::process::lifecycle::create::{create_kthread, KthreadParams};
 use crate::scheduler::core::task::Priority;
 
-use alloc::sync::Arc;
 use ::core::sync::atomic::{AtomicBool, Ordering};
 
 /// Macro de log noyau — no-op en attendant le système de log Ring-0.
@@ -46,10 +44,6 @@ macro_rules! log_kernel {
 
 /// État global du module ExoFS — initialisé une seule fois au boot
 static EXOFS_INITIALIZED: AtomicBool = AtomicBool::new(false);
-
-/// Référence globale au superblock actif (protégée par SpinLock dans SuperblockInMemory)
-#[allow(dead_code)]
-static mut EXOFS_SUPERBLOCK: Option<Arc<SuperblockInMemory>> = None;
 
 /// Initialise ExoFS au boot du kernel.
 /// Appelée par le VFS dispatcher après montage de la racine.

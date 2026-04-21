@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-extern crate blake3;
 
 //! # crypto_server — PID 4, Service de cryptographie (SRV-04)
 //!
@@ -31,38 +30,13 @@ extern crate blake3;
 //! - SRV-02 : seuls les handles sortent, jamais les octets bruts
 //! - CAP-01 : vérification de capability token en première instruction
 
+extern crate blake3;
+
+use exo_syscall_abi as syscall;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 mod xchacha20;
-
-mod syscall {
-    #[inline(always)]
-    pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> i64 {
-        let ret: i64;
-        core::arch::asm!(
-            "syscall",
-            in("rax") nr,
-            in("rdi") a1, in("rsi") a2, in("rdx") a3,
-            in("r10") a4, in("r8")  a5, in("r9")  a6,
-            lateout("rax") ret,
-            out("rcx") _, out("r11") _,
-            options(nostack),
-        );
-        ret
-    }
-
-    #[inline(always)]
-    pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> i64 {
-        syscall6(nr, a1, a2, a3, 0, 0, 0)
-    }
-
-    pub const SYS_IPC_REGISTER: u64 = 300;
-    pub const SYS_IPC_RECV:     u64 = 301;
-    pub const SYS_IPC_SEND:     u64 = 302;
-    /// SYS_GETRANDOM = 318 (Linux-compatible, implémenté dans le kernel)
-    pub const SYS_GETRANDOM:    u64 = 318;
-}
 
 // ── Types de messages crypto ──────────────────────────────────────────────────
 
@@ -78,8 +52,8 @@ const CRYPTO_ERR_KEY_INVALID: u32 = 3;
 const CRYPTO_ERR_AUTH:        u32 = 4;
 
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
-const IPC_FLAG_TIMEOUT: u64 = 0x0001;
-const ETIMEDOUT: i64 = -110;
+const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
+const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
 
 /// Message IPC entrant (128 bytes).
 #[repr(C)]
@@ -110,7 +84,7 @@ static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 // u32 non-nuls sont retournés). Le keystore est volontairement minimal : 32 slots,
 // aucune persistance, révocation par shredding DoD 5220.22-M (3 passes Write).
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8};
+use core::sync::atomic::AtomicU8;
 
 /// Nombre de slots dans le keystore.
 const KS_MAX: usize = 32;

@@ -226,10 +226,13 @@ pub struct AuditEntry {
     /// Magic de validation.
     pub magic:     u32,
     /// Réservé/expansion future.
-    pub _pad:      [u8; 4],
+    pub _pad:      [u8; 16],
 }
 
-// SIZE_ASSERT_DISABLED: const _: () = assert!(core::mem::size_of::<AuditEntry>() == AUDIT_ENTRY_SIZE);
+const _: () = assert!(
+    core::mem::size_of::<AuditEntry>() == AUDIT_ENTRY_SIZE,
+    "AuditEntry ABI size changed — verifier export/import audit userspace"
+);
 
 impl AuditEntry {
     /// Construit une entrée complète.
@@ -255,7 +258,7 @@ impl AuditEntry {
             flags,
             seq,
             magic:    AUDIT_ENTRY_MAGIC,
-            _pad:     [0; 4],
+            _pad:     [0; 16],
         }
     }
 

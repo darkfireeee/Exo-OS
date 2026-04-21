@@ -524,7 +524,7 @@ pub fn evaluate(pid: u32, metrics: &[u64], data: &[u8]) -> HeuristicResult {
     let mut total_score = 0u32;
 
     for i in 0..engine.rule_count {
-        let rule = &engine.rules[i];
+        let rule = engine.rules[i];
         if !rule.enabled {
             continue;
         }
@@ -562,9 +562,10 @@ pub fn evaluate(pid: u32, metrics: &[u64], data: &[u8]) -> HeuristicResult {
                 let bt_idx = rule.behavior_type as usize;
                 if bt_idx < 10 {
                     pscore.behavior_counts[bt_idx] += 1;
+                    let behavior_counts = pscore.behavior_counts;
 
                     // Mettre à jour le top 4 (tri par compteur)
-                    update_top_behaviors(&mut pscore.top_behaviors, &pscore.behavior_counts);
+                    update_top_behaviors(&mut pscore.top_behaviors, &behavior_counts);
                 }
             }
 

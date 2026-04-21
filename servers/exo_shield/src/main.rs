@@ -22,40 +22,13 @@
 //! - engine::scanner  — signature & heuristic scanning with periodic scheduler
 //! - engine::realtime — real-time event monitoring, filtering, rate tracking, alerts
 
+use exo_syscall_abi as syscall;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 mod engine;
 mod signatures;
 mod behavioral;
-
-// ── Syscall Interface ───────────────────────────────────────────────────────
-
-mod syscall {
-    #[inline(always)]
-    pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> i64 {
-        let ret: i64;
-        core::arch::asm!(
-            "syscall",
-            in("rax") nr,
-            in("rdi") a1, in("rsi") a2, in("rdx") a3,
-            in("r10") a4, in("r8")  a5, in("r9")  a6,
-            lateout("rax") ret,
-            out("rcx") _, out("r11") _,
-            options(nostack),
-        );
-        ret
-    }
-
-    #[inline(always)]
-    pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> i64 {
-        syscall6(nr, a1, a2, a3, 0, 0, 0)
-    }
-
-    pub const SYS_IPC_REGISTER: u64 = 300;
-    pub const SYS_IPC_RECV:     u64 = 301;
-    pub const SYS_IPC_SEND:     u64 = 302;
-}
 
 // ── Message Types ───────────────────────────────────────────────────────────
 
@@ -106,8 +79,8 @@ impl ShieldReply {
 // ── IPC Constants ───────────────────────────────────────────────────────────
 
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
-const IPC_FLAG_TIMEOUT:    u64 = 0x0001;
-const ETIMEDOUT:           i64 = -110;
+const IPC_FLAG_TIMEOUT:    u64 = syscall::IPC_FLAG_TIMEOUT;
+const ETIMEDOUT:           i64 = syscall::ETIMEDOUT;
 const EXO_SHIELD_PID:      u64 = 10;
 
 // ── Global Statistics ───────────────────────────────────────────────────────
@@ -540,7 +513,7 @@ fn handle_policy_update(req: &ShieldRequest) -> ShieldReply {
             let name_start = 26;
             let name_len = entry.name_len as usize;
             if name_start + name_len <= req.payload.len() && name_len <= 32 {
-                entry.sig_name[..name_len].copy_from_slice(&req.payload[name_start..name_start + name_len]);
+                entry.name[..name_len].copy_from_slice(&req.payload[name_start..name_start + name_len]);
             }
             entry.enabled = true;
 
@@ -697,7 +670,7 @@ fn perform_maintenance() {
             engine::stat_containments_inc();
 
             // Generate alert
-            let desc = if assessment.composite_score >= 750 {
+            let desc: &[u8] = if assessment.composite_score >= 750 {
                 b"auto_contain_critical"
             } else {
                 b"auto_contain_high"

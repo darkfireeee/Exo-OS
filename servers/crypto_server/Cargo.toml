@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 spin.workspace = true
+exo-syscall-abi = { path = "../syscall_abi" }
 
 # Crypto — crates RustCrypto validées IETF (pas d'implémentation from-scratch)
 # RÈGLE SRV-CRYPTO-01 : toutes les primitives crypto via crates, jamais from-scratch.
