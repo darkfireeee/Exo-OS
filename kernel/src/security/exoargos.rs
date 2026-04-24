@@ -38,7 +38,7 @@
 //   Intel SDM Vol.3 §18 (Performance Monitoring)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::arch::x86_64::cpu::msr;
 use crate::arch::x86_64::cpu::tsc;
@@ -67,8 +67,6 @@ const MSR_IA32_PERFEVTSEL1: u32 = 0x0000_0187;
 const MSR_IA32_FIXED_CTR_CTRL: u32 = 0x0000_038D;
 /// IA32_PERF_GLOBAL_CTRL — Global PMU enable.
 const MSR_IA32_PERF_GLOBAL_CTRL: u32 = 0x0000_038F;
-/// IA32_PERF_GLOBAL_STATUS — Global PMU status.
-const MSR_IA32_PERF_GLOBAL_STATUS: u32 = 0x0000_038E;
 /// IA32_PERF_GLOBAL_OVF_CTRL — Global overflow control.
 const MSR_IA32_PERF_GLOBAL_OVF_CTRL: u32 = 0x0000_0390;
 
@@ -89,14 +87,12 @@ const EVENT_BR_MISP_RETIRED_ALL: u64 = (0x00 << 8) | 0xC5;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Bit 0: Enable counter.
-const PERFEVTSEL_EN: u64  = 1 << 0;
+const PERFEVTSEL_EN: u64 = 1 << 0;
 /// Bit 1: User mode counting.
 const PERFEVTSEL_USR: u64 = 1 << 1;
 /// Bit 2: OS/kernel mode counting.
-const PERFEVTSEL_OS: u64  = 1 << 2;
+const PERFEVTSEL_OS: u64 = 1 << 2;
 
-/// Bit 0 of FIXED_CTR_CTRL: Enable Fixed Counter 0.
-const FIXED_CTR0_EN: u64 = 0x01;
 /// Bits [1:0] shifted by 4 for Fixed Counter 1 enable.
 const FIXED_CTR1_EN_SHIFT: u64 = 4;
 /// Mask to enable a fixed counter in OS + USR modes (bits [1:0] = 0x03).
@@ -159,8 +155,10 @@ pub struct PmcSnapshot {
 }
 
 // Static assertion: PmcSnapshot is exactly 64 bytes
-const _: () = assert!(core::mem::size_of::<PmcSnapshot>() == 64,
-    "PmcSnapshot must be exactly 64 bytes (SSR_PMC_SNAPSHOT_SIZE)");
+const _: () = assert!(
+    core::mem::size_of::<PmcSnapshot>() == 64,
+    "PmcSnapshot must be exactly 64 bytes (SSR_PMC_SNAPSHOT_SIZE)"
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Global ExoArgos state
@@ -206,40 +204,43 @@ fn validate_snapshot_subject_ptrs(
 /// Inner storage for the baseline snapshot using individual atomics
 /// (ISR-safe: no locks, no allocation).
 struct PmcSnapshotInner {
-    inst_retired:  AtomicU64,
-    clk_unhalted:  AtomicU64,
-    l3_miss:       AtomicU64,
+    inst_retired: AtomicU64,
+    clk_unhalted: AtomicU64,
+    l3_miss: AtomicU64,
     br_mispredict: AtomicU64,
-    tsc:           AtomicU64,
+    tsc: AtomicU64,
 }
 
 impl PmcSnapshotInner {
     const fn new() -> Self {
         Self {
-            inst_retired:  AtomicU64::new(0),
-            clk_unhalted:  AtomicU64::new(0),
-            l3_miss:       AtomicU64::new(0),
+            inst_retired: AtomicU64::new(0),
+            clk_unhalted: AtomicU64::new(0),
+            l3_miss: AtomicU64::new(0),
             br_mispredict: AtomicU64::new(0),
-            tsc:           AtomicU64::new(0),
+            tsc: AtomicU64::new(0),
         }
     }
 
     fn store(&self, snap: &PmcSnapshot) {
-        self.inst_retired.store(snap.inst_retired, Ordering::Release);
-        self.clk_unhalted.store(snap.clk_unhalted, Ordering::Release);
+        self.inst_retired
+            .store(snap.inst_retired, Ordering::Release);
+        self.clk_unhalted
+            .store(snap.clk_unhalted, Ordering::Release);
         self.l3_miss.store(snap.l3_miss, Ordering::Release);
-        self.br_mispredict.store(snap.br_mispredict, Ordering::Release);
+        self.br_mispredict
+            .store(snap.br_mispredict, Ordering::Release);
         self.tsc.store(snap.tsc, Ordering::Release);
     }
 
     fn load(&self) -> PmcSnapshot {
         PmcSnapshot {
-            inst_retired:  self.inst_retired.load(Ordering::Acquire),
-            clk_unhalted:  self.clk_unhalted.load(Ordering::Acquire),
-            l3_miss:       self.l3_miss.load(Ordering::Acquire),
+            inst_retired: self.inst_retired.load(Ordering::Acquire),
+            clk_unhalted: self.clk_unhalted.load(Ordering::Acquire),
+            l3_miss: self.l3_miss.load(Ordering::Acquire),
             br_mispredict: self.br_mispredict.load(Ordering::Acquire),
-            tsc:           self.tsc.load(Ordering::Acquire),
-            _reserved:     [0u64; 3],
+            tsc: self.tsc.load(Ordering::Acquire),
+            _reserved: [0u64; 3],
         }
     }
 }
@@ -260,7 +261,7 @@ impl PmcSnapshotInner {
 /// Must be called from Ring 0, exactly once at boot.
 pub unsafe fn exoargos_init() {
     // 1. Check PMU support via CPUID leaf 0xA
-    let eax_a = unsafe { core::arch::x86_64::__cpuid(0x0A) }.eax;
+    let eax_a = core::arch::x86_64::__cpuid(0x0A).eax;
 
     // Version ID (bits [7:0] of EAX) : 0 = no PMU
     let pmu_version = eax_a & 0xFF;
@@ -288,8 +289,10 @@ pub unsafe fn exoargos_init() {
         msr::write_msr(MSR_IA32_FIXED_CTR_CTRL, fixed_ctrl as u64);
 
         // 4. Clear overflow flags
-        msr::write_msr(MSR_IA32_PERF_GLOBAL_OVF_CTRL,
-            GLOBAL_FIXED_CTR0_EN | GLOBAL_FIXED_CTR1_EN | GLOBAL_PMC0_EN | GLOBAL_PMC1_EN);
+        msr::write_msr(
+            MSR_IA32_PERF_GLOBAL_OVF_CTRL,
+            GLOBAL_FIXED_CTR0_EN | GLOBAL_FIXED_CTR1_EN | GLOBAL_PMC0_EN | GLOBAL_PMC1_EN,
+        );
 
         // 5. Enable the PMU globally
         msr::write_msr(
@@ -340,11 +343,11 @@ pub fn pmc_snapshot(tcb: &ThreadControlBlock) -> PmcSnapshot {
         return PmcSnapshot::default();
     }
 
-    let inst_retired  = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR0) };
-    let clk_unhalted  = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR1) };
-    let l3_miss       = unsafe { msr::read_msr(MSR_IA32_PMC0) };
+    let inst_retired = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR0) };
+    let clk_unhalted = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR1) };
+    let l3_miss = unsafe { msr::read_msr(MSR_IA32_PMC0) };
     let br_mispredict = unsafe { msr::read_msr(MSR_IA32_PMC1) };
-    let tsc_val       = tsc::read_tsc();
+    let tsc_val = tsc::read_tsc();
 
     let snap = PmcSnapshot {
         inst_retired,
@@ -376,9 +379,10 @@ fn write_snapshot_to_ssr(snap: &PmcSnapshot) {
     };
 
     let offset = crate::exophoenix::ssr::pmc_snapshot_offset(cpu_id as usize);
-    let ssr_base = crate::memory::phys_to_virt(
-        crate::memory::core::PhysAddr::new(crate::exophoenix::ssr::SSR_BASE)
-    ).as_u64() as usize;
+    let ssr_base = crate::memory::phys_to_virt(crate::memory::core::PhysAddr::new(
+        crate::exophoenix::ssr::SSR_BASE,
+    ))
+    .as_u64() as usize;
 
     // SAFETY: The snapshot is exactly 64 bytes (SSR_PMC_SNAPSHOT_SIZE)
     // and the offset has been validated by SSR static assertions.
@@ -429,11 +433,11 @@ pub fn compute_discordance(oracle: u32, pmc: u32) -> u32 {
 /// Example: 3500 = 0.35 composite discordance.
 fn compute_snapshot_discordance(oracle: &PmcSnapshot, pmc: &PmcSnapshot) -> u32 {
     let metrics: [(u64, u64); NUM_METRICS as usize] = [
-        (oracle.inst_retired,  pmc.inst_retired),
-        (oracle.clk_unhalted,  pmc.clk_unhalted),
-        (oracle.l3_miss,       pmc.l3_miss),
+        (oracle.inst_retired, pmc.inst_retired),
+        (oracle.clk_unhalted, pmc.clk_unhalted),
+        (oracle.l3_miss, pmc.l3_miss),
         (oracle.br_mispredict, pmc.br_mispredict),
-        (oracle.tsc,           pmc.tsc),
+        (oracle.tsc, pmc.tsc),
     ];
 
     let mut total: u64 = 0;
@@ -467,11 +471,11 @@ pub fn check_anomaly() -> bool {
         return false;
     }
 
-    let inst_retired  = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR0) };
-    let clk_unhalted  = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR1) };
-    let l3_miss       = unsafe { msr::read_msr(MSR_IA32_PMC0) };
+    let inst_retired = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR0) };
+    let clk_unhalted = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR1) };
+    let l3_miss = unsafe { msr::read_msr(MSR_IA32_PMC0) };
     let br_mispredict = unsafe { msr::read_msr(MSR_IA32_PMC1) };
-    let tsc_val       = tsc::read_tsc();
+    let tsc_val = tsc::read_tsc();
 
     let current = PmcSnapshot {
         inst_retired,
@@ -540,8 +544,8 @@ pub struct ExoArgosStats {
 /// Returns a snapshot of ExoArgos statistics.
 pub fn exoargos_stats() -> ExoArgosStats {
     ExoArgosStats {
-        anomaly_count:       ANOMALY_COUNT.load(Ordering::Relaxed),
-        snapshot_count:      SNAPSHOT_COUNT.load(Ordering::Relaxed),
+        anomaly_count: ANOMALY_COUNT.load(Ordering::Relaxed),
+        snapshot_count: SNAPSHOT_COUNT.load(Ordering::Relaxed),
         baseline_established: BASELINE_ESTABLISHED.load(Ordering::Relaxed),
     }
 }

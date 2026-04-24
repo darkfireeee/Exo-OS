@@ -30,42 +30,23 @@ pub mod verify;
 // ── Re-exports publics ────────────────────────────────────────────────────────
 
 // Types fondamentaux
-pub use token::{CapToken, ObjectId, CapObjectType, TokenStats, read_stats as token_stats};
 pub use rights::Rights;
 pub use table::{CapTable, CapTableSnapshot, CAP_TABLE_CAPACITY};
+pub use token::{read_stats as token_stats, CapObjectType, CapToken, ObjectId, TokenStats};
 
 // verify — v6 : extraits de revocation.rs
 pub use verify::{
-    CapError,
-    verify,
-    verify_and_get_rights,
-    verify_typed,
-    verify_read,
-    verify_read_write,
-    verify_ipc_send,
-    verify_ipc_recv,
+    verify, verify_and_get_rights, verify_ipc_recv, verify_ipc_send, verify_read,
+    verify_read_write, verify_typed, CapError,
 };
 
 // revocation — v6 : uniquement révocation
-pub use revocation::{
-    revoke,
-    revoke_token,
-};
+pub use revocation::{revoke, revoke_token};
 
 pub use delegation::{
-    delegate,
-    delegate_all,
-    delegate_read_only,
-    can_delegate,
-    DelegationChain,
-    DelegationEntry,
+    can_delegate, delegate, delegate_all, delegate_read_only, DelegationChain, DelegationEntry,
 };
-pub use namespace::{
-    CapNamespace,
-    NamespaceId,
-    alloc_namespace_id,
-    cross_namespace_verify,
-};
+pub use namespace::{alloc_namespace_id, cross_namespace_verify, CapNamespace, NamespaceId};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // init_capability_subsystem — appelé au boot (étape séquencée)
@@ -133,10 +114,10 @@ impl KernelCapError {
     #[inline]
     pub const fn to_kernel_errno(self) -> i32 {
         match self {
-            Self::NotFound        => -2,   // ENOENT
-            Self::PermissionDenied => -1,  // EPERM
-            Self::InvalidArg      => -22,  // EINVAL
-            Self::NotSupported    => -38,  // ENOSYS
+            Self::NotFound => -2,         // ENOENT
+            Self::PermissionDenied => -1, // EPERM
+            Self::InvalidArg => -22,      // EINVAL
+            Self::NotSupported => -38,    // ENOSYS
         }
     }
 }

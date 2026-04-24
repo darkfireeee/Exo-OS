@@ -15,7 +15,7 @@
 //   • Bootstrap des clés de chiffrement de volume (combiné avec HKDF)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use x25519_dalek::{StaticSecret, PublicKey};
+use x25519_dalek::{PublicKey, StaticSecret};
 
 /// Paire de clés X25519.
 ///
@@ -23,7 +23,7 @@ use x25519_dalek::{StaticSecret, PublicKey};
 /// `public_key`  est le point Curve25519 correspondant (32B).
 #[derive(Clone)]
 pub struct X25519KeyPair {
-    pub public_key:  [u8; 32],
+    pub public_key: [u8; 32],
     pub private_key: [u8; 32],
 }
 
@@ -48,7 +48,9 @@ impl core::fmt::Display for X25519Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             X25519Error::InvalidPrivateKey => write!(f, "X25519: invalid private key"),
-            X25519Error::InvalidDhResult   => write!(f, "X25519: invalid DH result (point at infinity)"),
+            X25519Error::InvalidDhResult => {
+                write!(f, "X25519: invalid DH result (point at infinity)")
+            }
         }
     }
 }
@@ -63,11 +65,11 @@ impl core::fmt::Display for X25519Error {
 /// x25519-dalek effectue le clamping bits automatiquement (RFC 7748 §5).
 pub fn x25519_keypair_from_secret(secret_bytes: &[u8; 32]) -> Result<X25519KeyPair, X25519Error> {
     let secret = StaticSecret::from(*secret_bytes);
-    let public  = PublicKey::from(&secret);
+    let public = PublicKey::from(&secret);
 
     Ok(X25519KeyPair {
         private_key: secret.to_bytes(),
-        public_key:  *public.as_bytes(),
+        public_key: *public.as_bytes(),
     })
 }
 
@@ -83,11 +85,11 @@ pub fn x25519_diffie_hellman(
     our_private: &[u8; 32],
     their_public: &[u8; 32],
 ) -> Result<[u8; 32], X25519Error> {
-    let secret  = StaticSecret::from(*our_private);
+    let secret = StaticSecret::from(*our_private);
     let their_pk = PublicKey::from(*their_public);
 
     let dh_result = secret.diffie_hellman(&their_pk);
-    let shared    = dh_result.to_bytes();
+    let shared = dh_result.to_bytes();
 
     // Vérification contre low-order points (all-zeros = point neutre)
     let is_zero = shared.iter().fold(0u8, |acc, &b| acc | b);
@@ -109,13 +111,13 @@ mod tests {
     #[test]
     fn test_dh_symmetric() {
         let alice_secret = [0x11u8; 32];
-        let bob_secret   = [0x22u8; 32];
+        let bob_secret = [0x22u8; 32];
 
         let alice = x25519_keypair_from_secret(&alice_secret).unwrap();
-        let bob   = x25519_keypair_from_secret(&bob_secret).unwrap();
+        let bob = x25519_keypair_from_secret(&bob_secret).unwrap();
 
         let alice_shared = x25519_diffie_hellman(&alice.private_key, &bob.public_key).unwrap();
-        let bob_shared   = x25519_diffie_hellman(&bob.private_key, &alice.public_key).unwrap();
+        let bob_shared = x25519_diffie_hellman(&bob.private_key, &alice.public_key).unwrap();
 
         assert_eq!(alice_shared, bob_shared, "DH doit être symétrique");
     }

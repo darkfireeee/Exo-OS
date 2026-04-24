@@ -442,3 +442,49 @@ pub fn recv_raw_checked(
         })?;
     recv_raw(ep_id, buf, flags)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{mailbox_close, mailbox_open, recv_raw, send_raw};
+    use crate::ipc::core::types::EndpointId;
+
+    #[test]
+    fn test_raw_mailbox_open_send_recv_roundtrip() {
+        let ep = EndpointId::new(5).unwrap();
+        mailbox_close(ep);
+        assert!(mailbox_open(ep));
+
+        let payload = *b"exo-ipc";
+        send_raw(ep, &payload, 0).expect("send raw");
+
+        let mut out = [0u8; 32];
+        let n = recv_raw(ep, &mut out, 0x0001).expect("recv raw");
+        assert_eq!(&out[..n], &payload);
+
+        mailbox_close(ep);
+    }
+
+    #[test]
+    fn test_raw_mailbox_send_recv_stress() {
+        let ep = EndpointId::new(9).unwrap();
+        mailbox_close(ep);
+        assert!(mailbox_open(ep));
+
+        for round in 0..1024u16 {
+            let payload = [
+                (round & 0xFF) as u8,
+                (round >> 8) as u8,
+                (round as u8).wrapping_mul(3),
+                (round as u8).wrapping_mul(7),
+            ];
+            send_raw(ep, &payload, 0).expect("send raw stress");
+
+            let mut out = [0u8; 32];
+            let n = recv_raw(ep, &mut out, 0x0001).expect("recv raw stress");
+            assert_eq!(n, payload.len());
+            assert_eq!(&out[..n], &payload);
+        }
+
+        mailbox_close(ep);
+    }
+}

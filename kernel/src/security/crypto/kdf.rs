@@ -30,8 +30,12 @@ use sha2::{Sha256, Sha512};
 pub struct DerivedKey32(pub [u8; 32]);
 
 impl DerivedKey32 {
-    pub fn as_bytes(&self) -> &[u8; 32] { &self.0 }
-    pub fn zeroize(&mut self) { self.0.iter_mut().for_each(|b| *b = 0); }
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+    pub fn zeroize(&mut self) {
+        self.0.iter_mut().for_each(|b| *b = 0);
+    }
 }
 
 /// Clé dérivée 64 octets.
@@ -39,8 +43,12 @@ impl DerivedKey32 {
 pub struct DerivedKey64(pub [u8; 64]);
 
 impl DerivedKey64 {
-    pub fn as_bytes(&self) -> &[u8; 64] { &self.0 }
-    pub fn zeroize(&mut self) { self.0.iter_mut().for_each(|b| *b = 0); }
+    pub fn as_bytes(&self) -> &[u8; 64] {
+        &self.0
+    }
+    pub fn zeroize(&mut self) {
+        self.0.iter_mut().for_each(|b| *b = 0);
+    }
 }
 
 /// Erreur KDF.
@@ -58,8 +66,8 @@ impl core::fmt::Display for KdfError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             KdfError::InvalidOutputLength => write!(f, "KDF: invalid output length"),
-            KdfError::InvalidInput        => write!(f, "KDF: invalid input"),
-            KdfError::ExpandError         => write!(f, "KDF: HKDF expand error"),
+            KdfError::InvalidInput => write!(f, "KDF: invalid input"),
+            KdfError::ExpandError => write!(f, "KDF: HKDF expand error"),
         }
     }
 }
@@ -71,10 +79,7 @@ impl core::fmt::Display for KdfError {
 /// HKDF-SHA256 — Phase d'extraction.
 /// Retourne `(PRK 32 octets, Hkdf struct)`.
 /// `salt` peut être `None` (HKDF utilise alors un sel de zéros).
-pub fn hkdf_extract(
-    salt: Option<&[u8]>,
-    ikm: &[u8],
-) -> (DerivedKey32, Hkdf<Sha256>) {
+pub fn hkdf_extract(salt: Option<&[u8]>, ikm: &[u8]) -> (DerivedKey32, Hkdf<Sha256>) {
     let (prk, hkdf) = Hkdf::<Sha256>::extract(salt, ikm);
     let mut out = [0u8; 32];
     out.copy_from_slice(&prk);
@@ -82,12 +87,10 @@ pub fn hkdf_extract(
 }
 
 /// HKDF-SHA256 — Phase d'expansion vers 32 octets.
-pub fn hkdf_expand_32(
-    prk: &Hkdf<Sha256>,
-    info: &[u8],
-) -> Result<DerivedKey32, KdfError> {
+pub fn hkdf_expand_32(prk: &Hkdf<Sha256>, info: &[u8]) -> Result<DerivedKey32, KdfError> {
     let mut okm = [0u8; 32];
-    prk.expand(info, &mut okm).map_err(|_| KdfError::ExpandError)?;
+    prk.expand(info, &mut okm)
+        .map_err(|_| KdfError::ExpandError)?;
     Ok(DerivedKey32(okm))
 }
 
@@ -98,8 +101,9 @@ pub fn hkdf_expand_64(
     info: &[u8],
 ) -> Result<DerivedKey64, KdfError> {
     let (_, hkdf) = Hkdf::<Sha512>::extract(salt, ikm);
-    let mut okm   = [0u8; 64];
-    hkdf.expand(info, &mut okm).map_err(|_| KdfError::ExpandError)?;
+    let mut okm = [0u8; 64];
+    hkdf.expand(info, &mut okm)
+        .map_err(|_| KdfError::ExpandError)?;
     Ok(DerivedKey64(okm))
 }
 
@@ -210,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_hkdf_extract_expand() {
-        let ikm  = b"input key material";
+        let ikm = b"input key material";
         let salt = Some(b"ExoOS salt".as_ref());
         let (prk, hkdf) = hkdf_extract(salt, ikm);
         assert_eq!(prk.0.len(), 32);

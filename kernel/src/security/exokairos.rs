@@ -46,8 +46,8 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use spin::Once;
 
-use crate::security::capability::token::CapToken;
 use crate::security::capability::rights::Rights;
+use crate::security::capability::token::CapToken;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes ExoKairos
@@ -257,8 +257,10 @@ impl TemporalCap {
             let current = self.bytes_left.load(Ordering::Acquire);
             let new_val = current.saturating_sub(n);
             match self.bytes_left.compare_exchange_weak(
-                current, new_val,
-                Ordering::AcqRel, Ordering::Acquire,
+                current,
+                new_val,
+                Ordering::AcqRel,
+                Ordering::Acquire,
             ) {
                 Ok(_) => return new_val,
                 Err(_) => continue, // réessayer (CAS contention)
@@ -403,10 +405,10 @@ pub mod cap_deadline_table {
 
             if occupied == 0 {
                 // Slot libre — insertion CAS
-                match (*entry).occupied.compare_exchange(
-                    0, 1,
-                    Ordering::AcqRel, Ordering::Acquire,
-                ) {
+                match (*entry)
+                    .occupied
+                    .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+                {
                     Ok(_) => {
                         (*entry).oid = oid_val;
                         (*entry).deadline_tsc = deadline_tsc;
@@ -419,7 +421,10 @@ pub mod cap_deadline_table {
         }
 
         // Table pleine — panique (ne devrait jamais arriver en Phase 3.1)
-        panic!("EXOKAIROS: deadline table full ({} entries)", DEADLINE_TABLE_SIZE);
+        panic!(
+            "EXOKAIROS: deadline table full ({} entries)",
+            DEADLINE_TABLE_SIZE
+        );
     }
 
     /// Récupère la deadline TSC pour un ObjectId — temps constant.
@@ -530,7 +535,10 @@ fn ct_u8_array_eq(a: &[u8; 16], b: &[u8; 16]) -> bool {
 /// Le MAC tronqué à 16 bytes est stocké dans TemporalCap.deadline_mac.
 /// La deadline TSC réelle n'est PAS déductible depuis ce MAC.
 ///
-fn compute_deadline_mac(oid: crate::security::capability::token::ObjectId, deadline_tsc: u64) -> [u8; 16] {
+fn compute_deadline_mac(
+    oid: crate::security::capability::token::ObjectId,
+    deadline_tsc: u64,
+) -> [u8; 16] {
     // Construire le message : oid (8 bytes) || deadline_tsc (8 bytes)
     let mut msg = [0u8; 16];
     msg[0..8].copy_from_slice(&oid.as_u64().to_le_bytes());
@@ -564,7 +572,8 @@ pub fn init_kernel_secret(secret: &[u8; 32]) {
 /// Ne doit jamais être appelé depuis Ring 1 ou Ring 3.
 /// En Phase 3.2, cette lecture sera protégée par PKS Credentials.
 fn get_kernel_secret() -> [u8; 32] {
-    *KERNEL_SECRET.get()
+    *KERNEL_SECRET
+        .get()
         .expect("KERNEL_SECRET non initialisé — exoseal_boot_phase0 doit précéder verify()")
 }
 

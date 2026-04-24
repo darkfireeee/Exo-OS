@@ -42,9 +42,9 @@ use crate::scheduler::core::task::ThreadControlBlock;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// MSR IA32_U_CET — User-mode CET control.
-const MSR_IA32_U_CET:   u32 = 0x6A0;
+const MSR_IA32_U_CET: u32 = 0x6A0;
 /// MSR IA32_S_CET — Supervisor-mode CET control.
-const MSR_IA32_S_CET:   u32 = 0x6A2;
+const MSR_IA32_S_CET: u32 = 0x6A2;
 /// MSR IA32_PL0_SSP — Ring 0 Shadow Stack Pointer.
 const MSR_IA32_PL0_SSP: u32 = 0x6A4;
 /// MSR IA32_PL1_SSP — Ring 1 Shadow Stack Pointer.
@@ -64,14 +64,14 @@ const MSR_IA32_INTERRUPT_SSP_TABLE: u32 = 0x6A8;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Bit 0 — Shadow Stack Enable.
-const CET_SHSTK_EN:    u64 = 1 << 0;
+const CET_SHSTK_EN: u64 = 1 << 0;
 /// Bit 1 — WRSS instruction enable (required for kernel shadow stack management).
 const CET_WR_SHSTK_EN: u64 = 1 << 1;
 /// Bit 2 — ENDBRANCH enforcement (IBT).
-const CET_ENDBR_EN:    u64 = 1 << 2;
+const CET_ENDBR_EN: u64 = 1 << 2;
 /// Bit 3 — Legacy Shadow Stack compatibility (IBT only when set).
 #[allow(dead_code)]
-const CET_LEG_IW_EN:   u64 = 1 << 3;
+const CET_LEG_IW_EN: u64 = 1 << 3;
 /// Bit 4 — No Track for indirect CALL/JMP (suppress IBT when set).
 #[allow(dead_code)]
 const CET_NO_TRACK_EN: u64 = 1 << 4;
@@ -92,7 +92,7 @@ const CR4_CET_BIT: u64 = 1 << 23;
 /// Bit 0 : CET Shadow Stack activé pour ce thread.
 pub const CET_FLAG_ENABLED: u8 = 1 << 0;
 /// Bit 1 : IBT activé pour ce thread.
-pub const CET_FLAG_IBT:     u8 = 1 << 1;
+pub const CET_FLAG_IBT: u8 = 1 << 1;
 /// Bit 2 : Token shadow stack validé au setup.
 pub const CET_FLAG_TOKEN_VALID: u8 = 1 << 2;
 
@@ -214,13 +214,13 @@ unsafe fn tcb_read_cold_u8(tcb: &ThreadControlBlock, offset: usize) -> u8 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Offset de shadow_stack_token dans _cold_reserve (= [144] - [144] = 0).
-const OFF_SHADOW_STACK_TOKEN: usize = 0;   // [144] u64
+const OFF_SHADOW_STACK_TOKEN: usize = 0; // [144] u64
 /// Offset de cet_flags dans _cold_reserve (= [152] - [144] = 8).
-const OFF_CET_FLAGS:          usize = 8;   // [152] u8
+const OFF_CET_FLAGS: usize = 8; // [152] u8
 /// Offset de threat_score_u8 dans _cold_reserve (= [153] - [144] = 9).
-const OFF_THREAT_SCORE:       usize = 9;   // [153] u8
+const OFF_THREAT_SCORE: usize = 9; // [153] u8
 /// Offset de pt_buffer_phys dans _cold_reserve (= [160] - [144] = 16).
-const OFF_PT_BUFFER_PHYS:     usize = 16;  // [160] u64
+const OFF_PT_BUFFER_PHYS: usize = 16; // [160] u64
 const HANDOFF_FREEZE_REQ: u64 = 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -430,10 +430,7 @@ pub unsafe fn disable_cet_for_thread(tcb: &mut ThreadControlBlock) {
 /// # Safety
 /// Cette fonction est un handler d'interruption — elle ne doit jamais retourner
 /// normalement. Elle déclenche un HANDOFF vers Kernel B.
-pub extern "C" fn cp_handler(
-    _frame: usize,
-    error_code: u64,
-) {
+pub extern "C" fn cp_handler(_frame: usize, error_code: u64) {
     // 1. Incrémenter le compteur global de violations
     CP_VIOLATION_COUNT.fetch_add(1, Ordering::Relaxed);
 

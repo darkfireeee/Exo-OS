@@ -41,7 +41,7 @@ fn next_cookie() -> u64 {
 /// Magic pour valider l'en-tête.
 pub const CALL_MAGIC: u32 = 0x4558_4F43; // "EXOC"
 
-/// En-tête de 16 bytes préfixé au payload d'un appel raw.
+/// En-tête préfixé au payload d'un appel raw.
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct RawCallHeader {
@@ -51,6 +51,8 @@ struct RawCallHeader {
     payload_len: u32,
     /// Cookie de corrélation (unique par appel).
     cookie:      u64,
+    /// Endpoint de réponse éphémère.
+    reply_ep:    u64,
 }
 
 const CALL_HEADER_SIZE: usize = core::mem::size_of::<RawCallHeader>();
@@ -107,6 +109,7 @@ pub fn call_raw(
         magic:       CALL_MAGIC,
         payload_len: msg.len() as u32,
         cookie,
+        reply_ep:    reply_ep.get(),
     };
 
     let mut call_buf = [0u8; MAX_MSG_SIZE];
@@ -119,13 +122,6 @@ pub fn call_raw(
         );
     }
     call_buf[CALL_HEADER_SIZE..CALL_HEADER_SIZE + msg.len()].copy_from_slice(msg);
-
-    // Stocker reply_ep dans les derniers 8 bytes du message
-    // (le serveur l'utilise pour savoir où répondre).
-    // Protocole : bytes [MAX_MSG_SIZE-8..] = reply_ep_id (u64 LE)
-    let reply_ep_bytes = reply_ep.get().to_le_bytes();
-    let reply_pos = MAX_MSG_SIZE - core::mem::size_of::<u64>();
-    call_buf[reply_pos..].copy_from_slice(&reply_ep_bytes);
 
     // 3. Envoyer vers la mailbox du serveur.
     let send_result = channel_raw::send_raw(
@@ -195,8 +191,7 @@ pub fn parse_call<'a>(buf: &'a [u8]) -> Option<CallRequest<'a>> {
     let payload_len = hdr.payload_len as usize;
     if buf.len() < CALL_HEADER_SIZE + payload_len { return None; }
 
-    // Lire le reply_ep depuis la fin du buffer ORIGINAL (MAX_MSG_SIZE bytes).
-    let reply_ep = None; // Le endpoint de réponse est passé hors-bande dans le cookie
+    let reply_ep = EndpointId::new(hdr.reply_ep);
 
     Some(CallRequest {
         payload:  &buf[CALL_HEADER_SIZE..CALL_HEADER_SIZE + payload_len],
@@ -219,6 +214,7 @@ pub fn send_reply(
         magic:       CALL_MAGIC,
         payload_len: reply_data.len() as u32,
         cookie,
+        reply_ep:    reply_ep.get(),
     };
 
     let mut buf = [0u8; MAX_MSG_SIZE];
@@ -230,4 +226,83 @@ pub fn send_reply(
 
     channel_raw::send_raw(reply_ep, &buf[..CALL_HEADER_SIZE + reply_data.len()], 0)
         .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_call_preserves_reply_endpoint() {
+        let reply_ep = EndpointId::new(0x1234_5678).unwrap();
+        let header = RawCallHeader {
+            magic: CALL_MAGIC,
+            payload_len: 4,
+            cookie: 0xAA55,
+            reply_ep: reply_ep.get(),
+        };
+        let mut buf = [0u8; CALL_HEADER_SIZE + 4];
+        // SAFETY: `buf` est assez grand pour contenir l'en-tête `repr(C)`.
+        unsafe {
+            core::ptr::write_unaligned(buf.as_mut_ptr() as *mut RawCallHeader, header);
+        }
+        buf[CALL_HEADER_SIZE..CALL_HEADER_SIZE + 4].copy_from_slice(b"ping");
+
+        let req = parse_call(&buf).expect("valid call");
+        assert_eq!(req.cookie, 0xAA55);
+        assert_eq!(req.payload, b"ping");
+        assert_eq!(req.reply_ep, Some(reply_ep));
+    }
+
+    #[test]
+    fn test_call_raw_roundtrip() {
+        let server_ep = EndpointId::new(0x4242).unwrap();
+        assert!(channel_raw::mailbox_open(server_ep));
+
+        let worker = std::thread::spawn(move || {
+            let mut buf = [0u8; MAX_MSG_SIZE];
+            let n = channel_raw::recv_raw(server_ep, &mut buf, 0).expect("recv request");
+            let request = parse_call(&buf[..n]).expect("parse request");
+            let reply_ep = request.reply_ep.expect("reply endpoint");
+            send_reply(reply_ep, request.cookie, request.payload).expect("send reply");
+            channel_raw::mailbox_close(server_ep);
+        });
+
+        let mut reply = [0u8; 16];
+        let n = call_raw(server_ep, b"exo", &mut reply).expect("call succeeds");
+        assert_eq!(&reply[..n], b"exo");
+        worker.join().expect("worker exits");
+    }
+
+    #[test]
+    fn test_call_raw_roundtrip_stress() {
+        let server_ep = EndpointId::new(0x4343).unwrap();
+        assert!(channel_raw::mailbox_open(server_ep));
+
+        let worker = std::thread::spawn(move || {
+            let mut iter = 0u32;
+            while iter < 128 {
+                let mut buf = [0u8; MAX_MSG_SIZE];
+                let n = channel_raw::recv_raw(server_ep, &mut buf, 0).expect("recv request");
+                let request = parse_call(&buf[..n]).expect("parse request");
+                let reply_ep = request.reply_ep.expect("reply endpoint");
+                send_reply(reply_ep, request.cookie, request.payload).expect("send reply");
+                iter = iter.wrapping_add(1);
+            }
+            channel_raw::mailbox_close(server_ep);
+        });
+
+        let mut iter = 0u32;
+        while iter < 128 {
+            let mut payload = [0u8; 8];
+            payload[..4].copy_from_slice(&iter.to_le_bytes());
+            let mut reply = [0u8; 8];
+            let n = call_raw(server_ep, &payload[..4], &mut reply).expect("call succeeds");
+            assert_eq!(n, 4);
+            assert_eq!(&reply[..4], &payload[..4]);
+            iter = iter.wrapping_add(1);
+        }
+
+        worker.join().expect("worker exits");
+    }
 }

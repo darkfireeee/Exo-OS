@@ -10,13 +10,12 @@ pub mod labels;
 pub mod policy;
 pub mod verify;
 
-pub use context::{SecurityContext, TrustLevel, PrincipalId, ContextStats};
-pub use labels::{SecurityLabel, ConfidentialityLevel, IntegrityLevel};
+pub use context::{ContextStats, PrincipalId, SecurityContext, TrustLevel};
+pub use labels::{ConfidentialityLevel, IntegrityLevel, SecurityLabel};
 pub use policy::{
-    ZeroTrustPolicy, PolicyAction, ResourceKind, AccessRequest,
-    PolicyStats, global_policy,
+    global_policy, AccessRequest, PolicyAction, PolicyStats, ResourceKind, ZeroTrustPolicy,
 };
 pub use verify::{
-    AccessError, verify_access, verify_file_read, verify_file_write,
-    verify_ipc_access, verify_crypto_key_access, verify_dma_access, verify_syscall,
+    verify_access, verify_crypto_key_access, verify_dma_access, verify_file_read,
+    verify_file_write, verify_ipc_access, verify_syscall, AccessError,
 };

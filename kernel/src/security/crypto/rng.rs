@@ -20,11 +20,10 @@
 // RÈGLE RNG-03 : En cas d'échec RDRAND après 10 tentatives → fallback TSC+stack.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
+use super::xchacha20_poly1305::chacha20_block;
+use crate::arch::x86_64::cpu::features::CPU_FEATURES;
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
-use crate::arch::x86_64::cpu::features::CPU_FEATURES;
-use super::xchacha20_poly1305::chacha20_block;
 
 /// Nombre de blocs ChaCha20 avant un reseed obligatoire.
 const RESEED_INTERVAL_BLOCKS: u64 = 4096;
@@ -79,7 +78,9 @@ fn rdrand64() -> Result<u64, RngError> {
             }
             // Pause entre les tentatives (x86 hint)
             // SAFETY: PAUSE est une hint d'attente pour le CPU — aucun effet de bord.
-            unsafe { core::arch::asm!("pause", options(nostack, nomem)); }
+            unsafe {
+                core::arch::asm!("pause", options(nostack, nomem));
+            }
         }
         Err(RngError::RdrandExhausted)
     }
@@ -92,7 +93,7 @@ pub fn rdrand_fill(buf: &mut [u8]) -> Result<(), RngError> {
     let mut pos = 0;
     while pos + 8 <= buf.len() {
         let val = rdrand64()?;
-        buf[pos..pos+8].copy_from_slice(&val.to_le_bytes());
+        buf[pos..pos + 8].copy_from_slice(&val.to_le_bytes());
         pos += 8;
     }
     if pos < buf.len() {
@@ -154,15 +155,14 @@ fn fallback_entropy(out: &mut [u8; 32]) {
     for i in 0..2 {
         a = a.wrapping_add(b ^ (a >> 17));
         b = b.wrapping_add(a ^ (b >> 31));
-        out[16 + i * 8..24 + i * 8].copy_from_slice(
-            &a.wrapping_mul(0x2545_f491_4f6c_dd1d).to_le_bytes()
-        );
+        out[16 + i * 8..24 + i * 8]
+            .copy_from_slice(&a.wrapping_mul(0x2545_f491_4f6c_dd1d).to_le_bytes());
     }
     // Passe de mélange final — chaque octet reçoit une contribution de TSC + SP
     for i in 0..32 {
         out[i] = out[i].wrapping_add(
             (tsc.wrapping_shr((i as u32) & 63) as u8)
-            .wrapping_add(sp.wrapping_shr(((i as u32) + 3) & 63) as u8)
+                .wrapping_add(sp.wrapping_shr(((i as u32) + 3) & 63) as u8),
         );
     }
 }
@@ -208,7 +208,8 @@ impl ChaCha20Csprng {
         self.key.copy_from_slice(entropy);
         // Dérive un nonce à partir du seed en utilisant les 12 derniers octets XOR
         for i in 0..12 {
-            self.nonce[i] = entropy[i].wrapping_add(entropy[i + 20])
+            self.nonce[i] = entropy[i]
+                .wrapping_add(entropy[i + 20])
                 .wrapping_add(entropy[(i + 7) % 32]);
         }
         self.counter = 0;
@@ -253,9 +254,8 @@ impl ChaCha20Csprng {
             let remaining = buf.len() - pos;
             let available = CHACHA20_BLOCK_SIZE - self.buffer_pos;
             let to_copy = remaining.min(available);
-            buf[pos..pos + to_copy].copy_from_slice(
-                &self.buffer[self.buffer_pos..self.buffer_pos + to_copy]
-            );
+            buf[pos..pos + to_copy]
+                .copy_from_slice(&self.buffer[self.buffer_pos..self.buffer_pos + to_copy]);
             self.buffer_pos += to_copy;
             pos += to_copy;
         }
@@ -273,19 +273,19 @@ impl ChaCha20Csprng {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct KernelRng {
-    prng:             ChaCha20Csprng,
-    initialized:      bool,
-    bytes_generated:  u64,
-    reseed_count:     u64,
+    prng: ChaCha20Csprng,
+    initialized: bool,
+    bytes_generated: u64,
+    reseed_count: u64,
 }
 
 impl KernelRng {
     const fn new() -> Self {
         Self {
-            prng:            ChaCha20Csprng::new(),
-            initialized:     false,
+            prng: ChaCha20Csprng::new(),
+            initialized: false,
             bytes_generated: 0,
-            reseed_count:    0,
+            reseed_count: 0,
         }
     }
 
@@ -327,7 +327,7 @@ impl KernelRng {
 }
 
 static KERNEL_RNG: Mutex<KernelRng> = Mutex::new(KernelRng::new());
-static RNG_INIT:   AtomicBool = AtomicBool::new(false);
+static RNG_INIT: AtomicBool = AtomicBool::new(false);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API publique
@@ -385,13 +385,13 @@ pub fn rng_is_ready() -> bool {
 #[derive(Debug, Clone, Copy)]
 pub struct RngStats {
     pub bytes_generated: u64,
-    pub reseed_count:    u64,
+    pub reseed_count: u64,
 }
 
 pub fn rng_stats() -> RngStats {
     let rng = KERNEL_RNG.lock();
     RngStats {
         bytes_generated: rng.bytes_generated,
-        reseed_count:    rng.reseed_count,
+        reseed_count: rng.reseed_count,
     }
 }

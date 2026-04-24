@@ -128,6 +128,7 @@ pub unsafe fn kernel_init() {
     // ── Phase 2b : Allocateur heap (SLUB + large) ────────────────────────────
     crate::memory::heap::allocator::hybrid::init();
     kdb(b'3'); // Phase 2b done
+    crate::arch::x86_64::boot_display::stage_ok("MEMORY");
 
     // ── Phase 2c : Time subsystem (HPET + calibration TSC + ktime seqlock) ────────
     // Remplace les 3 appels directs par time_init() qui orchestre :
@@ -136,10 +137,12 @@ pub unsafe fn kernel_init() {
     // FIX TIME-01    : ktime protegé par seqlock ISR-safe.
     crate::arch::x86_64::time::time_init();
     kdb(b'4'); // Phase 2c done
+    crate::arch::x86_64::boot_display::stage_ok("TIME");
 
     // ── Phase 2d : drivers GI-03 (IOMMU queues + notifications kernel) ────────
     crate::drivers::init();
     kdb(b'D'); // Phase 2d done
+    crate::arch::x86_64::boot_display::stage_ok("DRIVERS");
 
     // ── Phase 3 : Scheduler ───────────────────────────────────────────
     crate::scheduler::init(&crate::scheduler::SchedInitParams::default());
@@ -187,6 +190,7 @@ pub unsafe fn kernel_init() {
         register_addr_space_cloner(&KERNEL_AS_CLONER);
     }
     kdb(b'F'); // fork cloner registered
+    crate::arch::x86_64::boot_display::stage_ok("SCHEDULER");
 
     // ── Phase 4 : Process ────────────────────────────────────────────────────
     // CORRECTIF : le crash GPF "f000ff53f000ff53" observé précédemment était causé
@@ -221,6 +225,7 @@ pub unsafe fn kernel_init() {
     crate::process::state::wakeup::register_with_dma();
     core::arch::asm!("sti", options(nomem, nostack));
     kdb(b'P'); // Phase 4 done (process init + reaper kthread)
+    crate::arch::x86_64::boot_display::stage_ok("PROCESS");
 
     // ── Phase 5 : Security ──────────────────────────────────────────────────
     // Si la sécurité a déjà été initialisée en early boot (SECURITY_READY=true),
@@ -242,6 +247,7 @@ pub unsafe fn kernel_init() {
         }
     }
     kdb(b'8'); // futex seed done
+    crate::arch::x86_64::boot_display::stage_ok("SECURITY");
 
     // ── Phase 6 : IPC ────────────────────────────────────────────────────────
     ipc::ring::spsc::init_spsc_rings();
@@ -266,6 +272,7 @@ pub unsafe fn kernel_init() {
         crate::arch::x86_64::memory_iface::shm_vmm_unmap_page,
     );
     kdb(b'9'); // IPC done
+    crate::arch::x86_64::boot_display::stage_ok("IPC");
 
     // ── Phase 7 : FS ─────────────────────────────────────────────────────────
      let _ = crate::fs::exofs::exofs_init(
@@ -284,6 +291,7 @@ pub unsafe fn kernel_init() {
     // SAFETY: exofs_init() terminé, appelé une seule fois depuis BSP
     unsafe { crate::syscall::fs_bridge::fs_bridge_init(); }
     kdb(b'@'); // fs_bridge actif
+    crate::arch::x86_64::boot_display::stage_ok("FS");
 }
 
 #[cfg(not(test))]

@@ -16,7 +16,6 @@
 // RÈGLE SAND-03 : Héritage : le fils reçoit une policy ⊆ père.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -24,47 +23,47 @@ use core::sync::atomic::{AtomicU64, Ordering};
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod syscall_nr {
-    pub const READ:        usize = 0;
-    pub const WRITE:       usize = 1;
-    pub const OPEN:        usize = 2;
-    pub const CLOSE:       usize = 3;
-    pub const STAT:        usize = 4;
-    pub const FSTAT:       usize = 5;
-    pub const LSTAT:       usize = 6;
-    pub const POLL:        usize = 7;
-    pub const LSEEK:       usize = 8;
-    pub const MMAP:        usize = 9;
-    pub const MPROTECT:    usize = 10;
-    pub const MUNMAP:      usize = 11;
-    pub const BRK:         usize = 12;
-    pub const RT_SIGACTION:usize = 13;
-    pub const FORK:        usize = 57;
-    pub const EXECVE:      usize = 59;
-    pub const EXIT:        usize = 60;
-    pub const WAIT4:       usize = 61;
-    pub const KILL:        usize = 62;
-    pub const SOCKET:      usize = 41;
-    pub const CONNECT:     usize = 42;
-    pub const BIND:        usize = 49;
-    pub const LISTEN:      usize = 50;
-    pub const ACCEPT:      usize = 43;
-    pub const SEND:        usize = 44;
-    pub const RECV:        usize = 45;
-    pub const IOCTL:       usize = 16;
-    pub const PRCTL:       usize = 157;
-    pub const CLONE:       usize = 56;
-    pub const PTRACE:      usize = 101;
-    pub const MADVISE:     usize = 28;
-    pub const FUTEX:       usize = 202;
-    pub const GETPID:      usize = 39;
-    pub const GETTID:      usize = 186;
-    pub const GETTIMEOFDAY:usize = 96;
-    pub const NANOSLEEP:   usize = 35;
-    pub const PIPE:        usize = 22;
-    pub const DUP:         usize = 32;
-    pub const DUP2:        usize = 33;
-    pub const GETUID:      usize = 102;
-    pub const GETGID:      usize = 104;
+    pub const READ: usize = 0;
+    pub const WRITE: usize = 1;
+    pub const OPEN: usize = 2;
+    pub const CLOSE: usize = 3;
+    pub const STAT: usize = 4;
+    pub const FSTAT: usize = 5;
+    pub const LSTAT: usize = 6;
+    pub const POLL: usize = 7;
+    pub const LSEEK: usize = 8;
+    pub const MMAP: usize = 9;
+    pub const MPROTECT: usize = 10;
+    pub const MUNMAP: usize = 11;
+    pub const BRK: usize = 12;
+    pub const RT_SIGACTION: usize = 13;
+    pub const FORK: usize = 57;
+    pub const EXECVE: usize = 59;
+    pub const EXIT: usize = 60;
+    pub const WAIT4: usize = 61;
+    pub const KILL: usize = 62;
+    pub const SOCKET: usize = 41;
+    pub const CONNECT: usize = 42;
+    pub const BIND: usize = 49;
+    pub const LISTEN: usize = 50;
+    pub const ACCEPT: usize = 43;
+    pub const SEND: usize = 44;
+    pub const RECV: usize = 45;
+    pub const IOCTL: usize = 16;
+    pub const PRCTL: usize = 157;
+    pub const CLONE: usize = 56;
+    pub const PTRACE: usize = 101;
+    pub const MADVISE: usize = 28;
+    pub const FUTEX: usize = 202;
+    pub const GETPID: usize = 39;
+    pub const GETTID: usize = 186;
+    pub const GETTIMEOFDAY: usize = 96;
+    pub const NANOSLEEP: usize = 35;
+    pub const PIPE: usize = 22;
+    pub const DUP: usize = 32;
+    pub const DUP2: usize = 33;
+    pub const GETUID: usize = 102;
+    pub const GETGID: usize = 104;
 
     pub const MAX_SYSCALL: usize = 256;
 }
@@ -77,13 +76,13 @@ pub mod syscall_nr {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxAction {
     /// Laisser passer le syscall.
-    Allow  = 0,
+    Allow = 0,
     /// Retourner EPERM (1).
     DenyEperm = 1,
     /// Retourner ENOSYS (2).
     DenyEnosys = 2,
     /// Tuer le processus (SIGKILL).
-    Kill   = 3,
+    Kill = 3,
     /// Logger et retourner EPERM.
     LogAndDeny = 4,
 }
@@ -101,12 +100,12 @@ pub enum SandboxAction {
 #[derive(Clone)]
 pub struct SandboxPolicy {
     allowed_bitmap: [u64; 4],
-    kill_bitmap:    [u64; 4],
-    log_bitmap:     [u64; 4],
+    kill_bitmap: [u64; 4],
+    log_bitmap: [u64; 4],
     /// Nombre de refus enregistrés (instrumentation).
-    denials:        u64,
+    denials: u64,
     /// Nombre d'autorisations enregistrées.
-    allows:         u64,
+    allows: u64,
 }
 
 impl SandboxPolicy {
@@ -114,10 +113,10 @@ impl SandboxPolicy {
     pub const fn deny_all() -> Self {
         Self {
             allowed_bitmap: [0u64; 4],
-            kill_bitmap:    [0u64; 4],
-            log_bitmap:     [0u64; 4],
-            denials:        0,
-            allows:         0,
+            kill_bitmap: [0u64; 4],
+            log_bitmap: [0u64; 4],
+            denials: 0,
+            allows: 0,
         }
     }
 
@@ -125,10 +124,10 @@ impl SandboxPolicy {
     pub const fn allow_all() -> Self {
         Self {
             allowed_bitmap: [!0u64; 4],
-            kill_bitmap:    [0u64; 4],
-            log_bitmap:     [0u64; 4],
-            denials:        0,
-            allows:         0,
+            kill_bitmap: [0u64; 4],
+            log_bitmap: [0u64; 4],
+            denials: 0,
+            allows: 0,
         }
     }
 
@@ -136,11 +135,20 @@ impl SandboxPolicy {
     pub fn read_only_minimal() -> Self {
         let mut p = Self::deny_all();
         for nr in [
-            syscall_nr::READ, syscall_nr::FSTAT, syscall_nr::STAT,
-            syscall_nr::LSEEK, syscall_nr::CLOSE, syscall_nr::MMAP,
-            syscall_nr::MUNMAP, syscall_nr::EXIT, syscall_nr::GETPID,
-            syscall_nr::GETTID, syscall_nr::GETTIMEOFDAY, syscall_nr::FUTEX,
-            syscall_nr::NANOSLEEP, syscall_nr::MADVISE,
+            syscall_nr::READ,
+            syscall_nr::FSTAT,
+            syscall_nr::STAT,
+            syscall_nr::LSEEK,
+            syscall_nr::CLOSE,
+            syscall_nr::MMAP,
+            syscall_nr::MUNMAP,
+            syscall_nr::EXIT,
+            syscall_nr::GETPID,
+            syscall_nr::GETTID,
+            syscall_nr::GETTIMEOFDAY,
+            syscall_nr::FUTEX,
+            syscall_nr::NANOSLEEP,
+            syscall_nr::MADVISE,
         ] {
             p.allow_syscall(nr);
         }
@@ -151,9 +159,15 @@ impl SandboxPolicy {
     pub fn network_io() -> Self {
         let mut p = Self::read_only_minimal();
         for nr in [
-            syscall_nr::WRITE, syscall_nr::SOCKET, syscall_nr::CONNECT,
-            syscall_nr::SEND, syscall_nr::RECV, syscall_nr::POLL,
-            syscall_nr::PIPE, syscall_nr::DUP, syscall_nr::DUP2,
+            syscall_nr::WRITE,
+            syscall_nr::SOCKET,
+            syscall_nr::CONNECT,
+            syscall_nr::SEND,
+            syscall_nr::RECV,
+            syscall_nr::POLL,
+            syscall_nr::PIPE,
+            syscall_nr::DUP,
+            syscall_nr::DUP2,
         ] {
             p.allow_syscall(nr);
         }
@@ -197,7 +211,7 @@ impl SandboxPolicy {
             return SandboxAction::DenyEnosys;
         }
         let word = nr / 64;
-        let bit  = 1u64 << (nr % 64);
+        let bit = 1u64 << (nr % 64);
 
         if self.kill_bitmap[word] & bit != 0 {
             self.denials += 1;
@@ -217,12 +231,20 @@ impl SandboxPolicy {
 
     /// Évalue sans modifier les compteurs (utile pour les checks préalables).
     pub fn check(&self, nr: usize) -> SandboxAction {
-        if nr >= syscall_nr::MAX_SYSCALL { return SandboxAction::DenyEnosys; }
+        if nr >= syscall_nr::MAX_SYSCALL {
+            return SandboxAction::DenyEnosys;
+        }
         let word = nr / 64;
-        let bit  = 1u64 << (nr % 64);
-        if self.kill_bitmap[word] & bit != 0 { return SandboxAction::Kill; }
-        if self.log_bitmap[word] & bit != 0  { return SandboxAction::LogAndDeny; }
-        if self.allowed_bitmap[word] & bit != 0 { return SandboxAction::Allow; }
+        let bit = 1u64 << (nr % 64);
+        if self.kill_bitmap[word] & bit != 0 {
+            return SandboxAction::Kill;
+        }
+        if self.log_bitmap[word] & bit != 0 {
+            return SandboxAction::LogAndDeny;
+        }
+        if self.allowed_bitmap[word] & bit != 0 {
+            return SandboxAction::Allow;
+        }
         SandboxAction::DenyEperm
     }
 
@@ -231,10 +253,10 @@ impl SandboxPolicy {
         // L'enfant hérite exactement les mêmes droits (sous-ensemble garanti par AND)
         Self {
             allowed_bitmap: self.allowed_bitmap,
-            kill_bitmap:    self.kill_bitmap,
-            log_bitmap:     self.log_bitmap,
-            denials:        0,
-            allows:         0,
+            kill_bitmap: self.kill_bitmap,
+            log_bitmap: self.log_bitmap,
+            denials: 0,
+            allows: 0,
         }
     }
 
@@ -242,8 +264,8 @@ impl SandboxPolicy {
     pub fn intersect_with(&mut self, other: &SandboxPolicy) {
         for i in 0..4 {
             self.allowed_bitmap[i] &= other.allowed_bitmap[i];
-            self.kill_bitmap[i]    |= other.kill_bitmap[i];
-            self.log_bitmap[i]     |= other.log_bitmap[i];
+            self.kill_bitmap[i] |= other.kill_bitmap[i];
+            self.log_bitmap[i] |= other.log_bitmap[i];
         }
     }
 
@@ -258,30 +280,36 @@ impl SandboxPolicy {
 // ─────────────────────────────────────────────────────────────────────────────
 
 static GLOBAL_SANDBOX_DENIALS: AtomicU64 = AtomicU64::new(0);
-static GLOBAL_SANDBOX_ALLOWS:  AtomicU64 = AtomicU64::new(0);
-static GLOBAL_SANDBOX_KILLS:   AtomicU64 = AtomicU64::new(0);
+static GLOBAL_SANDBOX_ALLOWS: AtomicU64 = AtomicU64::new(0);
+static GLOBAL_SANDBOX_KILLS: AtomicU64 = AtomicU64::new(0);
 
 /// Enregistre une décision sandbox dans les compteurs globaux.
 pub fn record_sandbox_decision(action: SandboxAction) {
     match action {
-        SandboxAction::Allow => { GLOBAL_SANDBOX_ALLOWS.fetch_add(1, Ordering::Relaxed); }
-        SandboxAction::Kill  => { GLOBAL_SANDBOX_KILLS.fetch_add(1, Ordering::Relaxed);
-                                  GLOBAL_SANDBOX_DENIALS.fetch_add(1, Ordering::Relaxed); }
-        _ =>                   { GLOBAL_SANDBOX_DENIALS.fetch_add(1, Ordering::Relaxed); }
+        SandboxAction::Allow => {
+            GLOBAL_SANDBOX_ALLOWS.fetch_add(1, Ordering::Relaxed);
+        }
+        SandboxAction::Kill => {
+            GLOBAL_SANDBOX_KILLS.fetch_add(1, Ordering::Relaxed);
+            GLOBAL_SANDBOX_DENIALS.fetch_add(1, Ordering::Relaxed);
+        }
+        _ => {
+            GLOBAL_SANDBOX_DENIALS.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct SandboxGlobalStats {
-    pub global_allows:  u64,
+    pub global_allows: u64,
     pub global_denials: u64,
-    pub global_kills:   u64,
+    pub global_kills: u64,
 }
 
 pub fn sandbox_global_stats() -> SandboxGlobalStats {
     SandboxGlobalStats {
-        global_allows:  GLOBAL_SANDBOX_ALLOWS.load(Ordering::Relaxed),
+        global_allows: GLOBAL_SANDBOX_ALLOWS.load(Ordering::Relaxed),
         global_denials: GLOBAL_SANDBOX_DENIALS.load(Ordering::Relaxed),
-        global_kills:   GLOBAL_SANDBOX_KILLS.load(Ordering::Relaxed),
+        global_kills: GLOBAL_SANDBOX_KILLS.load(Ordering::Relaxed),
     }
 }

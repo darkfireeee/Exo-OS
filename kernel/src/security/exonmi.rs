@@ -24,10 +24,10 @@
 //   ExoShield_v1_Production.md — MODULE 9 : ExoNmi
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::arch::x86_64::cpu::tsc;
 use crate::arch::x86_64::cpu::msr;
+use crate::arch::x86_64::cpu::tsc;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -55,7 +55,7 @@ const LAPIC_TIMER_DCR: u32 = 0x3E0;
 /// One-shot mode for the LVT timer (bits [17:16] = 00).
 const LVT_TIMER_ONESHOT: u32 = 0x0000_0000;
 /// Mask bit to disable the timer IRQ (bit 16).
-const LVT_TIMER_MASKED: u32  = 0x0001_0000;
+const LVT_TIMER_MASKED: u32 = 0x0001_0000;
 
 /// Divisor by 1 for the APIC timer (bits [3:1] of DCR).
 const APIC_TIMER_DIV_1: u32 = 0x0B;
@@ -124,10 +124,10 @@ pub struct ExoNmiStats {
 /// Returns a snapshot of ExoNmi statistics.
 pub fn exonmi_stats() -> ExoNmiStats {
     ExoNmiStats {
-        missed_count:    MISSED_COUNT.load(Ordering::Relaxed),
-        threshold:       STRIKE_THRESHOLD,
-        last_ping_tsc:   LAST_PING_TSC.load(Ordering::Relaxed),
-        armed:           WATCHDOG_ARMED.load(Ordering::Relaxed),
+        missed_count: MISSED_COUNT.load(Ordering::Relaxed),
+        threshold: STRIKE_THRESHOLD,
+        last_ping_tsc: LAST_PING_TSC.load(Ordering::Relaxed),
+        armed: WATCHDOG_ARMED.load(Ordering::Relaxed),
         current_strikes: STRIKE_COUNT.load(Ordering::Relaxed),
     }
 }
@@ -326,9 +326,8 @@ pub fn exonmi_init() {
     // Read the LAPIC physical base address from MSR
     let apic_base_phys = unsafe { msr::read_msr(msr::MSR_IA32_APIC_BASE) } & 0xFFFF_F000;
     // Convert to virtual address
-    let apic_base_virt = crate::memory::phys_to_virt(
-        crate::memory::core::PhysAddr::new(apic_base_phys)
-    ).as_u64();
+    let apic_base_virt =
+        crate::memory::phys_to_virt(crate::memory::core::PhysAddr::new(apic_base_phys)).as_u64();
     LAPIC_VIRT_BASE.store(apic_base_virt, Ordering::Release);
 
     // Ensure the timer is masked
@@ -430,9 +429,8 @@ pub fn tick() {
 
         // Write HANDOFF_FLAG into the SSR — triggers Kernel A freeze
         unsafe {
-            crate::exophoenix::ssr::ssr_atomic(
-                crate::exophoenix::ssr::SSR_HANDOFF_FLAG
-            ).store(HANDOFF_FREEZE_REQ, Ordering::Release);
+            crate::exophoenix::ssr::ssr_atomic(crate::exophoenix::ssr::SSR_HANDOFF_FLAG)
+                .store(HANDOFF_FREEZE_REQ, Ordering::Release);
         }
 
         // Spin — the HANDOFF will freeze this core

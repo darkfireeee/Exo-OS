@@ -60,15 +60,25 @@ fn main() {
     // Répertoire du crate (chemin absolu fourni par Cargo)
     let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let target = std::env::var("TARGET").unwrap_or_default();
+    let linker_script = Path::new(&dir)
+        .parent()
+        .expect("workspace root manquant")
+        .join("exo-boot")
+        .join("linker")
+        .join("linker.ld");
+    let linker_script = linker_script
+        .to_str()
+        .expect("chemin linker non UTF-8")
+        .to_owned();
 
     // Passer le linker script à rust-lld uniquement pour les cibles bare-metal.
     // Le chemin DOIT être absolu : le linker est invoqué depuis un répertoire temporaire.
     if target.contains("none") || target.contains("exo") {
-        println!("cargo:rustc-link-arg=-T{dir}/linker.ld");
+        println!("cargo:rustc-link-arg=-T{linker_script}");
     }
 
     // Rebuild si le linker script change.
-    println!("cargo:rerun-if-changed={dir}/linker.ld");
+    println!("cargo:rerun-if-changed={linker_script}");
 
     // Rebuild si un fichier ASM change (les .s sont inclus via include_str!).
     println!("cargo:rerun-if-changed={dir}/src/scheduler/asm/switch_asm.s");

@@ -9,6 +9,7 @@ pub mod apic;
 pub mod boot;
 pub mod cpu;
 pub mod exceptions;
+pub mod framebuffer_early;
 pub mod gdt;
 pub mod idt;
 pub mod irq;
@@ -20,6 +21,7 @@ pub mod spectre;
 pub mod syscall;
 pub mod time;
 pub mod tss;
+pub mod boot_display;
 pub mod vga_early;
 pub mod virt;
 

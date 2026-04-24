@@ -17,12 +17,11 @@
 //   namespaces source et cible diffèrent → isolation garantie.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use super::token::{ObjectId, CapObjectType};
 use super::rights::Rights;
 use super::table::CapTable;
+use super::token::{CapObjectType, ObjectId};
 use super::verify::CapError;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,13 +70,13 @@ pub fn alloc_namespace_id() -> NamespaceId {
 /// Un ObjectId issu d'un namespace A ne peut jamais être vérifié dans un namespace B.
 pub struct CapNamespace {
     /// Identifiant de ce namespace.
-    id:           NamespaceId,
+    id: NamespaceId,
     /// Table des capacités appartenant à ce namespace.
-    table:        CapTable,
+    table: CapTable,
     /// Compteur d'ObjectId local — incrémenté à chaque `alloc_object_id()`.
-    id_counter:   AtomicU64,
+    id_counter: AtomicU64,
     /// Nombre d'utilisateurs de ce namespace (reference counting).
-    refcount:     AtomicU32,
+    refcount: AtomicU32,
 }
 
 // SAFETY: CapNamespace utilise uniquement des primitives atomiques + CapTable (Sync).
@@ -89,9 +88,9 @@ impl CapNamespace {
     pub fn new(id: NamespaceId) -> Self {
         Self {
             id,
-            table:      CapTable::new(),
+            table: CapTable::new(),
             id_counter: AtomicU64::new(1), // 0 réservé = INVALID
-            refcount:   AtomicU32::new(1),
+            refcount: AtomicU32::new(1),
         }
     }
 
@@ -131,7 +130,7 @@ impl CapNamespace {
     /// Accorde une capability dans ce namespace.
     pub fn grant(
         &self,
-        rights:   Rights,
+        rights: Rights,
         obj_type: CapObjectType,
     ) -> Result<(ObjectId, super::token::CapToken), CapError> {
         let oid = self.alloc_object_id();
@@ -149,11 +148,7 @@ impl CapNamespace {
     }
 
     /// Vérifie un token dans ce namespace.
-    pub fn verify(
-        &self,
-        token:    super::token::CapToken,
-        required: Rights,
-    ) -> Result<(), CapError> {
+    pub fn verify(&self, token: super::token::CapToken, required: Rights) -> Result<(), CapError> {
         // Rejet rapide si l'ObjectId n'appartient pas à ce namespace
         if !self.owns(token.object_id()) {
             return Err(CapError::ObjectNotFound);

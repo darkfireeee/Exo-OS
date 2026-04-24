@@ -31,6 +31,26 @@ ExoOS is a from-scratch Rust microkernel featuring a dual-kernel fault-tolerant 
 
 > **Status:** Architecture v7 finalized · Formal verification complete (12/12 modules) · First boot validated on QEMU · Implementation of P0 security patches in progress.
 
+## Boot Milestone
+
+ExoOS now reaches the end of `kernel_main()` under QEMU and emits `OK` on the debug path after completing the visible boot stages:
+
+- `ARCH`
+- `MEMORY`
+- `TIME`
+- `DRIVERS`
+- `SCHEDULER`
+- `PROCESS`
+- `SECURITY`
+- `IPC`
+- `FS`
+
+Latest validated framebuffer capture:
+
+![ExoOS QEMU boot milestone](docs/avancement/qemu_boot/exoos-qemu-latest.png)
+
+Detailed validation notes, script locations, and the VirtualBox text-mode workaround are documented in [`docs/avancement/BOOT_VALIDATION_2026-04-24.md`](docs/avancement/BOOT_VALIDATION_2026-04-24.md).
+
 ---
 
 ## Architecture Overview

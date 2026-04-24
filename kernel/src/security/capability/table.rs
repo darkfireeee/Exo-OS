@@ -24,12 +24,11 @@
 //   CAP_TABLE_CAPACITY × size_of::<CapEntry>() = 512 × 24 = 12 288 bytes ≈ 12 KiB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
-use super::token::{ObjectId, CapToken, CapObjectType};
 use super::rights::Rights;
+use super::token::{CapObjectType, CapToken, ObjectId};
 use super::verify::CapError;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,25 +51,25 @@ const SLOT_FREE: u64 = u64::MAX;
 #[repr(C)]
 struct CapEntry {
     /// Identifiant de l'objet — SLOT_FREE si libre.
-    object_id:  AtomicU64,
+    object_id: AtomicU64,
     /// Droits accordés pour cet objet.
-    rights:     AtomicU32,
+    rights: AtomicU32,
     /// Génération courante — incrémentée lors d'une révocation.
     generation: AtomicU32,
     /// Type de l'objet — stocké pour validation rapide.
-    type_tag:   AtomicU32,
+    type_tag: AtomicU32,
     /// Padding pour alignement cache-line-friendly.
-    _pad:       AtomicU32,
+    _pad: AtomicU32,
 }
 
 impl CapEntry {
     const fn new_free() -> Self {
         Self {
-            object_id:  AtomicU64::new(SLOT_FREE),
-            rights:     AtomicU32::new(0),
+            object_id: AtomicU64::new(SLOT_FREE),
+            rights: AtomicU32::new(0),
             generation: AtomicU32::new(0),
-            type_tag:   AtomicU32::new(0),
-            _pad:       AtomicU32::new(0),
+            type_tag: AtomicU32::new(0),
+            _pad: AtomicU32::new(0),
         }
     }
 
@@ -87,9 +86,9 @@ impl CapEntry {
         if oid != expected_oid.0 {
             return None;
         }
-        let r   = Rights::from_bits_truncate(self.rights.load(Ordering::Acquire));
+        let r = Rights::from_bits_truncate(self.rights.load(Ordering::Acquire));
         let gen = self.generation.load(Ordering::Acquire);
-        let tt  = CapObjectType::from_u16(self.type_tag.load(Ordering::Acquire) as u16);
+        let tt = CapObjectType::from_u16(self.type_tag.load(Ordering::Acquire) as u16);
         Some((r, gen, tt))
     }
 }
@@ -118,19 +117,19 @@ pub struct CapTable {
 
 /// Statistiques par table.
 struct CapTableStats {
-    grants:      AtomicU64,
+    grants: AtomicU64,
     revocations: AtomicU64,
-    lookups:     AtomicU64,
-    misses:      AtomicU64,
+    lookups: AtomicU64,
+    misses: AtomicU64,
 }
 
 impl CapTableStats {
     const fn new() -> Self {
         Self {
-            grants:      AtomicU64::new(0),
+            grants: AtomicU64::new(0),
             revocations: AtomicU64::new(0),
-            lookups:     AtomicU64::new(0),
-            misses:      AtomicU64::new(0),
+            lookups: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
         }
     }
 }
@@ -138,11 +137,11 @@ impl CapTableStats {
 /// Snapshot de statistiques CapTable.
 #[derive(Debug, Clone, Copy)]
 pub struct CapTableSnapshot {
-    pub grants:      u64,
+    pub grants: u64,
     pub revocations: u64,
-    pub lookups:     u64,
-    pub misses:      u64,
-    pub count:       u32,
+    pub lookups: u64,
+    pub misses: u64,
+    pub count: u32,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -175,10 +174,10 @@ impl CapTable {
     /// Crée une nouvelle CapTable vide.
     pub fn new() -> Self {
         Self {
-            entries:    init_cap_entries!(),
+            entries: init_cap_entries!(),
             write_lock: Mutex::new(()),
-            count:      AtomicU32::new(0),
-            stats:      CapTableStats::new(),
+            count: AtomicU32::new(0),
+            stats: CapTableStats::new(),
         }
     }
 
@@ -243,9 +242,9 @@ impl CapTable {
     /// Acquiert le mutex d'écriture.
     pub fn grant(
         &self,
-        object_id:  ObjectId,
-        rights:     Rights,
-        type_tag:   CapObjectType,
+        object_id: ObjectId,
+        rights: Rights,
+        type_tag: CapObjectType,
     ) -> Result<CapToken, CapError> {
         let _guard = self.write_lock.lock();
 
@@ -299,7 +298,9 @@ impl CapTable {
             // On révoque d'abord (incrément génération)
             self.entries[idx].generation.fetch_add(1, Ordering::Release);
             // Puis on libère le slot en marquant comme libre
-            self.entries[idx].object_id.store(SLOT_FREE, Ordering::Release);
+            self.entries[idx]
+                .object_id
+                .store(SLOT_FREE, Ordering::Release);
             self.entries[idx].rights.store(0, Ordering::Release);
             self.count.fetch_sub(1, Ordering::Relaxed);
             Ok(())
@@ -324,9 +325,13 @@ impl CapTable {
         if let Some(idx) = self.find_slot(object_id) {
             let entry = &self.entries[idx];
             let rights = Rights::from_bits_truncate(entry.rights.load(Ordering::Acquire));
-            let gen    = entry.generation.load(Ordering::Acquire);
-            let tt     = CapObjectType::from_u16(entry.type_tag.load(Ordering::Acquire) as u16);
-            Some(CapEntryView { rights, generation: gen, type_tag: tt })
+            let gen = entry.generation.load(Ordering::Acquire);
+            let tt = CapObjectType::from_u16(entry.type_tag.load(Ordering::Acquire) as u16);
+            Some(CapEntryView {
+                rights,
+                generation: gen,
+                type_tag: tt,
+            })
         } else {
             self.stats.misses.fetch_add(1, Ordering::Relaxed);
             None
@@ -342,11 +347,11 @@ impl CapTable {
     /// Retourne un snapshot de stats.
     pub fn stats(&self) -> CapTableSnapshot {
         CapTableSnapshot {
-            grants:      self.stats.grants.load(Ordering::Relaxed),
+            grants: self.stats.grants.load(Ordering::Relaxed),
             revocations: self.stats.revocations.load(Ordering::Relaxed),
-            lookups:     self.stats.lookups.load(Ordering::Relaxed),
-            misses:      self.stats.misses.load(Ordering::Relaxed),
-            count:       self.count.load(Ordering::Relaxed),
+            lookups: self.stats.lookups.load(Ordering::Relaxed),
+            misses: self.stats.misses.load(Ordering::Relaxed),
+            count: self.count.load(Ordering::Relaxed),
         }
     }
 
@@ -376,7 +381,7 @@ impl Default for CapTable {
 /// Vue en lecture d'une entrée — retournée par `get()`.
 #[derive(Debug, Clone, Copy)]
 pub struct CapEntryView {
-    pub rights:     Rights,
+    pub rights: Rights,
     pub generation: u32,
-    pub type_tag:   CapObjectType,
+    pub type_tag: CapObjectType,
 }

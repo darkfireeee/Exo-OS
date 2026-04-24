@@ -12,31 +12,17 @@ pub mod runtime_check;
 pub mod secure_boot;
 
 pub use code_signing::{
-    verify_module_signature,
-    register_loaded_module,
-    ModuleHeader,
-    CodeSignError,
-    code_sign_stats,
+    code_sign_stats, register_loaded_module, verify_module_signature, CodeSignError, ModuleHeader,
 };
 
 pub use runtime_check::{
-    init_runtime_integrity,
-    check_kernel_integrity,
-    assert_kernel_integrity,
-    integrity_stats,
+    assert_kernel_integrity, check_kernel_integrity, init_runtime_integrity, integrity_stats,
     IntegrityError,
 };
 
 pub use secure_boot::{
-    verify_boot_attestation,
-    check_chain_of_trust,
-    boot_nonce,
-    read_pcr,
-    extend_pcr,
-    is_chain_verified,
-    secureboot_stats,
-    BootAttestation,
-    SecureBootError,
+    boot_nonce, check_chain_of_trust, extend_pcr, is_chain_verified, read_pcr, secureboot_stats,
+    verify_boot_attestation, BootAttestation, SecureBootError,
 };
 
 /// Initialise le sous-système d'intégrité.

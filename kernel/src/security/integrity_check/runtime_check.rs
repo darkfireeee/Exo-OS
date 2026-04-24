@@ -15,9 +15,8 @@
 // RÈGLE RUNTIME-03 : Les adresses .text/.rodata viennent du linker script (externs).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use super::super::crypto::blake3::blake3_hash;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Symboles du linker script (kernel/linker.ld)
@@ -28,10 +27,10 @@ use super::super::crypto::blake3::blake3_hash;
 // section de code en lecture seule — aucun accès concurrent n'est possible
 // puisque .text/.rodata ne sont jamais écrits après le chargement.
 extern "C" {
-    static _text_start:   u8;
-    static _text_end:     u8;
+    static _text_start: u8;
+    static _text_end: u8;
     static _rodata_start: u8;
-    static _rodata_end:   u8;
+    static _rodata_end: u8;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,13 +55,13 @@ pub enum IntegrityError {
 
 struct RuntimeIntegrityState {
     /// Hash de référence de la section .text.
-    text_hash:   [u8; 32],
+    text_hash: [u8; 32],
     /// Hash de référence de la section .rodata.
     rodata_hash: [u8; 32],
     /// Initialisé ?
     initialized: bool,
     /// Nombre de vérifications réussies.
-    checks_ok:   u64,
+    checks_ok: u64,
     /// Dernier timestamp TSC de vérification réussie.
     last_ok_tsc: u64,
 }
@@ -70,10 +69,10 @@ struct RuntimeIntegrityState {
 impl RuntimeIntegrityState {
     const fn new() -> Self {
         Self {
-            text_hash:   [0u8; 32],
+            text_hash: [0u8; 32],
             rodata_hash: [0u8; 32],
             initialized: false,
-            checks_ok:   0,
+            checks_ok: 0,
             last_ok_tsc: 0,
         }
     }
@@ -94,8 +93,8 @@ unsafe fn text_section() -> &'static [u8] {
     // SAFETY: Les symboles _text_start/_text_end sont définis par le linker script.
     // La section .text est valide et de taille correcte. On lit en lecture seule.
     let start = &_text_start as *const u8;
-    let end   = &_text_end   as *const u8;
-    let len   = end as usize - start as usize;
+    let end = &_text_end as *const u8;
+    let len = end as usize - start as usize;
     core::slice::from_raw_parts(start, len)
 }
 
@@ -103,8 +102,8 @@ unsafe fn text_section() -> &'static [u8] {
 unsafe fn rodata_section() -> &'static [u8] {
     // SAFETY: Identique à text_section() — symboles linker, lecture seule.
     let start = &_rodata_start as *const u8;
-    let end   = &_rodata_end   as *const u8;
-    let len   = end as usize - start as usize;
+    let end = &_rodata_end as *const u8;
+    let len = end as usize - start as usize;
     core::slice::from_raw_parts(start, len)
 }
 
@@ -121,7 +120,9 @@ fn read_tsc() -> u64 {
 }
 
 #[cfg(not(target_arch = "x86_64"))]
-fn read_tsc() -> u64 { 0 }
+fn read_tsc() -> u64 {
+    0
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API publique
@@ -138,10 +139,10 @@ pub fn init_runtime_integrity() {
     let mut state = INTEGRITY_STATE.lock();
 
     // SAFETY: Voir text_section() / rodata_section() — symboles linker valides.
-    let text_hash   = unsafe { blake3_hash(text_section()) };
+    let text_hash = unsafe { blake3_hash(text_section()) };
     let rodata_hash = unsafe { blake3_hash(rodata_section()) };
 
-    state.text_hash   = text_hash;
+    state.text_hash = text_hash;
     state.rodata_hash = rodata_hash;
     state.initialized = true;
     state.last_ok_tsc = read_tsc();
@@ -159,14 +160,14 @@ pub fn check_kernel_integrity() -> Result<(), IntegrityError> {
 
     // Calculer les hashes actuels
     // SAFETY: Voir text_section() / rodata_section().
-    let current_text   = unsafe { blake3_hash(text_section()) };
+    let current_text = unsafe { blake3_hash(text_section()) };
     let current_rodata = unsafe { blake3_hash(rodata_section()) };
 
     // Comparer en temps constant
-    let mut text_diff   = 0u8;
+    let mut text_diff = 0u8;
     let mut rodata_diff = 0u8;
     for i in 0..32 {
-        text_diff   |= current_text[i]   ^ state.text_hash[i];
+        text_diff |= current_text[i] ^ state.text_hash[i];
         rodata_diff |= current_rodata[i] ^ state.rodata_hash[i];
     }
 
@@ -184,8 +185,8 @@ pub fn check_kernel_integrity() -> Result<(), IntegrityError> {
 
     // Mise à jour du timestamp de succès
     let mut state = INTEGRITY_STATE.lock();
-    state.checks_ok   += 1;
-    state.last_ok_tsc  = read_tsc();
+    state.checks_ok += 1;
+    state.last_ok_tsc = read_tsc();
     Ok(())
 }
 
@@ -204,16 +205,16 @@ pub fn is_initialized() -> bool {
 
 #[derive(Debug, Clone, Copy)]
 pub struct IntegrityStats {
-    pub checks_performed:   u64,
+    pub checks_performed: u64,
     pub violations_detected: u64,
-    pub last_ok_tsc:        u64,
+    pub last_ok_tsc: u64,
 }
 
 pub fn integrity_stats() -> IntegrityStats {
     let state = INTEGRITY_STATE.lock();
     IntegrityStats {
-        checks_performed:    CHECKS_PERFORMED.load(Ordering::Relaxed),
+        checks_performed: CHECKS_PERFORMED.load(Ordering::Relaxed),
         violations_detected: VIOLATIONS_DETECTED.load(Ordering::Relaxed),
-        last_ok_tsc:         state.last_ok_tsc,
+        last_ok_tsc: state.last_ok_tsc,
     }
 }

@@ -16,10 +16,9 @@
 // RÈGLE SAU-03 : Syscalls privés du kernel (nr > MAX_USER_SYSCALL) non audités ici.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
 use super::logger::{log_event, log_security_violation, AuditCategory, AuditOutcome};
 use super::rules::{evaluate_global, RuleAction};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Verdict d'audit
@@ -45,27 +44,27 @@ pub enum AuditVerdict {
 /// Contexte d'un syscall en cours.
 #[derive(Clone, Copy)]
 struct SyscallContext {
-    thread_id:  u32,
-    pid:        u32,
-    uid:        u16,
+    thread_id: u32,
+    pid: u32,
+    uid: u16,
     syscall_nr: u32,
     #[allow(dead_code)]
-    entry_tsc:  u64,
+    entry_tsc: u64,
     #[allow(dead_code)]
-    verdict:    AuditVerdict,
-    active:     bool,
+    verdict: AuditVerdict,
+    active: bool,
 }
 
 impl SyscallContext {
     const fn empty() -> Self {
         Self {
-            thread_id:  0,
-            pid:        0,
-            uid:        0,
+            thread_id: 0,
+            pid: 0,
+            uid: 0,
             syscall_nr: 0,
-            entry_tsc:  0,
-            verdict:    AuditVerdict::Allow,
-            active:     false,
+            entry_tsc: 0,
+            verdict: AuditVerdict::Allow,
+            active: false,
         }
     }
 }
@@ -82,10 +81,14 @@ struct ContextTable {
 
 impl ContextTable {
     const fn new() -> Self {
-        Self { entries: [SyscallContext::empty(); MAX_CONCURRENT_SYSCALLS] }
+        Self {
+            entries: [SyscallContext::empty(); MAX_CONCURRENT_SYSCALLS],
+        }
     }
 
-    fn slot(tid: u32) -> usize { (tid as usize) % MAX_CONCURRENT_SYSCALLS }
+    fn slot(tid: u32) -> usize {
+        (tid as usize) % MAX_CONCURRENT_SYSCALLS
+    }
 
     fn set(&mut self, ctx: SyscallContext) {
         self.entries[Self::slot(ctx.thread_id)] = ctx;
@@ -93,7 +96,11 @@ impl ContextTable {
 
     fn get(&self, tid: u32) -> Option<&SyscallContext> {
         let e = &self.entries[Self::slot(tid)];
-        if e.active && e.thread_id == tid { Some(e) } else { None }
+        if e.active && e.thread_id == tid {
+            Some(e)
+        } else {
+            None
+        }
     }
 
     fn clear(&mut self, tid: u32) {
@@ -104,8 +111,7 @@ impl ContextTable {
     }
 }
 
-static CTX_TABLE: spin::Mutex<ContextTable> =
-    spin::Mutex::new(ContextTable::new());
+static CTX_TABLE: spin::Mutex<ContextTable> = spin::Mutex::new(ContextTable::new());
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Borne de syscalls utilisateur
@@ -118,11 +124,11 @@ const MAX_USER_SYSCALL: u32 = 511;
 // Statistiques
 // ─────────────────────────────────────────────────────────────────────────────
 
-static ENTRIES_TOTAL:   AtomicU64 = AtomicU64::new(0);
-static EXITS_TOTAL:     AtomicU64 = AtomicU64::new(0);
-static DENIALS_TOTAL:   AtomicU64 = AtomicU64::new(0);
-static KILLS_TOTAL:     AtomicU64 = AtomicU64::new(0);
-static ORPHAN_EXITS:    AtomicU64 = AtomicU64::new(0);
+static ENTRIES_TOTAL: AtomicU64 = AtomicU64::new(0);
+static EXITS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DENIALS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static KILLS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static ORPHAN_EXITS: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Timestamp
@@ -130,7 +136,8 @@ static ORPHAN_EXITS:    AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn rdtsc() -> u64 {
-    let lo: u32; let hi: u32;
+    let lo: u32;
+    let hi: u32;
     // SAFETY: rdtsc disponible sur x86_64; non-sérialisé suffisant pour timestamp d'audit.
     unsafe {
         core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi);
@@ -165,28 +172,42 @@ pub fn audit_syscall_entry(syscall_nr: u32, pid: u32, tid: u32, uid: u16) -> Aud
     let action = evaluate_global(pid, uid as u32, syscall_nr, AuditCategory::Syscall, 0);
 
     let verdict = match action {
-        RuleAction::Skip  => AuditVerdict::Allow,
-        RuleAction::Log   => AuditVerdict::Allow,
+        RuleAction::Skip => AuditVerdict::Allow,
+        RuleAction::Log => AuditVerdict::Allow,
         RuleAction::Alert => {
             // Alerter et permettre
-            log_security_violation(pid, tid, uid, syscall_nr, encode_syscall_data(syscall_nr, "alert"));
+            log_security_violation(
+                pid,
+                tid,
+                uid,
+                syscall_nr,
+                encode_syscall_data(syscall_nr, "alert"),
+            );
             AuditVerdict::Allow
         }
-        RuleAction::Deny  => {
+        RuleAction::Deny => {
             DENIALS_TOTAL.fetch_add(1, Ordering::Relaxed);
             log_event(
                 AuditCategory::SecurityViolation,
-                pid, tid, uid, syscall_nr, -1,
+                pid,
+                tid,
+                uid,
+                syscall_nr,
+                -1,
                 AuditOutcome::Deny,
                 encode_syscall_data(syscall_nr, "deny-rule"),
             );
             AuditVerdict::DenyEperm
         }
-        RuleAction::Kill  => {
+        RuleAction::Kill => {
             KILLS_TOTAL.fetch_add(1, Ordering::Relaxed);
             log_event(
                 AuditCategory::SecurityViolation,
-                pid, tid, uid, syscall_nr, -1,
+                pid,
+                tid,
+                uid,
+                syscall_nr,
+                -1,
                 AuditOutcome::Kill,
                 encode_syscall_data(syscall_nr, "kill-rule"),
             );
@@ -196,20 +217,24 @@ pub fn audit_syscall_entry(syscall_nr: u32, pid: u32, tid: u32, uid: u16) -> Aud
 
     // Enregistrer le contexte pour l'exit
     CTX_TABLE.lock().set(SyscallContext {
-        thread_id:  tid,
+        thread_id: tid,
         pid,
         uid,
         syscall_nr,
-        entry_tsc:  rdtsc(),
+        entry_tsc: rdtsc(),
         verdict,
-        active:     true,
+        active: true,
     });
 
     // Log entry si Log ou Alert
     if matches!(action, RuleAction::Log | RuleAction::Alert) {
         log_event(
             AuditCategory::Syscall,
-            pid, tid, uid, syscall_nr, 0,
+            pid,
+            tid,
+            uid,
+            syscall_nr,
+            0,
             AuditOutcome::Allow,
             encode_syscall_data(syscall_nr, "entry"),
         );
@@ -239,7 +264,11 @@ pub fn audit_syscall_exit(tid: u32, result: i64) {
         }
     };
 
-    let outcome = if result < 0 { AuditOutcome::Error } else { AuditOutcome::Allow };
+    let outcome = if result < 0 {
+        AuditOutcome::Error
+    } else {
+        AuditOutcome::Allow
+    };
 
     // Enregistrer l'exit avec le résultat
     log_event(
@@ -260,7 +289,9 @@ pub fn audit_capability_deny(pid: u32, tid: u32, uid: u16, cap_right: u32) {
     data[..4].copy_from_slice(&cap_right.to_le_bytes());
     log_event(
         AuditCategory::Capability,
-        pid, tid, uid,
+        pid,
+        tid,
+        uid,
         0,
         -1,
         AuditOutcome::Deny,
@@ -274,7 +305,9 @@ pub fn audit_file_deny(pid: u32, tid: u32, uid: u16, path_hash: u32) {
     data[..4].copy_from_slice(&path_hash.to_le_bytes());
     log_event(
         AuditCategory::FileAccess,
-        pid, tid, uid,
+        pid,
+        tid,
+        uid,
         0,
         -1,
         AuditOutcome::Deny,
@@ -291,19 +324,19 @@ fn encode_syscall_data(syscall_nr: u32, _tag: &str) -> [u8; 8] {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SyscallAuditStats {
-    pub entries_total:  u64,
-    pub exits_total:    u64,
-    pub denials_total:  u64,
-    pub kills_total:    u64,
-    pub orphan_exits:   u64,
+    pub entries_total: u64,
+    pub exits_total: u64,
+    pub denials_total: u64,
+    pub kills_total: u64,
+    pub orphan_exits: u64,
 }
 
 pub fn syscall_audit_stats() -> SyscallAuditStats {
     SyscallAuditStats {
         entries_total: ENTRIES_TOTAL.load(Ordering::Relaxed),
-        exits_total:   EXITS_TOTAL.load(Ordering::Relaxed),
+        exits_total: EXITS_TOTAL.load(Ordering::Relaxed),
         denials_total: DENIALS_TOTAL.load(Ordering::Relaxed),
-        kills_total:   KILLS_TOTAL.load(Ordering::Relaxed),
-        orphan_exits:  ORPHAN_EXITS.load(Ordering::Relaxed),
+        kills_total: KILLS_TOTAL.load(Ordering::Relaxed),
+        orphan_exits: ORPHAN_EXITS.load(Ordering::Relaxed),
     }
 }

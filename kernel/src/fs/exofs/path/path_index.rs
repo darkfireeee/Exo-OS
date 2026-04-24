@@ -24,6 +24,7 @@ use core::mem::size_of;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
+#[cfg(target_os = "none")]
 use crate::fs::exofs::crypto::ENTROPY_POOL;
 use super::path_component::{PathComponent, validate_component, siphash_keyed, NAME_MAX};
 use super::path_index_tree::PathIndexTree;
@@ -66,7 +67,11 @@ pub fn ensure_mount_key_initialized() {
         return;
     }
 
+    #[cfg(target_os = "none")]
     let mut key = ENTROPY_POOL.random_16();
+    #[cfg(not(target_os = "none"))]
+    let mut key = [0u8; 16];
+
     if key == [0u8; 16] {
         key[0] = 0xA5;
         key[7] = 0x5A;

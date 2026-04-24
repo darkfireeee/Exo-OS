@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 // Implémentation complète AES-256-GCM conforme NIST SP 800-38D :
-//   • Software AES-256 via la crate `aes` v0.8 (T-tables, pas de SIMD/SSE2)
+//   • Software AES-256 via rounds software internes (pas de SIMD/SSE2)
 //   • GCM mode avec GHASH multiplication (arithmétique u64 pure, pas de SIMD)
 //   • Détection AES-NI à l'exécution (CPUID via CPU_FEATURES)
 //   • Si AES-NI disponible → accélération matérielle (inline asm .byte)
@@ -14,10 +14,10 @@
 //
 // CONTRAINTE TARGET : la crate aes-gcm NE COMPILE PAS sur x86_64-unknown-none
 // (polyval/ghash génère des opérations 128-bit → LLVM ERROR: split 128-bit).
-// Solution : utiliser la crate `aes` (software T-tables, compile OK) + GCM
-// implémenté manuellement avec GHASH en arithmétique u64 pure.
+// Solution : utiliser un AES-256 software interne (SubBytes/ShiftRows/MixColumns)
+// + GCM implémenté manuellement avec GHASH en arithmétique u64 pure.
 //
-// RÈGLE CRYPTO-CRATES : l'AES est via la crate `aes` (RustCrypto, validée IETF).
+// RÈGLE CRYPTO-CRATES : le chemin kernel bare-metal doit rester pure-Rust soft.
 // Le GCM/GHASH est implémenté manuellement car la crate aes-gcm est incompatible
 // avec le target. Le GHASH utilise uniquement des opérations u64 (pas de SIMD).
 //
@@ -28,8 +28,6 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use subtle::ConstantTimeEq;
-use aes::Aes256;
-use aes::cipher::{KeyInit, BlockEncrypt};
 
 use crate::arch::x86_64::cpu::features::CPU_FEATURES;
 
@@ -64,7 +62,7 @@ impl core::fmt::Display for AesGcmError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             AesGcmError::AuthenticationFailed => write!(f, "AES-256-GCM: authentication failed"),
-            AesGcmError::InvalidParameter     => write!(f, "AES-256-GCM: invalid parameter"),
+            AesGcmError::InvalidParameter => write!(f, "AES-256-GCM: invalid parameter"),
         }
     }
 }
@@ -95,8 +93,13 @@ const AES_SBOX: [u8; 256] = [
 
 /// Round constants pour AES-256 key expansion.
 const AES_RCON: [u32; 7] = [
-    0x0100_0000, 0x0200_0000, 0x0400_0000, 0x0800_0000,
-    0x1000_0000, 0x2000_0000, 0x4000_0000,
+    0x0100_0000,
+    0x0200_0000,
+    0x0400_0000,
+    0x0800_0000,
+    0x1000_0000,
+    0x2000_0000,
+    0x4000_0000,
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,8 +115,8 @@ struct Aes256RoundKeys {
 fn sub_word(w: u32) -> u32 {
     let b0 = AES_SBOX[((w >> 24) & 0xFF) as usize] as u32;
     let b1 = AES_SBOX[((w >> 16) & 0xFF) as usize] as u32;
-    let b2 = AES_SBOX[((w >>  8) & 0xFF) as usize] as u32;
-    let b3 = AES_SBOX[((w      ) & 0xFF) as usize] as u32;
+    let b2 = AES_SBOX[((w >> 8) & 0xFF) as usize] as u32;
+    let b3 = AES_SBOX[((w) & 0xFF) as usize] as u32;
     (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
 }
 
@@ -157,15 +160,103 @@ fn aes256_expand_key(key: &[u8; 32]) -> Aes256RoundKeys {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AES-256 Encryption — Software path (crate `aes`)
+// AES-256 Encryption — Software path
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Chiffre un bloc 16 octets via le chemin software (crate `aes`).
-fn aes256_encrypt_block_sw(cipher: &Aes256, block: &mut [u8; 16]) {
-    // La crate `aes` utilise GenericArray<u8, U16> pour les blocs.
-    // On convertit via from_mut_slice (zéro-copy).
-    let ga = aes::cipher::generic_array::GenericArray::from_mut_slice(block);
-    cipher.encrypt_block(ga);
+#[inline]
+fn aes_add_round_key(state: &mut [u8; 16], round_key: &[u8; 16]) {
+    for i in 0..BLOCK_SIZE {
+        state[i] ^= round_key[i];
+    }
+}
+
+#[inline]
+fn aes_sub_bytes(state: &mut [u8; 16]) {
+    for byte in state.iter_mut() {
+        *byte = AES_SBOX[*byte as usize];
+    }
+}
+
+#[inline]
+fn aes_shift_rows(state: &mut [u8; 16]) {
+    let original = *state;
+    state[0] = original[0];
+    state[1] = original[5];
+    state[2] = original[10];
+    state[3] = original[15];
+    state[4] = original[4];
+    state[5] = original[9];
+    state[6] = original[14];
+    state[7] = original[3];
+    state[8] = original[8];
+    state[9] = original[13];
+    state[10] = original[2];
+    state[11] = original[7];
+    state[12] = original[12];
+    state[13] = original[1];
+    state[14] = original[6];
+    state[15] = original[11];
+}
+
+#[inline]
+fn aes_xtime(x: u8) -> u8 {
+    if x & 0x80 != 0 {
+        (x << 1) ^ 0x1B
+    } else {
+        x << 1
+    }
+}
+
+#[inline]
+fn aes_mul2(x: u8) -> u8 {
+    aes_xtime(x)
+}
+
+#[inline]
+fn aes_mul3(x: u8) -> u8 {
+    aes_mul2(x) ^ x
+}
+
+#[inline]
+fn aes_mix_single_column(col: &mut [u8; 4]) {
+    let a0 = col[0];
+    let a1 = col[1];
+    let a2 = col[2];
+    let a3 = col[3];
+
+    col[0] = aes_mul2(a0) ^ aes_mul3(a1) ^ a2 ^ a3;
+    col[1] = a0 ^ aes_mul2(a1) ^ aes_mul3(a2) ^ a3;
+    col[2] = a0 ^ a1 ^ aes_mul2(a2) ^ aes_mul3(a3);
+    col[3] = aes_mul3(a0) ^ a1 ^ a2 ^ aes_mul2(a3);
+}
+
+#[inline]
+fn aes_mix_columns(state: &mut [u8; 16]) {
+    for col_idx in 0..4 {
+        let start = col_idx * 4;
+        let mut col = [
+            state[start],
+            state[start + 1],
+            state[start + 2],
+            state[start + 3],
+        ];
+        aes_mix_single_column(&mut col);
+        state[start..start + 4].copy_from_slice(&col);
+    }
+}
+
+/// Chiffre un bloc 16 octets via le chemin software pure-Rust.
+fn aes256_encrypt_block_sw(round_keys: &Aes256RoundKeys, block: &mut [u8; 16]) {
+    aes_add_round_key(block, &round_keys.keys[0]);
+    for round in 1..14 {
+        aes_sub_bytes(block);
+        aes_shift_rows(block);
+        aes_mix_columns(block);
+        aes_add_round_key(block, &round_keys.keys[round]);
+    }
+    aes_sub_bytes(block);
+    aes_shift_rows(block);
+    aes_add_round_key(block, &round_keys.keys[14]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -319,46 +410,34 @@ unsafe fn aes256_encrypt_block_ni(_block: *mut u8, _round_keys: *const u8) {
 
 /// Contexte AES-256 pour le chiffrement GCM.
 ///
-/// Encapsule à la fois le chemin software (crate `aes`) et le chemin
+/// Encapsule à la fois le chemin software pure-Rust et le chemin
 /// AES-NI (round keys pré-calculées + inline assembly).
 struct Aes256GcmCipher {
-    /// Cipher software (crate `aes`) — toujours disponible.
-    sw_cipher: Aes256,
-    /// Round keys pour le chemin AES-NI — uniquement si AES-NI disponible.
-    ni_round_keys: Option<Aes256RoundKeys>,
+    /// Round keys utilisées par le chemin software et le chemin AES-NI.
+    round_keys: Aes256RoundKeys,
     /// AES-NI disponible sur ce CPU.
     has_aesni: bool,
 }
 
 impl Aes256GcmCipher {
     fn new(key: &[u8; 32]) -> Self {
-        let sw_cipher = Aes256::new_from_slice(key)
-            .expect("AES-256 key must be 32 bytes");
-
+        let round_keys = aes256_expand_key(key);
         let has_aesni = CPU_FEATURES.has_aes();
-        let ni_round_keys = if has_aesni {
-            Some(aes256_expand_key(key))
-        } else {
-            None
-        };
-
-        Self { sw_cipher, ni_round_keys, has_aesni }
+        Self {
+            round_keys,
+            has_aesni,
+        }
     }
 
     /// Chiffre un bloc 16 octets (dispatch software / AES-NI).
     fn encrypt_block(&self, block: &mut [u8; 16]) {
         if self.has_aesni {
-            if let Some(ref rk) = self.ni_round_keys {
-                unsafe {
-                    aes256_encrypt_block_ni(
-                        block.as_mut_ptr(),
-                        rk.keys[0].as_ptr(),
-                    );
-                }
-                return;
+            unsafe {
+                aes256_encrypt_block_ni(block.as_mut_ptr(), self.round_keys.keys[0].as_ptr());
             }
+            return;
         }
-        aes256_encrypt_block_sw(&self.sw_cipher, block);
+        aes256_encrypt_block_sw(&self.round_keys, block);
     }
 }
 
@@ -433,33 +512,21 @@ fn gf_to_bytes(gf: [u64; 2]) -> [u8; 16] {
 // GHASH
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Calcule GHASH(H, data) selon NIST SP 800-38D §6.3.
-///
-/// Traite `data` par blocs de 16 octets (le dernier bloc est complété
-/// avec des zéros si nécessaire). Retourne la valeur GHASH.
-fn ghash(h: [u64; 2], data: &[u8]) -> [u64; 2] {
-    let mut y = [0u64, 0u64];
-
+fn ghash_update(y: &mut [u64; 2], h: [u64; 2], data: &[u8]) {
     let mut pos = 0;
     while pos < data.len() {
-        // Préparer le bloc (compléter avec des zéros si nécessaire)
-        let mut block = [0u8; 16];
+        let mut block = [0u8; BLOCK_SIZE];
         let remaining = data.len() - pos;
-        let chunk_len = remaining.min(16);
+        let chunk_len = remaining.min(BLOCK_SIZE);
         block[..chunk_len].copy_from_slice(&data[pos..pos + chunk_len]);
 
-        // XOR avec Y
         let x = bytes_to_gf(&block);
         y[0] ^= x[0];
         y[1] ^= x[1];
-
-        // Multiplier par H
-        y = gf128_mul(y, h);
+        *y = gf128_mul(*y, h);
 
         pos += chunk_len;
     }
-
-    y
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -493,7 +560,7 @@ fn gcm_ctr_encrypt(cipher: &Aes256GcmCipher, mut icb: [u8; 16], data: &mut [u8])
 
         // XOR le keystream avec les données
         let remaining = data.len() - offset;
-        let chunk_len = remaining.min(16);
+        let chunk_len = remaining.min(BLOCK_SIZE);
         for i in 0..chunk_len {
             data[offset + i] ^= keystream[i];
         }
@@ -520,11 +587,11 @@ fn gcm_ctr_encrypt(cipher: &Aes256GcmCipher, mut icb: [u8; 16], data: &mut [u8])
 /// * `plaintext` — Données à chiffrer (chiffrées en place)
 /// * `tag_out`   — Tag d'authentification en sortie (16 octets)
 pub fn aes_gcm_seal(
-    key:       &[u8; AES_KEY_LEN],
-    iv:        &[u8; AES_GCM_NONCE_LEN],
-    aad:       &[u8],
+    key: &[u8; AES_KEY_LEN],
+    iv: &[u8; AES_GCM_NONCE_LEN],
+    aad: &[u8],
     plaintext: &mut [u8],
-    tag_out:   &mut [u8; AES_GCM_TAG_LEN],
+    tag_out: &mut [u8; AES_GCM_TAG_LEN],
 ) -> Result<(), AesGcmError> {
     let cipher = Aes256GcmCipher::new(key);
 
@@ -563,11 +630,11 @@ pub fn aes_gcm_seal(
 /// * `ciphertext` — Données chiffrées (déchiffrées en place si tag OK)
 /// * `tag`        — Tag d'authentification (16 octets)
 pub fn aes_gcm_open(
-    key:        &[u8; AES_KEY_LEN],
-    iv:         &[u8; AES_GCM_NONCE_LEN],
-    aad:        &[u8],
+    key: &[u8; AES_KEY_LEN],
+    iv: &[u8; AES_GCM_NONCE_LEN],
+    aad: &[u8],
     ciphertext: &mut [u8],
-    tag:        &[u8; AES_GCM_TAG_LEN],
+    tag: &[u8; AES_GCM_TAG_LEN],
 ) -> Result<(), AesGcmError> {
     let cipher = Aes256GcmCipher::new(key);
 
@@ -584,8 +651,11 @@ pub fn aes_gcm_open(
     // 3. Vérifier le tag AVANT de déchiffrer
     let expected_tag = compute_gcm_tag(&cipher, h, j0, aad, ciphertext);
     if !bool::from(expected_tag.ct_eq(tag)) {
-        // Nettoyer les données sensibles
-        h_block = [0u8; 16];
+        for byte in &mut h_block {
+            unsafe {
+                core::ptr::write_volatile(byte, 0);
+            }
+        }
         return Err(AesGcmError::AuthenticationFailed);
     }
 
@@ -611,46 +681,12 @@ fn compute_gcm_tag(
     aad: &[u8],
     ciphertext: &[u8],
 ) -> [u8; 16] {
-    // Construire les données pour GHASH : A || pad(A) || C || pad(C) || len(A) || len(C)
-    // On utilise un buffer stack pour les longueurs
-
-    // Calculer GHASH sur AAD
     let mut y = [0u64, 0u64];
-
-    // Traiter AAD
-    let mut pos = 0;
-    while pos < aad.len() {
-        let mut block = [0u8; 16];
-        let remaining = aad.len() - pos;
-        let chunk_len = remaining.min(16);
-        block[..chunk_len].copy_from_slice(&aad[pos..pos + chunk_len]);
-
-        let x = bytes_to_gf(&block);
-        y[0] ^= x[0];
-        y[1] ^= x[1];
-        y = gf128_mul(y, h);
-
-        pos += chunk_len;
-    }
-
-    // Traiter Ciphertext
-    pos = 0;
-    while pos < ciphertext.len() {
-        let mut block = [0u8; 16];
-        let remaining = ciphertext.len() - pos;
-        let chunk_len = remaining.min(16);
-        block[..chunk_len].copy_from_slice(&ciphertext[pos..pos + chunk_len]);
-
-        let x = bytes_to_gf(&block);
-        y[0] ^= x[0];
-        y[1] ^= x[1];
-        y = gf128_mul(y, h);
-
-        pos += chunk_len;
-    }
+    ghash_update(&mut y, h, aad);
+    ghash_update(&mut y, h, ciphertext);
 
     // Traiter le bloc de longueurs : len(A) en bits (64-bit BE) || len(C) en bits (64-bit BE)
-    let mut len_block = [0u8; 16];
+    let mut len_block = [0u8; BLOCK_SIZE];
     let aad_bits = (aad.len() as u64) * 8;
     let ct_bits = (ciphertext.len() as u64) * 8;
     len_block[0..8].copy_from_slice(&aad_bits.to_be_bytes());
@@ -667,7 +703,7 @@ fn compute_gcm_tag(
     // Tag = GHASH_result ⊕ AES_K(J0)
     let mut tag = j0;
     cipher.encrypt_block(&mut tag);
-    for i in 0..16 {
+    for i in 0..BLOCK_SIZE {
         tag[i] ^= ghash_result[i];
     }
 
@@ -682,9 +718,14 @@ fn compute_gcm_tag(
 mod tests {
     use super::*;
 
+    fn init_crypto_test_env() {
+        crate::arch::x86_64::cpu::features::init_cpu_features();
+    }
+
     /// Test : GF(2^128) multiplication par 1 est identité.
     #[test]
     fn gf128_mul_identity() {
+        init_crypto_test_env();
         let one: [u64; 2] = [0x8000_0000_0000_0000, 0]; // x^0 = 1 dans la convention GCM
         let a: [u64; 2] = [0x1234_5678_9ABC_DEF0, 0xFEDC_BA98_7654_3210];
         let result = gf128_mul(a, one);
@@ -694,6 +735,7 @@ mod tests {
     /// Test : GF(2^128) multiplication par 0 est 0.
     #[test]
     fn gf128_mul_zero() {
+        init_crypto_test_env();
         let zero: [u64; 2] = [0, 0];
         let a: [u64; 2] = [0x1234_5678_9ABC_DEF0, 0xFEDC_BA98_7654_3210];
         let result = gf128_mul(a, zero);
@@ -703,6 +745,7 @@ mod tests {
     /// Test : roundtrip seal/open avec AAD vide.
     #[test]
     fn roundtrip_empty_aad() {
+        init_crypto_test_env();
         let key = [0x42u8; AES_KEY_LEN];
         let iv = [0x24u8; AES_GCM_NONCE_LEN];
         let mut data = *b"AES-256-GCM test!";
@@ -719,6 +762,7 @@ mod tests {
     /// Test : tag corrompu est rejeté.
     #[test]
     fn tampered_tag_rejected() {
+        init_crypto_test_env();
         let key = [0x11u8; AES_KEY_LEN];
         let iv = [0x22u8; AES_GCM_NONCE_LEN];
         let mut data = *b"tamper-test-data!";
@@ -736,6 +780,7 @@ mod tests {
     /// Test : ciphertext corrompu est rejeté.
     #[test]
     fn tampered_ciphertext_rejected() {
+        init_crypto_test_env();
         let key = [0x33u8; AES_KEY_LEN];
         let iv = [0x44u8; AES_GCM_NONCE_LEN];
         let mut data = *b"corrupt-me-please";
@@ -753,6 +798,7 @@ mod tests {
     /// Test : AAD différent est rejeté.
     #[test]
     fn wrong_aad_rejected() {
+        init_crypto_test_env();
         let key = [0x55u8; AES_KEY_LEN];
         let iv = [0x66u8; AES_GCM_NONCE_LEN];
         let mut data = *b"aad-mismatch-test";
@@ -769,6 +815,7 @@ mod tests {
     /// Test : roundtrip avec AAD non vide.
     #[test]
     fn roundtrip_with_aad() {
+        init_crypto_test_env();
         let key = [0x77u8; AES_KEY_LEN];
         let iv = [0x88u8; AES_GCM_NONCE_LEN];
         let mut data = *b"data-with-aad-ok!";
@@ -783,6 +830,7 @@ mod tests {
     /// Test : données non alignées sur 16 octets.
     #[test]
     fn roundtrip_unaligned() {
+        init_crypto_test_env();
         let key = [0x99u8; AES_KEY_LEN];
         let iv = [0xAAu8; AES_GCM_NONCE_LEN];
         let mut data = *b"short"; // 5 octets
@@ -797,6 +845,7 @@ mod tests {
     /// Test : données vides.
     #[test]
     fn roundtrip_empty_plaintext() {
+        init_crypto_test_env();
         let key = [0xBBu8; AES_KEY_LEN];
         let iv = [0xCCu8; AES_GCM_NONCE_LEN];
         let mut data = [0u8; 0];

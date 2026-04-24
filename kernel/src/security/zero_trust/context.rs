@@ -15,9 +15,8 @@
 // RÈGLE ZT-03 : Les contexts fils héritent d'un sous-ensemble du contexte parent.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use super::labels::SecurityLabel;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TrustLevel — niveau de confiance
@@ -29,17 +28,17 @@ use super::labels::SecurityLabel;
 #[repr(u8)]
 pub enum TrustLevel {
     /// Thread complètement non fiable (sandbox strict).
-    Untrusted   = 0,
+    Untrusted = 0,
     /// Thread restreint (pledge actif, syscalls limités).
-    Restricted  = 1,
+    Restricted = 1,
     /// Thread normal (application utilisateur standard).
-    Normal      = 2,
+    Normal = 2,
     /// Thread de confiance (service système vérifié).
-    Trusted     = 3,
+    Trusted = 3,
     /// Thread noyau (kernel thread).
-    Kernel      = 4,
+    Kernel = 4,
     /// Thread système (init, driver critique).
-    System      = 5,
+    System = 5,
 }
 
 impl TrustLevel {
@@ -47,10 +46,10 @@ impl TrustLevel {
     pub fn inherit(self) -> Self {
         // Un fils ne peut pas être plus de confiance que son parent
         match self {
-            Self::System    => Self::Trusted,   // fils d'un System = max Trusted
-            Self::Kernel    => Self::Trusted,
-            Self::Trusted   => Self::Normal,
-            Self::Normal    => Self::Normal,
+            Self::System => Self::Trusted, // fils d'un System = max Trusted
+            Self::Kernel => Self::Trusted,
+            Self::Trusted => Self::Normal,
+            Self::Normal => Self::Normal,
             Self::Restricted => Self::Restricted,
             Self::Untrusted => Self::Untrusted,
         }
@@ -65,20 +64,24 @@ impl TrustLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrincipalId {
     /// UID POSIX.
-    pub uid:   u32,
+    pub uid: u32,
     /// GID POSIX.
-    pub gid:   u32,
+    pub gid: u32,
     /// PID du processus.
-    pub pid:   u32,
+    pub pid: u32,
     /// TID du thread.
-    pub tid:   u32,
+    pub tid: u32,
     /// Namespace PID (namespace isolation).
     pub ns_id: u32,
 }
 
 impl PrincipalId {
     pub const ROOT: Self = Self {
-        uid: 0, gid: 0, pid: 0, tid: 0, ns_id: 0
+        uid: 0,
+        gid: 0,
+        pid: 0,
+        tid: 0,
+        ns_id: 0,
     };
 
     pub fn is_root(&self) -> bool {
@@ -98,35 +101,35 @@ impl PrincipalId {
 #[repr(C)]
 pub struct SecurityContext {
     /// Identité du principal.
-    pub principal:    PrincipalId,
+    pub principal: PrincipalId,
     /// Niveau de confiance courant.
-    trust_level:      AtomicU32,
+    trust_level: AtomicU32,
     /// Label de sécurité MLS.
-    label:            SecurityLabel,
+    label: SecurityLabel,
     /// Flags de restrictions actives.
-    restrictions:     AtomicU64,
+    restrictions: AtomicU64,
     /// Nombre d'accès refusés depuis la création.
-    denied_count:     AtomicU64,
+    denied_count: AtomicU64,
     /// Nombre d'accès accordés.
-    allowed_count:    AtomicU64,
+    allowed_count: AtomicU64,
 }
 
 /// Flags de restrictions.
 pub mod restriction_flags {
     /// Restrict : syscalls limités (pledge actif).
-    pub const PLEDGE_ACTIVE:    u64 = 1 << 0;
+    pub const PLEDGE_ACTIVE: u64 = 1 << 0;
     /// Restrict : aucun réseau.
-    pub const NO_NETWORK:       u64 = 1 << 1;
+    pub const NO_NETWORK: u64 = 1 << 1;
     /// Restrict : aucun accès fichier hors tmpfs.
-    pub const NO_FS:            u64 = 1 << 2;
+    pub const NO_FS: u64 = 1 << 2;
     /// Restrict : aucun fork.
-    pub const NO_FORK:          u64 = 1 << 3;
+    pub const NO_FORK: u64 = 1 << 3;
     /// Restrict : aucun exec.
-    pub const NO_EXEC:          u64 = 1 << 4;
+    pub const NO_EXEC: u64 = 1 << 4;
     /// Restrict : sandbox complet (seccomp-like).
-    pub const SANDBOX_FULL:     u64 = 1 << 5;
+    pub const SANDBOX_FULL: u64 = 1 << 5;
     /// Restrict : lecture seule FS.
-    pub const FS_READONLY:      u64 = 1 << 6;
+    pub const FS_READONLY: u64 = 1 << 6;
     /// Restrict : pas de création de processus.
     pub const NO_PROCESS_CREATE: u64 = 1 << 7;
 }
@@ -140,10 +143,10 @@ impl SecurityContext {
     pub fn new_normal(principal: PrincipalId) -> Self {
         Self {
             principal,
-            trust_level:   AtomicU32::new(TrustLevel::Normal as u32),
-            label:         SecurityLabel::user_default(),
-            restrictions:  AtomicU64::new(0),
-            denied_count:  AtomicU64::new(0),
+            trust_level: AtomicU32::new(TrustLevel::Normal as u32),
+            label: SecurityLabel::user_default(),
+            restrictions: AtomicU64::new(0),
+            denied_count: AtomicU64::new(0),
             allowed_count: AtomicU64::new(0),
         }
     }
@@ -152,10 +155,10 @@ impl SecurityContext {
     pub fn new_kernel(principal: PrincipalId) -> Self {
         Self {
             principal,
-            trust_level:   AtomicU32::new(TrustLevel::Kernel as u32),
-            label:         SecurityLabel::kernel(),
-            restrictions:  AtomicU64::new(0),
-            denied_count:  AtomicU64::new(0),
+            trust_level: AtomicU32::new(TrustLevel::Kernel as u32),
+            label: SecurityLabel::kernel(),
+            restrictions: AtomicU64::new(0),
+            denied_count: AtomicU64::new(0),
             allowed_count: AtomicU64::new(0),
         }
     }
@@ -221,11 +224,11 @@ impl SecurityContext {
     pub fn derive_child(&self, child_principal: PrincipalId) -> SecurityContext {
         let child_trust = self.trust_level().inherit();
         SecurityContext {
-            principal:    child_principal,
-            trust_level:  AtomicU32::new(child_trust as u32),
-            label:        self.label.inherit(),
+            principal: child_principal,
+            trust_level: AtomicU32::new(child_trust as u32),
+            label: self.label.inherit(),
             restrictions: AtomicU64::new(self.restrictions.load(Ordering::Relaxed)),
-            denied_count:  AtomicU64::new(0),
+            denied_count: AtomicU64::new(0),
             allowed_count: AtomicU64::new(0),
         }
     }
@@ -233,8 +236,8 @@ impl SecurityContext {
     /// Snapshot de statistiques.
     pub fn stats(&self) -> ContextStats {
         ContextStats {
-            denied:   self.denied_count.load(Ordering::Relaxed),
-            allowed:  self.allowed_count.load(Ordering::Relaxed),
+            denied: self.denied_count.load(Ordering::Relaxed),
+            allowed: self.allowed_count.load(Ordering::Relaxed),
         }
     }
 }
@@ -242,6 +245,6 @@ impl SecurityContext {
 /// Snapshot de stats d'un contexte.
 #[derive(Debug, Clone, Copy)]
 pub struct ContextStats {
-    pub denied:  u64,
+    pub denied: u64,
     pub allowed: u64,
 }

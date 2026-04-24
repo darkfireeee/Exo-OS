@@ -293,10 +293,19 @@ impl CpuFeatures {
             512 // FXSAVE taille par défaut
         };
 
-        // Lecture MSR_IA32_ARCH_CAP si disponible
+        // Lecture MSR_IA32_ARCH_CAP si disponible.
+        // Sous les tests host/userspace, RDMSR provoquerait un #GP, donc on
+        // conserve une valeur neutre. Le vrai boot bare-metal garde la lecture.
         let arch_cap = if leaf7_edx & LEAF7_EDX_ARCH_CAP != 0 {
-            // SAFETY: ARCH_CAP MSR disponible si CPUID l'indique
-            unsafe { super::msr::read_msr(super::msr::MSR_IA32_ARCH_CAP) }
+            #[cfg(target_os = "none")]
+            {
+                // SAFETY: ARCH_CAP MSR disponible si CPUID l'indique sur le kernel bare-metal.
+                unsafe { super::msr::read_msr(super::msr::MSR_IA32_ARCH_CAP) }
+            }
+            #[cfg(not(target_os = "none"))]
+            {
+                0
+            }
         } else {
             0
         };

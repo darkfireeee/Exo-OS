@@ -18,7 +18,7 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::{IpcError, ProcessId};
 use crate::ipc::shared_memory::descriptor::{ShmPermissions, SHM_DESC_DIR};
-use crate::ipc::shared_memory::page::{PhysAddr, PageFlags, PAGE_SIZE};
+use crate::ipc::shared_memory::page::{PageFlags, PhysAddr, PAGE_SIZE};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ impl ShmMapping {
 // ---------------------------------------------------------------------------
 
 /// Table globale des mappings SHM actifs
-struct ShmMappingTable {
+pub(crate) struct ShmMappingTable {
     entries: [ShmMapping; MAX_SHM_MAPPINGS],
     count: usize,
 }
@@ -172,6 +172,10 @@ impl ShmMappingTable {
         } else {
             false
         }
+    }
+
+    pub(crate) fn entry(&self, idx: usize) -> Option<&ShmMapping> {
+        self.entries.get(idx)
     }
 }
 
@@ -272,9 +276,7 @@ pub fn shm_map(
                 for i in 0..n_pages {
                     if let Some(phys) = desc.page_phys(i) {
                         let virt = virt_base.0 + (i * PAGE_SIZE) as u64;
-                        let result = unsafe {
-                            map_fn(phys.0, virt, page_flags.0, pid.0)
-                        };
+                        let result = unsafe { map_fn(phys.0, virt, page_flags.0, pid.0) };
                         if result != 0 {
                             // Annuler les mappings précédents
                             if let Some(unmap_fn) = *UNMAP_PAGE_HOOK.lock() {
@@ -307,7 +309,8 @@ pub fn shm_map(
         m.desc_idx.store(desc_idx as u32, Ordering::Relaxed);
         m.process_id.store(pid.0, Ordering::Relaxed);
         m.virt_base.store(virt_base.0, Ordering::Relaxed);
-        m.permissions.store(region_perms.0 as u32, Ordering::Relaxed);
+        m.permissions
+            .store(region_perms.0 as u32, Ordering::Relaxed);
         m.mapped_pages.store(n_pages as u32, Ordering::Relaxed);
         m.active.store(1, Ordering::Release);
     }

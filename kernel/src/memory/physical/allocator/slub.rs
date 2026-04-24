@@ -12,7 +12,7 @@ use spin::Mutex;
 
 use crate::memory::core::{AllocError, AllocFlags, PAGE_SIZE};
 use crate::memory::physical::allocator::slab::{
-    SlabPageProvider, SLAB_PAGE_PROVIDER, size_class_for, N_SIZE_CLASSES, SizeClassInfo,
+    alloc_slab_backing_page, size_class_for, N_SIZE_CLASSES, SizeClassInfo,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -248,7 +248,7 @@ impl SlubCache {
     }
 
     fn create_new_slub(&self, inner: &mut SlubCacheInner) -> Result<NonNull<u8>, AllocError> {
-        let phys = SLAB_PAGE_PROVIDER.get_page()?;
+        let phys = alloc_slab_backing_page()?;
         // Adresse virtuelle = physmap directe (PHYS_MAP_BASE + phys).
         // La physmap couvre l'intégralité de la RAM physique sans mapping supplémentaire.
         let virt_base = crate::memory::core::layout::PHYS_MAP_BASE.as_u64() + phys.as_u64();
@@ -291,7 +291,8 @@ impl SlubCache {
             slub_list_push_front(header, &mut inner.partial, &mut inner.partial_count);
         }
 
-        self.alloc_partial(inner).ok_or(AllocError::OutOfMemory)
+        let ptr = self.alloc_partial(inner).ok_or(AllocError::OutOfMemory)?;
+        Ok(ptr)
     }
 }
 

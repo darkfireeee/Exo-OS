@@ -216,7 +216,7 @@ impl ProcessThread {
             }
         }
 
-        Some(Box::new(Self {
+        let thread = Box::new(Self {
             sched_tcb,
             kernel_stack: kstack,
             pid,
@@ -230,7 +230,9 @@ impl ProcessThread {
             join_result:  AtomicU64::new(0),
             sig_queue:    SigQueue::new(),
             rt_sig_queue: RTSigQueue::new(),
-        }))
+        });
+
+        Some(thread)
     }
 
     /// Crée un thread kernel dédié (pid=1, KTHREAD flag).

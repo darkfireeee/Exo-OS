@@ -17,7 +17,6 @@
 //   Si aucune règle ne matche → accès refusé.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::context::{SecurityContext, TrustLevel};
@@ -61,23 +60,23 @@ impl PolicyAction {
 #[repr(u8)]
 pub enum ResourceKind {
     /// Endpoint IPC.
-    IpcEndpoint   = 0,
+    IpcEndpoint = 0,
     /// Région mémoire.
-    MemoryRegion  = 1,
+    MemoryRegion = 1,
     /// Inode de fichier.
-    FileInode     = 2,
+    FileInode = 2,
     /// Périphérique physique.
-    Device        = 3,
+    Device = 3,
     /// Thread d'un autre processus.
-    Thread        = 4,
+    Thread = 4,
     /// Namespace.
-    Namespace     = 5,
+    Namespace = 5,
     /// Clé cryptographique.
-    CryptoKey     = 6,
+    CryptoKey = 6,
     /// Canal DMA.
-    DmaChannel    = 7,
+    DmaChannel = 7,
     /// Syscall système (pour le sandbox).
-    Syscall       = 8,
+    Syscall = 8,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -87,15 +86,15 @@ pub enum ResourceKind {
 /// Requête d'accès transmise au moteur de politique.
 pub struct AccessRequest<'a> {
     /// Contexte du demandeur.
-    pub subject:       &'a SecurityContext,
+    pub subject: &'a SecurityContext,
     /// Type de ressource accédée.
     pub resource_kind: ResourceKind,
     /// Label de sécurité de la ressource.
-    pub object_label:  SecurityLabel,
+    pub object_label: SecurityLabel,
     /// Opération demandée : vrai = écriture, faux = lecture.
-    pub is_write:      bool,
+    pub is_write: bool,
     /// Données supplémentaires (syscall no, adresse, etc.).
-    pub context_data:  u64,
+    pub context_data: u64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -111,17 +110,17 @@ pub struct AccessRequest<'a> {
 /// 4. Règle spécifique au type de ressource
 /// 5. Allow (default allow pour Kernel/System, Deny pour le reste si non matché)
 pub struct ZeroTrustPolicy {
-    evaluations:   AtomicU64,
-    denials:       AtomicU64,
-    alerts:        AtomicU64,
+    evaluations: AtomicU64,
+    denials: AtomicU64,
+    alerts: AtomicU64,
 }
 
 impl ZeroTrustPolicy {
     pub const fn new() -> Self {
         Self {
             evaluations: AtomicU64::new(0),
-            denials:     AtomicU64::new(0),
-            alerts:      AtomicU64::new(0),
+            denials: AtomicU64::new(0),
+            alerts: AtomicU64::new(0),
         }
     }
 
@@ -134,8 +133,8 @@ impl ZeroTrustPolicy {
         // ── 1. Threads non fiables : deny tout sauf lecture Public ───────────
         if trust == TrustLevel::Untrusted {
             // Untrusted peut uniquement lire des ressources Public
-            if req.is_write || req.object_label.confidentiality
-                != super::labels::ConfidentialityLevel::Public
+            if req.is_write
+                || req.object_label.confidentiality != super::labels::ConfidentialityLevel::Public
             {
                 self.denials.fetch_add(1, Ordering::Relaxed);
                 req.subject.record_deny();
@@ -242,8 +241,8 @@ impl ZeroTrustPolicy {
     pub fn stats(&self) -> PolicyStats {
         PolicyStats {
             evaluations: self.evaluations.load(Ordering::Relaxed),
-            denials:     self.denials.load(Ordering::Relaxed),
-            alerts:      self.alerts.load(Ordering::Relaxed),
+            denials: self.denials.load(Ordering::Relaxed),
+            alerts: self.alerts.load(Ordering::Relaxed),
         }
     }
 }
@@ -258,8 +257,8 @@ impl Default for ZeroTrustPolicy {
 #[derive(Debug, Clone, Copy)]
 pub struct PolicyStats {
     pub evaluations: u64,
-    pub denials:     u64,
-    pub alerts:      u64,
+    pub denials: u64,
+    pub alerts: u64,
 }
 
 // Singleton global

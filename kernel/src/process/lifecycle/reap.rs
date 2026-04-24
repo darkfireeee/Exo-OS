@@ -157,6 +157,10 @@ fn reap_entry(entry: ReaperEntry) {
 /// # Safety
 /// Appelé après `scheduler::init()` depuis le BSP.
 pub fn init_reaper() {
+    // SAFETY: trace E9 bornée pour localiser précisément l'init du reaper au boot.
+    unsafe {
+        core::arch::asm!("mov al, 0x52", "out 0xe9, al", options(nomem, nostack)); // 'R'
+    }
     create_kthread(&KthreadParams {
         name:       "reaper",
         entry:      reaper_loop,
@@ -164,6 +168,10 @@ pub fn init_reaper() {
         target_cpu: 0,
         priority:   Priority::NORMAL_DEFAULT,
     }).expect("init_reaper: impossible de démarrer le kthread reaper");
+    // SAFETY: trace E9 bornée pour confirmer la fin d'init_reaper.
+    unsafe {
+        core::arch::asm!("mov al, 0x72", "out 0xe9, al", options(nomem, nostack)); // 'r'
+    }
 }
 
 /// Nombre de processus/threads libérés depuis le boot.

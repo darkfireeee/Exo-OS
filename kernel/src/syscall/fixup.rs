@@ -33,7 +33,6 @@
 //     - recovery_fn: usize — adresse de la fonction de recovery (retourne EFAULT)
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use crate::memory::core::VirtAddr;
 
 /// Nombre maximum de CPUs supportés (doit matcher MAX_CPUS)
 const FIXUP_MAX_CPUS: usize = 256;
@@ -45,13 +44,13 @@ const FIXUP_MAX_CPUS: usize = 256;
 #[repr(C, align(64))]
 pub struct KernelCopyState {
     /// Une copie userspace est en cours sur ce CPU.
-    pub active:       AtomicBool,
-    _pad0:            [u8; 7],
+    pub active: AtomicBool,
+    _pad0: [u8; 7],
     /// RSP au moment de l'entrée dans la fonction de copie (pour unwinding).
     pub recovery_rsp: AtomicU64,
     /// RIP de reprise : l'instruction après le site de fault retournera EFAULT.
     pub recovery_rip: AtomicUsize,
-    _pad1:            [u8; 44],
+    _pad1: [u8; 40],
 }
 
 // SAFETY: tous les champs sont atomiques.
@@ -61,11 +60,11 @@ unsafe impl Sync for KernelCopyState {}
 impl KernelCopyState {
     const fn new() -> Self {
         Self {
-            active:       AtomicBool::new(false),
-            _pad0:        [0u8; 7],
+            active: AtomicBool::new(false),
+            _pad0: [0u8; 7],
             recovery_rsp: AtomicU64::new(0),
             recovery_rip: AtomicUsize::new(0),
-            _pad1:        [0u8; 44],
+            _pad1: [0u8; 40],
         }
     }
 }
@@ -100,7 +99,9 @@ static COPY_STATES: [KernelCopyState; FIXUP_MAX_CPUS] = {
 /// `recovery_rip` doit pointer vers du code kernel valide dans la même fonction.
 #[inline]
 pub unsafe fn fixup_enter(cpu_id: usize, recovery_rip: usize) {
-    if cpu_id >= FIXUP_MAX_CPUS { return; }
+    if cpu_id >= FIXUP_MAX_CPUS {
+        return;
+    }
     let state = &COPY_STATES[cpu_id];
     // Lire RSP courant pour le unwinding (non utilisé dans cette implémentation
     // simplifiée, mais disponible pour un unwinder futur)
@@ -119,7 +120,9 @@ pub unsafe fn fixup_enter(cpu_id: usize, recovery_rip: usize) {
 /// succès ou erreur.
 #[inline]
 pub fn fixup_exit(cpu_id: usize) {
-    if cpu_id >= FIXUP_MAX_CPUS { return; }
+    if cpu_id >= FIXUP_MAX_CPUS {
+        return;
+    }
     // Acquire pour que tout read/write de la copie soit visible avant la
     // désactivation.
     COPY_STATES[cpu_id].active.store(false, Ordering::Release);
@@ -137,14 +140,18 @@ pub fn fixup_exit(cpu_id: usize) {
 /// désactivées (garanties par le handler x86-64).
 #[inline]
 pub fn fixup_lookup(cpu_id: usize) -> Option<usize> {
-    if cpu_id >= FIXUP_MAX_CPUS { return None; }
+    if cpu_id >= FIXUP_MAX_CPUS {
+        return None;
+    }
     let state = &COPY_STATES[cpu_id];
     // Acquire pour synchroniser avec fixup_enter (Release sur active).
     if !state.active.load(Ordering::Acquire) {
         return None;
     }
     let rip = state.recovery_rip.load(Ordering::Relaxed);
-    if rip == 0 { return None; }
+    if rip == 0 {
+        return None;
+    }
     Some(rip)
 }
 
@@ -158,13 +165,10 @@ pub fn fixup_lookup(cpu_id: usize) -> Option<usize> {
 /// au lieu de paniquer.
 ///
 /// Remplace copy_from_user() dans validation.rs.
-pub fn copy_from_user_safe(
-    dst:    *mut u8,
-    src:    *const u8,
-    len:    usize,
-    cpu_id: usize,
-) -> bool {
-    if len == 0 { return true; }
+pub fn copy_from_user_safe(dst: *mut u8, src: *const u8, len: usize, cpu_id: usize) -> bool {
+    if len == 0 {
+        return true;
+    }
 
     // Label de recovery : si le #PF se produit pendant la boucle ci-dessous,
     // le handler patche RIP sur ce label et `faulted` vaut true au retour.
@@ -176,10 +180,12 @@ pub fn copy_from_user_safe(
 
     // Calculer l'adresse de recovery : l'instruction qui vérifie FAULTED
     // après la boucle. On utilise une étiquette Rust via un bloc.
-    let recovery_addr = fault_recovery_stub as usize;
+    let recovery_addr = fault_recovery_stub as *const () as usize;
 
     // SAFETY: recovery_addr est une fonction kernel valide.
-    unsafe { fixup_enter(cpu_id, recovery_addr); }
+    unsafe {
+        fixup_enter(cpu_id, recovery_addr);
+    }
 
     // Boucle d'accès userspace — faultable
     // SAFETY: src validé par l'appelant (validate_user_range). dst est kernel.
@@ -209,19 +215,18 @@ pub fn copy_from_user_safe(
 }
 
 /// Copie `len` octets de `src` (kernel) vers `dst` (userspace), avec fixup #PF.
-pub fn copy_to_user_safe(
-    dst:    *mut u8,
-    src:    *const u8,
-    len:    usize,
-    cpu_id: usize,
-) -> bool {
-    if len == 0 { return true; }
+pub fn copy_to_user_safe(dst: *mut u8, src: *const u8, len: usize, cpu_id: usize) -> bool {
+    if len == 0 {
+        return true;
+    }
 
     FAULTED[cpu_id.min(FIXUP_MAX_CPUS - 1)].store(false, Ordering::Relaxed);
-    let recovery_addr = fault_recovery_stub as usize;
+    let recovery_addr = fault_recovery_stub as *const () as usize;
 
     // SAFETY: recovery_addr est une fonction kernel valide.
-    unsafe { fixup_enter(cpu_id, recovery_addr); }
+    unsafe {
+        fixup_enter(cpu_id, recovery_addr);
+    }
 
     let ok = unsafe {
         let mut faulted_mid = false;
@@ -263,7 +268,9 @@ static FAULTED: [AtomicBool; FIXUP_MAX_CPUS] = {
 /// retourne false.
 #[inline]
 pub fn fixup_signal_fault(cpu_id: usize) {
-    if cpu_id >= FIXUP_MAX_CPUS { return; }
+    if cpu_id >= FIXUP_MAX_CPUS {
+        return;
+    }
     FAULTED[cpu_id].store(true, Ordering::Release);
     // Désactiver le fixup pour que le prochain accès kernel faulte normalement
     fixup_exit(cpu_id);
@@ -300,8 +307,10 @@ mod tests {
 
     #[test]
     fn fixup_enter_exit_roundtrip() {
-        let recovery = fault_recovery_stub as usize;
-        unsafe { fixup_enter(0, recovery); }
+        let recovery = fault_recovery_stub as *const () as usize;
+        unsafe {
+            fixup_enter(0, recovery);
+        }
         assert!(fixup_lookup(0).is_some());
         assert_eq!(fixup_lookup(0).unwrap(), recovery);
         fixup_exit(0);
@@ -310,8 +319,10 @@ mod tests {
 
     #[test]
     fn fixup_signal_clears_active() {
-        let recovery = fault_recovery_stub as usize;
-        unsafe { fixup_enter(1, recovery); }
+        let recovery = fault_recovery_stub as *const () as usize;
+        unsafe {
+            fixup_enter(1, recovery);
+        }
         fixup_signal_fault(1);
         assert!(fixup_lookup(1).is_none());
         assert!(FAULTED[1].load(Ordering::Relaxed));

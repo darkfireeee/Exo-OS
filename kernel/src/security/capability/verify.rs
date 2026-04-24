@@ -21,10 +21,9 @@
 // COMPLEXITÉ : O(1) — lookup haché + 3 lectures atomiques
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use super::token::{CapToken, CapObjectType, stat_verified, stat_denied};
 use super::rights::Rights;
 use super::table::CapTable;
+use super::token::{stat_denied, stat_verified, CapObjectType, CapToken};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CapError — erreurs de vérification et de révocation
@@ -56,14 +55,14 @@ pub enum CapError {
 impl core::fmt::Display for CapError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::ObjectNotFound     => write!(f, "capability: object not found"),
-            Self::Revoked            => write!(f, "capability: token revoked"),
+            Self::ObjectNotFound => write!(f, "capability: object not found"),
+            Self::Revoked => write!(f, "capability: token revoked"),
             Self::InsufficientRights => write!(f, "capability: insufficient rights"),
-            Self::InvalidToken       => write!(f, "capability: invalid token"),
-            Self::TableFull          => write!(f, "capability: table full"),
-            Self::DelegationDenied   => write!(f, "capability: delegation denied"),
-            Self::InternalError      => write!(f, "capability: internal error"),
-            Self::Denied             => write!(f, "capability: denied"),
+            Self::InvalidToken => write!(f, "capability: invalid token"),
+            Self::TableFull => write!(f, "capability: table full"),
+            Self::DelegationDenied => write!(f, "capability: delegation denied"),
+            Self::InternalError => write!(f, "capability: internal error"),
+            Self::Denied => write!(f, "capability: denied"),
         }
     }
 }
@@ -110,11 +109,7 @@ impl core::fmt::Display for CapError {
 /// directement — passer par `security::access_control::checker::check_access()`
 /// qui y ajoute le logging audit et un contexte d'erreur riche.
 #[inline]
-pub fn verify(
-    table:           &CapTable,
-    token:           CapToken,
-    required_rights: Rights,
-) -> Result<(), CapError> {
+pub fn verify(table: &CapTable, token: CapToken, required_rights: Rights) -> Result<(), CapError> {
     // 1. Le cas "token invalide" suit désormais le même chemin que les autres
     //    refus pour uniformiser le timing (CAP-05).
     let token_invalid = token.is_invalid();
@@ -125,12 +120,15 @@ pub fn verify(
     // 3. Valeurs sentinelles : mêmes comparaisons si l'entrée est absente.
     //    u32::MAX ne peut jamais être une génération valide (counter monotone).
     //    Rights::empty() ne satisfera jamais contains(required) si required != 0.
-    let stored_gen    = entry_opt.as_ref().map(|e| e.generation).unwrap_or(u32::MAX);
-    let stored_rights = entry_opt.as_ref().map(|e| e.rights).unwrap_or(Rights::empty());
-    let entry_found   = entry_opt.is_some();
+    let stored_gen = entry_opt.as_ref().map(|e| e.generation).unwrap_or(u32::MAX);
+    let stored_rights = entry_opt
+        .as_ref()
+        .map(|e| e.rights)
+        .unwrap_or(Rights::empty());
+    let entry_found = entry_opt.is_some();
 
     // 4. Les deux comparaisons sont TOUJOURS effectuées — pas d'évaluation courte.
-    let gen_ok    = stored_gen == token.generation();
+    let gen_ok = stored_gen == token.generation();
     let rights_ok = stored_rights.contains(required_rights);
     let access_ok = entry_found & gen_ok & rights_ok;
 
@@ -148,25 +146,29 @@ pub fn verify(
 /// Utilisée quand l'appelant a besoin de connaître les droits exacts.
 #[inline]
 pub fn verify_and_get_rights(
-    table:           &CapTable,
-    token:           CapToken,
+    table: &CapTable,
+    token: CapToken,
     required_rights: Rights,
 ) -> Result<Rights, CapError> {
     verify(table, token, required_rights)?;
-    let entry = table.get(token.object_id()).ok_or(CapError::ObjectNotFound)?;
+    let entry = table
+        .get(token.object_id())
+        .ok_or(CapError::ObjectNotFound)?;
     Ok(entry.rights)
 }
 
 /// Vérifie token ET type d'objet attendu en un seul appel.
 #[inline]
 pub fn verify_typed(
-    table:         &CapTable,
-    token:         CapToken,
-    required:      Rights,
+    table: &CapTable,
+    token: CapToken,
+    required: Rights,
     expected_type: CapObjectType,
 ) -> Result<(), CapError> {
     verify(table, token, required)?;
-    let entry = table.get(token.object_id()).ok_or(CapError::InternalError)?;
+    let entry = table
+        .get(token.object_id())
+        .ok_or(CapError::InternalError)?;
     if entry.type_tag != expected_type {
         stat_denied();
         return Err(CapError::InsufficientRights);

@@ -20,7 +20,6 @@
 //   No-write-up  : sujet ne peut écrire dans un objet d'intégrité supérieure
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // ConfidentialityLevel
 // ─────────────────────────────────────────────────────────────────────────────
@@ -29,11 +28,11 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum ConfidentialityLevel {
-    Public        = 0,
-    Internal      = 1,
-    Confidential  = 2,
-    Secret        = 3,
-    TopSecret     = 4,
+    Public = 0,
+    Internal = 1,
+    Confidential = 2,
+    Secret = 3,
+    TopSecret = 4,
 }
 
 impl ConfidentialityLevel {
@@ -70,10 +69,10 @@ impl ConfidentialityLevel {
 #[repr(u8)]
 pub enum IntegrityLevel {
     Untrusted = 0,
-    Low       = 1,
-    Medium    = 2,
-    High      = 3,
-    Critical  = 4,
+    Low = 1,
+    Medium = 2,
+    High = 3,
+    Critical = 4,
 }
 
 impl IntegrityLevel {
@@ -111,7 +110,7 @@ impl IntegrityLevel {
 #[repr(C)]
 pub struct SecurityLabel {
     pub confidentiality: ConfidentialityLevel,
-    pub integrity:       IntegrityLevel,
+    pub integrity: IntegrityLevel,
 }
 
 impl SecurityLabel {
@@ -119,7 +118,7 @@ impl SecurityLabel {
     pub const fn kernel() -> Self {
         Self {
             confidentiality: ConfidentialityLevel::TopSecret,
-            integrity:       IntegrityLevel::Critical,
+            integrity: IntegrityLevel::Critical,
         }
     }
 
@@ -127,7 +126,7 @@ impl SecurityLabel {
     pub const fn user_default() -> Self {
         Self {
             confidentiality: ConfidentialityLevel::Internal,
-            integrity:       IntegrityLevel::Medium,
+            integrity: IntegrityLevel::Medium,
         }
     }
 
@@ -135,7 +134,7 @@ impl SecurityLabel {
     pub const fn public() -> Self {
         Self {
             confidentiality: ConfidentialityLevel::Public,
-            integrity:       IntegrityLevel::Low,
+            integrity: IntegrityLevel::Low,
         }
     }
 
@@ -143,13 +142,16 @@ impl SecurityLabel {
     pub const fn driver() -> Self {
         Self {
             confidentiality: ConfidentialityLevel::Confidential,
-            integrity:       IntegrityLevel::High,
+            integrity: IntegrityLevel::High,
         }
     }
 
     /// Crée un label avec des niveaux spécifiés.
     pub const fn new(c: ConfidentialityLevel, i: IntegrityLevel) -> Self {
-        Self { confidentiality: c, integrity: i }
+        Self {
+            confidentiality: c,
+            integrity: i,
+        }
     }
 
     /// Vérifie si ce sujet (self) peut LIRE un objet avec le label `object`.
@@ -170,8 +172,7 @@ impl SecurityLabel {
     /// Domination : self domine object (≥ sur les deux axes).
     #[inline(always)]
     pub fn dominates(self, other: SecurityLabel) -> bool {
-        self.confidentiality >= other.confidentiality
-            && self.integrity >= other.integrity
+        self.confidentiality >= other.confidentiality && self.integrity >= other.integrity
     }
 
     /// Label hérité pour un fils — conservateur (prend le minimum).
@@ -198,7 +199,7 @@ impl SecurityLabel {
     pub fn decode(v: u16) -> Self {
         Self {
             confidentiality: ConfidentialityLevel::from_u8((v >> 8) as u8),
-            integrity:       IntegrityLevel::from_u8((v & 0xFF) as u8),
+            integrity: IntegrityLevel::from_u8((v & 0xFF) as u8),
         }
     }
 }

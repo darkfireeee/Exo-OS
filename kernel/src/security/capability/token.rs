@@ -27,7 +27,6 @@
 //                jamais recalculée après. La vérification compare.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -99,29 +98,29 @@ impl fmt::Display for ObjectId {
 #[repr(u16)]
 pub enum CapObjectType {
     /// Non initialisé — invalide.
-    Invalid      = 0,
+    Invalid = 0,
     /// Endpoint IPC (canal de communication).
-    IpcEndpoint  = 1,
+    IpcEndpoint = 1,
     /// Région mémoire virtuelle (VMA).
     MemoryRegion = 2,
     /// Inode de fichier.
-    FileInode    = 3,
+    FileInode = 3,
     /// Périphérique (driver Ring 1).
-    Device       = 4,
+    Device = 4,
     /// Thread (pour délégation de signaux, kill, etc.).
-    Thread       = 5,
+    Thread = 5,
     /// Processus entier.
-    Process      = 6,
+    Process = 6,
     /// Namespace (PID, net, mount…).
-    Namespace    = 7,
+    Namespace = 7,
     /// Backend DMA.
-    DmaChannel   = 8,
+    DmaChannel = 8,
     /// Domaine IOMMU.
-    IommuDomain  = 9,
+    IommuDomain = 9,
     /// Crypto key slot.
-    CryptoKey    = 10,
+    CryptoKey = 10,
     /// Capability elle-même (délégation de caps).
-    Capability   = 11,
+    Capability = 11,
 }
 
 impl CapObjectType {
@@ -129,18 +128,18 @@ impl CapObjectType {
     #[inline(always)]
     pub fn from_u16(v: u16) -> Self {
         match v {
-            1  => Self::IpcEndpoint,
-            2  => Self::MemoryRegion,
-            3  => Self::FileInode,
-            4  => Self::Device,
-            5  => Self::Thread,
-            6  => Self::Process,
-            7  => Self::Namespace,
-            8  => Self::DmaChannel,
-            9  => Self::IommuDomain,
+            1 => Self::IpcEndpoint,
+            2 => Self::MemoryRegion,
+            3 => Self::FileInode,
+            4 => Self::Device,
+            5 => Self::Thread,
+            6 => Self::Process,
+            7 => Self::Namespace,
+            8 => Self::DmaChannel,
+            9 => Self::IommuDomain,
             10 => Self::CryptoKey,
             11 => Self::Capability,
-            _  => Self::Invalid,
+            _ => Self::Invalid,
         }
     }
 }
@@ -163,15 +162,15 @@ impl CapObjectType {
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct CapToken {
     /// Identifiant de l'objet protégé.
-    pub(super) object_id:  ObjectId,
+    pub(super) object_id: ObjectId,
     /// Droits accordés — sous-ensemble des droits de la source de délégation.
-    pub(super) rights:     Rights,
+    pub(super) rights: Rights,
     /// Copie de la génération au moment de l'émission — utilisée pour détecter révocation.
     pub(super) generation: u32,
     /// Type sémantique — accélère la vérification sans consulter la table.
-    pub(super) type_tag:   CapObjectType,
+    pub(super) type_tag: CapObjectType,
     /// Padding explicite — garantit zéro byte indéfini (size_of == 24 par alignement u64).
-    pub(super) _pad:       u16,
+    pub(super) _pad: u16,
 }
 
 // Vérification statique de la taille — alignment ABI Rust pour #[repr(C)]:
@@ -190,21 +189,21 @@ const _ALIGN_CHECK: () = assert!(
 impl CapToken {
     /// Token invalide — ne passe jamais la vérification.
     pub const INVALID: Self = Self {
-        object_id:  ObjectId::INVALID,
-        rights:     Rights::NONE,
+        object_id: ObjectId::INVALID,
+        rights: Rights::NONE,
         generation: u32::MAX,
-        type_tag:   CapObjectType::Invalid,
-        _pad:       0,
+        type_tag: CapObjectType::Invalid,
+        _pad: 0,
     };
 
     /// Construit un token — RÉSERVÉ à `CapTable::grant()`.
     /// Appelé uniquement depuis ce module (visibility `pub(super)`).
     #[inline(always)]
     pub(crate) fn new(
-        object_id:  ObjectId,
-        rights:     Rights,
+        object_id: ObjectId,
+        rights: Rights,
         generation: u32,
-        type_tag:   CapObjectType,
+        type_tag: CapObjectType,
     ) -> Self {
         TOKENS_ISSUED.fetch_add(1, Ordering::Relaxed);
         Self {
@@ -269,16 +268,16 @@ impl CapToken {
     #[inline(always)]
     pub fn from_bytes(b: &[u8; 20]) -> Option<Self> {
         let oid = u64::from_ne_bytes(b[0..8].try_into().ok()?);
-        let r   = u32::from_ne_bytes(b[8..12].try_into().ok()?);
+        let r = u32::from_ne_bytes(b[8..12].try_into().ok()?);
         let gen = u32::from_ne_bytes(b[12..16].try_into().ok()?);
-        let tt  = u16::from_ne_bytes(b[16..18].try_into().ok()?);
+        let tt = u16::from_ne_bytes(b[16..18].try_into().ok()?);
         let obj_type = CapObjectType::from_u16(tt);
         Some(Self {
-            object_id:  ObjectId(oid),
-            rights:     Rights::from_bits_truncate(r),
+            object_id: ObjectId(oid),
+            rights: Rights::from_bits_truncate(r),
             generation: gen,
-            type_tag:   obj_type,
-            _pad:       0,
+            type_tag: obj_type,
+            _pad: 0,
         })
     }
 }
@@ -286,10 +285,10 @@ impl CapToken {
 impl fmt::Debug for CapToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CapToken")
-            .field("object_id",  &self.object_id)
-            .field("rights",     &self.rights)
+            .field("object_id", &self.object_id)
+            .field("rights", &self.rights)
             .field("generation", &self.generation)
-            .field("type_tag",   &self.type_tag)
+            .field("type_tag", &self.type_tag)
             .finish()
     }
 }
@@ -307,9 +306,9 @@ impl Default for CapToken {
 /// Snapshot de statistiques de tokens.
 #[derive(Debug, Clone, Copy)]
 pub struct TokenStats {
-    pub issued:   u64,
+    pub issued: u64,
     pub verified: u64,
-    pub denied:   u64,
+    pub denied: u64,
 }
 
 /// Incrémente le compteur de vérification — appelé depuis revocation::verify().
@@ -327,8 +326,8 @@ pub(super) fn stat_denied() {
 /// Lit un snapshot cohérent (chaque compteur lu indépendamment — acceptable pour perf monitoring).
 pub fn read_stats() -> TokenStats {
     TokenStats {
-        issued:   TOKENS_ISSUED.load(Ordering::Relaxed),
+        issued: TOKENS_ISSUED.load(Ordering::Relaxed),
         verified: TOKENS_VERIFIED.load(Ordering::Relaxed),
-        denied:   TOKENS_DENIED.load(Ordering::Relaxed),
+        denied: TOKENS_DENIED.load(Ordering::Relaxed),
     }
 }

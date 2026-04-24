@@ -30,21 +30,21 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub mod access_control;
-pub mod capability;
-pub mod zero_trust;
-pub mod crypto;
-pub mod isolation;
-pub mod integrity_check;
-pub mod exploit_mitigations;
 pub mod audit;
-pub mod exocage;
-pub mod exoveil;
-pub mod exoledger;
-pub mod exokairos;
-pub mod exoseal;
-pub mod ipc_policy;
-pub mod exonmi;
+pub mod capability;
+pub mod crypto;
 pub mod exoargos;
+pub mod exocage;
+pub mod exokairos;
+pub mod exoledger;
+pub mod exonmi;
+pub mod exoseal;
+pub mod exoveil;
+pub mod exploit_mitigations;
+pub mod integrity_check;
+pub mod ipc_policy;
+pub mod isolation;
+pub mod zero_trust;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -77,103 +77,46 @@ pub fn is_security_ready() -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use capability::{
-    CapToken,
-    ObjectId,
-    CapObjectType,
-    TokenStats,
-    token_stats,
-    Rights,
-    CapTable,
-    CapTableSnapshot,
-    CAP_TABLE_CAPACITY,
-    CapError,
-    verify,
-    verify_and_get_rights,
-    verify_typed,
-    verify_read,
-    verify_read_write,
-    verify_ipc_send,
-    verify_ipc_recv,
-    revoke,
-    revoke_token,
-    delegate,
-    delegate_all,
-    delegate_read_only,
-    can_delegate,
-    DelegationChain,
-    DelegationEntry,
-    CapNamespace,
-    NamespaceId,
-    alloc_namespace_id,
-    cross_namespace_verify,
-    init_capability_subsystem,
-    is_initialized,
-    KernelCapError,
-    create as cap_create,
-    revoke_handle as cap_revoke_handle,
+    alloc_namespace_id, can_delegate, create as cap_create, cross_namespace_verify, delegate,
+    delegate_all, delegate_read_only, init_capability_subsystem, is_initialized, revoke,
+    revoke_handle as cap_revoke_handle, revoke_token, token_stats, verify, verify_and_get_rights,
+    verify_ipc_recv, verify_ipc_send, verify_read, verify_read_write, verify_typed, CapError,
+    CapNamespace, CapObjectType, CapTable, CapTableSnapshot, CapToken, DelegationChain,
+    DelegationEntry, KernelCapError, NamespaceId, ObjectId, Rights, TokenStats, CAP_TABLE_CAPACITY,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports — access_control (v6)
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use access_control::{
-    check_access,
-    ObjectKind,
-    AccessError,
-};
+pub use access_control::{check_access, AccessError, ObjectKind};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports — zero_trust
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use zero_trust::{
-    SecurityLabel,
-    SecurityContext,
-    verify_access,
-};
+pub use zero_trust::{verify_access, SecurityContext, SecurityLabel};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports — crypto
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use crypto::{
-    crypto_init,
-    rng_fill,
-    rng_u64,
-    rng_u32,
-    rng_is_ready,
-    blake3_hash,
-    blake3_mac,
-};
+pub use crypto::{blake3_hash, blake3_mac, crypto_init, rng_fill, rng_is_ready, rng_u32, rng_u64};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports — isolation
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use isolation::{
-    SecurityDomain,
-    DomainContext,
-    SandboxPolicy,
-    NamespaceSet,
-    PledgeSet,
-};
+pub use isolation::{DomainContext, NamespaceSet, PledgeSet, SandboxPolicy, SecurityDomain};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports — integrity_check
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use integrity_check::{
-    integrity_init,
-    verify_module_signature,
-    check_kernel_integrity,
-    assert_kernel_integrity,
-    check_chain_of_trust,
-    is_chain_verified,
-    ModuleHeader,
-    CodeSignError,
+    assert_kernel_integrity, check_chain_of_trust, check_kernel_integrity, integrity_init,
+    is_chain_verified, verify_module_signature, CodeSignError, IntegrityError, ModuleHeader,
     SecureBootError,
-    IntegrityError,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -181,26 +124,11 @@ pub use integrity_check::{
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use exploit_mitigations::{
-    mitigations_init,
-    kaslr_offset,
-    phys_to_virt,
+    cet_is_supported, cet_status, cfg_assert_indirect_call, cfg_lock, cfg_register_range,
+    cfg_register_target, cfg_validate_indirect_call, check_canary, install_canary,
+    is_kernel_address, is_safe_kernel_ptr, kaslr_is_ready, kaslr_offset, mitigations_init,
+    phys_to_virt, remove_canary, safe_stack_check, safe_stack_new_thread, safe_stack_remove_thread,
     virt_to_phys,
-    kaslr_is_ready,
-    is_kernel_address,
-    is_safe_kernel_ptr,
-    install_canary,
-    check_canary,
-    remove_canary,
-    cfg_register_target,
-    cfg_register_range,
-    cfg_lock,
-    cfg_validate_indirect_call,
-    cfg_assert_indirect_call,
-    cet_is_supported,
-    cet_status,
-    safe_stack_new_thread,
-    safe_stack_check,
-    safe_stack_remove_thread,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -208,18 +136,9 @@ pub use exploit_mitigations::{
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use audit::{
-    audit_init,
-    log_event,
-    log_security_violation,
-    flush_to_userspace,
-    audit_syscall_entry,
-    audit_syscall_exit,
-    audit_capability_deny,
-    audit_file_deny,
-    AuditCategory,
-    AuditOutcome,
-    AuditVerdict,
-    AuditRecord,
+    audit_capability_deny, audit_file_deny, audit_init, audit_syscall_entry, audit_syscall_exit,
+    flush_to_userspace, log_event, log_security_violation, AuditCategory, AuditOutcome,
+    AuditRecord, AuditVerdict,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,84 +146,34 @@ pub use audit::{
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use exocage::{
-    cp_handler,
-    enable_cet_for_thread,
-    disable_cet_for_thread,
-    exocage_global_enable,
-    is_cet_global_enabled,
-    is_ibt_global_enabled,
-    validate_thread_cet,
-    exocage_stats,
-    cpuid_cet_available,
-    cp_violation_count,
-    cet_thread_count,
-    CET_FLAG_ENABLED,
-    CET_FLAG_IBT,
-    CET_FLAG_TOKEN_VALID,
-    ExoCageError,
-    ExoCageStats,
+    cet_thread_count, cp_handler, cp_violation_count, cpuid_cet_available, disable_cet_for_thread,
+    enable_cet_for_thread, exocage_global_enable, exocage_stats, is_cet_global_enabled,
+    is_ibt_global_enabled, validate_thread_cet, ExoCageError, ExoCageStats, CET_FLAG_ENABLED,
+    CET_FLAG_IBT, CET_FLAG_TOKEN_VALID,
 };
 
 pub use exoveil::{
-    PksDomain,
-    PksPermission,
-    revoke_domain,
-    restore_domain,
-    restore_domain_with_permission,
-    exoveil_init,
-    pks_restore_for_normal_ops,
-    exoveil_revoke_all_on_handoff,
-    pks_available,
-    exoveil_initialized,
-    exoveil_stats,
-    current_pkrs,
-    is_domain_revoked,
-    revoke_count,
-    save_pkrs_to_tcb,
-    restore_pkrs_from_tcb,
-    ExoVeilStats,
+    current_pkrs, exoveil_init, exoveil_initialized, exoveil_revoke_all_on_handoff, exoveil_stats,
+    is_domain_revoked, pks_available, pks_restore_for_normal_ops, restore_domain,
+    restore_domain_with_permission, restore_pkrs_from_tcb, revoke_count, revoke_domain,
+    save_pkrs_to_tcb, ExoVeilStats, PksDomain, PksPermission,
 };
 
 pub use exoledger::{
-    exo_ledger_append_p0,
-    exo_ledger_append,
-    exo_ledger_init,
-    verify_p0_integrity,
-    verify_ring_integrity,
-    ActionTag,
-    LedgerEntry,
-    AuditHeader,
-    LedgerIntegrityError,
-    ExoLedgerStats,
-    exoledger_stats,
-    P0_ZONE_ENTRIES,
-    SSR_LOG_AUDIT_OFFSET,
-    SSR_LOG_AUDIT_SIZE,
-    p0_used,
-    total_written,
-    current_seq,
-    read_p0_entry,
-    read_ring_entry,
+    current_seq, exo_ledger_append, exo_ledger_append_p0, exo_ledger_init, exoledger_stats,
+    p0_used, read_p0_entry, read_ring_entry, total_written, verify_p0_integrity,
+    verify_ring_integrity, ActionTag, AuditHeader, ExoLedgerStats, LedgerEntry,
+    LedgerIntegrityError, P0_ZONE_ENTRIES, SSR_LOG_AUDIT_OFFSET, SSR_LOG_AUDIT_SIZE,
 };
 
 pub use exokairos::{
-    TemporalCap,
-    CapError as TemporalCapError,
-    init_kernel_secret,
-    ttl_for_right,
-    exokairos_stats,
-    MAX_DELEGATION_DEPTH,
-    ExoKairosStats,
+    exokairos_stats, init_kernel_secret, ttl_for_right, CapError as TemporalCapError,
+    ExoKairosStats, TemporalCap, MAX_DELEGATION_DEPTH,
 };
 
 pub use exoseal::{
-    configure_nic_iommu_policy,
-    exoseal_boot_phase0,
-    exoseal_boot_complete,
-    verify_p0_fixes,
-    nic_iommu_locked,
-    nic_domain_id,
-    nic_dma_window,
+    configure_nic_iommu_policy, exoseal_boot_complete, exoseal_boot_phase0, nic_dma_window,
+    nic_domain_id, nic_iommu_locked, verify_p0_fixes,
 };
 
 pub use ipc_policy::{check_direct_ipc, IpcPolicyResult};
@@ -314,15 +183,8 @@ pub use ipc_policy::{check_direct_ipc, IpcPolicyResult};
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use exonmi::{
-    exonmi_init,
-    exonmi_stats,
-    ping,
-    tick,
-    arm_watchdog,
-    current_strikes,
-    is_armed,
-    configured_timeout_ms,
-    ExoNmiStats,
+    arm_watchdog, configured_timeout_ms, current_strikes, exonmi_init, exonmi_stats, is_armed,
+    ping, tick, ExoNmiStats,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -330,17 +192,8 @@ pub use exonmi::{
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use exoargos::{
-    exoargos_init,
-    init_pmu,
-    exoargos_stats,
-    pmc_snapshot,
-    compute_discordance,
-    check_anomaly,
-    update_baseline,
-    get_baseline,
-    baseline_established,
-    PmcSnapshot,
-    ExoArgosStats,
+    baseline_established, check_anomaly, compute_discordance, exoargos_init, exoargos_stats,
+    get_baseline, init_pmu, pmc_snapshot, update_baseline, ExoArgosStats, PmcSnapshot,
     DECEPTION_THRESHOLD,
 };
 
@@ -366,57 +219,94 @@ pub use exoargos::{
 /// - `kaslr_entropy` : entropie fournie par le bootloader (RDRAND + TSC)
 /// - `phys_base`     : adresse physique réelle de chargement du kernel
 pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
+    #[inline(always)]
+    fn probe(byte: u8) {
+        // SAFETY: port debug QEMU 0xE9, écriture bornée d'un octet pour tracer
+        // le progrès du boot sécurité sans dépendre d'un driver déjà initialisé.
+        unsafe {
+            core::arch::asm!("out 0xE9, al", in("al") byte, options(nomem, nostack));
+        }
+    }
+
     // ── 0. ExoSeal phase 0 — CET + PKS default-deny + watchdog boot ─────────
     // SAFETY: security_init() est appelé au boot, avant toute concurrence
     // significative des sous-systèmes de sécurité.
-    unsafe { exoseal::exoseal_boot_phase0(); }
+    probe(b'j');
+    unsafe {
+        exoseal::exoseal_boot_phase0();
+    }
+    probe(b'k');
 
     // ── 1. Intégrité ──────────────────────────────────────────────────────────
     integrity_init();
+    probe(b'l');
 
     // ── 2. Capabilities ───────────────────────────────────────────────────────
     capability::init_capability_subsystem();
+    probe(b'm');
 
     // ── 3. Zero Trust ─────────────────────────────────────────────────────────
     // (pas de fonction d'init dédiée — la politique est lazy-initialized)
+    probe(b'n');
 
     // ── 4. Crypto ─────────────────────────────────────────────────────────────
     crypto_init();
+    probe(b'o');
 
     // ── 5. Isolation ──────────────────────────────────────────────────────────
     // (domaines/namespaces/sandbox/pledge s'initialisent via leurs statics)
+    probe(b'p');
 
     // ── 6. Atténuations d'exploitation ────────────────────────────────────────
     mitigations_init(kaslr_entropy, phys_base);
+    probe(b'q');
 
     // ── 7. Audit ──────────────────────────────────────────────────────────────
     audit_init();
+    probe(b'r');
 
     // ── 8. Access Control (v6) ────────────────────────────────────────────────
     access_control::init();
+    probe(b's');
 
     // ── 9. ExoLedger — Audit chaîné Blake3 + zone P0 (ExoShield v1.0) ────────
     //    Initialise le journal d'audit chaîné avec la zone P0 immuable.
     //    Doit être avant SECURITY_READY pour capturer les événements de boot.
     exoledger::exo_ledger_init();
+    probe(b't');
 
     // ── 10. ExoKairos — Kernel secret (ExoShield v1.0) ──────────────────────
     //    Initialise le KERNEL_SECRET pour les capabilities temporelles.
     //    Le secret est dérivé du CSPRNG (déjà initialisé à l'étape 4).
     {
         let mut secret = [0u8; 32];
-        let _ = rng_fill(&mut secret);
+        if rng_fill(&mut secret).is_err() {
+            let mut fallback_material = [0u8; 32];
+            let tsc = crate::arch::x86_64::cpu::tsc::read_tsc();
+            fallback_material[0..8].copy_from_slice(&kaslr_entropy.to_le_bytes());
+            fallback_material[8..16].copy_from_slice(&phys_base.to_le_bytes());
+            fallback_material[16..24].copy_from_slice(&tsc.to_le_bytes());
+            fallback_material[24..32].copy_from_slice(
+                &(kaslr_entropy.rotate_left(17) ^ phys_base.rotate_left(9) ^ tsc).to_le_bytes(),
+            );
+            secret = blake3_hash(&fallback_material);
+        }
         exokairos::init_kernel_secret(&secret);
     }
+    probe(b'u');
 
     // ── 11. ExoArgos — PMC Monitoring (ExoShield v1.0 Module 8) ──────────────
     //    Initialise les compteurs PMU pour le monitoring de comportement.
     //    SAFETY: Ring 0, MSR write — appelé une seule fois au boot.
-    unsafe { exoargos::exoargos_init(); }
+    unsafe {
+        exoargos::exoargos_init();
+    }
+    probe(b'v');
 
     // ── 12. ExoNmi — Progressive NMI Watchdog (ExoShield v1.0 Module 9) ───────
     //    Initialise le watchdog (LAPIC virt base, timer masqué).
     exonmi::exonmi_init();
+    probe(b'w');
 
     // ── 12b. ExoCage per-thread — thread bootstrap courant ──────────────────
     let current_tcb = crate::scheduler::core::switch::current_thread_raw();
@@ -425,10 +315,14 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
         // avant l'ouverture normale du système.
         let _ = unsafe { exocage::enable_cet_for_thread(&mut *current_tcb) };
     }
+    probe(b'x');
 
     // ── 13. ExoSeal complete — PKS ops normales + SECURITY_READY + watchdog ──
     // SAFETY: Ring 0, séquence finale de boot des modules de sécurité.
-    unsafe { exoseal::exoseal_boot_complete(); }
+    unsafe {
+        exoseal::exoseal_boot_complete();
+    }
+    probe(b'y');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

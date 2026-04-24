@@ -31,8 +31,11 @@ core::arch::global_asm!(
     ".align 8",
     ".long 0xE85250D6",          // Magic Multiboot2
     ".long 0",                   // Architecture i386 (GRUB entre en 32-bit prot. mode)
-    ".long 24",                  // Header length : 16 (fixe) + 8 (end tag)
-    ".long 0x17ADAF12",          // Checksum : -(0xE85250D6 + 0 + 24) mod 2^32
+    ".long 48",                  // Header length : 16 + fb tag(20) + pad(4) + end tag(8)
+    ".long 0x17ADAEFA",          // Checksum : -(0xE85250D6 + 0 + 48) mod 2^32
+    ".short 5", ".short 0", ".long 20", // Framebuffer request tag
+    ".long 1024", ".long 768", ".long 32",
+    ".long 0",                   // padding 8-byte alignment avant end tag
     ".short 0", ".short 0", ".long 8",  // End tag
 );
 
@@ -307,17 +310,37 @@ pub unsafe extern "C" fn kernel_main(
     // Debug : marqueur de début kernel_main sur port 0xE9 ('K' = 0x4B)
     core::arch::asm!("mov al, 0x4B", "out 0xe9, al", options(nostack, nomem));
 
-    // Affichage VGA texte — visible dans la fenêtre QEMU dès le début du boot
-    kernel::arch::x86_64::vga_early::boot_screen();
+    // Console de boot de secours. En mode graphique GRUB, ce fallback peut ne pas
+    // être visible ; le framebuffer prendra le relais dès le retour d'arch_boot_init().
+    kernel::arch::x86_64::boot_display::boot_screen();
 
     // ── Phase 1 : Architecture (GDT, IDT, TSS, per-CPU, TSC, FPU, ACPI, APIC,
     //              SYSCALL, Spectre, SMP boot des APs)
     // SAFETY: arch_boot_init doit être le PREMIER code Rust exécuté en Ring 0.
     // Préconditions satisfaites : mode long, interruptions off, pile valide.
-    let _boot_info = kernel::arch_boot_init(mb2_magic, mb2_info, rsdp_phys);
+    let boot_info = kernel::arch_boot_init(mb2_magic, mb2_info, rsdp_phys);
 
     // Debug : arch_boot_init terminé ('A' = 0x41)
     core::arch::asm!("mov al, 0x41", "out 0xe9, al", options(nostack, nomem));
+
+    if boot_info.framebuffer_phys_addr != 0 && boot_info.framebuffer_size_bytes != 0 {
+        core::arch::asm!("mov al, 0x50", "out 0xe9, al", options(nostack, nomem)); // 'P'
+    } else {
+        core::arch::asm!("mov al, 0x70", "out 0xe9, al", options(nostack, nomem)); // 'p'
+    }
+
+    let framebuffer_attached = kernel::arch::x86_64::boot_display::attach_framebuffer(&boot_info);
+    if framebuffer_attached {
+        core::arch::asm!("mov al, 0x56", "out 0xe9, al", options(nostack, nomem)); // 'V'
+    } else {
+        core::arch::asm!("mov al, 0x76", "out 0xe9, al", options(nostack, nomem)); // 'v'
+    }
+    kernel::arch::x86_64::boot_display::stage_ok("ARCH");
+    if kernel::arch::x86_64::framebuffer_early::is_active() {
+        core::arch::asm!("mov al, 0x57", "out 0xe9, al", options(nostack, nomem)); // 'W'
+    } else {
+        core::arch::asm!("mov al, 0x77", "out 0xe9, al", options(nostack, nomem)); // 'w'
+    }
 
     // ── Phases 2–7 : Init des couches (memory → scheduler → process → ipc → fs)
     // SAFETY: kernel_init suit l'ordre strict des couches défini en docs/refonte.
@@ -328,7 +351,7 @@ pub unsafe extern "C" fn kernel_main(
     core::arch::asm!("mov al, 0x49", "out 0xe9, al", options(nostack, nomem));
 
     // Mise à jour écran VGA : Phase 1 complète
-    kernel::arch::x86_64::vga_early::boot_complete();
+    kernel::arch::x86_64::boot_display::boot_complete();
 
     // Debug : boot complet → '\n', 'O', 'K', '\n'
     core::arch::asm!(

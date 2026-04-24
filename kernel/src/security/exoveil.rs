@@ -34,7 +34,7 @@
 //   ExoShield_v1_Production.md — MODULE 4 : ExoVeil
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::arch::x86_64::cpu::msr;
 
@@ -80,13 +80,13 @@ const PKRS_ALL_REVOKED: u64 = 0x5555_5555_5555_5555; // chaque paire = 0b11
 #[repr(u32)]
 pub enum PksDomain {
     /// Domaine 0 : Code kernel standard — TOUJOURS accessible.
-    Default     = 0,
+    Default = 0,
     /// Domaine 1 : Tables CapToken — révoqué si compromission capabilities.
-    Caps        = 1,
+    Caps = 1,
     /// Domaine 2 : Clés crypto, credentials — révoqué au boot par défaut.
     Credentials = 2,
     /// Domaine 4 : TCB cache lines CL3-CL4 — révoqué si compromission critique.
-    TcbHot      = 4,
+    TcbHot = 4,
 }
 
 impl PksDomain {
@@ -119,13 +119,13 @@ impl PksDomain {
 #[repr(u8)]
 pub enum PksPermission {
     /// Lecture et écriture autorisées (valeur PKRS = 0b00).
-    ReadWrite  = 0b00,
+    ReadWrite = 0b00,
     /// Lecture seule (valeur PKRS = 0b01).
-    ReadOnly   = 0b01,
+    ReadOnly = 0b01,
     /// Écriture seule (valeur PKRS = 0b10).
-    WriteOnly  = 0b10,
+    WriteOnly = 0b10,
     /// Accès totalement interdit / révoqué (valeur PKRS = 0b11).
-    Disabled   = 0b11,
+    Disabled = 0b11,
 }
 
 impl PksPermission {

@@ -16,19 +16,20 @@
 //! - ARITH-02: arithmétique saturating/checked.
 //! - RECUR-01: aucune récursivité.
 
-use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Imports — délégation à security::crypto::rng
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::security::crypto::{
-    rng_fill,   // rng_fill(&mut buf)  → Result<(), RngError>
-    rng_u64,    // rng_u64()           → u64
-    rng_u32,    // rng_u32()           → u32
+    derive_subkey,
+    rng_fill, // rng_fill(&mut buf)  → Result<(), RngError>
     rng_init,
     rng_is_ready,
+    rng_u32, // rng_u32()           → u32
+    rng_u64, // rng_u64()           → u64
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -54,7 +55,9 @@ pub struct EntropyPool {
 
 impl EntropyPool {
     /// Construit un pool (stateless — l'état est dans security::crypto::rng).
-    pub const fn new_const() -> Self { Self { _private: () } }
+    pub const fn new_const() -> Self {
+        Self { _private: () }
+    }
 
     // ── Génération de valeurs ─────────────────────────────────────────────
 
@@ -117,17 +120,28 @@ impl EntropyPool {
 
     /// Génère un nonce XChaCha20 de 24 octets lié à un ObjectId (LAC-04 / S-06).
     ///
-    /// Les 8 premiers octets proviennent du compteur monotone CSPRNG,
-    /// les 8 suivants de l'ObjectId (domaine de séparation),
-    /// les 8 derniers d'aléa pur.
+    /// Construction canonique :
+    /// - ikm  = counter || object_id || entropy
+    /// - salt = random_32()
+    /// - okm  = HKDF(ikm, salt, "ExoFS-Nonce-ObjectId-v1")
+    ///
+    /// Fallback best-effort si le KDF échoue : composition directe
+    /// `counter || object_id || entropy`, qui conserve l'unicité.
     pub fn nonce_for_object_id(&self, object_id: u64) -> [u8; 24] {
-        let mut nonce = [0u8; 24];
         ensure_rng_ready();
-        nonce[0..8].copy_from_slice(&self.random_u64().to_le_bytes());
-        // 8..16 : object_id comme domaine de séparation
-        nonce[8..16].copy_from_slice(&object_id.to_le_bytes());
-        // 16..24 : aléa pur
-        nonce[16..24].copy_from_slice(&self.random_u64().to_le_bytes());
+        let counter = self.random_u64();
+        let entropy = self.random_u64();
+        let mut nonce = [0u8; 24];
+        let mut ikm = [0u8; 24];
+        ikm[0..8].copy_from_slice(&counter.to_le_bytes());
+        ikm[8..16].copy_from_slice(&object_id.to_le_bytes());
+        ikm[16..24].copy_from_slice(&entropy.to_le_bytes());
+
+        let salt = self.random_32();
+        match derive_subkey(&ikm, Some(&salt), b"ExoFS-Nonce-ObjectId-v1") {
+            Ok(derived) => nonce.copy_from_slice(&derived.as_bytes()[..24]),
+            Err(_) => nonce.copy_from_slice(&ikm),
+        }
         nonce
     }
 
@@ -150,11 +164,17 @@ impl EntropyPool {
                 options(nostack, nomem),
             );
         }
-        if ok != 0 { Some(v) } else { None }
+        if ok != 0 {
+            Some(v)
+        } else {
+            None
+        }
     }
 
     #[cfg(not(target_arch = "x86_64"))]
-    pub fn read_rdrand() -> Option<u64> { None }
+    pub fn read_rdrand() -> Option<u64> {
+        None
+    }
 }
 
 #[inline]
@@ -234,8 +254,14 @@ pub fn generate_unique_id() -> u64 {
 mod tests {
     use super::*;
 
+    fn init_crypto_test_env() {
+        crate::arch::x86_64::cpu::features::init_cpu_features();
+        crate::security::crypto::rng_init();
+    }
+
     #[test]
     fn test_random_u64_not_always_zero() {
+        init_crypto_test_env();
         // Plusieurs appels consécutifs ne doivent pas tous retourner 0.
         let v1 = ENTROPY_POOL.random_u64();
         let v2 = ENTROPY_POOL.random_u64();
@@ -246,32 +272,38 @@ mod tests {
 
     #[test]
     fn test_random_bytes_len() {
+        init_crypto_test_env();
         let b = ENTROPY_POOL.random_bytes(16).unwrap();
         assert_eq!(b.len(), 16);
     }
 
     #[test]
     fn test_random_32_size() {
+        init_crypto_test_env();
         let b = ENTROPY_POOL.random_32();
         assert_eq!(b.len(), 32);
     }
 
     #[test]
     fn test_nonce_xchacha20_size() {
+        init_crypto_test_env();
         let n = ENTROPY_POOL.nonce_xchacha20();
         assert_eq!(n.len(), 24);
     }
 
     #[test]
-    fn test_nonce_for_object_id_embeds_id() {
-        let n = ENTROPY_POOL.nonce_for_object_id(0xDEAD_BEEF_CAFE_BABE);
-        // Les octets [8..16] contiennent l'object_id
-        let id_from_nonce = u64::from_le_bytes(n[8..16].try_into().unwrap());
-        assert_eq!(id_from_nonce, 0xDEAD_BEEF_CAFE_BABE);
+    fn test_nonce_for_object_id_is_unique() {
+        init_crypto_test_env();
+        let n1 = ENTROPY_POOL.nonce_for_object_id(0xDEAD_BEEF_CAFE_BABE);
+        let n2 = ENTROPY_POOL.nonce_for_object_id(0xDEAD_BEEF_CAFE_BABE);
+        assert_eq!(n1.len(), 24);
+        assert_eq!(n2.len(), 24);
+        assert_ne!(n1, n2);
     }
 
     #[test]
     fn test_generate_salt_not_zero() {
+        init_crypto_test_env();
         let s = generate_salt().unwrap();
         // Un sel tout-zéro = CSPRNG non-initialisé (bug grave)
         // En host test, security::crypto::rng retourne au moins TSC

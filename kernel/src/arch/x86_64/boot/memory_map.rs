@@ -24,6 +24,7 @@ use crate::arch::x86_64::boot::multiboot2::{MmapEntry, Multiboot2Info, MMAP_AVAI
 use crate::arch::x86_64::boot::uefi::UefiMemoryMap;
 use crate::memory::core::{PhysAddr, Frame, PAGE_SIZE};
 use crate::memory::physical::allocator::{
+    alloc_page, free_page,
     init_phase1_bitmap, init_phase2_free_region,
     init_phase2b_buddy_zone, init_phase2b_buddy_free_region,
     init_phase3_slab_slub, init_phase4_numa,
@@ -49,29 +50,39 @@ static mut BUDDY_DMA32_BITMAP: [u64; 16384] = [0u64; 16384];
 // FOURNISSEUR DE PAGES PHYSIQUES POUR LE SLAB (bootstrap)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Implémentation de SlabPageProvider utilisant le BitmapAllocator de boot.
+/// Implémentation de SlabPageProvider utilisant le buddy dès qu'il est prêt,
+/// avec fallback bootstrap bitmap uniquement si le buddy n'est pas initialisé.
 ///
-/// Utilisé pendant la phase de boot avant qu'un allocateur physique plus
-/// sophistiqué (buddy) soit opérationnel. Délègue vers BOOTSTRAP_BITMAP.
-struct BitmapSlabProvider;
+/// Cela évite que SLUB et vmalloc allouent en parallèle dans deux pools
+/// physiques indépendants une fois le boot avancé.
+struct KernelSlabProvider;
 
-// SAFETY: BitmapSlabProvider est un ZST ; BOOTSTRAP_BITMAP est thread-safe.
-unsafe impl Sync for BitmapSlabProvider {}
+// SAFETY: KernelSlabProvider est un ZST ; les backends physiques appelés sont
+// thread-safe chacun selon leurs invariants internes.
+unsafe impl Sync for KernelSlabProvider {}
 
-impl SlabPageProvider for BitmapSlabProvider {
+impl SlabPageProvider for KernelSlabProvider {
     fn get_page(&self) -> Result<PhysAddr, AllocError> {
-        let frame = BOOTSTRAP_BITMAP.alloc_frame(crate::memory::core::AllocFlags::NONE)?;
-        Ok(frame.start_address())
+        match alloc_page(crate::memory::core::AllocFlags::NONE) {
+            Ok(frame) => Ok(frame.start_address()),
+            Err(AllocError::NotInitialized) => {
+                let frame = BOOTSTRAP_BITMAP.alloc_frame(crate::memory::core::AllocFlags::NONE)?;
+                Ok(frame.start_address())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn put_page(&self, phys: PhysAddr) {
         let frame = Frame::containing(phys);
-        BOOTSTRAP_BITMAP.free_frame(frame);
+        if free_page(frame).is_err() {
+            BOOTSTRAP_BITMAP.free_frame(frame);
+        }
     }
 }
 
 /// Instance statique du provider (durée de vie 'static requise par slab).
-static BITMAP_SLAB_PROVIDER: BitmapSlabProvider = BitmapSlabProvider;
+static KERNEL_SLAB_PROVIDER: KernelSlabProvider = KernelSlabProvider;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LIMITES PHYSIQUES DU SYSTÈME
@@ -267,11 +278,12 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
     }
 
     // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ─────────
-    // SAFETY: BOOTSTRAP_BITMAP initialisé (phases 1+2 ci-dessus).
-    //         BITMAP_SLAB_PROVIDER est 'static et Sync.
+    // SAFETY: le fournisseur est 'static et Sync.
+    //         Il utilise le buddy dès qu'il est prêt, et ne retombe
+    //         sur le bitmap bootstrap qu'avant l'initialisation du buddy.
     //         Doit être appelé AVANT init_phase3_slab_slub().
     register_slab_page_provider(
-        &BITMAP_SLAB_PROVIDER as *const dyn SlabPageProvider
+        &KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider
     );
     // ── Phase 3 : Slab / SLUB ─────────────────────────────────────────────────
     init_phase3_slab_slub();
@@ -362,7 +374,7 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
     }
     // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ─────────
     register_slab_page_provider(
-        &BITMAP_SLAB_PROVIDER as *const dyn SlabPageProvider
+        &KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider
     );
     // ── Phase 3 & 4 ──────────────────────────────────────────────────────────
     init_phase3_slab_slub();
@@ -617,10 +629,11 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
     }
 
     // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ───────
-    // SAFETY: BOOTSTRAP_BITMAP initialisé (phases 1+2 ci-dessus).
-    //         BITMAP_SLAB_PROVIDER est 'static et Sync.
+    // SAFETY: le fournisseur est 'static et Sync.
+    //         Il utilise le buddy dès qu'il est prêt, et ne retombe
+    //         sur le bitmap bootstrap qu'avant l'initialisation du buddy.
     register_slab_page_provider(
-        &BITMAP_SLAB_PROVIDER as *const dyn SlabPageProvider
+        &KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider
     );
 
     // ── Phase 3 : Slab / SLUB ─────────────────────────────────────────────────

@@ -22,10 +22,15 @@
 //! Tout `unsafe {}` est précédé d'un commentaire `// SAFETY:`.
 
 
+extern crate alloc;
+
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::syscall::numbers::*;
 use crate::syscall::validation::{
     UserBuf,
+    copy_from_user,
+    copy_to_user,
     read_user_path, read_user_typed,
     write_user_typed,
     validate_fd, validate_flags, validate_signal, IO_BUF_MAX,
@@ -51,6 +56,7 @@ use crate::memory::dma::core::types::{
     IommuDomainId,
     IovaAddr,
 };
+use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::fs::exofs::syscall::{
     sys_exofs_path_resolve,
     sys_exofs_object_open,
@@ -175,7 +181,7 @@ pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64)
         return E2BIG;
     }
     // Valider le buffer de destination
-    let buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
+    let _validated_buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
         Ok(b) => b, Err(e) => return e.to_errno()
     };
     // CORRECTION P0-04 : câbler vers fs_bridge
@@ -192,7 +198,7 @@ pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64
     if len > IO_BUF_MAX {
         return E2BIG;
     }
-    let buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
+    let _validated_buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
         Ok(b) => b, Err(e) => return e.to_errno()
     };
     // CORRECTION P0-04 : câbler vers fs_bridge
@@ -235,8 +241,9 @@ pub fn sys_lseek(fd: u64, offset: u64, whence: u64, _a4: u64, _a5: u64, _a6: u64
     stat_inc(SYS_LSEEK);
     let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
     if whence > 2 { return EINVAL; }
-    let _ = (fd, offset, whence);
-    ENOSYS
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_lseek(fd as u32, offset as i64, whence as u32, pid))
 }
 
 /// `openat(dirfd, path, flags, mode)`.
@@ -249,16 +256,20 @@ pub fn sys_openat(dirfd: u64, path_ptr: u64, flags: u64, mode: u64, _a5: u64, _a
     let flags = match validate_flags(flags, allowed_flags) {
         Ok(f) => f, Err(e) => return e.to_errno()
     };
-    let _ = (dirfd, path, flags, mode);
-    ENOSYS
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(
+        fs_bridge::fs_openat(dirfd as i32, path.as_bytes(), flags as u32, mode as u32, pid)
+    )
 }
 
 /// `dup(oldfd)` → nouveau fd ou errno.
 pub fn sys_dup(oldfd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_DUP);
     let fd = match validate_fd(oldfd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    let _ = fd;
-    ENOSYS
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_dup(fd as u32, pid))
 }
 
 /// `dup2(oldfd, newfd)`.
@@ -266,16 +277,18 @@ pub fn sys_dup2(oldfd: u64, newfd: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) 
     stat_inc(SYS_DUP2);
     let old = match validate_fd(oldfd) { Ok(f) => f, Err(e) => return e.to_errno() };
     let new = match validate_fd(newfd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    let _ = (old, new);
-    ENOSYS
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_dup2(old as u32, new as u32, pid))
 }
 
 /// `fcntl(fd, cmd, arg)`.
 pub fn sys_fcntl(fd: u64, cmd: u64, arg: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_FCNTL);
     let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    let _ = (fd, cmd, arg);
-    ENOSYS
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_fcntl(fd as u32, cmd as u32, arg, pid))
 }
 
 /// `stat(path, stat_buf)`.
@@ -285,8 +298,9 @@ pub fn sys_stat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6:
         Ok(p) => p, Err(e) => return e.to_errno()
     };
     if stat_ptr == 0 { return EFAULT; }
-    let _ = (path, stat_ptr);
-    ENOSYS
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_stat(path.as_bytes(), stat_ptr, pid))
 }
 
 /// `fstat(fd, stat_buf)`.
@@ -294,8 +308,9 @@ pub fn sys_fstat(fd: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
     stat_inc(SYS_FSTAT);
     let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
     if stat_ptr == 0 { return EFAULT; }
-    let _ = (fd, stat_ptr);
-    ENOSYS
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_fstat(fd as u32, stat_ptr, pid))
 }
 
 /// `mkdir(path, mode)`.
@@ -304,8 +319,9 @@ pub fn sys_mkdir(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     let path = match read_user_path(path_ptr) {
         Ok(p) => p, Err(e) => return e.to_errno()
     };
-    let _ = (path, mode);
-    ENOSYS
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_mkdir(path.as_bytes(), mode as u32, pid))
 }
 
 /// `rmdir(path)`.
@@ -314,8 +330,9 @@ pub fn sys_rmdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
     let path = match read_user_path(path_ptr) {
         Ok(p) => p, Err(e) => return e.to_errno()
     };
-    let _ = path;
-    ENOSYS
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_rmdir(path.as_bytes(), pid))
 }
 
 /// `unlink(path)`.
@@ -324,8 +341,47 @@ pub fn sys_unlink(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     let path = match read_user_path(path_ptr) {
         Ok(p) => p, Err(e) => return e.to_errno()
     };
-    let _ = path;
-    ENOSYS
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_unlink(path.as_bytes(), pid))
+}
+
+/// `getdents64(fd, dirp, count)`.
+pub fn sys_getdents64(fd: u64, dirp: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_GETDENTS64);
+    let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_getdents64(fd as u32, dirp, count as usize, pid))
+}
+
+/// `readlink(path, buf, bufsize)`.
+pub fn sys_readlink(path_ptr: u64, buf_ptr: u64, bufsize: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_READLINK);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p, Err(e) => return e.to_errno()
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_readlink(path.as_bytes(), buf_ptr, bufsize as usize, pid))
+}
+
+/// `readlinkat(dirfd, path, buf, bufsize)`.
+pub fn sys_readlinkat(
+    dirfd: u64,
+    path_ptr: u64,
+    buf_ptr: u64,
+    bufsize: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_READLINKAT);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p, Err(e) => return e.to_errno()
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_readlinkat(dirfd as i32, path.as_bytes(), buf_ptr, bufsize as usize, pid))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -519,8 +575,7 @@ pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: 
 /// do_waitpid(caller_pid, wait_pid, WaitOptions, &tcb) câblé lors de l'intégration.
 pub fn sys_wait4(pid: u64, wstatus_ptr: u64, options: u64, rusage_ptr: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_WAIT4);
-    let _ = (pid, wstatus_ptr, options, rusage_ptr);
-    ENOSYS
+    crate::syscall::handlers::process::sys_wait4(pid, wstatus_ptr, options, rusage_ptr, 0, 0)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -550,36 +605,25 @@ pub fn sys_kill(pid: u64, sig: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i
 /// `tgkill(tgid, tid, sig)` — câblé via send_signal_to_tcb lors de l'intégration.
 pub fn sys_tgkill(tgid: u64, tid: u64, sig: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_TGKILL);
-    let _ = (tgid, tid, sig);
-    ENOSYS
+    crate::syscall::handlers::signal::sys_tgkill(tgid, tid, sig, 0, 0, 0)
 }
 
 /// `rt_sigaction(sig, act_ptr, oldact_ptr, sigsetsize)`.
 pub fn sys_rt_sigaction(sig: u64, act_ptr: u64, oldact_ptr: u64, size: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_RT_SIGACTION);
-    let sig = match validate_signal(sig) { Ok(s) => s, Err(e) => return e.to_errno() };
-    if size != 8 { return EINVAL; } // sigset_t = 8 bytes sur x86_64
-    // setup_signal_frame/restore_signal_frame dans handler.rs, pas de sigaction direct.
-    let _ = (sig, act_ptr, oldact_ptr, size);
-    ENOSYS
+    crate::syscall::handlers::signal::sys_rt_sigaction(sig, act_ptr, oldact_ptr, size, 0, 0)
 }
 
 /// `rt_sigprocmask(how, set, oldset, sigsetsize)`.
 pub fn sys_rt_sigprocmask(how: u64, set_ptr: u64, oldset_ptr: u64, size: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_RT_SIGPROCMASK);
-    if size != 8 { return EINVAL; }
-    if how > 2 { return EINVAL; } // SIG_BLOCK=0, SIG_UNBLOCK=1, SIG_SETMASK=2
-    // sigprocmask(&tcb, how, Option<SigMask>) requiert le TCB courant — câblé lors de l'intégration.
-    let _ = (how, set_ptr, oldset_ptr, size);
-    ENOSYS
+    crate::syscall::handlers::signal::sys_rt_sigprocmask(how, set_ptr, oldset_ptr, size, 0, 0)
 }
 
 /// `sigaltstack(ss_ptr, old_ss_ptr)` — configure le stack alternatif pour les signaux.
 pub fn sys_sigaltstack(ss_ptr: u64, old_ss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_SIGALTSTACK);
-    // sigaltstack câblé lors de l'intégration process/signal/handler.
-    let _ = (ss_ptr, old_ss_ptr);
-    ENOSYS
+    crate::syscall::handlers::signal::sys_sigaltstack(ss_ptr, old_ss_ptr, 0, 0, 0, 0)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -629,62 +673,43 @@ pub fn sys_futex(uaddr: u64, op: u64, val: u64, timeout: u64, uaddr2: u64, val3:
 pub fn sys_exo_ipc_send(endpoint: u64, msg_ptr: u64, msg_len: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_IPC_SEND);
     let len = msg_len as usize;
-    // IpcFastMsg.data = [u8; 64] — limite réelle du fast path.
-    // FIX P2-06 : retourner E2BIG dès len > 64, pas EINVAL.
-    // La vérification à 65536 était lettre morte (EINVAL se déclenchait avant).
-    const IPC_FAST_DATA_MAX: usize = 64;
-    if len > IPC_FAST_DATA_MAX {
+    if len > crate::ipc::core::constants::MAX_MSG_SIZE {
         return E2BIG;
     }
     if let Err(errno) = enforce_direct_ipc_policy(endpoint) {
         return errno;
     }
-    let buf = match UserBuf::validate(msg_ptr, len, IPC_FAST_DATA_MAX) {
+    let endpoint_id = match EndpointId::new(endpoint) {
+        Some(id) => id,
+        None => return EINVAL,
+    };
+    let _validated_buf = match UserBuf::validate(msg_ptr, len, crate::ipc::core::constants::MAX_MSG_SIZE) {
         Ok(b) => b, Err(e) => return e.to_errno()
     };
-    // CORRECTION P0-05 : câbler vers ipc::ring::spsc
-    let mut fast_msg = crate::ipc::core::IpcFastMsg::zeroed();
-    fast_msg.flags = flags as u32;
-    fast_msg.len = len as u16;
-    // SAFETY: buf_ptr accessible (validé par UserBuf::validate)
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            msg_ptr as *const u8,
-            fast_msg.data.as_mut_ptr(),
-            len.min(fast_msg.data.len()),
-        );
+    let mut payload = Vec::new();
+    payload.resize(len, 0);
+    if len != 0 {
+        if copy_from_user(payload.as_mut_ptr(), msg_ptr as *const u8, len).is_err() {
+            return EFAULT;
+        }
     }
-    let rc = unsafe {
-        crate::ipc::ring::spsc::spsc_fast_write(&fast_msg as *const _, endpoint)
-    };
-    if rc == 0 { 0 } else { EAGAIN }
+    let raw_flags = if flags & IPC_RECV_TIMEOUT_FLAG != 0 { 0x0001 } else { 0 };
+    match crate::ipc::channel::raw::send_raw(endpoint_id, &payload, raw_flags) {
+        Ok(_) => 0,
+        Err(err) => ipc_error_to_errno(err),
+    }
 }
 
 /// `exo_ipc_recv(endpoint, buf_ptr, buf_len, flags)`.
 pub fn sys_exo_ipc_recv(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_IPC_RECV);
-    let len = buf_len as usize;
-    if len > 65536 { return E2BIG; }
-    if buf_ptr == 0 { return EFAULT; }
-    // CORRECTION P0-05 : câbler vers ipc::ring::spsc
-    let mut fast_msg = crate::ipc::core::IpcFastMsg::zeroed();
-    let rc = unsafe {
-        crate::ipc::ring::spsc::spsc_fast_read(&mut fast_msg as *mut _, endpoint)
-    };
-    if rc != 0 {
-        // Aucun message disponible
-        return EAGAIN;
-    }
-    let copy_len = (fast_msg.len as usize).min(len).min(fast_msg.data.len());
-    // SAFETY: buf_ptr accessible (validé implicitement par règles buffer)
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            fast_msg.data.as_ptr(),
-            buf_ptr as *mut u8,
-            copy_len,
-        );
-    }
-    copy_len as i64
+    recv_ipc_message(endpoint, buf_ptr, buf_len, flags, false)
+}
+
+/// `exo_ipc_recv_nb(endpoint, buf_ptr, buf_len, flags)`.
+pub fn sys_exo_ipc_recv_nb(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EXO_IPC_RECV_NB);
+    recv_ipc_message(endpoint, buf_ptr, buf_len, flags, true)
 }
 
 /// `exo_ipc_call(endpoint, msg_ptr, msg_len, resp_ptr, resp_len, flags)`.
@@ -692,18 +717,113 @@ pub fn sys_exo_ipc_call(endpoint: u64, msg_ptr: u64, msg_len: u64, resp_ptr: u64
     stat_inc(SYS_EXO_IPC_CALL);
     let send_len = msg_len as usize;
     let recv_len = resp_len as usize;
-    if send_len > 65536 || recv_len > 65536 { return E2BIG; }
+    if send_len > crate::ipc::rpc::MAX_CALL_PAYLOAD || recv_len > crate::ipc::rpc::MAX_CALL_PAYLOAD {
+        return E2BIG;
+    }
+    if flags != 0 {
+        return EINVAL;
+    }
+    if send_len != 0 && msg_ptr == 0 {
+        return EFAULT;
+    }
+    if recv_len != 0 && resp_ptr == 0 {
+        return EFAULT;
+    }
     if let Err(errno) = enforce_direct_ipc_policy(endpoint) {
         return errno;
     }
-    // ipc::rpc::call_raw câblé lors de l'intégration ipc/rpc.
-    let _ = (endpoint, msg_ptr, send_len, resp_ptr, recv_len, flags);
-    ENOSYS
+
+    let server_ep = match EndpointId::new(endpoint) {
+        Some(ep) => ep,
+        None => return EINVAL,
+    };
+
+    let mut request = Vec::new();
+    request.resize(send_len, 0);
+    if send_len != 0 {
+        if copy_from_user(request.as_mut_ptr(), msg_ptr as *const u8, send_len).is_err() {
+            return EFAULT;
+        }
+    }
+
+    let mut response = Vec::new();
+    response.resize(recv_len, 0);
+
+    match crate::ipc::rpc::call_raw(server_ep, &request, &mut response) {
+        Ok(reply_len) => {
+            if reply_len != 0 && copy_to_user(resp_ptr as *mut u8, response.as_ptr(), reply_len).is_err() {
+                return EFAULT;
+            }
+            reply_len as i64
+        }
+        Err(err) => ipc_error_to_errno(err),
+    }
+}
+
+/// `exo_ipc_create(name_ptr, name_len, endpoint)` — ouvre la mailbox raw du serveur.
+pub fn sys_exo_ipc_create(name_ptr: u64, name_len: u64, endpoint: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EXO_IPC_CREATE);
+    let len = name_len as usize;
+    if len == 0 || len > 128 {
+        return EINVAL;
+    }
+    let endpoint_pid = exo_ipc_endpoint_pid(endpoint);
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if endpoint_pid == 0 {
+        return EINVAL;
+    }
+    if caller_pid == 0 || endpoint_pid != caller_pid {
+        return EACCES;
+    }
+    let ep = match EndpointId::new(endpoint) {
+        Some(id) => id,
+        None => return EINVAL,
+    };
+
+    let _validated = match UserBuf::validate(name_ptr, len, 128) {
+        Ok(buf) => buf,
+        Err(err) => return err.to_errno(),
+    };
+    let mut name = Vec::new();
+    name.resize(len, 0);
+    if copy_from_user(name.as_mut_ptr(), name_ptr as *const u8, len).is_err() {
+        return EFAULT;
+    }
+
+    if crate::ipc::channel::raw::mailbox_open(ep) {
+        0
+    } else {
+        ENOMEM
+    }
+}
+
+/// `exo_ipc_destroy(endpoint)` — ferme la mailbox raw du serveur.
+pub fn sys_exo_ipc_destroy(endpoint: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EXO_IPC_DESTROY);
+    let endpoint_pid = exo_ipc_endpoint_pid(endpoint);
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if endpoint_pid == 0 {
+        return EINVAL;
+    }
+    if caller_pid == 0 || endpoint_pid != caller_pid {
+        return EACCES;
+    }
+    let ep = match EndpointId::new(endpoint) {
+        Some(id) => id,
+        None => return EINVAL,
+    };
+    crate::ipc::channel::raw::mailbox_close(ep);
+    0
 }
 
 #[inline(always)]
 fn exo_ipc_endpoint_pid(endpoint: u64) -> u32 {
-    (endpoint >> 32) as u32
+    let packed_pid = (endpoint >> 32) as u32;
+    if packed_pid != 0 {
+        packed_pid
+    } else {
+        endpoint as u32
+    }
 }
 
 #[inline(always)]
@@ -714,6 +834,95 @@ fn current_pid_u32() -> u32 {
     }
     if tcb_ptr == 0 { return 0; }
     unsafe { (*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock)).pid.0 }
+}
+
+const IPC_RECV_TIMEOUT_FLAG: u64 = 0x0001;
+
+fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, nowait: bool) -> i64 {
+    let len = buf_len as usize;
+    if len > 65_536 {
+        return E2BIG;
+    }
+    if buf_ptr == 0 && len != 0 {
+        return EFAULT;
+    }
+    let endpoint_id = match EndpointId::new(endpoint) {
+        Some(id) => id,
+        None => return EINVAL,
+    };
+
+    let recv_cap = len.min(crate::ipc::core::constants::MAX_MSG_SIZE);
+    let mut payload = [0u8; crate::ipc::core::constants::MAX_MSG_SIZE];
+    let timeout_requested = !nowait && (flags & IPC_RECV_TIMEOUT_FLAG != 0);
+    let timeout_ms = flags & !IPC_RECV_TIMEOUT_FLAG;
+
+    let result = if nowait {
+        crate::ipc::channel::raw::recv_raw(endpoint_id, &mut payload[..recv_cap], 0x0001)
+    } else if timeout_requested {
+        let deadline = crate::scheduler::timer::clock::monotonic_ns()
+            .saturating_add(timeout_ms.saturating_mul(1_000_000));
+        loop {
+            match crate::ipc::channel::raw::recv_raw(endpoint_id, &mut payload[..recv_cap], 0x0001) {
+                Ok(n) => break Ok(n),
+                Err(IpcError::WouldBlock) | Err(IpcError::QueueEmpty) => {
+                    if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
+                        break Err(IpcError::Timeout);
+                    }
+                    core::hint::spin_loop();
+                }
+                Err(err) => break Err(err),
+            }
+        }
+    } else {
+        crate::ipc::channel::raw::recv_raw(endpoint_id, &mut payload[..recv_cap], 0)
+    };
+
+    match result {
+        Ok(n) => {
+            if n != 0 && copy_to_user(buf_ptr as *mut u8, payload.as_ptr(), n).is_err() {
+                return EFAULT;
+            }
+            n as i64
+        }
+        Err(IpcError::Timeout) => crate::syscall::errno::ETIMEDOUT,
+        Err(err) => ipc_error_to_errno(err),
+    }
+}
+
+fn ipc_error_to_errno(err: IpcError) -> i64 {
+    match err {
+        IpcError::WouldBlock
+        | IpcError::Retry
+        | IpcError::Full
+        | IpcError::QueueFull
+        | IpcError::QueueEmpty => EAGAIN,
+        IpcError::EndpointNotFound
+        | IpcError::NotFound => ENOENT,
+        IpcError::PermissionDenied => EACCES,
+        IpcError::MessageTooLarge => E2BIG,
+        IpcError::Timeout => EAGAIN,
+        IpcError::ResourceExhausted
+        | IpcError::ShmPoolFull
+        | IpcError::OutOfResources => ENOMEM,
+        IpcError::ConnRefused => ENOENT,
+        IpcError::AlreadyConnected => EBUSY,
+        IpcError::InvalidParam
+        | IpcError::InvalidHandle
+        | IpcError::Invalid
+        | IpcError::NullEndpoint
+        | IpcError::InvalidEndpoint
+        | IpcError::InvalidArgument => EINVAL,
+        IpcError::Interrupted => EINTR,
+        IpcError::ChannelClosed
+        | IpcError::Closed => EBUSY,
+        IpcError::HandshakeFailed
+        | IpcError::OutOfOrder
+        | IpcError::ProtocolError
+        | IpcError::MappingFailed
+        | IpcError::InternalError
+        | IpcError::Internal
+        | IpcError::Loop => EINVAL,
+    }
 }
 
 fn enforce_direct_ipc_policy(endpoint: u64) -> Result<(), i64> {
@@ -1394,6 +1603,9 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_RMDIR     => sys_rmdir,
         SYS_UNLINK    => sys_unlink,
         SYS_OPENAT    => sys_openat,
+        SYS_GETDENTS64 => sys_getdents64,
+        SYS_READLINK  => sys_readlink,
+        SYS_READLINKAT => sys_readlinkat,
         // ── Mémoire ────────────────────────────────────────────────────────
         SYS_MMAP      => sys_mmap,
         SYS_MUNMAP    => sys_munmap,
@@ -1419,7 +1631,10 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         // ── IPC Exo-OS ─────────────────────────────────────────────────────
         SYS_EXO_IPC_SEND => sys_exo_ipc_send,
         SYS_EXO_IPC_RECV => sys_exo_ipc_recv,
+        SYS_EXO_IPC_RECV_NB => sys_exo_ipc_recv_nb,
         SYS_EXO_IPC_CALL => sys_exo_ipc_call,
+        SYS_EXO_IPC_CREATE => sys_exo_ipc_create,
+        SYS_EXO_IPC_DESTROY => sys_exo_ipc_destroy,
         SYS_EXO_CAP_CREATE => sys_exo_cap_create,
         SYS_EXO_CAP_REVOKE => sys_exo_cap_revoke,
         SYS_EXO_LOG        => sys_exo_log,

@@ -21,11 +21,10 @@
 //   de regrantiquer à son tour. Sans GRANT, la chaîne s'arrête.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use super::token::{CapToken, ObjectId};
 use super::rights::Rights;
 use super::table::CapTable;
-use super::verify::{CapError, verify};
+use super::token::{CapToken, ObjectId};
+use super::verify::{verify, CapError};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fonctions de délégation
@@ -44,9 +43,9 @@ use super::verify::{CapError, verify};
 /// # RÈGLE CAP-03 (proptest + INVARIANTS.md — LAC-02)
 /// delegated.is_subset_of(source.rights) — vérifiée ici OBLIGATOIREMENT.
 pub fn delegate(
-    source_table:    &CapTable,
-    source_token:    CapToken,
-    target_table:    &CapTable,
+    source_table: &CapTable,
+    source_token: CapToken,
+    target_table: &CapTable,
     delegated_rights: Rights,
 ) -> Result<CapToken, CapError> {
     // 1. Vérifier que le délégant a bien le droit DELEGATE
@@ -75,9 +74,9 @@ pub fn delegate(
 /// Délègue TOUS les droits du token source vers une table cible (sauf REVOKE).
 /// Raccourci pour le cas courant où l'on clone une capability.
 pub fn delegate_all(
-    source_table:  &CapTable,
-    source_token:  CapToken,
-    target_table:  &CapTable,
+    source_table: &CapTable,
+    source_token: CapToken,
+    target_table: &CapTable,
 ) -> Result<CapToken, CapError> {
     // Délègue tous les droits sauf REVOKE — principle of least privilege.
     let delegated = source_token.rights() - Rights::REVOKE;
@@ -86,9 +85,9 @@ pub fn delegate_all(
 
 /// Délègue un token en lecture seule — retire tous les droits d'écriture/contrôle.
 pub fn delegate_read_only(
-    source_table:  &CapTable,
-    source_token:  CapToken,
-    target_table:  &CapTable,
+    source_table: &CapTable,
+    source_token: CapToken,
+    target_table: &CapTable,
 ) -> Result<CapToken, CapError> {
     let read_only = Rights::READ & source_token.rights();
     if read_only.is_empty() {
@@ -100,8 +99,8 @@ pub fn delegate_read_only(
 /// Vérifie si une délégation est possible (sans modifier la table cible).
 /// Utile pour pre-validation avant une opération complexe.
 pub fn can_delegate(
-    source_table:    &CapTable,
-    source_token:    CapToken,
+    source_table: &CapTable,
+    source_token: CapToken,
     delegated_rights: Rights,
 ) -> bool {
     // Vérification rapide sans modifier de table
@@ -126,18 +125,18 @@ pub fn can_delegate(
 #[derive(Debug, Clone, Copy)]
 pub struct DelegationEntry {
     /// ObjectId de l'objet partagé.
-    pub object_id:   ObjectId,
+    pub object_id: ObjectId,
     /// Droits accordés à cette étape.
-    pub rights:      Rights,
+    pub rights: Rights,
     /// Profondeur dans la chaîne (0 = propriétaire original).
-    pub depth:       u8,
+    pub depth: u8,
 }
 
 /// Chaîne de délégation — trace pour le journal d'audit.
 /// Capacité maximale fixe (pas d'allocation heap sur le chemin critique).
 pub struct DelegationChain {
     entries: [Option<DelegationEntry>; 8],
-    len:     usize,
+    len: usize,
 }
 
 impl DelegationChain {
@@ -146,7 +145,7 @@ impl DelegationChain {
     pub fn new() -> Self {
         Self {
             entries: [None; 8],
-            len:     0,
+            len: 0,
         }
     }
 

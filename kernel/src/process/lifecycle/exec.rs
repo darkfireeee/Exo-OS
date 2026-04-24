@@ -18,16 +18,15 @@
 //   8. Retourner vers userspace.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::Ordering;
-use spin::Once;
-use crate::process::core::tcb::{ProcessThread, ThreadAddress};
-use crate::process::core::pcb::{ProcessControlBlock, ProcessState, process_flags};
-use crate::process::signal::mask::reset_signals_on_exec;
-use crate::process::signal::mask::block_all_except_kill;
 use crate::memory::virt::UserAddressSpace;
 use crate::memory::virt::VmaFlags;
 use crate::memory::VirtAddr;
+use crate::process::core::pcb::{process_flags, ProcessControlBlock, ProcessState};
+use crate::process::core::tcb::{ProcessThread, ThreadAddress};
+use crate::process::signal::mask::block_all_except_kill;
+use crate::process::signal::mask::reset_signals_on_exec;
+use core::sync::atomic::Ordering;
+use spin::Once;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trait ElfLoader — RÈGLE PROC-01 : abstraction de la couche fs/
@@ -37,21 +36,21 @@ use crate::memory::VirtAddr;
 #[derive(Debug, Clone)]
 pub struct ElfLoadResult {
     /// Adresse d'entrée (entry point du binaire).
-    pub entry_point:       u64,
+    pub entry_point: u64,
     /// Pointeur de pile initial (RSP au démarrage).
     pub initial_stack_top: u64,
     /// Base de la TLS statique chargée (segment .tdata/.tbss).
-    pub tls_base:          u64,
+    pub tls_base: u64,
     /// Taille de la TLS statique.
-    pub tls_size:          usize,
+    pub tls_size: usize,
     /// Adresse de début du heap brk (juste après le segment .bss).
-    pub brk_start:         u64,
+    pub brk_start: u64,
     /// Adresse physique (CR3) du nouvel espace d'adressage créé.
-    pub cr3:               u64,
+    pub cr3: u64,
     /// Pointeur opaque vers le UserAddressSpace créé par fs/.
-    pub addr_space_ptr:    usize,
+    pub addr_space_ptr: usize,
     /// Adresse virtuelle du SignalTcb mappé (0 si absent) — pour PROC-VMA/V-17.
-    pub signal_tcb_vaddr:  u64,
+    pub signal_tcb_vaddr: u64,
 }
 
 /// Erreurs renvoyées par ElfLoader.
@@ -104,9 +103,9 @@ pub trait ElfLoader: Send + Sync {
     /// `ElfLoadResult` décrivant l'espace d'adressage peuplé.
     fn load_elf(
         &self,
-        path:   &str,
-        argv:   &[&str],
-        envp:   &[&str],
+        path: &str,
+        argv: &[&str],
+        envp: &[&str],
         cr3_in: u64,
     ) -> Result<ElfLoadResult, ElfLoadError>;
 }
@@ -140,10 +139,10 @@ pub fn register_elf_loader(loader: &'static dyn ElfLoader) {
 /// L'espace d'adressage sera reconstruit — aucun accès userspace après l'appel.
 pub fn do_execve(
     thread: &mut ProcessThread,
-    pcb:    &ProcessControlBlock,
-    path:   &str,
-    argv:   &[&str],
-    envp:   &[&str],
+    pcb: &ProcessControlBlock,
+    path: &str,
+    argv: &[&str],
+    envp: &[&str],
 ) -> Result<(), ExecError> {
     // Vérifier que le processus n'est pas en train de quitter.
     if pcb.is_exiting() {
@@ -206,25 +205,37 @@ pub fn do_execve(
     // Mettre à jour les adresses du thread.
     // CORRECTION P2-03 : calculer et propager stack_base et stack_size au lieu de 0
     const DEFAULT_STACK_PAGES: u64 = 8;
-    const PAGE_SIZE_U64:       u64 = crate::memory::core::PAGE_SIZE as u64;
-    const DEFAULT_STACK_SIZE:  u64 = DEFAULT_STACK_PAGES * PAGE_SIZE_U64;
-    
-    let stack_top  = elf_result.initial_stack_top;
+    const PAGE_SIZE_U64: u64 = crate::memory::core::PAGE_SIZE as u64;
+    const DEFAULT_STACK_SIZE: u64 = DEFAULT_STACK_PAGES * PAGE_SIZE_U64;
+
+    let stack_top = elf_result.initial_stack_top;
     let stack_base = (stack_top.saturating_sub(DEFAULT_STACK_SIZE)) & !(PAGE_SIZE_U64 - 1);
     let stack_size = stack_top.saturating_sub(stack_base);
-    
+
     thread.addresses = ThreadAddress {
-        stack_base,                           // CORRECTION P2-03
-        stack_size,                           // CORRECTION P2-03
-        entry_point:      elf_result.entry_point,
-        initial_rsp:      elf_result.initial_stack_top,
-        tls_base:         elf_result.tls_base,
-        pthread_ptr:      0,
+        stack_base, // CORRECTION P2-03
+        stack_size, // CORRECTION P2-03
+        entry_point: elf_result.entry_point,
+        initial_rsp: elf_result.initial_stack_top,
+        tls_base: elf_result.tls_base,
+        pthread_ptr: 0,
         sigaltstack_base: 0,
         sigaltstack_size: 0,
     };
-    thread.tls_gs_base.store(elf_result.tls_base, Ordering::Release);
+    thread
+        .tls_gs_base
+        .store(elf_result.tls_base, Ordering::Release);
     thread.tls_size = elf_result.tls_size;
+
+    // P1-05 / PROC-01 : execve() ne remplace pas la pile kernel du thread courant,
+    // mais on republie explicitement ce kstack dans les slots arch locaux pour
+    // garder l'invariant TSS.RSP0 / GS:[0x00] visible et auto-documenté.
+    #[cfg(target_os = "none")]
+    unsafe {
+        let cpu_id = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
+        crate::arch::x86_64::smp::percpu::set_kernel_rsp(thread.sched_tcb.kstack_ptr);
+        crate::arch::x86_64::tss::update_rsp0(cpu_id, thread.sched_tcb.kstack_ptr);
+    }
 
     // BUG-04 / PROC-01 fix: écrire IA32_FS_BASE MSR immédiatement.
     // do_execve() s'exécute en contexte kernel sur le CPU courant du thread ;
@@ -235,6 +246,7 @@ pub fn do_execve(
         // SAFETY: WRMSR sur MSR_FS_BASE = 0xC000_0100 est toujours défini sur
         // x86_64 (AMD64 v0), et le MSR est writable depuis Ring 0. Le contexte
         // est celui du thread courant sur ce CPU — effet local, aucune contention.
+        #[cfg(target_os = "none")]
         unsafe {
             crate::arch::x86_64::cpu::msr::write_msr(
                 crate::arch::x86_64::cpu::msr::MSR_FS_BASE,
@@ -245,13 +257,17 @@ pub fn do_execve(
 
     // Mettre à jour le PCB avec le nouvel espace d'adressage.
     pcb.cr3.store(elf_result.cr3, Ordering::Release);
-    pcb.address_space.store(elf_result.addr_space_ptr, Ordering::Release);
+    pcb.address_space
+        .store(elf_result.addr_space_ptr, Ordering::Release);
     pcb.brk_start.store(elf_result.brk_start, Ordering::Release);
-    pcb.brk_current.store(elf_result.brk_start, Ordering::Release);
+    pcb.brk_current
+        .store(elf_result.brk_start, Ordering::Release);
 
     // Marquer EXEC_DONE et retirer FORKED.
-    pcb.flags.fetch_or(process_flags::EXEC_DONE, Ordering::Release);
-    pcb.flags.fetch_and(!process_flags::FORKED, Ordering::Release);
+    pcb.flags
+        .fetch_or(process_flags::EXEC_DONE, Ordering::Release);
+    pcb.flags
+        .fetch_and(!process_flags::FORKED, Ordering::Release);
 
     // Transition vers Running.
     pcb.set_state(ProcessState::Running);

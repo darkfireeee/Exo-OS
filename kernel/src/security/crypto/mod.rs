@@ -21,62 +21,45 @@
 //   • CRYPTO-05 : constant-time pour toutes les comparaisons de tags/clés.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub mod blake3;
-pub mod xchacha20_poly1305;
-pub mod rng;
-pub mod kdf;
-pub mod x25519;
-pub mod ed25519;
 pub mod aes_gcm;
+pub mod blake3;
+pub mod ed25519;
+pub mod kdf;
+pub mod rng;
+pub mod x25519;
+pub mod xchacha20_poly1305;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports principaux
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// BLAKE3
-pub use blake3::{
-    Blake3Hasher,
-    blake3_hash,
-    blake3_mac,
-    blake3_derive_key,
-    constant_time_eq,
-};
+pub use blake3::{blake3_derive_key, blake3_hash, blake3_mac, constant_time_eq, Blake3Hasher};
 
 /// XChaCha20-Poly1305
 pub use xchacha20_poly1305::{
-    xchacha20_poly1305_seal,
-    xchacha20_poly1305_open,
-    TAG_LEN          as XCHACHA20_TAG_SIZE,
-    XCHACHA20_NONCE_LEN as XCHACHA20_NONCE_SIZE,
-    KEY_LEN          as XCHACHA20_KEY_SIZE,
+    xchacha20_poly1305_open, xchacha20_poly1305_seal, KEY_LEN as XCHACHA20_KEY_SIZE,
+    TAG_LEN as XCHACHA20_TAG_SIZE, XCHACHA20_NONCE_LEN as XCHACHA20_NONCE_SIZE,
 };
 
 /// RNG
 pub use rng::{
-    rng_init,
-    rng_fill,
-    rng_u64,
-    rng_u32,
-    rng_key32,
-    rng_nonce24,
-    rng_is_ready,
-    rng_stats,
-    RngError,
-    RngStats,
+    rng_fill, rng_init, rng_is_ready, rng_key32, rng_nonce24, rng_stats, rng_u32, rng_u64,
+    RngError, RngStats,
 };
 
 /// KDF
 pub use kdf::{
-    hkdf_extract,
+    blake3_kdf,
+    derive_enc_mac_keys,
+    derive_fs_block_key,
+    derive_ipc_channel_key,
+    derive_key_encryption_key,
+    derive_subkey,
+    derive_tcb_attestation_key,
     hkdf_expand_32,
     hkdf_expand_64,
-    derive_subkey,
-    derive_enc_mac_keys,
-    derive_ipc_channel_key,
-    derive_tcb_attestation_key,
-    derive_key_encryption_key,
-    derive_fs_block_key,
-    blake3_kdf,
+    hkdf_extract,
     DerivedKey32,
     DerivedKey64,
     KdfError,
@@ -84,30 +67,16 @@ pub use kdf::{
 };
 
 /// X25519
-pub use x25519::{
-    x25519_keypair_from_secret,
-    x25519_diffie_hellman,
-    X25519Error,
-    X25519KeyPair,
-};
+pub use x25519::{x25519_diffie_hellman, x25519_keypair_from_secret, X25519Error, X25519KeyPair};
 
 /// Ed25519
 pub use ed25519::{
-    ed25519_keypair_from_seed,
-    ed25519_sign,
-    ed25519_verify,
-    Ed25519Error,
-    Ed25519KeyPair,
+    ed25519_keypair_from_seed, ed25519_sign, ed25519_verify, Ed25519Error, Ed25519KeyPair,
 };
 
 /// AES-256-GCM
 pub use aes_gcm::{
-    aes_gcm_seal,
-    aes_gcm_open,
-    AesGcmError,
-    AES_KEY_LEN,
-    AES_GCM_NONCE_LEN,
-    AES_GCM_TAG_LEN,
+    aes_gcm_open, aes_gcm_seal, AesGcmError, AES_GCM_NONCE_LEN, AES_GCM_TAG_LEN, AES_KEY_LEN,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

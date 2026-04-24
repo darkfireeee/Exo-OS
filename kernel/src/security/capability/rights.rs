@@ -18,9 +18,8 @@
 //   Les bits 16..=31 sont réservés aux extensions futures.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use core::fmt;
-use core::ops::{BitAnd, BitOr, BitOrAssign, BitAndAssign, Not, Sub};
+use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Sub};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Rights — type principal
@@ -39,22 +38,22 @@ impl Rights {
     // ── Droits standards (bits 0..5) ─────────────────────────────────────────
 
     /// Aucun droit.
-    pub const NONE:     Self = Self(0);
+    pub const NONE: Self = Self(0);
 
     /// Lecture de l'objet référencé.
-    pub const READ:     Self = Self(1 << 0);
+    pub const READ: Self = Self(1 << 0);
 
     /// Écriture dans l'objet référencé.
-    pub const WRITE:    Self = Self(1 << 1);
+    pub const WRITE: Self = Self(1 << 1);
 
     /// Exécution (mémoire exécutable, lancement d'ELF, invocation IPC).
-    pub const EXEC:     Self = Self(1 << 2);
+    pub const EXEC: Self = Self(1 << 2);
 
     /// Permission d'accorder ce droit à un tiers (subdélégation de GRANT).
-    pub const GRANT:    Self = Self(1 << 3);
+    pub const GRANT: Self = Self(1 << 3);
 
     /// Permission de révoquer des tokens émis sur cet objet.
-    pub const REVOKE:   Self = Self(1 << 4);
+    pub const REVOKE: Self = Self(1 << 4);
 
     /// Permission de déléguer un sous-ensemble des droits possédés.
     pub const DELEGATE: Self = Self(1 << 5);
@@ -62,51 +61,49 @@ impl Rights {
     // ── Droits domaines IPC (bits 6..9) ──────────────────────────────────────
 
     /// Connexion à un endpoint IPC.
-    pub const IPC_CONNECT:   Self = Self(1 << 6);
+    pub const IPC_CONNECT: Self = Self(1 << 6);
 
     /// Envoi de messages sur un endpoint.
-    pub const IPC_SEND:      Self = Self(1 << 7);
+    pub const IPC_SEND: Self = Self(1 << 7);
 
     /// Réception de messages sur un endpoint.
-    pub const IPC_RECV:      Self = Self(1 << 8);
+    pub const IPC_RECV: Self = Self(1 << 8);
 
     /// Contrôle du cycle de vie d'un endpoint (close, shutdown).
-    pub const IPC_MANAGE:    Self = Self(1 << 9);
+    pub const IPC_MANAGE: Self = Self(1 << 9);
 
     // ── Droits domaine Mémoire (bits 10..12) ─────────────────────────────────
 
     /// Mapper une VMA dans un espace d'adressage.
-    pub const MEM_MAP:       Self = Self(1 << 10);
+    pub const MEM_MAP: Self = Self(1 << 10);
 
     /// Modifier les permissions d'une VMA existante.
-    pub const MEM_PROTECT:   Self = Self(1 << 11);
+    pub const MEM_PROTECT: Self = Self(1 << 11);
 
     /// Libérer une VMA.
-    pub const MEM_UNMAP:     Self = Self(1 << 12);
+    pub const MEM_UNMAP: Self = Self(1 << 12);
 
     // ── Droits domaine Device/DMA (bits 13..15) ───────────────────────────────
 
     /// Accès MMIO à un périphérique.
-    pub const DEV_MMIO:      Self = Self(1 << 13);
+    pub const DEV_MMIO: Self = Self(1 << 13);
 
     /// Allocation d'opérations DMA.
-    pub const DEV_DMA:       Self = Self(1 << 14);
+    pub const DEV_DMA: Self = Self(1 << 14);
 
     /// Contrôle IRQ (enable/disable sur ce device).
-    pub const DEV_IRQ:       Self = Self(1 << 15);
+    pub const DEV_IRQ: Self = Self(1 << 15);
 
     // ── Champs composites utiles ─────────────────────────────────────────────
 
     /// Droits complets en lecture/écriture sans délégation.
-    pub const READ_WRITE:    Self = Self(Self::READ.0 | Self::WRITE.0);
+    pub const READ_WRITE: Self = Self(Self::READ.0 | Self::WRITE.0);
 
     /// Droits de base IPC (connexion + envoi + réception).
-    pub const IPC_BASIC:     Self = Self(
-        Self::IPC_CONNECT.0 | Self::IPC_SEND.0 | Self::IPC_RECV.0
-    );
+    pub const IPC_BASIC: Self = Self(Self::IPC_CONNECT.0 | Self::IPC_SEND.0 | Self::IPC_RECV.0);
 
     /// Tous les droits sur un objet (ownership complet).
-    pub const ALL:           Self = Self(u32::MAX);
+    pub const ALL: Self = Self(u32::MAX);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Constructeurs
@@ -263,32 +260,36 @@ impl fmt::Debug for Rights {
         let mut first = true;
         let mut bit = |name: &str, mask: u32| -> fmt::Result {
             if self.0 & mask != 0 {
-                if !first { write!(f, "|")?; }
+                if !first {
+                    write!(f, "|")?;
+                }
                 write!(f, "{}", name)?;
                 first = false;
             }
             Ok(())
         };
-        bit("READ",        1 << 0)?;
-        bit("WRITE",       1 << 1)?;
-        bit("EXEC",        1 << 2)?;
-        bit("GRANT",       1 << 3)?;
-        bit("REVOKE",      1 << 4)?;
-        bit("DELEGATE",    1 << 5)?;
+        bit("READ", 1 << 0)?;
+        bit("WRITE", 1 << 1)?;
+        bit("EXEC", 1 << 2)?;
+        bit("GRANT", 1 << 3)?;
+        bit("REVOKE", 1 << 4)?;
+        bit("DELEGATE", 1 << 5)?;
         bit("IPC_CONNECT", 1 << 6)?;
-        bit("IPC_SEND",    1 << 7)?;
-        bit("IPC_RECV",    1 << 8)?;
-        bit("IPC_MANAGE",  1 << 9)?;
-        bit("MEM_MAP",     1 << 10)?;
+        bit("IPC_SEND", 1 << 7)?;
+        bit("IPC_RECV", 1 << 8)?;
+        bit("IPC_MANAGE", 1 << 9)?;
+        bit("MEM_MAP", 1 << 10)?;
         bit("MEM_PROTECT", 1 << 11)?;
-        bit("MEM_UNMAP",   1 << 12)?;
-        bit("DEV_MMIO",    1 << 13)?;
-        bit("DEV_DMA",     1 << 14)?;
-        bit("DEV_IRQ",     1 << 15)?;
+        bit("MEM_UNMAP", 1 << 12)?;
+        bit("DEV_MMIO", 1 << 13)?;
+        bit("DEV_DMA", 1 << 14)?;
+        bit("DEV_IRQ", 1 << 15)?;
         // Bits inconnus
         let unknown = self.0 & !0x0000_FFFF;
         if unknown != 0 {
-            if !first { write!(f, "|")?; }
+            if !first {
+                write!(f, "|")?;
+            }
             write!(f, "UNKNOWN(0x{:08x})", unknown)?;
         }
         write!(f, ")")?;

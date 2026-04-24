@@ -22,12 +22,11 @@
 //       → security::audit  [log_event ou log_security_violation]
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use crate::security::capability::verify::{verify as cap_verify, CapError};
-use crate::security::capability::{CapTable, CapToken, Rights};
+use super::object_types::ObjectKind;
 use crate::security::audit;
 use crate::security::audit::{AuditCategory, AuditOutcome};
-use super::object_types::ObjectKind;
+use crate::security::capability::verify::{verify as cap_verify, CapError};
+use crate::security::capability::{CapTable, CapToken, Rights};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AccessError — erreur riche retournée à l'appelant
@@ -44,25 +43,28 @@ pub enum AccessError {
         module: &'static str,
     },
     /// L'objet demandé n'existe pas dans la table.
-    ObjectNotFound {
-        object: ObjectKind,
-    },
+    ObjectNotFound { object: ObjectKind },
     /// Les droits effectifs sont insuffisants.
-    InsufficientRights {
-        had:    Rights,
-        needed: Rights,
-    },
+    InsufficientRights { had: Rights, needed: Rights },
 }
 
 impl core::fmt::Display for AccessError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::CapabilityDenied { reason, object, module } =>
-                write!(f, "access_control: [{module}] denied for {object}: {reason}"),
-            Self::ObjectNotFound { object } =>
-                write!(f, "access_control: object not found: {object}"),
-            Self::InsufficientRights { had: _, needed: _ } =>
-                write!(f, "access_control: insufficient rights"),
+            Self::CapabilityDenied {
+                reason,
+                object,
+                module,
+            } => write!(
+                f,
+                "access_control: [{module}] denied for {object}: {reason}"
+            ),
+            Self::ObjectNotFound { object } => {
+                write!(f, "access_control: object not found: {object}")
+            }
+            Self::InsufficientRights { had: _, needed: _ } => {
+                write!(f, "access_control: insufficient rights")
+            }
         }
     }
 }
@@ -90,18 +92,20 @@ impl core::fmt::Display for AccessError {
 /// Surcoût d'audit ≈ 1 écriture atomique dans le ring buffer.
 #[inline]
 pub fn check_access(
-    table:    &CapTable,
-    token:    CapToken,
-    object:   ObjectKind,
+    table: &CapTable,
+    token: CapToken,
+    object: ObjectKind,
     required: Rights,
-    caller:   &'static str,
+    caller: &'static str,
 ) -> Result<(), AccessError> {
     match cap_verify(table, token, required) {
         Ok(()) => {
             // ── Succès — log audit filtrable (catégorie Capability)
             audit::log_event(
                 AuditCategory::Capability,
-                0, 0, 0,
+                0,
+                0,
+                0,
                 0,
                 0,
                 AuditOutcome::Allow,
@@ -117,7 +121,7 @@ pub fn check_access(
         Err(CapError::InsufficientRights) => {
             audit::audit_capability_deny(0, 0, 0, required.bits());
             Err(AccessError::InsufficientRights {
-                had:    Rights::NONE,
+                had: Rights::NONE,
                 needed: required,
             })
         }

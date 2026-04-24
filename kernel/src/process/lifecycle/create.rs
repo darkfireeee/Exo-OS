@@ -270,7 +270,6 @@ pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
         *frame.add(6) = kthread_trampoline as *const () as u64;     // return address → trampoline
         (*thread_ptr).sched_tcb.kstack_ptr = kernel_rsp;
     }
-
     // Enregistrer dans la run queue.
     {
         let _preempt = PreemptGuard::new();

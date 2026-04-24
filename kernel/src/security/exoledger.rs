@@ -125,7 +125,10 @@ impl ActionTag {
                 buf[0..8].copy_from_slice(&1u64.to_le_bytes());
                 buf[8..16].copy_from_slice(&error_code.to_le_bytes());
             }
-            ActionTag::IommuFault { domain_id, fault_addr } => {
+            ActionTag::IommuFault {
+                domain_id,
+                fault_addr,
+            } => {
                 buf[0..8].copy_from_slice(&2u64.to_le_bytes());
                 buf[8..12].copy_from_slice(&domain_id.to_le_bytes());
                 buf[12..24].copy_from_slice(&fault_addr.to_le_bytes());

@@ -20,6 +20,7 @@ const NIC_DMA_WHITELIST_END_EXCLUSIVE: u64 = 0x0B00_0000;
 static EXOSEAL_PHASE0_DONE: AtomicBool = AtomicBool::new(false);
 static EXOSEAL_COMPLETE_DONE: AtomicBool = AtomicBool::new(false);
 static NIC_POLICY_LOCKED: AtomicBool = AtomicBool::new(false);
+static NIC_POLICY_REQUIRED: AtomicBool = AtomicBool::new(false);
 static NIC_DOMAIN_ID: AtomicU32 = AtomicU32::new(0);
 static NIC_DMA_BASE: AtomicU64 = AtomicU64::new(0);
 static NIC_DMA_END: AtomicU64 = AtomicU64::new(0);
@@ -35,6 +36,7 @@ pub enum P0VerifyError {
 }
 
 fn validate_phase0_state(
+    nic_required: bool,
     nic_locked: bool,
     cet_supported: bool,
     cet_enabled: bool,
@@ -44,7 +46,7 @@ fn validate_phase0_state(
     credentials_revoked: bool,
     tcb_hot_revoked: bool,
 ) -> Result<(), P0VerifyError> {
-    if !nic_locked {
+    if nic_required && !nic_locked {
         return Err(P0VerifyError::NicIommuUnlocked);
     }
     if cet_supported && !cet_enabled {
@@ -68,6 +70,7 @@ fn validate_phase0_state(
 pub fn verify_p0_fixes() -> Result<(), P0VerifyError> {
     let (cet_supported, _) = exocage::cpuid_cet_available();
     let result = validate_phase0_state(
+        NIC_POLICY_REQUIRED.load(Ordering::Acquire),
         nic_iommu_locked(),
         cet_supported,
         exocage::is_cet_global_enabled(),
@@ -133,6 +136,8 @@ pub fn configure_nic_iommu_policy() {
         }
     });
 
+    NIC_POLICY_REQUIRED.store(nic_found, Ordering::Release);
+
     if !nic_found {
         let _ = IOMMU_DOMAINS.destroy_domain(domain_id);
         return;
@@ -153,7 +158,9 @@ pub unsafe fn exoseal_boot_phase0() {
     configure_nic_iommu_policy();
     // SAFETY: ExoSeal phase 0 s'exécute au boot en ring 0, avant usage normal
     // des domaines PKS.
-    unsafe { exoveil::exoveil_init(); }
+    unsafe {
+        exoveil::exoveil_init();
+    }
     // SAFETY: l'activation CET globale est un prérequis ring 0 du boot ExoShield.
     let _ = unsafe { exocage::exocage_global_enable() };
     let _ = stage0::arm_apic_watchdog(BOOT_PHASE0_WATCHDOG_MS);
@@ -173,7 +180,9 @@ pub unsafe fn exoseal_boot_complete() {
     }
 
     // SAFETY: la restauration PKS intervient à la fin du boot sécurité, en ring 0.
-    unsafe { exoveil::pks_restore_for_normal_ops(); }
+    unsafe {
+        exoveil::pks_restore_for_normal_ops();
+    }
 
     // SAFETY: `SSR_HANDOFF_FLAG` pointe une case SSR partagée 64-bit, mappée en
     // ring 0 pour ExoPhoenix et utilisée ici uniquement pour revenir en mode normal.
@@ -210,7 +219,15 @@ mod tests {
     #[test]
     fn test_validate_phase0_state_accepts_hardened_state() {
         assert_eq!(
-            validate_phase0_state(true, true, true, true, false, true, true, true),
+            validate_phase0_state(true, true, true, true, true, false, true, true, true),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn test_validate_phase0_state_accepts_absent_nic() {
+        assert_eq!(
+            validate_phase0_state(false, false, true, true, true, false, true, true, true),
             Ok(())
         );
     }
@@ -218,7 +235,7 @@ mod tests {
     #[test]
     fn test_validate_phase0_state_detects_missing_nic_lock() {
         assert_eq!(
-            validate_phase0_state(false, true, true, true, false, true, true, true),
+            validate_phase0_state(true, false, true, true, true, false, true, true, true),
             Err(P0VerifyError::NicIommuUnlocked)
         );
     }
@@ -226,7 +243,7 @@ mod tests {
     #[test]
     fn test_validate_phase0_state_detects_exposed_caps_domain() {
         assert_eq!(
-            validate_phase0_state(true, true, true, true, false, false, true, true),
+            validate_phase0_state(true, true, true, true, true, false, false, true, true),
             Err(P0VerifyError::CapsDomainExposed)
         );
     }

@@ -16,7 +16,6 @@
 // RÈGLE NS-03 : Un namespace est détruit quand son refcount atteint 0.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
@@ -32,7 +31,9 @@ impl NsId {
     /// Namespace init (PID 1) — id 0.
     pub const INIT: NsId = NsId(0);
 
-    pub fn is_init(&self) -> bool { self.0 == 0 }
+    pub fn is_init(&self) -> bool {
+        self.0 == 0
+    }
 }
 
 // Compteur global pour l'allocation de NsId
@@ -50,12 +51,12 @@ fn alloc_ns_id() -> NsId {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NsKind {
-    Pid     = 0,
-    Mount   = 1,
+    Pid = 0,
+    Mount = 1,
     Network = 2,
-    Ipc     = 3,
-    User    = 4,
-    Uts     = 5,
+    Ipc = 3,
+    User = 4,
+    Uts = 5,
 }
 
 impl NsKind {
@@ -68,49 +69,49 @@ impl NsKind {
 
 /// Descripteur d'un namespace.
 pub struct Namespace {
-    pub id:         NsId,
-    pub kind:       NsKind,
+    pub id: NsId,
+    pub kind: NsKind,
     /// Parent namespace (None pour init).
-    pub parent_id:  Option<NsId>,
+    pub parent_id: Option<NsId>,
     /// Compteur de références — détruit quand 0.
-    ref_count:      AtomicU32,
+    ref_count: AtomicU32,
     /// Nombre de processus dans ce namespace.
-    process_count:  AtomicU32,
+    process_count: AtomicU32,
     /// Flags (bitmask).
-    flags:          AtomicU64,
+    flags: AtomicU64,
 }
 
 pub mod ns_flags {
     /// Namespace est en cours de destruction.
-    pub const DYING:          u64 = 1 << 0;
+    pub const DYING: u64 = 1 << 0;
     /// Namespace est un clone d'un parent.
-    pub const CLONED:         u64 = 1 << 1;
+    pub const CLONED: u64 = 1 << 1;
     /// Namespace réseau est isolé (no external access).
-    pub const NET_ISOLATED:   u64 = 1 << 2;
+    pub const NET_ISOLATED: u64 = 1 << 2;
     /// Namespace PID commence à 1 (contenant).
-    pub const PID_CONTAINER:  u64 = 1 << 3;
+    pub const PID_CONTAINER: u64 = 1 << 3;
 }
 
 impl Namespace {
     pub fn new(kind: NsKind, parent_id: Option<NsId>) -> Self {
         Self {
-            id:           alloc_ns_id(),
+            id: alloc_ns_id(),
             kind,
             parent_id,
-            ref_count:    AtomicU32::new(1),
-            process_count:AtomicU32::new(0),
-            flags:         AtomicU64::new(0),
+            ref_count: AtomicU32::new(1),
+            process_count: AtomicU32::new(0),
+            flags: AtomicU64::new(0),
         }
     }
 
     pub fn new_init(kind: NsKind) -> Self {
         Self {
-            id:           NsId::INIT,
+            id: NsId::INIT,
             kind,
-            parent_id:    None,
-            ref_count:    AtomicU32::new(1),
-            process_count:AtomicU32::new(0),
-            flags:         AtomicU64::new(0),
+            parent_id: None,
+            ref_count: AtomicU32::new(1),
+            process_count: AtomicU32::new(0),
+            flags: AtomicU64::new(0),
         }
     }
 
@@ -155,12 +156,18 @@ impl Namespace {
     /// Un ns est visible depuis soi-même ou depuis un namespace parent.
     pub fn can_see(&self, other: &Namespace) -> bool {
         // Même namespace = toujours visible
-        if self.id == other.id { return true; }
+        if self.id == other.id {
+            return true;
+        }
         // Le namespace init est visible par tous
-        if other.id.is_init() { return true; }
+        if other.id.is_init() {
+            return true;
+        }
         // Vérifier la relation parent
         if let Some(parent) = self.parent_id {
-            if parent == other.id { return true; }
+            if parent == other.id {
+                return true;
+            }
         }
         false
     }
@@ -172,36 +179,36 @@ impl Namespace {
 
 /// Ensemble de namespaces d'un processus (un namespace par type).
 pub struct NamespaceSet {
-    pub pid_ns:  NsId,
-    pub mnt_ns:  NsId,
-    pub net_ns:  NsId,
-    pub ipc_ns:  NsId,
+    pub pid_ns: NsId,
+    pub mnt_ns: NsId,
+    pub net_ns: NsId,
+    pub ipc_ns: NsId,
     pub user_ns: NsId,
-    pub uts_ns:  NsId,
+    pub uts_ns: NsId,
 }
 
 impl NamespaceSet {
     /// Crée le namespace set du processus init.
     pub const fn init() -> Self {
         Self {
-            pid_ns:  NsId::INIT,
-            mnt_ns:  NsId::INIT,
-            net_ns:  NsId::INIT,
-            ipc_ns:  NsId::INIT,
+            pid_ns: NsId::INIT,
+            mnt_ns: NsId::INIT,
+            net_ns: NsId::INIT,
+            ipc_ns: NsId::INIT,
             user_ns: NsId::INIT,
-            uts_ns:  NsId::INIT,
+            uts_ns: NsId::INIT,
         }
     }
 
     /// Retourne le NsId pour un kind donné.
     pub fn get(&self, kind: NsKind) -> NsId {
         match kind {
-            NsKind::Pid     => self.pid_ns,
-            NsKind::Mount   => self.mnt_ns,
+            NsKind::Pid => self.pid_ns,
+            NsKind::Mount => self.mnt_ns,
             NsKind::Network => self.net_ns,
-            NsKind::Ipc     => self.ipc_ns,
-            NsKind::User    => self.user_ns,
-            NsKind::Uts     => self.uts_ns,
+            NsKind::Ipc => self.ipc_ns,
+            NsKind::User => self.user_ns,
+            NsKind::Uts => self.uts_ns,
         }
     }
 
@@ -209,12 +216,12 @@ impl NamespaceSet {
     pub fn clone_with_new(&self, kind: NsKind, new_id: NsId) -> Self {
         let mut ns = *self;
         match kind {
-            NsKind::Pid     => ns.pid_ns  = new_id,
-            NsKind::Mount   => ns.mnt_ns  = new_id,
-            NsKind::Network => ns.net_ns  = new_id,
-            NsKind::Ipc     => ns.ipc_ns  = new_id,
-            NsKind::User    => ns.user_ns = new_id,
-            NsKind::Uts     => ns.uts_ns  = new_id,
+            NsKind::Pid => ns.pid_ns = new_id,
+            NsKind::Mount => ns.mnt_ns = new_id,
+            NsKind::Network => ns.net_ns = new_id,
+            NsKind::Ipc => ns.ipc_ns = new_id,
+            NsKind::User => ns.user_ns = new_id,
+            NsKind::Uts => ns.uts_ns = new_id,
         }
         ns
     }
@@ -227,7 +234,9 @@ impl NamespaceSet {
 
 impl Copy for NamespaceSet {}
 impl Clone for NamespaceSet {
-    fn clone(&self) -> Self { *self }
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,7 +247,7 @@ const MAX_NAMESPACES: usize = 256;
 
 struct NsRegistry {
     entries: [Option<Namespace>; MAX_NAMESPACES],
-    count:   usize,
+    count: usize,
 }
 
 impl NsRegistry {

@@ -4,22 +4,18 @@
 
 pub mod domains;
 pub mod namespaces;
-pub mod sandbox;
 pub mod pledge;
+pub mod sandbox;
 
 pub use domains::{
-    SecurityDomain, DomainContext, DomainError,
-    domain_flags, read_domain_stats, DomainStatsSnapshot,
+    domain_flags, read_domain_stats, DomainContext, DomainError, DomainStatsSnapshot,
+    SecurityDomain,
 };
 pub use namespaces::{
-    NsId, NsKind, Namespace, NamespaceSet,
-    create_namespace, destroy_namespace, NsError, ns_flags,
+    create_namespace, destroy_namespace, ns_flags, Namespace, NamespaceSet, NsError, NsId, NsKind,
 };
+pub use pledge::{global_pledge_violations, pledge_flags, PledgeError, PledgeSet};
 pub use sandbox::{
-    SandboxPolicy, SandboxAction, syscall_nr,
-    record_sandbox_decision, sandbox_global_stats, SandboxGlobalStats,
-};
-pub use pledge::{
-    PledgeSet, PledgeError, pledge_flags,
-    global_pledge_violations,
+    record_sandbox_decision, sandbox_global_stats, syscall_nr, SandboxAction, SandboxGlobalStats,
+    SandboxPolicy,
 };

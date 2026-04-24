@@ -10,13 +10,12 @@
 //
 // COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
 
-
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use crate::memory::core::{VirtAddr, PageFlags, PAGE_SIZE};
+use crate::memory::core::{PageFlags, VirtAddr, PAGE_SIZE};
 use crate::memory::virt::address_space::{UserAddressSpace, USER_MMAP_BASE};
-use crate::memory::virt::vma::{VmaDescriptor, VmaFlags, VmaBacking};
+use crate::memory::virt::vma::{VmaBacking, VmaDescriptor, VmaFlags};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Erreurs
@@ -45,13 +44,13 @@ impl MmapError {
     /// Traduit l'erreur en errno POSIX négatif.
     pub fn to_kernel_errno(self) -> i64 {
         match self {
-            MmapError::InvalidLength      => -22, // EINVAL
-            MmapError::InvalidAddress     => -22, // EINVAL
+            MmapError::InvalidLength => -22,      // EINVAL
+            MmapError::InvalidAddress => -22,     // EINVAL
             MmapError::OutOfVirtualMemory => -12, // ENOMEM
-            MmapError::NoAddressSpace     => -12, // ENOMEM
-            MmapError::AllocFailed        => -12, // ENOMEM
-            MmapError::NotMapped          => -14, // EFAULT
-            MmapError::PermissionDenied   => -13, // EACCES
+            MmapError::NoAddressSpace => -12,     // ENOMEM
+            MmapError::AllocFailed => -12,        // ENOMEM
+            MmapError::NotMapped => -14,          // EFAULT
+            MmapError::PermissionDenied => -13,   // EACCES
         }
     }
 }
@@ -81,7 +80,11 @@ fn get_current_user_as() -> Option<*mut UserAddressSpace> {
     // SAFETY: Enregistré via register_current_as_getter avec la bonne signature.
     let f: CurrentAsGetterFn = unsafe { core::mem::transmute(ptr) };
     let as_ptr = f();
-    if as_ptr.is_null() { None } else { Some(as_ptr) }
+    if as_ptr.is_null() {
+        None
+    } else {
+        Some(as_ptr)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,21 +92,21 @@ fn get_current_user_as() -> Option<*mut UserAddressSpace> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Protection en lecture (PROT_READ).
-const PROT_READ:   u32 = 1;
+const PROT_READ: u32 = 1;
 /// Protection en écriture (PROT_WRITE).
-const PROT_WRITE:  u32 = 2;
+const PROT_WRITE: u32 = 2;
 /// Protection en exécution (PROT_EXEC).
-const PROT_EXEC:   u32 = 4;
+const PROT_EXEC: u32 = 4;
 
 /// Mapping partagé (MAP_SHARED).
-const MAP_SHARED:  u32 = 0x01;
+const MAP_SHARED: u32 = 0x01;
 /// Mapping privé (MAP_PRIVATE).
 #[allow(dead_code)]
 const MAP_PRIVATE: u32 = 0x02;
 /// Adresse fixée (MAP_FIXED).
-const MAP_FIXED:   u32 = 0x10;
+const MAP_FIXED: u32 = 0x10;
 /// Mapping anonyme (MAP_ANONYMOUS / MAP_ANON).
-const MAP_ANON:    u32 = 0x20;
+const MAP_ANON: u32 = 0x20;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers de conversion de flags
@@ -125,12 +128,24 @@ fn prot_to_page_flags(prot: u32) -> PageFlags {
 /// Convertit les flags POSIX (prot + map_flags) en VmaFlags.
 fn prot_to_vma_flags(prot: u32, map_flags: u32) -> VmaFlags {
     let mut f = VmaFlags::NONE;
-    if prot & PROT_READ  != 0 { f = f | VmaFlags::READ; }
-    if prot & PROT_WRITE != 0 { f = f | VmaFlags::WRITE; }
-    if prot & PROT_EXEC  != 0 { f = f | VmaFlags::EXEC; }
-    if map_flags & MAP_SHARED != 0 { f = f | VmaFlags::SHARED; }
-    if map_flags & MAP_FIXED  != 0 { f = f | VmaFlags::FIXED; }
-    if map_flags & MAP_ANON   != 0 { f = f | VmaFlags::ANONYMOUS; }
+    if prot & PROT_READ != 0 {
+        f = f | VmaFlags::READ;
+    }
+    if prot & PROT_WRITE != 0 {
+        f = f | VmaFlags::WRITE;
+    }
+    if prot & PROT_EXEC != 0 {
+        f = f | VmaFlags::EXEC;
+    }
+    if map_flags & MAP_SHARED != 0 {
+        f = f | VmaFlags::SHARED;
+    }
+    if map_flags & MAP_FIXED != 0 {
+        f = f | VmaFlags::FIXED;
+    }
+    if map_flags & MAP_ANON != 0 {
+        f = f | VmaFlags::ANONYMOUS;
+    }
     f
 }
 
@@ -149,12 +164,12 @@ fn prot_to_vma_flags(prot: u32, map_flags: u32) -> VmaFlags {
 ///
 /// Retourne l'adresse virtuelle de début de la région (comme usize).
 pub fn do_mmap(
-    addr:  u64,
-    len:   usize,
-    prot:  u32,
+    addr: u64,
+    len: usize,
+    prot: u32,
     flags: u32,
-    _fd:   i32,
-    _off:  u64,
+    _fd: i32,
+    _off: u64,
 ) -> Result<usize, MmapError> {
     if len == 0 {
         return Err(MmapError::InvalidLength);
@@ -170,19 +185,29 @@ pub fn do_mmap(
     user_as.stats.mmap_calls.fetch_add(1, Ordering::Relaxed);
 
     // Recherche d'un gap virtuel libre
-    let hint = if addr != 0 { Some(VirtAddr::new(addr)) } else { None };
+    let hint = if addr != 0 {
+        Some(VirtAddr::new(addr))
+    } else {
+        None
+    };
     let base = user_as
         .find_free_gap(len_aligned, hint)
         .ok_or(MmapError::OutOfVirtualMemory)?;
 
     let start = base;
-    let end   = VirtAddr::new(base.as_u64() + len_aligned as u64);
+    let end = VirtAddr::new(base.as_u64() + len_aligned as u64);
 
     let page_flags = prot_to_page_flags(prot);
-    let vma_flags  = prot_to_vma_flags(prot, flags) | VmaFlags::ANONYMOUS;
+    let vma_flags = prot_to_vma_flags(prot, flags) | VmaFlags::ANONYMOUS;
 
     // Allouer et insérer le descripteur VMA
-    let vma     = Box::new(VmaDescriptor::new(start, end, vma_flags, page_flags, VmaBacking::Anonymous));
+    let vma = Box::new(VmaDescriptor::new(
+        start,
+        end,
+        vma_flags,
+        page_flags,
+        VmaBacking::Anonymous,
+    ));
     let vma_ptr = Box::into_raw(vma);
 
     // SAFETY: vma_ptr est valide, non-null, exclusif.
@@ -245,26 +270,29 @@ pub fn do_munmap(addr: u64, _len: usize) -> Result<(), MmapError> {
             let mut cursor = vma_start.as_u64();
             while cursor < vma_end.as_u64() {
                 let mut frames = [crate::memory::core::types::Frame::containing(
-                    crate::memory::core::types::PhysAddr::new(0)); BATCH];
+                    crate::memory::core::types::PhysAddr::new(0),
+                ); BATCH];
                 let mut count = 0usize;
 
                 // Phase 1 : démappe jusqu'à BATCH pages (flush local intégré).
                 while cursor < vma_end.as_u64() && count < BATCH {
                     // SAFETY: adresses user canoniques.
-                    if let Some(f) = unsafe {
-                        user_as.unmap_page(VirtAddr::new(cursor))
-                    } {
+                    if let Some(f) = unsafe { user_as.unmap_page(VirtAddr::new(cursor)) } {
                         frames[count] = f;
                         count += 1;
                     }
                     cursor += PAGE_SIZE as u64;
                 }
 
-                if count == 0 { continue; }
+                if count == 0 {
+                    continue;
+                }
 
                 // Phase 2 : TLB shootdown synchrone (tous CPUs) — V-04.
                 let batch_start = VirtAddr::new(
-                    vma_start.as_u64().max(cursor - (count as u64 * PAGE_SIZE as u64))
+                    vma_start
+                        .as_u64()
+                        .max(cursor - (count as u64 * PAGE_SIZE as u64)),
                 );
                 let batch_end = VirtAddr::new(cursor);
                 // SAFETY: plage canonique user, appelé hors IRQ.
@@ -272,7 +300,7 @@ pub fn do_munmap(addr: u64, _len: usize) -> Result<(), MmapError> {
                     crate::memory::virt::shootdown_sync(
                         crate::memory::virt::TlbFlushType::Range {
                             start: batch_start,
-                            end:   batch_end,
+                            end: batch_end,
                         },
                         cpu_count,
                     );
@@ -322,11 +350,17 @@ pub fn do_mprotect(addr: u64, len: usize, prot: u32) -> Result<(), MmapError> {
 
     // Mettre à jour les flags VMA (READ/WRITE/EXEC uniquement).
     let perm_mask = VmaFlags::READ | VmaFlags::WRITE | VmaFlags::EXEC;
-    let keep      = VmaFlags::from_bits(vma.flags.bits() & !perm_mask.bits());
+    let keep = VmaFlags::from_bits(vma.flags.bits() & !perm_mask.bits());
     let mut new_perm = VmaFlags::NONE;
-    if prot & PROT_READ  != 0 { new_perm = new_perm | VmaFlags::READ; }
-    if prot & PROT_WRITE != 0 { new_perm = new_perm | VmaFlags::WRITE; }
-    if prot & PROT_EXEC  != 0 { new_perm = new_perm | VmaFlags::EXEC; }
+    if prot & PROT_READ != 0 {
+        new_perm = new_perm | VmaFlags::READ;
+    }
+    if prot & PROT_WRITE != 0 {
+        new_perm = new_perm | VmaFlags::WRITE;
+    }
+    if prot & PROT_EXEC != 0 {
+        new_perm = new_perm | VmaFlags::EXEC;
+    }
     vma.flags = keep | new_perm;
 
     // Appliquer les nouveaux flags sur les PTEs déjà présentes dans la table.
@@ -334,7 +368,7 @@ pub fn do_mprotect(addr: u64, len: usize, prot: u32) -> Result<(), MmapError> {
     // elles hériteront des nouveaux flags lors de leur prochain fault via vma.page_flags.
     let len_aligned = (len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
     let range_start = VirtAddr::new(addr);
-    let range_end   = VirtAddr::new(addr + len_aligned as u64);
+    let range_end = VirtAddr::new(addr + len_aligned as u64);
 
     let mut walker = crate::memory::virt::page_table::PageTableWalker::new(user_as.pml4_phys());
     let mut cursor = range_start.as_u64();
@@ -377,7 +411,11 @@ pub fn do_brk(addr: u64) -> Result<u64, MmapError> {
     // Initialiser le break au démarrage (première fois : heap_end == 0).
     let cur = {
         let v = user_as.heap_end.load(Ordering::Acquire);
-        if v == 0 { BRK_BASE } else { v }
+        if v == 0 {
+            BRK_BASE
+        } else {
+            v
+        }
     };
 
     if addr == 0 {
@@ -394,12 +432,19 @@ pub fn do_brk(addr: u64) -> Result<u64, MmapError> {
 
     if new_brk > cur {
         // Extension du heap : créer une VMA pour la nouvelle région
-        let start      = VirtAddr::new(cur);
-        let end        = VirtAddr::new(new_brk);
-        let page_flags = PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER | PageFlags::NO_EXECUTE;
-        let vma_flags  = VmaFlags::READ | VmaFlags::WRITE | VmaFlags::ANONYMOUS | VmaFlags::HEAP;
+        let start = VirtAddr::new(cur);
+        let end = VirtAddr::new(new_brk);
+        let page_flags =
+            PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER | PageFlags::NO_EXECUTE;
+        let vma_flags = VmaFlags::READ | VmaFlags::WRITE | VmaFlags::ANONYMOUS | VmaFlags::HEAP;
 
-        let vma     = Box::new(VmaDescriptor::new(start, end, vma_flags, page_flags, VmaBacking::Anonymous));
+        let vma = Box::new(VmaDescriptor::new(
+            start,
+            end,
+            vma_flags,
+            page_flags,
+            VmaBacking::Anonymous,
+        ));
         let vma_ptr = Box::into_raw(vma);
 
         // SAFETY: vma_ptr valide, non-null, exclusif — issu de Box::into_raw.
@@ -443,7 +488,7 @@ pub struct ShmMapIntoResult {
     /// Adresse virtuelle de base du mapping dans l'espace cible.
     pub virt_base: u64,
     /// Nombre de pages effectivement mappées.
-    pub n_pages:   usize,
+    pub n_pages: usize,
     /// Index du mapping dans SHM_MAPPING_TABLE (pour shm_unmap).
     pub mapping_idx: usize,
 }
@@ -468,11 +513,11 @@ pub struct ShmMapIntoResult {
 /// - `hint_virt` : adresse virtuelle souhaitée (0 = auto)
 /// - `writable`  : autoriser l'écriture dans le mapping
 pub fn map_shm_into_process(
-    user_as:   &UserAddressSpace,
-    desc_idx:  usize,
-    pid:       u32,
+    user_as: &UserAddressSpace,
+    desc_idx: usize,
+    pid: u32,
     hint_virt: u64,
-    writable:  bool,
+    writable: bool,
 ) -> Result<ShmMapIntoResult, ShmMapError> {
     use crate::ipc::shared_memory::descriptor::SHM_DESC_DIR;
     use crate::ipc::shared_memory::pool::shm_page_phys;
@@ -482,8 +527,7 @@ pub fn map_shm_into_process(
     // ── 1. Lire les métadonnées de la région SHM ──────────────────────────
     let (n_pages, size_bytes) = {
         let dir = SHM_DESC_DIR.lock();
-        let desc = unsafe { dir.get(desc_idx) }
-            .ok_or(ShmMapError::InvalidRegion)?;
+        let desc = unsafe { dir.get(desc_idx) }.ok_or(ShmMapError::InvalidRegion)?;
         if !desc.is_active() {
             return Err(ShmMapError::InvalidRegion);
         }
@@ -528,7 +572,11 @@ pub fn map_shm_into_process(
 
     // ── 4. Insérer la VMA ─────────────────────────────────────────────────
     let vma = Box::new(VmaDescriptor::new(
-        virt_base, virt_end, vma_flags, page_flags, VmaBacking::Shared,
+        virt_base,
+        virt_end,
+        vma_flags,
+        page_flags,
+        VmaBacking::Shared,
     ));
     let vma_ptr = Box::into_raw(vma);
     // SAFETY: vma_ptr est valide, non-null, exclusif.
@@ -544,9 +592,10 @@ pub fn map_shm_into_process(
     // les frames de données viennent du pool SHM.
     struct PtAllocOnly;
     impl crate::memory::virt::page_table::FrameAllocatorForWalk for PtAllocOnly {
-        fn alloc_frame(&self, flags: crate::memory::AllocFlags)
-            -> Result<Frame, crate::memory::AllocError>
-        {
+        fn alloc_frame(
+            &self,
+            flags: crate::memory::AllocFlags,
+        ) -> Result<Frame, crate::memory::AllocError> {
             buddy::alloc_pages(0, flags)
         }
         fn free_frame(&self, f: Frame) {
@@ -562,18 +611,20 @@ pub fn map_shm_into_process(
                 let pool_idx = desc.pages[i].load(core::sync::atomic::Ordering::Relaxed) as usize;
                 if let Some(phys) = shm_page_phys(pool_idx) {
                     let frame = Frame::containing(crate::memory::core::PhysAddr::new(phys.0));
-                    let virt  = VirtAddr::new(
-                        virt_base.as_u64().saturating_add((i * PAGE_SIZE) as u64)
-                    );
+                    let virt =
+                        VirtAddr::new(virt_base.as_u64().saturating_add((i * PAGE_SIZE) as u64));
                     // SAFETY: virt est dans l'espace user du processus cible,
                     // frame est une page SHM allouée et initialisée.
-                    if let Err(_) = unsafe { user_as.map_page(virt, frame, page_flags, &pt_alloc) } {
+                    if let Err(_) = unsafe { user_as.map_page(virt, frame, page_flags, &pt_alloc) }
+                    {
                         // Rollback : démappe les pages déjà insérées
                         for j in 0..i {
                             let v = VirtAddr::new(
-                                virt_base.as_u64().saturating_add((j * PAGE_SIZE) as u64)
+                                virt_base.as_u64().saturating_add((j * PAGE_SIZE) as u64),
                             );
-                            unsafe { user_as.unmap_page(v); }
+                            unsafe {
+                                user_as.unmap_page(v);
+                            }
                         }
                         user_as.remove_vma(virt_base);
                         return Err(ShmMapError::AllocFailed);
@@ -584,14 +635,16 @@ pub fn map_shm_into_process(
     }
 
     // ── 6. Enregistrer dans SHM_MAPPING_TABLE ────────────────────────────
-    use crate::ipc::shared_memory::mapping::{SHM_MAPPING_TABLE};
+    use crate::ipc::shared_memory::mapping::SHM_MAPPING_TABLE;
     let mapping_idx = {
         let mut tbl = SHM_MAPPING_TABLE.lock();
         tbl.alloc().ok_or_else(|| {
             // Rollback mappings
             for i in 0..n_pages {
                 let v = VirtAddr::new(virt_base.as_u64().saturating_add((i * PAGE_SIZE) as u64));
-                unsafe { user_as.unmap_page(v); }
+                unsafe {
+                    user_as.unmap_page(v);
+                }
             }
             user_as.remove_vma(virt_base);
             ShmMapError::AllocFailed
@@ -600,12 +653,19 @@ pub fn map_shm_into_process(
 
     {
         let tbl = SHM_MAPPING_TABLE.lock();
-        let m = &tbl.entries[mapping_idx];
-        m.desc_idx.store(desc_idx as u32, core::sync::atomic::Ordering::Relaxed);
-        m.process_id.store(pid, core::sync::atomic::Ordering::Relaxed);
-        m.virt_base.store(virt_base.as_u64(), core::sync::atomic::Ordering::Relaxed);
-        m.permissions.store(if writable { 0x3 } else { 0x1 }, core::sync::atomic::Ordering::Relaxed);
-        m.mapped_pages.store(n_pages as u32, core::sync::atomic::Ordering::Relaxed);
+        let m = tbl.entry(mapping_idx).ok_or(ShmMapError::AllocFailed)?;
+        m.desc_idx
+            .store(desc_idx as u32, core::sync::atomic::Ordering::Relaxed);
+        m.process_id
+            .store(pid, core::sync::atomic::Ordering::Relaxed);
+        m.virt_base
+            .store(virt_base.as_u64(), core::sync::atomic::Ordering::Relaxed);
+        m.permissions.store(
+            if writable { 0x3 } else { 0x1 },
+            core::sync::atomic::Ordering::Relaxed,
+        );
+        m.mapped_pages
+            .store(n_pages as u32, core::sync::atomic::Ordering::Relaxed);
         m.active.store(1, core::sync::atomic::Ordering::Release);
     }
 
@@ -618,7 +678,7 @@ pub fn map_shm_into_process(
     }
 
     Ok(ShmMapIntoResult {
-        virt_base:   virt_base.as_u64(),
+        virt_base: virt_base.as_u64(),
         n_pages,
         mapping_idx,
     })

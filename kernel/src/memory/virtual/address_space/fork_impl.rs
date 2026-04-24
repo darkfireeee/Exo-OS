@@ -9,41 +9,28 @@
 //   3. Copie les pages userspace et les marque CoW
 //   4. Fournit les primitives de libération pour les chemins d'erreur
 
-use crate::process::lifecycle::fork::{
-    AddressSpaceCloner, ClonedAddressSpace, AddrSpaceCloneError,
-};
+use crate::memory::core::{Frame, PhysAddr};
 use crate::memory::cow::tracker::COW_TRACKER;
+use crate::memory::physical::allocator::buddy;
 use crate::memory::virt::address_space::tlb::{shootdown_sync, TlbFlushType};
 use crate::memory::virt::page_table::x86_64::{
     phys_to_table_mut, phys_to_table_ref, PageTableEntry,
 };
-use crate::memory::virt::page_table::FrameAllocatorForWalk;
 use crate::memory::virt::UserAddressSpace;
-use crate::memory::core::{PhysAddr, Frame};
-use crate::memory::AllocFlags;
-use crate::memory::physical::allocator::buddy;
+use crate::process::lifecycle::fork::{
+    AddrSpaceCloneError, AddressSpaceCloner, ClonedAddressSpace,
+};
+use alloc::boxed::Box;
 
 pub struct KernelAddressSpaceCloner;
-
-struct ForkWalkAllocator;
 
 unsafe impl Send for KernelAddressSpaceCloner {}
 unsafe impl Sync for KernelAddressSpaceCloner {}
 
-impl FrameAllocatorForWalk for ForkWalkAllocator {
-    fn alloc_frame(&self, flags: AllocFlags) -> Result<Frame, crate::memory::AllocError> {
-        buddy::alloc_pages(0, flags)
-    }
-
-    fn free_frame(&self, frame: Frame) {
-        let _ = buddy::free_pages(frame, 0);
-    }
-}
-
 impl AddressSpaceCloner for KernelAddressSpaceCloner {
     fn clone_cow(
         &self,
-        src_cr3:       u64,
+        src_cr3: u64,
         src_space_ptr: usize,
     ) -> Result<ClonedAddressSpace, AddrSpaceCloneError> {
         if src_cr3 == 0 {
@@ -66,18 +53,25 @@ impl AddressSpaceCloner for KernelAddressSpaceCloner {
             }
         }
 
-        let mut child_as = Box::new(UserAddressSpace::new(child_pml4_phys, 0));
-        if src_space_ptr != 0 {
+        let inherited_heap_end = if src_space_ptr != 0 {
             let parent_as = unsafe { &*(src_space_ptr as *const UserAddressSpace) };
-            child_as.heap_end.store(
-                parent_as.heap_end.load(core::sync::atomic::Ordering::Acquire),
-                core::sync::atomic::Ordering::Release,
-            );
+            parent_as
+                .heap_end
+                .load(core::sync::atomic::Ordering::Acquire)
+        } else {
+            0
+        };
+
+        let child_as = Box::new(UserAddressSpace::new(child_pml4_phys, 0));
+        if inherited_heap_end != 0 {
+            child_as
+                .heap_end
+                .store(inherited_heap_end, core::sync::atomic::Ordering::Release);
         }
 
         Ok(ClonedAddressSpace {
-            cr3:             child_cr3,
-            addr_space_ptr:  Box::into_raw(child_as) as usize,
+            cr3: child_cr3,
+            addr_space_ptr: Box::into_raw(child_as) as usize,
         })
     }
 
@@ -95,7 +89,9 @@ impl AddressSpaceCloner for KernelAddressSpaceCloner {
             return;
         }
         let addr_space = unsafe { Box::from_raw(addr_space_ptr as *mut UserAddressSpace) };
-        unsafe { free_userspace_tables(addr_space.pml4_phys()); }
+        unsafe {
+            free_userspace_tables(addr_space.pml4_phys());
+        }
     }
 }
 
@@ -306,7 +302,9 @@ mod tests {
         let frame = Frame::containing(PhysAddr::new(0x20_000));
         let entry = PageTableEntry::new(
             frame,
-            PageTableEntry::FLAG_PRESENT | PageTableEntry::FLAG_WRITABLE | PageTableEntry::FLAG_USER,
+            PageTableEntry::FLAG_PRESENT
+                | PageTableEntry::FLAG_WRITABLE
+                | PageTableEntry::FLAG_USER,
         );
 
         let shared = shared_entry(entry);

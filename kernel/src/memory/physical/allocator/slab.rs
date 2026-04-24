@@ -64,6 +64,23 @@ pub fn size_class_for(size: usize) -> Option<usize> {
     None
 }
 
+/// Alloue une page de backing pour slab/slub.
+///
+/// Utilise le buddy dès qu'il est prêt afin d'éviter les doubles allocations
+/// physiques entre vmalloc et les caches slab/slub. Le bitmap bootstrap ne sert
+/// plus que de secours avant l'initialisation du buddy.
+pub(crate) fn alloc_slab_backing_page() -> Result<PhysAddr, AllocError> {
+    match crate::memory::physical::allocator::buddy::alloc_page(AllocFlags::NONE) {
+        Ok(frame) => Ok(frame.start_address()),
+        Err(AllocError::NotInitialized) => {
+            let frame = crate::memory::physical::allocator::bitmap::BOOTSTRAP_BITMAP
+                .alloc_frame(AllocFlags::NONE)?;
+            Ok(frame.start_address())
+        }
+        Err(e) => Err(e),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HEADER DE SLAB (stocké au début de chaque page de slab)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -309,7 +326,7 @@ impl SlabCache {
         // Comme slab.rs est dans physical/allocator/, il n'appelle PAS buddy directement
         // (éviter la dépendance circulaire). On s'appuie sur une fonction fournie
         // par la couche parente via un pointeur de fonction statique.
-        let phys = SLAB_PAGE_PROVIDER.get_page()?;
+        let phys = alloc_slab_backing_page()?;
 
         // Adresse virtuelle = physmap directe (PHYS_MAP_BASE + phys).
         // La physmap couvre toute la RAM physique sans mapping supplémentaire.

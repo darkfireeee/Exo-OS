@@ -12,33 +12,17 @@ pub mod rules;
 pub mod syscall_audit;
 
 pub use logger::{
-    log_event,
-    log_security_violation,
-    flush_to_userspace,
-    pending_events,
-    set_filter,
-    audit_logger_stats,
-    AuditRecord,
-    AuditCategory,
-    AuditOutcome,
+    audit_logger_stats, flush_to_userspace, log_event, log_security_violation, pending_events,
+    set_filter, AuditCategory, AuditOutcome, AuditRecord,
 };
 
 pub use rules::{
-    add_global_rule,
-    remove_global_rule,
-    evaluate_global,
-    rule_stats,
-    AuditRule,
-    RuleAction,
+    add_global_rule, evaluate_global, remove_global_rule, rule_stats, AuditRule, RuleAction,
 };
 
 pub use syscall_audit::{
-    audit_syscall_entry,
-    audit_syscall_exit,
-    audit_capability_deny,
-    audit_file_deny,
-    syscall_audit_stats,
-    AuditVerdict,
+    audit_capability_deny, audit_file_deny, audit_syscall_entry, audit_syscall_exit,
+    syscall_audit_stats, AuditVerdict,
 };
 
 /// Initialise le sous-système d'audit.

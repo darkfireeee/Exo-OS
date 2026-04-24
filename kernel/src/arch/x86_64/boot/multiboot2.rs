@@ -76,12 +76,32 @@ pub struct Multiboot2Info {
     pub bootloader_ptr: u64,
     pub mmap_ptr:       u64,  // pointeur vers le first MmapEntry
     pub mmap_count:     u32,
+    pub framebuffer_phys_addr: u64,
+    pub framebuffer_width:     u32,
+    pub framebuffer_height:    u32,
+    pub framebuffer_stride:    u32, // pixels par ligne
+    pub framebuffer_bpp:       u32,
+    pub framebuffer_format:    MultibootFramebufferFormat,
+    pub framebuffer_size_bytes:u64,
+}
+
+/// Format de pixel rapporté par le tag framebuffer Multiboot2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultibootFramebufferFormat {
+    None,
+    Rgbx,
+    Bgrx,
+    Unknown,
 }
 
 impl Multiboot2Info {
     const fn zeroed() -> Self {
         Self { rsdp_phys: 0, total_memory_kb: 0, cmdline_ptr: 0,
-               bootloader_ptr: 0, mmap_ptr: 0, mmap_count: 0 }
+               bootloader_ptr: 0, mmap_ptr: 0, mmap_count: 0,
+               framebuffer_phys_addr: 0, framebuffer_width: 0, framebuffer_height: 0,
+               framebuffer_stride: 0, framebuffer_bpp: 0,
+               framebuffer_format: MultibootFramebufferFormat::None,
+               framebuffer_size_bytes: 0 }
     }
 }
 
@@ -150,6 +170,96 @@ pub fn parse_multiboot2(mb2_phys: u64) -> Multiboot2Info {
             }
             TAG_RSDP_V1 | TAG_RSDP_V2 => {
                 info.rsdp_phys = data_addr as u64;
+            }
+            TAG_FRAMEBUFFER => {
+                // Layout MB2 framebuffer:
+                //   u64 addr
+                //   u32 pitch (bytes/ligne)
+                //   u32 width
+                //   u32 height
+                //   u8  bpp
+                //   u8  type
+                //   u16 reserved
+                // puis payload dépendant du type.
+                if tag_size >= 30 {
+                    // SAFETY: le tag a déjà été validé contre total_size.
+                    let fb_addr = unsafe { core::ptr::read_unaligned(data_addr as *const u64) };
+                    // SAFETY: offsets fixes dans le tag framebuffer MB2.
+                    let fb_pitch = unsafe {
+                        core::ptr::read_unaligned((data_addr + 8) as *const u32)
+                    };
+                    let fb_width = unsafe {
+                        core::ptr::read_unaligned((data_addr + 12) as *const u32)
+                    };
+                    let fb_height = unsafe {
+                        core::ptr::read_unaligned((data_addr + 16) as *const u32)
+                    };
+                    let fb_bpp = unsafe {
+                        core::ptr::read_unaligned((data_addr + 20) as *const u8)
+                    };
+                    let fb_type = unsafe {
+                        core::ptr::read_unaligned((data_addr + 21) as *const u8)
+                    };
+                    let bytes_per_pixel = ((fb_bpp as u32).saturating_add(7) / 8).max(1);
+
+                    let fb_format = if fb_type == 1 && tag_size >= 36 {
+                        // Direct RGB: 6 bytes supplémentaires.
+                        let red_pos = unsafe {
+                            core::ptr::read_unaligned((data_addr + 24) as *const u8)
+                        };
+                        let red_size = unsafe {
+                            core::ptr::read_unaligned((data_addr + 25) as *const u8)
+                        };
+                        let green_pos = unsafe {
+                            core::ptr::read_unaligned((data_addr + 26) as *const u8)
+                        };
+                        let green_size = unsafe {
+                            core::ptr::read_unaligned((data_addr + 27) as *const u8)
+                        };
+                        let blue_pos = unsafe {
+                            core::ptr::read_unaligned((data_addr + 28) as *const u8)
+                        };
+                        let blue_size = unsafe {
+                            core::ptr::read_unaligned((data_addr + 29) as *const u8)
+                        };
+
+                        if fb_bpp >= 24
+                            && red_size == 8
+                            && green_size == 8
+                            && blue_size == 8
+                            && red_pos == 16
+                            && green_pos == 8
+                            && blue_pos == 0
+                        {
+                            MultibootFramebufferFormat::Rgbx
+                        } else if fb_bpp >= 24
+                            && red_size == 8
+                            && green_size == 8
+                            && blue_size == 8
+                            && red_pos == 0
+                            && green_pos == 8
+                            && blue_pos == 16
+                        {
+                            MultibootFramebufferFormat::Bgrx
+                        } else {
+                            MultibootFramebufferFormat::Unknown
+                        }
+                    } else {
+                        MultibootFramebufferFormat::Unknown
+                    };
+
+                    info.framebuffer_phys_addr = fb_addr;
+                    info.framebuffer_width = fb_width;
+                    info.framebuffer_height = fb_height;
+                    info.framebuffer_stride = if bytes_per_pixel != 0 {
+                        fb_pitch / bytes_per_pixel
+                    } else {
+                        0
+                    };
+                    info.framebuffer_bpp = fb_bpp as u32;
+                    info.framebuffer_format = fb_format;
+                    info.framebuffer_size_bytes = (fb_pitch as u64).saturating_mul(fb_height as u64);
+                }
             }
             _ => {}
         }

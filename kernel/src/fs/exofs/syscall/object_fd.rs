@@ -70,6 +70,8 @@ pub mod open_flags {
 pub struct ObjectFdEntry {
     /// Numéro de fd (= index + FD_RESERVED).
     pub fd:        u32,
+    /// fd canonique qui porte l'état partagé de l'open-file-description.
+    pub shared_fd: u32,
     /// BlobId du blob associé.
     pub blob_id:   BlobId,
     /// Flags d'ouverture (O_RDONLY, O_WRONLY, O_RDWR, …).
@@ -90,6 +92,7 @@ impl ObjectFdEntry {
     const fn empty() -> Self {
         Self {
             fd:        SLOT_FREE,
+            shared_fd: SLOT_FREE,
             blob_id:   BlobId([0u8; 32]),
             flags:     0,
             cursor:    0,
@@ -108,6 +111,9 @@ impl ObjectFdEntry {
 
     #[inline]
     pub fn can_write(&self) -> bool { open_flags::can_write(self.flags) }
+
+    #[inline]
+    pub fn is_canonical(&self) -> bool { self.fd == self.shared_fd }
 
     /// Avance le curseur de `n` octets (saturating).
     #[inline]
@@ -145,11 +151,40 @@ impl ObjectFdTableInner {
         None
     }
 
+    /// Trouve un slot libre à partir d'un fd minimal.
+    fn find_free_slot_from(&self, min_fd: u32) -> Option<usize> {
+        let start_fd = min_fd.max(FD_RESERVED);
+        let mut idx = (start_fd - FD_RESERVED) as usize;
+        while idx < MAX_FDS {
+            if self.slots[idx].is_free() {
+                return Some(idx);
+            }
+            idx = idx.wrapping_add(1);
+        }
+        None
+    }
+
     /// Trouve le slot correspondant à un fd (RECUR-01 : while).
     fn slot_of_fd(&self, fd: u32) -> Option<usize> {
         if fd < FD_RESERVED || fd > FD_MAX { return None; }
         let idx = (fd - FD_RESERVED) as usize;
         if idx < MAX_FDS && !self.slots[idx].is_free() { Some(idx) } else { None }
+    }
+
+    fn canonical_slot_of_index(&self, idx: usize) -> ExofsResult<usize> {
+        let entry = self.slots[idx];
+        if entry.is_free() {
+            return Err(ExofsError::ObjectNotFound);
+        }
+        if entry.is_canonical() {
+            return Ok(idx);
+        }
+        self.slot_of_fd(entry.shared_fd).ok_or(ExofsError::ObjectNotFound)
+    }
+
+    fn canonical_slot_of_fd(&self, fd: u32) -> ExofsResult<usize> {
+        let idx = self.slot_of_fd(fd).ok_or(ExofsError::ObjectNotFound)?;
+        self.canonical_slot_of_index(idx)
     }
 
     /// Ouvre un nouveau fd→BlobId.
@@ -166,6 +201,7 @@ impl ObjectFdTableInner {
         let fd = FD_RESERVED.saturating_add(idx as u32);
         self.slots[idx] = ObjectFdEntry {
             fd,
+            shared_fd: fd,
             blob_id,
             flags,
             cursor:    0,
@@ -180,46 +216,151 @@ impl ObjectFdTableInner {
 
     /// Ferme un fd (retourne true si trouvé et fermé).
     fn close_slot(&mut self, fd: u32) -> bool {
-        if let Some(idx) = self.slot_of_fd(fd) {
-            let rc = self.slots[idx].ref_count;
-            if rc <= 1 {
-                self.slots[idx] = ObjectFdEntry::empty();
-                self.open_count = self.open_count.saturating_sub(1);
-            } else {
-                self.slots[idx].ref_count = rc.wrapping_sub(1);
+        let idx = match self.slot_of_fd(fd) {
+            Some(idx) => idx,
+            None => return false,
+        };
+
+        if !self.slots[idx].is_canonical() {
+            if let Some(canon_idx) = self.slot_of_fd(self.slots[idx].shared_fd) {
+                let rc = self.slots[canon_idx].ref_count;
+                self.slots[canon_idx].ref_count = rc.saturating_sub(1);
             }
-            true
-        } else {
-            false
+            self.slots[idx] = ObjectFdEntry::empty();
+            self.open_count = self.open_count.saturating_sub(1);
+            return true;
         }
+
+        let rc = self.slots[idx].ref_count;
+        if rc <= 1 {
+            self.slots[idx] = ObjectFdEntry::empty();
+            self.open_count = self.open_count.saturating_sub(1);
+            return true;
+        }
+
+        let mut promote_idx = None;
+        let mut i = 0usize;
+        while i < MAX_FDS {
+            if i != idx && !self.slots[i].is_free() && self.slots[i].shared_fd == fd {
+                promote_idx = Some(i);
+                break;
+            }
+            i = i.wrapping_add(1);
+        }
+
+        if let Some(new_idx) = promote_idx {
+            let old_entry = self.slots[idx];
+            let new_fd = self.slots[new_idx].fd;
+            let mut replacement = old_entry;
+            replacement.fd = new_fd;
+            replacement.shared_fd = new_fd;
+            replacement.ref_count = rc.saturating_sub(1);
+            self.slots[new_idx] = replacement;
+
+            let mut j = 0usize;
+            while j < MAX_FDS {
+                if j != idx && j != new_idx && !self.slots[j].is_free() && self.slots[j].shared_fd == fd {
+                    self.slots[j].shared_fd = new_fd;
+                }
+                j = j.wrapping_add(1);
+            }
+
+            self.slots[idx] = ObjectFdEntry::empty();
+            self.open_count = self.open_count.saturating_sub(1);
+            return true;
+        }
+
+        self.slots[idx].ref_count = rc.saturating_sub(1);
+        true
     }
 
     /// Lit l'entrée d'un fd (clonée).
     fn get_entry(&self, fd: u32) -> ExofsResult<ObjectFdEntry> {
-        let idx = self.slot_of_fd(fd).ok_or(ExofsError::ObjectNotFound)?;
-        Ok(self.slots[idx])
+        let canon_idx = self.canonical_slot_of_fd(fd)?;
+        let mut entry = self.slots[canon_idx];
+        entry.fd = fd;
+        Ok(entry)
     }
 
     /// Met à jour le curseur d'un fd.
     fn set_cursor(&mut self, fd: u32, cursor: u64) -> ExofsResult<()> {
-        let idx = self.slot_of_fd(fd).ok_or(ExofsError::ObjectNotFound)?;
+        let idx = self.canonical_slot_of_fd(fd)?;
         self.slots[idx].cursor = cursor;
         Ok(())
     }
 
     /// Met à jour la taille connue d'un fd.
     fn set_size(&mut self, fd: u32, size: u64) -> ExofsResult<()> {
-        let idx = self.slot_of_fd(fd).ok_or(ExofsError::ObjectNotFound)?;
+        let idx = self.canonical_slot_of_fd(fd)?;
         self.slots[idx].size = size;
         Ok(())
     }
 
-    /// Duplique un fd (incrémente ref_count).
+    /// Met à jour les flags d'état d'un fd canonique.
+    fn set_status_flags(&mut self, fd: u32, flags: u32) -> ExofsResult<u32> {
+        let idx = self.canonical_slot_of_fd(fd)?;
+        let access_mode = self.slots[idx].flags & 0x0003;
+        let mutable_mask = open_flags::O_APPEND;
+        let retained = self.slots[idx].flags & !(mutable_mask | 0x0003);
+        let updated = retained | access_mode | (flags & mutable_mask);
+        self.slots[idx].flags = updated;
+        Ok(updated)
+    }
+
+    /// Duplique un fd (nouveau descripteur partageant le même état).
     fn dup_fd(&mut self, fd: u32) -> ExofsResult<u32> {
-        let idx = self.slot_of_fd(fd).ok_or(ExofsError::ObjectNotFound)?;
-        let new_rc = self.slots[idx].ref_count.saturating_add(1);
-        self.slots[idx].ref_count = new_rc;
-        Ok(fd) // Même fd (sémantique simplifiée ; un dup complet créerait un nouveau slot).
+        let canon_idx = self.canonical_slot_of_fd(fd)?;
+        let new_idx = self.find_free_slot().ok_or(ExofsError::NoSpace)?;
+        let new_fd = FD_RESERVED.saturating_add(new_idx as u32);
+
+        let mut duplicate = self.slots[canon_idx];
+        duplicate.fd = new_fd;
+        duplicate.shared_fd = self.slots[canon_idx].fd;
+        duplicate.ref_count = 0;
+        self.slots[new_idx] = duplicate;
+        self.slots[canon_idx].ref_count = self.slots[canon_idx].ref_count.saturating_add(1);
+        self.open_count = self.open_count.saturating_add(1);
+        Ok(new_fd)
+    }
+
+    /// Duplique un fd dans un numéro précis.
+    fn dup2_fd(&mut self, oldfd: u32, newfd: u32) -> ExofsResult<u32> {
+        if newfd < FD_RESERVED || newfd > FD_MAX {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if oldfd == newfd {
+            self.canonical_slot_of_fd(oldfd)?;
+            return Ok(newfd);
+        }
+
+        let canon_idx = self.canonical_slot_of_fd(oldfd)?;
+        if let Some(existing_idx) = self.slot_of_fd(newfd) {
+            let existing_canon = self.canonical_slot_of_index(existing_idx)?;
+            if existing_canon == canon_idx {
+                return Ok(newfd);
+            }
+            let _ = self.close_slot(newfd);
+        }
+
+        let new_idx = (newfd - FD_RESERVED) as usize;
+        if !self.slots[new_idx].is_free() {
+            return Err(ExofsError::NoSpace);
+        }
+
+        let mut duplicate = self.slots[canon_idx];
+        duplicate.fd = newfd;
+        duplicate.shared_fd = self.slots[canon_idx].fd;
+        duplicate.ref_count = 0;
+        self.slots[new_idx] = duplicate;
+        self.slots[canon_idx].ref_count = self.slots[canon_idx].ref_count.saturating_add(1);
+        self.open_count = self.open_count.saturating_add(1);
+        Ok(newfd)
+    }
+
+    /// Duplique un fd en choisissant le premier numéro >= `min_fd`.
+    fn dup_from_fd(&mut self, fd: u32, min_fd: u32) -> ExofsResult<u32> {
+        let slot = self.find_free_slot_from(min_fd).ok_or(ExofsError::NoSpace)?;
+        self.dup2_fd(fd, FD_RESERVED.saturating_add(slot as u32))
     }
 
     /// Retourne le nombre de fds ouverts.
@@ -352,12 +493,12 @@ impl ObjectFdTable {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &mut *self.inner.get() };
-        let idx = inner.slot_of_fd(fd).ok_or_else(|| {
-            self.release();
-            ExofsError::ObjectNotFound
-        });
+        let idx = inner.canonical_slot_of_fd(fd);
         match idx {
-            Err(e) => { self.release(); Err(e) }
+            Err(e) => {
+                self.release();
+                Err(e)
+            }
             Ok(i) => {
                 inner.slots[i].advance_cursor(n);
                 let new_cursor = inner.slots[i].cursor;
@@ -372,6 +513,33 @@ impl ObjectFdTable {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &mut *self.inner.get() }.dup_fd(fd);
+        self.release();
+        r
+    }
+
+    /// Duplique un fd dans le numéro demandé.
+    pub fn dup2(&self, oldfd: u32, newfd: u32) -> ExofsResult<u32> {
+        self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let r = unsafe { &mut *self.inner.get() }.dup2_fd(oldfd, newfd);
+        self.release();
+        r
+    }
+
+    /// Duplique un fd vers le premier numéro >= `min_fd`.
+    pub fn dup_from(&self, fd: u32, min_fd: u32) -> ExofsResult<u32> {
+        self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let r = unsafe { &mut *self.inner.get() }.dup_from_fd(fd, min_fd);
+        self.release();
+        r
+    }
+
+    /// Met à jour les flags d'état d'un descripteur.
+    pub fn set_status_flags(&self, fd: u32, flags: u32) -> ExofsResult<u32> {
+        self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let r = unsafe { &mut *self.inner.get() }.set_status_flags(fd, flags);
         self.release();
         r
     }
@@ -469,9 +637,15 @@ mod tests {
         BlobId([b; 32])
     }
 
+    fn fresh_table() -> &'static ObjectFdTable {
+        static TABLE: ObjectFdTable = ObjectFdTable::new_const();
+        TABLE.reset_all();
+        &TABLE
+    }
+
     #[test]
     fn test_open_close_basic() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         let fd = t.open(make_blob(1), open_flags::O_RDWR, 0, 0, 0).unwrap();
         assert!(fd >= FD_RESERVED);
         assert!(t.close(fd));
@@ -479,7 +653,7 @@ mod tests {
 
     #[test]
     fn test_open_not_found_after_close() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         let fd = t.open(make_blob(2), open_flags::O_RDONLY, 0, 0, 0).unwrap();
         t.close(fd);
         assert!(t.get(fd).is_err());
@@ -487,7 +661,7 @@ mod tests {
 
     #[test]
     fn test_blob_id_of() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         let blob = make_blob(3);
         let fd = t.open(blob, open_flags::O_RDONLY, 0, 0, 0).unwrap();
         assert_eq!(t.blob_id_of(fd).unwrap().0, blob.0);
@@ -496,7 +670,7 @@ mod tests {
 
     #[test]
     fn test_open_count() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         assert_eq!(t.open_count(), 0);
         let fd1 = t.open(make_blob(4), open_flags::O_RDWR, 0, 0, 0).unwrap();
         let fd2 = t.open(make_blob(5), open_flags::O_RDWR, 0, 0, 0).unwrap();
@@ -509,7 +683,7 @@ mod tests {
 
     #[test]
     fn test_set_cursor() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         let fd = t.open(make_blob(6), open_flags::O_RDWR, 1024, 1, 0).unwrap();
         t.set_cursor(fd, 512).unwrap();
         assert_eq!(t.get(fd).unwrap().cursor, 512);
@@ -518,7 +692,7 @@ mod tests {
 
     #[test]
     fn test_advance_cursor() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         let fd = t.open(make_blob(7), open_flags::O_RDWR, 4096, 1, 0).unwrap();
         t.advance_cursor(fd, 100).unwrap();
         assert_eq!(t.get(fd).unwrap().cursor, 100);
@@ -529,7 +703,7 @@ mod tests {
 
     #[test]
     fn test_check_readable_rdonly() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         let fd = t.open(make_blob(8), open_flags::O_RDONLY, 0, 0, 0).unwrap();
         assert!(t.check_readable(fd).is_ok());
         assert!(t.check_writable(fd).is_err());
@@ -538,7 +712,7 @@ mod tests {
 
     #[test]
     fn test_check_writable_wronly() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         let fd = t.open(make_blob(9), open_flags::O_WRONLY, 0, 0, 0).unwrap();
         assert!(t.check_writable(fd).is_ok());
         assert!(t.check_readable(fd).is_err());
@@ -547,39 +721,105 @@ mod tests {
 
     #[test]
     fn test_invalid_flags_rejected() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         let r = t.open(make_blob(10), 0xDEAD_BEEF, 0, 0, 0);
         assert!(r.is_err());
     }
 
     #[test]
     fn test_close_nonexistent_returns_false() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         assert!(!t.close(9999));
     }
 
     #[test]
     fn test_get_invalid_fd_returns_err() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         assert!(t.get(0).is_err());
         assert!(t.get(3).is_err());
     }
 
     #[test]
-    fn test_dup_increments_refcount() {
-        let t = ObjectFdTable::new_const();
+    fn test_dup_creates_distinct_fd_with_shared_cursor() {
+        let t = fresh_table();
         let fd = t.open(make_blob(11), open_flags::O_RDWR, 0, 0, 0).unwrap();
-        t.dup(fd).unwrap();
-        // Après dup, une fermeture ne libère pas le slot.
+        let dup_fd = t.dup(fd).unwrap();
+        assert_ne!(fd, dup_fd);
+        t.set_cursor(fd, 123).unwrap();
+        assert_eq!(t.get(dup_fd).unwrap().cursor, 123);
+
+        // Fermer le fd canonique ne doit pas casser le descripteur dupliqué.
         t.close(fd);
-        assert!(t.get(fd).is_ok(), "fd still open after first close (ref=2)");
+        assert_eq!(t.get(dup_fd).unwrap().cursor, 123);
+        t.close(dup_fd);
+        assert!(t.get(dup_fd).is_err(), "duplicate closed after final close");
+    }
+
+    #[test]
+    fn test_dup2_retargets_requested_fd() {
+        let t = fresh_table();
+        let fd = t.open(make_blob(15), open_flags::O_RDWR, 0, 0, 0).unwrap();
+        let target_fd = fd.saturating_add(7);
+        let dup_fd = t.dup2(fd, target_fd).unwrap();
+        assert_eq!(dup_fd, target_fd);
+        t.set_cursor(fd, 64).unwrap();
+        assert_eq!(t.get(target_fd).unwrap().cursor, 64);
         t.close(fd);
-        assert!(t.get(fd).is_err(), "fd closed after second close (ref=0)");
+        assert_eq!(t.get(target_fd).unwrap().cursor, 64);
+        t.close(target_fd);
+    }
+
+    #[test]
+    fn test_set_status_flags_updates_shared_description() {
+        let t = fresh_table();
+        let fd = t.open(make_blob(16), open_flags::O_RDWR, 0, 0, 0).unwrap();
+        let dup_fd = t.dup(fd).unwrap();
+        let updated = t.set_status_flags(dup_fd, open_flags::O_APPEND).unwrap();
+        assert_ne!(updated & open_flags::O_APPEND, 0);
+        assert_ne!(t.get(fd).unwrap().flags & open_flags::O_APPEND, 0);
+        t.close(fd);
+        t.close(dup_fd);
+    }
+
+    #[test]
+    fn test_dup_promotion_stress() {
+        let t = fresh_table();
+
+        let mut seed = 0u32;
+        while seed < 128 {
+            let fd = t.open(make_blob(seed as u8), open_flags::O_RDWR, 0, 0, 0).unwrap();
+            let mut fds = [0u32; 8];
+            fds[0] = fd;
+
+            let mut i = 1usize;
+            while i < fds.len() {
+                fds[i] = t.dup(fd).unwrap();
+                i = i.wrapping_add(1);
+            }
+
+            t.set_cursor(fd, seed as u64).unwrap();
+
+            let mut j = 0usize;
+            while j < fds.len() {
+                assert_eq!(t.get(fds[j]).unwrap().cursor, seed as u64);
+                j = j.wrapping_add(1);
+            }
+
+            let mut k = 0usize;
+            while k < fds.len() {
+                assert!(t.close(fds[k]));
+                k = k.wrapping_add(1);
+            }
+
+            seed = seed.wrapping_add(1);
+        }
+
+        assert_eq!(t.open_count(), 0);
     }
 
     #[test]
     fn test_stats_tracking() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         let fd = t.open(make_blob(12), open_flags::O_RDWR, 0, 0, 0).unwrap();
         t.close(fd);
         let (o, c, _) = t.stats();
@@ -589,7 +829,7 @@ mod tests {
 
     #[test]
     fn test_reset_all() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         let fd = t.open(make_blob(13), open_flags::O_RDWR, 0, 0, 0).unwrap();
         assert_eq!(t.open_count(), 1);
         t.reset_all();
@@ -599,7 +839,7 @@ mod tests {
 
     #[test]
     fn test_set_size() {
-        let t = ObjectFdTable::new_const();
+        let t = fresh_table();
         let fd = t.open(make_blob(14), open_flags::O_RDWR, 0, 0, 0).unwrap();
         t.set_size(fd, 8192).unwrap();
         assert_eq!(t.get(fd).unwrap().size, 8192);

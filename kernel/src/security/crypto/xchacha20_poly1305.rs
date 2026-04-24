@@ -99,11 +99,7 @@ fn compute_tag(
     out
 }
 
-fn xchacha20_apply(
-    key: &[u8; KEY_LEN],
-    nonce: &[u8; XCHACHA20_NONCE_LEN],
-    data: &mut [u8],
-) {
+fn xchacha20_apply(key: &[u8; KEY_LEN], nonce: &[u8; XCHACHA20_NONCE_LEN], data: &mut [u8]) {
     let subkey = hchacha20(key, array_ref_16(&nonce[..16]));
     let mut chacha_nonce = [0u8; 12];
     chacha_nonce[4..].copy_from_slice(&nonce[16..]);
@@ -131,8 +127,7 @@ fn hchacha20(key: &[u8; KEY_LEN], nonce: &[u8; 16]) -> [u8; KEY_LEN] {
         state[4 + idx] = u32::from_le_bytes(key[idx * 4..idx * 4 + 4].try_into().unwrap());
     }
     for idx in 0..4 {
-        state[12 + idx] =
-            u32::from_le_bytes(nonce[idx * 4..idx * 4 + 4].try_into().unwrap());
+        state[12 + idx] = u32::from_le_bytes(nonce[idx * 4..idx * 4 + 4].try_into().unwrap());
     }
 
     let mut work = state;
@@ -148,8 +143,7 @@ fn hchacha20(key: &[u8; KEY_LEN], nonce: &[u8; 16]) -> [u8; KEY_LEN] {
     }
 
     let words = [
-        work[0], work[1], work[2], work[3],
-        work[12], work[13], work[14], work[15],
+        work[0], work[1], work[2], work[3], work[12], work[13], work[14], work[15],
     ];
     let mut out = [0u8; KEY_LEN];
     for (idx, word) in words.iter().enumerate() {
@@ -169,8 +163,7 @@ pub(crate) fn chacha20_block(key: &[u8; KEY_LEN], nonce: &[u8; 12], counter: u32
     }
     state[12] = counter;
     for idx in 0..3 {
-        state[13 + idx] =
-            u32::from_le_bytes(nonce[idx * 4..idx * 4 + 4].try_into().unwrap());
+        state[13 + idx] = u32::from_le_bytes(nonce[idx * 4..idx * 4 + 4].try_into().unwrap());
     }
 
     let mut work = state;
@@ -217,7 +210,9 @@ fn quarter_round(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) 
 
 #[inline(always)]
 fn array_ref_16(input: &[u8]) -> &[u8; 16] {
-    input.try_into().expect("XChaCha20 nonce prefix must be 16 bytes")
+    input
+        .try_into()
+        .expect("XChaCha20 nonce prefix must be 16 bytes")
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@
 //   • Attestation TCB (Trusted Computing Base)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer, Verifier};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 /// Paire de clés Ed25519.
 ///
@@ -58,7 +58,7 @@ pub enum Ed25519Error {
 impl core::fmt::Display for Ed25519Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Ed25519Error::InvalidKey       => write!(f, "Ed25519: invalid key"),
+            Ed25519Error::InvalidKey => write!(f, "Ed25519: invalid key"),
             Ed25519Error::InvalidSignature => write!(f, "Ed25519: invalid signature"),
             Ed25519Error::InvalidParameter => write!(f, "Ed25519: invalid parameter"),
         }
@@ -76,18 +76,18 @@ impl core::fmt::Display for Ed25519Error {
 /// conformément au RFC 8032 §5.1.5.
 pub fn ed25519_keypair_from_seed(seed: &[u8; 32]) -> Result<Ed25519KeyPair, Ed25519Error> {
     let signing_key = SigningKey::from_bytes(seed);
-    let public_key  = signing_key.verifying_key().to_bytes();
+    let public_key = signing_key.verifying_key().to_bytes();
 
     // Calcul de l'expanded key pour compatibilité API
     // La clé étendue = SHA-512(seed) avec modification des bits (clamping)
     // Stockée ici pour répondre à l'interface mais non utilisée directement.
     let mut expanded = [0u8; 64];
     {
-        use sha2::{Sha512, Digest};
+        use sha2::{Digest, Sha512};
         let hash = Sha512::digest(seed);
         expanded.copy_from_slice(&hash);
         // Clamping RFC 8032 §5.1.5
-        expanded[0]  &= 248;
+        expanded[0] &= 248;
         expanded[31] &= 127;
         expanded[31] |= 64;
     }
@@ -102,10 +102,7 @@ pub fn ed25519_keypair_from_seed(seed: &[u8; 32]) -> Result<Ed25519KeyPair, Ed25
 /// Signe un message avec la clé privée Ed25519.
 ///
 /// Retourne la signature 64 octets (format RFC 8032).
-pub fn ed25519_sign(
-    keypair: &Ed25519KeyPair,
-    message: &[u8],
-) -> Result<[u8; 64], Ed25519Error> {
+pub fn ed25519_sign(keypair: &Ed25519KeyPair, message: &[u8]) -> Result<[u8; 64], Ed25519Error> {
     let signing_key = SigningKey::from_bytes(&keypair.seed);
     let sig: Signature = signing_key.sign(message);
     Ok(sig.to_bytes())
@@ -119,8 +116,7 @@ pub fn ed25519_verify(
     message: &[u8],
     signature: &[u8; 64],
 ) -> Result<(), Ed25519Error> {
-    let vk  = VerifyingKey::from_bytes(public_key)
-        .map_err(|_| Ed25519Error::InvalidKey)?;
+    let vk = VerifyingKey::from_bytes(public_key).map_err(|_| Ed25519Error::InvalidKey)?;
     let sig = Signature::from_bytes(signature);
 
     vk.verify(message, &sig)
@@ -138,8 +134,8 @@ mod tests {
     #[test]
     fn test_sign_verify_roundtrip() {
         let seed = [0x42u8; 32];
-        let kp   = ed25519_keypair_from_seed(&seed).unwrap();
-        let msg  = b"ExoOS kernel module signature test";
+        let kp = ed25519_keypair_from_seed(&seed).unwrap();
+        let msg = b"ExoOS kernel module signature test";
 
         let sig = ed25519_sign(&kp, msg).unwrap();
         ed25519_verify(&kp.public_key, msg, &sig).unwrap(); // doit réussir
@@ -148,12 +144,12 @@ mod tests {
     #[test]
     fn test_tampered_message_rejected() {
         let seed = [0x11u8; 32];
-        let kp   = ed25519_keypair_from_seed(&seed).unwrap();
-        let msg  = b"original message";
+        let kp = ed25519_keypair_from_seed(&seed).unwrap();
+        let msg = b"original message";
 
-        let sig     = ed25519_sign(&kp, msg).unwrap();
+        let sig = ed25519_sign(&kp, msg).unwrap();
         let tampered = b"modified message";
-        let result   = ed25519_verify(&kp.public_key, tampered, &sig);
+        let result = ed25519_verify(&kp.public_key, tampered, &sig);
         assert_eq!(result, Err(Ed25519Error::InvalidSignature));
     }
 
@@ -163,7 +159,7 @@ mod tests {
         let kp2 = ed25519_keypair_from_seed(&[0x02u8; 32]).unwrap();
         let msg = b"test";
 
-        let sig    = ed25519_sign(&kp1, msg).unwrap();
+        let sig = ed25519_sign(&kp1, msg).unwrap();
         let result = ed25519_verify(&kp2.public_key, msg, &sig);
         assert_eq!(result, Err(Ed25519Error::InvalidSignature));
     }

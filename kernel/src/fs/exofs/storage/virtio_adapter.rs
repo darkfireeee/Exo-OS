@@ -31,8 +31,7 @@ impl BlockDevice for VirtioBlockAdapter {
     }
 
     fn total_blocks(&self) -> u64 {
-        // En simulant une capacité statique
-        1024 * 1024 
+        self.device.lock().total_blocks()
     }
 
     fn flush(&self) -> ExofsResult<()> {

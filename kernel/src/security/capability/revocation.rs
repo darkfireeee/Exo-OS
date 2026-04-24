@@ -16,11 +16,10 @@
 // COMPLEXITÉ : O(1) — fetch_add atomique Release
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use core::sync::atomic::Ordering;
 
-use super::token::{CapToken, ObjectId};
 use super::table::CapTable;
+use super::token::{CapToken, ObjectId};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // revoke — Révocation O(1)
@@ -48,4 +47,3 @@ pub fn revoke(table: &CapTable, object_id: ObjectId) {
 pub fn revoke_token(table: &CapTable, token: CapToken) {
     revoke(table, token.object_id());
 }
-

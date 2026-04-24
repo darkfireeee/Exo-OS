@@ -13,10 +13,9 @@
 //   déclenche une alerte immédiate vers le security monitor (Ring 1).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use super::context::SecurityContext;
 use super::labels::SecurityLabel;
-use super::policy::{AccessRequest, PolicyAction, ResourceKind, global_policy};
+use super::policy::{global_policy, AccessRequest, PolicyAction, ResourceKind};
 use crate::security::audit;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -37,8 +36,8 @@ pub enum AccessError {
 impl core::fmt::Display for AccessError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Denied        => write!(f, "zero-trust: access denied"),
-            Self::DeniedAlert   => write!(f, "zero-trust: access denied (security alert raised)"),
+            Self::Denied => write!(f, "zero-trust: access denied"),
+            Self::DeniedAlert => write!(f, "zero-trust: access denied (security alert raised)"),
             Self::InvalidContext => write!(f, "zero-trust: invalid security context"),
         }
     }
@@ -63,11 +62,11 @@ impl core::fmt::Display for AccessError {
 /// * `Err(AccessError::DeniedAlert)` si refusé avec alerte
 #[inline]
 pub fn verify_access(
-    subject:       &SecurityContext,
+    subject: &SecurityContext,
     resource_kind: ResourceKind,
-    object_label:  SecurityLabel,
-    is_write:      bool,
-    context_data:  u64,
+    object_label: SecurityLabel,
+    is_write: bool,
+    context_data: u64,
 ) -> Result<(), AccessError> {
     let req = AccessRequest {
         subject,
@@ -122,7 +121,13 @@ pub fn verify_file_read(
     object_label: SecurityLabel,
     inode_id: u64,
 ) -> Result<(), AccessError> {
-    verify_access(subject, ResourceKind::FileInode, object_label, false, inode_id)
+    verify_access(
+        subject,
+        ResourceKind::FileInode,
+        object_label,
+        false,
+        inode_id,
+    )
 }
 
 /// Raccourci : vérifie un accès en écriture à un fichier.
@@ -132,26 +137,38 @@ pub fn verify_file_write(
     object_label: SecurityLabel,
     inode_id: u64,
 ) -> Result<(), AccessError> {
-    verify_access(subject, ResourceKind::FileInode, object_label, true, inode_id)
+    verify_access(
+        subject,
+        ResourceKind::FileInode,
+        object_label,
+        true,
+        inode_id,
+    )
 }
 
 /// Raccourci : vérifie un accès IPC.
 #[inline(always)]
 pub fn verify_ipc_access(
-    subject:     &SecurityContext,
-    ep_label:    SecurityLabel,
+    subject: &SecurityContext,
+    ep_label: SecurityLabel,
     endpoint_id: u64,
-    is_send:     bool,
+    is_send: bool,
 ) -> Result<(), AccessError> {
-    verify_access(subject, ResourceKind::IpcEndpoint, ep_label, is_send, endpoint_id)
+    verify_access(
+        subject,
+        ResourceKind::IpcEndpoint,
+        ep_label,
+        is_send,
+        endpoint_id,
+    )
 }
 
 /// Raccourci : vérifie un accès à une clé cryptographique.
 #[inline(always)]
 pub fn verify_crypto_key_access(
-    subject:  &SecurityContext,
+    subject: &SecurityContext,
     key_label: SecurityLabel,
-    key_id:   u64,
+    key_id: u64,
 ) -> Result<(), AccessError> {
     verify_access(subject, ResourceKind::CryptoKey, key_label, false, key_id)
 }
@@ -159,20 +176,29 @@ pub fn verify_crypto_key_access(
 /// Raccourci : vérifie un accès DMA.
 #[inline(always)]
 pub fn verify_dma_access(
-    subject:    &SecurityContext,
-    chan_label:  SecurityLabel,
+    subject: &SecurityContext,
+    chan_label: SecurityLabel,
     channel_id: u64,
 ) -> Result<(), AccessError> {
-    verify_access(subject, ResourceKind::DmaChannel, chan_label, true, channel_id)
+    verify_access(
+        subject,
+        ResourceKind::DmaChannel,
+        chan_label,
+        true,
+        channel_id,
+    )
 }
 
 /// Vérifie un appel syscall dans un contexte sandboxé.
 #[inline]
-pub fn verify_syscall(
-    subject:     &SecurityContext,
-    syscall_no:  u64,
-) -> Result<(), AccessError> {
+pub fn verify_syscall(subject: &SecurityContext, syscall_no: u64) -> Result<(), AccessError> {
     // Syscalls ont le label kernel — vérification de la restriction sandbox
     let kernel_label = SecurityLabel::kernel();
-    verify_access(subject, ResourceKind::Syscall, kernel_label, false, syscall_no)
+    verify_access(
+        subject,
+        ResourceKind::Syscall,
+        kernel_label,
+        false,
+        syscall_no,
+    )
 }
