@@ -212,7 +212,7 @@ pub fn resolve_path_full<R: PathResolver>(
             break;
         }
 
-        let comp = ctx.remaining.pop().unwrap(); // safe: !is_done()
+        let comp = ctx.remaining.pop().ok_or(ExofsError::InternalError)?;
         let is_last = ctx.remaining.is_empty();
 
         // Lookup dans le répertoire courant

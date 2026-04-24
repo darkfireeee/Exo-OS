@@ -155,11 +155,10 @@ impl PhysicalRef {
 
     /// Décrémente le ref-count du P-Blob, si applicable.
     ///
-    /// **Panic** si le compteur atteint 0 sous sa valeur minimale (REFCNT-01).
-    pub fn dec_ref(&self) -> u32 {
+    pub fn dec_ref(&self) -> ExofsResult<u32> {
         match self {
             Self::Blob(b) => b.dec_ref(),
-            _ => 0,
+            _ => Ok(0),
         }
     }
 
@@ -357,7 +356,7 @@ mod tests {
         let r = PhysicalRef::from_blob(Arc::clone(&b));
         r.inc_ref();
         assert_eq!(b.ref_count(), 2);
-        r.dec_ref();
+        r.dec_ref().unwrap();
         assert_eq!(b.ref_count(), 1);
     }
 

@@ -170,7 +170,7 @@ impl BlobCache {
             let old_size = inner.map[&id].len();
             inner.used = inner.used.saturating_sub(old_size);
             inner.eviction.remove(&id);
-            let existing = inner.map.get_mut(&id).unwrap();
+            let existing = inner.map.get_mut(&id).ok_or(ExofsError::InternalError)?;
             existing.data = data;
             existing.dirty = false;
             existing.touch(now);

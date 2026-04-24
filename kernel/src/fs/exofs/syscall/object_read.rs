@@ -266,7 +266,10 @@ pub fn bytes_remaining(blob_size: u64, offset: u64) -> u64 {
 /// ARITH-02 : checked_div.
 #[inline]
 pub fn pages_in(bytes: u64, page_size: u64) -> u64 {
-    bytes.checked_div(page_size.max(1)).unwrap_or(0)
+    if page_size == 0 {
+        return 0;
+    }
+    bytes.checked_div(page_size).unwrap_or(0)
 }
 
 /// Aligne un offset vers le haut sur `align` (puissance de 2).

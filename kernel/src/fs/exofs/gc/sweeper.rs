@@ -275,14 +275,12 @@ impl Sweeper {
                 continue;
             }
 
-            // Decrementer le ref_count (REFCNT-01 via blob_refcount).
-            // Si le count atteint zero, le blob sera mis en file differee (GC-01).
-            match BLOB_REFCOUNT.dec(&blob_id, current_epoch) {
-                Ok(did_defer) => {
-                    if did_defer.0 == 0 {
-                        br.blobs_deferred = br.blobs_deferred.saturating_add(1);
-                        br.bytes_deferred = br.bytes_deferred.saturating_add(phys_size);
-                    }
+            // Le blob est deja a zero : l'ajouter dans la file differee sans
+            // sous-decrementer le compteur.
+            match BLOB_REFCOUNT.queue_zero(&blob_id, current_epoch) {
+                Ok(_) => {
+                    br.blobs_deferred = br.blobs_deferred.saturating_add(1);
+                    br.bytes_deferred = br.bytes_deferred.saturating_add(phys_size);
                 }
                 Err(ExofsError::Resource) => {
                     // File de suppression differee pleine.

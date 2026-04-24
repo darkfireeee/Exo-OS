@@ -265,19 +265,13 @@ impl PhysicalBlobInMemory {
 
     /// Décrémente le compteur de références.
     ///
-    /// **Panic** si le compteur est déjà à 0 (REFCNT-01).
-    ///
     /// Retourne la **nouvelle** valeur du compteur (0 = orphelin).
     #[inline]
-    pub fn dec_ref(&self) -> u32 {
+    pub fn dec_ref(&self) -> ExofsResult<u32> {
         loop {
             let cur = self.ref_count.load(Ordering::Acquire);
             if cur == 0 {
-                // REFCNT-01 : le panic est obligatoire — underflow = corruption.
-                panic!(
-                    "ExoFS REFCNT-01: PhysicalBlob ref_count underflow \
-                     (blob_id présent dans la table)"
-                );
+                return Err(ExofsError::RefCountUnderflow);
             }
             match self.ref_count.compare_exchange_weak(
                 cur,
@@ -293,7 +287,7 @@ impl PhysicalBlobInMemory {
                         //          qu'un blob est devenu éligible au GC.
                         EPOCH_STATS.inc_blobs_gc_eligible();
                     }
-                    return new_val;
+                    return Ok(new_val);
                 }
                 Err(_) => continue, // Retry ABA-safe.
             }
@@ -563,10 +557,10 @@ mod tests {
         assert_eq!(b.ref_count(), 1);
         b.inc_ref();
         assert_eq!(b.ref_count(), 2);
-        let new = b.dec_ref();
+        let new = b.dec_ref().unwrap();
         assert_eq!(new, 1);
         assert!(!b.is_orphan());
-        let new2 = b.dec_ref();
+        let new2 = b.dec_ref().unwrap();
         assert_eq!(new2, 0);
         assert!(b.is_orphan());
     }

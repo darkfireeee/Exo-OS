@@ -52,10 +52,22 @@ pub static CURRENT_THREAD_PER_CPU: [AtomicUsize; MAX_CPUS] =
 /// Le pointeur est non-null si le scheduler est initialisé et un thread tourne.
 #[inline]
 pub fn current_thread_raw() -> *mut ThreadControlBlock {
-    // BUG-C2A FIX: lire depuis gs:[0x20] per-CPU, pas l'index 0
-    // SAFETY: GS per-CPU initialisé avant tout appel à cette fonction
-    let tcb_ptr = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
-    tcb_ptr as *mut ThreadControlBlock
+    // BUG-C2A FIX: lire depuis gs:[0x20] per-CPU, pas l'index 0.
+    // Pendant les toutes premières phases de boot, le slot GS peut encore être
+    // nul alors que la publication canonique cross-CPU a déjà eu lieu.
+    // On retombe alors sur CURRENT_THREAD_PER_CPU[cpu] pour éviter un faux null
+    // pendant la couture BSP/AP.
+    let gs_tcb = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() as usize };
+    if gs_tcb != 0 {
+        return gs_tcb as *mut ThreadControlBlock;
+    }
+
+    let cpu_id = percpu::current_cpu_id() as usize;
+    if cpu_id >= MAX_CPUS {
+        return core::ptr::null_mut();
+    }
+
+    CURRENT_THREAD_PER_CPU[cpu_id].load(Ordering::Acquire) as *mut ThreadControlBlock
 }
 
 /// Bloque le thread courant.
@@ -384,7 +396,19 @@ pub unsafe fn schedule_block(
     use core::ptr::NonNull;
 
     let current_ptr = NonNull::new_unchecked(current as *mut ThreadControlBlock);
-    let idle_thread = rq.idle_thread;
+    let idle_thread = match rq.idle_thread {
+        Some(idle) => Some(idle),
+        None => {
+            let recovered = crate::scheduler::core::boot_idle::published_boot_idle(rq.cpu.0);
+            if let Some(idle) = recovered {
+                rq.set_idle_thread(idle);
+                if rq.current.is_none() {
+                    rq.current = Some(idle);
+                }
+            }
+            recovered
+        }
+    };
 
     match pick_next_task(rq, Some(current_ptr)) {
         PickResult::Switch(next) => {
@@ -397,8 +421,14 @@ pub unsafe fn schedule_block(
                         context_switch(current, &mut *idle.as_ptr());
                     }
                     _ => {
-                        // Fallback de sécurité : si aucun idle n'est encore câblé,
-                        // conserver l'ancien comportement plutôt que geler le CPU.
+                        // Garde-fou ultime: si l'idle per-CPU n'est vraiment pas
+                        // publiable, on évite le gel dur mais on laisse une trace
+                        // claire en debug.
+                        debug_assert!(
+                            false,
+                            "schedule_block: idle_thread absent sur cpu {}",
+                            rq.cpu.0
+                        );
                         current.set_state(TaskState::Runnable);
                         rq.enqueue(current_ptr);
                     }
@@ -411,7 +441,11 @@ pub unsafe fn schedule_block(
                     context_switch(current, &mut *idle.as_ptr());
                 }
                 _ => {
-                    // Fallback transitoire tant qu'aucun idle n'est lié à cette RQ.
+                    debug_assert!(
+                        false,
+                        "schedule_block: pick_next sans idle_thread sur cpu {}",
+                        rq.cpu.0
+                    );
                     current.set_state(TaskState::Runnable);
                     rq.enqueue(current_ptr);
                 }

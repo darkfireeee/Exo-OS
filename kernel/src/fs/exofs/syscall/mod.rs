@@ -1,4 +1,4 @@
-//! mod.rs — Dispatcher centralisé des syscalls ExoFS (SYS 500–518)
+//! mod.rs — Dispatcher centralisé des syscalls ExoFS (SYS 500–520)
 //!
 //! Déclare tous les sous-modules, ré-exporte les handlers, fournit
 //! `dispatch_exofs_syscall()` qui route par numéro de syscall.
@@ -252,6 +252,8 @@ pub fn syscall_name(nr: u64) -> &'static str {
         SYS_EXOFS_EXPORT_OBJECT => "exofs_export_object",
         SYS_EXOFS_IMPORT_OBJECT => "exofs_import_object",
         SYS_EXOFS_EPOCH_COMMIT => "exofs_epoch_commit",
+        SYS_EXOFS_OPEN_BY_PATH => "exofs_open_by_path",
+        SYS_EXOFS_READDIR => "exofs_readdir",
         _ => "<unknown_exofs_syscall>",
     }
 }
@@ -279,6 +281,8 @@ pub fn syscall_number(name: &[u8]) -> Option<u64> {
         (b"exofs_export_object", SYS_EXOFS_EXPORT_OBJECT),
         (b"exofs_import_object", SYS_EXOFS_IMPORT_OBJECT),
         (b"exofs_epoch_commit", SYS_EXOFS_EPOCH_COMMIT),
+        (b"exofs_open_by_path", SYS_EXOFS_OPEN_BY_PATH),
+        (b"exofs_readdir", SYS_EXOFS_READDIR),
     ];
     let mut i = 0usize;
     while i < TABLE.len() {
@@ -384,24 +388,27 @@ mod tests {
     fn test_is_exofs_syscall_valid() {
         assert!(is_exofs_syscall(SYS_EXOFS_PATH_RESOLVE));
         assert!(is_exofs_syscall(SYS_EXOFS_EPOCH_COMMIT));
+        assert!(is_exofs_syscall(SYS_EXOFS_READDIR));
     }
 
     #[test]
     fn test_is_exofs_syscall_invalid() {
         assert!(!is_exofs_syscall(0));
         assert!(!is_exofs_syscall(499));
-        assert!(!is_exofs_syscall(519));
+        assert!(!is_exofs_syscall(521));
     }
 
     #[test]
     fn test_syscall_count_is_19() {
-        assert_eq!(SYS_EXOFS_COUNT, 19);
+        assert_eq!(SYS_EXOFS_COUNT, 21);
     }
 
     #[test]
     fn test_syscall_name_known() {
         assert_eq!(syscall_name(SYS_EXOFS_PATH_RESOLVE), "exofs_path_resolve");
         assert_eq!(syscall_name(SYS_EXOFS_EPOCH_COMMIT), "exofs_epoch_commit");
+        assert_eq!(syscall_name(SYS_EXOFS_OPEN_BY_PATH), "exofs_open_by_path");
+        assert_eq!(syscall_name(SYS_EXOFS_READDIR), "exofs_readdir");
     }
 
     #[test]

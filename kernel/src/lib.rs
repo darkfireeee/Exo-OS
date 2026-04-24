@@ -121,6 +121,14 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     unsafe fn kdb(b: u8) {
         core::arch::asm!("out 0xE9, al", in("al") b, options(nomem, nostack));
     }
+
+    struct IrqStateGuard(u64);
+
+    impl Drop for IrqStateGuard {
+        fn drop(&mut self) {
+            crate::arch::x86_64::irq_restore(self.0);
+        }
+    }
     // ── Phase 2a : EmergencyPool — PREMIER ABSOLU (RÈGLE EMERGENCY-01) ─────────
     crate::memory::physical::frame::emergency_pool::init();
     kdb(b'2'); // Phase 2a done
@@ -196,7 +204,7 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     // GUARD: désactiver les interruptions pendant l'init du sous-système process
     // pour éviter qu'un timer interrupt ne déclenche un context switch avec des
     // structures de données partiellement initialisées.
-    core::arch::asm!("cli", options(nomem, nostack));
+    let process_irq_guard = IrqStateGuard(crate::arch::x86_64::irq_save());
     kdb(b'a'); // avant pid::init
     crate::process::core::pid::init(32768, 131072);
     kdb(b'b'); // avant registry::init
@@ -205,7 +213,7 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     crate::process::lifecycle::reap::init_reaper();
     kdb(b'd'); // avant register_with_dma
     crate::process::state::wakeup::register_with_dma();
-    core::arch::asm!("sti", options(nomem, nostack));
+    drop(process_irq_guard);
     kdb(b'P'); // Phase 4 done (process init + reaper kthread)
     crate::arch::x86_64::boot_display::stage_ok("PROCESS");
 
@@ -235,8 +243,19 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     ipc::ring::spsc::init_spsc_rings();
     // BUG-C2B FIX: réserver un pool SHM physique dédié avant l'initialisation IPC.
     const SHM_POOL_ORDER: usize = 8; // 2^8 pages = 256 pages = 1 MiB
-    let shm_pool = crate::memory::alloc_pages(SHM_POOL_ORDER, crate::memory::AllocFlags::ZEROED)
-        .expect("ipc shm pool allocation failed");
+    let shm_pool = match crate::memory::alloc_pages(
+        SHM_POOL_ORDER,
+        crate::memory::AllocFlags::ZEROED,
+    ) {
+        Ok(pool) => pool,
+        Err(err) => {
+            panic!(
+                "ipc shm pool allocation failed: order={} err={:?}",
+                SHM_POOL_ORDER,
+                err
+            );
+        }
+    };
     crate::ipc::ipc_init(
         shm_pool.start_address().as_u64(),
         1, // nr_numa_nodes — à lire depuis ACPI NUMA si disponible

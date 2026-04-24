@@ -255,7 +255,7 @@ impl BlobRefcount {
 
     /// Decremente le ref_count d'un blob.
     ///
-    /// REFCNT-01 : PANIC si underflow (current == 0).
+    /// REFCNT-01 : retourne `RefCountUnderflow` si underflow (current == 0).
     /// Retourne `(nouveau_count, phys_size)`.
     /// Si nouveau_count == 0 : le blob est candidat a la DeferredDeleteQueue.
     pub fn dec(&self, id: &BlobId, current_epoch: EpochId) -> ExofsResult<(u32, u64)> {
@@ -267,11 +267,7 @@ impl BlobRefcount {
                 loop {
                     let current = entry.count.load(Ordering::Acquire);
                     if current == 0 {
-                        // REFCNT-01 : jamais fetch_sub aveugle → panic.
-                        panic!(
-                            "[ExoFS BlobRefcount] REFCNT-01 underflow sur BlobId {:?}",
-                            id
-                        );
+                        return Err(ExofsError::RefCountUnderflow);
                     }
                     let next = current - 1; // Safe : current > 0
                     match entry.count.compare_exchange_weak(
@@ -308,6 +304,37 @@ impl BlobRefcount {
                         Err(_) => continue,
                     }
                 }
+            }
+        }
+    }
+
+    /// Ajoute explicitement un blob deja a ref_count 0 dans la file differee.
+    ///
+    /// Utilise par les passes de GC qui tombent sur un blob deja orphelin.
+    pub fn queue_zero(&self, id: &BlobId, current_epoch: EpochId) -> ExofsResult<u64> {
+        let mut g = self.inner.lock();
+        match g.map.get(id) {
+            None => Err(ExofsError::BlobNotFound),
+            Some(entry) => {
+                let current = entry.count.load(Ordering::Acquire);
+                let phys_size = entry.phys_size;
+                if current != 0 {
+                    return Err(ExofsError::InvalidState);
+                }
+                if g.deferred.iter().any(|queued| queued.blob_id == *id) {
+                    return Ok(phys_size);
+                }
+                if g.deferred.len() >= DEFERRED_QUEUE_MAX {
+                    return Err(ExofsError::Resource);
+                }
+                g.deferred.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                g.deferred.push(DeferredDeleteEntry {
+                    blob_id: *id,
+                    phys_size,
+                    min_epoch: current_epoch.0.saturating_add(GC_MIN_DEFERRED_EPOCHS),
+                });
+                g.stats.deferred_queued = g.stats.deferred_queued.saturating_add(1);
+                Ok(phys_size)
             }
         }
     }
@@ -452,6 +479,13 @@ mod tests {
         BlobId(arr)
     }
 
+    fn make_blob_id_u16(v: u16) -> BlobId {
+        let mut arr = [0u8; 32];
+        arr[0] = (v & 0x00FF) as u8;
+        arr[1] = (v >> 8) as u8;
+        BlobId(arr)
+    }
+
     fn epoch(v: u64) -> EpochId {
         EpochId(v)
     }
@@ -509,6 +543,40 @@ mod tests {
         let ready = table.flush_deferred(epoch(5));
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].blob_id, id);
+    }
+
+    #[test]
+    fn test_queue_zero_requeues_ready_blob_without_underflow() {
+        let table = BlobRefcount::new();
+        let id = make_blob_id(42);
+        table.register(id, 1024, epoch(1)).unwrap();
+        table.dec(&id, epoch(3)).unwrap();
+        let ready = table.flush_deferred(epoch(5));
+        assert_eq!(ready.len(), 1);
+        assert_eq!(table.queue_zero(&id, epoch(6)).unwrap(), 1024);
+        assert_eq!(table.deferred_len(), 1);
+    }
+
+    #[test]
+    fn test_queue_zero_stress_many_zero_blobs() {
+        let table = BlobRefcount::new();
+        const COUNT: u16 = 192;
+
+        for i in 0..COUNT {
+            let id = make_blob_id_u16(i);
+            table.register(id, 4096, epoch(1)).unwrap();
+            table.dec(&id, epoch(4)).unwrap();
+        }
+
+        let ready = table.flush_deferred(epoch(6));
+        assert_eq!(ready.len(), COUNT as usize);
+
+        for i in 0..COUNT {
+            let id = make_blob_id_u16(i);
+            assert_eq!(table.queue_zero(&id, epoch(7)).unwrap(), 4096);
+        }
+
+        assert_eq!(table.deferred_len(), COUNT as usize);
     }
 
     #[test]

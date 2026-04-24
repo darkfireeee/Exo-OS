@@ -353,9 +353,13 @@ impl PathIndex {
 
             let oid = ObjectId(raw_entry.object_id);
 
-            // Insérer dans la tree.
-            tree.insert(&comp, oid.clone(), raw_entry.kind)
-                .map_err(|_| ExofsError::CorruptedStructure)?;
+            // Insérer dans la table de hachage si la capacité fixe le permet.
+            // Au-delà, on garde l'entrée dans `entries` et le lookup retombe
+            // sur un scan linéaire borné pour préserver les gros répertoires.
+            match tree.insert(&comp, oid.clone(), raw_entry.kind) {
+                Ok(()) | Err(ExofsError::NoSpace) => {}
+                Err(_) => return Err(ExofsError::CorruptedStructure),
+            }
 
             // Construire InMemoryEntry.
             let mut name_arr = [0u8; NAME_MAX + 1];
@@ -437,7 +441,14 @@ impl PathIndex {
 
     /// Recherche une entrée par composant.
     pub fn lookup(&self, comp: &PathComponent) -> Option<(ObjectId, u8)> {
-        self.tree.find(comp).map(|e| (e.oid.clone(), e.kind))
+        if let Some(entry) = self.tree.find(comp) {
+            return Some((entry.oid.clone(), entry.kind));
+        }
+
+        self.entries
+            .iter()
+            .find(|entry| entry.name_bytes() == comp.as_bytes())
+            .map(|entry| (entry.oid.clone(), entry.kind))
     }
 
     /// Insère une nouvelle entrée.
@@ -447,7 +458,15 @@ impl PathIndex {
     /// - [`ExofsError::NoSpace`] si l index est plein.
     /// - [`ExofsError::NoMemory`] si allocation impossible.
     pub fn insert(&mut self, comp: &PathComponent, oid: ObjectId, kind: u8) -> ExofsResult<()> {
-        self.tree.insert(comp, oid.clone(), kind)?;
+        if self.lookup(comp).is_some() {
+            return Err(ExofsError::ObjectAlreadyExists);
+        }
+
+        match self.tree.insert(comp, oid.clone(), kind) {
+            Ok(()) | Err(ExofsError::NoSpace) => {}
+            Err(err) => return Err(err),
+        }
+
         let hash = siphash_keyed(&self.mount_key, comp.as_bytes());
         let mut name_arr = [0u8; NAME_MAX + 1];
         name_arr[..comp.len()].copy_from_slice(comp.as_bytes());
@@ -473,25 +492,46 @@ impl PathIndex {
     /// # Errors
     /// - [`ExofsError::ObjectNotFound`] si le nom n existe pas.
     pub fn remove(&mut self, comp: &PathComponent) -> ExofsResult<()> {
-        self.tree.remove(comp)?;
+        let tree_result = self.tree.remove(comp);
         let name = comp.as_bytes();
         if let Some(pos) = self.entries.iter().position(|e| e.name_bytes() == name) {
             self.entries.swap_remove(pos);
+            self.dirty = true;
+            return Ok(());
         }
-        self.dirty = true;
-        Ok(())
+
+        match tree_result {
+            Ok(()) => {
+                self.dirty = true;
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Met à jour l OID d une entrée existante.
     pub fn update(&mut self, comp: &PathComponent, new_oid: ObjectId) -> ExofsResult<()> {
-        self.tree.update_oid(comp, new_oid.clone())?;
+        let mut found = false;
+
+        match self.tree.update_oid(comp, new_oid.clone()) {
+            Ok(()) => found = true,
+            Err(ExofsError::ObjectNotFound) => {}
+            Err(err) => return Err(err),
+        }
+
         let name = comp.as_bytes();
         for e in &mut self.entries {
             if e.name_bytes() == name {
-                e.oid = new_oid;
+                e.oid = new_oid.clone();
+                found = true;
                 break;
             }
         }
+
+        if !found {
+            return Err(ExofsError::ObjectNotFound);
+        }
+
         self.dirty = true;
         Ok(())
     }

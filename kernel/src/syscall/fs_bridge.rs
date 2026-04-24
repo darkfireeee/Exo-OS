@@ -344,6 +344,57 @@ fn ensure_directory_exists(path: &[u8]) -> Result<(), FsBridgeError> {
 }
 
 #[inline]
+fn ensure_directory_chain(path: &[u8]) -> Result<(), FsBridgeError> {
+    let normalized_path = normalized_path_bytes(path)?;
+    ensure_root_directory()?;
+    if normalized_path == b"/" {
+        return Ok(());
+    }
+
+    let components = normalize_path_buf(&normalized_path)?;
+    let mut current = PathComponentBuf::new();
+
+    for comp in components.iter() {
+        let parent_path = path_buf_to_bytes(&current)?;
+        let next_comp = comp.clone();
+        current.push(next_comp.clone()).map_err(exofs_to_bridge_error)?;
+        let current_path = path_buf_to_bytes(&current)?;
+
+        match path_entry(&current_path) {
+            Ok((blob_id, kind)) => {
+                if kind == PATH_INDEX_KIND_DIR {
+                    continue;
+                }
+
+                let data = snapshot_blob(&blob_id)?;
+                if !blob_is_directory(&data) {
+                    return Err(FsBridgeError::NotDir);
+                }
+            }
+            Err(FsBridgeError::NotFound) => {
+                let blob_id = blob_id_for_path(&current_path)?;
+                let parent_oid = if parent_path == b"/" {
+                    ObjectId::default()
+                } else {
+                    blob_id_to_object_id(blob_id_for_path(&parent_path)?)
+                };
+
+                let dir_index = PathIndex::new_with_key(parent_oid, directory_mount_key());
+                let bytes = dir_index.serialize().map_err(exofs_to_bridge_error)?;
+                BLOB_CACHE
+                    .insert(blob_id, bytes)
+                    .map_err(exofs_to_bridge_error)?;
+                let _ = BLOB_CACHE.mark_dirty(&blob_id);
+                upsert_parent_entry(&parent_path, &next_comp, blob_id, PATH_INDEX_KIND_DIR)?;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok(())
+}
+
+#[inline]
 fn dirent_type_from_kind(kind: u8) -> u8 {
     match kind {
         PATH_INDEX_KIND_DIR => DT_DIR,
@@ -667,8 +718,13 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
         return Err(FsBridgeError::Invalid);
     }
 
-    let normalized_path = resolve_path_with_symlinks(path, true, true)?;
     ensure_root_directory()?;
+    let normalized_input = normalized_path_bytes(path)?;
+    if flags & open_flags::O_CREAT != 0 && normalized_input != b"/" {
+        let (parent_path, _) = split_parent_and_leaf(&normalized_input)?;
+        ensure_directory_chain(&parent_path)?;
+    }
+    let normalized_path = resolve_path_with_symlinks(path, true, true)?;
     let existing_entry = path_entry(&normalized_path).ok();
     let blob_id = blob_id_for_path(&normalized_path)?;
     let exists = existing_entry.is_some();
@@ -958,7 +1014,7 @@ pub fn fs_mkdir(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> 
     }
     ensure_root_directory()?;
     let (parent_path, leaf) = split_parent_and_leaf(&normalized_path)?;
-    ensure_directory_exists(&parent_path)?;
+    ensure_directory_chain(&parent_path)?;
     let blob_id = blob_id_for_path(&normalized_path)?;
     if BLOB_CACHE.contains(&blob_id) {
         return Err(FsBridgeError::Exists);

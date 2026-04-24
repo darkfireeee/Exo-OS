@@ -325,19 +325,12 @@ impl LogicalObject {
 
     /// Décrémente le compteur de références.
     ///
-    /// Utilise `compare_exchange` (REFCNT-01).  
-    /// **Panic** si le compteur était déjà à 0.
-    ///
     /// Retourne la nouvelle valeur (0 = orphelin).
-    pub fn dec_ref(&self) -> u32 {
+    pub fn dec_ref(&self) -> ExofsResult<u32> {
         loop {
             let cur = self.ref_count.load(Ordering::Acquire);
             if cur == 0 {
-                // REFCNT-01 : panic obligatoire sur underflow.
-                panic!(
-                    "ExoFS REFCNT-01: LogicalObject ref_count underflow \
-                     (objet en cours d'utilisation)"
-                );
+                return Err(ExofsError::RefCountUnderflow);
             }
             match self.ref_count.compare_exchange_weak(
                 cur,
@@ -345,7 +338,7 @@ impl LogicalObject {
                 Ordering::AcqRel,
                 Ordering::Relaxed,
             ) {
-                Ok(_) => return cur - 1,
+                Ok(_) => return Ok(cur - 1),
                 Err(_) => continue, // Retry ABA-safe.
             }
         }
@@ -559,13 +552,20 @@ mod tests {
     }
 
     #[test]
-    fn test_refcount_dec_underflow_would_panic() {
+    fn test_refcount_dec_to_zero() {
         let d = make_test_disk();
         let lo = LogicalObject::from_disk(&d).unwrap();
         assert_eq!(lo.ref_count(), 1);
-        let new_val = lo.dec_ref();
+        let new_val = lo.dec_ref().unwrap();
         assert_eq!(new_val, 0);
-        // Un second dec_ref déclencherait un panic (REFCNT-01).
+    }
+
+    #[test]
+    fn test_refcount_underflow_returns_error() {
+        let d = make_test_disk();
+        let lo = LogicalObject::from_disk(&d).unwrap();
+        assert_eq!(lo.dec_ref().unwrap(), 0);
+        assert_eq!(lo.dec_ref(), Err(ExofsError::RefCountUnderflow));
     }
 
     #[test]

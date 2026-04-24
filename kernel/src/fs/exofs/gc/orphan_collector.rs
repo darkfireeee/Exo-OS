@@ -283,11 +283,9 @@ impl OrphanCollector {
                 continue;
             }
 
-            match BLOB_REFCOUNT.dec(&blob_id, current_epoch) {
-                Ok(deferred) => {
-                    if deferred.0 == 0 {
-                        freed = freed.saturating_add(1);
-                    }
+            match BLOB_REFCOUNT.queue_zero(&blob_id, current_epoch) {
+                Ok(_) => {
+                    freed = freed.saturating_add(1);
                 }
                 Err(_) => {}
             }

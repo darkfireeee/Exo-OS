@@ -130,7 +130,7 @@ pub fn canonicalize_path(input: &[u8], buf: &mut [u8]) -> ExofsResult<usize> {
     }
 
     for (i, slot) in stack.as_slice().iter().enumerate() {
-        let comp = slot.as_ref().unwrap();
+        let comp = slot.as_ref().ok_or(ExofsError::InternalError)?;
         if i > 0 || !is_abs {
             if pos >= buf.len() {
                 return Err(ExofsError::PathTooLong);

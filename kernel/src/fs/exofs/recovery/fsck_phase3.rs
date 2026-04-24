@@ -583,7 +583,23 @@ impl FsckPhase3 {
                         // Enregistrer quand même pour la suite.
                         ctx.register(sid, lba, hdr.flags, 0)?;
                     } else {
-                        let (parent_lba, parent_flags) = ctx.get(parent_id).unwrap();
+                        let Some((parent_lba, parent_flags)) = ctx.get(parent_id) else {
+                            Self::push_err(
+                                &mut errors,
+                                Phase3Error {
+                                    kind: Phase3ErrorKind::ParentMissing,
+                                    snapshot_id: sid,
+                                    lba,
+                                    detail: parent_id,
+                                },
+                            )?;
+                            critical_errors = critical_errors.saturating_add(1);
+                            if opts.stop_on_critical {
+                                break 'scan;
+                            }
+                            ctx.register(sid, lba, hdr.flags, 0)?;
+                            continue;
+                        };
                         // Vérifier que le parent n est pas supprimé.
                         if parent_flags & 0x01 != 0 {
                             Self::push_err(

@@ -232,14 +232,13 @@ impl InlineGc {
         }
     }
 
-    /// Décrémente le ref_count d'un objet inline (REFCNT-01 : panic sur underflow).
+    /// Décrémente le ref_count d'un objet inline.
     pub fn dec_ref(&self, oid: &ObjectId) -> ExofsResult<bool> {
         let mut g = self.inner.lock();
         match g.registry.get_mut(oid) {
             Some(entry) => {
                 if entry.ref_count == 0 {
-                    // REFCNT-01 : underflow interdit.
-                    panic!("InlineGc::dec_ref: refcount underflow for {:?}", oid);
+                    return Err(ExofsError::RefCountUnderflow);
                 }
                 entry.ref_count -= 1;
                 Ok(entry.ref_count == 0)

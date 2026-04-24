@@ -578,3 +578,59 @@ pub unsafe extern "C" fn emergency_pool_alloc_wait_node() -> *mut u8 {
 pub unsafe extern "C" fn emergency_pool_free_wait_node(node: *mut u8) {
     SCHED_NODE_POOL.free(node);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn emergency_pool_init_is_idempotent() {
+        let pool = EmergencyPool::new_uninit();
+
+        unsafe {
+            pool.init();
+            pool.init();
+        }
+
+        assert!(pool.is_initialized());
+        assert_eq!(pool.allocated_count(), 0);
+
+        let node = pool.acquire(1).expect("pool should allocate after double init");
+        assert!(pool.owns(node));
+        assert_eq!(pool.allocated_count(), 1);
+
+        unsafe {
+            pool.release(node);
+        }
+        assert_eq!(pool.allocated_count(), 0);
+    }
+
+    #[test]
+    fn emergency_pool_double_init_stress_preserves_capacity() {
+        let pool = EmergencyPool::new_uninit();
+
+        unsafe {
+            pool.init();
+            pool.init();
+        }
+
+        let mut acquired: [Option<&WaitNode>; EMERGENCY_POOL_SIZE] =
+            [const { None }; EMERGENCY_POOL_SIZE];
+        for (idx, slot) in acquired.iter_mut().enumerate() {
+            *slot = pool.acquire(idx + 1);
+            assert!(slot.is_some(), "allocation {} should succeed", idx);
+        }
+
+        assert!(pool.is_full());
+        assert!(pool.acquire(EMERGENCY_POOL_SIZE + 1).is_none());
+
+        for slot in acquired.into_iter().flatten() {
+            unsafe {
+                pool.release(slot);
+            }
+        }
+
+        assert_eq!(pool.allocated_count(), 0);
+        assert_eq!(pool.free_count(), EMERGENCY_POOL_SIZE);
+    }
+}

@@ -86,19 +86,30 @@ pub unsafe fn publish_current_boot_idle(
     Some(idle)
 }
 
+/// Retourne le TCB idle de bootstrap déjà publié pour `cpu_id`, s'il existe.
+///
+/// N'initialise rien de nouveau : ce helper sert uniquement à rebrancher une
+/// run queue qui aurait perdu son `idle_thread` alors que le TCB idle canonique
+/// existe déjà pour ce CPU.
+pub fn published_boot_idle(cpu_id: u32) -> Option<NonNull<ThreadControlBlock>> {
+    let idx = cpu_id as usize;
+    if idx >= MAX_CPUS || !BOOT_IDLE_INIT[idx].load(Ordering::Acquire) {
+        return None;
+    }
+
+    // SAFETY: BOOT_IDLE_INIT[idx] publie l'initialisation complète du slot.
+    let ptr = unsafe { boot_idle_slot(idx).assume_init_ref() as *const ThreadControlBlock };
+    Some(unsafe { NonNull::new_unchecked(ptr as *mut ThreadControlBlock) })
+}
+
 /// Relie les TCB idle déjà publiés aux run queues per-CPU après `scheduler::init()`.
 ///
 /// # Safety
 /// Les run queues pour `nr_cpus` doivent déjà avoir été initialisées.
 pub unsafe fn bind_boot_idle_threads(nr_cpus: usize) {
     for idx in 0..nr_cpus.min(MAX_CPUS) {
-        if !BOOT_IDLE_INIT[idx].load(Ordering::Acquire) {
+        let Some(idle) = published_boot_idle(idx as u32) else {
             continue;
-        }
-
-        // SAFETY: le slot est marqué initialisé, la run queue de ce CPU existe.
-        let idle = unsafe {
-            NonNull::new_unchecked(boot_idle_slot(idx).assume_init_mut() as *mut ThreadControlBlock)
         };
         let rq = unsafe { run_queue(CpuId(idx as u32)) };
         rq.set_idle_thread(idle);
