@@ -29,36 +29,22 @@
 //     - init_bsp_percpu()           → offset BSP = 0
 // ════════════════════════════════════════════════════════════════════════════
 
-
 // ── Sous-modules ──────────────────────────────────────────────────────────────
 
-pub mod ktime;
-pub mod sources;
 pub mod calibration;
 pub mod drift;
+pub mod ktime;
 pub mod percpu;
+pub mod sources;
 
 // ── Ré-exports fondamentaux ───────────────────────────────────────────────────
 
 // Primitif universel d'horloge — le seul chemin d'accès au temps depuis le kernel.
 pub use ktime::{
-    ktime_get_ns,
-    ktime_get_wall_ns,
-    set_wall_time,
-    ktime_rtoffset_ns,
-    ktime_elapsed_ns,
-    ktime_elapsed_us,
-    ktime_past,
-    ktime_not_past,
-    ktime_deadline_ns,
-    ktime_deadline_us,
-    ktime_deadline_ms,
-    ktime_tsc_hz,
-    ktime_initialized,
-    ktime_contention_count,
-    ktime_snapshot,
-    KtimeSnapshot,
-    tsc_offset,
+    ktime_contention_count, ktime_deadline_ms, ktime_deadline_ns, ktime_deadline_us,
+    ktime_elapsed_ns, ktime_elapsed_us, ktime_get_ns, ktime_get_wall_ns, ktime_initialized,
+    ktime_not_past, ktime_past, ktime_rtoffset_ns, ktime_snapshot, ktime_tsc_hz, set_wall_time,
+    tsc_offset, KtimeSnapshot,
 };
 
 // ── Initialisation ────────────────────────────────────────════════════════────
@@ -114,7 +100,8 @@ pub unsafe fn time_init() {
 /// Utilisé uniquement pour l'ancrage initial dans `time_init()`.
 #[inline(always)]
 unsafe fn rdtscp_init() -> u64 {
-    let lo: u32; let hi: u32;
+    let lo: u32;
+    let hi: u32;
     // FIX TCG: utilise RDTSC simple (sans RDTSCP ni LFENCE) pour compatibilité QEMU TCG.
     // RDTSCP peut bloquer sur QEMU TCG si ECX (TSC_AUX) n'est pas initialisé.
     // LFENCE peut aussi être très lente dans certains modes TCG.
@@ -133,16 +120,27 @@ unsafe fn debug_log_time_init(tsc_hz: u64) {
     unsafe fn out(b: u8) {
         core::arch::asm!("out 0xe9, al", in("al") b, options(nomem, nostack));
     }
-    for &b in b"[TIME-INIT hz=" { out(b); }
+    for &b in b"[TIME-INIT hz=" {
+        out(b);
+    }
     // Écrire tsc_hz en décimal (max 11 digits pour 10 GHz).
     let mut buf = [0u8; 20];
     let mut n = tsc_hz;
     let mut i = 19usize;
-    if n == 0 { buf[i] = b'0'; } else {
-        while n > 0 { buf[i] = b'0' + (n % 10) as u8; n /= 10; i = i.saturating_sub(1); }
+    if n == 0 {
+        buf[i] = b'0';
+    } else {
+        while n > 0 {
+            buf[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+            i = i.saturating_sub(1);
+        }
         i = i.wrapping_add(1);
     }
-    while i <= 19 { out(buf[i]); i += 1; }
+    while i <= 19 {
+        out(buf[i]);
+        i += 1;
+    }
     out(b']');
     out(b'\n');
 }

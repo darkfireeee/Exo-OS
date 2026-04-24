@@ -9,15 +9,12 @@
 //   ARITH-02 : checked_add / saturating_* partout
 //   RECUR-01 : itératif seulement (recherche binaire en boucle)
 
-
+use alloc::vec::Vec;
 use core::fmt;
 use core::mem;
-use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{
-    ObjectId, EpochId, ExofsError, ExofsResult, blake3_hash,
-};
 use crate::fs::exofs::core::object_kind::ObjectKind;
+use crate::fs::exofs::core::{blake3_hash, EpochId, ExofsError, ExofsResult, ObjectId};
 
 // ── Constantes ──────────────────────────────────────────────────────────────────
 
@@ -57,14 +54,14 @@ pub const PATH_INDEX_MAX_ENTRIES: usize = 64;
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct PathIndexEntryDisk {
-    pub hash:      u64,
+    pub hash: u64,
     pub object_id: [u8; 32],
     pub parent_id: [u8; 16],
-    pub name_len:  u16,
-    pub kind:      u8,
-    pub flags:     u8,
-    pub name:      [u8; PATH_NAME_STORE_LEN],
-    pub _pad:      [u8; 4],
+    pub name_len: u16,
+    pub kind: u8,
+    pub flags: u8,
+    pub name: [u8; PATH_NAME_STORE_LEN],
+    pub _pad: [u8; 4],
 }
 
 const _: () = assert!(
@@ -74,10 +71,10 @@ const _: () = assert!(
 
 // ── Flags des entrées ──────────────────────────────────────────────────────────
 
-pub const PATH_ENTRY_FLAG_DELETED:   u8 = 1 << 0; // Tombstone
-pub const PATH_ENTRY_FLAG_OVERFLOW:  u8 = 1 << 1; // Nom > PATH_NAME_STORE_LEN
-pub const PATH_ENTRY_FLAG_SYMLINK:   u8 = 1 << 2; // Lien symbolique
-pub const PATH_ENTRY_FLAG_MOUNT:     u8 = 1 << 3; // Point de montage
+pub const PATH_ENTRY_FLAG_DELETED: u8 = 1 << 0; // Tombstone
+pub const PATH_ENTRY_FLAG_OVERFLOW: u8 = 1 << 1; // Nom > PATH_NAME_STORE_LEN
+pub const PATH_ENTRY_FLAG_SYMLINK: u8 = 1 << 2; // Lien symbolique
+pub const PATH_ENTRY_FLAG_MOUNT: u8 = 1 << 3; // Point de montage
 
 // ── PathIndexPageDisk ────────────────────────────────────────────────────────────
 
@@ -89,23 +86,23 @@ pub const PATH_ENTRY_FLAG_MOUNT:     u8 = 1 << 3; // Point de montage
 #[derive(Copy, Clone)]
 pub struct PathIndexPageHeader {
     /// Magic "PIDX".
-    pub magic:        u32,
+    pub magic: u32,
     /// Version du format.
-    pub version:      u8,
+    pub version: u8,
     /// Nombre d'entrées valides dans cette page.
-    pub entry_count:  u8,
+    pub entry_count: u8,
     /// Flags de page.
-    pub flags:        u16,
+    pub flags: u16,
     /// ObjectId de la page (LogicalObject qui détient ce PathIndex).
-    pub page_id:      [u8; 32],
+    pub page_id: [u8; 32],
     /// Epoch de dernière modification.
     pub epoch_modify: u64,
     /// Numéro de page (pour les PathIndex multi-page).
-    pub page_no:      u32,
+    pub page_no: u32,
     /// _pad pour aligner sur 64 octets.
-    pub _pad:         [u8; 8],
+    pub _pad: [u8; 8],
     /// Checksum Blake3 des 56 premiers octets, tronqué à 8 octets.
-    pub checksum:     [u8; 8],
+    pub checksum: [u8; 8],
 }
 
 // const _: () = assert!(
@@ -145,33 +142,33 @@ impl PathIndexPageHeader {
 #[derive(Clone, Debug)]
 pub struct PathIndexEntry {
     /// Hash FNV-1a 64 bits du nom (cache pour tri rapide).
-    pub hash:      u64,
+    pub hash: u64,
     /// ObjectId de la cible.
     pub object_id: ObjectId,
     /// ObjectId du répertoire parent (premiers 16 octets).
     pub parent_id: [u8; 16],
     /// Kind de la cible.
-    pub kind:      ObjectKind,
+    pub kind: ObjectKind,
     /// Nom du composant (UTF-8, ≤ PATH_NAME_MAX).
-    pub name:      [u8; PATH_NAME_STORE_LEN],
-    pub name_len:  u16,
+    pub name: [u8; PATH_NAME_STORE_LEN],
+    pub name_len: u16,
     /// Flags de l'entrée.
-    pub flags:     u8,
+    pub flags: u8,
 }
 
 impl PathIndexEntry {
     // ── Constructeur ──────────────────────────────────────────────────────────
 
     pub fn new(
-        name:      &[u8],
+        name: &[u8],
         object_id: ObjectId,
         parent_id: [u8; 16],
-        kind:      ObjectKind,
+        kind: ObjectKind,
     ) -> ExofsResult<Self> {
         if name.is_empty() || name.len() > PATH_NAME_MAX {
             return Err(ExofsError::InvalidArgument);
         }
-        let hash     = fnv1a_hash_u64(name);
+        let hash = fnv1a_hash_u64(name);
         let mut stored_name = [0u8; PATH_NAME_STORE_LEN];
         let copy_len = name.len().min(PATH_NAME_STORE_LEN);
         stored_name[..copy_len].copy_from_slice(&name[..copy_len]);
@@ -193,16 +190,15 @@ impl PathIndexEntry {
 
     /// Reconstruit depuis on-disk.
     pub fn from_disk(d: &PathIndexEntryDisk) -> ExofsResult<Self> {
-        let kind = ObjectKind::from_u8(d.kind)
-            .ok_or(ExofsError::InvalidObjectKind)?;
+        let kind = ObjectKind::from_u8(d.kind).ok_or(ExofsError::InvalidObjectKind)?;
         Ok(Self {
-            hash:      d.hash,
+            hash: d.hash,
             object_id: ObjectId(d.object_id),
             parent_id: d.parent_id,
             kind,
-            name:      d.name,
-            name_len:  d.name_len,
-            flags:     d.flags,
+            name: d.name,
+            name_len: d.name_len,
+            flags: d.flags,
         })
     }
 
@@ -210,14 +206,14 @@ impl PathIndexEntry {
 
     pub fn to_disk(&self) -> PathIndexEntryDisk {
         PathIndexEntryDisk {
-            hash:      self.hash,
+            hash: self.hash,
             object_id: self.object_id.0,
             parent_id: self.parent_id,
-            name_len:  self.name_len,
-            kind:      self.kind as u8,
-            flags:     self.flags,
-            name:      self.name,
-            _pad:      [0; 4],
+            name_len: self.name_len,
+            kind: self.kind as u8,
+            flags: self.flags,
+            name: self.name,
+            _pad: [0; 4],
         }
     }
 
@@ -267,15 +263,15 @@ impl fmt::Display for PathIndexEntry {
 /// LOBJ-01 : toujours associée à un LogicalObject de Class2.
 pub struct PathIndexPage {
     /// ObjectId de la page.
-    pub page_id:      ObjectId,
+    pub page_id: ObjectId,
     /// Epoch de dernière modification.
     pub epoch_modify: EpochId,
     /// Numéro de page.
-    pub page_no:      u32,
+    pub page_no: u32,
     /// Entrées (triées par hash pour la recherche binaire).
-    entries:          Vec<PathIndexEntry>,
+    entries: Vec<PathIndexEntry>,
     /// Nombre d'insertions depuis la dernière compaction.
-    dirty_count:      u32,
+    dirty_count: u32,
 }
 
 impl PathIndexPage {
@@ -286,14 +282,14 @@ impl PathIndexPage {
             page_id,
             epoch_modify: epoch,
             page_no,
-            entries:     Vec::new(),
+            entries: Vec::new(),
             dirty_count: 0,
         }
     }
 
     /// Reconstruit depuis un en-tête + slice d'entrées on-disk.
     pub fn from_disk(
-        header:  &PathIndexPageHeader,
+        header: &PathIndexPageHeader,
         entries: &[PathIndexEntryDisk],
     ) -> ExofsResult<Self> {
         header.verify()?;
@@ -309,7 +305,9 @@ impl PathIndexPage {
             header.page_no,
             EpochId(header.epoch_modify),
         );
-        page.entries.try_reserve(count).map_err(|_| ExofsError::NoMemory)?;
+        page.entries
+            .try_reserve(count)
+            .map_err(|_| ExofsError::NoMemory)?;
         for d in entries[..count].iter() {
             let e = PathIndexEntry::from_disk(d)?;
             page.entries.push(e);
@@ -322,28 +320,26 @@ impl PathIndexPage {
     pub fn to_disk_header(&self) -> PathIndexPageHeader {
         let active = self.entries.iter().filter(|e| !e.is_deleted()).count();
         let mut h = PathIndexPageHeader {
-            magic:        PATH_INDEX_MAGIC,
-            version:      PATH_INDEX_VERSION,
-            entry_count:  active.min(255) as u8,
-            flags:        0,
-            page_id:      self.page_id.0,
+            magic: PATH_INDEX_MAGIC,
+            version: PATH_INDEX_VERSION,
+            entry_count: active.min(255) as u8,
+            flags: 0,
+            page_id: self.page_id.0,
             epoch_modify: self.epoch_modify.0,
-            page_no:      self.page_no,
-            _pad:         [0; 8],
-            checksum:     [0; 8],
+            page_no: self.page_no,
+            _pad: [0; 8],
+            checksum: [0; 8],
         };
         h.checksum = h.compute_checksum();
         h
     }
 
     pub fn to_disk_entries(&self) -> ExofsResult<Vec<PathIndexEntryDisk>> {
-        let active: Vec<&PathIndexEntry> = self
-            .entries
-            .iter()
-            .filter(|e| !e.is_deleted())
-            .collect();
+        let active: Vec<&PathIndexEntry> =
+            self.entries.iter().filter(|e| !e.is_deleted()).collect();
         let mut out = Vec::new();
-        out.try_reserve(active.len()).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(active.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         for e in active {
             out.push(e.to_disk());
         }
@@ -358,7 +354,9 @@ impl PathIndexPage {
         if active >= PATH_INDEX_MAX_ENTRIES {
             return Err(ExofsError::NoSpace);
         }
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.entries.push(entry);
         // Tri itératif par hash (RECUR-01).
         self.entries.sort_unstable_by_key(|e| e.hash);
@@ -396,7 +394,7 @@ impl PathIndexPage {
                     }
                     return None;
                 }
-                core::cmp::Ordering::Less    => lo = mid + 1,
+                core::cmp::Ordering::Less => lo = mid + 1,
                 core::cmp::Ordering::Greater => hi = mid,
             }
         }
@@ -446,7 +444,9 @@ impl fmt::Display for PathIndexPage {
         write!(
             f,
             "PathIndexPage {{ page_no: {}, entries: {}, epoch: {} }}",
-            self.page_no, self.len(), self.epoch_modify.0,
+            self.page_no,
+            self.len(),
+            self.epoch_modify.0,
         )
     }
 }
@@ -466,7 +466,7 @@ impl fmt::Debug for PathIndexPage {
 #[inline]
 pub fn fnv1a_hash_u64(data: &[u8]) -> u64 {
     const FNV_OFFSET: u64 = 14695981039346656037;
-    const FNV_PRIME:  u64 = 1099511628211;
+    const FNV_PRIME: u64 = 1099511628211;
     let mut h = FNV_OFFSET;
     // RECUR-01 : boucle, pas récursif.
     for &b in data.iter() {
@@ -481,23 +481,31 @@ pub fn fnv1a_hash_u64(data: &[u8]) -> u64 {
 /// Statistiques des pages PathIndex.
 #[derive(Default, Debug)]
 pub struct PathIndexStats {
-    pub total_pages:    u64,
-    pub total_entries:  u64,
-    pub tombstone_count:u64,
+    pub total_pages: u64,
+    pub total_entries: u64,
+    pub tombstone_count: u64,
     pub overflow_count: u64,
-    pub mount_points:   u64,
+    pub mount_points: u64,
 }
 
 impl PathIndexStats {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn record(&mut self, page: &PathIndexPage) {
         self.total_pages = self.total_pages.saturating_add(1);
         for e in page.entries.iter() {
             self.total_entries = self.total_entries.saturating_add(1);
-            if e.is_deleted() { self.tombstone_count = self.tombstone_count.saturating_add(1); }
-            if e.flags & PATH_ENTRY_FLAG_OVERFLOW != 0 { self.overflow_count = self.overflow_count.saturating_add(1); }
-            if e.is_mount() { self.mount_points = self.mount_points.saturating_add(1); }
+            if e.is_deleted() {
+                self.tombstone_count = self.tombstone_count.saturating_add(1);
+            }
+            if e.flags & PATH_ENTRY_FLAG_OVERFLOW != 0 {
+                self.overflow_count = self.overflow_count.saturating_add(1);
+            }
+            if e.is_mount() {
+                self.mount_points = self.mount_points.saturating_add(1);
+            }
         }
     }
 }
@@ -508,8 +516,11 @@ impl fmt::Display for PathIndexStats {
             f,
             "PathIndexStats {{ pages: {}, entries: {}, tombstones: {}, \
              overflows: {}, mounts: {} }}",
-            self.total_pages, self.total_entries, self.tombstone_count,
-            self.overflow_count, self.mount_points,
+            self.total_pages,
+            self.total_entries,
+            self.tombstone_count,
+            self.overflow_count,
+            self.mount_points,
         )
     }
 }
@@ -540,13 +551,9 @@ mod tests {
 
     #[test]
     fn test_insert_and_lookup() {
-        let mut page = PathIndexPage::new(ObjectId([0;32]), 0, EpochId(1));
-        let entry = PathIndexEntry::new(
-            b"myfile",
-            ObjectId([1;32]),
-            [0u8;16],
-            ObjectKind::Blob,
-        ).unwrap();
+        let mut page = PathIndexPage::new(ObjectId([0; 32]), 0, EpochId(1));
+        let entry =
+            PathIndexEntry::new(b"myfile", ObjectId([1; 32]), [0u8; 16], ObjectKind::Blob).unwrap();
         page.insert(entry, EpochId(2)).unwrap();
         assert!(page.lookup(b"myfile").is_some());
         assert!(page.lookup(b"other").is_none());
@@ -554,13 +561,10 @@ mod tests {
 
     #[test]
     fn test_remove_sets_tombstone() {
-        let mut page = PathIndexPage::new(ObjectId([0;32]), 0, EpochId(1));
-        let entry = PathIndexEntry::new(
-            b"toremove",
-            ObjectId([2;32]),
-            [0u8;16],
-            ObjectKind::Blob,
-        ).unwrap();
+        let mut page = PathIndexPage::new(ObjectId([0; 32]), 0, EpochId(1));
+        let entry =
+            PathIndexEntry::new(b"toremove", ObjectId([2; 32]), [0u8; 16], ObjectKind::Blob)
+                .unwrap();
         page.insert(entry, EpochId(1)).unwrap();
         page.remove(b"toremove", EpochId(2)).unwrap();
         assert!(page.lookup(b"toremove").is_none());

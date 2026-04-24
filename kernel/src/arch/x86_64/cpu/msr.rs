@@ -7,7 +7,6 @@
 //! Ces fonctions sont `unsafe` — l'appelant garantit que le MSR existe
 //! sur le CPU cible et que la valeur écrite ne viole aucun invariant.
 
-
 use core::sync::atomic::Ordering;
 
 // ── Constantes MSR ────────────────────────────────────────────────────────────
@@ -109,16 +108,16 @@ pub const FLUSH_CMD_L1D: u64 = 1 << 0;
 pub const MSR_IA32_ARCH_CAP: u32 = 0x0000_010A;
 
 /// Bit RDCL_NO : CPU non vulnérable à Meltdown
-pub const ARCH_CAP_RDCL_NO: u64    = 1 << 0;
+pub const ARCH_CAP_RDCL_NO: u64 = 1 << 0;
 
 /// Bit IBRS_ALL : IBRS fonctionne en mode "always on"
-pub const ARCH_CAP_IBRS_ALL: u64   = 1 << 1;
+pub const ARCH_CAP_IBRS_ALL: u64 = 1 << 1;
 
 /// Bit RSBA : RSB alternative prediction possible
-pub const ARCH_CAP_RSBA: u64       = 1 << 2;
+pub const ARCH_CAP_RSBA: u64 = 1 << 2;
 
 /// Bit SSB_NO : CPU non vulnérable à Spectre v4
-pub const ARCH_CAP_SSB_NO: u64     = 1 << 4;
+pub const ARCH_CAP_SSB_NO: u64 = 1 << 4;
 
 /// MSR IA32_TSC_ADJUST : ajustement TSC (migration VM)
 pub const MSR_IA32_TSC_ADJUST: u32 = 0x0000_003B;
@@ -277,28 +276,30 @@ pub unsafe fn rdtscp() -> (u64, u32) {
 pub fn configure_pat() {
     // SAFETY: MSR_IA32_PAT est supporté sur tout CPU x86_64 moderne.
     // La valeur PAT_WC remplace l'entrée 7 par Write-Combining (0x01).
-    const PAT_WB:  u64 = 0x06;
-    const PAT_WT:  u64 = 0x04;
+    const PAT_WB: u64 = 0x06;
+    const PAT_WT: u64 = 0x04;
     const PAT_UCM: u64 = 0x07;
-    const PAT_UC:  u64 = 0x00;
-    const PAT_WC:  u64 = 0x01;
+    const PAT_UC: u64 = 0x00;
+    const PAT_WC: u64 = 0x01;
 
     let pat = PAT_WB
-        | (PAT_WT  << 8)
+        | (PAT_WT << 8)
         | (PAT_UCM << 16)
-        | (PAT_UC  << 24)
-        | (PAT_WB  << 32)
-        | (PAT_WT  << 40)
+        | (PAT_UC << 24)
+        | (PAT_WB << 32)
+        | (PAT_WT << 40)
         | (PAT_UCM << 48)
-        | (PAT_WC  << 56);
+        | (PAT_WC << 56);
 
     // SAFETY: PAT supporté sur tout x86_64; CPU-local, aucun tlb shootdown nécessaire.
-    unsafe { write_msr(MSR_IA32_PAT, pat); }
+    unsafe {
+        write_msr(MSR_IA32_PAT, pat);
+    }
 }
 
 // ── Statistiques MSR ─────────────────────────────────────────────────────────
 
-static MSR_READ_COUNT:  core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static MSR_READ_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static MSR_WRITE_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 #[cfg(feature = "msr_stats")]

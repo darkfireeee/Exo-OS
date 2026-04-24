@@ -32,24 +32,24 @@
 
 extern crate blake3;
 
-use exo_syscall_abi as syscall;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use exo_syscall_abi as syscall;
 
 mod xchacha20;
 
 // ── Types de messages crypto ──────────────────────────────────────────────────
 
-const CRYPTO_DERIVE_KEY:  u32 = 0;
-const CRYPTO_RANDOM:      u32 = 1;
-const CRYPTO_ENCRYPT:     u32 = 2;
-const CRYPTO_DECRYPT:     u32 = 3;
-const CRYPTO_HASH:        u32 = 4;
+const CRYPTO_DERIVE_KEY: u32 = 0;
+const CRYPTO_RANDOM: u32 = 1;
+const CRYPTO_ENCRYPT: u32 = 2;
+const CRYPTO_DECRYPT: u32 = 3;
+const CRYPTO_HASH: u32 = 4;
 
-const CRYPTO_OK:              u32 = 0;
-const CRYPTO_ERR_ARGS:        u32 = 1;
+const CRYPTO_OK: u32 = 0;
+const CRYPTO_ERR_ARGS: u32 = 1;
 const CRYPTO_ERR_KEY_INVALID: u32 = 3;
-const CRYPTO_ERR_AUTH:        u32 = 4;
+const CRYPTO_ERR_AUTH: u32 = 4;
 
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
 const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
@@ -59,25 +59,24 @@ const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
 #[repr(C)]
 struct CryptoRequest {
     sender_pid: u32,
-    msg_type:   u32,
-    payload:    [u8; 120],
+    msg_type: u32,
+    payload: [u8; 120],
 }
 
 /// Réponse IPC (64 bytes).
 #[repr(C)]
 struct CryptoReply {
-    status:     u32,
-    key_handle: u32,   // handle opaque (non-zero si succès DERIVE_KEY)
-    data:       [u8; 56],
+    status: u32,
+    key_handle: u32, // handle opaque (non-zero si succès DERIVE_KEY)
+    data: [u8; 56],
 }
 
 // ── Statistiques ─────────────────────────────────────────────────────────────
 
 static REQUESTS_TOTAL: AtomicU64 = AtomicU64::new(0);
-static REQUESTS_OK:    AtomicU64 = AtomicU64::new(0);
-static REQUESTS_ERR:   AtomicU64 = AtomicU64::new(0);
+static REQUESTS_OK: AtomicU64 = AtomicU64::new(0);
+static REQUESTS_ERR: AtomicU64 = AtomicU64::new(0);
 static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
-
 
 // ── Mini-keystore inline ──────────────────────────────────────────────────────
 // Les clés ne quittent JAMAIS ce processus (SRV-02 : seuls des handles opaques
@@ -93,21 +92,21 @@ const KS_KEY_SIZE: usize = 32;
 
 /// Un slot du keystore.
 struct KeySlot {
-    handle:     AtomicU32,   // 0 = libre
-    owner_pid:  AtomicU32,
-    key_type:   AtomicU8,
-    created_at: AtomicU64,   // TSC au moment de la création
-    key:        [u8; KS_KEY_SIZE],
+    handle: AtomicU32, // 0 = libre
+    owner_pid: AtomicU32,
+    key_type: AtomicU8,
+    created_at: AtomicU64, // TSC au moment de la création
+    key: [u8; KS_KEY_SIZE],
 }
 
 impl KeySlot {
     const fn new() -> Self {
         Self {
-            handle:     AtomicU32::new(0),
-            owner_pid:  AtomicU32::new(0),
-            key_type:   AtomicU8::new(0),
+            handle: AtomicU32::new(0),
+            owner_pid: AtomicU32::new(0),
+            key_type: AtomicU8::new(0),
             created_at: AtomicU64::new(0),
-            key:        [0u8; KS_KEY_SIZE],
+            key: [0u8; KS_KEY_SIZE],
         }
     }
 }
@@ -127,7 +126,11 @@ fn ks_insert(key: &[u8; KS_KEY_SIZE], key_type: u8, owner_pid: u32) -> u32 {
     for slot in slots.iter_mut() {
         if slot.handle.load(Ordering::Relaxed) == 0 {
             let h = KS_HANDLE_CTR.fetch_add(1, Ordering::Relaxed);
-            let h = if h == 0 { KS_HANDLE_CTR.fetch_add(1, Ordering::Relaxed) } else { h };
+            let h = if h == 0 {
+                KS_HANDLE_CTR.fetch_add(1, Ordering::Relaxed)
+            } else {
+                h
+            };
             slot.key.copy_from_slice(key);
             slot.key_type.store(key_type, Ordering::Relaxed);
             slot.owner_pid.store(owner_pid, Ordering::Relaxed);
@@ -142,7 +145,9 @@ fn ks_insert(key: &[u8; KS_KEY_SIZE], key_type: u8, owner_pid: u32) -> u32 {
 /// Récupère une référence à la clé associée à `handle` (si elle appartient à `owner_pid`).
 /// Retourne None si handle invalide ou PID ne correspond pas.
 fn ks_get(handle: u32, owner_pid: u32) -> Option<[u8; KS_KEY_SIZE]> {
-    if handle == 0 { return None; }
+    if handle == 0 {
+        return None;
+    }
     let slots = unsafe { &KS_SLOTS };
     for slot in slots.iter() {
         if slot.handle.load(Ordering::Acquire) == handle
@@ -159,7 +164,9 @@ fn ks_get(handle: u32, owner_pid: u32) -> Option<[u8; KS_KEY_SIZE]> {
 fn read_tsc() -> u64 {
     let lo: u32;
     let hi: u32;
-    unsafe { core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem)); }
+    unsafe {
+        core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem));
+    }
     ((hi as u64) << 32) | (lo as u64)
 }
 
@@ -185,7 +192,11 @@ fn hash_blake3(data: &[u8]) -> [u8; 32] {
 }
 
 fn handle_request(req: &CryptoRequest) -> CryptoReply {
-    let mut reply = CryptoReply { status: CRYPTO_ERR_ARGS, key_handle: 0, data: [0u8; 56] };
+    let mut reply = CryptoReply {
+        status: CRYPTO_ERR_ARGS,
+        key_handle: 0,
+        data: [0u8; 56],
+    };
     REQUESTS_TOTAL.fetch_add(1, Ordering::Relaxed);
 
     match req.msg_type {
@@ -193,7 +204,10 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
         CRYPTO_DERIVE_KEY => {
             // payload[0..4] = key_type (LE), payload[4..] = matériel de dérivation
             let key_type = u32::from_le_bytes([
-                req.payload[0], req.payload[1], req.payload[2], req.payload[3],
+                req.payload[0],
+                req.payload[1],
+                req.payload[2],
+                req.payload[3],
             ]);
             let mut derived_key = [0u8; 32];
             derive_key_hkdf(&req.payload[4..], &mut derived_key);
@@ -236,7 +250,10 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
             // payload[0..4] = key_handle (LE), payload[4..24] = nonce (ou 0 = auto)
             // Le plaintext est dans payload[24..], max 96 octets
             let key_handle = u32::from_le_bytes([
-                req.payload[0], req.payload[1], req.payload[2], req.payload[3],
+                req.payload[0],
+                req.payload[1],
+                req.payload[2],
+                req.payload[3],
             ]);
 
             let key = match ks_get(key_handle, req.sender_pid) {
@@ -260,7 +277,7 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
             let sealed_len = xchacha20::xchacha20_seal(
                 &key,
                 &plaintext[..pt_len],
-                &[],           // aad vide
+                &[], // aad vide
                 &mut nonce_out,
                 &mut sealed[24..24 + ct_tag_buf_len],
             );
@@ -280,7 +297,10 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
             // payload[0..4] = key_handle (LE)
             // payload[4..] = message scellé (nonce + ciphertext + tag)
             let key_handle = u32::from_le_bytes([
-                req.payload[0], req.payload[1], req.payload[2], req.payload[3],
+                req.payload[0],
+                req.payload[1],
+                req.payload[2],
+                req.payload[3],
             ]);
 
             let key = match ks_get(key_handle, req.sender_pid) {
@@ -310,7 +330,7 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
                 &key,
                 nonce,
                 ct_tag,
-                &[],  // aad vide
+                &[], // aad vide
                 &mut plaintext_buf[..pt_len],
             );
             if opened == pt_len && pt_len > 0 {
@@ -328,7 +348,6 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
             reply.data[..32].copy_from_slice(&hash);
             reply.status = CRYPTO_OK;
         }
-
 
         _ => {
             reply.status = CRYPTO_ERR_ARGS;
@@ -363,7 +382,11 @@ pub extern "C" fn _start() -> ! {
     };
 
     // ── 2. Boucle principale ───────────────────────────────────────────────
-    let mut req = CryptoRequest { sender_pid: 0, msg_type: 0, payload: [0u8; 120] };
+    let mut req = CryptoRequest {
+        sender_pid: 0,
+        msg_type: 0,
+        payload: [0u8; 120],
+    };
 
     loop {
         let r = unsafe {
@@ -381,7 +404,9 @@ pub extern "C" fn _start() -> ! {
             // Maintenance périodique : vérifier les expirations
             continue;
         }
-        if r < 0 { continue; }
+        if r < 0 {
+            continue;
+        }
 
         let reply = handle_request(&req);
 
@@ -391,7 +416,9 @@ pub extern "C" fn _start() -> ! {
                 req.sender_pid as u64,
                 &reply as *const CryptoReply as u64,
                 core::mem::size_of::<CryptoReply>() as u64,
-                0, 0, 0,
+                0,
+                0,
+                0,
             )
         };
     }
@@ -399,5 +426,9 @@ pub extern "C" fn _start() -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
+    }
 }

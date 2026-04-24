@@ -2,10 +2,4 @@
 
 pub mod counters;
 
-pub use counters::{
-    StatEvent,
-    IpcStats,
-    IpcStatsSnapshot,
-    IPC_STATS,
-    STAT_COUNT,
-};
+pub use counters::{IpcStats, IpcStatsSnapshot, StatEvent, IPC_STATS, STAT_COUNT};

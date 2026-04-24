@@ -22,7 +22,7 @@ pub fn process_iommu_faults() {
     let mut count = 0;
     while let Some(fault) = IOMMU_FAULT_QUEUE.pop() {
         count += 1;
-        
+
         let fa = fault.faulted_addr;
         let pci_dev = fault.device_id;
         let dom = fault.domain_id;
@@ -30,7 +30,10 @@ pub fn process_iommu_faults() {
 
         log::error!(
             "IOMMU FAULT DETECTED: device {:#06x} domain {} type {} @ {:#018x}",
-            pci_dev, dom, ftype, fa
+            pci_dev,
+            dom,
+            ftype,
+            fa
         );
 
         // Implémentation GI-03 §4: Lier domain_id au PID propriétaire
@@ -40,12 +43,18 @@ pub fn process_iommu_faults() {
             device_server_ipc::notify_iommu_fault_kill(pid, fa, ftype);
             let malicious_pid = crate::process::core::pid::Pid(pid);
             if let Err(_e) = crate::process::signal::send_signal_to_pid(
-                malicious_pid, 
-                crate::process::signal::Signal::SIGKILL
+                malicious_pid,
+                crate::process::signal::Signal::SIGKILL,
             ) {
-                log::error!("Failed to deliver SIGKILL to misbehaving PID {}", malicious_pid.0);
+                log::error!(
+                    "Failed to deliver SIGKILL to misbehaving PID {}",
+                    malicious_pid.0
+                );
             } else {
-                log::error!("Delivered SIGKILL to PID {} due to illegal IOMMU/DMA access", malicious_pid.0);
+                log::error!(
+                    "Delivered SIGKILL to PID {} due to illegal IOMMU/DMA access",
+                    malicious_pid.0
+                );
             }
         }
     }

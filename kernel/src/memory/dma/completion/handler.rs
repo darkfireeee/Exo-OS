@@ -4,9 +4,9 @@
 // et déclenche le mécanisme de réveil via DmaWakeupHandler.
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU8, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
-use crate::memory::dma::core::types::{DmaTransactionId, DmaError};
+use crate::memory::dma::core::types::{DmaError, DmaTransactionId};
 use crate::memory::dma::core::wakeup_iface::wake_on_completion;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -20,58 +20,65 @@ pub const MAX_PENDING_COMPLETIONS: usize = 512;
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
 enum SlotState {
-    Free       = 0,
-    Waiting    = 1,
-    Completed  = 2,
-    Consumed   = 3,
+    Free = 0,
+    Waiting = 1,
+    Completed = 2,
+    Consumed = 3,
 }
 
 /// Un slot de complétion pour une transaction DMA.
 #[repr(C, align(64))]
 struct CompletionSlot {
     /// Identifiant de la transaction associée.
-    txn_id:        DmaTransactionId,
+    txn_id: DmaTransactionId,
     /// ID du canal DMA.
-    channel_id:    u32,
+    channel_id: u32,
     /// TID du thread qui attend ce résultat.
-    waiter_tid:    u64,
+    waiter_tid: u64,
     /// État du slot.
-    state:         AtomicU8,
+    state: AtomicU8,
     /// Résultat de la transaction (0 = pas encore).
-    result_ok:     AtomicBool,
+    result_ok: AtomicBool,
     /// Octets transférés (succès) ou code d'erreur (erreur).
-    result_value:  AtomicU64,
+    result_value: AtomicU64,
     /// Timestamp de complétion (TSC).
-    complete_tsc:  AtomicU64,
+    complete_tsc: AtomicU64,
 }
 
 impl CompletionSlot {
     #[allow(dead_code)]
     const fn new() -> Self {
         CompletionSlot {
-            txn_id:       DmaTransactionId::INVALID,
-            channel_id:   u32::MAX,
-            waiter_tid:   0,
-            state:        AtomicU8::new(SlotState::Free as u8),
-            result_ok:    AtomicBool::new(false),
+            txn_id: DmaTransactionId::INVALID,
+            channel_id: u32::MAX,
+            waiter_tid: 0,
+            state: AtomicU8::new(SlotState::Free as u8),
+            result_ok: AtomicBool::new(false),
             result_value: AtomicU64::new(0),
             complete_tsc: AtomicU64::new(0),
         }
     }
 
-    fn is_free(&self) -> bool { self.state.load(Ordering::Acquire) == SlotState::Free as u8 }
-    fn is_waiting(&self) -> bool { self.state.load(Ordering::Acquire) == SlotState::Waiting as u8 }
-    fn is_completed(&self) -> bool { self.state.load(Ordering::Acquire) == SlotState::Completed as u8 }
+    fn is_free(&self) -> bool {
+        self.state.load(Ordering::Acquire) == SlotState::Free as u8
+    }
+    fn is_waiting(&self) -> bool {
+        self.state.load(Ordering::Acquire) == SlotState::Waiting as u8
+    }
+    fn is_completed(&self) -> bool {
+        self.state.load(Ordering::Acquire) == SlotState::Completed as u8
+    }
 
     fn mark_waiting(&self, txn_id: DmaTransactionId, channel_id: u32, tid: u64) {
         // SAFETY: Le slot est free (garantie par alloc).
         unsafe {
             let ptr = self as *const _ as *mut CompletionSlot;
-            (*ptr).txn_id     = txn_id;
+            (*ptr).txn_id = txn_id;
             (*ptr).channel_id = channel_id;
             (*ptr).waiter_tid = tid;
         }
-        self.state.store(SlotState::Waiting as u8, Ordering::Release);
+        self.state
+            .store(SlotState::Waiting as u8, Ordering::Release);
     }
 
     fn mark_completed(&self, result: Result<usize, DmaError>) {
@@ -85,11 +92,13 @@ impl CompletionSlot {
                 self.result_value.store(e as u64, Ordering::Release);
             }
         }
-        self.state.store(SlotState::Completed as u8, Ordering::Release);
+        self.state
+            .store(SlotState::Completed as u8, Ordering::Release);
     }
 
     fn consume(&self) -> Result<usize, DmaError> {
-        self.state.store(SlotState::Consumed as u8, Ordering::Release);
+        self.state
+            .store(SlotState::Consumed as u8, Ordering::Release);
         if self.result_ok.load(Ordering::Relaxed) {
             Ok(self.result_value.load(Ordering::Acquire) as usize)
         } else {
@@ -118,9 +127,9 @@ impl CompletionSlot {
 pub struct DmaCompletionManager {
     slots: [CompletionSlot; MAX_PENDING_COMPLETIONS],
     // Statistiques.
-    total_registered:  AtomicU64,
-    total_completed:   AtomicU64,
-    total_errors:      AtomicU64,
+    total_registered: AtomicU64,
+    total_completed: AtomicU64,
+    total_errors: AtomicU64,
 }
 
 // SAFETY: Les slots sont accédés via des atomiques — pas de lock global requis.
@@ -134,8 +143,8 @@ impl DmaCompletionManager {
             // On utilise MaybeUninit.
             slots: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
             total_registered: AtomicU64::new(0),
-            total_completed:  AtomicU64::new(0),
-            total_errors:     AtomicU64::new(0),
+            total_completed: AtomicU64::new(0),
+            total_errors: AtomicU64::new(0),
         }
     }
 
@@ -145,11 +154,16 @@ impl DmaCompletionManager {
         for slot in self.slots.iter() {
             if slot.is_free() {
                 // CAS pour éviter une race avec un concurrent.
-                if slot.state.compare_exchange(
-                    SlotState::Free as u8,
-                    SlotState::Waiting as u8,
-                    Ordering::AcqRel, Ordering::Relaxed
-                ).is_ok() {
+                if slot
+                    .state
+                    .compare_exchange(
+                        SlotState::Free as u8,
+                        SlotState::Waiting as u8,
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
                     slot.mark_waiting(txn_id, channel_id, waiter_tid);
                     self.total_registered.fetch_add(1, Ordering::Relaxed);
                     return true;
@@ -165,17 +179,17 @@ impl DmaCompletionManager {
         for slot in self.slots.iter() {
             if slot.is_waiting() {
                 // On accède au txn_id en unsafe (champ non atomique).
-                let slot_txn = unsafe {
-                    *(slot as *const CompletionSlot as *const DmaTransactionId)
-                };
+                let slot_txn =
+                    unsafe { *(slot as *const CompletionSlot as *const DmaTransactionId) };
                 if slot_txn == txn_id {
                     let waiter = unsafe {
                         *((slot as *const CompletionSlot as *const u8)
-                            .add(core::mem::offset_of!(CompletionSlot, waiter_tid)) as *const u64)
+                            .add(core::mem::offset_of!(CompletionSlot, waiter_tid))
+                            as *const u64)
                     };
                     slot.mark_completed(result);
                     match result {
-                        Ok(_)  => self.total_completed.fetch_add(1, Ordering::Relaxed),
+                        Ok(_) => self.total_completed.fetch_add(1, Ordering::Relaxed),
                         Err(_) => self.total_errors.fetch_add(1, Ordering::Relaxed),
                     };
                     // Réveille le waiter via l'interface de réveil.
@@ -191,9 +205,8 @@ impl DmaCompletionManager {
     pub fn poll(&self, txn_id: DmaTransactionId) -> Option<Result<usize, DmaError>> {
         for slot in self.slots.iter() {
             if slot.is_completed() {
-                let slot_txn = unsafe {
-                    *(slot as *const CompletionSlot as *const DmaTransactionId)
-                };
+                let slot_txn =
+                    unsafe { *(slot as *const CompletionSlot as *const DmaTransactionId) };
                 if slot_txn == txn_id {
                     let res = slot.consume();
                     slot.reset();

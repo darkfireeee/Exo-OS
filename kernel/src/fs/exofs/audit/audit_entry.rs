@@ -5,7 +5,6 @@
 //!  - ONDISK-03 : structure on-disk sans AtomicU64
 //!  - Zéro récursion (RECUR-01)
 
-
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -29,25 +28,25 @@ pub const AUDIT_ENTRY_MAGIC: u32 = 0x41554454; // "AUDT"
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AuditOp {
-    Read            = 0x01,
-    Write           = 0x02,
-    Create          = 0x03,
-    Delete          = 0x04,
-    Rename          = 0x05,
-    SetMeta         = 0x06,
-    SnapshotCreate  = 0x07,
-    SnapshotDelete  = 0x08,
-    EpochCommit     = 0x09,
-    GcTrigger       = 0x0A,
-    Export          = 0x0B,
-    Import          = 0x0C,
-    CryptoKey       = 0x0D,
-    MountRequested  = 0x0E,
-    MountGranted    = 0x0F,
-    Unmount         = 0x10,
-    PolicyChange    = 0x11,
-    ChecksumFail    = 0x12,
-    PermDenied      = 0x13,
+    Read = 0x01,
+    Write = 0x02,
+    Create = 0x03,
+    Delete = 0x04,
+    Rename = 0x05,
+    SetMeta = 0x06,
+    SnapshotCreate = 0x07,
+    SnapshotDelete = 0x08,
+    EpochCommit = 0x09,
+    GcTrigger = 0x0A,
+    Export = 0x0B,
+    Import = 0x0C,
+    CryptoKey = 0x0D,
+    MountRequested = 0x0E,
+    MountGranted = 0x0F,
+    Unmount = 0x10,
+    PolicyChange = 0x11,
+    ChecksumFail = 0x12,
+    PermDenied = 0x13,
 }
 
 impl AuditOp {
@@ -73,49 +72,61 @@ impl AuditOp {
             0x11 => Some(Self::PolicyChange),
             0x12 => Some(Self::ChecksumFail),
             0x13 => Some(Self::PermDenied),
-            _    => None,
+            _ => None,
         }
     }
 
     /// `true` pour les opérations d'écriture (modifie l'état du FS).
     pub fn is_mutating(self) -> bool {
-        matches!(self,
-            Self::Write | Self::Create | Self::Delete | Self::Rename
-            | Self::SetMeta | Self::SnapshotCreate | Self::SnapshotDelete
-            | Self::EpochCommit | Self::PolicyChange | Self::Import
+        matches!(
+            self,
+            Self::Write
+                | Self::Create
+                | Self::Delete
+                | Self::Rename
+                | Self::SetMeta
+                | Self::SnapshotCreate
+                | Self::SnapshotDelete
+                | Self::EpochCommit
+                | Self::PolicyChange
+                | Self::Import
         )
     }
 
     /// `true` pour les opérations de sécurité/cryptographie.
     pub fn is_security_sensitive(self) -> bool {
-        matches!(self,
-            Self::CryptoKey | Self::PolicyChange | Self::PermDenied
-            | Self::MountRequested | Self::MountGranted
+        matches!(
+            self,
+            Self::CryptoKey
+                | Self::PolicyChange
+                | Self::PermDenied
+                | Self::MountRequested
+                | Self::MountGranted
         )
     }
 
     /// Nom court de l'opération (ASCII, statique).
     pub fn name(self) -> &'static str {
         match self {
-            Self::Read           => "READ",
-            Self::Write          => "WRITE",
-            Self::Create         => "CREATE",
-            Self::Delete         => "DELETE",
-            Self::Rename         => "RENAME",
-            Self::SetMeta        => "SET_META",
+            Self::Read => "READ",
+            Self::Write => "WRITE",
+            Self::Create => "CREATE",
+            Self::Delete => "DELETE",
+            Self::Rename => "RENAME",
+            Self::SetMeta => "SET_META",
             Self::SnapshotCreate => "SNAP_CREATE",
             Self::SnapshotDelete => "SNAP_DELETE",
-            Self::EpochCommit    => "EPOCH_COMMIT",
-            Self::GcTrigger      => "GC_TRIGGER",
-            Self::Export         => "EXPORT",
-            Self::Import         => "IMPORT",
-            Self::CryptoKey      => "CRYPTO_KEY",
+            Self::EpochCommit => "EPOCH_COMMIT",
+            Self::GcTrigger => "GC_TRIGGER",
+            Self::Export => "EXPORT",
+            Self::Import => "IMPORT",
+            Self::CryptoKey => "CRYPTO_KEY",
             Self::MountRequested => "MOUNT_REQ",
-            Self::MountGranted   => "MOUNT_OK",
-            Self::Unmount        => "UNMOUNT",
-            Self::PolicyChange   => "POLICY_CHG",
-            Self::ChecksumFail   => "CHKSUM_FAIL",
-            Self::PermDenied     => "PERM_DENIED",
+            Self::MountGranted => "MOUNT_OK",
+            Self::Unmount => "UNMOUNT",
+            Self::PolicyChange => "POLICY_CHG",
+            Self::ChecksumFail => "CHKSUM_FAIL",
+            Self::PermDenied => "PERM_DENIED",
         }
     }
 }
@@ -130,8 +141,8 @@ impl AuditOp {
 pub enum AuditResult {
     #[default]
     Success = 0,
-    Denied  = 1,
-    Error   = 2,
+    Denied = 1,
+    Error = 2,
     Partial = 3,
     Timeout = 4,
 }
@@ -150,7 +161,9 @@ impl AuditResult {
     }
 
     /// `true` si l'opération a réussi.
-    pub fn is_ok(self) -> bool { matches!(self, Self::Success | Self::Partial) }
+    pub fn is_ok(self) -> bool {
+        matches!(self, Self::Success | Self::Partial)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -161,10 +174,10 @@ impl AuditResult {
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AuditSeverity {
-    Info     = 0,
-    Warning  = 1,
+    Info = 0,
+    Warning = 1,
     Critical = 2,
-    Alert    = 3,
+    Alert = 3,
 }
 
 impl AuditSeverity {
@@ -172,12 +185,20 @@ impl AuditSeverity {
     pub fn infer(op: AuditOp, result: AuditResult) -> Self {
         match result {
             AuditResult::Denied => Self::Critical,
-            AuditResult::Error  => {
-                if op.is_security_sensitive() { Self::Alert } else { Self::Warning }
+            AuditResult::Error => {
+                if op.is_security_sensitive() {
+                    Self::Alert
+                } else {
+                    Self::Warning
+                }
             }
             AuditResult::Timeout => Self::Warning,
             _ => {
-                if op.is_security_sensitive() { Self::Warning } else { Self::Info }
+                if op.is_security_sensitive() {
+                    Self::Warning
+                } else {
+                    Self::Info
+                }
             }
         }
     }
@@ -204,7 +225,7 @@ impl AuditSeverity {
 #[derive(Clone, Copy, Debug)]
 pub struct AuditEntry {
     /// Ticks CPU au moment de l'enregistrement.
-    pub tick:      u64,
+    pub tick: u64,
     /// UID de l'acteur.
     pub actor_uid: u64,
     /// Capabilities de l'acteur (bitmask).
@@ -212,21 +233,21 @@ pub struct AuditEntry {
     /// Identifiant objet cible.
     pub object_id: u64,
     /// BlobId de l'objet cible (32 octets).
-    pub blob_id:   [u8; 32],
+    pub blob_id: [u8; 32],
     /// Opération réalisée.
-    pub op:        u8,
+    pub op: u8,
     /// Résultat.
-    pub result:    u8,
+    pub result: u8,
     /// Sévérité (calculée à l'écriture).
-    pub severity:  u8,
+    pub severity: u8,
     /// Flags complémentaires (bit 0 = mutating, bit 1 = security).
-    pub flags:     u8,
+    pub flags: u8,
     /// Numéro de séquence dans le ring-buffer (toujours croissant).
-    pub seq:       u64,
+    pub seq: u64,
     /// Magic de validation.
-    pub magic:     u32,
+    pub magic: u32,
     /// Réservé/expansion future.
-    pub _pad:      [u8; 16],
+    pub _pad: [u8; 16],
 }
 
 const _: () = assert!(
@@ -237,52 +258,70 @@ const _: () = assert!(
 impl AuditEntry {
     /// Construit une entrée complète.
     pub fn new(
-        tick:      u64,
+        tick: u64,
         actor_uid: u64,
         actor_cap: u64,
         object_id: u64,
-        blob_id:   [u8; 32],
-        op:        AuditOp,
-        result:    AuditResult,
-        seq:       u64,
+        blob_id: [u8; 32],
+        op: AuditOp,
+        result: AuditResult,
+        seq: u64,
     ) -> Self {
         let sev = AuditSeverity::infer(op, result);
         let mut flags = 0u8;
-        if op.is_mutating()          { flags |= 0x01; }
-        if op.is_security_sensitive() { flags |= 0x02; }
+        if op.is_mutating() {
+            flags |= 0x01;
+        }
+        if op.is_security_sensitive() {
+            flags |= 0x02;
+        }
         AuditEntry {
-            tick, actor_uid, actor_cap, object_id, blob_id,
-            op:       op     as u8,
-            result:   result as u8,
-            severity: sev    as u8,
+            tick,
+            actor_uid,
+            actor_cap,
+            object_id,
+            blob_id,
+            op: op as u8,
+            result: result as u8,
+            severity: sev as u8,
             flags,
             seq,
-            magic:    AUDIT_ENTRY_MAGIC,
-            _pad:     [0; 16],
+            magic: AUDIT_ENTRY_MAGIC,
+            _pad: [0; 16],
         }
     }
 
     /// Vérifie la validité de l'entrée.
     pub fn is_valid(&self) -> bool {
         self.magic == AUDIT_ENTRY_MAGIC
-        && AuditOp::from_u8(self.op).is_some()
-        && AuditResult::from_u8(self.result).is_some()
+            && AuditOp::from_u8(self.op).is_some()
+            && AuditResult::from_u8(self.result).is_some()
     }
 
     /// Retourne l'opération typée.
-    pub fn op_typed(&self) -> Option<AuditOp> { AuditOp::from_u8(self.op) }
+    pub fn op_typed(&self) -> Option<AuditOp> {
+        AuditOp::from_u8(self.op)
+    }
 
     /// Retourne le résultat typé.
-    pub fn result_typed(&self) -> Option<AuditResult> { AuditResult::from_u8(self.result) }
+    pub fn result_typed(&self) -> Option<AuditResult> {
+        AuditResult::from_u8(self.result)
+    }
 
     /// Retourne la sévérité typée.
-    pub fn severity_typed(&self) -> Option<AuditSeverity> { AuditSeverity::from_u8(self.severity) }
+    pub fn severity_typed(&self) -> Option<AuditSeverity> {
+        AuditSeverity::from_u8(self.severity)
+    }
 
     /// `true` si l'entrée représente une opération mutante.
-    pub fn is_mutating(&self) -> bool { self.flags & 0x01 != 0 }
+    pub fn is_mutating(&self) -> bool {
+        self.flags & 0x01 != 0
+    }
 
     /// `true` si l'entrée est liée à la sécurité.
-    pub fn is_security(&self) -> bool { self.flags & 0x02 != 0 }
+    pub fn is_security(&self) -> bool {
+        self.flags & 0x02 != 0
+    }
 
     /// Sérialise l'entrée en un tableau d'octets bruts.
     pub fn as_bytes(&self) -> &[u8; AUDIT_ENTRY_SIZE] {
@@ -301,8 +340,7 @@ impl AuditEntry {
         if self.magic != AUDIT_ENTRY_MAGIC {
             return Err(ExofsError::InvalidMagic);
         }
-        if AuditOp::from_u8(self.op).is_none()
-            || AuditResult::from_u8(self.result).is_none() {
+        if AuditOp::from_u8(self.op).is_none() || AuditResult::from_u8(self.result).is_none() {
             return Err(ExofsError::CorruptedStructure);
         }
         Ok(())
@@ -316,34 +354,66 @@ impl AuditEntry {
 /// Constructeur fluide d'une entrée d'audit.
 #[derive(Default)]
 pub struct AuditEntryBuilder {
-    tick:      u64,
+    tick: u64,
     actor_uid: u64,
     actor_cap: u64,
     object_id: u64,
-    blob_id:   [u8; 32],
-    op:        Option<AuditOp>,
-    result:    AuditResult,
-    seq:       u64,
+    blob_id: [u8; 32],
+    op: Option<AuditOp>,
+    result: AuditResult,
+    seq: u64,
 }
 
 impl AuditEntryBuilder {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    pub fn tick(mut self, t: u64)           -> Self { self.tick      = t;    self }
-    pub fn actor_uid(mut self, uid: u64)    -> Self { self.actor_uid = uid;  self }
-    pub fn actor_cap(mut self, cap: u64)    -> Self { self.actor_cap = cap;  self }
-    pub fn object_id(mut self, id: u64)     -> Self { self.object_id = id;   self }
-    pub fn blob_id(mut self, b: [u8; 32])   -> Self { self.blob_id   = b;    self }
-    pub fn op(mut self, op: AuditOp)        -> Self { self.op        = Some(op); self }
-    pub fn result(mut self, r: AuditResult) -> Self { self.result    = r;    self }
-    pub fn seq(mut self, s: u64)            -> Self { self.seq       = s;    self }
+    pub fn tick(mut self, t: u64) -> Self {
+        self.tick = t;
+        self
+    }
+    pub fn actor_uid(mut self, uid: u64) -> Self {
+        self.actor_uid = uid;
+        self
+    }
+    pub fn actor_cap(mut self, cap: u64) -> Self {
+        self.actor_cap = cap;
+        self
+    }
+    pub fn object_id(mut self, id: u64) -> Self {
+        self.object_id = id;
+        self
+    }
+    pub fn blob_id(mut self, b: [u8; 32]) -> Self {
+        self.blob_id = b;
+        self
+    }
+    pub fn op(mut self, op: AuditOp) -> Self {
+        self.op = Some(op);
+        self
+    }
+    pub fn result(mut self, r: AuditResult) -> Self {
+        self.result = r;
+        self
+    }
+    pub fn seq(mut self, s: u64) -> Self {
+        self.seq = s;
+        self
+    }
 
     /// Finalise la construction.
     pub fn build(self) -> ExofsResult<AuditEntry> {
         let op = self.op.ok_or(ExofsError::InvalidArgument)?;
         Ok(AuditEntry::new(
-            self.tick, self.actor_uid, self.actor_cap, self.object_id,
-            self.blob_id, op, self.result, self.seq,
+            self.tick,
+            self.actor_uid,
+            self.actor_cap,
+            self.object_id,
+            self.blob_id,
+            op,
+            self.result,
+            self.seq,
         ))
     }
 }
@@ -355,21 +425,25 @@ impl AuditEntryBuilder {
 /// Résumé statistique d'un lot d'entrées d'audit.
 #[derive(Clone, Debug, Default)]
 pub struct AuditSummary {
-    pub total:        u64,
-    pub success:      u64,
-    pub denied:       u64,
-    pub errors:       u64,
-    pub mutating:     u64,
+    pub total: u64,
+    pub success: u64,
+    pub denied: u64,
+    pub errors: u64,
+    pub mutating: u64,
     pub security_ops: u64,
-    pub alerts:       u64,
+    pub alerts: u64,
 }
 
 impl AuditSummary {
     /// Accumule les statistiques d'une entrée.
     pub fn feed(&mut self, entry: &AuditEntry) {
         self.total = self.total.wrapping_add(1);
-        if entry.is_security()                              { self.security_ops = self.security_ops.wrapping_add(1); }
-        if entry.is_mutating()                              { self.mutating     = self.mutating.wrapping_add(1); }
+        if entry.is_security() {
+            self.security_ops = self.security_ops.wrapping_add(1);
+        }
+        if entry.is_mutating() {
+            self.mutating = self.mutating.wrapping_add(1);
+        }
         match AuditResult::from_u8(entry.result) {
             Some(AuditResult::Success) | Some(AuditResult::Partial) => {
                 self.success = self.success.wrapping_add(1);
@@ -388,7 +462,9 @@ impl AuditSummary {
     }
 
     /// `true` si aucun événement de sécurité critique n'a eu lieu.
-    pub fn is_clean(&self) -> bool { self.denied == 0 && self.alerts == 0 }
+    pub fn is_clean(&self) -> bool {
+        self.denied == 0 && self.alerts == 0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -403,43 +479,51 @@ mod tests {
         AuditEntry::new(100, 1, 0xFF, 42, [0u8; 32], op, result, 1)
     }
 
-    #[test] fn test_entry_size() {
+    #[test]
+    fn test_entry_size() {
         assert_eq!(core::mem::size_of::<AuditEntry>(), 96);
     }
 
-    #[test] fn test_entry_valid() {
+    #[test]
+    fn test_entry_valid() {
         let e = make(AuditOp::Read, AuditResult::Success);
         assert!(e.is_valid());
         assert!(e.validate().is_ok());
     }
 
-    #[test] fn test_entry_mutating_flag() {
+    #[test]
+    fn test_entry_mutating_flag() {
         let e = make(AuditOp::Write, AuditResult::Success);
         assert!(e.is_mutating());
     }
 
-    #[test] fn test_entry_security_flag() {
+    #[test]
+    fn test_entry_security_flag() {
         let e = make(AuditOp::CryptoKey, AuditResult::Success);
         assert!(e.is_security());
     }
 
-    #[test] fn test_op_from_u8_roundtrip() {
+    #[test]
+    fn test_op_from_u8_roundtrip() {
         for v in 0x01u8..=0x13 {
             assert!(AuditOp::from_u8(v).is_some(), "missing op {v:#x}");
         }
     }
 
-    #[test] fn test_severity_infer_denied_is_critical() {
+    #[test]
+    fn test_severity_infer_denied_is_critical() {
         let s = AuditSeverity::infer(AuditOp::Read, AuditResult::Denied);
         assert_eq!(s, AuditSeverity::Critical);
     }
 
-    #[test] fn test_severity_infer_security_error_is_alert() {
+    #[test]
+    fn test_severity_infer_security_error_is_alert() {
         let s = AuditSeverity::infer(AuditOp::CryptoKey, AuditResult::Error);
         assert_eq!(s, AuditSeverity::Alert);
     }
 
-    #[test] fn test_serialise_roundtrip() {
+    #[test]
+    fn test_serialise_roundtrip() {
         let e = make(AuditOp::Create, AuditResult::Success);
         let bytes = e.as_bytes();
         let e2 = AuditEntry::from_bytes(bytes);
@@ -447,28 +531,38 @@ mod tests {
         assert_eq!(e2.op, e.op);
     }
 
-    #[test] fn test_builder_ok() {
+    #[test]
+    fn test_builder_ok() {
         let e = AuditEntryBuilder::new()
-            .tick(999).actor_uid(7).actor_cap(0).object_id(42)
-            .op(AuditOp::Delete).result(AuditResult::Success).seq(5)
-            .build().unwrap();
+            .tick(999)
+            .actor_uid(7)
+            .actor_cap(0)
+            .object_id(42)
+            .op(AuditOp::Delete)
+            .result(AuditResult::Success)
+            .seq(5)
+            .build()
+            .unwrap();
         assert!(e.is_valid());
         assert!(e.is_mutating());
     }
 
-    #[test] fn test_builder_missing_op() {
+    #[test]
+    fn test_builder_missing_op() {
         let r = AuditEntryBuilder::new().build();
         assert!(r.is_err());
     }
 
-    #[test] fn test_summary_clean_initially() {
+    #[test]
+    fn test_summary_clean_initially() {
         let mut s = AuditSummary::default();
         let e = make(AuditOp::Read, AuditResult::Success);
         s.feed(&e);
         assert!(s.is_clean());
     }
 
-    #[test] fn test_summary_denied_not_clean() {
+    #[test]
+    fn test_summary_denied_not_clean() {
         let mut s = AuditSummary::default();
         let e = make(AuditOp::Read, AuditResult::Denied);
         s.feed(&e);

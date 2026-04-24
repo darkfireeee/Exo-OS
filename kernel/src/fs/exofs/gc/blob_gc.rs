@@ -24,7 +24,6 @@
 //   DAG-01 : PAS d'import de arch/, ipc/, process/
 // ==============================================================================
 
-
 use core::fmt;
 
 use crate::fs::exofs::core::{EpochId, ExofsResult};
@@ -59,39 +58,39 @@ pub const MAX_WORKSPACE_NODES: usize = 1_000_000;
 #[derive(Debug, Default, Clone)]
 pub struct GcPassResult {
     // ── Phase SCAN ──────────────────────────────────────────────────────────
-    pub scan_slots_valid:    u64,
-    pub scan_roots_found:    u64,
-    pub scan_blobs_greyed:   u64,
+    pub scan_slots_valid: u64,
+    pub scan_roots_found: u64,
+    pub scan_blobs_greyed: u64,
 
     // ── Phase MARK ──────────────────────────────────────────────────────────
-    pub mark_nodes_black:    u64,
-    pub mark_blobs_greyed:   u64,
-    pub mark_pinned_skip:    u64,
-    pub mark_queue_full:     u64,
+    pub mark_nodes_black: u64,
+    pub mark_blobs_greyed: u64,
+    pub mark_pinned_skip: u64,
+    pub mark_queue_full: u64,
 
     // ── Phase SWEEP ─────────────────────────────────────────────────────────
-    pub sweep_white_found:   u64,
-    pub sweep_deferred:      u64,
-    pub sweep_bytes:         u64,
-    pub sweep_pinned_skip:   u64,
+    pub sweep_white_found: u64,
+    pub sweep_deferred: u64,
+    pub sweep_bytes: u64,
+    pub sweep_pinned_skip: u64,
 
     // ── Phase ORPHAN ────────────────────────────────────────────────────────
-    pub orphan_objects:      u64,
-    pub orphan_blobs:        u64,
+    pub orphan_objects: u64,
+    pub orphan_blobs: u64,
 
     // ── Phase INLINE ────────────────────────────────────────────────────────
-    pub inline_collected:    u64,
-    pub inline_bytes:        u64,
+    pub inline_collected: u64,
+    pub inline_bytes: u64,
 
     // ── Phase FINALIZE ─────────────────────────────────────────────────────
-    pub finalize_flushed:    u64,
+    pub finalize_flushed: u64,
 
     // ── Statut global ───────────────────────────────────────────────────────
-    pub cycles_detected:     u64,
-    pub tick_start:          u64,
-    pub tick_end:            u64,
-    pub success:             bool,
-    pub abort_reason:        Option<&'static str>,
+    pub cycles_detected: u64,
+    pub tick_start: u64,
+    pub tick_end: u64,
+    pub success: bool,
+    pub abort_reason: Option<&'static str>,
 }
 
 impl GcPassResult {
@@ -140,25 +139,25 @@ impl fmt::Display for GcPassResult {
 #[derive(Debug, Clone)]
 pub struct BlobGcConfig {
     /// Activer la detection de cycles.
-    pub detect_cycles:    bool,
+    pub detect_cycles: bool,
     /// Activer la collecte d'orphelins.
-    pub collect_orphans:  bool,
+    pub collect_orphans: bool,
     /// Activer le GC inline.
-    pub collect_inline:   bool,
+    pub collect_inline: bool,
     /// Vider la file differee en fin de passe.
-    pub flush_deferred:   bool,
+    pub flush_deferred: bool,
     /// Epoch courante (pour la file differee).
-    pub current_epoch:    EpochId,
+    pub current_epoch: EpochId,
 }
 
 impl Default for BlobGcConfig {
     fn default() -> Self {
         Self {
-            detect_cycles:   true,
+            detect_cycles: true,
             collect_orphans: true,
-            collect_inline:  true,
-            flush_deferred:  true,
-            current_epoch:   EpochId(0),
+            collect_inline: true,
+            flush_deferred: true,
+            current_epoch: EpochId(0),
         }
     }
 }
@@ -168,8 +167,8 @@ impl Default for BlobGcConfig {
 // ==============================================================================
 
 struct BlobGcInner {
-    config:      BlobGcConfig,
-    pass_count:  u64,
+    config: BlobGcConfig,
+    pass_count: u64,
     last_result: Option<GcPassResult>,
 }
 
@@ -187,13 +186,13 @@ impl BlobGc {
         Self {
             inner: SpinLock::new(BlobGcInner {
                 config: BlobGcConfig {
-                    detect_cycles:   true,
+                    detect_cycles: true,
                     collect_orphans: true,
-                    collect_inline:  true,
-                    flush_deferred:  true,
-                    current_epoch:   EpochId(0),
+                    collect_inline: true,
+                    flush_deferred: true,
+                    current_epoch: EpochId(0),
                 },
-                pass_count:  0,
+                pass_count: 0,
                 last_result: None,
             }),
         }
@@ -220,10 +219,7 @@ impl BlobGc {
     ///
     /// Retourne un `GcPassResult` indépendamment du succès partiel.
     /// En cas d'erreur critique, la passe est abandonnée (GcPhase::Aborted).
-    pub fn run_pass(
-        &self,
-        epoch_roots: &[Option<&EpochRootInMemory>],
-    ) -> GcPassResult {
+    pub fn run_pass(&self, epoch_roots: &[Option<&EpochRootInMemory>]) -> GcPassResult {
         let (config, _pass_num) = {
             let mut g = self.inner.lock();
             g.pass_count = g.pass_count.saturating_add(1);
@@ -249,8 +245,8 @@ impl BlobGc {
 
         let scan_snapshot = match self.run_scan_phase(epoch_roots, &config) {
             Ok(snap) => {
-                result.scan_slots_valid   = snap.stats.slots_valid;
-                result.scan_roots_found   = snap.stats.roots_extracted;
+                result.scan_slots_valid = snap.stats.slots_valid;
+                result.scan_roots_found = snap.stats.roots_extracted;
                 snap
             }
             Err(_e) => {
@@ -291,8 +287,8 @@ impl BlobGc {
         match SWEEPER.run_sweep_phase(&mut workspace) {
             Ok(sw) => {
                 result.sweep_white_found = sw.white_blobs_found;
-                result.sweep_deferred    = sw.blobs_deferred;
-                result.sweep_bytes       = sw.bytes_deferred;
+                result.sweep_deferred = sw.blobs_deferred;
+                result.sweep_bytes = sw.bytes_deferred;
                 result.sweep_pinned_skip = sw.pinned_skipped;
             }
             Err(_) => {
@@ -305,7 +301,7 @@ impl BlobGc {
             match ORPHAN_COLLECTOR.collect_orphans(&scan_snapshot, config.current_epoch) {
                 Ok(orp) => {
                     result.orphan_objects = orp.objects_orphaned;
-                    result.orphan_blobs   = orp.blobs_deferred;
+                    result.orphan_blobs = orp.blobs_deferred;
                 }
                 Err(_) => {}
             }
@@ -316,7 +312,7 @@ impl BlobGc {
             match INLINE_GC.collect(&scan_snapshot) {
                 Ok(inl) => {
                     result.inline_collected = inl.collected;
-                    result.inline_bytes     = inl.bytes_freed;
+                    result.inline_bytes = inl.bytes_freed;
                 }
                 Err(_) => {}
             }
@@ -349,7 +345,7 @@ impl BlobGc {
 
         // ── Clôture de la passe ─────────────────────────────────────────────
         result.tick_end = GC_STATE.advance_tick();
-        result.success  = true;
+        result.success = true;
 
         // Creer un GcPassStats a partir du resultat pour end_pass.
         let pass_stats = build_pass_stats(&result);
@@ -372,7 +368,7 @@ impl BlobGc {
     fn run_scan_phase<'a>(
         &self,
         epoch_roots: &[Option<&'a EpochRootInMemory>],
-        _config:     &BlobGcConfig,
+        _config: &BlobGcConfig,
     ) -> ExofsResult<EpochScanSnapshot> {
         EPOCH_SCANNER.scan(epoch_roots)
     }
@@ -381,15 +377,14 @@ impl BlobGc {
     fn run_mark_phase<L: BlobLookup>(
         &self,
         snapshot: &EpochScanSnapshot,
-        lookup:   &L,
+        lookup: &L,
     ) -> ExofsResult<TricolorWorkspace> {
         let mut workspace = TricolorWorkspace::new()?;
 
         // Charger les BlobNodes depuis REFERENCE_TRACKER dans le workspace.
         let all_blobs = REFERENCE_TRACKER.all_blobs();
         for blob_id in all_blobs.iter().take(MAX_WORKSPACE_NODES) {
-            let (create_epoch, phys_size) =
-                BLOB_REFCOUNT.get_epoch_and_size(blob_id);
+            let (create_epoch, phys_size) = BLOB_REFCOUNT.get_epoch_and_size(blob_id);
             let rc = BLOB_REFCOUNT.get_count(blob_id);
             let node = crate::fs::exofs::gc::tricolor::BlobNode::new(
                 *blob_id,
@@ -430,22 +425,20 @@ impl BlobGc {
 // Helper — construire GcPassStats depuis GcPassResult
 // ==============================================================================
 
-fn build_pass_stats(
-    r: &GcPassResult,
-) -> crate::fs::exofs::gc::gc_state::GcPassStats {
+fn build_pass_stats(r: &GcPassResult) -> crate::fs::exofs::gc::gc_state::GcPassStats {
     crate::fs::exofs::gc::gc_state::GcPassStats {
-        blobs_scanned:     r.scan_roots_found,
+        blobs_scanned: r.scan_roots_found,
         blobs_marked_live: r.mark_nodes_black,
-        blobs_swept:       r.sweep_white_found,
-        bytes_freed:       r.total_bytes(),
+        blobs_swept: r.sweep_white_found,
+        bytes_freed: r.total_bytes(),
         orphans_collected: r.orphan_objects,
-        inline_gc_count:   r.inline_collected,
-        cycles_detected:   r.cycles_detected,
-        start_tick:        r.tick_duration(),
-        end_tick:          r.tick_duration(),
-        completed:         r.success,
-        abort_reason:      r.abort_reason,
-        epoch:             0,
+        inline_gc_count: r.inline_collected,
+        cycles_detected: r.cycles_detected,
+        start_tick: r.tick_duration(),
+        end_tick: r.tick_duration(),
+        completed: r.success,
+        abort_reason: r.abort_reason,
+        epoch: 0,
     }
 }
 
@@ -504,17 +497,17 @@ mod tests {
     #[test]
     fn test_pass_result_display() {
         let r = GcPassResult {
-            success:         true,
+            success: true,
             scan_roots_found: 10,
             mark_nodes_black: 8,
-            sweep_deferred:   2,
-            orphan_objects:   1,
+            sweep_deferred: 2,
+            orphan_objects: 1,
             inline_collected: 1,
-            sweep_bytes:      4096,
-            inline_bytes:     256,
-            cycles_detected:  0,
-            tick_start:       100,
-            tick_end:         200,
+            sweep_bytes: 4096,
+            inline_bytes: 256,
+            cycles_detected: 0,
+            tick_start: 100,
+            tick_end: 200,
             ..GcPassResult::default()
         };
         assert_eq!(r.tick_duration(), 100);

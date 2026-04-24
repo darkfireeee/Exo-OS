@@ -10,9 +10,8 @@
 //! - INDEX (base + 0x00) : numéro de registre
 //! - DATA  (base + 0x10) : données 32 bits
 
-
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicUsize, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -21,31 +20,31 @@ pub const IOAPIC_DEFAULT_BASE: u64 = 0xFEC0_0000;
 
 /// Registres IOAPIC
 const IOAPIC_IOREGSEL: u32 = 0x00;
-const IOAPIC_IOWIN:    u32 = 0x10;
+const IOAPIC_IOWIN: u32 = 0x10;
 
 /// Registre IOREGSEL : numéros de registres internes
-const IOAPIC_ID:    u8 = 0x00;
-const IOAPIC_VER:   u8 = 0x01;
+const IOAPIC_ID: u8 = 0x00;
+const IOAPIC_VER: u8 = 0x01;
 #[allow(dead_code)]
-const IOAPIC_ARB:   u8 = 0x02;
-const IOAPIC_REDTBL:u8 = 0x10; // Début table de redirection (24 entrées × 2 registres)
+const IOAPIC_ARB: u8 = 0x02;
+const IOAPIC_REDTBL: u8 = 0x10; // Début table de redirection (24 entrées × 2 registres)
 
 /// Bits de la Redirection Table Entry
-pub const IOAPIC_RTE_MASKED:    u64 = 1 << 16;
-pub const IOAPIC_RTE_LEVEL:     u64 = 1 << 15;
+pub const IOAPIC_RTE_MASKED: u64 = 1 << 16;
+pub const IOAPIC_RTE_LEVEL: u64 = 1 << 15;
 pub const IOAPIC_RTE_ACTIVE_LO: u64 = 1 << 13;
-pub const IOAPIC_RTE_REMOTE_IRR:u64 = 1 << 14;
+pub const IOAPIC_RTE_REMOTE_IRR: u64 = 1 << 14;
 
 // Champ mode de livraison (bits 10:8)
-pub const IOAPIC_DM_FIXED:   u64 = 0b000 << 8;
-pub const IOAPIC_DM_LOWEST:  u64 = 0b001 << 8;
-pub const IOAPIC_DM_NMI:     u64 = 0b100 << 8;
-pub const IOAPIC_DM_INIT:    u64 = 0b101 << 8;
-pub const IOAPIC_DM_EXTINT:  u64 = 0b111 << 8;
+pub const IOAPIC_DM_FIXED: u64 = 0b000 << 8;
+pub const IOAPIC_DM_LOWEST: u64 = 0b001 << 8;
+pub const IOAPIC_DM_NMI: u64 = 0b100 << 8;
+pub const IOAPIC_DM_INIT: u64 = 0b101 << 8;
+pub const IOAPIC_DM_EXTINT: u64 = 0b111 << 8;
 
 // Mode de destination (bit 11)
 pub const IOAPIC_DEST_PHYSICAL: u64 = 0;
-pub const IOAPIC_DEST_LOGICAL:  u64 = 1 << 11;
+pub const IOAPIC_DEST_LOGICAL: u64 = 1 << 11;
 
 // ── Table IOAPIC (multi-APIC supporté) ───────────────────────────────────────
 
@@ -53,13 +52,13 @@ const MAX_IOAPICS: usize = 8;
 
 #[allow(dead_code)]
 struct IoApicEntry {
-    base:          usize,
-    gsi_base:      u32,
-    max_redir:     u8,
+    base: usize,
+    gsi_base: u32,
+    max_redir: u8,
 }
 
 // Structure statique de 8 I/O APICs potentiels
-static IOAPIC_BASES:    [AtomicUsize; MAX_IOAPICS] = {
+static IOAPIC_BASES: [AtomicUsize; MAX_IOAPICS] = {
     const ZERO: AtomicUsize = AtomicUsize::new(0);
     [ZERO; MAX_IOAPICS]
 };
@@ -90,7 +89,9 @@ unsafe fn ioapic_write(base: usize, reg: u8, val: u32) {
 /// Appelé par `acpi::madt::parse_ioapic()`.
 pub fn register_ioapic(phys_base: u64, gsi_base: u32) {
     let idx = IOAPIC_COUNT.fetch_add(1, Ordering::AcqRel);
-    if idx >= MAX_IOAPICS { return; }
+    if idx >= MAX_IOAPICS {
+        return;
+    }
     IOAPIC_BASES[idx].store(phys_base as usize, Ordering::Release);
     IOAPIC_GSI_BASE[idx].store(gsi_base as u8, Ordering::Release);
 }
@@ -137,7 +138,7 @@ pub fn write_rte(gsi: u32, rte: u64) -> bool {
     // SAFETY: base et reg validés
     unsafe {
         ioapic_write(base, reg + 1, (rte >> 32) as u32);
-        ioapic_write(base, reg,      rte as u32);
+        ioapic_write(base, reg, rte as u32);
     }
     true
 }
@@ -157,8 +158,12 @@ pub fn route_irq(gsi: u32, vector: u8, dest_apic: u8, active_low: bool, level: b
     );
 
     let mut rte: u64 = IOAPIC_DM_FIXED | IOAPIC_DEST_PHYSICAL | (vector as u64);
-    if active_low { rte |= IOAPIC_RTE_ACTIVE_LO; }
-    if level      { rte |= IOAPIC_RTE_LEVEL; }
+    if active_low {
+        rte |= IOAPIC_RTE_ACTIVE_LO;
+    }
+    if level {
+        rte |= IOAPIC_RTE_LEVEL;
+    }
     rte |= (dest_apic as u64) << 56;
     write_rte(gsi, rte)
 }
@@ -184,7 +189,9 @@ pub fn init_all_ioapics() {
     let count = IOAPIC_COUNT.load(Ordering::Acquire).min(MAX_IOAPICS);
     for i in 0..count {
         let base = IOAPIC_BASES[i].load(Ordering::Relaxed);
-        if base == 0 { continue; }
+        if base == 0 {
+            continue;
+        }
 
         // SAFETY: base validée lors de l'enregistrement ACPI
         let max_redir = unsafe { (ioapic_read(base, IOAPIC_VER) >> 16) & 0xFF };
@@ -201,7 +208,9 @@ pub fn init_all_ioapics() {
 
 /// Lit l'ID de l'I/O APIC d'index `idx`
 pub fn ioapic_id(idx: usize) -> Option<u8> {
-    if idx >= IOAPIC_COUNT.load(Ordering::Relaxed) { return None; }
+    if idx >= IOAPIC_COUNT.load(Ordering::Relaxed) {
+        return None;
+    }
     let base = IOAPIC_BASES[idx].load(Ordering::Relaxed);
     // SAFETY: base validée
     Some(unsafe { (ioapic_read(base, IOAPIC_ID) >> 24) as u8 })

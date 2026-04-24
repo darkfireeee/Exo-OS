@@ -20,9 +20,9 @@ const BUCKETS: usize = 40;
 /// Histogramme de latence global (un seul pour tout l'OS).
 pub struct LatencyHist {
     buckets: [AtomicU64; BUCKETS],
-    total:   AtomicU64,
-    sum_ns:  AtomicU64,
-    max_ns:  AtomicU64,
+    total: AtomicU64,
+    sum_ns: AtomicU64,
+    max_ns: AtomicU64,
 }
 
 impl LatencyHist {
@@ -30,9 +30,9 @@ impl LatencyHist {
         const ZERO: AtomicU64 = AtomicU64::new(0);
         Self {
             buckets: [ZERO; BUCKETS],
-            total:   AtomicU64::new(0),
-            sum_ns:  AtomicU64::new(0),
-            max_ns:  AtomicU64::new(0),
+            total: AtomicU64::new(0),
+            sum_ns: AtomicU64::new(0),
+            max_ns: AtomicU64::new(0),
         }
     }
 
@@ -46,7 +46,10 @@ impl LatencyHist {
         let mut cur_max = self.max_ns.load(Ordering::Relaxed);
         while ns > cur_max {
             match self.max_ns.compare_exchange_weak(
-                cur_max, ns, Ordering::Relaxed, Ordering::Relaxed,
+                cur_max,
+                ns,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
             ) {
                 Ok(_) => break,
                 Err(m) => cur_max = m,
@@ -57,7 +60,9 @@ impl LatencyHist {
     /// Percentile P (0–100). Retourne la borne inférieure du bucket correspondant.
     pub fn percentile_pct(&self, p: u64) -> u64 {
         let total = self.total.load(Ordering::Relaxed);
-        if total == 0 { return 0; }
+        if total == 0 {
+            return 0;
+        }
         let threshold = (total * p + 99) / 100;
         let mut cumul = 0u64;
         for i in 0..BUCKETS {
@@ -69,30 +74,48 @@ impl LatencyHist {
         bucket_floor(BUCKETS - 1)
     }
 
-    pub fn p50(&self)  -> u64 { self.percentile_pct(50) }
-    pub fn p99(&self)  -> u64 { self.percentile_pct(99) }
+    pub fn p50(&self) -> u64 {
+        self.percentile_pct(50)
+    }
+    pub fn p99(&self) -> u64 {
+        self.percentile_pct(99)
+    }
     /// 99.9th percentile (uses millipercent scale 0–1000).
     pub fn p999(&self) -> u64 {
         let total = self.total.load(Ordering::Relaxed);
-        if total == 0 { return 0; }
+        if total == 0 {
+            return 0;
+        }
         let threshold = (total * 999 + 999) / 1000;
         let mut cumul = 0u64;
         for i in 0..BUCKETS {
             cumul += self.buckets[i].load(Ordering::Relaxed);
-            if cumul >= threshold { return bucket_floor(i); }
+            if cumul >= threshold {
+                return bucket_floor(i);
+            }
         }
         bucket_floor(BUCKETS - 1)
     }
 
-    pub fn total(&self)  -> u64 { self.total.load(Ordering::Relaxed) }
-    pub fn max_ns(&self) -> u64 { self.max_ns.load(Ordering::Relaxed) }
+    pub fn total(&self) -> u64 {
+        self.total.load(Ordering::Relaxed)
+    }
+    pub fn max_ns(&self) -> u64 {
+        self.max_ns.load(Ordering::Relaxed)
+    }
     pub fn avg_ns(&self) -> u64 {
         let t = self.total.load(Ordering::Relaxed);
-        if t == 0 { 0 } else { self.sum_ns.load(Ordering::Relaxed) / t }
+        if t == 0 {
+            0
+        } else {
+            self.sum_ns.load(Ordering::Relaxed) / t
+        }
     }
 
     pub fn reset(&self) {
-        for b in &self.buckets { b.store(0, Ordering::Relaxed); }
+        for b in &self.buckets {
+            b.store(0, Ordering::Relaxed);
+        }
         self.total.store(0, Ordering::Relaxed);
         self.sum_ns.store(0, Ordering::Relaxed);
         self.max_ns.store(0, Ordering::Relaxed);
@@ -105,13 +128,21 @@ impl LatencyHist {
 /// Exemples : ns=0→0, ns=1→1, ns=2..3→2, ns=4..7→3, ns=8..15→4.
 #[inline]
 fn bucket_for(ns: u64) -> usize {
-    if ns == 0 { 0 } else { (u64::BITS - ns.leading_zeros()) as usize }
+    if ns == 0 {
+        0
+    } else {
+        (u64::BITS - ns.leading_zeros()) as usize
+    }
 }
 
 /// Retourne la borne inférieure du bucket `k` (en ns).
 #[inline]
 fn bucket_floor(k: usize) -> u64 {
-    if k == 0 { 0 } else { 1u64 << (k - 1) }
+    if k == 0 {
+        0
+    } else {
+        1u64 << (k - 1)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -119,13 +150,13 @@ fn bucket_floor(k: usize) -> u64 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Latence de context_switch (ns).
-pub static SWITCH_LATENCY:  LatencyHist = LatencyHist::new();
+pub static SWITCH_LATENCY: LatencyHist = LatencyHist::new();
 /// Latence de wakeup (ns).
-pub static WAKEUP_LATENCY:  LatencyHist = LatencyHist::new();
+pub static WAKEUP_LATENCY: LatencyHist = LatencyHist::new();
 /// Latence pick_next_task (ns).
 pub static PICKNEXT_LATENCY: LatencyHist = LatencyHist::new();
 /// Latence IPI (ns).
-pub static IPI_LATENCY:     LatencyHist = LatencyHist::new();
+pub static IPI_LATENCY: LatencyHist = LatencyHist::new();
 
 pub unsafe fn init() {
     // Histogrammes initialisés à la compilation — rien à faire.

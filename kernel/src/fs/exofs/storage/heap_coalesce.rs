@@ -18,10 +18,10 @@
 // - OOM-02   : try_reserve avant tout push Vec.
 // - LOCK-04  : pas d'I/O sous SpinLock.
 
-use alloc::vec::Vec;
 use crate::fs::exofs::core::ExofsError;
 use crate::fs::exofs::storage::heap_free_map::HeapFreeMap;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CoalesceReport — résultat d'une passe de coalescence
@@ -31,15 +31,15 @@ use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 #[derive(Clone, Debug, Default)]
 pub struct CoalesceReport {
     /// Nombre de runs libres avant la passe.
-    pub runs_before:      u64,
+    pub runs_before: u64,
     /// Nombre de runs libres après la passe.
-    pub runs_after:       u64,
+    pub runs_after: u64,
     /// Nombre de fusions effectuées (runs_before - runs_after).
-    pub merges:           u64,
+    pub merges: u64,
     /// Plus grand run libre après la passe (en blocs).
-    pub largest_run:      u64,
+    pub largest_run: u64,
     /// Total de blocs libres (inchangé par la coalescence).
-    pub free_blocks:      u64,
+    pub free_blocks: u64,
     /// Taux de fragmentation après la passe (0..=100).
     pub fragmentation_pct: u8,
 }
@@ -64,15 +64,15 @@ pub struct CoalesceOptions {
     /// Taux de fragmentation minimum pour déclencher la coalescence (0..=100).
     pub min_frag_pct: u8,
     /// Si `false`, la passe tourne en mode "analyse seulement" sans modifier la carte.
-    pub apply:        bool,
+    pub apply: bool,
 }
 
 impl Default for CoalesceOptions {
     fn default() -> Self {
         Self {
-            max_merges:   0,     // illimité
-            min_frag_pct: 5,     // déclencher si fragmentation > 5 %
-            apply:        true,
+            max_merges: 0,   // illimité
+            min_frag_pct: 5, // déclencher si fragmentation > 5 %
+            apply: true,
         }
     }
 }
@@ -80,7 +80,10 @@ impl Default for CoalesceOptions {
 impl CoalesceOptions {
     /// Mode analyse seule (ne modifie pas la carte).
     pub fn analyze_only() -> Self {
-        Self { apply: false, ..Default::default() }
+        Self {
+            apply: false,
+            ..Default::default()
+        }
     }
 }
 
@@ -91,8 +94,8 @@ impl CoalesceOptions {
 /// Représentation d'un segment libre consolidé pendant la coalescence.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct FreeSegment {
-    pub start:  u64,
-    pub len:    u64,
+    pub start: u64,
+    pub len: u64,
     /// Nombre de runs sources ayant été fusionnés dans ce segment.
     pub merged: u32,
 }
@@ -118,7 +121,7 @@ impl HeapCoalescer {
     /// # Règle ARITH-02 : utilisée pour vérifier l'adjacence des runs.
     /// # Règle OOM-02   : try_reserve avant push.
     pub fn run(
-        map:  &mut HeapFreeMap,
+        map: &mut HeapFreeMap,
         opts: &CoalesceOptions,
     ) -> Result<CoalesceReport, ExofsError> {
         let frag_before = map.fragmentation_pct();
@@ -126,11 +129,11 @@ impl HeapCoalescer {
         // Ne rien faire si la fragmentation est acceptable.
         if frag_before < opts.min_frag_pct {
             return Ok(CoalesceReport {
-                runs_before:       map.free_run_count(),
-                runs_after:        map.free_run_count(),
-                merges:            0,
-                largest_run:       map.largest_free_run(),
-                free_blocks:       map.free_blocks(),
+                runs_before: map.free_run_count(),
+                runs_after: map.free_run_count(),
+                merges: 0,
+                largest_run: map.largest_free_run(),
+                free_blocks: map.free_blocks(),
                 fragmentation_pct: frag_before,
             });
         }
@@ -157,9 +160,9 @@ impl HeapCoalescer {
             STORAGE_STATS.inc_heap_coalesce();
         }
 
-        let runs_after       = map.free_run_count();
-        let merges           = runs_before.saturating_sub(runs_after);
-        let largest_run      = map.largest_free_run();
+        let runs_after = map.free_run_count();
+        let merges = runs_before.saturating_sub(runs_after);
+        let largest_run = map.largest_free_run();
         let fragmentation_pct = map.fragmentation_pct();
 
         Ok(CoalesceReport {
@@ -177,11 +180,11 @@ impl HeapCoalescer {
     /// Analyse la carte sans la modifier.
     pub fn analyze(map: &HeapFreeMap) -> CoalesceReport {
         CoalesceReport {
-            runs_before:       map.free_run_count(),
-            runs_after:        map.free_run_count(),
-            merges:            0,
-            largest_run:       map.largest_free_run(),
-            free_blocks:       map.free_blocks(),
+            runs_before: map.free_run_count(),
+            runs_after: map.free_run_count(),
+            merges: 0,
+            largest_run: map.largest_free_run(),
+            free_blocks: map.free_blocks(),
             fragmentation_pct: map.fragmentation_pct(),
         }
     }
@@ -194,7 +197,7 @@ impl HeapCoalescer {
     ///
     /// # Règle OOM-02 : try_reserve avant push.
     fn consolidate_runs(
-        map:  &HeapFreeMap,
+        map: &HeapFreeMap,
         _opts: &CoalesceOptions,
     ) -> Result<Vec<FreeSegment>, ExofsError> {
         let runs = map.free_runs()?;
@@ -205,8 +208,8 @@ impl HeapCoalescer {
         }
 
         let mut current = FreeSegment {
-            start:  runs[0].start,
-            len:    runs[0].len,
+            start: runs[0].start,
+            len: runs[0].len,
             merged: 1,
         };
 
@@ -214,15 +217,15 @@ impl HeapCoalescer {
             let current_end = current.start.saturating_add(current.len);
             if run.start == current_end {
                 // Runs adjacents → fusionner.
-                current.len    = current.len.saturating_add(run.len);
+                current.len = current.len.saturating_add(run.len);
                 current.merged = current.merged.saturating_add(1);
             } else {
                 // Nouveau segment.
                 segments.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                 segments.push(current);
                 current = FreeSegment {
-                    start:  run.start,
-                    len:    run.len,
+                    start: run.start,
+                    len: run.len,
                     merged: 1,
                 };
             }
@@ -240,19 +243,23 @@ impl HeapCoalescer {
     /// Pour un bloc d'ordre `order` (couvrant 2^order blocs) commençant à `block`,
     /// son buddy est à `block XOR (1 << order)`.
     pub fn buddy_of(block: u64, order: u32) -> Option<u64> {
-        if order >= 64 { return None; }
+        if order >= 64 {
+            return None;
+        }
         Some(block ^ (1u64 << order))
     }
 
     /// Vérifie si deux blocs d'ordre `order` sont des buddies.
     pub fn are_buddies(a: u64, b: u64, order: u32) -> bool {
-        if order >= 64 { return false; }
+        if order >= 64 {
+            return false;
+        }
         let size = 1u64 << order;
         // Les deux doivent être alignés sur 2×size.
         let align = size.checked_mul(2).unwrap_or(u64::MAX);
-        let mask  = align.saturating_sub(1);
+        let mask = align.saturating_sub(1);
         // L'aîné est celui dont le bit `order` est à 0.
-        let base  = a & !mask;
+        let base = a & !mask;
         (a == base && b == base + size) || (b == base && a == base + size)
     }
 
@@ -261,13 +268,9 @@ impl HeapCoalescer {
     /// Retourne le nombre de fusions buddy effectuées.
     ///
     /// RÈGLE ARITH-02 : checked_mul pour les offsets buddy.
-    pub fn try_merge_buddies(
-        map:       &mut HeapFreeMap,
-        block:     u64,
-        max_order: u32,
-    ) -> u64 {
+    pub fn try_merge_buddies(map: &mut HeapFreeMap, block: u64, max_order: u32) -> u64 {
         let mut current = block;
-        let mut merges  = 0u64;
+        let mut merges = 0u64;
 
         for order in 0..max_order {
             let buddy = match Self::buddy_of(current, order) {
@@ -276,19 +279,19 @@ impl HeapCoalescer {
             };
 
             if !map.is_free(buddy) {
-                break;  // Le buddy est occupé, on ne peut pas fusionner.
+                break; // Le buddy est occupé, on ne peut pas fusionner.
             }
 
             // Les deux sont libres → fusionner (marquer le buddy comme "occupé" puis
             // laisser le nouveau super-bloc libre).
             // En pratique on aligne sur l'aîné.
-            let _size   = 1u64 << order;
+            let _size = 1u64 << order;
             let parent = current.min(buddy);
 
             // Re-marquer les deux blocs puis le parent libre (déjà dans la carte).
             // (la carte ne stocke pas les ordres, mais cette opération est no-op
             //  car ils sont déjà libres — l'important est le décompte).
-            let _ = parent;    // utilisé pour la logique de fusion
+            let _ = parent; // utilisé pour la logique de fusion
             merges = merges.saturating_add(1);
             current = current.min(buddy);
         }
@@ -314,11 +317,11 @@ impl HeapCoalescer {
 
         // On ne peut pas run consolidate_runs sans &mut,
         // donc on itère manuellement sur les blocs.
-        let mut merges       = 0u64;
+        let mut merges = 0u64;
         let mut blocks_merged = 0u64;
         let mut prev_end: Option<u64> = None;
         let mut run_start = 0u64;
-        let mut in_run    = false;
+        let mut in_run = false;
 
         for b in 0..map.total_blocks() {
             if map.is_free(b) {
@@ -331,12 +334,12 @@ impl HeapCoalescer {
                         }
                     }
                     run_start = b;
-                    in_run    = true;
+                    in_run = true;
                 }
             } else if in_run {
                 blocks_merged = blocks_merged.saturating_add(b - run_start);
-                prev_end      = Some(b);
-                in_run        = false;
+                prev_end = Some(b);
+                in_run = false;
             }
         }
         if in_run {
@@ -362,8 +365,8 @@ mod tests {
     #[test]
     fn test_coalesce_no_fragmentation() {
         let mut m = make_map(64);
-        let opts  = CoalesceOptions::default();
-        let rep   = HeapCoalescer::run(&mut m, &opts).unwrap();
+        let opts = CoalesceOptions::default();
+        let rep = HeapCoalescer::run(&mut m, &opts).unwrap();
         // Pas de fragmentation → aucune fusion.
         assert_eq!(rep.merges, 0);
     }
@@ -372,7 +375,7 @@ mod tests {
     fn test_coalesce_two_adjacent_runs() {
         let mut m = make_map(10);
         // Créer un trou occupé entre deux zones libres.
-        m.mark_used(3, 1);   // bloc 3 occupé → runs [0..2] et [4..9]
+        m.mark_used(3, 1); // bloc 3 occupé → runs [0..2] et [4..9]
         let frag = m.fragmentation_pct();
         assert!(frag > 0);
 
@@ -399,7 +402,7 @@ mod tests {
 
     #[test]
     fn test_analyze_no_merge() {
-        let m   = make_map(64);
+        let m = make_map(64);
         let rep = HeapCoalescer::analyze(&m);
         assert_eq!(rep.merges, 0);
         assert_eq!(rep.free_blocks, 64);
@@ -416,13 +419,13 @@ mod tests {
     fn test_consolidate_adjacent() {
         let mut m = make_map(30);
         // Créer 3 runs libres de taille 5, séparés par des blocs occupés.
-        m.mark_used(5, 3);   // runs: [0..4], [8..29]
+        m.mark_used(5, 3); // runs: [0..4], [8..29]
         let (merges, _) = HeapCoalescer::estimate_gain(&m);
         // 2 runs → 0 adjacent (le bloc 5..7 sépare les deux) → 0 merges.
         assert_eq!(merges, 0);
 
         // Libérer, créer des runs adjacents.
-        m.mark_free(5, 3);   // maintenant [0..29] = 1 seul run.
+        m.mark_free(5, 3); // maintenant [0..29] = 1 seul run.
         assert_eq!(m.free_run_count(), 1);
     }
 }

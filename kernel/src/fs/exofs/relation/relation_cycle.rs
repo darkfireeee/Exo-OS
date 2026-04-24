@@ -5,13 +5,12 @@
 //!  - OOM-02   : try_reserve systématique
 //!  - ARITH-02 : arithmétique vérifiée
 
-
 extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
 use super::relation_graph::RELATION_GRAPH;
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -34,9 +33,9 @@ enum VisitState {
     /// Non encore visité.
     Unvisited = 0,
     /// Dans la pile DFS courante (potentiel cycle).
-    InStack   = 1,
+    InStack = 1,
     /// Traitement terminé (aucun cycle depuis ce nœud).
-    Done      = 2,
+    Done = 2,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,7 +46,7 @@ enum VisitState {
 #[derive(Clone, Debug, Default)]
 pub struct CycleReport {
     /// `true` si un cycle a été détecté.
-    pub has_cycle:  bool,
+    pub has_cycle: bool,
     /// Nœuds du cycle (vide si pas de cycle).
     pub cycle_path: Vec<BlobId>,
     /// Nombre de nœuds explorés avant de conclure.
@@ -56,16 +55,26 @@ pub struct CycleReport {
 
 impl CycleReport {
     /// Longueur du cycle détecté (0 si pas de cycle).
-    pub fn cycle_len(&self) -> usize { self.cycle_path.len() }
+    pub fn cycle_len(&self) -> usize {
+        self.cycle_path.len()
+    }
 
     /// Rapport sans cycle.
     pub fn no_cycle(n_explored: u32) -> Self {
-        CycleReport { has_cycle: false, cycle_path: Vec::new(), n_explored }
+        CycleReport {
+            has_cycle: false,
+            cycle_path: Vec::new(),
+            n_explored,
+        }
     }
 
     /// Rapport avec cycle.
     pub fn with_cycle(path: Vec<BlobId>, n_explored: u32) -> Self {
-        CycleReport { has_cycle: true, cycle_path: path, n_explored }
+        CycleReport {
+            has_cycle: true,
+            cycle_path: path,
+            n_explored,
+        }
     }
 }
 
@@ -75,16 +84,21 @@ impl CycleReport {
 
 /// Un cadre de la pile DFS itérative.
 struct DfsFrame {
-    node:           BlobId,
-    neighbor_idx:   usize,
-    neighbors:      Vec<BlobId>,
-    depth:          u32,
+    node: BlobId,
+    neighbor_idx: usize,
+    neighbors: Vec<BlobId>,
+    depth: u32,
 }
 
 impl DfsFrame {
     fn new(node: BlobId, depth: u32) -> ExofsResult<Self> {
         let neighbors = RELATION_GRAPH.get_neighbors(&node);
-        Ok(DfsFrame { node, neighbor_idx: 0, neighbors, depth })
+        Ok(DfsFrame {
+            node,
+            neighbor_idx: 0,
+            neighbors,
+            depth,
+        })
     }
 
     /// Prochain voisin non encore traité, ou `None` si terminé.
@@ -113,13 +127,10 @@ impl RelationCycleDetector {
     /// Détecte si un cycle est accessible depuis `start`.
     ///
     /// Itératif (RECUR-01) : pile explicite `Vec<DfsFrame>`.
-    pub fn detect_from(
-        start:     BlobId,
-        max_depth: u32,
-    ) -> ExofsResult<CycleReport> {
-        let mut state:  BTreeMap<[u8; 32], VisitState> = BTreeMap::new();
-        let mut path:   Vec<BlobId>   = Vec::new(); // chemin courant
-        let mut stack:  Vec<DfsFrame> = Vec::new();
+    pub fn detect_from(start: BlobId, max_depth: u32) -> ExofsResult<CycleReport> {
+        let mut state: BTreeMap<[u8; 32], VisitState> = BTreeMap::new();
+        let mut path: Vec<BlobId> = Vec::new(); // chemin courant
+        let mut stack: Vec<DfsFrame> = Vec::new();
         let mut n_explored: u32 = 0;
 
         // Initialisation
@@ -131,7 +142,8 @@ impl RelationCycleDetector {
 
         // Boucle principale (RECUR-01)
         while let Some(frame) = stack.last_mut() {
-            n_explored = n_explored.checked_add(1)
+            n_explored = n_explored
+                .checked_add(1)
                 .ok_or(ExofsError::OffsetOverflow)?;
 
             if n_explored as usize > CYCLE_DEFAULT_MAX_NODES {
@@ -152,10 +164,15 @@ impl RelationCycleDetector {
                     state.insert(*node.as_bytes(), VisitState::Done);
                 }
                 Some(nbr) => {
-                    if cur_depth >= max_depth { continue; }
+                    if cur_depth >= max_depth {
+                        continue;
+                    }
 
                     let nbr_key = *nbr.as_bytes();
-                    let s = state.get(&nbr_key).copied().unwrap_or(VisitState::Unvisited);
+                    let s = state
+                        .get(&nbr_key)
+                        .copied()
+                        .unwrap_or(VisitState::Unvisited);
 
                     match s {
                         VisitState::InStack => {
@@ -167,7 +184,8 @@ impl RelationCycleDetector {
                                 .iter()
                                 .position(|b| b.as_bytes() == &nbr_key)
                                 .unwrap_or(0);
-                            cycle.try_reserve(path.len() - start_idx + 1)
+                            cycle
+                                .try_reserve(path.len() - start_idx + 1)
                                 .map_err(|_| ExofsError::NoMemory)?;
                             for n in &path[start_idx..] {
                                 cycle.push(*n);
@@ -179,9 +197,8 @@ impl RelationCycleDetector {
                             // Déjà entièrement traité, pas de cycle par ici.
                         }
                         VisitState::Unvisited => {
-                            let new_depth = cur_depth
-                                .checked_add(1)
-                                .ok_or(ExofsError::OffsetOverflow)?;
+                            let new_depth =
+                                cur_depth.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
                             state.insert(nbr_key, VisitState::InStack);
                             path.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                             path.push(nbr);
@@ -204,10 +221,14 @@ impl RelationCycleDetector {
         let mut seen: BTreeMap<[u8; 32], ()> = BTreeMap::new();
 
         for (from, _) in all_edges {
-            if seen.contains_key(from.as_bytes()) { continue; }
+            if seen.contains_key(from.as_bytes()) {
+                continue;
+            }
             seen.insert(*from.as_bytes(), ());
             let report = Self::detect_from(from, max_depth)?;
-            if report.has_cycle { return Ok(report); }
+            if report.has_cycle {
+                return Ok(report);
+            }
         }
 
         Ok(CycleReport::no_cycle(seen.len() as u32))
@@ -227,16 +248,18 @@ impl RelationCycleDetector {
         queue.push_back((*to, 0));
 
         // Si from == to, cycle immédiat.
-        if from.as_bytes() == to.as_bytes() { return Ok(false); }
+        if from.as_bytes() == to.as_bytes() {
+            return Ok(false);
+        }
 
         while let Some((node, depth)) = queue.pop_front() {
             if node.as_bytes() == from.as_bytes() {
                 return Ok(false); // cycle détecté si on ajoutait l'arc
             }
-            let next_depth = depth
-                .checked_add(1)
-                .ok_or(ExofsError::OffsetOverflow)?;
-            if next_depth > max_depth { continue; }
+            let next_depth = depth.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
+            if next_depth > max_depth {
+                continue;
+            }
 
             for nbr in RELATION_GRAPH.get_neighbors(&node) {
                 if !visited.contains_key(nbr.as_bytes()) {
@@ -258,9 +281,9 @@ impl RelationCycleDetector {
 #[derive(Debug, Default)]
 pub struct TopoResult {
     /// Ordre topologique (du source vers les sinks).
-    pub order:      Vec<BlobId>,
+    pub order: Vec<BlobId>,
     /// `true` si un cycle a empêché un tri complet.
-    pub has_cycle:  bool,
+    pub has_cycle: bool,
 }
 
 /// Tri topologique de Kahn (itératif, RECUR-01).
@@ -274,13 +297,10 @@ impl TopologicalSorter {
     ///
     /// - `nodes`     : liste des nœuds à trier.
     /// - `edges`     : liste des arcs (from, to).
-    pub fn sort(
-        nodes: &[BlobId],
-        edges: &[(BlobId, BlobId)],
-    ) -> ExofsResult<TopoResult> {
+    pub fn sort(nodes: &[BlobId], edges: &[(BlobId, BlobId)]) -> ExofsResult<TopoResult> {
         // Calcule in-degree pour chaque nœud.
         let mut in_degree: BTreeMap<[u8; 32], u32> = BTreeMap::new();
-        let mut adj:       BTreeMap<[u8; 32], Vec<BlobId>> = BTreeMap::new();
+        let mut adj: BTreeMap<[u8; 32], Vec<BlobId>> = BTreeMap::new();
 
         for n in nodes {
             in_degree.entry(*n.as_bytes()).or_insert(0);
@@ -292,14 +312,16 @@ impl TopologicalSorter {
                 v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                 v.push(*to);
             }
-            *in_degree.entry(*to.as_bytes()).or_insert(0) =
-                in_degree.get(to.as_bytes()).copied().unwrap_or(0)
-                    .checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
+            *in_degree.entry(*to.as_bytes()).or_insert(0) = in_degree
+                .get(to.as_bytes())
+                .copied()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or(ExofsError::OffsetOverflow)?;
         }
 
         // File de départ : tous les nœuds à in-degree 0.
-        let mut queue: alloc::collections::VecDeque<BlobId> =
-            alloc::collections::VecDeque::new();
+        let mut queue: alloc::collections::VecDeque<BlobId> = alloc::collections::VecDeque::new();
         for (key, &deg) in &in_degree {
             if deg == 0 {
                 queue.push_back(BlobId(*key));
@@ -316,7 +338,9 @@ impl TopologicalSorter {
                 for &nbr in neighbors {
                     let d = in_degree.entry(*nbr.as_bytes()).or_insert(0);
                     *d = d.saturating_sub(1);
-                    if *d == 0 { queue.push_back(nbr); }
+                    if *d == 0 {
+                        queue.push_back(nbr);
+                    }
                 }
             }
         }
@@ -334,43 +358,51 @@ impl TopologicalSorter {
 mod tests {
     use super::*;
 
-    fn b(n: u8) -> BlobId { BlobId([n; 32]) }
+    fn b(n: u8) -> BlobId {
+        BlobId([n; 32])
+    }
 
     // ── CycleDetector ────────────────────────────────────────────────────────
 
-    #[test] fn test_detect_isolated_no_cycle() {
+    #[test]
+    fn test_detect_isolated_no_cycle() {
         // Nœud sans arcs sortants → pas de cycle.
         let r = RelationCycleDetector::detect_from(b(99), 10).unwrap();
         assert!(!r.has_cycle);
     }
 
-    #[test] fn test_cycle_report_no_cycle() {
+    #[test]
+    fn test_cycle_report_no_cycle() {
         let r = CycleReport::no_cycle(5);
         assert!(!r.has_cycle);
         assert_eq!(r.cycle_len(), 0);
         assert_eq!(r.n_explored, 5);
     }
 
-    #[test] fn test_cycle_report_with_cycle() {
+    #[test]
+    fn test_cycle_report_with_cycle() {
         let path = alloc::vec![b(1), b(2), b(3), b(1)];
         let r = CycleReport::with_cycle(path, 3);
         assert!(r.has_cycle);
         assert_eq!(r.cycle_len(), 4);
     }
 
-    #[test] fn test_is_safe_to_add_self_loop() {
+    #[test]
+    fn test_is_safe_to_add_self_loop() {
         // from == to → cycle immédiat.
         let safe = RelationCycleDetector::is_safe_to_add(&b(10), &b(10), 5).unwrap();
         assert!(!safe);
     }
 
-    #[test] fn test_is_safe_no_existing_arc() {
+    #[test]
+    fn test_is_safe_no_existing_arc() {
         // Pas d'arc entre 20 et 21 → sûr d'ajouter.
         let safe = RelationCycleDetector::is_safe_to_add(&b(20), &b(21), 5).unwrap();
         assert!(safe);
     }
 
-    #[test] fn test_detect_global_empty() {
+    #[test]
+    fn test_detect_global_empty() {
         // Graphe vide (ou nœuds sans arcs globaux vers des blobs fictifs).
         let r = RelationCycleDetector::detect_global(10).unwrap();
         // Pas de cycle dans un graphe vide.
@@ -379,7 +411,8 @@ mod tests {
 
     // ── TopologicalSorter ────────────────────────────────────────────────────
 
-    #[test] fn test_topo_sort_chain() {
+    #[test]
+    fn test_topo_sort_chain() {
         // 1 → 2 → 3
         let nodes = alloc::vec![b(1), b(2), b(3)];
         let edges = alloc::vec![(b(1), b(2)), (b(2), b(3))];
@@ -387,14 +420,27 @@ mod tests {
         assert!(!res.has_cycle);
         assert_eq!(res.order.len(), 3);
         // 1 doit précéder 2 et 3.
-        let pos1 = res.order.iter().position(|b| *b.as_bytes() == [1u8; 32]).unwrap();
-        let pos2 = res.order.iter().position(|b| *b.as_bytes() == [2u8; 32]).unwrap();
-        let pos3 = res.order.iter().position(|b| *b.as_bytes() == [3u8; 32]).unwrap();
+        let pos1 = res
+            .order
+            .iter()
+            .position(|b| *b.as_bytes() == [1u8; 32])
+            .unwrap();
+        let pos2 = res
+            .order
+            .iter()
+            .position(|b| *b.as_bytes() == [2u8; 32])
+            .unwrap();
+        let pos3 = res
+            .order
+            .iter()
+            .position(|b| *b.as_bytes() == [3u8; 32])
+            .unwrap();
         assert!(pos1 < pos2);
         assert!(pos2 < pos3);
     }
 
-    #[test] fn test_topo_sort_cycle() {
+    #[test]
+    fn test_topo_sort_cycle() {
         // 1 → 2 → 1 (cycle)
         let nodes = alloc::vec![b(1), b(2)];
         let edges = alloc::vec![(b(1), b(2)), (b(2), b(1))];
@@ -402,7 +448,8 @@ mod tests {
         assert!(res.has_cycle);
     }
 
-    #[test] fn test_topo_sort_single_node() {
+    #[test]
+    fn test_topo_sort_single_node() {
         let nodes = alloc::vec![b(5)];
         let edges: Vec<(BlobId, BlobId)> = alloc::vec![];
         let res = TopologicalSorter::sort(&nodes, &edges).unwrap();
@@ -410,12 +457,11 @@ mod tests {
         assert_eq!(res.order.len(), 1);
     }
 
-    #[test] fn test_topo_sort_diamond() {
+    #[test]
+    fn test_topo_sort_diamond() {
         // 1 → 2, 1 → 3, 2 → 4, 3 → 4
         let nodes = alloc::vec![b(1), b(2), b(3), b(4)];
-        let edges = alloc::vec![
-            (b(1), b(2)), (b(1), b(3)), (b(2), b(4)), (b(3), b(4))
-        ];
+        let edges = alloc::vec![(b(1), b(2)), (b(1), b(3)), (b(2), b(4)), (b(3), b(4))];
         let res = TopologicalSorter::sort(&nodes, &edges).unwrap();
         assert!(!res.has_cycle);
         assert_eq!(res.order.len(), 4);

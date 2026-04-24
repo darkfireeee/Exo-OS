@@ -41,9 +41,8 @@
 //   Si le PIT ne répond pas après 200M iters → retourner None (QEMU TCG).
 // ════════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use super::ClockSource;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 // ── Ports PIT ─────────────────────────────────────────────────────────────────
 
@@ -51,14 +50,14 @@ const PIT_CHANNEL0: u16 = 0x40; // Canal 0 (timer système, IRQ0)
 #[allow(dead_code)]
 const PIT_CHANNEL1: u16 = 0x41; // Canal 1 (DRAM refresh, ignoré)
 const PIT_CHANNEL2: u16 = 0x42; // Canal 2 (speaker / calibration)
-const PIT_CONTROL:  u16 = 0x43; // Register de contrôle (OCW)
-const PIT_GATE:     u16 = 0x61; // Port speaker/gate pour canal 2
+const PIT_CONTROL: u16 = 0x43; // Register de contrôle (OCW)
+const PIT_GATE: u16 = 0x61; // Port speaker/gate pour canal 2
 
 // ── Bits du port 0x61 ─────────────────────────────────────────────────────────
 
-const PIT_GATE61_GATE2:   u8 = 1 << 0; // 1 = Gate canal 2 activé
-const PIT_GATE61_SPKR:    u8 = 1 << 1; // 1 = Canal 2 connecté au speaker
-const PIT_GATE61_OUT2:    u8 = 1 << 5; // 1 = Sortie canal 2 à HIGH (fin one-shot)
+const PIT_GATE61_GATE2: u8 = 1 << 0; // 1 = Gate canal 2 activé
+const PIT_GATE61_SPKR: u8 = 1 << 1; // 1 = Canal 2 connecté au speaker
+const PIT_GATE61_OUT2: u8 = 1 << 5; // 1 = Sortie canal 2 à HIGH (fin one-shot)
 
 // ── Commandes OCW ─────────────────────────────────────────────────────────────
 
@@ -85,13 +84,13 @@ const PIT_MAX_ITER: u32 = 200_000_000;
 #[derive(Debug, Clone, Copy)]
 pub struct PitCalibrationResult {
     /// Fréquence TSC estimée via PIT (Hz).
-    pub tsc_hz:       u64,
+    pub tsc_hz: u64,
     /// Ticks TSC mesurés pendant PIT_COUNT_10MS ticks PIT.
-    pub tsc_delta:    u64,
+    pub tsc_delta: u64,
     /// `true` si la mesure est dans les limites de confiance.
-    pub valid:        bool,
+    pub valid: bool,
     /// Indicateur de qualité : 0 (invalide) à 100 (parfait).
-    pub quality:      u8,
+    pub quality: u8,
     /// QEMU TCG suspecté (PIT bloqué ou drift anormal).
     pub qemu_tcg_suspect: bool,
 }
@@ -99,18 +98,24 @@ pub struct PitCalibrationResult {
 // ── Globales ──────────────────────────────────────────────────────────────────
 
 static PIT_QEMU_TCG_DETECTED: AtomicBool = AtomicBool::new(false);
-static PIT_LAST_QUALITY:      AtomicU32  = AtomicU32::new(0);
-static PIT_CALIBRATION_COUNT: AtomicU64  = AtomicU64::new(0);
+static PIT_LAST_QUALITY: AtomicU32 = AtomicU32::new(0);
+static PIT_CALIBRATION_COUNT: AtomicU64 = AtomicU64::new(0);
 
 // ── Source PIT ClockSource ────────────────────────────────────────────────────
 
 pub struct PitSource;
 
 impl ClockSource for PitSource {
-    fn name(&self) -> &'static str { "PIT" }
+    fn name(&self) -> &'static str {
+        "PIT"
+    }
     fn rating(&self) -> u32 {
         // Rating réduit à 30 si QEMU TCG détecté (signal non fiable).
-        if PIT_QEMU_TCG_DETECTED.load(Ordering::Relaxed) { 30 } else { 50 }
+        if PIT_QEMU_TCG_DETECTED.load(Ordering::Relaxed) {
+            30
+        } else {
+            50
+        }
     }
 
     fn read(&self) -> u64 {
@@ -118,7 +123,9 @@ impl ClockSource for PitSource {
         read_latch_ch2() as u64
     }
 
-    fn freq_hz(&self) -> u64 { PIT_FREQ_HZ }
+    fn freq_hz(&self) -> u64 {
+        PIT_FREQ_HZ
+    }
 
     fn available(&self) -> bool {
         !PIT_QEMU_TCG_DETECTED.load(Ordering::Relaxed)
@@ -187,8 +194,7 @@ pub fn setup_ch2_oneshot(count: u16) {
 ///
 /// Timeout : fenêtre temporelle bornée à ~20 ms via le TSC.
 pub fn wait_ch2_done() -> bool {
-    let timeout_cycles = crate::arch::x86_64::cpu::tsc::tsc_us_to_cycles(20_000)
-        .max(20_000_000);
+    let timeout_cycles = crate::arch::x86_64::cpu::tsc::tsc_us_to_cycles(20_000).max(20_000_000);
     let start_tsc = crate::arch::x86_64::cpu::tsc::read_tsc();
 
     loop {
@@ -250,7 +256,11 @@ pub fn calibrate_tsc_via_pit() -> Option<u64> {
         PIT_QEMU_TCG_DETECTED.store(true, Ordering::Relaxed);
     }
 
-    if result.valid { Some(result.tsc_hz) } else { None }
+    if result.valid {
+        Some(result.tsc_hz)
+    } else {
+        None
+    }
 }
 
 /// Exécute la calibration PIT interne et retourne le résultat détaillé.
@@ -282,7 +292,11 @@ pub fn run_pit_calibration(count: u16) -> PitCalibrationResult {
 
     if tsc_delta == 0 {
         return PitCalibrationResult {
-            tsc_hz: 0, tsc_delta: 0, valid: false, quality: 0, qemu_tcg_suspect: true,
+            tsc_hz: 0,
+            tsc_delta: 0,
+            valid: false,
+            quality: 0,
+            qemu_tcg_suspect: true,
         };
     }
 
@@ -340,7 +354,9 @@ pub fn detect_kvm_vs_tcg() -> bool {
             options(nostack, nomem)
         );
     }
-    if (ecx & (1 << 31)) == 0 { return false; } // Pas d'hyperviseur.
+    if (ecx & (1 << 31)) == 0 {
+        return false;
+    } // Pas d'hyperviseur.
 
     // KVM leaf 0x40000001 → EAX = KVM features.
     let eax: u32;
@@ -398,13 +414,16 @@ unsafe fn inb_raw(port: u16) -> u8 {
 /// Délai I/O (port 0x80 write, ≈1µs sur ISA bus).
 #[inline(always)]
 unsafe fn io_delay() {
-    unsafe { core::arch::asm!("out 0x80, al", in("al") 0u8, options(nostack, nomem)); }
+    unsafe {
+        core::arch::asm!("out 0x80, al", in("al") 0u8, options(nostack, nomem));
+    }
 }
 
 /// Lecture TSC sérialisée (LFENCE avant RDTSC).
 #[inline(always)]
 fn tsc_serialized_start() -> u64 {
-    let lo: u32; let hi: u32;
+    let lo: u32;
+    let hi: u32;
     unsafe {
         core::arch::asm!(
             "lfence",
@@ -420,7 +439,9 @@ fn tsc_serialized_start() -> u64 {
 /// Lecture TSC sérialisée (RDTSCP + LFENCE).
 #[inline(always)]
 fn tsc_serialized_end() -> u64 {
-    let lo: u32; let hi: u32; let _aux: u32;
+    let lo: u32;
+    let hi: u32;
+    let _aux: u32;
     unsafe {
         core::arch::asm!(
             "rdtscp",

@@ -4,15 +4,14 @@
 // COUCHE 0 — aucune dépendance externe.
 
 use crate::memory::core::types::PhysAddr;
-use crate::memory::dma::core::types::{
-    DmaDirection, DmaMapFlags, DmaCapabilities, DmaPriority, DmaError,
-    DmaTransactionId,
-};
+use crate::memory::dma::channels::manager::DMA_CHANNELS;
+use crate::memory::dma::completion::handler::DMA_COMPLETION;
 use crate::memory::dma::core::descriptor::DMA_DESCRIPTOR_TABLE;
 use crate::memory::dma::core::mapping::IOVA_ALLOCATOR;
-use crate::memory::dma::channels::manager::DMA_CHANNELS;
+use crate::memory::dma::core::types::{
+    DmaCapabilities, DmaDirection, DmaError, DmaMapFlags, DmaPriority, DmaTransactionId,
+};
 use crate::memory::dma::iommu::domain::IDENTITY_DOMAIN_ID;
-use crate::memory::dma::completion::handler::DMA_COMPLETION;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API : SOUMETTRE UNE OPÉRATION MEMCPY DMA
@@ -20,7 +19,7 @@ use crate::memory::dma::completion::handler::DMA_COMPLETION;
 
 /// Résultat de la soumission d'une opération DMA.
 pub struct DmaOpHandle {
-    pub txn_id:    DmaTransactionId,
+    pub txn_id: DmaTransactionId,
     pub channel_id: u32,
 }
 
@@ -32,41 +31,61 @@ pub struct DmaOpHandle {
 /// `src` et `dst` doivent être des régions physiques valides et non-overlapping.
 /// `size` doit être > 0.
 pub unsafe fn dma_memcpy_async(
-    src:           PhysAddr,
-    dst:           PhysAddr,
-    size:          usize,
+    src: PhysAddr,
+    dst: PhysAddr,
+    size: usize,
     requester_tid: u64,
 ) -> Result<DmaOpHandle, DmaError> {
-    if size == 0 { return Err(DmaError::InvalidParams); }
+    if size == 0 {
+        return Err(DmaError::InvalidParams);
+    }
 
     // Alloue un canal supportant MEMCPY.
-    let ch_id = DMA_CHANNELS.alloc_channel(DmaCapabilities::MEMCPY, DmaPriority::Normal)
+    let ch_id = DMA_CHANNELS
+        .alloc_channel(DmaCapabilities::MEMCPY, DmaPriority::Normal)
         .ok_or(DmaError::NoChannel)?;
 
     // Alloue un descripteur de transaction.
-    let desc = DMA_DESCRIPTOR_TABLE.alloc_descriptor(ch_id.0, requester_tid)
+    let desc = DMA_DESCRIPTOR_TABLE
+        .alloc_descriptor(ch_id.0, requester_tid)
         .ok_or(DmaError::OutOfMemory)?;
 
     // Configure la transaction.
     desc.setup_simple(src, dst, size, DmaDirection::Bidirection);
 
     // Mappe src et dst en IOVA (passthrough ou IOMMU selon config).
-    let src_iova = IOVA_ALLOCATOR.map(src, size, DmaDirection::FromDevice, DmaMapFlags::NONE, IDENTITY_DOMAIN_ID)?;
-    let dst_iova = IOVA_ALLOCATOR.map(dst, size, DmaDirection::ToDevice,   DmaMapFlags::NONE, IDENTITY_DOMAIN_ID)?;
+    let src_iova = IOVA_ALLOCATOR.map(
+        src,
+        size,
+        DmaDirection::FromDevice,
+        DmaMapFlags::NONE,
+        IDENTITY_DOMAIN_ID,
+    )?;
+    let dst_iova = IOVA_ALLOCATOR.map(
+        dst,
+        size,
+        DmaDirection::ToDevice,
+        DmaMapFlags::NONE,
+        IDENTITY_DOMAIN_ID,
+    )?;
     desc.src_iova = src_iova;
     desc.dst_iova = dst_iova;
 
     let txn_id = desc.txn_id;
 
     // Enfile dans le canal.
-    DMA_CHANNELS.channel(ch_id)
+    DMA_CHANNELS
+        .channel(ch_id)
         .ok_or(DmaError::NoChannel)?
         .enqueue(txn_id)?;
 
     // Enregistre dans le gestionnaire de complétion.
     DMA_COMPLETION.register(txn_id, ch_id.0, requester_tid);
 
-    Ok(DmaOpHandle { txn_id, channel_id: ch_id.0 })
+    Ok(DmaOpHandle {
+        txn_id,
+        channel_id: ch_id.0,
+    })
 }
 
 /// Version synchrone (bloquante) — attend la complétion ou timeout.
@@ -77,8 +96,8 @@ pub unsafe fn dma_memcpy_async(
 /// # Safety
 /// Mêmes préconditions que `dma_memcpy_async`.
 pub unsafe fn dma_memcpy_sync(
-    src:  PhysAddr,
-    dst:  PhysAddr,
+    src: PhysAddr,
+    dst: PhysAddr,
     size: usize,
 ) -> Result<usize, DmaError> {
     let handle = dma_memcpy_async(src, dst, size, 0 /* tid=0 = kernel */)?;
@@ -87,12 +106,16 @@ pub unsafe fn dma_memcpy_sync(
     let mut spins = 0u64;
     loop {
         if let Some(result) = DMA_COMPLETION.poll(handle.txn_id) {
-            DMA_CHANNELS.free_channel(crate::memory::dma::core::types::DmaChannelId(handle.channel_id));
+            DMA_CHANNELS.free_channel(crate::memory::dma::core::types::DmaChannelId(
+                handle.channel_id,
+            ));
             return result;
         }
         spins += 1;
         if spins > timeout {
-            DMA_CHANNELS.free_channel(crate::memory::dma::core::types::DmaChannelId(handle.channel_id));
+            DMA_CHANNELS.free_channel(crate::memory::dma::core::types::DmaChannelId(
+                handle.channel_id,
+            ));
             return Err(DmaError::Timeout);
         }
         core::hint::spin_loop();

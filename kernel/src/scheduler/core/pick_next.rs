@@ -16,11 +16,11 @@
 //   • Compatible SMP : chaque CPU appelle sur SA propre run queue
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU64, Ordering};
 use super::preempt::assert_preempt_disabled;
 use super::runqueue::PerCpuRunQueue;
-use super::task::{ThreadControlBlock, TaskState};
+use super::task::{TaskState, ThreadControlBlock};
+use core::ptr::NonNull;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteurs globaux d'instrumentation
@@ -70,7 +70,7 @@ pub enum PickResult {
 /// En l'absence de contention, cette fonction s'exécute en 100-150 cycles.
 #[inline(always)]
 pub unsafe fn pick_next_task(
-    rq:      &mut PerCpuRunQueue,
+    rq: &mut PerCpuRunQueue,
     current: Option<NonNull<ThreadControlBlock>>,
 ) -> PickResult {
     assert_preempt_disabled();
@@ -93,7 +93,9 @@ pub unsafe fn pick_next_task(
                     if cur_ref.policy == crate::scheduler::core::task::SchedPolicy::RoundRobin {
                         rq.enqueue(cur);
                     }
-                    let next = rq.dequeue_highest_rt().expect("RT queue non vide après bitmap check");
+                    let next = rq
+                        .dequeue_highest_rt()
+                        .expect("RT queue non vide après bitmap check");
                     return PickResult::Switch(next);
                 }
             }

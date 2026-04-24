@@ -25,7 +25,6 @@
 //   MEM-02 : EmergencyPool initialisé EN PREMIER (avant cet appel).
 //   MEM-04 : free_pages() n'est JAMAIS appelé avant TLB shootdown complet.
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES D'INTÉGRATION
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,7 +62,9 @@ pub struct PhysMemoryRegion {
 impl PhysMemoryRegion {
     /// Adresse physique de fin exclusive.
     #[inline]
-    pub fn end(&self) -> u64 { self.base.wrapping_add(self.size) }
+    pub fn end(&self) -> u64 {
+        self.base.wrapping_add(self.size)
+    }
 
     /// Retourne `true` si c'est de la RAM utilisable par le buddy allocator.
     #[inline]
@@ -125,22 +126,27 @@ pub enum PhysRegionType {
 pub unsafe fn init_from_regions(regions: &[PhysMemoryRegion]) {
     use crate::memory::core::{PhysAddr, PAGE_SIZE};
     use crate::memory::physical::allocator::{
-        init_phase1_bitmap, init_phase2_free_region,
-        init_phase3_slab_slub, init_phase4_numa,
+        init_phase1_bitmap, init_phase2_free_region, init_phase3_slab_slub, init_phase4_numa,
     };
 
     let page = PAGE_SIZE as u64;
 
     // ── Détecter la plage physique totale ─────────────────────────────────────
     let mut phys_start = u64::MAX;
-    let mut phys_end   = 0u64;
+    let mut phys_end = 0u64;
 
     for region in regions {
-        if region.size == 0 { continue; }
+        if region.size == 0 {
+            continue;
+        }
         let base = region.base;
-        let end  = region.end();
-        if base < phys_start { phys_start = base; }
-        if end  > phys_end   { phys_end   = end;  }
+        let end = region.end();
+        if base < phys_start {
+            phys_start = base;
+        }
+        if end > phys_end {
+            phys_end = end;
+        }
     }
 
     if phys_start == u64::MAX || phys_end == 0 || phys_start >= phys_end {
@@ -157,12 +163,18 @@ pub unsafe fn init_from_regions(regions: &[PhysMemoryRegion]) {
 
     // ── Phase 2 : libérer les pages des régions usables ─────────────────────
     for region in regions {
-        if !region.is_usable() { continue; }
-        if region.size == 0    { continue; }
+        if !region.is_usable() {
+            continue;
+        }
+        if region.size == 0 {
+            continue;
+        }
 
         let base_adj = (region.base + page - 1) & !(page - 1);
-        let end_adj  = region.end() & !(page - 1);
-        if base_adj >= end_adj { continue; }
+        let end_adj = region.end() & !(page - 1);
+        if base_adj >= end_adj {
+            continue;
+        }
 
         init_phase2_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
     }

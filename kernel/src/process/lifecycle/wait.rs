@@ -11,11 +11,10 @@
 //   • Retour du PID terminé + code de sortie.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::Ordering;
-use crate::process::core::pid::Pid;
 use crate::process::core::pcb::ProcessState;
+use crate::process::core::pid::Pid;
 use crate::process::core::registry::PROCESS_REGISTRY;
+use core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -27,26 +26,28 @@ pub struct WaitOptions(pub u32);
 
 impl WaitOptions {
     /// Retour immédiat si aucun fils n'est terminé.
-    pub const WNOHANG:    u32 = 1 << 0;
+    pub const WNOHANG: u32 = 1 << 0;
     /// Rapporté quand un fils est arrêté (SIGSTOP).
-    pub const WUNTRACED:  u32 = 1 << 1;
+    pub const WUNTRACED: u32 = 1 << 1;
     /// Rapporté quand un fils reprend (SIGCONT).
     pub const WCONTINUED: u32 = 1 << 2;
     /// Attendre n'importe quel fils (pid=-1).
-    pub const WALL:       u32 = 1 << 3;
+    pub const WALL: u32 = 1 << 3;
 
-    pub fn has(self, flag: u32) -> bool { self.0 & flag != 0 }
+    pub fn has(self, flag: u32) -> bool {
+        self.0 & flag != 0
+    }
 }
 
 /// Résultat d'un waitpid réussi.
 #[derive(Debug, Clone, Copy)]
 pub struct WaitResult {
     /// PID du fils terminé (ou arrêté/continué).
-    pub pid:       Pid,
+    pub pid: Pid,
     /// Code de sortie brut (wstatus POSIX : exit_code << 8).
-    pub wstatus:   u32,
+    pub wstatus: u32,
     /// Raison de la terminaison.
-    pub reason:    WaitReason,
+    pub reason: WaitReason,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +81,7 @@ impl WaitResult {
         Self {
             pid,
             wstatus: (code as u32) << 8,
-            reason:  WaitReason::Exited,
+            reason: WaitReason::Exited,
         }
     }
 
@@ -90,7 +91,7 @@ impl WaitResult {
         Self {
             pid,
             wstatus: (sig as u32) | dump_bit,
-            reason:  WaitReason::Signaled,
+            reason: WaitReason::Signaled,
         }
     }
 }
@@ -99,18 +100,18 @@ impl WaitResult {
 // WaitTable — table des parents en attente
 // ─────────────────────────────────────────────────────────────────────────────
 
-use crate::scheduler::sync::wait_queue::WaitQueue;
 use crate::scheduler::sync::spinlock::SpinLock;
+use crate::scheduler::sync::wait_queue::WaitQueue;
 
 /// Entrée dans la table d'attente des parents.
 #[allow(dead_code)]
 struct WaitEntry {
     /// PID du parent attendant.
-    parent_pid:  u32,
+    parent_pid: u32,
     /// PID du fils attendu (0 = n'importe quel fils du parent).
-    child_pid:   u32,
+    child_pid: u32,
     /// Résultat déposé par SIGCHLD / exit().
-    result_pid:  core::sync::atomic::AtomicU32,
+    result_pid: core::sync::atomic::AtomicU32,
     result_code: core::sync::atomic::AtomicU32,
 }
 
@@ -118,7 +119,7 @@ struct WaitEntry {
 #[allow(dead_code)]
 struct WaitTable {
     entries: SpinLock<[Option<WaitEntry>; 512]>,
-    queue:   WaitQueue,
+    queue: WaitQueue,
 }
 
 // SAFETY: WaitTable accessible depuis plusieurs CPUs, protégé par SpinLock.
@@ -139,8 +140,8 @@ static WAIT_TABLE: WaitQueue = WaitQueue::new();
 /// * `caller_tcb`  — TCB du thread appelant (pour blocage).
 pub fn do_waitpid(
     caller_pid: Pid,
-    wait_pid:   i32,
-    opts:       WaitOptions,
+    wait_pid: i32,
+    opts: WaitOptions,
     caller_tcb: &crate::scheduler::core::task::ThreadControlBlock,
 ) -> Result<WaitResult, WaitError> {
     // Scan rapide : chercher un fils déjà Zombie dans la registry.
@@ -187,19 +188,21 @@ pub fn wake_waiting_parents(child_pid: Pid, parent_pid: Pid) {
 }
 
 /// Scanne la registry pour trouver un fils Zombie du parent.
-fn scan_zombie_children(
-    parent_pid: Pid,
-    wait_pid:   i32,
-    _opts:      WaitOptions,
-) -> Option<WaitResult> {
+fn scan_zombie_children(parent_pid: Pid, wait_pid: i32, _opts: WaitOptions) -> Option<WaitResult> {
     let any_child = wait_pid < 0 || wait_pid == 0;
     let mut found: Option<WaitResult> = None;
 
     PROCESS_REGISTRY.for_each(|pcb| {
-        if found.is_some() { return; }
+        if found.is_some() {
+            return;
+        }
         let ppid = Pid(pcb.ppid.load(Ordering::Relaxed));
-        if ppid != parent_pid { return; }
-        if !any_child && pcb.pid.0 != wait_pid as u32 { return; }
+        if ppid != parent_pid {
+            return;
+        }
+        if !any_child && pcb.pid.0 != wait_pid as u32 {
+            return;
+        }
         if pcb.state() == ProcessState::Zombie {
             let code = pcb.exit_code.load(Ordering::Acquire);
             found = Some(WaitResult::exited(pcb.pid, code as u8));
@@ -212,9 +215,13 @@ fn scan_zombie_children(
 fn has_children(parent_pid: Pid) -> bool {
     let mut found = false;
     PROCESS_REGISTRY.for_each(|pcb| {
-        if found { return; }
+        if found {
+            return;
+        }
         let ppid = Pid(pcb.ppid.load(Ordering::Relaxed));
-        if ppid == parent_pid { found = true; }
+        if ppid == parent_pid {
+            found = true;
+        }
     });
     found
 }

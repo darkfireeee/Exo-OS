@@ -18,7 +18,6 @@
 //   Si drift correction baisse tsc_hz, ns_base est ajusté en compensation.
 // ════════════════════════════════════════════════════════════════════════════
 
-
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
 // ── KtimeState ────────────────────────────────────────────────────────────────
@@ -30,25 +29,25 @@ use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 #[repr(C, align(64))]
 struct KtimeState {
     /// Seqlock counter : pair = état stable, impair = write en cours.
-    seq:      AtomicU64,
+    seq: AtomicU64,
     /// Valeur TSC au dernier point d'ancrage (tsc_base).
     tsc_base: AtomicU64,
     /// Nanosecondes au dernier point d'ancrage (ns_base).
-    ns_base:  AtomicU64,
+    ns_base: AtomicU64,
     /// Fréquence TSC actuelle en Hz (mise à jour par drift correction).
-    tsc_hz:   AtomicU64,
+    tsc_hz: AtomicU64,
     /// Padding pour compléter la cache line (64 - 4×8 = 32 bytes).
-    _pad:     [u8; 32],
+    _pad: [u8; 32],
 }
 
 impl KtimeState {
     const fn new() -> Self {
         Self {
-            seq:      AtomicU64::new(0),
+            seq: AtomicU64::new(0),
             tsc_base: AtomicU64::new(0),
-            ns_base:  AtomicU64::new(0),
-            tsc_hz:   AtomicU64::new(3_000_000_000), // Fallback 3 GHz avant calibration
-            _pad:     [0u8; 32],
+            ns_base: AtomicU64::new(0),
+            tsc_hz: AtomicU64::new(3_000_000_000), // Fallback 3 GHz avant calibration
+            _pad: [0u8; 32],
         }
     }
 }
@@ -99,8 +98,8 @@ pub fn ktime_get_ns() -> u64 {
 
         // 3. Lire les composants de l'anchor.
         let tsc_base = KTIME_STATE.tsc_base.load(Ordering::Acquire);
-        let ns_base  = KTIME_STATE.ns_base .load(Ordering::Acquire);
-        let tsc_hz   = KTIME_STATE.tsc_hz  .load(Ordering::Acquire);
+        let ns_base = KTIME_STATE.ns_base.load(Ordering::Acquire);
+        let tsc_hz = KTIME_STATE.tsc_hz.load(Ordering::Acquire);
 
         // 4. Vérifier l'intégrité : seq n'a pas changé pendant notre lecture.
         let seq2 = KTIME_STATE.seq.load(Ordering::Acquire);
@@ -111,7 +110,9 @@ pub fn ktime_get_ns() -> u64 {
         }
 
         // 5. Calcul final — seqlock garantit la cohérence.
-        if tsc_hz == 0 { return 0; }
+        if tsc_hz == 0 {
+            return 0;
+        }
 
         // Appliquer l'offset per-CPU si SMP est initialisé.
         let tsc_offset = super::percpu::tsc_offset(coreid as usize);
@@ -119,9 +120,7 @@ pub fn ktime_get_ns() -> u64 {
 
         let tsc_delta = tsc_adjusted.wrapping_sub(tsc_base);
         // ns = tsc_delta * 1_000_000_000 / tsc_hz — u128 pour éviter l'overflow.
-        let ns_delta = (tsc_delta as u128)
-            .saturating_mul(1_000_000_000)
-            / (tsc_hz as u128);
+        let ns_delta = (tsc_delta as u128).saturating_mul(1_000_000_000) / (tsc_hz as u128);
 
         return ns_base.wrapping_add(ns_delta as u64);
     }
@@ -136,9 +135,9 @@ pub fn ktime_get_ns() -> u64 {
 pub(crate) unsafe fn init_ktime(tsc_now: u64, ns_start: u64, tsc_hz: u64) {
     // Seq impair = write en cours (transitoire — personne ne lit encore).
     KTIME_STATE.seq.store(1, Ordering::Release);
-    KTIME_STATE.tsc_base.store(tsc_now,  Ordering::Release);
-    KTIME_STATE.ns_base .store(ns_start, Ordering::Release);
-    KTIME_STATE.tsc_hz  .store(tsc_hz,   Ordering::Release);
+    KTIME_STATE.tsc_base.store(tsc_now, Ordering::Release);
+    KTIME_STATE.ns_base.store(ns_start, Ordering::Release);
+    KTIME_STATE.tsc_hz.store(tsc_hz, Ordering::Release);
     // Seq pair = état stable.
     KTIME_STATE.seq.store(2, Ordering::Release);
 }
@@ -163,9 +162,9 @@ pub(crate) fn update_ktime_anchor(tsc_now: u64, ns_now: u64, new_tsc_hz: u64) {
     // Barrière : empêche le réordonnancement des stores suivants avant le seq impair.
     core::sync::atomic::fence(Ordering::Release);
 
-    KTIME_STATE.tsc_base.store(tsc_now,     Ordering::Relaxed);
-    KTIME_STATE.ns_base .store(ns_now,      Ordering::Relaxed);
-    KTIME_STATE.tsc_hz  .store(new_tsc_hz,  Ordering::Relaxed);
+    KTIME_STATE.tsc_base.store(tsc_now, Ordering::Relaxed);
+    KTIME_STATE.ns_base.store(ns_now, Ordering::Relaxed);
+    KTIME_STATE.tsc_hz.store(new_tsc_hz, Ordering::Relaxed);
 
     // Barrière : rendre les stores visibles avant de repasser à pair.
     core::sync::atomic::fence(Ordering::Release);
@@ -217,8 +216,11 @@ pub fn ktime_get_wall_ns() -> u64 {
             continue;
         }
         let offset = WALL_STATE.rtoffset_ns.load(Ordering::Acquire);
-        let seq2   = WALL_STATE.seq.load(Ordering::Acquire);
-        if seq1 != seq2 { core::hint::spin_loop(); continue; }
+        let seq2 = WALL_STATE.seq.load(Ordering::Acquire);
+        if seq1 != seq2 {
+            core::hint::spin_loop();
+            continue;
+        }
         return ktime_get_ns().wrapping_add(offset);
     }
 }
@@ -243,7 +245,9 @@ pub unsafe fn set_wall_time(epoch_unix_ns: u64) {
     core::sync::atomic::fence(Ordering::Release);
     WALL_STATE.rtoffset_ns.store(new_offset, Ordering::Relaxed);
     WALL_STATE.mono_at_set.store(mono_now, Ordering::Relaxed);
-    WALL_STATE.epoch_at_set.store(epoch_unix_ns, Ordering::Relaxed);
+    WALL_STATE
+        .epoch_at_set
+        .store(epoch_unix_ns, Ordering::Relaxed);
     core::sync::atomic::fence(Ordering::Release);
     WALL_STATE.seq.fetch_add(1, Ordering::Release);
 }
@@ -317,7 +321,9 @@ static TSC_OFFSET_VALID: [AtomicBool; MAX_CPUS] = {
 /// # Safety
 /// `cpu_id` doit être dans [1, MAX_CPUS). Appelé une seule fois par CPU au boot SMP.
 pub unsafe fn store_tsc_offset(cpu_id: usize, offset: i64) {
-    if cpu_id == 0 || cpu_id >= MAX_CPUS { return; }
+    if cpu_id == 0 || cpu_id >= MAX_CPUS {
+        return;
+    }
     TSC_OFFSETS[cpu_id].store(offset, Ordering::Release);
     TSC_OFFSET_VALID[cpu_id].store(true, Ordering::Release);
 }
@@ -325,7 +331,9 @@ pub unsafe fn store_tsc_offset(cpu_id: usize, offset: i64) {
 /// Retourne l'offset TSC d'un CPU (0 si BSP ou non encore mesuré).
 #[inline(always)]
 pub fn tsc_offset(cpu_id: usize) -> i64 {
-    if cpu_id >= MAX_CPUS { return 0; }
+    if cpu_id >= MAX_CPUS {
+        return 0;
+    }
     if TSC_OFFSET_VALID[cpu_id].load(Ordering::Relaxed) {
         TSC_OFFSETS[cpu_id].load(Ordering::Relaxed)
     } else {
@@ -368,23 +376,23 @@ pub fn ktime_contention_count() -> u64 {
 
 /// Snapshot immutable de l'état ktime pour debug/profiling.
 pub struct KtimeSnapshot {
-    pub seq:       u64,
-    pub tsc_base:  u64,
-    pub ns_base:   u64,
-    pub tsc_hz:    u64,
-    pub retries:   u64,
-    pub wall_off:  u64,
+    pub seq: u64,
+    pub tsc_base: u64,
+    pub ns_base: u64,
+    pub tsc_hz: u64,
+    pub retries: u64,
+    pub wall_off: u64,
     pub offsets_cpu0: i64,
 }
 
 pub fn ktime_snapshot() -> KtimeSnapshot {
     KtimeSnapshot {
-        seq:          KTIME_STATE.seq.load(Ordering::Relaxed),
-        tsc_base:     KTIME_STATE.tsc_base.load(Ordering::Relaxed),
-        ns_base:      KTIME_STATE.ns_base.load(Ordering::Relaxed),
-        tsc_hz:       KTIME_STATE.tsc_hz.load(Ordering::Relaxed),
-        retries:      KTIME_RETRIES.load(Ordering::Relaxed),
-        wall_off:     WALL_STATE.rtoffset_ns.load(Ordering::Relaxed),
+        seq: KTIME_STATE.seq.load(Ordering::Relaxed),
+        tsc_base: KTIME_STATE.tsc_base.load(Ordering::Relaxed),
+        ns_base: KTIME_STATE.ns_base.load(Ordering::Relaxed),
+        tsc_hz: KTIME_STATE.tsc_hz.load(Ordering::Relaxed),
+        retries: KTIME_RETRIES.load(Ordering::Relaxed),
+        wall_off: WALL_STATE.rtoffset_ns.load(Ordering::Relaxed),
         offsets_cpu0: TSC_OFFSETS[0].load(Ordering::Relaxed),
     }
 }
@@ -430,24 +438,24 @@ mod tests {
 /// Cache line dédiée au wall clock pour éviter la contention avec ktime monotone.
 #[repr(C, align(64))]
 struct WallState {
-    seq:           AtomicU64,
-    rtoffset_ns:   AtomicU64,   // wall = mono + rtoffset
-    mono_at_set:   AtomicU64,   // mono_ns au dernier set_wall_time()
-    epoch_at_set:  AtomicU64,   // epoch Unix ns au dernier set_wall_time()
-    _pad:          [u8; 32],
+    seq: AtomicU64,
+    rtoffset_ns: AtomicU64,  // wall = mono + rtoffset
+    mono_at_set: AtomicU64,  // mono_ns au dernier set_wall_time()
+    epoch_at_set: AtomicU64, // epoch Unix ns au dernier set_wall_time()
+    _pad: [u8; 32],
 }
 
 impl WallState {
     const fn new() -> Self {
         Self {
-            seq:          AtomicU64::new(0),
-            rtoffset_ns:  AtomicU64::new(0),
-            mono_at_set:  AtomicU64::new(0),
+            seq: AtomicU64::new(0),
+            rtoffset_ns: AtomicU64::new(0),
+            mono_at_set: AtomicU64::new(0),
             epoch_at_set: AtomicU64::new(0),
-            _pad:         [0u8; 32],
+            _pad: [0u8; 32],
         }
     }
 }
 
-static WALL_STATE:  WallState  = WallState::new();
+static WALL_STATE: WallState = WallState::new();
 static KTIME_RETRIES: AtomicU64 = AtomicU64::new(0);

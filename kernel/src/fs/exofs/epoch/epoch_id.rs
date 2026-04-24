@@ -72,7 +72,11 @@ static COMMIT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// # Erreurs
 /// - `ExofsError::AlreadyInitialized` si le compteur est déjà non-nul.
 pub fn init_epoch_counter(initial: EpochId) -> ExofsResult<()> {
-    let start = if initial.0 == 0 { EPOCH_FIRST.0 } else { initial.0 };
+    let start = if initial.0 == 0 {
+        EPOCH_FIRST.0
+    } else {
+        initial.0
+    };
     CURRENT_EPOCH
         .compare_exchange(0, start, AOrdering::AcqRel, AOrdering::Acquire)
         .map_err(|_| ExofsError::AlreadyInitialized)?;
@@ -152,7 +156,11 @@ pub fn allocate_next_epoch_id() -> ExofsResult<EpochId> {
 /// N'avance pas si `epoch` <= DURABLE_EPOCH courant (idempotent).
 pub fn mark_epoch_durable(epoch: EpochId) {
     let _ = DURABLE_EPOCH.fetch_update(AOrdering::AcqRel, AOrdering::Acquire, |old| {
-        if epoch.0 > old { Some(epoch.0) } else { None }
+        if epoch.0 > old {
+            Some(epoch.0)
+        } else {
+            None
+        }
     });
     COMMIT_SEQUENCE.fetch_add(1, AOrdering::Relaxed);
 }
@@ -169,12 +177,24 @@ pub fn mark_epoch_durable(epoch: EpochId) {
 /// Doit être appelé AVANT tout allocate_next_epoch_id() dans la séquence de boot.
 pub fn set_epoch_id_from_recovery(new_id: EpochId) {
     // Valeur invalide : on force le minimum viable.
-    let target = if new_id.0 == 0 { EPOCH_FIRST.0 } else { new_id.0 };
+    let target = if new_id.0 == 0 {
+        EPOCH_FIRST.0
+    } else {
+        new_id.0
+    };
     let _ = CURRENT_EPOCH.fetch_update(AOrdering::AcqRel, AOrdering::Acquire, |old| {
-        if target > old { Some(target) } else { None }
+        if target > old {
+            Some(target)
+        } else {
+            None
+        }
     });
     let _ = DURABLE_EPOCH.fetch_update(AOrdering::AcqRel, AOrdering::Acquire, |old| {
-        if target > old { Some(target) } else { None }
+        if target > old {
+            Some(target)
+        } else {
+            None
+        }
     });
 }
 
@@ -219,13 +239,21 @@ pub fn epoch_distance(from: EpochId, to: EpochId) -> u64 {
 /// Retourne le max de deux EpochIds.
 #[inline]
 pub fn epoch_max(a: EpochId, b: EpochId) -> EpochId {
-    if a.0 >= b.0 { a } else { b }
+    if a.0 >= b.0 {
+        a
+    } else {
+        b
+    }
 }
 
 /// Retourne le min de deux EpochIds.
 #[inline]
 pub fn epoch_min(a: EpochId, b: EpochId) -> EpochId {
-    if a.0 <= b.0 { a } else { b }
+    if a.0 <= b.0 {
+        a
+    } else {
+        b
+    }
 }
 
 /// Comparaison ordinale entre deux EpochIds.
@@ -280,7 +308,11 @@ impl EpochIdExt for EpochId {
 
     #[inline]
     fn prev(self) -> Option<Self> {
-        if self.0 == 0 { None } else { Some(EpochId(self.0 - 1)) }
+        if self.0 == 0 {
+            None
+        } else {
+            Some(EpochId(self.0 - 1))
+        }
     }
 
     #[inline]
@@ -339,7 +371,10 @@ impl EpochRange {
 
     /// Plage vide (start == end).
     pub fn empty() -> Self {
-        Self { start: EPOCH_INVALID, end: EPOCH_INVALID }
+        Self {
+            start: EPOCH_INVALID,
+            end: EPOCH_INVALID,
+        }
     }
 
     /// Vrai si la plage est vide (aucun epoch à traiter).
@@ -364,21 +399,28 @@ impl EpochRange {
     pub fn intersect(self, other: Self) -> Option<Self> {
         let s = epoch_max(self.start, other.start);
         let e = epoch_min(self.end, other.end);
-        if s.0 < e.0 { Some(Self { start: s, end: e }) } else { None }
+        if s.0 < e.0 {
+            Some(Self { start: s, end: e })
+        } else {
+            None
+        }
     }
 
     /// Itère sur tous les EpochIds de la plage (itératif, sans récursion).
     ///
     /// RÈGLE RECUR-01 : itération explicite, jamais récursive.
     pub fn iter(self) -> EpochRangeIter {
-        EpochRangeIter { current: self.start, end: self.end }
+        EpochRangeIter {
+            current: self.start,
+            end: self.end,
+        }
     }
 }
 
 /// Itérateur sur une EpochRange.
 pub struct EpochRangeIter {
     current: EpochId,
-    end:     EpochId,
+    end: EpochId,
 }
 
 impl Iterator for EpochRangeIter {
@@ -447,26 +489,26 @@ pub fn validate_epoch_sequence(ids: &[EpochId]) -> ExofsResult<()> {
 #[derive(Copy, Clone, Debug)]
 pub struct EpochCounterSnapshot {
     /// Epoch courant en mémoire (pas forcément sur disque).
-    pub current:    EpochId,
+    pub current: EpochId,
     /// Epoch le plus récent provably sur disque.
-    pub durable:    EpochId,
+    pub durable: EpochId,
     /// Nombre d'epochs en vol (current - durable).
-    pub in_flight:  u64,
+    pub in_flight: u64,
     /// Numéro de séquence des commits.
     pub commit_seq: u64,
     /// Vrai si le compteur est proche du wrapping.
-    pub near_wrap:  bool,
+    pub near_wrap: bool,
 }
 
 impl EpochCounterSnapshot {
     /// Prend un instantané atomiquement cohérent.
     pub fn take() -> Self {
-        let current    = CURRENT_EPOCH.load(AOrdering::Acquire);
-        let durable    = DURABLE_EPOCH.load(AOrdering::Relaxed);
+        let current = CURRENT_EPOCH.load(AOrdering::Acquire);
+        let durable = DURABLE_EPOCH.load(AOrdering::Relaxed);
         let commit_seq = COMMIT_SEQUENCE.load(AOrdering::Relaxed);
         EpochCounterSnapshot {
-            current:   EpochId(current),
-            durable:   EpochId(durable),
+            current: EpochId(current),
+            durable: EpochId(durable),
             in_flight: current.saturating_sub(durable),
             commit_seq,
             near_wrap: current >= EPOCH_WRAP_SENTINEL,

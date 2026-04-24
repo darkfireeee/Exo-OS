@@ -68,7 +68,11 @@ impl PciRegistry {
             return Err(syscall::EINVAL);
         }
 
-        if let Some(idx) = self.devices.iter().position(|device| device.active && device.bdf_raw == bdf_raw) {
+        if let Some(idx) = self
+            .devices
+            .iter()
+            .position(|device| device.active && device.bdf_raw == bdf_raw)
+        {
             self.devices[idx] = DeviceRecord {
                 active: true,
                 phys_base,
@@ -102,7 +106,11 @@ impl PciRegistry {
     }
 
     pub fn assign_owner(&mut self, owner_pid: u32, bdf_raw: u32) -> Result<DeviceSnapshot, i64> {
-        let Some(idx) = self.devices.iter().position(|device| device.active && device.bdf_raw == bdf_raw) else {
+        let Some(idx) = self
+            .devices
+            .iter()
+            .position(|device| device.active && device.bdf_raw == bdf_raw)
+        else {
             return Err(syscall::ENOENT);
         };
         if self.devices[idx].owner_pid != 0 {
@@ -113,13 +121,19 @@ impl PciRegistry {
     }
 
     pub fn release_owner(&mut self, owner_pid: u32) -> Option<DeviceSnapshot> {
-        let idx = self.devices.iter().position(|device| device.active && device.owner_pid == owner_pid)?;
+        let idx = self
+            .devices
+            .iter()
+            .position(|device| device.active && device.owner_pid == owner_pid)?;
         self.devices[idx].owner_pid = 0;
         Some(self.snapshot(idx))
     }
 
     pub fn snapshot_by_bdf(&self, bdf_raw: u32) -> Option<DeviceSnapshot> {
-        let idx = self.devices.iter().position(|device| device.active && device.bdf_raw == bdf_raw)?;
+        let idx = self
+            .devices
+            .iter()
+            .position(|device| device.active && device.bdf_raw == bdf_raw)?;
         Some(self.snapshot(idx))
     }
 

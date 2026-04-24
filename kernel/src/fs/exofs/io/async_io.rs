@@ -11,11 +11,10 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 
-
 extern crate alloc;
-use core::sync::atomic::{AtomicU8, AtomicU64, AtomicI32, Ordering};
-use core::cell::UnsafeCell;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicI32, AtomicU64, AtomicU8, Ordering};
 
 // ─── AsyncOpKind ─────────────────────────────────────────────────────────────
 
@@ -23,11 +22,11 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
 pub enum AsyncOpKind {
-    Read    = 0,
-    Write   = 1,
-    Flush   = 2,
+    Read = 0,
+    Write = 1,
+    Flush = 2,
     Discard = 3,
-    Sync    = 4,
+    Sync = 4,
 }
 
 impl AsyncOpKind {
@@ -44,16 +43,20 @@ impl AsyncOpKind {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            AsyncOpKind::Read    => "read",
-            AsyncOpKind::Write   => "write",
-            AsyncOpKind::Flush   => "flush",
+            AsyncOpKind::Read => "read",
+            AsyncOpKind::Write => "write",
+            AsyncOpKind::Flush => "flush",
             AsyncOpKind::Discard => "discard",
-            AsyncOpKind::Sync    => "sync",
+            AsyncOpKind::Sync => "sync",
         }
     }
 
-    pub fn is_read(self)  -> bool { matches!(self, AsyncOpKind::Read) }
-    pub fn is_write(self) -> bool { matches!(self, AsyncOpKind::Write) }
+    pub fn is_read(self) -> bool {
+        matches!(self, AsyncOpKind::Read)
+    }
+    pub fn is_write(self) -> bool {
+        matches!(self, AsyncOpKind::Write)
+    }
 }
 
 // ─── AsyncState ───────────────────────────────────────────────────────────────
@@ -62,10 +65,10 @@ impl AsyncOpKind {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
 pub enum AsyncState {
-    Pending   = 0,
-    Running   = 1,
+    Pending = 0,
+    Running = 1,
     Completed = 2,
-    Failed    = 3,
+    Failed = 3,
     Cancelled = 4,
 }
 
@@ -82,10 +85,15 @@ impl AsyncState {
     }
 
     pub fn is_done(self) -> bool {
-        matches!(self, AsyncState::Completed | AsyncState::Failed | AsyncState::Cancelled)
+        matches!(
+            self,
+            AsyncState::Completed | AsyncState::Failed | AsyncState::Cancelled
+        )
     }
 
-    pub fn is_ok(self) -> bool { matches!(self, AsyncState::Completed) }
+    pub fn is_ok(self) -> bool {
+        matches!(self, AsyncState::Completed)
+    }
 }
 
 // ─── AsyncIoHandle ────────────────────────────────────────────────────────────
@@ -94,12 +102,12 @@ impl AsyncState {
 ///
 /// Tous les champs sont atomiques — pas d'UnsafeCell nécessaire.
 pub struct AsyncIoHandle {
-    pub op_id:   u64,
-    kind_raw:    u8,                // AsyncOpKind
-    state:       AtomicU8,
-    result_code: AtomicI32,         // 0=ok, -errno style
-    bytes_done:  AtomicU64,
-    blob_id:     [u8; 32],
+    pub op_id: u64,
+    kind_raw: u8, // AsyncOpKind
+    state: AtomicU8,
+    result_code: AtomicI32, // 0=ok, -errno style
+    bytes_done: AtomicU64,
+    blob_id: [u8; 32],
 }
 
 // SAFETY: AtomicU8/AtomicU64/AtomicI32 sont Send+Sync ; blob_id est un tableau.
@@ -126,18 +134,33 @@ impl AsyncIoHandle {
         AsyncState::from_u8(self.state.load(Ordering::Acquire))
     }
 
-    pub fn bytes_done(&self) -> u64 { self.bytes_done.load(Ordering::Acquire) }
-    pub fn result_code(&self) -> i32 { self.result_code.load(Ordering::Acquire) }
-    pub fn blob_id(&self) -> &[u8; 32] { &self.blob_id }
-    pub fn is_done(&self) -> bool { self.state().is_done() }
-    pub fn is_ok(&self) -> bool { self.state().is_ok() }
+    pub fn bytes_done(&self) -> u64 {
+        self.bytes_done.load(Ordering::Acquire)
+    }
+    pub fn result_code(&self) -> i32 {
+        self.result_code.load(Ordering::Acquire)
+    }
+    pub fn blob_id(&self) -> &[u8; 32] {
+        &self.blob_id
+    }
+    pub fn is_done(&self) -> bool {
+        self.state().is_done()
+    }
+    pub fn is_ok(&self) -> bool {
+        self.state().is_ok()
+    }
 
     /// Transition vers Running.
     pub fn mark_running(&self) -> ExofsResult<()> {
-        let prev = self.state.compare_exchange(
-            AsyncState::Pending as u8, AsyncState::Running as u8,
-            Ordering::AcqRel, Ordering::Acquire,
-        ).map_err(|_| ExofsError::InvalidArgument)?;
+        let prev = self
+            .state
+            .compare_exchange(
+                AsyncState::Pending as u8,
+                AsyncState::Running as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map_err(|_| ExofsError::InvalidArgument)?;
         let _ = prev;
         Ok(())
     }
@@ -146,20 +169,24 @@ impl AsyncIoHandle {
     pub fn complete(&self, bytes: u64) {
         self.bytes_done.store(bytes, Ordering::Release);
         self.result_code.store(0, Ordering::Release);
-        self.state.store(AsyncState::Completed as u8, Ordering::Release);
+        self.state
+            .store(AsyncState::Completed as u8, Ordering::Release);
     }
 
     /// Marque l'opération comme échouée.
     pub fn fail(&self, code: i32) {
         self.result_code.store(code, Ordering::Release);
-        self.state.store(AsyncState::Failed as u8, Ordering::Release);
+        self.state
+            .store(AsyncState::Failed as u8, Ordering::Release);
     }
 
     /// Annule l'opération (si encore Pending).
     pub fn cancel(&self) {
         let _ = self.state.compare_exchange(
-            AsyncState::Pending as u8, AsyncState::Cancelled as u8,
-            Ordering::AcqRel, Ordering::Acquire,
+            AsyncState::Pending as u8,
+            AsyncState::Cancelled as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
         );
     }
 }
@@ -175,7 +202,7 @@ pub const ASYNC_IO_QUEUE_DEPTH: usize = 256;
 struct AsyncIoSlot {
     op_id: u64,
     #[allow(dead_code)]
-    kind:  u8,
+    kind: u8,
     state: u8,
     bytes: u64,
     #[allow(dead_code)]
@@ -185,7 +212,14 @@ struct AsyncIoSlot {
 
 impl AsyncIoSlot {
     const fn empty() -> Self {
-        Self { op_id: 0, kind: 0, state: 0, bytes: 0, blob_id: [0u8; 32], result: 0 }
+        Self {
+            op_id: 0,
+            kind: 0,
+            state: 0,
+            bytes: 0,
+            blob_id: [0u8; 32],
+            result: 0,
+        }
     }
 }
 
@@ -195,17 +229,17 @@ impl AsyncIoSlot {
 ///
 /// RECUR-01 : toutes les boucles while, aucune récursion.
 pub struct AsyncIoQueue {
-    slots:   UnsafeCell<[AsyncIoSlot; ASYNC_IO_QUEUE_DEPTH]>,
-    head:    AtomicU64,   // index de lecture (pop)
-    tail:    AtomicU64,   // index d'écriture (push)
-    count:   AtomicU64,   // nombre de slots occupés
-    lock:    AtomicU64,   // spinlock : 0=libre, 1=pris
-    next_id: AtomicU64,   // compteur monotone d'op_id
+    slots: UnsafeCell<[AsyncIoSlot; ASYNC_IO_QUEUE_DEPTH]>,
+    head: AtomicU64,    // index de lecture (pop)
+    tail: AtomicU64,    // index d'écriture (push)
+    count: AtomicU64,   // nombre de slots occupés
+    lock: AtomicU64,    // spinlock : 0=libre, 1=pris
+    next_id: AtomicU64, // compteur monotone d'op_id
     // stats
-    submitted:  AtomicU64,
-    completed:  AtomicU64,
-    failed:     AtomicU64,
-    cancelled:  AtomicU64,
+    submitted: AtomicU64,
+    completed: AtomicU64,
+    failed: AtomicU64,
+    cancelled: AtomicU64,
 }
 
 // SAFETY: accès sous spinlock exclusif.
@@ -217,28 +251,36 @@ impl AsyncIoQueue {
 
     pub const fn new_const() -> Self {
         Self {
-            slots:      UnsafeCell::new([Self::EMPTY_SLOT; ASYNC_IO_QUEUE_DEPTH]),
-            head:       AtomicU64::new(0),
-            tail:       AtomicU64::new(0),
-            count:      AtomicU64::new(0),
-            lock:       AtomicU64::new(0),
-            next_id:    AtomicU64::new(1),
-            submitted:  AtomicU64::new(0),
-            completed:  AtomicU64::new(0),
-            failed:     AtomicU64::new(0),
-            cancelled:  AtomicU64::new(0),
+            slots: UnsafeCell::new([Self::EMPTY_SLOT; ASYNC_IO_QUEUE_DEPTH]),
+            head: AtomicU64::new(0),
+            tail: AtomicU64::new(0),
+            count: AtomicU64::new(0),
+            lock: AtomicU64::new(0),
+            next_id: AtomicU64::new(1),
+            submitted: AtomicU64::new(0),
+            completed: AtomicU64::new(0),
+            failed: AtomicU64::new(0),
+            cancelled: AtomicU64::new(0),
         }
     }
 
     fn acquire(&self) {
-        while self.lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .lock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
 
-    fn release(&self) { self.lock.store(0, Ordering::Release); }
+    fn release(&self) {
+        self.lock.store(0, Ordering::Release);
+    }
 
-    fn alloc_id(&self) -> u64 { self.next_id.fetch_add(1, Ordering::Relaxed) }
+    fn alloc_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
 
     /// Soumet une opération dans la queue. Retourne l'op_id.
     pub fn submit(&self, kind: AsyncOpKind, blob_id: [u8; 32]) -> ExofsResult<u64> {
@@ -252,8 +294,14 @@ impl AsyncIoQueue {
             // SAFETY: accès sous spinlock exclusif, tail en range.
             unsafe {
                 let slots = &mut *self.slots.get();
-                slots[tail] = AsyncIoSlot { op_id, kind: kind as u8,
-                    state: AsyncState::Pending as u8, bytes: 0, blob_id, result: 0 };
+                slots[tail] = AsyncIoSlot {
+                    op_id,
+                    kind: kind as u8,
+                    state: AsyncState::Pending as u8,
+                    bytes: 0,
+                    blob_id,
+                    result: 0,
+                };
             }
             self.tail.fetch_add(1, Ordering::Relaxed);
             self.count.fetch_add(1, Ordering::Relaxed);
@@ -355,9 +403,7 @@ impl AsyncIoQueue {
                 // SAFETY: sous spinlock, idx en range.
                 unsafe {
                     let slots = &mut *self.slots.get();
-                    if slots[idx].op_id == op_id
-                        && slots[idx].state == AsyncState::Pending as u8
-                    {
+                    if slots[idx].op_id == op_id && slots[idx].state == AsyncState::Pending as u8 {
                         slots[idx].state = AsyncState::Cancelled as u8;
                         self.cancelled.fetch_add(1, Ordering::Relaxed);
                         return Ok(());
@@ -383,7 +429,11 @@ impl AsyncIoQueue {
                 // SAFETY: sous spinlock, idx en range.
                 let (op_id, state, bytes) = unsafe {
                     let slots = &*self.slots.get();
-                    (slots[idx].op_id, AsyncState::from_u8(slots[idx].state), slots[idx].bytes)
+                    (
+                        slots[idx].op_id,
+                        AsyncState::from_u8(slots[idx].state),
+                        slots[idx].bytes,
+                    )
                 };
                 if state.is_done() {
                     // Déplacer le head si c'est le premier slot
@@ -401,11 +451,21 @@ impl AsyncIoQueue {
         result
     }
 
-    pub fn pending_count(&self) -> u64 { self.count.load(Ordering::Relaxed) }
-    pub fn submitted_total(&self) -> u64 { self.submitted.load(Ordering::Relaxed) }
-    pub fn completed_total(&self) -> u64 { self.completed.load(Ordering::Relaxed) }
-    pub fn failed_total(&self) -> u64 { self.failed.load(Ordering::Relaxed) }
-    pub fn is_empty(&self) -> bool { self.count.load(Ordering::Relaxed) == 0 }
+    pub fn pending_count(&self) -> u64 {
+        self.count.load(Ordering::Relaxed)
+    }
+    pub fn submitted_total(&self) -> u64 {
+        self.submitted.load(Ordering::Relaxed)
+    }
+    pub fn completed_total(&self) -> u64 {
+        self.completed.load(Ordering::Relaxed)
+    }
+    pub fn failed_total(&self) -> u64 {
+        self.failed.load(Ordering::Relaxed)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.count.load(Ordering::Relaxed) == 0
+    }
 
     pub fn reset_stats(&self) {
         self.submitted.store(0, Ordering::Release);
@@ -423,7 +483,11 @@ pub static ASYNC_IO_QUEUE: AsyncIoQueue = AsyncIoQueue::new_const();
 mod tests {
     use super::*;
 
-    fn make_id(n: u8) -> [u8; 32] { let mut id = [0u8; 32]; id[0] = n; id }
+    fn make_id(n: u8) -> [u8; 32] {
+        let mut id = [0u8; 32];
+        id[0] = n;
+        id
+    }
 
     #[test]
     fn test_async_op_kind_from_u8() {

@@ -29,9 +29,8 @@
 //   Plus lent à lire que HPET (I/O port vs MMIO) mais toujours disponible.
 // ════════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
 use super::ClockSource;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -42,10 +41,10 @@ pub const PM_TIMER_FREQ_HZ: u64 = 3_579_545;
 const PM_TIMER_FREQ_KHZ: u64 = 3_580; // arrondi pour guard
 
 /// Masque valeur 24-bit.
-const PM_TIMER_MASK_24:   u32 = 0x00FF_FFFF;
+const PM_TIMER_MASK_24: u32 = 0x00FF_FFFF;
 /// Masque valeur 32-bit.
 #[allow(dead_code)]
-const PM_TIMER_MASK_32:   u32 = 0xFFFF_FFFF;
+const PM_TIMER_MASK_32: u32 = 0xFFFF_FFFF;
 
 /// Femtosecondes par tick PM Timer : 10^15 / 3_579_545 ≈ 279_365 fs/tick.
 #[allow(dead_code)]
@@ -53,20 +52,20 @@ const PM_TIMER_FEMTOS_PER_TICK: u64 = 10_000_000_000_000_00 / PM_TIMER_FREQ_HZ;
 
 // ── État PM Timer ─────────────────────────────────────────────────────────────
 
-static PM_TIMER_PORT:        AtomicU32  = AtomicU32::new(0);
+static PM_TIMER_PORT: AtomicU32 = AtomicU32::new(0);
 /// `true` si le compteur est 32-bit (TMR_VAL_EXT bit dans FADT flags).
-static PM_TIMER_IS_32BIT:    AtomicBool = AtomicBool::new(false);
+static PM_TIMER_IS_32BIT: AtomicBool = AtomicBool::new(false);
 /// Compteur d'overflows 24-bit (incrémenté à chaque rollover x000000).
-static PM_TIMER_OVF_COUNT:   AtomicU64  = AtomicU64::new(0);
+static PM_TIMER_OVF_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Dernière valeur 24-bit observée (pour détection rollover).
-static PM_TIMER_LAST_24:     AtomicU32  = AtomicU32::new(0);
+static PM_TIMER_LAST_24: AtomicU32 = AtomicU32::new(0);
 /// Compteur d'overflows 32-bit.
-static PM_TIMER_OVF_32_COUNT:AtomicU64  = AtomicU64::new(0);
+static PM_TIMER_OVF_32_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Dernière valeur 32-bit (rollover guard).
-static PM_TIMER_LAST_32:     AtomicU32  = AtomicU32::new(0);
-static PM_TIMER_INIT_DONE:   AtomicBool = AtomicBool::new(false);
+static PM_TIMER_LAST_32: AtomicU32 = AtomicU32::new(0);
+static PM_TIMER_INIT_DONE: AtomicBool = AtomicBool::new(false);
 /// Nombre de glitches détectés (vote majoritaire échoué).
-static PM_TIMER_GLITCH_COUNT:AtomicU64  = AtomicU64::new(0);
+static PM_TIMER_GLITCH_COUNT: AtomicU64 = AtomicU64::new(0);
 
 // ── Informations FADT ─────────────────────────────────────────────────────────
 
@@ -74,15 +73,15 @@ static PM_TIMER_GLITCH_COUNT:AtomicU64  = AtomicU64::new(0);
 #[derive(Debug, Clone, Copy)]
 pub struct PmTimerState {
     /// Port I/O en lecture.
-    pub port:        u16,
+    pub port: u16,
     /// Mode 32-bit si `true`, 24-bit si `false`.
-    pub is_32bit:    bool,
+    pub is_32bit: bool,
     /// Nombre d'overflows depuis le boot.
-    pub ovf_count:   u64,
+    pub ovf_count: u64,
     /// Nombre de glitches corrigés (lecture triple).
-    pub glitch_count:u64,
+    pub glitch_count: u64,
     /// `true` si le port a été détecté (non nul).
-    pub available:   bool,
+    pub available: bool,
 }
 
 // ── Initialisation ────────────────────────────────────────────────────────────
@@ -90,8 +89,12 @@ pub struct PmTimerState {
 /// Initialise le PM Timer depuis la structure FADT ACPI.
 /// Port et mode 24/32-bit proviennent de `acpi::fadt::pm_timer_port()`.
 pub fn init_pm_timer(port: u16, is_32bit: bool) {
-    if PM_TIMER_INIT_DONE.swap(true, Ordering::Relaxed) { return; }
-    if port == 0 { return; }
+    if PM_TIMER_INIT_DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    if port == 0 {
+        return;
+    }
 
     PM_TIMER_PORT.store(port as u32, Ordering::Relaxed);
     PM_TIMER_IS_32BIT.store(is_32bit, Ordering::Relaxed);
@@ -124,9 +127,13 @@ pub fn auto_detect() -> bool {
 /// Un PM Timer valide : la valeur ne doit pas être 0xFFFFFFFF et doit changer.
 fn probe_pm_timer(port: u16) -> bool {
     let v1 = read_raw_single(port);
-    if v1 == 0xFFFF_FFFF || v1 == 0 { return false; }
+    if v1 == 0xFFFF_FFFF || v1 == 0 {
+        return false;
+    }
     // Attendre quelques ns (PIT busy-wait n'est pas disponible ici).
-    for _ in 0..100 { core::hint::spin_loop(); }
+    for _ in 0..100 {
+        core::hint::spin_loop();
+    }
     let v2 = read_raw_single(port);
     // La valeur doit avoir changé (compteur qui avance).
     v2 != v1 && v2 != 0xFFFF_FFFF
@@ -137,14 +144,20 @@ fn probe_pm_timer(port: u16) -> bool {
 pub struct PmTimerSource;
 
 impl ClockSource for PmTimerSource {
-    fn name(&self) -> &'static str { "PM_TIMER" }
-    fn rating(&self) -> u32 { 200 }
+    fn name(&self) -> &'static str {
+        "PM_TIMER"
+    }
+    fn rating(&self) -> u32 {
+        200
+    }
 
     fn read(&self) -> u64 {
         read_extended()
     }
 
-    fn freq_hz(&self) -> u64 { PM_TIMER_FREQ_HZ }
+    fn freq_hz(&self) -> u64 {
+        PM_TIMER_FREQ_HZ
+    }
 
     fn available(&self) -> bool {
         PM_TIMER_PORT.load(Ordering::Relaxed) != 0
@@ -157,7 +170,9 @@ impl ClockSource for PmTimerSource {
 /// Retourne une valeur croissante monotone sur 64-bit.
 pub fn read_extended() -> u64 {
     let port = PM_TIMER_PORT.load(Ordering::Relaxed) as u16;
-    if port == 0 { return 0; }
+    if port == 0 {
+        return 0;
+    }
 
     let is_32bit = PM_TIMER_IS_32BIT.load(Ordering::Relaxed);
     let raw = read_anti_glitch(port);
@@ -197,9 +212,15 @@ pub fn read_anti_glitch(port: u16) -> u32 {
         // Aucun accord — prendre la valeur médiane (compromis).
         let mut vals = [a, b, c];
         // Tri simple à 3 éléments.
-        if vals[0] > vals[1] { vals.swap(0, 1); }
-        if vals[1] > vals[2] { vals.swap(1, 2); }
-        if vals[0] > vals[1] { vals.swap(0, 1); }
+        if vals[0] > vals[1] {
+            vals.swap(0, 1);
+        }
+        if vals[1] > vals[2] {
+            vals.swap(1, 2);
+        }
+        if vals[0] > vals[1] {
+            vals.swap(0, 1);
+        }
         vals[1]
     }
 }
@@ -258,7 +279,9 @@ pub fn read() -> u64 {
 
 /// Fréquence PM Timer en Hz.
 #[inline(always)]
-pub fn freq_hz() -> u64 { PM_TIMER_FREQ_HZ }
+pub fn freq_hz() -> u64 {
+    PM_TIMER_FREQ_HZ
+}
 
 /// `true` si le PM Timer est disponible et initialisé.
 #[inline(always)]
@@ -277,24 +300,22 @@ pub fn delta(start: u64, now: u64) -> u64 {
 /// ns = ticks × 10^9 / 3_579_545
 pub fn ticks_to_ns(ticks: u64) -> u64 {
     // Éviter l'overflow : ticks × 10^9 peut dépasser u64 pour grands ticks.
-    let ns = (ticks as u128)
-        .saturating_mul(1_000_000_000)
-        / PM_TIMER_FREQ_HZ as u128;
+    let ns = (ticks as u128).saturating_mul(1_000_000_000) / PM_TIMER_FREQ_HZ as u128;
     ns as u64
 }
 
 /// Convertit des nanosecondes en ticks PM Timer.
 pub fn ns_to_ticks(ns: u64) -> u64 {
-    let ticks = (ns as u128)
-        .saturating_mul(PM_TIMER_FREQ_HZ as u128)
-        / 1_000_000_000;
+    let ticks = (ns as u128).saturating_mul(PM_TIMER_FREQ_HZ as u128) / 1_000_000_000;
     ticks as u64
 }
 
 /// Attend `ns` nanosecondes en busy-waiting sur le PM Timer.
 /// RÈGLE CAL-CLI-01 : utiliser uniquement lors de la calibration (CLI actif ≤1ms).
 pub fn pm_timer_wait_ns(ns: u64) {
-    if !available() { return; }
+    if !available() {
+        return;
+    }
     let ticks = ns_to_ticks(ns);
     let start = read();
     while delta(start, read()) < ticks {

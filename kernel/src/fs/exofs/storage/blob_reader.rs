@@ -8,24 +8,21 @@
 //!   OOM-02   : try_reserve avant tout Vec::push / resize
 //!   ARITH-02 : checked_add pour toute arithmétique sur offsets
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, BlobId, DiskOffset,
-};
 use crate::fs::exofs::core::blob_id::verify_blob_id;
+use crate::fs::exofs::core::{BlobId, DiskOffset, ExofsError, ExofsResult};
 use crate::fs::exofs::crypto::secret_reader::SecretReader;
-use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
-use crate::fs::exofs::storage::layout::BLOCK_SIZE;
+use crate::fs::exofs::storage::blob_writer::{
+    blob_total_disk_size, verify_blob_header, BlobHeaderDisk, BlobWriter, BLOB_HEADER_MAGIC,
+    BLOB_HEADER_SIZE,
+};
 use crate::fs::exofs::storage::compression_choice::CompressionType;
 use crate::fs::exofs::storage::compression_reader::DecompressReader;
-use crate::fs::exofs::storage::blob_writer::{
-    BlobHeaderDisk, BlobWriter, BLOB_HEADER_MAGIC, BLOB_HEADER_SIZE,
-    verify_blob_header, blob_total_disk_size,
-};
+use crate::fs::exofs::storage::layout::BLOCK_SIZE;
+use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -172,12 +169,16 @@ impl BlobReader {
     {
         // ── 1. Lecture de l'en-tête ────────────────────────────────
         let hdr_raw = read_fn(offset, BLOB_HEADER_SIZE).map_err(|e| {
-            BLOB_READER_STATS.read_errors.fetch_add(1, Ordering::Relaxed);
+            BLOB_READER_STATS
+                .read_errors
+                .fetch_add(1, Ordering::Relaxed);
             e
         })?;
 
         if hdr_raw.len() < BLOB_HEADER_SIZE {
-            BLOB_READER_STATS.read_errors.fetch_add(1, Ordering::Relaxed);
+            BLOB_READER_STATS
+                .read_errors
+                .fetch_add(1, Ordering::Relaxed);
             return Err(ExofsError::InvalidSize);
         }
 
@@ -187,28 +188,30 @@ impl BlobReader {
                 // SAFETY: taille vérifiée ci-dessus
                 unsafe { &*(hdr_raw.as_ptr() as *const BlobHeaderDisk) }
             }
-            _ => {
-                match verify_blob_header(&hdr_raw) {
-                    Ok(h) => {
-                        BLOB_READER_STATS.header_ok.fetch_add(1, Ordering::Relaxed);
-                        STORAGE_STATS.inc_checksum_ok();
-                        h
-                    }
-                    Err(ExofsError::BadMagic) => {
-                        BLOB_READER_STATS.header_bad_magic.fetch_add(1, Ordering::Relaxed);
-                        STORAGE_STATS.inc_checksum_error();
-                        STORAGE_STATS.inc_io_error();
-                        return Err(ExofsError::BadMagic);
-                    }
-                    Err(ExofsError::ChecksumMismatch) => {
-                        BLOB_READER_STATS.header_bad_checksum.fetch_add(1, Ordering::Relaxed);
-                        STORAGE_STATS.inc_checksum_error();
-                        STORAGE_STATS.inc_io_error();
-                        return Err(ExofsError::ChecksumMismatch);
-                    }
-                    Err(e) => return Err(e),
+            _ => match verify_blob_header(&hdr_raw) {
+                Ok(h) => {
+                    BLOB_READER_STATS.header_ok.fetch_add(1, Ordering::Relaxed);
+                    STORAGE_STATS.inc_checksum_ok();
+                    h
                 }
-            }
+                Err(ExofsError::BadMagic) => {
+                    BLOB_READER_STATS
+                        .header_bad_magic
+                        .fetch_add(1, Ordering::Relaxed);
+                    STORAGE_STATS.inc_checksum_error();
+                    STORAGE_STATS.inc_io_error();
+                    return Err(ExofsError::BadMagic);
+                }
+                Err(ExofsError::ChecksumMismatch) => {
+                    BLOB_READER_STATS
+                        .header_bad_checksum
+                        .fetch_add(1, Ordering::Relaxed);
+                    STORAGE_STATS.inc_checksum_error();
+                    STORAGE_STATS.inc_io_error();
+                    return Err(ExofsError::ChecksumMismatch);
+                }
+                Err(e) => return Err(e),
+            },
         };
 
         // Extraction des champs
@@ -235,18 +238,23 @@ impl BlobReader {
 
         // ── 3. Lecture du payload ──────────────────────────────────
         let payload_offset = DiskOffset(
-            offset.0
+            offset
+                .0
                 .checked_add(BLOB_HEADER_SIZE as u64)
-                .ok_or(ExofsError::Overflow)?
+                .ok_or(ExofsError::Overflow)?,
         );
 
         let payload = read_fn(payload_offset, stored_size as usize).map_err(|e| {
-            BLOB_READER_STATS.read_errors.fetch_add(1, Ordering::Relaxed);
+            BLOB_READER_STATS
+                .read_errors
+                .fetch_add(1, Ordering::Relaxed);
             e
         })?;
 
         if payload.len() < stored_size as usize {
-            BLOB_READER_STATS.read_errors.fetch_add(1, Ordering::Relaxed);
+            BLOB_READER_STATS
+                .read_errors
+                .fetch_add(1, Ordering::Relaxed);
             return Err(ExofsError::InvalidSize);
         }
 
@@ -261,7 +269,9 @@ impl BlobReader {
             let key = BlobWriter::payload_key_for(&blob_id)?;
             clear_payload = SecretReader::new(&key).decrypt(payload_slice)?;
         } else {
-            clear_payload.try_reserve(payload_slice.len()).map_err(|_| ExofsError::NoMemory)?;
+            clear_payload
+                .try_reserve(payload_slice.len())
+                .map_err(|_| ExofsError::NoMemory)?;
             clear_payload.extend_from_slice(payload_slice);
         }
 
@@ -273,7 +283,9 @@ impl BlobReader {
                 BLOB_READER_STATS.blob_id_ok.fetch_add(1, Ordering::Relaxed);
                 true
             } else {
-                BLOB_READER_STATS.blob_id_mismatch.fetch_add(1, Ordering::Relaxed);
+                BLOB_READER_STATS
+                    .blob_id_mismatch
+                    .fetch_add(1, Ordering::Relaxed);
                 STORAGE_STATS.inc_io_error();
                 return Err(ExofsError::ChecksumMismatch);
             }
@@ -282,10 +294,14 @@ impl BlobReader {
         };
 
         // ── Statistiques ───────────────────────────────────────────
-        BLOB_READER_STATS.total_reads.fetch_add(1, Ordering::Relaxed);
-        BLOB_READER_STATS.total_bytes_read
+        BLOB_READER_STATS
+            .total_reads
+            .fetch_add(1, Ordering::Relaxed);
+        BLOB_READER_STATS
+            .total_bytes_read
             .fetch_add(disk_bytes, Ordering::Relaxed);
-        BLOB_READER_STATS.total_bytes_decompressed
+        BLOB_READER_STATS
+            .total_bytes_decompressed
             .fetch_add(data.len() as u64, Ordering::Relaxed);
         STORAGE_STATS.add_read(disk_bytes);
 
@@ -301,10 +317,7 @@ impl BlobReader {
     }
 
     /// Lit uniquement l'en-tête sans charger le payload
-    pub fn read_header<ReadFn>(
-        offset: DiskOffset,
-        read_fn: ReadFn,
-    ) -> ExofsResult<BlobHeaderInfo>
+    pub fn read_header<ReadFn>(offset: DiskOffset, read_fn: ReadFn) -> ExofsResult<BlobHeaderInfo>
     where
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
@@ -330,16 +343,20 @@ impl BlobReader {
             CompressionType::None => {
                 // Pas de compression : copie directe
                 let mut data = Vec::new();
-                data.try_reserve(payload.len()).map_err(|_| ExofsError::NoMemory)?;
+                data.try_reserve(payload.len())
+                    .map_err(|_| ExofsError::NoMemory)?;
                 data.extend_from_slice(payload);
                 Ok(data)
             }
             CompressionType::Lz4 | CompressionType::Zstd => {
-                let result = DecompressReader::decompress_raw(payload, algo, original_size as usize);
+                let result =
+                    DecompressReader::decompress_raw(payload, algo, original_size as usize);
                 match result {
                     Ok(d) => Ok(d),
                     Err(e) => {
-                        BLOB_READER_STATS.decompress_errors.fetch_add(1, Ordering::Relaxed);
+                        BLOB_READER_STATS
+                            .decompress_errors
+                            .fetch_add(1, Ordering::Relaxed);
                         STORAGE_STATS.inc_io_error();
                         Err(e)
                     }
@@ -418,7 +435,9 @@ impl BatchBlobReader {
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
         let mut results = Vec::new();
-        results.try_reserve(requests.len()).map_err(|_| ExofsError::NoMemory)?;
+        results
+            .try_reserve(requests.len())
+            .map_err(|_| ExofsError::NoMemory)?;
 
         for req in requests {
             let r = BlobReader::read_blob(req.offset, |off, sz| read_fn(off, sz), req.mode);
@@ -440,7 +459,8 @@ impl BatchBlobReader {
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
         let mut out = Vec::new();
-        out.try_reserve(offsets.len()).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(offsets.len())
+            .map_err(|_| ExofsError::NoMemory)?;
 
         for &off in offsets {
             let h = BlobReader::read_header(off, |o, sz| read_fn(o, sz));
@@ -507,9 +527,8 @@ impl BlobScanner {
             Err(e) => {
                 self.errors = self.errors.saturating_add(1);
                 // Avance d'un bloc pour tenter de récupérer
-                self.current_offset = DiskOffset(
-                    self.current_offset.0.saturating_add(BLOCK_SIZE as u64)
-                );
+                self.current_offset =
+                    DiskOffset(self.current_offset.0.saturating_add(BLOCK_SIZE as u64));
                 Some(Err(e))
             }
         }
@@ -532,17 +551,14 @@ impl BlobScanner {
         match BlobReader::read_blob(off, |o, sz| read_fn(o, sz), mode) {
             Ok(res) => {
                 let disk_size = blob_total_disk_size(res.stored_size);
-                self.current_offset = DiskOffset(
-                    off.0.saturating_add(disk_size)
-                );
+                self.current_offset = DiskOffset(off.0.saturating_add(disk_size));
                 self.scanned = self.scanned.saturating_add(1);
                 Some(Ok((off, res)))
             }
             Err(e) => {
                 self.errors = self.errors.saturating_add(1);
-                self.current_offset = DiskOffset(
-                    self.current_offset.0.saturating_add(BLOCK_SIZE as u64)
-                );
+                self.current_offset =
+                    DiskOffset(self.current_offset.0.saturating_add(BLOCK_SIZE as u64));
                 Some(Err(e))
             }
         }
@@ -567,7 +583,9 @@ impl BlobScanner {
     pub fn progress_pct(&self) -> u64 {
         let total = self.end_offset.0.saturating_sub(self.current_offset.0);
         let done = self.current_offset.0;
-        if total == 0 { return 100; }
+        if total == 0 {
+            return 100;
+        }
         done.saturating_mul(100) / total.saturating_add(done)
     }
 }
@@ -591,7 +609,9 @@ pub struct IntegrityReport {
 impl IntegrityReport {
     /// Taux de succès en pourcentage
     pub fn success_rate_pct(&self) -> u64 {
-        if self.checked == 0 { return 100; }
+        if self.checked == 0 {
+            return 100;
+        }
         self.ok.saturating_mul(100) / self.checked
     }
 
@@ -648,9 +668,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
-    use crate::fs::exofs::storage::blob_writer::{BlobWriter, BlobWriterConfig};
     use crate::fs::exofs::core::EpochId;
+    use crate::fs::exofs::storage::blob_writer::{BlobWriter, BlobWriterConfig};
+    use alloc::vec;
 
     fn make_disk(size: usize) -> Vec<u8> {
         vec![0u8; size]
@@ -684,7 +704,9 @@ mod tests {
         let read_fn = |off: DiskOffset, sz: usize| -> ExofsResult<Vec<u8>> {
             let s = off.0 as usize;
             let e = s + sz;
-            if e > disk.len() { return Err(ExofsError::InvalidSize); }
+            if e > disk.len() {
+                return Err(ExofsError::InvalidSize);
+            }
             let mut v = Vec::new();
             v.try_reserve(sz).map_err(|_| ExofsError::NoMemory)?;
             v.extend_from_slice(&disk[s..e]);
@@ -708,7 +730,7 @@ mod tests {
 
         let read_fn = |off: DiskOffset, sz: usize| -> ExofsResult<Vec<u8>> {
             let s = off.0 as usize;
-            Ok(disk[s..s+sz].to_vec())
+            Ok(disk[s..s + sz].to_vec())
         };
 
         let r = BlobReader::read_blob(DiskOffset(0), read_fn, BlobVerifyMode::Full);
@@ -723,7 +745,7 @@ mod tests {
 
         let read_fn = |off: DiskOffset, sz: usize| -> ExofsResult<Vec<u8>> {
             let s = off.0 as usize;
-            Ok(disk[s..s+sz].to_vec())
+            Ok(disk[s..s + sz].to_vec())
         };
 
         let info = BlobReader::read_header(DiskOffset(0), read_fn).unwrap();
@@ -746,7 +768,7 @@ mod tests {
 
         let read_fn = |o: DiskOffset, sz: usize| -> ExofsResult<Vec<u8>> {
             let s = o.0 as usize;
-            Ok(disk[s..s+sz].to_vec())
+            Ok(disk[s..s + sz].to_vec())
         };
 
         let mut count = 0;
@@ -769,18 +791,26 @@ mod tests {
             off += BlobWriter::disk_size_for(b.len()) as usize;
         }
 
-        let requests: Vec<_> = offsets.iter().enumerate()
-            .map(|(i, &o)| BlobReadRequest { index: i, offset: o, mode: BlobVerifyMode::Full })
+        let requests: Vec<_> = offsets
+            .iter()
+            .enumerate()
+            .map(|(i, &o)| BlobReadRequest {
+                index: i,
+                offset: o,
+                mode: BlobVerifyMode::Full,
+            })
             .collect();
 
         let read_fn = |o: DiskOffset, sz: usize| -> ExofsResult<Vec<u8>> {
             let s = o.0 as usize;
-            Ok(disk[s..s+sz].to_vec())
+            Ok(disk[s..s + sz].to_vec())
         };
 
         let results = BatchBlobReader::read_all(&requests, &read_fn).unwrap();
         assert_eq!(results.len(), 3);
-        for r in &results { assert!(r.result.is_ok()); }
+        for r in &results {
+            assert!(r.result.is_ok());
+        }
     }
 
     #[test]
@@ -792,7 +822,7 @@ mod tests {
 
         let read_fn = |o: DiskOffset, sz: usize| -> ExofsResult<Vec<u8>> {
             let s = o.0 as usize;
-            Ok(disk[s..s+sz].to_vec())
+            Ok(disk[s..s + sz].to_vec())
         };
 
         let report = verify_blob_range(DiskOffset(0), end, &read_fn);

@@ -6,14 +6,14 @@
 //! TOCTOU Protection (CORR-32) : Le lock d'écriture est pris *avant* toute vérification.
 //! 0 STUBS, 0 TODO.
 
-use spin::RwLock;
 use alloc::vec::Vec;
+use spin::RwLock;
 
 use crate::arch::x86_64::boot::memory_map::{MemoryRegionType, MEMORY_MAP, MEMORY_REGION_COUNT};
-use crate::memory::core::types::PhysAddr;
-use crate::process::PROCESS_REGISTRY;
-use crate::process::core::pid::Pid;
 use crate::arch::x86_64::irq_save;
+use crate::memory::core::types::PhysAddr;
+use crate::process::core::pid::Pid;
+use crate::process::PROCESS_REGISTRY;
 
 /// Erreur de revendication de périphérique
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,8 +98,10 @@ fn md_is_ram_region(base: PhysAddr, size: usize) -> bool {
 
     unsafe {
         MEMORY_MAP[..MEMORY_REGION_COUNT].iter().any(|region| {
-            matches!(region.region_type, MemoryRegionType::Usable | MemoryRegionType::KernelImage)
-                && start < region.end()
+            matches!(
+                region.region_type,
+                MemoryRegionType::Usable | MemoryRegionType::KernelImage
+            ) && start < region.end()
                 && region.base < end
         })
     }
@@ -136,15 +138,15 @@ pub fn sys_pci_claim(
     if !md_mmio_whitelist_contains(phys_base, size) {
         return Err(ClaimError::NotInHardwareRegion);
     }
-    
+
     if md_is_ram_region(phys_base, size) {
         return Err(ClaimError::PhysIsRam);
     }
-    
+
     if claims.iter().any(|c| c.overlaps(phys_base, size)) {
         return Err(ClaimError::AlreadyClaimed);
     }
-    
+
     // CORR-32 : Vérifier unicité BDF
     if let Some(b) = bdf {
         if claims.iter().any(|c| c.bdf == Some(b)) {

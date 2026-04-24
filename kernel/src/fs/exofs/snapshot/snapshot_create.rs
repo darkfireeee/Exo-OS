@@ -10,16 +10,13 @@
 //!   ARITH-02 : checked_add / checked_mul pour tailles
 //!   WRITE-02 : vérifier bytes_written == expected après chaque écriture
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, BlobId, EpochId, SnapshotId, DiskOffset,
-};
-use crate::fs::exofs::core::blob_id::compute_blob_id;
-use super::snapshot::{Snapshot, flags, make_snapshot_name, SNAPSHOT_NAME_LEN};
+use super::snapshot::{flags, make_snapshot_name, Snapshot, SNAPSHOT_NAME_LEN};
 use super::snapshot_list::SNAPSHOT_LIST;
+use crate::fs::exofs::core::blob_id::compute_blob_id;
+use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, SnapshotId};
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -39,21 +36,21 @@ pub const SNAPSHOT_MAX_TOTAL_BYTES: u64 = 512 << 30;
 #[derive(Clone, Debug)]
 pub struct SnapshotParams {
     /// Nom (UTF-8, max SNAPSHOT_NAME_LEN octets)
-    pub name:        [u8; SNAPSHOT_NAME_LEN],
+    pub name: [u8; SNAPSHOT_NAME_LEN],
     /// Snapshot parent (None = snapshot racine)
-    pub parent_id:   Option<SnapshotId>,
+    pub parent_id: Option<SnapshotId>,
     /// Époque de création
-    pub epoch_id:    EpochId,
+    pub epoch_id: EpochId,
     /// Flags initiaux
-    pub flags:       u32,
+    pub flags: u32,
     /// Quota en octets (0 = pas de quota)
     pub quota_bytes: u64,
     /// Timestamp de création (ticks)
-    pub created_at:  u64,
+    pub created_at: u64,
     /// Offset disque du catalogue de blobs
     pub blob_catalog_offset: DiskOffset,
     /// Taille du catalogue de blobs sur disque
-    pub blob_catalog_size:   u32,
+    pub blob_catalog_size: u32,
 }
 
 impl SnapshotParams {
@@ -79,11 +76,11 @@ impl SnapshotParams {
 #[derive(Debug, Clone)]
 pub struct SnapshotCreateResult {
     /// Identifiant alloué pour le nouveau snapshot
-    pub id:          SnapshotId,
+    pub id: SnapshotId,
     /// Racine Merkle calculée sur les blob ids RAW
-    pub root_blob:   BlobId,
+    pub root_blob: BlobId,
     /// Nombre de blobs
-    pub n_blobs:     u64,
+    pub n_blobs: u64,
     /// Octets totaux (somme des tailles des blobs)
     pub total_bytes: u64,
     /// Durée de création (ticks)
@@ -115,18 +112,28 @@ pub struct SnapshotBlobSet {
 }
 
 impl SnapshotBlobSet {
-    pub fn new() -> Self { Self { entries: Vec::new() } }
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
 
     /// OOM-02 : try_reserve avant push
     pub fn push(&mut self, entry: BlobEntry) -> ExofsResult<()> {
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.entries.push(entry);
         Ok(())
     }
 
-    pub fn len(&self) -> u64 { self.entries.len() as u64 }
+    pub fn len(&self) -> u64 {
+        self.entries.len() as u64
+    }
 
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 
     /// Taille totale RAW — ARITH-02 : checked_add
     pub fn total_bytes(&self) -> ExofsResult<u64> {
@@ -146,15 +153,21 @@ impl SnapshotBlobSet {
         // Recueille les 32 octets de chaque blob_id
         let mut raw: Vec<u8> = Vec::new();
         raw.try_reserve(
-            self.entries.len().checked_mul(32).ok_or(ExofsError::Overflow)?
-        ).map_err(|_| ExofsError::NoMemory)?;
+            self.entries
+                .len()
+                .checked_mul(32)
+                .ok_or(ExofsError::Overflow)?,
+        )
+        .map_err(|_| ExofsError::NoMemory)?;
         for e in &self.entries {
             raw.extend_from_slice(e.blob_id.as_bytes());
         }
         Ok(compute_blob_id(&raw))
     }
 
-    pub fn entries(&self) -> &[BlobEntry] { &self.entries }
+    pub fn entries(&self) -> &[BlobEntry] {
+        &self.entries
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -173,7 +186,10 @@ pub struct SnapshotCreator;
 
 impl SnapshotCreator {
     /// Crée un nouveau snapshot et l'enregistre dans SNAPSHOT_LIST
-    pub fn create(params: &SnapshotParams, blobs: SnapshotBlobSet) -> ExofsResult<SnapshotCreateResult> {
+    pub fn create(
+        params: &SnapshotParams,
+        blobs: SnapshotBlobSet,
+    ) -> ExofsResult<SnapshotCreateResult> {
         // ── Validation des paramètres ────────────────────────────────
         Self::validate_params(params)?;
 
@@ -200,7 +216,7 @@ impl SnapshotCreator {
 
         // ── Calcul de la racine Merkle (HASH-02 : blobs RAW) ─────────
         let root_blob = blobs.compute_root_blob()?;
-        let n_blobs   = blobs.len();
+        let n_blobs = blobs.len();
 
         // ── Allocation d'un identifiant ──────────────────────────────
         let snap_id = SNAPSHOT_LIST.allocate_id()?;
@@ -265,9 +281,9 @@ impl SnapshotCreator {
     /// Blobs existants du parent réutilisés + nouveaux blobs ajoutés.
     pub fn create_incremental(
         parent_id: SnapshotId,
-        new_blobs:  Vec<BlobEntry>,
-        epoch_id:   EpochId,
-        name:       &[u8],
+        new_blobs: Vec<BlobEntry>,
+        epoch_id: EpochId,
+        name: &[u8],
         created_at: u64,
     ) -> ExofsResult<SnapshotCreateResult> {
         let _parent = SNAPSHOT_LIST.get(parent_id)?;
@@ -301,9 +317,10 @@ impl SnapshotCreator {
 /// HASH-02 : compute_blob_id est appelé sur `raw_data` AVANT toute compression
 pub fn entries_from_raw(raw_data: &[&[u8]]) -> ExofsResult<Vec<BlobEntry>> {
     let mut out: Vec<BlobEntry> = Vec::new();
-    out.try_reserve(raw_data.len()).map_err(|_| ExofsError::NoMemory)?;
+    out.try_reserve(raw_data.len())
+        .map_err(|_| ExofsError::NoMemory)?;
     for data in raw_data {
-        let blob_id  = compute_blob_id(data);
+        let blob_id = compute_blob_id(data);
         let raw_size = data.len() as u64;
         out.push(BlobEntry { blob_id, raw_size });
     }
@@ -322,9 +339,13 @@ mod tests {
     fn base_params(name: &[u8]) -> SnapshotParams {
         SnapshotParams {
             name: make_snapshot_name(name),
-            parent_id: None, epoch_id: EpochId(1), flags: 0,
-            quota_bytes: 0, created_at: 1000,
-            blob_catalog_offset: DiskOffset(0), blob_catalog_size: 0,
+            parent_id: None,
+            epoch_id: EpochId(1),
+            flags: 0,
+            quota_bytes: 0,
+            created_at: 1000,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
         }
     }
 
@@ -343,8 +364,10 @@ mod tests {
 
         let mut set = SnapshotBlobSet::new();
         // HASH-02 : compute_blob_id sur données RAW
-        set.push(BlobEntry::new(compute_blob_id(raw1), raw1.len() as u64)).unwrap();
-        set.push(BlobEntry::new(compute_blob_id(raw2), raw2.len() as u64)).unwrap();
+        set.push(BlobEntry::new(compute_blob_id(raw1), raw1.len() as u64))
+            .unwrap();
+        set.push(BlobEntry::new(compute_blob_id(raw2), raw2.len() as u64))
+            .unwrap();
 
         let params = base_params(b"snap-with-blobs");
         let result = SnapshotCreator::create(&params, set).unwrap();
@@ -359,7 +382,8 @@ mod tests {
 
         let mut set = SnapshotBlobSet::new();
         let raw = b"too much data";
-        set.push(BlobEntry::new(compute_blob_id(raw), raw.len() as u64)).unwrap();
+        set.push(BlobEntry::new(compute_blob_id(raw), raw.len() as u64))
+            .unwrap();
 
         let err = SnapshotCreator::create(&params, set);
         assert!(matches!(err, Err(ExofsError::InvalidSize)));
@@ -377,8 +401,9 @@ mod tests {
     fn blob_set_total_bytes_overflow() {
         let mut set = SnapshotBlobSet::new();
         // Simule un dépassement avec u64::MAX
-        set.push(BlobEntry::new(BlobId([0u8;32]), u64::MAX)).unwrap();
-        set.push(BlobEntry::new(BlobId([1u8;32]), 1)).unwrap();
+        set.push(BlobEntry::new(BlobId([0u8; 32]), u64::MAX))
+            .unwrap();
+        set.push(BlobEntry::new(BlobId([1u8; 32]), 1)).unwrap();
         let err = set.total_bytes();
         assert!(matches!(err, Err(ExofsError::Overflow)));
     }

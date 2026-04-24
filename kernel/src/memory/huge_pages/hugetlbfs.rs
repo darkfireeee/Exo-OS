@@ -13,13 +13,10 @@
 //   2 MiB (ordre 9)  — interopérable avec thp.rs
 //   1 GiB (ordre 18) — pages gigantesques (processeurs récents)
 
-use core::sync::atomic::{AtomicU64, AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
-use crate::memory::core::{
-    Frame, PhysAddr, AllocFlags,
-    PAGE_SIZE,
-};
+use crate::memory::core::{AllocFlags, Frame, PhysAddr, PAGE_SIZE};
 use crate::memory::physical::allocator::buddy::{alloc_pages, free_pages};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,14 +38,18 @@ pub const HUGETLB_MAX_POOL: usize = 512;
 #[repr(u8)]
 pub enum HugeTlbSize {
     /// Page de 2 MiB (ordre 9).
-    TwoMiB  = 9,
+    TwoMiB = 9,
     /// Page de 1 GiB (ordre 18).
-    OneGiB  = 18,
+    OneGiB = 18,
 }
 
 impl HugeTlbSize {
-    #[inline] pub fn order(self) -> usize { self as usize }
-    #[inline] pub fn size_bytes(self) -> usize {
+    #[inline]
+    pub fn order(self) -> usize {
+        self as usize
+    }
+    #[inline]
+    pub fn size_bytes(self) -> usize {
         PAGE_SIZE << (self as usize)
     }
 }
@@ -57,15 +58,19 @@ impl HugeTlbSize {
 #[derive(Clone, Copy)]
 struct HugeTlbSlot {
     /// Adresse physique du frame (0 si libre).
-    phys:     u64,
+    phys: u64,
     /// Taille (ordre buddy).
-    order:    u8,
+    order: u8,
     /// Slot occupé (true = alloué à un appelant).
     occupied: bool,
 }
 
 impl HugeTlbSlot {
-    const EMPTY: HugeTlbSlot = HugeTlbSlot { phys: 0, order: 0, occupied: false };
+    const EMPTY: HugeTlbSlot = HugeTlbSlot {
+        phys: 0,
+        order: 0,
+        occupied: false,
+    };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,25 +80,25 @@ impl HugeTlbSlot {
 /// Statistiques du pool hugetlb.
 pub struct HugeTlbStats {
     /// Nombre de slots dans le pool (taille configurable au boot).
-    pub pool_size:      AtomicU32,
+    pub pool_size: AtomicU32,
     /// Nombre de slots actuellement alloués.
-    pub in_use:         AtomicU32,
+    pub in_use: AtomicU32,
     /// Nombre total d'allocations réussies.
-    pub alloc_success:  AtomicU64,
+    pub alloc_success: AtomicU64,
     /// Nombre d'allocations échouées (pool épuisé).
-    pub alloc_fail:     AtomicU64,
+    pub alloc_fail: AtomicU64,
     /// Nombre total de libérations.
-    pub frees:          AtomicU64,
+    pub frees: AtomicU64,
 }
 
 impl HugeTlbStats {
     const fn new() -> Self {
         HugeTlbStats {
-            pool_size:     AtomicU32::new(0),
-            in_use:        AtomicU32::new(0),
+            pool_size: AtomicU32::new(0),
+            in_use: AtomicU32::new(0),
             alloc_success: AtomicU64::new(0),
-            alloc_fail:    AtomicU64::new(0),
-            frees:         AtomicU64::new(0),
+            alloc_fail: AtomicU64::new(0),
+            frees: AtomicU64::new(0),
         }
     }
 }
@@ -105,8 +110,8 @@ pub static HUGETLB_STATS: HugeTlbStats = HugeTlbStats::new();
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct HugeTlbPoolInner {
-    slots:    [HugeTlbSlot; HUGETLB_MAX_POOL],
-    count:    usize,  // nombre de slots initialisés
+    slots: [HugeTlbSlot; HUGETLB_MAX_POOL],
+    count: usize, // nombre de slots initialisés
 }
 
 impl HugeTlbPoolInner {
@@ -120,14 +125,14 @@ impl HugeTlbPoolInner {
 
 /// Pool hugetlb global.
 pub struct HugeTlbPool {
-    inner:       Mutex<HugeTlbPoolInner>,
+    inner: Mutex<HugeTlbPoolInner>,
     initialized: AtomicBool,
 }
 
 impl HugeTlbPool {
     const fn new() -> Self {
         HugeTlbPool {
-            inner:       Mutex::new(HugeTlbPoolInner::new()),
+            inner: Mutex::new(HugeTlbPoolInner::new()),
             initialized: AtomicBool::new(false),
         }
     }
@@ -136,20 +141,24 @@ impl HugeTlbPool {
     ///
     /// # Safety : CPL 0, appelé une seule fois au boot.
     pub unsafe fn init(&self, n_2mib: usize, n_1gib: usize) {
-        if self.initialized.swap(true, Ordering::AcqRel) { return; }
+        if self.initialized.swap(true, Ordering::AcqRel) {
+            return;
+        }
         let total = (n_2mib + n_1gib).min(HUGETLB_MAX_POOL);
         let mut inner = self.inner.lock();
 
         // Pré-allouer les pages 2 MiB.
         let alloc_2mib = n_2mib.min(total);
         for _ in 0..alloc_2mib {
-            if inner.count >= HUGETLB_MAX_POOL { break; }
+            if inner.count >= HUGETLB_MAX_POOL {
+                break;
+            }
             match alloc_pages(HugeTlbSize::TwoMiB.order(), AllocFlags::MOVABLE) {
                 Ok(frame) => {
                     let idx = inner.count;
                     inner.slots[idx] = HugeTlbSlot {
-                        phys:     frame.start_address().as_u64(),
-                        order:    HugeTlbSize::TwoMiB as u8,
+                        phys: frame.start_address().as_u64(),
+                        order: HugeTlbSize::TwoMiB as u8,
                         occupied: false,
                     };
                     inner.count += 1;
@@ -161,13 +170,15 @@ impl HugeTlbPool {
         // Pré-allouer les pages 1 GiB.
         let alloc_1gib = n_1gib.min(HUGETLB_MAX_POOL - inner.count);
         for _ in 0..alloc_1gib {
-            if inner.count >= HUGETLB_MAX_POOL { break; }
+            if inner.count >= HUGETLB_MAX_POOL {
+                break;
+            }
             match alloc_pages(HugeTlbSize::OneGiB.order(), AllocFlags::NONE) {
                 Ok(frame) => {
                     let idx = inner.count;
                     inner.slots[idx] = HugeTlbSlot {
-                        phys:     frame.start_address().as_u64(),
-                        order:    HugeTlbSize::OneGiB as u8,
+                        phys: frame.start_address().as_u64(),
+                        order: HugeTlbSize::OneGiB as u8,
                         occupied: false,
                     };
                     inner.count += 1;
@@ -176,7 +187,9 @@ impl HugeTlbPool {
             }
         }
 
-        HUGETLB_STATS.pool_size.store(inner.count as u32, Ordering::Relaxed);
+        HUGETLB_STATS
+            .pool_size
+            .store(inner.count as u32, Ordering::Relaxed);
     }
 
     /// Alloue une huge page du pool.
@@ -185,7 +198,9 @@ impl HugeTlbPool {
     /// pour la taille demandée, retourne `None` (jamais de fallback buddy depuis
     /// hugetlb — c'est la responsabilité de l'appelant).
     pub fn alloc(&self, size: HugeTlbSize) -> Option<Frame> {
-        if !self.initialized.load(Ordering::Acquire) { return None; }
+        if !self.initialized.load(Ordering::Acquire) {
+            return None;
+        }
         let mut inner = self.inner.lock();
         let target_order = size as u8;
         let count = inner.count;
@@ -229,9 +244,12 @@ impl HugeTlbPool {
 
     /// Retourne le nombre de slots libres pour la taille donnée.
     pub fn free_count(&self, size: HugeTlbSize) -> usize {
-        if !self.initialized.load(Ordering::Acquire) { return 0; }
+        if !self.initialized.load(Ordering::Acquire) {
+            return 0;
+        }
         let inner = self.inner.lock();
-        inner.slots[..inner.count].iter()
+        inner.slots[..inner.count]
+            .iter()
             .filter(|s| s.order == size as u8 && !s.occupied && s.phys != 0)
             .count()
     }
@@ -242,20 +260,24 @@ impl HugeTlbPool {
     /// # Safety : CPL 0.
     pub unsafe fn resize(&self, size: HugeTlbSize, target_count: usize) {
         let current_free = self.free_count(size);
-        if current_free == target_count { return; }
+        if current_free == target_count {
+            return;
+        }
 
         if current_free < target_count {
             // Agrandir : allouer des pages supplémentaires.
             let to_alloc = target_count - current_free;
             let mut inner = self.inner.lock();
             for _ in 0..to_alloc {
-                if inner.count >= HUGETLB_MAX_POOL { break; }
+                if inner.count >= HUGETLB_MAX_POOL {
+                    break;
+                }
                 match alloc_pages(size.order(), AllocFlags::MOVABLE) {
                     Ok(frame) => {
                         let idx = inner.count;
                         inner.slots[idx] = HugeTlbSlot {
-                            phys:     frame.start_address().as_u64(),
-                            order:    size as u8,
+                            phys: frame.start_address().as_u64(),
+                            order: size as u8,
                             occupied: false,
                         };
                         inner.count += 1;
@@ -271,13 +293,15 @@ impl HugeTlbPool {
             let mut inner = self.inner.lock();
             let count = inner.count;
             for slot in inner.slots[..count].iter_mut() {
-                if freed >= to_free { break; }
+                if freed >= to_free {
+                    break;
+                }
                 if slot.order == size as u8 && !slot.occupied && slot.phys != 0 {
                     let frame = Frame::from_phys_addr(PhysAddr::new(slot.phys));
                     let _ = free_pages(frame, size.order());
-                    slot.phys     = 0;
+                    slot.phys = 0;
                     slot.occupied = false;
-                    slot.order    = 0;
+                    slot.order = 0;
                     HUGETLB_STATS.pool_size.fetch_sub(1, Ordering::Relaxed);
                     freed += 1;
                 }

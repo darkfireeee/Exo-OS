@@ -15,11 +15,11 @@
 //   une tâche est pull-migrée.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::core::task::CpuId;
-use crate::scheduler::core::runqueue;
-use super::topology::{nr_cpus, cpu_node};
 use super::migration::request_migration;
+use super::topology::{cpu_node, nr_cpus};
+use crate::scheduler::core::runqueue;
+use crate::scheduler::core::task::CpuId;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Paramètres d'équilibrage
@@ -36,9 +36,9 @@ pub const MAX_MIGRATIONS_PER_BALANCE: usize = 4;
 // Métriques
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub static BALANCE_RUNS:       AtomicU64 = AtomicU64::new(0);
+pub static BALANCE_RUNS: AtomicU64 = AtomicU64::new(0);
 pub static BALANCE_MIGRATIONS: AtomicU64 = AtomicU64::new(0);
-pub static BALANCE_NUMA_SKIP:  AtomicU64 = AtomicU64::new(0);
+pub static BALANCE_NUMA_SKIP: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Entrée principale
@@ -60,25 +60,31 @@ pub unsafe fn balance_cpu(local_cpu: CpuId) {
 
     // Cherche le CPU le plus chargé parmi tous les CPUs.
     let mut busiest_cpu: Option<CpuId> = None;
-    let mut busiest_nr:  usize = 0;
+    let mut busiest_nr: usize = 0;
 
     let n = nr_cpus();
     for cpu_raw in 0..n as u32 {
         let cpu = CpuId(cpu_raw);
-        if cpu == local_cpu { continue; }
+        if cpu == local_cpu {
+            continue;
+        }
         let rq = runqueue::run_queue(cpu);
         let nr = rq.nr_running_usize();
         if nr > busiest_nr {
-            busiest_nr  = nr;
+            busiest_nr = nr;
             busiest_cpu = Some(cpu);
         }
     }
 
-    let Some(busiest) = busiest_cpu else { return; };
-    if busiest_nr <= local_nr + IMBALANCE_THRESHOLD { return; }
+    let Some(busiest) = busiest_cpu else {
+        return;
+    };
+    if busiest_nr <= local_nr + IMBALANCE_THRESHOLD {
+        return;
+    }
 
     // Préférer un CPU du même nœud NUMA (coût de migration moindre).
-    let local_node   = cpu_node(local_cpu);
+    let local_node = cpu_node(local_cpu);
     let busiest_node = cpu_node(busiest);
     if local_node != busiest_node {
         // Vérifier si un CPU sur le même nœud est déjà plus chargé.
@@ -86,12 +92,16 @@ pub unsafe fn balance_cpu(local_cpu: CpuId) {
         let mut same_node_nr: usize = 0;
         for cpu_raw in 0..n as u32 {
             let cpu = CpuId(cpu_raw);
-            if cpu == local_cpu { continue; }
-            if cpu_node(cpu) != local_node { continue; }
+            if cpu == local_cpu {
+                continue;
+            }
+            if cpu_node(cpu) != local_node {
+                continue;
+            }
             let rq = runqueue::run_queue(cpu);
             let nr = rq.nr_running_usize();
             if nr > same_node_nr {
-                same_node_nr      = nr;
+                same_node_nr = nr;
                 same_node_busiest = Some(cpu);
             }
         }
@@ -118,7 +128,9 @@ pub unsafe fn balance_cpu(local_cpu: CpuId) {
 /// # Safety
 /// Préemption désactivée requise.
 unsafe fn do_pull(dst_cpu: CpuId, src_cpu: CpuId, count: usize) {
-    if count == 0 { return; }
+    if count == 0 {
+        return;
+    }
 
     // RÈGLE LB-01 : ordre d'acquisition croissant par CPU ID.
     let (first, second, first_is_dst) = if dst_cpu < src_cpu {
@@ -127,7 +139,7 @@ unsafe fn do_pull(dst_cpu: CpuId, src_cpu: CpuId, count: usize) {
         (src_cpu, dst_cpu, false)
     };
 
-    let _ = first;  // Dans un OS réel : spinlock(&rq[first]); spinlock(&rq[second]);
+    let _ = first; // Dans un OS réel : spinlock(&rq[first]); spinlock(&rq[second]);
     let _ = second;
 
     let src_rq = runqueue::run_queue(src_cpu);
@@ -137,7 +149,9 @@ unsafe fn do_pull(dst_cpu: CpuId, src_cpu: CpuId, count: usize) {
     while moved < count {
         // Essayer de pull une tâche CFS (jamais de tâche RT — violer les invariants RT).
         let tcb_opt = src_rq.cfs_dequeue_for_migration(dst_cpu);
-        let Some(tcb) = tcb_opt else { break; };
+        let Some(tcb) = tcb_opt else {
+            break;
+        };
 
         let tcb_ref = tcb.as_ref();
         // Vérifier l'affinité.

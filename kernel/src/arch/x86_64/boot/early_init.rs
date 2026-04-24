@@ -240,7 +240,9 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
             super::multiboot2::MultibootFramebufferFormat::None => BootFramebufferFormat::None,
             super::multiboot2::MultibootFramebufferFormat::Rgbx => BootFramebufferFormat::Rgbx,
             super::multiboot2::MultibootFramebufferFormat::Bgrx => BootFramebufferFormat::Bgrx,
-            super::multiboot2::MultibootFramebufferFormat::Unknown => BootFramebufferFormat::Unknown,
+            super::multiboot2::MultibootFramebufferFormat::Unknown => {
+                BootFramebufferFormat::Unknown
+            }
         };
         boot_info.framebuffer_size_bytes = mb2.framebuffer_size_bytes;
 
@@ -283,16 +285,11 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
 
         // Layout exo-boot synchronisé avec docs/exo-boot/BOOTINFO.md :
         // 6160..6199 = FramebufferInfo repr(C).
-        boot_info.framebuffer_phys_addr =
-            core::ptr::read_volatile((mb2_info + 6160) as *const u64);
-        boot_info.framebuffer_width =
-            core::ptr::read_volatile((mb2_info + 6168) as *const u32);
-        boot_info.framebuffer_height =
-            core::ptr::read_volatile((mb2_info + 6172) as *const u32);
-        boot_info.framebuffer_stride =
-            core::ptr::read_volatile((mb2_info + 6176) as *const u32);
-        boot_info.framebuffer_bpp =
-            core::ptr::read_volatile((mb2_info + 6180) as *const u32);
+        boot_info.framebuffer_phys_addr = core::ptr::read_volatile((mb2_info + 6160) as *const u64);
+        boot_info.framebuffer_width = core::ptr::read_volatile((mb2_info + 6168) as *const u32);
+        boot_info.framebuffer_height = core::ptr::read_volatile((mb2_info + 6172) as *const u32);
+        boot_info.framebuffer_stride = core::ptr::read_volatile((mb2_info + 6176) as *const u32);
+        boot_info.framebuffer_bpp = core::ptr::read_volatile((mb2_info + 6180) as *const u32);
         boot_info.framebuffer_format =
             match core::ptr::read_volatile((mb2_info + 6184) as *const u32) {
                 0 => BootFramebufferFormat::Rgbx,
@@ -310,6 +307,11 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
 
         // Protections mémoire hardware (NX / SMEP / SMAP)
         crate::memory::protection::init();
+    } else {
+        panic!(
+            "unsupported boot protocol: magic={:#x} info={:#x}",
+            mb2_magic, mb2_info
+        );
     }
 
     // ── Étape 12b : Mitigations Spectre/Meltdown ─────────────────────────────

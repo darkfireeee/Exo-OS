@@ -11,10 +11,9 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─── Traits source / sink ─────────────────────────────────────────────────────
 
@@ -40,20 +39,28 @@ pub struct SliceSource<'a> {
 }
 
 impl<'a> SliceSource<'a> {
-    pub fn new(data: &'a [u8]) -> Self { Self { data, pos: 0 } }
-    pub fn remaining(&self) -> usize { self.data.len().saturating_sub(self.pos) }
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+    pub fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.pos)
+    }
 }
 
 impl<'a> ByteSource for SliceSource<'a> {
     fn read(&mut self, buf: &mut [u8]) -> ExofsResult<usize> {
         let avail = self.data.len().saturating_sub(self.pos);
-        if avail == 0 { return Ok(0); }
+        if avail == 0 {
+            return Ok(0);
+        }
         let n = buf.len().min(avail);
         buf[..n].copy_from_slice(&self.data[self.pos..self.pos.wrapping_add(n)]);
         self.pos = self.pos.wrapping_add(n);
         Ok(n)
     }
-    fn is_eof(&self) -> bool { self.pos >= self.data.len() }
+    fn is_eof(&self) -> bool {
+        self.pos >= self.data.len()
+    }
 }
 
 // ─── VecSink — implémentation de ByteSink sur Vec ─────────────────────────────
@@ -65,14 +72,25 @@ pub struct VecSink {
 }
 
 impl VecSink {
-    pub fn new() -> Self { Self { data: Vec::new(), flush_count: 0 } }
-    pub fn as_slice(&self) -> &[u8] { &self.data }
-    pub fn flush_count(&self) -> u32 { self.flush_count }
+    pub fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            flush_count: 0,
+        }
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        &self.data
+    }
+    pub fn flush_count(&self) -> u32 {
+        self.flush_count
+    }
 }
 
 impl ByteSink for VecSink {
     fn write(&mut self, buf: &[u8]) -> ExofsResult<usize> {
-        self.data.try_reserve(buf.len()).map_err(|_| ExofsError::NoMemory)?;
+        self.data
+            .try_reserve(buf.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         self.data.extend_from_slice(buf);
         Ok(buf.len())
     }
@@ -98,18 +116,37 @@ pub struct RingBuffer {
 impl RingBuffer {
     /// Crée un anneau de `capacity` octets (OOM-02).
     pub fn new(capacity: usize) -> ExofsResult<Self> {
-        if capacity == 0 { return Err(ExofsError::InvalidArgument); }
+        if capacity == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         let mut buf = Vec::new();
-        buf.try_reserve(capacity).map_err(|_| ExofsError::NoMemory)?;
+        buf.try_reserve(capacity)
+            .map_err(|_| ExofsError::NoMemory)?;
         buf.resize(capacity, 0u8);
-        Ok(Self { buf, cap: capacity, head: 0, tail: 0, len: 0 })
+        Ok(Self {
+            buf,
+            cap: capacity,
+            head: 0,
+            tail: 0,
+            len: 0,
+        })
     }
 
-    pub fn capacity(&self) -> usize { self.cap }
-    pub fn len(&self) -> usize { self.len }
-    pub fn free(&self) -> usize { self.cap.saturating_sub(self.len) }
-    pub fn is_empty(&self) -> bool { self.len == 0 }
-    pub fn is_full(&self) -> bool { self.len >= self.cap }
+    pub fn capacity(&self) -> usize {
+        self.cap
+    }
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn free(&self) -> usize {
+        self.cap.saturating_sub(self.len)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    pub fn is_full(&self) -> bool {
+        self.len >= self.cap
+    }
 
     /// Écrit des octets dans l'anneau (ARITH-02).
     pub fn push_slice(&mut self, data: &[u8]) -> ExofsResult<usize> {
@@ -118,7 +155,9 @@ impl RingBuffer {
         while i < n {
             self.buf[self.tail] = data[i];
             self.tail = self.tail.wrapping_add(1);
-            if self.tail >= self.cap { self.tail = 0; }
+            if self.tail >= self.cap {
+                self.tail = 0;
+            }
             self.len = self.len.saturating_add(1);
             i = i.wrapping_add(1);
         }
@@ -132,7 +171,9 @@ impl RingBuffer {
         while i < n {
             out[i] = self.buf[self.head];
             self.head = self.head.wrapping_add(1);
-            if self.head >= self.cap { self.head = 0; }
+            if self.head >= self.cap {
+                self.head = 0;
+            }
             self.len = self.len.saturating_sub(1);
             i = i.wrapping_add(1);
         }
@@ -140,7 +181,11 @@ impl RingBuffer {
     }
 
     /// Vide l'anneau sans libérer la mémoire.
-    pub fn clear(&mut self) { self.head = 0; self.tail = 0; self.len = 0; }
+    pub fn clear(&mut self) {
+        self.head = 0;
+        self.tail = 0;
+        self.len = 0;
+    }
 }
 
 // ─── BufferedReader ───────────────────────────────────────────────────────────
@@ -154,18 +199,26 @@ pub struct BufferedReader {
 
 impl BufferedReader {
     pub fn new(ring_capacity: usize) -> ExofsResult<Self> {
-        Ok(Self { ring: RingBuffer::new(ring_capacity)?, bytes_produced: 0, fill_calls: 0 })
+        Ok(Self {
+            ring: RingBuffer::new(ring_capacity)?,
+            bytes_produced: 0,
+            fill_calls: 0,
+        })
     }
 
     /// Remplit le ring depuis la source (RECUR-01 : while).
     pub fn fill<S: ByteSource>(&mut self, source: &mut S) -> ExofsResult<usize> {
-        if self.ring.is_full() { return Ok(0); }
+        if self.ring.is_full() {
+            return Ok(0);
+        }
         let mut temp = [0u8; 512];
         let mut total = 0usize;
         while !self.ring.is_full() && !source.is_eof() {
             let to_read = temp.len().min(self.ring.free());
             let n = source.read(&mut temp[..to_read])?;
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             let pushed = self.ring.push_slice(&temp[..n])?;
             total = total.saturating_add(pushed);
         }
@@ -188,15 +241,23 @@ impl BufferedReader {
         while i < n {
             out[i] = self.ring.buf[h];
             h = h.wrapping_add(1);
-            if h >= self.ring.cap { h = 0; }
+            if h >= self.ring.cap {
+                h = 0;
+            }
             i = i.wrapping_add(1);
         }
         n
     }
 
-    pub fn available(&self) -> usize { self.ring.len() }
-    pub fn bytes_produced(&self) -> u64 { self.bytes_produced }
-    pub fn fill_calls(&self) -> u32 { self.fill_calls }
+    pub fn available(&self) -> usize {
+        self.ring.len()
+    }
+    pub fn bytes_produced(&self) -> u64 {
+        self.bytes_produced
+    }
+    pub fn fill_calls(&self) -> u32 {
+        self.fill_calls
+    }
 }
 
 // ─── BufferedWriter ───────────────────────────────────────────────────────────
@@ -210,7 +271,11 @@ pub struct BufferedWriter {
 
 impl BufferedWriter {
     pub fn new(ring_capacity: usize) -> ExofsResult<Self> {
-        Ok(Self { ring: RingBuffer::new(ring_capacity)?, bytes_flushed: 0, flush_calls: 0 })
+        Ok(Self {
+            ring: RingBuffer::new(ring_capacity)?,
+            bytes_flushed: 0,
+            flush_calls: 0,
+        })
     }
 
     /// Écrit dans le ring (RECUR-01 : while).
@@ -224,7 +289,9 @@ impl BufferedWriter {
         let mut total = 0u64;
         while !self.ring.is_empty() {
             let n = self.ring.pop_slice(&mut temp);
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             sink.write(&temp[..n])?;
             total = total.saturating_add(n as u64);
         }
@@ -234,9 +301,15 @@ impl BufferedWriter {
         Ok(total)
     }
 
-    pub fn pending_bytes(&self) -> usize { self.ring.len() }
-    pub fn bytes_flushed(&self) -> u64 { self.bytes_flushed }
-    pub fn flush_calls(&self) -> u32 { self.flush_calls }
+    pub fn pending_bytes(&self) -> usize {
+        self.ring.len()
+    }
+    pub fn bytes_flushed(&self) -> u64 {
+        self.bytes_flushed
+    }
+    pub fn flush_calls(&self) -> u32 {
+        self.flush_calls
+    }
 }
 
 // ─── IoBuffer : buffer positionnel ───────────────────────────────────────────
@@ -253,25 +326,42 @@ impl IoBuffer {
         let mut data = Vec::new();
         data.try_reserve(cap).map_err(|_| ExofsError::NoMemory)?;
         data.resize(cap, 0u8);
-        Ok(Self { data, capacity: cap })
+        Ok(Self {
+            data,
+            capacity: cap,
+        })
     }
 
-    pub fn capacity(&self) -> usize { self.capacity }
-    pub fn as_slice(&self) -> &[u8] { &self.data }
-    pub fn as_mut_slice(&mut self) -> &mut [u8] { &mut self.data }
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        &self.data
+    }
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.data
+    }
 
     /// Écrit `src` à l'offset `off` (ARITH-02).
     pub fn write_at(&mut self, off: usize, src: &[u8]) -> ExofsResult<usize> {
-        let end = off.checked_add(src.len()).ok_or(ExofsError::OffsetOverflow)?;
-        if end > self.capacity { return Err(ExofsError::OffsetOverflow); }
+        let end = off
+            .checked_add(src.len())
+            .ok_or(ExofsError::OffsetOverflow)?;
+        if end > self.capacity {
+            return Err(ExofsError::OffsetOverflow);
+        }
         self.data[off..end].copy_from_slice(src);
         Ok(src.len())
     }
 
     /// Lit `buf.len()` octets à l'offset `off` (ARITH-02).
     pub fn read_at(&self, off: usize, buf: &mut [u8]) -> ExofsResult<usize> {
-        let end = off.checked_add(buf.len()).ok_or(ExofsError::OffsetOverflow)?;
-        if end > self.capacity { return Err(ExofsError::OffsetOverflow); }
+        let end = off
+            .checked_add(buf.len())
+            .ok_or(ExofsError::OffsetOverflow)?;
+        if end > self.capacity {
+            return Err(ExofsError::OffsetOverflow);
+        }
         buf.copy_from_slice(&self.data[off..end]);
         Ok(buf.len())
     }
@@ -287,10 +377,14 @@ impl IoBuffer {
 
     /// Compare deux IoBuffer (RECUR-01 : while).
     pub fn equals(&self, other: &Self) -> bool {
-        if self.capacity != other.capacity { return false; }
+        if self.capacity != other.capacity {
+            return false;
+        }
         let mut i = 0usize;
         while i < self.capacity {
-            if self.data[i] != other.data[i] { return false; }
+            if self.data[i] != other.data[i] {
+                return false;
+            }
             i = i.wrapping_add(1);
         }
         true
@@ -403,14 +497,18 @@ mod tests {
         let mut out = [0u8; 8];
         buf.read_at(0, &mut out).expect("ok");
         let mut i = 0;
-        while i < 8 { assert_eq!(out[i], 0xAB); i += 1; }
+        while i < 8 {
+            assert_eq!(out[i], 0xAB);
+            i += 1;
+        }
     }
 
     #[test]
     fn test_io_buffer_equals() {
         let mut a = IoBuffer::new(4).expect("ok");
         let mut b = IoBuffer::new(4).expect("ok");
-        a.fill(1); b.fill(1);
+        a.fill(1);
+        b.fill(1);
         assert!(a.equals(&b));
         b.fill(2);
         assert!(!a.equals(&b));
@@ -434,6 +532,6 @@ mod tests {
         reader.peek(&mut out1);
         reader.peek(&mut out2);
         assert_eq!(out1, out2);
-        assert_eq!(reader.available(), 9);  // pas consumé
+        assert_eq!(reader.available(), 9); // pas consumé
     }
 }

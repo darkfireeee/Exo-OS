@@ -16,7 +16,7 @@
 
 use core::mem::size_of;
 
-use crate::ipc::core::types::{EndpointId, ProcessId, IpcError};
+use crate::ipc::core::types::{EndpointId, IpcError, ProcessId};
 
 // ---------------------------------------------------------------------------
 // Constantes du protocole
@@ -278,9 +278,18 @@ impl RpcCallFrame {
     pub const fn empty() -> Self {
         Self {
             header: RpcHeader {
-                magic: 0, version: 0, frame_type: 0, flags: 0,
-                method_id: 0, cookie: 0, caller_ep: 0, server_ep: 0,
-                caller_pid: 0, status: 0, payload_len: 0, timeout_ns: 0,
+                magic: 0,
+                version: 0,
+                frame_type: 0,
+                flags: 0,
+                method_id: 0,
+                cookie: 0,
+                caller_ep: 0,
+                server_ep: 0,
+                caller_pid: 0,
+                status: 0,
+                payload_len: 0,
+                timeout_ns: 0,
                 _pad: [0u8; 8],
             },
             payload: [0u8; MAX_RPC_PAYLOAD],
@@ -295,7 +304,9 @@ impl RpcCallFrame {
     pub fn serialize(&self, buf: &mut [u8]) -> Result<usize, IpcError> {
         let plen = self.header.payload_len as usize;
         let total = RpcHeader::SIZE + plen;
-        if buf.len() < total { return Err(IpcError::Invalid); }
+        if buf.len() < total {
+            return Err(IpcError::Invalid);
+        }
         let off = self.header.serialize_into(buf, 0)?;
         if plen > 0 {
             buf[off..off + plen].copy_from_slice(&self.payload[..plen]);
@@ -310,8 +321,12 @@ impl RpcCallFrame {
             return Err(IpcError::Invalid);
         }
         let plen = header.payload_len as usize;
-        if plen > MAX_RPC_PAYLOAD { return Err(IpcError::Invalid); }
-        if off + plen > buf.len() { return Err(IpcError::Invalid); }
+        if plen > MAX_RPC_PAYLOAD {
+            return Err(IpcError::Invalid);
+        }
+        if off + plen > buf.len() {
+            return Err(IpcError::Invalid);
+        }
         let mut frame = Self::empty();
         frame.header = header;
         if plen > 0 {
@@ -332,9 +347,18 @@ impl RpcReplyFrame {
     pub const fn empty() -> Self {
         Self {
             header: RpcHeader {
-                magic: 0, version: 0, frame_type: 0, flags: 0,
-                method_id: 0, cookie: 0, caller_ep: 0, server_ep: 0,
-                caller_pid: 0, status: 0, payload_len: 0, timeout_ns: 0,
+                magic: 0,
+                version: 0,
+                frame_type: 0,
+                flags: 0,
+                method_id: 0,
+                cookie: 0,
+                caller_ep: 0,
+                server_ep: 0,
+                caller_pid: 0,
+                status: 0,
+                payload_len: 0,
+                timeout_ns: 0,
                 _pad: [0u8; 8],
             },
             payload: [0u8; MAX_RPC_PAYLOAD],
@@ -348,7 +372,9 @@ impl RpcReplyFrame {
     pub fn serialize(&self, buf: &mut [u8]) -> Result<usize, IpcError> {
         let plen = self.header.payload_len as usize;
         let total = RpcHeader::SIZE + plen;
-        if buf.len() < total { return Err(IpcError::Invalid); }
+        if buf.len() < total {
+            return Err(IpcError::Invalid);
+        }
         let off = self.header.serialize_into(buf, 0)?;
         if plen > 0 {
             buf[off..off + plen].copy_from_slice(&self.payload[..plen]);
@@ -362,8 +388,12 @@ impl RpcReplyFrame {
             return Err(IpcError::Invalid);
         }
         let plen = header.payload_len as usize;
-        if plen > MAX_RPC_PAYLOAD { return Err(IpcError::Invalid); }
-        if off + plen > buf.len() { return Err(IpcError::Invalid); }
+        if plen > MAX_RPC_PAYLOAD {
+            return Err(IpcError::Invalid);
+        }
+        if off + plen > buf.len() {
+            return Err(IpcError::Invalid);
+        }
         let mut frame = Self::empty();
         frame.header = header;
         if plen > 0 {

@@ -4,17 +4,16 @@
 //!  - OOM-02   : try_reserve avant tout push
 //!  - ARITH-02 : arithmétique vérifiée
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
 use super::relation::{Relation, RelationId};
-use super::relation_type::{RelationType, RelationKind};
-use super::relation_storage::RELATION_STORAGE;
 use super::relation_graph::RELATION_GRAPH;
 use super::relation_index::RELATION_INDEX;
+use super::relation_storage::RELATION_STORAGE;
+use super::relation_type::{RelationKind, RelationType};
+use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -32,18 +31,14 @@ pub const BATCH_MAX_OPS: usize = 1024;
 pub enum BatchOp {
     /// Insérer une relation from → to de type `rel_type`.
     Insert {
-        from:     BlobId,
-        to:       BlobId,
+        from: BlobId,
+        to: BlobId,
         rel_type: RelationType,
     },
     /// Supprimer la relation identifiée par `id`.
-    Remove {
-        id: RelationId,
-    },
+    Remove { id: RelationId },
     /// Mettre à jour une relation existante (remplace par la nouvelle version).
-    Update {
-        rel: Relation,
-    },
+    Update { rel: Relation },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,20 +62,22 @@ pub enum BatchPolicy {
 #[derive(Clone, Debug, Default)]
 pub struct BatchResult {
     /// Nombre d'insertions réussies.
-    pub inserted:  u32,
+    pub inserted: u32,
     /// Nombre de suppressions réussies.
-    pub removed:   u32,
+    pub removed: u32,
     /// Nombre de mises à jour réussies.
-    pub updated:   u32,
+    pub updated: u32,
     /// Nombre d'opérations échouées.
-    pub failed:    u32,
+    pub failed: u32,
     /// Premier code d'erreur rencontré (si applicable).
     pub first_err: Option<ExofsError>,
 }
 
 impl BatchResult {
     /// `true` si toutes les opérations ont réussi.
-    pub fn is_success(&self) -> bool { self.failed == 0 }
+    pub fn is_success(&self) -> bool {
+        self.failed == 0
+    }
 
     /// Nombre total d'opérations effectuées (réussies + échouées).
     pub fn total_ops(&self) -> u32 {
@@ -99,7 +96,9 @@ impl BatchResult {
 
     fn record_err(&mut self, e: ExofsError) {
         self.failed = self.failed.saturating_add(1);
-        if self.first_err.is_none() { self.first_err = Some(e); }
+        if self.first_err.is_none() {
+            self.first_err = Some(e);
+        }
     }
 }
 
@@ -110,23 +109,23 @@ impl BatchResult {
 /// Statistiques cumulées sur tous les batchs exécutés.
 #[derive(Clone, Debug, Default)]
 pub struct BatchStats {
-    pub total_batches:   u64,
-    pub total_ops:       u64,
-    pub total_inserted:  u64,
-    pub total_removed:   u64,
-    pub total_updated:   u64,
-    pub total_failed:    u64,
+    pub total_batches: u64,
+    pub total_ops: u64,
+    pub total_inserted: u64,
+    pub total_removed: u64,
+    pub total_updated: u64,
+    pub total_failed: u64,
 }
 
 impl BatchStats {
     #[allow(dead_code)]
     fn record(&mut self, res: &BatchResult) {
-        self.total_batches  = self.total_batches.wrapping_add(1);
+        self.total_batches = self.total_batches.wrapping_add(1);
         self.total_inserted = self.total_inserted.wrapping_add(res.inserted as u64);
-        self.total_removed  = self.total_removed.wrapping_add(res.removed  as u64);
-        self.total_updated  = self.total_updated.wrapping_add(res.updated  as u64);
-        self.total_failed   = self.total_failed.wrapping_add(res.failed    as u64);
-        self.total_ops      = self.total_ops.wrapping_add(res.total_ops() as u64);
+        self.total_removed = self.total_removed.wrapping_add(res.removed as u64);
+        self.total_updated = self.total_updated.wrapping_add(res.updated as u64);
+        self.total_failed = self.total_failed.wrapping_add(res.failed as u64);
+        self.total_ops = self.total_ops.wrapping_add(res.total_ops() as u64);
     }
 }
 
@@ -140,7 +139,7 @@ impl BatchStats {
 /// via `commit()`.  En mode `FailFast`, l'exécution s'arrête à la
 /// première erreur sans rollback partiel.
 pub struct RelationBatch {
-    ops:    Vec<BatchOp>,
+    ops: Vec<BatchOp>,
     policy: BatchPolicy,
 }
 
@@ -148,21 +147,24 @@ impl RelationBatch {
     /// Crée un batch vide avec la politique par défaut (`BestEffort`).
     pub fn new() -> Self {
         RelationBatch {
-            ops:    Vec::new(),
+            ops: Vec::new(),
             policy: BatchPolicy::BestEffort,
         }
     }
 
     /// Crée un batch avec une politique explicite.
     pub fn with_policy(policy: BatchPolicy) -> Self {
-        RelationBatch { ops: Vec::new(), policy }
+        RelationBatch {
+            ops: Vec::new(),
+            policy,
+        }
     }
 
     /// Ajoute une opération d'insertion.
     pub fn add_insert(
         &mut self,
-        from:     BlobId,
-        to:       BlobId,
+        from: BlobId,
+        to: BlobId,
         rel_type: RelationType,
     ) -> ExofsResult<()> {
         if self.ops.len() >= BATCH_MAX_OPS {
@@ -194,13 +196,19 @@ impl RelationBatch {
     }
 
     /// Nombre d'opérations en attente.
-    pub fn len(&self) -> usize { self.ops.len() }
+    pub fn len(&self) -> usize {
+        self.ops.len()
+    }
 
     /// `true` si le batch est vide.
-    pub fn is_empty(&self) -> bool { self.ops.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
 
     /// Vide toutes les opérations sans les exécuter.
-    pub fn clear(&mut self) { self.ops.clear(); }
+    pub fn clear(&mut self) {
+        self.ops.clear();
+    }
 
     /// Exécute toutes les opérations dans l'ordre d'insertion.
     ///
@@ -209,15 +217,15 @@ impl RelationBatch {
     pub fn commit(self) -> BatchResult {
         let policy = self.policy;
         let mut res = BatchResult::default();
-        let tick    = exofs_ticks();
+        let tick = exofs_ticks();
 
         for op in self.ops {
             let outcome = Self::execute_op(op, tick);
             match outcome {
                 Ok(op_kind) => match op_kind {
                     OpKind::Insert => res.inserted = res.inserted.saturating_add(1),
-                    OpKind::Remove => res.removed  = res.removed.saturating_add(1),
-                    OpKind::Update => res.updated  = res.updated.saturating_add(1),
+                    OpKind::Remove => res.removed = res.removed.saturating_add(1),
+                    OpKind::Update => res.updated = res.updated.saturating_add(1),
                 },
                 Err(e) => {
                     res.record_err(e);
@@ -235,7 +243,7 @@ impl RelationBatch {
     fn execute_op(op: BatchOp, tick: u64) -> ExofsResult<OpKind> {
         match op {
             BatchOp::Insert { from, to, rel_type } => {
-                let id  = RELATION_STORAGE.allocate_id();
+                let id = RELATION_STORAGE.allocate_id();
                 let rel = Relation::new(id, from, to, rel_type, tick);
                 RELATION_STORAGE.persist(&rel)?;
                 RELATION_GRAPH.add_relation(&rel)?;
@@ -243,7 +251,8 @@ impl RelationBatch {
                 Ok(OpKind::Insert)
             }
             BatchOp::Remove { id } => {
-                let rel = RELATION_STORAGE.load(id)
+                let rel = RELATION_STORAGE
+                    .load(id)
                     .ok_or(ExofsError::ObjectNotFound)??;
                 RELATION_GRAPH.remove_relation(&rel);
                 RELATION_INDEX.remove(&rel);
@@ -259,7 +268,11 @@ impl RelationBatch {
 }
 
 /// Type d'opération réussie (usage interne).
-enum OpKind { Insert, Remove, Update }
+enum OpKind {
+    Insert,
+    Remove,
+    Update,
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BatchBuilder — API fluente
@@ -282,7 +295,8 @@ impl BatchBuilder {
 
     /// Définit la politique en cas d'erreur.
     pub fn policy(mut self, p: BatchPolicy) -> Self {
-        self.batch.policy = p; self
+        self.batch.policy = p;
+        self
     }
 
     /// Ajoute une insertion.
@@ -308,7 +322,9 @@ impl BatchBuilder {
 
     /// Vérifie et retourne le batch prêt à être exécuté.
     pub fn build(self) -> ExofsResult<RelationBatch> {
-        if let Some(e) = self.error { return Err(e); }
+        if let Some(e) = self.error {
+            return Err(e);
+        }
         Ok(self.batch)
     }
 
@@ -323,11 +339,7 @@ impl BatchBuilder {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Crée et exécute immédiatement un batch d'un seul Insert.
-pub fn insert_relation_now(
-    from:     BlobId,
-    to:       BlobId,
-    rel_type: RelationType,
-) -> ExofsResult<()> {
+pub fn insert_relation_now(from: BlobId, to: BlobId, rel_type: RelationType) -> ExofsResult<()> {
     let mut b = RelationBatch::new();
     b.add_insert(from, to, rel_type)?;
     let res = b.commit();
@@ -353,12 +365,15 @@ pub fn remove_relations_batch(ids: &[RelationId]) -> BatchResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::relation_type::RelationType;
+    use super::*;
 
-    fn blob(b: u8) -> BlobId { BlobId([b; 32]) }
+    fn blob(b: u8) -> BlobId {
+        BlobId([b; 32])
+    }
 
-    #[test] fn test_batch_empty() {
+    #[test]
+    fn test_batch_empty() {
         let b = RelationBatch::new();
         assert!(b.is_empty());
         let res = b.commit();
@@ -366,14 +381,18 @@ mod tests {
         assert_eq!(res.total_ops(), 0);
     }
 
-    #[test] fn test_batch_add_ops() {
+    #[test]
+    fn test_batch_add_ops() {
         let mut b = RelationBatch::new();
-        b.add_insert(blob(1), blob(2), RelationType::new(RelationKind::Parent)).unwrap();
-        b.add_insert(blob(3), blob(4), RelationType::new(RelationKind::Clone)).unwrap();
+        b.add_insert(blob(1), blob(2), RelationType::new(RelationKind::Parent))
+            .unwrap();
+        b.add_insert(blob(3), blob(4), RelationType::new(RelationKind::Clone))
+            .unwrap();
         assert_eq!(b.len(), 2);
     }
 
-    #[test] fn test_batch_remove_not_found_best_effort() {
+    #[test]
+    fn test_batch_remove_not_found_best_effort() {
         let mut b = RelationBatch::with_policy(BatchPolicy::BestEffort);
         b.add_remove(RelationId(9999999)).unwrap();
         let res = b.commit();
@@ -381,7 +400,8 @@ mod tests {
         assert_eq!(res.failed, 1);
     }
 
-    #[test] fn test_batch_remove_not_found_fail_fast() {
+    #[test]
+    fn test_batch_remove_not_found_fail_fast() {
         let mut b = RelationBatch::with_policy(BatchPolicy::FailFast);
         b.add_remove(RelationId(8888888)).unwrap();
         b.add_remove(RelationId(7777777)).unwrap();
@@ -391,9 +411,13 @@ mod tests {
         assert!(res.failed >= 1);
     }
 
-    #[test] fn test_batch_result_stats() {
+    #[test]
+    fn test_batch_result_stats() {
         let res = BatchResult {
-            inserted: 3, removed: 2, updated: 1, failed: 1,
+            inserted: 3,
+            removed: 2,
+            updated: 1,
+            failed: 1,
             first_err: Some(ExofsError::NoSpace),
         };
         assert_eq!(res.total_ops(), 7);
@@ -401,7 +425,8 @@ mod tests {
         assert!(!res.is_success());
     }
 
-    #[test] fn test_builder_basic() {
+    #[test]
+    fn test_builder_basic() {
         let b = BatchBuilder::new()
             .policy(BatchPolicy::BestEffort)
             .remove(RelationId(111))
@@ -410,7 +435,8 @@ mod tests {
         assert_eq!(b.len(), 1);
     }
 
-    #[test] fn test_builder_insert() {
+    #[test]
+    fn test_builder_insert() {
         let b = BatchBuilder::new()
             .insert(blob(10), blob(11), RelationKind::Snapshot)
             .build()
@@ -418,22 +444,26 @@ mod tests {
         assert_eq!(b.len(), 1);
     }
 
-    #[test] fn test_remove_batch_empty() {
+    #[test]
+    fn test_remove_batch_empty() {
         let res = remove_relations_batch(&[]);
         assert!(res.is_success());
     }
 
-    #[test] fn test_batch_max_ops() {
+    #[test]
+    fn test_batch_max_ops() {
         let mut b = RelationBatch::new();
         for _i in 0..BATCH_MAX_OPS {
-            b.add_insert(blob(0), blob(1), RelationType::new(RelationKind::Parent)).unwrap();
+            b.add_insert(blob(0), blob(1), RelationType::new(RelationKind::Parent))
+                .unwrap();
         }
         // La prochaine doit échouer.
         let err = b.add_insert(blob(0), blob(1), RelationType::new(RelationKind::Parent));
         assert!(err.is_err());
     }
 
-    #[test] fn test_batch_clear() {
+    #[test]
+    fn test_batch_clear() {
         let mut b = RelationBatch::new();
         b.add_remove(RelationId(42)).unwrap();
         b.clear();

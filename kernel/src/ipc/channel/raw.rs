@@ -11,16 +11,15 @@
 // RÈGLE IPC-RAW-01 : auto-open à la première écriture (send_raw crée le slot).
 // RÈGLE IPC-RAW-02 : un dépassement de ring (slot plein) incrémente drop_count.
 
-
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use crate::ipc::core::types::{EndpointId, IpcError, MessageId, alloc_message_id};
 use crate::ipc::core::constants::MAX_MSG_SIZE;
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::core::types::{alloc_message_id, EndpointId, IpcError, MessageId};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
 // IPC-04 (v6) : vérification capability via security::access_control
+use crate::security::access_control::{check_access, AccessError, ObjectKind};
 use crate::security::capability::{CapTable, CapToken, Rights};
-use crate::security::access_control::{check_access, ObjectKind, AccessError};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Dimensionnement
@@ -44,13 +43,16 @@ const _: () = assert!(
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct InnerMsg {
-    len:  usize,
+    len: usize,
     data: [u8; MAX_MSG_SIZE],
 }
 
 impl InnerMsg {
     const fn empty() -> Self {
-        Self { len: 0, data: [0u8; MAX_MSG_SIZE] }
+        Self {
+            len: 0,
+            data: [0u8; MAX_MSG_SIZE],
+        }
     }
 }
 
@@ -59,16 +61,18 @@ impl InnerMsg {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct InnerRing {
-    head:  usize,                            // lecture (consommateur)
-    tail:  usize,                            // écriture (producteur)
-    count: usize,                            // messages présents
-    msgs:  [InnerMsg; RAW_RING_DEPTH],
+    head: usize,  // lecture (consommateur)
+    tail: usize,  // écriture (producteur)
+    count: usize, // messages présents
+    msgs: [InnerMsg; RAW_RING_DEPTH],
 }
 
 impl InnerRing {
     const fn empty() -> Self {
         Self {
-            head: 0, tail: 0, count: 0,
+            head: 0,
+            tail: 0,
+            count: 0,
             // NOTE: const array init avec fonction const
             msgs: {
                 let arr = [const { InnerMsg::empty() }; RAW_RING_DEPTH];
@@ -80,7 +84,9 @@ impl InnerRing {
     /// Enfile un message. Retourne `false` si l'anneau est plein.
     #[inline]
     fn enqueue(&mut self, data: &[u8]) -> bool {
-        if self.count == RAW_RING_DEPTH { return false; }
+        if self.count == RAW_RING_DEPTH {
+            return false;
+        }
         let len = data.len().min(MAX_MSG_SIZE);
         let slot = &mut self.msgs[self.tail & RAW_RING_MASK];
         slot.len = len;
@@ -93,7 +99,9 @@ impl InnerRing {
     /// Défile un message. Retourne `None` si vide.
     #[inline]
     fn dequeue(&mut self, buf: &mut [u8]) -> Option<usize> {
-        if self.count == 0 { return None; }
+        if self.count == 0 {
+            return None;
+        }
         let slot = &self.msgs[self.head & RAW_RING_MASK];
         let len = slot.len.min(buf.len());
         buf[..len].copy_from_slice(&slot.data[..len]);
@@ -104,15 +112,19 @@ impl InnerRing {
 
     #[inline(always)]
     #[allow(dead_code)]
-    fn is_empty(&self) -> bool { self.count == 0 }
+    fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 
     #[inline(always)]
-    fn is_full(&self) -> bool  { self.count == RAW_RING_DEPTH }
+    fn is_full(&self) -> bool {
+        self.count == RAW_RING_DEPTH
+    }
 
     /// Réinitialise l'anneau (utilisé lors de `mailbox_close`).
     fn reset(&mut self) {
-        self.head  = 0;
-        self.tail  = 0;
+        self.head = 0;
+        self.tail = 0;
         self.count = 0;
     }
 }
@@ -125,21 +137,21 @@ struct RawSlot {
     /// 0 = slot libre, >0 = endpoint_id propriétaire.
     endpoint_id: AtomicU64,
     /// Anneau de messages protégé par spinlock.
-    ring:        SpinLock<InnerRing>,
+    ring: SpinLock<InnerRing>,
     /// Compteurs statistiques.
-    send_count:  AtomicU64,
-    recv_count:  AtomicU64,
-    drop_count:  AtomicU64,
+    send_count: AtomicU64,
+    recv_count: AtomicU64,
+    drop_count: AtomicU64,
 }
 
 impl RawSlot {
     const fn new() -> Self {
         Self {
             endpoint_id: AtomicU64::new(0),
-            ring:        SpinLock::new(InnerRing::empty()),
-            send_count:  AtomicU64::new(0),
-            recv_count:  AtomicU64::new(0),
-            drop_count:  AtomicU64::new(0),
+            ring: SpinLock::new(InnerRing::empty()),
+            send_count: AtomicU64::new(0),
+            recv_count: AtomicU64::new(0),
+            drop_count: AtomicU64::new(0),
         }
     }
 }
@@ -185,14 +197,19 @@ fn find_slot(ep_id: u64) -> Option<usize> {
 /// Retourne `false` si la table est pleine.
 pub fn mailbox_open(ep_id: EndpointId) -> bool {
     let id = ep_id.get();
-    if id == 0 { return false; }
+    if id == 0 {
+        return false;
+    }
     // Idempotence : déjà ouvert ?
-    if find_slot(id).is_some() { return true; }
+    if find_slot(id).is_some() {
+        return true;
+    }
     // Trouver un slot libre.
     let start = (id as usize).wrapping_mul(2654435761) % MAX_RAW_SLOTS;
     for i in 0..MAX_RAW_SLOTS {
         let idx = (start + i) % MAX_RAW_SLOTS;
-        if RAW_TABLE[idx].endpoint_id
+        if RAW_TABLE[idx]
+            .endpoint_id
             .compare_exchange(0, id, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
@@ -207,7 +224,8 @@ pub fn mailbox_open(ep_id: EndpointId) -> bool {
 pub fn mailbox_close(ep_id: EndpointId) {
     let id = ep_id.get();
     if let Some(idx) = find_slot(id) {
-        if RAW_TABLE[idx].endpoint_id
+        if RAW_TABLE[idx]
+            .endpoint_id
             .compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
@@ -240,7 +258,9 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
     }
 
     let id = ep_id.get();
-    if id == 0 { return Err(IpcError::NullEndpoint); }
+    if id == 0 {
+        return Err(IpcError::NullEndpoint);
+    }
 
     // Auto-open si nécessaire.
     if find_slot(id).is_none() {
@@ -332,7 +352,9 @@ pub fn try_send_raw_nowait(ep_id: EndpointId, data: &[u8]) -> Result<MessageId, 
 /// Retourne le nombre d'octets copiés dans `buf`.
 pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, IpcError> {
     let id = ep_id.get();
-    if id == 0 { return Err(IpcError::NullEndpoint); }
+    if id == 0 {
+        return Err(IpcError::NullEndpoint);
+    }
 
     let idx = find_slot(id).ok_or(IpcError::NotFound)?;
     let slot = &RAW_TABLE[idx];
@@ -375,9 +397,9 @@ pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct RawSlotStats {
     pub endpoint_id: u64,
-    pub send_count:  u64,
-    pub recv_count:  u64,
-    pub drop_count:  u64,
+    pub send_count: u64,
+    pub recv_count: u64,
+    pub drop_count: u64,
 }
 
 /// Snapshot des stats de toutes les mailboxes actives.
@@ -389,9 +411,9 @@ pub fn raw_stats_snapshot() -> [Option<RawSlotStats>; MAX_RAW_SLOTS] {
         if ep != 0 {
             out[i] = Some(RawSlotStats {
                 endpoint_id: ep,
-                send_count:  RAW_TABLE[i].send_count.load(Ordering::Relaxed),
-                recv_count:  RAW_TABLE[i].recv_count.load(Ordering::Relaxed),
-                drop_count:  RAW_TABLE[i].drop_count.load(Ordering::Relaxed),
+                send_count: RAW_TABLE[i].send_count.load(Ordering::Relaxed),
+                recv_count: RAW_TABLE[i].recv_count.load(Ordering::Relaxed),
+                drop_count: RAW_TABLE[i].drop_count.load(Ordering::Relaxed),
             });
         }
     }
@@ -410,17 +432,23 @@ pub fn raw_stats_snapshot() -> [Option<RawSlotStats>; MAX_RAW_SLOTS] {
 /// Les appels kernel-internes peuvent utiliser `send_raw()` directement.
 pub fn send_raw_checked(
     ep_id: EndpointId,
-    data:  &[u8],
+    data: &[u8],
     flags: u32,
     table: &CapTable,
     token: CapToken,
 ) -> Result<MessageId, IpcError> {
     // IPC-04 (v6) : vérification capability — security::access_control
-    check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_SEND, "ipc::channel::raw")
-        .map_err(|e| match e {
-            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-            _ => IpcError::PermissionDenied,
-        })?;
+    check_access(
+        table,
+        token,
+        ObjectKind::IpcChannel,
+        Rights::IPC_SEND,
+        "ipc::channel::raw",
+    )
+    .map_err(|e| match e {
+        AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+        _ => IpcError::PermissionDenied,
+    })?;
     send_raw(ep_id, data, flags)
 }
 
@@ -429,17 +457,23 @@ pub fn send_raw_checked(
 /// # Droits requis : `Rights::IPC_RECV`
 pub fn recv_raw_checked(
     ep_id: EndpointId,
-    buf:   &mut [u8],
+    buf: &mut [u8],
     flags: u32,
     table: &CapTable,
     token: CapToken,
 ) -> Result<usize, IpcError> {
     // IPC-04 (v6) : vérification capability — security::access_control
-    check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_RECV, "ipc::channel::raw")
-        .map_err(|e| match e {
-            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-            _ => IpcError::PermissionDenied,
-        })?;
+    check_access(
+        table,
+        token,
+        ObjectKind::IpcChannel,
+        Rights::IPC_RECV,
+        "ipc::channel::raw",
+    )
+    .map_err(|e| match e {
+        AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+        _ => IpcError::PermissionDenied,
+    })?;
     recv_raw(ep_id, buf, flags)
 }
 

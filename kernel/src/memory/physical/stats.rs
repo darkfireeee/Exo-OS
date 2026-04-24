@@ -1,8 +1,8 @@
-﻿// kernel/src/memory/physical/stats.rs
+// kernel/src/memory/physical/stats.rs
 //
-// 
+//
 // STATISTIQUES PHYSIQUES  wrappers vers le buddy allocator
-// 
+//
 //
 // Ce module expose les statistiques globales du sous-système physical memory.
 // Utilisé par syscall pour implémenter sysinfo/mem_info.

@@ -5,20 +5,20 @@
 //! et export des entrées.
 
 pub mod audit_entry;
+pub mod audit_export;
+pub mod audit_filter;
 pub mod audit_log;
-pub mod audit_writer;
 pub mod audit_reader;
 pub mod audit_rotation;
-pub mod audit_filter;
-pub mod audit_export;
+pub mod audit_writer;
 
 pub use audit_entry::{AuditEntry, AuditOp, AuditResult, AuditSeverity, AuditSummary};
-pub use audit_log::{AuditLog, AuditLogStats, AuditLogHealth, AUDIT_LOG};
-pub use audit_writer::{AuditWriter, WriterContext, WritePolicy};
+pub use audit_export::{AuditExporter, ExportFormat, ExportRange};
+pub use audit_filter::{AuditFilter, FilterChain, FilterCriteria};
+pub use audit_log::{AuditLog, AuditLogHealth, AuditLogStats, AUDIT_LOG};
 pub use audit_reader::{AuditReader, ReadDirection};
 pub use audit_rotation::{AuditRotation, RotationConfig, RotationReport};
-pub use audit_filter::{AuditFilter, FilterCriteria, FilterChain};
-pub use audit_export::{AuditExporter, ExportFormat, ExportRange};
+pub use audit_writer::{AuditWriter, WritePolicy, WriterContext};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fonctions de cycle de vie
@@ -61,4 +61,3 @@ pub fn needs_rotation() -> bool {
 pub fn perm_denied(actor_uid: u64, object_id: u64, op: AuditOp) {
     audit_writer::record_perm_denied(actor_uid, object_id, op);
 }
-

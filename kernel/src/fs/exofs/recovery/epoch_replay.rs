@@ -11,15 +11,14 @@
 //! - **WRITE-02** : vérification implicite via `BlockDevice::write_block`.
 //! - **RÈGLE 7** : barrière `SeqCst` entre les trois phases data→root→record.
 
-
 extern crate alloc;
-use alloc::vec;
-use core::sync::atomic::Ordering;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId, BlobId};
-use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};
 use super::boot_recovery::BlockDevice;
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
+use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};
+use crate::fs::exofs::core::{BlobId, EpochId, ExofsError, ExofsResult};
+use alloc::vec;
+use core::sync::atomic::Ordering;
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -51,25 +50,25 @@ pub const EPOCH_JOURNAL_DEFAULT_LBA: u64 = 0x1000;
 #[derive(Clone, Copy, Debug)]
 pub struct EpochJournalHeaderDisk {
     /// Magic "EPOCHJNL".
-    pub magic:       u64,
+    pub magic: u64,
     /// Version.
-    pub version:     u8,
+    pub version: u8,
     /// Flags (bit 0 = sealed, bit 1 = committed).
-    pub flags:       u8,
+    pub flags: u8,
     /// Rembourrage.
-    pub _pad0:       [u8; 6],
+    pub _pad0: [u8; 6],
     /// EpochId de ce journal.
-    pub epoch_id:    u64,
+    pub epoch_id: u64,
     /// Nombre d'enregistrements dans ce journal.
-    pub n_records:   u32,
+    pub n_records: u32,
     /// Rembourrage.
-    pub _pad1:       u32,
+    pub _pad1: u32,
     /// LBA du premier enregistrement.
-    pub first_lba:   u64,
+    pub first_lba: u64,
     /// Checksum CRC32 du champ `n_records` + `first_lba` + `epoch_id`.
-    pub crc32:       u32,
+    pub crc32: u32,
     /// Rembourrage final.
-    pub _pad2:       [u8; 12],
+    pub _pad2: [u8; 12],
 }
 
 // const _: () = assert!(
@@ -85,7 +84,7 @@ impl EpochJournalHeaderDisk {
     /// 2. version == 1
     pub fn from_bytes(buf: &[u8; EPOCH_JOURNAL_HDR_SIZE]) -> ExofsResult<Self> {
         // 1. Magic EN PREMIER.
-        let magic = u64::from_le_bytes(buf[0..8].try_into().unwrap_or([0;8]));
+        let magic = u64::from_le_bytes(buf[0..8].try_into().unwrap_or([0; 8]));
         if magic != EPOCH_JOURNAL_HDR_MAGIC {
             return Err(ExofsError::InvalidMagic);
         }
@@ -99,11 +98,15 @@ impl EpochJournalHeaderDisk {
 
     /// `true` si l'epoch est committée (toutes les données sont persistantes).
     #[inline]
-    pub fn is_committed(&self) -> bool { self.flags & 0x02 != 0 }
+    pub fn is_committed(&self) -> bool {
+        self.flags & 0x02 != 0
+    }
 
     /// `true` si le journal est scellé (plus d'ajout possible).
     #[inline]
-    pub fn is_sealed(&self) -> bool { self.flags & 0x01 != 0 }
+    pub fn is_sealed(&self) -> bool {
+        self.flags & 0x01 != 0
+    }
 }
 
 // ── Enregistrement d'epoch ────────────────────────────────────────────────────
@@ -128,17 +131,17 @@ impl EpochJournalHeaderDisk {
 #[derive(Clone, Copy, Debug)]
 pub struct EpochRecord {
     /// Magic "EPOCHREC".
-    pub magic:     u64,
+    pub magic: u64,
     /// EpochId associée.
-    pub epoch_id:  u64,
+    pub epoch_id: u64,
     /// BlobId des données (HASH-02 : calculé sur les données RAW).
-    pub blob_id:   [u8; 32],
+    pub blob_id: [u8; 32],
     /// LBA de destination.
-    pub data_lba:  u64,
+    pub data_lba: u64,
     /// Taille des données en octets.
-    pub data_len:  u32,
+    pub data_len: u32,
     /// Numéro de séquence.
-    pub seq_num:   u32,
+    pub seq_num: u32,
     /// Blake3 des données (pour vérification HASH-02).
     pub data_hash: [u8; 32],
 }
@@ -154,7 +157,7 @@ impl EpochRecord {
     /// # HDR-03
     /// magic vérifié EN PREMIER.
     pub fn from_bytes(buf: &[u8; EPOCH_RECORD_SIZE]) -> ExofsResult<Self> {
-        let magic = u64::from_le_bytes(buf[0..8].try_into().unwrap_or([0;8]));
+        let magic = u64::from_le_bytes(buf[0..8].try_into().unwrap_or([0; 8]));
         if magic != EPOCH_RECORD_MAGIC {
             return Err(ExofsError::InvalidMagic);
         }
@@ -181,11 +184,11 @@ impl EpochRecord {
 #[derive(Clone, Copy, Debug)]
 pub struct EpochReplayOptions {
     /// LBA de départ du journal d'epoch.
-    pub journal_lba:     u64,
+    pub journal_lba: u64,
     /// Nombre maximal d'enregistrements à traiter.
-    pub max_records:     usize,
+    pub max_records: usize,
     /// Mode dry-run : lit et valide sans écrire.
-    pub dry_run:         bool,
+    pub dry_run: bool,
     /// Arrêter au premier enregistrement invalide.
     pub stop_on_invalid: bool,
 }
@@ -193,9 +196,9 @@ pub struct EpochReplayOptions {
 impl Default for EpochReplayOptions {
     fn default() -> Self {
         Self {
-            journal_lba:     EPOCH_JOURNAL_DEFAULT_LBA,
-            max_records:     EPOCH_RECORD_MAX,
-            dry_run:         false,
+            journal_lba: EPOCH_JOURNAL_DEFAULT_LBA,
+            max_records: EPOCH_RECORD_MAX,
+            dry_run: false,
             stop_on_invalid: false,
         }
     }
@@ -207,15 +210,15 @@ impl Default for EpochReplayOptions {
 #[derive(Clone, Debug)]
 pub struct ReplayResult {
     /// EpochId traitée.
-    pub epoch_id:      EpochId,
+    pub epoch_id: EpochId,
     /// Nombre d'enregistrements rejoués.
-    pub n_replayed:    u32,
+    pub n_replayed: u32,
     /// Nombre d'enregistrements ignorés (magic invalide, epoch différente…).
-    pub n_skipped:     u32,
+    pub n_skipped: u32,
     /// Nombre d'enregistrements avec checksum échoué.
-    pub n_hash_fail:   u32,
+    pub n_hash_fail: u32,
     /// Nombre d'enregistrements avec erreur I/O.
-    pub n_io_error:    u32,
+    pub n_io_error: u32,
     /// `true` si le journal était marqué comme committed.
     pub was_committed: bool,
 }
@@ -241,10 +244,7 @@ pub struct EpochReplay;
 
 impl EpochReplay {
     /// Rejoue le journal d'epoch `epoch_id` avec les options par défaut.
-    pub fn replay(
-        device:   &mut dyn BlockDevice,
-        epoch_id: EpochId,
-    ) -> ExofsResult<ReplayResult> {
+    pub fn replay(device: &mut dyn BlockDevice, epoch_id: EpochId) -> ExofsResult<ReplayResult> {
         Self::replay_with_options(device, epoch_id, &EpochReplayOptions::default())
     }
 
@@ -261,22 +261,22 @@ impl EpochReplay {
     ///    f. Flush NVMe.
     /// 3. Retourner `ReplayResult`.
     pub fn replay_with_options(
-        device:   &mut dyn BlockDevice,
+        device: &mut dyn BlockDevice,
         epoch_id: EpochId,
-        opts:     &EpochReplayOptions,
+        opts: &EpochReplayOptions,
     ) -> ExofsResult<ReplayResult> {
         RECOVERY_LOG.log_replay_start(epoch_id.0);
 
         // ── Phase 0 : lecture de l'en-tête du journal ──────────────────────
         let mut hdr_buf = [0u8; EPOCH_JOURNAL_HDR_SIZE];
-        device.read_block(opts.journal_lba, &mut hdr_buf)
+        device
+            .read_block(opts.journal_lba, &mut hdr_buf)
             .map_err(|_| ExofsError::IoError)?;
 
-        let journal_hdr = EpochJournalHeaderDisk::from_bytes(&hdr_buf)
-            .map_err(|e| {
-                RECOVERY_AUDIT.record_invalid_magic(opts.journal_lba, 0);
-                e
-            })?;
+        let journal_hdr = EpochJournalHeaderDisk::from_bytes(&hdr_buf).map_err(|e| {
+            RECOVERY_AUDIT.record_invalid_magic(opts.journal_lba, 0);
+            e
+        })?;
 
         // Vérifier que l'epoch correspond.
         if journal_hdr.epoch_id != epoch_id.0 {
@@ -288,10 +288,10 @@ impl EpochReplay {
 
         let mut result = ReplayResult {
             epoch_id,
-            n_replayed:    0,
-            n_skipped:     0,
-            n_hash_fail:   0,
-            n_io_error:    0,
+            n_replayed: 0,
+            n_skipped: 0,
+            n_hash_fail: 0,
+            n_io_error: 0,
             was_committed,
         };
 
@@ -311,7 +311,9 @@ impl EpochReplay {
             let mut rec_buf = [0u8; EPOCH_RECORD_SIZE];
             if device.read_block(record_lba, &mut rec_buf).is_err() {
                 result.n_io_error = result.n_io_error.saturating_add(1);
-                if opts.stop_on_invalid { break; }
+                if opts.stop_on_invalid {
+                    break;
+                }
                 continue;
             }
 
@@ -345,7 +347,9 @@ impl EpochReplay {
             let mut data_buf = vec![0u8; data_len];
             if device.read_block(rec.data_lba, &mut data_buf).is_err() {
                 result.n_io_error = result.n_io_error.saturating_add(1);
-                if opts.stop_on_invalid { break; }
+                if opts.stop_on_invalid {
+                    break;
+                }
                 continue;
             }
 
@@ -353,13 +357,13 @@ impl EpochReplay {
             let blob_id = rec.blob_id();
             if !verify_blob_id(&blob_id, &data_buf) {
                 // Vérification secondaire : comparer le data_hash Blake3.
-                let computed_hash = blake3_hash(
-                    data_buf.as_slice().try_into().unwrap_or(&[]),
-                );
+                let computed_hash = blake3_hash(data_buf.as_slice().try_into().unwrap_or(&[]));
                 if computed_hash != rec.data_hash {
                     result.n_hash_fail = result.n_hash_fail.saturating_add(1);
                     RECOVERY_AUDIT.record_checksum_invalid(rec.data_lba, 0, 0);
-                    if opts.stop_on_invalid { break; }
+                    if opts.stop_on_invalid {
+                        break;
+                    }
                     continue;
                 }
             }
@@ -378,7 +382,9 @@ impl EpochReplay {
             // Écriture des données.
             if device.write_block(rec.data_lba, &data_buf).is_err() {
                 result.n_io_error = result.n_io_error.saturating_add(1);
-                if opts.stop_on_invalid { break; }
+                if opts.stop_on_invalid {
+                    break;
+                }
                 continue;
             }
 
@@ -407,12 +413,13 @@ impl EpochReplay {
     ///
     /// Retourne le nombre d'enregistrements valides et les statistiques.
     pub fn validate_journal(
-        device:      &dyn BlockDevice,
-        epoch_id:    EpochId,
+        device: &dyn BlockDevice,
+        epoch_id: EpochId,
         journal_lba: u64,
     ) -> ExofsResult<JournalValidationReport> {
         let mut hdr_buf = [0u8; EPOCH_JOURNAL_HDR_SIZE];
-        device.read_block(journal_lba, &mut hdr_buf)
+        device
+            .read_block(journal_lba, &mut hdr_buf)
             .map_err(|_| ExofsError::IoError)?;
 
         let hdr = EpochJournalHeaderDisk::from_bytes(&hdr_buf)?;
@@ -421,14 +428,15 @@ impl EpochReplay {
             return Err(ExofsError::InvalidArgument);
         }
 
-        let n_records  = hdr.n_records as usize;
-        let mut valid  = 0u32;
+        let n_records = hdr.n_records as usize;
+        let mut valid = 0u32;
         let mut bad_magic = 0u32;
-        let bad_hash  = 0u32;
+        let bad_hash = 0u32;
 
         for seq in 0..n_records.min(EPOCH_RECORD_MAX) {
             let block_idx = (seq * EPOCH_RECORD_SIZE) / device.block_size() as usize;
-            let rec_lba = hdr.first_lba
+            let rec_lba = hdr
+                .first_lba
                 .checked_add(block_idx as u64)
                 .unwrap_or(u64::MAX);
 
@@ -438,11 +446,16 @@ impl EpochReplay {
             }
 
             let rec = match EpochRecord::from_bytes(&buf) {
-                Ok(r)  => r,
-                Err(_) => { bad_magic += 1; break; }
+                Ok(r) => r,
+                Err(_) => {
+                    bad_magic += 1;
+                    break;
+                }
             };
 
-            if rec.epoch_id != epoch_id.0 { break; }
+            if rec.epoch_id != epoch_id.0 {
+                break;
+            }
 
             // Vérifier le hash sans relire les données (contrôle rapide).
             valid += 1;
@@ -454,18 +467,16 @@ impl EpochReplay {
         Ok(JournalValidationReport {
             epoch_id,
             journal_lba,
-            n_declared:   n_records as u32,
-            n_valid:      valid,
-            n_bad_magic:  bad_magic,
+            n_declared: n_records as u32,
+            n_valid: valid,
+            n_bad_magic: bad_magic,
             is_committed: hdr.is_committed(),
-            is_sealed:    hdr.is_sealed(),
+            is_sealed: hdr.is_sealed(),
         })
     }
 
     /// Construit le LBA de journal depuis le LBA du slot sélectionné.
-    pub fn journal_lba_from_slot_result(
-        slot: &super::slot_recovery::SlotRecoveryResult,
-    ) -> u64 {
+    pub fn journal_lba_from_slot_result(slot: &super::slot_recovery::SlotRecoveryResult) -> u64 {
         slot.journal_lba
     }
 }
@@ -476,28 +487,26 @@ impl EpochReplay {
 #[derive(Clone, Copy, Debug)]
 pub struct JournalValidationReport {
     /// EpochId contrôlée.
-    pub epoch_id:     EpochId,
+    pub epoch_id: EpochId,
     /// LBA du journal.
-    pub journal_lba:  u64,
+    pub journal_lba: u64,
     /// Nombre d'enregistrements déclarés dans l'en-tête.
-    pub n_declared:   u32,
+    pub n_declared: u32,
     /// Nombre d'enregistrements valides lus.
-    pub n_valid:      u32,
+    pub n_valid: u32,
     /// Nombre d'enregistrements avec magic invalide.
-    pub n_bad_magic:  u32,
+    pub n_bad_magic: u32,
     /// `true` si le journal est marqué committed.
     pub is_committed: bool,
     /// `true` si le journal est scellé.
-    pub is_sealed:    bool,
+    pub is_sealed: bool,
 }
 
 impl JournalValidationReport {
     /// `true` si le journal est complet et cohérent.
     #[inline]
     pub fn is_consistent(&self) -> bool {
-        self.n_bad_magic == 0
-            && self.n_valid == self.n_declared
-            && self.is_committed
+        self.n_bad_magic == 0 && self.n_valid == self.n_declared && self.is_committed
     }
 }
 
@@ -511,11 +520,11 @@ mod tests {
     fn test_epoch_record_roundtrip() {
         // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut rec: EpochRecord = unsafe { core::mem::zeroed() };
-        rec.magic    = EPOCH_RECORD_MAGIC;
+        rec.magic = EPOCH_RECORD_MAGIC;
         rec.epoch_id = 7;
         rec.data_lba = 0x5000;
         rec.data_len = 512;
-        rec.seq_num  = 0;
+        rec.seq_num = 0;
         let bytes = rec.to_bytes();
         let rec2 = EpochRecord::from_bytes(&bytes).unwrap();
         assert_eq!(rec2.epoch_id, 7);
@@ -532,11 +541,11 @@ mod tests {
     #[test]
     fn test_replay_result_clean() {
         let r = ReplayResult {
-            epoch_id:      EpochId(1),
-            n_replayed:    10,
-            n_skipped:     0,
-            n_hash_fail:   0,
-            n_io_error:    0,
+            epoch_id: EpochId(1),
+            n_replayed: 10,
+            n_skipped: 0,
+            n_hash_fail: 0,
+            n_io_error: 0,
             was_committed: true,
         };
         assert!(r.is_clean());
@@ -546,13 +555,13 @@ mod tests {
     #[test]
     fn test_journal_validation_consistent() {
         let report = JournalValidationReport {
-            epoch_id:     EpochId(1),
-            journal_lba:  0x1000,
-            n_declared:   5,
-            n_valid:      5,
-            n_bad_magic:  0,
+            epoch_id: EpochId(1),
+            journal_lba: 0x1000,
+            n_declared: 5,
+            n_valid: 5,
+            n_bad_magic: 0,
             is_committed: true,
-            is_sealed:    true,
+            is_sealed: true,
         };
         assert!(report.is_consistent());
     }

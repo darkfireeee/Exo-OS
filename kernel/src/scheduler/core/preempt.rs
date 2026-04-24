@@ -67,7 +67,9 @@ fn current_cpu_id() -> usize {
         id.min(MAX_CPUS - 1)
     }
     #[cfg(not(target_arch = "x86_64"))]
-    { 0 }
+    {
+        0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,7 +84,10 @@ fn preempt_disable_raw() {
     let prev = PREEMPT_COUNT[cpu].0.fetch_add(1, Ordering::Acquire);
     PREEMPT_DISABLE_TOTAL.fetch_add(1, Ordering::Relaxed);
     // Détection de débordement positif > 64 → signe d'un bug d'imbrication.
-    debug_assert!(prev < 64, "preempt_disable: compteur > 64, bug d'imbrication probable");
+    debug_assert!(
+        prev < 64,
+        "preempt_disable: compteur > 64, bug d'imbrication probable"
+    );
 }
 
 /// Réactive la préemption pour le CPU courant (décrémente compteur).
@@ -91,8 +96,10 @@ fn preempt_disable_raw() {
 fn preempt_enable_raw() {
     let cpu = current_cpu_id();
     let prev = PREEMPT_COUNT[cpu].0.fetch_sub(1, Ordering::Release);
-    debug_assert!(prev > 0,
-        "preempt_enable: compteur était <= 0 — déséquilibre disable/enable FATAL");
+    debug_assert!(
+        prev > 0,
+        "preempt_enable: compteur était <= 0 — déséquilibre disable/enable FATAL"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,7 +133,9 @@ impl PreemptGuard {
     #[must_use = "PreemptGuard doit être stocké dans une variable locale pour avoir un effet"]
     pub fn new() -> Self {
         preempt_disable_raw();
-        Self { _phantom: PhantomData }
+        Self {
+            _phantom: PhantomData,
+        }
     }
 
     /// Vérifie si la préemption est actuellement désactivée sur ce CPU.
@@ -184,10 +193,15 @@ impl IrqGuard {
             );
         }
         #[cfg(not(target_arch = "x86_64"))]
-        { rflags = 0; }
+        {
+            rflags = 0;
+        }
 
         preempt_disable_raw();
-        Self { rflags, _phantom: PhantomData }
+        Self {
+            rflags,
+            _phantom: PhantomData,
+        }
     }
 
     /// Vrai si les IRQ étaient activées avant ce guard (bit IF = 9 de RFLAGS).

@@ -195,9 +195,17 @@ pub fn sys_secondary_bus_reset_for_pid(pid: u32) -> Result<bool, PciCfgError> {
     let bridge_bdf = claim_bdf(bridge_bdf);
 
     let bridge_control = pci_cfg_read16(bridge_bdf, PCI_BRIDGE_CONTROL_OFFSET);
-    pci_cfg_write16(bridge_bdf, PCI_BRIDGE_CONTROL_OFFSET, bridge_control | PCI_BRIDGE_CTL_BUS_RESET);
+    pci_cfg_write16(
+        bridge_bdf,
+        PCI_BRIDGE_CONTROL_OFFSET,
+        bridge_control | PCI_BRIDGE_CTL_BUS_RESET,
+    );
     busy_wait_ms(2);
-    pci_cfg_write16(bridge_bdf, PCI_BRIDGE_CONTROL_OFFSET, bridge_control & !PCI_BRIDGE_CTL_BUS_RESET);
+    pci_cfg_write16(
+        bridge_bdf,
+        PCI_BRIDGE_CONTROL_OFFSET,
+        bridge_control & !PCI_BRIDGE_CTL_BUS_RESET,
+    );
     Ok(true)
 }
 

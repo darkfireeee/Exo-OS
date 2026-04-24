@@ -8,7 +8,7 @@ use alloc::collections::BTreeMap;
 use spin::Mutex;
 
 // ExoHal is a hardware abstraction layer we'll need for virtio-drivers
-// But since this is a complex integration, let's create a simpler abstract API 
+// But since this is a complex integration, let's create a simpler abstract API
 // that the kernel will consume.
 
 pub struct ExoVirtioBlkDevice {
@@ -44,9 +44,7 @@ impl ExoVirtioBlkDevice {
         if buf.len() != bs {
             return Err("Buffer invalide");
         }
-        let offset = (block_id as usize)
-            .checked_mul(bs)
-            .ok_or("Out of bounds")?;
+        let offset = (block_id as usize).checked_mul(bs).ok_or("Out of bounds")?;
 
         let storage = self.internal_storage.lock();
         if offset.checked_add(bs).ok_or("Out of bounds")? > self.capacity_bytes {
@@ -66,9 +64,7 @@ impl ExoVirtioBlkDevice {
         if buf.len() != bs {
             return Err("Buffer invalide");
         }
-        let offset = (block_id as usize)
-            .checked_mul(bs)
-            .ok_or("Out of bounds")?;
+        let offset = (block_id as usize).checked_mul(bs).ok_or("Out of bounds")?;
 
         let mut storage = self.internal_storage.lock();
         if offset.checked_add(bs).ok_or("Out of bounds")? > self.capacity_bytes {

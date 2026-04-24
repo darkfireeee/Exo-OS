@@ -17,16 +17,16 @@
 // mais avant qu'il ne dorme (grâce au numéro de séquence).
 // ═══════════════════════════════════════════════════════════════════════════════
 
+use crate::scheduler::core::task::{TaskState, ThreadControlBlock};
+use crate::scheduler::sync::mutex::KMutexGuard;
+use crate::scheduler::sync::wait_queue::{WaitNode, WaitQueue};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::sync::wait_queue::{WaitQueue, WaitNode};
-use crate::scheduler::sync::mutex::KMutexGuard;
-use crate::scheduler::core::task::{ThreadControlBlock, TaskState};
 
 /// Compteurs d'instrumentation.
-pub static CONDVAR_WAITS:     AtomicU64 = AtomicU64::new(0);
-pub static CONDVAR_WAKEUPS:   AtomicU64 = AtomicU64::new(0);
-pub static CONDVAR_SPURIOUS:  AtomicU64 = AtomicU64::new(0);
+pub static CONDVAR_WAITS: AtomicU64 = AtomicU64::new(0);
+pub static CONDVAR_WAKEUPS: AtomicU64 = AtomicU64::new(0);
+pub static CONDVAR_SPURIOUS: AtomicU64 = AtomicU64::new(0);
 
 pub struct CondVar {
     waiters: WaitQueue,
@@ -43,7 +43,7 @@ impl CondVar {
     pub const fn new() -> Self {
         Self {
             waiters: WaitQueue::new(),
-            seq:     AtomicU64::new(0),
+            seq: AtomicU64::new(0),
         }
     }
 
@@ -106,7 +106,11 @@ impl CondVar {
         // Extraire le mutex et le TID du thread avant de relâcher le guard.
         // SAFETY: Le guard contient une référence au mutex — on récupère le TID
         // via le TCB (tid est dans la CL1, lecture seule ici).
-        let tid = if !tcb.is_null() { (*tcb).tid as u32 } else { 1u32 };
+        let tid = if !tcb.is_null() {
+            (*tcb).tid as u32
+        } else {
+            1u32
+        };
         let mutex_ref = guard.mutex;
 
         if let Some(node) = node_opt {
@@ -158,9 +162,13 @@ impl CondVar {
 
     /// Séquence de notification courante (lecture externe pour tests/debug).
     #[inline(always)]
-    pub fn seq(&self) -> u64 { self.seq.load(Ordering::Relaxed) }
+    pub fn seq(&self) -> u64 {
+        self.seq.load(Ordering::Relaxed)
+    }
 
     /// Nombre de threads actuellement en attente.
     #[inline(always)]
-    pub fn waiters_count(&self) -> usize { self.waiters.count() }
+    pub fn waiters_count(&self) -> usize {
+        self.waiters.count()
+    }
 }

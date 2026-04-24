@@ -18,16 +18,16 @@
 //                   depuis son scheduler de messages IPC.
 // RÈGLE SERVER-02 : les handler fn pointers sont statiques (pas de closure).
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use core::mem::MaybeUninit;
 use core::num::NonZeroU64;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::ipc::rpc::protocol::{
-    MethodId, RpcCallFrame, RpcReplyFrame, RpcHeader, RpcStatus,
-    METHOD_ID_PING, METHOD_ID_INTROSPECT, MAX_RPC_PAYLOAD,
+    MethodId, RpcCallFrame, RpcHeader, RpcReplyFrame, RpcStatus, MAX_RPC_PAYLOAD,
+    METHOD_ID_INTROSPECT, METHOD_ID_PING,
 };
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -48,7 +48,8 @@ pub const MAX_RPC_SERVERS: usize = 32;
 /// - `call` : trame d'appel déjà désérialisée
 /// - `reply_payload` : buffer à remplir par le handler
 /// - Retourne : taille du payload de réponse, ou Err(IpcError)
-pub type RpcHandlerFn = fn(call: &RpcCallFrame, reply_payload: &mut [u8]) -> Result<usize, IpcError>;
+pub type RpcHandlerFn =
+    fn(call: &RpcCallFrame, reply_payload: &mut [u8]) -> Result<usize, IpcError>;
 
 // ---------------------------------------------------------------------------
 // MethodEntry
@@ -89,7 +90,9 @@ impl MethodEntry {
 
     pub fn handler(&self) -> Option<RpcHandlerFn> {
         let p = self.handler.load(Ordering::Relaxed);
-        if p == 0 { return None; }
+        if p == 0 {
+            return None;
+        }
         // SAFETY: handler est une fn pointer statique enregistrée via register()
         Some(unsafe { core::mem::transmute(p) })
     }
@@ -188,7 +191,9 @@ impl RpcServer {
         // Mise à jour si déjà existant
         for i in 0..MAX_RPC_METHODS {
             if self.methods[i].is_match(method_id.0) {
-                self.methods[i].handler.store(handler as usize, Ordering::Relaxed);
+                self.methods[i]
+                    .handler
+                    .store(handler as usize, Ordering::Relaxed);
                 return Ok(());
             }
         }
@@ -196,11 +201,17 @@ impl RpcServer {
         // Nouveau slot
         for i in 0..MAX_RPC_METHODS {
             if !self.methods[i].valid.load(Ordering::Relaxed) {
-                if self.methods[i].valid.compare_exchange(
-                    false, true, Ordering::AcqRel, Ordering::Relaxed,
-                ).is_ok() {
-                    self.methods[i].method_id.store(method_id.0, Ordering::Relaxed);
-                    self.methods[i].handler.store(handler as usize, Ordering::Release);
+                if self.methods[i]
+                    .valid
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    self.methods[i]
+                        .method_id
+                        .store(method_id.0, Ordering::Relaxed);
+                    self.methods[i]
+                        .handler
+                        .store(handler as usize, Ordering::Release);
                     self.method_count.fetch_add(1, Ordering::Relaxed);
                     return Ok(());
                 }
@@ -342,7 +353,9 @@ fn builtin_ping(call: &RpcCallFrame, reply: &mut [u8]) -> Result<usize, IpcError
 
 fn builtin_introspect(_call: &RpcCallFrame, reply: &mut [u8]) -> Result<usize, IpcError> {
     // Retourne le nombre de méthodes en 4 octets LE
-    if reply.len() < 4 { return Ok(0); }
+    if reply.len() < 4 {
+        return Ok(0);
+    }
     // Valeur symbolique — le serveur actuel est accessible via contexte global
     reply[..4].copy_from_slice(&(MAX_RPC_METHODS as u32).to_le_bytes());
     Ok(4)
@@ -359,7 +372,10 @@ struct RpcServerSlot {
 
 impl RpcServerSlot {
     const fn empty() -> Self {
-        Self { server: MaybeUninit::uninit(), occupied: AtomicBool::new(false) }
+        Self {
+            server: MaybeUninit::uninit(),
+            occupied: AtomicBool::new(false),
+        }
     }
 }
 
@@ -373,19 +389,23 @@ unsafe impl Sync for RpcServerTable {}
 impl RpcServerTable {
     const fn new() -> Self {
         const EMPTY: RpcServerSlot = RpcServerSlot::empty();
-        Self { slots: [EMPTY; MAX_RPC_SERVERS], count: AtomicU32::new(0) }
+        Self {
+            slots: [EMPTY; MAX_RPC_SERVERS],
+            count: AtomicU32::new(0),
+        }
     }
 
     fn alloc(&self, id: u32) -> Option<usize> {
         for i in 0..MAX_RPC_SERVERS {
             if !self.slots[i].occupied.load(Ordering::Relaxed) {
-                if self.slots[i].occupied.compare_exchange(
-                    false, true, Ordering::AcqRel, Ordering::Relaxed,
-                ).is_ok() {
+                if self.slots[i]
+                    .occupied
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
                     // SAFETY: CAS AcqRel garantit l'exclusivité; server MaybeUninit<RpcServer> write-once.
                     unsafe {
-                        (self.slots[i].server.as_ptr() as *mut RpcServer)
-                            .write(RpcServer::new(id));
+                        (self.slots[i].server.as_ptr() as *mut RpcServer).write(RpcServer::new(id));
                     }
                     self.count.fetch_add(1, Ordering::Relaxed);
                     return Some(i);
@@ -396,17 +416,27 @@ impl RpcServerTable {
     }
 
     fn get(&self, idx: usize) -> Option<&RpcServer> {
-        if idx >= MAX_RPC_SERVERS { return None; }
-        if !self.slots[idx].occupied.load(Ordering::Acquire) { return None; }
+        if idx >= MAX_RPC_SERVERS {
+            return None;
+        }
+        if !self.slots[idx].occupied.load(Ordering::Acquire) {
+            return None;
+        }
         Some(unsafe { &*self.slots[idx].server.as_ptr() })
     }
 
     fn free(&self, idx: usize) -> bool {
-        if idx >= MAX_RPC_SERVERS { return false; }
-        if let Some(s) = self.get(idx) { s.stop(); }
-        if self.slots[idx].occupied.compare_exchange(
-            true, false, Ordering::AcqRel, Ordering::Relaxed,
-        ).is_ok() {
+        if idx >= MAX_RPC_SERVERS {
+            return false;
+        }
+        if let Some(s) = self.get(idx) {
+            s.stop();
+        }
+        if self.slots[idx]
+            .occupied
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
             self.count.fetch_sub(1, Ordering::Relaxed);
             true
         } else {
@@ -434,7 +464,10 @@ pub fn rpc_server_register(
     method_id: MethodId,
     handler: RpcHandlerFn,
 ) -> Result<(), IpcError> {
-    RPC_SERVER_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?.register(method_id, handler)
+    RPC_SERVER_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)?
+        .register(method_id, handler)
 }
 
 /// Dispatche un appel RPC entrant.
@@ -443,7 +476,10 @@ pub fn rpc_server_dispatch(
     call_buf: &[u8],
     reply_buf: &mut [u8],
 ) -> Result<usize, IpcError> {
-    RPC_SERVER_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?.dispatch(call_buf, reply_buf)
+    RPC_SERVER_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)?
+        .dispatch(call_buf, reply_buf)
 }
 
 /// Arrête et détruit un serveur.

@@ -58,9 +58,15 @@ fn dispatch(request: &MemoryRequest) -> MemoryReply {
         MEMORY_MSG_FREE => service.handle_free(request.sender_pid, &request.payload),
         MEMORY_MSG_PROTECT => service.handle_protect(request.sender_pid, &request.payload),
         MEMORY_MSG_QUERY => service.handle_query(request.sender_pid, &request.payload),
-        MEMORY_MSG_SHM_CREATE => shm_server::handle_create(&mut service, request.sender_pid, &request.payload),
-        MEMORY_MSG_SHM_ATTACH => shm_server::handle_attach(&mut service, request.sender_pid, &request.payload),
-        MEMORY_MSG_SHM_DESTROY => shm_server::handle_destroy(&mut service, request.sender_pid, &request.payload),
+        MEMORY_MSG_SHM_CREATE => {
+            shm_server::handle_create(&mut service, request.sender_pid, &request.payload)
+        }
+        MEMORY_MSG_SHM_ATTACH => {
+            shm_server::handle_attach(&mut service, request.sender_pid, &request.payload)
+        }
+        MEMORY_MSG_SHM_DESTROY => {
+            shm_server::handle_destroy(&mut service, request.sender_pid, &request.payload)
+        }
         MEMORY_MSG_QUOTA_SET => service.handle_quota_set(request.sender_pid, &request.payload),
         MEMORY_MSG_QUOTA_QUERY => service.handle_quota_query(request.sender_pid, &request.payload),
         _ => MemoryReply::error(exo_syscall_abi::EINVAL),
@@ -71,6 +77,8 @@ fn dispatch(request: &MemoryRequest) -> MemoryReply {
 fn panic(_info: &PanicInfo) -> ! {
     loop {
         // SAFETY: panic terminale pour un serveur no_std monothread.
-        unsafe { core::arch::asm!("hlt", options(nostack, nomem)); }
+        unsafe {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
     }
 }

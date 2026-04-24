@@ -3,10 +3,10 @@
 // Module allocator — regroupe tous les allocateurs de pages physiques.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-pub mod numa_hints;
 pub mod bitmap;
 pub mod buddy;
 pub mod numa_aware;
+pub mod numa_hints;
 pub mod slab;
 pub mod slub;
 
@@ -14,39 +14,26 @@ pub mod slub;
 // RE-EXPORTS PRINCIPAUX
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use numa_hints::{
-    NumaNode, SizeClass,
-    numa_distance, cpu_numa_node,
-    set_numa_topology,
-};
+pub use numa_hints::{cpu_numa_node, numa_distance, set_numa_topology, NumaNode, SizeClass};
 
 pub use bitmap::{BitmapAllocator, BOOTSTRAP_BITMAP};
 
-pub use buddy::{
-    GlobalBuddyAllocator, BUDDY,
-    alloc_pages, free_pages, alloc_page, free_page,
-};
+pub use buddy::{alloc_page, alloc_pages, free_page, free_pages, GlobalBuddyAllocator, BUDDY};
 
 pub use numa_aware::{
-    NumaPolicy, NumaAllocContext, NumaAllocator, PageAllocator,
-    NUMA_ALLOCATOR, NUMA_STATS,
-    set_current_policy, get_current_policy,
+    get_current_policy, set_current_policy, NumaAllocContext, NumaAllocator, NumaPolicy,
+    PageAllocator, NUMA_ALLOCATOR, NUMA_STATS,
 };
 
 pub use slab::{
-    SlabCache, SlabCacheStats, SIZE_CLASSES, N_SIZE_CLASSES, SizeClassInfo,
-    size_class_for, SLAB_CACHES,
-    alloc as slab_alloc,
-    free  as slab_free,
-    init_all as slab_init_all,
-    register_slab_page_provider, SlabPageProvider,
+    alloc as slab_alloc, free as slab_free, init_all as slab_init_all, register_slab_page_provider,
+    size_class_for, SizeClassInfo, SlabCache, SlabCacheStats, SlabPageProvider, N_SIZE_CLASSES,
+    SIZE_CLASSES, SLAB_CACHES,
 };
 
 pub use slub::{
-    SlubCache, SlubCacheStats, SLUB_CACHES,
-    alloc as slub_alloc,
-    free  as slub_free,
-    init_all as slub_init_all,
+    alloc as slub_alloc, free as slub_free, init_all as slub_init_all, SlubCache, SlubCacheStats,
+    SLUB_CACHES,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -65,12 +52,16 @@ use crate::memory::core::PhysAddr;
 /// 6. NumaAllocator   (après topologie ACPI)
 pub fn init_phase1_bitmap(phys_start: PhysAddr, phys_end: PhysAddr) {
     // SAFETY: Single-CPU, avant init SMP, appelé une seule fois.
-    unsafe { BOOTSTRAP_BITMAP.init(phys_start, phys_end); }
+    unsafe {
+        BOOTSTRAP_BITMAP.init(phys_start, phys_end);
+    }
 }
 
 pub fn init_phase2_free_region(start: PhysAddr, end: PhysAddr) {
     // SAFETY: Single-CPU, appelé depuis le parser E820/UEFI map.
-    unsafe { BOOTSTRAP_BITMAP.add_free_region(start, end); }
+    unsafe {
+        BOOTSTRAP_BITMAP.add_free_region(start, end);
+    }
 }
 
 /// Initialise la zone DMA32 du buddy allocator (couvre la RAM < 4 GiB).
@@ -85,17 +76,25 @@ pub fn init_phase2_free_region(start: PhysAddr, end: PhysAddr) {
 /// # Safety
 /// - Single-CPU, physmap opérationnelle, appelé une seule fois.
 pub unsafe fn init_phase2b_buddy_zone(
-    phys_start:   PhysAddr,
-    phys_end:     PhysAddr,
-    bitmap_buf:   *mut u64,
+    phys_start: PhysAddr,
+    phys_end: PhysAddr,
+    bitmap_buf: *mut u64,
     bitmap_words: usize,
 ) {
-    use crate::memory::core::ZoneType;
     use crate::memory::core::constants::ZONE_DMA32_END;
+    use crate::memory::core::ZoneType;
     // Clamp à la limite DMA32 (< 4 GiB)
     let dma32_end = PhysAddr::new(phys_end.as_u64().min(ZONE_DMA32_END as u64));
-    if phys_start >= dma32_end { return; }
-    BUDDY.init_zone(ZoneType::Dma32, phys_start, dma32_end, bitmap_buf, bitmap_words);
+    if phys_start >= dma32_end {
+        return;
+    }
+    BUDDY.init_zone(
+        ZoneType::Dma32,
+        phys_start,
+        dma32_end,
+        bitmap_buf,
+        bitmap_words,
+    );
     BUDDY.mark_initialized();
 }
 

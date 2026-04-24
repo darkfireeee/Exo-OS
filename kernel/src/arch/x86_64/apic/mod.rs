@@ -8,16 +8,16 @@
 //! - `x2apic`     : détection + bascule x2APIC
 //! - `ipi`        : envoi d'IPIs vers les autres CPUs
 
-pub mod local_apic;
 pub mod io_apic;
-pub mod x2apic;
 pub mod ipi;
+pub mod local_apic;
+pub mod x2apic;
 
-pub use local_apic::{init_local_apic, lapic_id, ApicMode};
 pub use ipi::{
-    send_ipi_wakeup, send_ipi_reschedule, send_ipi_tlb_shootdown,
-    send_ipi_cpu_hotplug, broadcast_ipi_panic,
+    broadcast_ipi_panic, send_ipi_cpu_hotplug, send_ipi_reschedule, send_ipi_tlb_shootdown,
+    send_ipi_wakeup,
 };
+pub use local_apic::{init_local_apic, lapic_id, ApicMode};
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -55,9 +55,9 @@ pub fn init_apic_system() {
             APIC_MODE.store(ApicMode::X2Apic as u8, Ordering::Release);
         }
         ApicMode::XApic => {
-        // init_local_apic() : active xAPIC + masque TOUS les LVT (LINT0, THERMAL, PERF, CMCI,
-        // ERROR). Sans cela, le BIOS QEMU peut laisser LINT0 avec vecteur 0x8E non-masqué :
-        // quand le PIC envoie une IRQ, LINT0 délivre vecteur 0x8E → IDT[0x8E] absent → #GP.
+            // init_local_apic() : active xAPIC + masque TOUS les LVT (LINT0, THERMAL, PERF, CMCI,
+            // ERROR). Sans cela, le BIOS QEMU peut laisser LINT0 avec vecteur 0x8E non-masqué :
+            // quand le PIC envoie une IRQ, LINT0 délivre vecteur 0x8E → IDT[0x8E] absent → #GP.
             local_apic::init_local_apic();
             APIC_MODE.store(ApicMode::XApic as u8, Ordering::Release);
         }

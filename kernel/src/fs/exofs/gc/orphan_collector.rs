@@ -24,7 +24,6 @@
 //   DAG-01 : pas d'import de ipc/, process/, arch/
 // ==============================================================================
 
-
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::fmt;
@@ -56,23 +55,23 @@ pub const ORPHAN_BATCH_SIZE: usize = 256;
 #[derive(Debug, Default, Clone)]
 pub struct OrphanResult {
     /// Objets totaux analyses.
-    pub objects_analyzed:    u64,
+    pub objects_analyzed: u64,
     /// Objets atteignables depuis les EpochRoots.
-    pub objects_reachable:   u64,
+    pub objects_reachable: u64,
     /// Objets orphelins detectes.
-    pub objects_orphaned:    u64,
+    pub objects_orphaned: u64,
     /// Blobs orphelins detectes.
-    pub blobs_orphaned:      u64,
+    pub blobs_orphaned: u64,
     /// Blobs envoyes en suppression differee.
-    pub blobs_deferred:      u64,
+    pub blobs_deferred: u64,
     /// Blobs sautes car EPOCH_PINNED (GC-07).
-    pub pinned_skipped:      u64,
+    pub pinned_skipped: u64,
     /// Octets liberes (differes).
-    pub bytes_deferred:      u64,
+    pub bytes_deferred: u64,
     /// Erreurs de file pleine.
-    pub deferred_full_errs:  u64,
+    pub deferred_full_errs: u64,
     /// Phase complete.
-    pub phase_complete:      bool,
+    pub phase_complete: bool,
 }
 
 impl fmt::Display for OrphanResult {
@@ -97,7 +96,7 @@ impl fmt::Display for OrphanResult {
 
 struct OrphanCollectorInner {
     total_result: OrphanResult,
-    pass_count:   u64,
+    pass_count: u64,
 }
 
 // ==============================================================================
@@ -114,15 +113,15 @@ impl OrphanCollector {
         Self {
             inner: SpinLock::new(OrphanCollectorInner {
                 total_result: OrphanResult {
-                    objects_analyzed:   0,
-                    objects_reachable:  0,
-                    objects_orphaned:   0,
-                    blobs_orphaned:     0,
-                    blobs_deferred:     0,
-                    pinned_skipped:     0,
-                    bytes_deferred:     0,
+                    objects_analyzed: 0,
+                    objects_reachable: 0,
+                    objects_orphaned: 0,
+                    blobs_orphaned: 0,
+                    blobs_deferred: 0,
+                    pinned_skipped: 0,
+                    bytes_deferred: 0,
                     deferred_full_errs: 0,
-                    phase_complete:     false,
+                    phase_complete: false,
                 },
                 pass_count: 0,
             }),
@@ -203,13 +202,11 @@ impl OrphanCollector {
                     break;
                 }
 
-                let (create_epoch, phys_size) =
-                    BLOB_REFCOUNT.get_epoch_and_size(&blob_id);
+                let (create_epoch, phys_size) = BLOB_REFCOUNT.get_epoch_and_size(&blob_id);
 
                 // GC-07 : ne pas supprimer si epoch pinnee.
                 if is_epoch_pinned(create_epoch) {
-                    result.pinned_skipped =
-                        result.pinned_skipped.saturating_add(1);
+                    result.pinned_skipped = result.pinned_skipped.saturating_add(1);
                     processed = processed.saturating_add(1);
                     continue;
                 }
@@ -218,19 +215,15 @@ impl OrphanCollector {
                 match BLOB_REFCOUNT.dec(&blob_id, current_epoch) {
                     Ok(deferred) => {
                         if deferred.0 == 0 {
-                            result.blobs_deferred =
-                                result.blobs_deferred.saturating_add(1);
-                            result.bytes_deferred =
-                                result.bytes_deferred.saturating_add(phys_size);
+                            result.blobs_deferred = result.blobs_deferred.saturating_add(1);
+                            result.bytes_deferred = result.bytes_deferred.saturating_add(phys_size);
                         }
                     }
                     Err(ExofsError::Resource) => {
-                        result.deferred_full_errs =
-                            result.deferred_full_errs.saturating_add(1);
+                        result.deferred_full_errs = result.deferred_full_errs.saturating_add(1);
                     }
                     Err(_) => {
-                        result.deferred_full_errs =
-                            result.deferred_full_errs.saturating_add(1);
+                        result.deferred_full_errs = result.deferred_full_errs.saturating_add(1);
                     }
                 }
 
@@ -254,21 +247,15 @@ impl OrphanCollector {
             let mut g = self.inner.lock();
             g.pass_count = g.pass_count.saturating_add(1);
             let t = &mut g.total_result;
-            t.objects_analyzed = t.objects_analyzed
-                .saturating_add(result.objects_analyzed);
-            t.objects_reachable = t.objects_reachable
-                .saturating_add(result.objects_reachable);
-            t.objects_orphaned = t.objects_orphaned
-                .saturating_add(result.objects_orphaned);
-            t.blobs_orphaned = t.blobs_orphaned
-                .saturating_add(result.blobs_orphaned);
-            t.blobs_deferred = t.blobs_deferred
-                .saturating_add(result.blobs_deferred);
-            t.pinned_skipped = t.pinned_skipped
-                .saturating_add(result.pinned_skipped);
-            t.bytes_deferred = t.bytes_deferred
-                .saturating_add(result.bytes_deferred);
-            t.deferred_full_errs = t.deferred_full_errs
+            t.objects_analyzed = t.objects_analyzed.saturating_add(result.objects_analyzed);
+            t.objects_reachable = t.objects_reachable.saturating_add(result.objects_reachable);
+            t.objects_orphaned = t.objects_orphaned.saturating_add(result.objects_orphaned);
+            t.blobs_orphaned = t.blobs_orphaned.saturating_add(result.blobs_orphaned);
+            t.blobs_deferred = t.blobs_deferred.saturating_add(result.blobs_deferred);
+            t.pinned_skipped = t.pinned_skipped.saturating_add(result.pinned_skipped);
+            t.bytes_deferred = t.bytes_deferred.saturating_add(result.bytes_deferred);
+            t.deferred_full_errs = t
+                .deferred_full_errs
                 .saturating_add(result.deferred_full_errs);
         }
 
@@ -280,10 +267,7 @@ impl OrphanCollector {
     /// Identifie les BlobIds non referencies par aucun objet ni sous-blob connu.
     ///
     /// Utile pour nettoyer les blobs qui ont ete desattaches de tous leurs objets.
-    pub fn find_unreferenced_blobs(
-        &self,
-        current_epoch: EpochId,
-    ) -> ExofsResult<u64> {
+    pub fn find_unreferenced_blobs(&self, current_epoch: EpochId) -> ExofsResult<u64> {
         let all_blobs: Vec<BlobId> = REFERENCE_TRACKER.all_blobs();
         let mut freed: u64 = 0;
 
@@ -293,8 +277,7 @@ impl OrphanCollector {
                 continue;
             }
 
-            let (create_epoch, _phys_size) =
-                BLOB_REFCOUNT.get_epoch_and_size(&blob_id);
+            let (create_epoch, _phys_size) = BLOB_REFCOUNT.get_epoch_and_size(&blob_id);
 
             if is_epoch_pinned(create_epoch) {
                 continue;
@@ -347,12 +330,18 @@ mod tests {
     use crate::fs::exofs::core::{BlobId, ObjectId};
     use crate::fs::exofs::gc::epoch_scanner::EpochScanSnapshot;
 
-    #[allow(dead_code)] fn oid(b: u8) -> ObjectId {
-        let mut a = [0u8; 32]; a[0] = b; ObjectId(a)
+    #[allow(dead_code)]
+    fn oid(b: u8) -> ObjectId {
+        let mut a = [0u8; 32];
+        a[0] = b;
+        ObjectId(a)
     }
 
-    #[allow(dead_code)] fn bid(b: u8) -> BlobId {
-        let mut a = [0u8; 32]; a[0] = b; BlobId(a)
+    #[allow(dead_code)]
+    fn bid(b: u8) -> BlobId {
+        let mut a = [0u8; 32];
+        a[0] = b;
+        BlobId(a)
     }
 
     #[test]
@@ -367,15 +356,15 @@ mod tests {
     #[test]
     fn test_orphan_display() {
         let r = OrphanResult {
-            objects_analyzed:   10,
-            objects_reachable:  7,
-            objects_orphaned:   3,
-            blobs_orphaned:     5,
-            blobs_deferred:     4,
-            pinned_skipped:     1,
-            bytes_deferred:     4096,
+            objects_analyzed: 10,
+            objects_reachable: 7,
+            objects_orphaned: 3,
+            blobs_orphaned: 5,
+            blobs_deferred: 4,
+            pinned_skipped: 1,
+            bytes_deferred: 4096,
             deferred_full_errs: 0,
-            phase_complete:     true,
+            phase_complete: true,
         };
         let s = alloc::format!("{}", r);
         assert!(s.contains("orph_obj=3"));

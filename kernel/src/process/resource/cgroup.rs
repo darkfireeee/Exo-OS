@@ -4,9 +4,8 @@
 // cgroups v2 (basique) — Exo-OS Couche 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use crate::scheduler::sync::spinlock::SpinLock;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Nombre maximum de cgroups.
 const MAX_CGROUPS: usize = 256;
@@ -27,15 +26,19 @@ pub enum CgroupController {
 #[repr(C)]
 pub struct CpuPolicy {
     /// Quota CPU en µs par période (0 = illimité).
-    pub quota_us:  u64,
+    pub quota_us: u64,
     /// Période de quota (µs).
     pub period_us: u64,
     /// Poids relatif (1..10000 similaire CFS).
-    pub weight:    u32,
+    pub weight: u32,
 }
 
 impl CpuPolicy {
-    const DEFAULT: Self = Self { quota_us: 0, period_us: 100_000, weight: 100 };
+    const DEFAULT: Self = Self {
+        quota_us: 0,
+        period_us: 100_000,
+        weight: 100,
+    };
 }
 
 /// Politiques mémoire pour un cgroup.
@@ -43,13 +46,16 @@ impl CpuPolicy {
 #[repr(C)]
 pub struct MemPolicy {
     /// Limite mémoire (octets, 0 = illimité).
-    pub limit_bytes:  u64,
+    pub limit_bytes: u64,
     /// Limite swap (octets).
-    pub swap_bytes:   u64,
+    pub swap_bytes: u64,
 }
 
 impl MemPolicy {
-    const DEFAULT: Self = Self { limit_bytes: 0, swap_bytes: 0 };
+    const DEFAULT: Self = Self {
+        limit_bytes: 0,
+        swap_bytes: 0,
+    };
 }
 
 /// Politiques PID pour un cgroup.
@@ -57,7 +63,7 @@ impl MemPolicy {
 #[repr(C)]
 pub struct PidPolicy {
     /// Nombre max de processus (0 = illimité).
-    pub max:     u32,
+    pub max: u32,
 }
 
 impl PidPolicy {
@@ -68,44 +74,44 @@ impl PidPolicy {
 #[repr(C)]
 pub struct Cgroup {
     /// Identifiant unique (index dans la table).
-    pub id:          u32,
+    pub id: u32,
     /// ID du cgroup parent (0 = racine).
-    pub parent_id:   u32,
+    pub parent_id: u32,
     /// Nombre de processus membres.
-    pub pop:         AtomicU32,
+    pub pop: AtomicU32,
     /// Compteur de références.
-    pub refcount:    AtomicU32,
+    pub refcount: AtomicU32,
     /// Validité.
-    pub valid:       AtomicU32,
+    pub valid: AtomicU32,
     /// Verrou de configuration.
-    pub lock:        SpinLock<()>,
+    pub lock: SpinLock<()>,
     /// Politique CPU.
-    pub cpu:         CpuPolicy,
+    pub cpu: CpuPolicy,
     /// Politique mémoire.
-    pub mem:         MemPolicy,
+    pub mem: MemPolicy,
     /// Politique PID.
-    pub pids:        PidPolicy,
+    pub pids: PidPolicy,
     // Compteurs d'utilisation
-    pub cpu_time_us:    AtomicU64,
-    pub mem_usage:      AtomicU64,
-    pub pid_count:      AtomicU32,
+    pub cpu_time_us: AtomicU64,
+    pub mem_usage: AtomicU64,
+    pub pid_count: AtomicU32,
 }
 
 impl Cgroup {
     const fn empty() -> Self {
         Self {
-            id:          0,
-            parent_id:   0,
-            pop:         AtomicU32::new(0),
-            refcount:    AtomicU32::new(0),
-            valid:       AtomicU32::new(0),
-            lock:        SpinLock::new(()),
-            cpu:         CpuPolicy::DEFAULT,
-            mem:         MemPolicy::DEFAULT,
-            pids:        PidPolicy::DEFAULT,
+            id: 0,
+            parent_id: 0,
+            pop: AtomicU32::new(0),
+            refcount: AtomicU32::new(0),
+            valid: AtomicU32::new(0),
+            lock: SpinLock::new(()),
+            cpu: CpuPolicy::DEFAULT,
+            mem: MemPolicy::DEFAULT,
+            pids: PidPolicy::DEFAULT,
             cpu_time_us: AtomicU64::new(0),
-            mem_usage:   AtomicU64::new(0),
-            pid_count:   AtomicU32::new(0),
+            mem_usage: AtomicU64::new(0),
+            pid_count: AtomicU32::new(0),
         }
     }
 }
@@ -115,7 +121,7 @@ unsafe impl Sync for Cgroup {}
 /// Table globale des cgroups.
 pub struct CgroupTable {
     slots: [Cgroup; MAX_CGROUPS],
-    lock:  SpinLock<()>,
+    lock: SpinLock<()>,
     count: AtomicU32,
 }
 
@@ -126,7 +132,7 @@ impl CgroupTable {
         const EMPTY: Cgroup = Cgroup::empty();
         Self {
             slots: [EMPTY; MAX_CGROUPS],
-            lock:  SpinLock::new(()),
+            lock: SpinLock::new(()),
             count: AtomicU32::new(0),
         }
     }
@@ -144,11 +150,11 @@ impl CgroupTable {
                 // SAFETY: write_lock exclusif; slot libre (valid==0), accessible seulement après store(valid,1).
                 unsafe {
                     let s = slot as *const Cgroup as *mut Cgroup;
-                    (*s).id        = idx as u32;
+                    (*s).id = idx as u32;
                     (*s).parent_id = parent_id;
-                    (*s).cpu       = CpuPolicy::DEFAULT;
-                    (*s).mem       = MemPolicy::DEFAULT;
-                    (*s).pids      = PidPolicy::DEFAULT;
+                    (*s).cpu = CpuPolicy::DEFAULT;
+                    (*s).mem = MemPolicy::DEFAULT;
+                    (*s).pids = PidPolicy::DEFAULT;
                 }
                 slot.pop.store(0, Ordering::Release);
                 slot.refcount.store(1, Ordering::Release);
@@ -166,9 +172,15 @@ impl CgroupTable {
     /// Accède à un cgroup par ID.
     pub fn get(&self, id: u32) -> Option<&Cgroup> {
         let id = id as usize;
-        if id >= MAX_CGROUPS { return None; }
+        if id >= MAX_CGROUPS {
+            return None;
+        }
         let slot = &self.slots[id];
-        if slot.valid.load(Ordering::Acquire) == 1 { Some(slot) } else { None }
+        if slot.valid.load(Ordering::Acquire) == 1 {
+            Some(slot)
+        } else {
+            None
+        }
     }
 
     /// Ajoute un processus à un cgroup.
@@ -191,7 +203,9 @@ impl CgroupTable {
         if let Some(cg) = self.get(cg_id) {
             cg.pop.fetch_sub(1, Ordering::Relaxed);
             let c = cg.pid_count.load(Ordering::Acquire);
-            if c > 0 { cg.pid_count.fetch_sub(1, Ordering::Relaxed); }
+            if c > 0 {
+                cg.pid_count.fetch_sub(1, Ordering::Relaxed);
+            }
         }
     }
 
@@ -225,4 +239,6 @@ pub fn init() {
 }
 
 /// Accède à la table globale.
-pub fn cgroup_table() -> &'static CgroupTable { &CGROUP_TABLE }
+pub fn cgroup_table() -> &'static CgroupTable {
+    &CGROUP_TABLE
+}

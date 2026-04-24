@@ -102,7 +102,10 @@ impl StatsCollector {
     }
 
     pub fn snapshot(&self, tid: u32) -> Option<StatsSnapshot> {
-        let record = self.records.iter().find(|entry| entry.active && entry.tid == tid)?;
+        let record = self
+            .records
+            .iter()
+            .find(|entry| entry.active && entry.tid == tid)?;
         Some(StatsSnapshot {
             pid: record.pid,
             tid: record.tid,
@@ -122,7 +125,11 @@ impl StatsCollector {
     }
 
     fn ensure_slot(&mut self, pid: u32, tid: u32) -> usize {
-        if let Some(idx) = self.records.iter().position(|entry| entry.active && entry.tid == tid) {
+        if let Some(idx) = self
+            .records
+            .iter()
+            .position(|entry| entry.active && entry.tid == tid)
+        {
             return idx;
         }
         if let Some(idx) = self.records.iter().position(|entry| !entry.active) {

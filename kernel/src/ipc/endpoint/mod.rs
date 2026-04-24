@@ -2,15 +2,19 @@
 //
 // Module endpoint IPC.
 
-pub mod descriptor;
-pub mod registry;
 pub mod connection;
+pub mod descriptor;
 pub mod lifecycle;
+pub mod registry;
 
-pub use descriptor::{EndpointDesc, EndpointName, EndpointState, PendingConnection};
-pub use registry::{
-    NamedEndpointRegistry, ENDPOINT_REGISTRY,
-    register_endpoint, lookup_endpoint, unregister_endpoint,
+pub use connection::{
+    do_accept, do_connect, AcceptResult, ActiveConnection, ConnectResult, HandshakeMsg,
 };
-pub use connection::{HandshakeMsg, ActiveConnection, ConnectResult, AcceptResult, do_connect, do_accept};
-pub use lifecycle::{endpoint_create, endpoint_listen, endpoint_close, endpoint_destroy, active_endpoint_count};
+pub use descriptor::{EndpointDesc, EndpointName, EndpointState, PendingConnection};
+pub use lifecycle::{
+    active_endpoint_count, endpoint_close, endpoint_create, endpoint_destroy, endpoint_listen,
+};
+pub use registry::{
+    lookup_endpoint, register_endpoint, unregister_endpoint, NamedEndpointRegistry,
+    ENDPOINT_REGISTRY,
+};

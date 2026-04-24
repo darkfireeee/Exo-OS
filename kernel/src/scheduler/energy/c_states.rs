@@ -16,8 +16,8 @@
 //   C3 = deep sleep (centaines de µs — interdit en présence de threads RT)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU8, Ordering};
 use crate::scheduler::smp::topology::MAX_CPUS;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Niveaux C-state
@@ -26,10 +26,10 @@ use crate::scheduler::smp::topology::MAX_CPUS;
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CState {
-    C0 = 0,   // Actif
-    C1 = 1,   // HLT
-    C2 = 2,   // MWAIT/light
-    C3 = 3,   // Deep sleep
+    C0 = 0, // Actif
+    C1 = 1, // HLT
+    C2 = 2, // MWAIT/light
+    C3 = 3, // Deep sleep
 }
 
 impl CState {
@@ -37,9 +37,9 @@ impl CState {
     pub fn exit_latency_ns(self) -> u64 {
         match self {
             CState::C0 => 0,
-            CState::C1 => 1_000,        // 1µs
-            CState::C2 => 10_000,       // 10µs
-            CState::C3 => 200_000,      // 200µs
+            CState::C1 => 1_000,   // 1µs
+            CState::C2 => 10_000,  // 10µs
+            CState::C3 => 200_000, // 200µs
         }
     }
 }
@@ -91,7 +91,9 @@ pub fn release_rt_constraint(cpu: usize) {
 
 /// Retourne le C-state maximum autorisé sur le CPU `cpu`.
 pub fn max_allowed_cstate(cpu: usize) -> CState {
-    if cpu >= MAX_CPUS { return CState::C1; }
+    if cpu >= MAX_CPUS {
+        return CState::C1;
+    }
     match CSTATE_MAX[cpu].load(Ordering::Acquire) {
         0 => CState::C0,
         1 => CState::C1,
@@ -113,7 +115,9 @@ pub fn select_cstate(cpu: usize, idle_ns: u64) -> CState {
     let max = max_allowed_cstate(cpu);
     let candidates = [CState::C3, CState::C2, CState::C1, CState::C0];
     for cs in candidates {
-        if cs > max { continue; }
+        if cs > max {
+            continue;
+        }
         // Entrer dans ce C-state uniquement si on économise au moins 2× la latence de sortie.
         let threshold = cs.exit_latency_ns().saturating_mul(2);
         if idle_ns >= threshold {
@@ -142,7 +146,7 @@ pub unsafe fn enter_cstate(cs: CState) {
             let hint: u32 = match cs {
                 CState::C2 => 0x10, // C2 sub-state 0
                 CState::C3 => 0x20, // C3 sub-state 0
-                _           => 0x00,
+                _ => 0x00,
             };
             // MONITOR/MWAIT : surveille une zone mémoire.
             // En pratique, on surveille get_current_tcb().need_resched.

@@ -39,14 +39,14 @@ pub const MAX_IPC_EDGES: usize = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum SyscallCategory {
-    File     = 0,
-    Memory   = 1,
-    Network  = 2,
-    Process  = 3,
-    Signal   = 4,
-    Ipc      = 5,
-    Time     = 6,
-    Other    = 7,
+    File = 0,
+    Memory = 1,
+    Network = 2,
+    Process = 3,
+    Signal = 4,
+    Ipc = 5,
+    Time = 6,
+    Other = 7,
 }
 
 impl SyscallCategory {
@@ -54,21 +54,21 @@ impl SyscallCategory {
     /// Classification Linux/x86_64 simplifiée.
     pub fn from_syscall_nr(nr: u64) -> SyscallCategory {
         match nr {
-            0..=19   => SyscallCategory::File,      // read, write, open, close, etc.
-            20..=39  => SyscallCategory::File,      // more file ops
-            40..=59  => SyscallCategory::Process,   // pid, execve, etc.
-            60..=79  => SyscallCategory::File,      // more file ops
-            80..=99  => SyscallCategory::File,      // more file ops
-            100..=119 => SyscallCategory::File,     // more file ops
-            120..=139 => SyscallCategory::Process,  // clone, wait, etc.
-            140..=159 => SyscallCategory::File,     // more file ops
-            160..=179 => SyscallCategory::Ipc,      // ipc, shm, etc.
-            200..=219 => SyscallCategory::File,     // more file ops
-            220..=239 => SyscallCategory::File,     // more file ops
-            240..=259 => SyscallCategory::File,     // more file ops
-            260..=279 => SyscallCategory::Network,  // socket, bind, etc.
-            280..=299 => SyscallCategory::Ipc,      // ipc extended
-            300..=319 => SyscallCategory::Ipc,      // ipc router
+            0..=19 => SyscallCategory::File,  // read, write, open, close, etc.
+            20..=39 => SyscallCategory::File, // more file ops
+            40..=59 => SyscallCategory::Process, // pid, execve, etc.
+            60..=79 => SyscallCategory::File, // more file ops
+            80..=99 => SyscallCategory::File, // more file ops
+            100..=119 => SyscallCategory::File, // more file ops
+            120..=139 => SyscallCategory::Process, // clone, wait, etc.
+            140..=159 => SyscallCategory::File, // more file ops
+            160..=179 => SyscallCategory::Ipc, // ipc, shm, etc.
+            200..=219 => SyscallCategory::File, // more file ops
+            220..=239 => SyscallCategory::File, // more file ops
+            240..=259 => SyscallCategory::File, // more file ops
+            260..=279 => SyscallCategory::Network, // socket, bind, etc.
+            280..=299 => SyscallCategory::Ipc, // ipc extended
+            300..=319 => SyscallCategory::Ipc, // ipc router
             _ => SyscallCategory::Other,
         }
     }
@@ -542,7 +542,10 @@ pub fn record_memory_access(pid: u32, addr: u64, size: u64, access_type: u8, pro
                 2 => region.exec_count += 1,
                 _ => region.read_count += 1,
             }
-            profile.memory_region_count = profile.memory_region_count.saturating_add(1).min(MAX_MEMORY_REGIONS as u8);
+            profile.memory_region_count = profile
+                .memory_region_count
+                .saturating_add(1)
+                .min(MAX_MEMORY_REGIONS as u8);
             return;
         }
 
@@ -626,7 +629,10 @@ pub fn record_network_activity(
             entry.bytes_received = bytes_received;
             entry.connection_count = 1;
             entry.active = true;
-            profile.network_entry_count = profile.network_entry_count.saturating_add(1).min(MAX_NETWORK_ENTRIES as u8);
+            profile.network_entry_count = profile
+                .network_entry_count
+                .saturating_add(1)
+                .min(MAX_NETWORK_ENTRIES as u8);
             TOTAL_NETWORK_EVENTS.fetch_add(1, Ordering::Relaxed);
             return;
         }
@@ -696,7 +702,10 @@ pub fn record_ipc_call(pid: u32, target_pid: u32, msg_type: u8, bytes: u64) {
             node.msg_sent = 1;
             node.bytes_transferred = bytes;
             node.valid = true;
-            profile.ipc_node_count = profile.ipc_node_count.saturating_add(1).min(MAX_IPC_NODES as u8);
+            profile.ipc_node_count = profile
+                .ipc_node_count
+                .saturating_add(1)
+                .min(MAX_IPC_NODES as u8);
             node_found = true;
             break;
         }
@@ -737,7 +746,10 @@ pub fn record_ipc_call(pid: u32, target_pid: u32, msg_type: u8, bytes: u64) {
             edge.frequency = 1;
             edge.msg_type = msg_type;
             edge.valid = true;
-            profile.ipc_edge_count = profile.ipc_edge_count.saturating_add(1).min(MAX_IPC_EDGES as u8);
+            profile.ipc_edge_count = profile
+                .ipc_edge_count
+                .saturating_add(1)
+                .min(MAX_IPC_EDGES as u8);
             edge_found = true;
             break;
         }

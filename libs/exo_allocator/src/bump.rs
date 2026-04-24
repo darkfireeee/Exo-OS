@@ -25,7 +25,7 @@ impl BumpAllocator {
             offset: AtomicUsize::new(0),
         }
     }
-    
+
     /// Create bump allocator with capacity
     pub const fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -34,7 +34,7 @@ impl BumpAllocator {
             offset: AtomicUsize::new(0),
         }
     }
-    
+
     /// Initialize with memory region
     ///
     /// # Safety
@@ -51,22 +51,22 @@ impl BumpAllocator {
     /// All allocations must be dropped before allocator reset
     pub unsafe fn alloc(&self, size: usize, align: usize) -> Result<NonNull<u8>> {
         let base = self.base.ok_or(AllocError::InvalidState)?;
-        
+
         // Align current offset
         let current = self.offset.load(Ordering::Acquire);
         let aligned = align_up(current, align);
         let new_offset = aligned.checked_add(size).ok_or(AllocError::Overflow)?;
-        
+
         if new_offset > self.capacity {
             return Err(AllocError::OutOfMemory);
         }
-        
+
         // Try to claim this range (CAS loop for thread safety)
         match self.offset.compare_exchange_weak(
             current,
             new_offset,
             Ordering::Release,
-            Ordering::Acquire
+            Ordering::Acquire,
         ) {
             Ok(_) => {
                 let ptr = unsafe { base.as_ptr().add(aligned) };
@@ -78,15 +78,10 @@ impl BumpAllocator {
             }
         }
     }
-    
+
     /// Allocate typed value
     pub fn alloc_value<T>(&self, value: T) -> Result<&mut T> {
-        let ptr = unsafe {
-            self.alloc(
-                core::mem::size_of::<T>(),
-                core::mem::align_of::<T>()
-            )?
-        };
+        let ptr = unsafe { self.alloc(core::mem::size_of::<T>(), core::mem::align_of::<T>())? };
         let typed = ptr.cast::<T>().as_ptr();
         unsafe {
             ptr::write(typed, value);
@@ -105,7 +100,7 @@ impl BumpAllocator {
             Ok(core::slice::from_raw_parts_mut(typed, data.len()))
         }
     }
-    
+
     /// Allocate string slice
     pub fn alloc_str(&self, s: &str) -> Result<&mut str> {
         let bytes = self.alloc_slice(s.as_bytes())?;
@@ -129,12 +124,12 @@ impl BumpAllocator {
     pub const fn capacity(&self) -> usize {
         self.capacity
     }
-    
+
     /// Get available bytes
     pub fn available(&self) -> usize {
         self.capacity.saturating_sub(self.used())
     }
-    
+
     /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.used() == 0
@@ -158,40 +153,44 @@ mod tests {
     fn test_bump_basic() {
         let mut backing = vec![0u8; 1024];
         let base = NonNull::new(backing.as_mut_ptr()).unwrap();
-        
+
         let mut bump = BumpAllocator::new();
-        unsafe { bump.init(base, 1024); }
-        
+        unsafe {
+            bump.init(base, 1024);
+        }
+
         assert_eq!(bump.used(), 0);
         assert_eq!(bump.available(), 1024);
-        
+
         unsafe {
             let ptr1 = bump.alloc(64, 8).unwrap();
             assert_eq!(bump.used(), 64);
-            
+
             let ptr2 = bump.alloc(32, 8).unwrap();
             assert_eq!(bump.used(), 96);
-            
+
             bump.reset();
             assert_eq!(bump.used(), 0);
         }
     }
-    
+
     #[test]
     fn test_bump_typed() {
         let mut backing = vec![0u8; 1024];
         let base = NonNull::new(backing.as_mut_ptr()).unwrap();
-        
+
         let mut bump = BumpAllocator::new();
-        unsafe { bump.init(base, 1024); }
-        
+        unsafe {
+            bump.init(base, 1024);
+        }
+
         let val = bump.alloc_value(42u64).unwrap();
         assert_eq!(*val, 42);
-        
+
         let slice = bump.alloc_slice(&[1, 2, 3, 4, 5]).unwrap();
         assert_eq!(slice, &[1, 2, 3, 4, 5]);
     }
-    
+
     #[test]
     fn test_bump_creation() {
         let bump = BumpAllocator::with_capacity(4096);

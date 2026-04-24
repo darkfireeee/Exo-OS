@@ -28,11 +28,11 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CompressionType {
     /// Pas de compression.
-    None  = 0,
+    None = 0,
     /// LZ4 — rapide, bonne compression pour les données binaires.
-    Lz4   = 1,
+    Lz4 = 1,
     /// Zstd — meilleure compression, adapté au texte (source code, JSON...).
-    Zstd  = 2,
+    Zstd = 2,
 }
 
 impl CompressionType {
@@ -45,17 +45,21 @@ impl CompressionType {
         }
     }
 
-    pub fn to_u8(self) -> u8 { self as u8 }
+    pub fn to_u8(self) -> u8 {
+        self as u8
+    }
 
     pub fn name(self) -> &'static str {
         match self {
             Self::None => "none",
-            Self::Lz4  => "lz4",
+            Self::Lz4 => "lz4",
             Self::Zstd => "zstd",
         }
     }
 
-    pub fn is_compressed(self) -> bool { self != Self::None }
+    pub fn is_compressed(self) -> bool {
+        self != Self::None
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,21 +93,36 @@ pub enum ContentHint {
 /// Décision de compression + justification.
 #[derive(Clone, Debug)]
 pub struct CompressionDecision {
-    pub algorithm:  CompressionType,
-    pub reason:     &'static str,
-    pub hint_used:  ContentHint,
-    pub data_size:  u64,
+    pub algorithm: CompressionType,
+    pub reason: &'static str,
+    pub hint_used: ContentHint,
+    pub data_size: u64,
 }
 
 impl CompressionDecision {
     pub fn none(reason: &'static str, hint: ContentHint, size: u64) -> Self {
-        Self { algorithm: CompressionType::None, reason, hint_used: hint, data_size: size }
+        Self {
+            algorithm: CompressionType::None,
+            reason,
+            hint_used: hint,
+            data_size: size,
+        }
     }
     pub fn lz4(reason: &'static str, hint: ContentHint, size: u64) -> Self {
-        Self { algorithm: CompressionType::Lz4, reason, hint_used: hint, data_size: size }
+        Self {
+            algorithm: CompressionType::Lz4,
+            reason,
+            hint_used: hint,
+            data_size: size,
+        }
     }
     pub fn zstd(reason: &'static str, hint: ContentHint, size: u64) -> Self {
-        Self { algorithm: CompressionType::Zstd, reason, hint_used: hint, data_size: size }
+        Self {
+            algorithm: CompressionType::Zstd,
+            reason,
+            hint_used: hint,
+            data_size: size,
+        }
     }
 }
 
@@ -150,9 +169,7 @@ pub fn choose_compression(data: &[u8], hint: ContentHint) -> CompressionDecision
             }
         }
 
-        ContentHint::StructuredData => {
-            CompressionDecision::zstd("structured_data", hint, size)
-        }
+        ContentHint::StructuredData => CompressionDecision::zstd("structured_data", hint, size),
 
         ContentHint::Binary | ContentHint::Unknown => {
             // Heuristique d'entropie rapide sur un échantillon.
@@ -172,14 +189,14 @@ pub fn choose_compression_hint_only(hint: ContentHint, size: u64) -> Compression
         return CompressionDecision::none("too_small", hint, size);
     }
     match hint {
-        ContentHint::Media | ContentHint::AlreadyCompressed =>
-            CompressionDecision::none("already_compressed_hint", hint, size),
-        ContentHint::Text =>
-            CompressionDecision::zstd("text_hint", hint, size),
-        ContentHint::StructuredData =>
-            CompressionDecision::zstd("structured_hint", hint, size),
-        ContentHint::Metadata | ContentHint::Binary | ContentHint::Unknown =>
-            CompressionDecision::lz4("binary_hint", hint, size),
+        ContentHint::Media | ContentHint::AlreadyCompressed => {
+            CompressionDecision::none("already_compressed_hint", hint, size)
+        }
+        ContentHint::Text => CompressionDecision::zstd("text_hint", hint, size),
+        ContentHint::StructuredData => CompressionDecision::zstd("structured_hint", hint, size),
+        ContentHint::Metadata | ContentHint::Binary | ContentHint::Unknown => {
+            CompressionDecision::lz4("binary_hint", hint, size)
+        }
     }
 }
 
@@ -194,10 +211,12 @@ pub fn choose_compression_hint_only(hint: ContentHint, size: u64) -> Compression
 /// Ratio = (valeurs_distinctes * 1000) / 256.
 pub fn sample_entropy(data: &[u8]) -> u32 {
     let sample_len = data.len().min(256);
-    let sample     = &data[..sample_len];
+    let sample = &data[..sample_len];
 
     let mut seen = [false; 256];
-    for &b in sample { seen[b as usize] = true; }
+    for &b in sample {
+        seen[b as usize] = true;
+    }
 
     let distinct = seen.iter().filter(|&&v| v).count() as u32;
     (distinct * 1000) / 256
@@ -207,10 +226,12 @@ pub fn sample_entropy(data: &[u8]) -> u32 {
 pub fn sample_entropy_full(data: &[u8]) -> u32 {
     const SAMPLE: usize = 512;
     let sample_len = data.len().min(SAMPLE);
-    let sample     = &data[..sample_len];
+    let sample = &data[..sample_len];
 
     let mut hist = [0u32; 256];
-    for &b in sample { hist[b as usize] = hist[b as usize].saturating_add(1); }
+    for &b in sample {
+        hist[b as usize] = hist[b as usize].saturating_add(1);
+    }
 
     // Approximation de l'entropie de Shannon (évite log2 en no_std).
     let non_zero = hist.iter().filter(|&&c| c > 0).count() as u32;
@@ -220,9 +241,7 @@ pub fn sample_entropy_full(data: &[u8]) -> u32 {
     let max_count = hist.iter().copied().max().unwrap_or(1).max(1);
     let uniformity = (sample_len as u32 * 1000) / (max_count * 256).max(1);
 
-    frac_non_zero
-        .saturating_add(uniformity / 4)
-        .min(1000)
+    frac_non_zero.saturating_add(uniformity / 4).min(1000)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -244,10 +263,20 @@ pub enum CompressionPolicy {
 impl CompressionPolicy {
     pub fn apply(&self, decision: CompressionDecision) -> CompressionDecision {
         match self {
-            Self::Auto     => decision,
-            Self::ForceNone => CompressionDecision::none("policy_force_none", decision.hint_used, decision.data_size),
-            Self::ForceLz4  => CompressionDecision::lz4("policy_force_lz4",  decision.hint_used, decision.data_size),
-            Self::ForceZstd => CompressionDecision::zstd("policy_force_zstd", decision.hint_used, decision.data_size),
+            Self::Auto => decision,
+            Self::ForceNone => CompressionDecision::none(
+                "policy_force_none",
+                decision.hint_used,
+                decision.data_size,
+            ),
+            Self::ForceLz4 => {
+                CompressionDecision::lz4("policy_force_lz4", decision.hint_used, decision.data_size)
+            }
+            Self::ForceZstd => CompressionDecision::zstd(
+                "policy_force_zstd",
+                decision.hint_used,
+                decision.data_size,
+            ),
         }
     }
 }
@@ -267,7 +296,9 @@ mod tests {
 
     fn make_random_bytes(n: usize) -> Vec<u8> {
         let mut v: Vec<u8> = Vec::new();
-        for i in 0..n { v.push(((i * 127 + 37) ^ (i >> 3)) as u8); }
+        for i in 0..n {
+            v.push(((i * 127 + 37) ^ (i >> 3)) as u8);
+        }
         v
     }
 
@@ -295,7 +326,7 @@ mod tests {
     #[test]
     fn test_high_entropy_gives_none() {
         // Données très aléatoires → pas de compression.
-        let d   = make_random_bytes(4096);
+        let d = make_random_bytes(4096);
         let ent = sample_entropy(&d);
         if ent > MAX_ENTROPY_PERMILLE {
             let dec = choose_compression(&d, ContentHint::Unknown);
@@ -305,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_policy_force_none() {
-        let d   = make_text(4096);
+        let d = make_text(4096);
         let dec = choose_compression(&d, ContentHint::Text);
         let dec = CompressionPolicy::ForceNone.apply(dec);
         assert_eq!(dec.algorithm, CompressionType::None);
@@ -328,20 +359,20 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Compteurs globaux par algorithme.
 pub struct CompressionRegistry {
-    pub none_decisions:  AtomicU64,
-    pub lz4_decisions:   AtomicU64,
-    pub zstd_decisions:  AtomicU64,
-    pub bytes_saved:     AtomicU64,
+    pub none_decisions: AtomicU64,
+    pub lz4_decisions: AtomicU64,
+    pub zstd_decisions: AtomicU64,
+    pub bytes_saved: AtomicU64,
     pub bytes_processed: AtomicU64,
 }
 
 impl CompressionRegistry {
     pub const fn new() -> Self {
         Self {
-            none_decisions:  AtomicU64::new(0),
-            lz4_decisions:   AtomicU64::new(0),
-            zstd_decisions:  AtomicU64::new(0),
-            bytes_saved:     AtomicU64::new(0),
+            none_decisions: AtomicU64::new(0),
+            lz4_decisions: AtomicU64::new(0),
+            zstd_decisions: AtomicU64::new(0),
+            bytes_saved: AtomicU64::new(0),
             bytes_processed: AtomicU64::new(0),
         }
     }
@@ -349,7 +380,7 @@ impl CompressionRegistry {
     pub fn record_decision(&self, algo: CompressionType, data_size: u64) {
         match algo {
             CompressionType::None => self.none_decisions.fetch_add(1, Ordering::Relaxed),
-            CompressionType::Lz4  => self.lz4_decisions.fetch_add(1, Ordering::Relaxed),
+            CompressionType::Lz4 => self.lz4_decisions.fetch_add(1, Ordering::Relaxed),
             CompressionType::Zstd => self.zstd_decisions.fetch_add(1, Ordering::Relaxed),
         };
         self.bytes_processed.fetch_add(data_size, Ordering::Relaxed);
@@ -357,25 +388,31 @@ impl CompressionRegistry {
 
     pub fn record_savings(&self, original: u64, compressed: u64) {
         if original > compressed {
-            self.bytes_saved.fetch_add(original - compressed, Ordering::Relaxed);
+            self.bytes_saved
+                .fetch_add(original - compressed, Ordering::Relaxed);
         }
     }
 
     pub fn total_decisions(&self) -> u64 {
-        self.none_decisions.load(Ordering::Relaxed)
+        self.none_decisions
+            .load(Ordering::Relaxed)
             .saturating_add(self.lz4_decisions.load(Ordering::Relaxed))
             .saturating_add(self.zstd_decisions.load(Ordering::Relaxed))
     }
 
     pub fn lz4_pct(&self) -> u64 {
         let t = self.total_decisions();
-        if t == 0 { return 0; }
+        if t == 0 {
+            return 0;
+        }
         self.lz4_decisions.load(Ordering::Relaxed) * 100 / t
     }
 
     pub fn zstd_pct(&self) -> u64 {
         let t = self.total_decisions();
-        if t == 0 { return 0; }
+        if t == 0 {
+            return 0;
+        }
         self.zstd_decisions.load(Ordering::Relaxed) * 100 / t
     }
 }
@@ -390,16 +427,20 @@ pub static COMPRESSION_REGISTRY: CompressionRegistry = CompressionRegistry::new(
 /// Vérifie un échantillon de 128 octets.
 pub fn is_likely_text(data: &[u8]) -> bool {
     let sample = &data[..data.len().min(128)];
-    let text_chars = sample.iter().filter(|&&b| {
-        (b >= 0x20 && b <= 0x7E) || b == b'\n' || b == b'\r' || b == b'\t'
-    }).count();
+    let text_chars = sample
+        .iter()
+        .filter(|&&b| (b >= 0x20 && b <= 0x7E) || b == b'\n' || b == b'\r' || b == b'\t')
+        .count();
     sample.is_empty() || (text_chars * 100 / sample.len()) >= 85
 }
 
 /// Détermine si le contenu ressemble à un fichier média (header magic connu).
 pub fn is_known_media_magic(data: &[u8]) -> bool {
-    if data.len() < 4 { return false; }
-    matches!(&data[..4],
+    if data.len() < 4 {
+        return false;
+    }
+    matches!(
+        &data[..4],
         // JPEG
         [0xFF, 0xD8, 0xFF, _]
         // PNG
@@ -417,9 +458,15 @@ pub fn is_known_media_magic(data: &[u8]) -> bool {
 
 /// Déduit automatiquement un `ContentHint` à partir de l'inspection du contenu.
 pub fn auto_detect_hint(data: &[u8]) -> ContentHint {
-    if data.len() < 4 { return ContentHint::Unknown; }
-    if is_known_media_magic(data) { return ContentHint::AlreadyCompressed; }
-    if is_likely_text(data)       { return ContentHint::Text; }
+    if data.len() < 4 {
+        return ContentHint::Unknown;
+    }
+    if is_known_media_magic(data) {
+        return ContentHint::AlreadyCompressed;
+    }
+    if is_likely_text(data) {
+        return ContentHint::Text;
+    }
     ContentHint::Binary
 }
 

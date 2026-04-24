@@ -4,9 +4,9 @@
 // Aucune dépendance externe au kernel.
 // Tous les types sont testés statiquement pour leur taille/alignement.
 
+use super::constants::{HUGE_PAGE_SIZE, PAGE_MASK, PAGE_SHIFT};
 use core::fmt;
-use core::ops::{Add, AddAssign, Sub, SubAssign, BitAnd, BitOr, Not};
-use super::constants::{PAGE_SHIFT, PAGE_MASK, HUGE_PAGE_SIZE};
+use core::ops::{Add, AddAssign, BitAnd, BitOr, Not, Sub, SubAssign};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PHYSADDR — Adresse physique
@@ -121,29 +121,39 @@ impl PhysAddr {
 impl Add<u64> for PhysAddr {
     type Output = PhysAddr;
     #[inline(always)]
-    fn add(self, rhs: u64) -> PhysAddr { PhysAddr(self.0.wrapping_add(rhs)) }
+    fn add(self, rhs: u64) -> PhysAddr {
+        PhysAddr(self.0.wrapping_add(rhs))
+    }
 }
 
 impl AddAssign<u64> for PhysAddr {
     #[inline(always)]
-    fn add_assign(&mut self, rhs: u64) { self.0 = self.0.wrapping_add(rhs); }
+    fn add_assign(&mut self, rhs: u64) {
+        self.0 = self.0.wrapping_add(rhs);
+    }
 }
 
 impl Sub<u64> for PhysAddr {
     type Output = PhysAddr;
     #[inline(always)]
-    fn sub(self, rhs: u64) -> PhysAddr { PhysAddr(self.0.wrapping_sub(rhs)) }
+    fn sub(self, rhs: u64) -> PhysAddr {
+        PhysAddr(self.0.wrapping_sub(rhs))
+    }
 }
 
 impl Sub<PhysAddr> for PhysAddr {
     type Output = u64;
     #[inline(always)]
-    fn sub(self, rhs: PhysAddr) -> u64 { self.0.wrapping_sub(rhs.0) }
+    fn sub(self, rhs: PhysAddr) -> u64 {
+        self.0.wrapping_sub(rhs.0)
+    }
 }
 
 impl SubAssign<u64> for PhysAddr {
     #[inline(always)]
-    fn sub_assign(&mut self, rhs: u64) { self.0 = self.0.wrapping_sub(rhs); }
+    fn sub_assign(&mut self, rhs: u64) {
+        self.0 = self.0.wrapping_sub(rhs);
+    }
 }
 
 impl fmt::Debug for PhysAddr {
@@ -200,11 +210,15 @@ impl VirtAddr {
 
     /// Retourne la valeur brute.
     #[inline(always)]
-    pub const fn as_u64(self) -> u64 { self.0 }
+    pub const fn as_u64(self) -> u64 {
+        self.0
+    }
 
     /// Retourne la valeur brute sous forme usize.
     #[inline(always)]
-    pub const fn as_usize(self) -> usize { self.0 as usize }
+    pub const fn as_usize(self) -> usize {
+        self.0 as usize
+    }
 
     /// Convertit en pointeur brut *const T.
     /// SAFETY: L'appelant doit s'assurer que la page est mappée,
@@ -319,29 +333,39 @@ impl VirtAddr {
 impl Add<u64> for VirtAddr {
     type Output = VirtAddr;
     #[inline(always)]
-    fn add(self, rhs: u64) -> VirtAddr { VirtAddr::new(self.0.wrapping_add(rhs)) }
+    fn add(self, rhs: u64) -> VirtAddr {
+        VirtAddr::new(self.0.wrapping_add(rhs))
+    }
 }
 
 impl AddAssign<u64> for VirtAddr {
     #[inline(always)]
-    fn add_assign(&mut self, rhs: u64) { *self = *self + rhs; }
+    fn add_assign(&mut self, rhs: u64) {
+        *self = *self + rhs;
+    }
 }
 
 impl Sub<u64> for VirtAddr {
     type Output = VirtAddr;
     #[inline(always)]
-    fn sub(self, rhs: u64) -> VirtAddr { VirtAddr::new(self.0.wrapping_sub(rhs)) }
+    fn sub(self, rhs: u64) -> VirtAddr {
+        VirtAddr::new(self.0.wrapping_sub(rhs))
+    }
 }
 
 impl Sub<VirtAddr> for VirtAddr {
     type Output = u64;
     #[inline(always)]
-    fn sub(self, rhs: VirtAddr) -> u64 { self.0.wrapping_sub(rhs.0) }
+    fn sub(self, rhs: VirtAddr) -> u64 {
+        self.0.wrapping_sub(rhs.0)
+    }
 }
 
 impl SubAssign<u64> for VirtAddr {
     #[inline(always)]
-    fn sub_assign(&mut self, rhs: u64) { *self = *self - rhs; }
+    fn sub_assign(&mut self, rhs: u64) {
+        *self = *self - rhs;
+    }
 }
 
 impl fmt::Debug for VirtAddr {
@@ -374,7 +398,9 @@ impl Page {
 
     /// Retourne le VPN brut.
     #[inline(always)]
-    pub const fn vpn(self) -> u64 { self.0 }
+    pub const fn vpn(self) -> u64 {
+        self.0
+    }
 
     /// Retourne l'adresse virtuelle de début de cette page.
     #[inline(always)]
@@ -384,7 +410,9 @@ impl Page {
 
     /// Retourne la Page suivante.
     #[inline(always)]
-    pub const fn next(self) -> Self { Page(self.0 + 1) }
+    pub const fn next(self) -> Self {
+        Page(self.0 + 1)
+    }
 
     /// Retourne un itérateur sur la plage [self, end).
     #[inline(always)]
@@ -444,7 +472,9 @@ impl Frame {
 
     /// Retourne le PFN brut.
     #[inline(always)]
-    pub const fn pfn(self) -> u64 { self.0 }
+    pub const fn pfn(self) -> u64 {
+        self.0
+    }
 
     /// Retourne l'adresse physique de début de ce frame.
     #[inline(always)]
@@ -454,7 +484,9 @@ impl Frame {
 
     /// Retourne le Frame suivant.
     #[inline(always)]
-    pub const fn next(self) -> Self { Frame(self.0 + 1) }
+    pub const fn next(self) -> Self {
+        Frame(self.0 + 1)
+    }
 
     /// Itérateur sur la plage [self, end).
     #[inline(always)]
@@ -528,65 +560,63 @@ impl PageFlags {
     // ── Bits matériels x86_64 ──────────────────────────────────────────────
 
     /// Bit P : page présente en mémoire physique.
-    pub const PRESENT:       PageFlags = PageFlags(1 << 0);
+    pub const PRESENT: PageFlags = PageFlags(1 << 0);
     /// Bit RW : lecture/écriture (sinon lecture seule).
-    pub const WRITABLE:      PageFlags = PageFlags(1 << 1);
+    pub const WRITABLE: PageFlags = PageFlags(1 << 1);
     /// Bit US : accessible depuis userspace (ring 3).
-    pub const USER:          PageFlags = PageFlags(1 << 2);
+    pub const USER: PageFlags = PageFlags(1 << 2);
     /// Bit PWT : write-through (sinon write-back).
     pub const WRITE_THROUGH: PageFlags = PageFlags(1 << 3);
     /// Bit PCD : désactiver le cache (No-Cache).
-    pub const NO_CACHE:      PageFlags = PageFlags(1 << 4);
+    pub const NO_CACHE: PageFlags = PageFlags(1 << 4);
     /// Bit A : page accédée (mise à jour par le CPU).
-    pub const ACCESSED:      PageFlags = PageFlags(1 << 5);
+    pub const ACCESSED: PageFlags = PageFlags(1 << 5);
     /// Bit D : page modifiée/sale (Dirty).
-    pub const DIRTY:         PageFlags = PageFlags(1 << 6);
+    pub const DIRTY: PageFlags = PageFlags(1 << 6);
     /// Bit PS : huge page (2MiB au niveau PD, 1GiB au niveau PDPT).
-    pub const HUGE_PAGE:     PageFlags = PageFlags(1 << 7);
+    pub const HUGE_PAGE: PageFlags = PageFlags(1 << 7);
     /// Bit G : page globale (non invalidée sur changement CR3, TLB global).
-    pub const GLOBAL:        PageFlags = PageFlags(1 << 8);
+    pub const GLOBAL: PageFlags = PageFlags(1 << 8);
     /// Bit NX (bit 63) : No-Execute — interdit l'exécution de code.
-    pub const NO_EXECUTE:    PageFlags = PageFlags(1 << 63);
+    pub const NO_EXECUTE: PageFlags = PageFlags(1 << 63);
 
     // ── Bits logiciels (bits 9..11, bits 52..62 disponibles pour l'OS) ─────
 
     /// Bit logiciel 9 : page Copy-on-Write.
-    pub const COW:           PageFlags = PageFlags(1 << 9);
+    pub const COW: PageFlags = PageFlags(1 << 9);
     /// Bit logiciel 10 : page verrouillée en RAM (ne pas swapper).
-    pub const PINNED:        PageFlags = PageFlags(1 << 10);
+    pub const PINNED: PageFlags = PageFlags(1 << 10);
     /// Bit logiciel 11 : shared memory (partagé entre processus).
-    pub const SHARED:        PageFlags = PageFlags(1 << 11);
+    pub const SHARED: PageFlags = PageFlags(1 << 11);
     /// Bit logiciel 52 : page utilisée pour DMA (pas de CoW, pas de swap).
-    pub const DMA:           PageFlags = PageFlags(1 << 52);
+    pub const DMA: PageFlags = PageFlags(1 << 52);
     /// Bit logiciel 53 : frame DMA — pas de Write-Combining.
-    pub const DMA_NO_WC:     PageFlags = PageFlags(1 << 53);
+    pub const DMA_NO_WC: PageFlags = PageFlags(1 << 53);
 
     // ── Combinaisons courantes ─────────────────────────────────────────────
 
     /// Page noyau exécutable : P + RW + G + NX désactivé.
-    pub const KERNEL_CODE: PageFlags = PageFlags(
-        Self::PRESENT.0 | Self::GLOBAL.0
-    );
+    pub const KERNEL_CODE: PageFlags = PageFlags(Self::PRESENT.0 | Self::GLOBAL.0);
 
     /// Page noyau données R/W, non exécutable.
-    pub const KERNEL_DATA: PageFlags = PageFlags(
-        Self::PRESENT.0 | Self::WRITABLE.0 | Self::GLOBAL.0 | Self::NO_EXECUTE.0
-    );
+    pub const KERNEL_DATA: PageFlags =
+        PageFlags(Self::PRESENT.0 | Self::WRITABLE.0 | Self::GLOBAL.0 | Self::NO_EXECUTE.0);
 
     /// Page utilisateur R/W, non exécutable.
-    pub const USER_DATA: PageFlags = PageFlags(
-        Self::PRESENT.0 | Self::WRITABLE.0 | Self::USER.0 | Self::NO_EXECUTE.0
-    );
+    pub const USER_DATA: PageFlags =
+        PageFlags(Self::PRESENT.0 | Self::WRITABLE.0 | Self::USER.0 | Self::NO_EXECUTE.0);
 
     /// Page utilisateur exécutable (code).
-    pub const USER_CODE: PageFlags = PageFlags(
-        Self::PRESENT.0 | Self::USER.0
-    );
+    pub const USER_CODE: PageFlags = PageFlags(Self::PRESENT.0 | Self::USER.0);
 
     /// Page DMA coherent (device memory, no-cache, R/W, noyau global).
     pub const KERNEL_DMA: PageFlags = PageFlags(
-        Self::PRESENT.0 | Self::WRITABLE.0 | Self::GLOBAL.0
-            | Self::NO_CACHE.0 | Self::NO_EXECUTE.0 | Self::DMA.0
+        Self::PRESENT.0
+            | Self::WRITABLE.0
+            | Self::GLOBAL.0
+            | Self::NO_CACHE.0
+            | Self::NO_EXECUTE.0
+            | Self::DMA.0,
     );
 
     /// Page vide (non présente).
@@ -595,10 +625,14 @@ impl PageFlags {
     // ── Constructeur ──────────────────────────────────────────────────────
 
     #[inline(always)]
-    pub const fn new(bits: u64) -> Self { PageFlags(bits) }
+    pub const fn new(bits: u64) -> Self {
+        PageFlags(bits)
+    }
 
     #[inline(always)]
-    pub const fn bits(self) -> u64 { self.0 }
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
 
     // ── Opérations booléennes ─────────────────────────────────────────────
 
@@ -629,49 +663,69 @@ impl PageFlags {
 
     /// Vérifie si la page est présente.
     #[inline(always)]
-    pub const fn is_present(self) -> bool { self.contains(Self::PRESENT) }
+    pub const fn is_present(self) -> bool {
+        self.contains(Self::PRESENT)
+    }
 
     /// Vérifie si la page est inscriptible.
     #[inline(always)]
-    pub const fn is_writable(self) -> bool { self.contains(Self::WRITABLE) }
+    pub const fn is_writable(self) -> bool {
+        self.contains(Self::WRITABLE)
+    }
 
     /// Vérifie si la page est accessible depuis userspace.
     #[inline(always)]
-    pub const fn is_user(self) -> bool { self.contains(Self::USER) }
+    pub const fn is_user(self) -> bool {
+        self.contains(Self::USER)
+    }
 
     /// Vérifie si la page est exécutable (NX non positionné).
     #[inline(always)]
-    pub const fn is_executable(self) -> bool { !self.contains(Self::NO_EXECUTE) }
+    pub const fn is_executable(self) -> bool {
+        !self.contains(Self::NO_EXECUTE)
+    }
 
     /// Vérifie s'il s'agit d'une huge page.
     #[inline(always)]
-    pub const fn is_huge(self) -> bool { self.contains(Self::HUGE_PAGE) }
+    pub const fn is_huge(self) -> bool {
+        self.contains(Self::HUGE_PAGE)
+    }
 
     /// Vérifie si la page est CoW.
     #[inline(always)]
-    pub const fn is_cow(self) -> bool { self.contains(Self::COW) }
+    pub const fn is_cow(self) -> bool {
+        self.contains(Self::COW)
+    }
 
     /// Vérifie si la page est verrouillée en RAM.
     #[inline(always)]
-    pub const fn is_pinned(self) -> bool { self.contains(Self::PINNED) }
+    pub const fn is_pinned(self) -> bool {
+        self.contains(Self::PINNED)
+    }
 }
 
 impl BitAnd for PageFlags {
     type Output = Self;
     #[inline(always)]
-    fn bitand(self, rhs: Self) -> Self { PageFlags(self.0 & rhs.0) }
+    fn bitand(self, rhs: Self) -> Self {
+        PageFlags(self.0 & rhs.0)
+    }
 }
 
 impl BitOr for PageFlags {
     type Output = Self;
     #[inline(always)]
-    fn bitor(self, rhs: Self) -> Self { PageFlags(self.0 | rhs.0) }
+    fn bitor(self, rhs: Self) -> Self {
+        PageFlags(self.0 | rhs.0)
+    }
 }
 
 impl Not for PageFlags {
     type Output = Self;
     #[inline(always)]
-    fn not(self) -> Self { PageFlags(!self.0) }
+    fn not(self) -> Self {
+        PageFlags(!self.0)
+    }
 }
 
 impl fmt::Debug for PageFlags {
@@ -679,29 +733,33 @@ impl fmt::Debug for PageFlags {
         write!(f, "PageFlags(")?;
         let mut first = true;
         let flags = [
-            (Self::PRESENT,       "PRESENT"),
-            (Self::WRITABLE,      "WRITABLE"),
-            (Self::USER,          "USER"),
+            (Self::PRESENT, "PRESENT"),
+            (Self::WRITABLE, "WRITABLE"),
+            (Self::USER, "USER"),
             (Self::WRITE_THROUGH, "WRITE_THROUGH"),
-            (Self::NO_CACHE,      "NO_CACHE"),
-            (Self::ACCESSED,      "ACCESSED"),
-            (Self::DIRTY,         "DIRTY"),
-            (Self::HUGE_PAGE,     "HUGE"),
-            (Self::GLOBAL,        "GLOBAL"),
-            (Self::NO_EXECUTE,    "NX"),
-            (Self::COW,           "COW"),
-            (Self::PINNED,        "PINNED"),
-            (Self::SHARED,        "SHARED"),
-            (Self::DMA,           "DMA"),
+            (Self::NO_CACHE, "NO_CACHE"),
+            (Self::ACCESSED, "ACCESSED"),
+            (Self::DIRTY, "DIRTY"),
+            (Self::HUGE_PAGE, "HUGE"),
+            (Self::GLOBAL, "GLOBAL"),
+            (Self::NO_EXECUTE, "NX"),
+            (Self::COW, "COW"),
+            (Self::PINNED, "PINNED"),
+            (Self::SHARED, "SHARED"),
+            (Self::DMA, "DMA"),
         ];
         for (flag, name) in &flags {
             if self.contains(*flag) {
-                if !first { write!(f, "|")?; }
+                if !first {
+                    write!(f, "|")?;
+                }
                 write!(f, "{}", name)?;
                 first = false;
             }
         }
-        if first { write!(f, "EMPTY")?; }
+        if first {
+            write!(f, "EMPTY")?;
+        }
         write!(f, ")")
     }
 }
@@ -715,13 +773,13 @@ impl fmt::Debug for PageFlags {
 #[repr(u8)]
 pub enum ZoneType {
     /// Zone DMA — <16 MiB, pour les devices 32 bits legacy.
-    Dma    = 0,
+    Dma = 0,
     /// Zone DMA32 — <4 GiB, pour les devices PCIe 32 bits.
-    Dma32  = 1,
+    Dma32 = 1,
     /// Zone NORMAL — RAM principale (>= 4 GiB sur 64 bits, >= 896 MiB sur 32 bits).
     Normal = 2,
     /// Zone HIGH — Mémoire haute (32 bits uniquement, >896 MiB).
-    High   = 3,
+    High = 3,
     /// Zone MOVABLE — Pages déplaçables pour défragmenter les huge pages.
     Movable = 4,
 }
@@ -732,7 +790,9 @@ impl ZoneType {
 
     /// Retourne l'index numérique de la zone.
     #[inline(always)]
-    pub const fn index(self) -> usize { self as usize }
+    pub const fn index(self) -> usize {
+        self as usize
+    }
 
     /// Convertit un index en ZoneType (None si invalide).
     #[inline(always)]
@@ -750,7 +810,7 @@ impl ZoneType {
     /// Détermine la zone appropriée pour une adresse physique donnée.
     #[inline]
     pub fn for_phys_addr(addr: PhysAddr) -> ZoneType {
-        use super::constants::{ZONE_DMA_END, ZONE_DMA32_END};
+        use super::constants::{ZONE_DMA32_END, ZONE_DMA_END};
         let a = addr.as_usize();
         if a < ZONE_DMA_END {
             ZoneType::Dma
@@ -773,28 +833,30 @@ pub struct AllocFlags(u32);
 
 impl AllocFlags {
     /// Aucun flag spécial.
-    pub const NONE:       AllocFlags = AllocFlags(0);
+    pub const NONE: AllocFlags = AllocFlags(0);
     /// Ne pas bloquer si la mémoire est épuisée — retourne Err immédiatement.
-    pub const NO_WAIT:    AllocFlags = AllocFlags(1 << 0);
+    pub const NO_WAIT: AllocFlags = AllocFlags(1 << 0);
     /// Allocation pour DMA (zone DMA < 16 MiB obligatoire).
-    pub const DMA:        AllocFlags = AllocFlags(1 << 1);
+    pub const DMA: AllocFlags = AllocFlags(1 << 1);
     /// Allocation DMA32 (zone DMA32 < 4 GiB).
-    pub const DMA32:      AllocFlags = AllocFlags(1 << 2);
+    pub const DMA32: AllocFlags = AllocFlags(1 << 2);
     /// Initialiser les pages à zéro avant de les retourner.
-    pub const ZEROED:     AllocFlags = AllocFlags(1 << 3);
+    pub const ZEROED: AllocFlags = AllocFlags(1 << 3);
     /// Allocation urgente (utiliser le pool d'urgence si nécessaire).
-    pub const EMERGENCY:  AllocFlags = AllocFlags(1 << 4);
+    pub const EMERGENCY: AllocFlags = AllocFlags(1 << 4);
     /// Exécuter depuis un contexte atomic (pas de blocage autorisé).
-    pub const ATOMIC:     AllocFlags = AllocFlags(Self::NO_WAIT.0 | 1 << 5);
+    pub const ATOMIC: AllocFlags = AllocFlags(Self::NO_WAIT.0 | 1 << 5);
     /// Page de garde (ne jamais mapper en cache de TLB global).
-    pub const GUARD:      AllocFlags = AllocFlags(1 << 6);
+    pub const GUARD: AllocFlags = AllocFlags(1 << 6);
     /// Allocation MOVABLE (eligible à la migration inter-nœuds).
-    pub const MOVABLE:    AllocFlags = AllocFlags(1 << 7);
+    pub const MOVABLE: AllocFlags = AllocFlags(1 << 7);
     /// Verrouiller la page en RAM (ne pas permettre le swap).
-    pub const PIN:        AllocFlags = AllocFlags(1 << 8);
+    pub const PIN: AllocFlags = AllocFlags(1 << 8);
 
     #[inline(always)]
-    pub const fn bits(self) -> u32 { self.0 }
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
 
     #[inline(always)]
     pub const fn contains(self, f: AllocFlags) -> bool {
@@ -802,7 +864,9 @@ impl AllocFlags {
     }
 
     #[inline(always)]
-    pub const fn set(self, f: AllocFlags) -> Self { AllocFlags(self.0 | f.0) }
+    pub const fn set(self, f: AllocFlags) -> Self {
+        AllocFlags(self.0 | f.0)
+    }
 
     /// Zone requise par ces flags.
     #[inline]
@@ -822,7 +886,9 @@ impl AllocFlags {
 impl BitOr for AllocFlags {
     type Output = Self;
     #[inline(always)]
-    fn bitor(self, rhs: Self) -> Self { AllocFlags(self.0 | rhs.0) }
+    fn bitor(self, rhs: Self) -> Self {
+        AllocFlags(self.0 | rhs.0)
+    }
 }
 
 impl fmt::Debug for AllocFlags {
@@ -857,13 +923,13 @@ pub enum AllocError {
 impl fmt::Display for AllocError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AllocError::OutOfMemory       => write!(f, "Out of memory"),
-            AllocError::Fragmentation     => write!(f, "Memory fragmentation"),
-            AllocError::InvalidParams     => write!(f, "Invalid allocation parameters"),
-            AllocError::NotInitialized    => write!(f, "Allocator not initialized"),
-            AllocError::WouldBlock        => write!(f, "Allocation would block (NO_WAIT set)"),
-            AllocError::ZoneUnavailable   => write!(f, "Memory zone unavailable"),
-            AllocError::LimitExceeded     => write!(f, "Memory limit exceeded"),
+            AllocError::OutOfMemory => write!(f, "Out of memory"),
+            AllocError::Fragmentation => write!(f, "Memory fragmentation"),
+            AllocError::InvalidParams => write!(f, "Invalid allocation parameters"),
+            AllocError::NotInitialized => write!(f, "Allocator not initialized"),
+            AllocError::WouldBlock => write!(f, "Allocation would block (NO_WAIT set)"),
+            AllocError::ZoneUnavailable => write!(f, "Memory zone unavailable"),
+            AllocError::LimitExceeded => write!(f, "Memory limit exceeded"),
         }
     }
 }
@@ -872,10 +938,28 @@ impl fmt::Display for AllocError {
 // VÉRIFICATIONS STATIQUES SUR LES TAILLES
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _: () = assert!(core::mem::size_of::<PhysAddr>()  == 8,  "PhysAddr doit faire 8 bytes");
-const _: () = assert!(core::mem::size_of::<VirtAddr>()  == 8,  "VirtAddr doit faire 8 bytes");
-const _: () = assert!(core::mem::size_of::<Page>()      == 8,  "Page doit faire 8 bytes");
-const _: () = assert!(core::mem::size_of::<Frame>()     == 8,  "Frame doit faire 8 bytes");
-const _: () = assert!(core::mem::size_of::<PageFlags>() == 8,  "PageFlags doit faire 8 bytes");
-const _: () = assert!(core::mem::size_of::<AllocFlags>() == 4, "AllocFlags doit faire 4 bytes");
-const _: () = assert!(core::mem::size_of::<ZoneType>()  == 1,  "ZoneType doit faire 1 byte");
+const _: () = assert!(
+    core::mem::size_of::<PhysAddr>() == 8,
+    "PhysAddr doit faire 8 bytes"
+);
+const _: () = assert!(
+    core::mem::size_of::<VirtAddr>() == 8,
+    "VirtAddr doit faire 8 bytes"
+);
+const _: () = assert!(core::mem::size_of::<Page>() == 8, "Page doit faire 8 bytes");
+const _: () = assert!(
+    core::mem::size_of::<Frame>() == 8,
+    "Frame doit faire 8 bytes"
+);
+const _: () = assert!(
+    core::mem::size_of::<PageFlags>() == 8,
+    "PageFlags doit faire 8 bytes"
+);
+const _: () = assert!(
+    core::mem::size_of::<AllocFlags>() == 4,
+    "AllocFlags doit faire 4 bytes"
+);
+const _: () = assert!(
+    core::mem::size_of::<ZoneType>() == 1,
+    "ZoneType doit faire 1 byte"
+);

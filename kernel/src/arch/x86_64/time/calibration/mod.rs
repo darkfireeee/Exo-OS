@@ -43,17 +43,16 @@
 //   ```
 // ════════════════════════════════════════════════════════════════════════════
 
-
-pub mod window;
 pub mod cpuid_nominal;
 pub mod validation;
+pub mod window;
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use super::sources;
 use crate::arch::x86_64::cpu::tsc as cpu_tsc;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 // Ré-exports publics pour les modules consommateurs (drift, percpu, ktime).
-pub use window::{CalibrationResult, CalibrationSample, CalibrationSource, mean_and_variance};
+pub use window::{mean_and_variance, CalibrationResult, CalibrationSample, CalibrationSource};
 
 // ── État global de calibration ────────────────────────────────────────────────
 
@@ -85,13 +84,13 @@ static SOURCES_INITIALIZED: AtomicBool = AtomicBool::new(false);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum CalibSource {
-    Hpet      = 0,
-    PmTimer   = 1,
-    Cpuid15   = 2,
-    Cpuid16   = 3,
-    Pit       = 4,
+    Hpet = 0,
+    PmTimer = 1,
+    Cpuid15 = 2,
+    Cpuid16 = 3,
+    Pit = 4,
     Fallback3G = 5,
-    None      = 0xFF,
+    None = 0xFF,
 }
 
 impl CalibSource {
@@ -99,39 +98,45 @@ impl CalibSource {
     #[inline(always)]
     pub fn rating(self) -> u32 {
         match self {
-            CalibSource::Hpet       => 300,
-            CalibSource::PmTimer    => 200,
-            CalibSource::Cpuid15    => 150,
-            CalibSource::Cpuid16    => 100,
-            CalibSource::Pit        => 50,
+            CalibSource::Hpet => 300,
+            CalibSource::PmTimer => 200,
+            CalibSource::Cpuid15 => 150,
+            CalibSource::Cpuid16 => 100,
+            CalibSource::Pit => 50,
             CalibSource::Fallback3G => 10,
-            CalibSource::None       => 0,
+            CalibSource::None => 0,
         }
     }
 
     /// Vrai si la source implique une mesure réelle (fenêtre temporelle).
     #[inline(always)]
     pub fn is_measured(self) -> bool {
-        matches!(self, CalibSource::Hpet | CalibSource::PmTimer | CalibSource::Pit)
+        matches!(
+            self,
+            CalibSource::Hpet | CalibSource::PmTimer | CalibSource::Pit
+        )
     }
 
     /// Vrai si la source est fiable pour le drift compensation.
     #[inline(always)]
     pub fn is_trusted(self) -> bool {
-        matches!(self, CalibSource::Hpet | CalibSource::PmTimer | CalibSource::Cpuid15)
+        matches!(
+            self,
+            CalibSource::Hpet | CalibSource::PmTimer | CalibSource::Cpuid15
+        )
     }
 
     /// Étiquette ASCII courte pour le port 0xE9 / logs.
     #[inline(always)]
     pub fn tag(self) -> &'static [u8] {
         match self {
-            CalibSource::Hpet        => b"HPET",
-            CalibSource::PmTimer     => b"PMT",
-            CalibSource::Cpuid15     => b"CPUID15",
-            CalibSource::Cpuid16     => b"CPUID16",
-            CalibSource::Pit         => b"PIT",
-            CalibSource::Fallback3G  => b"FB3G",
-            CalibSource::None        => b"NONE",
+            CalibSource::Hpet => b"HPET",
+            CalibSource::PmTimer => b"PMT",
+            CalibSource::Cpuid15 => b"CPUID15",
+            CalibSource::Cpuid16 => b"CPUID16",
+            CalibSource::Pit => b"PIT",
+            CalibSource::Fallback3G => b"FB3G",
+            CalibSource::None => b"NONE",
         }
     }
 
@@ -417,7 +422,9 @@ fn ensure_sources_initialized() {
 /// Retourne `None` si `calibrate_tsc()` n'a jamais été appelé.
 pub fn last_calibration_result() -> Option<CalibratedTsc> {
     let hz = LAST_TSC_HZ.load(Ordering::Acquire);
-    if hz == 0 { return None; }
+    if hz == 0 {
+        return None;
+    }
     let seq = CALIB_SEQ.load(Ordering::Relaxed);
     Some(CalibratedTsc {
         tsc_hz: hz,
@@ -426,7 +433,9 @@ pub fn last_calibration_result() -> Option<CalibratedTsc> {
         variance_hz2: 0, // non stocké globalement (disponible via calibrate_tsc_detail)
         valid_samples: if CalibSource::from_u8(LAST_SOURCE.load(Ordering::Relaxed)).is_measured() {
             window::N_SAMPLES as u8
-        } else { 0 },
+        } else {
+            0
+        },
         duration_tsc_cycles: 0, // non stocké globalement
         tsc_invariant: cpu_tsc::tsc_invariant(),
         seq,
@@ -497,7 +506,9 @@ fn e9_tag(tag: &[u8]) {
     }
     unsafe {
         out(b'[');
-        for &b in tag { out(b); }
+        for &b in tag {
+            out(b);
+        }
         out(b']');
     }
 }
@@ -511,4 +522,3 @@ fn e9_tag(tag: &[u8]) {
 fn debug_log_source(tag: &[u8]) {
     e9_tag(tag);
 }
-

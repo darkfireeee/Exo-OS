@@ -12,8 +12,8 @@
 //   EPOCH-04 : Transitions d'état strictement séquentielles.
 //   EPOCH-05 : GC ne peut collecter qu'un epoch dans état GcEligible.
 
-use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::types::EpochId;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteur global monotone des epochs
@@ -39,7 +39,12 @@ pub fn next_epoch_id() -> EpochId {
 /// Retourne l'EpochId courant sans l'incrémenter.
 #[inline]
 pub fn current_epoch_id() -> EpochId {
-    EpochId(EPOCH_COUNTER.load(Ordering::Relaxed).saturating_sub(1).max(1))
+    EpochId(
+        EPOCH_COUNTER
+            .load(Ordering::Relaxed)
+            .saturating_sub(1)
+            .max(1),
+    )
 }
 
 /// Restaure le compteur d'epoch au boot depuis la valeur persistée sur disque.
@@ -69,19 +74,19 @@ pub fn restore_epoch_counter(last_committed: EpochId) {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EpochState {
     /// Epoch ouvert : transactions en cours d'accumulation.
-    Open        = 0,
+    Open = 0,
     /// Commit en cours (3 barrières NVMe en vol) — écriture EPOCH_LOCK.
-    Committing  = 1,
+    Committing = 1,
     /// Epoch durci sur disque avec les 3 barrières NVMe.
-    Committed   = 2,
+    Committed = 2,
     /// Délai GC ecoulé (>= GC_MIN_EPOCH_DELAY epochs plus récents existent).
-    GcEligible  = 3,
+    GcEligible = 3,
     /// GC a marqué l'epoch pour collecte — work item en file.
-    GcPending   = 4,
+    GcPending = 4,
     /// Tous les P-Blobs de l'epoch ont été libérés.
-    Collected   = 5,
+    Collected = 5,
     /// Commit annulé (panique, perte de courant pendant Committing).
-    Aborted     = 6,
+    Aborted = 6,
 }
 
 impl EpochState {
@@ -102,7 +107,9 @@ impl EpochState {
 
     /// Sérialisation on-disk.
     #[inline]
-    pub fn as_u8(self) -> u8 { self as u8 }
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
 
     /// Retourne vrai si l'epoch est dans un état terminal (Collected ou Aborted).
     #[inline]
@@ -131,29 +138,33 @@ impl EpochState {
     /// Applique la transition demandée. Retourne Err si illégale.
     pub fn transition(self, to: Self) -> Result<Self, &'static str> {
         let ok = match (self, to) {
-            (Self::Open,       Self::Committing)  => true,
-            (Self::Open,       Self::Aborted)     => true,
-            (Self::Committing, Self::Committed)   => true,
-            (Self::Committing, Self::Aborted)     => true,
-            (Self::Committed,  Self::GcEligible)  => true,
-            (Self::GcEligible, Self::GcPending)   => true,
-            (Self::GcPending,  Self::Collected)   => true,
-            _                                     => false,
+            (Self::Open, Self::Committing) => true,
+            (Self::Open, Self::Aborted) => true,
+            (Self::Committing, Self::Committed) => true,
+            (Self::Committing, Self::Aborted) => true,
+            (Self::Committed, Self::GcEligible) => true,
+            (Self::GcEligible, Self::GcPending) => true,
+            (Self::GcPending, Self::Collected) => true,
+            _ => false,
         };
-        if ok { Ok(to) } else { Err("illegal epoch state transition") }
+        if ok {
+            Ok(to)
+        } else {
+            Err("illegal epoch state transition")
+        }
     }
 }
 
 impl core::fmt::Display for EpochState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Open       => write!(f, "Open"),
+            Self::Open => write!(f, "Open"),
             Self::Committing => write!(f, "Committing"),
-            Self::Committed  => write!(f, "Committed"),
+            Self::Committed => write!(f, "Committed"),
             Self::GcEligible => write!(f, "GcEligible"),
-            Self::GcPending  => write!(f, "GcPending"),
-            Self::Collected  => write!(f, "Collected"),
-            Self::Aborted    => write!(f, "Aborted"),
+            Self::GcPending => write!(f, "GcPending"),
+            Self::Collected => write!(f, "Collected"),
+            Self::Aborted => write!(f, "Aborted"),
         }
     }
 }
@@ -192,11 +203,21 @@ pub struct EpochStats {
 
 impl EpochStats {
     pub const fn new(open_tick: u64) -> Self {
-        let mut s = Self { open_tick, ..EpochStats {
-            objects_created: 0, objects_deleted: 0, blobs_allocated: 0,
-            blobs_freed: 0, bytes_written: 0, relations_created: 0,
-            snapshots_created: 0, paths_modified: 0, open_tick: 0, commit_tick: 0,
-        }};
+        let mut s = Self {
+            open_tick,
+            ..EpochStats {
+                objects_created: 0,
+                objects_deleted: 0,
+                blobs_allocated: 0,
+                blobs_freed: 0,
+                bytes_written: 0,
+                relations_created: 0,
+                snapshots_created: 0,
+                paths_modified: 0,
+                open_tick: 0,
+                commit_tick: 0,
+            }
+        };
         s.open_tick = open_tick;
         s
     }
@@ -228,7 +249,7 @@ impl EpochStats {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct EpochRange {
     pub start: EpochId,
-    pub end:   EpochId,
+    pub end: EpochId,
 }
 
 impl EpochRange {
@@ -271,14 +292,25 @@ impl EpochRange {
     pub fn intersection(&self, other: &Self) -> Option<Self> {
         let s = self.start.0.max(other.start.0);
         let e = self.end.0.min(other.end.0);
-        if s > e { None } else { Some(Self { start: EpochId(s), end: EpochId(e) }) }
+        if s > e {
+            None
+        } else {
+            Some(Self {
+                start: EpochId(s),
+                end: EpochId(e),
+            })
+        }
     }
 
     /// Étend la plage pour inclure `id`.
     #[inline]
     pub fn extend_to(&mut self, id: EpochId) {
-        if id.0 < self.start.0 { self.start = id; }
-        if id.0 > self.end.0   { self.end   = id; }
+        if id.0 < self.start.0 {
+            self.start = id;
+        }
+        if id.0 > self.end.0 {
+            self.end = id;
+        }
     }
 
     /// Itérateur simple (retourne tous les EpochIds comme u64).
@@ -300,13 +332,21 @@ impl core::fmt::Display for EpochRange {
 /// Comparateur d'epochs : retourne l'epoch la plus récente.
 #[inline]
 pub fn max_epoch(a: EpochId, b: EpochId) -> EpochId {
-    if a.0 >= b.0 { a } else { b }
+    if a.0 >= b.0 {
+        a
+    } else {
+        b
+    }
 }
 
 /// Comparateur d'epochs : retourne l'epoch la plus ancienne.
 #[inline]
 pub fn min_epoch(a: EpochId, b: EpochId) -> EpochId {
-    if a.0 <= b.0 { a } else { b }
+    if a.0 <= b.0 {
+        a
+    } else {
+        b
+    }
 }
 
 /// Vérifie si deux epochs peuvent coexister sans risque de wrap u64.
@@ -314,7 +354,9 @@ pub fn min_epoch(a: EpochId, b: EpochId) -> EpochId {
 /// Distance > u64::MAX/2 → probable wrap ou données corrompues (règle EPOCH-03).
 #[inline]
 pub fn epoch_distance_sane(old: EpochId, new: EpochId) -> bool {
-    if new.0 < old.0 { return false; }
+    if new.0 < old.0 {
+        return false;
+    }
     new.0 - old.0 < (u64::MAX / 2)
 }
 
@@ -329,9 +371,15 @@ pub fn epoch_in_window(base: EpochId, window: u64, query: EpochId) -> bool {
 /// Retourne None si la distance dépasse u64::MAX/2 (probable corruption).
 #[inline]
 pub fn epoch_distance(old: EpochId, new: EpochId) -> Option<u64> {
-    if new.0 < old.0 { return None; }
+    if new.0 < old.0 {
+        return None;
+    }
     let d = new.0 - old.0;
-    if d >= u64::MAX / 2 { None } else { Some(d) }
+    if d >= u64::MAX / 2 {
+        None
+    } else {
+        Some(d)
+    }
 }
 
 /// Vrai si `candidate` est au moins `min_delay` epochs après `reference`.
@@ -345,15 +393,23 @@ pub fn epoch_gc_eligible(reference: EpochId, candidate: EpochId, min_delay: u64)
 /// Retourne l'EpochId précédent, ou INVALID si déjà à 1.
 #[inline]
 pub fn epoch_prev(id: EpochId) -> EpochId {
-    if id.0 <= 1 { EpochId::INVALID } else { EpochId(id.0 - 1) }
+    if id.0 <= 1 {
+        EpochId::INVALID
+    } else {
+        EpochId(id.0 - 1)
+    }
 }
 
 /// Clamp un EpochId entre two bornes (utile pour le parcours de journaux).
 #[inline]
 pub fn epoch_clamp(id: EpochId, lo: EpochId, hi: EpochId) -> EpochId {
-    if id.0 < lo.0 { lo }
-    else if id.0 > hi.0 { hi }
-    else { id }
+    if id.0 < lo.0 {
+        lo
+    } else if id.0 > hi.0 {
+        hi
+    } else {
+        id
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -364,14 +420,14 @@ pub fn epoch_clamp(id: EpochId, lo: EpochId, hi: EpochId) -> EpochId {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct EpochCommitSummary {
-    pub epoch_id:        u64,
-    pub bytes_written:   u64,
-    pub objects_delta:   i32,   // = created - deleted (peut être négatif)
-    pub blobs_freed:     u32,
-    pub commit_duration: u32,   // ticks (saturé à u32::MAX)
-    pub state:           u8,    // EpochState as u8
-    pub flags:           u8,    // EpochFlags
-    pub _pad:            [u8; 2],
+    pub epoch_id: u64,
+    pub bytes_written: u64,
+    pub objects_delta: i32, // = created - deleted (peut être négatif)
+    pub blobs_freed: u32,
+    pub commit_duration: u32, // ticks (saturé à u32::MAX)
+    pub state: u8,            // EpochState as u8
+    pub flags: u8,            // EpochFlags
+    pub _pad: [u8; 2],
 }
 
 const _: () = assert!(
@@ -383,13 +439,12 @@ impl EpochCommitSummary {
     pub fn from_stats(epoch_id: EpochId, stats: &EpochStats, state: EpochState, flags: u8) -> Self {
         let objects_delta = (stats.objects_created as i64 - stats.objects_deleted as i64)
             .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-        let commit_duration = stats.commit_duration_ticks()
-            .min(u32::MAX as u64) as u32;
+        let commit_duration = stats.commit_duration_ticks().min(u32::MAX as u64) as u32;
         Self {
             epoch_id: epoch_id.0,
             bytes_written: stats.bytes_written,
             objects_delta,
-            blobs_freed:   stats.blobs_freed,
+            blobs_freed: stats.blobs_freed,
             commit_duration,
             state: state as u8,
             flags,
@@ -399,11 +454,15 @@ impl EpochCommitSummary {
 
     /// Retourne l'EpochId encapsulé.
     #[inline]
-    pub fn epoch_id(&self) -> EpochId { EpochId(self.epoch_id) }
+    pub fn epoch_id(&self) -> EpochId {
+        EpochId(self.epoch_id)
+    }
 
     /// Retourne l'état de l'epoch depuis le résumé.
     #[inline]
-    pub fn state(&self) -> Option<EpochState> { EpochState::from_u8(self.state) }
+    pub fn state(&self) -> Option<EpochState> {
+        EpochState::from_u8(self.state)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -419,15 +478,19 @@ pub struct EpochWindow {
     /// Premier epoch encore référencé (ancré par un snapshot ou un lecteur actif).
     pub oldest_pinned: u64,
     /// Epoch actuel (epoch en cours de construction).
-    pub current:       u64,
+    pub current: u64,
     /// Taille maximale admise de la fenêtre (configuration).
-    pub max_window:    u32,
+    pub max_window: u32,
 }
 
 impl EpochWindow {
     /// Crée une fenêtre initiale avec un seul epoch (boot).
     pub fn new(initial_epoch: u64, max_window: u32) -> Self {
-        Self { oldest_pinned: initial_epoch, current: initial_epoch, max_window }
+        Self {
+            oldest_pinned: initial_epoch,
+            current: initial_epoch,
+            max_window,
+        }
     }
 
     /// Avance la fenêtre vers un nouvel epoch courant.

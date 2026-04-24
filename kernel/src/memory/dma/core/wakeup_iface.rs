@@ -10,8 +10,8 @@
 //
 // COUCHE 0 — aucune dépendance vers scheduler/ipc/fs/process.
 
+use crate::memory::dma::core::types::{DmaError, DmaTransactionId};
 use core::sync::atomic::{AtomicUsize, Ordering};
-use crate::memory::dma::core::types::{DmaTransactionId, DmaError};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TRAIT DE RÉVEIL
@@ -29,18 +29,14 @@ pub trait DmaWakeupHandler: Send + Sync {
     /// `result` — `Ok(bytes_transferred)` ou `Err(DmaError)`.
     fn wake_on_completion(
         &self,
-        tid:    u64,
+        tid: u64,
         txn_id: DmaTransactionId,
         result: Result<usize, DmaError>,
     );
 
     /// Notifie qu'une erreur fatale s'est produite sur un canal.
     /// Tous les waiters sur ce canal doivent être débloqués avec une erreur.
-    fn wake_all_on_error(
-        &self,
-        channel_id: u32,
-        error:      DmaError,
-    );
+    fn wake_all_on_error(&self, channel_id: u32, error: DmaError);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,7 +52,7 @@ struct NopWakeupHandler {
 impl DmaWakeupHandler for NopWakeupHandler {
     fn wake_on_completion(
         &self,
-        _tid:    u64,
+        _tid: u64,
         _txn_id: DmaTransactionId,
         _result: Result<usize, DmaError>,
     ) {
@@ -97,8 +93,8 @@ struct WakeupHandlerSlot {
 unsafe impl Sync for WakeupHandlerSlot {}
 
 static WAKEUP_SLOT: WakeupHandlerSlot = WakeupHandlerSlot {
-    data:       AtomicUsize::new(0),
-    vtbl:       AtomicUsize::new(0),
+    data: AtomicUsize::new(0),
+    vtbl: AtomicUsize::new(0),
     registered: AtomicUsize::new(0),
 };
 

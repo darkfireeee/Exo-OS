@@ -7,14 +7,13 @@
 //!   OOM-02   : try_reserve avant chaque push
 //!   ARITH-02 : checked_add pour compteurs
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 use core::cmp::Ordering as CmpOrdering;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId, SnapshotId};
 use super::snapshot::SnapshotRef;
 use super::snapshot_list::SNAPSHOT_LIST;
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult, SnapshotId};
 
 // ─────────────────────────────────────────────────────────────
 // DiffKind
@@ -41,30 +40,54 @@ pub enum DiffKind {
 #[derive(Debug, Clone)]
 pub struct DiffEntry {
     /// Blob id dans le snapshot gauche (None si Added)
-    pub blob_left:  Option<BlobId>,
+    pub blob_left: Option<BlobId>,
     /// Blob id dans le snapshot droit (None si Removed)
     pub blob_right: Option<BlobId>,
     /// Type de différence
     pub kind: DiffKind,
     /// Taille en octets du blob gauche (0 si absent)
-    pub size_left:  u64,
+    pub size_left: u64,
     /// Taille en octets du blob droit (0 si absent)
     pub size_right: u64,
 }
 
 impl DiffEntry {
     fn added(blob: BlobId, size: u64) -> Self {
-        Self { blob_left: None, blob_right: Some(blob), kind: DiffKind::Added, size_left: 0, size_right: size }
+        Self {
+            blob_left: None,
+            blob_right: Some(blob),
+            kind: DiffKind::Added,
+            size_left: 0,
+            size_right: size,
+        }
     }
     fn removed(blob: BlobId, size: u64) -> Self {
-        Self { blob_left: Some(blob), blob_right: None, kind: DiffKind::Removed, size_left: size, size_right: 0 }
+        Self {
+            blob_left: Some(blob),
+            blob_right: None,
+            kind: DiffKind::Removed,
+            size_left: size,
+            size_right: 0,
+        }
     }
     #[allow(dead_code)]
     fn modified(left: BlobId, right: BlobId, sl: u64, sr: u64) -> Self {
-        Self { blob_left: Some(left), blob_right: Some(right), kind: DiffKind::Modified, size_left: sl, size_right: sr }
+        Self {
+            blob_left: Some(left),
+            blob_right: Some(right),
+            kind: DiffKind::Modified,
+            size_left: sl,
+            size_right: sr,
+        }
     }
     fn unchanged(blob: BlobId, size: u64) -> Self {
-        Self { blob_left: Some(blob), blob_right: Some(blob), kind: DiffKind::Unchanged, size_left: size, size_right: size }
+        Self {
+            blob_left: Some(blob),
+            blob_right: Some(blob),
+            kind: DiffKind::Unchanged,
+            size_left: size,
+            size_right: size,
+        }
     }
 }
 
@@ -81,7 +104,12 @@ pub struct DiffOptions {
 }
 
 impl Default for DiffOptions {
-    fn default() -> Self { Self { include_unchanged: false, max_entries: 0 } }
+    fn default() -> Self {
+        Self {
+            include_unchanged: false,
+            max_entries: 0,
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -92,7 +120,7 @@ impl Default for DiffOptions {
 #[derive(Debug, Clone)]
 pub struct SnapshotDiffReport {
     /// Snapshot de gauche (référence)
-    pub left:  SnapshotRef,
+    pub left: SnapshotRef,
     /// Snapshot de droite (comparé)
     pub right: SnapshotRef,
     /// Entrées du diff
@@ -117,9 +145,12 @@ impl SnapshotDiffReport {
     /// Résumé d'une ligne pour les logs
     pub fn summary(&self) -> DiffSummary {
         DiffSummary {
-            n_added: self.n_added, n_removed: self.n_removed,
-            n_modified: self.n_modified, n_unchanged: self.n_unchanged,
-            bytes_added: self.bytes_added, bytes_removed: self.bytes_removed,
+            n_added: self.n_added,
+            n_removed: self.n_removed,
+            n_modified: self.n_modified,
+            n_unchanged: self.n_unchanged,
+            bytes_added: self.bytes_added,
+            bytes_removed: self.bytes_removed,
         }
     }
 
@@ -130,11 +161,11 @@ impl SnapshotDiffReport {
 
 #[derive(Debug, Clone, Copy)]
 pub struct DiffSummary {
-    pub n_added:      u64,
-    pub n_removed:    u64,
-    pub n_modified:   u64,
-    pub n_unchanged:  u64,
-    pub bytes_added:  u64,
+    pub n_added: u64,
+    pub n_removed: u64,
+    pub n_modified: u64,
+    pub n_unchanged: u64,
+    pub bytes_added: u64,
     pub bytes_removed: u64,
 }
 
@@ -156,7 +187,8 @@ impl SnapshotBlobEnumerator for MetaOnlyEnumerator {
         // Sans accès disque, on ne peut que retourner des tailles 0
         // Dans un vrai système, cela lirait le catalogue de blobs
         let mut out: Vec<(BlobId, u64)> = Vec::new();
-        out.try_reserve(snap.n_blobs as usize).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(snap.n_blobs as usize)
+            .map_err(|_| ExofsError::NoMemory)?;
         // Racine comme seule entrée visible
         out.push((snap.root_blob, 0));
         Ok(out)
@@ -174,29 +206,29 @@ impl SnapshotDiff {
 
     /// Compare deux snapshots via leur énumérateur de blobs
     pub fn compare<E: SnapshotBlobEnumerator>(
-        left_id:  SnapshotId,
+        left_id: SnapshotId,
         right_id: SnapshotId,
         enumerator: &E,
         opts: DiffOptions,
     ) -> ExofsResult<SnapshotDiffReport> {
-        let left_ref  = SNAPSHOT_LIST.get_ref(left_id)?;
+        let left_ref = SNAPSHOT_LIST.get_ref(left_id)?;
         let right_ref = SNAPSHOT_LIST.get_ref(right_id)?;
 
         // Optimisation : racines identiques => aucun diff
         if left_ref.n_blobs == right_ref.n_blobs {
             // Comparaison rapide des root_blob
-            let left_snap  = SNAPSHOT_LIST.get(left_id)?;
+            let left_snap = SNAPSHOT_LIST.get(left_id)?;
             let right_snap = SNAPSHOT_LIST.get(right_id)?;
             if left_snap.root_blob.ct_eq(&right_snap.root_blob) {
                 return Self::empty_report(left_ref, right_ref, left_snap.n_blobs);
             }
         }
 
-        let mut left_blobs  = enumerator.list_blobs_with_sizes(left_id)?;
+        let mut left_blobs = enumerator.list_blobs_with_sizes(left_id)?;
         let mut right_blobs = enumerator.list_blobs_with_sizes(right_id)?;
 
         // Trier par blob_id.as_bytes() pour la comparaison linéaire
-        left_blobs.sort_by(|a, b|  a.0.as_bytes().cmp(b.0.as_bytes()));
+        left_blobs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
         right_blobs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
 
         Self::merge_diff(left_ref, right_ref, &left_blobs, &right_blobs, opts)
@@ -206,9 +238,9 @@ impl SnapshotDiff {
 
     /// Calcule le diff entre deux listes de (BlobId, size) déjà triées
     pub fn diff_sorted(
-        left_ref:   SnapshotRef,
-        right_ref:  SnapshotRef,
-        left_blobs:  &[(BlobId, u64)],
+        left_ref: SnapshotRef,
+        right_ref: SnapshotRef,
+        left_blobs: &[(BlobId, u64)],
         right_blobs: &[(BlobId, u64)],
         opts: DiffOptions,
     ) -> ExofsResult<SnapshotDiffReport> {
@@ -218,22 +250,26 @@ impl SnapshotDiff {
     // ── Fusion merge-sort O(n) ────────────────────────────────────────
 
     fn merge_diff(
-        left_ref:   SnapshotRef,
-        right_ref:  SnapshotRef,
-        left_blobs:  &[(BlobId, u64)],
+        left_ref: SnapshotRef,
+        right_ref: SnapshotRef,
+        left_blobs: &[(BlobId, u64)],
         right_blobs: &[(BlobId, u64)],
         opts: DiffOptions,
     ) -> ExofsResult<SnapshotDiffReport> {
         let max_cap = left_blobs.len().saturating_add(right_blobs.len());
         let mut entries: Vec<DiffEntry> = Vec::new();
-        let cap = if opts.max_entries > 0 { opts.max_entries.min(max_cap) } else { max_cap };
+        let cap = if opts.max_entries > 0 {
+            opts.max_entries.min(max_cap)
+        } else {
+            max_cap
+        };
         entries.try_reserve(cap).map_err(|_| ExofsError::NoMemory)?;
 
-        let mut n_added:    u64 = 0;
-        let mut n_removed:  u64 = 0;
+        let mut n_added: u64 = 0;
+        let mut n_removed: u64 = 0;
         let n_modified: u64 = 0;
         let mut n_unchanged: u64 = 0;
-        let mut bytes_added:   u64 = 0;
+        let mut bytes_added: u64 = 0;
         let mut bytes_removed: u64 = 0;
         let mut li = 0usize;
         let mut ri = 0usize;
@@ -246,28 +282,30 @@ impl SnapshotDiff {
             }
 
             let entry = match (left_blobs.get(li), right_blobs.get(ri)) {
-                (Some(l), Some(r)) => {
-                    match l.0.as_bytes().cmp(r.0.as_bytes()) {
-                        CmpOrdering::Equal => {
-                            li += 1; ri += 1;
-                            n_unchanged = n_unchanged.checked_add(1).ok_or(ExofsError::Overflow)?;
-                            if !opts.include_unchanged { continue; }
-                            DiffEntry::unchanged(l.0, l.1)
+                (Some(l), Some(r)) => match l.0.as_bytes().cmp(r.0.as_bytes()) {
+                    CmpOrdering::Equal => {
+                        li += 1;
+                        ri += 1;
+                        n_unchanged = n_unchanged.checked_add(1).ok_or(ExofsError::Overflow)?;
+                        if !opts.include_unchanged {
+                            continue;
                         }
-                        CmpOrdering::Less => {
-                            li += 1;
-                            n_removed = n_removed.checked_add(1).ok_or(ExofsError::Overflow)?;
-                            bytes_removed = bytes_removed.checked_add(l.1).ok_or(ExofsError::Overflow)?;
-                            DiffEntry::removed(l.0, l.1)
-                        }
-                        CmpOrdering::Greater => {
-                            ri += 1;
-                            n_added = n_added.checked_add(1).ok_or(ExofsError::Overflow)?;
-                            bytes_added = bytes_added.checked_add(r.1).ok_or(ExofsError::Overflow)?;
-                            DiffEntry::added(r.0, r.1)
-                        }
+                        DiffEntry::unchanged(l.0, l.1)
                     }
-                }
+                    CmpOrdering::Less => {
+                        li += 1;
+                        n_removed = n_removed.checked_add(1).ok_or(ExofsError::Overflow)?;
+                        bytes_removed =
+                            bytes_removed.checked_add(l.1).ok_or(ExofsError::Overflow)?;
+                        DiffEntry::removed(l.0, l.1)
+                    }
+                    CmpOrdering::Greater => {
+                        ri += 1;
+                        n_added = n_added.checked_add(1).ok_or(ExofsError::Overflow)?;
+                        bytes_added = bytes_added.checked_add(r.1).ok_or(ExofsError::Overflow)?;
+                        DiffEntry::added(r.0, r.1)
+                    }
+                },
                 (Some(l), None) => {
                     li += 1;
                     n_removed = n_removed.checked_add(1).ok_or(ExofsError::Overflow)?;
@@ -288,24 +326,37 @@ impl SnapshotDiff {
         }
 
         Ok(SnapshotDiffReport {
-            left: left_ref, right: right_ref, entries,
-            n_added, n_removed, n_modified, n_unchanged,
-            bytes_added, bytes_removed, truncated,
+            left: left_ref,
+            right: right_ref,
+            entries,
+            n_added,
+            n_removed,
+            n_modified,
+            n_unchanged,
+            bytes_added,
+            bytes_removed,
+            truncated,
         })
     }
 
     // ── Rapport vide (snapshots identiques) ──────────────────────────
 
     fn empty_report(
-        left_ref:  SnapshotRef,
+        left_ref: SnapshotRef,
         right_ref: SnapshotRef,
         n_blobs: u64,
     ) -> ExofsResult<SnapshotDiffReport> {
         Ok(SnapshotDiffReport {
-            left: left_ref, right: right_ref,
+            left: left_ref,
+            right: right_ref,
             entries: Vec::new(),
-            n_added: 0, n_removed: 0, n_modified: 0, n_unchanged: n_blobs,
-            bytes_added: 0, bytes_removed: 0, truncated: false,
+            n_added: 0,
+            n_removed: 0,
+            n_modified: 0,
+            n_unchanged: n_blobs,
+            bytes_added: 0,
+            bytes_removed: 0,
+            truncated: false,
         })
     }
 
@@ -324,7 +375,7 @@ impl SnapshotDiff {
         other_id: SnapshotId,
         enumerator: &E,
     ) -> ExofsResult<Vec<BlobId>> {
-        let mut left  = enumerator.list_blobs_with_sizes(only_in_id)?;
+        let mut left = enumerator.list_blobs_with_sizes(only_in_id)?;
         let mut right = enumerator.list_blobs_with_sizes(other_id)?;
         left.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
         right.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
@@ -335,11 +386,24 @@ impl SnapshotDiff {
         while li < left.len() {
             match right.get(ri) {
                 Some(r) => match left[li].0.as_bytes().cmp(r.0.as_bytes()) {
-                    CmpOrdering::Less    => { out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?; out.push(left[li].0); li += 1; }
-                    CmpOrdering::Equal   => { li += 1; ri += 1; }
-                    CmpOrdering::Greater => { ri += 1; }
+                    CmpOrdering::Less => {
+                        out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                        out.push(left[li].0);
+                        li += 1;
+                    }
+                    CmpOrdering::Equal => {
+                        li += 1;
+                        ri += 1;
+                    }
+                    CmpOrdering::Greater => {
+                        ri += 1;
+                    }
                 },
-                None => { out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?; out.push(left[li].0); li += 1; }
+                None => {
+                    out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                    out.push(left[li].0);
+                    li += 1;
+                }
             }
         }
         Ok(out)
@@ -352,11 +416,11 @@ impl SnapshotDiff {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::fs::exofs::core::{EpochId, DiskOffset, SnapshotId};
-    use crate::fs::exofs::core::blob_id::compute_blob_id;
-    use super::super::snapshot::{Snapshot, make_snapshot_name};
+    use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::snapshot_list::SnapshotList;
+    use super::*;
+    use crate::fs::exofs::core::blob_id::compute_blob_id;
+    use crate::fs::exofs::core::{DiskOffset, EpochId, SnapshotId};
 
     struct TestEnumerator(alloc::collections::BTreeMap<u64, alloc::vec::Vec<(BlobId, u64)>>);
 
@@ -368,10 +432,16 @@ mod tests {
 
     fn make_snap(id: u64) -> Snapshot {
         Snapshot {
-            id: SnapshotId(id), epoch_id: EpochId(1), parent_id: None,
-            root_blob: BlobId([0u8;32]), created_at: 0, n_blobs: 0,
-            total_bytes: 0, flags: 0,
-            blob_catalog_offset: DiskOffset(0), blob_catalog_size: 0,
+            id: SnapshotId(id),
+            epoch_id: EpochId(1),
+            parent_id: None,
+            root_blob: BlobId([0u8; 32]),
+            created_at: 0,
+            n_blobs: 0,
+            total_bytes: 0,
+            flags: 0,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
             name: make_snapshot_name(b"t"),
         }
     }
@@ -392,8 +462,12 @@ mod tests {
 
         let enumerator = TestEnumerator(m);
         let report = SnapshotDiff::compare(
-            SnapshotId(1), SnapshotId(2), &enumerator, DiffOptions::default()
-        ).unwrap();
+            SnapshotId(1),
+            SnapshotId(2),
+            &enumerator,
+            DiffOptions::default(),
+        )
+        .unwrap();
         assert_eq!(report.n_added, 1);
         assert_eq!(report.n_removed, 1);
         assert!(!report.has_changes() || report.has_changes()); // OK
@@ -405,8 +479,10 @@ mod tests {
         let b = compute_blob_id(b"shared");
         let mut s1 = make_snap(10);
         let mut s2 = make_snap(11);
-        s1.root_blob = b; s1.n_blobs = 1;
-        s2.root_blob = b; s2.n_blobs = 1;
+        s1.root_blob = b;
+        s1.n_blobs = 1;
+        s2.root_blob = b;
+        s2.n_blobs = 1;
         list.register(s1).unwrap();
         list.register(s2).unwrap();
         let identical = SnapshotDiff::is_identical(SnapshotId(10), SnapshotId(11)).unwrap();
@@ -419,14 +495,22 @@ mod tests {
         list.register(make_snap(20)).unwrap();
         list.register(make_snap(21)).unwrap();
         let blobs: alloc::vec::Vec<(BlobId, u64)> = (0u8..10)
-            .map(|i| { let mut b = [0u8;32]; b[0] = i; (BlobId(b), i as u64 * 10) })
+            .map(|i| {
+                let mut b = [0u8; 32];
+                b[0] = i;
+                (BlobId(b), i as u64 * 10)
+            })
             .collect();
         let mut m = alloc::collections::BTreeMap::new();
         m.insert(20u64, blobs.clone());
         m.insert(21u64, alloc::vec![]);
         let enumerator = TestEnumerator(m);
-        let opts = DiffOptions { max_entries: 3, include_unchanged: false };
-        let report = SnapshotDiff::compare(SnapshotId(20), SnapshotId(21), &enumerator, opts).unwrap();
+        let opts = DiffOptions {
+            max_entries: 3,
+            include_unchanged: false,
+        };
+        let report =
+            SnapshotDiff::compare(SnapshotId(20), SnapshotId(21), &enumerator, opts).unwrap();
         assert!(report.truncated);
         assert_eq!(report.entries.len(), 3);
     }

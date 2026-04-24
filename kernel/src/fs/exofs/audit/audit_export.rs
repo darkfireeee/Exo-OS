@@ -8,15 +8,14 @@
 //!  - ARITH-02 : arithmétique vérifiée
 //!  - RECUR-01 : zéro récursion
 
-
 extern crate alloc;
-use alloc::vec::Vec;
 use alloc::string::String;
+use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::audit_entry::{AuditEntry, AuditOp, AuditResult, AuditSeverity, AUDIT_ENTRY_SIZE};
 use super::audit_filter::AuditFilter;
 use super::audit_log::{AuditLog, AUDIT_LOG};
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -63,10 +62,10 @@ pub enum ExportRange {
 /// Statistiques d'un export.
 #[derive(Clone, Debug, Default)]
 pub struct ExportStats {
-    pub n_exported:  u32,
-    pub n_filtered:  u32,
-    pub n_invalid:   u32,
-    pub byte_size:   usize,
+    pub n_exported: u32,
+    pub n_filtered: u32,
+    pub n_invalid: u32,
+    pub byte_size: usize,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +74,7 @@ pub struct ExportStats {
 
 /// Résultat d'un export.
 pub struct ExportResult {
-    pub data:  Vec<u8>,
+    pub data: Vec<u8>,
     pub stats: ExportStats,
 }
 
@@ -94,29 +93,41 @@ pub struct AuditExporter {
 impl AuditExporter {
     /// Crée un exporteur sans filtre.
     pub fn new() -> Self {
-        AuditExporter { filter: None, total_exported: 0 }
+        AuditExporter {
+            filter: None,
+            total_exported: 0,
+        }
     }
 
     /// Crée un exporteur avec un filtre appliqué.
     pub fn with_filter(filter: AuditFilter) -> Self {
-        AuditExporter { filter: Some(filter), total_exported: 0 }
+        AuditExporter {
+            filter: Some(filter),
+            total_exported: 0,
+        }
     }
 
     /// Remplace le filtre.
-    pub fn set_filter(&mut self, f: AuditFilter) { self.filter = Some(f); }
+    pub fn set_filter(&mut self, f: AuditFilter) {
+        self.filter = Some(f);
+    }
 
     /// Retire le filtre.
-    pub fn clear_filter(&mut self) { self.filter = None; }
+    pub fn clear_filter(&mut self) {
+        self.filter = None;
+    }
 
     /// Nombre total d'entrées exportées.
-    pub fn total_exported(&self) -> u64 { self.total_exported }
+    pub fn total_exported(&self) -> u64 {
+        self.total_exported
+    }
 
     // ── Export principal ──────────────────────────────────────────────────────
 
     /// Exporte les entrées selon la plage et le format donnés.
     pub fn export(
         &mut self,
-        range:  &ExportRange,
+        range: &ExportRange,
         format: ExportFormat,
     ) -> ExofsResult<ExportResult> {
         self.export_from(&AUDIT_LOG, range, format)
@@ -125,29 +136,26 @@ impl AuditExporter {
     /// Variante avec log explicite (utile pour les tests).
     pub fn export_from(
         &mut self,
-        log:    &AuditLog,
-        range:  &ExportRange,
+        log: &AuditLog,
+        range: &ExportRange,
         format: ExportFormat,
     ) -> ExofsResult<ExportResult> {
         let entries = self.collect_range(log, range)?;
-        let result  = match format {
-            ExportFormat::Raw  => self.export_raw(&entries)?,
+        let result = match format {
+            ExportFormat::Raw => self.export_raw(&entries)?,
             ExportFormat::Text => self.export_text(&entries)?,
         };
-        self.total_exported = self.total_exported
+        self.total_exported = self
+            .total_exported
             .wrapping_add(result.stats.n_exported as u64);
         Ok(result)
     }
 
     // ── Helpers de collection ─────────────────────────────────────────────────
 
-    fn collect_range(
-        &self,
-        log:   &AuditLog,
-        range: &ExportRange,
-    ) -> ExofsResult<Vec<AuditEntry>> {
+    fn collect_range(&self, log: &AuditLog, range: &ExportRange) -> ExofsResult<Vec<AuditEntry>> {
         let avail = log.available();
-        let head  = log.next_seq() as usize;
+        let head = log.next_seq() as usize;
 
         let (start_pos, n) = match range {
             ExportRange::All => {
@@ -161,8 +169,12 @@ impl AuditExporter {
             ExportRange::SeqRange(s, e) => {
                 let s = *s as usize;
                 let e = (*e as usize).min(head.wrapping_sub(1));
-                if e < s { return Ok(Vec::new()); }
-                let n = (e - s).checked_add(1).ok_or(ExofsError::OffsetOverflow)?
+                if e < s {
+                    return Ok(Vec::new());
+                }
+                let n = (e - s)
+                    .checked_add(1)
+                    .ok_or(ExofsError::OffsetOverflow)?
                     .min(EXPORT_MAX_ENTRIES);
                 (s, n)
             }
@@ -173,7 +185,7 @@ impl AuditExporter {
 
         for i in 0..n {
             let pos = start_pos.wrapping_add(i);
-            let e   = log.read_at(pos);
+            let e = log.read_at(pos);
             if e.is_valid() {
                 entries.push(e);
             }
@@ -188,11 +200,18 @@ impl AuditExporter {
         let mut data: Vec<u8> = Vec::new();
 
         for e in entries {
-            if !e.is_valid() { stats.n_invalid += 1; continue; }
-            if let Some(f) = &self.filter {
-                if !f.matches(e) { stats.n_filtered += 1; continue; }
+            if !e.is_valid() {
+                stats.n_invalid += 1;
+                continue;
             }
-            data.try_reserve(AUDIT_ENTRY_SIZE).map_err(|_| ExofsError::NoMemory)?;
+            if let Some(f) = &self.filter {
+                if !f.matches(e) {
+                    stats.n_filtered += 1;
+                    continue;
+                }
+            }
+            data.try_reserve(AUDIT_ENTRY_SIZE)
+                .map_err(|_| ExofsError::NoMemory)?;
             data.extend_from_slice(e.as_bytes());
             stats.n_exported = stats.n_exported.wrapping_add(1);
         }
@@ -208,31 +227,45 @@ impl AuditExporter {
         let mut data: Vec<u8> = Vec::new();
 
         for e in entries {
-            if !e.is_valid() { stats.n_invalid += 1; continue; }
+            if !e.is_valid() {
+                stats.n_invalid += 1;
+                continue;
+            }
             if let Some(f) = &self.filter {
-                if !f.matches(e) { stats.n_filtered += 1; continue; }
+                if !f.matches(e) {
+                    stats.n_filtered += 1;
+                    continue;
+                }
             }
 
-            let op_name  = AuditOp::from_u8(e.op)
-                .map(|o| o.name()).unwrap_or("UNKNOWN");
+            let op_name = AuditOp::from_u8(e.op)
+                .map(|o| o.name())
+                .unwrap_or("UNKNOWN");
             let res_name = match AuditResult::from_u8(e.result) {
                 Some(AuditResult::Success) => "OK",
-                Some(AuditResult::Denied)  => "DENIED",
-                Some(AuditResult::Error)   => "ERROR",
+                Some(AuditResult::Denied) => "DENIED",
+                Some(AuditResult::Error) => "ERROR",
                 Some(AuditResult::Partial) => "PARTIAL",
                 Some(AuditResult::Timeout) => "TIMEOUT",
-                None                       => "?",
+                None => "?",
             };
             let sev_name = match AuditSeverity::from_u8(e.severity) {
-                Some(AuditSeverity::Info)     => "INFO",
-                Some(AuditSeverity::Warning)  => "WARN",
+                Some(AuditSeverity::Info) => "INFO",
+                Some(AuditSeverity::Warning) => "WARN",
                 Some(AuditSeverity::Critical) => "CRIT",
-                Some(AuditSeverity::Alert)    => "ALERT",
-                None                          => "?",
+                Some(AuditSeverity::Alert) => "ALERT",
+                None => "?",
             };
 
-            let line = format_entry_line(e.seq, e.tick, e.actor_uid,
-                op_name, res_name, sev_name, e.object_id);
+            let line = format_entry_line(
+                e.seq,
+                e.tick,
+                e.actor_uid,
+                op_name,
+                res_name,
+                sev_name,
+                e.object_id,
+            );
             let line_bytes = line.as_bytes();
             data.try_reserve(line_bytes.len())
                 .map_err(|_| ExofsError::NoMemory)?;
@@ -257,9 +290,7 @@ impl AuditExporter {
     }
 
     /// Exporte une plage de séquences en texte.
-    pub fn export_seq_range_text(
-        &mut self, from: u64, to: u64,
-    ) -> ExofsResult<ExportResult> {
+    pub fn export_seq_range_text(&mut self, from: u64, to: u64) -> ExofsResult<ExportResult> {
         self.export(&ExportRange::SeqRange(from, to), ExportFormat::Text)
     }
 }
@@ -272,13 +303,13 @@ impl AuditExporter {
 ///
 /// Format : `[AUDIT] seq=<N> tick=<T> uid=<U> obj=<O> op=<OP> res=<R> sev=<S>\n`
 fn format_entry_line(
-    seq:      u64,
-    tick:     u64,
-    uid:      u64,
-    op:       &str,
-    result:   &str,
+    seq: u64,
+    tick: u64,
+    uid: u64,
+    op: &str,
+    result: &str,
     severity: &str,
-    obj:      u64,
+    obj: u64,
 ) -> String {
     let mut s = String::new();
     s.push_str(TEXT_LINE_PREFIX);
@@ -287,9 +318,15 @@ fn format_entry_line(
     push_kv_u64(&mut s, "tick", tick);
     push_kv_u64(&mut s, "uid", uid);
     push_kv_u64(&mut s, "obj", obj);
-    s.push_str("op=");  s.push_str(op);      s.push(' ');
-    s.push_str("res="); s.push_str(result);   s.push(' ');
-    s.push_str("sev="); s.push_str(severity); s.push('\n');
+    s.push_str("op=");
+    s.push_str(op);
+    s.push(' ');
+    s.push_str("res=");
+    s.push_str(result);
+    s.push(' ');
+    s.push_str("sev=");
+    s.push_str(severity);
+    s.push('\n');
     s
 }
 
@@ -302,7 +339,10 @@ fn push_kv_u64(s: &mut String, key: &str, val: u64) {
 
 /// Convertit `n` en décimal ASCII sans alloc.
 fn push_u64_decimal(s: &mut String, mut n: u64) {
-    if n == 0 { s.push('0'); return; }
+    if n == 0 {
+        s.push('0');
+        return;
+    }
     let mut buf = [0u8; 20];
     let mut len = 0usize;
     while n > 0 {
@@ -322,102 +362,152 @@ fn push_u64_decimal(s: &mut String, mut n: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::audit_entry::{AuditEntry, AuditOp, AuditResult};
     use super::super::audit_filter::FilterCriteria;
     use super::super::audit_log::AuditLog;
+    use super::*;
 
     fn push_n(log: &AuditLog, n: usize) {
         for i in 0..n {
             log.push(AuditEntry::new(
-                i as u64, 1, 0, i as u64, [0u8; 32],
-                AuditOp::Read, AuditResult::Success, log.next_seq(),
+                i as u64,
+                1,
+                0,
+                i as u64,
+                [0u8; 32],
+                AuditOp::Read,
+                AuditResult::Success,
+                log.next_seq(),
             ));
         }
     }
 
-    #[test] fn test_export_raw_byte_size() {
+    #[test]
+    fn test_export_raw_byte_size() {
         let log = AuditLog::new_const();
         push_n(&log, 3);
         let mut exp = AuditExporter::new();
-        let res = exp.export_from(&log, &ExportRange::All, ExportFormat::Raw).unwrap();
-        assert_eq!(res.stats.byte_size, res.stats.n_exported as usize * AUDIT_ENTRY_SIZE);
+        let res = exp
+            .export_from(&log, &ExportRange::All, ExportFormat::Raw)
+            .unwrap();
+        assert_eq!(
+            res.stats.byte_size,
+            res.stats.n_exported as usize * AUDIT_ENTRY_SIZE
+        );
     }
 
-    #[test] fn test_export_text_contains_audit_prefix() {
+    #[test]
+    fn test_export_text_contains_audit_prefix() {
         let log = AuditLog::new_const();
         push_n(&log, 2);
         let mut exp = AuditExporter::new();
-        let res = exp.export_from(&log, &ExportRange::LastN(2), ExportFormat::Text).unwrap();
+        let res = exp
+            .export_from(&log, &ExportRange::LastN(2), ExportFormat::Text)
+            .unwrap();
         let text = core::str::from_utf8(&res.data).unwrap();
-        assert!(text.contains("[AUDIT]"), "expected [AUDIT] in {:?}", &text[..text.len().min(80)]);
+        assert!(
+            text.contains("[AUDIT]"),
+            "expected [AUDIT] in {:?}",
+            &text[..text.len().min(80)]
+        );
     }
 
-    #[test] fn test_export_last_n_respects_limit() {
+    #[test]
+    fn test_export_last_n_respects_limit() {
         let log = AuditLog::new_const();
         push_n(&log, 5);
         let mut exp = AuditExporter::new();
-        let res = exp.export_from(&log, &ExportRange::LastN(2), ExportFormat::Raw).unwrap();
+        let res = exp
+            .export_from(&log, &ExportRange::LastN(2), ExportFormat::Raw)
+            .unwrap();
         assert!(res.stats.n_exported <= 2);
     }
 
-    #[test] fn test_export_with_filter() {
+    #[test]
+    fn test_export_with_filter() {
         let log = AuditLog::new_const();
         for i in 0..4u64 {
-            let op = if i % 2 == 0 { AuditOp::Write } else { AuditOp::Read };
-            log.push(AuditEntry::new(i, 1, 0, i, [0u8;32], op, AuditResult::Success, i));
+            let op = if i % 2 == 0 {
+                AuditOp::Write
+            } else {
+                AuditOp::Read
+            };
+            log.push(AuditEntry::new(
+                i,
+                1,
+                0,
+                i,
+                [0u8; 32],
+                op,
+                AuditResult::Success,
+                i,
+            ));
         }
         let filter = AuditFilter::new(FilterCriteria::by_op(AuditOp::Write));
         let mut exp = AuditExporter::with_filter(filter);
-        let res = exp.export_from(&log, &ExportRange::All, ExportFormat::Raw).unwrap();
+        let res = exp
+            .export_from(&log, &ExportRange::All, ExportFormat::Raw)
+            .unwrap();
         assert_eq!(res.stats.n_exported, 2);
     }
 
-    #[test] fn test_export_empty_log() {
+    #[test]
+    fn test_export_empty_log() {
         let log = AuditLog::new_const();
         let mut exp = AuditExporter::new();
-        let res = exp.export_from(&log, &ExportRange::All, ExportFormat::Raw).unwrap();
+        let res = exp
+            .export_from(&log, &ExportRange::All, ExportFormat::Raw)
+            .unwrap();
         assert_eq!(res.stats.n_exported, 0);
         assert!(res.data.is_empty());
     }
 
-    #[test] fn test_total_exported_increments() {
+    #[test]
+    fn test_total_exported_increments() {
         let log = AuditLog::new_const();
         push_n(&log, 2);
         let mut exp = AuditExporter::new();
-        exp.export_from(&log, &ExportRange::All, ExportFormat::Raw).unwrap();
+        exp.export_from(&log, &ExportRange::All, ExportFormat::Raw)
+            .unwrap();
         assert!(exp.total_exported() >= 2);
     }
 
-    #[test] fn test_push_u64_decimal_zero() {
+    #[test]
+    fn test_push_u64_decimal_zero() {
         let mut s = String::new();
         push_u64_decimal(&mut s, 0);
         assert_eq!(s, "0");
     }
 
-    #[test] fn test_push_u64_decimal_one() {
+    #[test]
+    fn test_push_u64_decimal_one() {
         let mut s = String::new();
         push_u64_decimal(&mut s, 1);
         assert_eq!(s, "1");
     }
 
-    #[test] fn test_push_u64_decimal_large() {
+    #[test]
+    fn test_push_u64_decimal_large() {
         let mut s = String::new();
         push_u64_decimal(&mut s, 123456789);
         assert_eq!(s, "123456789");
     }
 
-    #[test] fn test_seq_range_export() {
+    #[test]
+    fn test_seq_range_export() {
         let log = AuditLog::new_const();
         push_n(&log, 4);
         let start = log.next_seq().saturating_sub(3);
-        let end   = log.next_seq().saturating_sub(2);
+        let end = log.next_seq().saturating_sub(2);
         let mut exp = AuditExporter::new();
-        let res = exp.export_from(&log, &ExportRange::SeqRange(start, end), ExportFormat::Raw).unwrap();
+        let res = exp
+            .export_from(&log, &ExportRange::SeqRange(start, end), ExportFormat::Raw)
+            .unwrap();
         let _ = res; // Pas de panique.
     }
 
-    #[test] fn test_clear_filter() {
+    #[test]
+    fn test_clear_filter() {
         let mut exp = AuditExporter::with_filter(AuditFilter::passthrough());
         exp.clear_filter();
         assert!(exp.filter.is_none());

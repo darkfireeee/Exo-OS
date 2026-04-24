@@ -18,8 +18,8 @@
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-mod boot_sequence;
 mod boot_info;
+mod boot_sequence;
 mod dependency;
 mod isolation;
 mod protocol;
@@ -62,18 +62,20 @@ mod syscall {
         syscall6(nr, a1, 0, 0, 0, 0, 0)
     }
     #[inline(always)]
-    pub unsafe fn syscall0(nr: u64) -> i64 { syscall6(nr, 0, 0, 0, 0, 0, 0) }
+    pub unsafe fn syscall0(nr: u64) -> i64 {
+        syscall6(nr, 0, 0, 0, 0, 0, 0)
+    }
 
-    pub const SYS_FORK:       u64 =  57;
-    pub const SYS_EXECVE:     u64 =  59;
-    pub const SYS_EXIT:       u64 =  60;
-    pub const SYS_WAIT4:      u64 =  61;
-    pub const SYS_KILL:       u64 =  62;
-    pub const SYS_SIGACTION:  u64 =  13;
-    pub const SYS_NANOSLEEP:  u64 =  35;
-    pub const SYS_GETPID:     u64 =  39;
-    pub const SYS_IPC_SEND:   u64 = 300;
-    pub const SYS_IPC_RECV:   u64 = 301;
+    pub const SYS_FORK: u64 = 57;
+    pub const SYS_EXECVE: u64 = 59;
+    pub const SYS_EXIT: u64 = 60;
+    pub const SYS_WAIT4: u64 = 61;
+    pub const SYS_KILL: u64 = 62;
+    pub const SYS_SIGACTION: u64 = 13;
+    pub const SYS_NANOSLEEP: u64 = 35;
+    pub const SYS_GETPID: u64 = 39;
+    pub const SYS_IPC_SEND: u64 = 300;
+    pub const SYS_IPC_RECV: u64 = 301;
     pub const SYS_IPC_REGISTER: u64 = 304;
 
     // Flags wait4
@@ -91,11 +93,11 @@ mod syscall {
 /// Descripteur d'un service supervisé.
 struct Service {
     #[allow(dead_code)]
-    name:      &'static str,
-    bin_path:  &'static [u8],  // chemin u8 null-terminated vers le binaire
-    pid:       AtomicU32,      // PID courant (0 = non démarré)
-    restart_delay_ticks: AtomicU32,  // délai avant relance (backoff exponentiel)
-    disabled:  AtomicBool,
+    name: &'static str,
+    bin_path: &'static [u8], // chemin u8 null-terminated vers le binaire
+    pid: AtomicU32,          // PID courant (0 = non démarré)
+    restart_delay_ticks: AtomicU32, // délai avant relance (backoff exponentiel)
+    disabled: AtomicBool,
 }
 
 impl Service {
@@ -103,15 +105,19 @@ impl Service {
         Self {
             name,
             bin_path: bin,
-            pid:      AtomicU32::new(0),
+            pid: AtomicU32::new(0),
             restart_delay_ticks: AtomicU32::new(1),
             disabled: AtomicBool::new(false),
         }
     }
 
-    fn current_pid(&self) -> u32 { self.pid.load(Ordering::Acquire) }
+    fn current_pid(&self) -> u32 {
+        self.pid.load(Ordering::Acquire)
+    }
 
-    fn is_disabled(&self) -> bool { self.disabled.load(Ordering::Acquire) }
+    fn is_disabled(&self) -> bool {
+        self.disabled.load(Ordering::Acquire)
+    }
 
     fn set_pid(&self, pid: u32) {
         self.pid.store(pid, Ordering::Release);
@@ -133,7 +139,8 @@ impl Service {
         self.pid.store(0, Ordering::Release);
         // Délai exponentiel cappé à 32 ticks
         let d = self.restart_delay_ticks.load(Ordering::Relaxed);
-        self.restart_delay_ticks.store(d.saturating_mul(2).min(32), Ordering::Relaxed);
+        self.restart_delay_ticks
+            .store(d.saturating_mul(2).min(32), Ordering::Relaxed);
     }
 }
 
@@ -154,7 +161,11 @@ static SERVICES: [Service; service_table::SERVICE_COUNT] = [
 
 #[inline(always)]
 fn halt_forever() -> ! {
-    loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
+    }
 }
 
 /// Attends tous les fils zombies (WNOHANG) et met à jour la table de services.
@@ -169,7 +180,9 @@ unsafe fn reap_children(service_watchdog: &mut ServiceWatchdog) {
             0,
         ) as i32;
 
-        if pid <= 0 { break; } // plus de zombie
+        if pid <= 0 {
+            break;
+        } // plus de zombie
 
         // Trouver quel service a crashé et le marquer mort
         let dead_pid = pid as u32;
@@ -203,7 +216,8 @@ fn start_service(idx: usize, service_watchdog: &mut ServiceWatchdog) -> i64 {
 
     service.set_pid(pid);
     service_watchdog.observe_spawn(idx);
-    if unsafe { boot_sequence::wait_for_ipc_ready(pid, dependency::ready_timeout_ms(service.name)) } {
+    if unsafe { boot_sequence::wait_for_ipc_ready(pid, dependency::ready_timeout_ms(service.name)) }
+    {
         pid as i64
     } else {
         kill_service(pid, 15);
@@ -247,9 +261,9 @@ fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
                 }
             }
             protocol::INIT_MSG_STATUS => {
-                match protocol::read_service_name(&request.payload)
-                    .and_then(|service_name| supervisor::runtime_index_by_name(&SERVICES, service_name))
-                {
+                match protocol::read_service_name(&request.payload).and_then(|service_name| {
+                    supervisor::runtime_index_by_name(&SERVICES, service_name)
+                }) {
                     Some(idx) => protocol::status_reply(
                         idx as u32,
                         SERVICES[idx].current_pid(),
@@ -261,24 +275,27 @@ fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
                 }
             }
             protocol::INIT_MSG_START => {
-                match protocol::read_service_name(&request.payload)
-                    .and_then(|service_name| supervisor::runtime_index_by_name(&SERVICES, service_name))
-                {
+                match protocol::read_service_name(&request.payload).and_then(|service_name| {
+                    supervisor::runtime_index_by_name(&SERVICES, service_name)
+                }) {
                     Some(idx) => {
                         let rc = start_service(idx, service_watchdog);
                         if rc < 0 {
                             protocol::InitReply::error(rc)
                         } else {
-                            protocol::lifecycle_reply(rc as u32, supervisor::running_mask(&SERVICES))
+                            protocol::lifecycle_reply(
+                                rc as u32,
+                                supervisor::running_mask(&SERVICES),
+                            )
                         }
                     }
                     None => protocol::InitReply::error(syscall::ENOENT),
                 }
             }
             protocol::INIT_MSG_STOP => {
-                match protocol::read_service_name(&request.payload)
-                    .and_then(|service_name| supervisor::runtime_index_by_name(&SERVICES, service_name))
-                {
+                match protocol::read_service_name(&request.payload).and_then(|service_name| {
+                    supervisor::runtime_index_by_name(&SERVICES, service_name)
+                }) {
                     Some(idx) => {
                         let rc = stop_service(idx, service_watchdog);
                         if rc < 0 {
@@ -291,36 +308,37 @@ fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
                 }
             }
             protocol::INIT_MSG_RESTART => {
-                match protocol::read_service_name(&request.payload)
-                    .and_then(|service_name| supervisor::runtime_index_by_name(&SERVICES, service_name))
-                {
+                match protocol::read_service_name(&request.payload).and_then(|service_name| {
+                    supervisor::runtime_index_by_name(&SERVICES, service_name)
+                }) {
                     Some(idx) => {
                         let rc = restart_service(idx, service_watchdog);
                         if rc < 0 {
                             protocol::InitReply::error(rc)
                         } else {
-                            protocol::lifecycle_reply(rc as u32, supervisor::running_mask(&SERVICES))
+                            protocol::lifecycle_reply(
+                                rc as u32,
+                                supervisor::running_mask(&SERVICES),
+                            )
                         }
                     }
                     None => protocol::InitReply::error(syscall::ENOENT),
                 }
             }
-            protocol::INIT_MSG_CHILD_DIED => {
-                match protocol::read_u32(&request.payload, 0) {
-                    Ok(pid) => {
-                        let _ = protocol::read_i32(&request.payload, 4);
-                        if let Some(idx) = supervisor::note_child_exit(&SERVICES, pid) {
-                            if SERVICES[idx].is_disabled() {
-                                SERVICES[idx].disable();
-                            } else {
-                                service_watchdog.observe_stop(idx);
-                            }
+            protocol::INIT_MSG_CHILD_DIED => match protocol::read_u32(&request.payload, 0) {
+                Ok(pid) => {
+                    let _ = protocol::read_i32(&request.payload, 4);
+                    if let Some(idx) = supervisor::note_child_exit(&SERVICES, pid) {
+                        if SERVICES[idx].is_disabled() {
+                            SERVICES[idx].disable();
+                        } else {
+                            service_watchdog.observe_stop(idx);
                         }
-                        protocol::lifecycle_reply(pid, supervisor::running_mask(&SERVICES))
                     }
-                    Err(err) => protocol::InitReply::error(err),
+                    protocol::lifecycle_reply(pid, supervisor::running_mask(&SERVICES))
                 }
-            }
+                Err(err) => protocol::InitReply::error(err),
+            },
             protocol::INIT_MSG_PREPARE_ISOLATION => isolation::prepare_isolation_reply(&SERVICES),
             _ => protocol::InitReply::error(syscall::EINVAL),
         },
@@ -345,7 +363,9 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
     let mut service_watchdog = ServiceWatchdog::new();
 
     protocol::register_endpoint();
-    unsafe { sigchld_handler::install_handlers(); }
+    unsafe {
+        sigchld_handler::install_handlers();
+    }
 
     // ── 2. Démarrer tous les services dans l'ordre ────────────────────────
     let _ = unsafe { boot_sequence::boot_services(&SERVICES) };
@@ -375,7 +395,9 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
 
         // Si SIGCHLD reçu, recueillir les tombés
         if sigchld_handler::take_sigchld() {
-            unsafe { reap_children(&mut service_watchdog); }
+            unsafe {
+                reap_children(&mut service_watchdog);
+            }
         }
 
         let mut check_idx = 0usize;
@@ -405,7 +427,9 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
                     let _ = start_service(i, &mut service_watchdog);
                 } else {
                     // Décrémenter le compteur de délai
-                    SERVICES[i].restart_delay_ticks.fetch_sub(1, Ordering::Relaxed);
+                    SERVICES[i]
+                        .restart_delay_ticks
+                        .fetch_sub(1, Ordering::Relaxed);
                 }
             }
             i += 1;
@@ -415,7 +439,9 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
     }
 
     // Arrêt propre terminé : attendre les derniers zombies et halt
-    unsafe { reap_children(&mut service_watchdog); }
+    unsafe {
+        reap_children(&mut service_watchdog);
+    }
     halt_forever();
 }
 

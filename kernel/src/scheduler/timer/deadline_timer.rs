@@ -8,11 +8,11 @@
 // Intègre la détection de miss d'échéance et la reprogrammation de la prochaine période.
 // ═══════════════════════════════════════════════════════════════════════════════
 
+use crate::scheduler::core::task::ThreadControlBlock;
+use crate::scheduler::policies::deadline::{check_deadline_miss, refresh_deadline};
+use crate::scheduler::smp::topology::MAX_CPUS;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::core::task::ThreadControlBlock;
-use crate::scheduler::policies::deadline::{refresh_deadline, check_deadline_miss};
-use crate::scheduler::smp::topology::MAX_CPUS;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // File EDF par CPU — tableau trié par deadline_abs_ns croissant
@@ -30,17 +30,35 @@ unsafe impl Sync for DeadlineQueue {}
 
 impl DeadlineQueue {
     const fn new() -> Self {
-        Self { tasks: [None; MAX_DL_TASKS], count: 0 }
+        Self {
+            tasks: [None; MAX_DL_TASKS],
+            count: 0,
+        }
     }
 
     fn insert(&mut self, tcb: NonNull<ThreadControlBlock>) -> bool {
-        if self.count >= MAX_DL_TASKS { return false; }
-        let dl = unsafe { tcb.as_ref().deadline_abs.load(core::sync::atomic::Ordering::Relaxed) };
+        if self.count >= MAX_DL_TASKS {
+            return false;
+        }
+        let dl = unsafe {
+            tcb.as_ref()
+                .deadline_abs
+                .load(core::sync::atomic::Ordering::Relaxed)
+        };
         // Insertion triée par deadline_abs_ns croissant.
         let mut pos = self.count;
         for i in 0..self.count {
-            let d = unsafe { self.tasks[i].unwrap().as_ref().deadline_abs.load(core::sync::atomic::Ordering::Relaxed) };
-            if d > dl { pos = i; break; }
+            let d = unsafe {
+                self.tasks[i]
+                    .unwrap()
+                    .as_ref()
+                    .deadline_abs
+                    .load(core::sync::atomic::Ordering::Relaxed)
+            };
+            if d > dl {
+                pos = i;
+                break;
+            }
         }
         let mut j = self.count;
         while j > pos {
@@ -54,10 +72,15 @@ impl DeadlineQueue {
 
     /// Extrait le thread avec l'échéance la plus proche.
     fn pop_earliest(&mut self) -> Option<NonNull<ThreadControlBlock>> {
-        if self.count == 0 { return None; }
+        if self.count == 0 {
+            return None;
+        }
         let tcb = self.tasks[0];
         let mut j = 0;
-        while j + 1 < self.count { self.tasks[j] = self.tasks[j + 1]; j += 1; }
+        while j + 1 < self.count {
+            self.tasks[j] = self.tasks[j + 1];
+            j += 1;
+        }
         self.tasks[self.count - 1] = None;
         self.count -= 1;
         tcb
@@ -79,8 +102,8 @@ use core::mem::MaybeUninit;
 static mut DL_QUEUES: [MaybeUninit<DeadlineQueue>; MAX_CPUS] =
     [const { MaybeUninit::uninit() }; MAX_CPUS];
 
-pub static DL_ENQUEUES:    AtomicU64 = AtomicU64::new(0);
-pub static DL_DEQUEUES:    AtomicU64 = AtomicU64::new(0);
+pub static DL_ENQUEUES: AtomicU64 = AtomicU64::new(0);
+pub static DL_DEQUEUES: AtomicU64 = AtomicU64::new(0);
 pub static DL_MISS_EVENTS: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────

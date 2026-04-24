@@ -15,13 +15,15 @@
 //   tx.send(SomeCmd::Halt).unwrap();
 //   let cmd = rx.recv().unwrap();
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use core::mem::{size_of, MaybeUninit};
 use core::marker::PhantomData;
+use core::mem::{size_of, MaybeUninit};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use crate::ipc::core::types::{ChannelId, IpcError, MsgFlags, MessageId, alloc_channel_id, alloc_message_id};
+use crate::ipc::core::types::{
+    alloc_channel_id, alloc_message_id, ChannelId, IpcError, MessageId, MsgFlags,
+};
 use crate::ipc::ring::spsc::SpscRing;
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 
 // ---------------------------------------------------------------------------
 // Contrainte de taille
@@ -109,9 +111,12 @@ impl TypedChannelInner {
     ///
     /// # SAFETY
     /// Appelant doit garantir que size_of::<T>() == self.type_size
-    pub unsafe fn push_raw(&self, ptr: *const u8, len: usize, flags: MsgFlags)
-        -> Result<MessageId, IpcError>
-    {
+    pub unsafe fn push_raw(
+        &self,
+        ptr: *const u8,
+        len: usize,
+        flags: MsgFlags,
+    ) -> Result<MessageId, IpcError> {
         if self.is_closed() {
             return Err(IpcError::Closed);
         }
@@ -128,9 +133,7 @@ impl TypedChannelInner {
     ///
     /// # SAFETY
     /// Appelant doit garantir que buf a une taille >= self.type_size
-    pub unsafe fn pop_raw(&self, ptr: *mut u8, len: usize)
-        -> Result<usize, IpcError>
-    {
+    pub unsafe fn pop_raw(&self, ptr: *mut u8, len: usize) -> Result<usize, IpcError> {
         if self.is_closed() {
             return Err(IpcError::Closed);
         }
@@ -239,8 +242,14 @@ impl<T: Copy + Sized> TypedChannel<T> {
         drop(tbl);
 
         Ok((
-            TypedSender { channel_idx: idx, _phantom: PhantomData },
-            TypedReceiver { channel_idx: idx, _phantom: PhantomData },
+            TypedSender {
+                channel_idx: idx,
+                _phantom: PhantomData,
+            },
+            TypedReceiver {
+                channel_idx: idx,
+                _phantom: PhantomData,
+            },
         ))
     }
 }
@@ -249,22 +258,14 @@ impl<T: Copy + Sized> TypedSender<T> {
     /// Envoie la valeur `val` de type T via le canal typé.
     pub fn send(&self, val: T, flags: MsgFlags) -> Result<MessageId, IpcError> {
         let tbl = typed_table().lock();
-        let inner = unsafe { tbl.get(self.channel_idx) }
-            .ok_or(IpcError::InvalidHandle)?;
-        let inner_ref: &'static TypedChannelInner = unsafe {
-            &*(inner as *const TypedChannelInner)
-        };
+        let inner = unsafe { tbl.get(self.channel_idx) }.ok_or(IpcError::InvalidHandle)?;
+        let inner_ref: &'static TypedChannelInner =
+            unsafe { &*(inner as *const TypedChannelInner) };
         drop(tbl);
 
         let size = size_of::<T>();
         // SAFETY: val est T: Copy, la mémoire de size octets de &val est valide
-        unsafe {
-            inner_ref.push_raw(
-                &val as *const T as *const u8,
-                size,
-                flags,
-            )
-        }
+        unsafe { inner_ref.push_raw(&val as *const T as *const u8, size, flags) }
     }
 
     /// Ferme le canal (côté émetteur — notifie le récepteur).
@@ -289,11 +290,9 @@ impl<T: Copy + Sized> TypedReceiver<T> {
     /// - `IpcError::ProtocolError` — taille reçue != size_of::<T>()
     pub fn recv(&self) -> Result<T, IpcError> {
         let tbl = typed_table().lock();
-        let inner = unsafe { tbl.get(self.channel_idx) }
-            .ok_or(IpcError::InvalidHandle)?;
-        let inner_ref: &'static TypedChannelInner = unsafe {
-            &*(inner as *const TypedChannelInner)
-        };
+        let inner = unsafe { tbl.get(self.channel_idx) }.ok_or(IpcError::InvalidHandle)?;
+        let inner_ref: &'static TypedChannelInner =
+            unsafe { &*(inner as *const TypedChannelInner) };
         drop(tbl);
 
         let size = size_of::<T>();
@@ -302,12 +301,7 @@ impl<T: Copy + Sized> TypedReceiver<T> {
         let mut val = MaybeUninit::<T>::uninit();
 
         // SAFETY: val est T: Copy, les bytes non-initialisés seront remplis par pop_raw
-        let read_len = unsafe {
-            inner_ref.pop_raw(
-                val.as_mut_ptr() as *mut u8,
-                size,
-            )?
-        };
+        let read_len = unsafe { inner_ref.pop_raw(val.as_mut_ptr() as *mut u8, size)? };
 
         if read_len != size {
             return Err(IpcError::ProtocolError);
@@ -321,8 +315,7 @@ impl<T: Copy + Sized> TypedReceiver<T> {
     pub fn try_recv(&self) -> Result<T, IpcError> {
         // Vérifier d'abord si le ring a un message
         let tbl = typed_table().lock();
-        let inner = unsafe { tbl.get(self.channel_idx) }
-            .ok_or(IpcError::InvalidHandle)?;
+        let inner = unsafe { tbl.get(self.channel_idx) }.ok_or(IpcError::InvalidHandle)?;
         if inner.ring.is_empty() {
             return Err(IpcError::WouldBlock);
         }

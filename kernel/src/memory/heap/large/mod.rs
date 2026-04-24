@@ -4,4 +4,4 @@
 
 pub mod vmalloc;
 
-pub use vmalloc::{kalloc, kfree, krealloc, kalloc_usable_size, VMALLOC_STATS};
+pub use vmalloc::{kalloc, kalloc_usable_size, kfree, krealloc, VMALLOC_STATS};

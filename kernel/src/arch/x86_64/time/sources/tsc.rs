@@ -29,17 +29,16 @@
 //   Disponible depuis Intel Nehalem / AMD Barcelona.
 // ════════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use super::ClockSource;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 // ── MSR addresses ────────────────────────────────────────────────────────────
 
 const MSR_IA32_TSC_ADJUST: u32 = 0x0000_003B;
 #[allow(dead_code)]
-const MSR_IA32_TSC_AUX:    u32 = 0xC000_0103;
+const MSR_IA32_TSC_AUX: u32 = 0xC000_0103;
 /// Max leaf pour CPUID standard (feuille 0).
-const CPUID_MAX_STD_LEAF:  u32 = 0x0000_0000;
+const CPUID_MAX_STD_LEAF: u32 = 0x0000_0000;
 /// CPUID extended features.
 #[allow(dead_code)]
 const CPUID_EXTENDED_FEAT: u32 = 0x8000_0007;
@@ -50,50 +49,50 @@ const CPUID_EXTENDED_FEAT: u32 = 0x8000_0007;
 #[derive(Debug, Clone, Copy)]
 pub struct TscCapabilities {
     /// TSC invariant (CPUID 0x80000007 EDX bit 8).
-    pub invariant:          bool,
+    pub invariant: bool,
     /// RDTSCP disponible (CPUID 0x80000001 EDX bit 27).
-    pub rdtscp:             bool,
+    pub rdtscp: bool,
     /// TSC_DEADLINE disponible (CPUID 0x1 ECX bit 24).
-    pub tsc_deadline:       bool,
+    pub tsc_deadline: bool,
     /// IA32_TSC_ADJUST MSR présent et non nul (= BIOS a décalé le TSC).
     pub tsc_adjust_nonzero: bool,
     /// Valeur de IA32_TSC_ADJUST lue au boot.
-    pub tsc_adjust_value:   i64,
+    pub tsc_adjust_value: i64,
     /// VM/hyperviseur détecté.
-    pub hypervisor:         bool,
+    pub hypervisor: bool,
     /// Type d'hyperviseur.
-    pub hypervisor_type:    HypervisorType,
+    pub hypervisor_type: HypervisorType,
 }
 
 impl TscCapabilities {
     /// Valeur initiale (tout à false, à initialiser en appelant `detect()`).
     pub const fn uninit() -> Self {
         TscCapabilities {
-            invariant:          false,
-            rdtscp:             false,
-            tsc_deadline:       false,
+            invariant: false,
+            rdtscp: false,
+            tsc_deadline: false,
             tsc_adjust_nonzero: false,
-            tsc_adjust_value:   0,
-            hypervisor:         false,
-            hypervisor_type:    HypervisorType::None,
+            tsc_adjust_value: 0,
+            hypervisor: false,
+            hypervisor_type: HypervisorType::None,
         }
     }
 
     /// Détecte toutes les capacités TSC du CPU courant.
     pub fn detect() -> Self {
-        let invariant      = check_tsc_invariant();
-        let rdtscp         = check_rdtscp();
-        let tsc_deadline   = check_tsc_deadline();
-        let (hyp, hyp_type)= detect_hypervisor();
-        let adj            = read_tsc_adjust_msr();
+        let invariant = check_tsc_invariant();
+        let rdtscp = check_rdtscp();
+        let tsc_deadline = check_tsc_deadline();
+        let (hyp, hyp_type) = detect_hypervisor();
+        let adj = read_tsc_adjust_msr();
         TscCapabilities {
             invariant,
             rdtscp,
             tsc_deadline,
             tsc_adjust_nonzero: adj != 0,
-            tsc_adjust_value:   adj,
-            hypervisor:         hyp,
-            hypervisor_type:    hyp_type,
+            tsc_adjust_value: adj,
+            hypervisor: hyp,
+            hypervisor_type: hyp_type,
         }
     }
 
@@ -103,7 +102,11 @@ impl TscCapabilities {
     ///   - Non-invariant               → 50  (instable avec C-states)
     pub fn rating(&self) -> u32 {
         if self.invariant {
-            if self.hypervisor { 350 } else { 400 }
+            if self.hypervisor {
+                350
+            } else {
+                400
+            }
         } else {
             50
         }
@@ -125,11 +128,11 @@ pub enum HypervisorType {
 impl HypervisorType {
     pub fn as_str(self) -> &'static str {
         match self {
-            HypervisorType::None     => "none",
+            HypervisorType::None => "none",
             HypervisorType::KvmLinux => "KVM/Linux",
-            HypervisorType::HyperV   => "Hyper-V",
-            HypervisorType::VMware   => "VMware",
-            HypervisorType::Unknown  => "unknown-hypervisor",
+            HypervisorType::HyperV => "Hyper-V",
+            HypervisorType::VMware => "VMware",
+            HypervisorType::Unknown => "unknown-hypervisor",
         }
     }
 }
@@ -137,23 +140,25 @@ impl HypervisorType {
 // ── Globales ──────────────────────────────────────────────────────────────────
 
 /// Capacités TSC initialisées une fois au boot.
-static TSC_CAPS_INVARIANT:   AtomicBool = AtomicBool::new(false);
-static TSC_CAPS_RDTSCP:      AtomicBool = AtomicBool::new(false);
-static TSC_CAPS_HYPERVISOR:  AtomicBool = AtomicBool::new(false);
-static TSC_CAPS_RATING:      AtomicU32  = AtomicU32::new(0);
-static TSC_CAPS_ADJUST:      AtomicU64  = AtomicU64::new(0);
+static TSC_CAPS_INVARIANT: AtomicBool = AtomicBool::new(false);
+static TSC_CAPS_RDTSCP: AtomicBool = AtomicBool::new(false);
+static TSC_CAPS_HYPERVISOR: AtomicBool = AtomicBool::new(false);
+static TSC_CAPS_RATING: AtomicU32 = AtomicU32::new(0);
+static TSC_CAPS_ADJUST: AtomicU64 = AtomicU64::new(0);
 /// `true` si `init_tsc_source()` a été appelé.
 static TSC_SOURCE_INIT_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Initialise les capacités TSC et met à jour les globales.
 /// À appeler une seule fois depuis `time_init()`.
 pub fn init_tsc_source() {
-    if TSC_SOURCE_INIT_DONE.swap(true, Ordering::Relaxed) { return; }
+    if TSC_SOURCE_INIT_DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
     let caps = TscCapabilities::detect();
-    TSC_CAPS_INVARIANT.store(caps.invariant,    Ordering::Relaxed);
-    TSC_CAPS_RDTSCP.store(caps.rdtscp,          Ordering::Relaxed);
-    TSC_CAPS_HYPERVISOR.store(caps.hypervisor,  Ordering::Relaxed);
-    TSC_CAPS_RATING.store(caps.rating(),        Ordering::Relaxed);
+    TSC_CAPS_INVARIANT.store(caps.invariant, Ordering::Relaxed);
+    TSC_CAPS_RDTSCP.store(caps.rdtscp, Ordering::Relaxed);
+    TSC_CAPS_HYPERVISOR.store(caps.hypervisor, Ordering::Relaxed);
+    TSC_CAPS_RATING.store(caps.rating(), Ordering::Relaxed);
     // IA32_TSC_ADJUST en valeur brute (bit pattern de l'i64).
     TSC_CAPS_ADJUST.store(caps.tsc_adjust_value as u64, Ordering::Relaxed);
 }
@@ -163,13 +168,19 @@ pub fn init_tsc_source() {
 pub struct TscSource;
 
 impl ClockSource for TscSource {
-    fn name(&self) -> &'static str { "TSC" }
+    fn name(&self) -> &'static str {
+        "TSC"
+    }
 
     fn rating(&self) -> u32 {
         let r = TSC_CAPS_RATING.load(Ordering::Relaxed);
         if r == 0 {
             // Fallback si init_tsc_source() non encore appelé.
-            if check_tsc_invariant() { 400 } else { 50 }
+            if check_tsc_invariant() {
+                400
+            } else {
+                50
+            }
         } else {
             r
         }
@@ -187,7 +198,9 @@ impl ClockSource for TscSource {
         crate::arch::x86_64::cpu::tsc::tsc_hz()
     }
 
-    fn available(&self) -> bool { true } // TSC toujours présent sur x86_64
+    fn available(&self) -> bool {
+        true
+    } // TSC toujours présent sur x86_64
 }
 
 // ── Lecture TSC ───────────────────────────────────────────────────────────────
@@ -216,7 +229,7 @@ pub fn rdtscp_read() -> u64 {
     let lo: u32;
     let hi: u32;
     let _aux: u32; // TSC_AUX (CPU ID), ignoré ici — utilisé par percpu::sync.
-    // SAFETY: RDTSCP disponible si check_rdtscp() == true.
+                   // SAFETY: RDTSCP disponible si check_rdtscp() == true.
     unsafe {
         core::arch::asm!(
             "rdtscp",
@@ -278,7 +291,9 @@ pub fn check_rdtscp() -> bool {
             options(nostack, nomem)
         );
     }
-    if max_ext < 0x8000_0001 { return false; }
+    if max_ext < 0x8000_0001 {
+        return false;
+    }
     let edx: u32;
     unsafe {
         core::arch::asm!(
@@ -376,7 +391,9 @@ pub fn detect_hypervisor() -> (bool, HypervisorType) {
 /// Sur les CPU modernes, ce MSR est toujours présent (disponible depuis Ivy Bridge).
 pub fn read_tsc_adjust_msr() -> i64 {
     // Vérifier que CPUID 0x7 annonce IA32_TSC_ADJUST (EBX bit 1).
-    if !cpuid_tsc_adjust_supported() { return 0; }
+    if !cpuid_tsc_adjust_supported() {
+        return 0;
+    }
 
     let lo: u32;
     let hi: u32;
@@ -397,7 +414,9 @@ pub fn read_tsc_adjust_msr() -> i64 {
 /// Écrit IA32_TSC_ADJUST pour neutraliser un décalage BIOS.
 /// Uniquement en CPL=0 (kernel). Ne jamais appeler depuis le userespace.
 pub fn write_tsc_adjust_msr(value: i64) {
-    if !cpuid_tsc_adjust_supported() { return; }
+    if !cpuid_tsc_adjust_supported() {
+        return;
+    }
     let raw = value as u64;
     let lo = raw as u32;
     let hi = (raw >> 32) as u32;
@@ -427,7 +446,9 @@ pub fn cpuid_tsc_adjust_supported() -> bool {
             options(nostack, nomem)
         );
     }
-    if max_leaf < 7 { return false; }
+    if max_leaf < 7 {
+        return false;
+    }
     let ebx: u32;
     unsafe {
         core::arch::asm!(

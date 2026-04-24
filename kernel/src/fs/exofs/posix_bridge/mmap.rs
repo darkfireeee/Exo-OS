@@ -7,21 +7,21 @@
 //!
 //! RECUR-01 / OOM-02 / ARITH-02 — ExofsError exclusivement.
 
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
-use core::cell::UnsafeCell;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub const MMAP_MAX_MAPPINGS:  usize = 2048;
-pub const MMAP_PAGE_SIZE:     u64   = 4096;
-pub const MMAP_BASE_VIRT:     u64   = 0x0001_0000_0000_0000;
-pub const MMAP_VIRT_STRIDE:   u64   = 0x0000_0000_0010_0000; // 1 MiB entre chaque mapping
-pub const MMAP_MAGIC:         u32   = 0x4D4D_4150;           // "MMAP"
-pub const MMAP_VERSION:       u8    = 1;
+pub const MMAP_MAX_MAPPINGS: usize = 2048;
+pub const MMAP_PAGE_SIZE: u64 = 4096;
+pub const MMAP_BASE_VIRT: u64 = 0x0001_0000_0000_0000;
+pub const MMAP_VIRT_STRIDE: u64 = 0x0000_0000_0010_0000; // 1 MiB entre chaque mapping
+pub const MMAP_MAGIC: u32 = 0x4D4D_4150; // "MMAP"
+pub const MMAP_VERSION: u8 = 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Flags et protections
@@ -29,29 +29,29 @@ pub const MMAP_VERSION:       u8    = 1;
 
 /// Flags de mapping mémoire (MAP_*).
 pub mod map_flags {
-    pub const MAP_SHARED:    u32 = 0x01;
-    pub const MAP_PRIVATE:   u32 = 0x02;
+    pub const MAP_SHARED: u32 = 0x01;
+    pub const MAP_PRIVATE: u32 = 0x02;
     pub const MAP_ANONYMOUS: u32 = 0x04;
-    pub const MAP_FIXED:     u32 = 0x08;
-    pub const MAP_LOCKED:    u32 = 0x10;
-    pub const MAP_POPULATE:  u32 = 0x20;
-    pub const MAP_HUGETLB:   u32 = 0x40;
+    pub const MAP_FIXED: u32 = 0x08;
+    pub const MAP_LOCKED: u32 = 0x10;
+    pub const MAP_POPULATE: u32 = 0x20;
+    pub const MAP_HUGETLB: u32 = 0x40;
 }
 
 /// Protections de mapping mémoire (PROT_*).
 pub mod map_prot {
-    pub const PROT_NONE:  u32 = 0x00;
-    pub const PROT_READ:  u32 = 0x01;
+    pub const PROT_NONE: u32 = 0x00;
+    pub const PROT_READ: u32 = 0x01;
     pub const PROT_WRITE: u32 = 0x02;
-    pub const PROT_EXEC:  u32 = 0x04;
+    pub const PROT_EXEC: u32 = 0x04;
 }
 
 /// État interne d'un mapping.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MappingState {
-    Active  = 0,
-    Dirty   = 1,
+    Active = 0,
+    Dirty = 1,
     Syncing = 2,
     Removed = 3,
 }
@@ -64,15 +64,15 @@ pub enum MappingState {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct MmapEntry {
-    pub virt_addr:  u64,
-    pub length:     u64,
-    pub object_id:  u64,
-    pub offset:     u64,
-    pub prot:       u32,
-    pub flags:      u32,
-    pub pid:        u32,
-    pub state:      MappingState,
-    pub promoted:   u8,
+    pub virt_addr: u64,
+    pub length: u64,
+    pub object_id: u64,
+    pub offset: u64,
+    pub prot: u32,
+    pub flags: u32,
+    pub pid: u32,
+    pub state: MappingState,
+    pub promoted: u8,
     pub cow_active: u8,
     pub access_ctr: u8,
 }
@@ -83,16 +83,30 @@ const _: () = assert!(
 );
 
 impl MmapEntry {
-    pub fn is_shared(&self) -> bool   { self.flags & map_flags::MAP_SHARED != 0 }
-    pub fn is_private(&self) -> bool  { self.flags & map_flags::MAP_PRIVATE != 0 }
-    pub fn is_anon(&self)   -> bool   { self.flags & map_flags::MAP_ANONYMOUS != 0 }
-    pub fn is_writable(&self) -> bool { self.prot & map_prot::PROT_WRITE != 0 }
-    pub fn is_readable(&self) -> bool { self.prot & map_prot::PROT_READ != 0 }
-    pub fn is_exec(&self) -> bool     { self.prot & map_prot::PROT_EXEC != 0 }
-    pub fn end_addr(&self) -> u64     { self.virt_addr.saturating_add(self.length) }
+    pub fn is_shared(&self) -> bool {
+        self.flags & map_flags::MAP_SHARED != 0
+    }
+    pub fn is_private(&self) -> bool {
+        self.flags & map_flags::MAP_PRIVATE != 0
+    }
+    pub fn is_anon(&self) -> bool {
+        self.flags & map_flags::MAP_ANONYMOUS != 0
+    }
+    pub fn is_writable(&self) -> bool {
+        self.prot & map_prot::PROT_WRITE != 0
+    }
+    pub fn is_readable(&self) -> bool {
+        self.prot & map_prot::PROT_READ != 0
+    }
+    pub fn is_exec(&self) -> bool {
+        self.prot & map_prot::PROT_EXEC != 0
+    }
+    pub fn end_addr(&self) -> u64 {
+        self.virt_addr.saturating_add(self.length)
+    }
 
     pub fn overlaps_range(&self, other_start: u64, other_len: u64) -> bool {
-        let self_end  = self.virt_addr.saturating_add(self.length);
+        let self_end = self.virt_addr.saturating_add(self.length);
         let other_end = other_start.saturating_add(other_len);
         self.virt_addr < other_end && other_start < self_end
     }
@@ -103,11 +117,11 @@ impl MmapEntry {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct MmapTable {
-    entries:      UnsafeCell<Vec<MmapEntry>>,
-    spinlock:     AtomicU64,
-    virt_cursor:  AtomicU64,
+    entries: UnsafeCell<Vec<MmapEntry>>,
+    spinlock: AtomicU64,
+    virt_cursor: AtomicU64,
     total_mapped: AtomicU64,
-    map_count:    AtomicU64,
+    map_count: AtomicU64,
 }
 
 unsafe impl Sync for MmapTable {}
@@ -118,16 +132,20 @@ pub static MMAP_TABLE: MmapTable = MmapTable::new_const();
 impl MmapTable {
     pub const fn new_const() -> Self {
         Self {
-            entries:      UnsafeCell::new(Vec::new()),
-            spinlock:     AtomicU64::new(0),
-            virt_cursor:  AtomicU64::new(MMAP_BASE_VIRT),
+            entries: UnsafeCell::new(Vec::new()),
+            spinlock: AtomicU64::new(0),
+            virt_cursor: AtomicU64::new(MMAP_BASE_VIRT),
             total_mapped: AtomicU64::new(0),
-            map_count:    AtomicU64::new(0),
+            map_count: AtomicU64::new(0),
         }
     }
 
     fn lock_acquire(&self) {
-        while self.spinlock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .spinlock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
@@ -140,7 +158,9 @@ impl MmapTable {
 
     fn alloc_virt(&self, length: u64) -> u64 {
         let aligned = align_up(length, MMAP_PAGE_SIZE);
-        let base = self.virt_cursor.fetch_add(aligned.saturating_add(MMAP_VIRT_STRIDE), Ordering::Relaxed);
+        let base = self
+            .virt_cursor
+            .fetch_add(aligned.saturating_add(MMAP_VIRT_STRIDE), Ordering::Relaxed);
         base
     }
 
@@ -173,7 +193,9 @@ impl MmapTable {
         let mut n = 0usize;
         let mut i = 0usize;
         while i < entries.len() {
-            if entries[i].state != MappingState::Removed { n = n.wrapping_add(1); }
+            if entries[i].state != MappingState::Removed {
+                n = n.wrapping_add(1);
+            }
             i = i.wrapping_add(1);
         }
         n
@@ -182,13 +204,27 @@ impl MmapTable {
     // ─── Validation ───
 
     fn validate_args(length: u64, prot: u32, flags: u32) -> ExofsResult<()> {
-        if length == 0 { return Err(ExofsError::InvalidArgument); }
-        if length > 0x0001_0000_0000_0000 { return Err(ExofsError::InvalidArgument); }
-        let known_prot  = map_prot::PROT_READ | map_prot::PROT_WRITE | map_prot::PROT_EXEC | map_prot::PROT_NONE;
-        let known_flags = map_flags::MAP_SHARED | map_flags::MAP_PRIVATE | map_flags::MAP_ANONYMOUS
-            | map_flags::MAP_FIXED | map_flags::MAP_LOCKED | map_flags::MAP_POPULATE | map_flags::MAP_HUGETLB;
-        if prot  & !known_prot  != 0 { return Err(ExofsError::InvalidArgument); }
-        if flags & !known_flags != 0 { return Err(ExofsError::InvalidArgument); }
+        if length == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if length > 0x0001_0000_0000_0000 {
+            return Err(ExofsError::InvalidArgument);
+        }
+        let known_prot =
+            map_prot::PROT_READ | map_prot::PROT_WRITE | map_prot::PROT_EXEC | map_prot::PROT_NONE;
+        let known_flags = map_flags::MAP_SHARED
+            | map_flags::MAP_PRIVATE
+            | map_flags::MAP_ANONYMOUS
+            | map_flags::MAP_FIXED
+            | map_flags::MAP_LOCKED
+            | map_flags::MAP_POPULATE
+            | map_flags::MAP_HUGETLB;
+        if prot & !known_prot != 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if flags & !known_flags != 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         if flags & map_flags::MAP_SHARED != 0 && flags & map_flags::MAP_PRIVATE != 0 {
             return Err(ExofsError::InvalidArgument);
         }
@@ -199,10 +235,20 @@ impl MmapTable {
 
     /// Crée un nouveau mapping. Retourne l'adresse virtuelle.
     /// OOM-02 : try_reserve avant push.
-    pub fn mmap(&self, object_id: u64, offset: u64, length: u64, prot: u32, flags: u32, pid: u32) -> ExofsResult<u64> {
+    pub fn mmap(
+        &self,
+        object_id: u64,
+        offset: u64,
+        length: u64,
+        prot: u32,
+        flags: u32,
+        pid: u32,
+    ) -> ExofsResult<u64> {
         validate_page_aligned(offset)?;
         Self::validate_args(length, prot, flags)?;
-        if object_id == 0 && flags & map_flags::MAP_ANONYMOUS == 0 { return Err(ExofsError::InvalidArgument); }
+        if object_id == 0 && flags & map_flags::MAP_ANONYMOUS == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         let aligned_len = align_up(length, MMAP_PAGE_SIZE);
         self.lock_acquire();
         let result = self.mmap_inner(object_id, offset, aligned_len, prot, flags, pid);
@@ -210,16 +256,39 @@ impl MmapTable {
         result
     }
 
-    fn mmap_inner(&self, object_id: u64, offset: u64, length: u64, prot: u32, flags: u32, pid: u32) -> ExofsResult<u64> {
+    fn mmap_inner(
+        &self,
+        object_id: u64,
+        offset: u64,
+        length: u64,
+        prot: u32,
+        flags: u32,
+        pid: u32,
+    ) -> ExofsResult<u64> {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let active = Self::count_active(entries);
-        if active >= MMAP_MAX_MAPPINGS { return Err(ExofsError::QuotaExceeded); }
-        let promoted   = if flags & map_flags::MAP_SHARED != 0 && prot & map_prot::PROT_WRITE != 0 { 1u8 } else { 0u8 };
-        let cow_active = if flags & map_flags::MAP_PRIVATE != 0 { 1u8 } else { 0u8 };
-        let virt_addr  = self.alloc_virt(length);
+        if active >= MMAP_MAX_MAPPINGS {
+            return Err(ExofsError::QuotaExceeded);
+        }
+        let promoted = if flags & map_flags::MAP_SHARED != 0 && prot & map_prot::PROT_WRITE != 0 {
+            1u8
+        } else {
+            0u8
+        };
+        let cow_active = if flags & map_flags::MAP_PRIVATE != 0 {
+            1u8
+        } else {
+            0u8
+        };
+        let virt_addr = self.alloc_virt(length);
         let entry = MmapEntry {
-            virt_addr, length, object_id, offset, prot, flags,
+            virt_addr,
+            length,
+            object_id,
+            offset,
+            prot,
+            flags,
             pid,
             state: MappingState::Active,
             promoted,
@@ -235,7 +304,9 @@ impl MmapTable {
 
     /// Supprime un mapping à partir de virt_addr.
     pub fn munmap(&self, virt_addr: u64, length: u64) -> ExofsResult<()> {
-        if length == 0 { return Err(ExofsError::InvalidArgument); }
+        if length == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         self.lock_acquire();
         let result = self.munmap_inner(virt_addr, length);
         self.lock_release();
@@ -253,17 +324,24 @@ impl MmapTable {
                 let freed = e.length;
                 e.state = MappingState::Removed;
                 let cur = self.total_mapped.load(Ordering::Relaxed);
-                self.total_mapped.store(cur.saturating_sub(freed), Ordering::Relaxed);
+                self.total_mapped
+                    .store(cur.saturating_sub(freed), Ordering::Relaxed);
                 found = true;
             }
             i = i.wrapping_add(1);
         }
-        if found { Ok(()) } else { Err(ExofsError::ObjectNotFound) }
+        if found {
+            Ok(())
+        } else {
+            Err(ExofsError::ObjectNotFound)
+        }
     }
 
     /// Synchronise un mapping (marque Dirty → flush).
     pub fn msync(&self, virt_addr: u64, length: u64) -> ExofsResult<()> {
-        if length == 0 { return Err(ExofsError::InvalidArgument); }
+        if length == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         self.lock_acquire();
         let result = self.msync_inner(virt_addr, length);
         self.lock_release();
@@ -278,13 +356,19 @@ impl MmapTable {
         while i < entries.len() {
             let e = &mut entries[i];
             if e.state != MappingState::Removed && e.overlaps_range(virt_addr, length) {
-                if e.is_writable() && e.is_shared() { e.state = MappingState::Dirty; }
+                if e.is_writable() && e.is_shared() {
+                    e.state = MappingState::Dirty;
+                }
                 e.access_ctr = e.access_ctr.saturating_add(1);
                 found = true;
             }
             i = i.wrapping_add(1);
         }
-        if found { Ok(()) } else { Err(ExofsError::ObjectNotFound) }
+        if found {
+            Ok(())
+        } else {
+            Err(ExofsError::ObjectNotFound)
+        }
     }
 
     /// Confirme la fin du flush (Dirty → Active).
@@ -293,24 +377,34 @@ impl MmapTable {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = Self::find_by_vaddr(entries, virt_addr) {
-            entries[idx].state = MappingState::Active; Ok(())
-        } else { Err(ExofsError::ObjectNotFound) };
+            entries[idx].state = MappingState::Active;
+            Ok(())
+        } else {
+            Err(ExofsError::ObjectNotFound)
+        };
         self.lock_release();
         result
     }
 
     /// Change les protections d'un mapping.
     pub fn mprotect(&self, virt_addr: u64, prot: u32) -> ExofsResult<()> {
-        let known_prot = map_prot::PROT_READ | map_prot::PROT_WRITE | map_prot::PROT_EXEC | map_prot::PROT_NONE;
-        if prot & !known_prot != 0 { return Err(ExofsError::InvalidArgument); }
+        let known_prot =
+            map_prot::PROT_READ | map_prot::PROT_WRITE | map_prot::PROT_EXEC | map_prot::PROT_NONE;
+        if prot & !known_prot != 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         self.lock_acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = Self::find_exact(entries, virt_addr) {
             entries[idx].prot = prot;
-            if prot & map_prot::PROT_WRITE == 0 { entries[idx].promoted = 0; }
+            if prot & map_prot::PROT_WRITE == 0 {
+                entries[idx].promoted = 0;
+            }
             Ok(())
-        } else { Err(ExofsError::ObjectNotFound) };
+        } else {
+            Err(ExofsError::ObjectNotFound)
+        };
         self.lock_release();
         result
     }
@@ -332,7 +426,8 @@ impl MmapTable {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &*self.entries.get() };
         let mut out: Vec<MmapEntry> = Vec::new();
-        out.try_reserve(entries.len()).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(entries.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         let mut i = 0usize;
         while i < entries.len() {
             if entries[i].pid == pid && entries[i].state != MappingState::Removed {
@@ -355,7 +450,8 @@ impl MmapTable {
                 let freed = entries[i].length;
                 entries[i].state = MappingState::Removed;
                 let cur = self.total_mapped.load(Ordering::Relaxed);
-                self.total_mapped.store(cur.saturating_sub(freed), Ordering::Relaxed);
+                self.total_mapped
+                    .store(cur.saturating_sub(freed), Ordering::Relaxed);
             }
             i = i.wrapping_add(1);
         }
@@ -387,7 +483,9 @@ impl MmapTable {
                 entries[idx].state = MappingState::Dirty;
             }
             Ok(())
-        } else { Err(ExofsError::ObjectNotFound) };
+        } else {
+            Err(ExofsError::ObjectNotFound)
+        };
         self.lock_release();
         result
     }
@@ -432,7 +530,11 @@ pub fn align_up(v: u64, align: u64) -> u64 {
 
 /// Vérifie qu'un offset est aligné sur une page.
 pub fn validate_page_aligned(offset: u64) -> ExofsResult<()> {
-    if offset & (MMAP_PAGE_SIZE.wrapping_sub(1)) != 0 { Err(ExofsError::InvalidArgument) } else { Ok(()) }
+    if offset & (MMAP_PAGE_SIZE.wrapping_sub(1)) != 0 {
+        Err(ExofsError::InvalidArgument)
+    } else {
+        Ok(())
+    }
 }
 
 /// Calcule le nombre de pages nécessaires.
@@ -453,14 +555,18 @@ pub fn ranges_overlap(a: u64, la: u64, b: u64, lb: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::map_flags::*;
     use super::map_prot::*;
+    use super::*;
 
-    fn make_table() -> MmapTable { MmapTable::new_const() }
+    fn make_table() -> MmapTable {
+        MmapTable::new_const()
+    }
 
     #[test]
-    fn test_mmap_entry_size() { assert_eq!(core::mem::size_of::<MmapEntry>(), 48); }
+    fn test_mmap_entry_size() {
+        assert_eq!(core::mem::size_of::<MmapEntry>(), 48);
+    }
 
     #[test]
     fn test_align_up() {
@@ -473,7 +579,9 @@ mod tests {
     #[test]
     fn test_mmap_basic() {
         let t = make_table();
-        let va = t.mmap(1, 0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, 42).unwrap();
+        let va = t
+            .mmap(1, 0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, 42)
+            .unwrap();
         assert!(va >= MMAP_BASE_VIRT);
         assert_eq!(t.mapping_count(), 1);
     }
@@ -481,7 +589,9 @@ mod tests {
     #[test]
     fn test_mmap_shared_promotes() {
         let t = make_table();
-        let va = t.mmap(2, 0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, 1).unwrap();
+        let va = t
+            .mmap(2, 0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, 1)
+            .unwrap();
         let entry = t.find_mapping(va).unwrap();
         assert_eq!(entry.promoted, 1);
     }
@@ -505,13 +615,18 @@ mod tests {
     #[test]
     fn test_munmap_not_found() {
         let t = make_table();
-        assert!(matches!(t.munmap(0xDEAD_0000, 4096), Err(ExofsError::ObjectNotFound)));
+        assert!(matches!(
+            t.munmap(0xDEAD_0000, 4096),
+            Err(ExofsError::ObjectNotFound)
+        ));
     }
 
     #[test]
     fn test_msync_dirty() {
         let t = make_table();
-        let va = t.mmap(5, 0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, 1).unwrap();
+        let va = t
+            .mmap(5, 0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, 1)
+            .unwrap();
         t.msync(va, 4096).unwrap();
         let entry = t.find_mapping(va).unwrap();
         assert_eq!(entry.state as u8, MappingState::Dirty as u8);
@@ -520,7 +635,9 @@ mod tests {
     #[test]
     fn test_mprotect() {
         let t = make_table();
-        let va = t.mmap(6, 0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, 1).unwrap();
+        let va = t
+            .mmap(6, 0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, 1)
+            .unwrap();
         t.mprotect(va, PROT_READ).unwrap();
         let e = t.find_mapping(va).unwrap();
         assert!(!e.is_writable());
@@ -530,14 +647,17 @@ mod tests {
     fn test_mprotect_invalid_prot() {
         let t = make_table();
         let va = t.mmap(7, 0, 4096, PROT_READ, MAP_PRIVATE, 1).unwrap();
-        assert!(matches!(t.mprotect(va, 0xFF), Err(ExofsError::InvalidArgument)));
+        assert!(matches!(
+            t.mprotect(va, 0xFF),
+            Err(ExofsError::InvalidArgument)
+        ));
     }
 
     #[test]
     fn test_munmap_all_pid() {
         let t = make_table();
-        t.mmap(8,  0, 4096, PROT_READ, MAP_PRIVATE, 10).unwrap();
-        t.mmap(9,  0, 4096, PROT_READ, MAP_PRIVATE, 10).unwrap();
+        t.mmap(8, 0, 4096, PROT_READ, MAP_PRIVATE, 10).unwrap();
+        t.mmap(9, 0, 4096, PROT_READ, MAP_PRIVATE, 10).unwrap();
         t.mmap(10, 0, 4096, PROT_READ, MAP_PRIVATE, 20).unwrap();
         t.munmap_all_pid(10);
         assert_eq!(t.mappings_for_pid(10).unwrap().len(), 0);
@@ -546,9 +666,9 @@ mod tests {
 
     #[test]
     fn test_ranges_overlap() {
-        assert!( ranges_overlap(0, 100, 50, 100));
+        assert!(ranges_overlap(0, 100, 50, 100));
         assert!(!ranges_overlap(0, 100, 100, 100));
-        assert!( ranges_overlap(50, 100, 0, 60));
+        assert!(ranges_overlap(50, 100, 0, 60));
     }
 
     #[test]

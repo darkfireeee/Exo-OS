@@ -9,7 +9,7 @@ use crate::arch::x86_64::apic::{self, local_apic, x2apic};
 use crate::arch::x86_64::cpu::msr;
 use crate::arch::x86_64::idt;
 use crate::exophoenix::{ssr, stage0};
-use crate::memory::core::{KERNEL_IMAGE_MAX_SIZE, PageFlags, VirtAddr, PAGE_SIZE};
+use crate::memory::core::{PageFlags, VirtAddr, KERNEL_IMAGE_MAX_SIZE, PAGE_SIZE};
 use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
 use crate::memory::virt::address_space::kernel::KERNEL_AS;
 use crate::memory::virt::page_table::{PageTableWalker, WalkResult};
@@ -22,9 +22,7 @@ use crate::memory::virt::page_table::{PageTableWalker, WalkResult};
 #[inline(always)]
 fn read_apic_ticks() -> u32 {
     match stage0::B_FEATURES.apic_mode() {
-        stage0::BootApicMode::X2Apic => unsafe {
-            msr::read_msr(x2apic::X2APIC_TIMER_CCR) as u32
-        },
+        stage0::BootApicMode::X2Apic => unsafe { msr::read_msr(x2apic::X2APIC_TIMER_CCR) as u32 },
         stage0::BootApicMode::XApic => local_apic::timer_current_count(),
     }
 }
@@ -50,7 +48,9 @@ fn current_slot() -> Option<usize> {
 fn for_each_target_slot(self_slot: Option<usize>, mut f: impl FnMut(usize)) {
     let mut seen_slots = 0u64;
     for apic_id in 0u16..=255u16 {
-        let Some(slot) = stage0::apic_slot(apic_id as u32) else { continue };
+        let Some(slot) = stage0::apic_slot(apic_id as u32) else {
+            continue;
+        };
         if Some(slot) == self_slot || slot >= 64 {
             continue;
         }
@@ -75,7 +75,8 @@ fn all_tlb_acks_observed(self_slot: Option<usize>) -> bool {
         if !all_ok {
             return;
         }
-        let ack = unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
+        let ack =
+            unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
         if ack != ssr::TLB_ACK_DONE {
             all_ok = false;
         }
@@ -87,7 +88,11 @@ fn all_tlb_acks_observed(self_slot: Option<usize>) -> bool {
 
 fn mark_a_pages_not_present() {
     let kernel_start = crate::memory::core::layout::KERNEL_START;
-    let kernel_end_va = VirtAddr::new(kernel_start.as_u64().saturating_add(KERNEL_IMAGE_MAX_SIZE as u64));
+    let kernel_end_va = VirtAddr::new(
+        kernel_start
+            .as_u64()
+            .saturating_add(KERNEL_IMAGE_MAX_SIZE as u64),
+    );
 
     let mut walker = PageTableWalker::new(KERNEL_AS.pml4_phys());
     let mut va = kernel_start;
@@ -145,7 +150,9 @@ fn iommu_hard_revoke_and_flush() {
     if INTEL_VTD.is_initialized() && INTEL_VTD.unit_count() > 0 {
         // QI Intel VT-d : tables + flush IOTLB
         // S-N1 : ne pas se contenter de modifier les tables sans flush
-        unsafe { INTEL_VTD.flush_iotlb_domain(blocked as u16, 0); }
+        unsafe {
+            INTEL_VTD.flush_iotlb_domain(blocked as u16, 0);
+        }
     } else if AMD_IOMMU.is_initialized() {
         // AMD Completion Wait fallback
         core::sync::atomic::fence(Ordering::SeqCst);

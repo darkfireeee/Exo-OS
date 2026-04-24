@@ -27,7 +27,6 @@
 //! - **ABI-08** : pt_regs complet sauvegardé — accessible pour ptrace.
 //! - **BUG-05** : verify_rcx_canonical() obligatoire avant SYSRETQ (errata Intel/AMD).
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // SyscallArgs — vue typée des 6 arguments syscall
 // ─────────────────────────────────────────────────────────────────────────────
@@ -57,7 +56,14 @@ impl SyscallArgs {
     /// Construit depuis les 6 paramètres bruts de la table de dispatch.
     #[inline(always)]
     pub const fn new(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> Self {
-        Self { arg0: a0, arg1: a1, arg2: a2, arg3: a3, arg4: a4, arg5: a5 }
+        Self {
+            arg0: a0,
+            arg1: a1,
+            arg2: a2,
+            arg3: a3,
+            arg4: a4,
+            arg5: a5,
+        }
     }
 }
 
@@ -78,31 +84,43 @@ pub type SyscallResult = Result<i64, i64>;
 // Helpers de retour sécurisés
 // ─────────────────────────────────────────────────────────────────────────────
 
-use crate::syscall::errno::{EINVAL, EFAULT, ENOMEM, ENOSYS, EACCES, ENOENT};
+use crate::syscall::errno::{EACCES, EFAULT, EINVAL, ENOENT, ENOMEM, ENOSYS};
 
 /// Retour d'erreur EINVAL.
 #[inline(always)]
-pub fn err_inval() -> SyscallResult { Err(EINVAL) }
+pub fn err_inval() -> SyscallResult {
+    Err(EINVAL)
+}
 
 /// Retour d'erreur EFAULT (pointeur userspace invalide).
 #[inline(always)]
-pub fn err_fault() -> SyscallResult { Err(EFAULT) }
+pub fn err_fault() -> SyscallResult {
+    Err(EFAULT)
+}
 
 /// Retour d'erreur ENOMEM.
 #[inline(always)]
-pub fn err_nomem() -> SyscallResult { Err(ENOMEM) }
+pub fn err_nomem() -> SyscallResult {
+    Err(ENOMEM)
+}
 
 /// Retour d'erreur ENOSYS (syscall non implémenté).
 #[inline(always)]
-pub fn err_nosys() -> SyscallResult { Err(ENOSYS) }
+pub fn err_nosys() -> SyscallResult {
+    Err(ENOSYS)
+}
 
 /// Retour d'erreur EACCES (capability refusée).
 #[inline(always)]
-pub fn err_acces() -> SyscallResult { Err(EACCES) }
+pub fn err_acces() -> SyscallResult {
+    Err(EACCES)
+}
 
 /// Retour d'erreur ENOENT.
 #[inline(always)]
-pub fn err_noent() -> SyscallResult { Err(ENOENT) }
+pub fn err_noent() -> SyscallResult {
+    Err(ENOENT)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Validation canonicité RCX — FIX BUG-05 (errata Intel/AMD)
@@ -120,7 +138,7 @@ pub fn err_noent() -> SyscallResult { Err(ENOENT) }
 #[inline]
 pub fn is_canonical_address(addr: u64) -> bool {
     // Un pointeur canonique : bits 63:48 = bit 47 (sign-extended)
-    let sign_bit   = (addr >> 47) & 1;
+    let sign_bit = (addr >> 47) & 1;
     let upper_bits = addr >> 48;
     if sign_bit == 0 {
         upper_bits == 0x0000
@@ -132,13 +150,13 @@ pub fn is_canonical_address(addr: u64) -> bool {
 /// Constantes pour les plages d'adresses virtuelles.
 pub mod addr_space {
     /// Limite haute de l'espace userspace (canonical hole commence ici).
-    pub const USER_SPACE_TOP:    u64 = 0x0000_8000_0000_0000;
+    pub const USER_SPACE_TOP: u64 = 0x0000_8000_0000_0000;
     /// Début de l'espace noyau (canonical high).
     pub const KERNEL_SPACE_BASE: u64 = 0xFFFF_8000_0000_0000;
     /// Taille d'une page standard.
-    pub const PAGE_SIZE:         u64 = 4096;
+    pub const PAGE_SIZE: u64 = 4096;
     /// Masque d'alignement page.
-    pub const PAGE_MASK:         u64 = !(PAGE_SIZE - 1);
+    pub const PAGE_MASK: u64 = !(PAGE_SIZE - 1);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -149,21 +167,21 @@ pub mod addr_space {
 ///
 /// Correspond exactement au layout documenté dans `entry_asm.rs`.
 pub mod pt_regs_offsets {
-    pub const OFF_RAX:  usize =   0;  // numéro syscall / valeur retour
-    pub const OFF_R9:   usize =   8;  // arg6
-    pub const OFF_R8:   usize =  16;  // arg5
-    pub const OFF_R10:  usize =  24;  // arg4
-    pub const OFF_RDX:  usize =  32;  // arg3
-    pub const OFF_RDI:  usize =  40;  // arg1
-    pub const OFF_RSI:  usize =  48;  // arg2
-    pub const OFF_RSP:  usize =  56;  // RSP userspace sauvegardé
-    pub const OFF_R15:  usize =  64;
-    pub const OFF_R14:  usize =  72;
-    pub const OFF_R13:  usize =  80;
-    pub const OFF_R12:  usize =  88;
-    pub const OFF_RBX:  usize =  96;
-    pub const OFF_RBP:  usize = 104;
-    pub const OFF_R11:  usize = 112;  // RFLAGS Ring3 (sauvé par SYSCALL hw)
-    pub const OFF_RCX:  usize = 120;  // RIP retour Ring3 (sauvé par SYSCALL hw)
+    pub const OFF_RAX: usize = 0; // numéro syscall / valeur retour
+    pub const OFF_R9: usize = 8; // arg6
+    pub const OFF_R8: usize = 16; // arg5
+    pub const OFF_R10: usize = 24; // arg4
+    pub const OFF_RDX: usize = 32; // arg3
+    pub const OFF_RDI: usize = 40; // arg1
+    pub const OFF_RSI: usize = 48; // arg2
+    pub const OFF_RSP: usize = 56; // RSP userspace sauvegardé
+    pub const OFF_R15: usize = 64;
+    pub const OFF_R14: usize = 72;
+    pub const OFF_R13: usize = 80;
+    pub const OFF_R12: usize = 88;
+    pub const OFF_RBX: usize = 96;
+    pub const OFF_RBP: usize = 104;
+    pub const OFF_R11: usize = 112; // RFLAGS Ring3 (sauvé par SYSCALL hw)
+    pub const OFF_RCX: usize = 120; // RIP retour Ring3 (sauvé par SYSCALL hw)
     pub const FRAME_SIZE: usize = 128;
 }

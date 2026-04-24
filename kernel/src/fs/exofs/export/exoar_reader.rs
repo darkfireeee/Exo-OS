@@ -15,14 +15,13 @@
 //! OOM-02   : try_reserve avant tout push.
 //! ARITH-02 : saturating_* / checked_* sur tous les compteurs.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::exoar_format::{
-    ExoarHeader, ExoarEntryHeader, ExoarFooter, ExoarSummary,
-    EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD, crc32c_update, crc32c_verify,
+    crc32c_update, crc32c_verify, ExoarEntryHeader, ExoarFooter, ExoarHeader, ExoarSummary,
+    EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD,
 };
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 use core::mem::size_of;
 
 // ─── Trait source I/O ────────────────────────────────────────────────────────
@@ -85,17 +84,18 @@ pub enum ExoarReadError {
 impl From<ExoarReadError> for ExofsError {
     fn from(e: ExoarReadError) -> Self {
         match e {
-            ExoarReadError::BadHeaderMagic | ExoarReadError::BadEntryMagic
+            ExoarReadError::BadHeaderMagic
+            | ExoarReadError::BadEntryMagic
             | ExoarReadError::BadFooterMagic => ExofsError::CorruptedStructure,
-            ExoarReadError::BadVersion           => ExofsError::InvalidArgument,
-            ExoarReadError::CrcMismatch { .. }   => ExofsError::ChecksumMismatch,
+            ExoarReadError::BadVersion => ExofsError::InvalidArgument,
+            ExoarReadError::CrcMismatch { .. } => ExofsError::ChecksumMismatch,
             ExoarReadError::BlobIdMismatch { .. } => ExofsError::BlobIdMismatch,
             ExoarReadError::PayloadTooLarge { .. } => ExofsError::OffsetOverflow,
-            ExoarReadError::TooManyEntries       => ExofsError::OffsetOverflow,
-            ExoarReadError::TruncatedArchive     => ExofsError::CorruptedStructure,
-            ExoarReadError::EntryCountMismatch   => ExofsError::CorruptedStructure,
-            ExoarReadError::OutOfMemory          => ExofsError::NoMemory,
-            ExoarReadError::IoError              => ExofsError::IoFailed,
+            ExoarReadError::TooManyEntries => ExofsError::OffsetOverflow,
+            ExoarReadError::TruncatedArchive => ExofsError::CorruptedStructure,
+            ExoarReadError::EntryCountMismatch => ExofsError::CorruptedStructure,
+            ExoarReadError::OutOfMemory => ExofsError::NoMemory,
+            ExoarReadError::IoError => ExofsError::IoFailed,
         }
     }
 }
@@ -159,11 +159,19 @@ impl ExoarReaderConfig {
     }
 
     fn effective_max_payload(&self) -> u64 {
-        if self.max_payload_size == 0 { EXOAR_MAX_PAYLOAD } else { self.max_payload_size.min(EXOAR_MAX_PAYLOAD) }
+        if self.max_payload_size == 0 {
+            EXOAR_MAX_PAYLOAD
+        } else {
+            self.max_payload_size.min(EXOAR_MAX_PAYLOAD)
+        }
     }
 
     fn effective_max_entries(&self) -> u32 {
-        if self.max_entries == 0 { EXOAR_MAX_ENTRIES } else { self.max_entries.min(EXOAR_MAX_ENTRIES) }
+        if self.max_entries == 0 {
+            EXOAR_MAX_ENTRIES
+        } else {
+            self.max_entries.min(EXOAR_MAX_ENTRIES)
+        }
     }
 }
 
@@ -206,7 +214,8 @@ impl ExoarReadReport {
         }
     }
 
-    #[inline] pub fn has_errors(&self) -> bool {
+    #[inline]
+    pub fn has_errors(&self) -> bool {
         self.crc_errors > 0 || self.blob_id_errors > 0
     }
 
@@ -246,7 +255,11 @@ impl ExoarReader {
 
     /// Lit l'archive depuis `source` et appelle `receiver` pour chaque blob.
     /// RECUR-01 : boucle while sur les entrées.
-    pub fn read<S, R>(&self, source: &mut S, receiver: &mut R) -> Result<ExoarReadReport, ExoarReadError>
+    pub fn read<S, R>(
+        &self,
+        source: &mut S,
+        receiver: &mut R,
+    ) -> Result<ExoarReadReport, ExoarReadError>
     where
         S: ArchiveSource,
         R: BlobReceiver,
@@ -255,21 +268,31 @@ impl ExoarReader {
 
         // 1. Lire et valider l'en-tête — RÈGLE 8 : magic EN PREMIER.
         let mut hdr_buf = [0u8; size_of::<ExoarHeader>()];
-        source.read_exact(&mut hdr_buf).map_err(|_| ExoarReadError::IoError)?;
+        source
+            .read_exact(&mut hdr_buf)
+            .map_err(|_| ExoarReadError::IoError)?;
         let hdr = ExoarHeader::from_bytes(&hdr_buf).ok_or(ExoarReadError::BadHeaderMagic)?;
-        if !hdr.validate_version() { return Err(ExoarReadError::BadVersion); }
+        if !hdr.validate_version() {
+            return Err(ExoarReadError::BadVersion);
+        }
 
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        let entry_count_declared: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.entry_count)) };
+        let entry_count_declared: u32 =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.entry_count)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        report.header_epoch_base   = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_base)) };
+        report.header_epoch_base =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_base)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        report.header_epoch_target = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_target)) };
+        report.header_epoch_target =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_target)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        report.header_flags        = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.flags)) };
+        report.header_flags = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.flags)) };
 
-        let max_entries  = self.config.effective_max_entries().min(entry_count_declared);
-        let max_payload  = self.config.effective_max_payload();
+        let max_entries = self
+            .config
+            .effective_max_entries()
+            .min(entry_count_declared);
+        let max_payload = self.config.effective_max_payload();
 
         // CRC global accumulé
         let mut global_crc = crc32c_update(0, &hdr_buf);
@@ -287,11 +310,12 @@ impl ExoarReader {
             }
             global_crc = crc32c_update(global_crc, &ehdr_buf);
 
-            let ehdr = ExoarEntryHeader::from_bytes(&ehdr_buf)
-                .ok_or(ExoarReadError::BadEntryMagic)?;
+            let ehdr =
+                ExoarEntryHeader::from_bytes(&ehdr_buf).ok_or(ExoarReadError::BadEntryMagic)?;
 
             // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-            let payload_size: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_size)) };
+            let payload_size: u64 =
+                unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_size)) };
             if payload_size > max_payload {
                 return Err(ExoarReadError::PayloadTooLarge { entry_idx });
             }
@@ -300,16 +324,21 @@ impl ExoarReader {
             let usize_payload = payload_size as usize;
             let mut payload: Vec<u8> = Vec::new();
             if usize_payload > 0 {
-                payload.try_reserve(usize_payload).map_err(|_| ExoarReadError::OutOfMemory)?;
+                payload
+                    .try_reserve(usize_payload)
+                    .map_err(|_| ExoarReadError::OutOfMemory)?;
                 payload.resize(usize_payload, 0u8);
-                source.read_exact(&mut payload).map_err(|_| ExoarReadError::IoError)?;
+                source
+                    .read_exact(&mut payload)
+                    .map_err(|_| ExoarReadError::IoError)?;
                 global_crc = crc32c_update(global_crc, &payload);
             }
 
             // Vérifier CRC32C du payload
             if self.config.verify_crc && usize_payload > 0 {
                 // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-                let declared_crc: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_crc32)) };
+                let declared_crc: u32 =
+                    unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_crc32)) };
                 if !crc32c_verify(&payload, declared_crc) {
                     report.crc_errors = report.crc_errors.saturating_add(1);
                     if !self.config.skip_crc_errors {
@@ -341,7 +370,9 @@ impl ExoarReader {
                 }
             } else {
                 let keep_reading = receiver.receive_blob(&ehdr.blob_id, &payload, ehdr.flags);
-                if !keep_reading { break; }
+                if !keep_reading {
+                    break;
+                }
             }
 
             let ps_tracked = payload_size;
@@ -354,18 +385,22 @@ impl ExoarReader {
 
         // 3. Lire et valider le footer — RÈGLE 8.
         let mut ftr_buf = [0u8; size_of::<ExoarFooter>()];
-        source.read_exact(&mut ftr_buf).map_err(|_| ExoarReadError::TruncatedArchive)?;
+        source
+            .read_exact(&mut ftr_buf)
+            .map_err(|_| ExoarReadError::TruncatedArchive)?;
         let ftr = ExoarFooter::from_bytes(&ftr_buf).ok_or(ExoarReadError::BadFooterMagic)?;
 
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        let ftr_entry_count: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.entry_count)) };
+        let ftr_entry_count: u32 =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.entry_count)) };
         if ftr_entry_count != entry_count_declared {
             return Err(ExoarReadError::EntryCountMismatch);
         }
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        report.footer_global_crc32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.global_crc32)) };
+        report.footer_global_crc32 =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.global_crc32)) };
         report.bytes_consumed = source.bytes_read();
-        report.archive_valid  = !report.has_errors();
+        report.archive_valid = !report.has_errors();
 
         Ok(report)
     }
@@ -389,22 +424,32 @@ impl ExoarScanner {
     }
 
     /// Scan complet : (RECUR-01 : boucle while) valide header, entrées, footer.
-    pub fn scan<S: ArchiveSource>(&self, source: &mut S) -> Result<ExoarReadReport, ExoarReadError> {
+    pub fn scan<S: ArchiveSource>(
+        &self,
+        source: &mut S,
+    ) -> Result<ExoarReadReport, ExoarReadError> {
         let mut report = ExoarReadReport::new();
 
         let mut hdr_buf = [0u8; size_of::<ExoarHeader>()];
-        source.read_exact(&mut hdr_buf).map_err(|_| ExoarReadError::IoError)?;
+        source
+            .read_exact(&mut hdr_buf)
+            .map_err(|_| ExoarReadError::IoError)?;
         let hdr = ExoarHeader::from_bytes(&hdr_buf).ok_or(ExoarReadError::BadHeaderMagic)?;
-        if !hdr.validate_version() { return Err(ExoarReadError::BadVersion); }
+        if !hdr.validate_version() {
+            return Err(ExoarReadError::BadVersion);
+        }
 
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        let entry_count: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.entry_count)) };
+        let entry_count: u32 =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.entry_count)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        report.header_epoch_base   = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_base)) };
+        report.header_epoch_base =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_base)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        report.header_epoch_target = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_target)) };
+        report.header_epoch_target =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_target)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        report.header_flags        = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.flags)) };
+        report.header_flags = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.flags)) };
 
         let max_entries = self.config.effective_max_entries().min(entry_count);
         let max_payload = self.config.effective_max_payload();
@@ -414,14 +459,17 @@ impl ExoarScanner {
 
         while entry_idx < max_entries {
             let mut ehdr_buf = [0u8; size_of::<ExoarEntryHeader>()];
-            source.read_exact(&mut ehdr_buf).map_err(|_| ExoarReadError::TruncatedArchive)?;
+            source
+                .read_exact(&mut ehdr_buf)
+                .map_err(|_| ExoarReadError::TruncatedArchive)?;
             global_crc = crc32c_update(global_crc, &ehdr_buf);
 
-            let ehdr = ExoarEntryHeader::from_bytes(&ehdr_buf)
-                .ok_or(ExoarReadError::BadEntryMagic)?;
+            let ehdr =
+                ExoarEntryHeader::from_bytes(&ehdr_buf).ok_or(ExoarReadError::BadEntryMagic)?;
 
             // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-            let payload_size: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_size)) };
+            let payload_size: u64 =
+                unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_size)) };
             if payload_size > max_payload {
                 return Err(ExoarReadError::PayloadTooLarge { entry_idx });
             }
@@ -433,7 +481,8 @@ impl ExoarScanner {
 
             while remaining > 0 {
                 let chunk = remaining.min(4096) as usize;
-                source.read_exact(&mut payload_buf[..chunk])
+                source
+                    .read_exact(&mut payload_buf[..chunk])
                     .map_err(|_| ExoarReadError::IoError)?;
                 local_crc = crc32c_update(local_crc, &payload_buf[..chunk]);
                 global_crc = crc32c_update(global_crc, &payload_buf[..chunk]);
@@ -442,7 +491,8 @@ impl ExoarScanner {
 
             if self.config.verify_crc && payload_size > 0 {
                 // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-                let declared_crc: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_crc32)) };
+                let declared_crc: u32 =
+                    unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_crc32)) };
                 if local_crc != declared_crc {
                     report.crc_errors = report.crc_errors.saturating_add(1);
                     if !self.config.skip_crc_errors {
@@ -460,18 +510,22 @@ impl ExoarScanner {
         }
 
         let mut ftr_buf = [0u8; size_of::<ExoarFooter>()];
-        source.read_exact(&mut ftr_buf).map_err(|_| ExoarReadError::TruncatedArchive)?;
+        source
+            .read_exact(&mut ftr_buf)
+            .map_err(|_| ExoarReadError::TruncatedArchive)?;
         let ftr = ExoarFooter::from_bytes(&ftr_buf).ok_or(ExoarReadError::BadFooterMagic)?;
 
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        let ftr_count: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.entry_count)) };
+        let ftr_count: u32 =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.entry_count)) };
         if ftr_count != entry_count {
             return Err(ExoarReadError::EntryCountMismatch);
         }
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        report.footer_global_crc32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.global_crc32)) };
+        report.footer_global_crc32 =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.global_crc32)) };
         report.bytes_consumed = source.bytes_read();
-        report.archive_valid  = !report.has_errors();
+        report.archive_valid = !report.has_errors();
         Ok(report)
     }
 }
@@ -505,7 +559,9 @@ impl<'a> ArchiveSource for SliceSource<'a> {
         Ok(())
     }
 
-    fn bytes_read(&self) -> u64 { self.pos as u64 }
+    fn bytes_read(&self) -> u64 {
+        self.pos as u64
+    }
 
     fn skip(&mut self, n: u64) -> ExofsResult<()> {
         let new_pos = self.pos.saturating_add(n as usize);
@@ -527,7 +583,10 @@ pub struct CollectingReceiver {
 
 impl CollectingReceiver {
     pub fn new() -> Self {
-        Self { blobs: Vec::new(), tombstones: Vec::new() }
+        Self {
+            blobs: Vec::new(),
+            tombstones: Vec::new(),
+        }
     }
 
     /// Consomme le receiver et retourne les blobs collectés.
@@ -539,7 +598,9 @@ impl CollectingReceiver {
 impl BlobReceiver for CollectingReceiver {
     fn receive_blob(&mut self, blob_id: &[u8; 32], data: &[u8], _flags: u8) -> bool {
         let mut v = Vec::new();
-        if v.try_reserve(data.len()).is_err() { return false; }
+        if v.try_reserve(data.len()).is_err() {
+            return false;
+        }
         v.extend_from_slice(data);
         let mut id = [0u8; 32];
         id.copy_from_slice(blob_id);
@@ -568,9 +629,13 @@ fn blake3_hash_simple(data: &[u8]) -> [u8; 32] {
     let mut i = 0usize;
     while i < data.len() {
         let byte = data[i] as u64;
-        state[0] = state[0].wrapping_add(byte).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        state[0] = state[0]
+            .wrapping_add(byte)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
         state[1] ^= state[0].rotate_left(23);
-        state[2] = state[2].wrapping_add(state[1]).wrapping_mul(0x6C62_272E_07BB_0142);
+        state[2] = state[2]
+            .wrapping_add(state[1])
+            .wrapping_mul(0x6C62_272E_07BB_0142);
         state[3] ^= state[2].rotate_right(17);
         state[0] = state[0].wrapping_add(state[3]);
         i = i.wrapping_add(1);
@@ -581,7 +646,10 @@ fn blake3_hash_simple(data: &[u8]) -> [u8; 32] {
         let bytes = state[idx].to_le_bytes();
         let base = idx.wrapping_mul(8);
         let mut k = 0usize;
-        while k < 8 { out[base.wrapping_add(k)] = bytes[k]; k = k.wrapping_add(1); }
+        while k < 8 {
+            out[base.wrapping_add(k)] = bytes[k];
+            k = k.wrapping_add(1);
+        }
         idx = idx.wrapping_add(1);
     }
     out
@@ -590,9 +658,9 @@ fn blake3_hash_simple(data: &[u8]) -> [u8; 32] {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::exoar_format::{ExoarHeader, ExoarEntryHeader, ExoarFooter};
     use super::super::exoar_format::crc32c_compute;
+    use super::super::exoar_format::{ExoarEntryHeader, ExoarFooter, ExoarHeader};
+    use super::*;
 
     fn build_archive(blobs: &[(&[u8; 32], &[u8])], flags: u32) -> Vec<u8> {
         let mut out: Vec<u8> = Vec::new();
@@ -641,7 +709,9 @@ mod tests {
 
     #[test]
     fn test_read_multiple_blobs() {
-        let b1 = [1u8; 32]; let b2 = [2u8; 32]; let b3 = [3u8; 32];
+        let b1 = [1u8; 32];
+        let b2 = [2u8; 32];
+        let b3 = [3u8; 32];
         let d1 = b"blob one data";
         let d2 = b"blob two bigger data";
         let d3 = b"third blob";
@@ -672,7 +742,9 @@ mod tests {
         let mut archive = build_archive(&[(&bid, data)], 0);
         // Corrompre le payload (après header 128 + entry_header 96 = 224)
         let payload_start = 128 + 96;
-        if archive.len() > payload_start { archive[payload_start] ^= 0xFF; }
+        if archive.len() > payload_start {
+            archive[payload_start] ^= 0xFF;
+        }
         let mut src = SliceSource::new(&archive);
         let reader = ExoarReader::with_default_config();
         let mut rcv = CollectingReceiver::new();
@@ -686,7 +758,9 @@ mod tests {
         let data = b"recoverable data";
         let mut archive = build_archive(&[(&bid, data)], 0);
         let payload_start = 128 + 96;
-        if archive.len() > payload_start { archive[payload_start] ^= 0xFF; }
+        if archive.len() > payload_start {
+            archive[payload_start] ^= 0xFF;
+        }
         let mut src = SliceSource::new(&archive);
         let cfg = ExoarReaderConfig::recovery();
         let reader = ExoarReader::new(cfg);
@@ -707,7 +781,8 @@ mod tests {
 
     #[test]
     fn test_scanner_multi_blob() {
-        let b1 = [10u8; 32]; let b2 = [20u8; 32];
+        let b1 = [10u8; 32];
+        let b2 = [20u8; 32];
         let archive = build_archive(&[(&b1, b"payload_a"), (&b2, b"payload_b")], 0);
         let mut src = SliceSource::new(&archive);
         let scanner = ExoarScanner::default();

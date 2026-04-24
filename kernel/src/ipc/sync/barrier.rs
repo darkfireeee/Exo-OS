@@ -12,8 +12,8 @@
 // RÈGLE BARRIER-02 : spin-wait borné par un timeout configurable.
 // RÈGLE BARRIER-03 : génération AtomicU32 garantit la correction cyclique.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::IpcError;
 
@@ -299,12 +299,11 @@ impl IpcBarrierTable {
         }
         for i in 0..MAX_IPC_BARRIERS {
             if !self.slots[i].occupied.load(Ordering::Relaxed) {
-                if self.slots[i].occupied.compare_exchange(
-                    false,
-                    true,
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                ).is_ok() {
+                if self.slots[i]
+                    .occupied
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
                     let ptr = self.slots[i].barrier.as_ptr() as *mut IpcBarrier;
                     // SAFETY: CAS AcqRel garantit l'exclusivité du slot; MaybeUninit<IpcBarrier> write-once.
                     unsafe { ptr.write(IpcBarrier::new(id, parties)) }
@@ -317,23 +316,28 @@ impl IpcBarrierTable {
     }
 
     fn get(&self, idx: usize) -> Option<&IpcBarrier> {
-        if idx >= MAX_IPC_BARRIERS { return None; }
-        if !self.slots[idx].occupied.load(Ordering::Acquire) { return None; }
+        if idx >= MAX_IPC_BARRIERS {
+            return None;
+        }
+        if !self.slots[idx].occupied.load(Ordering::Acquire) {
+            return None;
+        }
         // SAFETY: occupied=true guarantees initialization
         Some(unsafe { &*self.slots[idx].barrier.as_ptr() })
     }
 
     fn free(&self, idx: usize) -> bool {
-        if idx >= MAX_IPC_BARRIERS { return false; }
+        if idx >= MAX_IPC_BARRIERS {
+            return false;
+        }
         if let Some(b) = self.get(idx) {
             b.destroy();
         }
-        if self.slots[idx].occupied.compare_exchange(
-            true,
-            false,
-            Ordering::AcqRel,
-            Ordering::Relaxed,
-        ).is_ok() {
+        if self.slots[idx]
+            .occupied
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
             self.count.fetch_sub(1, Ordering::Relaxed);
             return true;
         }
@@ -358,17 +362,26 @@ pub fn barrier_create(id: u32, parties: u32) -> Option<usize> {
 
 /// Arrive et attend que tous les participants soient là.
 pub fn barrier_arrive_and_wait(idx: usize, spin_max: u64) -> Result<BarrierResult, IpcError> {
-    IPC_BARRIER_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?.arrive_and_wait(spin_max)
+    IPC_BARRIER_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)?
+        .arrive_and_wait(spin_max)
 }
 
 /// Arrive sans attendre. Retourne true si ce thread complète le cycle.
 pub fn barrier_arrive(idx: usize) -> Result<bool, IpcError> {
-    Ok(IPC_BARRIER_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?.arrive())
+    Ok(IPC_BARRIER_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)?
+        .arrive())
 }
 
 /// Attend que la génération expectedgen avance.
 pub fn barrier_wait_phase(idx: usize, expected_gen: u32, spin_max: u64) -> Result<(), IpcError> {
-    IPC_BARRIER_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?.wait_for_phase(expected_gen, spin_max)
+    IPC_BARRIER_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)?
+        .wait_for_phase(expected_gen, spin_max)
 }
 
 /// Retourne la génération courante (pour un arrive non-bloquant).
@@ -378,7 +391,10 @@ pub fn barrier_generation(idx: usize) -> Option<u32> {
 
 /// Réinitialise d'urgence la barrière.
 pub fn barrier_reset(idx: usize) -> Result<(), IpcError> {
-    IPC_BARRIER_TABLE.get(idx).ok_or(IpcError::InvalidHandle).map(|b| b.reset())
+    IPC_BARRIER_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)
+        .map(|b| b.reset())
 }
 
 /// Détruit la barrière et libère son slot.

@@ -44,23 +44,23 @@ pub const DEFAULT_SEQUENCE_TIMEOUT_TSC: u64 = 30_000_000_000;
 #[repr(C)]
 pub enum EventType {
     /// Appel système.
-    Syscall     = 0,
+    Syscall = 0,
     /// Accès mémoire.
-    MemAccess   = 1,
+    MemAccess = 1,
     /// Activité réseau.
-    NetConnect  = 2,
+    NetConnect = 2,
     /// Appel IPC.
-    IpcCall     = 3,
+    IpcCall = 3,
     /// Accès fichier.
-    FileAccess  = 4,
+    FileAccess = 4,
     /// Changement de privilège.
-    PrivChange  = 5,
+    PrivChange = 5,
     /// Création de processus.
     ProcessCreate = 6,
     /// Signal.
-    Signal      = 7,
+    Signal = 7,
     /// Personnalisé.
-    Custom      = 8,
+    Custom = 8,
 }
 
 impl EventType {
@@ -137,15 +137,15 @@ impl BehaviorEvent {
 #[repr(C)]
 pub enum TransitionCondition {
     /// Événement exact (type + code).
-    ExactMatch     = 0,
+    ExactMatch = 0,
     /// Type d'événement uniquement.
-    TypeMatch      = 1,
+    TypeMatch = 1,
     /// Plage de codes (min..=max).
-    CodeRange      = 2,
+    CodeRange = 2,
     /// Paramètre dans une plage.
-    ParamRange     = 3,
+    ParamRange = 3,
     /// N'importe quel événement (toujours vrai).
-    Any            = 4,
+    Any = 4,
 }
 
 impl TransitionCondition {
@@ -274,9 +274,7 @@ impl SequenceStep {
             TransitionCondition::ExactMatch => {
                 event.event_type == self.expected_type && event.event_code == self.expected_code
             }
-            TransitionCondition::TypeMatch => {
-                event.event_type == self.expected_type
-            }
+            TransitionCondition::TypeMatch => event.event_type == self.expected_type,
             TransitionCondition::CodeRange => {
                 event.event_type == self.expected_type
                     && event.event_code >= self.code_min
@@ -573,7 +571,12 @@ pub fn disable_sequence(index: usize) -> bool {
 }
 
 /// Trouve ou crée un slot d'état pour une séquence.
-fn find_or_create_state(det: &mut SequenceDetectorInner, def_index: usize, pid: u32, now_tsc: u64) -> Option<usize> {
+fn find_or_create_state(
+    det: &mut SequenceDetectorInner,
+    def_index: usize,
+    pid: u32,
+    now_tsc: u64,
+) -> Option<usize> {
     // Chercher un état existant pour cette définition et ce PID
     for i in 0..det.state_count {
         if det.active_states[i].active

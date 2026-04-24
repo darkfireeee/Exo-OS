@@ -43,7 +43,11 @@ impl QuotaTable {
     }
 
     fn entry_mut(&mut self, pid: u32) -> Result<&mut QuotaEntry, i64> {
-        if let Some(idx) = self.entries.iter().position(|entry| entry.active && entry.pid == pid) {
+        if let Some(idx) = self
+            .entries
+            .iter()
+            .position(|entry| entry.active && entry.pid == pid)
+        {
             return Ok(&mut self.entries[idx]);
         }
 

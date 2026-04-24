@@ -7,15 +7,14 @@
 //!   ARITH-02 : checked_add pour accumulateurs
 //!   OOM-02   : try_reserve avant push
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use crate::scheduler::sync::spinlock::SpinLock;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
 use super::snapshot::flags;
 use super::snapshot_list::SNAPSHOT_LIST;
+use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
+use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────
 // Singleton global
@@ -30,11 +29,11 @@ pub static SNAPSHOT_QUOTA: SnapshotQuotaTable = SnapshotQuotaTable::new_const();
 /// Entrée de quota pour un snapshot spécifique
 #[derive(Debug, Clone, Copy)]
 pub struct SnapshotQuotaEntry {
-    pub snap_id:    SnapshotId,
+    pub snap_id: SnapshotId,
     /// Octets maximum autorisés (0 = illimité)
-    pub max_bytes:  u64,
+    pub max_bytes: u64,
     /// Nombre maximum de blobs (0 = illimité)
-    pub max_blobs:  u64,
+    pub max_blobs: u64,
     /// Octets actuellement utilisés
     pub used_bytes: u64,
     /// Blobs actuellement utilisés
@@ -43,7 +42,13 @@ pub struct SnapshotQuotaEntry {
 
 impl SnapshotQuotaEntry {
     pub fn new(snap_id: SnapshotId, max_bytes: u64, max_blobs: u64) -> Self {
-        Self { snap_id, max_bytes, max_blobs, used_bytes: 0, used_blobs: 0 }
+        Self {
+            snap_id,
+            max_bytes,
+            max_blobs,
+            used_bytes: 0,
+            used_blobs: 0,
+        }
     }
 
     /// Vérifie si une allocation de `bytes` / `blobs` est autorisée
@@ -62,7 +67,9 @@ impl SnapshotQuotaEntry {
 
     /// Taux d'utilisation (0.0 – 1.0) — bytes
     pub fn usage_ratio_bytes(&self) -> f64 {
-        if self.max_bytes == 0 { return 0.0; }
+        if self.max_bytes == 0 {
+            return 0.0;
+        }
         (self.used_bytes as f64) / (self.max_bytes as f64)
     }
 }
@@ -75,16 +82,20 @@ impl SnapshotQuotaEntry {
 #[derive(Debug, Clone, Copy)]
 pub struct GlobalQuotaPolicy {
     /// Octets totaux maximum (0 = illimité)
-    pub max_total_bytes:   u64,
+    pub max_total_bytes: u64,
     /// Nombre maximum de snapshots (0 = illimité)
-    pub max_snap_count:    usize,
+    pub max_snap_count: usize,
     /// Taille max par défaut d'un snapshot (0 = illimité)
     pub default_snap_max_bytes: u64,
 }
 
 impl Default for GlobalQuotaPolicy {
     fn default() -> Self {
-        Self { max_total_bytes: 0, max_snap_count: 0, default_snap_max_bytes: 0 }
+        Self {
+            max_total_bytes: 0,
+            max_snap_count: 0,
+            default_snap_max_bytes: 0,
+        }
     }
 }
 
@@ -94,7 +105,7 @@ impl Default for GlobalQuotaPolicy {
 
 pub struct SnapshotQuotaTable {
     entries: SpinLock<alloc::collections::BTreeMap<u64, SnapshotQuotaEntry>>,
-    policy:  SpinLock<GlobalQuotaPolicy>,
+    policy: SpinLock<GlobalQuotaPolicy>,
     global_used_bytes: AtomicU64,
     global_snap_count: AtomicUsize,
 }
@@ -103,8 +114,10 @@ impl SnapshotQuotaTable {
     pub const fn new_const() -> Self {
         Self {
             entries: SpinLock::new(alloc::collections::BTreeMap::new()),
-            policy:  SpinLock::new(GlobalQuotaPolicy {
-                max_total_bytes: 0, max_snap_count: 0, default_snap_max_bytes: 0
+            policy: SpinLock::new(GlobalQuotaPolicy {
+                max_total_bytes: 0,
+                max_snap_count: 0,
+                default_snap_max_bytes: 0,
             }),
             global_used_bytes: AtomicU64::new(0),
             global_snap_count: AtomicUsize::new(0),
@@ -150,16 +163,27 @@ impl SnapshotQuotaTable {
 
     /// Met à jour les statistiques d'utilisation pour un snapshot
     /// ARITH-02 : checked_add
-    pub fn update_usage(&self, snap_id: SnapshotId, bytes_delta: i64, blobs_delta: i64) -> ExofsResult<()> {
+    pub fn update_usage(
+        &self,
+        snap_id: SnapshotId,
+        bytes_delta: i64,
+        blobs_delta: i64,
+    ) -> ExofsResult<()> {
         let mut guard = self.entries.lock();
         if let Some(entry) = guard.get_mut(&snap_id.0) {
             if bytes_delta >= 0 {
-                entry.used_bytes = entry.used_bytes.checked_add(bytes_delta as u64).ok_or(ExofsError::Overflow)?;
+                entry.used_bytes = entry
+                    .used_bytes
+                    .checked_add(bytes_delta as u64)
+                    .ok_or(ExofsError::Overflow)?;
             } else {
                 entry.used_bytes = entry.used_bytes.saturating_sub((-bytes_delta) as u64);
             }
             if blobs_delta >= 0 {
-                entry.used_blobs = entry.used_blobs.checked_add(blobs_delta as u64).ok_or(ExofsError::Overflow)?;
+                entry.used_blobs = entry
+                    .used_blobs
+                    .checked_add(blobs_delta as u64)
+                    .ok_or(ExofsError::Overflow)?;
             } else {
                 entry.used_blobs = entry.used_blobs.saturating_sub((-blobs_delta) as u64);
             }
@@ -168,15 +192,29 @@ impl SnapshotQuotaTable {
         if bytes_delta >= 0 {
             loop {
                 let old = self.global_used_bytes.load(Ordering::Acquire);
-                let new = old.checked_add(bytes_delta as u64).ok_or(ExofsError::Overflow)?;
-                if self.global_used_bytes.compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire).is_ok() { break; }
+                let new = old
+                    .checked_add(bytes_delta as u64)
+                    .ok_or(ExofsError::Overflow)?;
+                if self
+                    .global_used_bytes
+                    .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    break;
+                }
             }
         } else {
             let sub = (-bytes_delta) as u64;
             loop {
                 let old = self.global_used_bytes.load(Ordering::Acquire);
                 let new = old.saturating_sub(sub);
-                if self.global_used_bytes.compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire).is_ok() { break; }
+                if self
+                    .global_used_bytes
+                    .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    break;
+                }
             }
         }
         Ok(())
@@ -189,7 +227,9 @@ impl SnapshotQuotaTable {
         // ── Quota global ────────────────────────────────────────
         let policy = *self.policy.lock();
         if policy.max_total_bytes > 0 {
-            let new_total = self.global_used_bytes.load(Ordering::Acquire)
+            let new_total = self
+                .global_used_bytes
+                .load(Ordering::Acquire)
                 .checked_add(bytes)
                 .ok_or(ExofsError::Overflow)?;
             if new_total > policy.max_total_bytes {
@@ -211,8 +251,13 @@ impl SnapshotQuotaTable {
             }
         } else if policy.default_snap_max_bytes > 0 {
             // Quota par défaut si pas d'entrée explicite
-            let snap = SNAPSHOT_LIST.get(snap_id).map_err(|_| ExofsError::NotFound)?;
-            let new_bytes = snap.total_bytes.checked_add(bytes).ok_or(ExofsError::Overflow)?;
+            let snap = SNAPSHOT_LIST
+                .get(snap_id)
+                .map_err(|_| ExofsError::NotFound)?;
+            let new_bytes = snap
+                .total_bytes
+                .checked_add(bytes)
+                .ok_or(ExofsError::Overflow)?;
             if new_bytes > policy.default_snap_max_bytes {
                 return Err(ExofsError::InvalidSize);
             }
@@ -245,28 +290,41 @@ impl SnapshotQuotaTable {
     pub fn all_entries(&self) -> ExofsResult<Vec<SnapshotQuotaEntry>> {
         let guard = self.entries.lock();
         let mut out: Vec<SnapshotQuotaEntry> = Vec::new();
-        out.try_reserve(guard.len()).map_err(|_| ExofsError::NoMemory)?;
-        for e in guard.values() { out.push(*e); }
+        out.try_reserve(guard.len())
+            .map_err(|_| ExofsError::NoMemory)?;
+        for e in guard.values() {
+            out.push(*e);
+        }
         Ok(out)
     }
 
     // ── Statistiques globales ────────────────────────────────────────
 
-    pub fn global_used_bytes(&self) -> u64 { self.global_used_bytes.load(Ordering::Acquire) }
-    pub fn global_snap_count(&self) -> usize { self.global_snap_count.load(Ordering::Acquire) }
+    pub fn global_used_bytes(&self) -> u64 {
+        self.global_used_bytes.load(Ordering::Acquire)
+    }
+    pub fn global_snap_count(&self) -> usize {
+        self.global_snap_count.load(Ordering::Acquire)
+    }
 
     pub fn register_snap_creation(&self) -> ExofsResult<()> {
         let policy = *self.policy.lock();
         if policy.max_snap_count > 0 {
             let current = self.global_snap_count.load(Ordering::Acquire);
-            if current >= policy.max_snap_count { return Err(ExofsError::BufferFull); }
+            if current >= policy.max_snap_count {
+                return Err(ExofsError::BufferFull);
+            }
         }
         self.global_snap_count.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 
     pub fn register_snap_deletion(&self) {
-        let _ = self.global_snap_count.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| Some(v.saturating_sub(1)));
+        let _ = self
+            .global_snap_count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+                Some(v.saturating_sub(1))
+            });
     }
 
     pub fn clear(&self) {
@@ -283,19 +341,26 @@ impl SnapshotQuotaTable {
 
 #[cfg(test)]
 mod tests {
+    use super::super::snapshot::{make_snapshot_name, Snapshot};
+    use super::super::snapshot_list::SnapshotList;
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
-    use super::super::snapshot::{Snapshot, make_snapshot_name};
-    use super::super::snapshot_list::SnapshotList;
 
     fn push_snap(list: &SnapshotList, id: u64) {
         list.register(Snapshot {
-            id: SnapshotId(id), epoch_id: EpochId(1), parent_id: None,
-            root_blob: BlobId([0u8;32]), created_at: 0, n_blobs: 0,
-            total_bytes: 0, flags: 0,
-            blob_catalog_offset: DiskOffset(0), blob_catalog_size: 0,
+            id: SnapshotId(id),
+            epoch_id: EpochId(1),
+            parent_id: None,
+            root_blob: BlobId([0u8; 32]),
+            created_at: 0,
+            n_blobs: 0,
+            total_bytes: 0,
+            flags: 0,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
             name: make_snapshot_name(b"q-test"),
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -333,7 +398,10 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 4);
         let qt = SnapshotQuotaTable::new_const();
-        qt.set_policy(GlobalQuotaPolicy { max_total_bytes: 500, ..Default::default() });
+        qt.set_policy(GlobalQuotaPolicy {
+            max_total_bytes: 500,
+            ..Default::default()
+        });
         qt.update_usage(SnapshotId(4), 400, 0).unwrap();
         let err = qt.check_allocation(SnapshotId(4), 200, 0);
         assert!(matches!(err, Err(ExofsError::InvalidSize)));

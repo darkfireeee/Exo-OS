@@ -12,11 +12,10 @@
 // join() est CONSIDÉRÉ INTERRUPTIBLE par les signaux.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::Ordering;
 use crate::process::core::tcb::ProcessThread;
 use crate::scheduler::core::task::ThreadControlBlock;
 use crate::scheduler::sync::wait_queue::WaitQueue;
+use core::sync::atomic::Ordering;
 
 /// Table de join : une WaitQueue par TID possible.
 /// Utilisée par do_exit_thread() pour réveiller les joineurs.
@@ -41,7 +40,7 @@ pub enum JoinError {
 /// `target` doit pointer vers un ProcessThread valide, non libéré.
 /// `caller_tcb` doit être le TCB du thread appelant.
 pub fn thread_join(
-    target:     *const ProcessThread,
+    target: *const ProcessThread,
     caller_tcb: &ThreadControlBlock,
 ) -> Result<u64, JoinError> {
     // SAFETY: caller garantit que target est valide.

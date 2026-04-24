@@ -10,13 +10,12 @@
 //! OOM-02   : try_reserve.
 //! ARITH-02 : saturating / checked / wrapping.
 
-
-use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -32,32 +31,37 @@ pub const BLOB_MAX_CHUNKS_IN_REGISTRY: usize = 16384; // CHUNK_MAX_PER_BLOB
 /// Entrée de registre pour un blob.
 #[derive(Clone, Debug)]
 pub struct BlobEntry {
-    pub blob_id:     BlobId,
+    pub blob_id: BlobId,
     pub chunk_count: u32,
-    pub total_size:  u64,
-    pub ref_count:   u32,
+    pub total_size: u64,
+    pub ref_count: u32,
     /// Empreintes blake3 des chunks dans l'ordre.
-    pub chunk_keys:  Vec<[u8; 32]>,
+    pub chunk_keys: Vec<[u8; 32]>,
 }
 
 impl BlobEntry {
     /// Crée une nouvelle entrée de blob.
     ///
     /// OOM-02 : try_reserve.
-    pub fn new(
-        blob_id:     BlobId,
-        total_size:  u64,
-        chunk_keys:  Vec<[u8; 32]>,
-    ) -> ExofsResult<Self> {
+    pub fn new(blob_id: BlobId, total_size: u64, chunk_keys: Vec<[u8; 32]>) -> ExofsResult<Self> {
         let chunk_count = chunk_keys.len() as u32;
-        Ok(Self { blob_id, chunk_count, total_size, ref_count: 1, chunk_keys })
+        Ok(Self {
+            blob_id,
+            chunk_count,
+            total_size,
+            ref_count: 1,
+            chunk_keys,
+        })
     }
 
     /// Incrémente le compteur de références.
     ///
     /// ARITH-02 : checked_add.
     pub fn inc_ref(&mut self) -> ExofsResult<()> {
-        self.ref_count = self.ref_count.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
+        self.ref_count = self
+            .ref_count
+            .checked_add(1)
+            .ok_or(ExofsError::OffsetOverflow)?;
         Ok(())
     }
 
@@ -65,13 +69,21 @@ impl BlobEntry {
     ///
     /// Retourne `true` si le blob devient orphelin.
     pub fn dec_ref(&mut self) -> bool {
-        if self.ref_count > 0 { self.ref_count -= 1; }
+        if self.ref_count > 0 {
+            self.ref_count -= 1;
+        }
         self.ref_count == 0
     }
 
-    pub fn is_shared(&self) -> bool { self.ref_count > 1 }
-    pub fn is_orphan(&self) -> bool { self.ref_count == 0 }
-    pub fn key(&self) -> &[u8; 32]  { self.blob_id.as_bytes() }
+    pub fn is_shared(&self) -> bool {
+        self.ref_count > 1
+    }
+    pub fn is_orphan(&self) -> bool {
+        self.ref_count == 0
+    }
+    pub fn key(&self) -> &[u8; 32] {
+        self.blob_id.as_bytes()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -80,14 +92,14 @@ impl BlobEntry {
 
 #[derive(Debug, Clone, Copy)]
 pub struct BlobRegistryStats {
-    pub total_blobs:    usize,
-    pub shared_blobs:   usize,
-    pub orphan_blobs:   usize,
-    pub total_chunks:   u64,
-    pub total_bytes:    u64,
-    pub insertions:     u64,
-    pub lookups:        u64,
-    pub removals:       u64,
+    pub total_blobs: usize,
+    pub shared_blobs: usize,
+    pub orphan_blobs: usize,
+    pub total_chunks: u64,
+    pub total_bytes: u64,
+    pub insertions: u64,
+    pub lookups: u64,
+    pub removals: u64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -96,11 +108,11 @@ pub struct BlobRegistryStats {
 
 /// Registre global des blobs, thread-safe (UnsafeCell + spinlock AtomicU64).
 pub struct BlobRegistry {
-    entries:    UnsafeCell<BTreeMap<[u8; 32], BlobEntry>>,
-    lock:       AtomicU64,
+    entries: UnsafeCell<BTreeMap<[u8; 32], BlobEntry>>,
+    lock: AtomicU64,
     insertions: AtomicU64,
-    lookups:    AtomicU64,
-    removals:   AtomicU64,
+    lookups: AtomicU64,
+    removals: AtomicU64,
 }
 
 unsafe impl Sync for BlobRegistry {}
@@ -109,22 +121,28 @@ unsafe impl Send for BlobRegistry {}
 impl BlobRegistry {
     pub const fn new_const() -> Self {
         Self {
-            entries:    UnsafeCell::new(BTreeMap::new()),
-            lock:       AtomicU64::new(0),
+            entries: UnsafeCell::new(BTreeMap::new()),
+            lock: AtomicU64::new(0),
             insertions: AtomicU64::new(0),
-            lookups:    AtomicU64::new(0),
-            removals:   AtomicU64::new(0),
+            lookups: AtomicU64::new(0),
+            removals: AtomicU64::new(0),
         }
     }
 
     // ── Spinlock ─────────────────────────────────────────────────────────────
 
     fn acquire(&self) {
-        while self.lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .lock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
-    fn release(&self) { self.lock.store(0, Ordering::Release); }
+    fn release(&self) {
+        self.lock.store(0, Ordering::Release);
+    }
     fn map(&self) -> &mut BTreeMap<[u8; 32], BlobEntry> {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { &mut *self.entries.get() }
@@ -148,13 +166,13 @@ impl BlobRegistry {
     /// Retourne `true` si le blob est nouveau.
     pub fn register(
         &self,
-        blob_id:    BlobId,
+        blob_id: BlobId,
         total_size: u64,
         chunk_keys: Vec<[u8; 32]>,
     ) -> ExofsResult<bool> {
         let key = *blob_id.as_bytes();
         self.acquire();
-        let map    = self.map();
+        let map = self.map();
         let is_new = if let Some(e) = map.get_mut(&key) {
             e.inc_ref()?;
             false
@@ -177,10 +195,19 @@ impl BlobRegistry {
         let key = *blob_id.as_bytes();
         self.acquire();
         let removed = if let Some(e) = self.map().get_mut(&key) {
-            if e.dec_ref() { self.map().remove(&key); true } else { false }
-        } else { false };
+            if e.dec_ref() {
+                self.map().remove(&key);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         self.release();
-        if removed { self.removals.fetch_add(1, Ordering::Relaxed); }
+        if removed {
+            self.removals.fetch_add(1, Ordering::Relaxed);
+        }
         removed
     }
 
@@ -200,7 +227,9 @@ impl BlobRegistry {
         n
     }
 
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     pub fn clear(&self) {
         self.acquire();
@@ -232,38 +261,47 @@ impl BlobRegistry {
     /// ARITH-02 : saturating_add.
     pub fn stats(&self) -> BlobRegistryStats {
         self.acquire();
-        let mut shared  = 0usize;
-        let mut orphan  = 0usize;
-        let mut chunks  = 0u64;
-        let mut bytes   = 0u64;
+        let mut shared = 0usize;
+        let mut orphan = 0usize;
+        let mut chunks = 0u64;
+        let mut bytes = 0u64;
         for v in self.map().values() {
-            if v.is_shared() { shared = shared.saturating_add(1); }
-            if v.is_orphan() { orphan = orphan.saturating_add(1); }
+            if v.is_shared() {
+                shared = shared.saturating_add(1);
+            }
+            if v.is_orphan() {
+                orphan = orphan.saturating_add(1);
+            }
             chunks = chunks.saturating_add(v.chunk_count as u64);
-            bytes  = bytes.saturating_add(v.total_size);
+            bytes = bytes.saturating_add(v.total_size);
         }
         let total = self.map().len();
         self.release();
         BlobRegistryStats {
-            total_blobs:  total,
+            total_blobs: total,
             shared_blobs: shared,
             orphan_blobs: orphan,
             total_chunks: chunks,
-            total_bytes:  bytes,
-            insertions:   self.insertions.load(Ordering::Relaxed),
-            lookups:      self.lookups.load(Ordering::Relaxed),
-            removals:     self.removals.load(Ordering::Relaxed),
+            total_bytes: bytes,
+            insertions: self.insertions.load(Ordering::Relaxed),
+            lookups: self.lookups.load(Ordering::Relaxed),
+            removals: self.removals.load(Ordering::Relaxed),
         }
     }
 
     /// Vérifie les invariants du registre.
     pub fn verify_integrity(&self) -> ExofsResult<()> {
         self.acquire();
-        let bad = self.map().values().any(|v| {
-            v.chunk_count as usize != v.chunk_keys.len()
-        });
+        let bad = self
+            .map()
+            .values()
+            .any(|v| v.chunk_count as usize != v.chunk_keys.len());
         self.release();
-        if bad { Err(ExofsError::CorruptedStructure) } else { Ok(()) }
+        if bad {
+            Err(ExofsError::CorruptedStructure)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -281,20 +319,26 @@ pub static BLOB_REGISTRY: BlobRegistry = BlobRegistry::new_const();
 mod tests {
     use super::*;
 
-    fn make_blob(seed: u8) -> BlobId { BlobId::from_raw([seed; 32]) }
-    fn keys(n: usize) -> Vec<[u8; 32]> { (0..n).map(|i| [i as u8; 32]).collect() }
+    fn make_blob(seed: u8) -> BlobId {
+        BlobId::from_raw([seed; 32])
+    }
+    fn keys(n: usize) -> Vec<[u8; 32]> {
+        (0..n).map(|i| [i as u8; 32]).collect()
+    }
 
-    #[test] fn test_register_new() {
+    #[test]
+    fn test_register_new() {
         let reg = BlobRegistry::new_const();
-        let id  = make_blob(1);
+        let id = make_blob(1);
         let new = reg.register(id.clone(), 1024, keys(4)).unwrap();
         assert!(new);
         assert!(reg.contains(&id));
     }
 
-    #[test] fn test_register_existing_increments_ref() {
+    #[test]
+    fn test_register_existing_increments_ref() {
         let reg = BlobRegistry::new_const();
-        let id  = make_blob(2);
+        let id = make_blob(2);
         reg.register(id.clone(), 1024, keys(4)).unwrap();
         let new = reg.register(id.clone(), 1024, keys(4)).unwrap();
         assert!(!new);
@@ -302,18 +346,20 @@ mod tests {
         assert_eq!(e.ref_count, 2);
     }
 
-    #[test] fn test_deregister_removes_orphan() {
+    #[test]
+    fn test_deregister_removes_orphan() {
         let reg = BlobRegistry::new_const();
-        let id  = make_blob(3);
+        let id = make_blob(3);
         reg.register(id.clone(), 512, keys(2)).unwrap();
         let removed = reg.deregister(&id);
         assert!(removed);
         assert!(!reg.contains(&id));
     }
 
-    #[test] fn test_deregister_keeps_shared() {
+    #[test]
+    fn test_deregister_keeps_shared() {
         let reg = BlobRegistry::new_const();
-        let id  = make_blob(4);
+        let id = make_blob(4);
         reg.register(id.clone(), 512, keys(2)).unwrap();
         reg.register(id.clone(), 512, keys(2)).unwrap();
         let removed = reg.deregister(&id);
@@ -321,7 +367,8 @@ mod tests {
         assert_eq!(reg.lookup(&id).unwrap().ref_count, 1);
     }
 
-    #[test] fn test_stats() {
+    #[test]
+    fn test_stats() {
         let reg = BlobRegistry::new_const();
         reg.register(make_blob(5), 100, keys(1)).unwrap();
         reg.register(make_blob(6), 200, keys(2)).unwrap();
@@ -331,13 +378,15 @@ mod tests {
         assert_eq!(s.total_chunks, 3);
     }
 
-    #[test] fn test_verify_integrity_ok() {
+    #[test]
+    fn test_verify_integrity_ok() {
         let reg = BlobRegistry::new_const();
         reg.register(make_blob(7), 50, keys(3)).unwrap();
         assert!(reg.verify_integrity().is_ok());
     }
 
-    #[test] fn test_clear() {
+    #[test]
+    fn test_clear() {
         let reg = BlobRegistry::new_const();
         reg.register(make_blob(8), 64, keys(1)).unwrap();
         reg.clear();
@@ -352,10 +401,10 @@ mod tests {
 /// Résumé compact d'un blob pour itération externe.
 #[derive(Debug, Clone)]
 pub struct BlobSummary {
-    pub blob_id:     BlobId,
+    pub blob_id: BlobId,
     pub chunk_count: u32,
-    pub total_size:  u64,
-    pub ref_count:   u32,
+    pub total_size: u64,
+    pub ref_count: u32,
 }
 
 impl BlobRegistry {
@@ -369,10 +418,10 @@ impl BlobRegistry {
         for v in self.map().values() {
             out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             out.push(BlobSummary {
-                blob_id:     v.blob_id.clone(),
+                blob_id: v.blob_id.clone(),
                 chunk_count: v.chunk_count,
-                total_size:  v.total_size,
-                ref_count:   v.ref_count,
+                total_size: v.total_size,
+                ref_count: v.ref_count,
             });
         }
         self.release();
@@ -397,7 +446,11 @@ impl BlobRegistry {
     /// Compte les blobs avec ref_count >= `min_refs` (partagés).
     pub fn count_shared_above(&self, min_refs: u32) -> usize {
         self.acquire();
-        let n = self.map().values().filter(|v| v.ref_count >= min_refs).count();
+        let n = self
+            .map()
+            .values()
+            .filter(|v| v.ref_count >= min_refs)
+            .count();
         self.release();
         n
     }
@@ -407,10 +460,15 @@ impl BlobRegistry {
 mod tests_extra {
     use super::*;
 
-    fn bid(s: u8) -> BlobId { BlobId::from_raw([s; 32]) }
-    fn ks(n: usize) -> Vec<[u8; 32]> { (0..n).map(|i| [i as u8; 32]).collect() }
+    fn bid(s: u8) -> BlobId {
+        BlobId::from_raw([s; 32])
+    }
+    fn ks(n: usize) -> Vec<[u8; 32]> {
+        (0..n).map(|i| [i as u8; 32]).collect()
+    }
 
-    #[test] fn test_all_summaries() {
+    #[test]
+    fn test_all_summaries() {
         let r = BlobRegistry::new_const();
         r.register(bid(10), 100, ks(2)).unwrap();
         r.register(bid(11), 200, ks(3)).unwrap();
@@ -418,16 +476,18 @@ mod tests_extra {
         assert_eq!(s.len(), 2);
     }
 
-    #[test] fn test_large_blobs() {
+    #[test]
+    fn test_large_blobs() {
         let r = BlobRegistry::new_const();
-        r.register(bid(20), 50,   ks(1)).unwrap();
-        r.register(bid(21), 500,  ks(2)).unwrap();
+        r.register(bid(20), 50, ks(1)).unwrap();
+        r.register(bid(21), 500, ks(2)).unwrap();
         r.register(bid(22), 5000, ks(3)).unwrap();
         let large = r.large_blobs(100).unwrap();
         assert_eq!(large.len(), 2);
     }
 
-    #[test] fn test_count_shared() {
+    #[test]
+    fn test_count_shared() {
         let r = BlobRegistry::new_const();
         let id = bid(30);
         r.register(id.clone(), 64, ks(1)).unwrap();
@@ -435,8 +495,9 @@ mod tests_extra {
         assert_eq!(r.count_shared_above(2), 1);
     }
 
-    #[test] fn test_orphan_blobs() {
-        let r  = BlobRegistry::new_const();
+    #[test]
+    fn test_orphan_blobs() {
+        let r = BlobRegistry::new_const();
         let id = bid(40);
         r.register(id.clone(), 32, ks(1)).unwrap();
         // Forcer orphelin depuis l'extérieur
@@ -447,7 +508,8 @@ mod tests_extra {
         assert_eq!(orphans.len(), 1);
     }
 
-    #[test] fn test_global_registry_accessible() {
+    #[test]
+    fn test_global_registry_accessible() {
         let s = BLOB_REGISTRY.stats();
         let _ = s.total_blobs; // accès sans panique
     }

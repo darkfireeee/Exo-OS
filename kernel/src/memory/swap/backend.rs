@@ -4,7 +4,7 @@
 // Couche 0 — aucune dépendance vers fs/process/scheduler.
 // L'intégration avec le FS se fait via le trait `SwapDevice`.
 
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::memory::core::types::PhysAddr;
 
@@ -19,8 +19,14 @@ pub struct SwapSlot(pub u64);
 
 impl SwapSlot {
     pub const INVALID: Self = SwapSlot(u64::MAX);
-    #[inline] pub fn is_valid(self) -> bool { self.0 != u64::MAX }
-    #[inline] pub fn as_u64(self) -> u64 { self.0 }
+    #[inline]
+    pub fn is_valid(self) -> bool {
+        self.0 != u64::MAX
+    }
+    #[inline]
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
 }
 
 /// Trait d'abstraction d'un dispositif swap.
@@ -58,13 +64,13 @@ pub trait SwapDevice: Send + Sync {
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
 pub enum SwapError {
-    NoDevice    = 0,
-    NoSlot      = 1,
-    IoError     = 2,
+    NoDevice = 0,
+    NoSlot = 1,
+    IoError = 2,
     InvalidSlot = 3,
-    DeviceFull  = 4,
-    NotEnabled  = 5,
-    Corrupted   = 6,
+    DeviceFull = 4,
+    NotEnabled = 5,
+    Corrupted = 6,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,13 +81,13 @@ pub const MAX_SWAP_DEVICES: usize = 8;
 
 /// Table des dispositifs swap enregistrés.
 pub struct SwapBackendRegistry {
-    devices:    [Option<&'static dyn SwapDevice>; MAX_SWAP_DEVICES],
-    count:      AtomicU32,
-    enabled:    AtomicBool,
+    devices: [Option<&'static dyn SwapDevice>; MAX_SWAP_DEVICES],
+    count: AtomicU32,
+    enabled: AtomicBool,
     // Statistiques globales.
-    pub stats_reads:    AtomicU64,
-    pub stats_writes:   AtomicU64,
-    pub stats_errors:   AtomicU64,
+    pub stats_reads: AtomicU64,
+    pub stats_writes: AtomicU64,
+    pub stats_errors: AtomicU64,
     pub stats_slots_freed: AtomicU64,
 }
 
@@ -92,12 +98,12 @@ unsafe impl Send for SwapBackendRegistry {}
 impl SwapBackendRegistry {
     const fn new() -> Self {
         SwapBackendRegistry {
-            devices:       [None; MAX_SWAP_DEVICES],
-            count:         AtomicU32::new(0),
-            enabled:       AtomicBool::new(false),
-            stats_reads:   AtomicU64::new(0),
-            stats_writes:  AtomicU64::new(0),
-            stats_errors:  AtomicU64::new(0),
+            devices: [None; MAX_SWAP_DEVICES],
+            count: AtomicU32::new(0),
+            enabled: AtomicBool::new(false),
+            stats_reads: AtomicU64::new(0),
+            stats_writes: AtomicU64::new(0),
+            stats_errors: AtomicU64::new(0),
             stats_slots_freed: AtomicU64::new(0),
         }
     }
@@ -108,7 +114,9 @@ impl SwapBackendRegistry {
     /// `device` doit avoir une durée de vie statique.
     pub unsafe fn register(&self, device: &'static dyn SwapDevice) -> Result<(), SwapError> {
         let idx = self.count.load(Ordering::Relaxed) as usize;
-        if idx >= MAX_SWAP_DEVICES { return Err(SwapError::DeviceFull); }
+        if idx >= MAX_SWAP_DEVICES {
+            return Err(SwapError::DeviceFull);
+        }
         // SAFETY: addr_of! évite &T→*mut T ; write-once par slot garanti par count atomique.
         let ptr = core::ptr::addr_of!(self.devices[idx]) as *mut Option<&'static dyn SwapDevice>;
         core::ptr::write(ptr, Some(device));
@@ -117,14 +125,18 @@ impl SwapBackendRegistry {
         Ok(())
     }
 
-    pub fn is_enabled(&self) -> bool { self.enabled.load(Ordering::Acquire) }
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Acquire)
+    }
 
     /// Alloue un slot sur le premier dispositif ayant de l'espace.
     pub fn alloc_slot(&self) -> Result<(usize, SwapSlot), SwapError> {
         let count = self.count.load(Ordering::Acquire) as usize;
         for i in 0..count {
             if let Some(dev) = self.devices[i] {
-                if let Some(slot) = dev.alloc_slot() { return Ok((i, slot)); }
+                if let Some(slot) = dev.alloc_slot() {
+                    return Ok((i, slot));
+                }
             }
         }
         Err(SwapError::NoSlot)
@@ -145,14 +157,23 @@ impl SwapBackendRegistry {
     /// # Safety
     /// `dst` doit être un frame physique valide.
     pub unsafe fn read_page(
-        &self, dev_idx: usize, slot: SwapSlot, dst: PhysAddr
+        &self,
+        dev_idx: usize,
+        slot: SwapSlot,
+        dst: PhysAddr,
     ) -> Result<(), SwapError> {
-        if dev_idx >= MAX_SWAP_DEVICES { return Err(SwapError::InvalidSlot); }
+        if dev_idx >= MAX_SWAP_DEVICES {
+            return Err(SwapError::InvalidSlot);
+        }
         let dev = self.devices[dev_idx].ok_or(SwapError::NoDevice)?;
         let res = dev.read_page(slot, dst);
         match &res {
-            Ok(_)  => { self.stats_reads.fetch_add(1, Ordering::Relaxed); }
-            Err(_) => { self.stats_errors.fetch_add(1, Ordering::Relaxed); }
+            Ok(_) => {
+                self.stats_reads.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                self.stats_errors.fetch_add(1, Ordering::Relaxed);
+            }
         }
         res
     }
@@ -162,14 +183,23 @@ impl SwapBackendRegistry {
     /// # Safety
     /// `src` doit être un frame physique valide.
     pub unsafe fn write_page(
-        &self, dev_idx: usize, slot: SwapSlot, src: PhysAddr
+        &self,
+        dev_idx: usize,
+        slot: SwapSlot,
+        src: PhysAddr,
     ) -> Result<(), SwapError> {
-        if dev_idx >= MAX_SWAP_DEVICES { return Err(SwapError::InvalidSlot); }
+        if dev_idx >= MAX_SWAP_DEVICES {
+            return Err(SwapError::InvalidSlot);
+        }
         let dev = self.devices[dev_idx].ok_or(SwapError::NoDevice)?;
         let res = dev.write_page(slot, src);
         match &res {
-            Ok(_)  => { self.stats_writes.fetch_add(1, Ordering::Relaxed); }
-            Err(_) => { self.stats_errors.fetch_add(1, Ordering::Relaxed); }
+            Ok(_) => {
+                self.stats_writes.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                self.stats_errors.fetch_add(1, Ordering::Relaxed);
+            }
         }
         res
     }
@@ -177,13 +207,19 @@ impl SwapBackendRegistry {
     /// Capacité totale en pages (somme de tous les dispositifs).
     pub fn total_capacity(&self) -> u64 {
         let count = self.count.load(Ordering::Acquire) as usize;
-        (0..count).filter_map(|i| self.devices[i]).map(|d| d.capacity_pages()).sum()
+        (0..count)
+            .filter_map(|i| self.devices[i])
+            .map(|d| d.capacity_pages())
+            .sum()
     }
 
     /// Pages libres totales.
     pub fn total_free(&self) -> u64 {
         let count = self.count.load(Ordering::Acquire) as usize;
-        (0..count).filter_map(|i| self.devices[i]).map(|d| d.free_pages()).sum()
+        (0..count)
+            .filter_map(|i| self.devices[i])
+            .map(|d| d.free_pages())
+            .sum()
     }
 }
 
@@ -211,7 +247,13 @@ impl SwapPte {
         raw & 1 == 0 && raw & Self::SWAP_FLAG != 0
     }
 
-    pub fn dev_idx(self) -> usize { ((self.0 >> 1) & 0x7) as usize }
-    pub fn slot(self) -> SwapSlot { SwapSlot(self.0 >> 12) }
-    pub fn raw(self) -> u64 { self.0 }
+    pub fn dev_idx(self) -> usize {
+        ((self.0 >> 1) & 0x7) as usize
+    }
+    pub fn slot(self) -> SwapSlot {
+        SwapSlot(self.0 >> 12)
+    }
+    pub fn raw(self) -> u64 {
+        self.0
+    }
 }

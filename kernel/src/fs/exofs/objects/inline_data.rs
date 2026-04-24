@@ -6,13 +6,10 @@
 //   ONDISK-01 : InlineDataDisk → #[repr(C, packed)], types plain uniquement
 //   HASH-01   : BlobId calculé sur données brutes (méthode seal())
 
-
+use crate::fs::exofs::core::{blake3_hash, BlobId, ExofsError, ExofsResult, INLINE_DATA_MAX};
+use crate::fs::exofs::objects::object_meta::crc32_compute;
 use core::fmt;
 use core::mem;
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, INLINE_DATA_MAX, BlobId, blake3_hash,
-};
-use crate::fs::exofs::objects::object_meta::crc32_compute;
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
@@ -41,15 +38,15 @@ pub const INLINE_DATA_DISK_SIZE: usize = mem::size_of::<InlineDataDisk>();
 #[derive(Clone, Copy)]
 pub struct InlineDataDisk {
     /// Longueur réelle des données (≤ 512).
-    pub len:          u16,
-    pub _pad0:        [u8; 2],
+    pub len: u16,
+    pub _pad0: [u8; 2],
     /// CRC32 du buffer.
-    pub checksum:     u32,
+    pub checksum: u32,
     /// Données inline (zéro-padées après `len` octets).
-    pub buf:          [u8; INLINE_BUF_SIZE],
+    pub buf: [u8; INLINE_BUF_SIZE],
     /// Hash Blake3 du contenu brut (HASH-01, calculé avant compression).
     pub content_hash: [u8; 32],
-    pub _pad1:        [u8; 16],
+    pub _pad1: [u8; 16],
 }
 
 // Vérification de taille en compile-time.
@@ -69,13 +66,13 @@ const _: () = assert!(
 #[derive(Clone)]
 pub struct InlineData {
     /// Buffer de données brutes.
-    buf:          [u8; INLINE_BUF_SIZE],
+    buf: [u8; INLINE_BUF_SIZE],
     /// Longueur réelle du contenu (≤ INLINE_BUF_SIZE).
-    len:          usize,
+    len: usize,
     /// Hash Blake3 du contenu (HASH-01 : calculé avant compression).
     content_hash: Option<BlobId>,
     /// Indique si le hash est à jour par rapport au buffer.
-    hash_valid:   bool,
+    hash_valid: bool,
 }
 
 impl InlineData {
@@ -84,10 +81,10 @@ impl InlineData {
     /// Crée un `InlineData` vide.
     pub const fn empty() -> Self {
         Self {
-            buf:          [0u8; INLINE_BUF_SIZE],
-            len:          0,
+            buf: [0u8; INLINE_BUF_SIZE],
+            len: 0,
             content_hash: None,
-            hash_valid:   false,
+            hash_valid: false,
         }
     }
 
@@ -104,14 +101,14 @@ impl InlineData {
             buf,
             len: data.len(),
             content_hash: None,
-            hash_valid:   false,
+            hash_valid: false,
         })
     }
 
     /// Reconstruit depuis la représentation disque après vérification CRC32.
     pub fn from_disk(d: &InlineDataDisk) -> ExofsResult<Self> {
         // Vérification CRC32 du buffer (HDR-03 analogue pour inline).
-        let stored   = d.checksum;
+        let stored = d.checksum;
         let computed = inline_crc32(d);
         if stored != computed {
             return Err(ExofsError::Corrupt);
@@ -123,10 +120,10 @@ impl InlineData {
 
         let hash = BlobId(d.content_hash);
         Ok(Self {
-            buf:          d.buf,
+            buf: d.buf,
             len,
             content_hash: Some(hash),
-            hash_valid:   true,
+            hash_valid: true,
         })
     }
 
@@ -140,18 +137,15 @@ impl InlineData {
         if !self.hash_valid {
             self.compute_hash();
         }
-        let content_hash = self.content_hash
-            .as_ref()
-            .map(|b| b.0)
-            .unwrap_or([0u8; 32]);
+        let content_hash = self.content_hash.as_ref().map(|b| b.0).unwrap_or([0u8; 32]);
 
         let mut d = InlineDataDisk {
-            len:          self.len as u16,
-            _pad0:        [0u8; 2],
-            checksum:     0,
-            buf:          self.buf,
+            len: self.len as u16,
+            _pad0: [0u8; 2],
+            checksum: 0,
+            buf: self.buf,
             content_hash,
-            _pad1:        [0u8; 16],
+            _pad1: [0u8; 16],
         };
         d.checksum = inline_crc32(&d);
         d
@@ -190,9 +184,9 @@ impl InlineData {
     /// Règle HASH-01 : calculé sur les données **avant** compression.
     pub fn compute_hash(&mut self) -> BlobId {
         let hash = blake3_hash(&self.buf[..self.len]);
-        let id   = BlobId(hash);
+        let id = BlobId(hash);
         self.content_hash = Some(id);
-        self.hash_valid   = true;
+        self.hash_valid = true;
         id
     }
 
@@ -228,8 +222,8 @@ impl InlineData {
         // Efface d'abord l'ancienne zone pour ne pas laisser de données résiduelles.
         self.buf[..self.len].fill(0);
         self.buf[..data.len()].copy_from_slice(data);
-        self.len          = data.len();
-        self.hash_valid   = false;
+        self.len = data.len();
+        self.hash_valid = false;
         self.content_hash = None;
         Ok(())
     }
@@ -247,7 +241,7 @@ impl InlineData {
         if end > self.len {
             self.len = end;
         }
-        self.hash_valid   = false;
+        self.hash_valid = false;
         self.content_hash = None;
         Ok(())
     }
@@ -260,7 +254,7 @@ impl InlineData {
             return Ok(0); // Lecture au-delà de la fin : retourne 0 octet lu.
         }
         let available = self.len - offset;
-        let to_copy   = dst.len().min(available);
+        let to_copy = dst.len().min(available);
         dst[..to_copy].copy_from_slice(&self.buf[offset..offset + to_copy]);
         Ok(to_copy)
     }
@@ -269,13 +263,16 @@ impl InlineData {
     ///
     /// Retourne `ExofsError::InlineTooLarge` si la capacité serait dépassée.
     pub fn append(&mut self, data: &[u8]) -> ExofsResult<()> {
-        let new_len = self.len.checked_add(data.len()).ok_or(ExofsError::Overflow)?;
+        let new_len = self
+            .len
+            .checked_add(data.len())
+            .ok_or(ExofsError::Overflow)?;
         if new_len > INLINE_BUF_SIZE {
             return Err(ExofsError::InlineTooLarge);
         }
         self.buf[self.len..new_len].copy_from_slice(data);
-        self.len          = new_len;
-        self.hash_valid   = false;
+        self.len = new_len;
+        self.hash_valid = false;
         self.content_hash = None;
         Ok(())
     }
@@ -288,8 +285,8 @@ impl InlineData {
             return Err(ExofsError::InvalidArgument);
         }
         self.buf[new_len..self.len].fill(0);
-        self.len          = new_len;
-        self.hash_valid   = false;
+        self.len = new_len;
+        self.hash_valid = false;
         self.content_hash = None;
         Ok(())
     }
@@ -319,8 +316,8 @@ impl InlineData {
     /// Effacement sécurisé du buffer (zéro-remplissage).
     pub fn zeroize(&mut self) {
         self.buf.fill(0);
-        self.len          = 0;
-        self.hash_valid   = false;
+        self.len = 0;
+        self.hash_valid = false;
         self.content_hash = None;
     }
 
@@ -348,9 +345,7 @@ impl fmt::Display for InlineData {
         write!(
             f,
             "InlineData {{ len: {}/{}, hash_valid: {} }}",
-            self.len,
-            INLINE_BUF_SIZE,
-            self.hash_valid,
+            self.len, INLINE_BUF_SIZE, self.hash_valid,
         )
     }
 }
@@ -367,34 +362,34 @@ impl fmt::Debug for InlineData {
 #[derive(Default, Debug, Clone)]
 pub struct InlineDataStats {
     /// Nombre de sérialisations vers disque.
-    pub to_disk_count:    u64,
+    pub to_disk_count: u64,
     /// Nombre de lectures depuis disque.
-    pub from_disk_count:  u64,
+    pub from_disk_count: u64,
     /// Nombre d'erreurs CRC32.
-    pub checksum_errors:  u64,
+    pub checksum_errors: u64,
     /// Nombre de calculs de hash Blake3.
     pub hash_computations: u64,
     /// Nombre d'opérations write_at.
-    pub write_at_count:   u64,
+    pub write_at_count: u64,
     /// Nombre d'opérations read_at.
-    pub read_at_count:    u64,
+    pub read_at_count: u64,
     /// Nombre d'appels append.
-    pub append_count:     u64,
+    pub append_count: u64,
     /// Nombre d'appels truncate.
-    pub truncate_count:   u64,
+    pub truncate_count: u64,
 }
 
 impl InlineDataStats {
     pub const fn new() -> Self {
         Self {
-            to_disk_count:     0,
-            from_disk_count:   0,
-            checksum_errors:   0,
+            to_disk_count: 0,
+            from_disk_count: 0,
+            checksum_errors: 0,
             hash_computations: 0,
-            write_at_count:    0,
-            read_at_count:     0,
-            append_count:      0,
-            truncate_count:    0,
+            write_at_count: 0,
+            read_at_count: 0,
+            append_count: 0,
+            truncate_count: 0,
         }
     }
 }

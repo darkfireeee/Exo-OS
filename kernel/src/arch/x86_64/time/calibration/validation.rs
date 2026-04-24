@@ -36,9 +36,8 @@
 //   RÈGLE CAL-VALIDATE-04 : plage absolue [500 MHz, 10 GHz] — rejet immédiat
 // ════════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use super::cpuid_nominal;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -48,13 +47,13 @@ pub const TSC_FREQ_MIN_HZ: u64 = 500_000_000;
 pub const TSC_FREQ_MAX_HZ: u64 = 10_000_000_000;
 
 /// Seuil "excellent" : écart < 2 % (permillage × 10 = cent-centième).
-const THRESHOLD_EXCELLENT_PCT_X100: u128 = 200;   // 2 %
+const THRESHOLD_EXCELLENT_PCT_X100: u128 = 200; // 2 %
 /// Seuil "bon" : écart < 5 %.
-const THRESHOLD_GOOD_PCT_X100:      u128 = 500;   // 5 %
+const THRESHOLD_GOOD_PCT_X100: u128 = 500; // 5 %
 /// Seuil "avertissement" : écart < 10 %.
-const THRESHOLD_WARN_PCT_X100:      u128 = 1_000; // 10 %
+const THRESHOLD_WARN_PCT_X100: u128 = 1_000; // 10 %
 /// Seuil "dégradé" : écart < 20 %.
-const THRESHOLD_DEGRADED_PCT_X100:  u128 = 2_000; // 20 %
+const THRESHOLD_DEGRADED_PCT_X100: u128 = 2_000; // 20 %
 
 /// Taille de l'historique de mesures conservé pour le calcul de l'écart-type.
 const HISTORY_SIZE: usize = 8;
@@ -72,32 +71,58 @@ pub enum ValidationResult {
     /// Concordance bonne (<5% d'écart). Confiance normale.
     Good(u64),
     /// Divergence modérée (<10%). Mesure acceptée, warning émis.
-    Warning { measured: u64, cpuid: u64, pct_x100: u64 },
+    Warning {
+        measured: u64,
+        cpuid: u64,
+        pct_x100: u64,
+    },
     /// Divergence significative (10-20%). Mesure acceptée mais dégradée.
-    Degraded { measured: u64, cpuid: u64, pct_x100: u64 },
+    Degraded {
+        measured: u64,
+        cpuid: u64,
+        pct_x100: u64,
+    },
     /// Divergence critique (>20%). Mesure rejetée, CPUID préféré si disponible.
-    Rejected { measured: u64, cpuid: u64, pct_x100: u64 },
+    Rejected {
+        measured: u64,
+        cpuid: u64,
+        pct_x100: u64,
+    },
     /// CPUID 0x15 non disponible → validation impossible, mesure retournée telle quelle.
     NoCpuid(u64),
     /// Valeur hors plage absolue [500 MHz, 10 GHz].
     OutOfRange(u64),
     /// Variation successive trop importante (>1% par rapport à la dernière mesure).
-    SuccessiveJump { new_hz: u64, prev_hz: u64, pct_x100: u64 },
+    SuccessiveJump {
+        new_hz: u64,
+        prev_hz: u64,
+        pct_x100: u64,
+    },
 }
 
 impl ValidationResult {
     /// Retourne la fréquence recommandée (None si rejetée).
     pub fn accepted_hz(self) -> Option<u64> {
         match self {
-            ValidationResult::Excellent(hz)     => Some(hz),
-            ValidationResult::Good(hz)          => Some(hz),
+            ValidationResult::Excellent(hz) => Some(hz),
+            ValidationResult::Good(hz) => Some(hz),
             ValidationResult::Warning { measured, .. } => Some(measured),
-            ValidationResult::Degraded { measured, cpuid: _, pct_x100: _ } => Some(measured),
-            ValidationResult::Rejected { measured: _, cpuid, .. } => {
+            ValidationResult::Degraded {
+                measured,
+                cpuid: _,
+                pct_x100: _,
+            } => Some(measured),
+            ValidationResult::Rejected {
+                measured: _, cpuid, ..
+            } => {
                 // Préférer CPUID si la mesure est hors plage.
-                if cpuid > 0 { Some(cpuid) } else { None }
+                if cpuid > 0 {
+                    Some(cpuid)
+                } else {
+                    None
+                }
             }
-            ValidationResult::NoCpuid(hz)  => Some(hz),
+            ValidationResult::NoCpuid(hz) => Some(hz),
             ValidationResult::OutOfRange(_) => None,
             ValidationResult::SuccessiveJump { new_hz, .. } => Some(new_hz), // accepter malgré le saut
         }
@@ -105,34 +130,39 @@ impl ValidationResult {
 
     /// Indique si la mesure est fiable (Excellent ou Good).
     pub fn is_high_confidence(self) -> bool {
-        matches!(self, ValidationResult::Excellent(_) | ValidationResult::Good(_) | ValidationResult::NoCpuid(_))
+        matches!(
+            self,
+            ValidationResult::Excellent(_)
+                | ValidationResult::Good(_)
+                | ValidationResult::NoCpuid(_)
+        )
     }
 
     /// Niveau de confiance de 0 (rejet total) à 100 (parfait).
     pub fn confidence(self) -> u8 {
         match self {
-            ValidationResult::Excellent(_)    => 100,
-            ValidationResult::Good(_)         => 90,
-            ValidationResult::Warning { .. }  => 70,
+            ValidationResult::Excellent(_) => 100,
+            ValidationResult::Good(_) => 90,
+            ValidationResult::Warning { .. } => 70,
             ValidationResult::Degraded { .. } => 50,
             ValidationResult::Rejected { .. } => 10,
-            ValidationResult::NoCpuid(_)      => 80, // Pas de référence, mais mesure directe OK.
-            ValidationResult::OutOfRange(_)   => 0,
-            ValidationResult::SuccessiveJump {..} => 60,
+            ValidationResult::NoCpuid(_) => 80, // Pas de référence, mais mesure directe OK.
+            ValidationResult::OutOfRange(_) => 0,
+            ValidationResult::SuccessiveJump { .. } => 60,
         }
     }
 
     /// Retourne un label court pour les logs port 0xE9.
     pub fn label(self) -> &'static str {
         match self {
-            ValidationResult::Excellent(_)    => "EXCE",
-            ValidationResult::Good(_)         => "GOOD",
-            ValidationResult::Warning { .. }  => "WARN",
+            ValidationResult::Excellent(_) => "EXCE",
+            ValidationResult::Good(_) => "GOOD",
+            ValidationResult::Warning { .. } => "WARN",
             ValidationResult::Degraded { .. } => "DEGR",
             ValidationResult::Rejected { .. } => "RJCT",
-            ValidationResult::NoCpuid(_)      => "NOCI",
-            ValidationResult::OutOfRange(_)   => "ORAN",
-            ValidationResult::SuccessiveJump {..} => "JUMP",
+            ValidationResult::NoCpuid(_) => "NOCI",
+            ValidationResult::OutOfRange(_) => "ORAN",
+            ValidationResult::SuccessiveJump { .. } => "JUMP",
         }
     }
 }
@@ -144,14 +174,14 @@ static HISTORY: [AtomicU64; HISTORY_SIZE] = {
     const ZERO: AtomicU64 = AtomicU64::new(0);
     [ZERO; HISTORY_SIZE]
 };
-static HISTORY_IDX:   AtomicU32 = AtomicU32::new(0);
+static HISTORY_IDX: AtomicU32 = AtomicU32::new(0);
 static HISTORY_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Dernière valeur validée et acceptée (pour contrôle successif).
 static LAST_ACCEPTED_HZ: AtomicU64 = AtomicU64::new(0);
 /// Nombre total de validations effectuées depuis le boot.
 static VALIDATION_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Nombre de validations dégradées (Degraded + Rejected).
-static DEGRADED_COUNT:   AtomicU64 = AtomicU64::new(0);
+static DEGRADED_COUNT: AtomicU64 = AtomicU64::new(0);
 
 // ── API principale ─────────────────────────────────────────────────────────────
 
@@ -259,7 +289,9 @@ pub fn validate(measured_hz: u64) -> ValidationResult {
 /// Calcule la moyenne des mesures dans l'historique.
 pub fn history_mean_hz() -> u64 {
     let count = HISTORY_COUNT.load(Ordering::Relaxed) as usize;
-    if count == 0 { return 0; }
+    if count == 0 {
+        return 0;
+    }
     let n = count.min(HISTORY_SIZE);
     let mut sum = 0u128;
     for i in 0..n {
@@ -273,10 +305,14 @@ pub fn history_mean_hz() -> u64 {
 pub fn history_variance_ppm2() -> u64 {
     let count = HISTORY_COUNT.load(Ordering::Relaxed) as usize;
     let n = count.min(HISTORY_SIZE);
-    if n < 2 { return 0; }
+    if n < 2 {
+        return 0;
+    }
 
     let mean = history_mean_hz();
-    if mean == 0 { return 0; }
+    if mean == 0 {
+        return 0;
+    }
 
     let mut sum_sq_ppm: u128 = 0;
     for i in 0..n {
@@ -300,26 +336,26 @@ pub fn tsc_is_unstable() -> bool {
 
 /// Snapshot de l'état de validation pour diagnostics.
 pub struct ValidationSnapshot {
-    pub validation_count:  u64,
-    pub degraded_count:    u64,
-    pub last_accepted_hz:  u64,
-    pub history_mean_hz:   u64,
-    pub variance_ppm2:     u64,
-    pub unstable:          bool,
-    pub cpuid_available:   bool,
-    pub cpuid_hz:          u64,
+    pub validation_count: u64,
+    pub degraded_count: u64,
+    pub last_accepted_hz: u64,
+    pub history_mean_hz: u64,
+    pub variance_ppm2: u64,
+    pub unstable: bool,
+    pub cpuid_available: bool,
+    pub cpuid_hz: u64,
 }
 
 pub fn validation_snapshot() -> ValidationSnapshot {
     ValidationSnapshot {
-        validation_count:  VALIDATION_COUNT.load(Ordering::Relaxed),
-        degraded_count:    DEGRADED_COUNT.load(Ordering::Relaxed),
-        last_accepted_hz:  LAST_ACCEPTED_HZ.load(Ordering::Relaxed),
-        history_mean_hz:   history_mean_hz(),
-        variance_ppm2:     history_variance_ppm2(),
-        unstable:          tsc_is_unstable(),
-        cpuid_available:   cpuid_nominal::cpuid_leaf15_available(),
-        cpuid_hz:          cpuid_nominal::cpuid_tsc_hz().unwrap_or(0),
+        validation_count: VALIDATION_COUNT.load(Ordering::Relaxed),
+        degraded_count: DEGRADED_COUNT.load(Ordering::Relaxed),
+        last_accepted_hz: LAST_ACCEPTED_HZ.load(Ordering::Relaxed),
+        history_mean_hz: history_mean_hz(),
+        variance_ppm2: history_variance_ppm2(),
+        unstable: tsc_is_unstable(),
+        cpuid_available: cpuid_nominal::cpuid_leaf15_available(),
+        cpuid_hz: cpuid_nominal::cpuid_tsc_hz().unwrap_or(0),
     }
 }
 
@@ -344,7 +380,9 @@ pub fn best_frequency(measured_hz: u64) -> Option<u64> {
             // Trust la mesure pour le Warning (CPUID nominal peut être décalé en VM).
             measured
         }
-        ValidationResult::Degraded { measured, cpuid, .. } => {
+        ValidationResult::Degraded {
+            measured, cpuid, ..
+        } => {
             if cpuid > 0 {
                 // Moyenne pondérée 70% mesure + 30% CPUID.
                 let weighted = (measured as u128 * 70 + cpuid as u128 * 30) / 100;
@@ -354,7 +392,11 @@ pub fn best_frequency(measured_hz: u64) -> Option<u64> {
             }
         }
         ValidationResult::Rejected { cpuid, .. } => {
-            if cpuid > 0 { cpuid } else { return None; }
+            if cpuid > 0 {
+                cpuid
+            } else {
+                return None;
+            }
         }
         ValidationResult::OutOfRange(_) => return None,
         ValidationResult::SuccessiveJump { new_hz, .. } => {
@@ -373,21 +415,29 @@ pub fn best_frequency(measured_hz: u64) -> Option<u64> {
         }
     };
 
-    if hz_in_range(hz) { Some(hz) } else { None }
+    if hz_in_range(hz) {
+        Some(hz)
+    } else {
+        None
+    }
 }
 
 // ── Utilitaires internes ───────────────────────────────────────────────────────
 
 /// Calcule l'écart en centièmes de % entre deux fréquences (|a - b| / b × 10000).
 fn percent_x100_u128(a: u128, b: u128) -> u128 {
-    if b == 0 { return 10_000; }
+    if b == 0 {
+        return 10_000;
+    }
     let diff = if a > b { a - b } else { b - a };
     diff.saturating_mul(10_000) / b
 }
 
 /// Version u64 pour les comparaisons critiques.
 fn percent_x100(a: u64, b: u64) -> u64 {
-    if b == 0 { return 10_000; }
+    if b == 0 {
+        return 10_000;
+    }
     let diff = if a > b { a - b } else { b - a };
     ((diff as u128).saturating_mul(10_000) / b as u128) as u64
 }
@@ -407,19 +457,29 @@ fn push_history(hz: u64) {
 fn log_validation_result(measured_hz: u64, result: &ValidationResult) {
     // Format : "[VAL:XXXX hz=XXXXXXXX]\n"
     unsafe fn out(b: u8) {
-        unsafe { core::arch::asm!("out 0xe9, al", in("al") b, options(nomem, nostack)); }
+        unsafe {
+            core::arch::asm!("out 0xe9, al", in("al") b, options(nomem, nostack));
+        }
     }
     let label = result.label();
     // SAFETY: port 0xE9 = canal debug QEMU, aucun effet si non disponible.
     unsafe {
-        for &b in b"[VAL:" { out(b); }
-        for &b in label.as_bytes() { out(b); }
+        for &b in b"[VAL:" {
+            out(b);
+        }
+        for &b in label.as_bytes() {
+            out(b);
+        }
         out(b' ');
         // Écrire measured_hz en hex 16 chiffres.
         let v = measured_hz;
         for shift in (0..64usize).step_by(4).rev() {
             let nib = ((v >> (60 - shift)) & 0xF) as u8;
-            out(if nib < 10 { b'0' + nib } else { b'a' + nib - 10 });
+            out(if nib < 10 {
+                b'0' + nib
+            } else {
+                b'a' + nib - 10
+            });
         }
         out(b']');
         out(b'\n');

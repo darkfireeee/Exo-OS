@@ -49,7 +49,7 @@ pub mod pollfd;
 
 // ─── Réexports publics ────────────────────────────────────────────────────────
 pub use addr::{IoVirtAddr, PhysAddr, VirtAddr};
-pub use cap::{CapToken, CapabilityType, Rights, verify_cap_token};
+pub use cap::{verify_cap_token, CapToken, CapabilityType, Rights};
 pub use constants::{EXOFS_PAGE_SIZE, ZERO_BLOB_ID_4K};
 pub use epoll::EpollEventAbi;
 pub use error::ExoError;

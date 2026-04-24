@@ -3,9 +3,8 @@
 //! Remplace certaines opérations coûteuses (EOI, TLB flush) par des versions
 //! paravirtualisées plus efficaces quand disponibles (principalement KVM).
 
-
-use super::detect::{hypervisor_type, HypervisorType, kvm_has_pv_eoi, kvm_has_pv_tlb_flush};
 use super::super::cpu::msr;
+use super::detect::{hypervisor_type, kvm_has_pv_eoi, kvm_has_pv_tlb_flush, HypervisorType};
 
 /// MSR KVM PV EOI
 const MSR_KVM_PV_EOI_EN: u32 = 0x4b564d04;
@@ -50,7 +49,11 @@ pub fn paravirt_tlb_flush() {
 ///
 /// Enregistre la page partagée PV EOI dans le MSR KVM.
 pub fn init_pv_eoi(_pv_eoi_page_phys: u64) {
-    if !(hypervisor_type() == HypervisorType::Kvm && kvm_has_pv_eoi()) { return; }
+    if !(hypervisor_type() == HypervisorType::Kvm && kvm_has_pv_eoi()) {
+        return;
+    }
     // SAFETY: MSR_KVM_PV_EOI_EN write depuis Ring 0 sur CPU en mode KVM
-    unsafe { msr::write_msr(MSR_KVM_PV_EOI_EN, _pv_eoi_page_phys | KVM_PV_EOI_ENABLED); }
+    unsafe {
+        msr::write_msr(MSR_KVM_PV_EOI_EN, _pv_eoi_page_phys | KVM_PV_EOI_ENABLED);
+    }
 }

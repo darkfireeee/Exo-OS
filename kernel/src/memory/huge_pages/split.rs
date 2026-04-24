@@ -9,9 +9,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::memory::core::{
-    PhysAddr, Frame, PAGE_SIZE, HUGE_PAGE_SIZE,
-};
+use crate::memory::core::{Frame, PhysAddr, HUGE_PAGE_SIZE, PAGE_SIZE};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATISTIQUES SPLIT
@@ -20,19 +18,19 @@ use crate::memory::core::{
 /// Statistiques de split de huge pages.
 pub struct SplitStats {
     /// Nombre de splits réussis.
-    pub splits_done:    AtomicU64,
+    pub splits_done: AtomicU64,
     /// Nombre de splits refusés (page non huge ou non splittable).
     pub splits_refused: AtomicU64,
     /// Nombre total de PTEs reconstruites (splits_done × 512).
-    pub ptes_rebuilt:   AtomicU64,
+    pub ptes_rebuilt: AtomicU64,
 }
 
 impl SplitStats {
     const fn new() -> Self {
         SplitStats {
-            splits_done:    AtomicU64::new(0),
+            splits_done: AtomicU64::new(0),
             splits_refused: AtomicU64::new(0),
-            ptes_rebuilt:   AtomicU64::new(0),
+            ptes_rebuilt: AtomicU64::new(0),
         }
     }
 }
@@ -66,45 +64,59 @@ pub enum SplitResult {
 #[derive(Debug, Clone, Copy)]
 pub struct HugePdeFlags {
     /// Écriture autorisée.
-    pub writable:   bool,
+    pub writable: bool,
     /// Accès user-mode autorisé.
-    pub user:       bool,
+    pub user: bool,
     /// Bit NX actif.
     pub no_execute: bool,
     /// Cache désactivé (MMIO).
-    pub no_cache:   bool,
+    pub no_cache: bool,
     /// Write-through activé.
     pub write_through: bool,
     /// Page globale (TLB global entry).
-    pub global:     bool,
+    pub global: bool,
     /// COW flag (bit OS disponible 9).
-    pub cow:        bool,
+    pub cow: bool,
 }
 
 impl HugePdeFlags {
     /// Reconstruit les flags PDE depuis les bits raw d'une PDE x86_64.
     pub fn from_raw_pde(raw: u64) -> Self {
         HugePdeFlags {
-            writable:      raw & 0x2 != 0,
-            user:          raw & 0x4 != 0,
-            no_execute:    raw & (1u64 << 63) != 0,
-            no_cache:      raw & 0x10 != 0,
+            writable: raw & 0x2 != 0,
+            user: raw & 0x4 != 0,
+            no_execute: raw & (1u64 << 63) != 0,
+            no_cache: raw & 0x10 != 0,
             write_through: raw & 0x8 != 0,
-            global:        raw & 0x100 != 0,
-            cow:           raw & 0x200 != 0,  // bit 9 = COW (OS-defined)
+            global: raw & 0x100 != 0,
+            cow: raw & 0x200 != 0, // bit 9 = COW (OS-defined)
         }
     }
 
     /// Encode en flags PTE 4 KiB (PRESENT | flags hérités).
     pub fn to_pte_flags(self) -> u64 {
         let mut f: u64 = 0x1; // PRESENT toujours
-        if self.writable      { f |= 0x2; }
-        if self.user          { f |= 0x4; }
-        if self.write_through { f |= 0x8; }
-        if self.no_cache      { f |= 0x10; }
-        if self.global        { f |= 0x100; }
-        if self.cow           { f |= 0x200; }
-        if self.no_execute    { f |= 1u64 << 63; }
+        if self.writable {
+            f |= 0x2;
+        }
+        if self.user {
+            f |= 0x4;
+        }
+        if self.write_through {
+            f |= 0x8;
+        }
+        if self.no_cache {
+            f |= 0x10;
+        }
+        if self.global {
+            f |= 0x100;
+        }
+        if self.cow {
+            f |= 0x200;
+        }
+        if self.no_execute {
+            f |= 1u64 << 63;
+        }
         f
     }
 }
@@ -140,7 +152,7 @@ pub struct SplitOutput {
     /// Adresse physique de la table PT à créer (allouée par l'appelant).
     pub pt_phys: PhysAddr,
     /// Les 512 entrées PTE raw à écrire dans `pt_phys`.
-    pub ptes:    [u64; 512],
+    pub ptes: [u64; 512],
 }
 
 /// Effectue le split logique d'une huge page.
@@ -162,8 +174,8 @@ pub struct SplitOutput {
 /// rester alloué jusqu'à la réécriture des PTEs (les pages restent utilisables).
 pub unsafe fn split_huge_pde(
     huge_phys: PhysAddr,
-    raw_pde:   u64,
-    pt_frame:  Frame,
+    raw_pde: u64,
+    pt_frame: Frame,
 ) -> Result<SplitOutput, SplitResult> {
     // Vérification alignement 2 MiB.
     if huge_phys.as_u64() % HUGE_PAGE_SIZE as u64 != 0 {
@@ -179,12 +191,15 @@ pub unsafe fn split_huge_pde(
 
     // Extraire les flags de la PDE et générer les 512 PTEs.
     let flags = HugePdeFlags::from_raw_pde(raw_pde);
-    let ptes  = generate_split_ptes(huge_phys, flags);
+    let ptes = generate_split_ptes(huge_phys, flags);
 
     SPLIT_STATS.splits_done.fetch_add(1, Ordering::Relaxed);
     SPLIT_STATS.ptes_rebuilt.fetch_add(512, Ordering::Relaxed);
 
-    Ok(SplitOutput { pt_phys: pt_frame.start_address(), ptes })
+    Ok(SplitOutput {
+        pt_phys: pt_frame.start_address(),
+        ptes,
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -203,14 +218,14 @@ pub unsafe fn split_huge_pde(
 /// # Safety
 /// La physmap doit être accessible et la PDE doit pointer sur `huge_phys`.
 pub unsafe fn split_huge_pde_in_place(
-    pde_virt:       *mut u64,
-    huge_phys:      PhysAddr,
-    raw_pde:        u64,
-    pt_frame:       Frame,
-    phys_map_base:  u64,
+    pde_virt: *mut u64,
+    huge_phys: PhysAddr,
+    raw_pde: u64,
+    pt_frame: Frame,
+    phys_map_base: u64,
 ) -> SplitResult {
     let output = match split_huge_pde(huge_phys, raw_pde, pt_frame) {
-        Ok(o)  => o,
+        Ok(o) => o,
         Err(e) => return e,
     };
 
@@ -227,8 +242,12 @@ pub unsafe fn split_huge_pde_in_place(
     // Remplacer la PDE par une PDE non-huge pointant vers la nouvelle PT.
     // Flags : PRESENT | WRITE | (USER si la PDE originale était user).
     let mut new_pde_flags: u64 = 0x3; // PRESENT + WRITE
-    if raw_pde & 0x4 != 0 { new_pde_flags |= 0x4; } // USER
-    if raw_pde & (1u64 << 63) != 0 { new_pde_flags |= 1u64 << 63; } // NX
+    if raw_pde & 0x4 != 0 {
+        new_pde_flags |= 0x4;
+    } // USER
+    if raw_pde & (1u64 << 63) != 0 {
+        new_pde_flags |= 1u64 << 63;
+    } // NX
 
     let new_pde = output.pt_phys.as_u64() | new_pde_flags;
     pde_virt.write_volatile(new_pde);

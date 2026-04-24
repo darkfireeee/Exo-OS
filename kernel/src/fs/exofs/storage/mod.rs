@@ -42,7 +42,6 @@
 //! | **BACKUP-01** | 3 miroirs superblock écrits à chaque commit |
 //! | **BACKUP-02** | Recovery sélectionne le miroir avec epoch_current max |
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -129,29 +128,22 @@ pub mod virtio_adapter;
 // ─────────────────────────────────────────────────────────────
 
 // Layout
-pub use layout::{
-    BLOCK_SIZE, HEAP_START_OFFSET,
-    align_up, align_down,
-    DiskZone, LayoutMap,
-};
+pub use layout::{align_down, align_up, DiskZone, LayoutMap, BLOCK_SIZE, HEAP_START_OFFSET};
 
 // Superblock
 pub use superblock::{
-    ExoSuperblockDisk, SuperblockManager, SuperblockSnapshot,
-    EXOFS_MAGIC, FORMAT_VERSION_MAJOR, SUPERBLOCK_DISK_SIZE,
-    MirrorSlot, SbManagerState,
-    verify_superblock_bytes, superblock_mirror_offsets,
+    superblock_mirror_offsets, verify_superblock_bytes, ExoSuperblockDisk, MirrorSlot,
+    SbManagerState, SuperblockManager, SuperblockSnapshot, EXOFS_MAGIC, FORMAT_VERSION_MAJOR,
+    SUPERBLOCK_DISK_SIZE,
 };
 
 // Superblock backup
-pub use superblock_backup::{
-    write_superblock_mirrors, recover_superblock,
-};
+pub use superblock_backup::{recover_superblock, write_superblock_mirrors};
 
 // Heap
 pub use heap::{ExofsHeap, HeapConfig};
-pub use heap_allocator::{HeapAllocator, AllocationPolicy};
-pub use heap_coalesce::{HeapCoalescer, CoalesceReport};
+pub use heap_allocator::{AllocationPolicy, HeapAllocator};
+pub use heap_coalesce::{CoalesceReport, HeapCoalescer};
 pub use heap_free_map::HeapFreeMap;
 
 // Block allocator
@@ -161,50 +153,43 @@ pub use block_allocator::{BlockAllocator, ExtentHandle, ExtentState};
 pub use block_cache::BlockCache;
 
 // I/O batch
-pub use io_batch::{IoBatch, IoBatchReport, BatchStats, IoBatchQueue};
+pub use io_batch::{BatchStats, IoBatch, IoBatchQueue, IoBatchReport};
 
 // Checksums
-pub use checksum_writer::{ChecksumWriter, ChecksumTag, BlockChecksumMap};
 pub use checksum_reader::{ChecksumReader, VerifyMode};
+pub use checksum_writer::{BlockChecksumMap, ChecksumTag, ChecksumWriter};
 
 // Compression
-pub use compression_choice::{CompressionType, ContentHint, choose_compression};
+pub use compression_choice::{choose_compression, CompressionType, ContentHint};
+pub use compression_reader::DecompressReader;
 pub use compression_writer::{CompressWriter, CompressedBlockHeader};
-pub use compression_reader::{DecompressReader};
 
 // Déduplication
-pub use dedup_writer::{DedupWriter, DedupEntry, DedupDecision};
 pub use dedup_reader::DedupReader;
+pub use dedup_writer::{DedupDecision, DedupEntry, DedupWriter};
 
 // Extents
-pub use extent_writer::{ExtentWriter, Extent, ExtentMap};
-pub use extent_reader::{ExtentReader, ExtentBlockIterator};
+pub use extent_reader::{ExtentBlockIterator, ExtentReader};
+pub use extent_writer::{Extent, ExtentMap, ExtentWriter};
 
 // Blobs
-pub use blob_writer::{
-    BlobWriter, BlobWriterConfig, BlobWriteResult, BatchBlobWriter,
-    BlobHeaderDisk, BLOB_HEADER_MAGIC, BLOB_HEADER_SIZE,
-    verify_blob_header, blob_total_disk_size,
-    BLOB_WRITER_STATS,
-};
 pub use blob_reader::{
-    BlobReader, BlobReadResult, BlobVerifyMode,
-    BatchBlobReader, BlobReadRequest, BatchBlobReadResult,
-    BlobScanner, IntegrityReport, verify_blob_range,
-    BLOB_READER_STATS,
+    verify_blob_range, BatchBlobReadResult, BatchBlobReader, BlobReadRequest, BlobReadResult,
+    BlobReader, BlobScanner, BlobVerifyMode, IntegrityReport, BLOB_READER_STATS,
+};
+pub use blob_writer::{
+    blob_total_disk_size, verify_blob_header, BatchBlobWriter, BlobHeaderDisk, BlobWriteResult,
+    BlobWriter, BlobWriterConfig, BLOB_HEADER_MAGIC, BLOB_HEADER_SIZE, BLOB_WRITER_STATS,
 };
 
 // Objets
-pub use object_writer::{
-    ObjectWriter, ObjectWriterConfig, ObjectWriteResult,
-    ObjectHeaderDisk, ObjectType, BlobRef,
-    OBJECT_HEADER_MAGIC, OBJECT_HEADER_SIZE,
-    OBJECT_WRITER_STATS,
-};
 pub use object_reader::{
-    ObjectReader, ObjectReadResult, ObjectVerifyMode,
-    ObjectMeta, ObjectScanner, ObjectIntegrityReport,
-    verify_objects, OBJECT_READER_STATS,
+    verify_objects, ObjectIntegrityReport, ObjectMeta, ObjectReadResult, ObjectReader,
+    ObjectScanner, ObjectVerifyMode, OBJECT_READER_STATS,
+};
+pub use object_writer::{
+    BlobRef, ObjectHeaderDisk, ObjectType, ObjectWriteResult, ObjectWriter, ObjectWriterConfig,
+    OBJECT_HEADER_MAGIC, OBJECT_HEADER_SIZE, OBJECT_WRITER_STATS,
 };
 
 // Statistiques
@@ -249,7 +234,10 @@ pub fn storage_init<ReadFn>(
     read_fn: ReadFn,
 ) -> Result<StorageInitResult, StorageInitError>
 where
-    ReadFn: Fn(crate::fs::exofs::core::DiskOffset, usize) -> crate::fs::exofs::core::ExofsResult<Vec<u8>>,
+    ReadFn: Fn(
+        crate::fs::exofs::core::DiskOffset,
+        usize,
+    ) -> crate::fs::exofs::core::ExofsResult<Vec<u8>>,
 {
     if STORAGE_INITIALIZED.load(Ordering::Acquire) {
         return Err(StorageInitError::AlreadyInitialized);
@@ -287,8 +275,7 @@ pub fn storage_shutdown() {
 /// Vrai si le module storage est initialisé et prêt
 #[inline]
 pub fn storage_is_ready() -> bool {
-    STORAGE_INITIALIZED.load(Ordering::Acquire)
-        && !STORAGE_SHUTDOWN.load(Ordering::Acquire)
+    STORAGE_INITIALIZED.load(Ordering::Acquire) && !STORAGE_SHUTDOWN.load(Ordering::Acquire)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -314,12 +301,18 @@ impl StorageHealthReport {
         let total_ops = snap.blobs_created.saturating_add(snap.blobs_deleted);
         let dedup_pct = if total_ops > 0 {
             snap.dedup_hits.saturating_mul(100) / total_ops
-        } else { 0 };
+        } else {
+            0
+        };
 
         let compress_ratio_pct = if snap.compress_bytes_in > 0 {
-            let saved = snap.compress_bytes_in.saturating_sub(snap.compress_bytes_out);
+            let saved = snap
+                .compress_bytes_in
+                .saturating_sub(snap.compress_bytes_out);
             saved.saturating_mul(100) / snap.compress_bytes_in
-        } else { 0 };
+        } else {
+            0
+        };
 
         Self {
             is_ready: storage_is_ready(),
@@ -345,22 +338,22 @@ impl StorageHealthReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
     use crate::fs::exofs::core::{DiskOffset, EpochId, ObjectId};
+    use alloc::vec;
 
     const DISK_SZ: u64 = 32 * 1024 * 1024;
 
     /// Crée et formate un disque en mémoire, retourne les bytes
     fn make_formatted_disk() -> Vec<u8> {
         let mut disk = vec![0u8; DISK_SZ as usize];
-        let _ = SuperblockManager::format(
-            DISK_SZ, b"TestVol", [0xAB; 16], 0,
-            |off, buf| {
-                let s = off.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
-                Ok(buf.len())
-            },
-        ).unwrap();
+        let _ = SuperblockManager::format(DISK_SZ, b"TestVol", [0xAB; 16], 0, |off, buf| {
+            let s = off.0 as usize;
+            if s + buf.len() <= disk.len() {
+                disk[s..s + buf.len()].copy_from_slice(buf);
+            }
+            Ok(buf.len())
+        })
+        .unwrap();
         disk
     }
 
@@ -397,9 +390,10 @@ mod tests {
             let s = off.0 as usize;
             let e = (s + sz).min(disk.len());
             let mut v = vec![0u8; sz];
-            v[..e-s].copy_from_slice(&disk[s..e]);
+            v[..e - s].copy_from_slice(&disk[s..e]);
             Ok(v)
-        }).unwrap();
+        })
+        .unwrap();
 
         let snap = mgr.snapshot();
         assert_eq!(snap.disk_size, DISK_SZ);
@@ -415,15 +409,19 @@ mod tests {
 
         let mut disk = vec![0u8; 65536usize];
         let result = BlobWriter::write_blob(
-            data, &config,
+            data,
+            &config,
             |_| Ok(DiskOffset(0)),
             |off, buf| {
                 let s = off.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+                if s + buf.len() <= disk.len() {
+                    disk[s..s + buf.len()].copy_from_slice(buf);
+                }
                 Ok(buf.len())
             },
             |_| None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(result.original_size, data.len() as u64);
         assert!(!result.dedup_hit);
@@ -432,10 +430,11 @@ mod tests {
             DiskOffset(0),
             |off, sz| {
                 let s = off.0 as usize;
-                Ok(disk[s..s+sz].to_vec())
+                Ok(disk[s..s + sz].to_vec())
             },
             BlobVerifyMode::Full,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(&read_result.data[..data.len()], data);
         assert!(read_result.id_verified);
@@ -453,15 +452,24 @@ mod tests {
         let mut off = 0u64;
 
         let result = ObjectWriter::write_object(
-            oid, data, &config,
-            |n| { let o = DiskOffset(off); off += n * BLOCK_SIZE as u64; Ok(o) },
+            oid,
+            data,
+            &config,
+            |n| {
+                let o = DiskOffset(off);
+                off += n * BLOCK_SIZE as u64;
+                Ok(o)
+            },
             |o, buf| {
                 let s = o.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+                if s + buf.len() <= disk.len() {
+                    disk[s..s + buf.len()].copy_from_slice(buf);
+                }
                 Ok(buf.len())
             },
             |_| None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(result.content_size, data.len() as u64);
         assert_eq!(result.blob_count, 1);
@@ -483,14 +491,10 @@ mod tests {
     #[test]
     fn verify_blob_range_empty() {
         let disk = vec![0u8; 4096usize];
-        let report = verify_blob_range(
-            DiskOffset(0),
-            DiskOffset(0),
-            &|off, sz| {
-                let s = off.0 as usize;
-                Ok(disk[s..s+sz].to_vec())
-            },
-        );
+        let report = verify_blob_range(DiskOffset(0), DiskOffset(0), &|off, sz| {
+            let s = off.0 as usize;
+            Ok(disk[s..s + sz].to_vec())
+        });
         assert_eq!(report.checked, 0);
     }
 

@@ -101,8 +101,10 @@ impl AtomicRefCount {
                 return false;
             }
             match self.0.compare_exchange_weak(
-                current, current + 1,
-                Ordering::AcqRel, Ordering::Relaxed
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
             ) {
                 Ok(_) => return true,
                 Err(new) => current = new,
@@ -128,7 +130,8 @@ impl AtomicRefCount {
     /// Retourne Ok(()) si réussi, Err(current) sinon.
     #[inline]
     pub fn compare_exchange(&self, expected: u32, new: u32) -> Result<(), u32> {
-        self.0.compare_exchange(expected, new, Ordering::AcqRel, Ordering::Acquire)
+        self.0
+            .compare_exchange(expected, new, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| ())
             .map_err(|cur| cur)
     }
@@ -161,7 +164,10 @@ pub struct CowSlot {
     _pad: u32,
 }
 
-const _: () = assert!(core::mem::size_of::<CowSlot>() == 16, "CowSlot doit faire 16 bytes");
+const _: () = assert!(
+    core::mem::size_of::<CowSlot>() == 16,
+    "CowSlot doit faire 16 bytes"
+);
 
 impl CowSlot {
     #[inline]

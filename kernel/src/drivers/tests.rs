@@ -1,16 +1,16 @@
 #[cfg(test)]
 pub mod smp_tests {
     extern crate std;
-    use std::thread;
-    use std::sync::Arc;
-    use std::time::Instant;
     use crate::arch::x86_64::boot::memory_map::{
         MemoryRegion, MemoryRegionType, MEMORY_MAP, MEMORY_REGION_COUNT,
     };
-    use crate::drivers::iommu::fault_queue::{IommuFaultQueue, IommuFaultEvent};
-    use crate::drivers::device_claims::{sys_pci_claim, DEVICE_CLAIMS, PciBdf, ClaimError};
+    use crate::drivers::device_claims::{sys_pci_claim, ClaimError, PciBdf, DEVICE_CLAIMS};
+    use crate::drivers::iommu::fault_queue::{IommuFaultEvent, IommuFaultQueue};
     use crate::memory::core::types::PhysAddr;
     use core::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Instant;
 
     #[test]
     fn test_01_iommu_queue_hft_smp_stress() {
@@ -51,7 +51,12 @@ pub mod smp_tests {
             let q = queue.clone();
             handles.push(thread::spawn(move || {
                 for _ in 0..items {
-                    let ev = IommuFaultEvent { device_id: p as u16, fault_type: 0, domain_id: 0, faulted_addr: 0 };
+                    let ev = IommuFaultEvent {
+                        device_id: p as u16,
+                        fault_type: 0,
+                        domain_id: 0,
+                        faulted_addr: 0,
+                    };
                     while !q.push(ev) {
                         core::hint::spin_loop();
                     }
@@ -64,7 +69,11 @@ pub mod smp_tests {
         }
 
         let dur = start.elapsed();
-        println!("-> SUCCES : {} evt traites par 32 coeurs en {:?} (Zero Lock Mutex)", total_popped.load(Ordering::Relaxed), dur);
+        println!(
+            "-> SUCCES : {} evt traites par 32 coeurs en {:?} (Zero Lock Mutex)",
+            total_popped.load(Ordering::Relaxed),
+            dur
+        );
         assert_eq!(total_popped.load(Ordering::Relaxed), expected as usize);
     }
 
@@ -77,8 +86,8 @@ pub mod smp_tests {
         let pid = 4_242u32;
         crate::drivers::iommu::release_domain_for_pid(pid);
 
-        let first = crate::drivers::iommu::ensure_domain_for_pid(pid)
-            .expect("premiere allocation domaine");
+        let first =
+            crate::drivers::iommu::ensure_domain_for_pid(pid).expect("premiere allocation domaine");
         assert_ne!(first.0, 0);
         assert_eq!(crate::drivers::iommu::domain_of_pid(pid).ok(), Some(first));
         assert_eq!(crate::drivers::iommu::pid_of_domain(first), Some(pid));
@@ -86,8 +95,8 @@ pub mod smp_tests {
         crate::drivers::iommu::release_domain_for_pid(pid);
         assert!(crate::drivers::iommu::domain_of_pid(pid).is_err());
 
-        let second = crate::drivers::iommu::ensure_domain_for_pid(pid)
-            .expect("reallocation domaine");
+        let second =
+            crate::drivers::iommu::ensure_domain_for_pid(pid).expect("reallocation domaine");
         assert_eq!(second.0, first.0, "le slot domaine doit etre recyclable");
 
         crate::drivers::iommu::release_domain_for_pid(pid);
@@ -99,7 +108,11 @@ pub mod smp_tests {
         // Simulation d'une attaque TOCTOU : 50 threads tentent d'enregistrer le BDF 0x01.00.0 simultanement
         let phys_base = PhysAddr::new(0xA000_0000);
         let size = 4096;
-        let bdf = Some(PciBdf { bus: 1, dev: 0, func: 0 });
+        let bdf = Some(PciBdf {
+            bus: 1,
+            dev: 0,
+            func: 0,
+        });
 
         let old_count;
         let old_region0;
@@ -135,12 +148,16 @@ pub mod smp_tests {
             }
         }
 
-        println!("-> SUCCES TOCTOU : {:?} ecoule. Resultats : {} succes, {} bloqués.", 
-                 start.elapsed(), successes, failures_already_claimed);
+        println!(
+            "-> SUCCES TOCTOU : {:?} ecoule. Resultats : {} succes, {} bloqués.",
+            start.elapsed(),
+            successes,
+            failures_already_claimed
+        );
 
         assert_eq!(successes, 1);
         assert_eq!(failures_already_claimed, 49);
-        
+
         // Cleanup test environment
         DEVICE_CLAIMS.write().clear();
         unsafe {

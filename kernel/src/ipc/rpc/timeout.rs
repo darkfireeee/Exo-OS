@@ -48,7 +48,9 @@ pub type TimeFn = fn() -> u64;
 
 /// Fonction de temps par défaut : retourne 0 (utilisable avant init de l'horloge)
 #[allow(dead_code)]
-fn time_zero() -> u64 { 0 }
+fn time_zero() -> u64 {
+    0
+}
 
 /// Pointeur de fonction de temps configurable
 /// Initialisé à 0 (cast de fn pointer interdit en const, installé au runtime).
@@ -96,7 +98,10 @@ impl RpcTimeout {
         } else {
             duration_ns
         };
-        Self { duration_ns: d, start_ns: now_ns() }
+        Self {
+            duration_ns: d,
+            start_ns: now_ns(),
+        }
     }
 
     /// Timeout par défaut (5 ms)
@@ -106,7 +111,10 @@ impl RpcTimeout {
 
     /// Crée un timeout infini (attente indéfinie)
     pub fn infinite() -> Self {
-        Self { duration_ns: 0, start_ns: 0 }
+        Self {
+            duration_ns: 0,
+            start_ns: 0,
+        }
     }
 
     /// Vérifie si le timeout est infini
@@ -121,16 +129,24 @@ impl RpcTimeout {
 
     /// Vérifie si le timeout est expiré
     pub fn is_expired(&self) -> bool {
-        if self.is_infinite() { return false; }
-        if self.start_ns == 0 { return false; }
+        if self.is_infinite() {
+            return false;
+        }
+        if self.start_ns == 0 {
+            return false;
+        }
         let elapsed = now_ns().saturating_sub(self.start_ns);
         elapsed >= self.duration_ns
     }
 
     /// Temps restant en ns (0 si expiré ou infini)
     pub fn remaining_ns(&self) -> u64 {
-        if self.is_infinite() { return u64::MAX; }
-        if self.start_ns == 0 { return self.duration_ns; }
+        if self.is_infinite() {
+            return u64::MAX;
+        }
+        if self.start_ns == 0 {
+            return self.duration_ns;
+        }
         let elapsed = now_ns().saturating_sub(self.start_ns);
         self.duration_ns.saturating_sub(elapsed)
     }
@@ -138,7 +154,9 @@ impl RpcTimeout {
     /// Nombre de spins suggérés pour attendre ce timeout.
     /// Heuristique : 1 ns ≈ 1 spin à ~1 GHz.
     pub fn to_spin_max(&self) -> u64 {
-        if self.is_infinite() { return 0; }
+        if self.is_infinite() {
+            return 0;
+        }
         self.remaining_ns()
     }
 }
@@ -155,10 +173,18 @@ pub struct RpcDeadline {
 impl RpcDeadline {
     pub fn from_timeout(t: &RpcTimeout) -> Self {
         if t.is_infinite() {
-            return Self { deadline_ns: u64::MAX };
+            return Self {
+                deadline_ns: u64::MAX,
+            };
         }
-        let start = if t.start_ns == 0 { now_ns() } else { t.start_ns };
-        Self { deadline_ns: start.saturating_add(t.duration_ns) }
+        let start = if t.start_ns == 0 {
+            now_ns()
+        } else {
+            t.start_ns
+        };
+        Self {
+            deadline_ns: start.saturating_add(t.duration_ns),
+        }
     }
 
     pub fn is_expired(&self) -> bool {
@@ -185,7 +211,11 @@ pub struct RetryState {
 impl RetryState {
     /// Initialise une politique de retry avec timeout.
     pub fn new(max_retries: u32, timeout: RpcTimeout) -> Self {
-        let n = if max_retries > RPC_MAX_RETRIES { RPC_MAX_RETRIES } else { max_retries };
+        let n = if max_retries > RPC_MAX_RETRIES {
+            RPC_MAX_RETRIES
+        } else {
+            max_retries
+        };
         Self {
             max_retries: n,
             attempt: 0,
@@ -216,7 +246,8 @@ impl RetryState {
         self.attempt += 1;
         let wait = self.backoff_ns;
         // Backoff exponentiel borné
-        self.backoff_ns = self.backoff_ns
+        self.backoff_ns = self
+            .backoff_ns
             .saturating_mul(RPC_BACKOFF_FACTOR)
             .min(RPC_MAX_BACKOFF_NS);
         Ok(wait)
@@ -264,7 +295,8 @@ impl RpcTimeoutStats {
     }
 
     pub fn record_success_after_retry(&self) {
-        self.total_success_after_retry.fetch_add(1, Ordering::Relaxed);
+        self.total_success_after_retry
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn snapshot(&self) -> RpcTimeoutStatsSnapshot {

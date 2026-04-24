@@ -5,9 +5,9 @@
 
 pub mod allocator;
 pub mod frame;
-pub mod zone;
 pub mod numa;
 pub mod stats;
+pub mod zone;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORTS
@@ -15,30 +15,22 @@ pub mod stats;
 
 // Frames
 pub use frame::{
-    EmergencyPool, EmergencyPoolStats, WaitNode, EMERGENCY_POOL,
-    FrameDesc, FrameFlags,
-    FrameDescEntry, FrameDescriptorTable, FRAME_DESCRIPTORS, MAX_PHYS_FRAMES,
-    AtomicRefCount, RefCountDecResult,
-    PerCpuFramePool, PerCpuPoolTable, PER_CPU_POOLS,
-    PerCpuPoolStats,
+    AtomicRefCount, EmergencyPool, EmergencyPoolStats, FrameDesc, FrameDescEntry,
+    FrameDescriptorTable, FrameFlags, PerCpuFramePool, PerCpuPoolStats, PerCpuPoolTable,
+    RefCountDecResult, WaitNode, EMERGENCY_POOL, FRAME_DESCRIPTORS, MAX_PHYS_FRAMES, PER_CPU_POOLS,
 };
 
 // Zones
 pub use zone::{
+    addr_satisfies_flags, zone_for_flags, Dma32Zone, DmaZone, HighZone, MovableZone, NormalZone,
     ZoneDescriptor, ZoneStats,
-    zone_for_flags, addr_satisfies_flags,
-    DmaZone, Dma32Zone, NormalZone, HighZone, MovableZone,
 };
 
 // Allocateurs
 pub use allocator::{
-    BOOTSTRAP_BITMAP, BitmapAllocator,
-    BUDDY, GlobalBuddyAllocator,
-    alloc_pages, free_pages, alloc_page, free_page,
-    SLAB_CACHES, slab_alloc, slab_free, slab_init_all,
-    SLUB_CACHES, slub_alloc, slub_free, slub_init_all,
-    NUMA_ALLOCATOR, NUMA_STATS, NumaPolicy, NumaAllocContext,
-    NumaNode, SizeClass,
-    init_phase1_bitmap, init_phase2_free_region,
-    init_phase3_slab_slub, init_phase4_numa,
+    alloc_page, alloc_pages, free_page, free_pages, init_phase1_bitmap, init_phase2_free_region,
+    init_phase3_slab_slub, init_phase4_numa, slab_alloc, slab_free, slab_init_all, slub_alloc,
+    slub_free, slub_init_all, BitmapAllocator, GlobalBuddyAllocator, NumaAllocContext, NumaNode,
+    NumaPolicy, SizeClass, BOOTSTRAP_BITMAP, BUDDY, NUMA_ALLOCATOR, NUMA_STATS, SLAB_CACHES,
+    SLUB_CACHES,
 };

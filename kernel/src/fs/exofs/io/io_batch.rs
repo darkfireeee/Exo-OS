@@ -10,41 +10,65 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::io_stats::IoOpKind;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─── IoBatchEntry ─────────────────────────────────────────────────────────────
 
 /// Une entrée dans un lot d'opérations IO.
 #[derive(Clone, Debug)]
 pub struct IoBatchEntry {
-    pub blob_id:    [u8; 32],
-    pub op:         IoOpKind,
-    pub buf_offset: u32,       // offset dans l'entrée (lecture partielle)
-    pub buf_len:    u32,       // nombre d'octets à traiter (0 = tout)
-    pub priority:   u8,        // 0 = normal, 255 = urgent
+    pub blob_id: [u8; 32],
+    pub op: IoOpKind,
+    pub buf_offset: u32, // offset dans l'entrée (lecture partielle)
+    pub buf_len: u32,    // nombre d'octets à traiter (0 = tout)
+    pub priority: u8,    // 0 = normal, 255 = urgent
 }
 
 impl IoBatchEntry {
     pub fn read(blob_id: [u8; 32]) -> Self {
-        Self { blob_id, op: IoOpKind::Read, buf_offset: 0, buf_len: 0, priority: 0 }
+        Self {
+            blob_id,
+            op: IoOpKind::Read,
+            buf_offset: 0,
+            buf_len: 0,
+            priority: 0,
+        }
     }
 
     pub fn write(blob_id: [u8; 32], len: u32) -> Self {
-        Self { blob_id, op: IoOpKind::Write, buf_offset: 0, buf_len: len, priority: 0 }
+        Self {
+            blob_id,
+            op: IoOpKind::Write,
+            buf_offset: 0,
+            buf_len: len,
+            priority: 0,
+        }
     }
 
     pub fn read_partial(blob_id: [u8; 32], offset: u32, len: u32) -> Self {
-        Self { blob_id, op: IoOpKind::Read, buf_offset: offset, buf_len: len, priority: 0 }
+        Self {
+            blob_id,
+            op: IoOpKind::Read,
+            buf_offset: offset,
+            buf_len: len,
+            priority: 0,
+        }
     }
 
-    pub fn with_priority(mut self, p: u8) -> Self { self.priority = p; self }
+    pub fn with_priority(mut self, p: u8) -> Self {
+        self.priority = p;
+        self
+    }
 
-    pub fn is_read(&self)  -> bool { self.op.is_read() }
-    pub fn is_write(&self) -> bool { self.op.is_write() }
+    pub fn is_read(&self) -> bool {
+        self.op.is_read()
+    }
+    pub fn is_write(&self) -> bool {
+        self.op.is_write()
+    }
 }
 
 // ─── BatchResult ─────────────────────────────────────────────────────────────
@@ -52,14 +76,16 @@ impl IoBatchEntry {
 /// Résultat de l'exécution d'un lot.
 #[derive(Clone, Debug, Default)]
 pub struct BatchResult {
-    pub entries_ok:  u32,
+    pub entries_ok: u32,
     pub entries_err: u32,
     pub bytes_total: u64,
-    pub errors:      Vec<(usize, ExofsError)>,  // (index, err)
+    pub errors: Vec<(usize, ExofsError)>, // (index, err)
 }
 
 impl BatchResult {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn add_ok(&mut self, bytes: u64) {
         self.entries_ok = self.entries_ok.saturating_add(1);
@@ -68,18 +94,27 @@ impl BatchResult {
 
     pub fn add_err(&mut self, idx: usize, e: ExofsError) -> ExofsResult<()> {
         self.entries_err = self.entries_err.saturating_add(1);
-        self.errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.errors
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.errors.push((idx, e));
         Ok(())
     }
 
-    pub fn is_all_ok(&self) -> bool { self.entries_err == 0 }
-    pub fn total_entries(&self) -> u32 { self.entries_ok.saturating_add(self.entries_err) }
+    pub fn is_all_ok(&self) -> bool {
+        self.entries_err == 0
+    }
+    pub fn total_entries(&self) -> u32 {
+        self.entries_ok.saturating_add(self.entries_err)
+    }
 
     pub fn success_rate_pct10(&self) -> u32 {
         let total = self.total_entries();
-        if total == 0 { return 1000; }
-        (self.entries_ok as u32).saturating_mul(1000)
+        if total == 0 {
+            return 1000;
+        }
+        (self.entries_ok as u32)
+            .saturating_mul(1000)
             .checked_div(total)
             .unwrap_or(0)
     }
@@ -91,25 +126,33 @@ impl BatchResult {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BatchStats {
     pub batches_executed: u64,
-    pub entries_total:    u64,
-    pub entries_ok:       u64,
-    pub entries_err:      u64,
-    pub bytes_total:      u64,
+    pub entries_total: u64,
+    pub entries_ok: u64,
+    pub entries_err: u64,
+    pub bytes_total: u64,
 }
 
 impl BatchStats {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn accumulate(&mut self, result: &BatchResult) {
         self.batches_executed = self.batches_executed.saturating_add(1);
-        self.entries_total    = self.entries_total.saturating_add(result.total_entries() as u64);
-        self.entries_ok       = self.entries_ok.saturating_add(result.entries_ok as u64);
-        self.entries_err      = self.entries_err.saturating_add(result.entries_err as u64);
-        self.bytes_total      = self.bytes_total.saturating_add(result.bytes_total);
+        self.entries_total = self
+            .entries_total
+            .saturating_add(result.total_entries() as u64);
+        self.entries_ok = self.entries_ok.saturating_add(result.entries_ok as u64);
+        self.entries_err = self.entries_err.saturating_add(result.entries_err as u64);
+        self.bytes_total = self.bytes_total.saturating_add(result.bytes_total);
     }
 
-    pub fn is_clean(&self) -> bool { self.entries_err == 0 }
-    pub fn reset(&mut self) { *self = Self::new(); }
+    pub fn is_clean(&self) -> bool {
+        self.entries_err == 0
+    }
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
 }
 
 // ─── Store trait pour les tests de IoBatch ────────────────────────────────────
@@ -128,13 +171,18 @@ pub struct VecBatchStore {
 }
 
 impl VecBatchStore {
-    pub fn new() -> Self { Self { blobs: Vec::new() } }
+    pub fn new() -> Self {
+        Self { blobs: Vec::new() }
+    }
 
     pub fn insert(&mut self, id: [u8; 32], data: &[u8]) -> ExofsResult<()> {
         let mut v = Vec::new();
-        v.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        v.try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         v.extend_from_slice(data);
-        self.blobs.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.blobs
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.blobs.push((id, v));
         Ok(())
     }
@@ -147,10 +195,14 @@ impl BatchStore for VecBatchStore {
             if self.blobs[i].0 == *blob_id {
                 let data = &self.blobs[i].1;
                 let start = (offset as usize).min(data.len());
-                let end = if len == 0 { data.len() }
-                    else { start.saturating_add(len as usize).min(data.len()) };
+                let end = if len == 0 {
+                    data.len()
+                } else {
+                    start.saturating_add(len as usize).min(data.len())
+                };
                 let mut out = Vec::new();
-                out.try_reserve(end - start).map_err(|_| ExofsError::NoMemory)?;
+                out.try_reserve(end - start)
+                    .map_err(|_| ExofsError::NoMemory)?;
                 out.extend_from_slice(&data[start..end]);
                 let bytes = (end - start) as u64;
                 return Ok((out, bytes));
@@ -165,7 +217,8 @@ impl BatchStore for VecBatchStore {
         while i < self.blobs.len() {
             if self.blobs[i].0 == *blob_id {
                 let mut v = Vec::new();
-                v.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+                v.try_reserve(data.len())
+                    .map_err(|_| ExofsError::NoMemory)?;
                 v.extend_from_slice(data);
                 self.blobs[i].1 = v;
                 return Ok(data.len() as u64);
@@ -173,9 +226,12 @@ impl BatchStore for VecBatchStore {
             i = i.wrapping_add(1);
         }
         let mut v = Vec::new();
-        v.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        v.try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         v.extend_from_slice(data);
-        self.blobs.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.blobs
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.blobs.push((*blob_id, v));
         Ok(data.len() as u64)
     }
@@ -187,28 +243,45 @@ impl BatchStore for VecBatchStore {
 ///
 /// RECUR-01 : toutes les boucles while.
 pub struct IoBatch {
-    entries:   Vec<IoBatchEntry>,
+    entries: Vec<IoBatchEntry>,
     max_entries: u32,
-    stats:     BatchStats,
-    write_data: Vec<Vec<u8>>,  // données associées aux writes
+    stats: BatchStats,
+    write_data: Vec<Vec<u8>>, // données associées aux writes
 }
 
 impl IoBatch {
     pub fn new(max_entries: u32) -> Self {
-        Self { entries: Vec::new(), max_entries, stats: BatchStats::new(), write_data: Vec::new() }
+        Self {
+            entries: Vec::new(),
+            max_entries,
+            stats: BatchStats::new(),
+            write_data: Vec::new(),
+        }
     }
 
-    pub fn default() -> Self { Self::new(64) }
+    pub fn default() -> Self {
+        Self::new(64)
+    }
 
-    pub fn entry_count(&self) -> usize { self.entries.len() }
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
-    pub fn stats(&self) -> &BatchStats { &self.stats }
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    pub fn stats(&self) -> &BatchStats {
+        &self.stats
+    }
 
     /// Ajoute une lecture (OOM-02).
     pub fn add_read(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
         self.check_capacity()?;
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-        self.write_data.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
+        self.write_data
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.entries.push(IoBatchEntry::read(blob_id));
         self.write_data.push(Vec::new());
         Ok(())
@@ -218,11 +291,17 @@ impl IoBatch {
     pub fn add_write(&mut self, blob_id: [u8; 32], data: &[u8]) -> ExofsResult<()> {
         self.check_capacity()?;
         let mut v = Vec::new();
-        v.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        v.try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         v.extend_from_slice(data);
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-        self.write_data.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-        self.entries.push(IoBatchEntry::write(blob_id, data.len() as u32));
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
+        self.write_data
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
+        self.entries
+            .push(IoBatchEntry::write(blob_id, data.len() as u32));
         self.write_data.push(v);
         Ok(())
     }
@@ -241,12 +320,10 @@ impl IoBatch {
         while i < self.entries.len() {
             let entry = &self.entries[i];
             match entry.op.is_read() {
-                true => {
-                    match store.read(&entry.blob_id, entry.buf_offset, entry.buf_len) {
-                        Ok((_, bytes)) => result.add_ok(bytes),
-                        Err(e) => result.add_err(i, e)?,
-                    }
-                }
+                true => match store.read(&entry.blob_id, entry.buf_offset, entry.buf_len) {
+                    Ok((_, bytes)) => result.add_ok(bytes),
+                    Err(e) => result.add_err(i, e)?,
+                },
                 false => {
                     let data = &self.write_data[i];
                     match store.write(&entry.blob_id, data) {
@@ -262,7 +339,10 @@ impl IoBatch {
     }
 
     /// Vide le lot (sans réinitialiser les stats).
-    pub fn clear(&mut self) { self.entries.clear(); self.write_data.clear(); }
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.write_data.clear();
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -270,7 +350,11 @@ impl IoBatch {
 mod tests {
     use super::*;
 
-    fn make_id(n: u8) -> [u8; 32] { let mut id = [0u8; 32]; id[0] = n; id }
+    fn make_id(n: u8) -> [u8; 32] {
+        let mut id = [0u8; 32];
+        id[0] = n;
+        id
+    }
 
     fn make_store() -> VecBatchStore {
         let mut store = VecBatchStore::new();
@@ -389,7 +473,12 @@ mod tests {
     #[test]
     fn test_stats_reset() {
         let mut stats = BatchStats::new();
-        let r = BatchResult { entries_ok: 3, entries_err: 1, bytes_total: 100, errors: Vec::new() };
+        let r = BatchResult {
+            entries_ok: 3,
+            entries_err: 1,
+            bytes_total: 100,
+            errors: Vec::new(),
+        };
         stats.accumulate(&r);
         stats.reset();
         assert_eq!(stats.batches_executed, 0);

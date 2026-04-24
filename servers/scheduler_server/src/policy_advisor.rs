@@ -45,7 +45,12 @@ impl PolicyAdvisor {
         Self
     }
 
-    pub fn recommend(&self, raw_nice: i32, latency_hint_ms: u16, class: SchedulingClass) -> SchedulingProfile {
+    pub fn recommend(
+        &self,
+        raw_nice: i32,
+        latency_hint_ms: u16,
+        class: SchedulingClass,
+    ) -> SchedulingProfile {
         let nice = clamp_nice(raw_nice);
         let priority_weight = compute_weight(nice, class);
         let quantum_ms = compute_quantum_ms(class, latency_hint_ms);

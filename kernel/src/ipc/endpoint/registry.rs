@@ -18,18 +18,17 @@
 // RÈGLE ZONE NO-ALLOC : zéro Vec/Box/Arc dans ce fichier.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::ipc::core::constants::MAX_ENDPOINTS;
+use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::scheduler::sync::spinlock::SpinLock;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hash FNV-1a 64 bits
 // ─────────────────────────────────────────────────────────────────────────────
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME:  u64 = 0x0000_0100_0000_01b3;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 /// Hash FNV-1a d'un slice de bytes.
 #[inline]
@@ -52,21 +51,26 @@ type RobinHoodDist = u16;
 /// Entrée de la table de hachage.
 struct RegistryEntry {
     /// Hash du nom (-1 si slot libre, -2 = tombstone).
-    hash:      u64,
+    hash: u64,
     /// EndpointId stocké.
-    ep_id:     u64,
+    ep_id: u64,
     /// Distance Robin Hood depuis la position idéale.
-    rh_dist:   RobinHoodDist,
+    rh_dist: RobinHoodDist,
     /// Padding.
-    _pad:      [u8; 6],
+    _pad: [u8; 6],
 }
 
 impl RegistryEntry {
-    const EMPTY: u64      = u64::MAX;
-    const TOMBSTONE: u64  = u64::MAX - 1;
+    const EMPTY: u64 = u64::MAX;
+    const TOMBSTONE: u64 = u64::MAX - 1;
 
     const fn empty() -> Self {
-        Self { hash: Self::EMPTY, ep_id: 0, rh_dist: 0, _pad: [0u8; 6] }
+        Self {
+            hash: Self::EMPTY,
+            ep_id: 0,
+            rh_dist: 0,
+            _pad: [0u8; 6],
+        }
     }
 
     #[inline(always)]
@@ -114,27 +118,32 @@ impl RegistryInner {
             // Table à 75% — refuser pour éviter trop de collisions.
             return Err(IpcError::ResourceExhausted);
         }
-        let mut pos  = (hash as usize) % MAX_ENDPOINTS;
+        let mut pos = (hash as usize) % MAX_ENDPOINTS;
         let dist: RobinHoodDist = 0;
-        let mut cur_hash  = hash;
+        let mut cur_hash = hash;
         let mut cur_ep_id = ep_id;
-        let mut cur_dist  = dist;
+        let mut cur_dist = dist;
 
         loop {
             let slot = &mut self.slots[pos];
             if slot.is_empty() || slot.is_tombstone() {
-                *slot = RegistryEntry { hash: cur_hash, ep_id: cur_ep_id, rh_dist: cur_dist, _pad: [0u8; 6] };
+                *slot = RegistryEntry {
+                    hash: cur_hash,
+                    ep_id: cur_ep_id,
+                    rh_dist: cur_dist,
+                    _pad: [0u8; 6],
+                };
                 self.count += 1;
                 return Ok(());
             }
             // Robin Hood : si le slot existant est moins loin de sa position idéale,
             // on le déplace.
             if slot.rh_dist < cur_dist {
-                core::mem::swap(&mut slot.hash,    &mut cur_hash);
-                core::mem::swap(&mut slot.ep_id,   &mut cur_ep_id);
+                core::mem::swap(&mut slot.hash, &mut cur_hash);
+                core::mem::swap(&mut slot.ep_id, &mut cur_ep_id);
                 core::mem::swap(&mut slot.rh_dist, &mut cur_dist);
             }
-            pos  = (pos + 1) % MAX_ENDPOINTS;
+            pos = (pos + 1) % MAX_ENDPOINTS;
             cur_dist += 1;
             if cur_dist as usize >= MAX_ENDPOINTS {
                 return Err(IpcError::InternalError);
@@ -145,7 +154,7 @@ impl RegistryInner {
     /// Recherche un endpoint par hash.
     /// Retourne l'EndpointId ou None si introuvable.
     fn lookup(&self, hash: u64) -> Option<u64> {
-        let mut pos  = (hash as usize) % MAX_ENDPOINTS;
+        let mut pos = (hash as usize) % MAX_ENDPOINTS;
         let mut dist = 0usize;
         loop {
             let slot = &self.slots[pos];
@@ -153,7 +162,7 @@ impl RegistryInner {
                 return None;
             }
             if slot.is_tombstone() {
-                pos  = (pos + 1) % MAX_ENDPOINTS;
+                pos = (pos + 1) % MAX_ENDPOINTS;
                 dist += 1;
                 continue;
             }
@@ -165,7 +174,7 @@ impl RegistryInner {
             if (slot.rh_dist as usize) < dist {
                 return None;
             }
-            pos  = (pos + 1) % MAX_ENDPOINTS;
+            pos = (pos + 1) % MAX_ENDPOINTS;
             dist += 1;
             if dist >= MAX_ENDPOINTS {
                 return None;
@@ -175,7 +184,7 @@ impl RegistryInner {
 
     /// Supprime un endpoint du registre.
     fn remove(&mut self, hash: u64) -> bool {
-        let mut pos  = (hash as usize) % MAX_ENDPOINTS;
+        let mut pos = (hash as usize) % MAX_ENDPOINTS;
         let mut dist = 0usize;
         loop {
             let slot = &mut self.slots[pos];
@@ -183,13 +192,13 @@ impl RegistryInner {
                 return false;
             }
             if !slot.is_tombstone() && slot.hash == hash {
-                slot.hash    = RegistryEntry::TOMBSTONE;
-                slot.ep_id   = 0;
+                slot.hash = RegistryEntry::TOMBSTONE;
+                slot.ep_id = 0;
                 slot.rh_dist = 0;
-                self.count  -= 1;
+                self.count -= 1;
                 return true;
             }
-            pos  = (pos + 1) % MAX_ENDPOINTS;
+            pos = (pos + 1) % MAX_ENDPOINTS;
             dist += 1;
             if dist >= MAX_ENDPOINTS {
                 return false;
@@ -223,7 +232,7 @@ pub struct NamedEndpointRegistry {
 impl NamedEndpointRegistry {
     pub const fn new() -> Self {
         Self {
-            inner:        SpinLock::new(RegistryInner::new()),
+            inner: SpinLock::new(RegistryInner::new()),
             lookup_count: AtomicU64::new(0),
             insert_count: AtomicU64::new(0),
         }
@@ -234,7 +243,7 @@ impl NamedEndpointRegistry {
         if name.is_empty() || name.len() >= crate::ipc::core::MAX_ENDPOINT_NAME_LEN {
             return Err(IpcError::InvalidParam);
         }
-        let hash  = fnv1a(name);
+        let hash = fnv1a(name);
         let mut inner = self.inner.lock();
         inner.insert(hash, ep_id.get())?;
         self.insert_count.fetch_add(1, Ordering::Relaxed);
@@ -244,7 +253,7 @@ impl NamedEndpointRegistry {
     /// Recherche un endpoint par son nom.
     pub fn lookup(&self, name: &[u8]) -> Option<EndpointId> {
         self.lookup_count.fetch_add(1, Ordering::Relaxed);
-        let hash  = fnv1a(name);
+        let hash = fnv1a(name);
         let inner = self.inner.lock();
         inner.lookup(hash).and_then(EndpointId::new)
     }

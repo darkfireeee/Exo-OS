@@ -9,8 +9,8 @@
 //   - Pas d'allocation dynamique — liste de pages inline (MAX_SHM_PAGES_PER_DESC)
 //   - Toutes les pages doivent avoir le flag NO_COW
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::{IpcError, ProcessId};
 use crate::ipc::shared_memory::page::{PhysAddr, PAGE_SIZE};
@@ -29,7 +29,11 @@ impl ShmId {
     pub const INVALID: Self = Self(0);
 
     pub fn new(v: u32) -> Option<Self> {
-        if v != 0 { Some(Self(v)) } else { None }
+        if v != 0 {
+            Some(Self(v))
+        } else {
+            None
+        }
     }
 
     pub fn get(self) -> u32 {
@@ -190,7 +194,11 @@ impl ShmDescriptor {
             return None;
         }
         let idx = self.pages[i].load(Ordering::Relaxed);
-        if idx == u32::MAX { None } else { Some(idx as usize) }
+        if idx == u32::MAX {
+            None
+        } else {
+            Some(idx as usize)
+        }
     }
 
     /// Incrémente le compteur de mappings actifs.
@@ -212,7 +220,8 @@ impl ShmDescriptor {
 
     /// Libère toutes les pages allouées et passe à l'état Destroyed.
     pub fn destroy(&self) {
-        self.state.store(ShmState::Destroyed as u32, Ordering::Release);
+        self.state
+            .store(ShmState::Destroyed as u32, Ordering::Release);
         let n = self.page_count();
         for i in 0..n {
             let pool_idx = self.pages[i].load(Ordering::Relaxed) as usize;
@@ -266,9 +275,12 @@ impl ShmDescDirectory {
     }
 
     /// Alloue un nouveau descripteur et retourne son index.
-    pub fn alloc(&mut self, owner: ProcessId, perms: ShmPermissions, n_pages: usize)
-        -> Result<usize, IpcError>
-    {
+    pub fn alloc(
+        &mut self,
+        owner: ProcessId,
+        perms: ShmPermissions,
+        n_pages: usize,
+    ) -> Result<usize, IpcError> {
         if n_pages == 0 || n_pages > MAX_SHM_PAGES_PER_DESC {
             return Err(IpcError::InvalidArgument);
         }
@@ -342,8 +354,7 @@ impl ShmDescDirectory {
 
 use crate::scheduler::sync::spinlock::SpinLock;
 
-pub static SHM_DESC_DIR: SpinLock<ShmDescDirectory> =
-    SpinLock::new(ShmDescDirectory::new());
+pub static SHM_DESC_DIR: SpinLock<ShmDescDirectory> = SpinLock::new(ShmDescDirectory::new());
 
 // ---------------------------------------------------------------------------
 // API publique de haut niveau
@@ -351,7 +362,11 @@ pub static SHM_DESC_DIR: SpinLock<ShmDescDirectory> =
 
 /// Crée une nouvelle région SHM de `n_pages` pages.
 /// Retourne l'index dans le répertoire.
-pub fn shm_create(owner: ProcessId, perms: ShmPermissions, n_pages: usize) -> Result<usize, IpcError> {
+pub fn shm_create(
+    owner: ProcessId,
+    perms: ShmPermissions,
+    n_pages: usize,
+) -> Result<usize, IpcError> {
     let mut dir = SHM_DESC_DIR.lock();
     dir.alloc(owner, perms, n_pages)
 }

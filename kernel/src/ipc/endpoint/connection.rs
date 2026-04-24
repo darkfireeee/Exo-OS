@@ -14,14 +14,13 @@
 // RÈGLE : zéro allocation heap — canaux créés depuis un pool statique.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use crate::ipc::core::types::{EndpointId, ChannelId, Cookie, IpcError, alloc_channel_id};
-use crate::ipc::core::constants::RPC_PROTOCOL_VERSION;
-use crate::scheduler::core::task::ThreadId;
-use crate::security::capability::{CapToken, Rights, CapTable};
-use crate::security::access_control::{check_access, ObjectKind};
 use super::descriptor::{EndpointDesc, PendingConnection};
+use crate::ipc::core::constants::RPC_PROTOCOL_VERSION;
+use crate::ipc::core::types::{alloc_channel_id, ChannelId, Cookie, EndpointId, IpcError};
+use crate::scheduler::core::task::ThreadId;
+use crate::security::access_control::{check_access, ObjectKind};
+use crate::security::capability::{CapTable, CapToken, Rights};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ConnectionState — état d'une connexion établie
@@ -31,15 +30,15 @@ use super::descriptor::{EndpointDesc, PendingConnection};
 #[repr(u32)]
 pub enum ConnectionState {
     /// En attente d'acceptation (dans le backlog).
-    Pending      = 0,
+    Pending = 0,
     /// Handshake en cours.
-    Handshaking  = 1,
+    Handshaking = 1,
     /// Connexion établie, prête à l'emploi.
-    Established  = 2,
+    Established = 2,
     /// Fermeture initiée par l'un des pairs.
-    Closing      = 3,
+    Closing = 3,
     /// Connexion fermée.
-    Closed       = 4,
+    Closed = 4,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -51,63 +50,63 @@ pub enum ConnectionState {
 #[repr(C)]
 pub struct HandshakeMsg {
     /// Magic IPC.
-    pub magic:   u32,
+    pub magic: u32,
     /// Version du protocole.
     pub version: u8,
     /// Type : 0 = SYN, 1 = SYN-ACK, 2 = ACK.
-    pub kind:    u8,
-    pub _pad:    u16,
+    pub kind: u8,
+    pub _pad: u16,
     /// Cookie pour corrélation.
-    pub cookie:  u64,
+    pub cookie: u64,
     /// EndpointId cible.
-    pub ep_id:   u64,
+    pub ep_id: u64,
     /// ThreadId de l'initiateur.
-    pub tid:     u32,
-    pub _pad2:   u32,
+    pub tid: u32,
+    pub _pad2: u32,
 }
 
 impl HandshakeMsg {
-    pub const MAGIC:      u32 = 0x4950_4348; // "IPCH"
-    pub const KIND_SYN:   u8  = 0;
+    pub const MAGIC: u32 = 0x4950_4348; // "IPCH"
+    pub const KIND_SYN: u8 = 0;
     pub const KIND_SYNACK: u8 = 1;
-    pub const KIND_ACK:   u8  = 2;
+    pub const KIND_ACK: u8 = 2;
 
     pub fn syn(cookie: Cookie, ep_id: EndpointId, tid: ThreadId) -> Self {
         Self {
-            magic:   Self::MAGIC,
+            magic: Self::MAGIC,
             version: RPC_PROTOCOL_VERSION,
-            kind:    Self::KIND_SYN,
-            _pad:    0,
-            cookie:  cookie.get(),
-            ep_id:   ep_id.get(),
-            tid:     tid.0 as u32,
-            _pad2:   0,
+            kind: Self::KIND_SYN,
+            _pad: 0,
+            cookie: cookie.get(),
+            ep_id: ep_id.get(),
+            tid: tid.0 as u32,
+            _pad2: 0,
         }
     }
 
     pub fn syn_ack(cookie: Cookie, ep_id: EndpointId, server_tid: ThreadId) -> Self {
         Self {
-            magic:   Self::MAGIC,
+            magic: Self::MAGIC,
             version: RPC_PROTOCOL_VERSION,
-            kind:    Self::KIND_SYNACK,
-            _pad:    0,
-            cookie:  cookie.get(),
-            ep_id:   ep_id.get(),
-            tid:     server_tid.0 as u32,
-            _pad2:   0,
+            kind: Self::KIND_SYNACK,
+            _pad: 0,
+            cookie: cookie.get(),
+            ep_id: ep_id.get(),
+            tid: server_tid.0 as u32,
+            _pad2: 0,
         }
     }
 
     pub fn ack(cookie: Cookie) -> Self {
         Self {
-            magic:   Self::MAGIC,
+            magic: Self::MAGIC,
             version: RPC_PROTOCOL_VERSION,
-            kind:    Self::KIND_ACK,
-            _pad:    0,
-            cookie:  cookie.get(),
-            ep_id:   0,
-            tid:     0,
-            _pad2:   0,
+            kind: Self::KIND_ACK,
+            _pad: 0,
+            cookie: cookie.get(),
+            ep_id: 0,
+            tid: 0,
+            _pad2: 0,
         }
     }
 
@@ -116,7 +115,10 @@ impl HandshakeMsg {
     }
 }
 
-const _: () = assert!(core::mem::size_of::<HandshakeMsg>() == 32, "HandshakeMsg = 32B");
+const _: () = assert!(
+    core::mem::size_of::<HandshakeMsg>() == 32,
+    "HandshakeMsg = 32B"
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ActiveConnection — connexion établie
@@ -130,42 +132,43 @@ pub struct ActiveConnection {
     /// Identifiant du canal serveur → client.
     pub s2c_channel: ChannelId,
     /// Thread client.
-    pub client_tid:  ThreadId,
+    pub client_tid: ThreadId,
     /// Thread serveur.
-    pub server_tid:  ThreadId,
+    pub server_tid: ThreadId,
     /// Endpoint auquel la connexion est rattachée.
     pub endpoint_id: EndpointId,
     /// État de la connexion.
-    pub state:       AtomicU32,
+    pub state: AtomicU32,
     /// Cookie de corrélation.
-    pub cookie:      u64,
+    pub cookie: u64,
     /// Timestamp d'établissement.
     pub established_tick: AtomicU64,
 }
 
 impl ActiveConnection {
     pub fn new(
-        c2s:    ChannelId,
-        s2c:    ChannelId,
+        c2s: ChannelId,
+        s2c: ChannelId,
         client: ThreadId,
         server: ThreadId,
-        ep_id:  EndpointId,
+        ep_id: EndpointId,
         cookie: Cookie,
     ) -> Self {
         Self {
-            c2s_channel:      c2s,
-            s2c_channel:      s2c,
-            client_tid:       client,
-            server_tid:       server,
-            endpoint_id:      ep_id,
-            state:            AtomicU32::new(ConnectionState::Handshaking as u32),
-            cookie:           cookie.get(),
+            c2s_channel: c2s,
+            s2c_channel: s2c,
+            client_tid: client,
+            server_tid: server,
+            endpoint_id: ep_id,
+            state: AtomicU32::new(ConnectionState::Handshaking as u32),
+            cookie: cookie.get(),
             established_tick: AtomicU64::new(0),
         }
     }
 
     pub fn mark_established(&self, tick: u64) {
-        self.state.store(ConnectionState::Established as u32, Ordering::Release);
+        self.state
+            .store(ConnectionState::Established as u32, Ordering::Release);
         self.established_tick.store(tick, Ordering::Relaxed);
     }
 
@@ -174,7 +177,8 @@ impl ActiveConnection {
     }
 
     pub fn close(&self) {
-        self.state.store(ConnectionState::Closed as u32, Ordering::Release);
+        self.state
+            .store(ConnectionState::Closed as u32, Ordering::Release);
     }
 }
 
@@ -185,7 +189,7 @@ impl ActiveConnection {
 /// Résultat d'un `connect()`.
 pub struct ConnectResult {
     pub channel_id: ChannelId,
-    pub cookie:     Cookie,
+    pub cookie: Cookie,
 }
 
 /// Résultat d'un `accept()`.
@@ -206,27 +210,33 @@ pub struct AcceptResult {
 /// # Retour
 /// `Ok(ConnectResult)` avec le ChannelId alloué pour recevoir la réponse.
 pub fn do_connect(
-    _ep_id:  EndpointId,
-    ep:     &EndpointDesc,
+    _ep_id: EndpointId,
+    ep: &EndpointDesc,
     client: ThreadId,
-    table:  &CapTable,
-    token:  CapToken,
+    table: &CapTable,
+    token: CapToken,
 ) -> Result<ConnectResult, IpcError> {
     // Vérification capability : CONNECT requis.
-    check_access(table, token, ObjectKind::IpcEndpoint, Rights::IPC_CONNECT, "ipc/endpoint")
-        .map_err(|_| IpcError::PermissionDenied)?;
+    check_access(
+        table,
+        token,
+        ObjectKind::IpcEndpoint,
+        Rights::IPC_CONNECT,
+        "ipc/endpoint",
+    )
+    .map_err(|_| IpcError::PermissionDenied)?;
 
     if !ep.is_listening() {
         return Err(IpcError::ConnRefused);
     }
 
     let channel_id = alloc_channel_id();
-    let cookie     = Cookie::new(channel_id.get() ^ (client.0 as u64));
+    let cookie = Cookie::new(channel_id.get() ^ (client.0 as u64));
 
     let pending = PendingConnection {
-        requester:       client,
-        channel_id:      channel_id.get(),
-        cookie:          cookie.get(),
+        requester: client,
+        channel_id: channel_id.get(),
+        cookie: cookie.get(),
         timestamp_ticks: 0, // mis à jour par l'appelant avec le tick courant
     };
 
@@ -242,14 +252,14 @@ pub fn do_connect(
 ///
 /// # Retour
 /// `Ok(AcceptResult)` avec le PendingConnection et le canal serveur→client.
-pub fn do_accept(
-    ep:     &EndpointDesc,
-    server: ThreadId,
-) -> Result<AcceptResult, IpcError> {
+pub fn do_accept(ep: &EndpointDesc, server: ThreadId) -> Result<AcceptResult, IpcError> {
     if !ep.is_owner(server) {
         return Err(IpcError::PermissionDenied);
     }
     let conn = ep.dequeue_connection().ok_or(IpcError::WouldBlock)?;
     let s2c_channel = alloc_channel_id();
-    Ok(AcceptResult { connection: conn, s2c_channel })
+    Ok(AcceptResult {
+        connection: conn,
+        s2c_channel,
+    })
 }

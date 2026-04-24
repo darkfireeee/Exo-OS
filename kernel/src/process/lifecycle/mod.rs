@@ -3,15 +3,15 @@
 // Sous-module lifecycle/ — cycle de vie des processus/threads.
 
 pub mod create;
-pub mod fork;
 pub mod exec;
 pub mod exit;
-pub mod wait;
+pub mod fork;
 pub mod reap;
+pub mod wait;
 
-pub use create::{create_process, create_kthread, CreateError};
-pub use fork::{do_fork, ForkError, ForkFlags};
+pub use create::{create_kthread, create_process, CreateError};
 pub use exec::{do_execve, register_elf_loader, ElfLoader, ExecError};
 pub use exit::{do_exit, do_exit_thread};
-pub use wait::{do_waitpid, WaitOptions, WaitResult, WaitError};
+pub use fork::{do_fork, ForkError, ForkFlags};
 pub use reap::init_reaper;
+pub use wait::{do_waitpid, WaitError, WaitOptions, WaitResult};

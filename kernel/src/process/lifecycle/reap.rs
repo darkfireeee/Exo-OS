@@ -14,13 +14,12 @@
 //     et libère toutes les ressources.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR};
 use crate::process::core::pcb::ProcessState;
+use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR};
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::lifecycle::create::{create_kthread, KthreadParams};
 use crate::scheduler::core::task::Priority;
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ReaperEntry — une entrée dans la file reaper
@@ -60,11 +59,11 @@ pub struct ReaperQueue {
 unsafe impl Sync for ReaperQueue {}
 
 pub static REAPER_QUEUE: ReaperQueue = ReaperQueue {
-    ring:           [ReaperEntry { pid: 0, tid: 0 }; REAPER_RING_SIZE],
-    head:           core::cell::UnsafeCell::new(0),
-    tail:           AtomicUsize::new(0),
+    ring: [ReaperEntry { pid: 0, tid: 0 }; REAPER_RING_SIZE],
+    head: core::cell::UnsafeCell::new(0),
+    tail: AtomicUsize::new(0),
     total_enqueued: AtomicU64::new(0),
-    lost:           AtomicU64::new(0),
+    lost: AtomicU64::new(0),
 };
 
 impl ReaperQueue {
@@ -95,16 +94,22 @@ impl ReaperQueue {
         let tail = self.tail.load(Ordering::Relaxed);
         // SAFETY: head lu en lecture seule ici (atomicité garantie par usize).
         let head = unsafe { *self.head.get() };
-        if tail == head { return None; }
+        if tail == head {
+            return None;
+        }
         // SAFETY: tail < REAPER_RING_SIZE.
         let entry = unsafe { core::ptr::read(&self.ring[tail]) };
-        self.tail.store((tail + 1) % REAPER_RING_SIZE, Ordering::Release);
+        self.tail
+            .store((tail + 1) % REAPER_RING_SIZE, Ordering::Release);
         Some(entry)
     }
 
     /// Statistiques.
     pub fn stats(&self) -> (u64, u64) {
-        (self.total_enqueued.load(Ordering::Relaxed), self.lost.load(Ordering::Relaxed))
+        (
+            self.total_enqueued.load(Ordering::Relaxed),
+            self.lost.load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -135,8 +140,9 @@ fn reap_entry(entry: ReaperEntry) {
     // Vérifier si c'est le dernier thread du processus.
     let is_last_thread = PROCESS_REGISTRY
         .find_by_pid(pid)
-        .map(|pcb| pcb.thread_count.load(Ordering::Relaxed) == 0
-                && pcb.state() == ProcessState::Zombie)
+        .map(|pcb| {
+            pcb.thread_count.load(Ordering::Relaxed) == 0 && pcb.state() == ProcessState::Zombie
+        })
         .unwrap_or(false);
 
     if is_last_thread {
@@ -159,18 +165,21 @@ fn reap_entry(entry: ReaperEntry) {
 pub fn init_reaper() {
     // SAFETY: trace E9 bornée pour localiser précisément l'init du reaper au boot.
     unsafe {
-        core::arch::asm!("mov al, 0x52", "out 0xe9, al", options(nomem, nostack)); // 'R'
+        core::arch::asm!("mov al, 0x52", "out 0xe9, al", options(nomem, nostack));
+        // 'R'
     }
     create_kthread(&KthreadParams {
-        name:       "reaper",
-        entry:      reaper_loop,
-        arg:        0,
+        name: "reaper",
+        entry: reaper_loop,
+        arg: 0,
         target_cpu: 0,
-        priority:   Priority::NORMAL_DEFAULT,
-    }).expect("init_reaper: impossible de démarrer le kthread reaper");
+        priority: Priority::NORMAL_DEFAULT,
+    })
+    .expect("init_reaper: impossible de démarrer le kthread reaper");
     // SAFETY: trace E9 bornée pour confirmer la fin d'init_reaper.
     unsafe {
-        core::arch::asm!("mov al, 0x72", "out 0xe9, al", options(nomem, nostack)); // 'r'
+        core::arch::asm!("mov al, 0x72", "out 0xe9, al", options(nomem, nostack));
+        // 'r'
     }
 }
 

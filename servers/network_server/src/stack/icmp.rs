@@ -77,7 +77,11 @@ impl IcmpTracker {
     }
 
     pub fn complete(&mut self, token: u64, latency_ms: u32) -> bool {
-        let Some(idx) = self.echoes.iter().position(|entry| entry.active && entry.token == token) else {
+        let Some(idx) = self
+            .echoes
+            .iter()
+            .position(|entry| entry.active && entry.token == token)
+        else {
             return false;
         };
         self.echoes[idx].last_latency_ms = latency_ms;
@@ -87,7 +91,10 @@ impl IcmpTracker {
     }
 
     pub fn snapshot(&self, token: u64) -> Option<EchoSnapshot> {
-        let entry = self.echoes.iter().find(|record| record.active && record.token == token)?;
+        let entry = self
+            .echoes
+            .iter()
+            .find(|record| record.active && record.token == token)?;
         Some(EchoSnapshot {
             token: entry.token,
             target: entry.target,

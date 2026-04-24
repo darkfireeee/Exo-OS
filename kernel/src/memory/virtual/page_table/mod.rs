@@ -9,11 +9,10 @@ pub mod walker;
 pub mod x86_64;
 
 pub use x86_64::{
-    PageTableEntry, PageTable, PageTableLevel,
-    phys_to_table, phys_to_table_ref, phys_to_table_mut,
-    read_cr3, write_cr3, invlpg,
+    invlpg, phys_to_table, phys_to_table_mut, phys_to_table_ref, read_cr3, write_cr3, PageTable,
+    PageTableEntry, PageTableLevel,
 };
 
-pub use walker::{PageTableWalker, WalkResult, FrameAllocatorForWalk};
 pub use builder::PageTableBuilder;
-pub use kpti_split::{KptiState, KptiTable, KPTI, should_enable_kpti};
+pub use kpti_split::{should_enable_kpti, KptiState, KptiTable, KPTI};
+pub use walker::{FrameAllocatorForWalk, PageTableWalker, WalkResult};

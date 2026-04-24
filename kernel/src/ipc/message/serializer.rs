@@ -17,7 +17,7 @@
 use core::mem::size_of;
 use core::num::NonZeroU64;
 
-use crate::ipc::core::types::{EndpointId, MessageType, MessageFlags, IpcError};
+use crate::ipc::core::types::{EndpointId, IpcError, MessageFlags, MessageType};
 use crate::ipc::message::builder::{IpcMessage, MAX_MSG_INLINE};
 
 // ---------------------------------------------------------------------------
@@ -279,7 +279,9 @@ impl<'a> Iterator for MessageFrameIter<'a> {
 /// Écrit un u32 LE à `buf[offset]`. Retourne offset + 4.
 pub fn write_u32(buf: &mut [u8], offset: usize, v: u32) -> Result<usize, IpcError> {
     let end = offset + 4;
-    if end > buf.len() { return Err(IpcError::Invalid); }
+    if end > buf.len() {
+        return Err(IpcError::Invalid);
+    }
     buf[offset..end].copy_from_slice(&v.to_le_bytes());
     Ok(end)
 }
@@ -287,15 +289,24 @@ pub fn write_u32(buf: &mut [u8], offset: usize, v: u32) -> Result<usize, IpcErro
 /// Lit un u32 LE à `buf[offset]`. Retourne (valeur, offset + 4).
 pub fn read_u32(buf: &[u8], offset: usize) -> Result<(u32, usize), IpcError> {
     let end = offset + 4;
-    if end > buf.len() { return Err(IpcError::Invalid); }
-    let v = u32::from_le_bytes([buf[offset], buf[offset+1], buf[offset+2], buf[offset+3]]);
+    if end > buf.len() {
+        return Err(IpcError::Invalid);
+    }
+    let v = u32::from_le_bytes([
+        buf[offset],
+        buf[offset + 1],
+        buf[offset + 2],
+        buf[offset + 3],
+    ]);
     Ok((v, end))
 }
 
 /// Écrit un u64 LE à `buf[offset]`.
 pub fn write_u64(buf: &mut [u8], offset: usize, v: u64) -> Result<usize, IpcError> {
     let end = offset + 8;
-    if end > buf.len() { return Err(IpcError::Invalid); }
+    if end > buf.len() {
+        return Err(IpcError::Invalid);
+    }
     buf[offset..end].copy_from_slice(&v.to_le_bytes());
     Ok(end)
 }
@@ -303,10 +314,18 @@ pub fn write_u64(buf: &mut [u8], offset: usize, v: u64) -> Result<usize, IpcErro
 /// Lit un u64 LE à `buf[offset]`.
 pub fn read_u64(buf: &[u8], offset: usize) -> Result<(u64, usize), IpcError> {
     let end = offset + 8;
-    if end > buf.len() { return Err(IpcError::Invalid); }
+    if end > buf.len() {
+        return Err(IpcError::Invalid);
+    }
     let b: [u8; 8] = [
-        buf[offset], buf[offset+1], buf[offset+2], buf[offset+3],
-        buf[offset+4], buf[offset+5], buf[offset+6], buf[offset+7],
+        buf[offset],
+        buf[offset + 1],
+        buf[offset + 2],
+        buf[offset + 3],
+        buf[offset + 4],
+        buf[offset + 5],
+        buf[offset + 6],
+        buf[offset + 7],
     ];
     Ok((u64::from_le_bytes(b), end))
 }
@@ -315,7 +334,9 @@ pub fn read_u64(buf: &[u8], offset: usize) -> Result<(u64, usize), IpcError> {
 pub fn write_bytes(buf: &mut [u8], offset: usize, data: &[u8]) -> Result<usize, IpcError> {
     let off = write_u32(buf, offset, data.len() as u32)?;
     let end = off + data.len();
-    if end > buf.len() { return Err(IpcError::Invalid); }
+    if end > buf.len() {
+        return Err(IpcError::Invalid);
+    }
     buf[off..end].copy_from_slice(data);
     Ok(end)
 }
@@ -324,6 +345,8 @@ pub fn write_bytes(buf: &mut [u8], offset: usize, data: &[u8]) -> Result<usize, 
 pub fn read_bytes<'a>(buf: &'a [u8], offset: usize) -> Result<(&'a [u8], usize), IpcError> {
     let (len, off) = read_u32(buf, offset)?;
     let end = off + len as usize;
-    if end > buf.len() { return Err(IpcError::Invalid); }
+    if end > buf.len() {
+        return Err(IpcError::Invalid);
+    }
     Ok((&buf[off..end], end))
 }

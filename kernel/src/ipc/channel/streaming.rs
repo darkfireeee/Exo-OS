@@ -14,13 +14,13 @@
 //
 // Granularité : configurable de 4 Ko (PAGE_SIZE) à 2 Mo (HUGE_PAGE)
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use crate::ipc::core::types::{ChannelId, IpcError, MessageId, alloc_channel_id, alloc_message_id};
 use crate::ipc::core::constants::SHM_POOL_PAGES;
-use crate::ipc::ring::zerocopy::{ZeroCopyRing, ZeroCopyBuffer, ZeroCopyRef};
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::core::types::{alloc_channel_id, alloc_message_id, ChannelId, IpcError, MessageId};
+use crate::ipc::ring::zerocopy::{ZeroCopyBuffer, ZeroCopyRef, ZeroCopyRing};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ---------------------------------------------------------------------------
@@ -325,14 +325,18 @@ impl StreamChannel {
             return Err(IpcError::Closed);
         }
 
-        let zc_ref = self.pool.make_ref(buf_idx, data_len)
+        let zc_ref = self
+            .pool
+            .make_ref(buf_idx, data_len)
             .ok_or(IpcError::InvalidHandle)?;
 
         match self.ring.push(zc_ref) {
             Ok(()) => {
                 let mid = alloc_message_id();
                 self.stats.pushes_ok.fetch_add(1, Ordering::Relaxed);
-                self.stats.bytes_transferred.fetch_add(data_len as u64, Ordering::Relaxed);
+                self.stats
+                    .bytes_transferred
+                    .fetch_add(data_len as u64, Ordering::Relaxed);
                 IPC_STATS.record(StatEvent::MessageSent);
                 Ok(mid)
             }
@@ -340,7 +344,9 @@ impl StreamChannel {
                 // Backpressure : ring plein, libérer le buffer
                 self.pool.free_buffer(buf_idx);
                 self.stats.pushes_full.fetch_add(1, Ordering::Relaxed);
-                self.stats.backpressure_events.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .backpressure_events
+                    .fetch_add(1, Ordering::Relaxed);
                 Err(IpcError::QueueFull)
             }
         }
@@ -417,7 +423,12 @@ impl StreamChannelTable {
         unsafe { core::mem::zeroed() }
     }
 
-    fn alloc(&mut self, base_phys: u64, granule: StreamGranule, buffer_count: usize) -> Option<usize> {
+    fn alloc(
+        &mut self,
+        base_phys: u64,
+        granule: StreamGranule,
+        buffer_count: usize,
+    ) -> Option<usize> {
         for i in 0..STREAM_CHANNEL_TABLE_SIZE {
             if !self.used[i] {
                 let mut chan = StreamChannel::new_uninit();
@@ -467,7 +478,8 @@ pub fn stream_channel_create(
     buffer_count: usize,
 ) -> Result<usize, IpcError> {
     let mut tbl = STREAM_CHANNEL_TABLE.lock();
-    tbl.alloc(base_phys, granule, buffer_count).ok_or(IpcError::OutOfResources)
+    tbl.alloc(base_phys, granule, buffer_count)
+        .ok_or(IpcError::OutOfResources)
 }
 
 /// Alloue un buffer producteur sur le canal `idx`.

@@ -15,12 +15,12 @@
 //   • Le WaitNode est libéré vers l'EmergencyPool APRÈS le réveil.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::core::task::{ThreadControlBlock, TaskState};
+use super::spinlock::SpinLock;
 use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::task::CpuId;
-use super::spinlock::SpinLock;
+use crate::scheduler::core::task::{TaskState, ThreadControlBlock};
+use core::ptr::NonNull;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EmergencyPool FFI (Couche 0 — memory/)
@@ -39,7 +39,7 @@ extern "C" {
 
 #[repr(C)]
 pub struct WaitNode {
-    pub tcb:  *mut ThreadControlBlock,
+    pub tcb: *mut ThreadControlBlock,
     pub next: *mut WaitNode,
     pub prev: *mut WaitNode,
     /// Drapeaux : bit 0 = EXCLUSIVE (réveiller un seul thread).
@@ -58,9 +58,9 @@ impl WaitNode {
         let ptr = emergency_pool_alloc_wait_node();
         let node = NonNull::new(ptr)?;
         let n = &mut *node.as_ptr();
-        n.tcb   = tcb;
-        n.next  = core::ptr::null_mut();
-        n.prev  = core::ptr::null_mut();
+        n.tcb = tcb;
+        n.next = core::ptr::null_mut();
+        n.prev = core::ptr::null_mut();
         n.flags = flags;
         Some(node)
     }
@@ -82,7 +82,7 @@ use core::cell::UnsafeCell;
 
 /// Données mutables de la file d'attente (toujours accédées sous `lock`).
 struct WaitQueueData {
-    head:  *mut WaitNode,
+    head: *mut WaitNode,
     count: usize,
 }
 
@@ -100,7 +100,7 @@ impl WaitQueue {
     pub const fn new() -> Self {
         Self {
             data: UnsafeCell::new(WaitQueueData {
-                head:  core::ptr::null_mut(),
+                head: core::ptr::null_mut(),
                 count: 0,
             }),
             lock: SpinLock::new(()),
@@ -122,9 +122,11 @@ impl WaitQueue {
             d.head = n;
         } else {
             let mut cur = d.head;
-            while !(*cur).next.is_null() { cur = (*cur).next; }
+            while !(*cur).next.is_null() {
+                cur = (*cur).next;
+            }
             (*cur).next = n;
-            (*n).prev   = cur;
+            (*n).prev = cur;
         }
         d.count += 1;
     }
@@ -137,12 +139,19 @@ impl WaitQueue {
         let _g = self.lock.lock();
         let d = &mut *self.data.get();
         let n = node.as_ptr();
-        if !(*n).prev.is_null() { (*(*n).prev).next = (*n).next; }
-        else                    { d.head = (*n).next; }
-        if !(*n).next.is_null() { (*(*n).next).prev = (*n).prev; }
-        (*n).next  = core::ptr::null_mut();
-        (*n).prev  = core::ptr::null_mut();
-        if d.count > 0 { d.count -= 1; }
+        if !(*n).prev.is_null() {
+            (*(*n).prev).next = (*n).next;
+        } else {
+            d.head = (*n).next;
+        }
+        if !(*n).next.is_null() {
+            (*(*n).next).prev = (*n).prev;
+        }
+        (*n).next = core::ptr::null_mut();
+        (*n).prev = core::ptr::null_mut();
+        if d.count > 0 {
+            d.count -= 1;
+        }
     }
 
     /// Réveille le premier thread en attente.
@@ -152,11 +161,17 @@ impl WaitQueue {
         // SAFETY: sous le lock, accès exclusif à data.
         unsafe {
             let d = &mut *self.data.get();
-            if d.head.is_null() { return false; }
+            if d.head.is_null() {
+                return false;
+            }
             let node = d.head;
             d.head = (*node).next;
-            if !d.head.is_null() { (*d.head).prev = core::ptr::null_mut(); }
-            if d.count > 0 { d.count -= 1; }
+            if !d.head.is_null() {
+                (*d.head).prev = core::ptr::null_mut();
+            }
+            if d.count > 0 {
+                d.count -= 1;
+            }
 
             let tcb = (*node).tcb;
             if !tcb.is_null() {
@@ -186,7 +201,9 @@ impl WaitQueue {
     /// Thread-safe — prend le lock interne.
     pub fn notify_all(&self) -> usize {
         let mut woken = 0usize;
-        while self.notify_one() { woken += 1; }
+        while self.notify_one() {
+            woken += 1;
+        }
         woken
     }
 
@@ -207,9 +224,15 @@ impl WaitQueue {
     // ─────────────────────────────────────────────────────────────────────
 
     /// Alias de `notify_one` pour compatibilité.
-    #[inline] pub unsafe fn wake_one(&self) -> bool { self.notify_one() }
+    #[inline]
+    pub unsafe fn wake_one(&self) -> bool {
+        self.notify_one()
+    }
     /// Alias de `notify_all` pour compatibilité.
-    #[inline] pub unsafe fn wake_all(&self) -> usize { self.notify_all() }
+    #[inline]
+    pub unsafe fn wake_all(&self) -> usize {
+        self.notify_all()
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // Blocage interruptible
@@ -227,7 +250,7 @@ impl WaitQueue {
         // 1. Allouer un WaitNode depuis l'EmergencyPool.
         let node = match WaitNode::alloc(tcb, 0) {
             Some(n) => n,
-            None    => return false, // EmergencyPool épuisé
+            None => return false, // EmergencyPool épuisé
         };
 
         // 2. Mettre l'état en Sleeping AVANT d'insérer (évite réveil manqué).

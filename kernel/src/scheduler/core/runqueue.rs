@@ -17,13 +17,13 @@
 //   • MAX_TASKS_PER_CPU = 512 → suffisant pour toute charge réaliste
 //   • Instrumentation : compteurs atomiques pour pick_next latency tracking
 //
-// LOCK ORDERING (regle_bonus.md) : Scheduler locks < Memory locks
+// LOCK ORDERING (regle_bonus.md) : Memory locks → Scheduler locks
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use core::ptr::NonNull;
-use super::task::{ThreadControlBlock, CpuId, SchedPolicy};
 use super::preempt::MAX_CPUS;
+use super::task::{CpuId, SchedPolicy, ThreadControlBlock};
+use core::ptr::NonNull;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -49,7 +49,7 @@ pub const CFS_TARGET_LATENCY_MS: u64 = 6;
 #[derive(Default)]
 #[repr(C)]
 struct RtBitmap {
-    bits: [u64; 2],  // 128 bits → couvre 100 niveaux avec marge
+    bits: [u64; 2], // 128 bits → couvre 100 niveaux avec marge
 }
 
 impl RtBitmap {
@@ -57,14 +57,14 @@ impl RtBitmap {
     fn set(&mut self, prio: u8) {
         debug_assert!((prio as usize) < RT_LEVELS);
         let word = prio as usize / 64;
-        let bit  = prio as usize % 64;
+        let bit = prio as usize % 64;
         self.bits[word] |= 1u64 << bit;
     }
 
     #[inline(always)]
     fn clear(&mut self, prio: u8) {
         let word = prio as usize / 64;
-        let bit  = prio as usize % 64;
+        let bit = prio as usize % 64;
         self.bits[word] &= !(1u64 << bit);
     }
 
@@ -88,9 +88,9 @@ impl RtBitmap {
 
 /// Un slot dans la file RT (stocke un pointeur TCB + lien doublement chaîné).
 struct RtEntry {
-    tcb:  Option<NonNull<ThreadControlBlock>>,
-    next: u16,  // indice suivant dans le tableau (0xFFFF = fin)
-    prev: u16,  // indice précédent
+    tcb: Option<NonNull<ThreadControlBlock>>,
+    next: u16, // indice suivant dans le tableau (0xFFFF = fin)
+    prev: u16, // indice précédent
 }
 
 const RT_QUEUE_CAPACITY: usize = 256;
@@ -99,7 +99,7 @@ const RT_QUEUE_NONE: u16 = 0xFFFF;
 /// File RT complète : 100 têtes + pool d'entrées.
 struct RtRunQueue {
     /// Tête de chaque niveau (indice dans `entries`, RT_QUEUE_NONE si vide).
-    heads:   [u16; RT_LEVELS],
+    heads: [u16; RT_LEVELS],
     /// Pool d'entrées doublement chaîné.
     entries: [RtEntry; RT_QUEUE_CAPACITY],
     /// Next free slot in entries.
@@ -112,7 +112,11 @@ struct RtRunQueue {
 
 impl RtRunQueue {
     fn new() -> Self {
-        const ENTRY: RtEntry = RtEntry { tcb: None, next: RT_QUEUE_NONE, prev: RT_QUEUE_NONE };
+        const ENTRY: RtEntry = RtEntry {
+            tcb: None,
+            next: RT_QUEUE_NONE,
+            prev: RT_QUEUE_NONE,
+        };
         let mut entries = [ENTRY; RT_QUEUE_CAPACITY];
         // Initialiser la liste libre : 0 → 1 → 2 → … → CAPACITY-1 → NONE
         for i in 0..(RT_QUEUE_CAPACITY - 1) {
@@ -120,11 +124,11 @@ impl RtRunQueue {
         }
         entries[RT_QUEUE_CAPACITY - 1].next = RT_QUEUE_NONE;
         Self {
-            heads:     [RT_QUEUE_NONE; RT_LEVELS],
+            heads: [RT_QUEUE_NONE; RT_LEVELS],
             entries,
             free_head: 0,
-            bitmap:    RtBitmap::default(),
-            count:     0,
+            bitmap: RtBitmap::default(),
+            count: 0,
         }
     }
 
@@ -137,7 +141,9 @@ impl RtRunQueue {
         debug_assert!(prio < RT_LEVELS);
 
         let slot = self.alloc_slot();
-        let Some(slot_idx) = slot else { return false; };
+        let Some(slot_idx) = slot else {
+            return false;
+        };
 
         self.entries[slot_idx].tcb = Some(tcb);
         self.entries[slot_idx].next = RT_QUEUE_NONE;
@@ -152,7 +158,9 @@ impl RtRunQueue {
             let mut cur = head;
             loop {
                 let nxt = self.entries[cur as usize].next;
-                if nxt == RT_QUEUE_NONE { break; }
+                if nxt == RT_QUEUE_NONE {
+                    break;
+                }
                 cur = nxt;
             }
             self.entries[cur as usize].next = slot_idx as u16;
@@ -186,7 +194,9 @@ impl RtRunQueue {
     }
 
     fn alloc_slot(&mut self) -> Option<usize> {
-        if self.free_head == RT_QUEUE_NONE { return None; }
+        if self.free_head == RT_QUEUE_NONE {
+            return None;
+        }
         let idx = self.free_head as usize;
         self.free_head = self.entries[idx].next;
         self.entries[idx].next = RT_QUEUE_NONE;
@@ -212,9 +222,9 @@ impl RtRunQueue {
 
 struct CfsRunQueue {
     /// Tableau de pointeurs TCB triés par vruntime croissant.
-    tasks:    [Option<NonNull<ThreadControlBlock>>; MAX_TASKS_PER_CPU],
+    tasks: [Option<NonNull<ThreadControlBlock>>; MAX_TASKS_PER_CPU],
     /// Nombre de threads CFS prêts.
-    count:    usize,
+    count: usize,
     /// Somme des poids pour le calcul du quantum.
     weight_sum: u64,
     /// vruntime minimum courant (valeur de base CFS).
@@ -224,8 +234,8 @@ struct CfsRunQueue {
 impl CfsRunQueue {
     fn new() -> Self {
         Self {
-            tasks:    [None; MAX_TASKS_PER_CPU],
-            count:    0,
+            tasks: [None; MAX_TASKS_PER_CPU],
+            count: 0,
             weight_sum: 0,
             min_vruntime: AtomicU64::new(0),
         }
@@ -252,9 +262,17 @@ impl CfsRunQueue {
                 let mid = (lo + hi) / 2;
                 // SAFETY: tasks[mid] est Some car mid < self.count.
                 let mv = unsafe {
-                    self.tasks[mid].unwrap().as_ref().vruntime.load(Ordering::Acquire)
+                    self.tasks[mid]
+                        .unwrap()
+                        .as_ref()
+                        .vruntime
+                        .load(Ordering::Acquire)
                 };
-                if mv < vr { lo = mid + 1; } else { hi = mid; }
+                if mv < vr {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
             }
             lo
         };
@@ -270,7 +288,9 @@ impl CfsRunQueue {
 
     /// Retire le thread avec le plus petit vruntime (tête du tableau trié).
     fn dequeue_min(&mut self) -> Option<NonNull<ThreadControlBlock>> {
-        if self.count == 0 { return None; }
+        if self.count == 0 {
+            return None;
+        }
         let tcb = self.tasks[0].take()?;
         self.tasks.copy_within(1..self.count, 0);
         self.tasks[self.count - 1] = None;
@@ -284,7 +304,11 @@ impl CfsRunQueue {
         if self.count > 0 {
             // SAFETY: tasks[0] est Some car self.count > 0.
             let new_min = unsafe {
-                self.tasks[0].unwrap().as_ref().vruntime.load(Ordering::Relaxed)
+                self.tasks[0]
+                    .unwrap()
+                    .as_ref()
+                    .vruntime
+                    .load(Ordering::Relaxed)
             };
             // Intentionnel: min_vruntime est une borne approximative CFS.
             // La cohérence stricte de décision est garantie par insert_sorted() en Acquire.
@@ -329,30 +353,30 @@ impl CfsRunQueue {
 #[repr(C)]
 pub struct RunQueueStats {
     /// Appels totaux à pick_next_task().
-    pub picks_total:      AtomicU64,
+    pub picks_total: AtomicU64,
     /// Appels pick_next ayant retourné RT.
-    pub picks_rt:         AtomicU64,
+    pub picks_rt: AtomicU64,
     /// Appels pick_next ayant retourné CFS.
-    pub picks_cfs:        AtomicU64,
+    pub picks_cfs: AtomicU64,
     /// Appels pick_next ayant retourné idle.
-    pub picks_idle:       AtomicU64,
+    pub picks_idle: AtomicU64,
     /// Nombre de threads en attente (snapshot).
-    pub nr_running:       AtomicU32,
+    pub nr_running: AtomicU32,
     /// Charge normalisée × 1024 (load average).
-    pub load_avg:         AtomicU64,
+    pub load_avg: AtomicU64,
     /// Timestamp du dernier reequilibrage SMP (ns).
-    pub last_balance_ns:  AtomicU64,
+    pub last_balance_ns: AtomicU64,
 }
 
 impl RunQueueStats {
     const fn new() -> Self {
         Self {
-            picks_total:     AtomicU64::new(0),
-            picks_rt:        AtomicU64::new(0),
-            picks_cfs:       AtomicU64::new(0),
-            picks_idle:      AtomicU64::new(0),
-            nr_running:      AtomicU32::new(0),
-            load_avg:        AtomicU64::new(0),
+            picks_total: AtomicU64::new(0),
+            picks_rt: AtomicU64::new(0),
+            picks_cfs: AtomicU64::new(0),
+            picks_idle: AtomicU64::new(0),
+            nr_running: AtomicU32::new(0),
+            load_avg: AtomicU64::new(0),
             last_balance_ns: AtomicU64::new(0),
         }
     }
@@ -368,9 +392,9 @@ pub struct PerCpuRunQueue {
     /// Identifiant du CPU propriétaire.
     pub cpu: CpuId,
     /// File temps-réel.
-    rt:      RtRunQueue,
+    rt: RtRunQueue,
     /// File CFS (ordonnancement équitable).
-    cfs:     CfsRunQueue,
+    cfs: CfsRunQueue,
     /// Thread idle de ce CPU (toujours présent, non compté dans nr_running).
     pub idle_thread: Option<NonNull<ThreadControlBlock>>,
     /// Thread courant (en train de tourner).
@@ -392,11 +416,11 @@ impl PerCpuRunQueue {
     pub fn new(cpu: CpuId) -> Self {
         Self {
             cpu,
-            rt:          RtRunQueue::new(),
-            cfs:         CfsRunQueue::new(),
+            rt: RtRunQueue::new(),
+            cfs: CfsRunQueue::new(),
             idle_thread: None,
-            current:     None,
-            stats:       RunQueueStats::new(),
+            current: None,
+            stats: RunQueueStats::new(),
             clock_task_ns: 0,
         }
     }
@@ -404,7 +428,8 @@ impl PerCpuRunQueue {
     /// Enregistre le thread idle de ce CPU (appelé une seule fois au boot).
     pub fn set_idle_thread(&mut self, idle: NonNull<ThreadControlBlock>) {
         // SAFETY: idle est valide, la run queue en est propriétaire.
-        unsafe { idle.as_ref() }.sched_state
+        unsafe { idle.as_ref() }
+            .sched_state
             .fetch_or(super::task::SCHED_IDLE_BIT, Ordering::Relaxed);
         self.idle_thread = Some(idle);
     }
@@ -426,9 +451,7 @@ impl PerCpuRunQueue {
                 // SCHED_DEADLINE → file EDF dédiée (échéance la plus proche en tête).
                 // SAFETY: préemption désactivée (INVARIANT), cpu.0 < MAX_CPUS garanti.
                 unsafe {
-                    crate::scheduler::timer::deadline_timer::dl_enqueue(
-                        self.cpu.0 as usize, tcb,
-                    );
+                    crate::scheduler::timer::deadline_timer::dl_enqueue(self.cpu.0 as usize, tcb);
                 }
             }
             SchedPolicy::Idle => { /* géré par idle_thread */ }
@@ -447,7 +470,9 @@ impl PerCpuRunQueue {
                 // SAFETY: même invariant que pour policy.
                 let prio = unsafe { tcb.as_ref() }.priority.0 as usize;
                 let head = self.rt.heads[prio];
-                if head == RT_QUEUE_NONE { return false; }
+                if head == RT_QUEUE_NONE {
+                    return false;
+                }
                 let mut cur = head;
                 loop {
                     let entry_tcb = self.rt.entries[cur as usize].tcb;
@@ -470,7 +495,9 @@ impl PerCpuRunQueue {
                         break true;
                     }
                     cur = self.rt.entries[cur as usize].next;
-                    if cur == RT_QUEUE_NONE { break false; }
+                    if cur == RT_QUEUE_NONE {
+                        break false;
+                    }
                 }
             }
             SchedPolicy::Deadline => {
@@ -508,12 +535,11 @@ impl PerCpuRunQueue {
 
         // 2. File DEADLINE (EDF — échéance la plus proche en tête).
         // SAFETY: DL_QUEUES initialisé par scheduler::init() étape 8.
-        let dl_candidate = unsafe {
-            crate::scheduler::timer::deadline_timer::dl_pick_next(self.cpu.0 as usize)
-        };
+        let dl_candidate =
+            unsafe { crate::scheduler::timer::deadline_timer::dl_pick_next(self.cpu.0 as usize) };
         if let Some(tcb) = dl_candidate {
             self.stats.picks_cfs.fetch_add(1, Ordering::Relaxed); // comptabilisé avec CFS
-            // BUG-FIX B (DL) : décrémenter nr_running pour thread DEADLINE.
+                                                                  // BUG-FIX B (DL) : décrémenter nr_running pour thread DEADLINE.
             self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
             return Some(tcb);
         }
@@ -580,21 +606,29 @@ impl PerCpuRunQueue {
     /// Priorité RT la plus haute actuellement dans la file RT (0 = aucune).
     /// Retourne 0 si la file RT est vide.
     pub fn rt_highest_prio(&self) -> u8 {
-        if self.rt.count == 0 { return 0; }
+        if self.rt.count == 0 {
+            return 0;
+        }
         self.rt.bitmap.find_highest_prio().unwrap_or(0)
     }
 
     /// Retourne (sans extraire) le 2e thread CFS trié par vruntime.
     /// Utilisé par ai_guided::maybe_prefer() pour une comparaison légère.
     pub fn cfs_peek_second(&self) -> Option<NonNull<ThreadControlBlock>> {
-        if self.cfs.count >= 2 { self.cfs.tasks[1] }
-        else { None }
+        if self.cfs.count >= 2 {
+            self.cfs.tasks[1]
+        } else {
+            None
+        }
     }
 
     /// Défile un thread CFS migreable vers le CPU `dst_cpu`.
     /// Cherche depuis la fin (plus haute vruntime = moins prioritaire = meilleur candidat à migrer).
     /// Ne déplace JAMAIS de threads RT.
-    pub fn cfs_dequeue_for_migration(&mut self, dst_cpu: CpuId) -> Option<NonNull<ThreadControlBlock>> {
+    pub fn cfs_dequeue_for_migration(
+        &mut self,
+        dst_cpu: CpuId,
+    ) -> Option<NonNull<ThreadControlBlock>> {
         // Cherche depuis la fin du tableau CFS (ordre décroissant de vruntime).
         let mut found_idx = None;
         for i in (0..self.cfs.count).rev() {
@@ -631,7 +665,9 @@ impl PerCpuRunQueue {
     /// Expose `RtRunQueue::bitmap` depuis l'extérieur du module.
     #[inline(always)]
     pub fn rt_bitmap_highest_prio(&self) -> Option<u8> {
-        if self.rt.count == 0 { return None; }
+        if self.rt.count == 0 {
+            return None;
+        }
         self.rt.bitmap.find_highest_prio()
     }
 

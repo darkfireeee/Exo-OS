@@ -8,7 +8,6 @@
 //! Clé = FNV-1a 64-bit du chemin + vérification anti-collision.
 //! Règles : OOM-02, ARITH-02, RECUR-01.
 
-
 extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -16,26 +15,33 @@ use alloc::vec::Vec;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use super::cache_stats::CACHE_STATS;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::scheduler::sync::spinlock::SpinLock;
-use super::cache_stats::CACHE_STATS;
 
 // ── PathEntry ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
 pub struct PathEntry {
     /// Chemin complet sur heap (jamais sur stack).
-    pub path:         String,
-    pub inode_id:     u64,
-    pub flags:        u32,
-    pub depth:        u32,
-    pub cached_tick:  u64,
+    pub path: String,
+    pub inode_id: u64,
+    pub flags: u32,
+    pub depth: u32,
+    pub cached_tick: u64,
     pub access_count: u64,
 }
 
 impl PathEntry {
     pub fn new(path: String, inode_id: u64, flags: u32, depth: u32, now: u64) -> Self {
-        Self { path, inode_id, flags, depth, cached_tick: now, access_count: 1 }
+        Self {
+            path,
+            inode_id,
+            flags,
+            depth,
+            cached_tick: now,
+            access_count: 1,
+        }
     }
 
     pub fn touch(&mut self) {
@@ -55,24 +61,32 @@ struct PathCacheInner {
 }
 
 impl PathCacheInner {
-    const fn new(max: usize) -> Self { Self { map: BTreeMap::new(), max } }
+    const fn new(max: usize) -> Self {
+        Self {
+            map: BTreeMap::new(),
+            max,
+        }
+    }
 
     fn evict_one_lru(&mut self) {
-        let oldest = self.map
+        let oldest = self
+            .map
             .iter()
             .min_by_key(|(_, e)| e.cached_tick)
             .map(|(k, _)| *k);
-        if let Some(k) = oldest { self.map.remove(&k); }
+        if let Some(k) = oldest {
+            self.map.remove(&k);
+        }
     }
 }
 
 // ── PathCache ──────────────────────────────────────────────────────────────────
 
 pub struct PathCache {
-    inner:          SpinLock<PathCacheInner>,
-    hits:           AtomicU64,
-    misses:         AtomicU64,
-    invalidations:  AtomicU64,
+    inner: SpinLock<PathCacheInner>,
+    hits: AtomicU64,
+    misses: AtomicU64,
+    invalidations: AtomicU64,
 }
 
 pub static PATH_CACHE: PathCache = PathCache::new_const();
@@ -80,9 +94,9 @@ pub static PATH_CACHE: PathCache = PathCache::new_const();
 impl PathCache {
     pub const fn new_const() -> Self {
         Self {
-            inner:         SpinLock::new(PathCacheInner::new(16384)),
-            hits:          AtomicU64::new(0),
-            misses:        AtomicU64::new(0),
+            inner: SpinLock::new(PathCacheInner::new(16384)),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
             invalidations: AtomicU64::new(0),
         }
     }
@@ -126,17 +140,22 @@ impl PathCache {
         // Chemin sur heap (Règle RECUR-01 + pas de heap sur pile).
         let path_str = {
             let mut s = String::new();
-            s.try_reserve(path.len()).map_err(|_| ExofsError::NoMemory)?;
-            for &b in path { s.push(b as char); }
+            s.try_reserve(path.len())
+                .map_err(|_| ExofsError::NoMemory)?;
+            for &b in path {
+                s.push(b as char);
+            }
             s
         };
         let depth = path.iter().filter(|&&c| c == b'/').count() as u32;
-        let now   = crate::arch::time::read_ticks();
-        let key   = Self::fnv1a(path);
+        let now = crate::arch::time::read_ticks();
+        let key = Self::fnv1a(path);
         let entry = PathEntry::new(path_str, inode_id, flags, depth, now);
 
         let mut inner = self.inner.lock();
-        if inner.map.len() >= inner.max { inner.evict_one_lru(); }
+        if inner.map.len() >= inner.max {
+            inner.evict_one_lru();
+        }
         inner.map.insert(key, entry);
         CACHE_STATS.record_insert(path.len() as u64);
         Ok(())
@@ -153,7 +172,8 @@ impl PathCache {
 
     pub fn invalidate_prefix(&self, prefix: &[u8]) {
         let mut inner = self.inner.lock();
-        let to_remove: Vec<u64> = inner.map
+        let to_remove: Vec<u64> = inner
+            .map
             .iter()
             .filter(|(_, e)| e.path.as_bytes().starts_with(prefix))
             .map(|(k, _)| *k)
@@ -166,7 +186,8 @@ impl PathCache {
 
     pub fn invalidate_inode(&self, inode_id: u64) {
         let mut inner = self.inner.lock();
-        let to_remove: Vec<u64> = inner.map
+        let to_remove: Vec<u64> = inner
+            .map
             .iter()
             .filter(|(_, e)| e.inode_id == inode_id)
             .map(|(k, _)| *k)
@@ -179,7 +200,8 @@ impl PathCache {
 
     pub fn evict_stale(&self, now: u64, ttl: u64) -> usize {
         let mut inner = self.inner.lock();
-        let stale: Vec<u64> = inner.map
+        let stale: Vec<u64> = inner
+            .map
             .iter()
             .filter(|(_, e)| e.is_stale(now, ttl))
             .map(|(k, _)| *k)
@@ -194,11 +216,21 @@ impl PathCache {
 
     // ── Statistiques ────────────────────────────────────────────────────────
 
-    pub fn n_entries(&self)     -> usize { self.inner.lock().map.len() }
-    pub fn hits(&self)          -> u64   { self.hits.load(Ordering::Relaxed) }
-    pub fn misses(&self)        -> u64   { self.misses.load(Ordering::Relaxed) }
-    pub fn invalidations(&self) -> u64   { self.invalidations.load(Ordering::Relaxed) }
-    pub fn flush_all(&self)              { self.inner.lock().map.clear(); }
+    pub fn n_entries(&self) -> usize {
+        self.inner.lock().map.len()
+    }
+    pub fn hits(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+    pub fn misses(&self) -> u64 {
+        self.misses.load(Ordering::Relaxed)
+    }
+    pub fn invalidations(&self) -> u64 {
+        self.invalidations.load(Ordering::Relaxed)
+    }
+    pub fn flush_all(&self) {
+        self.inner.lock().map.clear();
+    }
 }
 
 // ── Extensions PathCache ───────────────────────────────────────────────────────
@@ -206,11 +238,17 @@ impl PathCache {
 impl PathCache {
     /// Insère ou ré-insère si TTL expiré.
     pub fn lookup_or_insert(
-        &self, path: &[u8], inode_id: u64, flags: u32, ttl: u64,
+        &self,
+        path: &[u8],
+        inode_id: u64,
+        flags: u32,
+        ttl: u64,
     ) -> ExofsResult<PathEntry> {
         let now = crate::arch::time::read_ticks();
         if let Some(e) = self.lookup(path) {
-            if !e.is_stale(now, ttl) { return Ok(e); }
+            if !e.is_stale(now, ttl) {
+                return Ok(e);
+            }
         }
         self.insert(path, inode_id, flags)?;
         self.lookup(path).ok_or(ExofsError::InternalError)
@@ -231,7 +269,9 @@ impl PathCache {
         let old_key = Self::fnv1a(old_path);
         let entry = {
             let inner = self.inner.lock();
-            inner.map.get(&old_key)
+            inner
+                .map
+                .get(&old_key)
                 .filter(|e| e.path.as_bytes() == old_path)
                 .map(|e| (e.inode_id, e.flags))
         };
@@ -265,14 +305,14 @@ impl PathCache {
     }
 }
 
-
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test] fn test_insert_and_lookup() {
+    #[test]
+    fn test_insert_and_lookup() {
         let c = PathCache::new_const();
         c.insert(b"/foo/bar", 42, 0).unwrap();
         let r = c.lookup(b"/foo/bar");
@@ -280,19 +320,22 @@ mod tests {
         assert_eq!(r.unwrap().inode_id, 42);
     }
 
-    #[test] fn test_miss() {
+    #[test]
+    fn test_miss() {
         let c = PathCache::new_const();
         assert!(c.lookup(b"/not/found").is_none());
     }
 
-    #[test] fn test_invalidate_path() {
+    #[test]
+    fn test_invalidate_path() {
         let c = PathCache::new_const();
         c.insert(b"/a/b", 1, 0).unwrap();
         c.invalidate_path(b"/a/b");
         assert!(c.lookup(b"/a/b").is_none());
     }
 
-    #[test] fn test_invalidate_prefix() {
+    #[test]
+    fn test_invalidate_prefix() {
         let c = PathCache::new_const();
         c.insert(b"/a", 1, 0).unwrap();
         c.insert(b"/a/b", 2, 0).unwrap();
@@ -301,7 +344,8 @@ mod tests {
         assert_eq!(c.n_entries(), 1);
     }
 
-    #[test] fn test_invalidate_inode() {
+    #[test]
+    fn test_invalidate_inode() {
         let c = PathCache::new_const();
         c.insert(b"/x", 7, 0).unwrap();
         c.insert(b"/y", 7, 0).unwrap();
@@ -309,38 +353,50 @@ mod tests {
         assert_eq!(c.n_entries(), 0);
     }
 
-    #[test] fn test_hits_misses() {
+    #[test]
+    fn test_hits_misses() {
         let c = PathCache::new_const();
         c.insert(b"/p", 1, 0).unwrap();
-        c.lookup(b"/p"); c.lookup(b"/q");
+        c.lookup(b"/p");
+        c.lookup(b"/q");
         assert_eq!(c.hits(), 1);
         assert_eq!(c.misses(), 1);
     }
 
-    #[test] fn test_evict_stale() {
+    #[test]
+    fn test_evict_stale() {
         let c = PathCache::new_const();
         c.insert(b"/old", 1, 0).unwrap();
         // Force le tick à 0 via update direct.
-        { c.inner.lock().map.values_mut().for_each(|e| e.cached_tick = 0); }
+        {
+            c.inner
+                .lock()
+                .map
+                .values_mut()
+                .for_each(|e| e.cached_tick = 0);
+        }
         let evicted = c.evict_stale(5000, 100);
         assert_eq!(evicted, 1);
     }
 
-    #[test] fn test_depth_counted() {
+    #[test]
+    fn test_depth_counted() {
         let c = PathCache::new_const();
         c.insert(b"/a/b/c", 1, 0).unwrap();
         let e = c.lookup(b"/a/b/c").unwrap();
         assert_eq!(e.depth, 3);
     }
 
-    #[test] fn test_flush_all() {
+    #[test]
+    fn test_flush_all() {
         let c = PathCache::new_const();
         c.insert(b"/x", 1, 0).unwrap();
         c.flush_all();
         assert_eq!(c.n_entries(), 0);
     }
 
-    #[test] fn test_rename() {
+    #[test]
+    fn test_rename() {
         let c = PathCache::new_const();
         c.insert(b"/old", 42, 0).unwrap();
         c.rename(b"/old", b"/new").unwrap();
@@ -348,67 +404,78 @@ mod tests {
         assert!(c.lookup(b"/new").is_some());
     }
 
-    #[test] fn test_hottest_n() {
+    #[test]
+    fn test_hottest_n() {
         let c = PathCache::new_const();
         c.insert(b"/hot", 1, 0).unwrap();
         c.insert(b"/cold", 2, 0).unwrap();
         // accéder plusieurs fois à /hot
-        c.lookup(b"/hot"); c.lookup(b"/hot"); c.lookup(b"/hot");
+        c.lookup(b"/hot");
+        c.lookup(b"/hot");
+        c.lookup(b"/hot");
         let hot = c.hottest_n(1);
         assert_eq!(hot[0].path.as_bytes(), b"/hot");
     }
 
-    #[test] fn test_insert_batch() {
+    #[test]
+    fn test_insert_batch() {
         let c = PathCache::new_const();
         let batch = [(b"/a" as &[u8], 1u64, 0u32), (b"/b", 2, 0)];
         let n = c.insert_batch(&batch).unwrap();
         assert_eq!(n, 2);
     }
 
-    #[test] fn test_depth_histogram() {
+    #[test]
+    fn test_depth_histogram() {
         let c = PathCache::new_const();
         c.insert(b"/a/b/c", 1, 0).unwrap();
         let h = c.depth_histogram();
         assert_eq!(h[3], 1);
     }
 
-    #[test] fn test_contains() {
+    #[test]
+    fn test_contains() {
         let c = PathCache::new_const();
         c.insert(b"/foo", 1, 0).unwrap();
         assert!(c.contains(b"/foo"));
         assert!(!c.contains(b"/bar"));
     }
 
-    #[test] fn test_flush_all_clears() {
+    #[test]
+    fn test_flush_all_clears() {
         let c = PathCache::new_const();
         c.insert(b"/x", 1, 0).unwrap();
         c.flush_all();
         assert_eq!(c.n_entries(), 0);
     }
 
-    #[test] fn test_remove_existing_path() {
+    #[test]
+    fn test_remove_existing_path() {
         let c = PathCache::new_const();
         c.insert(b"/rem", 2, 0).unwrap();
         c.invalidate_path(b"/rem");
         assert!(!c.contains(b"/rem"));
     }
 
-    #[test] fn test_get_miss() {
+    #[test]
+    fn test_get_miss() {
         let c = PathCache::new_const();
         assert!(c.lookup(b"/nonexistent").is_none());
     }
 
-    #[test] fn test_n_entries_after_inserts() {
+    #[test]
+    fn test_n_entries_after_inserts() {
         let c = PathCache::new_const();
         c.insert(b"/a", 1, 0).unwrap();
         c.insert(b"/b", 2, 0).unwrap();
         assert_eq!(c.n_entries(), 2);
     }
 
-    #[test] fn test_depth_histogram_multiple_depths() {
+    #[test]
+    fn test_depth_histogram_multiple_depths() {
         let c = PathCache::new_const();
-        c.insert(b"/a",     1, 0).unwrap();
-        c.insert(b"/a/b",   2, 0).unwrap();
+        c.insert(b"/a", 1, 0).unwrap();
+        c.insert(b"/a/b", 2, 0).unwrap();
         c.insert(b"/a/b/c", 3, 0).unwrap();
         let h = c.depth_histogram();
         assert_eq!(h[1], 1);

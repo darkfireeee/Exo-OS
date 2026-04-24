@@ -33,9 +33,8 @@ impl PageFlags {
     /// Page mappée dans plusieurs espaces d'adressage
     pub const SHARED: Self = Self(1 << 5);
     /// Combined lecture + écriture + no_cow + pinned (défaut SHM)
-    pub const SHM_DEFAULT: Self = Self(
-        Self::READ.0 | Self::WRITE.0 | Self::NO_COW.0 | Self::PINNED.0 | Self::SHARED.0
-    );
+    pub const SHM_DEFAULT: Self =
+        Self(Self::READ.0 | Self::WRITE.0 | Self::NO_COW.0 | Self::PINNED.0 | Self::SHARED.0);
 
     pub fn contains(self, other: Self) -> bool {
         (self.0 & other.0) == other.0
@@ -145,8 +144,11 @@ impl ShmPage {
     /// un raw pointer write (pattern write-once sur static).
     pub fn init(&self, phys: PhysAddr, pool_idx: u32, flags: PageFlags) {
         // SAFETY: init() appelé une seule fois avant tout accès concurrent; phys write-once sur static.
-        unsafe { self.set_phys_unchecked(phys); }
-        self.flags.store(flags.0 | PageFlags::NO_COW.0, Ordering::Relaxed);
+        unsafe {
+            self.set_phys_unchecked(phys);
+        }
+        self.flags
+            .store(flags.0 | PageFlags::NO_COW.0, Ordering::Relaxed);
         self.pool_index.store(pool_idx, Ordering::Relaxed);
         self.refcount.store(0, Ordering::Release);
     }

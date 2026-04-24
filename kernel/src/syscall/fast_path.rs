@@ -22,11 +22,10 @@
 //! ## RÈGLE CONTRAT UNSAFE (regle_bonus.md)
 //! Tout `unsafe {}` est précédé d'un commentaire `// SAFETY:`.
 
-
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::arch::x86_64::smp::percpu::current_cpu_id;
-use crate::scheduler::core::task::{ThreadControlBlock, ThreadId, ProcessId};
+use crate::scheduler::core::task::{ProcessId, ThreadControlBlock, ThreadId};
 use crate::scheduler::timer::clock::monotonic_ns;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -39,51 +38,51 @@ use crate::scheduler::timer::clock::monotonic_ns;
 const RFLAGS_USER_MASK: u64 = 0x003F_FFFF;
 
 /// POSIX CLOCK IDs
-pub const CLOCK_REALTIME:         u32 = 0;
-pub const CLOCK_MONOTONIC:        u32 = 1;
-pub const CLOCK_PROCESS_CPUTIME:  u32 = 2;
-pub const CLOCK_THREAD_CPUTIME:   u32 = 3;
-pub const CLOCK_MONOTONIC_RAW:    u32 = 4;
-pub const CLOCK_REALTIME_COARSE:  u32 = 5;
+pub const CLOCK_REALTIME: u32 = 0;
+pub const CLOCK_MONOTONIC: u32 = 1;
+pub const CLOCK_PROCESS_CPUTIME: u32 = 2;
+pub const CLOCK_THREAD_CPUTIME: u32 = 3;
+pub const CLOCK_MONOTONIC_RAW: u32 = 4;
+pub const CLOCK_REALTIME_COARSE: u32 = 5;
 pub const CLOCK_MONOTONIC_COARSE: u32 = 6;
-pub const CLOCK_BOOTTIME:         u32 = 7;
+pub const CLOCK_BOOTTIME: u32 = 7;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Instrumentation fast-path
 // ─────────────────────────────────────────────────────────────────────────────
 
-static FP_GETPID_COUNT:       AtomicU64 = AtomicU64::new(0);
-static FP_GETTID_COUNT:       AtomicU64 = AtomicU64::new(0);
-static FP_GETUID_COUNT:       AtomicU64 = AtomicU64::new(0);
-static FP_GETGID_COUNT:       AtomicU64 = AtomicU64::new(0);
-static FP_GETPPID_COUNT:      AtomicU64 = AtomicU64::new(0);
-static FP_GETCPU_COUNT:       AtomicU64 = AtomicU64::new(0);
-static FP_CLOCKGET_COUNT:     AtomicU64 = AtomicU64::new(0);
-static FP_YIELD_COUNT:        AtomicU64 = AtomicU64::new(0);
+static FP_GETPID_COUNT: AtomicU64 = AtomicU64::new(0);
+static FP_GETTID_COUNT: AtomicU64 = AtomicU64::new(0);
+static FP_GETUID_COUNT: AtomicU64 = AtomicU64::new(0);
+static FP_GETGID_COUNT: AtomicU64 = AtomicU64::new(0);
+static FP_GETPPID_COUNT: AtomicU64 = AtomicU64::new(0);
+static FP_GETCPU_COUNT: AtomicU64 = AtomicU64::new(0);
+static FP_CLOCKGET_COUNT: AtomicU64 = AtomicU64::new(0);
+static FP_YIELD_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Statistiques fast-path renvoyées par [`fast_path_stats`].
 #[derive(Copy, Clone, Debug, Default)]
 pub struct FastPathStats {
-    pub getpid:    u64,
-    pub gettid:    u64,
-    pub getuid:    u64,
-    pub getgid:    u64,
-    pub getppid:   u64,
-    pub getcpu:    u64,
-    pub clockget:  u64,
+    pub getpid: u64,
+    pub gettid: u64,
+    pub getuid: u64,
+    pub getgid: u64,
+    pub getppid: u64,
+    pub getcpu: u64,
+    pub clockget: u64,
     pub yield_cnt: u64,
 }
 
 /// Retourne un snapshot des compteurs fast-path.
 pub fn fast_path_stats() -> FastPathStats {
     FastPathStats {
-        getpid:    FP_GETPID_COUNT.load(Ordering::Relaxed),
-        gettid:    FP_GETTID_COUNT.load(Ordering::Relaxed),
-        getuid:    FP_GETUID_COUNT.load(Ordering::Relaxed),
-        getgid:    FP_GETGID_COUNT.load(Ordering::Relaxed),
-        getppid:   FP_GETPPID_COUNT.load(Ordering::Relaxed),
-        getcpu:    FP_GETCPU_COUNT.load(Ordering::Relaxed),
-        clockget:  FP_CLOCKGET_COUNT.load(Ordering::Relaxed),
+        getpid: FP_GETPID_COUNT.load(Ordering::Relaxed),
+        gettid: FP_GETTID_COUNT.load(Ordering::Relaxed),
+        getuid: FP_GETUID_COUNT.load(Ordering::Relaxed),
+        getgid: FP_GETGID_COUNT.load(Ordering::Relaxed),
+        getppid: FP_GETPPID_COUNT.load(Ordering::Relaxed),
+        getcpu: FP_GETCPU_COUNT.load(Ordering::Relaxed),
+        clockget: FP_CLOCKGET_COUNT.load(Ordering::Relaxed),
         yield_cnt: FP_YIELD_COUNT.load(Ordering::Relaxed),
     }
 }
@@ -152,7 +151,7 @@ unsafe fn current_pid() -> ProcessId {
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Timespec {
     /// Secondes entières depuis l'époque (CLOCK_REALTIME) ou le boot (CLOCK_MONOTONIC).
-    pub tv_sec:  i64,
+    pub tv_sec: i64,
     /// Nanosecondes (0..999_999_999).
     pub tv_nsec: i64,
 }
@@ -162,7 +161,7 @@ impl Timespec {
     #[inline]
     pub const fn from_ns(ns: u64) -> Self {
         Self {
-            tv_sec:  (ns / 1_000_000_000) as i64,
+            tv_sec: (ns / 1_000_000_000) as i64,
             tv_nsec: (ns % 1_000_000_000) as i64,
         }
     }
@@ -196,13 +195,13 @@ fn current_creds() -> Credentials {
             // SAFETY: SpinLock<Credentials> — verrouillage court, pas d'alloc.
             let creds = pcb.creds.lock();
             Credentials {
-                uid:  creds.uid,
-                gid:  creds.gid,
+                uid: creds.uid,
+                gid: creds.gid,
                 euid: creds.euid,
                 egid: creds.egid,
                 ppid: pcb.ppid.load(Ordering::Relaxed),
             }
-        },
+        }
         None => Credentials::root(),
     }
 }
@@ -210,8 +209,8 @@ fn current_creds() -> Credentials {
 /// Credentials d'un processus lus depuis le PCB.
 #[derive(Copy, Clone, Debug)]
 struct Credentials {
-    uid:  u32,
-    gid:  u32,
+    uid: u32,
+    gid: u32,
     euid: u32,
     egid: u32,
     ppid: u32,
@@ -219,7 +218,13 @@ struct Credentials {
 
 impl Credentials {
     fn root() -> Self {
-        Self { uid: 0, gid: 0, euid: 0, egid: 0, ppid: 0 }
+        Self {
+            uid: 0,
+            gid: 0,
+            euid: 0,
+            egid: 0,
+            ppid: 0,
+        }
     }
 }
 
@@ -357,9 +362,7 @@ pub fn sys_clock_gettime(clkid: u64, ts_ptr: u64) -> i64 {
         CLOCK_REALTIME | CLOCK_REALTIME_COARSE => {
             // Offset réel = monotonic + REALTIME_OFFSET (mis à jour par settimeofday / NTP).
             // L'offset est stocké dans un AtomicU64 global du module timer/clock.
-            monotonic_ns().saturating_add(
-                crate::scheduler::timer::clock::realtime_offset_ns()
-            )
+            monotonic_ns().saturating_add(crate::scheduler::timer::clock::realtime_offset_ns())
         }
         // CLOCK_PROCESS_CPUTIME_ID / CLOCK_THREAD_CPUTIME_ID
         CLOCK_PROCESS_CPUTIME | CLOCK_THREAD_CPUTIME => {
@@ -372,7 +375,7 @@ pub fn sys_clock_gettime(clkid: u64, ts_ptr: u64) -> i64 {
 
     let ts = Timespec::from_ns(ns);
     match crate::syscall::validation::write_user_typed::<Timespec>(ts_ptr, ts) {
-        Ok(_)  => 0,
+        Ok(_) => 0,
         Err(e) => e.to_errno(),
     }
 }
@@ -388,11 +391,10 @@ pub fn sys_gettimeofday(tv_ptr: u64, tz_ptr: u64) -> i64 {
     if tv_ptr == 0 {
         return super::numbers::EFAULT;
     }
-    let wall_ns = monotonic_ns().saturating_add(
-        crate::scheduler::timer::clock::realtime_offset_ns()
-    );
+    let wall_ns =
+        monotonic_ns().saturating_add(crate::scheduler::timer::clock::realtime_offset_ns());
     let timeval = Timeval {
-        tv_sec:  (wall_ns / 1_000_000_000) as i64,
+        tv_sec: (wall_ns / 1_000_000_000) as i64,
         tv_usec: ((wall_ns % 1_000_000_000) / 1000) as i64,
     };
     if let Err(e) = crate::syscall::validation::write_user_typed::<Timeval>(tv_ptr, timeval) {
@@ -400,7 +402,10 @@ pub fn sys_gettimeofday(tv_ptr: u64, tz_ptr: u64) -> i64 {
     }
     // Timezone : timezone fixe UTC, daylight=0.
     if tz_ptr != 0 {
-        let tz = Timezone { tz_minuteswest: 0, tz_dsttime: 0 };
+        let tz = Timezone {
+            tz_minuteswest: 0,
+            tz_dsttime: 0,
+        };
         if let Err(e) = crate::syscall::validation::write_user_typed::<Timezone>(tz_ptr, tz) {
             return e.to_errno();
         }
@@ -445,7 +450,7 @@ pub fn sys_sched_yield() -> i64 {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Timeval {
-    pub tv_sec:  i64,
+    pub tv_sec: i64,
     pub tv_usec: i64,
 }
 
@@ -454,7 +459,7 @@ pub struct Timeval {
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Timezone {
     pub tz_minuteswest: i32,
-    pub tz_dsttime:     i32,
+    pub tz_dsttime: i32,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -471,7 +476,7 @@ pub struct Timezone {
 /// contre-productif car la fonction est appelée une seule fois par syscall).
 #[inline]
 pub fn try_fast_path(
-    nr:   u64,
+    nr: u64,
     arg1: u64,
     arg2: u64,
     arg3: u64,
@@ -481,17 +486,17 @@ pub fn try_fast_path(
 ) -> Option<i64> {
     use crate::syscall::numbers::*;
     match nr {
-        SYS_GETPID      => Some(sys_getpid()),
-        SYS_GETTID      => Some(sys_gettid()),
-        SYS_GETUID      => Some(sys_getuid()),
-        SYS_GETEUID     => Some(sys_geteuid()),
-        SYS_GETGID      => Some(sys_getgid()),
-        SYS_GETEGID     => Some(sys_getegid()),
-        SYS_GETPPID     => Some(sys_getppid()),
-        SYS_GETCPU      => Some(sys_getcpu(arg1, arg2, arg3)),
+        SYS_GETPID => Some(sys_getpid()),
+        SYS_GETTID => Some(sys_gettid()),
+        SYS_GETUID => Some(sys_getuid()),
+        SYS_GETEUID => Some(sys_geteuid()),
+        SYS_GETGID => Some(sys_getgid()),
+        SYS_GETEGID => Some(sys_getegid()),
+        SYS_GETPPID => Some(sys_getppid()),
+        SYS_GETCPU => Some(sys_getcpu(arg1, arg2, arg3)),
         SYS_CLOCK_GETTIME => Some(sys_clock_gettime(arg1, arg2)),
-        SYS_GETTIMEOFDAY  => Some(sys_gettimeofday(arg1, arg2)),
-        SYS_SCHED_YIELD   => Some(sys_sched_yield()),
-        _               => None,
+        SYS_GETTIMEOFDAY => Some(sys_gettimeofday(arg1, arg2)),
+        SYS_SCHED_YIELD => Some(sys_sched_yield()),
+        _ => None,
     }
 }

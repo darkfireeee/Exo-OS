@@ -46,7 +46,11 @@ impl IommuLedger {
     }
 
     pub fn bind_driver(&mut self, pid: u32, domain_hint: u32) {
-        if let Some(idx) = self.domains.iter().position(|entry| entry.active && entry.pid == pid) {
+        if let Some(idx) = self
+            .domains
+            .iter()
+            .position(|entry| entry.active && entry.pid == pid)
+        {
             self.domains[idx].domain_hint = domain_hint;
             return;
         }
@@ -65,13 +69,21 @@ impl IommuLedger {
     }
 
     pub fn unbind_driver(&mut self, pid: u32) {
-        if let Some(idx) = self.domains.iter().position(|entry| entry.active && entry.pid == pid) {
+        if let Some(idx) = self
+            .domains
+            .iter()
+            .position(|entry| entry.active && entry.pid == pid)
+        {
             self.domains[idx] = DomainRecord::empty();
         }
     }
 
     pub fn report_fault(&mut self, pid: u32, fault_code: u32, value0: u64, value1: u64) {
-        if let Some(idx) = self.domains.iter().position(|entry| entry.active && entry.pid == pid) {
+        if let Some(idx) = self
+            .domains
+            .iter()
+            .position(|entry| entry.active && entry.pid == pid)
+        {
             let entry = &mut self.domains[idx];
             entry.fault_count = entry.fault_count.saturating_add(1);
             entry.last_fault_code = fault_code;
@@ -81,7 +93,10 @@ impl IommuLedger {
     }
 
     pub fn snapshot(&self, pid: u32) -> Option<DomainSnapshot> {
-        let entry = self.domains.iter().find(|entry| entry.active && entry.pid == pid)?;
+        let entry = self
+            .domains
+            .iter()
+            .find(|entry| entry.active && entry.pid == pid)?;
         Some(DomainSnapshot {
             domain_hint: entry.domain_hint,
             fault_count: entry.fault_count,

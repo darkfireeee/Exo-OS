@@ -22,7 +22,7 @@
 //
 // Règles d'architecture (docs/refonte/regle_bonus.md) :
 //   • COUCHE 0 : aucune dépendance scheduler/process/ipc/fs.
-//   • Ordonnancement des locks : IPC < Scheduler < Memory < FS.
+//   • Ordonnancement des locks : Memory → Scheduler → Security → IPC → FS.
 //   • RÈGLE IA-KERNEL-01 : tables .rodata statiques uniquement.
 //   • RÈGLE EMERGENCY-01 : EmergencyPool initialisé EN PREMIER.
 //   • DmaWakeupHandler trait : défini ici, implémenté par process/.
@@ -49,17 +49,17 @@ pub mod core;
 pub mod physical;
 // "virtual" est un mot-clé réservé Rust : le répertoire virtual/ est
 // déclaré comme module public `virt` via l'attribut #[path].
-#[path = "virtual/mod.rs"]
-pub mod virt;
-pub mod heap;
-pub mod dma;
-pub mod swap;
 pub mod cow;
+pub mod dma;
+pub mod heap;
 pub mod huge_pages;
-pub mod protection;
 pub mod integrity;
 pub mod numa;
+pub mod protection;
+pub mod swap;
 pub mod utils;
+#[path = "virtual/mod.rs"]
+pub mod virt;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports de premier niveau (API publique du module)
@@ -67,32 +67,25 @@ pub mod utils;
 
 // Core types — exportés en premier car tous les autres en dépendent.
 pub use self::core::{
-    PhysAddr, VirtAddr, Frame, Page, PageRange, FrameRange,
-    PageFlags, ZoneType, AllocFlags, AllocError,
-    PAGE_SIZE, HUGE_PAGE_SIZE, BUDDY_MAX_ORDER, BUDDY_ORDER_COUNT,
-    PER_CPU_POOL_SIZE, EMERGENCY_POOL_SIZE, DMA_RING_SIZE, FUTEX_HASH_BUCKETS,
-    PhysRange, VirtRange, phys_to_virt, virt_to_phys_physmap,
-    PHYS_MAP_BASE, VMALLOC_BASE, KERNEL_HEAP_START,
+    phys_to_virt, virt_to_phys_physmap, AllocError, AllocFlags, Frame, FrameRange, Page, PageFlags,
+    PageRange, PhysAddr, PhysRange, VirtAddr, VirtRange, ZoneType, BUDDY_MAX_ORDER,
+    BUDDY_ORDER_COUNT, DMA_RING_SIZE, EMERGENCY_POOL_SIZE, FUTEX_HASH_BUCKETS, HUGE_PAGE_SIZE,
+    KERNEL_HEAP_START, PAGE_SIZE, PER_CPU_POOL_SIZE, PHYS_MAP_BASE, VMALLOC_BASE,
 };
 
 // Physical allocator — API d'allocation frames.
 // Note: alloc_zeroed_page n'existe pas dans physical — utiliser
 // alloc_page() + écriture manuelle ou heap_alloc_zeroed() pour la heap.
-pub use physical::{
-    alloc_page, alloc_pages, free_page, free_pages,
-};
+pub use physical::{alloc_page, alloc_pages, free_page, free_pages};
 
 // Heap — allocateur global (SLUB / vmalloc).
-pub use heap::{
-    heap_alloc, heap_free,
-    drain_on_context_switch, drain_on_memory_pressure,
-};
+pub use heap::{drain_on_context_switch, drain_on_memory_pressure, heap_alloc, heap_free};
 
 // DMA — trait wakeup injecté par process/.
 pub use dma::DmaWakeupHandler;
 
 // Swap.
-pub use swap::{SwapDevice, SwapSlot, SwapPte, should_swap, is_critical};
+pub use swap::{is_critical, should_swap, SwapDevice, SwapPte, SwapSlot};
 
 // COW.
 pub use cow::COW_TRACKER;
@@ -101,23 +94,22 @@ pub use cow::COW_TRACKER;
 pub use huge_pages::{alloc_huge_page, free_huge_page, split_huge_page, try_promote_to_huge};
 
 // Protection matérielle (NX / SMEP / SMAP / PKU).
-pub use protection::{copy_from_user, copy_to_user, zero_user, nx_page_flags};
+pub use protection::{copy_from_user, copy_to_user, nx_page_flags, zero_user};
 
 // Intégrité (canary / guard pages / KASAN-lite).
 pub use integrity::{
-    kasan_on_alloc, kasan_on_free, kasan_check_access,
-    cpu_canary, thread_canary, verify_thread_canary,
+    cpu_canary, kasan_check_access, kasan_on_alloc, kasan_on_free, thread_canary,
+    verify_thread_canary,
 };
 
 // NUMA — politique depuis numa::policy (distinct de physical::allocator::NumaPolicy).
-pub use numa::{NUMA_NODES, numa_distance, closest_node};
 pub use numa::policy::NumaPolicy;
+pub use numa::{closest_node, numa_distance, NUMA_NODES};
 
 // Utils (UNIQUE table futex + OOM killer + shrinker).
 pub use utils::{
-    FUTEX_TABLE, futex_wait, futex_wake, futex_wake_n, futex_cancel,
-    OomScorer, register_oom_kill_sender, oom_kill,
-    register_shrinker, run_shrinkers,
+    futex_cancel, futex_wait, futex_wake, futex_wake_n, oom_kill, register_oom_kill_sender,
+    register_shrinker, run_shrinkers, OomScorer, FUTEX_TABLE,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -7,13 +7,12 @@
 //!   OOM-02   : try_reserve avant chaque Vec::push
 //!   ARITH-02 : checked_add pour compteurs
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
 use super::snapshot::Snapshot;
 use super::snapshot_list::SNAPSHOT_LIST;
+use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
 
 // ─────────────────────────────────────────────────────────────
 // Options de suppression
@@ -25,14 +24,18 @@ pub struct DeleteOptions {
     /// Supprime récursivement les enfants avant le parent
     pub cascade: bool,
     /// Force la suppression même si le snapshot est protégé
-    pub force:   bool,
+    pub force: bool,
     /// Ne supprime pas si le snapshot est monté
     pub skip_mounted: bool,
 }
 
 impl Default for DeleteOptions {
     fn default() -> Self {
-        Self { cascade: false, force: false, skip_mounted: true }
+        Self {
+            cascade: false,
+            force: false,
+            skip_mounted: true,
+        }
     }
 }
 
@@ -77,12 +80,12 @@ pub enum DeleteDenyReason {
 impl From<DeleteDenyReason> for ExofsError {
     fn from(r: DeleteDenyReason) -> Self {
         match r {
-            DeleteDenyReason::Protected   => ExofsError::InvalidState,
+            DeleteDenyReason::Protected => ExofsError::InvalidState,
             DeleteDenyReason::HasChildren => ExofsError::InvalidState,
-            DeleteDenyReason::Mounted     => ExofsError::InvalidState,
-            DeleteDenyReason::Restoring   => ExofsError::InvalidState,
-            DeleteDenyReason::Streaming   => ExofsError::InvalidState,
-            DeleteDenyReason::NotFound    => ExofsError::NotFound,
+            DeleteDenyReason::Mounted => ExofsError::InvalidState,
+            DeleteDenyReason::Restoring => ExofsError::InvalidState,
+            DeleteDenyReason::Streaming => ExofsError::InvalidState,
+            DeleteDenyReason::NotFound => ExofsError::NotFound,
         }
     }
 }
@@ -138,7 +141,9 @@ impl SnapshotDeleter {
     /// OOM-02 : try_reserve avant push
     pub fn delete_batch(ids: &[SnapshotId], opts: DeleteOptions) -> ExofsResult<Vec<DeleteResult>> {
         let mut results: Vec<DeleteResult> = Vec::new();
-        results.try_reserve(ids.len()).map_err(|_| ExofsError::NoMemory)?;
+        results
+            .try_reserve(ids.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         for &id in ids {
             let r = Self::delete(id, opts)?;
             results.push(r);
@@ -179,7 +184,9 @@ impl SnapshotDeleter {
             // Récursion sur les petits-enfants
             Self::cascade_delete(child_id, opts, total_freed, cascade_ids, n_cascade)?;
 
-            let child = SNAPSHOT_LIST.get(child_id).map_err(|_| ExofsError::NotFound)?;
+            let child = SNAPSHOT_LIST
+                .get(child_id)
+                .map_err(|_| ExofsError::NotFound)?;
             // Vérification force pour les enfants aussi
             if child.is_protected() && !opts.force {
                 return Err(ExofsError::from(DeleteDenyReason::Protected));
@@ -188,7 +195,9 @@ impl SnapshotDeleter {
             *total_freed = total_freed.saturating_add(removed.total_bytes);
 
             // OOM-02 : try_reserve avant push
-            cascade_ids.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+            cascade_ids
+                .try_reserve(1)
+                .map_err(|_| ExofsError::NoMemory)?;
             cascade_ids.push(child_id);
             *n_cascade = n_cascade.checked_add(1).ok_or(ExofsError::Overflow)?;
         }
@@ -199,26 +208,48 @@ impl SnapshotDeleter {
 
     /// Retourne true si le snapshot est éligible à la suppression
     pub fn can_delete(id: SnapshotId, opts: DeleteOptions) -> bool {
-        let Ok(snap) = SNAPSHOT_LIST.get(id) else { return false };
-        if Self::check_preconditions(&snap, opts).is_err() { return false; }
+        let Ok(snap) = SNAPSHOT_LIST.get(id) else {
+            return false;
+        };
+        if Self::check_preconditions(&snap, opts).is_err() {
+            return false;
+        }
         // Sans cascade : vérifier l'absence d'enfants
         if !opts.cascade {
-            let Ok(children) = SNAPSHOT_LIST.children_of(id) else { return false };
-            if !children.is_empty() { return false; }
+            let Ok(children) = SNAPSHOT_LIST.children_of(id) else {
+                return false;
+            };
+            if !children.is_empty() {
+                return false;
+            }
         }
         true
     }
 
     /// Retourne la raison du rejet (ou None si suppression possible)
     pub fn deny_reason(id: SnapshotId, opts: DeleteOptions) -> Option<DeleteDenyReason> {
-        let Ok(snap) = SNAPSHOT_LIST.get(id) else { return Some(DeleteDenyReason::NotFound) };
-        if snap.is_protected() && !opts.force { return Some(DeleteDenyReason::Protected); }
-        if snap.is_mounted() && opts.skip_mounted { return Some(DeleteDenyReason::Mounted); }
-        if snap.is_restoring() { return Some(DeleteDenyReason::Restoring); }
-        if snap.is_streaming() { return Some(DeleteDenyReason::Streaming); }
+        let Ok(snap) = SNAPSHOT_LIST.get(id) else {
+            return Some(DeleteDenyReason::NotFound);
+        };
+        if snap.is_protected() && !opts.force {
+            return Some(DeleteDenyReason::Protected);
+        }
+        if snap.is_mounted() && opts.skip_mounted {
+            return Some(DeleteDenyReason::Mounted);
+        }
+        if snap.is_restoring() {
+            return Some(DeleteDenyReason::Restoring);
+        }
+        if snap.is_streaming() {
+            return Some(DeleteDenyReason::Streaming);
+        }
         if !opts.cascade {
-            let Ok(children) = SNAPSHOT_LIST.children_of(id) else { return Some(DeleteDenyReason::NotFound) };
-            if !children.is_empty() { return Some(DeleteDenyReason::HasChildren); }
+            let Ok(children) = SNAPSHOT_LIST.children_of(id) else {
+                return Some(DeleteDenyReason::NotFound);
+            };
+            if !children.is_empty() {
+                return Some(DeleteDenyReason::HasChildren);
+            }
         }
         None
     }
@@ -260,21 +291,27 @@ impl SnapshotDeleter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId};
     use super::super::snapshot::{flags, make_snapshot_name};
     use super::super::snapshot_list::SnapshotList;
+    use super::*;
+    use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId};
 
     fn push_snap(list: &SnapshotList, id: u64, bytes: u64, parent: Option<u64>, flags: u32) {
         use super::super::snapshot::Snapshot;
         list.register(Snapshot {
-            id: SnapshotId(id), epoch_id: EpochId(1),
+            id: SnapshotId(id),
+            epoch_id: EpochId(1),
             parent_id: parent.map(SnapshotId),
-            root_blob: BlobId([0u8;32]), created_at: 100 + id,
-            n_blobs: 0, total_bytes: bytes, flags,
-            blob_catalog_offset: DiskOffset(0), blob_catalog_size: 0,
+            root_blob: BlobId([0u8; 32]),
+            created_at: 100 + id,
+            n_blobs: 0,
+            total_bytes: bytes,
+            flags,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
             name: make_snapshot_name(b"t"),
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -290,13 +327,22 @@ mod tests {
     #[test]
     fn force_bypasses_protected() {
         let snap = super::super::snapshot::Snapshot {
-            id: SnapshotId(1), epoch_id: EpochId(1), parent_id: None,
-            root_blob: BlobId([0u8;32]), created_at: 0, n_blobs: 0,
-            total_bytes: 0, flags: flags::PROTECTED,
-            blob_catalog_offset: DiskOffset(0), blob_catalog_size: 0,
+            id: SnapshotId(1),
+            epoch_id: EpochId(1),
+            parent_id: None,
+            root_blob: BlobId([0u8; 32]),
+            created_at: 0,
+            n_blobs: 0,
+            total_bytes: 0,
+            flags: flags::PROTECTED,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
             name: make_snapshot_name(b"t"),
         };
-        let opts = DeleteOptions { force: true, ..Default::default() };
+        let opts = DeleteOptions {
+            force: true,
+            ..Default::default()
+        };
         assert!(SnapshotDeleter::check_preconditions(&snap, opts).is_ok());
     }
 

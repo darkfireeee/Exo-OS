@@ -6,18 +6,18 @@
 //!
 //! RECUR-01 / OOM-02 / ARITH-02 — ExofsError exclusivement.
 
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const MAX_LOCKS_PER_OBJECT: usize = 256;
-pub const MAX_OBJECTS_LOCKED:   usize = 1024;
-pub const LOCK_TABLE_MAGIC:     u32   = 0x4C_4B_54_42; // "LKTB"
-pub const LOCK_RANGE_MAX:       u64   = u64::MAX / 2;
+pub const MAX_OBJECTS_LOCKED: usize = 1024;
+pub const LOCK_TABLE_MAGIC: u32 = 0x4C_4B_54_42; // "LKTB"
+pub const LOCK_RANGE_MAX: u64 = u64::MAX / 2;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -27,8 +27,8 @@ pub const LOCK_RANGE_MAX:       u64   = u64::MAX / 2;
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LockKind {
-    Read   = 0,
-    Write  = 1,
+    Read = 0,
+    Write = 1,
     Unlock = 2,
 }
 
@@ -36,8 +36,8 @@ pub enum LockKind {
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FcntlCmd {
-    GetLk  = 0, // F_GETLK
-    SetLk  = 1, // F_SETLK
+    GetLk = 0,  // F_GETLK
+    SetLk = 1,  // F_SETLK
     SetLkW = 2, // F_SETLKW (non-bloquant dans ce kernel — traité comme SetLk)
 }
 
@@ -46,12 +46,12 @@ pub enum FcntlCmd {
 #[derive(Clone, Copy, Debug)]
 pub struct ByteRangeLock {
     pub object_id: u64,
-    pub pid:       u64,
-    pub tid:       u64,
-    pub start:     u64,
-    pub length:    u64,
-    pub kind:      LockKind,
-    pub _pad:      [u8; 7],
+    pub pid: u64,
+    pub tid: u64,
+    pub start: u64,
+    pub length: u64,
+    pub kind: LockKind,
+    pub _pad: [u8; 7],
 }
 
 const _: () = assert!(core::mem::size_of::<ByteRangeLock>() == 48);
@@ -62,11 +62,11 @@ const _: () = assert!(core::mem::size_of::<ByteRangeLock>() == 48);
 pub struct LockInfo {
     pub conflicting_pid: u64,
     pub conflicting_tid: u64,
-    pub start:           u64,
-    pub length:          u64,
-    pub kind:            u8,
-    pub blocked:         u8,
-    pub _pad:            [u8; 6],
+    pub start: u64,
+    pub length: u64,
+    pub kind: u8,
+    pub blocked: u8,
+    pub _pad: [u8; 6],
 }
 
 const _: () = assert!(core::mem::size_of::<LockInfo>() == 40);
@@ -77,7 +77,7 @@ const _: () = assert!(core::mem::size_of::<LockInfo>() == 40);
 
 struct ObjectLockSlot {
     object_id: u64,
-    locks:     Vec<ByteRangeLock>,
+    locks: Vec<ByteRangeLock>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -87,9 +87,9 @@ struct ObjectLockSlot {
 use core::cell::UnsafeCell;
 
 pub struct FcntlLockTable {
-    slots:    UnsafeCell<Vec<ObjectLockSlot>>,
+    slots: UnsafeCell<Vec<ObjectLockSlot>>,
     spinlock: AtomicU64,
-    count:    AtomicU64,
+    count: AtomicU64,
 }
 
 unsafe impl Sync for FcntlLockTable {}
@@ -100,14 +100,18 @@ pub static FCNTL_LOCK_TABLE: FcntlLockTable = FcntlLockTable::new_const();
 impl FcntlLockTable {
     pub const fn new_const() -> Self {
         Self {
-            slots:    UnsafeCell::new(Vec::new()),
+            slots: UnsafeCell::new(Vec::new()),
             spinlock: AtomicU64::new(0),
-            count:    AtomicU64::new(0),
+            count: AtomicU64::new(0),
         }
     }
 
     fn lock_acquire(&self) {
-        while self.spinlock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .spinlock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
@@ -122,7 +126,9 @@ impl FcntlLockTable {
     fn find_slot(slots: &[ObjectLockSlot], object_id: u64) -> Option<usize> {
         let mut i = 0usize;
         while i < slots.len() {
-            if slots[i].object_id == object_id { return Some(i); }
+            if slots[i].object_id == object_id {
+                return Some(i);
+            }
             i = i.wrapping_add(1);
         }
         None
@@ -145,7 +151,10 @@ impl FcntlLockTable {
         while i < existing.len() {
             let e = &existing[i];
             // Même pid/tid → pas de conflit interne.
-            if e.pid == candidate.pid && e.tid == candidate.tid { i = i.wrapping_add(1); continue; }
+            if e.pid == candidate.pid && e.tid == candidate.tid {
+                i = i.wrapping_add(1);
+                continue;
+            }
             let over = Self::overlaps(candidate.start, candidate.length, e.start, e.length);
             if over && (candidate.kind == LockKind::Write || e.kind == LockKind::Write) {
                 return Some(i);
@@ -160,9 +169,15 @@ impl FcntlLockTable {
     /// Acquiert un verrou byte-range (F_SETLK / F_SETLKW).
     /// OOM-02 : try_reserve. RECUR-01 : while.
     pub fn acquire(&self, lock: ByteRangeLock) -> ExofsResult<()> {
-        if lock.kind == LockKind::Unlock { return self.release(lock.object_id, lock.pid, lock.tid, lock.start, lock.length); }
-        if lock.length == 0 { return Err(ExofsError::InvalidArgument); }
-        if lock.start > LOCK_RANGE_MAX { return Err(ExofsError::InvalidArgument); }
+        if lock.kind == LockKind::Unlock {
+            return self.release(lock.object_id, lock.pid, lock.tid, lock.start, lock.length);
+        }
+        if lock.length == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if lock.start > LOCK_RANGE_MAX {
+            return Err(ExofsError::InvalidArgument);
+        }
 
         self.lock_acquire();
         let result = self.acquire_inner(lock);
@@ -181,15 +196,23 @@ impl FcntlLockTable {
             if slots[idx].locks.len() >= MAX_LOCKS_PER_OBJECT {
                 return Err(ExofsError::QuotaExceeded);
             }
-            slots[idx].locks.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+            slots[idx]
+                .locks
+                .try_reserve(1)
+                .map_err(|_| ExofsError::NoMemory)?;
             slots[idx].locks.push(lock);
         } else {
-            if slots.len() >= MAX_OBJECTS_LOCKED { return Err(ExofsError::QuotaExceeded); }
+            if slots.len() >= MAX_OBJECTS_LOCKED {
+                return Err(ExofsError::QuotaExceeded);
+            }
             slots.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             let mut v: Vec<ByteRangeLock> = Vec::new();
             v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             v.push(lock);
-            slots.push(ObjectLockSlot { object_id: lock.object_id, locks: v });
+            slots.push(ObjectLockSlot {
+                object_id: lock.object_id,
+                locks: v,
+            });
             self.count.fetch_add(1, Ordering::Relaxed);
         }
         Ok(())
@@ -197,7 +220,14 @@ impl FcntlLockTable {
 
     /// Libère les verrous d'un pid/tid sur une plage d'un objet.
     /// RECUR-01 : while.
-    pub fn release(&self, object_id: u64, pid: u64, tid: u64, start: u64, length: u64) -> ExofsResult<()> {
+    pub fn release(
+        &self,
+        object_id: u64,
+        pid: u64,
+        tid: u64,
+        start: u64,
+        length: u64,
+    ) -> ExofsResult<()> {
         self.lock_acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let slots = unsafe { &mut *self.slots.get() };
@@ -235,7 +265,11 @@ impl FcntlLockTable {
             let v = &mut slots[si].locks;
             let mut li = 0usize;
             while li < v.len() {
-                if v[li].pid == pid { v.remove(li); } else { li = li.wrapping_add(1); }
+                if v[li].pid == pid {
+                    v.remove(li);
+                } else {
+                    li = li.wrapping_add(1);
+                }
             }
             if slots[si].locks.is_empty() {
                 slots.remove(si);
@@ -259,11 +293,11 @@ impl FcntlLockTable {
                     Ok(Some(LockInfo {
                         conflicting_pid: c.pid,
                         conflicting_tid: c.tid,
-                        start:           c.start,
-                        length:          c.length,
-                        kind:            c.kind as u8,
-                        blocked:         1,
-                        _pad:            [0; 6],
+                        start: c.start,
+                        length: c.length,
+                        kind: c.kind as u8,
+                        blocked: 1,
+                        _pad: [0; 6],
                     }))
                 }
                 None => Ok(None),
@@ -299,7 +333,11 @@ impl FcntlLockTable {
         self.lock_acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let slots = unsafe { &*self.slots.get() };
-        let n = if let Some(idx) = Self::find_slot(slots, object_id) { slots[idx].locks.len() } else { 0 };
+        let n = if let Some(idx) = Self::find_slot(slots, object_id) {
+            slots[idx].locks.len()
+        } else {
+            0
+        };
         self.lock_release();
         n
     }
@@ -325,8 +363,23 @@ impl FcntlLockTable {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Construit un ByteRangeLock de manière ergonomique.
-pub fn make_lock(object_id: u64, pid: u64, tid: u64, start: u64, length: u64, kind: LockKind) -> ByteRangeLock {
-    ByteRangeLock { object_id, pid, tid, start, length, kind, _pad: [0; 7] }
+pub fn make_lock(
+    object_id: u64,
+    pid: u64,
+    tid: u64,
+    start: u64,
+    length: u64,
+    kind: LockKind,
+) -> ByteRangeLock {
+    ByteRangeLock {
+        object_id,
+        pid,
+        tid,
+        start,
+        length,
+        kind,
+        _pad: [0; 7],
+    }
 }
 
 /// Retourne vrai si deux plages se chevauchent.
@@ -343,15 +396,21 @@ pub fn union_range_size(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> u
     let a_end = a_start.saturating_add(a_len);
     let b_end = b_start.saturating_add(b_len);
     let start = a_start.min(b_start);
-    let end   = a_end.max(b_end);
+    let end = a_end.max(b_end);
     end.saturating_sub(start)
 }
 
 /// Valide les paramètres d'un verrou.
 pub fn validate_lock(lock: &ByteRangeLock) -> ExofsResult<()> {
-    if lock.length == 0 { return Err(ExofsError::InvalidArgument); }
-    if lock.start > LOCK_RANGE_MAX { return Err(ExofsError::InvalidArgument); }
-    if lock.start.checked_add(lock.length).is_none() { return Err(ExofsError::InvalidArgument); }
+    if lock.length == 0 {
+        return Err(ExofsError::InvalidArgument);
+    }
+    if lock.start > LOCK_RANGE_MAX {
+        return Err(ExofsError::InvalidArgument);
+    }
+    if lock.start.checked_add(lock.length).is_none() {
+        return Err(ExofsError::InvalidArgument);
+    }
     match lock.kind {
         LockKind::Read | LockKind::Write | LockKind::Unlock => Ok(()),
     }
@@ -365,17 +424,23 @@ pub fn validate_lock(lock: &ByteRangeLock) -> ExofsResult<()> {
 mod tests {
     use super::*;
 
-    fn tbl() -> FcntlLockTable { FcntlLockTable::new_const() }
+    fn tbl() -> FcntlLockTable {
+        FcntlLockTable::new_const()
+    }
 
     fn mk(oid: u64, pid: u64, start: u64, len: u64, k: LockKind) -> ByteRangeLock {
         make_lock(oid, pid, 0, start, len, k)
     }
 
     #[test]
-    fn test_lock_size() { assert_eq!(core::mem::size_of::<ByteRangeLock>(), 48); }
+    fn test_lock_size() {
+        assert_eq!(core::mem::size_of::<ByteRangeLock>(), 48);
+    }
 
     #[test]
-    fn test_lock_info_size() { assert_eq!(core::mem::size_of::<LockInfo>(), 40); }
+    fn test_lock_info_size() {
+        assert_eq!(core::mem::size_of::<LockInfo>(), 40);
+    }
 
     #[test]
     fn test_acquire_read_ok() {

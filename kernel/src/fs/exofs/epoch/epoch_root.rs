@@ -16,12 +16,12 @@ use core::mem::size_of;
 
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, EpochId, DiskOffset, ObjectId,
-    EPOCH_ROOT_MAGIC, EPOCH_MAX_OBJECTS, blake3_hash,
-};
 use crate::fs::exofs::core::flags::EpochFlags;
-use crate::fs::exofs::epoch::epoch_delta::{EpochDelta, DeltaOpKind};
+use crate::fs::exofs::core::{
+    blake3_hash, DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId, EPOCH_MAX_OBJECTS,
+    EPOCH_ROOT_MAGIC,
+};
+use crate::fs::exofs::epoch::epoch_delta::{DeltaOpKind, EpochDelta};
 
 // =============================================================================
 // EpochRootPageHeader — en-tête de chaque page chainée (on-disk)
@@ -35,21 +35,21 @@ use crate::fs::exofs::epoch::epoch_delta::{EpochDelta, DeltaOpKind};
 #[repr(C, packed)]
 pub struct EpochRootPageHeader {
     /// Magic EPOC : 0x45504F43.
-    pub magic:          u32,
+    pub magic: u32,
     /// Version du format de page.
-    pub version:        u16,
+    pub version: u16,
     /// Flags de l'epoch.
-    pub flags:          u16,
+    pub flags: u16,
     /// Identifiant de l'epoch.
-    pub epoch_id:       u64,
+    pub epoch_id: u64,
     /// Nombre d'entrées dans cette page.
-    pub entry_count:    u32,
+    pub entry_count: u32,
     /// Index de cette page dans la chaîne (0-based).
-    pub page_index:     u32,
+    pub page_index: u32,
     /// Offset de la page suivante (0 = fin de chaîne).
-    pub next_page:      u64,
+    pub next_page: u64,
     /// Checksum Blake3 de cette page (header + entries).
-    pub checksum:       [u8; 32],
+    pub checksum: [u8; 32],
 }
 
 const _: () = assert!(
@@ -67,13 +67,13 @@ const _: () = assert!(
 #[repr(C, packed)]
 pub struct EpochRootEntry {
     /// ObjectId de l'objet modifié.
-    pub object_id:    [u8; 32],
+    pub object_id: [u8; 32],
     /// Offset disque de sa nouvelle version.
-    pub disk_offset:  u64,
+    pub disk_offset: u64,
     /// Flags (bit 0 = supprimé, bit 1 = créé, bit 2 = modifié, bit 3 = meta).
-    pub entry_flags:  u8,
+    pub entry_flags: u8,
     /// _pad pour alignement.
-    pub _pad:         [u8; 7],
+    pub _pad: [u8; 7],
 }
 
 const _: () = assert!(
@@ -82,10 +82,10 @@ const _: () = assert!(
 );
 
 impl EpochRootEntry {
-    pub const FLAG_DELETED:  u8 = 1 << 0;
-    pub const FLAG_CREATED:  u8 = 1 << 1;
+    pub const FLAG_DELETED: u8 = 1 << 0;
+    pub const FLAG_CREATED: u8 = 1 << 1;
     pub const FLAG_MODIFIED: u8 = 1 << 2;
-    pub const FLAG_META:     u8 = 1 << 3;
+    pub const FLAG_META: u8 = 1 << 3;
 
     /// Retourne vrai si cette entrée est une suppression.
     #[inline]
@@ -114,10 +114,10 @@ impl EpochRootEntry {
     /// Construit une entrée depuis ses composants.
     pub fn new(object_id: ObjectId, disk_offset: DiskOffset, entry_flags: u8) -> Self {
         Self {
-            object_id:   object_id.0,
+            object_id: object_id.0,
             disk_offset: disk_offset.0,
             entry_flags,
-            _pad:        [0u8; 7],
+            _pad: [0u8; 7],
         }
     }
 }
@@ -125,10 +125,10 @@ impl EpochRootEntry {
 impl fmt::Debug for EpochRootPageHeader {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // SAFETY: magic est packed u32, lecture via copy.
-        let magic         = self.magic;
-        let epoch_id      = self.epoch_id;
-        let entry_count   = self.entry_count;
-        let page_index    = self.page_index;
+        let magic = self.magic;
+        let epoch_id = self.epoch_id;
+        let entry_count = self.entry_count;
+        let page_index = self.page_index;
         write!(
             f,
             "EpochRootPageHeader{{ magic={:#010x} epoch={} idx={} entries={} }}",
@@ -144,13 +144,13 @@ impl fmt::Debug for EpochRootPageHeader {
 /// EpochRoot en mémoire vive — accumule les entrées de l'epoch courant.
 pub struct EpochRootInMemory {
     /// Identifiant de l'epoch courant.
-    pub epoch_id:          EpochId,
+    pub epoch_id: EpochId,
     /// Flags de l'epoch.
-    pub flags:             EpochFlags,
+    pub flags: EpochFlags,
     /// Objets modifiés ou créés dans cet epoch.
-    pub modified_objects:  Vec<EpochRootEntry>,
+    pub modified_objects: Vec<EpochRootEntry>,
     /// Objets supprimés dans cet epoch (stockés séparément pour accès rapide GC).
-    pub deleted_objects:   Vec<ObjectId>,
+    pub deleted_objects: Vec<ObjectId>,
 }
 
 impl EpochRootInMemory {
@@ -158,9 +158,9 @@ impl EpochRootInMemory {
     pub fn new(epoch_id: EpochId) -> Self {
         Self {
             epoch_id,
-            flags:            EpochFlags::default(),
+            flags: EpochFlags::default(),
             modified_objects: Vec::new(),
-            deleted_objects:  Vec::new(),
+            deleted_objects: Vec::new(),
         }
     }
 
@@ -172,7 +172,7 @@ impl EpochRootInMemory {
     /// RÈGLE EPOCH-05 : limit EPOCH_MAX_OBJECTS.
     pub fn add_modified(
         &mut self,
-        object_id:   ObjectId,
+        object_id: ObjectId,
         disk_offset: DiskOffset,
         entry_flags: u8,
     ) -> ExofsResult<()> {
@@ -182,7 +182,8 @@ impl EpochRootInMemory {
         self.modified_objects
             .try_reserve(1)
             .map_err(|_| ExofsError::NoMemory)?;
-        self.modified_objects.push(EpochRootEntry::new(object_id, disk_offset, entry_flags));
+        self.modified_objects
+            .push(EpochRootEntry::new(object_id, disk_offset, entry_flags));
         Ok(())
     }
 
@@ -206,7 +207,9 @@ impl EpochRootInMemory {
     /// RÈGLE RECUR-01 : boucle itérative.
     pub fn add_from_delta(&mut self, delta: &EpochDelta) -> ExofsResult<()> {
         let additions = delta.entries.len();
-        if self.total_entries().checked_add(additions)
+        if self
+            .total_entries()
+            .checked_add(additions)
             .map(|t| t > EPOCH_MAX_OBJECTS)
             .unwrap_or(true)
         {
@@ -300,18 +303,24 @@ impl EpochRootInMemory {
         let mut modified = 0u32;
         let mut meta = 0u32;
         for e in &self.modified_objects {
-            if e.is_created()  { created  += 1; }
-            if e.is_modified() { modified += 1; }
-            if e.is_meta()     { meta     += 1; }
+            if e.is_created() {
+                created += 1;
+            }
+            if e.is_modified() {
+                modified += 1;
+            }
+            if e.is_meta() {
+                meta += 1;
+            }
         }
         EpochRootStats {
-            epoch_id:      self.epoch_id,
+            epoch_id: self.epoch_id,
             modified_count: self.modified_objects.len() as u32,
-            deleted_count:  self.deleted_objects.len() as u32,
-            created_count:  created,
-            data_edits:     modified,
-            meta_edits:     meta,
-            fill_pct:       (self.total_entries() as u64)
+            deleted_count: self.deleted_objects.len() as u32,
+            created_count: created,
+            data_edits: modified,
+            meta_edits: meta,
+            fill_pct: (self.total_entries() as u64)
                 .saturating_mul(100)
                 .checked_div(EPOCH_MAX_OBJECTS as u64)
                 .unwrap_or(0),
@@ -326,13 +335,13 @@ impl EpochRootInMemory {
 /// Statistiques d'un EpochRoot in-memory.
 #[derive(Copy, Clone, Debug)]
 pub struct EpochRootStats {
-    pub epoch_id:       EpochId,
+    pub epoch_id: EpochId,
     pub modified_count: u32,
-    pub deleted_count:  u32,
-    pub created_count:  u32,
-    pub data_edits:     u32,
-    pub meta_edits:     u32,
-    pub fill_pct:       u64,
+    pub deleted_count: u32,
+    pub created_count: u32,
+    pub data_edits: u32,
+    pub meta_edits: u32,
+    pub fill_pct: u64,
 }
 
 impl fmt::Display for EpochRootStats {
@@ -377,9 +386,9 @@ impl EpochRootBuilder {
     /// Ajoute un objet modifié.
     pub fn add_modified(
         mut self,
-        oid:         ObjectId,
+        oid: ObjectId,
         disk_offset: DiskOffset,
-        flags:       u8,
+        flags: u8,
     ) -> ExofsResult<Self> {
         self.inner.add_modified(oid, disk_offset, flags)?;
         Ok(self)
@@ -423,7 +432,7 @@ pub fn verify_epoch_root_page(page_data: &[u8]) -> ExofsResult<()> {
     // RÈGLE V-13 : checksum ensuite.
     let body_len = page_data.len().saturating_sub(32);
     let expected = blake3_hash(&page_data[..body_len]);
-    let stored   = &page_data[body_len..];
+    let stored = &page_data[body_len..];
     if stored.len() != 32 {
         return Err(ExofsError::CorruptedStructure);
     }
@@ -446,9 +455,8 @@ pub fn read_page_header(page_data: &[u8]) -> ExofsResult<EpochRootPageHeader> {
         return Err(ExofsError::CorruptedStructure);
     }
     // SAFETY: EpochRootPageHeader est #[repr(C, packed)], Copy, plain types.
-    let hdr: EpochRootPageHeader = unsafe {
-        core::ptr::read_unaligned(page_data.as_ptr() as *const EpochRootPageHeader)
-    };
+    let hdr: EpochRootPageHeader =
+        unsafe { core::ptr::read_unaligned(page_data.as_ptr() as *const EpochRootPageHeader) };
     Ok(hdr)
 }
 
@@ -460,14 +468,16 @@ pub fn read_page_entries(page_data: &[u8]) -> ExofsResult<Vec<EpochRootEntry>> {
     verify_epoch_root_page(page_data)?;
     let hdr = read_page_header(page_data)?;
     let entry_count = hdr.entry_count as usize;
-    let entry_size  = size_of::<EpochRootEntry>();
-    let hdr_size    = size_of::<EpochRootPageHeader>();
+    let entry_size = size_of::<EpochRootEntry>();
+    let hdr_size = size_of::<EpochRootPageHeader>();
     let max_entries = page_data.len().saturating_sub(hdr_size + 32) / entry_size;
     if entry_count > max_entries {
         return Err(ExofsError::CorruptedStructure);
     }
     let mut result: Vec<EpochRootEntry> = Vec::new();
-    result.try_reserve(entry_count).map_err(|_| ExofsError::NoMemory)?;
+    result
+        .try_reserve(entry_count)
+        .map_err(|_| ExofsError::NoMemory)?;
     let mut offset = hdr_size;
     for _ in 0..entry_count {
         // SAFETY: EpochRootEntry est #[repr(C, packed)], taille 48, Copy.
@@ -483,4 +493,3 @@ pub fn read_page_entries(page_data: &[u8]) -> ExofsResult<Vec<EpochRootEntry>> {
 // ─────────────────────────────────────────────────────────────────────────────
 // EpochRootPageHeader — 80 octets, tête de chaque page chainée
 // ─────────────────────────────────────────────────────────────────────────────
-

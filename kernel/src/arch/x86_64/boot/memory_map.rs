@@ -19,19 +19,16 @@
 //   5. KernelAddressSpace::init()      — PML4 kernel
 //   6. memory_iface::init_memory_integration() — IPI TLB sender
 
-
 use crate::arch::x86_64::boot::multiboot2::{MmapEntry, Multiboot2Info, MMAP_AVAILABLE};
 use crate::arch::x86_64::boot::uefi::UefiMemoryMap;
-use crate::memory::core::{PhysAddr, Frame, PAGE_SIZE};
-use crate::memory::physical::allocator::{
-    alloc_page, free_page,
-    init_phase1_bitmap, init_phase2_free_region,
-    init_phase2b_buddy_zone, init_phase2b_buddy_free_region,
-    init_phase3_slab_slub, init_phase4_numa,
-    register_slab_page_provider, SlabPageProvider, BOOTSTRAP_BITMAP,
-};
-use crate::memory::core::AllocError;
 use crate::exophoenix::ssr;
+use crate::memory::core::AllocError;
+use crate::memory::core::{Frame, PhysAddr, PAGE_SIZE};
+use crate::memory::physical::allocator::{
+    alloc_page, free_page, init_phase1_bitmap, init_phase2_free_region,
+    init_phase2b_buddy_free_region, init_phase2b_buddy_zone, init_phase3_slab_slub,
+    init_phase4_numa, register_slab_page_provider, SlabPageProvider, BOOTSTRAP_BITMAP,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BITMAP STATIQUE POUR LE BUDDY ALLOCATOR (zone DMA32 — <4 GiB)
@@ -143,14 +140,16 @@ pub enum MemoryRegionType {
 /// Région de la carte mémoire physique.
 #[derive(Debug, Clone, Copy)]
 pub struct MemoryRegion {
-    pub base:        u64,
-    pub size:        u64,
+    pub base: u64,
+    pub size: u64,
     pub region_type: MemoryRegionType,
 }
 
 impl MemoryRegion {
     #[inline]
-    pub fn end(&self) -> u64 { self.base + self.size }
+    pub fn end(&self) -> u64 {
+        self.base + self.size
+    }
 
     #[inline]
     pub fn is_usable(&self) -> bool {
@@ -159,10 +158,11 @@ impl MemoryRegion {
 }
 
 /// Carte mémoire statique (construite au boot, immutable ensuite).
-pub static mut MEMORY_MAP: [MemoryRegion; MAX_MEMORY_REGIONS] = [
-    MemoryRegion { base: 0, size: 0, region_type: MemoryRegionType::Reserved };
-    MAX_MEMORY_REGIONS
-];
+pub static mut MEMORY_MAP: [MemoryRegion; MAX_MEMORY_REGIONS] = [MemoryRegion {
+    base: 0,
+    size: 0,
+    region_type: MemoryRegionType::Reserved,
+}; MAX_MEMORY_REGIONS];
 
 /// Nombre de régions valides dans `MEMORY_MAP`.
 pub static mut MEMORY_REGION_COUNT: usize = 0;
@@ -181,37 +181,41 @@ pub static mut MEMORY_REGION_COUNT: usize = 0;
 /// - EmergencyPool doit avoir été initialisé avant cet appel (RÈGLE MEM-02).
 pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
     debug_assert!(info.mmap_count > 0, "Multiboot2 : mmap vide");
-    debug_assert!(info.mmap_ptr  != 0, "Multiboot2 : mmap_ptr nul");
+    debug_assert!(info.mmap_ptr != 0, "Multiboot2 : mmap_ptr nul");
 
     // ── Phase 1 : détecter la plage physique totale ───────────────────────────
 
     // SAFETY: mmap_ptr et mmap_count validés par le parseur multiboot2.
-    let entries = core::slice::from_raw_parts(
-        info.mmap_ptr as *const MmapEntry,
-        info.mmap_count as usize,
-    );
+    let entries =
+        core::slice::from_raw_parts(info.mmap_ptr as *const MmapEntry, info.mmap_count as usize);
 
     let mut phys_start = u64::MAX;
-    let mut phys_end   = 0u64;
+    let mut phys_end = 0u64;
     let mut region_count = 0usize;
 
     for entry in entries {
         let base = entry.base_addr;
-        let end  = base + entry.length;
+        let end = base + entry.length;
 
         // Filtrer les régions sous 1 MiB (legacy BIOS / ISA)
-        if end <= PHYS_MEMORY_START { continue; }
+        if end <= PHYS_MEMORY_START {
+            continue;
+        }
         let base_adj = base.max(PHYS_MEMORY_START);
 
-        if base_adj < phys_start { phys_start = base_adj; }
-        if end > phys_end        { phys_end   = end; }
+        if base_adj < phys_start {
+            phys_start = base_adj;
+        }
+        if end > phys_end {
+            phys_end = end;
+        }
 
         // Remplir MEMORY_MAP
         if region_count < MAX_MEMORY_REGIONS {
             let rtype = e820_type_to_region_type(entry.entry_type);
             MEMORY_MAP[region_count] = MemoryRegion {
-                base:        base_adj,
-                size:        end.saturating_sub(base_adj),
+                base: base_adj,
+                size: end.saturating_sub(base_adj),
                 region_type: rtype,
             };
             region_count += 1;
@@ -227,22 +231,28 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
 
     // Aligner sur des pages
     let phys_start_pa = PhysAddr::new(align_up(phys_start, PAGE_SIZE as u64));
-    let phys_end_pa   = PhysAddr::new(align_down(phys_end, PAGE_SIZE as u64));
+    let phys_end_pa = PhysAddr::new(align_down(phys_end, PAGE_SIZE as u64));
 
     // ── Phase 1 : initialiser le bitmap allocateur ────────────────────────────
     init_phase1_bitmap(phys_start_pa, phys_end_pa);
 
     // ── Phase 2 : libérer toutes les régions utilisables ─────────────────────
     for entry in entries {
-        if entry.entry_type != MMAP_AVAILABLE { continue; }
+        if entry.entry_type != MMAP_AVAILABLE {
+            continue;
+        }
 
         let base = entry.base_addr;
-        let end  = base + entry.length;
-        if end <= PHYS_MEMORY_START { continue; }
+        let end = base + entry.length;
+        if end <= PHYS_MEMORY_START {
+            continue;
+        }
 
         let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
-        let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
-        if base_adj >= end_adj { continue; }
+        let end_adj = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
+        if base_adj >= end_adj {
+            continue;
+        }
 
         for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
             init_phase2_free_region(PhysAddr::new(s), PhysAddr::new(e));
@@ -255,22 +265,29 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
     // SAFETY: Single-CPU. BUDDY_DMA32_BITMAP est 'static (BSS, durée de vie infinie).
     //         init_phase2b_buddy_zone initialise la zone puis mark_initialized().
     init_phase2b_buddy_zone(
-        phys_start_pa, phys_end_pa,
+        phys_start_pa,
+        phys_end_pa,
         // SAFETY: mutable static dans BSS, durée de vie 'static ≥ celle du buddy.
         BUDDY_DMA32_BITMAP.as_mut_ptr(),
         BUDDY_DMA32_BITMAP.len(),
     );
     // Peupler le buddy avec les mêmes régions libres que le bitmap.
     for entry in entries {
-        if entry.entry_type != MMAP_AVAILABLE { continue; }
+        if entry.entry_type != MMAP_AVAILABLE {
+            continue;
+        }
 
         let base = entry.base_addr;
-        let end  = base + entry.length;
-        if end <= PHYS_MEMORY_START { continue; }
+        let end = base + entry.length;
+        if end <= PHYS_MEMORY_START {
+            continue;
+        }
 
         let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
-        let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
-        if base_adj >= end_adj { continue; }
+        let end_adj = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
+        if base_adj >= end_adj {
+            continue;
+        }
 
         for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
             init_phase2b_buddy_free_region(PhysAddr::new(s), PhysAddr::new(e));
@@ -282,9 +299,7 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
     //         Il utilise le buddy dès qu'il est prêt, et ne retombe
     //         sur le bitmap bootstrap qu'avant l'initialisation du buddy.
     //         Doit être appelé AVANT init_phase3_slab_slub().
-    register_slab_page_provider(
-        &KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider
-    );
+    register_slab_page_provider(&KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider);
     // ── Phase 3 : Slab / SLUB ─────────────────────────────────────────────────
     init_phase3_slab_slub();
 
@@ -300,26 +315,32 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
 /// # Safety
 /// Mêmes contraintes que `init_memory_subsystem_multiboot2`.
 pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
-    let mut phys_start   = u64::MAX;
-    let mut phys_end     = 0u64;
+    let mut phys_start = u64::MAX;
+    let mut phys_end = 0u64;
     let mut region_count = 0usize;
 
     // ── Première passe : détecter les bornes et remplir MEMORY_MAP ────────────
     for desc in uefi_map.iter() {
         let base = desc.physical_start;
-        let end  = base + desc.number_of_pages * PAGE_SIZE as u64;
+        let end = base + desc.number_of_pages * PAGE_SIZE as u64;
 
-        if end <= PHYS_MEMORY_START { continue; }
+        if end <= PHYS_MEMORY_START {
+            continue;
+        }
         let base_adj = base.max(PHYS_MEMORY_START);
 
-        if base_adj < phys_start { phys_start = base_adj; }
-        if end > phys_end        { phys_end   = end; }
+        if base_adj < phys_start {
+            phys_start = base_adj;
+        }
+        if end > phys_end {
+            phys_end = end;
+        }
 
         if region_count < MAX_MEMORY_REGIONS {
             let rtype = uefi_type_to_region_type(desc.mem_type);
             MEMORY_MAP[region_count] = MemoryRegion {
-                base:        base_adj,
-                size:        end.saturating_sub(base_adj),
+                base: base_adj,
+                size: end.saturating_sub(base_adj),
                 region_type: rtype,
             };
             region_count += 1;
@@ -333,22 +354,28 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
     }
 
     let phys_start_pa = PhysAddr::new(align_up(phys_start, PAGE_SIZE as u64));
-    let phys_end_pa   = PhysAddr::new(align_down(phys_end, PAGE_SIZE as u64));
+    let phys_end_pa = PhysAddr::new(align_down(phys_end, PAGE_SIZE as u64));
 
     // ── Phase 1 : bitmap allocateur ──────────────────────────────────────────
     init_phase1_bitmap(phys_start_pa, phys_end_pa);
 
     // ── Phase 2 : libérer les régions conventionnelles ────────────────────────
     for desc in uefi_map.iter() {
-        if !desc.is_usable() { continue; }
+        if !desc.is_usable() {
+            continue;
+        }
 
         let base = desc.physical_start;
-        let end  = base + desc.number_of_pages * PAGE_SIZE as u64;
-        if end <= PHYS_MEMORY_START { continue; }
+        let end = base + desc.number_of_pages * PAGE_SIZE as u64;
+        if end <= PHYS_MEMORY_START {
+            continue;
+        }
 
         let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
-        let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
-        if base_adj >= end_adj { continue; }
+        let end_adj = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
+        if base_adj >= end_adj {
+            continue;
+        }
 
         for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
             init_phase2_free_region(PhysAddr::new(s), PhysAddr::new(e));
@@ -356,26 +383,31 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
     }
     // ── Phase 2b : Buddy allocator (zone DMA32, < 4 GiB) ─────────────────────
     init_phase2b_buddy_zone(
-        phys_start_pa, phys_end_pa,
+        phys_start_pa,
+        phys_end_pa,
         BUDDY_DMA32_BITMAP.as_mut_ptr(),
         BUDDY_DMA32_BITMAP.len(),
     );
     for desc in uefi_map.iter() {
-        if !desc.is_usable() { continue; }
+        if !desc.is_usable() {
+            continue;
+        }
         let base = desc.physical_start;
-        let end  = base + desc.number_of_pages * PAGE_SIZE as u64;
-        if end <= PHYS_MEMORY_START { continue; }
+        let end = base + desc.number_of_pages * PAGE_SIZE as u64;
+        if end <= PHYS_MEMORY_START {
+            continue;
+        }
         let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
-        let end_adj  = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
-        if base_adj >= end_adj { continue; }
+        let end_adj = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
+        if base_adj >= end_adj {
+            continue;
+        }
         for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
             init_phase2b_buddy_free_region(PhysAddr::new(s), PhysAddr::new(e));
         });
     }
     // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ─────────
-    register_slab_page_provider(
-        &KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider
-    );
+    register_slab_page_provider(&KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider);
     // ── Phase 3 & 4 ──────────────────────────────────────────────────────────
     init_phase3_slab_slub();
     init_phase4_numa(0b0000_0001);
@@ -403,11 +435,11 @@ fn e820_type_to_region_type(e820_type: u32) -> MemoryRegionType {
 fn uefi_type_to_region_type(uefi_type: u32) -> MemoryRegionType {
     // Types UEFI Memory (EFI_MEMORY_TYPE)
     match uefi_type {
-        7  => MemoryRegionType::Usable,           // EfiConventionalMemory
-        9  => MemoryRegionType::AcpiReclaimable,  // EfiACPIReclaimMemory
-        10 => MemoryRegionType::AcpiNvs,          // EfiACPIMemoryNVS
-        11 => MemoryRegionType::Bad,              // EfiMemoryMappedIO → reserved
-        _  => MemoryRegionType::Reserved,
+        7 => MemoryRegionType::Usable,          // EfiConventionalMemory
+        9 => MemoryRegionType::AcpiReclaimable, // EfiACPIReclaimMemory
+        10 => MemoryRegionType::AcpiNvs,        // EfiACPIMemoryNVS
+        11 => MemoryRegionType::Bad,            // EfiMemoryMappedIO → reserved
+        _ => MemoryRegionType::Reserved,
     }
 }
 
@@ -429,11 +461,7 @@ const fn align_down(n: u64, align: u64) -> u64 {
 /// Règle doc: cette exclusion doit s'appliquer AVANT toute insertion dans
 /// les allocateurs bitmap/buddy pour éviter l'allocation accidentelle de la SSR.
 #[inline]
-fn for_each_usable_subrange_excluding_ssr(
-    start: u64,
-    end: u64,
-    mut f: impl FnMut(u64, u64),
-) {
+fn for_each_usable_subrange_excluding_ssr(start: u64, end: u64, mut f: impl FnMut(u64, u64)) {
     if start >= end {
         return;
     }
@@ -476,10 +504,10 @@ pub const EXOBOOT_MAGIC_U32: u32 = 0x4F4F_5845;
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct ExoMemRegion {
-    base:   u64,  // octet  0
-    length: u64,  // octet  8
-    kind:   u32,  // octet 16 (MemoryKind repr u32)
-    _pad:   u32,  // octet 20 (padding → taille totale 24)
+    base: u64,   // octet  0
+    length: u64, // octet  8
+    kind: u32,   // octet 16 (MemoryKind repr u32)
+    _pad: u32,   // octet 20 (padding → taille totale 24)
 }
 
 /// En-tête minimal du BootInfo exo-boot.
@@ -487,36 +515,36 @@ struct ExoMemRegion {
 /// Seuls les champs utilisés sont modélisés ; les champs suivants sont ignorés.
 #[repr(C, align(4096))]
 struct ExoBootInfo {
-    magic:               u64,             // offset   0
-    version:             u32,             // offset   8
-    memory_region_count: u32,             // offset  12
-    memory_regions:      [ExoMemRegion; 256], // offset 16, 256 × 24 = 6144 bytes
+    magic: u64,                          // offset   0
+    version: u32,                        // offset   8
+    memory_region_count: u32,            // offset  12
+    memory_regions: [ExoMemRegion; 256], // offset 16, 256 × 24 = 6144 bytes
     // FramebufferInfo (40 bytes, offset 6160)
-    fb_phys_addr:        u64,             // offset 6160
-    fb_width:            u32,             // offset 6168
-    fb_height:           u32,             // offset 6172
-    fb_stride:           u32,             // offset 6176
-    fb_bpp:              u32,             // offset 6180
-    fb_format:           u32,             // offset 6184 (PixelFormat repr u32)
-    _fb_pad:             u32,             // offset 6188 (align u64)
-    fb_size_bytes:       u64,             // offset 6192
-    acpi_rsdp:           u64,             // offset 6200
+    fb_phys_addr: u64,  // offset 6160
+    fb_width: u32,      // offset 6168
+    fb_height: u32,     // offset 6172
+    fb_stride: u32,     // offset 6176
+    fb_bpp: u32,        // offset 6180
+    fb_format: u32,     // offset 6184 (PixelFormat repr u32)
+    _fb_pad: u32,       // offset 6188 (align u64)
+    fb_size_bytes: u64, // offset 6192
+    acpi_rsdp: u64,     // offset 6200
 }
 
 /// Convertit `MemoryKind` exo-boot (repr u32) en `MemoryRegionType` kernel.
 #[inline]
 fn exo_kind_to_region_type(kind: u32) -> MemoryRegionType {
     match kind {
-        1       => MemoryRegionType::Usable,          // Usable
-        2 | 3   => MemoryRegionType::KernelImage,     // KernelCode / KernelData
-        4       => MemoryRegionType::Usable,          // BootloaderReclaimable → au kernel
-        5       => MemoryRegionType::Reserved,        // PageTables (jusqu'à re-init kernel)
-        6       => MemoryRegionType::AcpiReclaimable, // AcpiReclaimable
-        7       => MemoryRegionType::AcpiNvs,         // AcpiNvs
-        8       => MemoryRegionType::Reserved,        // Reserved
-        9       => MemoryRegionType::Reserved,        // Framebuffer
-        10      => MemoryRegionType::Reserved,        // Mmio
-        _       => MemoryRegionType::Reserved,        // Unknown / autres
+        1 => MemoryRegionType::Usable,          // Usable
+        2 | 3 => MemoryRegionType::KernelImage, // KernelCode / KernelData
+        4 => MemoryRegionType::Usable,          // BootloaderReclaimable → au kernel
+        5 => MemoryRegionType::Reserved,        // PageTables (jusqu'à re-init kernel)
+        6 => MemoryRegionType::AcpiReclaimable, // AcpiReclaimable
+        7 => MemoryRegionType::AcpiNvs,         // AcpiNvs
+        8 => MemoryRegionType::Reserved,        // Reserved
+        9 => MemoryRegionType::Reserved,        // Framebuffer
+        10 => MemoryRegionType::Reserved,       // Mmio
+        _ => MemoryRegionType::Reserved,        // Unknown / autres
     }
 }
 
@@ -540,29 +568,37 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
         crate::arch::x86_64::halt_cpu();
     }
 
-    let count         = (bi.memory_region_count as usize).min(MAX_MEMORY_REGIONS);
+    let count = (bi.memory_region_count as usize).min(MAX_MEMORY_REGIONS);
     let mut phys_start = u64::MAX;
-    let mut phys_end   = 0u64;
+    let mut phys_end = 0u64;
     let mut region_count = 0usize;
 
     // ── Première passe : bornes physiques + remplissage MEMORY_MAP ────────────
     for i in 0..count {
         let r = &bi.memory_regions[i];
-        if r.length == 0 { continue; }
+        if r.length == 0 {
+            continue;
+        }
 
         let base = r.base;
-        let end  = base + r.length;
-        if end <= PHYS_MEMORY_START { continue; }
+        let end = base + r.length;
+        if end <= PHYS_MEMORY_START {
+            continue;
+        }
 
         let base_adj = base.max(PHYS_MEMORY_START);
 
-        if base_adj < phys_start { phys_start = base_adj; }
-        if end       > phys_end  { phys_end   = end; }
+        if base_adj < phys_start {
+            phys_start = base_adj;
+        }
+        if end > phys_end {
+            phys_end = end;
+        }
 
         if region_count < MAX_MEMORY_REGIONS {
             MEMORY_MAP[region_count] = MemoryRegion {
-                base:        base_adj,
-                size:        end.saturating_sub(base_adj),
+                base: base_adj,
+                size: end.saturating_sub(base_adj),
                 region_type: exo_kind_to_region_type(r.kind),
             };
             region_count += 1;
@@ -576,7 +612,7 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
     }
 
     let phys_start_pa = PhysAddr::new(align_up(phys_start, PAGE_SIZE as u64));
-    let phys_end_pa   = PhysAddr::new(align_down(phys_end,  PAGE_SIZE as u64));
+    let phys_end_pa = PhysAddr::new(align_down(phys_end, PAGE_SIZE as u64));
 
     // ── Phase 1 : bitmap allocateur ──────────────────────────────────────────
     init_phase1_bitmap(phys_start_pa, phys_end_pa);
@@ -584,7 +620,9 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
     // ── Phase 2 : libérer les régions utilisables ─────────────────────────────
     for i in 0..count {
         let r = &bi.memory_regions[i];
-        if r.length == 0 { continue; }
+        if r.length == 0 {
+            continue;
+        }
 
         match exo_kind_to_region_type(r.kind) {
             MemoryRegionType::Usable | MemoryRegionType::AcpiReclaimable => {}
@@ -592,12 +630,16 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
         }
 
         let base = r.base;
-        let end  = base + r.length;
-        if end <= PHYS_MEMORY_START { continue; }
+        let end = base + r.length;
+        if end <= PHYS_MEMORY_START {
+            continue;
+        }
 
         let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
-        let end_adj  = align_down(end.min(PHYS_MEMORY_MAX),  PAGE_SIZE as u64);
-        if base_adj >= end_adj { continue; }
+        let end_adj = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
+        if base_adj >= end_adj {
+            continue;
+        }
 
         for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
             init_phase2_free_region(PhysAddr::new(s), PhysAddr::new(e));
@@ -606,23 +648,30 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
 
     // ── Phase 2b : Buddy allocator (zone DMA32, < 4 GiB) ─────────────────────
     init_phase2b_buddy_zone(
-        phys_start_pa, phys_end_pa,
+        phys_start_pa,
+        phys_end_pa,
         BUDDY_DMA32_BITMAP.as_mut_ptr(),
         BUDDY_DMA32_BITMAP.len(),
     );
     for i in 0..count {
         let r = &bi.memory_regions[i];
-        if r.length == 0 { continue; }
+        if r.length == 0 {
+            continue;
+        }
         match exo_kind_to_region_type(r.kind) {
             MemoryRegionType::Usable | MemoryRegionType::AcpiReclaimable => {}
             _ => continue,
         }
         let base = r.base;
-        let end  = base + r.length;
-        if end <= PHYS_MEMORY_START { continue; }
+        let end = base + r.length;
+        if end <= PHYS_MEMORY_START {
+            continue;
+        }
         let base_adj = align_up(base.max(kernel_physical_end()), PAGE_SIZE as u64);
-        let end_adj  = align_down(end.min(PHYS_MEMORY_MAX),  PAGE_SIZE as u64);
-        if base_adj >= end_adj { continue; }
+        let end_adj = align_down(end.min(PHYS_MEMORY_MAX), PAGE_SIZE as u64);
+        if base_adj >= end_adj {
+            continue;
+        }
         for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
             init_phase2b_buddy_free_region(PhysAddr::new(s), PhysAddr::new(e));
         });
@@ -632,9 +681,7 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
     // SAFETY: le fournisseur est 'static et Sync.
     //         Il utilise le buddy dès qu'il est prêt, et ne retombe
     //         sur le bitmap bootstrap qu'avant l'initialisation du buddy.
-    register_slab_page_provider(
-        &KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider
-    );
+    register_slab_page_provider(&KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider);
 
     // ── Phase 3 : Slab / SLUB ─────────────────────────────────────────────────
     init_phase3_slab_slub();

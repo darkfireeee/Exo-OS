@@ -28,7 +28,7 @@ pub struct FaultContext {
     /// Adresse virtuelle fautive (contenu de CR2).
     pub fault_addr: VirtAddr,
     /// Cause du fault.
-    pub cause:      FaultCause,
+    pub cause: FaultCause,
     /// Fault depuis le mode kernel (Ring 0) ?
     pub from_kernel: bool,
     /// Pointeur vers la VMA de l'espace utilisateur (lookup déjà fait, facultatif).
@@ -36,11 +36,7 @@ pub struct FaultContext {
 }
 
 impl FaultContext {
-    pub fn new(
-        fault_addr: VirtAddr,
-        cause:      FaultCause,
-        from_kernel: bool,
-    ) -> Self {
+    pub fn new(fault_addr: VirtAddr, cause: FaultCause, from_kernel: bool) -> Self {
         FaultContext {
             fault_addr,
             cause,
@@ -56,10 +52,16 @@ impl FaultContext {
 
     /// Retourne le VmaDescriptor si disponible dans le contexte.
     pub fn find_vma(&self, addr: VirtAddr) -> Option<&VmaDescriptor> {
-        if self.vma_ptr.is_null() { return None; }
+        if self.vma_ptr.is_null() {
+            return None;
+        }
         // SAFETY: vma_ptr est valide si fourni par l'address space.
         let vma = unsafe { &*self.vma_ptr };
-        if vma.contains(addr) { Some(vma) } else { None }
+        if vma.contains(addr) {
+            Some(vma)
+        } else {
+            None
+        }
     }
 }
 
@@ -84,5 +86,5 @@ impl FaultResult {
     }
 }
 
-pub use handler::{handle_page_fault, FAULT_STATS, FaultAllocator};
+pub use handler::{handle_page_fault, FaultAllocator, FAULT_STATS};
 pub use swap_in::SwapInProvider;

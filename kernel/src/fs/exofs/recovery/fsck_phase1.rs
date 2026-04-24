@@ -10,19 +10,18 @@
 //! - **OOM-02** : `try_reserve(1)` avant tout `Vec::push`.
 //! - **ARITH-02** : `checked_add` sur les offsets et compteurs.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::blob_id::blake3_hash;
 use super::boot_recovery::BlockDevice;
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
+use crate::fs::exofs::core::blob_id::blake3_hash;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
 /// Magic du superbloc ExoFS : "EXOFSBLK".
-pub const SUPERBLOCK_MAGIC: u64  = 0x4B4C42534F465845; // "EXOFSBLK"
+pub const SUPERBLOCK_MAGIC: u64 = 0x4B4C42534F465845; // "EXOFSBLK"
 
 /// Version courante du superbloc.
 pub const SUPERBLOCK_VERSION: u8 = 1;
@@ -68,24 +67,24 @@ pub const BLOB_REGION_MAGIC: u64 = 0x47455242_4C424F45; // "EXOBLREG"
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct SuperblockDisk {
-    pub magic:              u64,
-    pub version:            u8,
-    pub flags:              u8,
-    pub _pad0:              u16,
-    pub block_size:         u32,
-    pub total_blocks:       u64,
-    pub free_blocks:        u64,
-    pub epoch_id:           u64,
-    pub n_blobs:            u64,
-    pub alloc_lba:          u64,
-    pub journal_lba:        u64,
-    pub blob_region_start:  u64,
-    pub blob_region_end:    u64,
-    pub snapshot_count:     u32,
-    pub _pad1:              u32,
-    pub uuid:               [u8; 16],
-    pub _reserved:          [u8; 120],
-    pub sb_hash:            [u8; 32],
+    pub magic: u64,
+    pub version: u8,
+    pub flags: u8,
+    pub _pad0: u16,
+    pub block_size: u32,
+    pub total_blocks: u64,
+    pub free_blocks: u64,
+    pub epoch_id: u64,
+    pub n_blobs: u64,
+    pub alloc_lba: u64,
+    pub journal_lba: u64,
+    pub blob_region_start: u64,
+    pub blob_region_end: u64,
+    pub snapshot_count: u32,
+    pub _pad1: u32,
+    pub uuid: [u8; 16],
+    pub _reserved: [u8; 120],
+    pub sb_hash: [u8; 32],
 }
 
 const _: () = assert!(
@@ -150,36 +149,36 @@ impl SuperblockDisk {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase1ErrorKind {
     /// Magic du superbloc invalide.
-    SuperblockBadMagic     = 0x01,
+    SuperblockBadMagic = 0x01,
     /// Checksum du superbloc invalide.
-    SuperblockBadChecksum  = 0x02,
+    SuperblockBadChecksum = 0x02,
     /// Version du superbloc non supportée.
-    SuperblockBadVersion   = 0x03,
+    SuperblockBadVersion = 0x03,
     /// Taille de bloc invalide.
-    InvalidBlockSize       = 0x04,
+    InvalidBlockSize = 0x04,
     /// free_blocks > total_blocks.
-    FreeBlocksOverflow     = 0x05,
+    FreeBlocksOverflow = 0x05,
     /// Région blob incohérente (end ≤ start).
-    InvalidBlobRegion      = 0x06,
+    InvalidBlobRegion = 0x06,
     /// Magic de la table d'allocation invalide.
-    AllocTableBadMagic     = 0x10,
+    AllocTableBadMagic = 0x10,
     /// Checksum de la table d'allocation invalide.
-    AllocTableBadChecksum  = 0x11,
+    AllocTableBadChecksum = 0x11,
     /// Magic de l'en-tête de région blob invalide.
-    BlobRegionBadMagic     = 0x20,
+    BlobRegionBadMagic = 0x20,
     /// Lecture I/O échouée.
-    IoError                = 0xFE,
+    IoError = 0xFE,
     /// Anomalie générique.
-    Generic                = 0xFF,
+    Generic = 0xFF,
 }
 
 /// Une entrée d'erreur de la phase 1.
 #[derive(Clone, Copy, Debug)]
 pub struct Phase1Error {
     /// Type d'anomalie.
-    pub kind:   Phase1ErrorKind,
+    pub kind: Phase1ErrorKind,
     /// LBA concerné.
-    pub lba:    u64,
+    pub lba: u64,
     /// Informations complémentaires.
     pub detail: u64,
 }
@@ -190,19 +189,19 @@ pub struct Phase1Error {
 #[derive(Clone, Debug)]
 pub struct Phase1Report {
     /// Erreurs détectées.
-    pub errors:             Vec<Phase1Error>,
+    pub errors: Vec<Phase1Error>,
     /// Superbloc lu (si valide).
-    pub superblock:         Option<SuperblockDisk>,
+    pub superblock: Option<SuperblockDisk>,
     /// `true` si le superbloc est valide.
-    pub superblock_ok:      bool,
+    pub superblock_ok: bool,
     /// `true` si le superbloc est corrompu (anté `superblock_ok`).
     pub superblock_corrupt: bool,
     /// `true` si la table d'allocation est valide.
-    pub alloc_table_ok:     bool,
+    pub alloc_table_ok: bool,
     /// `true` si la région blob est cohérente.
-    pub blob_region_ok:     bool,
+    pub blob_region_ok: bool,
     /// Nombre de LBA vérifiés.
-    pub lbas_checked:       u64,
+    pub lbas_checked: u64,
 }
 
 impl Phase1Report {
@@ -244,11 +243,11 @@ pub const SUPERBLOCK_HDR_MAGIC: u64 = SUPERBLOCK_MAGIC;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Phase1Options {
     /// Nombre maximal d'erreurs avant abandon (0 = pas de limite).
-    pub max_errors:       usize,
+    pub max_errors: usize,
     /// Vérifier les checksums des blobs.
     pub verify_checksums: bool,
     /// LBA du superbloc à utiliser (0 = défaut = `SUPERBLOCK_LBA`).
-    pub override_lba:     u64,
+    pub override_lba: u64,
 }
 
 // ── Exécuteur de la phase 1 ─────────────────────────────────────────────
@@ -275,8 +274,15 @@ impl FsckPhase1 {
     }
 
     /// Exécute la phase 1 avec options.
-    pub fn run_with_options(device: &dyn BlockDevice, opts: &Phase1Options) -> ExofsResult<Phase1Report> {
-        let lba = if opts.override_lba != 0 { opts.override_lba } else { Self::DEFAULT_SUPERBLOCK_LBA };
+    pub fn run_with_options(
+        device: &dyn BlockDevice,
+        opts: &Phase1Options,
+    ) -> ExofsResult<Phase1Report> {
+        let lba = if opts.override_lba != 0 {
+            opts.override_lba
+        } else {
+            Self::DEFAULT_SUPERBLOCK_LBA
+        };
         Self::run_at(device, lba)
     }
 
@@ -296,19 +302,19 @@ impl FsckPhase1 {
             Err(_) => {
                 errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                 errors.push(Phase1Error {
-                    kind:   Phase1ErrorKind::IoError,
-                    lba:    sb_lba,
+                    kind: Phase1ErrorKind::IoError,
+                    lba: sb_lba,
                     detail: 0,
                 });
                 // Pas de superbloc → arrêt de la phase 1.
                 let report = Phase1Report {
                     errors,
-                    superblock:        None,
-                    superblock_ok:     false,
+                    superblock: None,
+                    superblock_ok: false,
                     superblock_corrupt: true,
-                    alloc_table_ok:    false,
-                    blob_region_ok:    false,
-                    lbas_checked:      0,
+                    alloc_table_ok: false,
+                    blob_region_ok: false,
+                    lbas_checked: 0,
                 };
                 RECOVERY_LOG.log_phase_done(1, 1);
                 return Ok(report);
@@ -323,8 +329,8 @@ impl FsckPhase1 {
                 RECOVERY_AUDIT.record_invalid_magic(sb_lba, 0);
                 errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                 errors.push(Phase1Error {
-                    kind:   Phase1ErrorKind::SuperblockBadMagic,
-                    lba:    sb_lba,
+                    kind: Phase1ErrorKind::SuperblockBadMagic,
+                    lba: sb_lba,
                     detail: 0,
                 });
             }
@@ -332,16 +338,16 @@ impl FsckPhase1 {
                 RECOVERY_AUDIT.record_checksum_invalid(sb_lba, 0, 0);
                 errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                 errors.push(Phase1Error {
-                    kind:   Phase1ErrorKind::SuperblockBadChecksum,
-                    lba:    sb_lba,
+                    kind: Phase1ErrorKind::SuperblockBadChecksum,
+                    lba: sb_lba,
                     detail: 0,
                 });
             }
             Err(_) => {
                 errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                 errors.push(Phase1Error {
-                    kind:   Phase1ErrorKind::Generic,
-                    lba:    sb_lba,
+                    kind: Phase1ErrorKind::Generic,
+                    lba: sb_lba,
                     detail: 0,
                 });
             }
@@ -352,8 +358,8 @@ impl FsckPhase1 {
                 if !sb.block_size_valid() {
                     errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     errors.push(Phase1Error {
-                        kind:   Phase1ErrorKind::InvalidBlockSize,
-                        lba:    sb_lba,
+                        kind: Phase1ErrorKind::InvalidBlockSize,
+                        lba: sb_lba,
                         detail: sb.block_size as u64,
                     });
                 }
@@ -361,8 +367,8 @@ impl FsckPhase1 {
                 if !sb.free_blocks_valid() {
                     errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     errors.push(Phase1Error {
-                        kind:   Phase1ErrorKind::FreeBlocksOverflow,
-                        lba:    sb_lba,
+                        kind: Phase1ErrorKind::FreeBlocksOverflow,
+                        lba: sb_lba,
                         detail: sb.free_blocks,
                     });
                 }
@@ -370,8 +376,8 @@ impl FsckPhase1 {
                 if !sb.blob_region_valid() {
                     errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     errors.push(Phase1Error {
-                        kind:   Phase1ErrorKind::InvalidBlobRegion,
-                        lba:    sb_lba,
+                        kind: Phase1ErrorKind::InvalidBlobRegion,
+                        lba: sb_lba,
                         detail: sb.blob_region_start,
                     });
                 } else {
@@ -380,13 +386,14 @@ impl FsckPhase1 {
                     let mut alloc_buf = [0u8; 64];
                     if device.read_block(alloc_lba, &mut alloc_buf).is_ok() {
                         lbas_checked = lbas_checked.checked_add(1).unwrap_or(u64::MAX);
-                        let magic = u64::from_le_bytes(alloc_buf[0..8].try_into().unwrap_or([0; 8]));
+                        let magic =
+                            u64::from_le_bytes(alloc_buf[0..8].try_into().unwrap_or([0; 8]));
                         if magic != ALLOC_TABLE_MAGIC {
                             RECOVERY_AUDIT.record_invalid_magic(alloc_lba, magic);
                             errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                             errors.push(Phase1Error {
-                                kind:   Phase1ErrorKind::AllocTableBadMagic,
-                                lba:    alloc_lba,
+                                kind: Phase1ErrorKind::AllocTableBadMagic,
+                                lba: alloc_lba,
                                 detail: magic,
                             });
                         } else {
@@ -395,8 +402,8 @@ impl FsckPhase1 {
                     } else {
                         errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                         errors.push(Phase1Error {
-                            kind:   Phase1ErrorKind::IoError,
-                            lba:    alloc_lba,
+                            kind: Phase1ErrorKind::IoError,
+                            lba: alloc_lba,
                             detail: 0,
                         });
                     }
@@ -406,13 +413,14 @@ impl FsckPhase1 {
                     let mut region_buf = [0u8; 64];
                     if device.read_block(region_lba, &mut region_buf).is_ok() {
                         lbas_checked = lbas_checked.checked_add(1).unwrap_or(u64::MAX);
-                        let magic = u64::from_le_bytes(region_buf[0..8].try_into().unwrap_or([0; 8]));
+                        let magic =
+                            u64::from_le_bytes(region_buf[0..8].try_into().unwrap_or([0; 8]));
                         if magic != BLOB_REGION_MAGIC {
                             RECOVERY_AUDIT.record_invalid_magic(region_lba, magic);
                             errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                             errors.push(Phase1Error {
-                                kind:   Phase1ErrorKind::BlobRegionBadMagic,
-                                lba:    region_lba,
+                                kind: Phase1ErrorKind::BlobRegionBadMagic,
+                                lba: region_lba,
                                 detail: magic,
                             });
                         } else {
@@ -421,8 +429,8 @@ impl FsckPhase1 {
                     } else {
                         errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                         errors.push(Phase1Error {
-                            kind:   Phase1ErrorKind::IoError,
-                            lba:    region_lba,
+                            kind: Phase1ErrorKind::IoError,
+                            lba: region_lba,
                             detail: 0,
                         });
                     }
@@ -437,7 +445,7 @@ impl FsckPhase1 {
         Ok(Phase1Report {
             errors,
             superblock,
-            superblock_ok:      superblock.is_some(),
+            superblock_ok: superblock.is_some(),
             superblock_corrupt: superblock.is_none(),
             alloc_table_ok,
             blob_region_ok,
@@ -446,9 +454,7 @@ impl FsckPhase1 {
     }
 
     /// Retourne le LBA du superbloc depuis un résultat de sélection de slot.
-    pub fn superblock_lba_from_slot(
-        slot: &super::slot_recovery::SlotRecoveryResult,
-    ) -> u64 {
+    pub fn superblock_lba_from_slot(slot: &super::slot_recovery::SlotRecoveryResult) -> u64 {
         slot.superblock_lba
     }
 }
@@ -470,11 +476,11 @@ mod tests {
     fn test_superblock_fields_validation() {
         // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut sb: SuperblockDisk = unsafe { core::mem::zeroed() };
-        sb.block_size   = 4096;
+        sb.block_size = 4096;
         sb.total_blocks = 1000;
-        sb.free_blocks  = 500;
+        sb.free_blocks = 500;
         sb.blob_region_start = 100;
-        sb.blob_region_end   = 900;
+        sb.blob_region_end = 900;
         assert!(sb.block_size_valid());
         assert!(sb.free_blocks_valid());
         assert!(sb.blob_region_valid());
@@ -485,7 +491,7 @@ mod tests {
         // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut sb: SuperblockDisk = unsafe { core::mem::zeroed() };
         sb.total_blocks = 100;
-        sb.free_blocks  = 200;
+        sb.free_blocks = 200;
         assert!(!sb.free_blocks_valid());
     }
 
@@ -500,13 +506,13 @@ mod tests {
     #[test]
     fn test_phase1_report_clean() {
         let r = Phase1Report {
-            errors:            Vec::new(),
-            superblock:        None,
-            superblock_ok:     true,
+            errors: Vec::new(),
+            superblock: None,
+            superblock_ok: true,
             superblock_corrupt: false,
-            alloc_table_ok:    true,
-            blob_region_ok:    true,
-            lbas_checked:      3,
+            alloc_table_ok: true,
+            blob_region_ok: true,
+            lbas_checked: 3,
         };
         assert!(r.is_clean());
         assert_eq!(r.error_count(), 0);

@@ -6,9 +6,8 @@
 //! RÈGLE BUG-04  : do_exec() doit initialiser %fs (TLS) avant jump_to_entry.
 //! RÈGLE BUG-09  : block_all_except_kill() durant exec pour éviter signal inter-exec.
 
-
+use crate::syscall::errno::{EAGAIN, ECHILD, EFAULT, EINTR, EINVAL, ENOMEM, ENOSYS};
 use crate::syscall::validation::{read_user_path, USER_ADDR_MAX};
-use crate::syscall::errno::{EINVAL, EFAULT, ENOMEM, ENOSYS, EAGAIN, ECHILD, EINTR};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fork() — Ring3 → kernel CoW
@@ -44,15 +43,26 @@ pub fn sys_fork(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i
 /// EXEC-08 : AT_PHDR, AT_PHNUM, AT_ENTRY, AT_RANDOM, AT_SIGNAL_TCB, AT_SYSINFO_EHDR.
 /// BUG-04  : arch::set_fs_base(tls_initial_addr) avant jump_to_entry — PROC-10.
 /// BUG-09  : block_all_except_kill() AVANT chargement ELF — PROC-03.
-pub fn sys_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_execve(
+    path_ptr: u64,
+    argv_ptr: u64,
+    envp_ptr: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     // SYS-01 : copy_from_user pour le chemin (OBLIGATOIRE avant tout accès)
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     // Valider argv_ptr et envp_ptr (pointeurs userspace)
-    if argv_ptr != 0 && argv_ptr >= USER_ADDR_MAX { return EFAULT; }
-    if envp_ptr != 0 && envp_ptr >= USER_ADDR_MAX { return EFAULT; }
+    if argv_ptr != 0 && argv_ptr >= USER_ADDR_MAX {
+        return EFAULT;
+    }
+    if envp_ptr != 0 && envp_ptr >= USER_ADDR_MAX {
+        return EFAULT;
+    }
     // Délègue → process::lifecycle::exec::do_execve()
     // do_execve() suit la séquence obligatoire du document §4.3 :
     //   1. copy_from_user path/argv/envp
@@ -90,7 +100,8 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
             let tcb = &*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock);
             let pid = crate::process::core::pid::Pid(tcb.pid.0);
             if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid) {
-                pcb.exit_code.store(exit_code, core::sync::atomic::Ordering::Release);
+                pcb.exit_code
+                    .store(exit_code, core::sync::atomic::Ordering::Release);
                 pcb.set_state(crate::process::core::pcb::ProcessState::Zombie);
             }
             tcb.set_state(crate::scheduler::core::task::TaskState::Dead);
@@ -100,7 +111,11 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
         }
     }
     // Unreachable après schedule_block avec état Dead.
-    loop { unsafe { core::arch::asm!("hlt", options(nomem, nostack)); } }
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack));
+        }
+    }
 }
 
 /// `exit_group(status)` — termine tous les threads du groupe.
@@ -116,11 +131,13 @@ pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: 
 
 /// `wait4(pid, status, options, rusage)` → PID collecté ou errno.
 pub fn sys_wait4(pid: u64, status_ptr: u64, options: u64, _rusage: u64, _a5: u64, _a6: u64) -> i64 {
-    use crate::process::lifecycle::wait::{do_waitpid, WaitOptions, WaitError};
     use crate::process::core::pid::Pid;
+    use crate::process::lifecycle::wait::{do_waitpid, WaitError, WaitOptions};
     use crate::scheduler::core::task::ThreadControlBlock;
 
-    if status_ptr != 0 && status_ptr >= USER_ADDR_MAX { return EFAULT; }
+    if status_ptr != 0 && status_ptr >= USER_ADDR_MAX {
+        return EFAULT;
+    }
 
     // Lire le TCB du thread courant depuis gs:[0x20].
     // SAFETY: GS kernel actif dans le contexte syscall.
@@ -129,13 +146,15 @@ pub fn sys_wait4(pid: u64, status_ptr: u64, options: u64, _rusage: u64, _a5: u64
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) p, options(nostack, nomem));
         p
     };
-    if tcb_ptr == 0 { return EFAULT; }
+    if tcb_ptr == 0 {
+        return EFAULT;
+    }
 
     // SAFETY: tcb_ptr depuis gs:[0x20] est toujours valide pendant un syscall.
     let tcb = unsafe { &*(tcb_ptr as *const ThreadControlBlock) };
     let caller_pid = Pid(tcb.pid.0);
-    let wait_pid   = pid as i32;
-    let opts       = WaitOptions(options as u32);
+    let wait_pid = pid as i32;
+    let opts = WaitOptions(options as u32);
 
     match do_waitpid(caller_pid, wait_pid, opts, tcb) {
         Ok(result) => {
@@ -149,20 +168,22 @@ pub fn sys_wait4(pid: u64, status_ptr: u64, options: u64, _rusage: u64, _a5: u64
             result.pid.0 as i64
         }
         // WNOHANG positionné, fils existent mais pas zombie : retourne 0 (POSIX).
-        Err(WaitError::WouldBlock)  => 0,
-        Err(WaitError::NoChild)     => ECHILD,
+        Err(WaitError::WouldBlock) => 0,
+        Err(WaitError::NoChild) => ECHILD,
         Err(WaitError::Interrupted) => EINTR,
-        Err(WaitError::InvalidPid)  => EINVAL,
+        Err(WaitError::InvalidPid) => EINVAL,
     }
 }
 
 /// `waitid(idtype, id, infop, options, rusage)`.
 pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, _a6: u64) -> i64 {
-    use crate::process::lifecycle::wait::{do_waitpid, WaitOptions, WaitError, WaitReason};
     use crate::process::core::pid::Pid;
+    use crate::process::lifecycle::wait::{do_waitpid, WaitError, WaitOptions, WaitReason};
     use crate::scheduler::core::task::ThreadControlBlock;
 
-    if infop != 0 && infop >= USER_ADDR_MAX { return EFAULT; }
+    if infop != 0 && infop >= USER_ADDR_MAX {
+        return EFAULT;
+    }
 
     // Lire le TCB du thread courant depuis gs:[0x20].
     // SAFETY: GS kernel actif dans le contexte syscall.
@@ -171,7 +192,9 @@ pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, 
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) p, options(nostack, nomem));
         p
     };
-    if tcb_ptr == 0 { return EFAULT; }
+    if tcb_ptr == 0 {
+        return EFAULT;
+    }
 
     // SAFETY: tcb_ptr depuis gs:[0x20] est toujours valide pendant un syscall.
     let tcb = unsafe { &*(tcb_ptr as *const ThreadControlBlock) };
@@ -179,19 +202,25 @@ pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, 
 
     // idtype : P_ALL=0, P_PID=1, P_PGID=2
     let wait_pid: i32 = match idtype {
-        0 => -1,                   // P_ALL  : n'importe quel fils
-        1 => id as i32,            // P_PID  : fils spécifique
-        2 => -(id as i32),         // P_PGID : groupe de processus (approx.)
+        0 => -1,           // P_ALL  : n'importe quel fils
+        1 => id as i32,    // P_PID  : fils spécifique
+        2 => -(id as i32), // P_PGID : groupe de processus (approx.)
         _ => return EINVAL,
     };
 
     // Conversion des flags waitid → WaitOptions.
     // WNOHANG=1, WSTOPPED=2, WEXITED=4, WCONTINUED=8
     let mut wo = WaitOptions(0);
-    if options & 0x1 != 0 { wo.0 |= WaitOptions::WNOHANG;    }  // WNOHANG
-    if options & 0x2 != 0 { wo.0 |= WaitOptions::WUNTRACED;  }  // WSTOPPED
-    if options & 0x8 != 0 { wo.0 |= WaitOptions::WCONTINUED; }  // WCONTINUED
-    // WEXITED=4 est l'équivalent du mode normal (pas de flag supplémentaire).
+    if options & 0x1 != 0 {
+        wo.0 |= WaitOptions::WNOHANG;
+    } // WNOHANG
+    if options & 0x2 != 0 {
+        wo.0 |= WaitOptions::WUNTRACED;
+    } // WSTOPPED
+    if options & 0x8 != 0 {
+        wo.0 |= WaitOptions::WCONTINUED;
+    } // WCONTINUED
+      // WEXITED=4 est l'équivalent du mode normal (pas de flag supplémentaire).
 
     match do_waitpid(caller_pid, wait_pid, wo, tcb) {
         Ok(result) => {
@@ -204,22 +233,22 @@ pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, 
                 // [16] si_uid   (uint32) = 0
                 // [20] si_status(int32) = code brut (non décalé)
                 // [24..128] = zéros
-                const SIGCHLD:    i32 = 17;
+                const SIGCHLD: i32 = 17;
                 const CLD_EXITED: i32 = 1;
                 const CLD_KILLED: i32 = 2;
 
                 let (si_code, si_status) = match result.reason {
-                    WaitReason::Exited   => (CLD_EXITED, (result.wstatus >> 8) as i32),
-                    _                    => (CLD_KILLED, (result.wstatus & 0x7F) as i32),
+                    WaitReason::Exited => (CLD_EXITED, (result.wstatus >> 8) as i32),
+                    _ => (CLD_KILLED, (result.wstatus & 0x7F) as i32),
                 };
 
                 // SAFETY: infop est une adresse userspace validée ci-dessus.
                 unsafe {
                     let p = infop as *mut u8;
                     core::ptr::write_bytes(p, 0u8, 128);
-                    core::ptr::write_volatile(p.add( 0) as *mut i32, SIGCHLD);
-                    core::ptr::write_volatile(p.add( 4) as *mut i32, 0i32);
-                    core::ptr::write_volatile(p.add( 8) as *mut i32, si_code);
+                    core::ptr::write_volatile(p.add(0) as *mut i32, SIGCHLD);
+                    core::ptr::write_volatile(p.add(4) as *mut i32, 0i32);
+                    core::ptr::write_volatile(p.add(8) as *mut i32, si_code);
                     core::ptr::write_volatile(p.add(12) as *mut i32, result.pid.0 as i32);
                     core::ptr::write_volatile(p.add(16) as *mut u32, 0u32);
                     core::ptr::write_volatile(p.add(20) as *mut i32, si_status);
@@ -228,10 +257,10 @@ pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, 
             0 // waitid retourne 0 en succès (contrairement à wait4)
         }
         // WNOHANG, fils présents mais pas zombie : succès avec si_pid=0.
-        Err(WaitError::WouldBlock)  => 0,
-        Err(WaitError::NoChild)     => ECHILD,
+        Err(WaitError::WouldBlock) => 0,
+        Err(WaitError::NoChild) => ECHILD,
         Err(WaitError::Interrupted) => EINTR,
-        Err(WaitError::InvalidPid)  => EINVAL,
+        Err(WaitError::InvalidPid) => EINVAL,
     }
 }
 
@@ -241,47 +270,61 @@ pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, 
 
 /// `clone(flags, stack, ptid, ctid, tls)` → TID ou errno.
 pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u64) -> i64 {
-    if ptid != 0 && ptid >= USER_ADDR_MAX { return EFAULT; }
-    if ctid != 0 && ctid >= USER_ADDR_MAX { return EFAULT; }
+    if ptid != 0 && ptid >= USER_ADDR_MAX {
+        return EFAULT;
+    }
+    if ctid != 0 && ctid >= USER_ADDR_MAX {
+        return EFAULT;
+    }
     // Point d'entrée : tls en priorité (pthread_create) puis ctid.
     let start_func = if tls != 0 { tls } else { ctid };
-    if start_func == 0 { return EINVAL; }
-    let stack_addr = if stack != 0 { stack.saturating_sub(16) } else { 0 };
+    if start_func == 0 {
+        return EINVAL;
+    }
+    let stack_addr = if stack != 0 {
+        stack.saturating_sub(16)
+    } else {
+        0
+    };
     let stack_size = if stack != 0 { 0u64 } else { 8 * 1024 * 1024u64 };
-    let detached   = (flags & 0x0040_0000) != 0;
+    let detached = (flags & 0x0040_0000) != 0;
     // Lecture PID courant depuis TCB per-CPU
     let current_pid_val: u32 = unsafe {
         let ptr: u64;
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nomem, nostack));
-        if ptr == 0 { return EFAULT; }
-        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock)).pid.0
+        if ptr == 0 {
+            return EFAULT;
+        }
+        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock))
+            .pid
+            .0
     };
     let pcb_ref = match crate::process::core::registry::PROCESS_REGISTRY
         .find_by_pid(crate::process::core::pid::Pid(current_pid_val))
     {
         Some(p) => p,
-        None    => return -3i64, // ESRCH
+        None => return -3i64, // ESRCH
     };
     let attr = crate::process::thread::creation::ThreadAttr {
         stack_size,
         stack_addr,
-        policy:           crate::scheduler::core::task::SchedPolicy::Normal,
-        priority:         crate::scheduler::core::task::Priority::NORMAL_DEFAULT,
+        policy: crate::scheduler::core::task::SchedPolicy::Normal,
+        priority: crate::scheduler::core::task::Priority::NORMAL_DEFAULT,
         detached,
-        cpu_affinity:     -1,
+        cpu_affinity: -1,
         sigaltstack_size: 8192,
     };
     let params = crate::process::thread::creation::ThreadCreateParams {
-        pcb:         pcb_ref as *const crate::process::core::pcb::ProcessControlBlock,
+        pcb: pcb_ref as *const crate::process::core::pcb::ProcessControlBlock,
         attr,
         start_func,
-        arg:         0,
-        target_cpu:  0,
+        arg: 0,
+        target_cpu: 0,
         pthread_out: ptid,
     };
     match crate::process::thread::creation::create_thread(&params) {
-        Ok(handle)  => handle.tid.0 as i64,
-        Err(crate::process::thread::creation::ThreadCreateError::OutOfMemory)  => ENOMEM,
+        Ok(handle) => handle.tid.0 as i64,
+        Err(crate::process::thread::creation::ThreadCreateError::OutOfMemory) => ENOMEM,
         Err(crate::process::thread::creation::ThreadCreateError::TidExhausted) => EAGAIN,
         Err(_) => EINVAL,
     }

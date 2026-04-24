@@ -6,16 +6,15 @@
 //! OOM-02   : try_reserve avant toute allocation.
 //! ARITH-02 : saturating_*/checked_add pour offsets.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
-use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use super::validation::{
-    read_user_buf, exofs_err_to_errno,
-    validate_fd, validate_count, validate_offset,
-    verify_cap, CapabilityType, EFAULT,
-};
 use super::object_fd::OBJECT_TABLE;
+use super::validation::{
+    exofs_err_to_errno, read_user_buf, validate_count, validate_fd, validate_offset, verify_cap,
+    CapabilityType, EFAULT,
+};
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -33,15 +32,15 @@ pub const WRITE_MAX_BYTES: usize = 8 * 1_024 * 1_024; // 8 MiB.
 #[derive(Clone, Copy, Debug)]
 pub struct WriteArgs {
     /// Offset d'écriture dans le blob.
-    pub offset:     u64,
+    pub offset: u64,
     /// Nombre d'octets à écrire.
-    pub count:      u64,
+    pub count: u64,
     /// Si non-zéro, utilise et avance le curseur du fd.
     pub use_cursor: u32,
     /// Si non-zéro, flush immédiat vers le stockage persistant.
-    pub sync:       u32,
+    pub sync: u32,
     /// Flags additionnels (0 = défaut).
-    pub flags:      u64,
+    pub flags: u64,
 }
 
 const _: () = assert!(core::mem::size_of::<WriteArgs>() == 32);
@@ -49,7 +48,13 @@ const _: () = assert!(core::mem::size_of::<WriteArgs>() == 32);
 impl WriteArgs {
     #[allow(dead_code)]
     fn defaults(offset: u64, count: u64) -> Self {
-        Self { offset, count, use_cursor: 0, sync: 0, flags: 0 }
+        Self {
+            offset,
+            count,
+            use_cursor: 0,
+            sync: 0,
+            flags: 0,
+        }
     }
 }
 
@@ -59,8 +64,8 @@ impl WriteArgs {
 
 pub struct WriteResult {
     pub bytes_written: usize,
-    pub new_offset:    u64,
-    pub new_size:      u64,
+    pub new_offset: u64,
+    pub new_size: u64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,7 +78,8 @@ pub struct WriteResult {
 /// les octets à l'offset (copy-on-write sémantique).
 /// OOM-02 : try_reserve pour le nouveau contenu.
 fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteResult> {
-    let write_end = offset.checked_add(data.len() as u64)
+    let write_end = offset
+        .checked_add(data.len() as u64)
         .ok_or(ExofsError::OffsetOverflow)?;
 
     // Lire le contenu existant (ou créer un blob vide).
@@ -88,7 +94,9 @@ fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteRes
     }
 
     let mut new_content: Vec<u8> = Vec::new();
-    new_content.try_reserve(new_size_usize).map_err(|_| ExofsError::NoMemory)?;
+    new_content
+        .try_reserve(new_size_usize)
+        .map_err(|_| ExofsError::NoMemory)?;
     new_content.resize(new_size_usize, 0u8);
 
     // Copier le contenu existant si présent (RECUR-01 : while).
@@ -117,13 +125,16 @@ fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteRes
     // ── Phase 6 : Persistance Block Device ─────────────────────────
     // Dépassement du comportement exclusif en RAM pour initier les
     // écritures réelles sur pointeur virtio_blk (NVMe/Qemu emulé).
-    if let Some(dev) = crate::fs::exofs::storage::virtio_adapter::GLOBAL_DISK.lock().as_mut() {
+    if let Some(dev) = crate::fs::exofs::storage::virtio_adapter::GLOBAL_DISK
+        .lock()
+        .as_mut()
+    {
         use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
-        let block_size = dev.block_size() as usize; 
+        let block_size = dev.block_size() as usize;
         let dlen = new_content.len();
         let mut idx = 0;
         let mut base_lba = (blob_id.0[0] as u64) * 100; // Naive LBA routing
-        
+
         while idx < dlen {
             let chunk_size = core::cmp::min(block_size, dlen - idx);
             let mut block_buf = alloc::vec![0u8; block_size];
@@ -142,18 +153,18 @@ fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteRes
 
     Ok(WriteResult {
         bytes_written: dlen,
-        new_offset:    write_end,
+        new_offset: write_end,
         new_size,
     })
 }
 
 /// Effectue une écriture via un fd.
 fn write_fd(
-    fd:         u32,
-    offset:     u64,
-    data:       &[u8],
+    fd: u32,
+    offset: u64,
+    data: &[u8],
     use_cursor: bool,
-    _sync:       bool,
+    _sync: bool,
 ) -> ExofsResult<WriteResult> {
     OBJECT_TABLE.check_writable(fd)?;
     let entry = OBJECT_TABLE.get(fd)?;
@@ -178,24 +189,26 @@ fn write_fd(
 
 /// `exofs_object_write(fd, buf_ptr, count, offset, args_ptr, _) → bytes_written ou errno`
 pub fn sys_exofs_object_write(
-    fd:       u64,
-    buf_ptr:  u64,
-    count:    u64,
-    offset:   u64,
+    fd: u64,
+    buf_ptr: u64,
+    count: u64,
+    offset: u64,
     args_ptr: u64,
     cap_rights: u64,
 ) -> i64 {
     let fd_u32 = match validate_fd(fd) {
-        Ok(f)  => f,
+        Ok(f) => f,
         Err(e) => return e,
     };
-    if count == 0 { return 0; }
+    if count == 0 {
+        return 0;
+    }
     let count_usize = match validate_count(count) {
-        Ok(c)  => c.min(WRITE_MAX_BYTES),
+        Ok(c) => c.min(WRITE_MAX_BYTES),
         Err(e) => return e,
     };
     let offset_val = match validate_offset(offset) {
-        Ok(o)  => o,
+        Ok(o) => o,
         Err(e) => return e,
     };
 
@@ -203,7 +216,15 @@ pub fn sys_exofs_object_write(
     let (effective_offset, use_cursor, sync) = if args_ptr != 0 {
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         match unsafe { super::validation::copy_struct_from_user::<WriteArgs>(args_ptr) } {
-            Ok(a) => (if a.use_cursor != 0 { offset_val } else { a.offset }, a.use_cursor != 0, a.sync != 0),
+            Ok(a) => (
+                if a.use_cursor != 0 {
+                    offset_val
+                } else {
+                    a.offset
+                },
+                a.use_cursor != 0,
+                a.sync != 0,
+            ),
             Err(_) => return EFAULT,
         }
     } else {
@@ -222,7 +243,7 @@ pub fn sys_exofs_object_write(
     }
 
     match write_fd(fd_u32, effective_offset, &data_buf, use_cursor, sync) {
-        Ok(r)  => r.bytes_written as i64,
+        Ok(r) => r.bytes_written as i64,
         Err(e) => exofs_err_to_errno(e),
     }
 }
@@ -235,8 +256,8 @@ pub fn sys_exofs_object_write(
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WriteSegment {
-    pub offset:  u64,
-    pub count:   u64,
+    pub offset: u64,
+    pub count: u64,
     pub buf_ptr: u64,
 }
 
@@ -275,8 +296,14 @@ pub fn scatter_write(blob_id: BlobId, segments: &[WriteSegment]) -> ExofsResult<
 /// ARITH-02 : checked_add.
 #[inline]
 pub fn check_write_bounds(offset: u64, count: u64, max_size: u64) -> ExofsResult<()> {
-    let end = offset.checked_add(count).ok_or(ExofsError::OffsetOverflow)?;
-    if end > max_size { Err(ExofsError::NoSpace) } else { Ok(()) }
+    let end = offset
+        .checked_add(count)
+        .ok_or(ExofsError::OffsetOverflow)?;
+    if end > max_size {
+        Err(ExofsError::NoSpace)
+    } else {
+        Ok(())
+    }
 }
 
 /// Calculs ARITH-02 : retourne le nouvel offset après écriture.
@@ -291,8 +318,8 @@ pub fn new_write_offset(offset: u64, written: usize) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::validation::{EBADF, ERANGE};
+    use super::*;
 
     #[test]
     fn test_write_args_size() {
@@ -369,7 +396,9 @@ mod tests {
     fn test_write_fd_wronly() {
         use super::super::object_fd::open_flags;
         let blob = BlobId::from_bytes_blake3(b"/write/test/fd");
-        let fd = OBJECT_TABLE.open(blob, open_flags::O_WRONLY, 0, 0, 0).unwrap();
+        let fd = OBJECT_TABLE
+            .open(blob, open_flags::O_WRONLY, 0, 0, 0)
+            .unwrap();
         let data = [0xABu8; 16];
         let r = write_fd(fd, 0, &data, false, false).unwrap();
         assert_eq!(r.bytes_written, 16);
@@ -380,7 +409,9 @@ mod tests {
     fn test_write_fd_rdonly_rejected() {
         use super::super::object_fd::open_flags;
         let blob = BlobId::from_bytes_blake3(b"/write/test/ro");
-        let fd = OBJECT_TABLE.open(blob, open_flags::O_RDONLY, 0, 0, 0).unwrap();
+        let fd = OBJECT_TABLE
+            .open(blob, open_flags::O_RDONLY, 0, 0, 0)
+            .unwrap();
         let data = [0u8; 16];
         assert!(write_fd(fd, 0, &data, false, false).is_err());
         OBJECT_TABLE.close(fd);
@@ -396,15 +427,21 @@ mod tests {
 /// Si `new_size > current_size`, étend avec des zéros (sparse extension).
 /// OOM-02 : try_reserve. ARITH-02 : min/saturating_sub.
 pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
-    if new_size > WRITE_MAX_BYTES { return Err(ExofsError::NoSpace); }
+    if new_size > WRITE_MAX_BYTES {
+        return Err(ExofsError::NoSpace);
+    }
 
     let existing = BLOB_CACHE.get(&blob_id);
     let current_size = existing.as_ref().map(|d| d.len()).unwrap_or(0);
 
-    if new_size == current_size { return Ok(()); }
+    if new_size == current_size {
+        return Ok(());
+    }
 
     let mut new_content: Vec<u8> = Vec::new();
-    new_content.try_reserve(new_size).map_err(|_| ExofsError::NoMemory)?;
+    new_content
+        .try_reserve(new_size)
+        .map_err(|_| ExofsError::NoMemory)?;
     new_content.resize(new_size, 0u8);
 
     // Copier l'existant jusqu'à min(current_size, new_size) (RECUR-01 : while).
@@ -421,13 +458,16 @@ pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
     BLOB_CACHE.mark_dirty(&blob_id).ok();
 
     // ── Phase 6 : Persistance Block Device (Truncate) ─────────────
-    if let Some(dev) = crate::fs::exofs::storage::virtio_adapter::GLOBAL_DISK.lock().as_mut() {
+    if let Some(dev) = crate::fs::exofs::storage::virtio_adapter::GLOBAL_DISK
+        .lock()
+        .as_mut()
+    {
         use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
-        let block_size = dev.block_size() as usize; 
+        let block_size = dev.block_size() as usize;
         let dlen = new_content.len();
         let mut idx = 0;
         let mut base_lba = (blob_id.0[0] as u64) * 100;
-        
+
         while idx < dlen {
             let chunk_size = core::cmp::min(block_size, dlen - idx);
             let mut block_buf = alloc::vec![0u8; block_size];

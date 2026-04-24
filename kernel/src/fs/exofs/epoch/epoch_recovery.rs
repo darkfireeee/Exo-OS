@@ -24,14 +24,10 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, EpochId, DiskOffset,
-};
-use crate::fs::exofs::epoch::epoch_slots::{
-    EpochSlot, EpochSlotSelector, parse_slot_data,
-};
+use crate::fs::exofs::core::{DiskOffset, EpochId, ExofsError, ExofsResult};
 use crate::fs::exofs::epoch::epoch_record::EpochRecord;
 use crate::fs::exofs::epoch::epoch_root::verify_epoch_root_page;
+use crate::fs::exofs::epoch::epoch_slots::{parse_slot_data, EpochSlot, EpochSlotSelector};
 use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
 
 // =============================================================================
@@ -62,14 +58,14 @@ pub enum RecoveryPhase {
 impl fmt::Display for RecoveryPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RecoveryPhase::Idle               => write!(f, "Idle"),
-            RecoveryPhase::ReadingSlots       => write!(f, "ReadingSlots"),
+            RecoveryPhase::Idle => write!(f, "Idle"),
+            RecoveryPhase::ReadingSlots => write!(f, "ReadingSlots"),
             RecoveryPhase::SelectingActiveSlot => write!(f, "SelectingActiveSlot"),
             RecoveryPhase::VerifyingEpochRoot => write!(f, "VerifyingEpochRoot"),
-            RecoveryPhase::ReplayingRedoLog   => write!(f, "ReplayingRedoLog"),
+            RecoveryPhase::ReplayingRedoLog => write!(f, "ReplayingRedoLog"),
             RecoveryPhase::UpdatingSuperblock => write!(f, "UpdatingSuperblock"),
-            RecoveryPhase::Complete           => write!(f, "Complete"),
-            RecoveryPhase::Failed             => write!(f, "Failed"),
+            RecoveryPhase::Complete => write!(f, "Complete"),
+            RecoveryPhase::Failed => write!(f, "Failed"),
         }
     }
 }
@@ -82,17 +78,17 @@ impl fmt::Display for RecoveryPhase {
 #[derive(Debug)]
 pub struct RecoveryResult {
     /// Epoch actif retrouvé.
-    pub active_epoch_id:  EpochId,
+    pub active_epoch_id: EpochId,
     /// Slot contenant l'EpochRecord actif.
-    pub active_slot:      EpochSlot,
+    pub active_slot: EpochSlot,
     /// Nombre de slots sains (0–3).
     pub valid_slot_count: u8,
     /// Sélecteur prêt à l'emploi pour les commits suivants.
-    pub slot_selector:    EpochSlotSelector,
+    pub slot_selector: EpochSlotSelector,
     /// Vrai si l'epoch retrouvé avait le flag RECOVERING (crash précédent).
-    pub needs_redo:       bool,
+    pub needs_redo: bool,
     /// Diagnostics détaillés de la récupération.
-    pub diagnostics:      RecoveryDiagnostics,
+    pub diagnostics: RecoveryDiagnostics,
 }
 
 // =============================================================================
@@ -119,12 +115,12 @@ pub enum SlotCheckResult {
 impl fmt::Display for SlotCheckResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SlotCheckResult::Valid(e)         => write!(f, "Valid(epoch={})", e),
-            SlotCheckResult::Empty            => write!(f, "Empty"),
-            SlotCheckResult::IoError          => write!(f, "IoError"),
+            SlotCheckResult::Valid(e) => write!(f, "Valid(epoch={})", e),
+            SlotCheckResult::Empty => write!(f, "Empty"),
+            SlotCheckResult::IoError => write!(f, "IoError"),
             SlotCheckResult::ChecksumMismatch => write!(f, "ChecksumMismatch"),
-            SlotCheckResult::MagicMismatch    => write!(f, "MagicMismatch"),
-            SlotCheckResult::NotChecked       => write!(f, "NotChecked"),
+            SlotCheckResult::MagicMismatch => write!(f, "MagicMismatch"),
+            SlotCheckResult::NotChecked => write!(f, "NotChecked"),
         }
     }
 }
@@ -133,29 +129,29 @@ impl fmt::Display for SlotCheckResult {
 #[derive(Debug)]
 pub struct RecoveryDiagnostics {
     /// Résultat par slot : [A, B, C].
-    pub slot_results:         [SlotCheckResult; 3],
+    pub slot_results: [SlotCheckResult; 3],
     /// Vrai si l'EpochRoot du record actif est valide.
-    pub epoch_root_valid:     bool,
+    pub epoch_root_valid: bool,
     /// Nombre d'epochs rejoués depuis le redo log (0 si pas de crash).
     pub redo_epochs_replayed: u32,
     /// Vrai si montage en mode dégradé (< 3 slots valides).
-    pub degraded_mode:        bool,
+    pub degraded_mode: bool,
     /// Phase finale atteinte.
-    pub final_phase:          RecoveryPhase,
+    pub final_phase: RecoveryPhase,
     /// Durée totale de récupération en cycles TSC.
-    pub duration_cycles:      u64,
+    pub duration_cycles: u64,
 }
 
 impl RecoveryDiagnostics {
     /// Crée des diagnostics vierges.
     fn new() -> Self {
         Self {
-            slot_results:         [SlotCheckResult::NotChecked; 3],
-            epoch_root_valid:     false,
+            slot_results: [SlotCheckResult::NotChecked; 3],
+            epoch_root_valid: false,
             redo_epochs_replayed: 0,
-            degraded_mode:        false,
-            final_phase:          RecoveryPhase::Idle,
-            duration_cycles:      0,
+            degraded_mode: false,
+            final_phase: RecoveryPhase::Idle,
+            duration_cycles: 0,
         }
     }
 }
@@ -204,17 +200,17 @@ pub type TscFn<'a> = &'a dyn Fn() -> u64;
 /// Paramètres regroupés pour la procédure de récupération.
 pub struct RecoveryParams<'a> {
     /// Taille totale du volume en octets (pour le calcul de l'offset slot C).
-    pub disk_size:    DiskOffset,
+    pub disk_size: DiskOffset,
     /// Fonction de lecture 104 octets.
-    pub read_fn:      ReadFn<'a>,
+    pub read_fn: ReadFn<'a>,
     /// Fonction de lecture d'une page (EpochRoot).
-    pub read_page:    ReadPageFn<'a>,
+    pub read_page: ReadPageFn<'a>,
     /// Callback pour mettre à jour l'epoch courant dans le superblock.
     pub set_epoch_fn: SetEpochFn<'a>,
     /// Timestamp TSC (pour mesure de durée).
-    pub tsc_fn:       TscFn<'a>,
+    pub tsc_fn: TscFn<'a>,
     /// Taille d'une page EpochRoot (généralement 4096).
-    pub page_size:    usize,
+    pub page_size: usize,
 }
 
 // =============================================================================
@@ -237,13 +233,17 @@ pub struct RecoveryParams<'a> {
 /// - Pas d'allocation infinie — tout Vec est pré-réservé (OOM-02).
 pub fn recover_active_epoch(params: RecoveryParams<'_>) -> ExofsResult<RecoveryResult> {
     let start_tsc = (params.tsc_fn)();
-    let mut diag  = RecoveryDiagnostics::new();
+    let mut diag = RecoveryDiagnostics::new();
     diag.final_phase = RecoveryPhase::ReadingSlots;
 
     let disk_size = params.disk_size;
-    let page_size = if params.page_size == 0 { 4096 } else { params.page_size };
+    let page_size = if params.page_size == 0 {
+        4096
+    } else {
+        params.page_size
+    };
 
-    let mut selector          = EpochSlotSelector::new(disk_size);
+    let mut selector = EpochSlotSelector::new(disk_size);
     let mut records: [Option<EpochRecord>; 3] = [None, None, None];
 
     // ── Étape 1 : lecture et validation des 3 slots ─────────────────────────
@@ -251,7 +251,7 @@ pub fn recover_active_epoch(params: RecoveryParams<'_>) -> ExofsResult<RecoveryR
     for &slot in &slots {
         let idx = slot as usize;
         let offset = match slot.disk_offset(disk_size) {
-            Ok(o)  => o,
+            Ok(o) => o,
             Err(_) => {
                 diag.slot_results[idx] = SlotCheckResult::IoError;
                 selector.update_slot(slot, false, 0);
@@ -384,7 +384,7 @@ pub fn recover_active_epoch(params: RecoveryParams<'_>) -> ExofsResult<RecoveryR
 /// - Cette fonction est conservatrice : elle ne modifie aucun état disque.
 /// - RECUR-01 : pas de récursion, boucle iterative uniquement.
 fn redo_log_replay(
-    record:    &EpochRecord,
+    record: &EpochRecord,
     read_page: ReadPageFn<'_>,
     page_size: usize,
 ) -> ExofsResult<u32> {
@@ -484,13 +484,13 @@ pub fn max_valid_epoch(results: &[SlotCheckResult; 3]) -> Option<u64> {
 #[derive(Debug, Copy, Clone)]
 pub struct RecoveryStats {
     /// Nombre de montages dégradés (< 3 slots valides).
-    pub degraded_mounts:   u64,
+    pub degraded_mounts: u64,
     /// Nombre d'epochs rejoués suite à un crash.
-    pub epochs_replayed:   u64,
+    pub epochs_replayed: u64,
     /// Erreurs I/O sur les slots.
-    pub slot_io_errors:    u64,
+    pub slot_io_errors: u64,
     /// Erreurs de checksum sur les slots.
-    pub checksum_errors:   u64,
+    pub checksum_errors: u64,
     /// Erreurs de magic sur les slots.
     pub slot_magic_errors: u64,
 }
@@ -514,10 +514,10 @@ impl fmt::Display for RecoveryStats {
 pub fn snapshot_recovery_stats() -> RecoveryStats {
     let snap = EPOCH_STATS.snapshot();
     RecoveryStats {
-        degraded_mounts:   snap.recovery.degraded_mounts,
-        epochs_replayed:   snap.recovery.epochs_replayed,
-        slot_io_errors:    snap.recovery.slot_io_errors,
-        checksum_errors:   snap.recovery.checksum_errors,
+        degraded_mounts: snap.recovery.degraded_mounts,
+        epochs_replayed: snap.recovery.epochs_replayed,
+        slot_io_errors: snap.recovery.slot_io_errors,
+        checksum_errors: snap.recovery.checksum_errors,
         slot_magic_errors: snap.recovery.slot_magic_errors,
     }
 }
@@ -548,11 +548,11 @@ pub fn validate_recovery_result(result: &RecoveryResult) -> ExofsResult<()> {
 /// Résumé compact d'une récupération pour affichage kernel log.
 #[derive(Debug, Copy, Clone)]
 pub struct RecoverySummary {
-    pub active_epoch_id:  EpochId,
-    pub active_slot:      EpochSlot,
+    pub active_epoch_id: EpochId,
+    pub active_slot: EpochSlot,
     pub valid_slot_count: u8,
-    pub degraded:         bool,
-    pub redo_replayed:    u32,
+    pub degraded: bool,
+    pub redo_replayed: u32,
 }
 
 impl fmt::Display for RecoverySummary {
@@ -572,10 +572,10 @@ impl fmt::Display for RecoverySummary {
 /// Construit un RecoverySummary depuis un RecoveryResult.
 pub fn recovery_summary(result: &RecoveryResult) -> RecoverySummary {
     RecoverySummary {
-        active_epoch_id:  result.active_epoch_id,
-        active_slot:      result.active_slot,
+        active_epoch_id: result.active_epoch_id,
+        active_slot: result.active_slot,
         valid_slot_count: result.valid_slot_count,
-        degraded:         result.diagnostics.degraded_mode,
-        redo_replayed:    result.diagnostics.redo_epochs_replayed,
+        degraded: result.diagnostics.degraded_mode,
+        redo_replayed: result.diagnostics.redo_epochs_replayed,
     }
 }

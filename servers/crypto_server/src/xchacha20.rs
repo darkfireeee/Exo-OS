@@ -20,18 +20,18 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use chacha20poly1305::{
+    aead::{AeadInPlace, Error as AeadError, KeyInit},
     XChaCha20Poly1305,
-    aead::{AeadInPlace, KeyInit, Error as AeadError},
 };
 
 // ── Constantes ───────────────────────────────────────────────────────────────
 
 /// Taille de la clé XChaCha20-Poly1305 (256 bits).
-pub const KEY_SIZE:   usize = 32;
+pub const KEY_SIZE: usize = 32;
 /// Taille du nonce XChaCha20 (192 bits).
 pub const NONCE_SIZE: usize = 24;
 /// Taille du tag d'authentification Poly1305 (128 bits).
-pub const TAG_SIZE:   usize = 16;
+pub const TAG_SIZE: usize = 16;
 
 // ── Nonce counter ─────────────────────────────────────────────────────────────
 
@@ -102,11 +102,11 @@ fn build_nonce() -> [u8; NONCE_SIZE] {
 /// # Retourne
 /// Longueur du buffer chiffré (plaintext.len() + TAG_SIZE), ou 0 en cas d'erreur.
 pub fn xchacha20_seal(
-    key:       &[u8; KEY_SIZE],
+    key: &[u8; KEY_SIZE],
     plaintext: &[u8],
-    aad:       &[u8],
+    aad: &[u8],
     out_nonce: &mut [u8; NONCE_SIZE],
-    out_buf:   &mut [u8],
+    out_buf: &mut [u8],
 ) -> usize {
     let needed = plaintext.len() + TAG_SIZE;
     if out_buf.len() < needed {
@@ -146,11 +146,11 @@ pub fn xchacha20_seal(
 /// # Retourne
 /// Longueur du plaintext, ou 0 si l'authentification échoue.
 pub fn xchacha20_open(
-    key:        &[u8; KEY_SIZE],
-    nonce:      &[u8; NONCE_SIZE],
+    key: &[u8; KEY_SIZE],
+    nonce: &[u8; NONCE_SIZE],
     ciphertext: &[u8],
-    aad:        &[u8],
-    out_buf:    &mut [u8],
+    aad: &[u8],
+    out_buf: &mut [u8],
 ) -> usize {
     if ciphertext.len() < TAG_SIZE {
         return 0;

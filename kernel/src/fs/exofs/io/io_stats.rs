@@ -12,9 +12,8 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add.
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
 use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─── Instance statique globale ────────────────────────────────────────────────
 
@@ -27,13 +26,13 @@ pub static IO_STATS: IoStats = IoStats::new_const();
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum IoOpKind {
-    Read    = 0,
-    Write   = 1,
-    Flush   = 2,
+    Read = 0,
+    Write = 1,
+    Flush = 2,
     Discard = 3,
-    Sync    = 4,
+    Sync = 4,
     Readahead = 5,
-    Prefetch  = 6,
+    Prefetch = 6,
     Writeback = 7,
 }
 
@@ -52,17 +51,24 @@ impl IoOpKind {
         }
     }
 
-    pub fn is_read(self) -> bool { matches!(self, IoOpKind::Read | IoOpKind::Readahead | IoOpKind::Prefetch) }
-    pub fn is_write(self) -> bool { matches!(self, IoOpKind::Write | IoOpKind::Writeback) }
+    pub fn is_read(self) -> bool {
+        matches!(
+            self,
+            IoOpKind::Read | IoOpKind::Readahead | IoOpKind::Prefetch
+        )
+    }
+    pub fn is_write(self) -> bool {
+        matches!(self, IoOpKind::Write | IoOpKind::Writeback)
+    }
     pub fn as_str(self) -> &'static str {
         match self {
-            IoOpKind::Read      => "read",
-            IoOpKind::Write     => "write",
-            IoOpKind::Flush     => "flush",
-            IoOpKind::Discard   => "discard",
-            IoOpKind::Sync      => "sync",
+            IoOpKind::Read => "read",
+            IoOpKind::Write => "write",
+            IoOpKind::Flush => "flush",
+            IoOpKind::Discard => "discard",
+            IoOpKind::Sync => "sync",
             IoOpKind::Readahead => "readahead",
-            IoOpKind::Prefetch  => "prefetch",
+            IoOpKind::Prefetch => "prefetch",
             IoOpKind::Writeback => "writeback",
         }
     }
@@ -95,8 +101,13 @@ const _: () = assert!(core::mem::size_of::<IoOpRecord>() == 48);
 impl IoOpRecord {
     pub const fn new_empty() -> Self {
         Self {
-            timestamp: 0, blob_id_partial: [0u8; 16], size: 0,
-            latency_us: 0, kind: 0, result: 0, _pad: [0u8; 10],
+            timestamp: 0,
+            blob_id_partial: [0u8; 16],
+            size: 0,
+            latency_us: 0,
+            kind: 0,
+            result: 0,
+            _pad: [0u8; 10],
         }
     }
 
@@ -105,13 +116,21 @@ impl IoOpRecord {
         partial.copy_from_slice(&blob_id[..16]);
         Self {
             timestamp: 0, // sera rempli par l'appelant
-            blob_id_partial: partial, size,
-            latency_us, kind: kind as u8, result: if ok { 0 } else { 1 }, _pad: [0u8; 10],
+            blob_id_partial: partial,
+            size,
+            latency_us,
+            kind: kind as u8,
+            result: if ok { 0 } else { 1 },
+            _pad: [0u8; 10],
         }
     }
 
-    pub fn is_ok(&self) -> bool { self.result == 0 }
-    pub fn kind(&self) -> IoOpKind { IoOpKind::from_u8(self.kind) }
+    pub fn is_ok(&self) -> bool {
+        self.result == 0
+    }
+    pub fn kind(&self) -> IoOpKind {
+        IoOpKind::from_u8(self.kind)
+    }
 }
 
 // ─── Histogramme de latences ──────────────────────────────────────────────────
@@ -136,8 +155,14 @@ impl IoLatencyBucket {
     pub const fn new() -> Self {
         Self {
             counts: [
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
             ],
             total_us: AtomicU64::new(0),
             total_ops: AtomicU64::new(0),
@@ -147,18 +172,23 @@ impl IoLatencyBucket {
     /// Enregistre une latence en µs dans le bucket approprié.
     pub fn record(&self, latency_us: u32) {
         // Bucket = floor(log2(latency_us + 1)).min(7)
-        let bucket = if latency_us == 0 { 0 } else {
+        let bucket = if latency_us == 0 {
+            0
+        } else {
             let bits = 32 - latency_us.leading_zeros();
             (bits as usize).saturating_sub(1).min(LATENCY_BUCKETS - 1)
         };
         self.counts[bucket].fetch_add(1, Ordering::Relaxed);
-        self.total_us.fetch_add(latency_us as u64, Ordering::Relaxed);
+        self.total_us
+            .fetch_add(latency_us as u64, Ordering::Relaxed);
         self.total_ops.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Bucket count (RECUR-01 safe — pas de récursion).
     pub fn bucket_count(&self, i: usize) -> u64 {
-        if i >= LATENCY_BUCKETS { return 0; }
+        if i >= LATENCY_BUCKETS {
+            return 0;
+        }
         self.counts[i].load(Ordering::Relaxed)
     }
 
@@ -166,14 +196,16 @@ impl IoLatencyBucket {
     pub fn avg_us_pct10(&self) -> u64 {
         let total = self.total_ops.load(Ordering::Relaxed);
         let sum = self.total_us.load(Ordering::Relaxed);
-        sum.saturating_mul(10)
-            .checked_div(total)
-            .unwrap_or(0)
+        sum.saturating_mul(10).checked_div(total).unwrap_or(0)
     }
 
     /// Latence totale cumulée en µs.
-    pub fn total_us(&self) -> u64 { self.total_us.load(Ordering::Relaxed) }
-    pub fn total_ops(&self) -> u64 { self.total_ops.load(Ordering::Relaxed) }
+    pub fn total_us(&self) -> u64 {
+        self.total_us.load(Ordering::Relaxed)
+    }
+    pub fn total_ops(&self) -> u64 {
+        self.total_ops.load(Ordering::Relaxed)
+    }
 
     /// Remet tous les buckets à zéro.
     pub fn reset(&self) {
@@ -196,8 +228,8 @@ const IO_OP_RING_MASK: usize = IO_OP_RING_SIZE - 1;
 /// Journal circulaire des dernières opérations IO (thread-safe via spinlock).
 pub struct IoOpRing {
     entries: UnsafeCell<[IoOpRecord; IO_OP_RING_SIZE]>,
-    head: AtomicU64,    // prochain index à écrire
-    _lock: AtomicU64,   // spinlock
+    head: AtomicU64,  // prochain index à écrire
+    _lock: AtomicU64, // spinlock
 }
 
 unsafe impl Sync for IoOpRing {}
@@ -213,12 +245,18 @@ impl IoOpRing {
     }
 
     fn acquire(&self) {
-        while self._lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            ._lock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
 
-    fn release(&self) { self._lock.store(0, Ordering::Release); }
+    fn release(&self) {
+        self._lock.store(0, Ordering::Release);
+    }
 
     /// Enregistre une opération IO.
     pub fn push(&self, mut rec: IoOpRecord, ts: u64) {
@@ -227,8 +265,11 @@ impl IoOpRing {
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = head & IO_OP_RING_MASK;
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        unsafe { (*self.entries.get())[idx] = rec; }
-        self.head.store(head.wrapping_add(1) as u64, Ordering::Relaxed);
+        unsafe {
+            (*self.entries.get())[idx] = rec;
+        }
+        self.head
+            .store(head.wrapping_add(1) as u64, Ordering::Relaxed);
         self.release();
     }
 
@@ -268,44 +309,44 @@ impl IoOpRing {
 /// Compteurs atomiques des opérations IO ExoFS.
 pub struct IoStats {
     // ── Lectures ─────────────────────────────────────────────────────────────
-    pub reads_ok:     AtomicU64,
-    pub reads_err:    AtomicU64,
-    pub bytes_read:   AtomicU64,
+    pub reads_ok: AtomicU64,
+    pub reads_err: AtomicU64,
+    pub bytes_read: AtomicU64,
 
     // ── Écritures ────────────────────────────────────────────────────────────
-    pub writes_ok:    AtomicU64,
-    pub writes_err:   AtomicU64,
+    pub writes_ok: AtomicU64,
+    pub writes_err: AtomicU64,
     pub bytes_written: AtomicU64,
 
     // ── Flush / Sync ─────────────────────────────────────────────────────────
-    pub flushes:      AtomicU64,
-    pub syncs:        AtomicU64,
+    pub flushes: AtomicU64,
+    pub syncs: AtomicU64,
 
     // ── Writeback ────────────────────────────────────────────────────────────
-    pub writeback_enqueued:  AtomicU64,
+    pub writeback_enqueued: AtomicU64,
     pub writeback_completed: AtomicU64,
-    pub writeback_errors:    AtomicU64,
+    pub writeback_errors: AtomicU64,
 
     // ── Cache / Prefetch ─────────────────────────────────────────────────────
-    pub cache_hits:     AtomicU64,
-    pub cache_misses:   AtomicU64,
-    pub prefetch_ops:   AtomicU64,
-    pub readahead_ops:  AtomicU64,
+    pub cache_hits: AtomicU64,
+    pub cache_misses: AtomicU64,
+    pub prefetch_ops: AtomicU64,
+    pub readahead_ops: AtomicU64,
 
     // ── Batch / Async ────────────────────────────────────────────────────────
-    pub batch_ops:     AtomicU64,
-    pub async_ops:     AtomicU64,
-    pub async_errors:  AtomicU64,
+    pub batch_ops: AtomicU64,
+    pub async_ops: AtomicU64,
+    pub async_errors: AtomicU64,
 
     // ── Histogramme de latences ───────────────────────────────────────────────
-    pub read_latency:  IoLatencyBucket,
+    pub read_latency: IoLatencyBucket,
     pub write_latency: IoLatencyBucket,
 
     // ── Journal ───────────────────────────────────────────────────────────────
     pub ring: IoOpRing,
 
     // ── Epoch de reset ───────────────────────────────────────────────────────
-    pub reset_count:  AtomicU64,
+    pub reset_count: AtomicU64,
 }
 
 unsafe impl Sync for IoStats {}
@@ -314,18 +355,24 @@ unsafe impl Send for IoStats {}
 impl IoStats {
     pub const fn new_const() -> Self {
         Self {
-            reads_ok: AtomicU64::new(0), reads_err: AtomicU64::new(0),
+            reads_ok: AtomicU64::new(0),
+            reads_err: AtomicU64::new(0),
             bytes_read: AtomicU64::new(0),
-            writes_ok: AtomicU64::new(0), writes_err: AtomicU64::new(0),
+            writes_ok: AtomicU64::new(0),
+            writes_err: AtomicU64::new(0),
             bytes_written: AtomicU64::new(0),
-            flushes: AtomicU64::new(0), syncs: AtomicU64::new(0),
+            flushes: AtomicU64::new(0),
+            syncs: AtomicU64::new(0),
             writeback_enqueued: AtomicU64::new(0),
             writeback_completed: AtomicU64::new(0),
             writeback_errors: AtomicU64::new(0),
-            cache_hits: AtomicU64::new(0), cache_misses: AtomicU64::new(0),
-            prefetch_ops: AtomicU64::new(0), readahead_ops: AtomicU64::new(0),
+            cache_hits: AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
+            prefetch_ops: AtomicU64::new(0),
+            readahead_ops: AtomicU64::new(0),
             batch_ops: AtomicU64::new(0),
-            async_ops: AtomicU64::new(0), async_errors: AtomicU64::new(0),
+            async_ops: AtomicU64::new(0),
+            async_errors: AtomicU64::new(0),
             read_latency: IoLatencyBucket::new(),
             write_latency: IoLatencyBucket::new(),
             ring: IoOpRing::new(),
@@ -382,31 +429,29 @@ impl IoStats {
     // ── Accesseurs ────────────────────────────────────────────────────────────
 
     pub fn total_reads(&self) -> u64 {
-        self.reads_ok.load(Ordering::Relaxed).saturating_add(
-            self.reads_err.load(Ordering::Relaxed))
+        self.reads_ok
+            .load(Ordering::Relaxed)
+            .saturating_add(self.reads_err.load(Ordering::Relaxed))
     }
 
     pub fn total_writes(&self) -> u64 {
-        self.writes_ok.load(Ordering::Relaxed).saturating_add(
-            self.writes_err.load(Ordering::Relaxed))
+        self.writes_ok
+            .load(Ordering::Relaxed)
+            .saturating_add(self.writes_err.load(Ordering::Relaxed))
     }
 
     /// Ratio de succès des lectures × 1000 (sans float) — ARITH-02 : checked_div.
     pub fn read_success_pct10(&self) -> u64 {
         let ok = self.reads_ok.load(Ordering::Relaxed);
         let total = self.total_reads();
-        ok.saturating_mul(1000)
-            .checked_div(total)
-            .unwrap_or(1000)
+        ok.saturating_mul(1000).checked_div(total).unwrap_or(1000)
     }
 
     /// Ratio hit/miss cache × 1000 — ARITH-02 : checked_div.
     pub fn cache_hit_ratio_pct10(&self) -> u64 {
         let hits = self.cache_hits.load(Ordering::Relaxed);
         let total = hits.saturating_add(self.cache_misses.load(Ordering::Relaxed));
-        hits.saturating_mul(1000)
-            .checked_div(total)
-            .unwrap_or(0)
+        hits.saturating_mul(1000).checked_div(total).unwrap_or(0)
     }
 
     pub fn is_clean(&self) -> bool {
@@ -443,25 +488,25 @@ impl IoStats {
     /// Prend un snapshot non-atomique (usage debug/sysfs).
     pub fn snapshot(&self) -> IoStatsSnapshot {
         IoStatsSnapshot {
-            reads_ok:    self.reads_ok.load(Ordering::Relaxed),
-            reads_err:   self.reads_err.load(Ordering::Relaxed),
-            bytes_read:  self.bytes_read.load(Ordering::Relaxed),
-            writes_ok:   self.writes_ok.load(Ordering::Relaxed),
-            writes_err:  self.writes_err.load(Ordering::Relaxed),
+            reads_ok: self.reads_ok.load(Ordering::Relaxed),
+            reads_err: self.reads_err.load(Ordering::Relaxed),
+            bytes_read: self.bytes_read.load(Ordering::Relaxed),
+            writes_ok: self.writes_ok.load(Ordering::Relaxed),
+            writes_err: self.writes_err.load(Ordering::Relaxed),
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
-            flushes:     self.flushes.load(Ordering::Relaxed),
-            syncs:       self.syncs.load(Ordering::Relaxed),
-            writeback_enqueued:  self.writeback_enqueued.load(Ordering::Relaxed),
+            flushes: self.flushes.load(Ordering::Relaxed),
+            syncs: self.syncs.load(Ordering::Relaxed),
+            writeback_enqueued: self.writeback_enqueued.load(Ordering::Relaxed),
             writeback_completed: self.writeback_completed.load(Ordering::Relaxed),
             writeback_errors: self.writeback_errors.load(Ordering::Relaxed),
-            cache_hits:   self.cache_hits.load(Ordering::Relaxed),
+            cache_hits: self.cache_hits.load(Ordering::Relaxed),
             cache_misses: self.cache_misses.load(Ordering::Relaxed),
             prefetch_ops: self.prefetch_ops.load(Ordering::Relaxed),
             readahead_ops: self.readahead_ops.load(Ordering::Relaxed),
-            batch_ops:   self.batch_ops.load(Ordering::Relaxed),
-            async_ops:   self.async_ops.load(Ordering::Relaxed),
+            batch_ops: self.batch_ops.load(Ordering::Relaxed),
+            async_ops: self.async_ops.load(Ordering::Relaxed),
             async_errors: self.async_errors.load(Ordering::Relaxed),
-            read_avg_latency_us_pct10:  self.read_latency.avg_us_pct10(),
+            read_avg_latency_us_pct10: self.read_latency.avg_us_pct10(),
             write_avg_latency_us_pct10: self.write_latency.avg_us_pct10(),
             reset_count: self.reset_count.load(Ordering::Relaxed),
         }
@@ -473,41 +518,46 @@ impl IoStats {
 /// Snapshot non-atomique des statistiques IO (pour affichage).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct IoStatsSnapshot {
-    pub reads_ok:    u64,
-    pub reads_err:   u64,
-    pub bytes_read:  u64,
-    pub writes_ok:   u64,
-    pub writes_err:  u64,
+    pub reads_ok: u64,
+    pub reads_err: u64,
+    pub bytes_read: u64,
+    pub writes_ok: u64,
+    pub writes_err: u64,
     pub bytes_written: u64,
-    pub flushes:     u64,
-    pub syncs:       u64,
-    pub writeback_enqueued:  u64,
+    pub flushes: u64,
+    pub syncs: u64,
+    pub writeback_enqueued: u64,
     pub writeback_completed: u64,
-    pub writeback_errors:    u64,
-    pub cache_hits:   u64,
+    pub writeback_errors: u64,
+    pub cache_hits: u64,
     pub cache_misses: u64,
     pub prefetch_ops: u64,
     pub readahead_ops: u64,
-    pub batch_ops:   u64,
-    pub async_ops:   u64,
+    pub batch_ops: u64,
+    pub async_ops: u64,
     pub async_errors: u64,
-    pub read_avg_latency_us_pct10:  u64,
+    pub read_avg_latency_us_pct10: u64,
     pub write_avg_latency_us_pct10: u64,
     pub reset_count: u64,
 }
 
 impl IoStatsSnapshot {
     pub fn total_ops(&self) -> u64 {
-        self.reads_ok.saturating_add(self.reads_err)
+        self.reads_ok
+            .saturating_add(self.reads_err)
             .saturating_add(self.writes_ok)
             .saturating_add(self.writes_err)
     }
 
     pub fn error_count(&self) -> u64 {
-        self.reads_err.saturating_add(self.writes_err).saturating_add(self.async_errors)
+        self.reads_err
+            .saturating_add(self.writes_err)
+            .saturating_add(self.async_errors)
     }
 
-    pub fn is_clean(&self) -> bool { self.error_count() == 0 }
+    pub fn is_clean(&self) -> bool {
+        self.error_count() == 0
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -556,10 +606,10 @@ mod tests {
     #[test]
     fn test_latency_bucket_record() {
         let b = IoLatencyBucket::new();
-        b.record(0);    // bucket 0
-        b.record(1);    // bucket 0
-        b.record(2);    // bucket 1
-        b.record(100);  // bucket 6
+        b.record(0); // bucket 0
+        b.record(1); // bucket 0
+        b.record(2); // bucket 1
+        b.record(100); // bucket 6
         assert_eq!(b.total_ops(), 4);
         assert!(b.avg_us_pct10() > 0);
     }

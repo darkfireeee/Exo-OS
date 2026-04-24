@@ -17,12 +17,12 @@
 // - ARITH-02 : checked_add pour les offset.
 // - LOCK-04  : SpinLock uniquement pendant la mutation du cache.
 
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::sync::spinlock::SpinLock;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
+use crate::fs::exofs::core::{DiskOffset, ExofsError, ExofsResult};
 use crate::fs::exofs::storage::layout::BLOCK_SIZE;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
+use crate::scheduler::sync::spinlock::SpinLock;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CacheBlockState — état d'un bloc en cache
@@ -44,25 +44,31 @@ pub enum CacheBlockState {
 /// Entrée dans le cache de blocs.
 pub(crate) struct CacheBlock {
     /// Offset disque de ce bloc.
-    offset:    DiskOffset,
+    offset: DiskOffset,
     /// Contenu du bloc (BLOCK_SIZE = 4096 octets).
-    data:      Vec<u8>,
+    data: Vec<u8>,
     /// État (propre ou dirty).
-    state:     CacheBlockState,
+    state: CacheBlockState,
     /// Compteur LRU : plus élevé = plus récemment utilisé.
-    lru_tick:  u64,
+    lru_tick: u64,
     /// Nombre de hits sur ce bloc.
-    hits:      u32,
+    hits: u32,
 }
 
 impl CacheBlock {
     fn new(offset: DiskOffset, data: Vec<u8>, lru_tick: u64) -> Self {
-        Self { offset, data, state: CacheBlockState::Clean, lru_tick, hits: 0 }
+        Self {
+            offset,
+            data,
+            state: CacheBlockState::Clean,
+            lru_tick,
+            hits: 0,
+        }
     }
 
     fn touch(&mut self, tick: u64) {
         self.lru_tick = tick;
-        self.hits     = self.hits.saturating_add(1);
+        self.hits = self.hits.saturating_add(1);
     }
 
     fn mark_dirty(&mut self) {
@@ -83,14 +89,18 @@ impl CacheBlock {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct CacheState {
-    entries:  Vec<CacheBlock>,
+    entries: Vec<CacheBlock>,
     capacity: usize,
-    tick:     u64,
+    tick: u64,
 }
 
 impl CacheState {
     fn new(capacity: usize) -> Self {
-        Self { entries: Vec::new(), capacity, tick: 0 }
+        Self {
+            entries: Vec::new(),
+            capacity,
+            tick: 0,
+        }
     }
 
     fn next_tick(&mut self) -> u64 {
@@ -114,10 +124,15 @@ impl CacheState {
     /// Sélectionne la victime LRU pour éviction.
     /// Préfère les blocs propres, sinon prend le moins récemment utilisé.
     fn lru_victim(&self) -> Option<usize> {
-        if self.entries.is_empty() { return None; }
+        if self.entries.is_empty() {
+            return None;
+        }
 
         // Chercher un bloc clean LRU.
-        let clean_victim = self.entries.iter().enumerate()
+        let clean_victim = self
+            .entries
+            .iter()
+            .enumerate()
             .filter(|(_, b)| !b.is_dirty())
             .min_by_key(|(_, b)| b.lru_tick);
 
@@ -126,7 +141,9 @@ impl CacheState {
         }
 
         // Tous sont dirty → prendre le dirty LRU.
-        self.entries.iter().enumerate()
+        self.entries
+            .iter()
+            .enumerate()
             .min_by_key(|(_, b)| b.lru_tick)
             .map(|(i, _)| i)
     }
@@ -143,12 +160,12 @@ impl CacheState {
 
 /// Cache de blocs LRU write-back pour ExoFS.
 pub struct BlockCache {
-    state:       SpinLock<CacheState>,
+    state: SpinLock<CacheState>,
     // ── Statistiques ───────────────────────────────────────────────────────
-    hits:        AtomicU64,
-    misses:      AtomicU64,
-    evictions:   AtomicU64,
-    flushes:     AtomicU64,
+    hits: AtomicU64,
+    misses: AtomicU64,
+    evictions: AtomicU64,
+    flushes: AtomicU64,
     dirty_writes: AtomicU64,
 }
 
@@ -158,11 +175,11 @@ impl BlockCache {
     /// Crée un cache d'une capacité de `capacity` blocs.
     pub fn new(capacity: usize) -> Self {
         Self {
-            state:       SpinLock::new(CacheState::new(capacity)),
-            hits:        AtomicU64::new(0),
-            misses:      AtomicU64::new(0),
-            evictions:   AtomicU64::new(0),
-            flushes:     AtomicU64::new(0),
+            state: SpinLock::new(CacheState::new(capacity)),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
+            flushes: AtomicU64::new(0),
             dirty_writes: AtomicU64::new(0),
         }
     }
@@ -174,7 +191,7 @@ impl BlockCache {
     /// `read_fn` est appelé uniquement en cas de cache miss.
     pub fn read_block(
         &self,
-        offset:  DiskOffset,
+        offset: DiskOffset,
         out_buf: &mut [u8],
         read_fn: &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
     ) -> ExofsResult<usize> {
@@ -185,7 +202,7 @@ impl BlockCache {
         // Cache lookup.
         {
             let mut st = self.state.lock();
-            let tick   = st.next_tick();
+            let tick = st.next_tick();
             if let Some(entry) = st.find(offset) {
                 entry.touch(tick);
                 out_buf[..BLOCK_SIZE as usize].copy_from_slice(&entry.data);
@@ -198,7 +215,8 @@ impl BlockCache {
 
         // Cache miss → lecture physique.
         let mut buf: Vec<u8> = Vec::new();
-        buf.try_reserve(BLOCK_SIZE as usize).map_err(|_| ExofsError::NoMemory)?;
+        buf.try_reserve(BLOCK_SIZE as usize)
+            .map_err(|_| ExofsError::NoMemory)?;
         buf.resize(BLOCK_SIZE as usize, 0u8);
 
         let n = read_fn(offset, &mut buf)?;
@@ -222,17 +240,13 @@ impl BlockCache {
     /// appel à `flush_dirty()` ou à l'éviction.
     ///
     /// # Règle WRITE-02 : la vérification bytes_written est à la charge du caller.
-    pub fn write_block_dirty(
-        &self,
-        offset: DiskOffset,
-        data:   &[u8],
-    ) -> ExofsResult<()> {
+    pub fn write_block_dirty(&self, offset: DiskOffset, data: &[u8]) -> ExofsResult<()> {
         if data.len() != BLOCK_SIZE as usize {
             return Err(ExofsError::InvalidArgument);
         }
 
-        let mut st   = self.state.lock();
-        let tick     = st.next_tick();
+        let mut st = self.state.lock();
+        let tick = st.next_tick();
 
         if let Some(entry) = st.find(offset) {
             // Mise à jour en place.
@@ -245,7 +259,8 @@ impl BlockCache {
 
         // Nouvel entrée.
         let mut buf: Vec<u8> = Vec::new();
-        buf.try_reserve(BLOCK_SIZE as usize).map_err(|_| ExofsError::NoMemory)?;
+        buf.try_reserve(BLOCK_SIZE as usize)
+            .map_err(|_| ExofsError::NoMemory)?;
         buf.extend_from_slice(data);
 
         // Éviction si plein.
@@ -253,7 +268,9 @@ impl BlockCache {
             self.evict_one(&mut st, None)?;
         }
 
-        st.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        st.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         let mut entry = CacheBlock::new(offset, buf, tick);
         entry.mark_dirty();
         st.entries.push(entry);
@@ -265,8 +282,8 @@ impl BlockCache {
     /// Écrit un bloc dans le cache ET immédiatement sur le disque.
     pub fn write_block_sync(
         &self,
-        offset:   DiskOffset,
-        data:     &[u8],
+        offset: DiskOffset,
+        data: &[u8],
         write_fn: &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
     ) -> ExofsResult<usize> {
         self.write_block_dirty(offset, data)?;
@@ -291,7 +308,7 @@ impl BlockCache {
         write_fn: &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
     ) -> ExofsResult<u64> {
         let offsets_data: Vec<(DiskOffset, Vec<u8>)> = {
-            let mut st    = self.state.lock();
+            let mut st = self.state.lock();
             let mut dirty = Vec::new();
 
             for entry in &mut st.entries {
@@ -346,25 +363,27 @@ impl BlockCache {
 
     fn insert_clean(&self, offset: DiskOffset, data: Vec<u8>) -> ExofsResult<()> {
         let mut st = self.state.lock();
-        let tick   = st.next_tick();
+        let tick = st.next_tick();
 
         if st.is_full() {
             self.evict_one(&mut st, None)?;
         }
 
-        st.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        st.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         st.entries.push(CacheBlock::new(offset, data, tick));
         Ok(())
     }
 
     fn evict_one(
         &self,
-        st:       &mut CacheState,
+        st: &mut CacheState,
         write_fn: Option<&dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>>,
     ) -> ExofsResult<()> {
         let victim_idx = match st.lru_victim() {
             Some(i) => i,
-            None    => return Err(ExofsError::NoMemory),
+            None => return Err(ExofsError::NoMemory),
         };
 
         let victim = &st.entries[victim_idx];
@@ -383,23 +402,43 @@ impl BlockCache {
 
     // ── Requêtes ─────────────────────────────────────────────────────────────
 
-    pub fn hit_count(&self)      -> u64 { self.hits.load(Ordering::Relaxed) }
-    pub fn miss_count(&self)     -> u64 { self.misses.load(Ordering::Relaxed) }
-    pub fn eviction_count(&self) -> u64 { self.evictions.load(Ordering::Relaxed) }
-    pub fn flush_count(&self)    -> u64 { self.flushes.load(Ordering::Relaxed) }
+    pub fn hit_count(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+    pub fn miss_count(&self) -> u64 {
+        self.misses.load(Ordering::Relaxed)
+    }
+    pub fn eviction_count(&self) -> u64 {
+        self.evictions.load(Ordering::Relaxed)
+    }
+    pub fn flush_count(&self) -> u64 {
+        self.flushes.load(Ordering::Relaxed)
+    }
 
     /// Ratio de hit en pourcentage (0..=100).
     pub fn hit_rate_pct(&self) -> u64 {
         let h = self.hits.load(Ordering::Relaxed);
         let m = self.misses.load(Ordering::Relaxed);
         let t = h.saturating_add(m);
-        if t == 0 { 0 } else { (h as u128 * 100 / t as u128) as u64 }
+        if t == 0 {
+            0
+        } else {
+            (h as u128 * 100 / t as u128) as u64
+        }
     }
 
-    pub fn dirty_count(&self)    -> usize { self.state.lock().dirty_count() }
-    pub fn cached_count(&self)   -> usize { self.state.lock().entries.len() }
-    pub fn capacity(&self)       -> usize { self.state.lock().capacity }
-    pub fn is_empty(&self)       -> bool  { self.state.lock().entries.is_empty() }
+    pub fn dirty_count(&self) -> usize {
+        self.state.lock().dirty_count()
+    }
+    pub fn cached_count(&self) -> usize {
+        self.state.lock().entries.len()
+    }
+    pub fn capacity(&self) -> usize {
+        self.state.lock().capacity
+    }
+    pub fn is_empty(&self) -> bool {
+        self.state.lock().entries.is_empty()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -427,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_read_miss_then_hit() {
-        let c   = make_cache();
+        let c = make_cache();
         let off = DiskOffset(4096);
         let mut buf = vec![0u8; BLK];
 
@@ -440,8 +479,8 @@ mod tests {
 
     #[test]
     fn test_write_dirty_then_flush() {
-        let c    = make_cache();
-        let off  = DiskOffset(4096);
+        let c = make_cache();
+        let off = DiskOffset(4096);
         let data = vec![0xFFu8; BLK];
 
         c.write_block_dirty(off, &data).unwrap();
@@ -454,7 +493,7 @@ mod tests {
 
     #[test]
     fn test_invalidate() {
-        let c   = make_cache();
+        let c = make_cache();
         let off = DiskOffset(4096);
         let mut buf = vec![0u8; BLK];
         c.read_block(off, &mut buf, &mock_read).unwrap();
@@ -467,10 +506,12 @@ mod tests {
     fn test_eviction_lru() {
         let c = BlockCache::new(2);
         let mut buf = vec![0u8; BLK];
-        c.read_block(DiskOffset(0),    &mut buf, &mock_read).unwrap();
-        c.read_block(DiskOffset(4096), &mut buf, &mock_read).unwrap();
+        c.read_block(DiskOffset(0), &mut buf, &mock_read).unwrap();
+        c.read_block(DiskOffset(4096), &mut buf, &mock_read)
+            .unwrap();
         // Cache plein, 3ème lecture → éviction du plus ancien.
-        c.read_block(DiskOffset(8192), &mut buf, &mock_read).unwrap();
+        c.read_block(DiskOffset(8192), &mut buf, &mock_read)
+            .unwrap();
         assert_eq!(c.cached_count(), 2);
         assert_eq!(c.eviction_count(), 1);
     }

@@ -8,58 +8,48 @@
 //   - allocator : allocation par classe de taille (Small/Medium/Large/Huge)
 //   - numa_aware: allocation avec affinité NUMA (jusqu'à 8 nœuds)
 
-pub mod page;
-pub mod pool;
+pub mod allocator;
 pub mod descriptor;
 pub mod mapping;
-pub mod allocator;
 pub mod numa_aware;
+pub mod page;
+pub mod pool;
 
 // ---------------------------------------------------------------------------
 // Re-exports
 // ---------------------------------------------------------------------------
 
 // Primitives de page
-pub use page::{
-    ShmPage, PageFlags, PhysAddr, ShmPageStats,
-    PAGE_SIZE, HUGE_PAGE_SIZE,
-};
+pub use page::{PageFlags, PhysAddr, ShmPage, ShmPageStats, HUGE_PAGE_SIZE, PAGE_SIZE};
 
 // Pool de pages
 pub use pool::{
-    init_shm_pool, shm_page_alloc, shm_page_free,
-    shm_page_ref, shm_page_phys, shm_pool_stats,
-    shm_alloc_contiguous, shm_free_contiguous,
-    ShmPoolStats, POOL_BITMAP_WORDS,
+    init_shm_pool, shm_alloc_contiguous, shm_free_contiguous, shm_page_alloc, shm_page_free,
+    shm_page_phys, shm_page_ref, shm_pool_stats, ShmPoolStats, POOL_BITMAP_WORDS,
 };
 
 // Descripteurs de régions
 pub use descriptor::{
-    ShmDescriptor, ShmId, ShmPermissions, ShmState,
-    ShmDescDirectory, MAX_SHM_PAGES_PER_DESC, MAX_SHM_REGIONS,
-    SHM_DESC_DIR, alloc_shm_id,
-    shm_create, shm_get_id, shm_get_size, shm_destroy, shm_region_count,
+    alloc_shm_id, shm_create, shm_destroy, shm_get_id, shm_get_size, shm_region_count,
+    ShmDescDirectory, ShmDescriptor, ShmId, ShmPermissions, ShmState, MAX_SHM_PAGES_PER_DESC,
+    MAX_SHM_REGIONS, SHM_DESC_DIR,
 };
 
 // Mapping virtuel
 pub use mapping::{
-    VirtAddr, ShmMapping, ShmMapResult, MapPageFn, UnmapPageFn,
-    MAX_SHM_MAPPINGS,
-    register_map_hook, register_unmap_hook,
-    shm_map, shm_unmap, shm_mapping_count,
+    register_map_hook, register_unmap_hook, shm_map, shm_mapping_count, shm_unmap, MapPageFn,
+    ShmMapResult, ShmMapping, UnmapPageFn, VirtAddr, MAX_SHM_MAPPINGS,
 };
 
 // Allocateur par classe de taille
 pub use allocator::{
-    ShmHandle, ShmSizeClass, ShmAllocatorStats,
-    shm_alloc, shm_alloc_pages, shm_free, shm_free_by_idx,
-    shm_free_page_count, shm_can_alloc, shm_allocator_stats,
+    shm_alloc, shm_alloc_pages, shm_allocator_stats, shm_can_alloc, shm_free, shm_free_by_idx,
+    shm_free_page_count, ShmAllocatorStats, ShmHandle, ShmSizeClass,
 };
 
 // NUMA-aware
 pub use numa_aware::{
-    NumaManager, NumaNodeId, NumaBitmap, NumaStats, NumaStatsSnapshot,
-    MAX_NUMA_NODES, NUMA_PAGES_PER_NODE, NUMA_MANAGER,
-    numa_init, numa_shm_alloc, numa_shm_free,
-    numa_stats, numa_node_free_pages,
+    numa_init, numa_node_free_pages, numa_shm_alloc, numa_shm_free, numa_stats, NumaBitmap,
+    NumaManager, NumaNodeId, NumaStats, NumaStatsSnapshot, MAX_NUMA_NODES, NUMA_MANAGER,
+    NUMA_PAGES_PER_NODE,
 };

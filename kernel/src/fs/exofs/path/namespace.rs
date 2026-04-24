@@ -5,7 +5,6 @@
 //!  - ONDISK-03: pas d'AtomicU64 dans les structs repr(C)
 //!  - ARITH-02 : arithmétique vérifiée
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
@@ -26,9 +25,9 @@ pub const NAMESPACE_NAME_MAX: usize = 64;
 pub const ROOT_NAMESPACE_ID: u64 = 1;
 
 /// Drapeaux de namespace.
-pub const NS_FLAG_READONLY:  u32 = 0x0001;
-pub const NS_FLAG_PRIVATE:   u32 = 0x0002;
-pub const NS_FLAG_SHARED:    u32 = 0x0004;
+pub const NS_FLAG_READONLY: u32 = 0x0001;
+pub const NS_FLAG_PRIVATE: u32 = 0x0002;
+pub const NS_FLAG_SHARED: u32 = 0x0004;
 pub const NS_FLAG_UNCLONEABLE: u32 = 0x0008;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -39,27 +38,22 @@ pub const NS_FLAG_UNCLONEABLE: u32 = 0x0008;
 #[derive(Clone)]
 pub struct Namespace {
     /// Identifiant unique (0 = slot vide).
-    pub id:           u64,
+    pub id: u64,
     /// OID racine de ce namespace.
-    pub root_oid:     ObjectId,
+    pub root_oid: ObjectId,
     /// Nom lisible (debug).
-    pub name:         [u8; NAMESPACE_NAME_MAX],
+    pub name: [u8; NAMESPACE_NAME_MAX],
     /// Longueur valide du nom.
-    pub name_len:     u8,
+    pub name_len: u8,
     /// Drapeaux (NS_FLAG_*).
-    pub flags:        u32,
+    pub flags: u32,
     /// Tick de création.
     pub created_tick: u64,
 }
 
 impl Namespace {
     /// Crée un namespace validé.
-    pub fn new(
-        id:       u64,
-        root_oid: ObjectId,
-        name:     &[u8],
-        flags:    u32,
-    ) -> ExofsResult<Self> {
+    pub fn new(id: u64, root_oid: ObjectId, name: &[u8], flags: u32) -> ExofsResult<Self> {
         if name.is_empty() || name.len() > NAMESPACE_NAME_MAX {
             return Err(ExofsError::InvalidArgument);
         }
@@ -68,8 +62,8 @@ impl Namespace {
         Ok(Namespace {
             id,
             root_oid,
-            name:         name_buf,
-            name_len:     name.len() as u8,
+            name: name_buf,
+            name_len: name.len() as u8,
             flags,
             created_tick: crate::arch::time::read_ticks(),
         })
@@ -97,11 +91,11 @@ impl Namespace {
 impl Default for Namespace {
     fn default() -> Self {
         Namespace {
-            id:           0,
-            root_oid:     ObjectId([0u8; 32]),
-            name:         [0u8; NAMESPACE_NAME_MAX],
-            name_len:     0,
-            flags:        0,
+            id: 0,
+            root_oid: ObjectId([0u8; 32]),
+            name: [0u8; NAMESPACE_NAME_MAX],
+            name_len: 0,
+            flags: 0,
             created_tick: 0,
         }
     }
@@ -112,39 +106,43 @@ impl Default for Namespace {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EMPTY_NS: Namespace = Namespace {
-    id:           0,
-    root_oid:     ObjectId([0u8; 32]),
-    name:         [0u8; NAMESPACE_NAME_MAX],
-    name_len:     0,
-    flags:        0,
+    id: 0,
+    root_oid: ObjectId([0u8; 32]),
+    name: [0u8; NAMESPACE_NAME_MAX],
+    name_len: 0,
+    flags: 0,
     created_tick: 0,
 };
 
 struct NamespaceTableInner {
-    entries:  [Namespace; NAMESPACE_TABLE_MAX],
-    count:    usize,
-    next_id:  u64,
+    entries: [Namespace; NAMESPACE_TABLE_MAX],
+    count: usize,
+    next_id: u64,
 }
 
 impl NamespaceTableInner {
     const fn new() -> Self {
         NamespaceTableInner {
             entries: [EMPTY_NS; NAMESPACE_TABLE_MAX],
-            count:   0,
+            count: 0,
             next_id: ROOT_NAMESPACE_ID,
         }
     }
 
     fn free_slot(&self) -> Option<usize> {
         for i in 0..NAMESPACE_TABLE_MAX {
-            if self.entries[i].id == 0 { return Some(i); }
+            if self.entries[i].id == 0 {
+                return Some(i);
+            }
         }
         None
     }
 
     fn find_by_id(&self, id: u64) -> Option<usize> {
         for i in 0..NAMESPACE_TABLE_MAX {
-            if self.entries[i].id == id { return Some(i); }
+            if self.entries[i].id == id {
+                return Some(i);
+            }
         }
         None
     }
@@ -165,12 +163,14 @@ impl NamespaceTableInner {
         }
         let slot = self.free_slot().ok_or(ExofsError::NoSpace)?;
         let id = self.next_id;
-        self.next_id = self.next_id
+        self.next_id = self
+            .next_id
             .checked_add(1)
             .ok_or(ExofsError::OffsetOverflow)?;
         ns.id = id;
         self.entries[slot] = ns;
-        self.count = self.count
+        self.count = self
+            .count
             .checked_add(1)
             .ok_or(ExofsError::OffsetOverflow)?;
         Ok(id)
@@ -214,7 +214,8 @@ impl NamespaceTable {
         let ns = Namespace::new(ROOT_NAMESPACE_ID, root_oid, b"root", 0)?;
         let slot = guard.free_slot().ok_or(ExofsError::NoSpace)?;
         guard.entries[slot] = ns;
-        guard.count = guard.count
+        guard.count = guard
+            .count
             .checked_add(1)
             .ok_or(ExofsError::OffsetOverflow)?;
         // next_id doit être > ROOT_NAMESPACE_ID
@@ -227,12 +228,7 @@ impl NamespaceTable {
     }
 
     /// Enregistre un nouveau namespace.
-    pub fn register(
-        &self,
-        name:     &[u8],
-        root_oid: ObjectId,
-        flags:    u32,
-    ) -> ExofsResult<u64> {
+    pub fn register(&self, name: &[u8], root_oid: ObjectId, flags: u32) -> ExofsResult<u64> {
         let ns = Namespace::new(0, root_oid, name, flags)?;
         let mut guard = self.inner.lock();
         guard.insert(ns)
@@ -286,9 +282,7 @@ impl NamespaceTable {
     pub fn flush_non_root(&self) {
         let mut guard = self.inner.lock();
         for i in 0..NAMESPACE_TABLE_MAX {
-            if guard.entries[i].id != 0
-                && guard.entries[i].id != ROOT_NAMESPACE_ID
-            {
+            if guard.entries[i].id != 0 && guard.entries[i].id != ROOT_NAMESPACE_ID {
                 guard.entries[i] = EMPTY_NS;
                 guard.count = guard.count.saturating_sub(1);
             }
@@ -314,9 +308,7 @@ pub fn init_namespaces(root_oid: ObjectId) -> ExofsResult<()> {
 
 /// Enregistre un namespace dans la table globale.
 #[inline]
-pub fn register_namespace(name: &[u8], root_oid: ObjectId, flags: u32)
-    -> ExofsResult<u64>
-{
+pub fn register_namespace(name: &[u8], root_oid: ObjectId, flags: u32) -> ExofsResult<u64> {
     NAMESPACE_TABLE.register(name, root_oid, flags)
 }
 
@@ -334,8 +326,14 @@ pub fn lookup_namespace_by_id(id: u64) -> Option<Namespace> {
 
 /// Vérifie qu'un namespace est accessible en écriture.
 pub fn assert_writable(ns_id: u64) -> ExofsResult<()> {
-    let ns = NAMESPACE_TABLE.get(ns_id).ok_or(ExofsError::ObjectNotFound)?;
-    if ns.is_readonly() { Err(ExofsError::PermissionDenied) } else { Ok(()) }
+    let ns = NAMESPACE_TABLE
+        .get(ns_id)
+        .ok_or(ExofsError::ObjectNotFound)?;
+    if ns.is_readonly() {
+        Err(ExofsError::PermissionDenied)
+    } else {
+        Ok(())
+    }
 }
 
 /// Collecte tous les namespaces dans un Vec (OOM-02 : try_reserve).
@@ -356,16 +354,22 @@ pub fn all_namespaces() -> ExofsResult<Vec<Namespace>> {
 mod tests {
     use super::*;
 
-    fn oid(b: u8) -> ObjectId { let mut a = [0u8; 32]; a[0] = b; ObjectId(a) }
+    fn oid(b: u8) -> ObjectId {
+        let mut a = [0u8; 32];
+        a[0] = b;
+        ObjectId(a)
+    }
 
-    #[test] fn test_init_root() {
+    #[test]
+    fn test_init_root() {
         let tbl = NamespaceTable::new_const();
         tbl.init_root(oid(1)).unwrap();
         let r = tbl.root_of(ROOT_NAMESPACE_ID).unwrap();
         assert_eq!(r.0[0], 1);
     }
 
-    #[test] fn test_register_find() {
+    #[test]
+    fn test_register_find() {
         let tbl = NamespaceTable::new_const();
         tbl.init_root(oid(1)).unwrap();
         let id = tbl.register(b"ns1", oid(10), 0).unwrap();
@@ -373,13 +377,15 @@ mod tests {
         assert_eq!(n.name_str(), b"ns1");
     }
 
-    #[test] fn test_unregister_root_denied() {
+    #[test]
+    fn test_unregister_root_denied() {
         let tbl = NamespaceTable::new_const();
         tbl.init_root(oid(1)).unwrap();
         assert!(tbl.unregister(ROOT_NAMESPACE_ID).is_err());
     }
 
-    #[test] fn test_by_name() {
+    #[test]
+    fn test_by_name() {
         let tbl = NamespaceTable::new_const();
         tbl.init_root(oid(1)).unwrap();
         tbl.register(b"myns", oid(5), 0).unwrap();
@@ -387,7 +393,8 @@ mod tests {
         assert_eq!(n.root_oid.0[0], 5);
     }
 
-    #[test] fn test_count() {
+    #[test]
+    fn test_count() {
         let tbl = NamespaceTable::new_const();
         tbl.init_root(oid(1)).unwrap();
         tbl.register(b"a", oid(2), 0).unwrap();
@@ -395,7 +402,8 @@ mod tests {
         assert_eq!(tbl.count(), 3); // root + a + b
     }
 
-    #[test] fn test_flush_non_root() {
+    #[test]
+    fn test_flush_non_root() {
         let tbl = NamespaceTable::new_const();
         tbl.init_root(oid(1)).unwrap();
         tbl.register(b"x", oid(20), 0).unwrap();

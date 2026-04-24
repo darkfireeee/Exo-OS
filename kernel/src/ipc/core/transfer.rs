@@ -18,11 +18,10 @@
 //   • Vérification bounds systématique avant toute copie
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
+use super::constants::{MAX_MSG_SIZE, MSG_HEADER_SIZE, RING_SLOT_SIZE};
+use super::types::{alloc_message_id, IpcError, MessageId, MsgFlags};
 use core::ptr;
 use core::sync::atomic::{fence, Ordering};
-use super::constants::{MAX_MSG_SIZE, MSG_HEADER_SIZE, RING_SLOT_SIZE};
-use super::types::{MessageId, MsgFlags, IpcError, alloc_message_id};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MessageHeader — en-tête inline dans chaque slot du ring
@@ -34,13 +33,13 @@ use super::types::{MessageId, MsgFlags, IpcError, alloc_message_id};
 #[repr(C, align(8))]
 pub struct MessageHeader {
     /// Identifiant unique du message.
-    pub msg_id:    u64,
+    pub msg_id: u64,
     /// Drapeaux (RT, ZEROCOPY, BROADCAST…).
-    pub flags:     u32,
+    pub flags: u32,
     /// Longueur du payload (0..=MAX_MSG_SIZE).
-    pub len:       u16,
+    pub len: u16,
     /// Padding pour aligner sur 16 bytes.
-    pub _pad:      u16,
+    pub _pad: u16,
 }
 
 const _: () = assert!(
@@ -55,9 +54,9 @@ impl MessageHeader {
         debug_assert!(len <= MAX_MSG_SIZE, "payload dépasse MAX_MSG_SIZE");
         Self {
             msg_id: id.get(),
-            flags:  flags.0,
-            len:    len as u16,
-            _pad:   0,
+            flags: flags.0,
+            len: len as u16,
+            _pad: 0,
         }
     }
 
@@ -67,9 +66,9 @@ impl MessageHeader {
         let f = MsgFlags(flags.0 | MsgFlags::ZEROCOPY.0);
         Self {
             msg_id: id.get(),
-            flags:  f.0,
-            len:    0, // payload est une référence physique externe
-            _pad:   0,
+            flags: f.0,
+            len: 0, // payload est une référence physique externe
+            _pad: 0,
         }
     }
 
@@ -94,7 +93,7 @@ impl MessageHeader {
 /// Taille fixe RING_SLOT_SIZE = MSG_HEADER_SIZE + MAX_MSG_SIZE.
 #[repr(C, align(64))]
 pub struct RingSlot {
-    pub header:  MessageHeader,
+    pub header: MessageHeader,
     pub payload: [u8; MAX_MSG_SIZE],
 }
 
@@ -107,7 +106,12 @@ impl RingSlot {
     /// Crée un slot vide (zéro-initialisé).
     pub const fn zeroed() -> Self {
         Self {
-            header:  MessageHeader { msg_id: 0, flags: 0, len: 0, _pad: 0 },
+            header: MessageHeader {
+                msg_id: 0,
+                flags: 0,
+                len: 0,
+                _pad: 0,
+            },
             payload: [0u8; MAX_MSG_SIZE],
         }
     }
@@ -120,10 +124,10 @@ impl RingSlot {
     #[inline]
     pub unsafe fn write_inline(
         &mut self,
-        id:    MessageId,
+        id: MessageId,
         flags: MsgFlags,
-        src:   *const u8,
-        len:   usize,
+        src: *const u8,
+        len: usize,
     ) -> Result<(), IpcError> {
         if len > MAX_MSG_SIZE {
             return Err(IpcError::MessageTooLarge);
@@ -145,11 +149,7 @@ impl RingSlot {
     /// `dst` doit pointer sur au moins `buf_len` bytes valides.
     /// Appelé uniquement après une barrière Acquire sur le ring.
     #[inline]
-    pub unsafe fn read_inline(
-        &self,
-        dst:     *mut u8,
-        buf_len: usize,
-    ) -> Result<usize, IpcError> {
+    pub unsafe fn read_inline(&self, dst: *mut u8, buf_len: usize) -> Result<usize, IpcError> {
         let len = self.header.len as usize;
         if len > buf_len {
             return Err(IpcError::MessageTooLarge);
@@ -176,16 +176,20 @@ pub struct ZeroCopyRef {
     /// Adresse physique du buffer (alignée sur PAGE_SIZE).
     pub phys_addr: u64,
     /// Longueur du buffer en bytes.
-    pub length:    u32,
+    pub length: u32,
     /// Index dans le pool SHM (pour libération).
-    pub pool_idx:  u32,
+    pub pool_idx: u32,
 }
 
 impl ZeroCopyRef {
     /// Crée une référence zero-copy.
     #[inline(always)]
     pub fn new(phys_addr: u64, length: u32, pool_idx: u32) -> Self {
-        Self { phys_addr, length, pool_idx }
+        Self {
+            phys_addr,
+            length,
+            pool_idx,
+        }
     }
 
     /// Retourne vrai si la référence est valide (non nulle).
@@ -197,7 +201,11 @@ impl ZeroCopyRef {
     /// Référence nulle (adresse physique 0, sans buffer).
     #[inline(always)]
     pub const fn null() -> Self {
-        Self { phys_addr: 0, length: 0, pool_idx: 0 }
+        Self {
+            phys_addr: 0,
+            length: 0,
+            pool_idx: 0,
+        }
     }
 }
 
@@ -230,9 +238,9 @@ impl TransferEngine {
     /// - `slot` doit être exclusivement détenu par l'appelant.
     #[inline]
     pub unsafe fn copy_to_slot(
-        slot:  &mut RingSlot,
-        src:   *const u8,
-        len:   usize,
+        slot: &mut RingSlot,
+        src: *const u8,
+        len: usize,
         flags: MsgFlags,
     ) -> Result<MessageId, IpcError> {
         if len > MAX_MSG_SIZE {
@@ -251,8 +259,8 @@ impl TransferEngine {
     /// - Une barrière Acquire doit avoir été posée avant cet appel.
     #[inline]
     pub unsafe fn copy_from_slot(
-        slot:    &RingSlot,
-        dst:     *mut u8,
+        slot: &RingSlot,
+        dst: *mut u8,
         buf_len: usize,
     ) -> Result<usize, IpcError> {
         // SAFETY: dst valide et buf_len vérifiés par l'appelant.
@@ -265,20 +273,13 @@ impl TransferEngine {
     /// `T` doit être `Copy + 'static` (pas de pointeurs internes).
     #[inline]
     pub fn transfer_value<T: Copy>(
-        slot:  &mut RingSlot,
+        slot: &mut RingSlot,
         value: &T,
         flags: MsgFlags,
     ) -> Result<MessageId, IpcError> {
         let len = core::mem::size_of::<T>();
         // SAFETY: value est une référence valide vers un T de taille `len`.
-        unsafe {
-            Self::copy_to_slot(
-                slot,
-                value as *const T as *const u8,
-                len,
-                flags,
-            )
-        }
+        unsafe { Self::copy_to_slot(slot, value as *const T as *const u8, len, flags) }
     }
 
     /// Reçoit un slot vers un type `T` (version typée safe).
@@ -294,9 +295,7 @@ impl TransferEngine {
         }
         // SAFETY: payload contient exactement `len` bytes du type T.
         // L'alignement de payload (=[u8]) est 1 — on utilise read_unaligned.
-        let t: T = unsafe {
-            ptr::read_unaligned(slot.payload.as_ptr() as *const T)
-        };
+        let t: T = unsafe { ptr::read_unaligned(slot.payload.as_ptr() as *const T) };
         Ok(t)
     }
 }

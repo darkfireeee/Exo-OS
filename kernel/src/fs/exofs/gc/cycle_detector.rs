@@ -18,7 +18,6 @@
 //   DAG-01 : pas d'import de ipc/, process/, arch/
 // ==============================================================================
 
-
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
@@ -66,7 +65,7 @@ pub struct DetectedCycle {
     /// Membres du cycle (dans l'ordre de détection).
     pub members: Vec<BlobId>,
     /// Noeud d'entrée du cycle (le blob qui ferme la boucle).
-    pub entry:   BlobId,
+    pub entry: BlobId,
     /// Taille totale en octets des blobs dans le cycle
     /// (approximation — somme des tailles si connues).
     pub total_size_hint: u64,
@@ -104,19 +103,19 @@ impl fmt::Display for DetectedCycle {
 #[derive(Debug, Default, Clone)]
 pub struct CycleDetectStats {
     /// Noeuds visités.
-    pub nodes_visited:     u64,
+    pub nodes_visited: u64,
     /// Arêtes traversées.
-    pub edges_traversed:   u64,
+    pub edges_traversed: u64,
     /// Cycles détectés.
-    pub cycles_found:      u64,
+    pub cycles_found: u64,
     /// Total de membres de cycles.
     pub total_cycle_nodes: u64,
     /// Passes de détection.
-    pub passes:            u64,
+    pub passes: u64,
     /// Erreurs OOM (try_reserve).
-    pub oom_errors:        u64,
+    pub oom_errors: u64,
     /// Noeuds depasses (profondeur stack max).
-    pub stack_overflows:   u64,
+    pub stack_overflows: u64,
 }
 
 impl fmt::Display for CycleDetectStats {
@@ -141,9 +140,9 @@ impl fmt::Display for CycleDetectStats {
 #[derive(Debug, Clone)]
 struct DfsFrame {
     /// BlobId en cours.
-    blob_id:       BlobId,
+    blob_id: BlobId,
     /// Index dans la liste des enfants (pour reentrée).
-    child_index:   usize,
+    child_index: usize,
 }
 
 // ==============================================================================
@@ -151,10 +150,10 @@ struct DfsFrame {
 // ==============================================================================
 
 struct CycleDetectorInner {
-    total_stats:   CycleDetectStats,
-    pass_count:    u64,
+    total_stats: CycleDetectStats,
+    pass_count: u64,
     /// Derniers cycles détectés.
-    last_cycles:   Vec<DetectedCycle>,
+    last_cycles: Vec<DetectedCycle>,
 }
 
 // ==============================================================================
@@ -171,15 +170,15 @@ impl CycleDetector {
         Self {
             inner: SpinLock::new(CycleDetectorInner {
                 total_stats: CycleDetectStats {
-                    nodes_visited:     0,
-                    edges_traversed:   0,
-                    cycles_found:      0,
+                    nodes_visited: 0,
+                    edges_traversed: 0,
+                    cycles_found: 0,
                     total_cycle_nodes: 0,
-                    passes:            0,
-                    oom_errors:        0,
-                    stack_overflows:   0,
+                    passes: 0,
+                    oom_errors: 0,
+                    stack_overflows: 0,
                 },
-                pass_count:  0,
+                pass_count: 0,
                 last_cycles: Vec::new(),
             }),
         }
@@ -196,13 +195,10 @@ impl CycleDetector {
     ///
     /// # Returns
     /// Vecteur de cycles détectés (au max `MAX_CYCLES_PER_PASS`).
-    pub fn detect_cycles(
-        &self,
-        blob_ids: &[BlobId],
-    ) -> ExofsResult<Vec<DetectedCycle>> {
-        let mut colors:  BTreeMap<BlobId, DfsColor> = BTreeMap::new();
-        let mut parent:  BTreeMap<BlobId, BlobId>   = BTreeMap::new();
-        let mut cycles:  Vec<DetectedCycle>          = Vec::new();
+    pub fn detect_cycles(&self, blob_ids: &[BlobId]) -> ExofsResult<Vec<DetectedCycle>> {
+        let mut colors: BTreeMap<BlobId, DfsColor> = BTreeMap::new();
+        let mut parent: BTreeMap<BlobId, BlobId> = BTreeMap::new();
+        let mut cycles: Vec<DetectedCycle> = Vec::new();
         let mut stats = CycleDetectStats::default();
 
         // Initialiser toutes les couleurs a Blanc.
@@ -222,13 +218,7 @@ impl CycleDetector {
             }
 
             // DFS iteratif depuis `start`.
-            self.dfs_iterative(
-                start,
-                &mut colors,
-                &mut parent,
-                &mut cycles,
-                &mut stats,
-            )?;
+            self.dfs_iterative(start, &mut colors, &mut parent, &mut cycles, &mut stats)?;
         }
 
         stats.passes = 1;
@@ -238,16 +228,12 @@ impl CycleDetector {
             let mut g = self.inner.lock();
             g.pass_count = g.pass_count.saturating_add(1);
             let t = &mut g.total_stats;
-            t.nodes_visited = t.nodes_visited
-                .saturating_add(stats.nodes_visited);
-            t.edges_traversed = t.edges_traversed
-                .saturating_add(stats.edges_traversed);
-            t.cycles_found = t.cycles_found
-                .saturating_add(cycles.len() as u64);
-            t.total_cycle_nodes = t.total_cycle_nodes
-                .saturating_add(
-                    cycles.iter().map(|c| c.len() as u64).sum::<u64>()
-                );
+            t.nodes_visited = t.nodes_visited.saturating_add(stats.nodes_visited);
+            t.edges_traversed = t.edges_traversed.saturating_add(stats.edges_traversed);
+            t.cycles_found = t.cycles_found.saturating_add(cycles.len() as u64);
+            t.total_cycle_nodes = t
+                .total_cycle_nodes
+                .saturating_add(cycles.iter().map(|c| c.len() as u64).sum::<u64>());
             t.passes = t.passes.saturating_add(1);
             t.oom_errors = t.oom_errors.saturating_add(stats.oom_errors);
             t.stack_overflows = t.stack_overflows.saturating_add(stats.stack_overflows);
@@ -262,11 +248,11 @@ impl CycleDetector {
     /// Utilise une pile explicite (RECUR-01) — jamais recursive.
     fn dfs_iterative(
         &self,
-        start:   BlobId,
-        colors:  &mut BTreeMap<BlobId, DfsColor>,
-        parent:  &mut BTreeMap<BlobId, BlobId>,
-        cycles:  &mut Vec<DetectedCycle>,
-        stats:   &mut CycleDetectStats,
+        start: BlobId,
+        colors: &mut BTreeMap<BlobId, DfsColor>,
+        parent: &mut BTreeMap<BlobId, BlobId>,
+        cycles: &mut Vec<DetectedCycle>,
+        stats: &mut CycleDetectStats,
     ) -> ExofsResult<()> {
         // Pile DFS.
         let mut stack: Vec<DfsFrame> = Vec::new();
@@ -279,7 +265,10 @@ impl CycleDetector {
         colors.insert(start, DfsColor::Grey);
         stats.nodes_visited = stats.nodes_visited.saturating_add(1);
 
-        stack.push(DfsFrame { blob_id: start, child_index: 0 });
+        stack.push(DfsFrame {
+            blob_id: start,
+            child_index: 0,
+        });
 
         // RECUR-01 : boucle iterative.
         while !stack.is_empty() {
@@ -327,17 +316,16 @@ impl CycleDetector {
 
                     if stack.len() < MAX_DFS_STACK_DEPTH {
                         stack.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-                        stack.push(DfsFrame { blob_id: child, child_index: 0 });
+                        stack.push(DfsFrame {
+                            blob_id: child,
+                            child_index: 0,
+                        });
                     }
                 }
                 DfsColor::Grey => {
                     // Arête de retour -> CYCLE détecté !
                     if cycles.len() < MAX_CYCLES_PER_PASS {
-                        let cycle = self.extract_cycle(
-                            child,
-                            current,
-                            parent,
-                        )?;
+                        let cycle = self.extract_cycle(child, current, parent)?;
                         cycles.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                         cycles.push(cycle);
                     }
@@ -361,7 +349,7 @@ impl CycleDetector {
         &self,
         cycle_entry: BlobId,
         cycle_close: BlobId,
-        parent:      &BTreeMap<BlobId, BlobId>,
+        parent: &BTreeMap<BlobId, BlobId>,
     ) -> ExofsResult<DetectedCycle> {
         let mut members: Vec<BlobId> = Vec::new();
         let mut visited: BTreeSet<BlobId> = BTreeSet::new();
@@ -391,7 +379,7 @@ impl CycleDetector {
         members.reverse();
 
         Ok(DetectedCycle {
-            entry:           cycle_entry,
+            entry: cycle_entry,
             total_size_hint: 0, // A remplir si les tailles sont connues.
             members,
         })
@@ -458,7 +446,9 @@ mod tests {
     use crate::fs::exofs::core::BlobId;
 
     fn bid(b: u8) -> BlobId {
-        let mut a = [0u8; 32]; a[0] = b; BlobId(a)
+        let mut a = [0u8; 32];
+        a[0] = b;
+        BlobId(a)
     }
 
     #[test]
@@ -479,8 +469,8 @@ mod tests {
     #[test]
     fn test_detected_cycle_display() {
         let c = DetectedCycle {
-            members:         alloc::vec![bid(1), bid(2)],
-            entry:           bid(1),
+            members: alloc::vec![bid(1), bid(2)],
+            entry: bid(1),
             total_size_hint: 1024,
         };
         assert!(c.contains(&bid(1)));
@@ -492,13 +482,13 @@ mod tests {
     fn test_all_cycle_members() {
         let detector = CycleDetector::new();
         let c1 = DetectedCycle {
-            members:         alloc::vec![bid(1), bid(2)],
-            entry:           bid(1),
+            members: alloc::vec![bid(1), bid(2)],
+            entry: bid(1),
             total_size_hint: 0,
         };
         let c2 = DetectedCycle {
-            members:         alloc::vec![bid(3), bid(4)],
-            entry:           bid(3),
+            members: alloc::vec![bid(3), bid(4)],
+            entry: bid(3),
             total_size_hint: 0,
         };
         let members = detector.all_cycle_members(&[c1, c2]);

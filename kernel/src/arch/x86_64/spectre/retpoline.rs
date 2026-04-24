@@ -18,7 +18,6 @@
 //! En pratique, avec Rust/LLVM ≥ 15 : `-Ztarget-feature=+retpoline-indirect-calls`
 //! ce module expose uniquement les macros et helpers pour les cas manuels (ASM).
 
-
 /// Appel indirect via retpoline vers un pointeur de fonction
 ///
 /// Usage : quand on ne peut pas utiliser l'attribut Rust `-Zretpoline`.
@@ -81,7 +80,6 @@ core::arch::global_asm!(
     "    jmp 2b",
     "1:  mov [rsp], rax",
     "    ret",
-
     // Thunk pour R11
     ".global __x86_indirect_thunk_r11",
     ".type __x86_indirect_thunk_r11, @function",

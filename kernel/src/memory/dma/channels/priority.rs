@@ -13,7 +13,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
-use crate::memory::dma::core::types::{DmaChannelId, DmaTransactionId, DmaPriority, DmaError};
+use crate::memory::dma::core::types::{DmaChannelId, DmaError, DmaPriority, DmaTransactionId};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES
@@ -37,7 +37,7 @@ pub const STARVATION_THRESHOLD: u32 = 32;
 #[derive(Copy, Clone)]
 struct PrioEntry {
     /// Transaction DMA associée.
-    txn_id:     DmaTransactionId,
+    txn_id: DmaTransactionId,
     /// Canal DMA demandeur.
     channel_id: DmaChannelId,
     /// Nombre de passes de scheduler écoulées sans être dépilée (anti-famine).
@@ -46,7 +46,7 @@ struct PrioEntry {
 
 impl PrioEntry {
     const EMPTY: Self = PrioEntry {
-        txn_id:     DmaTransactionId::INVALID,
+        txn_id: DmaTransactionId::INVALID,
         channel_id: DmaChannelId(u32::MAX),
         age_passes: 0,
     };
@@ -63,23 +63,25 @@ impl PrioEntry {
 
 struct PrioQueue {
     entries: [PrioEntry; PRIORITY_QUEUE_DEPTH],
-    head:    usize,
-    tail:    usize,
-    count:   usize,
+    head: usize,
+    tail: usize,
+    count: usize,
 }
 
 impl PrioQueue {
     const fn new() -> Self {
         PrioQueue {
             entries: [PrioEntry::EMPTY; PRIORITY_QUEUE_DEPTH],
-            head:    0,
-            tail:    0,
-            count:   0,
+            head: 0,
+            tail: 0,
+            count: 0,
         }
     }
 
     fn push(&mut self, entry: PrioEntry) -> bool {
-        if self.count >= PRIORITY_QUEUE_DEPTH { return false; }
+        if self.count >= PRIORITY_QUEUE_DEPTH {
+            return false;
+        }
         self.entries[self.tail] = entry;
         self.tail = (self.tail + 1) % PRIORITY_QUEUE_DEPTH;
         self.count += 1;
@@ -87,7 +89,9 @@ impl PrioQueue {
     }
 
     fn pop(&mut self) -> Option<PrioEntry> {
-        if self.count == 0 { return None; }
+        if self.count == 0 {
+            return None;
+        }
         let entry = self.entries[self.head];
         self.entries[self.head] = PrioEntry::EMPTY;
         self.head = (self.head + 1) % PRIORITY_QUEUE_DEPTH;
@@ -96,22 +100,29 @@ impl PrioQueue {
     }
 
     fn peek(&self) -> Option<&PrioEntry> {
-        if self.count == 0 { return None; }
+        if self.count == 0 {
+            return None;
+        }
         Some(&self.entries[self.head])
     }
 
-    fn len(&self) -> usize { self.count }
+    fn len(&self) -> usize {
+        self.count
+    }
     #[allow(dead_code)]
-    fn is_full(&self)  -> bool { self.count >= PRIORITY_QUEUE_DEPTH }
+    fn is_full(&self) -> bool {
+        self.count >= PRIORITY_QUEUE_DEPTH
+    }
     #[allow(dead_code)]
-    fn is_empty(&self) -> bool { self.count == 0 }
+    fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 
     /// Incrémente l'âge de toutes les entrées (anti-famine).
     fn age_all(&mut self) {
         let mut idx = self.head;
         for _ in 0..self.count {
-            self.entries[idx].age_passes =
-                self.entries[idx].age_passes.saturating_add(1);
+            self.entries[idx].age_passes = self.entries[idx].age_passes.saturating_add(1);
             idx = (idx + 1) % PRIORITY_QUEUE_DEPTH;
         }
     }
@@ -123,20 +134,28 @@ impl PrioQueue {
 
 /// Statistiques du scheduler de priorité.
 pub struct PrioritySchedulerStats {
-    pub enqueued:   [AtomicU64; PRIORITY_LEVELS],
-    pub dequeued:   [AtomicU64; PRIORITY_LEVELS],
-    pub promoted:   AtomicU64,
+    pub enqueued: [AtomicU64; PRIORITY_LEVELS],
+    pub dequeued: [AtomicU64; PRIORITY_LEVELS],
+    pub promoted: AtomicU64,
     pub full_drops: AtomicU64,
 }
 
 impl PrioritySchedulerStats {
     const fn new() -> Self {
         PrioritySchedulerStats {
-            enqueued:   [AtomicU64::new(0), AtomicU64::new(0),
-                         AtomicU64::new(0), AtomicU64::new(0)],
-            dequeued:   [AtomicU64::new(0), AtomicU64::new(0),
-                         AtomicU64::new(0), AtomicU64::new(0)],
-            promoted:   AtomicU64::new(0),
+            enqueued: [
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+            ],
+            dequeued: [
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+            ],
+            promoted: AtomicU64::new(0),
             full_drops: AtomicU64::new(0),
         }
     }
@@ -151,9 +170,11 @@ struct PrioritySchedulerInner {
 impl PrioritySchedulerInner {
     const fn new() -> Self {
         PrioritySchedulerInner {
-            queues:       [
-                PrioQueue::new(), PrioQueue::new(),
-                PrioQueue::new(), PrioQueue::new(),
+            queues: [
+                PrioQueue::new(),
+                PrioQueue::new(),
+                PrioQueue::new(),
+                PrioQueue::new(),
             ],
             pass_counter: 0,
         }
@@ -161,9 +182,9 @@ impl PrioritySchedulerInner {
 
     fn prio_index(p: DmaPriority) -> usize {
         match p {
-            DmaPriority::Low      => 0,
-            DmaPriority::Normal   => 1,
-            DmaPriority::High     => 2,
+            DmaPriority::Low => 0,
+            DmaPriority::Normal => 1,
+            DmaPriority::High => 2,
             DmaPriority::Realtime => 3,
         }
     }
@@ -195,12 +216,16 @@ impl PriorityScheduler {
     /// Retourne `Err(DmaError::OutOfMemory)` si la file de ce niveau est pleine.
     pub fn enqueue(
         &self,
-        txn_id:     DmaTransactionId,
+        txn_id: DmaTransactionId,
         channel_id: DmaChannelId,
-        priority:   DmaPriority,
+        priority: DmaPriority,
     ) -> Result<(), DmaError> {
         let level = PrioritySchedulerInner::prio_index(priority);
-        let entry = PrioEntry { txn_id, channel_id, age_passes: 0 };
+        let entry = PrioEntry {
+            txn_id,
+            channel_id,
+            age_passes: 0,
+        };
 
         let mut inner = self.inner.lock();
         if !inner.queues[level].push(entry) {
@@ -275,7 +300,7 @@ impl PriorityScheduler {
             for _ in 0..src_len {
                 let aged = match inner.queues[src_level].peek() {
                     Some(e) => e.age_passes >= STARVATION_THRESHOLD,
-                    None    => false,
+                    None => false,
                 };
                 if aged {
                     if let Some(mut entry) = inner.queues[src_level].pop() {
@@ -292,7 +317,9 @@ impl PriorityScheduler {
                 }
             }
             if promoted_count > 0 {
-                self.stats.promoted.fetch_add(promoted_count as u64, Ordering::Relaxed);
+                self.stats
+                    .promoted
+                    .fetch_add(promoted_count as u64, Ordering::Relaxed);
             }
         }
     }

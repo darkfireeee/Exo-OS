@@ -2,7 +2,6 @@
 //
 // Espace de noms réseau (CLONE_NEWNET) — Exo-OS Couche 1.5
 
-
 use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Identifiant d'un espace de noms réseau.
@@ -14,27 +13,31 @@ pub struct NetNsId(pub u32);
 #[repr(C)]
 pub struct NetNamespace {
     /// Identifiant unique.
-    pub id:        u32,
+    pub id: u32,
     /// Nombre de processus.
-    pub refcount:  AtomicU32,
+    pub refcount: AtomicU32,
     /// Loopback actif.
-    pub loopback:  AtomicU32,
+    pub loopback: AtomicU32,
     /// Validité.
-    pub valid:     AtomicU32,
+    pub valid: AtomicU32,
 }
 
 impl NetNamespace {
     const fn new_root() -> Self {
         Self {
-            id:       0,
+            id: 0,
             refcount: AtomicU32::new(1),
             loopback: AtomicU32::new(0),
-            valid:    AtomicU32::new(1),
+            valid: AtomicU32::new(1),
         }
     }
 
-    pub fn inc_ref(&self) { self.refcount.fetch_add(1, Ordering::Relaxed); }
-    pub fn dec_ref(&self) -> u32 { self.refcount.fetch_sub(1, Ordering::AcqRel) }
+    pub fn inc_ref(&self) {
+        self.refcount.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn dec_ref(&self) -> u32 {
+        self.refcount.fetch_sub(1, Ordering::AcqRel)
+    }
 }
 
 unsafe impl Sync for NetNamespace {}

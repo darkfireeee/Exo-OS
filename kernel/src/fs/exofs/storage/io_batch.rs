@@ -17,11 +17,11 @@
 // - ARITH-02 : checked_add pour tous les offsets.
 // - WRITE-02 : bytes_written vérifié après chaque écriture.
 
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
+use crate::fs::exofs::core::{DiskOffset, ExofsError, ExofsResult};
 use crate::fs::exofs::storage::layout::BLOCK_SIZE;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -44,7 +44,7 @@ pub const COALESCE_GAP_THRESHOLD: u64 = BLOCK_SIZE as u64;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IoOpKind {
     /// Lecture : (`offset`, `len`) → remplir le buffer fourni à la soumission.
-    Read  { len: u64 },
+    Read { len: u64 },
     /// Écriture : (`offset`, `data`) → écrire les octets sur le disque.
     Write { data: Vec<u8> },
 }
@@ -57,18 +57,26 @@ pub enum IoOpKind {
 #[derive(Clone, Debug)]
 pub struct IoOp {
     pub offset: DiskOffset,
-    pub kind:   IoOpKind,
+    pub kind: IoOpKind,
     /// Priorité (plus petit numero = plus haute priorité).
-    pub prio:   u8,
+    pub prio: u8,
 }
 
 impl IoOp {
     pub fn read(offset: DiskOffset, len: u64) -> IoOp {
-        IoOp { offset, kind: IoOpKind::Read { len }, prio: 128 }
+        IoOp {
+            offset,
+            kind: IoOpKind::Read { len },
+            prio: 128,
+        }
     }
 
     pub fn write(offset: DiskOffset, data: Vec<u8>) -> IoOp {
-        IoOp { offset, kind: IoOpKind::Write { data }, prio: 128 }
+        IoOp {
+            offset,
+            kind: IoOpKind::Write { data },
+            prio: 128,
+        }
     }
 
     pub fn with_prio(mut self, prio: u8) -> Self {
@@ -86,7 +94,7 @@ impl IoOp {
 
     pub fn byte_count(&self) -> u64 {
         match &self.kind {
-            IoOpKind::Read  { len  } => *len,
+            IoOpKind::Read { len } => *len,
             IoOpKind::Write { data } => data.len() as u64,
         }
     }
@@ -104,19 +112,29 @@ impl IoOp {
 /// Résultat d'une opération soumise dans un lot.
 #[derive(Debug)]
 pub struct IoOpResult {
-    pub offset:       DiskOffset,
-    pub bytes_done:   u64,
-    pub success:      bool,
-    pub error:        Option<ExofsError>,
+    pub offset: DiskOffset,
+    pub bytes_done: u64,
+    pub success: bool,
+    pub error: Option<ExofsError>,
 }
 
 impl IoOpResult {
     fn ok(offset: DiskOffset, bytes_done: u64) -> Self {
-        Self { offset, bytes_done, success: true, error: None }
+        Self {
+            offset,
+            bytes_done,
+            success: true,
+            error: None,
+        }
     }
 
     fn err(offset: DiskOffset, e: ExofsError) -> Self {
-        Self { offset, bytes_done: 0, success: false, error: Some(e) }
+        Self {
+            offset,
+            bytes_done: 0,
+            success: false,
+            error: Some(e),
+        }
     }
 }
 
@@ -126,25 +144,25 @@ impl IoOpResult {
 
 #[derive(Default, Debug, Clone, Copy)]
 pub struct BatchStats {
-    pub ops_submitted:  u64,
-    pub ops_succeeded:  u64,
-    pub ops_failed:     u64,
-    pub bytes_written:  u64,
-    pub bytes_read:     u64,
+    pub ops_submitted: u64,
+    pub ops_succeeded: u64,
+    pub ops_failed: u64,
+    pub bytes_written: u64,
+    pub bytes_read: u64,
     pub coalesce_merges: u64,
-    pub total_batches:  u64,
+    pub total_batches: u64,
 }
 
 impl BatchStats {
     pub fn merge(&self, other: &BatchStats) -> BatchStats {
         BatchStats {
-            ops_submitted:  self.ops_submitted.saturating_add(other.ops_submitted),
-            ops_succeeded:  self.ops_succeeded.saturating_add(other.ops_succeeded),
-            ops_failed:     self.ops_failed.saturating_add(other.ops_failed),
-            bytes_written:  self.bytes_written.saturating_add(other.bytes_written),
-            bytes_read:     self.bytes_read.saturating_add(other.bytes_read),
+            ops_submitted: self.ops_submitted.saturating_add(other.ops_submitted),
+            ops_succeeded: self.ops_succeeded.saturating_add(other.ops_succeeded),
+            ops_failed: self.ops_failed.saturating_add(other.ops_failed),
+            bytes_written: self.bytes_written.saturating_add(other.bytes_written),
+            bytes_read: self.bytes_read.saturating_add(other.bytes_read),
             coalesce_merges: self.coalesce_merges.saturating_add(other.coalesce_merges),
-            total_batches:  self.total_batches.saturating_add(other.total_batches),
+            total_batches: self.total_batches.saturating_add(other.total_batches),
         }
     }
 }
@@ -155,9 +173,9 @@ impl BatchStats {
 
 /// Lot d'opérations d'I/O à soumettre en une fois.
 pub struct IoBatch {
-    ops:          Vec<IoOp>,
-    submitted:    bool,
-    coalesce:     bool,
+    ops: Vec<IoOp>,
+    submitted: bool,
+    coalesce: bool,
     sort_offsets: bool,
 }
 
@@ -165,27 +183,47 @@ impl IoBatch {
     // ── Constructeurs ─────────────────────────────────────────────────────────
 
     pub fn new() -> Self {
-        Self { ops: Vec::new(), submitted: false, coalesce: true, sort_offsets: true }
+        Self {
+            ops: Vec::new(),
+            submitted: false,
+            coalesce: true,
+            sort_offsets: true,
+        }
     }
 
     pub fn with_capacity(cap: usize) -> ExofsResult<Self> {
         let cap = cap.min(MAX_BATCH_OPS);
         let mut ops = Vec::new();
         ops.try_reserve(cap).map_err(|_| ExofsError::NoMemory)?;
-        Ok(Self { ops, submitted: false, coalesce: true, sort_offsets: true })
+        Ok(Self {
+            ops,
+            submitted: false,
+            coalesce: true,
+            sort_offsets: true,
+        })
     }
 
     /// Désactive la coalescence.
-    pub fn no_coalesce(mut self) -> Self { self.coalesce = false; self }
+    pub fn no_coalesce(mut self) -> Self {
+        self.coalesce = false;
+        self
+    }
     /// Désactive le tri par offsets.
-    pub fn no_sort(mut self) -> Self { self.sort_offsets = false; self }
+    pub fn no_sort(mut self) -> Self {
+        self.sort_offsets = false;
+        self
+    }
 
     // ── Ajouter des opérations ────────────────────────────────────────────────
 
     /// Ajoute une opération de lecture.
     pub fn add_read(&mut self, offset: DiskOffset, len: u64) -> ExofsResult<()> {
-        if self.submitted { return Err(ExofsError::InvalidState); }
-        if self.ops.len() >= MAX_BATCH_OPS { return Err(ExofsError::BufferFull); }
+        if self.submitted {
+            return Err(ExofsError::InvalidState);
+        }
+        if self.ops.len() >= MAX_BATCH_OPS {
+            return Err(ExofsError::BufferFull);
+        }
         self.ops.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         self.ops.push(IoOp::read(offset, len));
         Ok(())
@@ -193,8 +231,12 @@ impl IoBatch {
 
     /// Ajoute une opération d'écriture.
     pub fn add_write(&mut self, offset: DiskOffset, data: Vec<u8>) -> ExofsResult<()> {
-        if self.submitted { return Err(ExofsError::InvalidState); }
-        if self.ops.len() >= MAX_BATCH_OPS { return Err(ExofsError::BufferFull); }
+        if self.submitted {
+            return Err(ExofsError::InvalidState);
+        }
+        if self.ops.len() >= MAX_BATCH_OPS {
+            return Err(ExofsError::BufferFull);
+        }
         self.ops.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         self.ops.push(IoOp::write(offset, data));
         Ok(())
@@ -202,8 +244,12 @@ impl IoBatch {
 
     /// Ajoute une opération avec priorité explicite.
     pub fn add_op(&mut self, op: IoOp) -> ExofsResult<()> {
-        if self.submitted { return Err(ExofsError::InvalidState); }
-        if self.ops.len() >= MAX_BATCH_OPS { return Err(ExofsError::BufferFull); }
+        if self.submitted {
+            return Err(ExofsError::InvalidState);
+        }
+        if self.ops.len() >= MAX_BATCH_OPS {
+            return Err(ExofsError::BufferFull);
+        }
         self.ops.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         self.ops.push(op);
         Ok(())
@@ -219,9 +265,11 @@ impl IoBatch {
     /// Fusionne les écritures contiguës dans un seul vecteur de bytes.
     /// Retourne le nombre de fusions effectuées.
     fn coalesce_writes(&mut self) -> u64 {
-        if self.ops.len() < 2 { return 0; }
+        if self.ops.len() < 2 {
+            return 0;
+        }
 
-        let mut merged  = 0u64;
+        let mut merged = 0u64;
         let mut result: Vec<IoOp> = Vec::new();
         result.try_reserve(self.ops.len()).unwrap_or(());
 
@@ -247,13 +295,14 @@ impl IoBatch {
             }
 
             let mut j = i + 1;
-            while j < self.ops.len()
-                && combined_data.len() as u64 <= MAX_COALESCE_BYTES
-            {
+            while j < self.ops.len() && combined_data.len() as u64 <= MAX_COALESCE_BYTES {
                 let next = &self.ops[j];
-                if !next.is_write() { break; }
+                if !next.is_write() {
+                    break;
+                }
 
-                let expected_offset = start_offset.0
+                let expected_offset = start_offset
+                    .0
                     .checked_add(combined_data.len() as u64)
                     .unwrap_or(u64::MAX);
 
@@ -263,13 +312,17 @@ impl IoBatch {
                     COALESCE_GAP_THRESHOLD + 1
                 };
 
-                if gap > COALESCE_GAP_THRESHOLD { break; }
+                if gap > COALESCE_GAP_THRESHOLD {
+                    break;
+                }
 
                 // Combler le trou avec des zéros si nécessaire.
                 let pad = (next.offset.0.saturating_sub(expected_offset)) as usize;
                 if pad > 0 {
                     combined_data.try_reserve(pad).unwrap_or(());
-                    for _ in 0..pad { combined_data.push(0u8); }
+                    for _ in 0..pad {
+                        combined_data.push(0u8);
+                    }
                 }
 
                 if let IoOpKind::Write { data } = &next.kind {
@@ -298,23 +351,37 @@ impl IoBatch {
     pub fn submit(
         &mut self,
         write_fn: &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
-        read_fn:  &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
+        read_fn: &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
     ) -> ExofsResult<IoBatchReport> {
-        if self.submitted { return Err(ExofsError::InvalidState); }
+        if self.submitted {
+            return Err(ExofsError::InvalidState);
+        }
         if self.ops.is_empty() {
             self.submitted = true;
             return Ok(IoBatchReport::empty());
         }
 
         // Optimisations pre-soumission.
-        if self.sort_offsets { self.sort_by_offset(); }
-        let merges = if self.coalesce { self.coalesce_writes() } else { 0 };
+        if self.sort_offsets {
+            self.sort_by_offset();
+        }
+        let merges = if self.coalesce {
+            self.coalesce_writes()
+        } else {
+            0
+        };
 
         let n_ops = self.ops.len();
         let mut results: Vec<IoOpResult> = Vec::new();
-        results.try_reserve(n_ops).map_err(|_| ExofsError::NoMemory)?;
+        results
+            .try_reserve(n_ops)
+            .map_err(|_| ExofsError::NoMemory)?;
 
-        let mut stats = BatchStats { total_batches: 1, coalesce_merges: merges, ..Default::default() };
+        let mut stats = BatchStats {
+            total_batches: 1,
+            coalesce_merges: merges,
+            ..Default::default()
+        };
 
         for op in &self.ops {
             stats.ops_submitted = stats.ops_submitted.saturating_add(1);
@@ -381,27 +448,53 @@ impl IoBatch {
 
     // ── Utilitaires ───────────────────────────────────────────────────────────
 
-    pub fn len(&self) -> usize           { self.ops.len() }
-    pub fn is_empty(&self) -> bool       { self.ops.is_empty() }
-    pub fn is_submitted(&self) -> bool   { self.submitted }
-    pub fn has_writes(&self) -> bool     { self.ops.iter().any(|op| op.is_write()) }
-    pub fn has_reads(&self) -> bool      { self.ops.iter().any(|op| op.is_read()) }
+    pub fn len(&self) -> usize {
+        self.ops.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+    pub fn is_submitted(&self) -> bool {
+        self.submitted
+    }
+    pub fn has_writes(&self) -> bool {
+        self.ops.iter().any(|op| op.is_write())
+    }
+    pub fn has_reads(&self) -> bool {
+        self.ops.iter().any(|op| op.is_read())
+    }
 
     pub fn total_write_bytes(&self) -> u64 {
-        self.ops.iter()
-            .filter_map(|op| if op.is_write() { Some(op.byte_count()) } else { None })
+        self.ops
+            .iter()
+            .filter_map(|op| {
+                if op.is_write() {
+                    Some(op.byte_count())
+                } else {
+                    None
+                }
+            })
             .fold(0u64, |a, b| a.saturating_add(b))
     }
 
     pub fn total_read_bytes(&self) -> u64 {
-        self.ops.iter()
-            .filter_map(|op| if op.is_read() { Some(op.byte_count()) } else { None })
+        self.ops
+            .iter()
+            .filter_map(|op| {
+                if op.is_read() {
+                    Some(op.byte_count())
+                } else {
+                    None
+                }
+            })
             .fold(0u64, |a, b| a.saturating_add(b))
     }
 }
 
 impl Default for IoBatch {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -411,12 +504,15 @@ impl Default for IoBatch {
 /// Rapport de soumission d'un lot d'I/O.
 pub struct IoBatchReport {
     pub results: Vec<IoOpResult>,
-    pub stats:   BatchStats,
+    pub stats: BatchStats,
 }
 
 impl IoBatchReport {
     fn empty() -> Self {
-        Self { results: Vec::new(), stats: BatchStats::default() }
+        Self {
+            results: Vec::new(),
+            stats: BatchStats::default(),
+        }
     }
 
     pub fn all_succeeded(&self) -> bool {
@@ -438,26 +534,32 @@ impl IoBatchReport {
 
 /// File de lots d'I/O à soumettre en séquence.
 pub struct IoBatchQueue {
-    pending:  Vec<IoBatch>,
-    global:   BatchStats,
-    errors:   AtomicU64,
+    pending: Vec<IoBatch>,
+    global: BatchStats,
+    errors: AtomicU64,
     shutdown: AtomicBool,
 }
 
 impl IoBatchQueue {
     pub fn new() -> Self {
         Self {
-            pending:  Vec::new(),
-            global:   BatchStats::default(),
-            errors:   AtomicU64::new(0),
+            pending: Vec::new(),
+            global: BatchStats::default(),
+            errors: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
         }
     }
 
     pub fn enqueue(&mut self, batch: IoBatch) -> ExofsResult<()> {
-        if batch.is_submitted() { return Err(ExofsError::InvalidState); }
-        if self.shutdown.load(Ordering::Relaxed) { return Err(ExofsError::Shutdown); }
-        self.pending.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        if batch.is_submitted() {
+            return Err(ExofsError::InvalidState);
+        }
+        if self.shutdown.load(Ordering::Relaxed) {
+            return Err(ExofsError::Shutdown);
+        }
+        self.pending
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.pending.push(batch);
         Ok(())
     }
@@ -466,7 +568,7 @@ impl IoBatchQueue {
     pub fn flush(
         &mut self,
         write_fn: &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
-        read_fn:  &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
+        read_fn: &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
     ) -> ExofsResult<BatchStats> {
         let mut combined = BatchStats::default();
 
@@ -475,7 +577,8 @@ impl IoBatchQueue {
                 Ok(report) => {
                     combined = combined.merge(&report.stats);
                     if !report.all_succeeded() {
-                        self.errors.fetch_add(report.error_count() as u64, Ordering::Relaxed);
+                        self.errors
+                            .fetch_add(report.error_count() as u64, Ordering::Relaxed);
                     }
                 }
                 Err(_) => {
@@ -489,9 +592,15 @@ impl IoBatchQueue {
         Ok(combined)
     }
 
-    pub fn pending_count(&self)  -> usize { self.pending.len() }
-    pub fn error_count(&self)    -> u64   { self.errors.load(Ordering::Relaxed) }
-    pub fn global_stats(&self)   -> &BatchStats { &self.global }
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
+    pub fn error_count(&self) -> u64 {
+        self.errors.load(Ordering::Relaxed)
+    }
+    pub fn global_stats(&self) -> &BatchStats {
+        &self.global
+    }
 
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Release);
@@ -527,7 +636,7 @@ mod tests {
     #[test]
     fn test_coalesce_two_writes() {
         let mut b = IoBatch::new().no_sort();
-        b.add_write(DiskOffset(0),    vec![0xAAu8; 4096]).unwrap();
+        b.add_write(DiskOffset(0), vec![0xAAu8; 4096]).unwrap();
         b.add_write(DiskOffset(4096), vec![0xBBu8; 4096]).unwrap();
         b.coalesce_writes();
         // Après coalescence, une seule op.

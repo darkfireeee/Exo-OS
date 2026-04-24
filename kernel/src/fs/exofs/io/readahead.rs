@@ -11,10 +11,9 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─── ReadaheadPolicy ─────────────────────────────────────────────────────────
 
@@ -23,15 +22,21 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 #[repr(u8)]
 pub enum ReadaheadPolicy {
     Disabled = 0,
-    Fixed    = 1,
+    Fixed = 1,
     Adaptive = 2,
 }
 
 impl ReadaheadPolicy {
     pub fn from_u8(v: u8) -> Self {
-        match v { 0=>Self::Disabled, 1=>Self::Fixed, _=>Self::Adaptive }
+        match v {
+            0 => Self::Disabled,
+            1 => Self::Fixed,
+            _ => Self::Adaptive,
+        }
     }
-    pub fn is_active(self) -> bool { !matches!(self, Self::Disabled) }
+    pub fn is_active(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
 }
 
 // ─── ReadaheadWindow ─────────────────────────────────────────────────────────
@@ -40,15 +45,21 @@ impl ReadaheadPolicy {
 #[derive(Clone, Debug)]
 pub struct ReadaheadWindow {
     pub start_block: u64,
-    pub length:      u32,     // nombre de blocs pré-chargés
-    pub hit_count:   u32,     // accès dans la fenêtre
-    pub miss_count:  u32,     // miss dans la fenêtre
-    pub active:      bool,
+    pub length: u32,     // nombre de blocs pré-chargés
+    pub hit_count: u32,  // accès dans la fenêtre
+    pub miss_count: u32, // miss dans la fenêtre
+    pub active: bool,
 }
 
 impl ReadaheadWindow {
     pub fn new(start_block: u64, length: u32) -> Self {
-        Self { start_block, length, hit_count: 0, miss_count: 0, active: true }
+        Self {
+            start_block,
+            length,
+            hit_count: 0,
+            miss_count: 0,
+            active: true,
+        }
     }
 
     pub fn end_block(&self) -> u64 {
@@ -59,13 +70,20 @@ impl ReadaheadWindow {
         self.active && block >= self.start_block && block < self.end_block()
     }
 
-    pub fn record_hit(&mut self) { self.hit_count = self.hit_count.saturating_add(1); }
-    pub fn record_miss(&mut self) { self.miss_count = self.miss_count.saturating_add(1); }
+    pub fn record_hit(&mut self) {
+        self.hit_count = self.hit_count.saturating_add(1);
+    }
+    pub fn record_miss(&mut self) {
+        self.miss_count = self.miss_count.saturating_add(1);
+    }
 
     pub fn hit_ratio_pct10(&self) -> u32 {
         let total = self.hit_count.saturating_add(self.miss_count);
-        if total == 0 { return 0; }
-        self.hit_count.saturating_mul(1000)
+        if total == 0 {
+            return 0;
+        }
+        self.hit_count
+            .saturating_mul(1000)
             .checked_div(total)
             .unwrap_or(0)
     }
@@ -85,13 +103,19 @@ const ACCESS_LOG_SIZE: usize = 32;
 
 /// Journal circulaire des N derniers accès (pour détecter les accès séquentiels).
 pub struct BlockAccessLog {
-    log:  [u64; ACCESS_LOG_SIZE],
+    log: [u64; ACCESS_LOG_SIZE],
     head: usize,
     count: usize,
 }
 
 impl BlockAccessLog {
-    pub const fn new() -> Self { Self { log: [0u64; ACCESS_LOG_SIZE], head: 0, count: 0 } }
+    pub const fn new() -> Self {
+        Self {
+            log: [0u64; ACCESS_LOG_SIZE],
+            head: 0,
+            count: 0,
+        }
+    }
 
     pub fn push(&mut self, block: u64) {
         self.log[self.head] = block;
@@ -101,21 +125,28 @@ impl BlockAccessLog {
 
     /// Détecte si les derniers accès sont séquentiels (RECUR-01 : while).
     pub fn is_sequential(&self, window: u32) -> bool {
-        if self.count < 2 { return false; }
+        if self.count < 2 {
+            return false;
+        }
         let n = (window as usize).min(self.count).min(ACCESS_LOG_SIZE);
         let mut i = 1usize;
         while i < n {
             let cur = self.head.wrapping_sub(i).wrapping_add(ACCESS_LOG_SIZE) % ACCESS_LOG_SIZE;
-            let prev = self.head.wrapping_sub(i + 1).wrapping_add(ACCESS_LOG_SIZE) % ACCESS_LOG_SIZE;
+            let prev =
+                self.head.wrapping_sub(i + 1).wrapping_add(ACCESS_LOG_SIZE) % ACCESS_LOG_SIZE;
             let diff = self.log[cur].wrapping_sub(self.log[prev]);
-            if diff != 1 { return false; }
+            if diff != 1 {
+                return false;
+            }
             i = i.wrapping_add(1);
         }
         true
     }
 
     pub fn last(&self) -> Option<u64> {
-        if self.count == 0 { return None; }
+        if self.count == 0 {
+            return None;
+        }
         let idx = self.head.wrapping_sub(1).wrapping_add(ACCESS_LOG_SIZE) % ACCESS_LOG_SIZE;
         Some(self.log[idx])
     }
@@ -126,25 +157,36 @@ impl BlockAccessLog {
 /// Statistiques du read-ahead.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ReadaheadStats {
-    pub windows_created:  u64,
+    pub windows_created: u64,
     pub blocks_prefetched: u64,
-    pub hits:             u64,
-    pub misses:           u64,
-    pub window_advances:  u64,
-    pub policy_upgrades:  u64,  // Disabled→Fixed→Adaptive
+    pub hits: u64,
+    pub misses: u64,
+    pub window_advances: u64,
+    pub policy_upgrades: u64, // Disabled→Fixed→Adaptive
 }
 
 impl ReadaheadStats {
-    pub fn new() -> Self { Self::default() }
-    pub fn is_clean(&self) -> bool { true } // le readahead ne génère pas d'erreurs dures
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn is_clean(&self) -> bool {
+        true
+    } // le readahead ne génère pas d'erreurs dures
 
     pub fn hit_ratio_pct10(&self) -> u32 {
         let total = self.hits.saturating_add(self.misses);
-        if total == 0 { return 0; }
-        self.hits.saturating_mul(1000).checked_div(total).unwrap_or(0) as u32
+        if total == 0 {
+            return 0;
+        }
+        self.hits
+            .saturating_mul(1000)
+            .checked_div(total)
+            .unwrap_or(0) as u32
     }
 
-    pub fn reset(&mut self) { *self = Self::new(); }
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
 }
 
 // ─── ReadaheadEngine ─────────────────────────────────────────────────────────
@@ -153,13 +195,13 @@ impl ReadaheadStats {
 ///
 /// RECUR-01 : toutes les boucles while.
 pub struct ReadaheadEngine {
-    policy:        ReadaheadPolicy,
-    window:        ReadaheadWindow,
-    log:           BlockAccessLog,
-    stats:         ReadaheadStats,
+    policy: ReadaheadPolicy,
+    window: ReadaheadWindow,
+    log: BlockAccessLog,
+    stats: ReadaheadStats,
     fixed_distance: u32,
     adaptive_distance: u32,
-    seq_threshold: u32,   // accès séquentiels consécutifs pour passer en Adaptive
+    seq_threshold: u32, // accès séquentiels consécutifs pour passer en Adaptive
 }
 
 impl ReadaheadEngine {
@@ -175,13 +217,17 @@ impl ReadaheadEngine {
         }
     }
 
-    pub fn policy(&self) -> ReadaheadPolicy { self.policy }
+    pub fn policy(&self) -> ReadaheadPolicy {
+        self.policy
+    }
 
     /// Signale un accès à un bloc et met à jour la fenêtre.
     pub fn hint_access(&mut self, block: u64) {
         self.log.push(block);
 
-        if !self.policy.is_active() { return; }
+        if !self.policy.is_active() {
+            return;
+        }
 
         if self.window.contains(block) {
             self.window.record_hit();
@@ -192,8 +238,7 @@ impl ReadaheadEngine {
         }
 
         // Passage Adaptive si accès séquentiels
-        if self.policy == ReadaheadPolicy::Fixed
-            && self.log.is_sequential(self.seq_threshold) {
+        if self.policy == ReadaheadPolicy::Fixed && self.log.is_sequential(self.seq_threshold) {
             self.policy = ReadaheadPolicy::Adaptive;
             self.stats.policy_upgrades = self.stats.policy_upgrades.saturating_add(1);
         }
@@ -201,7 +246,9 @@ impl ReadaheadEngine {
 
     /// Retourne les prochains blocs à pré-charger (RECUR-01 : while).
     pub fn next_blocks_to_prefetch(&self) -> Vec<u64> {
-        if !self.policy.is_active() { return Vec::new(); }
+        if !self.policy.is_active() {
+            return Vec::new();
+        }
         let distance = match self.policy {
             ReadaheadPolicy::Adaptive => self.adaptive_distance,
             _ => self.fixed_distance,
@@ -229,9 +276,15 @@ impl ReadaheadEngine {
         self.stats.window_advances = self.stats.window_advances.saturating_add(1);
     }
 
-    pub fn stats(&self) -> &ReadaheadStats { &self.stats }
-    pub fn reset_stats(&mut self) { self.stats.reset(); }
-    pub fn window(&self) -> &ReadaheadWindow { &self.window }
+    pub fn stats(&self) -> &ReadaheadStats {
+        &self.stats
+    }
+    pub fn reset_stats(&mut self) {
+        self.stats.reset();
+    }
+    pub fn window(&self) -> &ReadaheadWindow {
+        &self.window
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -258,7 +311,9 @@ mod tests {
     #[test]
     fn test_window_hit_ratio() {
         let mut w = ReadaheadWindow::new(0, 10);
-        w.record_hit(); w.record_hit(); w.record_miss();
+        w.record_hit();
+        w.record_hit();
+        w.record_miss();
         assert_eq!(w.hit_ratio_pct10(), 666);
     }
 
@@ -274,14 +329,19 @@ mod tests {
     #[test]
     fn test_access_log_sequential() {
         let mut log = BlockAccessLog::new();
-        log.push(1); log.push(2); log.push(3); log.push(4);
+        log.push(1);
+        log.push(2);
+        log.push(3);
+        log.push(4);
         assert!(log.is_sequential(3));
     }
 
     #[test]
     fn test_access_log_not_sequential() {
         let mut log = BlockAccessLog::new();
-        log.push(1); log.push(5); log.push(6);
+        log.push(1);
+        log.push(5);
+        log.push(6);
         assert!(!log.is_sequential(3));
     }
 
@@ -319,7 +379,10 @@ mod tests {
     #[test]
     fn test_policy_upgrade_to_adaptive() {
         let mut eng = ReadaheadEngine::new(ReadaheadPolicy::Fixed);
-        eng.hint_access(1); eng.hint_access(2); eng.hint_access(3); eng.hint_access(4);
+        eng.hint_access(1);
+        eng.hint_access(2);
+        eng.hint_access(3);
+        eng.hint_access(4);
         assert_eq!(eng.policy(), ReadaheadPolicy::Adaptive);
     }
 
@@ -342,40 +405,53 @@ mod tests {
 
 /// Planificateur multi-flux de read-ahead (plusieurs fenêtres en parallèle).
 pub struct ReadaheadScheduler {
-    engines:  Vec<ReadaheadEngine>,
+    engines: Vec<ReadaheadEngine>,
     max_streams: usize,
 }
 
 impl ReadaheadScheduler {
     /// Crée un planificateur avec `max_streams` flux (OOM-02).
     pub fn new(max_streams: usize, policy: ReadaheadPolicy) -> ExofsResult<Self> {
-        if max_streams == 0 { return Err(ExofsError::InvalidArgument); }
+        if max_streams == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         let mut engines = Vec::new();
-        engines.try_reserve(max_streams).map_err(|_| ExofsError::NoMemory)?;
+        engines
+            .try_reserve(max_streams)
+            .map_err(|_| ExofsError::NoMemory)?;
         let mut i = 0usize;
         while i < max_streams {
             engines.push(ReadaheadEngine::new(policy));
             i = i.wrapping_add(1);
         }
-        Ok(Self { engines, max_streams })
+        Ok(Self {
+            engines,
+            max_streams,
+        })
     }
 
     /// Donne un accès au flux `stream_id` (RECUR-01 : pas de récursion).
     pub fn hint_access(&mut self, stream_id: usize, block: u64) -> ExofsResult<()> {
-        if stream_id >= self.max_streams { return Err(ExofsError::InvalidArgument); }
+        if stream_id >= self.max_streams {
+            return Err(ExofsError::InvalidArgument);
+        }
         self.engines[stream_id].hint_access(block);
         Ok(())
     }
 
     /// Retourne les blocs à pré-charger pour le flux `stream_id`.
     pub fn next_blocks(&self, stream_id: usize) -> ExofsResult<Vec<u64>> {
-        if stream_id >= self.max_streams { return Err(ExofsError::InvalidArgument); }
+        if stream_id >= self.max_streams {
+            return Err(ExofsError::InvalidArgument);
+        }
         Ok(self.engines[stream_id].next_blocks_to_prefetch())
     }
 
     /// Ajuste la fenêtre du flux `stream_id`.
     pub fn adjust_window(&mut self, stream_id: usize, block: u64) -> ExofsResult<()> {
-        if stream_id >= self.max_streams { return Err(ExofsError::InvalidArgument); }
+        if stream_id >= self.max_streams {
+            return Err(ExofsError::InvalidArgument);
+        }
         self.engines[stream_id].adjust_window(block);
         Ok(())
     }
@@ -386,18 +462,20 @@ impl ReadaheadScheduler {
         let mut i = 0usize;
         while i < self.engines.len() {
             let e = self.engines[i].stats();
-            s.windows_created    = s.windows_created.saturating_add(e.windows_created);
-            s.blocks_prefetched  = s.blocks_prefetched.saturating_add(e.blocks_prefetched);
-            s.hits               = s.hits.saturating_add(e.hits);
-            s.misses             = s.misses.saturating_add(e.misses);
-            s.window_advances    = s.window_advances.saturating_add(e.window_advances);
-            s.policy_upgrades    = s.policy_upgrades.saturating_add(e.policy_upgrades);
+            s.windows_created = s.windows_created.saturating_add(e.windows_created);
+            s.blocks_prefetched = s.blocks_prefetched.saturating_add(e.blocks_prefetched);
+            s.hits = s.hits.saturating_add(e.hits);
+            s.misses = s.misses.saturating_add(e.misses);
+            s.window_advances = s.window_advances.saturating_add(e.window_advances);
+            s.policy_upgrades = s.policy_upgrades.saturating_add(e.policy_upgrades);
             i = i.wrapping_add(1);
         }
         s
     }
 
-    pub fn stream_count(&self) -> usize { self.engines.len() }
+    pub fn stream_count(&self) -> usize {
+        self.engines.len()
+    }
 
     /// Réinitialise toutes les stats (RECUR-01 : while).
     pub fn reset_all_stats(&mut self) {

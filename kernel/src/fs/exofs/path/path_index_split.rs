@@ -14,28 +14,27 @@
 //! - **ARITH-02** : `checked_add` sur les calculs de taille.
 //! - **OOM-02** : `try_reserve(1)` avant les insertions.
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
-use super::path_index::{PathIndex, InMemoryEntry};
 use super::path_component::validate_component;
+use super::path_index::{InMemoryEntry, PathIndex};
+use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
 
 // ── SplitResult ───────────────────────────────────────────────────────────────
 
 /// Résultat d un split.
 pub struct SplitResult {
     /// Index fils "bas" (hashes inférieurs au pivot).
-    pub low:         PathIndex,
+    pub low: PathIndex,
     /// Index fils "haut" (hashes supérieurs ou égaux au pivot).
-    pub high:        PathIndex,
+    pub high: PathIndex,
     /// Hash pivot utilisé pour la division.
-    pub pivot_hash:  u64,
+    pub pivot_hash: u64,
     /// Nombre d entrées transférées dans l index bas.
-    pub low_count:   usize,
+    pub low_count: usize,
     /// Nombre d entrées transférées dans l index haut.
-    pub high_count:  usize,
+    pub high_count: usize,
 }
 
 // ── PathIndexSplitter ─────────────────────────────────────────────────────────
@@ -73,12 +72,11 @@ impl PathIndexSplitter {
         let pivot_hash = sorted[mid].hash;
 
         // ── 3. Création des deux index fils ───────────────────────────────────
-        let mut low  = PathIndex::new(parent_oid.clone());
+        let mut low = PathIndex::new(parent_oid.clone());
         let mut high = PathIndex::new(parent_oid);
 
         for (i, e) in sorted.iter().enumerate() {
-            let comp = validate_component(e.name_bytes())
-                .map_err(|_| ExofsError::InternalError)?;
+            let comp = validate_component(e.name_bytes()).map_err(|_| ExofsError::InternalError)?;
 
             if i < mid {
                 low.insert(&comp, e.oid.clone(), e.kind)?;
@@ -87,13 +85,19 @@ impl PathIndexSplitter {
             }
         }
 
-        low.dirty  = true;
+        low.dirty = true;
         high.dirty = true;
 
-        let low_count  = low.len();
+        let low_count = low.len();
         let high_count = high.len();
 
-        Ok(SplitResult { low, high, pivot_hash, low_count, high_count })
+        Ok(SplitResult {
+            low,
+            high,
+            pivot_hash,
+            low_count,
+            high_count,
+        })
     }
 
     /// Divise en appliquant un pivot hash fourni explicitement.
@@ -111,12 +115,11 @@ impl PathIndexSplitter {
             return Err(ExofsError::InvalidArgument);
         }
 
-        let mut low  = PathIndex::new(parent_oid.clone());
+        let mut low = PathIndex::new(parent_oid.clone());
         let mut high = PathIndex::new(parent_oid);
 
         for e in src.entries() {
-            let comp = validate_component(e.name_bytes())
-                .map_err(|_| ExofsError::InternalError)?;
+            let comp = validate_component(e.name_bytes()).map_err(|_| ExofsError::InternalError)?;
             if e.hash < pivot_hash {
                 low.insert(&comp, e.oid.clone(), e.kind)?;
             } else {
@@ -128,13 +131,19 @@ impl PathIndexSplitter {
             return Err(ExofsError::InvalidArgument);
         }
 
-        low.dirty  = true;
+        low.dirty = true;
         high.dirty = true;
 
-        let low_count  = low.len();
+        let low_count = low.len();
         let high_count = high.len();
 
-        Ok(SplitResult { low, high, pivot_hash, low_count, high_count })
+        Ok(SplitResult {
+            low,
+            high,
+            pivot_hash,
+            low_count,
+            high_count,
+        })
     }
 
     /// Vérifie qu un split est nécessaire.
@@ -147,7 +156,9 @@ impl PathIndexSplitter {
     ///
     /// Retourne `None` si l index a moins de 2 entrées.
     pub fn optimal_pivot(idx: &PathIndex) -> Option<u64> {
-        if idx.len() < 2 { return None; }
+        if idx.len() < 2 {
+            return None;
+        }
         let mut hashes: Vec<u64> = Vec::new();
         for e in idx.entries() {
             hashes.try_reserve(1).ok()?;
@@ -167,11 +178,19 @@ impl PathIndexSplitter {
         let half = src.len() / 2;
         // Taille header + entrées moyennes (44 + ~16 octets de nom).
         let avg_entry: usize = 44_usize.checked_add(16).ok_or(ExofsError::OffsetOverflow)?;
-        let half_entries = half.checked_mul(avg_entry).ok_or(ExofsError::OffsetOverflow)?;
-        let low_size  = (148_usize).checked_add(half_entries).ok_or(ExofsError::OffsetOverflow)?;
+        let half_entries = half
+            .checked_mul(avg_entry)
+            .ok_or(ExofsError::OffsetOverflow)?;
+        let low_size = (148_usize)
+            .checked_add(half_entries)
+            .ok_or(ExofsError::OffsetOverflow)?;
         let rem = src.len().saturating_sub(half);
-        let rem_entries = rem.checked_mul(avg_entry).ok_or(ExofsError::OffsetOverflow)?;
-        let high_size = (148_usize).checked_add(rem_entries).ok_or(ExofsError::OffsetOverflow)?;
+        let rem_entries = rem
+            .checked_mul(avg_entry)
+            .ok_or(ExofsError::OffsetOverflow)?;
+        let high_size = (148_usize)
+            .checked_add(rem_entries)
+            .ok_or(ExofsError::OffsetOverflow)?;
         Ok((low_size, high_size))
     }
 
@@ -179,12 +198,10 @@ impl PathIndexSplitter {
     /// - low  : tous les hashes < pivot.
     /// - high : tous les hashes >= pivot.
     /// - low.len() + high.len() == original_count.
-    pub fn verify_split(
-        result: &SplitResult,
-        original_count: usize,
-    ) -> ExofsResult<()> {
+    pub fn verify_split(result: &SplitResult, original_count: usize) -> ExofsResult<()> {
         // Vérifier cohérence count.
-        let total = result.low_count
+        let total = result
+            .low_count
             .checked_add(result.high_count)
             .ok_or(ExofsError::OffsetOverflow)?;
         if total != original_count {
@@ -213,39 +230,41 @@ impl PathIndexSplitter {
 #[derive(Debug, Clone)]
 pub struct SplitMetrics {
     /// Nombre total d entrées dans la source avant split.
-    pub total_before:      usize,
+    pub total_before: usize,
     /// Nombre d entrées dans l index bas.
-    pub low_count:         usize,
+    pub low_count: usize,
     /// Nombre d entrées dans l index haut.
-    pub high_count:        usize,
+    pub high_count: usize,
     /// Ratio de déséquilibre (0.0 = parfaitement équilibré, 1.0 = tout d un côté).
-    pub imbalance_pct:     u32,
+    pub imbalance_pct: u32,
     /// Hash pivot finalement utilisé.
-    pub used_pivot:        u64,
+    pub used_pivot: u64,
     /// Seuil de split de la source.
-    pub source_threshold:  u32,
+    pub source_threshold: u32,
 }
 
 impl SplitMetrics {
     /// Construit les métriques depuis un SplitResult.
     pub fn from_result(result: &SplitResult, total_before: usize, source_threshold: u32) -> Self {
-        let low  = result.low_count as i64;
+        let low = result.low_count as i64;
         let high = result.high_count as i64;
         let total = (total_before as i64).max(1);
-        let diff  = (low - high).unsigned_abs() as u32;
+        let diff = (low - high).unsigned_abs() as u32;
         let imbalance_pct = (diff.saturating_mul(100)) / (total as u32).max(1);
         SplitMetrics {
             total_before,
-            low_count:        result.low_count,
-            high_count:       result.high_count,
+            low_count: result.low_count,
+            high_count: result.high_count,
             imbalance_pct,
-            used_pivot:       result.pivot_hash,
+            used_pivot: result.pivot_hash,
             source_threshold,
         }
     }
 
     /// `true` si le split est fortement déséquilibré (>75 % d un côté).
-    pub fn is_imbalanced(&self) -> bool { self.imbalance_pct > 75 }
+    pub fn is_imbalanced(&self) -> bool {
+        self.imbalance_pct > 75
+    }
 }
 
 // ── SplitPolicy ───────────────────────────────────────────────────────────────
@@ -264,7 +283,9 @@ pub enum SplitPolicy {
 }
 
 impl Default for SplitPolicy {
-    fn default() -> Self { SplitPolicy::Median }
+    fn default() -> Self {
+        SplitPolicy::Median
+    }
 }
 
 impl SplitPolicy {
@@ -280,14 +301,16 @@ impl SplitPolicy {
                     hashes.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     hashes.push(e.hash);
                 }
-                if hashes.is_empty() { return Err(ExofsError::InvalidArgument); }
+                if hashes.is_empty() {
+                    return Err(ExofsError::InvalidArgument);
+                }
                 hashes.sort_unstable();
                 let n = hashes.len();
                 let idx = match policy {
-                    SplitPolicy::Median       => n / 2,
+                    SplitPolicy::Median => n / 2,
                     SplitPolicy::Percentile25 => n / 4,
                     SplitPolicy::Percentile75 => (n * 3) / 4,
-                    SplitPolicy::Explicit(_)  => unreachable!(),
+                    SplitPolicy::Explicit(_) => unreachable!(),
                 };
                 Ok(hashes[idx.min(n - 1)])
             }
@@ -300,9 +323,9 @@ impl SplitPolicy {
 /// Requête de split avec politique configurable.
 pub struct SplitRequest {
     pub parent_oid: ObjectId,
-    pub policy:     SplitPolicy,
+    pub policy: SplitPolicy,
     /// Si `true`, vérifie automatiquement le résultat après split.
-    pub verify:     bool,
+    pub verify: bool,
 }
 
 impl SplitRequest {
@@ -317,13 +340,14 @@ impl SplitRequest {
 
     /// Modifie la politique.
     pub fn with_policy(mut self, p: SplitPolicy) -> Self {
-        self.policy = p; self
+        self.policy = p;
+        self
     }
 
     /// Exécute le split.
     pub fn execute(self, src: &mut PathIndex) -> ExofsResult<(SplitResult, SplitMetrics)> {
         let total_before = src.len();
-        let source_thr   = src.split_threshold;
+        let source_thr = src.split_threshold;
         let pivot = self.policy.compute_pivot(src)?;
         let result = PathIndexSplitter::split_at_hash(src, self.parent_oid, pivot)?;
         if self.verify {
@@ -363,11 +387,13 @@ pub fn split_with_metrics(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::path_component::validate_component;
+    use super::*;
 
     fn fake_oid(b: u8) -> ObjectId {
-        let mut a = [0u8; 32]; a[0] = b; ObjectId(a)
+        let mut a = [0u8; 32];
+        a[0] = b;
+        ObjectId(a)
     }
 
     fn make_index(n: usize) -> PathIndex {
@@ -381,7 +407,8 @@ mod tests {
         idx
     }
 
-    #[test] fn test_split_basic() {
+    #[test]
+    fn test_split_basic() {
         let mut idx = make_index(10);
         let res = PathIndexSplitter::split(&mut idx, fake_oid(0)).unwrap();
         assert_eq!(res.low_count + res.high_count, 10);
@@ -389,7 +416,8 @@ mod tests {
         assert!(res.high_count > 0);
     }
 
-    #[test] fn test_split_too_small() {
+    #[test]
+    fn test_split_too_small() {
         let mut idx = PathIndex::new(fake_oid(0));
         let c = validate_component(b"only").unwrap();
         idx.insert(&c, fake_oid(1), 0).unwrap();
@@ -399,20 +427,23 @@ mod tests {
         ));
     }
 
-    #[test] fn test_verify_split() {
+    #[test]
+    fn test_verify_split() {
         let mut idx = make_index(8);
         let original = idx.len();
         let res = PathIndexSplitter::split(&mut idx, fake_oid(0)).unwrap();
         PathIndexSplitter::verify_split(&res, original).unwrap();
     }
 
-    #[test] fn test_optimal_pivot() {
+    #[test]
+    fn test_optimal_pivot() {
         let idx = make_index(10);
         let p = PathIndexSplitter::optimal_pivot(&idx);
         assert!(p.is_some());
     }
 
-    #[test] fn test_split_at_hash() {
+    #[test]
+    fn test_split_at_hash() {
         let mut idx = make_index(10);
         let pivot = PathIndexSplitter::optimal_pivot(&idx).unwrap();
         let original = idx.len();
@@ -420,7 +451,8 @@ mod tests {
         assert_eq!(res.low_count + res.high_count, original);
     }
 
-    #[test] fn test_estimate_size() {
+    #[test]
+    fn test_estimate_size() {
         let idx = make_index(10);
         let (low, high) = PathIndexSplitter::estimate_split_size(&idx).unwrap();
         assert!(low > 148);

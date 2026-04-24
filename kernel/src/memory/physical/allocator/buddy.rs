@@ -16,16 +16,16 @@
 //   - Le buddy d'un bloc d'adresse P est P ⊕ (1 << k).
 //   - Jamais de fragmentation externe au-delà de 1 bloc de chaque ordre.
 
-use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use core::ptr::null_mut;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use spin::Mutex;
 
 use crate::memory::core::{
-    Frame, PhysAddr, AllocFlags, AllocError, ZoneType,
-    PAGE_SIZE, BUDDY_MAX_ORDER, BUDDY_ORDER_COUNT, is_aligned,
+    is_aligned, AllocError, AllocFlags, Frame, PhysAddr, ZoneType, BUDDY_MAX_ORDER,
+    BUDDY_ORDER_COUNT, PAGE_SIZE,
 };
-use crate::memory::physical::frame::descriptor::{FRAME_DESCRIPTORS, FrameFlags};
+use crate::memory::physical::frame::descriptor::{FrameFlags, FRAME_DESCRIPTORS};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FREE LIST NODE — nœud de liste chaînée dans un buddy bloc libre
@@ -38,26 +38,26 @@ use crate::memory::physical::frame::descriptor::{FRAME_DESCRIPTORS, FrameFlags};
 /// Dès qu'un bloc est alloué, son contenu est indéfini pour l'allocateur.
 #[repr(C)]
 struct FreeNode {
-    next:  *mut FreeNode,
-    prev:  *mut FreeNode,
+    next: *mut FreeNode,
+    prev: *mut FreeNode,
     order: u8,
-    _pad:  [u8; 7],
+    _pad: [u8; 7],
 }
 
 impl FreeNode {
     #[inline]
     unsafe fn init(ptr: *mut FreeNode, order: u8) {
-        (*ptr).next  = ptr;
-        (*ptr).prev  = ptr;
+        (*ptr).next = ptr;
+        (*ptr).prev = ptr;
         (*ptr).order = order;
     }
 
     #[inline]
     unsafe fn insert_after(list_head: *mut FreeNode, node: *mut FreeNode) {
         let next = (*list_head).next;
-        (*node).prev      = list_head;
-        (*node).next      = next;
-        (*next).prev      = node;
+        (*node).prev = list_head;
+        (*node).next = next;
+        (*next).prev = node;
         (*list_head).next = node;
     }
 
@@ -73,7 +73,9 @@ impl FreeNode {
 
     #[inline]
     unsafe fn is_empty(list_head: *const FreeNode) -> bool {
-        if list_head.is_null() { return true; }
+        if list_head.is_null() {
+            return true;
+        }
         (*list_head).next == list_head as *mut FreeNode
     }
 
@@ -96,7 +98,7 @@ impl FreeNode {
 #[repr(C, align(64))]
 struct BuddyOrderLevel {
     /// Tête sentinelle (nœud vide — next/prev pointent vers elle-même si vide).
-    head:  FreeNode,
+    head: FreeNode,
     /// Nombre de blocs libres à cet ordre.
     count: AtomicUsize,
 }
@@ -104,7 +106,12 @@ struct BuddyOrderLevel {
 impl BuddyOrderLevel {
     const fn new() -> Self {
         BuddyOrderLevel {
-            head:  FreeNode { next: null_mut(), prev: null_mut(), order: 0, _pad: [0; 7] },
+            head: FreeNode {
+                next: null_mut(),
+                prev: null_mut(),
+                order: 0,
+                _pad: [0; 7],
+            },
             count: AtomicUsize::new(0),
         }
     }
@@ -128,32 +135,32 @@ impl BuddyOrderLevel {
 /// la concurrence inter-zones sans contention croisée.
 pub struct BuddyZone {
     /// Zone mémoire gérée par cet allocateur.
-    zone_type:    ZoneType,
+    zone_type: ZoneType,
     /// Nœud NUMA.
-    numa_node:    u8,
+    numa_node: u8,
     /// Adresse physique de début.
-    phys_start:   PhysAddr,
+    phys_start: PhysAddr,
     /// Adresse physique de fin (exclusive).
-    phys_end:     PhysAddr,
+    phys_end: PhysAddr,
     /// Nombre total de frames dans cette zone.
     total_frames: usize,
     /// Free-lists protégées par spinlock.
     /// L'usage de spin::Mutex est autorisé dans memory/ (Couche 0).
     inner: Mutex<BuddyZoneInner>,
     /// Nombre de frames libres (snapshot approximatif, cache-friendly).
-    free_frames:  AtomicUsize,
+    free_frames: AtomicUsize,
     /// Compteur d'allocations.
-    alloc_count:  AtomicUsize,
+    alloc_count: AtomicUsize,
     /// Compteur de libérations.
-    free_count:   AtomicUsize,
+    free_count: AtomicUsize,
     /// Compteur d'échecs (fragmentation ou mémoire épuisée).
-    fail_count:   AtomicUsize,
+    fail_count: AtomicUsize,
     /// Compteur de scissions (splits).
-    split_count:  AtomicUsize,
+    split_count: AtomicUsize,
     /// Compteur de fusions (merges/coalescing).
-    merge_count:  AtomicUsize,
+    merge_count: AtomicUsize,
     /// Indicateur d'initialisation.
-    initialized:  AtomicBool,
+    initialized: AtomicBool,
 }
 
 struct BuddyZoneInner {
@@ -164,7 +171,7 @@ struct BuddyZoneInner {
     /// Null si non configuré.
     ///
     /// SAFETY: Le bitmap est accessible uniquement sous le spinlock.
-    bitmap_ptr:   *mut u64,
+    bitmap_ptr: *mut u64,
     bitmap_words: usize,
 }
 
@@ -174,11 +181,8 @@ unsafe impl Send for BuddyZoneInner {}
 impl BuddyZoneInner {
     const fn new() -> Self {
         BuddyZoneInner {
-            orders: [
-                const { BuddyOrderLevel::new() };
-                BUDDY_ORDER_COUNT
-            ],
-            bitmap_ptr:   null_mut(),
+            orders: [const { BuddyOrderLevel::new() }; BUDDY_ORDER_COUNT],
+            bitmap_ptr: null_mut(),
             bitmap_words: 0,
         }
     }
@@ -186,9 +190,11 @@ impl BuddyZoneInner {
     /// Marque le frame `pfn` comme libre dans le bitmap.
     #[inline(always)]
     unsafe fn bitmap_clear(&self, pfn: usize) {
-        if self.bitmap_ptr.is_null() { return; }
+        if self.bitmap_ptr.is_null() {
+            return;
+        }
         let word = pfn / 64;
-        let bit  = pfn % 64;
+        let bit = pfn % 64;
         if word < self.bitmap_words {
             (*self.bitmap_ptr.add(word)) &= !(1u64 << bit);
         }
@@ -197,9 +203,11 @@ impl BuddyZoneInner {
     /// Marque le frame `pfn` comme alloué dans le bitmap.
     #[inline(always)]
     unsafe fn bitmap_set(&self, pfn: usize) {
-        if self.bitmap_ptr.is_null() { return; }
+        if self.bitmap_ptr.is_null() {
+            return;
+        }
         let word = pfn / 64;
-        let bit  = pfn % 64;
+        let bit = pfn % 64;
         if word < self.bitmap_words {
             (*self.bitmap_ptr.add(word)) |= 1u64 << bit;
         }
@@ -208,10 +216,14 @@ impl BuddyZoneInner {
     /// Retourne `true` si le frame `pfn` est libre dans le bitmap.
     #[inline(always)]
     unsafe fn bitmap_is_free(&self, pfn: usize) -> bool {
-        if self.bitmap_ptr.is_null() { return false; }
+        if self.bitmap_ptr.is_null() {
+            return false;
+        }
         let word = pfn / 64;
-        let bit  = pfn % 64;
-        if word >= self.bitmap_words { return false; }
+        let bit = pfn % 64;
+        if word >= self.bitmap_words {
+            return false;
+        }
         ((*self.bitmap_ptr.add(word)) & (1u64 << bit)) == 0
     }
 }
@@ -220,19 +232,19 @@ impl BuddyZone {
     /// Crée une instance non initialisée.
     pub const fn new_uninit() -> Self {
         BuddyZone {
-            zone_type:    ZoneType::Normal,
-            numa_node:    0,
-            phys_start:   PhysAddr::new(0),
-            phys_end:     PhysAddr::new(0),
+            zone_type: ZoneType::Normal,
+            numa_node: 0,
+            phys_start: PhysAddr::new(0),
+            phys_end: PhysAddr::new(0),
             total_frames: 0,
-            inner:        Mutex::new(BuddyZoneInner::new()),
-            free_frames:  AtomicUsize::new(0),
-            alloc_count:  AtomicUsize::new(0),
-            free_count:   AtomicUsize::new(0),
-            fail_count:   AtomicUsize::new(0),
-            split_count:  AtomicUsize::new(0),
-            merge_count:  AtomicUsize::new(0),
-            initialized:  AtomicBool::new(false),
+            inner: Mutex::new(BuddyZoneInner::new()),
+            free_frames: AtomicUsize::new(0),
+            alloc_count: AtomicUsize::new(0),
+            free_count: AtomicUsize::new(0),
+            fail_count: AtomicUsize::new(0),
+            split_count: AtomicUsize::new(0),
+            merge_count: AtomicUsize::new(0),
+            initialized: AtomicBool::new(false),
         }
     }
 
@@ -245,28 +257,27 @@ impl BuddyZone {
     ///         (avant l'init SMP).
     pub unsafe fn init(
         &self,
-        zone_type:    ZoneType,
-        numa_node:    u8,
-        phys_start:   PhysAddr,
-        phys_end:     PhysAddr,
-        bitmap_buf:   *mut u64,
+        zone_type: ZoneType,
+        numa_node: u8,
+        phys_start: PhysAddr,
+        phys_end: PhysAddr,
+        bitmap_buf: *mut u64,
         bitmap_words: usize,
     ) {
         // Stocker les paramètres de zone
         let s = self as *const BuddyZone as *mut BuddyZone;
-        (*s).zone_type    = zone_type;
-        (*s).numa_node    = numa_node;
-        (*s).phys_start   = phys_start;
-        (*s).phys_end     = phys_end;
-        (*s).total_frames =
-            ((phys_end.as_u64() - phys_start.as_u64()) / PAGE_SIZE as u64) as usize;
+        (*s).zone_type = zone_type;
+        (*s).numa_node = numa_node;
+        (*s).phys_start = phys_start;
+        (*s).phys_end = phys_end;
+        (*s).total_frames = ((phys_end.as_u64() - phys_start.as_u64()) / PAGE_SIZE as u64) as usize;
 
         // Initialiser l'inner sous lock
         let mut inner = self.inner.lock();
         for order in &mut inner.orders {
             order.init();
         }
-        inner.bitmap_ptr   = bitmap_buf;
+        inner.bitmap_ptr = bitmap_buf;
         inner.bitmap_words = bitmap_words;
 
         // Initialiser le bitmap à "tout alloué" (bits = 1)
@@ -369,13 +380,17 @@ impl BuddyZone {
                 self.alloc_count.fetch_add(1, Ordering::Relaxed);
                 if flags.contains(AllocFlags::ZEROED) {
                     // SAFETY: Le frame vient d'être alloué, nous en sommes l'unique propriétaire.
-                    unsafe { zero_pages(phys, order); }
+                    unsafe {
+                        zero_pages(phys, order);
+                    }
                 }
                 let frame = Frame::containing(phys);
                 // V-05 / MEM-05 : poser DMA_PINNED sur tous les frames DMA jusqu'à
                 // wait_dma_complete() — protège contre reclaim et swap.
                 if flags.contains(AllocFlags::DMA) || flags.contains(AllocFlags::DMA32) {
-                    FRAME_DESCRIPTORS.get(frame).set_flag(FrameFlags::DMA_PINNED);
+                    FRAME_DESCRIPTORS
+                        .get(frame)
+                        .set_flag(FrameFlags::DMA_PINNED);
                 }
                 Ok(frame)
             }
@@ -401,7 +416,9 @@ impl BuddyZone {
                 match FreeNode::pop(head) {
                     None => continue, // Pas de bloc à cet ordre
                     Some(node) => {
-                        inner.orders[current_order].count.fetch_sub(1, Ordering::Relaxed);
+                        inner.orders[current_order]
+                            .count
+                            .fetch_sub(1, Ordering::Relaxed);
 
                         let phys = virt_to_phys_buddy(node as usize);
 
@@ -411,7 +428,7 @@ impl BuddyZone {
                             // Le buddy de `block_phys` à l'ordre `split_order + 1`
                             // est `block_phys + 2^split_order × PAGE_SIZE`
                             let buddy_phys = PhysAddr::new(
-                                block_phys.as_u64() + (PAGE_SIZE << split_order) as u64
+                                block_phys.as_u64() + (PAGE_SIZE << split_order) as u64,
                             );
 
                             // Remettre le buddy dans la free-list
@@ -419,7 +436,9 @@ impl BuddyZone {
                             FreeNode::init(buddy_node, split_order as u8);
                             let buddy_head = &mut inner.orders[split_order].head as *mut FreeNode;
                             FreeNode::insert_after(buddy_head, buddy_node);
-                            inner.orders[split_order].count.fetch_add(1, Ordering::Relaxed);
+                            inner.orders[split_order]
+                                .count
+                                .fetch_add(1, Ordering::Relaxed);
 
                             // Vider le bitmap du buddy (il est libre maintenant)
                             let buddy_pfn = self.phys_to_pfn(buddy_phys);
@@ -466,17 +485,22 @@ impl BuddyZone {
         }
 
         let phys = frame.start_address();
-        debug_assert!(phys >= self.phys_start && phys < self.phys_end,
-            "free_pages: frame hors zone");
+        debug_assert!(
+            phys >= self.phys_start && phys < self.phys_end,
+            "free_pages: frame hors zone"
+        );
         debug_assert!(
             is_aligned(phys.as_usize(), PAGE_SIZE << order),
-            "free_pages: frame mal aligné pour l'ordre {}", order
+            "free_pages: frame mal aligné pour l'ordre {}",
+            order
         );
 
         {
             let mut inner = self.inner.lock();
             // SAFETY: Sous spinlock, accès exclusif.
-            unsafe { self.free_inner(&mut inner, phys, order); }
+            unsafe {
+                self.free_inner(&mut inner, phys, order);
+            }
         }
 
         self.free_frames.fetch_add(1 << order, Ordering::Relaxed);
@@ -485,7 +509,7 @@ impl BuddyZone {
     }
 
     unsafe fn free_inner(&self, inner: &mut BuddyZoneInner, phys: PhysAddr, order: usize) {
-        let mut current_phys  = phys;
+        let mut current_phys = phys;
         let mut current_order = order;
 
         // Marquer les pages comme libres dans le bitmap
@@ -505,8 +529,8 @@ impl BuddyZone {
 
             // Vérifier si le buddy est libre dans le bitmap
             let buddy_pfn = self.phys_to_pfn(buddy_phys);
-            let buddy_free = (0..(1usize << current_order))
-                .all(|i| inner.bitmap_is_free(buddy_pfn + i));
+            let buddy_free =
+                (0..(1usize << current_order)).all(|i| inner.bitmap_is_free(buddy_pfn + i));
 
             if !buddy_free {
                 break; // Le buddy est alloué → pas de fusion possible
@@ -519,10 +543,16 @@ impl BuddyZone {
                 break;
             }
             FreeNode::remove(buddy_node);
-            inner.orders[current_order].count.fetch_sub(1, Ordering::Relaxed);
+            inner.orders[current_order]
+                .count
+                .fetch_sub(1, Ordering::Relaxed);
 
             // Fusionner : prendre l'adresse la plus basse des deux blocs
-            current_phys = if current_phys < buddy_phys { current_phys } else { buddy_phys };
+            current_phys = if current_phys < buddy_phys {
+                current_phys
+            } else {
+                buddy_phys
+            };
             current_order += 1;
             self.merge_count.fetch_add(1, Ordering::Relaxed);
         }
@@ -532,7 +562,9 @@ impl BuddyZone {
         FreeNode::init(node_ptr, current_order as u8);
         let head = &mut inner.orders[current_order].head as *mut FreeNode;
         FreeNode::insert_after(head, node_ptr);
-        inner.orders[current_order].count.fetch_add(1, Ordering::Relaxed);
+        inner.orders[current_order]
+            .count
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -574,15 +606,15 @@ impl BuddyZone {
             free_by_order[i] = order.count.load(Ordering::Relaxed);
         }
         BuddyZoneStats {
-            zone_type:    self.zone_type,
-            numa_node:    self.numa_node,
+            zone_type: self.zone_type,
+            numa_node: self.numa_node,
             total_frames: self.total_frames,
-            free_frames:  self.free_frames.load(Ordering::Relaxed),
-            alloc_count:  self.alloc_count.load(Ordering::Relaxed),
-            free_count:   self.free_count.load(Ordering::Relaxed),
-            fail_count:   self.fail_count.load(Ordering::Relaxed),
-            split_count:  self.split_count.load(Ordering::Relaxed),
-            merge_count:  self.merge_count.load(Ordering::Relaxed),
+            free_frames: self.free_frames.load(Ordering::Relaxed),
+            alloc_count: self.alloc_count.load(Ordering::Relaxed),
+            free_count: self.free_count.load(Ordering::Relaxed),
+            fail_count: self.fail_count.load(Ordering::Relaxed),
+            split_count: self.split_count.load(Ordering::Relaxed),
+            merge_count: self.merge_count.load(Ordering::Relaxed),
             free_by_order,
         }
     }
@@ -607,15 +639,15 @@ impl BuddyZone {
 /// Statistiques d'une zone buddy.
 #[derive(Copy, Clone, Debug)]
 pub struct BuddyZoneStats {
-    pub zone_type:    ZoneType,
-    pub numa_node:    u8,
+    pub zone_type: ZoneType,
+    pub numa_node: u8,
     pub total_frames: usize,
-    pub free_frames:  usize,
-    pub alloc_count:  usize,
-    pub free_count:   usize,
-    pub fail_count:   usize,
-    pub split_count:  usize,
-    pub merge_count:  usize,
+    pub free_frames: usize,
+    pub alloc_count: usize,
+    pub free_count: usize,
+    pub fail_count: usize,
+    pub split_count: usize,
+    pub merge_count: usize,
     /// Nombre de blocs libres par ordre (0..BUDDY_ORDER_COUNT).
     pub free_by_order: [usize; BUDDY_ORDER_COUNT],
 }
@@ -623,15 +655,20 @@ pub struct BuddyZoneStats {
 impl BuddyZoneStats {
     /// Pourcentage de mémoire libre (0.0-100.0).
     pub fn free_percent(&self) -> f32 {
-        if self.total_frames == 0 { return 0.0; }
+        if self.total_frames == 0 {
+            return 0.0;
+        }
         self.free_frames as f32 * 100.0 / self.total_frames as f32
     }
 
     /// Taux de fragmentation (0.0 = aucune, 1.0 = maximale).
     /// Mesure l'écart entre la mémoire libre totale et les blocs de grand ordre.
     pub fn fragmentation_ratio(&self) -> f32 {
-        if self.free_frames == 0 { return 0.0; }
-        let largest_order = (0..BUDDY_ORDER_COUNT).rev()
+        if self.free_frames == 0 {
+            return 0.0;
+        }
+        let largest_order = (0..BUDDY_ORDER_COUNT)
+            .rev()
             .find(|&o| self.free_by_order[o] > 0)
             .unwrap_or(0);
         let max_contiguous = self.free_by_order[largest_order] * (1 << largest_order);
@@ -663,7 +700,7 @@ unsafe impl Send for GlobalBuddyAllocator {}
 impl GlobalBuddyAllocator {
     pub const fn new() -> Self {
         GlobalBuddyAllocator {
-            zones:       [const { BuddyZone::new_uninit() }; 4],
+            zones: [const { BuddyZone::new_uninit() }; 4],
             initialized: AtomicBool::new(false),
         }
     }
@@ -672,8 +709,10 @@ impl GlobalBuddyAllocator {
     /// Sélectionne automatiquement la zone appropriée.
     #[inline]
     pub fn alloc_pages(&self, order: usize, flags: AllocFlags) -> Result<Frame, AllocError> {
-        debug_assert!(self.initialized.load(Ordering::Acquire),
-            "GlobalBuddyAllocator non initialisé");
+        debug_assert!(
+            self.initialized.load(Ordering::Acquire),
+            "GlobalBuddyAllocator non initialisé"
+        );
 
         let zone_idx = self.zone_index_for(flags);
         let result = self.zones[zone_idx].alloc_pages(order, flags);
@@ -682,7 +721,9 @@ impl GlobalBuddyAllocator {
         if result.is_err() && !flags.contains(AllocFlags::DMA) {
             for fallback_idx in (zone_idx + 1)..4 {
                 let r = self.zones[fallback_idx].alloc_pages(order, flags);
-                if r.is_ok() { return r; }
+                if r.is_ok() {
+                    return r;
+                }
             }
         }
 
@@ -692,7 +733,9 @@ impl GlobalBuddyAllocator {
         if result.is_err() && zone_idx > 1 {
             for fallback_idx in (1..zone_idx).rev() {
                 let r = self.zones[fallback_idx].alloc_pages(order, flags);
-                if r.is_ok() { return r; }
+                if r.is_ok() {
+                    return r;
+                }
             }
         }
 
@@ -723,13 +766,19 @@ impl GlobalBuddyAllocator {
         flags: AllocFlags,
         numa_node: u8,
     ) -> Result<Frame, AllocError> {
-        debug_assert!(self.initialized.load(Ordering::Acquire),
-            "GlobalBuddyAllocator non initialisé");
+        debug_assert!(
+            self.initialized.load(Ordering::Acquire),
+            "GlobalBuddyAllocator non initialisé"
+        );
 
         // Phase 1 : essai dans les zones NUMA-locales.
         for zone in &self.zones {
-            if !zone.is_initialized() { continue; }
-            if zone.numa_node != numa_node { continue; }
+            if !zone.is_initialized() {
+                continue;
+            }
+            if zone.numa_node != numa_node {
+                continue;
+            }
             if let Ok(frame) = zone.alloc_pages(order, flags) {
                 return Ok(frame);
             }
@@ -742,16 +791,17 @@ impl GlobalBuddyAllocator {
     #[inline]
     fn zone_index_for(&self, flags: AllocFlags) -> usize {
         match flags.required_zone() {
-            ZoneType::Dma     => 0,
-            ZoneType::Dma32   => 1,
+            ZoneType::Dma => 0,
+            ZoneType::Dma32 => 1,
             ZoneType::Movable => 3,
-            _                 => 2, // Normal par défaut
+            _ => 2, // Normal par défaut
         }
     }
 
     /// Retourne le nombre total de frames libres dans toutes les zones.
     pub fn total_free_frames(&self) -> usize {
-        self.zones.iter()
+        self.zones
+            .iter()
             .filter(|z| z.is_initialized())
             .map(|z| z.free_frames())
             .sum()
@@ -759,7 +809,8 @@ impl GlobalBuddyAllocator {
 
     /// Retourne le nombre total de frames physiques gérées (libres + utilisées).
     pub fn total_frames(&self) -> usize {
-        self.zones.iter()
+        self.zones
+            .iter()
             .filter(|z| z.is_initialized())
             .map(|z| z.total_frames_count())
             .sum()
@@ -780,15 +831,21 @@ impl GlobalBuddyAllocator {
     /// - `bitmap_buf` doit être valide pour `bitmap_words` × 8 bytes.
     pub unsafe fn init_zone(
         &self,
-        zone_type:    ZoneType,
-        phys_start:   PhysAddr,
-        phys_end:     PhysAddr,
-        bitmap_buf:   *mut u64,
+        zone_type: ZoneType,
+        phys_start: PhysAddr,
+        phys_end: PhysAddr,
+        bitmap_buf: *mut u64,
         bitmap_words: usize,
     ) {
         let idx = (zone_type.index()).min(3);
-        self.zones[idx].init(zone_type, 0 /* NUMA node 0 */,
-            phys_start, phys_end, bitmap_buf, bitmap_words);
+        self.zones[idx].init(
+            zone_type,
+            0, /* NUMA node 0 */
+            phys_start,
+            phys_end,
+            bitmap_buf,
+            bitmap_words,
+        );
     }
 
     /// Ajoute une plage de frames libres aux zones initialisées qui couvrent cette plage.
@@ -800,17 +857,23 @@ impl GlobalBuddyAllocator {
     /// - La plage ne doit pas contenir de mémoire kernel active.
     pub unsafe fn add_free_zone_region(&self, start: PhysAddr, end: PhysAddr) {
         for zone in &self.zones {
-            if !zone.is_initialized() { continue; }
+            if !zone.is_initialized() {
+                continue;
+            }
             let zs = zone.phys_start.as_u64();
             let ze = zone.phys_end.as_u64();
             let rs = start.as_u64();
             let re = end.as_u64();
-            if rs >= ze || re <= zs { continue; }    // pas d'overlap
+            if rs >= ze || re <= zs {
+                continue;
+            } // pas d'overlap
             let cs = rs.max(zs);
             let ce = re.min(ze);
-            if cs >= ce { continue; }
+            if cs >= ce {
+                continue;
+            }
             let first_pfn = ((cs - zs) / PAGE_SIZE as u64) as usize;
-            let last_pfn  = ((ce - zs) / PAGE_SIZE as u64) as usize;
+            let last_pfn = ((ce - zs) / PAGE_SIZE as u64) as usize;
             zone.add_free_range(first_pfn, last_pfn);
         }
     }
@@ -818,14 +881,18 @@ impl GlobalBuddyAllocator {
     /// Retourne une référence à la zone pour un type donné.
     pub fn zone(&self, zone_type: ZoneType) -> Option<&BuddyZone> {
         let idx = match zone_type {
-            ZoneType::Dma     => 0,
-            ZoneType::Dma32   => 1,
-            ZoneType::Normal  => 2,
+            ZoneType::Dma => 0,
+            ZoneType::Dma32 => 1,
+            ZoneType::Normal => 2,
             ZoneType::Movable => 3,
-            ZoneType::High    => return None,
+            ZoneType::High => return None,
         };
         let z = &self.zones[idx];
-        if z.is_initialized() { Some(z) } else { None }
+        if z.is_initialized() {
+            Some(z)
+        } else {
+            None
+        }
     }
 
     /// Accès mutant à une zone (initialisation uniquement).

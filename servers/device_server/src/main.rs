@@ -26,9 +26,8 @@ use iommu_service::IommuLedger;
 use power::{PowerPolicyTable, PowerState};
 use protocol::{
     read_u32, read_u64, recv_request, register_endpoint, send_heartbeat, send_reply, DeviceReply,
-    DeviceRequest, DEVICE_MSG_CLAIM, DEVICE_MSG_EVENT_POLL, DEVICE_MSG_FAULT,
-    DEVICE_MSG_HEARTBEAT, DEVICE_MSG_POWER_SET, DEVICE_MSG_QUERY, DEVICE_MSG_REGISTER_DEVICE,
-    DEVICE_MSG_RELEASE,
+    DeviceRequest, DEVICE_MSG_CLAIM, DEVICE_MSG_EVENT_POLL, DEVICE_MSG_FAULT, DEVICE_MSG_HEARTBEAT,
+    DEVICE_MSG_POWER_SET, DEVICE_MSG_QUERY, DEVICE_MSG_REGISTER_DEVICE, DEVICE_MSG_RELEASE,
 };
 use registry::PciRegistry;
 
@@ -98,10 +97,28 @@ impl DeviceService {
             }
         }
 
-        match self.registry.register_device(phys_base, size, bdf_raw, parent_bdf_raw, vendor_device, class_code, flags) {
+        match self.registry.register_device(
+            phys_base,
+            size,
+            bdf_raw,
+            parent_bdf_raw,
+            vendor_device,
+            class_code,
+            flags,
+        ) {
             Ok(snapshot) => {
-                self.hotplug.push(DeviceEvent::new(DeviceEventKind::Registered, snapshot.bdf_raw, 0, snapshot.flags as u64));
-                DeviceReply::ok(snapshot.bdf_raw as u64, snapshot.phys_base, snapshot.size, snapshot.flags)
+                self.hotplug.push(DeviceEvent::new(
+                    DeviceEventKind::Registered,
+                    snapshot.bdf_raw,
+                    0,
+                    snapshot.flags as u64,
+                ));
+                DeviceReply::ok(
+                    snapshot.bdf_raw as u64,
+                    snapshot.phys_base,
+                    snapshot.size,
+                    snapshot.flags,
+                )
             }
             Err(err) => DeviceReply::error(err),
         }
@@ -133,7 +150,8 @@ impl DeviceService {
             Err(err) => return DeviceReply::error(err),
         };
 
-        if let Err(err) = validate_claim(&self.registry, phys_base, size, owner_pid, bdf_raw, flags) {
+        if let Err(err) = validate_claim(&self.registry, phys_base, size, owner_pid, bdf_raw, flags)
+        {
             return DeviceReply::error(err);
         }
 
@@ -156,8 +174,18 @@ impl DeviceService {
             Ok(snapshot) => {
                 self.iommu.bind_driver(owner_pid, bdf_raw);
                 self.power.set_state(owner_pid, PowerState::Active);
-                self.hotplug.push(DeviceEvent::new(DeviceEventKind::Claimed, bdf_raw, owner_pid, 0));
-                DeviceReply::ok(snapshot.bdf_raw as u64, snapshot.owner_pid as u64, snapshot.phys_base, snapshot.flags)
+                self.hotplug.push(DeviceEvent::new(
+                    DeviceEventKind::Claimed,
+                    bdf_raw,
+                    owner_pid,
+                    0,
+                ));
+                DeviceReply::ok(
+                    snapshot.bdf_raw as u64,
+                    snapshot.owner_pid as u64,
+                    snapshot.phys_base,
+                    snapshot.flags,
+                )
             }
             Err(err) => DeviceReply::error(err),
         }
@@ -189,8 +217,18 @@ impl DeviceService {
         if let Some(snapshot) = self.registry.release_owner(driver_pid) {
             self.iommu.unbind_driver(driver_pid);
             self.power.note_release(driver_pid, signal);
-            self.hotplug.push(DeviceEvent::new(DeviceEventKind::Released, snapshot.bdf_raw, driver_pid, signal as u64));
-            DeviceReply::ok(snapshot.bdf_raw as u64, driver_pid as u64, signal as u64, snapshot.flags)
+            self.hotplug.push(DeviceEvent::new(
+                DeviceEventKind::Released,
+                snapshot.bdf_raw,
+                driver_pid,
+                signal as u64,
+            ));
+            DeviceReply::ok(
+                snapshot.bdf_raw as u64,
+                driver_pid as u64,
+                signal as u64,
+                snapshot.flags,
+            )
         } else {
             DeviceReply::error(exo_syscall_abi::ENOENT)
         }
@@ -214,15 +252,26 @@ impl DeviceService {
             Err(err) => return DeviceReply::error(err),
         };
 
-        self.iommu.report_fault(driver_pid, fault_code, value0, value1);
+        self.iommu
+            .report_fault(driver_pid, fault_code, value0, value1);
         let bdf_raw = self.registry.bdf_of_owner(driver_pid).unwrap_or(0);
-        self.hotplug.push(DeviceEvent::new(DeviceEventKind::Faulted, bdf_raw, driver_pid, value0));
+        self.hotplug.push(DeviceEvent::new(
+            DeviceEventKind::Faulted,
+            bdf_raw,
+            driver_pid,
+            value0,
+        ));
         DeviceReply::ok(driver_pid as u64, value0, value1, fault_code)
     }
 
     fn handle_event_poll(&mut self) -> DeviceReply {
         match self.hotplug.pop() {
-            Some(event) => DeviceReply::ok(event.bdf_raw as u64, event.pid as u64, event.value, event.kind as u32),
+            Some(event) => DeviceReply::ok(
+                event.bdf_raw as u64,
+                event.pid as u64,
+                event.value,
+                event.kind as u32,
+            ),
             None => DeviceReply::error(exo_syscall_abi::EAGAIN),
         }
     }
@@ -252,8 +301,18 @@ impl DeviceService {
 
         let snapshot = self.power.set_state(driver_pid, state);
         let bdf_raw = self.registry.bdf_of_owner(driver_pid).unwrap_or(0);
-        self.hotplug.push(DeviceEvent::new(DeviceEventKind::PowerChanged, bdf_raw, driver_pid, value));
-        DeviceReply::ok(driver_pid as u64, snapshot.state as u64, snapshot.restart_backoff_ms, snapshot.last_signal)
+        self.hotplug.push(DeviceEvent::new(
+            DeviceEventKind::PowerChanged,
+            bdf_raw,
+            driver_pid,
+            value,
+        ));
+        DeviceReply::ok(
+            driver_pid as u64,
+            snapshot.state as u64,
+            snapshot.restart_backoff_ms,
+            snapshot.last_signal,
+        )
     }
 
     fn handle_query(&mut self, payload: &[u8]) -> DeviceReply {
@@ -272,7 +331,10 @@ impl DeviceService {
                     snapshot.bdf_raw as u64,
                     snapshot.owner_pid as u64,
                     snapshot.phys_base,
-                    snapshot.class_code ^ snapshot.vendor_device ^ snapshot.parent_bdf_raw ^ snapshot.flags,
+                    snapshot.class_code
+                        ^ snapshot.vendor_device
+                        ^ snapshot.parent_bdf_raw
+                        ^ snapshot.flags,
                 ),
                 None => DeviceReply::error(exo_syscall_abi::ENOENT),
             }
@@ -318,7 +380,9 @@ fn dispatch(request: &DeviceRequest) -> DeviceReply {
     let mut service = DEVICE_SERVICE.lock();
 
     match request.msg_type {
-        DEVICE_MSG_REGISTER_DEVICE => service.handle_register_device(request.sender_pid, &request.payload),
+        DEVICE_MSG_REGISTER_DEVICE => {
+            service.handle_register_device(request.sender_pid, &request.payload)
+        }
         DEVICE_MSG_CLAIM => service.handle_claim(request.sender_pid, &request.payload),
         DEVICE_MSG_RELEASE => service.handle_release(request.sender_pid, &request.payload),
         DEVICE_MSG_FAULT => service.handle_fault(&request.payload),
@@ -333,6 +397,8 @@ fn dispatch(request: &DeviceRequest) -> DeviceReply {
 fn panic(_info: &PanicInfo) -> ! {
     loop {
         // SAFETY: panic terminale pour un serveur no_std monothread.
-        unsafe { core::arch::asm!("hlt", options(nostack, nomem)); }
+        unsafe {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
     }
 }

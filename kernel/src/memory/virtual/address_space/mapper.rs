@@ -4,13 +4,9 @@
 // Gère les invalidations TLB automatiquement après chaque modification.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-use crate::memory::core::{
-    VirtAddr, PhysAddr, Frame, PageFlags, AllocError, PAGE_SIZE,
-};
-use crate::memory::virt::page_table::{
-    PageTableWalker, FrameAllocatorForWalk, WalkResult,
-};
-use crate::memory::virt::address_space::tlb::{flush_single, flush_range};
+use crate::memory::core::{AllocError, Frame, PageFlags, PhysAddr, VirtAddr, PAGE_SIZE};
+use crate::memory::virt::address_space::tlb::{flush_range, flush_single};
+use crate::memory::virt::page_table::{FrameAllocatorForWalk, PageTableWalker, WalkResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAPPER
@@ -20,9 +16,9 @@ use crate::memory::virt::address_space::tlb::{flush_single, flush_range};
 /// Wrapping autour de PageTableWalker avec gestion automatique du TLB.
 pub struct Mapper<'a, A: FrameAllocatorForWalk> {
     walker: PageTableWalker,
-    alloc:  &'a A,
+    alloc: &'a A,
     /// Nombre de pages mappées depuis la création (pour stats).
-    mapped_count:   u64,
+    mapped_count: u64,
     unmapped_count: u64,
 }
 
@@ -30,9 +26,9 @@ impl<'a, A: FrameAllocatorForWalk> Mapper<'a, A> {
     /// Crée un mapper pour la PML4 à `pml4_phys`.
     pub fn new(pml4_phys: PhysAddr, alloc: &'a A) -> Self {
         Mapper {
-            walker:         PageTableWalker::new(pml4_phys),
+            walker: PageTableWalker::new(pml4_phys),
             alloc,
-            mapped_count:   0,
+            mapped_count: 0,
             unmapped_count: 0,
         }
     }
@@ -42,13 +38,15 @@ impl<'a, A: FrameAllocatorForWalk> Mapper<'a, A> {
     /// Invalide automatiquement le TLB local pour `virt`.
     pub fn map(
         &mut self,
-        virt:  VirtAddr,
+        virt: VirtAddr,
         frame: Frame,
         flags: PageFlags,
     ) -> Result<(), AllocError> {
         self.walker.map(virt, frame, flags, self.alloc)?;
         // SAFETY: virt est une adresse canonique (validée par PageTableWalker).
-        unsafe { flush_single(virt); }
+        unsafe {
+            flush_single(virt);
+        }
         self.mapped_count += 1;
         Ok(())
     }
@@ -56,18 +54,21 @@ impl<'a, A: FrameAllocatorForWalk> Mapper<'a, A> {
     /// Mappe une plage physique contiguë vers une plage virtuelle contiguë.
     pub fn map_range(
         &mut self,
-        virt_start:  VirtAddr,
-        phys_start:  PhysAddr,
-        size_bytes:  usize,
-        flags:       PageFlags,
+        virt_start: VirtAddr,
+        phys_start: PhysAddr,
+        size_bytes: usize,
+        flags: PageFlags,
     ) -> Result<(), AllocError> {
         let n = (size_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
         for i in 0..n {
             let v = VirtAddr::new(virt_start.as_u64() + (i * PAGE_SIZE) as u64);
             let p = PhysAddr::new(phys_start.as_u64() + (i * PAGE_SIZE) as u64);
-            self.walker.map(v, Frame::containing(p), flags, self.alloc)?;
+            self.walker
+                .map(v, Frame::containing(p), flags, self.alloc)?;
             // SAFETY: adresses canoniques.
-            unsafe { flush_single(v); }
+            unsafe {
+                flush_single(v);
+            }
         }
         self.mapped_count += n as u64;
         Ok(())
@@ -81,7 +82,9 @@ impl<'a, A: FrameAllocatorForWalk> Mapper<'a, A> {
         let result = self.walker.unmap(virt);
         if result.is_some() {
             // SAFETY: adresse canonique.
-            unsafe { flush_single(virt); }
+            unsafe {
+                flush_single(virt);
+            }
             self.unmapped_count += 1;
         }
         result
@@ -94,7 +97,9 @@ impl<'a, A: FrameAllocatorForWalk> Mapper<'a, A> {
         let mut count = 0usize;
         for i in 0..n {
             let v = VirtAddr::new(start.as_u64() + (i * PAGE_SIZE) as u64);
-            if self.walker.unmap(v).is_some() { count += 1; }
+            if self.walker.unmap(v).is_some() {
+                count += 1;
+            }
         }
         if count > 0 {
             // SAFETY: plage d'adresses canoniques.
@@ -107,20 +112,21 @@ impl<'a, A: FrameAllocatorForWalk> Mapper<'a, A> {
     }
 
     /// Modifie les flags d'une page existante.
-    pub fn remap_flags(
-        &mut self,
-        virt:      VirtAddr,
-        new_flags: PageFlags,
-    ) -> Result<(), AllocError> {
+    pub fn remap_flags(&mut self, virt: VirtAddr, new_flags: PageFlags) -> Result<(), AllocError> {
         self.walker.remap_flags(virt, new_flags)?;
         // SAFETY: adresse canonique.
-        unsafe { flush_single(virt); }
+        unsafe {
+            flush_single(virt);
+        }
         Ok(())
     }
 
     /// Vérifie si une adresse est mappée.
     pub fn is_mapped(&self, virt: VirtAddr) -> bool {
-        matches!(self.walker.walk_read(virt), WalkResult::Leaf { .. } | WalkResult::HugePage { .. })
+        matches!(
+            self.walker.walk_read(virt),
+            WalkResult::Leaf { .. } | WalkResult::HugePage { .. }
+        )
     }
 
     /// Traduit une adresse virtuelle en adresse physique.
@@ -132,7 +138,7 @@ impl<'a, A: FrameAllocatorForWalk> Mapper<'a, A> {
             }
             WalkResult::HugePage { entry, level } => {
                 let page_size = level.page_size() as u64;
-                let offset    = virt.as_u64() & (page_size - 1);
+                let offset = virt.as_u64() & (page_size - 1);
                 Some(PhysAddr::new(entry.phys_addr().as_u64() + offset))
             }
             _ => None,

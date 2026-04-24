@@ -15,9 +15,9 @@
 // par vruntime) est dans core/runqueue.rs.
 // ═══════════════════════════════════════════════════════════════════════════════
 
+use crate::scheduler::core::runqueue::{CFS_MIN_GRANULARITY_US, CFS_TARGET_LATENCY_MS};
+use crate::scheduler::core::task::{SchedPolicy, ThreadControlBlock};
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy};
-use crate::scheduler::core::runqueue::{CFS_TARGET_LATENCY_MS, CFS_MIN_GRANULARITY_US};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes CFS
@@ -49,7 +49,9 @@ pub static CFS_WAKEUP_PREEMPT_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Avec `nr_tasks` threads de même poids :
 ///   slice = target_period / nr_tasks  (≥ min_granularity)
 pub fn timeslice_for(tcb: &ThreadControlBlock, nr_tasks: usize, total_weight: u64) -> u64 {
-    if nr_tasks == 0 { return CFS_TARGET_PERIOD_NS; }
+    if nr_tasks == 0 {
+        return CFS_TARGET_PERIOD_NS;
+    }
     let nr = nr_tasks.max(1);
     let weight = tcb.priority.cfs_weight() as u64;
     let raw_slice = if total_weight == 0 {
@@ -66,15 +68,17 @@ pub fn timeslice_for(tcb: &ThreadControlBlock, nr_tasks: usize, total_weight: u6
 /// RÈGLE : appelé dans `wakeup_thread()` après réinsertion dans la queue CFS.
 /// Retourne `true` si une préemption est souhaitable.
 pub fn should_preempt_on_wakeup(
-    running:  &ThreadControlBlock,
-    woken:    &ThreadControlBlock,
+    running: &ThreadControlBlock,
+    woken: &ThreadControlBlock,
     _min_vruntime: u64,
 ) -> bool {
     // Ne préempter que si le thread actuel n'est pas RT.
-    if running.priority.is_realtime() { return false; }
+    if running.priority.is_realtime() {
+        return false;
+    }
 
     let running_vr = running.vruntime.load(Ordering::Relaxed);
-    let woken_vr   = woken.vruntime.load(Ordering::Relaxed);
+    let woken_vr = woken.vruntime.load(Ordering::Relaxed);
 
     // FIX-VRUNTIME-01 : utiliser wrapping_add pour éviter le panic en debug
     // et le wrap silencieux en release. Sémantique correcte : préempter si le
@@ -104,10 +108,10 @@ pub fn normalize_vruntime_on_enqueue(tcb: &ThreadControlBlock, min_vruntime: u64
 ///
 /// Retourne `true` si le thread doit être préempté.
 pub fn tick_check_preempt(
-    tcb:           &ThreadControlBlock,
-    elapsed_ns:    u64,
-    slice_ns:      u64,
-    nr_tasks:      usize,
+    tcb: &ThreadControlBlock,
+    elapsed_ns: u64,
+    slice_ns: u64,
+    nr_tasks: usize,
 ) -> bool {
     if tcb.policy != SchedPolicy::Normal && tcb.policy != SchedPolicy::Batch {
         return false;

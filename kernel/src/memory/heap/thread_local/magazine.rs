@@ -18,7 +18,7 @@ pub struct Magazine {
     /// Tableau d'objets libres (index 0..count-1 sont valides).
     objects: [*mut u8; MAGAZINE_SIZE],
     /// Nombre d'objets actuellement dans le magazine.
-    count:   usize,
+    count: usize,
     /// Classe de taille de ce magazine.
     pub size_class: usize,
 }
@@ -30,8 +30,8 @@ unsafe impl Sync for Magazine {}
 impl Magazine {
     pub const fn new(size_class: usize) -> Self {
         Magazine {
-            objects:    [core::ptr::null_mut(); MAGAZINE_SIZE],
-            count:      0,
+            objects: [core::ptr::null_mut(); MAGAZINE_SIZE],
+            count: 0,
             size_class,
         }
     }
@@ -40,7 +40,9 @@ impl Magazine {
     /// Retourne `None` si le magazine est vide.
     #[inline]
     pub fn pop(&mut self) -> Option<NonNull<u8>> {
-        if self.count == 0 { return None; }
+        if self.count == 0 {
+            return None;
+        }
         self.count -= 1;
         NonNull::new(self.objects[self.count])
     }
@@ -49,16 +51,30 @@ impl Magazine {
     /// Retourne `false` si le magazine est plein.
     #[inline]
     pub fn push(&mut self, ptr: NonNull<u8>) -> bool {
-        if self.count >= MAGAZINE_SIZE { return false; }
+        if self.count >= MAGAZINE_SIZE {
+            return false;
+        }
         self.objects[self.count] = ptr.as_ptr();
         self.count += 1;
         true
     }
 
-    #[inline] pub fn is_empty(&self) -> bool { self.count == 0 }
-    #[inline] pub fn is_full(&self)  -> bool { self.count >= MAGAZINE_SIZE }
-    #[inline] pub fn len(&self)      -> usize { self.count }
-    #[inline] pub fn capacity(&self) -> usize { MAGAZINE_SIZE }
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.count >= MAGAZINE_SIZE
+    }
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.count
+    }
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        MAGAZINE_SIZE
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -74,14 +90,14 @@ impl Magazine {
 ///    Si toujours plein, rendre prev au dépôt et allouer un nouveau.
 pub struct CpuMagazinePair {
     pub loaded: Magazine,
-    pub prev:   Magazine,
+    pub prev: Magazine,
 }
 
 impl CpuMagazinePair {
     pub const fn new(size_class: usize) -> Self {
         CpuMagazinePair {
             loaded: Magazine::new(size_class),
-            prev:   Magazine::new(size_class),
+            prev: Magazine::new(size_class),
         }
     }
 
@@ -89,7 +105,9 @@ impl CpuMagazinePair {
     /// Retourne `None` si les deux magazines sont vides (refill nécessaire).
     #[inline]
     pub fn alloc(&mut self) -> Option<NonNull<u8>> {
-        if let Some(p) = self.loaded.pop() { return Some(p); }
+        if let Some(p) = self.loaded.pop() {
+            return Some(p);
+        }
         // Swap et réessayer
         core::mem::swap(&mut self.loaded, &mut self.prev);
         self.loaded.pop()
@@ -99,7 +117,9 @@ impl CpuMagazinePair {
     /// Retourne `false` si les deux magazines sont pleins (drain nécessaire).
     #[inline]
     pub fn free(&mut self, ptr: NonNull<u8>) -> bool {
-        if self.loaded.push(ptr) { return true; }
+        if self.loaded.push(ptr) {
+            return true;
+        }
         // Swap et réessayer
         core::mem::swap(&mut self.loaded, &mut self.prev);
         self.loaded.push(ptr)

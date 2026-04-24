@@ -10,12 +10,13 @@
 //   Tous les accès MSRL passent par `asm!` inline.
 //   Pas de std ; spin = "0.9" uniquement pour les locks.
 
-
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crate::memory::core::types::PageFlags;
 use crate::memory::core::constants::PAGE_SIZE;
-use crate::memory::core::layout::{PHYS_MAP_BASE, PHYS_MAP_END, VMALLOC_BASE, VMALLOC_END, KERNEL_HEAP_START};
+use crate::memory::core::layout::{
+    KERNEL_HEAP_START, PHYS_MAP_BASE, PHYS_MAP_END, VMALLOC_BASE, VMALLOC_END,
+};
+use crate::memory::core::types::PageFlags;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes internes
@@ -53,11 +54,11 @@ impl NxStats {
     const fn new() -> Self {
         Self {
             efer_nxe_enable_count: AtomicU64::new(0),
-            violation_count:       AtomicU64::new(0),
-            pages_marked_nx:       AtomicU64::new(0),
-            pages_cleared_nx:      AtomicU64::new(0),
-            region_enforce_calls:  AtomicU64::new(0),
-            redundant_enable:      AtomicU64::new(0),
+            violation_count: AtomicU64::new(0),
+            pages_marked_nx: AtomicU64::new(0),
+            pages_cleared_nx: AtomicU64::new(0),
+            region_enforce_calls: AtomicU64::new(0),
+            redundant_enable: AtomicU64::new(0),
         }
     }
 }
@@ -93,7 +94,7 @@ pub enum NxPolicy {
 #[derive(Debug, Clone, Copy)]
 pub struct NxRegionRule {
     pub start: u64,
-    pub end:   u64,
+    pub end: u64,
     pub policy: NxPolicy,
 }
 
@@ -101,17 +102,41 @@ pub struct NxRegionRule {
 /// RÈGLE IA-KERNEL-01 : table .rodata, pas de génération runtime.
 static NX_REGION_RULES: [NxRegionRule; 6] = [
     // Physmap — données mappées, jamais exécutables.
-    NxRegionRule { start: PHYS_MAP_BASE.as_u64(), end: PHYS_MAP_END.as_u64(), policy: NxPolicy::NonExecutable },
+    NxRegionRule {
+        start: PHYS_MAP_BASE.as_u64(),
+        end: PHYS_MAP_END.as_u64(),
+        policy: NxPolicy::NonExecutable,
+    },
     // Vmalloc — allocations dynamiques noyau, données.
-    NxRegionRule { start: VMALLOC_BASE.as_u64(),  end: VMALLOC_END.as_u64(), policy: NxPolicy::NonExecutable },
+    NxRegionRule {
+        start: VMALLOC_BASE.as_u64(),
+        end: VMALLOC_END.as_u64(),
+        policy: NxPolicy::NonExecutable,
+    },
     // Heap noyau — jamais exécutable.
-    NxRegionRule { start: KERNEL_HEAP_START.as_u64(), end: KERNEL_HEAP_START.as_u64() + 0x0000_0100_0000_0000, policy: NxPolicy::NonExecutable },
+    NxRegionRule {
+        start: KERNEL_HEAP_START.as_u64(),
+        end: KERNEL_HEAP_START.as_u64() + 0x0000_0100_0000_0000,
+        policy: NxPolicy::NonExecutable,
+    },
     // Stacks CPU (fixe 64 KiB par CPU, 256 CPUs max = 16 MiB total).
-    NxRegionRule { start: 0xFFFF_FF80_0000_0000, end: 0xFFFF_FF80_0100_0000, policy: NxPolicy::NonExecutable },
+    NxRegionRule {
+        start: 0xFFFF_FF80_0000_0000,
+        end: 0xFFFF_FF80_0100_0000,
+        policy: NxPolicy::NonExecutable,
+    },
     // Code noyau (segments .text/.init).
-    NxRegionRule { start: 0xFFFF_FFFF_8000_0000, end: 0xFFFF_FFFF_A000_0000, policy: NxPolicy::Executable },
+    NxRegionRule {
+        start: 0xFFFF_FFFF_8000_0000,
+        end: 0xFFFF_FFFF_A000_0000,
+        policy: NxPolicy::Executable,
+    },
     // Données noyau (.data/.bss/.rodata).
-    NxRegionRule { start: 0xFFFF_FFFF_A000_0000, end: 0xFFFF_FFFF_C000_0000, policy: NxPolicy::NonExecutable },
+    NxRegionRule {
+        start: 0xFFFF_FFFF_A000_0000,
+        end: 0xFFFF_FFFF_C000_0000,
+        policy: NxPolicy::NonExecutable,
+    },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,7 +197,9 @@ pub unsafe fn enable_nx() {
         return;
     }
     wrmsr(MSR_EFER, efer | EFER_NXE_BIT);
-    NX_STATS.efer_nxe_enable_count.fetch_add(1, Ordering::Relaxed);
+    NX_STATS
+        .efer_nxe_enable_count
+        .fetch_add(1, Ordering::Relaxed);
     NX_ENABLED.store(true, Ordering::Release);
 }
 
@@ -212,8 +239,8 @@ pub fn nx_page_flags(virt: u64, flags: PageFlags) -> PageFlags {
     }
     match nx_policy_for(virt) {
         NxPolicy::NonExecutable => flags | PageFlags::NO_EXECUTE,
-        NxPolicy::Executable    => flags & !PageFlags::NO_EXECUTE,
-        NxPolicy::Absent        => flags,
+        NxPolicy::Executable => flags & !PageFlags::NO_EXECUTE,
+        NxPolicy::Absent => flags,
     }
 }
 
@@ -231,7 +258,9 @@ pub unsafe fn nx_enforce_region<F>(base_virt: u64, count: usize, pte_resolver: F
 where
     F: Fn(u64) -> Option<*mut u64>,
 {
-    NX_STATS.region_enforce_calls.fetch_add(1, Ordering::Relaxed);
+    NX_STATS
+        .region_enforce_calls
+        .fetch_add(1, Ordering::Relaxed);
 
     for i in 0..count as u64 {
         let vaddr = base_virt + i * PAGE_SIZE as u64;

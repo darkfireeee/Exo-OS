@@ -6,13 +6,11 @@
 
 use core::mem;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicUsize, AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
-use crate::memory::core::{
-    AllocError, AllocFlags, PhysAddr, PAGE_SIZE, CACHE_LINE_SIZE,
-};
 use crate::memory::core::layout::PHYS_MAP_BASE;
+use crate::memory::core::{AllocError, AllocFlags, PhysAddr, CACHE_LINE_SIZE, PAGE_SIZE};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLASSES DE TAILLE SLAB
@@ -22,30 +20,35 @@ use crate::memory::core::layout::PHYS_MAP_BASE;
 /// Chaque classe gère des objets de taille fixe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SizeClassInfo {
-    pub size:      usize,   // Taille de l'objet en octets
-    pub alignment: usize,   // Alignement requis
+    pub size: usize,          // Taille de l'objet en octets
+    pub alignment: usize,     // Alignement requis
     pub objs_per_slab: usize, // Nombre d'objets par slab page
-    pub color_range:   usize, // Nombre de couleurs de cache
+    pub color_range: usize,   // Nombre de couleurs de cache
 }
 
 impl SizeClassInfo {
     pub const fn new(size: usize, alignment: usize) -> Self {
         let usable = PAGE_SIZE - mem::size_of::<SlabHeader>();
-        let objs   = usable / size;
-        let waste  = usable - objs * size;
-        SizeClassInfo { size, alignment, objs_per_slab: objs, color_range: waste }
+        let objs = usable / size;
+        let waste = usable - objs * size;
+        SizeClassInfo {
+            size,
+            alignment,
+            objs_per_slab: objs,
+            color_range: waste,
+        }
     }
 }
 
 /// Classes de taille standard (8 B → 2 KiB).
 pub const SIZE_CLASSES: &[SizeClassInfo] = &[
-    SizeClassInfo::new(8,    8),
-    SizeClassInfo::new(16,   16),
-    SizeClassInfo::new(32,   16),
-    SizeClassInfo::new(64,   64),
-    SizeClassInfo::new(128,  64),
-    SizeClassInfo::new(256,  64),
-    SizeClassInfo::new(512,  64),
+    SizeClassInfo::new(8, 8),
+    SizeClassInfo::new(16, 16),
+    SizeClassInfo::new(32, 16),
+    SizeClassInfo::new(64, 64),
+    SizeClassInfo::new(128, 64),
+    SizeClassInfo::new(256, 64),
+    SizeClassInfo::new(512, 64),
     SizeClassInfo::new(1024, 64),
     SizeClassInfo::new(2048, 64),
 ];
@@ -120,23 +123,23 @@ const _: () = assert!(mem::size_of::<SlabHeader>() <= 64);
 /// FIX-SLABCACHE-01 : #[repr(C, align(64))] évite le false sharing avec `inner`.
 #[repr(C, align(64))]
 pub struct SlabCacheStats {
-    pub allocs:       AtomicU64,
-    pub frees:        AtomicU64,
+    pub allocs: AtomicU64,
+    pub frees: AtomicU64,
     pub slabs_created: AtomicU64,
-    pub slabs_freed:   AtomicU64,
+    pub slabs_freed: AtomicU64,
     pub current_inuse: AtomicUsize,
-    pub cache_full:    AtomicU64,
+    pub cache_full: AtomicU64,
 }
 
 impl SlabCacheStats {
     pub const fn new() -> Self {
         SlabCacheStats {
-            allocs:        AtomicU64::new(0),
-            frees:         AtomicU64::new(0),
+            allocs: AtomicU64::new(0),
+            frees: AtomicU64::new(0),
             slabs_created: AtomicU64::new(0),
-            slabs_freed:   AtomicU64::new(0),
+            slabs_freed: AtomicU64::new(0),
             current_inuse: AtomicUsize::new(0),
-            cache_full:    AtomicU64::new(0),
+            cache_full: AtomicU64::new(0),
         }
     }
 }
@@ -158,23 +161,23 @@ struct CacheLineAligned<T>(T);
 /// sont sur des cache lines distinctes → pas de false sharing SMP.
 #[repr(C, align(64))]
 pub struct SlabCache {
-    info:    SizeClassInfo,
-    inner:   Mutex<SlabCacheInner>,
+    info: SizeClassInfo,
+    inner: Mutex<SlabCacheInner>,
     /// Séparateur : force `stats` sur une cache line dédiée.
     _cache_line_separator: CacheLineAligned<()>,
-    pub stats:   SlabCacheStats,
+    pub stats: SlabCacheStats,
     enabled: AtomicBool,
 }
 
 struct SlabCacheInner {
     partial_list: *mut SlabHeader,
-    full_list:    *mut SlabHeader,
-    free_list:    *mut SlabHeader,
+    full_list: *mut SlabHeader,
+    free_list: *mut SlabHeader,
     partial_count: usize,
-    full_count:    usize,
-    free_count:    usize,
-    color_next:    usize, // Couleur actuelle pour le prochain slab
-    // Note : plus de vmalloc_ptr — adresse virtuelle dérivée de phys via physmap
+    full_count: usize,
+    free_count: usize,
+    color_next: usize, // Couleur actuelle pour le prochain slab
+                       // Note : plus de vmalloc_ptr — adresse virtuelle dérivée de phys via physmap
 }
 
 // SAFETY: SlabCache est protégé par son Mutex interne.
@@ -186,16 +189,16 @@ impl SlabCache {
         SlabCache {
             info,
             inner: Mutex::new(SlabCacheInner {
-                partial_list:  core::ptr::null_mut(),
-                full_list:     core::ptr::null_mut(),
-                free_list:     core::ptr::null_mut(),
+                partial_list: core::ptr::null_mut(),
+                full_list: core::ptr::null_mut(),
+                free_list: core::ptr::null_mut(),
                 partial_count: 0,
-                full_count:    0,
-                free_count:    0,
-                color_next:    0,
+                full_count: 0,
+                free_count: 0,
+                color_next: 0,
             }),
             _cache_line_separator: CacheLineAligned(()),
-            stats:   SlabCacheStats::new(),
+            stats: SlabCacheStats::new(),
             enabled: AtomicBool::new(false),
         }
     }
@@ -248,16 +251,16 @@ impl SlabCache {
         let mut inner = self.inner.lock();
         // Retrouver le header du slab (début de la page contenant ptr)
         let page_addr = ptr.as_ptr() as usize & !(PAGE_SIZE - 1);
-        let header    = page_addr as *mut SlabHeader;
+        let header = page_addr as *mut SlabHeader;
 
         // Pousser sur la freelist du slab
         // SAFETY: `header` pointe sur un SlabHeader valide (issu de notre create_new_slab)
-        let obj_ptr   = ptr.as_ptr();
-        let old_free  = (*header).freelist;
+        let obj_ptr = ptr.as_ptr();
+        let old_free = (*header).freelist;
         // Écrire le pointeur vers l'ancien freelist dans les premiers octets de l'objet
         core::ptr::write(obj_ptr as *mut *mut u8, old_free);
         (*header).freelist = obj_ptr;
-        (*header).inuse   -= 1;
+        (*header).inuse -= 1;
 
         let inuse = (*header).inuse;
 
@@ -266,7 +269,7 @@ impl SlabCache {
             // SAFETY: header ptr valide (slab actif); listes manipulées sous verrou.
             unsafe {
                 list_remove(header, &mut r.partial_list, &mut r.partial_count);
-                list_remove(header, &mut r.full_list,    &mut r.full_count);
+                list_remove(header, &mut r.full_list, &mut r.full_count);
                 list_push_front(header, &mut r.free_list, &mut r.free_count);
             }
             self.stats.current_inuse.fetch_sub(1, Ordering::Relaxed);
@@ -289,17 +292,21 @@ impl SlabCache {
     // ─────────────── helpers internes ───────────────────────────────────────
 
     fn alloc_from_list(list: &mut *mut SlabHeader, info: &SizeClassInfo) -> Option<NonNull<u8>> {
-        if list.is_null() { return None; }
+        if list.is_null() {
+            return None;
+        }
         // SAFETY: list pointe sur un SlabHeader valide (géré par ce cache)
         let header = unsafe { &mut **list };
-        if header.freelist.is_null() { return None; }
+        if header.freelist.is_null() {
+            return None;
+        }
 
         let obj = header.freelist;
         // SAFETY: obj pointe sur un objet libre dont les premiers octets
         //         contiennent le pointeur vers le prochain élément libre
         let next = unsafe { core::ptr::read(obj as *const *mut u8) };
         header.freelist = next;
-        header.inuse   += 1;
+        header.inuse += 1;
 
         if header.inuse == header.total {
             // Slab maintenant plein — sera géré par l'appelant si besoin
@@ -309,7 +316,9 @@ impl SlabCache {
     }
 
     fn activate_free_slab(inner: &mut SlabCacheInner, info: &SizeClassInfo) -> Option<NonNull<u8>> {
-        if inner.free_list.is_null() { return None; }
+        if inner.free_list.is_null() {
+            return None;
+        }
         let header = inner.free_list;
         // SAFETY: free_list non-null (vérifié ci-dessus); manipulation de liste sous verrou.
         unsafe {
@@ -321,7 +330,10 @@ impl SlabCache {
 
     /// Crée un nouveau slab en mappant une page physique dans l'espace vmalloc réservé.
     /// Utilise une adresse virtuelle avançante (bump pointer) pour les mappings slab.
-    fn create_new_slab(inner: &mut SlabCacheInner, info: &SizeClassInfo) -> Result<NonNull<u8>, AllocError> {
+    fn create_new_slab(
+        inner: &mut SlabCacheInner,
+        info: &SizeClassInfo,
+    ) -> Result<NonNull<u8>, AllocError> {
         // Obtenir une page physique via l'allocateur buddy de niveau supérieur.
         // Comme slab.rs est dans physical/allocator/, il n'appelle PAS buddy directement
         // (éviter la dépendance circulaire). On s'appuie sur une fonction fournie
@@ -343,10 +355,11 @@ impl SlabCache {
         // Écrire le header au début de la page (offset 0)
         // SAFETY: virt_base pointe sur une page valide fraîchement allouée et mappée.
         //         Le header est aligné sur 64 octets (= alignement de SlabHeader).
-        let header_ptr  = virt_base as *mut SlabHeader;
-        let first_obj   = virt_base as usize
+        let header_ptr = virt_base as *mut SlabHeader;
+        let first_obj = virt_base as usize
             + mem::size_of::<SlabHeader>()
-            + align_up_slab(mem::size_of::<SlabHeader>(), info.alignment) - mem::size_of::<SlabHeader>()
+            + align_up_slab(mem::size_of::<SlabHeader>(), info.alignment)
+            - mem::size_of::<SlabHeader>()
             + color;
         let objs_in_page = (PAGE_SIZE - (first_obj - virt_base as usize)) / info.size;
         let objs_in_page = objs_in_page.min(info.objs_per_slab);
@@ -363,23 +376,34 @@ impl SlabCache {
                 } else {
                     core::ptr::write(obj as *mut *mut u8, core::ptr::null_mut());
                 }
-                if i == 0 { current = obj; }
+                if i == 0 {
+                    current = obj;
+                }
             }
 
-            core::ptr::write(header_ptr, SlabHeader {
-                freelist:     current,
-                inuse:        0,
-                total:        objs_in_page as u32,
-                next:         core::ptr::null_mut(),
-                prev:         core::ptr::null_mut(),
-                class_idx:    0,
-                color_offset: color as u8,
-                _pad:         [0; 6],
-            });
+            core::ptr::write(
+                header_ptr,
+                SlabHeader {
+                    freelist: current,
+                    inuse: 0,
+                    total: objs_in_page as u32,
+                    next: core::ptr::null_mut(),
+                    prev: core::ptr::null_mut(),
+                    class_idx: 0,
+                    color_offset: color as u8,
+                    _pad: [0; 6],
+                },
+            );
         }
 
         // SAFETY: header_ptr initialisé ci-dessus (page fraîche); liste partielle sous verrou.
-        unsafe { list_push_front(header_ptr, &mut inner.partial_list, &mut inner.partial_count); }
+        unsafe {
+            list_push_front(
+                header_ptr,
+                &mut inner.partial_list,
+                &mut inner.partial_count,
+            );
+        }
 
         // Allouer le premier objet
         Self::alloc_from_list(&mut inner.partial_list, info).ok_or(AllocError::OutOfMemory)
@@ -402,20 +426,27 @@ unsafe fn list_push_front(node: *mut SlabHeader, head: &mut *mut SlabHeader, cou
     if !(*head).is_null() {
         (*(*head)).prev = node;
     }
-    *head  = node;
+    *head = node;
     *count += 1;
 }
 
 /// Retire `node` de la liste pointée par `head` (si présent).
 unsafe fn list_remove(node: *mut SlabHeader, head: &mut *mut SlabHeader, count: &mut usize) {
-    if node.is_null() { return; }
+    if node.is_null() {
+        return;
+    }
     let prev = (*node).prev;
     let next = (*node).next;
-    if !prev.is_null() { (*prev).next = next; }
-    else               { *head        = next; }
-    if !next.is_null() { (*next).prev = prev; }
-    (*node).prev  = core::ptr::null_mut();
-    (*node).next  = core::ptr::null_mut();
+    if !prev.is_null() {
+        (*prev).next = next;
+    } else {
+        *head = next;
+    }
+    if !next.is_null() {
+        (*next).prev = prev;
+    }
+    (*node).prev = core::ptr::null_mut();
+    (*node).next = core::ptr::null_mut();
     *count = count.saturating_sub(1);
 }
 
@@ -426,43 +457,45 @@ unsafe fn list_remove(node: *mut SlabHeader, head: &mut *mut SlabHeader, count: 
 /// Trait permettant à slab d'obtenir des pages physiques sans dépendre
 /// directement du buddy (évite la circularité).
 pub trait SlabPageProvider: Sync {
-    fn get_page(&self)  -> Result<PhysAddr, AllocError>;
+    fn get_page(&self) -> Result<PhysAddr, AllocError>;
     fn put_page(&self, phys: PhysAddr);
 }
 
 /// Implémentation par défaut à base de pointeur statique late-bound.
 /// Stocke les deux parties d'un fat pointer (data + vtable) séparément.
 pub struct DefaultProvider {
-    data:   AtomicUsize,
+    data: AtomicUsize,
     vtable: AtomicUsize,
 }
 
 impl SlabPageProvider for DefaultProvider {
     fn get_page(&self) -> Result<PhysAddr, AllocError> {
-        let data   = self.data.load(Ordering::Acquire);
+        let data = self.data.load(Ordering::Acquire);
         let vtable = self.vtable.load(Ordering::Acquire);
-        if data == 0 || vtable == 0 { return Err(AllocError::NotInitialized); }
+        if data == 0 || vtable == 0 {
+            return Err(AllocError::NotInitialized);
+        }
         // SAFETY: data+vtable forment un fat pointer réenregistré par register_slab_page_provider.
-        let fat: *const dyn SlabPageProvider = unsafe {
-            core::mem::transmute((data as *const (), vtable as *const ()))
-        };
+        let fat: *const dyn SlabPageProvider =
+            unsafe { core::mem::transmute((data as *const (), vtable as *const ())) };
         // SAFETY: fat pointer reconstruit depuis data/vtable enregistrés; fat est valide.
         unsafe { (*fat).get_page() }
     }
     fn put_page(&self, phys: PhysAddr) {
-        let data   = self.data.load(Ordering::Acquire);
+        let data = self.data.load(Ordering::Acquire);
         let vtable = self.vtable.load(Ordering::Acquire);
-        if data == 0 || vtable == 0 { return; }
-        let fat: *const dyn SlabPageProvider = unsafe {
-            core::mem::transmute((data as *const (), vtable as *const ()))
-        };
+        if data == 0 || vtable == 0 {
+            return;
+        }
+        let fat: *const dyn SlabPageProvider =
+            unsafe { core::mem::transmute((data as *const (), vtable as *const ())) };
         // SAFETY: fat pointer reconstruit depuis data/vtable enregistrés; fat valide.
         unsafe { (*fat).put_page(phys) }
     }
 }
 
 pub static SLAB_PAGE_PROVIDER: DefaultProvider = DefaultProvider {
-    data:   AtomicUsize::new(0),
+    data: AtomicUsize::new(0),
     vtable: AtomicUsize::new(0),
 };
 

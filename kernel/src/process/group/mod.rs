@@ -2,10 +2,10 @@
 //
 // Groupes de processus et sessions POSIX (SID, PGID).
 
-pub mod session;
-pub mod pgrp;
 pub mod job_control;
+pub mod pgrp;
+pub mod session;
 
-pub use session::{SessionId, Session, SESSION_TABLE};
+pub use job_control::{tcgetpgrp, tcsetpgrp, JobControlError};
 pub use pgrp::{PgId, ProcessGroup, PGROUP_TABLE};
-pub use job_control::{tcsetpgrp, tcgetpgrp, JobControlError};
+pub use session::{Session, SessionId, SESSION_TABLE};

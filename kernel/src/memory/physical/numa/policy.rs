@@ -14,12 +14,11 @@
 //
 // COUCHE 0 — pas de dépendance scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::RwLock;
 
-use super::node::{NUMA_NODES, NUMA_NODE_INVALID, MAX_NUMA_NODES};
 use super::distance::closest_node;
+use super::node::{MAX_NUMA_NODES, NUMA_NODES, NUMA_NODE_INVALID};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Type NumaPolicy
@@ -35,29 +34,39 @@ impl NumaNodeMask {
 
     #[inline]
     pub fn from_node(nid: u32) -> Self {
-        if nid >= 64 { return Self::NONE; }
+        if nid >= 64 {
+            return Self::NONE;
+        }
         Self(1u64 << nid)
     }
 
     #[inline]
     pub fn contains(&self, nid: u32) -> bool {
-        if nid >= 64 { return false; }
+        if nid >= 64 {
+            return false;
+        }
         self.0 & (1u64 << nid) != 0
     }
 
     #[inline]
-    pub fn is_empty(&self) -> bool { self.0 == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
 
     /// Premier nœud du masque.
     #[inline]
     pub fn first_set(&self) -> Option<u32> {
-        if self.0 == 0 { return None; }
+        if self.0 == 0 {
+            return None;
+        }
         Some(self.0.trailing_zeros())
     }
 
     /// Nombre de nœuds dans le masque.
     #[inline]
-    pub fn count(&self) -> u32 { self.0.count_ones() }
+    pub fn count(&self) -> u32 {
+        self.0.count_ones()
+    }
 }
 
 /// Politique d'allocation NUMA.
@@ -159,21 +168,21 @@ pub fn set_system_policy(policy: NumaPolicy) {
 
 #[repr(C)]
 pub struct NumaPolicyStats {
-    pub default_allocs:    AtomicU64,
-    pub bind_allocs:       AtomicU64,
-    pub preferred_allocs:  AtomicU64,
+    pub default_allocs: AtomicU64,
+    pub bind_allocs: AtomicU64,
+    pub preferred_allocs: AtomicU64,
     pub interleave_allocs: AtomicU64,
-    pub bind_failures:     AtomicU64,
+    pub bind_failures: AtomicU64,
 }
 
 impl NumaPolicyStats {
     const fn new() -> Self {
         Self {
-            default_allocs:    AtomicU64::new(0),
-            bind_allocs:       AtomicU64::new(0),
-            preferred_allocs:  AtomicU64::new(0),
+            default_allocs: AtomicU64::new(0),
+            bind_allocs: AtomicU64::new(0),
+            preferred_allocs: AtomicU64::new(0),
             interleave_allocs: AtomicU64::new(0),
-            bind_failures:     AtomicU64::new(0),
+            bind_failures: AtomicU64::new(0),
         }
     }
 }
@@ -189,16 +198,26 @@ pub static NUMA_POLICY_STATS: NumaPolicyStats = NumaPolicyStats::new();
 pub fn select_node(policy: &NumaPolicy, cpu_id: u32, interleave_ctr: u64) -> u32 {
     let nid = policy.select_node(cpu_id, interleave_ctr);
     match policy {
-        NumaPolicy::Default     => NUMA_POLICY_STATS.default_allocs.fetch_add(1, Ordering::Relaxed),
-        NumaPolicy::Bind(_)     => {
+        NumaPolicy::Default => NUMA_POLICY_STATS
+            .default_allocs
+            .fetch_add(1, Ordering::Relaxed),
+        NumaPolicy::Bind(_) => {
             if nid == NUMA_NODE_INVALID {
-                NUMA_POLICY_STATS.bind_failures.fetch_add(1, Ordering::Relaxed)
+                NUMA_POLICY_STATS
+                    .bind_failures
+                    .fetch_add(1, Ordering::Relaxed)
             } else {
-                NUMA_POLICY_STATS.bind_allocs.fetch_add(1, Ordering::Relaxed)
+                NUMA_POLICY_STATS
+                    .bind_allocs
+                    .fetch_add(1, Ordering::Relaxed)
             }
         }
-        NumaPolicy::Preferred(_)  => NUMA_POLICY_STATS.preferred_allocs.fetch_add(1, Ordering::Relaxed),
-        NumaPolicy::Interleave(_) => NUMA_POLICY_STATS.interleave_allocs.fetch_add(1, Ordering::Relaxed),
+        NumaPolicy::Preferred(_) => NUMA_POLICY_STATS
+            .preferred_allocs
+            .fetch_add(1, Ordering::Relaxed),
+        NumaPolicy::Interleave(_) => NUMA_POLICY_STATS
+            .interleave_allocs
+            .fetch_add(1, Ordering::Relaxed),
     };
     nid
 }
@@ -218,9 +237,15 @@ pub trait NumaCpuProvider {
 /// Implémentation BSP statique (avant scheduler).
 pub struct BspNumaProvider;
 impl NumaCpuProvider for BspNumaProvider {
-    fn current_cpu_id(&self) -> u32 { 0 }
-    fn thread_interleave_counter(&self) -> u64 { 0 }
-    fn thread_numa_policy(&self) -> NumaPolicy { NumaPolicy::Default }
+    fn current_cpu_id(&self) -> u32 {
+        0
+    }
+    fn thread_interleave_counter(&self) -> u64 {
+        0
+    }
+    fn thread_numa_policy(&self) -> NumaPolicy {
+        NumaPolicy::Default
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

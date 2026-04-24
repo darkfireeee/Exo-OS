@@ -9,12 +9,10 @@
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::memory::heap::thread_local::magazine::{CpuMagazinePair, MAGAZINE_SIZE};
-use crate::memory::heap::allocator::size_classes::{
-    HEAP_SIZE_CLASSES, heap_size_class_for,
-};
-use crate::memory::physical::allocator::slub::SLUB_CACHES;
 use crate::memory::core::types::AllocFlags;
+use crate::memory::heap::allocator::size_classes::{heap_size_class_for, HEAP_SIZE_CLASSES};
+use crate::memory::heap::thread_local::magazine::{CpuMagazinePair, MAGAZINE_SIZE};
+use crate::memory::physical::allocator::slub::SLUB_CACHES;
 
 /// Nombre maximum de CPUs supportés.
 pub use crate::memory::core::constants::MAX_CPUS;
@@ -31,23 +29,23 @@ const _: () = assert!(
 
 /// Statistiques détaillées par CPU et par classe de taille.
 pub struct PerCpuCacheStats {
-    pub hits:       AtomicU64,   // allocs servies par le cache local
-    pub misses:     AtomicU64,   // allocs qui ont dû aller au SLUB
-    pub free_hits:  AtomicU64,   // frees absorbées par le cache local
-    pub free_miss:  AtomicU64,   // frees renvoyées au SLUB
-    pub drains:     AtomicU64,   // nombre de drain complets (contexte switch, etc.)
-    pub refills:    AtomicU64,   // nombre de refills depuis le SLUB
+    pub hits: AtomicU64,      // allocs servies par le cache local
+    pub misses: AtomicU64,    // allocs qui ont dû aller au SLUB
+    pub free_hits: AtomicU64, // frees absorbées par le cache local
+    pub free_miss: AtomicU64, // frees renvoyées au SLUB
+    pub drains: AtomicU64,    // nombre de drain complets (contexte switch, etc.)
+    pub refills: AtomicU64,   // nombre de refills depuis le SLUB
 }
 
 impl PerCpuCacheStats {
     const fn new() -> Self {
         PerCpuCacheStats {
-            hits:       AtomicU64::new(0),
-            misses:     AtomicU64::new(0),
-            free_hits:  AtomicU64::new(0),
-            free_miss:  AtomicU64::new(0),
-            drains:     AtomicU64::new(0),
-            refills:    AtomicU64::new(0),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+            free_hits: AtomicU64::new(0),
+            free_miss: AtomicU64::new(0),
+            drains: AtomicU64::new(0),
+            refills: AtomicU64::new(0),
         }
     }
 }
@@ -68,9 +66,9 @@ pub struct PerCpuCache {
     /// Paires de magazines pour chaque classe de taille.
     pub magazines: [CpuMagazinePair; CACHED_SIZE_CLASSES],
     /// CPU propriétaire de ce cache.
-    cpu_id:    u32,
+    cpu_id: u32,
     /// Cache actif ? (faux tant que non initialisé).
-    pub active:    bool,
+    pub active: bool,
     /// Statistiques.
     pub stats: PerCpuCacheStats,
     /// Padding pour aligner à 64 * N.
@@ -104,8 +102,8 @@ impl PerCpuCache {
             ],
             cpu_id: 0,
             active: false,
-            stats:  PerCpuCacheStats::new(),
-            _pad:   [0u8; 3],
+            stats: PerCpuCacheStats::new(),
+            _pad: [0u8; 3],
         }
     }
 
@@ -115,7 +113,7 @@ impl PerCpuCache {
         self.active = true;
         for (i, mag) in self.magazines.iter_mut().enumerate() {
             mag.loaded.size_class = i;
-            mag.prev.size_class   = i;
+            mag.prev.size_class = i;
         }
     }
 
@@ -125,9 +123,13 @@ impl PerCpuCache {
     /// (l'appelant doit alors appeler `alloc_slow`).
     #[inline]
     pub fn alloc_fast(&mut self, size: usize) -> Option<NonNull<u8>> {
-        if !self.active { return None; }
+        if !self.active {
+            return None;
+        }
         let class_idx = heap_size_class_for(size)?;
-        if class_idx >= CACHED_SIZE_CLASSES { return None; }
+        if class_idx >= CACHED_SIZE_CLASSES {
+            return None;
+        }
 
         if let Some(ptr) = self.magazines[class_idx].alloc() {
             self.stats.hits.fetch_add(1, Ordering::Relaxed);
@@ -143,12 +145,16 @@ impl PerCpuCache {
     /// Retourne `false` si le cache est saturé (l'appelant doit drainer).
     #[inline]
     pub fn free_fast(&mut self, ptr: NonNull<u8>, size: usize) -> bool {
-        if !self.active { return false; }
+        if !self.active {
+            return false;
+        }
         let class_idx = match heap_size_class_for(size) {
             Some(idx) => idx,
-            None      => return false,
+            None => return false,
         };
-        if class_idx >= CACHED_SIZE_CLASSES { return false; }
+        if class_idx >= CACHED_SIZE_CLASSES {
+            return false;
+        }
 
         if self.magazines[class_idx].free(ptr) {
             self.stats.free_hits.fetch_add(1, Ordering::Relaxed);
@@ -170,14 +176,18 @@ impl PerCpuCache {
             match SLUB_CACHES[slub_idx].alloc(AllocFlags::NONE) {
                 Ok(ptr) => {
                     // Pousse directement dans le magazine prev (loaded est plein côté alloc).
-                    if !self.magazines[class_idx].prev.push(ptr) { break; }
+                    if !self.magazines[class_idx].prev.push(ptr) {
+                        break;
+                    }
                     loaded += 1;
                 }
                 Err(_) => break,
             }
         }
 
-        if loaded == 0 { return None; }
+        if loaded == 0 {
+            return None;
+        }
 
         // Swap loaded ↔ prev pour remettre le prev rempli en position "loaded".
         core::mem::swap(
@@ -192,18 +202,24 @@ impl PerCpuCache {
     /// Drain le magazine chargé vers le SLUB (appelé lors d'un context switch
     /// ou quand le magazine est plein sur le chemin lent).
     pub fn drain_class(&mut self, class_idx: usize) {
-        if class_idx >= CACHED_SIZE_CLASSES { return; }
+        if class_idx >= CACHED_SIZE_CLASSES {
+            return;
+        }
         let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx as usize;
 
         // Vide loaded.
         while let Some(ptr) = self.magazines[class_idx].loaded.pop() {
             // SAFETY: ptr a été alloué par le SLUB correspondant.
-            unsafe { SLUB_CACHES[slub_idx].free(ptr); }
+            unsafe {
+                SLUB_CACHES[slub_idx].free(ptr);
+            }
         }
         // Vide prev.
         while let Some(ptr) = self.magazines[class_idx].prev.pop() {
             // SAFETY: ptr alloqué par SLUB_CACHES[slub_idx] (magazine prev).
-            unsafe { SLUB_CACHES[slub_idx].free(ptr); }
+            unsafe {
+                SLUB_CACHES[slub_idx].free(ptr);
+            }
         }
         self.stats.drains.fetch_add(1, Ordering::Relaxed);
     }
@@ -272,7 +288,12 @@ impl PerCpuCacheTable {
     /// # Safety
     /// Appelé depuis le code d'initialisation du CPU avant toute allocation.
     pub unsafe fn init_cpu(&self, cpu_id: usize) {
-        assert!(cpu_id < MAX_CPUS, "vmalloc: cpu_id {} >= MAX_CPUS {}", cpu_id, MAX_CPUS);
+        assert!(
+            cpu_id < MAX_CPUS,
+            "vmalloc: cpu_id {} >= MAX_CPUS {}",
+            cpu_id,
+            MAX_CPUS
+        );
         // SAFETY: chaque CPU accède uniquement à son propre slot.
         let cache_ptr = &self.caches[cpu_id] as *const PerCpuCache as *mut PerCpuCache;
         (*cache_ptr).init(cpu_id as u32);
@@ -306,7 +327,9 @@ pub static CPU_CACHES: PerCpuCacheTable = PerCpuCacheTable::new();
 /// `cpu_id` doit être le CPU courant, sans préemption pendant l'appel.
 pub unsafe fn cache_alloc(size: usize, cpu_id: usize) -> Option<NonNull<u8>> {
     let cache = CPU_CACHES.get_mut(cpu_id);
-    if let Some(ptr) = cache.alloc_fast(size) { return Some(ptr); }
+    if let Some(ptr) = cache.alloc_fast(size) {
+        return Some(ptr);
+    }
 
     // Slow path: refill.
     let class_idx = heap_size_class_for(size)?;
@@ -322,14 +345,18 @@ pub unsafe fn cache_alloc(size: usize, cpu_id: usize) -> Option<NonNull<u8>> {
 /// `cpu_id` doit être le CPU courant, sans préemption pendant l'appel.
 pub unsafe fn cache_free(ptr: NonNull<u8>, size: usize, cpu_id: usize) {
     let cache = CPU_CACHES.get_mut(cpu_id);
-    if cache.free_fast(ptr, size) { return; }
+    if cache.free_fast(ptr, size) {
+        return;
+    }
 
     // Slow path: drain la classe concernée puis on libère directement via SLUB.
     if let Some(class_idx) = heap_size_class_for(size) {
         if class_idx < CACHED_SIZE_CLASSES {
             cache.drain_class(class_idx);
             // Après drain, réessaie.
-            if cache.free_fast(ptr, size) { return; }
+            if cache.free_fast(ptr, size) {
+                return;
+            }
         }
     }
     // Dernier recours: libère directement via SLUB.

@@ -17,11 +17,7 @@ fn sleep_ms(ms: u64) {
     };
 
     unsafe {
-        let _ = syscall::syscall2(
-            syscall::SYS_NANOSLEEP,
-            &ts as *const Timespec as u64,
-            0,
-        );
+        let _ = syscall::syscall2(syscall::SYS_NANOSLEEP, &ts as *const Timespec as u64, 0);
     }
 }
 
@@ -36,10 +32,7 @@ fn pid_alive(pid: u32) -> bool {
 pub unsafe fn spawn_service(service_name: &str, bin_path: &[u8]) -> u32 {
     let _ = service_name;
 
-    let argv: [u64; 2] = [
-        bin_path.as_ptr() as u64,
-        0,
-    ];
+    let argv: [u64; 2] = [bin_path.as_ptr() as u64, 0];
     let envp: [u64; 1] = [0];
 
     let child_pid = syscall::syscall0(syscall::SYS_FORK);

@@ -16,12 +16,11 @@
 //   ne peut pas être libéré tant qu'il y a des références (refcounting).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
-use alloc::boxed::Box;
+use super::pcb::{Credentials, ProcessControlBlock};
 use super::pid::Pid;
-use super::pcb::{ProcessControlBlock, Credentials};
 use crate::scheduler::sync::spinlock::SpinLock;
+use alloc::boxed::Box;
+use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RegistrySlot
@@ -39,7 +38,7 @@ struct RegistrySlot {
 impl RegistrySlot {
     const fn empty() -> Self {
         Self {
-            pcb_ptr:  AtomicPtr::new(core::ptr::null_mut()),
+            pcb_ptr: AtomicPtr::new(core::ptr::null_mut()),
             refcount: AtomicU32::new(0),
         }
     }
@@ -63,19 +62,19 @@ pub enum RegistryError {
 /// Table globale PID → PCB (initialisation dynamique).
 pub struct ProcessRegistry {
     /// Slots de la registry (alloués à l'init).
-    slots:     *mut RegistrySlot,
+    slots: *mut RegistrySlot,
     /// Capacité de la table (nombre de PIDs supportés).
-    capacity:  usize,
+    capacity: usize,
     /// Spinlock pour les écritures (insert/remove).
     write_lock: SpinLock<()>,
     /// Nombre de processus enregistrés.
-    count:     AtomicUsize,
+    count: AtomicUsize,
     /// Nombre total d'insertions depuis le boot.
-    inserts:   AtomicUsize,
+    inserts: AtomicUsize,
     /// Nombre total de suppressions.
-    removes:   AtomicUsize,
+    removes: AtomicUsize,
     /// Nombre de lookups (instrumentation debugging).
-    lookups:   AtomicUsize,
+    lookups: AtomicUsize,
 }
 
 // SAFETY: slots pointés sont accédés de manière exclusive ou via atomiques.
@@ -84,13 +83,13 @@ unsafe impl Send for ProcessRegistry {}
 
 // Registry globale — initialement invalide (ptr null, capacity 0).
 pub static PROCESS_REGISTRY: ProcessRegistry = ProcessRegistry {
-    slots:      core::ptr::null_mut(),
-    capacity:   0,
+    slots: core::ptr::null_mut(),
+    capacity: 0,
     write_lock: SpinLock::new(()),
-    count:      AtomicUsize::new(0),
-    inserts:    AtomicUsize::new(0),
-    removes:    AtomicUsize::new(0),
-    lookups:    AtomicUsize::new(0),
+    count: AtomicUsize::new(0),
+    inserts: AtomicUsize::new(0),
+    removes: AtomicUsize::new(0),
+    lookups: AtomicUsize::new(0),
 };
 
 impl ProcessRegistry {
@@ -100,8 +99,7 @@ impl ProcessRegistry {
     /// Appelé une seule fois depuis le BSP durant l'init.
     pub unsafe fn init(&self, capacity: usize) {
         use alloc::alloc::{alloc_zeroed, Layout};
-        let layout = Layout::array::<RegistrySlot>(capacity)
-            .expect("layout RegistrySlot valide");
+        let layout = Layout::array::<RegistrySlot>(capacity).expect("layout RegistrySlot valide");
         let ptr = alloc_zeroed(layout) as *mut RegistrySlot;
         assert!(!ptr.is_null(), "ProcessRegistry::init : allocation échouée");
         // Initialiser chaque slot à l'état vide.
@@ -111,7 +109,7 @@ impl ProcessRegistry {
         }
         // Mise à jour via raw pointer (la static mut est à adresse fixe).
         let self_mut = self as *const Self as *mut Self;
-        (*self_mut).slots    = ptr;
+        (*self_mut).slots = ptr;
         (*self_mut).capacity = capacity;
     }
 
@@ -189,7 +187,8 @@ impl ProcessRegistry {
     /// Itère sur tous les PCBs actifs (lecture seule).
     /// Fermeture appelée pour chaque PCB non-null.
     pub fn for_each<F>(&self, mut f: F)
-    where F: FnMut(&ProcessControlBlock)
+    where
+        F: FnMut(&ProcessControlBlock),
     {
         for i in 0..self.capacity {
             // SAFETY: i < capacity.
@@ -224,11 +223,11 @@ impl ProcessRegistry {
     /// Statistiques de la registry pour le système de monitoring.
     pub fn stats(&self) -> RegistryStats {
         RegistryStats {
-            current_count:  self.count.load(Ordering::Relaxed),
-            total_inserts:  self.inserts.load(Ordering::Relaxed),
-            total_removes:  self.removes.load(Ordering::Relaxed),
-            total_lookups:  self.lookups.load(Ordering::Relaxed),
-            capacity:       self.capacity,
+            current_count: self.count.load(Ordering::Relaxed),
+            total_inserts: self.inserts.load(Ordering::Relaxed),
+            total_removes: self.removes.load(Ordering::Relaxed),
+            total_lookups: self.lookups.load(Ordering::Relaxed),
+            capacity: self.capacity,
         }
     }
 }
@@ -240,7 +239,7 @@ pub struct RegistryStats {
     pub total_inserts: usize,
     pub total_removes: usize,
     pub total_lookups: usize,
-    pub capacity:      usize,
+    pub capacity: usize,
 }
 
 /// Initialise la registry globale.

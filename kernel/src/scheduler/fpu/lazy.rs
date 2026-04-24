@@ -16,8 +16,8 @@
 //   Les instructions ASM brutes sont dans arch/x86_64/cpu/fpu.rs.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicBool, Ordering};
 use crate::scheduler::core::task::ThreadControlBlock;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // État global d'initialisation
@@ -32,7 +32,9 @@ static FPU_LAZY_INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Correspond au step 4 de la séquence d'initialisation scheduler (DOC3).
 pub fn init() {
     // SAFETY: cr0_set_ts() set le bit TS dans CR0. Sûr au boot avant tout thread.
-    unsafe { cr0_set_ts(); }
+    unsafe {
+        cr0_set_ts();
+    }
     FPU_LAZY_INITIALIZED.store(true, Ordering::Release);
 }
 
@@ -58,10 +60,7 @@ pub unsafe fn cr0_set_ts() {
 #[inline(always)]
 pub unsafe fn cr0_clear_ts() {
     #[cfg(target_arch = "x86_64")]
-    core::arch::asm!(
-        "clts",
-        options(nostack, nomem),
-    );
+    core::arch::asm!("clts", options(nostack, nomem),);
 }
 
 /// Retourne vrai si CR0.TS est activé.
@@ -78,7 +77,9 @@ pub unsafe fn cr0_ts_is_set() -> bool {
         (cr0 >> 3) & 1 != 0
     }
     #[cfg(not(target_arch = "x86_64"))]
-    { false }
+    {
+        false
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

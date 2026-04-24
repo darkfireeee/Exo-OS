@@ -12,10 +12,8 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::ipc::core::types::{
-    EndpointId, ProcessId, IpcError, MessageFlags, MessageType,
-};
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::core::types::{EndpointId, IpcError, MessageFlags, MessageType, ProcessId};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -43,7 +41,12 @@ pub struct IpcDescriptor {
 
 impl IpcDescriptor {
     pub const fn new(kind: u32, handle: u32, flags: u32) -> Self {
-        Self { kind, handle, flags, _pad: 0 }
+        Self {
+            kind,
+            handle,
+            flags,
+            _pad: 0,
+        }
     }
 }
 
@@ -102,7 +105,12 @@ impl IpcMessage {
             sender_pid: ProcessId(0),
             cookie: 0,
             _pad: [0u8; 14],
-            descriptors: [IpcDescriptor { kind: 0, handle: 0, flags: 0, _pad: 0 }; MAX_MSG_DESCRIPTORS],
+            descriptors: [IpcDescriptor {
+                kind: 0,
+                handle: 0,
+                flags: 0,
+                _pad: 0,
+            }; MAX_MSG_DESCRIPTORS],
             payload: [0u8; MAX_MSG_INLINE],
         }
     }
@@ -178,7 +186,12 @@ impl IpcMessageBuilder {
             priority: 64,
             sender_pid: ProcessId(0),
             cookie: 0,
-            descriptors: [IpcDescriptor { kind: 0, handle: 0, flags: 0, _pad: 0 }; MAX_MSG_DESCRIPTORS],
+            descriptors: [IpcDescriptor {
+                kind: 0,
+                handle: 0,
+                flags: 0,
+                _pad: 0,
+            }; MAX_MSG_DESCRIPTORS],
             desc_count: 0,
             payload_buf: [0u8; MAX_MSG_INLINE],
             payload_len: 0,

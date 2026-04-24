@@ -14,9 +14,7 @@ pub fn validate_claim(
         return Err(syscall::EINVAL);
     }
 
-    let snapshot = registry
-        .snapshot_by_bdf(bdf_raw)
-        .ok_or(syscall::ENOENT)?;
+    let snapshot = registry.snapshot_by_bdf(bdf_raw).ok_or(syscall::ENOENT)?;
 
     if snapshot.phys_base != phys_base || snapshot.size != size {
         return Err(syscall::EINVAL);

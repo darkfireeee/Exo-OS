@@ -31,17 +31,21 @@
 #[derive(Clone, Copy, Debug)]
 pub struct EpollEventAbi {
     /// Bitmask des événements surveilles/retournés (EPOLLIN, EPOLLOUT, etc.).
-    pub events:    u32,
+    pub events: u32,
     /// Données utilisateur — **NE PAS accéder directement** (UB packed).
     /// Utiliser `data_u64()` et `set_data_u64()`.
-    data_bytes:   [u8; 8],
+    data_bytes: [u8; 8],
 }
 
 // Assertions ABI Linux compile-time (TL-36)
-const _: () = assert!(core::mem::size_of::<EpollEventAbi>() == 12,
-    "EpollEventAbi doit faire 12B (ABI Linux epoll_event)");
-const _: () = assert!(core::mem::offset_of!(EpollEventAbi, data_bytes) == 4,
-    "data_bytes doit être à l'offset 4");
+const _: () = assert!(
+    core::mem::size_of::<EpollEventAbi>() == 12,
+    "EpollEventAbi doit faire 12B (ABI Linux epoll_event)"
+);
+const _: () = assert!(
+    core::mem::offset_of!(EpollEventAbi, data_bytes) == 4,
+    "data_bytes doit être à l'offset 4"
+);
 
 impl EpollEventAbi {
     /// Lit la valeur `u64` du champ `data` — **toujours safe** (lecture unaligned explicite).
@@ -70,19 +74,19 @@ impl EpollEventAbi {
 
 // ─── Constantes epoll ─────────────────────────────────────────────────────────
 /// Donnée disponible en lecture.
-pub const EPOLLIN:      u32 = 0x0000_0001;
+pub const EPOLLIN: u32 = 0x0000_0001;
 /// Donnée urgente disponible.
-pub const EPOLLPRI:     u32 = 0x0000_0002;
+pub const EPOLLPRI: u32 = 0x0000_0002;
 /// Prêt à l'écriture.
-pub const EPOLLOUT:     u32 = 0x0000_0004;
+pub const EPOLLOUT: u32 = 0x0000_0004;
 /// Condition d'erreur.
-pub const EPOLLERR:     u32 = 0x0000_0008;
+pub const EPOLLERR: u32 = 0x0000_0008;
 /// Accrochage (connexion fermée).
-pub const EPOLLHUP:     u32 = 0x0000_0010;
+pub const EPOLLHUP: u32 = 0x0000_0010;
 /// Pair a fermé le socket (lecture seule).
-pub const EPOLLRDHUP:   u32 = 0x0000_2000;
+pub const EPOLLRDHUP: u32 = 0x0000_2000;
 /// Mode Edge Triggered.
-pub const EPOLLET:      u32 = 0x8000_0000;
+pub const EPOLLET: u32 = 0x8000_0000;
 /// Désarmé après le premier événement.
 pub const EPOLLONESHOT: u32 = 0x4000_0000;
 

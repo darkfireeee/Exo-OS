@@ -16,7 +16,6 @@
 //
 // COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
@@ -46,23 +45,23 @@ const MAX_GUARD_REGIONS: usize = 4096;
 
 #[repr(C)]
 pub struct GuardPageStats {
-    pub regions_registered:  AtomicU64,
+    pub regions_registered: AtomicU64,
     pub regions_unregistered: AtomicU64,
     pub violations_detected: AtomicU64,
     pub stack_guards_placed: AtomicU64,
     pub vmalloc_guards_placed: AtomicU64,
-    pub false_positives:     AtomicU64,
+    pub false_positives: AtomicU64,
 }
 
 impl GuardPageStats {
     const fn new() -> Self {
         Self {
-            regions_registered:   AtomicU64::new(0),
+            regions_registered: AtomicU64::new(0),
             regions_unregistered: AtomicU64::new(0),
-            violations_detected:  AtomicU64::new(0),
-            stack_guards_placed:  AtomicU64::new(0),
+            violations_detected: AtomicU64::new(0),
+            stack_guards_placed: AtomicU64::new(0),
             vmalloc_guards_placed: AtomicU64::new(0),
-            false_positives:      AtomicU64::new(0),
+            false_positives: AtomicU64::new(0),
         }
     }
 }
@@ -95,12 +94,12 @@ pub enum GuardRegionKind {
 #[derive(Debug, Clone, Copy)]
 pub struct GuardRegion {
     /// Adresse virtuelle de début de la page garde inférieure.
-    pub low_guard:  u64,
+    pub low_guard: u64,
     /// Adresse virtuelle de début de la page garde supérieure.
     pub high_guard: u64,
     /// Adresse de la région protégée (pour diagnostics).
     pub region_start: u64,
-    pub region_size:  u64,
+    pub region_size: u64,
     pub kind: GuardRegionKind,
     pub active: bool,
 }
@@ -109,10 +108,10 @@ impl GuardRegion {
     #[allow(dead_code)]
     const fn inactive() -> Self {
         Self {
-            low_guard:    0,
-            high_guard:   0,
+            low_guard: 0,
+            high_guard: 0,
             region_start: 0,
-            region_size:  0,
+            region_size: 0,
             kind: GuardRegionKind::Generic,
             active: false,
         }
@@ -121,15 +120,19 @@ impl GuardRegion {
 
 struct GuardRegionTable {
     regions: [GuardRegion; MAX_GUARD_REGIONS],
-    count:   usize,
+    count: usize,
 }
 
 impl GuardRegionTable {
     const fn new() -> Self {
         Self {
             regions: [GuardRegion {
-                low_guard: 0, high_guard: 0, region_start: 0, region_size: 0,
-                kind: GuardRegionKind::Generic, active: false,
+                low_guard: 0,
+                high_guard: 0,
+                region_start: 0,
+                region_size: 0,
+                kind: GuardRegionKind::Generic,
+                active: false,
             }; MAX_GUARD_REGIONS],
             count: 0,
         }
@@ -155,10 +158,9 @@ impl GuardRegionTable {
             if !r.active {
                 continue;
             }
-            let low_end  = r.low_guard  + PAGE_SIZE as u64;
+            let low_end = r.low_guard + PAGE_SIZE as u64;
             let high_end = r.high_guard + PAGE_SIZE as u64;
-            if (virt >= r.low_guard && virt < low_end)
-                || (virt >= r.high_guard && virt < high_end)
+            if (virt >= r.low_guard && virt < low_end) || (virt >= r.high_guard && virt < high_end)
             {
                 return Some(i);
             }
@@ -213,13 +215,13 @@ pub unsafe fn clear_guard_pte(pte_ptr: *mut u64) {
 /// Retourne `Some(GuardRegionId)` ou `None` si table pleine.
 pub fn register_guard_region(
     region_start: u64,
-    region_size:  u64,
-    kind:         GuardRegionKind,
+    region_size: u64,
+    kind: GuardRegionKind,
 ) -> Option<GuardRegionId> {
     let mut table = GUARD_TABLE.lock();
     let slot = table.alloc_slot()?;
 
-    let low_guard  = region_start.wrapping_sub(PAGE_SIZE as u64);
+    let low_guard = region_start.wrapping_sub(PAGE_SIZE as u64);
     let high_guard = region_start + region_size;
 
     table.regions[slot] = GuardRegion {
@@ -231,13 +233,17 @@ pub fn register_guard_region(
         active: true,
     };
     table.count += 1;
-    GUARD_STATS.regions_registered.fetch_add(1, Ordering::Relaxed);
+    GUARD_STATS
+        .regions_registered
+        .fetch_add(1, Ordering::Relaxed);
 
     match kind {
-        GuardRegionKind::KernelStack { .. } | GuardRegionKind::UserStack { .. } =>
-            GUARD_STATS.stack_guards_placed.fetch_add(1, Ordering::Relaxed),
-        GuardRegionKind::Vmalloc =>
-            GUARD_STATS.vmalloc_guards_placed.fetch_add(1, Ordering::Relaxed),
+        GuardRegionKind::KernelStack { .. } | GuardRegionKind::UserStack { .. } => GUARD_STATS
+            .stack_guards_placed
+            .fetch_add(1, Ordering::Relaxed),
+        GuardRegionKind::Vmalloc => GUARD_STATS
+            .vmalloc_guards_placed
+            .fetch_add(1, Ordering::Relaxed),
         _ => 0,
     };
 
@@ -252,7 +258,9 @@ pub fn unregister_guard_region(id: GuardRegionId) -> bool {
         if region.active {
             region.active = false;
             table.count -= 1;
-            GUARD_STATS.regions_unregistered.fetch_add(1, Ordering::Relaxed);
+            GUARD_STATS
+                .regions_unregistered
+                .fetch_add(1, Ordering::Relaxed);
             return true;
         }
     }
@@ -267,7 +275,10 @@ pub fn unregister_guard_region(id: GuardRegionId) -> bool {
 #[derive(Debug, Clone, Copy)]
 pub enum GuardFaultResult {
     /// Page guard confirmée → kernel panic.
-    GuardViolation { region_idx: usize, kind: GuardRegionKind },
+    GuardViolation {
+        region_idx: usize,
+        kind: GuardRegionKind,
+    },
     /// Pas une page guard → fault normal.
     NotGuard,
 }
@@ -286,8 +297,13 @@ pub fn check_guard_fault(fault_virt: u64, pte_value: u64) -> GuardFaultResult {
     if let Some(idx) = table.lookup(fault_virt) {
         let kind = table.regions[idx].kind;
         drop(table);
-        GUARD_STATS.violations_detected.fetch_add(1, Ordering::Relaxed);
-        GuardFaultResult::GuardViolation { region_idx: idx, kind }
+        GUARD_STATS
+            .violations_detected
+            .fetch_add(1, Ordering::Relaxed);
+        GuardFaultResult::GuardViolation {
+            region_idx: idx,
+            kind,
+        }
     } else {
         GuardFaultResult::NotGuard
     }
@@ -295,16 +311,22 @@ pub fn check_guard_fault(fault_virt: u64, pte_value: u64) -> GuardFaultResult {
 
 /// Gestionnaire de violation de page garde — déclenche un kernel panic.
 pub fn guard_page_violation_handler(virt: u64, kind: GuardRegionKind) -> ! {
-    GUARD_STATS.violations_detected.fetch_add(1, Ordering::Relaxed);
+    GUARD_STATS
+        .violations_detected
+        .fetch_add(1, Ordering::Relaxed);
     match kind {
-        GuardRegionKind::KernelStack { cpu_id } =>
-            panic!("GUARD PAGE VIOLATION: kernel stack overflow cpu={} virt={:#x}", cpu_id, virt),
-        GuardRegionKind::UserStack { tid } =>
-            panic!("GUARD PAGE VIOLATION: user stack overflow tid={} virt={:#x}", tid, virt),
-        GuardRegionKind::Vmalloc =>
-            panic!("GUARD PAGE VIOLATION: vmalloc overflow virt={:#x}", virt),
-        GuardRegionKind::Generic =>
-            panic!("GUARD PAGE VIOLATION: generic region virt={:#x}", virt),
+        GuardRegionKind::KernelStack { cpu_id } => panic!(
+            "GUARD PAGE VIOLATION: kernel stack overflow cpu={} virt={:#x}",
+            cpu_id, virt
+        ),
+        GuardRegionKind::UserStack { tid } => panic!(
+            "GUARD PAGE VIOLATION: user stack overflow tid={} virt={:#x}",
+            tid, virt
+        ),
+        GuardRegionKind::Vmalloc => {
+            panic!("GUARD PAGE VIOLATION: vmalloc overflow virt={:#x}", virt)
+        }
+        GuardRegionKind::Generic => panic!("GUARD PAGE VIOLATION: generic region virt={:#x}", virt),
     }
 }
 

@@ -6,14 +6,11 @@
 //!  - PATH-07  : pas de [u8; PATH_MAX] sur la pile
 //!  - ARITH-02 : arithmétique vérifiée sur toutes les offsets
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
-use crate::fs::exofs::path::path_component::{
-    PathComponent, PathParser, validate_component,
-};
+use crate::fs::exofs::path::path_component::{validate_component, PathComponent, PathParser};
 use crate::fs::exofs::path::symlink::SYMLINK_MAX_DEPTH;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -27,18 +24,13 @@ pub enum WalkerState {
     AtRoot,
     /// Dans un répertoire, composants restants à descendre.
     InDirectory {
-        dir_oid:   ObjectId,
+        dir_oid: ObjectId,
         remaining: Vec<PathComponent>,
     },
     /// Un symlink vient d'être rencontré.
-    AtSymlink {
-        target:    Vec<u8>,
-        depth:     usize,
-    },
+    AtSymlink { target: Vec<u8>, depth: usize },
     /// Résolution terminée avec succès.
-    Done {
-        oid: ObjectId,
-    },
+    Done { oid: ObjectId },
     /// Résolution terminée en erreur.
     Failed(ExofsError),
 }
@@ -94,9 +86,9 @@ pub trait WalkerBackend {
 /// continuer jusqu'à `WalkerStepResult::Done` ou `::Error`.
 pub struct PathWalker {
     /// OID du répertoire racine de résolution.
-    pub root_oid:      ObjectId,
+    pub root_oid: ObjectId,
     /// État courant.
-    pub state:         WalkerState,
+    pub state: WalkerState,
     /// Profondeur de résolution de symlinks.
     pub symlink_depth: usize,
 }
@@ -115,8 +107,12 @@ impl PathWalker {
         while let Some(comp) = parser.next_component()? {
             // Ignorer les composants "."
             let bytes = comp.as_bytes();
-            if bytes == b"." { continue; }
-            components.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+            if bytes == b"." {
+                continue;
+            }
+            components
+                .try_reserve(1)
+                .map_err(|_| ExofsError::NoMemory)?;
             components.push(comp);
         }
         // Inverser pour que le prochain composant soit en queue.
@@ -124,7 +120,7 @@ impl PathWalker {
         Ok(PathWalker {
             root_oid: root.clone(),
             state: WalkerState::InDirectory {
-                dir_oid:   root,
+                dir_oid: root,
                 remaining: components,
             },
             symlink_depth: 0,
@@ -134,10 +130,7 @@ impl PathWalker {
     /// Avance d'un pas dans la résolution.
     ///
     /// Itératif (RECUR-01) — aucun appel interne récursif.
-    pub fn step<B: WalkerBackend>(
-        &mut self,
-        backend: &B,
-    ) -> WalkerStepResult {
+    pub fn step<B: WalkerBackend>(&mut self, backend: &B) -> WalkerStepResult {
         match &mut self.state {
             WalkerState::AtRoot => {
                 // Transition vers InDirectory à la racine sans composants.
@@ -146,13 +139,9 @@ impl PathWalker {
                 WalkerStepResult::Done(root)
             }
 
-            WalkerState::Done { oid } => {
-                WalkerStepResult::Done(oid.clone())
-            }
+            WalkerState::Done { oid } => WalkerStepResult::Done(oid.clone()),
 
-            WalkerState::Failed(e) => {
-                WalkerStepResult::Error(e.clone())
-            }
+            WalkerState::Failed(e) => WalkerStepResult::Error(e.clone()),
 
             WalkerState::AtSymlink { target, depth } => {
                 let tgt = core::mem::take(target);
@@ -173,7 +162,9 @@ impl PathWalker {
                             return WalkerStepResult::Error(e);
                         }
                         Ok(c) => {
-                            if c.as_bytes() == b"." { continue; }
+                            if c.as_bytes() == b"." {
+                                continue;
+                            }
                             if let Err(_) = components.try_reserve(1) {
                                 let e = ExofsError::NoMemory;
                                 self.state = WalkerState::Failed(e.clone());
@@ -192,7 +183,7 @@ impl PathWalker {
                 };
                 self.symlink_depth = d;
                 self.state = WalkerState::InDirectory {
-                    dir_oid:   start,
+                    dir_oid: start,
                     remaining: components,
                 };
                 WalkerStepResult::Continue
@@ -229,8 +220,7 @@ impl PathWalker {
                             }
                             Ok(Some((oid, true))) => {
                                 // Symlink
-                                let new_depth = match self.symlink_depth
-                                    .checked_add(1) {
+                                let new_depth = match self.symlink_depth.checked_add(1) {
                                     None => {
                                         let e = ExofsError::OffsetOverflow;
                                         self.state = WalkerState::Failed(e.clone());
@@ -252,7 +242,7 @@ impl PathWalker {
                                         let tgt_copy = tgt.clone();
                                         self.state = WalkerState::AtSymlink {
                                             target: tgt,
-                                            depth:  new_depth,
+                                            depth: new_depth,
                                         };
                                         WalkerStepResult::SymlinkEncountered(tgt_copy)
                                     }
@@ -282,19 +272,18 @@ impl PathWalker {
     /// Résout le chemin jusqu'au bout.
     ///
     /// Itératif (RECUR-01) — boucle `while` explicite.
-    pub fn collect_to_end<B: WalkerBackend>(
-        &mut self,
-        backend: &B,
-    ) -> ExofsResult<ObjectId> {
+    pub fn collect_to_end<B: WalkerBackend>(&mut self, backend: &B) -> ExofsResult<ObjectId> {
         let mut iters: usize = 0;
         let max_iters: usize = 4096;
         loop {
-            if iters >= max_iters { return Err(ExofsError::InternalError); }
+            if iters >= max_iters {
+                return Err(ExofsError::InternalError);
+            }
             iters = iters.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
             match self.step(backend) {
-                WalkerStepResult::Done(oid)             => return Ok(oid),
-                WalkerStepResult::Error(e)              => return Err(e),
-                WalkerStepResult::Continue              => {}
+                WalkerStepResult::Done(oid) => return Ok(oid),
+                WalkerStepResult::Error(e) => return Err(e),
+                WalkerStepResult::Continue => {}
                 WalkerStepResult::SymlinkEncountered(_) => {}
             }
         }
@@ -364,19 +353,31 @@ pub fn walk_parent<B: WalkerBackend>(
 mod tests {
     use super::*;
 
-    fn oid(b: u8) -> ObjectId { let mut a = [0u8; 32]; a[0] = b; ObjectId(a) }
+    fn oid(b: u8) -> ObjectId {
+        let mut a = [0u8; 32];
+        a[0] = b;
+        ObjectId(a)
+    }
 
     struct FlatBackend {
         root: ObjectId,
     }
     impl WalkerBackend for FlatBackend {
-        fn lookup(&self, _dir: &ObjectId, comp: &PathComponent)
-            -> ExofsResult<Option<(ObjectId, bool)>>
-        {
+        fn lookup(
+            &self,
+            _dir: &ObjectId,
+            comp: &PathComponent,
+        ) -> ExofsResult<Option<(ObjectId, bool)>> {
             let b = comp.as_bytes();
-            if b == b"bin"   { return Ok(Some((oid(2), false))); }
-            if b == b"lib"   { return Ok(Some((oid(3), false))); }
-            if b == b"link"  { return Ok(Some((oid(10), true))); }
+            if b == b"bin" {
+                return Ok(Some((oid(2), false)));
+            }
+            if b == b"lib" {
+                return Ok(Some((oid(3), false)));
+            }
+            if b == b"link" {
+                return Ok(Some((oid(10), true)));
+            }
             Ok(None)
         }
         fn symlink_target(&self, _oid: &ObjectId) -> ExofsResult<Vec<u8>> {
@@ -384,26 +385,32 @@ mod tests {
             v.extend_from_slice(b"/bin");
             Ok(v)
         }
-        fn root_oid(&self) -> ObjectId { self.root.clone() }
+        fn root_oid(&self) -> ObjectId {
+            self.root.clone()
+        }
     }
 
-    #[test] fn test_walk_simple() {
+    #[test]
+    fn test_walk_simple() {
         let b = FlatBackend { root: oid(1) };
         let res = walk_path(oid(1), b"/bin", &b).unwrap();
         assert_eq!(res.0[0], 2);
     }
 
-    #[test] fn test_walk_not_found() {
+    #[test]
+    fn test_walk_not_found() {
         let b = FlatBackend { root: oid(1) };
         assert!(walk_path(oid(1), b"/missing", &b).is_err());
     }
 
-    #[test] fn test_basename() {
+    #[test]
+    fn test_basename() {
         let c = basename(b"/a/b/filename").unwrap();
         assert_eq!(c.as_bytes(), b"filename");
     }
 
-    #[test] fn test_basename_root() {
+    #[test]
+    fn test_basename_root() {
         assert!(basename(b"/").is_err());
     }
 }

@@ -1,4 +1,4 @@
-﻿// kernel/src/memory/swap/compress.rs
+// kernel/src/memory/swap/compress.rs
 //
 // Compression/décompression de pages swap — implémentation zswap light.
 //
@@ -33,10 +33,10 @@ use crate::memory::core::constants::PAGE_SIZE;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Taille maximale du buffer compressé accepté (75 % de PAGE_SIZE).
-pub const ZSWAP_SLOT_SIZE:  usize = 3072;
+pub const ZSWAP_SLOT_SIZE: usize = 3072;
 
 /// Nombre de slots dans le pool zswap.
-pub const MAX_ZSWAP_SLOTS:  usize = 4096;
+pub const MAX_ZSWAP_SLOTS: usize = 4096;
 
 /// Taille du hash de validation (CRC32-like XOR fold).
 #[allow(dead_code)]
@@ -94,25 +94,25 @@ impl CompressBackend for Lz4Lite {
 /// Un slot du pool zswap. Taille fixe = ZSWAP_SLOT_SIZE + métadonnées.
 pub struct ZswapSlot {
     /// Données compressées.
-    data:           [u8; ZSWAP_SLOT_SIZE],
+    data: [u8; ZSWAP_SLOT_SIZE],
     /// Longueur réelle des données compressées (0 = libre).
     compressed_len: u16,
     /// PFN d'origine de la page (identifiant).
-    pub orig_pfn:   u64,
+    pub orig_pfn: u64,
     /// Ce slot est-il occupé ?
-    pub valid:      AtomicBool,
+    pub valid: AtomicBool,
     /// XOR-fold CRC16 des données décompressées pour validation.
-    checksum:       u16,
+    checksum: u16,
 }
 
 impl ZswapSlot {
     const fn new() -> Self {
         ZswapSlot {
-            data:           [0u8; ZSWAP_SLOT_SIZE],
+            data: [0u8; ZSWAP_SLOT_SIZE],
             compressed_len: 0,
-            orig_pfn:       0,
-            valid:          AtomicBool::new(false),
-            checksum:       0,
+            orig_pfn: 0,
+            valid: AtomicBool::new(false),
+            checksum: 0,
         }
     }
 }
@@ -165,10 +165,10 @@ struct ZswapPoolInner {
 pub struct ZswapPool {
     inner: Mutex<()>,
     /// Statistiques.
-    pub stored:       AtomicU64,
-    pub evicted:      AtomicU64,
-    pub decomp_ok:    AtomicU64,
-    pub decomp_fail:  AtomicU64,
+    pub stored: AtomicU64,
+    pub evicted: AtomicU64,
+    pub decomp_ok: AtomicU64,
+    pub decomp_fail: AtomicU64,
     pub compress_fail: AtomicU64,
 }
 
@@ -181,11 +181,11 @@ static mut ZSWAP_SLOTS: [ZswapSlot; MAX_ZSWAP_SLOTS] = {
 impl ZswapPool {
     const fn new() -> Self {
         ZswapPool {
-            inner:         Mutex::new(()),
-            stored:        AtomicU64::new(0),
-            evicted:       AtomicU64::new(0),
-            decomp_ok:     AtomicU64::new(0),
-            decomp_fail:   AtomicU64::new(0),
+            inner: Mutex::new(()),
+            stored: AtomicU64::new(0),
+            evicted: AtomicU64::new(0),
+            decomp_ok: AtomicU64::new(0),
+            decomp_fail: AtomicU64::new(0),
             compress_fail: AtomicU64::new(0),
         }
     }
@@ -199,7 +199,7 @@ impl ZswapPool {
         let mut tmp = [0u8; ZSWAP_SLOT_SIZE];
         let compressed_len = match Lz4Lite::compress(page_data, &mut tmp) {
             Some(n) => n,
-            None    => {
+            None => {
                 self.compress_fail.fetch_add(1, Ordering::Relaxed);
                 return ZswapStoreResult::NotCompressible;
             }
@@ -219,8 +219,8 @@ impl ZswapPool {
             if !slot.valid.load(Ordering::Acquire) {
                 slot.data[..compressed_len].copy_from_slice(&tmp[..compressed_len]);
                 slot.compressed_len = compressed_len as u16;
-                slot.orig_pfn       = pfn;
-                slot.checksum       = csum;
+                slot.orig_pfn = pfn;
+                slot.checksum = csum;
                 slot.valid.store(true, Ordering::Release);
                 self.stored.fetch_add(1, Ordering::Relaxed);
                 return ZswapStoreResult::Stored(idx);
@@ -235,12 +235,12 @@ impl ZswapPool {
     pub fn load(&self, pfn: u64, out: &mut [u8]) -> ZswapLoadResult {
         debug_assert_eq!(out.len(), PAGE_SIZE);
         let _guard = self.inner.lock();
-        let slots  = unsafe { &mut ZSWAP_SLOTS };
+        let slots = unsafe { &mut ZSWAP_SLOTS };
 
         for slot in slots.iter_mut() {
             if slot.valid.load(Ordering::Acquire) && slot.orig_pfn == pfn {
                 let clen = slot.compressed_len as usize;
-                let ok   = Lz4Lite::decompress(&slot.data[..clen], out);
+                let ok = Lz4Lite::decompress(&slot.data[..clen], out);
                 if !ok {
                     self.decomp_fail.fetch_add(1, Ordering::Relaxed);
                     return ZswapLoadResult::DecompressError;
@@ -264,7 +264,7 @@ impl ZswapPool {
     /// Invalide (expulse) le slot associé à `pfn` sans décompresser.
     pub fn evict(&self, pfn: u64) -> bool {
         let _guard = self.inner.lock();
-        let slots  = unsafe { &mut ZSWAP_SLOTS };
+        let slots = unsafe { &mut ZSWAP_SLOTS };
         for slot in slots.iter_mut() {
             if slot.valid.load(Ordering::Acquire) && slot.orig_pfn == pfn {
                 slot.valid.store(false, Ordering::Release);
@@ -279,8 +279,11 @@ impl ZswapPool {
     /// Nombre de slots occupés.
     pub fn occupancy(&self) -> usize {
         let _guard = self.inner.lock();
-        let slots  = unsafe { &ZSWAP_SLOTS };
-        slots.iter().filter(|s| s.valid.load(Ordering::Relaxed)).count()
+        let slots = unsafe { &ZSWAP_SLOTS };
+        slots
+            .iter()
+            .filter(|s| s.valid.load(Ordering::Relaxed))
+            .count()
     }
 }
 

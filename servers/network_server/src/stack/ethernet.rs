@@ -50,7 +50,13 @@ impl EthernetPort {
         }
     }
 
-    pub fn attach_driver(&mut self, driver_pid: u32, mtu: u32, mac: [u8; 6], queue_pairs: u16) -> EthernetSnapshot {
+    pub fn attach_driver(
+        &mut self,
+        driver_pid: u32,
+        mtu: u32,
+        mac: [u8; 6],
+        queue_pairs: u16,
+    ) -> EthernetSnapshot {
         self.driver_pid = driver_pid;
         self.mtu = mtu.max(576);
         self.mac = mac;

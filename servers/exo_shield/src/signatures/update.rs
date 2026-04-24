@@ -77,8 +77,14 @@ impl Fe {
         for i in 0..4 {
             let base = i * 8;
             f[i] = u64::from_le_bytes([
-                bytes[base], bytes[base + 1], bytes[base + 2], bytes[base + 3],
-                bytes[base + 4], bytes[base + 5], bytes[base + 6], bytes[base + 7],
+                bytes[base],
+                bytes[base + 1],
+                bytes[base + 2],
+                bytes[base + 3],
+                bytes[base + 4],
+                bytes[base + 5],
+                bytes[base + 6],
+                bytes[base + 7],
             ]);
         }
         let mut r = Fe(f);
@@ -202,7 +208,7 @@ impl Fe {
             // Chaque unité dans la limb haute représente 2^(64*high_idx)
             // = 2^(64*(i+4)) = 2^(256+64i)
             // 2^256 mod p = 2^256 - 2·p + 2·p = 2^256 - 2·(2^255-19) = 2^256 - 2^256 + 38 = 38
-            // Plus précisément : 2^256 = 4·2^254 ≡ 4·(2^255/2) ≡ ... 
+            // Plus précisément : 2^256 = 4·2^254 ≡ 4·(2^255/2) ≡ ...
             // Méthode : réduire itérativement
             let _ = high_idx;
             carry += coeff;
@@ -313,10 +319,9 @@ struct Point {
 /// En Ed25519, d = 37095705934669439343138083508754565189542113879843219016388785533085940283555
 fn ed25519_d() -> Fe {
     Fe::from_bytes(&[
-        0xa3, 0x78, 0x59, 0x13, 0xca, 0x4d, 0xeb, 0x75,
-        0xab, 0xd8, 0x41, 0x94, 0xcf, 0xd4, 0xd6, 0x6e,
-        0x67, 0x56, 0x77, 0x0a, 0x9a, 0x62, 0x10, 0x84,
-        0x95, 0xd1, 0xed, 0x3c, 0x45, 0x59, 0x2d, 0x52,
+        0xa3, 0x78, 0x59, 0x13, 0xca, 0x4d, 0xeb, 0x75, 0xab, 0xd8, 0x41, 0x94, 0xcf, 0xd4, 0xd6,
+        0x6e, 0x67, 0x56, 0x77, 0x0a, 0x9a, 0x62, 0x10, 0x84, 0x95, 0xd1, 0xed, 0x3c, 0x45, 0x59,
+        0x2d, 0x52,
     ])
 }
 
@@ -446,7 +451,12 @@ impl Point {
         let b = self.y.mul(&other.y);
         let c = self.t.mul(&other.t).mul(&d);
         let d_val = self.z.mul(&other.z);
-        let e = self.x.add(&self.y).mul(&other.x.add(&other.y)).sub(&a).sub(&b);
+        let e = self
+            .x
+            .add(&self.y)
+            .mul(&other.x.add(&other.y))
+            .sub(&a)
+            .sub(&b);
         let f = d_val.sub(&c);
         let g = d_val.add(&c);
         let h = b.add(&a.sub(&self.x.mul(&other.y).mul(&d)));
@@ -536,10 +546,9 @@ fn compute_sqrt_minus_one() -> Fe {
 /// Point de base B de Ed25519 (standard RFC 8032).
 fn base_point() -> Point {
     let b_bytes: [u8; 32] = [
-        0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66,
     ];
     Point::from_bytes(&b_bytes).unwrap_or_else(Point::identity)
 }
@@ -584,7 +593,8 @@ fn hash_64(data: &[u8]) -> [u8; 64] {
                 let val = u64::from_le_bytes(val_bytes);
 
                 state[i] = state[i].wrapping_add(val);
-                state[i] = state[i].wrapping_add(state[(i + 1) % 8].rotate_left(7 + (round as u32 * 3) % 16));
+                state[i] = state[i]
+                    .wrapping_add(state[(i + 1) % 8].rotate_left(7 + (round as u32 * 3) % 16));
                 state[(i + 3) % 8] ^= state[i].rotate_left(11 + (round as u32 * 5) % 16);
                 state[(i + 5) % 8] = state[(i + 5) % 8].wrapping_add(state[(i + 2) % 8]);
             }
@@ -668,9 +678,9 @@ pub fn verify_ed25519(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64
     // Simplification : on clamp le scalaire comme dans Ed25519
     let mut k_scalar = [0u8; 32];
     k_scalar.copy_from_slice(&k_hash[..32]);
-    k_scalar[0] &= 0xf8;    // Les 3 bits bas du premier octet à 0
-    k_scalar[31] &= 0x7f;   // Le bit de poids fort à 0
-    k_scalar[31] |= 0x40;   // Le deuxième bit de poids fort à 1
+    k_scalar[0] &= 0xf8; // Les 3 bits bas du premier octet à 0
+    k_scalar[31] &= 0x7f; // Le bit de poids fort à 0
+    k_scalar[31] |= 0x40; // Le deuxième bit de poids fort à 1
 
     // Calculer [8][S]B
     let sb = base_point().scalar_mul(&s_bytes);
@@ -713,11 +723,21 @@ pub struct UpdateVersion {
 
 impl UpdateVersion {
     pub const fn new(major: u16, minor: u16, patch: u16, build: u16) -> Self {
-        Self { major, minor, patch, build }
+        Self {
+            major,
+            minor,
+            patch,
+            build,
+        }
     }
 
     pub const fn zero() -> Self {
-        Self { major: 0, minor: 0, patch: 0, build: 0 }
+        Self {
+            major: 0,
+            minor: 0,
+            patch: 0,
+            build: 0,
+        }
     }
 
     /// Encode en u64 pour comparaison.
@@ -737,13 +757,13 @@ impl UpdateVersion {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum UpdateStatus {
-    Idle         = 0,
-    Downloading  = 1,
-    Verifying    = 2,
-    Applying     = 3,
-    Applied      = 4,
-    Failed       = 5,
-    RolledBack   = 6,
+    Idle = 0,
+    Downloading = 1,
+    Verifying = 2,
+    Applying = 3,
+    Applied = 4,
+    Failed = 5,
+    RolledBack = 6,
 }
 
 // ── Snapshot pour rollback ───────────────────────────────────────────────────
@@ -829,8 +849,10 @@ impl EncodedSignature {
         entry.id = self.id;
         entry.pattern = self.pattern;
         entry.pattern_len = self.pattern_len;
-        entry.severity = database::Severity::from_u8(self.severity).unwrap_or(database::Severity::Low);
-        entry.category = database::Category::from_u8(self.category).unwrap_or(database::Category::Custom);
+        entry.severity =
+            database::Severity::from_u8(self.severity).unwrap_or(database::Severity::Low);
+        entry.category =
+            database::Category::from_u8(self.category).unwrap_or(database::Category::Custom);
         entry.enabled = self.enabled != 0;
         entry
     }
@@ -1022,10 +1044,8 @@ fn create_snapshot(version: UpdateVersion) -> bool {
     if mgr.rollback_depth >= MAX_ROLLBACK_DEPTH {
         // Décaler la pile (FIFO : supprimer le plus ancien)
         for i in 0..MAX_ROLLBACK_DEPTH - 1 {
-            mgr.rollback_stack[i] = core::mem::replace(
-                &mut mgr.rollback_stack[i + 1],
-                RollbackSnapshot::empty(),
-            );
+            mgr.rollback_stack[i] =
+                core::mem::replace(&mut mgr.rollback_stack[i + 1], RollbackSnapshot::empty());
         }
         mgr.rollback_depth = MAX_ROLLBACK_DEPTH - 1;
     }
@@ -1115,9 +1135,8 @@ pub fn apply_update(header: &SignatureUpdateHeader, payload: &[u8], merge: bool)
         }
 
         // Décoder l'EncodedSignature
-        let encoded: EncodedSignature = unsafe {
-            core::ptr::read(payload[offset..].as_ptr() as *const EncodedSignature)
-        };
+        let encoded: EncodedSignature =
+            unsafe { core::ptr::read(payload[offset..].as_ptr() as *const EncodedSignature) };
 
         let entry = encoded.to_entry();
         if !entry.is_valid() {

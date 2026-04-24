@@ -132,7 +132,12 @@ pub struct IrqRoute {
 }
 
 impl IrqRoute {
-    pub fn new(irq_line: IrqVector, source_kind: IrqSourceKind, gsi: Option<u32>, pci_bdf: Option<u64>) -> Self {
+    pub fn new(
+        irq_line: IrqVector,
+        source_kind: IrqSourceKind,
+        gsi: Option<u32>,
+        pci_bdf: Option<u64>,
+    ) -> Self {
         Self {
             irq_line,
             source_kind,
@@ -157,7 +162,9 @@ pub struct IrqTable {
 impl IrqTable {
     pub const fn new() -> Self {
         const INIT: Option<IrqRoute> = None;
-        Self { entries: [INIT; 256] }
+        Self {
+            entries: [INIT; 256],
+        }
     }
 
     #[inline(always)]
@@ -175,7 +182,10 @@ impl IrqTable {
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (u8, &mut Option<IrqRoute>)> {
-        self.entries.iter_mut().enumerate().map(|(i, r)| (i as u8, r))
+        self.entries
+            .iter_mut()
+            .enumerate()
+            .map(|(i, r)| (i as u8, r))
     }
 }
 
@@ -200,7 +210,10 @@ pub enum IrqError {
     OwnerPidDead,
     AlreadyRegistered,
     RouteFailed,
-    KindMismatch { existing: IrqSourceKind, requested: IrqSourceKind },
+    KindMismatch {
+        existing: IrqSourceKind,
+        requested: IrqSourceKind,
+    },
     HandlerLimitReached,
     NotRegistered,
     NotOwner,

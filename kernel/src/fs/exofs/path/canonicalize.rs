@@ -11,8 +11,8 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
+use super::path_component::{validate_component, PathComponent, PathParser};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use super::path_component::{PathComponent, PathParser, validate_component};
 
 /// Longueur maximale dun chemin (4096 octets, POSIX PATH_MAX).
 pub const PATH_MAX: usize = 4096;
@@ -23,17 +23,22 @@ pub const PATH_MAX: usize = 4096;
 /// Capacite : 64 composants max (chemin de 64 niveaux de profondeur).
 pub struct ComponentStack {
     data: [Option<PathComponent>; 64],
-    top:  usize,
+    top: usize,
 }
 
 impl ComponentStack {
     pub fn new() -> Self {
         // SAFETY : Option<PathComponent> est Copy-capable ici (Clone au moins)
-        ComponentStack { data: core::array::from_fn(|_| None), top: 0 }
+        ComponentStack {
+            data: core::array::from_fn(|_| None),
+            top: 0,
+        }
     }
 
     pub fn push(&mut self, comp: PathComponent) -> ExofsResult<()> {
-        if self.top >= 64 { return Err(ExofsError::PathTooLong); }
+        if self.top >= 64 {
+            return Err(ExofsError::PathTooLong);
+        }
         self.data[self.top] = Some(comp);
         self.top = self.top.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
         Ok(())
@@ -46,15 +51,23 @@ impl ComponentStack {
         }
     }
 
-    pub fn len(&self) -> usize { self.top }
-    pub fn is_empty(&self) -> bool { self.top == 0 }
+    pub fn len(&self) -> usize {
+        self.top
+    }
+    pub fn is_empty(&self) -> bool {
+        self.top == 0
+    }
 
     pub fn as_slice(&self) -> &[Option<PathComponent>] {
         &self.data[..self.top]
     }
 }
 
-impl Default for ComponentStack { fn default() -> Self { Self::new() } }
+impl Default for ComponentStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 // -- canonicalize_path --------------------------------------------------------
 
@@ -77,8 +90,12 @@ impl Default for ComponentStack { fn default() -> Self { Self::new() } }
 /// -  si un composant est invalide.
 /// -         si calcul darithmetique deborde.
 pub fn canonicalize_path(input: &[u8], buf: &mut [u8]) -> ExofsResult<usize> {
-    if input.is_empty() { return Err(ExofsError::InvalidPathComponent); }
-    if buf.len() < 2    { return Err(ExofsError::InvalidArgument); }
+    if input.is_empty() {
+        return Err(ExofsError::InvalidPathComponent);
+    }
+    if buf.len() < 2 {
+        return Err(ExofsError::InvalidArgument);
+    }
 
     let is_abs = input.first() == Some(&b'/');
     let mut stack = ComponentStack::new();
@@ -105,7 +122,9 @@ pub fn canonicalize_path(input: &[u8], buf: &mut [u8]) -> ExofsResult<usize> {
     let mut pos: usize = 0;
 
     if is_abs {
-        if pos >= buf.len() { return Err(ExofsError::PathTooLong); }
+        if pos >= buf.len() {
+            return Err(ExofsError::PathTooLong);
+        }
         buf[pos] = b'/';
         pos = pos.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
     }
@@ -113,15 +132,21 @@ pub fn canonicalize_path(input: &[u8], buf: &mut [u8]) -> ExofsResult<usize> {
     for (i, slot) in stack.as_slice().iter().enumerate() {
         let comp = slot.as_ref().unwrap();
         if i > 0 || !is_abs {
-            if pos >= buf.len() { return Err(ExofsError::PathTooLong); }
+            if pos >= buf.len() {
+                return Err(ExofsError::PathTooLong);
+            }
             if i > 0 {
                 buf[pos] = b'/';
                 pos = pos.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
             }
         }
         let name = comp.as_bytes();
-        let end = pos.checked_add(name.len()).ok_or(ExofsError::OffsetOverflow)?;
-        if end > buf.len() { return Err(ExofsError::PathTooLong); }
+        let end = pos
+            .checked_add(name.len())
+            .ok_or(ExofsError::OffsetOverflow)?;
+        if end > buf.len() {
+            return Err(ExofsError::PathTooLong);
+        }
         buf[pos..end].copy_from_slice(name);
         pos = end;
     }
@@ -132,13 +157,17 @@ pub fn canonicalize_path(input: &[u8], buf: &mut [u8]) -> ExofsResult<usize> {
             // Deja ecrit le /
         } else {
             // Chemin relatif vide -- retourner .
-            if buf.len() < 1 { return Err(ExofsError::PathTooLong); }
+            if buf.len() < 1 {
+                return Err(ExofsError::PathTooLong);
+            }
             buf[0] = b'.';
             pos = 1;
         }
     }
 
-    if pos > PATH_MAX { return Err(ExofsError::PathTooLong); }
+    if pos > PATH_MAX {
+        return Err(ExofsError::PathTooLong);
+    }
     Ok(pos)
 }
 
@@ -191,16 +220,30 @@ impl CanonicalPath {
         Ok(CanonicalPath { bytes })
     }
 
-    pub fn as_bytes(&self) -> &[u8] { &self.bytes }
-    pub fn len(&self) -> usize { self.bytes.len() }
-    pub fn is_empty(&self) -> bool { self.bytes.is_empty() }
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
 
     /// Retourne le composant final (basename).
     pub fn basename(&self) -> Option<&[u8]> {
         let b = &self.bytes;
-        if b == b"/" { return Some(b"/"); }
-        let start = b.iter().rposition(|&c| c == b'/').map(|p| p + 1).unwrap_or(0);
-        if start >= b.len() { return None; }
+        if b == b"/" {
+            return Some(b"/");
+        }
+        let start = b
+            .iter()
+            .rposition(|&c| c == b'/')
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        if start >= b.len() {
+            return None;
+        }
         Some(&b[start..])
     }
 
@@ -208,8 +251,8 @@ impl CanonicalPath {
     pub fn dirname(&self) -> &[u8] {
         let b = &self.bytes;
         match b.iter().rposition(|&c| c == b'/') {
-            None      => b".",
-            Some(0)   => b"/",
+            None => b".",
+            Some(0) => b"/",
             Some(pos) => &b[..pos],
         }
     }
@@ -217,21 +260,26 @@ impl CanonicalPath {
     /// Teste si ce chemin est un prefixe de .
     pub fn is_prefix_of(&self, other: &[u8]) -> bool {
         other.starts_with(&self.bytes)
-            && (other.len() == self.bytes.len()
-                || other.get(self.bytes.len()) == Some(&b'/'))
+            && (other.len() == self.bytes.len() || other.get(self.bytes.len()) == Some(&b'/'))
     }
 
     /// Joint ce chemin avec un composant supplementaire.
     pub fn join(&self, comp: &PathComponent) -> ExofsResult<Self> {
-        let total = self.bytes.len()
+        let total = self
+            .bytes
+            .len()
             .checked_add(1)
             .and_then(|n| n.checked_add(comp.len()))
             .ok_or(ExofsError::PathTooLong)?;
-        if total > PATH_MAX { return Err(ExofsError::PathTooLong); }
+        if total > PATH_MAX {
+            return Err(ExofsError::PathTooLong);
+        }
         let mut b: Vec<u8> = Vec::new();
         b.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
         b.extend_from_slice(&self.bytes);
-        if self.bytes.last() != Some(&b'/') { b.push(b'/'); }
+        if self.bytes.last() != Some(&b'/') {
+            b.push(b'/');
+        }
         b.extend_from_slice(comp.as_bytes());
         Ok(CanonicalPath { bytes: b })
     }
@@ -252,15 +300,21 @@ impl PathNormalizer {
     ///
     /// Retourne `Ok(())` si le chemin est correct, une erreur sinon.
     pub fn verify(path: &[u8]) -> ExofsResult<()> {
-        if path.is_empty() { return Err(ExofsError::InvalidPathComponent); }
-        if path.len() > PATH_MAX { return Err(ExofsError::PathTooLong); }
+        if path.is_empty() {
+            return Err(ExofsError::InvalidPathComponent);
+        }
+        if path.len() > PATH_MAX {
+            return Err(ExofsError::PathTooLong);
+        }
 
         let mut prev_slash = false;
         let mut start: Option<usize> = None;
 
         for (i, &b) in path.iter().enumerate() {
             if b == b'/' {
-                if prev_slash { return Err(ExofsError::InvalidPathComponent); }
+                if prev_slash {
+                    return Err(ExofsError::InvalidPathComponent);
+                }
                 if let Some(s) = start {
                     let comp = &path[s..i];
                     validate_component(comp)?;
@@ -268,7 +322,9 @@ impl PathNormalizer {
                 }
                 prev_slash = true;
             } else {
-                if start.is_none() { start = Some(i); }
+                if start.is_none() {
+                    start = Some(i);
+                }
                 prev_slash = false;
             }
         }
@@ -285,7 +341,8 @@ impl PathNormalizer {
             extern crate alloc;
             use alloc::vec::Vec;
             let mut v: Vec<u8> = Vec::new();
-            v.try_reserve(path.len()).map_err(|_| ExofsError::NoMemory)?;
+            v.try_reserve(path.len())
+                .map_err(|_| ExofsError::NoMemory)?;
             v.extend_from_slice(path);
             v
         };
@@ -301,8 +358,14 @@ impl PathNormalizer {
 pub fn split_canonical(path: &[u8]) -> ExofsResult<alloc::vec::Vec<PathComponent>> {
     use alloc::vec::Vec;
     let mut out: Vec<PathComponent> = Vec::new();
-    let src = if path.first() == Some(&b'/') { &path[1..] } else { path };
-    if src.is_empty() { return Ok(out); }
+    let src = if path.first() == Some(&b'/') {
+        &path[1..]
+    } else {
+        path
+    };
+    if src.is_empty() {
+        return Ok(out);
+    }
 
     let mut seg_start = 0;
     for (i, &b) in src.iter().enumerate() {
@@ -326,15 +389,22 @@ pub fn join_components(comps: &[PathComponent]) -> ExofsResult<alloc::vec::Vec<u
     use alloc::vec::Vec;
     let mut total: usize = 1; // leading '/'
     for c in comps {
-        total = total.checked_add(1).ok_or(ExofsError::OffsetOverflow)?
-            .checked_add(c.len()).ok_or(ExofsError::OffsetOverflow)?;
+        total = total
+            .checked_add(1)
+            .ok_or(ExofsError::OffsetOverflow)?
+            .checked_add(c.len())
+            .ok_or(ExofsError::OffsetOverflow)?;
     }
-    if total > PATH_MAX { return Err(ExofsError::PathTooLong); }
+    if total > PATH_MAX {
+        return Err(ExofsError::PathTooLong);
+    }
     let mut out: Vec<u8> = Vec::new();
     out.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
     out.push(b'/');
     for (i, c) in comps.iter().enumerate() {
-        if i > 0 { out.push(b'/'); }
+        if i > 0 {
+            out.push(b'/');
+        }
         out.extend_from_slice(c.as_bytes());
     }
     Ok(out)
@@ -345,19 +415,23 @@ pub fn join_components(comps: &[PathComponent]) -> ExofsResult<alloc::vec::Vec<u
 mod extra_tests {
     use super::*;
 
-    #[test] fn test_verify_ok() {
+    #[test]
+    fn test_verify_ok() {
         PathNormalizer::verify(b"/home/user/file").unwrap();
     }
-    #[test] fn test_verify_double_slash() {
+    #[test]
+    fn test_verify_double_slash() {
         assert!(PathNormalizer::verify(b"//a").is_err());
     }
-    #[test] fn test_split_canonical() {
+    #[test]
+    fn test_split_canonical() {
         let comps = split_canonical(b"/a/b/c").unwrap();
         assert_eq!(comps.len(), 3);
         assert_eq!(comps[0].as_bytes(), b"a");
         assert_eq!(comps[2].as_bytes(), b"c");
     }
-    #[test] fn test_join_components() {
+    #[test]
+    fn test_join_components() {
         use super::super::path_component::validate_component;
         let comps = [
             validate_component(b"home").unwrap(),
@@ -366,11 +440,13 @@ mod extra_tests {
         let path = join_components(&comps).unwrap();
         assert_eq!(path, b"/home/user");
     }
-    #[test] fn test_can_verify_and_return() {
+    #[test]
+    fn test_can_verify_and_return() {
         let p = PathNormalizer::verify_and_return(b"/proc/1/status").unwrap();
         assert_eq!(p.as_bytes(), b"/proc/1/status");
     }
-    #[test] fn test_canonicalize_multi_dotdot() {
+    #[test]
+    fn test_canonicalize_multi_dotdot() {
         let r = canonicalize_to_vec(b"/a/b/c/../../d").unwrap();
         assert_eq!(r, b"/a/d");
     }
@@ -385,43 +461,55 @@ mod tests {
         canonicalize_to_vec(input).unwrap()
     }
 
-    #[test] fn test_absolute_simple() {
+    #[test]
+    fn test_absolute_simple() {
         assert_eq!(canon(b"/home/user"), b"/home/user");
     }
-    #[test] fn test_trailing_slash() {
+    #[test]
+    fn test_trailing_slash() {
         assert_eq!(canon(b"/home/user/"), b"/home/user");
     }
-    #[test] fn test_double_slash() {
+    #[test]
+    fn test_double_slash() {
         assert_eq!(canon(b"//home//user"), b"/home/user");
     }
-    #[test] fn test_dot() {
+    #[test]
+    fn test_dot() {
         assert_eq!(canon(b"/a/./b"), b"/a/b");
     }
-    #[test] fn test_dotdot() {
+    #[test]
+    fn test_dotdot() {
         assert_eq!(canon(b"/a/b/../c"), b"/a/c");
     }
-    #[test] fn test_dotdot_beyond_root() {
+    #[test]
+    fn test_dotdot_beyond_root() {
         // /../../ = /
         assert_eq!(canon(b"/../.."), b"/");
     }
-    #[test] fn test_relative() {
+    #[test]
+    fn test_relative() {
         assert_eq!(canon(b"a/b/c"), b"a/b/c");
     }
-    #[test] fn test_relative_dotdot() {
+    #[test]
+    fn test_relative_dotdot() {
         assert_eq!(canon(b"a/b/../c"), b"a/c");
     }
-    #[test] fn test_root_only() {
+    #[test]
+    fn test_root_only() {
         assert_eq!(canon(b"/"), b"/");
     }
-    #[test] fn test_canonical_path_basename() {
+    #[test]
+    fn test_canonical_path_basename() {
         let c = CanonicalPath::new(b"/home/user/file.txt").unwrap();
         assert_eq!(c.basename().unwrap(), b"file.txt");
     }
-    #[test] fn test_canonical_path_dirname() {
+    #[test]
+    fn test_canonical_path_dirname() {
         let c = CanonicalPath::new(b"/home/user/file.txt").unwrap();
         assert_eq!(c.dirname(), b"/home/user");
     }
-    #[test] fn test_is_prefix_of() {
+    #[test]
+    fn test_is_prefix_of() {
         let c = CanonicalPath::new(b"/home").unwrap();
         assert!(c.is_prefix_of(b"/home/user"));
         assert!(!c.is_prefix_of(b"/homeother"));

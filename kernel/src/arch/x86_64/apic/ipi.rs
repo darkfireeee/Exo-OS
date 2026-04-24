@@ -12,21 +12,19 @@
 //! ## Routage
 //! Délégué vers x2APIC (MSR ICR) ou xAPIC (MMIO ICR) selon le mode actif.
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
 use super::super::idt::{
-    VEC_IPI_WAKEUP, VEC_IPI_RESCHEDULE, VEC_IPI_TLB_SHOOTDOWN,
-    VEC_IPI_CPU_HOTPLUG, VEC_IPI_PANIC,
+    VEC_IPI_CPU_HOTPLUG, VEC_IPI_PANIC, VEC_IPI_RESCHEDULE, VEC_IPI_TLB_SHOOTDOWN, VEC_IPI_WAKEUP,
 };
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ── TLB Shootdown payload ─────────────────────────────────────────────────────
 
 /// Adresse virtuelle cible du TLB shootdown en cours (0 = flush total)
 static TLB_SHOOTDOWN_ADDR: AtomicU64 = AtomicU64::new(0);
 /// Compteur de CPUs ayant acquitté le TLB shootdown courant
-static TLB_SHOOTDOWN_ACK:  AtomicU64 = AtomicU64::new(0);
+static TLB_SHOOTDOWN_ACK: AtomicU64 = AtomicU64::new(0);
 /// Génération du TLB shootdown (anti-spurious)
-static TLB_SHOOTDOWN_GEN:  AtomicU64 = AtomicU64::new(0);
+static TLB_SHOOTDOWN_GEN: AtomicU64 = AtomicU64::new(0);
 
 // ── Envoi IPI générique ───────────────────────────────────────────────────────
 
@@ -94,8 +92,8 @@ pub fn broadcast_tlb_shootdown(virt_addr: u64, cpu_count: u32) {
 
     // Attendre ACK de (cpu_count - 1) CPU distants
     let expected = cpu_count.saturating_sub(1) as u64;
-    let deadline = super::super::cpu::tsc::read_tsc()
-        + super::super::cpu::tsc::tsc_us_to_cycles(100);
+    let deadline =
+        super::super::cpu::tsc::read_tsc() + super::super::cpu::tsc::tsc_us_to_cycles(100);
 
     while TLB_SHOOTDOWN_ACK.load(Ordering::Acquire) < expected {
         if super::super::cpu::tsc::read_tsc() > deadline {
@@ -153,14 +151,24 @@ pub fn send_startup_ipi(dest_apic_id: u8, trampoline_page: u8) {
 
 // ── Instrumentations ──────────────────────────────────────────────────────────
 
-static IPI_WAKEUP_SENT:     AtomicU64 = AtomicU64::new(0);
+static IPI_WAKEUP_SENT: AtomicU64 = AtomicU64::new(0);
 static IPI_RESCHEDULE_SENT: AtomicU64 = AtomicU64::new(0);
-static IPI_TLB_SENT:        AtomicU64 = AtomicU64::new(0);
-static IPI_HOTPLUG_SENT:    AtomicU64 = AtomicU64::new(0);
-static IPI_PANIC_SENT:      AtomicU64 = AtomicU64::new(0);
+static IPI_TLB_SENT: AtomicU64 = AtomicU64::new(0);
+static IPI_HOTPLUG_SENT: AtomicU64 = AtomicU64::new(0);
+static IPI_PANIC_SENT: AtomicU64 = AtomicU64::new(0);
 
-pub fn ipi_wakeup_sent()     -> u64 { IPI_WAKEUP_SENT.load(Ordering::Relaxed) }
-pub fn ipi_reschedule_sent() -> u64 { IPI_RESCHEDULE_SENT.load(Ordering::Relaxed) }
-pub fn ipi_tlb_sent()        -> u64 { IPI_TLB_SENT.load(Ordering::Relaxed) }
-pub fn ipi_hotplug_sent()    -> u64 { IPI_HOTPLUG_SENT.load(Ordering::Relaxed) }
-pub fn ipi_panic_sent()      -> u64 { IPI_PANIC_SENT.load(Ordering::Relaxed) }
+pub fn ipi_wakeup_sent() -> u64 {
+    IPI_WAKEUP_SENT.load(Ordering::Relaxed)
+}
+pub fn ipi_reschedule_sent() -> u64 {
+    IPI_RESCHEDULE_SENT.load(Ordering::Relaxed)
+}
+pub fn ipi_tlb_sent() -> u64 {
+    IPI_TLB_SENT.load(Ordering::Relaxed)
+}
+pub fn ipi_hotplug_sent() -> u64 {
+    IPI_HOTPLUG_SENT.load(Ordering::Relaxed)
+}
+pub fn ipi_panic_sent() -> u64 {
+    IPI_PANIC_SENT.load(Ordering::Relaxed)
+}

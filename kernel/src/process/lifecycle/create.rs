@@ -17,10 +17,9 @@
 //   6. Retourner le PID.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
+use crate::process::core::pid::{Pid, PidAllocError, Tid, PID_ALLOCATOR, TID_ALLOCATOR};
 use alloc::boxed::Box;
 use core::ptr::NonNull;
-use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR, TID_ALLOCATOR, PidAllocError};
 
 // Trampoline de démarrage kthread — défini dans scheduler/asm/switch_asm.s.
 // Appelé lors du premier context_switch vers un nouveau kthread.
@@ -28,12 +27,12 @@ use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR, TID_ALLOCATOR, PidAlloc
 extern "C" {
     fn kthread_trampoline();
 }
-use crate::process::core::pcb::{ProcessControlBlock, Credentials};
-use crate::process::core::tcb::ProcessThread;
+use crate::process::core::pcb::{Credentials, ProcessControlBlock};
 use crate::process::core::registry::PROCESS_REGISTRY;
-use crate::scheduler::core::task::{SchedPolicy, Priority, ThreadId, CpuId};
-use crate::scheduler::core::runqueue::run_queue;
+use crate::process::core::tcb::ProcessThread;
 use crate::scheduler::core::preempt::{PreemptGuard, MAX_CPUS};
+use crate::scheduler::core::runqueue::run_queue;
+use crate::scheduler::core::task::{CpuId, Priority, SchedPolicy, ThreadId};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Erreurs de création
@@ -56,7 +55,7 @@ pub enum CreateError {
 impl From<PidAllocError> for CreateError {
     fn from(e: PidAllocError) -> Self {
         match e {
-            PidAllocError::Exhausted   => CreateError::PidExhausted,
+            PidAllocError::Exhausted => CreateError::PidExhausted,
             PidAllocError::AlreadyUsed => CreateError::PidExhausted,
         }
     }
@@ -69,34 +68,34 @@ impl From<PidAllocError> for CreateError {
 /// Paramètres de création d'un processus utilisateur.
 pub struct CreateParams {
     /// PID du processus parent (0 = init).
-    pub ppid:        Pid,
+    pub ppid: Pid,
     /// Credentials du nouveau processus.
-    pub creds:       Credentials,
+    pub creds: Credentials,
     /// CR3 initial (espace d'adressage vide — rempli par execve).
-    pub cr3:         u64,
+    pub cr3: u64,
     /// Pointeur opaque vers l'espace d'adressage initial (peut être 0).
-    pub addr_space:  usize,
+    pub addr_space: usize,
     /// Politique d'ordonnancement du thread principal.
-    pub policy:      SchedPolicy,
+    pub policy: SchedPolicy,
     /// Priorité initiale.
-    pub priority:    Priority,
+    pub priority: Priority,
     /// CPU cible pour l'enfilement initial.
-    pub target_cpu:  u32,
+    pub target_cpu: u32,
     /// Limite de FDs ouverts.
-    pub fd_limit:    usize,
+    pub fd_limit: usize,
 }
 
 impl Default for CreateParams {
     fn default() -> Self {
         Self {
-            ppid:       Pid::INIT,
-            creds:      Credentials::new(1000, 1000),
-            cr3:        0,
+            ppid: Pid::INIT,
+            creds: Credentials::new(1000, 1000),
+            cr3: 0,
             addr_space: 0,
-            policy:     SchedPolicy::Normal,
-            priority:   Priority::NORMAL_DEFAULT,
+            policy: SchedPolicy::Normal,
+            priority: Priority::NORMAL_DEFAULT,
             target_cpu: 0,
-            fd_limit:   1024,
+            fd_limit: 1024,
         }
     }
 }
@@ -104,9 +103,9 @@ impl Default for CreateParams {
 /// Handle de création — regroupe les objets créés pour les passer de façon atomique.
 pub struct ProcessHandle {
     /// PID du processus créé.
-    pub pid:    Pid,
+    pub pid: Pid,
     /// TID du thread principal.
-    pub tid:    Tid,
+    pub tid: Tid,
     /// Pointeur raw vers le ProcessThread (géré par lifecycle).
     pub thread: *mut ProcessThread,
 }
@@ -156,7 +155,7 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
     let pcb = ProcessControlBlock::new(
         pid,
         params.ppid,
-        pid,  // tgid = pid pour le thread principal
+        pid, // tgid = pid pour le thread principal
         ThreadId(tid_raw as u64),
         params.creds,
         params.fd_limit,
@@ -167,7 +166,9 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
     // 4. Insérer dans la registry.
     PROCESS_REGISTRY.insert(pcb).map_err(|_| {
         // SAFETY: thread_ptr a été créé par Box::into_raw juste au-dessus.
-        unsafe { drop(Box::from_raw(thread_ptr)); }
+        unsafe {
+            drop(Box::from_raw(thread_ptr));
+        }
         PID_ALLOCATOR.free(pid_raw);
         TID_ALLOCATOR.free(tid_raw);
         CreateError::RegistryError
@@ -181,7 +182,9 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
             // CPU invalide — nettoyer et retourner erreur.
             let _ = PROCESS_REGISTRY.remove(pid);
             // SAFETY: thread_ptr créé par Box::into_raw(), non passé à la runqueue; Box::from_raw seul reclaim valide.
-            unsafe { drop(Box::from_raw(thread_ptr)); }
+            unsafe {
+                drop(Box::from_raw(thread_ptr));
+            }
             PID_ALLOCATOR.free(pid_raw);
             TID_ALLOCATOR.free(tid_raw);
             return Err(CreateError::InvalidCpu);
@@ -193,7 +196,11 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
         }
     }
 
-    Ok(ProcessHandle { pid, tid, thread: thread_ptr })
+    Ok(ProcessHandle {
+        pid,
+        tid,
+        thread: thread_ptr,
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -203,15 +210,15 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
 /// Paramètres d'un kthread.
 pub struct KthreadParams {
     /// Nom du kthread (pour le debugging).
-    pub name:       &'static str,
+    pub name: &'static str,
     /// Fonction d'entrée du kthread.
-    pub entry:      fn(usize) -> !,
+    pub entry: fn(usize) -> !,
     /// Argument passé à `entry`.
-    pub arg:        usize,
+    pub arg: usize,
     /// CPU cible (0 = BSP).
     pub target_cpu: u32,
     /// Priorité (Normal par défaut).
-    pub priority:   Priority,
+    pub priority: Priority,
 }
 
 /// Crée un thread kernel (kthread) et l'enfile dans la run queue.
@@ -226,15 +233,16 @@ pub struct KthreadParams {
 /// pendant toute la durée de vie du kthread.
 pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
     // Allouer un TID uniquement (kthread ne consomme pas de PID extra).
-    let tid_raw = TID_ALLOCATOR.alloc().map_err(|_| CreateError::TidExhausted)?;
+    let tid_raw = TID_ALLOCATOR
+        .alloc()
+        .map_err(|_| CreateError::TidExhausted)?;
     let tid = Tid(tid_raw);
 
     // Créer le ProcessThread avec cr3=0 (espace kernel partagé).
-    let thread = ProcessThread::new_kthread(tid, 0)
-        .ok_or_else(|| {
-            TID_ALLOCATOR.free(tid_raw);
-            CreateError::OutOfMemory
-        })?;
+    let thread = ProcessThread::new_kthread(tid, 0).ok_or_else(|| {
+        TID_ALLOCATOR.free(tid_raw);
+        CreateError::OutOfMemory
+    })?;
 
     let thread_ptr = Box::into_raw(thread);
 
@@ -261,13 +269,13 @@ pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
         const FRAME: u64 = 7 * 8; // 56 bytes — format switch_to_new_thread
         let kernel_rsp = stack_top - FRAME;
         let frame = kernel_rsp as *mut u64;
-        *frame.add(0) = 0;                             // rbx
-        *frame.add(1) = 0;                             // rbp
-        *frame.add(2) = params.entry as u64;           // r12 → entry_fn
-        *frame.add(3) = params.arg as u64;             // r13 → arg
-        *frame.add(4) = 0;                             // r14
-        *frame.add(5) = 0;                             // r15
-        *frame.add(6) = kthread_trampoline as *const () as u64;     // return address → trampoline
+        *frame.add(0) = 0; // rbx
+        *frame.add(1) = 0; // rbp
+        *frame.add(2) = params.entry as u64; // r12 → entry_fn
+        *frame.add(3) = params.arg as u64; // r13 → arg
+        *frame.add(4) = 0; // r14
+        *frame.add(5) = 0; // r15
+        *frame.add(6) = kthread_trampoline as *const () as u64; // return address → trampoline
         (*thread_ptr).sched_tcb.kstack_ptr = kernel_rsp;
     }
     // Enregistrer dans la run queue.
@@ -275,7 +283,9 @@ pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
         let _preempt = PreemptGuard::new();
         if params.target_cpu as usize >= MAX_CPUS {
             // SAFETY: thread_ptr créé via Box::into_raw() ci-dessus, pas encore enfilé.
-            unsafe { drop(Box::from_raw(thread_ptr)); }
+            unsafe {
+                drop(Box::from_raw(thread_ptr));
+            }
             TID_ALLOCATOR.free(tid_raw);
             return Err(CreateError::InvalidCpu);
         }

@@ -16,7 +16,6 @@
 //! 5. SWAPGS si Ring 3
 //! 6. IRETQ
 
-
 use core::concat;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -52,31 +51,31 @@ extern "C" {
 #[repr(C)]
 pub struct ExceptionFrame {
     // Registres sauvegardés par l'ASM stub (caller-saved)
-    pub r15:    u64,
-    pub r14:    u64,
-    pub r13:    u64,
-    pub r12:    u64,
-    pub r11:    u64,
-    pub r10:    u64,
-    pub r9:     u64,
-    pub r8:     u64,
-    pub rbp:    u64,
-    pub rdi:    u64,
-    pub rsi:    u64,
-    pub rdx:    u64,
-    pub rcx:    u64,
-    pub rbx:    u64,
-    pub rax:    u64,
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
+    pub rbp: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rdx: u64,
+    pub rcx: u64,
+    pub rbx: u64,
+    pub rax: u64,
 
     // Poussés par le stub ou le CPU selon l'exception
     pub error_code: u64,
 
     // Poussés automatiquement par le CPU
-    pub rip:    u64,
-    pub cs:     u64,
+    pub rip: u64,
+    pub cs: u64,
     pub rflags: u64,
-    pub rsp:    u64,   // Présent uniquement si changement de niveau de privilège
-    pub ss:     u64,   // Idem
+    pub rsp: u64, // Présent uniquement si changement de niveau de privilège
+    pub ss: u64,  // Idem
 }
 
 impl ExceptionFrame {
@@ -108,8 +107,8 @@ macro_rules! define_exception_handler_errcode {
             // [rsp+24] = RFLAGS
             // [rsp+32] = RSP  (si changement Ring 3→Ring 0)
             // [rsp+40] = SS   (si changement Ring 3→Ring 0)
-            "test qword ptr [rsp + 16], 3",  // CS & 3 != 0 ⇒ Ring 3
-            "jz   1f",                        // ZF=1 ⇒ Ring 0 (kernel), sauter swapgs
+            "test qword ptr [rsp + 16], 3", // CS & 3 != 0 ⇒ Ring 3
+            "jz   1f",                      // ZF=1 ⇒ Ring 0 (kernel), sauter swapgs
             "swapgs",
             "1:",
             // Sauvegarder registres callee-saved + scratch
@@ -151,13 +150,13 @@ macro_rules! define_exception_handler_errcode {
             "add  rsp, 8",
             // Après add rsp,8 : [rsp+0]=RIP, [rsp+8]=CS, [rsp+16]=RFLAGS
             // Vérifier CS RPL pour le SWAPGS de sortie
-            "test qword ptr [rsp + 8], 3",   // CS & 3 != 0 ⇒ retour Ring 3
+            "test qword ptr [rsp + 8], 3", // CS & 3 != 0 ⇒ retour Ring 3
             "jz   2f",
             "swapgs",
             "2:",
             "iretq",
         );
-    }
+    };
 }
 
 /// Génère un stub d'entrée exception SANS error code (pousse 0 synthétique)
@@ -175,7 +174,7 @@ macro_rules! define_exception_handler_no_errcode {
             // Pousser 0 comme error_code synthétique
             "push 0",
             // [rsp+ 0]=0, [rsp+ 8]=RIP, [rsp+16]=CS, [rsp+24]=RFLAGS ...
-            "test qword ptr [rsp + 16], 3",  // CS & 3 != 0 ⇒ Ring 3
+            "test qword ptr [rsp + 16], 3", // CS & 3 != 0 ⇒ Ring 3
             "jz   1f",
             "swapgs",
             "1:",
@@ -213,60 +212,60 @@ macro_rules! define_exception_handler_no_errcode {
             "pop  rax",
             "add  rsp, 8",
             // Après add rsp,8 : [rsp+0]=RIP, [rsp+8]=CS
-            "test qword ptr [rsp + 8], 3",   // CS RPL bits
+            "test qword ptr [rsp + 8], 3", // CS RPL bits
             "jz   2f",
             "swapgs",
             "2:",
             "iretq",
         );
-    }
+    };
 }
 
 // Stubs ASM pour toutes les exceptions
-define_exception_handler_no_errcode!(exc_divide_error_handler,     do_divide_error);
-define_exception_handler_no_errcode!(exc_debug_handler,            do_debug);
-define_exception_handler_no_errcode!(exc_nmi_handler,              do_nmi);
-define_exception_handler_no_errcode!(exc_breakpoint_handler,       do_breakpoint);
-define_exception_handler_no_errcode!(exc_overflow_handler,         do_overflow);
-define_exception_handler_no_errcode!(exc_bound_range_handler,      do_bound_range);
-define_exception_handler_no_errcode!(exc_invalid_opcode_handler,   do_invalid_opcode);
+define_exception_handler_no_errcode!(exc_divide_error_handler, do_divide_error);
+define_exception_handler_no_errcode!(exc_debug_handler, do_debug);
+define_exception_handler_no_errcode!(exc_nmi_handler, do_nmi);
+define_exception_handler_no_errcode!(exc_breakpoint_handler, do_breakpoint);
+define_exception_handler_no_errcode!(exc_overflow_handler, do_overflow);
+define_exception_handler_no_errcode!(exc_bound_range_handler, do_bound_range);
+define_exception_handler_no_errcode!(exc_invalid_opcode_handler, do_invalid_opcode);
 define_exception_handler_no_errcode!(exc_device_not_avail_handler, do_device_not_avail);
-define_exception_handler_errcode!(   exc_double_fault_handler,     do_double_fault);
-define_exception_handler_errcode!(   exc_invalid_tss_handler,      do_invalid_tss);
-define_exception_handler_errcode!(   exc_segment_not_present_handler, do_segment_not_present);
-define_exception_handler_errcode!(   exc_stack_fault_handler,      do_stack_fault);
-define_exception_handler_errcode!(   exc_general_protection_handler, do_general_protection);
-define_exception_handler_errcode!(   exc_page_fault_handler,       do_page_fault);
-define_exception_handler_no_errcode!(exc_x87_fp_handler,           do_x87_fp);
-define_exception_handler_errcode!(   exc_alignment_check_handler,  do_alignment_check);
-define_exception_handler_no_errcode!(exc_machine_check_handler,    do_machine_check);
-define_exception_handler_no_errcode!(exc_simd_fp_handler,          do_simd_fp);
-define_exception_handler_no_errcode!(exc_virtualization_handler,   do_virtualization);
-define_exception_handler_errcode!(   exc_ctrl_protection_handler,  do_ctrl_protection);
+define_exception_handler_errcode!(exc_double_fault_handler, do_double_fault);
+define_exception_handler_errcode!(exc_invalid_tss_handler, do_invalid_tss);
+define_exception_handler_errcode!(exc_segment_not_present_handler, do_segment_not_present);
+define_exception_handler_errcode!(exc_stack_fault_handler, do_stack_fault);
+define_exception_handler_errcode!(exc_general_protection_handler, do_general_protection);
+define_exception_handler_errcode!(exc_page_fault_handler, do_page_fault);
+define_exception_handler_no_errcode!(exc_x87_fp_handler, do_x87_fp);
+define_exception_handler_errcode!(exc_alignment_check_handler, do_alignment_check);
+define_exception_handler_no_errcode!(exc_machine_check_handler, do_machine_check);
+define_exception_handler_no_errcode!(exc_simd_fp_handler, do_simd_fp);
+define_exception_handler_no_errcode!(exc_virtualization_handler, do_virtualization);
+define_exception_handler_errcode!(exc_ctrl_protection_handler, do_ctrl_protection);
 
 // IRQ et IPI
-define_exception_handler_no_errcode!(irq_timer_handler,          do_irq_timer);
-define_exception_handler_no_errcode!(irq_1_handler,              do_irq_1);
-define_exception_handler_no_errcode!(irq_2_handler,              do_irq_2);
-define_exception_handler_no_errcode!(irq_3_handler,              do_irq_3);
-define_exception_handler_no_errcode!(irq_4_handler,              do_irq_4);
-define_exception_handler_no_errcode!(irq_5_handler,              do_irq_5);
-define_exception_handler_no_errcode!(irq_6_handler,              do_irq_6);
-define_exception_handler_no_errcode!(irq_7_handler,              do_irq_7);
-define_exception_handler_no_errcode!(irq_8_handler,              do_irq_8);
-define_exception_handler_no_errcode!(irq_9_handler,              do_irq_9);
-define_exception_handler_no_errcode!(irq_10_handler,             do_irq_10);
-define_exception_handler_no_errcode!(irq_11_handler,             do_irq_11);
-define_exception_handler_no_errcode!(irq_12_handler,             do_irq_12);
-define_exception_handler_no_errcode!(irq_13_handler,             do_irq_13);
-define_exception_handler_no_errcode!(irq_14_handler,             do_irq_14);
-define_exception_handler_no_errcode!(irq_15_handler,             do_irq_15);
-define_exception_handler_no_errcode!(irq_spurious_handler,       do_irq_spurious);
-define_exception_handler_no_errcode!(ipi_wakeup_handler,         do_ipi_wakeup);
-define_exception_handler_no_errcode!(ipi_reschedule_handler,     do_ipi_reschedule);
-define_exception_handler_no_errcode!(ipi_tlb_shootdown_handler,  do_ipi_tlb_shootdown);
-define_exception_handler_no_errcode!(ipi_cpu_hotplug_handler,    do_ipi_cpu_hotplug);
-define_exception_handler_no_errcode!(ipi_panic_handler,          do_ipi_panic);
+define_exception_handler_no_errcode!(irq_timer_handler, do_irq_timer);
+define_exception_handler_no_errcode!(irq_1_handler, do_irq_1);
+define_exception_handler_no_errcode!(irq_2_handler, do_irq_2);
+define_exception_handler_no_errcode!(irq_3_handler, do_irq_3);
+define_exception_handler_no_errcode!(irq_4_handler, do_irq_4);
+define_exception_handler_no_errcode!(irq_5_handler, do_irq_5);
+define_exception_handler_no_errcode!(irq_6_handler, do_irq_6);
+define_exception_handler_no_errcode!(irq_7_handler, do_irq_7);
+define_exception_handler_no_errcode!(irq_8_handler, do_irq_8);
+define_exception_handler_no_errcode!(irq_9_handler, do_irq_9);
+define_exception_handler_no_errcode!(irq_10_handler, do_irq_10);
+define_exception_handler_no_errcode!(irq_11_handler, do_irq_11);
+define_exception_handler_no_errcode!(irq_12_handler, do_irq_12);
+define_exception_handler_no_errcode!(irq_13_handler, do_irq_13);
+define_exception_handler_no_errcode!(irq_14_handler, do_irq_14);
+define_exception_handler_no_errcode!(irq_15_handler, do_irq_15);
+define_exception_handler_no_errcode!(irq_spurious_handler, do_irq_spurious);
+define_exception_handler_no_errcode!(ipi_wakeup_handler, do_ipi_wakeup);
+define_exception_handler_no_errcode!(ipi_reschedule_handler, do_ipi_reschedule);
+define_exception_handler_no_errcode!(ipi_tlb_shootdown_handler, do_ipi_tlb_shootdown);
+define_exception_handler_no_errcode!(ipi_cpu_hotplug_handler, do_ipi_cpu_hotplug);
+define_exception_handler_no_errcode!(ipi_panic_handler, do_ipi_panic);
 
 // ── Handlers Rust d'exceptions ────────────────────────────────────────────────
 
@@ -287,7 +286,9 @@ fn exception_return_to_user(frame: &mut ExceptionFrame) {
             options(nostack, nomem),
         );
     }
-    if tcb_ptr == 0 { return; }
+    if tcb_ptr == 0 {
+        return;
+    }
     // SAFETY: proc_signal_on_exception_return thread-safe; exclu par cli implicite dans handler.
     unsafe {
         proc_signal_on_exception_return(
@@ -363,8 +364,11 @@ extern "C" fn do_overflow(frame: *mut ExceptionFrame) {
     // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[4].fetch_add(1, Ordering::Relaxed);
-    if frame.from_userspace() { exception_return_to_user(frame); }
-    else { kernel_panic_exception("Overflow kernel", frame); }
+    if frame.from_userspace() {
+        exception_return_to_user(frame);
+    } else {
+        kernel_panic_exception("Overflow kernel", frame);
+    }
 }
 
 /// Handler #BR — Bound Range Exceeded
@@ -373,8 +377,11 @@ extern "C" fn do_bound_range(frame: *mut ExceptionFrame) {
     // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[5].fetch_add(1, Ordering::Relaxed);
-    if frame.from_userspace() { exception_return_to_user(frame); }
-    else { kernel_panic_exception("Bound Range kernel", frame); }
+    if frame.from_userspace() {
+        exception_return_to_user(frame);
+    } else {
+        kernel_panic_exception("Bound Range kernel", frame);
+    }
 }
 
 /// Handler #UD — Invalid Opcode
@@ -422,7 +429,9 @@ extern "C" fn do_device_not_avail(frame: *mut ExceptionFrame) {
     //   • Met à jour fpu_loaded = true dans le TCB.
     // Si tcb_ptr == 0 (boot / idle) : simple clts sans xrstor.
     // SAFETY: sched_fpu_handle_nm() est thread-safe pour le CPU courant.
-    unsafe { sched_fpu_handle_nm(tcb_ptr as *mut u8); }
+    unsafe {
+        sched_fpu_handle_nm(tcb_ptr as *mut u8);
+    }
 }
 
 /// Handler #DF — Double Fault
@@ -520,7 +529,7 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
 
     // CR2 contient l'adresse virtuelle qui a causé le fault.
     let fault_addr_raw = super::read_cr2();
-    let error_code     = frame.error_code;
+    let error_code = frame.error_code;
 
     // Décomposition de l'error code x86_64 :
     // bit 0 = P  (page présente — protection violation)
@@ -529,16 +538,16 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     // bit 3 = RSVD (bit réservé corrompu dans le PTE)
     // bit 4 = I  (instruction fetch)
     // bit 5 = PK (protection key violation)
-    let is_present     = error_code & 1 != 0;
-    let is_write       = error_code & 2 != 0;
-    let _is_user        = error_code & 4 != 0;
+    let is_present = error_code & 1 != 0;
+    let is_write = error_code & 2 != 0;
+    let _is_user = error_code & 4 != 0;
     let is_instr_fetch = error_code & 16 != 0;
     let _ = is_present; // Utilisé implicitement via FaultCause + FaultContext
 
     // Construire le FaultContext
+    use super::memory_iface::KERNEL_FAULT_ALLOC;
     use crate::memory::core::VirtAddr;
     use crate::memory::virt::fault::{FaultCause, FaultContext, FaultResult};
-    use super::memory_iface::KERNEL_FAULT_ALLOC;
 
     let cause = if is_instr_fetch {
         FaultCause::Execute
@@ -553,10 +562,7 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     let ctx = FaultContext::new(fault_addr, cause, from_kernel);
 
     // Dispatcher vers le sous-système memory/
-    let result = crate::memory::virt::fault::handler::handle_page_fault(
-        &ctx,
-        &KERNEL_FAULT_ALLOC,
-    );
+    let result = crate::memory::virt::fault::handler::handle_page_fault(&ctx, &KERNEL_FAULT_ALLOC);
 
     match result {
         FaultResult::Handled => {
@@ -604,15 +610,17 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     }
 }
 
-
 /// Handler #MF — x87 FP Exception
 #[no_mangle]
 extern "C" fn do_x87_fp(frame: *mut ExceptionFrame) {
     // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[16].fetch_add(1, Ordering::Relaxed);
-    if frame.from_userspace() { exception_return_to_user(frame); }
-    else { kernel_panic_exception("#MF x87 kernel", frame); }
+    if frame.from_userspace() {
+        exception_return_to_user(frame);
+    } else {
+        kernel_panic_exception("#MF x87 kernel", frame);
+    }
 }
 
 /// Handler #AC — Alignment Check
@@ -621,8 +629,11 @@ extern "C" fn do_alignment_check(frame: *mut ExceptionFrame) {
     // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[17].fetch_add(1, Ordering::Relaxed);
-    if frame.from_userspace() { exception_return_to_user(frame); }
-    else { kernel_panic_exception("#AC kernel", frame); }
+    if frame.from_userspace() {
+        exception_return_to_user(frame);
+    } else {
+        kernel_panic_exception("#AC kernel", frame);
+    }
 }
 
 /// Handler #MC — Machine Check
@@ -643,8 +654,11 @@ extern "C" fn do_simd_fp(frame: *mut ExceptionFrame) {
     // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[19].fetch_add(1, Ordering::Relaxed);
-    if frame.from_userspace() { exception_return_to_user(frame); }
-    else { kernel_panic_exception("#XM SIMD FP kernel", frame); }
+    if frame.from_userspace() {
+        exception_return_to_user(frame);
+    } else {
+        kernel_panic_exception("#XM SIMD FP kernel", frame);
+    }
 }
 
 /// Handler #VE — Virtualization Exception
@@ -661,10 +675,7 @@ extern "C" fn do_ctrl_protection(frame: *mut ExceptionFrame) {
     // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[21].fetch_add(1, Ordering::Relaxed);
-    crate::security::exocage::cp_handler(
-        frame as *mut ExceptionFrame as usize,
-        frame.error_code,
-    );
+    crate::security::exocage::cp_handler(frame as *mut ExceptionFrame as usize, frame.error_code);
 
     if frame.from_userspace() {
         exception_return_to_user(frame);
@@ -744,7 +755,9 @@ extern "C" fn do_irq_timer(frame: *mut ExceptionFrame) {
         );
     }
     // SAFETY: scheduler_tick est thread-safe ; cli implicite dans handler IRQ.
-    unsafe { scheduler_tick(cpu_id, tcb_ptr as *mut u8); }
+    unsafe {
+        scheduler_tick(cpu_id, tcb_ptr as *mut u8);
+    }
 
     // 3. Si retour vers Ring 3 : vérifier préemption + signaux.
     if frame.from_userspace() {
@@ -777,7 +790,9 @@ extern "C" fn do_ipi_wakeup(_frame: *mut ExceptionFrame) {
         );
     }
     // SAFETY: sched_ipi_reschedule est thread-safe pour le CPU courant.
-    unsafe { sched_ipi_reschedule(tcb_ptr as *mut u8); }
+    unsafe {
+        sched_ipi_reschedule(tcb_ptr as *mut u8);
+    }
     // EOI Local APIC — acquitter l'IPI avant le retour d'interruption.
     // SAFETY: LAPIC initialisé avant tout IPI SMP.
     super::apic::eoi();
@@ -811,7 +826,9 @@ extern "C" fn do_ipi_reschedule(frame: *mut ExceptionFrame) {
     // kernel vérifiera le flag (ou à l'IRET vers Ring 3).
     // Si le scheduler n'est pas encore initialisé (tcb_ptr == 0), ignoré.
     // SAFETY: sched_ipi_reschedule() est thread-safe pour le CPU courant.
-    unsafe { sched_ipi_reschedule(tcb_ptr as *mut u8); }
+    unsafe {
+        sched_ipi_reschedule(tcb_ptr as *mut u8);
+    }
 
     // EOI Local APIC — acquitter l'IPI avant le retour d'interruption.
     // SAFETY: LAPIC initialisé avant tout IPI SMP.
@@ -919,17 +936,35 @@ static EXC_COUNTERS: [AtomicU64; 32] = {
     [ZERO; 32]
 };
 
-static NMI_COUNT:                   AtomicU64 = AtomicU64::new(0);
-static MC_COUNT:                    AtomicU64 = AtomicU64::new(0);
-static GP_FAULT_COUNT:              AtomicU64 = AtomicU64::new(0);
-static TIMER_IRQ_COUNT:             AtomicU64 = AtomicU64::new(0);
-static SPURIOUS_IRQ_COUNT:          AtomicU64 = AtomicU64::new(0);
-static FPU_DEVICE_NOT_AVAIL_COUNT:  AtomicU64 = AtomicU64::new(0);
+static NMI_COUNT: AtomicU64 = AtomicU64::new(0);
+static MC_COUNT: AtomicU64 = AtomicU64::new(0);
+static GP_FAULT_COUNT: AtomicU64 = AtomicU64::new(0);
+static TIMER_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
+static SPURIOUS_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
+static FPU_DEVICE_NOT_AVAIL_COUNT: AtomicU64 = AtomicU64::new(0);
 
-pub fn exc_count(vector: u8)           -> u64 { if (vector as usize) < 32 { EXC_COUNTERS[vector as usize].load(Ordering::Relaxed) } else { 0 } }
-pub fn nmi_count()                     -> u64 { NMI_COUNT.load(Ordering::Relaxed) }
-pub fn machine_check_count()           -> u64 { MC_COUNT.load(Ordering::Relaxed) }
-pub fn gp_fault_count()                -> u64 { GP_FAULT_COUNT.load(Ordering::Relaxed) }
-pub fn timer_irq_count()               -> u64 { TIMER_IRQ_COUNT.load(Ordering::Relaxed) }
-pub fn spurious_irq_count()            -> u64 { SPURIOUS_IRQ_COUNT.load(Ordering::Relaxed) }
-pub fn fpu_device_not_avail_count()    -> u64 { FPU_DEVICE_NOT_AVAIL_COUNT.load(Ordering::Relaxed) }
+pub fn exc_count(vector: u8) -> u64 {
+    if (vector as usize) < 32 {
+        EXC_COUNTERS[vector as usize].load(Ordering::Relaxed)
+    } else {
+        0
+    }
+}
+pub fn nmi_count() -> u64 {
+    NMI_COUNT.load(Ordering::Relaxed)
+}
+pub fn machine_check_count() -> u64 {
+    MC_COUNT.load(Ordering::Relaxed)
+}
+pub fn gp_fault_count() -> u64 {
+    GP_FAULT_COUNT.load(Ordering::Relaxed)
+}
+pub fn timer_irq_count() -> u64 {
+    TIMER_IRQ_COUNT.load(Ordering::Relaxed)
+}
+pub fn spurious_irq_count() -> u64 {
+    SPURIOUS_IRQ_COUNT.load(Ordering::Relaxed)
+}
+pub fn fpu_device_not_avail_count() -> u64 {
+    FPU_DEVICE_NOT_AVAIL_COUNT.load(Ordering::Relaxed)
+}

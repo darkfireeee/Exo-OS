@@ -3,7 +3,7 @@
 //! Central threat assessment, scoring, and record management.
 //! All state is held in static arrays (no heap).
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 // ── Threat Level ────────────────────────────────────────────────────────────
@@ -12,9 +12,9 @@ use spin::Mutex;
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum ThreatLevel {
-    Low      = 0,
-    Medium   = 1,
-    High     = 2,
+    Low = 0,
+    Medium = 1,
+    High = 2,
     Critical = 3,
 }
 
@@ -40,15 +40,15 @@ impl ThreatLevel {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ThreatCategory {
-    None           = 0,
-    Malware        = 1,
-    Anomaly        = 2,
-    PolicyViol     = 3,
-    ResourceAbuse  = 4,
-    Intrusion      = 5,
-    DataExfil      = 6,
-    PrivilegeEsc   = 7,
-    SandboxEscape  = 8,
+    None = 0,
+    Malware = 1,
+    Anomaly = 2,
+    PolicyViol = 3,
+    ResourceAbuse = 4,
+    Intrusion = 5,
+    DataExfil = 6,
+    PrivilegeEsc = 7,
+    SandboxEscape = 8,
 }
 
 impl ThreatCategory {
@@ -79,31 +79,31 @@ pub const MAX_SIG_NAME: usize = 32;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ThreatRecord {
-    pub id:         u32,
-    pub pid:        u32,
-    pub level:      ThreatLevel,
-    pub category:   ThreatCategory,
-    pub score:      u32,       // 0..1000 composite score
-    pub timestamp:  u64,
-    pub sig_name:   [u8; MAX_SIG_NAME],
-    pub sig_len:    u8,
-    pub contained:  bool,
-    pub resolved:   bool,
+    pub id: u32,
+    pub pid: u32,
+    pub level: ThreatLevel,
+    pub category: ThreatCategory,
+    pub score: u32, // 0..1000 composite score
+    pub timestamp: u64,
+    pub sig_name: [u8; MAX_SIG_NAME],
+    pub sig_len: u8,
+    pub contained: bool,
+    pub resolved: bool,
 }
 
 impl ThreatRecord {
     pub const fn empty() -> Self {
         ThreatRecord {
-            id:        0,
-            pid:       0,
-            level:     ThreatLevel::Low,
-            category:  ThreatCategory::None,
-            score:     0,
+            id: 0,
+            pid: 0,
+            level: ThreatLevel::Low,
+            category: ThreatCategory::None,
+            score: 0,
             timestamp: 0,
-            sig_name:  [0u8; MAX_SIG_NAME],
-            sig_len:   0,
+            sig_name: [0u8; MAX_SIG_NAME],
+            sig_len: 0,
             contained: false,
-            resolved:  false,
+            resolved: false,
         }
     }
 
@@ -122,11 +122,11 @@ impl ThreatRecord {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ContainmentAction {
-    None       = 0,
-    Monitor    = 1,
-    Throttle   = 2,
+    None = 0,
+    Monitor = 1,
+    Throttle = 2,
     Quarantine = 3,
-    Kill       = 4,
+    Kill = 4,
 }
 
 impl ContainmentAction {
@@ -144,39 +144,39 @@ impl ContainmentAction {
 // ── Scoring System ──────────────────────────────────────────────────────────
 
 /// Score thresholds mapping to threat levels.
-const SCORE_LOW:      u32 = 0;
-const SCORE_MEDIUM:   u32 = 250;
-const SCORE_HIGH:     u32 = 500;
+const SCORE_LOW: u32 = 0;
+const SCORE_MEDIUM: u32 = 250;
+const SCORE_HIGH: u32 = 500;
 const SCORE_CRITICAL: u32 = 750;
 
 /// Threat score weights for different factors.
-const WEIGHT_SIGNATURE:   u32 = 350;
-const WEIGHT_BEHAVIOR:    u32 = 250;
-const WEIGHT_FREQUENCY:   u32 = 150;
-const WEIGHT_SCOPE:       u32 = 150;
-const WEIGHT_RECENCY:     u32 = 100;
+const WEIGHT_SIGNATURE: u32 = 350;
+const WEIGHT_BEHAVIOR: u32 = 250;
+const WEIGHT_FREQUENCY: u32 = 150;
+const WEIGHT_SCOPE: u32 = 150;
+const WEIGHT_RECENCY: u32 = 100;
 
 /// Score a threat based on multiple contributing factors.
 /// Returns a composite score in range 0..1000.
 pub fn compute_threat_score(
-    sig_match: u32,   // 0..1000 signature match confidence
-    behavior:  u32,   // 0..1000 behavioral anomaly score
-    frequency: u32,   // 0..1000 event frequency score
-    scope:     u32,   // 0..1000 scope of impact score
-    recency:   u32,   // 0..1000 recency score
+    sig_match: u32, // 0..1000 signature match confidence
+    behavior: u32,  // 0..1000 behavioral anomaly score
+    frequency: u32, // 0..1000 event frequency score
+    scope: u32,     // 0..1000 scope of impact score
+    recency: u32,   // 0..1000 recency score
 ) -> u32 {
-    let sig_c   = sig_match.min(1000);
-    let beh_c   = behavior.min(1000);
-    let freq_c  = frequency.min(1000);
+    let sig_c = sig_match.min(1000);
+    let beh_c = behavior.min(1000);
+    let freq_c = frequency.min(1000);
     let scope_c = scope.min(1000);
-    let rec_c   = recency.min(1000);
+    let rec_c = recency.min(1000);
 
     // Weighted sum with overflow-safe arithmetic
-    let total = (sig_c   / 1000 * WEIGHT_SIGNATURE)
-              + (beh_c   / 1000 * WEIGHT_BEHAVIOR)
-              + (freq_c  / 1000 * WEIGHT_FREQUENCY)
-              + (scope_c / 1000 * WEIGHT_SCOPE)
-              + (rec_c   / 1000 * WEIGHT_RECENCY);
+    let total = (sig_c / 1000 * WEIGHT_SIGNATURE)
+        + (beh_c / 1000 * WEIGHT_BEHAVIOR)
+        + (freq_c / 1000 * WEIGHT_FREQUENCY)
+        + (scope_c / 1000 * WEIGHT_SCOPE)
+        + (rec_c / 1000 * WEIGHT_RECENCY);
 
     total.min(1000)
 }
@@ -197,9 +197,9 @@ pub fn score_to_level(score: u32) -> ThreatLevel {
 /// Determine the containment action based on threat level.
 pub fn containment_for_level(level: ThreatLevel) -> ContainmentAction {
     match level {
-        ThreatLevel::Low      => ContainmentAction::Monitor,
-        ThreatLevel::Medium   => ContainmentAction::Throttle,
-        ThreatLevel::High     => ContainmentAction::Quarantine,
+        ThreatLevel::Low => ContainmentAction::Monitor,
+        ThreatLevel::Medium => ContainmentAction::Throttle,
+        ThreatLevel::High => ContainmentAction::Quarantine,
         ThreatLevel::Critical => ContainmentAction::Kill,
     }
 }
@@ -209,17 +209,17 @@ pub fn containment_for_level(level: ThreatLevel) -> ContainmentAction {
 static THREAT_STORE: Mutex<ThreatStore> = Mutex::new(ThreatStore::new());
 
 struct ThreatStore {
-    records:  [ThreatRecord; MAX_THREAT_RECORDS],
-    count:    u32,
-    next_id:  u32,
+    records: [ThreatRecord; MAX_THREAT_RECORDS],
+    count: u32,
+    next_id: u32,
 }
 
 impl ThreatStore {
     const fn new() -> Self {
         ThreatStore {
-            records:  [ThreatRecord::empty(); MAX_THREAT_RECORDS],
-            count:    0,
-            next_id:  1,
+            records: [ThreatRecord::empty(); MAX_THREAT_RECORDS],
+            count: 0,
+            next_id: 1,
         }
     }
 
@@ -268,7 +268,9 @@ impl ThreatStore {
     fn get_by_pid(&self, pid: u32, out: &mut [ThreatRecord], max: usize) -> usize {
         let mut written = 0usize;
         for i in 0..MAX_THREAT_RECORDS {
-            if written >= max { break; }
+            if written >= max {
+                break;
+            }
             if self.records[i].id != 0 && self.records[i].pid == pid {
                 out[written] = self.records[i];
                 written += 1;
@@ -372,12 +374,12 @@ pub fn active_threat_count() -> u32 {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ThreatAssessment {
-    pub pid:               u32,
-    pub composite_score:   u32,
-    pub level:             ThreatLevel,
+    pub pid: u32,
+    pub composite_score: u32,
+    pub level: ThreatLevel,
     pub recommended_action: ContainmentAction,
-    pub active_threats:    u32,
-    pub history_threats:   u32,
+    pub active_threats: u32,
+    pub history_threats: u32,
 }
 
 /// Perform a threat assessment for a given PID.
@@ -407,7 +409,13 @@ pub fn assess_pid(pid: u32, current_tick: u64) -> ThreatAssessment {
             }
             // Accumulate partial scores from recency-weighted contributions
             let age = current_tick.saturating_sub(rec.timestamp);
-            let recency_factor = if age < 100 { 1000u32 } else if age < 1000 { 500 } else { 100 };
+            let recency_factor = if age < 100 {
+                1000u32
+            } else if age < 1000 {
+                500
+            } else {
+                100
+            };
             sig_agg += (rec.score / 4).min(250) * recency_factor / 1000;
             beh_agg += (rec.score / 4).min(250) * recency_factor / 1000;
         }
@@ -416,8 +424,20 @@ pub fn assess_pid(pid: u32, current_tick: u64) -> ThreatAssessment {
 
     // If active threats, recompute score with aggregated data
     let composite = if active > 0 {
-        let freq_score = if active > 5 { 800 } else if active > 2 { 500 } else { 200 };
-        let scope_score = if history > 10 { 700 } else if history > 3 { 400 } else { 150 };
+        let freq_score = if active > 5 {
+            800
+        } else if active > 2 {
+            500
+        } else {
+            200
+        };
+        let scope_score = if history > 10 {
+            700
+        } else if history > 3 {
+            400
+        } else {
+            150
+        };
         compute_threat_score(
             sig_agg.min(1000),
             beh_agg.min(1000),
@@ -433,12 +453,12 @@ pub fn assess_pid(pid: u32, current_tick: u64) -> ThreatAssessment {
     let action = containment_for_level(level);
 
     ThreatAssessment {
-        pid:                pid,
-        composite_score:    composite,
-        level:              level,
+        pid: pid,
+        composite_score: composite,
+        level: level,
         recommended_action: action,
-        active_threats:     active,
-        history_threats:    history,
+        active_threats: active,
+        history_threats: history,
     }
 }
 
@@ -451,31 +471,31 @@ pub const MAX_TRACKED_PROCESSES: usize = 128;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ProcessRiskProfile {
-    pub pid:              u32,
-    pub baseline_score:   u32,    // score at last assessment
-    pub peak_score:       u32,    // highest score observed
-    pub syscall_rate:     u32,    // syscalls per tick window
-    pub net_rate:         u32,    // network ops per tick window
-    pub fs_rate:          u32,    // filesystem ops per tick window
-    pub anomaly_count:    u32,    // cumulative anomaly hits
+    pub pid: u32,
+    pub baseline_score: u32, // score at last assessment
+    pub peak_score: u32,     // highest score observed
+    pub syscall_rate: u32,   // syscalls per tick window
+    pub net_rate: u32,       // network ops per tick window
+    pub fs_rate: u32,        // filesystem ops per tick window
+    pub anomaly_count: u32,  // cumulative anomaly hits
     pub last_assess_tick: u64,
-    pub contained:        bool,
-    pub quarantine_tick:  u64,
+    pub contained: bool,
+    pub quarantine_tick: u64,
 }
 
 impl ProcessRiskProfile {
     pub const fn empty() -> Self {
         ProcessRiskProfile {
-            pid:              0,
-            baseline_score:   0,
-            peak_score:       0,
-            syscall_rate:     0,
-            net_rate:         0,
-            fs_rate:          0,
-            anomaly_count:    0,
+            pid: 0,
+            baseline_score: 0,
+            peak_score: 0,
+            syscall_rate: 0,
+            net_rate: 0,
+            fs_rate: 0,
+            anomaly_count: 0,
             last_assess_tick: 0,
-            contained:        false,
-            quarantine_tick:  0,
+            contained: false,
+            quarantine_tick: 0,
         }
     }
 }
@@ -484,14 +504,14 @@ static RISK_PROFILES: Mutex<RiskProfileStore> = Mutex::new(RiskProfileStore::new
 
 struct RiskProfileStore {
     profiles: [ProcessRiskProfile; MAX_TRACKED_PROCESSES],
-    count:    u32,
+    count: u32,
 }
 
 impl RiskProfileStore {
     const fn new() -> Self {
         RiskProfileStore {
             profiles: [ProcessRiskProfile::empty(); MAX_TRACKED_PROCESSES],
-            count:    0,
+            count: 0,
         }
     }
 
@@ -517,7 +537,10 @@ impl RiskProfileStore {
                     contained: false,
                     quarantine_tick: 0,
                 };
-                self.count = self.count.saturating_add(1).min(MAX_TRACKED_PROCESSES as u32);
+                self.count = self
+                    .count
+                    .saturating_add(1)
+                    .min(MAX_TRACKED_PROCESSES as u32);
                 return Some(&mut self.profiles[i]);
             }
         }
@@ -551,7 +574,9 @@ pub fn update_risk_profile(
         profile.anomaly_count = profile.anomaly_count.saturating_add(anomaly_delta);
         profile.last_assess_tick = tick;
         // Update peak score if current assessment is higher
-        let total_rate = syscall_rate.saturating_add(net_rate).saturating_add(fs_rate);
+        let total_rate = syscall_rate
+            .saturating_add(net_rate)
+            .saturating_add(fs_rate);
         let rate_score = total_rate.min(1000);
         if rate_score > profile.peak_score {
             profile.peak_score = rate_score;
@@ -593,11 +618,11 @@ pub fn release_process(pid: u32) -> bool {
 // ── Statistics ──────────────────────────────────────────────────────────────
 
 static STATS_TOTAL_ASSESSMENTS: AtomicU64 = AtomicU64::new(0);
-static STATS_TOTAL_THREATS:     AtomicU64 = AtomicU64::new(0);
-static STATS_CONTAINMENTS:      AtomicU64 = AtomicU64::new(0);
-static STATS_RESOLVED:          AtomicU64 = AtomicU64::new(0);
-static STATS_CRITICAL_ALERTS:   AtomicU32 = AtomicU32::new(0);
-static STATS_ENGINE_INIT:       AtomicBool = AtomicBool::new(false);
+static STATS_TOTAL_THREATS: AtomicU64 = AtomicU64::new(0);
+static STATS_CONTAINMENTS: AtomicU64 = AtomicU64::new(0);
+static STATS_RESOLVED: AtomicU64 = AtomicU64::new(0);
+static STATS_CRITICAL_ALERTS: AtomicU32 = AtomicU32::new(0);
+static STATS_ENGINE_INIT: AtomicBool = AtomicBool::new(false);
 
 /// Initialize the core engine.
 pub fn core_init() {
@@ -656,21 +681,21 @@ pub fn stat_critical_inc() {
 #[derive(Clone, Copy)]
 pub struct CoreStats {
     pub total_assessments: u64,
-    pub total_threats:     u64,
-    pub containments:      u64,
-    pub resolved:          u64,
-    pub critical_alerts:   u32,
-    pub active_threats:    u32,
+    pub total_threats: u64,
+    pub containments: u64,
+    pub resolved: u64,
+    pub critical_alerts: u32,
+    pub active_threats: u32,
 }
 
 /// Retrieve current engine statistics.
 pub fn get_core_stats() -> CoreStats {
     CoreStats {
         total_assessments: STATS_TOTAL_ASSESSMENTS.load(Ordering::Relaxed),
-        total_threats:     STATS_TOTAL_THREATS.load(Ordering::Relaxed),
-        containments:      STATS_CONTAINMENTS.load(Ordering::Relaxed),
-        resolved:          STATS_RESOLVED.load(Ordering::Relaxed),
-        critical_alerts:   STATS_CRITICAL_ALERTS.load(Ordering::Relaxed),
-        active_threats:    active_threat_count(),
+        total_threats: STATS_TOTAL_THREATS.load(Ordering::Relaxed),
+        containments: STATS_CONTAINMENTS.load(Ordering::Relaxed),
+        resolved: STATS_RESOLVED.load(Ordering::Relaxed),
+        critical_alerts: STATS_CRITICAL_ALERTS.load(Ordering::Relaxed),
+        active_threats: active_threat_count(),
     }
 }

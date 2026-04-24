@@ -17,12 +17,11 @@
 //   ARITH-02 : checked_add sur les compteurs
 // ==============================================================================
 
-
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::fs::exofs::core::{BlobId, ObjectId, ExofsError, ExofsResult};
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult, ObjectId};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ==============================================================================
@@ -48,13 +47,13 @@ pub struct RefGraphStats {
     /// Nombre d'objets suivis.
     pub objects_tracked: u64,
     /// Nombre total de references objet->blob enregistrees.
-    pub obj_blob_refs:   u64,
+    pub obj_blob_refs: u64,
     /// Nombre de blobs suivis avec sous-blobs.
-    pub blobs_tracked:   u64,
+    pub blobs_tracked: u64,
     /// Nombre total de sous-references blob->blob.
-    pub blob_blob_refs:  u64,
+    pub blob_blob_refs: u64,
     /// Lectures (traversees) effectuees.
-    pub traversals:      u64,
+    pub traversals: u64,
 }
 
 impl fmt::Display for RefGraphStats {
@@ -90,7 +89,7 @@ impl ReferenceTrackerInner {
         Self {
             obj_to_blobs: BTreeMap::new(),
             blob_to_subs: BTreeMap::new(),
-            stats:        RefGraphStats::default(),
+            stats: RefGraphStats::default(),
         }
     }
 }
@@ -113,12 +112,12 @@ impl ReferenceTracker {
             inner: SpinLock::new(ReferenceTrackerInner {
                 obj_to_blobs: BTreeMap::new(),
                 blob_to_subs: BTreeMap::new(),
-                stats:        RefGraphStats {
+                stats: RefGraphStats {
                     objects_tracked: 0,
-                    obj_blob_refs:   0,
-                    blobs_tracked:   0,
-                    blob_blob_refs:  0,
-                    traversals:      0,
+                    obj_blob_refs: 0,
+                    blobs_tracked: 0,
+                    blob_blob_refs: 0,
+                    traversals: 0,
                 },
             }),
         }
@@ -177,8 +176,7 @@ impl ReferenceTracker {
     pub fn remove_obj(&self, obj: &ObjectId) {
         let mut g = self.inner.lock();
         if let Some(refs) = g.obj_to_blobs.remove(obj) {
-            g.stats.obj_blob_refs = g.stats.obj_blob_refs
-                .saturating_sub(refs.len() as u64);
+            g.stats.obj_blob_refs = g.stats.obj_blob_refs.saturating_sub(refs.len() as u64);
         }
     }
 
@@ -186,8 +184,7 @@ impl ReferenceTracker {
     pub fn remove_blob(&self, blob: &BlobId) {
         let mut g = self.inner.lock();
         if let Some(refs) = g.blob_to_subs.remove(blob) {
-            g.stats.blob_blob_refs = g.stats.blob_blob_refs
-                .saturating_sub(refs.len() as u64);
+            g.stats.blob_blob_refs = g.stats.blob_blob_refs.saturating_sub(refs.len() as u64);
         }
     }
 
@@ -212,9 +209,9 @@ impl ReferenceTracker {
     /// RECUR-01 : iteratif avec pile heap-allouee.
     /// Traverse : obj -> blobs directs -> sous-blobs (transitivement).
     pub fn all_reachable_blobs(&self, obj: &ObjectId) -> ExofsResult<Vec<BlobId>> {
-        let mut result : Vec<BlobId> = Vec::new();
+        let mut result: Vec<BlobId> = Vec::new();
         // Pile iterative pour traversee DFS.
-        let mut stack  : Vec<BlobId> = Vec::new();
+        let mut stack: Vec<BlobId> = Vec::new();
         let mut visited: alloc::collections::BTreeSet<BlobId> = alloc::collections::BTreeSet::new();
 
         // Amorcer depuis les references directes de l'objet.
@@ -306,11 +303,15 @@ mod tests {
     use super::*;
 
     fn oid(b: u8) -> ObjectId {
-        let mut arr = [0u8; 32]; arr[0] = b; ObjectId(arr)
+        let mut arr = [0u8; 32];
+        arr[0] = b;
+        ObjectId(arr)
     }
 
     fn bid(b: u8) -> BlobId {
-        let mut arr = [0u8; 32]; arr[0] = b; BlobId(arr)
+        let mut arr = [0u8; 32];
+        arr[0] = b;
+        BlobId(arr)
     }
 
     #[test]
@@ -340,7 +341,7 @@ mod tests {
     fn test_add_blob_ref() {
         let t = ReferenceTracker::new();
         let parent = bid(30);
-        let child  = bid(31);
+        let child = bid(31);
         t.add_blob_ref(parent, child).unwrap();
         let subs = t.get_refs(&parent);
         assert_eq!(subs.len(), 1);

@@ -14,14 +14,13 @@
 //
 // Couche 0 — aucune dépendance scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::memory::core::types::{Frame, PhysAddr, AllocFlags};
-use crate::memory::core::constants::PAGE_SIZE;
-use crate::memory::core::address::phys_to_virt;
-use crate::memory::physical::allocator::buddy::free_pages;
 use super::node::NUMA_NODES;
+use crate::memory::core::address::phys_to_virt;
+use crate::memory::core::constants::PAGE_SIZE;
+use crate::memory::core::types::{AllocFlags, Frame, PhysAddr};
+use crate::memory::physical::allocator::buddy::free_pages;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Statistiques
@@ -31,13 +30,13 @@ use super::node::NUMA_NODES;
 pub struct MigrationStats {
     pub migrations_attempted: AtomicU64,
     pub migrations_succeeded: AtomicU64,
-    pub migrations_failed:    AtomicU64,
+    pub migrations_failed: AtomicU64,
     /// Nombre de pages déplacées entre nœuds distincts.
-    pub pages_moved:          AtomicU64,
+    pub pages_moved: AtomicU64,
     /// Optimisations : page déjà sur le bon nœud.
-    pub already_local:        AtomicU64,
+    pub already_local: AtomicU64,
     /// Échecs d'allocation sur le nœud cible.
-    pub alloc_failures:       AtomicU64,
+    pub alloc_failures: AtomicU64,
 }
 
 impl MigrationStats {
@@ -45,10 +44,10 @@ impl MigrationStats {
         Self {
             migrations_attempted: AtomicU64::new(0),
             migrations_succeeded: AtomicU64::new(0),
-            migrations_failed:    AtomicU64::new(0),
-            pages_moved:          AtomicU64::new(0),
-            already_local:        AtomicU64::new(0),
-            alloc_failures:       AtomicU64::new(0),
+            migrations_failed: AtomicU64::new(0),
+            pages_moved: AtomicU64::new(0),
+            already_local: AtomicU64::new(0),
+            alloc_failures: AtomicU64::new(0),
         }
     }
 }
@@ -131,17 +130,21 @@ pub fn frame_node(frame: Frame) -> u32 {
 /// - La frame source ne doit pas être accédée pendant la copie.
 /// - La PTE doit être verrouillée / protégée par le caller.
 pub unsafe fn migrate_page<P: MigrationPageTableOps>(
-    src_frame:   Frame,
+    src_frame: Frame,
     target_node: u32,
-    virt_addr:   Option<u64>,
-    pt_ops:      Option<&P>,
+    virt_addr: Option<u64>,
+    pt_ops: Option<&P>,
 ) -> MigrateResult {
-    MIGRATION_STATS.migrations_attempted.fetch_add(1, Ordering::Relaxed);
+    MIGRATION_STATS
+        .migrations_attempted
+        .fetch_add(1, Ordering::Relaxed);
 
     // Vérifier si déjà local.
     let src_node = frame_node(src_frame);
     if src_node == target_node {
-        MIGRATION_STATS.already_local.fetch_add(1, Ordering::Relaxed);
+        MIGRATION_STATS
+            .already_local
+            .fetch_add(1, Ordering::Relaxed);
         return MigrateResult::AlreadyLocal;
     }
 
@@ -149,8 +152,12 @@ pub unsafe fn migrate_page<P: MigrationPageTableOps>(
     let dst_frame = match alloc_pages_on_node(target_node, 0, AllocFlags::NONE) {
         Some(f) => f,
         None => {
-            MIGRATION_STATS.alloc_failures.fetch_add(1, Ordering::Relaxed);
-            MIGRATION_STATS.migrations_failed.fetch_add(1, Ordering::Relaxed);
+            MIGRATION_STATS
+                .alloc_failures
+                .fetch_add(1, Ordering::Relaxed);
+            MIGRATION_STATS
+                .migrations_failed
+                .fetch_add(1, Ordering::Relaxed);
             return MigrateResult::AllocFailed;
         }
     };
@@ -164,14 +171,16 @@ pub unsafe fn migrate_page<P: MigrationPageTableOps>(
         if let Some(old_pte) = ops.get_pte(virt) {
             // Masque des flags : conserver tous les bits sauf la pfn.
             const PFN_MASK: u64 = !0x0FFF_FFFF_FFFF_F000; // bits 11:0 + 63:48
-            let flags   = old_pte & PFN_MASK;
+            let flags = old_pte & PFN_MASK;
             let new_pfn = (dst_frame.start_address().as_u64() >> 12) << 12;
             let new_pte = new_pfn | flags;
 
             if ops.swap_pte(virt, new_pte).is_err() {
                 // Rollback : libérer la frame destination.
                 let _ = free_pages(dst_frame, 0);
-                MIGRATION_STATS.migrations_failed.fetch_add(1, Ordering::Relaxed);
+                MIGRATION_STATS
+                    .migrations_failed
+                    .fetch_add(1, Ordering::Relaxed);
                 return MigrateResult::PteUpdateFailed;
             }
             ops.flush_tlb(virt);
@@ -191,9 +200,13 @@ pub unsafe fn migrate_page<P: MigrationPageTableOps>(
         dst_n.stats.record_alloc_local();
     }
 
-    MIGRATION_STATS.migrations_succeeded.fetch_add(1, Ordering::Relaxed);
+    MIGRATION_STATS
+        .migrations_succeeded
+        .fetch_add(1, Ordering::Relaxed);
     MIGRATION_STATS.pages_moved.fetch_add(1, Ordering::Relaxed);
-    MigrateResult::Success { new_frame: dst_frame }
+    MigrateResult::Success {
+        new_frame: dst_frame,
+    }
 }
 
 /// Helper : allocation de page ordonnée sur un nœud NUMA spécifique.
@@ -203,7 +216,9 @@ pub unsafe fn migrate_page<P: MigrationPageTableOps>(
 unsafe fn alloc_pages_on_node(node_id: u32, order: u32, flags: AllocFlags) -> Option<Frame> {
     use crate::memory::physical::BUDDY;
     // alloc_on_node(order: usize, flags: AllocFlags, numa_node: u8) → Result
-    BUDDY.alloc_on_node(order as usize, flags, node_id as u8).ok()
+    BUDDY
+        .alloc_on_node(order as usize, flags, node_id as u8)
+        .ok()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -215,16 +230,16 @@ unsafe fn alloc_pages_on_node(node_id: u32, order: u32, flags: AllocFlags) -> Op
 ///
 /// # Safety : frames doivent être valides, non aliasées pendant l'opération.
 pub unsafe fn migrate_pages_batch<P: MigrationPageTableOps>(
-    frames:      &[(Frame, Option<u64>)], // (frame, virt_addr optionnelle)
+    frames: &[(Frame, Option<u64>)], // (frame, virt_addr optionnelle)
     target_node: u32,
-    max_pages:   usize,
-    pt_ops:      Option<&P>,
+    max_pages: usize,
+    pt_ops: Option<&P>,
 ) -> usize {
     let mut count = 0;
     for &(frame, virt) in frames.iter().take(max_pages) {
         match migrate_page(frame, target_node, virt, pt_ops) {
             MigrateResult::Success { .. } => count += 1,
-            MigrateResult::AlreadyLocal   => count += 1, // déjà optimal
+            MigrateResult::AlreadyLocal => count += 1, // déjà optimal
             _ => {}
         }
     }

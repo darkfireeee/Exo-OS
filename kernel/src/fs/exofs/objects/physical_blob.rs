@@ -8,16 +8,13 @@
 //   ARITH-02  : checked_add pour tout calcul d'offset
 //   SEC-04    : jamais de contenu de blob Secret dans les stats/logs
 
-
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt;
 use core::mem;
 use core::sync::atomic::{AtomicU32, Ordering};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{
-    BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, blake3_hash,
-};
+use crate::fs::exofs::core::{blake3_hash, BlobId, DiskOffset, EpochId, ExofsError, ExofsResult};
 use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
@@ -40,11 +37,11 @@ pub const BLOB_GC_EPOCH_DELAY: u64 = 2;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CompressionType {
     /// Aucune compression.
-    None    = 0,
+    None = 0,
     /// LZ4 (compression rapide).
-    Lz4     = 1,
+    Lz4 = 1,
     /// Zstd niveau standard.
-    Zstd    = 2,
+    Zstd = 2,
     /// Zstd niveau maximal.
     ZstdMax = 3,
 }
@@ -73,9 +70,9 @@ impl CompressionType {
 impl fmt::Display for CompressionType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            Self::None    => "none",
-            Self::Lz4     => "lz4",
-            Self::Zstd    => "zstd",
+            Self::None => "none",
+            Self::Lz4 => "lz4",
+            Self::Zstd => "zstd",
             Self::ZstdMax => "zstd-max",
         };
         f.write_str(s)
@@ -106,27 +103,27 @@ impl fmt::Display for CompressionType {
 #[derive(Clone, Copy)]
 pub struct PhysicalBlobDisk {
     /// Identifiant du blob (Blake3 du contenu brut, HASH-01).
-    pub blob_id:       [u8; 32],
+    pub blob_id: [u8; 32],
     /// Offset disque du premier octet du contenu.
-    pub data_offset:   u64,
+    pub data_offset: u64,
     /// Taille des données sur disque (compressées si applicable).
-    pub data_size:     u64,
+    pub data_size: u64,
     /// Compteur de références au dernier commit (u32 plain — ONDISK-01).
-    pub ref_count:     u32,
+    pub ref_count: u32,
     /// Type de compression (0 = aucun).
     pub compress_type: u8,
     /// Padding.
-    pub _pad:          [u8; 3],
+    pub _pad: [u8; 3],
     /// Epoch de création du blob.
-    pub epoch_create:  u64,
+    pub epoch_create: u64,
     /// Epoch de suppression logique (0 = blob vivant).
-    pub epoch_del:     u64,
+    pub epoch_del: u64,
     /// Taille d'origine avant compression (= data_size si non compressé).
     pub original_size: u64,
     /// Hash Blake3 du contenu brut (vérifié à la lecture).
-    pub checksum:      [u8; 32],
+    pub checksum: [u8; 32],
     /// Padding pour arrondir à 120 octets.
-    pub _pad2:         [u8; 8],
+    pub _pad2: [u8; 8],
 }
 
 // Validation de taille en compile-time.
@@ -173,23 +170,23 @@ impl fmt::Debug for PhysicalBlobDisk {
 /// via `Arc<PhysicalBlobInMemory>` lorsque la déduplication est active.
 pub struct PhysicalBlobInMemory {
     /// Identifiant du blob (immuable après création).
-    pub blob_id:        BlobId,
+    pub blob_id: BlobId,
     /// Offset disque du contenu.
-    pub data_offset:    DiskOffset,
+    pub data_offset: DiskOffset,
     /// Taille des données sur disque.
-    pub data_size:      u64,
+    pub data_size: u64,
     /// Taille originale avant compression.
-    pub original_size:  u64,
+    pub original_size: u64,
     /// Compteur de références atomique (REFCNT-01).
-    pub ref_count:      AtomicU32,
+    pub ref_count: AtomicU32,
     /// Type de compression du contenu.
-    pub compress_type:  CompressionType,
+    pub compress_type: CompressionType,
     /// Epoch de création.
-    pub epoch_create:   EpochId,
+    pub epoch_create: EpochId,
     /// Epoch de suppression logique (0 = vivant).
-    pub epoch_del:      u64,
+    pub epoch_del: u64,
     /// Indique si le hash a été vérifié contre le contenu disque.
-    pub hash_verified:  bool,
+    pub hash_verified: bool,
 }
 
 impl PhysicalBlobInMemory {
@@ -197,18 +194,17 @@ impl PhysicalBlobInMemory {
 
     /// Reconstruit depuis la représentation on-disk.
     pub fn from_disk(d: &PhysicalBlobDisk) -> ExofsResult<Self> {
-        let compress_type = CompressionType::from_u8(d.compress_type)
-            .ok_or(ExofsError::Corrupt)?;
+        let compress_type = CompressionType::from_u8(d.compress_type).ok_or(ExofsError::Corrupt)?;
 
         Ok(Self {
-            blob_id:       BlobId(d.blob_id),
-            data_offset:   DiskOffset(d.data_offset),
-            data_size:     d.data_size,
+            blob_id: BlobId(d.blob_id),
+            data_offset: DiskOffset(d.data_offset),
+            data_size: d.data_size,
             original_size: d.original_size,
-            ref_count:     AtomicU32::new(d.ref_count),
+            ref_count: AtomicU32::new(d.ref_count),
             compress_type,
-            epoch_create:  EpochId(d.epoch_create),
-            epoch_del:     d.epoch_del,
+            epoch_create: EpochId(d.epoch_create),
+            epoch_del: d.epoch_del,
             hash_verified: false,
         })
     }
@@ -217,11 +213,11 @@ impl PhysicalBlobInMemory {
     ///
     /// Le `blob_id` est calculé ici sur les données brutes (HASH-01).
     pub fn new(
-        data_offset:   DiskOffset,
-        data:          &[u8],
+        data_offset: DiskOffset,
+        data: &[u8],
         original_size: u64,
         compress_type: CompressionType,
-        epoch_create:  EpochId,
+        epoch_create: EpochId,
     ) -> Self {
         // HASH-01 : BlobId calculé sur les données BRUTES avant compression.
         let hash = blake3_hash(data);
@@ -232,10 +228,10 @@ impl PhysicalBlobInMemory {
             data_offset,
             data_size: data.len() as u64,
             original_size,
-            ref_count:     AtomicU32::new(BLOB_INITIAL_REF_COUNT),
+            ref_count: AtomicU32::new(BLOB_INITIAL_REF_COUNT),
             compress_type,
             epoch_create,
-            epoch_del:     0,
+            epoch_del: 0,
             hash_verified: false,
         }
     }
@@ -245,17 +241,17 @@ impl PhysicalBlobInMemory {
     /// Sérialise vers la représentation on-disk.
     pub fn to_disk(&self) -> PhysicalBlobDisk {
         PhysicalBlobDisk {
-            blob_id:       self.blob_id.0,
-            data_offset:   self.data_offset.0,
-            data_size:     self.data_size,
-            ref_count:     self.ref_count.load(Ordering::Relaxed),
+            blob_id: self.blob_id.0,
+            data_offset: self.data_offset.0,
+            data_size: self.data_size,
+            ref_count: self.ref_count.load(Ordering::Relaxed),
             compress_type: self.compress_type.as_u8(),
-            _pad:          [0u8; 3],
-            epoch_create:  self.epoch_create.0,
-            epoch_del:     self.epoch_del,
+            _pad: [0u8; 3],
+            epoch_create: self.epoch_create.0,
+            epoch_del: self.epoch_del,
             original_size: self.original_size,
-            checksum:      self.blob_id.0, // Le BlobId IS le hash du contenu.
-            _pad2:         [0u8; 8],
+            checksum: self.blob_id.0, // Le BlobId IS le hash du contenu.
+            _pad2: [0u8; 8],
         }
     }
 
@@ -402,31 +398,31 @@ pub type PhysicalBlobRef = Arc<PhysicalBlobInMemory>;
 #[derive(Default, Debug, Clone)]
 pub struct BlobStats {
     /// Nombre de blobs créés.
-    pub created:          u64,
+    pub created: u64,
     /// Nombre de blobs détruits (GC).
-    pub gc_collected:     u64,
+    pub gc_collected: u64,
     /// Nombre de vérifications de contenu.
-    pub verify_calls:     u64,
+    pub verify_calls: u64,
     /// Nombre d'erreurs de vérification.
-    pub verify_errors:    u64,
+    pub verify_errors: u64,
     /// Nombre de reconstructions depuis disque.
-    pub from_disk_count:  u64,
+    pub from_disk_count: u64,
     /// Nombre d'erreurs de désérialisation.
     pub from_disk_errors: u64,
     /// Nombre total de bytes référencés.
-    pub total_bytes:      u64,
+    pub total_bytes: u64,
 }
 
 impl BlobStats {
     pub const fn new() -> Self {
         Self {
-            created:          0,
-            gc_collected:     0,
-            verify_calls:     0,
-            verify_errors:    0,
-            from_disk_count:  0,
+            created: 0,
+            gc_collected: 0,
+            verify_calls: 0,
+            verify_errors: 0,
+            from_disk_count: 0,
             from_disk_errors: 0,
-            total_bytes:      0,
+            total_bytes: 0,
         }
     }
 }
@@ -466,7 +462,7 @@ impl PhysicalBlobTable {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
-            stats:   BlobStats::new(),
+            stats: BlobStats::new(),
         }
     }
 
@@ -500,12 +496,13 @@ impl PhysicalBlobTable {
             }
         }
         // Nouveau blob — insérer.
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         let new_ref = Arc::clone(&blob);
         self.entries.push(blob);
-        self.stats.created       = self.stats.created.saturating_add(1);
-        self.stats.total_bytes   = self.stats.total_bytes
-            .saturating_add(new_ref.data_size);
+        self.stats.created = self.stats.created.saturating_add(1);
+        self.stats.total_bytes = self.stats.total_bytes.saturating_add(new_ref.data_size);
         Ok(new_ref)
     }
 
@@ -516,8 +513,7 @@ impl PhysicalBlobTable {
         let before = self.entries.len();
         self.entries.retain(|b| !b.is_gc_eligible(current_epoch));
         let removed = before - self.entries.len();
-        self.stats.gc_collected = self.stats.gc_collected
-            .saturating_add(removed as u64);
+        self.stats.gc_collected = self.stats.gc_collected.saturating_add(removed as u64);
         removed
     }
 
@@ -585,9 +581,9 @@ mod tests {
 
     #[test]
     fn test_from_disk_roundtrip() {
-        let b   = make_blob(0x4000, b"roundtrip");
-        let d   = b.to_disk();
-        let b2  = PhysicalBlobInMemory::from_disk(&d).unwrap();
+        let b = make_blob(0x4000, b"roundtrip");
+        let d = b.to_disk();
+        let b2 = PhysicalBlobInMemory::from_disk(&d).unwrap();
         assert_eq!(b.blob_id.0, b2.blob_id.0);
         assert_eq!(b.data_offset.0, b2.data_offset.0);
     }

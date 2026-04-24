@@ -9,22 +9,26 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use pci_types;
 use spin::RwLock;
 
-pub mod iommu;
-pub mod dma;
 pub mod device_claims;
 pub mod device_server_ipc;
-pub mod pci_topology;
+pub mod dma;
+pub mod iommu;
 mod pci_cfg;
 mod pci_link;
+pub mod pci_topology;
 
 #[cfg(test)]
 pub mod tests;
 
 // Re-export key types and functions
-pub use dma::{sys_dma_alloc_for_pid, sys_dma_free_for_pid, sys_mmio_map_for_pid, sys_mmio_unmap_for_pid};
-pub use iommu::{ensure_domain_for_pid, domain_of_pid, iommu_init, pid_of_domain, release_domain_for_pid};
 pub use crate::memory::dma::core::types::IommuDomainId;
 pub use device_claims::ClaimError;
+pub use dma::{
+    sys_dma_alloc_for_pid, sys_dma_free_for_pid, sys_mmio_map_for_pid, sys_mmio_unmap_for_pid,
+};
+pub use iommu::{
+    domain_of_pid, ensure_domain_for_pid, iommu_init, pid_of_domain, release_domain_for_pid,
+};
 pub use pci_topology::PciError as TopoError;
 
 pub fn init() {
@@ -162,7 +166,7 @@ pub fn sys_pci_claim(
     device_claims::sys_pci_claim(phys_base, size, pid, custom_bdf, calling_pid)
 }
 
-pub fn release_claims_for_pid(pid: u32) -> usize { 
+pub fn release_claims_for_pid(pid: u32) -> usize {
     device_claims::revoke_claims_for_pid(pid);
     0
 }
@@ -281,7 +285,10 @@ pub fn sys_msi_config_for_pid(pid: u32, handle: u64, vector_idx: u16) -> Result<
 
 pub fn sys_msi_free_for_pid(pid: u32, handle: u64) -> Result<(), MsiError> {
     let mut leases = MSI_LEASES.write();
-    let Some(pos) = leases.iter().position(|lease| lease.handle == handle && lease.pid == pid) else {
+    let Some(pos) = leases
+        .iter()
+        .position(|lease| lease.handle == handle && lease.pid == pid)
+    else {
         return Err(MsiError::NotFound);
     };
 

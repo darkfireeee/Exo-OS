@@ -8,10 +8,9 @@ pub mod descriptor;
 pub mod operations;
 pub mod tree;
 
-pub use descriptor::{VmaDescriptor, VmaFlags, VmaBacking};
-pub use tree::{VmaTree, VmaTreeIter, MAX_VMAS_PER_PROCESS};
+pub use cow::{cow_break, mark_vma_cow, CowBreakResult, CowFrameAllocator, COW_STATS};
+pub use descriptor::{VmaBacking, VmaDescriptor, VmaFlags};
 pub use operations::{
-    VmaAllocParams, find_gap, split_vma, SplitResult,
-    mprotect_vma, MprotectResult, validate_vma,
+    find_gap, mprotect_vma, split_vma, validate_vma, MprotectResult, SplitResult, VmaAllocParams,
 };
-pub use cow::{CowFrameAllocator, CowBreakResult, cow_break, mark_vma_cow, COW_STATS};
+pub use tree::{VmaTree, VmaTreeIter, MAX_VMAS_PER_PROCESS};

@@ -11,7 +11,6 @@
 //
 // COUCHE 0 — pas de dépendance scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
@@ -23,21 +22,28 @@ use spin::Mutex;
 #[derive(Debug, Clone, Copy)]
 pub struct OomKillCandidate {
     /// Process ID.
-    pub pid:      u64,
+    pub pid: u64,
     /// Score OOM calculé (plus grand = plus prioritaire à tuer).
     pub oom_score: u64,
     /// Résistant RSS en pages.
-    pub vm_rss:   u64,
+    pub vm_rss: u64,
     /// Nom du processus (pour le log).
-    pub name:     [u8; 16],
+    pub name: [u8; 16],
 }
 
 impl OomKillCandidate {
     pub const fn invalid() -> Self {
-        Self { pid: 0, oom_score: 0, vm_rss: 0, name: [0; 16] }
+        Self {
+            pid: 0,
+            oom_score: 0,
+            vm_rss: 0,
+            name: [0; 16],
+        }
     }
 
-    pub fn is_valid(&self) -> bool { self.pid != 0 }
+    pub fn is_valid(&self) -> bool {
+        self.pid != 0
+    }
 }
 
 /// Trait que process/ implémente pour fournir la liste des candidats OOM.
@@ -59,7 +65,9 @@ impl OomScorer for DefaultOomScorer {
         // Avant que process/ soit disponible : pas de victime connue.
         None
     }
-    fn candidates(&self, _buf: &mut [OomKillCandidate]) -> usize { 0 }
+    fn candidates(&self, _buf: &mut [OomKillCandidate]) -> usize {
+        0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -72,7 +80,9 @@ impl OomScorer for DefaultOomScorer {
 pub type OomKillSendFn = fn(pid: u64) -> bool;
 
 #[allow(dead_code)]
-fn nop_oom_kill(_pid: u64) -> bool { false }
+fn nop_oom_kill(_pid: u64) -> bool {
+    false
+}
 
 /// Pointeur fonction vers le handler OOM de process/ — write-once.
 static OOM_KILL_SENDER: AtomicUsize = AtomicUsize::new(0);
@@ -80,12 +90,9 @@ static OOM_KILL_SENDER: AtomicUsize = AtomicUsize::new(0);
 /// Enregistre le handler OOM de process/.
 /// Doit être appelé une seule fois par process/ lors de son init.
 pub fn register_oom_kill_sender(f: OomKillSendFn) {
-    OOM_KILL_SENDER.compare_exchange(
-        0,
-        f as usize,
-        Ordering::Release,
-        Ordering::Relaxed,
-    ).ok();
+    OOM_KILL_SENDER
+        .compare_exchange(0, f as usize, Ordering::Release, Ordering::Relaxed)
+        .ok();
 }
 
 /// Appelle le sender OOM enregistré.
@@ -104,25 +111,25 @@ fn invoke_kill_sender(pid: u64) -> bool {
 
 #[repr(C)]
 pub struct OomStats {
-    pub oom_invocations:  AtomicU64,
+    pub oom_invocations: AtomicU64,
     pub victims_selected: AtomicU64,
-    pub kills_sent:       AtomicU64,
-    pub kills_failed:     AtomicU64,
+    pub kills_sent: AtomicU64,
+    pub kills_failed: AtomicU64,
     /// Déclenchements en situation critique (zone vide).
-    pub critical_events:  AtomicU64,
+    pub critical_events: AtomicU64,
     /// Ignorer OOM : flag levé quand kernel est en shutdown.
-    pub suppressed:       AtomicBool,
+    pub suppressed: AtomicBool,
 }
 
 impl OomStats {
     const fn new() -> Self {
         Self {
-            oom_invocations:  AtomicU64::new(0),
+            oom_invocations: AtomicU64::new(0),
             victims_selected: AtomicU64::new(0),
-            kills_sent:       AtomicU64::new(0),
-            kills_failed:     AtomicU64::new(0),
-            critical_events:  AtomicU64::new(0),
-            suppressed:       AtomicBool::new(false),
+            kills_sent: AtomicU64::new(0),
+            kills_failed: AtomicU64::new(0),
+            critical_events: AtomicU64::new(0),
+            suppressed: AtomicBool::new(false),
         }
     }
 }
@@ -164,7 +171,9 @@ fn rdtsc() -> u64 {
 fn cooldown_elapsed() -> bool {
     let now = rdtsc();
     let last = LAST_KILL_TSC.load(Ordering::Relaxed);
-    if last == 0 { return true; }
+    if last == 0 {
+        return true;
+    }
     let elapsed_ticks = now.wrapping_sub(last);
     let hz = TSC_HZ.load(Ordering::Relaxed);
     // Cooldown 100 ms.
@@ -177,8 +186,14 @@ fn cooldown_elapsed() -> bool {
 
 /// Buffer statique pour les candidats OOM (évite toute allocation sur le
 /// chemin d'urgence).
-static OOM_CANDIDATE_BUF: Mutex<[OomKillCandidate; 64]> =
-    Mutex::new([OomKillCandidate { pid: 0, oom_score: 0, vm_rss: 0, name: [0; 16] }; 64]);
+static OOM_CANDIDATE_BUF: Mutex<[OomKillCandidate; 64]> = Mutex::new(
+    [OomKillCandidate {
+        pid: 0,
+        oom_score: 0,
+        vm_rss: 0,
+        name: [0; 16],
+    }; 64],
+);
 
 /// Sélectionne la victime OOM via le scorer fourni.
 ///

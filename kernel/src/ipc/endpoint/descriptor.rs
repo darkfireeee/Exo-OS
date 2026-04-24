@@ -14,11 +14,10 @@
 // RÈGLE : zéro allocation heap ici — structures à taille fixe (Zone NO-ALLOC).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use crate::ipc::core::constants::{ENDPOINT_BACKLOG, MAX_ENDPOINT_NAME_LEN, MAX_ENDPOINT_OWNERS};
 use crate::ipc::core::types::{EndpointId, IpcError};
-use crate::ipc::core::constants::{MAX_ENDPOINT_OWNERS, ENDPOINT_BACKLOG, MAX_ENDPOINT_NAME_LEN};
 use crate::scheduler::core::task::ThreadId;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EndpointState — machine d'états d'un endpoint
@@ -29,15 +28,15 @@ use crate::scheduler::core::task::ThreadId;
 #[repr(u32)]
 pub enum EndpointState {
     /// Endpoint créé, pas encore en écoute.
-    Created       = 0,
+    Created = 0,
     /// En écoute — accepte des connexions.
-    Listening     = 1,
+    Listening = 1,
     /// Fermé — rejette toutes les connexions.
-    Closed        = 2,
+    Closed = 2,
     /// En cours de fermeture (drain des messages en vol).
-    Draining      = 3,
+    Draining = 3,
     /// Détruit — la structure peut être réutilisée.
-    Destroyed     = 4,
+    Destroyed = 4,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,9 +59,9 @@ pub struct PendingConnection {
 
 impl PendingConnection {
     pub const EMPTY: Self = Self {
-        requester:       ThreadId(0),
-        channel_id:      0,
-        cookie:          0,
+        requester: ThreadId(0),
+        channel_id: 0,
+        cookie: 0,
         timestamp_ticks: 0,
     };
 
@@ -80,11 +79,14 @@ impl PendingConnection {
 #[repr(C)]
 pub struct EndpointName {
     bytes: [u8; MAX_ENDPOINT_NAME_LEN],
-    len:   u8,
+    len: u8,
 }
 
 impl EndpointName {
-    pub const EMPTY: Self = Self { bytes: [0u8; MAX_ENDPOINT_NAME_LEN], len: 0 };
+    pub const EMPTY: Self = Self {
+        bytes: [0u8; MAX_ENDPOINT_NAME_LEN],
+        len: 0,
+    };
 
     /// Crée un nom depuis un slice ASCII.
     pub fn from_bytes(src: &[u8]) -> Result<Self, IpcError> {
@@ -160,18 +162,18 @@ impl EndpointDesc {
         owners[0] = owner;
         Self {
             id,
-            state:          AtomicU32::new(EndpointState::Created as u32),
-            active_conns:   AtomicU32::new(0),
-            generation:     AtomicU64::new(1),
+            state: AtomicU32::new(EndpointState::Created as u32),
+            active_conns: AtomicU32::new(0),
+            generation: AtomicU64::new(1),
             owners,
-            owner_count:    1,
-            config_flags:   0,
+            owner_count: 1,
+            config_flags: 0,
             name,
-            backlog:        [PendingConnection::EMPTY; ENDPOINT_BACKLOG],
-            backlog_head:   AtomicU32::new(0),
-            backlog_tail:   AtomicU32::new(0),
+            backlog: [PendingConnection::EMPTY; ENDPOINT_BACKLOG],
+            backlog_head: AtomicU32::new(0),
+            backlog_tail: AtomicU32::new(0),
             total_accepted: AtomicU64::new(0),
-            total_refused:  AtomicU64::new(0),
+            total_refused: AtomicU64::new(0),
         }
     }
 
@@ -234,9 +236,7 @@ impl EndpointDesc {
             return None; // backlog vide
         }
         // SAFETY: head est dans [0, ENDPOINT_BACKLOG) et tail != head.
-        let conn = unsafe {
-            core::ptr::read(&self.backlog[head as usize])
-        };
+        let conn = unsafe { core::ptr::read(&self.backlog[head as usize]) };
         let next = (head + 1) % ENDPOINT_BACKLOG as u32;
         self.backlog_head.store(next, Ordering::Release);
         self.total_accepted.fetch_add(1, Ordering::Relaxed);

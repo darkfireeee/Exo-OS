@@ -12,54 +12,48 @@
 //! - #PF (vecteur 14) → IST2 (#PF dédié)
 //! - 0xF1/0xF2/0xF3   → IST1 (ExoPhoenix critiques)
 
-
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use super::tss::{
-    IST_DOUBLE_FAULT,
-    IST_NMI,
-    IST_MACHINE_CHECK,
-    IST_DEBUG,
-    IST_EXOPHOENIX_IPI,
-    IST_PAGE_FAULT,
-};
 use super::gdt::GDT_KERNEL_CS;
+use super::tss::{
+    IST_DEBUG, IST_DOUBLE_FAULT, IST_EXOPHOENIX_IPI, IST_MACHINE_CHECK, IST_NMI, IST_PAGE_FAULT,
+};
 
 // ── Vecteurs d'exception ──────────────────────────────────────────────────────
 
-pub const EXC_DIVIDE_ERROR:     u8  = 0;
-pub const EXC_DEBUG:            u8  = 1;
-pub const EXC_NMI:              u8  = 2;
-pub const EXC_BREAKPOINT:       u8  = 3;
-pub const EXC_OVERFLOW:         u8  = 4;
-pub const EXC_BOUND_RANGE:      u8  = 5;
-pub const EXC_INVALID_OPCODE:   u8  = 6;
-pub const EXC_DEVICE_NOT_AVAIL: u8  = 7;   // #NM — Device Not Available (FPU)
-pub const EXC_DOUBLE_FAULT:     u8  = 8;
-pub const EXC_COPROCESSOR_SEG:  u8  = 9;
-pub const EXC_INVALID_TSS:      u8  = 10;
-pub const EXC_SEGMENT_NOT_PRES: u8  = 11;
-pub const EXC_STACK_FAULT:      u8  = 12;
-pub const EXC_GENERAL_PROT:     u8  = 13;
-pub const EXC_PAGE_FAULT:       u8  = 14;
-pub const EXC_X87_FP:           u8  = 16;
-pub const EXC_ALIGNMENT_CHECK:  u8  = 17;
-pub const EXC_MACHINE_CHECK:    u8  = 18;
-pub const EXC_SIMD_FP:          u8  = 19;
-pub const EXC_VIRT:             u8  = 20;  // Virtualization exception
-pub const EXC_CTRL_PROT:        u8  = 21;  // Control Protection (#CP)
-pub const EXC_HYPERVISOR_INJ:   u8  = 28;
-pub const EXC_VMM_COMM:         u8  = 29;
-pub const EXC_SECURITY:         u8  = 30;
+pub const EXC_DIVIDE_ERROR: u8 = 0;
+pub const EXC_DEBUG: u8 = 1;
+pub const EXC_NMI: u8 = 2;
+pub const EXC_BREAKPOINT: u8 = 3;
+pub const EXC_OVERFLOW: u8 = 4;
+pub const EXC_BOUND_RANGE: u8 = 5;
+pub const EXC_INVALID_OPCODE: u8 = 6;
+pub const EXC_DEVICE_NOT_AVAIL: u8 = 7; // #NM — Device Not Available (FPU)
+pub const EXC_DOUBLE_FAULT: u8 = 8;
+pub const EXC_COPROCESSOR_SEG: u8 = 9;
+pub const EXC_INVALID_TSS: u8 = 10;
+pub const EXC_SEGMENT_NOT_PRES: u8 = 11;
+pub const EXC_STACK_FAULT: u8 = 12;
+pub const EXC_GENERAL_PROT: u8 = 13;
+pub const EXC_PAGE_FAULT: u8 = 14;
+pub const EXC_X87_FP: u8 = 16;
+pub const EXC_ALIGNMENT_CHECK: u8 = 17;
+pub const EXC_MACHINE_CHECK: u8 = 18;
+pub const EXC_SIMD_FP: u8 = 19;
+pub const EXC_VIRT: u8 = 20; // Virtualization exception
+pub const EXC_CTRL_PROT: u8 = 21; // Control Protection (#CP)
+pub const EXC_HYPERVISOR_INJ: u8 = 28;
+pub const EXC_VMM_COMM: u8 = 29;
+pub const EXC_SECURITY: u8 = 30;
 
 /// Premier vecteur IRQ hardware (après les 32 exceptions)
-pub const IRQ_BASE:             u8  = 32;
+pub const IRQ_BASE: u8 = 32;
 
 /// Vecteur IRQ timer (APIC Local Timer)
-pub const VEC_IRQ_TIMER:        u8  = 0x20;
+pub const VEC_IRQ_TIMER: u8 = 0x20;
 
 /// Vecteur IPI wakeup (scheduler)
-pub const VEC_IPI_WAKEUP:       u8  = 0xF0;
+pub const VEC_IPI_WAKEUP: u8 = 0xF0;
 
 /// Vecteur ExoPhoenix Freeze (réservé)
 pub const VEC_EXOPHOENIX_FREEZE: u8 = 0xF1;
@@ -73,23 +67,21 @@ pub const VEC_EXOPHOENIX_TLB: u8 = 0xF3;
 /// Retourne `true` si `vector` appartient aux vecteurs réservés ExoPhoenix.
 #[inline(always)]
 pub const fn is_exophoenix_reserved_vector(vector: u8) -> bool {
-    vector == VEC_EXOPHOENIX_FREEZE
-        || vector == VEC_EXOPHOENIX_PMC
-        || vector == VEC_EXOPHOENIX_TLB
+    vector == VEC_EXOPHOENIX_FREEZE || vector == VEC_EXOPHOENIX_PMC || vector == VEC_EXOPHOENIX_TLB
 }
 
 /// Alias de compatibilité scheduler (utilisation historique)
-pub const VEC_IPI_RESCHEDULE:   u8  = VEC_EXOPHOENIX_FREEZE;
+pub const VEC_IPI_RESCHEDULE: u8 = VEC_EXOPHOENIX_FREEZE;
 /// Alias de compatibilité memory shootdown (utilisation historique)
 pub const VEC_IPI_TLB_SHOOTDOWN: u8 = VEC_EXOPHOENIX_PMC;
 /// Alias de compatibilité hotplug (utilisation historique)
-pub const VEC_IPI_CPU_HOTPLUG:  u8  = VEC_EXOPHOENIX_TLB;
+pub const VEC_IPI_CPU_HOTPLUG: u8 = VEC_EXOPHOENIX_TLB;
 
 /// Vecteur IPI panic broadcast
-pub const VEC_IPI_PANIC:        u8  = 0xFE;
+pub const VEC_IPI_PANIC: u8 = 0xFE;
 
 /// Vecteur spurious APIC (doit être 0xFF côté APIC)
-pub const VEC_SPURIOUS:         u8  = 0xFF;
+pub const VEC_SPURIOUS: u8 = 0xFF;
 
 // ── Descripteur IDT ───────────────────────────────────────────────────────────
 
@@ -101,7 +93,7 @@ impl IdtEntryFlags {
     /// Interrupt gate 64-bit (IF=0 à l'entrée — interruptions désactivées)
     pub const INTERRUPT_GATE: Self = Self(0x8E); // P=1, DPL=0, Type=0xE
     /// Trap gate 64-bit (IF inchangé — interruptions restent actives)
-    pub const TRAP_GATE:      Self = Self(0x8F); // P=1, DPL=0, Type=0xF
+    pub const TRAP_GATE: Self = Self(0x8F); // P=1, DPL=0, Type=0xF
     /// Trap gate accessible depuis Ring 3 (pour INT3, syscall soft)
     pub const TRAP_GATE_USER: Self = Self(0xEF); // P=1, DPL=3, Type=0xF
 }
@@ -110,25 +102,25 @@ impl IdtEntryFlags {
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct IdtEntry {
-    offset_lo:   u16,   // handler[15:0]
-    selector:    u16,   // code segment selector
-    ist:         u8,    // IST index (0 = pas d'IST, 1-7 = IST1-IST7)
-    flags:       u8,    // type + DPL + P
-    offset_mid:  u16,   // handler[31:16]
-    offset_hi:   u32,   // handler[63:32]
-    _reserved:   u32,
+    offset_lo: u16,  // handler[15:0]
+    selector: u16,   // code segment selector
+    ist: u8,         // IST index (0 = pas d'IST, 1-7 = IST1-IST7)
+    flags: u8,       // type + DPL + P
+    offset_mid: u16, // handler[31:16]
+    offset_hi: u32,  // handler[63:32]
+    _reserved: u32,
 }
 
 impl IdtEntry {
     pub const fn missing() -> Self {
         Self {
-            offset_lo:  0,
-            selector:   0,
-            ist:        0,
-            flags:      0, // P=0 → entrée non présente
+            offset_lo: 0,
+            selector: 0,
+            ist: 0,
+            flags: 0, // P=0 → entrée non présente
             offset_mid: 0,
-            offset_hi:  0,
-            _reserved:  0,
+            offset_hi: 0,
+            _reserved: 0,
         }
     }
 
@@ -140,21 +132,19 @@ impl IdtEntry {
     /// `flags`    : IdtEntryFlags
     pub fn new(handler: u64, selector: u16, ist: u8, flags: IdtEntryFlags) -> Self {
         Self {
-            offset_lo:  (handler & 0xFFFF) as u16,
+            offset_lo: (handler & 0xFFFF) as u16,
             selector,
-            ist:        ist & 0x7,
-            flags:      flags.0,
+            ist: ist & 0x7,
+            flags: flags.0,
             offset_mid: ((handler >> 16) & 0xFFFF) as u16,
-            offset_hi:  (handler >> 32) as u32,
-            _reserved:  0,
+            offset_hi: (handler >> 32) as u32,
+            _reserved: 0,
         }
     }
 
     /// Retourne l'adresse complète du handler
     pub fn handler_addr(&self) -> u64 {
-        (self.offset_lo  as u64)
-            | ((self.offset_mid as u64) << 16)
-            | ((self.offset_hi  as u64) << 32)
+        (self.offset_lo as u64) | ((self.offset_mid as u64) << 16) | ((self.offset_hi as u64) << 32)
     }
 
     /// Retourne `true` si l'entrée est présente (P=1)
@@ -176,7 +166,7 @@ pub struct InterruptDescriptorTable {
 #[repr(C, packed)]
 struct IdtRegister {
     limit: u16,
-    base:  u64,
+    base: u64,
 }
 
 impl InterruptDescriptorTable {
@@ -266,55 +256,265 @@ pub fn init_idt() {
     let idt = unsafe { &mut IDT };
 
     // ── Exceptions (vecteurs 0–31) ────────────────────────────────────────────
-    idt.set_handler(EXC_DIVIDE_ERROR,     exc_divide_error_handler as *const () as u64,     0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_DEBUG,            exc_debug_handler as *const () as u64,            IST_DEBUG as u8 + 1, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_NMI,             exc_nmi_handler as *const () as u64,              IST_NMI as u8 + 1,   IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(EXC_BREAKPOINT,       exc_breakpoint_handler as *const () as u64,       0, IdtEntryFlags::TRAP_GATE_USER);
-    idt.set_handler(EXC_OVERFLOW,         exc_overflow_handler as *const () as u64,         0, IdtEntryFlags::TRAP_GATE_USER);
-    idt.set_handler(EXC_BOUND_RANGE,      exc_bound_range_handler as *const () as u64,      0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_INVALID_OPCODE,   exc_invalid_opcode_handler as *const () as u64,   0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_DEVICE_NOT_AVAIL, exc_device_not_avail_handler as *const () as u64, 0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_DOUBLE_FAULT,     exc_double_fault_handler as *const () as u64,     IST_DOUBLE_FAULT as u8 + 1, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_INVALID_TSS,      exc_invalid_tss_handler as *const () as u64,      0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_SEGMENT_NOT_PRES, exc_segment_not_present_handler as *const () as u64, 0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_STACK_FAULT,      exc_stack_fault_handler as *const () as u64,      0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_GENERAL_PROT,     exc_general_protection_handler as *const () as u64, 0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_PAGE_FAULT,       exc_page_fault_handler as *const () as u64,       IST_PAGE_FAULT as u8 + 1, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_X87_FP,           exc_x87_fp_handler as *const () as u64,           0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_ALIGNMENT_CHECK,  exc_alignment_check_handler as *const () as u64,  0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_MACHINE_CHECK,    exc_machine_check_handler as *const () as u64,    IST_MACHINE_CHECK as u8 + 1, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_SIMD_FP,          exc_simd_fp_handler as *const () as u64,          0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_VIRT,             exc_virtualization_handler as *const () as u64,   0, IdtEntryFlags::TRAP_GATE);
-    idt.set_handler(EXC_CTRL_PROT,        exc_ctrl_protection_handler as *const () as u64,  0, IdtEntryFlags::TRAP_GATE);
+    idt.set_handler(
+        EXC_DIVIDE_ERROR,
+        exc_divide_error_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_DEBUG,
+        exc_debug_handler as *const () as u64,
+        IST_DEBUG as u8 + 1,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_NMI,
+        exc_nmi_handler as *const () as u64,
+        IST_NMI as u8 + 1,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        EXC_BREAKPOINT,
+        exc_breakpoint_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE_USER,
+    );
+    idt.set_handler(
+        EXC_OVERFLOW,
+        exc_overflow_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE_USER,
+    );
+    idt.set_handler(
+        EXC_BOUND_RANGE,
+        exc_bound_range_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_INVALID_OPCODE,
+        exc_invalid_opcode_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_DEVICE_NOT_AVAIL,
+        exc_device_not_avail_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_DOUBLE_FAULT,
+        exc_double_fault_handler as *const () as u64,
+        IST_DOUBLE_FAULT as u8 + 1,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_INVALID_TSS,
+        exc_invalid_tss_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_SEGMENT_NOT_PRES,
+        exc_segment_not_present_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_STACK_FAULT,
+        exc_stack_fault_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_GENERAL_PROT,
+        exc_general_protection_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_PAGE_FAULT,
+        exc_page_fault_handler as *const () as u64,
+        IST_PAGE_FAULT as u8 + 1,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_X87_FP,
+        exc_x87_fp_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_ALIGNMENT_CHECK,
+        exc_alignment_check_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_MACHINE_CHECK,
+        exc_machine_check_handler as *const () as u64,
+        IST_MACHINE_CHECK as u8 + 1,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_SIMD_FP,
+        exc_simd_fp_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_VIRT,
+        exc_virtualization_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
+    idt.set_handler(
+        EXC_CTRL_PROT,
+        exc_ctrl_protection_handler as *const () as u64,
+        0,
+        IdtEntryFlags::TRAP_GATE,
+    );
 
     // ── IRQ hardware (vecteurs 32+) ───────────────────────────────────────────
-    idt.set_handler(IRQ_BASE,     irq_timer_handler as *const () as u64,    0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 1,  irq_1_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 2,  irq_2_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 3,  irq_3_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 4,  irq_4_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 5,  irq_5_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 6,  irq_6_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 7,  irq_7_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 8,  irq_8_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 9,  irq_9_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 10, irq_10_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 11, irq_11_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 12, irq_12_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 13, irq_13_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 14, irq_14_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(IRQ_BASE + 15, irq_15_handler as *const () as u64,       0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(
+        IRQ_BASE,
+        irq_timer_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 1,
+        irq_1_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 2,
+        irq_2_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 3,
+        irq_3_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 4,
+        irq_4_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 5,
+        irq_5_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 6,
+        irq_6_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 7,
+        irq_7_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 8,
+        irq_8_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 9,
+        irq_9_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 10,
+        irq_10_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 11,
+        irq_11_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 12,
+        irq_12_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 13,
+        irq_13_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 14,
+        irq_14_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        IRQ_BASE + 15,
+        irq_15_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
 
     // ── IPIs ──────────────────────────────────────────────────────────────────
-    idt.set_handler(VEC_IPI_WAKEUP,           ipi_wakeup_handler as *const () as u64,        0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(VEC_EXOPHOENIX_FREEZE,    ipi_reschedule_handler as *const () as u64,    0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(VEC_EXOPHOENIX_PMC,       ipi_tlb_shootdown_handler as *const () as u64, 0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(VEC_EXOPHOENIX_TLB,       ipi_cpu_hotplug_handler as *const () as u64,   0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_handler(
+        VEC_IPI_WAKEUP,
+        ipi_wakeup_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        VEC_EXOPHOENIX_FREEZE,
+        ipi_reschedule_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        VEC_EXOPHOENIX_PMC,
+        ipi_tlb_shootdown_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        VEC_EXOPHOENIX_TLB,
+        ipi_cpu_hotplug_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
     idt.set_stack_index(VEC_EXOPHOENIX_FREEZE, IST_EXOPHOENIX_IPI as u8 + 1);
-    idt.set_stack_index(VEC_EXOPHOENIX_PMC,    IST_EXOPHOENIX_IPI as u8 + 1);
-    idt.set_stack_index(VEC_EXOPHOENIX_TLB,    IST_EXOPHOENIX_IPI as u8 + 1);
-    idt.set_handler(VEC_IPI_PANIC,         ipi_panic_handler as *const () as u64,         0, IdtEntryFlags::INTERRUPT_GATE);
-    idt.set_handler(VEC_SPURIOUS,          irq_spurious_handler as *const () as u64,      0, IdtEntryFlags::INTERRUPT_GATE);
+    idt.set_stack_index(VEC_EXOPHOENIX_PMC, IST_EXOPHOENIX_IPI as u8 + 1);
+    idt.set_stack_index(VEC_EXOPHOENIX_TLB, IST_EXOPHOENIX_IPI as u8 + 1);
+    idt.set_handler(
+        VEC_IPI_PANIC,
+        ipi_panic_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        VEC_SPURIOUS,
+        irq_spurious_handler as *const () as u64,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
 
     IDT_INITIALIZED.store(true, Ordering::Release);
 }
@@ -326,7 +526,7 @@ pub fn load_idt() {
     let idtr = IdtRegister {
         limit: (core::mem::size_of::<InterruptDescriptorTable>() - 1) as u16,
         // SAFETY: IDT est une static — son adresse est stable
-        base:  unsafe { IDT.entries.as_ptr() as u64 },
+        base: unsafe { IDT.entries.as_ptr() as u64 },
     };
 
     // SAFETY: idtr pointe vers une IDT valide avec tous les handlers présents
@@ -349,7 +549,11 @@ pub fn idt_ready() -> bool {
 pub fn get_handler_addr(vector: u8) -> Option<u64> {
     // SAFETY: IDT read-only après init
     let entry = unsafe { &IDT.entries[vector as usize] };
-    if entry.is_present() { Some(entry.handler_addr()) } else { None }
+    if entry.is_present() {
+        Some(entry.handler_addr())
+    } else {
+        None
+    }
 }
 
 #[inline(always)]

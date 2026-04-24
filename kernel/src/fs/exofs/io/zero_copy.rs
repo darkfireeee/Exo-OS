@@ -12,35 +12,48 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─── ZeroCopySlice ────────────────────────────────────────────────────────────
 
 /// Vue immuable et positionnée sur une tranche `&[u8]`.
 pub struct ZeroCopySlice<'a> {
-    data:   &'a [u8],
+    data: &'a [u8],
     offset: usize,
 }
 
 impl<'a> ZeroCopySlice<'a> {
-    pub fn new(data: &'a [u8]) -> Self { Self { data, offset: 0 } }
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data, offset: 0 }
+    }
 
     pub fn at_offset(data: &'a [u8], offset: usize) -> ExofsResult<Self> {
-        if offset > data.len() { return Err(ExofsError::OffsetOverflow); }
+        if offset > data.len() {
+            return Err(ExofsError::OffsetOverflow);
+        }
         Ok(Self { data, offset })
     }
 
-    pub fn position(&self) -> usize { self.offset }
-    pub fn remaining(&self) -> usize { self.data.len().saturating_sub(self.offset) }
-    pub fn total_len(&self) -> usize { self.data.len() }
-    pub fn is_exhausted(&self) -> bool { self.offset >= self.data.len() }
+    pub fn position(&self) -> usize {
+        self.offset
+    }
+    pub fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.offset)
+    }
+    pub fn total_len(&self) -> usize {
+        self.data.len()
+    }
+    pub fn is_exhausted(&self) -> bool {
+        self.offset >= self.data.len()
+    }
 
     pub fn peek_slice(&self, n: usize) -> ExofsResult<&'a [u8]> {
         let end = self.offset.saturating_add(n);
-        if end > self.data.len() { return Err(ExofsError::OffsetOverflow); }
+        if end > self.data.len() {
+            return Err(ExofsError::OffsetOverflow);
+        }
         Ok(&self.data[self.offset..end])
     }
 
@@ -48,7 +61,9 @@ impl<'a> ZeroCopySlice<'a> {
     pub fn read_into(&mut self, dst: &mut [u8]) -> ExofsResult<usize> {
         let n = dst.len();
         let to_copy = n.min(self.remaining());
-        if to_copy == 0 { return Ok(0); }
+        if to_copy == 0 {
+            return Ok(0);
+        }
         let src = &self.data[self.offset..self.offset.saturating_add(to_copy)];
         // RECUR-01 : while
         let mut i = 0usize;
@@ -62,13 +77,17 @@ impl<'a> ZeroCopySlice<'a> {
 
     pub fn advance(&mut self, n: usize) -> ExofsResult<()> {
         let new_off = self.offset.saturating_add(n);
-        if new_off > self.data.len() { return Err(ExofsError::OffsetOverflow); }
+        if new_off > self.data.len() {
+            return Err(ExofsError::OffsetOverflow);
+        }
         self.offset = new_off;
         Ok(())
     }
 
     pub fn as_remaining_slice(&self) -> &'a [u8] {
-        if self.offset >= self.data.len() { return &[]; }
+        if self.offset >= self.data.len() {
+            return &[];
+        }
         &self.data[self.offset..]
     }
 
@@ -91,34 +110,54 @@ impl<'a> ZeroCopySlice<'a> {
 
 /// Sous-vue (fenêtre) sur une `ZeroCopySlice` — aucune copie.
 pub struct ZeroCopyWindow<'a> {
-    data:  &'a [u8],
+    data: &'a [u8],
     start: usize,
-    end:   usize,
+    end: usize,
 }
 
 impl<'a> ZeroCopyWindow<'a> {
     pub fn new(slice: &ZeroCopySlice<'a>, start: usize, len: usize) -> ExofsResult<Self> {
         let end = start.saturating_add(len);
-        if end > slice.data.len() { return Err(ExofsError::OffsetOverflow); }
-        Ok(Self { data: slice.data, start, end })
+        if end > slice.data.len() {
+            return Err(ExofsError::OffsetOverflow);
+        }
+        Ok(Self {
+            data: slice.data,
+            start,
+            end,
+        })
     }
 
-    pub fn as_slice(&self) -> &'a [u8] { &self.data[self.start..self.end] }
-    pub fn len(&self) -> usize { self.end.saturating_sub(self.start) }
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn as_slice(&self) -> &'a [u8] {
+        &self.data[self.start..self.end]
+    }
+    pub fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     pub fn read_at(&self, off: usize, n: usize) -> ExofsResult<&'a [u8]> {
         let abs_start = self.start.saturating_add(off);
-        let abs_end   = abs_start.saturating_add(n);
-        if abs_end > self.end { return Err(ExofsError::OffsetOverflow); }
+        let abs_end = abs_start.saturating_add(n);
+        if abs_end > self.end {
+            return Err(ExofsError::OffsetOverflow);
+        }
         Ok(&self.data[abs_start..abs_end])
     }
 
     pub fn sub_window(&self, off: usize, len: usize) -> ExofsResult<ZeroCopyWindow<'a>> {
         let start = self.start.saturating_add(off);
-        let end   = start.saturating_add(len);
-        if end > self.end { return Err(ExofsError::OffsetOverflow); }
-        Ok(ZeroCopyWindow { data: self.data, start, end })
+        let end = start.saturating_add(len);
+        if end > self.end {
+            return Err(ExofsError::OffsetOverflow);
+        }
+        Ok(ZeroCopyWindow {
+            data: self.data,
+            start,
+            end,
+        })
     }
 
     /// Copie la fenêtre dans un Vec (OOM-02).
@@ -145,15 +184,20 @@ pub struct ZeroCopyReader<'a> {
 
 impl<'a> ZeroCopyReader<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        Self { slice: ZeroCopySlice::new(data), stats: ZeroCopyStats::new() }
+        Self {
+            slice: ZeroCopySlice::new(data),
+            stats: ZeroCopyStats::new(),
+        }
     }
 
     /// Lit exactement `dst.len()` bytes.
     pub fn read_exact(&mut self, dst: &mut [u8]) -> ExofsResult<()> {
-        if self.slice.remaining() < dst.len() { return Err(ExofsError::IoError); }
+        if self.slice.remaining() < dst.len() {
+            return Err(ExofsError::IoError);
+        }
         let n = self.slice.read_into(dst)?;
         self.stats.bytes_read = self.stats.bytes_read.saturating_add(n as u64);
-        self.stats.read_ops   = self.stats.read_ops.saturating_add(1);
+        self.stats.read_ops = self.stats.read_ops.saturating_add(1);
         Ok(())
     }
 
@@ -161,16 +205,28 @@ impl<'a> ZeroCopyReader<'a> {
     pub fn read_partial(&mut self, dst: &mut [u8]) -> ExofsResult<usize> {
         let n = self.slice.read_into(dst)?;
         self.stats.bytes_read = self.stats.bytes_read.saturating_add(n as u64);
-        self.stats.read_ops   = self.stats.read_ops.saturating_add(1);
+        self.stats.read_ops = self.stats.read_ops.saturating_add(1);
         Ok(n)
     }
 
-    pub fn skip(&mut self, n: usize) -> ExofsResult<()> { self.slice.advance(n) }
-    pub fn position(&self) -> usize { self.slice.position() }
-    pub fn remaining(&self) -> usize { self.slice.remaining() }
-    pub fn stats(&self) -> &ZeroCopyStats { &self.stats }
-    pub fn reset_stats(&mut self) { self.stats = ZeroCopyStats::new(); }
-    pub fn peek(&self, n: usize) -> ExofsResult<&'a [u8]> { self.slice.peek_slice(n) }
+    pub fn skip(&mut self, n: usize) -> ExofsResult<()> {
+        self.slice.advance(n)
+    }
+    pub fn position(&self) -> usize {
+        self.slice.position()
+    }
+    pub fn remaining(&self) -> usize {
+        self.slice.remaining()
+    }
+    pub fn stats(&self) -> &ZeroCopyStats {
+        &self.stats
+    }
+    pub fn reset_stats(&mut self) {
+        self.stats = ZeroCopyStats::new();
+    }
+    pub fn peek(&self, n: usize) -> ExofsResult<&'a [u8]> {
+        self.slice.peek_slice(n)
+    }
 
     /// Lit une valeur u8.
     pub fn read_u8(&mut self) -> ExofsResult<u8> {
@@ -205,22 +261,32 @@ impl<'a> ZeroCopyReader<'a> {
 
 /// Écrivain séquentiel sur une tranche mutable (aucune allocation).
 pub struct ZeroCopyWriter<'a> {
-    buf:    &'a mut [u8],
+    buf: &'a mut [u8],
     offset: usize,
-    stats:  ZeroCopyStats,
+    stats: ZeroCopyStats,
 }
 
 impl<'a> ZeroCopyWriter<'a> {
     pub fn new(buf: &'a mut [u8]) -> Self {
-        Self { buf, offset: 0, stats: ZeroCopyStats::new() }
+        Self {
+            buf,
+            offset: 0,
+            stats: ZeroCopyStats::new(),
+        }
     }
 
-    pub fn remaining(&self) -> usize { self.buf.len().saturating_sub(self.offset) }
-    pub fn position(&self) -> usize { self.offset }
+    pub fn remaining(&self) -> usize {
+        self.buf.len().saturating_sub(self.offset)
+    }
+    pub fn position(&self) -> usize {
+        self.offset
+    }
 
     pub fn write_exact(&mut self, src: &[u8]) -> ExofsResult<()> {
         let n = src.len();
-        if self.remaining() < n { return Err(ExofsError::NoSpace); }
+        if self.remaining() < n {
+            return Err(ExofsError::NoSpace);
+        }
         let start = self.offset;
         // RECUR-01 : while
         let mut i = 0usize;
@@ -230,12 +296,14 @@ impl<'a> ZeroCopyWriter<'a> {
         }
         self.offset = self.offset.saturating_add(n);
         self.stats.bytes_written = self.stats.bytes_written.saturating_add(n as u64);
-        self.stats.write_ops     = self.stats.write_ops.saturating_add(1);
+        self.stats.write_ops = self.stats.write_ops.saturating_add(1);
         Ok(())
     }
 
     pub fn write_zeros(&mut self, n: usize) -> ExofsResult<()> {
-        if self.remaining() < n { return Err(ExofsError::NoSpace); }
+        if self.remaining() < n {
+            return Err(ExofsError::NoSpace);
+        }
         let start = self.offset;
         let mut i = 0usize;
         while i < n {
@@ -263,26 +331,36 @@ impl<'a> ZeroCopyWriter<'a> {
         self.write_exact(&v.to_be_bytes())
     }
 
-    pub fn written_slice(&self) -> &[u8] { &self.buf[..self.offset] }
-    pub fn stats(&self) -> &ZeroCopyStats { &self.stats }
+    pub fn written_slice(&self) -> &[u8] {
+        &self.buf[..self.offset]
+    }
+    pub fn stats(&self) -> &ZeroCopyStats {
+        &self.stats
+    }
 }
 
 // ─── ZeroCopyPipe ─────────────────────────────────────────────────────────────
 
 /// Chaîne logique de deux tranches de lecture (sans allocation).
 pub struct ZeroCopyPipe<'a> {
-    first:  ZeroCopySlice<'a>,
+    first: ZeroCopySlice<'a>,
     second: ZeroCopySlice<'a>,
-    stats:  ZeroCopyStats,
+    stats: ZeroCopyStats,
 }
 
 impl<'a> ZeroCopyPipe<'a> {
     pub fn new(first: &'a [u8], second: &'a [u8]) -> Self {
-        Self { first: ZeroCopySlice::new(first), second: ZeroCopySlice::new(second), stats: ZeroCopyStats::new() }
+        Self {
+            first: ZeroCopySlice::new(first),
+            second: ZeroCopySlice::new(second),
+            stats: ZeroCopyStats::new(),
+        }
     }
 
     pub fn remaining(&self) -> usize {
-        self.first.remaining().saturating_add(self.second.remaining())
+        self.first
+            .remaining()
+            .saturating_add(self.second.remaining())
     }
 
     /// Lit jusqu'à `dst.len()` bytes en consommant first puis second.
@@ -297,31 +375,40 @@ impl<'a> ZeroCopyPipe<'a> {
             total = total.saturating_add(n);
         }
         self.stats.bytes_read = self.stats.bytes_read.saturating_add(total as u64);
-        self.stats.read_ops   = self.stats.read_ops.saturating_add(1);
+        self.stats.read_ops = self.stats.read_ops.saturating_add(1);
         Ok(total)
     }
 
-    pub fn stats(&self) -> &ZeroCopyStats { &self.stats }
+    pub fn stats(&self) -> &ZeroCopyStats {
+        &self.stats
+    }
 }
 
 // ─── ZeroCopyStats ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ZeroCopyStats {
-    pub bytes_read:    u64,
+    pub bytes_read: u64,
     pub bytes_written: u64,
-    pub read_ops:      u64,
-    pub write_ops:     u64,
+    pub read_ops: u64,
+    pub write_ops: u64,
 }
 
 impl ZeroCopyStats {
-    pub fn new() -> Self { Self::default() }
-    pub fn reset(&mut self) { *self = Self::new(); }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
 
     /// Ratio read/(read+write) * 100 (ARITH-02: checked_div).
     pub fn read_ratio_pct(&self) -> u64 {
         let total = self.read_ops.saturating_add(self.write_ops);
-        self.read_ops.saturating_mul(100).checked_div(total).unwrap_or(0)
+        self.read_ops
+            .saturating_mul(100)
+            .checked_div(total)
+            .unwrap_or(0)
     }
 }
 
@@ -413,7 +500,10 @@ mod tests {
         let mut buf = [0u8; 8];
         let mut w = ZeroCopyWriter::new(&mut buf);
         w.write_u32_be(0xCAFEBABE).expect("ok");
-        assert_eq!(u32::from_be_bytes(buf[..4].try_into().expect("4")), 0xCAFEBABE);
+        assert_eq!(
+            u32::from_be_bytes(buf[..4].try_into().expect("4")),
+            0xCAFEBABE
+        );
     }
 
     #[test]
@@ -445,7 +535,7 @@ mod tests {
     #[test]
     fn test_stats_ratio() {
         let mut s = ZeroCopyStats::new();
-        s.read_ops  = 3;
+        s.read_ops = 3;
         s.write_ops = 1;
         assert_eq!(s.read_ratio_pct(), 75);
     }

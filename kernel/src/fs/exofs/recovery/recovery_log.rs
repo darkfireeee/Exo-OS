@@ -9,11 +9,10 @@
 //! - **ARITH-02** : `checked_add` / `wrapping_add` pour les index.
 //! - **ONDISK-03** : pas d'`AtomicU64` dans les structs `repr(C)`.
 
-
 extern crate alloc;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ── Constantes ───────────────────────────────────────────────────────────────
 
@@ -22,7 +21,10 @@ pub const RECOVERY_LOG_CAPACITY: usize = 2048;
 const CAPACITY_MASK: usize = RECOVERY_LOG_CAPACITY - 1;
 
 // Vérification statique que la capacité est bien une puissance de 2.
-const _: () = assert!(RECOVERY_LOG_CAPACITY.is_power_of_two(), "RECOVERY_LOG_CAPACITY doit être une puissance de 2");
+const _: () = assert!(
+    RECOVERY_LOG_CAPACITY.is_power_of_two(),
+    "RECOVERY_LOG_CAPACITY doit être une puissance de 2"
+);
 
 // ── Singleton global ──────────────────────────────────────────────────────────
 
@@ -36,35 +38,35 @@ pub static RECOVERY_LOG: RecoveryLog = RecoveryLog::new_const();
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecoveryLogCategory {
     /// Démarrage de la séquence de boot recovery.
-    BootStart      = 0x01,
+    BootStart = 0x01,
     /// Sélection du meilleur slot A/B/C.
-    SlotSelected   = 0x02,
+    SlotSelected = 0x02,
     /// Début du replay d'epoch.
-    ReplayStart    = 0x03,
+    ReplayStart = 0x03,
     /// Fin du replay d'epoch.
-    ReplayDone     = 0x04,
+    ReplayDone = 0x04,
     /// Séquence de boot recovery terminée.
-    BootDone       = 0x05,
+    BootDone = 0x05,
     /// Lancement d'un fsck.
-    FsckStarted    = 0x06,
+    FsckStarted = 0x06,
     /// Fin d'un fsck (succès ou partiel).
-    FsckDone       = 0x07,
+    FsckDone = 0x07,
     /// Une action de réparation a été appliquée.
-    RepairApplied  = 0x08,
+    RepairApplied = 0x08,
     /// Début d'une phase fsck numérotée.
-    PhaseStart     = 0x09,
+    PhaseStart = 0x09,
     /// Fin d'une phase fsck numérotée.
-    PhaseDone      = 0x0A,
+    PhaseDone = 0x0A,
     /// Checkpoint enregistré.
     CheckpointSaved = 0x0B,
     /// Erreur détectée (non fatale).
-    ErrorDetected  = 0x0C,
+    ErrorDetected = 0x0C,
     /// Avertissement (état dégradé mais récupérable).
-    Warning        = 0x0D,
+    Warning = 0x0D,
     /// Entrée d'audit externe intégrée.
     AuditIntegration = 0x0E,
     /// Catégorie personnalisée / extension future.
-    Custom         = 0xFF,
+    Custom = 0xFF,
 }
 
 impl RecoveryLogCategory {
@@ -85,7 +87,7 @@ impl RecoveryLogCategory {
             0x0C => Self::ErrorDetected,
             0x0D => Self::Warning,
             0x0E => Self::AuditIntegration,
-            _    => Self::Custom,
+            _ => Self::Custom,
         }
     }
 
@@ -110,29 +112,29 @@ impl RecoveryLogCategory {
 #[derive(Clone, Copy, Debug)]
 pub struct RecoveryLogEntry {
     /// Horodatage TSC (CPU ticks) de l'événement.
-    pub tick:     u64,
+    pub tick: u64,
     /// Catégorie de l'événement.
     pub category: RecoveryLogCategory,
     /// Sous-code numérique (interprétation dépend de `category`).
-    pub code:     u8,
+    pub code: u8,
     /// Rembourrage explicite pour alignement.
-    pub _pad:     [u8; 6],
+    pub _pad: [u8; 6],
     /// Donnée u64 associée (slot_id, epoch_id, count, etc.).
-    pub data:     u64,
+    pub data: u64,
     /// Données optionnelles complémentaires (ex. blob_id partiel).
-    pub extra:    [u8; 8],
+    pub extra: [u8; 8],
 }
 
 impl RecoveryLogEntry {
     /// Entrée nulle (valeur d'initialisation dans le ring buffer).
     pub const fn zeroed() -> Self {
         Self {
-            tick:     0,
+            tick: 0,
             category: RecoveryLogCategory::Custom,
-            code:     0,
-            _pad:     [0; 6],
-            data:     0,
-            extra:    [0; 8],
+            code: 0,
+            _pad: [0; 6],
+            data: 0,
+            extra: [0; 8],
         }
     }
 
@@ -141,8 +143,8 @@ impl RecoveryLogEntry {
         Self {
             tick,
             category,
-            code:  0,
-            _pad:  [0; 6],
+            code: 0,
+            _pad: [0; 6],
             data,
             extra: [0; 8],
         }
@@ -150,13 +152,20 @@ impl RecoveryLogEntry {
 
     /// Construit une entrée avec sous-code et extra.
     pub fn with_extra(
-        tick:     u64,
+        tick: u64,
         category: RecoveryLogCategory,
-        code:     u8,
-        data:     u64,
-        extra:    [u8; 8],
+        code: u8,
+        data: u64,
+        extra: [u8; 8],
     ) -> Self {
-        Self { tick, category, code, _pad: [0; 6], data, extra }
+        Self {
+            tick,
+            category,
+            code,
+            _pad: [0; 6],
+            data,
+            extra,
+        }
     }
 }
 
@@ -196,11 +205,11 @@ unsafe impl Sync for LogSlot {}
 /// - Lecture diagnostique sans verrouillage.
 pub struct RecoveryLog {
     /// Tableau statique de slots.
-    ring:       [LogSlot; RECOVERY_LOG_CAPACITY],
+    ring: [LogSlot; RECOVERY_LOG_CAPACITY],
     /// Index d'écriture qui avance monotoniquement.
-    head:       AtomicU64,
+    head: AtomicU64,
     /// Compteur total d'entrées écrites (saturations incluses).
-    total:      AtomicU64,
+    total: AtomicU64,
     /// Compteur d'entrées de catégorie `ErrorDetected`.
     error_count: AtomicUsize,
     /// Compteur d'entrées notables (erreurs + avertissements).
@@ -213,10 +222,10 @@ impl RecoveryLog {
         // Initialise le tableau de slots à zéro.
         const SLOT: LogSlot = LogSlot::new();
         Self {
-            ring:          [SLOT; RECOVERY_LOG_CAPACITY],
-            head:          AtomicU64::new(0),
-            total:         AtomicU64::new(0),
-            error_count:   AtomicUsize::new(0),
+            ring: [SLOT; RECOVERY_LOG_CAPACITY],
+            head: AtomicU64::new(0),
+            total: AtomicU64::new(0),
+            error_count: AtomicUsize::new(0),
             notable_count: AtomicUsize::new(0),
         }
     }
@@ -232,7 +241,9 @@ impl RecoveryLog {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize & CAPACITY_MASK;
 
         // SAFETY: idx est dans [0, CAPACITY_MASK] par masquage.
-        unsafe { self.ring[idx].write(entry); }
+        unsafe {
+            self.ring[idx].write(entry);
+        }
 
         self.total.fetch_add(1, Ordering::Relaxed);
 
@@ -306,17 +317,12 @@ impl RecoveryLog {
     /// Raccourci : enregistre une réparation appliquée.
     pub fn log_repair_applied(&self, repair_code: u32, target_id: u64) {
         let tick = crate::arch::time::read_ticks();
-        let entry = RecoveryLogEntry::with_extra(
-            tick,
-            RecoveryLogCategory::RepairApplied,
-            0,
-            target_id,
-            {
+        let entry =
+            RecoveryLogEntry::with_extra(tick, RecoveryLogCategory::RepairApplied, 0, target_id, {
                 let mut e = [0u8; 8];
                 e[0..4].copy_from_slice(&repair_code.to_le_bytes());
                 e
-            },
-        );
+            });
         self.push(entry);
     }
 
@@ -336,13 +342,8 @@ impl RecoveryLog {
     /// Raccourci : enregistre un avertissement.
     pub fn log_warning(&self, code: u8, context: u64) {
         let tick = crate::arch::time::read_ticks();
-        let entry = RecoveryLogEntry::with_extra(
-            tick,
-            RecoveryLogCategory::Warning,
-            code,
-            context,
-            [0; 8],
-        );
+        let entry =
+            RecoveryLogEntry::with_extra(tick, RecoveryLogCategory::Warning, code, context, [0; 8]);
         self.push(entry);
     }
 
@@ -404,10 +405,7 @@ impl RecoveryLog {
 
         for i in 0..n {
             // Index du slot : on remonte depuis head - n + i.
-            let slot_idx = head
-                .wrapping_sub(n)
-                .wrapping_add(i)
-                & CAPACITY_MASK;
+            let slot_idx = head.wrapping_sub(n).wrapping_add(i) & CAPACITY_MASK;
             // SAFETY: slot_idx est dans [0, CAPACITY_MASK].
             let entry = unsafe { self.ring[slot_idx].read() };
             out.push(entry);
@@ -476,10 +474,10 @@ impl RecoveryLog {
     /// Retourne un snapshot diagnostique du journal.
     pub fn diagnostic(&self) -> RecoveryLogDiagnostic {
         RecoveryLogDiagnostic {
-            capacity:      RECOVERY_LOG_CAPACITY,
+            capacity: RECOVERY_LOG_CAPACITY,
             total_written: self.total_written(),
-            current_len:   self.len(),
-            error_count:   self.error_count(),
+            current_len: self.len(),
+            error_count: self.error_count(),
             notable_count: self.notable_count(),
         }
     }
@@ -491,13 +489,13 @@ impl RecoveryLog {
 #[derive(Clone, Copy, Debug)]
 pub struct RecoveryLogDiagnostic {
     /// Capacité maximale du ring buffer.
-    pub capacity:      usize,
+    pub capacity: usize,
     /// Nombre total d'entrées écrites (peut dépasser `capacity`).
     pub total_written: u64,
     /// Nombre d'entrées actuellement accessibles dans le ring.
-    pub current_len:   usize,
+    pub current_len: usize,
     /// Nombre d'entrées de catégorie `ErrorDetected`.
-    pub error_count:   usize,
+    pub error_count: usize,
     /// Nombre d'entrées notables (erreurs + warnings).
     pub notable_count: usize,
 }
@@ -524,17 +522,17 @@ impl RecoveryLog {
     /// Compatibilité legacy : traduit `RecoveryEvent` en entrée structurée.
     pub fn log_event(&self, event: RecoveryEvent) {
         match event {
-            RecoveryEvent::BootStart           => self.log_boot_start(),
-            RecoveryEvent::SlotSelected(s)     => self.log_slot_selected(s.0),
-            RecoveryEvent::ReplayStart         => self.log(RecoveryLogCategory::ReplayStart, 0),
-            RecoveryEvent::ReplayDone          => self.log(RecoveryLogCategory::ReplayDone, 0),
-            RecoveryEvent::BootDone            => self.log_boot_done(),
-            RecoveryEvent::FsckStarted         => self.log_fsck_started(),
-            RecoveryEvent::FsckDone            => self.log_fsck_done(0),
-            RecoveryEvent::RepairApplied(n)    => self.log_repair_applied(n, 0),
-            RecoveryEvent::RecoveryModuleLoaded   => self.log(RecoveryLogCategory::BootStart, 0),
+            RecoveryEvent::BootStart => self.log_boot_start(),
+            RecoveryEvent::SlotSelected(s) => self.log_slot_selected(s.0),
+            RecoveryEvent::ReplayStart => self.log(RecoveryLogCategory::ReplayStart, 0),
+            RecoveryEvent::ReplayDone => self.log(RecoveryLogCategory::ReplayDone, 0),
+            RecoveryEvent::BootDone => self.log_boot_done(),
+            RecoveryEvent::FsckStarted => self.log_fsck_started(),
+            RecoveryEvent::FsckDone => self.log_fsck_done(0),
+            RecoveryEvent::RepairApplied(n) => self.log_repair_applied(n, 0),
+            RecoveryEvent::RecoveryModuleLoaded => self.log(RecoveryLogCategory::BootStart, 0),
             RecoveryEvent::RecoveryModuleUnloaded => self.log(RecoveryLogCategory::BootDone, 0),
-            RecoveryEvent::RepairStarted          => self.log(RecoveryLogCategory::RepairApplied, 0),
+            RecoveryEvent::RepairStarted => self.log(RecoveryLogCategory::RepairApplied, 0),
         }
     }
 }
@@ -554,7 +552,10 @@ mod tests {
         assert_eq!(log.total_written(), 1);
         let entries = log.read_recent(10).unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].category as u8, RecoveryLogCategory::BootStart as u8);
+        assert_eq!(
+            entries[0].category as u8,
+            RecoveryLogCategory::BootStart as u8
+        );
         assert_eq!(entries[0].data, 42);
     }
 

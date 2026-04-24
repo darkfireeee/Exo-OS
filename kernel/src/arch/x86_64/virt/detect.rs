@@ -9,21 +9,20 @@
 //!   - "XenVMMXenVMM" = Xen
 //!   - "VBoxVBoxVBox" = VirtualBox
 
-
 use core::sync::atomic::{AtomicU8, Ordering};
 
 /// Types d'hyperviseurs reconnus
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum HypervisorType {
-    None      = 0,
-    Kvm       = 1,
-    Vmware    = 2,
-    HyperV    = 3,
-    Xen       = 4,
-    Bhyve     = 5,
-    VirtualBox= 6,
-    Unknown   = 0xFF,
+    None = 0,
+    Kvm = 1,
+    Vmware = 2,
+    HyperV = 3,
+    Xen = 4,
+    Bhyve = 5,
+    VirtualBox = 6,
+    Unknown = 0xFF,
 }
 
 static HYPERVISOR: AtomicU8 = AtomicU8::new(0);
@@ -31,14 +30,14 @@ static HYPERVISOR: AtomicU8 = AtomicU8::new(0);
 /// Retourne le type d'hyperviseur détecté
 pub fn hypervisor_type() -> HypervisorType {
     match HYPERVISOR.load(Ordering::Relaxed) {
-        0   => HypervisorType::None,
-        1   => HypervisorType::Kvm,
-        2   => HypervisorType::Vmware,
-        3   => HypervisorType::HyperV,
-        4   => HypervisorType::Xen,
-        5   => HypervisorType::Bhyve,
-        6   => HypervisorType::VirtualBox,
-        _   => HypervisorType::Unknown,
+        0 => HypervisorType::None,
+        1 => HypervisorType::Kvm,
+        2 => HypervisorType::Vmware,
+        3 => HypervisorType::HyperV,
+        4 => HypervisorType::Xen,
+        5 => HypervisorType::Bhyve,
+        6 => HypervisorType::VirtualBox,
+        _ => HypervisorType::Unknown,
     }
 }
 
@@ -62,9 +61,18 @@ pub fn detect_hypervisor() -> HypervisorType {
     let (_, ebx, ecx, edx) = cpuid(0x4000_0000, 0);
 
     let sig = [
-        (ebx & 0xFF) as u8, ((ebx >> 8) & 0xFF) as u8, ((ebx >> 16) & 0xFF) as u8, ((ebx >> 24) & 0xFF) as u8,
-        (ecx & 0xFF) as u8, ((ecx >> 8) & 0xFF) as u8, ((ecx >> 16) & 0xFF) as u8, ((ecx >> 24) & 0xFF) as u8,
-        (edx & 0xFF) as u8, ((edx >> 8) & 0xFF) as u8, ((edx >> 16) & 0xFF) as u8, ((edx >> 24) & 0xFF) as u8,
+        (ebx & 0xFF) as u8,
+        ((ebx >> 8) & 0xFF) as u8,
+        ((ebx >> 16) & 0xFF) as u8,
+        ((ebx >> 24) & 0xFF) as u8,
+        (ecx & 0xFF) as u8,
+        ((ecx >> 8) & 0xFF) as u8,
+        ((ecx >> 16) & 0xFF) as u8,
+        ((ecx >> 24) & 0xFF) as u8,
+        (edx & 0xFF) as u8,
+        ((edx >> 8) & 0xFF) as u8,
+        ((edx >> 16) & 0xFF) as u8,
+        ((edx >> 24) & 0xFF) as u8,
     ];
 
     let hv = if &sig[..9] == b"KVMKVMKVM" {
@@ -117,18 +125,26 @@ const KVM_CPUID_FEATURES: u32 = 0x4000_0001;
 
 // Bits des features KVM
 #[allow(dead_code)]
-const KVM_FEATURE_CLOCKSOURCE2:   u32 = 1 << 3;
-const KVM_FEATURE_STEAL_TIME:     u32 = 1 << 5;
-const KVM_FEATURE_PV_EOI:         u32 = 1 << 6;
-const KVM_FEATURE_PV_TLB_FLUSH:   u32 = 1 << 9;
+const KVM_FEATURE_CLOCKSOURCE2: u32 = 1 << 3;
+const KVM_FEATURE_STEAL_TIME: u32 = 1 << 5;
+const KVM_FEATURE_PV_EOI: u32 = 1 << 6;
+const KVM_FEATURE_PV_TLB_FLUSH: u32 = 1 << 9;
 
 /// Retourne les features KVM disponibles (feuille 0x40000001 EAX)
 pub fn kvm_features() -> u32 {
-    if hypervisor_type() != HypervisorType::Kvm { return 0; }
+    if hypervisor_type() != HypervisorType::Kvm {
+        return 0;
+    }
     let (eax, _, _, _) = cpuid(KVM_CPUID_FEATURES, 0);
     eax
 }
 
-pub fn kvm_has_steal_time()   -> bool { kvm_features() & KVM_FEATURE_STEAL_TIME   != 0 }
-pub fn kvm_has_pv_eoi()       -> bool { kvm_features() & KVM_FEATURE_PV_EOI       != 0 }
-pub fn kvm_has_pv_tlb_flush() -> bool { kvm_features() & KVM_FEATURE_PV_TLB_FLUSH != 0 }
+pub fn kvm_has_steal_time() -> bool {
+    kvm_features() & KVM_FEATURE_STEAL_TIME != 0
+}
+pub fn kvm_has_pv_eoi() -> bool {
+    kvm_features() & KVM_FEATURE_PV_EOI != 0
+}
+pub fn kvm_has_pv_tlb_flush() -> bool {
+    kvm_features() & KVM_FEATURE_PV_TLB_FLUSH != 0
+}

@@ -20,7 +20,6 @@
 //! Le switch CR3 se fait dans le code ASM de bas niveau (switch_asm.s).
 //! syscall.rs gère la logique Rust après le passage en mode kernel.
 
-
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::cpu::msr;
@@ -28,39 +27,39 @@ use super::gdt::{GDT_KERNEL_CS, GDT_USER_CS32};
 
 // ── Numéros syscall ───────────────────────────────────────────────────────────
 
-pub const SYSCALL_READ:        u64 = 0;
-pub const SYSCALL_WRITE:       u64 = 1;
-pub const SYSCALL_OPEN:        u64 = 2;
-pub const SYSCALL_CLOSE:       u64 = 3;
-pub const SYSCALL_STAT:        u64 = 4;
-pub const SYSCALL_FSTAT:       u64 = 5;
-pub const SYSCALL_LSTAT:       u64 = 6;
-pub const SYSCALL_POLL:        u64 = 7;
-pub const SYSCALL_LSEEK:       u64 = 8;
-pub const SYSCALL_MMAP:        u64 = 9;
-pub const SYSCALL_MPROTECT:    u64 = 10;
-pub const SYSCALL_MUNMAP:      u64 = 11;
-pub const SYSCALL_BRK:         u64 = 12;
-pub const SYSCALL_RT_SIGACTION:u64 = 13;
+pub const SYSCALL_READ: u64 = 0;
+pub const SYSCALL_WRITE: u64 = 1;
+pub const SYSCALL_OPEN: u64 = 2;
+pub const SYSCALL_CLOSE: u64 = 3;
+pub const SYSCALL_STAT: u64 = 4;
+pub const SYSCALL_FSTAT: u64 = 5;
+pub const SYSCALL_LSTAT: u64 = 6;
+pub const SYSCALL_POLL: u64 = 7;
+pub const SYSCALL_LSEEK: u64 = 8;
+pub const SYSCALL_MMAP: u64 = 9;
+pub const SYSCALL_MPROTECT: u64 = 10;
+pub const SYSCALL_MUNMAP: u64 = 11;
+pub const SYSCALL_BRK: u64 = 12;
+pub const SYSCALL_RT_SIGACTION: u64 = 13;
 pub const SYSCALL_RT_SIGPROCMASK: u64 = 14;
 pub const SYSCALL_RT_SIGRETURN: u64 = 15;
-pub const SYSCALL_IOCTL:       u64 = 16;
-pub const SYSCALL_FORK:        u64 = 57;
-pub const SYSCALL_VFORK:       u64 = 58;
-pub const SYSCALL_EXECVE:      u64 = 59;
-pub const SYSCALL_EXIT:        u64 = 60;
-pub const SYSCALL_WAIT4:       u64 = 61;
-pub const SYSCALL_KILL:        u64 = 62;
-pub const SYSCALL_CLONE:       u64 = 56;
-pub const SYSCALL_FUTEX:       u64 = 202;
+pub const SYSCALL_IOCTL: u64 = 16;
+pub const SYSCALL_FORK: u64 = 57;
+pub const SYSCALL_VFORK: u64 = 58;
+pub const SYSCALL_EXECVE: u64 = 59;
+pub const SYSCALL_EXIT: u64 = 60;
+pub const SYSCALL_WAIT4: u64 = 61;
+pub const SYSCALL_KILL: u64 = 62;
+pub const SYSCALL_CLONE: u64 = 56;
+pub const SYSCALL_FUTEX: u64 = 202;
 pub const SYSCALL_SCHED_YIELD: u64 = 24;
-pub const SYSCALL_NANOSLEEP:   u64 = 35;
-pub const SYSCALL_GETPID:      u64 = 39;
-pub const SYSCALL_SOCKET:      u64 = 41;
-pub const SYSCALL_CONNECT:     u64 = 42;
-pub const SYSCALL_ACCEPT:      u64 = 43;
-pub const SYSCALL_SENDTO:      u64 = 44;
-pub const SYSCALL_RECVFROM:    u64 = 45;
+pub const SYSCALL_NANOSLEEP: u64 = 35;
+pub const SYSCALL_GETPID: u64 = 39;
+pub const SYSCALL_SOCKET: u64 = 41;
+pub const SYSCALL_CONNECT: u64 = 42;
+pub const SYSCALL_ACCEPT: u64 = 43;
+pub const SYSCALL_SENDTO: u64 = 44;
+pub const SYSCALL_RECVFROM: u64 = 45;
 
 /// Numéro syscall maximum supporté
 pub const SYSCALL_MAX: u64 = 512;
@@ -93,22 +92,22 @@ pub const SYSCALL_MAX: u64 = 512;
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct SyscallFrame {
-    pub rax: u64,   // offset   0 — syscall number / return value (last push)
-    pub r9:  u64,   // offset   8 — arg6
-    pub r8:  u64,   // offset  16 — arg5
-    pub r10: u64,   // offset  24 — arg4
-    pub rdx: u64,   // offset  32 — arg3
-    pub rdi: u64,   // offset  40 — arg1
-    pub rsi: u64,   // offset  48 — arg2
-    pub rsp: u64,   // offset  56 — RSP userspace sauvé
-    pub r15: u64,   // offset  64
-    pub r14: u64,   // offset  72
-    pub r13: u64,   // offset  80
-    pub r12: u64,   // offset  88
-    pub rbx: u64,   // offset  96
-    pub rbp: u64,   // offset 104
-    pub r11: u64,   // offset 112 — RFLAGS userspace (sauvé par SYSCALL hw)
-    pub rcx: u64,   // offset 120 — RIP retour userspace (first push)
+    pub rax: u64, // offset   0 — syscall number / return value (last push)
+    pub r9: u64,  // offset   8 — arg6
+    pub r8: u64,  // offset  16 — arg5
+    pub r10: u64, // offset  24 — arg4
+    pub rdx: u64, // offset  32 — arg3
+    pub rdi: u64, // offset  40 — arg1
+    pub rsi: u64, // offset  48 — arg2
+    pub rsp: u64, // offset  56 — RSP userspace sauvé
+    pub r15: u64, // offset  64
+    pub r14: u64, // offset  72
+    pub r13: u64, // offset  80
+    pub r12: u64, // offset  88
+    pub rbx: u64, // offset  96
+    pub rbp: u64, // offset 104
+    pub r11: u64, // offset 112 — RFLAGS userspace (sauvé par SYSCALL hw)
+    pub rcx: u64, // offset 120 — RIP retour userspace (first push)
 }
 
 // ── Initialisation SYSCALL/SYSRET ─────────────────────────────────────────────
@@ -121,7 +120,9 @@ pub fn init_syscall() {
 
     // 1. Activer SCE dans EFER (SYSCALL Enable)
     // SAFETY: EFER.SCE est sûr à activer une fois la GDT en place
-    unsafe { set_msr_bits(MSR_IA32_EFER, EFER_SCE); }
+    unsafe {
+        set_msr_bits(MSR_IA32_EFER, EFER_SCE);
+    }
 
     // 2. MSR STAR : sélecteurs segments
     // Bits [47:32] = SYSCALL CS (kernel CS) ; SS = CS+8 = KERNEL_DS
@@ -131,17 +132,23 @@ pub fn init_syscall() {
     // SYSRET 64-bit utilisera USER_CS32+16 = USER_CS64 pour CS
     // et USER_CS32+8 = USER_DS pour SS.
     let star_kernel = (GDT_KERNEL_CS as u64) << 32;
-    let star_user   = ((GDT_USER_CS32 & !3) as u64) << 48;
+    let star_user = ((GDT_USER_CS32 & !3) as u64) << 48;
     // SAFETY: STAR contient uniquement des sélecteurs GDT valides
-    unsafe { write_msr(MSR_STAR, star_kernel | star_user); }
+    unsafe {
+        write_msr(MSR_STAR, star_kernel | star_user);
+    }
 
     // 3. MSR LSTAR : adresse 64-bit du handler SYSCALL
     // SAFETY: syscall_entry_asm est le point d'entrée syscall valide
-    unsafe { write_msr(MSR_LSTAR, syscall_entry_asm as *const () as u64); }
+    unsafe {
+        write_msr(MSR_LSTAR, syscall_entry_asm as *const () as u64);
+    }
 
     // 4. MSR CSTAR : handler mode compat (non utilisé — pointe vers une fonction vide)
     // SAFETY: syscall_cstar_asm est une fonction noop valide
-    unsafe { write_msr(MSR_CSTAR, syscall_cstar_noop as *const () as u64); }
+    unsafe {
+        write_msr(MSR_CSTAR, syscall_cstar_noop as *const () as u64);
+    }
 
     // 5. MSR SFMASK : masque RFLAGS lors de SYSCALL
     // Masquer IF (bit 9), TF (bit 8), DF (bit 10), AC (bit 18)
@@ -149,8 +156,10 @@ pub fn init_syscall() {
                | (1 << 8)  // TF
                | (1 << 10) // DF
                | (1 << 18); // AC
-    // SAFETY: SFMASK masque les flags dangereux uniquement
-    unsafe { write_msr(MSR_SFMASK, sfmask); }
+                            // SAFETY: SFMASK masque les flags dangereux uniquement
+    unsafe {
+        write_msr(MSR_SFMASK, sfmask);
+    }
 }
 
 // ── Entrée SYSCALL en ASM ─────────────────────────────────────────────────────
@@ -182,22 +191,22 @@ core::arch::global_asm!(
     // ── 4. Construire la SyscallFrame sur la pile kernel ──────────────────────────
     // Ordre push : premier → haut adresse, dernier → bas adresse = [rsp]
     // DOIT correspondre exactement à l'ordre des champs de SyscallFrame
-    "push  rcx",                    // [rsp+120] RIP retour userspace (SYSCALL saves in rcx)
-    "push  r11",                    // [rsp+112] RFLAGS userspace   (SYSCALL saves in r11)
-    "push  rbp",                    // [rsp+104]
-    "push  rbx",                    // [rsp+ 96] (rbx sera écrasé temporairement — voir étape 6)
-    "push  r12",                    // [rsp+ 88]
-    "push  r13",                    // [rsp+ 80]
-    "push  r14",                    // [rsp+ 72]
-    "push  r15",                    // [rsp+ 64]
-    "push  qword ptr gs:[0x08]",    // [rsp+ 56] RSP userspace (lu depuis le save slot)
-    "push  rsi",                    // [rsp+ 48] arg2
-    "push  rdi",                    // [rsp+ 40] arg1
-    "push  rdx",                    // [rsp+ 32] arg3
-    "push  r10",                    // [rsp+ 24] arg4
-    "push  r8",                     // [rsp+ 16] arg5
-    "push  r9",                     // [rsp+  8] arg6
-    "push  rax",                    // [rsp+  0] numéro syscall (frame.rax)
+    "push  rcx",                 // [rsp+120] RIP retour userspace (SYSCALL saves in rcx)
+    "push  r11",                 // [rsp+112] RFLAGS userspace   (SYSCALL saves in r11)
+    "push  rbp",                 // [rsp+104]
+    "push  rbx",                 // [rsp+ 96] (rbx sera écrasé temporairement — voir étape 6)
+    "push  r12",                 // [rsp+ 88]
+    "push  r13",                 // [rsp+ 80]
+    "push  r14",                 // [rsp+ 72]
+    "push  r15",                 // [rsp+ 64]
+    "push  qword ptr gs:[0x08]", // [rsp+ 56] RSP userspace (lu depuis le save slot)
+    "push  rsi",                 // [rsp+ 48] arg2
+    "push  rdi",                 // [rsp+ 40] arg1
+    "push  rdx",                 // [rsp+ 32] arg3
+    "push  r10",                 // [rsp+ 24] arg4
+    "push  r8",                  // [rsp+ 16] arg5
+    "push  r9",                  // [rsp+  8] arg6
+    "push  rax",                 // [rsp+  0] numéro syscall (frame.rax)
     // ── 5. Sauvegarder le pointeur de frame dans rbx (callee-saved) ──────────────
     // rbx est callee-saved : syscall_rust_handler le préservera.
     // La valeur sauvée sur frame (frame.rbx) est déjà sur la pile à [rsp+96].
@@ -215,23 +224,23 @@ core::arch::global_asm!(
     "mov   rsp, rbx",
     // ── 9. Restaurer les registres depuis la frame (ordre inverse des pushs) ──────
     // frame.rax contient la valeur retour writée par le handler Rust
-    "mov   rax, [rsp]",             // return value = frame.rax
-    "add   rsp, 8",                 // skip rax slot
-    "pop   r9",                     // restore r9
-    "pop   r8",                     // restore r8
-    "pop   r10",                    // restore r10
-    "pop   rdx",                    // restore rdx
-    "pop   rdi",                    // restore rdi
-    "pop   rsi",                    // restore rsi
-    "add   rsp, 8",                 // skip user_rsp slot (restauré depuis GS ci-dessous)
+    "mov   rax, [rsp]", // return value = frame.rax
+    "add   rsp, 8",     // skip rax slot
+    "pop   r9",         // restore r9
+    "pop   r8",         // restore r8
+    "pop   r10",        // restore r10
+    "pop   rdx",        // restore rdx
+    "pop   rdi",        // restore rdi
+    "pop   rsi",        // restore rsi
+    "add   rsp, 8",     // skip user_rsp slot (restauré depuis GS ci-dessous)
     "pop   r15",
     "pop   r14",
     "pop   r13",
     "pop   r12",
-    "pop   rbx",                    // restaure rbx original (user rbx depuis frame.rbx)
+    "pop   rbx", // restaure rbx original (user rbx depuis frame.rbx)
     "pop   rbp",
-    "pop   r11",                    // RFLAGS userspace
-    "pop   rcx",                    // RIP retour userspace
+    "pop   r11", // RFLAGS userspace
+    "pop   rcx", // RIP retour userspace
     // ── 10. Restaurer RSP userspace depuis gs:[0x08] ──────────────────────────────
     "mov   rsp, qword ptr gs:[0x08]",
     // ── 11. Restaurer GS userspace ───────────────────────────────────────────────
@@ -260,8 +269,9 @@ core::arch::global_asm!(
     "mov rsp, qword ptr gs:[0x08]",
     // Restaurer GS userspace.
     "swapgs",
-    // sysretq = retour 64-bit (ou sysretl pour compat 32-bit, mais ExoOS ne supporte pas compat)
-    "sysretq",
+    // Retour compat 32-bit : `sysret` sans suffixe émet la variante compat,
+    // contrairement à `sysretq` qui force le retour 64-bit et provoquerait un #GP.
+    "sysret",
     ".size syscall_cstar_noop, . - syscall_cstar_noop",
 );
 
@@ -317,14 +327,18 @@ pub extern "C" fn syscall_rust_handler(frame: *mut SyscallFrame) {
     // On force frame.rcx = 0 → processus faultera en Ring 3 à @0 (SIGSEGV),
     // jamais en Ring 0. Solution minimale sans dépendance process::signal ici.
     if !is_canonical(frame.rcx) {
-        frame.rcx = 0;  // adresse 0 = non-mappée → #PF userspace, pas kernel
+        frame.rcx = 0; // adresse 0 = non-mappée → #PF userspace, pas kernel
     }
 }
 
 // ── Instrumentation syscall ───────────────────────────────────────────────────
 
-static SYSCALL_COUNT:       AtomicU64 = AtomicU64::new(0);
+static SYSCALL_COUNT: AtomicU64 = AtomicU64::new(0);
 static SYSCALL_ERROR_COUNT: AtomicU64 = AtomicU64::new(0);
 
-pub fn syscall_count()       -> u64 { SYSCALL_COUNT.load(Ordering::Relaxed)       }
-pub fn syscall_error_count() -> u64 { SYSCALL_ERROR_COUNT.load(Ordering::Relaxed) }
+pub fn syscall_count() -> u64 {
+    SYSCALL_COUNT.load(Ordering::Relaxed)
+}
+pub fn syscall_error_count() -> u64 {
+    SYSCALL_ERROR_COUNT.load(Ordering::Relaxed)
+}

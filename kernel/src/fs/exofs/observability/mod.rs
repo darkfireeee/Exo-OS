@@ -7,76 +7,73 @@
 //! Regroupe métriques, alertes, santé, latences, débits,
 //! compteurs de perf, espace disque, tracing et interface de debug.
 
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─── Sous-modules ─────────────────────────────────────────────────────────────
 
-pub mod metrics;
 pub mod alert;
+pub mod debug_interface;
 pub mod health_check;
 pub mod latency_histogram;
+pub mod metrics;
 pub mod perf_counters;
 pub mod space_tracker;
 pub mod throughput_tracker;
 pub mod tracing;
-pub mod debug_interface;
 
 // ─── Re-exports principaux ───────────────────────────────────────────────────
 
 // metrics
 pub use metrics::{
-    MetricId, MetricKind, ExofsMetrics, MetricsSnapshot, MetricsDiff,
-    MetricsHistory, EXOFS_METRICS, METRICS_HISTORY,
+    ExofsMetrics, MetricId, MetricKind, MetricsDiff, MetricsHistory, MetricsSnapshot,
+    EXOFS_METRICS, METRICS_HISTORY,
 };
 
 // alert
-pub use alert::{
-    AlertLevel, AlertCode, Alert, AlertLog, AlertFilter, AlertManager,
-    ALERT_LOG,
-};
+pub use alert::{Alert, AlertCode, AlertFilter, AlertLevel, AlertLog, AlertManager, ALERT_LOG};
 
 // health_check
 pub use health_check::{
-    HealthStatus, HealthProbeId, HealthProbeResult, HealthProbeRing,
-    HealthThresholds, HealthCheck, HEALTH,
+    HealthCheck, HealthProbeId, HealthProbeResult, HealthProbeRing, HealthStatus, HealthThresholds,
+    HEALTH,
 };
 
 // latency_histogram
 pub use latency_histogram::{
-    LatencyHistogram, LatencySummary, LatencyTracker, LatencyCategory,
-    LatencyWindow, LATENCY_HIST, LATENCY_TRACKER,
+    LatencyCategory, LatencyHistogram, LatencySummary, LatencyTracker, LatencyWindow, LATENCY_HIST,
+    LATENCY_TRACKER,
 };
 
 // perf_counters
 pub use perf_counters::{
-    PerfCounterId, PerfCounterSet, PerfSnapshot, PerfDelta,
-    PerfRateWindow, PerfReport, PERF_COUNTERS, PERF_RATE,
+    PerfCounterId, PerfCounterSet, PerfDelta, PerfRateWindow, PerfReport, PerfSnapshot,
+    PERF_COUNTERS, PERF_RATE,
 };
 
 // space_tracker
 pub use space_tracker::{
-    SpaceZone, SpaceZoneStats, SpaceTracker, SpaceSnapshot,
-    SpaceQuota, FragmentationInfo, SpaceHistory, SPACE_TRACKER, SPACE_HISTORY,
+    FragmentationInfo, SpaceHistory, SpaceQuota, SpaceSnapshot, SpaceTracker, SpaceZone,
+    SpaceZoneStats, SPACE_HISTORY, SPACE_TRACKER,
 };
 
 // throughput_tracker
 pub use throughput_tracker::{
-    ThroughputSample, ThroughputWindow, ThroughputTracker, ThroughputSnapshot,
-    ThroughputRate, ThroughputThresholds, THROUGHPUT_TRACKER,
+    ThroughputRate, ThroughputSample, ThroughputSnapshot, ThroughputThresholds, ThroughputTracker,
+    ThroughputWindow, THROUGHPUT_TRACKER,
 };
 
 // tracing
 pub use tracing::{
-    TraceLevel, ComponentId, TraceEvent, TraceFilter, TraceRing,
-    TraceSession, TraceSummary, TRACE_RING,
+    ComponentId, TraceEvent, TraceFilter, TraceLevel, TraceRing, TraceSession, TraceSummary,
+    TRACE_RING,
 };
 
 // debug_interface
 pub use debug_interface::{
-    DebugCommandId, DebugCommand, DebugResponseStatus, DebugResponse,
-    DebugQueue, DebugSession, DebugStats, DEBUG_QUEUE,
+    DebugCommand, DebugCommandId, DebugQueue, DebugResponse, DebugResponseStatus, DebugSession,
+    DebugStats, DEBUG_QUEUE,
 };
 
 // ─── ObservabilityConfig ─────────────────────────────────────────────────────
@@ -85,28 +82,28 @@ pub use debug_interface::{
 #[derive(Clone, Copy, Debug)]
 pub struct ObservabilityConfig {
     /// Active la collecte de métriques.
-    pub metrics_enabled:     bool,
+    pub metrics_enabled: bool,
     /// Active les alertes.
-    pub alerts_enabled:      bool,
+    pub alerts_enabled: bool,
     /// Niveau de trace minimum.
-    pub min_trace_level:     TraceLevel,
+    pub min_trace_level: TraceLevel,
     /// Période d'évaluation de santé en µs.
     pub health_eval_period_us: u64,
     /// Taille de fenêtre pour le calcul de débit (nombre de périodes).
-    pub throughput_window:   u64,
+    pub throughput_window: u64,
     /// Activer le debug via la queue.
-    pub debug_enabled:       bool,
+    pub debug_enabled: bool,
 }
 
 impl ObservabilityConfig {
     pub const fn default_config() -> Self {
         Self {
-            metrics_enabled:      true,
-            alerts_enabled:       true,
-            min_trace_level:      TraceLevel::Info,
+            metrics_enabled: true,
+            alerts_enabled: true,
+            min_trace_level: TraceLevel::Info,
             health_eval_period_us: 1_000_000, // 1s
-            throughput_window:    16,
-            debug_enabled:        true,
+            throughput_window: 16,
+            debug_enabled: true,
         }
     }
 
@@ -131,12 +128,12 @@ impl ObservabilityConfig {
 /// État agrégé du module d'observabilité.
 #[derive(Clone, Copy, Debug)]
 pub struct ObservabilityStatus {
-    pub health:        HealthStatus,
+    pub health: HealthStatus,
     pub has_critical_alert: bool,
-    pub error_rate_ppt:     u64,
-    pub space_usage_pct:    u64,
-    pub throughput_bpt:     u64,
-    pub trace_dropped:      u64,
+    pub error_rate_ppt: u64,
+    pub space_usage_pct: u64,
+    pub throughput_bpt: u64,
+    pub trace_dropped: u64,
 }
 
 impl ObservabilityStatus {
@@ -156,16 +153,16 @@ impl ObservabilityStatus {
 /// Facade principale du module d'observabilité.
 #[allow(dead_code)]
 pub struct ObservabilityModule {
-    config:      ObservabilityConfig,
-    init_tick:   AtomicU64,
+    config: ObservabilityConfig,
+    init_tick: AtomicU64,
     event_count: AtomicU64,
 }
 
 impl ObservabilityModule {
     pub const fn new_const() -> Self {
         Self {
-            config:      ObservabilityConfig::default_config(),
-            init_tick:   AtomicU64::new(0),
+            config: ObservabilityConfig::default_config(),
+            init_tick: AtomicU64::new(0),
             event_count: AtomicU64::new(0),
         }
     }
@@ -175,7 +172,12 @@ impl ObservabilityModule {
         config.validate()?;
         TRACE_RING.set_min_level(config.min_trace_level);
         self.init_tick.store(tick, Ordering::Relaxed);
-        TRACE_RING.emit(tick, ComponentId::OBSERVER, TraceLevel::Info, "observability init ok");
+        TRACE_RING.emit(
+            tick,
+            ComponentId::OBSERVER,
+            TraceLevel::Info,
+            "observability init ok",
+        );
         Ok(())
     }
 
@@ -188,24 +190,27 @@ impl ObservabilityModule {
     /// Retourne le statut agrégé courant.
     pub fn status(&self) -> ObservabilityStatus {
         ObservabilityStatus {
-            health:             HEALTH.status(),
+            health: HEALTH.status(),
             has_critical_alert: ALERT_LOG.has_critical(),
-            error_rate_ppt:     EXOFS_METRICS.error_rate_pct10().saturating_mul(100)
-                                    .checked_div(10).unwrap_or(0),
-            space_usage_pct:    SPACE_TRACKER.usage_pct() as u64,
-            throughput_bpt:     THROUGHPUT_TRACKER.avg_total_bpt(),
-            trace_dropped:      TRACE_RING.dropped(),
+            error_rate_ppt: EXOFS_METRICS
+                .error_rate_pct10()
+                .saturating_mul(100)
+                .checked_div(10)
+                .unwrap_or(0),
+            space_usage_pct: SPACE_TRACKER.usage_pct() as u64,
+            throughput_bpt: THROUGHPUT_TRACKER.avg_total_bpt(),
+            trace_dropped: TRACE_RING.dropped(),
         }
     }
 
     /// Produit un snapshot agrégeant toutes les métriques.
     pub fn full_snapshot(&self) -> ExofsResult<ObservabilitySnapshot> {
         let metrics = EXOFS_METRICS.snapshot();
-        let space   = SPACE_TRACKER.snapshot();
-        let perf    = PERF_COUNTERS.snapshot();
-        let thru    = THROUGHPUT_TRACKER.snapshot()?;
+        let space = SPACE_TRACKER.snapshot();
+        let perf = PERF_COUNTERS.snapshot();
+        let thru = THROUGHPUT_TRACKER.snapshot()?;
         Ok(ObservabilitySnapshot {
-            status:    self.status(),
+            status: self.status(),
             metrics,
             space,
             perf,
@@ -249,12 +254,12 @@ pub static OBSERVABILITY: ObservabilityModule = ObservabilityModule::new_const()
 /// Snapshot agrégé de tout le module d'observabilité.
 #[derive(Debug)]
 pub struct ObservabilitySnapshot {
-    pub status:       ObservabilityStatus,
-    pub metrics:      MetricsSnapshot,
-    pub space:        SpaceSnapshot,
-    pub perf:         PerfSnapshot,
-    pub throughput:   ThroughputSnapshot,
-    pub event_count:  u64,
+    pub status: ObservabilityStatus,
+    pub metrics: MetricsSnapshot,
+    pub space: SpaceSnapshot,
+    pub perf: PerfSnapshot,
+    pub throughput: ThroughputSnapshot,
+    pub event_count: u64,
     pub uptime_ticks: u64,
 }
 
@@ -282,7 +287,8 @@ impl ObservabilitySnapshot {
     /// Copie les métriques dans un Vec (OOM-02).
     pub fn metrics_to_vec(&self) -> ExofsResult<Vec<u64>> {
         let mut v = Vec::new();
-        v.try_reserve(metrics::MetricId::COUNT).map_err(|_| ExofsError::NoMemory)?;
+        v.try_reserve(metrics::MetricId::COUNT)
+            .map_err(|_| ExofsError::NoMemory)?;
         let mut i = 0usize;
         while i < metrics::MetricId::COUNT {
             v.push(self.metrics.values[i]);
@@ -394,12 +400,12 @@ mod tests {
     #[test]
     fn test_observability_status_nominal() {
         let s = ObservabilityStatus {
-            health:             HealthStatus::Healthy,
+            health: HealthStatus::Healthy,
             has_critical_alert: false,
-            error_rate_ppt:     0,
-            space_usage_pct:    50,
-            throughput_bpt:     1024,
-            trace_dropped:      0,
+            error_rate_ppt: 0,
+            space_usage_pct: 50,
+            throughput_bpt: 1024,
+            trace_dropped: 0,
         };
         assert!(s.is_nominal());
         assert!(!s.needs_attention());
@@ -408,12 +414,12 @@ mod tests {
     #[test]
     fn test_observability_status_degraded_nominal() {
         let s = ObservabilityStatus {
-            health:             HealthStatus::Degraded,
+            health: HealthStatus::Degraded,
             has_critical_alert: false,
-            error_rate_ppt:     10,
-            space_usage_pct:    80,
-            throughput_bpt:     512,
-            trace_dropped:      0,
+            error_rate_ppt: 10,
+            space_usage_pct: 80,
+            throughput_bpt: 512,
+            trace_dropped: 0,
         };
         assert!(s.is_nominal()); // Degraded sans critical est encore nominal
     }
@@ -421,12 +427,12 @@ mod tests {
     #[test]
     fn test_observability_status_critical_not_nominal() {
         let s = ObservabilityStatus {
-            health:             HealthStatus::Critical,
+            health: HealthStatus::Critical,
             has_critical_alert: true,
-            error_rate_ppt:     200,
-            space_usage_pct:    99,
-            throughput_bpt:     0,
-            trace_dropped:      10,
+            error_rate_ppt: 200,
+            space_usage_pct: 99,
+            throughput_bpt: 0,
+            trace_dropped: 10,
         };
         assert!(!s.is_nominal());
         assert!(s.needs_attention());

@@ -51,7 +51,12 @@ impl IommuDomainRegistry {
 
         let mut inner = self.inner.lock();
 
-        if let Some(slot) = inner.pid_to_domain.iter().flatten().find(|slot| slot.pid == pid) {
+        if let Some(slot) = inner
+            .pid_to_domain
+            .iter()
+            .flatten()
+            .find(|slot| slot.pid == pid)
+        {
             return Ok(slot.domain);
         }
 
@@ -67,11 +72,7 @@ impl IommuDomainRegistry {
         let iova_limit = iova_base.saturating_add(DOMAIN_IOVA_SLICE_SIZE);
 
         let domain = IOMMU_DOMAINS
-            .create_domain(
-                DomainType::Translated,
-                iova_base,
-                iova_limit,
-            )
+            .create_domain(DomainType::Translated, iova_base, iova_limit)
             .map_err(|_| ())?;
         let _ = IOMMU_DOMAINS.with_domain_mut(domain, |dom| dom.activate());
 
@@ -91,7 +92,8 @@ impl IommuDomainRegistry {
         }
 
         let inner = self.inner.lock();
-        inner.pid_to_domain
+        inner
+            .pid_to_domain
             .iter()
             .flatten()
             .find(|slot| slot.pid == pid)

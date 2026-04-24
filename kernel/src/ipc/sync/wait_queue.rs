@@ -8,7 +8,7 @@
 // RÈGLE WAITQ-01 : WaitNode provient de l'EmergencyPool du scheduler.
 // Ce module ne duplique pas la logique — il délègue au scheduler.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::{ChannelId, IpcError};
 
@@ -179,16 +179,15 @@ impl IpcWaitQueue {
 
     /// Inscrit le thread `thread_id` comme waiter avec un timeout optionnel.
     /// Retourne l'index du waiter, ou `None` si la queue est pleine.
-    pub fn enqueue(
-        &self,
-        thread_id: u32,
-        timeout_ns: u64,
-        now_ns: u64,
-    ) -> Option<usize> {
+    pub fn enqueue(&self, thread_id: u32, timeout_ns: u64, now_ns: u64) -> Option<usize> {
         for i in 0..MAX_IPC_WAITERS {
             if !self.waiters[i].is_active() {
-                self.waiters[i].thread_id.store(thread_id, Ordering::Relaxed);
-                self.waiters[i].timeout_ns.store(timeout_ns, Ordering::Relaxed);
+                self.waiters[i]
+                    .thread_id
+                    .store(thread_id, Ordering::Relaxed);
+                self.waiters[i]
+                    .timeout_ns
+                    .store(timeout_ns, Ordering::Relaxed);
                 self.waiters[i].enqueued_at.store(now_ns, Ordering::Relaxed);
                 self.waiters[i].woken.store(false, Ordering::Relaxed);
                 self.waiters[i].reason.store(0, Ordering::Relaxed);
@@ -227,7 +226,7 @@ impl IpcWaitQueue {
 
         let w = &self.waiters[waiter_idx];
         let tid = w.thread_id.load(Ordering::Relaxed);
-        let timeout_ns  = w.timeout_ns.load(Ordering::Relaxed);
+        let timeout_ns = w.timeout_ns.load(Ordering::Relaxed);
         let mut spin_count: u32 = 0;
         const SPIN_BEFORE_BLOCK: u32 = 64;
 
@@ -290,7 +289,9 @@ impl IpcWaitQueue {
                 "IpcWaitQueue::wait: block_current() appelé avec PreemptGuard actif — deadlock garanti"
             );
             // SAFETY: le waiter est actif dans la table, un réveil est attendu.
-            unsafe { super::sched_hooks::block_current(tid); }
+            unsafe {
+                super::sched_hooks::block_current(tid);
+            }
             spin_count += 1;
         }
     }
@@ -338,10 +339,7 @@ impl IpcWaitQueue {
     pub fn wake_thread(&self, thread_id: u32, reason: WakeReason) -> bool {
         for i in 0..MAX_IPC_WAITERS {
             let w = &self.waiters[i];
-            if w.is_active()
-                && w.thread_id.load(Ordering::Relaxed) == thread_id
-                && !w.is_woken()
-            {
+            if w.is_active() && w.thread_id.load(Ordering::Relaxed) == thread_id && !w.is_woken() {
                 w.wake(reason);
                 super::sched_hooks::wake_thread(thread_id);
                 self.total_woken.fetch_add(1, Ordering::Relaxed);

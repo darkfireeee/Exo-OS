@@ -22,32 +22,32 @@
 //! - engine::scanner  — signature & heuristic scanning with periodic scheduler
 //! - engine::realtime — real-time event monitoring, filtering, rate tracking, alerts
 
-use exo_syscall_abi as syscall;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use exo_syscall_abi as syscall;
 
+mod behavioral;
 mod engine;
 mod signatures;
-mod behavioral;
 
 // ── Message Types ───────────────────────────────────────────────────────────
 
-const SCAN_REQUEST:   u32 = 0;
-const EVENT_REPORT:   u32 = 1;
+const SCAN_REQUEST: u32 = 0;
+const EVENT_REPORT: u32 = 1;
 const QUARANTINE_CMD: u32 = 2;
-const THREAT_QUERY:   u32 = 3;
-const POLICY_UPDATE:  u32 = 4;
-const HEARTBEAT:      u32 = 5;
+const THREAT_QUERY: u32 = 3;
+const POLICY_UPDATE: u32 = 4;
+const HEARTBEAT: u32 = 5;
 
 // ── Reply Status Codes ──────────────────────────────────────────────────────
 
-const SHIELD_OK:                u32 = 0;
-const SHIELD_ERR_ARGS:          u32 = 1;
-const SHIELD_ERR_BUSY:          u32 = 2;
-const SHIELD_ERR_NOT_FOUND:     u32 = 3;
-const SHIELD_ERR_UNAUTHORIZED:  u32 = 4;
+const SHIELD_OK: u32 = 0;
+const SHIELD_ERR_ARGS: u32 = 1;
+const SHIELD_ERR_BUSY: u32 = 2;
+const SHIELD_ERR_NOT_FOUND: u32 = 3;
+const SHIELD_ERR_UNAUTHORIZED: u32 = 4;
 const SHIELD_ERR_THREAT_EXISTS: u32 = 5;
-const SHIELD_ERR_QUEUE_FULL:    u32 = 6;
+const SHIELD_ERR_QUEUE_FULL: u32 = 6;
 const SHIELD_ERR_NOT_CONTAINED: u32 = 7;
 
 // ── IPC Message Structures ──────────────────────────────────────────────────
@@ -56,22 +56,22 @@ const SHIELD_ERR_NOT_CONTAINED: u32 = 7;
 #[repr(C)]
 struct ShieldRequest {
     sender_pid: u32,
-    msg_type:   u32,
-    payload:    [u8; 120],
+    msg_type: u32,
+    payload: [u8; 120],
 }
 
 /// Outgoing IPC reply (64 bytes).
 #[repr(C)]
 struct ShieldReply {
-    status:  u32,
-    data:    [u8; 56],
+    status: u32,
+    data: [u8; 56],
 }
 
 impl ShieldReply {
     fn new(status: u32) -> Self {
         ShieldReply {
             status: status,
-            data:   [0u8; 56],
+            data: [0u8; 56],
         }
     }
 }
@@ -79,18 +79,18 @@ impl ShieldReply {
 // ── IPC Constants ───────────────────────────────────────────────────────────
 
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
-const IPC_FLAG_TIMEOUT:    u64 = syscall::IPC_FLAG_TIMEOUT;
-const ETIMEDOUT:           i64 = syscall::ETIMEDOUT;
-const EXO_SHIELD_PID:      u64 = 10;
+const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
+const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
+const EXO_SHIELD_PID: u64 = 10;
 
 // ── Global Statistics ───────────────────────────────────────────────────────
 
-static REQUESTS_TOTAL:      AtomicU64 = AtomicU64::new(0);
-static REQUESTS_OK:         AtomicU64 = AtomicU64::new(0);
-static REQUESTS_ERR:        AtomicU64 = AtomicU64::new(0);
-static IPC_RECV_TIMEOUTS:   AtomicU32 = AtomicU32::new(0);
+static REQUESTS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static REQUESTS_OK: AtomicU64 = AtomicU64::new(0);
+static REQUESTS_ERR: AtomicU64 = AtomicU64::new(0);
+static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 static PERIODIC_SCAN_TICKS: AtomicU64 = AtomicU64::new(0);
-static MAINTENANCE_TICKS:   AtomicU64 = AtomicU64::new(0);
+static MAINTENANCE_TICKS: AtomicU64 = AtomicU64::new(0);
 
 // ── Global Tick Counter ─────────────────────────────────────────────────────
 
@@ -123,10 +123,14 @@ fn read_u64_le(payload: &[u8], offset: usize) -> u64 {
         return 0;
     }
     u64::from_le_bytes([
-        payload[offset],     payload[offset + 1],
-        payload[offset + 2], payload[offset + 3],
-        payload[offset + 4], payload[offset + 5],
-        payload[offset + 6], payload[offset + 7],
+        payload[offset],
+        payload[offset + 1],
+        payload[offset + 2],
+        payload[offset + 3],
+        payload[offset + 4],
+        payload[offset + 5],
+        payload[offset + 6],
+        payload[offset + 7],
     ])
 }
 
@@ -150,9 +154,9 @@ fn read_u64_le(payload: &[u8], offset: usize) -> u64 {
 fn handle_scan_request(req: &ShieldRequest) -> ShieldReply {
     let target_pid = read_u32_le(&req.payload, 0);
     let scan_type = req.payload[4];
-    let priority  = req.payload[5];
-    let data_len  = read_u32_le(&req.payload, 6) as usize;
-    let data_end  = (10 + data_len).min(120);
+    let priority = req.payload[5];
+    let data_len = read_u32_le(&req.payload, 6) as usize;
+    let data_end = (10 + data_len).min(120);
     let scan_data = &req.payload[10..data_end];
     let tick = current_tick();
 
@@ -202,26 +206,26 @@ fn handle_scan_request(req: &ShieldRequest) -> ShieldReply {
 ///   data[5]     = rate_exceeded (0/1)
 ///   data[6]     = contained (0/1)
 fn handle_event_report(req: &ShieldRequest) -> ShieldReply {
-    let target_pid  = read_u32_le(&req.payload, 0);
-    let event_type  = engine::EventType::from_u8(req.payload[4]);
-    let opcode      = read_u32_le(&req.payload, 8);
-    let arg0        = read_u64_le(&req.payload, 12);
-    let arg1        = read_u64_le(&req.payload, 20);
-    let severity    = engine::ThreatLevel::from_u8(req.payload[28]);
-    let tick        = current_tick();
+    let target_pid = read_u32_le(&req.payload, 0);
+    let event_type = engine::EventType::from_u8(req.payload[4]);
+    let opcode = read_u32_le(&req.payload, 8);
+    let arg0 = read_u64_le(&req.payload, 12);
+    let arg1 = read_u64_le(&req.payload, 20);
+    let severity = engine::ThreatLevel::from_u8(req.payload[28]);
+    let tick = current_tick();
 
     if target_pid == 0 {
         return ShieldReply::new(SHIELD_ERR_ARGS);
     }
 
     let event = engine::MonitoredEvent {
-        pid:        target_pid,
+        pid: target_pid,
         event_type: event_type,
-        opcode:     opcode,
-        arg0:       arg0,
-        arg1:       arg1,
-        timestamp:  tick,
-        severity:   severity,
+        opcode: opcode,
+        arg0: arg0,
+        arg1: arg1,
+        timestamp: tick,
+        severity: severity,
     };
 
     let result = engine::submit_event(&event, tick);
@@ -249,9 +253,9 @@ fn handle_event_report(req: &ShieldRequest) -> ShieldReply {
 ///   data[0]    = is_contained (0/1)
 ///   data[1..5] = threat_count (LE)
 fn handle_quarantine_cmd(req: &ShieldRequest) -> ShieldReply {
-    let cmd        = req.payload[0];
+    let cmd = req.payload[0];
     let target_pid = read_u32_le(&req.payload, 1);
-    let tick       = current_tick();
+    let tick = current_tick();
 
     if target_pid == 0 {
         return ShieldReply::new(SHIELD_ERR_ARGS);
@@ -269,14 +273,20 @@ fn handle_quarantine_cmd(req: &ShieldRequest) -> ShieldReply {
         1 => {
             // Release process from containment
             let ok = engine::release_process(target_pid);
-            let mut reply = ShieldReply::new(if ok { SHIELD_OK } else { SHIELD_ERR_NOT_CONTAINED });
+            let mut reply = ShieldReply::new(if ok {
+                SHIELD_OK
+            } else {
+                SHIELD_ERR_NOT_CONTAINED
+            });
             reply.data[0] = if ok { 1 } else { 0 };
             reply
         }
         2 => {
             // Query containment status
             let profile = engine::get_risk_profile(target_pid);
-            let is_contained = profile.map(|p| if p.contained { 1u8 } else { 0u8 }).unwrap_or(0);
+            let is_contained = profile
+                .map(|p| if p.contained { 1u8 } else { 0u8 })
+                .unwrap_or(0);
             let threats = engine::active_threat_count();
             let mut reply = ShieldReply::new(SHIELD_OK);
             reply.data[0] = is_contained;
@@ -321,8 +331,8 @@ fn handle_quarantine_cmd(req: &ShieldRequest) -> ShieldReply {
 ///   data[36..40] = active_threats (LE)
 fn handle_threat_query(req: &ShieldRequest) -> ShieldReply {
     let query_type = req.payload[0];
-    let id_or_pid  = read_u32_le(&req.payload, 1);
-    let tick       = current_tick();
+    let id_or_pid = read_u32_le(&req.payload, 1);
+    let tick = current_tick();
 
     match query_type {
         0 => {
@@ -421,13 +431,13 @@ fn handle_policy_update(req: &ShieldRequest) -> ShieldReply {
             let opcode_mask = read_u32_le(&req.payload, 8);
 
             let filter = engine::EventFilter {
-                id:           0,
-                event_type:   event_type,
-                pid:          pid,
-                opcode_mask:  opcode_mask,
+                id: 0,
+                event_type: event_type,
+                pid: pid,
+                opcode_mask: opcode_mask,
                 min_severity: min_severity,
-                action:       action,
-                enabled:      true,
+                action: action,
+                enabled: true,
             };
 
             match engine::add_event_filter(&filter) {
@@ -455,8 +465,8 @@ fn handle_policy_update(req: &ShieldRequest) -> ShieldReply {
             // [13..17] fs_limit, [17..21] anomaly_limit
             let pid = read_u32_le(&req.payload, 1);
             let sysc_limit = read_u32_le(&req.payload, 5);
-            let net_limit  = read_u32_le(&req.payload, 9);
-            let fs_limit   = read_u32_le(&req.payload, 13);
+            let net_limit = read_u32_le(&req.payload, 9);
+            let fs_limit = read_u32_le(&req.payload, 13);
             let anom_limit = read_u32_le(&req.payload, 17);
 
             if engine::set_process_rate_limits(pid, sysc_limit, net_limit, fs_limit, anom_limit) {
@@ -513,7 +523,8 @@ fn handle_policy_update(req: &ShieldRequest) -> ShieldReply {
             let name_start = 26;
             let name_len = entry.name_len as usize;
             if name_start + name_len <= req.payload.len() && name_len <= 32 {
-                entry.name[..name_len].copy_from_slice(&req.payload[name_start..name_start + name_len]);
+                entry.name[..name_len]
+                    .copy_from_slice(&req.payload[name_start..name_start + name_len]);
             }
             entry.enabled = true;
 
@@ -628,12 +639,12 @@ fn handle_request(req: &ShieldRequest) -> ShieldReply {
     advance_tick();
 
     let reply = match req.msg_type {
-        SCAN_REQUEST   => handle_scan_request(req),
-        EVENT_REPORT   => handle_event_report(req),
+        SCAN_REQUEST => handle_scan_request(req),
+        EVENT_REPORT => handle_event_report(req),
         QUARANTINE_CMD => handle_quarantine_cmd(req),
-        THREAT_QUERY   => handle_threat_query(req),
-        POLICY_UPDATE  => handle_policy_update(req),
-        HEARTBEAT      => handle_heartbeat(req),
+        THREAT_QUERY => handle_threat_query(req),
+        POLICY_UPDATE => handle_policy_update(req),
+        HEARTBEAT => handle_heartbeat(req),
         _ => ShieldReply::new(SHIELD_ERR_ARGS),
     };
 
@@ -719,8 +730,8 @@ pub extern "C" fn _start() -> ! {
     // ── 2. Main IPC receive loop ────────────────────────────────────────────
     let mut req = ShieldRequest {
         sender_pid: 0,
-        msg_type:   0,
-        payload:    [0u8; 120],
+        msg_type: 0,
+        payload: [0u8; 120],
     };
 
     loop {
@@ -751,7 +762,9 @@ pub extern "C" fn _start() -> ! {
                 req.sender_pid as u64,
                 &reply as *const ShieldReply as u64,
                 core::mem::size_of::<ShieldReply>() as u64,
-                0, 0, 0,
+                0,
+                0,
+                0,
             )
         };
     }

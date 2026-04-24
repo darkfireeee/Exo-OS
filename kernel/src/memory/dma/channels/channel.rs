@@ -10,13 +10,13 @@
 //
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::memory::dma::core::types::{
-    DmaChannelId, DmaTransactionId, DmaDirection, DmaMapFlags, DmaError,
-};
 use crate::memory::core::types::PhysAddr;
+use crate::memory::dma::core::types::{
+    DmaChannelId, DmaDirection, DmaError, DmaMapFlags, DmaTransactionId,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES
@@ -37,19 +37,19 @@ const RING_MASK: usize = CHANNEL_RING_SIZE - 1;
 #[derive(Copy, Clone)]
 pub struct DmaCommand {
     /// Transaction parente (pour signalement de completion/erreur).
-    pub txn_id:    DmaTransactionId,
+    pub txn_id: DmaTransactionId,
     /// Adresse physique source.
-    pub src_phys:  PhysAddr,
+    pub src_phys: PhysAddr,
     /// Adresse physique de destination.
-    pub dst_phys:  PhysAddr,
+    pub dst_phys: PhysAddr,
     /// Longueur du transfert en octets.
-    pub len:       u32,
+    pub len: u32,
     /// Direction du transfert.
-    pub direction: u8,     // DmaDirection as u8
+    pub direction: u8, // DmaDirection as u8
     /// Flags de mapping DMA.
-    pub flags:     u32,    // DmaMapFlags.0
+    pub flags: u32, // DmaMapFlags.0
     /// Padding pour exactement 64 bytes.
-    _pad:          [u8; 7],
+    _pad: [u8; 7],
 }
 
 const _: () = assert!(
@@ -59,22 +59,22 @@ const _: () = assert!(
 
 impl DmaCommand {
     pub const EMPTY: Self = DmaCommand {
-        txn_id:    DmaTransactionId::INVALID,
-        src_phys:  PhysAddr::new(0),
-        dst_phys:  PhysAddr::new(0),
-        len:       0,
+        txn_id: DmaTransactionId::INVALID,
+        src_phys: PhysAddr::new(0),
+        dst_phys: PhysAddr::new(0),
+        len: 0,
         direction: 0,
-        flags:     0,
-        _pad:      [0u8; 7],
+        flags: 0,
+        _pad: [0u8; 7],
     };
 
     pub fn new(
-        txn_id:    DmaTransactionId,
-        src_phys:  PhysAddr,
-        dst_phys:  PhysAddr,
-        len:       u32,
+        txn_id: DmaTransactionId,
+        src_phys: PhysAddr,
+        dst_phys: PhysAddr,
+        len: u32,
         direction: DmaDirection,
-        flags:     DmaMapFlags,
+        flags: DmaMapFlags,
     ) -> Self {
         DmaCommand {
             txn_id,
@@ -82,8 +82,8 @@ impl DmaCommand {
             dst_phys,
             len,
             direction: direction as u8,
-            flags:     flags.0,
-            _pad:      [0u8; 7],
+            flags: flags.0,
+            _pad: [0u8; 7],
         }
     }
 
@@ -130,9 +130,9 @@ pub struct DmaChannelRing {
     /// Ring actif (peut recevoir des soumissions).
     active: AtomicBool,
     /// Statistiques.
-    pub submitted:       AtomicU64,
-    pub consumed:        AtomicU64,
-    pub dropped_full:    AtomicU64,
+    pub submitted: AtomicU64,
+    pub consumed: AtomicU64,
+    pub dropped_full: AtomicU64,
     pub errors_injected: AtomicU64,
 }
 
@@ -145,13 +145,13 @@ impl DmaChannelRing {
     pub const fn new(channel_id: DmaChannelId) -> Self {
         DmaChannelRing {
             channel_id,
-            ring:            UnsafeCell::new([DmaCommand::EMPTY; CHANNEL_RING_SIZE]),
-            head:            AtomicU32::new(0),
-            tail:            AtomicU32::new(0),
-            active:          AtomicBool::new(false),
-            submitted:       AtomicU64::new(0),
-            consumed:        AtomicU64::new(0),
-            dropped_full:    AtomicU64::new(0),
+            ring: UnsafeCell::new([DmaCommand::EMPTY; CHANNEL_RING_SIZE]),
+            head: AtomicU32::new(0),
+            tail: AtomicU32::new(0),
+            active: AtomicBool::new(false),
+            submitted: AtomicU64::new(0),
+            consumed: AtomicU64::new(0),
+            dropped_full: AtomicU64::new(0),
             errors_injected: AtomicU64::new(0),
         }
     }
@@ -242,8 +242,11 @@ impl DmaChannelRing {
         let mut count = 0;
         while count < out_buf.len() {
             match self.consume() {
-                Some(cmd) => { out_buf[count] = cmd; count += 1; }
-                None      => break,
+                Some(cmd) => {
+                    out_buf[count] = cmd;
+                    count += 1;
+                }
+                None => break,
             }
         }
         count
@@ -258,7 +261,13 @@ impl DmaChannelRing {
         (head.wrapping_sub(tail)) as usize
     }
 
-    pub fn is_empty(&self) -> bool { self.pending() == 0 }
-    pub fn is_full(&self)  -> bool { self.pending() >= CHANNEL_RING_SIZE }
-    pub fn capacity(&self) -> usize { CHANNEL_RING_SIZE }
+    pub fn is_empty(&self) -> bool {
+        self.pending() == 0
+    }
+    pub fn is_full(&self) -> bool {
+        self.pending() >= CHANNEL_RING_SIZE
+    }
+    pub fn capacity(&self) -> usize {
+        CHANNEL_RING_SIZE
+    }
 }

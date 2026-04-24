@@ -11,17 +11,19 @@
 //   - Capacité configurable jusqu'à RING_SIZE (4096 slots)
 //   - Statistiques temps-réel (AtomicU64, pas de mutex)
 
-use core::sync::atomic::{AtomicU64, AtomicU32, AtomicUsize, Ordering};
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use crate::ipc::core::types::{ChannelId, IpcError, MsgFlags, MessageId, alloc_channel_id, alloc_message_id};
 use crate::ipc::core::constants::MAX_MSG_SIZE;
+use crate::ipc::core::types::{
+    alloc_channel_id, alloc_message_id, ChannelId, IpcError, MessageId, MsgFlags,
+};
 use crate::ipc::ring::mpmc::MpmcRing;
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
 // IPC-04 (v6) : vérification capability via security::access_control
+use crate::security::access_control::{check_access, AccessError, ObjectKind};
 use crate::security::capability::{CapTable, CapToken, Rights};
-use crate::security::access_control::{check_access, ObjectKind, AccessError};
 
 // ---------------------------------------------------------------------------
 // Politique de débordement
@@ -210,14 +212,14 @@ impl MpmcChannel {
         }
 
         let mid = alloc_message_id();
-        let policy = OverflowPolicy::from_u8(
-            self.overflow_policy.load(Ordering::Relaxed) as u8,
-        );
+        let policy = OverflowPolicy::from_u8(self.overflow_policy.load(Ordering::Relaxed) as u8);
 
         match self.ring.push_copy(data, flags) {
             Ok(_seq) => {
                 self.stats.sends_ok.fetch_add(1, Ordering::Relaxed);
-                self.stats.total_bytes_sent.fetch_add(data.len() as u64, Ordering::Relaxed);
+                self.stats
+                    .total_bytes_sent
+                    .fetch_add(data.len() as u64, Ordering::Relaxed);
                 self.pending.fetch_add(1, Ordering::Relaxed);
                 IPC_STATS.record(StatEvent::MessageSent);
                 Ok(mid)
@@ -294,7 +296,9 @@ impl MpmcChannel {
             match self.ring.pop_into(buf) {
                 Ok((len, msg_flags)) => {
                     self.stats.recvs_ok.fetch_add(1, Ordering::Relaxed);
-                    self.stats.total_bytes_recv.fetch_add(len as u64, Ordering::Relaxed);
+                    self.stats
+                        .total_bytes_recv
+                        .fetch_add(len as u64, Ordering::Relaxed);
                     self.pending.fetch_sub(1, Ordering::Relaxed);
                     IPC_STATS.record(StatEvent::MessageReceived);
                     Ok((len, msg_flags))
@@ -312,7 +316,9 @@ impl MpmcChannel {
                 match self.ring.pop_into(buf) {
                     Ok((len, msg_flags)) => {
                         self.stats.recvs_ok.fetch_add(1, Ordering::Relaxed);
-                        self.stats.total_bytes_recv.fetch_add(len as u64, Ordering::Relaxed);
+                        self.stats
+                            .total_bytes_recv
+                            .fetch_add(len as u64, Ordering::Relaxed);
                         self.pending.fetch_sub(1, Ordering::Relaxed);
                         IPC_STATS.record(StatEvent::MessageReceived);
                         return Ok((len, msg_flags));
@@ -335,9 +341,11 @@ impl MpmcChannel {
 
     /// Tente de lire jusqu'à `max` messages en une seule opération (batch).
     /// Retourne le nombre de messages effectivement lus.
-    pub fn recv_batch(&self, bufs: &mut [[u8; MAX_MSG_SIZE]], max: usize)
-        -> Result<usize, IpcError>
-    {
+    pub fn recv_batch(
+        &self,
+        bufs: &mut [[u8; MAX_MSG_SIZE]],
+        max: usize,
+    ) -> Result<usize, IpcError> {
         let n = max.min(bufs.len());
         let mut count = 0usize;
 
@@ -345,12 +353,16 @@ impl MpmcChannel {
             match self.ring.pop_into(&mut bufs[i]) {
                 Ok((len, _flags)) => {
                     self.stats.recvs_ok.fetch_add(1, Ordering::Relaxed);
-                    self.stats.total_bytes_recv.fetch_add(len as u64, Ordering::Relaxed);
+                    self.stats
+                        .total_bytes_recv
+                        .fetch_add(len as u64, Ordering::Relaxed);
                     count += 1;
                 }
                 Err(IpcError::QueueEmpty) => break,
                 Err(e) => {
-                    if count == 0 { return Err(e); }
+                    if count == 0 {
+                        return Err(e);
+                    }
                     break;
                 }
             }
@@ -390,17 +402,23 @@ impl MpmcChannel {
     #[inline]
     pub fn send_checked(
         &self,
-        data:  &[u8],
+        data: &[u8],
         flags: MsgFlags,
         table: &CapTable,
         token: CapToken,
     ) -> Result<MessageId, IpcError> {
         // IPC-04 (v6) : vérification capability — appel direct security/access_control/
-        check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_SEND, "ipc::mpmc")
-            .map_err(|e| match e {
-                AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-                _ => IpcError::PermissionDenied,
-            })?;
+        check_access(
+            table,
+            token,
+            ObjectKind::IpcChannel,
+            Rights::IPC_SEND,
+            "ipc::mpmc",
+        )
+        .map_err(|e| match e {
+            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+            _ => IpcError::PermissionDenied,
+        })?;
         self.send(data, flags)
     }
 
@@ -409,17 +427,23 @@ impl MpmcChannel {
     #[inline]
     pub fn recv_checked(
         &self,
-        buf:   &mut [u8],
+        buf: &mut [u8],
         flags: MsgFlags,
         table: &CapTable,
         token: CapToken,
     ) -> Result<(usize, MsgFlags), IpcError> {
         // IPC-04 (v6) : vérification capability — appel direct security/access_control/
-        check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_RECV, "ipc::mpmc")
-            .map_err(|e| match e {
-                AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-                _ => IpcError::PermissionDenied,
-            })?;
+        check_access(
+            table,
+            token,
+            ObjectKind::IpcChannel,
+            Rights::IPC_RECV,
+            "ipc::mpmc",
+        )
+        .map_err(|e| match e {
+            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+            _ => IpcError::PermissionDenied,
+        })?;
         self.recv(buf, flags)
     }
 }
@@ -507,9 +531,11 @@ pub fn mpmc_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<Mes
 }
 
 /// Reçoit un message du canal MPMC identifié par `idx`.
-pub fn mpmc_channel_recv(idx: usize, buf: &mut [u8], flags: MsgFlags)
-    -> Result<(usize, MsgFlags), IpcError>
-{
+pub fn mpmc_channel_recv(
+    idx: usize,
+    buf: &mut [u8],
+    flags: MsgFlags,
+) -> Result<(usize, MsgFlags), IpcError> {
     let tbl = MPMC_CHANNEL_TABLE.lock();
     // SAFETY: tbl.get() vérifie used[idx] avant de retourner.
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -541,8 +567,8 @@ pub fn mpmc_channel_count() -> usize {
 
 /// Envoie dans le canal MPMC `idx` avec vérification capability (IPC-04 v6).
 pub fn mpmc_channel_send_checked(
-    idx:   usize,
-    data:  &[u8],
+    idx: usize,
+    data: &[u8],
     flags: MsgFlags,
     table: &CapTable,
     token: CapToken,
@@ -558,8 +584,8 @@ pub fn mpmc_channel_send_checked(
 
 /// Reçoit depuis le canal MPMC `idx` avec vérification capability (IPC-04 v6).
 pub fn mpmc_channel_recv_checked(
-    idx:   usize,
-    buf:   &mut [u8],
+    idx: usize,
+    buf: &mut [u8],
     flags: MsgFlags,
     table: &CapTable,
     token: CapToken,

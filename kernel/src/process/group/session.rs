@@ -4,10 +4,9 @@
 // Sessions POSIX — Exo-OS Couche 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use crate::scheduler::sync::spinlock::SpinLock;
 use crate::process::core::pid::Pid;
+use crate::scheduler::sync::spinlock::SpinLock;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Identifiant de session.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -25,25 +24,25 @@ const MAX_SESSIONS: usize = 1024;
 #[repr(C)]
 pub struct Session {
     /// SID = PID du leader de session.
-    pub sid:        SessionId,
+    pub sid: SessionId,
     /// PID du leader de session.
     pub leader_pid: AtomicU32,
     /// Terminal de contrôle associé (0 = aucun).
-    pub ctty:       AtomicU64,
+    pub ctty: AtomicU64,
     /// Numéro de références.
-    pub refcount:   AtomicU32,
+    pub refcount: AtomicU32,
     /// Slot valid.
-    pub valid:      AtomicU32,
+    pub valid: AtomicU32,
 }
 
 impl Session {
     const fn empty() -> Self {
         Self {
-            sid:        SessionId(0),
+            sid: SessionId(0),
             leader_pid: AtomicU32::new(0),
-            ctty:       AtomicU64::new(0),
-            refcount:   AtomicU32::new(0),
-            valid:      AtomicU32::new(0),
+            ctty: AtomicU64::new(0),
+            refcount: AtomicU32::new(0),
+            valid: AtomicU32::new(0),
         }
     }
 }
@@ -51,7 +50,7 @@ impl Session {
 /// Table globale des sessions (tableau statique).
 pub struct SessionTable {
     slots: [Session; MAX_SESSIONS],
-    lock:  SpinLock<()>,
+    lock: SpinLock<()>,
     count: AtomicU32,
 }
 
@@ -63,7 +62,7 @@ impl SessionTable {
         const EMPTY: Session = Session::empty();
         Self {
             slots: [EMPTY; MAX_SESSIONS],
-            lock:  SpinLock::new(()),
+            lock: SpinLock::new(()),
             count: AtomicU32::new(0),
         }
     }
@@ -91,9 +90,7 @@ impl SessionTable {
     /// Cherche une session par SID.
     pub fn find(&self, sid: SessionId) -> Option<&Session> {
         for slot in &self.slots {
-            if slot.valid.load(Ordering::Acquire) == 1
-               && slot.sid == sid
-            {
+            if slot.valid.load(Ordering::Acquire) == 1 && slot.sid == sid {
                 return Some(slot);
             }
         }
@@ -115,7 +112,9 @@ impl SessionTable {
         }
     }
 
-    pub fn active_count(&self) -> u32 { self.count.load(Ordering::Relaxed) }
+    pub fn active_count(&self) -> u32 {
+        self.count.load(Ordering::Relaxed)
+    }
 }
 
 /// Table globale des sessions.
@@ -125,12 +124,14 @@ pub static SESSION_TABLE: SessionTable = SessionTable::new();
 pub fn setsid(caller_pid: Pid) -> Result<SessionId, SidError> {
     // Vérifier que le caller n'est pas déjà leader de groupe.
     use crate::process::core::registry::PROCESS_REGISTRY;
-    let pcb = PROCESS_REGISTRY.find_by_pid(caller_pid)
+    let pcb = PROCESS_REGISTRY
+        .find_by_pid(caller_pid)
         .ok_or(SidError::NoSuchProcess)?;
     if pcb.is_pgroup_leader() {
         return Err(SidError::AlreadyLeader);
     }
-    let sid = SESSION_TABLE.create(caller_pid)
+    let sid = SESSION_TABLE
+        .create(caller_pid)
         .ok_or(SidError::TooManySessions)?;
     pcb.set_session_id(sid.0);
     pcb.set_pgroup_id(caller_pid.0);

@@ -13,10 +13,9 @@
 // RÈGLE NO-ALLOC : ce fichier — zéro Vec/Box/Arc (types de base uniquement)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use core::fmt;
-use core::sync::atomic::{AtomicU64, Ordering};
 use core::num::NonZeroU64;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // Re-export ProcessId depuis scheduler (ProcessId est défini là-bas comme ProcessId(pub u32)).
 pub use crate::scheduler::ProcessId;
@@ -200,19 +199,19 @@ pub struct MsgFlags(pub u32);
 
 impl MsgFlags {
     /// Message temps-réel (priorité maximale dans les queues).
-    pub const RT:         Self = Self(1 << 0);
+    pub const RT: Self = Self(1 << 0);
     /// Message de réponse (corrèle à un MessageId existant).
-    pub const REPLY:      Self = Self(1 << 1);
+    pub const REPLY: Self = Self(1 << 1);
     /// Zero-copy : le contenu est une référence physique, pas une copie.
-    pub const ZEROCOPY:   Self = Self(1 << 2);
+    pub const ZEROCOPY: Self = Self(1 << 2);
     /// Broadcast : livrer à tous les récepteurs.
-    pub const BROADCAST:  Self = Self(1 << 3);
+    pub const BROADCAST: Self = Self(1 << 3);
     /// Message d'erreur.
-    pub const ERROR:      Self = Self(1 << 4);
+    pub const ERROR: Self = Self(1 << 4);
     /// Synchrone : bloque l'émetteur jusqu'à l'acquittement.
-    pub const SYNC:       Self = Self(1 << 5);
+    pub const SYNC: Self = Self(1 << 5);
     /// Non bloquant : retourne immédiatement si queue pleine.
-    pub const NOWAIT:     Self = Self(1 << 6);
+    pub const NOWAIT: Self = Self(1 << 6);
 
     #[inline(always)]
     pub fn contains(self, flag: Self) -> bool {
@@ -268,103 +267,103 @@ impl MsgFlags {
 #[repr(u32)]
 pub enum IpcError {
     /// Opération non bloquante sur une file pleine.
-    WouldBlock          = 1,
+    WouldBlock = 1,
     /// Endpoint introuvable dans le registre.
-    EndpointNotFound    = 2,
+    EndpointNotFound = 2,
     /// Canal fermé par l'autre extrémité.
-    ChannelClosed       = 3,
+    ChannelClosed = 3,
     /// Permission refusée par le système de capabilities.
-    PermissionDenied    = 4,
+    PermissionDenied = 4,
     /// Message trop grand (dépasse MAX_MSG_SIZE).
-    MessageTooLarge     = 5,
+    MessageTooLarge = 5,
     /// Timeout expiré.
-    Timeout             = 6,
+    Timeout = 6,
     /// Ressource IPC épuisée (pool SHM, CapToken, etc.).
-    ResourceExhausted   = 7,
+    ResourceExhausted = 7,
     /// Connexion refusée (endpoint non en écoute).
-    ConnRefused         = 8,
+    ConnRefused = 8,
     /// Déjà connecté.
-    AlreadyConnected    = 9,
+    AlreadyConnected = 9,
     /// Paramètre non valide.
-    InvalidParam        = 10,
+    InvalidParam = 10,
     /// Échec handshake (version, magic mismatch).
-    HandshakeFailed     = 11,
+    HandshakeFailed = 11,
     /// Opération interrompue par un signal.
-    Interrupted         = 12,
+    Interrupted = 12,
     /// Erreur interne inattendue du kernel.
-    InternalError       = 13,
+    InternalError = 13,
     /// Pool SHM saturé.
-    ShmPoolFull         = 14,
+    ShmPoolFull = 14,
     /// Séquence hors ordre.
-    OutOfOrder          = 15,
+    OutOfOrder = 15,
     /// Handle IPC invalide ou expiré.
-    InvalidHandle       = 16,
+    InvalidHandle = 16,
     /// Canal / connexion fermé(e) — alias expressif pour ChannelClosed.
-    Closed              = 17,
+    Closed = 17,
     /// Erreur interne kernel — alias expressif pour InternalError.
-    Internal            = 18,
+    Internal = 18,
     /// Argument / données invalide(s) — alias expressif pour InvalidParam.
-    Invalid             = 19,
+    Invalid = 19,
     /// File/ring pleine.
-    Full                = 20,
+    Full = 20,
     /// Boucle de routage détectée.
-    Loop                = 21,
+    Loop = 21,
     /// Ressource introuvable.
-    NotFound            = 22,
+    NotFound = 22,
     /// Endpoint nul (EndpointId 0) passé à une opération.
-    NullEndpoint        = 23,
+    NullEndpoint = 23,
     /// Endpoint invalide (corrompu, désalloué, mauvais type).
-    InvalidEndpoint     = 24,
+    InvalidEndpoint = 24,
     /// Opération à réessayer (backoff exponentiel).
-    Retry               = 25,
+    Retry = 25,
     /// Argument invalide — alias pour InvalidParam avec sémantique plus forte.
-    InvalidArgument     = 26,
+    InvalidArgument = 26,
     /// Ressources IPC épuisées (table pleine, pool vide, etc.).
-    OutOfResources      = 27,
+    OutOfResources = 27,
     /// File/ring pleine lors d'un push (non bloquant).
-    QueueFull           = 28,
+    QueueFull = 28,
     /// File/ring vide lors d'un pop (non bloquant).
-    QueueEmpty          = 29,
+    QueueEmpty = 29,
     /// Erreur de protocole (magic/version mismatch, séquence invalide).
-    ProtocolError       = 30,
+    ProtocolError = 30,
     /// Échec de mapping mémoire IPC (SHM, zero-copy page fault).
-    MappingFailed       = 31,
+    MappingFailed = 31,
 }
 
 impl fmt::Display for IpcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::WouldBlock        => write!(f, "IPC: opération non bloquante sur file pleine"),
-            Self::EndpointNotFound  => write!(f, "IPC: endpoint introuvable"),
-            Self::ChannelClosed     => write!(f, "IPC: canal fermé"),
-            Self::PermissionDenied  => write!(f, "IPC: accès refusé (capability)"),
-            Self::MessageTooLarge   => write!(f, "IPC: message trop grand"),
-            Self::Timeout           => write!(f, "IPC: timeout expiré"),
+            Self::WouldBlock => write!(f, "IPC: opération non bloquante sur file pleine"),
+            Self::EndpointNotFound => write!(f, "IPC: endpoint introuvable"),
+            Self::ChannelClosed => write!(f, "IPC: canal fermé"),
+            Self::PermissionDenied => write!(f, "IPC: accès refusé (capability)"),
+            Self::MessageTooLarge => write!(f, "IPC: message trop grand"),
+            Self::Timeout => write!(f, "IPC: timeout expiré"),
             Self::ResourceExhausted => write!(f, "IPC: ressource épuisée"),
-            Self::ConnRefused       => write!(f, "IPC: connexion refusée"),
-            Self::AlreadyConnected  => write!(f, "IPC: déjà connecté"),
-            Self::InvalidParam      => write!(f, "IPC: paramètre invalide"),
-            Self::HandshakeFailed   => write!(f, "IPC: échec handshake"),
-            Self::Interrupted       => write!(f, "IPC: interrompu par signal"),
-            Self::InternalError     => write!(f, "IPC: erreur interne"),
-            Self::ShmPoolFull       => write!(f, "IPC: pool SHM saturé"),
-            Self::OutOfOrder        => write!(f, "IPC: séquence hors ordre"),
-            Self::InvalidHandle     => write!(f, "IPC: handle invalide"),
-            Self::Closed            => write!(f, "IPC: connexion fermée"),
-            Self::Internal          => write!(f, "IPC: erreur interne kernel"),
-            Self::Invalid           => write!(f, "IPC: données invalides"),
-            Self::Full              => write!(f, "IPC: file pleine"),
-            Self::Loop              => write!(f, "IPC: boucle de routage détectée"),
-            Self::NotFound          => write!(f, "IPC: ressource introuvable"),
-            Self::NullEndpoint      => write!(f, "IPC: endpoint nul"),
-            Self::InvalidEndpoint   => write!(f, "IPC: endpoint invalide"),
-            Self::Retry             => write!(f, "IPC: réessayer l'opération"),
-            Self::InvalidArgument   => write!(f, "IPC: argument invalide"),
-            Self::OutOfResources    => write!(f, "IPC: ressources épuisées"),
-            Self::QueueFull         => write!(f, "IPC: file pleine (push refusé)"),
-            Self::QueueEmpty        => write!(f, "IPC: file vide (pop échoué)"),
-            Self::ProtocolError     => write!(f, "IPC: erreur de protocole (magic/version)"),
-            Self::MappingFailed     => write!(f, "IPC: échec de mapping mémoire"),
+            Self::ConnRefused => write!(f, "IPC: connexion refusée"),
+            Self::AlreadyConnected => write!(f, "IPC: déjà connecté"),
+            Self::InvalidParam => write!(f, "IPC: paramètre invalide"),
+            Self::HandshakeFailed => write!(f, "IPC: échec handshake"),
+            Self::Interrupted => write!(f, "IPC: interrompu par signal"),
+            Self::InternalError => write!(f, "IPC: erreur interne"),
+            Self::ShmPoolFull => write!(f, "IPC: pool SHM saturé"),
+            Self::OutOfOrder => write!(f, "IPC: séquence hors ordre"),
+            Self::InvalidHandle => write!(f, "IPC: handle invalide"),
+            Self::Closed => write!(f, "IPC: connexion fermée"),
+            Self::Internal => write!(f, "IPC: erreur interne kernel"),
+            Self::Invalid => write!(f, "IPC: données invalides"),
+            Self::Full => write!(f, "IPC: file pleine"),
+            Self::Loop => write!(f, "IPC: boucle de routage détectée"),
+            Self::NotFound => write!(f, "IPC: ressource introuvable"),
+            Self::NullEndpoint => write!(f, "IPC: endpoint nul"),
+            Self::InvalidEndpoint => write!(f, "IPC: endpoint invalide"),
+            Self::Retry => write!(f, "IPC: réessayer l'opération"),
+            Self::InvalidArgument => write!(f, "IPC: argument invalide"),
+            Self::OutOfResources => write!(f, "IPC: ressources épuisées"),
+            Self::QueueFull => write!(f, "IPC: file pleine (push refusé)"),
+            Self::QueueEmpty => write!(f, "IPC: file vide (pop échoué)"),
+            Self::ProtocolError => write!(f, "IPC: erreur de protocole (magic/version)"),
+            Self::MappingFailed => write!(f, "IPC: échec de mapping mémoire"),
         }
     }
 }
@@ -430,11 +429,11 @@ impl MessageFlags {
 pub enum MessageType {
     #[default]
     /// Message de données brutes.
-    Data     = 0,
+    Data = 0,
     /// Message de contrôle du canal.
-    Control  = 1,
+    Control = 1,
     /// Notification de signal.
-    Signal   = 2,
+    Signal = 2,
     /// Réponse RPC.
     RpcReply = 3,
 }
@@ -469,7 +468,7 @@ impl MessageType {
 #[repr(u32)]
 pub enum IpcCapError {
     /// Token révoqué ou génération incorrecte.
-    Revoked       = 1,
+    Revoked = 1,
     /// Objet capability introuvable.
     ObjectNotFound = 2,
     /// Droits insuffisants pour cette opération.
@@ -481,10 +480,10 @@ pub enum IpcCapError {
 impl From<IpcCapError> for IpcError {
     fn from(e: IpcCapError) -> Self {
         match e {
-            IpcCapError::Revoked            => IpcError::PermissionDenied,
-            IpcCapError::ObjectNotFound     => IpcError::EndpointNotFound,
+            IpcCapError::Revoked => IpcError::PermissionDenied,
+            IpcCapError::ObjectNotFound => IpcError::EndpointNotFound,
             IpcCapError::InsufficientRights => IpcError::PermissionDenied,
-            IpcCapError::DelegationDenied   => IpcError::PermissionDenied,
+            IpcCapError::DelegationDenied => IpcError::PermissionDenied,
         }
     }
 }
@@ -519,4 +518,3 @@ pub fn array_index_nospec(index: usize, size: usize) -> usize {
     let mask = (index.wrapping_sub(size) as isize >> (isize::BITS - 1)) as usize;
     index & mask
 }
-

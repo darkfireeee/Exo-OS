@@ -19,12 +19,13 @@
 // USAGE : Canal MPMC pour event dispatching, worker pools.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
-use core::cell::UnsafeCell;
-use crate::ipc::core::{IpcError, MsgFlags, alloc_message_id, RING_SIZE, RING_MASK, array_index_nospec};
-use crate::ipc::core::transfer::MessageHeader;
 use super::slot::SlotCell;
+use crate::ipc::core::transfer::MessageHeader;
+use crate::ipc::core::{
+    alloc_message_id, array_index_nospec, IpcError, MsgFlags, RING_MASK, RING_SIZE,
+};
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Nombre de slots dans un ring MPMC (= RING_SIZE).
 /// Re-exporté pour usage dans channel/mpmc.rs.
@@ -39,7 +40,7 @@ pub const MPMC_RING_SIZE: usize = RING_SIZE;
 #[repr(C, align(64))]
 pub struct MpmcRing {
     /// Curseur producteur — partagé entre plusieurs threads.
-    head: [u8; 64],           // AtomicU64 à offset 0 dans ce cache pad
+    head: [u8; 64], // AtomicU64 à offset 0 dans ce cache pad
     /// Curseur consommateur — partagé entre plusieurs threads.
     tail: [u8; 64],
     /// Tableau des cellules.
@@ -72,8 +73,8 @@ impl MpmcRing {
     pub const fn new_uninit() -> Self {
         const INIT_CELL: SlotCell = SlotCell::new_at(0);
         Self {
-            head:  [0u8; 64],
-            tail:  [0u8; 64],
+            head: [0u8; 64],
+            tail: [0u8; 64],
             cells: UnsafeCell::new([INIT_CELL; RING_SIZE]),
         }
     }
@@ -156,7 +157,7 @@ impl MpmcRing {
     /// Reçoit un message dans `dst`.
     pub fn pop_into(&self, dst: &mut [u8]) -> Result<(usize, MsgFlags), IpcError> {
         loop {
-            let pos  = self.tail_atomic().fetch_add(1, Ordering::AcqRel);
+            let pos = self.tail_atomic().fetch_add(1, Ordering::AcqRel);
             let cell = self.cell_at(pos);
 
             let mut spin = 0u32;
@@ -178,19 +179,15 @@ impl MpmcRing {
             }
 
             let (len, msg_flags) = unsafe {
-                let slot  = (*cell.slot.get()).assume_init_ref();
-                let ln    = slot.header.len as usize;
+                let slot = (*cell.slot.get()).assume_init_ref();
+                let ln = slot.header.len as usize;
                 let flags = slot.header.flags;
                 if ln > dst.len() {
                     cell.store_seq(pos + RING_SIZE as u64);
                     return Err(IpcError::MessageTooLarge);
                 }
                 if ln > 0 {
-                    core::ptr::copy_nonoverlapping(
-                        slot.payload.as_ptr(),
-                        dst.as_mut_ptr(),
-                        ln,
-                    );
+                    core::ptr::copy_nonoverlapping(slot.payload.as_ptr(), dst.as_mut_ptr(), ln);
                 }
                 (ln, MsgFlags(flags))
             };

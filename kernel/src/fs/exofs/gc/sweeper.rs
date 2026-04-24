@@ -18,7 +18,6 @@
 //   DAG-01 : pas d'import de ipc/, process/, arch/
 // ==============================================================================
 
-
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -48,21 +47,21 @@ pub const SWEEP_BATCH_SIZE: usize = 512;
 #[derive(Debug, Default, Clone)]
 pub struct SweeperResult {
     /// Blobs blancs trouves apres le marquage.
-    pub white_blobs_found:   u64,
+    pub white_blobs_found: u64,
     /// Blobs effectivement envoyes en suppression differee (GC-01).
-    pub blobs_deferred:      u64,
+    pub blobs_deferred: u64,
     /// Blobs sautes car EPOCH_PINNED (GC-07).
-    pub pinned_skipped:      u64,
+    pub pinned_skipped: u64,
     /// Blobs sautes car ref_count > 0 (encore references).
-    pub refcount_skipped:    u64,
+    pub refcount_skipped: u64,
     /// Octets liberes (suppression differee programmee).
-    pub bytes_deferred:      u64,
+    pub bytes_deferred: u64,
     /// Erreurs de file pleine.
-    pub deferred_full_errs:  u64,
+    pub deferred_full_errs: u64,
     /// Batches de balayage executes.
-    pub batches_executed:    u64,
+    pub batches_executed: u64,
     /// Phase complete (tous les blobs blancs traites).
-    pub phase_complete:      bool,
+    pub phase_complete: bool,
 }
 
 impl fmt::Display for SweeperResult {
@@ -89,9 +88,9 @@ impl fmt::Display for SweeperResult {
 #[derive(Debug, Clone)]
 pub struct SweepConfig {
     /// Taille d'un batch de balayage.
-    pub batch_size:    usize,
+    pub batch_size: usize,
     /// Nombre maximal de blobs par passe.
-    pub max_per_pass:  usize,
+    pub max_per_pass: usize,
     /// Epoch courante pour la file de suppression differee.
     pub current_epoch: EpochId,
 }
@@ -99,8 +98,8 @@ pub struct SweepConfig {
 impl Default for SweepConfig {
     fn default() -> Self {
         Self {
-            batch_size:    SWEEP_BATCH_SIZE,
-            max_per_pass:  MAX_SWEEP_PER_PASS,
+            batch_size: SWEEP_BATCH_SIZE,
+            max_per_pass: MAX_SWEEP_PER_PASS,
             current_epoch: EpochId(0),
         }
     }
@@ -111,9 +110,9 @@ impl Default for SweepConfig {
 // ==============================================================================
 
 struct SweeperInner {
-    config:        SweepConfig,
-    total_result:  SweeperResult,
-    pass_count:    u64,
+    config: SweepConfig,
+    total_result: SweeperResult,
+    pass_count: u64,
 }
 
 // ==============================================================================
@@ -130,19 +129,19 @@ impl Sweeper {
         Self {
             inner: SpinLock::new(SweeperInner {
                 config: SweepConfig {
-                    batch_size:    SWEEP_BATCH_SIZE,
-                    max_per_pass:  MAX_SWEEP_PER_PASS,
+                    batch_size: SWEEP_BATCH_SIZE,
+                    max_per_pass: MAX_SWEEP_PER_PASS,
                     current_epoch: EpochId(0),
                 },
                 total_result: SweeperResult {
-                    white_blobs_found:  0,
-                    blobs_deferred:     0,
-                    pinned_skipped:     0,
-                    refcount_skipped:   0,
-                    bytes_deferred:     0,
+                    white_blobs_found: 0,
+                    blobs_deferred: 0,
+                    pinned_skipped: 0,
+                    refcount_skipped: 0,
+                    bytes_deferred: 0,
                     deferred_full_errs: 0,
-                    batches_executed:   0,
-                    phase_complete:     false,
+                    batches_executed: 0,
+                    phase_complete: false,
                 },
                 pass_count: 0,
             }),
@@ -172,10 +171,7 @@ impl Sweeper {
     ///
     /// GC-07 : les blobs EPOCH_PINNED sont skipes.
     /// GC-05 : traitement par batches pour eviter le blocage.
-    pub fn run_sweep_phase(
-        &self,
-        workspace: &mut TricolorWorkspace,
-    ) -> ExofsResult<SweeperResult> {
+    pub fn run_sweep_phase(&self, workspace: &mut TricolorWorkspace) -> ExofsResult<SweeperResult> {
         let (batch_size, max_per_pass, current_epoch) = {
             let g = self.inner.lock();
             (
@@ -204,18 +200,16 @@ impl Sweeper {
             let batch = &white_blobs[batch_start..batch_end];
 
             let batch_r = self.sweep_batch(batch, current_epoch)?;
-            result.blobs_deferred = result.blobs_deferred
-                .saturating_add(batch_r.blobs_deferred);
-            result.pinned_skipped = result.pinned_skipped
-                .saturating_add(batch_r.pinned_skipped);
-            result.refcount_skipped = result.refcount_skipped
+            result.blobs_deferred = result.blobs_deferred.saturating_add(batch_r.blobs_deferred);
+            result.pinned_skipped = result.pinned_skipped.saturating_add(batch_r.pinned_skipped);
+            result.refcount_skipped = result
+                .refcount_skipped
                 .saturating_add(batch_r.refcount_skipped);
-            result.bytes_deferred = result.bytes_deferred
-                .saturating_add(batch_r.bytes_deferred);
-            result.deferred_full_errs = result.deferred_full_errs
+            result.bytes_deferred = result.bytes_deferred.saturating_add(batch_r.bytes_deferred);
+            result.deferred_full_errs = result
+                .deferred_full_errs
                 .saturating_add(batch_r.deferred_full_errs);
-            result.batches_executed = result.batches_executed
-                .saturating_add(1);
+            result.batches_executed = result.batches_executed.saturating_add(1);
 
             processed = processed.saturating_add(batch.len());
             batch_start = batch_end;
@@ -241,20 +235,15 @@ impl Sweeper {
             let mut g = self.inner.lock();
             g.pass_count = g.pass_count.saturating_add(1);
             let t = &mut g.total_result;
-            t.white_blobs_found = t.white_blobs_found
-                .saturating_add(result.white_blobs_found);
-            t.blobs_deferred = t.blobs_deferred
-                .saturating_add(result.blobs_deferred);
-            t.pinned_skipped = t.pinned_skipped
-                .saturating_add(result.pinned_skipped);
-            t.refcount_skipped = t.refcount_skipped
-                .saturating_add(result.refcount_skipped);
-            t.bytes_deferred = t.bytes_deferred
-                .saturating_add(result.bytes_deferred);
-            t.deferred_full_errs = t.deferred_full_errs
+            t.white_blobs_found = t.white_blobs_found.saturating_add(result.white_blobs_found);
+            t.blobs_deferred = t.blobs_deferred.saturating_add(result.blobs_deferred);
+            t.pinned_skipped = t.pinned_skipped.saturating_add(result.pinned_skipped);
+            t.refcount_skipped = t.refcount_skipped.saturating_add(result.refcount_skipped);
+            t.bytes_deferred = t.bytes_deferred.saturating_add(result.bytes_deferred);
+            t.deferred_full_errs = t
+                .deferred_full_errs
                 .saturating_add(result.deferred_full_errs);
-            t.batches_executed = t.batches_executed
-                .saturating_add(result.batches_executed);
+            t.batches_executed = t.batches_executed.saturating_add(result.batches_executed);
         }
 
         Ok(result)
@@ -263,7 +252,7 @@ impl Sweeper {
     /// Traite un batch de blobs blancs.
     fn sweep_batch(
         &self,
-        batch:         &[BlobId],
+        batch: &[BlobId],
         current_epoch: EpochId,
     ) -> ExofsResult<BatchSweepResult> {
         let mut br = BatchSweepResult::default();
@@ -292,8 +281,7 @@ impl Sweeper {
                 Ok(did_defer) => {
                     if did_defer.0 == 0 {
                         br.blobs_deferred = br.blobs_deferred.saturating_add(1);
-                        br.bytes_deferred = br.bytes_deferred
-                            .saturating_add(phys_size);
+                        br.bytes_deferred = br.bytes_deferred.saturating_add(phys_size);
                     }
                 }
                 Err(ExofsError::Resource) => {
@@ -347,11 +335,11 @@ impl Sweeper {
 
 #[derive(Default)]
 struct BatchSweepResult {
-    blobs_deferred:      u64,
-    pinned_skipped:      u64,
-    refcount_skipped:    u64,
-    bytes_deferred:      u64,
-    deferred_full_errs:  u64,
+    blobs_deferred: u64,
+    pinned_skipped: u64,
+    refcount_skipped: u64,
+    bytes_deferred: u64,
+    deferred_full_errs: u64,
 }
 
 // ==============================================================================
@@ -372,7 +360,9 @@ mod tests {
     use crate::fs::exofs::gc::tricolor::{BlobNode, TricolorWorkspace};
 
     fn bid(b: u8) -> BlobId {
-        let mut a = [0u8; 32]; a[0] = b; BlobId(a)
+        let mut a = [0u8; 32];
+        a[0] = b;
+        BlobId(a)
     }
 
     fn white_node(b: u8) -> BlobNode {
@@ -421,8 +411,8 @@ mod tests {
     fn test_sweep_config() {
         let sweeper = Sweeper::new();
         sweeper.set_config(SweepConfig {
-            batch_size:    16,
-            max_per_pass:  100,
+            batch_size: 16,
+            max_per_pass: 100,
             current_epoch: EpochId(5),
         });
         let cfg = sweeper.get_config();

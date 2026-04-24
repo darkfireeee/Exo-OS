@@ -33,15 +33,15 @@
 // Sous-modules
 // ---------------------------------------------------------------------------
 
-pub mod core;
-pub mod ring;
-pub mod endpoint;
 pub mod channel;
-pub mod shared_memory;
-pub mod sync;
-pub mod stats;
+pub mod core;
+pub mod endpoint;
 pub mod message;
+pub mod ring;
 pub mod rpc;
+pub mod shared_memory;
+pub mod stats;
+pub mod sync;
 
 // ---------------------------------------------------------------------------
 // Re-exports principaux pour usage externe depuis kernel/
@@ -49,55 +49,54 @@ pub mod rpc;
 
 // core/ — types fondamentaux
 pub use core::{
-    types::{
-        ChannelId, EndpointId, ProcessId, MessageFlags, MessageType, IpcError,
-    },
-    constants::{
-        IPC_VERSION, IPC_MAX_CHANNELS, IPC_MAX_ENDPOINTS, IPC_MAX_PROCESSES,
-    },
+    constants::{IPC_MAX_CHANNELS, IPC_MAX_ENDPOINTS, IPC_MAX_PROCESSES, IPC_VERSION},
+    types::{ChannelId, EndpointId, IpcError, MessageFlags, MessageType, ProcessId},
 };
 
 // stats/ — compteurs globaux
-pub use stats::counters::{IPC_STATS, StatEvent, IpcStatsSnapshot};
+pub use stats::counters::{IpcStatsSnapshot, StatEvent, IPC_STATS};
 
 // endpoint/ — API principale d'endpoint
 pub use endpoint::{
-    endpoint_create, endpoint_destroy, endpoint_listen, endpoint_close,
-    do_connect as endpoint_connect, do_accept as endpoint_accept,
+    do_accept as endpoint_accept, do_connect as endpoint_connect, endpoint_close, endpoint_create,
+    endpoint_destroy, endpoint_listen,
 };
 
 // channel/ — API channels
-pub use channel::{
-    sync::{sync_channel_create, sync_channel_send, sync_channel_recv, sync_channel_destroy},
+pub use channel::sync::{
+    sync_channel_create, sync_channel_destroy, sync_channel_recv, sync_channel_send,
 };
 
 // shared_memory/ — API SHM
 pub use shared_memory::{
     allocator::{shm_alloc, shm_free},
-    mapping::{shm_map, shm_unmap, register_map_hook, register_unmap_hook},
-    pool::init_shm_pool,
+    mapping::{register_map_hook, register_unmap_hook, shm_map, shm_unmap},
     numa_aware::numa_init,
+    pool::init_shm_pool,
 };
 
 // sync/ — API synchronisation IPC
 pub use sync::{
-    futex::{FutexKey, WaiterState, FutexIpcStats, futex_wait, futex_wake, futex_wake_all, futex_cancel, futex_requeue, futex_stats},
-    event::{event_create, event_set, event_wait, event_destroy},
-    barrier::{barrier_create, barrier_arrive_and_wait, barrier_destroy},
+    barrier::{barrier_arrive_and_wait, barrier_create, barrier_destroy},
+    event::{event_create, event_destroy, event_set, event_wait},
+    futex::{
+        futex_cancel, futex_requeue, futex_stats, futex_wait, futex_wake, futex_wake_all,
+        FutexIpcStats, FutexKey, WaiterState,
+    },
 };
 
 // message/ — API message
 pub use message::{
-    builder::{IpcMessage, IpcMessageBuilder, msg_data, msg_control, msg_signal},
-    router::{router_add, router_remove, router_dispatch},
+    builder::{msg_control, msg_data, msg_signal, IpcMessage, IpcMessageBuilder},
+    router::{router_add, router_dispatch, router_remove},
 };
 
 // rpc/ — API RPC
 pub use rpc::{
+    client::{rpc_call, rpc_client_create, rpc_client_destroy},
     protocol::{MethodId, RpcStatus, RPC_MAGIC},
-    server::{rpc_server_create, rpc_server_register, rpc_server_dispatch, rpc_server_destroy},
-    client::{rpc_client_create, rpc_call, rpc_client_destroy},
-    timeout::{RpcTimeout, install_time_fn},
+    server::{rpc_server_create, rpc_server_destroy, rpc_server_dispatch, rpc_server_register},
+    timeout::{install_time_fn, RpcTimeout},
 };
 
 /// Envoie une notification IRQ bornée et non bloquante à un endpoint driver.
@@ -105,7 +104,11 @@ pub use rpc::{
 /// Payload canonique :
 /// - octet 0  : numéro IRQ
 /// - octets 1..8 : wave generation little-endian
-pub fn send_irq_notification(endpoint: &exo_types::IpcEndpoint, irq: u8, wave_gen: u64) -> Result<(), IpcError> {
+pub fn send_irq_notification(
+    endpoint: &exo_types::IpcEndpoint,
+    irq: u8,
+    wave_gen: u64,
+) -> Result<(), IpcError> {
     let endpoint_code = ((endpoint.pid as u64) << 32) | endpoint.chan_idx as u64;
     let endpoint_id = EndpointId::new(endpoint_code).ok_or(IpcError::NullEndpoint)?;
 
@@ -187,7 +190,7 @@ pub fn ipc_install_scheduler_hooks(block_fn: sync::sched_hooks::BlockFn) {
 ///                     0 = succès, non-zéro = erreur.
 /// - `unmap_page_fn` : `unsafe fn(virt: u64, pid: u32) -> i32`
 pub fn ipc_install_vmm_hooks(
-    map_page_fn:   shared_memory::mapping::MapPageFn,
+    map_page_fn: shared_memory::mapping::MapPageFn,
     unmap_page_fn: shared_memory::mapping::UnmapPageFn,
 ) {
     shared_memory::mapping::register_map_hook(map_page_fn);

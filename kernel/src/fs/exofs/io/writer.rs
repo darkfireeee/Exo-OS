@@ -12,12 +12,11 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::io_stats::IO_STATS;
 use super::reader::inline_blake3;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─── Trait d'écriture dans le store ──────────────────────────────────────────
 
@@ -57,18 +56,36 @@ pub struct WriteConfig {
 
 impl WriteConfig {
     pub fn default() -> Self {
-        Self { verify_after_write: true, auto_flush: false, max_pending: 64,
-            max_blob_size: 0, record_stats: true, overwrite: false }
+        Self {
+            verify_after_write: true,
+            auto_flush: false,
+            max_pending: 64,
+            max_blob_size: 0,
+            record_stats: true,
+            overwrite: false,
+        }
     }
 
     pub fn fast() -> Self {
-        Self { verify_after_write: false, auto_flush: false, max_pending: 256,
-            max_blob_size: 0, record_stats: false, overwrite: true }
+        Self {
+            verify_after_write: false,
+            auto_flush: false,
+            max_pending: 256,
+            max_blob_size: 0,
+            record_stats: false,
+            overwrite: true,
+        }
     }
 
     pub fn safe() -> Self {
-        Self { verify_after_write: true, auto_flush: true, max_pending: 8,
-            max_blob_size: 8 * 1024 * 1024, record_stats: true, overwrite: false }
+        Self {
+            verify_after_write: true,
+            auto_flush: true,
+            max_pending: 8,
+            max_blob_size: 8 * 1024 * 1024,
+            record_stats: true,
+            overwrite: false,
+        }
     }
 
     pub fn validate(&self) -> ExofsResult<()> {
@@ -92,14 +109,26 @@ pub struct WriteEntry {
 
 impl WriteEntry {
     pub fn write_entry(blob_id: [u8; 32], data: Vec<u8>, ts: u64) -> Self {
-        Self { blob_id, data, ts, is_delete: false }
+        Self {
+            blob_id,
+            data,
+            ts,
+            is_delete: false,
+        }
     }
 
     pub fn delete_entry(blob_id: [u8; 32], ts: u64) -> Self {
-        Self { blob_id, data: Vec::new(), ts, is_delete: true }
+        Self {
+            blob_id,
+            data: Vec::new(),
+            ts,
+            is_delete: true,
+        }
     }
 
-    pub fn data_len(&self) -> u64 { self.data.len() as u64 }
+    pub fn data_len(&self) -> u64 {
+        self.data.len() as u64
+    }
 }
 
 // ─── Buffer de pending writes ─────────────────────────────────────────────────
@@ -113,7 +142,11 @@ pub struct PendingWriteBuffer {
 
 impl PendingWriteBuffer {
     pub fn new(max_pending: u32) -> Self {
-        Self { entries: Vec::new(), max_pending, total_bytes_pending: 0 }
+        Self {
+            entries: Vec::new(),
+            max_pending,
+            total_bytes_pending: 0,
+        }
     }
 
     /// Ajoute une entrée d'écriture (OOM-02).
@@ -122,15 +155,23 @@ impl PendingWriteBuffer {
             return Err(ExofsError::Resource);
         }
         let len = entry.data_len();
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.entries.push(entry);
         self.total_bytes_pending = self.total_bytes_pending.saturating_add(len);
         Ok(())
     }
 
-    pub fn len(&self) -> usize { self.entries.len() }
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
-    pub fn total_bytes(&self) -> u64 { self.total_bytes_pending }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    pub fn total_bytes(&self) -> u64 {
+        self.total_bytes_pending
+    }
 
     /// Extrait toutes les entrées et les retourne (RECUR-01 : while).
     pub fn drain_all(&mut self) -> Vec<WriteEntry> {
@@ -183,9 +224,15 @@ pub struct WriterStats {
 }
 
 impl WriterStats {
-    pub fn new() -> Self { Self::default() }
-    pub fn is_clean(&self) -> bool { self.write_errors == 0 && self.verify_errors == 0 }
-    pub fn total_ops(&self) -> u64 { self.blobs_written.saturating_add(self.blobs_deleted) }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn is_clean(&self) -> bool {
+        self.write_errors == 0 && self.verify_errors == 0
+    }
+    pub fn total_ops(&self) -> u64 {
+        self.blobs_written.saturating_add(self.blobs_deleted)
+    }
 }
 
 // ─── Écrivain de blobs ────────────────────────────────────────────────────────
@@ -203,7 +250,11 @@ impl BlobWriter {
     pub fn new(config: WriteConfig) -> ExofsResult<Self> {
         config.validate()?;
         let max_pending = config.max_pending;
-        Ok(Self { config, stats: WriterStats::new(), pending: PendingWriteBuffer::new(max_pending) })
+        Ok(Self {
+            config,
+            stats: WriterStats::new(),
+            pending: PendingWriteBuffer::new(max_pending),
+        })
     }
 
     pub fn default() -> Self {
@@ -224,7 +275,8 @@ impl BlobWriter {
 
         // Copie des données dans un Vec (OOM-02)
         let mut buf = Vec::new();
-        buf.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        buf.try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         buf.extend_from_slice(data);
 
         if self.config.auto_flush {
@@ -233,12 +285,17 @@ impl BlobWriter {
             match result {
                 Ok(()) => {
                     self.stats.blobs_written = self.stats.blobs_written.saturating_add(1);
-                    self.stats.bytes_written = self.stats.bytes_written.saturating_add(data.len() as u64);
-                    if self.config.record_stats { IO_STATS.record_write_ok(data.len() as u64, 0); }
+                    self.stats.bytes_written =
+                        self.stats.bytes_written.saturating_add(data.len() as u64);
+                    if self.config.record_stats {
+                        IO_STATS.record_write_ok(data.len() as u64, 0);
+                    }
                 }
                 Err(e) => {
                     self.stats.write_errors = self.stats.write_errors.saturating_add(1);
-                    if self.config.record_stats { IO_STATS.record_write_err(); }
+                    if self.config.record_stats {
+                        IO_STATS.record_write_err();
+                    }
                     return Err(e);
                 }
             }
@@ -284,17 +341,29 @@ impl BlobWriter {
         self.stats.blobs_written = self.stats.blobs_written.saturating_add(count as u64);
         store.flush()?;
         self.stats.flushes = self.stats.flushes.saturating_add(1);
-        if self.config.record_stats { IO_STATS.record_flush(); }
+        if self.config.record_stats {
+            IO_STATS.record_flush();
+        }
         Ok(count)
     }
 
     /// Abandonner toutes les ecritures en pending.
-    pub fn discard(&mut self) { self.pending.discard_all(); }
+    pub fn discard(&mut self) {
+        self.pending.discard_all();
+    }
 
-    pub fn pending_count(&self) -> usize { self.pending.len() }
-    pub fn pending_bytes(&self) -> u64 { self.pending.total_bytes() }
-    pub fn stats(&self) -> &WriterStats { &self.stats }
-    pub fn reset_stats(&mut self) { self.stats = WriterStats::new(); }
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
+    pub fn pending_bytes(&self) -> u64 {
+        self.pending.total_bytes()
+    }
+    pub fn stats(&self) -> &WriterStats {
+        &self.stats
+    }
+    pub fn reset_stats(&mut self) {
+        self.stats = WriterStats::new();
+    }
 }
 
 // ─── VecStoreMut : implémentation mutable pour les tests ─────────────────────
@@ -306,14 +375,25 @@ pub struct VecStoreMut {
 }
 
 impl VecStoreMut {
-    pub fn new() -> Self { Self { blobs: Vec::new(), flush_count: 0 } }
-    pub fn flush_count(&self) -> u32 { self.flush_count }
-    pub fn blob_count(&self) -> usize { self.blobs.len() }
+    pub fn new() -> Self {
+        Self {
+            blobs: Vec::new(),
+            flush_count: 0,
+        }
+    }
+    pub fn flush_count(&self) -> u32 {
+        self.flush_count
+    }
+    pub fn blob_count(&self) -> usize {
+        self.blobs.len()
+    }
 
     pub fn get(&self, blob_id: &[u8; 32]) -> Option<&[u8]> {
         let mut i = 0usize;
         while i < self.blobs.len() {
-            if self.blobs[i].0 == *blob_id { return Some(&self.blobs[i].1); }
+            if self.blobs[i].0 == *blob_id {
+                return Some(&self.blobs[i].1);
+            }
             i = i.wrapping_add(1);
         }
         None
@@ -327,7 +407,8 @@ impl BlobStoreWrite for VecStoreMut {
         while i < self.blobs.len() {
             if self.blobs[i].0 == *blob_id {
                 let mut v = Vec::new();
-                v.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+                v.try_reserve(data.len())
+                    .map_err(|_| ExofsError::NoMemory)?;
                 v.extend_from_slice(data);
                 self.blobs[i].1 = v;
                 return Ok(());
@@ -335,9 +416,12 @@ impl BlobStoreWrite for VecStoreMut {
             i = i.wrapping_add(1);
         }
         let mut v = Vec::new();
-        v.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        v.try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         v.extend_from_slice(data);
-        self.blobs.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.blobs
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.blobs.push((*blob_id, v));
         Ok(())
     }
@@ -362,7 +446,9 @@ impl BlobStoreWrite for VecStoreMut {
     fn contains(&self, blob_id: &[u8; 32]) -> bool {
         let mut i = 0usize;
         while i < self.blobs.len() {
-            if self.blobs[i].0 == *blob_id { return true; }
+            if self.blobs[i].0 == *blob_id {
+                return true;
+            }
             i = i.wrapping_add(1);
         }
         false
@@ -374,7 +460,11 @@ impl BlobStoreWrite for VecStoreMut {
 mod tests {
     use super::*;
 
-    fn make_id(tag: u8) -> [u8; 32] { let mut id = [0u8; 32]; id[0] = tag; id }
+    fn make_id(tag: u8) -> [u8; 32] {
+        let mut id = [0u8; 32];
+        id[0] = tag;
+        id
+    }
 
     #[test]
     fn test_write_auto_flush() {
@@ -411,7 +501,11 @@ mod tests {
     #[test]
     fn test_max_pending_limit() {
         let mut store = VecStoreMut::new();
-        let cfg = WriteConfig { max_pending: 2, auto_flush: false, ..WriteConfig::fast() };
+        let cfg = WriteConfig {
+            max_pending: 2,
+            auto_flush: false,
+            ..WriteConfig::fast()
+        };
         let mut writer = BlobWriter::new(cfg).expect("ok");
         writer.write(&mut store, make_id(1), b"a").expect("ok");
         writer.write(&mut store, make_id(2), b"b").expect("ok");
@@ -423,7 +517,9 @@ mod tests {
     fn test_discard() {
         let mut store = VecStoreMut::new();
         let mut writer = BlobWriter::new(WriteConfig::fast()).expect("ok");
-        writer.write(&mut store, make_id(1), b"discard me").expect("ok");
+        writer
+            .write(&mut store, make_id(1), b"discard me")
+            .expect("ok");
         writer.discard();
         assert_eq!(writer.pending_count(), 0);
     }
@@ -481,7 +577,10 @@ mod tests {
 
     #[test]
     fn test_delete_not_found() {
-        let cfg = WriteConfig { auto_flush: true, ..WriteConfig::fast() };
+        let cfg = WriteConfig {
+            auto_flush: true,
+            ..WriteConfig::fast()
+        };
         let mut store = VecStoreMut::new();
         let mut writer = BlobWriter::new(cfg).expect("ok");
         // Suppression d'un blob inexistant
@@ -491,15 +590,24 @@ mod tests {
     #[test]
     fn test_max_blob_size() {
         let mut store = VecStoreMut::new();
-        let cfg = WriteConfig { max_blob_size: 4, auto_flush: true, ..WriteConfig::safe() };
+        let cfg = WriteConfig {
+            max_blob_size: 4,
+            auto_flush: true,
+            ..WriteConfig::safe()
+        };
         let mut writer = BlobWriter::new(cfg).expect("ok");
-        assert!(writer.write(&mut store, make_id(1), b"too large data").is_err());
+        assert!(writer
+            .write(&mut store, make_id(1), b"too large data")
+            .is_err());
     }
 
     #[test]
     fn test_stats_is_clean() {
         let mut store = VecStoreMut::new();
-        let cfg = WriteConfig { auto_flush: true, ..WriteConfig::fast() };
+        let cfg = WriteConfig {
+            auto_flush: true,
+            ..WriteConfig::fast()
+        };
         let mut writer = BlobWriter::new(cfg).expect("ok");
         writer.write(&mut store, make_id(1), b"clean").expect("ok");
         assert!(writer.stats().is_clean());

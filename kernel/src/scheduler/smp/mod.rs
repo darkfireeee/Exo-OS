@@ -5,7 +5,7 @@ pub mod load_balance;
 pub mod migration;
 pub mod topology;
 
-pub use affinity::{CpuMask, CpuSet, cpu_allowed, sanitize_affinity};
+pub use affinity::{cpu_allowed, sanitize_affinity, CpuMask, CpuSet};
 pub use load_balance::{balance_cpu, BALANCE_INTERVAL_TICKS};
-pub use migration::{request_migration, drain_pending_migrations};
-pub use topology::{nr_cpus, cpu_node, numa_distance, same_node, init as topology_init};
+pub use migration::{drain_pending_migrations, request_migration};
+pub use topology::{cpu_node, init as topology_init, nr_cpus, numa_distance, same_node};

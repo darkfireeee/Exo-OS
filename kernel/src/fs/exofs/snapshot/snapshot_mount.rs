@@ -7,15 +7,14 @@
 //!   OOM-02   : try_reserve avant chaque push
 //!   ARITH-02 : checked_add pour compteurs
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use crate::scheduler::sync::spinlock::SpinLock;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
 use super::snapshot::flags;
 use super::snapshot_list::SNAPSHOT_LIST;
+use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
+use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────
 // Singleton global
@@ -38,17 +37,17 @@ pub struct MountId(pub u64);
 #[derive(Debug, Clone)]
 pub struct MountPoint {
     /// Identifiant de montage
-    pub mount_id:    MountId,
+    pub mount_id: MountId,
     /// Snapshot monté
-    pub snap_id:     SnapshotId,
+    pub snap_id: SnapshotId,
     /// Chemin virtuel (UTF-8, null-padded)
-    pub path:        [u8; 256],
+    pub path: [u8; 256],
     /// Timestamp de montage (ticks)
-    pub mounted_at:  u64,
+    pub mounted_at: u64,
     /// Nombre d'ouvertures actives sur ce point de montage
-    pub open_count:  u64,
+    pub open_count: u64,
     /// Options de montage
-    pub opts:        MountOptions,
+    pub opts: MountOptions,
 }
 
 impl MountPoint {
@@ -57,7 +56,9 @@ impl MountPoint {
         core::str::from_utf8(&self.path[..end]).unwrap_or("<invalid>")
     }
 
-    pub fn is_busy(&self) -> bool { self.open_count > 0 }
+    pub fn is_busy(&self) -> bool {
+        self.open_count > 0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -71,11 +72,17 @@ pub struct MountOptions {
     /// Montage non-bloquant : n'attend pas les I/O
     pub nonblock: bool,
     /// Montage avec strict verify (vérifie chaque accès)
-    pub strict:   bool,
+    pub strict: bool,
 }
 
 impl Default for MountOptions {
-    fn default() -> Self { Self { readonly: true, nonblock: false, strict: false } }
+    fn default() -> Self {
+        Self {
+            readonly: true,
+            nonblock: false,
+            strict: false,
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -83,9 +90,9 @@ impl Default for MountOptions {
 // ─────────────────────────────────────────────────────────────
 
 pub struct SnapshotMountRegistry {
-    mounts:    SpinLock<alloc::collections::BTreeMap<u64, MountPoint>>,
-    next_id:   AtomicU64,
-    n_mounts:  AtomicUsize,
+    mounts: SpinLock<alloc::collections::BTreeMap<u64, MountPoint>>,
+    next_id: AtomicU64,
+    n_mounts: AtomicUsize,
 }
 
 impl SnapshotMountRegistry {
@@ -100,7 +107,13 @@ impl SnapshotMountRegistry {
     // ── Montage ─────────────────────────────────────────────────────
 
     /// Monte un snapshot sur le chemin virtuel `path`
-    pub fn mount(&self, snap_id: SnapshotId, path: &[u8], opts: MountOptions, now: u64) -> ExofsResult<MountId> {
+    pub fn mount(
+        &self,
+        snap_id: SnapshotId,
+        path: &[u8],
+        opts: MountOptions,
+        now: u64,
+    ) -> ExofsResult<MountId> {
         // Le snapshot doit exister
         let snap = SNAPSHOT_LIST.get(snap_id)?;
 
@@ -116,11 +129,15 @@ impl SnapshotMountRegistry {
         path_arr[..len].copy_from_slice(&path[..len]);
 
         let mp = MountPoint {
-            mount_id, snap_id,
+            mount_id,
+            snap_id,
             path: path_arr,
             mounted_at: now,
             open_count: 0,
-            opts: MountOptions { readonly: true, ..opts },
+            opts: MountOptions {
+                readonly: true,
+                ..opts
+            },
         };
 
         let mut guard = self.mounts.lock();
@@ -225,24 +242,35 @@ impl SnapshotMountRegistry {
     pub fn all_mount_ids(&self) -> ExofsResult<Vec<MountId>> {
         let guard = self.mounts.lock();
         let mut out: Vec<MountId> = Vec::new();
-        out.try_reserve(guard.len()).map_err(|_| ExofsError::NoMemory)?;
-        for &k in guard.keys() { out.push(MountId(k)); }
+        out.try_reserve(guard.len())
+            .map_err(|_| ExofsError::NoMemory)?;
+        for &k in guard.keys() {
+            out.push(MountId(k));
+        }
         Ok(out)
     }
 
     // ── Statistiques ────────────────────────────────────────────────
 
-    pub fn n_mounts(&self)  -> usize { self.n_mounts.load(Ordering::Acquire) }
+    pub fn n_mounts(&self) -> usize {
+        self.n_mounts.load(Ordering::Acquire)
+    }
 
     pub fn stats(&self) -> MountStats {
         let guard = self.mounts.lock();
         let mut n_busy: usize = 0;
         let mut total_opens: u64 = 0;
         for mp in guard.values() {
-            if mp.is_busy() { n_busy += 1; }
+            if mp.is_busy() {
+                n_busy += 1;
+            }
             total_opens = total_opens.saturating_add(mp.open_count);
         }
-        MountStats { n_mounts: guard.len(), n_busy, total_opens }
+        MountStats {
+            n_mounts: guard.len(),
+            n_busy,
+            total_opens,
+        }
     }
 
     // ── Nettoyage ────────────────────────────────────────────────────
@@ -260,8 +288,8 @@ impl SnapshotMountRegistry {
 
 #[derive(Debug, Clone, Copy)]
 pub struct MountStats {
-    pub n_mounts:    usize,
-    pub n_busy:      usize,
+    pub n_mounts: usize,
+    pub n_busy: usize,
     pub total_opens: u64,
 }
 
@@ -271,19 +299,26 @@ pub struct MountStats {
 
 #[cfg(test)]
 mod tests {
+    use super::super::snapshot::{make_snapshot_name, Snapshot};
+    use super::super::snapshot_list::SnapshotList;
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
-    use super::super::snapshot::{Snapshot, make_snapshot_name};
-    use super::super::snapshot_list::SnapshotList;
 
     fn push_snap(list: &SnapshotList, id: u64) {
         list.register(Snapshot {
-            id: SnapshotId(id), epoch_id: EpochId(1), parent_id: None,
-            root_blob: BlobId([0u8;32]), created_at: 0, n_blobs: 0,
-            total_bytes: 0, flags: 0,
-            blob_catalog_offset: DiskOffset(0), blob_catalog_size: 0,
+            id: SnapshotId(id),
+            epoch_id: EpochId(1),
+            parent_id: None,
+            root_blob: BlobId([0u8; 32]),
+            created_at: 0,
+            n_blobs: 0,
+            total_bytes: 0,
+            flags: 0,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
             name: make_snapshot_name(b"m-test"),
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -291,7 +326,9 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 1);
         let reg = SnapshotMountRegistry::new_const();
-        let mid = reg.mount(SnapshotId(1), b"/snap/1", MountOptions::default(), 0).unwrap();
+        let mid = reg
+            .mount(SnapshotId(1), b"/snap/1", MountOptions::default(), 0)
+            .unwrap();
         assert!(reg.is_snap_mounted(SnapshotId(1)));
         reg.umount(mid).unwrap();
         assert!(!reg.is_snap_mounted(SnapshotId(1)));
@@ -302,7 +339,9 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 2);
         let reg = SnapshotMountRegistry::new_const();
-        let mid = reg.mount(SnapshotId(2), b"/snap/2", MountOptions::default(), 0).unwrap();
+        let mid = reg
+            .mount(SnapshotId(2), b"/snap/2", MountOptions::default(), 0)
+            .unwrap();
         reg.open(mid).unwrap();
         let err = reg.umount(mid);
         assert!(matches!(err, Err(ExofsError::InvalidState)));
@@ -315,7 +354,9 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 3);
         let reg = SnapshotMountRegistry::new_const();
-        let mid = reg.mount(SnapshotId(3), b"/snap/3", MountOptions::default(), 0).unwrap();
+        let mid = reg
+            .mount(SnapshotId(3), b"/snap/3", MountOptions::default(), 0)
+            .unwrap();
         reg.open(mid).unwrap();
         reg.force_umount(mid).unwrap();
         assert!(!reg.is_snap_mounted(SnapshotId(3)));
@@ -326,7 +367,8 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 4);
         let reg = SnapshotMountRegistry::new_const();
-        reg.mount(SnapshotId(4), b"/mnt/snap4", MountOptions::default(), 0).unwrap();
+        reg.mount(SnapshotId(4), b"/mnt/snap4", MountOptions::default(), 0)
+            .unwrap();
         let mp = reg.find_by_path(b"/mnt/snap4");
         assert!(mp.is_some());
         assert_eq!(mp.unwrap().snap_id, SnapshotId(4));
@@ -337,7 +379,9 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 5);
         let reg = SnapshotMountRegistry::new_const();
-        let mid = reg.mount(SnapshotId(5), b"/snap/5", MountOptions::default(), 0).unwrap();
+        let mid = reg
+            .mount(SnapshotId(5), b"/snap/5", MountOptions::default(), 0)
+            .unwrap();
         {
             let mut g = reg.mounts.lock();
             g.get_mut(&mid.0).unwrap().open_count = u64::MAX;

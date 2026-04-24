@@ -9,8 +9,8 @@
 // no_alloc — tableau fixe trié par insertion).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU64, Ordering};
 use crate::scheduler::timer::clock::monotonic_ns;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -27,14 +27,19 @@ type HrTimerCallback = unsafe fn(u32, u64);
 #[derive(Clone, Copy)]
 struct HrTimerEntry {
     expiry_ns: u64,
-    id:        u32,
-    data:      u64,
-    callback:  Option<HrTimerCallback>,
+    id: u32,
+    data: u64,
+    callback: Option<HrTimerCallback>,
 }
 
 impl HrTimerEntry {
     const fn empty() -> Self {
-        Self { expiry_ns: u64::MAX, id: 0, data: 0, callback: None }
+        Self {
+            expiry_ns: u64::MAX,
+            id: 0,
+            data: 0,
+            callback: None,
+        }
     }
 }
 
@@ -44,7 +49,7 @@ impl HrTimerEntry {
 
 struct HrTimerList {
     entries: [HrTimerEntry; MAX_HRTIMERS],
-    count:   usize,
+    count: usize,
     next_id: u32,
 }
 
@@ -52,18 +57,25 @@ impl HrTimerList {
     const fn new() -> Self {
         Self {
             entries: [HrTimerEntry::empty(); MAX_HRTIMERS],
-            count:   0,
+            count: 0,
             next_id: 1,
         }
     }
 
     /// Insère une minuterie triée par expiration. Retourne son ID ou 0 si plein.
     fn insert(&mut self, expiry_ns: u64, data: u64, cb: HrTimerCallback) -> u32 {
-        if self.count >= MAX_HRTIMERS { return 0; }
+        if self.count >= MAX_HRTIMERS {
+            return 0;
+        }
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
 
-        let entry = HrTimerEntry { expiry_ns, id, data, callback: Some(cb) };
+        let entry = HrTimerEntry {
+            expiry_ns,
+            id,
+            data,
+            callback: Some(cb),
+        };
         // Insertion triée par expiry_ns.
         let mut pos = self.count;
         for i in 0..self.count {
@@ -165,7 +177,9 @@ pub unsafe fn arm(cpu: usize, delay_ns: u64, data: u64, cb: HrTimerCallback) -> 
 /// Préemption désactivée requise.
 pub unsafe fn cancel(cpu: usize, id: u32) -> bool {
     let r = HR_LISTS[cpu].assume_init_mut().cancel(id);
-    if r { HRTIMER_CANCELLED.fetch_add(1, Ordering::Relaxed); }
+    if r {
+        HRTIMER_CANCELLED.fetch_add(1, Ordering::Relaxed);
+    }
     r
 }
 

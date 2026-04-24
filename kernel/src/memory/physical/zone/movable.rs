@@ -5,8 +5,8 @@
 // consolidées pour former des 2MiB/1GiB huge pages.
 // Couche 0 — aucune dépendance externe.
 
-use crate::memory::core::{PhysAddr, ZoneType};
 use super::ZoneDescriptor;
+use crate::memory::core::{PhysAddr, ZoneType};
 
 /// Zone MOVABLE — allocation de pages migratables.
 ///
@@ -20,9 +20,9 @@ impl MovableZone {
     /// Crée la zone MOVABLE.
     /// `phys_start`/`phys_end` sont configurés par le policy NUMA au boot.
     pub const fn new(
-        numa_node:      u8,
-        phys_start:     PhysAddr,
-        phys_end:       PhysAddr,
+        numa_node: u8,
+        phys_start: PhysAddr,
+        phys_end: PhysAddr,
         reserved_frames: usize,
     ) -> Self {
         let total = if phys_end.as_u64() > phys_start.as_u64() {
@@ -38,7 +38,7 @@ impl MovableZone {
                 phys_end,
                 total,
                 reserved_frames,
-            )
+            ),
         }
     }
 
@@ -52,7 +52,7 @@ impl MovableZone {
                 PhysAddr::new(0),
                 0,
                 0,
-            )
+            ),
         }
     }
 }

@@ -15,17 +15,19 @@
 //   - Isolation des abonnés : un ring plein n'affecte pas les autres (DROP_SUBSCRIBER)
 //   - Aucune importation de process/ ou fs/
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::ipc::core::types::{ChannelId, IpcError, MsgFlags, MessageId, alloc_channel_id, alloc_message_id};
 use crate::ipc::core::constants::MAX_MSG_SIZE;
+use crate::ipc::core::types::{
+    alloc_channel_id, alloc_message_id, ChannelId, IpcError, MessageId, MsgFlags,
+};
 use crate::ipc::ring::spsc::SpscRing;
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
 // IPC-04 (v6) : vérification capability via security::access_control
+use crate::security::access_control::{check_access, AccessError, ObjectKind};
 use crate::security::capability::{CapTable, CapToken, Rights};
-use crate::security::access_control::{check_access, ObjectKind, AccessError};
 
 // ---------------------------------------------------------------------------
 // Constantes du broadcast
@@ -304,9 +306,7 @@ impl BroadcastChannel {
     /// Retourne `(MessageId, delivered, dropped)` :
     ///   - `delivered` : nombre d'abonnés ayant reçu le message
     ///   - `dropped`   : nombre d'abonnés dont le ring était plein
-    pub fn publish(&self, data: &[u8], flags: MsgFlags)
-        -> Result<(MessageId, u32, u32), IpcError>
-    {
+    pub fn publish(&self, data: &[u8], flags: MsgFlags) -> Result<(MessageId, u32, u32), IpcError> {
         if self.is_closed() {
             return Err(IpcError::Closed);
         }
@@ -334,9 +334,15 @@ impl BroadcastChannel {
         }
 
         self.stats.publishes.fetch_add(1, Ordering::Relaxed);
-        self.stats.total_deliveries.fetch_add(delivered as u64, Ordering::Relaxed);
-        self.stats.total_drops.fetch_add(dropped as u64, Ordering::Relaxed);
-        self.stats.bytes_published.fetch_add(data.len() as u64, Ordering::Relaxed);
+        self.stats
+            .total_deliveries
+            .fetch_add(delivered as u64, Ordering::Relaxed);
+        self.stats
+            .total_drops
+            .fetch_add(dropped as u64, Ordering::Relaxed);
+        self.stats
+            .bytes_published
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
 
         if delivered > 0 {
             IPC_STATS.record(StatEvent::MessageSent);
@@ -350,7 +356,11 @@ impl BroadcastChannel {
     // -----------------------------------------------------------------------
 
     /// L'abonné `sub_id` lit son prochain message.
-    pub fn recv(&self, sub_id: SubscriberId, buf: &mut [u8]) -> Result<(usize, MsgFlags), IpcError> {
+    pub fn recv(
+        &self,
+        sub_id: SubscriberId,
+        buf: &mut [u8],
+    ) -> Result<(usize, MsgFlags), IpcError> {
         let idx = sub_id as usize;
         if idx >= MAX_BROADCAST_SUBSCRIBERS {
             return Err(IpcError::InvalidHandle);
@@ -387,17 +397,23 @@ impl BroadcastChannel {
     #[inline]
     pub fn publish_checked(
         &self,
-        data:  &[u8],
+        data: &[u8],
         flags: MsgFlags,
         table: &CapTable,
         token: CapToken,
     ) -> Result<(MessageId, u32, u32), IpcError> {
         // IPC-04 (v6) : vérification capability — appel direct security/access_control/
-        check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_SEND, "ipc::broadcast")
-            .map_err(|e| match e {
-                AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-                _ => IpcError::PermissionDenied,
-            })?;
+        check_access(
+            table,
+            token,
+            ObjectKind::IpcChannel,
+            Rights::IPC_SEND,
+            "ipc::broadcast",
+        )
+        .map_err(|e| match e {
+            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+            _ => IpcError::PermissionDenied,
+        })?;
         self.publish(data, flags)
     }
 
@@ -408,15 +424,21 @@ impl BroadcastChannel {
     pub fn subscribe_checked(
         &self,
         owner_id: u64,
-        table:    &CapTable,
-        token:    CapToken,
+        table: &CapTable,
+        token: CapToken,
     ) -> Result<Option<SubscriberId>, IpcError> {
         // IPC-04 (v6) : vérification capability — appel direct security/access_control/
-        check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_RECV, "ipc::broadcast")
-            .map_err(|e| match e {
-                AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-                _ => IpcError::PermissionDenied,
-            })?;
+        check_access(
+            table,
+            token,
+            ObjectKind::IpcChannel,
+            Rights::IPC_RECV,
+            "ipc::broadcast",
+        )
+        .map_err(|e| match e {
+            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+            _ => IpcError::PermissionDenied,
+        })?;
         Ok(self.subscribe(owner_id))
     }
 
@@ -427,16 +449,22 @@ impl BroadcastChannel {
     pub fn recv_checked(
         &self,
         sub_id: SubscriberId,
-        buf:    &mut [u8],
-        table:  &CapTable,
-        token:  CapToken,
+        buf: &mut [u8],
+        table: &CapTable,
+        token: CapToken,
     ) -> Result<(usize, MsgFlags), IpcError> {
         // IPC-04 (v6) : vérification capability — appel direct security/access_control/
-        check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_RECV, "ipc::broadcast")
-            .map_err(|e| match e {
-                AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-                _ => IpcError::PermissionDenied,
-            })?;
+        check_access(
+            table,
+            token,
+            ObjectKind::IpcChannel,
+            Rights::IPC_RECV,
+            "ipc::broadcast",
+        )
+        .map_err(|e| match e {
+            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+            _ => IpcError::PermissionDenied,
+        })?;
         self.recv(sub_id, buf)
     }
 }
@@ -540,13 +568,19 @@ pub fn broadcast_unsubscribe(chan_idx: usize, sub_id: SubscriberId) -> Result<()
     // SAFETY: même invariant 'static que broadcast_subscribe().
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
     drop(tbl);
-    if chan_ref.unsubscribe(sub_id) { Ok(()) } else { Err(IpcError::InvalidHandle) }
+    if chan_ref.unsubscribe(sub_id) {
+        Ok(())
+    } else {
+        Err(IpcError::InvalidHandle)
+    }
 }
 
 /// Publier un message vers tous les abonnés du canal `chan_idx`.
-pub fn broadcast_publish(chan_idx: usize, data: &[u8], flags: MsgFlags)
-    -> Result<(MessageId, u32, u32), IpcError>
-{
+pub fn broadcast_publish(
+    chan_idx: usize,
+    data: &[u8],
+    flags: MsgFlags,
+) -> Result<(MessageId, u32, u32), IpcError> {
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -557,9 +591,11 @@ pub fn broadcast_publish(chan_idx: usize, data: &[u8], flags: MsgFlags)
 }
 
 /// Recevoir un message pour l'abonné `sub_id` sur le canal `chan_idx`.
-pub fn broadcast_recv(chan_idx: usize, sub_id: SubscriberId, buf: &mut [u8])
-    -> Result<(usize, MsgFlags), IpcError>
-{
+pub fn broadcast_recv(
+    chan_idx: usize,
+    sub_id: SubscriberId,
+    buf: &mut [u8],
+) -> Result<(usize, MsgFlags), IpcError> {
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -588,10 +624,10 @@ pub fn broadcast_destroy(chan_idx: usize) -> Result<(), IpcError> {
 /// Publier avec vérification capability (IPC-04 v6).
 pub fn broadcast_publish_checked(
     chan_idx: usize,
-    data:     &[u8],
-    flags:    MsgFlags,
-    table:    &CapTable,
-    token:    CapToken,
+    data: &[u8],
+    flags: MsgFlags,
+    table: &CapTable,
+    token: CapToken,
 ) -> Result<(MessageId, u32, u32), IpcError> {
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
@@ -604,10 +640,10 @@ pub fn broadcast_publish_checked(
 
 /// S'abonner avec vérification capability (IPC-04 v6).
 pub fn broadcast_subscribe_checked(
-    chan_idx:  usize,
-    owner_id:  u64,
-    table:     &CapTable,
-    token:     CapToken,
+    chan_idx: usize,
+    owner_id: u64,
+    table: &CapTable,
+    token: CapToken,
 ) -> Result<SubscriberId, IpcError> {
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
@@ -615,17 +651,18 @@ pub fn broadcast_subscribe_checked(
     // SAFETY: même invariant 'static que broadcast_subscribe().
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
     drop(tbl);
-    chan_ref.subscribe_checked(owner_id, table, token)?
+    chan_ref
+        .subscribe_checked(owner_id, table, token)?
         .ok_or(IpcError::OutOfResources)
 }
 
 /// Recevoir avec vérification capability (IPC-04 v6).
 pub fn broadcast_recv_checked(
     chan_idx: usize,
-    sub_id:   SubscriberId,
-    buf:      &mut [u8],
-    table:    &CapTable,
-    token:    CapToken,
+    sub_id: SubscriberId,
+    buf: &mut [u8],
+    table: &CapTable,
+    token: CapToken,
 ) -> Result<(usize, MsgFlags), IpcError> {
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.

@@ -13,12 +13,12 @@
 // - HDR-03   : le BlobId est vérifié avant toute lecture.
 // - OOM-02   : try_reserve avant toute allocation.
 
+use crate::fs::exofs::core::blob_id::verify_blob_id;
+use crate::fs::exofs::core::{BlobId, DiskOffset, ExofsError, ExofsResult};
+use crate::fs::exofs::storage::dedup_writer::{DedupEntry, DedupWriter};
+use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId, DiskOffset};
-use crate::fs::exofs::core::blob_id::verify_blob_id;
-use crate::fs::exofs::storage::dedup_writer::{DedupWriter, DedupEntry};
-use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ResolveResult — résultat de la résolution d'un BlobId
@@ -27,9 +27,9 @@ use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 #[derive(Debug, Clone)]
 pub struct ResolveResult {
     pub blob_id: BlobId,
-    pub offset:  DiskOffset,
-    pub size:    u64,
-    pub cached:  bool,
+    pub offset: DiskOffset,
+    pub size: u64,
+    pub cached: bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,18 +40,23 @@ const RESOLVE_CACHE_CAP: usize = 64;
 
 struct CacheEntry {
     blob_id: BlobId,
-    offset:  DiskOffset,
-    size:    u64,
-    tick:    u64,
+    offset: DiskOffset,
+    size: u64,
+    tick: u64,
 }
 
 struct ResolutionCache {
     entries: Vec<CacheEntry>,
-    tick:    u64,
+    tick: u64,
 }
 
 impl ResolutionCache {
-    fn new() -> Self { Self { entries: Vec::new(), tick: 0 } }
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            tick: 0,
+        }
+    }
 
     fn next_tick(&mut self) -> u64 {
         self.tick = self.tick.wrapping_add(1);
@@ -63,7 +68,12 @@ impl ResolutionCache {
         for e in &mut self.entries {
             if e.blob_id == *id {
                 e.tick = tick;
-                return Some(ResolveResult { blob_id: *id, offset: e.offset, size: e.size, cached: true });
+                return Some(ResolveResult {
+                    blob_id: *id,
+                    offset: e.offset,
+                    size: e.size,
+                    cached: true,
+                });
             }
         }
         None
@@ -73,12 +83,25 @@ impl ResolutionCache {
         let tick = self.next_tick();
         // Éviction LRU si plein.
         if self.entries.len() >= RESOLVE_CACHE_CAP {
-            if let Some(lru_idx) = self.entries.iter().enumerate().min_by_key(|(_, e)| e.tick).map(|(i, _)| i) {
+            if let Some(lru_idx) = self
+                .entries
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, e)| e.tick)
+                .map(|(i, _)| i)
+            {
                 self.entries.swap_remove(lru_idx);
             }
         }
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-        self.entries.push(CacheEntry { blob_id: id, offset, size, tick });
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
+        self.entries.push(CacheEntry {
+            blob_id: id,
+            offset,
+            size,
+            tick,
+        });
         Ok(())
     }
 
@@ -88,8 +111,12 @@ impl ResolutionCache {
         }
     }
 
-    fn clear(&mut self) { self.entries.clear(); }
-    fn len(&self) -> usize { self.entries.len() }
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,8 +126,8 @@ impl ResolutionCache {
 use crate::scheduler::sync::spinlock::SpinLock;
 
 pub struct DedupReader {
-    cache:        SpinLock<ResolutionCache>,
-    cache_hits:   AtomicU64,
+    cache: SpinLock<ResolutionCache>,
+    cache_hits: AtomicU64,
     cache_misses: AtomicU64,
     verify_errors: AtomicU64,
 }
@@ -108,19 +135,15 @@ pub struct DedupReader {
 impl DedupReader {
     pub fn new() -> Self {
         Self {
-            cache:         SpinLock::new(ResolutionCache::new()),
-            cache_hits:    AtomicU64::new(0),
-            cache_misses:  AtomicU64::new(0),
+            cache: SpinLock::new(ResolutionCache::new()),
+            cache_hits: AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
             verify_errors: AtomicU64::new(0),
         }
     }
 
     /// Résout un BlobId vers son offset via l'index DedupWriter.
-    pub fn resolve(
-        &self,
-        blob_id: &BlobId,
-        index:   &DedupWriter,
-    ) -> ExofsResult<ResolveResult> {
+    pub fn resolve(&self, blob_id: &BlobId, index: &DedupWriter) -> ExofsResult<ResolveResult> {
         // 1. Vérifier le cache.
         {
             let mut cache = self.cache.lock();
@@ -147,9 +170,9 @@ impl DedupReader {
     pub fn resolve_from_entry(&self, entry: &DedupEntry) -> ExofsResult<ResolveResult> {
         let r = ResolveResult {
             blob_id: entry.blob_id,
-            offset:  entry.offset,
-            size:    entry.size,
-            cached:  false,
+            offset: entry.offset,
+            size: entry.size,
+            cached: false,
         };
         // Mettre en cache.
         let mut cache = self.cache.lock();
@@ -163,8 +186,8 @@ impl DedupReader {
     pub fn read_and_verify(
         &self,
         blob_id: &BlobId,
-        offset:  DiskOffset,
-        size:    u64,
+        offset: DiskOffset,
+        size: u64,
         read_fn: &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
     ) -> ExofsResult<Vec<u8>> {
         let sz = size as usize;
@@ -195,29 +218,45 @@ impl DedupReader {
         self.cache.lock().clear();
     }
 
-    pub fn cache_hit_count(&self)  -> u64 { self.cache_hits.load(Ordering::Relaxed) }
-    pub fn cache_miss_count(&self) -> u64 { self.cache_misses.load(Ordering::Relaxed) }
-    pub fn verify_error_count(&self) -> u64 { self.verify_errors.load(Ordering::Relaxed) }
-    pub fn cache_size(&self)       -> usize { self.cache.lock().len() }
+    pub fn cache_hit_count(&self) -> u64 {
+        self.cache_hits.load(Ordering::Relaxed)
+    }
+    pub fn cache_miss_count(&self) -> u64 {
+        self.cache_misses.load(Ordering::Relaxed)
+    }
+    pub fn verify_error_count(&self) -> u64 {
+        self.verify_errors.load(Ordering::Relaxed)
+    }
+    pub fn cache_size(&self) -> usize {
+        self.cache.lock().len()
+    }
 
     pub fn cache_hit_rate_pct(&self) -> u64 {
         let h = self.cache_hit_count();
         let m = self.cache_miss_count();
         let t = h.saturating_add(m);
-        if t == 0 { 0 } else { h * 100 / t }
+        if t == 0 {
+            0
+        } else {
+            h * 100 / t
+        }
     }
 }
 
-impl Default for DedupReader { fn default() -> Self { Self::new() } }
+impl Default for DedupReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DedupReadPipeline — pipeline complet de lecture avec déduplication
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct DedupReadPipeline<'a> {
-    reader:  &'a DedupReader,
+    reader: &'a DedupReader,
     #[allow(dead_code)]
-    writer:  &'a DedupWriter,
+    writer: &'a DedupWriter,
 }
 
 impl<'a> DedupReadPipeline<'a> {
@@ -237,7 +276,9 @@ impl<'a> DedupReadPipeline<'a> {
             if let Some(r) = cache.lookup(blob_id) {
                 drop(cache);
                 self.reader.cache_hits.fetch_add(1, Ordering::Relaxed);
-                return self.reader.read_and_verify(blob_id, r.offset, r.size, read_fn);
+                return self
+                    .reader
+                    .read_and_verify(blob_id, r.offset, r.size, read_fn);
             }
         }
         Err(ExofsError::NotFound)
@@ -265,18 +306,18 @@ mod tests {
     fn test_resolve_not_found_without_index() {
         let reader = DedupReader::new();
         let writer = DedupWriter::new();
-        let id     = compute_blob_id(b"test");
-        let r      = reader.resolve(&id, &writer);
+        let id = compute_blob_id(b"test");
+        let r = reader.resolve(&id, &writer);
         assert!(r.is_err());
     }
 
     #[test]
     fn test_resolve_from_entry() {
         let reader = DedupReader::new();
-        let data   = b"dedup blob data";
-        let id     = compute_blob_id(data);
-        let entry  = DedupEntry::new(id, DiskOffset(4096), data.len() as u64);
-        let r      = reader.resolve_from_entry(&entry).unwrap();
+        let data = b"dedup blob data";
+        let id = compute_blob_id(data);
+        let entry = DedupEntry::new(id, DiskOffset(4096), data.len() as u64);
+        let r = reader.resolve_from_entry(&entry).unwrap();
         assert_eq!(r.offset, DiskOffset(4096));
         assert_eq!(reader.cache_size(), 1);
     }
@@ -284,10 +325,10 @@ mod tests {
     #[test]
     fn test_read_and_verify_ok() {
         let reader = DedupReader::new();
-        let data   = b"verified blob content";
-        let id     = compute_blob_id(data);
-        let buf    = data.to_vec();
-        let rfn    = mock_read(buf);
+        let data = b"verified blob content";
+        let id = compute_blob_id(data);
+        let buf = data.to_vec();
+        let rfn = mock_read(buf);
         let result = reader.read_and_verify(&id, DiskOffset(0), data.len() as u64, &rfn);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), data);
@@ -296,9 +337,9 @@ mod tests {
     #[test]
     fn test_cache_invalidate() {
         let reader = DedupReader::new();
-        let data   = b"cache test data";
-        let id     = compute_blob_id(data);
-        let entry  = DedupEntry::new(id, DiskOffset(0), data.len() as u64);
+        let data = b"cache test data";
+        let id = compute_blob_id(data);
+        let entry = DedupEntry::new(id, DiskOffset(0), data.len() as u64);
         reader.resolve_from_entry(&entry).unwrap();
         assert_eq!(reader.cache_size(), 1);
         reader.invalidate(&id);
@@ -312,32 +353,42 @@ mod tests {
 
 #[derive(Default, Debug, Clone, Copy)]
 pub struct DedupReadStats {
-    pub total_reads:     u64,
-    pub cache_hits:      u64,
-    pub cache_misses:    u64,
-    pub verify_errors:   u64,
-    pub bytes_served:    u64,
+    pub total_reads: u64,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub verify_errors: u64,
+    pub bytes_served: u64,
 }
 
 impl DedupReadStats {
     pub fn cache_hit_pct(&self) -> u64 {
         let t = self.cache_hits.saturating_add(self.cache_misses);
-        if t == 0 { 0 } else { self.cache_hits * 100 / t }
+        if t == 0 {
+            0
+        } else {
+            self.cache_hits * 100 / t
+        }
     }
 
     pub fn error_pct(&self) -> u64 {
-        if self.total_reads == 0 { 0 } else { self.verify_errors * 100 / self.total_reads }
+        if self.total_reads == 0 {
+            0
+        } else {
+            self.verify_errors * 100 / self.total_reads
+        }
     }
 }
 
 impl DedupReader {
     pub fn stats(&self) -> DedupReadStats {
         DedupReadStats {
-            total_reads:   self.cache_hit_count().saturating_add(self.cache_miss_count()),
-            cache_hits:    self.cache_hit_count(),
-            cache_misses:  self.cache_miss_count(),
+            total_reads: self
+                .cache_hit_count()
+                .saturating_add(self.cache_miss_count()),
+            cache_hits: self.cache_hit_count(),
+            cache_misses: self.cache_miss_count(),
             verify_errors: self.verify_error_count(),
-            bytes_served:  0, // Mis à jour seulement avec des compteurs supplémentaires.
+            bytes_served: 0, // Mis à jour seulement avec des compteurs supplémentaires.
         }
     }
 }
@@ -354,8 +405,8 @@ pub fn verify_blob_integrity(data: &[u8], blob_id: &BlobId) -> bool {
 /// Résout et lit un blob en un seul appel.
 pub fn resolve_and_read(
     blob_id: &BlobId,
-    entry:   &crate::fs::exofs::storage::dedup_writer::DedupEntry,
-    reader:  &DedupReader,
+    entry: &crate::fs::exofs::storage::dedup_writer::DedupEntry,
+    reader: &DedupReader,
     read_fn: &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
 ) -> ExofsResult<Vec<u8>> {
     reader.read_and_verify(blob_id, entry.offset, entry.size, read_fn)
@@ -367,27 +418,37 @@ pub fn resolve_and_read(
 
 pub struct MultiDedupRead {
     pub blob_id: BlobId,
-    pub data:    Vec<u8>,
-    pub ok:      bool,
+    pub data: Vec<u8>,
+    pub ok: bool,
 }
 
 pub fn read_blobs_batch(
-    items:   &[(BlobId, DiskOffset, u64)],
-    reader:  &DedupReader,
+    items: &[(BlobId, DiskOffset, u64)],
+    reader: &DedupReader,
     read_fn: &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
 ) -> ExofsResult<Vec<MultiDedupRead>> {
     let mut results: Vec<MultiDedupRead> = Vec::new();
-    results.try_reserve(items.len()).map_err(|_| ExofsError::NoMemory)?;
+    results
+        .try_reserve(items.len())
+        .map_err(|_| ExofsError::NoMemory)?;
 
     for (blob_id, offset, size) in items {
         match reader.read_and_verify(blob_id, *offset, *size, read_fn) {
             Ok(data) => {
                 results.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-                results.push(MultiDedupRead { blob_id: *blob_id, data, ok: true });
+                results.push(MultiDedupRead {
+                    blob_id: *blob_id,
+                    data,
+                    ok: true,
+                });
             }
             Err(_) => {
                 results.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-                results.push(MultiDedupRead { blob_id: *blob_id, data: Vec::new(), ok: false });
+                results.push(MultiDedupRead {
+                    blob_id: *blob_id,
+                    data: Vec::new(),
+                    ok: false,
+                });
             }
         }
     }
@@ -401,14 +462,14 @@ mod tests_extra {
 
     #[test]
     fn test_verify_blob_integrity_ok() {
-        let data    = b"integrity check data";
+        let data = b"integrity check data";
         let blob_id = compute_blob_id(data);
         assert!(verify_blob_integrity(data, &blob_id));
     }
 
     #[test]
     fn test_verify_blob_integrity_fail() {
-        let data    = b"integrity check data";
+        let data = b"integrity check data";
         let blob_id = compute_blob_id(data);
         let corrupt = b"corrupted data XXXX!";
         assert!(!verify_blob_integrity(corrupt, &blob_id));
@@ -417,7 +478,7 @@ mod tests_extra {
     #[test]
     fn test_stats_snapshot() {
         let reader = DedupReader::new();
-        let stats  = reader.stats();
+        let stats = reader.stats();
         assert_eq!(stats.total_reads, 0);
     }
 }

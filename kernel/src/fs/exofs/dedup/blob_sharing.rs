@@ -8,20 +8,19 @@
 //! OOM-02   : try_reserve.
 //! ARITH-02 : saturating / checked / wrapping.
 
-
-use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const SHARING_MAX_BLOBS_PER_CHUNK: usize = 4096;
-pub const SHARING_MAX_ENTRIES:        usize = 200_000;
+pub const SHARING_MAX_ENTRIES: usize = 200_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SharedChunkRef
@@ -31,7 +30,7 @@ pub const SHARING_MAX_ENTRIES:        usize = 200_000;
 #[derive(Clone, Debug)]
 pub struct SharedChunkRef {
     pub chunk_blake3: [u8; 32],
-    pub blob_ids:     Vec<BlobId>,
+    pub blob_ids: Vec<BlobId>,
 }
 
 impl SharedChunkRef {
@@ -39,7 +38,10 @@ impl SharedChunkRef {
         let mut v: Vec<BlobId> = Vec::new();
         v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         v.push(first_blob);
-        Ok(Self { chunk_blake3, blob_ids: v })
+        Ok(Self {
+            chunk_blake3,
+            blob_ids: v,
+        })
     }
 
     /// Ajoute un blob référençant ce chunk (pas de doublon).
@@ -48,12 +50,16 @@ impl SharedChunkRef {
     pub fn add_blob(&mut self, blob_id: BlobId) -> ExofsResult<()> {
         // Éviter les doublons.
         for existing in &self.blob_ids {
-            if existing.as_bytes() == blob_id.as_bytes() { return Ok(()); }
+            if existing.as_bytes() == blob_id.as_bytes() {
+                return Ok(());
+            }
         }
         if self.blob_ids.len() >= SHARING_MAX_BLOBS_PER_CHUNK {
             return Err(ExofsError::NoMemory);
         }
-        self.blob_ids.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.blob_ids
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.blob_ids.push(blob_id);
         Ok(())
     }
@@ -63,9 +69,15 @@ impl SharedChunkRef {
         self.blob_ids.retain(|b| b.as_bytes() != blob_id.as_bytes());
     }
 
-    pub fn is_shared(&self) -> bool { self.blob_ids.len() > 1 }
-    pub fn ref_count(&self) -> usize { self.blob_ids.len() }
-    pub fn is_empty(&self) -> bool   { self.blob_ids.is_empty() }
+    pub fn is_shared(&self) -> bool {
+        self.blob_ids.len() > 1
+    }
+    pub fn ref_count(&self) -> usize {
+        self.blob_ids.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.blob_ids.is_empty()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,10 +87,10 @@ impl SharedChunkRef {
 #[derive(Debug, Clone, Copy)]
 pub struct BlobSharingStats {
     pub total_shared_chunks: usize,
-    pub max_sharing_degree:  usize,
-    pub total_refs:          u64,
-    pub insertions:          u64,
-    pub removals:            u64,
+    pub max_sharing_degree: usize,
+    pub total_refs: u64,
+    pub insertions: u64,
+    pub removals: u64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -87,10 +99,10 @@ pub struct BlobSharingStats {
 
 /// Registre de partage chunk ↔ blobs, thread-safe.
 pub struct BlobSharing {
-    refs:       UnsafeCell<BTreeMap<[u8; 32], SharedChunkRef>>,
-    lock:       AtomicU64,
+    refs: UnsafeCell<BTreeMap<[u8; 32], SharedChunkRef>>,
+    lock: AtomicU64,
     insertions: AtomicU64,
-    removals:   AtomicU64,
+    removals: AtomicU64,
 }
 
 unsafe impl Sync for BlobSharing {}
@@ -99,21 +111,27 @@ unsafe impl Send for BlobSharing {}
 impl BlobSharing {
     pub const fn new_const() -> Self {
         Self {
-            refs:       UnsafeCell::new(BTreeMap::new()),
-            lock:       AtomicU64::new(0),
+            refs: UnsafeCell::new(BTreeMap::new()),
+            lock: AtomicU64::new(0),
             insertions: AtomicU64::new(0),
-            removals:   AtomicU64::new(0),
+            removals: AtomicU64::new(0),
         }
     }
 
     // ── Spinlock ─────────────────────────────────────────────────────────────
 
     fn acquire(&self) {
-        while self.lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .lock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
-    fn release(&self) { self.lock.store(0, Ordering::Release); }
+    fn release(&self) {
+        self.lock.store(0, Ordering::Release);
+    }
     fn map(&self) -> &mut BTreeMap<[u8; 32], SharedChunkRef> {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { &mut *self.refs.get() }
@@ -155,20 +173,20 @@ impl BlobSharing {
             } else {
                 false
             }
-        } else { false };
+        } else {
+            false
+        };
         self.release();
-        if removed { self.removals.fetch_add(1, Ordering::Relaxed); }
+        if removed {
+            self.removals.fetch_add(1, Ordering::Relaxed);
+        }
         removed
     }
 
     /// Retire toutes les références d'un blob pour une liste de chunks.
     ///
     /// RECUR-01 : boucle for.
-    pub fn remove_blob_refs(
-        &self,
-        chunk_keys: &[[u8; 32]],
-        blob_id:    &BlobId,
-    ) {
+    pub fn remove_blob_refs(&self, chunk_keys: &[[u8; 32]], blob_id: &BlobId) {
         for key in chunk_keys {
             self.remove_ref(key, blob_id);
         }
@@ -185,7 +203,11 @@ impl BlobSharing {
     /// Vérifie si un chunk est partagé entre plusieurs blobs.
     pub fn is_shared(&self, chunk_blake3: &[u8; 32]) -> bool {
         self.acquire();
-        let shared = self.map().get(chunk_blake3).map(|e| e.is_shared()).unwrap_or(false);
+        let shared = self
+            .map()
+            .get(chunk_blake3)
+            .map(|e| e.is_shared())
+            .unwrap_or(false);
         self.release();
         shared
     }
@@ -213,7 +235,9 @@ impl BlobSharing {
         n
     }
 
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     pub fn clear(&self) {
         self.acquire();
@@ -228,21 +252,25 @@ impl BlobSharing {
     /// ARITH-02 : saturating_add.
     pub fn stats(&self) -> BlobSharingStats {
         self.acquire();
-        let mut total   = 0usize;
+        let mut total = 0usize;
         let mut max_deg = 0usize;
-        let mut refs    = 0u64;
+        let mut refs = 0u64;
         for v in self.map().values() {
-            if v.is_shared() { total = total.saturating_add(1); }
-            if v.ref_count() > max_deg { max_deg = v.ref_count(); }
+            if v.is_shared() {
+                total = total.saturating_add(1);
+            }
+            if v.ref_count() > max_deg {
+                max_deg = v.ref_count();
+            }
             refs = refs.saturating_add(v.ref_count() as u64);
         }
         self.release();
         BlobSharingStats {
             total_shared_chunks: total,
-            max_sharing_degree:  max_deg,
-            total_refs:          refs,
-            insertions:          self.insertions.load(Ordering::Relaxed),
-            removals:            self.removals.load(Ordering::Relaxed),
+            max_sharing_degree: max_deg,
+            total_refs: refs,
+            insertions: self.insertions.load(Ordering::Relaxed),
+            removals: self.removals.load(Ordering::Relaxed),
         }
     }
 
@@ -251,7 +279,11 @@ impl BlobSharing {
         self.acquire();
         let bad = self.map().values().any(|v| v.blob_ids.is_empty());
         self.release();
-        if bad { Err(ExofsError::CorruptedStructure) } else { Ok(()) }
+        if bad {
+            Err(ExofsError::CorruptedStructure)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -269,30 +301,38 @@ pub static BLOB_SHARING: BlobSharing = BlobSharing::new_const();
 mod tests {
     use super::*;
 
-    fn blob(s: u8) -> BlobId { BlobId::from_raw([s; 32]) }
-    fn chunk(s: u8) -> [u8; 32] { [s; 32] }
+    fn blob(s: u8) -> BlobId {
+        BlobId::from_raw([s; 32])
+    }
+    fn chunk(s: u8) -> [u8; 32] {
+        [s; 32]
+    }
 
-    #[test] fn test_add_ref_new() {
+    #[test]
+    fn test_add_ref_new() {
         let bs = BlobSharing::new_const();
         bs.add_ref(chunk(1), blob(10)).unwrap();
         assert!(!bs.is_shared(&chunk(1)));
     }
 
-    #[test] fn test_add_ref_shared() {
+    #[test]
+    fn test_add_ref_shared() {
         let bs = BlobSharing::new_const();
         bs.add_ref(chunk(2), blob(20)).unwrap();
         bs.add_ref(chunk(2), blob(21)).unwrap();
         assert!(bs.is_shared(&chunk(2)));
     }
 
-    #[test] fn test_remove_ref_cleans_up() {
+    #[test]
+    fn test_remove_ref_cleans_up() {
         let bs = BlobSharing::new_const();
         bs.add_ref(chunk(3), blob(30)).unwrap();
         bs.remove_ref(&chunk(3), &blob(30));
         assert!(bs.is_empty());
     }
 
-    #[test] fn test_blobs_for_chunk() {
+    #[test]
+    fn test_blobs_for_chunk() {
         let bs = BlobSharing::new_const();
         bs.add_ref(chunk(4), blob(40)).unwrap();
         bs.add_ref(chunk(4), blob(41)).unwrap();
@@ -300,7 +340,8 @@ mod tests {
         assert_eq!(blobs.len(), 2);
     }
 
-    #[test] fn test_remove_blob_refs() {
+    #[test]
+    fn test_remove_blob_refs() {
         let bs = BlobSharing::new_const();
         let keys = [chunk(5), chunk(6)];
         bs.add_ref(chunk(5), blob(50)).unwrap();
@@ -309,7 +350,8 @@ mod tests {
         assert!(bs.is_empty());
     }
 
-    #[test] fn test_stats() {
+    #[test]
+    fn test_stats() {
         let bs = BlobSharing::new_const();
         bs.add_ref(chunk(7), blob(70)).unwrap();
         bs.add_ref(chunk(7), blob(71)).unwrap();
@@ -318,7 +360,8 @@ mod tests {
         assert_eq!(s.max_sharing_degree, 2);
     }
 
-    #[test] fn test_all_shared_chunks() {
+    #[test]
+    fn test_all_shared_chunks() {
         let bs = BlobSharing::new_const();
         bs.add_ref(chunk(8), blob(80)).unwrap();
         bs.add_ref(chunk(8), blob(81)).unwrap();
@@ -328,7 +371,8 @@ mod tests {
         assert_eq!(shared[0], chunk(8));
     }
 
-    #[test] fn test_verify_integrity() {
+    #[test]
+    fn test_verify_integrity() {
         let bs = BlobSharing::new_const();
         bs.add_ref(chunk(10), blob(100)).unwrap();
         assert!(bs.verify_integrity().is_ok());
@@ -345,9 +389,9 @@ pub struct BlobDeletionAnalysis {
     /// Chunks qui seraient orphelins après suppression de ce blob.
     pub chunks_to_delete: Vec<[u8; 32]>,
     /// Chunks qui resteraient référencés par d'autres blobs.
-    pub chunks_to_keep:   Vec<[u8; 32]>,
+    pub chunks_to_keep: Vec<[u8; 32]>,
     /// Blobs qui partagent au moins un chunk avec le blob à supprimer.
-    pub dependent_blobs:  Vec<BlobId>,
+    pub dependent_blobs: Vec<BlobId>,
 }
 
 impl BlobSharing {
@@ -360,11 +404,11 @@ impl BlobSharing {
     pub fn analyze_deletion(
         &self,
         chunk_keys: &[[u8; 32]],
-        blob_id:    &BlobId,
+        blob_id: &BlobId,
     ) -> ExofsResult<BlobDeletionAnalysis> {
-        let mut to_delete:  Vec<[u8; 32]> = Vec::new();
-        let mut to_keep:    Vec<[u8; 32]> = Vec::new();
-        let mut dep_blobs:  Vec<BlobId>   = Vec::new();
+        let mut to_delete: Vec<[u8; 32]> = Vec::new();
+        let mut to_keep: Vec<[u8; 32]> = Vec::new();
+        let mut dep_blobs: Vec<BlobId> = Vec::new();
 
         for key in chunk_keys {
             self.acquire();
@@ -387,7 +431,9 @@ impl BlobSharing {
                         // Collecter les blobs dépendants.
                         for b in &entry.blob_ids {
                             if b.as_bytes() != blob_id.as_bytes() {
-                                let already = dep_blobs.iter().any(|x: &BlobId| x.as_bytes() == b.as_bytes());
+                                let already = dep_blobs
+                                    .iter()
+                                    .any(|x: &BlobId| x.as_bytes() == b.as_bytes());
                                 if !already {
                                     dep_blobs.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                                     dep_blobs.push(b.clone());
@@ -401,8 +447,8 @@ impl BlobSharing {
 
         Ok(BlobDeletionAnalysis {
             chunks_to_delete: to_delete,
-            chunks_to_keep:   to_keep,
-            dependent_blobs:  dep_blobs,
+            chunks_to_keep: to_keep,
+            dependent_blobs: dep_blobs,
         })
     }
 }
@@ -411,12 +457,17 @@ impl BlobSharing {
 mod tests_deletion {
     use super::*;
 
-    fn blob(s: u8) -> BlobId { BlobId::from_raw([s; 32]) }
-    fn chunk(s: u8) -> [u8; 32] { [s; 32] }
+    fn blob(s: u8) -> BlobId {
+        BlobId::from_raw([s; 32])
+    }
+    fn chunk(s: u8) -> [u8; 32] {
+        [s; 32]
+    }
 
-    #[test] fn test_analyze_deletion_sole_owner() {
+    #[test]
+    fn test_analyze_deletion_sole_owner() {
         let bs = BlobSharing::new_const();
-        let k  = chunk(0xAA);
+        let k = chunk(0xAA);
         bs.add_ref(k, blob(1)).unwrap();
         let analysis = bs.analyze_deletion(&[k], &blob(1)).unwrap();
         assert_eq!(analysis.chunks_to_delete.len(), 1);
@@ -424,9 +475,10 @@ mod tests_deletion {
         assert!(analysis.dependent_blobs.is_empty());
     }
 
-    #[test] fn test_analyze_deletion_shared() {
+    #[test]
+    fn test_analyze_deletion_shared() {
         let bs = BlobSharing::new_const();
-        let k  = chunk(0xBB);
+        let k = chunk(0xBB);
         bs.add_ref(k, blob(1)).unwrap();
         bs.add_ref(k, blob(2)).unwrap();
         let analysis = bs.analyze_deletion(&[k], &blob(1)).unwrap();
@@ -435,7 +487,8 @@ mod tests_deletion {
         assert_eq!(analysis.dependent_blobs.len(), 1);
     }
 
-    #[test] fn test_global_sharing_accessible() {
+    #[test]
+    fn test_global_sharing_accessible() {
         let s = BLOB_SHARING.stats();
         let _ = s.total_shared_chunks;
     }

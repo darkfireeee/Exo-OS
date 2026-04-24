@@ -17,25 +17,25 @@ pub const EVICT_CANDIDATE_LIST_SIZE: usize = 1024;
 
 /// Statistiques du swapper.
 pub struct SwapPolicyStats {
-    pub pages_evicted:     AtomicU64,
-    pub pages_reclaimed:   AtomicU64,
-    pub scan_cycles:       AtomicU64,
-    pub accessed_cleared:  AtomicU64,
-    pub dirty_skipped:     AtomicU64,
-    pub pinned_skipped:    AtomicU64,
-    pub oom_triggers:      AtomicU64,
+    pub pages_evicted: AtomicU64,
+    pub pages_reclaimed: AtomicU64,
+    pub scan_cycles: AtomicU64,
+    pub accessed_cleared: AtomicU64,
+    pub dirty_skipped: AtomicU64,
+    pub pinned_skipped: AtomicU64,
+    pub oom_triggers: AtomicU64,
 }
 
 impl SwapPolicyStats {
     const fn new() -> Self {
         SwapPolicyStats {
-            pages_evicted:    AtomicU64::new(0),
-            pages_reclaimed:  AtomicU64::new(0),
-            scan_cycles:      AtomicU64::new(0),
+            pages_evicted: AtomicU64::new(0),
+            pages_reclaimed: AtomicU64::new(0),
+            scan_cycles: AtomicU64::new(0),
             accessed_cleared: AtomicU64::new(0),
-            dirty_skipped:    AtomicU64::new(0),
-            pinned_skipped:   AtomicU64::new(0),
-            oom_triggers:     AtomicU64::new(0),
+            dirty_skipped: AtomicU64::new(0),
+            pinned_skipped: AtomicU64::new(0),
+            oom_triggers: AtomicU64::new(0),
         }
     }
 }
@@ -49,13 +49,13 @@ pub static SWAP_POLICY_STATS: SwapPolicyStats = SwapPolicyStats::new();
 /// Candidat à l'éviction dans la liste CLOCK.
 #[derive(Copy, Clone, Debug)]
 pub struct EvictCandidate {
-    pub phys:       PhysAddr,
+    pub phys: PhysAddr,
     /// Address space associé (opaque, encodé en u64).
-    pub as_id:      u64,
+    pub as_id: u64,
     /// Adresse virtuelle dans l'address space.
-    pub virt_addr:  u64,
+    pub virt_addr: u64,
     /// Génération LRU (de FrameDesc::lru_gen).
-    pub lru_gen:    u8,
+    pub lru_gen: u8,
 }
 
 impl EvictCandidate {
@@ -65,7 +65,9 @@ impl EvictCandidate {
         virt_addr: 0,
         lru_gen: 0,
     };
-    pub fn is_valid(&self) -> bool { self.phys.as_u64() != 0 }
+    pub fn is_valid(&self) -> bool {
+        self.phys.as_u64() != 0
+    }
 }
 
 /// Liste CLOCK pour l'algorithme d'éviction.
@@ -76,7 +78,7 @@ pub struct ClockEvictList {
 struct ClockEvictListInner {
     candidates: [EvictCandidate; EVICT_CANDIDATE_LIST_SIZE],
     clock_hand: usize,
-    count:      usize,
+    count: usize,
 }
 
 // SAFETY: ClockEvictList est protégé par Mutex.
@@ -89,7 +91,7 @@ impl ClockEvictList {
             inner: Mutex::new(ClockEvictListInner {
                 candidates: [EvictCandidate::EMPTY; EVICT_CANDIDATE_LIST_SIZE],
                 clock_hand: 0,
-                count:      0,
+                count: 0,
             }),
         }
     }
@@ -97,7 +99,9 @@ impl ClockEvictList {
     /// Ajoute un candidat à la liste (si non pleine).
     pub fn add(&self, candidate: EvictCandidate) {
         let mut inner = self.inner.lock();
-        if inner.count >= EVICT_CANDIDATE_LIST_SIZE { return; }
+        if inner.count >= EVICT_CANDIDATE_LIST_SIZE {
+            return;
+        }
         // Insère à la position suivante disponible.
         for slot in inner.candidates.iter_mut() {
             if !slot.is_valid() {
@@ -112,18 +116,24 @@ impl ClockEvictList {
     /// Retourne `None` si la liste est vide ou toutes les pages sont "accédées".
     pub fn next_victim(&self) -> Option<EvictCandidate> {
         let mut inner = self.inner.lock();
-        if inner.count == 0 { return None; }
+        if inner.count == 0 {
+            return None;
+        }
 
         let mut scans = 0usize;
         loop {
-            if scans >= EVICT_CANDIDATE_LIST_SIZE * 2 { return None; }
+            if scans >= EVICT_CANDIDATE_LIST_SIZE * 2 {
+                return None;
+            }
             scans += 1;
 
             let idx = inner.clock_hand % EVICT_CANDIDATE_LIST_SIZE;
             inner.clock_hand = (inner.clock_hand + 1) % EVICT_CANDIDATE_LIST_SIZE;
 
             let c = &inner.candidates[idx];
-            if !c.is_valid() { continue; }
+            if !c.is_valid() {
+                continue;
+            }
 
             // Vérifie le bit Accessed dans le FrameDesc.
             // (En vrai on vérifierait aussi le PTE Accessed bit).
@@ -132,13 +142,19 @@ impl ClockEvictList {
             // Sélectionne cette victime.
             inner.candidates[idx] = EvictCandidate::EMPTY;
             inner.count -= 1;
-            SWAP_POLICY_STATS.scan_cycles.fetch_add(scans as u64, Ordering::Relaxed);
+            SWAP_POLICY_STATS
+                .scan_cycles
+                .fetch_add(scans as u64, Ordering::Relaxed);
             return Some(candidate);
         }
     }
 
-    pub fn len(&self) -> usize { self.inner.lock().count }
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn len(&self) -> usize {
+        self.inner.lock().count
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 pub static EVICT_LIST: ClockEvictList = ClockEvictList::new();
@@ -151,18 +167,18 @@ pub static EVICT_LIST: ClockEvictList = ClockEvictList::new();
 #[derive(Copy, Clone, Debug)]
 pub struct SwapWatermarks {
     /// Pages libres minimales avant déclenchement du kswapd.
-    pub low:      u64,
+    pub low: u64,
     /// Pages libres "saines" (pas de swap).
-    pub high:     u64,
+    pub high: u64,
     /// Pages libres d'urgence (passe en mode OOM-kill si en-dessous).
     pub critical: u64,
 }
 
 impl SwapWatermarks {
     pub const DEFAULT: Self = SwapWatermarks {
-        low:      512,   // 2 MiB
-        high:     2048,  // 8 MiB
-        critical: 64,    // 256 KiB
+        low: 512,     // 2 MiB
+        high: 2048,   // 8 MiB
+        critical: 64, // 256 KiB
     };
 }
 

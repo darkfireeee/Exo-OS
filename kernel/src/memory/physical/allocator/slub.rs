@@ -7,12 +7,12 @@
 
 use core::mem;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicUsize, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::{AllocError, AllocFlags, PAGE_SIZE};
 use crate::memory::physical::allocator::slab::{
-    alloc_slab_backing_page, size_class_for, N_SIZE_CLASSES, SizeClassInfo,
+    alloc_slab_backing_page, size_class_for, SizeClassInfo, N_SIZE_CLASSES,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -28,23 +28,22 @@ use crate::memory::physical::allocator::slab::{
 #[repr(C, align(32))]
 struct SlubHeader {
     /// Tête de la freelist (encodée XOR).
-    freelist:    *mut u8,
+    freelist: *mut u8,
     /// Clé XOR pour encoder/décoder la freelist.
     freelist_key: usize,
     /// Objets actifs dans ce slub.
-    inuse:       u16,
+    inuse: u16,
     /// Objets totaux.
-    total:       u16,
+    total: u16,
     /// Index de classe de taille.
-    class_idx:   u8,
-    _pad:        [u8; 3],
+    class_idx: u8,
+    _pad: [u8; 3],
     /// Lien suivant/précédent dans la liste partielle.
-    next:        *mut SlubHeader,
-    prev:        *mut SlubHeader,
+    next: *mut SlubHeader,
+    prev: *mut SlubHeader,
 }
 
-const _: () = assert!(mem::size_of::<SlubHeader>() <= 64,
-    "SlubHeader trop grand");
+const _: () = assert!(mem::size_of::<SlubHeader>() <= 64, "SlubHeader trop grand");
 
 impl SlubHeader {
     /// Encode/décode un pointeur de freelist avec XOR.
@@ -77,31 +76,31 @@ impl SlubHeader {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct SlubCacheStats {
-    pub allocs:        AtomicU64,
-    pub frees:         AtomicU64,
+    pub allocs: AtomicU64,
+    pub frees: AtomicU64,
     pub slubs_created: AtomicU64,
-    pub slubs_reaped:  AtomicU64,
+    pub slubs_reaped: AtomicU64,
     pub current_inuse: AtomicUsize,
-    pub oom_count:     AtomicU64,
+    pub oom_count: AtomicU64,
 }
 
 impl SlubCacheStats {
     pub const fn new() -> Self {
         SlubCacheStats {
-            allocs:        AtomicU64::new(0),
-            frees:         AtomicU64::new(0),
+            allocs: AtomicU64::new(0),
+            frees: AtomicU64::new(0),
             slubs_created: AtomicU64::new(0),
-            slubs_reaped:  AtomicU64::new(0),
+            slubs_reaped: AtomicU64::new(0),
             current_inuse: AtomicUsize::new(0),
-            oom_count:     AtomicU64::new(0),
+            oom_count: AtomicU64::new(0),
         }
     }
 }
 
 pub struct SlubCache {
-    info:    SizeClassInfo,
-    inner:   Mutex<SlubCacheInner>,
-    pub stats:   SlubCacheStats,
+    info: SizeClassInfo,
+    inner: Mutex<SlubCacheInner>,
+    pub stats: SlubCacheStats,
     enabled: AtomicBool,
 }
 
@@ -110,10 +109,10 @@ struct SlubCacheInner {
     partial: *mut SlubHeader,
     partial_count: usize,
     /// Liste vide : slubs entièrement libres.
-    empty:   *mut SlubHeader,
-    empty_count:   usize,
+    empty: *mut SlubHeader,
+    empty_count: usize,
     /// Nombre de slubs complets (sans pointeur — on ne les suit pas).
-    full_count:    usize,
+    full_count: usize,
     // Note : plus de vmalloc_bump — adresse virtuelle dérivée de phys via physmap
 }
 
@@ -126,18 +125,20 @@ impl SlubCache {
         SlubCache {
             info,
             inner: Mutex::new(SlubCacheInner {
-                partial:       core::ptr::null_mut(),
+                partial: core::ptr::null_mut(),
                 partial_count: 0,
-                empty:         core::ptr::null_mut(),
-                empty_count:   0,
-                full_count:    0,
+                empty: core::ptr::null_mut(),
+                empty_count: 0,
+                full_count: 0,
             }),
-            stats:   SlubCacheStats::new(),
+            stats: SlubCacheStats::new(),
             enabled: AtomicBool::new(false),
         }
     }
 
-    pub fn enable(&self) { self.enabled.store(true, Ordering::Release); }
+    pub fn enable(&self) {
+        self.enabled.store(true, Ordering::Release);
+    }
 
     /// Alloue un objet de ce cache SLUB.
     pub fn alloc(&self, _flags: AllocFlags) -> Result<NonNull<u8>, AllocError> {
@@ -186,7 +187,7 @@ impl SlubCache {
         // SAFETY: header pointe sur un SlubHeader géré par ce cache.
         (*header).write_next(ptr.as_ptr(), (*header).freelist);
         (*header).freelist = ptr.as_ptr();
-        (*header).inuse   -= 1;
+        (*header).inuse -= 1;
 
         let inuse = (*header).inuse;
         let total = (*header).total;
@@ -204,7 +205,9 @@ impl SlubCache {
             // Était plein (sans liste), maintenant partiel
             r.full_count = r.full_count.saturating_sub(1);
             // SAFETY: header ptr valide; slub était plein, passage vers partiel sous verrou.
-            unsafe { slub_list_push_front(header, &mut r.partial, &mut r.partial_count); }
+            unsafe {
+                slub_list_push_front(header, &mut r.partial, &mut r.partial_count);
+            }
             self.stats.current_inuse.fetch_sub(1, Ordering::Relaxed);
             self.stats.frees.fetch_add(1, Ordering::Relaxed);
         } else {
@@ -216,28 +219,36 @@ impl SlubCache {
     // ─── helpers privés ─────────────────────────────────────────────────────
 
     fn alloc_partial(&self, inner: &mut SlubCacheInner) -> Option<NonNull<u8>> {
-        if inner.partial.is_null() { return None; }
+        if inner.partial.is_null() {
+            return None;
+        }
         // SAFETY: inner.partial pointe sur un SlubHeader valide.
         let header = unsafe { &mut *inner.partial };
-        if header.freelist.is_null() { return None; }
+        if header.freelist.is_null() {
+            return None;
+        }
 
         let obj = header.freelist;
         // SAFETY: header est valide, obj pointe sur un objet libre encodé XOR.
         let next = unsafe { header.read_next(obj) };
         header.freelist = next;
-        header.inuse   += 1;
+        header.inuse += 1;
 
         if header.inuse == header.total {
             let h = inner.partial as *mut SlubHeader;
             // SAFETY: h = partial non-null (inuse == total); retrait de la liste partielle.
-            unsafe { slub_list_remove(h, &mut inner.partial, &mut inner.partial_count); }
+            unsafe {
+                slub_list_remove(h, &mut inner.partial, &mut inner.partial_count);
+            }
             inner.full_count += 1;
         }
         NonNull::new(obj)
     }
 
     fn reactivate_empty(&self, inner: &mut SlubCacheInner) -> Option<NonNull<u8>> {
-        if inner.empty.is_null() { return None; }
+        if inner.empty.is_null() {
+            return None;
+        }
         let h = inner.empty;
         // SAFETY: empty non-null (vérifié); déplacement vers partial sous verrou.
         unsafe {
@@ -257,16 +268,16 @@ impl SlubCache {
         // Générer une clé XOR pseudo-aléatoire basée sur l'adresse virtuelle
         let key = (virt_base as usize).wrapping_mul(0x9e3779b97f4a7c15);
 
-        let header_end  = mem::size_of::<SlubHeader>();
-        let first_off   = align_up_slub(header_end, self.info.alignment);
-        let usable      = PAGE_SIZE - first_off;
-        let n_objs      = usable / self.info.size;
+        let header_end = mem::size_of::<SlubHeader>();
+        let first_off = align_up_slub(header_end, self.info.alignment);
+        let usable = PAGE_SIZE - first_off;
+        let n_objs = usable / self.info.size;
 
         // SAFETY: virt_base pointe sur une page valide fraîchement mappée.
         unsafe {
             // Construire la freelist XOR-encodée
             for i in 0..n_objs {
-                let obj  = (virt_base as usize + first_off + i * self.info.size) as *mut u8;
+                let obj = (virt_base as usize + first_off + i * self.info.size) as *mut u8;
                 let next = if i + 1 < n_objs {
                     (virt_base as usize + first_off + (i + 1) * self.info.size) as *mut u8
                 } else {
@@ -278,16 +289,19 @@ impl SlubCache {
 
             let header = virt_base as *mut SlubHeader;
             let first_obj = (virt_base as usize + first_off) as *mut u8;
-            core::ptr::write(header, SlubHeader {
-                freelist:     first_obj,
-                freelist_key: key,
-                inuse:        0,
-                total:        n_objs as u16,
-                class_idx:    0,
-                _pad:         [0; 3],
-                next:         core::ptr::null_mut(),
-                prev:         core::ptr::null_mut(),
-            });
+            core::ptr::write(
+                header,
+                SlubHeader {
+                    freelist: first_obj,
+                    freelist_key: key,
+                    inuse: 0,
+                    total: n_objs as u16,
+                    class_idx: 0,
+                    _pad: [0; 3],
+                    next: core::ptr::null_mut(),
+                    prev: core::ptr::null_mut(),
+                },
+            );
             slub_list_push_front(header, &mut inner.partial, &mut inner.partial_count);
         }
 
@@ -305,22 +319,36 @@ fn align_up_slub(val: usize, align: usize) -> usize {
 // OPÉRATIONS SUR LES LISTES
 // ─────────────────────────────────────────────────────────────────────────────
 
-unsafe fn slub_list_push_front(node: *mut SlubHeader, head: &mut *mut SlubHeader, count: &mut usize) {
+unsafe fn slub_list_push_front(
+    node: *mut SlubHeader,
+    head: &mut *mut SlubHeader,
+    count: &mut usize,
+) {
     (*node).prev = core::ptr::null_mut();
     (*node).next = *head;
-    if !(*head).is_null() { (*(*head)).prev = node; }
-    *head  = node;
+    if !(*head).is_null() {
+        (*(*head)).prev = node;
+    }
+    *head = node;
     *count += 1;
 }
 
 unsafe fn slub_list_remove(node: *mut SlubHeader, head: &mut *mut SlubHeader, count: &mut usize) {
-    if node.is_null() { return; }
+    if node.is_null() {
+        return;
+    }
     let prev = (*node).prev;
     let next = (*node).next;
-    if !prev.is_null() { (*prev).next = next; } else { *head = next; }
-    if !next.is_null() { (*next).prev = prev; }
-    (*node).prev  = core::ptr::null_mut();
-    (*node).next  = core::ptr::null_mut();
+    if !prev.is_null() {
+        (*prev).next = next;
+    } else {
+        *head = next;
+    }
+    if !next.is_null() {
+        (*next).prev = prev;
+    }
+    (*node).prev = core::ptr::null_mut();
+    (*node).next = core::ptr::null_mut();
     *count = count.saturating_sub(1);
 }
 
@@ -347,7 +375,9 @@ pub static SLUB_CACHES: [SlubCache; N_SIZE_CLASSES] = slub_caches_init! {
 };
 
 pub fn init_all() {
-    for cache in &SLUB_CACHES { cache.enable(); }
+    for cache in &SLUB_CACHES {
+        cache.enable();
+    }
 }
 
 pub fn alloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError> {

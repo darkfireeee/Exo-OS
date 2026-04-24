@@ -12,12 +12,11 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::blob_id::blake3_hash;
 use super::io_stats::IO_STATS;
+use crate::fs::exofs::core::blob_id::blake3_hash;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─── Trait d'accès au store ───────────────────────────────────────────────────
 
@@ -68,19 +67,35 @@ pub struct ReadConfig {
 impl ReadConfig {
     pub fn default() -> Self {
         Self {
-            verify: VerifyMode::BlobId, max_size: 0, max_blobs: 0,
-            record_stats: true, offset: 0, length: 0,
+            verify: VerifyMode::BlobId,
+            max_size: 0,
+            max_blobs: 0,
+            record_stats: true,
+            offset: 0,
+            length: 0,
         }
     }
 
     pub fn fast() -> Self {
-        Self { verify: VerifyMode::None, max_size: 0, max_blobs: 0,
-            record_stats: false, offset: 0, length: 0 }
+        Self {
+            verify: VerifyMode::None,
+            max_size: 0,
+            max_blobs: 0,
+            record_stats: false,
+            offset: 0,
+            length: 0,
+        }
     }
 
     pub fn partial(offset: u64, length: u64) -> Self {
-        Self { verify: VerifyMode::SizeOnly, max_size: 0, max_blobs: 0,
-            record_stats: true, offset, length }
+        Self {
+            verify: VerifyMode::SizeOnly,
+            max_size: 0,
+            max_blobs: 0,
+            record_stats: true,
+            offset,
+            length,
+        }
     }
 
     pub fn validate(&self) -> ExofsResult<()> {
@@ -104,7 +119,12 @@ pub struct ReadResult {
 
 impl ReadResult {
     pub fn new(blob_id: [u8; 32], size: u64, verify_ok: bool) -> Self {
-        Self { blob_id, size, verify_ok, from_cache: false }
+        Self {
+            blob_id,
+            size,
+            verify_ok,
+            from_cache: false,
+        }
     }
 }
 
@@ -121,9 +141,15 @@ pub struct ReaderStats {
 }
 
 impl ReaderStats {
-    pub fn new() -> Self { Self::default() }
-    pub fn is_clean(&self) -> bool { self.verify_errors == 0 && self.not_found == 0 }
-    pub fn total_ops(&self) -> u64 { self.blobs_read.saturating_add(self.not_found) }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn is_clean(&self) -> bool {
+        self.verify_errors == 0 && self.not_found == 0
+    }
+    pub fn total_ops(&self) -> u64 {
+        self.blobs_read.saturating_add(self.not_found)
+    }
 }
 
 // ─── Lecteur de blobs ─────────────────────────────────────────────────────────
@@ -139,11 +165,17 @@ pub struct BlobReader {
 impl BlobReader {
     pub fn new(config: ReadConfig) -> ExofsResult<Self> {
         config.validate()?;
-        Ok(Self { config, stats: ReaderStats::new() })
+        Ok(Self {
+            config,
+            stats: ReaderStats::new(),
+        })
     }
 
     pub fn default() -> Self {
-        Self { config: ReadConfig::default(), stats: ReaderStats::new() }
+        Self {
+            config: ReadConfig::default(),
+            stats: ReaderStats::new(),
+        }
     }
 
     /// Lit un blob depuis le store et vérifie son intégrité.
@@ -155,8 +187,7 @@ impl BlobReader {
         blob_id: &[u8; 32],
     ) -> ExofsResult<(&'s [u8], ReadResult)> {
         // Vérification limite max_blobs
-        if self.config.max_blobs > 0
-            && self.stats.blobs_read >= self.config.max_blobs as u64 {
+        if self.config.max_blobs > 0 && self.stats.blobs_read >= self.config.max_blobs as u64 {
             return Err(ExofsError::Resource);
         }
 
@@ -165,7 +196,9 @@ impl BlobReader {
             Ok(d) => d,
             Err(e) => {
                 self.stats.not_found = self.stats.not_found.saturating_add(1);
-                if self.config.record_stats { IO_STATS.record_read_err(); }
+                if self.config.record_stats {
+                    IO_STATS.record_read_err();
+                }
                 return Err(e);
             }
         };
@@ -179,7 +212,9 @@ impl BlobReader {
         let slice = if self.config.offset > 0 || self.config.length > 0 {
             let start = (self.config.offset as usize).min(data.len());
             let end = if self.config.length > 0 {
-                start.saturating_add(self.config.length as usize).min(data.len())
+                start
+                    .saturating_add(self.config.length as usize)
+                    .min(data.len())
             } else {
                 data.len()
             };
@@ -214,7 +249,10 @@ impl BlobReader {
             IO_STATS.record_read_ok(slice.len() as u64, 0);
         }
 
-        Ok((slice, ReadResult::new(*blob_id, slice.len() as u64, verify_ok)))
+        Ok((
+            slice,
+            ReadResult::new(*blob_id, slice.len() as u64, verify_ok),
+        ))
     }
 
     /// Lit plusieurs blobs depuis le store (RECUR-01 : boucle while).
@@ -244,17 +282,25 @@ impl BlobReader {
     }
 
     /// Vérifie l'intégrité d'un blob sans le retourner.
-    pub fn verify_only<S: BlobStore>(&mut self, store: &S, blob_id: &[u8; 32]) -> ExofsResult<bool> {
+    pub fn verify_only<S: BlobStore>(
+        &mut self,
+        store: &S,
+        blob_id: &[u8; 32],
+    ) -> ExofsResult<bool> {
         let data = store.read_blob(blob_id)?;
         let computed = inline_blake3(data);
         Ok(computed == *blob_id)
     }
 
     /// Retourne les statistiques de cette session.
-    pub fn stats(&self) -> &ReaderStats { &self.stats }
+    pub fn stats(&self) -> &ReaderStats {
+        &self.stats
+    }
 
     /// Remet les statistiques à zéro.
-    pub fn reset_stats(&mut self) { self.stats = ReaderStats::new(); }
+    pub fn reset_stats(&mut self) {
+        self.stats = ReaderStats::new();
+    }
 }
 
 // ─── Implémentation de BlobStore sur slice (tests) ───────────────────────────
@@ -265,7 +311,9 @@ pub struct SliceStore<'a> {
 }
 
 impl<'a> SliceStore<'a> {
-    pub fn new(blobs: &'a [([u8; 32], &'a [u8])]) -> Self { Self { blobs } }
+    pub fn new(blobs: &'a [([u8; 32], &'a [u8])]) -> Self {
+        Self { blobs }
+    }
 }
 
 impl<'a> BlobStore for SliceStore<'a> {
@@ -283,7 +331,9 @@ impl<'a> BlobStore for SliceStore<'a> {
     fn contains(&self, blob_id: &[u8; 32]) -> bool {
         let mut i = 0usize;
         while i < self.blobs.len() {
-            if self.blobs[i].0 == *blob_id { return true; }
+            if self.blobs[i].0 == *blob_id {
+                return true;
+            }
             i = i.wrapping_add(1);
         }
         false
@@ -309,19 +359,26 @@ pub struct VecStore {
 }
 
 impl VecStore {
-    pub fn new() -> Self { Self { blobs: Vec::new() } }
+    pub fn new() -> Self {
+        Self { blobs: Vec::new() }
+    }
 
     /// Ajoute un blob — OOM-02 : try_reserve.
     pub fn insert(&mut self, blob_id: [u8; 32], data: &[u8]) -> ExofsResult<()> {
-        self.blobs.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.blobs
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         let mut v = Vec::new();
-        v.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        v.try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         v.extend_from_slice(data);
         self.blobs.push((blob_id, v));
         Ok(())
     }
 
-    pub fn len(&self) -> usize { self.blobs.len() }
+    pub fn len(&self) -> usize {
+        self.blobs.len()
+    }
 }
 
 impl BlobStore for VecStore {
@@ -338,7 +395,9 @@ impl BlobStore for VecStore {
     fn contains(&self, blob_id: &[u8; 32]) -> bool {
         let mut i = 0usize;
         while i < self.blobs.len() {
-            if self.blobs[i].0 == *blob_id { return true; }
+            if self.blobs[i].0 == *blob_id {
+                return true;
+            }
             i = i.wrapping_add(1);
         }
         false
@@ -367,7 +426,11 @@ pub(crate) fn inline_blake3(data: &[u8]) -> [u8; 32] {
 mod tests {
     use super::*;
 
-    fn make_id(tag: u8) -> [u8; 32] { let mut id = [0u8; 32]; id[0] = tag; id }
+    fn make_id(tag: u8) -> [u8; 32] {
+        let mut id = [0u8; 32];
+        id[0] = tag;
+        id
+    }
 
     fn store_with(data: &'static [u8]) -> (VecStore, [u8; 32]) {
         let id = make_id(data[0]);
@@ -417,11 +480,13 @@ mod tests {
     #[test]
     fn test_read_batch() {
         let mut store = VecStore::new();
-        let ids: Vec<[u8; 32]> = (0u8..4).map(|i| {
-            let id = make_id(i);
-            store.insert(id, &[i, i + 1, i + 2]).expect("ok");
-            id
-        }).collect();
+        let ids: Vec<[u8; 32]> = (0u8..4)
+            .map(|i| {
+                let id = make_id(i);
+                store.insert(id, &[i, i + 1, i + 2]).expect("ok");
+                id
+            })
+            .collect();
         let mut reader = BlobReader::new(ReadConfig::fast()).expect("ok");
         let mut out = Vec::new();
         let count = reader.read_batch(&store, &ids, &mut out).expect("ok");
@@ -438,7 +503,10 @@ mod tests {
             store.insert(id, &[i]).expect("ok");
             ids.push(id);
         }
-        let cfg = ReadConfig { max_blobs: 3, ..ReadConfig::fast() };
+        let cfg = ReadConfig {
+            max_blobs: 3,
+            ..ReadConfig::fast()
+        };
         let mut reader = BlobReader::new(cfg).expect("ok");
         // Après 3 lectures, la 4e doit échouer
         for i in 0..3 {

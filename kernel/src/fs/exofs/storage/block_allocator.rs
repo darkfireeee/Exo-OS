@@ -16,12 +16,12 @@
 // - LOCK-04  : SpinLock uniquement pour les listes partagées.
 // - WRITE-02 : la vérification bytes_written est la responsabilité du caller.
 
-use core::sync::atomic::{AtomicU64, Ordering};
-use alloc::vec::Vec;
-use crate::scheduler::sync::spinlock::SpinLock;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
-use crate::fs::exofs::storage::heap_allocator::{Extent, HeapAllocator, AllocationPolicy};
+use crate::fs::exofs::core::{DiskOffset, ExofsError, ExofsResult};
+use crate::fs::exofs::storage::heap_allocator::{AllocationPolicy, Extent, HeapAllocator};
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
+use crate::scheduler::sync::spinlock::SpinLock;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ExtentHandle — extent avec état de cycle de vie
@@ -42,21 +42,25 @@ pub enum ExtentState {
 #[derive(Clone, Debug)]
 pub struct ExtentHandle {
     pub extent: Extent,
-    pub state:  ExtentState,
+    pub state: ExtentState,
     /// Nombre d'octets effectivement écrits dans cet extent.
     pub written: u64,
 }
 
 impl ExtentHandle {
     pub fn new(extent: Extent) -> Self {
-        Self { extent, state: ExtentState::Reserved, written: 0 }
+        Self {
+            extent,
+            state: ExtentState::Reserved,
+            written: 0,
+        }
     }
 
     /// Marque l'extent comme commité.
     #[inline]
     pub fn commit(&mut self, bytes_written: u64) {
         self.written = bytes_written;
-        self.state   = ExtentState::Committed;
+        self.state = ExtentState::Committed;
     }
 
     /// Marque l'extent comme libéré.
@@ -67,7 +71,9 @@ impl ExtentHandle {
 
     /// Taux d'utilisation de l'extent (0..=100).
     pub fn fill_pct(&self) -> u64 {
-        if self.extent.size == 0 { return 0; }
+        if self.extent.size == 0 {
+            return 0;
+        }
         (self.written as u128 * 100 / self.extent.size as u128).min(100) as u64
     }
 }
@@ -80,26 +86,29 @@ impl ExtentHandle {
 #[derive(Clone, Debug)]
 pub struct BlockAllocRequest {
     /// Taille demandée en octets (arrondie automatiquement à BLOCK_SIZE).
-    pub size:     u64,
+    pub size: u64,
     /// Politique d'allocation.
-    pub policy:   AllocationPolicy,
+    pub policy: AllocationPolicy,
     /// Forcer l'alignement sur cette puissance de 2 (0 = pas d'alignement spécial).
-    pub align:    u64,
+    pub align: u64,
 }
 
 impl Default for BlockAllocRequest {
     fn default() -> Self {
         Self {
-            size:   0,
+            size: 0,
             policy: AllocationPolicy::NextFit,
-            align:  0,
+            align: 0,
         }
     }
 }
 
 impl BlockAllocRequest {
     pub fn of_size(size: u64) -> Self {
-        Self { size, ..Default::default() }
+        Self {
+            size,
+            ..Default::default()
+        }
     }
 }
 
@@ -114,12 +123,16 @@ struct BlockAllocatorState {
 
 impl BlockAllocatorState {
     fn new() -> Self {
-        Self { handles: Vec::new() }
+        Self {
+            handles: Vec::new(),
+        }
     }
 
     /// Ajoute un handle (OOM-02 : try_reserve).
     fn push(&mut self, handle: ExtentHandle) -> ExofsResult<()> {
-        self.handles.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.handles
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.handles.push(handle);
         Ok(())
     }
@@ -147,11 +160,11 @@ impl BlockAllocatorState {
 ///
 /// Interface de bas niveau pour object_writer et blob_writer.
 pub struct BlockAllocator {
-    heap:       HeapAllocator,
-    state:      SpinLock<BlockAllocatorState>,
+    heap: HeapAllocator,
+    state: SpinLock<BlockAllocatorState>,
     // ── Statistiques ───────────────────────────────────────────────────────
-    n_allocs:   AtomicU64,
-    n_commits:  AtomicU64,
+    n_allocs: AtomicU64,
+    n_commits: AtomicU64,
     n_rollbacks: AtomicU64,
     bytes_commit: AtomicU64,
 }
@@ -164,10 +177,10 @@ impl BlockAllocator {
         let heap = HeapAllocator::new(heap_start, total_blocks)?;
         Ok(Self {
             heap,
-            state:        SpinLock::new(BlockAllocatorState::new()),
-            n_allocs:     AtomicU64::new(0),
-            n_commits:    AtomicU64::new(0),
-            n_rollbacks:  AtomicU64::new(0),
+            state: SpinLock::new(BlockAllocatorState::new()),
+            n_allocs: AtomicU64::new(0),
+            n_commits: AtomicU64::new(0),
+            n_rollbacks: AtomicU64::new(0),
             bytes_commit: AtomicU64::new(0),
         })
     }
@@ -212,7 +225,8 @@ impl BlockAllocator {
                 if h.state == ExtentState::Reserved {
                     h.commit(bytes_written);
                     self.n_commits.fetch_add(1, Ordering::Relaxed);
-                    self.bytes_commit.fetch_add(bytes_written, Ordering::Relaxed);
+                    self.bytes_commit
+                        .fetch_add(bytes_written, Ordering::Relaxed);
                     return Ok(());
                 } else {
                     return Err(ExofsError::InvalidArgument);
@@ -309,10 +323,18 @@ impl BlockAllocator {
         self.heap.total_blocks()
     }
 
-    pub fn n_allocs(&self)    -> u64 { self.n_allocs.load(Ordering::Relaxed) }
-    pub fn n_commits(&self)   -> u64 { self.n_commits.load(Ordering::Relaxed) }
-    pub fn n_rollbacks(&self) -> u64 { self.n_rollbacks.load(Ordering::Relaxed) }
-    pub fn bytes_committed(&self) -> u64 { self.bytes_commit.load(Ordering::Relaxed) }
+    pub fn n_allocs(&self) -> u64 {
+        self.n_allocs.load(Ordering::Relaxed)
+    }
+    pub fn n_commits(&self) -> u64 {
+        self.n_commits.load(Ordering::Relaxed)
+    }
+    pub fn n_rollbacks(&self) -> u64 {
+        self.n_rollbacks.load(Ordering::Relaxed)
+    }
+    pub fn bytes_committed(&self) -> u64 {
+        self.bytes_commit.load(Ordering::Relaxed)
+    }
 
     /// Nombre d'handles actifs (Reserved ou Committed).
     pub fn active_handles(&self) -> usize {
@@ -346,7 +368,7 @@ mod tests {
     use super::*;
 
     const HEAP_START: u64 = 1024 * 1024;
-    const N_BLOCKS:   u64 = 512;
+    const N_BLOCKS: u64 = 512;
 
     fn make() -> BlockAllocator {
         BlockAllocator::new(HEAP_START, N_BLOCKS).unwrap()
@@ -354,7 +376,7 @@ mod tests {
 
     #[test]
     fn test_alloc_commit() {
-        let a   = make();
+        let a = make();
         let ext = a.alloc_extent(4096).unwrap();
         a.commit_extent(ext.offset, 4096).unwrap();
         assert_eq!(a.n_commits(), 1);
@@ -362,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_alloc_rollback() {
-        let a   = make();
+        let a = make();
         let ext = a.alloc_extent(4096).unwrap();
         a.rollback_extent(ext.offset).unwrap();
         assert_eq!(a.n_rollbacks(), 1);
@@ -377,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_free_committed() {
-        let a   = make();
+        let a = make();
         let ext = a.alloc_extent(4096).unwrap();
         a.commit_extent(ext.offset, 4096).unwrap();
         a.free_committed(ext.offset).unwrap();
@@ -391,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_gc_freed() {
-        let a   = make();
+        let a = make();
         let ext = a.alloc_extent(4096).unwrap();
         a.commit_extent(ext.offset, 4096).unwrap();
         a.free_committed(ext.offset).unwrap();

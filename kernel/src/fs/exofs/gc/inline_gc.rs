@@ -19,7 +19,6 @@
 //   DAG-01 : pas d'import de ipc/, process/, arch/
 // ==============================================================================
 
-
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
@@ -53,29 +52,30 @@ pub const INLINE_BATCH_SIZE: usize = 256;
 #[derive(Debug, Clone)]
 pub struct InlineObjectEntry {
     /// Identifiant de l'objet.
-    pub object_id:    ObjectId,
+    pub object_id: ObjectId,
     /// Taille des données inline (en octets, <= INLINE_DATA_THRESHOLD).
-    pub data_size:    u32,
+    pub data_size: u32,
     /// Epoch de création.
     pub create_epoch: EpochId,
     /// Ref_count atomique de cet objet inline.
-    ref_count:        u32, // Simplifié : u32 (pas atomique dans la struct).
+    ref_count: u32, // Simplifié : u32 (pas atomique dans la struct).
 }
 
 impl InlineObjectEntry {
     /// Crée une nouvelle entrée inline.
-    pub fn new(
-        object_id:    ObjectId,
-        data_size:    u32,
-        create_epoch: EpochId,
-    ) -> Self {
+    pub fn new(object_id: ObjectId, data_size: u32, create_epoch: EpochId) -> Self {
         assert!(
             data_size as usize <= INLINE_DATA_THRESHOLD,
             "InlineObjectEntry: data_size {} > INLINE_DATA_THRESHOLD {}",
             data_size,
             INLINE_DATA_THRESHOLD,
         );
-        Self { object_id, data_size, create_epoch, ref_count: 1 }
+        Self {
+            object_id,
+            data_size,
+            create_epoch,
+            ref_count: 1,
+        }
     }
 
     /// Ref_count courant.
@@ -97,19 +97,19 @@ impl InlineObjectEntry {
 #[derive(Debug, Default, Clone)]
 pub struct InlineGcStats {
     /// Objets inline enregistres.
-    pub registered:         u64,
+    pub registered: u64,
     /// Objets inline supprimes.
-    pub collected:          u64,
+    pub collected: u64,
     /// Octets liberes.
-    pub bytes_freed:        u64,
+    pub bytes_freed: u64,
     /// Objets sautes car EPOCH_PINNED (GC-07).
-    pub pinned_skipped:     u64,
+    pub pinned_skipped: u64,
     /// Objets sautes car encore references.
-    pub refcount_skipped:   u64,
+    pub refcount_skipped: u64,
     /// Passes effectuees.
-    pub passes:             u64,
+    pub passes: u64,
     /// Nombre courant d'objets inline.
-    pub current_count:      u64,
+    pub current_count: u64,
 }
 
 impl fmt::Display for InlineGcStats {
@@ -135,17 +135,17 @@ impl fmt::Display for InlineGcStats {
 #[derive(Debug, Default, Clone)]
 pub struct InlineGcResult {
     /// Objets analyses.
-    pub analyzed:         u64,
+    pub analyzed: u64,
     /// Objets collectes (ref_count = 0 + non pinned).
-    pub collected:        u64,
+    pub collected: u64,
     /// Octets liberes.
-    pub bytes_freed:      u64,
+    pub bytes_freed: u64,
     /// Objets sautes EPOCH_PINNED.
-    pub pinned_skipped:   u64,
+    pub pinned_skipped: u64,
     /// Objets sautes car ref_count > 0.
     pub refcount_skipped: u64,
     /// Phase complete.
-    pub phase_complete:   bool,
+    pub phase_complete: bool,
 }
 
 impl fmt::Display for InlineGcResult {
@@ -153,10 +153,7 @@ impl fmt::Display for InlineGcResult {
         write!(
             f,
             "InlineGcResult[analyzed={} collected={} bytes={} pinned={}]",
-            self.analyzed,
-            self.collected,
-            self.bytes_freed,
-            self.pinned_skipped,
+            self.analyzed, self.collected, self.bytes_freed, self.pinned_skipped,
         )
     }
 }
@@ -167,9 +164,9 @@ impl fmt::Display for InlineGcResult {
 
 struct InlineGcInner {
     /// Registre des objets inline connus.
-    registry:   BTreeMap<ObjectId, InlineObjectEntry>,
+    registry: BTreeMap<ObjectId, InlineObjectEntry>,
     /// Stats cumulees.
-    stats:      InlineGcStats,
+    stats: InlineGcStats,
 }
 
 // ==============================================================================
@@ -186,14 +183,14 @@ impl InlineGc {
         Self {
             inner: SpinLock::new(InlineGcInner {
                 registry: BTreeMap::new(),
-                stats:    InlineGcStats {
-                    registered:       0,
-                    collected:        0,
-                    bytes_freed:      0,
-                    pinned_skipped:   0,
+                stats: InlineGcStats {
+                    registered: 0,
+                    collected: 0,
+                    bytes_freed: 0,
+                    pinned_skipped: 0,
                     refcount_skipped: 0,
-                    passes:           0,
-                    current_count:    0,
+                    passes: 0,
+                    current_count: 0,
                 },
             }),
         }
@@ -205,10 +202,7 @@ impl InlineGc {
     ///
     /// OOM-02 : try_reserve implicite via BTreeMap (pas de try_reserve disponible,
     /// mais on borne la taille du registre).
-    pub fn register(
-        &self,
-        entry: InlineObjectEntry,
-    ) -> ExofsResult<()> {
+    pub fn register(&self, entry: InlineObjectEntry) -> ExofsResult<()> {
         let mut g = self.inner.lock();
 
         if g.registry.len() >= MAX_INLINE_PER_PASS {
@@ -228,7 +222,8 @@ impl InlineGc {
         let mut g = self.inner.lock();
         match g.registry.get_mut(oid) {
             Some(entry) => {
-                entry.ref_count = entry.ref_count
+                entry.ref_count = entry
+                    .ref_count
                     .checked_add(1)
                     .ok_or(ExofsError::InternalError)?;
                 Ok(())
@@ -268,10 +263,7 @@ impl InlineGc {
     /// references dans le snapshot de scan des EpochRoots.
     ///
     /// GC-07 : sauter les objets dont l'epoch est pinnee.
-    pub fn collect(
-        &self,
-        scan_snapshot: &EpochScanSnapshot,
-    ) -> ExofsResult<InlineGcResult> {
+    pub fn collect(&self, scan_snapshot: &EpochScanSnapshot) -> ExofsResult<InlineGcResult> {
         // Ensemble des ObjectIds vivants (depuis les EpochRoots).
         let reachable: BTreeSet<ObjectId> = scan_snapshot
             .live_objects()
@@ -280,10 +272,9 @@ impl InlineGc {
 
         let to_collect: Vec<(ObjectId, u32, EpochId)> = {
             let g = self.inner.lock();
-            g.registry.iter()
-                .filter(|(oid, entry)| {
-                    !reachable.contains(*oid) && entry.is_collectible()
-                })
+            g.registry
+                .iter()
+                .filter(|(oid, entry)| !reachable.contains(*oid) && entry.is_collectible())
                 .map(|(oid, entry)| (*oid, entry.data_size, entry.create_epoch))
                 .take(MAX_INLINE_PER_PASS)
                 .collect()
@@ -301,15 +292,13 @@ impl InlineGc {
             };
 
             if rc > 0 {
-                result.refcount_skipped =
-                    result.refcount_skipped.saturating_add(1);
+                result.refcount_skipped = result.refcount_skipped.saturating_add(1);
                 continue;
             }
 
             // GC-07 : verifier si l'epoch est pinnee.
             if is_epoch_pinned(create_epoch) {
-                result.pinned_skipped =
-                    result.pinned_skipped.saturating_add(1);
+                result.pinned_skipped = result.pinned_skipped.saturating_add(1);
                 continue;
             }
 
@@ -318,14 +307,12 @@ impl InlineGc {
                 let mut g = self.inner.lock();
                 g.registry.remove(&oid);
                 g.stats.collected = g.stats.collected.saturating_add(1);
-                g.stats.bytes_freed = g.stats.bytes_freed
-                    .saturating_add(data_size as u64);
+                g.stats.bytes_freed = g.stats.bytes_freed.saturating_add(data_size as u64);
                 g.stats.current_count = g.registry.len() as u64;
             }
 
             result.collected = result.collected.saturating_add(1);
-            result.bytes_freed = result.bytes_freed
-                .saturating_add(data_size as u64);
+            result.bytes_freed = result.bytes_freed.saturating_add(data_size as u64);
         }
 
         result.phase_complete = true;
@@ -339,9 +326,10 @@ impl InlineGc {
         {
             let mut g = self.inner.lock();
             g.stats.passes = g.stats.passes.saturating_add(1);
-            g.stats.pinned_skipped = g.stats.pinned_skipped
-                .saturating_add(result.pinned_skipped);
-            g.stats.refcount_skipped = g.stats.refcount_skipped
+            g.stats.pinned_skipped = g.stats.pinned_skipped.saturating_add(result.pinned_skipped);
+            g.stats.refcount_skipped = g
+                .stats
+                .refcount_skipped
                 .saturating_add(result.refcount_skipped);
         }
 
@@ -394,7 +382,9 @@ mod tests {
     use crate::fs::exofs::gc::epoch_scanner::EpochScanSnapshot;
 
     fn oid(b: u8) -> ObjectId {
-        let mut a = [0u8; 32]; a[0] = b; ObjectId(a)
+        let mut a = [0u8; 32];
+        a[0] = b;
+        ObjectId(a)
     }
 
     fn entry(b: u8, size: u32) -> InlineObjectEntry {
@@ -434,15 +424,15 @@ mod tests {
 
         // L'objet oid(2) est dans le scan snapshot (reachable).
         let mut snap = EpochScanSnapshot::empty();
-        use crate::fs::exofs::gc::epoch_scanner::RootObject;
-        use crate::fs::exofs::epoch::epoch_slots::EpochSlot;
         use crate::fs::exofs::core::DiskOffset;
+        use crate::fs::exofs::epoch::epoch_slots::EpochSlot;
+        use crate::fs::exofs::gc::epoch_scanner::RootObject;
         snap.root_objects.push(RootObject {
-            object_id:   oid(2),
+            object_id: oid(2),
             disk_offset: DiskOffset::zero(),
-            slot:        EpochSlot::A,
-            epoch_id:    EpochId(1),
-            is_deleted:  false,
+            slot: EpochSlot::A,
+            epoch_id: EpochId(1),
+            is_deleted: false,
         });
 
         let result = gc.collect(&snap).unwrap();
@@ -454,7 +444,8 @@ mod tests {
     #[test]
     fn test_inc_dec_ref() {
         let gc = InlineGc::new();
-        gc.register(InlineObjectEntry::new(oid(3), 32, EpochId(0))).unwrap();
+        gc.register(InlineObjectEntry::new(oid(3), 32, EpochId(0)))
+            .unwrap();
         assert_eq!(gc.ref_count_of(&oid(3)), Some(1));
 
         gc.inc_ref(&oid(3)).unwrap();

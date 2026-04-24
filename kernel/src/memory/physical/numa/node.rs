@@ -10,8 +10,7 @@
 //
 // COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
 
-
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::memory::core::constants::PAGE_SIZE;
 
@@ -34,17 +33,17 @@ pub const NUMA_NODE_INVALID: u32 = u32::MAX;
 #[repr(C, align(64))]
 pub struct NumaNodeStats {
     /// Pages totales dans ce nœud.
-    pub total_pages:  AtomicU64,
+    pub total_pages: AtomicU64,
     /// Pages libres actuellement.
-    pub free_pages:   AtomicU64,
+    pub free_pages: AtomicU64,
     /// Pages utilisées (total - free).
-    pub used_pages:   AtomicU64,
+    pub used_pages: AtomicU64,
     /// Allocations locales réussies.
     pub local_allocs: AtomicU64,
     /// Allocations distantes (fallback).
     pub remote_allocs: AtomicU64,
     /// Pages migrées vers ce nœud.
-    pub migrated_in:  AtomicU64,
+    pub migrated_in: AtomicU64,
     /// Pages migrées hors de ce nœud.
     pub migrated_out: AtomicU64,
     _pad: [u8; 8],
@@ -53,12 +52,12 @@ pub struct NumaNodeStats {
 impl NumaNodeStats {
     const fn new() -> Self {
         Self {
-            total_pages:  AtomicU64::new(0),
-            free_pages:   AtomicU64::new(0),
-            used_pages:   AtomicU64::new(0),
+            total_pages: AtomicU64::new(0),
+            free_pages: AtomicU64::new(0),
+            used_pages: AtomicU64::new(0),
             local_allocs: AtomicU64::new(0),
             remote_allocs: AtomicU64::new(0),
-            migrated_in:  AtomicU64::new(0),
+            migrated_in: AtomicU64::new(0),
             migrated_out: AtomicU64::new(0),
             _pad: [0; 8],
         }
@@ -92,8 +91,8 @@ unsafe impl Sync for NumaNodeStats {}
 /// Une plage d'adresses physiques appartenant à un nœud NUMA.
 #[derive(Debug, Clone, Copy)]
 pub struct NumaPhysRange {
-    pub start: u64,  // inclus
-    pub end:   u64,  // exclus
+    pub start: u64, // inclus
+    pub end: u64,   // exclus
 }
 
 impl NumaPhysRange {
@@ -122,7 +121,7 @@ impl NumaPhysRange {
 #[repr(C, align(64))]
 pub struct NumaNode {
     /// Identifiant unique du nœud (0..MAX_NUMA_NODES-1).
-    pub id:     u32,
+    pub id: u32,
     /// Masque de CPUs locaux à ce nœud (bit i = CPU i).
     pub cpu_mask: AtomicU64,
     /// Nombre de plages physiques valides dans `ranges`.
@@ -141,13 +140,13 @@ impl NumaNode {
     const fn new(id: u32) -> Self {
         Self {
             id,
-            cpu_mask:    AtomicU64::new(0),
+            cpu_mask: AtomicU64::new(0),
             range_count: 0,
-            active:      AtomicBool::new(false),
-            _pad1:       [0; 3],
-            stats:       NumaNodeStats::new(),
-            ranges:      [NumaPhysRange { start: 0, end: 0 }; MAX_RANGES_PER_NODE],
-            _pad2:       [0; 16],
+            active: AtomicBool::new(false),
+            _pad1: [0; 3],
+            stats: NumaNodeStats::new(),
+            ranges: [NumaPhysRange { start: 0, end: 0 }; MAX_RANGES_PER_NODE],
+            _pad2: [0; 16],
         }
     }
 
@@ -159,8 +158,12 @@ impl NumaNode {
         self.ranges[self.range_count as usize] = NumaPhysRange { start, end };
         self.range_count += 1;
         let new_pages = (end - start) / PAGE_SIZE as u64;
-        self.stats.total_pages.fetch_add(new_pages, Ordering::Relaxed);
-        self.stats.free_pages.fetch_add(new_pages, Ordering::Relaxed);
+        self.stats
+            .total_pages
+            .fetch_add(new_pages, Ordering::Relaxed);
+        self.stats
+            .free_pages
+            .fetch_add(new_pages, Ordering::Relaxed);
         true
     }
 
@@ -195,7 +198,7 @@ unsafe impl Sync for NumaNode {}
 
 /// Table centrale de tous les nœuds NUMA détectés.
 pub struct NumaNodeTable {
-    nodes:      [NumaNode; MAX_NUMA_NODES],
+    nodes: [NumaNode; MAX_NUMA_NODES],
     node_count: AtomicU32,
 }
 
@@ -203,8 +206,14 @@ impl NumaNodeTable {
     const fn new() -> Self {
         Self {
             nodes: [
-                NumaNode::new(0), NumaNode::new(1), NumaNode::new(2), NumaNode::new(3),
-                NumaNode::new(4), NumaNode::new(5), NumaNode::new(6), NumaNode::new(7),
+                NumaNode::new(0),
+                NumaNode::new(1),
+                NumaNode::new(2),
+                NumaNode::new(3),
+                NumaNode::new(4),
+                NumaNode::new(5),
+                NumaNode::new(6),
+                NumaNode::new(7),
             ],
             node_count: AtomicU32::new(0),
         }
@@ -265,9 +274,15 @@ impl NumaNodeTable {
     /// Accès à un nœud par id.
     #[inline]
     pub fn get(&self, id: u32) -> Option<&NumaNode> {
-        if id as usize >= MAX_NUMA_NODES { return None; }
+        if id as usize >= MAX_NUMA_NODES {
+            return None;
+        }
         let n = &self.nodes[id as usize];
-        if n.active.load(Ordering::Relaxed) { Some(n) } else { None }
+        if n.active.load(Ordering::Relaxed) {
+            Some(n)
+        } else {
+            None
+        }
     }
 
     /// Nombre de nœuds actifs.
@@ -287,17 +302,17 @@ pub static NUMA_NODES: NumaNodeTable = NumaNodeTable::new();
 
 #[repr(C)]
 pub struct NumaGlobalStats {
-    pub total_nodes:   AtomicU32,
+    pub total_nodes: AtomicU32,
     pub fallback_allocs: AtomicU64,
-    pub migration_ops:   AtomicU64,
+    pub migration_ops: AtomicU64,
 }
 
 impl NumaGlobalStats {
     const fn new() -> Self {
         Self {
-            total_nodes:   AtomicU32::new(0),
+            total_nodes: AtomicU32::new(0),
             fallback_allocs: AtomicU64::new(0),
-            migration_ops:   AtomicU64::new(0),
+            migration_ops: AtomicU64::new(0),
         }
     }
 }

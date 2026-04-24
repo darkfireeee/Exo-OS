@@ -5,16 +5,15 @@
 //!  - ONDISK-03: AtomicU64 uniquement dans les structs non-repr(C)
 //!  - ARITH-02 : arithmétique vérifiée
 
-
 extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
-use crate::scheduler::sync::spinlock::SpinLock;
 use super::relation::{Relation, RelationId, RelationOnDisk, RELATION_ONDISK_SIZE};
 use super::relation_type::RelationKind;
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
+use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -30,10 +29,10 @@ pub const STORAGE_MAX_RELATIONS: usize = 65536;
 /// Statistiques du stockage de relations.
 #[derive(Clone, Debug, Default)]
 pub struct StorageStats {
-    pub total_persisted:  u64,
-    pub total_removed:    u64,
-    pub current_count:    usize,
-    pub peak_count:       usize,
+    pub total_persisted: u64,
+    pub total_removed: u64,
+    pub current_count: usize,
+    pub peak_count: usize,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,8 +42,8 @@ pub struct StorageStats {
 /// Partie intérieure du store protégée par SpinLock.
 struct RelationStoreInner {
     /// Map id → blob on-disk.
-    store:       BTreeMap<u64, RelationOnDisk>,
-    stats:       StorageStats,
+    store: BTreeMap<u64, RelationOnDisk>,
+    stats: StorageStats,
 }
 
 impl RelationStoreInner {
@@ -53,9 +52,9 @@ impl RelationStoreInner {
             store: BTreeMap::new(),
             stats: StorageStats {
                 total_persisted: 0,
-                total_removed:   0,
-                current_count:   0,
-                peak_count:      0,
+                total_removed: 0,
+                current_count: 0,
+                peak_count: 0,
             },
         }
     }
@@ -90,7 +89,8 @@ impl RelationStoreInner {
 
     fn load_all(&self) -> ExofsResult<Vec<Relation>> {
         let mut out = Vec::new();
-        out.try_reserve(self.store.len()).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(self.store.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         for d in self.store.values() {
             out.push(Relation::from_on_disk(d)?);
         }
@@ -145,7 +145,7 @@ impl RelationStoreInner {
 /// Thread-safe via SpinLock.  L'allocateur d'ID utilise un AtomicU64
 /// en dehors de la zone repr(C) (ONDISK-03 ok).
 pub struct RelationStorage {
-    inner:   SpinLock<RelationStoreInner>,
+    inner: SpinLock<RelationStoreInner>,
     next_id: AtomicU64,
 }
 
@@ -153,7 +153,7 @@ impl RelationStorage {
     /// Constructeur `const` pour initialisation statique.
     pub const fn new_const() -> Self {
         RelationStorage {
-            inner:   SpinLock::new(RelationStoreInner::new_empty()),
+            inner: SpinLock::new(RelationStoreInner::new_empty()),
             next_id: AtomicU64::new(1),
         }
     }
@@ -248,7 +248,8 @@ impl RelationStorage {
     pub fn dump_raw(&self) -> ExofsResult<Vec<[u8; RELATION_ONDISK_SIZE]>> {
         let guard = self.inner.lock();
         let mut out = Vec::new();
-        out.try_reserve(guard.store.len()).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(guard.store.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         for d in guard.store.values() {
             out.push(d.to_bytes());
         }
@@ -281,12 +282,12 @@ pub static RELATION_STORAGE: RelationStorage = RelationStorage::new_const();
 
 /// Alloue un ID et persiste la relation en une seule opération.
 pub fn create_relation(
-    from:     BlobId,
-    to:       BlobId,
+    from: BlobId,
+    to: BlobId,
     rel_type: super::relation_type::RelationType,
-    tick:     u64,
+    tick: u64,
 ) -> ExofsResult<Relation> {
-    let id  = RELATION_STORAGE.allocate_id();
+    let id = RELATION_STORAGE.allocate_id();
     let rel = Relation::new(id, from, to, rel_type, tick);
     RELATION_STORAGE.persist(&rel)?;
     Ok(rel)
@@ -309,12 +310,16 @@ pub fn purge_deleted() -> ExofsResult<usize> {
 /// Retourne `true` si toutes les relations chargées sont parsables.
 pub fn verify_store_integrity() -> bool {
     let raw = match RELATION_STORAGE.dump_raw() {
-        Ok(r)  => r,
+        Ok(r) => r,
         Err(_) => return false,
     };
     for buf in &raw {
-        if RelationOnDisk::from_bytes(buf).is_err() { return false; }
-        if !RelationOnDisk::crc_ok(buf)             { return false; }
+        if RelationOnDisk::from_bytes(buf).is_err() {
+            return false;
+        }
+        if !RelationOnDisk::crc_ok(buf) {
+            return false;
+        }
     }
     true
 }
@@ -325,10 +330,12 @@ pub fn verify_store_integrity() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::relation_type::RelationType;
+    use super::*;
 
-    fn blob(b: u8) -> BlobId { BlobId([b; 32]) }
+    fn blob(b: u8) -> BlobId {
+        BlobId([b; 32])
+    }
 
     fn make_rel(id: u64) -> Relation {
         Relation::new(
@@ -340,7 +347,8 @@ mod tests {
         )
     }
 
-    #[test] fn test_persist_load() {
+    #[test]
+    fn test_persist_load() {
         let store = RelationStorage::new_const();
         let rel = make_rel(1);
         store.persist(&rel).unwrap();
@@ -348,21 +356,24 @@ mod tests {
         assert_eq!(back.id, RelationId(1));
     }
 
-    #[test] fn test_remove() {
+    #[test]
+    fn test_remove() {
         let store = RelationStorage::new_const();
         store.persist(&make_rel(2)).unwrap();
         assert!(store.remove(RelationId(2)));
         assert!(!store.remove(RelationId(2)));
     }
 
-    #[test] fn test_count() {
+    #[test]
+    fn test_count() {
         let store = RelationStorage::new_const();
         store.persist(&make_rel(3)).unwrap();
         store.persist(&make_rel(4)).unwrap();
         assert_eq!(store.count(), 2);
     }
 
-    #[test] fn test_load_all() {
+    #[test]
+    fn test_load_all() {
         let store = RelationStorage::new_const();
         store.persist(&make_rel(5)).unwrap();
         store.persist(&make_rel(6)).unwrap();
@@ -370,7 +381,8 @@ mod tests {
         assert_eq!(all.len(), 2);
     }
 
-    #[test] fn test_allocate_id_unique() {
+    #[test]
+    fn test_allocate_id_unique() {
         let store = RelationStorage::new_const();
         let id1 = store.allocate_id();
         let id2 = store.allocate_id();
@@ -378,14 +390,16 @@ mod tests {
         assert!(id1.is_valid());
     }
 
-    #[test] fn test_flush() {
+    #[test]
+    fn test_flush() {
         let store = RelationStorage::new_const();
         store.persist(&make_rel(10)).unwrap();
         store.flush();
         assert_eq!(store.count(), 0);
     }
 
-    #[test] fn test_update() {
+    #[test]
+    fn test_update() {
         let store = RelationStorage::new_const();
         let mut rel = make_rel(20);
         store.persist(&rel).unwrap();
@@ -395,7 +409,8 @@ mod tests {
         assert!(!back.is_active());
     }
 
-    #[test] fn test_load_by_kind() {
+    #[test]
+    fn test_load_by_kind() {
         let store = RelationStorage::new_const();
         store.persist(&make_rel(30)).unwrap();
         let mut rel2 = make_rel(31);

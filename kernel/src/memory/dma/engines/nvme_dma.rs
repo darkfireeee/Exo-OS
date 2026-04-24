@@ -8,7 +8,9 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::PhysAddr;
-use crate::memory::dma::stats::counters::{DMA_STATS, dma_stat_submit, dma_stat_complete, dma_stat_error};
+use crate::memory::dma::stats::counters::{
+    dma_stat_complete, dma_stat_error, dma_stat_submit, DMA_STATS,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REGISTRES CONTROLLER MMIO
@@ -17,19 +19,19 @@ use crate::memory::dma::stats::counters::{DMA_STATS, dma_stat_submit, dma_stat_c
 #[allow(dead_code)]
 mod regs {
     /// Controller Capabilities (64 bits).
-    pub const CAP:    usize = 0x00;
+    pub const CAP: usize = 0x00;
     /// Version (32 bits).
-    pub const VS:     usize = 0x08;
+    pub const VS: usize = 0x08;
     /// Controller Configuration (32 bits).
-    pub const CC:     usize = 0x14;
+    pub const CC: usize = 0x14;
     /// Controller Status (32 bits).
-    pub const CSTS:   usize = 0x1C;
+    pub const CSTS: usize = 0x1C;
     /// Admin Queue Attributes (32 bits).
-    pub const AQA:    usize = 0x24;
+    pub const AQA: usize = 0x24;
     /// Admin Submission Queue Base Address (64 bits).
-    pub const ASQ:    usize = 0x28;
+    pub const ASQ: usize = 0x28;
     /// Admin Completion Queue Base Address (64 bits).
-    pub const ACQ:    usize = 0x30;
+    pub const ACQ: usize = 0x30;
     /// Submission Queue 0 Tail Doorbell (stride-dependent).
     pub const SQ0TDB: usize = 0x1000;
     /// Completion Queue 0 Head Doorbell (stride).
@@ -41,18 +43,18 @@ mod regs {
 }
 
 mod cc {
-    pub const EN:          u32 = 1 << 0;
-    pub const IO_SQS_SHIFT: u32 = 16;   // I/O SQ entry size (log2)
-    pub const IO_CQS_SHIFT: u32 = 20;   // I/O CQ entry size (log2)
-    pub const IO_SQS_64:    u32 = 6;    // 64 bytes
-    pub const IO_CQS_16:    u32 = 4;    // 16 bytes
-    pub const CSS_NVM:      u32 = 0 << 4; // NVM command set
-    pub const MPS_4K:       u32 = 0 << 7; // 4096 bytes pages
+    pub const EN: u32 = 1 << 0;
+    pub const IO_SQS_SHIFT: u32 = 16; // I/O SQ entry size (log2)
+    pub const IO_CQS_SHIFT: u32 = 20; // I/O CQ entry size (log2)
+    pub const IO_SQS_64: u32 = 6; // 64 bytes
+    pub const IO_CQS_16: u32 = 4; // 16 bytes
+    pub const CSS_NVM: u32 = 0 << 4; // NVM command set
+    pub const MPS_4K: u32 = 0 << 7; // 4096 bytes pages
 }
 
 mod csts {
     pub const RDY: u32 = 1 << 0;
-    pub const CFS: u32 = 1 << 1;   // Controller Fatal Status
+    pub const CFS: u32 = 1 << 1; // Controller Fatal Status
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,7 +66,7 @@ mod csts {
 pub enum NvmeAdminOpc {
     CreateIOCQ = 0x05,
     CreateIOSQ = 0x01,
-    Identify   = 0x06,
+    Identify = 0x06,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +74,7 @@ pub enum NvmeAdminOpc {
 pub enum NvmeIoOpc {
     Flush = 0x00,
     Write = 0x01,
-    Read  = 0x02,
+    Read = 0x02,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -83,12 +85,12 @@ pub enum NvmeIoOpc {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NvmeSqe {
     /// DW0 : CDW0 — opcode (7:0), fuse (9:8), CID (31:16).
-    pub cdw0:  u32,
+    pub cdw0: u32,
     /// DW1 : NSID.
-    pub nsid:  u32,
+    pub nsid: u32,
     /// DW2-DW3 : CDW2-CDW3 (réservés pour NVM).
-    pub cdw2:  u32,
-    pub cdw3:  u32,
+    pub cdw2: u32,
+    pub cdw3: u32,
     /// DW4-DW5 : Metadata Pointer.
     pub mptr_lo: u32,
     pub mptr_hi: u32,
@@ -98,28 +100,33 @@ pub struct NvmeSqe {
     pub prp2_lo: u32,
     pub prp2_hi: u32,
     /// DW10-DW15 : opération-dépendants.
-    pub cdw10:  u32,
-    pub cdw11:  u32,
-    pub cdw12:  u32,
-    pub cdw13:  u32,
-    pub cdw14:  u32,
-    pub cdw15:  u32,
+    pub cdw10: u32,
+    pub cdw11: u32,
+    pub cdw12: u32,
+    pub cdw13: u32,
+    pub cdw14: u32,
+    pub cdw15: u32,
 }
 
 impl NvmeSqe {
     pub fn new_read(cid: u16, nsid: u32, slba: u64, nr_minus1: u16, prp1: PhysAddr) -> Self {
         NvmeSqe {
-            cdw0:    (NvmeIoOpc::Read as u32) | ((cid as u32) << 16),
+            cdw0: (NvmeIoOpc::Read as u32) | ((cid as u32) << 16),
             nsid,
-            cdw2: 0, cdw3: 0,
-            mptr_lo: 0, mptr_hi: 0,
+            cdw2: 0,
+            cdw3: 0,
+            mptr_lo: 0,
+            mptr_hi: 0,
             prp1_lo: (prp1.as_u64() & 0xFFFF_FFFF) as u32,
             prp1_hi: (prp1.as_u64() >> 32) as u32,
-            prp2_lo: 0, prp2_hi: 0,
+            prp2_lo: 0,
+            prp2_hi: 0,
             cdw10: (slba & 0xFFFF_FFFF) as u32,
             cdw11: (slba >> 32) as u32,
-            cdw12: nr_minus1 as u32,    // NLB (0-based)
-            cdw13: 0, cdw14: 0, cdw15: 0,
+            cdw12: nr_minus1 as u32, // NLB (0-based)
+            cdw13: 0,
+            cdw14: 0,
+            cdw15: 0,
         }
     }
 
@@ -138,20 +145,28 @@ impl NvmeSqe {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NvmeCqe {
     /// DW0 : Command Specific.
-    pub dw0:  u32,
+    pub dw0: u32,
     /// DW1 : réservé.
-    pub dw1:  u32,
+    pub dw1: u32,
     /// DW2 : SQ Head Pointer (15:0) + SQ ID (31:16).
-    pub dw2:  u32,
+    pub dw2: u32,
     /// DW3 : CID (31:16) + Phase Tag (0) + Status (15:1).
-    pub dw3:  u32,
+    pub dw3: u32,
 }
 
 impl NvmeCqe {
-    pub fn phase(&self) -> bool  { self.dw3 & 1 != 0 }
-    pub fn status(&self) -> u16  { ((self.dw3 >> 1) & 0x7FFF) as u16 }
-    pub fn cid(&self)    -> u16  { (self.dw3 >> 16) as u16 }
-    pub fn is_success(&self) -> bool { self.status() == 0 }
+    pub fn phase(&self) -> bool {
+        self.dw3 & 1 != 0
+    }
+    pub fn status(&self) -> u16 {
+        ((self.dw3 >> 1) & 0x7FFF) as u16
+    }
+    pub fn cid(&self) -> u16 {
+        (self.dw3 >> 16) as u16
+    }
+    pub fn is_success(&self) -> bool {
+        self.status() == 0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,10 +177,10 @@ const NVME_QUEUE_DEPTH: usize = 64;
 
 struct NvmeSQ {
     entries: [NvmeSqe; NVME_QUEUE_DEPTH],
-    tail:    u16,
+    tail: u16,
     #[allow(dead_code)]
-    head:    u16,
-    count:   u16,
+    head: u16,
+    count: u16,
 }
 
 impl NvmeSQ {
@@ -173,12 +188,18 @@ impl NvmeSQ {
     fn new() -> Self {
         NvmeSQ {
             entries: [NvmeSqe::default(); NVME_QUEUE_DEPTH],
-            tail: 0, head: 0, count: 0,
+            tail: 0,
+            head: 0,
+            count: 0,
         }
     }
-    fn is_full(&self) -> bool { self.count as usize >= NVME_QUEUE_DEPTH }
+    fn is_full(&self) -> bool {
+        self.count as usize >= NVME_QUEUE_DEPTH
+    }
     fn submit(&mut self, sqe: NvmeSqe) -> bool {
-        if self.is_full() { return false; }
+        if self.is_full() {
+            return false;
+        }
         self.entries[self.tail as usize] = sqe;
         self.tail = (self.tail + 1) % NVME_QUEUE_DEPTH as u16;
         self.count += 1;
@@ -188,24 +209,29 @@ impl NvmeSQ {
 
 struct NvmeCQ {
     entries: [NvmeCqe; NVME_QUEUE_DEPTH],
-    head:    u16,
-    phase:   bool,
+    head: u16,
+    phase: bool,
 }
 
 impl NvmeCQ {
     fn new() -> Self {
         NvmeCQ {
             entries: [NvmeCqe::default(); NVME_QUEUE_DEPTH],
-            head: 0, phase: true,
+            head: 0,
+            phase: true,
         }
     }
 
     /// Retourne la prochaine entrée complétée, si disponible.
     fn pop(&mut self) -> Option<NvmeCqe> {
         let cqe = self.entries[self.head as usize];
-        if cqe.phase() != self.phase { return None; }
+        if cqe.phase() != self.phase {
+            return None;
+        }
         self.head = (self.head + 1) % NVME_QUEUE_DEPTH as u16;
-        if self.head == 0 { self.phase = !self.phase; }
+        if self.head == 0 {
+            self.phase = !self.phase;
+        }
         Some(cqe)
     }
 }
@@ -215,21 +241,21 @@ impl NvmeCQ {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct NvmeState {
-    sq:          NvmeSQ,
-    cq:          NvmeCQ,
+    sq: NvmeSQ,
+    cq: NvmeCQ,
     cid_counter: u16,
     bytes_inflight: [u32; NVME_QUEUE_DEPTH],
-    is_write:    [bool; NVME_QUEUE_DEPTH],
+    is_write: [bool; NVME_QUEUE_DEPTH],
 }
 
 impl NvmeState {
     fn new() -> Self {
         NvmeState {
-            sq:           NvmeSQ::new(),
-            cq:           NvmeCQ::new(),
-            cid_counter:  1,
+            sq: NvmeSQ::new(),
+            cq: NvmeCQ::new(),
+            cid_counter: 1,
             bytes_inflight: [0; NVME_QUEUE_DEPTH],
-            is_write:     [false; NVME_QUEUE_DEPTH],
+            is_write: [false; NVME_QUEUE_DEPTH],
         }
     }
 
@@ -241,21 +267,21 @@ impl NvmeState {
 }
 
 pub struct NvmeDmaEngine {
-    bar0:       AtomicU64,
-    present:    AtomicBool,
-    engine_id:  AtomicU32,
-    nsid:       AtomicU32,
-    state:      Mutex<NvmeState>,
+    bar0: AtomicU64,
+    present: AtomicBool,
+    engine_id: AtomicU32,
+    nsid: AtomicU32,
+    state: Mutex<NvmeState>,
 }
 
 impl NvmeDmaEngine {
     const fn new_uninit() -> Self {
         NvmeDmaEngine {
-            bar0:      AtomicU64::new(0),
-            present:   AtomicBool::new(false),
+            bar0: AtomicU64::new(0),
+            present: AtomicBool::new(false),
             engine_id: AtomicU32::new(0),
-            nsid:      AtomicU32::new(1),
-            state:     Mutex::new(unsafe { core::mem::zeroed() }),
+            nsid: AtomicU32::new(1),
+            state: Mutex::new(unsafe { core::mem::zeroed() }),
         }
     }
 
@@ -293,10 +319,14 @@ impl NvmeDmaEngine {
         self.write32(regs::CC, cc);
         let mut tries = 100_000u32;
         while tries > 0 {
-            if self.read32(regs::CSTS) & csts::RDY == 0 { break; }
+            if self.read32(regs::CSTS) & csts::RDY == 0 {
+                break;
+            }
             tries -= 1;
         }
-        if tries == 0 { return false; }
+        if tries == 0 {
+            return false;
+        }
 
         // Configurer les queues via les adresses statiques en state.
         let st = self.state.lock();
@@ -307,8 +337,9 @@ impl NvmeDmaEngine {
         // Admin queues → on utilise les I/O queues (pas d'admin ici).
         self.write64(regs::ASQ, sq_phys);
         self.write64(regs::ACQ, cq_phys);
-        self.write32(regs::AQA,
-            ((NVME_QUEUE_DEPTH as u32 - 1) << 16) | (NVME_QUEUE_DEPTH as u32 - 1)
+        self.write32(
+            regs::AQA,
+            ((NVME_QUEUE_DEPTH as u32 - 1) << 16) | (NVME_QUEUE_DEPTH as u32 - 1),
         );
 
         // Activer CC.EN avec tailles de queue.
@@ -323,11 +354,17 @@ impl NvmeDmaEngine {
         let mut tries = 100_000u32;
         while tries > 0 {
             let csts = self.read32(regs::CSTS);
-            if csts & csts::CFS != 0 { return false; }
-            if csts & csts::RDY != 0 { break; }
+            if csts & csts::CFS != 0 {
+                return false;
+            }
+            if csts & csts::RDY != 0 {
+                break;
+            }
             tries -= 1;
         }
-        if tries == 0 { return false; }
+        if tries == 0 {
+            return false;
+        }
 
         let eid = DMA_STATS.register_engine();
         self.engine_id.store(eid as u32, Ordering::Relaxed);
@@ -350,9 +387,13 @@ impl NvmeDmaEngine {
     }
 
     unsafe fn submit_io(&self, slba: u64, nlb: u16, prp1: PhysAddr, write: bool) -> bool {
-        if !self.present.load(Ordering::Acquire) { return false; }
+        if !self.present.load(Ordering::Acquire) {
+            return false;
+        }
         let mut st = self.state.lock();
-        if st.sq.is_full() { return false; }
+        if st.sq.is_full() {
+            return false;
+        }
 
         let cid = st.next_cid();
         let nsid = self.nsid.load(Ordering::Relaxed);
@@ -366,7 +407,9 @@ impl NvmeDmaEngine {
         st.bytes_inflight[slot] = (nlb as u32 + 1) * 512;
         st.is_write[slot] = write;
 
-        if !st.sq.submit(sqe) { return false; }
+        if !st.sq.submit(sqe) {
+            return false;
+        }
 
         // Ring Submission Doorbell.
         let tail = st.sq.tail;
@@ -382,7 +425,9 @@ impl NvmeDmaEngine {
     ///
     /// # Safety : contexte non-préemptible.
     pub unsafe fn poll_cq(&self) -> usize {
-        if !self.present.load(Ordering::Acquire) { return 0; }
+        if !self.present.load(Ordering::Acquire) {
+            return 0;
+        }
         let mut st = self.state.lock();
         let eid = self.engine_id.load(Ordering::Relaxed) as usize;
         let mut count = 0;

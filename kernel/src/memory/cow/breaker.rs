@@ -17,11 +17,11 @@
 
 use core::sync::atomic::Ordering;
 
-use crate::memory::core::types::{Frame, AllocFlags, AllocError};
 use crate::memory::core::constants::PAGE_SIZE;
 use crate::memory::core::layout::PHYS_MAP_BASE;
-use crate::memory::physical::allocator::{alloc_page, free_page};
+use crate::memory::core::types::{AllocError, AllocFlags, Frame};
 use crate::memory::cow::tracker::COW_TRACKER;
+use crate::memory::physical::allocator::{alloc_page, free_page};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RÉSULTAT D'UNE RUPTURE CoW
@@ -47,19 +47,19 @@ use core::sync::atomic::AtomicU64;
 
 pub struct CowBreakerStats {
     /// Ruptures CoW effectuées (copie physique réalisée).
-    pub breaks:         AtomicU64,
+    pub breaks: AtomicU64,
     /// Frames qui étaient déjà exclusifs (zéro copy).
-    pub already_excl:   AtomicU64,
+    pub already_excl: AtomicU64,
     /// Échecs OOM lors de la rupture.
-    pub oom_failures:   AtomicU64,
+    pub oom_failures: AtomicU64,
     /// Octets copiés au total via les ruptures CoW.
-    pub bytes_copied:   AtomicU64,
+    pub bytes_copied: AtomicU64,
 }
 
 impl CowBreakerStats {
     const fn new() -> Self {
         CowBreakerStats {
-            breaks:       AtomicU64::new(0),
+            breaks: AtomicU64::new(0),
             already_excl: AtomicU64::new(0),
             oom_failures: AtomicU64::new(0),
             bytes_copied: AtomicU64::new(0),
@@ -97,15 +97,19 @@ pub unsafe fn break_cow(frame: Frame) -> CowBreakOutcome {
 
     // Si le frame est déjà exclusif, pas de copie nécessaire.
     if refcount <= 1 {
-        COW_BREAKER_STATS.already_excl.fetch_add(1, Ordering::Relaxed);
+        COW_BREAKER_STATS
+            .already_excl
+            .fetch_add(1, Ordering::Relaxed);
         return CowBreakOutcome::AlreadyExclusive(frame);
     }
 
     // Allouer un nouveau frame (non zéro — on va le remplir immédiatement).
     let new_frame = match alloc_page(AllocFlags::NONE) {
-        Ok(f)  => f,
+        Ok(f) => f,
         Err(_) => {
-            COW_BREAKER_STATS.oom_failures.fetch_add(1, Ordering::Relaxed);
+            COW_BREAKER_STATS
+                .oom_failures
+                .fetch_add(1, Ordering::Relaxed);
             return CowBreakOutcome::Oom;
         }
     };
@@ -127,7 +131,9 @@ pub unsafe fn break_cow(frame: Frame) -> CowBreakOutcome {
     }
 
     COW_BREAKER_STATS.breaks.fetch_add(1, Ordering::Relaxed);
-    COW_BREAKER_STATS.bytes_copied.fetch_add(PAGE_SIZE as u64, Ordering::Relaxed);
+    COW_BREAKER_STATS
+        .bytes_copied
+        .fetch_add(PAGE_SIZE as u64, Ordering::Relaxed);
 
     CowBreakOutcome::Copied(new_frame)
 }
@@ -140,8 +146,8 @@ pub unsafe fn break_cow(frame: Frame) -> CowBreakOutcome {
 #[inline]
 pub unsafe fn try_break_cow(frame: Frame) -> Result<Frame, AllocError> {
     match break_cow(frame) {
-        CowBreakOutcome::Copied(f)          => Ok(f),
+        CowBreakOutcome::Copied(f) => Ok(f),
         CowBreakOutcome::AlreadyExclusive(f) => Ok(f),
-        CowBreakOutcome::Oom                 => Err(AllocError::OutOfMemory),
+        CowBreakOutcome::Oom => Err(AllocError::OutOfMemory),
     }
 }

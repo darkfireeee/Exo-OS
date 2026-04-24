@@ -122,9 +122,14 @@ impl DeviceServerEventQueue {
             let dif = seq as i64 - pos as i64;
 
             if dif == 0 {
-                match self.head.compare_exchange(pos, pos + 1, Ordering::AcqRel, Ordering::Relaxed) {
+                match self
+                    .head
+                    .compare_exchange(pos, pos + 1, Ordering::AcqRel, Ordering::Relaxed)
+                {
                     Ok(_) => {
-                        unsafe { *slot.event.get() = event; }
+                        unsafe {
+                            *slot.event.get() = event;
+                        }
                         slot.seq.store(pos + 1, Ordering::Release);
                         return true;
                     }
@@ -152,10 +157,14 @@ impl DeviceServerEventQueue {
             let dif = seq as i64 - (pos + 1) as i64;
 
             if dif == 0 {
-                match self.tail.compare_exchange(pos, pos + 1, Ordering::AcqRel, Ordering::Relaxed) {
+                match self
+                    .tail
+                    .compare_exchange(pos, pos + 1, Ordering::AcqRel, Ordering::Relaxed)
+                {
                     Ok(_) => {
                         let event = unsafe { *slot.event.get() };
-                        slot.seq.store(pos + DEVICE_SERVER_EVENT_CAPACITY, Ordering::Release);
+                        slot.seq
+                            .store(pos + DEVICE_SERVER_EVENT_CAPACITY, Ordering::Release);
                         return Some(event);
                     }
                     Err(actual) => {
@@ -201,17 +210,35 @@ fn notify(event: DeviceServerEvent) {
 
 /// Driver non réactif : IRQ non acquittée dans la fenêtre watchdog.
 pub fn notify_driver_stall(irq: u8) {
-    notify(DeviceServerEvent::at(DeviceServerEventKind::DriverStall, irq, 0, 0, 0));
+    notify(DeviceServerEvent::at(
+        DeviceServerEventKind::DriverStall,
+        irq,
+        0,
+        0,
+        0,
+    ));
 }
 
 /// IRQ ghost : aucun handler n'a revendiqué l'IRQ level.
 pub fn notify_unhandled_irq(irq: u8) {
-    notify(DeviceServerEvent::at(DeviceServerEventKind::UnhandledIrq, irq, 0, 0, 0));
+    notify(DeviceServerEvent::at(
+        DeviceServerEventKind::UnhandledIrq,
+        irq,
+        0,
+        0,
+        0,
+    ));
 }
 
 /// IRQ blacklistée après storms répétés.
 pub fn notify_irq_blacklisted(irq: u8) {
-    notify(DeviceServerEvent::at(DeviceServerEventKind::IrqBlacklisted, irq, 0, 0, 0));
+    notify(DeviceServerEvent::at(
+        DeviceServerEventKind::IrqBlacklisted,
+        irq,
+        0,
+        0,
+        0,
+    ));
 }
 
 /// Faute IOMMU détectée pour un PID et une IOVA données.

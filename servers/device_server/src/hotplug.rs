@@ -20,7 +20,12 @@ pub struct DeviceEvent {
 
 impl DeviceEvent {
     pub const fn new(kind: DeviceEventKind, bdf_raw: u32, pid: u32, value: u64) -> Self {
-        Self { kind, bdf_raw, pid, value }
+        Self {
+            kind,
+            bdf_raw,
+            pid,
+            value,
+        }
     }
 }
 
@@ -56,7 +61,10 @@ impl HotplugQueue {
 
     pub fn push(&mut self, event: DeviceEvent) {
         let idx = self.head % MAX_EVENTS;
-        self.slots[idx] = QueueSlot { active: true, event };
+        self.slots[idx] = QueueSlot {
+            active: true,
+            event,
+        };
         self.head = self.head.wrapping_add(1);
         if self.head.wrapping_sub(self.tail) > MAX_EVENTS {
             self.tail = self.head - MAX_EVENTS;

@@ -24,9 +24,4 @@ pub use super::ktime::tsc_offset;
 pub use super::ktime::tsc_offset_valid;
 
 // Re-exports publics pour les usages SMP boot.
-pub use sync::{
-    measure_tsc_offset_for_ap,
-    ap_sync_tsc_response,
-    init_bsp_percpu,
-    tsc_synced,
-};
+pub use sync::{ap_sync_tsc_response, init_bsp_percpu, measure_tsc_offset_for_ap, tsc_synced};

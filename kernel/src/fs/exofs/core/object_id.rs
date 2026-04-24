@@ -24,10 +24,10 @@
 //   INVALID : bytes[0..32] = 0xFF × 32 (sentinel ObjectId::INVALID dans types.rs)
 //   ZERO    : bytes[0..32] = 0x00 × 32 (jamais alloué, erreur on-disk)
 
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::fs::exofs::core::types::{ObjectId, BlobId};
-use crate::fs::exofs::core::object_class::ObjectClass;
 use crate::fs::exofs::core::error::ExofsError;
+use crate::fs::exofs::core::object_class::ObjectClass;
+use crate::fs::exofs::core::types::{BlobId, ObjectId};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -104,8 +104,14 @@ pub fn new_class2_with_counter(counter: u64) -> ObjectId {
 fn build_class2_id(counter: u64) -> ObjectId {
     let mut bytes = [0u8; 32];
     let c = counter.to_le_bytes();
-    bytes[0] = c[0]; bytes[1] = c[1]; bytes[2] = c[2]; bytes[3] = c[3];
-    bytes[4] = c[4]; bytes[5] = c[5]; bytes[6] = c[6]; bytes[7] = c[7];
+    bytes[0] = c[0];
+    bytes[1] = c[1];
+    bytes[2] = c[2];
+    bytes[3] = c[3];
+    bytes[4] = c[4];
+    bytes[5] = c[5];
+    bytes[6] = c[6];
+    bytes[7] = c[7];
     bytes[CLASS_MARKER_BYTE_IDX] = CLASS2_MARKER;
     ObjectId(bytes)
 }
@@ -126,9 +132,13 @@ pub fn restore_class2_counter(last_counter: u64) {
     let next = last_counter.saturating_add(1).max(CLASS2_COUNTER_MIN);
     loop {
         let cur = CLASS2_COUNTER.load(Ordering::Relaxed);
-        if next <= cur { break; }
-        if CLASS2_COUNTER.compare_exchange(cur, next,
-            Ordering::SeqCst, Ordering::Relaxed).is_ok() {
+        if next <= cur {
+            break;
+        }
+        if CLASS2_COUNTER
+            .compare_exchange(cur, next, Ordering::SeqCst, Ordering::Relaxed)
+            .is_ok()
+        {
             break;
         }
     }
@@ -148,10 +158,7 @@ pub fn current_class2_counter() -> u64 {
 /// Cela peut indiquer une perte de données ou un crash mid-commit.
 ///
 /// Retourne (expected_next, found_next, gap_detected).
-pub fn detect_class2_counter_gap(
-    last_persisted: u64,
-    actual_max_on_disk: u64,
-) -> (u64, u64, bool) {
+pub fn detect_class2_counter_gap(last_persisted: u64, actual_max_on_disk: u64) -> (u64, u64, bool) {
     let expected = last_persisted.saturating_add(1);
     let gap = actual_max_on_disk > last_persisted.saturating_add(1);
     (expected, actual_max_on_disk, gap)
@@ -182,7 +189,11 @@ pub fn is_class1_heuristic(oid: &ObjectId) -> bool {
 /// Résultat à confirmer via `validate_class_invariants()` avec le Kind.
 #[inline]
 pub fn detect_class(oid: &ObjectId) -> ObjectClass {
-    if is_class2_heuristic(oid) { ObjectClass::Class2 } else { ObjectClass::Class1 }
+    if is_class2_heuristic(oid) {
+        ObjectClass::Class2
+    } else {
+        ObjectClass::Class1
+    }
 }
 
 /// Extrait le compteur u64 d'un ObjectId Class2.
@@ -191,10 +202,11 @@ pub fn detect_class(oid: &ObjectId) -> ObjectClass {
 /// Utilisé au recovery pour restaurer CLASS2_COUNTER.
 #[inline]
 pub fn extract_class2_counter(oid: &ObjectId) -> Option<u64> {
-    if !is_class2_heuristic(oid) { return None; }
+    if !is_class2_heuristic(oid) {
+        return None;
+    }
     Some(u64::from_le_bytes([
-        oid.0[0], oid.0[1], oid.0[2], oid.0[3],
-        oid.0[4], oid.0[5], oid.0[6], oid.0[7],
+        oid.0[0], oid.0[1], oid.0[2], oid.0[3], oid.0[4], oid.0[5], oid.0[6], oid.0[7],
     ]))
 }
 
@@ -210,7 +222,7 @@ pub fn object_id_to_hex(oid: &ObjectId) -> [u8; OBJECT_ID_HEX_LEN] {
     let mut out = [0u8; OBJECT_ID_HEX_LEN];
     const D: &[u8] = b"0123456789abcdef";
     for (i, &b) in oid.0.iter().enumerate() {
-        out[i * 2]     = D[(b >> 4) as usize];
+        out[i * 2] = D[(b >> 4) as usize];
         out[i * 2 + 1] = D[(b & 0xf) as usize];
     }
     out
@@ -223,7 +235,7 @@ pub fn object_id_short_hex(oid: &ObjectId) -> [u8; OBJECT_ID_SHORT_HEX_LEN] {
     let mut out = [0u8; OBJECT_ID_SHORT_HEX_LEN];
     const D: &[u8] = b"0123456789abcdef";
     for (i, &b) in oid.0[..8].iter().enumerate() {
-        out[i * 2]     = D[(b >> 4) as usize];
+        out[i * 2] = D[(b >> 4) as usize];
         out[i * 2 + 1] = D[(b & 0xf) as usize];
     }
     out
@@ -249,7 +261,7 @@ fn hex_nibble(c: u8) -> Result<u8, ExofsError> {
         b'0'..=b'9' => Ok(c - b'0'),
         b'a'..=b'f' => Ok(c - b'a' + 10),
         b'A'..=b'F' => Ok(c - b'A' + 10),
-        _            => Err(ExofsError::InvalidArgument),
+        _ => Err(ExofsError::InvalidArgument),
     }
 }
 
@@ -305,17 +317,19 @@ pub fn validate_batch(oids: &[ObjectId]) -> Option<usize> {
 /// Garantit que les invariants LOBJ-05/06/07 sont respectés avant émission.
 #[derive(Default)]
 pub struct ObjectIdBuilder {
-    blob_id_set:       bool,
-    blob_id:          [u8; 32],
-    owner_cap_set:    bool,
-    owner_cap:        [u8; 32],
-    target_class2:    bool,
-    force_counter:    Option<u64>,
+    blob_id_set: bool,
+    blob_id: [u8; 32],
+    owner_cap_set: bool,
+    owner_cap: [u8; 32],
+    target_class2: bool,
+    force_counter: Option<u64>,
 }
 
 impl ObjectIdBuilder {
     /// Nouveau builder (commence vide).
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Configure le BlobId pour un ObjectId Class1.
     pub fn blob_id(mut self, bid: &BlobId) -> Self {
@@ -351,7 +365,9 @@ impl ObjectIdBuilder {
         if self.target_class2 {
             let counter = match self.force_counter {
                 Some(c) => {
-                    if c == 0 { return Err(ExofsError::InvalidArgument); }
+                    if c == 0 {
+                        return Err(ExofsError::InvalidArgument);
+                    }
                     c
                 }
                 None => CLASS2_COUNTER.fetch_add(1, Ordering::Relaxed),
@@ -386,18 +402,18 @@ pub const OBJECT_ID_POOL_CAP: usize = 64;
 /// Le pool est rempli en une seule opération fetch_add, réduisant
 /// la pression sur le cache partagé.
 pub struct ObjectIdPool {
-    ids:   [ObjectId; OBJECT_ID_POOL_CAP],
+    ids: [ObjectId; OBJECT_ID_POOL_CAP],
     count: usize,
-    next:  usize,
+    next: usize,
 }
 
 impl ObjectIdPool {
     /// Crée un pool vide.
     pub const fn empty() -> Self {
         Self {
-            ids:   [ObjectId::INVALID; OBJECT_ID_POOL_CAP],
+            ids: [ObjectId::INVALID; OBJECT_ID_POOL_CAP],
             count: 0,
-            next:  0,
+            next: 0,
         }
     }
 
@@ -415,7 +431,7 @@ impl ObjectIdPool {
             self.ids[i] = build_class2_id(base + i as u64);
         }
         self.count = n;
-        self.next  = 0;
+        self.next = 0;
         Ok(())
     }
 
@@ -423,7 +439,9 @@ impl ObjectIdPool {
     ///
     /// Retourne None si le pool est épuisé.
     pub fn take(&mut self) -> Option<ObjectId> {
-        if self.next >= self.count { return None; }
+        if self.next >= self.count {
+            return None;
+        }
         let id = self.ids[self.next];
         self.next += 1;
         Some(id)
@@ -441,12 +459,14 @@ impl ObjectIdPool {
     /// Note : les compteurs atomiques ne sont pas restaurés (monotone strict).
     pub fn flush(&mut self) {
         self.count = 0;
-        self.next  = 0;
+        self.next = 0;
     }
 
     /// Vrai si le pool est épuisé.
     #[inline]
-    pub fn is_empty(&self) -> bool { self.remaining() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.remaining() == 0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

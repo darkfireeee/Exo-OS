@@ -13,11 +13,10 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::incremental_export::EpochId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─── Trait de fourniture de données ──────────────────────────────────────────
 
@@ -77,10 +76,16 @@ pub struct StreamFilter {
 
 impl StreamFilter {
     pub fn new(mode: FilterMode) -> Self {
-        Self { mode, accepted: 0, rejected: 0 }
+        Self {
+            mode,
+            accepted: 0,
+            rejected: 0,
+        }
     }
 
-    pub fn accept_all() -> Self { Self::new(FilterMode::AcceptAll) }
+    pub fn accept_all() -> Self {
+        Self::new(FilterMode::AcceptAll)
+    }
 
     pub fn epoch_range(min: u64, max: u64) -> Self {
         Self::new(FilterMode::EpochRange { min, max })
@@ -103,8 +108,12 @@ impl StreamFilter {
         accept
     }
 
-    pub fn accepted(&self) -> u64 { self.accepted }
-    pub fn rejected(&self) -> u64 { self.rejected }
+    pub fn accepted(&self) -> u64 {
+        self.accepted
+    }
+    pub fn rejected(&self) -> u64 {
+        self.rejected
+    }
 }
 
 // ─── Configuration d'export streaming ────────────────────────────────────────
@@ -131,19 +140,25 @@ pub struct StreamExportConfig {
 impl StreamExportConfig {
     pub fn default(session_id: u32) -> Self {
         Self {
-            session_id, verify_blob_id: true,
-            block_size: 65536, max_blobs: 0,
+            session_id,
+            verify_blob_id: true,
+            block_size: 65536,
+            max_blobs: 0,
             include_tombstones: true,
-            epoch_min: 0, epoch_max: u64::MAX,
+            epoch_min: 0,
+            epoch_max: u64::MAX,
         }
     }
 
     pub fn minimal(session_id: u32) -> Self {
         Self {
-            session_id, verify_blob_id: false,
-            block_size: 4096, max_blobs: 0,
+            session_id,
+            verify_blob_id: false,
+            block_size: 4096,
+            max_blobs: 0,
             include_tombstones: false,
-            epoch_min: 0, epoch_max: u64::MAX,
+            epoch_min: 0,
+            epoch_max: u64::MAX,
         }
     }
 
@@ -176,7 +191,9 @@ pub struct StreamExportReport {
 }
 
 impl StreamExportReport {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn record_exported(&mut self, size: u64) {
         self.blobs_exported = self.blobs_exported.saturating_add(1);
@@ -199,8 +216,12 @@ impl StreamExportReport {
         self.blobs_exported.saturating_add(self.tombstones_emitted)
     }
 
-    pub fn has_errors(&self) -> bool { self.errors > 0 }
-    pub fn is_clean(&self) -> bool { self.is_complete && !self.has_errors() }
+    pub fn has_errors(&self) -> bool {
+        self.errors > 0
+    }
+    pub fn is_clean(&self) -> bool {
+        self.is_complete && !self.has_errors()
+    }
 }
 
 // ─── Checkpoint d'export streaming ───────────────────────────────────────────
@@ -223,8 +244,11 @@ pub struct StreamCheckpoint {
 impl StreamCheckpoint {
     pub fn new() -> Self {
         Self {
-            next_index: 0, last_exported: [0u8; 32],
-            exported_so_far: 0, last_epoch: 0, valid: false,
+            next_index: 0,
+            last_exported: [0u8; 32],
+            exported_so_far: 0,
+            last_epoch: 0,
+            valid: false,
         }
     }
 
@@ -267,7 +291,11 @@ impl StreamExporter {
     /// Reprend un export depuis un checkpoint précédent.
     pub fn resume(config: StreamExportConfig, checkpoint: StreamCheckpoint) -> ExofsResult<Self> {
         config.validate()?;
-        Ok(Self { config, checkpoint, report: StreamExportReport::new() })
+        Ok(Self {
+            config,
+            checkpoint,
+            report: StreamExportReport::new(),
+        })
     }
 
     /// Lance l'export d'une liste de blobs vers le sink.
@@ -291,7 +319,8 @@ impl StreamExporter {
         while idx < blob_ids.len() {
             // Limite max_blobs
             if self.config.max_blobs > 0
-                && self.report.blobs_exported >= self.config.max_blobs as u64 {
+                && self.report.blobs_exported >= self.config.max_blobs as u64
+            {
                 break;
             }
 
@@ -389,8 +418,12 @@ impl StreamExporter {
         Ok(self.report)
     }
 
-    pub fn checkpoint(&self) -> &StreamCheckpoint { &self.checkpoint }
-    pub fn report(&self) -> &StreamExportReport { &self.report }
+    pub fn checkpoint(&self) -> &StreamCheckpoint {
+        &self.checkpoint
+    }
+    pub fn report(&self) -> &StreamExportReport {
+        &self.report
+    }
 }
 
 // ─── Lot d'export avec checkpoint ────────────────────────────────────────────
@@ -421,23 +454,30 @@ pub struct StreamExportBatch {
 impl StreamExportBatch {
     pub fn new(batch_id: u32, config: StreamExportConfig) -> Self {
         Self {
-            batch_id, state: BatchState::Pending, config,
+            batch_id,
+            state: BatchState::Pending,
+            config,
             checkpoint: StreamCheckpoint::new(),
             report: StreamExportReport::new(),
-            blob_ids: Vec::new(), tombstones: Vec::new(),
+            blob_ids: Vec::new(),
+            tombstones: Vec::new(),
         }
     }
 
     /// Ajoute un blob_id au lot — OOM-02 : try_reserve.
     pub fn add_blob(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
-        self.blob_ids.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.blob_ids
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.blob_ids.push(blob_id);
         Ok(())
     }
 
     /// Ajoute un tombstone au lot — OOM-02 : try_reserve.
     pub fn add_tombstone(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
-        self.tombstones.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.tombstones
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.tombstones.push(blob_id);
         Ok(())
     }
@@ -455,7 +495,11 @@ impl StreamExportBatch {
             Ok(report) => {
                 self.report = report;
                 self.checkpoint = *exporter.checkpoint();
-                self.state = if report.has_errors() { BatchState::Failed } else { BatchState::Completed };
+                self.state = if report.has_errors() {
+                    BatchState::Failed
+                } else {
+                    BatchState::Completed
+                };
                 Ok(report)
             }
             Err(e) => {
@@ -466,8 +510,12 @@ impl StreamExportBatch {
         }
     }
 
-    pub fn blob_count(&self) -> usize { self.blob_ids.len() }
-    pub fn is_done(&self) -> bool { matches!(self.state, BatchState::Completed | BatchState::Failed) }
+    pub fn blob_count(&self) -> usize {
+        self.blob_ids.len()
+    }
+    pub fn is_done(&self) -> bool {
+        matches!(self.state, BatchState::Completed | BatchState::Failed)
+    }
 }
 
 // ─── blake3 inline minimal (no_std) ─────────────────────────────────────────
@@ -475,8 +523,14 @@ impl StreamExportBatch {
 /// hash blake3 simplifié (production : remplacer par crate::fs::exofs::dedup::content_hash).
 fn inline_blake3(data: &[u8]) -> [u8; 32] {
     let mut state = [
-        0x6b08_c647u32, 0xbb67_ae85, 0x3c6e_f372, 0xa54f_f53a,
-        0x510e_527f, 0x9b05_688c, 0x1f83_d9ab, 0x5be0_cd19,
+        0x6b08_c647u32,
+        0xbb67_ae85,
+        0x3c6e_f372,
+        0xa54f_f53a,
+        0x510e_527f,
+        0x9b05_688c,
+        0x1f83_d9ab,
+        0x5be0_cd19,
     ];
     let mut i = 0usize;
     while i < data.len() {
@@ -508,14 +562,26 @@ pub struct VecStreamSink {
 }
 
 impl VecStreamSink {
-    pub fn new() -> Self { Self { buf: Vec::new(), entries: 0, written: 0 } }
-    pub fn as_slice(&self) -> &[u8] { &self.buf }
-    pub fn entry_count(&self) -> u32 { self.entries }
+    pub fn new() -> Self {
+        Self {
+            buf: Vec::new(),
+            entries: 0,
+            written: 0,
+        }
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buf
+    }
+    pub fn entry_count(&self) -> u32 {
+        self.entries
+    }
 }
 
 impl StreamSink for VecStreamSink {
     fn write_chunk(&mut self, data: &[u8]) -> ExofsResult<()> {
-        self.buf.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        self.buf
+            .try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         self.buf.extend_from_slice(data);
         self.written = self.written.saturating_add(data.len() as u64);
         Ok(())
@@ -524,8 +590,12 @@ impl StreamSink for VecStreamSink {
         self.entries = self.entries.saturating_add(1);
         Ok(())
     }
-    fn end_entry(&mut self) -> ExofsResult<()> { Ok(()) }
-    fn bytes_written(&self) -> u64 { self.written }
+    fn end_entry(&mut self) -> ExofsResult<()> {
+        Ok(())
+    }
+    fn bytes_written(&self) -> u64 {
+        self.written
+    }
 }
 
 // ─── MockBlobDataProvider ─────────────────────────────────────────────────────
@@ -537,7 +607,9 @@ struct MockProvider {
 
 #[cfg(test)]
 impl MockProvider {
-    fn new() -> Self { Self { blobs: Vec::new() } }
+    fn new() -> Self {
+        Self { blobs: Vec::new() }
+    }
 
     fn add(&mut self, data: &[u8], epoch: EpochId) -> [u8; 32] {
         let id = inline_blake3(data);
@@ -552,13 +624,17 @@ impl MockProvider {
 impl BlobDataProvider for MockProvider {
     fn provide_blob(&self, blob_id: &[u8; 32]) -> ExofsResult<&[u8]> {
         for (id, data, _) in &self.blobs {
-            if id == blob_id { return Ok(data.as_slice()); }
+            if id == blob_id {
+                return Ok(data.as_slice());
+            }
         }
         Err(ExofsError::NotFound)
     }
     fn blob_epoch(&self, blob_id: &[u8; 32]) -> ExofsResult<EpochId> {
         for (id, _, epoch) in &self.blobs {
-            if id == blob_id { return Ok(*epoch); }
+            if id == blob_id {
+                return Ok(*epoch);
+            }
         }
         Err(ExofsError::NotFound)
     }
@@ -573,7 +649,9 @@ mod tests {
     use super::*;
 
     fn make_id(n: u8) -> [u8; 32] {
-        let mut id = [0u8; 32]; id[0] = n; id
+        let mut id = [0u8; 32];
+        id[0] = n;
+        id
     }
 
     #[test]
@@ -605,7 +683,10 @@ mod tests {
     fn test_config_validate() {
         let ok = StreamExportConfig::default(1);
         assert!(ok.validate().is_ok());
-        let bad = StreamExportConfig { block_size: 0, ..StreamExportConfig::default(1) };
+        let bad = StreamExportConfig {
+            block_size: 0,
+            ..StreamExportConfig::default(1)
+        };
         assert!(bad.validate().is_err());
     }
 
@@ -638,7 +719,9 @@ mod tests {
         let cfg = StreamExportConfig::default(1);
         let mut exporter = StreamExporter::new(cfg).expect("ok");
         let mut sink = VecStreamSink::new();
-        let report = exporter.run(&provider, &mut sink, &[], &[], StreamFilter::accept_all()).expect("ok");
+        let report = exporter
+            .run(&provider, &mut sink, &[], &[], StreamFilter::accept_all())
+            .expect("ok");
         assert_eq!(report.blobs_exported, 0);
         assert!(report.is_complete);
     }
@@ -647,11 +730,16 @@ mod tests {
     fn test_export_single_blob() {
         let mut provider = MockProvider::new();
         let bid = provider.add(b"hello exofs", EpochId(3));
-        let cfg = StreamExportConfig { verify_blob_id: false, ..StreamExportConfig::default(1) };
+        let cfg = StreamExportConfig {
+            verify_blob_id: false,
+            ..StreamExportConfig::default(1)
+        };
         let mut exporter = StreamExporter::new(cfg).expect("ok");
         let mut sink = VecStreamSink::new();
         let ids = [bid];
-        let report = exporter.run(&provider, &mut sink, &ids, &[], StreamFilter::accept_all()).expect("ok");
+        let report = exporter
+            .run(&provider, &mut sink, &ids, &[], StreamFilter::accept_all())
+            .expect("ok");
         assert_eq!(report.blobs_exported, 1);
         assert_eq!(sink.entry_count(), 1);
         assert!(report.is_complete);
@@ -665,10 +753,15 @@ mod tests {
             let data = [i; 64]; // 64 bytes de tag i
             ids.push(provider.add(&data, EpochId(i as u64)));
         }
-        let cfg = StreamExportConfig { verify_blob_id: false, ..StreamExportConfig::default(1) };
+        let cfg = StreamExportConfig {
+            verify_blob_id: false,
+            ..StreamExportConfig::default(1)
+        };
         let mut exporter = StreamExporter::new(cfg).expect("ok");
         let mut sink = VecStreamSink::new();
-        let report = exporter.run(&provider, &mut sink, &ids, &[], StreamFilter::accept_all()).expect("ok");
+        let report = exporter
+            .run(&provider, &mut sink, &ids, &[], StreamFilter::accept_all())
+            .expect("ok");
         assert_eq!(report.blobs_exported, 5);
         assert_eq!(report.bytes_exported, 320);
     }
@@ -680,7 +773,15 @@ mod tests {
         let mut exporter = StreamExporter::new(cfg).expect("ok");
         let mut sink = VecStreamSink::new();
         let tombs = [make_id(11), make_id(22)];
-        let report = exporter.run(&provider, &mut sink, &[], &tombs, StreamFilter::accept_all()).expect("ok");
+        let report = exporter
+            .run(
+                &provider,
+                &mut sink,
+                &[],
+                &tombs,
+                StreamFilter::accept_all(),
+            )
+            .expect("ok");
         assert_eq!(report.tombstones_emitted, 2);
     }
 
@@ -691,10 +792,16 @@ mod tests {
         for i in 0u8..10 {
             ids.push(provider.add(&[i; 32], EpochId(1)));
         }
-        let cfg = StreamExportConfig { verify_blob_id: false, max_blobs: 4, ..StreamExportConfig::default(1) };
+        let cfg = StreamExportConfig {
+            verify_blob_id: false,
+            max_blobs: 4,
+            ..StreamExportConfig::default(1)
+        };
         let mut exporter = StreamExporter::new(cfg).expect("ok");
         let mut sink = VecStreamSink::new();
-        let report = exporter.run(&provider, &mut sink, &ids, &[], StreamFilter::accept_all()).expect("ok");
+        let report = exporter
+            .run(&provider, &mut sink, &ids, &[], StreamFilter::accept_all())
+            .expect("ok");
         assert_eq!(report.blobs_exported, 4);
     }
 
@@ -716,7 +823,10 @@ mod tests {
         for i in 0u8..3 {
             actual_ids.push(provider.add(&[i; 128], EpochId(1)));
         }
-        let cfg = StreamExportConfig { verify_blob_id: false, ..StreamExportConfig::default(1) };
+        let cfg = StreamExportConfig {
+            verify_blob_id: false,
+            ..StreamExportConfig::default(1)
+        };
         let mut batch = StreamExportBatch::new(1, cfg);
         for id in &actual_ids {
             batch.add_blob(*id).expect("ok");

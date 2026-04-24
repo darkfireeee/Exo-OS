@@ -7,38 +7,37 @@
 //! Les registres LAPIC sont accédés via MSR 0x800–0x8FF.
 //! Chaque registre MMIO offset 0xXY0 devient MSR 0x800 + (0xXY0 >> 4).
 
-
 use super::super::cpu::msr;
 
 // ── Constantes MSR x2APIC ─────────────────────────────────────────────────────
 
 const X2APIC_BASE: u32 = 0x800;
 
-pub const X2APIC_ID:          u32 = X2APIC_BASE + 0x02; // 0x802
-pub const X2APIC_VER:         u32 = X2APIC_BASE + 0x03;
-pub const X2APIC_TPR:         u32 = X2APIC_BASE + 0x08;
-pub const X2APIC_PPR:         u32 = X2APIC_BASE + 0x0A;
-pub const X2APIC_EOI:         u32 = X2APIC_BASE + 0x0B;
-pub const X2APIC_LDR:         u32 = X2APIC_BASE + 0x0D;
-pub const X2APIC_SIVR:        u32 = X2APIC_BASE + 0x0F;
-pub const X2APIC_ISR0:        u32 = X2APIC_BASE + 0x10;
-pub const X2APIC_ESR:         u32 = X2APIC_BASE + 0x28;
-pub const X2APIC_LVT_CMCI:    u32 = X2APIC_BASE + 0x2F;
-pub const X2APIC_ICR:         u32 = X2APIC_BASE + 0x30; // ICR 64 bits (combiné hi+lo)
-pub const X2APIC_LVT_TIMER:   u32 = X2APIC_BASE + 0x32;
+pub const X2APIC_ID: u32 = X2APIC_BASE + 0x02; // 0x802
+pub const X2APIC_VER: u32 = X2APIC_BASE + 0x03;
+pub const X2APIC_TPR: u32 = X2APIC_BASE + 0x08;
+pub const X2APIC_PPR: u32 = X2APIC_BASE + 0x0A;
+pub const X2APIC_EOI: u32 = X2APIC_BASE + 0x0B;
+pub const X2APIC_LDR: u32 = X2APIC_BASE + 0x0D;
+pub const X2APIC_SIVR: u32 = X2APIC_BASE + 0x0F;
+pub const X2APIC_ISR0: u32 = X2APIC_BASE + 0x10;
+pub const X2APIC_ESR: u32 = X2APIC_BASE + 0x28;
+pub const X2APIC_LVT_CMCI: u32 = X2APIC_BASE + 0x2F;
+pub const X2APIC_ICR: u32 = X2APIC_BASE + 0x30; // ICR 64 bits (combiné hi+lo)
+pub const X2APIC_LVT_TIMER: u32 = X2APIC_BASE + 0x32;
 pub const X2APIC_LVT_THERMAL: u32 = X2APIC_BASE + 0x33;
-pub const X2APIC_LVT_PERF:    u32 = X2APIC_BASE + 0x34;
-pub const X2APIC_LVT_LINT0:   u32 = X2APIC_BASE + 0x35;
-pub const X2APIC_LVT_LINT1:   u32 = X2APIC_BASE + 0x36;
-pub const X2APIC_LVT_ERROR:   u32 = X2APIC_BASE + 0x37;
-pub const X2APIC_TIMER_ICR:   u32 = X2APIC_BASE + 0x38;
-pub const X2APIC_TIMER_CCR:   u32 = X2APIC_BASE + 0x39;
-pub const X2APIC_TIMER_DCR:   u32 = X2APIC_BASE + 0x3E;
-pub const X2APIC_SELF_IPI:    u32 = X2APIC_BASE + 0x3F; // Self-IPI (x2APIC uniquement)
+pub const X2APIC_LVT_PERF: u32 = X2APIC_BASE + 0x34;
+pub const X2APIC_LVT_LINT0: u32 = X2APIC_BASE + 0x35;
+pub const X2APIC_LVT_LINT1: u32 = X2APIC_BASE + 0x36;
+pub const X2APIC_LVT_ERROR: u32 = X2APIC_BASE + 0x37;
+pub const X2APIC_TIMER_ICR: u32 = X2APIC_BASE + 0x38;
+pub const X2APIC_TIMER_CCR: u32 = X2APIC_BASE + 0x39;
+pub const X2APIC_TIMER_DCR: u32 = X2APIC_BASE + 0x3E;
+pub const X2APIC_SELF_IPI: u32 = X2APIC_BASE + 0x3F; // Self-IPI (x2APIC uniquement)
 
 const MSR_IA32_APICBASE: u32 = 0x001B;
-const APICBASE_ENABLE:   u64 = 1 << 11;
-const APICBASE_EXTD:     u64 = 1 << 10;
+const APICBASE_ENABLE: u64 = 1 << 11;
+const APICBASE_EXTD: u64 = 1 << 10;
 
 // ── Lecture / écriture via MSR ────────────────────────────────────────────────
 
@@ -60,14 +59,18 @@ pub fn x2apic_read64(reg: u32) -> u64 {
 #[inline(always)]
 pub fn x2apic_write32(reg: u32, val: u32) {
     // SAFETY: registre x2APIC validé, Ring 0 uniquement
-    unsafe { msr::write_msr(reg, val as u64); }
+    unsafe {
+        msr::write_msr(reg, val as u64);
+    }
 }
 
 /// Écrit ICR 64 bits (envoi IPI unique — pas d'attente delivery status en x2APIC)
 #[inline(always)]
 pub fn x2apic_write_icr(val: u64) {
     // SAFETY: MSR X2APIC_ICR est Write-Only en x2APIC
-    unsafe { msr::write_msr(X2APIC_ICR, val); }
+    unsafe {
+        msr::write_msr(X2APIC_ICR, val);
+    }
 }
 
 // ── Activation x2APIC ─────────────────────────────────────────────────────────
@@ -80,12 +83,12 @@ pub fn x2apic_write_icr(val: u64) {
 pub fn mask_all_lvt_x2apic() {
     const MASKED: u32 = 0x0001_0000; // bit 16 = mask
     x2apic_write32(X2APIC_LVT_THERMAL, MASKED);
-    x2apic_write32(X2APIC_LVT_PERF,    MASKED);
-    x2apic_write32(X2APIC_LVT_CMCI,    MASKED);
-    x2apic_write32(X2APIC_LVT_LINT0,   MASKED);
-    x2apic_write32(X2APIC_LVT_LINT1,   0x0000_0400); // NMI, non masqué
-    x2apic_write32(X2APIC_LVT_ERROR,   0x0000_00FE); // vecteur 0xFE, non masqué
-    // Effacer ESR
+    x2apic_write32(X2APIC_LVT_PERF, MASKED);
+    x2apic_write32(X2APIC_LVT_CMCI, MASKED);
+    x2apic_write32(X2APIC_LVT_LINT0, MASKED);
+    x2apic_write32(X2APIC_LVT_LINT1, 0x0000_0400); // NMI, non masqué
+    x2apic_write32(X2APIC_LVT_ERROR, 0x0000_00FE); // vecteur 0xFE, non masqué
+                                                   // Effacer ESR
     x2apic_write32(X2APIC_ESR, 0);
     x2apic_write32(X2APIC_ESR, 0);
     // Task Priority : accepter toutes les interruptions
@@ -100,7 +103,12 @@ pub fn enable_x2apic() {
     // SAFETY: transition xAPIC → x2APIC ; Ring 0, CPU supporte x2APIC (vérifié par cpu::features)
     let apicbase = unsafe { msr::read_msr(MSR_IA32_APICBASE) };
     // SAFETY: écriture MSR APICBASE pour activer x2APIC
-    unsafe { msr::write_msr(MSR_IA32_APICBASE, apicbase | APICBASE_ENABLE | APICBASE_EXTD); }
+    unsafe {
+        msr::write_msr(
+            MSR_IA32_APICBASE,
+            apicbase | APICBASE_ENABLE | APICBASE_EXTD,
+        );
+    }
 
     // Activation LAPIC soft via SIVR
     let sivr = x2apic_read32(X2APIC_SIVR) | 0x100;
@@ -163,5 +171,7 @@ pub fn timer_init_tsc_deadline_x2apic(vector: u8) {
 #[inline]
 pub fn timer_set_deadline_x2apic(deadline: u64) {
     // SAFETY: MSR TSC_DEADLINE disponible si CPUID validé
-    unsafe { msr::write_msr(msr::MSR_TSC_DEADLINE, deadline); }
+    unsafe {
+        msr::write_msr(msr::MSR_TSC_DEADLINE, deadline);
+    }
 }

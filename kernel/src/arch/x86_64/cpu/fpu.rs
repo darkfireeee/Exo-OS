@@ -10,22 +10,21 @@
 //! - `xsaveopt`           : optimisé (ne sauvegarde que les composants dirty)
 //! - `xsavec`             : compacté (ne sauvegarde que les composants actifs)
 
-
 use core::sync::atomic::{AtomicU32, Ordering};
 
 // ── Constantes XSAVE ─────────────────────────────────────────────────────────
 
 /// Composants XSAVE supportés (XCR0 bits)
-pub const XSAVE_X87:       u64 = 1 << 0;   // x87 FPU
-pub const XSAVE_SSE:       u64 = 1 << 1;   // XMM0–15
-pub const XSAVE_AVX:       u64 = 1 << 2;   // YMM0–15 (upper 128)
+pub const XSAVE_X87: u64 = 1 << 0; // x87 FPU
+pub const XSAVE_SSE: u64 = 1 << 1; // XMM0–15
+pub const XSAVE_AVX: u64 = 1 << 2; // YMM0–15 (upper 128)
 pub const XSAVE_MPX_BNDREGS: u64 = 1 << 3; // BND0–3 (MPX)
-pub const XSAVE_MPX_BNDCSR:  u64 = 1 << 4; // BNDCFGU / BNDSTATUS
-pub const XSAVE_AVX512_K:     u64 = 1 << 5; // K0–7 opmask
+pub const XSAVE_MPX_BNDCSR: u64 = 1 << 4; // BNDCFGU / BNDSTATUS
+pub const XSAVE_AVX512_K: u64 = 1 << 5; // K0–7 opmask
 pub const XSAVE_AVX512_ZMM_HI: u64 = 1 << 6; // ZMM0–15 upper 256
-pub const XSAVE_AVX512_HI16:   u64 = 1 << 7; // ZMM16–31
-pub const XSAVE_PT:           u64 = 1 << 8;  // Intel PT
-pub const XSAVE_PKRU:         u64 = 1 << 9;  // Protection Keys
+pub const XSAVE_AVX512_HI16: u64 = 1 << 7; // ZMM16–31
+pub const XSAVE_PT: u64 = 1 << 8; // Intel PT
+pub const XSAVE_PKRU: u64 = 1 << 9; // Protection Keys
 
 /// Masque XSAVE minimal — x87 + SSE + AVX (obligatoire pour Exo-OS)
 pub const XSAVE_MASK_MINIMAL: u64 = XSAVE_X87 | XSAVE_SSE;
@@ -69,7 +68,9 @@ pub struct FpuRawArea {
 
 impl FpuRawArea {
     pub const fn zeroed() -> Self {
-        Self { data: [0u8; XSAVE_AREA_MAX] }
+        Self {
+            data: [0u8; XSAVE_AREA_MAX],
+        }
     }
 }
 
@@ -258,8 +259,6 @@ pub unsafe fn write_xcr0(val: u64) {
 /// - Configure XCR0 avec x87 + SSE (+ AVX si disponible)
 /// - Exécute FINIT pour nettoyer l'état x87
 pub fn init_fpu_for_cpu() {
-    
-
     // Lecture CR0 courant
     let cr0 = super::super::read_cr4();
     let _ = cr0; // utilisation future
@@ -274,9 +273,9 @@ pub fn init_fpu_for_cpu() {
     // CR0.EM = 0 (pas d'émulation FPU)
     // CR0.NE = 1 (native FP exceptions)
     // CR0.TS = 0 (Task Switched — lazy FPU le mettra à 1 après switch)
-    cr0_raw |= (1 << 1) | (1 << 5);  // MP, NE
+    cr0_raw |= (1 << 1) | (1 << 5); // MP, NE
     cr0_raw &= !((1 << 2) | (1 << 3)); // clear EM, TS
-    // SAFETY: modification cohérente de CR0 avec état FPU valide
+                                       // SAFETY: modification cohérente de CR0 avec état FPU valide
     unsafe {
         core::arch::asm!("mov cr0, {}", in(reg) cr0_raw, options(nostack, nomem));
     }
@@ -293,7 +292,9 @@ pub fn init_fpu_for_cpu() {
     }
 
     // SAFETY: activation de OSFXSR/OSXMMEXCPT/OSXSAVE — requis pour SSE/XSAVE
-    unsafe { super::super::write_cr4(cr4); }
+    unsafe {
+        super::super::write_cr4(cr4);
+    }
 
     // Configurer XCR0 si XSAVE disponible
     if features.has_xsave() {
@@ -310,7 +311,9 @@ pub fn init_fpu_for_cpu() {
         }
 
         // SAFETY: xcr0 ne contient que des bits supportés par ce CPU
-        unsafe { write_xcr0(xcr0); }
+        unsafe {
+            write_xcr0(xcr0);
+        }
 
         // Mettre à jour la taille XSAVE détectée
         let size = features.xsave_size();

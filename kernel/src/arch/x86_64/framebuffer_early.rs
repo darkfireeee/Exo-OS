@@ -12,9 +12,7 @@
 use spin::Mutex;
 
 use crate::arch::x86_64::memory_iface::KERNEL_FAULT_ALLOC;
-use crate::memory::core::{
-    align_up, Frame, PageFlags, PhysAddr, VirtAddr, FIXMAP_BASE, PAGE_SIZE,
-};
+use crate::memory::core::{align_up, Frame, PageFlags, PhysAddr, VirtAddr, FIXMAP_BASE, PAGE_SIZE};
 use crate::memory::virt::address_space::kernel::KERNEL_AS;
 
 use super::boot::early_init::{BootFramebufferFormat, BootInfo};
@@ -34,12 +32,12 @@ const STAGE_ROW_HEIGHT: u32 = 28;
 
 #[derive(Debug, Clone, Copy)]
 struct Framebuffer {
-    virt_addr:  u64,
-    width:      u32,
-    height:     u32,
-    stride:     u32,
-    bpp:        u32,
-    format:     BootFramebufferFormat,
+    virt_addr: u64,
+    width: u32,
+    height: u32,
+    stride: u32,
+    bpp: u32,
+    format: BootFramebufferFormat,
     size_bytes: u64,
 }
 
@@ -303,7 +301,13 @@ fn draw_logo(fb: &Framebuffer) {
     fb.draw_line(cx + 30, cy - 30, cx - 30, cy + 30, fg_dark);
 
     fb.draw_text_scaled(center_x - 120, top_y, "EXO-OS", TITLE_SCALE, fg, bg);
-    fb.draw_text_centered(top_y + 88, "FRAMEBUFFER BOOT PATH ACTIVE", SUBTITLE_SCALE, text_color(fb), bg);
+    fb.draw_text_centered(
+        top_y + 88,
+        "FRAMEBUFFER BOOT PATH ACTIVE",
+        SUBTITLE_SCALE,
+        text_color(fb),
+        bg,
+    );
     fb.draw_text_centered(
         top_y + 124,
         "Kernel progress follows the real init phases",
@@ -325,15 +329,16 @@ fn draw_stage_line(fb: &Framebuffer, row: u32, label: &str, status: &str, ok: bo
     fb.fill_rect(left, y, 760, 22, panel);
     fb.fill_rect(left, y + 21, 760, 1, accent_dark(fb));
     fb.draw_text_scaled(left + 14, y + 3, label, BODY_SCALE, fg, panel);
-    fb.draw_text_scaled(left + 470, y + 3, "................", BODY_SCALE, muted, panel);
-    fb.fill_rect(left + 620, y + 3, 120, 16, chip);
-    fb.draw_text_centered(
+    fb.draw_text_scaled(
+        left + 470,
         y + 3,
-        "",
+        "................",
         BODY_SCALE,
-        chip_text,
-        chip,
+        muted,
+        panel,
     );
+    fb.fill_rect(left + 620, y + 3, 120, 16, chip);
+    fb.draw_text_centered(y + 3, "", BODY_SCALE, chip_text, chip);
     fb.draw_text_scaled(left + 650, y + 3, status, BODY_SCALE, chip_text, chip);
 }
 

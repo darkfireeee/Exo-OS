@@ -9,21 +9,21 @@
 //!
 //! Capacité : 65 532 descripteurs simultanés (fd 4 … 65535).
 
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Fd réservés : 0 (stdin), 1 (stdout), 2 (stderr), 3 (exofs-ctrl).
-pub const FD_RESERVED: u32  = 4;
+pub const FD_RESERVED: u32 = 4;
 /// Fd maximum inclusif.
-pub const FD_MAX:      u32  = 65_535;
+pub const FD_MAX: u32 = 65_535;
 /// Nombre de slots (fd 4…65535 → index 0…65531).
-pub const MAX_FDS:     usize = (FD_MAX - FD_RESERVED + 1) as usize;
+pub const MAX_FDS: usize = (FD_MAX - FD_RESERVED + 1) as usize;
 /// Marqueur de slot libre.
 const SLOT_FREE: u32 = u32::MAX;
 
@@ -34,10 +34,10 @@ const SLOT_FREE: u32 = u32::MAX;
 pub mod open_flags {
     pub const O_RDONLY: u32 = 0x0000;
     pub const O_WRONLY: u32 = 0x0001;
-    pub const O_RDWR:   u32 = 0x0002;
-    pub const O_CREAT:  u32 = 0x0040;
-    pub const O_EXCL:   u32 = 0x0080;
-    pub const O_TRUNC:  u32 = 0x0200;
+    pub const O_RDWR: u32 = 0x0002;
+    pub const O_CREAT: u32 = 0x0040;
+    pub const O_EXCL: u32 = 0x0080;
+    pub const O_TRUNC: u32 = 0x0200;
     pub const O_APPEND: u32 = 0x0400;
 
     /// Retourne true si les flags autorisent la lecture.
@@ -69,21 +69,21 @@ pub mod open_flags {
 #[derive(Clone, Copy)]
 pub struct ObjectFdEntry {
     /// Numéro de fd (= index + FD_RESERVED).
-    pub fd:        u32,
+    pub fd: u32,
     /// fd canonique qui porte l'état partagé de l'open-file-description.
     pub shared_fd: u32,
     /// BlobId du blob associé.
-    pub blob_id:   BlobId,
+    pub blob_id: BlobId,
     /// Flags d'ouverture (O_RDONLY, O_WRONLY, O_RDWR, …).
-    pub flags:     u32,
+    pub flags: u32,
     /// Curseur de lecture/écriture courant.
-    pub cursor:    u64,
+    pub cursor: u64,
     /// Taille connue du blob en octets (0 = inconnue).
-    pub size:      u64,
+    pub size: u64,
     /// Compteur de références (fork/dup).
     pub ref_count: u32,
     /// Epoch au moment de l'ouverture.
-    pub epoch_id:  u64,
+    pub epoch_id: u64,
     /// Uid de l'appelant (pour vérification de droits ultérieure).
     pub owner_uid: u64,
 }
@@ -91,29 +91,37 @@ pub struct ObjectFdEntry {
 impl ObjectFdEntry {
     const fn empty() -> Self {
         Self {
-            fd:        SLOT_FREE,
+            fd: SLOT_FREE,
             shared_fd: SLOT_FREE,
-            blob_id:   BlobId([0u8; 32]),
-            flags:     0,
-            cursor:    0,
-            size:      0,
+            blob_id: BlobId([0u8; 32]),
+            flags: 0,
+            cursor: 0,
+            size: 0,
             ref_count: 0,
-            epoch_id:  0,
+            epoch_id: 0,
             owner_uid: 0,
         }
     }
 
     #[inline]
-    pub fn is_free(&self) -> bool { self.fd == SLOT_FREE }
+    pub fn is_free(&self) -> bool {
+        self.fd == SLOT_FREE
+    }
 
     #[inline]
-    pub fn can_read(&self) -> bool { open_flags::can_read(self.flags) }
+    pub fn can_read(&self) -> bool {
+        open_flags::can_read(self.flags)
+    }
 
     #[inline]
-    pub fn can_write(&self) -> bool { open_flags::can_write(self.flags) }
+    pub fn can_write(&self) -> bool {
+        open_flags::can_write(self.flags)
+    }
 
     #[inline]
-    pub fn is_canonical(&self) -> bool { self.fd == self.shared_fd }
+    pub fn is_canonical(&self) -> bool {
+        self.fd == self.shared_fd
+    }
 
     /// Avance le curseur de `n` octets (saturating).
     #[inline]
@@ -136,7 +144,7 @@ struct ObjectFdTableInner {
 impl ObjectFdTableInner {
     const fn new() -> Self {
         Self {
-            slots:      [const { ObjectFdEntry::empty() }; MAX_FDS],
+            slots: [const { ObjectFdEntry::empty() }; MAX_FDS],
             open_count: 0,
         }
     }
@@ -145,7 +153,9 @@ impl ObjectFdTableInner {
     fn find_free_slot(&self) -> Option<usize> {
         let mut i = 0usize;
         while i < MAX_FDS {
-            if self.slots[i].is_free() { return Some(i); }
+            if self.slots[i].is_free() {
+                return Some(i);
+            }
             i = i.wrapping_add(1);
         }
         None
@@ -166,9 +176,15 @@ impl ObjectFdTableInner {
 
     /// Trouve le slot correspondant à un fd (RECUR-01 : while).
     fn slot_of_fd(&self, fd: u32) -> Option<usize> {
-        if fd < FD_RESERVED || fd > FD_MAX { return None; }
+        if fd < FD_RESERVED || fd > FD_MAX {
+            return None;
+        }
         let idx = (fd - FD_RESERVED) as usize;
-        if idx < MAX_FDS && !self.slots[idx].is_free() { Some(idx) } else { None }
+        if idx < MAX_FDS && !self.slots[idx].is_free() {
+            Some(idx)
+        } else {
+            None
+        }
     }
 
     fn canonical_slot_of_index(&self, idx: usize) -> ExofsResult<usize> {
@@ -179,7 +195,8 @@ impl ObjectFdTableInner {
         if entry.is_canonical() {
             return Ok(idx);
         }
-        self.slot_of_fd(entry.shared_fd).ok_or(ExofsError::ObjectNotFound)
+        self.slot_of_fd(entry.shared_fd)
+            .ok_or(ExofsError::ObjectNotFound)
     }
 
     fn canonical_slot_of_fd(&self, fd: u32) -> ExofsResult<usize> {
@@ -190,12 +207,12 @@ impl ObjectFdTableInner {
     /// Ouvre un nouveau fd→BlobId.
     fn open_slot(
         &mut self,
-        blob_id:   BlobId,
-        flags:     u32,
-        size:      u64,
-        epoch_id:  u64,
+        blob_id: BlobId,
+        flags: u32,
+        size: u64,
+        epoch_id: u64,
         owner_uid: u64,
-        _next_fd:   u32,
+        _next_fd: u32,
     ) -> ExofsResult<u32> {
         let idx = self.find_free_slot().ok_or(ExofsError::NoSpace)?;
         let fd = FD_RESERVED.saturating_add(idx as u32);
@@ -204,7 +221,7 @@ impl ObjectFdTableInner {
             shared_fd: fd,
             blob_id,
             flags,
-            cursor:    0,
+            cursor: 0,
             size,
             ref_count: 1,
             epoch_id,
@@ -259,7 +276,11 @@ impl ObjectFdTableInner {
 
             let mut j = 0usize;
             while j < MAX_FDS {
-                if j != idx && j != new_idx && !self.slots[j].is_free() && self.slots[j].shared_fd == fd {
+                if j != idx
+                    && j != new_idx
+                    && !self.slots[j].is_free()
+                    && self.slots[j].shared_fd == fd
+                {
                     self.slots[j].shared_fd = new_fd;
                 }
                 j = j.wrapping_add(1);
@@ -359,13 +380,17 @@ impl ObjectFdTableInner {
 
     /// Duplique un fd en choisissant le premier numéro >= `min_fd`.
     fn dup_from_fd(&mut self, fd: u32, min_fd: u32) -> ExofsResult<u32> {
-        let slot = self.find_free_slot_from(min_fd).ok_or(ExofsError::NoSpace)?;
+        let slot = self
+            .find_free_slot_from(min_fd)
+            .ok_or(ExofsError::NoSpace)?;
         self.dup2_fd(fd, FD_RESERVED.saturating_add(slot as u32))
     }
 
     /// Retourne le nombre de fds ouverts.
     #[inline]
-    fn open_count(&self) -> u32 { self.open_count }
+    fn open_count(&self) -> u32 {
+        self.open_count
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -377,12 +402,12 @@ impl ObjectFdTableInner {
 /// Thread-safety : UnsafeCell<ObjectFdTableInner> + AtomicU64 spinlock.
 /// Pas de SpinLock<BTreeMap> (violation règle NO-STD + pérf).
 pub struct ObjectFdTable {
-    inner:    UnsafeCell<ObjectFdTableInner>,
-    lock:     AtomicU64,
-    next_hint:AtomicU32,   // Hint de départ de parcours (non bloquant).
-    opens:    AtomicU64,   // Compteur total d'ouvertures.
-    closes:   AtomicU64,   // Compteur total de fermetures.
-    errors:   AtomicU64,   // Erreurs (NoSpace, NotFound, …).
+    inner: UnsafeCell<ObjectFdTableInner>,
+    lock: AtomicU64,
+    next_hint: AtomicU32, // Hint de départ de parcours (non bloquant).
+    opens: AtomicU64,     // Compteur total d'ouvertures.
+    closes: AtomicU64,    // Compteur total de fermetures.
+    errors: AtomicU64,    // Erreurs (NoSpace, NotFound, …).
 }
 
 unsafe impl Sync for ObjectFdTable {}
@@ -391,19 +416,23 @@ unsafe impl Send for ObjectFdTable {}
 impl ObjectFdTable {
     pub const fn new_const() -> Self {
         Self {
-            inner:     UnsafeCell::new(ObjectFdTableInner::new()),
-            lock:      AtomicU64::new(0),
+            inner: UnsafeCell::new(ObjectFdTableInner::new()),
+            lock: AtomicU64::new(0),
             next_hint: AtomicU32::new(FD_RESERVED),
-            opens:     AtomicU64::new(0),
-            closes:    AtomicU64::new(0),
-            errors:    AtomicU64::new(0),
+            opens: AtomicU64::new(0),
+            closes: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
         }
     }
 
     // ── Spinlock ─────────────────────────────────────────────────────────────
 
     fn acquire(&self) {
-        while self.lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .lock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
@@ -417,10 +446,10 @@ impl ObjectFdTable {
     /// Ouvre un fd pour le BlobId donné.
     pub fn open(
         &self,
-        blob_id:   BlobId,
-        flags:     u32,
-        size:      u64,
-        epoch_id:  u64,
+        blob_id: BlobId,
+        flags: u32,
+        size: u64,
+        epoch_id: u64,
         owner_uid: u64,
     ) -> ExofsResult<u32> {
         if !open_flags::validate(flags) {
@@ -429,12 +458,22 @@ impl ObjectFdTable {
         }
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        let r = unsafe { &mut *self.inner.get() }
-            .open_slot(blob_id, flags, size, epoch_id, owner_uid, self.next_hint.load(Ordering::Relaxed));
+        let r = unsafe { &mut *self.inner.get() }.open_slot(
+            blob_id,
+            flags,
+            size,
+            epoch_id,
+            owner_uid,
+            self.next_hint.load(Ordering::Relaxed),
+        );
         self.release();
         match &r {
-            Ok(_)  => { self.opens.fetch_add(1, Ordering::Relaxed); }
-            Err(_) => { self.errors.fetch_add(1, Ordering::Relaxed); }
+            Ok(_) => {
+                self.opens.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                self.errors.fetch_add(1, Ordering::Relaxed);
+            }
         }
         r
     }
@@ -599,7 +638,9 @@ impl ObjectFdTable {
 
     /// Pseudo-verrou : retourne `Ok(&self)` (ObjectFdTable est déjà thread-safe via UnsafeCell+acquire).
     #[inline]
-    pub fn lock(&self) -> Result<&Self, ExofsError> { Ok(self) }
+    pub fn lock(&self) -> Result<&Self, ExofsError> {
+        Ok(self)
+    }
 
     /// Nombre de fd ouverts pour un BlobId donné.
     pub fn open_count_for(&self, id: &BlobId) -> usize {
@@ -684,7 +725,9 @@ mod tests {
     #[test]
     fn test_set_cursor() {
         let t = fresh_table();
-        let fd = t.open(make_blob(6), open_flags::O_RDWR, 1024, 1, 0).unwrap();
+        let fd = t
+            .open(make_blob(6), open_flags::O_RDWR, 1024, 1, 0)
+            .unwrap();
         t.set_cursor(fd, 512).unwrap();
         assert_eq!(t.get(fd).unwrap().cursor, 512);
         t.close(fd);
@@ -693,7 +736,9 @@ mod tests {
     #[test]
     fn test_advance_cursor() {
         let t = fresh_table();
-        let fd = t.open(make_blob(7), open_flags::O_RDWR, 4096, 1, 0).unwrap();
+        let fd = t
+            .open(make_blob(7), open_flags::O_RDWR, 4096, 1, 0)
+            .unwrap();
         t.advance_cursor(fd, 100).unwrap();
         assert_eq!(t.get(fd).unwrap().cursor, 100);
         t.advance_cursor(fd, 200).unwrap();
@@ -787,7 +832,9 @@ mod tests {
 
         let mut seed = 0u32;
         while seed < 128 {
-            let fd = t.open(make_blob(seed as u8), open_flags::O_RDWR, 0, 0, 0).unwrap();
+            let fd = t
+                .open(make_blob(seed as u8), open_flags::O_RDWR, 0, 0, 0)
+                .unwrap();
             let mut fds = [0u32; 8];
             fds[0] = fd;
 

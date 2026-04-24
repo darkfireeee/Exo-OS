@@ -10,8 +10,8 @@
 //! RÈGLE ARITH-02 : arithmétique checked/saturating.
 //! RÈGLE RECUR-01 : aucune récursivité — toutes les boucles sont dans lz4_flex.
 
-use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 use lz4_flex::block::{compress_into, decompress_into, get_maximum_output_size};
 
@@ -27,13 +27,15 @@ impl Lz4Compressor {
         if input.is_empty() {
             return Ok(0);
         }
-        let bound    = get_maximum_output_size(input.len());
+        let bound = get_maximum_output_size(input.len());
         let prev_len = output.len();
-        output.try_reserve(bound).map_err(|_| ExofsError::NoMemory)?;
+        output
+            .try_reserve(bound)
+            .map_err(|_| ExofsError::NoMemory)?;
         output.resize(prev_len + bound, 0u8);
 
-        let n = compress_into(input, &mut output[prev_len..])
-            .map_err(|_| ExofsError::InternalError)?;
+        let n =
+            compress_into(input, &mut output[prev_len..]).map_err(|_| ExofsError::InternalError)?;
 
         output.truncate(prev_len + n);
         Ok(n)
@@ -43,8 +45,8 @@ impl Lz4Compressor {
     ///
     /// OOM-02 : try_reserve avant tout resize.
     pub fn decompress(
-        input:             &[u8],
-        output:            &mut Vec<u8>,
+        input: &[u8],
+        output: &mut Vec<u8>,
         decompressed_size: usize,
     ) -> ExofsResult<usize> {
         let prev_len = output.len();

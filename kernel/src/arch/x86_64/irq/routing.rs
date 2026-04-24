@@ -9,12 +9,12 @@ use super::types::*;
 use core::sync::atomic::Ordering;
 
 // Dépendances de l'OS (process, IPC, APIC, IOAPIC)
-use crate::arch::x86_64::apic::local_apic;
 use crate::arch::x86_64::apic::io_apic;
+use crate::arch::x86_64::apic::local_apic;
 use crate::drivers::device_server_ipc;
 use crate::ipc;
-use crate::process::PROCESS_REGISTRY;
 use crate::process::core::pid::Pid;
+use crate::process::PROCESS_REGISTRY;
 use crate::scheduler::timer::clock::monotonic_ns;
 
 pub fn parse_irq_source_kind(flags: u64) -> Option<IrqSourceKind> {
@@ -50,7 +50,12 @@ pub fn sys_irq_register_syscall(
     owner_pid: IrqOwnerPid,
     reg_params: IrqRouteRegistration,
 ) -> Result<u64, IrqError> {
-    let endpoint = IpcEndpoint { pid: owner_pid.0, chan_idx: 0, generation: 0, _pad: 0 };
+    let endpoint = IpcEndpoint {
+        pid: owner_pid.0,
+        chan_idx: 0,
+        generation: 0,
+        _pad: 0,
+    };
     sys_irq_register_common(
         owner_pid,
         irq_vector,
@@ -75,7 +80,15 @@ pub fn sys_irq_register_canonical(
         None
     };
 
-    sys_irq_register_common(owner_pid, irq_vector, source_kind, endpoint, gsi, pci_bdf, None)
+    sys_irq_register_common(
+        owner_pid,
+        irq_vector,
+        source_kind,
+        endpoint,
+        gsi,
+        pci_bdf,
+        None,
+    )
 }
 
 fn sys_irq_register_common(
@@ -97,12 +110,12 @@ fn sys_irq_register_common(
     // OBLIGATOIRE : irq_save() AVANT write() (cf DRV-45 v8)
     let _irq_guard = crate::arch::x86_64::irq_save();
     let mut table = IRQ_TABLE.write();
-    
+
     let is_new = table.get(irq_vector).is_none();
-    
-    let route = table.get_mut(irq_vector).get_or_insert_with(|| {
-        IrqRoute::new(irq_vector, source_kind, gsi, pci_bdf)
-    });
+
+    let route = table
+        .get_mut(irq_vector)
+        .get_or_insert_with(|| IrqRoute::new(irq_vector, source_kind, gsi, pci_bdf));
 
     if !is_new {
         if route.source_kind != source_kind {
@@ -141,11 +154,15 @@ fn sys_irq_register_common(
         handlers.retain(|h| {
             let alive = process_is_alive(h.owner_pid.0);
             if !alive {
-                log::debug!("IRQ {}: purge handler orphelin PID {}", irq_vector.as_u8(), h.owner_pid.0);
+                log::debug!(
+                    "IRQ {}: purge handler orphelin PID {}",
+                    irq_vector.as_u8(),
+                    h.owner_pid.0
+                );
             }
             alive
         });
-        
+
         if handlers.len() >= MAX_HANDLERS_PER_IRQ {
             return Err(IrqError::HandlerLimitReached);
         }
@@ -153,7 +170,7 @@ fn sys_irq_register_common(
         // Reset handlers obsolètes du même PID
         handlers.retain(|h| h.owner_pid != owner_pid);
     }
-    
+
     // FIX-99 v8 : reset overflow_count sur re-registration.
     route.overflow_count.store(0, Ordering::Relaxed);
     if route.pending_acks.load(Ordering::Acquire) == 0 {
@@ -173,7 +190,7 @@ fn sys_irq_register_common(
     {
         let mut handlers = route.handlers.write();
         handlers.push(new_handler);
-        
+
         if handlers.len() == 1 {
             route.soft_alarmed.store(false, Ordering::Release);
         }
@@ -190,7 +207,7 @@ fn sys_irq_register_common(
         ) {
             return Err(IrqError::RouteFailed);
         }
-        
+
         io_apic::unmask_irq(reg_params.gsi);
     }
 
@@ -206,12 +223,12 @@ pub fn ack_irq_syscall(vector: IrqVector) -> Result<(), IrqError> {
 
     let _prev = route.pending_acks.fetch_sub(1, Ordering::AcqRel);
     let remaining = route.pending_acks.load(Ordering::Acquire);
-    
+
     if remaining == 0 {
         route.handled_count.store(0, Ordering::Release);
         route.masked_since.store(0, Ordering::Release);
         route.soft_alarmed.store(false, Ordering::Release);
-        
+
         if route.source_kind == IrqSourceKind::IoApicLevel {
             route.masked.store(false, Ordering::Release);
             if let Some(gsi) = route.gsi {
@@ -236,7 +253,10 @@ pub fn ack_irq_canonical(
     }
 
     let table = IRQ_TABLE.read();
-    let route = table.get(irq_vector).as_ref().ok_or(IrqError::NotRegistered)?;
+    let route = table
+        .get(irq_vector)
+        .as_ref()
+        .ok_or(IrqError::NotRegistered)?;
 
     {
         let handlers = route.handlers.read();
@@ -330,7 +350,7 @@ pub fn revoke_all_irq(owner_pid: IrqOwnerPid) -> Result<(), IrqError> {
                     }
                 }
             }
-            
+
             route.dispatch_generation.fetch_add(1, Ordering::Release);
         }
     }
@@ -364,17 +384,19 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
                 io_apic::mask_irq(gsi);
             }
             let now = clock_ms();
-            let _ = route.masked_since.compare_exchange(
-                0, now, Ordering::Release, Ordering::Relaxed
-            );
+            let _ =
+                route
+                    .masked_since
+                    .compare_exchange(0, now, Ordering::Release, Ordering::Relaxed);
             route.masked.store(true, Ordering::Release);
         }
         IrqSourceKind::IoApicEdge | IrqSourceKind::Msi | IrqSourceKind::MsiX => {
             local_apic::eoi();
             let now = clock_ms();
-            let _ = route.masked_since.compare_exchange(
-                0, now, Ordering::Release, Ordering::Relaxed
-            );
+            let _ =
+                route
+                    .masked_since
+                    .compare_exchange(0, now, Ordering::Release, Ordering::Relaxed);
             route.masked.store(false, Ordering::Release);
         }
     }
@@ -386,7 +408,9 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
     {
         let handlers = route.handlers.read();
         for h in handlers.iter() {
-            if n_eps >= MAX_HANDLERS_PER_IRQ { break; }
+            if n_eps >= MAX_HANDLERS_PER_IRQ {
+                break;
+            }
             eps[n_eps] = Some(h.endpoint);
             n_eps += 1;
         }
@@ -422,10 +446,16 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
             if current > MAX_PENDING_ACKS {
                 let now = clock_ms();
                 let _ = route.masked_since.compare_exchange(
-                    0, now, Ordering::Release, Ordering::Relaxed
+                    0,
+                    now,
+                    Ordering::Release,
+                    Ordering::Relaxed,
                 );
                 match route.pending_acks.compare_exchange(
-                    current, n, Ordering::Release, Ordering::Relaxed
+                    current,
+                    n,
+                    Ordering::Release,
+                    Ordering::Relaxed,
                 ) {
                     Ok(_) => {
                         let ov = route.overflow_count.fetch_add(1, Ordering::Relaxed) + 1;
@@ -443,13 +473,18 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
                     Err(actual) => {
                         current = actual;
                         spin_count += 1;
-                        if spin_count >= SPIN_THRESHOLD { return; }
+                        if spin_count >= SPIN_THRESHOLD {
+                            return;
+                        }
                         core::hint::spin_loop();
                     }
                 }
             } else {
                 match route.pending_acks.compare_exchange(
-                    current, current + n, Ordering::AcqRel, Ordering::Relaxed
+                    current,
+                    current + n,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
                 ) {
                     Ok(prev) => {
                         if prev == 0 {
@@ -460,7 +495,9 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
                     Err(actual) => {
                         current = actual;
                         spin_count += 1;
-                        if spin_count >= SPIN_THRESHOLD { return; }
+                        if spin_count >= SPIN_THRESHOLD {
+                            return;
+                        }
                         core::hint::spin_loop();
                     }
                 }
@@ -480,7 +517,6 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
 fn clock_ms() -> u64 {
     monotonic_ns() / 1_000_000
 }
-
 
 pub fn revoke_all_irq_for_pid(target_pid: u32) {
     let _ = revoke_all_irq(IrqOwnerPid(target_pid));

@@ -16,7 +16,6 @@
 // Conformite : DAG-01 . ONDISK-01 . REFCNT-01 . HASH-01 . LOBJ-01 . HDR-03
 // ==============================================================================
 
-
 // ------------------------------------------------------------------------------
 // Declarations de sous-modules
 // ------------------------------------------------------------------------------
@@ -59,77 +58,49 @@ pub mod object_cache;
 // ------------------------------------------------------------------------------
 
 pub use object_meta::{
-    ObjectMeta,
-    ObjectMetaDisk,
-    ObjectMetaStats,
-    XAttrEntry,
-    crc32_compute,
-    MODE_DEFAULT_FILE,
+    crc32_compute, ObjectMeta, ObjectMetaDisk, ObjectMetaStats, XAttrEntry, MODE_DEFAULT_FILE,
 };
 
 // ------------------------------------------------------------------------------
 // Re-exports -- inline_data
 // ------------------------------------------------------------------------------
 
-pub use inline_data::{
-    InlineData,
-    InlineDataDisk,
-    InlineDataStats,
-};
+pub use inline_data::{InlineData, InlineDataDisk, InlineDataStats};
 
 // ------------------------------------------------------------------------------
 // Re-exports -- extent
 // ------------------------------------------------------------------------------
 
-pub use extent::{
-    ObjectExtent,
-    ObjectExtentDisk,
-    ExtentBuilder,
-    ExtentStats,
-};
+pub use extent::{ExtentBuilder, ExtentStats, ObjectExtent, ObjectExtentDisk};
 
 // ------------------------------------------------------------------------------
 // Re-exports -- physical_blob
 // ------------------------------------------------------------------------------
 
 pub use physical_blob::{
-    PhysicalBlobInMemory,
-    PhysicalBlobRef,
+    BlobStats as PhysBlobStats, CompressionType, PhysicalBlobInMemory, PhysicalBlobRef,
     PhysicalBlobTable,
-    CompressionType,
-    BlobStats as PhysBlobStats,
 };
 
 // ------------------------------------------------------------------------------
 // Re-exports -- physical_ref
 // ------------------------------------------------------------------------------
 
-pub use physical_ref::{
-    PhysicalRef,
-    PhysicalRefStats,
-};
+pub use physical_ref::{PhysicalRef, PhysicalRefStats};
 
 // ------------------------------------------------------------------------------
 // Re-exports -- extent_tree
 // ------------------------------------------------------------------------------
 
-pub use extent_tree::{
-    ExtentTree,
-    ExtentTreeStats,
-    INLINE_EXTENT_COUNT,
-};
+pub use extent_tree::{ExtentTree, ExtentTreeStats, INLINE_EXTENT_COUNT};
 
 // ------------------------------------------------------------------------------
 // Re-exports -- logical_object
 // ------------------------------------------------------------------------------
 
 pub use logical_object::{
-    LogicalObject,
-    LogicalObjectDisk,
-    LogicalObjectRef,
-    ObjectVersion,
+    LogicalObject, LogicalObjectDisk, LogicalObjectRef, ObjectVersion, LOGICAL_OBJECT_MAGIC,
     LOGICAL_OBJECT_VERSION,
-    LOGICAL_OBJECT_MAGIC,
 };
 
 // ------------------------------------------------------------------------------
@@ -137,59 +108,59 @@ pub use logical_object::{
 // ------------------------------------------------------------------------------
 
 pub use object_kind::{
+    blob_compute_id,
+
+    code_is_valid,
+
+    fnv1a_hash_u64,
+    secret_compute_plaintext_id,
+
+    BlobCreateParams,
     // Blob
     BlobDescriptor,
     BlobDescriptorDisk,
-    BlobCreateParams,
     BlobStats,
-    BLOB_DESCRIPTOR_MAGIC,
-    BLOB_MAX_SIZE,
-    blob_compute_id,
-
     // Code
     CodeDescriptor,
     CodeDescriptorDisk,
-    CodeValidationResult,
-    ElfClass,
-    ElfMachine,
     CodeStats,
-    CODE_MAX_SIZE,
-    code_is_valid,
-
+    CodeValidationResult,
     // Config
     ConfigEntry,
     ConfigEntryDisk,
-    ConfigStore,
     ConfigStats,
-    CONFIG_KEY_LEN,
-    CONFIG_VALUE_LEN,
-    CONFIG_MAX_ENTRIES,
-
-    // Secret
-    SecretDescriptor,
-    SecretDescriptorDisk,
-    SecretCipher,
-    SecretAccessRecord,
-    SecretStats,
-    secret_compute_plaintext_id,
-
+    ConfigStore,
+    ElfClass,
+    ElfMachine,
     // PathIndex
     PathIndexEntry,
     PathIndexEntryDisk,
     PathIndexPage,
     PathIndexPageHeader,
     PathIndexStats,
-    fnv1a_hash_u64,
+    RelationDescriptor,
+    RelationEntryDisk,
+    RelationFlags,
+    // Relation
+    RelationKind,
+    RelationStats,
+    RelationTable,
+    SecretAccessRecord,
+    SecretCipher,
+    // Secret
+    SecretDescriptor,
+    SecretDescriptorDisk,
+    SecretStats,
+    BLOB_DESCRIPTOR_MAGIC,
+    BLOB_MAX_SIZE,
+    CODE_MAX_SIZE,
+    CONFIG_KEY_LEN,
+    CONFIG_MAX_ENTRIES,
+
+    CONFIG_VALUE_LEN,
     PATH_INDEX_MAGIC,
     PATH_INDEX_MAX_ENTRIES,
 
-    // Relation
-    RelationKind,
-    RelationFlags,
-    RelationDescriptor,
-    RelationEntryDisk,
-    RelationTable,
-    RelationStats,
     RELATION_MAX_COUNT,
 };
 
@@ -197,32 +168,16 @@ pub use object_kind::{
 // Re-exports -- object_builder
 // ------------------------------------------------------------------------------
 
-pub use object_builder::{
-    ObjectBuilder,
-    BuildParams,
-    BuildError,
-    BuildResult,
-    BuildStats,
-};
+pub use object_builder::{BuildError, BuildParams, BuildResult, BuildStats, ObjectBuilder};
 
 // ------------------------------------------------------------------------------
 // Re-exports -- object_loader
 // ------------------------------------------------------------------------------
 
-pub use object_loader::{
-    ObjectLoader,
-    LoadParams,
-    LoadResult,
-    LoaderStats,
-    ReadFn,
-};
+pub use object_loader::{LoadParams, LoadResult, LoaderStats, ObjectLoader, ReadFn};
 
 // ------------------------------------------------------------------------------
 // Re-exports -- object_cache
 // ------------------------------------------------------------------------------
 
-pub use object_cache::{
-    ObjectCache,
-    ObjectCacheStats,
-    OBJECT_CACHE_DEFAULT_CAPACITY,
-};
+pub use object_cache::{ObjectCache, ObjectCacheStats, OBJECT_CACHE_DEFAULT_CAPACITY};

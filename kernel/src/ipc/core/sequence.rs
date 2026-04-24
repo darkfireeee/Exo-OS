@@ -14,9 +14,8 @@
 // CONTRAINTE : zéro allocation heap (conforme Zone NO-ALLOC).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
 use super::constants::SEQ_WINDOW_SIZE;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SeqSender — côté émetteur (monotone croissant)
@@ -34,7 +33,9 @@ impl SeqSender {
     /// Crée un nouveau SeqSender commençant à la séquence 1.
     /// La séquence 0 est réservée comme "invalide".
     pub const fn new() -> Self {
-        Self { next_seq: AtomicU64::new(1) }
+        Self {
+            next_seq: AtomicU64::new(1),
+        }
     }
 
     /// Alloue le prochain numéro de séquence.
@@ -82,24 +83,24 @@ pub enum SeqCheck {
 /// La fenêtre est un bitmask de SEQ_WINDOW_BITS bits (u128 max 128 bits).
 pub struct SeqReceiver {
     /// Prochain numéro de séquence attendu en ordre.
-    expected:   AtomicU64,
+    expected: AtomicU64,
     /// Bitmask de présence pour la fenêtre [expected .. expected + WINDOW).
     /// Bit i = 1 si le message expected+i a déjà été reçu.
-    window:     AtomicU64,
+    window: AtomicU64,
     /// Compteur de messages hors-ordre détectés.
     out_of_order_count: AtomicU64,
     /// Compteur de messages dupliqués rejetés.
-    duplicate_count:    AtomicU64,
+    duplicate_count: AtomicU64,
 }
 
 impl SeqReceiver {
     /// Crée un récepteur s'attendant à recevoir la séquence 1 en premier.
     pub const fn new() -> Self {
         Self {
-            expected:           AtomicU64::new(1),
-            window:             AtomicU64::new(0),
+            expected: AtomicU64::new(1),
+            window: AtomicU64::new(0),
             out_of_order_count: AtomicU64::new(0),
-            duplicate_count:    AtomicU64::new(0),
+            duplicate_count: AtomicU64::new(0),
         }
     }
 
@@ -132,7 +133,6 @@ impl SeqReceiver {
             self.window.store(win, Ordering::Relaxed);
             self.expected.store(new_expected, Ordering::Release);
             SeqCheck::InOrder
-
         } else if seq > expected {
             let gap = seq - expected;
             if gap >= SEQ_WINDOW_SIZE {
@@ -204,14 +204,14 @@ impl Default for SeqReceiver {
 
 /// Un canal unidirectionnel complet pour la gestion de séquence.
 pub struct SeqPair {
-    pub sender:   SeqSender,
+    pub sender: SeqSender,
     pub receiver: SeqReceiver,
 }
 
 impl SeqPair {
     pub const fn new() -> Self {
         Self {
-            sender:   SeqSender::new(),
+            sender: SeqSender::new(),
             receiver: SeqReceiver::new(),
         }
     }
@@ -244,7 +244,10 @@ mod tests {
     fn test_out_of_order_then_gap_fill() {
         let recv = SeqReceiver::new();
         // Arrive séq 2 avant séq 1.
-        assert!(matches!(recv.check_and_advance(2), SeqCheck::Future { gap: 1 }));
+        assert!(matches!(
+            recv.check_and_advance(2),
+            SeqCheck::Future { gap: 1 }
+        ));
         // Maintenant séq 1 arrive → doit déclencher InOrder et avancer.
         assert_eq!(recv.check_and_advance(1), SeqCheck::InOrder);
         // expected doit avoir sauté à 3 (2 était déjà dans la fenêtre).

@@ -10,10 +10,10 @@
 
 extern crate alloc;
 
-pub mod json;
-pub mod toml_parser;
-pub mod markdown;
 pub mod diff;
+pub mod json;
+pub mod markdown;
+pub mod toml_parser;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextError {

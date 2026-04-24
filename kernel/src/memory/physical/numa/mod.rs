@@ -25,12 +25,16 @@ pub mod policy;
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Table globale des nœuds NUMA actifs.
-pub use node::{NUMA_NODES, NumaNodeTable, NumaNode, NumaNodeStats, NumaPhysRange,
-               NumaGlobalStats, NUMA_GLOBAL_STATS, MAX_NUMA_NODES, NUMA_NODE_INVALID};
+pub use node::{
+    NumaGlobalStats, NumaNode, NumaNodeStats, NumaNodeTable, NumaPhysRange, MAX_NUMA_NODES,
+    NUMA_GLOBAL_STATS, NUMA_NODES, NUMA_NODE_INVALID,
+};
 
 // Distances inter-nœuds et helper de nœud le plus proche.
-pub use distance::{numa_distance, numa_same_node, closest_node, NumaDistanceTable,
-                   NUMA_DISTANCE, NUMA_DISTANCE_LOCAL, NUMA_DISTANCE_REMOTE, NUMA_DISTANCE_FAR};
+pub use distance::{
+    closest_node, numa_distance, numa_same_node, NumaDistanceTable, NUMA_DISTANCE,
+    NUMA_DISTANCE_FAR, NUMA_DISTANCE_LOCAL, NUMA_DISTANCE_REMOTE,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Initialisation

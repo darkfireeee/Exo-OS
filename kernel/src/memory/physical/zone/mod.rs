@@ -5,15 +5,12 @@
 
 pub mod dma;
 pub mod dma32;
-pub mod normal;
 pub mod high;
 pub mod movable;
+pub mod normal;
 
-use core::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
-use crate::memory::core::{
-    PhysAddr, Frame, AllocFlags, ZoneType,
-    ZONE_DMA_END, ZONE_DMA32_END,
-};
+use crate::memory::core::{AllocFlags, Frame, PhysAddr, ZoneType, ZONE_DMA32_END, ZONE_DMA_END};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ZONE DESCRIPTOR — structure commune à toutes les zones
@@ -25,31 +22,31 @@ use crate::memory::core::{
 #[repr(C, align(64))]
 pub struct ZoneDescriptor {
     /// Type de cette zone.
-    pub zone_type:    ZoneType,
+    pub zone_type: ZoneType,
     /// Nœud NUMA d'appartenance.
-    pub numa_node:    u8,
+    pub numa_node: u8,
     /// Padding.
-    _pad0:            [u8; 6],
+    _pad0: [u8; 6],
     /// Adresse physique de début de zone.
-    pub phys_start:   PhysAddr,
+    pub phys_start: PhysAddr,
     /// Adresse physique de fin de zone (exclusive).
-    pub phys_end:     PhysAddr,
+    pub phys_end: PhysAddr,
     /// Nombre total de frames dans cette zone.
     pub total_frames: usize,
     /// Nombre de frames libres actuellement.
-    free_frames:      AtomicUsize,
+    free_frames: AtomicUsize,
     /// Nombre de frames réservés (firmware/BIOS).
     pub reserved_frames: usize,
     /// Nombre d'allocations réussies depuis cette zone.
-    alloc_success:    AtomicU64,
+    alloc_success: AtomicU64,
     /// Nombre d'échecs d'allocation dans cette zone.
-    alloc_failures:   AtomicU64,
+    alloc_failures: AtomicU64,
     /// Nombre de libérations effectuées dans cette zone.
-    free_count:       AtomicU64,
+    free_count: AtomicU64,
     /// Watermark bas : sous ce seuil, kswapd se réveille.
-    pub watermark_low:  usize,
+    pub watermark_low: usize,
     /// Watermark minimum : sous ce seuil, seulement les allocs urgentes passent.
-    pub watermark_min:  usize,
+    pub watermark_min: usize,
     /// Watermark haut : au-dessus, kswapd s'arrête.
     pub watermark_high: usize,
     /// Padding pour atteindre 128 bytes.
@@ -68,16 +65,16 @@ const _: () = assert!(
 impl ZoneDescriptor {
     /// Crée un descripteur de zone.
     pub const fn new(
-        zone_type:      ZoneType,
-        numa_node:      u8,
-        phys_start:     PhysAddr,
-        phys_end:       PhysAddr,
-        total_frames:   usize,
+        zone_type: ZoneType,
+        numa_node: u8,
+        phys_start: PhysAddr,
+        phys_end: PhysAddr,
+        total_frames: usize,
         reserved_frames: usize,
     ) -> Self {
-        let wm_min  = total_frames / 100;       // 1%
-        let wm_low  = total_frames * 3 / 100;   // 3%
-        let wm_high = total_frames * 5 / 100;   // 5%
+        let wm_min = total_frames / 100; // 1%
+        let wm_low = total_frames * 3 / 100; // 3%
+        let wm_high = total_frames * 5 / 100; // 5%
 
         ZoneDescriptor {
             zone_type,
@@ -86,14 +83,14 @@ impl ZoneDescriptor {
             phys_start,
             phys_end,
             total_frames,
-            free_frames:     AtomicUsize::new(total_frames - reserved_frames),
+            free_frames: AtomicUsize::new(total_frames - reserved_frames),
             reserved_frames,
-            alloc_success:   AtomicU64::new(0),
-            alloc_failures:  AtomicU64::new(0),
-            free_count:      AtomicU64::new(0),
-            watermark_low:   wm_low,
-            watermark_min:   wm_min,
-            watermark_high:  wm_high,
+            alloc_success: AtomicU64::new(0),
+            alloc_failures: AtomicU64::new(0),
+            free_count: AtomicU64::new(0),
+            watermark_low: wm_low,
+            watermark_min: wm_min,
+            watermark_high: wm_high,
             _pad1: [0u8; 32],
         }
     }
@@ -146,14 +143,14 @@ impl ZoneDescriptor {
     /// Statistiques de cette zone.
     pub fn stats(&self) -> ZoneStats {
         ZoneStats {
-            zone_type:      self.zone_type,
-            numa_node:      self.numa_node,
-            total_frames:   self.total_frames,
-            free_frames:    self.free_frames(),
+            zone_type: self.zone_type,
+            numa_node: self.numa_node,
+            total_frames: self.total_frames,
+            free_frames: self.free_frames(),
             reserved_frames: self.reserved_frames,
-            alloc_success:  self.alloc_success.load(Ordering::Relaxed),
+            alloc_success: self.alloc_success.load(Ordering::Relaxed),
             alloc_failures: self.alloc_failures.load(Ordering::Relaxed),
-            free_count:     self.free_count.load(Ordering::Relaxed),
+            free_count: self.free_count.load(Ordering::Relaxed),
         }
     }
 }
@@ -161,20 +158,22 @@ impl ZoneDescriptor {
 /// Statistiques d'une zone mémoire.
 #[derive(Copy, Clone, Debug)]
 pub struct ZoneStats {
-    pub zone_type:      ZoneType,
-    pub numa_node:      u8,
-    pub total_frames:   usize,
-    pub free_frames:    usize,
+    pub zone_type: ZoneType,
+    pub numa_node: u8,
+    pub total_frames: usize,
+    pub free_frames: usize,
     pub reserved_frames: usize,
-    pub alloc_success:  u64,
+    pub alloc_success: u64,
     pub alloc_failures: u64,
-    pub free_count:     u64,
+    pub free_count: u64,
 }
 
 impl ZoneStats {
     /// Pourcentage de mémoire libre (0-100).
     pub fn free_percent(&self) -> u32 {
-        if self.total_frames == 0 { return 0; }
+        if self.total_frames == 0 {
+            return 0;
+        }
         (self.free_frames * 100 / self.total_frames) as u32
     }
 }
@@ -196,15 +195,15 @@ pub fn zone_for_flags(flags: AllocFlags) -> ZoneType {
 pub fn addr_satisfies_flags(addr: PhysAddr, flags: AllocFlags) -> bool {
     let required = zone_for_flags(flags);
     match required {
-        ZoneType::Dma     => addr.as_usize() < ZONE_DMA_END,
-        ZoneType::Dma32   => addr.as_usize() < ZONE_DMA32_END,
+        ZoneType::Dma => addr.as_usize() < ZONE_DMA_END,
+        ZoneType::Dma32 => addr.as_usize() < ZONE_DMA32_END,
         ZoneType::Movable => true, // Any address can be movable
-        _                 => true, // Normal/High : pas de contrainte d'adresse basse
+        _ => true,                 // Normal/High : pas de contrainte d'adresse basse
     }
 }
 
 pub use dma::DmaZone;
 pub use dma32::Dma32Zone;
-pub use normal::NormalZone;
 pub use high::HighZone;
 pub use movable::MovableZone;
+pub use normal::NormalZone;

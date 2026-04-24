@@ -8,17 +8,14 @@
 //!   WRITE-02  : vérification bytes_written après chaque écriture disque
 //!   ARITH-02  : checked_add avant tout calcul d'offset
 
-
 extern crate alloc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, EpochId, DiskOffset,
-};
 use crate::fs::exofs::core::blob_id::blake3_hash;
-use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
+use crate::fs::exofs::core::{DiskOffset, EpochId, ExofsError, ExofsResult};
 use crate::fs::exofs::storage::layout::{BLOCK_SIZE, HEAP_START_OFFSET};
+use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────
@@ -65,15 +62,15 @@ pub mod incompat_flags {
     /// Compression activée sur le volume.
     pub const COMPRESSION: u64 = 1 << 0;
     /// Déduplication activée sur le volume.
-    pub const DEDUP:        u64 = 1 << 1;
+    pub const DEDUP: u64 = 1 << 1;
     /// Chiffrement activé sur le volume.
-    pub const ENCRYPTION:   u64 = 1 << 2;
+    pub const ENCRYPTION: u64 = 1 << 2;
     /// RÈGLE FS-10 : checksums Blake3 sur toutes les écritures ExoFS.
-    pub const EXO_BLAKE3:   u64 = 1 << 3;
+    pub const EXO_BLAKE3: u64 = 1 << 3;
     /// RÈGLE FS-10 : allocation différée (blocs alloués au writeback, jamais au write).
-    pub const EXO_DELAYED:  u64 = 1 << 4;
+    pub const EXO_DELAYED: u64 = 1 << 4;
     /// RÈGLE FS-10 : reflink (copy-on-write partagé de blocs).
-    pub const EXO_REFLINK:  u64 = 1 << 5;
+    pub const EXO_REFLINK: u64 = 1 << 5;
     /// Combinaison obligatoire pour tout nouveau volume ExoFS (FS-10).
     pub const REQUIRED: u64 = EXO_BLAKE3 | EXO_DELAYED | EXO_REFLINK;
 }
@@ -244,9 +241,8 @@ impl ExoSuperblockDisk {
             return Err(ExofsError::InvalidSize);
         }
         // SAFETY: taille vérifiée, repr(C)
-        let sb: ExoSuperblockDisk = unsafe {
-            core::ptr::read_unaligned(buf.as_ptr() as *const ExoSuperblockDisk)
-        };
+        let sb: ExoSuperblockDisk =
+            unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const ExoSuperblockDisk) };
         Ok(sb)
     }
 }
@@ -258,9 +254,9 @@ impl ExoSuperblockDisk {
 /// Index d'un miroir superblock
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MirrorSlot {
-    Primary   = 0,
+    Primary = 0,
     Secondary = 1,
-    Tertiary  = 2,
+    Tertiary = 2,
 }
 
 impl MirrorSlot {
@@ -338,10 +334,7 @@ impl SuperblockManager {
     /// Monte un volume existant : lit et vérifie les 3 miroirs, récupère le meilleur.
     ///
     /// BACKUP-02 : sélection du miroir avec epoch_current le plus élevé.
-    pub fn mount<ReadFn>(
-        disk_size: u64,
-        read_fn: ReadFn,
-    ) -> ExofsResult<Self>
+    pub fn mount<ReadFn>(disk_size: u64, read_fn: ReadFn) -> ExofsResult<Self>
     where
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
@@ -519,14 +512,15 @@ impl SuperblockManager {
             }
         }
 
-        if any_ok { Ok(()) } else { Err(last_err) }
+        if any_ok {
+            Ok(())
+        } else {
+            Err(last_err)
+        }
     }
 
     /// Lit et valide un miroir (HDR-03)
-    fn read_mirror<ReadFn>(
-        offset: DiskOffset,
-        read_fn: &ReadFn,
-    ) -> ExofsResult<ExoSuperblockDisk>
+    fn read_mirror<ReadFn>(offset: DiskOffset, read_fn: &ReadFn) -> ExofsResult<ExoSuperblockDisk>
     where
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
@@ -601,7 +595,9 @@ impl SuperblockSnapshot {
     /// Utilisation en pourcentage (0–100)
     pub fn usage_pct(&self) -> u64 {
         let total = self.heap_end.saturating_sub(self.heap_start);
-        if total == 0 { return 0; }
+        if total == 0 {
+            return 0;
+        }
         let used = total.saturating_sub(self.free_bytes);
         used.saturating_mul(100) / total
     }
@@ -648,11 +644,16 @@ mod tests {
 
     const TEST_DISK: u64 = 32 * 1024 * 1024; // 32 MiB
 
-    fn make_disk(size: usize) -> Vec<u8> { vec![0u8; size] }
+    fn make_disk(size: usize) -> Vec<u8> {
+        vec![0u8; size]
+    }
 
     #[test]
     fn superblock_disk_size() {
-        assert_eq!(core::mem::size_of::<ExoSuperblockDisk>(), SUPERBLOCK_DISK_SIZE);
+        assert_eq!(
+            core::mem::size_of::<ExoSuperblockDisk>(),
+            SUPERBLOCK_DISK_SIZE
+        );
     }
 
     #[test]
@@ -679,29 +680,25 @@ mod tests {
     fn format_and_mount_roundtrip() {
         let mut disk = make_disk(TEST_DISK as usize);
 
-        let _mgr = SuperblockManager::format(
-            TEST_DISK,
-            b"RoundtripVol",
-            [0xAB; 16],
-            999,
-            |off, buf| {
+        let _mgr =
+            SuperblockManager::format(TEST_DISK, b"RoundtripVol", [0xAB; 16], 999, |off, buf| {
                 let s = off.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+                if s + buf.len() <= disk.len() {
+                    disk[s..s + buf.len()].copy_from_slice(buf);
+                }
                 Ok(buf.len())
-            },
-        ).unwrap();
+            })
+            .unwrap();
 
-        let mgr2 = SuperblockManager::mount(
-            TEST_DISK,
-            |off, sz| {
-                let s = off.0 as usize;
-                let e = (s + sz).min(disk.len());
-                let mut v = vec![0u8; sz];
-                let avail = e - s;
-                v[..avail].copy_from_slice(&disk[s..e]);
-                Ok(v)
-            },
-        ).unwrap();
+        let mgr2 = SuperblockManager::mount(TEST_DISK, |off, sz| {
+            let s = off.0 as usize;
+            let e = (s + sz).min(disk.len());
+            let mut v = vec![0u8; sz];
+            let avail = e - s;
+            v[..avail].copy_from_slice(&disk[s..e]);
+            Ok(v)
+        })
+        .unwrap();
 
         let snap = mgr2.snapshot();
         assert_eq!(snap.disk_size, TEST_DISK);
@@ -711,21 +708,24 @@ mod tests {
     fn commit_increments_epoch() {
         let mut disk = make_disk(TEST_DISK as usize);
 
-        let mgr = SuperblockManager::format(
-            TEST_DISK, b"Epoch", [0u8; 16], 0,
-            |off, buf| {
-                let s = off.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
-                Ok(buf.len())
-            },
-        ).unwrap();
+        let mgr = SuperblockManager::format(TEST_DISK, b"Epoch", [0u8; 16], 0, |off, buf| {
+            let s = off.0 as usize;
+            if s + buf.len() <= disk.len() {
+                disk[s..s + buf.len()].copy_from_slice(buf);
+            }
+            Ok(buf.len())
+        })
+        .unwrap();
 
         let ep1 = mgr.current_epoch().0;
         mgr.commit(1000, |off, buf| {
             let s = off.0 as usize;
-            if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+            if s + buf.len() <= disk.len() {
+                disk[s..s + buf.len()].copy_from_slice(buf);
+            }
             Ok(buf.len())
-        }).unwrap();
+        })
+        .unwrap();
         let ep2 = mgr.current_epoch().0;
         assert!(ep2 > ep1);
     }
@@ -754,9 +754,10 @@ mod tests {
             let s = off.0 as usize;
             let e = (s + sz).min(disk.len());
             let mut v = vec![0u8; sz];
-            v[..e-s].copy_from_slice(&disk[s..e]);
+            v[..e - s].copy_from_slice(&disk[s..e]);
             Ok(v)
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_eq!(mgr.current_epoch().0, 999);
     }
@@ -766,15 +767,15 @@ mod tests {
         let mut disk = make_disk(TEST_DISK as usize);
         let mut write_calls = 0u32;
 
-        let _mgr = SuperblockManager::format(
-            TEST_DISK, b"Mirrors", [0u8; 16], 0,
-            |off, buf| {
-                write_calls += 1;
-                let s = off.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
-                Ok(buf.len())
-            },
-        ).unwrap();
+        let _mgr = SuperblockManager::format(TEST_DISK, b"Mirrors", [0u8; 16], 0, |off, buf| {
+            write_calls += 1;
+            let s = off.0 as usize;
+            if s + buf.len() <= disk.len() {
+                disk[s..s + buf.len()].copy_from_slice(buf);
+            }
+            Ok(buf.len())
+        })
+        .unwrap();
 
         // Le format doit écrire exactement 3 miroirs
         assert_eq!(write_calls, SB_MIRROR_COUNT as u32);
@@ -802,10 +803,8 @@ mod tests {
 
     #[test]
     fn min_disk_size_enforced() {
-        let r = SuperblockManager::format(
-            MIN_DISK_SIZE - 1, b"TooSmall", [0u8; 16], 0,
-            |_, _| Ok(0),
-        );
+        let r =
+            SuperblockManager::format(MIN_DISK_SIZE - 1, b"TooSmall", [0u8; 16], 0, |_, _| Ok(0));
         assert!(matches!(r, Err(ExofsError::InvalidSize)));
     }
 }

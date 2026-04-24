@@ -3,7 +3,6 @@
 //! Définit `CacheConfig`, `CachePolicy` et les seuils dynamiques (watermarks).
 //! Règles : ARITH-02 (arithmétique vérifiée), RECUR-01 (zéro récursion).
 
-
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -15,11 +14,11 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EvictionAlgorithmKind {
     /// Least Recently Used.
-    Lru   = 0,
+    Lru = 0,
     /// Least Frequently Used.
-    Lfu   = 1,
+    Lfu = 1,
     /// Adaptive Replacement Cache.
-    Arc   = 2,
+    Arc = 2,
     /// CLOCK (approximation LRU bas coût).
     Clock = 3,
 }
@@ -37,9 +36,9 @@ impl EvictionAlgorithmKind {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Lru   => "LRU",
-            Self::Lfu   => "LFU",
-            Self::Arc   => "ARC",
+            Self::Lru => "LRU",
+            Self::Lfu => "LFU",
+            Self::Arc => "ARC",
             Self::Clock => "CLOCK",
         }
     }
@@ -56,7 +55,7 @@ pub enum WritePolicy {
     /// Écriture synchrone vers le stockage à chaque modification.
     WriteThrough = 0,
     /// Écriture différée — accumule les dirty pages.
-    WriteBack    = 1,
+    WriteBack = 1,
 }
 
 impl WritePolicy {
@@ -74,7 +73,7 @@ impl WritePolicy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrefetchStrategy {
     /// Aucune prélecture.
-    None   = 0,
+    None = 0,
     /// Prélecture séquentielle (ahead_count blobs).
     Linear = 1,
     /// Prélecture adaptative basée sur les patterns d'accès.
@@ -89,68 +88,68 @@ pub enum PrefetchStrategy {
 #[derive(Clone, Debug)]
 pub struct CacheConfig {
     /// Taille maximale en octets.
-    pub max_bytes:        u64,
+    pub max_bytes: u64,
     /// Algorithme d'éviction.
-    pub eviction_algo:    EvictionAlgorithmKind,
+    pub eviction_algo: EvictionAlgorithmKind,
     /// Politique d'écriture.
-    pub write_policy:     WritePolicy,
+    pub write_policy: WritePolicy,
     /// Stratégie de prélecture.
     pub prefetch_strategy: PrefetchStrategy,
     /// Nombre de blobs à pré-charger.
-    pub prefetch_ahead:   u32,
+    pub prefetch_ahead: u32,
     /// Pourcentage maximum de pages sales avant flush forcé (0–100).
-    pub dirty_ratio:      u8,
+    pub dirty_ratio: u8,
     /// Pourcentage minimum libre avant éviction proactive (0–100).
-    pub min_free_ratio:   u8,
+    pub min_free_ratio: u8,
     /// Si `true`, invalide les entrées périmées après `ttl_ticks`.
-    pub ttl_enabled:      bool,
+    pub ttl_enabled: bool,
     /// Durée de vie en ticks CPU (0 = infini).
-    pub ttl_ticks:        u64,
+    pub ttl_ticks: u64,
 }
 
 impl CacheConfig {
     /// Configuration standard 512 MiB avec ARC.
     pub fn default_512mib() -> Self {
         Self {
-            max_bytes:         512 * 1024 * 1024,
-            eviction_algo:     EvictionAlgorithmKind::Arc,
-            write_policy:      WritePolicy::WriteBack,
+            max_bytes: 512 * 1024 * 1024,
+            eviction_algo: EvictionAlgorithmKind::Arc,
+            write_policy: WritePolicy::WriteBack,
             prefetch_strategy: PrefetchStrategy::Linear,
-            prefetch_ahead:    4,
-            dirty_ratio:       40,
-            min_free_ratio:    10,
-            ttl_enabled:       false,
-            ttl_ticks:         0,
+            prefetch_ahead: 4,
+            dirty_ratio: 40,
+            min_free_ratio: 10,
+            ttl_enabled: false,
+            ttl_ticks: 0,
         }
     }
 
     /// Configuration minimale 32 MiB avec LRU — convient aux tests.
     pub fn minimal() -> Self {
         Self {
-            max_bytes:         32 * 1024 * 1024,
-            eviction_algo:     EvictionAlgorithmKind::Lru,
-            write_policy:      WritePolicy::WriteThrough,
+            max_bytes: 32 * 1024 * 1024,
+            eviction_algo: EvictionAlgorithmKind::Lru,
+            write_policy: WritePolicy::WriteThrough,
             prefetch_strategy: PrefetchStrategy::None,
-            prefetch_ahead:    0,
-            dirty_ratio:       20,
-            min_free_ratio:    20,
-            ttl_enabled:       false,
-            ttl_ticks:         0,
+            prefetch_ahead: 0,
+            dirty_ratio: 20,
+            min_free_ratio: 20,
+            ttl_enabled: false,
+            ttl_ticks: 0,
         }
     }
 
     /// Configuration pour environnement mémoire contraint.
     pub fn low_memory() -> Self {
         Self {
-            max_bytes:         4 * 1024 * 1024,
-            eviction_algo:     EvictionAlgorithmKind::Clock,
-            write_policy:      WritePolicy::WriteThrough,
+            max_bytes: 4 * 1024 * 1024,
+            eviction_algo: EvictionAlgorithmKind::Clock,
+            write_policy: WritePolicy::WriteThrough,
             prefetch_strategy: PrefetchStrategy::None,
-            prefetch_ahead:    0,
-            dirty_ratio:       10,
-            min_free_ratio:    30,
-            ttl_enabled:       true,
-            ttl_ticks:         500_000,
+            prefetch_ahead: 0,
+            dirty_ratio: 10,
+            min_free_ratio: 30,
+            ttl_enabled: true,
+            ttl_ticks: 500_000,
         }
     }
 
@@ -209,7 +208,9 @@ impl CachePolicy {
     /// Quantité à libérer pour atteindre `low_watermark`.
     pub fn bytes_to_free(&self, used: u64) -> u64 {
         let low = self.low_watermark();
-        if used <= low { return 0; }
+        if used <= low {
+            return 0;
+        }
         used.saturating_sub(low)
     }
 
@@ -223,16 +224,19 @@ impl CachePolicy {
 
     /// `true` si l'écriture en writeback est en retard.
     pub fn needs_writeback(&self, dirty_bytes: u64) -> bool {
-        self.config.write_policy == WritePolicy::WriteBack
-            && dirty_bytes >= self.dirty_limit()
+        self.config.write_policy == WritePolicy::WriteBack && dirty_bytes >= self.dirty_limit()
     }
 
     /// Accès à la configuration.
-    pub fn config(&self) -> &CacheConfig { &self.config }
+    pub fn config(&self) -> &CacheConfig {
+        &self.config
+    }
 
     /// Modifie la taille max à chaud.
     pub fn resize(&mut self, new_max_bytes: u64) -> ExofsResult<()> {
-        if new_max_bytes == 0 { return Err(ExofsError::InvalidArgument); }
+        if new_max_bytes == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         self.config.max_bytes = new_max_bytes;
         Ok(())
     }
@@ -247,7 +251,7 @@ impl CachePolicy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CacheTier {
     /// Cache chaud en RAM (plus rapide).
-    Hot  = 0,
+    Hot = 0,
     /// Cache tiède (fréquent mais pas récent).
     Warm = 1,
     /// Cache froid (rare, candidat à l'éviction).
@@ -275,87 +279,101 @@ impl CacheTier {
 mod tests {
     use super::*;
 
-    #[test] fn test_high_watermark_below_max() {
+    #[test]
+    fn test_high_watermark_below_max() {
         let p = CachePolicy::new(CacheConfig::default_512mib());
         assert!(p.high_watermark() < p.config.max_bytes);
     }
 
-    #[test] fn test_low_watermark_below_high() {
+    #[test]
+    fn test_low_watermark_below_high() {
         let p = CachePolicy::new(CacheConfig::default_512mib());
         assert!(p.low_watermark() <= p.high_watermark());
     }
 
-    #[test] fn test_dirty_limit() {
+    #[test]
+    fn test_dirty_limit() {
         let p = CachePolicy::new(CacheConfig::default_512mib());
         assert!(p.dirty_limit() > 0);
         assert!(p.dirty_limit() < p.config.max_bytes);
     }
 
-    #[test] fn test_is_under_pressure_false() {
+    #[test]
+    fn test_is_under_pressure_false() {
         let p = CachePolicy::new(CacheConfig::default_512mib());
         assert!(!p.is_under_pressure(0));
     }
 
-    #[test] fn test_is_under_pressure_true() {
+    #[test]
+    fn test_is_under_pressure_true() {
         let p = CachePolicy::new(CacheConfig::default_512mib());
         assert!(p.is_under_pressure(p.config.max_bytes));
     }
 
-    #[test] fn test_bytes_to_free_zero_when_not_pressured() {
+    #[test]
+    fn test_bytes_to_free_zero_when_not_pressured() {
         let p = CachePolicy::new(CacheConfig::default_512mib());
         assert_eq!(p.bytes_to_free(0), 0);
     }
 
-    #[test] fn test_bytes_to_free_positive() {
+    #[test]
+    fn test_bytes_to_free_positive() {
         let p = CachePolicy::new(CacheConfig::default_512mib());
         let used = p.config.max_bytes;
         assert!(p.bytes_to_free(used) > 0);
     }
 
-    #[test] fn test_ttl_not_expired_when_disabled() {
+    #[test]
+    fn test_ttl_not_expired_when_disabled() {
         let p = CachePolicy::new(CacheConfig::minimal());
         assert!(!p.is_expired(0, u64::MAX));
     }
 
-    #[test] fn test_ttl_expired_when_enabled() {
+    #[test]
+    fn test_ttl_expired_when_enabled() {
         let mut cfg = CacheConfig::minimal();
         cfg.ttl_enabled = true;
-        cfg.ttl_ticks   = 100;
+        cfg.ttl_ticks = 100;
         let p = CachePolicy::new(cfg);
         assert!(p.is_expired(0, 200));
         assert!(!p.is_expired(150, 200));
     }
 
-    #[test] fn test_validate_ok() {
+    #[test]
+    fn test_validate_ok() {
         assert!(CacheConfig::default_512mib().validate().is_ok());
     }
 
-    #[test] fn test_validate_zero_bytes() {
+    #[test]
+    fn test_validate_zero_bytes() {
         let mut cfg = CacheConfig::minimal();
         cfg.max_bytes = 0;
         assert!(cfg.validate().is_err());
     }
 
-    #[test] fn test_resize() {
+    #[test]
+    fn test_resize() {
         let mut p = CachePolicy::new(CacheConfig::minimal());
         p.resize(64 * 1024 * 1024).unwrap();
         assert_eq!(p.config.max_bytes, 64 * 1024 * 1024);
     }
 
-    #[test] fn test_cache_tier_classify() {
+    #[test]
+    fn test_cache_tier_classify() {
         assert_eq!(CacheTier::classify(5, 10, 100), CacheTier::Hot);
         assert_eq!(CacheTier::classify(2, 1000, 100), CacheTier::Warm);
         assert_eq!(CacheTier::classify(1, 9999, 100), CacheTier::Cold);
     }
 
-    #[test] fn test_eviction_algorithm_name() {
+    #[test]
+    fn test_eviction_algorithm_name() {
         assert_eq!(EvictionAlgorithmKind::Lru.name(), "LRU");
         assert_eq!(EvictionAlgorithmKind::Arc.name(), "ARC");
     }
 
-    #[test] fn test_write_policy_is_synchronous() {
+    #[test]
+    fn test_write_policy_is_synchronous() {
         assert!(WritePolicy::WriteThrough.is_synchronous());
         assert!(!WritePolicy::WriteBack.is_synchronous());
     }
 }
-

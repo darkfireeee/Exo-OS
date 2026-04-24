@@ -18,11 +18,10 @@
 //   • Thread-safe pour un seul producteur et un seul consommateur.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
-use crate::ipc::core::{IpcError, MsgFlags};
-use super::spsc::SpscRing;
 use super::batch::BatchBuffer;
+use super::spsc::SpscRing;
+use crate::ipc::core::{IpcError, MsgFlags};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mode de fonctionnement du Fusion Ring
@@ -35,7 +34,7 @@ pub enum FusionMode {
     /// Envoi direct sans buffering (faible charge).
     Direct = 0,
     /// Accumulation + flush différé (forte charge).
-    Batch  = 1,
+    Batch = 1,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,9 +57,9 @@ impl FusionMetrics {
     const fn new() -> Self {
         Self {
             msgs_since_last: AtomicU64::new(0),
-            last_obs_tick:   AtomicU64::new(0),
-            ewa_throughput:  AtomicU32::new(0),
-            mode_switches:   AtomicU64::new(0),
+            last_obs_tick: AtomicU64::new(0),
+            ewa_throughput: AtomicU32::new(0),
+            mode_switches: AtomicU64::new(0),
         }
     }
 
@@ -74,8 +73,8 @@ impl FusionMetrics {
         let dt = (current_tick - last).max(1);
         let msgs = self.msgs_since_last.swap(0, Ordering::Relaxed);
         let instant = (msgs / dt).min(u32::MAX as u64) as u32;
-        let ewa = ((self.ewa_throughput.load(Ordering::Relaxed) as u64 * 7
-            + instant as u64) >> 3) as u32;
+        let ewa =
+            ((self.ewa_throughput.load(Ordering::Relaxed) as u64 * 7 + instant as u64) >> 3) as u32;
         self.ewa_throughput.store(ewa, Ordering::Relaxed);
         self.last_obs_tick.store(current_tick, Ordering::Relaxed);
     }
@@ -102,7 +101,7 @@ pub struct FusionRing {
     /// Tampon de batch côté producteur.
     batch: BatchBuffer,
     /// Mode courant.
-    mode:  AtomicU32, // 0 = Direct, 1 = Batch
+    mode: AtomicU32, // 0 = Direct, 1 = Batch
     /// Métriques pour l'adaptation.
     metrics: FusionMetrics,
     /// Tick courant (mis à jour par le scheduler tick handler).
@@ -113,10 +112,10 @@ impl FusionRing {
     /// Crée un FusionRing en mode Direct.
     pub const fn new() -> Self {
         Self {
-            inner:        SpscRing::new(),
-            batch:        BatchBuffer::new(),
-            mode:         AtomicU32::new(0),
-            metrics:      FusionMetrics::new(),
+            inner: SpscRing::new(),
+            batch: BatchBuffer::new(),
+            mode: AtomicU32::new(0),
+            metrics: FusionMetrics::new(),
             current_tick: AtomicU64::new(0),
         }
     }

@@ -26,15 +26,15 @@
 //! Activée via la feature `linux_compat` (par défaut ON pour Exo-OS).
 //! Peut être désactivée pour un kernel minimal (test ou embedded).
 
-use core::sync::atomic::{AtomicU64, Ordering};
 use crate::syscall::numbers::*;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteurs
 // ─────────────────────────────────────────────────────────────────────────────
 
-static COMPAT_TRANSLATED:  AtomicU64 = AtomicU64::new(0);
-static COMPAT_BLOCKED:     AtomicU64 = AtomicU64::new(0);
+static COMPAT_TRANSLATED: AtomicU64 = AtomicU64::new(0);
+static COMPAT_BLOCKED: AtomicU64 = AtomicU64::new(0);
 static COMPAT_PASSTHROUGH: AtomicU64 = AtomicU64::new(0);
 
 /// Statistiques de la couche compat Linux.
@@ -51,8 +51,8 @@ pub struct LinuxCompatStats {
 /// Snapshot des compteurs compat.
 pub fn linux_compat_stats() -> LinuxCompatStats {
     LinuxCompatStats {
-        translated:  COMPAT_TRANSLATED.load(Ordering::Relaxed),
-        blocked:     COMPAT_BLOCKED.load(Ordering::Relaxed),
+        translated: COMPAT_TRANSLATED.load(Ordering::Relaxed),
+        blocked: COMPAT_BLOCKED.load(Ordering::Relaxed),
         passthrough: COMPAT_PASSTHROUGH.load(Ordering::Relaxed),
     }
 }
@@ -110,7 +110,6 @@ pub fn translate_linux_nr(nr: u64) -> Option<u64> {
     // Quand un bras non-return sera ajouté, `_translated` recevra une valeur et
     // COMPAT_TRANSLATED sera incrémenté. Actuellement tous les bras font return.
     let _translated = match nr {
-
         // time(tloc) → clock_gettime(CLOCK_REALTIME, tloc) via wrapper dans table
         // Note : le dispatch utilisera le même handler clock_gettime,
         // mais avec clock_id implicitement CLOCK_REALTIME.
@@ -169,23 +168,25 @@ pub fn sys_sysinfo_compat(info_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64,
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
     struct SysInfo {
-        uptime:    i64,
-        loads:     [u64; 3],
-        totalram:  u64,
-        freeram:   u64,
+        uptime: i64,
+        loads: [u64; 3],
+        totalram: u64,
+        freeram: u64,
         sharedram: u64,
         bufferram: u64,
         totalswap: u64,
-        freeswap:  u64,
-        procs:     u16,
-        pad:       u16,
-        _pad2:     u32,
+        freeswap: u64,
+        procs: u16,
+        pad: u16,
+        _pad2: u32,
         totalhigh: u64,
-        freehigh:  u64,
-        mem_unit:  u32,
-        _pad3:     [u8; 8],
+        freehigh: u64,
+        mem_unit: u32,
+        _pad3: [u8; 8],
     }
-    if info_ptr == 0 { return EFAULT; }
+    if info_ptr == 0 {
+        return EFAULT;
+    }
 
     let uptime_ns = crate::scheduler::timer::clock::monotonic_ns();
     let uptime_sec = (uptime_ns / 1_000_000_000) as i64;
@@ -195,7 +196,7 @@ pub fn sys_sysinfo_compat(info_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64,
         mem_unit: 4096,
         // Les champs mémoire sont lus depuis memory/physical/stats
         totalram: crate::memory::physical::stats::total_pages() as u64,
-        freeram:  crate::memory::physical::stats::free_pages() as u64,
+        freeram: crate::memory::physical::stats::free_pages() as u64,
         ..SysInfo::default()
     };
     match write_user_typed::<SysInfo>(info_ptr, info) {
@@ -210,20 +211,22 @@ pub fn sys_uname_compat(buf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a
     #[repr(C)]
     #[derive(Copy, Clone)]
     struct UtsName {
-        sysname:    [u8; 65],
-        nodename:   [u8; 65],
-        release:    [u8; 65],
-        version:    [u8; 65],
-        machine:    [u8; 65],
+        sysname: [u8; 65],
+        nodename: [u8; 65],
+        release: [u8; 65],
+        version: [u8; 65],
+        machine: [u8; 65],
         domainname: [u8; 65],
     }
-    if buf_ptr == 0 { return EFAULT; }
+    if buf_ptr == 0 {
+        return EFAULT;
+    }
     let mut uts = UtsName {
-        sysname:    [0u8; 65],
-        nodename:   [0u8; 65],
-        release:    [0u8; 65],
-        version:    [0u8; 65],
-        machine:    [0u8; 65],
+        sysname: [0u8; 65],
+        nodename: [0u8; 65],
+        release: [0u8; 65],
+        version: [0u8; 65],
+        machine: [0u8; 65],
         domainname: [0u8; 65],
     };
     // Copie des chaînes littérales dans les buffers
@@ -248,24 +251,63 @@ fn copy_literal_to_buf(src: &[u8], dst: &mut [u8]) {
 }
 
 /// `getrlimit(resource, rlim_ptr)` — limites de ressources.
-pub fn sys_getrlimit_compat(resource: u64, rlim_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_getrlimit_compat(
+    resource: u64,
+    rlim_ptr: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     use crate::syscall::validation::write_user_typed;
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
-    struct Rlimit { rlim_cur: u64, rlim_max: u64 }
-    if rlim_ptr == 0 { return EFAULT; }
+    struct Rlimit {
+        rlim_cur: u64,
+        rlim_max: u64,
+    }
+    if rlim_ptr == 0 {
+        return EFAULT;
+    }
     // Valeurs par défaut conservative (voir DOC4 resource/rlimit.rs)
     let limit = match resource {
-        0  => Rlimit { rlim_cur: 65536, rlim_max: 65536 },  // RLIMIT_CPU (s)
-        1  => Rlimit { rlim_cur: u64::MAX, rlim_max: u64::MAX }, // RLIMIT_FSIZE
-        2  => Rlimit { rlim_cur: u64::MAX, rlim_max: u64::MAX }, // RLIMIT_DATA
-        3  => Rlimit { rlim_cur: 8 * 1024 * 1024, rlim_max: 64 * 1024 * 1024 }, // RLIMIT_STACK
-        4  => Rlimit { rlim_cur: u64::MAX, rlim_max: u64::MAX }, // RLIMIT_CORE
-        5  => Rlimit { rlim_cur: u64::MAX, rlim_max: u64::MAX }, // RLIMIT_RSS
-        6  => Rlimit { rlim_cur: 4194304, rlim_max: 4194304 },   // RLIMIT_NPROC
-        7  => Rlimit { rlim_cur: 65536, rlim_max: 65536 },  // RLIMIT_NOFILE
-        9  => Rlimit { rlim_cur: u64::MAX, rlim_max: u64::MAX }, // RLIMIT_AS
-        _  => return EINVAL,
+        0 => Rlimit {
+            rlim_cur: 65536,
+            rlim_max: 65536,
+        }, // RLIMIT_CPU (s)
+        1 => Rlimit {
+            rlim_cur: u64::MAX,
+            rlim_max: u64::MAX,
+        }, // RLIMIT_FSIZE
+        2 => Rlimit {
+            rlim_cur: u64::MAX,
+            rlim_max: u64::MAX,
+        }, // RLIMIT_DATA
+        3 => Rlimit {
+            rlim_cur: 8 * 1024 * 1024,
+            rlim_max: 64 * 1024 * 1024,
+        }, // RLIMIT_STACK
+        4 => Rlimit {
+            rlim_cur: u64::MAX,
+            rlim_max: u64::MAX,
+        }, // RLIMIT_CORE
+        5 => Rlimit {
+            rlim_cur: u64::MAX,
+            rlim_max: u64::MAX,
+        }, // RLIMIT_RSS
+        6 => Rlimit {
+            rlim_cur: 4194304,
+            rlim_max: 4194304,
+        }, // RLIMIT_NPROC
+        7 => Rlimit {
+            rlim_cur: 65536,
+            rlim_max: 65536,
+        }, // RLIMIT_NOFILE
+        9 => Rlimit {
+            rlim_cur: u64::MAX,
+            rlim_max: u64::MAX,
+        }, // RLIMIT_AS
+        _ => return EINVAL,
     };
     match write_user_typed::<Rlimit>(rlim_ptr, limit) {
         Ok(_) => 0,
@@ -274,35 +316,49 @@ pub fn sys_getrlimit_compat(resource: u64, rlim_ptr: u64, _a3: u64, _a4: u64, _a
 }
 
 /// `getrusage(who, rusage_ptr)` — utilisation de ressources.
-pub fn sys_getrusage_compat(who: u64, rusage_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_getrusage_compat(
+    who: u64,
+    rusage_ptr: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     use crate::syscall::validation::write_user_typed;
     // struct rusage (Linux) : 18 × timeval (2 × i64) = 144 bytes
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
-    struct Timeval { tv_sec: i64, tv_usec: i64 }
+    struct Timeval {
+        tv_sec: i64,
+        tv_usec: i64,
+    }
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
     struct RUsage {
-        ru_utime:   Timeval,
-        ru_stime:   Timeval,
-        ru_maxrss:  i64,
-        ru_ixrss:   i64,
-        ru_idrss:   i64,
-        ru_isrss:   i64,
-        ru_minflt:  i64,
-        ru_majflt:  i64,
-        ru_nswap:   i64,
+        ru_utime: Timeval,
+        ru_stime: Timeval,
+        ru_maxrss: i64,
+        ru_ixrss: i64,
+        ru_idrss: i64,
+        ru_isrss: i64,
+        ru_minflt: i64,
+        ru_majflt: i64,
+        ru_nswap: i64,
         ru_inblock: i64,
         ru_oublock: i64,
-        ru_msgsnd:  i64,
-        ru_msgrcv:  i64,
+        ru_msgsnd: i64,
+        ru_msgrcv: i64,
         ru_nsignals: i64,
-        ru_nvcsw:   i64,
-        ru_nivcsw:  i64,
+        ru_nvcsw: i64,
+        ru_nivcsw: i64,
     }
-    if rusage_ptr == 0 { return EFAULT; }
+    if rusage_ptr == 0 {
+        return EFAULT;
+    }
     // who: 0=RUSAGE_SELF, -1=RUSAGE_CHILDREN, 1=RUSAGE_THREAD
-    if who > 1 && who != u64::MAX { return EINVAL; }
+    if who > 1 && who != u64::MAX {
+        return EINVAL;
+    }
     // Pour l'instant, retourne des valeurs partielles depuis le TCB courant.
     // L'implémentation complète sera dans process/resource/usage.rs.
     let ru = RUsage::default();
@@ -313,12 +369,29 @@ pub fn sys_getrusage_compat(who: u64, rusage_ptr: u64, _a3: u64, _a4: u64, _a5: 
 }
 
 /// `prctl(option, arg2, arg3, arg4, arg5)` — contrôle du processus.
-pub fn sys_prctl_compat(option: u64, arg2: u64, _arg3: u64, _arg4: u64, _arg5: u64, _a6: u64) -> i64 {
+pub fn sys_prctl_compat(
+    option: u64,
+    arg2: u64,
+    _arg3: u64,
+    _arg4: u64,
+    _arg5: u64,
+    _a6: u64,
+) -> i64 {
     match option {
-        1  => { /* PR_SET_DUMPABLE */ 0 }
-        2  => { /* PR_GET_DUMPABLE */ 1 }
-        4  => { /* PR_GET_UNALIGN  */ 0 }
-        15 => { /* PR_SET_NAME : fixe le nom du thread dans le commslab */
+        1 => {
+            /* PR_SET_DUMPABLE */
+            0
+        }
+        2 => {
+            /* PR_GET_DUMPABLE */
+            1
+        }
+        4 => {
+            /* PR_GET_UNALIGN  */
+            0
+        }
+        15 => {
+            /* PR_SET_NAME : fixe le nom du thread dans le commslab */
             // arg2 = pointeur vers chaîne null-terminée (16 bytes max)
             match crate::syscall::validation::UserStr::from_user(arg2, 16) {
                 Ok(_name) => {
@@ -329,10 +402,22 @@ pub fn sys_prctl_compat(option: u64, arg2: u64, _arg3: u64, _arg4: u64, _arg5: u
                 Err(e) => e.to_errno(),
             }
         }
-        16 => { /* PR_GET_NAME */ EINVAL }
-        22 => { /* PR_SET_SECCOMP : non supporté → EINVAL */ EINVAL }
-        38 => { /* PR_SET_NO_NEW_PRIVS */ 0 }
-        39 => { /* PR_GET_NO_NEW_PRIVS */ 0 }
-        _  => EINVAL,
+        16 => {
+            /* PR_GET_NAME */
+            EINVAL
+        }
+        22 => {
+            /* PR_SET_SECCOMP : non supporté → EINVAL */
+            EINVAL
+        }
+        38 => {
+            /* PR_SET_NO_NEW_PRIVS */
+            0
+        }
+        39 => {
+            /* PR_GET_NO_NEW_PRIVS */
+            0
+        }
+        _ => EINVAL,
     }
 }

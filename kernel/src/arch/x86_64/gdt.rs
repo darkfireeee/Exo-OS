@@ -28,7 +28,6 @@
 //! 0x30/0x38 = TSS   (2 descripteurs × 8 bytes)
 //! ```
 
-
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use super::cpu::topology::MAX_CPUS;
@@ -36,13 +35,13 @@ use super::tss;
 
 // ── Sélecteurs GDT ────────────────────────────────────────────────────────────
 
-pub const GDT_NULL:       u16 = 0x00;
-pub const GDT_KERNEL_CS:  u16 = 0x08;
-pub const GDT_KERNEL_DS:  u16 = 0x10;
-pub const GDT_USER_CS32:  u16 = 0x18 | 3;   // Ring 3
-pub const GDT_USER_DS:    u16 = 0x20 | 3;   // Ring 3
-pub const GDT_USER_CS64:  u16 = 0x28 | 3;   // Ring 3
-pub const GDT_TSS_SEL:    u16 = 0x30;        // TSS (Ring 0)
+pub const GDT_NULL: u16 = 0x00;
+pub const GDT_KERNEL_CS: u16 = 0x08;
+pub const GDT_KERNEL_DS: u16 = 0x10;
+pub const GDT_USER_CS32: u16 = 0x18 | 3; // Ring 3
+pub const GDT_USER_DS: u16 = 0x20 | 3; // Ring 3
+pub const GDT_USER_CS64: u16 = 0x28 | 3; // Ring 3
+pub const GDT_TSS_SEL: u16 = 0x30; // TSS (Ring 0)
 
 /// Valeur MSR STAR bits [47:32] = SYSCALL CS/SS (kernel)
 /// SYSCALL : CS = STAR[47:32], SS = CS+8
@@ -51,7 +50,7 @@ pub const STAR_KERNEL_SEG: u32 = GDT_KERNEL_CS as u32;
 /// Valeur MSR STAR bits [63:48] = SYSRET CS/SS (user)
 /// SYSRET 64-bit : CS = STAR[63:48]+16, SS = STAR[63:48]+8
 /// → USER_CS32 correspond ici, SYSRET 64 = USER_CS32+16 = USER_CS64
-pub const STAR_USER_SEG:   u32 = GDT_USER_CS32 as u32 & !3;  // sans RPL
+pub const STAR_USER_SEG: u32 = GDT_USER_CS32 as u32 & !3; // sans RPL
 
 // ── Descripteur GDT 64 bits ───────────────────────────────────────────────────
 
@@ -65,32 +64,34 @@ impl GdtDescriptor {
     ///
     /// Pour les segments 64-bit, base et limite sont ignorés (toujours 0/0xFFFFF).
     const fn new(
-        base:   u32,
-        limit:  u32,
+        base: u32,
+        limit: u32,
         access: u8,
-        flags:  u8, // bits [7:4] du byte 6 : G, D/B, L, AVL
+        flags: u8, // bits [7:4] du byte 6 : G, D/B, L, AVL
     ) -> Self {
         let limit_lo = limit & 0xFFFF;
-        let base_lo  = (base & 0xFFFF) as u64;
+        let base_lo = (base & 0xFFFF) as u64;
         let base_mid = ((base >> 16) & 0xFF) as u64;
-        let base_hi  = ((base >> 24) & 0xFF) as u64;
+        let base_hi = ((base >> 24) & 0xFF) as u64;
         let limit_hi = ((limit >> 16) & 0xF) as u64;
         let flags_nibble = (flags & 0xF) as u64;
-        let access_byte  = access as u64;
+        let access_byte = access as u64;
 
         Self(
-              limit_lo         as u64
-            | (base_lo  << 16)
-            | (base_mid << 32)
-            | (access_byte << 40)
-            | (limit_hi  << 48)
-            | (flags_nibble << 52)
-            | (base_hi  << 56)
+            limit_lo as u64
+                | (base_lo << 16)
+                | (base_mid << 32)
+                | (access_byte << 40)
+                | (limit_hi << 48)
+                | (flags_nibble << 52)
+                | (base_hi << 56),
         )
     }
 
     /// Descripteur segment nul
-    const fn null() -> Self { Self(0) }
+    const fn null() -> Self {
+        Self(0)
+    }
 
     /// Segment kernel code 64-bit (L=1, D/B=0)
     const fn kernel_code64() -> Self {
@@ -129,21 +130,21 @@ impl GdtDescriptor {
     /// Descripteur TSS (lower 8 bytes d'un System Segment 16-bytes)
     fn tss_lower(base: u64, limit: u32) -> Self {
         // Access : P=1, DPL=0, Type=0x9 (Available 64-bit TSS)
-        let base_lo  = (base & 0xFFFF) as u64;
+        let base_lo = (base & 0xFFFF) as u64;
         let base_mid = ((base >> 16) & 0xFF) as u64;
-        let base_hi  = ((base >> 24) & 0xFF) as u64;
+        let base_hi = ((base >> 24) & 0xFF) as u64;
         let limit_lo = (limit & 0xFFFF) as u64;
         let limit_hi = ((limit >> 16) & 0xF) as u64;
-        let access   = 0x89u64; // P=1, DPL=0, Type=0x9
+        let access = 0x89u64; // P=1, DPL=0, Type=0x9
 
         Self(
-              limit_lo
+            limit_lo
             | (base_lo  << 16)
             | (base_mid << 32)
             | (access   << 40)
             | (limit_hi  << 48)
             | (0xAu64    << 52) // G=1, flags
-            | (base_hi   << 56)
+            | (base_hi   << 56),
         )
     }
 
@@ -169,7 +170,7 @@ pub struct Gdt {
 #[repr(C, packed)]
 pub struct GdtRegister {
     limit: u16,
-    base:  u64,
+    base: u64,
 }
 
 impl Gdt {
@@ -226,7 +227,7 @@ pub unsafe fn init_gdt_for_cpu(cpu_id: usize, kernel_stack_top: u64) {
 
     let gdtr = GdtRegister {
         limit: (core::mem::size_of::<Gdt>() - 1) as u16,
-        base:  gdt.entries.as_ptr() as u64,
+        base: gdt.entries.as_ptr() as u64,
     };
 
     // 1. Charger GDTR
@@ -272,7 +273,9 @@ pub unsafe fn init_gdt_for_cpu(cpu_id: usize, kernel_stack_top: u64) {
 
     // 3. Charger le TSS dans TR
     // SAFETY: GDT_TSS_SEL pointe vers un descripteur TSS valide
-    unsafe { tss::load_tss(GDT_TSS_SEL); }
+    unsafe {
+        tss::load_tss(GDT_TSS_SEL);
+    }
 
     GDT_INITIALIZED.store(true, Ordering::Release);
 }
@@ -292,6 +295,6 @@ pub fn validate_star_layout() -> bool {
     // Avec notre layout : KERNEL_CS(0x08), KERNEL_DS(0x10) → différence = 8 ✓
     // USER_CS32(0x18) → USER_DS(0x20) → USER_CS64(0x28) → diff = 8 ✓
     (GDT_KERNEL_DS - GDT_KERNEL_CS) == 8
-        && (GDT_USER_DS  - GDT_USER_CS32) == 8
+        && (GDT_USER_DS - GDT_USER_CS32) == 8
         && (GDT_USER_CS64 - GDT_USER_CS32) == 16
 }

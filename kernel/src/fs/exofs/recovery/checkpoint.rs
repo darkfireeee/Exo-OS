@@ -11,14 +11,13 @@
 //! - **ARITH-02** : `checked_add` pour l'arithmétique sur les IDs.
 //! - **WRITE-02** : vérification `bytes_written == expected` après sérialisation.
 
-
 extern crate alloc;
+use crate::fs::exofs::core::blob_id::blake3_hash;
+use crate::fs::exofs::core::{EpochId, ExofsError, ExofsResult};
+use crate::scheduler::sync::spinlock::SpinLock;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::sync::spinlock::SpinLock;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId};
-use crate::fs::exofs::core::blob_id::blake3_hash;
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -68,33 +67,33 @@ pub static CHECKPOINT_STORE: CheckpointStore = CheckpointStore::new_const();
 #[derive(Clone, Copy, Debug)]
 pub struct CheckpointHeaderDisk {
     /// Magic "CHKPOINT" (0x43484B504F494E54).
-    pub magic:          u64,
+    pub magic: u64,
     /// Version du format.
-    pub version:        u8,
+    pub version: u8,
     /// Phase de récupération atteinte.
-    pub phase:          u8,
+    pub phase: u8,
     /// Flags (bit 0 = dirty, bit 1 = final).
-    pub flags:          u16,
+    pub flags: u16,
     /// Rembourrage.
-    pub _pad0:          u32,
+    pub _pad0: u32,
     /// Identifiant unique du checkpoint.
-    pub checkpoint_id:  u64,
+    pub checkpoint_id: u64,
     /// EpochId associée.
-    pub epoch_id:       u64,
+    pub epoch_id: u64,
     /// Horodatage TSC.
-    pub tick:           u64,
+    pub tick: u64,
     /// Nombre d'erreurs détectées.
-    pub error_count:    u32,
+    pub error_count: u32,
     /// Nombre de réparations appliquées.
-    pub repair_count:   u32,
+    pub repair_count: u32,
     /// Réservé pour usage futur.
-    pub _reserved:      u64,
+    pub _reserved: u64,
     /// Rembourrage.
-    pub _pad1:          [u8; 8],
+    pub _pad1: [u8; 8],
     /// Blake3 des 64 premiers octets de cet en-tête (champs 0..63).
-    pub header_hash:    [u8; 32],
+    pub header_hash: [u8; 32],
     /// Rembourrage final.
-    pub _pad2:          [u8; 32],
+    pub _pad2: [u8; 32],
 }
 
 // Vérification statique de la taille.
@@ -110,29 +109,24 @@ impl CheckpointHeaderDisk {
     /// `header_hash = Blake3(bytes[0..64])` calculé en fin de construction.
     pub fn build(cp: &Checkpoint) -> Self {
         let mut hdr = Self {
-            magic:         CHECKPOINT_MAGIC,
-            version:       CHECKPOINT_VERSION,
-            phase:         cp.phase as u8,
-            flags:         cp.flags,
-            _pad0:         0,
+            magic: CHECKPOINT_MAGIC,
+            version: CHECKPOINT_VERSION,
+            phase: cp.phase as u8,
+            flags: cp.flags,
+            _pad0: 0,
             checkpoint_id: cp.id.0,
-            epoch_id:      cp.epoch_id.0,
-            tick:          cp.tick,
-            error_count:   cp.error_count,
-            repair_count:  cp.repair_count,
-            _reserved:     0,
-            _pad1:         [0; 8],
-            header_hash:   [0; 32],
-            _pad2:         [0; 32],
+            epoch_id: cp.epoch_id.0,
+            tick: cp.tick,
+            error_count: cp.error_count,
+            repair_count: cp.repair_count,
+            _reserved: 0,
+            _pad1: [0; 8],
+            header_hash: [0; 32],
+            _pad2: [0; 32],
         };
         // Calculer le hash sur les 64 premiers octets (metadata scalaire).
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let raw = unsafe {
-            core::slice::from_raw_parts(
-                &hdr as *const _ as *const u8,
-                64,
-            )
-        };
+        let raw = unsafe { core::slice::from_raw_parts(&hdr as *const _ as *const u8, 64) };
         hdr.header_hash = blake3_hash(raw);
         hdr
     }
@@ -196,23 +190,23 @@ impl CheckpointHeaderDisk {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RecoveryPhase {
     /// Aucune phase entamée.
-    None        = 0,
+    None = 0,
     /// Slot lu et validé.
-    SlotRead    = 1,
+    SlotRead = 1,
     /// Epoch identifiée.
-    EpochFound  = 2,
+    EpochFound = 2,
     /// Epoch rejouée.
-    Replayed    = 3,
+    Replayed = 3,
     /// Phase 1 fsck terminée (en-têtes).
-    Phase1Done  = 4,
+    Phase1Done = 4,
     /// Phase 2 fsck terminée (comptage blob).
-    Phase2Done  = 5,
+    Phase2Done = 5,
     /// Phase 3 fsck terminée (cohérence snapshots).
-    Phase3Done  = 6,
+    Phase3Done = 6,
     /// Phase 4 fsck terminée (orphans).
-    Phase4Done  = 7,
+    Phase4Done = 7,
     /// Récupération complète.
-    Complete    = 8,
+    Complete = 8,
 }
 
 impl RecoveryPhase {
@@ -235,7 +229,11 @@ impl RecoveryPhase {
     pub fn next(self) -> Option<Self> {
         let n = self as u8;
         let nxt = n.checked_add(1)?;
-        if nxt > Self::Complete as u8 { None } else { Some(Self::from_u8(nxt)) }
+        if nxt > Self::Complete as u8 {
+            None
+        } else {
+            Some(Self::from_u8(nxt))
+        }
     }
 
     /// `true` si la récupération est complète.
@@ -265,28 +263,28 @@ impl CheckpointId {
 #[derive(Clone, Copy, Debug)]
 pub struct Checkpoint {
     /// Identifiant unique.
-    pub id:           CheckpointId,
+    pub id: CheckpointId,
     /// Phase de récupération atteinte.
-    pub phase:        RecoveryPhase,
+    pub phase: RecoveryPhase,
     /// EpochId associée.
-    pub epoch_id:     EpochId,
+    pub epoch_id: EpochId,
     /// Horodatage TSC.
-    pub tick:         u64,
+    pub tick: u64,
     /// Nombre d'erreurs détectées à ce point.
-    pub error_count:  u32,
+    pub error_count: u32,
     /// Nombre de réparations appliquées à ce point.
     pub repair_count: u32,
     /// Flags (bit 0 = dirty, bit 1 = final).
-    pub flags:        u16,
+    pub flags: u16,
 }
 
 impl Checkpoint {
     /// Construit un checkpoint pour la phase donnée.
     pub fn new(
-        id:           CheckpointId,
-        phase:        RecoveryPhase,
-        epoch_id:     EpochId,
-        error_count:  u32,
+        id: CheckpointId,
+        phase: RecoveryPhase,
+        epoch_id: EpochId,
+        error_count: u32,
         repair_count: u32,
     ) -> Self {
         Self {
@@ -327,7 +325,7 @@ pub struct CheckpointStore {
     /// Map triée `checkpoint_id → Checkpoint`.
     checkpoints: SpinLock<BTreeMap<u64, Checkpoint>>,
     /// Générateur d'ID monotone.
-    next_id:     AtomicU64,
+    next_id: AtomicU64,
 }
 
 impl CheckpointStore {
@@ -335,7 +333,7 @@ impl CheckpointStore {
     pub const fn new_const() -> Self {
         Self {
             checkpoints: SpinLock::new(BTreeMap::new()),
-            next_id:     AtomicU64::new(1),
+            next_id: AtomicU64::new(1),
         }
     }
 
@@ -350,9 +348,9 @@ impl CheckpointStore {
     /// `checked_add` pour l'génération d'ID.
     pub fn save(
         &self,
-        phase:        RecoveryPhase,
-        epoch_id:     EpochId,
-        error_count:  u32,
+        phase: RecoveryPhase,
+        epoch_id: EpochId,
+        error_count: u32,
         repair_count: u32,
     ) -> ExofsResult<CheckpointId> {
         // Générer l'ID (ARITH-02).
@@ -378,20 +376,20 @@ impl CheckpointStore {
     }
 
     /// Sauvegarde un checkpoint rapide (tick, phase, nombre d'erreurs).
-    pub fn save_checkpoint(&self, tick: u64, phase: RecoveryPhase, error_count: u32) -> ExofsResult<CheckpointId> {
+    pub fn save_checkpoint(
+        &self,
+        tick: u64,
+        phase: RecoveryPhase,
+        error_count: u32,
+    ) -> ExofsResult<CheckpointId> {
         use crate::fs::exofs::core::types::EpochId;
         self.save(phase, EpochId(tick), error_count, 0)
     }
 
-
     /// Met à jour un checkpoint existant (ex. après réparation).
     ///
     /// Retourne `ExofsError::BlobNotFound` si l'ID est inconnu.
-    pub fn update_repair_count(
-        &self,
-        id: CheckpointId,
-        delta: u32,
-    ) -> ExofsResult<()> {
+    pub fn update_repair_count(&self, id: CheckpointId, delta: u32) -> ExofsResult<()> {
         let mut store = self.checkpoints.lock();
         let cp = store.get_mut(&id.0).ok_or(ExofsError::BlobNotFound)?;
         // ARITH-02 : checked_add.
@@ -448,18 +446,16 @@ impl CheckpointStore {
     ///
     /// # HDR-03
     /// `CheckpointHeaderDisk::from_bytes` vérifie magic + checksum en premier.
-    pub fn deserialize_and_validate(
-        buf: &[u8; CHECKPOINT_HEADER_SIZE],
-    ) -> ExofsResult<Checkpoint> {
+    pub fn deserialize_and_validate(buf: &[u8; CHECKPOINT_HEADER_SIZE]) -> ExofsResult<Checkpoint> {
         let hdr = CheckpointHeaderDisk::from_bytes(buf)?;
         Ok(Checkpoint {
-            id:           CheckpointId(hdr.checkpoint_id),
-            phase:        RecoveryPhase::from_u8(hdr.phase),
-            epoch_id:     EpochId(hdr.epoch_id),
-            tick:         hdr.tick,
-            error_count:  hdr.error_count,
+            id: CheckpointId(hdr.checkpoint_id),
+            phase: RecoveryPhase::from_u8(hdr.phase),
+            epoch_id: EpochId(hdr.epoch_id),
+            tick: hdr.tick,
+            error_count: hdr.error_count,
             repair_count: hdr.repair_count,
-            flags:        hdr.flags,
+            flags: hdr.flags,
         })
     }
 
@@ -531,13 +527,13 @@ impl CheckpointStore {
 #[derive(Clone, Copy, Debug)]
 pub struct CheckpointDiagnostic {
     /// Nombre de checkpoints en mémoire.
-    pub count:         usize,
+    pub count: usize,
     /// Capacité maximale.
-    pub max_capacity:  usize,
+    pub max_capacity: usize,
     /// Phase la plus avancée parmi les checkpoints.
-    pub latest_phase:  RecoveryPhase,
+    pub latest_phase: RecoveryPhase,
     /// Total cumulé d'erreurs détectées.
-    pub total_errors:  u64,
+    pub total_errors: u64,
     /// Total cumulé de réparations appliquées.
     pub total_repairs: u64,
 }
@@ -551,7 +547,9 @@ mod tests {
     #[test]
     fn test_save_and_get() {
         let store = CheckpointStore::new_const();
-        let id = store.save(RecoveryPhase::Phase1Done, EpochId(42), 2, 0).unwrap();
+        let id = store
+            .save(RecoveryPhase::Phase1Done, EpochId(42), 2, 0)
+            .unwrap();
         let cp = store.get(id).unwrap();
         assert_eq!(cp.phase, RecoveryPhase::Phase1Done);
         assert_eq!(cp.epoch_id, EpochId(42));
@@ -561,8 +559,12 @@ mod tests {
     #[test]
     fn test_latest_and_furthest() {
         let store = CheckpointStore::new_const();
-        store.save(RecoveryPhase::SlotRead,   EpochId(1), 0, 0).unwrap();
-        store.save(RecoveryPhase::Phase2Done, EpochId(1), 0, 0).unwrap();
+        store
+            .save(RecoveryPhase::SlotRead, EpochId(1), 0, 0)
+            .unwrap();
+        store
+            .save(RecoveryPhase::Phase2Done, EpochId(1), 0, 0)
+            .unwrap();
         let furthest = store.furthest_phase().unwrap();
         assert_eq!(furthest.phase, RecoveryPhase::Phase2Done);
     }
@@ -590,7 +592,9 @@ mod tests {
     fn test_eviction() {
         let store = CheckpointStore::new_const();
         for i in 0..(CHECKPOINT_MAX_IN_MEMORY + 5) {
-            store.save(RecoveryPhase::None, EpochId(i as u64), 0, 0).unwrap();
+            store
+                .save(RecoveryPhase::None, EpochId(i as u64), 0, 0)
+                .unwrap();
         }
         assert_eq!(store.count(), CHECKPOINT_MAX_IN_MEMORY);
     }
@@ -598,7 +602,9 @@ mod tests {
     #[test]
     fn test_clear() {
         let store = CheckpointStore::new_const();
-        store.save(RecoveryPhase::SlotRead, EpochId(1), 0, 0).unwrap();
+        store
+            .save(RecoveryPhase::SlotRead, EpochId(1), 0, 0)
+            .unwrap();
         store.clear();
         assert_eq!(store.count(), 0);
     }

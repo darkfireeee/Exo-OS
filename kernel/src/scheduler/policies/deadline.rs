@@ -17,10 +17,9 @@
 // La run queue EDF trie par `deadline_abs` croissant.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::core::task::{ThreadControlBlock, DeadlineParams, SchedPolicy};
+use crate::scheduler::core::task::{DeadlineParams, SchedPolicy, ThreadControlBlock};
 use crate::scheduler::timer::clock::monotonic_ns;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Comptabilité d'admission
@@ -58,8 +57,12 @@ pub enum DeadlineError {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn validate_params(p: &DeadlineParams) -> Result<(), DeadlineError> {
-    if p.period_ns == 0 { return Err(DeadlineError::InvalidParams); }
-    if p.deadline_ns > p.period_ns { return Err(DeadlineError::InvalidParams); }
+    if p.period_ns == 0 {
+        return Err(DeadlineError::InvalidParams);
+    }
+    if p.deadline_ns > p.period_ns {
+        return Err(DeadlineError::InvalidParams);
+    }
     if p.runtime_ns == 0 || p.runtime_ns > p.deadline_ns {
         return Err(DeadlineError::InvalidParams);
     }
@@ -126,7 +129,8 @@ pub fn release_thread(fraction: u64) {
 pub fn refresh_deadline(tcb: &mut ThreadControlBlock) {
     let now = monotonic_ns();
     let deadline_ns = tcb.dl_period;
-    tcb.deadline_abs.store(now.saturating_add(deadline_ns), Ordering::Release);
+    tcb.deadline_abs
+        .store(now.saturating_add(deadline_ns), Ordering::Release);
 }
 
 /// Vérifie si le thread a manqué son échéance.
@@ -144,17 +148,22 @@ pub fn check_deadline_miss(tcb: &ThreadControlBlock) -> bool {
 /// Retourne le temps restant (en ns) avant l'échéance absolue du thread.
 /// Retourne 0 si l'échéance est déjà dépassée ou non initialisée.
 pub fn remaining_budget(tcb: &ThreadControlBlock) -> u64 {
-    let now          = monotonic_ns();
+    let now = monotonic_ns();
     let deadline_abs = tcb.deadline_abs.load(Ordering::Relaxed);
-    if deadline_abs == 0 || now >= deadline_abs { 0 }
-    else { deadline_abs - now }
+    if deadline_abs == 0 || now >= deadline_abs {
+        0
+    } else {
+        deadline_abs - now
+    }
 }
 
 /// Appelé lors du tick timer pour un thread DEADLINE.
 /// Décrémente le budget restant, retourne `true` si le budget est épuisé
 /// (le thread doit se bloquer jusqu'à sa prochaine période).
 pub fn deadline_tick(tcb: &ThreadControlBlock, elapsed_ns: u64) -> bool {
-    if tcb.policy != SchedPolicy::Deadline { return false; }
+    if tcb.policy != SchedPolicy::Deadline {
+        return false;
+    }
     let budget = remaining_budget(tcb);
     elapsed_ns >= budget
 }

@@ -16,12 +16,12 @@
 // RÈGLE ROUTE-02 : MAX_HOPS = 8 pour éviter les boucles infinies.
 // RÈGLE ROUTE-03 : les routes circulaires sont détectées et retournent Err(Loop).
 
-use core::sync::atomic::{AtomicU32, AtomicBool, AtomicU64, Ordering};
 use core::num::NonZeroU64;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::ipc::message::builder::IpcMessage;
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ---------------------------------------------------------------------------
@@ -160,7 +160,7 @@ impl RoutingTable {
 
         loop {
             match self.lookup(current) {
-                None => return Ok(current),    // fin de chaîne
+                None => return Ok(current), // fin de chaîne
                 Some(next) => {
                     if next == start || next == current {
                         return Err(IpcError::Loop);
@@ -216,7 +216,12 @@ impl IpcRouter {
     // -----------------------------------------------------------------------
 
     /// Ajoute une route src → next_hop avec un coût optionnel.
-    pub fn add_route(&self, src: EndpointId, next_hop: EndpointId, cost: u32) -> Result<(), IpcError> {
+    pub fn add_route(
+        &self,
+        src: EndpointId,
+        next_hop: EndpointId,
+        cost: u32,
+    ) -> Result<(), IpcError> {
         let guard = self.table.lock();
         guard.add(src.0.get() as u32, next_hop.0.get() as u32, cost)
     }
@@ -230,7 +235,8 @@ impl IpcRouter {
     /// Lookup direct : next-hop immédiat pour src.
     pub fn next_hop(&self, src: EndpointId) -> Option<EndpointId> {
         let guard = self.table.lock();
-        guard.lookup(src.0.get() as u32)
+        guard
+            .lookup(src.0.get() as u32)
             .and_then(|v| NonZeroU64::new(v as u64))
             .map(EndpointId)
     }
@@ -239,7 +245,9 @@ impl IpcRouter {
     pub fn resolve(&self, src: EndpointId) -> Result<EndpointId, IpcError> {
         let guard = self.table.lock();
         match guard.resolve_final(src.0.get() as u32) {
-            Ok(id) => Ok(NonZeroU64::new(id as u64).map(EndpointId).unwrap_or(EndpointId::INVALID)),
+            Ok(id) => Ok(NonZeroU64::new(id as u64)
+                .map(EndpointId)
+                .unwrap_or(EndpointId::INVALID)),
             Err(e) => {
                 self.loops_detected.fetch_add(1, Ordering::Relaxed);
                 Err(e)
@@ -266,7 +274,9 @@ impl IpcRouter {
         match guard.resolve_final(dst_raw) {
             Ok(final_dst) => {
                 if final_dst != dst_raw {
-                    msg.dst = NonZeroU64::new(final_dst as u64).map(EndpointId).unwrap_or(EndpointId::INVALID);
+                    msg.dst = NonZeroU64::new(final_dst as u64)
+                        .map(EndpointId)
+                        .unwrap_or(EndpointId::INVALID);
                     self.forwarded.fetch_add(1, Ordering::Relaxed);
                     IPC_STATS.record(StatEvent::MessageSent);
                 }

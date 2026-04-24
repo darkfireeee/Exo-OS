@@ -10,35 +10,25 @@ pub mod page_table;
 pub mod vma;
 
 pub use address_space::{
-    KernelAddressSpace, KERNEL_AS,
-    Mapper,
-    TlbFlushType, flush_single, flush_range, flush_all,
-    shootdown, shootdown_sync, register_tlb_ipi_sender,
-    TLB_QUEUE, TLB_STATS,
-    UserAddressSpace, UserAsStats,
+    flush_all, flush_range, flush_single, register_tlb_ipi_sender, shootdown, shootdown_sync,
+    KernelAddressSpace, Mapper, TlbFlushType, UserAddressSpace, UserAsStats, KERNEL_AS, TLB_QUEUE,
+    TLB_STATS,
 };
 
 pub use page_table::{
-    PageTableEntry, PageTable, PageTableLevel,
-    PageTableWalker, WalkResult, FrameAllocatorForWalk,
-    PageTableBuilder,
-    KPTI, should_enable_kpti,
-    read_cr3, write_cr3, invlpg,
+    invlpg, read_cr3, should_enable_kpti, write_cr3, FrameAllocatorForWalk, PageTable,
+    PageTableBuilder, PageTableEntry, PageTableLevel, PageTableWalker, WalkResult, KPTI,
 };
 
 pub use vma::{
-    VmaDescriptor, VmaFlags, VmaBacking,
-    VmaTree, MAX_VMAS_PER_PROCESS,
-    VmaAllocParams, find_gap, split_vma, validate_vma,
-    CowFrameAllocator, CowBreakResult, cow_break,
+    cow_break, find_gap, split_vma, validate_vma, CowBreakResult, CowFrameAllocator,
+    VmaAllocParams, VmaBacking, VmaDescriptor, VmaFlags, VmaTree, MAX_VMAS_PER_PROCESS,
 };
 
 pub use fault::{
-    FaultCause, FaultContext, FaultResult,
-    handle_page_fault, FAULT_STATS, FaultAllocator,
+    handle_page_fault, FaultAllocator, FaultCause, FaultContext, FaultResult, FAULT_STATS,
 };
 pub use mmap::{
-    do_mmap, do_munmap, do_mprotect, do_brk,
-    map_shm_into_process, ShmMapIntoResult, ShmMapError,
-    MmapError, CurrentAsGetterFn, register_current_as_getter,
+    do_brk, do_mmap, do_mprotect, do_munmap, map_shm_into_process, register_current_as_getter,
+    CurrentAsGetterFn, MmapError, ShmMapError, ShmMapIntoResult,
 };

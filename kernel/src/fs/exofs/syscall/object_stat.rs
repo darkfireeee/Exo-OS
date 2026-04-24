@@ -2,26 +2,26 @@
 //!
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
-use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use super::validation::{
-    read_user_path_heap, write_user_buf, exofs_err_to_errno,
-    verify_cap, CapabilityType, EFAULT, EINVAL,
-};
 use super::object_fd::OBJECT_TABLE;
+use super::validation::{
+    exofs_err_to_errno, read_user_path_heap, verify_cap, write_user_buf, CapabilityType, EFAULT,
+    EINVAL,
+};
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Flags stat
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod stat_flags {
-    pub const USE_FD:        u32 = 0x0001;
-    pub const NO_FOLLOW:     u32 = 0x0002;
-    pub const INCLUDE_HASH:  u32 = 0x0004;
+    pub const USE_FD: u32 = 0x0001;
+    pub const NO_FOLLOW: u32 = 0x0002;
+    pub const INCLUDE_HASH: u32 = 0x0004;
     pub const INCLUDE_EPOCH: u32 = 0x0008;
-    pub const VALID_MASK:    u32 = USE_FD | NO_FOLLOW | INCLUDE_HASH | INCLUDE_EPOCH;
+    pub const VALID_MASK: u32 = USE_FD | NO_FOLLOW | INCLUDE_HASH | INCLUDE_EPOCH;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,27 +33,27 @@ pub mod stat_flags {
 #[derive(Clone, Copy, Debug)]
 pub struct ObjectStat {
     /// Identifiant blob (clés du cache).
-    pub blob_id:      [u8; 32],
+    pub blob_id: [u8; 32],
     /// Identifiant objet (Blake3 XOR 0x5A).
-    pub object_id:    [u8; 32],
+    pub object_id: [u8; 32],
     /// Taille en octets du contenu.
-    pub size:         u64,
+    pub size: u64,
     /// Numéro d'époch courant.
-    pub epoch_id:     u64,
+    pub epoch_id: u64,
     /// Nombre de références (hard links).
-    pub link_count:   u32,
+    pub link_count: u32,
     /// Flags d'accès (open_flags).
     pub access_flags: u32,
     /// Type d'objet : 0=fichier, 1=répertoire, 2=lien, 3=snapshot.
-    pub kind:         u8,
+    pub kind: u8,
     /// Alignement.
-    pub _pad:         [u8; 7],
+    pub _pad: [u8; 7],
     /// Hash du contenu (Blake3, 32 octets) — rempli si INCLUDE_HASH.
     pub content_hash: [u8; 32],
     /// UID propriétaire.
-    pub owner_uid:    u64,
+    pub owner_uid: u64,
     /// Réservé pour extensions ABI futures.
-    pub _reserved:    [u8; 40],
+    pub _reserved: [u8; 40],
 }
 
 const _: () = assert!(
@@ -85,20 +85,29 @@ impl ObjectStat {
         let bid = blob_id.as_bytes();
         let mut obj_id = [0u8; 32];
         let mut i = 0usize;
-        while i < 32 { obj_id[i] = bid[i] ^ 0x5A; i = i.wrapping_add(1); }
+        while i < 32 {
+            obj_id[i] = bid[i] ^ 0x5A;
+            i = i.wrapping_add(1);
+        }
 
         let mut s = ObjectStat {
-            size:         data.len() as u64,
+            size: data.len() as u64,
             epoch_id,
-            link_count:   1,
+            link_count: 1,
             access_flags: 0,
             kind,
             ..Self::default()
         };
         let mut j = 0usize;
-        while j < 32 { s.blob_id[j] = bid[j]; j = j.wrapping_add(1); }
+        while j < 32 {
+            s.blob_id[j] = bid[j];
+            j = j.wrapping_add(1);
+        }
         let mut k = 0usize;
-        while k < 32 { s.object_id[k] = obj_id[k]; k = k.wrapping_add(1); }
+        while k < 32 {
+            s.object_id[k] = obj_id[k];
+            k = k.wrapping_add(1);
+        }
         s
     }
 
@@ -107,7 +116,10 @@ impl ObjectStat {
         let h = BlobId::from_bytes_blake3(data);
         let hb = h.as_bytes();
         let mut i = 0usize;
-        while i < 32 { self.content_hash[i] = hb[i]; i = i.wrapping_add(1); }
+        while i < 32 {
+            self.content_hash[i] = hb[i];
+            i = i.wrapping_add(1);
+        }
     }
 }
 
@@ -116,10 +128,11 @@ impl ObjectStat {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn stat_blob(blob_id: BlobId, flags: u32) -> ExofsResult<ObjectStat> {
-    let data = BLOB_CACHE.get(&blob_id)
-        .ok_or(ExofsError::BlobNotFound)?;
+    let data = BLOB_CACHE.get(&blob_id).ok_or(ExofsError::BlobNotFound)?;
     let mut s = ObjectStat::from_blob(blob_id, &data, 0, 0);
-    if flags & stat_flags::INCLUDE_HASH != 0 { s.fill_hash(&data); }
+    if flags & stat_flags::INCLUDE_HASH != 0 {
+        s.fill_hash(&data);
+    }
     Ok(s)
 }
 
@@ -130,12 +143,13 @@ fn stat_blob(blob_id: BlobId, flags: u32) -> ExofsResult<ObjectStat> {
 fn stat_by_fd(fd: u32, flags: u32) -> ExofsResult<ObjectStat> {
     let entry = OBJECT_TABLE.get(fd)?;
     let blob_id = entry.blob_id;
-    let data = BLOB_CACHE.get(&blob_id)
-        .ok_or(ExofsError::BlobNotFound)?;
+    let data = BLOB_CACHE.get(&blob_id).ok_or(ExofsError::BlobNotFound)?;
     let mut s = ObjectStat::from_blob(blob_id, &data, entry.epoch_id, 0);
     s.access_flags = entry.flags;
-    s.owner_uid    = entry.owner_uid;
-    if flags & stat_flags::INCLUDE_HASH != 0 { s.fill_hash(&data); }
+    s.owner_uid = entry.owner_uid;
+    if flags & stat_flags::INCLUDE_HASH != 0 {
+        s.fill_hash(&data);
+    }
     Ok(s)
 }
 
@@ -144,7 +158,9 @@ fn stat_by_fd(fd: u32, flags: u32) -> ExofsResult<ObjectStat> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn stat_by_path(path_bytes: &[u8], path_len: usize, flags: u32) -> ExofsResult<ObjectStat> {
-    if path_len == 0 { return Err(ExofsError::InvalidArgument); }
+    if path_len == 0 {
+        return Err(ExofsError::InvalidArgument);
+    }
     let blob_id = BlobId::from_bytes_blake3(&path_bytes[..path_len]);
     stat_blob(blob_id, flags)
 }
@@ -159,15 +175,19 @@ fn stat_by_path(path_bytes: &[u8], path_len: usize, flags: u32) -> ExofsResult<O
 /// Sinon : `fd_or_path` est un pointeur userspace vers une chaîne de chemin.
 pub fn sys_exofs_object_stat(
     fd_or_path: u64,
-    _length:     u64,
-    flags:      u64,
-    out_ptr:    u64,
-    _a5:        u64,
+    _length: u64,
+    flags: u64,
+    out_ptr: u64,
+    _a5: u64,
     cap_rights: u64,
 ) -> i64 {
-    if out_ptr == 0 { return EFAULT; }
+    if out_ptr == 0 {
+        return EFAULT;
+    }
     let f = flags as u32;
-    if f & !stat_flags::VALID_MASK != 0 { return EINVAL; }
+    if f & !stat_flags::VALID_MASK != 0 {
+        return EINVAL;
+    }
 
     let result = if f & stat_flags::USE_FD != 0 {
         if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectStat) {
@@ -175,21 +195,23 @@ pub fn sys_exofs_object_stat(
         }
         let fd = fd_or_path as u32;
         match stat_by_fd(fd, f) {
-            Ok(s)  => s,
+            Ok(s) => s,
             Err(e) => return exofs_err_to_errno(e),
         }
     } else {
-        if fd_or_path == 0 { return EFAULT; }
+        if fd_or_path == 0 {
+            return EFAULT;
+        }
         let mut path_buf: Vec<u8> = Vec::new();
         let actual_len = match read_user_path_heap(fd_or_path, &mut path_buf) {
-            Ok(l)  => l,
+            Ok(l) => l,
             Err(e) => return e,
         };
         if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectStat) {
             return e;
         }
         match stat_by_path(&path_buf, actual_len, f) {
-            Ok(s)  => s,
+            Ok(s) => s,
             Err(e) => return exofs_err_to_errno(e),
         }
     };
@@ -202,7 +224,7 @@ pub fn sys_exofs_object_stat(
         )
     };
     match write_user_buf(out_ptr, bytes) {
-        Ok(_)  => 0i64,
+        Ok(_) => 0i64,
         Err(e) => e,
     }
 }
@@ -225,9 +247,11 @@ pub fn object_epoch(blob_id: &BlobId) -> u64 {
 pub fn is_directory(blob_id: &BlobId) -> bool {
     let data = match BLOB_CACHE.get(blob_id) {
         Some(d) => d,
-        None    => return false,
+        None => return false,
     };
-    if data.len() < 4 { return false; }
+    if data.len() < 4 {
+        return false;
+    }
     data[0] == 0xCA && data[1] == 0xFE && data[2] == 0xD0 && data[3] == 0xD1
 }
 
@@ -235,7 +259,8 @@ pub fn is_directory(blob_id: &BlobId) -> bool {
 /// OOM-02 : try_reserve. RECUR-01 : while.
 pub fn stat_batch(blob_ids: &[BlobId], flags: u32) -> ExofsResult<Vec<ObjectStat>> {
     let mut out: Vec<ObjectStat> = Vec::new();
-    out.try_reserve(blob_ids.len()).map_err(|_| ExofsError::NoMemory)?;
+    out.try_reserve(blob_ids.len())
+        .map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < blob_ids.len() {
         let s = stat_blob(blob_ids[i], flags).unwrap_or_default();
@@ -326,10 +351,7 @@ mod tests {
 
     #[test]
     fn test_stat_batch() {
-        let ids = [
-            insert(b"/batch/s1", b"a"),
-            insert(b"/batch/s2", b"bb"),
-        ];
+        let ids = [insert(b"/batch/s1", b"a"), insert(b"/batch/s2", b"bb")];
         let results = stat_batch(&ids, 0).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[1].size, 2);
@@ -372,7 +394,10 @@ pub fn same_object(a: &ObjectStat, b: &ObjectStat) -> bool {
     let mut eq = true;
     let mut i = 0usize;
     while i < 32 {
-        if a.blob_id[i] != b.blob_id[i] { eq = false; break; }
+        if a.blob_id[i] != b.blob_id[i] {
+            eq = false;
+            break;
+        }
         i = i.wrapping_add(1);
     }
     eq
@@ -385,9 +410,7 @@ pub fn serialize_stat(s: &ObjectStat) -> ExofsResult<Vec<u8>> {
     let mut buf: Vec<u8> = Vec::new();
     buf.try_reserve(size).map_err(|_| ExofsError::NoMemory)?;
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-    let raw = unsafe {
-        core::slice::from_raw_parts(s as *const ObjectStat as *const u8, size)
-    };
+    let raw = unsafe { core::slice::from_raw_parts(s as *const ObjectStat as *const u8, size) };
     let mut i = 0usize;
     while i < size {
         buf.push(raw[i]);
@@ -399,12 +422,13 @@ pub fn serialize_stat(s: &ObjectStat) -> ExofsResult<Vec<u8>> {
 /// Désérialise un `ObjectStat` depuis un slice d'octets.
 pub fn deserialize_stat(bytes: &[u8]) -> ExofsResult<ObjectStat> {
     let size = core::mem::size_of::<ObjectStat>();
-    if bytes.len() < size { return Err(ExofsError::InvalidArgument); }
+    if bytes.len() < size {
+        return Err(ExofsError::InvalidArgument);
+    }
     let mut s = ObjectStat::default();
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-    let dst = unsafe {
-        core::slice::from_raw_parts_mut(&mut s as *mut ObjectStat as *mut u8, size)
-    };
+    let dst =
+        unsafe { core::slice::from_raw_parts_mut(&mut s as *mut ObjectStat as *mut u8, size) };
     let mut i = 0usize;
     while i < size {
         dst[i] = bytes[i];
@@ -419,7 +443,10 @@ pub fn same_content(a: &ObjectStat, b: &ObjectStat) -> bool {
     let mut eq = true;
     let mut i = 0usize;
     while i < 32 {
-        if a.content_hash[i] != b.content_hash[i] { eq = false; break; }
+        if a.content_hash[i] != b.content_hash[i] {
+            eq = false;
+            break;
+        }
         i = i.wrapping_add(1);
     }
     eq
@@ -430,7 +457,10 @@ pub fn is_content_known(s: &ObjectStat) -> bool {
     let mut nonzero = false;
     let mut i = 0usize;
     while i < 32 {
-        if s.content_hash[i] != 0 { nonzero = true; break; }
+        if s.content_hash[i] != 0 {
+            nonzero = true;
+            break;
+        }
         i = i.wrapping_add(1);
     }
     nonzero
@@ -444,11 +474,11 @@ pub fn is_content_known(s: &ObjectStat) -> bool {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CompactStat {
-    pub blob_id:  [u8; 32],
-    pub size:     u64,
+    pub blob_id: [u8; 32],
+    pub size: u64,
     pub epoch_id: u64,
-    pub kind:     u8,
-    pub _pad:     [u8; 7],
+    pub kind: u8,
+    pub _pad: [u8; 7],
 }
 
 const _: () = assert!(core::mem::size_of::<CompactStat>() == 56);
@@ -456,13 +486,16 @@ const _: () = assert!(core::mem::size_of::<CompactStat>() == 56);
 impl CompactStat {
     pub fn from_full(s: &ObjectStat) -> Self {
         let mut c = Self {
-            size:     s.size,
+            size: s.size,
             epoch_id: s.epoch_id,
-            kind:     s.kind,
+            kind: s.kind,
             ..Self::default()
         };
         let mut i = 0usize;
-        while i < 32 { c.blob_id[i] = s.blob_id[i]; i = i.wrapping_add(1); }
+        while i < 32 {
+            c.blob_id[i] = s.blob_id[i];
+            i = i.wrapping_add(1);
+        }
         c
     }
 }
@@ -479,13 +512,19 @@ mod advanced_tests {
 
     #[test]
     fn test_size_delta_positive() {
-        let s = ObjectStat { size: 100, ..ObjectStat::default() };
+        let s = ObjectStat {
+            size: 100,
+            ..ObjectStat::default()
+        };
         assert_eq!(size_delta(&s, 150), 50);
     }
 
     #[test]
     fn test_size_delta_negative_clamped() {
-        let s = ObjectStat { size: 200, ..ObjectStat::default() };
+        let s = ObjectStat {
+            size: 200,
+            ..ObjectStat::default()
+        };
         // saturating_sub clamp à 0 donc delta = 0
         assert_eq!(size_delta(&s, 50), 0);
     }

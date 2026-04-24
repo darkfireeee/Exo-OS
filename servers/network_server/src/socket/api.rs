@@ -131,19 +131,25 @@ pub fn send_heartbeat() -> NetworkReply {
 
 #[inline]
 pub fn read_u16(payload: &[u8], offset: usize) -> Result<u16, i64> {
-    let bytes = payload.get(offset..offset.saturating_add(2)).ok_or(syscall::EINVAL)?;
+    let bytes = payload
+        .get(offset..offset.saturating_add(2))
+        .ok_or(syscall::EINVAL)?;
     Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
 }
 
 #[inline]
 pub fn read_u32(payload: &[u8], offset: usize) -> Result<u32, i64> {
-    let bytes = payload.get(offset..offset.saturating_add(4)).ok_or(syscall::EINVAL)?;
+    let bytes = payload
+        .get(offset..offset.saturating_add(4))
+        .ok_or(syscall::EINVAL)?;
     Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
 #[inline]
 pub fn read_u64(payload: &[u8], offset: usize) -> Result<u64, i64> {
-    let bytes = payload.get(offset..offset.saturating_add(8)).ok_or(syscall::EINVAL)?;
+    let bytes = payload
+        .get(offset..offset.saturating_add(8))
+        .ok_or(syscall::EINVAL)?;
     Ok(u64::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]))

@@ -26,7 +26,6 @@
 //
 // COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use spin::Mutex;
 
@@ -53,19 +52,19 @@ fn nop_wake(_tid: u64, _code: i32) {}
 #[repr(C)]
 pub struct FutexWaiter {
     /// Adresse virtuelle sur laquelle ce thread attend.
-    pub virt_addr:    u64,
+    pub virt_addr: u64,
     /// Valeur attendue (vérifiée au moment de l'enfilement).
     pub expected_val: u32,
     /// Thread ID du waiter.
-    pub tid:          u64,
+    pub tid: u64,
     /// Fonction de réveil injectée par le scheduler.
-    pub wake_fn:      WakeFn,
+    pub wake_fn: WakeFn,
     /// Code de retour à transmettre au thread à son réveil.
-    pub wake_code:    i32,
+    pub wake_code: i32,
     /// Indicateur : le waiter a été réveillé / annulé.
-    pub woken:        AtomicBool,
+    pub woken: AtomicBool,
     /// Lien dans la liste intrusive du bucket.
-    pub next:         Option<core::ptr::NonNull<FutexWaiter>>,
+    pub next: Option<core::ptr::NonNull<FutexWaiter>>,
     _pad: [u8; 7],
 }
 
@@ -102,7 +101,10 @@ unsafe impl Sync for BucketInner {}
 
 impl BucketInner {
     const fn new() -> Self {
-        Self { head: None, count: 0 }
+        Self {
+            head: None,
+            count: 0,
+        }
     }
 
     /// Enfile `waiter` en tête de liste.
@@ -127,7 +129,7 @@ impl BucketInner {
                 return true;
             }
             prev = &mut (*node.as_ptr()).next;
-            cur  = (*node.as_ptr()).next;
+            cur = (*node.as_ptr()).next;
         }
         false
     }
@@ -161,7 +163,7 @@ impl BucketInner {
                 cur = next;
             } else {
                 prev = &mut (*node.as_ptr()).next;
-                cur  = next;
+                cur = next;
             }
         }
         woken
@@ -173,10 +175,10 @@ impl BucketInner {
     /// # Safety : pointeurs valides pendant l'opération.
     unsafe fn requeue_to(
         &mut self,
-        src_addr:     u64,
-        dst_addr:     u64,
-        dst_inner:    &mut BucketInner,
-        max_requeue:  u32,
+        src_addr: u64,
+        dst_addr: u64,
+        dst_inner: &mut BucketInner,
+        max_requeue: u32,
     ) -> u32 {
         let mut requeued = 0u32;
         let mut prev: *mut Option<core::ptr::NonNull<FutexWaiter>> = &mut self.head;
@@ -202,7 +204,7 @@ impl BucketInner {
                 cur = next;
             } else {
                 prev = &mut (*node.as_ptr()).next;
-                cur  = next;
+                cur = next;
             }
         }
         requeued
@@ -216,7 +218,9 @@ pub struct FutexBucket {
 
 impl FutexBucket {
     pub const fn new() -> Self {
-        Self { inner: Mutex::new(BucketInner::new()) }
+        Self {
+            inner: Mutex::new(BucketInner::new()),
+        }
     }
 
     /// Nombre de waiters dans ce bucket.
@@ -232,24 +236,24 @@ impl FutexBucket {
 
 #[repr(C)]
 pub struct FutexStats {
-    pub wait_calls:       AtomicU64,
-    pub wake_calls:       AtomicU64,
-    pub requeue_calls:    AtomicU64,
+    pub wait_calls: AtomicU64,
+    pub wake_calls: AtomicU64,
+    pub requeue_calls: AtomicU64,
     pub value_mismatches: AtomicU64,
-    pub timeouts:         AtomicU64,
-    pub total_woken:      AtomicU64,
+    pub timeouts: AtomicU64,
+    pub total_woken: AtomicU64,
     pub max_bucket_depth: AtomicU32,
 }
 
 impl FutexStats {
     const fn new() -> Self {
         Self {
-            wait_calls:       AtomicU64::new(0),
-            wake_calls:       AtomicU64::new(0),
-            requeue_calls:    AtomicU64::new(0),
+            wait_calls: AtomicU64::new(0),
+            wake_calls: AtomicU64::new(0),
+            requeue_calls: AtomicU64::new(0),
             value_mismatches: AtomicU64::new(0),
-            timeouts:         AtomicU64::new(0),
-            total_woken:      AtomicU64::new(0),
+            timeouts: AtomicU64::new(0),
+            total_woken: AtomicU64::new(0),
             max_bucket_depth: AtomicU32::new(0),
         }
     }
@@ -311,11 +315,19 @@ pub fn init_futex_seed(key: [u8; 16]) {
 fn siphash13(k0: u64, k1: u64, data: u64) -> u64 {
     macro_rules! sipround {
         ($v0:expr, $v1:expr, $v2:expr, $v3:expr) => {
-            $v0 = $v0.wrapping_add($v1); $v1 = $v1.rotate_left(13); $v1 ^= $v0;
+            $v0 = $v0.wrapping_add($v1);
+            $v1 = $v1.rotate_left(13);
+            $v1 ^= $v0;
             $v0 = $v0.rotate_left(32);
-            $v2 = $v2.wrapping_add($v3); $v3 = $v3.rotate_left(16); $v3 ^= $v2;
-            $v0 = $v0.wrapping_add($v3); $v3 = $v3.rotate_left(21); $v3 ^= $v0;
-            $v2 = $v2.wrapping_add($v1); $v1 = $v1.rotate_left(17); $v1 ^= $v2;
+            $v2 = $v2.wrapping_add($v3);
+            $v3 = $v3.rotate_left(16);
+            $v3 ^= $v2;
+            $v0 = $v0.wrapping_add($v3);
+            $v3 = $v3.rotate_left(21);
+            $v3 ^= $v0;
+            $v2 = $v2.wrapping_add($v1);
+            $v1 = $v1.rotate_left(17);
+            $v1 ^= $v2;
             $v2 = $v2.rotate_left(32);
         };
     }
@@ -357,7 +369,7 @@ fn bucket_index(virt_addr: u64) -> usize {
     } else {
         // Fallback FNV-1a (avant init_futex_seed, pendant le boot early)
         const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-        const FNV_PRIME:  u64 = 0x0000_0100_0000_01B3;
+        const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
         let mut h = FNV_OFFSET;
         for b in virt_addr.to_le_bytes() {
             h ^= b as u64;
@@ -395,9 +407,9 @@ pub enum FutexWaitResult {
 /// - `virt_addr` doit être une adresse user valide pointant vers un `u32`.
 pub unsafe fn futex_wait(
     virt_addr: u64,
-    expected:  u32,
-    waiter:    *mut FutexWaiter,
-    wake_fn:   WakeFn,
+    expected: u32,
+    waiter: *mut FutexWaiter,
+    wake_fn: WakeFn,
 ) -> FutexWaitResult {
     FUTEX_STATS.wait_calls.fetch_add(1, Ordering::Relaxed);
 
@@ -413,9 +425,9 @@ pub unsafe fn futex_wait(
     }
 
     // Initialiser le waiter.
-    (*waiter).virt_addr    = virt_addr;
+    (*waiter).virt_addr = virt_addr;
     (*waiter).expected_val = expected;
-    (*waiter).wake_fn      = wake_fn;
+    (*waiter).wake_fn = wake_fn;
     (*waiter).woken.store(false, Ordering::Release);
     (*waiter).next = None;
 
@@ -456,7 +468,9 @@ pub unsafe fn futex_wake(virt_addr: u64, max: u32, wake_code: i32) -> u32 {
     let idx = bucket_index(virt_addr);
     let mut bucket = FUTEX_TABLE.buckets[idx].inner.lock();
     let woken = bucket.wake(virt_addr, max, wake_code);
-    FUTEX_STATS.total_woken.fetch_add(woken as u64, Ordering::Relaxed);
+    FUTEX_STATS
+        .total_woken
+        .fetch_add(woken as u64, Ordering::Relaxed);
     woken
 }
 
@@ -471,11 +485,11 @@ pub unsafe fn futex_wake_n(virt_addr: u64, n: u32) -> u32 {
 ///
 /// # Safety : idem.
 pub unsafe fn futex_requeue(
-    src_addr:    u64,
-    dst_addr:    u64,
-    max_wake:    u32,
+    src_addr: u64,
+    dst_addr: u64,
+    max_wake: u32,
     max_requeue: u32,
-    wake_code:   i32,
+    wake_code: i32,
 ) -> (u32, u32) {
     FUTEX_STATS.requeue_calls.fetch_add(1, Ordering::Relaxed);
 
@@ -489,7 +503,9 @@ pub unsafe fn futex_requeue(
         // requeue dans le même bucket → même adresse différente.
         // Résoudre le problème de double-emprunt en faisant un split.
         // Simplification : on wake seulement dans ce cas.
-        FUTEX_STATS.total_woken.fetch_add(woken as u64, Ordering::Relaxed);
+        FUTEX_STATS
+            .total_woken
+            .fetch_add(woken as u64, Ordering::Relaxed);
         return (woken, 0);
     }
 
@@ -517,10 +533,12 @@ pub unsafe fn futex_requeue(
         }
     };
 
-    let woken    = src_inner.wake(src_addr, max_wake, wake_code);
+    let woken = src_inner.wake(src_addr, max_wake, wake_code);
     let requeued = src_inner.requeue_to(src_addr, dst_addr, dst_inner, max_requeue);
 
-    FUTEX_STATS.total_woken.fetch_add(woken as u64, Ordering::Relaxed);
+    FUTEX_STATS
+        .total_woken
+        .fetch_add(woken as u64, Ordering::Relaxed);
     (woken, requeued)
 }
 
@@ -536,9 +554,9 @@ pub fn init() {}
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Codes d'opération FUTEX (Linux-compatible).
-const FUTEX_WAIT:         u32 = 0;
-const FUTEX_WAKE:         u32 = 1;
-const FUTEX_REQUEUE:      u32 = 3;
+const FUTEX_WAIT: u32 = 0;
+const FUTEX_WAKE: u32 = 1;
+const FUTEX_REQUEUE: u32 = 3;
 /// Masque permettant de retirer le flag PRIVATE avant comparaison.
 const FUTEX_PRIVATE_FLAG: u32 = 128;
 
@@ -561,11 +579,11 @@ impl FutexError {
     /// Traduit l'erreur en errno POSIX négatif.
     pub fn to_kernel_errno(self) -> i64 {
         match self {
-            FutexError::InvalidOp      => -22, // EINVAL
-            FutexError::ValueMismatch  => -11, // EAGAIN
-            FutexError::Interrupted    => -4,  // EINTR
-            FutexError::Timeout        => -110,// ETIMEDOUT
-            FutexError::NoMemory       => -12, // ENOMEM
+            FutexError::InvalidOp => -22,     // EINVAL
+            FutexError::ValueMismatch => -11, // EAGAIN
+            FutexError::Interrupted => -4,    // EINTR
+            FutexError::Timeout => -110,      // ETIMEDOUT
+            FutexError::NoMemory => -12,      // ENOMEM
         }
     }
 }
@@ -620,12 +638,12 @@ fn nop_wake_sys(_tid: u64, _code: i32) {}
 ///
 /// Retourne le nombre de threads réveillés (FUTEX_WAKE/REQUEUE) ou 0 (FUTEX_WAIT).
 pub fn sys_futex(
-    uaddr:   u64,
-    op:      u32,
-    val:     u32,
+    uaddr: u64,
+    op: u32,
+    val: u32,
     timeout: u64,
-    uaddr2:  u64,
-    val3:    u32,
+    uaddr2: u64,
+    val3: u32,
 ) -> Result<i64, FutexError> {
     // Retirer le flag PRIVATE — la table courante est déjà par-processus.
     let cmd = op & !FUTEX_PRIVATE_FLAG;
@@ -684,16 +702,14 @@ pub fn sys_futex(
             // val  = max threads réveillés sur uaddr
             // val3 = max threads requeueés vers uaddr2
             // timeout (troisième arg Linux) = max_wake ; val3 = max_requeue
-            let max_wake    = val;
+            let max_wake = val;
             let max_requeue = val3;
             // SAFETY: uaddr/uaddr2 sont des adresses user valides, vérifiées côté syscall.
-            let (woken, _requeued) = unsafe {
-                futex_requeue(uaddr, uaddr2, max_wake, max_requeue, 0)
-            };
+            let (woken, _requeued) =
+                unsafe { futex_requeue(uaddr, uaddr2, max_wake, max_requeue, 0) };
             Ok(woken as i64)
         }
 
         _ => Err(FutexError::InvalidOp),
     }
 }
-

@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crate::arch::x86_64::apic::{self, ipi, local_apic, x2apic};
 use crate::arch::x86_64::cpu::msr;
 use crate::arch::x86_64::idt;
-use crate::exophoenix::{forge, ssr, stage0, PHOENIX_STATE, PhoenixState};
+use crate::exophoenix::{forge, ssr, stage0, PhoenixState, PHOENIX_STATE};
 use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
 
 const HANDOFF_NORMAL: u64 = 0;
@@ -145,7 +145,8 @@ fn all_freeze_acks_observed(self_slot: Option<usize>) -> bool {
         }
         seen_slots |= bit;
         // SAFETY: offset borné par slot map stage0.
-        let ack = unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
+        let ack =
+            unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
         if ack != ssr::FREEZE_ACK_DONE && ack != ssr::TLB_ACK_DONE {
             all_ok = false;
         }
@@ -169,7 +170,9 @@ fn stage_soft_revoke_iommu() {
 
     if INTEL_VTD.is_initialized() && INTEL_VTD.unit_count() > 0 {
         // SAFETY: CPL0, VT-d initialisé.
-        unsafe { INTEL_VTD.flush_iotlb_domain(blocked_domain as u16, 0); }
+        unsafe {
+            INTEL_VTD.flush_iotlb_domain(blocked_domain as u16, 0);
+        }
     } else if AMD_IOMMU.is_initialized() && AMD_IOMMU.unit_count() > 0 {
         core::sync::atomic::fence(Ordering::SeqCst);
     }
@@ -186,7 +189,9 @@ fn stage_hard_revoke_iommu(with_drain: bool) {
 
     if INTEL_VTD.is_initialized() && INTEL_VTD.unit_count() > 0 {
         // SAFETY: CPL0, flush IOTLB domaine bloqué (QI-like sync).
-        unsafe { INTEL_VTD.flush_iotlb_domain(blocked_domain as u16, 0); }
+        unsafe {
+            INTEL_VTD.flush_iotlb_domain(blocked_domain as u16, 0);
+        }
     } else if AMD_IOMMU.is_initialized() && AMD_IOMMU.unit_count() > 0 {
         // AMD completion wait fallback (barrière stricte).
         core::sync::atomic::fence(Ordering::SeqCst);
@@ -273,7 +278,9 @@ unsafe fn find_pci_cap(bus: u8, dev: u8, func: u8, cap_id: u8) -> Option<u8> {
 
 fn mask_all_msi_msix() {
     for i in 0..stage0::b_device_count() {
-        let Some(dev) = stage0::b_device(i) else { continue };
+        let Some(dev) = stage0::b_device(i) else {
+            continue;
+        };
 
         // SAFETY: accès PCI config space en ring0 pour les devices Stage0.
         unsafe {
@@ -292,7 +299,8 @@ fn mask_all_msi_msix() {
             }
 
             // MSI-X : bit14 Function Mask du MSI-X Control
-            if let Some(msix_cap) = find_pci_cap(dev.bus, dev.device, dev.function, PCI_CAP_ID_MSIX) {
+            if let Some(msix_cap) = find_pci_cap(dev.bus, dev.device, dev.function, PCI_CAP_ID_MSIX)
+            {
                 let ctrl_offset = msix_cap + 2;
                 let raw = pci_read_dword_handoff(dev.bus, dev.device, dev.function, msix_cap);
                 let ctrl = ((raw >> 16) & 0xFFFF) as u16;
@@ -312,10 +320,8 @@ fn mask_all_msi_msix() {
 
 fn send_init_ipi_to_apic(apic_id: u8) {
     if apic::is_x2apic() {
-        let icr = ((apic_id as u64) << 32)
-            | ICR_LEVEL_ASSERT
-            | ICR_TRIGGER_LEVEL
-            | ICR_DM_INIT_X2APIC;
+        let icr =
+            ((apic_id as u64) << 32) | ICR_LEVEL_ASSERT | ICR_TRIGGER_LEVEL | ICR_DM_INIT_X2APIC;
         x2apic::x2apic_write_icr(icr);
     } else {
         ipi::send_init_ipi(apic_id);
@@ -328,7 +334,8 @@ fn send_init_ipi_to_resistant_cores(self_slot: Option<usize>) {
             return;
         }
         // SAFETY: offset borné par slot map stage0.
-        let ack = unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
+        let ack =
+            unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
         if ack != ssr::FREEZE_ACK_DONE && ack != ssr::TLB_ACK_DONE {
             send_init_ipi_to_apic(apic_id);
         }

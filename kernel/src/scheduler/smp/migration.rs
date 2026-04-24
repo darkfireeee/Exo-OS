@@ -12,10 +12,10 @@
 // (jusqu'à MIGRATION_QUEUE_DEPTH migrations en attente).
 // ═══════════════════════════════════════════════════════════════════════════════
 
+use super::topology::{nr_cpus, MAX_CPUS};
+use crate::scheduler::core::task::{CpuId, ThreadControlBlock};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use crate::scheduler::core::task::{ThreadControlBlock, CpuId};
-use super::topology::{MAX_CPUS, nr_cpus};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Canal de migration par CPU
@@ -25,8 +25,8 @@ const MIGRATION_QUEUE_DEPTH: usize = 16;
 
 /// File circulaire de migration pour un CPU cible.
 struct MigrationQueue {
-    head:  AtomicU32,
-    tail:  AtomicU32,
+    head: AtomicU32,
+    tail: AtomicU32,
     slots: [core::sync::atomic::AtomicPtr<ThreadControlBlock>; MIGRATION_QUEUE_DEPTH],
 }
 
@@ -36,8 +36,8 @@ impl MigrationQueue {
         const NULL: core::sync::atomic::AtomicPtr<ThreadControlBlock> =
             core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
         Self {
-            head:  AtomicU32::new(0),
-            tail:  AtomicU32::new(0),
+            head: AtomicU32::new(0),
+            tail: AtomicU32::new(0),
             slots: [NULL; MIGRATION_QUEUE_DEPTH],
         }
     }
@@ -90,9 +90,9 @@ extern "C" {
 // Métriques
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub static MIGRATIONS_SENT:     AtomicU64 = AtomicU64::new(0);
+pub static MIGRATIONS_SENT: AtomicU64 = AtomicU64::new(0);
 pub static MIGRATIONS_RECEIVED: AtomicU64 = AtomicU64::new(0);
-pub static MIGRATIONS_DROPPED:  AtomicU64 = AtomicU64::new(0);
+pub static MIGRATIONS_DROPPED: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API publique
@@ -107,7 +107,9 @@ pub static MIGRATIONS_DROPPED:  AtomicU64 = AtomicU64::new(0);
 /// Le TCB doit être retiré de la run queue source AVANT cet appel.
 pub unsafe fn request_migration(tcb: NonNull<ThreadControlBlock>, target: CpuId) {
     let target_idx = target.0 as usize;
-    if target_idx >= nr_cpus() { return; }
+    if target_idx >= nr_cpus() {
+        return;
+    }
 
     // MIGRATED flag: encodé dans sched_state si nécessaire — no-op pour les stats seules.
 

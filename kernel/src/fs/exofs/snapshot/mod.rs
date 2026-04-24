@@ -61,15 +61,15 @@
 // ─────────────────────────────────────────────────────────────
 
 pub mod snapshot;
-pub mod snapshot_list;
 pub mod snapshot_create;
 pub mod snapshot_delete;
 pub mod snapshot_diff;
 pub mod snapshot_gc;
-pub mod snapshot_restore;
-pub mod snapshot_protect;
+pub mod snapshot_list;
 pub mod snapshot_mount;
+pub mod snapshot_protect;
 pub mod snapshot_quota;
+pub mod snapshot_restore;
 pub mod snapshot_streaming;
 
 // ─────────────────────────────────────────────────────────────
@@ -78,73 +78,60 @@ pub mod snapshot_streaming;
 
 // Types fondamentaux
 pub use snapshot::{
-    Snapshot, SnapshotRef, SnapshotChain,
-    SnapshotHeaderDisk, flags as snapshot_flags,
-    SNAPSHOT_MAGIC, SNAPSHOT_HEADER_SIZE, SNAPSHOT_FORMAT_VERSION,
-    SNAPSHOT_NAME_LEN, SNAPSHOT_MAX_COUNT,
-    verify_snapshot_header, make_snapshot_name,
+    flags as snapshot_flags, make_snapshot_name, verify_snapshot_header, Snapshot, SnapshotChain,
+    SnapshotHeaderDisk, SnapshotRef, SNAPSHOT_FORMAT_VERSION, SNAPSHOT_HEADER_SIZE, SNAPSHOT_MAGIC,
+    SNAPSHOT_MAX_COUNT, SNAPSHOT_NAME_LEN,
 };
 
 // Registre global
-pub use snapshot_list::{
-    SNAPSHOT_LIST, SnapshotList, ListStats, ListConsistencyError,
-};
+pub use snapshot_list::{ListConsistencyError, ListStats, SnapshotList, SNAPSHOT_LIST};
 
 // Création
 pub use snapshot_create::{
-    SnapshotCreator, SnapshotParams, SnapshotCreateResult,
-    SnapshotBlobSet, BlobEntry,
-    SNAPSHOT_MAX_BLOBS, SNAPSHOT_MAX_TOTAL_BYTES,
-    entries_from_raw,
+    entries_from_raw, BlobEntry, SnapshotBlobSet, SnapshotCreateResult, SnapshotCreator,
+    SnapshotParams, SNAPSHOT_MAX_BLOBS, SNAPSHOT_MAX_TOTAL_BYTES,
 };
 
 // Suppression
-pub use snapshot_delete::{
-    SnapshotDeleter, DeleteOptions, DeleteResult,
-    DeleteDenyReason,
-};
+pub use snapshot_delete::{DeleteDenyReason, DeleteOptions, DeleteResult, SnapshotDeleter};
 
 // Diff
 pub use snapshot_diff::{
-    SnapshotDiff, SnapshotDiffReport, DiffEntry, DiffKind, DiffOptions, DiffSummary,
-    SnapshotBlobEnumerator, MetaOnlyEnumerator,
+    DiffEntry, DiffKind, DiffOptions, DiffSummary, MetaOnlyEnumerator, SnapshotBlobEnumerator,
+    SnapshotDiff, SnapshotDiffReport,
 };
 
 // GC
 pub use snapshot_gc::{
-    SnapshotGc, SnapshotGcReport, SnapshotRetentionPolicy,
-    GcCandidate, GcReason,
+    GcCandidate, GcReason, SnapshotGc, SnapshotGcReport, SnapshotRetentionPolicy,
 };
 
 // Restauration
 pub use snapshot_restore::{
-    SnapshotRestore, RestoreResult, RestoreError, RestoreErrorKind, RestoreOptions,
-    RestoreSink, SnapshotBlobSource,
-    NullRestoreSink, MemBlobSource,
+    MemBlobSource, NullRestoreSink, RestoreError, RestoreErrorKind, RestoreOptions, RestoreResult,
+    RestoreSink, SnapshotBlobSource, SnapshotRestore,
 };
 
 // Protection
 pub use snapshot_protect::{
-    SNAPSHOT_PROTECT, SnapshotProtect, ProtectEntry, WormPolicy, ProtectStats,
+    ProtectEntry, ProtectStats, SnapshotProtect, WormPolicy, SNAPSHOT_PROTECT,
 };
 
 // Montage
 pub use snapshot_mount::{
-    SNAPSHOT_MOUNT, SnapshotMountRegistry, MountPoint, MountId, MountOptions, MountStats,
+    MountId, MountOptions, MountPoint, MountStats, SnapshotMountRegistry, SNAPSHOT_MOUNT,
 };
 
 // Quota
 pub use snapshot_quota::{
-    SNAPSHOT_QUOTA, SnapshotQuotaTable, SnapshotQuotaEntry, GlobalQuotaPolicy,
+    GlobalQuotaPolicy, SnapshotQuotaEntry, SnapshotQuotaTable, SNAPSHOT_QUOTA,
 };
 
 // Streaming
 pub use snapshot_streaming::{
-    SnapshotStreamer, StreamChunkHeader, StreamResult, StreamOptions,
-    StreamWriter, StreamBlobSource,
-    VecStreamWriter, MemStreamBlobSource,
-    STREAM_MAGIC, STREAM_CHUNK_HDR_SIZE,
-    CHUNK_TYPE_MANIFEST, CHUNK_TYPE_BLOB, CHUNK_TYPE_END,
+    MemStreamBlobSource, SnapshotStreamer, StreamBlobSource, StreamChunkHeader, StreamOptions,
+    StreamResult, StreamWriter, VecStreamWriter, CHUNK_TYPE_BLOB, CHUNK_TYPE_END,
+    CHUNK_TYPE_MANIFEST, STREAM_CHUNK_HDR_SIZE, STREAM_MAGIC,
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -168,24 +155,32 @@ pub fn shutdown() {
 
 /// Vérifie la cohérence interne du sous-système (assertions de santé)
 pub fn verify_health() -> HealthReport {
-    let list_ok  = SNAPSHOT_LIST.verify_consistency().is_ok();
-    let n_snaps  = SNAPSHOT_LIST.count();
+    let list_ok = SNAPSHOT_LIST.verify_consistency().is_ok();
+    let n_snaps = SNAPSHOT_LIST.count();
     let n_mounts = SNAPSHOT_MOUNT.n_mounts();
-    let n_prot   = SNAPSHOT_PROTECT.n_protected();
-    let n_worm   = SNAPSHOT_PROTECT.n_worm();
-    HealthReport { list_ok, n_snaps, n_mounts, n_protected: n_prot, n_worm }
+    let n_prot = SNAPSHOT_PROTECT.n_protected();
+    let n_worm = SNAPSHOT_PROTECT.n_worm();
+    HealthReport {
+        list_ok,
+        n_snaps,
+        n_mounts,
+        n_protected: n_prot,
+        n_worm,
+    }
 }
 
 /// Rapport de santé du sous-système snapshot
 #[derive(Debug, Clone, Copy)]
 pub struct HealthReport {
-    pub list_ok:     bool,
-    pub n_snaps:     usize,
-    pub n_mounts:    usize,
+    pub list_ok: bool,
+    pub n_snaps: usize,
+    pub n_mounts: usize,
     pub n_protected: usize,
-    pub n_worm:      usize,
+    pub n_worm: usize,
 }
 
 impl HealthReport {
-    pub fn is_healthy(&self) -> bool { self.list_ok }
+    pub fn is_healthy(&self) -> bool {
+        self.list_ok
+    }
 }

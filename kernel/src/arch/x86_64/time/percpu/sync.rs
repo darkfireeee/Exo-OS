@@ -36,9 +36,8 @@
 //
 // ════════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use crate::arch::x86_64::time::ktime;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -102,7 +101,9 @@ static AP_DONE: [AtomicBool; MAX_CPUS] = {
 /// # Sécurité
 ///   Unsafe : accès direct aux MSR TSC, coordination avec l'AP via atomics partagés.
 pub unsafe fn measure_tsc_offset_for_ap(ap_cpu_id: u32) {
-    if ap_cpu_id as usize >= MAX_CPUS { return; }
+    if ap_cpu_id as usize >= MAX_CPUS {
+        return;
+    }
     let idx = ap_cpu_id as usize;
 
     // Reset des signaux de communication.
@@ -175,7 +176,9 @@ pub unsafe fn measure_tsc_offset_for_ap(ap_cpu_id: u32) {
 ///
 /// RÈGLE TSC-SYNC-01 : L'AP doit attendre le signal BSP_READY avant de lire son TSC.
 pub unsafe fn ap_sync_tsc_response(ap_cpu_id: u32) {
-    if ap_cpu_id as usize >= MAX_CPUS { return; }
+    if ap_cpu_id as usize >= MAX_CPUS {
+        return;
+    }
     let idx = ap_cpu_id as usize;
 
     // Attendre que le BSP soit prêt.
@@ -201,7 +204,9 @@ pub unsafe fn ap_sync_tsc_response(ap_cpu_id: u32) {
 /// L'offset du BSP est toujours 0 (référence).
 pub fn init_bsp_percpu() {
     // SAFETY: cpu_id = 0, offset = 0. BSP est toujours la référence.
-    unsafe { ktime::store_tsc_offset(0, 0); }
+    unsafe {
+        ktime::store_tsc_offset(0, 0);
+    }
 }
 
 /// Vérifie si la synchronisation TSC a été effectuée pour un CPU donné.
@@ -224,7 +229,9 @@ fn median_i64(samples: &mut [i64]) -> i64 {
         samples[j] = key;
     }
     let n = samples.len();
-    if n == 0 { return 0; }
+    if n == 0 {
+        return 0;
+    }
     if n % 2 == 1 {
         samples[n / 2]
     } else {
@@ -241,7 +248,9 @@ fn log_tsc_skew_warning(cpu_id: u32, offset_cycles: i64) {
     // Format : "[TSC-SKEW cpu=XX off=XXXXXXXX]\n"
     unsafe {
         let buf = b"[TSC-SKEW cpu=";
-        for &b in buf { core::arch::asm!("out 0xe9, al", in("al") b, options(nostack, nomem)); }
+        for &b in buf {
+            core::arch::asm!("out 0xe9, al", in("al") b, options(nostack, nomem));
+        }
         // cpu_id decimal simple (0–255)
         let d2 = (cpu_id / 100) as u8 + b'0';
         let d1 = ((cpu_id / 10) % 10) as u8 + b'0';
@@ -250,12 +259,18 @@ fn log_tsc_skew_warning(cpu_id: u32, offset_cycles: i64) {
         core::arch::asm!("out 0xe9, al", in("al") d1, options(nostack, nomem));
         core::arch::asm!("out 0xe9, al", in("al") d0, options(nostack, nomem));
         let buf2 = b" off=";
-        for &b in buf2 { core::arch::asm!("out 0xe9, al", in("al") b, options(nostack, nomem)); }
+        for &b in buf2 {
+            core::arch::asm!("out 0xe9, al", in("al") b, options(nostack, nomem));
+        }
         // offset en hex (16 chiffres).
         let val = offset_cycles as u64;
         for shift in (0..64).step_by(4).rev() {
             let nib = ((val >> (60 - shift)) & 0xF) as u8;
-            let ch = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
+            let ch = if nib < 10 {
+                b'0' + nib
+            } else {
+                b'a' + nib - 10
+            };
             core::arch::asm!("out 0xe9, al", in("al") ch, options(nostack, nomem));
         }
         core::arch::asm!("out 0xe9, al", in("al") b']', options(nostack, nomem));
@@ -266,7 +281,8 @@ fn log_tsc_skew_warning(cpu_id: u32, offset_cycles: i64) {
 /// Lit le TSC avec sérialisation (RDTSCP fournit aussi le coreid).
 #[inline(always)]
 fn rdtscp() -> u64 {
-    let lo: u32; let hi: u32;
+    let lo: u32;
+    let hi: u32;
     unsafe {
         core::arch::asm!(
             "rdtscp",

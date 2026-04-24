@@ -51,8 +51,13 @@ impl RealtimeAdmission {
             return Err(syscall::EINVAL);
         }
 
-        let utilization_ppm = ((runtime_us as u64).saturating_mul(1_000_000) / period_us as u64) as u32;
-        let existing = self.records.iter().find(|record| record.active && record.tid == tid).copied();
+        let utilization_ppm =
+            ((runtime_us as u64).saturating_mul(1_000_000) / period_us as u64) as u32;
+        let existing = self
+            .records
+            .iter()
+            .find(|record| record.active && record.tid == tid)
+            .copied();
         let previous_util = existing.map(|record| record.utilization_ppm).unwrap_or(0);
         let next_total = self
             .total_utilization_ppm
@@ -62,7 +67,11 @@ impl RealtimeAdmission {
             return Err(syscall::EBUSY);
         }
 
-        if let Some(idx) = self.records.iter().position(|record| record.active && record.tid == tid) {
+        if let Some(idx) = self
+            .records
+            .iter()
+            .position(|record| record.active && record.tid == tid)
+        {
             self.records[idx] = RtRecord {
                 active: true,
                 tid,
@@ -90,9 +99,14 @@ impl RealtimeAdmission {
     }
 
     pub fn release(&mut self, tid: u32) -> Option<RtSnapshot> {
-        let idx = self.records.iter().position(|record| record.active && record.tid == tid)?;
+        let idx = self
+            .records
+            .iter()
+            .position(|record| record.active && record.tid == tid)?;
         let record = self.records[idx];
-        self.total_utilization_ppm = self.total_utilization_ppm.saturating_sub(record.utilization_ppm);
+        self.total_utilization_ppm = self
+            .total_utilization_ppm
+            .saturating_sub(record.utilization_ppm);
         self.records[idx] = RtRecord::empty();
         Some(RtSnapshot {
             tid: record.tid,
@@ -104,7 +118,10 @@ impl RealtimeAdmission {
     }
 
     pub fn snapshot(&self, tid: u32) -> Option<RtSnapshot> {
-        let record = self.records.iter().find(|entry| entry.active && entry.tid == tid)?;
+        let record = self
+            .records
+            .iter()
+            .find(|entry| entry.active && entry.tid == tid)?;
         Some(RtSnapshot {
             tid: record.tid,
             runtime_us: record.runtime_us,

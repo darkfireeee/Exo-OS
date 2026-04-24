@@ -15,14 +15,11 @@
 //   DAG-01 : pas d'import de ipc/, process/, arch/
 // ==============================================================================
 
-
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::fs::exofs::core::{
-    BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId,
-};
+use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId};
 use crate::fs::exofs::epoch::epoch_root::EpochRootInMemory;
 use crate::fs::exofs::epoch::epoch_slots::EpochSlot;
 use crate::fs::exofs::gc::tricolor::TricolorWorkspace;
@@ -46,15 +43,15 @@ pub const MAX_BLOBS_PER_ROOT: usize = 65_536;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RootObject {
     /// Identifiant de l'objet.
-    pub object_id:   ObjectId,
+    pub object_id: ObjectId,
     /// Offset disque de l'objet (de l'EpochRootEntry).
     pub disk_offset: DiskOffset,
     /// Slot source (A, B ou C).
-    pub slot:        EpochSlot,
+    pub slot: EpochSlot,
     /// Epoch a laquelle l'objet a ete vu.
-    pub epoch_id:    EpochId,
+    pub epoch_id: EpochId,
     /// L'objet est marque comme supprime.
-    pub is_deleted:  bool,
+    pub is_deleted: bool,
 }
 
 // ==============================================================================
@@ -64,14 +61,14 @@ pub struct RootObject {
 /// Resultat du scan d'un slot EpochRoot individuel.
 #[derive(Debug, Default, Clone)]
 pub struct SlotScanResult {
-    pub slot:           EpochSlot,
-    pub epoch_id:       EpochId,
+    pub slot: EpochSlot,
+    pub epoch_id: EpochId,
     /// Objets modifies trouves.
     pub modified_count: usize,
     /// Objets supprimes trouves.
-    pub deleted_count:  usize,
+    pub deleted_count: usize,
     /// Erreur rencontree durant le scan (si present le slot est ignore).
-    pub scan_error:     Option<ExofsError>,
+    pub scan_error: Option<ExofsError>,
 }
 
 impl Default for EpochSlot {
@@ -88,21 +85,21 @@ impl Default for EpochSlot {
 #[derive(Debug, Default, Clone)]
 pub struct ScanStats {
     /// Slots scannes.
-    pub slots_scanned:       u64,
+    pub slots_scanned: u64,
     /// Slots valides.
-    pub slots_valid:         u64,
+    pub slots_valid: u64,
     /// Slots ignores (erreur ou vides).
-    pub slots_skipped:       u64,
+    pub slots_skipped: u64,
     /// Nombre total d'objets racines extraits.
-    pub roots_extracted:     u64,
+    pub roots_extracted: u64,
     /// Nombre d'objets non supprimes (candidats live).
-    pub live_roots:          u64,
+    pub live_roots: u64,
     /// Nombre d'objets marques supprimes.
-    pub deleted_roots:       u64,
+    pub deleted_roots: u64,
     /// BlobIds grises dans le workspace.
-    pub blobs_greyed:        u64,
+    pub blobs_greyed: u64,
     /// Erreurs de file GcQueueFull.
-    pub queue_full_errors:   u64,
+    pub queue_full_errors: u64,
 }
 
 impl fmt::Display for ScanStats {
@@ -131,9 +128,9 @@ pub struct EpochScanSnapshot {
     /// Tous les objets racines extraits.
     pub root_objects: Vec<RootObject>,
     /// Ensemble des ObjectIds supprimes (a ne PAS griser).
-    pub deleted_set:  BTreeSet<ObjectId>,
+    pub deleted_set: BTreeSet<ObjectId>,
     /// Stats du scan.
-    pub stats:        ScanStats,
+    pub stats: ScanStats,
 }
 
 impl EpochScanSnapshot {
@@ -186,9 +183,9 @@ struct EpochScannerInner {
     /// Dernier snapshot de scan.
     last_snapshot: Option<EpochScanSnapshot>,
     /// Stats cumulees.
-    total_stats:   ScanStats,
+    total_stats: ScanStats,
     /// Nombre de passes de scan.
-    pass_count:    u64,
+    pass_count: u64,
 }
 
 // ==============================================================================
@@ -205,14 +202,14 @@ impl EpochScanner {
         Self {
             inner: SpinLock::new(EpochScannerInner {
                 last_snapshot: None,
-                total_stats:   ScanStats {
-                    slots_scanned:     0,
-                    slots_valid:       0,
-                    slots_skipped:     0,
-                    roots_extracted:   0,
-                    live_roots:        0,
-                    deleted_roots:     0,
-                    blobs_greyed:      0,
+                total_stats: ScanStats {
+                    slots_scanned: 0,
+                    slots_valid: 0,
+                    slots_skipped: 0,
+                    roots_extracted: 0,
+                    live_roots: 0,
+                    deleted_roots: 0,
+                    blobs_greyed: 0,
                     queue_full_errors: 0,
                 },
                 pass_count: 0,
@@ -253,12 +250,15 @@ impl EpochScanner {
 
             let result = self.scan_single_root(root, *slot, &mut snapshot)?;
             stats.slots_valid = stats.slots_valid.saturating_add(1);
-            stats.roots_extracted = stats.roots_extracted
+            stats.roots_extracted = stats
+                .roots_extracted
                 .saturating_add(result.modified_count as u64)
                 .saturating_add(result.deleted_count as u64);
-            stats.live_roots = stats.live_roots
+            stats.live_roots = stats
+                .live_roots
                 .saturating_add(result.modified_count as u64);
-            stats.deleted_roots = stats.deleted_roots
+            stats.deleted_roots = stats
+                .deleted_roots
                 .saturating_add(result.deleted_count as u64);
         }
 
@@ -269,13 +269,18 @@ impl EpochScanner {
             let mut g = self.inner.lock();
             g.pass_count = g.pass_count.saturating_add(1);
             // Cumuler les stats totales.
-            g.total_stats.slots_scanned = g.total_stats.slots_scanned
+            g.total_stats.slots_scanned = g
+                .total_stats
+                .slots_scanned
                 .saturating_add(stats.slots_scanned);
-            g.total_stats.roots_extracted = g.total_stats.roots_extracted
+            g.total_stats.roots_extracted = g
+                .total_stats
+                .roots_extracted
                 .saturating_add(stats.roots_extracted);
-            g.total_stats.live_roots = g.total_stats.live_roots
-                .saturating_add(stats.live_roots);
-            g.total_stats.deleted_roots = g.total_stats.deleted_roots
+            g.total_stats.live_roots = g.total_stats.live_roots.saturating_add(stats.live_roots);
+            g.total_stats.deleted_roots = g
+                .total_stats
+                .deleted_roots
                 .saturating_add(stats.deleted_roots);
             g.last_snapshot = Some(snapshot.clone());
         }
@@ -286,16 +291,16 @@ impl EpochScanner {
     /// Scanne un seul EpochRoot et ajoute les objets au snapshot.
     fn scan_single_root(
         &self,
-        root:     &EpochRootInMemory,
-        slot:     EpochSlot,
+        root: &EpochRootInMemory,
+        slot: EpochSlot,
         snapshot: &mut EpochScanSnapshot,
     ) -> ExofsResult<SlotScanResult> {
         let mut result = SlotScanResult {
             slot,
-            epoch_id:       root.epoch_id,
+            epoch_id: root.epoch_id,
             modified_count: 0,
-            deleted_count:  0,
-            scan_error:     None,
+            deleted_count: 0,
+            scan_error: None,
         };
 
         // 1. Parcourir les objets modifies (vivants potentiels).
@@ -308,14 +313,16 @@ impl EpochScanner {
             let oid = ObjectId(oid_bytes);
 
             let ro = RootObject {
-                object_id:   oid,
+                object_id: oid,
                 disk_offset: DiskOffset(entry.disk_offset),
                 slot,
-                epoch_id:    root.epoch_id,
-                is_deleted:  false,
+                epoch_id: root.epoch_id,
+                is_deleted: false,
             };
 
-            snapshot.root_objects.try_reserve(1)
+            snapshot
+                .root_objects
+                .try_reserve(1)
                 .map_err(|_| ExofsError::NoMemory)?;
             snapshot.root_objects.push(ro);
             result.modified_count = result.modified_count.saturating_add(1);
@@ -328,14 +335,16 @@ impl EpochScanner {
             }
 
             let ro = RootObject {
-                object_id:   *oid,
+                object_id: *oid,
                 disk_offset: DiskOffset::zero(),
                 slot,
-                epoch_id:    root.epoch_id,
-                is_deleted:  true,
+                epoch_id: root.epoch_id,
+                is_deleted: true,
             };
 
-            snapshot.root_objects.try_reserve(1)
+            snapshot
+                .root_objects
+                .try_reserve(1)
                 .map_err(|_| ExofsError::NoMemory)?;
             snapshot.root_objects.push(ro);
 
@@ -356,9 +365,9 @@ impl EpochScanner {
     /// Retourne le nombre de BlobIds grises.
     pub fn build_grey_set<L: BlobLookup>(
         &self,
-        snapshot:  &EpochScanSnapshot,
+        snapshot: &EpochScanSnapshot,
         workspace: &mut TricolorWorkspace,
-        lookup:    &L,
+        lookup: &L,
     ) -> ExofsResult<u64> {
         let mut greyed: BTreeSet<BlobId> = BTreeSet::new();
         let mut count: u64 = 0;
@@ -397,10 +406,9 @@ impl EpochScanner {
         // Mise a jour des stats.
         {
             let mut g = self.inner.lock();
-            g.total_stats.blobs_greyed = g.total_stats.blobs_greyed
-                .saturating_add(count);
-            g.total_stats.queue_full_errors = g.total_stats.queue_full_errors
-                .saturating_add(queue_full);
+            g.total_stats.blobs_greyed = g.total_stats.blobs_greyed.saturating_add(count);
+            g.total_stats.queue_full_errors =
+                g.total_stats.queue_full_errors.saturating_add(queue_full);
         }
 
         Ok(count)
@@ -412,8 +420,8 @@ impl EpochScanner {
     pub fn scan_and_grey<L: BlobLookup>(
         &self,
         epoch_roots: &[Option<&EpochRootInMemory>],
-        workspace:   &mut TricolorWorkspace,
-        lookup:      &L,
+        workspace: &mut TricolorWorkspace,
+        lookup: &L,
     ) -> ExofsResult<EpochScanSnapshot> {
         let snapshot = self.scan(epoch_roots)?;
         let _greyed = self.build_grey_set(&snapshot, workspace, lookup)?;
@@ -458,18 +466,22 @@ pub static EPOCH_SCANNER: EpochScanner = EpochScanner::new();
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::collections::BTreeMap;
     use crate::fs::exofs::core::{BlobId, EpochId, ObjectId};
-    use crate::fs::exofs::epoch::EpochRootEntry;
     use crate::fs::exofs::epoch::epoch_root::EpochRootInMemory;
+    use crate::fs::exofs::epoch::EpochRootEntry;
     use crate::fs::exofs::gc::tricolor::{BlobNode, TricolorWorkspace};
+    use alloc::collections::BTreeMap;
 
     fn oid(b: u8) -> ObjectId {
-        let mut a = [0u8; 32]; a[0] = b; ObjectId(a)
+        let mut a = [0u8; 32];
+        a[0] = b;
+        ObjectId(a)
     }
 
     fn bid(b: u8) -> BlobId {
-        let mut a = [0u8; 32]; a[0] = b; BlobId(a)
+        let mut a = [0u8; 32];
+        a[0] = b;
+        BlobId(a)
     }
 
     fn offset(n: u64) -> DiskOffset {
@@ -502,7 +514,8 @@ mod tests {
     fn test_scan_single_modified_object() {
         let scanner = EpochScanner::new();
         let mut root = EpochRootInMemory::new(eid(42));
-        root.add_modified(oid(1), offset(1024), EpochRootEntry::FLAG_MODIFIED).unwrap();
+        root.add_modified(oid(1), offset(1024), EpochRootEntry::FLAG_MODIFIED)
+            .unwrap();
 
         let snap = scanner.scan(&[Some(&root), None, None]).unwrap();
         assert_eq!(snap.live_count(), 1);
@@ -525,7 +538,8 @@ mod tests {
     fn test_build_grey_set() {
         let scanner = EpochScanner::new();
         let mut root = EpochRootInMemory::new(eid(5));
-        root.add_modified(oid(1), offset(512), EpochRootEntry::FLAG_CREATED).unwrap();
+        root.add_modified(oid(1), offset(512), EpochRootEntry::FLAG_CREATED)
+            .unwrap();
 
         // Lookup: oid(1) -> [bid(10), bid(11)]
         let mut map = BTreeMap::new();
@@ -548,15 +562,23 @@ mod tests {
         let scanner = EpochScanner::new();
 
         let mut root_a = EpochRootInMemory::new(eid(1));
-        root_a.add_modified(oid(1), offset(0), EpochRootEntry::FLAG_CREATED).unwrap();
+        root_a
+            .add_modified(oid(1), offset(0), EpochRootEntry::FLAG_CREATED)
+            .unwrap();
 
         let mut root_b = EpochRootInMemory::new(eid(2));
-        root_b.add_modified(oid(2), offset(0), EpochRootEntry::FLAG_MODIFIED).unwrap();
+        root_b
+            .add_modified(oid(2), offset(0), EpochRootEntry::FLAG_MODIFIED)
+            .unwrap();
 
         let mut root_c = EpochRootInMemory::new(eid(3));
-        root_c.add_modified(oid(3), offset(0), EpochRootEntry::FLAG_MODIFIED).unwrap();
+        root_c
+            .add_modified(oid(3), offset(0), EpochRootEntry::FLAG_MODIFIED)
+            .unwrap();
 
-        let snap = scanner.scan(&[Some(&root_a), Some(&root_b), Some(&root_c)]).unwrap();
+        let snap = scanner
+            .scan(&[Some(&root_a), Some(&root_b), Some(&root_c)])
+            .unwrap();
         assert_eq!(snap.stats.slots_valid, 3);
         assert_eq!(snap.live_count(), 3);
     }

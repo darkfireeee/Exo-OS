@@ -33,7 +33,7 @@ impl SlabAllocator {
     pub const fn new(object_size: usize, capacity: usize) -> Self {
         assert!(object_size >= core::mem::size_of::<FreeNode>());
         assert!(object_size % core::mem::align_of::<FreeNode>() == 0);
-        
+
         Self {
             base: None,
             object_size,
@@ -42,7 +42,7 @@ impl SlabAllocator {
             allocated: AtomicUsize::new(0),
         }
     }
-    
+
     /// Initialize with memory region
     ///
     /// # Safety
@@ -50,12 +50,12 @@ impl SlabAllocator {
     /// - Memory must be properly aligned for `object_size`
     pub unsafe fn init(&mut self, base: NonNull<u8>) {
         self.base = Some(base);
-        
+
         // Build free list
         let mut current = base.as_ptr();
         for i in 0..self.capacity {
             let node = current as *mut FreeNode;
-            
+
             let next_offset = (i + 1) * self.object_size;
             if next_offset < self.capacity * self.object_size {
                 unsafe {
@@ -67,10 +67,10 @@ impl SlabAllocator {
                     (*node).next = None;
                 }
             }
-            
+
             current = unsafe { current.add(self.object_size) };
         }
-        
+
         self.free_list = NonNull::new(base.as_ptr() as *mut FreeNode);
     }
 
@@ -111,22 +111,22 @@ impl SlabAllocator {
     pub const fn capacity(&self) -> usize {
         self.capacity
     }
-    
+
     /// Get number of allocated objects
     pub fn allocated(&self) -> usize {
         self.allocated.load(Ordering::Relaxed)
     }
-    
+
     /// Get number of free objects
     pub fn available(&self) -> usize {
         self.capacity.saturating_sub(self.allocated())
     }
-    
+
     /// Check if full
     pub fn is_full(&self) -> bool {
         self.allocated() >= self.capacity
     }
-    
+
     /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.allocated() == 0
@@ -145,26 +145,32 @@ mod tests {
         const COUNT: usize = 10;
         let mut backing = vec![0u8; SIZE * COUNT];
         let base = NonNull::new(backing.as_mut_ptr()).unwrap();
-        
+
         let mut slab = SlabAllocator::new(SIZE, COUNT);
-        unsafe { slab.init(base); }
-        
+        unsafe {
+            slab.init(base);
+        }
+
         assert_eq!(slab.available(), COUNT);
         assert!(slab.is_empty());
-        
+
         let ptr1 = slab.alloc().unwrap();
         assert_eq!(slab.allocated(), 1);
-        
+
         let ptr2 = slab.alloc().unwrap();
         assert_eq!(slab.allocated(), 2);
-        
-        unsafe { slab.free(ptr1); }
+
+        unsafe {
+            slab.free(ptr1);
+        }
         assert_eq!(slab.allocated(), 1);
-        
-        unsafe { slab.free(ptr2); }
+
+        unsafe {
+            slab.free(ptr2);
+        }
         assert!(slab.is_empty());
     }
-    
+
     #[test]
     fn test_slab_creation() {
         let slab = SlabAllocator::new(64, 1024);

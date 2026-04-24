@@ -13,21 +13,20 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_*.
 
-
 extern crate alloc;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─── SpaceZone ───────────────────────────────────────────────────────────────
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpaceZone {
-    Data      = 0,
-    Metadata  = 1,
+    Data = 0,
+    Metadata = 1,
     GcReserve = 2,
-    Journal   = 3,
+    Journal = 3,
 }
 
 impl SpaceZone {
@@ -35,10 +34,10 @@ impl SpaceZone {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Data      => "data",
-            Self::Metadata  => "metadata",
+            Self::Data => "data",
+            Self::Metadata => "metadata",
             Self::GcReserve => "gc_reserve",
-            Self::Journal   => "journal",
+            Self::Journal => "journal",
         }
     }
 }
@@ -47,16 +46,16 @@ impl SpaceZone {
 
 /// Statistiques par zone (en blocs).
 pub struct SpaceZoneStats {
-    total:    AtomicU64,
-    used:     AtomicU64,
+    total: AtomicU64,
+    used: AtomicU64,
     reserved: AtomicU64,
 }
 
 impl SpaceZoneStats {
     pub const fn new_const() -> Self {
         Self {
-            total:    AtomicU64::new(0),
-            used:     AtomicU64::new(0),
+            total: AtomicU64::new(0),
+            used: AtomicU64::new(0),
             reserved: AtomicU64::new(0),
         }
     }
@@ -67,25 +66,42 @@ impl SpaceZoneStats {
         self.used.store(0, Ordering::Relaxed);
     }
 
-    pub fn alloc(&self, n: u64) { self.used.fetch_add(n, Ordering::Relaxed); }
+    pub fn alloc(&self, n: u64) {
+        self.used.fetch_add(n, Ordering::Relaxed);
+    }
 
     pub fn free(&self, n: u64) {
         let cur = self.used.load(Ordering::Relaxed);
         self.used.store(cur.saturating_sub(n), Ordering::Relaxed);
     }
 
-    pub fn total(&self)    -> u64 { self.total.load(Ordering::Relaxed) }
-    pub fn used(&self)     -> u64 { self.used.load(Ordering::Relaxed) }
-    pub fn reserved(&self) -> u64 { self.reserved.load(Ordering::Relaxed) }
+    pub fn total(&self) -> u64 {
+        self.total.load(Ordering::Relaxed)
+    }
+    pub fn used(&self) -> u64 {
+        self.used.load(Ordering::Relaxed)
+    }
+    pub fn reserved(&self) -> u64 {
+        self.reserved.load(Ordering::Relaxed)
+    }
 
     pub fn free_blocks(&self) -> u64 {
-        self.total().saturating_sub(self.used()).saturating_sub(self.reserved())
+        self.total()
+            .saturating_sub(self.used())
+            .saturating_sub(self.reserved())
     }
 
     pub fn usage_pct(&self) -> u8 {
         let t = self.total();
-        if t == 0 { return 0; }
-        (self.used().saturating_mul(100).checked_div(t).unwrap_or(0).min(100)) as u8
+        if t == 0 {
+            return 0;
+        }
+        (self
+            .used()
+            .saturating_mul(100)
+            .checked_div(t)
+            .unwrap_or(0)
+            .min(100)) as u8
     }
 }
 
@@ -93,10 +109,10 @@ impl SpaceZoneStats {
 
 /// Suivi global de l'espace disque par zone.
 pub struct SpaceTracker {
-    zones:      [SpaceZoneStats; SpaceZone::COUNT],
+    zones: [SpaceZoneStats; SpaceZone::COUNT],
     block_size: AtomicU64,
     total_extents: AtomicU64,
-    small_extents: AtomicU64,  // extents < 4 blocs → indicateur fragmentation
+    small_extents: AtomicU64, // extents < 4 blocs → indicateur fragmentation
 }
 
 unsafe impl Sync for SpaceTracker {}
@@ -105,21 +121,27 @@ unsafe impl Send for SpaceTracker {}
 impl SpaceTracker {
     pub const fn new_const() -> Self {
         const Z: SpaceZoneStats = SpaceZoneStats {
-            total:    AtomicU64::new(0),
-            used:     AtomicU64::new(0),
+            total: AtomicU64::new(0),
+            used: AtomicU64::new(0),
             reserved: AtomicU64::new(0),
         };
         Self {
-            zones:         [Z, Z, Z, Z],
-            block_size:    AtomicU64::new(4096),
+            zones: [Z, Z, Z, Z],
+            block_size: AtomicU64::new(4096),
             total_extents: AtomicU64::new(0),
             small_extents: AtomicU64::new(0),
         }
     }
 
     /// Initialise les zones.
-    pub fn init(&self, data_total: u64, meta_total: u64, gc_reserve: u64,
-                journal: u64, block_size: u64) {
+    pub fn init(
+        &self,
+        data_total: u64,
+        meta_total: u64,
+        gc_reserve: u64,
+        journal: u64,
+        block_size: u64,
+    ) {
         self.zones[SpaceZone::Data as usize].init(data_total, 0);
         self.zones[SpaceZone::Metadata as usize].init(meta_total, 0);
         self.zones[SpaceZone::GcReserve as usize].init(gc_reserve, gc_reserve);
@@ -127,7 +149,9 @@ impl SpaceTracker {
         self.block_size.store(block_size, Ordering::Relaxed);
     }
 
-    pub fn zone(&self, z: SpaceZone) -> &SpaceZoneStats { &self.zones[z as usize] }
+    pub fn zone(&self, z: SpaceZone) -> &SpaceZoneStats {
+        &self.zones[z as usize]
+    }
 
     pub fn alloc_blocks(&self, zone: SpaceZone, n: u64) {
         self.zones[zone as usize].alloc(n);
@@ -137,7 +161,9 @@ impl SpaceTracker {
         self.zones[zone as usize].free(n);
     }
 
-    pub fn block_size(&self) -> u64 { self.block_size.load(Ordering::Relaxed) }
+    pub fn block_size(&self) -> u64 {
+        self.block_size.load(Ordering::Relaxed)
+    }
 
     /// Total blocs utilisés toutes zones confondues (RECUR-01 : while).
     pub fn total_used_blocks(&self) -> u64 {
@@ -164,15 +190,21 @@ impl SpaceTracker {
     /// Utilisation globale en % (ARITH-02).
     pub fn usage_pct(&self) -> u8 {
         let mut all_total = 0u64;
-        let mut all_used  = 0u64;
+        let mut all_used = 0u64;
         let mut i = 0usize;
         while i < SpaceZone::COUNT {
             all_total = all_total.saturating_add(self.zones[i].total());
-            all_used  = all_used.saturating_add(self.zones[i].used());
+            all_used = all_used.saturating_add(self.zones[i].used());
             i = i.wrapping_add(1);
         }
-        if all_total == 0 { return 0; }
-        (all_used.saturating_mul(100).checked_div(all_total).unwrap_or(0).min(100)) as u8
+        if all_total == 0 {
+            return 0;
+        }
+        (all_used
+            .saturating_mul(100)
+            .checked_div(all_total)
+            .unwrap_or(0)
+            .min(100)) as u8
     }
 
     /// Bytes utilisés (ARITH-02).
@@ -214,10 +246,10 @@ impl SpaceTracker {
         }
         SpaceSnapshot {
             zones,
-            block_size:      self.block_size(),
-            total_extents:   self.total_extents.load(Ordering::Relaxed),
-            small_extents:   self.small_extents.load(Ordering::Relaxed),
-            usage_pct:       self.usage_pct(),
+            block_size: self.block_size(),
+            total_extents: self.total_extents.load(Ordering::Relaxed),
+            small_extents: self.small_extents.load(Ordering::Relaxed),
+            usage_pct: self.usage_pct(),
         }
     }
 }
@@ -230,23 +262,31 @@ pub static SPACE_TRACKER: SpaceTracker = SpaceTracker::new_const();
 #[derive(Clone, Copy, Debug)]
 pub struct SpaceSnapshot {
     /// (total, used, reserved) par zone.
-    pub zones:         [(u64, u64, u64); SpaceZone::COUNT],
-    pub block_size:    u64,
+    pub zones: [(u64, u64, u64); SpaceZone::COUNT],
+    pub block_size: u64,
     pub total_extents: u64,
     pub small_extents: u64,
-    pub usage_pct:     u8,
+    pub usage_pct: u8,
 }
 
 impl SpaceSnapshot {
     pub fn zone_usage_pct(&self, z: SpaceZone) -> u8 {
         let (total, used, _) = self.zones[z as usize];
-        if total == 0 { return 0; }
-        (used.saturating_mul(100).checked_div(total).unwrap_or(0).min(100)) as u8
+        if total == 0 {
+            return 0;
+        }
+        (used
+            .saturating_mul(100)
+            .checked_div(total)
+            .unwrap_or(0)
+            .min(100)) as u8
     }
 
     pub fn fragmentation_pct10(&self) -> u64 {
-        self.small_extents.saturating_mul(1000)
-            .checked_div(self.total_extents.max(1)).unwrap_or(0)
+        self.small_extents
+            .saturating_mul(1000)
+            .checked_div(self.total_extents.max(1))
+            .unwrap_or(0)
     }
 }
 
@@ -255,18 +295,22 @@ impl SpaceSnapshot {
 /// Quotas d'utilisation par zone.
 #[derive(Clone, Copy, Debug)]
 pub struct SpaceQuota {
-    pub zone:       SpaceZone,
+    pub zone: SpaceZone,
     pub max_blocks: u64,
     pub soft_limit: u64,
 }
 
 impl SpaceQuota {
     pub fn check(&self, used: u64) -> ExofsResult<()> {
-        if used > self.max_blocks { return Err(ExofsError::QuotaExceeded); }
+        if used > self.max_blocks {
+            return Err(ExofsError::QuotaExceeded);
+        }
         Ok(())
     }
 
-    pub fn soft_exceeded(&self, used: u64) -> bool { used > self.soft_limit }
+    pub fn soft_exceeded(&self, used: u64) -> bool {
+        used > self.soft_limit
+    }
 }
 
 // ─── FragmentationInfo ───────────────────────────────────────────────────────
@@ -276,15 +320,22 @@ impl SpaceQuota {
 pub struct FragmentationInfo {
     pub total_extents: u64,
     pub small_extents: u64,
-    pub frag_pct10:    u64,
+    pub frag_pct10: u64,
 }
 
 impl FragmentationInfo {
     pub fn from_tracker(t: &SpaceTracker) -> Self {
         let total = t.total_extents.load(Ordering::Relaxed);
         let small = t.small_extents.load(Ordering::Relaxed);
-        let pct10 = small.saturating_mul(1000).checked_div(total.max(1)).unwrap_or(0);
-        Self { total_extents: total, small_extents: small, frag_pct10: pct10 }
+        let pct10 = small
+            .saturating_mul(1000)
+            .checked_div(total.max(1))
+            .unwrap_or(0);
+        Self {
+            total_extents: total,
+            small_extents: small,
+            frag_pct10: pct10,
+        }
     }
 
     pub fn needs_defrag(&self, threshold_pct10: u64) -> bool {
@@ -329,7 +380,7 @@ mod tests {
         let t = SpaceTracker::new_const();
         t.track_extent(2); // small
         t.track_extent(8); // large
-        // 1/2 * 1000 = 500
+                           // 1/2 * 1000 = 500
         assert_eq!(t.fragmentation_pct10(), 500);
     }
 
@@ -344,7 +395,11 @@ mod tests {
 
     #[test]
     fn test_quota_check() {
-        let q = SpaceQuota { zone: SpaceZone::Data, max_blocks: 100, soft_limit: 80 };
+        let q = SpaceQuota {
+            zone: SpaceZone::Data,
+            max_blocks: 100,
+            soft_limit: 80,
+        };
         assert!(q.check(50).is_ok());
         assert!(q.check(101).is_err());
         assert!(!q.soft_exceeded(70));
@@ -353,7 +408,10 @@ mod tests {
 
     #[test]
     fn test_fragmentation_info_needs_defrag() {
-        let info = FragmentationInfo { frag_pct10: 400, ..Default::default() };
+        let info = FragmentationInfo {
+            frag_pct10: 400,
+            ..Default::default()
+        };
         assert!(info.needs_defrag(300));
         assert!(!info.needs_defrag(500));
     }
@@ -387,9 +445,9 @@ pub const SPACE_HISTORY_SIZE: usize = 32;
 /// Ring de snapshots d'utilisation pour suivi de tendance.
 pub struct SpaceHistory {
     usage_pct: [core::sync::atomic::AtomicU8; SPACE_HISTORY_SIZE],
-    ticks:     [AtomicU64; SPACE_HISTORY_SIZE],
-    head:      AtomicU64,
-    count:     AtomicU64,
+    ticks: [AtomicU64; SPACE_HISTORY_SIZE],
+    head: AtomicU64,
+    count: AtomicU64,
 }
 
 unsafe impl Sync for SpaceHistory {}
@@ -397,11 +455,15 @@ unsafe impl Sync for SpaceHistory {}
 impl SpaceHistory {
     pub const fn new_const() -> Self {
         #[allow(clippy::declare_interior_mutable_const)]
-        const ZU8:  core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+        const ZU8: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
         #[allow(clippy::declare_interior_mutable_const)]
         const ZU64: AtomicU64 = AtomicU64::new(0);
-        Self { usage_pct: [ZU8; SPACE_HISTORY_SIZE], ticks: [ZU64; SPACE_HISTORY_SIZE],
-               head: AtomicU64::new(0), count: AtomicU64::new(0) }
+        Self {
+            usage_pct: [ZU8; SPACE_HISTORY_SIZE],
+            ticks: [ZU64; SPACE_HISTORY_SIZE],
+            head: AtomicU64::new(0),
+            count: AtomicU64::new(0),
+        }
     }
 
     pub fn record(&self, pct: u8, tick: u64) {
@@ -409,18 +471,26 @@ impl SpaceHistory {
         self.usage_pct[idx].store(pct, Ordering::Relaxed);
         self.ticks[idx].store(tick, Ordering::Relaxed);
         let c = self.count.load(Ordering::Relaxed);
-        if c < SPACE_HISTORY_SIZE as u64 { self.count.fetch_add(1, Ordering::Relaxed); }
+        if c < SPACE_HISTORY_SIZE as u64 {
+            self.count.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Moyenne d'utilisation sur les n derniers points (ARITH-02 / RECUR-01).
     pub fn average_pct(&self) -> u8 {
         let n = self.count.load(Ordering::Relaxed);
-        if n == 0 { return 0; }
+        if n == 0 {
+            return 0;
+        }
         let mut sum = 0u64;
         let head = self.head.load(Ordering::Relaxed) as usize;
         let mut i = 0usize;
         while i < n as usize {
-            let idx = (head.wrapping_add(SPACE_HISTORY_SIZE).wrapping_sub(i).wrapping_sub(1)) % SPACE_HISTORY_SIZE;
+            let idx = (head
+                .wrapping_add(SPACE_HISTORY_SIZE)
+                .wrapping_sub(i)
+                .wrapping_sub(1))
+                % SPACE_HISTORY_SIZE;
             sum = sum.saturating_add(self.usage_pct[idx].load(Ordering::Relaxed) as u64);
             i = i.wrapping_add(1);
         }
@@ -430,10 +500,16 @@ impl SpaceHistory {
     /// Trend: retourne true si l'utilisation augmente.
     pub fn is_growing(&self) -> bool {
         let n = self.count.load(Ordering::Relaxed) as usize;
-        if n < 2 { return false; }
+        if n < 2 {
+            return false;
+        }
         let head = self.head.load(Ordering::Relaxed) as usize;
-        let last  = self.usage_pct[(head.wrapping_add(SPACE_HISTORY_SIZE).wrapping_sub(1)) % SPACE_HISTORY_SIZE].load(Ordering::Relaxed);
-        let prev  = self.usage_pct[(head.wrapping_add(SPACE_HISTORY_SIZE).wrapping_sub(2)) % SPACE_HISTORY_SIZE].load(Ordering::Relaxed);
+        let last = self.usage_pct
+            [(head.wrapping_add(SPACE_HISTORY_SIZE).wrapping_sub(1)) % SPACE_HISTORY_SIZE]
+            .load(Ordering::Relaxed);
+        let prev = self.usage_pct
+            [(head.wrapping_add(SPACE_HISTORY_SIZE).wrapping_sub(2)) % SPACE_HISTORY_SIZE]
+            .load(Ordering::Relaxed);
         last > prev
     }
 
@@ -445,7 +521,11 @@ impl SpaceHistory {
         let head = self.head.load(Ordering::Relaxed) as usize;
         let mut i = 0usize;
         while i < n {
-            let idx = (head.wrapping_add(SPACE_HISTORY_SIZE).wrapping_sub(i).wrapping_sub(1)) % SPACE_HISTORY_SIZE;
+            let idx = (head
+                .wrapping_add(SPACE_HISTORY_SIZE)
+                .wrapping_sub(i)
+                .wrapping_sub(1))
+                % SPACE_HISTORY_SIZE;
             v.push(self.usage_pct[idx].load(Ordering::Relaxed));
             i = i.wrapping_add(1);
         }
@@ -462,24 +542,29 @@ mod tests_history {
     #[test]
     fn test_history_record_average() {
         let h = SpaceHistory::new_const();
-        h.record(40, 1); h.record(60, 2); h.record(80, 3);
+        h.record(40, 1);
+        h.record(60, 2);
+        h.record(80, 3);
         assert_eq!(h.average_pct(), 60);
     }
 
     #[test]
     fn test_history_is_growing() {
         let h = SpaceHistory::new_const();
-        h.record(50, 1); h.record(70, 2);
+        h.record(50, 1);
+        h.record(70, 2);
         assert!(h.is_growing());
         let h2 = SpaceHistory::new_const();
-        h2.record(70, 1); h2.record(50, 2);
+        h2.record(70, 1);
+        h2.record(50, 2);
         assert!(!h2.is_growing());
     }
 
     #[test]
     fn test_history_to_vec() {
         let h = SpaceHistory::new_const();
-        h.record(10, 1); h.record(20, 2);
+        h.record(10, 1);
+        h.record(20, 2);
         let v = h.to_vec().expect("ok");
         assert_eq!(v.len(), 2);
     }

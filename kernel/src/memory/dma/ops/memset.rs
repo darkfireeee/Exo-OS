@@ -12,14 +12,14 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::memory::core::types::PhysAddr;
-use crate::memory::dma::core::types::{
-    DmaDirection, DmaMapFlags, DmaCapabilities, DmaPriority, DmaError,
-};
+use crate::memory::dma::channels::manager::DMA_CHANNELS;
+use crate::memory::dma::completion::handler::DMA_COMPLETION;
 use crate::memory::dma::core::descriptor::DMA_DESCRIPTOR_TABLE;
 use crate::memory::dma::core::mapping::IOVA_ALLOCATOR;
-use crate::memory::dma::channels::manager::DMA_CHANNELS;
+use crate::memory::dma::core::types::{
+    DmaCapabilities, DmaDirection, DmaError, DmaMapFlags, DmaPriority,
+};
 use crate::memory::dma::iommu::domain::IDENTITY_DOMAIN_ID;
-use crate::memory::dma::completion::handler::DMA_COMPLETION;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATISTIQUES
@@ -27,28 +27,28 @@ use crate::memory::dma::completion::handler::DMA_COMPLETION;
 
 pub struct DmaMemsetStats {
     /// Appels à dma_memset (total).
-    pub calls:        AtomicU64,
+    pub calls: AtomicU64,
     /// Opérations traitées par un canal DMA hardware.
-    pub hw_ops:       AtomicU64,
+    pub hw_ops: AtomicU64,
     /// Opérations traitées par le chemin software (fallback).
-    pub sw_ops:       AtomicU64,
+    pub sw_ops: AtomicU64,
     /// Octets zéro-fill via DMA hardware.
-    pub hw_bytes:     AtomicU64,
+    pub hw_bytes: AtomicU64,
     /// Octets zéro-fill via software.
-    pub sw_bytes:     AtomicU64,
+    pub sw_bytes: AtomicU64,
     /// Erreurs (invalidParams, OutOfMemory, mapping…).
-    pub errors:       AtomicU64,
+    pub errors: AtomicU64,
 }
 
 impl DmaMemsetStats {
     pub const fn new() -> Self {
         DmaMemsetStats {
-            calls:    AtomicU64::new(0),
-            hw_ops:   AtomicU64::new(0),
-            sw_ops:   AtomicU64::new(0),
+            calls: AtomicU64::new(0),
+            hw_ops: AtomicU64::new(0),
+            sw_ops: AtomicU64::new(0),
             hw_bytes: AtomicU64::new(0),
             sw_bytes: AtomicU64::new(0),
-            errors:   AtomicU64::new(0),
+            errors: AtomicU64::new(0),
         }
     }
 }
@@ -75,13 +75,17 @@ const HW_MEMSET_THRESHOLD: usize = 4096; // 1 page
 pub unsafe fn dma_memset(dst: PhysAddr, value: u8, size: usize) -> Result<(), DmaError> {
     DMA_MEMSET_STATS.calls.fetch_add(1, Ordering::Relaxed);
 
-    if size == 0 { return Ok(()); }
+    if size == 0 {
+        return Ok(());
+    }
 
     // Petit transfert → SW direct sans overhead de canal.
     if size < HW_MEMSET_THRESHOLD {
         sw_memset(dst, value, size);
-        DMA_MEMSET_STATS.sw_ops  .fetch_add(1, Ordering::Relaxed);
-        DMA_MEMSET_STATS.sw_bytes.fetch_add(size as u64, Ordering::Relaxed);
+        DMA_MEMSET_STATS.sw_ops.fetch_add(1, Ordering::Relaxed);
+        DMA_MEMSET_STATS
+            .sw_bytes
+            .fetch_add(size as u64, Ordering::Relaxed);
         return Ok(());
     }
 
@@ -98,8 +102,10 @@ pub unsafe fn dma_memset(dst: PhysAddr, value: u8, size: usize) -> Result<(), Dm
                 // jusqu'à la complétion via interrupt ; cette implémentation simule
                 // une soumission best-effort.
                 DMA_CHANNELS.free_channel(ch_id);
-                DMA_MEMSET_STATS.hw_ops  .fetch_add(1, Ordering::Relaxed);
-                DMA_MEMSET_STATS.hw_bytes.fetch_add(size as u64, Ordering::Relaxed);
+                DMA_MEMSET_STATS.hw_ops.fetch_add(1, Ordering::Relaxed);
+                DMA_MEMSET_STATS
+                    .hw_bytes
+                    .fetch_add(size as u64, Ordering::Relaxed);
                 return Ok(());
             }
             Err(_) => {
@@ -112,8 +118,10 @@ pub unsafe fn dma_memset(dst: PhysAddr, value: u8, size: usize) -> Result<(), Dm
 
     // Fallback software.
     sw_memset(dst, value, size);
-    DMA_MEMSET_STATS.sw_ops  .fetch_add(1, Ordering::Relaxed);
-    DMA_MEMSET_STATS.sw_bytes.fetch_add(size as u64, Ordering::Relaxed);
+    DMA_MEMSET_STATS.sw_ops.fetch_add(1, Ordering::Relaxed);
+    DMA_MEMSET_STATS
+        .sw_bytes
+        .fetch_add(size as u64, Ordering::Relaxed);
     Ok(())
 }
 
@@ -135,9 +143,9 @@ pub unsafe fn dma_zero(dst: PhysAddr, size: usize) -> Result<(), DmaError> {
 /// # Safety
 /// `dst` doit être physiquement valide.
 unsafe fn submit_hw_memset(
-    dst:   PhysAddr,
+    dst: PhysAddr,
     value: u8,
-    size:  usize,
+    size: usize,
     ch_id: u32,
 ) -> Result<(), DmaError> {
     // Allouer un descripteur de transaction.
@@ -152,7 +160,8 @@ unsafe fn submit_hw_memset(
 
     // Mapper la destination en IOVA.
     let dst_iova = IOVA_ALLOCATOR.map(
-        dst, size,
+        dst,
+        size,
         DmaDirection::ToDevice,
         DmaMapFlags::NONE,
         IDENTITY_DOMAIN_ID,

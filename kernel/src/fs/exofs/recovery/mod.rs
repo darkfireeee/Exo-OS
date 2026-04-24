@@ -34,126 +34,65 @@
 //! - [`verify_health()`] : retourne un bilan de santé du module.
 //! - [`boot_recovery_sequence()`] : exécute la récupération complète au boot.
 
-
 // ── Déclarations de sous-modules ──────────────────────────────────────────────
 
-pub mod recovery_log;
-pub mod recovery_audit;
-pub mod checkpoint;
 pub mod boot_recovery;
-pub mod slot_recovery;
+pub mod checkpoint;
 pub mod epoch_replay;
+pub mod fsck;
 pub mod fsck_phase1;
 pub mod fsck_phase2;
 pub mod fsck_phase3;
 pub mod fsck_phase4;
 pub mod fsck_repair;
-pub mod fsck;
+pub mod recovery_audit;
+pub mod recovery_log;
+pub mod slot_recovery;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
 // Journaux.
-pub use recovery_log::{
-    RECOVERY_LOG,
-    RecoveryLog,
-    RecoveryLogCategory,
-    RecoveryLogEntry,
-    RecoveryEvent,
-};
 pub use recovery_audit::{
-    RECOVERY_AUDIT,
-    RecoveryAudit,
-    AuditEventKind,
-    AuditSeverity,
-    AuditEntry,
+    AuditEntry, AuditEventKind, AuditSeverity, RecoveryAudit, RECOVERY_AUDIT,
+};
+pub use recovery_log::{
+    RecoveryEvent, RecoveryLog, RecoveryLogCategory, RecoveryLogEntry, RECOVERY_LOG,
 };
 
 // Checkpoint.
-pub use checkpoint::{
-    CHECKPOINT_STORE,
-    CheckpointStore,
-    Checkpoint,
-    CheckpointId,
-    RecoveryPhase,
-};
+pub use checkpoint::{Checkpoint, CheckpointId, CheckpointStore, RecoveryPhase, CHECKPOINT_STORE};
 
 // Boot recovery.
 pub use boot_recovery::{
-    BootRecovery,
-    BootRecoveryResult,
-    BootRecoveryOptions,
-    BlockDevice,
-    boot_recovery_sequence,
+    boot_recovery_sequence, BlockDevice, BootRecovery, BootRecoveryOptions, BootRecoveryResult,
 };
 
 // Slot recovery.
-pub use slot_recovery::{
-    SlotRecovery,
-    SlotId,
-    SlotRecoveryResult,
-    SLOT_A,
-    SLOT_B,
-    SLOT_C,
-};
+pub use slot_recovery::{SlotId, SlotRecovery, SlotRecoveryResult, SLOT_A, SLOT_B, SLOT_C};
 
 // Epoch replay.
-pub use epoch_replay::{
-    EpochReplay,
-    ReplayResult,
-    EpochReplayOptions,
-};
+pub use epoch_replay::{EpochReplay, EpochReplayOptions, ReplayResult};
 
 // Fsck — orchestrateur.
-pub use fsck::{
-    Fsck,
-    FsckResult,
-    FsckOptions,
-};
+pub use fsck::{Fsck, FsckOptions, FsckResult};
 
 // Fsck — phases individuelles.
 pub use fsck_phase1::{
-    FsckPhase1,
-    Phase1Report,
-    Phase1Options,
-    Phase1Error,
-    Phase1ErrorKind,
-    SuperblockDisk,
-    SUPERBLOCK_LBA,
-    SUPERBLOCK_HDR_MAGIC,
+    FsckPhase1, Phase1Error, Phase1ErrorKind, Phase1Options, Phase1Report, SuperblockDisk,
+    SUPERBLOCK_HDR_MAGIC, SUPERBLOCK_LBA,
 };
 pub use fsck_phase2::{
-    FsckPhase2,
+    AllocEntry, BlobRefCounter, FsckPhase2, Phase2Error, Phase2ErrorKind, Phase2Options,
     Phase2Report,
-    Phase2Options,
-    Phase2Error,
-    Phase2ErrorKind,
-    BlobRefCounter,
-    AllocEntry,
 };
 pub use fsck_phase3::{
-    FsckPhase3,
-    Phase3Report,
-    Phase3Options,
-    Phase3Error,
-    Phase3ErrorKind,
-    SnapshotHeaderDisk,
+    FsckPhase3, Phase3Error, Phase3ErrorKind, Phase3Options, Phase3Report, SnapshotHeaderDisk,
     SNAPSHOT_HDR_MAGIC,
 };
 pub use fsck_phase4::{
-    FsckPhase4,
-    Phase4Report,
-    Phase4Options,
-    Phase4Error,
-    Phase4ErrorKind,
-    LostFoundEntry,
+    FsckPhase4, LostFoundEntry, Phase4Error, Phase4ErrorKind, Phase4Options, Phase4Report,
 };
-pub use fsck_repair::{
-    FsckRepair,
-    RepairAction,
-    RepairRecord,
-    RepairLog,
-    REPAIR_LOG,
-};
+pub use fsck_repair::{FsckRepair, RepairAction, RepairLog, RepairRecord, REPAIR_LOG};
 
 extern crate alloc;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -173,19 +112,19 @@ static RECOVERY_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 #[derive(Clone, Copy, Debug)]
 pub struct RecoveryHealth {
     /// Nombre total d événements enregistrés dans RECOVERY_LOG.
-    pub log_events_total:      usize,
+    pub log_events_total: usize,
     /// Nombre total d entrées dans RECOVERY_AUDIT.
-    pub audit_entries_total:   usize,
+    pub audit_entries_total: usize,
     /// Nombre total de checkpoints sauvegardés.
-    pub checkpoint_count:      usize,
+    pub checkpoint_count: usize,
     /// Nombre total de réparations appliquées.
-    pub repairs_total:         usize,
+    pub repairs_total: usize,
     /// `true` si toutes les réparations récentes ont réussi.
-    pub repairs_ok:            bool,
+    pub repairs_ok: bool,
     /// `true` si des erreurs critiques ont été auditées.
-    pub has_critical_audit:    bool,
+    pub has_critical_audit: bool,
     /// Module initialisé.
-    pub initialized:           bool,
+    pub initialized: bool,
 }
 
 // ── API publique ──────────────────────────────────────────────────────────────
@@ -198,7 +137,10 @@ pub struct RecoveryHealth {
 /// # Errors
 /// - [`ExofsError::CommitInProgress`] si le module est déjà initialisé.
 pub fn init() -> ExofsResult<()> {
-    if RECOVERY_INITIALIZED.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    if RECOVERY_INITIALIZED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Err(ExofsError::CommitInProgress);
     }
     RECOVERY_LOG.log_event(RecoveryEvent::RecoveryModuleLoaded);
@@ -210,7 +152,9 @@ pub fn init() -> ExofsResult<()> {
 ///
 /// Peut être appelé sans danger même si le module n a pas été initialisé.
 pub fn shutdown() {
-    if !RECOVERY_INITIALIZED.load(Ordering::Acquire) { return; }
+    if !RECOVERY_INITIALIZED.load(Ordering::Acquire) {
+        return;
+    }
     RECOVERY_SHUTTING_DOWN.store(true, Ordering::SeqCst);
     RECOVERY_LOG.log_event(RecoveryEvent::RecoveryModuleUnloaded);
     RECOVERY_INITIALIZED.store(false, Ordering::SeqCst);
@@ -222,10 +166,10 @@ pub fn verify_health() -> RecoveryHealth {
     let repairs_ok = REPAIR_LOG.all_recent_ok(16);
     let has_critical_audit = RECOVERY_AUDIT.violation_count() > 0;
     RecoveryHealth {
-        log_events_total:    RECOVERY_LOG.total_written() as usize,
+        log_events_total: RECOVERY_LOG.total_written() as usize,
         audit_entries_total: RECOVERY_AUDIT.total() as usize as usize,
-        checkpoint_count:    CHECKPOINT_STORE.count(),
-        repairs_total:       REPAIR_LOG.total(),
+        checkpoint_count: CHECKPOINT_STORE.count(),
+        repairs_total: REPAIR_LOG.total(),
         repairs_ok,
         has_critical_audit,
         initialized: RECOVERY_INITIALIZED.load(Ordering::Relaxed),

@@ -7,20 +7,20 @@
 //!
 //! RECUR-01 / OOM-02 / ARITH-02 — ExofsError exclusivement.
 
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
-use core::cell::UnsafeCell;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub const INO_ROOT:      u64   = 1;
-pub const INO_RESERVED:  u64   = 2;  // premier utilisable
+pub const INO_ROOT: u64 = 1;
+pub const INO_RESERVED: u64 = 2; // premier utilisable
 pub const INO_MAX_CACHE: usize = 4096;
-pub const INO_VER:       u8    = 1;
-pub const INO_MAGIC:     u32   = 0x494E_4F45; // "INOE"
+pub const INO_VER: u8 = 1;
+pub const INO_MAGIC: u32 = 0x494E_4F45; // "INOE"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types publics
@@ -32,9 +32,9 @@ pub type ObjectIno = u64;
 /// Flags d'attributs associés à un inode émulé.
 pub mod inode_flags {
     pub const DIRECTORY: u32 = 0x0001;
-    pub const SYMLINK:   u32 = 0x0002;
-    pub const REGULAR:   u32 = 0x0004;
-    pub const SNAPSHOT:  u32 = 0x0008;
+    pub const SYMLINK: u32 = 0x0002;
+    pub const REGULAR: u32 = 0x0004;
+    pub const SNAPSHOT: u32 = 0x0008;
     pub const READ_ONLY: u32 = 0x0010;
 }
 
@@ -42,13 +42,13 @@ pub mod inode_flags {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InodeEntry {
-    pub ino:       ObjectIno,
+    pub ino: ObjectIno,
     pub object_id: u64,
-    pub flags:     u32,
-    pub link_count:u32,
-    pub size:      u64,
-    pub uid:       u64,
-    pub epoch_id:  u64,
+    pub flags: u32,
+    pub link_count: u32,
+    pub size: u64,
+    pub uid: u64,
+    pub epoch_id: u64,
     pub access_ts: u64,
 }
 
@@ -60,7 +60,7 @@ const _: () = assert!(core::mem::size_of::<InodeEntry>() == 56);
 
 pub struct InodeEmulation {
     /// forward: (object_id, ino, entry) — tableau linéaire
-    fwd:      UnsafeCell<Vec<InodeEntry>>,
+    fwd: UnsafeCell<Vec<InodeEntry>>,
     spinlock: AtomicU64,
     next_ino: AtomicU64,
     #[allow(dead_code)]
@@ -75,15 +75,19 @@ pub static INODE_EMULATION: InodeEmulation = InodeEmulation::new_const();
 impl InodeEmulation {
     pub const fn new_const() -> Self {
         Self {
-            fwd:          UnsafeCell::new(Vec::new()),
-            spinlock:     AtomicU64::new(0),
-            next_ino:     AtomicU64::new(INO_RESERVED),
+            fwd: UnsafeCell::new(Vec::new()),
+            spinlock: AtomicU64::new(0),
+            next_ino: AtomicU64::new(INO_RESERVED),
             evict_cursor: AtomicU64::new(0),
         }
     }
 
     fn lock_acquire(&self) {
-        while self.spinlock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .spinlock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
@@ -97,7 +101,9 @@ impl InodeEmulation {
     fn find_by_oid(table: &[InodeEntry], oid: u64) -> Option<usize> {
         let mut i = 0usize;
         while i < table.len() {
-            if table[i].object_id == oid { return Some(i); }
+            if table[i].object_id == oid {
+                return Some(i);
+            }
             i = i.wrapping_add(1);
         }
         None
@@ -108,7 +114,9 @@ impl InodeEmulation {
     fn find_by_ino(table: &[InodeEntry], ino: ObjectIno) -> Option<usize> {
         let mut i = 0usize;
         while i < table.len() {
-            if table[i].ino == ino { return Some(i); }
+            if table[i].ino == ino {
+                return Some(i);
+            }
             i = i.wrapping_add(1);
         }
         None
@@ -116,7 +124,9 @@ impl InodeEmulation {
 
     /// Éviction round-robin si le cache est plein.
     fn evict_one(table: &mut Vec<InodeEntry>) {
-        if table.is_empty() { return; }
+        if table.is_empty() {
+            return;
+        }
         // Retire la première entrée (FIFO simple)
         table.remove(0);
     }
@@ -131,23 +141,46 @@ impl InodeEmulation {
 
     /// Retourne ou alloue un ino avec métadonnées complètes.
     /// OOM-02 : try_reserve.
-    pub fn get_or_alloc_flags(&self, object_id: u64, flags: u32, size: u64, uid: u64) -> ExofsResult<ObjectIno> {
+    pub fn get_or_alloc_flags(
+        &self,
+        object_id: u64,
+        flags: u32,
+        size: u64,
+        uid: u64,
+    ) -> ExofsResult<ObjectIno> {
         self.lock_acquire();
         let result = self.get_or_alloc_inner(object_id, flags, size, uid);
         self.lock_release();
         result
     }
 
-    fn get_or_alloc_inner(&self, object_id: u64, flags: u32, size: u64, uid: u64) -> ExofsResult<ObjectIno> {
+    fn get_or_alloc_inner(
+        &self,
+        object_id: u64,
+        flags: u32,
+        size: u64,
+        uid: u64,
+    ) -> ExofsResult<ObjectIno> {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         if let Some(idx) = Self::find_by_oid(table, object_id) {
             return Ok(table[idx].ino);
         }
         // Alloue un nouveau ino.
-        if table.len() >= INO_MAX_CACHE { Self::evict_one(table); }
+        if table.len() >= INO_MAX_CACHE {
+            Self::evict_one(table);
+        }
         let ino = self.next_ino.fetch_add(1, Ordering::Relaxed);
-        let entry = InodeEntry { ino, object_id, flags, link_count: 1, size, uid, epoch_id: 0, access_ts: 0 };
+        let entry = InodeEntry {
+            ino,
+            object_id,
+            flags,
+            link_count: 1,
+            size,
+            uid,
+            epoch_id: 0,
+            access_ts: 0,
+        };
         table.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         table.push(entry);
         Ok(ino)
@@ -222,8 +255,11 @@ impl InodeEmulation {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         let result = if let Some(idx) = Self::find_by_ino(table, ino) {
-            table[idx].flags = flags; Ok(())
-        } else { Err(ExofsError::ObjectNotFound) };
+            table[idx].flags = flags;
+            Ok(())
+        } else {
+            Err(ExofsError::ObjectNotFound)
+        };
         self.lock_release();
         result
     }
@@ -234,8 +270,11 @@ impl InodeEmulation {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         let result = if let Some(idx) = Self::find_by_ino(table, ino) {
-            table[idx].epoch_id = epoch_id; Ok(())
-        } else { Err(ExofsError::ObjectNotFound) };
+            table[idx].epoch_id = epoch_id;
+            Ok(())
+        } else {
+            Err(ExofsError::ObjectNotFound)
+        };
         self.lock_release();
         result
     }
@@ -312,15 +351,21 @@ impl InodeEmulation {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &*self.fwd.get() };
         let mut out: Vec<ObjectIno> = Vec::new();
-        out.try_reserve(table.len()).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(table.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         let mut i = 0usize;
-        while i < table.len() { out.push(table[i].ino); i = i.wrapping_add(1); }
+        while i < table.len() {
+            out.push(table[i].ino);
+            i = i.wrapping_add(1);
+        }
         self.lock_release();
         Ok(out)
     }
 
     /// Alias pour la racine.
-    pub fn root_ino() -> ObjectIno { INO_ROOT }
+    pub fn root_ino() -> ObjectIno {
+        INO_ROOT
+    }
 
     /// Garantit que la racine est bien enregistrée.
     pub fn ensure_root(&self) -> ExofsResult<()> {
@@ -328,8 +373,20 @@ impl InodeEmulation {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let table = unsafe { &mut *self.fwd.get() };
         if Self::find_by_ino(table, INO_ROOT).is_none() {
-            let entry = InodeEntry { ino: INO_ROOT, object_id: 1, flags: inode_flags::DIRECTORY, link_count: 2, size: 0, uid: 0, epoch_id: 0, access_ts: 0 };
-            table.try_reserve(1).map_err(|_| { self.lock_release(); ExofsError::NoMemory })?;
+            let entry = InodeEntry {
+                ino: INO_ROOT,
+                object_id: 1,
+                flags: inode_flags::DIRECTORY,
+                link_count: 2,
+                size: 0,
+                uid: 0,
+                epoch_id: 0,
+                access_ts: 0,
+            };
+            table.try_reserve(1).map_err(|_| {
+                self.lock_release();
+                ExofsError::NoMemory
+            })?;
             table.push(entry);
         }
         self.lock_release();
@@ -344,12 +401,23 @@ impl InodeEmulation {
 /// Encode un InodeEntry en 56 octets.
 pub fn encode_inode_entry(e: &InodeEntry) -> [u8; 56] {
     let mut buf = [0u8; 56];
-    let fields: [u64; 7] = [e.ino, e.object_id, (e.flags as u64) | ((e.link_count as u64) << 32), e.size, e.uid, e.epoch_id, e.access_ts];
+    let fields: [u64; 7] = [
+        e.ino,
+        e.object_id,
+        (e.flags as u64) | ((e.link_count as u64) << 32),
+        e.size,
+        e.uid,
+        e.epoch_id,
+        e.access_ts,
+    ];
     let mut i = 0usize;
     while i < 7 {
         let b = fields[i].to_le_bytes();
         let mut j = 0usize;
-        while j < 8 { buf[i * 8 + j] = b[j]; j = j.wrapping_add(1); }
+        while j < 8 {
+            buf[i * 8 + j] = b[j];
+            j = j.wrapping_add(1);
+        }
         i = i.wrapping_add(1);
     }
     buf
@@ -357,22 +425,33 @@ pub fn encode_inode_entry(e: &InodeEntry) -> [u8; 56] {
 
 /// Décode un InodeEntry depuis 56 octets.
 pub fn decode_inode_entry(buf: &[u8]) -> Option<InodeEntry> {
-    if buf.len() < 56 { return None; }
+    if buf.len() < 56 {
+        return None;
+    }
     let mut fields = [0u64; 7];
     let mut i = 0usize;
     while i < 7 {
-        fields[i] = u64::from_le_bytes([buf[i*8],buf[i*8+1],buf[i*8+2],buf[i*8+3],buf[i*8+4],buf[i*8+5],buf[i*8+6],buf[i*8+7]]);
+        fields[i] = u64::from_le_bytes([
+            buf[i * 8],
+            buf[i * 8 + 1],
+            buf[i * 8 + 2],
+            buf[i * 8 + 3],
+            buf[i * 8 + 4],
+            buf[i * 8 + 5],
+            buf[i * 8 + 6],
+            buf[i * 8 + 7],
+        ]);
         i = i.wrapping_add(1);
     }
     Some(InodeEntry {
-        ino:        fields[0],
-        object_id:  fields[1],
-        flags:      (fields[2] & 0xFFFF_FFFF) as u32,
+        ino: fields[0],
+        object_id: fields[1],
+        flags: (fields[2] & 0xFFFF_FFFF) as u32,
         link_count: (fields[2] >> 32) as u32,
-        size:       fields[3],
-        uid:        fields[4],
-        epoch_id:   fields[5],
-        access_ts:  fields[6],
+        size: fields[3],
+        uid: fields[4],
+        epoch_id: fields[5],
+        access_ts: fields[6],
     })
 }
 
@@ -384,10 +463,14 @@ pub fn decode_inode_entry(buf: &[u8]) -> Option<InodeEntry> {
 mod tests {
     use super::*;
 
-    fn emu() -> InodeEmulation { InodeEmulation::new_const() }
+    fn emu() -> InodeEmulation {
+        InodeEmulation::new_const()
+    }
 
     #[test]
-    fn test_inode_entry_size() { assert_eq!(core::mem::size_of::<InodeEntry>(), 56); }
+    fn test_inode_entry_size() {
+        assert_eq!(core::mem::size_of::<InodeEntry>(), 56);
+    }
 
     #[test]
     fn test_get_or_alloc_deterministic() {
@@ -453,7 +536,16 @@ mod tests {
 
     #[test]
     fn test_encode_decode_roundtrip() {
-        let entry = InodeEntry { ino: 42, object_id: 99, flags: inode_flags::REGULAR, link_count: 3, size: 4096, uid: 1000, epoch_id: 7, access_ts: 12345 };
+        let entry = InodeEntry {
+            ino: 42,
+            object_id: 99,
+            flags: inode_flags::REGULAR,
+            link_count: 3,
+            size: 4096,
+            uid: 1000,
+            epoch_id: 7,
+            access_ts: 12345,
+        };
         let buf = encode_inode_entry(&entry);
         let decoded = decode_inode_entry(&buf).unwrap();
         assert_eq!(decoded.ino, 42);

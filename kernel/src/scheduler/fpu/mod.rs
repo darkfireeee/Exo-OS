@@ -4,10 +4,10 @@
 // arch/x86_64/cpu/fpu.rs = instructions brutes (XSAVE/XRSTOR/FXSAVE).
 // Ce module = politique (lazy, quand sauvegarder, pour quel thread).
 
-pub mod state;
 pub mod lazy;
 pub mod save_restore;
+pub mod state;
 
-pub use state::{FpuState, XSAVE_AREA_SIZE, detect_xsave_size, FXSAVE_SIZE};
-pub use lazy::{init, mark_fpu_not_loaded, handle_nm_exception, cr0_set_ts, cr0_clear_ts};
-pub use save_restore::{xsave_current, xrstor_for, alloc_fpu_state};
+pub use lazy::{cr0_clear_ts, cr0_set_ts, handle_nm_exception, init, mark_fpu_not_loaded};
+pub use save_restore::{alloc_fpu_state, xrstor_for, xsave_current};
+pub use state::{detect_xsave_size, FpuState, FXSAVE_SIZE, XSAVE_AREA_SIZE};

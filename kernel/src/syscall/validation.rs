@@ -22,12 +22,11 @@
 //! ## RÈGLE CONTRAT UNSAFE (regle_bonus.md)
 //! Tout bloc `unsafe {}` est précédé d'un commentaire `// SAFETY:`.
 
-
+use core::fmt;
 use core::mem;
 use core::sync::atomic::{AtomicU64, Ordering};
-use core::fmt;
 
-use super::numbers::{EFAULT, EINVAL, E2BIG};
+use super::numbers::{E2BIG, EFAULT, EINVAL};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes de plage d'adresses
@@ -53,23 +52,31 @@ pub const ARGV_MAX: usize = 1024;
 // Compteurs d'instrumentation
 // ─────────────────────────────────────────────────────────────────────────────
 
-static VALIDATION_COUNT:       AtomicU64 = AtomicU64::new(0);
+static VALIDATION_COUNT: AtomicU64 = AtomicU64::new(0);
 static VALIDATION_FAULT_COUNT: AtomicU64 = AtomicU64::new(0);
-static COPY_FROM_USER_BYTES:   AtomicU64 = AtomicU64::new(0);
-static COPY_TO_USER_BYTES:     AtomicU64 = AtomicU64::new(0);
+static COPY_FROM_USER_BYTES: AtomicU64 = AtomicU64::new(0);
+static COPY_TO_USER_BYTES: AtomicU64 = AtomicU64::new(0);
 
 /// Retourne le nombre total de validations effectuées
 #[inline]
-pub fn validation_count() -> u64 { VALIDATION_COUNT.load(Ordering::Relaxed) }
+pub fn validation_count() -> u64 {
+    VALIDATION_COUNT.load(Ordering::Relaxed)
+}
 /// Retourne le nombre de fautes de validation (EFAULT levé)
 #[inline]
-pub fn validation_fault_count() -> u64 { VALIDATION_FAULT_COUNT.load(Ordering::Relaxed) }
+pub fn validation_fault_count() -> u64 {
+    VALIDATION_FAULT_COUNT.load(Ordering::Relaxed)
+}
 /// Retourne le total d'octets copiés depuis userspace
 #[inline]
-pub fn copy_from_user_bytes_total() -> u64 { COPY_FROM_USER_BYTES.load(Ordering::Relaxed) }
+pub fn copy_from_user_bytes_total() -> u64 {
+    COPY_FROM_USER_BYTES.load(Ordering::Relaxed)
+}
 /// Retourne le total d'octets copiés vers userspace
 #[inline]
-pub fn copy_to_user_bytes_total() -> u64 { COPY_TO_USER_BYTES.load(Ordering::Relaxed) }
+pub fn copy_to_user_bytes_total() -> u64 {
+    COPY_TO_USER_BYTES.load(Ordering::Relaxed)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UserPtr<T> — pointeur typé provenant de l'espace utilisateur
@@ -96,7 +103,10 @@ impl<T> UserPtr<T> {
     /// Construit un `UserPtr` depuis une adresse brute (issue d'un registre syscall).
     #[inline]
     pub fn from_raw(addr: u64) -> Self {
-        Self { addr, _phantom: core::marker::PhantomData }
+        Self {
+            addr,
+            _phantom: core::marker::PhantomData,
+        }
     }
 
     /// Retourne l'adresse brute sans validation.
@@ -185,7 +195,9 @@ impl<T: Copy> ValidatedUserPtr<T> {
 impl<T> ValidatedUserPtr<T> {
     /// Retourne l'adresse validée.
     #[inline]
-    pub fn as_raw(&self) -> u64 { self.addr }
+    pub fn as_raw(&self) -> u64 {
+        self.addr
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -195,7 +207,7 @@ impl<T> ValidatedUserPtr<T> {
 /// Représente un buffer utilisateur (adresse + longueur) entièrement validé.
 pub struct UserBuf {
     addr: u64,
-    len:  usize,
+    len: usize,
 }
 
 impl UserBuf {
@@ -234,13 +246,19 @@ impl UserBuf {
 
     /// Retourne la longueur validée.
     #[inline]
-    pub fn len(&self) -> usize { self.len }
+    pub fn len(&self) -> usize {
+        self.len
+    }
     /// Retourne true si le buffer est vide.
     #[inline]
-    pub fn is_empty(&self) -> bool { self.len == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
     /// Retourne l'adresse validée.
     #[inline]
-    pub fn addr(&self) -> u64 { self.addr }
+    pub fn addr(&self) -> u64 {
+        self.addr
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,8 +270,8 @@ impl UserBuf {
 /// Le contenu est copié dans un buffer kernel interne lors de la validation.
 pub struct UserStr {
     /// Buffer kernel contenant la chaîne UTF-8 copiée (sans le '\0')
-    buf:  [u8; STRING_MAX],
-    len:  usize,
+    buf: [u8; STRING_MAX],
+    len: usize,
 }
 
 impl UserStr {
@@ -278,7 +296,10 @@ impl UserStr {
             return Err(SyscallError::Fault);
         }
         let capped_max = max.min(STRING_MAX);
-        let mut result = Self { buf: [0u8; STRING_MAX], len: 0 };
+        let mut result = Self {
+            buf: [0u8; STRING_MAX],
+            len: 0,
+        };
 
         // Copie octet par octet jusqu'au '\0' ou ptr+max
         // (safe car on vérifie la borne userspace ci-dessous)
@@ -288,9 +309,7 @@ impl UserStr {
                 record_fault();
                 return Err(SyscallError::TooBig);
             }
-            let byte_addr = ptr
-                .checked_add(offset as u64)
-                .ok_or(SyscallError::Fault)?;
+            let byte_addr = ptr.checked_add(offset as u64).ok_or(SyscallError::Fault)?;
             if byte_addr >= USER_ADDR_MAX {
                 record_fault();
                 return Err(SyscallError::Fault);
@@ -312,20 +331,25 @@ impl UserStr {
 
     /// Retourne la chaîne comme slice d'octets (sans le null terminal).
     #[inline]
-    pub fn as_bytes(&self) -> &[u8] { &self.buf[..self.len] }
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
 
     /// Retourne la longueur sans le null-terminal.
     #[inline]
-    pub fn len(&self) -> usize { self.len }
+    pub fn len(&self) -> usize {
+        self.len
+    }
 
     /// Retourne true si la chaîne est vide.
     #[inline]
-    pub fn is_empty(&self) -> bool { self.len == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 
     /// Tente de convertir en &str (UTF-8 strict).
     pub fn as_str(&self) -> Result<&str, SyscallError> {
-        core::str::from_utf8(&self.buf[..self.len])
-            .map_err(|_| SyscallError::Invalid)
+        core::str::from_utf8(&self.buf[..self.len]).map_err(|_| SyscallError::Invalid)
     }
 }
 
@@ -360,14 +384,14 @@ impl SyscallError {
     #[inline]
     pub const fn to_errno(self) -> i64 {
         match self {
-            SyscallError::Fault        => EFAULT,
-            SyscallError::Invalid      => EINVAL,
-            SyscallError::TooBig       => E2BIG,
-            SyscallError::Access       => -13,  // EACCES
-            SyscallError::NotFound     => -2,   // ENOENT
-            SyscallError::Busy         => -16,  // EBUSY
-            SyscallError::Interrupted  => -4,   // EINTR
-            SyscallError::NotSupported => -38,  // ENOSYS
+            SyscallError::Fault => EFAULT,
+            SyscallError::Invalid => EINVAL,
+            SyscallError::TooBig => E2BIG,
+            SyscallError::Access => -13,       // EACCES
+            SyscallError::NotFound => -2,      // ENOENT
+            SyscallError::Busy => -16,         // EBUSY
+            SyscallError::Interrupted => -4,   // EINTR
+            SyscallError::NotSupported => -38, // ENOSYS
         }
     }
 }
@@ -375,13 +399,13 @@ impl SyscallError {
 impl fmt::Display for SyscallError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            SyscallError::Fault        => "bad address (EFAULT)",
-            SyscallError::Invalid      => "invalid argument (EINVAL)",
-            SyscallError::TooBig       => "argument too large (E2BIG)",
-            SyscallError::Access       => "permission denied (EACCES)",
-            SyscallError::NotFound     => "not found (ENOENT)",
-            SyscallError::Busy         => "resource busy (EBUSY)",
-            SyscallError::Interrupted  => "interrupted (EINTR)",
+            SyscallError::Fault => "bad address (EFAULT)",
+            SyscallError::Invalid => "invalid argument (EINVAL)",
+            SyscallError::TooBig => "argument too large (E2BIG)",
+            SyscallError::Access => "permission denied (EACCES)",
+            SyscallError::NotFound => "not found (ENOENT)",
+            SyscallError::Busy => "resource busy (EBUSY)",
+            SyscallError::Interrupted => "interrupted (EINTR)",
             SyscallError::NotSupported => "not supported (ENOSYS)",
         };
         f.write_str(s)
@@ -416,13 +440,19 @@ fn validate_user_range(addr: u64, len: usize, align: usize) -> Result<(), Syscal
         return Err(SyscallError::Fault);
     }
     // Vérification anti-wrap : addr + len ne doit pas déborder u64 ni franchir USER_ADDR_MAX
-    let end = addr.checked_add(len as u64).ok_or_else(|| { record_fault(); SyscallError::Fault })?;
+    let end = addr.checked_add(len as u64).ok_or_else(|| {
+        record_fault();
+        SyscallError::Fault
+    })?;
     if end > USER_ADDR_MAX {
         record_fault();
         return Err(SyscallError::Fault);
     }
     // Vérification alignement (align doit être puissance de 2)
-    debug_assert!(align.is_power_of_two(), "align doit être une puissance de 2");
+    debug_assert!(
+        align.is_power_of_two(),
+        "align doit être une puissance de 2"
+    );
     if align > 1 && (addr as usize) % align != 0 {
         record_fault();
         return Err(SyscallError::Fault);
@@ -515,7 +545,11 @@ pub fn write_user_typed<T: Copy>(ptr_raw: u64, value: T) -> Result<(), SyscallEr
 /// Valide un buffer `(ptr, len)` et copie les données dans un `Vec` kernel.
 ///
 /// `max` est la limite de taille autorisée (ex: `IO_BUF_MAX` pour `read()`).
-pub fn read_user_buf_to_vec(ptr: u64, len: usize, max: usize) -> Result<alloc::vec::Vec<u8>, SyscallError> {
+pub fn read_user_buf_to_vec(
+    ptr: u64,
+    len: usize,
+    max: usize,
+) -> Result<alloc::vec::Vec<u8>, SyscallError> {
     let buf = UserBuf::validate(ptr, len, max)?;
     let mut vec = alloc::vec![0u8; len];
     buf.read_into(&mut vec)?;

@@ -22,10 +22,9 @@
 //   RDTSCP sérialise + fournit coreid → mesure ancrée au bon cœur.
 // ════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::Ordering;
 use super::super::sources::hpet as hpet_src;
 use super::super::sources::pm_timer as pm_src;
+use core::sync::atomic::Ordering;
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -66,11 +65,15 @@ const SAMPLE_TSC_TIMEOUT_CYCLES: u64 = 3_000_000;
 ///
 /// Retourne `None` si HPET indisponible ou mesure hors plage.
 pub fn calibrate_tsc_via_hpet(hpet_freq_hz: u64) -> Option<u64> {
-    if hpet_freq_hz == 0 { return None; }
+    if hpet_freq_hz == 0 {
+        return None;
+    }
 
     // 1ms de ticks HPET.
     let target_ticks: u64 = hpet_freq_hz / 1_000;
-    if target_ticks == 0 { return None; }
+    if target_ticks == 0 {
+        return None;
+    }
 
     let mut samples = [0u64; N_SAMPLES];
 
@@ -81,10 +84,15 @@ pub fn calibrate_tsc_via_hpet(hpet_freq_hz: u64) -> Option<u64> {
         let mut synced = false;
         for _ in 0..MAX_SYNC_ITERS {
             let v = hpet_src::read();
-            if v != sync_val { synced = true; break; }
+            if v != sync_val {
+                synced = true;
+                break;
+            }
             core::hint::spin_loop();
         }
-        if !synced { return None; }
+        if !synced {
+            return None;
+        }
 
         // ── Mesure 1ms SANS CLI (boucle HPET) ────────────────────────────────
         // RÈGLE CAL-CLI-01 : CLI autour de rdtsc_begin/rdtscp_end UNIQUEMENT,
@@ -98,7 +106,9 @@ pub fn calibrate_tsc_via_hpet(hpet_freq_hz: u64) -> Option<u64> {
         // ✅ CAL-CLI-01 VARIANTE HPET : CLI seulement pour rdtsc_begin sérialisé.
         let flags = flags_save_cli();
         let tsc_start = rdtsc_begin();
-        unsafe { flags_restore(flags); }
+        unsafe {
+            flags_restore(flags);
+        }
 
         // Boucle d'attente HPET — IRQs autorisées (voir note ci-dessus).
         // DOUBLE GARDE :
@@ -111,7 +121,9 @@ pub fn calibrate_tsc_via_hpet(hpet_freq_hz: u64) -> Option<u64> {
             let hpet_now = hpet_src::read();
             poll_count = poll_count.wrapping_add(1);
             // RÈGLE TIME-08 : wrapping_sub gère le rollover 32/64-bit.
-            if hpet_now.wrapping_sub(hpet_start) >= target_ticks { break; }
+            if hpet_now.wrapping_sub(hpet_start) >= target_ticks {
+                break;
+            }
             // GARDE MMIO : max N_MAX_POLL_MMIO lectures (protège contre HPET très lent).
             if poll_count >= N_MAX_POLL_MMIO {
                 return None;
@@ -127,7 +139,9 @@ pub fn calibrate_tsc_via_hpet(hpet_freq_hz: u64) -> Option<u64> {
         // ✅ CAL-CLI-01 : CLI seulement pour rdtscp_end sérialisé.
         let flags2 = flags_save_cli();
         let (tsc_end, _coreid) = rdtscp_end();
-        unsafe { flags_restore(flags2); }
+        unsafe {
+            flags_restore(flags2);
+        }
 
         let tsc_delta = tsc_end.wrapping_sub(tsc_start);
         // Extrapolation : delta sur 1ms → Hz pour 1 seconde.
@@ -155,10 +169,14 @@ pub fn calibrate_tsc_via_hpet(hpet_freq_hz: u64) -> Option<u64> {
 ///
 /// Retourne `None` si PM Timer indisponible ou mesure hors plage.
 pub fn calibrate_tsc_via_pm_timer() -> Option<u64> {
-    if !pm_src::available() { return None; }
+    if !pm_src::available() {
+        return None;
+    }
 
     let freq_hz = pm_src::freq_hz(); // 3_579_545 Hz (fixe)
-    if freq_hz == 0 { return None; }
+    if freq_hz == 0 {
+        return None;
+    }
 
     // 1ms de ticks PM Timer.
     let target_ticks: u64 = freq_hz / 1_000; // ≈ 3 579 ticks
@@ -170,10 +188,15 @@ pub fn calibrate_tsc_via_pm_timer() -> Option<u64> {
         let sync_val = pm_src::read();
         let mut synced = false;
         for _ in 0..MAX_SYNC_ITERS {
-            if pm_src::read() != sync_val { synced = true; break; }
+            if pm_src::read() != sync_val {
+                synced = true;
+                break;
+            }
             core::hint::spin_loop();
         }
-        if !synced { return None; }
+        if !synced {
+            return None;
+        }
 
         // ── Mesure 1ms — CLI autour de rdtsc/rdtscp UNIQUEMENT (CAL-CLI-01) ────
         // PM Timer = port I/O 0xPMTMR (déjà sérialisé nativement sur x86).
@@ -182,7 +205,9 @@ pub fn calibrate_tsc_via_pm_timer() -> Option<u64> {
 
         let flags = flags_save_cli();
         let tsc_start = rdtsc_begin();
-        unsafe { flags_restore(flags); }
+        unsafe {
+            flags_restore(flags);
+        }
 
         // ✅ FIX TIME-02 : condition de sortie = PM Timer delta ticks.
         // DOUBLE GARDE : N_MAX_POLL_MMIO et TSC timeout.
@@ -192,7 +217,9 @@ pub fn calibrate_tsc_via_pm_timer() -> Option<u64> {
             let pm_now = pm_src::read();
             poll_count = poll_count.wrapping_add(1);
             // RÈGLE TIME-09 : pm_src::delta gère le wrap 24/32-bit.
-            if pm_src::delta(pm_start, pm_now) >= target_ticks { break; }
+            if pm_src::delta(pm_start, pm_now) >= target_ticks {
+                break;
+            }
             // GARDE MMIO : max N_MAX_POLL_MMIO lectures I/O.
             if poll_count >= N_MAX_POLL_MMIO {
                 return None;
@@ -207,7 +234,9 @@ pub fn calibrate_tsc_via_pm_timer() -> Option<u64> {
 
         let flags2 = flags_save_cli();
         let (tsc_end, _coreid) = rdtscp_end();
-        unsafe { flags_restore(flags2); }
+        unsafe {
+            flags_restore(flags2);
+        }
 
         let tsc_delta = tsc_end.wrapping_sub(tsc_start);
         *sample = tsc_delta.saturating_mul(1_000);
@@ -223,8 +252,12 @@ pub fn calibrate_tsc_via_pm_timer() -> Option<u64> {
 /// Algorithme : tri → Q1/Q3 → rejeter hors [Q1 - 1.5×IQR, Q3 + 1.5×IQR].
 fn iqr_mean(sorted_samples: &[u64]) -> u64 {
     let n = sorted_samples.len();
-    if n == 0 { return 0; }
-    if n == 1 { return sorted_samples[0]; }
+    if n == 0 {
+        return 0;
+    }
+    if n == 1 {
+        return sorted_samples[0];
+    }
 
     let q1 = sorted_samples[n / 4];
     let q3 = sorted_samples[3 * n / 4];
@@ -263,8 +296,8 @@ fn iqr_mean(sorted_samples: &[u64]) -> u64 {
 // Résolution tick PIT : ~838 ns → 1ms = ~1193 ticks.
 
 const PIT_FREQ_HZ: u64 = 1_193_182;
-const PIT_CMD_PORT:  u16 = 0x43;
-const PIT_CH2_PORT:  u16 = 0x42;
+const PIT_CMD_PORT: u16 = 0x43;
+const PIT_CH2_PORT: u16 = 0x42;
 const PIT_GATE_PORT: u16 = 0x61;
 
 /// Calibre le TSC Hz via le PIT canal 2 (speaker gate) en one-shot.
@@ -291,7 +324,7 @@ pub fn calibrate_tsc_via_pit() -> Option<u64> {
 
         // 2. Commande : canal 2, lobyte/hibyte, mode 0 (terminal count), bcd=0.
         outb(PIT_CMD_PORT, 0b10_11_000_0);
-        outb(PIT_CH2_PORT, (target_count & 0xFF) as u8);        // LSB
+        outb(PIT_CH2_PORT, (target_count & 0xFF) as u8); // LSB
         outb(PIT_CH2_PORT, ((target_count >> 8) & 0xFF) as u8); // MSB
 
         // Barrière : les writes port I/O ci-dessus doivent être terminés avant
@@ -307,19 +340,26 @@ pub fn calibrate_tsc_via_pit() -> Option<u64> {
         // Timeout : 100 itérations max (diagnostic ultra-court pour QEMU TCG).
         let mut poll_ok = false;
         for _ in 0..100u32 {
-            if inb(PIT_GATE_PORT) & 0x20 != 0 { poll_ok = true; break; }
+            if inb(PIT_GATE_PORT) & 0x20 != 0 {
+                poll_ok = true;
+                break;
+            }
             core::hint::spin_loop();
         }
         if !poll_ok {
             outb(PIT_GATE_PORT, gate & !0x01);
-            unsafe { flags_restore(flags); }
+            unsafe {
+                flags_restore(flags);
+            }
             return None;
         }
 
         let (tsc_end, _coreid) = rdtscp_end();
         // Remettre le gate en état initial.
         outb(PIT_GATE_PORT, gate & !0x01);
-        unsafe { flags_restore(flags); }
+        unsafe {
+            flags_restore(flags);
+        }
 
         let tsc_delta = tsc_end.wrapping_sub(tsc_start);
         // Extrapolation : delta sur 1ms → Hz pour 1 seconde.
@@ -342,17 +382,22 @@ pub struct CalibrationSample {
     /// Fréquence TSC extrapolée de ce sample en Hz (tsc_delta × 1000).
     pub tsc_hz_estimate: u64,
     /// Ticks TSC mesurés pendant la fenêtre de 1ms.
-    pub tsc_ticks:       u64,
+    pub tsc_ticks: u64,
     /// Ticks de référence (HPET/PM/PIT) mesurés pendant la même fenêtre.
-    pub ref_ticks:       u64,
+    pub ref_ticks: u64,
     /// Sample rejeté comme outlier par IQR (hors [Q1-1.5×IQR, Q3+1.5×IQR]).
-    pub is_outlier:      bool,
+    pub is_outlier: bool,
 }
 
 impl CalibrationSample {
     /// Crée un sample vide (avant mesure).
     pub const fn zero() -> Self {
-        Self { tsc_hz_estimate: 0, tsc_ticks: 0, ref_ticks: 0, is_outlier: false }
+        Self {
+            tsc_hz_estimate: 0,
+            tsc_ticks: 0,
+            ref_ticks: 0,
+            is_outlier: false,
+        }
     }
 }
 
@@ -372,14 +417,14 @@ pub enum CalibrationSource {
 #[derive(Debug, Clone, Copy)]
 pub struct CalibrationResult {
     /// Fréquence TSC finale en Hz (moyenne IQR des samples valides).
-    pub tsc_hz:       u64,
+    pub tsc_hz: u64,
     /// Nombre de samples retenus après rejet des outliers (max = N_SAMPLES).
-    pub valid_count:  u8,
+    pub valid_count: u8,
     /// Variance empirique des samples valides en Hz² — élevée (> 1% de hz²)
     /// indique une mesure instable (charge CPU, Turbo Boost, IRQ perturbatrice).
     pub variance_hz2: u64,
     /// Source de référence utilisée pour la mesure.
-    pub source:       CalibrationSource,
+    pub source: CalibrationSource,
 }
 
 impl CalibrationResult {
@@ -387,11 +432,11 @@ impl CalibrationResult {
     ///
     /// Seuil : variance < (tsc_hz / 100)², soit < 0.01 % de dispersion relative.
     pub fn is_stable(&self) -> bool {
-        if self.tsc_hz == 0 || self.valid_count == 0 { return false; }
+        if self.tsc_hz == 0 || self.valid_count == 0 {
+            return false;
+        }
         // (1% de tsc_hz)² = tsc_hz² / 10_000
-        let threshold = (self.tsc_hz as u128)
-            .saturating_mul(self.tsc_hz as u128)
-            / 10_000;
+        let threshold = (self.tsc_hz as u128).saturating_mul(self.tsc_hz as u128) / 10_000;
         (self.variance_hz2 as u128) < threshold
     }
 
@@ -409,14 +454,18 @@ impl CalibrationResult {
 /// N'alloue pas — travaille sur le slice trié fourni.
 pub fn mean_and_variance(sorted_samples: &[u64]) -> (u64, u64) {
     let n = sorted_samples.len();
-    if n == 0 { return (0, 0); }
+    if n == 0 {
+        return (0, 0);
+    }
 
     let mean = iqr_mean(sorted_samples);
-    if mean == 0 || n < 2 { return (mean, 0); }
+    if mean == 0 || n < 2 {
+        return (mean, 0);
+    }
 
     // Bornes IQR (mêmes que dans iqr_mean).
-    let q1  = sorted_samples[n / 4];
-    let q3  = sorted_samples[3 * n / 4];
+    let q1 = sorted_samples[n / 4];
+    let q3 = sorted_samples[3 * n / 4];
     let iqr = q3.saturating_sub(q1);
     let margin = iqr.saturating_add(iqr / 2); // 1.5 × IQR
     let lo = q1.saturating_sub(margin);
@@ -433,13 +482,19 @@ pub fn mean_and_variance(sorted_samples: &[u64]) -> (u64, u64) {
         }
     }
 
-    let variance = if count > 1 { (sum_sq / count as u128) as u64 } else { 0 };
+    let variance = if count > 1 {
+        (sum_sq / count as u128) as u64
+    } else {
+        0
+    };
     (mean, variance)
 }
 
 /// Racine carrée entière (Newton-Raphson) — sans libm, sans alloc.
 fn isqrt64(n: u64) -> u64 {
-    if n == 0 { return 0; }
+    if n == 0 {
+        return 0;
+    }
     let mut x = n;
     let mut y = (x + 1) / 2;
     while y < x {
@@ -519,7 +574,8 @@ unsafe fn flags_restore(flags: u64) {
 /// Lit RDTSC avec barrière LFENCE (sérialisée côté charges).
 #[inline(always)]
 fn rdtsc_begin() -> u64 {
-    let lo: u32; let hi: u32;
+    let lo: u32;
+    let hi: u32;
     // SAFETY: LFENCE + RDTSC — barrière standard, non-privilégiée.
     unsafe {
         core::arch::asm!(
@@ -537,7 +593,9 @@ fn rdtsc_begin() -> u64 {
 /// RÈGLE CAL-RDTSCP-01 : RDTSCP sérialise l'exécution + fournit coreid.
 #[inline(always)]
 fn rdtscp_end() -> (u64, u32) {
-    let lo: u32; let hi: u32; let aux: u32;
+    let lo: u32;
+    let hi: u32;
+    let aux: u32;
     // SAFETY: RDTSCP + LFENCE — séquence standard pour fin de mesure précise.
     unsafe {
         core::arch::asm!(

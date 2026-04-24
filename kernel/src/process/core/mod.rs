@@ -3,12 +3,12 @@
 // Sous-module core/ du module process/ — types fondamentaux.
 // Ne dépend que de memory/ et scheduler/.
 
-pub mod pid;
 pub mod pcb;
-pub mod tcb;
+pub mod pid;
 pub mod registry;
+pub mod tcb;
 
-pub use pid::{Pid, Tid, PidAllocator, PID_ALLOCATOR, TID_ALLOCATOR};
-pub use pcb::{ProcessControlBlock, ProcessState, ProcessFlags, OpenFileTable};
+pub use pcb::{OpenFileTable, ProcessControlBlock, ProcessFlags, ProcessState};
+pub use pid::{Pid, PidAllocator, Tid, PID_ALLOCATOR, TID_ALLOCATOR};
+pub use registry::{ProcessRegistry, PROCESS_REGISTRY};
 pub use tcb::{ProcessThread, ThreadAddress, KSTACK_SIZE};
-pub use registry::{PROCESS_REGISTRY, ProcessRegistry};

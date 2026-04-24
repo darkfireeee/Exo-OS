@@ -23,24 +23,11 @@
 pub mod linux;
 pub mod posix;
 
-pub use linux::{
-    translate_linux_nr,
-    linux_compat_stats,
-    LinuxCompatStats,
-};
+pub use linux::{linux_compat_stats, translate_linux_nr, LinuxCompatStats};
 
 pub use posix::{
-    get_posix_handler,
-    posix_call_count,
-    validate_open_flags,
-    validate_prot,
-    validate_mmap_flags,
-    validate_lseek_whence,
-    open_flags,
-    seek_whence,
-    mmap_flags,
-    prot_flags,
-    signals,
+    get_posix_handler, mmap_flags, open_flags, posix_call_count, prot_flags, seek_whence, signals,
+    validate_lseek_whence, validate_mmap_flags, validate_open_flags, validate_prot,
 };
 
 /// Statistiques globales de la couche compat (linux + posix agrégés).
@@ -60,9 +47,9 @@ pub struct CompatStats {
 pub fn compat_stats() -> CompatStats {
     let ls = linux_compat_stats();
     CompatStats {
-        linux_translated:  ls.translated,
-        linux_blocked:     ls.blocked,
+        linux_translated: ls.translated,
+        linux_blocked: ls.blocked,
         linux_passthrough: ls.passthrough,
-        posix_calls:       posix_call_count(),
+        posix_calls: posix_call_count(),
     }
 }

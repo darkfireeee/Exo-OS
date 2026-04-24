@@ -23,10 +23,10 @@
 //   CLASS-09 : L'epoch_id d'un objet Class2 est mis à jour à chaque CoW commit.
 //   CLASS-10 : Un objet Class2 peut revenir à Class1 via "freeze" (snapshot).
 
-use core::fmt;
+use crate::fs::exofs::core::error::ExofsError;
 use crate::fs::exofs::core::object_kind::ObjectKind;
 use crate::fs::exofs::core::types::{BlobId, EpochId, Extent};
-use crate::fs::exofs::core::error::ExofsError;
+use core::fmt;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ObjectClass
@@ -58,21 +58,31 @@ pub enum ObjectClass {
 impl ObjectClass {
     /// Retourne vrai si l'objet est immuable (Classe 1).
     #[inline]
-    pub fn is_immutable(self) -> bool { matches!(self, Self::Class1) }
+    pub fn is_immutable(self) -> bool {
+        matches!(self, Self::Class1)
+    }
 
     /// Retourne vrai si l'objet supporte la mutation CoW (Classe 2).
     #[inline]
-    pub fn is_mutable(self) -> bool { matches!(self, Self::Class2) }
+    pub fn is_mutable(self) -> bool {
+        matches!(self, Self::Class2)
+    }
 
     /// Convertit depuis octet on-disk. Retourne None si valeur inconnue.
     #[inline]
     pub fn from_u8(v: u8) -> Option<Self> {
-        match v { 1 => Some(Self::Class1), 2 => Some(Self::Class2), _ => None }
+        match v {
+            1 => Some(Self::Class1),
+            2 => Some(Self::Class2),
+            _ => None,
+        }
     }
 
     /// Représentation u8 pour écriture on-disk (règle ONDISK-01).
     #[inline]
-    pub fn as_u8(self) -> u8 { self as u8 }
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
 
     /// Classe par défaut pour un ObjectKind donné.
     ///
@@ -86,7 +96,7 @@ impl ObjectClass {
     pub fn default_for_kind(kind: ObjectKind) -> Self {
         match kind {
             ObjectKind::PathIndex => Self::Class2,
-            _                    => Self::Class1,
+            _ => Self::Class1,
         }
     }
 
@@ -95,7 +105,10 @@ impl ObjectClass {
     /// PathIndex → toujours Class2.
     /// Secret, Relation → toujours Class1.
     pub fn is_forced_for_kind(kind: ObjectKind) -> bool {
-        matches!(kind, ObjectKind::PathIndex | ObjectKind::Secret | ObjectKind::Relation)
+        matches!(
+            kind,
+            ObjectKind::PathIndex | ObjectKind::Secret | ObjectKind::Relation
+        )
     }
 
     /// Vrai si la BlobId peut être exposée dans cette classe + kind.
@@ -109,11 +122,11 @@ impl ObjectClass {
     /// Vérifie si cette classe est compatible avec l'opération demandée.
     pub fn check_operation(self, op: ClassOperation) -> Result<(), ExofsError> {
         match (self, op) {
-            (Self::Class1, ClassOperation::Write)      => Err(ExofsError::WrongObjectClass),
-            (Self::Class1, ClassOperation::Truncate)   => Err(ExofsError::WrongObjectClass),
-            (Self::Class1, ClassOperation::Extend)     => Err(ExofsError::WrongObjectClass),
-            (Self::Class1, ClassOperation::SetMeta)    => Err(ExofsError::WrongObjectClass),
-            (Self::Class1, ClassOperation::Freeze)     => Err(ExofsError::WrongObjectClass),
+            (Self::Class1, ClassOperation::Write) => Err(ExofsError::WrongObjectClass),
+            (Self::Class1, ClassOperation::Truncate) => Err(ExofsError::WrongObjectClass),
+            (Self::Class1, ClassOperation::Extend) => Err(ExofsError::WrongObjectClass),
+            (Self::Class1, ClassOperation::SetMeta) => Err(ExofsError::WrongObjectClass),
+            (Self::Class1, ClassOperation::Freeze) => Err(ExofsError::WrongObjectClass),
             _ => Ok(()),
         }
     }
@@ -145,11 +158,16 @@ impl ObjectClass {
 
     /// Retourne le nom textuel de la classe (pour logs kernel).
     pub fn name(self) -> &'static str {
-        match self { Self::Class1 => "Class1", Self::Class2 => "Class2" }
+        match self {
+            Self::Class1 => "Class1",
+            Self::Class2 => "Class2",
+        }
     }
 
     /// Vrai si une transition de cette classe vers `target` est possible.
-    pub fn can_transition_to(self, target: Self) -> bool { self != target }
+    pub fn can_transition_to(self, target: Self) -> bool {
+        self != target
+    }
 
     /// Valide la cohérence d'une transition, en tenant compte du kind.
     pub fn validate_transition(
@@ -157,7 +175,9 @@ impl ObjectClass {
         target: Self,
         kind: ObjectKind,
     ) -> Result<ClassTransition, ExofsError> {
-        if self == target { return Err(ExofsError::InvalidArgument); }
+        if self == target {
+            return Err(ExofsError::InvalidArgument);
+        }
         if target == Self::Class1 && kind == ObjectKind::PathIndex {
             return Err(ExofsError::WrongObjectClass);
         }
@@ -167,7 +187,11 @@ impl ObjectClass {
         if kind == ObjectKind::Relation {
             return Err(ExofsError::WrongObjectClass);
         }
-        Ok(ClassTransition { from: self, to: target, reason: TransitionReason::Explicit })
+        Ok(ClassTransition {
+            from: self,
+            to: target,
+            reason: TransitionReason::Explicit,
+        })
     }
 }
 
@@ -213,8 +237,10 @@ impl ClassOperation {
     /// Vrai si cette opération nécessite Class2.
     #[inline]
     pub fn requires_class2(self) -> bool {
-        matches!(self, Self::Write | Self::Truncate | Self::Extend
-                     | Self::SetMeta | Self::Freeze)
+        matches!(
+            self,
+            Self::Write | Self::Truncate | Self::Extend | Self::SetMeta | Self::Freeze
+        )
     }
 
     /// Vrai si cette opération est en lecture seule.
@@ -226,16 +252,16 @@ impl ClassOperation {
     /// Description courte pour les journaux kernel.
     pub fn name(self) -> &'static str {
         match self {
-            Self::Read          => "read",
-            Self::Write         => "write",
-            Self::Truncate      => "truncate",
-            Self::Extend        => "extend",
-            Self::SetMeta       => "setmeta",
-            Self::Snapshot      => "snapshot",
-            Self::Delete        => "delete",
-            Self::StatMetadata  => "stat",
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Truncate => "truncate",
+            Self::Extend => "extend",
+            Self::SetMeta => "setmeta",
+            Self::Snapshot => "snapshot",
+            Self::Delete => "delete",
+            Self::StatMetadata => "stat",
             Self::InspectBlobId => "inspect_blobid",
-            Self::Freeze        => "freeze",
+            Self::Freeze => "freeze",
         }
     }
 }
@@ -247,8 +273,8 @@ impl ClassOperation {
 /// Transition de classe validée, retournée par `validate_transition`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ClassTransition {
-    pub from:   ObjectClass,
-    pub to:     ObjectClass,
+    pub from: ObjectClass,
+    pub to: ObjectClass,
     pub reason: TransitionReason,
 }
 
@@ -267,13 +293,16 @@ pub enum TransitionReason {
 
 impl fmt::Display for ClassTransition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} → {} ({})",
-            self.from.name(), self.to.name(),
+        write!(
+            f,
+            "{} → {} ({})",
+            self.from.name(),
+            self.to.name(),
             match self.reason {
-                TransitionReason::Explicit       => "explicit",
+                TransitionReason::Explicit => "explicit",
                 TransitionReason::CowAutoPromote => "cow-auto",
                 TransitionReason::SnapshotFreeze => "freeze",
-                TransitionReason::Recovery       => "recovery",
+                TransitionReason::Recovery => "recovery",
             }
         )
     }
@@ -310,10 +339,10 @@ impl CowPolicy {
     /// Description lisible de la politique.
     pub fn name(self) -> &'static str {
         match self {
-            Self::FullCopy      => "full-copy",
+            Self::FullCopy => "full-copy",
             Self::PartialExtent => "partial-extent",
-            Self::Inline        => "inline",
-            Self::Deferred      => "deferred",
+            Self::Inline => "inline",
+            Self::Deferred => "deferred",
         }
     }
 
@@ -371,32 +400,32 @@ pub fn should_defer_cow(snapshotted_in_current_epoch: bool, write_pending: bool)
 #[derive(Clone, Debug)]
 pub struct CowContext {
     /// BlobId de l'objet avant la mutation.
-    pub old_blob_id:     BlobId,
+    pub old_blob_id: BlobId,
     /// BlobId de l'objet après la mutation.
-    pub new_blob_id:     Option<BlobId>,
+    pub new_blob_id: Option<BlobId>,
     /// Epoch de début de cette opération CoW.
-    pub started_epoch:   EpochId,
+    pub started_epoch: EpochId,
     /// Politique CoW sélectionnée.
-    pub policy:          CowPolicy,
+    pub policy: CowPolicy,
     /// Extent modifié (Some si PartialExtent, None si FullCopy/Inline).
     pub modified_extent: Option<Extent>,
     /// Taille totale de l'objet avant mutation.
-    pub total_bytes:     u64,
+    pub total_bytes: u64,
     /// Nombre d'octets modifiés.
-    pub modified_bytes:  u64,
+    pub modified_bytes: u64,
     /// Le CoW a-t-il été committé ?
-    pub committed:       bool,
+    pub committed: bool,
     /// Le CoW a-t-il été annulé ?
-    pub aborted:         bool,
+    pub aborted: bool,
 }
 
 impl CowContext {
     /// Crée un nouveau contexte CoW et sélectionne la politique optimale.
     pub fn new(
-        old_blob_id:     BlobId,
-        started_epoch:   EpochId,
-        total_bytes:     u64,
-        modified_bytes:  u64,
+        old_blob_id: BlobId,
+        started_epoch: EpochId,
+        total_bytes: u64,
+        modified_bytes: u64,
         modified_extent: Option<Extent>,
     ) -> Self {
         let policy = choose_cow_policy(total_bytes, modified_bytes);
@@ -409,7 +438,7 @@ impl CowContext {
             total_bytes,
             modified_bytes,
             committed: false,
-            aborted:   false,
+            aborted: false,
         }
     }
 
@@ -429,14 +458,14 @@ impl CowContext {
             return Err(ExofsError::InvalidArgument);
         }
         self.new_blob_id = Some(new_blob_id);
-        self.committed   = true;
+        self.committed = true;
         Ok(())
     }
 
     /// Annule le CoW : l'ancien BlobId reste actif.
     pub fn rollback(&mut self) {
         self.new_blob_id = None;
-        self.aborted     = true;
+        self.aborted = true;
     }
 
     /// BlobId actif (nouveau si committé, ancien sinon).
@@ -450,7 +479,9 @@ impl CowContext {
 
     /// Vrai si ce contexte est en attente de commit ou rollback.
     #[inline]
-    pub fn is_pending(&self) -> bool { !self.committed && !self.aborted }
+    pub fn is_pending(&self) -> bool {
+        !self.committed && !self.aborted
+    }
 
     /// Vrai si le CoW modifie assez pour justifier une dédup.
     pub fn dedup_eligible(&self) -> bool {
@@ -463,10 +494,11 @@ impl CowContext {
     /// PartialExtent → 100 (≈1×).
     /// Inline / Deferred → 0.
     pub fn write_amplification_x100(&self) -> u64 {
-        if self.modified_bytes == 0 { return 0; }
+        if self.modified_bytes == 0 {
+            return 0;
+        }
         match self.policy {
-            CowPolicy::FullCopy      =>
-                self.total_bytes.saturating_mul(100) / self.modified_bytes,
+            CowPolicy::FullCopy => self.total_bytes.saturating_mul(100) / self.modified_bytes,
             CowPolicy::PartialExtent => 100,
             CowPolicy::Inline | CowPolicy::Deferred => 0,
         }
@@ -481,33 +513,32 @@ impl CowContext {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ClassConstraints {
     /// La classe est fixée et ne peut jamais changer pour ce kind.
-    pub class_fixed:       bool,
+    pub class_fixed: bool,
     /// La promotion Class1 → Class2 est autorisée.
     pub promotion_allowed: bool,
     /// Le gel (Class2 → Class1) est autorisé.
-    pub freeze_allowed:    bool,
+    pub freeze_allowed: bool,
     /// Les mutations CoW sont autorisées.
-    pub cow_allowed:       bool,
+    pub cow_allowed: bool,
     /// Le BlobId peut être exposé (non-Secret).
     pub blob_id_exposable: bool,
     /// La déduplication peut être appliquée.
-    pub dedup_allowed:     bool,
+    pub dedup_allowed: bool,
     /// La compression peut être appliquée.
-    pub compress_allowed:  bool,
+    pub compress_allowed: bool,
 }
 
 impl ClassConstraints {
     /// Construit les contraintes pour une combinaison kind + class.
     pub fn for_kind_class(kind: ObjectKind, class: ObjectClass) -> Self {
         Self {
-            class_fixed:       ObjectClass::is_forced_for_kind(kind),
+            class_fixed: ObjectClass::is_forced_for_kind(kind),
             promotion_allowed: can_promote_to_class2(class, kind),
-            freeze_allowed:    class == ObjectClass::Class2
-                                   && kind != ObjectKind::PathIndex,
-            cow_allowed:       class == ObjectClass::Class2,
+            freeze_allowed: class == ObjectClass::Class2 && kind != ObjectKind::PathIndex,
+            cow_allowed: class == ObjectClass::Class2,
             blob_id_exposable: !kind.is_secret(),
-            dedup_allowed:     kind.dedup_applicable(),
-            compress_allowed:  kind.compression_applicable(),
+            dedup_allowed: kind.dedup_applicable(),
+            compress_allowed: kind.compression_applicable(),
         }
     }
 
@@ -524,10 +555,7 @@ impl ClassConstraints {
 /// Vérifie les invariants de classe pour un objet donné (désérialisation).
 ///
 /// Retourne `ExofsError::CorruptedStructure` si un invariant est violé.
-pub fn validate_class_invariants(
-    class: ObjectClass,
-    kind:  ObjectKind,
-) -> Result<(), ExofsError> {
+pub fn validate_class_invariants(class: ObjectClass, kind: ObjectKind) -> Result<(), ExofsError> {
     // CLASS-03 : PathIndex doit être Class2.
     if kind == ObjectKind::PathIndex && class != ObjectClass::Class2 {
         return Err(ExofsError::CorruptedStructure);
@@ -552,7 +580,10 @@ pub fn validate_class_invariants(
 ///   4. Kind ≠ Relation (immuabilité sémantique).
 pub fn can_promote_to_class2(class: ObjectClass, kind: ObjectKind) -> bool {
     class == ObjectClass::Class1
-        && !matches!(kind, ObjectKind::PathIndex | ObjectKind::Secret | ObjectKind::Relation)
+        && !matches!(
+            kind,
+            ObjectKind::PathIndex | ObjectKind::Secret | ObjectKind::Relation
+        )
 }
 
 /// Vrai si l'objet doit rester Class1 indépendamment des demandes de mutation.
@@ -579,8 +610,8 @@ pub fn can_share_blob(class_a: ObjectClass, class_b: ObjectClass) -> bool {
 /// Centralise toute la logique de matrice pour éviter les incohérences.
 pub fn class_operation_check(
     class: ObjectClass,
-    kind:  ObjectKind,
-    op:    ClassOperation,
+    kind: ObjectKind,
+    op: ClassOperation,
 ) -> Result<(), ExofsError> {
     // 1. Invariants structurels class + kind.
     validate_class_invariants(class, kind)?;
@@ -589,11 +620,11 @@ pub fn class_operation_check(
     // 3. ContraClasses combinées kind + op.
     match (kind, op) {
         // CLASS-06 / SEC-07 : BlobId d'un Secret jamais exposé.
-        (ObjectKind::Secret, ClassOperation::InspectBlobId) =>
-            Err(ExofsError::SecretBlobIdLeakPrevented),
+        (ObjectKind::Secret, ClassOperation::InspectBlobId) => {
+            Err(ExofsError::SecretBlobIdLeakPrevented)
+        }
         // CLASS-03 : PathIndex ne peut pas être gelé.
-        (ObjectKind::PathIndex, ClassOperation::Freeze) =>
-            Err(ExofsError::WrongObjectClass),
+        (ObjectKind::PathIndex, ClassOperation::Freeze) => Err(ExofsError::WrongObjectClass),
         _ => Ok(()),
     }
 }
@@ -610,10 +641,10 @@ pub fn serialize_transition(t: &ClassTransition) -> [u8; 3] {
         t.from.as_u8(),
         t.to.as_u8(),
         match t.reason {
-            TransitionReason::Explicit       => 0,
+            TransitionReason::Explicit => 0,
             TransitionReason::CowAutoPromote => 1,
             TransitionReason::SnapshotFreeze => 2,
-            TransitionReason::Recovery       => 3,
+            TransitionReason::Recovery => 3,
         },
     ]
 }
@@ -622,8 +653,8 @@ pub fn serialize_transition(t: &ClassTransition) -> [u8; 3] {
 ///
 /// Retourne `ExofsError::CorruptedStructure` si les octets sont invalides.
 pub fn deserialize_transition(b: [u8; 3]) -> Result<ClassTransition, ExofsError> {
-    let from   = ObjectClass::from_u8(b[0]).ok_or(ExofsError::CorruptedStructure)?;
-    let to     = ObjectClass::from_u8(b[1]).ok_or(ExofsError::CorruptedStructure)?;
+    let from = ObjectClass::from_u8(b[0]).ok_or(ExofsError::CorruptedStructure)?;
+    let to = ObjectClass::from_u8(b[1]).ok_or(ExofsError::CorruptedStructure)?;
     let reason = match b[2] {
         0 => TransitionReason::Explicit,
         1 => TransitionReason::CowAutoPromote,

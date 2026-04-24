@@ -2,22 +2,15 @@
 //
 // Module canaux DMA.
 
-pub mod manager;
-pub mod channel;
-pub mod priority;
 pub mod affinity;
+pub mod channel;
+pub mod manager;
+pub mod priority;
 
-pub use channel::{
-    DmaCommand, DmaChannelRing, CHANNEL_RING_SIZE,
-};
-pub use priority::{
-    PriorityScheduler, DMA_PRIORITY_SCHEDULER, STARVATION_THRESHOLD,
-};
-pub use affinity::{
-    DmaAffinityTable, DMA_AFFINITY, CPU_AFFINITY_NONE, NUMA_NODE_NONE,
-};
+pub use affinity::{DmaAffinityTable, CPU_AFFINITY_NONE, DMA_AFFINITY, NUMA_NODE_NONE};
+pub use channel::{DmaChannelRing, DmaCommand, CHANNEL_RING_SIZE};
 pub use manager::{
-    DmaChannel, DmaChannelManager, DMA_CHANNELS,
-    ChannelState, ChannelStats,
-    MAX_DMA_CHANNELS, CHANNEL_QUEUE_DEPTH,
+    ChannelState, ChannelStats, DmaChannel, DmaChannelManager, CHANNEL_QUEUE_DEPTH, DMA_CHANNELS,
+    MAX_DMA_CHANNELS,
 };
+pub use priority::{PriorityScheduler, DMA_PRIORITY_SCHEDULER, STARVATION_THRESHOLD};

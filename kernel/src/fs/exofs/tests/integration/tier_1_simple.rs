@@ -1,6 +1,5 @@
-
-use crate::fs::exofs::core::BlobId;
 use crate::fs::exofs::cache::object_cache::ObjectCache;
+use crate::fs::exofs::core::BlobId;
 
 #[test]
 fn test_cache_init() {

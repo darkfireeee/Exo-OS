@@ -36,7 +36,7 @@ pub const CLUSTER_SIZE: usize = 8;
 pub const MAX_CLUSTER_QUEUE: usize = 256;
 
 /// Nombre maximum d'accumulateurs per-device (1 accumulateur = 1 cluster en cours).
-pub const MAX_SWAP_DEVICES: usize = 8;  // doit correspondre à swap/backend.rs
+pub const MAX_SWAP_DEVICES: usize = 8; // doit correspondre à swap/backend.rs
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SWAP CLUSTER
@@ -45,13 +45,13 @@ pub const MAX_SWAP_DEVICES: usize = 8;  // doit correspondre à swap/backend.rs
 /// Une entrée dans un cluster — un slot de swap et son PFN source.
 #[derive(Copy, Clone, Debug)]
 pub struct ClusterEntry {
-    pub slot:    SwapSlot,
+    pub slot: SwapSlot,
     pub src_pfn: u64,
 }
 
 impl ClusterEntry {
     const EMPTY: ClusterEntry = ClusterEntry {
-        slot:    SwapSlot(0),
+        slot: SwapSlot(0),
         src_pfn: 0,
     };
 }
@@ -64,7 +64,7 @@ pub struct SwapCluster {
     /// Les entrées du cluster.
     pub entries: [ClusterEntry; CLUSTER_SIZE],
     /// Nombre d'entrées valides dans ce cluster (1..=CLUSTER_SIZE).
-    pub count:   u8,
+    pub count: u8,
 }
 
 impl SwapCluster {
@@ -72,7 +72,7 @@ impl SwapCluster {
         SwapCluster {
             dev_idx: 0,
             entries: [ClusterEntry::EMPTY; CLUSTER_SIZE],
-            count:   0,
+            count: 0,
         }
     }
 
@@ -94,24 +94,26 @@ impl SwapCluster {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct ClusterQueue {
-    buf:   [SwapCluster; MAX_CLUSTER_QUEUE],
-    head:  usize,  // producteur
-    tail:  usize,  // consommateur
+    buf: [SwapCluster; MAX_CLUSTER_QUEUE],
+    head: usize, // producteur
+    tail: usize, // consommateur
     count: usize,
 }
 
 impl ClusterQueue {
     const fn new() -> Self {
         ClusterQueue {
-            buf:   [SwapCluster::new(); MAX_CLUSTER_QUEUE],  // Copy
-            head:  0,
-            tail:  0,
+            buf: [SwapCluster::new(); MAX_CLUSTER_QUEUE], // Copy
+            head: 0,
+            tail: 0,
             count: 0,
         }
     }
 
     fn push(&mut self, cluster: SwapCluster) -> bool {
-        if self.count >= MAX_CLUSTER_QUEUE { return false; }
+        if self.count >= MAX_CLUSTER_QUEUE {
+            return false;
+        }
         self.buf[self.head] = cluster;
         self.head = (self.head + 1) % MAX_CLUSTER_QUEUE;
         self.count += 1;
@@ -119,7 +121,9 @@ impl ClusterQueue {
     }
 
     fn pop(&mut self) -> Option<SwapCluster> {
-        if self.count == 0 { return None; }
+        if self.count == 0 {
+            return None;
+        }
         let c = self.buf[self.tail];
         self.tail = (self.tail + 1) % MAX_CLUSTER_QUEUE;
         self.count -= 1;
@@ -127,7 +131,9 @@ impl ClusterQueue {
     }
 
     #[inline]
-    fn len(&self) -> usize { self.count }
+    fn len(&self) -> usize {
+        self.count
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -137,14 +143,14 @@ impl ClusterQueue {
 struct Accumulator {
     cluster: SwapCluster,
     /// True si cet accumulateur est actif pour un device.
-    active:  bool,
+    active: bool,
 }
 
 impl Accumulator {
     const fn new() -> Self {
         Accumulator {
             cluster: SwapCluster::new(),
-            active:  false,
+            active: false,
         }
     }
 
@@ -191,13 +197,13 @@ impl Accumulator {
 /// Statistiques du gestionnaire de clusters.
 pub struct ClusterStats {
     /// Total de clusters complets formés.
-    pub clusters_formed:   AtomicU64,
+    pub clusters_formed: AtomicU64,
     /// Total de clusters partiels flushés.
-    pub partial_flushes:   AtomicU64,
+    pub partial_flushes: AtomicU64,
     /// Total d'entrées ajoutées.
-    pub pages_added:       AtomicU64,
+    pub pages_added: AtomicU64,
     /// Clusters perdus (queue pleine).
-    pub queue_overflows:   AtomicU64,
+    pub queue_overflows: AtomicU64,
     /// Clusters prélevés par le thread d'I/O.
     pub clusters_consumed: AtomicU64,
 }
@@ -205,10 +211,10 @@ pub struct ClusterStats {
 impl ClusterStats {
     const fn new() -> Self {
         ClusterStats {
-            clusters_formed:   AtomicU64::new(0),
-            partial_flushes:   AtomicU64::new(0),
-            pages_added:       AtomicU64::new(0),
-            queue_overflows:   AtomicU64::new(0),
+            clusters_formed: AtomicU64::new(0),
+            partial_flushes: AtomicU64::new(0),
+            pages_added: AtomicU64::new(0),
+            queue_overflows: AtomicU64::new(0),
             clusters_consumed: AtomicU64::new(0),
         }
     }
@@ -216,7 +222,7 @@ impl ClusterStats {
 
 struct ClusterManagerInner {
     accumulators: [Accumulator; MAX_SWAP_DEVICES],
-    queue:        ClusterQueue,
+    queue: ClusterQueue,
 }
 
 impl ClusterManagerInner {
@@ -224,7 +230,7 @@ impl ClusterManagerInner {
         const A: Accumulator = Accumulator::new();
         ClusterManagerInner {
             accumulators: [A; MAX_SWAP_DEVICES],
-            queue:        ClusterQueue::new(),
+            queue: ClusterQueue::new(),
         }
     }
 }
@@ -247,7 +253,9 @@ impl ClusterManager {
     ///
     /// Retourne `true` si l'entrée a été acceptée (echec si `dev_idx` hors limites).
     pub fn add_page(&self, dev_idx: usize, slot: SwapSlot, src_pfn: u64) -> bool {
-        if dev_idx >= MAX_SWAP_DEVICES { return false; }
+        if dev_idx >= MAX_SWAP_DEVICES {
+            return false;
+        }
 
         self.stats.pages_added.fetch_add(1, Ordering::Relaxed);
 
@@ -283,7 +291,9 @@ impl ClusterManager {
 
     /// Flush forcé de l'accumulateur pour un device donné.
     pub fn flush_device(&self, dev_idx: usize) -> bool {
-        if dev_idx >= MAX_SWAP_DEVICES { return false; }
+        if dev_idx >= MAX_SWAP_DEVICES {
+            return false;
+        }
         let mut inner = self.inner.lock();
         if let Some(partial) = inner.accumulators[dev_idx].flush() {
             if inner.queue.push(partial) {
@@ -316,8 +326,16 @@ impl ClusterManager {
     /// Nombre de pages en attente dans les accumulateurs (pas encore dans la queue).
     pub fn buffered_pages(&self) -> usize {
         let inner = self.inner.lock();
-        inner.accumulators.iter()
-            .map(|a| if a.active { a.cluster.count as usize } else { 0 })
+        inner
+            .accumulators
+            .iter()
+            .map(|a| {
+                if a.active {
+                    a.cluster.count as usize
+                } else {
+                    0
+                }
+            })
             .sum()
     }
 }

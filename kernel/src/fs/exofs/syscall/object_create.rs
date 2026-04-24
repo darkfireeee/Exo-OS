@@ -2,15 +2,14 @@
 //!
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
-use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use super::validation::{
-    read_user_path_heap, write_user_buf, exofs_err_to_errno,
-    verify_cap, CapabilityType, EFAULT,
-};
 use super::object_fd::OBJECT_TABLE;
+use super::validation::{
+    exofs_err_to_errno, read_user_path_heap, verify_cap, write_user_buf, CapabilityType, EFAULT,
+};
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types d'objet
@@ -20,10 +19,10 @@ use super::object_fd::OBJECT_TABLE;
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectKind {
-    File      = 0,
+    File = 0,
     Directory = 1,
-    Symlink   = 2,
-    Snapshot  = 3,
+    Symlink = 2,
+    Snapshot = 3,
 }
 
 impl ObjectKind {
@@ -39,10 +38,10 @@ impl ObjectKind {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::File      => "file",
+            Self::File => "file",
             Self::Directory => "directory",
-            Self::Symlink   => "symlink",
-            Self::Snapshot  => "snapshot",
+            Self::Symlink => "symlink",
+            Self::Snapshot => "snapshot",
         }
     }
 }
@@ -55,13 +54,13 @@ impl ObjectKind {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct CreateArgs {
-    pub flags:       u32,
-    pub mode:        u32,
-    pub kind:        u8,
-    pub _pad:        [u8; 7],
-    pub epoch_id:    u64,
-    pub owner_uid:   u64,
-    pub initial_size:u64,
+    pub flags: u32,
+    pub mode: u32,
+    pub kind: u8,
+    pub _pad: [u8; 7],
+    pub epoch_id: u64,
+    pub owner_uid: u64,
+    pub initial_size: u64,
 }
 
 const _: () = assert!(core::mem::size_of::<CreateArgs>() == 40);
@@ -69,13 +68,12 @@ const _: () = assert!(core::mem::size_of::<CreateArgs>() == 40);
 impl CreateArgs {
     fn defaults() -> Self {
         Self {
-            flags:        super::object_fd::open_flags::O_RDWR
-                        | super::object_fd::open_flags::O_CREAT,
-            mode:         0o644,
-            kind:         0,
-            _pad:         [0u8; 7],
-            epoch_id:     0,
-            owner_uid:    0,
+            flags: super::object_fd::open_flags::O_RDWR | super::object_fd::open_flags::O_CREAT,
+            mode: 0o644,
+            kind: 0,
+            _pad: [0u8; 7],
+            epoch_id: 0,
+            owner_uid: 0,
             initial_size: 0,
         }
     }
@@ -89,11 +87,11 @@ impl CreateArgs {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct CreateResult {
-    pub fd:        u32,
-    pub _pad:      u32,
-    pub blob_id:   [u8; 32],
+    pub fd: u32,
+    pub _pad: u32,
+    pub blob_id: [u8; 32],
     pub object_id: [u8; 32],
-    pub epoch_id:  u64,
+    pub epoch_id: u64,
     pub _reserved: [u8; 8],
 }
 
@@ -110,8 +108,14 @@ const _: () = assert!(
 ///
 /// Si l'objet existe déjà ET que O_EXCL est positionné → ObjectAlreadyExists.
 /// OOM-02 : try_reserve pour le buffer initial.
-fn create_object(path_bytes: &[u8], path_len: usize, args: &CreateArgs) -> ExofsResult<CreateResult> {
-    if args.flags & !0x07FF != 0 { return Err(ExofsError::InvalidArgument); }
+fn create_object(
+    path_bytes: &[u8],
+    path_len: usize,
+    args: &CreateArgs,
+) -> ExofsResult<CreateResult> {
+    if args.flags & !0x07FF != 0 {
+        return Err(ExofsError::InvalidArgument);
+    }
     let _kind = ObjectKind::from_u8(args.kind).ok_or(ExofsError::InvalidArgument)?;
 
     // Dériver le BlobId du chemin.
@@ -143,7 +147,13 @@ fn create_object(path_bytes: &[u8], path_len: usize, args: &CreateArgs) -> Exofs
     }
 
     // Ouvrir un fd.
-    let fd = OBJECT_TABLE.open(blob_id, args.flags & 0x0003, args.initial_size, args.epoch_id, args.owner_uid)?;
+    let fd = OBJECT_TABLE.open(
+        blob_id,
+        args.flags & 0x0003,
+        args.initial_size,
+        args.epoch_id,
+        args.owner_uid,
+    )?;
 
     // ObjectId = Blake3(BlobId bytes XOR 0x5A).
     let mut obj_bytes = [0u8; 32];
@@ -156,10 +166,10 @@ fn create_object(path_bytes: &[u8], path_len: usize, args: &CreateArgs) -> Exofs
 
     Ok(CreateResult {
         fd,
-        _pad:      0,
-        blob_id:   *bid_bytes,
+        _pad: 0,
+        blob_id: *bid_bytes,
         object_id: obj_bytes,
-        epoch_id:  args.epoch_id,
+        epoch_id: args.epoch_id,
         _reserved: [0u8; 8],
     })
 }
@@ -172,23 +182,25 @@ fn create_object(path_bytes: &[u8], path_len: usize, args: &CreateArgs) -> Exofs
 pub fn sys_exofs_object_create(
     path_ptr: u64,
     _path_len: u64,
-    flags:    u64,
-    out_ptr:  u64,
+    flags: u64,
+    out_ptr: u64,
     args_ptr: u64,
     cap_rights: u64,
 ) -> i64 {
-    if path_ptr == 0 { return EFAULT; }
+    if path_ptr == 0 {
+        return EFAULT;
+    }
 
     let mut path_buf: Vec<u8> = Vec::new();
     let actual_len = match read_user_path_heap(path_ptr, &mut path_buf) {
-        Ok(l)  => l,
+        Ok(l) => l,
         Err(e) => return e,
     };
 
     let create_args = if args_ptr != 0 {
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         match unsafe { super::validation::copy_struct_from_user::<CreateArgs>(args_ptr) } {
-            Ok(a)  => a,
+            Ok(a) => a,
             Err(_) => return EFAULT,
         }
     } else {
@@ -202,7 +214,7 @@ pub fn sys_exofs_object_create(
     }
 
     let result = match create_object(&path_buf, actual_len, &create_args) {
-        Ok(r)  => r,
+        Ok(r) => r,
         Err(e) => return exofs_err_to_errno(e),
     };
 
@@ -230,8 +242,12 @@ pub fn sys_exofs_object_create(
 
 /// Vérifie qu'un chemin de création est valide (composants et longueur).
 pub fn validate_create_path(path: &[u8], len: usize) -> ExofsResult<()> {
-    if len == 0 || len > super::validation::EXOFS_PATH_MAX { return Err(ExofsError::PathTooLong); }
-    if path[0] != b'/' { return Err(ExofsError::InvalidPathComponent); }
+    if len == 0 || len > super::validation::EXOFS_PATH_MAX {
+        return Err(ExofsError::PathTooLong);
+    }
+    if path[0] != b'/' {
+        return Err(ExofsError::InvalidPathComponent);
+    }
     Ok(())
 }
 
@@ -248,7 +264,10 @@ mod tests {
         let mut v = Vec::new();
         v.try_reserve(b.len()).unwrap();
         let mut i = 0usize;
-        while i < b.len() { v.push(b[i]); i = i.wrapping_add(1); }
+        while i < b.len() {
+            v.push(b[i]);
+            i = i.wrapping_add(1);
+        }
         v
     }
 
@@ -263,7 +282,12 @@ mod tests {
 
     #[test]
     fn test_create_excl_conflict() {
-        let args = CreateArgs { flags: super::super::object_fd::open_flags::O_CREAT | super::super::object_fd::open_flags::O_EXCL | super::super::object_fd::open_flags::O_RDWR, ..CreateArgs::defaults() };
+        let args = CreateArgs {
+            flags: super::super::object_fd::open_flags::O_CREAT
+                | super::super::object_fd::open_flags::O_EXCL
+                | super::super::object_fd::open_flags::O_RDWR,
+            ..CreateArgs::defaults()
+        };
         let p = path("/excl/unique/obj");
         let r = create_object(&p, p.len(), &args).unwrap();
         OBJECT_TABLE.close(r.fd);
@@ -308,7 +332,10 @@ mod tests {
         args.initial_size = 256;
         let p = path("/create/sized");
         let r = create_object(&p, p.len(), &args).unwrap();
-        let sz = BLOB_CACHE.get(&BlobId::from_bytes_blake3(&p)).map(|d| d.len()).unwrap_or(0);
+        let sz = BLOB_CACHE
+            .get(&BlobId::from_bytes_blake3(&p))
+            .map(|d| d.len())
+            .unwrap_or(0);
         assert_eq!(sz, 256);
         OBJECT_TABLE.close(r.fd);
     }
@@ -381,10 +408,15 @@ pub fn create_directory_object(blob_id: BlobId) -> ExofsResult<()> {
 /// Crée un objet lien symbolique avec sa cible.
 /// OOM-02 respecté pour le buffer cible.
 pub fn create_symlink_object(blob_id: BlobId, target: &[u8]) -> ExofsResult<()> {
-    if target.is_empty() { return Err(ExofsError::InvalidArgument); }
-    if target.len() > super::validation::EXOFS_PATH_MAX { return Err(ExofsError::PathTooLong); }
+    if target.is_empty() {
+        return Err(ExofsError::InvalidArgument);
+    }
+    if target.len() > super::validation::EXOFS_PATH_MAX {
+        return Err(ExofsError::PathTooLong);
+    }
     let mut buf: Vec<u8> = Vec::new();
-    buf.try_reserve(target.len()).map_err(|_| ExofsError::NoMemory)?;
+    buf.try_reserve(target.len())
+        .map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < target.len() {
         buf.push(target[i]);
@@ -414,8 +446,8 @@ pub fn merge_flags(user_flags: u32, default_flags: u32) -> u32 {
 /// Retourne `true` si les flags impliquent une création exclusive.
 #[inline(always)]
 pub fn is_exclusive(flags: u32) -> bool {
-    (flags & super::object_fd::open_flags::O_EXCL) != 0 &&
-    (flags & super::object_fd::open_flags::O_CREAT) != 0
+    (flags & super::object_fd::open_flags::O_EXCL) != 0
+        && (flags & super::object_fd::open_flags::O_CREAT) != 0
 }
 
 #[cfg(test)]
@@ -460,7 +492,8 @@ mod extended_tests {
 
     #[test]
     fn test_is_exclusive_true() {
-        let flags = super::super::object_fd::open_flags::O_EXCL | super::super::object_fd::open_flags::O_CREAT;
+        let flags = super::super::object_fd::open_flags::O_EXCL
+            | super::super::object_fd::open_flags::O_CREAT;
         assert!(is_exclusive(flags));
     }
 

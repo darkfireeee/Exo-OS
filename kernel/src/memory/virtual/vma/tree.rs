@@ -5,8 +5,8 @@
 // Taille maximale : MAX_VMAS_PER_PROCESS VMAs par processus.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-use crate::memory::core::VirtAddr;
 use super::descriptor::VmaDescriptor;
+use crate::memory::core::VirtAddr;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ARBRE AVL DE VMAS
@@ -20,8 +20,8 @@ pub const MAX_VMAS_PER_PROCESS: usize = 65536;
 /// Les noeuds sont des pointeurs vers des VmaDescriptor alloués par le slab.
 /// L'arbre ne possède PAS les descripteurs — c'est le VmaAllocator qui les gère.
 pub struct VmaTree {
-    root:    *mut VmaDescriptor,
-    count:   usize,
+    root: *mut VmaDescriptor,
+    count: usize,
 }
 
 // SAFETY: VmaTree est protégé par le verrou de l'address space parent.
@@ -30,12 +30,19 @@ unsafe impl Sync for VmaTree {}
 
 impl VmaTree {
     pub const fn new() -> Self {
-        VmaTree { root: core::ptr::null_mut(), count: 0 }
+        VmaTree {
+            root: core::ptr::null_mut(),
+            count: 0,
+        }
     }
 
     /// Nombre de VMAs dans l'arbre.
-    pub fn len(&self) -> usize { self.count }
-    pub fn is_empty(&self) -> bool { self.count == 0 }
+    pub fn len(&self) -> usize {
+        self.count
+    }
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 
     /// Cherche la VMA contenant `addr`.
     ///
@@ -58,9 +65,11 @@ impl VmaTree {
     /// SAFETY: `vma` doit pointer sur un VmaDescriptor valide et non encore
     ///         inséré dans un autre arbre.
     pub unsafe fn insert(&mut self, vma: *mut VmaDescriptor) -> bool {
-        if self.count >= MAX_VMAS_PER_PROCESS { return false; }
+        if self.count >= MAX_VMAS_PER_PROCESS {
+            return false;
+        }
         if self.root.is_null() {
-            self.root  = vma;
+            self.root = vma;
             self.count = 1;
             return true;
         }
@@ -78,7 +87,9 @@ impl VmaTree {
     pub fn remove(&mut self, start: VirtAddr) -> Option<*mut VmaDescriptor> {
         // SAFETY: Accès exclusif.
         let removed = unsafe { Self::remove_node(&mut self.root, start) };
-        if removed.is_some() { self.count = self.count.saturating_sub(1); }
+        if removed.is_some() {
+            self.count = self.count.saturating_sub(1);
+        }
         removed
     }
 
@@ -97,7 +108,10 @@ impl VmaTree {
 
     // ─── helpers de l'arbre AVL ──────────────────────────────────────────────
 
-    unsafe fn find_node<'a>(mut node: *mut VmaDescriptor, addr: VirtAddr) -> Option<&'a VmaDescriptor> {
+    unsafe fn find_node<'a>(
+        mut node: *mut VmaDescriptor,
+        addr: VirtAddr,
+    ) -> Option<&'a VmaDescriptor> {
         while !node.is_null() {
             let n = &*node;
             if addr.as_u64() < n.start.as_u64() {
@@ -111,7 +125,10 @@ impl VmaTree {
         None
     }
 
-    unsafe fn find_node_mut<'a>(mut node: *mut VmaDescriptor, addr: VirtAddr) -> Option<&'a mut VmaDescriptor> {
+    unsafe fn find_node_mut<'a>(
+        mut node: *mut VmaDescriptor,
+        addr: VirtAddr,
+    ) -> Option<&'a mut VmaDescriptor> {
         while !node.is_null() {
             let n = &mut *node;
             if addr.as_u64() < n.start.as_u64() {
@@ -129,8 +146,8 @@ impl VmaTree {
         let node = *root;
         if node.is_null() {
             *root = vma;
-            (*vma).rb_left   = core::ptr::null_mut();
-            (*vma).rb_right  = core::ptr::null_mut();
+            (*vma).rb_left = core::ptr::null_mut();
+            (*vma).rb_right = core::ptr::null_mut();
             (*vma).rb_height = 1;
             return true;
         }
@@ -141,17 +158,26 @@ impl VmaTree {
             return false;
         }
         if vma_ref.start.as_u64() < n.start.as_u64() {
-            if !Self::insert_node(&mut n.rb_left, vma) { return false; }
+            if !Self::insert_node(&mut n.rb_left, vma) {
+                return false;
+            }
         } else {
-            if !Self::insert_node(&mut n.rb_right, vma) { return false; }
+            if !Self::insert_node(&mut n.rb_right, vma) {
+                return false;
+            }
         }
         n.rb_height = 1 + Self::height(n.rb_left).max(Self::height(n.rb_right));
         Self::rebalance(root);
         true
     }
 
-    unsafe fn remove_node(root: &mut *mut VmaDescriptor, start: VirtAddr) -> Option<*mut VmaDescriptor> {
-        if (*root).is_null() { return None; }
+    unsafe fn remove_node(
+        root: &mut *mut VmaDescriptor,
+        start: VirtAddr,
+    ) -> Option<*mut VmaDescriptor> {
+        if (*root).is_null() {
+            return None;
+        }
         let n = &mut **root;
         if start.as_u64() < n.start.as_u64() {
             let res = Self::remove_node(&mut n.rb_left, start);
@@ -178,20 +204,24 @@ impl VmaTree {
                 // Trouver le successeur inorder (min du sous-arbre droit)
                 let succ = Self::min_node(n.rb_right);
                 // Swap succ et root
-                (*succ).rb_left  = n.rb_left;
+                (*succ).rb_left = n.rb_left;
                 (*succ).rb_right = Self::remove_min(n.rb_right);
-                (*succ).rb_height = 1 + Self::height((*succ).rb_left).max(Self::height((*succ).rb_right));
+                (*succ).rb_height =
+                    1 + Self::height((*succ).rb_left).max(Self::height((*succ).rb_right));
                 *root = succ;
                 Self::rebalance(root);
             }
-            (*removed).rb_left   = core::ptr::null_mut();
-            (*removed).rb_right  = core::ptr::null_mut();
+            (*removed).rb_left = core::ptr::null_mut();
+            (*removed).rb_right = core::ptr::null_mut();
             (*removed).rb_height = 1;
             Some(removed)
         }
     }
 
-    unsafe fn find_prev_node<'a>(mut node: *mut VmaDescriptor, addr: VirtAddr) -> Option<&'a VmaDescriptor> {
+    unsafe fn find_prev_node<'a>(
+        mut node: *mut VmaDescriptor,
+        addr: VirtAddr,
+    ) -> Option<&'a VmaDescriptor> {
         let mut best: *mut VmaDescriptor = core::ptr::null_mut();
         while !node.is_null() {
             let n = &*node;
@@ -202,31 +232,42 @@ impl VmaTree {
                 node = n.rb_left;
             }
         }
-        if best.is_null() { None } else { Some(&*best) }
+        if best.is_null() {
+            None
+        } else {
+            Some(&*best)
+        }
     }
 
     // ─── AVL helpers ─────────────────────────────────────────────────────────
 
     unsafe fn height(node: *mut VmaDescriptor) -> i32 {
-        if node.is_null() { 0 } else { (*node).rb_height }
+        if node.is_null() {
+            0
+        } else {
+            (*node).rb_height
+        }
     }
 
     unsafe fn balance_factor(node: *mut VmaDescriptor) -> i32 {
-        if node.is_null() { return 0; }
+        if node.is_null() {
+            return 0;
+        }
         Self::height((*node).rb_left) - Self::height((*node).rb_right)
     }
 
     unsafe fn update_height(node: *mut VmaDescriptor) {
         if !node.is_null() {
-            (*node).rb_height = 1 + Self::height((*node).rb_left).max(Self::height((*node).rb_right));
+            (*node).rb_height =
+                1 + Self::height((*node).rb_left).max(Self::height((*node).rb_right));
         }
     }
 
     unsafe fn rotate_right(y: &mut *mut VmaDescriptor) {
         let y_ptr = *y;
-        let x     = (*y_ptr).rb_left;
-        (*y_ptr).rb_left      = (*x).rb_right;
-        (*x).rb_right         = y_ptr;
+        let x = (*y_ptr).rb_left;
+        (*y_ptr).rb_left = (*x).rb_right;
+        (*x).rb_right = y_ptr;
         Self::update_height(y_ptr);
         Self::update_height(x);
         *y = x;
@@ -234,16 +275,18 @@ impl VmaTree {
 
     unsafe fn rotate_left(x: &mut *mut VmaDescriptor) {
         let x_ptr = *x;
-        let y     = (*x_ptr).rb_right;
+        let y = (*x_ptr).rb_right;
         (*x_ptr).rb_right = (*y).rb_left;
-        (*y).rb_left      = x_ptr;
+        (*y).rb_left = x_ptr;
         Self::update_height(x_ptr);
         Self::update_height(y);
         *x = y;
     }
 
     unsafe fn rebalance(root: &mut *mut VmaDescriptor) {
-        if root.is_null() { return; }
+        if root.is_null() {
+            return;
+        }
         let bf = Self::balance_factor(*root);
         if bf > 1 {
             if Self::balance_factor((**root).rb_left) < 0 {
@@ -259,7 +302,9 @@ impl VmaTree {
     }
 
     unsafe fn min_node(mut node: *mut VmaDescriptor) -> *mut VmaDescriptor {
-        while !(*node).rb_left.is_null() { node = (*node).rb_left; }
+        while !(*node).rb_left.is_null() {
+            node = (*node).rb_left;
+        }
         node
     }
 
@@ -268,7 +313,7 @@ impl VmaTree {
             return (*root).rb_right;
         }
         let mut r = root;
-        (*r).rb_left  = Self::remove_min((*r).rb_left);
+        (*r).rb_left = Self::remove_min((*r).rb_left);
         (*r).rb_height = 1 + Self::height((*r).rb_left).max(Self::height((*r).rb_right));
         let rr = &mut r as *mut *mut VmaDescriptor;
         Self::rebalance(&mut *rr);
@@ -289,8 +334,8 @@ pub struct VmaTreeIter<'a> {
 impl<'a> VmaTreeIter<'a> {
     fn new(root: *mut VmaDescriptor, _stack: [*mut VmaDescriptor; 64], _depth: usize) -> Self {
         let mut iter = VmaTreeIter {
-            stack:   [core::ptr::null_mut(); 64],
-            depth:   0,
+            stack: [core::ptr::null_mut(); 64],
+            depth: 0,
             _marker: core::marker::PhantomData,
         };
         // Pousser jusqu'au nœud le plus à gauche
@@ -309,7 +354,9 @@ impl<'a> Iterator for VmaTreeIter<'a> {
     type Item = &'a VmaDescriptor;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.depth == 0 { return None; }
+        if self.depth == 0 {
+            return None;
+        }
         self.depth -= 1;
         let node = self.stack[self.depth];
         // SAFETY: node est un VmaDescriptor valide.

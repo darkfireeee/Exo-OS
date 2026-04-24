@@ -4,8 +4,8 @@
 // Pour les devices PCIe avec DMA sur 32 bits d'adresse.
 // Couche 0 — aucune dépendance externe.
 
-use crate::memory::core::{PhysAddr, ZoneType, ZONE_DMA_END, ZONE_DMA32_END};
 use super::ZoneDescriptor;
+use crate::memory::core::{PhysAddr, ZoneType, ZONE_DMA32_END, ZONE_DMA_END};
 
 /// Zone DMA32 — adresses physiques [16 MiB, 4 GiB).
 pub struct Dma32Zone {
@@ -37,7 +37,7 @@ impl Dma32Zone {
                 phys_end,
                 total,
                 reserved_frames,
-            )
+            ),
         }
     }
 

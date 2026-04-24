@@ -22,13 +22,12 @@
 
 use core::mem::size_of;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
+use crate::fs::exofs::core::{DiskOffset, ExofsError, ExofsResult};
 use crate::fs::exofs::storage::layout::{
-    superblock_mirror_offsets, superblock_primary, superblock_mirror_12k,
-    superblock_mirror_end,
+    superblock_mirror_12k, superblock_mirror_end, superblock_mirror_offsets, superblock_primary,
 };
-use crate::fs::exofs::storage::superblock::ExoSuperblockDisk;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
+use crate::fs::exofs::storage::superblock::ExoSuperblockDisk;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MirrorIndex — identifiant d'un miroir
@@ -37,16 +36,16 @@ use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 /// Identifiant d'un des 3 miroirs du superblock.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum MirrorIndex {
-    Primary     = 0,
-    Mirror12k   = 1,
-    MirrorEnd   = 2,
+    Primary = 0,
+    Mirror12k = 1,
+    MirrorEnd = 2,
 }
 
 impl MirrorIndex {
     /// Nom lisible pour les journaux.
     pub fn name(self) -> &'static str {
         match self {
-            MirrorIndex::Primary   => "primary@0",
+            MirrorIndex::Primary => "primary@0",
             MirrorIndex::Mirror12k => "mirror@12KB",
             MirrorIndex::MirrorEnd => "mirror@end-4KB",
         }
@@ -54,7 +53,11 @@ impl MirrorIndex {
 
     /// Les 3 miroirs sous forme de tableau.
     pub fn all() -> [MirrorIndex; 3] {
-        [MirrorIndex::Primary, MirrorIndex::Mirror12k, MirrorIndex::MirrorEnd]
+        [
+            MirrorIndex::Primary,
+            MirrorIndex::Mirror12k,
+            MirrorIndex::MirrorEnd,
+        ]
     }
 }
 
@@ -91,11 +94,11 @@ impl MirrorStatus {
 /// Résultat de la lecture d'un miroir SuperBlock.
 #[derive(Clone)]
 pub struct MirrorReadResult {
-    pub index:   MirrorIndex,
-    pub offset:  DiskOffset,
-    pub status:  MirrorStatus,
+    pub index: MirrorIndex,
+    pub offset: DiskOffset,
+    pub status: MirrorStatus,
     /// Contenu du superblock (valide uniquement si status == Valid).
-    pub data:    ExoSuperblockDisk,
+    pub data: ExoSuperblockDisk,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -113,9 +116,9 @@ pub struct MirrorReadResult {
 /// # Règle WRITE-02
 /// Vérifie que bytes_written == size_of::<ExoSuperblockDisk>() après chaque écriture.
 pub fn write_superblock_mirrors(
-    sb:        &ExoSuperblockDisk,
+    sb: &ExoSuperblockDisk,
     disk_size: u64,
-    write_fn:  &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
+    write_fn: &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
 ) -> ExofsResult<u8> {
     let offsets = superblock_mirror_offsets(disk_size)?;
     let sb_size = size_of::<ExoSuperblockDisk>();
@@ -158,12 +161,12 @@ pub fn write_superblock_mirrors(
 ///
 /// Utilisé lors d'un commit rapide où seul le primaire est mis à jour.
 pub fn write_primary_superblock(
-    sb:       &ExoSuperblockDisk,
+    sb: &ExoSuperblockDisk,
     write_fn: &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
 ) -> ExofsResult<()> {
     let sb_size = size_of::<ExoSuperblockDisk>();
     // SAFETY: validité des données vérifiée par les gardes ci-dessus.
-    let bytes   = unsafe {
+    let bytes = unsafe {
         core::slice::from_raw_parts(sb as *const ExoSuperblockDisk as *const u8, sb_size)
     };
     let n = write_fn(bytes, superblock_primary())?;
@@ -178,21 +181,25 @@ pub fn write_primary_superblock(
 ///
 /// Utilisé après une récupération ou un fsck.
 pub fn sync_secondary_mirrors(
-    sb:        &ExoSuperblockDisk,
+    sb: &ExoSuperblockDisk,
     disk_size: u64,
-    write_fn:  &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
+    write_fn: &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
 ) -> ExofsResult<()> {
     let sb_size = size_of::<ExoSuperblockDisk>();
     // SAFETY: validité des données vérifiée par les gardes ci-dessus.
-    let bytes   = unsafe {
+    let bytes = unsafe {
         core::slice::from_raw_parts(sb as *const ExoSuperblockDisk as *const u8, sb_size)
     };
 
-    let mirror_12k  = superblock_mirror_12k();
-    let mirror_end  = superblock_mirror_end(disk_size)?;
+    let mirror_12k = superblock_mirror_12k();
+    let mirror_end = superblock_mirror_end(disk_size)?;
 
-    let ok1 = write_fn(bytes, mirror_12k).map(|n| n == sb_size).unwrap_or(false);
-    let ok2 = write_fn(bytes, mirror_end).map(|n| n == sb_size).unwrap_or(false);
+    let ok1 = write_fn(bytes, mirror_12k)
+        .map(|n| n == sb_size)
+        .unwrap_or(false);
+    let ok2 = write_fn(bytes, mirror_end)
+        .map(|n| n == sb_size)
+        .unwrap_or(false);
 
     if ok1 || ok2 {
         STORAGE_STATS.inc_sb_mirror_restore();
@@ -211,8 +218,8 @@ pub fn sync_secondary_mirrors(
 /// # Règle HDR-03
 /// verify() est appelé avant tout accès aux champs du superblock.
 pub fn read_superblock_mirror(
-    index:   MirrorIndex,
-    offset:  DiskOffset,
+    index: MirrorIndex,
+    offset: DiskOffset,
     read_fn: &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
 ) -> MirrorReadResult {
     let sb_size = size_of::<ExoSuperblockDisk>();
@@ -227,7 +234,7 @@ pub fn read_superblock_mirror(
                 index,
                 offset,
                 status: MirrorStatus::IoError,
-                data:   zeroed_superblock_disk(),
+                data: zeroed_superblock_disk(),
             };
         }
     };
@@ -238,15 +245,14 @@ pub fn read_superblock_mirror(
             index,
             offset,
             status: MirrorStatus::IoError,
-            data:   zeroed_superblock_disk(),
+            data: zeroed_superblock_disk(),
         };
     }
 
     // Parser le superblock depuis le buffer.
     // SAFETY: buf est aligné et suffisamment grand.
-    let sb: ExoSuperblockDisk = unsafe {
-        core::ptr::read(buf.as_ptr() as *const ExoSuperblockDisk)
-    };
+    let sb: ExoSuperblockDisk =
+        unsafe { core::ptr::read(buf.as_ptr() as *const ExoSuperblockDisk) };
 
     // RÈGLE HDR-03 : vérification avant accès aux champs.
     let status = match sb.verify() {
@@ -268,17 +274,22 @@ pub fn read_superblock_mirror(
         }
     };
 
-    MirrorReadResult { index, offset, status, data: sb }
+    MirrorReadResult {
+        index,
+        offset,
+        status,
+        data: sb,
+    }
 }
 
 /// Lit les 3 miroirs et retourne leurs résultats.
 pub fn read_all_mirrors(
     disk_size: u64,
-    read_fn:   &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
+    read_fn: &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
 ) -> ExofsResult<[MirrorReadResult; 3]> {
     let offsets = superblock_mirror_offsets(disk_size)?;
 
-    let r0 = read_superblock_mirror(MirrorIndex::Primary,   offsets[0], read_fn);
+    let r0 = read_superblock_mirror(MirrorIndex::Primary, offsets[0], read_fn);
     let r1 = read_superblock_mirror(MirrorIndex::Mirror12k, offsets[1], read_fn);
     let r2 = read_superblock_mirror(MirrorIndex::MirrorEnd, offsets[2], read_fn);
 
@@ -292,11 +303,11 @@ pub fn read_all_mirrors(
 /// Résultat de la sélection du meilleur miroir.
 pub struct MirrorRecoveryResult {
     /// Index du miroir sélectionné (le plus récent valide).
-    pub selected:     MirrorIndex,
+    pub selected: MirrorIndex,
     /// Superblock récupéré.
-    pub superblock:   ExoSuperblockDisk,
+    pub superblock: ExoSuperblockDisk,
     /// Nombre de miroirs valides.
-    pub valid_count:  u8,
+    pub valid_count: u8,
     /// Nombre de miroirs corrompus.
     pub corrupt_count: u8,
 }
@@ -306,10 +317,8 @@ pub struct MirrorRecoveryResult {
 /// Stratégie (BACKUP-02) :
 /// - Parmi les miroirs valides, choisit celui avec `epoch_current` le plus élevé.
 /// - Si aucun miroir n'est valide, retourne `Err(CorruptedFilesystem)`.
-pub fn select_best_mirror(
-    results: &[MirrorReadResult; 3],
-) -> ExofsResult<MirrorRecoveryResult> {
-    let mut valid_count:  u8 = 0;
+pub fn select_best_mirror(results: &[MirrorReadResult; 3]) -> ExofsResult<MirrorRecoveryResult> {
+    let mut valid_count: u8 = 0;
     let mut corrupt_count: u8 = 0;
     let mut best: Option<usize> = None;
 
@@ -318,7 +327,9 @@ pub fn select_best_mirror(
             valid_count += 1;
             // Prend le miroir avec la plus haute epoch.
             match best {
-                None => { best = Some(i); }
+                None => {
+                    best = Some(i);
+                }
                 Some(prev) => {
                     if r.data.epoch_current > results[prev].data.epoch_current {
                         best = Some(i);
@@ -337,8 +348,8 @@ pub fn select_best_mirror(
                 STORAGE_STATS.inc_sb_mirror_restore();
             }
             Ok(MirrorRecoveryResult {
-                selected:      results[idx].index,
-                superblock:    results[idx].data,
+                selected: results[idx].index,
+                superblock: results[idx].data,
                 valid_count,
                 corrupt_count,
             })
@@ -351,7 +362,7 @@ pub fn select_best_mirror(
 /// Combine `read_all_mirrors` + `select_best_mirror` en une seule opération.
 pub fn recover_superblock(
     disk_size: u64,
-    read_fn:   &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
+    read_fn: &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
 ) -> ExofsResult<MirrorRecoveryResult> {
     let results = read_all_mirrors(disk_size, read_fn)?;
     select_best_mirror(&results)
@@ -368,9 +379,8 @@ pub fn recover_superblock(
 /// - Leur `disk_size_bytes` est identique.
 /// - Leur `heap_start` est identique.
 pub fn cross_validate_mirrors(results: &[MirrorReadResult; 3]) -> bool {
-    let valid: alloc::vec::Vec<&MirrorReadResult> = results.iter()
-        .filter(|r| r.status.is_valid())
-        .collect();
+    let valid: alloc::vec::Vec<&MirrorReadResult> =
+        results.iter().filter(|r| r.status.is_valid()).collect();
 
     if valid.len() < 2 {
         return true; // Pas assez de miroirs pour comparer — accepté.
@@ -378,9 +388,15 @@ pub fn cross_validate_mirrors(results: &[MirrorReadResult; 3]) -> bool {
 
     let ref0 = valid[0];
     for other in valid.iter().skip(1) {
-        if other.data.uuid          != ref0.data.uuid          { return false; }
-        if other.data.disk_size_bytes != ref0.data.disk_size_bytes { return false; }
-        if other.data.heap_start    != ref0.data.heap_start    { return false; }
+        if other.data.uuid != ref0.data.uuid {
+            return false;
+        }
+        if other.data.disk_size_bytes != ref0.data.disk_size_bytes {
+            return false;
+        }
+        if other.data.heap_start != ref0.data.heap_start {
+            return false;
+        }
     }
     true
 }
@@ -409,13 +425,9 @@ mod tests {
     use super::*;
     // use crate::fs::exofs::storage::layout::HEAP_START_OFFSET;
 
-    #[allow(dead_code)] fn make_valid_sb(epoch: u64) -> ExoSuperblockDisk {
-        ExoSuperblockDisk::new_volume(
-            64 * 1024 * 1024,
-            b"test",
-            [1u8; 16],
-            1000 + epoch,
-        )
+    #[allow(dead_code)]
+    fn make_valid_sb(epoch: u64) -> ExoSuperblockDisk {
+        ExoSuperblockDisk::new_volume(64 * 1024 * 1024, b"test", [1u8; 16], 1000 + epoch)
         // Note: epoch n'est pas dans new_volume, on l'override ici.
         // En pratique on utiliserait un setter.
     }
@@ -443,7 +455,7 @@ mod tests {
             data: zeroed_superblock_disk(),
         };
         let results = [
-            mk(MirrorIndex::Primary,   MirrorStatus::BadMagic),
+            mk(MirrorIndex::Primary, MirrorStatus::BadMagic),
             mk(MirrorIndex::Mirror12k, MirrorStatus::BadChecksum),
             mk(MirrorIndex::MirrorEnd, MirrorStatus::IoError),
         ];
@@ -453,11 +465,13 @@ mod tests {
     #[test]
     fn test_count_valid_mirrors() {
         let mk = |idx, status| MirrorReadResult {
-            index: idx, offset: DiskOffset(0),
-            status, data: zeroed_superblock_disk(),
+            index: idx,
+            offset: DiskOffset(0),
+            status,
+            data: zeroed_superblock_disk(),
         };
         let results = [
-            mk(MirrorIndex::Primary,   MirrorStatus::Valid),
+            mk(MirrorIndex::Primary, MirrorStatus::Valid),
             mk(MirrorIndex::Mirror12k, MirrorStatus::BadChecksum),
             mk(MirrorIndex::MirrorEnd, MirrorStatus::Valid),
         ];

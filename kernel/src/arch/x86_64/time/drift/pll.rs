@@ -25,8 +25,7 @@
 //   Convergence si dérive = 5000 ppm : 10 cycles × 30s = 5 minutes
 // ════════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicI64, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
 // ── Constantes PLL ────────────────────────────────────────────────────────────
 
@@ -49,21 +48,21 @@ const CONVERGENCE_THRESHOLD: u32 = 2;
 /// État interne de la boucle PLL.
 struct PllState {
     /// Fréquence de référence courante (Hz) — base du calcul de correction.
-    current_hz:       AtomicU64,
+    current_hz: AtomicU64,
     /// Erreur de phase accumulée (en nano-ppm, signé) — intégration PI controller.
     #[allow(dead_code)]
     phase_error_nppm: AtomicI64,
     /// Nombre de mesures concordantes consécutives observées.
     #[allow(dead_code)]
-    converge_count:   AtomicU64,
+    converge_count: AtomicU64,
     /// Somme des N dernières mesures pour calcul de moyenne glissante.
-    measure_sum:      AtomicU64,
+    measure_sum: AtomicU64,
     /// Nombre de mesures dans la somme glissante.
-    measure_count:    AtomicU64,
+    measure_count: AtomicU64,
     /// Dernier ajustement appliqué (en Hz, signé via cast).
-    last_adj_hz:      AtomicI64,
+    last_adj_hz: AtomicI64,
     /// `true` si la PLL est en état de lock (dérive < LOCK_THRESHOLD_PPM).
-    locked:           AtomicBool,
+    locked: AtomicBool,
     /// Compteur total de corrections appliquées depuis le boot.
     total_corrections: AtomicU64,
 }
@@ -71,13 +70,13 @@ struct PllState {
 impl PllState {
     const fn new() -> Self {
         Self {
-            current_hz:        AtomicU64::new(3_000_000_000),
-            phase_error_nppm:  AtomicI64::new(0),
-            converge_count:    AtomicU64::new(0),
-            measure_sum:       AtomicU64::new(0),
-            measure_count:     AtomicU64::new(0),
-            last_adj_hz:       AtomicI64::new(0),
-            locked:            AtomicBool::new(false),
+            current_hz: AtomicU64::new(3_000_000_000),
+            phase_error_nppm: AtomicI64::new(0),
+            converge_count: AtomicU64::new(0),
+            measure_sum: AtomicU64::new(0),
+            measure_count: AtomicU64::new(0),
+            last_adj_hz: AtomicI64::new(0),
+            locked: AtomicBool::new(false),
             total_corrections: AtomicU64::new(0),
         }
     }
@@ -98,8 +97,10 @@ const MOVING_AVG_WINDOW: u64 = 5;
 /// Doit être appelé depuis `time_init()` après la calibration initiale.
 pub fn pll_init(initial_hz: u64) {
     PLL.current_hz.store(initial_hz, Ordering::Release);
-    PLL.measure_sum.store(initial_hz * MOVING_AVG_WINDOW, Ordering::Relaxed);
-    PLL.measure_count.store(MOVING_AVG_WINDOW, Ordering::Relaxed);
+    PLL.measure_sum
+        .store(initial_hz * MOVING_AVG_WINDOW, Ordering::Relaxed);
+    PLL.measure_count
+        .store(MOVING_AVG_WINDOW, Ordering::Relaxed);
     PLL.locked.store(false, Ordering::Release);
 }
 
@@ -119,13 +120,18 @@ pub fn pll_init(initial_hz: u64) {
 /// RÈGLE DRIFT-CIRCULAR-01 : N'appelle PAS ktime_get_ns() ici.
 pub fn pll_update(measured_hz: u64, _tsc_now: u64, ref_ns_anchor: u64) -> (u64, u64) {
     // ── Mise à jour moyenne glissante ──────────────────────────────────────────
-    let old_sum   = PLL.measure_sum.load(Ordering::Relaxed);
-    let old_count = PLL.measure_count.load(Ordering::Relaxed).min(MOVING_AVG_WINDOW);
+    let old_sum = PLL.measure_sum.load(Ordering::Relaxed);
+    let old_count = PLL
+        .measure_count
+        .load(Ordering::Relaxed)
+        .min(MOVING_AVG_WINDOW);
 
     // Expulser la plus ancienne mesure de la fenêtre si fenêtre pleine.
     let new_sum = if old_count >= MOVING_AVG_WINDOW {
         let oldest_approx = old_sum / old_count;
-        old_sum.saturating_sub(oldest_approx).saturating_add(measured_hz)
+        old_sum
+            .saturating_sub(oldest_approx)
+            .saturating_add(measured_hz)
     } else {
         old_sum.saturating_add(measured_hz)
     };
@@ -138,8 +144,10 @@ pub fn pll_update(measured_hz: u64, _tsc_now: u64, ref_ns_anchor: u64) -> (u64, 
     let smoothed_hz = new_sum / new_count;
 
     // ── Calcul de la correction ────────────────────────────────────────────────
-    let current_hz  = PLL.current_hz.load(Ordering::Relaxed);
-    if current_hz == 0 { return (ref_ns_anchor, measured_hz); }
+    let current_hz = PLL.current_hz.load(Ordering::Relaxed);
+    if current_hz == 0 {
+        return (ref_ns_anchor, measured_hz);
+    }
 
     // Erreur brute (signée).
     let error_hz: i64 = smoothed_hz as i64 - current_hz as i64;
@@ -161,7 +169,9 @@ pub fn pll_update(measured_hz: u64, _tsc_now: u64, ref_ns_anchor: u64) -> (u64, 
     // ── Vérification convergence ────────────────────────────────────────────────
     let deviation_ppm = if new_hz > 0 {
         (error_hz.unsigned_abs() as u128 * 1_000_000 / new_hz as u128) as u64
-    } else { 0 };
+    } else {
+        0
+    };
 
     if deviation_ppm < LOCK_THRESHOLD_PPM {
         PLL.locked.store(true, Ordering::Relaxed);
@@ -207,20 +217,20 @@ pub fn pll_correction_count() -> u64 {
 
 /// Snapshot complet de l'état PLL pour diagnostic.
 pub struct PllSnapshot {
-    pub current_hz:    u64,
-    pub last_adj_hz:   i64,
-    pub locked:        bool,
-    pub corrections:   u64,
-    pub smoothed_hz:   u64,
+    pub current_hz: u64,
+    pub last_adj_hz: i64,
+    pub locked: bool,
+    pub corrections: u64,
+    pub smoothed_hz: u64,
 }
 
 pub fn pll_snapshot() -> PllSnapshot {
-    let sum   = PLL.measure_sum.load(Ordering::Relaxed);
+    let sum = PLL.measure_sum.load(Ordering::Relaxed);
     let count = PLL.measure_count.load(Ordering::Relaxed).max(1);
     PllSnapshot {
-        current_hz:  PLL.current_hz.load(Ordering::Relaxed),
+        current_hz: PLL.current_hz.load(Ordering::Relaxed),
         last_adj_hz: PLL.last_adj_hz.load(Ordering::Relaxed),
-        locked:      PLL.locked.load(Ordering::Relaxed),
+        locked: PLL.locked.load(Ordering::Relaxed),
         corrections: PLL.total_corrections.load(Ordering::Relaxed),
         smoothed_hz: sum / count,
     }

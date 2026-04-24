@@ -6,11 +6,10 @@
 //   ARITH-02  : checked_add / saturating_* pour tout calcul d'offset
 //   NO-STD-01 : core::fmt pour Display/Debug
 
-
+use crate::fs::exofs::core::{DiskOffset, ExofsError, ExofsResult, Extent};
+use core::cmp::Ordering;
 use core::fmt;
 use core::mem;
-use core::cmp::Ordering;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset, Extent};
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
@@ -26,15 +25,15 @@ pub const EXTENT_INVALID_OFFSET: u64 = u64::MAX;
 // ── Flags d'un extent ─────────────────────────────────────────────────────────
 
 /// Bit 0 : extent creux (trou de fichier, zéros non persistés).
-pub const EXTENT_FLAG_SPARSE:     u8 = 1 << 0;
+pub const EXTENT_FLAG_SPARSE: u8 = 1 << 0;
 /// Bit 1 : données compressées sur disque.
 pub const EXTENT_FLAG_COMPRESSED: u8 = 1 << 1;
 /// Bit 2 : extent Copy-on-Write (partagé entre snapshots).
-pub const EXTENT_FLAG_COW:        u8 = 1 << 2;
+pub const EXTENT_FLAG_COW: u8 = 1 << 2;
 /// Bit 3 : extent en cours d'écriture (dirty, pas encore committé).
-pub const EXTENT_FLAG_DIRTY:      u8 = 1 << 3;
+pub const EXTENT_FLAG_DIRTY: u8 = 1 << 3;
 /// Bit 4 : données chiffrées.
-pub const EXTENT_FLAG_ENCRYPTED:  u8 = 1 << 4;
+pub const EXTENT_FLAG_ENCRYPTED: u8 = 1 << 4;
 
 // ── Représentation on-disk ─────────────────────────────────────────────────────
 
@@ -57,13 +56,13 @@ pub struct ObjectExtentDisk {
     /// Offset logique dans l'objet (en octets).
     pub logical_offset: u64,
     /// Offset disque du premier octet de données.
-    pub disk_offset:    u64,
+    pub disk_offset: u64,
     /// Longueur de l'extent en octets.
-    pub len:            u64,
+    pub len: u64,
     /// Flags (EXTENT_FLAG_*).
-    pub flags:          u8,
+    pub flags: u8,
     /// Padding pour aligner à 32 octets.
-    pub _pad:           [u8; 7],
+    pub _pad: [u8; 7],
 }
 
 // Validation de taille en compile-time.
@@ -74,11 +73,11 @@ const _: () = assert!(
 
 impl ObjectExtentDisk {
     // Constantes de flags (alias pour compatibilité).
-    pub const FLAG_SPARSE:     u8 = EXTENT_FLAG_SPARSE;
+    pub const FLAG_SPARSE: u8 = EXTENT_FLAG_SPARSE;
     pub const FLAG_COMPRESSED: u8 = EXTENT_FLAG_COMPRESSED;
-    pub const FLAG_COW:        u8 = EXTENT_FLAG_COW;
-    pub const FLAG_DIRTY:      u8 = EXTENT_FLAG_DIRTY;
-    pub const FLAG_ENCRYPTED:  u8 = EXTENT_FLAG_ENCRYPTED;
+    pub const FLAG_COW: u8 = EXTENT_FLAG_COW;
+    pub const FLAG_DIRTY: u8 = EXTENT_FLAG_DIRTY;
+    pub const FLAG_ENCRYPTED: u8 = EXTENT_FLAG_ENCRYPTED;
 
     /// Crée un nouvel extent on-disk.
     pub fn new(logical_offset: u64, disk_offset: u64, len: u64, flags: u8) -> Self {
@@ -113,15 +112,15 @@ impl ObjectExtentDisk {
     ///
     /// Règle ARITH-02 : `checked_add`.
     pub fn logical_end(self) -> ExofsResult<u64> {
-        let lo  = { self.logical_offset };
+        let lo = { self.logical_offset };
         let len = { self.len };
         lo.checked_add(len).ok_or(ExofsError::Overflow)
     }
 
     /// Calcule l'offset disque de fin (exclusif).
     pub fn disk_end(self) -> ExofsResult<u64> {
-        let do_  = { self.disk_offset };
-        let len  = { self.len };
+        let do_ = { self.disk_offset };
+        let len = { self.len };
         do_.checked_add(len).ok_or(ExofsError::Overflow)
     }
 
@@ -172,9 +171,9 @@ pub struct ObjectExtent {
     /// Offset logique dans l'objet (en octets).
     pub logical_offset: u64,
     /// Plage disque physique (offset + longueur).
-    pub physical:       Extent,
+    pub physical: Extent,
     /// Flags (EXTENT_FLAG_*).
-    pub flags:          u8,
+    pub flags: u8,
 }
 
 impl ObjectExtent {
@@ -184,7 +183,10 @@ impl ObjectExtent {
     pub fn new(logical_offset: u64, disk_offset: DiskOffset, len: u64, flags: u8) -> Self {
         Self {
             logical_offset,
-            physical: Extent { offset: disk_offset, len },
+            physical: Extent {
+                offset: disk_offset,
+                len,
+            },
             flags,
         }
     }
@@ -195,7 +197,7 @@ impl ObjectExtent {
             logical_offset: d.logical_offset,
             physical: Extent {
                 offset: DiskOffset(d.disk_offset),
-                len:    d.len,
+                len: d.len,
             },
             flags: d.flags,
         }
@@ -205,10 +207,10 @@ impl ObjectExtent {
     pub fn to_disk(&self) -> ObjectExtentDisk {
         ObjectExtentDisk {
             logical_offset: self.logical_offset,
-            disk_offset:    self.physical.offset.0,
-            len:            self.physical.len,
-            flags:          self.flags,
-            _pad:           [0u8; 7],
+            disk_offset: self.physical.offset.0,
+            len: self.physical.len,
+            flags: self.flags,
+            _pad: [0u8; 7],
         }
     }
 
@@ -231,18 +233,35 @@ impl ObjectExtent {
     /// Offset disque de fin (exclusif).
     #[inline]
     pub fn disk_end(&self) -> ExofsResult<u64> {
-        self.physical.offset.0
+        self.physical
+            .offset
+            .0
             .checked_add(self.physical.len)
             .ok_or(ExofsError::Overflow)
     }
 
     // ── Flags ─────────────────────────────────────────────────────────────────
 
-    #[inline] pub fn is_sparse(&self)     -> bool { self.flags & EXTENT_FLAG_SPARSE     != 0 }
-    #[inline] pub fn is_compressed(&self) -> bool { self.flags & EXTENT_FLAG_COMPRESSED != 0 }
-    #[inline] pub fn is_cow(&self)        -> bool { self.flags & EXTENT_FLAG_COW        != 0 }
-    #[inline] pub fn is_dirty(&self)      -> bool { self.flags & EXTENT_FLAG_DIRTY      != 0 }
-    #[inline] pub fn is_encrypted(&self)  -> bool { self.flags & EXTENT_FLAG_ENCRYPTED  != 0 }
+    #[inline]
+    pub fn is_sparse(&self) -> bool {
+        self.flags & EXTENT_FLAG_SPARSE != 0
+    }
+    #[inline]
+    pub fn is_compressed(&self) -> bool {
+        self.flags & EXTENT_FLAG_COMPRESSED != 0
+    }
+    #[inline]
+    pub fn is_cow(&self) -> bool {
+        self.flags & EXTENT_FLAG_COW != 0
+    }
+    #[inline]
+    pub fn is_dirty(&self) -> bool {
+        self.flags & EXTENT_FLAG_DIRTY != 0
+    }
+    #[inline]
+    pub fn is_encrypted(&self) -> bool {
+        self.flags & EXTENT_FLAG_ENCRYPTED != 0
+    }
 
     /// Positionne le flag dirty (extent modifié en mémoire).
     #[inline]
@@ -272,14 +291,20 @@ impl ObjectExtent {
         }
         match self.logical_end() {
             Ok(end) => offset < end,
-            Err(_)  => false,
+            Err(_) => false,
         }
     }
 
     /// Retourne `true` si cet extent chevauche `other` dans l'espace logique.
     pub fn overlaps_logical(&self, other: &ObjectExtent) -> bool {
-        let self_end  = match self.logical_end()  { Ok(e) => e, Err(_) => return false };
-        let other_end = match other.logical_end() { Ok(e) => e, Err(_) => return false };
+        let self_end = match self.logical_end() {
+            Ok(e) => e,
+            Err(_) => return false,
+        };
+        let other_end = match other.logical_end() {
+            Ok(e) => e,
+            Err(_) => return false,
+        };
         self.logical_offset < other_end && other.logical_offset < self_end
     }
 
@@ -305,7 +330,9 @@ impl ObjectExtent {
             return Err(ExofsError::InvalidArgument);
         }
         // ARITH-02 : saturating_add — la validation sera refaite par le caller.
-        self.physical.len = self.physical.len
+        self.physical.len = self
+            .physical
+            .len
             .checked_add(other.physical.len)
             .ok_or(ExofsError::Overflow)?;
         Ok(())
@@ -326,17 +353,18 @@ impl ObjectExtent {
             return Err(ExofsError::InvalidArgument);
         }
         // Calcul ARITH-02.
-        let left_len  = split_offset
+        let left_len = split_offset
             .checked_sub(self.logical_offset)
             .ok_or(ExofsError::Overflow)?;
-        let right_len = end
-            .checked_sub(split_offset)
-            .ok_or(ExofsError::Overflow)?;
-        let right_disk_offset = self.physical.offset.0
+        let right_len = end.checked_sub(split_offset).ok_or(ExofsError::Overflow)?;
+        let right_disk_offset = self
+            .physical
+            .offset
+            .0
             .checked_add(left_len)
             .ok_or(ExofsError::Overflow)?;
 
-        let left  = ObjectExtent::new(
+        let left = ObjectExtent::new(
             self.logical_offset,
             self.physical.offset,
             left_len,
@@ -357,12 +385,12 @@ impl ObjectExtent {
     pub fn cow_copy(&self, new_disk_offset: DiskOffset) -> ObjectExtent {
         let mut flags = self.flags;
         flags &= !EXTENT_FLAG_DIRTY;
-        flags |=  EXTENT_FLAG_COW;
+        flags |= EXTENT_FLAG_COW;
         ObjectExtent {
             logical_offset: self.logical_offset,
             physical: Extent {
                 offset: new_disk_offset,
-                len:    self.physical.len,
+                len: self.physical.len,
             },
             flags,
         }
@@ -418,10 +446,10 @@ impl fmt::Display for ObjectExtent {
             self.logical_offset,
             self.physical.offset.0,
             self.physical.len,
-            if self.is_sparse()     { "S" } else { "-" },
+            if self.is_sparse() { "S" } else { "-" },
             if self.is_compressed() { "C" } else { "-" },
-            if self.is_cow()        { "W" } else { "-" },
-            if self.is_dirty()      { "D" } else { "-" },
+            if self.is_cow() { "W" } else { "-" },
+            if self.is_dirty() { "D" } else { "-" },
         )
     }
 }
@@ -432,13 +460,13 @@ impl fmt::Display for ObjectExtent {
 #[derive(Default, Debug, Clone)]
 pub struct ExtentStats {
     /// Nombre d'extents créés.
-    pub created:         u64,
+    pub created: u64,
     /// Nombre d'extents fusionnés.
-    pub merged:          u64,
+    pub merged: u64,
     /// Nombre d'extents divisés (split).
-    pub split:           u64,
+    pub split: u64,
     /// Nombre de copies CoW.
-    pub cow_copies:      u64,
+    pub cow_copies: u64,
     /// Nombre d'erreurs de validation.
     pub validate_errors: u64,
 }
@@ -446,10 +474,10 @@ pub struct ExtentStats {
 impl ExtentStats {
     pub const fn new() -> Self {
         Self {
-            created:         0,
-            merged:          0,
-            split:           0,
-            cow_copies:      0,
+            created: 0,
+            merged: 0,
+            split: 0,
+            cow_copies: 0,
             validate_errors: 0,
         }
     }
@@ -461,11 +489,7 @@ impl fmt::Display for ExtentStats {
             f,
             "ExtentStats {{ created: {}, merged: {}, split: {}, \
              cow: {}, validate_err: {} }}",
-            self.created,
-            self.merged,
-            self.split,
-            self.cow_copies,
-            self.validate_errors,
+            self.created, self.merged, self.split, self.cow_copies, self.validate_errors,
         )
     }
 }
@@ -476,9 +500,9 @@ impl fmt::Display for ExtentStats {
 #[derive(Default)]
 pub struct ExtentBuilder {
     logical_offset: u64,
-    disk_offset:    u64,
-    len:            u64,
-    flags:          u8,
+    disk_offset: u64,
+    len: u64,
+    flags: u8,
 }
 
 impl ExtentBuilder {
@@ -552,8 +576,8 @@ mod tests {
     #[test]
     fn test_contains_offset() {
         let e = ObjectExtent::new(0x1000, DiskOffset(0x4000), 0x1000, 0);
-        assert!( e.contains_offset(0x1000));
-        assert!( e.contains_offset(0x1FFF));
+        assert!(e.contains_offset(0x1000));
+        assert!(e.contains_offset(0x1FFF));
         assert!(!e.contains_offset(0x2000));
         assert!(!e.contains_offset(0x0FFF));
     }
@@ -562,7 +586,7 @@ mod tests {
     fn test_split_at() {
         let e = ObjectExtent::new(0, DiskOffset(0x8000), 0x4000, 0);
         let (left, right) = e.split_at(0x2000).unwrap();
-        assert_eq!(left.physical.len,  0x2000);
+        assert_eq!(left.physical.len, 0x2000);
         assert_eq!(right.physical.len, 0x2000);
         assert_eq!(right.logical_offset, 0x2000);
         assert_eq!(right.physical.offset.0, 0x8000 + 0x2000);
@@ -570,18 +594,18 @@ mod tests {
 
     #[test]
     fn test_try_merge() {
-        let mut a = ObjectExtent::new(0,      DiskOffset(0), 0x1000, 0);
-        let     b = ObjectExtent::new(0x1000, DiskOffset(0x1000), 0x1000, 0);
+        let mut a = ObjectExtent::new(0, DiskOffset(0), 0x1000, 0);
+        let b = ObjectExtent::new(0x1000, DiskOffset(0x1000), 0x1000, 0);
         a.try_merge(&b).unwrap();
         assert_eq!(a.physical.len, 0x2000);
     }
 
     #[test]
     fn test_overlaps_logical() {
-        let a = ObjectExtent::new(0,    DiskOffset(0), 0x1000, 0);
+        let a = ObjectExtent::new(0, DiskOffset(0), 0x1000, 0);
         let b = ObjectExtent::new(0x800, DiskOffset(0x800), 0x1000, 0);
         let c = ObjectExtent::new(0x1000, DiskOffset(0x1000), 0x1000, 0);
-        assert!( a.overlaps_logical(&b));
+        assert!(a.overlaps_logical(&b));
         assert!(!a.overlaps_logical(&c));
     }
 

@@ -110,13 +110,17 @@ pub fn read_service_name(payload: &[u8]) -> Option<&[u8]> {
 
 #[inline]
 pub fn read_u32(payload: &[u8], offset: usize) -> Result<u32, i64> {
-    let bytes = payload.get(offset..offset.saturating_add(4)).ok_or(syscall::EINVAL)?;
+    let bytes = payload
+        .get(offset..offset.saturating_add(4))
+        .ok_or(syscall::EINVAL)?;
     Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
 #[inline]
 pub fn read_i32(payload: &[u8], offset: usize) -> Result<i32, i64> {
-    let bytes = payload.get(offset..offset.saturating_add(4)).ok_or(syscall::EINVAL)?;
+    let bytes = payload
+        .get(offset..offset.saturating_add(4))
+        .ok_or(syscall::EINVAL)?;
     Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
@@ -151,7 +155,11 @@ pub fn lifecycle_reply(pid: u32, running_mask: u64) -> InitReply {
     reply
 }
 
-pub fn isolation_reply(checkpoint_tag: &[u8; 32], running_count: u32, running_mask: u64) -> InitReply {
+pub fn isolation_reply(
+    checkpoint_tag: &[u8; 32],
+    running_count: u32,
+    running_mask: u64,
+) -> InitReply {
     let mut reply = InitReply::ok();
     reply.data[0..32].copy_from_slice(checkpoint_tag);
     reply.data[32..36].copy_from_slice(&running_count.to_le_bytes());

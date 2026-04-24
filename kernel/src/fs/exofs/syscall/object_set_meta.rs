@@ -3,24 +3,22 @@
 //! Gestion des métadonnées key/value attachées à un blob ExoFS.
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
-use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use super::object_fd::OBJECT_TABLE;
 use super::validation::{
-    exofs_err_to_errno,
-    copy_struct_from_user,
-    verify_cap, CapabilityType, EFAULT, EINVAL,
+    copy_struct_from_user, exofs_err_to_errno, verify_cap, CapabilityType, EFAULT, EINVAL,
     EXOFS_META_MAX,
 };
-use super::object_fd::OBJECT_TABLE;
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Taille maximale d'une clé de métadonnée (octets).
-pub const META_KEY_MAX:   usize = 128;
+pub const META_KEY_MAX: usize = 128;
 /// Taille maximale d'une valeur de métadonnée (octets).
 pub const META_VALUE_MAX: usize = EXOFS_META_MAX;
 /// Nombre maximum d'entrées dans un bloc de métadonnées.
@@ -33,23 +31,23 @@ pub const META_MAGIC: u32 = 0xEF05_4D45; // "EF05ME"
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod meta_flags {
-    pub const SET:       u32 = 0x0001;
-    pub const GET:       u32 = 0x0002;
-    pub const DELETE:    u32 = 0x0004;
-    pub const LIST:      u32 = 0x0008;
+    pub const SET: u32 = 0x0001;
+    pub const GET: u32 = 0x0002;
+    pub const DELETE: u32 = 0x0004;
+    pub const LIST: u32 = 0x0008;
     pub const CLEAR_ALL: u32 = 0x0010;
-    pub const VALID_MASK:u32 = SET | GET | DELETE | LIST | CLEAR_ALL;
+    pub const VALID_MASK: u32 = SET | GET | DELETE | LIST | CLEAR_ALL;
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SetMetaArgs {
-    pub fd:      u64,
+    pub fd: u64,
     pub key_ptr: u64,
     pub key_len: u64,
     pub val_ptr: u64,
     pub val_len: u64,
-    pub flags:   u64,
+    pub flags: u64,
 }
 
 const _: () = assert!(core::mem::size_of::<SetMetaArgs>() == 48);
@@ -62,41 +60,59 @@ const _: () = assert!(core::mem::size_of::<SetMetaArgs>() == 48);
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct MetaEntry {
-    pub key_len:   u16,
+    pub key_len: u16,
     pub value_len: u16,
-    pub _pad:      u32,
-    pub key:       [u8; META_KEY_MAX],
-    pub value:     [u8; META_VALUE_MAX],
+    pub _pad: u32,
+    pub key: [u8; META_KEY_MAX],
+    pub value: [u8; META_VALUE_MAX],
 }
 
 const _: () = assert!(META_KEY_MAX + META_VALUE_MAX + 8 <= 2048);
 
 impl MetaEntry {
     pub fn new(key: &[u8], value: &[u8]) -> ExofsResult<Self> {
-        if key.is_empty() || key.len() > META_KEY_MAX   { return Err(ExofsError::InvalidArgument); }
-        if value.len() > META_VALUE_MAX                 { return Err(ExofsError::InvalidArgument); }
+        if key.is_empty() || key.len() > META_KEY_MAX {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if value.len() > META_VALUE_MAX {
+            return Err(ExofsError::InvalidArgument);
+        }
         let mut e = MetaEntry {
-            key_len:   key.len()   as u16,
+            key_len: key.len() as u16,
             value_len: value.len() as u16,
-            _pad:      0,
-            key:       [0u8; META_KEY_MAX],
-            value:     [0u8; META_VALUE_MAX],
+            _pad: 0,
+            key: [0u8; META_KEY_MAX],
+            value: [0u8; META_VALUE_MAX],
         };
         let mut i = 0usize;
-        while i < key.len()   { e.key[i]   = key[i];   i = i.wrapping_add(1); }
+        while i < key.len() {
+            e.key[i] = key[i];
+            i = i.wrapping_add(1);
+        }
         let mut j = 0usize;
-        while j < value.len() { e.value[j] = value[j]; j = j.wrapping_add(1); }
+        while j < value.len() {
+            e.value[j] = value[j];
+            j = j.wrapping_add(1);
+        }
         Ok(e)
     }
 
-    pub fn key_bytes(&self) -> &[u8] { &self.key[..self.key_len as usize] }
-    pub fn value_bytes(&self) -> &[u8] { &self.value[..self.value_len as usize] }
+    pub fn key_bytes(&self) -> &[u8] {
+        &self.key[..self.key_len as usize]
+    }
+    pub fn value_bytes(&self) -> &[u8] {
+        &self.value[..self.value_len as usize]
+    }
 
     pub fn key_eq(&self, k: &[u8]) -> bool {
-        if self.key_len as usize != k.len() { return false; }
+        if self.key_len as usize != k.len() {
+            return false;
+        }
         let mut i = 0usize;
         while i < k.len() {
-            if self.key[i] != k[i] { return false; }
+            if self.key[i] != k[i] {
+                return false;
+            }
             i = i.wrapping_add(1);
         }
         true
@@ -124,7 +140,10 @@ fn meta_blob_id(blob_id: BlobId) -> BlobId {
     let mut buf = [0u8; 34];
     let raw = blob_id.as_bytes();
     let mut i = 0usize;
-    while i < 32 { buf[i] = raw[i]; i = i.wrapping_add(1); }
+    while i < 32 {
+        buf[i] = raw[i];
+        i = i.wrapping_add(1);
+    }
     buf[32] = 0xFE;
     buf[33] = 0xED;
     BlobId::from_bytes_blake3(&buf)
@@ -133,28 +152,42 @@ fn meta_blob_id(blob_id: BlobId) -> BlobId {
 /// Désérialise les entrées depuis les octets du cache.
 /// OOM-02 : try_reserve. RECUR-01 : while.
 fn deserialize_entries(raw: &[u8]) -> ExofsResult<Vec<MetaEntry>> {
-    if raw.len() < RAW_HEADER_SIZE { return Err(ExofsError::CorruptedStructure); }
+    if raw.len() < RAW_HEADER_SIZE {
+        return Err(ExofsError::CorruptedStructure);
+    }
     let magic = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
-    if magic != META_MAGIC { return Err(ExofsError::InvalidMagic); }
+    if magic != META_MAGIC {
+        return Err(ExofsError::InvalidMagic);
+    }
     let count = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]) as usize;
-    if count > META_ENTRIES_MAX { return Err(ExofsError::CorruptedStructure); }
+    if count > META_ENTRIES_MAX {
+        return Err(ExofsError::CorruptedStructure);
+    }
 
     let mut entries: Vec<MetaEntry> = Vec::new();
-    entries.try_reserve(count).map_err(|_| ExofsError::NoMemory)?;
+    entries
+        .try_reserve(count)
+        .map_err(|_| ExofsError::NoMemory)?;
 
     let mut off = RAW_HEADER_SIZE;
     let mut i = 0usize;
     while i < count {
-        if off.saturating_add(4) > raw.len() { break; }
+        if off.saturating_add(4) > raw.len() {
+            break;
+        }
         let kl = u16::from_le_bytes([raw[off], raw[off + 1]]) as usize;
         let vl = u16::from_le_bytes([raw[off + 2], raw[off + 3]]) as usize;
         off = off.saturating_add(4);
-        if off.saturating_add(kl).saturating_add(vl) > raw.len() { break; }
+        if off.saturating_add(kl).saturating_add(vl) > raw.len() {
+            break;
+        }
         let k = &raw[off..off.saturating_add(kl)];
         off = off.saturating_add(kl);
         let v = &raw[off..off.saturating_add(vl)];
         off = off.saturating_add(vl);
-        if let Ok(e) = MetaEntry::new(k, v) { entries.push(e); }
+        if let Ok(e) = MetaEntry::new(k, v) {
+            entries.push(e);
+        }
         i = i.wrapping_add(1);
     }
     Ok(entries)
@@ -178,21 +211,33 @@ fn serialize_entries(entries: &[MetaEntry]) -> ExofsResult<Vec<u8>> {
     let magic_le = META_MAGIC.to_le_bytes();
     let count_le = (entries.len() as u32).to_le_bytes();
     let mut j = 0usize;
-    while j < 4 { buf.push(magic_le[j]); j = j.wrapping_add(1); }
+    while j < 4 {
+        buf.push(magic_le[j]);
+        j = j.wrapping_add(1);
+    }
     let mut k = 0usize;
-    while k < 4 { buf.push(count_le[k]); k = k.wrapping_add(1); }
+    while k < 4 {
+        buf.push(count_le[k]);
+        k = k.wrapping_add(1);
+    }
     // Entries
     let mut idx = 0usize;
     while idx < entries.len() {
         let e = &entries[idx];
         buf.push((e.key_len & 0xFF) as u8);
-        buf.push((e.key_len >> 8)   as u8);
+        buf.push((e.key_len >> 8) as u8);
         buf.push((e.value_len & 0xFF) as u8);
-        buf.push((e.value_len >> 8)   as u8);
+        buf.push((e.value_len >> 8) as u8);
         let mut ki = 0usize;
-        while ki < e.key_len as usize   { buf.push(e.key[ki]);   ki = ki.wrapping_add(1); }
+        while ki < e.key_len as usize {
+            buf.push(e.key[ki]);
+            ki = ki.wrapping_add(1);
+        }
         let mut vi = 0usize;
-        while vi < e.value_len as usize { buf.push(e.value[vi]); vi = vi.wrapping_add(1); }
+        while vi < e.value_len as usize {
+            buf.push(e.value[vi]);
+            vi = vi.wrapping_add(1);
+        }
         idx = idx.wrapping_add(1);
     }
     Ok(buf)
@@ -202,7 +247,7 @@ fn serialize_entries(entries: &[MetaEntry]) -> ExofsResult<Vec<u8>> {
 fn load_entries(meta_id: BlobId) -> ExofsResult<Vec<MetaEntry>> {
     match BLOB_CACHE.get(&meta_id) {
         Some(data) => deserialize_entries(&data),
-        None       => Ok(Vec::new()),
+        None => Ok(Vec::new()),
     }
 }
 
@@ -231,7 +276,9 @@ pub fn meta_set(blob_id: BlobId, key: &[u8], value: &[u8]) -> ExofsResult<()> {
         i = i.wrapping_add(1);
     }
     if !found {
-        if entries.len() >= META_ENTRIES_MAX { return Err(ExofsError::QuotaExceeded); }
+        if entries.len() >= META_ENTRIES_MAX {
+            return Err(ExofsError::QuotaExceeded);
+        }
         entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         entries.push(MetaEntry::new(key, value)?);
     }
@@ -247,7 +294,10 @@ pub fn meta_get(blob_id: BlobId, key: &[u8], out: &mut Vec<u8>) -> ExofsResult<u
             let vl = entries[i].value_len as usize;
             out.try_reserve(vl).map_err(|_| ExofsError::NoMemory)?;
             let mut j = 0usize;
-            while j < vl { out.push(entries[i].value[j]); j = j.wrapping_add(1); }
+            while j < vl {
+                out.push(entries[i].value[j]);
+                j = j.wrapping_add(1);
+            }
             return Ok(vl);
         }
         i = i.wrapping_add(1);
@@ -259,10 +309,14 @@ pub fn meta_delete(blob_id: BlobId, key: &[u8]) -> ExofsResult<()> {
     let meta_id = meta_blob_id(blob_id);
     let entries = load_entries(meta_id)?;
     let mut new_entries: Vec<MetaEntry> = Vec::new();
-    new_entries.try_reserve(entries.len()).map_err(|_| ExofsError::NoMemory)?;
+    new_entries
+        .try_reserve(entries.len())
+        .map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < entries.len() {
-        if !entries[i].key_eq(key) { new_entries.push(entries[i]); }
+        if !entries[i].key_eq(key) {
+            new_entries.push(entries[i]);
+        }
         i = i.wrapping_add(1);
     }
     save_entries(meta_id, &new_entries)
@@ -279,20 +333,28 @@ pub fn meta_clear(blob_id: BlobId) -> ExofsResult<()> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `exofs_object_set_meta(args_ptr, cap_token) → 0 ou errno`
-pub fn sys_exofs_object_set_meta(
-    args_ptr:  u64,
-    cap_token: u64,
-) -> i64 {
-    if args_ptr == 0 { return EFAULT; }
+pub fn sys_exofs_object_set_meta(args_ptr: u64, cap_token: u64) -> i64 {
+    if args_ptr == 0 {
+        return EFAULT;
+    }
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     let args = match unsafe { copy_struct_from_user::<SetMetaArgs>(args_ptr) } {
-        Ok(a)  => a,
+        Ok(a) => a,
         Err(_) => return EFAULT,
     };
 
-    let SetMetaArgs { fd, key_ptr, key_len, val_ptr, val_len, flags } = args;
+    let SetMetaArgs {
+        fd,
+        key_ptr,
+        key_len,
+        val_ptr,
+        val_len,
+        flags,
+    } = args;
     let f = flags as u32;
-    if f & !meta_flags::VALID_MASK != 0 { return EINVAL; }
+    if f & !meta_flags::VALID_MASK != 0 {
+        return EINVAL;
+    }
 
     let blob_id = match OBJECT_TABLE.blob_id_of(fd as u32) {
         Ok(id) => id,
@@ -304,24 +366,33 @@ pub fn sys_exofs_object_set_meta(
             return e;
         }
         return match meta_clear(blob_id) {
-            Ok(_)  => 0,
+            Ok(_) => 0,
             Err(e) => exofs_err_to_errno(e),
         };
     }
 
     if f & meta_flags::SET != 0 {
-        if key_ptr == 0 { return EFAULT; }
+        if key_ptr == 0 {
+            return EFAULT;
+        }
         let kl = key_len as usize;
         let vl = val_len as usize;
-        if kl == 0 || kl > META_KEY_MAX   { return EINVAL; }
-        if vl > META_VALUE_MAX             { return EINVAL; }
+        if kl == 0 || kl > META_KEY_MAX {
+            return EINVAL;
+        }
+        if vl > META_VALUE_MAX {
+            return EINVAL;
+        }
         let mut kbuf: Vec<u8> = Vec::new();
         kbuf.try_reserve(kl).map_err(|_| -12i64).unwrap_or_default();
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         unsafe {
             let src = key_ptr as *const u8;
             let mut i = 0usize;
-            while i < kl { kbuf.push(*src.add(i)); i = i.wrapping_add(1); }
+            while i < kl {
+                kbuf.push(*src.add(i));
+                i = i.wrapping_add(1);
+            }
         }
         let mut vbuf: Vec<u8> = Vec::new();
         if vl > 0 && val_ptr != 0 {
@@ -330,14 +401,17 @@ pub fn sys_exofs_object_set_meta(
             unsafe {
                 let src = val_ptr as *const u8;
                 let mut i = 0usize;
-                while i < vl { vbuf.push(*src.add(i)); i = i.wrapping_add(1); }
+                while i < vl {
+                    vbuf.push(*src.add(i));
+                    i = i.wrapping_add(1);
+                }
             }
         }
         if let Err(e) = verify_cap(cap_token, CapabilityType::ExoFsObjectSetMeta) {
             return e;
         }
         return match meta_set(blob_id, &kbuf, &vbuf) {
-            Ok(_)  => 0,
+            Ok(_) => 0,
             Err(e) => exofs_err_to_errno(e),
         };
     }
@@ -439,7 +513,7 @@ mod tests {
     #[test]
     fn test_meta_multiple_keys() {
         let id = mk_blob(b"/meta/multi");
-        meta_set(id, b"name",    b"exofs").unwrap();
+        meta_set(id, b"name", b"exofs").unwrap();
         meta_set(id, b"version", b"42").unwrap();
         let mut out: Vec<u8> = Vec::new();
         meta_get(id, b"version", &mut out).unwrap();
@@ -477,6 +551,9 @@ mod tests {
             val_len: 0,
             flags: 0xDEAD,
         };
-        assert_eq!(sys_exofs_object_set_meta(&args as *const SetMetaArgs as u64, 0), EINVAL);
+        assert_eq!(
+            sys_exofs_object_set_meta(&args as *const SetMetaArgs as u64, 0),
+            EINVAL
+        );
     }
 }

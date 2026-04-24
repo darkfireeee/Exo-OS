@@ -13,19 +13,18 @@
 //! - **WRITE-02** : délégué à `FsckRepair::apply`.
 //! - **ONDISK-03** : pas d `AtomicU64` dans `repr(C)`.
 
-
 extern crate alloc;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::boot_recovery::BlockDevice;
+use super::checkpoint::{RecoveryPhase, CHECKPOINT_STORE};
 use super::fsck_phase1::{FsckPhase1, Phase1Options, Phase1Report};
 use super::fsck_phase2::{FsckPhase2, Phase2Options, Phase2Report};
 use super::fsck_phase3::{FsckPhase3, Phase3Options, Phase3Report};
 use super::fsck_phase4::{FsckPhase4, Phase4Options, Phase4Report};
 use super::fsck_repair::{FsckRepair, RepairAction};
-use super::checkpoint::{CHECKPOINT_STORE, RecoveryPhase};
 use super::recovery_log::RECOVERY_LOG;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ── Garde d exécution ─────────────────────────────────────────────────────────
 
@@ -38,10 +37,10 @@ static FSCK_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 #[derive(Clone, Debug)]
 pub struct FsckOptions {
     // ── Sélection des phases ──────────────────────────────────────────────────
-    pub run_phase1:  bool,
-    pub run_phase2:  bool,
-    pub run_phase3:  bool,
-    pub run_phase4:  bool,
+    pub run_phase1: bool,
+    pub run_phase2: bool,
+    pub run_phase3: bool,
+    pub run_phase4: bool,
 
     // ── Comportement en cas d erreur ──────────────────────────────────────────
     /// Si `true`, stoppe le fsck dès la première erreur critique.
@@ -51,15 +50,15 @@ pub struct FsckOptions {
 
     // ── Réparation automatique ────────────────────────────────────────────────
     /// Si `true`, applique automatiquement les réparations après chaque phase.
-    pub auto_repair:  bool,
+    pub auto_repair: bool,
     /// Si `true`, ne fait que simuler les réparations (aucune écriture).
-    pub dry_run:      bool,
+    pub dry_run: bool,
 
     // ── Options par phase ─────────────────────────────────────────────────────
-    pub phase1_opts:  Phase1Options,
-    pub phase2_opts:  Phase2Options,
-    pub phase3_opts:  Phase3Options,
-    pub phase4_opts:  Phase4Options,
+    pub phase1_opts: Phase1Options,
+    pub phase2_opts: Phase2Options,
+    pub phase3_opts: Phase3Options,
+    pub phase4_opts: Phase4Options,
 
     // ── Checkpointing ─────────────────────────────────────────────────────────
     /// Si `true`, sauvegarde un checkpoint après chaque phase.
@@ -69,18 +68,18 @@ pub struct FsckOptions {
 impl Default for FsckOptions {
     fn default() -> Self {
         Self {
-            run_phase1:       true,
-            run_phase2:       true,
-            run_phase3:       true,
-            run_phase4:       true,
+            run_phase1: true,
+            run_phase2: true,
+            run_phase3: true,
+            run_phase4: true,
             stop_on_critical: false,
             max_total_errors: 1024,
-            auto_repair:      false,
-            dry_run:          false,
-            phase1_opts:      Phase1Options::default(),
-            phase2_opts:      Phase2Options::default(),
-            phase3_opts:      Phase3Options::default(),
-            phase4_opts:      Phase4Options::default(),
+            auto_repair: false,
+            dry_run: false,
+            phase1_opts: Phase1Options::default(),
+            phase2_opts: Phase2Options::default(),
+            phase3_opts: Phase3Options::default(),
+            phase4_opts: Phase4Options::default(),
             save_checkpoints: true,
         }
     }
@@ -90,8 +89,8 @@ impl FsckOptions {
     /// Crée des options pour un fsck rapide (phases 1+2 uniquement, sans réparation).
     pub fn quick() -> Self {
         Self {
-            run_phase3:  false,
-            run_phase4:  false,
+            run_phase3: false,
+            run_phase4: false,
             auto_repair: false,
             save_checkpoints: false,
             ..Self::default()
@@ -121,10 +120,18 @@ impl FsckOptions {
     /// bit0=phase1, bit1=phase2, bit2=phase3, bit3=phase4.
     pub fn phases_bitmask(&self) -> u8 {
         let mut mask = 0u8;
-        if self.run_phase1 { mask |= 0x01; }
-        if self.run_phase2 { mask |= 0x02; }
-        if self.run_phase3 { mask |= 0x04; }
-        if self.run_phase4 { mask |= 0x08; }
+        if self.run_phase1 {
+            mask |= 0x01;
+        }
+        if self.run_phase2 {
+            mask |= 0x02;
+        }
+        if self.run_phase3 {
+            mask |= 0x04;
+        }
+        if self.run_phase4 {
+            mask |= 0x08;
+        }
         mask
     }
 }
@@ -139,22 +146,22 @@ pub struct FsckResult {
     pub phase2_errors: u32,
     pub phase3_errors: u32,
     pub phase4_errors: u32,
-    pub total_errors:  u32,
+    pub total_errors: u32,
 
     // ── Compteurs de réparations ──────────────────────────────────────────────
-    pub total_repairs:     u32,
+    pub total_repairs: u32,
     pub repairs_succeeded: u32,
-    pub repairs_failed:    u32,
+    pub repairs_failed: u32,
 
     // ── Phases exécutées (bitmask) ────────────────────────────────────────────
     /// bit0=phase1, bit1=phase2, bit2=phase3, bit3=phase4.
-    pub phases_completed:  u8,
+    pub phases_completed: u8,
 
     // ── Statistiques ─────────────────────────────────────────────────────────
-    pub blobs_checked:     u64,
+    pub blobs_checked: u64,
     pub snapshots_checked: u64,
     pub orphans_recovered: u64,
-    pub bytes_recovered:   u64,
+    pub bytes_recovered: u64,
 
     // ── Rapport de phase 1 ────────────────────────────────────────────────────
     pub phase1: Option<Phase1Report>,
@@ -168,14 +175,18 @@ pub struct FsckResult {
 
 impl FsckResult {
     /// `true` si aucune erreur n a été détectée.
-    pub fn is_clean(&self) -> bool { self.total_errors == 0 }
+    pub fn is_clean(&self) -> bool {
+        self.total_errors == 0
+    }
     /// `true` si toutes les phases demandées ont été exécutées.
     pub fn phases_all_done(&self, expected_mask: u8) -> bool {
         self.phases_completed & expected_mask == expected_mask
     }
     /// Taux de réparation (0..=100).
     pub fn repair_rate_pct(&self) -> u32 {
-        if self.total_repairs == 0 { return 100; }
+        if self.total_repairs == 0 {
+            return 100;
+        }
         self.repairs_succeeded
             .saturating_mul(100)
             .checked_div(self.total_repairs)
@@ -209,10 +220,13 @@ impl Fsck {
     /// 7. Libérer le verrou.
     pub fn run_with_options(
         device: &mut dyn BlockDevice,
-        opts:   &FsckOptions,
+        opts: &FsckOptions,
     ) -> ExofsResult<FsckResult> {
         // Verrou d exclusion mutuelle.
-        if FSCK_IN_PROGRESS.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        if FSCK_IN_PROGRESS
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             return Err(ExofsError::CommitInProgress);
         }
 
@@ -222,10 +236,7 @@ impl Fsck {
         result
     }
 
-    fn run_inner(
-        device: &mut dyn BlockDevice,
-        opts:   &FsckOptions,
-    ) -> ExofsResult<FsckResult> {
+    fn run_inner(device: &mut dyn BlockDevice, opts: &FsckOptions) -> ExofsResult<FsckResult> {
         RECOVERY_LOG.log_event(super::recovery_log::RecoveryEvent::FsckStarted);
 
         let mut res = FsckResult {
@@ -233,15 +244,15 @@ impl Fsck {
             phase2_errors: 0,
             phase3_errors: 0,
             phase4_errors: 0,
-            total_errors:  0,
+            total_errors: 0,
             total_repairs: 0,
             repairs_succeeded: 0,
             repairs_failed: 0,
             phases_completed: 0,
-            blobs_checked:     0,
+            blobs_checked: 0,
             snapshots_checked: 0,
             orphans_recovered: 0,
-            bytes_recovered:   0,
+            bytes_recovered: 0,
             phase1: None,
             phase2: None,
             phase3: None,
@@ -254,14 +265,16 @@ impl Fsck {
             let p1 = FsckPhase1::run_with_options(device, &opts.phase1_opts)?;
             let ec = p1.errors.len() as u32;
             res.phase1_errors = ec;
-            res.total_errors  = res.total_errors.saturating_add(ec);
+            res.total_errors = res.total_errors.saturating_add(ec);
             res.phases_completed |= 0x01;
 
             if opts.auto_repair && ec > 0 {
                 let applied = Self::repair_phase1(device, &p1, opts.dry_run)?;
-                res.total_repairs     = res.total_repairs.saturating_add(applied.0);
+                res.total_repairs = res.total_repairs.saturating_add(applied.0);
                 res.repairs_succeeded = res.repairs_succeeded.saturating_add(applied.1);
-                res.repairs_failed    = res.repairs_failed.saturating_add(applied.0.saturating_sub(applied.1));
+                res.repairs_failed = res
+                    .repairs_failed
+                    .saturating_add(applied.0.saturating_sub(applied.1));
             }
 
             if opts.save_checkpoints {
@@ -276,14 +289,16 @@ impl Fsck {
             res.phase1 = Some(p1);
         }
 
-        if res.total_errors >= opts.max_total_errors { return Ok(res); }
+        if res.total_errors >= opts.max_total_errors {
+            return Ok(res);
+        }
 
         // ── Phase 2 ───────────────────────────────────────────────────────────
         if opts.run_phase2 {
             let p2 = FsckPhase2::run_with_options(device, &opts.phase2_opts)?;
             let ec = p2.errors.len() as u32;
             res.phase2_errors = ec;
-            res.total_errors  = res.total_errors.saturating_add(ec);
+            res.total_errors = res.total_errors.saturating_add(ec);
             res.blobs_checked = p2.blobs_walked;
             res.phases_completed |= 0x02;
 
@@ -298,7 +313,9 @@ impl Fsck {
             res.phase2 = Some(p2);
         }
 
-        if res.total_errors >= opts.max_total_errors { return Ok(res); }
+        if res.total_errors >= opts.max_total_errors {
+            return Ok(res);
+        }
 
         // ── Phase 3 ───────────────────────────────────────────────────────────
         if opts.run_phase3 {
@@ -310,14 +327,14 @@ impl Fsck {
                     res.phases_completed |= 0x04;
                     // Passer directement à la phase 4 avec un rapport vide.
                     let p3 = Phase3Report {
-                        errors:            alloc::vec![],
+                        errors: alloc::vec![],
                         snapshots_checked: 0,
-                        snapshots_ok:      0,
-                        orphan_snapshots:  0,
-                        chains_ok:         0,
-                        cycle_count:       0,
-                        critical_errors:   0,
-                        deleted_skipped:   0,
+                        snapshots_ok: 0,
+                        orphan_snapshots: 0,
+                        chains_ok: 0,
+                        cycle_count: 0,
+                        critical_errors: 0,
+                        deleted_skipped: 0,
                     };
                     res.phase3 = Some(p3);
                     return Ok(res);
@@ -326,8 +343,8 @@ impl Fsck {
 
             let p3 = FsckPhase3::run_with_options(device, ref_counter, &opts.phase3_opts)?;
             let ec = p3.errors.len() as u32;
-            res.phase3_errors     = ec;
-            res.total_errors      = res.total_errors.saturating_add(ec);
+            res.phase3_errors = ec;
+            res.total_errors = res.total_errors.saturating_add(ec);
             res.snapshots_checked = p3.snapshots_checked;
             res.phases_completed |= 0x04;
 
@@ -342,7 +359,9 @@ impl Fsck {
             res.phase3 = Some(p3);
         }
 
-        if res.total_errors >= opts.max_total_errors { return Ok(res); }
+        if res.total_errors >= opts.max_total_errors {
+            return Ok(res);
+        }
 
         // ── Phase 4 ───────────────────────────────────────────────────────────
         if opts.run_phase4 {
@@ -360,10 +379,10 @@ impl Fsck {
 
             let p4 = FsckPhase4::run_with_options(device, p2, &p4_opts)?;
             let ec = p4.errors.len() as u32;
-            res.phase4_errors     = ec;
-            res.total_errors      = res.total_errors.saturating_add(ec);
+            res.phase4_errors = ec;
+            res.total_errors = res.total_errors.saturating_add(ec);
             res.orphans_recovered = p4.orphans_recovered;
-            res.bytes_recovered   = p4.bytes_recovered;
+            res.bytes_recovered = p4.bytes_recovered;
             res.phases_completed |= 0x08;
 
             if opts.save_checkpoints {
@@ -385,11 +404,11 @@ impl Fsck {
     ///
     /// Retourne `(total_applied, succeeded)`.
     fn repair_phase1(
-        device:  &mut dyn BlockDevice,
-        p1:      &Phase1Report,
+        device: &mut dyn BlockDevice,
+        p1: &Phase1Report,
         dry_run: bool,
     ) -> ExofsResult<(u32, u32)> {
-        let mut total     = 0u32;
+        let mut total = 0u32;
         let mut succeeded = 0u32;
 
         // Si le superbloc est corrompu, tenter une reconstruction.
@@ -399,7 +418,9 @@ impl Fsck {
             };
             total = total.saturating_add(1);
             match FsckRepair::apply(device, action, dry_run) {
-                Ok(_) => { succeeded = succeeded.saturating_add(1); }
+                Ok(_) => {
+                    succeeded = succeeded.saturating_add(1);
+                }
                 Err(_) => {}
             }
         }
@@ -408,18 +429,19 @@ impl Fsck {
         for error in &p1.errors {
             use super::fsck_phase1::Phase1ErrorKind;
             let action_opt = match error.kind {
-                Phase1ErrorKind::SuperblockBadMagic
-                | Phase1ErrorKind::SuperblockBadChecksum => Some(
-                    RepairAction::WriteFallbackSuperblock {
+                Phase1ErrorKind::SuperblockBadMagic | Phase1ErrorKind::SuperblockBadChecksum => {
+                    Some(RepairAction::WriteFallbackSuperblock {
                         lba: super::fsck_phase1::SUPERBLOCK_LBA,
-                    }
-                ),
+                    })
+                }
                 _ => None,
             };
             if let Some(action) = action_opt {
                 total = total.saturating_add(1);
                 match FsckRepair::apply(device, action, dry_run) {
-                    Ok(_) => { succeeded = succeeded.saturating_add(1); }
+                    Ok(_) => {
+                        succeeded = succeeded.saturating_add(1);
+                    }
                     Err(_) => {}
                 }
             }
@@ -435,11 +457,12 @@ impl Phase1Report {
     /// Retourne `true` si des erreurs critiques ont été détectées en phase 1.
     pub fn has_critical_errors(&self) -> bool {
         use super::fsck_phase1::Phase1ErrorKind;
-        self.errors.iter().any(|e| matches!(
-            e.kind,
-            Phase1ErrorKind::SuperblockBadMagic
-            | Phase1ErrorKind::SuperblockBadChecksum
-        ))
+        self.errors.iter().any(|e| {
+            matches!(
+                e.kind,
+                Phase1ErrorKind::SuperblockBadMagic | Phase1ErrorKind::SuperblockBadChecksum
+            )
+        })
     }
 }
 
@@ -447,12 +470,14 @@ impl Phase2Report {
     /// Retourne `true` si des erreurs critiques ont été détectées en phase 2.
     pub fn has_critical_errors(&self) -> bool {
         use super::fsck_phase2::Phase2ErrorKind;
-        self.errors.iter().any(|e| matches!(
-            e.kind,
-            Phase2ErrorKind::HeaderBadMagic
-            | Phase2ErrorKind::HeaderBadChecksum
-            | Phase2ErrorKind::DataHashMismatch
-        ))
+        self.errors.iter().any(|e| {
+            matches!(
+                e.kind,
+                Phase2ErrorKind::HeaderBadMagic
+                    | Phase2ErrorKind::HeaderBadChecksum
+                    | Phase2ErrorKind::DataHashMismatch
+            )
+        })
     }
 }
 
@@ -499,15 +524,15 @@ mod tests {
             phase2_errors: 0,
             phase3_errors: 0,
             phase4_errors: 0,
-            total_errors:  0,
+            total_errors: 0,
             total_repairs: 0,
             repairs_succeeded: 0,
             repairs_failed: 0,
             phases_completed: 0x0F,
-            blobs_checked:     100,
+            blobs_checked: 100,
             snapshots_checked: 10,
             orphans_recovered: 0,
-            bytes_recovered:   0,
+            bytes_recovered: 0,
             phase1: None,
             phase2: None,
             phase3: None,
@@ -526,15 +551,15 @@ mod tests {
             phase2_errors: 0,
             phase3_errors: 0,
             phase4_errors: 0,
-            total_errors:  2,
+            total_errors: 2,
             total_repairs: 4,
             repairs_succeeded: 3,
             repairs_failed: 1,
             phases_completed: 0x0F,
-            blobs_checked:     50,
+            blobs_checked: 50,
             snapshots_checked: 5,
             orphans_recovered: 2,
-            bytes_recovered:   1024,
+            bytes_recovered: 1024,
             phase1: None,
             phase2: None,
             phase3: None,

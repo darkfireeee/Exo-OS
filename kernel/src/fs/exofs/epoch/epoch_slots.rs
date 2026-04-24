@@ -16,9 +16,7 @@
 
 use core::fmt;
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, EpochId, DiskOffset,
-};
+use crate::fs::exofs::core::{DiskOffset, EpochId, ExofsError, ExofsResult};
 use crate::fs::exofs::epoch::epoch_record::EpochRecord;
 
 // =============================================================================
@@ -157,7 +155,7 @@ impl SlotReadResult {
 #[derive(Copy, Clone, Debug)]
 pub struct SlotStatus {
     /// Identifiant du slot.
-    pub slot:   EpochSlot,
+    pub slot: EpochSlot,
     /// Résultat de la lecture.
     pub result: SlotReadResult,
     /// Offset disque du slot.
@@ -167,7 +165,11 @@ pub struct SlotStatus {
 impl SlotStatus {
     /// Crée un SlotStatus "invalide" (pour initialisation).
     pub fn invalid(slot: EpochSlot, offset: DiskOffset) -> Self {
-        SlotStatus { slot, result: SlotReadResult::Empty, offset }
+        SlotStatus {
+            slot,
+            result: SlotReadResult::Empty,
+            offset,
+        }
     }
 
     /// Vrai si le slot contient un EpochRecord valide.
@@ -179,7 +181,13 @@ impl SlotStatus {
 
 impl fmt::Display for SlotStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}[{}]={:?}", self.slot.name(), self.offset.0, self.result)
+        write!(
+            f,
+            "{}[{}]={:?}",
+            self.slot.name(),
+            self.offset.0,
+            self.result
+        )
     }
 }
 
@@ -200,7 +208,7 @@ pub struct EpochSlotSelector {
     /// État des 3 slots après la phase de lecture initiale.
     slot_states: [SlotState; 3],
     /// Taille du disque (pour calculer l'offset du slot C).
-    disk_size:   DiskOffset,
+    disk_size: DiskOffset,
 }
 
 // Manual Debug impl for EpochSlotSelector
@@ -215,11 +223,11 @@ impl core::fmt::Debug for EpochSlotSelector {
 #[derive(Copy, Clone, Debug)]
 struct SlotState {
     /// Vrai si le slot contient un EpochRecord valide.
-    valid:    bool,
+    valid: bool,
     /// EpochId du record dans ce slot (0 si invalide).
     epoch_id: u64,
     /// Offset du slot sur disque.
-    offset:   DiskOffset,
+    offset: DiskOffset,
 }
 
 impl EpochSlotSelector {
@@ -227,16 +235,27 @@ impl EpochSlotSelector {
     pub fn new(disk_size: DiskOffset) -> Self {
         let _slots = EpochSlot::all();
         let slot_states = [
-            SlotState { valid: false, epoch_id: 0, offset: DiskOffset(EPOCH_SLOT_A_OFFSET) },
-            SlotState { valid: false, epoch_id: 0, offset: DiskOffset(EPOCH_SLOT_B_OFFSET) },
+            SlotState {
+                valid: false,
+                epoch_id: 0,
+                offset: DiskOffset(EPOCH_SLOT_A_OFFSET),
+            },
+            SlotState {
+                valid: false,
+                epoch_id: 0,
+                offset: DiskOffset(EPOCH_SLOT_B_OFFSET),
+            },
             // Slot C : offset calculé si possible, sinon 0 (sera recalculé).
             SlotState {
-                valid:    false,
+                valid: false,
                 epoch_id: 0,
-                offset:   epoch_slot_c_offset(disk_size.0).unwrap_or(DiskOffset(0)),
+                offset: epoch_slot_c_offset(disk_size.0).unwrap_or(DiskOffset(0)),
             },
         ];
-        EpochSlotSelector { slot_states, disk_size }
+        EpochSlotSelector {
+            slot_states,
+            disk_size,
+        }
     }
 
     /// Met à jour l'état d'un slot après lecture pendant le recovery.
@@ -247,7 +266,7 @@ impl EpochSlotSelector {
     /// - `epoch_id` : EpochId du record (0 si invalide).
     pub fn update_slot(&mut self, slot: EpochSlot, valid: bool, epoch_id: u64) {
         let s = &mut self.slot_states[slot.index()];
-        s.valid    = valid;
+        s.valid = valid;
         s.epoch_id = epoch_id;
     }
 
@@ -330,10 +349,10 @@ impl EpochSlotSelector {
 /// Rapport d'état d'un slot individuel.
 #[derive(Copy, Clone, Debug)]
 pub struct SlotStatusReport {
-    pub slot:     EpochSlot,
-    pub valid:    bool,
+    pub slot: EpochSlot,
+    pub valid: bool,
     pub epoch_id: EpochId,
-    pub offset:   DiskOffset,
+    pub offset: DiskOffset,
 }
 
 impl fmt::Display for SlotStatusReport {
@@ -341,7 +360,10 @@ impl fmt::Display for SlotStatusReport {
         write!(
             f,
             "{}@0x{:x} epoch={} valid={}",
-            self.slot.name(), self.offset.0, self.epoch_id.0, self.valid
+            self.slot.name(),
+            self.offset.0,
+            self.epoch_id.0,
+            self.valid
         )
     }
 }
@@ -372,11 +394,11 @@ pub fn parse_slot_data(data: &[u8; 104]) -> ExofsResult<Option<EpochRecord>> {
 /// Combine la lecture brute avec le résultat typé `SlotReadResult`.
 pub fn read_and_classify_slot(data: &[u8; 104]) -> SlotReadResult {
     match EpochRecord::from_bytes(data) {
-        Ok(None)   => SlotReadResult::Empty,
+        Ok(None) => SlotReadResult::Empty,
         Ok(Some(r)) => SlotReadResult::Valid(r.epoch_id()),
-        Err(ExofsError::InvalidMagic)     => SlotReadResult::InvalidMagic,
+        Err(ExofsError::InvalidMagic) => SlotReadResult::InvalidMagic,
         Err(ExofsError::ChecksumMismatch) => SlotReadResult::BadChecksum,
-        Err(_)                            => SlotReadResult::IoError,
+        Err(_) => SlotReadResult::IoError,
     }
 }
 
@@ -394,7 +416,7 @@ pub fn read_and_classify_slot(data: &[u8; 104]) -> SlotReadResult {
 /// - `reason`   : raison de la dégradation (log seulement).
 pub fn recovery_write_slot(
     selector: &EpochSlotSelector,
-    _reason:   RecoverySlotReason,
+    _reason: RecoverySlotReason,
 ) -> ExofsResult<(EpochSlot, DiskOffset)> {
     // En recovery, on priorise toujours le slot invalide.
     selector.select_write_slot()

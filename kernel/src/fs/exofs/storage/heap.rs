@@ -18,12 +18,10 @@
 // - LOCK-04  : SpinLock uniquement quand nécessaire, pas d'I/O sous verrou.
 // - ONDISK-03 : ce module est purement RAM.
 
-use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
-use crate::fs::exofs::storage::heap_allocator::{HeapAllocator, Extent, AllocationPolicy};
-use crate::fs::exofs::storage::layout::{
-    BLOCK_SIZE, LayoutMap, blocks_for_bytes
-};
+use crate::fs::exofs::core::{DiskOffset, ExofsError, ExofsResult};
+use crate::fs::exofs::storage::heap_allocator::{AllocationPolicy, Extent, HeapAllocator};
+use crate::fs::exofs::storage::layout::{blocks_for_bytes, LayoutMap, BLOCK_SIZE};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HeapConfig — configuration du heap
@@ -35,11 +33,11 @@ pub struct HeapConfig {
     /// Offset de début du heap (octet).
     pub heap_start_offset: u64,
     /// Offset de fin du heap (octet, exclusif).
-    pub heap_end_offset:   u64,
+    pub heap_end_offset: u64,
     /// Taille d'un bloc en octets (toujours BLOCK_SIZE = 4096).
-    pub block_size:        u64,
+    pub block_size: u64,
     /// Politique d'allocation par défaut.
-    pub policy:            AllocationPolicy,
+    pub policy: AllocationPolicy,
     /// Seuil de fragmentation pour déclencher la coalescence automatique (%).
     pub auto_coalesce_threshold: u8,
 }
@@ -47,14 +45,16 @@ pub struct HeapConfig {
 impl HeapConfig {
     /// Construit la configuration depuis le LayoutMap.
     pub fn from_layout(lm: &LayoutMap) -> ExofsResult<Self> {
-        let heap_end = lm.heap_start.0
+        let heap_end = lm
+            .heap_start
+            .0
             .checked_add(lm.heap_len)
             .ok_or(ExofsError::OffsetOverflow)?;
         Ok(Self {
-            heap_start_offset:       lm.heap_start.0,
-            heap_end_offset:         heap_end,
-            block_size:              BLOCK_SIZE,
-            policy:                  AllocationPolicy::NextFit,
+            heap_start_offset: lm.heap_start.0,
+            heap_end_offset: heap_end,
+            block_size: BLOCK_SIZE,
+            policy: AllocationPolicy::NextFit,
             auto_coalesce_threshold: 15,
         })
     }
@@ -67,7 +67,8 @@ impl HeapConfig {
 
     /// Nombre de blocs dans le heap.
     pub fn total_blocks(&self) -> ExofsResult<u64> {
-        let heap_len = self.heap_end_offset
+        let heap_len = self
+            .heap_end_offset
             .checked_sub(self.heap_start_offset)
             .ok_or(ExofsError::OffsetOverflow)?;
         blocks_for_bytes(heap_len)
@@ -81,18 +82,18 @@ impl HeapConfig {
 /// Snapshot des statistiques du heap.
 #[derive(Clone, Debug, Default)]
 pub struct HeapStats {
-    pub total_bytes:     u64,
-    pub free_bytes:      u64,
-    pub used_bytes:      u64,
-    pub total_blocks:    u64,
-    pub free_blocks:     u64,
-    pub used_blocks:     u64,
-    pub fragmentation:   u8,
-    pub largest_free:    u64,
-    pub n_allocs:        u64,
-    pub n_frees:         u64,
-    pub n_failures:      u64,
-    pub usage_pct:       u64,
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub used_bytes: u64,
+    pub total_blocks: u64,
+    pub free_blocks: u64,
+    pub used_blocks: u64,
+    pub fragmentation: u8,
+    pub largest_free: u64,
+    pub n_allocs: u64,
+    pub n_frees: u64,
+    pub n_failures: u64,
+    pub usage_pct: u64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,12 +104,12 @@ pub struct HeapStats {
 ///
 /// Fournit les opérations d'allocation/libération d'extents physiques.
 pub struct ExofsHeap {
-    allocator:          HeapAllocator,
-    config:             HeapConfig,
+    allocator: HeapAllocator,
+    config: HeapConfig,
     /// Coalescence automatique activée.
-    auto_coalesce:      AtomicBool,
+    auto_coalesce: AtomicBool,
     /// Nombre de libérations depuis la dernière coalescence.
-    frees_since_gc:     AtomicU64,
+    frees_since_gc: AtomicU64,
     /// Seuil pour déclencher la coalescence automatique.
     coalesce_threshold: u64,
 }
@@ -125,17 +126,14 @@ impl ExofsHeap {
     /// Crée un heap depuis une configuration explicite.
     pub fn from_config(config: HeapConfig) -> ExofsResult<Self> {
         let total_blocks = config.total_blocks()?;
-        let allocator = HeapAllocator::new_with_policy(
-            config.heap_start_offset,
-            total_blocks,
-            config.policy,
-        )?;
+        let allocator =
+            HeapAllocator::new_with_policy(config.heap_start_offset, total_blocks, config.policy)?;
         Ok(Self {
             allocator,
             config,
-            auto_coalesce:      AtomicBool::new(true),
-            frees_since_gc:     AtomicU64::new(0),
-            coalesce_threshold: 64,    // déclencher après 64 libérations
+            auto_coalesce: AtomicBool::new(true),
+            frees_since_gc: AtomicU64::new(0),
+            coalesce_threshold: 64, // déclencher après 64 libérations
         })
     }
 
@@ -208,7 +206,8 @@ impl ExofsHeap {
 
     /// Taille totale du heap en octets.
     pub fn total_bytes(&self) -> u64 {
-        self.config.total_blocks()
+        self.config
+            .total_blocks()
             .map(|b| b * BLOCK_SIZE)
             .unwrap_or(0)
     }
@@ -242,13 +241,13 @@ impl ExofsHeap {
 
     /// Retourne les statistiques complètes du heap.
     pub fn stats(&self) -> HeapStats {
-        let total_blocks  = self.total_blocks();
-        let free_bytes    = self.free_bytes();
-        let total_bytes   = self.total_bytes();
-        let used_bytes    = total_bytes.saturating_sub(free_bytes);
-        let free_blocks   = free_bytes / BLOCK_SIZE;
-        let used_blocks   = total_blocks.saturating_sub(free_blocks);
-        let usage_pct     = self.usage_pct();
+        let total_blocks = self.total_blocks();
+        let free_bytes = self.free_bytes();
+        let total_bytes = self.total_bytes();
+        let used_bytes = total_bytes.saturating_sub(free_bytes);
+        let free_blocks = free_bytes / BLOCK_SIZE;
+        let used_blocks = total_blocks.saturating_sub(free_blocks);
+        let usage_pct = self.usage_pct();
 
         HeapStats {
             total_bytes,
@@ -258,10 +257,10 @@ impl ExofsHeap {
             free_blocks,
             used_blocks,
             fragmentation: self.fragmentation_pct(),
-            largest_free:  self.largest_free_extent(),
-            n_allocs:      self.allocator.n_allocs(),
-            n_frees:       self.allocator.n_frees(),
-            n_failures:    self.allocator.n_failures(),
+            largest_free: self.largest_free_extent(),
+            n_allocs: self.allocator.n_allocs(),
+            n_frees: self.allocator.n_frees(),
+            n_failures: self.allocator.n_failures(),
             usage_pct,
         }
     }
@@ -271,9 +270,9 @@ impl ExofsHeap {
     /// Vérifie qu'un extent est dans les bornes du heap.
     pub fn extent_in_bounds(&self, extent: &Extent) -> bool {
         let start = extent.offset.0;
-        let end   = match start.checked_add(extent.size) {
+        let end = match start.checked_add(extent.size) {
             Some(e) => e,
-            None    => return false,
+            None => return false,
         };
         start >= self.config.heap_start_offset && end <= self.config.heap_end_offset
     }
@@ -294,11 +293,12 @@ impl ExofsHeap {
         if start_offset.0 < self.config.heap_start_offset {
             return Err(ExofsError::InvalidArgument);
         }
-        let rel = start_offset.0
+        let rel = start_offset
+            .0
             .checked_sub(self.config.heap_start_offset)
             .ok_or(ExofsError::OffsetOverflow)?;
         let block_start = rel / BLOCK_SIZE;
-        let n_blocks    = size / BLOCK_SIZE;
+        let n_blocks = size / BLOCK_SIZE;
         self.allocator.reserve_range(block_start, n_blocks);
         Ok(())
     }
@@ -345,7 +345,7 @@ mod tests {
     use super::*;
     use crate::fs::exofs::storage::layout::HEAP_START_OFFSET;
 
-    const DISK_SIZE: u64 = 64 * 1024 * 1024;   // 64 MB
+    const DISK_SIZE: u64 = 64 * 1024 * 1024; // 64 MB
 
     fn make_heap() -> ExofsHeap {
         ExofsHeap::new(DISK_SIZE).unwrap()
@@ -383,8 +383,8 @@ mod tests {
 
     #[test]
     fn test_stats() {
-        let h   = make_heap();
-        let s   = h.stats();
+        let h = make_heap();
+        let s = h.stats();
         assert_eq!(s.free_bytes, s.total_bytes);
         assert_eq!(s.used_bytes, 0);
     }
@@ -406,7 +406,10 @@ mod tests {
     #[test]
     fn test_extent_out_of_bounds() {
         let h = make_heap();
-        let bad = Extent { offset: DiskOffset(0), size: 4096 };
+        let bad = Extent {
+            offset: DiskOffset(0),
+            size: 4096,
+        };
         assert!(!h.extent_in_bounds(&bad));
     }
 }

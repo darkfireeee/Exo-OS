@@ -15,7 +15,6 @@
 //
 // COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 // FIX-CANARY-01 : importer MAX_CPUS depuis la source canonique.
 // Évite une divergence silencieuse si MAX_CPUS change dans constants.rs.
@@ -38,22 +37,22 @@ const CANARY_POISON: u64 = 0x0000_0000_0000_0000;
 #[repr(C)]
 pub struct CanaryStats {
     /// Nombre de canaries initialisés (BSP + APs).
-    pub init_count:      AtomicU64,
+    pub init_count: AtomicU64,
     /// Violations détectées.
     pub violation_count: AtomicU64,
     /// Régénérations forcées (rotation de clé).
-    pub rotate_count:    AtomicU64,
+    pub rotate_count: AtomicU64,
     /// Vérifications réussies (métriques debug, coûteux en prod).
-    pub check_ok:        AtomicU64,
+    pub check_ok: AtomicU64,
 }
 
 impl CanaryStats {
     const fn new() -> Self {
         Self {
-            init_count:      AtomicU64::new(0),
+            init_count: AtomicU64::new(0),
             violation_count: AtomicU64::new(0),
-            rotate_count:    AtomicU64::new(0),
-            check_ok:        AtomicU64::new(0),
+            rotate_count: AtomicU64::new(0),
+            check_ok: AtomicU64::new(0),
         }
     }
 }
@@ -69,20 +68,20 @@ pub static CANARY_STATS: CanaryStats = CanaryStats::new();
 /// `align(64)` evite le false sharing entre CPUs adjacents.
 #[repr(C, align(64))]
 struct CanarySlot {
-    value:       AtomicU64,
-    generation:  AtomicU64,
+    value: AtomicU64,
+    generation: AtomicU64,
     initialized: AtomicBool,
-    _pad:        [u8; 39],
+    _pad: [u8; 39],
 }
 
 impl CanarySlot {
     #[allow(dead_code)]
     const fn uninit() -> Self {
         Self {
-            value:       AtomicU64::new(CANARY_UNINIT),
-            generation:  AtomicU64::new(0),
+            value: AtomicU64::new(CANARY_UNINIT),
+            generation: AtomicU64::new(0),
             initialized: AtomicBool::new(false),
-            _pad:        [0u8; 39],
+            _pad: [0u8; 39],
         }
     }
 }
@@ -183,7 +182,9 @@ pub fn cpu_canary(cpu_id: u32) -> u64 {
     if cpu_id as usize >= MAX_CPUS {
         return CANARY_UNINIT;
     }
-    CANARY_TABLE.slots[cpu_id as usize].value.load(Ordering::Acquire)
+    CANARY_TABLE.slots[cpu_id as usize]
+        .value
+        .load(Ordering::Acquire)
 }
 
 /// Génère un canary de thread = cpu_canary XOR tid.
@@ -210,7 +211,10 @@ pub fn verify_thread_canary(expected: u64, actual: u64) -> bool {
 pub fn canary_violation_handler(expected: u64, actual: u64) -> ! {
     CANARY_STATS.violation_count.fetch_add(1, Ordering::Relaxed);
     let _ = (expected, actual);
-    panic!("STACK CANARY VIOLATION: expected={:#018x} actual={:#018x}", expected, actual);
+    panic!(
+        "STACK CANARY VIOLATION: expected={:#018x} actual={:#018x}",
+        expected, actual
+    );
 }
 
 /// Effectue une rotation du canary pour tous les CPUs initialisés.

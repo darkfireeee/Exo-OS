@@ -13,12 +13,11 @@
 //   ARITH-02 : saturating_add partout
 // ==============================================================================
 
-
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::fs::exofs::gc::tricolor::{MarkStats, SweepResult};
 use crate::fs::exofs::gc::gc_state::GcPassStats;
+use crate::fs::exofs::gc::tricolor::{MarkStats, SweepResult};
 
 // ==============================================================================
 // PhaseMetrics — metriques d'une phase
@@ -27,25 +26,25 @@ use crate::fs::exofs::gc::gc_state::GcPassStats;
 /// Metriques cumulees pour une phase GC specifique.
 pub struct PhaseMetrics {
     /// Nombre de fois que la phase s'est executee.
-    pub runs:           AtomicU64,
+    pub runs: AtomicU64,
     /// Ticks logiques cumules passes dans cette phase.
-    pub ticks_total:    AtomicU64,
+    pub ticks_total: AtomicU64,
     /// Operations realisees dans cette phase (blobs/bytes selon phase).
-    pub ops_total:      AtomicU64,
+    pub ops_total: AtomicU64,
     /// Erreurs rencontrees dans cette phase.
-    pub errors_total:   AtomicU64,
+    pub errors_total: AtomicU64,
     /// Ticks du pic (le run le plus long).
-    pub ticks_peak:     AtomicU64,
+    pub ticks_peak: AtomicU64,
 }
 
 impl PhaseMetrics {
     pub const fn new() -> Self {
         Self {
-            runs:         AtomicU64::new(0),
-            ticks_total:  AtomicU64::new(0),
-            ops_total:    AtomicU64::new(0),
+            runs: AtomicU64::new(0),
+            ticks_total: AtomicU64::new(0),
+            ops_total: AtomicU64::new(0),
             errors_total: AtomicU64::new(0),
-            ticks_peak:   AtomicU64::new(0),
+            ticks_peak: AtomicU64::new(0),
         }
     }
 
@@ -68,18 +67,20 @@ impl PhaseMetrics {
     /// Ticks moyens par run (0 si aucun run).
     pub fn avg_ticks(&self) -> u64 {
         let runs = self.runs.load(Ordering::Relaxed);
-        if runs == 0 { return 0; }
+        if runs == 0 {
+            return 0;
+        }
         self.ticks_total.load(Ordering::Relaxed) / runs
     }
 
     /// Snapshot non-atomique (valeurs approximatives).
     pub fn snapshot(&self) -> PhaseSnapshot {
         PhaseSnapshot {
-            runs:        self.runs.load(Ordering::Relaxed),
+            runs: self.runs.load(Ordering::Relaxed),
             ticks_total: self.ticks_total.load(Ordering::Relaxed),
-            ops_total:   self.ops_total.load(Ordering::Relaxed),
-            errors:      self.errors_total.load(Ordering::Relaxed),
-            ticks_peak:  self.ticks_peak.load(Ordering::Relaxed),
+            ops_total: self.ops_total.load(Ordering::Relaxed),
+            errors: self.errors_total.load(Ordering::Relaxed),
+            ticks_peak: self.ticks_peak.load(Ordering::Relaxed),
         }
     }
 }
@@ -87,16 +88,18 @@ impl PhaseMetrics {
 /// Snapshot d'une PhaseMetrics (copiable).
 #[derive(Debug, Clone, Default)]
 pub struct PhaseSnapshot {
-    pub runs:        u64,
+    pub runs: u64,
     pub ticks_total: u64,
-    pub ops_total:   u64,
-    pub errors:      u64,
-    pub ticks_peak:  u64,
+    pub ops_total: u64,
+    pub errors: u64,
+    pub ticks_peak: u64,
 }
 
 impl PhaseSnapshot {
     pub fn avg_ticks(&self) -> u64 {
-        if self.runs == 0 { return 0; }
+        if self.runs == 0 {
+            return 0;
+        }
         self.ticks_total / self.runs
     }
 }
@@ -127,37 +130,37 @@ impl fmt::Display for PhaseSnapshot {
 pub struct GcMetrics {
     // ── Compteurs globaux ────────────────────────────────────────────────────
     /// Total des passes GC terminees.
-    pub passes_completed:    AtomicU64,
+    pub passes_completed: AtomicU64,
     /// Total des passes abandonnees.
-    pub passes_aborted:      AtomicU64,
+    pub passes_aborted: AtomicU64,
     /// Total des blobs collectes depuis le boot.
-    pub blobs_collected:     AtomicU64,
+    pub blobs_collected: AtomicU64,
     /// Total des octets liberes depuis le boot.
-    pub bytes_freed:         AtomicU64,
+    pub bytes_freed: AtomicU64,
     /// Total des blobs scannes.
-    pub blobs_scanned:       AtomicU64,
+    pub blobs_scanned: AtomicU64,
     /// Total des blobs marques vivants.
-    pub blobs_marked_live:   AtomicU64,
+    pub blobs_marked_live: AtomicU64,
     /// Total des orphelins collectes.
-    pub orphans_collected:   AtomicU64,
+    pub orphans_collected: AtomicU64,
     /// Total des objets inline GC-es.
-    pub inline_gc_count:     AtomicU64,
+    pub inline_gc_count: AtomicU64,
     /// Total des cycles detectes.
-    pub cycles_detected:     AtomicU64,
+    pub cycles_detected: AtomicU64,
     /// Depassements de la file grise (GC-03).
     pub grey_queue_overflows: AtomicU64,
     /// Entrees traitees dans la DeferredDeleteQueue.
-    pub deferred_flushed:    AtomicU64,
+    pub deferred_flushed: AtomicU64,
     /// Blobs skipped car EPOCH_PINNED (GC-07).
-    pub pinned_skipped:      AtomicU64,
+    pub pinned_skipped: AtomicU64,
 
     // ── Metriques par phase ──────────────────────────────────────────────────
     /// Phase Scanning.
-    pub scan:     PhaseMetrics,
+    pub scan: PhaseMetrics,
     /// Phase Marking.
-    pub mark:     PhaseMetrics,
+    pub mark: PhaseMetrics,
     /// Phase Sweeping.
-    pub sweep:    PhaseMetrics,
+    pub sweep: PhaseMetrics,
     /// Phase Finalizing.
     pub finalize: PhaseMetrics,
 }
@@ -165,21 +168,21 @@ pub struct GcMetrics {
 impl GcMetrics {
     pub const fn new() -> Self {
         Self {
-            passes_completed:    AtomicU64::new(0),
-            passes_aborted:      AtomicU64::new(0),
-            blobs_collected:     AtomicU64::new(0),
-            bytes_freed:         AtomicU64::new(0),
-            blobs_scanned:       AtomicU64::new(0),
-            blobs_marked_live:   AtomicU64::new(0),
-            orphans_collected:   AtomicU64::new(0),
-            inline_gc_count:     AtomicU64::new(0),
-            cycles_detected:     AtomicU64::new(0),
+            passes_completed: AtomicU64::new(0),
+            passes_aborted: AtomicU64::new(0),
+            blobs_collected: AtomicU64::new(0),
+            bytes_freed: AtomicU64::new(0),
+            blobs_scanned: AtomicU64::new(0),
+            blobs_marked_live: AtomicU64::new(0),
+            orphans_collected: AtomicU64::new(0),
+            inline_gc_count: AtomicU64::new(0),
+            cycles_detected: AtomicU64::new(0),
             grey_queue_overflows: AtomicU64::new(0),
-            deferred_flushed:    AtomicU64::new(0),
-            pinned_skipped:      AtomicU64::new(0),
-            scan:     PhaseMetrics::new(),
-            mark:     PhaseMetrics::new(),
-            sweep:    PhaseMetrics::new(),
+            deferred_flushed: AtomicU64::new(0),
+            pinned_skipped: AtomicU64::new(0),
+            scan: PhaseMetrics::new(),
+            mark: PhaseMetrics::new(),
+            sweep: PhaseMetrics::new(),
             finalize: PhaseMetrics::new(),
         }
     }
@@ -195,13 +198,20 @@ impl GcMetrics {
             return;
         }
 
-        self.blobs_collected.fetch_add(stats.blobs_swept, Ordering::Relaxed);
-        self.bytes_freed.fetch_add(stats.bytes_freed, Ordering::Relaxed);
-        self.blobs_scanned.fetch_add(stats.blobs_scanned, Ordering::Relaxed);
-        self.blobs_marked_live.fetch_add(stats.blobs_marked_live, Ordering::Relaxed);
-        self.orphans_collected.fetch_add(stats.orphans_collected, Ordering::Relaxed);
-        self.inline_gc_count.fetch_add(stats.inline_gc_count, Ordering::Relaxed);
-        self.cycles_detected.fetch_add(stats.cycles_detected, Ordering::Relaxed);
+        self.blobs_collected
+            .fetch_add(stats.blobs_swept, Ordering::Relaxed);
+        self.bytes_freed
+            .fetch_add(stats.bytes_freed, Ordering::Relaxed);
+        self.blobs_scanned
+            .fetch_add(stats.blobs_scanned, Ordering::Relaxed);
+        self.blobs_marked_live
+            .fetch_add(stats.blobs_marked_live, Ordering::Relaxed);
+        self.orphans_collected
+            .fetch_add(stats.orphans_collected, Ordering::Relaxed);
+        self.inline_gc_count
+            .fetch_add(stats.inline_gc_count, Ordering::Relaxed);
+        self.cycles_detected
+            .fetch_add(stats.cycles_detected, Ordering::Relaxed);
     }
 
     /// Enregistre les statistiques de la phase de marquage.
@@ -222,38 +232,60 @@ impl GcMetrics {
 
     // ── Increments unitaires ─────────────────────────────────────────────────
 
-    pub fn inc_passes_completed(&self)         { self.passes_completed.fetch_add(1, Ordering::Relaxed); }
-    pub fn inc_passes_aborted(&self)           { self.passes_aborted.fetch_add(1, Ordering::Relaxed); }
-    pub fn add_blobs_collected(&self, n: u64)  { self.blobs_collected.fetch_add(n, Ordering::Relaxed); }
-    pub fn add_bytes_freed(&self, n: u64)      { self.bytes_freed.fetch_add(n, Ordering::Relaxed); }
-    pub fn inc_grey_overflow(&self)            { self.grey_queue_overflows.fetch_add(1, Ordering::Relaxed); }
-    pub fn inc_pinned_skipped(&self)           { self.pinned_skipped.fetch_add(1, Ordering::Relaxed); }
-    pub fn add_pinned_skipped(&self, n: u64)   { self.pinned_skipped.fetch_add(n, Ordering::Relaxed); }
-    pub fn add_deferred_flushed(&self, n: u64) { self.deferred_flushed.fetch_add(n, Ordering::Relaxed); }
-    pub fn add_blobs_marked_live(&self, n: u64) { self.blobs_marked_live.fetch_add(n, Ordering::Relaxed); }
-    pub fn add_grey_queue_overflows(&self, n: u64) { self.grey_queue_overflows.fetch_add(n, Ordering::Relaxed); }
-    pub fn add_orphans_collected(&self, n: u64) { self.orphans_collected.fetch_add(n, Ordering::Relaxed); }
+    pub fn inc_passes_completed(&self) {
+        self.passes_completed.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_passes_aborted(&self) {
+        self.passes_aborted.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn add_blobs_collected(&self, n: u64) {
+        self.blobs_collected.fetch_add(n, Ordering::Relaxed);
+    }
+    pub fn add_bytes_freed(&self, n: u64) {
+        self.bytes_freed.fetch_add(n, Ordering::Relaxed);
+    }
+    pub fn inc_grey_overflow(&self) {
+        self.grey_queue_overflows.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_pinned_skipped(&self) {
+        self.pinned_skipped.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn add_pinned_skipped(&self, n: u64) {
+        self.pinned_skipped.fetch_add(n, Ordering::Relaxed);
+    }
+    pub fn add_deferred_flushed(&self, n: u64) {
+        self.deferred_flushed.fetch_add(n, Ordering::Relaxed);
+    }
+    pub fn add_blobs_marked_live(&self, n: u64) {
+        self.blobs_marked_live.fetch_add(n, Ordering::Relaxed);
+    }
+    pub fn add_grey_queue_overflows(&self, n: u64) {
+        self.grey_queue_overflows.fetch_add(n, Ordering::Relaxed);
+    }
+    pub fn add_orphans_collected(&self, n: u64) {
+        self.orphans_collected.fetch_add(n, Ordering::Relaxed);
+    }
 
     // ── Snapshots ────────────────────────────────────────────────────────────
 
     /// Snapshot de toutes les metriques.
     pub fn snapshot(&self) -> GcMetricsSnapshot {
         GcMetricsSnapshot {
-            passes_completed:    self.passes_completed.load(Ordering::Relaxed),
-            passes_aborted:      self.passes_aborted.load(Ordering::Relaxed),
-            blobs_collected:     self.blobs_collected.load(Ordering::Relaxed),
-            bytes_freed:         self.bytes_freed.load(Ordering::Relaxed),
-            blobs_scanned:       self.blobs_scanned.load(Ordering::Relaxed),
-            blobs_marked_live:   self.blobs_marked_live.load(Ordering::Relaxed),
-            orphans_collected:   self.orphans_collected.load(Ordering::Relaxed),
-            inline_gc_count:     self.inline_gc_count.load(Ordering::Relaxed),
-            cycles_detected:     self.cycles_detected.load(Ordering::Relaxed),
+            passes_completed: self.passes_completed.load(Ordering::Relaxed),
+            passes_aborted: self.passes_aborted.load(Ordering::Relaxed),
+            blobs_collected: self.blobs_collected.load(Ordering::Relaxed),
+            bytes_freed: self.bytes_freed.load(Ordering::Relaxed),
+            blobs_scanned: self.blobs_scanned.load(Ordering::Relaxed),
+            blobs_marked_live: self.blobs_marked_live.load(Ordering::Relaxed),
+            orphans_collected: self.orphans_collected.load(Ordering::Relaxed),
+            inline_gc_count: self.inline_gc_count.load(Ordering::Relaxed),
+            cycles_detected: self.cycles_detected.load(Ordering::Relaxed),
             grey_queue_overflows: self.grey_queue_overflows.load(Ordering::Relaxed),
-            deferred_flushed:    self.deferred_flushed.load(Ordering::Relaxed),
-            pinned_skipped:      self.pinned_skipped.load(Ordering::Relaxed),
-            scan:     self.scan.snapshot(),
-            mark:     self.mark.snapshot(),
-            sweep:    self.sweep.snapshot(),
+            deferred_flushed: self.deferred_flushed.load(Ordering::Relaxed),
+            pinned_skipped: self.pinned_skipped.load(Ordering::Relaxed),
+            scan: self.scan.snapshot(),
+            mark: self.mark.snapshot(),
+            sweep: self.sweep.snapshot(),
             finalize: self.finalize.snapshot(),
         }
     }
@@ -261,7 +293,9 @@ impl GcMetrics {
     /// Ratio de collecte global (blobs collectes / blobs scannes * 100).
     pub fn global_collect_ratio_x100(&self) -> u64 {
         let scanned = self.blobs_scanned.load(Ordering::Relaxed);
-        if scanned == 0 { return 0; }
+        if scanned == 0 {
+            return 0;
+        }
         let collected = self.blobs_collected.load(Ordering::Relaxed);
         collected.saturating_mul(100) / scanned
     }
@@ -274,27 +308,29 @@ impl GcMetrics {
 /// Snapshot des metriques GC (toutes valeurs copiables).
 #[derive(Debug, Clone, Default)]
 pub struct GcMetricsSnapshot {
-    pub passes_completed:    u64,
-    pub passes_aborted:      u64,
-    pub blobs_collected:     u64,
-    pub bytes_freed:         u64,
-    pub blobs_scanned:       u64,
-    pub blobs_marked_live:   u64,
-    pub orphans_collected:   u64,
-    pub inline_gc_count:     u64,
-    pub cycles_detected:     u64,
+    pub passes_completed: u64,
+    pub passes_aborted: u64,
+    pub blobs_collected: u64,
+    pub bytes_freed: u64,
+    pub blobs_scanned: u64,
+    pub blobs_marked_live: u64,
+    pub orphans_collected: u64,
+    pub inline_gc_count: u64,
+    pub cycles_detected: u64,
     pub grey_queue_overflows: u64,
-    pub deferred_flushed:    u64,
-    pub pinned_skipped:      u64,
-    pub scan:                PhaseSnapshot,
-    pub mark:                PhaseSnapshot,
-    pub sweep:               PhaseSnapshot,
-    pub finalize:            PhaseSnapshot,
+    pub deferred_flushed: u64,
+    pub pinned_skipped: u64,
+    pub scan: PhaseSnapshot,
+    pub mark: PhaseSnapshot,
+    pub sweep: PhaseSnapshot,
+    pub finalize: PhaseSnapshot,
 }
 
 impl GcMetricsSnapshot {
     pub fn collect_ratio_x100(&self) -> u64 {
-        if self.blobs_scanned == 0 { return 0; }
+        if self.blobs_scanned == 0 {
+            return 0;
+        }
         self.blobs_collected.saturating_mul(100) / self.blobs_scanned
     }
 
@@ -357,18 +393,18 @@ mod tests {
     fn test_gc_metrics_record_pass_completed() {
         let m = GcMetrics::new();
         let stats = GcPassStats {
-            epoch:             1,
-            blobs_scanned:     1000,
+            epoch: 1,
+            blobs_scanned: 1000,
             blobs_marked_live: 800,
-            blobs_swept:       200,
-            bytes_freed:       1_024_000,
+            blobs_swept: 200,
+            bytes_freed: 1_024_000,
             orphans_collected: 10,
-            inline_gc_count:   5,
-            cycles_detected:   0,
-            start_tick:        0,
-            end_tick:          500,
-            completed:         true,
-            abort_reason:      None,
+            inline_gc_count: 5,
+            cycles_detected: 0,
+            start_tick: 0,
+            end_tick: 500,
+            completed: true,
+            abort_reason: None,
         };
         m.record_pass(&stats);
         let s = m.snapshot();

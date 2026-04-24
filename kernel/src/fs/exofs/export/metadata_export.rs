@@ -17,13 +17,12 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_* sur compteurs.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
-use alloc::string::String;
-use core::fmt::Write as FmtWrite;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::incremental_export::EpochId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt::Write as FmtWrite;
 
 // ─── Trait de sortie texte ────────────────────────────────────────────────────
 
@@ -61,7 +60,9 @@ pub struct VecTextSink {
 }
 
 impl VecTextSink {
-    pub fn new() -> Self { Self { buf: Vec::new() } }
+    pub fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
 
     pub fn with_capacity(cap: usize) -> ExofsResult<Self> {
         let mut buf = Vec::new();
@@ -73,15 +74,23 @@ impl VecTextSink {
         core::str::from_utf8(&self.buf).unwrap_or("<invalid utf8>")
     }
 
-    pub fn into_bytes(self) -> Vec<u8> { self.buf }
-    pub fn len(&self) -> usize { self.buf.len() }
-    pub fn is_empty(&self) -> bool { self.buf.is_empty() }
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.buf
+    }
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
 }
 
 impl TextSink for VecTextSink {
     fn write_str(&mut self, s: &str) -> ExofsResult<()> {
         let bytes = s.as_bytes();
-        self.buf.try_reserve(bytes.len()).map_err(|_| ExofsError::NoMemory)?;
+        self.buf
+            .try_reserve(bytes.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         self.buf.extend_from_slice(bytes);
         Ok(())
     }
@@ -115,9 +124,15 @@ pub struct BlobMeta {
 impl BlobMeta {
     pub fn new(blob_id: [u8; 32], size: u64, epoch: EpochId) -> Self {
         Self {
-            blob_id, size, compressed_size: 0,
-            epoch, flags: 0, ref_count: 1, crc32: 0,
-            name: [0u8; 64], name_len: 0,
+            blob_id,
+            size,
+            compressed_size: 0,
+            epoch,
+            flags: 0,
+            ref_count: 1,
+            crc32: 0,
+            name: [0u8; 64],
+            name_len: 0,
         }
     }
 
@@ -136,7 +151,9 @@ impl BlobMeta {
 
     /// Retourne le ratio de compression (× 1000, sans float).
     pub fn compression_ratio_pct10(&self) -> u32 {
-        if self.size == 0 || self.compressed_size == 0 { return 1000; }
+        if self.size == 0 || self.compressed_size == 0 {
+            return 1000;
+        }
         (self.compressed_size.saturating_mul(1000))
             .checked_div(self.size)
             .unwrap_or(1000)
@@ -170,9 +187,14 @@ pub struct SnapshotMeta {
 impl SnapshotMeta {
     pub const fn new(snapshot_id: u64, epoch: EpochId) -> Self {
         Self {
-            snapshot_id, epoch, blob_count: 0,
-            total_bytes: 0, compressed_bytes: 0,
-            created_at: 0, is_consistent: true, is_full: true,
+            snapshot_id,
+            epoch,
+            blob_count: 0,
+            total_bytes: 0,
+            compressed_bytes: 0,
+            created_at: 0,
+            is_consistent: true,
+            is_full: true,
         }
     }
 }
@@ -194,7 +216,12 @@ pub struct ChunkMeta {
 
 impl ChunkMeta {
     pub const fn new(fingerprint: [u8; 32], size: u32) -> Self {
-        Self { fingerprint, ref_count: 1, size, offset: 0 }
+        Self {
+            fingerprint,
+            ref_count: 1,
+            size,
+            offset: 0,
+        }
     }
 }
 
@@ -232,7 +259,10 @@ impl MetadataExporter {
         sink.write_kv("total_bytes", &u64_to_str(meta.total_bytes))?;
         sink.write_kv("compressed_bytes", &u64_to_str(meta.compressed_bytes))?;
         sink.write_kv("created_at", &u64_to_str(meta.created_at))?;
-        sink.write_kv("is_consistent", if meta.is_consistent { "true" } else { "false" })?;
+        sink.write_kv(
+            "is_consistent",
+            if meta.is_consistent { "true" } else { "false" },
+        )?;
         sink.write_kv("is_full", if meta.is_full { "true" } else { "false" })?;
         Ok(())
     }
@@ -302,8 +332,12 @@ const _: () = assert!(core::mem::size_of::<ManifestBlobEntry>() == 64);
 impl ManifestBlobEntry {
     pub fn new(blob_id: [u8; 32], size: u64, epoch: EpochId, crc32: u32) -> Self {
         Self {
-            blob_id, size, epoch: epoch.value(), crc32,
-            flags: 0, _pad: [0u8; 11],
+            blob_id,
+            size,
+            epoch: epoch.value(),
+            crc32,
+            flags: 0,
+            _pad: [0u8; 11],
         }
     }
 
@@ -337,15 +371,21 @@ impl ExportManifest {
     /// Crée un manifest vide.
     pub fn new(session_id: u32, epoch_base: EpochId, epoch_target: EpochId) -> Self {
         Self {
-            session_id, epoch_base, epoch_target,
-            entries: Vec::new(), tombstones: Vec::new(),
-            total_bytes: 0, archive_size: 0,
+            session_id,
+            epoch_base,
+            epoch_target,
+            entries: Vec::new(),
+            tombstones: Vec::new(),
+            total_bytes: 0,
+            archive_size: 0,
         }
     }
 
     /// Ajoute une entrée blob — OOM-02 : try_reserve.
     pub fn add_entry(&mut self, entry: ManifestBlobEntry) -> ExofsResult<()> {
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.total_bytes = self.total_bytes.saturating_add(entry.size);
         self.entries.push(entry);
         Ok(())
@@ -353,7 +393,9 @@ impl ExportManifest {
 
     /// Ajoute un tombstone — OOM-02 : try_reserve.
     pub fn add_tombstone(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
-        self.tombstones.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.tombstones
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.tombstones.push(blob_id);
         Ok(())
     }
@@ -395,7 +437,9 @@ impl ExportManifest {
         Ok(())
     }
 
-    pub fn entry_count(&self) -> usize { self.entries.len() }
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
 
     /// Vérifie l'intégrité du manifest (aucite entré avec size = 0 si non tombstone).
     pub fn validate(&self) -> bool {
@@ -403,7 +447,9 @@ impl ExportManifest {
         while i < self.entries.len() {
             // Chaque entrée doit avoir un blob_id non nul
             let all_zero = self.entries[i].blob_id.iter().all(|&b| b == 0);
-            if all_zero { return false; }
+            if all_zero {
+                return false;
+            }
             i = i.wrapping_add(1);
         }
         true
@@ -432,12 +478,21 @@ pub struct MetaBinaryHeader {
 const _: () = assert!(core::mem::size_of::<MetaBinaryHeader>() == 40);
 
 impl MetaBinaryHeader {
-    pub fn new(session_id: u32, epoch_base: EpochId, epoch_target: EpochId,
-               entry_count: u32, tombstone_count: u32) -> Self {
+    pub fn new(
+        session_id: u32,
+        epoch_base: EpochId,
+        epoch_target: EpochId,
+        entry_count: u32,
+        tombstone_count: u32,
+    ) -> Self {
         Self {
-            magic: META_BINARY_MAGIC, version: 1,
-            entry_count, tombstone_count, session_id,
-            epoch_base: epoch_base.value(), epoch_target: epoch_target.value(),
+            magic: META_BINARY_MAGIC,
+            version: 1,
+            entry_count,
+            tombstone_count,
+            session_id,
+            epoch_base: epoch_base.value(),
+            epoch_target: epoch_target.value(),
             _pad: [0u8; 6],
         }
     }
@@ -465,7 +520,9 @@ pub struct MetadataBinaryWriter {
 }
 
 impl MetadataBinaryWriter {
-    pub fn new() -> Self { Self { buf: Vec::new() } }
+    pub fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
 
     /// Sérialise le manifest en binaire — OOM-02 + RECUR-01.
     pub fn write_manifest(&mut self, manifest: &ExportManifest) -> ExofsResult<usize> {
@@ -479,8 +536,13 @@ impl MetadataBinaryWriter {
         let hdr_bytes = hdr.as_bytes();
         let entries_bytes = manifest.entries.len().saturating_mul(64);
         let tomb_bytes = manifest.tombstones.len().saturating_mul(32);
-        let total = hdr_bytes.len().saturating_add(entries_bytes).saturating_add(tomb_bytes);
-        self.buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
+        let total = hdr_bytes
+            .len()
+            .saturating_add(entries_bytes)
+            .saturating_add(tomb_bytes);
+        self.buf
+            .try_reserve(total)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.buf.extend_from_slice(hdr_bytes);
 
         // Entrées (RECUR-01 : boucle while)
@@ -498,9 +560,15 @@ impl MetadataBinaryWriter {
         Ok(self.buf.len())
     }
 
-    pub fn as_slice(&self) -> &[u8] { &self.buf }
-    pub fn len(&self) -> usize { self.buf.len() }
-    pub fn is_empty(&self) -> bool { self.buf.is_empty() }
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buf
+    }
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
 }
 
 // ─── Fonctions utilitaires (no std, no alloc String si possible) ──────────────
@@ -636,12 +704,16 @@ mod tests {
     fn test_manifest_validate() {
         let mut manifest = ExportManifest::new(1, EpochId(0), EpochId(5));
         let bid = make_blob_id(5);
-        manifest.add_entry(ManifestBlobEntry::new(bid, 100, EpochId(1), 0)).expect("ok");
+        manifest
+            .add_entry(ManifestBlobEntry::new(bid, 100, EpochId(1), 0))
+            .expect("ok");
         assert!(manifest.validate());
 
         let mut manifest2 = ExportManifest::new(1, EpochId(0), EpochId(5));
         // Entrée avec blob_id = [0; 32] invalide
-        manifest2.add_entry(ManifestBlobEntry::new([0u8; 32], 100, EpochId(1), 0)).expect("ok");
+        manifest2
+            .add_entry(ManifestBlobEntry::new([0u8; 32], 100, EpochId(1), 0))
+            .expect("ok");
         assert!(!manifest2.validate());
     }
 
@@ -651,7 +723,8 @@ mod tests {
         let mut writer = MetadataBinaryWriter::new();
         let n = writer.write_manifest(&manifest).expect("ok");
         assert!(n >= 40); // au moins la taille du header
-        let magic = u32::from_le_bytes([writer.buf[0], writer.buf[1], writer.buf[2], writer.buf[3]]);
+        let magic =
+            u32::from_le_bytes([writer.buf[0], writer.buf[1], writer.buf[2], writer.buf[3]]);
         assert_eq!(magic, META_BINARY_MAGIC);
     }
 
@@ -660,7 +733,9 @@ mod tests {
         let mut manifest = ExportManifest::new(1, EpochId(0), EpochId(3));
         for i in 0u8..5 {
             let bid = make_blob_id(i);
-            manifest.add_entry(ManifestBlobEntry::new(bid, 64, EpochId(1), 0)).expect("ok");
+            manifest
+                .add_entry(ManifestBlobEntry::new(bid, 64, EpochId(1), 0))
+                .expect("ok");
         }
         let mut writer = MetadataBinaryWriter::new();
         let n = writer.write_manifest(&manifest).expect("ok");

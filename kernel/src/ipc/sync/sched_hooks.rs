@@ -20,14 +20,13 @@
 // COUCHE : ipc/ dépend de scheduler/ (autorisé — voir DOC5).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use core::ptr::NonNull;
 
-use crate::scheduler::sync::spinlock::SpinLock;
-use crate::scheduler::core::task::{ThreadControlBlock, TaskState};
-use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::preempt::MAX_CPUS;
+use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::switch::current_thread_raw;
+use crate::scheduler::core::task::{TaskState, ThreadControlBlock};
+use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hook de blocage — fourni par le scheduler au boot
@@ -48,13 +47,17 @@ pub const MAX_SLEEPING_IPC: usize = 128;
 
 #[repr(C)]
 struct SleepEntry {
-    tid:     u32,
+    tid: u32,
     tcb_ptr: usize, // *mut ThreadControlBlock encodé en usize
 }
 
 impl SleepEntry {
-    const fn empty() -> Self { Self { tid: 0, tcb_ptr: 0 } }
-    fn is_free(&self) -> bool { self.tcb_ptr == 0 }
+    const fn empty() -> Self {
+        Self { tid: 0, tcb_ptr: 0 }
+    }
+    fn is_free(&self) -> bool {
+        self.tcb_ptr == 0
+    }
 }
 
 struct SleepRegistry {
@@ -67,14 +70,16 @@ unsafe impl Send for SleepRegistry {}
 impl SleepRegistry {
     const fn new() -> Self {
         const E: SleepEntry = SleepEntry::empty();
-        Self { entries: [E; MAX_SLEEPING_IPC] }
+        Self {
+            entries: [E; MAX_SLEEPING_IPC],
+        }
     }
 
     /// Enregistre (tid, tcb). Échoue silencieusement si le registre est plein.
     fn register(&mut self, tid: u32, tcb: *mut ThreadControlBlock) {
         for e in self.entries.iter_mut() {
             if e.is_free() {
-                e.tid     = tid;
+                e.tid = tid;
                 e.tcb_ptr = tcb as usize;
                 return;
             }

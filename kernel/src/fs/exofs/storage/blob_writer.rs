@@ -9,23 +9,20 @@
 //!   OOM-02   : try_reserve(1) avant chaque Vec::push
 //!   ARITH-02 : checked_add/mul pour toute arithmétique
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, BlobId, DiskOffset, EpochId,
-};
 use crate::fs::exofs::core::blob_id::compute_blob_id;
+use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, ExofsError, ExofsResult};
 use crate::fs::exofs::crypto::key_derivation::KeyDerivation;
 use crate::fs::exofs::crypto::secret_writer::SecretWriter;
-use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
-use crate::fs::exofs::storage::layout::{BLOCK_SIZE, align_up};
 use crate::fs::exofs::storage::compression_choice::{
     choose_compression, CompressionType, ContentHint,
 };
 use crate::fs::exofs::storage::compression_writer::CompressWriter;
+use crate::fs::exofs::storage::layout::{align_up, BLOCK_SIZE};
+use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -139,7 +136,10 @@ impl Default for BlobWriterConfig {
 
 impl BlobWriterConfig {
     pub fn new(epoch: EpochId) -> Self {
-        Self { epoch, ..Default::default() }
+        Self {
+            epoch,
+            ..Default::default()
+        }
     }
 
     pub fn with_algo(mut self, algo: CompressionType) -> Self {
@@ -193,13 +193,17 @@ pub struct BlobWriteResult {
 impl BlobWriteResult {
     /// Ratio de compression (0.0 = pas de compression, 1.0 = tout compressé)
     pub fn compression_ratio(&self) -> f32 {
-        if self.original_size == 0 { return 0.0; }
+        if self.original_size == 0 {
+            return 0.0;
+        }
         1.0 - (self.stored_size as f32 / self.original_size as f32)
     }
 
     /// Efficacité de stockage en pourcentage
     pub fn storage_efficiency_pct(&self) -> u64 {
-        if self.original_size == 0 { return 0; }
+        if self.original_size == 0 {
+            return 0;
+        }
         let ratio = self.stored_size.saturating_mul(100) / self.original_size;
         100u64.saturating_sub(ratio)
     }
@@ -330,8 +334,9 @@ impl BlobWriter {
                 BLOB_WRITER_STATS.dedup_hits.fetch_add(1, Ordering::Relaxed);
                 STORAGE_STATS.inc_dedup_hit(data.len() as u64);
                 let n_blocks = Self::size_to_blocks(
-                    BLOB_HEADER_SIZE.checked_add(data.len())
-                        .ok_or(ExofsError::Overflow)? as u64
+                    BLOB_HEADER_SIZE
+                        .checked_add(data.len())
+                        .ok_or(ExofsError::Overflow)? as u64,
                 );
                 return Ok(BlobWriteResult {
                     blob_id,
@@ -355,10 +360,14 @@ impl BlobWriter {
         let result = Self::write_to_disk(ctx, blob_id, config, alloc_fn, write_fn)?;
 
         // ── 7. Statistiques ───────────────────────────────────────────
-        BLOB_WRITER_STATS.total_writes.fetch_add(1, Ordering::Relaxed);
-        BLOB_WRITER_STATS.total_bytes_raw
+        BLOB_WRITER_STATS
+            .total_writes
+            .fetch_add(1, Ordering::Relaxed);
+        BLOB_WRITER_STATS
+            .total_bytes_raw
             .fetch_add(result.original_size, Ordering::Relaxed);
-        BLOB_WRITER_STATS.total_bytes_stored
+        BLOB_WRITER_STATS
+            .total_bytes_stored
             .fetch_add(result.stored_size, Ordering::Relaxed);
         STORAGE_STATS.add_write(result.disk_size);
         STORAGE_STATS.inc_blob_created();
@@ -385,12 +394,15 @@ impl BlobWriter {
         let (payload, effective_algo) = if algo == CompressionType::None {
             // Pas de compression : copie directe
             let mut v = Vec::new();
-            v.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+            v.try_reserve(data.len())
+                .map_err(|_| ExofsError::NoMemory)?;
             v.extend_from_slice(data);
             (v, CompressionType::None)
         } else {
             // Compression
-            BLOB_WRITER_STATS.compress_ops.fetch_add(1, Ordering::Relaxed);
+            BLOB_WRITER_STATS
+                .compress_ops
+                .fetch_add(1, Ordering::Relaxed);
             STORAGE_STATS.inc_compress_op();
             STORAGE_STATS.add_compress_bytes_in(data.len() as u64);
 
@@ -403,7 +415,8 @@ impl BlobWriter {
             } else {
                 // Compression inefficace → stocker brut
                 let mut v = Vec::new();
-                v.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+                v.try_reserve(data.len())
+                    .map_err(|_| ExofsError::NoMemory)?;
                 v.extend_from_slice(data);
                 STORAGE_STATS.add_compress_bytes_out(data.len() as u64);
                 (v, CompressionType::None)
@@ -476,23 +489,30 @@ impl BlobWriter {
         // Écriture de l'en-tête (WRITE-02)
         let written_hdr = write_fn(base_offset, &hdr_bytes)?;
         if written_hdr != BLOB_HEADER_SIZE {
-            BLOB_WRITER_STATS.write_errors.fetch_add(1, Ordering::Relaxed);
+            BLOB_WRITER_STATS
+                .write_errors
+                .fetch_add(1, Ordering::Relaxed);
             STORAGE_STATS.inc_io_error();
             return Err(ExofsError::ShortWrite);
         }
-        BLOB_WRITER_STATS.header_writes.fetch_add(1, Ordering::Relaxed);
+        BLOB_WRITER_STATS
+            .header_writes
+            .fetch_add(1, Ordering::Relaxed);
 
         // Offset du payload = base + BLOB_HEADER_SIZE
         let payload_offset = DiskOffset(
-            base_offset.0
+            base_offset
+                .0
                 .checked_add(BLOB_HEADER_SIZE as u64)
-                .ok_or(ExofsError::Overflow)?
+                .ok_or(ExofsError::Overflow)?,
         );
 
         // Écriture du payload (WRITE-02)
         let written_payload = write_fn(payload_offset, &ctx.payload)?;
         if written_payload != ctx.payload.len() {
-            BLOB_WRITER_STATS.write_errors.fetch_add(1, Ordering::Relaxed);
+            BLOB_WRITER_STATS
+                .write_errors
+                .fetch_add(1, Ordering::Relaxed);
             STORAGE_STATS.inc_io_error();
             return Err(ExofsError::ShortWrite);
         }
@@ -524,7 +544,7 @@ impl BlobWriter {
     ) -> ExofsResult<BlobHeaderDisk> {
         let algo_byte: u8 = match ctx.algo {
             CompressionType::None => 0,
-            CompressionType::Lz4  => 1,
+            CompressionType::Lz4 => 1,
             CompressionType::Zstd => 2,
         };
 
@@ -564,16 +584,15 @@ impl BlobWriter {
     #[inline]
     pub fn size_to_blocks(size: u64) -> u64 {
         let bs = BLOCK_SIZE as u64;
-        size.checked_add(bs - 1)
-            .unwrap_or(u64::MAX)
-            / bs
+        size.checked_add(bs - 1).unwrap_or(u64::MAX) / bs
     }
 
     /// Taille totale d'un blob sur disque donnée une taille originale
     pub fn disk_size_for(original_size: usize) -> u64 {
-        let total = BLOB_HEADER_SIZE
-            .saturating_add(original_size);
-        align_up(DiskOffset(total as u64), BLOCK_SIZE as u64).map(|d| d.0).unwrap_or(u64::MAX)
+        let total = BLOB_HEADER_SIZE.saturating_add(original_size);
+        align_up(DiskOffset(total as u64), BLOCK_SIZE as u64)
+            .map(|d| d.0)
+            .unwrap_or(u64::MAX)
     }
 }
 
@@ -610,9 +629,12 @@ impl BatchBlobWriter {
             return Err(ExofsError::InvalidSize);
         }
         let mut v = Vec::new();
-        v.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        v.try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         v.extend_from_slice(data);
-        self.pending.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.pending
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.pending.push((index, v));
         Ok(())
     }
@@ -641,8 +663,13 @@ impl BatchBlobWriter {
                 |off, buf| write_fn(off, buf),
                 |_id| dedup_ref,
             );
-            self.results.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-            self.results.push(BatchBlobResult { index: idx, result: res });
+            self.results
+                .try_reserve(1)
+                .map_err(|_| ExofsError::NoMemory)?;
+            self.results.push(BatchBlobResult {
+                index: idx,
+                result: res,
+            });
         }
 
         Ok(&self.results)
@@ -655,7 +682,9 @@ impl BatchBlobWriter {
 
     /// Octets totaux en attente
     pub fn pending_bytes(&self) -> u64 {
-        self.pending.iter().fold(0u64, |acc, (_, d)| acc.saturating_add(d.len() as u64))
+        self.pending
+            .iter()
+            .fold(0u64, |acc, (_, d)| acc.saturating_add(d.len() as u64))
     }
 
     /// Vide le batch sans écrire
@@ -681,18 +710,24 @@ where
     if aligned == data.len() {
         // Déjà aligné
         let n = write_fn(offset, data)?;
-        if n != data.len() { return Err(ExofsError::ShortWrite); }
+        if n != data.len() {
+            return Err(ExofsError::ShortWrite);
+        }
         return Ok(n);
     }
 
     // Pad avec des zéros
     let mut padded = Vec::new();
-    padded.try_reserve(aligned).map_err(|_| ExofsError::NoMemory)?;
+    padded
+        .try_reserve(aligned)
+        .map_err(|_| ExofsError::NoMemory)?;
     padded.extend_from_slice(data);
     padded.resize(aligned, 0u8);
 
     let n = write_fn(offset, &padded)?;
-    if n != padded.len() { return Err(ExofsError::ShortWrite); }
+    if n != padded.len() {
+        return Err(ExofsError::ShortWrite);
+    }
     Ok(data.len()) // retourne la taille des données utiles
 }
 
@@ -702,9 +737,7 @@ pub fn verify_blob_header(raw: &[u8]) -> ExofsResult<&BlobHeaderDisk> {
         return Err(ExofsError::InvalidSize);
     }
     // SAFETY: taille vérifiée ci-dessus, repr(C) garanti
-    let hdr: &BlobHeaderDisk = unsafe {
-        &*(raw.as_ptr() as *const BlobHeaderDisk)
-    };
+    let hdr: &BlobHeaderDisk = unsafe { &*(raw.as_ptr() as *const BlobHeaderDisk) };
     if hdr.magic != BLOB_HEADER_MAGIC {
         return Err(ExofsError::BadMagic);
     }
@@ -716,9 +749,10 @@ pub fn verify_blob_header(raw: &[u8]) -> ExofsResult<&BlobHeaderDisk> {
 
 /// Taille totale sur disque pour un blob connaissant stored_size
 pub fn blob_total_disk_size(stored_size: u32) -> u64 {
-    let raw = (BLOB_HEADER_SIZE as u64)
-        .saturating_add(stored_size as u64);
-    align_up(DiskOffset(raw), BLOCK_SIZE as u64).map(|d| d.0).unwrap_or(u64::MAX)
+    let raw = (BLOB_HEADER_SIZE as u64).saturating_add(stored_size as u64);
+    align_up(DiskOffset(raw), BLOCK_SIZE as u64)
+        .map(|d| d.0)
+        .unwrap_or(u64::MAX)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -774,13 +808,17 @@ mod tests {
     #[test]
     fn verify_header_after_write() {
         let data = make_data(256, 0x77);
-        let config = BlobWriterConfig::new(EpochId(5)).no_dedup().with_algo(CompressionType::None);
+        let config = BlobWriterConfig::new(EpochId(5))
+            .no_dedup()
+            .with_algo(CompressionType::None);
 
         let mut disk = alloc::vec![0u8; 16384];
         let alloc_fn = |_n: u64| Ok(DiskOffset(0));
         let write_fn = |off: DiskOffset, buf: &[u8]| -> ExofsResult<usize> {
             let s = off.0 as usize;
-            if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+            if s + buf.len() <= disk.len() {
+                disk[s..s + buf.len()].copy_from_slice(buf);
+            }
             Ok(buf.len())
         };
 
@@ -806,10 +844,8 @@ mod tests {
             panic!("write ne doit pas être appelé sur dédup hit")
         };
 
-        let r = BlobWriter::write_blob(
-            &data, &config, alloc_fn, write_fn,
-            |_bid| Some(existing),
-        ).unwrap();
+        let r = BlobWriter::write_blob(&data, &config, alloc_fn, write_fn, |_bid| Some(existing))
+            .unwrap();
 
         assert!(r.dedup_hit);
         assert_eq!(r.offset.0, existing.0);
@@ -835,18 +871,28 @@ mod tests {
 
         let mut off = 0u64;
         let mut disk = alloc::vec![0u8; 65536];
-        let results = bw.flush(
-            |n| { let o = DiskOffset(off); off += n * BLOCK_SIZE as u64; Ok(o) },
-            |o, buf| {
-                let s = o.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
-                Ok(buf.len())
-            },
-            |_| None,
-        ).unwrap();
+        let results = bw
+            .flush(
+                |n| {
+                    let o = DiskOffset(off);
+                    off += n * BLOCK_SIZE as u64;
+                    Ok(o)
+                },
+                |o, buf| {
+                    let s = o.0 as usize;
+                    if s + buf.len() <= disk.len() {
+                        disk[s..s + buf.len()].copy_from_slice(buf);
+                    }
+                    Ok(buf.len())
+                },
+                |_| None,
+            )
+            .unwrap();
 
         assert_eq!(results.len(), 4);
-        for r in results { assert!(r.result.is_ok()); }
+        for r in results {
+            assert!(r.result.is_ok());
+        }
     }
 
     #[test]

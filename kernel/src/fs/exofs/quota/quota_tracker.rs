@@ -2,11 +2,11 @@
 // ExoFS Quota — Tracker d'utilisation
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
+use super::quota_policy::{QuotaKind, QuotaLimits};
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use super::quota_policy::{QuotaKind, QuotaLimits};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -18,17 +18,29 @@ pub const QUOTA_MAX_ENTRIES: usize = 256;
 /// Clé unique d'une entité soumise à quota : (kind, entity_id).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct QuotaKey {
-    pub kind:      u8,   // QuotaKind as u8
+    pub kind: u8, // QuotaKind as u8
     pub entity_id: u64,
 }
 
 impl QuotaKey {
     pub fn new(kind: QuotaKind, entity_id: u64) -> Self {
-        Self { kind: kind as u8, entity_id }
+        Self {
+            kind: kind as u8,
+            entity_id,
+        }
     }
-    pub fn kind(&self) -> QuotaKind { QuotaKind::from_u8(self.kind) }
-    pub const fn zeroed() -> Self { Self { kind: 0, entity_id: 0 } }
-    pub fn is_zeroed(&self) -> bool { self.kind == 0 && self.entity_id == 0 }
+    pub fn kind(&self) -> QuotaKind {
+        QuotaKind::from_u8(self.kind)
+    }
+    pub const fn zeroed() -> Self {
+        Self {
+            kind: 0,
+            entity_id: 0,
+        }
+    }
+    pub fn is_zeroed(&self) -> bool {
+        self.kind == 0 && self.entity_id == 0
+    }
 }
 
 // ─── QuotaUsage ───────────────────────────────────────────────────────────────
@@ -36,28 +48,62 @@ impl QuotaKey {
 /// Consommation courante d'une entité.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QuotaUsage {
-    pub bytes_used:  u64,
-    pub blobs_used:  u64,
+    pub bytes_used: u64,
+    pub blobs_used: u64,
     pub inodes_used: u64,
 }
 
 impl QuotaUsage {
     pub const fn zero() -> Self {
-        Self { bytes_used: 0, blobs_used: 0, inodes_used: 0 }
+        Self {
+            bytes_used: 0,
+            blobs_used: 0,
+            inodes_used: 0,
+        }
     }
 
     /// Ajoute des bytes (saturating, ARITH-02).
-    pub fn add_bytes(self, n: u64)  -> Self { Self { bytes_used:  self.bytes_used.saturating_add(n),  ..self } }
+    pub fn add_bytes(self, n: u64) -> Self {
+        Self {
+            bytes_used: self.bytes_used.saturating_add(n),
+            ..self
+        }
+    }
     /// Soustrait des bytes (saturating, ARITH-02).
-    pub fn sub_bytes(self, n: u64)  -> Self { Self { bytes_used:  self.bytes_used.saturating_sub(n),  ..self } }
+    pub fn sub_bytes(self, n: u64) -> Self {
+        Self {
+            bytes_used: self.bytes_used.saturating_sub(n),
+            ..self
+        }
+    }
     /// Ajoute des blobs (saturating).
-    pub fn add_blobs(self, n: u64)  -> Self { Self { blobs_used:  self.blobs_used.saturating_add(n),  ..self } }
+    pub fn add_blobs(self, n: u64) -> Self {
+        Self {
+            blobs_used: self.blobs_used.saturating_add(n),
+            ..self
+        }
+    }
     /// Soustrait des blobs.
-    pub fn sub_blobs(self, n: u64)  -> Self { Self { blobs_used:  self.blobs_used.saturating_sub(n),  ..self } }
+    pub fn sub_blobs(self, n: u64) -> Self {
+        Self {
+            blobs_used: self.blobs_used.saturating_sub(n),
+            ..self
+        }
+    }
     /// Ajoute des inodes.
-    pub fn add_inodes(self, n: u64) -> Self { Self { inodes_used: self.inodes_used.saturating_add(n), ..self } }
+    pub fn add_inodes(self, n: u64) -> Self {
+        Self {
+            inodes_used: self.inodes_used.saturating_add(n),
+            ..self
+        }
+    }
     /// Soustrait des inodes.
-    pub fn sub_inodes(self, n: u64) -> Self { Self { inodes_used: self.inodes_used.saturating_sub(n), ..self } }
+    pub fn sub_inodes(self, n: u64) -> Self {
+        Self {
+            inodes_used: self.inodes_used.saturating_sub(n),
+            ..self
+        }
+    }
 
     /// Total des octets + blobs + inodes pour tri.
     pub fn total_weight(&self) -> u64 {
@@ -72,8 +118,8 @@ impl QuotaUsage {
 /// Enregistrement interne combinant clé, utilisation et limites.
 #[derive(Clone, Copy, Debug)]
 pub struct QuotaEntry {
-    pub key:    QuotaKey,
-    pub usage:  QuotaUsage,
+    pub key: QuotaKey,
+    pub usage: QuotaUsage,
     pub limits: QuotaLimits,
     /// Tick du dernier dépassement soft (0 = pas de dépassement actif).
     pub soft_breach_tick: u64,
@@ -84,8 +130,8 @@ pub struct QuotaEntry {
 impl QuotaEntry {
     pub const fn empty() -> Self {
         Self {
-            key:    QuotaKey::zeroed(),
-            usage:  QuotaUsage::zero(),
+            key: QuotaKey::zeroed(),
+            usage: QuotaUsage::zero(),
             limits: QuotaLimits::unlimited(),
             soft_breach_tick: 0,
             occupied: false,
@@ -93,7 +139,13 @@ impl QuotaEntry {
     }
 
     pub fn new(key: QuotaKey, limits: QuotaLimits) -> Self {
-        Self { key, usage: QuotaUsage::zero(), limits, soft_breach_tick: 0, occupied: true }
+        Self {
+            key,
+            usage: QuotaUsage::zero(),
+            limits,
+            soft_breach_tick: 0,
+            occupied: true,
+        }
     }
 
     /// Pourcentage d'utilisation bytes en ‰.
@@ -113,8 +165,12 @@ impl QuotaEntry {
 
     /// Vrai si la grâce est expirée depuis le premier dépassement soft.
     pub fn grace_expired(&self, current_tick: u64) -> bool {
-        if self.soft_breach_tick == 0 { return false; }
-        if self.limits.grace_ticks == 0 { return true; }
+        if self.soft_breach_tick == 0 {
+            return false;
+        }
+        if self.limits.grace_ticks == 0 {
+            return true;
+        }
         current_tick.saturating_sub(self.soft_breach_tick) >= self.limits.grace_ticks
     }
 }
@@ -124,12 +180,12 @@ impl QuotaEntry {
 /// Table plate d'entrées de quota (max QUOTA_MAX_ENTRIES).
 /// Thread-safe via spinlock AtomicU64.
 pub struct QuotaTracker {
-    entries:       UnsafeCell<[QuotaEntry; QUOTA_MAX_ENTRIES]>,
-    count:         AtomicU64,
-    lock:          AtomicU64,
-    total_bytes:   AtomicU64,
-    total_blobs:   AtomicU64,
-    total_inodes:  AtomicU64,
+    entries: UnsafeCell<[QuotaEntry; QUOTA_MAX_ENTRIES]>,
+    count: AtomicU64,
+    lock: AtomicU64,
+    total_bytes: AtomicU64,
+    total_blobs: AtomicU64,
+    total_inodes: AtomicU64,
 }
 
 unsafe impl Sync for QuotaTracker {}
@@ -138,11 +194,11 @@ unsafe impl Send for QuotaTracker {}
 impl QuotaTracker {
     pub const fn new_const() -> Self {
         Self {
-            entries:      UnsafeCell::new([QuotaEntry::empty(); QUOTA_MAX_ENTRIES]),
-            count:        AtomicU64::new(0),
-            lock:         AtomicU64::new(0),
-            total_bytes:  AtomicU64::new(0),
-            total_blobs:  AtomicU64::new(0),
+            entries: UnsafeCell::new([QuotaEntry::empty(); QUOTA_MAX_ENTRIES]),
+            count: AtomicU64::new(0),
+            lock: AtomicU64::new(0),
+            total_bytes: AtomicU64::new(0),
+            total_blobs: AtomicU64::new(0),
             total_inodes: AtomicU64::new(0),
         }
     }
@@ -150,7 +206,8 @@ impl QuotaTracker {
     // ── Spinlock ─────────────────────────────────────────────────────────────
 
     fn acquire(&self) {
-        while self.lock
+        while self
+            .lock
             .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
@@ -182,7 +239,9 @@ impl QuotaTracker {
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < QUOTA_MAX_ENTRIES {
-            if !entries[i].occupied { return Some(i); }
+            if !entries[i].occupied {
+                return Some(i);
+            }
             i = i.wrapping_add(1);
         }
         None
@@ -220,9 +279,12 @@ impl QuotaTracker {
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(key) {
             let e = &entries[idx];
-            self.total_bytes.fetch_sub(e.usage.bytes_used, Ordering::Relaxed);
-            self.total_blobs.fetch_sub(e.usage.blobs_used, Ordering::Relaxed);
-            self.total_inodes.fetch_sub(e.usage.inodes_used, Ordering::Relaxed);
+            self.total_bytes
+                .fetch_sub(e.usage.bytes_used, Ordering::Relaxed);
+            self.total_blobs
+                .fetch_sub(e.usage.blobs_used, Ordering::Relaxed);
+            self.total_inodes
+                .fetch_sub(e.usage.inodes_used, Ordering::Relaxed);
             entries[idx] = QuotaEntry::empty();
             self.count.fetch_sub(1, Ordering::Relaxed);
             Ok(())
@@ -407,12 +469,20 @@ impl QuotaTracker {
     }
 
     /// Nombre d'entités actives.
-    pub fn count(&self) -> usize { self.count.load(Ordering::Relaxed) as usize }
+    pub fn count(&self) -> usize {
+        self.count.load(Ordering::Relaxed) as usize
+    }
 
     /// Totaux agrégés.
-    pub fn total_bytes(&self)  -> u64 { self.total_bytes.load(Ordering::Relaxed) }
-    pub fn total_blobs(&self)  -> u64 { self.total_blobs.load(Ordering::Relaxed) }
-    pub fn total_inodes(&self) -> u64 { self.total_inodes.load(Ordering::Relaxed) }
+    pub fn total_bytes(&self) -> u64 {
+        self.total_bytes.load(Ordering::Relaxed)
+    }
+    pub fn total_blobs(&self) -> u64 {
+        self.total_blobs.load(Ordering::Relaxed)
+    }
+    pub fn total_inodes(&self) -> u64 {
+        self.total_inodes.load(Ordering::Relaxed)
+    }
 
     /// Snapshot de toutes les entrées actives (OOM-02).
     pub fn snapshot_all(&self) -> ExofsResult<Vec<QuotaEntry>> {
@@ -425,7 +495,10 @@ impl QuotaTracker {
         let mut i = 0usize;
         while i < QUOTA_MAX_ENTRIES {
             if entries[i].occupied {
-                v.try_reserve(1).map_err(|_| { self.release(); ExofsError::NoMemory })?;
+                v.try_reserve(1).map_err(|_| {
+                    self.release();
+                    ExofsError::NoMemory
+                })?;
                 v.push(entries[i]);
             }
             i = i.wrapping_add(1);
@@ -444,7 +517,10 @@ impl QuotaTracker {
         let mut i = 0usize;
         while i < QUOTA_MAX_ENTRIES {
             if entries[i].occupied && entries[i].bytes_hard_exceeded() {
-                v.try_reserve(1).map_err(|_| { self.release(); ExofsError::NoMemory })?;
+                v.try_reserve(1).map_err(|_| {
+                    self.release();
+                    ExofsError::NoMemory
+                })?;
                 v.push(entries[i].key);
             }
             i = i.wrapping_add(1);
@@ -460,9 +536,19 @@ impl QuotaTracker {
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(key) {
             let old = entries[idx].usage;
-            self.total_bytes.fetch_sub(old.bytes_used.min(self.total_bytes.load(Ordering::Relaxed)), Ordering::Relaxed);
-            self.total_blobs.fetch_sub(old.blobs_used.min(self.total_blobs.load(Ordering::Relaxed)), Ordering::Relaxed);
-            self.total_inodes.fetch_sub(old.inodes_used.min(self.total_inodes.load(Ordering::Relaxed)), Ordering::Relaxed);
+            self.total_bytes.fetch_sub(
+                old.bytes_used.min(self.total_bytes.load(Ordering::Relaxed)),
+                Ordering::Relaxed,
+            );
+            self.total_blobs.fetch_sub(
+                old.blobs_used.min(self.total_blobs.load(Ordering::Relaxed)),
+                Ordering::Relaxed,
+            );
+            self.total_inodes.fetch_sub(
+                old.inodes_used
+                    .min(self.total_inodes.load(Ordering::Relaxed)),
+                Ordering::Relaxed,
+            );
             entries[idx].usage = QuotaUsage::zero();
             entries[idx].soft_breach_tick = 0;
             Ok(())
@@ -484,12 +570,17 @@ mod tests {
     use super::*;
     use crate::fs::exofs::quota::quota_policy::QuotaKind;
 
-    fn make_key(id: u64) -> QuotaKey { QuotaKey::new(QuotaKind::User, id) }
+    fn make_key(id: u64) -> QuotaKey {
+        QuotaKey::new(QuotaKind::User, id)
+    }
     fn make_limits(hard: u64) -> QuotaLimits {
         QuotaLimits {
-            soft_bytes: hard / 2, hard_bytes: hard,
-            soft_blobs: u64::MAX, hard_blobs: u64::MAX,
-            soft_inodes: u64::MAX, hard_inodes: u64::MAX,
+            soft_bytes: hard / 2,
+            hard_bytes: hard,
+            soft_blobs: u64::MAX,
+            hard_blobs: u64::MAX,
+            soft_inodes: u64::MAX,
+            hard_inodes: u64::MAX,
             grace_ticks: 0,
         }
     }
@@ -609,15 +700,18 @@ mod tests {
     #[test]
     fn test_grace_expired() {
         let lim = QuotaLimits {
-            soft_bytes: 50, hard_bytes: 100,
-            soft_blobs: u64::MAX, hard_blobs: u64::MAX,
-            soft_inodes: u64::MAX, hard_inodes: u64::MAX,
+            soft_bytes: 50,
+            hard_bytes: 100,
+            soft_blobs: u64::MAX,
+            hard_blobs: u64::MAX,
+            soft_inodes: u64::MAX,
+            hard_inodes: u64::MAX,
             grace_ticks: 100,
         };
         let mut e = QuotaEntry::new(make_key(40), lim);
         e.soft_breach_tick = 100;
         assert!(!e.grace_expired(150)); // 50 < 100
-        assert!(e.grace_expired(201));  // 101 >= 100
+        assert!(e.grace_expired(201)); // 101 >= 100
     }
 
     #[test]

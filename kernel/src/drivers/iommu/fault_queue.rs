@@ -6,9 +6,9 @@
 //! Logique lock-free complète pour autoriser l'appel `push()` depuis ISR sans aucun Mutex.
 //! 0 STUB, 0 TODO
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::cell::UnsafeCell;
 use core::hint::spin_loop;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 pub const IOMMU_QUEUE_CAPACITY: u32 = 256;
 
@@ -94,11 +94,14 @@ impl IommuFaultQueue {
             let dif = seq as i64 - pos as i64;
 
             if dif == 0 {
-                match self.head.compare_exchange(
-                    pos, pos + 1, Ordering::AcqRel, Ordering::Relaxed
-                ) {
+                match self
+                    .head
+                    .compare_exchange(pos, pos + 1, Ordering::AcqRel, Ordering::Relaxed)
+                {
                     Ok(_) => {
-                        unsafe { *slot.event.get() = event; }
+                        unsafe {
+                            *slot.event.get() = event;
+                        }
                         slot.seq.store(pos + 1, Ordering::Release);
                         return true;
                     }
@@ -127,12 +130,14 @@ impl IommuFaultQueue {
             let dif = seq as i64 - (pos + 1) as i64;
 
             if dif == 0 {
-                match self.tail.compare_exchange(
-                    pos, pos + 1, Ordering::AcqRel, Ordering::Relaxed
-                ) {
+                match self
+                    .tail
+                    .compare_exchange(pos, pos + 1, Ordering::AcqRel, Ordering::Relaxed)
+                {
                     Ok(_) => {
                         let event = unsafe { *slot.event.get() };
-                        slot.seq.store(pos + IOMMU_QUEUE_CAPACITY, Ordering::Release);
+                        slot.seq
+                            .store(pos + IOMMU_QUEUE_CAPACITY, Ordering::Release);
                         return Some(event);
                     }
                     Err(actual) => {

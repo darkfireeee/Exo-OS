@@ -6,16 +6,15 @@
 //! OOM-02   : try_reserve avant toute allocation.
 //! ARITH-02 : saturating_*/checked_div pour calculs d'offset.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
-use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use super::validation::{
-    write_user_buf, exofs_err_to_errno,
-    validate_fd, validate_count, validate_offset,
-    verify_cap, CapabilityType, EFAULT, ENOMEM,
-};
 use super::object_fd::OBJECT_TABLE;
+use super::validation::{
+    exofs_err_to_errno, validate_count, validate_fd, validate_offset, verify_cap, write_user_buf,
+    CapabilityType, EFAULT, ENOMEM,
+};
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -35,13 +34,13 @@ pub const READ_BUF_DEFAULT: usize = 4_096; // 4 KiB, pour les petits reads.
 #[derive(Clone, Copy, Debug)]
 pub struct ReadArgs {
     /// Offset de lecture dans le blob. Si `use_cursor != 0`, ignoré.
-    pub offset:     u64,
+    pub offset: u64,
     /// Nombre d'octets maximal à lire.
-    pub count:      u64,
+    pub count: u64,
     /// Si non-zéro, utilise et avance le curseur du fd.
     pub use_cursor: u32,
     /// Flags optionnels (0 = défaut).
-    pub flags:      u32,
+    pub flags: u32,
 }
 
 const _: () = assert!(core::mem::size_of::<ReadArgs>() == 24);
@@ -49,7 +48,12 @@ const _: () = assert!(core::mem::size_of::<ReadArgs>() == 24);
 impl ReadArgs {
     #[allow(dead_code)]
     fn defaults(offset: u64, count: u64) -> Self {
-        Self { offset, count, use_cursor: 0, flags: 0 }
+        Self {
+            offset,
+            count,
+            use_cursor: 0,
+            flags: 0,
+        }
     }
 }
 
@@ -64,7 +68,7 @@ pub struct ReadResult {
     /// Nouvel offset après la lecture.
     pub new_offset: u64,
     /// True si l'EOF a été atteint.
-    pub eof:        bool,
+    pub eof: bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -79,21 +83,26 @@ pub struct ReadResult {
 /// OOM-02 : le buffer est fourni par l'appelant (alloué via try_reserve).
 fn read_blob(
     blob_id: BlobId,
-    offset:  u64,
-    count:   usize,
-    buf:     &mut [u8],
+    offset: u64,
+    count: usize,
+    buf: &mut [u8],
 ) -> ExofsResult<ReadResult> {
     // Récupérer le blob depuis le cache.
     let data = BLOB_CACHE.get(&blob_id).ok_or(ExofsError::BlobNotFound)?;
     let blob_size = data.len();
 
     if offset >= blob_size as u64 {
-        return Ok(ReadResult { bytes_read: 0, new_offset: offset, eof: true });
+        return Ok(ReadResult {
+            bytes_read: 0,
+            new_offset: offset,
+            eof: true,
+        });
     }
 
     let start = offset as usize;
     // ARITH-02 : checked_add pour éviter overflow.
-    let end = start.checked_add(count)
+    let end = start
+        .checked_add(count)
         .map(|e| e.min(blob_size))
         .unwrap_or(blob_size);
     let n = end.saturating_sub(start);
@@ -117,11 +126,11 @@ fn read_blob(
 ///
 /// Si `use_cursor`, l'offset courant du fd est utilisé et le curseur avancé.
 fn read_fd(
-    fd:         u32,
-    offset:     u64,
-    count:      usize,
+    fd: u32,
+    offset: u64,
+    count: usize,
     use_cursor: bool,
-    buf:        &mut Vec<u8>,
+    buf: &mut Vec<u8>,
 ) -> ExofsResult<ReadResult> {
     // Vérification des droits.
     OBJECT_TABLE.check_readable(fd)?;
@@ -163,25 +172,27 @@ fn read_fd(
 /// - `offset`   : offset dans le blob (ignoré si ReadArgs.use_cursor != 0).
 /// - `args_ptr` : pointeur optionnel vers `ReadArgs`.
 pub fn sys_exofs_object_read(
-    fd:       u64,
-    buf_ptr:  u64,
-    count:    u64,
-    offset:   u64,
+    fd: u64,
+    buf_ptr: u64,
+    count: u64,
+    offset: u64,
     args_ptr: u64,
     cap_rights: u64,
 ) -> i64 {
     // 1. Valider les arguments de base.
     let fd_u32 = match validate_fd(fd) {
-        Ok(f)  => f,
+        Ok(f) => f,
         Err(e) => return e,
     };
-    if buf_ptr == 0 { return EFAULT; }
+    if buf_ptr == 0 {
+        return EFAULT;
+    }
     let count_usize = match validate_count(count) {
-        Ok(c)  => c.min(READ_MAX_BYTES),
+        Ok(c) => c.min(READ_MAX_BYTES),
         Err(e) => return e,
     };
     let offset_val = match validate_offset(offset) {
-        Ok(o)  => o,
+        Ok(o) => o,
         Err(e) => return e,
     };
 
@@ -190,7 +201,11 @@ pub fn sys_exofs_object_read(
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         match unsafe { super::validation::copy_struct_from_user::<ReadArgs>(args_ptr) } {
             Ok(a) => {
-                let off = if a.use_cursor != 0 { offset_val } else { a.offset };
+                let off = if a.use_cursor != 0 {
+                    offset_val
+                } else {
+                    a.offset
+                };
                 let cnt = (a.count as usize).min(READ_MAX_BYTES);
                 (off, cnt, a.use_cursor != 0)
             }
@@ -200,7 +215,9 @@ pub fn sys_exofs_object_read(
         (offset_val, count_usize, false)
     };
 
-    if effective_count == 0 { return 0; }
+    if effective_count == 0 {
+        return 0;
+    }
 
     if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectRead) {
         return e;
@@ -208,20 +225,28 @@ pub fn sys_exofs_object_read(
 
     // 3. Allouer le buffer de lecture sur le tas (RÈGLE 10, OOM-02).
     let mut read_buf: Vec<u8> = Vec::new();
-    read_buf.try_reserve(effective_count).map_err(|_| ENOMEM as i64)
+    read_buf
+        .try_reserve(effective_count)
+        .map_err(|_| ENOMEM as i64)
         .and_then(|_| {
             read_buf.resize(effective_count, 0u8);
             // 4. Lire depuis le fd.
-            read_fd(fd_u32, effective_offset, effective_count, use_cursor, &mut read_buf)
-                .map_err(|e| exofs_err_to_errno(e))
-                .and_then(|result| {
-                    if result.bytes_read == 0 {
-                        return Ok(0i64); // EOF
-                    }
-                    // 5. Copier vers userspace (RÈGLE 9 : copy_to_user).
-                    write_user_buf(buf_ptr, &read_buf[..result.bytes_read])?;
-                    Ok(result.bytes_read as i64)
-                })
+            read_fd(
+                fd_u32,
+                effective_offset,
+                effective_count,
+                use_cursor,
+                &mut read_buf,
+            )
+            .map_err(|e| exofs_err_to_errno(e))
+            .and_then(|result| {
+                if result.bytes_read == 0 {
+                    return Ok(0i64); // EOF
+                }
+                // 5. Copier vers userspace (RÈGLE 9 : copy_to_user).
+                write_user_buf(buf_ptr, &read_buf[..result.bytes_read])?;
+                Ok(result.bytes_read as i64)
+            })
         })
         .unwrap_or_else(|e| e)
 }
@@ -248,7 +273,9 @@ pub fn pages_in(bytes: u64, page_size: u64) -> u64 {
 /// ARITH-02 : checked_add + wrapping_sub + masque.
 #[inline]
 pub fn align_up(offset: u64, align: u64) -> Option<u64> {
-    if align == 0 { return None; }
+    if align == 0 {
+        return None;
+    }
     let mask = align.wrapping_sub(1);
     offset.checked_add(mask).map(|v| v & !mask)
 }
@@ -259,8 +286,8 @@ pub fn align_up(offset: u64, align: u64) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::validation::{EBADF, EINVAL, ERANGE};
+    use super::*;
 
     #[test]
     fn test_bytes_remaining_normal() {
@@ -359,9 +386,9 @@ pub struct ReadSegment {
     /// Offset dans le blob.
     pub offset: u64,
     /// Nombre d'octets à lire.
-    pub count:  u64,
+    pub count: u64,
     /// Pointeur userspace vers le buffer de destination.
-    pub buf_ptr:u64,
+    pub buf_ptr: u64,
 }
 
 const _: () = assert!(core::mem::size_of::<ReadSegment>() == 24);
@@ -374,10 +401,7 @@ pub const MAX_SCATTER_SEGMENTS: usize = 16;
 /// Retourne le nombre total d'octets lus.
 /// RECUR-01 : while.
 /// OOM-02 : try_reserve pour le buffer temporaire.
-pub fn scatter_read(
-    blob_id:  BlobId,
-    segments: &[ReadSegment],
-) -> ExofsResult<u64> {
+pub fn scatter_read(blob_id: BlobId, segments: &[ReadSegment]) -> ExofsResult<u64> {
     let n_segs = segments.len().min(MAX_SCATTER_SEGMENTS);
     let mut total: u64 = 0u64;
     let mut seg_idx = 0usize;
@@ -404,7 +428,8 @@ pub fn scatter_read(
                     seg.buf_ptr as *mut u8,
                     tmp.as_ptr(),
                     result.bytes_read,
-                ).map_err(|_| ExofsError::IoError)?;
+                )
+                .map_err(|_| ExofsError::IoError)?;
             }
             total = total.saturating_add(result.bytes_read as u64);
         }
@@ -417,7 +442,9 @@ pub fn scatter_read(
 /// ARITH-02 : checked_add, saturating_sub.
 #[inline]
 pub fn clamp_read_count(offset: u64, count: usize, blob_size: u64) -> usize {
-    if offset >= blob_size { return 0; }
+    if offset >= blob_size {
+        return 0;
+    }
     let remaining = blob_size.saturating_sub(offset);
     count.min(remaining as usize)
 }
@@ -426,8 +453,13 @@ pub fn clamp_read_count(offset: u64, count: usize, blob_size: u64) -> usize {
 /// ARITH-02 : checked_add.
 #[inline]
 pub fn is_range_valid(offset: u64, count: u64, blob_size: u64) -> bool {
-    if count == 0 { return true; }
-    offset.checked_add(count).map(|end| end <= blob_size).unwrap_or(false)
+    if count == 0 {
+        return true;
+    }
+    offset
+        .checked_add(count)
+        .map(|end| end <= blob_size)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

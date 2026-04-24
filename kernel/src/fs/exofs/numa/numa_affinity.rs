@@ -2,20 +2,20 @@
 // ExoFS NUMA — Carte d'affinité CPU↔nœud NUMA
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::scheduler::smp::topology::MAX_CPUS as SCHED_MAX_CPUS;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::scheduler::smp::topology::MAX_CPUS as SCHED_MAX_CPUS;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 pub const MAX_NUMA_NODES: usize = 8;
 /// Nombre maximum de CPUs supportés par le sous-système NUMA.
 /// Doit rester identique à `scheduler::smp::topology::MAX_CPUS`.
-pub const MAX_CPUS:       usize = SCHED_MAX_CPUS;
+pub const MAX_CPUS: usize = SCHED_MAX_CPUS;
 /// Sentinel : CPU non assigné à un nœud.
-pub const CPU_NODE_NONE:  u8    = u8::MAX;
+pub const CPU_NODE_NONE: u8 = u8::MAX;
 
 /// Assertion compile-time : cohérence avec la constante canonique scheduler.
 const _: () = assert!(
@@ -31,8 +31,12 @@ pub struct NumaNodeId(pub u8);
 
 impl NumaNodeId {
     pub const UNSET: NumaNodeId = NumaNodeId(CPU_NODE_NONE);
-    pub fn is_valid(self) -> bool { (self.0 as usize) < MAX_NUMA_NODES }
-    pub fn idx(self) -> usize { self.0 as usize }
+    pub fn is_valid(self) -> bool {
+        (self.0 as usize) < MAX_NUMA_NODES
+    }
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
 }
 
 // ─── CpuId ────────────────────────────────────────────────────────────────────
@@ -42,8 +46,12 @@ impl NumaNodeId {
 pub struct CpuId(pub u32);
 
 impl CpuId {
-    pub fn is_valid(self) -> bool { (self.0 as usize) < MAX_CPUS }
-    pub fn idx(self) -> usize { self.0 as usize }
+    pub fn is_valid(self) -> bool {
+        (self.0 as usize) < MAX_CPUS
+    }
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
 }
 
 // ─── AffinityNodeEntry ────────────────────────────────────────────────────────
@@ -55,15 +63,20 @@ pub struct AffinityNodeEntry {
     pub cpu_count: u16,
     /// Indice du premier CPU dans la liste compacte (non utilisé si cpu_count=0).
     /// Informations complementaires du nœud.
-    pub memory_mb:  u64,
-    pub active:     bool,
+    pub memory_mb: u64,
+    pub active: bool,
     /// Distance locale (self→self = 10 par convention ACPI SLIT).
     pub local_dist: u8,
 }
 
 impl AffinityNodeEntry {
     pub const fn empty() -> Self {
-        Self { cpu_count: 0, memory_mb: 0, active: false, local_dist: 10 }
+        Self {
+            cpu_count: 0,
+            memory_mb: 0,
+            active: false,
+            local_dist: 10,
+        }
     }
 }
 
@@ -83,9 +96,9 @@ struct AffinityInner {
 impl AffinityInner {
     const fn new() -> Self {
         Self {
-            cpu_nodes:    [CPU_NODE_NONE; MAX_CPUS],
-            nodes:        [AffinityNodeEntry::empty(); MAX_NUMA_NODES],
-            dist_matrix:  [[20u8; MAX_NUMA_NODES]; MAX_NUMA_NODES],
+            cpu_nodes: [CPU_NODE_NONE; MAX_CPUS],
+            nodes: [AffinityNodeEntry::empty(); MAX_NUMA_NODES],
+            dist_matrix: [[20u8; MAX_NUMA_NODES]; MAX_NUMA_NODES],
             active_nodes: 0,
         }
     }
@@ -96,7 +109,7 @@ impl AffinityInner {
 /// Registre d'affinité CPU↔nœud NUMA (tableau plat, sans BTreeMap, sans SpinLock externe).
 pub struct AffinityMap {
     inner: UnsafeCell<AffinityInner>,
-    lock:  AtomicU64,
+    lock: AtomicU64,
 }
 
 unsafe impl Sync for AffinityMap {}
@@ -106,25 +119,30 @@ impl AffinityMap {
     pub const fn new_const() -> Self {
         Self {
             inner: UnsafeCell::new(AffinityInner::new()),
-            lock:  AtomicU64::new(0),
+            lock: AtomicU64::new(0),
         }
     }
 
     fn acquire(&self) {
-        while self.lock
+        while self
+            .lock
             .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
             core::hint::spin_loop();
         }
     }
-    fn release(&self) { self.lock.store(0, Ordering::Release); }
+    fn release(&self) {
+        self.lock.store(0, Ordering::Release);
+    }
 
     // ── Enregistrement ────────────────────────────────────────────────────────
 
     /// Déclare un nœud NUMA avec sa capacité mémoire en MiB.
     pub fn register_node(&self, node: NumaNodeId, memory_mb: u64) -> ExofsResult<()> {
-        if !node.is_valid() { return Err(ExofsError::InvalidArgument); }
+        if !node.is_valid() {
+            return Err(ExofsError::InvalidArgument);
+        }
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &mut *self.inner.get() };
@@ -132,7 +150,7 @@ impl AffinityMap {
         if !entry.active {
             inner.active_nodes = inner.active_nodes.saturating_add(1);
         }
-        entry.active    = true;
+        entry.active = true;
         entry.memory_mb = memory_mb;
         // Distance locale = 10 (standard ACPI SLIT)
         inner.dist_matrix[node.idx()][node.idx()] = 10;
@@ -142,8 +160,12 @@ impl AffinityMap {
 
     /// Associe un CPU à un nœud NUMA.
     pub fn register_cpu(&self, cpu: CpuId, node: NumaNodeId) -> ExofsResult<()> {
-        if !cpu.is_valid()  { return Err(ExofsError::InvalidArgument); }
-        if !node.is_valid() { return Err(ExofsError::InvalidArgument); }
+        if !cpu.is_valid() {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if !node.is_valid() {
+            return Err(ExofsError::InvalidArgument);
+        }
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &mut *self.inner.get() };
@@ -157,14 +179,12 @@ impl AffinityMap {
         if old_node != CPU_NODE_NONE && old_node as usize != node.idx() {
             let on = old_node as usize;
             if on < MAX_NUMA_NODES {
-                inner.nodes[on].cpu_count =
-                    inner.nodes[on].cpu_count.saturating_sub(1);
+                inner.nodes[on].cpu_count = inner.nodes[on].cpu_count.saturating_sub(1);
             }
         }
         inner.cpu_nodes[cpu.idx()] = node.0;
         if old_node != node.0 {
-            inner.nodes[node.idx()].cpu_count =
-                inner.nodes[node.idx()].cpu_count.saturating_add(1);
+            inner.nodes[node.idx()].cpu_count = inner.nodes[node.idx()].cpu_count.saturating_add(1);
         }
         self.release();
         Ok(())
@@ -172,8 +192,12 @@ impl AffinityMap {
 
     /// Définit la distance entre deux nœuds (symétrique).
     pub fn set_distance(&self, a: NumaNodeId, b: NumaNodeId, dist: u8) -> ExofsResult<()> {
-        if !a.is_valid() || !b.is_valid() { return Err(ExofsError::InvalidArgument); }
-        if dist == 0 { return Err(ExofsError::InvalidArgument); }
+        if !a.is_valid() || !b.is_valid() {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if dist == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &mut *self.inner.get() };
@@ -187,18 +211,26 @@ impl AffinityMap {
 
     /// Retourne le nœud NUMA d'un CPU (ou None).
     pub fn node_of_cpu(&self, cpu: CpuId) -> Option<NumaNodeId> {
-        if !cpu.is_valid() { return None; }
+        if !cpu.is_valid() {
+            return None;
+        }
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &*self.inner.get() };
         let n = inner.cpu_nodes[cpu.idx()];
         self.release();
-        if n == CPU_NODE_NONE { None } else { Some(NumaNodeId(n)) }
+        if n == CPU_NODE_NONE {
+            None
+        } else {
+            Some(NumaNodeId(n))
+        }
     }
 
     /// Retourne le nombre de CPUs sur un nœud.
     pub fn cpu_count_of_node(&self, node: NumaNodeId) -> u16 {
-        if !node.is_valid() { return 0; }
+        if !node.is_valid() {
+            return 0;
+        }
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let c = unsafe { (*self.inner.get()).nodes[node.idx()].cpu_count };
@@ -208,17 +240,25 @@ impl AffinityMap {
 
     /// Retourne les informations d'un nœud.
     pub fn node_entry(&self, node: NumaNodeId) -> Option<AffinityNodeEntry> {
-        if !node.is_valid() { return None; }
+        if !node.is_valid() {
+            return None;
+        }
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let e = unsafe { (*self.inner.get()).nodes[node.idx()] };
         self.release();
-        if e.active { Some(e) } else { None }
+        if e.active {
+            Some(e)
+        } else {
+            None
+        }
     }
 
     /// Distance entre deux nœuds.
     pub fn distance(&self, a: NumaNodeId, b: NumaNodeId) -> u8 {
-        if !a.is_valid() || !b.is_valid() { return u8::MAX; }
+        if !a.is_valid() || !b.is_valid() {
+            return u8::MAX;
+        }
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let d = unsafe { (*self.inner.get()).dist_matrix[a.idx()][b.idx()] };
@@ -238,14 +278,18 @@ impl AffinityMap {
     /// Liste des nœuds actifs (OOM-02, RECUR-01).
     pub fn active_nodes(&self) -> ExofsResult<Vec<NumaNodeId>> {
         let mut v = Vec::new();
-        v.try_reserve(MAX_NUMA_NODES).map_err(|_| ExofsError::NoMemory)?;
+        v.try_reserve(MAX_NUMA_NODES)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &*self.inner.get() };
         let mut i = 0usize;
         while i < MAX_NUMA_NODES {
             if inner.nodes[i].active {
-                v.try_reserve(1).map_err(|_| { self.release(); ExofsError::NoMemory })?;
+                v.try_reserve(1).map_err(|_| {
+                    self.release();
+                    ExofsError::NoMemory
+                })?;
                 v.push(NumaNodeId(i as u8));
             }
             i = i.wrapping_add(1);
@@ -256,7 +300,9 @@ impl AffinityMap {
 
     /// Liste des CPU sur un nœud donné (RECUR-01 : while).
     pub fn cpus_of_node(&self, node: NumaNodeId) -> ExofsResult<Vec<CpuId>> {
-        if !node.is_valid() { return Err(ExofsError::InvalidArgument); }
+        if !node.is_valid() {
+            return Err(ExofsError::InvalidArgument);
+        }
         let mut v = Vec::new();
         v.try_reserve(64).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
@@ -265,7 +311,10 @@ impl AffinityMap {
         let mut i = 0usize;
         while i < MAX_CPUS {
             if inner.cpu_nodes[i] == node.0 {
-                v.try_reserve(1).map_err(|_| { self.release(); ExofsError::NoMemory })?;
+                v.try_reserve(1).map_err(|_| {
+                    self.release();
+                    ExofsError::NoMemory
+                })?;
                 v.push(CpuId(i as u32));
             }
             i = i.wrapping_add(1);
@@ -276,7 +325,9 @@ impl AffinityMap {
 
     /// Nœud le plus proche du nœud `from` (distance minimale parmi actifs, RECUR-01).
     pub fn nearest_node(&self, from: NumaNodeId) -> Option<NumaNodeId> {
-        if !from.is_valid() { return None; }
+        if !from.is_valid() {
+            return None;
+        }
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &*self.inner.get() };
@@ -286,7 +337,10 @@ impl AffinityMap {
         while i < MAX_NUMA_NODES {
             if i != from.idx() && inner.nodes[i].active {
                 let d = inner.dist_matrix[from.idx()][i];
-                if d < best_dist { best_dist = d; best_node = Some(NumaNodeId(i as u8)); }
+                if d < best_dist {
+                    best_dist = d;
+                    best_node = Some(NumaNodeId(i as u8));
+                }
             }
             i = i.wrapping_add(1);
         }
@@ -299,13 +353,13 @@ impl AffinityMap {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &*self.inner.get() };
-        let mut best_mb  = 0u64;
+        let mut best_mb = 0u64;
         let mut best: Option<NumaNodeId> = None;
         let mut i = 0usize;
         while i < MAX_NUMA_NODES {
             if inner.nodes[i].active && inner.nodes[i].memory_mb > best_mb {
                 best_mb = inner.nodes[i].memory_mb;
-                best    = Some(NumaNodeId(i as u8));
+                best = Some(NumaNodeId(i as u8));
             }
             i = i.wrapping_add(1);
         }
@@ -375,7 +429,9 @@ mod tests {
     #[test]
     fn test_register_cpu_invalid_cpu() {
         let m = AffinityMap::new_const();
-        assert!(m.register_cpu(CpuId(MAX_CPUS as u32), NumaNodeId(0)).is_err());
+        assert!(m
+            .register_cpu(CpuId(MAX_CPUS as u32), NumaNodeId(0))
+            .is_err());
     }
 
     #[test]

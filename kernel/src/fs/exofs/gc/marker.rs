@@ -24,7 +24,6 @@
 //   DAG-01 : pas d'import de ipc/, process/, arch/
 // ==============================================================================
 
-
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -54,21 +53,21 @@ pub const MARKER_BATCH_SIZE: usize = GC_MARK_BATCH_SIZE;
 #[derive(Debug, Default, Clone)]
 pub struct MarkingResult {
     /// Noeuds gris depiles et traites.
-    pub nodes_processed:     u64,
+    pub nodes_processed: u64,
     /// Sous-blobs grises durant cette passe.
-    pub blobs_greyed:        u64,
+    pub blobs_greyed: u64,
     /// Noeuds blackenes (marquage complet).
-    pub nodes_blackened:     u64,
+    pub nodes_blackened: u64,
     /// Noeuds sautes car EPOCH_PINNED (GC-07).
-    pub pinned_skipped:      u64,
+    pub pinned_skipped: u64,
     /// Debordements de file (GC-03).
-    pub queue_full_errors:   u64,
+    pub queue_full_errors: u64,
     /// Batches traites.
-    pub batches_processed:   u64,
+    pub batches_processed: u64,
     /// La passe est terminee (file vide).
-    pub phase_complete:      bool,
+    pub phase_complete: bool,
     /// La passe a ete interrompue (limite de batches atteinte).
-    pub interrupted:         bool,
+    pub interrupted: bool,
 }
 
 impl fmt::Display for MarkingResult {
@@ -82,7 +81,13 @@ impl fmt::Display for MarkingResult {
             self.pinned_skipped,
             self.queue_full_errors,
             self.batches_processed,
-            if self.phase_complete { "DONE" } else if self.interrupted { "INTERRUPTED" } else { "" },
+            if self.phase_complete {
+                "DONE"
+            } else if self.interrupted {
+                "INTERRUPTED"
+            } else {
+                ""
+            },
         )
     }
 }
@@ -95,9 +100,9 @@ impl fmt::Display for MarkingResult {
 #[derive(Debug, Clone)]
 pub struct MarkerConfig {
     /// Taille d'un batch de marquage.
-    pub batch_size:     usize,
+    pub batch_size: usize,
     /// Nombre maximum de batches avant interruption (GC-05 : non bloquant).
-    pub max_batches:    u64,
+    pub max_batches: u64,
     /// Activer la traversee des relations (GC-02).
     pub walk_relations: bool,
 }
@@ -105,8 +110,8 @@ pub struct MarkerConfig {
 impl Default for MarkerConfig {
     fn default() -> Self {
         Self {
-            batch_size:     MARKER_BATCH_SIZE,
-            max_batches:    MAX_MARK_BATCHES,
+            batch_size: MARKER_BATCH_SIZE,
+            max_batches: MAX_MARK_BATCHES,
             walk_relations: true,
         }
     }
@@ -119,12 +124,12 @@ impl Default for MarkerConfig {
 /// Resultat du traitement d'un seul batch.
 #[derive(Debug, Default, Clone)]
 struct BatchResult {
-    processed:   usize,
-    blackened:   usize,
-    greyed:      usize,
+    processed: usize,
+    blackened: usize,
+    greyed: usize,
     pinned_skip: usize,
-    queue_full:  usize,
-    empty:       bool, // La file etait vide avant ce batch.
+    queue_full: usize,
+    empty: bool, // La file etait vide avant ce batch.
 }
 
 // ==============================================================================
@@ -133,11 +138,11 @@ struct BatchResult {
 
 struct MarkerInner {
     /// Configuration courante.
-    config:       MarkerConfig,
+    config: MarkerConfig,
     /// Stats cumulees de toutes les passes.
     total_result: MarkingResult,
     /// Nombre de passes lancees.
-    pass_count:   u64,
+    pass_count: u64,
 }
 
 // ==============================================================================
@@ -154,19 +159,19 @@ impl Marker {
         Self {
             inner: SpinLock::new(MarkerInner {
                 config: MarkerConfig {
-                    batch_size:     MARKER_BATCH_SIZE,
-                    max_batches:    MAX_MARK_BATCHES,
+                    batch_size: MARKER_BATCH_SIZE,
+                    max_batches: MAX_MARK_BATCHES,
                     walk_relations: true,
                 },
                 total_result: MarkingResult {
-                    nodes_processed:   0,
-                    blobs_greyed:      0,
-                    nodes_blackened:   0,
-                    pinned_skipped:    0,
+                    nodes_processed: 0,
+                    blobs_greyed: 0,
+                    nodes_blackened: 0,
+                    pinned_skipped: 0,
                     queue_full_errors: 0,
                     batches_processed: 0,
-                    phase_complete:    false,
-                    interrupted:       false,
+                    phase_complete: false,
+                    interrupted: false,
                 },
                 pass_count: 0,
             }),
@@ -191,37 +196,36 @@ impl Marker {
     /// `max_batches` est atteint avant la fin.
     ///
     /// GC-07 : les blobs EPOCH_PINNED ne sont jamais grises/noircis.
-    pub fn run_mark_phase(
-        &self,
-        workspace: &mut TricolorWorkspace,
-    ) -> ExofsResult<MarkingResult> {
+    pub fn run_mark_phase(&self, workspace: &mut TricolorWorkspace) -> ExofsResult<MarkingResult> {
         let (batch_size, max_batches, walk_relations) = {
             let g = self.inner.lock();
-            (g.config.batch_size, g.config.max_batches, g.config.walk_relations)
+            (
+                g.config.batch_size,
+                g.config.max_batches,
+                g.config.walk_relations,
+            )
         };
 
         let mut result = MarkingResult::default();
 
         // RECUR-01 : boucle iterative par batches.
         for _batch_idx in 0..max_batches {
-            let batch_r = self.process_batch(
-                workspace,
-                batch_size,
-                walk_relations,
-            )?;
+            let batch_r = self.process_batch(workspace, batch_size, walk_relations)?;
 
-            result.nodes_processed = result.nodes_processed
+            result.nodes_processed = result
+                .nodes_processed
                 .saturating_add(batch_r.processed as u64);
-            result.nodes_blackened = result.nodes_blackened
+            result.nodes_blackened = result
+                .nodes_blackened
                 .saturating_add(batch_r.blackened as u64);
-            result.blobs_greyed = result.blobs_greyed
-                .saturating_add(batch_r.greyed as u64);
-            result.pinned_skipped = result.pinned_skipped
+            result.blobs_greyed = result.blobs_greyed.saturating_add(batch_r.greyed as u64);
+            result.pinned_skipped = result
+                .pinned_skipped
                 .saturating_add(batch_r.pinned_skip as u64);
-            result.queue_full_errors = result.queue_full_errors
+            result.queue_full_errors = result
+                .queue_full_errors
                 .saturating_add(batch_r.queue_full as u64);
-            result.batches_processed = result.batches_processed
-                .saturating_add(1);
+            result.batches_processed = result.batches_processed.saturating_add(1);
 
             if batch_r.empty {
                 result.phase_complete = true;
@@ -245,18 +249,12 @@ impl Marker {
             let mut g = self.inner.lock();
             g.pass_count = g.pass_count.saturating_add(1);
             let t = &mut g.total_result;
-            t.nodes_processed = t.nodes_processed
-                .saturating_add(result.nodes_processed);
-            t.nodes_blackened = t.nodes_blackened
-                .saturating_add(result.nodes_blackened);
-            t.blobs_greyed = t.blobs_greyed
-                .saturating_add(result.blobs_greyed);
-            t.pinned_skipped = t.pinned_skipped
-                .saturating_add(result.pinned_skipped);
-            t.queue_full_errors = t.queue_full_errors
-                .saturating_add(result.queue_full_errors);
-            t.batches_processed = t.batches_processed
-                .saturating_add(result.batches_processed);
+            t.nodes_processed = t.nodes_processed.saturating_add(result.nodes_processed);
+            t.nodes_blackened = t.nodes_blackened.saturating_add(result.nodes_blackened);
+            t.blobs_greyed = t.blobs_greyed.saturating_add(result.blobs_greyed);
+            t.pinned_skipped = t.pinned_skipped.saturating_add(result.pinned_skipped);
+            t.queue_full_errors = t.queue_full_errors.saturating_add(result.queue_full_errors);
+            t.batches_processed = t.batches_processed.saturating_add(result.batches_processed);
         }
 
         Ok(result)
@@ -265,15 +263,17 @@ impl Marker {
     /// Traite un batch de noeuds gris.
     fn process_batch(
         &self,
-        workspace:      &mut TricolorWorkspace,
-        batch_size:     usize,
+        workspace: &mut TricolorWorkspace,
+        batch_size: usize,
         walk_relations: bool,
     ) -> ExofsResult<BatchResult> {
         let mut br = BatchResult::default();
 
         // Collecter un batch de BlobIds gris.
         let mut batch: Vec<BlobId> = Vec::new();
-        batch.try_reserve(batch_size).map_err(|_| ExofsError::NoMemory)?;
+        batch
+            .try_reserve(batch_size)
+            .map_err(|_| ExofsError::NoMemory)?;
 
         for _ in 0..batch_size {
             match workspace.pop_grey() {
@@ -295,9 +295,7 @@ impl Marker {
             br.processed = br.processed.saturating_add(1);
 
             // Obtenir l'epoch de creation du blob pour verif pinned (GC-07).
-            let create_epoch = workspace
-                .node_epoch(&blob_id)
-                .unwrap_or(0);
+            let create_epoch = workspace.node_epoch(&blob_id).unwrap_or(0);
 
             // GC-07 : Ne pas marquer si EPOCH_PINNED est actif.
             if is_epoch_pinned(EpochId(create_epoch)) {
@@ -378,7 +376,9 @@ mod tests {
     use crate::fs::exofs::gc::tricolor::{BlobNode, TricolorWorkspace};
 
     fn bid(b: u8) -> BlobId {
-        let mut a = [0u8; 32]; a[0] = b; BlobId(a)
+        let mut a = [0u8; 32];
+        a[0] = b;
+        BlobId(a)
     }
 
     fn node(b: u8, rc: u32) -> BlobNode {
@@ -426,8 +426,8 @@ mod tests {
     fn test_mark_interrupts_on_max_batches() {
         let marker = Marker::new();
         marker.set_config(MarkerConfig {
-            batch_size:     1,
-            max_batches:    2, // Forcer interruption.
+            batch_size: 1,
+            max_batches: 2, // Forcer interruption.
             walk_relations: false,
         });
         let mut ws = TricolorWorkspace::new().unwrap();

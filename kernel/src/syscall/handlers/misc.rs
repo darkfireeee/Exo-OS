@@ -3,9 +3,8 @@
 //! RÈGLE SYS-03 : THIN WRAPPERS UNIQUEMENT.
 //! ABI-03 : INTERDIT de retourner un pointeur kernel dans rax.
 
-
+use crate::syscall::errno::{EFAULT, EINVAL, ENOSYS};
 use crate::syscall::validation::USER_ADDR_MAX;
-use crate::syscall::errno::{EFAULT, ENOSYS, EINVAL};
 
 /// `getpid()` → PID du processus courant.
 pub fn sys_getpid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
@@ -13,8 +12,12 @@ pub fn sys_getpid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
     let pid_val: u32 = unsafe {
         let ptr: u64;
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nomem, nostack));
-        if ptr == 0 { return 1; }
-        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock)).pid.0
+        if ptr == 0 {
+            return 1;
+        }
+        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock))
+            .pid
+            .0
     };
     pid_val as i64
 }
@@ -24,13 +27,17 @@ pub fn sys_getppid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
     let pid_val: u32 = unsafe {
         let ptr: u64;
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nomem, nostack));
-        if ptr == 0 { return 0; }
-        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock)).pid.0
+        if ptr == 0 {
+            return 0;
+        }
+        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock))
+            .pid
+            .0
     };
     let pid = crate::process::core::pid::Pid(pid_val);
     match crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid) {
         Some(pcb) => pcb.ppid.load(core::sync::atomic::Ordering::Acquire) as i64,
-        None      => 0,
+        None => 0,
     }
 }
 
@@ -39,7 +46,9 @@ pub fn sys_gettid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
     let tid_val: u64 = unsafe {
         let ptr: u64;
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nomem, nostack));
-        if ptr == 0 { return 1; }
+        if ptr == 0 {
+            return 1;
+        }
         (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock)).tid
     };
     tid_val as i64
@@ -72,7 +81,9 @@ pub fn sys_getegid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
 /// Remplit `struct utsname` (6 × 65 bytes = 390 bytes) :
 ///   sysname[65], nodename[65], release[65], version[65], machine[65], domainname[65]
 pub fn sys_uname(buf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    if buf_ptr == 0 || buf_ptr >= USER_ADDR_MAX { return EFAULT; }
+    if buf_ptr == 0 || buf_ptr >= USER_ADDR_MAX {
+        return EFAULT;
+    }
 
     // SAFETY: buf_ptr est une adresse userspace validée ci-dessus.
     // On écrit 390 bytes (6 × 65) : d'abord tout à zéro puis les champs.
@@ -89,19 +100,21 @@ pub fn sys_uname(buf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
             }};
         }
 
-        write_field!(  0, b"Exo-OS");        // sysname
-        write_field!( 65, b"exo-os");        // nodename
-        write_field!(130, b"1.0.0");         // release
-        write_field!(195, b"#1 SMP 2026");   // version
-        write_field!(260, b"x86_64");        // machine
-        write_field!(325, b"(none)");        // domainname
+        write_field!(0, b"Exo-OS"); // sysname
+        write_field!(65, b"exo-os"); // nodename
+        write_field!(130, b"1.0.0"); // release
+        write_field!(195, b"#1 SMP 2026"); // version
+        write_field!(260, b"x86_64"); // machine
+        write_field!(325, b"(none)"); // domainname
     }
     0
 }
 
 /// `sysinfo(info_ptr)` → 0 ou errno.
 pub fn sys_sysinfo(info_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    if info_ptr == 0 || info_ptr >= USER_ADDR_MAX { return EFAULT; }
+    if info_ptr == 0 || info_ptr >= USER_ADDR_MAX {
+        return EFAULT;
+    }
     let _ = info_ptr;
     ENOSYS
 }
@@ -144,7 +157,9 @@ pub fn sys_arch_prctl(code: u64, addr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
             0
         }
         ARCH_GET_FS | ARCH_GET_GS => {
-            if addr == 0 || addr >= USER_ADDR_MAX { return EFAULT; }
+            if addr == 0 || addr >= USER_ADDR_MAX {
+                return EFAULT;
+            }
             ENOSYS
         }
         _ => EINVAL,
@@ -153,7 +168,9 @@ pub fn sys_arch_prctl(code: u64, addr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
 
 /// `set_tid_address(tidptr)` → TID courant.
 pub fn sys_set_tid_address(tidptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    if tidptr != 0 && tidptr >= USER_ADDR_MAX { return EFAULT; }
+    if tidptr != 0 && tidptr >= USER_ADDR_MAX {
+        return EFAULT;
+    }
     sys_gettid(0, 0, 0, 0, 0, 0)
 }
 
@@ -181,6 +198,8 @@ pub fn sys_sched_yield(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
 
 /// `getcpu(cpu_ptr, node_ptr, tcache)`.
 pub fn sys_getcpu(cpu_ptr: u64, _node_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    if cpu_ptr != 0 && cpu_ptr >= USER_ADDR_MAX { return EFAULT; }
+    if cpu_ptr != 0 && cpu_ptr >= USER_ADDR_MAX {
+        return EFAULT;
+    }
     ENOSYS
 }

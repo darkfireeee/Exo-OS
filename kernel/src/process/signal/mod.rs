@@ -10,8 +10,8 @@ pub mod mask;
 pub mod queue;
 pub mod tcb;
 
-pub use default::{Signal, SigAction, SigActionKind, DEFAULT_ACTIONS};
+pub use default::{SigAction, SigActionKind, Signal, DEFAULT_ACTIONS};
 pub use delivery::{handle_pending_signals, send_signal_to_pid, send_signal_to_tcb};
-pub use handler::{setup_signal_frame, restore_signal_frame};
-pub use mask::{SigMask, SigSet, sigprocmask, reset_signals_on_exec};
-pub use queue::{SigQueue, RTSigQueue, SIGQUEUE_OVERFLOW};
+pub use handler::{restore_signal_frame, setup_signal_frame};
+pub use mask::{reset_signals_on_exec, sigprocmask, SigMask, SigSet};
+pub use queue::{RTSigQueue, SigQueue, SIGQUEUE_OVERFLOW};

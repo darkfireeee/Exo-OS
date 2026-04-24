@@ -3,15 +3,14 @@
 //! Calcul et vérification du hash Blake3 du contenu d'un objet ExoFS.
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
-use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use super::validation::{
-    exofs_err_to_errno, write_user_buf, EFAULT, EINVAL,
-    verify_cap, CapabilityType,
-};
 use super::object_fd::OBJECT_TABLE;
+use super::validation::{
+    exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT, EINVAL,
+};
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -27,10 +26,10 @@ pub const HASH_CHUNK: usize = 1024 * 1024;
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod hash_flags {
-    pub const BY_FD:        u32 = 0x0001;
-    pub const VERIFY:       u32 = 0x0002;
-    pub const INCREMENTAL:  u32 = 0x0004;
-    pub const VALID_MASK:   u32 = BY_FD | VERIFY | INCREMENTAL;
+    pub const BY_FD: u32 = 0x0001;
+    pub const VERIFY: u32 = 0x0002;
+    pub const INCREMENTAL: u32 = 0x0004;
+    pub const VALID_MASK: u32 = BY_FD | VERIFY | INCREMENTAL;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,12 +40,12 @@ pub mod hash_flags {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ContentHashResult {
     /// Hash Blake3 du contenu (32 octets).
-    pub hash:        [u8; 32],
+    pub hash: [u8; 32],
     /// Taille totale hashée.
-    pub bytes_hashed:u64,
+    pub bytes_hashed: u64,
     /// 1 si la vérification a réussi (mode VERIFY).
-    pub verified:    u32,
-    pub _pad:        u32,
+    pub verified: u32,
+    pub _pad: u32,
 }
 
 const _: () = assert!(core::mem::size_of::<ContentHashResult>() == 48);
@@ -68,7 +67,9 @@ pub fn hash_data(data: &[u8]) -> [u8; HASH_SIZE] {
 /// ARITH-02 : saturating_add, min.
 pub fn hash_range(data: &[u8], offset: usize, count: usize) -> ExofsResult<[u8; HASH_SIZE]> {
     let end = offset.saturating_add(count).min(data.len());
-    if offset > data.len() { return Err(ExofsError::OffsetOverflow); }
+    if offset > data.len() {
+        return Err(ExofsError::OffsetOverflow);
+    }
     Ok(hash_data(&data[offset..end]))
 }
 
@@ -78,7 +79,10 @@ pub fn verify_hash(data: &[u8], expected: &[u8; HASH_SIZE]) -> bool {
     let mut eq = true;
     let mut i = 0usize;
     while i < HASH_SIZE {
-        if got[i] != expected[i] { eq = false; break; }
+        if got[i] != expected[i] {
+            eq = false;
+            break;
+        }
         i = i.wrapping_add(1);
     }
     eq
@@ -89,14 +93,13 @@ pub fn verify_hash(data: &[u8], expected: &[u8; HASH_SIZE]) -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn hash_blob(blob_id: BlobId, _flags: u32) -> ExofsResult<ContentHashResult> {
-    let data = BLOB_CACHE.get(&blob_id)
-        .ok_or(ExofsError::BlobNotFound)?;
+    let data = BLOB_CACHE.get(&blob_id).ok_or(ExofsError::BlobNotFound)?;
     let h = hash_data(&data);
     Ok(ContentHashResult {
-        hash:         h,
+        hash: h,
         bytes_hashed: data.len() as u64,
-        verified:     0,
-        _pad:         0,
+        verified: 0,
+        _pad: 0,
     })
 }
 
@@ -117,22 +120,26 @@ fn hash_by_blob_id(blob_id: BlobId, flags: u32) -> ExofsResult<ContentHashResult
 /// Vérifie le contenu du fd contre un hash attendu fourni en userspace.
 fn verify_fd_hash(fd: u32, expected_ptr: u64) -> ExofsResult<ContentHashResult> {
     let entry = OBJECT_TABLE.get(fd)?;
-    let data = BLOB_CACHE.get(&entry.blob_id)
+    let data = BLOB_CACHE
+        .get(&entry.blob_id)
         .ok_or(ExofsError::BlobNotFound)?;
     let mut expected = [0u8; HASH_SIZE];
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
         let src = expected_ptr as *const u8;
         let mut i = 0usize;
-        while i < HASH_SIZE { expected[i] = *src.add(i); i = i.wrapping_add(1); }
+        while i < HASH_SIZE {
+            expected[i] = *src.add(i);
+            i = i.wrapping_add(1);
+        }
     }
     let ok = verify_hash(&data, &expected);
     let h = hash_data(&data);
     Ok(ContentHashResult {
-        hash:         h,
+        hash: h,
         bytes_hashed: data.len() as u64,
-        verified:     ok as u32,
-        _pad:         0,
+        verified: ok as u32,
+        _pad: 0,
     })
 }
 
@@ -142,16 +149,20 @@ fn verify_fd_hash(fd: u32, expected_ptr: u64) -> ExofsResult<ContentHashResult> 
 
 /// `exofs_get_content_hash(fd, out_hash_ptr, expected_ptr, flags, _, _) → 0 ou errno`
 pub fn sys_exofs_get_content_hash(
-    fd:           u64,
+    fd: u64,
     out_hash_ptr: u64,
     expected_ptr: u64,
-    flags:        u64,
-    _a5:          u64,
-    cap_rights:   u64,
+    flags: u64,
+    _a5: u64,
+    cap_rights: u64,
 ) -> i64 {
-    if out_hash_ptr == 0 { return EFAULT; }
+    if out_hash_ptr == 0 {
+        return EFAULT;
+    }
     let f = flags as u32;
-    if f & !hash_flags::VALID_MASK != 0 { return EINVAL; }
+    if f & !hash_flags::VALID_MASK != 0 {
+        return EINVAL;
+    }
 
     if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsGetContentHash) {
         return e;
@@ -159,12 +170,12 @@ pub fn sys_exofs_get_content_hash(
 
     let result = if f & hash_flags::VERIFY != 0 && expected_ptr != 0 {
         match verify_fd_hash(fd as u32, expected_ptr) {
-            Ok(r)  => r,
+            Ok(r) => r,
             Err(e) => return exofs_err_to_errno(e),
         }
     } else {
         match hash_by_fd(fd as u32, f) {
-            Ok(r)  => r,
+            Ok(r) => r,
             Err(e) => return exofs_err_to_errno(e),
         }
     };
@@ -177,7 +188,7 @@ pub fn sys_exofs_get_content_hash(
         )
     };
     match write_user_buf(out_hash_ptr, bytes) {
-        Ok(_)  => 0i64,
+        Ok(_) => 0i64,
         Err(e) => e,
     }
 }
@@ -191,7 +202,9 @@ pub fn hashes_equal(a: &[u8; HASH_SIZE], b: &[u8; HASH_SIZE]) -> bool {
     let mut i = 0usize;
     let mut eq = true;
     while i < HASH_SIZE {
-        if a[i] != b[i] { eq = false; }
+        if a[i] != b[i] {
+            eq = false;
+        }
         i = i.wrapping_add(1);
     }
     eq
@@ -202,7 +215,8 @@ pub fn hashes_equal(a: &[u8; HASH_SIZE], b: &[u8; HASH_SIZE]) -> bool {
 pub fn hash_to_hex(hash: &[u8; HASH_SIZE]) -> ExofsResult<Vec<u8>> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut buf: Vec<u8> = Vec::new();
-    buf.try_reserve(HASH_SIZE * 2).map_err(|_| ExofsError::NoMemory)?;
+    buf.try_reserve(HASH_SIZE * 2)
+        .map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < HASH_SIZE {
         let byte = hash[i];
@@ -215,7 +229,9 @@ pub fn hash_to_hex(hash: &[u8; HASH_SIZE]) -> ExofsResult<Vec<u8>> {
 
 /// Décode un hash depuis sa représentation hexadécimale (64 caractères).
 pub fn hash_from_hex(hex: &[u8]) -> ExofsResult<[u8; HASH_SIZE]> {
-    if hex.len() != HASH_SIZE * 2 { return Err(ExofsError::InvalidArgument); }
+    if hex.len() != HASH_SIZE * 2 {
+        return Err(ExofsError::InvalidArgument);
+    }
     let mut out = [0u8; HASH_SIZE];
     let mut i = 0usize;
     while i < HASH_SIZE {
@@ -232,7 +248,7 @@ fn hex_char(c: u8) -> ExofsResult<u8> {
         b'0'..=b'9' => Ok(c - b'0'),
         b'a'..=b'f' => Ok(c - b'a' + 10),
         b'A'..=b'F' => Ok(c - b'A' + 10),
-        _            => Err(ExofsError::InvalidArgument),
+        _ => Err(ExofsError::InvalidArgument),
     }
 }
 
@@ -245,17 +261,23 @@ pub fn path_hash(path: &[u8]) -> [u8; HASH_SIZE] {
 /// Retourne le hash du hash de chaque chunk combiné.
 /// RECUR-01 : while. OOM-02 : try_reserve.
 pub fn hash_incremental(data: &[u8]) -> ExofsResult<[u8; HASH_SIZE]> {
-    if data.len() <= HASH_CHUNK { return Ok(hash_data(data)); }
+    if data.len() <= HASH_CHUNK {
+        return Ok(hash_data(data));
+    }
     let chunk_count = data.len().saturating_add(HASH_CHUNK - 1) / HASH_CHUNK;
     let mut combined: Vec<u8> = Vec::new();
-    combined.try_reserve(chunk_count.saturating_mul(HASH_SIZE))
+    combined
+        .try_reserve(chunk_count.saturating_mul(HASH_SIZE))
         .map_err(|_| ExofsError::NoMemory)?;
     let mut off = 0usize;
     while off < data.len() {
         let end = off.saturating_add(HASH_CHUNK).min(data.len());
         let chunk_hash = hash_data(&data[off..end]);
         let mut i = 0usize;
-        while i < HASH_SIZE { combined.push(chunk_hash[i]); i = i.wrapping_add(1); }
+        while i < HASH_SIZE {
+            combined.push(chunk_hash[i]);
+            i = i.wrapping_add(1);
+        }
         off = end;
     }
     Ok(hash_data(&combined))
@@ -338,8 +360,10 @@ mod tests {
 
     #[test]
     fn test_hash_to_hex() {
-        let h = [0xABu8, 0xCD, 0xEF, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let h = [
+            0xABu8, 0xCD, 0xEF, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+        ];
         let hex = hash_to_hex(&h).unwrap();
         assert_eq!(&hex[..8], b"abcdef01");
     }
@@ -385,22 +409,37 @@ mod tests {
 pub fn combine_hashes(left: &[u8; HASH_SIZE], right: &[u8; HASH_SIZE]) -> [u8; HASH_SIZE] {
     let mut combined = [0u8; HASH_SIZE * 2];
     let mut i = 0usize;
-    while i < HASH_SIZE { combined[i] = left[i]; i = i.wrapping_add(1); }
+    while i < HASH_SIZE {
+        combined[i] = left[i];
+        i = i.wrapping_add(1);
+    }
     let mut j = 0usize;
-    while j < HASH_SIZE { combined[HASH_SIZE + j] = right[j]; j = j.wrapping_add(1); }
+    while j < HASH_SIZE {
+        combined[HASH_SIZE + j] = right[j];
+        j = j.wrapping_add(1);
+    }
     hash_data(&combined)
 }
 
 /// Calcule la racine d'un arbre de Merkle sur une liste de hashes feuilles.
 /// RECUR-01 : while. OOM-02 : try_reserve.
 pub fn merkle_root(leaves: &[[u8; HASH_SIZE]]) -> ExofsResult<[u8; HASH_SIZE]> {
-    if leaves.is_empty() { return Ok([0u8; HASH_SIZE]); }
-    if leaves.len() == 1 { return Ok(leaves[0]); }
+    if leaves.is_empty() {
+        return Ok([0u8; HASH_SIZE]);
+    }
+    if leaves.len() == 1 {
+        return Ok(leaves[0]);
+    }
 
     let mut current: Vec<[u8; HASH_SIZE]> = Vec::new();
-    current.try_reserve(leaves.len()).map_err(|_| ExofsError::NoMemory)?;
+    current
+        .try_reserve(leaves.len())
+        .map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
-    while i < leaves.len() { current.push(leaves[i]); i = i.wrapping_add(1); }
+    while i < leaves.len() {
+        current.push(leaves[i]);
+        i = i.wrapping_add(1);
+    }
 
     while current.len() > 1 {
         let mut next: Vec<[u8; HASH_SIZE]> = Vec::new();
@@ -425,10 +464,13 @@ pub fn merkle_root(leaves: &[[u8; HASH_SIZE]]) -> ExofsResult<[u8; HASH_SIZE]> {
 /// Découpe les données en chunks et retourne les hashes de chaque chunk.
 /// OOM-02 : try_reserve. RECUR-01 : while.
 pub fn chunk_hashes(data: &[u8], chunk_size: usize) -> ExofsResult<Vec<[u8; HASH_SIZE]>> {
-    if chunk_size == 0 { return Err(ExofsError::InvalidArgument); }
+    if chunk_size == 0 {
+        return Err(ExofsError::InvalidArgument);
+    }
     let count = data.len().saturating_add(chunk_size - 1) / chunk_size;
     let mut out: Vec<[u8; HASH_SIZE]> = Vec::new();
-    out.try_reserve(count.max(1)).map_err(|_| ExofsError::NoMemory)?;
+    out.try_reserve(count.max(1))
+        .map_err(|_| ExofsError::NoMemory)?;
     if data.is_empty() {
         out.push([0u8; HASH_SIZE]);
         return Ok(out);

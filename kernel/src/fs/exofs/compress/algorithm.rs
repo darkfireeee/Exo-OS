@@ -5,7 +5,6 @@
 //! RÈGLE ARITH-02 : arithmétique checked/saturating.
 //! RÈGLE ONDISK-03 : aucun AtomicU64 dans les types #[repr(C)].
 
-
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -16,10 +15,10 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum CompressLevel {
-    None    = 0,
-    Fast    = 1,
+    None = 0,
+    Fast = 1,
     Default = 3,
-    Best    = 6,
+    Best = 6,
     Maximum = 9,
 }
 
@@ -27,16 +26,18 @@ impl CompressLevel {
     /// Construit depuis un octet on-disk. Retourne `Default` si invalide.
     pub const fn from_u8(v: u8) -> Self {
         match v {
-            1       => Self::Fast,
-            3       => Self::Default,
-            6       => Self::Best,
+            1 => Self::Fast,
+            3 => Self::Default,
+            6 => Self::Best,
             7..=255 => Self::Maximum,
-            _       => Self::Default,
+            _ => Self::Default,
         }
     }
 
     /// Valeur numérique pour les appels de librairie embarquée.
-    pub const fn as_i32(self) -> i32 { self as i32 }
+    pub const fn as_i32(self) -> i32 {
+        self as i32
+    }
 
     /// `true` si le niveau est au moins `Default`.
     pub const fn is_at_least_default(self) -> bool {
@@ -46,10 +47,10 @@ impl CompressLevel {
     /// Retourne le niveau immédiatement supérieur (plafonné à Maximum).
     pub const fn next(self) -> Self {
         match self {
-            Self::None    => Self::Fast,
-            Self::Fast    => Self::Default,
+            Self::None => Self::Fast,
+            Self::Fast => Self::Default,
             Self::Default => Self::Best,
-            Self::Best    => Self::Maximum,
+            Self::Best => Self::Maximum,
             Self::Maximum => Self::Maximum,
         }
     }
@@ -57,10 +58,10 @@ impl CompressLevel {
     /// Retourne le niveau immédiatement inférieur (plancher à Fast).
     pub const fn prev(self) -> Self {
         match self {
-            Self::None    => Self::None,
-            Self::Fast    => Self::None,
+            Self::None => Self::None,
+            Self::Fast => Self::None,
             Self::Default => Self::Fast,
-            Self::Best    => Self::Default,
+            Self::Best => Self::Default,
             Self::Maximum => Self::Best,
         }
     }
@@ -68,10 +69,10 @@ impl CompressLevel {
     /// Nom lisible du niveau.
     pub const fn name(self) -> &'static str {
         match self {
-            Self::None    => "none",
-            Self::Fast    => "fast",
+            Self::None => "none",
+            Self::Fast => "fast",
             Self::Default => "default",
-            Self::Best    => "best",
+            Self::Best => "best",
             Self::Maximum => "maximum",
         }
     }
@@ -86,7 +87,9 @@ impl CompressLevel {
 }
 
 impl Default for CompressLevel {
-    fn default() -> Self { CompressLevel::Default }
+    fn default() -> Self {
+        CompressLevel::Default
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,11 +101,11 @@ impl Default for CompressLevel {
 #[repr(u8)]
 pub enum CompressionAlgorithm {
     /// Pas de compression.
-    None  = 0,
+    None = 0,
     /// LZ4 — rapide, faible ratio, idéal pour données chaudes.
-    Lz4   = 1,
+    Lz4 = 1,
     /// Zstd — meilleur ratio, légèrement plus lent.
-    Zstd  = 2,
+    Zstd = 2,
 }
 
 impl CompressionAlgorithm {
@@ -110,7 +113,7 @@ impl CompressionAlgorithm {
     pub const fn name(self) -> &'static str {
         match self {
             Self::None => "none",
-            Self::Lz4  => "lz4",
+            Self::Lz4 => "lz4",
             Self::Zstd => "zstd",
         }
     }
@@ -139,7 +142,7 @@ impl CompressionAlgorithm {
     pub const fn default_level(self) -> CompressLevel {
         match self {
             Self::None => CompressLevel::Default,
-            Self::Lz4  => CompressLevel::Fast,
+            Self::Lz4 => CompressLevel::Fast,
             Self::Zstd => CompressLevel::Default,
         }
     }
@@ -153,7 +156,7 @@ impl CompressionAlgorithm {
     pub const fn relative_latency(self) -> u8 {
         match self {
             Self::None => 1,
-            Self::Lz4  => 2,
+            Self::Lz4 => 2,
             Self::Zstd => 5,
         }
     }
@@ -166,14 +169,14 @@ impl CompressionAlgorithm {
     ];
 
     /// Algorithmes compressants uniquement (hors None).
-    pub const COMPRESSING: [CompressionAlgorithm; 2] = [
-        CompressionAlgorithm::Lz4,
-        CompressionAlgorithm::Zstd,
-    ];
+    pub const COMPRESSING: [CompressionAlgorithm; 2] =
+        [CompressionAlgorithm::Lz4, CompressionAlgorithm::Zstd];
 }
 
 impl Default for CompressionAlgorithm {
-    fn default() -> Self { CompressionAlgorithm::None }
+    fn default() -> Self {
+        CompressionAlgorithm::None
+    }
 }
 impl core::convert::TryFrom<u8> for CompressionAlgorithm {
     type Error = ();
@@ -216,9 +219,7 @@ pub fn compress_bound(algorithm: CompressionAlgorithm, input_len: usize) -> usiz
                 .saturating_add(margin)
                 .saturating_add(LZ4_MAX_EXPANSION_BYTES)
         }
-        CompressionAlgorithm::Zstd => {
-            input_len.saturating_add(ZSTD_COMPRESSBOUND_MARGIN)
-        }
+        CompressionAlgorithm::Zstd => input_len.saturating_add(ZSTD_COMPRESSBOUND_MARGIN),
     }
 }
 
@@ -247,12 +248,12 @@ pub fn validate_compressed_size(compressed_size: u64) -> ExofsResult<usize> {
 /// Capacités d'un algorithme de compression.
 #[derive(Debug, Clone, Copy)]
 pub struct AlgorithmCapabilities {
-    pub algorithm:       CompressionAlgorithm,
-    pub stream_support:  bool,
-    pub dict_support:    bool,
-    pub max_level:       CompressLevel,
+    pub algorithm: CompressionAlgorithm,
+    pub stream_support: bool,
+    pub dict_support: bool,
+    pub max_level: CompressLevel,
     /// Débit de compression typique en MB/s.
-    pub compress_mbps:   u32,
+    pub compress_mbps: u32,
     /// Débit de décompression typique en MB/s.
     pub decompress_mbps: u32,
 }
@@ -262,27 +263,27 @@ impl AlgorithmCapabilities {
     pub const fn for_algorithm(algo: CompressionAlgorithm) -> Self {
         match algo {
             CompressionAlgorithm::None => AlgorithmCapabilities {
-                algorithm:       CompressionAlgorithm::None,
-                stream_support:  false,
-                dict_support:    false,
-                max_level:       CompressLevel::Default,
-                compress_mbps:   10_000,
+                algorithm: CompressionAlgorithm::None,
+                stream_support: false,
+                dict_support: false,
+                max_level: CompressLevel::Default,
+                compress_mbps: 10_000,
                 decompress_mbps: 10_000,
             },
             CompressionAlgorithm::Lz4 => AlgorithmCapabilities {
-                algorithm:       CompressionAlgorithm::Lz4,
-                stream_support:  false,
-                dict_support:    false,
-                max_level:       CompressLevel::Fast,
-                compress_mbps:   600,
+                algorithm: CompressionAlgorithm::Lz4,
+                stream_support: false,
+                dict_support: false,
+                max_level: CompressLevel::Fast,
+                compress_mbps: 600,
                 decompress_mbps: 3_000,
             },
             CompressionAlgorithm::Zstd => AlgorithmCapabilities {
-                algorithm:       CompressionAlgorithm::Zstd,
-                stream_support:  false,
-                dict_support:    false,
-                max_level:       CompressLevel::Maximum,
-                compress_mbps:   400,
+                algorithm: CompressionAlgorithm::Zstd,
+                stream_support: false,
+                dict_support: false,
+                max_level: CompressLevel::Maximum,
+                compress_mbps: 400,
                 decompress_mbps: 1_500,
             },
         }
@@ -302,23 +303,32 @@ impl AlgorithmCapabilities {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompressionProfile {
     pub algorithm: CompressionAlgorithm,
-    pub level:     CompressLevel,
+    pub level: CompressLevel,
 }
 
 impl CompressionProfile {
     /// Profil par défaut : Lz4 en mode Fast.
     pub const fn default_lz4() -> Self {
-        Self { algorithm: CompressionAlgorithm::Lz4, level: CompressLevel::Fast }
+        Self {
+            algorithm: CompressionAlgorithm::Lz4,
+            level: CompressLevel::Fast,
+        }
     }
 
     /// Profil haute compression : Zstd Default.
     pub const fn high_ratio() -> Self {
-        Self { algorithm: CompressionAlgorithm::Zstd, level: CompressLevel::Default }
+        Self {
+            algorithm: CompressionAlgorithm::Zstd,
+            level: CompressLevel::Default,
+        }
     }
 
     /// Pas de compression.
     pub const fn none() -> Self {
-        Self { algorithm: CompressionAlgorithm::None, level: CompressLevel::Default }
+        Self {
+            algorithm: CompressionAlgorithm::None,
+            level: CompressLevel::Default,
+        }
     }
 
     /// Sérialise sur 2 bytes (algorithm, level).
@@ -329,13 +339,15 @@ impl CompressionProfile {
     /// Désérialise depuis 2 bytes.
     pub fn from_bytes(b: [u8; 2]) -> ExofsResult<Self> {
         let algorithm = CompressionAlgorithm::parse_on_disk(b[0])?;
-        let level     = CompressLevel::from_u8(b[1]);
+        let level = CompressLevel::from_u8(b[1]);
         Ok(Self { algorithm, level })
     }
 }
 
 impl Default for CompressionProfile {
-    fn default() -> Self { Self::default_lz4() }
+    fn default() -> Self {
+        Self::default_lz4()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -346,19 +358,34 @@ impl Default for CompressionProfile {
 mod tests {
     use super::*;
 
-    #[test] fn test_algorithm_from_u8_all() {
-        assert_eq!(CompressionAlgorithm::from_u8(0), Some(CompressionAlgorithm::None));
-        assert_eq!(CompressionAlgorithm::from_u8(1), Some(CompressionAlgorithm::Lz4));
-        assert_eq!(CompressionAlgorithm::from_u8(2), Some(CompressionAlgorithm::Zstd));
+    #[test]
+    fn test_algorithm_from_u8_all() {
+        assert_eq!(
+            CompressionAlgorithm::from_u8(0),
+            Some(CompressionAlgorithm::None)
+        );
+        assert_eq!(
+            CompressionAlgorithm::from_u8(1),
+            Some(CompressionAlgorithm::Lz4)
+        );
+        assert_eq!(
+            CompressionAlgorithm::from_u8(2),
+            Some(CompressionAlgorithm::Zstd)
+        );
         assert_eq!(CompressionAlgorithm::from_u8(3), None);
         assert_eq!(CompressionAlgorithm::from_u8(255), None);
     }
 
-    #[test] fn test_parse_on_disk_invalid_returns_not_supported() {
-        assert_eq!(CompressionAlgorithm::parse_on_disk(42), Err(ExofsError::NotSupported));
+    #[test]
+    fn test_parse_on_disk_invalid_returns_not_supported() {
+        assert_eq!(
+            CompressionAlgorithm::parse_on_disk(42),
+            Err(ExofsError::NotSupported)
+        );
     }
 
-    #[test] fn test_level_from_u8_edges() {
+    #[test]
+    fn test_level_from_u8_edges() {
         assert_eq!(CompressLevel::from_u8(1), CompressLevel::Fast);
         assert_eq!(CompressLevel::from_u8(3), CompressLevel::Default);
         assert_eq!(CompressLevel::from_u8(6), CompressLevel::Best);
@@ -366,81 +393,101 @@ mod tests {
         assert_eq!(CompressLevel::from_u8(0), CompressLevel::Default); // invalid → Default
     }
 
-    #[test] fn test_compress_bound_lz4() {
+    #[test]
+    fn test_compress_bound_lz4() {
         let n = compress_bound(CompressionAlgorithm::Lz4, 1000);
         assert!(n >= 1000 + 16);
     }
 
-    #[test] fn test_compress_bound_none_identity() {
+    #[test]
+    fn test_compress_bound_none_identity() {
         assert_eq!(compress_bound(CompressionAlgorithm::None, 500), 500);
     }
 
-    #[test] fn test_compress_bound_no_overflow() {
+    #[test]
+    fn test_compress_bound_no_overflow() {
         // saturating_add : jamais de panic même avec max usize
         let n = compress_bound(CompressionAlgorithm::Zstd, usize::MAX - 256);
         assert!(n > 0);
     }
 
-    #[test] fn test_validate_decompressed_size_ok() {
+    #[test]
+    fn test_validate_decompressed_size_ok() {
         assert!(validate_decompressed_size(1024).is_ok());
         assert_eq!(validate_decompressed_size(1024).unwrap(), 1024);
     }
 
-    #[test] fn test_validate_decompressed_size_over_limit() {
+    #[test]
+    fn test_validate_decompressed_size_over_limit() {
         let over = (MAX_DECOMPRESSED_BLOCK_SIZE + 1) as u64;
-        assert_eq!(validate_decompressed_size(over), Err(ExofsError::InvalidArgument));
+        assert_eq!(
+            validate_decompressed_size(over),
+            Err(ExofsError::InvalidArgument)
+        );
     }
 
-    #[test] fn test_validate_compressed_size_over_limit() {
+    #[test]
+    fn test_validate_compressed_size_over_limit() {
         let over = (MAX_COMPRESSED_BLOCK_SIZE + 1) as u64;
-        assert_eq!(validate_compressed_size(over), Err(ExofsError::InvalidArgument));
+        assert_eq!(
+            validate_compressed_size(over),
+            Err(ExofsError::InvalidArgument)
+        );
     }
 
-    #[test] fn test_level_next_chain() {
-        assert_eq!(CompressLevel::Fast.next(),    CompressLevel::Default);
+    #[test]
+    fn test_level_next_chain() {
+        assert_eq!(CompressLevel::Fast.next(), CompressLevel::Default);
         assert_eq!(CompressLevel::Default.next(), CompressLevel::Best);
-        assert_eq!(CompressLevel::Best.next(),    CompressLevel::Maximum);
+        assert_eq!(CompressLevel::Best.next(), CompressLevel::Maximum);
         assert_eq!(CompressLevel::Maximum.next(), CompressLevel::Maximum);
     }
 
-    #[test] fn test_level_prev_chain() {
+    #[test]
+    fn test_level_prev_chain() {
         assert_eq!(CompressLevel::Maximum.prev(), CompressLevel::Best);
-        assert_eq!(CompressLevel::Best.prev(),    CompressLevel::Default);
+        assert_eq!(CompressLevel::Best.prev(), CompressLevel::Default);
         assert_eq!(CompressLevel::Default.prev(), CompressLevel::Fast);
-        assert_eq!(CompressLevel::Fast.prev(),    CompressLevel::Fast);
+        assert_eq!(CompressLevel::Fast.prev(), CompressLevel::Fast);
     }
 
-    #[test] fn test_capabilities_lz4_decompresses_faster() {
+    #[test]
+    fn test_capabilities_lz4_decompresses_faster() {
         let caps = AlgorithmCapabilities::for_algorithm(CompressionAlgorithm::Lz4);
         assert!(caps.decompress_mbps > caps.compress_mbps);
     }
 
-    #[test] fn test_algorithm_is_compressed() {
+    #[test]
+    fn test_algorithm_is_compressed() {
         assert!(!CompressionAlgorithm::None.is_compressed());
         assert!(CompressionAlgorithm::Lz4.is_compressed());
         assert!(CompressionAlgorithm::Zstd.is_compressed());
     }
 
-    #[test] fn test_compression_profile_roundtrip() {
-        let p  = CompressionProfile::default_lz4();
-        let b  = p.to_bytes();
+    #[test]
+    fn test_compression_profile_roundtrip() {
+        let p = CompressionProfile::default_lz4();
+        let b = p.to_bytes();
         let p2 = CompressionProfile::from_bytes(b).unwrap();
         assert_eq!(p, p2);
     }
 
-    #[test] fn test_compression_profile_high_ratio() {
+    #[test]
+    fn test_compression_profile_high_ratio() {
         let p = CompressionProfile::high_ratio();
         assert_eq!(p.algorithm, CompressionAlgorithm::Zstd);
         assert_eq!(p.level, CompressLevel::Default);
     }
 
-    #[test] fn test_level_is_at_least_default() {
+    #[test]
+    fn test_level_is_at_least_default() {
         assert!(!CompressLevel::Fast.is_at_least_default());
         assert!(CompressLevel::Default.is_at_least_default());
         assert!(CompressLevel::Maximum.is_at_least_default());
     }
 
-    #[test] fn test_algorithm_supports_levels() {
+    #[test]
+    fn test_algorithm_supports_levels() {
         assert!(!CompressionAlgorithm::Lz4.supports_levels());
         assert!(CompressionAlgorithm::Zstd.supports_levels());
     }

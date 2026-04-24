@@ -7,31 +7,31 @@
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crate::memory::core::{AllocError, AllocFlags};
-use crate::memory::physical::allocator::slub::{SLUB_CACHES};
 use super::size_classes::{heap_size_class_for, HEAP_LARGE_THRESHOLD, HEAP_SIZE_CLASSES};
+use crate::memory::core::{AllocError, AllocFlags};
+use crate::memory::physical::allocator::slub::SLUB_CACHES;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATISTIQUES
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct HybridAllocStats {
-    pub small_allocs:  AtomicU64,
-    pub small_frees:   AtomicU64,
-    pub large_allocs:  AtomicU64,
-    pub large_frees:   AtomicU64,
-    pub oom_count:     AtomicU64,
+    pub small_allocs: AtomicU64,
+    pub small_frees: AtomicU64,
+    pub large_allocs: AtomicU64,
+    pub large_frees: AtomicU64,
+    pub oom_count: AtomicU64,
     pub current_inuse: AtomicU64,
 }
 
 impl HybridAllocStats {
     pub const fn new() -> Self {
         HybridAllocStats {
-            small_allocs:  AtomicU64::new(0),
-            small_frees:   AtomicU64::new(0),
-            large_allocs:  AtomicU64::new(0),
-            large_frees:   AtomicU64::new(0),
-            oom_count:     AtomicU64::new(0),
+            small_allocs: AtomicU64::new(0),
+            small_frees: AtomicU64::new(0),
+            large_allocs: AtomicU64::new(0),
+            large_frees: AtomicU64::new(0),
+            oom_count: AtomicU64::new(0),
             current_inuse: AtomicU64::new(0),
         }
     }
@@ -74,7 +74,9 @@ pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8
         match SLUB_CACHES[slab_idx].alloc(flags) {
             Ok(ptr) => {
                 HEAP_STATS.small_allocs.fetch_add(1, Ordering::Relaxed);
-                HEAP_STATS.current_inuse.fetch_add(real_size as u64, Ordering::Relaxed);
+                HEAP_STATS
+                    .current_inuse
+                    .fetch_add(real_size as u64, Ordering::Relaxed);
                 Ok(ptr)
             }
             Err(_e) => {
@@ -84,7 +86,9 @@ pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8
                 match crate::memory::heap::large::vmalloc::kalloc(real_size, flags) {
                     Ok(ptr) => {
                         HEAP_STATS.large_allocs.fetch_add(1, Ordering::Relaxed);
-                        HEAP_STATS.current_inuse.fetch_add(real_size as u64, Ordering::Relaxed);
+                        HEAP_STATS
+                            .current_inuse
+                            .fetch_add(real_size as u64, Ordering::Relaxed);
                         Ok(ptr)
                     }
                     Err(e2) => {
@@ -99,7 +103,9 @@ pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8
         match crate::memory::heap::large::vmalloc::kalloc(real_size, flags) {
             Ok(ptr) => {
                 HEAP_STATS.large_allocs.fetch_add(1, Ordering::Relaxed);
-                HEAP_STATS.current_inuse.fetch_add(real_size as u64, Ordering::Relaxed);
+                HEAP_STATS
+                    .current_inuse
+                    .fetch_add(real_size as u64, Ordering::Relaxed);
                 Ok(ptr)
             }
             Err(e) => {
@@ -122,24 +128,30 @@ pub unsafe fn free(ptr: NonNull<u8>, size: usize) {
     if let Some(usable) = crate::memory::heap::large::vmalloc::kalloc_usable_size(ptr) {
         crate::memory::heap::large::vmalloc::kfree(ptr, usable);
         HEAP_STATS.large_frees.fetch_add(1, Ordering::Relaxed);
-        HEAP_STATS.current_inuse.fetch_sub(usable as u64, Ordering::Relaxed);
+        HEAP_STATS
+            .current_inuse
+            .fetch_sub(usable as u64, Ordering::Relaxed);
         return;
     }
 
     if real_size <= HEAP_LARGE_THRESHOLD {
         let sc_entry = match heap_size_class_for(real_size) {
             Some(i) => i,
-            None    => return,
+            None => return,
         };
         let slab_idx = HEAP_SIZE_CLASSES[sc_entry].slab_idx;
         SLUB_CACHES[slab_idx].free(ptr);
         HEAP_STATS.small_frees.fetch_add(1, Ordering::Relaxed);
         // Décrémenter de façon simple; la stat peut brièvement sous-estimer sous
         // contention mais jamais provoquer de comportement incorrect.
-        HEAP_STATS.current_inuse.fetch_sub(real_size as u64, Ordering::Relaxed);
+        HEAP_STATS
+            .current_inuse
+            .fetch_sub(real_size as u64, Ordering::Relaxed);
     } else {
         crate::memory::heap::large::vmalloc::kfree(ptr, real_size);
         HEAP_STATS.large_frees.fetch_add(1, Ordering::Relaxed);
-        HEAP_STATS.current_inuse.fetch_sub(real_size as u64, Ordering::Relaxed);
+        HEAP_STATS
+            .current_inuse
+            .fetch_sub(real_size as u64, Ordering::Relaxed);
     }
 }

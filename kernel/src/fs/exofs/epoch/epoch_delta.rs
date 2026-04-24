@@ -18,11 +18,10 @@ use core::fmt;
 
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, EpochId, DiskOffset, ObjectId, BlobId,
-    EPOCH_MAX_OBJECTS,
-};
 use crate::fs::exofs::core::flags::ObjectFlags;
+use crate::fs::exofs::core::{
+    BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId, EPOCH_MAX_OBJECTS,
+};
 
 // =============================================================================
 // DeltaOpKind — type de mutation
@@ -33,15 +32,15 @@ use crate::fs::exofs::core::flags::ObjectFlags;
 #[repr(u8)]
 pub enum DeltaOpKind {
     /// Création d'un nouvel objet.
-    Create           = 0,
+    Create = 0,
     /// Nouvelle version d'un objet Class2 (CoW).
-    CowWrite         = 1,
+    CowWrite = 1,
     /// Mise à jour des métadonnées uniquement (droits, flags...).
-    MetaUpdate       = 2,
+    MetaUpdate = 2,
     /// Alias de déduplication (pointe sur un blob existant).
-    DedupAlias       = 3,
+    DedupAlias = 3,
     /// Suppression logique définitive.
-    Delete           = 4,
+    Delete = 4,
 }
 
 impl DeltaOpKind {
@@ -61,11 +60,11 @@ impl DeltaOpKind {
 impl fmt::Display for DeltaOpKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Create     => write!(f, "CREATE"),
-            Self::CowWrite   => write!(f, "COW"),
+            Self::Create => write!(f, "CREATE"),
+            Self::CowWrite => write!(f, "COW"),
             Self::MetaUpdate => write!(f, "META"),
             Self::DedupAlias => write!(f, "DEDUP"),
-            Self::Delete     => write!(f, "DELETE"),
+            Self::Delete => write!(f, "DELETE"),
         }
     }
 }
@@ -78,33 +77,33 @@ impl fmt::Display for DeltaOpKind {
 #[derive(Clone, Debug)]
 pub struct DeltaEntry {
     /// ObjectId affecté.
-    pub object_id:    ObjectId,
+    pub object_id: ObjectId,
     /// Type d'opération.
-    pub op:           DeltaOpKind,
+    pub op: DeltaOpKind,
     /// Offset disque de la nouvelle version (0 si Delete).
-    pub disk_offset:  DiskOffset,
+    pub disk_offset: DiskOffset,
     /// BlobId si l'objet a un contenu (None si Delete ou MetaUpdate).
-    pub blob_id:      Option<BlobId>,
+    pub blob_id: Option<BlobId>,
     /// Flags de l'objet après cette opération.
-    pub flags:        ObjectFlags,
+    pub flags: ObjectFlags,
     /// Taille en octets du blob (0 si Delete ou MetaUpdate).
-    pub size_bytes:   u64,
+    pub size_bytes: u64,
 }
 
 impl DeltaEntry {
     /// Crée une entrée Create.
     pub fn new_create(
-        object_id:   ObjectId,
+        object_id: ObjectId,
         disk_offset: DiskOffset,
-        blob_id:     BlobId,
-        flags:       ObjectFlags,
-        size_bytes:  u64,
+        blob_id: BlobId,
+        flags: ObjectFlags,
+        size_bytes: u64,
     ) -> Self {
         Self {
             object_id,
-            op:          DeltaOpKind::Create,
+            op: DeltaOpKind::Create,
             disk_offset,
-            blob_id:     Some(blob_id),
+            blob_id: Some(blob_id),
             flags,
             size_bytes,
         }
@@ -114,44 +113,41 @@ impl DeltaEntry {
     pub fn new_delete(object_id: ObjectId) -> Self {
         Self {
             object_id,
-            op:          DeltaOpKind::Delete,
+            op: DeltaOpKind::Delete,
             disk_offset: DiskOffset(0),
-            blob_id:     None,
-            flags:       ObjectFlags::default(),
-            size_bytes:  0,
+            blob_id: None,
+            flags: ObjectFlags::default(),
+            size_bytes: 0,
         }
     }
 
     /// Crée une entrée CowWrite.
     pub fn new_cow_write(
-        object_id:   ObjectId,
+        object_id: ObjectId,
         disk_offset: DiskOffset,
-        blob_id:     BlobId,
-        flags:       ObjectFlags,
-        size_bytes:  u64,
+        blob_id: BlobId,
+        flags: ObjectFlags,
+        size_bytes: u64,
     ) -> Self {
         Self {
             object_id,
-            op:          DeltaOpKind::CowWrite,
+            op: DeltaOpKind::CowWrite,
             disk_offset,
-            blob_id:     Some(blob_id),
+            blob_id: Some(blob_id),
             flags,
             size_bytes,
         }
     }
 
     /// Crée une entrée MetaUpdate.
-    pub fn new_meta_update(
-        object_id: ObjectId,
-        flags:     ObjectFlags,
-    ) -> Self {
+    pub fn new_meta_update(object_id: ObjectId, flags: ObjectFlags) -> Self {
         Self {
             object_id,
-            op:          DeltaOpKind::MetaUpdate,
+            op: DeltaOpKind::MetaUpdate,
             disk_offset: DiskOffset(0),
-            blob_id:     None,
+            blob_id: None,
             flags,
-            size_bytes:  0,
+            size_bytes: 0,
         }
     }
 }
@@ -161,11 +157,7 @@ impl fmt::Display for DeltaEntry {
         write!(
             f,
             "DeltaEntry{{ op={} oid={:02x}{:02x}... offset={} size={} }}",
-            self.op,
-            self.object_id.0[0],
-            self.object_id.0[1],
-            self.disk_offset.0,
-            self.size_bytes,
+            self.op, self.object_id.0[0], self.object_id.0[1], self.disk_offset.0, self.size_bytes,
         )
     }
 }
@@ -192,9 +184,9 @@ pub enum DeltaSortOrder {
 /// Accumulateur de mutations pour l'epoch courant.
 pub struct EpochDelta {
     /// Epoch auquel appartient ce delta.
-    pub epoch_id:    EpochId,
+    pub epoch_id: EpochId,
     /// Liste ordonnée des entrées.
-    pub entries:     Vec<DeltaEntry>,
+    pub entries: Vec<DeltaEntry>,
     /// Vrai si au moins une suppression a été enregistrée.
     pub has_deletes: bool,
     /// Vrai si on a des créations.
@@ -208,7 +200,7 @@ impl EpochDelta {
     pub fn new(epoch_id: EpochId) -> Self {
         Self {
             epoch_id,
-            entries:     Vec::new(),
+            entries: Vec::new(),
             has_deletes: false,
             has_creates: false,
             total_bytes: 0,
@@ -225,10 +217,16 @@ impl EpochDelta {
         if self.entries.len() >= EPOCH_MAX_OBJECTS {
             return Err(ExofsError::EpochFull);
         }
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         match entry.op {
-            DeltaOpKind::Delete => { self.has_deletes = true; }
-            DeltaOpKind::Create => { self.has_creates = true; }
+            DeltaOpKind::Delete => {
+                self.has_deletes = true;
+            }
+            DeltaOpKind::Create => {
+                self.has_creates = true;
+            }
             _ => {}
         }
         self.total_bytes = self.total_bytes.saturating_add(entry.size_bytes);
@@ -241,18 +239,26 @@ impl EpochDelta {
     /// RÈGLE OOM-02 : try_reserve(other.len()) avant merge.
     /// Retourne Err(EpochFull) si le résultat dépasserait EPOCH_MAX_OBJECTS.
     pub fn merge_from(&mut self, other: &EpochDelta) -> ExofsResult<()> {
-        let new_len = self.entries.len().checked_add(other.entries.len())
+        let new_len = self
+            .entries
+            .len()
+            .checked_add(other.entries.len())
             .ok_or(ExofsError::OffsetOverflow)?;
         if new_len > EPOCH_MAX_OBJECTS {
             return Err(ExofsError::EpochFull);
         }
-        self.entries.try_reserve(other.entries.len())
+        self.entries
+            .try_reserve(other.entries.len())
             .map_err(|_| ExofsError::NoMemory)?;
         // RÈGLE RECUR-01 : itération itérative.
         for entry in &other.entries {
             match entry.op {
-                DeltaOpKind::Delete => { self.has_deletes = true; }
-                DeltaOpKind::Create => { self.has_creates = true; }
+                DeltaOpKind::Delete => {
+                    self.has_deletes = true;
+                }
+                DeltaOpKind::Create => {
+                    self.has_creates = true;
+                }
                 _ => {}
             }
             self.total_bytes = self.total_bytes.saturating_add(entry.size_bytes);
@@ -306,11 +312,11 @@ impl EpochDelta {
         let mut c = DeltaOpCounts::default();
         for entry in &self.entries {
             match entry.op {
-                DeltaOpKind::Create     => c.creates   += 1,
-                DeltaOpKind::CowWrite   => c.cow_writes += 1,
+                DeltaOpKind::Create => c.creates += 1,
+                DeltaOpKind::CowWrite => c.cow_writes += 1,
                 DeltaOpKind::MetaUpdate => c.meta_updates += 1,
                 DeltaOpKind::DedupAlias => c.dedup_aliases += 1,
-                DeltaOpKind::Delete     => c.deletes    += 1,
+                DeltaOpKind::Delete => c.deletes += 1,
             }
         }
         c
@@ -324,7 +330,8 @@ impl EpochDelta {
     pub fn sort_by(&mut self, order: DeltaSortOrder) {
         match order {
             DeltaSortOrder::ByObjectId => {
-                self.entries.sort_unstable_by(|a, b| a.object_id.0.cmp(&b.object_id.0));
+                self.entries
+                    .sort_unstable_by(|a, b| a.object_id.0.cmp(&b.object_id.0));
             }
             DeltaSortOrder::ByOpKind => {
                 self.entries.sort_unstable_by_key(|e| e.op);
@@ -347,12 +354,18 @@ impl EpochDelta {
         }
         let tail = self.entries.split_off(max_entries);
         let mut other = EpochDelta::new(self.epoch_id);
-        other.entries.try_reserve(tail.len())
+        other
+            .entries
+            .try_reserve(tail.len())
             .map_err(|_| ExofsError::NoMemory)?;
         for entry in tail {
             match entry.op {
-                DeltaOpKind::Delete => { other.has_deletes = true; }
-                DeltaOpKind::Create => { other.has_creates = true; }
+                DeltaOpKind::Delete => {
+                    other.has_deletes = true;
+                }
+                DeltaOpKind::Create => {
+                    other.has_creates = true;
+                }
                 _ => {}
             }
             other.total_bytes = other.total_bytes.saturating_add(entry.size_bytes);
@@ -361,7 +374,10 @@ impl EpochDelta {
         // Recalcule les flags du self tronqué.
         self.has_deletes = self.entries.iter().any(|e| e.op.is_delete());
         self.has_creates = self.entries.iter().any(|e| e.op == DeltaOpKind::Create);
-        self.total_bytes = self.entries.iter().fold(0u64, |acc, e| acc.saturating_add(e.size_bytes));
+        self.total_bytes = self
+            .entries
+            .iter()
+            .fold(0u64, |acc, e| acc.saturating_add(e.size_bytes));
         Ok(Some(other))
     }
 
@@ -386,11 +402,11 @@ impl EpochDelta {
     /// Retourne les statistiques du delta.
     pub fn stats(&self) -> DeltaStats {
         DeltaStats {
-            epoch_id:    self.epoch_id,
+            epoch_id: self.epoch_id,
             entry_count: self.entries.len() as u64,
             total_bytes: self.total_bytes,
-            ops:         self.count_by_kind(),
-            fill_pct:    (self.entries.len() as u64)
+            ops: self.count_by_kind(),
+            fill_pct: (self.entries.len() as u64)
                 .saturating_mul(100)
                 .checked_div(EPOCH_MAX_OBJECTS as u64)
                 .unwrap_or(0),
@@ -431,11 +447,11 @@ impl EpochDelta {
 /// Compteurs des opérations du delta par type.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct DeltaOpCounts {
-    pub creates:      usize,
-    pub cow_writes:   usize,
+    pub creates: usize,
+    pub cow_writes: usize,
     pub meta_updates: usize,
     pub dedup_aliases: usize,
-    pub deletes:      usize,
+    pub deletes: usize,
 }
 
 impl DeltaOpCounts {
@@ -455,8 +471,7 @@ impl fmt::Display for DeltaOpCounts {
         write!(
             f,
             "ops[create={} cow={} meta={} dedup={} del={}]",
-            self.creates, self.cow_writes, self.meta_updates,
-            self.dedup_aliases, self.deletes,
+            self.creates, self.cow_writes, self.meta_updates, self.dedup_aliases, self.deletes,
         )
     }
 }
@@ -468,12 +483,12 @@ impl fmt::Display for DeltaOpCounts {
 /// Statistiques d'un delta (snapshot non-atomique pour diagnostic).
 #[derive(Clone, Debug)]
 pub struct DeltaStats {
-    pub epoch_id:    EpochId,
+    pub epoch_id: EpochId,
     pub entry_count: u64,
     pub total_bytes: u64,
-    pub ops:         DeltaOpCounts,
+    pub ops: DeltaOpCounts,
     /// Remplissage en pourcents (0..100).
-    pub fill_pct:    u64,
+    pub fill_pct: u64,
 }
 
 impl fmt::Display for DeltaStats {
@@ -481,13 +496,7 @@ impl fmt::Display for DeltaStats {
         write!(
             f,
             "DeltaStats{{ epoch={} entries={} bytes={} fill={}% {} }}",
-            self.epoch_id.0,
-            self.entry_count,
-            self.total_bytes,
-            self.fill_pct,
-            self.ops,
+            self.epoch_id.0, self.entry_count, self.total_bytes, self.fill_pct, self.ops,
         )
     }
 }
-
-

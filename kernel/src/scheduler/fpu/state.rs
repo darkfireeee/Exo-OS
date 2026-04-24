@@ -58,7 +58,7 @@ pub fn detect_xsave_size() {
                 out_ebx = lateout(reg) cpuid_ebx,
             );
             let _ = cpuid_eax; // EAX ignoré, seul EBX nous intéresse.
-            // ebx = taille minimale de la zone XCSR pour sauvegarder tous les composants actifs.
+                               // ebx = taille minimale de la zone XCSR pour sauvegarder tous les composants actifs.
             if cpuid_ebx >= 512 {
                 size = (cpuid_ebx as usize).min(FPU_STATE_MAX_SIZE);
             } else {
@@ -90,7 +90,7 @@ pub struct FpuState {
     /// Taille réellement utilisée (copie de XSAVE_AREA_SIZE au moment de l'alloc).
     pub active_size: usize,
     /// Numéro de génération pour détecter les sauvegardes obsolètes (debug).
-    pub generation:  u64,
+    pub generation: u64,
 }
 
 impl FpuState {
@@ -100,14 +100,14 @@ impl FpuState {
         // Initialisation FXSAVE par défaut :
         // FCW = 0x037F (masque toutes les exceptions FP sauf invalide)
         // MXCSR = 0x1F80 (mode arrondi = round-to-nearest, flush-to-zero off)
-        data[0] = 0x7F;  // FCW low
-        data[1] = 0x03;  // FCW high
+        data[0] = 0x7F; // FCW low
+        data[1] = 0x03; // FCW high
         data[24] = 0x80; // MXCSR low  : 0x1F80
         data[25] = 0x1F; // MXCSR high
         Self {
             data,
             active_size: FXSAVE_SIZE,
-            generation:  0,
+            generation: 0,
         }
     }
 

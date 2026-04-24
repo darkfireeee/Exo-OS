@@ -7,13 +7,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::{
-    VirtAddr, PhysAddr, Frame, PageFlags, AllocError, PAGE_SIZE,
-    layout::VMALLOC_BASE,
-};
-use crate::memory::virt::page_table::{
-    PageTableWalker, FrameAllocatorForWalk,
+    layout::VMALLOC_BASE, AllocError, Frame, PageFlags, PhysAddr, VirtAddr, PAGE_SIZE,
 };
 use crate::memory::virt::address_space::tlb::flush_single;
+use crate::memory::virt::page_table::{FrameAllocatorForWalk, PageTableWalker};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ESPACE D'ADRESSAGE KERNEL
@@ -25,25 +22,25 @@ use crate::memory::virt::address_space::tlb::flush_single;
 /// Thread-safe via des spinlocks séparés pour la partie vmalloc et la partie
 /// physmap (les deux sont les plus sollicitées concurrentiellement).
 pub struct KernelAddressSpace {
-    inner:       Mutex<KernelAsInner>,
+    inner: Mutex<KernelAsInner>,
     initialized: AtomicBool,
-    pml4_phys:   PhysAddr,
+    pml4_phys: PhysAddr,
 }
 
 struct KernelAsInner {
     /// Pointeur de bump pour les allocations vmalloc.
     vmalloc_ptr: VirtAddr,
     /// Statistiques.
-    stats:       KernelAsStats,
+    stats: KernelAsStats,
 }
 
 #[allow(dead_code)]
 #[derive(Default)]
 struct KernelAsStats {
     vmalloc_allocs: u64,
-    vmalloc_frees:  u64,
-    map_calls:      u64,
-    unmap_calls:    u64,
+    vmalloc_frees: u64,
+    map_calls: u64,
+    unmap_calls: u64,
 }
 
 // SAFETY: KernelAddressSpace est thread-safe via son Mutex interne et des
@@ -56,15 +53,15 @@ impl KernelAddressSpace {
         KernelAddressSpace {
             inner: Mutex::new(KernelAsInner {
                 vmalloc_ptr: VMALLOC_BASE,
-                stats:       KernelAsStats {
+                stats: KernelAsStats {
                     vmalloc_allocs: 0,
-                    vmalloc_frees:  0,
-                    map_calls:      0,
-                    unmap_calls:    0,
+                    vmalloc_frees: 0,
+                    map_calls: 0,
+                    unmap_calls: 0,
                 },
             }),
             initialized: AtomicBool::new(false),
-            pml4_phys:   PhysAddr::NULL,
+            pml4_phys: PhysAddr::NULL,
         }
     }
 
@@ -80,14 +77,16 @@ impl KernelAddressSpace {
     }
 
     /// Adresse physique de la PML4 kernel.
-    pub fn pml4_phys(&self) -> PhysAddr { self.pml4_phys }
+    pub fn pml4_phys(&self) -> PhysAddr {
+        self.pml4_phys
+    }
 
     /// Mappe `frame` → `virt` avec les flags donnés dans l'espace kernel.
     ///
     /// SAFETY: `virt` doit être dans la moitié haute (>= 0xFFFF800000000000).
     pub unsafe fn map<A: FrameAllocatorForWalk>(
         &self,
-        virt:  VirtAddr,
+        virt: VirtAddr,
         frame: Frame,
         flags: PageFlags,
         alloc: &A,
@@ -120,12 +119,12 @@ impl KernelAddressSpace {
     pub unsafe fn vmalloc<A: FrameAllocatorForWalk>(
         &self,
         frames: &[Frame],
-        flags:  PageFlags,
-        alloc:  &A,
+        flags: PageFlags,
+        alloc: &A,
     ) -> Result<VirtAddr, AllocError> {
         let mut inner = self.inner.lock();
         let start = inner.vmalloc_ptr;
-        let end   = VirtAddr::new(start.as_u64() + (frames.len() * PAGE_SIZE) as u64);
+        let end = VirtAddr::new(start.as_u64() + (frames.len() * PAGE_SIZE) as u64);
         // Vérifier que la plage est dans l'espace vmalloc
         if end.as_u64() > crate::memory::core::layout::MODULES_BASE.as_u64() {
             return Err(AllocError::OutOfMemory);

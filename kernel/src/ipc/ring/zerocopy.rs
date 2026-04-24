@@ -23,10 +23,9 @@
 //   • La page est immutable côté consommateur (R/O mapping).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 pub use crate::ipc::core::transfer::ZeroCopyRef;
-use crate::ipc::core::{IpcError, array_index_nospec};
+use crate::ipc::core::{array_index_nospec, IpcError};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ZeroCopyBuffer — buffer SHM avec compteur de références
@@ -39,13 +38,13 @@ pub struct ZeroCopyBuffer {
     /// Adresse physique du début des données (alignée sur PAGE_SIZE).
     pub phys_addr: u64,
     /// Taille totale du buffer en bytes.
-    pub capacity:  u32,
+    pub capacity: u32,
     /// Nombre de bytes écrits (longueur utile).
-    pub length:    AtomicU32,
+    pub length: AtomicU32,
     /// Compteur de références : 1 = producteur seul, 2 = prod + cons, 0 = libre.
-    pub refcount:  AtomicU32,
+    pub refcount: AtomicU32,
     /// Index dans le pool SHM (pour libération).
-    pub pool_idx:  u32,
+    pub pool_idx: u32,
     /// Génération du slot (détecte les réutilisations UAF).
     pub generation: AtomicU64,
 }
@@ -69,8 +68,8 @@ impl ZeroCopyBuffer {
         Self {
             phys_addr,
             capacity,
-            length:     AtomicU32::new(0),
-            refcount:   AtomicU32::new(1), // commence à 1 (producteur)
+            length: AtomicU32::new(0),
+            refcount: AtomicU32::new(1), // commence à 1 (producteur)
             pool_idx,
             generation: AtomicU64::new(1),
         }
@@ -120,15 +119,19 @@ const ZC_RING_MASK: usize = ZC_RING_SIZE - 1;
 #[repr(C, align(32))]
 struct ZcSlot {
     seq: AtomicU64,
-    zc:  ZeroCopyRef,
+    zc: ZeroCopyRef,
     _pad: [u8; 4],
 }
 
 impl ZcSlot {
     const fn zeroed() -> Self {
         Self {
-            seq:  AtomicU64::new(0),
-            zc:   ZeroCopyRef { phys_addr: 0, length: 0, pool_idx: 0 },
+            seq: AtomicU64::new(0),
+            zc: ZeroCopyRef {
+                phys_addr: 0,
+                length: 0,
+                pool_idx: 0,
+            },
             _pad: [0u8; 4],
         }
     }
@@ -141,9 +144,9 @@ const _: () = assert!(
 
 /// Ring SPSC pour les échanges zero-copy.
 pub struct ZeroCopyRing {
-    head:  AtomicU64,
+    head: AtomicU64,
     _pad1: [u8; 56],
-    tail:  AtomicU64,
+    tail: AtomicU64,
     _pad2: [u8; 56],
     slots: [ZcSlot; ZC_RING_SIZE],
 }
@@ -157,9 +160,9 @@ impl ZeroCopyRing {
     pub const fn new() -> Self {
         const ZERO_SLOT: ZcSlot = ZcSlot::zeroed();
         Self {
-            head:  AtomicU64::new(0),
+            head: AtomicU64::new(0),
             _pad1: [0u8; 56],
-            tail:  AtomicU64::new(0),
+            tail: AtomicU64::new(0),
             _pad2: [0u8; 56],
             slots: [ZERO_SLOT; ZC_RING_SIZE],
         }
@@ -193,10 +196,7 @@ impl ZeroCopyRing {
         unsafe {
             let safe_idx = array_index_nospec((pos as usize) & ZC_RING_MASK, ZC_RING_SIZE);
             let s = core::ptr::addr_of!(self.slots[safe_idx]);
-            core::ptr::write(
-                core::ptr::addr_of!((*s).zc) as *mut ZeroCopyRef,
-                zc,
-            );
+            core::ptr::write(core::ptr::addr_of!((*s).zc) as *mut ZeroCopyRef, zc);
         }
         slot.seq.store(pos + 1, Ordering::Release);
         self.head.store(pos + 1, Ordering::Relaxed);
@@ -205,7 +205,7 @@ impl ZeroCopyRing {
 
     /// Reçoit une référence zero-copy.
     pub fn pop(&self) -> Result<ZeroCopyRef, IpcError> {
-        let pos  = self.tail.load(Ordering::Relaxed);
+        let pos = self.tail.load(Ordering::Relaxed);
         let slot = self.slot_at(pos);
         if slot.seq.load(Ordering::Acquire) != pos + 1 {
             return Err(IpcError::WouldBlock);
@@ -223,7 +223,7 @@ impl ZeroCopyRing {
     /// Retourne vrai si le ring est vide.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        let pos  = self.tail.load(Ordering::Relaxed);
+        let pos = self.tail.load(Ordering::Relaxed);
         self.slot_at(pos).seq.load(Ordering::Relaxed) != pos + 1
     }
 }

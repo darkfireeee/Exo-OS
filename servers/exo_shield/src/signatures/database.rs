@@ -25,9 +25,9 @@ pub const PATTERN_SIZE: usize = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum Severity {
-    Low      = 0,
-    Medium   = 1,
-    High     = 2,
+    Low = 0,
+    Medium = 1,
+    High = 2,
     Critical = 3,
 }
 
@@ -48,9 +48,9 @@ impl Severity {
 
     pub fn weight(self) -> u32 {
         match self {
-            Severity::Low      => 1,
-            Severity::Medium   => 5,
-            Severity::High     => 15,
+            Severity::Low => 1,
+            Severity::Medium => 5,
+            Severity::High => 15,
             Severity::Critical => 50,
         }
     }
@@ -62,16 +62,16 @@ impl Severity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum Category {
-    Malware     = 0,
-    Exploit     = 1,
-    Backdoor    = 2,
-    Ransomware  = 3,
-    Spyware     = 4,
-    Rootkit     = 5,
-    Network     = 6,
-    Filesystem  = 7,
-    Memory      = 8,
-    Custom      = 9,
+    Malware = 0,
+    Exploit = 1,
+    Backdoor = 2,
+    Ransomware = 3,
+    Spyware = 4,
+    Rootkit = 5,
+    Network = 6,
+    Filesystem = 7,
+    Memory = 8,
+    Custom = 9,
 }
 
 impl Category {
@@ -279,7 +279,13 @@ pub fn add_signature(pattern: &[u8], severity: Severity, category: Category) -> 
 ///
 /// # Retour
 /// - L'ID si succès, 0 si échec.
-pub fn add_signature_with_id(id: u32, pattern: &[u8], severity: Severity, category: Category, enabled: bool) -> u32 {
+pub fn add_signature_with_id(
+    id: u32,
+    pattern: &[u8],
+    severity: Severity,
+    category: Category,
+    enabled: bool,
+) -> u32 {
     if id == 0 || pattern.is_empty() || pattern.len() > PATTERN_SIZE {
         return 0;
     }
@@ -316,7 +322,10 @@ pub fn add_signature_with_id(id: u32, pattern: &[u8], severity: Severity, catego
     loop {
         let current = NEXT_SIG_ID.load(Ordering::Acquire);
         if id >= current {
-            if NEXT_SIG_ID.compare_exchange(current, id + 1, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            if NEXT_SIG_ID
+                .compare_exchange(current, id + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
                 break;
             }
         } else {

@@ -3,31 +3,29 @@
 // Copy-on-Write des VMAs — gestion du bris de CoW et de l'héritage au fork.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::memory::core::{
-    Frame, PageFlags, AllocError, PAGE_SIZE,
-};
-use crate::memory::physical::frame::ref_count::{AtomicRefCount, RefCountDecResult};
 use super::descriptor::{VmaDescriptor, VmaFlags};
+use crate::memory::core::{AllocError, Frame, PageFlags, PAGE_SIZE};
+use crate::memory::physical::frame::ref_count::{AtomicRefCount, RefCountDecResult};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATISTIQUES COW
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct CowStats {
-    pub breaks:       AtomicU64,
+    pub breaks: AtomicU64,
     pub shared_pages: AtomicU64,
-    pub zero_pages:   AtomicU64,
-    pub fork_copies:  AtomicU64,
+    pub zero_pages: AtomicU64,
+    pub fork_copies: AtomicU64,
 }
 
 impl CowStats {
     pub const fn new() -> Self {
         CowStats {
-            breaks:       AtomicU64::new(0),
+            breaks: AtomicU64::new(0),
             shared_pages: AtomicU64::new(0),
-            zero_pages:   AtomicU64::new(0),
-            fork_copies:  AtomicU64::new(0),
+            zero_pages: AtomicU64::new(0),
+            fork_copies: AtomicU64::new(0),
         }
     }
 }
@@ -40,8 +38,8 @@ pub static COW_STATS: CowStats = CowStats::new();
 
 /// Trait permettant au module CoW d'allouer/libérer des frames.
 pub trait CowFrameAllocator: Sync {
-    fn alloc_zeroed(&self)     -> Result<Frame, AllocError>;
-    fn alloc_nonzeroed(&self)  -> Result<Frame, AllocError>;
+    fn alloc_zeroed(&self) -> Result<Frame, AllocError>;
+    fn alloc_nonzeroed(&self) -> Result<Frame, AllocError>;
     fn free_frame(&self, f: Frame);
 }
 
@@ -68,8 +66,8 @@ pub enum CowBreakResult {
 ///         libération concurrente. Le TLB doit être invalidé par l'appelant.
 pub unsafe fn cow_break<A: CowFrameAllocator>(
     old_frame: Frame,
-    refcount:  &AtomicRefCount,
-    alloc:     &A,
+    refcount: &AtomicRefCount,
+    alloc: &A,
 ) -> CowBreakResult {
     // Tenter de décrémenter : si refcount passe à 1, le frame devient exclusif.
     match refcount.dec() {
@@ -81,7 +79,7 @@ pub unsafe fn cow_break<A: CowFrameAllocator>(
         RefCountDecResult::StillShared => {
             // Shared : allouer un nouveau frame et copier le contenu.
             let new_frame = match alloc.alloc_nonzeroed() {
-                Ok(f)  => f,
+                Ok(f) => f,
                 Err(e) => {
                     // Remettre le refcount à son état précédent.
                     refcount.inc();
@@ -90,9 +88,9 @@ pub unsafe fn cow_break<A: CowFrameAllocator>(
             };
             // Copier le contenu de l'ancien frame vers le nouveau.
             let src = (crate::memory::core::layout::PHYS_MAP_BASE.as_u64()
-                       + old_frame.start_address().as_u64()) as *const u8;
+                + old_frame.start_address().as_u64()) as *const u8;
             let dst = (crate::memory::core::layout::PHYS_MAP_BASE.as_u64()
-                       + new_frame.start_address().as_u64()) as *mut u8;
+                + new_frame.start_address().as_u64()) as *mut u8;
             // SAFETY: src et dst sont des plages physiques valides mappées
             //         dans le physmap. Taille = PAGE_SIZE octets.
             core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE);
@@ -106,7 +104,7 @@ pub unsafe fn cow_break<A: CowFrameAllocator>(
             //  mais on le gère pour la robustesse.)
             alloc.free_frame(old_frame);
             match alloc.alloc_zeroed() {
-                Ok(f)  => {
+                Ok(f) => {
                     COW_STATS.zero_pages.fetch_add(1, Ordering::Relaxed);
                     CowBreakResult::ZeroPage(f)
                 }
@@ -131,8 +129,10 @@ pub fn mark_vma_cow(vma: &mut VmaDescriptor) {
     // qui est appellé par le gestionnaire de fault. Ici on marque uniquement
     // les flags du descripteur — le walk de table sera fait par address_space::fork().
     if vma.flags.contains(VmaFlags::WRITE) && !vma.flags.contains(VmaFlags::SHARED) {
-        vma.flags    |= VmaFlags::COW;
+        vma.flags |= VmaFlags::COW;
         vma.page_flags = vma.page_flags & !PageFlags::WRITABLE | PageFlags::COW;
     }
-    COW_STATS.shared_pages.fetch_add(vma.n_pages() as u64, Ordering::Relaxed);
+    COW_STATS
+        .shared_pages
+        .fetch_add(vma.n_pages() as u64, Ordering::Relaxed);
 }

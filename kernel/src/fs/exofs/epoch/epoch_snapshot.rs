@@ -24,10 +24,8 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, EpochId, ObjectId,
-};
-use crate::fs::exofs::epoch::epoch_pin::{EpochPin, PinReason, oldest_pinned_epoch};
+use crate::fs::exofs::core::{EpochId, ExofsError, ExofsResult, ObjectId};
+use crate::fs::exofs::epoch::epoch_pin::{oldest_pinned_epoch, EpochPin, PinReason};
 use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
 use crate::scheduler::sync::spinlock::SpinLock;
 
@@ -40,9 +38,9 @@ pub const RIGHT_SNAPSHOT_CREATE: u64 = 1 << 0;
 /// Bit droit : suppression de snapshot autorisée.
 pub const RIGHT_SNAPSHOT_DELETE: u64 = 1 << 1;
 /// Bit droit : listage des snapshots autorisé.
-pub const RIGHT_SNAPSHOT_LIST:   u64 = 1 << 2;
+pub const RIGHT_SNAPSHOT_LIST: u64 = 1 << 2;
 /// Bit droit : lecture depuis un snapshot autorisée.
-pub const RIGHT_SNAPSHOT_READ:   u64 = 1 << 3;
+pub const RIGHT_SNAPSHOT_READ: u64 = 1 << 3;
 
 /// Vérifie si le bitmask de droits autorise la création de snapshot.
 #[inline]
@@ -106,7 +104,11 @@ impl fmt::Debug for SnapshotName {
         // Affiche la partie ASCII valide ou les octets bruts si non-ASCII.
         let bytes = self.as_bytes();
         if core::str::from_utf8(bytes).is_ok() {
-            write!(f, "SnapshotName({:?})", core::str::from_utf8(bytes).unwrap_or("?"))
+            write!(
+                f,
+                "SnapshotName({:?})",
+                core::str::from_utf8(bytes).unwrap_or("?")
+            )
         } else {
             write!(f, "SnapshotName({:?})", bytes)
         }
@@ -117,7 +119,7 @@ impl fmt::Display for SnapshotName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let bytes = self.as_bytes();
         match core::str::from_utf8(bytes) {
-            Ok(s)  => write!(f, "{}", s),
+            Ok(s) => write!(f, "{}", s),
             Err(_) => write!(f, "<non-utf8 name>"),
         }
     }
@@ -130,20 +132,20 @@ impl fmt::Display for SnapshotName {
 /// Métadonnées in-memory d'un snapshot.
 pub struct SnapshotDescriptor {
     /// SnapshotId unique (alloué par le registre).
-    pub snapshot_id:    u64,
+    pub snapshot_id: u64,
     /// Epoch épinglé par ce snapshot.
-    pub epoch_id:       EpochId,
+    pub epoch_id: EpochId,
     /// Nom du snapshot (max 64 octets).
-    pub name:           SnapshotName,
+    pub name: SnapshotName,
     /// Timestamp de création (TSC cycles).
-    pub created_at:     u64,
+    pub created_at: u64,
     /// Timestamp d'expiration (0 = pas d'expiration).
-    pub expires_at:     u64,
+    pub expires_at: u64,
     /// ObjectId de l'objet racine snapshotté.
     pub root_object_id: ObjectId,
     /// Pin RAII — maintient l'epoch vivant tant que le snapshot existe.
     #[allow(dead_code)]
-    pin:                EpochPin,
+    pin: EpochPin,
 }
 
 impl SnapshotDescriptor {
@@ -188,9 +190,9 @@ pub const MAX_SNAPSHOTS: usize = 64;
 /// État interne du registre de snapshots.
 struct SnapshotRegistryInner {
     /// Liste des snapshots actifs.
-    snapshots:    Vec<SnapshotDescriptor>,
+    snapshots: Vec<SnapshotDescriptor>,
     /// Compteur d'allocation d'IDs (jamais réutilisé).
-    next_id:      u64,
+    next_id: u64,
     /// Nombre total de snapshots créés (statistique).
     total_created: u64,
     /// Nombre total de snapshots supprimés (statistique).
@@ -200,8 +202,8 @@ struct SnapshotRegistryInner {
 impl SnapshotRegistryInner {
     const fn new_uninit() -> Self {
         Self {
-            snapshots:     Vec::new(),
-            next_id:       1,
+            snapshots: Vec::new(),
+            next_id: 1,
             total_created: 0,
             total_deleted: 0,
         }
@@ -237,12 +239,12 @@ impl SnapshotRegistry {
     /// - `Err(ExofsError::QuotaExceeded)` : MAX_SNAPSHOTS atteint.
     pub fn create(
         &self,
-        rights_bits:    u64,
-        epoch_id:       EpochId,
+        rights_bits: u64,
+        epoch_id: EpochId,
         root_object_id: ObjectId,
-        name:           &[u8],
-        timestamp:      u64,
-        expires_at:     u64,
+        name: &[u8],
+        timestamp: u64,
+        expires_at: u64,
     ) -> ExofsResult<u64> {
         if !has_snapshot_create(rights_bits) {
             return Err(ExofsError::PermissionDenied);
@@ -259,12 +261,8 @@ impl SnapshotRegistry {
         inner.next_id = inner.next_id.saturating_add(1);
 
         // Crée le pin RAII (propriétaire = snapshot_id tronqué sur 32 bits).
-        let pin = EpochPin::acquire_with_reason(
-            epoch_id,
-            snapshot_id as u32,
-            PinReason::Snapshot,
-            0,
-        )?;
+        let pin =
+            EpochPin::acquire_with_reason(epoch_id, snapshot_id as u32, PinReason::Snapshot, 0)?;
 
         // Pré-réserve pour éviter panic OOM (OOM-02).
         inner
@@ -275,8 +273,8 @@ impl SnapshotRegistry {
         inner.snapshots.push(SnapshotDescriptor {
             snapshot_id,
             epoch_id,
-            name:           SnapshotName::from_bytes(name),
-            created_at:     timestamp,
+            name: SnapshotName::from_bytes(name),
+            created_at: timestamp,
             expires_at,
             root_object_id,
             pin,
@@ -388,10 +386,10 @@ impl SnapshotRegistry {
     pub fn stats(&self) -> SnapshotRegistryStats {
         let inner = self.inner.lock();
         SnapshotRegistryStats {
-            active_count:   inner.snapshots.len() as u32,
-            total_created:  inner.total_created,
-            total_deleted:  inner.total_deleted,
-            oldest_epoch:   oldest_pinned_epoch(),
+            active_count: inner.snapshots.len() as u32,
+            total_created: inner.total_created,
+            total_deleted: inner.total_deleted,
+            oldest_epoch: oldest_pinned_epoch(),
         }
     }
 
@@ -425,13 +423,13 @@ pub static SNAPSHOT_REGISTRY: SnapshotRegistry = SnapshotRegistry::new();
 #[derive(Debug, Copy, Clone)]
 pub struct SnapshotRegistryStats {
     /// Nombre de snapshots actuellement actifs.
-    pub active_count:  u32,
+    pub active_count: u32,
     /// Total des snapshots créés depuis le démarrage.
     pub total_created: u64,
     /// Total des snapshots supprimés (ou expirés) depuis le démarrage.
     pub total_deleted: u64,
     /// Epoch le plus ancien épinglé par un snapshot (None si aucun).
-    pub oldest_epoch:  Option<EpochId>,
+    pub oldest_epoch: Option<EpochId>,
 }
 
 impl fmt::Display for SnapshotRegistryStats {
@@ -455,23 +453,23 @@ impl fmt::Display for SnapshotRegistryStats {
 ///
 /// Voir `SnapshotRegistry::create` pour la documentation complète.
 pub fn create_snapshot(
-    rights_bits:    u64,
-    epoch_id:       EpochId,
+    rights_bits: u64,
+    epoch_id: EpochId,
     root_object_id: ObjectId,
-    name:           &[u8],
-    timestamp:      u64,
+    name: &[u8],
+    timestamp: u64,
 ) -> ExofsResult<u64> {
     SNAPSHOT_REGISTRY.create(rights_bits, epoch_id, root_object_id, name, timestamp, 0)
 }
 
 /// Crée un snapshot avec expiration dans le registre global.
 pub fn create_snapshot_with_expiry(
-    rights_bits:    u64,
-    epoch_id:       EpochId,
+    rights_bits: u64,
+    epoch_id: EpochId,
     root_object_id: ObjectId,
-    name:           &[u8],
-    timestamp:      u64,
-    expires_at:     u64,
+    name: &[u8],
+    timestamp: u64,
+    expires_at: u64,
 ) -> ExofsResult<u64> {
     SNAPSHOT_REGISTRY.create(
         rights_bits,

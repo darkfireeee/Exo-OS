@@ -23,7 +23,9 @@ fn parse_hash32_hex(var_name: &str) -> [u8; 32] {
     println!("cargo:rerun-if-env-changed={var_name}");
 
     let Ok(raw) = std::env::var(var_name) else {
-        println!("cargo:warning={var_name} non défini — fallback hash nul (mode dégradé ExoPhoenix)");
+        println!(
+            "cargo:warning={var_name} non défini — fallback hash nul (mode dégradé ExoPhoenix)"
+        );
         return [0u8; 32];
     };
 
@@ -42,7 +44,9 @@ fn parse_hash32_hex(var_name: &str) -> [u8; 32] {
         let hi = hex_nibble(bytes[i * 2]);
         let lo = hex_nibble(bytes[i * 2 + 1]);
         let (Some(hi), Some(lo)) = (hi, lo) else {
-            println!("cargo:warning={var_name} contient des caractères non-hex — fallback hash nul");
+            println!(
+                "cargo:warning={var_name} contient des caractères non-hex — fallback hash nul"
+            );
             return [0u8; 32];
         };
         out[i] = (hi << 4) | lo;

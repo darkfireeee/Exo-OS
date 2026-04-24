@@ -8,14 +8,13 @@
 //   DAG-01  : pas d'import storage/, ipc/, process/, arch/
 //   LOCK-04 : SpinLock léger — pas d'I/O dans la section critique
 
-
-use core::fmt;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::fmt;
 
-use crate::fs::exofs::core::{ObjectId, ExofsResult};
-use crate::fs::exofs::objects::logical_object::LogicalObjectRef;
+use crate::fs::exofs::core::{ExofsResult, ObjectId};
 use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
+use crate::fs::exofs::objects::logical_object::LogicalObjectRef;
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ── Constantes ──────────────────────────────────────────────────────────────────
@@ -34,13 +33,13 @@ pub const OBJECT_CACHE_EVICT_BATCH: usize = 64;
 /// Entrée du cache avec métadonnées LRU.
 struct CacheEntry {
     /// Référence à l'objet.
-    obj:         LogicalObjectRef,
+    obj: LogicalObjectRef,
     /// Epoch du dernier accès (approximatif, pas un vrai timestamp).
     access_epoch: u64,
     /// Nombre d'accès depuis le dernier éviction.
     access_count: u32,
     /// Si vrai : pinned, jamais évincer.
-    pinned:       bool,
+    pinned: bool,
 }
 
 impl CacheEntry {
@@ -49,7 +48,7 @@ impl CacheEntry {
             obj,
             access_epoch: epoch,
             access_count: 1,
-            pinned:       false,
+            pinned: false,
         }
     }
 
@@ -63,22 +62,22 @@ impl CacheEntry {
 
 struct ObjectCacheInner {
     /// Entrées indexées par ObjectId.0 ([u8;32]).
-    map:      BTreeMap<[u8; 32], CacheEntry>,
+    map: BTreeMap<[u8; 32], CacheEntry>,
     /// Capacité maximale.
     capacity: usize,
     /// Compteur d'epoch logique (incrémenté à chaque accès).
-    epoch:    u64,
+    epoch: u64,
     /// Statistiques internes.
-    stats:    ObjectCacheStats,
+    stats: ObjectCacheStats,
 }
 
 impl ObjectCacheInner {
     fn new(capacity: usize) -> Self {
         Self {
-            map:      BTreeMap::new(),
+            map: BTreeMap::new(),
             capacity: capacity.max(1),
-            epoch:    0,
-            stats:    ObjectCacheStats::new(),
+            epoch: 0,
+            stats: ObjectCacheStats::new(),
         }
     }
 
@@ -141,8 +140,7 @@ impl ObjectCacheInner {
     ///
     /// RECUR-01 : itératif, pas récursif.
     fn evict_batch(&mut self) {
-        let threshold_pct =
-            (self.capacity * OBJECT_CACHE_EVICT_THRESHOLD) / 100;
+        let threshold_pct = (self.capacity * OBJECT_CACHE_EVICT_THRESHOLD) / 100;
         if self.map.len() < threshold_pct {
             return;
         }
@@ -226,11 +224,7 @@ impl ObjectCache {
     /// Retourne un objet existant, ou l'insère si absent (get-or-insert).
     ///
     /// L'objet est construit par `factory()` seulement si nécessaire.
-    pub fn get_or_insert<F>(
-        &self,
-        id:      &ObjectId,
-        factory: F,
-    ) -> ExofsResult<LogicalObjectRef>
+    pub fn get_or_insert<F>(&self, id: &ObjectId, factory: F) -> ExofsResult<LogicalObjectRef>
     where
         F: FnOnce() -> ExofsResult<LogicalObjectRef>,
     {
@@ -331,15 +325,17 @@ impl ObjectCache {
 /// Statistiques du cache d'objets.
 #[derive(Default, Debug, Clone)]
 pub struct ObjectCacheStats {
-    pub hits:       u64,
-    pub misses:     u64,
-    pub inserts:    u64,
-    pub updates:    u64,
-    pub evictions:  u64,
+    pub hits: u64,
+    pub misses: u64,
+    pub inserts: u64,
+    pub updates: u64,
+    pub evictions: u64,
 }
 
 impl ObjectCacheStats {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Ratio de succès de cache ×100 (100 = 100% de hits).
     pub fn hit_ratio_x100(&self) -> u64 {
@@ -357,8 +353,12 @@ impl fmt::Display for ObjectCacheStats {
             f,
             "ObjectCacheStats {{ hits: {}, misses: {}, inserts: {}, \
              updates: {}, evictions: {}, hit_ratio: {}% }}",
-            self.hits, self.misses, self.inserts, self.updates,
-            self.evictions, self.hit_ratio_x100(),
+            self.hits,
+            self.misses,
+            self.inserts,
+            self.updates,
+            self.evictions,
+            self.hit_ratio_x100(),
         )
     }
 }
@@ -368,30 +368,32 @@ impl fmt::Display for ObjectCacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::exofs::objects::logical_object::{
+        LogicalObject, LogicalObjectDisk, LOGICAL_OBJECT_VERSION,
+    };
     use alloc::sync::Arc;
-    use crate::fs::exofs::objects::logical_object::{LogicalObject, LogicalObjectDisk, LOGICAL_OBJECT_VERSION};
 
     fn make_obj(id_byte: u8) -> (ObjectId, LogicalObjectRef) {
         let mut d = LogicalObjectDisk {
-            object_id:    [id_byte; 32],
-            blob_id:      [0u8; 32],
+            object_id: [id_byte; 32],
+            blob_id: [0u8; 32],
             epoch_create: 1,
             epoch_modify: 1,
-            blob_offset:  0,
-            data_size:    0,
-            flags:        0,
-            kind:         0,
-            class:        1,
-            ref_count:    1,
-            mode:         0o644,
-            uid:          0,
-            gid:          0,
-            version:      LOGICAL_OBJECT_VERSION,
-            _pad0:        [0; 3],
-            generation:   0,
-            _pad1:        [0; 64],
-            checksum:     [0; 32],
-            _pad2:        [0; 32],
+            blob_offset: 0,
+            data_size: 0,
+            flags: 0,
+            kind: 0,
+            class: 1,
+            ref_count: 1,
+            mode: 0o644,
+            uid: 0,
+            gid: 0,
+            version: LOGICAL_OBJECT_VERSION,
+            _pad0: [0; 3],
+            generation: 0,
+            _pad1: [0; 64],
+            checksum: [0; 32],
+            _pad2: [0; 32],
         };
         d.checksum = d.compute_checksum();
         let obj = LogicalObject::from_disk(&d).unwrap();

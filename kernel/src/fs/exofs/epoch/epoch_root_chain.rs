@@ -22,15 +22,11 @@ use core::mem::size_of;
 
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, EpochId, DiskOffset,
-    EPOCH_ROOT_MAGIC,
-};
-use crate::fs::exofs::epoch::epoch_root::{
-    EpochRootInMemory, EpochRootEntry, EpochRootPageHeader,
-    verify_epoch_root_page,
-};
+use crate::fs::exofs::core::{DiskOffset, EpochId, ExofsError, ExofsResult, EPOCH_ROOT_MAGIC};
 use crate::fs::exofs::epoch::epoch_checksum::seal_epoch_root_page;
+use crate::fs::exofs::epoch::epoch_root::{
+    verify_epoch_root_page, EpochRootEntry, EpochRootInMemory, EpochRootPageHeader,
+};
 use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
 
 // =============================================================================
@@ -44,8 +40,7 @@ pub const EPOCH_ROOT_PAGE_SIZE: usize = 4096;
 const OVERHEAD: usize = size_of::<EpochRootPageHeader>() + 32;
 
 /// Nombre maximum d'EpochRootEntry par page.
-pub const ENTRIES_PER_PAGE: usize =
-    (EPOCH_ROOT_PAGE_SIZE - OVERHEAD) / size_of::<EpochRootEntry>();
+pub const ENTRIES_PER_PAGE: usize = (EPOCH_ROOT_PAGE_SIZE - OVERHEAD) / size_of::<EpochRootEntry>();
 
 /// Offset du checksum dans une page (les 32 derniers octets).
 const CHECKSUM_OFFSET: usize = EPOCH_ROOT_PAGE_SIZE - 32;
@@ -58,15 +53,15 @@ const CHECKSUM_OFFSET: usize = EPOCH_ROOT_PAGE_SIZE - 32;
 #[derive(Copy, Clone, Debug)]
 pub struct PageStats {
     /// Index de cette page dans la chaîne.
-    pub page_index:     u32,
+    pub page_index: u32,
     /// Nombre d'entrées dans cette page.
-    pub entry_count:    u32,
+    pub entry_count: u32,
     /// Offset disque de cette page (0 si non encore alloué).
-    pub disk_offset:    DiskOffset,
+    pub disk_offset: DiskOffset,
     /// Vrai si c'est la dernière page de la chaîne (next_page == 0).
-    pub is_last:        bool,
+    pub is_last: bool,
     /// Taille utilisée (header + entries) en octets.
-    pub used_bytes:     usize,
+    pub used_bytes: usize,
 }
 
 // =============================================================================
@@ -76,13 +71,13 @@ pub struct PageStats {
 /// Statistiques de la chaîne de pages EpochRoot.
 #[derive(Clone, Debug)]
 pub struct ChainStats {
-    pub epoch_id:      EpochId,
-    pub page_count:    u32,
+    pub epoch_id: EpochId,
+    pub page_count: u32,
     pub total_entries: u32,
-    pub empty_pages:   u32,
-    pub full_pages:    u32,
+    pub empty_pages: u32,
+    pub full_pages: u32,
     pub partial_pages: u32,
-    pub total_bytes:   usize,
+    pub total_bytes: usize,
 }
 
 impl fmt::Display for ChainStats {
@@ -90,10 +85,7 @@ impl fmt::Display for ChainStats {
         write!(
             f,
             "ChainStats{{ epoch={} pages={} entries={} bytes={} }}",
-            self.epoch_id.0,
-            self.page_count,
-            self.total_entries,
-            self.total_bytes,
+            self.epoch_id.0, self.page_count, self.total_entries, self.total_bytes,
         )
     }
 }
@@ -129,20 +121,23 @@ pub fn count_pages_needed(total_entries: usize) -> usize {
 /// RÈGLE RECUR-01 : boucle itérative.
 pub fn serialize_epoch_root_chain(root: &EpochRootInMemory) -> ExofsResult<Vec<Vec<u8>>> {
     let total_modified = root.modified_objects.len();
-    let total_entries  = root.total_entries();
-    let page_count     = count_pages_needed(total_entries);
-    let flags_raw      = root.flags.0;
+    let total_entries = root.total_entries();
+    let page_count = count_pages_needed(total_entries);
+    let flags_raw = root.flags.0;
 
     let mut pages: Vec<Vec<u8>> = Vec::new();
-    pages.try_reserve(page_count).map_err(|_| ExofsError::NoMemory)?;
+    pages
+        .try_reserve(page_count)
+        .map_err(|_| ExofsError::NoMemory)?;
 
     for page_idx in 0..page_count {
         let mut page: Vec<u8> = Vec::new();
-        page.try_reserve(EPOCH_ROOT_PAGE_SIZE).map_err(|_| ExofsError::NoMemory)?;
+        page.try_reserve(EPOCH_ROOT_PAGE_SIZE)
+            .map_err(|_| ExofsError::NoMemory)?;
         page.resize(EPOCH_ROOT_PAGE_SIZE, 0u8);
 
         let entry_start = page_idx * ENTRIES_PER_PAGE;
-        let entry_end   = (entry_start.saturating_add(ENTRIES_PER_PAGE)).min(total_entries);
+        let entry_end = (entry_start.saturating_add(ENTRIES_PER_PAGE)).min(total_entries);
         let page_entry_count = entry_end.saturating_sub(entry_start);
 
         // Placeholder pour next_page : l'appelant le remplaçe après allocation.
@@ -153,22 +148,21 @@ pub fn serialize_epoch_root_chain(root: &EpochRootInMemory) -> ExofsResult<Vec<V
         };
 
         let hdr = EpochRootPageHeader {
-            magic:       EPOCH_ROOT_MAGIC,
-            version:     1,
-            flags:       flags_raw,
-            epoch_id:    root.epoch_id.0,
+            magic: EPOCH_ROOT_MAGIC,
+            version: 1,
+            flags: flags_raw,
+            epoch_id: root.epoch_id.0,
             entry_count: page_entry_count as u32,
-            page_index:  page_idx as u32,
+            page_index: page_idx as u32,
             next_page,
-            checksum:    [0u8; 32],
+            checksum: [0u8; 32],
         };
 
         // Sérialiser l'en-tête.
         let hdr_size = size_of::<EpochRootPageHeader>();
         // SAFETY: EpochRootPageHeader est #[repr(C, packed)], Copy, 64 octets.
-        let hdr_bytes = unsafe {
-            core::slice::from_raw_parts(&hdr as *const _ as *const u8, hdr_size)
-        };
+        let hdr_bytes =
+            unsafe { core::slice::from_raw_parts(&hdr as *const _ as *const u8, hdr_size) };
         page[..hdr_size].copy_from_slice(hdr_bytes);
 
         // Sérialiser les entrées de cette page.
@@ -182,9 +176,8 @@ pub fn serialize_epoch_root_chain(root: &EpochRootInMemory) -> ExofsResult<Vec<V
             };
             if let Some(e) = entry {
                 // SAFETY: EpochRootEntry est #[repr(C, packed)], Copy, 48 octets.
-                let bytes = unsafe {
-                    core::slice::from_raw_parts(e as *const _ as *const u8, entry_size)
-                };
+                let bytes =
+                    unsafe { core::slice::from_raw_parts(e as *const _ as *const u8, entry_size) };
                 if offset + entry_size <= CHECKSUM_OFFSET {
                     page[offset..offset + entry_size].copy_from_slice(bytes);
                 }
@@ -222,7 +215,7 @@ pub const EPOCH_CHAIN_NEXT_PLACEHOLDER: u64 = 0xDEAD_BEEF_DEAD_BEEF;
 /// RÈGLE CHAIN-01 : next_page est inclus dans le checksum → scellement re-nécessaire.
 /// RÈGLE ARITH-02 : bornes vérifiées avant tout accès.
 pub fn rebuild_chain_offsets(
-    pages:        &mut [Vec<u8>],
+    pages: &mut [Vec<u8>],
     disk_offsets: &[DiskOffset],
 ) -> ExofsResult<()> {
     if pages.len() != disk_offsets.len() {
@@ -262,9 +255,11 @@ pub fn rebuild_chain_offsets(
 pub fn deserialize_epoch_root_chain(pages: &[Vec<u8>]) -> ExofsResult<Vec<EpochRootEntry>> {
     let capacity = pages.len() * ENTRIES_PER_PAGE;
     let mut result: Vec<EpochRootEntry> = Vec::new();
-    result.try_reserve(capacity).map_err(|_| ExofsError::NoMemory)?;
+    result
+        .try_reserve(capacity)
+        .map_err(|_| ExofsError::NoMemory)?;
 
-    let hdr_size   = size_of::<EpochRootPageHeader>();
+    let hdr_size = size_of::<EpochRootPageHeader>();
     let entry_size = size_of::<EpochRootEntry>();
 
     // RÈGLE RECUR-01 : boucle itérative.
@@ -278,21 +273,19 @@ pub fn deserialize_epoch_root_chain(pages: &[Vec<u8>]) -> ExofsResult<Vec<EpochR
 
         // Lecture de l'en-tête.
         // SAFETY: page.as_ptr est aligné, hdr_size = 64, EpochRootPageHeader #[repr(C, packed)].
-        let hdr: EpochRootPageHeader = unsafe {
-            core::ptr::read_unaligned(page.as_ptr() as *const EpochRootPageHeader)
-        };
+        let hdr: EpochRootPageHeader =
+            unsafe { core::ptr::read_unaligned(page.as_ptr() as *const EpochRootPageHeader) };
 
         let entry_count = hdr.entry_count as usize;
-        let max_entries = page.len()
-            .saturating_sub(hdr_size)
-            .saturating_sub(32)
-            / entry_size;
+        let max_entries = page.len().saturating_sub(hdr_size).saturating_sub(32) / entry_size;
 
         if entry_count > max_entries {
             return Err(ExofsError::CorruptedStructure);
         }
 
-        result.try_reserve(entry_count).map_err(|_| ExofsError::NoMemory)?;
+        result
+            .try_reserve(entry_count)
+            .map_err(|_| ExofsError::NoMemory)?;
 
         let mut offset = hdr_size;
         for _ in 0..entry_count {
@@ -344,13 +337,14 @@ pub fn validate_chain_integrity(pages: &[Vec<u8>]) -> ExofsResult<ChainStats> {
             return Err(ExofsError::CorruptedStructure);
         }
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let hdr: EpochRootPageHeader = unsafe {
-            core::ptr::read_unaligned(page.as_ptr() as *const EpochRootPageHeader)
-        };
+        let hdr: EpochRootPageHeader =
+            unsafe { core::ptr::read_unaligned(page.as_ptr() as *const EpochRootPageHeader) };
         // Vérifie l'epoch_id cohérent.
         match first_epoch_id {
-            None       => { first_epoch_id = Some(hdr.epoch_id); }
-            Some(eid)  => {
+            None => {
+                first_epoch_id = Some(hdr.epoch_id);
+            }
+            Some(eid) => {
                 if hdr.epoch_id != eid {
                     return Err(ExofsError::CorruptedStructure);
                 }
@@ -366,17 +360,17 @@ pub fn validate_chain_integrity(pages: &[Vec<u8>]) -> ExofsResult<ChainStats> {
         }
         let cnt = hdr.entry_count as usize;
         total_entries = total_entries.saturating_add(cnt as u32);
-        total_bytes   = total_bytes.saturating_add(hdr_size + cnt * size_of::<EpochRootEntry>() + 32);
+        total_bytes = total_bytes.saturating_add(hdr_size + cnt * size_of::<EpochRootEntry>() + 32);
         match cnt {
-            0               => empty_pages   += 1,
-            c if c >= ENTRIES_PER_PAGE => full_pages    += 1,
-            _               => partial_pages += 1,
+            0 => empty_pages += 1,
+            c if c >= ENTRIES_PER_PAGE => full_pages += 1,
+            _ => partial_pages += 1,
         }
     }
 
     Ok(ChainStats {
-        epoch_id:      EpochId(first_epoch_id.unwrap_or(0)),
-        page_count:    pages.len() as u32,
+        epoch_id: EpochId(first_epoch_id.unwrap_or(0)),
+        page_count: pages.len() as u32,
         total_entries,
         empty_pages,
         full_pages,
@@ -384,4 +378,3 @@ pub fn validate_chain_integrity(pages: &[Vec<u8>]) -> ExofsResult<ChainStats> {
         total_bytes,
     })
 }
-

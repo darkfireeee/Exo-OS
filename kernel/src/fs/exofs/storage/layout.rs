@@ -19,7 +19,7 @@
 //
 // Taille minimale d'un volume ExoFS valide : 2 MB (contrainte hard codée).
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
+use crate::fs::exofs::core::{DiskOffset, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes du layout
@@ -38,28 +38,28 @@ pub const SB_PRIMARY_OFFSET: u64 = 0;
 pub const SUPERBLOCK_SIZE: u64 = 4096;
 
 /// Offset du Slot Epoch A.
-pub const EPOCH_SLOT_A_OFFSET: u64 = 4 * 1024;       // 4 KB
+pub const EPOCH_SLOT_A_OFFSET: u64 = 4 * 1024; // 4 KB
 
 /// Offset du Slot Epoch B.
-pub const EPOCH_SLOT_B_OFFSET: u64 = 8 * 1024;       // 8 KB
+pub const EPOCH_SLOT_B_OFFSET: u64 = 8 * 1024; // 8 KB
 
 /// Offset du SuperBlock miroir à 12 KB.
-pub const SB_MIRROR_12K_OFFSET: u64 = 12 * 1024;     // 12 KB
+pub const SB_MIRROR_12K_OFFSET: u64 = 12 * 1024; // 12 KB
 
 /// Début du heap général (1 MB).
-pub const HEAP_START_OFFSET: u64 = 1024 * 1024;      // 1 MB
+pub const HEAP_START_OFFSET: u64 = 1024 * 1024; // 1 MB
 
 /// Décalage depuis la fin du disque pour l'Epoch Slot C (8 KB avant la fin).
-pub const EPOCH_SLOT_C_FROM_END: u64 = 8 * 1024;     // 8 KB depuis la fin
+pub const EPOCH_SLOT_C_FROM_END: u64 = 8 * 1024; // 8 KB depuis la fin
 
 /// Décalage depuis la fin du disque pour le SuperBlock miroir final (4 KB avant la fin).
-pub const SB_MIRROR_END_FROM_END: u64 = 4 * 1024;    // 4 KB depuis la fin
+pub const SB_MIRROR_END_FROM_END: u64 = 4 * 1024; // 4 KB depuis la fin
 
 /// Taille d'un Epoch Slot en octets (4 KB).
 pub const EPOCH_SLOT_SIZE: u64 = 4096;
 
 /// Taille minimale d'un volume ExoFS valide.
-pub const MIN_DISK_SIZE: u64 = 2 * 1024 * 1024;      // 2 MB
+pub const MIN_DISK_SIZE: u64 = 2 * 1024 * 1024; // 2 MB
 
 /// Nombre de miroirs du superblock (primaire + 12KB + fin).
 pub const SB_MIRROR_COUNT: usize = 3;
@@ -68,10 +68,10 @@ pub const SB_MIRROR_COUNT: usize = 3;
 pub const HEAP_ALLOC_ALIGN: u64 = BLOCK_SIZE;
 
 /// Nombre d'ordres buddy (2^0 × BLOCK_SIZE .. 2^MAX_BUDDY_ORDER × BLOCK_SIZE).
-pub const MAX_BUDDY_ORDER: u32 = 14;           // 2^14 × 4KB = 64 MB max
+pub const MAX_BUDDY_ORDER: u32 = 14; // 2^14 × 4KB = 64 MB max
 
 /// Taille maximale d'un extent alloué.
-pub const MAX_EXTENT_SIZE: u64 = BLOCK_SIZE << MAX_BUDDY_ORDER;   // 64 MB
+pub const MAX_EXTENT_SIZE: u64 = BLOCK_SIZE << MAX_BUDDY_ORDER; // 64 MB
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DiskZone — description d'une plage disque
@@ -83,7 +83,7 @@ pub struct DiskZone {
     /// Offset de début (inclusif).
     pub start: DiskOffset,
     /// Longueur en octets.
-    pub len:   u64,
+    pub len: u64,
 }
 
 impl DiskZone {
@@ -104,7 +104,8 @@ impl DiskZone {
     /// RÈGLE ARITH-01 : checked_add.
     #[inline]
     pub fn end(&self) -> ExofsResult<DiskOffset> {
-        self.start.0
+        self.start
+            .0
             .checked_add(self.len)
             .ok_or(ExofsError::OffsetOverflow)
             .map(DiskOffset)
@@ -113,13 +114,12 @@ impl DiskZone {
     /// Vérifie si un offset se trouve dans cette zone.
     #[inline]
     pub fn contains(&self, offset: DiskOffset) -> bool {
-        offset.0 >= self.start.0
-            && offset.0 < self.start.0.saturating_add(self.len)
+        offset.0 >= self.start.0 && offset.0 < self.start.0.saturating_add(self.len)
     }
 
     /// Vérifie si deux zones se chevauchent.
     pub fn overlaps(&self, other: &DiskZone) -> bool {
-        let self_end  = self.start.0.saturating_add(self.len);
+        let self_end = self.start.0.saturating_add(self.len);
         let other_end = other.start.0.saturating_add(other.len);
         self.start.0 < other_end && other.start.0 < self_end
     }
@@ -143,7 +143,10 @@ pub fn superblock_primary() -> DiskOffset {
 /// Retourne la zone du SuperBlock primaire.
 #[inline]
 pub fn superblock_primary_zone() -> DiskZone {
-    DiskZone { start: DiskOffset(SB_PRIMARY_OFFSET), len: SUPERBLOCK_SIZE }
+    DiskZone {
+        start: DiskOffset(SB_PRIMARY_OFFSET),
+        len: SUPERBLOCK_SIZE,
+    }
 }
 
 /// Retourne l'offset du Slot Epoch A (fixe : 4 KB).
@@ -155,7 +158,10 @@ pub fn epoch_slot_a() -> DiskOffset {
 /// Retourne la zone du Slot Epoch A.
 #[inline]
 pub fn epoch_slot_a_zone() -> DiskZone {
-    DiskZone { start: DiskOffset(EPOCH_SLOT_A_OFFSET), len: EPOCH_SLOT_SIZE }
+    DiskZone {
+        start: DiskOffset(EPOCH_SLOT_A_OFFSET),
+        len: EPOCH_SLOT_SIZE,
+    }
 }
 
 /// Retourne l'offset du Slot Epoch B (fixe : 8 KB).
@@ -167,7 +173,10 @@ pub fn epoch_slot_b() -> DiskOffset {
 /// Retourne la zone du Slot Epoch B.
 #[inline]
 pub fn epoch_slot_b_zone() -> DiskZone {
-    DiskZone { start: DiskOffset(EPOCH_SLOT_B_OFFSET), len: EPOCH_SLOT_SIZE }
+    DiskZone {
+        start: DiskOffset(EPOCH_SLOT_B_OFFSET),
+        len: EPOCH_SLOT_SIZE,
+    }
 }
 
 /// Retourne l'offset du SuperBlock miroir à 12 KB.
@@ -179,7 +188,10 @@ pub fn superblock_mirror_12k() -> DiskOffset {
 /// Retourne la zone du SuperBlock miroir à 12 KB.
 #[inline]
 pub fn superblock_mirror_12k_zone() -> DiskZone {
-    DiskZone { start: DiskOffset(SB_MIRROR_12K_OFFSET), len: SUPERBLOCK_SIZE }
+    DiskZone {
+        start: DiskOffset(SB_MIRROR_12K_OFFSET),
+        len: SUPERBLOCK_SIZE,
+    }
 }
 
 /// Retourne l'offset du début du heap général (1 MB).
@@ -207,7 +219,10 @@ pub fn epoch_slot_c(disk_size_bytes: u64) -> ExofsResult<DiskOffset> {
 /// Retourne la zone du Slot Epoch C.
 pub fn epoch_slot_c_zone(disk_size_bytes: u64) -> ExofsResult<DiskZone> {
     let start = epoch_slot_c(disk_size_bytes)?;
-    Ok(DiskZone { start, len: EPOCH_SLOT_SIZE })
+    Ok(DiskZone {
+        start,
+        len: EPOCH_SLOT_SIZE,
+    })
 }
 
 /// Retourne l'offset du SuperBlock miroir final (disk_size - 4 KB).
@@ -224,13 +239,16 @@ pub fn superblock_mirror_end(disk_size_bytes: u64) -> ExofsResult<DiskOffset> {
 /// Retourne la zone du SuperBlock miroir final.
 pub fn superblock_mirror_end_zone(disk_size_bytes: u64) -> ExofsResult<DiskZone> {
     let start = superblock_mirror_end(disk_size_bytes)?;
-    Ok(DiskZone { start, len: SUPERBLOCK_SIZE })
+    Ok(DiskZone {
+        start,
+        len: SUPERBLOCK_SIZE,
+    })
 }
 
 /// Retourne la zone heap [HEAP_START, epoch_slot_c).
 pub fn heap_zone(disk_size_bytes: u64) -> ExofsResult<DiskZone> {
     let start = heap_start();
-    let end   = epoch_slot_c(disk_size_bytes)?;
+    let end = epoch_slot_c(disk_size_bytes)?;
     if end.0 <= start.0 {
         return Err(ExofsError::OffsetOverflow);
     }
@@ -261,7 +279,8 @@ pub fn offset_to_sector_512(offset: DiskOffset) -> u64 {
 /// Convertit un numéro de secteur 512 octets en offset.
 #[inline]
 pub fn sector_512_to_offset(sector: u64) -> ExofsResult<DiskOffset> {
-    sector.checked_mul(512)
+    sector
+        .checked_mul(512)
         .ok_or(ExofsError::OffsetOverflow)
         .map(DiskOffset)
 }
@@ -275,7 +294,8 @@ pub fn offset_to_block_4k(offset: DiskOffset) -> u64 {
 /// Convertit un numéro de bloc 4 KB en offset.
 #[inline]
 pub fn block_4k_to_offset(block: u64) -> ExofsResult<DiskOffset> {
-    block.checked_mul(BLOCK_SIZE)
+    block
+        .checked_mul(BLOCK_SIZE)
         .ok_or(ExofsError::OffsetOverflow)
         .map(DiskOffset)
 }
@@ -285,7 +305,8 @@ pub fn block_4k_to_offset(block: u64) -> ExofsResult<DiskOffset> {
 /// # Règle ARITH-01
 #[inline]
 pub fn zone_end(start: DiskOffset, len: u64) -> ExofsResult<DiskOffset> {
-    start.0
+    start
+        .0
         .checked_add(len)
         .ok_or(ExofsError::OffsetOverflow)
         .map(DiskOffset)
@@ -295,7 +316,8 @@ pub fn zone_end(start: DiskOffset, len: u64) -> ExofsResult<DiskOffset> {
 ///
 /// # Règle ARITH-01
 pub fn check_bounds(offset: DiskOffset, len: u64, disk_size: u64) -> ExofsResult<()> {
-    let end = offset.0
+    let end = offset
+        .0
         .checked_add(len)
         .ok_or(ExofsError::OffsetOverflow)?;
     if end > disk_size {
@@ -322,10 +344,9 @@ pub fn blocks_to_offset(base: DiskOffset, n_blocks: u64) -> ExofsResult<DiskOffs
 #[inline]
 pub fn align_up(offset: DiskOffset, align: u64) -> ExofsResult<DiskOffset> {
     debug_assert!(align.is_power_of_two(), "align must be power of 2");
-    let mask = align
-        .checked_sub(1)
-        .ok_or(ExofsError::OffsetOverflow)?;
-    let aligned = offset.0
+    let mask = align.checked_sub(1).ok_or(ExofsError::OffsetOverflow)?;
+    let aligned = offset
+        .0
         .checked_add(mask)
         .ok_or(ExofsError::OffsetOverflow)?
         & !mask;
@@ -336,9 +357,7 @@ pub fn align_up(offset: DiskOffset, align: u64) -> ExofsResult<DiskOffset> {
 #[inline]
 pub fn align_down(offset: DiskOffset, align: u64) -> ExofsResult<DiskOffset> {
     debug_assert!(align.is_power_of_two(), "align must be power of 2");
-    let mask = align
-        .checked_sub(1)
-        .ok_or(ExofsError::OffsetOverflow)?;
+    let mask = align.checked_sub(1).ok_or(ExofsError::OffsetOverflow)?;
     Ok(DiskOffset(offset.0 & !mask))
 }
 
@@ -379,7 +398,8 @@ pub fn validate_disk_layout(disk_size_bytes: u64) -> ExofsResult<()> {
 
     // L'offset de fin du miroir final doit être ≤ disk_size.
     let mirror_end_off = superblock_mirror_end(disk_size_bytes)?;
-    let mirror_end = mirror_end_off.0
+    let mirror_end = mirror_end_off
+        .0
         .checked_add(SUPERBLOCK_SIZE)
         .ok_or(ExofsError::OffsetOverflow)?;
     if mirror_end > disk_size_bytes {
@@ -421,17 +441,17 @@ pub fn heap_blocks(disk_size_bytes: u64) -> ExofsResult<u64> {
 /// Résumé calculé une fois au montage du volume.
 #[derive(Copy, Clone, Debug)]
 pub struct LayoutMap {
-    pub disk_size:          u64,
-    pub sb_primary:         DiskOffset,
-    pub epoch_slot_a:       DiskOffset,
-    pub epoch_slot_b:       DiskOffset,
-    pub sb_mirror_12k:      DiskOffset,
-    pub heap_start:         DiskOffset,
-    pub heap_end:           DiskOffset,
-    pub heap_len:           u64,
-    pub epoch_slot_c:       DiskOffset,
-    pub sb_mirror_end:      DiskOffset,
-    pub heap_blocks:        u64,
+    pub disk_size: u64,
+    pub sb_primary: DiskOffset,
+    pub epoch_slot_a: DiskOffset,
+    pub epoch_slot_b: DiskOffset,
+    pub sb_mirror_12k: DiskOffset,
+    pub heap_start: DiskOffset,
+    pub heap_end: DiskOffset,
+    pub heap_len: u64,
+    pub epoch_slot_c: DiskOffset,
+    pub sb_mirror_end: DiskOffset,
+    pub heap_blocks: u64,
 }
 
 impl LayoutMap {
@@ -441,39 +461,37 @@ impl LayoutMap {
     pub fn new(disk_size_bytes: u64) -> ExofsResult<Self> {
         validate_disk_layout(disk_size_bytes)?;
 
-        let slot_c    = epoch_slot_c(disk_size_bytes)?;
-        let sb_end    = superblock_mirror_end(disk_size_bytes)?;
-        let hz        = heap_zone(disk_size_bytes)?;
-        let hb        = blocks_for_bytes(hz.len)?;
+        let slot_c = epoch_slot_c(disk_size_bytes)?;
+        let sb_end = superblock_mirror_end(disk_size_bytes)?;
+        let hz = heap_zone(disk_size_bytes)?;
+        let hb = blocks_for_bytes(hz.len)?;
 
         Ok(Self {
-            disk_size:     disk_size_bytes,
-            sb_primary:    DiskOffset(SB_PRIMARY_OFFSET),
-            epoch_slot_a:  DiskOffset(EPOCH_SLOT_A_OFFSET),
-            epoch_slot_b:  DiskOffset(EPOCH_SLOT_B_OFFSET),
+            disk_size: disk_size_bytes,
+            sb_primary: DiskOffset(SB_PRIMARY_OFFSET),
+            epoch_slot_a: DiskOffset(EPOCH_SLOT_A_OFFSET),
+            epoch_slot_b: DiskOffset(EPOCH_SLOT_B_OFFSET),
             sb_mirror_12k: DiskOffset(SB_MIRROR_12K_OFFSET),
-            heap_start:    hz.start,
-            heap_end:      DiskOffset(hz.start.0.saturating_add(hz.len)),
-            heap_len:      hz.len,
-            epoch_slot_c:  slot_c,
+            heap_start: hz.start,
+            heap_end: DiskOffset(hz.start.0.saturating_add(hz.len)),
+            heap_len: hz.len,
+            epoch_slot_c: slot_c,
             sb_mirror_end: sb_end,
-            heap_blocks:   hb,
+            heap_blocks: hb,
         })
     }
 
     /// Les 3 offsets miroirs du SuperBlock.
     pub fn superblock_mirrors(&self) -> [DiskOffset; 3] {
-        [
-            self.sb_primary,
-            self.sb_mirror_12k,
-            self.sb_mirror_end,
-        ]
+        [self.sb_primary, self.sb_mirror_12k, self.sb_mirror_end]
     }
 
     /// Retourne le pourcentage d'espace de métadonnées par rapport à la taille totale.
     pub fn metadata_overhead_pct(&self) -> u64 {
-        let meta = HEAP_START_OFFSET;       // tout ce qui est avant le heap
-        if self.disk_size == 0 { return 0; }
+        let meta = HEAP_START_OFFSET; // tout ce qui est avant le heap
+        if self.disk_size == 0 {
+            return 0;
+        }
         (meta as u128 * 100 / self.disk_size as u128) as u64
     }
 
@@ -487,7 +505,7 @@ impl LayoutMap {
     pub fn zone_in_heap(&self, offset: DiskOffset, len: u64) -> bool {
         let end = match offset.0.checked_add(len) {
             Some(e) => e,
-            None    => return false,
+            None => return false,
         };
         offset.0 >= self.heap_start.0 && end <= self.heap_end.0
     }

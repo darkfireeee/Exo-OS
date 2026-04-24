@@ -61,11 +61,19 @@ impl PowerPolicyTable {
     }
 
     fn slot_mut(&mut self, pid: u32) -> &mut PowerPolicy {
-        if let Some(idx) = self.entries.iter().position(|entry| entry.active && entry.pid == pid) {
+        if let Some(idx) = self
+            .entries
+            .iter()
+            .position(|entry| entry.active && entry.pid == pid)
+        {
             return &mut self.entries[idx];
         }
 
-        let idx = self.entries.iter().position(|entry| !entry.active).unwrap_or(0);
+        let idx = self
+            .entries
+            .iter()
+            .position(|entry| !entry.active)
+            .unwrap_or(0);
         self.entries[idx] = PowerPolicy {
             active: true,
             pid,

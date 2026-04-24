@@ -16,7 +16,6 @@
 //
 // Couche 0 — pas de dépendance scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
@@ -66,9 +65,9 @@ pub const PKU_MMIO_KEY: u8 = 3;
 
 #[repr(C)]
 pub struct PkuStats {
-    pub enable_count:    AtomicU64,
-    pub alloc_count:     AtomicU64,
-    pub free_count:      AtomicU64,
+    pub enable_count: AtomicU64,
+    pub alloc_count: AtomicU64,
+    pub free_count: AtomicU64,
     pub pkru_write_count: AtomicU64,
     pub violation_count: AtomicU64,
     pub exhausted_count: AtomicU64,
@@ -77,12 +76,12 @@ pub struct PkuStats {
 impl PkuStats {
     const fn new() -> Self {
         Self {
-            enable_count:     AtomicU64::new(0),
-            alloc_count:      AtomicU64::new(0),
-            free_count:       AtomicU64::new(0),
+            enable_count: AtomicU64::new(0),
+            alloc_count: AtomicU64::new(0),
+            free_count: AtomicU64::new(0),
             pkru_write_count: AtomicU64::new(0),
-            violation_count:  AtomicU64::new(0),
-            exhausted_count:  AtomicU64::new(0),
+            violation_count: AtomicU64::new(0),
+            exhausted_count: AtomicU64::new(0),
         }
     }
 }
@@ -98,7 +97,7 @@ pub static PKU_STATS: PkuStats = PkuStats::new();
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PkuKeyDesc {
     /// Index de la clé (0..15).
-    pub key:  u8,
+    pub key: u8,
     /// Propriétaire (TID, 0 = noyau).
     pub owner: u64,
     /// Clé actuellement allouée.
@@ -107,7 +106,11 @@ pub struct PkuKeyDesc {
 
 impl PkuKeyDesc {
     const fn free() -> Self {
-        Self { key: 0, owner: 0, in_use: false }
+        Self {
+            key: 0,
+            owner: 0,
+            in_use: false,
+        }
     }
 }
 
@@ -119,10 +122,26 @@ impl PkuKeyAllocator {
     const fn new() -> Self {
         // Les clés 0..PKU_DEFAULT+3 sont réservées noyau.
         let mut keys = [PkuKeyDesc::free(); PKU_KEY_COUNT];
-        keys[PKU_DEFAULT_KEY as usize]     = PkuKeyDesc { key: PKU_DEFAULT_KEY,     owner: 0, in_use: true };
-        keys[PKU_KERNEL_HEAP_KEY as usize] = PkuKeyDesc { key: PKU_KERNEL_HEAP_KEY, owner: 0, in_use: true };
-        keys[PKU_GUARD_KEY as usize]       = PkuKeyDesc { key: PKU_GUARD_KEY,       owner: 0, in_use: true };
-        keys[PKU_MMIO_KEY as usize]        = PkuKeyDesc { key: PKU_MMIO_KEY,        owner: 0, in_use: true };
+        keys[PKU_DEFAULT_KEY as usize] = PkuKeyDesc {
+            key: PKU_DEFAULT_KEY,
+            owner: 0,
+            in_use: true,
+        };
+        keys[PKU_KERNEL_HEAP_KEY as usize] = PkuKeyDesc {
+            key: PKU_KERNEL_HEAP_KEY,
+            owner: 0,
+            in_use: true,
+        };
+        keys[PKU_GUARD_KEY as usize] = PkuKeyDesc {
+            key: PKU_GUARD_KEY,
+            owner: 0,
+            in_use: true,
+        };
+        keys[PKU_MMIO_KEY as usize] = PkuKeyDesc {
+            key: PKU_MMIO_KEY,
+            owner: 0,
+            in_use: true,
+        };
         Self { keys }
     }
 
@@ -130,7 +149,11 @@ impl PkuKeyAllocator {
     fn alloc(&mut self, owner: u64) -> Option<u8> {
         for k in 4..PKU_KEY_COUNT {
             if !self.keys[k].in_use {
-                self.keys[k] = PkuKeyDesc { key: k as u8, owner, in_use: true };
+                self.keys[k] = PkuKeyDesc {
+                    key: k as u8,
+                    owner,
+                    in_use: true,
+                };
                 return Some(k as u8);
             }
         }
@@ -258,7 +281,7 @@ pub unsafe fn enable_pku() {
 
     // PKRU initial : clé 2 (guard) inaccessible.
     let pkru: u32 = pkru_ad_bit(PKU_GUARD_KEY) // clé 2 AD
-                  | pkru_wd_bit(PKU_MMIO_KEY);  // clé 3 WD
+                  | pkru_wd_bit(PKU_MMIO_KEY); // clé 3 WD
     wrpkru(pkru);
 }
 
@@ -342,7 +365,7 @@ pub const fn pte_get_pkey(pte: u64) -> u8 {
 /// puis restaure l'état PKRU précédent au drop.
 pub struct PkuAccessGuard {
     #[allow(dead_code)]
-    key:       u8,
+    key: u8,
     saved_pkru: u32,
 }
 

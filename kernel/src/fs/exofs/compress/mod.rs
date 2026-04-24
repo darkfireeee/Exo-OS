@@ -36,7 +36,6 @@
 //! RÈGLE ARITH-02 : arithmétique checked/saturating.
 //! RÈGLE RECUR-01 : aucune récursivité.
 
-
 pub mod algorithm;
 pub mod compress_benchmark;
 pub mod compress_choice;
@@ -56,24 +55,27 @@ pub use algorithm::{
     AlgorithmCapabilities, CompressLevel, CompressionAlgorithm, CompressionProfile,
 };
 pub use compress_benchmark::{BenchHistory, BenchResult, BenchSummary, CompressBenchmark};
-pub use compress_choice::{CompressDecision, CompressPolicy, CompressionChoice, DecisionReason, PolicyPresets};
+pub use compress_choice::{
+    CompressDecision, CompressPolicy, CompressionChoice, DecisionReason, PolicyPresets,
+};
 pub use compress_header::{
-    CompressedBlobView, CompressionHeader, HeaderBuilder,
-    COMPRESSION_HEADER_SIZE, COMPRESSION_MAGIC, HEADER_VERSION,
+    CompressedBlobView, CompressionHeader, HeaderBuilder, COMPRESSION_HEADER_SIZE,
+    COMPRESSION_MAGIC, HEADER_VERSION,
 };
 pub use compress_stats::{
-    AlgoStats, AlgoStatsSnapshot, CompressionStats, CompressionStatsSnapshot,
-    COMPRESSION_STATS,
+    AlgoStats, AlgoStatsSnapshot, CompressionStats, CompressionStatsSnapshot, COMPRESSION_STATS,
 };
 pub use compress_threshold::CompressionThreshold;
-pub use compress_writer::{CompressResult, CompressionPipeline, CompressWriter};
+pub use compress_writer::{CompressResult, CompressWriter, CompressionPipeline};
 // crc32_simple est pub(crate) dans compress_writer — ne peut pas être re-exporté (E0364)
 pub use decompress_reader::{DecompressReader, DecompressStats};
 pub use lz4_wrapper::Lz4Compressor;
-pub use zstd_wrapper::{ZstdCompressor, ZstdConfig, ZstdDecoder, ZSTD_DEFAULT_LEVEL, ZSTD_MAX_LEVEL};
+pub use zstd_wrapper::{
+    ZstdCompressor, ZstdConfig, ZstdDecoder, ZSTD_DEFAULT_LEVEL, ZSTD_MAX_LEVEL,
+};
 
-use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration globale du module
@@ -85,7 +87,7 @@ pub struct CompressorConfig {
     /// Politique de compression par défaut.
     pub default_policy: CompressPolicy,
     /// Activer la validation CRC à la décompression.
-    pub validate_crc:   bool,
+    pub validate_crc: bool,
     /// Taille minimale en octets pour tenter la compression.
     pub min_compress_size: usize,
 }
@@ -94,8 +96,8 @@ impl CompressorConfig {
     /// Configuration par défaut raisonnable.
     pub const fn default_config() -> Self {
         Self {
-            default_policy:    CompressPolicy::lz4_default(),
-            validate_crc:      true,
+            default_policy: CompressPolicy::lz4_default(),
+            validate_crc: true,
             min_compress_size: 64,
         }
     }
@@ -103,8 +105,8 @@ impl CompressorConfig {
     /// Configuration haute performance (LZ4 rapide, pas de CRC).
     pub const fn fast_config() -> Self {
         Self {
-            default_policy:    CompressPolicy::lz4_fast(),
-            validate_crc:      false,
+            default_policy: CompressPolicy::lz4_fast(),
+            validate_crc: false,
             min_compress_size: 128,
         }
     }
@@ -112,15 +114,17 @@ impl CompressorConfig {
     /// Configuration haute densité (Zstd, CRC activé).
     pub const fn dense_config() -> Self {
         Self {
-            default_policy:    CompressPolicy::zstd_default(),
-            validate_crc:      true,
+            default_policy: CompressPolicy::zstd_default(),
+            validate_crc: true,
             min_compress_size: 32,
         }
     }
 }
 
 impl Default for CompressorConfig {
-    fn default() -> Self { Self::default_config() }
+    fn default() -> Self {
+        Self::default_config()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -160,7 +164,8 @@ impl CompressModule {
     pub fn compress(&self, data: &[u8]) -> ExofsResult<Vec<u8>> {
         if data.len() < self.config.min_compress_size {
             let mut out = Vec::new();
-            out.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+            out.try_reserve(data.len())
+                .map_err(|_| ExofsError::NoMemory)?;
             out.extend_from_slice(data);
             return Ok(out);
         }
@@ -184,11 +189,15 @@ impl CompressModule {
     }
 
     /// Retourne la configuration active.
-    pub fn config(&self) -> &CompressorConfig { &self.config }
+    pub fn config(&self) -> &CompressorConfig {
+        &self.config
+    }
 }
 
 impl Default for CompressModule {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -229,11 +238,14 @@ mod integration_tests {
     use super::*;
 
     fn uniform(n: usize, b: u8) -> Vec<u8> {
-        let mut v = Vec::new(); v.resize(n, b); v
+        let mut v = Vec::new();
+        v.resize(n, b);
+        v
     }
 
     fn pseudo_random(n: usize) -> Vec<u8> {
-        let mut v = Vec::new(); v.reserve(n);
+        let mut v = Vec::new();
+        v.reserve(n);
         let mut s: u32 = 0x1234_5678;
         for _ in 0..n {
             s = s.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -242,164 +254,222 @@ mod integration_tests {
         v
     }
 
-    #[test] fn test_compress_decompress_roundtrip_lz4() {
+    #[test]
+    fn test_compress_decompress_roundtrip_lz4() {
         let data = uniform(4096, 0xAA);
         let blob = compress_blob(&data, CompressPolicy::lz4_fast()).unwrap();
-        let dec  = decompress_blob(&blob).unwrap();
+        let dec = decompress_blob(&blob).unwrap();
         // Si compressé : roundtrip exact. Si brut : identique.
         assert!(dec.len() == data.len() || dec == data);
     }
 
-    #[test] fn test_compress_decompress_roundtrip_zstd() {
+    #[test]
+    fn test_compress_decompress_roundtrip_zstd() {
         let data = uniform(2048, 0x77);
         let blob = compress_blob(&data, CompressPolicy::zstd_default()).unwrap();
-        let dec  = decompress_blob(&blob).unwrap();
+        let dec = decompress_blob(&blob).unwrap();
         assert!(dec.len() == data.len() || !dec.is_empty());
     }
 
-    #[test] fn test_is_compressed_after_compress() {
+    #[test]
+    fn test_is_compressed_after_compress() {
         let data = uniform(1024, 0x11);
         let blob = compress_blob(&data, CompressPolicy::lz4_fast()).unwrap();
         // Peut être compressé ou brut selon la décision adaptative.
         let _ = is_compressed_blob(&blob);
     }
 
-    #[test] fn test_compress_validated_ok() {
+    #[test]
+    fn test_compress_validated_ok() {
         let data = uniform(2048, 0x33);
         let blob = compress_validated(&data, CompressPolicy::lz4_fast()).unwrap();
         assert!(!blob.is_empty() || data.is_empty());
     }
 
-    #[test] fn test_empty_roundtrip() {
+    #[test]
+    fn test_empty_roundtrip() {
         let blob = compress_blob(&[], CompressPolicy::default()).unwrap();
-        let dec  = decompress_blob(&blob).unwrap();
+        let dec = decompress_blob(&blob).unwrap();
         assert!(dec.is_empty());
     }
 
-    #[test] fn test_module_compress_below_min_size() {
+    #[test]
+    fn test_module_compress_below_min_size() {
         let module = CompressModule::with_config(CompressorConfig {
             min_compress_size: 1000,
             ..CompressorConfig::default_config()
         });
         let data = uniform(64, 0xFF);
-        let out  = module.compress(&data).unwrap();
+        let out = module.compress(&data).unwrap();
         // Données trop petites → stockage brut.
         assert_eq!(out.as_slice(), data.as_slice());
     }
 
-    #[test] fn test_module_decompress_raw() {
+    #[test]
+    fn test_module_decompress_raw() {
         let module = CompressModule::new();
-        let data   = b"raw not compressed";
-        let out    = module.decompress(data).unwrap();
+        let data = b"raw not compressed";
+        let out = module.decompress(data).unwrap();
         assert_eq!(out.as_slice(), data);
     }
 
-    #[test] fn test_compressor_config_default() {
+    #[test]
+    fn test_compressor_config_default() {
         let cfg = CompressorConfig::default_config();
         assert!(cfg.min_compress_size > 0);
     }
 
-    #[test] fn test_compressor_config_fast() {
+    #[test]
+    fn test_compressor_config_fast() {
         let cfg = CompressorConfig::fast_config();
         assert!(!cfg.validate_crc);
     }
 
-    #[test] fn test_stats_snapshot_no_panic() {
+    #[test]
+    fn test_stats_snapshot_no_panic() {
         let module = CompressModule::new();
         let _ = module.stats_snapshot();
     }
 
-    #[test] fn test_compress_random_no_panic() {
+    #[test]
+    fn test_compress_random_no_panic() {
         let data = pseudo_random(512);
         let blob = compress_blob(&data, CompressPolicy::default()).unwrap();
-        let dec  = decompress_blob(&blob).unwrap();
+        let dec = decompress_blob(&blob).unwrap();
         assert_eq!(dec.len(), data.len());
     }
 
     // ── Tests supplémentaires ─────────────────────────────────────────────────
 
-    #[test] fn test_compress_blob_returns_nonempty_for_nonempty_input() {
+    #[test]
+    fn test_compress_blob_returns_nonempty_for_nonempty_input() {
         let data = uniform(256, 0x42);
         let blob = compress_blob(&data, CompressPolicy::default()).unwrap();
         assert!(blob.len() > 0);
     }
 
-    #[test] fn test_is_compressed_blob_false_for_plain_text() {
+    #[test]
+    fn test_is_compressed_blob_false_for_plain_text() {
         assert!(!is_compressed_blob(b"plain text"));
     }
 
-    #[test] fn test_module_config_dense() {
+    #[test]
+    fn test_module_config_dense() {
         let m = CompressModule::with_config(CompressorConfig::dense_config());
         let r = m.compress(&uniform(200, 0x99)).unwrap();
         assert!(!r.is_empty() || true);
     }
 
-    #[test] fn test_compress_validated_empty() {
+    #[test]
+    fn test_compress_validated_empty() {
         let blob = compress_validated(&[], CompressPolicy::default()).unwrap();
         assert!(blob.is_empty());
     }
 
-    #[test] fn test_compress_module_default_config_validate_crc() {
+    #[test]
+    fn test_compress_module_default_config_validate_crc() {
         let m = CompressModule::new();
         assert!(m.config().validate_crc);
     }
 
-    #[test] fn test_compress_module_fast_config_no_crc() {
+    #[test]
+    fn test_compress_module_fast_config_no_crc() {
         let m = CompressModule::with_config(CompressorConfig::fast_config());
         assert!(!m.config().validate_crc);
     }
 
-    #[test] fn test_decompress_blob_passthrough_raw() {
+    #[test]
+    fn test_decompress_blob_passthrough_raw() {
         let data = b"raw payload";
-        let dec  = decompress_blob(data).unwrap();
+        let dec = decompress_blob(data).unwrap();
         assert_eq!(dec.as_slice(), data);
     }
 
-    #[test] fn test_zstd_config_default() {
+    #[test]
+    fn test_zstd_config_default() {
         let c = ZstdConfig::default_config();
         assert_eq!(c.level, ZSTD_DEFAULT_LEVEL);
     }
 
-    #[test] fn test_compress_level_variants() {
+    #[test]
+    fn test_compress_level_variants() {
         let _ = CompressLevel::Fast;
         let _ = CompressLevel::Default;
         let _ = CompressLevel::Best;
     }
 
-    #[test] fn test_module_stats_default() {
+    #[test]
+    fn test_module_stats_default() {
         let m = CompressModule::new();
         let s = m.stats_snapshot();
         let _ = s;
     }
-    #[test] fn test_compress_validated_non_empty() {
+    #[test]
+    fn test_compress_validated_non_empty() {
         let data = vec![0x11u8; 512];
         let b = compress_validated(&data, CompressPolicy::lz4_fast()).unwrap();
         assert!(b.len() > 0);
     }
-    #[test] fn test_compressor_config_dense_validate_crc() {
+    #[test]
+    fn test_compressor_config_dense_validate_crc() {
         let c = CompressorConfig::dense_config();
         assert!(c.validate_crc);
     }
-    #[test] fn test_algo_capabilities_lz4_supported() {
+    #[test]
+    fn test_algo_capabilities_lz4_supported() {
         let caps = AlgorithmCapabilities::for_algorithm(CompressionAlgorithm::Lz4);
         assert_eq!(caps.algorithm, CompressionAlgorithm::Lz4);
         assert!(caps.compress_mbps > 0);
     }
-    #[test] fn test_algo_capabilities_none_not_really_compressing() {
+    #[test]
+    fn test_algo_capabilities_none_not_really_compressing() {
         let caps = AlgorithmCapabilities::for_algorithm(CompressionAlgorithm::None);
         assert!(!caps.algorithm.is_compressed());
     }
-    #[test] fn test_compress_blob_zstd_policy() { let data = vec![0xBBu8; 256]; let b = compress_blob(&data, CompressPolicy::zstd_default()).unwrap(); assert!(!b.is_empty()); }
-    #[test] fn test_is_compressed_blob_false_for_random() { let d: Vec<u8> = (0u8..32).collect(); assert!(!is_compressed_blob(&d)); }
-    #[test] fn test_module_compress_returns_data() { let m = CompressModule::new(); let r = m.compress(&vec![0u8; 512]).unwrap(); assert!(!r.is_empty()); }
-    #[test] fn test_compress_blob_empty_returns_empty() { let b = compress_blob(&[], CompressPolicy::default()).unwrap(); assert!(b.is_empty()); }
-    #[test] fn test_decompress_non_compressed_returns_same() { let d = b"hello"; let r = decompress_blob(d).unwrap(); assert_eq!(r.as_slice(), d); }
-    #[test] fn test_header_version_constant() { assert!(HEADER_VERSION > 0); }
+    #[test]
+    fn test_compress_blob_zstd_policy() {
+        let data = vec![0xBBu8; 256];
+        let b = compress_blob(&data, CompressPolicy::zstd_default()).unwrap();
+        assert!(!b.is_empty());
+    }
+    #[test]
+    fn test_is_compressed_blob_false_for_random() {
+        let d: Vec<u8> = (0u8..32).collect();
+        assert!(!is_compressed_blob(&d));
+    }
+    #[test]
+    fn test_module_compress_returns_data() {
+        let m = CompressModule::new();
+        let r = m.compress(&vec![0u8; 512]).unwrap();
+        assert!(!r.is_empty());
+    }
+    #[test]
+    fn test_compress_blob_empty_returns_empty() {
+        let b = compress_blob(&[], CompressPolicy::default()).unwrap();
+        assert!(b.is_empty());
+    }
+    #[test]
+    fn test_decompress_non_compressed_returns_same() {
+        let d = b"hello";
+        let r = decompress_blob(d).unwrap();
+        assert_eq!(r.as_slice(), d);
+    }
+    #[test]
+    fn test_header_version_constant() {
+        assert!(HEADER_VERSION > 0);
+    }
 }
 
 #[cfg(test)]
 mod extra_compress_tests {
     use super::*;
-    #[test] fn test_zstd_config_clamped_max() { let c = ZstdConfig { level: 999 }; assert_eq!(c.clamped_level(), ZSTD_MAX_LEVEL); }
-    #[test] fn test_compress_choice_default_no_panic() { let _ = CompressionChoice::new(CompressPolicy::default()); }
+    #[test]
+    fn test_zstd_config_clamped_max() {
+        let c = ZstdConfig { level: 999 };
+        assert_eq!(c.clamped_level(), ZSTD_MAX_LEVEL);
+    }
+    #[test]
+    fn test_compress_choice_default_no_panic() {
+        let _ = CompressionChoice::new(CompressPolicy::default());
+    }
 }

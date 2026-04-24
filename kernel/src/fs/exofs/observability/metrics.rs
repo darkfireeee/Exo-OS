@@ -13,11 +13,10 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_*.
 
-
 extern crate alloc;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─── MetricId ────────────────────────────────────────────────────────────────
 
@@ -25,20 +24,20 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MetricId {
-    Reads         = 0,
-    Writes        = 1,
-    ReadBytes     = 2,
-    WriteBytes    = 3,
-    CacheHits     = 4,
-    CacheMisses   = 5,
-    Errors        = 6,
-    GcRuns        = 7,
-    DedupSaves    = 8,
-    EpochCommits  = 9,
-    Allocations   = 10,
+    Reads = 0,
+    Writes = 1,
+    ReadBytes = 2,
+    WriteBytes = 3,
+    CacheHits = 4,
+    CacheMisses = 5,
+    Errors = 6,
+    GcRuns = 7,
+    DedupSaves = 8,
+    EpochCommits = 9,
+    Allocations = 10,
     Deallocations = 11,
-    FlushOps      = 12,
-    CoWCopies     = 13,
+    FlushOps = 12,
+    CoWCopies = 13,
     SnapshotCreates = 14,
     SnapshotDeletes = 15,
 }
@@ -48,20 +47,20 @@ impl MetricId {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Reads           => "reads",
-            Self::Writes          => "writes",
-            Self::ReadBytes       => "read_bytes",
-            Self::WriteBytes      => "write_bytes",
-            Self::CacheHits       => "cache_hits",
-            Self::CacheMisses     => "cache_misses",
-            Self::Errors          => "errors",
-            Self::GcRuns          => "gc_runs",
-            Self::DedupSaves      => "dedup_saves",
-            Self::EpochCommits    => "epoch_commits",
-            Self::Allocations     => "allocations",
-            Self::Deallocations   => "deallocations",
-            Self::FlushOps        => "flush_ops",
-            Self::CoWCopies       => "cow_copies",
+            Self::Reads => "reads",
+            Self::Writes => "writes",
+            Self::ReadBytes => "read_bytes",
+            Self::WriteBytes => "write_bytes",
+            Self::CacheHits => "cache_hits",
+            Self::CacheMisses => "cache_misses",
+            Self::Errors => "errors",
+            Self::GcRuns => "gc_runs",
+            Self::DedupSaves => "dedup_saves",
+            Self::EpochCommits => "epoch_commits",
+            Self::Allocations => "allocations",
+            Self::Deallocations => "deallocations",
+            Self::FlushOps => "flush_ops",
+            Self::CoWCopies => "cow_copies",
             Self::SnapshotCreates => "snapshot_creates",
             Self::SnapshotDeletes => "snapshot_deletes",
         }
@@ -76,9 +75,9 @@ impl MetricId {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MetricKind {
-    Counter,   // monotone croissant
-    Gauge,     // valeur absolue instantanée
-    Ratio,     // rapport calculé (pas stocké directement)
+    Counter, // monotone croissant
+    Gauge,   // valeur absolue instantanée
+    Ratio,   // rapport calculé (pas stocké directement)
 }
 
 // ─── ExofsMetrics ────────────────────────────────────────────────────────────
@@ -96,7 +95,9 @@ impl ExofsMetrics {
     pub const fn new_const() -> Self {
         #[allow(clippy::declare_interior_mutable_const)]
         const ZERO: AtomicU64 = AtomicU64::new(0);
-        Self { counters: [ZERO; MetricId::COUNT] }
+        Self {
+            counters: [ZERO; MetricId::COUNT],
+        }
     }
 
     #[inline]
@@ -120,30 +121,56 @@ impl ExofsMetrics {
         self.add(MetricId::WriteBytes, bytes);
     }
 
-    pub fn inc_cache_hit(&self)  { self.add(MetricId::CacheHits, 1); }
-    pub fn inc_cache_miss(&self) { self.add(MetricId::CacheMisses, 1); }
-    pub fn inc_error(&self)      { self.add(MetricId::Errors, 1); }
-    pub fn inc_gc(&self)         { self.add(MetricId::GcRuns, 1); }
-    pub fn inc_dedup_save(&self, bytes: u64) { self.add(MetricId::DedupSaves, bytes); }
-    pub fn inc_epoch_commit(&self)  { self.add(MetricId::EpochCommits, 1); }
-    pub fn inc_alloc(&self)         { self.add(MetricId::Allocations, 1); }
-    pub fn inc_dealloc(&self)       { self.add(MetricId::Deallocations, 1); }
-    pub fn inc_flush(&self)         { self.add(MetricId::FlushOps, 1); }
-    pub fn inc_cow(&self)           { self.add(MetricId::CoWCopies, 1); }
-    pub fn inc_snapshot_create(&self) { self.add(MetricId::SnapshotCreates, 1); }
-    pub fn inc_snapshot_delete(&self) { self.add(MetricId::SnapshotDeletes, 1); }
+    pub fn inc_cache_hit(&self) {
+        self.add(MetricId::CacheHits, 1);
+    }
+    pub fn inc_cache_miss(&self) {
+        self.add(MetricId::CacheMisses, 1);
+    }
+    pub fn inc_error(&self) {
+        self.add(MetricId::Errors, 1);
+    }
+    pub fn inc_gc(&self) {
+        self.add(MetricId::GcRuns, 1);
+    }
+    pub fn inc_dedup_save(&self, bytes: u64) {
+        self.add(MetricId::DedupSaves, bytes);
+    }
+    pub fn inc_epoch_commit(&self) {
+        self.add(MetricId::EpochCommits, 1);
+    }
+    pub fn inc_alloc(&self) {
+        self.add(MetricId::Allocations, 1);
+    }
+    pub fn inc_dealloc(&self) {
+        self.add(MetricId::Deallocations, 1);
+    }
+    pub fn inc_flush(&self) {
+        self.add(MetricId::FlushOps, 1);
+    }
+    pub fn inc_cow(&self) {
+        self.add(MetricId::CoWCopies, 1);
+    }
+    pub fn inc_snapshot_create(&self) {
+        self.add(MetricId::SnapshotCreates, 1);
+    }
+    pub fn inc_snapshot_delete(&self) {
+        self.add(MetricId::SnapshotDeletes, 1);
+    }
 
     /// Cache hit ratio * 1000 (ARITH-02: checked_div).
     pub fn cache_hit_ratio_pct10(&self) -> u64 {
-        let hits   = self.get(MetricId::CacheHits);
+        let hits = self.get(MetricId::CacheHits);
         let misses = self.get(MetricId::CacheMisses);
-        let total  = hits.saturating_add(misses);
+        let total = hits.saturating_add(misses);
         hits.saturating_mul(1000).checked_div(total).unwrap_or(0)
     }
 
     /// Taux d'erreur * 1000 (ARITH-02).
     pub fn error_rate_pct10(&self) -> u64 {
-        let ops = self.get(MetricId::Reads).saturating_add(self.get(MetricId::Writes));
+        let ops = self
+            .get(MetricId::Reads)
+            .saturating_add(self.get(MetricId::Writes));
         let err = self.get(MetricId::Errors);
         err.saturating_mul(1000).checked_div(ops).unwrap_or(0)
     }
@@ -181,17 +208,37 @@ pub struct MetricsSnapshot {
 }
 
 impl MetricsSnapshot {
-    pub fn get(&self, id: MetricId) -> u64 { self.values[id as usize] }
+    pub fn get(&self, id: MetricId) -> u64 {
+        self.values[id as usize]
+    }
 
-    pub fn reads(&self)        -> u64 { self.get(MetricId::Reads) }
-    pub fn writes(&self)       -> u64 { self.get(MetricId::Writes) }
-    pub fn read_bytes(&self)   -> u64 { self.get(MetricId::ReadBytes) }
-    pub fn write_bytes(&self)  -> u64 { self.get(MetricId::WriteBytes) }
-    pub fn cache_hits(&self)   -> u64 { self.get(MetricId::CacheHits) }
-    pub fn cache_misses(&self) -> u64 { self.get(MetricId::CacheMisses) }
-    pub fn errors(&self)       -> u64 { self.get(MetricId::Errors) }
-    pub fn gc_runs(&self)      -> u64 { self.get(MetricId::GcRuns) }
-    pub fn epoch_commits(&self)-> u64 { self.get(MetricId::EpochCommits) }
+    pub fn reads(&self) -> u64 {
+        self.get(MetricId::Reads)
+    }
+    pub fn writes(&self) -> u64 {
+        self.get(MetricId::Writes)
+    }
+    pub fn read_bytes(&self) -> u64 {
+        self.get(MetricId::ReadBytes)
+    }
+    pub fn write_bytes(&self) -> u64 {
+        self.get(MetricId::WriteBytes)
+    }
+    pub fn cache_hits(&self) -> u64 {
+        self.get(MetricId::CacheHits)
+    }
+    pub fn cache_misses(&self) -> u64 {
+        self.get(MetricId::CacheMisses)
+    }
+    pub fn errors(&self) -> u64 {
+        self.get(MetricId::Errors)
+    }
+    pub fn gc_runs(&self) -> u64 {
+        self.get(MetricId::GcRuns)
+    }
+    pub fn epoch_commits(&self) -> u64 {
+        self.get(MetricId::EpochCommits)
+    }
 
     pub fn total_ops(&self) -> u64 {
         self.reads().saturating_add(self.writes())
@@ -222,11 +269,21 @@ pub struct MetricsDiff {
 }
 
 impl MetricsDiff {
-    pub fn get(&self, id: MetricId) -> u64 { self.delta[id as usize] }
-    pub fn read_rate(&self)  -> u64 { self.get(MetricId::Reads) }
-    pub fn write_rate(&self) -> u64 { self.get(MetricId::Writes) }
-    pub fn error_delta(&self)-> u64 { self.get(MetricId::Errors) }
-    pub fn is_clean(&self)   -> bool { self.error_delta() == 0 }
+    pub fn get(&self, id: MetricId) -> u64 {
+        self.delta[id as usize]
+    }
+    pub fn read_rate(&self) -> u64 {
+        self.get(MetricId::Reads)
+    }
+    pub fn write_rate(&self) -> u64 {
+        self.get(MetricId::Writes)
+    }
+    pub fn error_delta(&self) -> u64 {
+        self.get(MetricId::Errors)
+    }
+    pub fn is_clean(&self) -> bool {
+        self.error_delta() == 0
+    }
 }
 
 // ─── MetricsHistory ──────────────────────────────────────────────────────────
@@ -236,12 +293,12 @@ pub const METRICS_HISTORY_SIZE: usize = 64;
 /// Ring de snapshots horodatés.
 pub struct MetricsHistory {
     slots: [MetricsHistorySlot; METRICS_HISTORY_SIZE],
-    head:  core::sync::atomic::AtomicU64,
+    head: core::sync::atomic::AtomicU64,
 }
 
 #[derive(Clone, Copy, Default)]
 pub struct MetricsHistorySlot {
-    pub tick:     u64,
+    pub tick: u64,
     pub snapshot: MetricsSnapshot,
 }
 
@@ -251,9 +308,15 @@ unsafe impl Sync for MetricsHistory {}
 impl MetricsHistory {
     pub const fn new_const() -> Self {
         const ZERO: MetricsHistorySlot = MetricsHistorySlot {
-            tick: 0, snapshot: MetricsSnapshot { values: [0u64; MetricId::COUNT] },
+            tick: 0,
+            snapshot: MetricsSnapshot {
+                values: [0u64; MetricId::COUNT],
+            },
         };
-        Self { slots: [ZERO; METRICS_HISTORY_SIZE], head: core::sync::atomic::AtomicU64::new(0) }
+        Self {
+            slots: [ZERO; METRICS_HISTORY_SIZE],
+            head: core::sync::atomic::AtomicU64::new(0),
+        }
     }
 
     /// Enregistre le snapshot courant (tick fourni en paramètre).
@@ -262,7 +325,7 @@ impl MetricsHistory {
         // SAFETY: index tournant exclusif.
         unsafe {
             let ptr = &self.slots[idx] as *const MetricsHistorySlot as *mut MetricsHistorySlot;
-            (*ptr).tick     = tick;
+            (*ptr).tick = tick;
             (*ptr).snapshot = snap;
         }
     }
@@ -270,7 +333,7 @@ impl MetricsHistory {
     /// Retourne le dernier slot enregistré.
     pub fn latest(&self) -> MetricsHistorySlot {
         let head = self.head.load(Ordering::Relaxed) as usize;
-        let idx  = (head.wrapping_add(METRICS_HISTORY_SIZE).wrapping_sub(1)) % METRICS_HISTORY_SIZE;
+        let idx = (head.wrapping_add(METRICS_HISTORY_SIZE).wrapping_sub(1)) % METRICS_HISTORY_SIZE;
         self.slots[idx]
     }
 
@@ -281,7 +344,11 @@ impl MetricsHistory {
         let head = self.head.load(Ordering::Relaxed) as usize;
         let mut i = 0usize;
         while i < n {
-            let idx = (head.wrapping_add(METRICS_HISTORY_SIZE).wrapping_sub(i).wrapping_sub(1)) % METRICS_HISTORY_SIZE;
+            let idx = (head
+                .wrapping_add(METRICS_HISTORY_SIZE)
+                .wrapping_sub(i)
+                .wrapping_sub(1))
+                % METRICS_HISTORY_SIZE;
             out.push(self.slots[idx]);
             i = i.wrapping_add(1);
         }
@@ -315,7 +382,8 @@ mod tests {
     #[test]
     fn test_cache_hit_ratio() {
         let m = ExofsMetrics::new_const();
-        m.inc_cache_hit(); m.inc_cache_hit();
+        m.inc_cache_hit();
+        m.inc_cache_hit();
         m.inc_cache_miss();
         // 2/3 * 1000 = 666
         assert_eq!(m.cache_hit_ratio_pct10(), 666);
@@ -330,7 +398,8 @@ mod tests {
     #[test]
     fn test_snapshot_values() {
         let m = ExofsMetrics::new_const();
-        m.inc_gc(); m.inc_gc();
+        m.inc_gc();
+        m.inc_gc();
         let snap = m.snapshot();
         assert_eq!(snap.gc_runs(), 2);
     }
@@ -339,7 +408,8 @@ mod tests {
     fn test_snapshot_diff() {
         let m = ExofsMetrics::new_const();
         let s0 = m.snapshot();
-        m.inc_read(1); m.inc_read(1);
+        m.inc_read(1);
+        m.inc_read(1);
         let s1 = m.snapshot();
         let d = s1.diff(&s0);
         assert_eq!(d.read_rate(), 2);
@@ -356,7 +426,8 @@ mod tests {
     #[test]
     fn test_total_ops_and_bytes() {
         let m = ExofsMetrics::new_const();
-        m.inc_read(100); m.inc_write(200);
+        m.inc_read(100);
+        m.inc_write(200);
         let s = m.snapshot();
         assert_eq!(s.total_ops(), 2);
         assert_eq!(s.total_bytes(), 300);
@@ -365,7 +436,8 @@ mod tests {
     #[test]
     fn test_reset() {
         let m = ExofsMetrics::new_const();
-        m.inc_error(); m.inc_error();
+        m.inc_error();
+        m.inc_error();
         m.reset();
         assert_eq!(m.get(MetricId::Errors), 0);
     }

@@ -2,18 +2,20 @@
 //
 // Module IOMMU — domaines, tables de pages, pilotes Intel VT-d et AMD IOMMU.
 
-pub mod domain;
-pub mod page_table;
-pub mod intel_vtd;
 pub mod amd_iommu;
+pub mod domain;
+pub mod intel_vtd;
+pub mod page_table;
 
+pub use amd_iommu::{AmdDte, AmdIommuCmd, AmdIommuController, AMD_IOMMU};
 pub use domain::{
-    IommuDomain, IommuDomainTable, IOMMU_DOMAINS, DomainType,
-    PciBdf, IDENTITY_DOMAIN_ID, MAX_DOMAINS,
+    DomainType, IommuDomain, IommuDomainTable, PciBdf, IDENTITY_DOMAIN_ID, IOMMU_DOMAINS,
+    MAX_DOMAINS,
+};
+pub use intel_vtd::{
+    ContextEntry, ContextTable, DmarUnit, IntelVtd, RootEntry, RootTable, INTEL_VTD,
 };
 pub use page_table::{
-    IommuEntry, IommuPageTable, IommuFrameAlloc, IommuWalkResult,
-    iommu_map, iommu_unmap, iommu_walk,
+    iommu_map, iommu_unmap, iommu_walk, IommuEntry, IommuFrameAlloc, IommuPageTable,
+    IommuWalkResult,
 };
-pub use intel_vtd::{IntelVtd, INTEL_VTD, DmarUnit, RootTable, RootEntry, ContextTable, ContextEntry};
-pub use amd_iommu::{AmdIommuController, AMD_IOMMU, AmdDte, AmdIommuCmd};

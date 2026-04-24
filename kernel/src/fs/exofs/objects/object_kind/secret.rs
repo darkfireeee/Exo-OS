@@ -8,15 +8,13 @@
 //   ONDISK-01 : SecretDescriptorDisk #[repr(C, packed)]
 //   ARITH-02  : checked_add / saturating_* partout
 
-
 use core::fmt;
 use core::mem;
 
-use crate::fs::exofs::core::{
-    BlobId, ObjectId, EpochId, DiskOffset,
-    ExofsError, ExofsResult, blake3_hash, compute_blob_id,
-};
 use crate::fs::exofs::core::flags::ObjectFlags;
+use crate::fs::exofs::core::{
+    blake3_hash, compute_blob_id, BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId,
+};
 
 // ── Constantes ──────────────────────────────────────────────────────────────────
 
@@ -56,7 +54,7 @@ impl SecretCipher {
         match v {
             0x01 => Self::Aes256Gcm,
             0x02 => Self::ChaCha20Poly1305,
-            _    => Self::Unknown,
+            _ => Self::Unknown,
         }
     }
 }
@@ -64,9 +62,9 @@ impl SecretCipher {
 impl fmt::Display for SecretCipher {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Aes256Gcm          => write!(f, "AES-256-GCM"),
-            Self::ChaCha20Poly1305   => write!(f, "ChaCha20-Poly1305"),
-            Self::Unknown            => write!(f, "unknown"),
+            Self::Aes256Gcm => write!(f, "AES-256-GCM"),
+            Self::ChaCha20Poly1305 => write!(f, "ChaCha20-Poly1305"),
+            Self::Unknown => write!(f, "unknown"),
         }
     }
 }
@@ -96,21 +94,21 @@ impl fmt::Display for SecretCipher {
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct SecretDescriptorDisk {
-    pub magic:           u32,
-    pub plaintext_bid:   [u8; 32], // BlobId du plaintext (SEC-03)
-    pub object_id:       [u8; 32],
-    pub disk_offset:     u64,
+    pub magic: u32,
+    pub plaintext_bid: [u8; 32], // BlobId du plaintext (SEC-03)
+    pub object_id: [u8; 32],
+    pub disk_offset: u64,
     pub ciphertext_size: u64,
-    pub plaintext_size:  u64,
-    pub nonce:           [u8; SECRET_NONCE_LEN],
-    pub auth_tag:        [u8; SECRET_AUTH_TAG_LEN],
-    pub key_id:          [u8; SECRET_KEY_ID_LEN],
-    pub epoch_create:    u64,
-    pub flags:           u16,
-    pub cipher:          u8,
-    pub version:         u8,
-    pub _pad:            [u8; 12],
-    pub checksum:        [u8; 16],
+    pub plaintext_size: u64,
+    pub nonce: [u8; SECRET_NONCE_LEN],
+    pub auth_tag: [u8; SECRET_AUTH_TAG_LEN],
+    pub key_id: [u8; SECRET_KEY_ID_LEN],
+    pub epoch_create: u64,
+    pub flags: u16,
+    pub cipher: u8,
+    pub version: u8,
+    pub _pad: [u8; 12],
+    pub checksum: [u8; 16],
 }
 
 const _: () = assert!(
@@ -153,7 +151,8 @@ impl fmt::Debug for SecretDescriptorDisk {
         write!(
             f,
             "SecretDescriptorDisk {{ cipher: {}, flags: {:#x} }}",
-            { self.cipher }, { self.flags },
+            { self.cipher },
+            { self.flags },
         )
     }
 }
@@ -166,23 +165,28 @@ impl fmt::Debug for SecretDescriptorDisk {
 #[derive(Copy, Clone, Debug)]
 pub struct SecretAccessRecord {
     /// ID de l'objet Secret accédé.
-    pub object_id:    ObjectId,
+    pub object_id: ObjectId,
     /// Epoch de l'accès.
     pub epoch_access: EpochId,
     /// Hash de l'identité du demandeur (capability hash).
-    pub accessor_hash:[u8; 32],
+    pub accessor_hash: [u8; 32],
     /// Vrai si la lecture a réussi.
-    pub success:      bool,
+    pub success: bool,
 }
 
 impl SecretAccessRecord {
     pub fn new(
-        object_id:    ObjectId,
-        epoch:        EpochId,
-        accessor_hash:[u8; 32],
-        success:      bool,
+        object_id: ObjectId,
+        epoch: EpochId,
+        accessor_hash: [u8; 32],
+        success: bool,
     ) -> Self {
-        Self { object_id, epoch_access: epoch, accessor_hash, success }
+        Self {
+            object_id,
+            epoch_access: epoch,
+            accessor_hash,
+            success,
+        }
     }
 }
 
@@ -207,27 +211,27 @@ impl fmt::Display for SecretAccessRecord {
 /// SEC-04 : aucun champ ne contient le plaintext ou la clé de chiffrement.
 pub struct SecretDescriptor {
     /// BlobId du plaintext (AVANT chiffrement), SEC-03.
-    pub plaintext_bid:   BlobId,
+    pub plaintext_bid: BlobId,
     /// Objet propriétaire.
-    pub object_id:       ObjectId,
+    pub object_id: ObjectId,
     /// Offset disque du payload chiffré.
-    pub disk_offset:     DiskOffset,
+    pub disk_offset: DiskOffset,
     /// Taille du ciphertext (stocké sur disque).
     pub ciphertext_size: u64,
     /// Taille du plaintext original.
-    pub plaintext_size:  u64,
+    pub plaintext_size: u64,
     /// Nonce AEAD (12 octets pour AES-256-GCM).
-    pub nonce:           [u8; SECRET_NONCE_LEN],
+    pub nonce: [u8; SECRET_NONCE_LEN],
     /// Tag d'authentification AEAD.
-    pub auth_tag:        [u8; SECRET_AUTH_TAG_LEN],
+    pub auth_tag: [u8; SECRET_AUTH_TAG_LEN],
     /// ID de la KEK (Key Encryption Key) utilisée.
-    pub key_id:          [u8; SECRET_KEY_ID_LEN],
+    pub key_id: [u8; SECRET_KEY_ID_LEN],
     /// Epoch de création.
-    pub epoch_create:    EpochId,
+    pub epoch_create: EpochId,
     /// Flags de l'objet (doit inclure ENCRYPTED).
-    pub flags:           u16,
+    pub flags: u16,
     /// Algorithme de chiffrement.
-    pub cipher:          SecretCipher,
+    pub cipher: SecretCipher,
 }
 
 impl SecretDescriptor {
@@ -241,16 +245,16 @@ impl SecretDescriptor {
     /// Le ciphertext est déjà chiffré et positionné sur disque par l'appelant.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        plaintext_bid:   BlobId,
-        object_id:       ObjectId,
-        disk_offset:     DiskOffset,
+        plaintext_bid: BlobId,
+        object_id: ObjectId,
+        disk_offset: DiskOffset,
         ciphertext_size: u64,
-        plaintext_size:  u64,
-        nonce:           [u8; SECRET_NONCE_LEN],
-        auth_tag:        [u8; SECRET_AUTH_TAG_LEN],
-        key_id:          [u8; SECRET_KEY_ID_LEN],
-        epoch_create:    EpochId,
-        cipher:          SecretCipher,
+        plaintext_size: u64,
+        nonce: [u8; SECRET_NONCE_LEN],
+        auth_tag: [u8; SECRET_AUTH_TAG_LEN],
+        key_id: [u8; SECRET_KEY_ID_LEN],
+        epoch_create: EpochId,
+        cipher: SecretCipher,
     ) -> ExofsResult<Self> {
         if plaintext_size > SECRET_MAX_SIZE {
             return Err(ExofsError::Overflow);
@@ -278,16 +282,16 @@ impl SecretDescriptor {
         d.verify()?;
         let cipher = SecretCipher::from_u8(d.cipher);
         Ok(Self {
-            plaintext_bid:   BlobId(d.plaintext_bid),
-            object_id:       ObjectId(d.object_id),
-            disk_offset:     DiskOffset(d.disk_offset),
+            plaintext_bid: BlobId(d.plaintext_bid),
+            object_id: ObjectId(d.object_id),
+            disk_offset: DiskOffset(d.disk_offset),
             ciphertext_size: d.ciphertext_size,
-            plaintext_size:  d.plaintext_size,
-            nonce:           d.nonce,
-            auth_tag:        d.auth_tag,
-            key_id:          d.key_id,
-            epoch_create:    EpochId(d.epoch_create),
-            flags:           d.flags,
+            plaintext_size: d.plaintext_size,
+            nonce: d.nonce,
+            auth_tag: d.auth_tag,
+            key_id: d.key_id,
+            epoch_create: EpochId(d.epoch_create),
+            flags: d.flags,
             cipher,
         })
     }
@@ -296,21 +300,21 @@ impl SecretDescriptor {
 
     pub fn to_disk(&self) -> SecretDescriptorDisk {
         let mut d = SecretDescriptorDisk {
-            magic:           SECRET_DESCRIPTOR_MAGIC,
-            plaintext_bid:   self.plaintext_bid.0,
-            object_id:       self.object_id.0,
-            disk_offset:     self.disk_offset.0,
+            magic: SECRET_DESCRIPTOR_MAGIC,
+            plaintext_bid: self.plaintext_bid.0,
+            object_id: self.object_id.0,
+            disk_offset: self.disk_offset.0,
             ciphertext_size: self.ciphertext_size,
-            plaintext_size:  self.plaintext_size,
-            nonce:           self.nonce,
-            auth_tag:        self.auth_tag,
-            key_id:          self.key_id,
-            epoch_create:    self.epoch_create.0,
-            flags:           self.flags,
-            cipher:          self.cipher as u8,
-            version:         SECRET_DESCRIPTOR_VERSION,
-            _pad:            [0; 12],
-            checksum:        [0; 16],
+            plaintext_size: self.plaintext_size,
+            nonce: self.nonce,
+            auth_tag: self.auth_tag,
+            key_id: self.key_id,
+            epoch_create: self.epoch_create.0,
+            flags: self.flags,
+            cipher: self.cipher as u8,
+            version: SECRET_DESCRIPTOR_VERSION,
+            _pad: [0; 12],
+            checksum: [0; 16],
         };
         d.checksum = d.compute_checksum();
         d
@@ -358,7 +362,9 @@ impl fmt::Display for SecretDescriptor {
         write!(
             f,
             "SecretDescriptor {{ cipher: {}, size: {} B, encrypted: {} }}",
-            self.cipher, self.plaintext_size, self.is_encrypted(),
+            self.cipher,
+            self.plaintext_size,
+            self.is_encrypted(),
         )
     }
 }
@@ -392,24 +398,30 @@ pub fn secret_compute_plaintext_id(plaintext: &[u8]) -> BlobId {
 /// SEC-04 : aucune statistique de contenu.
 #[derive(Default, Debug)]
 pub struct SecretStats {
-    pub total:               u64,
-    pub aes256gcm_count:     u64,
-    pub chacha20poly_count:  u64,
-    pub total_cipher_bytes:  u64, // taille aggregate du ciphertext
-    pub access_deny_count:   u64,
-    pub access_grant_count:  u64,
+    pub total: u64,
+    pub aes256gcm_count: u64,
+    pub chacha20poly_count: u64,
+    pub total_cipher_bytes: u64, // taille aggregate du ciphertext
+    pub access_deny_count: u64,
+    pub access_grant_count: u64,
 }
 
 impl SecretStats {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn record(&mut self, s: &SecretDescriptor) {
         self.total = self.total.saturating_add(1);
         self.total_cipher_bytes = self.total_cipher_bytes.saturating_add(s.ciphertext_size);
         match s.cipher {
-            SecretCipher::Aes256Gcm        => self.aes256gcm_count    = self.aes256gcm_count.saturating_add(1),
-            SecretCipher::ChaCha20Poly1305 => self.chacha20poly_count = self.chacha20poly_count.saturating_add(1),
-            _                              => {}
+            SecretCipher::Aes256Gcm => {
+                self.aes256gcm_count = self.aes256gcm_count.saturating_add(1)
+            }
+            SecretCipher::ChaCha20Poly1305 => {
+                self.chacha20poly_count = self.chacha20poly_count.saturating_add(1)
+            }
+            _ => {}
         }
     }
 
@@ -428,8 +440,11 @@ impl fmt::Display for SecretStats {
             f,
             "SecretStats {{ total: {}, aes: {}, cha: {}, \
              grants: {}, denies: {} }}",
-            self.total, self.aes256gcm_count, self.chacha20poly_count,
-            self.access_grant_count, self.access_deny_count,
+            self.total,
+            self.aes256gcm_count,
+            self.chacha20poly_count,
+            self.access_grant_count,
+            self.access_deny_count,
         )
     }
 }
@@ -448,21 +463,28 @@ mod tests {
     #[test]
     fn test_secret_flags_valid() {
         let good = ObjectFlags(ObjectFlags::ENCRYPTED.0);
-        let bad  = ObjectFlags(0);
-        assert!( secret_flags_valid(good));
+        let bad = ObjectFlags(0);
+        assert!(secret_flags_valid(good));
         assert!(!secret_flags_valid(bad));
     }
 
     #[test]
     fn test_plaintext_id_mismatch() {
         let data = b"my secret";
-        let bid  = secret_compute_plaintext_id(data);
+        let bid = secret_compute_plaintext_id(data);
         let s = SecretDescriptor::new(
-            bid, ObjectId([0;32]), DiskOffset(0),
-            100, data.len() as u64,
-            [0u8; 12], [0u8; 16], [0u8; 32],
-            EpochId(1), SecretCipher::Aes256Gcm,
-        ).unwrap();
+            bid,
+            ObjectId([0; 32]),
+            DiskOffset(0),
+            100,
+            data.len() as u64,
+            [0u8; 12],
+            [0u8; 16],
+            [0u8; 32],
+            EpochId(1),
+            SecretCipher::Aes256Gcm,
+        )
+        .unwrap();
         assert!(s.verify_plaintext_id(data).is_ok());
         assert!(s.verify_plaintext_id(b"tampered").is_err());
     }
@@ -470,13 +492,20 @@ mod tests {
     #[test]
     fn test_to_disk_roundtrip() {
         let data = b"secret payload";
-        let bid  = secret_compute_plaintext_id(data);
+        let bid = secret_compute_plaintext_id(data);
         let orig = SecretDescriptor::new(
-            bid, ObjectId([1;32]), DiskOffset(8192),
-            200, data.len() as u64,
-            [0u8; 12], [0xFF; 16], [0xAB; 32],
-            EpochId(5), SecretCipher::ChaCha20Poly1305,
-        ).unwrap();
+            bid,
+            ObjectId([1; 32]),
+            DiskOffset(8192),
+            200,
+            data.len() as u64,
+            [0u8; 12],
+            [0xFF; 16],
+            [0xAB; 32],
+            EpochId(5),
+            SecretCipher::ChaCha20Poly1305,
+        )
+        .unwrap();
         let disk = orig.to_disk();
         disk.verify().expect("verify doit réussir");
         let back = SecretDescriptor::from_disk(&disk).unwrap();

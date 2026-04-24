@@ -45,7 +45,12 @@ impl XdpProgramTable {
         }
     }
 
-    pub fn attach(&mut self, owner_pid: u32, prog_id: u32, flags: u32) -> Result<ProgramSnapshot, i64> {
+    pub fn attach(
+        &mut self,
+        owner_pid: u32,
+        prog_id: u32,
+        flags: u32,
+    ) -> Result<ProgramSnapshot, i64> {
         if let Some(idx) = self
             .programs
             .iter()

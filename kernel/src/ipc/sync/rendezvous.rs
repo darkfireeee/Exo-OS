@@ -12,8 +12,8 @@
 // RÈGLE RNDV-02 : exchange atomique via CAS à deux phases (offer/take).
 // RÈGLE RNDV-03 : spin-wait borné. Timeout → désinscription propre.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::IpcError;
 
@@ -110,7 +110,8 @@ impl IpcRendezvous {
 
         if my_arrival == parties {
             // Ce thread est le leader
-            self.state.store(RendezvousState::Releasing as u32, Ordering::Release);
+            self.state
+                .store(RendezvousState::Releasing as u32, Ordering::Release);
             self.total_meetings.fetch_add(1, Ordering::Relaxed);
             // Avancer la génération pour libérer les autres
             self.generation.fetch_add(1, Ordering::Release);
@@ -145,13 +146,15 @@ impl IpcRendezvous {
     /// Réarme le rendez-vous pour un prochain cycle.
     pub fn rearm(&self) {
         self.arrived.store(0, Ordering::Release);
-        self.state.store(RendezvousState::Waiting as u32, Ordering::Release);
+        self.state
+            .store(RendezvousState::Waiting as u32, Ordering::Release);
     }
 
     /// Détruit le rendez-vous.
     pub fn destroy(&self) {
         self.active.store(false, Ordering::Release);
-        self.state.store(RendezvousState::Destroyed as u32, Ordering::Release);
+        self.state
+            .store(RendezvousState::Destroyed as u32, Ordering::Release);
         // Libérer les éventuels waiters
         self.generation.fetch_add(1, Ordering::Release);
     }
@@ -255,12 +258,15 @@ impl ExchangeSlot {
         let size = data.len() as u32;
 
         // Tenter de devenir l'offrant (CAS Empty → OfferPending)
-        let became_offerer = self.state.compare_exchange(
-            ExchangeState::Empty as u32,
-            ExchangeState::OfferPending as u32,
-            Ordering::AcqRel,
-            Ordering::Relaxed,
-        ).is_ok();
+        let became_offerer = self
+            .state
+            .compare_exchange(
+                ExchangeState::Empty as u32,
+                ExchangeState::OfferPending as u32,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .is_ok();
 
         if became_offerer {
             // --- Thread A : déposer l'offre ---
@@ -294,7 +300,8 @@ impl ExchangeSlot {
                 }
                 if spins >= limit {
                     // Annuler l'offre
-                    self.state.store(ExchangeState::Empty as u32, Ordering::Release);
+                    self.state
+                        .store(ExchangeState::Empty as u32, Ordering::Release);
                     self.timeouts.fetch_add(1, Ordering::Relaxed);
                     return Err(IpcError::Timeout);
                 }
@@ -310,12 +317,16 @@ impl ExchangeSlot {
                 let st = self.state.load(Ordering::Acquire);
                 if st == ExchangeState::OfferPending as u32 {
                     // CAS OfferPending → Completing
-                    if self.state.compare_exchange(
-                        ExchangeState::OfferPending as u32,
-                        ExchangeState::Completing as u32,
-                        Ordering::AcqRel,
-                        Ordering::Relaxed,
-                    ).is_ok() {
+                    if self
+                        .state
+                        .compare_exchange(
+                            ExchangeState::OfferPending as u32,
+                            ExchangeState::Completing as u32,
+                            Ordering::AcqRel,
+                            Ordering::Relaxed,
+                        )
+                        .is_ok()
+                    {
                         // Lire l'offre de A
                         // SAFETY: A a initialisé offer_buf sous OfferPending
                         let offer_size = self.data_size.load(Ordering::Relaxed) as usize;
@@ -337,7 +348,8 @@ impl ExchangeSlot {
                         // Signaler à A que l'échange est terminé
                         self.result_ready.store(true, Ordering::Release);
                         // Revenir à Empty pour le prochain échange
-                        self.state.store(ExchangeState::Empty as u32, Ordering::Release);
+                        self.state
+                            .store(ExchangeState::Empty as u32, Ordering::Release);
                         return Ok(());
                     }
                 }
@@ -362,7 +374,10 @@ struct RendezvousTableEntry {
 
 impl RendezvousTableEntry {
     const fn empty() -> Self {
-        Self { rdv: MaybeUninit::uninit(), occupied: AtomicBool::new(false) }
+        Self {
+            rdv: MaybeUninit::uninit(),
+            occupied: AtomicBool::new(false),
+        }
     }
 }
 
@@ -376,16 +391,23 @@ unsafe impl Sync for IpcRendezvousTable {}
 impl IpcRendezvousTable {
     const fn new() -> Self {
         const EMPTY: RendezvousTableEntry = RendezvousTableEntry::empty();
-        Self { slots: [EMPTY; MAX_RENDEZVOUS_ENTRIES], count: AtomicU32::new(0) }
+        Self {
+            slots: [EMPTY; MAX_RENDEZVOUS_ENTRIES],
+            count: AtomicU32::new(0),
+        }
     }
 
     fn alloc(&self, id: u32, parties: u32) -> Option<usize> {
-        if parties == 0 || parties as usize > MAX_RENDEZVOUS_PARTIES { return None; }
+        if parties == 0 || parties as usize > MAX_RENDEZVOUS_PARTIES {
+            return None;
+        }
         for i in 0..MAX_RENDEZVOUS_ENTRIES {
             if !self.slots[i].occupied.load(Ordering::Relaxed) {
-                if self.slots[i].occupied.compare_exchange(
-                    false, true, Ordering::AcqRel, Ordering::Relaxed,
-                ).is_ok() {
+                if self.slots[i]
+                    .occupied
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
                     // SAFETY: CAS AcqRel garantit l'exclusivité du slot; rdv MaybeUninit write-once.
                     unsafe {
                         (self.slots[i].rdv.as_ptr() as *mut IpcRendezvous)
@@ -400,17 +422,27 @@ impl IpcRendezvousTable {
     }
 
     fn get(&self, idx: usize) -> Option<&IpcRendezvous> {
-        if idx >= MAX_RENDEZVOUS_ENTRIES { return None; }
-        if !self.slots[idx].occupied.load(Ordering::Acquire) { return None; }
+        if idx >= MAX_RENDEZVOUS_ENTRIES {
+            return None;
+        }
+        if !self.slots[idx].occupied.load(Ordering::Acquire) {
+            return None;
+        }
         Some(unsafe { &*self.slots[idx].rdv.as_ptr() })
     }
 
     fn free(&self, idx: usize) -> bool {
-        if idx >= MAX_RENDEZVOUS_ENTRIES { return false; }
-        if let Some(r) = self.get(idx) { r.destroy(); }
-        if self.slots[idx].occupied.compare_exchange(
-            true, false, Ordering::AcqRel, Ordering::Relaxed,
-        ).is_ok() {
+        if idx >= MAX_RENDEZVOUS_ENTRIES {
+            return false;
+        }
+        if let Some(r) = self.get(idx) {
+            r.destroy();
+        }
+        if self.slots[idx]
+            .occupied
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
             self.count.fetch_sub(1, Ordering::Relaxed);
             true
         } else {
@@ -434,19 +466,23 @@ impl ExchangeTable {
     const fn new() -> Self {
         const UNINIT: MaybeUninit<ExchangeSlot> = MaybeUninit::uninit();
         const FALSE: AtomicBool = AtomicBool::new(false);
-        Self { slots: [UNINIT; MAX_EXCHANGE_SLOTS], occupied: [FALSE; MAX_EXCHANGE_SLOTS], count: AtomicU32::new(0) }
+        Self {
+            slots: [UNINIT; MAX_EXCHANGE_SLOTS],
+            occupied: [FALSE; MAX_EXCHANGE_SLOTS],
+            count: AtomicU32::new(0),
+        }
     }
 
     fn alloc(&self) -> Option<usize> {
         for i in 0..MAX_EXCHANGE_SLOTS {
             if !self.occupied[i].load(Ordering::Relaxed) {
-                if self.occupied[i].compare_exchange(
-                    false, true, Ordering::AcqRel, Ordering::Relaxed,
-                ).is_ok() {
+                if self.occupied[i]
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
                     // SAFETY: CAS AcqRel garantit l'exclusivité; slots[i] MaybeUninit<ExchangeSlot> write-once.
                     unsafe {
-                        (self.slots[i].as_ptr() as *mut ExchangeSlot)
-                            .write(ExchangeSlot::new());
+                        (self.slots[i].as_ptr() as *mut ExchangeSlot).write(ExchangeSlot::new());
                     }
                     self.count.fetch_add(1, Ordering::Relaxed);
                     return Some(i);
@@ -457,16 +493,23 @@ impl ExchangeTable {
     }
 
     fn get(&self, idx: usize) -> Option<&ExchangeSlot> {
-        if idx >= MAX_EXCHANGE_SLOTS { return None; }
-        if !self.occupied[idx].load(Ordering::Acquire) { return None; }
+        if idx >= MAX_EXCHANGE_SLOTS {
+            return None;
+        }
+        if !self.occupied[idx].load(Ordering::Acquire) {
+            return None;
+        }
         Some(unsafe { &*self.slots[idx].as_ptr() })
     }
 
     fn free(&self, idx: usize) -> bool {
-        if idx >= MAX_EXCHANGE_SLOTS { return false; }
-        if self.occupied[idx].compare_exchange(
-            true, false, Ordering::AcqRel, Ordering::Relaxed,
-        ).is_ok() {
+        if idx >= MAX_EXCHANGE_SLOTS {
+            return false;
+        }
+        if self.occupied[idx]
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
             self.count.fetch_sub(1, Ordering::Relaxed);
             true
         } else {
@@ -490,12 +533,18 @@ pub fn rendezvous_create(id: u32, parties: u32) -> Option<usize> {
 /// Attend que tous les `parties` soient présents.
 /// Retourne `true` si ce thread était le dernier (leader).
 pub fn rendezvous_meet(idx: usize, spin_max: u64) -> Result<bool, IpcError> {
-    IPC_RENDEZVOUS_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?.meet(spin_max)
+    IPC_RENDEZVOUS_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)?
+        .meet(spin_max)
 }
 
 /// Réarme le rendez-vous pour un prochain cycle.
 pub fn rendezvous_rearm(idx: usize) -> Result<(), IpcError> {
-    IPC_RENDEZVOUS_TABLE.get(idx).ok_or(IpcError::InvalidHandle).map(|r| r.rearm())
+    IPC_RENDEZVOUS_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)
+        .map(|r| r.rearm())
 }
 
 /// Détruit le rendez-vous et libère son slot.
@@ -533,7 +582,9 @@ pub fn exchange_swap(
     out: &mut [u8],
     spin_max: u64,
 ) -> Result<(), IpcError> {
-    IPC_EXCHANGE_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?
+    IPC_EXCHANGE_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)?
         .exchange(thread_id, data, out, spin_max)
 }
 

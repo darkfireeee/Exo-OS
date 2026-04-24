@@ -31,145 +31,77 @@
 
 // ── Déclarations de sous-modules ────────────────────────────────────────────
 
-pub mod gc_state;
-pub mod tricolor;
+pub mod blob_gc;
 pub mod blob_refcount;
+pub mod cycle_detector;
+pub mod epoch_scanner;
 pub mod gc_metrics;
+pub mod gc_scheduler;
+pub mod gc_state;
+pub mod gc_thread;
 pub mod gc_tuning;
+pub mod inline_gc;
+pub mod marker;
+pub mod orphan_collector;
 pub mod reference_tracker;
 pub mod relation_walker;
-pub mod epoch_scanner;
-pub mod marker;
 pub mod sweeper;
-pub mod cycle_detector;
-pub mod orphan_collector;
-pub mod inline_gc;
-pub mod blob_gc;
-pub mod gc_scheduler;
-pub mod gc_thread;
+pub mod tricolor;
 
 // ── Re-exports : API publique GC ────────────────────────────────────────────
 
 // gc_state
-pub use gc_state::{
-    GcPhase,
-    GcPassStats,
-    GcStateSnapshot,
-    GC_STATE,
-};
+pub use gc_state::{GcPassStats, GcPhase, GcStateSnapshot, GC_STATE};
 
 // tricolor
 pub use tricolor::{
-    TriColor,
-    BlobNode,
-    TricolorWorkspace,
-    MarkStats,
-    SweepResult,
+    BlobNode, MarkStats, SweepResult, TriColor, TricolorWorkspace, GC_MARK_BATCH_SIZE,
     MAX_GC_GREY_QUEUE,
-    GC_MARK_BATCH_SIZE,
 };
 
 // blob_refcount
-pub use blob_refcount::{
-    BLOB_REFCOUNT,
-    GC_MIN_DEFERRED_EPOCHS,
-};
+pub use blob_refcount::{BLOB_REFCOUNT, GC_MIN_DEFERRED_EPOCHS};
 
 // gc_metrics
-pub use gc_metrics::{
-    GcMetricsSnapshot,
-    GC_METRICS,
-};
+pub use gc_metrics::{GcMetricsSnapshot, GC_METRICS};
 
 // gc_tuning
-pub use gc_tuning::{
-    GcTriggerReason,
-    GcTuningParams,
-    GcSystemState,
-    GC_TUNER,
-};
+pub use gc_tuning::{GcSystemState, GcTriggerReason, GcTuningParams, GC_TUNER};
 
 // reference_tracker
-pub use reference_tracker::{
-    ReferenceTracker,
-    REFERENCE_TRACKER,
-};
+pub use reference_tracker::{ReferenceTracker, REFERENCE_TRACKER};
 
 // relation_walker
-pub use relation_walker::{
-    RelationEdge,
-    WalkStats,
-    RELATION_WALKER,
-};
+pub use relation_walker::{RelationEdge, WalkStats, RELATION_WALKER};
 
 // epoch_scanner
-pub use epoch_scanner::{
-    EpochScanSnapshot,
-    ScanStats,
-    BlobLookup,
-    EmptyBlobLookup,
-    EPOCH_SCANNER,
-};
+pub use epoch_scanner::{BlobLookup, EmptyBlobLookup, EpochScanSnapshot, ScanStats, EPOCH_SCANNER};
 
 // marker
-pub use marker::{
-    MarkingResult,
-    MarkerConfig,
-    MARKER,
-};
+pub use marker::{MarkerConfig, MarkingResult, MARKER};
 
 // sweeper
-pub use sweeper::{
-    SweeperResult,
-    SweepConfig,
-    SWEEPER,
-};
+pub use sweeper::{SweepConfig, SweeperResult, SWEEPER};
 
 // cycle_detector
-pub use cycle_detector::{
-    DetectedCycle,
-    CycleDetectStats,
-    CYCLE_DETECTOR,
-};
+pub use cycle_detector::{CycleDetectStats, DetectedCycle, CYCLE_DETECTOR};
 
 // orphan_collector
-pub use orphan_collector::{
-    OrphanResult,
-    ORPHAN_COLLECTOR,
-};
+pub use orphan_collector::{OrphanResult, ORPHAN_COLLECTOR};
 
 // inline_gc
 pub use inline_gc::{
-    InlineObjectEntry,
-    InlineGcStats,
-    InlineGcResult,
-    INLINE_GC,
-    INLINE_DATA_THRESHOLD,
+    InlineGcResult, InlineGcStats, InlineObjectEntry, INLINE_DATA_THRESHOLD, INLINE_GC,
 };
 
 // blob_gc
-pub use blob_gc::{
-    GcPassResult,
-    BlobGcConfig,
-    BLOB_GC,
-};
+pub use blob_gc::{BlobGcConfig, GcPassResult, BLOB_GC};
 
 // gc_scheduler
-pub use gc_scheduler::{
-    ScheduleReason,
-    ScheduleDecision,
-    GcSchedulerStats,
-    GC_SCHEDULER,
-};
+pub use gc_scheduler::{GcSchedulerStats, ScheduleDecision, ScheduleReason, GC_SCHEDULER};
 
 // gc_thread
-pub use gc_thread::{
-    GcThread,
-    GcThreadStats,
-    GcThreadControl,
-    GC_THREAD,
-    gc_thread_entry,
-};
+pub use gc_thread::{gc_thread_entry, GcThread, GcThreadControl, GcThreadStats, GC_THREAD};
 
 // ==============================================================================
 // Initialisation du sous-système GC

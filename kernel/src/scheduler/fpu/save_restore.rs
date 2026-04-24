@@ -13,9 +13,9 @@
 //   switch_asm.s ne touche PAS MXCSR ni FCW (V7-C-02 — kernel compilé sans SSE).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::Ordering;
 use super::state::{FpuState, XSAVE_AREA_SIZE};
 use crate::scheduler::core::task::ThreadControlBlock;
+use core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FFI vers arch/x86_64/cpu/fpu.rs (instructions ASM brutes)
@@ -32,8 +32,7 @@ extern "C" {
 }
 
 /// Cache statique de la disponibilité XSAVE (lu une seule fois au boot).
-static HAS_XSAVE: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
+static HAS_XSAVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Initialise le module save_restore (détecte XSAVE, appelle detect_xsave_size).
 /// Appelé depuis scheduler::init(), step 3.
@@ -142,8 +141,8 @@ pub unsafe fn alloc_fpu_state(tcb: &mut ThreadControlBlock) -> bool {
     // BUG-FIX F : interdire les allocations depuis un contexte IN_RECLAIM.
     // Appeler l'allocateur heap depuis IN_RECLAIM peut créer un deadlock si
     // l'allocateur lui-même attend l'EmergencyPool (RÈGLE FPU-03).
-    if tcb.sched_state.load(Ordering::Relaxed)
-        & crate::scheduler::core::task::SCHED_IN_RECLAIM_BIT != 0
+    if tcb.sched_state.load(Ordering::Relaxed) & crate::scheduler::core::task::SCHED_IN_RECLAIM_BIT
+        != 0
     {
         return false;
     }

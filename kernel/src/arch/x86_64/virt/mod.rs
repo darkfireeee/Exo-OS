@@ -7,6 +7,6 @@ pub mod detect;
 pub mod paravirt;
 pub mod stolen_time;
 
-pub use detect::{detect_hypervisor, HypervisorType, hypervisor_type};
+pub use detect::{detect_hypervisor, hypervisor_type, HypervisorType};
 pub use paravirt::{paravirt_eoi, paravirt_tlb_flush};
 pub use stolen_time::{stolen_time_ns, update_stolen_time};

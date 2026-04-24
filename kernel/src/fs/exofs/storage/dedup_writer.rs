@@ -14,12 +14,12 @@
 // - OOM-02   : try_reserve avant toute insertion.
 // - ARITH-02 : checked_add pour l'offset disque.
 
+use crate::fs::exofs::core::blob_id::compute_blob_id;
+use crate::fs::exofs::core::{BlobId, DiskOffset, ExofsError, ExofsResult};
+use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
+use crate::scheduler::sync::spinlock::SpinLock;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::sync::spinlock::SpinLock;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId, DiskOffset};
-use crate::fs::exofs::core::blob_id::compute_blob_id;
-use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DedupEntry — entrée dans l'index de déduplication
@@ -27,15 +27,20 @@ use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 
 #[derive(Clone, Debug)]
 pub struct DedupEntry {
-    pub blob_id:   BlobId,
-    pub offset:    DiskOffset,
-    pub size:      u64,
+    pub blob_id: BlobId,
+    pub offset: DiskOffset,
+    pub size: u64,
     pub ref_count: u32,
 }
 
 impl DedupEntry {
     pub fn new(blob_id: BlobId, offset: DiskOffset, size: u64) -> Self {
-        Self { blob_id, offset, size, ref_count: 1 }
+        Self {
+            blob_id,
+            offset,
+            size,
+            ref_count: 1,
+        }
     }
 
     pub fn inc_ref(&mut self) {
@@ -57,23 +62,25 @@ pub enum DedupDecision {
     /// Blob déjà présent — écriture inutile.
     Hit {
         blob_id: BlobId,
-        offset:  DiskOffset,
-        saved:   u64,
+        offset: DiskOffset,
+        saved: u64,
     },
     /// Blob nouveau — doit être écrit.
-    Miss {
-        blob_id: BlobId,
-    },
+    Miss { blob_id: BlobId },
 }
 
 impl DedupDecision {
-    pub fn is_hit(&self)  -> bool { matches!(self, Self::Hit  { .. }) }
-    pub fn is_miss(&self) -> bool { matches!(self, Self::Miss { .. }) }
+    pub fn is_hit(&self) -> bool {
+        matches!(self, Self::Hit { .. })
+    }
+    pub fn is_miss(&self) -> bool {
+        matches!(self, Self::Miss { .. })
+    }
 
     pub fn blob_id(&self) -> &BlobId {
         match self {
-            Self::Hit  { blob_id, .. } => blob_id,
-            Self::Miss { blob_id }     => blob_id,
+            Self::Hit { blob_id, .. } => blob_id,
+            Self::Miss { blob_id } => blob_id,
         }
     }
 }
@@ -90,7 +97,11 @@ struct DedupBucket {
 
 impl DedupBucket {
     #[allow(dead_code)]
-    const fn new() -> Self { Self { entries: Vec::new() } }
+    const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
 
     fn find(&self, id: &BlobId) -> Option<&DedupEntry> {
         self.entries.iter().find(|e| e.blob_id == *id)
@@ -101,7 +112,9 @@ impl DedupBucket {
     }
 
     fn insert(&mut self, entry: DedupEntry) -> ExofsResult<()> {
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.entries.push(entry);
         Ok(())
     }
@@ -114,19 +127,26 @@ impl DedupBucket {
         }
     }
 
-    fn len(&self) -> usize { self.entries.len() }
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 struct DedupIndexInner {
-    buckets:   [DedupBucket; DEDUP_BUCKETS],
-    total:     usize,
+    buckets: [DedupBucket; DEDUP_BUCKETS],
+    total: usize,
 }
 
 impl DedupIndexInner {
     fn new() -> Self {
         // Initialiser les 256 buckets.
-        const EMPTY: DedupBucket = DedupBucket { entries: Vec::new() };
-        Self { buckets: [EMPTY; DEDUP_BUCKETS], total: 0 }
+        const EMPTY: DedupBucket = DedupBucket {
+            entries: Vec::new(),
+        };
+        Self {
+            buckets: [EMPTY; DEDUP_BUCKETS],
+            total: 0,
+        }
     }
 
     fn bucket_index(id: &BlobId) -> usize {
@@ -167,15 +187,21 @@ impl DedupIndexInner {
 
     fn remove(&mut self, id: &BlobId) -> Option<DedupEntry> {
         let idx = Self::bucket_index(id);
-        let r   = self.buckets[idx].remove(id);
-        if r.is_some() { self.total = self.total.saturating_sub(1); }
+        let r = self.buckets[idx].remove(id);
+        if r.is_some() {
+            self.total = self.total.saturating_sub(1);
+        }
         r
     }
 
-    fn total_entries(&self) -> usize { self.total }
+    fn total_entries(&self) -> usize {
+        self.total
+    }
 
     fn load_factor_pct(&self) -> u32 {
-        if DEDUP_BUCKETS == 0 { return 0; }
+        if DEDUP_BUCKETS == 0 {
+            return 0;
+        }
         (self.total * 100 / DEDUP_BUCKETS) as u32
     }
 }
@@ -185,19 +211,19 @@ impl DedupIndexInner {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct DedupWriter {
-    index:  SpinLock<DedupIndexInner>,
-    hits:   AtomicU64,
+    index: SpinLock<DedupIndexInner>,
+    hits: AtomicU64,
     misses: AtomicU64,
-    saved:  AtomicU64,
+    saved: AtomicU64,
 }
 
 impl DedupWriter {
     pub fn new() -> Self {
         Self {
-            index:  SpinLock::new(DedupIndexInner::new()),
-            hits:   AtomicU64::new(0),
+            index: SpinLock::new(DedupIndexInner::new()),
+            hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
-            saved:  AtomicU64::new(0),
+            saved: AtomicU64::new(0),
         }
     }
 
@@ -206,16 +232,20 @@ impl DedupWriter {
     /// # Règle HASH-02 : `raw_data` est le contenu AVANT compression.
     pub fn check(&self, raw_data: &[u8]) -> DedupDecision {
         let blob_id = compute_blob_id(raw_data);
-        let guard   = self.index.lock();
+        let guard = self.index.lock();
 
         if let Some(entry) = guard.lookup(&blob_id) {
             let offset = entry.offset;
-            let saved  = raw_data.len() as u64;
+            let saved = raw_data.len() as u64;
             drop(guard);
             self.hits.fetch_add(1, Ordering::Relaxed);
             self.saved.fetch_add(saved, Ordering::Relaxed);
             STORAGE_STATS.inc_dedup_hit(saved);
-            DedupDecision::Hit { blob_id, offset, saved }
+            DedupDecision::Hit {
+                blob_id,
+                offset,
+                saved,
+            }
         } else {
             drop(guard);
             self.misses.fetch_add(1, Ordering::Relaxed);
@@ -225,12 +255,7 @@ impl DedupWriter {
     }
 
     /// Enregistre un blob nouvellement écrit dans l'index.
-    pub fn register(
-        &self,
-        blob_id: BlobId,
-        offset:  DiskOffset,
-        size:    u64,
-    ) -> ExofsResult<()> {
+    pub fn register(&self, blob_id: BlobId, offset: DiskOffset, size: u64) -> ExofsResult<()> {
         let entry = DedupEntry::new(blob_id, offset, size);
         let mut g = self.index.lock();
         // Vérifier que le blob n'existe pas déjà (double registration).
@@ -261,22 +286,38 @@ impl DedupWriter {
         self.index.lock().remove(blob_id)
     }
 
-    pub fn hit_count(&self)    -> u64 { self.hits.load(Ordering::Relaxed) }
-    pub fn miss_count(&self)   -> u64 { self.misses.load(Ordering::Relaxed) }
-    pub fn bytes_saved(&self)  -> u64 { self.saved.load(Ordering::Relaxed) }
-    pub fn entry_count(&self)  -> usize { self.index.lock().total_entries() }
-    pub fn load_factor_pct(&self) -> u32 { self.index.lock().load_factor_pct() }
+    pub fn hit_count(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+    pub fn miss_count(&self) -> u64 {
+        self.misses.load(Ordering::Relaxed)
+    }
+    pub fn bytes_saved(&self) -> u64 {
+        self.saved.load(Ordering::Relaxed)
+    }
+    pub fn entry_count(&self) -> usize {
+        self.index.lock().total_entries()
+    }
+    pub fn load_factor_pct(&self) -> u32 {
+        self.index.lock().load_factor_pct()
+    }
 
     pub fn dedup_ratio_milli(&self) -> u64 {
         let h = self.hit_count();
         let m = self.miss_count();
         let t = h.saturating_add(m);
-        if t == 0 { 0 } else { h * 1000 / t }
+        if t == 0 {
+            0
+        } else {
+            h * 1000 / t
+        }
     }
 }
 
 impl Default for DedupWriter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -287,11 +328,13 @@ impl Default for DedupWriter {
 mod tests {
     use super::*;
 
-    fn make_offset(n: u64) -> DiskOffset { DiskOffset(n * 4096) }
+    fn make_offset(n: u64) -> DiskOffset {
+        DiskOffset(n * 4096)
+    }
 
     #[test]
     fn test_first_write_is_miss() {
-        let w   = DedupWriter::new();
+        let w = DedupWriter::new();
         let dec = w.check(b"unique data abc");
         assert!(dec.is_miss());
         assert_eq!(w.miss_count(), 1);
@@ -299,10 +342,10 @@ mod tests {
 
     #[test]
     fn test_second_write_is_hit() {
-        let w    = DedupWriter::new();
+        let w = DedupWriter::new();
         let data = b"duplicate blob content 1234567890";
-        let dec  = w.check(data);
-        let id   = *dec.blob_id();
+        let dec = w.check(data);
+        let id = *dec.blob_id();
         w.register(id, make_offset(1), data.len() as u64).unwrap();
 
         let dec2 = w.check(data);
@@ -312,10 +355,10 @@ mod tests {
 
     #[test]
     fn test_bytes_saved() {
-        let w    = DedupWriter::new();
+        let w = DedupWriter::new();
         let data = b"some data ABCDEF0123456";
-        let dec  = w.check(data);
-        let id   = *dec.blob_id();
+        let dec = w.check(data);
+        let id = *dec.blob_id();
         w.register(id, make_offset(2), data.len() as u64).unwrap();
         w.check(data);
         assert_eq!(w.bytes_saved(), data.len() as u64);
@@ -323,10 +366,10 @@ mod tests {
 
     #[test]
     fn test_entry_count_and_unregister() {
-        let w    = DedupWriter::new();
+        let w = DedupWriter::new();
         let data = b"content to dedup";
-        let dec  = w.check(data);
-        let id   = *dec.blob_id();
+        let dec = w.check(data);
+        let id = *dec.blob_id();
         w.register(id, make_offset(3), data.len() as u64).unwrap();
         assert_eq!(w.entry_count(), 1);
         w.unregister(&id);
@@ -339,15 +382,15 @@ mod tests {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct GcReport {
-    pub entries_scanned:  u64,
-    pub entries_removed:  u64,
-    pub bytes_reclaimed:  u64,
+    pub entries_scanned: u64,
+    pub entries_removed: u64,
+    pub bytes_reclaimed: u64,
 }
 
 impl DedupWriter {
     /// Retire toutes les entrées dont le ref_count est 0.
     pub fn gc(&self) -> ExofsResult<GcReport> {
-        let mut idx     = self.index.lock();
+        let mut idx = self.index.lock();
         let mut removed = 0u64;
         let mut reclaimed = 0u64;
         let mut scanned = 0u64;
@@ -369,7 +412,11 @@ impl DedupWriter {
 
         idx.total = idx.total.saturating_sub(removed as usize);
 
-        Ok(GcReport { entries_scanned: scanned, entries_removed: removed, bytes_reclaimed: reclaimed })
+        Ok(GcReport {
+            entries_scanned: scanned,
+            entries_removed: removed,
+            bytes_reclaimed: reclaimed,
+        })
     }
 
     /// Liste tous les blobs dont le ref_count est exactement 1 (candidats GC).
@@ -420,10 +467,10 @@ mod tests_extra {
 
     #[test]
     fn test_gc_removes_zero_ref() {
-        let w    = DedupWriter::new();
+        let w = DedupWriter::new();
         let data = b"gc test data 12345";
-        let dec  = w.check(data);
-        let id   = *dec.blob_id();
+        let dec = w.check(data);
+        let id = *dec.blob_id();
         w.register(id, DiskOffset(0), data.len() as u64).unwrap();
         // Décrémente à 0.
         w.dec_ref(&id);
@@ -433,24 +480,26 @@ mod tests_extra {
 
     #[test]
     fn test_snapshot_restore() {
-        let w1   = DedupWriter::new();
+        let w1 = DedupWriter::new();
         let data = b"snapshot content ABCDEF";
-        let dec  = w1.check(data);
-        let id   = *dec.blob_id();
-        w1.register(id, DiskOffset(8192), data.len() as u64).unwrap();
+        let dec = w1.check(data);
+        let id = *dec.blob_id();
+        w1.register(id, DiskOffset(8192), data.len() as u64)
+            .unwrap();
 
         let snap = w1.snapshot().unwrap();
-        let w2   = DedupWriter::new();
+        let w2 = DedupWriter::new();
         w2.restore_snapshot(&snap).unwrap();
         assert_eq!(w2.entry_count(), 1);
     }
 
     #[test]
     fn test_orphan_detection() {
-        let w   = DedupWriter::new();
-        let d1  = b"orphan candidate data 1234";
+        let w = DedupWriter::new();
+        let d1 = b"orphan candidate data 1234";
         let dec = w.check(d1);
-        w.register(*dec.blob_id(), DiskOffset(0), d1.len() as u64).unwrap();
+        w.register(*dec.blob_id(), DiskOffset(0), d1.len() as u64)
+            .unwrap();
         let orphans = w.orphans();
         assert!(!orphans.is_empty());
     }

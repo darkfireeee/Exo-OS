@@ -4,11 +4,10 @@
 //! `WarmingStrategy` : politique de prélecture.
 //! Règles : RECUR-01, OOM-02, ARITH-02.
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WarmingStrategy
@@ -35,24 +34,34 @@ pub enum WarmingStrategy {
 #[derive(Clone, Debug)]
 pub struct WarmEntry {
     /// Identifiant du blob.
-    pub blob_id:    BlobId,
+    pub blob_id: BlobId,
     /// Score combiné (fréquence * 1000 + recéence_relative).
-    pub score:      u32,
+    pub score: u32,
     /// Taille estimée en octets.
-    pub size_hint:  u64,
+    pub size_hint: u64,
     /// Ticks du dernier accès.
     pub last_ticks: u64,
     /// Nombre d'accès historiques.
-    pub freq:       u32,
+    pub freq: u32,
 }
 
 impl WarmEntry {
     pub fn new(blob_id: BlobId, freq: u32, last_ticks: u64, size_hint: u64) -> Self {
         let score = freq.saturating_mul(1000).saturating_add(
             // normalise la récence (ticks récents = score plus haut)
-            if last_ticks > 0 { (last_ticks % 1000) as u32 } else { 0 },
+            if last_ticks > 0 {
+                (last_ticks % 1000) as u32
+            } else {
+                0
+            },
         );
-        Self { blob_id, score, size_hint, last_ticks, freq }
+        Self {
+            blob_id,
+            score,
+            size_hint,
+            last_ticks,
+            freq,
+        }
     }
 }
 
@@ -62,10 +71,10 @@ impl WarmEntry {
 
 /// File de pré-chargement de blobs avec stratégie ordonnable.
 pub struct CacheWarmer {
-    queue:    Vec<WarmEntry>,
+    queue: Vec<WarmEntry>,
     strategy: WarmingStrategy,
-    warmed:   u64,
-    skipped:  u64,
+    warmed: u64,
+    skipped: u64,
     /// Taille maximale de la file.
     max_queue: usize,
 }
@@ -75,8 +84,8 @@ impl CacheWarmer {
         Self {
             queue: Vec::new(),
             strategy,
-            warmed:    0,
-            skipped:   0,
+            warmed: 0,
+            skipped: 0,
             max_queue: max_queue.max(1),
         }
     }
@@ -88,7 +97,9 @@ impl CacheWarmer {
         if self.queue.len() >= self.max_queue {
             return Err(ExofsError::NoSpace);
         }
-        self.queue.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.queue
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.queue.push(entry);
         Ok(())
     }
@@ -101,7 +112,8 @@ impl CacheWarmer {
                 self.queue.sort_unstable_by(|a, b| b.freq.cmp(&a.freq));
             }
             WarmingStrategy::ByRecency => {
-                self.queue.sort_unstable_by(|a, b| b.last_ticks.cmp(&a.last_ticks));
+                self.queue
+                    .sort_unstable_by(|a, b| b.last_ticks.cmp(&a.last_ticks));
             }
             WarmingStrategy::Selective { min_score } => {
                 self.queue.retain(|e| e.score >= min_score);
@@ -124,18 +136,31 @@ impl CacheWarmer {
 
     // ── Statistiques ──────────────────────────────────────────────────────────
 
-    pub fn queue_len(&self)  -> usize { self.queue.len() }
-    pub fn warmed(&self)     -> u64   { self.warmed }
-    pub fn skipped(&self)    -> u64   { self.skipped }
-    pub fn strategy(&self)   -> WarmingStrategy { self.strategy }
-    pub fn is_empty(&self)   -> bool  { self.queue.is_empty() }
+    pub fn queue_len(&self) -> usize {
+        self.queue.len()
+    }
+    pub fn warmed(&self) -> u64 {
+        self.warmed
+    }
+    pub fn skipped(&self) -> u64 {
+        self.skipped
+    }
+    pub fn strategy(&self) -> WarmingStrategy {
+        self.strategy
+    }
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
 
     /// Vide la file.
-    pub fn clear(&mut self) { self.queue.clear(); }
+    pub fn clear(&mut self) {
+        self.queue.clear();
+    }
 
     /// Taille totale estimée des blobs en queue.
     pub fn queued_bytes(&self) -> u64 {
-        self.queue.iter()
+        self.queue
+            .iter()
             .map(|e| e.size_hint)
             .fold(0u64, |acc, v| acc.saturating_add(v))
     }
@@ -160,26 +185,31 @@ impl CacheWarmer {
 mod tests {
     use super::*;
 
-    fn blob(b: u8) -> BlobId { BlobId([b; 32]) }
+    fn blob(b: u8) -> BlobId {
+        BlobId([b; 32])
+    }
     fn entry(b: u8, freq: u32, ticks: u64) -> WarmEntry {
         WarmEntry::new(blob(b), freq, ticks, 512)
     }
 
-    #[test] fn test_enqueue_and_len() {
+    #[test]
+    fn test_enqueue_and_len() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
         w.enqueue(entry(1, 5, 100)).unwrap();
         w.enqueue(entry(2, 3, 200)).unwrap();
         assert_eq!(w.queue_len(), 2);
     }
 
-    #[test] fn test_enqueue_overflow() {
+    #[test]
+    fn test_enqueue_overflow() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 2);
         w.enqueue(entry(1, 1, 1)).unwrap();
         w.enqueue(entry(2, 1, 1)).unwrap();
         assert!(w.enqueue(entry(3, 1, 1)).is_err());
     }
 
-    #[test] fn test_sort_by_frequency() {
+    #[test]
+    fn test_sort_by_frequency() {
         let mut w = CacheWarmer::new(WarmingStrategy::ByFrequency, 10);
         w.enqueue(entry(1, 1, 0)).unwrap();
         w.enqueue(entry(2, 9, 0)).unwrap();
@@ -188,7 +218,8 @@ mod tests {
         assert_eq!(batch[0].blob_id, blob(2));
     }
 
-    #[test] fn test_sort_by_recency() {
+    #[test]
+    fn test_sort_by_recency() {
         let mut w = CacheWarmer::new(WarmingStrategy::ByRecency, 10);
         w.enqueue(entry(1, 1, 50)).unwrap();
         w.enqueue(entry(2, 1, 200)).unwrap();
@@ -197,24 +228,29 @@ mod tests {
         assert_eq!(batch[0].blob_id, blob(2));
     }
 
-    #[test] fn test_selective_filters() {
+    #[test]
+    fn test_selective_filters() {
         let mut w = CacheWarmer::new(WarmingStrategy::Selective { min_score: 5000 }, 10);
-        w.enqueue(entry(1, 1, 0)).unwrap();  // score = 1000
-        w.enqueue(entry(2, 6, 0)).unwrap();  // score = 6000
+        w.enqueue(entry(1, 1, 0)).unwrap(); // score = 1000
+        w.enqueue(entry(2, 6, 0)).unwrap(); // score = 6000
         w.sort_queue();
         assert_eq!(w.queue_len(), 1);
         assert_eq!(w.queue[0].blob_id, blob(2));
     }
 
-    #[test] fn test_next_batch_reduces_queue() {
+    #[test]
+    fn test_next_batch_reduces_queue() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
-        for i in 0..5u8 { w.enqueue(entry(i, 1, 0)).unwrap(); }
+        for i in 0..5u8 {
+            w.enqueue(entry(i, 1, 0)).unwrap();
+        }
         let b = w.next_batch(3);
         assert_eq!(b.len(), 3);
         assert_eq!(w.queue_len(), 2);
     }
 
-    #[test] fn test_warmed_counter() {
+    #[test]
+    fn test_warmed_counter() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
         w.enqueue(entry(1, 1, 0)).unwrap();
         w.enqueue(entry(2, 1, 0)).unwrap();
@@ -222,13 +258,15 @@ mod tests {
         assert_eq!(w.warmed(), 2);
     }
 
-    #[test] fn test_queued_bytes() {
+    #[test]
+    fn test_queued_bytes() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
         w.enqueue(WarmEntry::new(blob(1), 1, 0, 1024)).unwrap();
         assert_eq!(w.queued_bytes(), 1024);
     }
 
-    #[test] fn test_dedup_with() {
+    #[test]
+    fn test_dedup_with() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
         w.enqueue(entry(1, 1, 0)).unwrap();
         w.enqueue(entry(2, 1, 0)).unwrap();
@@ -237,7 +275,8 @@ mod tests {
         assert_eq!(w.skipped(), 1);
     }
 
-    #[test] fn test_clear() {
+    #[test]
+    fn test_clear() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
         w.enqueue(entry(1, 1, 0)).unwrap();
         w.clear();
@@ -287,7 +326,9 @@ impl CacheWarmer {
 
     /// Nombre de blobs en attente avec size_hint > `threshold`.
     pub fn count_large(&self, threshold: u64) -> usize {
-        self.queue.iter().filter(|e| e.size_hint > threshold).count()
+        self.queue
+            .iter()
+            .filter(|e| e.size_hint > threshold)
+            .count()
     }
 }
-

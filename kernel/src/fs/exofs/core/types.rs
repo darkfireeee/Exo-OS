@@ -117,7 +117,9 @@ impl Default for BlobId {
 pub struct EpochId(pub u64);
 
 impl Default for EpochId {
-    fn default() -> Self { Self(0) }
+    fn default() -> Self {
+        Self(0)
+    }
 }
 
 impl EpochId {
@@ -164,7 +166,9 @@ pub struct DiskOffset(pub u64);
 impl DiskOffset {
     pub const INVALID: Self = Self(u64::MAX);
     pub const ZERO: Self = Self(0);
-    pub fn zero() -> Self { Self(0) }
+    pub fn zero() -> Self {
+        Self(0)
+    }
 
     /// Addition sûre : retourne None en cas d'overflow (règle ARITH-01).
     #[inline]
@@ -190,7 +194,10 @@ impl DiskOffset {
     /// Retourne None en cas d'overflow (règle ARITH-02).
     #[inline]
     pub fn align_up(self, align: u64) -> Option<Self> {
-        debug_assert!(align > 0 && align.is_power_of_two(), "align_up: non power-of-2");
+        debug_assert!(
+            align > 0 && align.is_power_of_two(),
+            "align_up: non power-of-2"
+        );
         let mask = align - 1;
         self.0.checked_add(mask).map(|v| Self(v & !mask))
     }
@@ -200,7 +207,10 @@ impl DiskOffset {
     /// `align` doit être une puissance de 2 non nulle.
     #[inline]
     pub fn align_down(self, align: u64) -> Self {
-        debug_assert!(align > 0 && align.is_power_of_two(), "align_down: non power-of-2");
+        debug_assert!(
+            align > 0 && align.is_power_of_two(),
+            "align_down: non power-of-2"
+        );
         Self(self.0 & !(align - 1))
     }
 
@@ -217,13 +227,17 @@ impl DiskOffset {
         let a = self.0 as i128;
         let b = other.0 as i128;
         let d = a - b;
-        if d < i64::MIN as i128 || d > i64::MAX as i128 { return None; }
+        if d < i64::MIN as i128 || d > i64::MAX as i128 {
+            return None;
+        }
         Some(d as i64)
     }
 
     /// Vrai si cet offset est l'offset invalide sentinelle.
     #[inline]
-    pub fn is_invalid(self) -> bool { self == Self::INVALID }
+    pub fn is_invalid(self) -> bool {
+        self == Self::INVALID
+    }
 }
 
 impl fmt::Display for DiskOffset {
@@ -247,12 +261,18 @@ pub struct Extent {
 }
 
 impl Extent {
-    pub const EMPTY: Self = Self { offset: DiskOffset(0), len: 0 };
+    pub const EMPTY: Self = Self {
+        offset: DiskOffset(0),
+        len: 0,
+    };
 
     /// Crée un extent depuis un offset et une longueur.
     #[inline]
     pub const fn new(offset: u64, len: u64) -> Self {
-        Self { offset: DiskOffset(offset), len }
+        Self {
+            offset: DiskOffset(offset),
+            len,
+        }
     }
 
     /// Retourne l'offset de fin (exclusif). None en cas d'overflow.
@@ -263,21 +283,27 @@ impl Extent {
 
     /// Vrai si l'extent est vide.
     #[inline]
-    pub fn is_empty(self) -> bool { self.len == 0 }
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
 
     /// Vrai si `off` est à l'intérieur de cet extent.
     #[inline]
     pub fn contains_offset(self, off: DiskOffset) -> bool {
-        off.0 >= self.offset.0
-            && self.end().map(|e| off.0 < e.0).unwrap_or(false)
+        off.0 >= self.offset.0 && self.end().map(|e| off.0 < e.0).unwrap_or(false)
     }
 
     /// Vrai si les deux extents se chevauchent (intersection non vide).
     pub fn overlaps(self, other: Extent) -> bool {
-        let a_end = match self.end()  { Some(v) => v.0, None => return false };
-        let b_end = match other.end() { Some(v) => v.0, None => return false };
-        self.offset.0
-        < b_end && other.offset.0 < a_end
+        let a_end = match self.end() {
+            Some(v) => v.0,
+            None => return false,
+        };
+        let b_end = match other.end() {
+            Some(v) => v.0,
+            None => return false,
+        };
+        self.offset.0 < b_end && other.offset.0 < a_end
     }
 
     /// Calcule l'intersection de deux extents.
@@ -287,9 +313,14 @@ impl Extent {
         let start = self.offset.0.max(other.offset.0);
         let a_end = self.end()?.0;
         let b_end = other.end()?.0;
-        let end   = a_end.min(b_end);
-        if start >= end { return None; }
-        Some(Extent { offset: DiskOffset(start), len: end - start })
+        let end = a_end.min(b_end);
+        if start >= end {
+            return None;
+        }
+        Some(Extent {
+            offset: DiskOffset(start),
+            len: end - start,
+        })
     }
 
     /// Fusionne deux extents contigus ou adjacents en un seul.
@@ -300,10 +331,16 @@ impl Extent {
         let b_end = other.end()?.0;
         if a_end == other.offset.0 {
             // self est avant other
-            Some(Extent { offset: self.offset, len: self.len.checked_add(other.len)? })
+            Some(Extent {
+                offset: self.offset,
+                len: self.len.checked_add(other.len)?,
+            })
         } else if b_end == self.offset.0 {
             // other est avant self
-            Some(Extent { offset: other.offset, len: other.len.checked_add(self.len)? })
+            Some(Extent {
+                offset: other.offset,
+                len: other.len.checked_add(self.len)?,
+            })
         } else {
             None
         }
@@ -313,8 +350,13 @@ impl Extent {
     ///
     /// Retourne (gauche, droite). Retourne None si `split_at` est hors limites.
     pub fn split(self, split_at: u64) -> Option<(Extent, Extent)> {
-        if split_at == 0 || split_at >= self.len { return None; }
-        let left  = Extent { offset: self.offset, len: split_at };
+        if split_at == 0 || split_at >= self.len {
+            return None;
+        }
+        let left = Extent {
+            offset: self.offset,
+            len: split_at,
+        };
         let right = Extent {
             offset: DiskOffset(self.offset.0.checked_add(split_at)?),
             len: self.len - split_at,
@@ -326,10 +368,13 @@ impl Extent {
     /// et vers le haut pour la fin (arrondi conservateur).
     pub fn expand_to_block_boundaries(self, block_size: u64) -> Option<Extent> {
         let aligned_start = self.offset.align_down(block_size);
-        let raw_end       = self.end()?.0;
-        let aligned_end   = DiskOffset(raw_end).align_up(block_size)?.0;
-        let new_len       = aligned_end.checked_sub(aligned_start.0)?;
-        Some(Extent { offset: aligned_start, len: new_len })
+        let raw_end = self.end()?.0;
+        let aligned_end = DiskOffset(raw_end).align_up(block_size)?.0;
+        let new_len = aligned_end.checked_sub(aligned_start.0)?;
+        Some(Extent {
+            offset: aligned_start,
+            len: new_len,
+        })
     }
 }
 
@@ -360,7 +405,9 @@ impl PhysAddr {
     #[inline]
     pub fn align_up(self, align: u64) -> Option<Self> {
         debug_assert!(align > 0 && align.is_power_of_two());
-        self.0.checked_add(align - 1).map(|v| Self(v & !(align - 1)))
+        self.0
+            .checked_add(align - 1)
+            .map(|v| Self(v & !(align - 1)))
     }
 }
 
@@ -382,7 +429,7 @@ impl fmt::Display for PhysAddr {
 #[repr(C)]
 pub struct TimeSpec {
     /// Secondes depuis le démarrage (ou epoch arbitraire).
-    pub secs:  u64,
+    pub secs: u64,
     /// Nanosecondes [0, 999_999_999].
     pub nanos: u32,
     /// Padding pour alignement 16B.
@@ -391,7 +438,11 @@ pub struct TimeSpec {
 
 impl TimeSpec {
     /// Horodatage zéro (origine / valeur invalide).
-    pub const ZERO: Self = Self { secs: 0, nanos: 0, _pad: 0 };
+    pub const ZERO: Self = Self {
+        secs: 0,
+        nanos: 0,
+        _pad: 0,
+    };
 
     /// Crée un TimeSpec depuis des secondes et nanosecondes.
     ///
@@ -399,7 +450,11 @@ impl TimeSpec {
     pub fn new(secs: u64, nanos: u32) -> Self {
         let extra_secs = (nanos / 1_000_000_000) as u64;
         let norm_nanos = nanos % 1_000_000_000;
-        Self { secs: secs.saturating_add(extra_secs), nanos: norm_nanos, _pad: 0 }
+        Self {
+            secs: secs.saturating_add(extra_secs),
+            nanos: norm_nanos,
+            _pad: 0,
+        }
     }
 
     /// Crée depuis des millisecondes depuis l'origine.
@@ -409,26 +464,35 @@ impl TimeSpec {
 
     /// Durée en millisecondes (perte de précision en dessous de 1 ms).
     pub fn as_millis(self) -> u64 {
-        self.secs.saturating_mul(1_000)
+        self.secs
+            .saturating_mul(1_000)
             .saturating_add((self.nanos / 1_000_000) as u64)
     }
 
     /// Soustraction saturante : retourne la durée entre deux timestamps.
     pub fn saturating_elapsed(self, older: TimeSpec) -> TimeSpec {
-        if self <= older { return Self::ZERO; }
+        if self <= older {
+            return Self::ZERO;
+        }
         let (mut s, mut n) = (self.secs - older.secs, self.nanos);
         if n < older.nanos {
-            s  = s.saturating_sub(1);
-            n  = n + 1_000_000_000 - older.nanos;
+            s = s.saturating_sub(1);
+            n = n + 1_000_000_000 - older.nanos;
         } else {
             n -= older.nanos;
         }
-        Self { secs: s, nanos: n, _pad: 0 }
+        Self {
+            secs: s,
+            nanos: n,
+            _pad: 0,
+        }
     }
 
     /// Vrai si cet horodatage est plus récent que `other`.
     #[inline]
-    pub fn is_after(self, other: TimeSpec) -> bool { self > other }
+    pub fn is_after(self, other: TimeSpec) -> bool {
+        self > other
+    }
 }
 
 impl fmt::Display for TimeSpec {
@@ -447,7 +511,7 @@ impl fmt::Display for TimeSpec {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ByteRange {
     pub start: u64,
-    pub len:   u64,
+    pub len: u64,
 }
 
 impl ByteRange {
@@ -455,15 +519,21 @@ impl ByteRange {
 
     /// Crée une ByteRange.
     #[inline]
-    pub const fn new(start: u64, len: u64) -> Self { Self { start, len } }
+    pub const fn new(start: u64, len: u64) -> Self {
+        Self { start, len }
+    }
 
     /// Retourne la position de fin (exclusive). None si overflow.
     #[inline]
-    pub fn end(self) -> Option<u64> { self.start.checked_add(self.len) }
+    pub fn end(self) -> Option<u64> {
+        self.start.checked_add(self.len)
+    }
 
     /// Vrai si la plage est vide.
     #[inline]
-    pub fn is_empty(self) -> bool { self.len == 0 }
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
 
     /// Vrai si `offset` est dans la plage.
     #[inline]
@@ -474,9 +544,14 @@ impl ByteRange {
     /// Intersection de deux ByteRanges.
     pub fn intersection(self, other: ByteRange) -> Option<ByteRange> {
         let start = self.start.max(other.start);
-        let end   = self.end()?.min(other.end()?);
-        if start >= end { return None; }
-        Some(ByteRange { start, len: end - start })
+        let end = self.end()?.min(other.end()?);
+        if start >= end {
+            return None;
+        }
+        Some(ByteRange {
+            start,
+            len: end - start,
+        })
     }
 
     /// Vrai si les deux plages se chevauchent.
@@ -486,11 +561,16 @@ impl ByteRange {
 
     /// Divise la plage à l'offset relatif `split_at`.
     pub fn split(self, split_at: u64) -> Option<(ByteRange, ByteRange)> {
-        if split_at == 0 || split_at >= self.len { return None; }
-        let left  = ByteRange { start: self.start, len: split_at };
+        if split_at == 0 || split_at >= self.len {
+            return None;
+        }
+        let left = ByteRange {
+            start: self.start,
+            len: split_at,
+        };
         let right = ByteRange {
             start: self.start.checked_add(split_at)?,
-            len:   self.len - split_at,
+            len: self.len - split_at,
         };
         Some((left, right))
     }
@@ -498,7 +578,12 @@ impl ByteRange {
 
 impl fmt::Display for ByteRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ByteRange({:#x}..{:#x})", self.start, self.end().unwrap_or(u64::MAX))
+        write!(
+            f,
+            "ByteRange({:#x}..{:#x})",
+            self.start,
+            self.end().unwrap_or(u64::MAX)
+        )
     }
 }
 
@@ -518,11 +603,16 @@ pub struct InlineData {
 
 impl InlineData {
     /// Buffer vide.
-    pub const EMPTY: Self = Self { buf: [0u8; 128], len: 0 };
+    pub const EMPTY: Self = Self {
+        buf: [0u8; 128],
+        len: 0,
+    };
 
     /// Crée depuis un slice. Retourne None si len > 128.
     pub fn from_slice(data: &[u8]) -> Option<Self> {
-        if data.len() > 128 { return None; }
+        if data.len() > 128 {
+            return None;
+        }
         let mut s = Self::EMPTY;
         s.buf[..data.len()].copy_from_slice(data);
         s.len = data.len();
@@ -531,17 +621,25 @@ impl InlineData {
 
     /// Retourne les données.
     #[inline]
-    pub fn as_slice(&self) -> &[u8] { &self.buf[..self.len] }
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
 
     /// Longueur des données.
     #[inline]
-    pub fn len(&self) -> usize { self.len }
+    pub fn len(&self) -> usize {
+        self.len
+    }
 
     /// Vrai si vide.
     #[inline]
-    pub fn is_empty(&self) -> bool { self.len == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
 
 impl Default for InlineData {
-    fn default() -> Self { Self::EMPTY }
+    fn default() -> Self {
+        Self::EMPTY
+    }
 }

@@ -5,14 +5,13 @@
 // RÈGLE SIGNAL-01 : handle_pending_signals appelé UNIQUEMENT au retour syscall.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::Ordering;
-use crate::scheduler::core::task::ThreadControlBlock;
+use super::default::{default_action, SigAction, SigActionKind, Signal};
+use super::queue::SigInfo;
+use crate::process::core::pcb::ProcessState;
 use crate::process::core::pid::Pid;
 use crate::process::core::registry::PROCESS_REGISTRY;
-use crate::process::core::pcb::ProcessState;
-use super::default::{Signal, SigAction, SigActionKind, default_action};
-use super::queue::SigInfo;
+use crate::scheduler::core::task::ThreadControlBlock;
+use core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Erreurs
@@ -43,7 +42,8 @@ pub enum SendError {
 /// 4. Démande une préemption via raise_signal_pending().
 pub fn send_signal_to_pid(pid: Pid, sig: Signal) -> Result<(), SendError> {
     let sig_n = sig.number();
-    let pcb = PROCESS_REGISTRY.find_by_pid(pid)
+    let pcb = PROCESS_REGISTRY
+        .find_by_pid(pid)
         .ok_or(SendError::NoSuchProcess)?;
 
     // Un processus zombie ne peut plus recevoir de signaux (sauf SIGCHLD ignore).
@@ -54,7 +54,9 @@ pub fn send_signal_to_pid(pid: Pid, sig: Signal) -> Result<(), SendError> {
 
     // Récupère le thread principal (TID == PID).
     let thread_ptr = pcb.main_thread_ptr();
-    if thread_ptr.is_null() { return Err(SendError::NoSuchProcess); }
+    if thread_ptr.is_null() {
+        return Err(SendError::NoSuchProcess);
+    }
 
     // SAFETY : thread_ptr est valide tant que le PCB est vivant ; on est sous
     // spinlock PCB (write_lock) -- ici lecture seule du pointeur suffisante.
@@ -76,11 +78,13 @@ pub fn send_signal_to_pid(pid: Pid, sig: Signal) -> Result<(), SendError> {
 /// Envoie un signal directement à un TCB scheduler connu.
 /// Utilisé quand on a déjà le punteur TCB (ex: livraison d'exception).
 pub fn send_signal_to_tcb(
-    thread:    &crate::process::core::tcb::ProcessThread,
-    sig:       u8,
-    info:      SigInfo,
+    thread: &crate::process::core::tcb::ProcessThread,
+    sig: u8,
+    info: SigInfo,
 ) {
-    if sig == 0 || sig > 63 { return; }
+    if sig == 0 || sig > 63 {
+        return;
+    }
     if sig < 32 {
         thread.sig_queue.enqueue(sig);
     } else {
@@ -98,18 +102,18 @@ pub fn send_signal_to_tcb(
 /// de modifier les registres utilisateur (rip, rsp, rax...).
 #[repr(C)]
 pub struct SyscallFrame {
-    pub user_rsp:    u64,
-    pub user_rip:    u64,
+    pub user_rsp: u64,
+    pub user_rip: u64,
     pub user_rflags: u64,
-    pub user_rax:    u64,  // valeur de retour syscall
-    pub user_rdi:    u64,
-    pub user_rsi:    u64,
-    pub user_rdx:    u64,
-    pub user_rcx:    u64,
-    pub user_r8:     u64,
-    pub user_r9:     u64,
-    pub user_cs:     u64,
-    pub user_ss:     u64,
+    pub user_rax: u64, // valeur de retour syscall
+    pub user_rdi: u64,
+    pub user_rsi: u64,
+    pub user_rdx: u64,
+    pub user_rcx: u64,
+    pub user_r8: u64,
+    pub user_r9: u64,
+    pub user_cs: u64,
+    pub user_ss: u64,
 }
 
 /// Traite tous les signaux en attente non-bloqués.
@@ -122,21 +126,25 @@ pub struct SyscallFrame {
 /// 4. SA_RESETHAND : réinitialiser handler après délivrance.
 pub fn handle_pending_signals(
     thread: &mut crate::process::core::tcb::ProcessThread,
-    frame:  &mut SyscallFrame,
+    frame: &mut SyscallFrame,
 ) {
     use crate::process::core::pid::Pid;
-    
 
     // Pas de signal_pending ? Sortie rapide.
-    if !thread.sched_tcb.has_signal_pending() { return; }
+    if !thread.sched_tcb.has_signal_pending() {
+        return;
+    }
 
     let mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
-    let pid  = Pid(thread.sched_tcb.pid.0);
+    let pid = Pid(thread.sched_tcb.pid.0);
 
     // Lire la table des handlers depuis le PCB.
     let pcb = match PROCESS_REGISTRY.find_by_pid(pid) {
         Some(p) => p,
-        None    => { clear_signal_pending(thread); return; }
+        None => {
+            clear_signal_pending(thread);
+            return;
+        }
     };
 
     // Boucle de livraison : on traite jusqu'à ce qu'il n'y ait plus rien.
@@ -172,8 +180,8 @@ pub fn handle_pending_signals(
 
     // Effacer le drapeau si plus rien en attente.
     let remaining_std = thread.sig_queue.pending.load(Ordering::Acquire) & !mask;
-    let remaining_rt  = (thread.rt_sig_queue.pending_mask.load(Ordering::Acquire) as u32)
-                        & !((mask >> 32) as u32);
+    let remaining_rt =
+        (thread.rt_sig_queue.pending_mask.load(Ordering::Acquire) as u32) & !((mask >> 32) as u32);
     if remaining_std == 0 && remaining_rt == 0 {
         clear_signal_pending(thread);
     }
@@ -182,11 +190,11 @@ pub fn handle_pending_signals(
 /// Livre un seul signal.
 fn deliver_one(
     thread: &mut crate::process::core::tcb::ProcessThread,
-    frame:  &mut SyscallFrame,
-    sig_n:  u8,
-    info:   SigInfo,
+    frame: &mut SyscallFrame,
+    sig_n: u8,
+    info: SigInfo,
     action: SigAction,
-    pcb:    &crate::process::core::pcb::ProcessControlBlock,
+    pcb: &crate::process::core::pcb::ProcessControlBlock,
 ) {
     use super::handler::setup_signal_frame;
     use crate::process::lifecycle::exit::do_exit;
@@ -206,14 +214,13 @@ fn deliver_one(
             // Envoyer SIGCHLD au parent (POSIX obligation).
             let ppid = pcb.ppid();
             if ppid.0 != 0 {
-                let _ = send_signal_to_pid(
-                    ppid,
-                    Signal::SIGCHLD,
-                );
+                let _ = send_signal_to_pid(ppid, Signal::SIGCHLD);
             }
             // Bloquer le thread jusqu'à SIGCONT (POSIX SIGSTOP sémantique).
             // Le thread sera réveillé par deliver_one(SIGCONT) via PCB::set_state(Running).
-            thread.sched_tcb.set_state(crate::scheduler::core::task::TaskState::Sleeping);
+            thread
+                .sched_tcb
+                .set_state(crate::scheduler::core::task::TaskState::Sleeping);
             // SAFETY: sched_tcb est le TCB courant; seul détenteur sur ce CPU (préemption désactivée).
             unsafe {
                 let cpu_id = thread.sched_tcb.current_cpu();
@@ -254,27 +261,27 @@ fn clear_signal_pending(thread: &crate::process::core::tcb::ProcessThread) {
 /// INVARIANT : tout changement dans ExceptionFrame DOIT être répercuté ici.
 #[repr(C)]
 struct ExcFrame {
-    r15:        u64,
-    r14:        u64,
-    r13:        u64,
-    r12:        u64,
-    r11:        u64,
-    r10:        u64,
-    r9:         u64,
-    r8:         u64,
-    rbp:        u64,
-    rdi:        u64,
-    rsi:        u64,
-    rdx:        u64,
-    rcx:        u64,
-    rbx:        u64,
-    rax:        u64,
+    r15: u64,
+    r14: u64,
+    r13: u64,
+    r12: u64,
+    r11: u64,
+    r10: u64,
+    r9: u64,
+    r8: u64,
+    rbp: u64,
+    rdi: u64,
+    rsi: u64,
+    rdx: u64,
+    rcx: u64,
+    rbx: u64,
+    rax: u64,
     error_code: u64,
-    rip:        u64,
-    cs:         u64,
-    rflags:     u64,
-    rsp:        u64,
-    ss:         u64,
+    rip: u64,
+    cs: u64,
+    rflags: u64,
+    rsp: u64,
+    ss: u64,
 }
 
 /// Pont ABI C pour la livraison de signaux au retour d'exception.
@@ -297,22 +304,23 @@ struct ExcFrame {
 /// - `excframe_ptr` : pointeur vers la `ExceptionFrame` sur la pile kernel.
 /// Les deux doivent pointer vers des structures valides et non partagées.
 #[no_mangle]
-pub unsafe extern "C" fn proc_signal_on_exception_return(
-    tcb_ptr:      *mut u8,
-    excframe_ptr: *mut u8,
-) {
-    if tcb_ptr.is_null() || excframe_ptr.is_null() { return; }
+pub unsafe extern "C" fn proc_signal_on_exception_return(tcb_ptr: *mut u8, excframe_ptr: *mut u8) {
+    if tcb_ptr.is_null() || excframe_ptr.is_null() {
+        return;
+    }
 
     // Lecture rapide du flag signal_pending — évite le lookup PROCESS_REGISTRY
     // si aucun signal n'est en attente.
     let sched_tcb = &*(tcb_ptr as *const ThreadControlBlock);
-    if !sched_tcb.has_signal_pending() { return; }
+    if !sched_tcb.has_signal_pending() {
+        return;
+    }
 
     // Lookup PCB par pid (nécessaire pour les handlers et le masque).
     let pid = Pid(sched_tcb.pid.0);
     let pcb = match PROCESS_REGISTRY.find_by_pid(pid) {
         Some(p) => p,
-        None    => {
+        None => {
             // Processus inconnu — effacer le flag orphelin et sortir.
             sched_tcb.clear_signal_pending();
             return;
@@ -322,25 +330,27 @@ pub unsafe extern "C" fn proc_signal_on_exception_return(
     // Récupérer le ProcessThread principal.
     // SAFETY: À ce stade le processus est monothread ; main_thread_ptr() == thread courant.
     let thread_ptr = pcb.main_thread_ptr();
-    if thread_ptr.is_null() { return; }
+    if thread_ptr.is_null() {
+        return;
+    }
     let thread = &mut *thread_ptr;
 
     // Construire un SyscallFrame depuis la ExceptionFrame pour réutiliser
     // handle_pending_signals() (qui normalise les frames userspace).
     let exc = &*(excframe_ptr as *const ExcFrame);
     let mut frame = SyscallFrame {
-        user_rsp:    exc.rsp,
-        user_rip:    exc.rip,
+        user_rsp: exc.rsp,
+        user_rip: exc.rip,
         user_rflags: exc.rflags,
-        user_rax:    exc.rax,
-        user_rdi:    exc.rdi,
-        user_rsi:    exc.rsi,
-        user_rdx:    exc.rdx,
-        user_rcx:    exc.rcx,
-        user_r8:     exc.r8,
-        user_r9:     exc.r9,
-        user_cs:     exc.cs,
-        user_ss:     exc.ss,
+        user_rax: exc.rax,
+        user_rdi: exc.rdi,
+        user_rsi: exc.rsi,
+        user_rdx: exc.rdx,
+        user_rcx: exc.rcx,
+        user_r8: exc.r8,
+        user_r9: exc.r9,
+        user_cs: exc.cs,
+        user_ss: exc.ss,
     };
 
     // Livraison effective — modifie frame si un handler utilisateur est installé.
@@ -348,17 +358,17 @@ pub unsafe extern "C" fn proc_signal_on_exception_return(
 
     // Répercuter les registres potentiellement modifiés (ex. RIP redirigé vers
     // le signal handler, RSP vers sigaltstack) dans la frame réelle.
-    let exc_mut      = &mut *(excframe_ptr as *mut ExcFrame);
-    exc_mut.rsp      = frame.user_rsp;
-    exc_mut.rip      = frame.user_rip;
-    exc_mut.rflags   = frame.user_rflags;
-    exc_mut.rax      = frame.user_rax;
-    exc_mut.rdi      = frame.user_rdi;
-    exc_mut.rsi      = frame.user_rsi;
-    exc_mut.rdx      = frame.user_rdx;
-    exc_mut.rcx      = frame.user_rcx;
-    exc_mut.r8       = frame.user_r8;
-    exc_mut.r9       = frame.user_r9;
-    exc_mut.cs       = frame.user_cs;
-    exc_mut.ss       = frame.user_ss;
+    let exc_mut = &mut *(excframe_ptr as *mut ExcFrame);
+    exc_mut.rsp = frame.user_rsp;
+    exc_mut.rip = frame.user_rip;
+    exc_mut.rflags = frame.user_rflags;
+    exc_mut.rax = frame.user_rax;
+    exc_mut.rdi = frame.user_rdi;
+    exc_mut.rsi = frame.user_rsi;
+    exc_mut.rdx = frame.user_rdx;
+    exc_mut.rcx = frame.user_rcx;
+    exc_mut.r8 = frame.user_r8;
+    exc_mut.r9 = frame.user_r9;
+    exc_mut.cs = frame.user_cs;
+    exc_mut.ss = frame.user_ss;
 }

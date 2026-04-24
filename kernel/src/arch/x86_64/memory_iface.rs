@@ -29,7 +29,6 @@
 //   TLB-01 : flush_local → IPI synchrone ACK → free_pages (jamais l'inverse).
 //   MEM-04 : Les frames NE sont JAMAIS libérées avant ACK de tous les CPUs cibles.
 
-
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::memory::core::{AllocError, AllocFlags, Frame, PageFlags, PhysAddr, VirtAddr};
@@ -215,9 +214,7 @@ pub unsafe fn init_memory_integration() {
     }
 
     // Enregistrer l'envoyeur d'IPI TLB auprès du sous-système TLB shootdown.
-    crate::memory::virt::address_space::tlb::register_tlb_ipi_sender(
-        send_tlb_ipi_to_mask,
-    );
+    crate::memory::virt::address_space::tlb::register_tlb_ipi_sender(send_tlb_ipi_to_mask);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -267,23 +264,12 @@ impl FaultAllocator for KernelFaultAllocator {
         let _ = free_page(f);
     }
 
-    fn map_page(
-        &self,
-        virt:  VirtAddr,
-        frame: Frame,
-        flags: PageFlags,
-    ) -> Result<(), AllocError> {
+    fn map_page(&self, virt: VirtAddr, frame: Frame, flags: PageFlags) -> Result<(), AllocError> {
         // SAFETY: virt doit être une adresse canonique ; l'allocateur est valide.
-        unsafe {
-            crate::memory::virt::address_space::KERNEL_AS.map(virt, frame, flags, self)
-        }
+        unsafe { crate::memory::virt::address_space::KERNEL_AS.map(virt, frame, flags, self) }
     }
 
-    fn remap_flags(
-        &self,
-        virt:  VirtAddr,
-        flags: PageFlags,
-    ) -> Result<(), AllocError> {
+    fn remap_flags(&self, virt: VirtAddr, flags: PageFlags) -> Result<(), AllocError> {
         use crate::memory::virt::page_table::PageTableWalker;
         let pml4 = crate::memory::virt::address_space::KERNEL_AS.pml4_phys();
         let mut walker = PageTableWalker::new(pml4);
@@ -325,25 +311,26 @@ pub static KERNEL_FAULT_ALLOC: KernelFaultAllocator = KernelFaultAllocator;
 /// `virt` doit être une adresse user canonique alignée sur PAGE_SIZE.
 /// `pid`  doit correspondre à un processus actif avec un addr_space_ptr valide.
 pub unsafe fn shm_vmm_map_page(phys: u64, virt: u64, flags: u32, pid: u32) -> i32 {
-    use crate::memory::core::{PhysAddr, VirtAddr, Frame, PageFlags};
+    use crate::memory::core::AllocError;
+    use crate::memory::core::{Frame, PageFlags, PhysAddr, VirtAddr};
     use crate::memory::physical::allocator::buddy;
     use crate::memory::virt::page_table::FrameAllocatorForWalk;
-    use crate::memory::core::AllocError;
-    use crate::process::PROCESS_REGISTRY;
     use crate::process::core::pid::Pid;
+    use crate::process::PROCESS_REGISTRY;
 
     // Retrouver l'espace d'adressage du processus cible par PID
     let pcb = match PROCESS_REGISTRY.find_by_pid(Pid(pid)) {
         Some(p) => p,
-        None    => return -3, // ESRCH
+        None => return -3, // ESRCH
     };
-    let as_ptr = pcb.address_space.load(core::sync::atomic::Ordering::Acquire);
+    let as_ptr = pcb
+        .address_space
+        .load(core::sync::atomic::Ordering::Acquire);
     if as_ptr == 0 {
         return -12; // ENOMEM — espace non initialisé
     }
-    let user_as = unsafe {
-        &*(as_ptr as *const crate::memory::virt::address_space::UserAddressSpace)
-    };
+    let user_as =
+        unsafe { &*(as_ptr as *const crate::memory::virt::address_space::UserAddressSpace) };
 
     // Traduire les flags (MapPageFn utilise u32 simple) en PageFlags kernel
     // flags & 0x1 = READ, flags & 0x2 = WRITE
@@ -359,15 +346,17 @@ pub unsafe fn shm_vmm_map_page(phys: u64, virt: u64, flags: u32, pid: u32) -> i3
         fn alloc_frame(&self, f: crate::memory::AllocFlags) -> Result<Frame, AllocError> {
             buddy::alloc_pages(0, f)
         }
-        fn free_frame(&self, fr: Frame) { let _ = buddy::free_pages(fr, 0); }
+        fn free_frame(&self, fr: Frame) {
+            let _ = buddy::free_pages(fr, 0);
+        }
     }
 
     let frame = Frame::containing(PhysAddr::new(phys));
     let vaddr = VirtAddr::new(virt);
 
     match unsafe { user_as.map_page(vaddr, frame, page_flags, &PtOnly) } {
-        Ok(())  => 0,
-        Err(_)  => -12, // ENOMEM
+        Ok(()) => 0,
+        Err(_) => -12, // ENOMEM
     }
 }
 
@@ -378,20 +367,21 @@ pub unsafe fn shm_vmm_map_page(phys: u64, virt: u64, flags: u32, pid: u32) -> i3
 /// `pid`  doit correspondre à un processus actif.
 pub unsafe fn shm_vmm_unmap_page(virt: u64, pid: u32) -> i32 {
     use crate::memory::core::VirtAddr;
-    use crate::process::PROCESS_REGISTRY;
     use crate::process::core::pid::Pid;
+    use crate::process::PROCESS_REGISTRY;
 
     let pcb = match PROCESS_REGISTRY.find_by_pid(Pid(pid)) {
         Some(p) => p,
-        None    => return -3, // ESRCH
+        None => return -3, // ESRCH
     };
-    let as_ptr = pcb.address_space.load(core::sync::atomic::Ordering::Acquire);
+    let as_ptr = pcb
+        .address_space
+        .load(core::sync::atomic::Ordering::Acquire);
     if as_ptr == 0 {
         return -12;
     }
-    let user_as = unsafe {
-        &*(as_ptr as *const crate::memory::virt::address_space::UserAddressSpace)
-    };
+    let user_as =
+        unsafe { &*(as_ptr as *const crate::memory::virt::address_space::UserAddressSpace) };
 
     unsafe { user_as.unmap_page(VirtAddr::new(virt)) };
     0

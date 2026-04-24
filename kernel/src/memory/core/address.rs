@@ -3,12 +3,11 @@
 // Translations d'adresses, assertions d'alignement, utilitaires.
 // Couche 0 — aucune dépendance externe.
 
-use super::types::{PhysAddr, VirtAddr, Frame, Page};
-use super::constants::{PAGE_SIZE, PAGE_SHIFT, HUGE_PAGE_SIZE, HUGE_PAGE_SHIFT};
+use super::constants::{HUGE_PAGE_SHIFT, HUGE_PAGE_SIZE, PAGE_SHIFT, PAGE_SIZE};
 use super::layout::{
-    KERNEL_PHYS_OFFSET, PHYS_MAP_BASE, PHYS_MAP_SIZE,
-    KERNEL_HEAP_START, KERNEL_HEAP_SIZE,
+    KERNEL_HEAP_SIZE, KERNEL_HEAP_START, KERNEL_PHYS_OFFSET, PHYS_MAP_BASE, PHYS_MAP_SIZE,
 };
+use super::types::{Frame, Page, PhysAddr, VirtAddr};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TRANSLATIONS PHYSIQUE ↔ VIRTUEL (via la région physmap du noyau)
@@ -206,14 +205,17 @@ pub const fn is_user_canonical(addr: u64) -> bool {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct PhysRange {
     pub start: PhysAddr,
-    pub end:   PhysAddr,
+    pub end: PhysAddr,
 }
 
 impl PhysRange {
     /// Crée une plage [start, start + size).
     #[inline(always)]
     pub const fn new(start: PhysAddr, size: usize) -> Self {
-        PhysRange { start, end: PhysAddr::new(start.as_u64() + size as u64) }
+        PhysRange {
+            start,
+            end: PhysAddr::new(start.as_u64() + size as u64),
+        }
     }
 
     /// Crée une plage [start, end).
@@ -249,8 +251,7 @@ impl PhysRange {
     /// Vérifie si deux plages se chevauchent.
     #[inline(always)]
     pub const fn overlaps(self, other: PhysRange) -> bool {
-        self.start.as_u64() < other.end.as_u64()
-            && other.start.as_u64() < self.end.as_u64()
+        self.start.as_u64() < other.end.as_u64() && other.start.as_u64() < self.end.as_u64()
     }
 
     /// Alignement de start vers le bas sur une page.
@@ -258,7 +259,7 @@ impl PhysRange {
     pub fn page_aligned(self) -> PhysRange {
         PhysRange {
             start: self.start.page_align_down(),
-            end:   self.end.page_align_up(),
+            end: self.end.page_align_up(),
         }
     }
 }
@@ -267,7 +268,7 @@ impl PhysRange {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct VirtRange {
     pub start: VirtAddr,
-    pub end:   VirtAddr,
+    pub end: VirtAddr,
 }
 
 impl VirtRange {
@@ -307,8 +308,7 @@ impl VirtRange {
     /// Vérifie si les deux plages se chevauchent.
     #[inline(always)]
     pub const fn overlaps(self, other: VirtRange) -> bool {
-        self.start.as_u64() < other.end.as_u64()
-            && other.start.as_u64() < self.end.as_u64()
+        self.start.as_u64() < other.end.as_u64() && other.start.as_u64() < self.end.as_u64()
     }
 
     /// Aligne les bornes sur des pages.
@@ -316,7 +316,7 @@ impl VirtRange {
     pub fn page_aligned(self) -> VirtRange {
         VirtRange {
             start: self.start.page_align_down(),
-            end:   self.end.page_align_up(),
+            end: self.end.page_align_up(),
         }
     }
 
@@ -381,10 +381,25 @@ pub fn assert_invariants() {
 // VÉRIFICATIONS STATIQUES
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _: () = assert!(is_power_of_two(PAGE_SIZE),       "PAGE_SIZE doit être puissance de 2");
-const _: () = assert!(is_power_of_two(HUGE_PAGE_SIZE),  "HUGE_PAGE_SIZE doit être puissance de 2");
-const _: () = assert!(PAGE_SIZE == 4096,                "PAGE_SIZE doit être 4096 pour x86_64");
-const _: () = assert!(HUGE_PAGE_SIZE == 2097152,        "HUGE_PAGE_SIZE doit être 2MiB");
-const _: () = assert!(align_up(0, PAGE_SIZE)  == 0,     "align_up(0, PAGE_SIZE) doit être 0");
-const _: () = assert!(align_up(1, PAGE_SIZE)  == PAGE_SIZE, "align_up(1, PAGE_SIZE) doit être PAGE_SIZE");
-const _: () = assert!(align_down(PAGE_SIZE + 1, PAGE_SIZE) == PAGE_SIZE, "align_down doit arrondir vers le bas");
+const _: () = assert!(
+    is_power_of_two(PAGE_SIZE),
+    "PAGE_SIZE doit être puissance de 2"
+);
+const _: () = assert!(
+    is_power_of_two(HUGE_PAGE_SIZE),
+    "HUGE_PAGE_SIZE doit être puissance de 2"
+);
+const _: () = assert!(PAGE_SIZE == 4096, "PAGE_SIZE doit être 4096 pour x86_64");
+const _: () = assert!(HUGE_PAGE_SIZE == 2097152, "HUGE_PAGE_SIZE doit être 2MiB");
+const _: () = assert!(
+    align_up(0, PAGE_SIZE) == 0,
+    "align_up(0, PAGE_SIZE) doit être 0"
+);
+const _: () = assert!(
+    align_up(1, PAGE_SIZE) == PAGE_SIZE,
+    "align_up(1, PAGE_SIZE) doit être PAGE_SIZE"
+);
+const _: () = assert!(
+    align_down(PAGE_SIZE + 1, PAGE_SIZE) == PAGE_SIZE,
+    "align_down doit arrondir vers le bas"
+);

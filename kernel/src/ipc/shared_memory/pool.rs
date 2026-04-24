@@ -9,7 +9,7 @@
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::ipc::core::constants::SHM_POOL_PAGES;
-use crate::ipc::shared_memory::page::{ShmPage, PhysAddr, PageFlags, PAGE_SIZE};
+use crate::ipc::shared_memory::page::{PageFlags, PhysAddr, ShmPage, PAGE_SIZE};
 
 // ---------------------------------------------------------------------------
 // Bitmap d'allocation — 256 pages = 4 mots de 64 bits
@@ -215,7 +215,12 @@ pub fn shm_alloc_contiguous(count: usize) -> Option<usize> {
             let mask = 1u64 << bit;
             let v = POOL_BITMAP[word_idx].load(Ordering::Acquire);
 
-            match POOL_BITMAP[word_idx].compare_exchange(v, v & !mask, Ordering::AcqRel, Ordering::Acquire) {
+            match POOL_BITMAP[word_idx].compare_exchange(
+                v,
+                v & !mask,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
                 Ok(_) => {
                     POOL_PAGES[idx].ref_acquire();
                     POOL_FREE_COUNT.fetch_sub(1, Ordering::Relaxed);

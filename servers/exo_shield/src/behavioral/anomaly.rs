@@ -42,8 +42,8 @@ pub const MAX_DEVIATION_SCORE: u32 = 1000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(C)]
 pub enum AlertLevel {
-    Info     = 0,
-    Warning  = 1,
+    Info = 0,
+    Warning = 1,
     Critical = 2,
     Emergency = 3,
 }
@@ -233,12 +233,20 @@ impl Baseline {
             if value == mean {
                 return 0;
             }
-            let diff = if value > mean { value - mean } else { mean - value };
+            let diff = if value > mean {
+                value - mean
+            } else {
+                mean - value
+            };
             return if diff > 0 { MAX_DEVIATION_SCORE } else { 0 };
         }
 
         let mean = self.mean();
-        let diff = if value > mean { value - mean } else { mean - value };
+        let diff = if value > mean {
+            value - mean
+        } else {
+            mean - value
+        };
 
         // Score = (diff / sigma) * 10
         let score = (diff * 10) / sigma;
@@ -287,9 +295,9 @@ impl AnomalyThreshold {
         Self {
             metric_id,
             info_threshold: 20,      // 2.0 σ
-            warning_threshold: 30,    // 3.0 σ
-            critical_threshold: 50,   // 5.0 σ
-            emergency_threshold: 80,  // 8.0 σ
+            warning_threshold: 30,   // 3.0 σ
+            critical_threshold: 50,  // 5.0 σ
+            emergency_threshold: 80, // 8.0 σ
             active: true,
             _reserved: [0; 3],
         }
@@ -548,7 +556,10 @@ pub fn reset_baseline(metric_id: usize) -> bool {
         return false;
     }
     let name = det.baselines[metric_id].name;
-    det.baselines[metric_id] = Baseline { name, ..Baseline::empty() };
+    det.baselines[metric_id] = Baseline {
+        name,
+        ..Baseline::empty()
+    };
     true
 }
 

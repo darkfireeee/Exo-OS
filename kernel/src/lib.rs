@@ -17,7 +17,7 @@
 //! ## Règles absolues
 //! - `unsafe` → `// SAFETY:` obligatoire (regle_bonus.md)
 //! - scheduler/core/ + ISR → NO-ALLOC (regle_bonus.md)
-//! - Lock ordering : IPC < Scheduler < Memory < FS (regle_bonus.md)
+//! - Lock ordering : Memory → Scheduler → Security → IPC → FS (regle_bonus.md)
 //! - signal/ ∈ process/ uniquement (DOC1 RÈGLE SIGNAL-01)
 //! - capability/ ∈ security/ uniquement (DOC1 RÈGLE CAP-01)
 //! - futex ∈ memory/utils/futex_table.rs (DOC3 RÈGLE SCHED-03)
@@ -38,7 +38,6 @@ compile_error!(
 Utiliser une cible hôte pour les tests (ex: --target x86_64-unknown-linux-gnu), \
 ou utiliser le check bare-metal via run_tests.sh/Makefile."
 );
-
 
 // ── Crates externes (no_std) ──────────────────────────────────────────────────
 
@@ -83,20 +82,20 @@ pub mod syscall;
 // Seuls les symboles nécessaires aux crates externes (tests, outils) sont exportés.
 // Le binaire kernel_main utilise ces modules directement via `exo_os_kernel::`.
 
-#[cfg(target_arch = "x86_64")]
-pub use arch::ArchInfo;
 pub use arch::x86_64::{
+    // Informations d'architecture
+    arch_info,
     // Point d'entrée d'initialisation architecture
     boot::early_init::arch_boot_init,
     // Primitives bas niveau exposées
     halt_cpu,
     memory_barrier,
-    // Informations d'architecture
-    arch_info,
+    KERNEL_BASE,
     // Constantes
     PAGE_SIZE,
-    KERNEL_BASE,
 };
+#[cfg(target_arch = "x86_64")]
+pub use arch::ArchInfo;
 
 #[cfg(target_arch = "x86_64")]
 pub use arch::x86_64::cpu::{
@@ -117,8 +116,9 @@ pub use arch::x86_64::cpu::{
 ///
 /// # Safety
 /// Doit être appelé une seule fois, depuis le BSP, après `arch_boot_init`.
-pub unsafe fn kernel_init() {
-    #[inline(always)] unsafe fn kdb(b: u8) {
+pub unsafe fn kernel_init(cpu_count: usize) {
+    #[inline(always)]
+    unsafe fn kdb(b: u8) {
         core::arch::asm!("out 0xE9, al", in("al") b, options(nomem, nostack));
     }
     // ── Phase 2a : EmergencyPool — PREMIER ABSOLU (RÈGLE EMERGENCY-01) ─────────
@@ -145,41 +145,23 @@ pub unsafe fn kernel_init() {
     crate::arch::x86_64::boot_display::stage_ok("DRIVERS");
 
     // ── Phase 3 : Scheduler ───────────────────────────────────────────
-    crate::scheduler::init(&crate::scheduler::SchedInitParams::default());
+    let sched_cpus = if crate::arch::x86_64::smp::init::smp_boot_complete() {
+        cpu_count.max(1)
+    } else {
+        1
+    };
+    crate::scheduler::init(&crate::scheduler::SchedInitParams {
+        nr_cpus: sched_cpus,
+        nr_nodes: 1,
+    });
     kdb(b'5'); // Phase 3 done
 
-    // ── Phase 3b : Thread idle du BSP (CPU 0) ────────────────────────────────
-    // Requis pour que pick_next_task() ait un fallback lorsqu'aucun thread n'est prêt.
-    // TCB stocké dans la section .bss (static mut) — aucune allocation heap.
-    // SAFETY: appelé une seule fois depuis le BSP, après scheduler::init()
-    //         qui a déjà exécuté init_percpu() pour le CPU 0.
-    {
-        use core::mem::MaybeUninit;
-        use core::ptr::NonNull;
-
-        static mut IDLE_TCB: MaybeUninit<crate::scheduler::ThreadControlBlock> =
-            MaybeUninit::uninit();
-
-        let idle = IDLE_TCB.write(
-            crate::scheduler::ThreadControlBlock::new(
-                crate::scheduler::ThreadId(0),
-                crate::scheduler::ProcessId(0),
-                crate::scheduler::SchedPolicy::Normal,
-                crate::scheduler::core::task::Priority::IDLE,
-                0u64, // cr3 : réutilise le CR3 courant (pas de switch de PGD)
-                crate::arch::x86_64::boot::early_init::boot_stack_top(),
-            )
-        );
-
-        // SAFETY: write() retourne &mut T non nul ; durée de vie = 'static.
-        let idle_ptr = NonNull::new_unchecked(idle as *mut _);
-        crate::scheduler::run_queue(crate::scheduler::CpuId(0))
-            .set_idle_thread(idle_ptr);
-        
-        // BUG-01 FIX: initialiser gs:[0x20] avec le TCB idle AVANT tout syscall
-        // SAFETY: idle_ptr est non-nul, durée de vie 'static, GS per-CPU initialisé
-        crate::arch::x86_64::smp::percpu::set_current_tcb(idle_ptr.as_ptr());
-    }
+    // ── Phase 3b : Thread idle de bootstrap (BSP + APs déjà en ligne) ─────────
+    let _ = crate::scheduler::core::publish_current_boot_idle(
+        0,
+        crate::arch::x86_64::boot::early_init::boot_stack_top(),
+    );
+    crate::scheduler::core::bind_boot_idle_threads(sched_cpus);
     kdb(b'6'); // idle thread done
 
     // ── Phase 3c : Enregistrement du cloner d'espace d'adressage ───────────────
@@ -253,17 +235,13 @@ pub unsafe fn kernel_init() {
     ipc::ring::spsc::init_spsc_rings();
     // BUG-C2B FIX: réserver un pool SHM physique dédié avant l'initialisation IPC.
     const SHM_POOL_ORDER: usize = 8; // 2^8 pages = 256 pages = 1 MiB
-    let shm_pool = crate::memory::alloc_pages(
-        SHM_POOL_ORDER,
-        crate::memory::AllocFlags::ZEROED,
-    ).expect("ipc shm pool allocation failed");
+    let shm_pool = crate::memory::alloc_pages(SHM_POOL_ORDER, crate::memory::AllocFlags::ZEROED)
+        .expect("ipc shm pool allocation failed");
     crate::ipc::ipc_init(
         shm_pool.start_address().as_u64(),
         1, // nr_numa_nodes — à lire depuis ACPI NUMA si disponible
     );
-    crate::ipc::ipc_install_scheduler_hooks(
-        crate::scheduler::core::switch::block_current_thread,
-    );
+    crate::ipc::ipc_install_scheduler_hooks(crate::scheduler::core::switch::block_current_thread);
     // P1-02 : installer les hooks VMM pour le mappage SHM dans les espaces
     // d'adressage des processus. Doit être fait après ipc_init() et avant
     // tout appel à shm_map() (i.e. avant le démarrage des serveurs Ring1).
@@ -275,8 +253,8 @@ pub unsafe fn kernel_init() {
     crate::arch::x86_64::boot_display::stage_ok("IPC");
 
     // ── Phase 7 : FS ─────────────────────────────────────────────────────────
-     let _ = crate::fs::exofs::exofs_init(
-        crate::fs::exofs::storage::virtio_adapter::default_global_disk_size_bytes()
+    let _ = crate::fs::exofs::exofs_init(
+        crate::fs::exofs::storage::virtio_adapter::default_global_disk_size_bytes(),
     );
 
     // CORRECTION P0-02 : enregistrer le chargeur ELF après exofs_init
@@ -289,7 +267,9 @@ pub unsafe fn kernel_init() {
 
     // BUG-02 FIX: activer le bridge syscall→fs après exofs_init
     // SAFETY: exofs_init() terminé, appelé une seule fois depuis BSP
-    unsafe { crate::syscall::fs_bridge::fs_bridge_init(); }
+    unsafe {
+        crate::syscall::fs_bridge::fs_bridge_init();
+    }
     kdb(b'@'); // fs_bridge actif
     crate::arch::x86_64::boot_display::stage_ok("FS");
 }
@@ -308,15 +288,26 @@ fn kernel_panic(info: &core::panic::PanicInfo) -> ! {
     }
     #[inline(always)]
     unsafe fn debug_str(s: &[u8]) {
-        for &b in s { debug_byte(b); }
+        for &b in s {
+            debug_byte(b);
+        }
     }
     #[inline(always)]
     unsafe fn debug_u32(mut n: u32) {
         let mut buf = [0u8; 10];
         let mut len = 0usize;
-        if n == 0 { debug_byte(b'0'); return; }
-        while n > 0 { buf[len] = b'0' + (n % 10) as u8; len += 1; n /= 10; }
-        for i in (0..len).rev() { debug_byte(buf[i]); }
+        if n == 0 {
+            debug_byte(b'0');
+            return;
+        }
+        while n > 0 {
+            buf[len] = b'0' + (n % 10) as u8;
+            len += 1;
+            n /= 10;
+        }
+        for i in (0..len).rev() {
+            debug_byte(buf[i]);
+        }
     }
     // SAFETY: CLI depuis Ring 0 — toujours sûr. debug_byte écrit sur le port 0xE9.
     unsafe {
@@ -333,7 +324,11 @@ fn kernel_panic(info: &core::panic::PanicInfo) -> ! {
         }
         debug_byte(b'\n');
     }
-    loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
+    }
 }
 
 #[cfg(not(test))]
@@ -348,19 +343,36 @@ fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
     unsafe fn debug_usize(mut n: usize) {
         let mut buf = [0u8; 20];
         let mut len = 0usize;
-        if n == 0 { debug_byte(b'0'); return; }
-        while n > 0 { buf[len] = b'0' + (n % 10) as u8; len += 1; n /= 10; }
-        for i in (0..len).rev() { debug_byte(buf[i]); }
+        if n == 0 {
+            debug_byte(b'0');
+            return;
+        }
+        while n > 0 {
+            buf[len] = b'0' + (n % 10) as u8;
+            len += 1;
+            n /= 10;
+        }
+        for i in (0..len).rev() {
+            debug_byte(buf[i]);
+        }
     }
     unsafe {
         core::arch::asm!("cli", options(nostack, nomem));
-        for &b in b"\n*** ALLOC ERROR size=" { debug_byte(b); }
+        for &b in b"\n*** ALLOC ERROR size=" {
+            debug_byte(b);
+        }
         debug_usize(layout.size());
-        for &b in b" align=" { debug_byte(b); }
+        for &b in b" align=" {
+            debug_byte(b);
+        }
         debug_usize(layout.align());
         debug_byte(b'\n');
     }
-    loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
+    }
 }
 
 // ── Point d'entrée principal du kernel (BSP) ─────────────────────────────────

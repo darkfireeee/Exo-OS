@@ -8,13 +8,13 @@
 //   - TypedChannel<T> : canal générique typé (T: Copy)
 //   - StreamChannel  : streaming zero-copy pour grands volumes
 
-pub mod raw;
-pub mod sync;
 pub mod r#async;
-pub mod mpmc;
 pub mod broadcast;
-pub mod typed;
+pub mod mpmc;
+pub mod raw;
 pub mod streaming;
+pub mod sync;
+pub mod typed;
 
 // ---------------------------------------------------------------------------
 // Re-exports
@@ -22,64 +22,93 @@ pub mod streaming;
 
 // Canal brut (raw mailbox) — bridge syscall ↔ IPC
 pub use raw::{
-    send_raw, recv_raw, mailbox_open, mailbox_close,
-    mailbox_open_count, raw_stats_snapshot,
-    MAX_RAW_SLOTS, RawSlotStats,
+    mailbox_close,
+    mailbox_open,
+    mailbox_open_count,
+    raw_stats_snapshot,
+    recv_raw,
+    recv_raw_checked,
+    send_raw,
     // IPC-04 (v6) — variantes cap-checked pour la couche syscall
-    send_raw_checked, recv_raw_checked,
+    send_raw_checked,
+    RawSlotStats,
+    MAX_RAW_SLOTS,
 };
 
 // Canal synchrone (rendezvous)
 pub use sync::{
-    SyncChannel, SyncChannelStats, SyncChannelSnapshot, SyncSlot, RendezVousState,
-    SYNC_CHANNEL_TABLE_SIZE, SYNC_INLINE_SIZE,
-    sync_channel_create, sync_channel_send, sync_channel_recv,
-    sync_channel_close, sync_channel_destroy, sync_channel_count,
+    sync_channel_close,
+    sync_channel_count,
+    sync_channel_create,
+    sync_channel_destroy,
+    sync_channel_recv,
+    sync_channel_recv_checked,
+    sync_channel_send,
     // IPC-04 (v6) — variantes cap-checked pour la couche syscall
-    sync_channel_send_checked, sync_channel_recv_checked,
+    sync_channel_send_checked,
+    RendezVousState,
+    SyncChannel,
+    SyncChannelSnapshot,
+    SyncChannelStats,
+    SyncSlot,
+    SYNC_CHANNEL_TABLE_SIZE,
+    SYNC_INLINE_SIZE,
 };
 
 // Canal asynchrone
 pub use r#async::{
-    AsyncChannel, AsyncChannelStats, AsyncChannelStatsSnapshot,
-    AsyncWaker, WakerTable, WakeFn, MAX_ASYNC_WAKERS,
-    async_channel_create, async_channel_register_waker,
-    async_channel_unregister_waker, async_channel_send,
-    async_channel_try_recv, async_channel_destroy, async_channel_count,
+    async_channel_count, async_channel_create, async_channel_destroy, async_channel_register_waker,
+    async_channel_send, async_channel_try_recv, async_channel_unregister_waker, AsyncChannel,
+    AsyncChannelStats, AsyncChannelStatsSnapshot, AsyncWaker, WakeFn, WakerTable, MAX_ASYNC_WAKERS,
 };
 
 // Canal MPMC
 pub use mpmc::{
-    MpmcChannel, MpmcStats, MpmcStatsSnapshot, OverflowPolicy,
-    MPMC_CHANNEL_TABLE_SIZE,
-    mpmc_channel_create, mpmc_channel_send, mpmc_channel_recv,
-    mpmc_channel_destroy, mpmc_channel_count,
+    mpmc_channel_count,
+    mpmc_channel_create,
+    mpmc_channel_destroy,
+    mpmc_channel_recv,
+    mpmc_channel_recv_checked,
+    mpmc_channel_send,
     // IPC-04 (v6) — variantes cap-checked pour la couche syscall
-    mpmc_channel_send_checked, mpmc_channel_recv_checked,
+    mpmc_channel_send_checked,
+    MpmcChannel,
+    MpmcStats,
+    MpmcStatsSnapshot,
+    OverflowPolicy,
+    MPMC_CHANNEL_TABLE_SIZE,
 };
 
 // Canal broadcast
 pub use broadcast::{
-    BroadcastChannel, BroadcastStats, BroadcastStatsSnapshot,
-    SubscriberSlot, SubscriberId, SUBSCRIBER_INVALID,
-    MAX_BROADCAST_SUBSCRIBERS,
-    broadcast_create, broadcast_subscribe, broadcast_unsubscribe,
-    broadcast_publish, broadcast_recv, broadcast_destroy,
+    broadcast_create,
+    broadcast_destroy,
+    broadcast_publish,
     // IPC-04 (v6) — variantes cap-checked pour la couche syscall
-    broadcast_publish_checked, broadcast_subscribe_checked, broadcast_recv_checked,
+    broadcast_publish_checked,
+    broadcast_recv,
+    broadcast_recv_checked,
+    broadcast_subscribe,
+    broadcast_subscribe_checked,
+    broadcast_unsubscribe,
+    BroadcastChannel,
+    BroadcastStats,
+    BroadcastStatsSnapshot,
+    SubscriberId,
+    SubscriberSlot,
+    MAX_BROADCAST_SUBSCRIBERS,
+    SUBSCRIBER_INVALID,
 };
 
 // Canal typé générique
 pub use typed::{
-    TypedChannel, TypedSender, TypedReceiver, TypedChannelInner,
-    TypedChannelTable, MAX_TYPED_VALUE_SIZE,
-    typed_channel_destroy, typed_channel_count,
+    typed_channel_count, typed_channel_destroy, TypedChannel, TypedChannelInner, TypedChannelTable,
+    TypedReceiver, TypedSender, MAX_TYPED_VALUE_SIZE,
 };
 
 // Canal streaming
 pub use streaming::{
-    StreamChannel, StreamPool, StreamBuffer, StreamStats, StreamStatsSnapshot,
-    StreamGranule, STREAM_POOL_SIZE, STREAM_CHANNEL_TABLE_SIZE,
-    stream_channel_create, stream_alloc_buffer, stream_push,
-    stream_pop, stream_release_buffer, stream_channel_destroy,
+    stream_alloc_buffer, stream_channel_create, stream_channel_destroy, stream_pop, stream_push,
+    stream_release_buffer, StreamBuffer, StreamChannel, StreamGranule, StreamPool, StreamStats,
+    StreamStatsSnapshot, STREAM_CHANNEL_TABLE_SIZE, STREAM_POOL_SIZE,
 };

@@ -10,7 +10,6 @@
 //! ARITH-02 : saturating_* / checked_* sur tous les compteurs.
 //! RECUR-01 : pas de récursion.
 
-
 use core::mem::size_of;
 
 // ─── Constantes magiques ─────────────────────────────────────────────────────
@@ -37,30 +36,30 @@ pub const EXOAR_MAX_PAYLOAD: u64 = 256 * 1024 * 1024;
 
 // ─── Flags d'archive ─────────────────────────────────────────────────────────
 pub const ARCHIVE_FLAG_INCREMENTAL: u32 = 0x0001;
-pub const ARCHIVE_FLAG_VERIFIED:    u32 = 0x0002;
-pub const ARCHIVE_FLAG_COMPRESSED:  u32 = 0x0004;
-pub const ARCHIVE_FLAG_ENCRYPTED:   u32 = 0x0008;
-pub const ARCHIVE_FLAG_SNAPSHOT:    u32 = 0x0010;
+pub const ARCHIVE_FLAG_VERIFIED: u32 = 0x0002;
+pub const ARCHIVE_FLAG_COMPRESSED: u32 = 0x0004;
+pub const ARCHIVE_FLAG_ENCRYPTED: u32 = 0x0008;
+pub const ARCHIVE_FLAG_SNAPSHOT: u32 = 0x0010;
 
 // ─── Flags d'entrée ──────────────────────────────────────────────────────────
 pub const ENTRY_FLAG_COMPRESSED: u8 = 0x01;
-pub const ENTRY_FLAG_ENCRYPTED:  u8 = 0x02;
-pub const ENTRY_FLAG_TOMBSTONE:  u8 = 0x04;
-pub const ENTRY_FLAG_HARDLINK:   u8 = 0x08;
-pub const ENTRY_FLAG_DIRECTORY:  u8 = 0x10;
-pub const ENTRY_FLAG_VERIFIED:   u8 = 0x20;
-pub const ENTRY_FLAG_FOREIGN:    u8 = 0x40;
+pub const ENTRY_FLAG_ENCRYPTED: u8 = 0x02;
+pub const ENTRY_FLAG_TOMBSTONE: u8 = 0x04;
+pub const ENTRY_FLAG_HARDLINK: u8 = 0x08;
+pub const ENTRY_FLAG_DIRECTORY: u8 = 0x10;
+pub const ENTRY_FLAG_VERIFIED: u8 = 0x20;
+pub const ENTRY_FLAG_FOREIGN: u8 = 0x40;
 
 // ─── Algorithmes de compression ──────────────────────────────────────────────
-pub const COMPRESS_NONE:   u8 = 0;
-pub const COMPRESS_LZ4:    u8 = 1;
-pub const COMPRESS_ZSTD:   u8 = 2;
+pub const COMPRESS_NONE: u8 = 0;
+pub const COMPRESS_LZ4: u8 = 1;
+pub const COMPRESS_ZSTD: u8 = 2;
 pub const COMPRESS_SNAPPY: u8 = 3;
 
 // ─── Algorithmes de chiffrement ──────────────────────────────────────────────
-pub const CIPHER_NONE:     u8 = 0;
+pub const CIPHER_NONE: u8 = 0;
 pub const CIPHER_AES256GCM: u8 = 1;
-pub const CIPHER_CHACHA20:  u8 = 2;
+pub const CIPHER_CHACHA20: u8 = 2;
 
 // ─── Structures binaires ─────────────────────────────────────────────────────
 
@@ -125,8 +124,12 @@ impl ExoarHeader {
 
     /// Validation complète : magic + version + entry_count.
     pub fn validate(&self) -> bool {
-        if !self.validate_magic() { return false; }
-        if !self.validate_version() { return false; }
+        if !self.validate_magic() {
+            return false;
+        }
+        if !self.validate_version() {
+            return false;
+        }
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ec: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.entry_count)) };
         ec <= EXOAR_MAX_ENTRIES
@@ -143,22 +146,19 @@ impl ExoarHeader {
     /// Sérialise en slice d'octets (pointeur vers self).
     pub fn as_bytes(&self) -> &[u8] {
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        unsafe {
-            core::slice::from_raw_parts(
-                self as *const Self as *const u8,
-                size_of::<Self>(),
-            )
-        }
+        unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
     }
 
     /// Désérialise depuis un slice de bytes (magic EN PREMIER).
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
-        if buf.len() < size_of::<Self>() { return None; }
+        if buf.len() < size_of::<Self>() {
+            return None;
+        }
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let hdr: Self = unsafe {
-            core::ptr::read_unaligned(buf.as_ptr() as *const Self)
-        };
-        if !hdr.validate_magic() { return None; }
+        let hdr: Self = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
+        if !hdr.validate_magic() {
+            return None;
+        }
         Some(hdr)
     }
 }
@@ -219,32 +219,46 @@ impl ExoarEntryHeader {
         ps <= EXOAR_MAX_PAYLOAD
     }
 
-    #[inline] pub fn is_tombstone(&self)  -> bool { self.flags & ENTRY_FLAG_TOMBSTONE != 0 }
-    #[inline] pub fn is_compressed(&self) -> bool { self.flags & ENTRY_FLAG_COMPRESSED != 0 }
-    #[inline] pub fn is_encrypted(&self)  -> bool { self.flags & ENTRY_FLAG_ENCRYPTED != 0 }
-    #[inline] pub fn is_directory(&self)  -> bool { self.flags & ENTRY_FLAG_DIRECTORY != 0 }
-    #[inline] pub fn is_hardlink(&self)   -> bool { self.flags & ENTRY_FLAG_HARDLINK != 0 }
+    #[inline]
+    pub fn is_tombstone(&self) -> bool {
+        self.flags & ENTRY_FLAG_TOMBSTONE != 0
+    }
+    #[inline]
+    pub fn is_compressed(&self) -> bool {
+        self.flags & ENTRY_FLAG_COMPRESSED != 0
+    }
+    #[inline]
+    pub fn is_encrypted(&self) -> bool {
+        self.flags & ENTRY_FLAG_ENCRYPTED != 0
+    }
+    #[inline]
+    pub fn is_directory(&self) -> bool {
+        self.flags & ENTRY_FLAG_DIRECTORY != 0
+    }
+    #[inline]
+    pub fn is_hardlink(&self) -> bool {
+        self.flags & ENTRY_FLAG_HARDLINK != 0
+    }
 
     /// Sérialise en slice d'octets.
     pub fn as_bytes(&self) -> &[u8] {
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        unsafe {
-            core::slice::from_raw_parts(
-                self as *const Self as *const u8,
-                size_of::<Self>(),
-            )
-        }
+        unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
     }
 
     /// Désérialise depuis un slice (RÈGLE 8 : magic EN PREMIER).
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
-        if buf.len() < size_of::<Self>() { return None; }
+        if buf.len() < size_of::<Self>() {
+            return None;
+        }
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let hdr: Self = unsafe {
-            core::ptr::read_unaligned(buf.as_ptr() as *const Self)
-        };
-        if !hdr.validate_magic() { return None; }
-        if !hdr.validate_size() { return None; }
+        let hdr: Self = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
+        if !hdr.validate_magic() {
+            return None;
+        }
+        if !hdr.validate_size() {
+            return None;
+        }
         Some(hdr)
     }
 }
@@ -288,7 +302,9 @@ impl ExoarFooter {
     }
 
     pub fn validate(&self, expected_entries: u32) -> bool {
-        if !self.validate_magic() { return false; }
+        if !self.validate_magic() {
+            return false;
+        }
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ec: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.entry_count)) };
         ec == expected_entries
@@ -296,21 +312,18 @@ impl ExoarFooter {
 
     pub fn as_bytes(&self) -> &[u8] {
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        unsafe {
-            core::slice::from_raw_parts(
-                self as *const Self as *const u8,
-                size_of::<Self>(),
-            )
-        }
+        unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
     }
 
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
-        if buf.len() < size_of::<Self>() { return None; }
+        if buf.len() < size_of::<Self>() {
+            return None;
+        }
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let ftr: Self = unsafe {
-            core::ptr::read_unaligned(buf.as_ptr() as *const Self)
-        };
-        if !ftr.validate_magic() { return None; }
+        let ftr: Self = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
+        if !ftr.validate_magic() {
+            return None;
+        }
         Some(ftr)
     }
 }
@@ -331,41 +344,58 @@ pub struct ExoarSummary {
 impl ExoarSummary {
     pub const fn new() -> Self {
         Self {
-            entry_count: 0, tombstone_count: 0, compressed_count: 0,
-            encrypted_count: 0, total_payload_bytes: 0, total_original_bytes: 0,
-            crc_errors: 0, magic_errors: 0,
+            entry_count: 0,
+            tombstone_count: 0,
+            compressed_count: 0,
+            encrypted_count: 0,
+            total_payload_bytes: 0,
+            total_original_bytes: 0,
+            crc_errors: 0,
+            magic_errors: 0,
         }
     }
 
     /// Enregistre une entrée dans le résumé.
     pub fn record_entry(&mut self, hdr: &ExoarEntryHeader, crc_ok: bool) {
         self.entry_count = self.entry_count.saturating_add(1);
-        if hdr.is_tombstone()  { self.tombstone_count  = self.tombstone_count.saturating_add(1); }
-        if hdr.is_compressed() { self.compressed_count = self.compressed_count.saturating_add(1); }
-        if hdr.is_encrypted()  { self.encrypted_count  = self.encrypted_count.saturating_add(1); }
+        if hdr.is_tombstone() {
+            self.tombstone_count = self.tombstone_count.saturating_add(1);
+        }
+        if hdr.is_compressed() {
+            self.compressed_count = self.compressed_count.saturating_add(1);
+        }
+        if hdr.is_encrypted() {
+            self.encrypted_count = self.encrypted_count.saturating_add(1);
+        }
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ps: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_size)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let os: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.original_size)) };
-        self.total_payload_bytes  = self.total_payload_bytes.saturating_add(ps);
+        self.total_payload_bytes = self.total_payload_bytes.saturating_add(ps);
         self.total_original_bytes = self.total_original_bytes.saturating_add(os);
-        if !crc_ok { self.crc_errors = self.crc_errors.saturating_add(1); }
+        if !crc_ok {
+            self.crc_errors = self.crc_errors.saturating_add(1);
+        }
     }
 
     /// Ratio de compression en pourcentage × 10 (évite le float). Ex: 650 = 65.0%.
     pub fn compression_ratio_pct10(&self) -> u32 {
-        if self.total_original_bytes == 0 { return 1000; }
+        if self.total_original_bytes == 0 {
+            return 1000;
+        }
         let ratio = (self.total_payload_bytes.saturating_mul(1000))
             .checked_div(self.total_original_bytes)
             .unwrap_or(1000);
         ratio.min(1000) as u32
     }
 
-    #[inline] pub fn active_entry_count(&self) -> u32 {
+    #[inline]
+    pub fn active_entry_count(&self) -> u32 {
         self.entry_count.saturating_sub(self.tombstone_count)
     }
 
-    #[inline] pub fn is_clean(&self) -> bool {
+    #[inline]
+    pub fn is_clean(&self) -> bool {
         self.crc_errors == 0 && self.magic_errors == 0
     }
 }
@@ -382,10 +412,18 @@ pub enum ExoarEntryKind {
 
 impl ExoarEntryKind {
     pub fn from_flags(flags: u8) -> Self {
-        if flags & ENTRY_FLAG_TOMBSTONE != 0 { return Self::Tombstone; }
-        if flags & ENTRY_FLAG_DIRECTORY != 0 { return Self::Directory; }
-        if flags & ENTRY_FLAG_HARDLINK  != 0 { return Self::HardLink; }
-        if flags & ENTRY_FLAG_FOREIGN   != 0 { return Self::Foreign; }
+        if flags & ENTRY_FLAG_TOMBSTONE != 0 {
+            return Self::Tombstone;
+        }
+        if flags & ENTRY_FLAG_DIRECTORY != 0 {
+            return Self::Directory;
+        }
+        if flags & ENTRY_FLAG_HARDLINK != 0 {
+            return Self::HardLink;
+        }
+        if flags & ENTRY_FLAG_FOREIGN != 0 {
+            return Self::Foreign;
+        }
         Self::Blob
     }
 }
@@ -405,22 +443,29 @@ pub struct ExoarEntryInfo {
 impl ExoarEntryInfo {
     pub fn from_entry_header(hdr: &ExoarEntryHeader) -> Self {
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        let payload_size   = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_size)) };
+        let payload_size =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_size)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        let original_size  = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.original_size)) };
+        let original_size =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.original_size)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        let declared_crc32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_crc32)) };
+        let declared_crc32 =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_crc32)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        let epoch          = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch)) };
+        let epoch = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch)) };
         Self {
             kind: ExoarEntryKind::from_flags(hdr.flags),
             blob_id: hdr.blob_id,
-            payload_size, original_size, declared_crc32, epoch,
+            payload_size,
+            original_size,
+            declared_crc32,
+            epoch,
             flags: hdr.flags,
         }
     }
 
-    #[inline] pub fn has_payload(&self) -> bool {
+    #[inline]
+    pub fn has_payload(&self) -> bool {
         self.kind != ExoarEntryKind::Tombstone && self.payload_size > 0
     }
 }
@@ -435,7 +480,11 @@ const CRC32C_TABLE: [u32; 256] = {
         let mut crc = i as u32;
         let mut j = 0usize;
         while j < 8 {
-            if crc & 1 != 0 { crc = 0x82F6_3B78 ^ (crc >> 1); } else { crc >>= 1; }
+            if crc & 1 != 0 {
+                crc = 0x82F6_3B78 ^ (crc >> 1);
+            } else {
+                crc >>= 1;
+            }
             j += 1;
         }
         table[i] = crc;
@@ -456,8 +505,14 @@ pub fn crc32c_update(mut crc: u32, data: &[u8]) -> u32 {
     !crc
 }
 
-#[inline] pub fn crc32c_compute(data: &[u8]) -> u32 { crc32c_update(0, data) }
-#[inline] pub fn crc32c_verify(data: &[u8], expected: u32) -> bool { crc32c_compute(data) == expected }
+#[inline]
+pub fn crc32c_compute(data: &[u8]) -> u32 {
+    crc32c_update(0, data)
+}
+#[inline]
+pub fn crc32c_verify(data: &[u8], expected: u32) -> bool {
+    crc32c_compute(data) == expected
+}
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
@@ -553,8 +608,14 @@ mod tests {
 
     #[test]
     fn test_entry_kind_from_flags() {
-        assert_eq!(ExoarEntryKind::from_flags(ENTRY_FLAG_TOMBSTONE), ExoarEntryKind::Tombstone);
-        assert_eq!(ExoarEntryKind::from_flags(ENTRY_FLAG_DIRECTORY), ExoarEntryKind::Directory);
+        assert_eq!(
+            ExoarEntryKind::from_flags(ENTRY_FLAG_TOMBSTONE),
+            ExoarEntryKind::Tombstone
+        );
+        assert_eq!(
+            ExoarEntryKind::from_flags(ENTRY_FLAG_DIRECTORY),
+            ExoarEntryKind::Directory
+        );
         assert_eq!(ExoarEntryKind::from_flags(0), ExoarEntryKind::Blob);
     }
 
@@ -574,13 +635,19 @@ mod tests {
         let parsed = ExoarEntryHeader::from_bytes(bytes).expect("parse ok");
         assert_eq!(parsed.blob_id, blob_id);
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        assert_eq!(unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(parsed.payload_size)) }, 256u64);
+        assert_eq!(
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(parsed.payload_size)) },
+            256u64
+        );
     }
 
     #[test]
     fn test_from_bytes_bad_magic() {
         let mut buf = [0u8; 96];
-        buf[0] = 0xFF; buf[1] = 0xFF; buf[2] = 0xFF; buf[3] = 0xFF;
+        buf[0] = 0xFF;
+        buf[1] = 0xFF;
+        buf[2] = 0xFF;
+        buf[3] = 0xFF;
         assert!(ExoarEntryHeader::from_bytes(&buf).is_none());
     }
 

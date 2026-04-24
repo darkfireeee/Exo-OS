@@ -17,15 +17,13 @@
 //   • PROC-04 : signal_pending est ÉCRIT ici (process/signal/), LU par scheduler.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, AtomicUsize, AtomicBool};
-use alloc::boxed::Box;
-use crate::scheduler::core::task::{
-    ThreadControlBlock, ThreadId, ProcessId, Priority, SchedPolicy,
-    TaskState,
-};
 use super::pid::{Pid, Tid};
-use crate::process::signal::queue::{SigQueue, RTSigQueue};
+use crate::process::signal::queue::{RTSigQueue, SigQueue};
+use crate::scheduler::core::task::{
+    Priority, ProcessId, SchedPolicy, TaskState, ThreadControlBlock, ThreadId,
+};
+use alloc::boxed::Box;
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 
 /// Taille du stack kernel par thread (4 pages × 4096 = 16 384 bytes).
 pub const KSTACK_SIZE: usize = 16 * 1024;
@@ -42,17 +40,17 @@ const STACK_CANARY: u64 = 0xDEAD_BEEF_CAFE_BABE;
 #[repr(C)]
 pub struct ThreadAddress {
     /// Base du stack utilisateur alloué (plus basse adresse).
-    pub stack_base:      u64,
+    pub stack_base: u64,
     /// Taille du stack utilisateur (bytes).
-    pub stack_size:      u64,
+    pub stack_size: u64,
     /// Registre d’instruction de retour (RIP initial au lancement).
-    pub entry_point:     u64,
+    pub entry_point: u64,
     /// Pointeur de cadre utilisateur initial (RSP au démarrage).
-    pub initial_rsp:     u64,
+    pub initial_rsp: u64,
     /// Pointeur vers la TLS statique (GS.base pour x86_64).
-    pub tls_base:        u64,
+    pub tls_base: u64,
     /// Pointeur vers la structure `pthread_t` userspace.
-    pub pthread_ptr:     u64,
+    pub pthread_ptr: u64,
     /// Zone `sigaltstack` (stack alternatif pour signaux).
     pub sigaltstack_base: u64,
     pub sigaltstack_size: u64,
@@ -74,11 +72,11 @@ impl ThreadAddress {
 /// La page la plus basse est une guard page (à mapper NX + non-present = trap overflow).
 pub struct KernelStack {
     /// Pointeur vers la mémoire allouée (bas du buffer, y compris garde).
-    base:  *mut u8,
+    base: *mut u8,
     /// Taille totale en bytes.
-    size:  usize,
+    size: usize,
     /// Adresse du sommet (base + size, aligné 16).
-    top:   u64,
+    top: u64,
 }
 
 impl KernelStack {
@@ -89,7 +87,9 @@ impl KernelStack {
         let layout = Layout::from_size_align(size, 16).ok()?;
         // SAFETY: layout est valide, on vérifie le pointeur.
         let base = unsafe { alloc(layout) };
-        if base.is_null() { return None; }
+        if base.is_null() {
+            return None;
+        }
         // Écriture du canari au bas du stack.
         // SAFETY: base pointe vers `size` bytes alloués, canari à offset 0.
         unsafe {
@@ -100,12 +100,18 @@ impl KernelStack {
         let top = unsafe { base.add(size) } as u64;
         // Aligner sur 16 bytes (x86_64 ABI) : le top doit être 16-aligné - 8.
         let top_aligned = (top & !0xF) - 8;
-        Some(Self { base, size, top: top_aligned })
+        Some(Self {
+            base,
+            size,
+            top: top_aligned,
+        })
     }
 
     /// Adresse du sommet utile (valeur initiale du RSP kernel).
     #[inline(always)]
-    pub fn top_addr(&self) -> u64 { self.top }
+    pub fn top_addr(&self) -> u64 {
+        self.top
+    }
 
     /// Vérifie le canari — retourne false si débordement détecté.
     pub fn check_canary(&self) -> bool {
@@ -115,7 +121,9 @@ impl KernelStack {
 
     /// Taille en bytes.
     #[inline(always)]
-    pub fn size(&self) -> usize { self.size }
+    pub fn size(&self) -> usize {
+        self.size
+    }
 }
 
 impl Drop for KernelStack {
@@ -152,33 +160,33 @@ pub struct ProcessThread {
 
     // ── Identité process ───────────────────────────────────────────────────────
     /// PID du processus propriétaire.
-    pub pid:          Pid,
+    pub pid: Pid,
     /// TID de ce thread.
-    pub tid:          Tid,
+    pub tid: Tid,
 
     // ── Adresses userspace ─────────────────────────────────────────────────────
     /// Adresses du thread côté userspace.
-    pub addresses:    ThreadAddress,
+    pub addresses: ThreadAddress,
 
     // ── TLS (Thread Local Storage) ─────────────────────────────────────────────
     /// Base du segment TLS (valeur de GS.base en mode kernel).
-    pub tls_gs_base:  AtomicU64,
+    pub tls_gs_base: AtomicU64,
     /// Bloc TLS statique (segment .tdata/.tbss du binaire).
-    pub tls_block:    AtomicUsize,  // *mut u8 opaque
+    pub tls_block: AtomicUsize, // *mut u8 opaque
     /// Taille du bloc TLS.
-    pub tls_size:     usize,
+    pub tls_size: usize,
 
     // ── État de join ───────────────────────────────────────────────────────────
     /// true = thread detaché (le joineur n'attendra pas).
-    pub detached:     AtomicBool,
+    pub detached: AtomicBool,
     /// true = join terminé (résultat disponible dans join_result).
-    pub join_done:    AtomicBool,
+    pub join_done: AtomicBool,
     /// Valeur de retour du thread (ptr vers donnée userspace).
-    pub join_result:  AtomicU64,
+    pub join_result: AtomicU64,
 
     // ── Files de signaux ───────────────────────────────────────────────────────
     /// File de signaux standard (signaux 1..31).
-    pub sig_queue:    SigQueue,
+    pub sig_queue: SigQueue,
     /// File de signaux temps-réel (signaux 32..63).
     pub rt_sig_queue: RTSigQueue,
 }
@@ -192,11 +200,11 @@ impl ProcessThread {
     /// * `cr3`   — CR3 de l'espace d'adressage.
     /// * `policy`/`prio` — politique et priorité d'ordonnancement.
     pub fn new(
-        tid:    Tid,
-        pid:    Pid,
-        cr3:    u64,
+        tid: Tid,
+        pid: Pid,
+        cr3: u64,
         policy: SchedPolicy,
-        prio:   Priority,
+        prio: Priority,
     ) -> Option<Box<Self>> {
         let kstack = KernelStack::alloc(KSTACK_SIZE)?;
         let stack_top = kstack.top_addr();
@@ -221,14 +229,14 @@ impl ProcessThread {
             kernel_stack: kstack,
             pid,
             tid,
-            addresses:    ThreadAddress::default(),
-            tls_gs_base:  AtomicU64::new(0),
-            tls_block:    AtomicUsize::new(0),
-            tls_size:     0,
-            detached:     AtomicBool::new(false),
-            join_done:    AtomicBool::new(false),
-            join_result:  AtomicU64::new(0),
-            sig_queue:    SigQueue::new(),
+            addresses: ThreadAddress::default(),
+            tls_gs_base: AtomicU64::new(0),
+            tls_block: AtomicUsize::new(0),
+            tls_size: 0,
+            detached: AtomicBool::new(false),
+            join_done: AtomicBool::new(false),
+            join_result: AtomicU64::new(0),
+            sig_queue: SigQueue::new(),
             rt_sig_queue: RTSigQueue::new(),
         });
 
@@ -237,7 +245,13 @@ impl ProcessThread {
 
     /// Crée un thread kernel dédié (pid=1, KTHREAD flag).
     pub fn new_kthread(tid: Tid, cr3: u64) -> Option<Box<Self>> {
-        Self::new(tid, Pid(1), cr3, SchedPolicy::Normal, Priority::NORMAL_DEFAULT)
+        Self::new(
+            tid,
+            Pid(1),
+            cr3,
+            SchedPolicy::Normal,
+            Priority::NORMAL_DEFAULT,
+        )
     }
 
     /// Référence au TCB scheduler (short-lived, hot path).

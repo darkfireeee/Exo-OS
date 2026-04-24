@@ -23,19 +23,14 @@
 // résident EXCLUSIVEMENT dans memory::utils::futex_table.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use crate::memory::utils::futex_table::{
-    WakeFn, FutexWaiter, FutexWaitResult,
-    FUTEX_STATS,
-    futex_wait  as mem_futex_wait,
-    futex_wake  as mem_futex_wake,
-    futex_wake_n as mem_futex_wake_n,
-    futex_cancel as mem_futex_cancel,
-    futex_requeue as mem_futex_requeue,
-};
 use crate::ipc::core::types::IpcError;
+use crate::memory::utils::futex_table::{
+    futex_cancel as mem_futex_cancel, futex_requeue as mem_futex_requeue,
+    futex_wait as mem_futex_wait, futex_wake as mem_futex_wake, futex_wake_n as mem_futex_wake_n,
+    FutexWaitResult, FutexWaiter, WakeFn, FUTEX_STATS,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FutexKey — clé identifiant un futex IPC par adresse virtuelle (physmap)
@@ -81,11 +76,11 @@ pub enum WaiterState {
 #[derive(Debug, Clone, Copy)]
 pub struct FutexIpcStats {
     /// Nombre d'appels WAIT depuis le boot.
-    pub waits_total:      u64,
+    pub waits_total: u64,
     /// Nombre d'appels WAKE depuis le boot.
-    pub wakes_total:      u64,
+    pub wakes_total: u64,
     /// Nombre de timeouts (futex_cancel suite à spin_max dépassé).
-    pub timeouts_total:   u64,
+    pub timeouts_total: u64,
     /// Nombre de WAIT où *addr ≠ expected (retour immédiat).
     pub value_mismatches: u64,
 }
@@ -127,12 +122,12 @@ fn nop_wake_fn(_tid: u64, _code: i32) {}
 /// - La durée de vie du waiter alloué sur la pile est garantie par le
 ///   spin-loop : la fonction ne retourne pas tant que le waiter est actif.
 pub unsafe fn futex_wait(
-    _addr:      &AtomicU32,
-    key:       FutexKey,
-    expected:  u32,
+    _addr: &AtomicU32,
+    key: FutexKey,
+    expected: u32,
     thread_id: u32,
-    spin_max:  u64,
-    wake_fn:   Option<WakeFn>,
+    spin_max: u64,
+    wake_fn: Option<WakeFn>,
 ) -> Result<WaiterState, IpcError> {
     // Utiliser ipc_futex_wake_fn par défaut : réveille réellement le thread.
     // Si le caller fournit une wake_fn explicite, l'utiliser à la place.
@@ -234,8 +229,9 @@ pub unsafe fn futex_requeue(
 /// La source de vérité est la table mémoire — pas de doublon local.
 pub fn futex_stats() -> FutexIpcStats {
     FutexIpcStats {
-        waits_total:      FUTEX_STATS.wait_calls.load(Ordering::Relaxed),
-        wakes_total:      FUTEX_STATS.wake_calls.load(Ordering::Relaxed),
-        timeouts_total:   FUTEX_STATS.timeouts.load(Ordering::Relaxed),
+        waits_total: FUTEX_STATS.wait_calls.load(Ordering::Relaxed),
+        wakes_total: FUTEX_STATS.wake_calls.load(Ordering::Relaxed),
+        timeouts_total: FUTEX_STATS.timeouts.load(Ordering::Relaxed),
         value_mismatches: FUTEX_STATS.value_mismatches.load(Ordering::Relaxed),
-    }}
+    }
+}

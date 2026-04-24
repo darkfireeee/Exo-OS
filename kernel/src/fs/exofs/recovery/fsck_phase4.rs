@@ -11,21 +11,20 @@
 //! - **ARITH-02** : `checked_add` / `checked_mul` sur tous les calculs d offset.
 //! - **WRITE-02** : vérification que `bytes_written == expected` après chaque écriture.
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};
 use super::boot_recovery::BlockDevice;
 use super::fsck_phase2::{AllocEntry, Phase2Report};
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
+use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
 /// Magic identifiant la région lost+found on-disk.
-pub const LOST_FOUND_MAGIC: u64  = 0x444E4F464C544650; // "PFTLFOND"
+pub const LOST_FOUND_MAGIC: u64 = 0x444E4F464C544650; // "PFTLFOND"
 /// Version du format de la région lost+found.
 pub const LOST_FOUND_VERSION: u8 = 1;
 /// Taille de l en-tête on-disk de la région lost+found.
@@ -43,15 +42,15 @@ pub const LOST_FOUND_ENTRY_SIZE: usize = 48;
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct LostFoundHeaderDisk {
-    pub magic:      u64,
-    pub version:    u8,
-    pub _pad:       [u8; 7],
-    pub n_entries:  u32,
-    pub capacity:   u32,
+    pub magic: u64,
+    pub version: u8,
+    pub _pad: [u8; 7],
+    pub n_entries: u32,
+    pub capacity: u32,
     pub region_lba: u64,
     pub created_tick: u64,
-    pub _reserved:  [u8; 16],
-    pub hdr_hash:   [u8; 8],  // CRC simple sur [0..56].
+    pub _reserved: [u8; 16],
+    pub hdr_hash: [u8; 8], // CRC simple sur [0..56].
 }
 
 const _CHECK_LF_HDR: () = assert!(
@@ -63,13 +62,18 @@ impl LostFoundHeaderDisk {
     pub fn from_bytes(buf: &[u8; LOST_FOUND_HDR_SIZE]) -> ExofsResult<Self> {
         // HDR-03 : magic EN PREMIER.
         let magic = u64::from_le_bytes([
-            buf[0], buf[1], buf[2], buf[3],
-            buf[4], buf[5], buf[6], buf[7],
+            buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
         ]);
-        if magic != LOST_FOUND_MAGIC { return Err(ExofsError::InvalidMagic); }
-        if buf[8] != LOST_FOUND_VERSION { return Err(ExofsError::InvalidMagic); }
+        if magic != LOST_FOUND_MAGIC {
+            return Err(ExofsError::InvalidMagic);
+        }
+        if buf[8] != LOST_FOUND_VERSION {
+            return Err(ExofsError::InvalidMagic);
+        }
         // Checksum basique : Blake3(buf[0..56])[0..8].
-        let body: &[u8; 56] = buf[0..56].try_into().map_err(|_| ExofsError::CorruptedStructure)?;
+        let body: &[u8; 56] = buf[0..56]
+            .try_into()
+            .map_err(|_| ExofsError::CorruptedStructure)?;
         // Utiliser le hash Blake3 en tronquant à 8 octets.
         let full_hash = {
             let padded = {
@@ -80,7 +84,9 @@ impl LostFoundHeaderDisk {
             blake3_hash(&padded)
         };
         let stored = &buf[56..64];
-        if &full_hash[0..8] != stored { return Err(ExofsError::ChecksumMismatch); }
+        if &full_hash[0..8] != stored {
+            return Err(ExofsError::ChecksumMismatch);
+        }
         // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         Ok(unsafe { core::mem::transmute_copy(buf) })
     }
@@ -117,11 +123,11 @@ impl LostFoundHeaderDisk {
 #[derive(Clone, Copy, Debug)]
 pub struct LostFoundEntry {
     /// BlobId du blob orphelin.
-    pub blob_id:    [u8; 32],
+    pub blob_id: [u8; 32],
     /// LBA d origine (où le blob a été trouvé).
     pub origin_lba: u64,
     /// Taille des données en octets.
-    pub data_len:   u64,
+    pub data_len: u64,
 }
 
 const _CHECK_LF_ENTRY: () = assert!(
@@ -136,29 +142,29 @@ const _CHECK_LF_ENTRY: () = assert!(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase4ErrorKind {
     /// Erreur I/O lors de la lecture du blob.
-    ReadIoError        = 0x01,
+    ReadIoError = 0x01,
     /// Erreur I/O lors de l écriture dans lost+found.
-    WriteIoError       = 0x02,
+    WriteIoError = 0x02,
     /// La vérification HASH-02 a échoué sur les données.
-    HashMismatch       = 0x03,
+    HashMismatch = 0x03,
     /// La région lost+found est pleine.
-    LostFoundFull      = 0x04,
+    LostFoundFull = 0x04,
     /// Overflow arithmétique lors du calcul d offset.
-    ArithOverflow      = 0x05,
+    ArithOverflow = 0x05,
     /// Echec de la mise à jour de la table d allocation.
-    AllocUpdateFailed  = 0x06,
+    AllocUpdateFailed = 0x06,
     /// Ecriture partielle (WRITE-02).
-    PartialWrite       = 0x07,
+    PartialWrite = 0x07,
 }
 
 /// Erreur individuelle relevée lors de la phase 4.
 #[derive(Clone, Copy, Debug)]
 pub struct Phase4Error {
-    pub kind:    Phase4ErrorKind,
+    pub kind: Phase4ErrorKind,
     pub blob_id: [u8; 32],
     /// LBA source du blob.
-    pub lba:     u64,
-    pub detail:  u64,
+    pub lba: u64,
+    pub detail: u64,
 }
 
 // ── Options de la phase 4 ─────────────────────────────────────────────────────
@@ -167,28 +173,28 @@ pub struct Phase4Error {
 #[derive(Clone, Copy, Debug)]
 pub struct Phase4Options {
     /// LBA de départ de la région lost+found.
-    pub lost_found_lba:  u64,
+    pub lost_found_lba: u64,
     /// Capacité de la région (nombre d entrées).
-    pub capacity:        usize,
+    pub capacity: usize,
     /// Si `true`, simule les actions sans écrire sur le disque.
-    pub dry_run:         bool,
+    pub dry_run: bool,
     /// Nombre maximal d erreurs avant abandon.
-    pub max_errors:      u32,
+    pub max_errors: u32,
     /// Si `true`, stoppe à la première erreur I/O.
-    pub stop_on_io_err:  bool,
+    pub stop_on_io_err: bool,
     /// Si `true`, vérifie les données via HASH-02 avant déplacement.
-    pub verify_data:     bool,
+    pub verify_data: bool,
 }
 
 impl Default for Phase4Options {
     fn default() -> Self {
         Self {
-            lost_found_lba:  LOST_FOUND_REGION_LBA,
-            capacity:        LOST_FOUND_CAPACITY,
-            dry_run:         false,
-            max_errors:      256,
-            stop_on_io_err:  false,
-            verify_data:     true,
+            lost_found_lba: LOST_FOUND_REGION_LBA,
+            capacity: LOST_FOUND_CAPACITY,
+            dry_run: false,
+            max_errors: 256,
+            stop_on_io_err: false,
+            verify_data: true,
         }
     }
 }
@@ -199,39 +205,43 @@ impl Default for Phase4Options {
 #[derive(Clone, Debug)]
 pub struct Phase4Report {
     /// Erreurs individuelles relevées.
-    pub errors:              Vec<Phase4Error>,
+    pub errors: Vec<Phase4Error>,
     /// Blobs orphelins trouvés (ref_count == 0).
-    pub orphans_found:       u64,
+    pub orphans_found: u64,
     /// Blobs orphelins déplacés dans lost+found.
-    pub orphans_recovered:   u64,
+    pub orphans_recovered: u64,
     /// Blobs orphelins non récupérables.
-    pub orphans_abandoned:   u64,
+    pub orphans_abandoned: u64,
     /// Taux de récupération en pourcentage.
-    pub recovery_rate_pct:   u64,
+    pub recovery_rate_pct: u64,
     /// Octets totaux récupérés.
-    pub bytes_recovered:     u64,
+    pub bytes_recovered: u64,
     /// Mode dry-run actif.
-    pub dry_run:             bool,
+    pub dry_run: bool,
 }
 
 impl Phase4Report {
-    pub fn is_clean(&self) -> bool { self.errors.is_empty() }
-    pub fn error_count(&self) -> usize { self.errors.len() }
+    pub fn is_clean(&self) -> bool {
+        self.errors.is_empty()
+    }
+    pub fn error_count(&self) -> usize {
+        self.errors.len()
+    }
 }
 
 // ── Table lost+found en mémoire ───────────────────────────────────────────────
 
 /// Table lost+found maintenue en mémoire pendant la phase 4.
 struct LostFoundTable {
-    entries:   Vec<LostFoundEntry>,
-    capacity:  usize,
-    base_lba:  u64,
+    entries: Vec<LostFoundEntry>,
+    capacity: usize,
+    base_lba: u64,
 }
 
 impl LostFoundTable {
     fn new(capacity: usize, base_lba: u64) -> Self {
         Self {
-            entries:  Vec::new(),
+            entries: Vec::new(),
             capacity,
             base_lba,
         }
@@ -242,7 +252,9 @@ impl LostFoundTable {
         if self.entries.len() >= self.capacity {
             return Err(ExofsError::NoSpace);
         }
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.entries.push(entry);
         Ok(())
     }
@@ -266,12 +278,10 @@ impl LostFoundTable {
     }
 
     /// Persiste l entrée i sur le device — WRITE-02.
-    fn write_entry(
-        &self,
-        idx:        usize,
-        device:     &dyn BlockDevice,
-    ) -> ExofsResult<()> {
-        if idx >= self.entries.len() { return Err(ExofsError::InvalidArgument); }
+    fn write_entry(&self, idx: usize, device: &dyn BlockDevice) -> ExofsResult<()> {
+        if idx >= self.entries.len() {
+            return Err(ExofsError::InvalidArgument);
+        }
         let block_size = device.block_size() as u64;
         let lba = self.entry_lba(idx, block_size)?;
         let entry = &self.entries[idx];
@@ -313,10 +323,7 @@ pub struct FsckPhase4;
 
 impl FsckPhase4 {
     /// Lance la phase 4 avec les options par défaut.
-    pub fn run(
-        device:      &mut dyn BlockDevice,
-        phase2:      &Phase2Report,
-    ) -> ExofsResult<Phase4Report> {
+    pub fn run(device: &mut dyn BlockDevice, phase2: &Phase2Report) -> ExofsResult<Phase4Report> {
         Self::run_with_options(device, phase2, &Phase4Options::default())
     }
 
@@ -331,18 +338,18 @@ impl FsckPhase4 {
     ///    d. WRITE-02 : vérifie que l écriture a réussi.
     /// 3. Flush + écriture de l en-tête lost+found.
     pub fn run_with_options(
-        device:      &mut dyn BlockDevice,
-        phase2:      &Phase2Report,
-        opts:        &Phase4Options,
+        device: &mut dyn BlockDevice,
+        phase2: &Phase2Report,
+        opts: &Phase4Options,
     ) -> ExofsResult<Phase4Report> {
         RECOVERY_LOG.log_phase_start(4);
         let tick = crate::arch::time::read_ticks();
 
-        let mut errors: Vec<Phase4Error>  = Vec::new();
-        let mut orphans_found:     u64    = 0;
-        let mut orphans_recovered: u64    = 0;
-        let mut orphans_abandoned: u64    = 0;
-        let mut bytes_recovered:   u64    = 0;
+        let mut errors: Vec<Phase4Error> = Vec::new();
+        let mut orphans_found: u64 = 0;
+        let mut orphans_recovered: u64 = 0;
+        let mut orphans_abandoned: u64 = 0;
+        let mut bytes_recovered: u64 = 0;
 
         let mut lf_table = LostFoundTable::new(opts.capacity, opts.lost_found_lba);
         let block_size = device.block_size() as u64;
@@ -350,7 +357,9 @@ impl FsckPhase4 {
         // Itérer sur les entrées d allocation.
         for entry in phase2.alloc_entries_iter() {
             // Seulement les blobs orphelins.
-            if phase2.ref_counter.count(&entry.blob_id) != 0 { continue; }
+            if phase2.ref_counter.count(&entry.blob_id) != 0 {
+                continue;
+            }
 
             orphans_found = orphans_found.checked_add(1).unwrap_or(u64::MAX);
 
@@ -366,12 +375,15 @@ impl FsckPhase4 {
                 match device.read_block(entry.data_lba, &mut data_buf) {
                     Ok(()) => {}
                     Err(_) => {
-                        Self::push_err(&mut errors, Phase4Error {
-                            kind:    Phase4ErrorKind::ReadIoError,
-                            blob_id: entry.blob_id,
-                            lba:     entry.data_lba,
-                            detail:  0,
-                        })?;
+                        Self::push_err(
+                            &mut errors,
+                            Phase4Error {
+                                kind: Phase4ErrorKind::ReadIoError,
+                                blob_id: entry.blob_id,
+                                lba: entry.data_lba,
+                                detail: 0,
+                            },
+                        )?;
                         orphans_abandoned = orphans_abandoned.checked_add(1).unwrap_or(u64::MAX);
                         if opts.stop_on_io_err || errors.len() as u32 >= opts.max_errors {
                             break;
@@ -381,13 +393,19 @@ impl FsckPhase4 {
                 }
                 // HASH-02 : vérifier l intégrité des données.
                 let relevant = &data_buf[..entry.data_len as usize];
-                if !verify_blob_id(&crate::fs::exofs::core::types::BlobId(entry.blob_id), relevant) {
-                    Self::push_err(&mut errors, Phase4Error {
-                        kind:    Phase4ErrorKind::HashMismatch,
-                        blob_id: entry.blob_id,
-                        lba:     entry.data_lba,
-                        detail:  0,
-                    })?;
+                if !verify_blob_id(
+                    &crate::fs::exofs::core::types::BlobId(entry.blob_id),
+                    relevant,
+                ) {
+                    Self::push_err(
+                        &mut errors,
+                        Phase4Error {
+                            kind: Phase4ErrorKind::HashMismatch,
+                            blob_id: entry.blob_id,
+                            lba: entry.data_lba,
+                            detail: 0,
+                        },
+                    )?;
                     orphans_abandoned = orphans_abandoned.checked_add(1).unwrap_or(u64::MAX);
                     continue;
                 }
@@ -395,20 +413,23 @@ impl FsckPhase4 {
 
             // Ajouter dans la table lost+found.
             let lf_entry = LostFoundEntry {
-                blob_id:    entry.blob_id,
+                blob_id: entry.blob_id,
                 origin_lba: entry.data_lba,
-                data_len:   entry.data_len,
+                data_len: entry.data_len,
             };
 
             match lf_table.add(lf_entry) {
                 Ok(()) => {}
                 Err(ExofsError::NoSpace) => {
-                    Self::push_err(&mut errors, Phase4Error {
-                        kind:    Phase4ErrorKind::LostFoundFull,
-                        blob_id: entry.blob_id,
-                        lba:     entry.data_lba,
-                        detail:  0,
-                    })?;
+                    Self::push_err(
+                        &mut errors,
+                        Phase4Error {
+                            kind: Phase4ErrorKind::LostFoundFull,
+                            blob_id: entry.blob_id,
+                            lba: entry.data_lba,
+                            detail: 0,
+                        },
+                    )?;
                     orphans_abandoned = orphans_abandoned.checked_add(1).unwrap_or(u64::MAX);
                     break;
                 }
@@ -420,15 +441,20 @@ impl FsckPhase4 {
                 match lf_table.write_entry(idx, device) {
                     Ok(()) => {}
                     Err(_) => {
-                        Self::push_err(&mut errors, Phase4Error {
-                            kind:    Phase4ErrorKind::WriteIoError,
-                            blob_id: entry.blob_id,
-                            lba:     entry.data_lba,
-                            detail:  0,
-                        })?;
+                        Self::push_err(
+                            &mut errors,
+                            Phase4Error {
+                                kind: Phase4ErrorKind::WriteIoError,
+                                blob_id: entry.blob_id,
+                                lba: entry.data_lba,
+                                detail: 0,
+                            },
+                        )?;
                         lf_table.entries.pop(); // Rollback.
                         orphans_abandoned = orphans_abandoned.checked_add(1).unwrap_or(u64::MAX);
-                        if opts.stop_on_io_err || errors.len() as u32 >= opts.max_errors { break; }
+                        if opts.stop_on_io_err || errors.len() as u32 >= opts.max_errors {
+                            break;
+                        }
                         continue;
                     }
                 }
@@ -478,7 +504,9 @@ impl FsckPhase4 {
 
     /// Calcule le nombre de blocs nécessaires pour `data_len` octets.
     fn data_blocks(data_len: u64, block_size: u64) -> ExofsResult<u64> {
-        if block_size == 0 { return Err(ExofsError::InvalidArgument); }
+        if block_size == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         data_len
             .checked_add(block_size.saturating_sub(1))
             .and_then(|v| v.checked_div(block_size))
@@ -529,7 +557,11 @@ mod tests {
     #[test]
     fn test_lost_found_table_capacity() {
         let mut table = LostFoundTable::new(2, 0x8000);
-        let e = LostFoundEntry { blob_id: [0; 32], origin_lba: 1, data_len: 512 };
+        let e = LostFoundEntry {
+            blob_id: [0; 32],
+            origin_lba: 1,
+            data_len: 512,
+        };
         assert!(table.add(e).is_ok());
         assert!(table.add(e).is_ok());
         // Troisième ajout → NoSpace.
@@ -546,13 +578,13 @@ mod tests {
     #[test]
     fn test_phase4_report_clean() {
         let r = Phase4Report {
-            errors:            Vec::new(),
-            orphans_found:     4,
+            errors: Vec::new(),
+            orphans_found: 4,
             orphans_recovered: 4,
             orphans_abandoned: 0,
             recovery_rate_pct: 100,
-            bytes_recovered:   4096,
-            dry_run:           false,
+            bytes_recovered: 4096,
+            dry_run: false,
         };
         assert!(r.is_clean());
         assert_eq!(r.error_count(), 0);
@@ -561,10 +593,10 @@ mod tests {
     #[test]
     fn test_phase4_error_kinds() {
         let e = Phase4Error {
-            kind:    Phase4ErrorKind::HashMismatch,
+            kind: Phase4ErrorKind::HashMismatch,
             blob_id: [0xCCu8; 32],
-            lba:     0x1000,
-            detail:  0,
+            lba: 0x1000,
+            detail: 0,
         };
         assert_eq!(e.kind, Phase4ErrorKind::HashMismatch);
     }
@@ -578,7 +610,10 @@ mod tests {
 
     #[test]
     fn test_lost_found_entry_size() {
-        assert_eq!(core::mem::size_of::<LostFoundEntry>(), LOST_FOUND_ENTRY_SIZE);
+        assert_eq!(
+            core::mem::size_of::<LostFoundEntry>(),
+            LOST_FOUND_ENTRY_SIZE
+        );
     }
 
     #[test]

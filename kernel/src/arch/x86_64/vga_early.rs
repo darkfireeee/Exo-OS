@@ -22,25 +22,27 @@ const VGA_COLS: usize = 80;
 const VGA_ROWS: usize = 25;
 
 // ── Couleurs ──────────────────────────────────────────────────────────────────
-pub const BLACK:       u8 = 0;
-pub const BLUE:        u8 = 1;
-pub const GREEN:       u8 = 2;
-pub const CYAN:        u8 = 3;
-pub const RED:         u8 = 4;
-pub const MAGENTA:     u8 = 5;
-pub const BROWN:       u8 = 6;
-pub const LIGHT_GRAY:  u8 = 7;
-pub const DARK_GRAY:   u8 = 8;
-pub const LIGHT_BLUE:  u8 = 9;
+pub const BLACK: u8 = 0;
+pub const BLUE: u8 = 1;
+pub const GREEN: u8 = 2;
+pub const CYAN: u8 = 3;
+pub const RED: u8 = 4;
+pub const MAGENTA: u8 = 5;
+pub const BROWN: u8 = 6;
+pub const LIGHT_GRAY: u8 = 7;
+pub const DARK_GRAY: u8 = 8;
+pub const LIGHT_BLUE: u8 = 9;
 pub const LIGHT_GREEN: u8 = 10;
-pub const LIGHT_CYAN:  u8 = 11;
-pub const LIGHT_RED:   u8 = 12;
-pub const YELLOW:      u8 = 14;
-pub const WHITE:       u8 = 15;
+pub const LIGHT_CYAN: u8 = 11;
+pub const LIGHT_RED: u8 = 12;
+pub const YELLOW: u8 = 14;
+pub const WHITE: u8 = 15;
 
 /// Construit un attribut VGA : fond × 16 + texte.
 #[inline(always)]
-pub const fn attr(fg: u8, bg: u8) -> u8 { (bg << 4) | (fg & 0x0F) }
+pub const fn attr(fg: u8, bg: u8) -> u8 {
+    (bg << 4) | (fg & 0x0F)
+}
 
 // ── Position curseur ──────────────────────────────────────────────────────────
 
@@ -68,7 +70,9 @@ pub fn clear(background: u8) {
     for row in 0..VGA_ROWS {
         for col in 0..VGA_COLS {
             // SAFETY: voir put_cell
-            unsafe { put_cell(col, row, b' ', attribute); }
+            unsafe {
+                put_cell(col, row, b' ', attribute);
+            }
         }
     }
     VGA_COL.store(0, Ordering::Relaxed);
@@ -81,11 +85,7 @@ fn scroll(attribute: u8) {
     unsafe {
         let base = VGA_BASE as *mut u8;
         // Copier lignes 1..ROWS vers 0..ROWS-1
-        core::ptr::copy(
-            base.add(VGA_COLS * 2),
-            base,
-            (VGA_ROWS - 1) * VGA_COLS * 2,
-        );
+        core::ptr::copy(base.add(VGA_COLS * 2), base, (VGA_ROWS - 1) * VGA_COLS * 2);
         // Effacer la dernière ligne
         for col in 0..VGA_COLS {
             put_cell(col, VGA_ROWS - 1, b' ', attribute);
@@ -115,7 +115,9 @@ pub fn write_char(ch: u8, attribute: u8) {
         _ => {
             let ch_out = if ch >= 0x20 && ch < 0x7F { ch } else { b'?' };
             // SAFETY: voir put_cell
-            unsafe { put_cell(col, row, ch_out, attribute); }
+            unsafe {
+                put_cell(col, row, ch_out, attribute);
+            }
             let new_col = col + 1;
             if new_col >= VGA_COLS {
                 VGA_COL.store(0, Ordering::Relaxed);
@@ -146,7 +148,9 @@ pub fn write_centered(s: &str, attribute: u8) {
     let pad = (VGA_COLS - len) / 2;
     let row = VGA_ROW.load(Ordering::Relaxed);
     for col in 0..pad {
-        unsafe { put_cell(col, row, b' ', attribute); }
+        unsafe {
+            put_cell(col, row, b' ', attribute);
+        }
     }
     VGA_COL.store(pad, Ordering::Relaxed);
     write_str(s, attribute);
@@ -158,7 +162,9 @@ pub fn write_centered(s: &str, attribute: u8) {
 pub fn write_hline(attribute: u8) {
     let row = VGA_ROW.load(Ordering::Relaxed);
     for col in 0..VGA_COLS {
-        unsafe { put_cell(col, row, 0xC4, attribute); }
+        unsafe {
+            put_cell(col, row, 0xC4, attribute);
+        }
     }
     write_char(b'\n', attribute);
 }
@@ -171,7 +177,10 @@ pub fn set_cursor(col: usize, row: usize) {
 
 /// Ecrit un u32 en décimal.
 pub fn write_u32(mut n: u32, attribute: u8) {
-    if n == 0 { write_char(b'0', attribute); return; }
+    if n == 0 {
+        write_char(b'0', attribute);
+        return;
+    }
     let mut buf = [0u8; 10];
     let mut len = 0;
     while n > 0 {
@@ -196,14 +205,16 @@ pub fn boot_screen() {
     // Ligne de titre — fond bleu, texte blanc
     let title_attr = attr(WHITE, BLUE);
     let normal_attr = attr(LIGHT_GRAY, BLACK);
-    let ok_attr     = attr(LIGHT_GREEN, BLACK);
-    let warn_attr   = attr(YELLOW, BLACK);
-    let cyan_attr   = attr(LIGHT_CYAN, BLACK);
+    let ok_attr = attr(LIGHT_GREEN, BLACK);
+    let warn_attr = attr(YELLOW, BLACK);
+    let cyan_attr = attr(LIGHT_CYAN, BLACK);
 
     // ── En-tête ────────────────────────────────────────────────────────────────
     // Ligne 0 : titre plein écran
     for col in 0..VGA_COLS {
-        unsafe { put_cell(col, 0, b' ', title_attr); }
+        unsafe {
+            put_cell(col, 0, b' ', title_attr);
+        }
     }
     set_cursor(0, 0);
     write_centered("  Exo-OS v0.1  --  Kernel Phase 1  ", title_attr);
@@ -212,7 +223,10 @@ pub fn boot_screen() {
     write_char(b'\n', normal_attr);
 
     // ── Version ────────────────────────────────────────────────────────────────
-    write_str("  Architecture : x86_64   Platform : QEMU Q35   RAM : 256 MiB\n", cyan_attr);
+    write_str(
+        "  Architecture : x86_64   Platform : QEMU Q35   RAM : 256 MiB\n",
+        cyan_attr,
+    );
     write_char(b'\n', normal_attr);
 
     // ── Sous-systemes Phase 1 ──────────────────────────────────────────────────
@@ -246,12 +260,15 @@ pub fn boot_screen() {
 ///
 /// Appelé depuis `kernel_main` après que `kernel_init()` est terminé.
 pub fn boot_complete() {
-    let ok_attr  = attr(LIGHT_GREEN, BLACK);
+    let ok_attr = attr(LIGHT_GREEN, BLACK);
     let cyan_attr = attr(LIGHT_CYAN, BLACK);
 
     // Aller à la fin de l'écran
     set_cursor(0, VGA_ROWS - 3);
     write_hline(attr(DARK_GRAY, BLACK));
     write_centered("[ Exo-OS Phase 1 complete - scheduler running ]", ok_attr);
-    write_str("\n  Port 0xE9 debug output active. QEMU -serial stdio.\n", cyan_attr);
+    write_str(
+        "\n  Port 0xE9 debug output active. QEMU -serial stdio.\n",
+        cyan_attr,
+    );
 }

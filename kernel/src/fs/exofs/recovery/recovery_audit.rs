@@ -9,11 +9,10 @@
 //! - **ARITH-02** : `checked_add` / `wrapping_add` pour les index.
 //! - **ONDISK-03** : pas d'`AtomicU64` dans les structs `repr(C)`.
 
-
 extern crate alloc;
+use crate::fs::exofs::core::{EpochId, ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId};
 
 // ── Constantes ───────────────────────────────────────────────────────────────
 
@@ -38,43 +37,43 @@ pub static RECOVERY_AUDIT: RecoveryAudit = RecoveryAudit::new_const();
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuditEventKind {
     /// Début de la séquence de récupération.
-    RecoveryStarted       = 0x01,
+    RecoveryStarted = 0x01,
     /// Fin de la séquence de récupération (succès).
-    RecoveryCompleted     = 0x02,
+    RecoveryCompleted = 0x02,
     /// Fin de la séquence de récupération (échec).
-    RecoveryFailed        = 0x03,
+    RecoveryFailed = 0x03,
     /// Début d'une phase fsck.
-    FsckPhaseStarted      = 0x10,
+    FsckPhaseStarted = 0x10,
     /// Fin d'une phase fsck sans erreurs.
-    FsckPhaseClean        = 0x11,
+    FsckPhaseClean = 0x11,
     /// Fin d'une phase fsck avec erreurs.
-    FsckPhaseErrors       = 0x12,
+    FsckPhaseErrors = 0x12,
     /// Réparation de métadonnées appliquée.
-    MetadataRepaired      = 0x20,
+    MetadataRepaired = 0x20,
     /// Blob orphan récupéré vers lost+found.
-    OrphanRecovered       = 0x21,
+    OrphanRecovered = 0x21,
     /// Entrée journal corrompue ignorée.
     CorruptJournalSkipped = 0x22,
     /// Slot sélectionné lors du boot.
-    SlotSelected          = 0x30,
+    SlotSelected = 0x30,
     /// Epoch rejoué lors du boot.
-    EpochReplayed         = 0x31,
+    EpochReplayed = 0x31,
     /// Checkpoint sauvegardé.
-    CheckpointSaved       = 0x40,
+    CheckpointSaved = 0x40,
     /// Checkpoint restauré.
-    CheckpointRestored    = 0x41,
+    CheckpointRestored = 0x41,
     /// Magic invalide détecté sur en-tête.
-    InvalidMagicDetected  = 0x50,
+    InvalidMagicDetected = 0x50,
     /// Checksum invalide détecté.
-    ChecksumInvalid       = 0x51,
+    ChecksumInvalid = 0x51,
     /// Violation d'intégrité structurelle.
-    StructureCorrupted    = 0x52,
+    StructureCorrupted = 0x52,
     /// Accès hors-borne ou offset invalide.
-    OffsetOutOfBounds     = 0x53,
+    OffsetOutOfBounds = 0x53,
     /// Réparation annulée (mode dry-run).
-    RepairSkippedDryRun   = 0x60,
+    RepairSkippedDryRun = 0x60,
     /// Évènement personnalisé / extension.
-    Custom                = 0xFF,
+    Custom = 0xFF,
 }
 
 impl AuditEventKind {
@@ -126,7 +125,7 @@ impl AuditEventKind {
             0x52 => Self::StructureCorrupted,
             0x53 => Self::OffsetOutOfBounds,
             0x60 => Self::RepairSkippedDryRun,
-            _    => Self::Custom,
+            _ => Self::Custom,
         }
     }
 }
@@ -138,11 +137,11 @@ impl AuditEventKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AuditSeverity {
     /// Information banale.
-    Info     = 0,
+    Info = 0,
     /// Avertissement : état dégradé mais récupérable.
-    Warning  = 1,
+    Warning = 1,
     /// Erreur : anomalie corrigée ou ignorée.
-    Error    = 2,
+    Error = 2,
     /// Critique : données potentiellement perdues.
     Critical = 3,
 }
@@ -167,63 +166,63 @@ impl AuditSeverity {
 #[derive(Clone, Copy, Debug)]
 pub struct AuditEntry {
     /// Horodatage TSC.
-    pub tick:     u64,
+    pub tick: u64,
     /// Type de l'événement.
-    pub kind:     AuditEventKind,
+    pub kind: AuditEventKind,
     /// Niveau de sévérité.
     pub severity: AuditSeverity,
     /// Rembourrage.
-    pub _pad:     [u8; 6],
+    pub _pad: [u8; 6],
     /// EpochId associée (0 si N/A).
     pub epoch_id: u64,
     /// Identifiant secondaire (slot_id, phase, checkpoint_id, etc.).
-    pub target:   u64,
+    pub target: u64,
     /// Nombre d'occurrences ou d'erreurs rattachées.
-    pub count:    u32,
+    pub count: u32,
     /// Code erreur ExofsError (0 = aucun).
     pub err_code: u32,
     /// Informations complémentaires sur 16 octets.
-    pub detail:   [u8; 16],
+    pub detail: [u8; 16],
 }
 
 impl AuditEntry {
     /// Entrée nulle (valeur d'initialisation).
     pub const fn zeroed() -> Self {
         Self {
-            tick:     0,
-            kind:     AuditEventKind::Custom,
+            tick: 0,
+            kind: AuditEventKind::Custom,
             severity: AuditSeverity::Info,
-            _pad:     [0; 6],
+            _pad: [0; 6],
             epoch_id: 0,
-            target:   0,
-            count:    0,
+            target: 0,
+            count: 0,
             err_code: 0,
-            detail:   [0; 16],
+            detail: [0; 16],
         }
     }
 
     /// Construit une entrée d'information simple.
     pub fn info(kind: AuditEventKind, epoch_id: u64, target: u64) -> Self {
         Self {
-            tick:     crate::arch::time::read_ticks(),
+            tick: crate::arch::time::read_ticks(),
             kind,
             severity: AuditSeverity::Info,
-            _pad:     [0; 6],
+            _pad: [0; 6],
             epoch_id,
             target,
-            count:    0,
+            count: 0,
             err_code: 0,
-            detail:   [0; 16],
+            detail: [0; 16],
         }
     }
 
     /// Construit une entrée d'erreur avec code et compteur.
     pub fn error(
-        kind:     AuditEventKind,
+        kind: AuditEventKind,
         severity: AuditSeverity,
         epoch_id: u64,
-        target:   u64,
-        count:    u32,
+        target: u64,
+        count: u32,
         err_code: u32,
     ) -> Self {
         Self {
@@ -241,11 +240,11 @@ impl AuditEntry {
 
     /// Construit une entrée avec 16 octets de détail.
     pub fn with_detail(
-        kind:     AuditEventKind,
+        kind: AuditEventKind,
         severity: AuditSeverity,
         epoch_id: u64,
-        target:   u64,
-        detail:   [u8; 16],
+        target: u64,
+        detail: [u8; 16],
     ) -> Self {
         Self {
             tick: crate::arch::time::read_ticks(),
@@ -287,12 +286,12 @@ unsafe impl Sync for AuditSlot {}
 
 /// Trail d'audit circulaire lock-free pour la récupération ExoFS.
 pub struct RecoveryAudit {
-    ring:             [AuditSlot; AUDIT_RING_CAPACITY],
-    head:             AtomicU64,
-    total:            AtomicU64,
-    violation_count:  AtomicUsize,
-    repair_count:     AtomicUsize,
-    critical_count:   AtomicUsize,
+    ring: [AuditSlot; AUDIT_RING_CAPACITY],
+    head: AtomicU64,
+    total: AtomicU64,
+    violation_count: AtomicUsize,
+    repair_count: AtomicUsize,
+    critical_count: AtomicUsize,
 }
 
 impl RecoveryAudit {
@@ -300,12 +299,12 @@ impl RecoveryAudit {
     pub const fn new_const() -> Self {
         const SLOT: AuditSlot = AuditSlot::new();
         Self {
-            ring:            [SLOT; AUDIT_RING_CAPACITY],
-            head:            AtomicU64::new(0),
-            total:           AtomicU64::new(0),
+            ring: [SLOT; AUDIT_RING_CAPACITY],
+            head: AtomicU64::new(0),
+            total: AtomicU64::new(0),
             violation_count: AtomicUsize::new(0),
-            repair_count:    AtomicUsize::new(0),
-            critical_count:  AtomicUsize::new(0),
+            repair_count: AtomicUsize::new(0),
+            critical_count: AtomicUsize::new(0),
         }
     }
 
@@ -315,7 +314,9 @@ impl RecoveryAudit {
     pub fn record(&self, entry: AuditEntry) {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize & AUDIT_MASK;
         // SAFETY: idx est dans [0, AUDIT_MASK].
-        unsafe { self.ring[idx].write(entry); }
+        unsafe {
+            self.ring[idx].write(entry);
+        }
         self.total.fetch_add(1, Ordering::Relaxed);
 
         if entry.kind.is_integrity_violation() {
@@ -384,7 +385,11 @@ impl RecoveryAudit {
         } else {
             AuditEventKind::FsckPhaseErrors
         };
-        let sev = if errors == 0 { AuditSeverity::Info } else { AuditSeverity::Warning };
+        let sev = if errors == 0 {
+            AuditSeverity::Info
+        } else {
+            AuditSeverity::Warning
+        };
         self.record(AuditEntry::error(kind, sev, 0, phase as u64, errors, 0));
     }
 
@@ -548,11 +553,7 @@ impl RecoveryAudit {
     ///
     /// # Règle OOM-02
     /// `try_reserve(1)` avant chaque `push`.
-    pub fn read_by_kind(
-        &self,
-        kind: AuditEventKind,
-        n: usize,
-    ) -> ExofsResult<Vec<AuditEntry>> {
+    pub fn read_by_kind(&self, kind: AuditEventKind, n: usize) -> ExofsResult<Vec<AuditEntry>> {
         let all = self.read_recent(n)?;
         let mut out = Vec::new();
         for entry in &all {
@@ -622,13 +623,13 @@ impl RecoveryAudit {
     /// Retourne un snapshot diagnostique.
     pub fn diagnostic(&self) -> AuditDiagnostic {
         AuditDiagnostic {
-            capacity:        AUDIT_RING_CAPACITY,
-            total_events:    self.total(),
-            current_len:     self.len(),
-            violations:      self.violation_count(),
-            repairs:         self.repair_count(),
-            critical:        self.critical_count(),
-            is_clean:        self.is_clean(),
+            capacity: AUDIT_RING_CAPACITY,
+            total_events: self.total(),
+            current_len: self.len(),
+            violations: self.violation_count(),
+            repairs: self.repair_count(),
+            critical: self.critical_count(),
+            is_clean: self.is_clean(),
         }
     }
 }
@@ -639,19 +640,19 @@ impl RecoveryAudit {
 #[derive(Clone, Copy, Debug)]
 pub struct AuditDiagnostic {
     /// Capacité maximale du ring.
-    pub capacity:     usize,
+    pub capacity: usize,
     /// Total d'événements enregistrés.
     pub total_events: u64,
     /// Nombre courant dans le ring.
-    pub current_len:  usize,
+    pub current_len: usize,
     /// Violations d'intégrité.
-    pub violations:   usize,
+    pub violations: usize,
     /// Réparations effectuées.
-    pub repairs:      usize,
+    pub repairs: usize,
     /// Événements critiques.
-    pub critical:     usize,
+    pub critical: usize,
     /// `true` si aucune violation ni événement critique.
-    pub is_clean:     bool,
+    pub is_clean: bool,
 }
 
 // ── Tests unitaires ───────────────────────────────────────────────────────────

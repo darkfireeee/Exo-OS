@@ -4,13 +4,12 @@
 //! and memory regions. Includes a scan queue (max 64), scan profiles,
 //! and a periodic scan scheduler.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 use super::core::{
-    ThreatLevel, ThreatCategory, ThreatRecord,
-    MAX_SIG_NAME, record_threat, score_to_level,
-    stat_threats_inc, stat_critical_inc,
+    record_threat, score_to_level, stat_critical_inc, stat_threats_inc, ThreatCategory,
+    ThreatLevel, ThreatRecord, MAX_SIG_NAME,
 };
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -33,31 +32,31 @@ pub const DEFAULT_SCAN_INTERVAL_TICKS: u64 = 1000;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SignatureEntry {
-    pub id:         u32,
-    pub sig_type:   u8,        // 0=pattern, 1=heuristic, 2=behavioral
-    pub category:   ThreatCategory,
-    pub severity:   ThreatLevel,
-    pub base_score: u32,       // 0..1000
-    pub pattern:    [u8; 16],  // pattern bytes for matching
+    pub id: u32,
+    pub sig_type: u8, // 0=pattern, 1=heuristic, 2=behavioral
+    pub category: ThreatCategory,
+    pub severity: ThreatLevel,
+    pub base_score: u32,   // 0..1000
+    pub pattern: [u8; 16], // pattern bytes for matching
     pub pattern_len: u8,
-    pub name:       [u8; MAX_SIG_NAME],
-    pub name_len:   u8,
-    pub enabled:    bool,
+    pub name: [u8; MAX_SIG_NAME],
+    pub name_len: u8,
+    pub enabled: bool,
 }
 
 impl SignatureEntry {
     pub const fn empty() -> Self {
         SignatureEntry {
-            id:           0,
-            sig_type:     0,
-            category:     ThreatCategory::None,
-            severity:     ThreatLevel::Low,
-            base_score:   0,
-            pattern:      [0u8; 16],
-            pattern_len:  0,
-            name:         [0u8; MAX_SIG_NAME],
-            name_len:     0,
-            enabled:      false,
+            id: 0,
+            sig_type: 0,
+            category: ThreatCategory::None,
+            severity: ThreatLevel::Low,
+            base_score: 0,
+            pattern: [0u8; 16],
+            pattern_len: 0,
+            name: [0u8; MAX_SIG_NAME],
+            name_len: 0,
+            enabled: false,
         }
     }
 }
@@ -68,31 +67,31 @@ impl SignatureEntry {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ScanResult {
-    pub scan_id:     u32,
-    pub pid:         u32,
-    pub matched:     bool,
+    pub scan_id: u32,
+    pub pid: u32,
+    pub matched: bool,
     pub match_count: u32,
     pub max_severity: ThreatLevel,
-    pub composite:   u32,         // aggregate score 0..1000
-    pub timestamp:   u64,
-    pub sig_ids:     [u32; 8],    // up to 8 matched signature IDs
-    pub sig_count:   u8,
-    pub status:      u8,          // 0=pending, 1=complete, 2=error
+    pub composite: u32, // aggregate score 0..1000
+    pub timestamp: u64,
+    pub sig_ids: [u32; 8], // up to 8 matched signature IDs
+    pub sig_count: u8,
+    pub status: u8, // 0=pending, 1=complete, 2=error
 }
 
 impl ScanResult {
     pub const fn empty() -> Self {
         ScanResult {
-            scan_id:      0,
-            pid:          0,
-            matched:      false,
-            match_count:  0,
+            scan_id: 0,
+            pid: 0,
+            matched: false,
+            match_count: 0,
             max_severity: ThreatLevel::Low,
-            composite:    0,
-            timestamp:    0,
-            sig_ids:      [0u32; 8],
-            sig_count:    0,
-            status:       0,
+            composite: 0,
+            timestamp: 0,
+            sig_ids: [0u32; 8],
+            sig_count: 0,
+            status: 0,
         }
     }
 }
@@ -103,27 +102,27 @@ impl ScanResult {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ScanRequest {
-    pub id:         u32,
-    pub pid:        u32,
-    pub scan_type:  u8,    // 0=full, 1=quick, 2=memory, 3=behavioral
-    pub priority:   u8,    // 0=low, 1=normal, 2=high, 3=critical
-    pub submitted:  u64,
-    pub started:    u64,
-    pub completed:  u64,
-    pub active:     bool,
+    pub id: u32,
+    pub pid: u32,
+    pub scan_type: u8, // 0=full, 1=quick, 2=memory, 3=behavioral
+    pub priority: u8,  // 0=low, 1=normal, 2=high, 3=critical
+    pub submitted: u64,
+    pub started: u64,
+    pub completed: u64,
+    pub active: bool,
 }
 
 impl ScanRequest {
     pub const fn empty() -> Self {
         ScanRequest {
-            id:        0,
-            pid:       0,
+            id: 0,
+            pid: 0,
             scan_type: 0,
-            priority:  1,
+            priority: 1,
             submitted: 0,
-            started:   0,
+            started: 0,
             completed: 0,
-            active:    false,
+            active: false,
         }
     }
 }
@@ -134,33 +133,33 @@ impl ScanRequest {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ScanProfile {
-    pub name:           [u8; MAX_PROFILE_NAME],
-    pub name_len:       u8,
-    pub scan_memory:    bool,
-    pub scan_syscalls:  bool,
-    pub scan_network:   bool,
-    pub scan_fs:        bool,
-    pub scan_behavior:  bool,
-    pub max_depth:      u8,
-    pub timeout_ticks:  u16,
-    pub heuristic_level: u8,  // 0=off, 1=low, 2=medium, 3=aggressive
-    pub enabled:        bool,
+    pub name: [u8; MAX_PROFILE_NAME],
+    pub name_len: u8,
+    pub scan_memory: bool,
+    pub scan_syscalls: bool,
+    pub scan_network: bool,
+    pub scan_fs: bool,
+    pub scan_behavior: bool,
+    pub max_depth: u8,
+    pub timeout_ticks: u16,
+    pub heuristic_level: u8, // 0=off, 1=low, 2=medium, 3=aggressive
+    pub enabled: bool,
 }
 
 impl ScanProfile {
     pub const fn empty() -> Self {
         ScanProfile {
-            name:            [0u8; MAX_PROFILE_NAME],
-            name_len:        0,
-            scan_memory:     false,
-            scan_syscalls:   false,
-            scan_network:    false,
-            scan_fs:         false,
-            scan_behavior:   false,
-            max_depth:       3,
-            timeout_ticks:   500,
+            name: [0u8; MAX_PROFILE_NAME],
+            name_len: 0,
+            scan_memory: false,
+            scan_syscalls: false,
+            scan_network: false,
+            scan_fs: false,
+            scan_behavior: false,
+            max_depth: 3,
+            timeout_ticks: 500,
             heuristic_level: 1,
-            enabled:         false,
+            enabled: false,
         }
     }
 }
@@ -171,7 +170,7 @@ static SIG_DB: Mutex<SignatureDatabase> = Mutex::new(SignatureDatabase::new());
 
 struct SignatureDatabase {
     entries: [SignatureEntry; MAX_SIGNATURES],
-    count:   u32,
+    count: u32,
     next_id: u32,
 }
 
@@ -179,7 +178,7 @@ impl SignatureDatabase {
     const fn new() -> Self {
         SignatureDatabase {
             entries: [SignatureEntry::empty(); MAX_SIGNATURES],
-            count:   0,
+            count: 0,
             next_id: 1,
         }
     }
@@ -238,20 +237,20 @@ static SCAN_QUEUE: Mutex<ScanQueue> = Mutex::new(ScanQueue::new());
 
 struct ScanQueue {
     requests: [ScanRequest; SCAN_QUEUE_MAX],
-    head:     u32,
-    tail:     u32,
-    count:    u32,
-    next_id:  u32,
+    head: u32,
+    tail: u32,
+    count: u32,
+    next_id: u32,
 }
 
 impl ScanQueue {
     const fn new() -> Self {
         ScanQueue {
             requests: [ScanRequest::empty(); SCAN_QUEUE_MAX],
-            head:     0,
-            tail:     0,
-            count:    0,
-            next_id:  1,
+            head: 0,
+            tail: 0,
+            count: 0,
+            next_id: 1,
         }
     }
 
@@ -268,14 +267,14 @@ impl ScanQueue {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         self.requests[idx] = ScanRequest {
-            id:        id,
-            pid:       pid,
+            id: id,
+            pid: pid,
             scan_type: scan_type,
-            priority:  priority,
+            priority: priority,
             submitted: tick,
-            started:   0,
+            started: 0,
             completed: 0,
-            active:    false,
+            active: false,
         };
         self.tail = self.tail.wrapping_add(1);
         self.count += 1;
@@ -353,14 +352,14 @@ const NUM_PROFILES: usize = 8;
 
 struct ProfileStore {
     profiles: [ScanProfile; NUM_PROFILES],
-    count:    u32,
+    count: u32,
 }
 
 impl ProfileStore {
     const fn new() -> Self {
         ProfileStore {
             profiles: [ScanProfile::empty(); NUM_PROFILES],
-            count:    0,
+            count: 0,
         }
     }
 
@@ -520,10 +519,15 @@ pub fn compute_entropy(data: &[u8]) -> u32 {
             if p > 0 && p < 1000 {
                 // Approximate: -p * log2(p/1000) * 1000
                 // Use a simple piecewise linear approximation
-                let contrib = if p > 500 { 1000 - p }
-                              else if p > 250 { p }
-                              else if p > 100 { p + 200 }
-                              else { p + 400 };
+                let contrib = if p > 500 {
+                    1000 - p
+                } else if p > 250 {
+                    p
+                } else if p > 100 {
+                    p + 200
+                } else {
+                    p + 400
+                };
                 entropy += contrib.min(800);
             }
         }
@@ -586,12 +590,12 @@ pub fn heuristic_analyze(data: &[u8]) -> u32 {
 
     // Factor 5: suspicious byte sequences (common shellcode patterns)
     let suspicious_patterns: &[(&[u8], u32)] = &[
-        (b"\xcd\x80", 150),       // int 0x80 (Linux syscall)
-        (b"\x0f\x05", 150),       // syscall instruction
-        (b"\xff\xe4", 120),       // jmp esp
-        (b"\xff\xe0", 120),       // jmp eax
-        (b"\xeb\xfe", 100),       // jmp -2 (infinite loop)
-        (b"\x90\x90", 60),        // NOP sled
+        (b"\xcd\x80", 150), // int 0x80 (Linux syscall)
+        (b"\x0f\x05", 150), // syscall instruction
+        (b"\xff\xe4", 120), // jmp esp
+        (b"\xff\xe0", 120), // jmp eax
+        (b"\xeb\xfe", 100), // jmp -2 (infinite loop)
+        (b"\x90\x90", 60),  // NOP sled
     ];
     for &(pattern, weight) in suspicious_patterns {
         if match_pattern(data, pattern) > 0 {
@@ -614,16 +618,16 @@ pub fn execute_scan(
     tick: u64,
 ) -> ScanResult {
     let mut result = ScanResult {
-        scan_id:      0,
-        pid:          pid,
-        matched:      false,
-        match_count:  0,
+        scan_id: 0,
+        pid: pid,
+        matched: false,
+        match_count: 0,
         max_severity: ThreatLevel::Low,
-        composite:    0,
-        timestamp:    tick,
-        sig_ids:      [0u32; 8],
-        sig_count:    0,
-        status:       1, // complete
+        composite: 0,
+        timestamp: tick,
+        sig_ids: [0u32; 8],
+        sig_count: 0,
+        status: 1, // complete
     };
 
     let mut total_score = 0u32;
@@ -694,11 +698,17 @@ pub fn execute_scan(
             let pat_len = sig.pattern_len as usize;
             if pat_len >= 4 {
                 let sig_hash = u32::from_le_bytes([
-                    sig.pattern[0], sig.pattern[1],
-                    sig.pattern[2], sig.pattern[3],
+                    sig.pattern[0],
+                    sig.pattern[1],
+                    sig.pattern[2],
+                    sig.pattern[3],
                 ]);
                 // Check proximity within a tolerance window
-                let diff = if hash > sig_hash { hash - sig_hash } else { sig_hash - hash };
+                let diff = if hash > sig_hash {
+                    hash - sig_hash
+                } else {
+                    sig_hash - hash
+                };
                 if diff < 0x0100 {
                     result.matched = true;
                     total_score = total_score.saturating_add(sig.base_score / 2);
@@ -839,23 +849,23 @@ const PERIODIC_MAX_PROCS: usize = 32;
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct PeriodicEntry {
-    pid:          u32,
-    interval:     u64,   // ticks between scans
-    last_scan:    u64,   // tick of last scan
-    scan_type:    u8,
-    priority:     u8,
-    active:       bool,
+    pid: u32,
+    interval: u64,  // ticks between scans
+    last_scan: u64, // tick of last scan
+    scan_type: u8,
+    priority: u8,
+    active: bool,
 }
 
 impl PeriodicEntry {
     const fn empty() -> Self {
         PeriodicEntry {
-            pid:       0,
-            interval:  DEFAULT_SCAN_INTERVAL_TICKS,
+            pid: 0,
+            interval: DEFAULT_SCAN_INTERVAL_TICKS,
             last_scan: 0,
             scan_type: 1, // quick scan
-            priority:  1,
-            active:    false,
+            priority: 1,
+            active: false,
         }
     }
 }
@@ -888,12 +898,12 @@ impl PeriodicTable {
         for i in 0..PERIODIC_MAX_PROCS {
             if self.entries[i].pid == 0 || !self.entries[i].active {
                 self.entries[i] = PeriodicEntry {
-                    pid:       pid,
-                    interval:  interval,
+                    pid: pid,
+                    interval: interval,
                     last_scan: 0,
                     scan_type: scan_type,
-                    priority:  priority,
-                    active:    true,
+                    priority: priority,
+                    active: true,
                 };
                 return true;
             }
@@ -926,7 +936,9 @@ impl PeriodicTable {
                     self.entries[i].scan_type,
                     self.entries[i].priority,
                     current_tick,
-                ).is_some() {
+                )
+                .is_some()
+                {
                     self.entries[i].last_scan = current_tick;
                     enqueued += 1;
                 }
@@ -957,11 +969,11 @@ pub fn periodic_scan_tick(current_tick: u64) -> u32 {
 
 // ── Scanner Statistics ──────────────────────────────────────────────────────
 
-static STATS_SCANS_TOTAL:     AtomicU64 = AtomicU64::new(0);
-static STATS_SCANS_MATCHED:   AtomicU64 = AtomicU64::new(0);
-static STATS_SCANS_QUEUED:    AtomicU64 = AtomicU64::new(0);
-static STATS_SIG_DB_SIZE:     AtomicU32 = AtomicU32::new(0);
-static STATS_SCANNER_INIT:    AtomicBool = AtomicBool::new(false);
+static STATS_SCANS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static STATS_SCANS_MATCHED: AtomicU64 = AtomicU64::new(0);
+static STATS_SCANS_QUEUED: AtomicU64 = AtomicU64::new(0);
+static STATS_SIG_DB_SIZE: AtomicU32 = AtomicU32::new(0);
+static STATS_SCANNER_INIT: AtomicBool = AtomicBool::new(false);
 
 /// Initialize the scanner module.
 pub fn scanner_init() {
@@ -970,14 +982,70 @@ pub fn scanner_init() {
         let mut db = SIG_DB.lock();
         let default_sigs: &[(&[u8], u8, ThreatCategory, ThreatLevel, u32, &[u8])] = &[
             // (pattern, sig_type, category, severity, base_score, name)
-            (b"\xcd\x80\x00\x00", 0, ThreatCategory::Intrusion,    ThreatLevel::High,     700, b"linux_syscall_int80"),
-            (b"\x0f\x05\x00\x00", 0, ThreatCategory::Intrusion,    ThreatLevel::High,     700, b"linux_syscall_new"),
-            (b"\xff\xe4\x00\x00", 0, ThreatCategory::Intrusion,    ThreatLevel::Critical, 850, b"jmp_esp_shellcode"),
-            (b"\xff\xe0\x00\x00", 0, ThreatCategory::Intrusion,    ThreatLevel::Critical, 850, b"jmp_eax_shellcode"),
-            (b"\x90\x90\x90\x90", 0, ThreatCategory::Malware,      ThreatLevel::Medium,   500, b"nop_sled_long"),
-            (b"\xeb\xfe\x90\x90", 0, ThreatCategory::Malware,      ThreatLevel::Medium,   450, b"infinite_loop_nop"),
-            (b"\xcc\xcc\xcc\xcc", 0, ThreatCategory::Anomaly,      ThreatLevel::Low,      200, b"int3_breakpoint"),
-            (b"\x48\x31\xc0\x48", 0, ThreatCategory::Intrusion,    ThreatLevel::High,     600, b"xor_rax_x64_seq"),
+            (
+                b"\xcd\x80\x00\x00",
+                0,
+                ThreatCategory::Intrusion,
+                ThreatLevel::High,
+                700,
+                b"linux_syscall_int80",
+            ),
+            (
+                b"\x0f\x05\x00\x00",
+                0,
+                ThreatCategory::Intrusion,
+                ThreatLevel::High,
+                700,
+                b"linux_syscall_new",
+            ),
+            (
+                b"\xff\xe4\x00\x00",
+                0,
+                ThreatCategory::Intrusion,
+                ThreatLevel::Critical,
+                850,
+                b"jmp_esp_shellcode",
+            ),
+            (
+                b"\xff\xe0\x00\x00",
+                0,
+                ThreatCategory::Intrusion,
+                ThreatLevel::Critical,
+                850,
+                b"jmp_eax_shellcode",
+            ),
+            (
+                b"\x90\x90\x90\x90",
+                0,
+                ThreatCategory::Malware,
+                ThreatLevel::Medium,
+                500,
+                b"nop_sled_long",
+            ),
+            (
+                b"\xeb\xfe\x90\x90",
+                0,
+                ThreatCategory::Malware,
+                ThreatLevel::Medium,
+                450,
+                b"infinite_loop_nop",
+            ),
+            (
+                b"\xcc\xcc\xcc\xcc",
+                0,
+                ThreatCategory::Anomaly,
+                ThreatLevel::Low,
+                200,
+                b"int3_breakpoint",
+            ),
+            (
+                b"\x48\x31\xc0\x48",
+                0,
+                ThreatCategory::Intrusion,
+                ThreatLevel::High,
+                600,
+                b"xor_rax_x64_seq",
+            ),
         ];
 
         for &(pattern, sig_type, category, severity, base_score, name) in default_sigs {
@@ -1001,20 +1069,20 @@ pub fn scanner_init() {
     {
         let mut store = SCAN_PROFILES.lock();
         let default_profile = ScanProfile {
-            name:            [
-                b's', b't', b'a', b'n', b'd', b'a', b'r', b'd',
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            name: [
+                b's', b't', b'a', b'n', b'd', b'a', b'r', b'd', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0,
             ],
-            name_len:        8,
-            scan_memory:     true,
-            scan_syscalls:   true,
-            scan_network:    true,
-            scan_fs:         false,
-            scan_behavior:   true,
-            max_depth:       3,
-            timeout_ticks:   500,
+            name_len: 8,
+            scan_memory: true,
+            scan_syscalls: true,
+            scan_network: true,
+            scan_fs: false,
+            scan_behavior: true,
+            max_depth: 3,
+            timeout_ticks: 500,
             heuristic_level: 2,
-            enabled:         true,
+            enabled: true,
         };
         let _ = store.set(0, &default_profile);
     }
@@ -1045,20 +1113,20 @@ pub fn stat_scan_queued() {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ScannerStats {
-    pub scans_total:   u64,
+    pub scans_total: u64,
     pub scans_matched: u64,
-    pub scans_queued:  u64,
-    pub sig_db_size:   u32,
+    pub scans_queued: u64,
+    pub sig_db_size: u32,
     pub pending_count: u32,
 }
 
 /// Retrieve current scanner statistics.
 pub fn get_scanner_stats() -> ScannerStats {
     ScannerStats {
-        scans_total:   STATS_SCANS_TOTAL.load(Ordering::Relaxed),
+        scans_total: STATS_SCANS_TOTAL.load(Ordering::Relaxed),
         scans_matched: STATS_SCANS_MATCHED.load(Ordering::Relaxed),
-        scans_queued:  STATS_SCANS_QUEUED.load(Ordering::Relaxed),
-        sig_db_size:   STATS_SIG_DB_SIZE.load(Ordering::Relaxed),
+        scans_queued: STATS_SCANS_QUEUED.load(Ordering::Relaxed),
+        sig_db_size: STATS_SIG_DB_SIZE.load(Ordering::Relaxed),
         pending_count: pending_scan_count(),
     }
 }

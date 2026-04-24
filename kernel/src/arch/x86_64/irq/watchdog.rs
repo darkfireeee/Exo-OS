@@ -6,13 +6,13 @@
 //! Logique complète 0 stub :
 //! Scan de `IRQ_TABLE` -> Détection d'IRQ droppées (masked_since) -> Reset dur.
 
-use core::sync::atomic::Ordering;
-use crate::arch::x86_64::irq::types::{
-    IRQ_TABLE, SOFT_WATCHDOG_MS, HARD_WATCHDOG_MS, IrqSourceKind,
-};
 use crate::arch::x86_64::apic::{io_apic, local_apic};
+use crate::arch::x86_64::irq::types::{
+    IrqSourceKind, HARD_WATCHDOG_MS, IRQ_TABLE, SOFT_WATCHDOG_MS,
+};
 use crate::drivers::device_server_ipc;
 use crate::scheduler::timer::clock::monotonic_ns;
+use core::sync::atomic::Ordering;
 
 #[inline]
 fn clock_ms() -> u64 {
@@ -48,7 +48,10 @@ pub fn watchdog_tick() {
         if elapsed > SOFT_WATCHDOG_MS && !route.soft_alarmed.swap(true, Ordering::Relaxed) {
             log::warn!(
                 "IRQ {} ({:?}) soft watchdog ({} ms), pending_acks={}",
-                route.irq_line.as_u8(), route.source_kind, elapsed, pending
+                route.irq_line.as_u8(),
+                route.source_kind,
+                elapsed,
+                pending
             );
         }
 
@@ -56,13 +59,15 @@ pub fn watchdog_tick() {
         if elapsed > HARD_WATCHDOG_MS {
             log::error!(
                 "IRQ {} ({:?}) hard watchdog ({} ms) → force reset",
-                route.irq_line.as_u8(), route.source_kind, elapsed
+                route.irq_line.as_u8(),
+                route.source_kind,
+                elapsed
             );
 
             // FIX-77 v8 : incrémenter dispatch_generation AVANT de reset pending,
             // pour rejeter tous les ACKs volants de la vague morte.
             route.dispatch_generation.fetch_add(1, Ordering::AcqRel);
-            
+
             // Remise à l'état inactif
             route.pending_acks.store(0, Ordering::Release);
             route.handled_count.store(0, Ordering::Release);

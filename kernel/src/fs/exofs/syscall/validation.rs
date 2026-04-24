@@ -8,70 +8,58 @@
 
 #![allow(clippy::let_and_return)]
 
+use crate::fs::exofs::core::rights::{
+    ALL_RIGHTS, RIGHT_ADMIN, RIGHT_CREATE, RIGHT_DELETE, RIGHT_EXPORT, RIGHT_GC_TRIGGER,
+    RIGHT_IMPORT, RIGHT_INSPECT_CONTENT, RIGHT_LIST, RIGHT_READ, RIGHT_RELATION_CREATE,
+    RIGHT_SETMETA, RIGHT_SNAPSHOT_CREATE, RIGHT_STAT, RIGHT_WRITE,
+};
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::mem;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::rights::{
-    ALL_RIGHTS,
-    RIGHT_ADMIN,
-    RIGHT_CREATE,
-    RIGHT_DELETE,
-    RIGHT_EXPORT,
-    RIGHT_GC_TRIGGER,
-    RIGHT_IMPORT,
-    RIGHT_INSPECT_CONTENT,
-    RIGHT_LIST,
-    RIGHT_READ,
-    RIGHT_RELATION_CREATE,
-    RIGHT_SETMETA,
-    RIGHT_SNAPSHOT_CREATE,
-    RIGHT_STAT,
-    RIGHT_WRITE,
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes de bornage
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub const EXOFS_PATH_MAX:     usize = 4_096;
-pub const EXOFS_NAME_MAX:     usize = 255;
-pub const EXOFS_BLOB_MAX:     usize = 16 * 1_024 * 1_024;
-pub const EXOFS_META_MAX:     usize = 1_024;
-pub const EXOFS_LIST_MAX:     usize = 256 * 32;
-pub const EXOFS_SNAP_LIST_MAX:usize = 128;
-pub const EXOFS_SNAP_NAME_MAX:usize = 64;
-pub const EXOFS_FD_INVALID:   u32   = u32::MAX;
-pub const EXOFS_FD_MIN:       u32   = 4;
-pub const EXOFS_FD_MAX:       u32   = 65_535;
+pub const EXOFS_PATH_MAX: usize = 4_096;
+pub const EXOFS_NAME_MAX: usize = 255;
+pub const EXOFS_BLOB_MAX: usize = 16 * 1_024 * 1_024;
+pub const EXOFS_META_MAX: usize = 1_024;
+pub const EXOFS_LIST_MAX: usize = 256 * 32;
+pub const EXOFS_SNAP_LIST_MAX: usize = 128;
+pub const EXOFS_SNAP_NAME_MAX: usize = 64;
+pub const EXOFS_FD_INVALID: u32 = u32::MAX;
+pub const EXOFS_FD_MIN: u32 = 4;
+pub const EXOFS_FD_MAX: u32 = 65_535;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Codes errno POSIX
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub const EPERM:      i64 = -1;
-pub const ENOENT:     i64 = -2;
-pub const EIO:        i64 = -5;
-pub const EBADF:      i64 = -9;
-pub const ENOMEM:     i64 = -12;
-pub const EACCES:     i64 = -13;
-pub const EFAULT:     i64 = -14;
-pub const EBUSY:      i64 = -16;
-pub const EEXIST:     i64 = -17;
-pub const ENODIR:     i64 = -20;
-pub const EINVAL:     i64 = -22;
-pub const ENOSPC:     i64 = -28;
-pub const ENOSYS:     i64 = -38;
-pub const ERANGE:     i64 = -34;
-pub const EPROTO:     i64 = -71;
-pub const EBADMSG:    i64 = -74;
-pub const EOVERFLOW:  i64 = -75;
-pub const ENOTSUP:    i64 = -95;
-pub const EKEYREV:    i64 = -126;
-pub const ENOEPOCH:   i64 = -130;
-pub const EGCFULL:    i64 = -131;
-pub const EQUOTA:     i64 = -132;
+pub const EPERM: i64 = -1;
+pub const ENOENT: i64 = -2;
+pub const EIO: i64 = -5;
+pub const EBADF: i64 = -9;
+pub const ENOMEM: i64 = -12;
+pub const EACCES: i64 = -13;
+pub const EFAULT: i64 = -14;
+pub const EBUSY: i64 = -16;
+pub const EEXIST: i64 = -17;
+pub const ENODIR: i64 = -20;
+pub const EINVAL: i64 = -22;
+pub const ENOSPC: i64 = -28;
+pub const ENOSYS: i64 = -38;
+pub const ERANGE: i64 = -34;
+pub const EPROTO: i64 = -71;
+pub const EBADMSG: i64 = -74;
+pub const EOVERFLOW: i64 = -75;
+pub const ENOTSUP: i64 = -95;
+pub const EKEYREV: i64 = -126;
+pub const ENOEPOCH: i64 = -130;
+pub const EGCFULL: i64 = -131;
+pub const EQUOTA: i64 = -132;
 pub const EEPOCHFULL: i64 = -133;
-pub const ECOMMIT:    i64 = -134;
+pub const ECOMMIT: i64 = -134;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ExofsError → errno POSIX
@@ -80,38 +68,38 @@ pub const ECOMMIT:    i64 = -134;
 #[inline]
 pub fn exofs_err_to_errno(e: ExofsError) -> i64 {
     match e {
-        ExofsError::NoMemory               => ENOMEM,
-        ExofsError::NoSpace                => ENOSPC,
-        ExofsError::IoError                => EIO,
-        ExofsError::PartialWrite           => EIO,
-        ExofsError::OffsetOverflow         => EOVERFLOW,
-        ExofsError::InvalidMagic           => EBADMSG,
-        ExofsError::ChecksumMismatch       => EBADMSG,
-        ExofsError::IncompatibleVersion    => EPROTO,
-        ExofsError::CorruptedStructure     => EBADMSG,
-        ExofsError::CorruptedChain         => EBADMSG,
-        ExofsError::ObjectNotFound         => ENOENT,
-        ExofsError::BlobNotFound           => ENOENT,
-        ExofsError::ObjectAlreadyExists    => EEXIST,
-        ExofsError::WrongObjectKind        => EINVAL,
-        ExofsError::WrongObjectClass       => EINVAL,
-        ExofsError::InvalidPathComponent   => EINVAL,
-        ExofsError::PathTooLong            => ERANGE,
-        ExofsError::TooManySymlinks        => ERANGE,
-        ExofsError::DirectoryNotEmpty      => EBUSY,
-        ExofsError::NotADirectory          => ENODIR,
-        ExofsError::PermissionDenied       => EACCES,
-        ExofsError::QuotaExceeded          => EQUOTA,
+        ExofsError::NoMemory => ENOMEM,
+        ExofsError::NoSpace => ENOSPC,
+        ExofsError::IoError => EIO,
+        ExofsError::PartialWrite => EIO,
+        ExofsError::OffsetOverflow => EOVERFLOW,
+        ExofsError::InvalidMagic => EBADMSG,
+        ExofsError::ChecksumMismatch => EBADMSG,
+        ExofsError::IncompatibleVersion => EPROTO,
+        ExofsError::CorruptedStructure => EBADMSG,
+        ExofsError::CorruptedChain => EBADMSG,
+        ExofsError::ObjectNotFound => ENOENT,
+        ExofsError::BlobNotFound => ENOENT,
+        ExofsError::ObjectAlreadyExists => EEXIST,
+        ExofsError::WrongObjectKind => EINVAL,
+        ExofsError::WrongObjectClass => EINVAL,
+        ExofsError::InvalidPathComponent => EINVAL,
+        ExofsError::PathTooLong => ERANGE,
+        ExofsError::TooManySymlinks => ERANGE,
+        ExofsError::DirectoryNotEmpty => EBUSY,
+        ExofsError::NotADirectory => ENODIR,
+        ExofsError::PermissionDenied => EACCES,
+        ExofsError::QuotaExceeded => EQUOTA,
         ExofsError::SecretBlobIdLeakPrevented => EACCES,
-        ExofsError::NoValidEpoch           => ENOEPOCH,
-        ExofsError::EpochFull              => EEPOCHFULL,
-        ExofsError::CommitInProgress       => ECOMMIT,
-        ExofsError::GcQueueFull            => EGCFULL,
-        ExofsError::RefCountUnderflow      => EIO,
-        ExofsError::NotSupported           => ENOTSUP,
-        ExofsError::InvalidArgument        => EINVAL,
-        ExofsError::InternalError          => EIO,
-        _                                  => EIO,
+        ExofsError::NoValidEpoch => ENOEPOCH,
+        ExofsError::EpochFull => EEPOCHFULL,
+        ExofsError::CommitInProgress => ECOMMIT,
+        ExofsError::GcQueueFull => EGCFULL,
+        ExofsError::RefCountUnderflow => EIO,
+        ExofsError::NotSupported => ENOTSUP,
+        ExofsError::InvalidArgument => EINVAL,
+        ExofsError::InternalError => EIO,
+        _ => EIO,
     }
 }
 
@@ -151,30 +139,30 @@ pub enum CapabilityType {
 #[inline]
 const fn required_right_for(cap: CapabilityType) -> u32 {
     match cap {
-        CapabilityType::ExoFsPathResolve     => RIGHT_READ,
-        CapabilityType::ExoFsOpenRead        => RIGHT_READ,
-        CapabilityType::ExoFsOpenWrite       => RIGHT_WRITE,
-        CapabilityType::ExoFsObjectRead      => RIGHT_READ,
-        CapabilityType::ExoFsObjectWrite     => RIGHT_WRITE,
-        CapabilityType::ExoFsObjectCreate    => RIGHT_CREATE,
-        CapabilityType::ExoFsObjectDelete    => RIGHT_DELETE,
-        CapabilityType::ExoFsObjectStat      => RIGHT_STAT,
-        CapabilityType::ExoFsObjectSetMeta   => RIGHT_SETMETA,
-        CapabilityType::ExoFsGetContentHash  => RIGHT_INSPECT_CONTENT,
-        CapabilityType::ExoFsSnapshotCreate  => RIGHT_SNAPSHOT_CREATE,
-        CapabilityType::ExoFsSnapshotList    => RIGHT_READ,
-        CapabilityType::ExoFsSnapshotMount   => RIGHT_READ,
-        CapabilityType::ExoFsRelationCreate  => RIGHT_RELATION_CREATE,
-        CapabilityType::ExoFsRelationQuery   => RIGHT_READ,
-        CapabilityType::ExoFsGcTrigger       => RIGHT_GC_TRIGGER,
-        CapabilityType::ExoFsQuotaQuery      => RIGHT_READ,
-        CapabilityType::ExoFsQuotaSet        => RIGHT_ADMIN,
-        CapabilityType::ExoFsExportObject    => RIGHT_EXPORT,
-        CapabilityType::ExoFsImportObject    => RIGHT_IMPORT,
-        CapabilityType::ExoFsEpochCommit     => RIGHT_WRITE,
-        CapabilityType::ExoFsOpenByPathRead  => RIGHT_READ,
+        CapabilityType::ExoFsPathResolve => RIGHT_READ,
+        CapabilityType::ExoFsOpenRead => RIGHT_READ,
+        CapabilityType::ExoFsOpenWrite => RIGHT_WRITE,
+        CapabilityType::ExoFsObjectRead => RIGHT_READ,
+        CapabilityType::ExoFsObjectWrite => RIGHT_WRITE,
+        CapabilityType::ExoFsObjectCreate => RIGHT_CREATE,
+        CapabilityType::ExoFsObjectDelete => RIGHT_DELETE,
+        CapabilityType::ExoFsObjectStat => RIGHT_STAT,
+        CapabilityType::ExoFsObjectSetMeta => RIGHT_SETMETA,
+        CapabilityType::ExoFsGetContentHash => RIGHT_INSPECT_CONTENT,
+        CapabilityType::ExoFsSnapshotCreate => RIGHT_SNAPSHOT_CREATE,
+        CapabilityType::ExoFsSnapshotList => RIGHT_READ,
+        CapabilityType::ExoFsSnapshotMount => RIGHT_READ,
+        CapabilityType::ExoFsRelationCreate => RIGHT_RELATION_CREATE,
+        CapabilityType::ExoFsRelationQuery => RIGHT_READ,
+        CapabilityType::ExoFsGcTrigger => RIGHT_GC_TRIGGER,
+        CapabilityType::ExoFsQuotaQuery => RIGHT_READ,
+        CapabilityType::ExoFsQuotaSet => RIGHT_ADMIN,
+        CapabilityType::ExoFsExportObject => RIGHT_EXPORT,
+        CapabilityType::ExoFsImportObject => RIGHT_IMPORT,
+        CapabilityType::ExoFsEpochCommit => RIGHT_WRITE,
+        CapabilityType::ExoFsOpenByPathRead => RIGHT_READ,
         CapabilityType::ExoFsOpenByPathWrite => RIGHT_WRITE,
-        CapabilityType::ExoFsReaddir         => RIGHT_LIST,
+        CapabilityType::ExoFsReaddir => RIGHT_LIST,
     }
 }
 
@@ -245,7 +233,11 @@ pub unsafe fn copy_struct_from_user<T: Copy>(ptr: u64) -> ExofsResult<T> {
         return Err(ExofsError::InvalidArgument);
     }
     let mut val = mem::MaybeUninit::<T>::uninit();
-    copy_from_user(val.as_mut_ptr() as *mut u8, ptr as *const u8, mem::size_of::<T>())?;
+    copy_from_user(
+        val.as_mut_ptr() as *mut u8,
+        ptr as *const u8,
+        mem::size_of::<T>(),
+    )?;
     Ok(val.assume_init())
 }
 
@@ -283,17 +275,22 @@ pub fn read_user_path_heap(ptr: u64, out: &mut Vec<u8>) -> Result<usize, i64> {
     out.resize(EXOFS_PATH_MAX, 0u8);
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
-        copy_from_user(out.as_mut_ptr(), ptr as *const u8, EXOFS_PATH_MAX)
-            .map_err(|_| EFAULT)?;
+        copy_from_user(out.as_mut_ptr(), ptr as *const u8, EXOFS_PATH_MAX).map_err(|_| EFAULT)?;
     }
     // RECUR-01 : while.
     let mut i = 0usize;
     while i < EXOFS_PATH_MAX {
-        if out[i] == 0 { break; }
+        if out[i] == 0 {
+            break;
+        }
         i = i.wrapping_add(1);
     }
-    if i == 0 { return Err(EINVAL); }
-    if i >= EXOFS_PATH_MAX { return Err(ERANGE); }
+    if i == 0 {
+        return Err(EINVAL);
+    }
+    if i >= EXOFS_PATH_MAX {
+        return Err(ERANGE);
+    }
     Ok(i)
 }
 
@@ -308,43 +305,54 @@ pub fn read_user_name_heap(ptr: u64, max: usize, out: &mut Vec<u8>) -> Result<us
     out.resize(cap, 0u8);
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
-        copy_from_user(out.as_mut_ptr(), ptr as *const u8, cap)
-            .map_err(|_| EFAULT)?;
+        copy_from_user(out.as_mut_ptr(), ptr as *const u8, cap).map_err(|_| EFAULT)?;
     }
     let mut i = 0usize;
     while i < cap {
-        if out[i] == 0 { break; }
+        if out[i] == 0 {
+            break;
+        }
         i = i.wrapping_add(1);
     }
-    if i == 0 { return Err(EINVAL); }
+    if i == 0 {
+        return Err(EINVAL);
+    }
     Ok(i)
 }
 
 /// Lit un buffer binaire borné depuis userspace.
 pub fn read_user_buf(ptr: u64, len: u64, out: &mut Vec<u8>) -> Result<(), i64> {
     let len = len as usize;
-    if ptr == 0 { return Err(EFAULT); }
-    if len == 0 { return Err(EINVAL); }
-    if len > EXOFS_BLOB_MAX { return Err(ERANGE); }
+    if ptr == 0 {
+        return Err(EFAULT);
+    }
+    if len == 0 {
+        return Err(EINVAL);
+    }
+    if len > EXOFS_BLOB_MAX {
+        return Err(ERANGE);
+    }
     out.clear();
     out.try_reserve(len).map_err(|_| ENOMEM)?;
     out.resize(len, 0u8);
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
-        copy_from_user(out.as_mut_ptr(), ptr as *const u8, len)
-            .map_err(|_| EFAULT)?;
+        copy_from_user(out.as_mut_ptr(), ptr as *const u8, len).map_err(|_| EFAULT)?;
     }
     Ok(())
 }
 
 /// Écrit un buffer noyau vers userspace.
 pub fn write_user_buf(dst: u64, src: &[u8]) -> Result<(), i64> {
-    if dst == 0 { return Err(EFAULT); }
-    if src.is_empty() { return Ok(()); }
+    if dst == 0 {
+        return Err(EFAULT);
+    }
+    if src.is_empty() {
+        return Ok(());
+    }
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
     unsafe {
-        copy_to_user(dst as *mut u8, src.as_ptr(), src.len())
-            .map_err(|_| EFAULT)?;
+        copy_to_user(dst as *mut u8, src.as_ptr(), src.len()).map_err(|_| EFAULT)?;
     }
     Ok(())
 }
@@ -352,21 +360,27 @@ pub fn write_user_buf(dst: u64, src: &[u8]) -> Result<(), i64> {
 /// Écrit un u64 optionnel vers userspace (ignore si pointeur nul).
 #[inline]
 pub fn write_user_u64_opt(dst: u64, val: u64) -> Result<(), i64> {
-    if dst == 0 { return Ok(()); }
+    if dst == 0 {
+        return Ok(());
+    }
     write_user_buf(dst, &val.to_le_bytes())
 }
 
 /// Écrit un u32 optionnel vers userspace.
 #[inline]
 pub fn write_user_u32_opt(dst: u64, val: u32) -> Result<(), i64> {
-    if dst == 0 { return Ok(()); }
+    if dst == 0 {
+        return Ok(());
+    }
     write_user_buf(dst, &val.to_le_bytes())
 }
 
 /// Écrit un i64 optionnel vers userspace.
 #[inline]
 pub fn write_user_i64_opt(dst: u64, val: i64) -> Result<(), i64> {
-    if dst == 0 { return Ok(()); }
+    if dst == 0 {
+        return Ok(());
+    }
     write_user_buf(dst, &val.to_le_bytes())
 }
 
@@ -386,8 +400,12 @@ pub fn validate_fd(fd: u64) -> Result<u32, i64> {
 /// Valide un count de transfert (1 ≤ count ≤ EXOFS_BLOB_MAX).
 #[inline]
 pub fn validate_count(count: u64) -> Result<usize, i64> {
-    if count == 0 { return Err(EINVAL); }
-    if count > EXOFS_BLOB_MAX as u64 { return Err(ERANGE); }
+    if count == 0 {
+        return Err(EINVAL);
+    }
+    if count > EXOFS_BLOB_MAX as u64 {
+        return Err(ERANGE);
+    }
     Ok(count as usize)
 }
 
@@ -395,7 +413,9 @@ pub fn validate_count(count: u64) -> Result<usize, i64> {
 #[inline]
 pub fn validate_offset(offset: u64) -> Result<u64, i64> {
     const MAX_OFFSET: u64 = (1u64 << 48).wrapping_sub(1);
-    if offset > MAX_OFFSET { return Err(EOVERFLOW); }
+    if offset > MAX_OFFSET {
+        return Err(EOVERFLOW);
+    }
     Ok(offset)
 }
 
@@ -404,38 +424,54 @@ pub fn validate_offset(offset: u64) -> Result<u64, i64> {
 pub fn validate_open_flags(flags: u64) -> Result<u32, i64> {
     const VALID_FLAGS: u32 = 0x0000_07FF;
     let f = flags as u32;
-    if f & !VALID_FLAGS != 0 { return Err(EINVAL); }
+    if f & !VALID_FLAGS != 0 {
+        return Err(EINVAL);
+    }
     Ok(f)
 }
 
 /// Valide un pointeur userspace non nul et aligné sur `align`.
 #[inline]
 pub fn validate_user_ptr(ptr: u64, align: usize) -> Result<(), i64> {
-    if ptr == 0 { return Err(EFAULT); }
-    if align > 1 && (ptr as usize) % align != 0 { return Err(EINVAL); }
+    if ptr == 0 {
+        return Err(EFAULT);
+    }
+    if align > 1 && (ptr as usize) % align != 0 {
+        return Err(EINVAL);
+    }
     Ok(())
 }
 
 /// Valide qu'un identifiant 32 octets est ni tout-FF ni tout-zéro.
 #[inline]
 pub fn validate_id32(bytes: &[u8; 32]) -> Result<(), i64> {
-    let mut all_ff  = true;
+    let mut all_ff = true;
     let mut all_zero = true;
     let mut i = 0usize;
     while i < 32 {
-        if bytes[i] != 0xFF { all_ff = false; }
-        if bytes[i] != 0x00 { all_zero = false; }
+        if bytes[i] != 0xFF {
+            all_ff = false;
+        }
+        if bytes[i] != 0x00 {
+            all_zero = false;
+        }
         i = i.wrapping_add(1);
     }
-    if all_ff || all_zero { return Err(EINVAL); }
+    if all_ff || all_zero {
+        return Err(EINVAL);
+    }
     Ok(())
 }
 
 /// Valide une longueur de métadonnée (1 ≤ len ≤ EXOFS_META_MAX).
 #[inline]
 pub fn validate_meta_len(len: u64) -> Result<usize, i64> {
-    if len == 0 { return Err(EINVAL); }
-    if len > EXOFS_META_MAX as u64 { return Err(ERANGE); }
+    if len == 0 {
+        return Err(EINVAL);
+    }
+    if len > EXOFS_META_MAX as u64 {
+        return Err(ERANGE);
+    }
     Ok(len as usize)
 }
 
@@ -446,21 +482,28 @@ pub fn validate_meta_len(len: u64) -> Result<usize, i64> {
 /// Wrapper sémantique pour un pointeur userspace typé.
 #[derive(Copy, Clone, Debug)]
 pub struct UserPtr<T> {
-    addr:     u64,
+    addr: u64,
     _phantom: core::marker::PhantomData<*mut T>,
 }
 
 impl<T: Copy> UserPtr<T> {
     #[inline]
     pub fn new(addr: u64) -> Self {
-        Self { addr, _phantom: core::marker::PhantomData }
+        Self {
+            addr,
+            _phantom: core::marker::PhantomData,
+        }
     }
 
     #[inline]
-    pub fn addr(self) -> u64 { self.addr }
+    pub fn addr(self) -> u64 {
+        self.addr
+    }
 
     #[inline]
-    pub fn is_null(self) -> bool { self.addr == 0 }
+    pub fn is_null(self) -> bool {
+        self.addr == 0
+    }
 
     /// # Safety — adresse userspace valide de taille `size_of::<T>()`.
     pub unsafe fn read(self) -> ExofsResult<T> {
@@ -483,13 +526,19 @@ unsafe impl<T> Sync for UserPtr<T> {}
 /// Retourne la valeur syscall depuis un Result<i64, i64>.
 #[inline]
 pub fn syscall_ret(r: Result<i64, i64>) -> i64 {
-    match r { Ok(v) => v, Err(e) => e }
+    match r {
+        Ok(v) => v,
+        Err(e) => e,
+    }
 }
 
 /// Convertit un ExofsResult<i64> en code de retour syscall.
 #[inline]
 pub fn exofs_ret(r: ExofsResult<i64>) -> i64 {
-    match r { Ok(v) => v, Err(e) => exofs_err_to_errno(e) }
+    match r {
+        Ok(v) => v,
+        Err(e) => exofs_err_to_errno(e),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -563,7 +612,10 @@ mod tests {
 
     #[test]
     fn test_validate_count_overflow() {
-        assert_eq!(validate_count(EXOFS_BLOB_MAX as u64 + 1).unwrap_err(), ERANGE);
+        assert_eq!(
+            validate_count(EXOFS_BLOB_MAX as u64 + 1).unwrap_err(),
+            ERANGE
+        );
     }
 
     #[test]
@@ -656,13 +708,19 @@ mod tests {
     #[test]
     fn test_validate_meta_len_ok() {
         assert_eq!(validate_meta_len(1).unwrap(), 1);
-        assert_eq!(validate_meta_len(EXOFS_META_MAX as u64).unwrap(), EXOFS_META_MAX);
+        assert_eq!(
+            validate_meta_len(EXOFS_META_MAX as u64).unwrap(),
+            EXOFS_META_MAX
+        );
     }
 
     #[test]
     fn test_validate_meta_len_bad() {
         assert_eq!(validate_meta_len(0).unwrap_err(), EINVAL);
-        assert_eq!(validate_meta_len(EXOFS_META_MAX as u64 + 1).unwrap_err(), ERANGE);
+        assert_eq!(
+            validate_meta_len(EXOFS_META_MAX as u64 + 1).unwrap_err(),
+            ERANGE
+        );
     }
 
     #[test]

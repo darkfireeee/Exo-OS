@@ -7,17 +7,14 @@
 //! Via `MSR_IA32_SPEC_CTRL` bit 2 (SSBD) ou via AMD VIRT_SPEC_CTRL.
 //! Configuré per-thread (certains processus n'en ont pas besoin → performance).
 
-
+use super::super::cpu::msr::{self, MSR_IA32_SPEC_CTRL, SPEC_CTRL_SSBD};
 use core::sync::atomic::{AtomicBool, Ordering};
-use super::super::cpu::msr::{
-    self, MSR_IA32_SPEC_CTRL, SPEC_CTRL_SSBD,
-};
 
 const AMD_MSR_VIRT_SPEC_CTRL: u32 = 0xC001_011F;
 const AMD_SSBD_BIT: u64 = 1 << 2;
 
 static SSBD_SYSTEM_ENABLED: AtomicBool = AtomicBool::new(false);
-static SSBD_AMD_MODE:       AtomicBool = AtomicBool::new(false);
+static SSBD_AMD_MODE: AtomicBool = AtomicBool::new(false);
 
 /// Retourne `true` si SSBD est activé sur ce système
 pub fn ssbd_enabled() -> bool {
@@ -45,19 +42,27 @@ pub fn init_ssbd() {
 /// Appelé lors du context switch vers un thread nécessitant SSBD.
 #[inline]
 pub fn apply_ssbd_for_thread(enable: bool) {
-    if !SSBD_SYSTEM_ENABLED.load(Ordering::Relaxed) { return; }
+    if !SSBD_SYSTEM_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
 
     if SSBD_AMD_MODE.load(Ordering::Relaxed) {
         let val: u64 = if enable { AMD_SSBD_BIT } else { 0 };
         // SAFETY: MSR AMD VIRT_SPEC_CTRL sur CPU AMD supportant SSBD
-        unsafe { msr::write_msr(AMD_MSR_VIRT_SPEC_CTRL, val); }
+        unsafe {
+            msr::write_msr(AMD_MSR_VIRT_SPEC_CTRL, val);
+        }
     } else {
         if enable {
             // SAFETY: MSR_IA32_SPEC_CTRL bit SSBD — disponible si CPUID 7.0 EDX[31]
-            unsafe { msr::set_msr_bits(MSR_IA32_SPEC_CTRL, SPEC_CTRL_SSBD); }
+            unsafe {
+                msr::set_msr_bits(MSR_IA32_SPEC_CTRL, SPEC_CTRL_SSBD);
+            }
         } else {
             // SAFETY: idem
-            unsafe { msr::clear_msr_bits(MSR_IA32_SPEC_CTRL, SPEC_CTRL_SSBD); }
+            unsafe {
+                msr::clear_msr_bits(MSR_IA32_SPEC_CTRL, SPEC_CTRL_SSBD);
+            }
         }
     }
 }

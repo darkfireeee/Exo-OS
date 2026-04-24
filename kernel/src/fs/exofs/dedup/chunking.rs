@@ -7,9 +7,8 @@
 //! OOM-02   : try_reserve sur tous les Vec.
 //! ARITH-02 : checked/saturating/wrapping sur toutes les arithmétiques.
 
-
-use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -54,7 +53,9 @@ impl ChunkBoundary {
             return Err(ExofsError::InvalidArgument);
         }
         // Vérifie que offset + length ne déborde pas.
-        offset.checked_add(length as u64).ok_or(ExofsError::OffsetOverflow)?;
+        offset
+            .checked_add(length as u64)
+            .ok_or(ExofsError::OffsetOverflow)?;
         Ok(Self { offset, length })
     }
 
@@ -62,7 +63,9 @@ impl ChunkBoundary {
     ///
     /// ARITH-02 : checked_add.
     pub fn end_offset(&self) -> ExofsResult<u64> {
-        self.offset.checked_add(self.length as u64).ok_or(ExofsError::OffsetOverflow)
+        self.offset
+            .checked_add(self.length as u64)
+            .ok_or(ExofsError::OffsetOverflow)
     }
 
     /// Retourne `true` si ce chunk contient l'offset donné.
@@ -87,41 +90,57 @@ pub struct DedupChunk {
     /// Position et taille dans le flux original.
     pub boundary: ChunkBoundary,
     /// Empreinte Blake3 du contenu du chunk.
-    pub blake3:   [u8; 32],
+    pub blake3: [u8; 32],
     /// Hash rapide (XxHash64 ou FNV) pour filtrage préliminaire.
     pub fast_hash: u64,
     /// Contenu brut du chunk (peut être vide si on n'a que les métadonnées).
-    pub data:     Vec<u8>,
+    pub data: Vec<u8>,
 }
 
 impl DedupChunk {
     /// Crée un chunk avec données.
     ///
     /// OOM-02 : try_reserve.
-    pub fn new(boundary: ChunkBoundary, blake3: [u8; 32], fast_hash: u64, raw: &[u8])
-        -> ExofsResult<Self>
-    {
+    pub fn new(
+        boundary: ChunkBoundary,
+        blake3: [u8; 32],
+        fast_hash: u64,
+        raw: &[u8],
+    ) -> ExofsResult<Self> {
         if raw.len() != boundary.length as usize {
             return Err(ExofsError::InvalidArgument);
         }
         let mut data: Vec<u8> = Vec::new();
-        data.try_reserve(raw.len()).map_err(|_| ExofsError::NoMemory)?;
+        data.try_reserve(raw.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         data.extend_from_slice(raw);
-        Ok(Self { boundary, blake3, fast_hash, data })
+        Ok(Self {
+            boundary,
+            blake3,
+            fast_hash,
+            data,
+        })
     }
 
     /// Crée un chunk sans données (métadonnées seules).
-    pub fn metadata_only(boundary: ChunkBoundary, blake3: [u8; 32], fast_hash: u64)
-        -> Self
-    {
-        Self { boundary, blake3, fast_hash, data: Vec::new() }
+    pub fn metadata_only(boundary: ChunkBoundary, blake3: [u8; 32], fast_hash: u64) -> Self {
+        Self {
+            boundary,
+            blake3,
+            fast_hash,
+            data: Vec::new(),
+        }
     }
 
     /// Retourne `true` si les données sont présentes.
-    pub fn has_data(&self) -> bool { !self.data.is_empty() }
+    pub fn has_data(&self) -> bool {
+        !self.data.is_empty()
+    }
 
     /// Taille déclarée du chunk.
-    pub fn len(&self) -> u32 { self.boundary.length }
+    pub fn len(&self) -> u32 {
+        self.boundary.length
+    }
 
     /// Vérifie que la taille des données correspond à `boundary.length`.
     pub fn is_consistent(&self) -> bool {
@@ -196,15 +215,15 @@ pub trait Chunker {
 #[derive(Debug, Clone, Default)]
 pub struct ChunkStats {
     /// Nombre total de chunks produits.
-    pub total_chunks:    usize,
+    pub total_chunks: usize,
     /// Taille minimale observée.
-    pub min_chunk_size:  u32,
+    pub min_chunk_size: u32,
     /// Taille maximale observée.
-    pub max_chunk_size:  u32,
+    pub max_chunk_size: u32,
     /// Taille moyenne (approximée, entière).
-    pub avg_chunk_size:  u32,
+    pub avg_chunk_size: u32,
     /// Taille totale des données découpées.
-    pub total_bytes:     u64,
+    pub total_bytes: u64,
 }
 
 impl ChunkStats {
@@ -219,14 +238,19 @@ impl ChunkStats {
         let mut max_s: u32 = 0;
         let mut total_bytes: u64 = 0;
         for b in bounds {
-            if b.length < min_s { min_s = b.length; }
-            if b.length > max_s { max_s = b.length; }
-            total_bytes = total_bytes.checked_add(b.length as u64)
+            if b.length < min_s {
+                min_s = b.length;
+            }
+            if b.length > max_s {
+                max_s = b.length;
+            }
+            total_bytes = total_bytes
+                .checked_add(b.length as u64)
                 .ok_or(ExofsError::OffsetOverflow)?;
         }
         let avg = total_bytes.checked_div(bounds.len() as u64).unwrap_or(0);
         Ok(Self {
-            total_chunks:   bounds.len(),
+            total_chunks: bounds.len(),
             min_chunk_size: min_s,
             max_chunk_size: max_s,
             avg_chunk_size: avg as u32,
@@ -252,22 +276,30 @@ pub struct ChunkList {
 
 impl ChunkList {
     /// Crée une liste vide.
-    pub fn new() -> Self { Self { chunks: Vec::new() } }
+    pub fn new() -> Self {
+        Self { chunks: Vec::new() }
+    }
 
     /// Crée depuis un vecteur existant.
-    pub fn from_vec(chunks: Vec<DedupChunk>) -> Self { Self { chunks } }
+    pub fn from_vec(chunks: Vec<DedupChunk>) -> Self {
+        Self { chunks }
+    }
 
     /// Ajoute un chunk.
     ///
     /// OOM-02 : try_reserve.
     pub fn push(&mut self, chunk: DedupChunk) -> ExofsResult<()> {
-        self.chunks.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.chunks
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.chunks.push(chunk);
         Ok(())
     }
 
     /// Retourne le chunk à l'index `i`.
-    pub fn get(&self, i: usize) -> Option<&DedupChunk> { self.chunks.get(i) }
+    pub fn get(&self, i: usize) -> Option<&DedupChunk> {
+        self.chunks.get(i)
+    }
 
     /// Retourne le chunk contenant l'offset `off`.
     ///
@@ -277,13 +309,19 @@ impl ChunkList {
     }
 
     /// Nombre de chunks.
-    pub fn len(&self) -> usize { self.chunks.len() }
+    pub fn len(&self) -> usize {
+        self.chunks.len()
+    }
 
     /// `true` si vide.
-    pub fn is_empty(&self) -> bool { self.chunks.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.chunks.is_empty()
+    }
 
     /// Itérateur sur les chunks.
-    pub fn iter(&self) -> core::slice::Iter<'_, DedupChunk> { self.chunks.iter() }
+    pub fn iter(&self) -> core::slice::Iter<'_, DedupChunk> {
+        self.chunks.iter()
+    }
 
     /// Statistiques sur la liste.
     pub fn stats(&self) -> ExofsResult<ChunkStats> {
@@ -295,9 +333,12 @@ impl ChunkList {
     /// OOM-02 : try_reserve.
     pub fn undersized_chunks(&self, min: usize) -> ExofsResult<Vec<usize>> {
         let mut out: Vec<usize> = Vec::new();
-        out.try_reserve(self.chunks.len()).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(self.chunks.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         for (i, c) in self.chunks.iter().enumerate() {
-            if (c.boundary.length as usize) < min { out.push(i); }
+            if (c.boundary.length as usize) < min {
+                out.push(i);
+            }
         }
         Ok(out)
     }
@@ -311,24 +352,34 @@ impl ChunkList {
 ///
 /// ARITH-02 : checked_add, wrapping_sub.
 pub fn align_up(size: usize, align: usize) -> ExofsResult<usize> {
-    if align == 0 { return Err(ExofsError::InvalidArgument); }
+    if align == 0 {
+        return Err(ExofsError::InvalidArgument);
+    }
     let mask = align.wrapping_sub(1);
-    size.checked_add(mask).map(|v| v & !mask).ok_or(ExofsError::OffsetOverflow)
+    size.checked_add(mask)
+        .map(|v| v & !mask)
+        .ok_or(ExofsError::OffsetOverflow)
 }
 
 /// Vérifie que les frontières ne se chevauchent pas et couvrent [0, total).
 ///
 /// ARITH-02 / RECUR-01.
 pub fn validate_boundaries(bounds: &[ChunkBoundary], total: u64) -> ExofsResult<()> {
-    if bounds.is_empty() { return Ok(()); }
+    if bounds.is_empty() {
+        return Ok(());
+    }
     let mut cursor: u64 = 0;
     for b in bounds {
         if b.offset != cursor {
             return Err(ExofsError::CorruptedStructure);
         }
-        cursor = cursor.checked_add(b.length as u64).ok_or(ExofsError::OffsetOverflow)?;
+        cursor = cursor
+            .checked_add(b.length as u64)
+            .ok_or(ExofsError::OffsetOverflow)?;
     }
-    if cursor != total { return Err(ExofsError::CorruptedStructure); }
+    if cursor != total {
+        return Err(ExofsError::CorruptedStructure);
+    }
     Ok(())
 }
 
@@ -340,21 +391,25 @@ pub fn validate_boundaries(bounds: &[ChunkBoundary], total: u64) -> ExofsResult<
 mod tests {
     use super::*;
 
-    #[test] fn test_chunk_boundary_new_ok() {
+    #[test]
+    fn test_chunk_boundary_new_ok() {
         let b = ChunkBoundary::new(0, 4096).unwrap();
         assert_eq!(b.length, 4096);
         assert_eq!(b.end_offset().unwrap(), 4096);
     }
 
-    #[test] fn test_chunk_boundary_zero_size() {
+    #[test]
+    fn test_chunk_boundary_zero_size() {
         assert!(ChunkBoundary::new(0, 0).is_err());
     }
 
-    #[test] fn test_chunk_boundary_too_large() {
+    #[test]
+    fn test_chunk_boundary_too_large() {
         assert!(ChunkBoundary::new(0, (CHUNK_MAX_SIZE + 1) as u32).is_err());
     }
 
-    #[test] fn test_chunk_boundary_contains_offset() {
+    #[test]
+    fn test_chunk_boundary_contains_offset() {
         let b = ChunkBoundary::new(100, 50).unwrap();
         assert!(b.contains_offset(100));
         assert!(b.contains_offset(149));
@@ -362,7 +417,8 @@ mod tests {
         assert!(!b.contains_offset(99));
     }
 
-    #[test] fn test_chunk_boundary_overlap() {
+    #[test]
+    fn test_chunk_boundary_overlap() {
         let b1 = ChunkBoundary::new(0, 100).unwrap();
         let b2 = ChunkBoundary::new(50, 100).unwrap();
         let b3 = ChunkBoundary::new(100, 100).unwrap();
@@ -370,21 +426,24 @@ mod tests {
         assert!(!b1.overlaps(&b3));
     }
 
-    #[test] fn test_dedup_chunk_new_ok() {
+    #[test]
+    fn test_dedup_chunk_new_ok() {
         let b = ChunkBoundary::new(0, 4).unwrap();
         let c = DedupChunk::new(b, [0u8; 32], 42, &[1, 2, 3, 4]).unwrap();
         assert!(c.has_data());
         assert!(c.is_consistent());
     }
 
-    #[test] fn test_dedup_chunk_size_mismatch() {
+    #[test]
+    fn test_dedup_chunk_size_mismatch() {
         let b = ChunkBoundary::new(0, 4).unwrap();
         assert!(DedupChunk::new(b, [0u8; 32], 0, &[1, 2, 3]).is_err());
     }
 
-    #[test] fn test_chunk_stats_from_boundaries() {
+    #[test]
+    fn test_chunk_stats_from_boundaries() {
         let bs = alloc::vec![
-            ChunkBoundary::new(0,   100).unwrap(),
+            ChunkBoundary::new(0, 100).unwrap(),
             ChunkBoundary::new(100, 200).unwrap(),
             ChunkBoundary::new(300, 150).unwrap(),
         ];
@@ -395,15 +454,17 @@ mod tests {
         assert_eq!(s.total_bytes, 450);
     }
 
-    #[test] fn test_validate_boundaries_ok() {
+    #[test]
+    fn test_validate_boundaries_ok() {
         let bs = alloc::vec![
-            ChunkBoundary::new(0,  100).unwrap(),
+            ChunkBoundary::new(0, 100).unwrap(),
             ChunkBoundary::new(100, 50).unwrap(),
         ];
         assert!(validate_boundaries(&bs, 150).is_ok());
     }
 
-    #[test] fn test_validate_boundaries_gap() {
+    #[test]
+    fn test_validate_boundaries_gap() {
         let bs = alloc::vec![
             ChunkBoundary::new(0, 100).unwrap(),
             ChunkBoundary::new(110, 50).unwrap(),
@@ -411,21 +472,25 @@ mod tests {
         assert!(validate_boundaries(&bs, 160).is_err());
     }
 
-    #[test] fn test_align_up() {
+    #[test]
+    fn test_align_up() {
         assert_eq!(align_up(100, 512).unwrap(), 512);
         assert_eq!(align_up(512, 512).unwrap(), 512);
         assert_eq!(align_up(513, 512).unwrap(), 1024);
     }
 
-    #[test] fn test_chunk_list_find_by_offset() {
+    #[test]
+    fn test_chunk_list_find_by_offset() {
         let mut list = ChunkList::new();
         let b = ChunkBoundary::new(0, 10).unwrap();
-        list.push(DedupChunk::metadata_only(b, [0u8; 32], 0)).unwrap();
+        list.push(DedupChunk::metadata_only(b, [0u8; 32], 0))
+            .unwrap();
         assert!(list.find_by_offset(5).is_some());
         assert!(list.find_by_offset(10).is_none());
     }
 
-    #[test] fn test_chunk_kind_deduplicable() {
+    #[test]
+    fn test_chunk_kind_deduplicable() {
         assert!(ChunkKind::Data.is_deduplicable());
         assert!(!ChunkKind::Metadata.is_deduplicable());
     }

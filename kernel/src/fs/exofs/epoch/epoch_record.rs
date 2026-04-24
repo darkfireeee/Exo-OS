@@ -9,14 +9,14 @@
 // RÈGLE ONDISK-06 : const assert size_of::<EpochRecord>() == 104.
 // RÈGLE V-08      : magic vérifié EN PREMIER avant tout accès au payload.
 
-use core::mem::size_of;
 use core::fmt;
+use core::mem::size_of;
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, EpochId, DiskOffset, ObjectId,
-    EXOFS_MAGIC, FORMAT_VERSION_MAJOR, blake3_hash,
-};
 use crate::fs::exofs::core::flags::EpochFlags;
+use crate::fs::exofs::core::{
+    blake3_hash, DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId, EXOFS_MAGIC,
+    FORMAT_VERSION_MAJOR,
+};
 use crate::fs::exofs::epoch::epoch_checksum::{ct_eq_32, EPOCH_RECORD_BODY_LEN};
 
 // =============================================================================
@@ -67,23 +67,23 @@ use crate::fs::exofs::epoch::epoch_checksum::{ct_eq_32, EPOCH_RECORD_BODY_LEN};
 #[repr(C, packed)]
 pub struct EpochRecord {
     /// Magic ExoFS : 0x45584F46 ("EXOF").
-    pub magic:       u32,
+    pub magic: u32,
     /// Version du format.
-    pub version:     u16,
+    pub version: u16,
     /// Flags (EpochFlags).
-    pub flags:       u16,
+    pub flags: u16,
     /// Identifiant d'epoch (monotone croissant).
-    pub epoch_id:    u64,
+    pub epoch_id: u64,
     /// Timestamp TSC au moment du commit.
-    pub timestamp:   u64,
+    pub timestamp: u64,
     /// ObjectId de l'EpochRoot (32 octets).
-    pub root_oid:    [u8; 32],
+    pub root_oid: [u8; 32],
     /// Offset disque de l'EpochRoot.
     pub root_offset: u64,
     /// Offset du slot précédent (double-link pour le recovery chaîné).
-    pub prev_slot:   u64,
+    pub prev_slot: u64,
     /// Blake3 des 72 premiers octets (corps body).
-    pub checksum:    [u8; 32],
+    pub checksum: [u8; 32],
 }
 
 // Vérification statique de la taille : EXACTEMENT 104 octets.
@@ -107,23 +107,23 @@ impl EpochRecord {
     /// - `root_offset` : offset disque de l'EpochRoot.
     /// - `prev_slot`   : offset du slot précédent (0 si premier epoch).
     pub fn new(
-        epoch_id:    EpochId,
-        flags:       EpochFlags,
-        timestamp:   u64,
-        root_oid:    ObjectId,
+        epoch_id: EpochId,
+        flags: EpochFlags,
+        timestamp: u64,
+        root_oid: ObjectId,
         root_offset: DiskOffset,
-        prev_slot:   DiskOffset,
+        prev_slot: DiskOffset,
     ) -> Self {
         let mut rec = Self {
-            magic:       EXOFS_MAGIC,
-            version:     FORMAT_VERSION_MAJOR,
-            flags:       flags.0,
-            epoch_id:    epoch_id.0,
+            magic: EXOFS_MAGIC,
+            version: FORMAT_VERSION_MAJOR,
+            flags: flags.0,
+            epoch_id: epoch_id.0,
             timestamp,
-            root_oid:    root_oid.0,
+            root_oid: root_oid.0,
             root_offset: root_offset.0,
-            prev_slot:   prev_slot.0,
-            checksum:    [0u8; 32],
+            prev_slot: prev_slot.0,
+            checksum: [0u8; 32],
         };
         // Calcul du checksum sur les 72 premiers octets (body).
         let body = rec.body_bytes();
@@ -180,9 +180,7 @@ impl EpochRecord {
             return Err(ExofsError::InvalidMagic);
         }
         // SAFETY: data est un tableau de 104 octets, EpochRecord est 104 B.
-        let record: Self = unsafe {
-            core::ptr::read_unaligned(data.as_ptr() as *const Self)
-        };
+        let record: Self = unsafe { core::ptr::read_unaligned(data.as_ptr() as *const Self) };
         // Vérification du checksum.
         record.verify_checksum()?;
         Ok(Some(record))
@@ -332,7 +330,11 @@ impl EpochRecord {
 
     /// Retourne le record avec le plus grand epoch_id.
     pub fn newest<'a>(a: &'a Self, b: &'a Self) -> &'a Self {
-        if a.is_newer_than(b) { a } else { b }
+        if a.is_newer_than(b) {
+            a
+        } else {
+            b
+        }
     }
 }
 
@@ -344,24 +346,24 @@ impl EpochRecord {
 ///
 /// Valide les champs obligatoires avant de produire le record final.
 pub struct EpochRecordBuilder {
-    epoch_id:    Option<EpochId>,
-    flags:       EpochFlags,
-    timestamp:   u64,
-    root_oid:    Option<ObjectId>,
+    epoch_id: Option<EpochId>,
+    flags: EpochFlags,
+    timestamp: u64,
+    root_oid: Option<ObjectId>,
     root_offset: Option<DiskOffset>,
-    prev_slot:   DiskOffset,
+    prev_slot: DiskOffset,
 }
 
 impl EpochRecordBuilder {
     /// Crée un builder vide.
     pub fn new() -> Self {
         EpochRecordBuilder {
-            epoch_id:    None,
-            flags:       EpochFlags::default(),
-            timestamp:   0,
-            root_oid:    None,
+            epoch_id: None,
+            flags: EpochFlags::default(),
+            timestamp: 0,
+            root_oid: None,
             root_offset: None,
-            prev_slot:   DiskOffset(0),
+            prev_slot: DiskOffset(0),
         }
     }
 
@@ -417,7 +419,7 @@ impl EpochRecordBuilder {
         if epoch_id.0 == 0 {
             return Err(ExofsError::InvalidEpochId);
         }
-        let root_oid    = self.root_oid.ok_or(ExofsError::CorruptedStructure)?;
+        let root_oid = self.root_oid.ok_or(ExofsError::CorruptedStructure)?;
         let root_offset = self.root_offset.ok_or(ExofsError::CorruptedStructure)?;
 
         Ok(EpochRecord::new(
@@ -442,16 +444,17 @@ impl fmt::Debug for EpochRecord {
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let magic = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
-        let root_offset = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.root_offset)) };
+        let root_offset =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.root_offset)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let flags = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let timestamp = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.timestamp)) };
         f.debug_struct("EpochRecord")
-            .field("magic",       &format_args!("0x{:08X}", magic))
-            .field("epoch_id",    &epoch_id)
-            .field("flags",       &format_args!("0x{:04X}", flags))
-            .field("timestamp",   &timestamp)
+            .field("magic", &format_args!("0x{:08X}", magic))
+            .field("epoch_id", &epoch_id)
+            .field("flags", &format_args!("0x{:04X}", flags))
+            .field("timestamp", &timestamp)
             .field("root_offset", &root_offset)
             .finish()
     }
@@ -464,7 +467,11 @@ impl fmt::Display for EpochRecord {
         let committed = if self.is_committed() { "C" } else { "-" };
         let recovering = if self.is_recovering() { "R" } else { "-" };
         let snapshot = if self.is_snapshot() { "S" } else { "-" };
-        write!(f, "Epoch[{}] flags=[{}{}{}]", epoch_id, committed, recovering, snapshot)
+        write!(
+            f,
+            "Epoch[{}] flags=[{}{}{}]",
+            epoch_id, committed, recovering, snapshot
+        )
     }
 }
 

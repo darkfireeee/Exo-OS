@@ -13,16 +13,14 @@
 pub mod early_init;
 pub mod memory_map;
 pub mod multiboot2;
-pub mod uefi;
 pub mod trampoline_asm;
+pub mod uefi;
 
 pub use early_init::arch_boot_init;
 pub use memory_map::{
-    init_memory_subsystem_multiboot2, init_memory_subsystem_uefi,
-    init_memory_subsystem_exoboot,
-    MemoryRegion, MemoryRegionType, MEMORY_MAP, MEMORY_REGION_COUNT,
-    PHYS_MEMORY_START, PHYS_MEMORY_MAX,
-    EXOBOOT_MAGIC_U32, EXOBOOT_BOOT_INFO_MAGIC,
+    init_memory_subsystem_exoboot, init_memory_subsystem_multiboot2, init_memory_subsystem_uefi,
+    MemoryRegion, MemoryRegionType, EXOBOOT_BOOT_INFO_MAGIC, EXOBOOT_MAGIC_U32, MEMORY_MAP,
+    MEMORY_REGION_COUNT, PHYS_MEMORY_MAX, PHYS_MEMORY_START,
 };
 pub use multiboot2::{parse_multiboot2, Multiboot2Info};
 pub use uefi::{parse_uefi_memmap, UefiMemoryMap};

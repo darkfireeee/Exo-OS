@@ -16,9 +16,8 @@
 // RÈGLE : Aucune allocation heap dans ce fichier (zone NO-ALLOC partielle).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use core::fmt;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -35,25 +34,33 @@ pub struct Pid(pub u32);
 pub struct Tid(pub u32);
 
 impl Pid {
-    pub const INVALID: Self  = Self(0);
-    pub const IDLE:    Self  = Self(0);
-    pub const INIT:    Self  = Self(1);
+    pub const INVALID: Self = Self(0);
+    pub const IDLE: Self = Self(0);
+    pub const INIT: Self = Self(1);
 
     #[inline(always)]
-    pub fn is_valid(self) -> bool { self.0 > 0 }
+    pub fn is_valid(self) -> bool {
+        self.0 > 0
+    }
 
     #[inline(always)]
-    pub fn as_u32(self) -> u32 { self.0 }
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
 }
 
 impl Tid {
     pub const INVALID: Self = Self(0);
 
     #[inline(always)]
-    pub fn is_valid(self) -> bool { self.0 > 0 }
+    pub fn is_valid(self) -> bool {
+        self.0 > 0
+    }
 
     #[inline(always)]
-    pub fn as_u32(self) -> u32 { self.0 }
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
 }
 
 impl fmt::Display for Pid {
@@ -72,13 +79,13 @@ impl fmt::Display for Tid {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Capacité maximale du bitmap PID (entrées).
-pub const PID_BITMAP_WORDS: usize = 512;   // 512 × 64 = 32 768 PIDs
-pub const TID_BITMAP_WORDS: usize = 2048;  // 2048 × 64 = 131 072 TIDs
+pub const PID_BITMAP_WORDS: usize = 512; // 512 × 64 = 32 768 PIDs
+pub const TID_BITMAP_WORDS: usize = 2048; // 2048 × 64 = 131 072 TIDs
 
-pub const PID_FIRST_USABLE: u32 = 2;       // 0=idle, 1=init réservés
-pub const PID_MAX:          u32 = (PID_BITMAP_WORDS as u32 * 64) - 1;
+pub const PID_FIRST_USABLE: u32 = 2; // 0=idle, 1=init réservés
+pub const PID_MAX: u32 = (PID_BITMAP_WORDS as u32 * 64) - 1;
 pub const TID_FIRST_USABLE: u32 = 1;
-pub const TID_MAX:          u32 = (TID_BITMAP_WORDS as u32 * 64) - 1;
+pub const TID_MAX: u32 = (TID_BITMAP_WORDS as u32 * 64) - 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PidBitmap — structure bitmap statique
@@ -96,19 +103,23 @@ impl<const N: usize> PidBitmap<N> {
         // Tous les bits à 1 = tous libres.
         #[allow(clippy::declare_interior_mutable_const)]
         const WORD_FREE: AtomicU64 = AtomicU64::new(u64::MAX);
-        Self { words: [WORD_FREE; N] }
+        Self {
+            words: [WORD_FREE; N],
+        }
     }
 
     /// Alloue le premier ID libre >= `first_usable`.
     /// Retourne `None` si épuisé.
     /// Algorithme : scan word par word, CLZ pour trouver bit libre.
     fn alloc(&self, first_usable: u32) -> Option<u32> {
-        let start_word  = (first_usable / 64) as usize;
+        let start_word = (first_usable / 64) as usize;
         let total_words = N;
 
         for w in start_word..total_words {
             let val = self.words[w].load(Ordering::Relaxed);
-            if val == 0 { continue; }  // mot plein
+            if val == 0 {
+                continue;
+            } // mot plein
 
             // Trouver le bit libre le moins significatif.
             let bit = val.trailing_zeros(); // position du premier bit à 1
@@ -136,7 +147,7 @@ impl<const N: usize> PidBitmap<N> {
     /// Libère l'ID donné (remet le bit à 1).
     /// Panique (debug) si l'ID était déjà libre.
     fn free(&self, id: u32) {
-        let w   = (id / 64) as usize;
+        let w = (id / 64) as usize;
         let bit = id % 64;
         let mask = 1u64 << bit;
         let prev = self.words[w].fetch_or(mask, Ordering::Release);
@@ -149,8 +160,8 @@ impl<const N: usize> PidBitmap<N> {
 
     /// Vérifie si l'ID est utilisé (bit à 0).
     fn is_used(&self, id: u32) -> bool {
-        let w    = (id / 64) as usize;
-        let bit  = id % 64;
+        let w = (id / 64) as usize;
+        let bit = id % 64;
         self.words[w].load(Ordering::Relaxed) & (1u64 << bit) == 0
     }
 }
@@ -161,20 +172,20 @@ impl<const N: usize> PidBitmap<N> {
 
 /// Allocateur PID avec instrumentation complète.
 pub struct PidAllocator {
-    bitmap:        &'static PidBitmapPid,
-    first_usable:  u32,
+    bitmap: &'static PidBitmapPid,
+    first_usable: u32,
     #[allow(dead_code)]
     total_capacity: u32,
     /// Nombre d'allocations réussies depuis le boot.
-    alloc_count:   AtomicU64,
+    alloc_count: AtomicU64,
     /// Nombre de libérations depuis le boot.
-    free_count:    AtomicU64,
+    free_count: AtomicU64,
     /// Nombre courant d'IDs utilisés.
-    current_used:  AtomicU32,
+    current_used: AtomicU32,
     /// Nombre max d'IDs simultanément utilisés (high-water mark).
-    peak_used:     AtomicU32,
+    peak_used: AtomicU32,
     /// Nombre d'échecs d'allocation (épuisement).
-    exhausted:     AtomicU64,
+    exhausted: AtomicU64,
 }
 
 // Alias de type pour les bitmaps statiques.
@@ -191,27 +202,27 @@ unsafe impl Sync for PidBitmapTid {}
 pub static PID_ALLOCATOR: PidAllocator = PidAllocator {
     // SAFETY: PID_BITMAP_STORAGE est un tableau statique aligné avec le layout correct;
     //         PidBitmapPid est un newtype transparent autour du même type sous-jacent.
-    bitmap:         unsafe { &*(&PID_BITMAP_STORAGE as *const PidBitmapPid) },
-    first_usable:   PID_FIRST_USABLE,
+    bitmap: unsafe { &*(&PID_BITMAP_STORAGE as *const PidBitmapPid) },
+    first_usable: PID_FIRST_USABLE,
     total_capacity: PID_MAX,
-    alloc_count:    AtomicU64::new(0),
-    free_count:     AtomicU64::new(0),
-    current_used:   AtomicU32::new(0),
-    peak_used:      AtomicU32::new(0),
-    exhausted:      AtomicU64::new(0),
+    alloc_count: AtomicU64::new(0),
+    free_count: AtomicU64::new(0),
+    current_used: AtomicU32::new(0),
+    peak_used: AtomicU32::new(0),
+    exhausted: AtomicU64::new(0),
 };
 
 pub static TID_ALLOCATOR: PidAllocator = PidAllocator {
     // SAFETY: TID_BITMAP_STORAGE est un tableau statique aligné ; cast en PidBitmapPid valide
     //         car PidBitmapTid et PidBitmapPid ont le même layout (même type sous-jacent).
-    bitmap:         unsafe { &*(&TID_BITMAP_STORAGE as *const PidBitmapTid as *const PidBitmapPid) },
-    first_usable:   TID_FIRST_USABLE,
+    bitmap: unsafe { &*(&TID_BITMAP_STORAGE as *const PidBitmapTid as *const PidBitmapPid) },
+    first_usable: TID_FIRST_USABLE,
     total_capacity: TID_MAX,
-    alloc_count:    AtomicU64::new(0),
-    free_count:     AtomicU64::new(0),
-    current_used:   AtomicU32::new(0),
-    peak_used:      AtomicU32::new(0),
-    exhausted:      AtomicU64::new(0),
+    alloc_count: AtomicU64::new(0),
+    free_count: AtomicU64::new(0),
+    current_used: AtomicU32::new(0),
+    peak_used: AtomicU32::new(0),
+    exhausted: AtomicU64::new(0),
 };
 
 // SAFETY: PidAllocator n'accède à ses champs atomiques que via Atomic*.
@@ -240,9 +251,12 @@ impl PidAllocator {
                 let mut peak = self.peak_used.load(Ordering::Relaxed);
                 while cur > peak {
                     match self.peak_used.compare_exchange_weak(
-                        peak, cur, Ordering::Relaxed, Ordering::Relaxed,
+                        peak,
+                        cur,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
                     ) {
-                        Ok(_)  => break,
+                        Ok(_) => break,
                         Err(p) => peak = p,
                     }
                 }

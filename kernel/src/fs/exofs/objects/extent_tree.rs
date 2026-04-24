@@ -6,14 +6,11 @@
 //   OOM-02    : try_reserve(1) avant tout push
 //   RECUR-01  : itératif uniquement, jamais de récursion
 
-
-use core::fmt;
 use alloc::vec::Vec;
+use core::fmt;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::objects::extent::{
-    ObjectExtent, ObjectExtentDisk,
-};
+use crate::fs::exofs::objects::extent::{ObjectExtent, ObjectExtentDisk};
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
@@ -37,11 +34,11 @@ pub struct ExtentTree {
     /// Extents inline (slots initialisés à `None` = libre).
     inline_extents: [Option<ObjectExtent>; INLINE_EXTENT_COUNT],
     /// Extents supplémentaires au-delà de `INLINE_EXTENT_COUNT`.
-    spill:          Vec<ObjectExtent>,
+    spill: Vec<ObjectExtent>,
     /// Nombre total d'extents (inline + spill).
-    count:          usize,
+    count: usize,
     /// Statistiques.
-    pub stats:      ExtentTreeStats,
+    pub stats: ExtentTreeStats,
 }
 
 impl ExtentTree {
@@ -51,9 +48,9 @@ impl ExtentTree {
     pub fn new() -> Self {
         Self {
             inline_extents: [None; INLINE_EXTENT_COUNT],
-            spill:          Vec::new(),
-            count:          0,
-            stats:          ExtentTreeStats::new(),
+            spill: Vec::new(),
+            count: 0,
+            stats: ExtentTreeStats::new(),
         }
     }
 
@@ -84,7 +81,9 @@ impl ExtentTree {
             self.inline_extents[pos] = Some(extent);
         } else {
             // Spill vers le Vec heap.
-            self.spill.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+            self.spill
+                .try_reserve(1)
+                .map_err(|_| ExofsError::NoMemory)?;
             // Trouver la position dans le vec pour maintenir le tri.
             let pos = self.find_spill_insert_pos(extent.logical_offset);
             self.spill.insert(pos, extent);
@@ -137,14 +136,14 @@ impl ExtentTree {
     ///
     /// Retourne `None` si aucun extent ne couvre cet offset (trou).
     pub fn find_extent_for_offset(&self, offset: u64) -> Option<&ObjectExtent> {
-        self.stats.lookup_count.set(
-            self.stats.lookup_count.get().saturating_add(1)
-        );
+        self.stats
+            .lookup_count
+            .set(self.stats.lookup_count.get().saturating_add(1));
         for e in self.iter() {
             if e.contains_offset(offset) {
-                self.stats.lookup_hit.set(
-                    self.stats.lookup_hit.get().saturating_add(1)
-                );
+                self.stats
+                    .lookup_hit
+                    .set(self.stats.lookup_hit.get().saturating_add(1));
                 return Some(e);
             }
         }
@@ -175,9 +174,7 @@ impl ExtentTree {
     /// Itère sur tous les extents triés par `logical_offset` croissant.
     pub fn iter(&self) -> impl Iterator<Item = &ObjectExtent> {
         let inline_count = self.count.min(INLINE_EXTENT_COUNT);
-        let inline_iter  = self.inline_extents[..inline_count]
-            .iter()
-            .flatten();
+        let inline_iter = self.inline_extents[..inline_count].iter().flatten();
         let spill_iter = self.spill.iter();
         inline_iter.chain(spill_iter)
     }
@@ -198,9 +195,8 @@ impl ExtentTree {
 
     /// Taille totale des octets couverts par tous les extents (ARITH-02).
     pub fn total_data_size(&self) -> u64 {
-        self.iter().fold(0u64, |acc, e| {
-            acc.saturating_add(e.physical.len)
-        })
+        self.iter()
+            .fold(0u64, |acc, e| acc.saturating_add(e.physical.len))
     }
 
     /// Taille totale des extents non-sparse.
@@ -244,7 +240,7 @@ impl ExtentTree {
             // Avancer après cet extent.
             cursor = match e.logical_end() {
                 Ok(end) => end,
-                Err(_)  => return None,
+                Err(_) => return None,
             };
         }
         None // Pas de trou trouvé.
@@ -313,7 +309,8 @@ impl ExtentTree {
     /// Règle OOM-02 : `try_reserve` avant push.
     pub fn to_disk_vec(&self) -> ExofsResult<Vec<ObjectExtentDisk>> {
         let mut out = Vec::new();
-        out.try_reserve(self.count).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(self.count)
+            .map_err(|_| ExofsError::NoMemory)?;
         for e in self.iter() {
             out.push(e.to_disk());
         }
@@ -345,7 +342,7 @@ impl ExtentTree {
         let mut prev_end: Option<u64> = None;
         for e in self.iter() {
             e.validate()?;
-            let lo  = e.logical_offset;
+            let lo = e.logical_offset;
             let end = e.logical_end()?;
             if let Some(pe) = prev_end {
                 if lo < pe {
@@ -455,17 +452,17 @@ impl fmt::Debug for ExtentTree {
 /// sur `lookup_count` et `lookup_hit` (appelées depuis `&self`).
 pub struct ExtentTreeStats {
     /// Nombre d'insertions.
-    pub insert_count:  u64,
+    pub insert_count: u64,
     /// Nombre de suppressions.
-    pub remove_count:  u64,
+    pub remove_count: u64,
     /// Nombre de fusions.
-    pub merge_count:   u64,
+    pub merge_count: u64,
     /// Nombre de recherches.
-    lookup_count:      core::cell::Cell<u64>,
+    lookup_count: core::cell::Cell<u64>,
     /// Nombre de recherches ayant abouti.
-    lookup_hit:        core::cell::Cell<u64>,
+    lookup_hit: core::cell::Cell<u64>,
     /// Nombre d'erreurs de validation.
-    pub validate_err:  u64,
+    pub validate_err: u64,
 }
 
 impl ExtentTreeStats {
@@ -473,9 +470,9 @@ impl ExtentTreeStats {
         Self {
             insert_count: 0,
             remove_count: 0,
-            merge_count:  0,
+            merge_count: 0,
             lookup_count: core::cell::Cell::new(0),
-            lookup_hit:   core::cell::Cell::new(0),
+            lookup_hit: core::cell::Cell::new(0),
             validate_err: 0,
         }
     }
@@ -496,7 +493,8 @@ impl ExtentTreeStats {
         if total == 0 {
             return 100;
         }
-        self.lookup_hit.get()
+        self.lookup_hit
+            .get()
             .saturating_mul(100)
             .checked_div(total)
             .unwrap_or(0)
@@ -514,9 +512,9 @@ impl Clone for ExtentTreeStats {
         Self {
             insert_count: self.insert_count,
             remove_count: self.remove_count,
-            merge_count:  self.merge_count,
+            merge_count: self.merge_count,
             lookup_count: core::cell::Cell::new(self.lookup_count.get()),
-            lookup_hit:   core::cell::Cell::new(self.lookup_hit.get()),
+            lookup_hit: core::cell::Cell::new(self.lookup_hit.get()),
             validate_err: self.validate_err,
         }
     }
@@ -562,7 +560,7 @@ mod tests {
     #[test]
     fn test_insert_and_find() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0,      0x1000)).unwrap();
+        tree.insert(mk_extent(0, 0x1000)).unwrap();
         tree.insert(mk_extent(0x1000, 0x1000)).unwrap();
         tree.insert(mk_extent(0x2000, 0x1000)).unwrap();
 
@@ -605,7 +603,7 @@ mod tests {
     #[test]
     fn test_total_data_size() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0,      0x1000)).unwrap();
+        tree.insert(mk_extent(0, 0x1000)).unwrap();
         tree.insert(mk_extent(0x2000, 0x2000)).unwrap();
         assert_eq!(tree.total_data_size(), 0x3000);
     }
@@ -613,16 +611,16 @@ mod tests {
     #[test]
     fn test_sparse_size() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0,      0x1000)).unwrap(); // dense
+        tree.insert(mk_extent(0, 0x1000)).unwrap(); // dense
         tree.insert(mk_sparse(0x2000, 0x1000)).unwrap(); // sparse
-        assert_eq!(tree.sparse_size(),     0x1000);
+        assert_eq!(tree.sparse_size(), 0x1000);
         assert_eq!(tree.allocated_data_size(), 0x1000);
     }
 
     #[test]
     fn test_remove_at_offset() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0,      0x1000)).unwrap();
+        tree.insert(mk_extent(0, 0x1000)).unwrap();
         tree.insert(mk_extent(0x1000, 0x1000)).unwrap();
         let removed = tree.remove_at_offset(0x500).unwrap();
         assert_eq!(removed.logical_offset, 0);
@@ -633,19 +631,18 @@ mod tests {
     fn test_validate_sorted() {
         let mut tree = ExtentTree::new();
         tree.insert(mk_extent(0x2000, 0x1000)).unwrap();
-        tree.insert(mk_extent(0,      0x1000)).unwrap(); // inséré avant
+        tree.insert(mk_extent(0, 0x1000)).unwrap(); // inséré avant
         tree.validate().unwrap(); // doit être trié
     }
 
     #[test]
     fn test_disk_roundtrip() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0,      0x1000)).unwrap();
+        tree.insert(mk_extent(0, 0x1000)).unwrap();
         tree.insert(mk_extent(0x2000, 0x1000)).unwrap();
-        let disk  = tree.to_disk_vec().unwrap();
+        let disk = tree.to_disk_vec().unwrap();
         let tree2 = ExtentTree::from_disk_slice(&disk).unwrap();
         assert_eq!(tree2.len(), 2);
         assert_eq!(tree2.total_data_size(), tree.total_data_size());
     }
 }
-

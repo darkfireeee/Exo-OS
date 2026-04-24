@@ -190,18 +190,51 @@ pub const FUTEX_HASH_MASK: usize = FUTEX_HASH_BUCKETS - 1;
 // VÉRIFICATIONS STATIQUES
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _: () = assert!(PAGE_SIZE.is_power_of_two(), "PAGE_SIZE doit être une puissance de 2");
-const _: () = assert!(HUGE_PAGE_SIZE.is_power_of_two(), "HUGE_PAGE_SIZE doit être une puissance de 2");
-const _: () = assert!(GIGA_PAGE_SIZE.is_power_of_two(), "GIGA_PAGE_SIZE doit être une puissance de 2");
-const _: () = assert!(CACHE_LINE_SIZE.is_power_of_two(), "CACHE_LINE_SIZE doit être une puissance de 2");
-const _: () = assert!(DMA_RING_SIZE.is_power_of_two(), "DMA_RING_SIZE doit être une puissance de 2");
-const _: () = assert!(IPC_RING_SIZE.is_power_of_two(), "IPC_RING_SIZE doit être une puissance de 2");
-const _: () = assert!(FUTEX_HASH_BUCKETS.is_power_of_two(), "FUTEX_HASH_BUCKETS doit être une puissance de 2");
+const _: () = assert!(
+    PAGE_SIZE.is_power_of_two(),
+    "PAGE_SIZE doit être une puissance de 2"
+);
+const _: () = assert!(
+    HUGE_PAGE_SIZE.is_power_of_two(),
+    "HUGE_PAGE_SIZE doit être une puissance de 2"
+);
+const _: () = assert!(
+    GIGA_PAGE_SIZE.is_power_of_two(),
+    "GIGA_PAGE_SIZE doit être une puissance de 2"
+);
+const _: () = assert!(
+    CACHE_LINE_SIZE.is_power_of_two(),
+    "CACHE_LINE_SIZE doit être une puissance de 2"
+);
+const _: () = assert!(
+    DMA_RING_SIZE.is_power_of_two(),
+    "DMA_RING_SIZE doit être une puissance de 2"
+);
+const _: () = assert!(
+    IPC_RING_SIZE.is_power_of_two(),
+    "IPC_RING_SIZE doit être une puissance de 2"
+);
+const _: () = assert!(
+    FUTEX_HASH_BUCKETS.is_power_of_two(),
+    "FUTEX_HASH_BUCKETS doit être une puissance de 2"
+);
 const _: () = assert!(PAGE_SHIFT == 12, "PAGE_SHIFT doit être 12 pour x86_64");
 const _: () = assert!(HUGE_PAGE_SHIFT == 21, "HUGE_PAGE_SHIFT doit être 21 (2MiB)");
-const _: () = assert!(EMERGENCY_POOL_SIZE >= 256, "EmergencyPool trop petit (< 256) — risque DoS par épuisement (SCHED-POOL)");
+const _: () = assert!(
+    EMERGENCY_POOL_SIZE >= 256,
+    "EmergencyPool trop petit (< 256) — risque DoS par épuisement (SCHED-POOL)"
+);
 const _: () = assert!(BUDDY_MAX_ORDER <= 20, "BUDDY_MAX_ORDER excessif");
 const _: () = assert!(MAX_CPUS <= 4096, "MAX_CPUS dépasse la limite x2APIC");
-const _: () = assert!(ZONE_DMA_END == 16 * 1024 * 1024, "Zone DMA doit se terminer à 16MiB");
-const _: () = assert!(1 << PAGE_SHIFT == PAGE_SIZE, "PAGE_SHIFT incohérent avec PAGE_SIZE");
-const _: () = assert!(1 << HUGE_PAGE_SHIFT == HUGE_PAGE_SIZE, "HUGE_PAGE_SHIFT incohérent");
+const _: () = assert!(
+    ZONE_DMA_END == 16 * 1024 * 1024,
+    "Zone DMA doit se terminer à 16MiB"
+);
+const _: () = assert!(
+    1 << PAGE_SHIFT == PAGE_SIZE,
+    "PAGE_SHIFT incohérent avec PAGE_SIZE"
+);
+const _: () = assert!(
+    1 << HUGE_PAGE_SHIFT == HUGE_PAGE_SIZE,
+    "HUGE_PAGE_SHIFT incohérent"
+);

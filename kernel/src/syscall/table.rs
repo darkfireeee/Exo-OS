@@ -21,64 +21,36 @@
 //! ## RÈGLE CONTRAT UNSAFE (regle_bonus.md)
 //! Tout `unsafe {}` est précédé d'un commentaire `// SAFETY:`.
 
-
 extern crate alloc;
 
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use crate::syscall::fast_path::Timespec;
 use crate::syscall::numbers::*;
 use crate::syscall::validation::{
-    UserBuf,
-    copy_from_user,
-    copy_to_user,
-    read_user_path, read_user_typed,
-    write_user_typed,
-    validate_fd, validate_flags, validate_signal, IO_BUF_MAX,
+    copy_from_user, copy_to_user, read_user_path, read_user_typed, validate_fd, validate_flags,
+    validate_signal, write_user_typed, UserBuf, IO_BUF_MAX,
 };
-use crate::syscall::fast_path::Timespec;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 // GI-03 IRQ types et fonctions
 use crate::arch::x86_64::irq::{
-    IpcEndpoint,
-    IrqAckResult,
-    IrqOwnerPid,
-    IrqVector,
-    parse_irq_source_kind,
-    irq_error_to_errno,
+    irq_error_to_errno, parse_irq_source_kind, IpcEndpoint, IrqAckResult, IrqOwnerPid, IrqVector,
 };
 // GI-03 Driver types
 use crate::drivers::{ClaimError, MmioError, MsiError, PciCfgError, TopoError};
 
-use crate::memory::core::types::PhysAddr;
-use crate::memory::dma::core::types::{
-    DmaDirection,
-    DmaError,
-    DmaMapFlags,
-    IommuDomainId,
-    IovaAddr,
+use crate::fs::exofs::syscall::{
+    sys_exofs_epoch_commit, sys_exofs_export_object, sys_exofs_gc_trigger,
+    sys_exofs_get_content_hash, sys_exofs_import_object, sys_exofs_object_create,
+    sys_exofs_object_delete, sys_exofs_object_open, sys_exofs_object_read,
+    sys_exofs_object_set_meta, sys_exofs_object_stat, sys_exofs_object_write,
+    sys_exofs_open_by_path, sys_exofs_path_resolve, sys_exofs_quota_query, sys_exofs_readdir,
+    sys_exofs_relation_create, sys_exofs_relation_query, sys_exofs_snapshot_create,
+    sys_exofs_snapshot_list, sys_exofs_snapshot_mount,
 };
 use crate::ipc::core::types::{EndpointId, IpcError};
-use crate::fs::exofs::syscall::{
-    sys_exofs_path_resolve,
-    sys_exofs_object_open,
-    sys_exofs_object_read,
-    sys_exofs_object_write,
-    sys_exofs_object_create,
-    sys_exofs_object_delete,
-    sys_exofs_object_stat,
-    sys_exofs_object_set_meta,
-    sys_exofs_get_content_hash,
-    sys_exofs_snapshot_create,
-    sys_exofs_snapshot_list,
-    sys_exofs_snapshot_mount,
-    sys_exofs_relation_create,
-    sys_exofs_relation_query,
-    sys_exofs_gc_trigger,
-    sys_exofs_quota_query,
-    sys_exofs_export_object,
-    sys_exofs_import_object,
-    sys_exofs_epoch_commit,
-    sys_exofs_open_by_path,
-    sys_exofs_readdir,
+use crate::memory::core::types::PhysAddr;
+use crate::memory::dma::core::types::{
+    DmaDirection, DmaError, DmaMapFlags, IommuDomainId, IovaAddr,
 };
 use pci_types::PciAddress;
 
@@ -102,7 +74,7 @@ static SYSCALL_STATS: [AtomicU64; SYSCALL_TABLE_SIZE] = {
     // [0u64; N] est une séquence d'octets nuls valide pour [AtomicU64; N].
     unsafe {
         core::mem::transmute::<[u64; SYSCALL_TABLE_SIZE], [AtomicU64; SYSCALL_TABLE_SIZE]>(
-            [0u64; SYSCALL_TABLE_SIZE]
+            [0u64; SYSCALL_TABLE_SIZE],
         )
     }
 };
@@ -139,8 +111,7 @@ fn stat_inc(nr: u64) {
 #[allow(unused_macros)]
 macro_rules! enosys_handler {
     () => {
-        (|_a: u64, _b: u64, _c: u64, _d: u64, _e: u64, _f: u64| -> i64 { ENOSYS })
-            as SyscallHandler
+        (|_a: u64, _b: u64, _c: u64, _d: u64, _e: u64, _f: u64| -> i64 { ENOSYS }) as SyscallHandler
     };
 }
 
@@ -174,7 +145,10 @@ pub fn sys_exofs_object_set_meta_abi(
 /// `read(fd, buf, count)` → nombre d'octets lus ou errno.
 pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_READ);
-    let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
     let len = count as usize;
     // Borne maximale pour éviter les timeout : IO_BUF_MAX
     if len > IO_BUF_MAX {
@@ -182,7 +156,8 @@ pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64)
     }
     // Valider le buffer de destination
     let _validated_buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
-        Ok(b) => b, Err(e) => return e.to_errno()
+        Ok(b) => b,
+        Err(e) => return e.to_errno(),
     };
     // CORRECTION P0-04 : câbler vers fs_bridge
     use crate::syscall::fs_bridge;
@@ -193,13 +168,17 @@ pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64)
 /// `write(fd, buf, count)` → nombre d'octets écrits ou errno.
 pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_WRITE);
-    let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
     let len = count as usize;
     if len > IO_BUF_MAX {
         return E2BIG;
     }
     let _validated_buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
-        Ok(b) => b, Err(e) => return e.to_errno()
+        Ok(b) => b,
+        Err(e) => return e.to_errno(),
     };
     // CORRECTION P0-04 : câbler vers fs_bridge
     use crate::syscall::fs_bridge;
@@ -211,25 +190,33 @@ pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64
 pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_OPEN);
     let path = match read_user_path(path_ptr) {
-        Ok(p) => p, Err(e) => return e.to_errno()
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
     };
     // Flags O_RDONLY/O_WRONLY/O_RDWR | O_CREAT | O_EXCL | O_TRUNC | O_APPEND | O_NONBLOCK
     let allowed_flags = 0x0040_1FFFu64;
     let flags = match validate_flags(flags, allowed_flags) {
-        Ok(f) => f, Err(e) => return e.to_errno()
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
     };
     // CORRECTION P0-04 : câbler vers fs_bridge
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(
-        fs_bridge::fs_open(path.as_bytes(), flags as u32, mode as u32, pid)
-    )
+    fs_bridge::bridge_result(fs_bridge::fs_open(
+        path.as_bytes(),
+        flags as u32,
+        mode as u32,
+        pid,
+    ))
 }
 
 /// `close(fd)` → 0 ou errno.
 pub fn sys_close(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CLOSE);
-    let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
     // CORRECTION P0-04 : câbler vers fs_bridge
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
@@ -239,34 +226,53 @@ pub fn sys_close(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i
 /// `lseek(fd, offset, whence)` → nouvelle position ou errno.
 pub fn sys_lseek(fd: u64, offset: u64, whence: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_LSEEK);
-    let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    if whence > 2 { return EINVAL; }
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    if whence > 2 {
+        return EINVAL;
+    }
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_lseek(fd as u32, offset as i64, whence as u32, pid))
+    fs_bridge::bridge_result(fs_bridge::fs_lseek(
+        fd as u32,
+        offset as i64,
+        whence as u32,
+        pid,
+    ))
 }
 
 /// `openat(dirfd, path, flags, mode)`.
 pub fn sys_openat(dirfd: u64, path_ptr: u64, flags: u64, mode: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_OPENAT);
     let path = match read_user_path(path_ptr) {
-        Ok(p) => p, Err(e) => return e.to_errno()
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
     };
     let allowed_flags = 0x0040_1FFFu64;
     let flags = match validate_flags(flags, allowed_flags) {
-        Ok(f) => f, Err(e) => return e.to_errno()
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(
-        fs_bridge::fs_openat(dirfd as i32, path.as_bytes(), flags as u32, mode as u32, pid)
-    )
+    fs_bridge::bridge_result(fs_bridge::fs_openat(
+        dirfd as i32,
+        path.as_bytes(),
+        flags as u32,
+        mode as u32,
+        pid,
+    ))
 }
 
 /// `dup(oldfd)` → nouveau fd ou errno.
 pub fn sys_dup(oldfd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_DUP);
-    let fd = match validate_fd(oldfd) { Ok(f) => f, Err(e) => return e.to_errno() };
+    let fd = match validate_fd(oldfd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_dup(fd as u32, pid))
@@ -275,8 +281,14 @@ pub fn sys_dup(oldfd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> 
 /// `dup2(oldfd, newfd)`.
 pub fn sys_dup2(oldfd: u64, newfd: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_DUP2);
-    let old = match validate_fd(oldfd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    let new = match validate_fd(newfd) { Ok(f) => f, Err(e) => return e.to_errno() };
+    let old = match validate_fd(oldfd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    let new = match validate_fd(newfd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_dup2(old as u32, new as u32, pid))
@@ -285,7 +297,10 @@ pub fn sys_dup2(oldfd: u64, newfd: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) 
 /// `fcntl(fd, cmd, arg)`.
 pub fn sys_fcntl(fd: u64, cmd: u64, arg: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_FCNTL);
-    let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_fcntl(fd as u32, cmd as u32, arg, pid))
@@ -295,9 +310,12 @@ pub fn sys_fcntl(fd: u64, cmd: u64, arg: u64, _a4: u64, _a5: u64, _a6: u64) -> i
 pub fn sys_stat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_STAT);
     let path = match read_user_path(path_ptr) {
-        Ok(p) => p, Err(e) => return e.to_errno()
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
     };
-    if stat_ptr == 0 { return EFAULT; }
+    if stat_ptr == 0 {
+        return EFAULT;
+    }
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_stat(path.as_bytes(), stat_ptr, pid))
@@ -306,18 +324,39 @@ pub fn sys_stat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6:
 /// `fstat(fd, stat_buf)`.
 pub fn sys_fstat(fd: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_FSTAT);
-    let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    if stat_ptr == 0 { return EFAULT; }
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    if stat_ptr == 0 {
+        return EFAULT;
+    }
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_fstat(fd as u32, stat_ptr, pid))
+}
+
+/// `lstat(path, stat_buf)` — ne suit pas le symlink terminal.
+pub fn sys_lstat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_LSTAT);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    if stat_ptr == 0 {
+        return EFAULT;
+    }
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_lstat(path.as_bytes(), stat_ptr, pid))
 }
 
 /// `mkdir(path, mode)`.
 pub fn sys_mkdir(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_MKDIR);
     let path = match read_user_path(path_ptr) {
-        Ok(p) => p, Err(e) => return e.to_errno()
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
@@ -328,7 +367,8 @@ pub fn sys_mkdir(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
 pub fn sys_rmdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_RMDIR);
     let path = match read_user_path(path_ptr) {
-        Ok(p) => p, Err(e) => return e.to_errno()
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
@@ -339,31 +379,108 @@ pub fn sys_rmdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
 pub fn sys_unlink(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_UNLINK);
     let path = match read_user_path(path_ptr) {
-        Ok(p) => p, Err(e) => return e.to_errno()
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_unlink(path.as_bytes(), pid))
 }
 
-/// `getdents64(fd, dirp, count)`.
-pub fn sys_getdents64(fd: u64, dirp: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    stat_inc(SYS_GETDENTS64);
-    let fd = match validate_fd(fd) { Ok(f) => f, Err(e) => return e.to_errno() };
-    use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_getdents64(fd as u32, dirp, count as usize, pid))
-}
-
-/// `readlink(path, buf, bufsize)`.
-pub fn sys_readlink(path_ptr: u64, buf_ptr: u64, bufsize: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    stat_inc(SYS_READLINK);
-    let path = match read_user_path(path_ptr) {
-        Ok(p) => p, Err(e) => return e.to_errno()
+/// `symlink(target, linkpath)`.
+pub fn sys_symlink(
+    target_ptr: u64,
+    linkpath_ptr: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_SYMLINK);
+    let target = match read_user_path(target_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    let linkpath = match read_user_path(linkpath_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_readlink(path.as_bytes(), buf_ptr, bufsize as usize, pid))
+    fs_bridge::bridge_result(fs_bridge::fs_symlink(
+        target.as_bytes(),
+        linkpath.as_bytes(),
+        pid,
+    ))
+}
+
+/// `symlinkat(target, dirfd, linkpath)`.
+pub fn sys_symlinkat(
+    target_ptr: u64,
+    dirfd: u64,
+    linkpath_ptr: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_SYMLINKAT);
+    let target = match read_user_path(target_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    let linkpath = match read_user_path(linkpath_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_symlinkat(
+        target.as_bytes(),
+        dirfd as i32,
+        linkpath.as_bytes(),
+        pid,
+    ))
+}
+
+/// `getdents64(fd, dirp, count)`.
+pub fn sys_getdents64(fd: u64, dirp: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_GETDENTS64);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_getdents64(
+        fd as u32,
+        dirp,
+        count as usize,
+        pid,
+    ))
+}
+
+/// `readlink(path, buf, bufsize)`.
+pub fn sys_readlink(
+    path_ptr: u64,
+    buf_ptr: u64,
+    bufsize: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_READLINK);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_readlink(
+        path.as_bytes(),
+        buf_ptr,
+        bufsize as usize,
+        pid,
+    ))
 }
 
 /// `readlinkat(dirfd, path, buf, bufsize)`.
@@ -377,11 +494,18 @@ pub fn sys_readlinkat(
 ) -> i64 {
     stat_inc(SYS_READLINKAT);
     let path = match read_user_path(path_ptr) {
-        Ok(p) => p, Err(e) => return e.to_errno()
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_readlinkat(dirfd as i32, path.as_bytes(), buf_ptr, bufsize as usize, pid))
+    fs_bridge::bridge_result(fs_bridge::fs_readlinkat(
+        dirfd as i32,
+        path.as_bytes(),
+        buf_ptr,
+        bufsize as usize,
+        pid,
+    ))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -392,11 +516,18 @@ pub fn sys_readlinkat(
 pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -> i64 {
     stat_inc(SYS_MMAP);
     // Longueur doit être > 0 et multiple de PAGE_SIZE
-    if len == 0 { return EINVAL; }
+    if len == 0 {
+        return EINVAL;
+    }
     let _len_pages = (len as usize + 4095) / 4096;
     // Déléguer à memory/virtual/mmap.rs
     match crate::memory::virt::mmap::do_mmap(
-        addr, len as usize, prot as u32, flags as u32, fd as i32, off
+        addr,
+        len as usize,
+        prot as u32,
+        flags as u32,
+        fd as i32,
+        off,
     ) {
         Ok(va) => va as i64,
         Err(e) => e.to_kernel_errno() as i64,
@@ -406,7 +537,9 @@ pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -
 /// `munmap(addr, len)`.
 pub fn sys_munmap(addr: u64, len: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_MUNMAP);
-    if len == 0 { return EINVAL; }
+    if len == 0 {
+        return EINVAL;
+    }
     match crate::memory::virt::mmap::do_munmap(addr, len as usize) {
         Ok(_) => 0,
         Err(e) => e.to_kernel_errno() as i64,
@@ -416,7 +549,9 @@ pub fn sys_munmap(addr: u64, len: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
 /// `mprotect(addr, len, prot)`.
 pub fn sys_mprotect(addr: u64, len: u64, prot: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_MPROTECT);
-    if len == 0 { return EINVAL; }
+    if len == 0 {
+        return EINVAL;
+    }
     match crate::memory::virt::mmap::do_mprotect(addr, len as usize, prot as u32) {
         Ok(_) => 0,
         Err(e) => e.to_kernel_errno() as i64,
@@ -428,7 +563,7 @@ pub fn sys_brk(addr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i
     stat_inc(SYS_BRK);
     match crate::memory::virt::mmap::do_brk(addr) {
         Ok(new_brk) => new_brk as i64,
-        Err(_)      => ENOMEM,
+        Err(_) => ENOMEM,
     }
 }
 
@@ -465,8 +600,12 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u6
     let current_pid_val: u32 = unsafe {
         let ptr: u64;
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nomem, nostack));
-        if ptr == 0 { return EFAULT; }
-        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock)).pid.0
+        if ptr == 0 {
+            return EFAULT;
+        }
+        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock))
+            .pid
+            .0
     };
 
     // Trouver le PCB du processus courant dans le registry global.
@@ -474,46 +613,58 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u6
         .find_by_pid(crate::process::core::pid::Pid(current_pid_val))
     {
         Some(p) => p,
-        None    => return -3i64, // ESRCH
+        None => return -3i64, // ESRCH
     };
 
     // Point d'entrée : tls en priorité (pthread_create convention) puis ctid.
-    let start_func  = if tls  != 0 { tls  } else { ctid };
+    let start_func = if tls != 0 { tls } else { ctid };
     // Stack : l'appelant fournit RSP ou on alloue un stack kernel par défaut.
-    let stack_addr  = if stack != 0 { stack.saturating_sub(16) } else { 0 };
-    let stack_size  = if stack != 0 { 0 } else { 8 * 1024 * 1024 };
-    let detached    = (flags & 0x0040_0000) != 0; // CLONE_DETACHED
+    let stack_addr = if stack != 0 {
+        stack.saturating_sub(16)
+    } else {
+        0
+    };
+    let stack_size = if stack != 0 { 0 } else { 8 * 1024 * 1024 };
+    let detached = (flags & 0x0040_0000) != 0; // CLONE_DETACHED
 
     let attr = crate::process::thread::creation::ThreadAttr {
         stack_size,
         stack_addr,
-        policy:           crate::scheduler::core::task::SchedPolicy::Normal,
-        priority:         crate::scheduler::core::task::Priority::NORMAL_DEFAULT,
+        policy: crate::scheduler::core::task::SchedPolicy::Normal,
+        priority: crate::scheduler::core::task::Priority::NORMAL_DEFAULT,
         detached,
-        cpu_affinity:     -1,
+        cpu_affinity: -1,
         sigaltstack_size: 8192,
     };
     let params = crate::process::thread::creation::ThreadCreateParams {
-        pcb:         pcb_ref as *const crate::process::core::pcb::ProcessControlBlock,
+        pcb: pcb_ref as *const crate::process::core::pcb::ProcessControlBlock,
         attr,
         start_func,
-        arg:         0,
-        target_cpu:  0,
+        arg: 0,
+        target_cpu: 0,
         pthread_out: ptid,
     };
     match crate::process::thread::creation::create_thread(&params) {
-        Ok(handle)  => handle.tid.0 as i64,
-        Err(crate::process::thread::creation::ThreadCreateError::OutOfMemory)  => ENOMEM,
+        Ok(handle) => handle.tid.0 as i64,
+        Err(crate::process::thread::creation::ThreadCreateError::OutOfMemory) => ENOMEM,
         Err(crate::process::thread::creation::ThreadCreateError::TidExhausted) => EAGAIN,
-        Err(_)      => EINVAL,
+        Err(_) => EINVAL,
     }
 }
 
 /// `execve(path, argv, envp)`.
-pub fn sys_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_execve(
+    path_ptr: u64,
+    argv_ptr: u64,
+    envp_ptr: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     stat_inc(SYS_EXECVE);
     let path = match read_user_path(path_ptr) {
-        Ok(p) => p, Err(e) => return e.to_errno()
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
     };
     // do_execve requiert &mut ProcessThread + &ProcessControlBlock — câblé lors de l'intégration.
     let _ = (path, argv_ptr, envp_ptr);
@@ -545,7 +696,12 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
             if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid) {
                 use core::sync::atomic::Ordering;
                 pcb.exit_code.store(exit_code, Ordering::Release);
+                pcb.flags.fetch_or(
+                    crate::process::core::pcb::process_flags::VFORK_DONE,
+                    Ordering::Release,
+                );
                 pcb.set_state(crate::process::core::pcb::ProcessState::Zombie);
+                crate::process::lifecycle::fork::notify_vfork_completion(pid);
             }
 
             // Transition Dead → pick_next_task ignorera ce thread.
@@ -558,7 +714,11 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
     }
     // Unreachable après schedule_block avec état Dead (satisfait le type -> i64).
     #[allow(clippy::empty_loop)]
-    loop { unsafe { core::arch::asm!("hlt", options(nomem, nostack)); } }
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack));
+        }
+    }
 }
 
 /// `exit_group(status)` — termine tous les threads du groupe de processus.
@@ -573,7 +733,14 @@ pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: 
 
 /// `wait4(pid, wstatus, options, rusage)`.
 /// do_waitpid(caller_pid, wait_pid, WaitOptions, &tcb) câblé lors de l'intégration.
-pub fn sys_wait4(pid: u64, wstatus_ptr: u64, options: u64, rusage_ptr: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_wait4(
+    pid: u64,
+    wstatus_ptr: u64,
+    options: u64,
+    rusage_ptr: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     stat_inc(SYS_WAIT4);
     crate::syscall::handlers::process::sys_wait4(pid, wstatus_ptr, options, rusage_ptr, 0, 0)
 }
@@ -589,15 +756,20 @@ pub fn sys_wait4(pid: u64, wstatus_ptr: u64, options: u64, rusage_ptr: u64, _a5:
 /// La livraison effective se fait au retour userspace du thread cible.
 pub fn sys_kill(pid: u64, sig: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_KILL);
-    let sig_n = match validate_signal(sig) { Ok(s) => s as u8, Err(e) => return e.to_errno() };
-    if sig_n == 0 { return 0; } // Signal 0 = vérification d'existence seulement
+    let sig_n = match validate_signal(sig) {
+        Ok(s) => s as u8,
+        Err(e) => return e.to_errno(),
+    };
+    if sig_n == 0 {
+        return 0;
+    } // Signal 0 = vérification d'existence seulement
     let signal = match crate::process::signal::default::Signal::from_u8(sig_n) {
         Some(s) => s,
-        None    => return EINVAL,
+        None => return EINVAL,
     };
     use crate::process::core::pid::Pid;
     match crate::process::signal::delivery::send_signal_to_pid(Pid(pid as u32), signal) {
-        Ok(_)  => 0,
+        Ok(_) => 0,
         Err(_) => -3i64, // ESRCH
     }
 }
@@ -609,19 +781,40 @@ pub fn sys_tgkill(tgid: u64, tid: u64, sig: u64, _a4: u64, _a5: u64, _a6: u64) -
 }
 
 /// `rt_sigaction(sig, act_ptr, oldact_ptr, sigsetsize)`.
-pub fn sys_rt_sigaction(sig: u64, act_ptr: u64, oldact_ptr: u64, size: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_rt_sigaction(
+    sig: u64,
+    act_ptr: u64,
+    oldact_ptr: u64,
+    size: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     stat_inc(SYS_RT_SIGACTION);
     crate::syscall::handlers::signal::sys_rt_sigaction(sig, act_ptr, oldact_ptr, size, 0, 0)
 }
 
 /// `rt_sigprocmask(how, set, oldset, sigsetsize)`.
-pub fn sys_rt_sigprocmask(how: u64, set_ptr: u64, oldset_ptr: u64, size: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_rt_sigprocmask(
+    how: u64,
+    set_ptr: u64,
+    oldset_ptr: u64,
+    size: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     stat_inc(SYS_RT_SIGPROCMASK);
     crate::syscall::handlers::signal::sys_rt_sigprocmask(how, set_ptr, oldset_ptr, size, 0, 0)
 }
 
 /// `sigaltstack(ss_ptr, old_ss_ptr)` — configure le stack alternatif pour les signaux.
-pub fn sys_sigaltstack(ss_ptr: u64, old_ss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_sigaltstack(
+    ss_ptr: u64,
+    old_ss_ptr: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     stat_inc(SYS_SIGALTSTACK);
     crate::syscall::handlers::signal::sys_sigaltstack(ss_ptr, old_ss_ptr, 0, 0, 0, 0)
 }
@@ -633,9 +826,11 @@ pub fn sys_sigaltstack(ss_ptr: u64, old_ss_ptr: u64, _a3: u64, _a4: u64, _a5: u6
 /// `nanosleep(req_ptr, rem_ptr)` — suspend le thread pendant une durée.
 pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_NANOSLEEP);
-    if req_ptr == 0 { return EFAULT; }
+    if req_ptr == 0 {
+        return EFAULT;
+    }
     let ts = match read_user_typed::<Timespec>(req_ptr) {
-        Ok(t)  => t,
+        Ok(t) => t,
         Err(e) => return e.to_errno(),
     };
     if ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1_000_000_000 {
@@ -646,7 +841,9 @@ pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _
     // Pour l'instant : busy-wait TSC (acceptable pour les délais courts de boot).
     let deadline = crate::scheduler::timer::clock::monotonic_ns().saturating_add(ns);
     loop {
-        if crate::scheduler::timer::clock::monotonic_ns() >= deadline { break; }
+        if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
+            break;
+        }
         core::hint::spin_loop();
     }
     let _ = rem_ptr;
@@ -658,9 +855,14 @@ pub fn sys_futex(uaddr: u64, op: u64, val: u64, timeout: u64, uaddr2: u64, val3:
     stat_inc(SYS_FUTEX);
     // futex est dans memory/utils/futex_table.rs (RÈGLE SCHED-03 DOC3).
     match crate::memory::utils::futex_table::sys_futex(
-        uaddr, op as u32, val as u32, timeout, uaddr2, val3 as u32
+        uaddr,
+        op as u32,
+        val as u32,
+        timeout,
+        uaddr2,
+        val3 as u32,
     ) {
-        Ok(v)  => v,
+        Ok(v) => v,
         Err(e) => e.to_kernel_errno() as i64,
     }
 }
@@ -670,7 +872,14 @@ pub fn sys_futex(uaddr: u64, op: u64, val: u64, timeout: u64, uaddr2: u64, val3:
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `exo_ipc_send(endpoint, msg_ptr, msg_len, flags)`.
-pub fn sys_exo_ipc_send(endpoint: u64, msg_ptr: u64, msg_len: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_exo_ipc_send(
+    endpoint: u64,
+    msg_ptr: u64,
+    msg_len: u64,
+    flags: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     stat_inc(SYS_EXO_IPC_SEND);
     let len = msg_len as usize;
     if len > crate::ipc::core::constants::MAX_MSG_SIZE {
@@ -683,9 +892,11 @@ pub fn sys_exo_ipc_send(endpoint: u64, msg_ptr: u64, msg_len: u64, flags: u64, _
         Some(id) => id,
         None => return EINVAL,
     };
-    let _validated_buf = match UserBuf::validate(msg_ptr, len, crate::ipc::core::constants::MAX_MSG_SIZE) {
-        Ok(b) => b, Err(e) => return e.to_errno()
-    };
+    let _validated_buf =
+        match UserBuf::validate(msg_ptr, len, crate::ipc::core::constants::MAX_MSG_SIZE) {
+            Ok(b) => b,
+            Err(e) => return e.to_errno(),
+        };
     let mut payload = Vec::new();
     payload.resize(len, 0);
     if len != 0 {
@@ -693,7 +904,11 @@ pub fn sys_exo_ipc_send(endpoint: u64, msg_ptr: u64, msg_len: u64, flags: u64, _
             return EFAULT;
         }
     }
-    let raw_flags = if flags & IPC_RECV_TIMEOUT_FLAG != 0 { 0x0001 } else { 0 };
+    let raw_flags = if flags & IPC_RECV_TIMEOUT_FLAG != 0 {
+        0x0001
+    } else {
+        0
+    };
     match crate::ipc::channel::raw::send_raw(endpoint_id, &payload, raw_flags) {
         Ok(_) => 0,
         Err(err) => ipc_error_to_errno(err),
@@ -701,23 +916,45 @@ pub fn sys_exo_ipc_send(endpoint: u64, msg_ptr: u64, msg_len: u64, flags: u64, _
 }
 
 /// `exo_ipc_recv(endpoint, buf_ptr, buf_len, flags)`.
-pub fn sys_exo_ipc_recv(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_exo_ipc_recv(
+    endpoint: u64,
+    buf_ptr: u64,
+    buf_len: u64,
+    flags: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     stat_inc(SYS_EXO_IPC_RECV);
     recv_ipc_message(endpoint, buf_ptr, buf_len, flags, false)
 }
 
 /// `exo_ipc_recv_nb(endpoint, buf_ptr, buf_len, flags)`.
-pub fn sys_exo_ipc_recv_nb(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_exo_ipc_recv_nb(
+    endpoint: u64,
+    buf_ptr: u64,
+    buf_len: u64,
+    flags: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     stat_inc(SYS_EXO_IPC_RECV_NB);
     recv_ipc_message(endpoint, buf_ptr, buf_len, flags, true)
 }
 
 /// `exo_ipc_call(endpoint, msg_ptr, msg_len, resp_ptr, resp_len, flags)`.
-pub fn sys_exo_ipc_call(endpoint: u64, msg_ptr: u64, msg_len: u64, resp_ptr: u64, resp_len: u64, flags: u64) -> i64 {
+pub fn sys_exo_ipc_call(
+    endpoint: u64,
+    msg_ptr: u64,
+    msg_len: u64,
+    resp_ptr: u64,
+    resp_len: u64,
+    flags: u64,
+) -> i64 {
     stat_inc(SYS_EXO_IPC_CALL);
     let send_len = msg_len as usize;
     let recv_len = resp_len as usize;
-    if send_len > crate::ipc::rpc::MAX_CALL_PAYLOAD || recv_len > crate::ipc::rpc::MAX_CALL_PAYLOAD {
+    if send_len > crate::ipc::rpc::MAX_CALL_PAYLOAD || recv_len > crate::ipc::rpc::MAX_CALL_PAYLOAD
+    {
         return E2BIG;
     }
     if flags != 0 {
@@ -751,7 +988,9 @@ pub fn sys_exo_ipc_call(endpoint: u64, msg_ptr: u64, msg_len: u64, resp_ptr: u64
 
     match crate::ipc::rpc::call_raw(server_ep, &request, &mut response) {
         Ok(reply_len) => {
-            if reply_len != 0 && copy_to_user(resp_ptr as *mut u8, response.as_ptr(), reply_len).is_err() {
+            if reply_len != 0
+                && copy_to_user(resp_ptr as *mut u8, response.as_ptr(), reply_len).is_err()
+            {
                 return EFAULT;
             }
             reply_len as i64
@@ -761,7 +1000,14 @@ pub fn sys_exo_ipc_call(endpoint: u64, msg_ptr: u64, msg_len: u64, resp_ptr: u64
 }
 
 /// `exo_ipc_create(name_ptr, name_len, endpoint)` — ouvre la mailbox raw du serveur.
-pub fn sys_exo_ipc_create(name_ptr: u64, name_len: u64, endpoint: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_exo_ipc_create(
+    name_ptr: u64,
+    name_len: u64,
+    endpoint: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     stat_inc(SYS_EXO_IPC_CREATE);
     let len = name_len as usize;
     if len == 0 || len > 128 {
@@ -832,8 +1078,14 @@ fn current_pid_u32() -> u32 {
     unsafe {
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
     }
-    if tcb_ptr == 0 { return 0; }
-    unsafe { (*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock)).pid.0 }
+    if tcb_ptr == 0 {
+        return 0;
+    }
+    unsafe {
+        (*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock))
+            .pid
+            .0
+    }
 }
 
 const IPC_RECV_TIMEOUT_FLAG: u64 = 0x0001;
@@ -862,7 +1114,8 @@ fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, nowai
         let deadline = crate::scheduler::timer::clock::monotonic_ns()
             .saturating_add(timeout_ms.saturating_mul(1_000_000));
         loop {
-            match crate::ipc::channel::raw::recv_raw(endpoint_id, &mut payload[..recv_cap], 0x0001) {
+            match crate::ipc::channel::raw::recv_raw(endpoint_id, &mut payload[..recv_cap], 0x0001)
+            {
                 Ok(n) => break Ok(n),
                 Err(IpcError::WouldBlock) | Err(IpcError::QueueEmpty) => {
                     if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
@@ -896,14 +1149,11 @@ fn ipc_error_to_errno(err: IpcError) -> i64 {
         | IpcError::Full
         | IpcError::QueueFull
         | IpcError::QueueEmpty => EAGAIN,
-        IpcError::EndpointNotFound
-        | IpcError::NotFound => ENOENT,
+        IpcError::EndpointNotFound | IpcError::NotFound => ENOENT,
         IpcError::PermissionDenied => EACCES,
         IpcError::MessageTooLarge => E2BIG,
         IpcError::Timeout => EAGAIN,
-        IpcError::ResourceExhausted
-        | IpcError::ShmPoolFull
-        | IpcError::OutOfResources => ENOMEM,
+        IpcError::ResourceExhausted | IpcError::ShmPoolFull | IpcError::OutOfResources => ENOMEM,
         IpcError::ConnRefused => ENOENT,
         IpcError::AlreadyConnected => EBUSY,
         IpcError::InvalidParam
@@ -913,8 +1163,7 @@ fn ipc_error_to_errno(err: IpcError) -> i64 {
         | IpcError::InvalidEndpoint
         | IpcError::InvalidArgument => EINVAL,
         IpcError::Interrupted => EINTR,
-        IpcError::ChannelClosed
-        | IpcError::Closed => EBUSY,
+        IpcError::ChannelClosed | IpcError::Closed => EBUSY,
         IpcError::HandshakeFailed
         | IpcError::OutOfOrder
         | IpcError::ProtocolError
@@ -957,11 +1206,18 @@ fn enforce_direct_ipc_policy(endpoint: u64) -> Result<(), i64> {
 }
 
 /// `exo_cap_create(type, rights, target_pid)` → capability handle ou errno.
-pub fn sys_exo_cap_create(cap_type: u64, rights: u64, target: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_exo_cap_create(
+    cap_type: u64,
+    rights: u64,
+    target: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
     stat_inc(SYS_EXO_CAP_CREATE);
     match crate::security::capability::create(cap_type as u32, rights as u32, target as u32) {
         Ok(handle) => handle as i64,
-        Err(e)     => e.to_kernel_errno() as i64,
+        Err(e) => e.to_kernel_errno() as i64,
     }
 }
 
@@ -969,7 +1225,7 @@ pub fn sys_exo_cap_create(cap_type: u64, rights: u64, target: u64, _a4: u64, _a5
 pub fn sys_exo_cap_revoke(handle: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_CAP_REVOKE);
     match crate::security::capability::revoke_handle(handle as u32) {
-        Ok(_)  => 0,
+        Ok(_) => 0,
         Err(e) => e.to_kernel_errno() as i64,
     }
 }
@@ -979,7 +1235,8 @@ pub fn sys_exo_log(buf_ptr: u64, len: u64, level: u64, _a4: u64, _a5: u64, _a6: 
     stat_inc(SYS_EXO_LOG);
     let log_len = (len as usize).min(4096);
     let buf = match UserBuf::validate(buf_ptr, log_len, 4096) {
-        Ok(b) => b, Err(e) => return e.to_errno()
+        Ok(b) => b,
+        Err(e) => return e.to_errno(),
     };
     // Copier le message dans un buffer kernel local (stack, NO-ALLOC)
     let mut kbuf = [0u8; 4096];
@@ -1208,7 +1465,8 @@ pub fn sys_mmio_map(phys_addr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _a6
         return EACCES;
     }
 
-    match crate::drivers::sys_mmio_map_for_pid(caller_pid, PhysAddr::new(phys_addr), size as usize) {
+    match crate::drivers::sys_mmio_map_for_pid(caller_pid, PhysAddr::new(phys_addr), size as usize)
+    {
         Ok(virt) => virt as i64,
         Err(err) => mmio_error_to_errno(err),
     }
@@ -1280,7 +1538,8 @@ pub fn sys_dma_alloc(
         Ok((virt, iova)) => {
             if user_virt_out != 0 {
                 if let Err(e) = write_user_typed::<u64>(user_virt_out, virt) {
-                    let _ = crate::drivers::sys_dma_free_for_pid(caller_pid, iova, effective_domain);
+                    let _ =
+                        crate::drivers::sys_dma_free_for_pid(caller_pid, iova, effective_domain);
                     return e.to_errno();
                 }
             }
@@ -1305,12 +1564,15 @@ pub fn sys_dma_free(iova: u64, size: u64, domain_hint: u64, _a4: u64, _a5: u64, 
         return EACCES;
     }
 
-    if crate::drivers::dma::dma_alloc_size_for_pid(caller_pid, IovaAddr(iova)) != Some(size as usize) {
+    if crate::drivers::dma::dma_alloc_size_for_pid(caller_pid, IovaAddr(iova))
+        != Some(size as usize)
+    {
         return EINVAL;
     }
 
     let requested_domain = IommuDomainId(domain_hint as u32);
-    let effective_domain = crate::drivers::iommu::domain_of_pid(caller_pid).unwrap_or(requested_domain);
+    let effective_domain =
+        crate::drivers::iommu::domain_of_pid(caller_pid).unwrap_or(requested_domain);
 
     match crate::drivers::sys_dma_free_for_pid(caller_pid, IovaAddr(iova), effective_domain) {
         Ok(()) => 0,
@@ -1336,7 +1598,8 @@ pub fn sys_dma_sync(iova: u64, size: u64, direction: u64, _a4: u64, _a5: u64, _a
         return EACCES;
     }
 
-    match crate::drivers::sys_dma_sync_for_pid(caller_pid, IovaAddr(iova), size as usize, direction) {
+    match crate::drivers::sys_dma_sync_for_pid(caller_pid, IovaAddr(iova), size as usize, direction)
+    {
         Ok(()) => 0,
         Err(err) => dma_error_to_errno(err),
     }
@@ -1421,7 +1684,13 @@ pub fn sys_pci_claim(
         None
     };
 
-    match crate::drivers::sys_pci_claim(PhysAddr::new(phys_addr), size as usize, owner_pid, bdf, caller_pid) {
+    match crate::drivers::sys_pci_claim(
+        PhysAddr::new(phys_addr),
+        size as usize,
+        owner_pid,
+        bdf,
+        caller_pid,
+    ) {
         Ok(()) => {
             if crate::drivers::iommu::ensure_domain_for_pid(owner_pid).is_err() {
                 let _ = crate::drivers::release_claim_for_owner(owner_pid);
@@ -1434,14 +1703,7 @@ pub fn sys_pci_claim(
 }
 
 /// ABI GI-03 : `sys_dma_map(vaddr, size, direction)`.
-pub fn sys_dma_map(
-    vaddr: u64,
-    size: u64,
-    direction: u64,
-    _a4: u64,
-    _a5: u64,
-    _a6: u64,
-) -> i64 {
+pub fn sys_dma_map(vaddr: u64, size: u64, direction: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_DMA_MAP);
 
     if size == 0 || size > usize::MAX as u64 || vaddr > usize::MAX as u64 {
@@ -1458,26 +1720,14 @@ pub fn sys_dma_map(
         return EACCES;
     }
 
-    match crate::drivers::sys_dma_map(
-        caller_pid,
-        vaddr as usize,
-        size as usize,
-        direction,
-    ) {
+    match crate::drivers::sys_dma_map(caller_pid, vaddr as usize, size as usize, direction) {
         Ok(iova) => iova.0 as i64,
         Err(err) => dma_error_to_errno(err),
     }
 }
 
 /// ABI GI-03 : `sys_dma_unmap(domain_id, iova)`.
-pub fn sys_dma_unmap(
-    domain_id: u64,
-    iova: u64,
-    _a3: u64,
-    _a4: u64,
-    _a5: u64,
-    _a6: u64,
-) -> i64 {
+pub fn sys_dma_unmap(domain_id: u64, iova: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_DMA_UNMAP);
     if domain_id > u32::MAX as u64 {
         return EINVAL;
@@ -1589,45 +1839,48 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
     // Ici on fait confiance à dispatch.rs pour la borne.
     match nr {
         // ── I/O, Fichiers ──────────────────────────────────────────────────
-        SYS_READ      => sys_read,
-        SYS_WRITE     => sys_write,
-        SYS_OPEN      => sys_open,
-        SYS_CLOSE     => sys_close,
-        SYS_STAT      => sys_stat,
-        SYS_FSTAT     => sys_fstat,
-        SYS_LSEEK     => sys_lseek,
-        SYS_DUP       => sys_dup,
-        SYS_DUP2      => sys_dup2,
-        SYS_FCNTL     => sys_fcntl,
-        SYS_MKDIR     => sys_mkdir,
-        SYS_RMDIR     => sys_rmdir,
-        SYS_UNLINK    => sys_unlink,
-        SYS_OPENAT    => sys_openat,
+        SYS_READ => sys_read,
+        SYS_WRITE => sys_write,
+        SYS_OPEN => sys_open,
+        SYS_CLOSE => sys_close,
+        SYS_STAT => sys_stat,
+        SYS_FSTAT => sys_fstat,
+        SYS_LSTAT => sys_lstat,
+        SYS_LSEEK => sys_lseek,
+        SYS_DUP => sys_dup,
+        SYS_DUP2 => sys_dup2,
+        SYS_FCNTL => sys_fcntl,
+        SYS_MKDIR => sys_mkdir,
+        SYS_RMDIR => sys_rmdir,
+        SYS_UNLINK => sys_unlink,
+        SYS_SYMLINK => sys_symlink,
+        SYS_OPENAT => sys_openat,
         SYS_GETDENTS64 => sys_getdents64,
-        SYS_READLINK  => sys_readlink,
+        SYS_READLINK => sys_readlink,
+        SYS_SYMLINKAT => sys_symlinkat,
         SYS_READLINKAT => sys_readlinkat,
         // ── Mémoire ────────────────────────────────────────────────────────
-        SYS_MMAP      => sys_mmap,
-        SYS_MUNMAP    => sys_munmap,
-        SYS_MPROTECT  => sys_mprotect,
-        SYS_BRK       => sys_brk,
+        SYS_MMAP => sys_mmap,
+        SYS_MUNMAP => sys_munmap,
+        SYS_MPROTECT => sys_mprotect,
+        SYS_BRK => sys_brk,
         // ── Processus ──────────────────────────────────────────────────────
-        SYS_FORK      => sys_fork,
-        SYS_VFORK     => sys_vfork,
-        SYS_CLONE     => sys_clone,
-        SYS_EXECVE    => sys_execve,
-        SYS_EXIT      => sys_exit,
+        SYS_FORK => sys_fork,
+        SYS_VFORK => sys_vfork,
+        SYS_CLONE => sys_clone,
+        SYS_EXECVE => sys_execve,
+        SYS_EXIT => sys_exit,
         SYS_EXIT_GROUP => sys_exit_group,
-        SYS_WAIT4     => sys_wait4,
+        SYS_WAIT4 => sys_wait4,
         // ── Signaux ────────────────────────────────────────────────────────
-        SYS_KILL          => sys_kill,
-        SYS_TGKILL        => sys_tgkill,
-        SYS_RT_SIGACTION  => sys_rt_sigaction,
+        SYS_KILL => sys_kill,
+        SYS_TGKILL => sys_tgkill,
+        SYS_RT_SIGACTION => sys_rt_sigaction,
         SYS_RT_SIGPROCMASK => sys_rt_sigprocmask,
-        SYS_SIGALTSTACK   => sys_sigaltstack,
+        SYS_SIGALTSTACK => sys_sigaltstack,
         // ── Scheduler ──────────────────────────────────────────────────────
-        SYS_NANOSLEEP    => sys_nanosleep,
-        SYS_FUTEX        => sys_futex,
+        SYS_NANOSLEEP => sys_nanosleep,
+        SYS_FUTEX => sys_futex,
         // ── IPC Exo-OS ─────────────────────────────────────────────────────
         SYS_EXO_IPC_SEND => sys_exo_ipc_send,
         SYS_EXO_IPC_RECV => sys_exo_ipc_recv,
@@ -1637,49 +1890,49 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXO_IPC_DESTROY => sys_exo_ipc_destroy,
         SYS_EXO_CAP_CREATE => sys_exo_cap_create,
         SYS_EXO_CAP_REVOKE => sys_exo_cap_revoke,
-        SYS_EXO_LOG        => sys_exo_log,
+        SYS_EXO_LOG => sys_exo_log,
         // ── ExoFS (500–518) ────────────────────────────────────────────────
-        SYS_EXOFS_PATH_RESOLVE     => sys_exofs_path_resolve,
-        SYS_EXOFS_OBJECT_OPEN      => sys_exofs_object_open,
-        SYS_EXOFS_OBJECT_READ      => sys_exofs_object_read,
-        SYS_EXOFS_OBJECT_WRITE     => sys_exofs_object_write,
-        SYS_EXOFS_OBJECT_CREATE    => sys_exofs_object_create,
-        SYS_EXOFS_OBJECT_DELETE    => sys_exofs_object_delete,
-        SYS_EXOFS_OBJECT_STAT      => sys_exofs_object_stat,
-        SYS_EXOFS_OBJECT_SET_META  => sys_exofs_object_set_meta_abi,
+        SYS_EXOFS_PATH_RESOLVE => sys_exofs_path_resolve,
+        SYS_EXOFS_OBJECT_OPEN => sys_exofs_object_open,
+        SYS_EXOFS_OBJECT_READ => sys_exofs_object_read,
+        SYS_EXOFS_OBJECT_WRITE => sys_exofs_object_write,
+        SYS_EXOFS_OBJECT_CREATE => sys_exofs_object_create,
+        SYS_EXOFS_OBJECT_DELETE => sys_exofs_object_delete,
+        SYS_EXOFS_OBJECT_STAT => sys_exofs_object_stat,
+        SYS_EXOFS_OBJECT_SET_META => sys_exofs_object_set_meta_abi,
         SYS_EXOFS_GET_CONTENT_HASH => sys_exofs_get_content_hash,
-        SYS_EXOFS_SNAPSHOT_CREATE  => sys_exofs_snapshot_create,
-        SYS_EXOFS_SNAPSHOT_LIST    => sys_exofs_snapshot_list,
-        SYS_EXOFS_SNAPSHOT_MOUNT   => sys_exofs_snapshot_mount,
-        SYS_EXOFS_RELATION_CREATE  => sys_exofs_relation_create,
-        SYS_EXOFS_RELATION_QUERY   => sys_exofs_relation_query,
-        SYS_EXOFS_GC_TRIGGER       => sys_exofs_gc_trigger,
-        SYS_EXOFS_QUOTA_QUERY      => sys_exofs_quota_query,
-        SYS_EXOFS_EXPORT_OBJECT    => sys_exofs_export_object,
-        SYS_EXOFS_IMPORT_OBJECT    => sys_exofs_import_object,
-        SYS_EXOFS_EPOCH_COMMIT     => sys_exofs_epoch_commit,
+        SYS_EXOFS_SNAPSHOT_CREATE => sys_exofs_snapshot_create,
+        SYS_EXOFS_SNAPSHOT_LIST => sys_exofs_snapshot_list,
+        SYS_EXOFS_SNAPSHOT_MOUNT => sys_exofs_snapshot_mount,
+        SYS_EXOFS_RELATION_CREATE => sys_exofs_relation_create,
+        SYS_EXOFS_RELATION_QUERY => sys_exofs_relation_query,
+        SYS_EXOFS_GC_TRIGGER => sys_exofs_gc_trigger,
+        SYS_EXOFS_QUOTA_QUERY => sys_exofs_quota_query,
+        SYS_EXOFS_EXPORT_OBJECT => sys_exofs_export_object,
+        SYS_EXOFS_IMPORT_OBJECT => sys_exofs_import_object,
+        SYS_EXOFS_EPOCH_COMMIT => sys_exofs_epoch_commit,
         // ── ExoFS extensions (519–520) — FIX BUG-01 + BUG-02 ───────────────
-        SYS_EXOFS_OPEN_BY_PATH     => sys_exofs_open_by_path,
-        SYS_EXOFS_READDIR          => sys_exofs_readdir,
+        SYS_EXOFS_OPEN_BY_PATH => sys_exofs_open_by_path,
+        SYS_EXOFS_READDIR => sys_exofs_readdir,
         // ── GI-03 Drivers (530–546) ──────────────────────────────────────────
-        SYS_IRQ_REGISTER        => sys_irq_register,
-        SYS_IRQ_ACK             => sys_irq_ack,
-        SYS_MMIO_MAP            => sys_mmio_map,
-        SYS_MMIO_UNMAP          => sys_mmio_unmap,
-        SYS_DMA_ALLOC           => sys_dma_alloc,
-        SYS_DMA_FREE            => sys_dma_free,
-        SYS_DMA_SYNC            => sys_dma_sync,
-        SYS_PCI_CFG_READ        => sys_pci_cfg_read,
-        SYS_PCI_CFG_WRITE       => sys_pci_cfg_write,
-        SYS_PCI_BUS_MASTER      => sys_pci_bus_master,
-        SYS_PCI_CLAIM           => sys_pci_claim,
-        SYS_DMA_MAP             => sys_dma_map,
-        SYS_DMA_UNMAP           => sys_dma_unmap,
-        SYS_MSI_ALLOC           => sys_msi_alloc,
-        SYS_MSI_CONFIG          => sys_msi_config,
-        SYS_MSI_FREE            => sys_msi_free,
-        SYS_PCI_SET_TOPOLOGY    => sys_pci_set_topology,
+        SYS_IRQ_REGISTER => sys_irq_register,
+        SYS_IRQ_ACK => sys_irq_ack,
+        SYS_MMIO_MAP => sys_mmio_map,
+        SYS_MMIO_UNMAP => sys_mmio_unmap,
+        SYS_DMA_ALLOC => sys_dma_alloc,
+        SYS_DMA_FREE => sys_dma_free,
+        SYS_DMA_SYNC => sys_dma_sync,
+        SYS_PCI_CFG_READ => sys_pci_cfg_read,
+        SYS_PCI_CFG_WRITE => sys_pci_cfg_write,
+        SYS_PCI_BUS_MASTER => sys_pci_bus_master,
+        SYS_PCI_CLAIM => sys_pci_claim,
+        SYS_DMA_MAP => sys_dma_map,
+        SYS_DMA_UNMAP => sys_dma_unmap,
+        SYS_MSI_ALLOC => sys_msi_alloc,
+        SYS_MSI_CONFIG => sys_msi_config,
+        SYS_MSI_FREE => sys_msi_free,
+        SYS_PCI_SET_TOPOLOGY => sys_pci_set_topology,
         // ── Catch-all ──────────────────────────────────────────────────────
-        _             => sys_enosys,
+        _ => sys_enosys,
     }
 }

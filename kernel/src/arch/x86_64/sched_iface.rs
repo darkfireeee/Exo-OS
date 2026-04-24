@@ -37,10 +37,9 @@
 //     scheduler/energy/frequency.rs (arch_set_cpu_pstate)
 // ═════════════════════════════════════════════════════════════════════════════
 
-
 use super::apic;
-use super::smp::percpu;
 use super::cpu::msr;
+use super::smp::percpu;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,10 +62,14 @@ const PERF_CTL_PSTATE_MASK: u64 = 0xFF;
 // ─────────────────────────────────────────────────────────────────────────────
 
 static RESCHEDULE_IPIS_SENT: AtomicU64 = AtomicU64::new(0);
-static PSTATE_CHANGES:        AtomicU64 = AtomicU64::new(0);
+static PSTATE_CHANGES: AtomicU64 = AtomicU64::new(0);
 
-pub fn reschedule_ipis_sent() -> u64 { RESCHEDULE_IPIS_SENT.load(Ordering::Relaxed) }
-pub fn pstate_changes()        -> u64 { PSTATE_CHANGES.load(Ordering::Relaxed) }
+pub fn reschedule_ipis_sent() -> u64 {
+    RESCHEDULE_IPIS_SENT.load(Ordering::Relaxed)
+}
+pub fn pstate_changes() -> u64 {
+    PSTATE_CHANGES.load(Ordering::Relaxed)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // arch_send_reschedule_ipi — C ABI export
@@ -160,7 +163,7 @@ pub unsafe extern "C" fn arch_set_cpu_pstate(cpu: u32, pstate: u32) {
     // mais la logique d'appel du scheduler est la même.
     // On masque les bits [7:0] et on écrit le nouveau P-state.
     let current = msr::read_msr(MSR_IA32_PERF_CTL);
-    let new_val  = (current & !PERF_CTL_PSTATE_MASK) | pstate_val;
+    let new_val = (current & !PERF_CTL_PSTATE_MASK) | pstate_val;
 
     // SAFETY: WRMSR depuis Ring 0 — modifie uniquement la fréquence cible
     msr::write_msr(MSR_IA32_PERF_CTL, new_val);

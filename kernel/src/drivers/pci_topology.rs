@@ -36,7 +36,9 @@ struct TopologyEntries {
 
 impl TopologyEntries {
     const fn new() -> Self {
-        Self { slots: [None; MAX_TOPOLOGY_ENTRIES] }
+        Self {
+            slots: [None; MAX_TOPOLOGY_ENTRIES],
+        }
     }
 }
 
@@ -78,7 +80,8 @@ impl PciTopology {
     /// Retourne le parent d'un device PCI avec un lock READ thread-safe.
     pub fn parent_bridge(&self, child: PciBdf) -> Option<PciBdf> {
         let table = self.entries.read();
-        table.slots
+        table
+            .slots
             .iter()
             .flatten()
             .find(|entry| entry.child == child)

@@ -77,7 +77,9 @@ impl BlobId {
     /// Retourne None si le slice n'a pas exactement 32 octets.
     #[inline]
     pub fn from_slice(s: &[u8]) -> Option<Self> {
-        if s.len() != 32 { return None; }
+        if s.len() != 32 {
+            return None;
+        }
         let mut b = [0u8; 32];
         b.copy_from_slice(s);
         Some(Self(b))
@@ -87,18 +89,22 @@ impl BlobId {
     ///
     /// Note : la méthode existante retourne `&[u8;32]`. Celle-ci retourne une copie.
     #[inline]
-    pub fn to_bytes(self) -> [u8; 32] { self.0 }
+    pub fn to_bytes(self) -> [u8; 32] {
+        self.0
+    }
 
     /// Vrai si ce BlobId est le BlobId zéro (jamais alloué).
     #[inline]
-    pub fn is_zero(self) -> bool { self.0 == [0u8; 32] }
+    pub fn is_zero(self) -> bool {
+        self.0 == [0u8; 32]
+    }
 
     /// Formate le BlobId en hex ASCII (64 chars), sans allocation.
     pub fn to_hex(&self) -> [u8; 64] {
         let mut out = [0u8; 64];
         let digits = b"0123456789abcdef";
         for (i, &b) in self.0.iter().enumerate() {
-            out[i * 2]     = digits[(b >> 4) as usize];
+            out[i * 2] = digits[(b >> 4) as usize];
             out[i * 2 + 1] = digits[(b & 0xf) as usize];
         }
         out
@@ -108,8 +114,7 @@ impl BlobId {
     #[inline]
     pub fn prefix_u64(&self) -> u64 {
         u64::from_le_bytes([
-            self.0[0], self.0[1], self.0[2], self.0[3],
-            self.0[4], self.0[5], self.0[6], self.0[7],
+            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7],
         ])
     }
 }
@@ -150,7 +155,9 @@ impl BlobIdHasher {
 }
 
 impl Default for BlobIdHasher {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -165,7 +172,9 @@ impl Default for BlobIdHasher {
 /// Algorithme : concatène les 32 octets de chaque BlobId et hache le tout.
 /// Pour un slice vide, retourne BlobId::ZERO.
 pub fn merkle_root(ids: &[BlobId]) -> BlobId {
-    if ids.is_empty() { return BlobId::ZERO; }
+    if ids.is_empty() {
+        return BlobId::ZERO;
+    }
     let mut h = BlobIdHasher::new();
     for id in ids {
         h.update(&id.0);
@@ -237,7 +246,7 @@ pub const BLOB_ID_SET_CAP: usize = 32;
 /// de Merkle. L'ordre d'insertion est préservé.
 #[derive(Clone, Debug)]
 pub struct BlobIdSet {
-    ids:   [BlobId; BLOB_ID_SET_CAP],
+    ids: [BlobId; BLOB_ID_SET_CAP],
     count: usize,
 }
 
@@ -245,7 +254,7 @@ impl BlobIdSet {
     /// Crée un ensemble vide.
     pub const fn new() -> Self {
         Self {
-            ids:   [BlobId([0u8; 32]); BLOB_ID_SET_CAP],
+            ids: [BlobId([0u8; 32]); BLOB_ID_SET_CAP],
             count: 0,
         }
     }
@@ -273,15 +282,21 @@ impl BlobIdSet {
 
     /// Retourne `true` si l'ensemble est plein.
     #[inline]
-    pub fn is_full(&self) -> bool { self.count >= BLOB_ID_SET_CAP }
+    pub fn is_full(&self) -> bool {
+        self.count >= BLOB_ID_SET_CAP
+    }
 
     /// Retourne le nombre d'éléments présents.
     #[inline]
-    pub fn len(&self) -> usize { self.count }
+    pub fn len(&self) -> usize {
+        self.count
+    }
 
     /// Retourne `true` si l'ensemble est vide.
     #[inline]
-    pub fn is_empty(&self) -> bool { self.count == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 
     /// Iterateur sur les BlobIds présents.
     #[inline]
@@ -291,7 +306,9 @@ impl BlobIdSet {
 
     /// Vide l'ensemble.
     #[inline]
-    pub fn clear(&mut self) { self.count = 0; }
+    pub fn clear(&mut self) {
+        self.count = 0;
+    }
 
     /// Tente de fusionner un autre ensemble dans celui-ci.
     ///
@@ -308,7 +325,9 @@ impl BlobIdSet {
 }
 
 impl Default for BlobIdSet {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -321,8 +340,8 @@ impl Default for BlobIdSet {
 /// ce qui permet de vérifier l'intégrité d'un ensemble d'objets en O(log N).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct BlobIdMerkleNode {
-    pub left:   BlobId,
-    pub right:  BlobId,
+    pub left: BlobId,
+    pub right: BlobId,
     pub parent: BlobId,
 }
 
@@ -330,7 +349,11 @@ impl BlobIdMerkleNode {
     /// Construit un nœud en combinant left et right.
     pub fn new(left: BlobId, right: BlobId) -> Self {
         let parent = merkle_combine(left, right);
-        Self { left, right, parent }
+        Self {
+            left,
+            right,
+            parent,
+        }
     }
 }
 
@@ -350,7 +373,10 @@ pub fn merkle_combine(a: BlobId, b: BlobId) -> BlobId {
     let crc_b = crc32c::crc32c(&b.0);
     let combined = crc_a.wrapping_add(crc_b).wrapping_mul(0x9e37_79b9);
     let cb = combined.to_le_bytes();
-    out[0] ^= cb[0]; out[1] ^= cb[1]; out[2] ^= cb[2]; out[3] ^= cb[3];
+    out[0] ^= cb[0];
+    out[1] ^= cb[1];
+    out[2] ^= cb[2];
+    out[3] ^= cb[3];
     BlobId::from_raw(out)
 }
 
@@ -383,5 +409,7 @@ pub fn sort_blob_ids(ids: &mut [BlobId]) {
 /// Retourne `Some(index)` si trouvé, `None` sinon.
 /// Précondition : `sorted_ids` doit être trié par `sort_blob_ids`.
 pub fn search_sorted_blob_ids(sorted_ids: &[BlobId], target: &BlobId) -> Option<usize> {
-    sorted_ids.binary_search_by(|id| compare_blob_ids(id, target)).ok()
+    sorted_ids
+        .binary_search_by(|id| compare_blob_ids(id, target))
+        .ok()
 }

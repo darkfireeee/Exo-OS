@@ -60,25 +60,25 @@ pub enum SecurityVerdict {
 #[repr(u8)]
 pub enum DenyReason {
     UnauthorizedPath = 0,
-    QuotaExhausted   = 1,
-    PayloadTooLarge  = 2,
-    UnknownService   = 3,
+    QuotaExhausted = 1,
+    PayloadTooLarge = 2,
+    UnknownService = 3,
 }
 
 // ── Compteurs de violations par PID ──────────────────────────────────────────
 
 struct PidStats {
-    pid:        AtomicU32,
+    pid: AtomicU32,
     violations: AtomicU32,
-    allowed:    AtomicU64,
+    allowed: AtomicU64,
 }
 
 impl PidStats {
     const fn new() -> Self {
         Self {
-            pid:        AtomicU32::new(0),
+            pid: AtomicU32::new(0),
             violations: AtomicU32::new(0),
-            allowed:    AtomicU64::new(0),
+            allowed: AtomicU64::new(0),
         }
     }
 }
@@ -88,8 +88,8 @@ static PID_STATS: [PidStats; MAX_TRACKED_PIDS] = {
     [E; MAX_TRACKED_PIDS]
 };
 
-static TOTAL_ALLOWED:         AtomicU64 = AtomicU64::new(0);
-static TOTAL_DENIED:          AtomicU64 = AtomicU64::new(0);
+static TOTAL_ALLOWED: AtomicU64 = AtomicU64::new(0);
+static TOTAL_DENIED: AtomicU64 = AtomicU64::new(0);
 static SOFT_QUARANTINE_COUNT: AtomicU32 = AtomicU32::new(0);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -101,7 +101,10 @@ fn find_or_alloc_slot(pid: u32) -> Option<usize> {
         }
     }
     for (i, s) in PID_STATS.iter().enumerate() {
-        if s.pid.compare_exchange(0, pid, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+        if s.pid
+            .compare_exchange(0, pid, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
             return Some(i);
         }
     }
@@ -235,15 +238,15 @@ pub fn security_gate_init() {
 /// Statistiques de la porte de sécurité.
 #[derive(Clone, Copy, Debug)]
 pub struct SecurityGateStats {
-    pub total_allowed:         u64,
-    pub total_denied:          u64,
+    pub total_allowed: u64,
+    pub total_denied: u64,
     pub soft_quarantine_count: u32,
 }
 
 pub fn security_gate_stats() -> SecurityGateStats {
     SecurityGateStats {
-        total_allowed:         TOTAL_ALLOWED.load(Ordering::Relaxed),
-        total_denied:          TOTAL_DENIED.load(Ordering::Relaxed),
+        total_allowed: TOTAL_ALLOWED.load(Ordering::Relaxed),
+        total_denied: TOTAL_DENIED.load(Ordering::Relaxed),
         soft_quarantine_count: SOFT_QUARANTINE_COUNT.load(Ordering::Relaxed),
     }
 }

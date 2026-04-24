@@ -9,7 +9,6 @@
 //! RÈGLE ARITH-02 : arithmétique checked/saturating.
 //! RÈGLE RECUR-01 : aucune récursivité.
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
@@ -49,33 +48,33 @@ pub struct CompressionThreshold {
 impl CompressionThreshold {
     pub const fn default() -> Self {
         Self {
-            min_size:                  MIN_COMPRESS_SIZE,
-            ratio_threshold:           MAX_RATIO_PERCENT,
+            min_size: MIN_COMPRESS_SIZE,
+            ratio_threshold: MAX_RATIO_PERCENT,
             detect_already_compressed: true,
-            detect_high_entropy:       true,
-            entropy_threshold:         ENTROPY_HIGH_THRESHOLD,
+            detect_high_entropy: true,
+            entropy_threshold: ENTROPY_HIGH_THRESHOLD,
         }
     }
 
     /// Crée un seuil agressif : tente la compression sur tout (usage : archivage).
     pub const fn aggressive() -> Self {
         Self {
-            min_size:                  64,
-            ratio_threshold:           99,
+            min_size: 64,
+            ratio_threshold: 99,
             detect_already_compressed: false,
-            detect_high_entropy:       false,
-            entropy_threshold:         256,
+            detect_high_entropy: false,
+            entropy_threshold: 256,
         }
     }
 
     /// Crée un seuil conservateur : compression uniquement si clairement bénéfique.
     pub const fn conservative() -> Self {
         Self {
-            min_size:                  4096,
-            ratio_threshold:           80,
+            min_size: 4096,
+            ratio_threshold: 80,
             detect_already_compressed: true,
-            detect_high_entropy:       true,
-            entropy_threshold:         200,
+            detect_high_entropy: true,
+            entropy_threshold: 200,
         }
     }
 
@@ -100,21 +99,17 @@ impl CompressionThreshold {
 
     /// `true` si le résultat compressé justifie le stockage compressé.
     pub fn is_worth_storing(&self, compressed_len: usize, original_len: usize) -> bool {
-        if original_len == 0 { return false; }
-        let ratio = (compressed_len as u64).saturating_mul(100)
-            / (original_len as u64);
+        if original_len == 0 {
+            return false;
+        }
+        let ratio = (compressed_len as u64).saturating_mul(100) / (original_len as u64);
         ratio <= self.ratio_threshold
     }
 
     /// Décision complète : doit-on stocker compressé ?
     /// Combine `should_compress` + `is_worth_storing` en une seule logique.
-    pub fn should_store_compressed(
-        &self,
-        original:   &[u8],
-        compressed: &[u8],
-    ) -> bool {
-        self.should_compress(original)
-            && self.is_worth_storing(compressed.len(), original.len())
+    pub fn should_store_compressed(&self, original: &[u8], compressed: &[u8]) -> bool {
+        self.should_compress(original) && self.is_worth_storing(compressed.len(), original.len())
     }
 
     /// Estimation du potentiel de compression (0 = très compressible, 100 = incompressible).
@@ -127,7 +122,9 @@ impl CompressionThreshold {
 }
 
 impl Default for CompressionThreshold {
-    fn default() -> Self { CompressionThreshold::default() }
+    fn default() -> Self {
+        CompressionThreshold::default()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,7 +135,9 @@ impl Default for CompressionThreshold {
 /// Vérifie les magic bytes des formats courants.
 /// RECUR-01 : pas de récursivité.
 pub fn looks_compressed(data: &[u8]) -> bool {
-    if data.len() < 4 { return false; }
+    if data.len() < 4 {
+        return false;
+    }
     let magic4 = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
     // Zstd, LZ4 frame, GZIP, ZIP, BZIP2, XZ, PNG, JPEG.
     matches!(
@@ -161,7 +160,9 @@ pub fn looks_compressed(data: &[u8]) -> bool {
 /// Retourne le nombre de valeurs d'octet distinctes (0–256).
 /// RECUR-01 : boucle itérative simple.
 pub fn estimate_entropy(data: &[u8]) -> usize {
-    if data.is_empty() { return 0; }
+    if data.is_empty() {
+        return 0;
+    }
     let sample_len = data.len().min(ENTROPY_SAMPLE_SIZE);
     let mut seen = [false; 256];
     let mut count = 0usize;
@@ -179,7 +180,9 @@ pub fn estimate_entropy(data: &[u8]) -> usize {
 /// Estime si les données sont probablement du texte (entropie faible).
 /// Heuristique : > 90% des bytes sont dans [0x09–0x0D, 0x20–0x7E].
 pub fn looks_like_text(data: &[u8]) -> bool {
-    if data.is_empty() { return false; }
+    if data.is_empty() {
+        return false;
+    }
     let sample_len = data.len().min(1024);
     let mut printable = 0u32;
     for i in 0..sample_len {
@@ -194,10 +197,14 @@ pub fn looks_like_text(data: &[u8]) -> bool {
 /// Calcule le niveau de redondance d'un bloc (0 = max compressible, 100 = aléatoire).
 /// Basé sur le comptage de répétitions de 4-grams dans le premier kilo-octet.
 pub fn redundancy_score(data: &[u8]) -> u8 {
-    if data.len() < 8 { return 50; }
+    if data.len() < 8 {
+        return 50;
+    }
     let sample = &data[..data.len().min(1024)];
     let total_grams = sample.len().saturating_sub(3);
-    if total_grams == 0 { return 50; }
+    if total_grams == 0 {
+        return 50;
+    }
     let mut seen = [0u8; 256]; // Table de hash 256 entrées, approximation.
     let mut repeats = 0usize;
     for w in sample.windows(4) {
@@ -227,114 +234,131 @@ pub fn redundancy_score(data: &[u8]) -> u8 {
 mod tests {
     use super::*;
 
-    #[test] fn test_should_compress_too_small() {
+    #[test]
+    fn test_should_compress_too_small() {
         let t = CompressionThreshold::default();
         assert!(!t.should_compress(b"tiny"));
     }
 
-    #[test] fn test_should_compress_ok() {
+    #[test]
+    fn test_should_compress_ok() {
         let t = CompressionThreshold::default();
         let data = b"AAAAAAAAAAAAAAAAAAAAAAAA".repeat(40);
         // 40*24 = 960 bytes, faible entropie
         assert!(t.should_compress(&data));
     }
 
-    #[test] fn test_looks_compressed_zstd() {
+    #[test]
+    fn test_looks_compressed_zstd() {
         // Zstd magic : FD 2F B5 28
         let buf = [0xFDu8, 0x2F, 0xB5, 0x28, 0x00, 0x00];
         assert!(looks_compressed(&buf));
     }
 
-    #[test] fn test_looks_compressed_none() {
+    #[test]
+    fn test_looks_compressed_none() {
         let buf = b"Hello, world! This is plain text.";
         assert!(!looks_compressed(buf));
     }
 
-    #[test] fn test_estimate_entropy_all_same() {
+    #[test]
+    fn test_estimate_entropy_all_same() {
         let data = [0xAAu8; 256];
         assert_eq!(estimate_entropy(&data), 1);
     }
 
-    #[test] fn test_estimate_entropy_all_different() {
+    #[test]
+    fn test_estimate_entropy_all_different() {
         let data: [u8; 256] = core::array::from_fn(|i| i as u8);
         assert_eq!(estimate_entropy(&data), 256);
     }
 
-    #[test] fn test_is_worth_storing_beneficial() {
+    #[test]
+    fn test_is_worth_storing_beneficial() {
         let t = CompressionThreshold::default();
         assert!(t.is_worth_storing(500, 1000)); // 50% → acceptable
     }
 
-    #[test] fn test_is_worth_storing_not_beneficial() {
+    #[test]
+    fn test_is_worth_storing_not_beneficial() {
         let t = CompressionThreshold::default();
         assert!(!t.is_worth_storing(970, 1000)); // 97% > 95% → reject
     }
 
-    #[test] fn test_is_worth_storing_zero_original() {
+    #[test]
+    fn test_is_worth_storing_zero_original() {
         let t = CompressionThreshold::default();
         assert!(!t.is_worth_storing(0, 0));
     }
 
-    #[test] fn test_looks_like_text_true() {
+    #[test]
+    fn test_looks_like_text_true() {
         let text = b"Hello World! This is ASCII text.";
         assert!(looks_like_text(text));
     }
 
-    #[test] fn test_looks_like_text_false_binary() {
+    #[test]
+    fn test_looks_like_text_false_binary() {
         let bin: [u8; 32] = core::array::from_fn(|i| i as u8);
         assert!(!looks_like_text(&bin));
     }
 
-    #[test] fn test_incompressibility_score_uniform() {
+    #[test]
+    fn test_incompressibility_score_uniform() {
         let t = CompressionThreshold::default();
         let data = [0u8; 512]; // entropie 1 → très compressible → score bas
         let score = t.incompressibility_score(&data);
         assert!(score < 5);
     }
 
-    #[test] fn test_conservative_threshold() {
+    #[test]
+    fn test_conservative_threshold() {
         let t = CompressionThreshold::conservative();
         assert_eq!(t.min_size, 4096);
         assert_eq!(t.ratio_threshold, 80);
     }
 
-    #[test] fn test_aggressive_threshold() {
+    #[test]
+    fn test_aggressive_threshold() {
         let t = CompressionThreshold::aggressive();
         // Données déjà compressées : aggressive ne les filtre pas.
-        let buf = [0xFDu8, 0x2F, 0xB5, 0x28, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let buf = [
+            0xFDu8, 0x2F, 0xB5, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         assert!(t.should_compress(&buf)); // 64 bytes suffit, pas de filtre magic
     }
 
-    #[test] fn test_redundancy_score_uniform_data() {
+    #[test]
+    fn test_redundancy_score_uniform_data() {
         let data = [0xAAu8; 1024]; // Données uniformes = très haute redondance
         let score = redundancy_score(&data);
         // Score < 50 : très compressible
         assert!(score <= 100);
     }
 
-    #[test] fn test_should_store_compressed_true() {
-        let t          = CompressionThreshold::default();
-        let original   = b"AAAA".repeat(300); // 1200 bytes compressibles
-        let compressed = b"X".repeat(400);    // 33% du original
+    #[test]
+    fn test_should_store_compressed_true() {
+        let t = CompressionThreshold::default();
+        let original = b"AAAA".repeat(300); // 1200 bytes compressibles
+        let compressed = b"X".repeat(400); // 33% du original
         assert!(t.should_store_compressed(&original, &compressed));
     }
 
-    #[test] fn test_should_store_compressed_false_poor_ratio() {
-        let t          = CompressionThreshold::default();
-        let original   = b"AAAA".repeat(300);
-        let compressed = b"X".repeat(1150);   // 95.8% > 95% seuil
+    #[test]
+    fn test_should_store_compressed_false_poor_ratio() {
+        let t = CompressionThreshold::default();
+        let original = b"AAAA".repeat(300);
+        let compressed = b"X".repeat(1150); // 95.8% > 95% seuil
         assert!(!t.should_store_compressed(&original, &compressed));
     }
 
-    #[test] fn test_incompressibility_score_random_like() {
-        let t    = CompressionThreshold::default();
+    #[test]
+    fn test_incompressibility_score_random_like() {
+        let t = CompressionThreshold::default();
         // 256 octets distincts = entropie maximale
         let data: [u8; 256] = core::array::from_fn(|i| i as u8);
         let score = t.incompressibility_score(&data);

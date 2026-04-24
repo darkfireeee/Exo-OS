@@ -16,12 +16,12 @@
 // RÈGLE PRIO-02 : le niveau RT est TOUJOURS consommé en premier.
 // RÈGLE PRIO-03 : pas de starvation → ratio configurable RT:NORMAL.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::IpcError;
 use crate::ipc::message::builder::IpcMessage;
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -293,8 +293,7 @@ impl PriorityQueue {
         }
 
         // Politique : RT ou anti-starvation?
-        let take_rt = !rt_empty
-            && (normal_empty || normal_count < PRIORITY_ANTI_STARVATION_RATIO);
+        let take_rt = !rt_empty && (normal_empty || normal_count < PRIORITY_ANTI_STARVATION_RATIO);
 
         if take_rt {
             if let Some(slot) = self.rt_ring.pop() {
@@ -308,7 +307,8 @@ impl PriorityQueue {
         // Consommer depuis NORMAL
         if let Some(slot) = self.normal_ring.pop() {
             self.normal_dequeued.fetch_add(1, Ordering::Relaxed);
-            self.normal_reads_since_last_rt.fetch_add(1, Ordering::Relaxed);
+            self.normal_reads_since_last_rt
+                .fetch_add(1, Ordering::Relaxed);
             IPC_STATS.record(StatEvent::MessageReceived);
             return Some(slot);
         }
@@ -396,15 +396,20 @@ unsafe impl Sync for PriorityQueueTable {}
 impl PriorityQueueTable {
     const fn new() -> Self {
         const EMPTY: PrioQueueSlot = PrioQueueSlot::empty();
-        Self { slots: [EMPTY; MAX_PRIORITY_QUEUES], count: AtomicU32::new(0) }
+        Self {
+            slots: [EMPTY; MAX_PRIORITY_QUEUES],
+            count: AtomicU32::new(0),
+        }
     }
 
     fn alloc(&self, id: u32) -> Option<usize> {
         for i in 0..MAX_PRIORITY_QUEUES {
             if !self.slots[i].occupied.load(Ordering::Relaxed) {
-                if self.slots[i].occupied.compare_exchange(
-                    false, true, Ordering::AcqRel, Ordering::Relaxed,
-                ).is_ok() {
+                if self.slots[i]
+                    .occupied
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
                     // SAFETY: CAS AcqRel garantit l'exclusivité; queue MaybeUninit<PriorityQueue> write-once.
                     unsafe {
                         (self.slots[i].queue.as_ptr() as *mut PriorityQueue)
@@ -419,16 +424,24 @@ impl PriorityQueueTable {
     }
 
     fn get(&self, idx: usize) -> Option<&PriorityQueue> {
-        if idx >= MAX_PRIORITY_QUEUES { return None; }
-        if !self.slots[idx].occupied.load(Ordering::Acquire) { return None; }
+        if idx >= MAX_PRIORITY_QUEUES {
+            return None;
+        }
+        if !self.slots[idx].occupied.load(Ordering::Acquire) {
+            return None;
+        }
         Some(unsafe { &*self.slots[idx].queue.as_ptr() })
     }
 
     fn free(&self, idx: usize) -> bool {
-        if idx >= MAX_PRIORITY_QUEUES { return false; }
-        if self.slots[idx].occupied.compare_exchange(
-            true, false, Ordering::AcqRel, Ordering::Relaxed,
-        ).is_ok() {
+        if idx >= MAX_PRIORITY_QUEUES {
+            return false;
+        }
+        if self.slots[idx]
+            .occupied
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
             self.count.fetch_sub(1, Ordering::Relaxed);
             true
         } else {
@@ -448,7 +461,10 @@ pub fn prio_queue_create(id: u32) -> Option<usize> {
 }
 
 pub fn prio_queue_enqueue(idx: usize, msg: &IpcMessage) -> Result<(), IpcError> {
-    PRIO_QUEUE_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?.enqueue(msg)
+    PRIO_QUEUE_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)?
+        .enqueue(msg)
 }
 
 pub fn prio_queue_dequeue(idx: usize) -> Option<PrioMsgSlot> {

@@ -22,12 +22,10 @@
 
 use core::fmt;
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, EpochId, DiskOffset, ObjectId,
-};
 use crate::fs::exofs::core::flags::EpochFlags;
+use crate::fs::exofs::core::{DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId};
 use crate::fs::exofs::epoch::epoch_barriers::{
-    nvme_barrier_after_data, nvme_barrier_after_root, nvme_barrier_after_record,
+    nvme_barrier_after_data, nvme_barrier_after_record, nvme_barrier_after_root,
 };
 use crate::fs::exofs::epoch::epoch_commit_lock::EPOCH_COMMIT_LOCK;
 use crate::fs::exofs::epoch::epoch_record::EpochRecord;
@@ -46,11 +44,11 @@ pub struct CommitCallbacks<'a> {
     /// Lit l'EpochId courant du superblock.
     pub get_current_epoch: &'a dyn Fn() -> EpochId,
     /// Avance l'EpochId du superblock après commit réussi.
-    pub advance_epoch:     &'a dyn Fn(EpochId) -> ExofsResult<()>,
+    pub advance_epoch: &'a dyn Fn(EpochId) -> ExofsResult<()>,
     /// Horodatage TSC.
-    pub get_tsc:           &'a dyn Fn() -> u64,
+    pub get_tsc: &'a dyn Fn() -> u64,
     /// Écrit `data` à l'`offset` disque ; retourne bytes_written.
-    pub write_fn:          &'a dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
+    pub write_fn: &'a dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
 }
 
 // =============================================================================
@@ -61,9 +59,9 @@ pub struct CommitCallbacks<'a> {
 #[derive(Debug)]
 pub struct CommitResult {
     /// Identifiant du nouvel epoch committé.
-    pub epoch_id:     EpochId,
+    pub epoch_id: EpochId,
     /// Offset disque du slot écrit.
-    pub slot_offset:  DiskOffset,
+    pub slot_offset: DiskOffset,
     /// Nombre d'objets committés (total modified + deleted).
     pub object_count: u32,
     /// Durée du commit en cycles TSC.
@@ -87,15 +85,15 @@ impl fmt::Display for CommitResult {
 /// Paramètres d'entrée pour le protocole de commit Epoch.
 pub struct CommitInput<'a> {
     /// EpochRoot contenant les modifications.
-    pub root:             &'a EpochRootInMemory,
+    pub root: &'a EpochRootInMemory,
     /// Callbacks vers la couche storage (RÈGLE DAG-01).
-    pub callbacks:        CommitCallbacks<'a>,
+    pub callbacks: CommitCallbacks<'a>,
     /// Offset disque où l'EpochRoot sérialisé a été écrit (après Phase 2).
     pub root_disk_offset: DiskOffset,
     /// Offset disque du slot cible pour l'EpochRecord (A, B ou C).
-    pub slot_offset:      DiskOffset,
+    pub slot_offset: DiskOffset,
     /// Flags additionnels à fusionner dans l'EpochRecord.
-    pub extra_flags:      EpochFlags,
+    pub extra_flags: EpochFlags,
 }
 
 // =============================================================================
@@ -161,7 +159,10 @@ pub fn commit_epoch(input: CommitInput<'_>) -> ExofsResult<CommitResult> {
     flags.merge(input.extra_flags);
 
     // Sélectionne un ObjectId représentatif (premier objet modifié, sinon zéro).
-    let root_oid = input.root.modified_objects.first()
+    let root_oid = input
+        .root
+        .modified_objects
+        .first()
         .map(|e| ObjectId(e.object_id))
         .unwrap_or(ObjectId([0u8; 32]));
 
@@ -178,13 +179,12 @@ pub fn commit_epoch(input: CommitInput<'_>) -> ExofsResult<CommitResult> {
 
     // Sérialise l'EpochRecord en tableau de 104 octets.
     // SAFETY: EpochRecord est #[repr(C, packed)], plain types, taille 104.
-    let record_bytes: &[u8] = unsafe {
-        core::slice::from_raw_parts(&record as *const EpochRecord as *const u8, 104)
-    };
+    let record_bytes: &[u8] =
+        unsafe { core::slice::from_raw_parts(&record as *const EpochRecord as *const u8, 104) };
 
     // Écriture physique dans le slot.
-    let bytes_written = (input.callbacks.write_fn)(record_bytes, input.slot_offset)
-        .map_err(|e| {
+    let bytes_written =
+        (input.callbacks.write_fn)(record_bytes, input.slot_offset).map_err(|e| {
             lock.aborted_commits = lock.aborted_commits.saturating_add(1);
             EPOCH_STATS.inc_commits_aborted();
             e
@@ -231,8 +231,8 @@ pub fn commit_epoch(input: CommitInput<'_>) -> ExofsResult<CommitResult> {
     drop(lock);
 
     Ok(CommitResult {
-        epoch_id:        next_epoch,
-        slot_offset:     input.slot_offset,
+        epoch_id: next_epoch,
+        slot_offset: input.slot_offset,
         object_count,
         duration_cycles: duration,
     })
@@ -247,40 +247,40 @@ pub fn commit_epoch(input: CommitInput<'_>) -> ExofsResult<CommitResult> {
 #[repr(u8)]
 pub enum CommitPhase {
     /// Pas encore commencé.
-    Idle           = 0,
+    Idle = 0,
     /// Phase 1 : écriture payload.
-    Payload        = 1,
+    Payload = 1,
     /// Barrière 1 en cours.
-    Barrier1       = 2,
+    Barrier1 = 2,
     /// Phase 2 : écriture EpochRoot.
-    EpochRoot      = 3,
+    EpochRoot = 3,
     /// Barrière 2 en cours.
-    Barrier2       = 4,
+    Barrier2 = 4,
     /// Phase 3 : écriture EpochRecord.
-    EpochRecord    = 5,
+    EpochRecord = 5,
     /// Barrière 3 en cours.
-    Barrier3       = 6,
+    Barrier3 = 6,
     /// Avancement du superblock.
     AdvanceSuperblock = 7,
     /// Commit terminé avec succès.
-    Done           = 8,
+    Done = 8,
     /// Commit avorté.
-    Aborted        = 255,
+    Aborted = 255,
 }
 
 impl fmt::Display for CommitPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Idle              => write!(f, "IDLE"),
-            Self::Payload           => write!(f, "PAYLOAD"),
-            Self::Barrier1          => write!(f, "BARRIER_1"),
-            Self::EpochRoot         => write!(f, "EPOCH_ROOT"),
-            Self::Barrier2          => write!(f, "BARRIER_2"),
-            Self::EpochRecord       => write!(f, "EPOCH_RECORD"),
-            Self::Barrier3          => write!(f, "BARRIER_3"),
+            Self::Idle => write!(f, "IDLE"),
+            Self::Payload => write!(f, "PAYLOAD"),
+            Self::Barrier1 => write!(f, "BARRIER_1"),
+            Self::EpochRoot => write!(f, "EPOCH_ROOT"),
+            Self::Barrier2 => write!(f, "BARRIER_2"),
+            Self::EpochRecord => write!(f, "EPOCH_RECORD"),
+            Self::Barrier3 => write!(f, "BARRIER_3"),
             Self::AdvanceSuperblock => write!(f, "ADVANCE_SB"),
-            Self::Done              => write!(f, "DONE"),
-            Self::Aborted           => write!(f, "ABORTED"),
+            Self::Done => write!(f, "DONE"),
+            Self::Aborted => write!(f, "ABORTED"),
         }
     }
 }
@@ -311,13 +311,13 @@ pub enum AbortReason {
 impl fmt::Display for AbortReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Barrier1Failed          => write!(f, "barrier_1_failed"),
-            Self::Barrier2Failed          => write!(f, "barrier_2_failed"),
-            Self::Barrier3Failed          => write!(f, "barrier_3_failed"),
-            Self::EpochIdOverflow         => write!(f, "epoch_id_overflow"),
-            Self::PartialWrite            => write!(f, "partial_write"),
+            Self::Barrier1Failed => write!(f, "barrier_1_failed"),
+            Self::Barrier2Failed => write!(f, "barrier_2_failed"),
+            Self::Barrier3Failed => write!(f, "barrier_3_failed"),
+            Self::EpochIdOverflow => write!(f, "epoch_id_overflow"),
+            Self::PartialWrite => write!(f, "partial_write"),
             Self::SuperblockAdvanceFailed => write!(f, "superblock_advance_failed"),
-            Self::LockContention          => write!(f, "lock_contention"),
+            Self::LockContention => write!(f, "lock_contention"),
         }
     }
 }
@@ -341,4 +341,3 @@ pub fn forced_commit_flags(base: EpochFlags) -> EpochFlags {
     f.set(EpochFlags::FORCE_COMMITTED);
     f
 }
-

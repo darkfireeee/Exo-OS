@@ -278,14 +278,14 @@ pub const CLASS2_COUNTER_LEN: usize = 8;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Identifiant du tier « chaud » (hot) — SSD NVMe, accès fréquent.
-pub const TIER_HOT:  u8 = 0;
+pub const TIER_HOT: u8 = 0;
 /// Identifiant du tier « tiède » (warm) — SSD SATA / HDD rapide, accès modéré.
 pub const TIER_WARM: u8 = 1;
 /// Identifiant du tier « froid » (cold) — HDD / stockage objet, accès rare.
 pub const TIER_COLD: u8 = 2;
 
 /// Latence maximale admise pour le tier HOT (microsecondes).
-pub const TIER_HOT_MAX_LATENCY_US:  u64 = 100;
+pub const TIER_HOT_MAX_LATENCY_US: u64 = 100;
 /// Latence maximale admise pour le tier WARM (microsecondes).
 pub const TIER_WARM_MAX_LATENCY_US: u64 = 1_000;
 /// Latence maximale admise pour le tier COLD (microsecondes).
@@ -320,7 +320,7 @@ pub const COMPRESS_ZSTD_LEVEL_DEFAULT: u8 = 3;
 /// Seuil de pression GC « medium » : nombre de blobs pendants.
 pub const GC_PRESSURE_MEDIUM_BLOBS: u64 = 25;
 /// Seuil de pression GC « high ».
-pub const GC_PRESSURE_HIGH_BLOBS:   u64 = 100;
+pub const GC_PRESSURE_HIGH_BLOBS: u64 = 100;
 /// Seuil de pression GC « critique » — GC immédiat obligatoire.
 pub const GC_PRESSURE_CRITICAL_BLOBS: u64 = 500;
 
@@ -354,17 +354,17 @@ pub const MAX_RELATION_BYTES: u64 = 4096;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Nombre maximal d'extents pour un objet BLOB.
-pub const MAX_BLOB_EXTENTS:      u32 = 65536;
+pub const MAX_BLOB_EXTENTS: u32 = 65536;
 /// Nombre maximal d'extents pour un objet CODE.
-pub const MAX_CODE_EXTENTS:      u32 = 8192;
+pub const MAX_CODE_EXTENTS: u32 = 8192;
 /// Nombre maximal d'extents pour un objet CONFIG.
-pub const MAX_CONFIG_EXTENTS:    u32 = 256;
+pub const MAX_CONFIG_EXTENTS: u32 = 256;
 /// Nombre maximal d'extents pour un objet SECRET.
-pub const MAX_SECRET_EXTENTS:    u32 = 16;
+pub const MAX_SECRET_EXTENTS: u32 = 16;
 /// Nombre maximal d'extents pour un objet PATHINDEX.
 pub const MAX_PATHINDEX_EXTENTS: u32 = 4096;
 /// Nombre maximal d'extents pour un objet RELATION.
-pub const MAX_RELATION_EXTENTS:  u32 = 1;
+pub const MAX_RELATION_EXTENTS: u32 = 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NUMA

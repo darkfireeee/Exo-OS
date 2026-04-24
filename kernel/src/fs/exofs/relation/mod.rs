@@ -12,14 +12,14 @@ pub mod relation_type;
 pub mod relation_walker;
 
 pub use relation::{Relation, RelationId};
-pub use relation_batch::{RelationBatch, BatchResult};
-pub use relation_cycle::{RelationCycleDetector, CycleReport};
-pub use relation_gc::{RelationGc, RelationGcReport, BlobExistsChecker};
+pub use relation_batch::{BatchResult, RelationBatch};
+pub use relation_cycle::{CycleReport, RelationCycleDetector};
+pub use relation_gc::{BlobExistsChecker, RelationGc, RelationGcReport};
 pub use relation_graph::{RelationGraph, RELATION_GRAPH};
 pub use relation_index::{RelationIndex, RELATION_INDEX};
-pub use relation_query::{RelationQuery, QueryResult};
+pub use relation_query::{QueryResult, RelationQuery};
 pub use relation_storage::{RelationStorage, RELATION_STORAGE};
-pub use relation_type::{RelationType, RelationKind};
+pub use relation_type::{RelationKind, RelationType};
 pub use relation_walker::{RelationWalker, WalkResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -51,12 +51,16 @@ pub fn shutdown() {
 pub fn verify_health() -> bool {
     use relation_storage::STORAGE_MAX_RELATIONS;
     let n = RELATION_STORAGE.count();
-    if n > STORAGE_MAX_RELATIONS { return false; }
+    if n > STORAGE_MAX_RELATIONS {
+        return false;
+    }
 
     // Le nombre d arêtes dans le graphe doit rester cohérent avec
     // le nombre de relations persistées.
     let n_edges = RELATION_GRAPH.n_edges() as usize;
-    if n_edges > n.saturating_mul(2) { return false; }
+    if n_edges > n.saturating_mul(2) {
+        return false;
+    }
 
     true
 }

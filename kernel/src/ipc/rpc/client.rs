@@ -18,17 +18,16 @@
 // RÈGLE CLIENT-02 : cookie unique par appel (AtomicU64 incrémentiel).
 // RÈGLE CLIENT-03 : retry transparent avec backoff exponentiel.
 
-use core::sync::atomic::{AtomicU64, AtomicU32, AtomicBool, Ordering};
 use core::mem::MaybeUninit;
 use core::num::NonZeroU64;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::ipc::core::types::{EndpointId, ProcessId, IpcError};
+use crate::ipc::core::types::{EndpointId, IpcError, ProcessId};
 use crate::ipc::rpc::protocol::{
-    MethodId, RpcCallFrame, RpcReplyFrame, RpcHeader, RpcStatus,
-    MAX_RPC_PAYLOAD,
+    MethodId, RpcCallFrame, RpcHeader, RpcReplyFrame, RpcStatus, MAX_RPC_PAYLOAD,
 };
-use crate::ipc::rpc::timeout::{RpcTimeout, RetryState, RPC_TIMEOUT_STATS};
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::rpc::timeout::{RetryState, RpcTimeout, RPC_TIMEOUT_STATS};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -157,7 +156,9 @@ impl RpcClient {
 
     fn transport_fn(&self) -> Option<RpcTransportFn> {
         let p = self.transport.load(Ordering::Relaxed);
-        if p == 0 { return None; }
+        if p == 0 {
+            return None;
+        }
         // SAFETY: fn pointer stocké via start()
         Some(unsafe { core::mem::transmute(p) })
     }
@@ -189,7 +190,9 @@ impl RpcClient {
         // SAFETY: client_ep est toujours non-nul après start() — chargement d'une valeur
         //         stockée via ep.0.get() dans start(), donc jamais 0 sur client actif.
         let ep_raw = self.client_ep.load(Ordering::Relaxed);
-        if ep_raw == 0 { return Err(IpcError::InvalidEndpoint); }
+        if ep_raw == 0 {
+            return Err(IpcError::InvalidEndpoint);
+        }
         let client_ep = EndpointId(unsafe { NonZeroU64::new_unchecked(ep_raw) });
         let pid = ProcessId(self.pid.load(Ordering::Relaxed));
         let cookie = self.next_cookie();
@@ -219,7 +222,8 @@ impl RpcClient {
             }
 
             let mut call_buf = [0u8; RPC_CALL_BUF_SIZE];
-            let call_size = call_frame.serialize(&mut call_buf)
+            let call_size = call_frame
+                .serialize(&mut call_buf)
                 .map_err(|_| IpcError::Invalid)?;
 
             // --- Envoyer + recevoir ---
@@ -322,7 +326,12 @@ impl RpcClient {
         let mut retry = RetryState::new(max_retries, timeout);
 
         loop {
-            match self.call(server_ep, method_id, args, RpcTimeout::with_ns(retry.timeout.remaining_ns())) {
+            match self.call(
+                server_ep,
+                method_id,
+                args,
+                RpcTimeout::with_ns(retry.timeout.remaining_ns()),
+            ) {
                 Ok(r) => return Ok(r),
                 Err(IpcError::Timeout) | Err(IpcError::WouldBlock) => {
                     if retry.should_retry() {
@@ -378,7 +387,10 @@ struct RpcClientSlot {
 
 impl RpcClientSlot {
     const fn empty() -> Self {
-        Self { client: MaybeUninit::uninit(), occupied: AtomicBool::new(false) }
+        Self {
+            client: MaybeUninit::uninit(),
+            occupied: AtomicBool::new(false),
+        }
     }
 }
 
@@ -392,19 +404,23 @@ unsafe impl Sync for RpcClientTable {}
 impl RpcClientTable {
     const fn new() -> Self {
         const EMPTY: RpcClientSlot = RpcClientSlot::empty();
-        Self { slots: [EMPTY; MAX_RPC_CLIENTS], count: AtomicU32::new(0) }
+        Self {
+            slots: [EMPTY; MAX_RPC_CLIENTS],
+            count: AtomicU32::new(0),
+        }
     }
 
     fn alloc(&self, id: u32) -> Option<usize> {
         for i in 0..MAX_RPC_CLIENTS {
             if !self.slots[i].occupied.load(Ordering::Relaxed) {
-                if self.slots[i].occupied.compare_exchange(
-                    false, true, Ordering::AcqRel, Ordering::Relaxed,
-                ).is_ok() {
+                if self.slots[i]
+                    .occupied
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
                     // SAFETY: CAS AcqRel garantit l'exclusivité; client MaybeUninit<RpcClient> write-once.
                     unsafe {
-                        (self.slots[i].client.as_ptr() as *mut RpcClient)
-                            .write(RpcClient::new(id));
+                        (self.slots[i].client.as_ptr() as *mut RpcClient).write(RpcClient::new(id));
                     }
                     self.count.fetch_add(1, Ordering::Relaxed);
                     return Some(i);
@@ -415,17 +431,27 @@ impl RpcClientTable {
     }
 
     fn get(&self, idx: usize) -> Option<&RpcClient> {
-        if idx >= MAX_RPC_CLIENTS { return None; }
-        if !self.slots[idx].occupied.load(Ordering::Acquire) { return None; }
+        if idx >= MAX_RPC_CLIENTS {
+            return None;
+        }
+        if !self.slots[idx].occupied.load(Ordering::Acquire) {
+            return None;
+        }
         Some(unsafe { &*self.slots[idx].client.as_ptr() })
     }
 
     fn free(&self, idx: usize) -> bool {
-        if idx >= MAX_RPC_CLIENTS { return false; }
-        if let Some(c) = self.get(idx) { c.stop(); }
-        if self.slots[idx].occupied.compare_exchange(
-            true, false, Ordering::AcqRel, Ordering::Relaxed,
-        ).is_ok() {
+        if idx >= MAX_RPC_CLIENTS {
+            return false;
+        }
+        if let Some(c) = self.get(idx) {
+            c.stop();
+        }
+        if self.slots[idx]
+            .occupied
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
             self.count.fetch_sub(1, Ordering::Relaxed);
             true
         } else {
@@ -464,7 +490,9 @@ pub fn rpc_call(
     } else {
         RpcTimeout::with_ns(timeout_ns)
     };
-    RPC_CLIENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?
+    RPC_CLIENT_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)?
         .call(server_ep, method_id, args, timeout)
 }
 
@@ -478,7 +506,9 @@ pub fn rpc_call_retry(
     timeout_ns: u64,
 ) -> Result<RpcResult, IpcError> {
     let timeout = RpcTimeout::with_ns(timeout_ns);
-    RPC_CLIENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?
+    RPC_CLIENT_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)?
         .call_with_retry(server_ep, method_id, args, max_retries, timeout)
 }
 

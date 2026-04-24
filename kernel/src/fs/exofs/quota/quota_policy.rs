@@ -10,17 +10,25 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum QuotaKind {
-    User    = 0,
-    Group   = 1,
+    User = 0,
+    Group = 1,
     Project = 2,
 }
 
 impl QuotaKind {
     pub fn from_u8(v: u8) -> Self {
-        match v { 1 => Self::Group, 2 => Self::Project, _ => Self::User }
+        match v {
+            1 => Self::Group,
+            2 => Self::Project,
+            _ => Self::User,
+        }
     }
     pub fn name(self) -> &'static str {
-        match self { Self::User => "user", Self::Group => "group", Self::Project => "project" }
+        match self {
+            Self::User => "user",
+            Self::Group => "group",
+            Self::Project => "project",
+        }
     }
     pub const COUNT: usize = 3;
 }
@@ -31,13 +39,13 @@ impl QuotaKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuotaLimits {
     /// Limite souple en octets (avertissement).
-    pub soft_bytes:  u64,
+    pub soft_bytes: u64,
     /// Limite dure en octets (blocage immédiat).
-    pub hard_bytes:  u64,
+    pub hard_bytes: u64,
     /// Limite souple en nombre de blobs.
-    pub soft_blobs:  u64,
+    pub soft_blobs: u64,
     /// Limite dure en nombre de blobs.
-    pub hard_blobs:  u64,
+    pub hard_blobs: u64,
     /// Limite souple en nombre d'inodes.
     pub soft_inodes: u64,
     /// Limite dure en nombre d'inodes.
@@ -50,9 +58,12 @@ impl QuotaLimits {
     /// Quotas illimités (valeur par défaut).
     pub const fn unlimited() -> Self {
         Self {
-            soft_bytes:  u64::MAX, hard_bytes:  u64::MAX,
-            soft_blobs:  u64::MAX, hard_blobs:  u64::MAX,
-            soft_inodes: u64::MAX, hard_inodes: u64::MAX,
+            soft_bytes: u64::MAX,
+            hard_bytes: u64::MAX,
+            soft_blobs: u64::MAX,
+            hard_blobs: u64::MAX,
+            soft_inodes: u64::MAX,
+            hard_inodes: u64::MAX,
             grace_ticks: 0,
         }
     }
@@ -73,32 +84,39 @@ impl QuotaLimits {
 
     /// Vrai si toutes les limites sont à MAX (non contraignant).
     pub fn is_unlimited(&self) -> bool {
-        self.hard_bytes  == u64::MAX
-        && self.hard_blobs  == u64::MAX
-        && self.hard_inodes == u64::MAX
+        self.hard_bytes == u64::MAX && self.hard_blobs == u64::MAX && self.hard_inodes == u64::MAX
     }
 
     /// Calcul du pourcentage d'utilisation bytes en ‰ (ARITH-02).
     pub fn bytes_usage_ppt(&self, used: u64) -> u64 {
-        if self.hard_bytes == 0 || self.hard_bytes == u64::MAX { return 0; }
+        if self.hard_bytes == 0 || self.hard_bytes == u64::MAX {
+            return 0;
+        }
         used.saturating_mul(1000)
-            .checked_div(self.hard_bytes).unwrap_or(1000)
+            .checked_div(self.hard_bytes)
+            .unwrap_or(1000)
             .min(1000)
     }
 
     /// Calcul du pourcentage d'utilisation blobs en ‰.
     pub fn blobs_usage_ppt(&self, used: u64) -> u64 {
-        if self.hard_blobs == 0 || self.hard_blobs == u64::MAX { return 0; }
+        if self.hard_blobs == 0 || self.hard_blobs == u64::MAX {
+            return 0;
+        }
         used.saturating_mul(1000)
-            .checked_div(self.hard_blobs).unwrap_or(1000)
+            .checked_div(self.hard_blobs)
+            .unwrap_or(1000)
             .min(1000)
     }
 
     /// Calcul du pourcentage d'utilisation inodes en ‰.
     pub fn inodes_usage_ppt(&self, used: u64) -> u64 {
-        if self.hard_inodes == 0 || self.hard_inodes == u64::MAX { return 0; }
+        if self.hard_inodes == 0 || self.hard_inodes == u64::MAX {
+            return 0;
+        }
         used.saturating_mul(1000)
-            .checked_div(self.hard_inodes).unwrap_or(1000)
+            .checked_div(self.hard_inodes)
+            .unwrap_or(1000)
             .min(1000)
     }
 
@@ -134,19 +152,25 @@ impl QuotaLimits {
 
     /// Octets disponibles avant la limite dure (saturating).
     pub fn bytes_remaining(&self, used: u64) -> u64 {
-        if self.hard_bytes == u64::MAX { return u64::MAX; }
+        if self.hard_bytes == u64::MAX {
+            return u64::MAX;
+        }
         self.hard_bytes.saturating_sub(used)
     }
 
     /// Blobs disponibles avant la limite dure.
     pub fn blobs_remaining(&self, used: u64) -> u64 {
-        if self.hard_blobs == u64::MAX { return u64::MAX; }
+        if self.hard_blobs == u64::MAX {
+            return u64::MAX;
+        }
         self.hard_blobs.saturating_sub(used)
     }
 
     /// Inodes disponibles avant la limite dure.
     pub fn inodes_remaining(&self, used: u64) -> u64 {
-        if self.hard_inodes == u64::MAX { return u64::MAX; }
+        if self.hard_inodes == u64::MAX {
+            return u64::MAX;
+        }
         self.hard_inodes.saturating_sub(used)
     }
 }
@@ -159,17 +183,17 @@ pub struct PolicyFlags(pub u32);
 
 impl PolicyFlags {
     /// Politique activée.
-    pub const ENABLED:      PolicyFlags = PolicyFlags(1 << 0);
+    pub const ENABLED: PolicyFlags = PolicyFlags(1 << 0);
     /// Journaliser les dépassements soft.
-    pub const LOG_SOFT:     PolicyFlags = PolicyFlags(1 << 1);
+    pub const LOG_SOFT: PolicyFlags = PolicyFlags(1 << 1);
     /// Journaliser les refus hard.
-    pub const LOG_HARD:     PolicyFlags = PolicyFlags(1 << 2);
+    pub const LOG_HARD: PolicyFlags = PolicyFlags(1 << 2);
     /// Envoyer une alerte lors d'un dépassement soft.
-    pub const ALERT_SOFT:   PolicyFlags = PolicyFlags(1 << 3);
+    pub const ALERT_SOFT: PolicyFlags = PolicyFlags(1 << 3);
     /// Héritage des limites depuis le parent namespace.
-    pub const INHERIT:      PolicyFlags = PolicyFlags(1 << 4);
+    pub const INHERIT: PolicyFlags = PolicyFlags(1 << 4);
     /// Mode strict : soft = hard (pas de grâce).
-    pub const STRICT:       PolicyFlags = PolicyFlags(1 << 5);
+    pub const STRICT: PolicyFlags = PolicyFlags(1 << 5);
     /// Activer la journalisation des modifications de limites.
     pub const AUDIT_LIMITS: PolicyFlags = PolicyFlags(1 << 6);
 
@@ -178,14 +202,30 @@ impl PolicyFlags {
         PolicyFlags(Self::ENABLED.0 | Self::LOG_HARD.0 | Self::ALERT_SOFT.0)
     }
 
-    pub fn has(self, flag: PolicyFlags) -> bool { self.0 & flag.0 != 0 }
-    pub fn set(self, flag: PolicyFlags) -> Self  { PolicyFlags(self.0 | flag.0) }
-    pub fn clear(self, flag: PolicyFlags) -> Self { PolicyFlags(self.0 & !flag.0) }
-    pub fn is_enabled(self) -> bool { self.has(Self::ENABLED) }
-    pub fn is_strict(self)  -> bool { self.has(Self::STRICT) }
-    pub fn should_log_soft(self) -> bool { self.has(Self::LOG_SOFT) }
-    pub fn should_log_hard(self) -> bool { self.has(Self::LOG_HARD) }
-    pub fn should_alert_soft(self) -> bool { self.has(Self::ALERT_SOFT) }
+    pub fn has(self, flag: PolicyFlags) -> bool {
+        self.0 & flag.0 != 0
+    }
+    pub fn set(self, flag: PolicyFlags) -> Self {
+        PolicyFlags(self.0 | flag.0)
+    }
+    pub fn clear(self, flag: PolicyFlags) -> Self {
+        PolicyFlags(self.0 & !flag.0)
+    }
+    pub fn is_enabled(self) -> bool {
+        self.has(Self::ENABLED)
+    }
+    pub fn is_strict(self) -> bool {
+        self.has(Self::STRICT)
+    }
+    pub fn should_log_soft(self) -> bool {
+        self.has(Self::LOG_SOFT)
+    }
+    pub fn should_log_hard(self) -> bool {
+        self.has(Self::LOG_HARD)
+    }
+    pub fn should_alert_soft(self) -> bool {
+        self.has(Self::ALERT_SOFT)
+    }
 }
 
 // ─── QuotaPolicy ─────────────────────────────────────────────────────────────
@@ -193,11 +233,11 @@ impl PolicyFlags {
 /// Politique de quota associant limites, kind et comportement.
 #[derive(Clone, Copy, Debug)]
 pub struct QuotaPolicy {
-    pub kind:   QuotaKind,
+    pub kind: QuotaKind,
     pub limits: QuotaLimits,
-    pub flags:  PolicyFlags,
+    pub flags: PolicyFlags,
     /// Nom court ASCII[32] de la politique (paddé de zéros).
-    pub name:   [u8; 32],
+    pub name: [u8; 32],
 }
 
 impl QuotaPolicy {
@@ -205,8 +245,8 @@ impl QuotaPolicy {
         Self {
             kind,
             limits: QuotaLimits::unlimited(),
-            flags:  PolicyFlags::default_flags(),
-            name:   [0u8; 32],
+            flags: PolicyFlags::default_flags(),
+            name: [0u8; 32],
         }
     }
 
@@ -216,7 +256,10 @@ impl QuotaPolicy {
         let bytes = name.as_bytes();
         let len = bytes.len().min(32);
         let mut i = 0usize;
-        while i < len { p.name[i] = bytes[i]; i = i.wrapping_add(1); }
+        while i < len {
+            p.name[i] = bytes[i];
+            i = i.wrapping_add(1);
+        }
         p
     }
 
@@ -230,13 +273,17 @@ impl QuotaPolicy {
         core::str::from_utf8(&self.name[..end]).unwrap_or("<invalid>")
     }
 
-    pub fn is_enabled(&self) -> bool { self.flags.is_enabled() }
-    pub fn is_strict(&self)  -> bool { self.flags.is_strict() }
+    pub fn is_enabled(&self) -> bool {
+        self.flags.is_enabled()
+    }
+    pub fn is_strict(&self) -> bool {
+        self.flags.is_strict()
+    }
 
     /// Retourne une politique stricte : soft = hard sur chaque dimension.
     pub fn make_strict(mut self) -> Self {
-        self.limits.soft_bytes  = self.limits.hard_bytes;
-        self.limits.soft_blobs  = self.limits.hard_blobs;
+        self.limits.soft_bytes = self.limits.hard_bytes;
+        self.limits.soft_blobs = self.limits.hard_blobs;
         self.limits.soft_inodes = self.limits.hard_inodes;
         self.limits.grace_ticks = 0;
         self.flags = self.flags.set(PolicyFlags::STRICT);
@@ -291,10 +338,10 @@ impl PolicyPresets {
             QuotaKind::User,
             "standard_user",
             QuotaLimits {
-                soft_bytes:  900 * 1024 * 1024,
-                hard_bytes:  1024 * 1024 * 1024,
-                soft_blobs:  90_000,
-                hard_blobs:  100_000,
+                soft_bytes: 900 * 1024 * 1024,
+                hard_bytes: 1024 * 1024 * 1024,
+                soft_blobs: 90_000,
+                hard_blobs: 100_000,
                 soft_inodes: 45_000,
                 hard_inodes: 50_000,
                 grace_ticks: 3_600_000_000, // ~1h en µs
@@ -308,10 +355,10 @@ impl PolicyPresets {
             QuotaKind::Project,
             "large_project",
             QuotaLimits {
-                soft_bytes:  9 * 1024 * 1024 * 1024,
-                hard_bytes:  10 * 1024 * 1024 * 1024,
-                soft_blobs:  900_000,
-                hard_blobs:  1_000_000,
+                soft_bytes: 9 * 1024 * 1024 * 1024,
+                hard_bytes: 10 * 1024 * 1024 * 1024,
+                soft_blobs: 900_000,
+                hard_blobs: 1_000_000,
                 soft_inodes: 180_000,
                 hard_inodes: 200_000,
                 grace_ticks: 7_200_000_000,
@@ -325,15 +372,16 @@ impl PolicyPresets {
             QuotaKind::User,
             "sandbox",
             QuotaLimits {
-                soft_bytes:  8 * 1024 * 1024,
-                hard_bytes:  10 * 1024 * 1024,
-                soft_blobs:  900,
-                hard_blobs:  1_000,
+                soft_bytes: 8 * 1024 * 1024,
+                hard_bytes: 10 * 1024 * 1024,
+                soft_blobs: 900,
+                hard_blobs: 1_000,
                 soft_inodes: 900,
                 hard_inodes: 1_000,
                 grace_ticks: 0,
             },
-        ).make_strict()
+        )
+        .make_strict()
     }
 
     /// Politique groupe illimitée.
@@ -367,9 +415,12 @@ mod tests {
     #[test]
     fn test_quota_limits_soft_leq_hard() {
         let l = QuotaLimits {
-            soft_bytes: 1000, hard_bytes: 500,
-            soft_blobs: 0, hard_blobs: 100,
-            soft_inodes: 0, hard_inodes: 100,
+            soft_bytes: 1000,
+            hard_bytes: 500,
+            soft_blobs: 0,
+            hard_blobs: 100,
+            soft_inodes: 0,
+            hard_inodes: 100,
             grace_ticks: 0,
         };
         assert!(l.validate().is_err());
@@ -378,9 +429,12 @@ mod tests {
     #[test]
     fn test_quota_limits_usage_ppt() {
         let l = QuotaLimits {
-            soft_bytes: 800, hard_bytes: 1000,
-            soft_blobs: u64::MAX, hard_blobs: u64::MAX,
-            soft_inodes: u64::MAX, hard_inodes: u64::MAX,
+            soft_bytes: 800,
+            hard_bytes: 1000,
+            soft_blobs: u64::MAX,
+            hard_blobs: u64::MAX,
+            soft_inodes: u64::MAX,
+            hard_inodes: u64::MAX,
             grace_ticks: 0,
         };
         assert_eq!(l.bytes_usage_ppt(500), 500);
@@ -392,9 +446,12 @@ mod tests {
     #[test]
     fn test_quota_limits_exceeded() {
         let l = QuotaLimits {
-            soft_bytes: 500, hard_bytes: 1000,
-            soft_blobs: u64::MAX, hard_blobs: u64::MAX,
-            soft_inodes: u64::MAX, hard_inodes: u64::MAX,
+            soft_bytes: 500,
+            hard_bytes: 1000,
+            soft_blobs: u64::MAX,
+            hard_blobs: u64::MAX,
+            soft_inodes: u64::MAX,
+            hard_inodes: u64::MAX,
             grace_ticks: 0,
         };
         assert!(!l.bytes_hard_exceeded(999));
@@ -406,9 +463,12 @@ mod tests {
     #[test]
     fn test_quota_limits_remaining() {
         let l = QuotaLimits {
-            soft_bytes: 800, hard_bytes: 1000,
-            soft_blobs: u64::MAX, hard_blobs: u64::MAX,
-            soft_inodes: u64::MAX, hard_inodes: u64::MAX,
+            soft_bytes: 800,
+            hard_bytes: 1000,
+            soft_blobs: u64::MAX,
+            hard_blobs: u64::MAX,
+            soft_inodes: u64::MAX,
+            hard_inodes: u64::MAX,
             grace_ticks: 0,
         };
         assert_eq!(l.bytes_remaining(600), 400);
@@ -440,9 +500,12 @@ mod tests {
     #[test]
     fn test_policy_named() {
         let lim = QuotaLimits {
-            soft_bytes: 500, hard_bytes: 1000,
-            soft_blobs: u64::MAX, hard_blobs: u64::MAX,
-            soft_inodes: u64::MAX, hard_inodes: u64::MAX,
+            soft_bytes: 500,
+            hard_bytes: 1000,
+            soft_blobs: u64::MAX,
+            hard_blobs: u64::MAX,
+            soft_inodes: u64::MAX,
+            hard_inodes: u64::MAX,
             grace_ticks: 0,
         };
         let p = QuotaPolicy::named(QuotaKind::User, "test", lim);
@@ -453,9 +516,12 @@ mod tests {
     #[test]
     fn test_policy_make_strict() {
         let lim = QuotaLimits {
-            soft_bytes: 500, hard_bytes: 1000,
-            soft_blobs: u64::MAX, hard_blobs: u64::MAX,
-            soft_inodes: u64::MAX, hard_inodes: u64::MAX,
+            soft_bytes: 500,
+            hard_bytes: 1000,
+            soft_blobs: u64::MAX,
+            hard_blobs: u64::MAX,
+            soft_inodes: u64::MAX,
+            hard_inodes: u64::MAX,
             grace_ticks: 100,
         };
         let p = QuotaPolicy::named(QuotaKind::User, "strict", lim).make_strict();
@@ -467,11 +533,7 @@ mod tests {
     #[test]
     fn test_policy_severity_score() {
         let p = PolicyPresets::standard_user();
-        let score = p.severity_score(
-            950 * 1024 * 1024,
-            10_000,
-            5_000,
-        );
+        let score = p.severity_score(950 * 1024 * 1024, 10_000, 5_000);
         assert!(score > 0 && score <= 1000);
     }
 
@@ -487,9 +549,12 @@ mod tests {
     fn test_policy_with_limits() {
         let p = QuotaPolicy::default_policy(QuotaKind::Group);
         let lim = QuotaLimits {
-            soft_bytes: 100, hard_bytes: 200,
-            soft_blobs: u64::MAX, hard_blobs: u64::MAX,
-            soft_inodes: u64::MAX, hard_inodes: u64::MAX,
+            soft_bytes: 100,
+            hard_bytes: 200,
+            soft_blobs: u64::MAX,
+            hard_blobs: u64::MAX,
+            soft_inodes: u64::MAX,
+            hard_inodes: u64::MAX,
             grace_ticks: 0,
         };
         let p2 = p.with_limits(lim).expect("ok");
@@ -500,9 +565,12 @@ mod tests {
     fn test_policy_with_limits_invalid() {
         let p = QuotaPolicy::default_policy(QuotaKind::Group);
         let bad = QuotaLimits {
-            soft_bytes: 5000, hard_bytes: 100,
-            soft_blobs: u64::MAX, hard_blobs: u64::MAX,
-            soft_inodes: u64::MAX, hard_inodes: u64::MAX,
+            soft_bytes: 5000,
+            hard_bytes: 100,
+            soft_blobs: u64::MAX,
+            hard_blobs: u64::MAX,
+            soft_inodes: u64::MAX,
+            hard_inodes: u64::MAX,
             grace_ticks: 0,
         };
         assert!(p.with_limits(bad).is_err());

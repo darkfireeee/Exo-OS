@@ -15,13 +15,11 @@
 //
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use spin::Mutex;
 
-use crate::memory::dma::core::types::{
-    DmaChannelId, DmaTransactionId, DmaDirection, DmaError,
-};
 use crate::memory::core::types::PhysAddr;
+use crate::memory::dma::core::types::{DmaChannelId, DmaDirection, DmaError, DmaTransactionId};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES
@@ -47,17 +45,17 @@ pub const MAX_PERIOD_BYTES: usize = 1024 * 1024;
 #[derive(Copy, Clone)]
 pub struct CyclicConfig {
     /// Canal DMA à utiliser.
-    pub channel:      DmaChannelId,
+    pub channel: DmaChannelId,
     /// Adresse physique du tampon circulaire.
-    pub buf_phys:     PhysAddr,
+    pub buf_phys: PhysAddr,
     /// Taille totale du tampon (doit être un multiple de `period_bytes`).
-    pub buf_bytes:    usize,
+    pub buf_bytes: usize,
     /// Taille d'une période en octets.
     pub period_bytes: usize,
     /// Direction des transferts.
-    pub direction:    DmaDirection,
+    pub direction: DmaDirection,
     /// Adresse physique du périphérique (registre FIFO, etc.).
-    pub dev_phys:     PhysAddr,
+    pub dev_phys: PhysAddr,
 }
 
 /// Résultat de la validation d'une configuration cyclique.
@@ -102,10 +100,10 @@ impl CyclicConfig {
 #[repr(u8)]
 #[allow(dead_code)]
 enum CyclicState {
-    Idle    = 0,
+    Idle = 0,
     Running = 1,
-    Paused  = 2,
-    Error   = 3,
+    Paused = 2,
+    Error = 3,
 }
 
 /// Descripteur interne d'une période cyclique.
@@ -115,63 +113,66 @@ struct PeriodDesc {
     /// Adresse physique de début de la période dans le tampon.
     phys_start: PhysAddr,
     /// Octets dans cette période.
-    bytes:      usize,
+    bytes: usize,
 }
 
 /// Un transfert DMA cyclique actif.
 pub struct CyclicTransfer {
     /// Configuration de ce transfert.
-    config:          CyclicConfig,
+    config: CyclicConfig,
     /// Période[]s découpées.
-    periods:         [PeriodDesc; MAX_CYCLIC_PERIODS],
-    period_count:    usize,
+    periods: [PeriodDesc; MAX_CYCLIC_PERIODS],
+    period_count: usize,
     /// État courant.
-    state:           AtomicU8,   // CyclicState
+    state: AtomicU8, // CyclicState
     /// Nombre de périodes écoulées depuis le démarrage (IRQ incrémente ce compteur).
     elapsed_periods: AtomicU64,
     /// Dernière période lue par le driver audio.
     consumed_periods: AtomicU64,
     /// Transaction DMA courante (réutilisée à chaque periode).
-    current_txn:     DmaTransactionId,
+    current_txn: DmaTransactionId,
     /// Index de la période en cours de transfert.
-    current_period:  AtomicU32,
+    current_period: AtomicU32,
     /// Statistiques.
-    pub underruns:   AtomicU32,
-    pub overruns:    AtomicU32,
+    pub underruns: AtomicU32,
+    pub overruns: AtomicU32,
 }
 
 impl CyclicTransfer {
     const fn new() -> Self {
-        const PD: PeriodDesc = PeriodDesc { phys_start: PhysAddr::new(0), bytes: 0 };
+        const PD: PeriodDesc = PeriodDesc {
+            phys_start: PhysAddr::new(0),
+            bytes: 0,
+        };
         CyclicTransfer {
-            config:           CyclicConfig {
-                channel:      DmaChannelId(u32::MAX),
-                buf_phys:     PhysAddr::new(0),
-                buf_bytes:    0,
+            config: CyclicConfig {
+                channel: DmaChannelId(u32::MAX),
+                buf_phys: PhysAddr::new(0),
+                buf_bytes: 0,
                 period_bytes: 0,
-                direction:    DmaDirection::None,
-                dev_phys:     PhysAddr::new(0),
+                direction: DmaDirection::None,
+                dev_phys: PhysAddr::new(0),
             },
-            periods:          [PD; MAX_CYCLIC_PERIODS],
-            period_count:     0,
-            state:            AtomicU8::new(CyclicState::Idle as u8),
-            elapsed_periods:  AtomicU64::new(0),
+            periods: [PD; MAX_CYCLIC_PERIODS],
+            period_count: 0,
+            state: AtomicU8::new(CyclicState::Idle as u8),
+            elapsed_periods: AtomicU64::new(0),
             consumed_periods: AtomicU64::new(0),
-            current_txn:      DmaTransactionId::INVALID,
-            current_period:   AtomicU32::new(0),
-            underruns:        AtomicU32::new(0),
-            overruns:         AtomicU32::new(0),
+            current_txn: DmaTransactionId::INVALID,
+            current_period: AtomicU32::new(0),
+            underruns: AtomicU32::new(0),
+            overruns: AtomicU32::new(0),
         }
     }
 
     /// Prépare le transfert à partir d'une configuration validée.
     fn setup(&mut self, config: CyclicConfig, period_count: usize) {
-        self.config       = config;
+        self.config = config;
         self.period_count = period_count;
         for i in 0..period_count {
             self.periods[i] = PeriodDesc {
                 phys_start: PhysAddr::new(
-                    config.buf_phys.as_u64() + (i * config.period_bytes) as u64
+                    config.buf_phys.as_u64() + (i * config.period_bytes) as u64,
                 ),
                 bytes: config.period_bytes,
             };
@@ -188,7 +189,8 @@ impl CyclicTransfer {
         }
         let txn = DmaTransactionId::generate();
         self.current_txn = txn;
-        self.state.store(CyclicState::Running as u8, Ordering::Release);
+        self.state
+            .store(CyclicState::Running as u8, Ordering::Release);
         Ok(txn)
     }
 
@@ -198,7 +200,8 @@ impl CyclicTransfer {
     pub fn on_period_complete(&self) {
         let elapsed = self.elapsed_periods.fetch_add(1, Ordering::AcqRel) + 1;
         let next_period = (elapsed as usize) % self.period_count;
-        self.current_period.store(next_period as u32, Ordering::Relaxed);
+        self.current_period
+            .store(next_period as u32, Ordering::Relaxed);
 
         // Détection de xrun.
         let consumed = self.consumed_periods.load(Ordering::Relaxed);
@@ -210,7 +213,7 @@ impl CyclicTransfer {
 
     /// Retourne combien de périodes sont disponibles pour le driver.
     pub fn available_periods(&self) -> u64 {
-        let elapsed  = self.elapsed_periods.load(Ordering::Acquire);
+        let elapsed = self.elapsed_periods.load(Ordering::Acquire);
         let consumed = self.consumed_periods.load(Ordering::Relaxed);
         elapsed.saturating_sub(consumed)
     }
@@ -243,7 +246,10 @@ struct CyclicTable {
 impl CyclicTable {
     const fn new() -> Self {
         const T: CyclicTransfer = CyclicTransfer::new();
-        CyclicTable { slots: [T; MAX_CYCLIC_CHANNELS], count: 0 }
+        CyclicTable {
+            slots: [T; MAX_CYCLIC_CHANNELS],
+            count: 0,
+        }
     }
 
     fn alloc_slot(&mut self) -> Option<usize> {
@@ -266,7 +272,9 @@ unsafe impl Send for CyclicManager {}
 
 impl CyclicManager {
     const fn new() -> Self {
-        CyclicManager { inner: Mutex::new(CyclicTable::new()) }
+        CyclicManager {
+            inner: Mutex::new(CyclicTable::new()),
+        }
     }
 
     /// Prépare et démarre un transfert cyclique.
@@ -275,7 +283,9 @@ impl CyclicManager {
     pub fn start(&self, config: CyclicConfig) -> Result<usize, CyclicConfigError> {
         let period_count = config.validate()?;
         let mut table = self.inner.lock();
-        let slot_idx = table.alloc_slot().ok_or(CyclicConfigError::TooManyPeriods)?;
+        let slot_idx = table
+            .alloc_slot()
+            .ok_or(CyclicConfigError::TooManyPeriods)?;
         table.slots[slot_idx].setup(config, period_count);
         table.slots[slot_idx]
             .start()

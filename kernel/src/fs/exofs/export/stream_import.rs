@@ -14,11 +14,10 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::incremental_export::EpochId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─── Trait d'écriture blob ────────────────────────────────────────────────────
 
@@ -65,12 +64,10 @@ impl ConflictResolver {
             ConflictResolver::Skip => Ok(false),
             ConflictResolver::Overwrite => Ok(true),
             ConflictResolver::Fail => Err(ExofsError::AlreadyExists),
-            ConflictResolver::KeepNewer => {
-                match existing_epoch {
-                    Some(ep) => Ok(incoming_epoch.value() > ep.value()),
-                    None => Ok(true),
-                }
-            }
+            ConflictResolver::KeepNewer => match existing_epoch {
+                Some(ep) => Ok(incoming_epoch.value() > ep.value()),
+                None => Ok(true),
+            },
         }
     }
 }
@@ -90,17 +87,17 @@ pub enum TombstoneHandler {
 
 impl TombstoneHandler {
     /// Traite un tombstone — retourne Ok(true) pour déclencher la suppression locale.
-    pub fn handle(
-        &self,
-        blob_id: &[u8; 32],
-        local_exists: bool,
-    ) -> ExofsResult<bool> {
+    pub fn handle(&self, blob_id: &[u8; 32], local_exists: bool) -> ExofsResult<bool> {
         let _ = blob_id;
         match self {
             TombstoneHandler::Delete => Ok(local_exists),
             TombstoneHandler::Ignore => Ok(false),
             TombstoneHandler::FailIfPresent => {
-                if local_exists { Err(ExofsError::AlreadyExists) } else { Ok(false) }
+                if local_exists {
+                    Err(ExofsError::AlreadyExists)
+                } else {
+                    Ok(false)
+                }
             }
         }
     }
@@ -155,8 +152,12 @@ impl ImportEntryHeader {
 
     pub fn new_tombstone(blob_id: [u8; 32]) -> Self {
         Self {
-            magic: IMPORT_ENTRY_MAGIC, flags: IMPORT_FLAG_TOMBSTONE,
-            _pad: [0u8; 3], blob_id, data_size: 0, _pad2: [0u8; 4],
+            magic: IMPORT_ENTRY_MAGIC,
+            flags: IMPORT_FLAG_TOMBSTONE,
+            _pad: [0u8; 3],
+            blob_id,
+            data_size: 0,
+            _pad2: [0u8; 4],
         }
     }
 
@@ -211,7 +212,12 @@ pub struct ImportCheckpoint {
 
 impl ImportCheckpoint {
     pub fn new() -> Self {
-        Self { source_offset: 0, entries_processed: 0, last_blob_id: [0u8; 32], valid: false }
+        Self {
+            source_offset: 0,
+            entries_processed: 0,
+            last_blob_id: [0u8; 32],
+            valid: false,
+        }
     }
 
     pub fn advance(&mut self, offset: u64, blob_id: [u8; 32]) {
@@ -221,7 +227,9 @@ impl ImportCheckpoint {
         self.valid = true;
     }
 
-    pub fn reset(&mut self) { *self = Self::new(); }
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
 }
 
 // ─── Configuration d'import ───────────────────────────────────────────────────
@@ -246,8 +254,10 @@ pub struct StreamImportConfig {
 impl StreamImportConfig {
     pub fn default(session_id: u32) -> Self {
         Self {
-            session_id, verify_blob_id: true,
-            max_entries: 0, conflict: ConflictResolver::Skip,
+            session_id,
+            verify_blob_id: true,
+            max_entries: 0,
+            conflict: ConflictResolver::Skip,
             tombstone_mode: TombstoneHandler::Delete,
             max_blob_size: 0,
         }
@@ -255,14 +265,18 @@ impl StreamImportConfig {
 
     pub fn strict(session_id: u32) -> Self {
         Self {
-            session_id, verify_blob_id: true,
-            max_entries: 0, conflict: ConflictResolver::Fail,
+            session_id,
+            verify_blob_id: true,
+            max_entries: 0,
+            conflict: ConflictResolver::Fail,
             tombstone_mode: TombstoneHandler::FailIfPresent,
             max_blob_size: 256 * 1024 * 1024,
         }
     }
 
-    pub fn validate(&self) -> ExofsResult<()> { Ok(()) }
+    pub fn validate(&self) -> ExofsResult<()> {
+        Ok(())
+    }
 }
 
 // ─── Rapport d'import ─────────────────────────────────────────────────────────
@@ -284,12 +298,16 @@ pub struct StreamImportReport {
 }
 
 impl StreamImportReport {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn record_imported(&mut self, size: u64, overwrite: bool) {
         self.blobs_imported = self.blobs_imported.saturating_add(1);
         self.bytes_written = self.bytes_written.saturating_add(size);
-        if overwrite { self.blobs_overwritten = self.blobs_overwritten.saturating_add(1); }
+        if overwrite {
+            self.blobs_overwritten = self.blobs_overwritten.saturating_add(1);
+        }
     }
 
     pub fn record_skipped(&mut self) {
@@ -315,8 +333,12 @@ impl StreamImportReport {
             .saturating_add(self.tombstones_skipped)
     }
 
-    pub fn has_errors(&self) -> bool { self.errors > 0 }
-    pub fn is_clean(&self) -> bool { self.is_complete && !self.has_errors() }
+    pub fn has_errors(&self) -> bool {
+        self.errors > 0
+    }
+    pub fn is_clean(&self) -> bool {
+        self.is_complete && !self.has_errors()
+    }
 }
 
 // ─── Source de flux ───────────────────────────────────────────────────────────
@@ -337,8 +359,12 @@ pub struct SliceImportSource<'a> {
 }
 
 impl<'a> SliceImportSource<'a> {
-    pub fn new(data: &'a [u8]) -> Self { Self { data, pos: 0 } }
-    pub fn remaining(&self) -> usize { self.data.len().saturating_sub(self.pos) }
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+    pub fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.pos)
+    }
 }
 
 impl<'a> ImportSource for SliceImportSource<'a> {
@@ -350,7 +376,9 @@ impl<'a> ImportSource for SliceImportSource<'a> {
         self.pos = self.pos.wrapping_add(buf.len());
         Ok(())
     }
-    fn bytes_read(&self) -> u64 { self.pos as u64 }
+    fn bytes_read(&self) -> u64 {
+        self.pos as u64
+    }
 }
 
 // ─── Moteur d'import streaming ────────────────────────────────────────────────
@@ -379,7 +407,11 @@ impl StreamImporter {
 
     pub fn resume(config: StreamImportConfig, ck: ImportCheckpoint) -> ExofsResult<Self> {
         config.validate()?;
-        Ok(Self { config, checkpoint: ck, report: StreamImportReport::new() })
+        Ok(Self {
+            config,
+            checkpoint: ck,
+            report: StreamImportReport::new(),
+        })
     }
 
     /// Lance l'import depuis la source `src` vers le writer `writer`.
@@ -395,8 +427,9 @@ impl StreamImporter {
 
         loop {
             // Limite max_entries (ARITH-02 : comparaison saturante)
-            if self.config.max_entries > 0
-                && entries >= self.config.max_entries as u64 { break; }
+            if self.config.max_entries > 0 && entries >= self.config.max_entries as u64 {
+                break;
+            }
 
             // Lecture de l'en-tête
             if src.read_exact(&mut hdr_buf).is_err() {
@@ -406,9 +439,8 @@ impl StreamImporter {
 
             // Reinterprétation sûre en ImportEntryHeader
             // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-            let hdr: ImportEntryHeader = unsafe {
-                core::ptr::read_unaligned(hdr_buf.as_ptr() as *const ImportEntryHeader)
-            };
+            let hdr: ImportEntryHeader =
+                unsafe { core::ptr::read_unaligned(hdr_buf.as_ptr() as *const ImportEntryHeader) };
 
             // RÈGLE 8 : magic EN PREMIER
             if !hdr.validate_magic() {
@@ -451,7 +483,9 @@ impl StreamImporter {
 
             // Allocation du buffer de données — OOM-02 : try_reserve
             let mut payload: Vec<u8> = Vec::new();
-            payload.try_reserve(data_size as usize).map_err(|_| ExofsError::NoMemory)?;
+            payload
+                .try_reserve(data_size as usize)
+                .map_err(|_| ExofsError::NoMemory)?;
             payload.resize(data_size as usize, 0u8);
 
             if src.read_exact(&mut payload).is_err() {
@@ -475,7 +509,11 @@ impl StreamImporter {
             let local_exists = writer.blob_exists(&blob_id);
             if local_exists {
                 let existing_epoch = None; // sans accès direct à l'epoch locale
-                match self.config.conflict.resolve(&blob_id, EpochId(0), existing_epoch) {
+                match self
+                    .config
+                    .conflict
+                    .resolve(&blob_id, EpochId(0), existing_epoch)
+                {
                     Ok(true) => {
                         // Écraser
                         match writer.write_blob(&blob_id, &payload) {
@@ -511,8 +549,12 @@ impl StreamImporter {
         Ok(self.report)
     }
 
-    pub fn checkpoint(&self) -> &ImportCheckpoint { &self.checkpoint }
-    pub fn report(&self) -> &StreamImportReport { &self.report }
+    pub fn checkpoint(&self) -> &ImportCheckpoint {
+        &self.checkpoint
+    }
+    pub fn report(&self) -> &StreamImportReport {
+        &self.report
+    }
 }
 
 // ─── Constructeur de flux d'import ───────────────────────────────────────────
@@ -523,14 +565,18 @@ pub struct ImportStreamBuilder {
 }
 
 impl ImportStreamBuilder {
-    pub fn new() -> Self { Self { buf: Vec::new() } }
+    pub fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
 
     /// Ajoute un blob au flux — OOM-02 : try_reserve.
     pub fn append_blob(&mut self, blob_id: [u8; 32], data: &[u8]) -> ExofsResult<()> {
         let hdr = ImportEntryHeader::new_blob(blob_id, data.len() as u64);
         let hdr_bytes = hdr.as_bytes();
         let total = hdr_bytes.len().saturating_add(data.len());
-        self.buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
+        self.buf
+            .try_reserve(total)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.buf.extend_from_slice(hdr_bytes);
         self.buf.extend_from_slice(data);
         Ok(())
@@ -540,22 +586,36 @@ impl ImportStreamBuilder {
     pub fn append_tombstone(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
         let hdr = ImportEntryHeader::new_tombstone(blob_id);
         let hdr_bytes = hdr.as_bytes();
-        self.buf.try_reserve(hdr_bytes.len()).map_err(|_| ExofsError::NoMemory)?;
+        self.buf
+            .try_reserve(hdr_bytes.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         self.buf.extend_from_slice(hdr_bytes);
         Ok(())
     }
 
-    pub fn as_slice(&self) -> &[u8] { &self.buf }
-    pub fn len(&self) -> usize { self.buf.len() }
-    pub fn is_empty(&self) -> bool { self.buf.is_empty() }
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buf
+    }
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
 }
 
 // ─── blake3 inline minimal ────────────────────────────────────────────────────
 
 fn inline_blake3(data: &[u8]) -> [u8; 32] {
     let mut state = [
-        0x6b08_c647u32, 0xbb67_ae85, 0x3c6e_f372, 0xa54f_f53a,
-        0x510e_527f, 0x9b05_688c, 0x1f83_d9ab, 0x5be0_cd19,
+        0x6b08_c647u32,
+        0xbb67_ae85,
+        0x3c6e_f372,
+        0xa54f_f53a,
+        0x510e_527f,
+        0x9b05_688c,
+        0x1f83_d9ab,
+        0x5be0_cd19,
     ];
     let mut i = 0usize;
     while i < data.len() {
@@ -588,8 +648,16 @@ struct MockWriter {
 
 #[cfg(test)]
 impl MockWriter {
-    fn new() -> Self { Self { blobs: Vec::new(), deleted: Vec::new(), written_bytes: 0 } }
-    fn find_blob(&self, id: &[u8; 32]) -> bool { self.blobs.iter().any(|(bid, _)| bid == id) }
+    fn new() -> Self {
+        Self {
+            blobs: Vec::new(),
+            deleted: Vec::new(),
+            written_bytes: 0,
+        }
+    }
+    fn find_blob(&self, id: &[u8; 32]) -> bool {
+        self.blobs.iter().any(|(bid, _)| bid == id)
+    }
 }
 
 #[cfg(test)]
@@ -601,13 +669,17 @@ impl BlobWriter for MockWriter {
         self.written_bytes = self.written_bytes.saturating_add(data.len() as u64);
         Ok(())
     }
-    fn blob_exists(&self, blob_id: &[u8; 32]) -> bool { self.find_blob(blob_id) }
+    fn blob_exists(&self, blob_id: &[u8; 32]) -> bool {
+        self.find_blob(blob_id)
+    }
     fn delete_blob(&mut self, blob_id: &[u8; 32]) -> ExofsResult<()> {
         self.blobs.retain(|(id, _)| id != blob_id);
         self.deleted.push(*blob_id);
         Ok(())
     }
-    fn bytes_written(&self) -> u64 { self.written_bytes }
+    fn bytes_written(&self) -> u64 {
+        self.written_bytes
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -615,7 +687,11 @@ impl BlobWriter for MockWriter {
 mod tests {
     use super::*;
 
-    fn make_id(n: u8) -> [u8; 32] { let mut id = [0u8; 32]; id[0] = n; id }
+    fn make_id(n: u8) -> [u8; 32] {
+        let mut id = [0u8; 32];
+        id[0] = n;
+        id
+    }
 
     #[test]
     fn test_entry_header_size() {
@@ -698,7 +774,10 @@ mod tests {
         let mut builder = ImportStreamBuilder::new();
         builder.append_blob(blob_id, data).expect("ok");
 
-        let cfg = StreamImportConfig { verify_blob_id: false, ..StreamImportConfig::default(1) };
+        let cfg = StreamImportConfig {
+            verify_blob_id: false,
+            ..StreamImportConfig::default(1)
+        };
         let mut importer = StreamImporter::new(cfg).expect("ok");
         let mut src = SliceImportSource::new(builder.as_slice());
         let mut writer = MockWriter::new();
@@ -715,7 +794,10 @@ mod tests {
             let bid = inline_blake3(&data);
             builder.append_blob(bid, &data).expect("ok");
         }
-        let cfg = StreamImportConfig { verify_blob_id: false, ..StreamImportConfig::default(1) };
+        let cfg = StreamImportConfig {
+            verify_blob_id: false,
+            ..StreamImportConfig::default(1)
+        };
         let mut importer = StreamImporter::new(cfg).expect("ok");
         let mut src = SliceImportSource::new(builder.as_slice());
         let mut writer = MockWriter::new();
@@ -752,7 +834,11 @@ mod tests {
         let mut builder = ImportStreamBuilder::new();
         builder.append_blob(bid, b"new version").expect("ok");
 
-        let cfg = StreamImportConfig { verify_blob_id: false, conflict: ConflictResolver::Skip, ..StreamImportConfig::default(1) };
+        let cfg = StreamImportConfig {
+            verify_blob_id: false,
+            conflict: ConflictResolver::Skip,
+            ..StreamImportConfig::default(1)
+        };
         let mut importer = StreamImporter::new(cfg).expect("ok");
         let mut src = SliceImportSource::new(builder.as_slice());
         let report = importer.run(&mut src, &mut writer).expect("ok");

@@ -4,37 +4,37 @@
 // Dispatche vers demand_paging, cow, ou swap_in selon la cause.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::memory::core::{VirtAddr, PageFlags, AllocError};
-use crate::memory::virt::vma::{VmaFlags, VmaBacking};
 use super::{FaultCause, FaultContext, FaultResult};
+use crate::memory::core::{AllocError, PageFlags, VirtAddr};
+use crate::memory::virt::vma::{VmaBacking, VmaFlags};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATISTIQUES DE PAGE FAULT
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct FaultStats {
-    pub total:          AtomicU64,
-    pub demand_paging:  AtomicU64,
-    pub cow_breaks:     AtomicU64,
-    pub swap_ins:       AtomicU64,
-    pub not_mapped:     AtomicU64,
-    pub protection:     AtomicU64,
-    pub kernel_faults:  AtomicU64,
-    pub oom_kills:      AtomicU64,
+    pub total: AtomicU64,
+    pub demand_paging: AtomicU64,
+    pub cow_breaks: AtomicU64,
+    pub swap_ins: AtomicU64,
+    pub not_mapped: AtomicU64,
+    pub protection: AtomicU64,
+    pub kernel_faults: AtomicU64,
+    pub oom_kills: AtomicU64,
 }
 
 impl FaultStats {
     pub const fn new() -> Self {
         FaultStats {
-            total:         AtomicU64::new(0),
+            total: AtomicU64::new(0),
             demand_paging: AtomicU64::new(0),
-            cow_breaks:    AtomicU64::new(0),
-            swap_ins:      AtomicU64::new(0),
-            not_mapped:    AtomicU64::new(0),
-            protection:    AtomicU64::new(0),
+            cow_breaks: AtomicU64::new(0),
+            swap_ins: AtomicU64::new(0),
+            not_mapped: AtomicU64::new(0),
+            protection: AtomicU64::new(0),
             kernel_faults: AtomicU64::new(0),
-            oom_kills:     AtomicU64::new(0),
+            oom_kills: AtomicU64::new(0),
         }
     }
 }
@@ -52,15 +52,14 @@ pub static FAULT_STATS: FaultStats = FaultStats::new();
 ///
 /// Retourne `FaultResult::Handled` si le fault a été résolu et l'exécution
 /// peut reprendre, ou une erreur pour déclencher un signal/kill.
-pub fn handle_page_fault<A: FaultAllocator>(
-    ctx:  &FaultContext,
-    alloc: &A,
-) -> FaultResult {
+pub fn handle_page_fault<A: FaultAllocator>(ctx: &FaultContext, alloc: &A) -> FaultResult {
     FAULT_STATS.total.fetch_add(1, Ordering::Relaxed);
     if ctx.from_kernel {
         FAULT_STATS.kernel_faults.fetch_add(1, Ordering::Relaxed);
         // Un fault kernel non résolvable = panic.
-        return FaultResult::KernelFault { addr: ctx.fault_addr };
+        return FaultResult::KernelFault {
+            addr: ctx.fault_addr,
+        };
     }
 
     // Trouver la VMA qui contient l'adresse fautive.
@@ -68,7 +67,9 @@ pub fn handle_page_fault<A: FaultAllocator>(
         Some(v) => v,
         None => {
             FAULT_STATS.not_mapped.fetch_add(1, Ordering::Relaxed);
-            return FaultResult::Segfault { addr: ctx.fault_addr };
+            return FaultResult::Segfault {
+                addr: ctx.fault_addr,
+            };
         }
     };
 
@@ -77,13 +78,17 @@ pub fn handle_page_fault<A: FaultAllocator>(
         FaultCause::Write => {
             if !vma.flags.contains(VmaFlags::WRITE) && !vma.flags.contains(VmaFlags::COW) {
                 FAULT_STATS.protection.fetch_add(1, Ordering::Relaxed);
-                return FaultResult::Segfault { addr: ctx.fault_addr };
+                return FaultResult::Segfault {
+                    addr: ctx.fault_addr,
+                };
             }
         }
         FaultCause::Execute => {
             if !vma.flags.contains(VmaFlags::EXEC) {
                 FAULT_STATS.protection.fetch_add(1, Ordering::Relaxed);
-                return FaultResult::Segfault { addr: ctx.fault_addr };
+                return FaultResult::Segfault {
+                    addr: ctx.fault_addr,
+                };
             }
         }
         FaultCause::Read => {} // Toujours OK si la VMA est présente
@@ -118,12 +123,12 @@ pub fn handle_page_fault<A: FaultAllocator>(
 
 /// Trait d'allocation utilisé par les handlers de fault.
 pub trait FaultAllocator: Sync {
-    fn alloc_zeroed(&self)    -> Result<crate::memory::core::Frame, AllocError>;
+    fn alloc_zeroed(&self) -> Result<crate::memory::core::Frame, AllocError>;
     fn alloc_nonzeroed(&self) -> Result<crate::memory::core::Frame, AllocError>;
     fn free_frame(&self, f: crate::memory::core::Frame);
     fn map_page(
         &self,
-        virt:  VirtAddr,
+        virt: VirtAddr,
         frame: crate::memory::core::Frame,
         flags: PageFlags,
     ) -> Result<(), AllocError>;
@@ -136,5 +141,7 @@ pub trait FaultAllocator: Sync {
     /// dans les bits [63:1] d'une PTE marquée non-présente (PRESENT=0).
     ///
     /// Retourne `0` si la page n'a pas de PTE connue (implémentation par défaut).
-    fn read_pte_raw(&self, _virt: VirtAddr) -> u64 { 0 }
+    fn read_pte_raw(&self, _virt: VirtAddr) -> u64 {
+        0
+    }
 }

@@ -7,7 +7,9 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::PhysAddr;
-use crate::memory::dma::stats::counters::{DMA_STATS, dma_stat_submit, dma_stat_complete, dma_stat_error};
+use crate::memory::dma::stats::counters::{
+    dma_stat_complete, dma_stat_error, dma_stat_submit, DMA_STATS,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES VIRTIO
@@ -20,9 +22,9 @@ pub const VIRTQ_SIZE: usize = 256;
 #[allow(dead_code)]
 mod desc_flags {
     /// Descripteur en lecture seule pour le device (write = 0 par défaut).
-    pub const NEXT:     u16 = 1 << 0;  // Chaîn next.
-    pub const WRITE:    u16 = 1 << 1;  // Device écrit (sinon device lit).
-    pub const INDIRECT: u16 = 1 << 2;  // Descripteur de table indirecte.
+    pub const NEXT: u16 = 1 << 0; // Chaîn next.
+    pub const WRITE: u16 = 1 << 1; // Device écrit (sinon device lit).
+    pub const INDIRECT: u16 = 1 << 2; // Descripteur de table indirecte.
 }
 
 // Flags de l'available ring.
@@ -40,13 +42,13 @@ mod avail_flags {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct VirtqDesc {
     /// Adresse physique du buffer.
-    pub addr:  u64,
+    pub addr: u64,
     /// Longueur du buffer.
-    pub len:   u32,
+    pub len: u32,
     /// Flags (desc_flags).
     pub flags: u16,
     /// Index du prochain descripteur (si NEXT).
-    pub next:  u16,
+    pub next: u16,
 }
 
 /// Available Ring (place des buffers disponibles pour le device).
@@ -54,8 +56,8 @@ pub struct VirtqDesc {
 #[derive(Clone, Copy)]
 pub struct VirtqAvail {
     pub flags: u16,
-    pub idx:   u16,
-    pub ring:  [u16; VIRTQ_SIZE],
+    pub idx: u16,
+    pub ring: [u16; VIRTQ_SIZE],
     pub used_event: u16,
 }
 
@@ -64,7 +66,7 @@ pub struct VirtqAvail {
 #[derive(Clone, Copy, Default)]
 pub struct VirtqUsedElem {
     /// Index du descripteur de tête.
-    pub id:  u32,
+    pub id: u32,
     /// Nombre d'octets écrits par le device.
     pub len: u32,
 }
@@ -74,8 +76,8 @@ pub struct VirtqUsedElem {
 #[derive(Clone, Copy)]
 pub struct VirtqUsed {
     pub flags: u16,
-    pub idx:   u16,
-    pub ring:  [VirtqUsedElem; VIRTQ_SIZE],
+    pub idx: u16,
+    pub ring: [VirtqUsedElem; VIRTQ_SIZE],
     pub avail_event: u16,
 }
 
@@ -85,39 +87,41 @@ pub struct VirtqUsed {
 
 /// État interne de la virtqueue.
 struct VirtqState {
-    desc:        [VirtqDesc; VIRTQ_SIZE],
-    avail:       VirtqAvail,
-    used:        VirtqUsed,
+    desc: [VirtqDesc; VIRTQ_SIZE],
+    avail: VirtqAvail,
+    used: VirtqUsed,
     /// Bitmap des descripteurs libres (bit=1 → libre).
     free_bitmap: [u64; VIRTQ_SIZE / 64],
     /// Indice Our last_used_idx pour la sonde de la used ring.
-    last_used:   u16,
+    last_used: u16,
     /// Taille de données par slot (pour les stats).
-    slot_bytes:  [u32; VIRTQ_SIZE],
-    slot_write:  [bool; VIRTQ_SIZE],
+    slot_bytes: [u32; VIRTQ_SIZE],
+    slot_write: [bool; VIRTQ_SIZE],
 }
 
 impl VirtqState {
     #[allow(dead_code)]
     fn new() -> Self {
         let avail = VirtqAvail {
-            flags: 0, idx: 0,
+            flags: 0,
+            idx: 0,
             ring: [0; VIRTQ_SIZE],
             used_event: 0,
         };
         let used = VirtqUsed {
-            flags: 0, idx: 0,
+            flags: 0,
+            idx: 0,
             ring: [VirtqUsedElem::default(); VIRTQ_SIZE],
             avail_event: 0,
         };
         VirtqState {
-            desc:        [VirtqDesc::default(); VIRTQ_SIZE],
+            desc: [VirtqDesc::default(); VIRTQ_SIZE],
             avail,
             used,
-            free_bitmap: [!0u64; VIRTQ_SIZE / 64],   // tous libres
-            last_used:   0,
-            slot_bytes:  [0; VIRTQ_SIZE],
-            slot_write:  [false; VIRTQ_SIZE],
+            free_bitmap: [!0u64; VIRTQ_SIZE / 64], // tous libres
+            last_used: 0,
+            slot_bytes: [0; VIRTQ_SIZE],
+            slot_write: [false; VIRTQ_SIZE],
         }
     }
 
@@ -126,7 +130,7 @@ impl VirtqState {
         for (i, word) in self.free_bitmap.iter_mut().enumerate() {
             if *word != 0 {
                 let bit = (*word).trailing_zeros() as usize;
-                *word &= !( 1u64 << bit );
+                *word &= !(1u64 << bit);
                 return Some((i * 64 + bit) as u16);
             }
         }
@@ -146,10 +150,10 @@ impl VirtqState {
     fn submit_buf(&mut self, phys: PhysAddr, len: u32, write: bool) -> Option<u16> {
         let idx = self.alloc_desc()?;
         self.desc[idx as usize] = VirtqDesc {
-            addr:  phys.as_u64(),
+            addr: phys.as_u64(),
             len,
             flags: if write { desc_flags::WRITE } else { 0 },
-            next:  0,
+            next: 0,
         };
         self.slot_bytes[idx as usize] = len;
         self.slot_write[idx as usize] = write;
@@ -196,41 +200,41 @@ impl VirtqState {
 #[allow(dead_code)]
 mod virtio_mmio {
     /// Magic Value (0x74726976 = "virt").
-    pub const MAGIC:         usize = 0x000;
+    pub const MAGIC: usize = 0x000;
     /// Device ID.
-    pub const DEVICE_ID:     usize = 0x008;
+    pub const DEVICE_ID: usize = 0x008;
     /// Vendor ID.
-    pub const VENDOR_ID:     usize = 0x00C;
+    pub const VENDOR_ID: usize = 0x00C;
     /// Device Feature Bits.
-    pub const DEVICE_FEAT:   usize = 0x010;
+    pub const DEVICE_FEAT: usize = 0x010;
     /// Driver Feature Bits.
-    pub const DRIVER_FEAT:   usize = 0x020;
+    pub const DRIVER_FEAT: usize = 0x020;
     /// Queue Selector.
-    pub const QUEUE_SEL:     usize = 0x030;
+    pub const QUEUE_SEL: usize = 0x030;
     /// Queue Max (read).
     pub const QUEUE_NUM_MAX: usize = 0x034;
     /// Queue Size (write).
-    pub const QUEUE_NUM:     usize = 0x038;
+    pub const QUEUE_NUM: usize = 0x038;
     /// Queue Alignment.
-    pub const QUEUE_ALIGN:   usize = 0x03C;
+    pub const QUEUE_ALIGN: usize = 0x03C;
     /// Queue PFN.
-    pub const QUEUE_PFN:     usize = 0x040;
+    pub const QUEUE_PFN: usize = 0x040;
     /// Queue Ready (MMIO v2).
-    pub const QUEUE_READY:   usize = 0x044;
+    pub const QUEUE_READY: usize = 0x044;
     /// Queue Notify.
-    pub const QUEUE_NOTIFY:  usize = 0x050;
+    pub const QUEUE_NOTIFY: usize = 0x050;
     /// Status.
-    pub const STATUS:        usize = 0x070;
+    pub const STATUS: usize = 0x070;
 }
 
 /// Bits de status (§3.1).
 #[allow(dead_code)]
 mod status {
     pub const ACKNOWLEDGE: u32 = 1;
-    pub const DRIVER:      u32 = 2;
-    pub const DRIVER_OK:   u32 = 4;
+    pub const DRIVER: u32 = 2;
+    pub const DRIVER_OK: u32 = 4;
     pub const FEATURES_OK: u32 = 8;
-    pub const FAILED:      u32 = 128;
+    pub const FAILED: u32 = 128;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -239,18 +243,18 @@ mod status {
 
 pub struct VirtioDmaEngine {
     mmio_base: AtomicU64,
-    present:   AtomicBool,
+    present: AtomicBool,
     engine_id: AtomicU32,
-    state:     Mutex<VirtqState>,
+    state: Mutex<VirtqState>,
 }
 
 impl VirtioDmaEngine {
     const fn new_uninit() -> Self {
         VirtioDmaEngine {
             mmio_base: AtomicU64::new(0),
-            present:   AtomicBool::new(false),
+            present: AtomicBool::new(false),
             engine_id: AtomicU32::new(0),
-            state:     Mutex::new(unsafe { core::mem::zeroed() }),
+            state: Mutex::new(unsafe { core::mem::zeroed() }),
         }
     }
 
@@ -268,21 +272,28 @@ impl VirtioDmaEngine {
     pub unsafe fn init(&self, mmio_base: u64) -> bool {
         // Vérifier magic value.
         let magic = ((mmio_base + virtio_mmio::MAGIC as u64) as *const u32).read_volatile();
-        if magic != 0x74726976 { return false; }
+        if magic != 0x74726976 {
+            return false;
+        }
 
         self.mmio_base.store(mmio_base, Ordering::Release);
 
         // Séquence d'initialisation §3.1.
-        self.write32(virtio_mmio::STATUS, 0);  // Reset.
+        self.write32(virtio_mmio::STATUS, 0); // Reset.
         self.write32(virtio_mmio::STATUS, status::ACKNOWLEDGE);
         self.write32(virtio_mmio::STATUS, status::ACKNOWLEDGE | status::DRIVER);
         // Pas de feature negotiation ici (pas de supported feature bits BLK spécifiques).
-        self.write32(virtio_mmio::STATUS, status::ACKNOWLEDGE | status::DRIVER | status::FEATURES_OK);
+        self.write32(
+            virtio_mmio::STATUS,
+            status::ACKNOWLEDGE | status::DRIVER | status::FEATURES_OK,
+        );
 
         // Configurer la queue 0.
         self.write32(virtio_mmio::QUEUE_SEL, 0);
         let qmax = self.read32(virtio_mmio::QUEUE_NUM_MAX);
-        if qmax == 0 { return false; }
+        if qmax == 0 {
+            return false;
+        }
         let qsize = (VIRTQ_SIZE as u32).min(qmax);
         self.write32(virtio_mmio::QUEUE_NUM, qsize);
 
@@ -296,7 +307,8 @@ impl VirtioDmaEngine {
         self.write32(virtio_mmio::QUEUE_ALIGN, 4096);
 
         // DRIVER_OK.
-        self.write32(virtio_mmio::STATUS,
+        self.write32(
+            virtio_mmio::STATUS,
             status::ACKNOWLEDGE | status::DRIVER | status::FEATURES_OK | status::DRIVER_OK,
         );
 
@@ -312,7 +324,9 @@ impl VirtioDmaEngine {
     ///
     /// # Safety : `phys` valide pour toute la durée du transfert.
     pub unsafe fn submit(&self, phys: PhysAddr, len: u32, write: bool) -> bool {
-        if !self.present.load(Ordering::Acquire) { return false; }
+        if !self.present.load(Ordering::Acquire) {
+            return false;
+        }
         let mut st = self.state.lock();
         let ok = st.submit_buf(phys, len, write).is_some();
         drop(st);
@@ -329,7 +343,9 @@ impl VirtioDmaEngine {
     ///
     /// # Safety : contexte non-préemptible.
     pub unsafe fn poll(&self) -> usize {
-        if !self.present.load(Ordering::Acquire) { return 0; }
+        if !self.present.load(Ordering::Acquire) {
+            return 0;
+        }
         let mut st = self.state.lock();
         let (ok, err, bytes) = st.poll_used();
         drop(st);

@@ -6,4 +6,4 @@ pub mod transitions;
 pub mod wakeup;
 
 pub use transitions::{transition, StateTransition, TransitionError};
-pub use wakeup::{PROCESS_WAKEUP_HANDLER, register_with_dma};
+pub use wakeup::{register_with_dma, PROCESS_WAKEUP_HANDLER};

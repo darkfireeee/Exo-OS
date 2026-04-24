@@ -31,36 +31,36 @@ const COMMIT_HISTORY_SIZE: usize = 32;
 #[repr(u8)]
 pub enum CommitStatus {
     /// Commit réussi.
-    Success  = 0,
+    Success = 0,
     /// Commit avorté (erreur I/O ou lock déjà tenu).
-    Aborted  = 1,
+    Aborted = 1,
     /// Commit partiel (barrière manquante — CRITIQUE).
-    Partial  = 2,
+    Partial = 2,
 }
 
 /// Entrée dans l'historique des commits.
 #[derive(Copy, Clone, Debug)]
 pub struct CommitHistoryEntry {
     /// Epoch commité.
-    pub epoch_id:     EpochId,
+    pub epoch_id: EpochId,
     /// Timestamp TSC du début du commit.
-    pub started_at:   u64,
+    pub started_at: u64,
     /// Durée du commit en cycles TSC.
     pub duration_cyc: u64,
     /// Nombre d'objets commités.
     pub object_count: u32,
     /// Statut du commit.
-    pub status:       CommitStatus,
+    pub status: CommitStatus,
 }
 
 impl CommitHistoryEntry {
     const fn empty() -> Self {
         CommitHistoryEntry {
-            epoch_id:     EpochId(0),
-            started_at:   0,
+            epoch_id: EpochId(0),
+            started_at: 0,
             duration_cyc: 0,
             object_count: 0,
-            status:       CommitStatus::Aborted,
+            status: CommitStatus::Aborted,
         }
     }
 }
@@ -68,34 +68,34 @@ impl CommitHistoryEntry {
 /// État interne du protocole de commit, protégé par EPOCH_COMMIT_LOCK.
 pub struct EpochCommitState {
     /// Numéro de séquence du commit courant (incrémenté à chaque acquisition).
-    pub commit_seq:       u64,
+    pub commit_seq: u64,
     /// Total de commits réussis.
-    pub total_commits:    u64,
+    pub total_commits: u64,
     /// Total de commits avortés.
-    pub aborted_commits:  u64,
+    pub aborted_commits: u64,
     /// Total de commits partiels (CRITIQUE — doit rester à 0 en prod).
-    pub partial_commits:  u64,
+    pub partial_commits: u64,
     /// EpochId du dernier commit réussi.
-    pub last_epoch:       EpochId,
+    pub last_epoch: EpochId,
     /// TSC du dernier commit réussi.
-    pub last_commit_tsc:  u64,
+    pub last_commit_tsc: u64,
     /// Historique circulaire des derniers commits.
-    history:              [CommitHistoryEntry; COMMIT_HISTORY_SIZE],
+    history: [CommitHistoryEntry; COMMIT_HISTORY_SIZE],
     /// Index d'écriture dans l'historique.
-    history_head:         usize,
+    history_head: usize,
 }
 
 impl EpochCommitState {
     pub const fn new() -> Self {
         EpochCommitState {
-            commit_seq:      0,
-            total_commits:   0,
+            commit_seq: 0,
+            total_commits: 0,
             aborted_commits: 0,
             partial_commits: 0,
-            last_epoch:      EpochId(0),
+            last_epoch: EpochId(0),
             last_commit_tsc: 0,
-            history:         [CommitHistoryEntry::empty(); COMMIT_HISTORY_SIZE],
-            history_head:    0,
+            history: [CommitHistoryEntry::empty(); COMMIT_HISTORY_SIZE],
+            history_head: 0,
         }
     }
 
@@ -107,7 +107,7 @@ impl EpochCommitState {
         match entry.status {
             CommitStatus::Success => {
                 self.total_commits = self.total_commits.saturating_add(1);
-                self.last_epoch    = entry.epoch_id;
+                self.last_epoch = entry.epoch_id;
                 self.last_commit_tsc = entry.started_at.saturating_add(entry.duration_cyc);
             }
             CommitStatus::Aborted => {
@@ -173,8 +173,7 @@ impl EpochCommitState {
 /// # RÈGLE LOCK-07
 /// Ce lock est au niveau le PLUS ÉLEVÉ de la hiérarchie fs/.
 /// Jamais acquis sous un autre lock fs/ plus fin.
-pub static EPOCH_COMMIT_LOCK: SpinLock<EpochCommitState> =
-    SpinLock::new(EpochCommitState::new());
+pub static EPOCH_COMMIT_LOCK: SpinLock<EpochCommitState> = SpinLock::new(EpochCommitState::new());
 
 /// Indicateur rapide (atomique) qu'un commit est en cours.
 ///
@@ -245,24 +244,24 @@ pub fn lock_contention_count() -> u64 {
 #[derive(Debug)]
 pub struct CommitLockSnapshot {
     /// Vrai si un commit est en cours.
-    pub in_progress:     bool,
+    pub in_progress: bool,
     /// Nombre total de commits réussis.
-    pub total_commits:   u64,
+    pub total_commits: u64,
     /// Nombre total d'aborts.
     pub aborted_commits: u64,
     /// Nombre de commits partiels (doit être 0).
     pub partial_commits: u64,
     /// EpochId du dernier commit réussi.
-    pub last_epoch:      EpochId,
+    pub last_epoch: EpochId,
     /// Contention (acquisitions refusées).
-    pub contention:      u64,
+    pub contention: u64,
 }
 
 impl CommitLockSnapshot {
     /// Prend un instantané de l'état courant.
     pub fn take() -> Self {
         let in_progress = COMMIT_IN_PROGRESS.load(Ordering::Acquire);
-        let contention  = LOCK_CONTENTION_COUNT.load(Ordering::Relaxed);
+        let contention = LOCK_CONTENTION_COUNT.load(Ordering::Relaxed);
         // Lecture de l'état interne sans lock si non critique pour diagnostics.
         // Note : en production, utiliser try_lock si cohérence stricte nécessaire.
         let (total_commits, aborted_commits, partial_commits, last_epoch) = {

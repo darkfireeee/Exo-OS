@@ -35,12 +35,15 @@ pub struct FixedString<const N: usize> {
     /// Données UTF-8 — seuls `bytes[0..len]` sont valides.
     pub bytes: [u8; N],
     /// Longueur en bytes (u32 pour ABI stable — CORR-30).
-    pub len:   u32,
+    pub len: u32,
 }
 
 impl<const N: usize> FixedString<N> {
     /// Chaîne vide.
-    pub const EMPTY: Self = Self { bytes: [0u8; N], len: 0 };
+    pub const EMPTY: Self = Self {
+        bytes: [0u8; N],
+        len: 0,
+    };
 
     /// Construit depuis un slice de bytes UTF-8.
     ///
@@ -95,7 +98,8 @@ impl<const N: usize> FixedString<N> {
 
 impl<const N: usize> PartialEq for FixedString<N> {
     fn eq(&self, other: &Self) -> bool {
-        self.len == other.len && self.bytes[..self.len as usize] == other.bytes[..other.len as usize]
+        self.len == other.len
+            && self.bytes[..self.len as usize] == other.bytes[..other.len as usize]
     }
 }
 

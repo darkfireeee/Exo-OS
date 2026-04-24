@@ -13,34 +13,33 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_*.
 
-
 extern crate alloc;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─── HealthStatus ────────────────────────────────────────────────────────────
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HealthStatus {
-    Healthy   = 0,
-    Degraded  = 1,   // Performances dégradées mais fonctionnel.
-    Warning   = 2,   // Seuils dépassés, attention requise.
-    Critical  = 3,   // Espace faible / erreurs fréquentes.
-    ReadOnly  = 4,   // Monté en lecture seule.
+    Healthy = 0,
+    Degraded = 1, // Performances dégradées mais fonctionnel.
+    Warning = 2,  // Seuils dépassés, attention requise.
+    Critical = 3, // Espace faible / erreurs fréquentes.
+    ReadOnly = 4, // Monté en lecture seule.
     Unmounted = 5,
 }
 
 impl HealthStatus {
     pub fn name(self) -> &'static str {
         match self {
-            Self::Healthy   => "healthy",
-            Self::Degraded  => "degraded",
-            Self::Warning   => "warning",
-            Self::Critical  => "critical",
-            Self::ReadOnly  => "read_only",
+            Self::Healthy => "healthy",
+            Self::Degraded => "degraded",
+            Self::Warning => "warning",
+            Self::Critical => "critical",
+            Self::ReadOnly => "read_only",
             Self::Unmounted => "unmounted",
         }
     }
@@ -66,7 +65,11 @@ impl HealthStatus {
 
     /// Retourne le pire des deux états.
     pub fn worst(self, other: Self) -> Self {
-        if other > self { other } else { self }
+        if other > self {
+            other
+        } else {
+            self
+        }
     }
 }
 
@@ -75,13 +78,13 @@ impl HealthStatus {
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HealthProbeId {
-    SpaceUsage      = 0,
-    ErrorRate       = 1,
+    SpaceUsage = 0,
+    ErrorRate = 1,
     CacheEfficiency = 2,
-    GcPressure      = 3,
-    LatencyP99      = 4,
-    WritePending    = 5,
-    EpochHealth     = 6,
+    GcPressure = 3,
+    LatencyP99 = 4,
+    WritePending = 5,
+    EpochHealth = 6,
     MetadataIntegrity = 7,
 }
 
@@ -90,13 +93,13 @@ impl HealthProbeId {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::SpaceUsage        => "space_usage",
-            Self::ErrorRate         => "error_rate",
-            Self::CacheEfficiency   => "cache_efficiency",
-            Self::GcPressure        => "gc_pressure",
-            Self::LatencyP99        => "latency_p99",
-            Self::WritePending      => "write_pending",
-            Self::EpochHealth       => "epoch_health",
+            Self::SpaceUsage => "space_usage",
+            Self::ErrorRate => "error_rate",
+            Self::CacheEfficiency => "cache_efficiency",
+            Self::GcPressure => "gc_pressure",
+            Self::LatencyP99 => "latency_p99",
+            Self::WritePending => "write_pending",
+            Self::EpochHealth => "epoch_health",
             Self::MetadataIntegrity => "metadata_integrity",
         }
     }
@@ -107,23 +110,38 @@ impl HealthProbeId {
 /// Résultat d'une sonde de santé.
 #[derive(Clone, Copy, Debug)]
 pub struct HealthProbeResult {
-    pub probe:   HealthProbeId,
-    pub status:  HealthStatus,
-    pub value:   u64,   // valeur mesurée (unité dépend de la sonde)
-    pub tick:    u64,
+    pub probe: HealthProbeId,
+    pub status: HealthStatus,
+    pub value: u64, // valeur mesurée (unité dépend de la sonde)
+    pub tick: u64,
 }
 
 impl HealthProbeResult {
     pub fn ok(probe: HealthProbeId, value: u64, tick: u64) -> Self {
-        Self { probe, status: HealthStatus::Healthy, value, tick }
+        Self {
+            probe,
+            status: HealthStatus::Healthy,
+            value,
+            tick,
+        }
     }
 
     pub fn warn(probe: HealthProbeId, value: u64, tick: u64) -> Self {
-        Self { probe, status: HealthStatus::Warning, value, tick }
+        Self {
+            probe,
+            status: HealthStatus::Warning,
+            value,
+            tick,
+        }
     }
 
     pub fn critical(probe: HealthProbeId, value: u64, tick: u64) -> Self {
-        Self { probe, status: HealthStatus::Critical, value, tick }
+        Self {
+            probe,
+            status: HealthStatus::Critical,
+            value,
+            tick,
+        }
     }
 }
 
@@ -134,7 +152,7 @@ pub const PROBE_RING_SIZE: usize = 64;
 /// Ring des résultats de sondes récents.
 pub struct HealthProbeRing {
     slots: [UnsafeCell<HealthProbeResult>; PROBE_RING_SIZE],
-    head:  AtomicU64,
+    head: AtomicU64,
 }
 
 // SAFETY: accès par index atomique tournant.
@@ -144,43 +162,58 @@ unsafe impl Send for HealthProbeRing {}
 impl HealthProbeRing {
     #[allow(dead_code)]
     const ZERO: HealthProbeResult = HealthProbeResult {
-        probe:  HealthProbeId::SpaceUsage,
+        probe: HealthProbeId::SpaceUsage,
         status: HealthStatus::Healthy,
-        value:  0, tick: 0,
+        value: 0,
+        tick: 0,
     };
 
     pub const fn new_const() -> Self {
         const Z: UnsafeCell<HealthProbeResult> = UnsafeCell::new(HealthProbeResult {
-            probe:  HealthProbeId::SpaceUsage,
+            probe: HealthProbeId::SpaceUsage,
             status: HealthStatus::Healthy,
-            value:  0,
-            tick:   0,
+            value: 0,
+            tick: 0,
         });
-        Self { slots: [Z; PROBE_RING_SIZE], head: AtomicU64::new(0) }
+        Self {
+            slots: [Z; PROBE_RING_SIZE],
+            head: AtomicU64::new(0),
+        }
     }
 
     pub fn push(&self, r: HealthProbeResult) {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % PROBE_RING_SIZE;
         // SAFETY: index atomique tournant.
-        unsafe { *self.slots[idx].get() = r; }
+        unsafe {
+            *self.slots[idx].get() = r;
+        }
     }
 
     pub fn latest(&self) -> HealthProbeResult {
         let head = self.head.load(Ordering::Relaxed) as usize;
-        let idx  = (head.wrapping_add(PROBE_RING_SIZE).wrapping_sub(1)) % PROBE_RING_SIZE;
+        let idx = (head.wrapping_add(PROBE_RING_SIZE).wrapping_sub(1)) % PROBE_RING_SIZE;
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         unsafe { *self.slots[idx].get() }
     }
 
     /// Collecte les n derniers résultats filtrés par probe (OOM-02 / RECUR-01).
-    pub fn last_n_for_probe(&self, probe: HealthProbeId, n: usize, out: &mut Vec<HealthProbeResult>) -> ExofsResult<()> {
+    pub fn last_n_for_probe(
+        &self,
+        probe: HealthProbeId,
+        n: usize,
+        out: &mut Vec<HealthProbeResult>,
+    ) -> ExofsResult<()> {
         let cap = n.min(PROBE_RING_SIZE);
         out.try_reserve(cap).map_err(|_| ExofsError::NoMemory)?;
         let head = self.head.load(Ordering::Relaxed) as usize;
         let mut found = 0usize;
         let mut i = 0usize;
         while i < PROBE_RING_SIZE && found < cap {
-            let idx = (head.wrapping_add(PROBE_RING_SIZE).wrapping_sub(i).wrapping_sub(1)) % PROBE_RING_SIZE;
+            let idx = (head
+                .wrapping_add(PROBE_RING_SIZE)
+                .wrapping_sub(i)
+                .wrapping_sub(1))
+                % PROBE_RING_SIZE;
             // SAFETY: accès exclusif garanti par lock atomique acquis avant.
             let r = unsafe { *self.slots[idx].get() };
             if r.tick > 0 && r.probe == probe {
@@ -198,29 +231,33 @@ impl HealthProbeRing {
 /// Seuils configurables par sonde.
 #[derive(Clone, Copy, Debug)]
 pub struct HealthThresholds {
-    pub space_warn_pct:    u8,   // % utilisation → Warning
-    pub space_crit_pct:    u8,   // % utilisation → Critical
-    pub error_warn_pct10:  u64,  // taux d'erreur * 1000 → Warning
-    pub error_crit_pct10:  u64,  // taux d'erreur * 1000 → Critical
-    pub latency_warn_us:   u64,
-    pub latency_crit_us:   u64,
+    pub space_warn_pct: u8,    // % utilisation → Warning
+    pub space_crit_pct: u8,    // % utilisation → Critical
+    pub error_warn_pct10: u64, // taux d'erreur * 1000 → Warning
+    pub error_crit_pct10: u64, // taux d'erreur * 1000 → Critical
+    pub latency_warn_us: u64,
+    pub latency_crit_us: u64,
 }
 
 impl HealthThresholds {
     pub fn default_thresholds() -> Self {
         Self {
-            space_warn_pct:   80,
-            space_crit_pct:   95,
-            error_warn_pct10: 10,    // 1%
-            error_crit_pct10: 50,    // 5%
-            latency_warn_us:  10_000,
-            latency_crit_us:  100_000,
+            space_warn_pct: 80,
+            space_crit_pct: 95,
+            error_warn_pct10: 10, // 1%
+            error_crit_pct10: 50, // 5%
+            latency_warn_us: 10_000,
+            latency_crit_us: 100_000,
         }
     }
 
     pub fn validate(&self) -> ExofsResult<()> {
-        if self.space_warn_pct >= self.space_crit_pct { return Err(ExofsError::InvalidArgument); }
-        if self.error_warn_pct10 >= self.error_crit_pct10 { return Err(ExofsError::InvalidArgument); }
+        if self.space_warn_pct >= self.space_crit_pct {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if self.error_warn_pct10 >= self.error_crit_pct10 {
+            return Err(ExofsError::InvalidArgument);
+        }
         Ok(())
     }
 }
@@ -229,10 +266,10 @@ impl HealthThresholds {
 
 /// Évaluateur de santé du filesystem.
 pub struct HealthCheck {
-    status:     AtomicU8,
+    status: AtomicU8,
     thresholds: UnsafeCell<HealthThresholds>,
     probe_ring: HealthProbeRing,
-    eval_tick:  AtomicU64,
+    eval_tick: AtomicU64,
 }
 
 unsafe impl Sync for HealthCheck {}
@@ -241,18 +278,18 @@ unsafe impl Send for HealthCheck {}
 impl HealthCheck {
     pub const fn new_const() -> Self {
         const DEFAULT_THR: HealthThresholds = HealthThresholds {
-            space_warn_pct:   80,
-            space_crit_pct:   95,
+            space_warn_pct: 80,
+            space_crit_pct: 95,
             error_warn_pct10: 10,
             error_crit_pct10: 50,
-            latency_warn_us:  10_000,
-            latency_crit_us:  100_000,
+            latency_warn_us: 10_000,
+            latency_crit_us: 100_000,
         };
         Self {
-            status:     AtomicU8::new(HealthStatus::Healthy as u8),
+            status: AtomicU8::new(HealthStatus::Healthy as u8),
             thresholds: UnsafeCell::new(DEFAULT_THR),
             probe_ring: HealthProbeRing::new_const(),
-            eval_tick:  AtomicU64::new(0),
+            eval_tick: AtomicU64::new(0),
         }
     }
 
@@ -272,12 +309,16 @@ impl HealthCheck {
         self.status.store(s as u8, Ordering::Release);
     }
 
-    pub fn is_writable(&self) -> bool { self.status().is_writable() }
+    pub fn is_writable(&self) -> bool {
+        self.status().is_writable()
+    }
 
     /// Met à jour les seuils (SAFETY : appelé sans concurrent dans init).
     pub fn set_thresholds(&self, t: HealthThresholds) {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        unsafe { *self.thresholds.get() = t; }
+        unsafe {
+            *self.thresholds.get() = t;
+        }
     }
 
     fn thresholds(&self) -> &HealthThresholds {
@@ -295,7 +336,12 @@ impl HealthCheck {
         } else {
             HealthStatus::Healthy
         };
-        let r = HealthProbeResult { probe: HealthProbeId::SpaceUsage, status, value: usage_pct as u64, tick };
+        let r = HealthProbeResult {
+            probe: HealthProbeId::SpaceUsage,
+            status,
+            value: usage_pct as u64,
+            tick,
+        };
         self.probe_ring.push(r);
         r
     }
@@ -303,7 +349,10 @@ impl HealthCheck {
     /// Évalue le taux d'erreur.
     pub fn probe_error_rate(&self, errors: u64, total_ops: u64, tick: u64) -> HealthProbeResult {
         let thr = self.thresholds();
-        let rate = errors.saturating_mul(1000).checked_div(total_ops.max(1)).unwrap_or(0);
+        let rate = errors
+            .saturating_mul(1000)
+            .checked_div(total_ops.max(1))
+            .unwrap_or(0);
         let status = if rate >= thr.error_crit_pct10 {
             HealthStatus::Critical
         } else if rate >= thr.error_warn_pct10 {
@@ -311,7 +360,12 @@ impl HealthCheck {
         } else {
             HealthStatus::Healthy
         };
-        let r = HealthProbeResult { probe: HealthProbeId::ErrorRate, status, value: rate, tick };
+        let r = HealthProbeResult {
+            probe: HealthProbeId::ErrorRate,
+            status,
+            value: rate,
+            tick,
+        };
         self.probe_ring.push(r);
         r
     }
@@ -326,13 +380,24 @@ impl HealthCheck {
         } else {
             HealthStatus::Healthy
         };
-        let r = HealthProbeResult { probe: HealthProbeId::LatencyP99, status, value: p99_us, tick };
+        let r = HealthProbeResult {
+            probe: HealthProbeId::LatencyP99,
+            status,
+            value: p99_us,
+            tick,
+        };
         self.probe_ring.push(r);
         r
     }
 
     /// Évaluation globale : combine plusieurs sondes → pire état.
-    pub fn evaluate(&self, usage_pct: u8, errors: u64, total_ops: u64, p99_us: u64) -> HealthStatus {
+    pub fn evaluate(
+        &self,
+        usage_pct: u8,
+        errors: u64,
+        total_ops: u64,
+        p99_us: u64,
+    ) -> HealthStatus {
         let tick = self.eval_tick.fetch_add(1, Ordering::Relaxed);
         let s1 = self.probe_space(usage_pct, tick);
         let s2 = self.probe_error_rate(errors, total_ops, tick);
@@ -342,7 +407,9 @@ impl HealthCheck {
         worst
     }
 
-    pub fn probe_ring(&self) -> &HealthProbeRing { &self.probe_ring }
+    pub fn probe_ring(&self) -> &HealthProbeRing {
+        &self.probe_ring
+    }
 }
 
 pub static HEALTH: HealthCheck = HealthCheck::new_const();
@@ -420,8 +487,14 @@ mod tests {
 
     #[test]
     fn test_health_status_worst() {
-        assert_eq!(HealthStatus::Healthy.worst(HealthStatus::Critical), HealthStatus::Critical);
-        assert_eq!(HealthStatus::Warning.worst(HealthStatus::Degraded), HealthStatus::Warning);
+        assert_eq!(
+            HealthStatus::Healthy.worst(HealthStatus::Critical),
+            HealthStatus::Critical
+        );
+        assert_eq!(
+            HealthStatus::Warning.worst(HealthStatus::Degraded),
+            HealthStatus::Warning
+        );
     }
 
     #[test]
@@ -446,7 +519,9 @@ mod tests {
         h.probe_space(50, 1);
         h.probe_space(85, 2);
         let mut out = Vec::new();
-        h.probe_ring().last_n_for_probe(HealthProbeId::SpaceUsage, 10, &mut out).expect("ok");
+        h.probe_ring()
+            .last_n_for_probe(HealthProbeId::SpaceUsage, 10, &mut out)
+            .expect("ok");
         assert_eq!(out.len(), 2);
     }
 

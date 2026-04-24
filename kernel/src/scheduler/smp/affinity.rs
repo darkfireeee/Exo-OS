@@ -4,15 +4,15 @@
 // Affinité CPU — gestion des masques de CPU autorisés pour chaque thread
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::AtomicU64;
+use super::topology::{nr_cpus, MAX_CPUS};
 use crate::scheduler::core::task::CpuId;
-use super::topology::{MAX_CPUS, nr_cpus};
+use core::sync::atomic::AtomicU64;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CpuMask — masque de CPUs (jusqu'à 256 CPUs sur 4 × u64)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MASK_WORDS: usize = 4;  // 4 × 64 = 256 bits
+const MASK_WORDS: usize = 4; // 4 × 64 = 256 bits
 
 /// Masque de CPUs autorisés.
 #[repr(C)]
@@ -22,8 +22,12 @@ pub struct CpuSet {
 }
 
 impl CpuSet {
-    pub const EMPTY: Self = Self { bits: [0; MASK_WORDS] };
-    pub const ALL: Self = Self { bits: [u64::MAX; MASK_WORDS] };
+    pub const EMPTY: Self = Self {
+        bits: [0; MASK_WORDS],
+    };
+    pub const ALL: Self = Self {
+        bits: [u64::MAX; MASK_WORDS],
+    };
 
     /// Masque vide.
     pub const fn empty() -> Self {
@@ -68,8 +72,11 @@ impl CpuSet {
     #[inline(always)]
     pub fn contains(&self, cpu: CpuId) -> bool {
         let cpu = cpu.0 as usize;
-        if cpu < MAX_CPUS { self.bits[cpu / 64] & (1u64 << (cpu % 64)) != 0 }
-        else { false }
+        if cpu < MAX_CPUS {
+            self.bits[cpu / 64] & (1u64 << (cpu % 64)) != 0
+        } else {
+            false
+        }
     }
 
     /// Retourne le premier CPU du masque, ou `None` si le masque est vide.
@@ -80,7 +87,9 @@ impl CpuSet {
     pub fn first_cpu(&self) -> Option<CpuId> {
         for (word_idx, &word) in self.bits.iter().enumerate() {
             if word != 0 {
-                return Some(CpuId((word_idx * 64 + word.trailing_zeros() as usize) as u32));
+                return Some(CpuId(
+                    (word_idx * 64 + word.trailing_zeros() as usize) as u32,
+                ));
             }
         }
         None
@@ -94,7 +103,9 @@ impl CpuSet {
     /// Intersection (ET logique) de deux masques.
     pub fn and(&self, other: &Self) -> Self {
         let mut out = Self::empty();
-        for i in 0..MASK_WORDS { out.bits[i] = self.bits[i] & other.bits[i]; }
+        for i in 0..MASK_WORDS {
+            out.bits[i] = self.bits[i] & other.bits[i];
+        }
         out
     }
 
@@ -113,7 +124,10 @@ impl CpuSet {
 
 pub type CpuMask = CpuSet;
 
-const _: () = assert!(core::mem::size_of::<CpuSet>() == 32, "CpuSet doit faire 32 bytes");
+const _: () = assert!(
+    core::mem::size_of::<CpuSet>() == 32,
+    "CpuSet doit faire 32 bytes"
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vérification d'affinité
@@ -133,7 +147,11 @@ pub fn affinity_mask_from_cpu_mask(mask: &CpuMask) -> CpuSet {
 /// Retourne l'affinité inchangée si valide, ou un masque avec TOUS les CPUs
 /// si le masque résultant est vide (protection anti-deadlock).
 pub fn sanitize_affinity(affinity: CpuSet) -> CpuSet {
-    if affinity.is_empty() { CpuSet::full() } else { affinity }
+    if affinity.is_empty() {
+        CpuSet::full()
+    } else {
+        affinity
+    }
 }
 
 /// Métriques.

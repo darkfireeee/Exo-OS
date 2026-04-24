@@ -23,7 +23,7 @@ pub struct KptiState {
     /// PML4 noyau (utilisée pendant les exceptions/syscalls).
     pub kernel_pml4: PhysAddr,
     /// PML4 user minimal (utilisée en espace user).
-    pub user_pml4:   PhysAddr,
+    pub user_pml4: PhysAddr,
     /// Stub de retour interprocesseur (trampoline).
     pub trampoline_phys: PhysAddr,
 }
@@ -31,8 +31,8 @@ pub struct KptiState {
 impl KptiState {
     pub const fn empty() -> Self {
         KptiState {
-            kernel_pml4:    PhysAddr::NULL,
-            user_pml4:      PhysAddr::NULL,
+            kernel_pml4: PhysAddr::NULL,
+            user_pml4: PhysAddr::NULL,
             trampoline_phys: PhysAddr::NULL,
         }
     }
@@ -40,7 +40,7 @@ impl KptiState {
 
 /// Table KPTI globale (une entrée par CPU, MAX_CPUS=256).
 pub struct KptiTable {
-    states:  [KptiState; 256],
+    states: [KptiState; 256],
     enabled: AtomicBool,
 }
 
@@ -51,7 +51,7 @@ unsafe impl Sync for KptiTable {}
 impl KptiTable {
     pub const fn new() -> Self {
         KptiTable {
-            states:  {
+            states: {
                 const EMPTY: KptiState = KptiState::empty();
                 [EMPTY; 256]
             },
@@ -73,16 +73,16 @@ impl KptiTable {
     ///         valides allouées avant cet appel.
     pub unsafe fn register_cpu(
         &self,
-        cpu_id:      usize,
+        cpu_id: usize,
         kernel_pml4: PhysAddr,
-        user_pml4:   PhysAddr,
-        trampoline:  PhysAddr,
+        user_pml4: PhysAddr,
+        trampoline: PhysAddr,
     ) {
         debug_assert!(cpu_id < 256);
         // SAFETY: Accès exclusif pendant l'init CPU (single-CPU path).
         let state = &self.states[cpu_id] as *const KptiState as *mut KptiState;
-        (*state).kernel_pml4     = kernel_pml4;
-        (*state).user_pml4       = user_pml4;
+        (*state).kernel_pml4 = kernel_pml4;
+        (*state).user_pml4 = user_pml4;
         (*state).trampoline_phys = trampoline;
     }
 
@@ -91,9 +91,13 @@ impl KptiTable {
     /// SAFETY: Doit être appelé en entrée de syscall/exception avec KPTI actif.
     #[inline]
     pub unsafe fn switch_to_kernel(&self, cpu_id: usize) {
-        if !self.is_enabled() { return; }
+        if !self.is_enabled() {
+            return;
+        }
         let pml4 = self.states[cpu_id].kernel_pml4;
-        if pml4.as_u64() != 0 { write_cr3(pml4); }
+        if pml4.as_u64() != 0 {
+            write_cr3(pml4);
+        }
     }
 
     /// Switch vers la PML4 user pour ce CPU.
@@ -101,16 +105,26 @@ impl KptiTable {
     /// SAFETY: Doit être appelé en sortie de syscall/exception (avant iret/sysret).
     #[inline]
     pub unsafe fn switch_to_user(&self, cpu_id: usize) {
-        if !self.is_enabled() { return; }
+        if !self.is_enabled() {
+            return;
+        }
         let pml4 = self.states[cpu_id].user_pml4;
-        if pml4.as_u64() != 0 { write_cr3(pml4); }
+        if pml4.as_u64() != 0 {
+            write_cr3(pml4);
+        }
     }
 
     /// Retourne les PML4 pour un CPU.
     pub fn get_pml4s(&self, cpu_id: usize) -> Option<(PhysAddr, PhysAddr)> {
-        if cpu_id >= 256 { return None; }
+        if cpu_id >= 256 {
+            return None;
+        }
         let s = &self.states[cpu_id];
-        if s.kernel_pml4.as_u64() == 0 { None } else { Some((s.kernel_pml4, s.user_pml4)) }
+        if s.kernel_pml4.as_u64() == 0 {
+            None
+        } else {
+            Some((s.kernel_pml4, s.user_pml4))
+        }
     }
 
     /// Retourne le CR3 user (physique) pour un CPU donné.
@@ -120,7 +134,11 @@ impl KptiTable {
             return None;
         }
         let user = self.states[cpu_id].user_pml4.as_u64();
-        if user == 0 { None } else { Some(user) }
+        if user == 0 {
+            None
+        } else {
+            Some(user)
+        }
     }
 }
 

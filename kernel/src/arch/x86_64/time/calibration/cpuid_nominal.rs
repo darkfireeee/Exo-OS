@@ -35,11 +35,10 @@
 // ## Précision : ±0.01% si cristal référence fourni, ±1% si ECX=0 et fallback 24 MHz
 // ════════════════════════════════════════════════════════════════════════════════
 
-
 // ── Constantes cristaux de référence Intel ────────────────────────────────────
 
 /// Fréquence cristal standard Intel 24 MHz (Skylake, Kaby Lake, Coffee Lake…)
-pub const CRYSTAL_FREQ_24MHZ:  u64 = 24_000_000;
+pub const CRYSTAL_FREQ_24MHZ: u64 = 24_000_000;
 /// Fréquence cristal standard Intel 19.2 MHz (Atom Goldmont, Silvermont)
 pub const CRYSTAL_FREQ_192MHZ: u64 = 19_200_000;
 /// Fréquence cristal standard Intel 38.4 MHz (Tiger Lake, Alder Lake SoC)
@@ -58,17 +57,17 @@ pub const TSC_MAX_HZ: u64 = 10_000_000_000;
 #[derive(Debug, Clone, Copy)]
 pub struct CpuidLeaf15Result {
     /// Dénominateur du ratio cristal/TSC (EAX).
-    pub denominator:  u32,
+    pub denominator: u32,
     /// Numérateur du ratio cristal/TSC (EBX).
-    pub numerator:    u32,
+    pub numerator: u32,
     /// Fréquence cristal en Hz (ECX, 0 si non fournie).
-    pub crystal_hz:   u32,
+    pub crystal_hz: u32,
     /// Fréquence cristal effective utilisée (après fallback si ECX=0).
     pub crystal_used: u64,
     /// Fréquence TSC calculée, 0 si invalide.
-    pub tsc_hz:       u64,
+    pub tsc_hz: u64,
     /// Source du cristal utilisée.
-    pub crystal_src:  CrystalSource,
+    pub crystal_src: CrystalSource,
 }
 
 /// Source de la fréquence cristal.
@@ -91,12 +90,12 @@ pub enum CrystalSource {
 impl CrystalSource {
     pub fn as_str(self) -> &'static str {
         match self {
-            CrystalSource::CpuidEcx        => "CPUID-ECX",
-            CrystalSource::Standard24Mhz   => "24MHz-SKL",
-            CrystalSource::Standard192Mhz  => "19.2MHz-ATOM",
-            CrystalSource::Standard384Mhz  => "38.4MHz-TGL",
+            CrystalSource::CpuidEcx => "CPUID-ECX",
+            CrystalSource::Standard24Mhz => "24MHz-SKL",
+            CrystalSource::Standard192Mhz => "19.2MHz-ATOM",
+            CrystalSource::Standard384Mhz => "38.4MHz-TGL",
             CrystalSource::DefaultIntel24Mhz => "24MHz-DFLT",
-            CrystalSource::NotAvailable    => "N/A",
+            CrystalSource::NotAvailable => "N/A",
         }
     }
 }
@@ -105,13 +104,13 @@ impl CrystalSource {
 #[derive(Debug, Clone, Copy)]
 pub struct CpuidLeaf16Result {
     /// Fréquence de base CPU en MHz (EAX[15:0]).
-    pub base_mhz:   u32,
+    pub base_mhz: u32,
     /// Fréquence max (Turbo) en MHz (EBX[15:0]).
-    pub max_mhz:    u32,
+    pub max_mhz: u32,
     /// Fréquence bus en MHz (ECX[15:0]).
-    pub bus_mhz:    u32,
+    pub bus_mhz: u32,
     /// Fréquence TSC déduite (= base_mhz × 1_000_000).
-    pub tsc_hz:     u64,
+    pub tsc_hz: u64,
 }
 
 // ── API principale ─────────────────────────────────────────────────────────────
@@ -131,7 +130,11 @@ pub struct CpuidLeaf16Result {
 /// Retourne `None` si leaf 0x15 non disponible ou données invalides.
 pub fn cpuid_tsc_hz() -> Option<u64> {
     let result = cpuid_leaf15_full()?;
-    if result.tsc_hz == 0 { None } else { Some(result.tsc_hz) }
+    if result.tsc_hz == 0 {
+        None
+    } else {
+        Some(result.tsc_hz)
+    }
 }
 
 /// Variante retournant le résultat complet avec diagnostic.
@@ -145,7 +148,11 @@ pub fn cpuid_tsc_hz_detailed() -> Option<CpuidLeaf15Result> {
 /// Précision ±1 MHz (arrondi au MHz fabricant).
 pub fn cpuid_tsc_hz_leaf16() -> Option<u64> {
     let result = cpuid_leaf16_full()?;
-    if result.tsc_hz == 0 { None } else { Some(result.tsc_hz) }
+    if result.tsc_hz == 0 {
+        None
+    } else {
+        Some(result.tsc_hz)
+    }
 }
 
 /// Variante retournant le résultat complet leaf 0x16.
@@ -207,9 +214,9 @@ fn cpuid_leaf15_full() -> Option<CpuidLeaf15Result> {
     };
 
     Some(CpuidLeaf15Result {
-        denominator:  eax,
-        numerator:    ebx,
-        crystal_hz:   ecx,
+        denominator: eax,
+        numerator: ebx,
+        crystal_hz: ecx,
         crystal_used: crystal_hz,
         tsc_hz,
         crystal_src,
@@ -236,8 +243,8 @@ fn cpuid_leaf16_full() -> Option<CpuidLeaf16Result> {
 
     Some(CpuidLeaf16Result {
         base_mhz,
-        max_mhz:  (ebx & 0xFFFF),
-        bus_mhz:  (ecx & 0xFFFF),
+        max_mhz: (ebx & 0xFFFF),
+        bus_mhz: (ecx & 0xFFFF),
         tsc_hz,
     })
 }
@@ -282,22 +289,16 @@ fn intel_crystal_by_model(model: u32) -> (u64, CrystalSource) {
             (CRYSTAL_FREQ_24MHZ, CrystalSource::Standard24Mhz)
         }
         // Ice Lake (0x7E, 0x7D)
-        0x7E | 0x7D => {
-            (CRYSTAL_FREQ_24MHZ, CrystalSource::Standard24Mhz)
-        }
+        0x7E | 0x7D => (CRYSTAL_FREQ_24MHZ, CrystalSource::Standard24Mhz),
         // Tiger Lake (0x8C, 0x8D) — Alder Lake (0x97, 0x9A)
         // Raptor Lake (0xB7, 0xBA) — Meteor Lake (0xAA, 0xAC)
         0x8C | 0x8D | 0x97 | 0x9A | 0xB7 | 0xBA | 0xBF | 0xAA | 0xAC => {
             (CRYSTAL_FREQ_384MHZ, CrystalSource::Standard384Mhz)
         }
         // Atom Goldmont (0x5C) — Goldmont Plus (0x7A)
-        0x5C | 0x7A => {
-            (CRYSTAL_FREQ_192MHZ, CrystalSource::Standard192Mhz)
-        }
+        0x5C | 0x7A => (CRYSTAL_FREQ_192MHZ, CrystalSource::Standard192Mhz),
         // Atom Tremont (0x86, Elkhart Lake 0x96, Jasper Lake 0x9C)
-        0x86 | 0x96 | 0x9C => {
-            (CRYSTAL_FREQ_192MHZ, CrystalSource::Standard192Mhz)
-        }
+        0x86 | 0x96 | 0x9C => (CRYSTAL_FREQ_192MHZ, CrystalSource::Standard192Mhz),
         // Haswell (0x3C, 0x3F), Broadwell (0x47, 0x4F) — pas de crystal 0x15 valide
         // mais si EBX/EAX valides, on suppose 25 MHz (fréquence BCLK standard).
         0x3C | 0x3F | 0x47 | 0x4F => {
@@ -394,11 +395,11 @@ fn read_cpu_family_model() -> (u32, u32, u32) {
             options(nostack, nomem)
         );
     }
-    let stepping     = eax & 0xF;
-    let base_model   = (eax >> 4)  & 0xF;
-    let base_family  = (eax >> 8)  & 0xF;
-    let ext_model    = (eax >> 16) & 0xF;
-    let ext_family   = (eax >> 20) & 0xFF;
+    let stepping = eax & 0xF;
+    let base_model = (eax >> 4) & 0xF;
+    let base_family = (eax >> 8) & 0xF;
+    let ext_model = (eax >> 16) & 0xF;
+    let ext_family = (eax >> 20) & 0xFF;
 
     // Intel/AMD : family réelle = base_family + ext_family (si base_family = 0xF ou 0x6)
     let family = if base_family == 0xF {
@@ -430,12 +431,24 @@ pub fn detect_crystal_hz() -> u64 {
 ///
 /// Retourne `true` si les deux sources sont cohérentes (écart < 5%).
 pub fn cross_check_0x15_vs_0x16() -> bool {
-    let hz15 = match cpuid_tsc_hz() { Some(v) => v, None => return true };
-    let hz16 = match cpuid_tsc_hz_leaf16() { Some(v) => v, None => return true };
-    if hz16 == 0 { return true; }
-    let diff = if hz15 > hz16 { hz15 - hz16 } else { hz16 - hz15 };
+    let hz15 = match cpuid_tsc_hz() {
+        Some(v) => v,
+        None => return true,
+    };
+    let hz16 = match cpuid_tsc_hz_leaf16() {
+        Some(v) => v,
+        None => return true,
+    };
+    if hz16 == 0 {
+        return true;
+    }
+    let diff = if hz15 > hz16 {
+        hz15 - hz16
+    } else {
+        hz16 - hz15
+    };
     let pct_x100 = (diff as u128 * 10_000) / hz16 as u128;
-    pct_x100 <= 500  // ≤ 5% d'écart acceptable
+    pct_x100 <= 500 // ≤ 5% d'écart acceptable
 }
 
 /// Vérifie la disponibilité complète du chemin CPUID nominal.
@@ -448,7 +461,9 @@ pub fn cpuid_nominal_available() -> bool {
 pub fn cpuid_source_label() -> &'static str {
     if cpuid_leaf15_available() {
         if let Some(r) = cpuid_leaf15_full() {
-            if r.tsc_hz > 0 { return "CPUID-0x15"; }
+            if r.tsc_hz > 0 {
+                return "CPUID-0x15";
+            }
         }
     }
     if cpuid_leaf16_available() {

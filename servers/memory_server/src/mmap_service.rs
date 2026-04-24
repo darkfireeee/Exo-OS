@@ -161,7 +161,12 @@ impl MemoryService {
         let flags = ((snapshot.prot as u64) & 0xFFFF)
             | (((snapshot.flags as u64) & 0xFFFF) << 16)
             | ((snapshot.share_count as u64) << 32);
-        MemoryReply::ok(snapshot.handle, snapshot.length, quota.used_bytes, flags as u32)
+        MemoryReply::ok(
+            snapshot.handle,
+            snapshot.length,
+            quota.used_bytes,
+            flags as u32,
+        )
     }
 
     pub fn handle_alloc(&mut self, sender_pid: u32, payload: &[u8]) -> MemoryReply {
@@ -288,7 +293,9 @@ impl MemoryService {
         };
 
         match self.quotas.set_limit(pid, limit) {
-            Ok(snapshot) => MemoryReply::ok(pid as u64, snapshot.used_bytes, snapshot.limit_bytes, 0),
+            Ok(snapshot) => {
+                MemoryReply::ok(pid as u64, snapshot.used_bytes, snapshot.limit_bytes, 0)
+            }
             Err(err) => MemoryReply::error(err),
         }
     }

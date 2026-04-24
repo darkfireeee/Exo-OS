@@ -41,25 +41,25 @@
 //   • unsafe → // SAFETY: obligatoire (regle_bonus.md)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+pub mod auxv;
 pub mod core;
+pub mod group;
 pub mod lifecycle;
-pub mod thread;
+pub mod namespace;
+pub mod resource;
 pub mod signal;
 pub mod state;
-pub mod group;
-pub mod namespace;
-pub mod auxv;
-pub mod resource;
+pub mod thread;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports principaux
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use self::core::pid::{Pid, Tid, PidAllocator, PID_ALLOCATOR, TID_ALLOCATOR};
-pub use self::core::pcb::{ProcessControlBlock, ProcessState, ProcessFlags};
+pub use self::core::pcb::{ProcessControlBlock, ProcessFlags, ProcessState};
+pub use self::core::pid::{Pid, PidAllocator, Tid, PID_ALLOCATOR, TID_ALLOCATOR};
+pub use self::core::registry::{ProcessRegistry, PROCESS_REGISTRY};
 pub use self::core::tcb::{ProcessThread, ThreadAddress};
-pub use self::core::registry::{PROCESS_REGISTRY, ProcessRegistry};
-pub use self::lifecycle::exec::{ElfLoader, register_elf_loader, ExecError};
+pub use self::lifecycle::exec::{register_elf_loader, ElfLoader, ExecError};
 pub use self::signal::delivery::handle_pending_signals;
 pub use self::state::wakeup::{register_with_dma, PROCESS_WAKEUP_HANDLER};
 
@@ -70,18 +70,18 @@ pub use self::state::wakeup::{register_with_dma, PROCESS_WAKEUP_HANDLER};
 /// Paramètres pour `process::init()`.
 pub struct ProcessInitParams {
     /// Nombre max de processus simultanés.
-    pub max_pids:      usize,
+    pub max_pids: usize,
     /// Nombre max de threads simultanés.
-    pub max_tids:      usize,
+    pub max_tids: usize,
     /// Stack kernel par thread (bytes, multiple de PAGE_SIZE).
-    pub kstack_size:   usize,
+    pub kstack_size: usize,
 }
 
 impl Default for ProcessInitParams {
     fn default() -> Self {
         Self {
-            max_pids:    32768,
-            max_tids:    131072,
+            max_pids: 32768,
+            max_tids: 131072,
             kstack_size: 16384, // 4 × 4K pages
         }
     }
@@ -111,5 +111,7 @@ pub unsafe fn init(params: &ProcessInitParams) {
 /// Returns true if PID exists in PROCESS_REGISTRY.
 #[inline]
 pub fn is_alive(pid: u32) -> bool {
-    PROCESS_REGISTRY.find_by_pid(crate::process::core::pid::Pid(pid)).is_some()
+    PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+        .is_some()
 }

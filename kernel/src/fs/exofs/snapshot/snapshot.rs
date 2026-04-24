@@ -8,14 +8,11 @@
 //!   HDR-03    : magic vérifié EN PREMIER, puis checksum Blake3
 //!   ARITH-02  : checked_add pour toute arithmétique
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, BlobId, EpochId, SnapshotId, DiskOffset,
-};
 use crate::fs::exofs::core::blob_id::blake3_hash;
+use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, SnapshotId};
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -42,21 +39,21 @@ pub const SNAPSHOT_MAX_COUNT: usize = 1024;
 
 pub mod flags {
     /// Snapshot en lecture seule (immuable)
-    pub const READONLY:      u32 = 1 << 0;
+    pub const READONLY: u32 = 1 << 0;
     /// Protégé contre la suppression
-    pub const PROTECTED:     u32 = 1 << 1;
+    pub const PROTECTED: u32 = 1 << 1;
     /// Associé à un stream réseau en cours
-    pub const STREAMING:     u32 = 1 << 2;
+    pub const STREAMING: u32 = 1 << 2;
     /// Quota explicitement défini
-    pub const QUOTA_SET:     u32 = 1 << 3;
+    pub const QUOTA_SET: u32 = 1 << 3;
     /// Snapshot monté
-    pub const MOUNTED:       u32 = 1 << 4;
+    pub const MOUNTED: u32 = 1 << 4;
     /// Snapshot en cours de restauration
-    pub const RESTORING:     u32 = 1 << 5;
+    pub const RESTORING: u32 = 1 << 5;
     /// Snapshot orph. (parent introuvable)
-    pub const ORPHAN:        u32 = 1 << 6;
+    pub const ORPHAN: u32 = 1 << 6;
     /// Snapshot de type incrémental
-    pub const INCREMENTAL:   u32 = 1 << 7;
+    pub const INCREMENTAL: u32 = 1 << 7;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -158,9 +155,7 @@ impl SnapshotHeaderDisk {
             return Err(ExofsError::InvalidSize);
         }
         // SAFETY: taille vérifiée, repr(C)
-        let hdr: Self = unsafe {
-            core::ptr::read_unaligned(buf.as_ptr() as *const Self)
-        };
+        let hdr: Self = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
         Ok(hdr)
     }
 }
@@ -199,29 +194,56 @@ pub struct Snapshot {
 impl Snapshot {
     // ── Accesseurs de flags ───────────────────────────────────────────
 
-    pub fn is_readonly(&self)    -> bool { self.flags & flags::READONLY   != 0 }
-    pub fn is_protected(&self)   -> bool { self.flags & flags::PROTECTED  != 0 }
-    pub fn is_streaming(&self)   -> bool { self.flags & flags::STREAMING  != 0 }
-    pub fn is_mounted(&self)     -> bool { self.flags & flags::MOUNTED    != 0 }
-    pub fn is_restoring(&self)   -> bool { self.flags & flags::RESTORING  != 0 }
-    pub fn is_orphan(&self)      -> bool { self.flags & flags::ORPHAN     != 0 }
-    pub fn is_incremental(&self) -> bool { self.flags & flags::INCREMENTAL != 0 }
+    pub fn is_readonly(&self) -> bool {
+        self.flags & flags::READONLY != 0
+    }
+    pub fn is_protected(&self) -> bool {
+        self.flags & flags::PROTECTED != 0
+    }
+    pub fn is_streaming(&self) -> bool {
+        self.flags & flags::STREAMING != 0
+    }
+    pub fn is_mounted(&self) -> bool {
+        self.flags & flags::MOUNTED != 0
+    }
+    pub fn is_restoring(&self) -> bool {
+        self.flags & flags::RESTORING != 0
+    }
+    pub fn is_orphan(&self) -> bool {
+        self.flags & flags::ORPHAN != 0
+    }
+    pub fn is_incremental(&self) -> bool {
+        self.flags & flags::INCREMENTAL != 0
+    }
 
-    pub fn set_flag(&mut self, flag: u32) { self.flags |= flag; }
-    pub fn clear_flag(&mut self, flag: u32) { self.flags &= !flag; }
-    pub fn toggle_flag(&mut self, flag: u32) { self.flags ^= flag; }
+    pub fn set_flag(&mut self, flag: u32) {
+        self.flags |= flag;
+    }
+    pub fn clear_flag(&mut self, flag: u32) {
+        self.flags &= !flag;
+    }
+    pub fn toggle_flag(&mut self, flag: u32) {
+        self.flags ^= flag;
+    }
 
     // ── Nom ──────────────────────────────────────────────────────────
 
     /// Retourne le nom comme &str (UTF-8)
     pub fn name_str(&self) -> &str {
-        let end = self.name.iter().position(|&b| b == 0).unwrap_or(SNAPSHOT_NAME_LEN);
+        let end = self
+            .name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(SNAPSHOT_NAME_LEN);
         core::str::from_utf8(&self.name[..end]).unwrap_or("<invalid>")
     }
 
     /// Longueur effective du nom
     pub fn name_len(&self) -> u16 {
-        self.name.iter().position(|&b| b == 0).unwrap_or(SNAPSHOT_NAME_LEN) as u16
+        self.name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(SNAPSHOT_NAME_LEN) as u16
     }
 
     // ── Conversion disque ─────────────────────────────────────────────
@@ -256,7 +278,11 @@ impl Snapshot {
     pub fn from_header_disk(hdr: &SnapshotHeaderDisk) -> ExofsResult<Self> {
         hdr.verify()?;
 
-        let parent_id = if hdr.parent_id == 0 { None } else { Some(SnapshotId(hdr.parent_id)) };
+        let parent_id = if hdr.parent_id == 0 {
+            None
+        } else {
+            Some(SnapshotId(hdr.parent_id))
+        };
 
         let mut name = [0u8; SNAPSHOT_NAME_LEN];
         name.copy_from_slice(&hdr.name);
@@ -300,10 +326,18 @@ pub struct SnapshotChain {
 }
 
 impl SnapshotChain {
-    pub fn len(&self) -> usize { self.ids.len() }
-    pub fn is_empty(&self) -> bool { self.ids.is_empty() }
-    pub fn root(&self) -> Option<SnapshotId> { self.ids.last().copied() }
-    pub fn tip(&self) -> Option<SnapshotId> { self.ids.first().copied() }
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+    pub fn root(&self) -> Option<SnapshotId> {
+        self.ids.last().copied()
+    }
+    pub fn tip(&self) -> Option<SnapshotId> {
+        self.ids.first().copied()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -365,7 +399,10 @@ mod tests {
 
     #[test]
     fn header_disk_size() {
-        assert_eq!(core::mem::size_of::<SnapshotHeaderDisk>(), SNAPSHOT_HEADER_SIZE);
+        assert_eq!(
+            core::mem::size_of::<SnapshotHeaderDisk>(),
+            SNAPSHOT_HEADER_SIZE
+        );
     }
 
     #[test]
@@ -390,10 +427,17 @@ mod tests {
     #[test]
     fn bad_magic_detected() {
         let snap = Snapshot {
-            id: SnapshotId(1), epoch_id: EpochId(1), parent_id: None,
-            root_blob: BlobId([0u8; 32]), created_at: 0, n_blobs: 0,
-            total_bytes: 0, flags: 0, blob_catalog_offset: DiskOffset(0),
-            blob_catalog_size: 0, name: [0u8; SNAPSHOT_NAME_LEN],
+            id: SnapshotId(1),
+            epoch_id: EpochId(1),
+            parent_id: None,
+            root_blob: BlobId([0u8; 32]),
+            created_at: 0,
+            n_blobs: 0,
+            total_bytes: 0,
+            flags: 0,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
+            name: [0u8; SNAPSHOT_NAME_LEN],
         };
         let mut hdr = snap.to_header_disk();
         hdr.magic = 0xDEAD_BEEF;
@@ -403,10 +447,17 @@ mod tests {
     #[test]
     fn checksum_mismatch_detected() {
         let snap = Snapshot {
-            id: SnapshotId(1), epoch_id: EpochId(1), parent_id: None,
-            root_blob: BlobId([0u8; 32]), created_at: 0, n_blobs: 0,
-            total_bytes: 0, flags: 0, blob_catalog_offset: DiskOffset(0),
-            blob_catalog_size: 0, name: [0u8; SNAPSHOT_NAME_LEN],
+            id: SnapshotId(1),
+            epoch_id: EpochId(1),
+            parent_id: None,
+            root_blob: BlobId([0u8; 32]),
+            created_at: 0,
+            n_blobs: 0,
+            total_bytes: 0,
+            flags: 0,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
+            name: [0u8; SNAPSHOT_NAME_LEN],
         };
         let mut hdr = snap.to_header_disk();
         hdr.n_blobs = 999; // Modifier sans recalculer le checksum
@@ -416,10 +467,16 @@ mod tests {
     #[test]
     fn from_header_disk_roundtrip() {
         let snap = Snapshot {
-            id: SnapshotId(99), epoch_id: EpochId(5), parent_id: Some(SnapshotId(1)),
-            root_blob: BlobId([0xCC; 32]), created_at: 88888, n_blobs: 5,
-            total_bytes: 20480, flags: flags::PROTECTED | flags::READONLY,
-            blob_catalog_offset: DiskOffset(4096), blob_catalog_size: 256,
+            id: SnapshotId(99),
+            epoch_id: EpochId(5),
+            parent_id: Some(SnapshotId(1)),
+            root_blob: BlobId([0xCC; 32]),
+            created_at: 88888,
+            n_blobs: 5,
+            total_bytes: 20480,
+            flags: flags::PROTECTED | flags::READONLY,
+            blob_catalog_offset: DiskOffset(4096),
+            blob_catalog_size: 256,
             name: make_snapshot_name(b"prod-snapshot"),
         };
         let hdr = snap.to_header_disk();
@@ -433,10 +490,17 @@ mod tests {
     #[test]
     fn name_str_valid() {
         let snap = Snapshot {
-            id: SnapshotId(1), epoch_id: EpochId(1), parent_id: None,
-            root_blob: BlobId([0u8; 32]), created_at: 0, n_blobs: 0,
-            total_bytes: 0, flags: 0, blob_catalog_offset: DiskOffset(0),
-            blob_catalog_size: 0, name: make_snapshot_name(b"hello"),
+            id: SnapshotId(1),
+            epoch_id: EpochId(1),
+            parent_id: None,
+            root_blob: BlobId([0u8; 32]),
+            created_at: 0,
+            n_blobs: 0,
+            total_bytes: 0,
+            flags: 0,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
+            name: make_snapshot_name(b"hello"),
         };
         assert_eq!(snap.name_str(), "hello");
     }

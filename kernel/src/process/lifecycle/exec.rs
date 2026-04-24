@@ -23,6 +23,7 @@ use crate::memory::virt::VmaFlags;
 use crate::memory::VirtAddr;
 use crate::process::core::pcb::{process_flags, ProcessControlBlock, ProcessState};
 use crate::process::core::tcb::{ProcessThread, ThreadAddress};
+use crate::process::lifecycle::fork::notify_vfork_completion;
 use crate::process::signal::mask::block_all_except_kill;
 use crate::process::signal::mask::reset_signals_on_exec;
 use core::sync::atomic::Ordering;
@@ -264,13 +265,16 @@ pub fn do_execve(
         .store(elf_result.brk_start, Ordering::Release);
 
     // Marquer EXEC_DONE et retirer FORKED.
-    pcb.flags
-        .fetch_or(process_flags::EXEC_DONE, Ordering::Release);
+    pcb.flags.fetch_or(
+        process_flags::EXEC_DONE | process_flags::VFORK_DONE,
+        Ordering::Release,
+    );
     pcb.flags
         .fetch_and(!process_flags::FORKED, Ordering::Release);
 
     // Transition vers Running.
     pcb.set_state(ProcessState::Running);
+    notify_vfork_completion(pcb.pid);
 
     Ok(())
 }

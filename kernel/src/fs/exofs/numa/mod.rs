@@ -18,43 +18,38 @@
 //! - Jamais `FsError` : uniquement `ExofsError` / `ExofsResult`.
 
 pub mod numa_affinity;
-pub mod numa_stats;
-pub mod numa_placement;
 pub mod numa_migration;
+pub mod numa_placement;
+pub mod numa_stats;
 pub mod numa_tuning;
 
 // ─── Réexports publics ────────────────────────────────────────────────────────
 
 // Affinité
 pub use numa_affinity::{
-    AffinityMap, AffinityNodeEntry, CpuId, NumaNodeId,
-    AFFINITY_MAP, MAX_NUMA_NODES, MAX_CPUS, CPU_NODE_NONE,
+    AffinityMap, AffinityNodeEntry, CpuId, NumaNodeId, AFFINITY_MAP, CPU_NODE_NONE, MAX_CPUS,
+    MAX_NUMA_NODES,
 };
 
 // Statistiques
-pub use numa_stats::{
-    NumaStats, NumaNodeStats, NUMA_STATS,
-};
+pub use numa_stats::{NumaNodeStats, NumaStats, NUMA_STATS};
 
 // Placement
 pub use numa_placement::{
-    PlacementStrategy, PlacementHint, PlacementResult, NumaPlacement,
-    NUMA_PLACEMENT,
+    NumaPlacement, PlacementHint, PlacementResult, PlacementStrategy, NUMA_PLACEMENT,
 };
 
 // Migration
 pub use numa_migration::{
-    MigrationStatus, MigrationResult, MigrationPolicy, MigrationQueue,
-    NumaMigration, BlobNodeLocator, NUMA_MIGRATION, MIGRATION_QUEUE_MAX,
+    BlobNodeLocator, MigrationPolicy, MigrationQueue, MigrationResult, MigrationStatus,
+    NumaMigration, MIGRATION_QUEUE_MAX, NUMA_MIGRATION,
 };
 
 // Tuning
-pub use numa_tuning::{
-    TuningEvent, TuningReport, PressureZone, NumaPolicy, NUMA_POLICY,
-};
+pub use numa_tuning::{NumaPolicy, PressureZone, TuningEvent, TuningReport, NUMA_POLICY};
 
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
 
 // ─── NumaConfig ───────────────────────────────────────────────────────────────
 
@@ -62,46 +57,52 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
 #[derive(Clone, Copy, Debug)]
 pub struct NumaConfig {
     /// Nombre de nœuds NUMA actifs.
-    pub n_nodes:               u8,
+    pub n_nodes: u8,
     /// Stratégie de placement initiale.
-    pub initial_strategy:      PlacementStrategy,
+    pub initial_strategy: PlacementStrategy,
     /// Auto-tuning activé.
-    pub auto_tune:             bool,
+    pub auto_tune: bool,
     /// Seuil de déséquilibre en ‰ (entre 0 et 1000).
     pub imbalance_threshold_ppt: u64,
     /// Intervalle entre évaluations de tuning.
-    pub tune_interval_ticks:   u64,
+    pub tune_interval_ticks: u64,
     /// Capacité mémoire de référence par nœud (octets, 0 = inconnue).
-    pub node_capacity_bytes:   u64,
+    pub node_capacity_bytes: u64,
 }
 
 impl NumaConfig {
     pub const fn default_config() -> Self {
         Self {
-            n_nodes:                 1,
-            initial_strategy:        PlacementStrategy::RoundRobin,
-            auto_tune:               false,
+            n_nodes: 1,
+            initial_strategy: PlacementStrategy::RoundRobin,
+            auto_tune: false,
             imbalance_threshold_ppt: 300,
-            tune_interval_ticks:     100_000,
-            node_capacity_bytes:     0,
+            tune_interval_ticks: 100_000,
+            node_capacity_bytes: 0,
         }
     }
 
     pub const fn multi_node(n: u8) -> Self {
         Self {
-            n_nodes:                 n,
-            initial_strategy:        PlacementStrategy::LeastUsed,
-            auto_tune:               true,
+            n_nodes: n,
+            initial_strategy: PlacementStrategy::LeastUsed,
+            auto_tune: true,
             imbalance_threshold_ppt: 200,
-            tune_interval_ticks:     50_000,
-            node_capacity_bytes:     0,
+            tune_interval_ticks: 50_000,
+            node_capacity_bytes: 0,
         }
     }
 
     pub fn validate(&self) -> ExofsResult<()> {
-        if self.n_nodes == 0 { return Err(ExofsError::InvalidArgument); }
-        if self.imbalance_threshold_ppt > 1000 { return Err(ExofsError::InvalidArgument); }
-        if self.tune_interval_ticks == 0 { return Err(ExofsError::InvalidArgument); }
+        if self.n_nodes == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if self.imbalance_threshold_ppt > 1000 {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if self.tune_interval_ticks == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         Ok(())
     }
 }
@@ -109,17 +110,23 @@ impl NumaConfig {
 // ─── NumaModuleState ──────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NumaModuleState { Uninitialized, Ready, Degraded }
+pub enum NumaModuleState {
+    Uninitialized,
+    Ready,
+    Degraded,
+}
 
 impl NumaModuleState {
     pub fn name(self) -> &'static str {
         match self {
             Self::Uninitialized => "uninitialized",
-            Self::Ready         => "ready",
-            Self::Degraded      => "degraded",
+            Self::Ready => "ready",
+            Self::Degraded => "degraded",
         }
     }
-    pub fn is_ready(self) -> bool { matches!(self, Self::Ready | Self::Degraded) }
+    pub fn is_ready(self) -> bool {
+        matches!(self, Self::Ready | Self::Degraded)
+    }
 }
 
 // ─── NumaModule ───────────────────────────────────────────────────────────────
@@ -127,8 +134,8 @@ impl NumaModuleState {
 /// Façade principale du module NUMA.
 pub struct NumaModule {
     config: core::cell::UnsafeCell<NumaConfig>,
-    state:  core::cell::UnsafeCell<NumaModuleState>,
-    lock:   core::sync::atomic::AtomicU64,
+    state: core::cell::UnsafeCell<NumaModuleState>,
+    lock: core::sync::atomic::AtomicU64,
 }
 
 unsafe impl Sync for NumaModule {}
@@ -138,17 +145,20 @@ impl NumaModule {
     pub const fn new_const() -> Self {
         Self {
             config: core::cell::UnsafeCell::new(NumaConfig::default_config()),
-            state:  core::cell::UnsafeCell::new(NumaModuleState::Uninitialized),
-            lock:   core::sync::atomic::AtomicU64::new(0),
+            state: core::cell::UnsafeCell::new(NumaModuleState::Uninitialized),
+            lock: core::sync::atomic::AtomicU64::new(0),
         }
     }
 
     fn acquire(&self) {
         use core::sync::atomic::Ordering;
-        while self.lock
+        while self
+            .lock
             .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
-        { core::hint::spin_loop(); }
+        {
+            core::hint::spin_loop();
+        }
     }
     fn release(&self) {
         use core::sync::atomic::Ordering;
@@ -166,14 +176,20 @@ impl NumaModule {
             return Ok(());
         }
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        unsafe { *self.config.get() = cfg; }
+        unsafe {
+            *self.config.get() = cfg;
+        }
         self.release();
 
         // Initialiser le placement
         NUMA_PLACEMENT.init(cfg.n_nodes, cfg.initial_strategy)?;
 
         // Configurer le tuning
-        NUMA_POLICY.configure(cfg.imbalance_threshold_ppt, cfg.auto_tune, cfg.tune_interval_ticks)?;
+        NUMA_POLICY.configure(
+            cfg.imbalance_threshold_ppt,
+            cfg.auto_tune,
+            cfg.tune_interval_ticks,
+        )?;
 
         // Capacité mémoire par nœud si fournie
         if cfg.node_capacity_bytes > 0 {
@@ -218,19 +234,29 @@ impl NumaModule {
 
     /// Enregistre une allocation sur un nœud.
     pub fn record_alloc(&self, node: NumaNodeId, bytes: u64) {
-        if node.is_valid() { NUMA_STATS.record_alloc(node.idx(), bytes); }
+        if node.is_valid() {
+            NUMA_STATS.record_alloc(node.idx(), bytes);
+        }
     }
 
     /// Enregistre une libération sur un nœud.
     pub fn record_free(&self, node: NumaNodeId, bytes: u64) {
-        if node.is_valid() { NUMA_STATS.record_free(node.idx(), bytes); }
+        if node.is_valid() {
+            NUMA_STATS.record_free(node.idx(), bytes);
+        }
     }
 
     /// Enregistre une opération I/O.
     pub fn record_io(&self, node: NumaNodeId, read_bytes: u64, write_bytes: u64) {
-        if !node.is_valid() { return; }
-        if read_bytes  > 0 { NUMA_STATS.record_read(node.idx(),  read_bytes); }
-        if write_bytes > 0 { NUMA_STATS.record_write(node.idx(), write_bytes); }
+        if !node.is_valid() {
+            return;
+        }
+        if read_bytes > 0 {
+            NUMA_STATS.record_read(node.idx(), read_bytes);
+        }
+        if write_bytes > 0 {
+            NUMA_STATS.record_write(node.idx(), write_bytes);
+        }
     }
 
     // ── Affinité ──────────────────────────────────────────────────────────────
@@ -261,7 +287,9 @@ impl NumaModule {
 
     /// Vrai si le système NUMA est sain.
     pub fn is_healthy(&self) -> bool {
-        if !self.state().is_ready() { return false; }
+        if !self.state().is_ready() {
+            return false;
+        }
         NUMA_STATS.is_healthy() && NUMA_MIGRATION.is_healthy()
     }
 
@@ -316,8 +344,12 @@ pub fn numa_preferred_node(blob_id: Option<BlobId>) -> usize {
 mod tests {
     use super::*;
 
-    fn default_cfg() -> NumaConfig { NumaConfig::default_config() }
-    fn multi_cfg()   -> NumaConfig { NumaConfig::multi_node(4) }
+    fn default_cfg() -> NumaConfig {
+        NumaConfig::default_config()
+    }
+    fn multi_cfg() -> NumaConfig {
+        NumaConfig::multi_node(4)
+    }
 
     #[test]
     fn test_config_validate_ok() {
@@ -436,8 +468,8 @@ mod tests {
 
     #[test]
     fn test_state_name() {
-        assert_eq!(NumaModuleState::Ready.name(),         "ready");
+        assert_eq!(NumaModuleState::Ready.name(), "ready");
         assert_eq!(NumaModuleState::Uninitialized.name(), "uninitialized");
-        assert_eq!(NumaModuleState::Degraded.name(),      "degraded");
+        assert_eq!(NumaModuleState::Degraded.name(), "degraded");
     }
 }

@@ -4,8 +4,8 @@
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::Ordering;
 
-use crate::arch::x86_64::cpu::msr;
 use crate::arch::x86_64::apic::x2apic;
+use crate::arch::x86_64::cpu::msr;
 
 use super::ssr;
 use super::stage0;
@@ -46,12 +46,16 @@ fn apic_ack() {
     match stage0::B_FEATURES.apic_mode() {
         stage0::BootApicMode::X2Apic => {
             // SAFETY: x2APIC actif ; EOI via MSR dédié.
-            unsafe { msr::write_msr(x2apic::X2APIC_EOI, 0); }
+            unsafe {
+                msr::write_msr(x2apic::X2APIC_EOI, 0);
+            }
         }
         stage0::BootApicMode::XApic => {
             let lapic_eoi_ptr = (xapic_mmio_base() + LAPIC_ACK_REG_OFFSET) as *mut u32;
             // SAFETY: LAPIC MMIO actif en mode xAPIC.
-            unsafe { write_volatile(lapic_eoi_ptr, 0); }
+            unsafe {
+                write_volatile(lapic_eoi_ptr, 0);
+            }
         }
     }
 }
@@ -63,7 +67,9 @@ fn apic_ack() {
 /// - boucle pause infinie
 pub unsafe fn handle_freeze_ipi() -> ! {
     // SAFETY: instruction privilégiée en contexte handler IRQ ring0.
-    unsafe { core::arch::asm!("cli", options(nostack, nomem)); }
+    unsafe {
+        core::arch::asm!("cli", options(nostack, nomem));
+    }
 
     if let Some(slot) = current_slot() {
         // SAFETY: SSR physique fixée/réservée ; offset borné via slot map.
@@ -76,7 +82,9 @@ pub unsafe fn handle_freeze_ipi() -> ! {
 
     loop {
         // SAFETY: boucle de gel volontaire.
-        unsafe { core::arch::asm!("pause", options(nostack, nomem)); }
+        unsafe {
+            core::arch::asm!("pause", options(nostack, nomem));
+        }
     }
 }
 
@@ -113,7 +121,9 @@ pub unsafe fn handle_pmc_snapshot_ipi() {
 /// 0xF3 — TLB flush global local (reload CR3) + ACK.
 pub unsafe fn handle_tlb_flush_ipi() {
     // SAFETY: instruction privilégiée en contexte handler IRQ ring0.
-    unsafe { core::arch::asm!("cli", options(nostack, nomem)); }
+    unsafe {
+        core::arch::asm!("cli", options(nostack, nomem));
+    }
 
     // SAFETY: rechargement du CR3 courant pour invalider le TLB local.
     unsafe {

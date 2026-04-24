@@ -10,14 +10,13 @@
 //! - **ARITH-02** : `checked_add` pour les compteurs.
 //! - **WRITE-02** : vérification des écritures dans les sous-modules.
 
-
 extern crate alloc;
-use core::sync::atomic::{AtomicBool, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId};
-use super::checkpoint::{CHECKPOINT_STORE, RecoveryPhase};
-use super::recovery_log::RECOVERY_LOG;
-use super::recovery_audit::RECOVERY_AUDIT;
+use super::checkpoint::{RecoveryPhase, CHECKPOINT_STORE};
 use super::fsck::FsckOptions;
+use super::recovery_audit::RECOVERY_AUDIT;
+use super::recovery_log::RECOVERY_LOG;
+use crate::fs::exofs::core::{EpochId, ExofsError, ExofsResult};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // ── Trait périphérique bloc ───────────────────────────────────────────────────
 
@@ -53,25 +52,25 @@ pub trait BlockDevice: Send + Sync {
 #[derive(Clone, Copy, Debug)]
 pub struct BootRecoveryOptions {
     /// Forcer le fsck même si le dirty flag est absent.
-    pub force_fsck:          bool,
+    pub force_fsck: bool,
     /// Mode dry-run : aucune écriture sur disque.
-    pub dry_run:             bool,
+    pub dry_run: bool,
     /// Nombre maximal d'erreurs avant abandon du fsck.
-    pub max_fsck_errors:     u32,
+    pub max_fsck_errors: u32,
     /// Activer le replay d'epoch même si `dirty_flag` est faux.
-    pub force_replay:        bool,
+    pub force_replay: bool,
     /// Timeout de récupération en millisecondes (0 = pas de timeout).
-    pub timeout_ms:          u64,
+    pub timeout_ms: u64,
 }
 
 impl Default for BootRecoveryOptions {
     fn default() -> Self {
         Self {
-            force_fsck:      false,
-            dry_run:         false,
+            force_fsck: false,
+            dry_run: false,
             max_fsck_errors: 256,
-            force_replay:    false,
-            timeout_ms:      0,
+            force_replay: false,
+            timeout_ms: 0,
         }
     }
 }
@@ -82,23 +81,23 @@ impl Default for BootRecoveryOptions {
 #[derive(Clone, Debug)]
 pub struct BootRecoveryResult {
     /// Slot sélectionné (0=A, 1=B, 2=C).
-    pub selected_slot:       u8,
+    pub selected_slot: u8,
     /// EpochId récupérée depuis le slot sélectionné.
-    pub recovered_epoch:     EpochId,
+    pub recovered_epoch: EpochId,
     /// `true` si un replay d'epoch a été effectué.
-    pub replayed:            bool,
+    pub replayed: bool,
     /// Nombre de blocs rejoués.
-    pub n_replayed:          u32,
+    pub n_replayed: u32,
     /// `true` si un fsck a été requis.
-    pub fsck_needed:         bool,
+    pub fsck_needed: bool,
     /// `true` si un fsck a été effectivement exécuté.
-    pub fsck_done:           bool,
+    pub fsck_done: bool,
     /// Nombre total d'erreurs détectées.
-    pub total_errors:        u32,
+    pub total_errors: u32,
     /// Nombre total de réparations appliquées.
-    pub total_repairs:       u32,
+    pub total_repairs: u32,
     /// Phases fsck complétées (bitmask : bit N = phase N+1 terminée).
-    pub phases_completed:    u8,
+    pub phases_completed: u8,
     /// ID du checkpoint final sauvegardé.
     pub final_checkpoint_id: u64,
 }
@@ -158,7 +157,7 @@ impl BootRecovery {
     /// - `ExofsError::InvalidState` : une récupération est déjà en cours.
     /// - Toute erreur remontée par `slot_recovery`, `epoch_replay` ou `fsck`.
     pub fn run(
-        device:  &mut dyn BlockDevice,
+        device: &mut dyn BlockDevice,
         options: &BootRecoveryOptions,
     ) -> ExofsResult<BootRecoveryResult> {
         // Guard : une seule récupération à la fois.
@@ -173,24 +172,23 @@ impl BootRecovery {
     }
 
     fn run_inner(
-        device:  &mut dyn BlockDevice,
+        device: &mut dyn BlockDevice,
         options: &BootRecoveryOptions,
     ) -> ExofsResult<BootRecoveryResult> {
         // ── Initialisation ──────────────────────────────────────────────────
         RECOVERY_LOG.log_boot_start();
         RECOVERY_AUDIT.record_recovery_started(EpochId(0));
 
-        let mut total_errors:  u32 = 0;
+        let mut total_errors: u32 = 0;
         let mut total_repairs: u32 = 0;
         let mut phases_completed: u8 = 0;
 
         // ── Étape 1 : sélection du slot ────────────────────────────────────
-        let slot_result = super::slot_recovery::SlotRecovery::select_best(device)
-            .map_err(|e| {
-                RECOVERY_LOG.log_error(0x01, 0);
-                RECOVERY_AUDIT.record_recovery_failed(EpochId(0), e as u32);
-                e
-            })?;
+        let slot_result = super::slot_recovery::SlotRecovery::select_best(device).map_err(|e| {
+            RECOVERY_LOG.log_error(0x01, 0);
+            RECOVERY_AUDIT.record_recovery_failed(EpochId(0), e as u32);
+            e
+        })?;
 
         RECOVERY_LOG.log_slot_selected(slot_result.selected_slot.0);
         RECOVERY_AUDIT.record_slot_selected(slot_result.selected_slot.0, slot_result.epoch_id.0);
@@ -216,7 +214,7 @@ impl BootRecovery {
         // ── Étape 3 : replay si nécessaire ─────────────────────────────────
         let needs_replay = slot_result.needs_replay || options.force_replay;
         let mut n_replayed = 0u32;
-        let mut replayed   = false;
+        let mut replayed = false;
 
         if needs_replay {
             RECOVERY_LOG.log_replay_start(epoch_id.0);
@@ -228,7 +226,7 @@ impl BootRecovery {
                 })?;
 
             n_replayed = replay_result.n_replayed;
-            replayed   = true;
+            replayed = true;
 
             RECOVERY_LOG.log_replay_done(n_replayed);
             RECOVERY_AUDIT.record_epoch_replayed(epoch_id, n_replayed);
@@ -257,17 +255,17 @@ impl BootRecovery {
             RECOVERY_AUDIT.record_phase_started(0); // Phase globale.
 
             let fsck_opts = super::fsck::FsckOptions {
-                run_phase1:       true,
-                run_phase2:       true,
-                run_phase3:       true,
-                run_phase4:       true,
-                auto_repair:      !options.dry_run,
+                run_phase1: true,
+                run_phase2: true,
+                run_phase3: true,
+                run_phase4: true,
+                auto_repair: !options.dry_run,
                 max_total_errors: options.max_fsck_errors,
                 ..FsckOptions::default()
             };
 
-            let fsck_result = super::fsck::Fsck::run_with_options(device, &fsck_opts)
-                .map_err(|e| {
+            let fsck_result =
+                super::fsck::Fsck::run_with_options(device, &fsck_opts).map_err(|e| {
                     RECOVERY_LOG.log_error(0x03, 0);
                     e
                 })?;
@@ -288,34 +286,57 @@ impl BootRecovery {
 
             // Checkpoints après chaque phase.
             if fsck_result.phases_completed & 0x01 != 0 {
-                let _ = CHECKPOINT_STORE.save(RecoveryPhase::Phase1Done, epoch_id, total_errors, total_repairs);
+                let _ = CHECKPOINT_STORE.save(
+                    RecoveryPhase::Phase1Done,
+                    epoch_id,
+                    total_errors,
+                    total_repairs,
+                );
             }
             if fsck_result.phases_completed & 0x02 != 0 {
-                let _ = CHECKPOINT_STORE.save(RecoveryPhase::Phase2Done, epoch_id, total_errors, total_repairs);
+                let _ = CHECKPOINT_STORE.save(
+                    RecoveryPhase::Phase2Done,
+                    epoch_id,
+                    total_errors,
+                    total_repairs,
+                );
             }
             if fsck_result.phases_completed & 0x04 != 0 {
-                let _ = CHECKPOINT_STORE.save(RecoveryPhase::Phase3Done, epoch_id, total_errors, total_repairs);
+                let _ = CHECKPOINT_STORE.save(
+                    RecoveryPhase::Phase3Done,
+                    epoch_id,
+                    total_errors,
+                    total_repairs,
+                );
             }
             if fsck_result.phases_completed & 0x08 != 0 {
-                let _ = CHECKPOINT_STORE.save(RecoveryPhase::Phase4Done, epoch_id, total_errors, total_repairs);
+                let _ = CHECKPOINT_STORE.save(
+                    RecoveryPhase::Phase4Done,
+                    epoch_id,
+                    total_errors,
+                    total_repairs,
+                );
             }
         }
 
         // ── Étape 5 : checkpoint final ─────────────────────────────────────
-        let final_cp_id = CHECKPOINT_STORE.save(
-            RecoveryPhase::Complete,
-            epoch_id,
-            total_errors,
-            total_repairs,
-        ).map(|id| id.0).unwrap_or(0);
+        let final_cp_id = CHECKPOINT_STORE
+            .save(
+                RecoveryPhase::Complete,
+                epoch_id,
+                total_errors,
+                total_repairs,
+            )
+            .map(|id| id.0)
+            .unwrap_or(0);
 
         RECOVERY_LOG.log_checkpoint_saved(final_cp_id);
         RECOVERY_LOG.log_boot_done();
         RECOVERY_AUDIT.record_recovery_completed(epoch_id, total_repairs);
 
         Ok(BootRecoveryResult {
-            selected_slot:       slot_result.selected_slot.0,
-            recovered_epoch:     epoch_id,
+            selected_slot: slot_result.selected_slot.0,
+            recovered_epoch: epoch_id,
             replayed,
             n_replayed,
             fsck_needed,
@@ -356,13 +377,13 @@ pub fn boot_recovery_sequence(_disk_size_bytes: u64) -> ExofsResult<()> {
 #[derive(Clone, Copy, Debug)]
 pub struct BootRecoveryHealth {
     /// `true` si aucune récupération n'est en cours.
-    pub idle:                  bool,
+    pub idle: bool,
     /// Nombre de checkpoints en mémoire.
-    pub checkpoint_count:      usize,
+    pub checkpoint_count: usize,
     /// Phase la plus avancée vue.
-    pub furthest_phase:        RecoveryPhase,
+    pub furthest_phase: RecoveryPhase,
     /// Erreurs dans le journal de récupération.
-    pub log_error_count:       usize,
+    pub log_error_count: usize,
     /// Violations d'intégrité dans l'audit.
     pub audit_violation_count: usize,
 }
@@ -370,14 +391,14 @@ pub struct BootRecoveryHealth {
 impl BootRecovery {
     /// Construit un rapport de santé du sous-système.
     pub fn health() -> BootRecoveryHealth {
-        let cp_diag  = CHECKPOINT_STORE.diagnostic();
+        let cp_diag = CHECKPOINT_STORE.diagnostic();
         let log_diag = RECOVERY_LOG.diagnostic();
         let aud_diag = RECOVERY_AUDIT.diagnostic();
         BootRecoveryHealth {
-            idle:                  !Self::is_running(),
-            checkpoint_count:      cp_diag.count,
-            furthest_phase:        cp_diag.latest_phase,
-            log_error_count:       log_diag.error_count,
+            idle: !Self::is_running(),
+            checkpoint_count: cp_diag.count,
+            furthest_phase: cp_diag.latest_phase,
+            log_error_count: log_diag.error_count,
             audit_violation_count: aud_diag.violations,
         }
     }
@@ -400,15 +421,15 @@ mod tests {
     #[test]
     fn test_boot_recovery_result_clean() {
         let r = BootRecoveryResult {
-            selected_slot:       0,
-            recovered_epoch:     EpochId(1),
-            replayed:            false,
-            n_replayed:          0,
-            fsck_needed:         false,
-            fsck_done:           false,
-            total_errors:        0,
-            total_repairs:       0,
-            phases_completed:    0,
+            selected_slot: 0,
+            recovered_epoch: EpochId(1),
+            replayed: false,
+            n_replayed: 0,
+            fsck_needed: false,
+            fsck_done: false,
+            total_errors: 0,
+            total_repairs: 0,
+            phases_completed: 0,
             final_checkpoint_id: 1,
         };
         assert!(r.is_clean());

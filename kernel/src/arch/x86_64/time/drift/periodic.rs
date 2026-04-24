@@ -28,26 +28,25 @@
 //   À terme (Phase 4+) : kthread dédié avec HLT/MWAIT en idle.
 // ════════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, AtomicBool, AtomicU32, Ordering};
-use super::pll;
+use super::super::calibration::window;
 use super::super::ktime;
 use super::super::sources::{hpet as hpet_src, pm_timer as pm_src};
-use super::super::calibration::window;
+use super::pll;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 // ── Constantes de périodicité ─────────────────────────────────────────────────
 
 /// Intervalle de recalibration en conditions normales (ns).
-const RECAL_INTERVAL_NORMAL_NS:  u64 = 10_000_000_000; // 10 secondes
+const RECAL_INTERVAL_NORMAL_NS: u64 = 10_000_000_000; // 10 secondes
 /// Intervalle en charge élevée (ns).
-const RECAL_INTERVAL_HEAVY_NS:   u64 =  5_000_000_000; // 5 secondes
+const RECAL_INTERVAL_HEAVY_NS: u64 = 5_000_000_000; // 5 secondes
 /// Intervalle en idle (ns).
-const RECAL_INTERVAL_IDLE_NS:    u64 = 30_000_000_000; // 30 secondes
+const RECAL_INTERVAL_IDLE_NS: u64 = 30_000_000_000; // 30 secondes
 
 /// Seuil de charge CPU pour "idle" (pourcentage × 10 = permillage).
-const IDLE_THRESHOLD_PERMIL:     u32 =  200; // 20%
+const IDLE_THRESHOLD_PERMIL: u32 = 200; // 20%
 /// Seuil de charge CPU pour "charge élevée".
-const HEAVY_THRESHOLD_PERMIL:    u32 =  800; // 80%
+const HEAVY_THRESHOLD_PERMIL: u32 = 800; // 80%
 
 /// Taille de l'historique de mesures (FIFO circulaire pour détection d'anomalie).
 #[allow(dead_code)]
@@ -57,37 +56,37 @@ const HISTORY_SIZE: usize = 8;
 
 struct DriftState {
     /// Timestamp (ktime ns) de la dernière recalibration.
-    last_recal_ns:     AtomicU64,
+    last_recal_ns: AtomicU64,
     /// Intervalle de recalibration courant (adaptatif).
-    interval_ns:       AtomicU64,
+    interval_ns: AtomicU64,
     /// Nombre total de recalibrations effectuées depuis le boot.
-    recal_count:       AtomicU64,
+    recal_count: AtomicU64,
     /// Nombre de recalibrations échouées (HPET/PM Timer non disponible ou mesure hors plage).
-    fail_count:        AtomicU64,
+    fail_count: AtomicU64,
     /// Charge CPU courante en permillage (0–1000), mise à jour par le tick handler.
-    cpu_load_permil:   AtomicU32,
+    cpu_load_permil: AtomicU32,
     /// `true` si une recalibration est en cours (guard contre ré-entrance SMP).
-    in_progress:       AtomicBool,
+    in_progress: AtomicBool,
     /// Nombre de fois que la monotonie a dû être corrigée (dérive PLL trop agressive).
-    monotone_fixes:    AtomicU64,
+    monotone_fixes: AtomicU64,
     /// Dernière fréquence TSC mesurée (avant PLL).
-    last_measured_hz:  AtomicU64,
+    last_measured_hz: AtomicU64,
     /// Dernière fréquence TSC appliquée (après PLL).
-    last_applied_hz:   AtomicU64,
+    last_applied_hz: AtomicU64,
 }
 
 impl DriftState {
     const fn new() -> Self {
         Self {
-            last_recal_ns:    AtomicU64::new(0),
-            interval_ns:      AtomicU64::new(RECAL_INTERVAL_NORMAL_NS),
-            recal_count:      AtomicU64::new(0),
-            fail_count:       AtomicU64::new(0),
-            cpu_load_permil:  AtomicU32::new(0),
-            in_progress:      AtomicBool::new(false),
-            monotone_fixes:   AtomicU64::new(0),
+            last_recal_ns: AtomicU64::new(0),
+            interval_ns: AtomicU64::new(RECAL_INTERVAL_NORMAL_NS),
+            recal_count: AtomicU64::new(0),
+            fail_count: AtomicU64::new(0),
+            cpu_load_permil: AtomicU32::new(0),
+            in_progress: AtomicBool::new(false),
+            monotone_fixes: AtomicU64::new(0),
             last_measured_hz: AtomicU64::new(0),
-            last_applied_hz:  AtomicU64::new(0),
+            last_applied_hz: AtomicU64::new(0),
         }
     }
 }
@@ -122,7 +121,9 @@ pub fn drift_tick(tsc_now_direct: u64) {
     // RÈGLE DRIFT-CIRCULAR-01 : On utilise le TSC directement + la fréquence PLL courante,
     // pas ktime_get_ns() qui dépend de tsc_hz en cours de mise à jour.
     let current_hz = pll::pll_current_hz();
-    if current_hz == 0 { return; }
+    if current_hz == 0 {
+        return;
+    }
 
     // Lire le snapshot UNE FOIS pour la cohérence (évite deux lectures atomiques disjointes).
     let snap = ktime::ktime_snapshot();
@@ -137,7 +138,11 @@ pub fn drift_tick(tsc_now_direct: u64) {
     }
 
     // Guard contre ré-entrance SMP : un seul CPU recalibre à la fois.
-    if DRIFT.in_progress.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).is_err() {
+    if DRIFT
+        .in_progress
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
         return;
     }
 
@@ -199,7 +204,9 @@ fn do_recalibrate(tsc_anchor: u64, ns_anchor: u64) -> bool {
     let tsc_since_anchor = rdtsc_direct().wrapping_sub(tsc_anchor);
     let ns_since_anchor = if current_hz_pll > 0 {
         (tsc_since_anchor as u128 * 1_000_000_000 / current_hz_pll as u128) as u64
-    } else { 0 };
+    } else {
+        0
+    };
     let ns_now = ns_anchor.wrapping_add(ns_since_anchor);
 
     // Appliquer la correction PLL.
@@ -250,7 +257,9 @@ fn adapt_interval() {
 /// Met à jour la charge CPU courante (appelé depuis le tick handler).
 /// `load_permil` : charge en permillage (0–1000, ex: 500 = 50%).
 pub fn update_cpu_load(load_permil: u32) {
-    DRIFT.cpu_load_permil.store(load_permil.min(1000), Ordering::Relaxed);
+    DRIFT
+        .cpu_load_permil
+        .store(load_permil.min(1000), Ordering::Relaxed);
 }
 
 // ── Validations internes ──────────────────────────────────────────────────────
@@ -267,7 +276,8 @@ fn is_plausible_hz(hz: u64) -> bool {
 /// RÈGLE DRIFT-CIRCULAR-01 : Jamais ktime_get_ns() dans ce contexte.
 #[inline(always)]
 fn rdtsc_direct() -> u64 {
-    let lo: u32; let hi: u32;
+    let lo: u32;
+    let hi: u32;
     unsafe {
         core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem));
     }
@@ -303,23 +313,23 @@ pub fn drift_last_applied_hz() -> u64 {
 
 /// Snapshot complet de l'état de dérive pour les outils de profiling.
 pub struct DriftSnapshot {
-    pub recal_count:    u64,
-    pub fail_count:     u64,
+    pub recal_count: u64,
+    pub fail_count: u64,
     pub monotone_fixes: u64,
-    pub measured_hz:    u64,
-    pub applied_hz:     u64,
-    pub interval_ns:    u64,
-    pub pll_locked:     bool,
+    pub measured_hz: u64,
+    pub applied_hz: u64,
+    pub interval_ns: u64,
+    pub pll_locked: bool,
 }
 
 pub fn drift_snapshot() -> DriftSnapshot {
     DriftSnapshot {
-        recal_count:    DRIFT.recal_count.load(Ordering::Relaxed),
-        fail_count:     DRIFT.fail_count.load(Ordering::Relaxed),
+        recal_count: DRIFT.recal_count.load(Ordering::Relaxed),
+        fail_count: DRIFT.fail_count.load(Ordering::Relaxed),
         monotone_fixes: DRIFT.monotone_fixes.load(Ordering::Relaxed),
-        measured_hz:    DRIFT.last_measured_hz.load(Ordering::Relaxed),
-        applied_hz:     DRIFT.last_applied_hz.load(Ordering::Relaxed),
-        interval_ns:    DRIFT.interval_ns.load(Ordering::Relaxed),
-        pll_locked:     pll::pll_locked(),
+        measured_hz: DRIFT.last_measured_hz.load(Ordering::Relaxed),
+        applied_hz: DRIFT.last_applied_hz.load(Ordering::Relaxed),
+        interval_ns: DRIFT.interval_ns.load(Ordering::Relaxed),
+        pll_locked: pll::pll_locked(),
     }
 }

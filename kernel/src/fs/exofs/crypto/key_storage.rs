@@ -5,11 +5,10 @@
 //!
 //! OOM-02 / ARITH-02 / RECUR-01 respectés.
 
-
-use alloc::vec::Vec;
-use alloc::collections::BTreeMap;
-use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -43,9 +42,9 @@ pub enum KeyKind {
 impl core::fmt::Display for KeyKind {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Master  => write!(f, "Master"),
-            Self::Volume  => write!(f, "Volume"),
-            Self::Object  => write!(f, "Object"),
+            Self::Master => write!(f, "Master"),
+            Self::Volume => write!(f, "Volume"),
+            Self::Object => write!(f, "Object"),
             Self::Derived => write!(f, "Derived"),
             Self::Session => write!(f, "Session"),
         }
@@ -63,17 +62,19 @@ pub enum SlotState {
 /// Entrée dans la table de stockage.
 struct KeyEntry {
     /// Matériel de clé.
-    key:       [u8; 32],
+    key: [u8; 32],
     /// Type.
-    kind:      KeyKind,
+    kind: KeyKind,
     /// État.
-    state:     SlotState,
+    state: SlotState,
     /// Compteur d'accès.
-    accesses:  u64,
+    accesses: u64,
 }
 
 impl Drop for KeyEntry {
-    fn drop(&mut self) { self.key.iter_mut().for_each(|b| *b = 0); }
+    fn drop(&mut self) {
+        self.key.iter_mut().for_each(|b| *b = 0);
+    }
 }
 
 /// Table de stockage (accédée sous lock).
@@ -83,18 +84,32 @@ struct StorageTable {
 
 impl StorageTable {
     #[allow(dead_code)]
-    fn new() -> Self { Self { entries: BTreeMap::new() } }
+    fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+        }
+    }
 
     fn insert(&mut self, slot: KeySlotId, key: [u8; 32], kind: KeyKind) -> ExofsResult<()> {
         if self.entries.contains_key(&slot) {
             return Err(ExofsError::InternalError); // slot déjà occupé
         }
-        self.entries.insert(slot, KeyEntry { key, kind, state: SlotState::Active, accesses: 0 });
+        self.entries.insert(
+            slot,
+            KeyEntry {
+                key,
+                kind,
+                state: SlotState::Active,
+                accesses: 0,
+            },
+        );
         Ok(())
     }
 
     fn get(&mut self, slot: KeySlotId) -> ExofsResult<[u8; 32]> {
-        let entry = self.entries.get_mut(&slot)
+        let entry = self
+            .entries
+            .get_mut(&slot)
             .ok_or(ExofsError::ObjectNotFound)?;
         if entry.state != SlotState::Active {
             return Err(ExofsError::InternalError);
@@ -104,7 +119,9 @@ impl StorageTable {
     }
 
     fn revoke(&mut self, slot: KeySlotId) -> ExofsResult<()> {
-        let entry = self.entries.get_mut(&slot)
+        let entry = self
+            .entries
+            .get_mut(&slot)
             .ok_or(ExofsError::ObjectNotFound)?;
         entry.key.iter_mut().for_each(|b| *b = 0);
         entry.state = SlotState::Revoked;
@@ -112,27 +129,40 @@ impl StorageTable {
     }
 
     fn remove(&mut self, slot: KeySlotId) -> ExofsResult<()> {
-        self.entries.remove(&slot).ok_or(ExofsError::ObjectNotFound)?;
+        self.entries
+            .remove(&slot)
+            .ok_or(ExofsError::ObjectNotFound)?;
         Ok(())
     }
 
     fn kind_of(&self, slot: KeySlotId) -> ExofsResult<KeyKind> {
-        Ok(self.entries.get(&slot).ok_or(ExofsError::ObjectNotFound)?.kind)
+        Ok(self
+            .entries
+            .get(&slot)
+            .ok_or(ExofsError::ObjectNotFound)?
+            .kind)
     }
 
     fn state_of(&self, slot: KeySlotId) -> ExofsResult<SlotState> {
-        Ok(self.entries.get(&slot).ok_or(ExofsError::ObjectNotFound)?.state)
+        Ok(self
+            .entries
+            .get(&slot)
+            .ok_or(ExofsError::ObjectNotFound)?
+            .state)
     }
 
     fn list_active(&self) -> Vec<(KeySlotId, KeyKind)> {
-        self.entries.iter()
+        self.entries
+            .iter()
             .filter(|(_, e)| e.state == SlotState::Active)
             .map(|(&s, e)| (s, e.kind))
             .collect()
     }
 
     #[allow(dead_code)]
-    fn total(&self) -> usize { self.entries.len() }
+    fn total(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -144,9 +174,9 @@ impl StorageTable {
 /// Utilise un `core::cell::UnsafeCell` pour la mutabilité intérieure,
 /// protégé par une sémantique de lock atomique simple (spin).
 pub struct KeyStorage {
-    table:      core::cell::UnsafeCell<StorageTable>,
-    lock:       AtomicU64,
-    next_slot:  AtomicU64,
+    table: core::cell::UnsafeCell<StorageTable>,
+    lock: AtomicU64,
+    next_slot: AtomicU64,
     total_keys: AtomicU64,
 }
 
@@ -161,9 +191,11 @@ impl KeyStorage {
     /// Constructeur const pour l'initialisation statique.
     pub const fn new_const() -> Self {
         Self {
-            table:      core::cell::UnsafeCell::new(StorageTable { entries: BTreeMap::new() }),
-            lock:       AtomicU64::new(0),
-            next_slot:  AtomicU64::new(1),
+            table: core::cell::UnsafeCell::new(StorageTable {
+                entries: BTreeMap::new(),
+            }),
+            lock: AtomicU64::new(0),
+            next_slot: AtomicU64::new(1),
             total_keys: AtomicU64::new(0),
         }
     }
@@ -171,12 +203,18 @@ impl KeyStorage {
     // ── Gestion du lock ───────────────────────────────────────────────────────
 
     fn acquire(&self) {
-        while self.lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .lock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
 
-    fn release(&self) { self.lock.store(0, Ordering::Release); }
+    fn release(&self) {
+        self.lock.store(0, Ordering::Release);
+    }
 
     // ── API publique ──────────────────────────────────────────────────────────
 
@@ -216,7 +254,9 @@ impl KeyStorage {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let result = unsafe { &mut *self.table.get() }.remove(slot);
         self.release();
-        if result.is_ok() { self.total_keys.fetch_sub(1, Ordering::Relaxed); }
+        if result.is_ok() {
+            self.total_keys.fetch_sub(1, Ordering::Relaxed);
+        }
         result
     }
 
@@ -250,7 +290,9 @@ impl KeyStorage {
     }
 
     /// Nombre total de clés (actives + révoquées).
-    pub fn total_count(&self) -> u64 { self.total_keys.load(Ordering::Relaxed) }
+    pub fn total_count(&self) -> u64 {
+        self.total_keys.load(Ordering::Relaxed)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -261,70 +303,82 @@ impl KeyStorage {
 mod tests {
     use super::*;
 
-    fn ks() -> KeyStorage { KeyStorage::new_const() }
+    fn ks() -> KeyStorage {
+        KeyStorage::new_const()
+    }
 
-    #[test] fn test_store_load_roundtrip() {
-        let ks  = ks();
+    #[test]
+    fn test_store_load_roundtrip() {
+        let ks = ks();
         let key = [0x42u8; 32];
         let sid = ks.store_key_256(&key, KeyKind::Master).unwrap();
         assert_eq!(ks.load_key_256(sid).unwrap(), key);
     }
 
-    #[test] fn test_store_different_slots() {
-        let ks  = ks();
-        let s1  = ks.store_key_256(&[1u8; 32], KeyKind::Volume).unwrap();
-        let s2  = ks.store_key_256(&[2u8; 32], KeyKind::Object).unwrap();
+    #[test]
+    fn test_store_different_slots() {
+        let ks = ks();
+        let s1 = ks.store_key_256(&[1u8; 32], KeyKind::Volume).unwrap();
+        let s2 = ks.store_key_256(&[2u8; 32], KeyKind::Object).unwrap();
         assert_ne!(s1, s2);
     }
 
-    #[test] fn test_revoke_zeroes_key() {
-        let ks  = ks();
+    #[test]
+    fn test_revoke_zeroes_key() {
+        let ks = ks();
         let sid = ks.store_key_256(&[0xABu8; 32], KeyKind::Derived).unwrap();
         ks.revoke_key(sid).unwrap();
         // Après révocation, load doit échouer.
         assert!(ks.load_key_256(sid).is_err());
     }
 
-    #[test] fn test_remove_key() {
-        let ks  = ks();
+    #[test]
+    fn test_remove_key() {
+        let ks = ks();
         let sid = ks.store_key_256(&[0u8; 32], KeyKind::Session).unwrap();
         ks.remove_key(sid).unwrap();
         assert!(ks.load_key_256(sid).is_err());
     }
 
-    #[test] fn test_load_nonexistent_fails() {
+    #[test]
+    fn test_load_nonexistent_fails() {
         let ks = ks();
         assert!(ks.load_key_256(KeySlotId(999)).is_err());
     }
 
-    #[test] fn test_key_kind_ok() {
-        let ks  = ks();
+    #[test]
+    fn test_key_kind_ok() {
+        let ks = ks();
         let sid = ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
         assert_eq!(ks.key_kind(sid).unwrap(), KeyKind::Volume);
     }
 
-    #[test] fn test_list_active_slots_count() {
-        let ks  = ks();
+    #[test]
+    fn test_list_active_slots_count() {
+        let ks = ks();
         ks.store_key_256(&[1u8; 32], KeyKind::Master).unwrap();
         ks.store_key_256(&[2u8; 32], KeyKind::Volume).unwrap();
         let active = ks.list_active_slots().unwrap();
         assert_eq!(active.len(), 2);
     }
 
-    #[test] fn test_total_count() {
-        let ks  = ks();
+    #[test]
+    fn test_total_count() {
+        let ks = ks();
         ks.store_key_256(&[0u8; 32], KeyKind::Derived).unwrap();
         assert!(ks.total_count() >= 1);
     }
 
-    #[test] fn test_slot_state_active() {
-        let ks  = ks();
+    #[test]
+    fn test_slot_state_active() {
+        let ks = ks();
         let sid = ks.store_key_256(&[0u8; 32], KeyKind::Master).unwrap();
         assert_eq!(ks.slot_state(sid).unwrap(), SlotState::Active);
     }
 
-    #[test] fn test_slot_state_after_revoke() {
-        let ks  = ks();
+    #[test]
+    fn test_slot_state_after_revoke() {
+        let ks = ks();
         let sid = ks.store_key_256(&[0u8; 32], KeyKind::Master).unwrap();
         ks.revoke_key(sid).unwrap();
         assert_eq!(ks.slot_state(sid).unwrap(), SlotState::Revoked);
@@ -338,9 +392,9 @@ mod tests {
 /// Snapshot public d'un slot (sans matériel secret).
 #[derive(Debug, Clone)]
 pub struct SlotInfo {
-    pub slot_id:  KeySlotId,
-    pub kind:     KeyKind,
-    pub state:    SlotState,
+    pub slot_id: KeySlotId,
+    pub kind: KeyKind,
+    pub state: SlotState,
     pub accesses: u64,
 }
 
@@ -352,11 +406,14 @@ impl KeyStorage {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let tbl = unsafe { &*self.table.get() };
-        let entry = tbl.entries.get(&slot).ok_or_else(|| { self.release(); ExofsError::ObjectNotFound })?;
+        let entry = tbl.entries.get(&slot).ok_or_else(|| {
+            self.release();
+            ExofsError::ObjectNotFound
+        })?;
         let info = SlotInfo {
-            slot_id:  slot,
-            kind:     entry.kind,
-            state:    entry.state,
+            slot_id: slot,
+            kind: entry.kind,
+            state: entry.state,
             accesses: entry.accesses,
         };
         self.release();
@@ -368,8 +425,10 @@ impl KeyStorage {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let tbl = unsafe { &mut *self.table.get() };
-        let entry = tbl.entries.get_mut(&slot)
-            .ok_or_else(|| { ExofsError::ObjectNotFound })?;
+        let entry = tbl
+            .entries
+            .get_mut(&slot)
+            .ok_or_else(|| ExofsError::ObjectNotFound)?;
         if entry.state != SlotState::Active {
             self.release();
             return Err(ExofsError::InternalError);
@@ -384,8 +443,10 @@ impl KeyStorage {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let tbl = unsafe { &mut *self.table.get() };
-        let entry = tbl.entries.get_mut(&slot)
-            .ok_or_else(|| { ExofsError::ObjectNotFound })?;
+        let entry = tbl
+            .entries
+            .get_mut(&slot)
+            .ok_or_else(|| ExofsError::ObjectNotFound)?;
         entry.key.iter_mut().for_each(|b| *b = 0);
         entry.state = SlotState::Expired;
         self.release();
@@ -398,8 +459,10 @@ impl KeyStorage {
     pub fn list_by_kind(&self, kind: KeyKind) -> ExofsResult<Vec<KeySlotId>> {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        let tbl  = unsafe { &*self.table.get() };
-        let list: Vec<KeySlotId> = tbl.entries.iter()
+        let tbl = unsafe { &*self.table.get() };
+        let list: Vec<KeySlotId> = tbl
+            .entries
+            .iter()
             .filter(|(_, e)| e.kind == kind && e.state == SlotState::Active)
             .map(|(&s, _)| s)
             .collect();
@@ -414,7 +477,7 @@ impl KeyStorage {
         let tbl = unsafe { &mut *self.table.get() };
         let before = tbl.entries.len();
         tbl.entries.retain(|_, e| e.state == SlotState::Active);
-        let after  = tbl.entries.len();
+        let after = tbl.entries.len();
         self.release();
         let purged = before.saturating_sub(after);
         if purged > 0 {
@@ -428,7 +491,9 @@ impl KeyStorage {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let tbl = unsafe { &*self.table.get() };
-        let cnt = tbl.entries.get(&slot)
+        let cnt = tbl
+            .entries
+            .get(&slot)
             .ok_or_else(|| ExofsError::ObjectNotFound)
             .map(|e| e.accesses);
         self.release();
@@ -440,33 +505,39 @@ impl KeyStorage {
 mod extended_tests {
     use super::*;
 
-    fn ks() -> KeyStorage { KeyStorage::new_const() }
+    fn ks() -> KeyStorage {
+        KeyStorage::new_const()
+    }
 
-    #[test] fn test_slot_info_ok() {
-        let ks  = ks();
+    #[test]
+    fn test_slot_info_ok() {
+        let ks = ks();
         let sid = ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
         let info = ks.slot_info(sid).unwrap();
         assert_eq!(info.kind, KeyKind::Volume);
         assert_eq!(info.state, SlotState::Active);
     }
 
-    #[test] fn test_retype_ok() {
-        let ks  = ks();
+    #[test]
+    fn test_retype_ok() {
+        let ks = ks();
         let sid = ks.store_key_256(&[0u8; 32], KeyKind::Session).unwrap();
         ks.retype_slot(sid, KeyKind::Derived).unwrap();
         assert_eq!(ks.key_kind(sid).unwrap(), KeyKind::Derived);
     }
 
-    #[test] fn test_expire_slot() {
-        let ks  = ks();
+    #[test]
+    fn test_expire_slot() {
+        let ks = ks();
         let sid = ks.store_key_256(&[0u8; 32], KeyKind::Master).unwrap();
         ks.expire_slot(sid).unwrap();
         assert_eq!(ks.slot_state(sid).unwrap(), SlotState::Expired);
         assert!(ks.load_key_256(sid).is_err());
     }
 
-    #[test] fn test_list_by_kind() {
-        let ks  = ks();
+    #[test]
+    fn test_list_by_kind() {
+        let ks = ks();
         ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
         ks.store_key_256(&[1u8; 32], KeyKind::Volume).unwrap();
         ks.store_key_256(&[2u8; 32], KeyKind::Master).unwrap();
@@ -474,18 +545,20 @@ mod extended_tests {
         assert_eq!(vols.len(), 2);
     }
 
-    #[test] fn test_purge_inactive() {
-        let ks  = ks();
-        let s1  = ks.store_key_256(&[0u8; 32], KeyKind::Session).unwrap();
-        let s2  = ks.store_key_256(&[1u8; 32], KeyKind::Session).unwrap();
+    #[test]
+    fn test_purge_inactive() {
+        let ks = ks();
+        let s1 = ks.store_key_256(&[0u8; 32], KeyKind::Session).unwrap();
+        let s2 = ks.store_key_256(&[1u8; 32], KeyKind::Session).unwrap();
         ks.revoke_key(s1).unwrap();
         let purged = ks.purge_inactive().unwrap();
         assert_eq!(purged, 1);
         assert!(ks.load_key_256(s2).is_ok()); // s2 toujours actif
     }
 
-    #[test] fn test_access_count_increments() {
-        let ks  = ks();
+    #[test]
+    fn test_access_count_increments() {
+        let ks = ks();
         let sid = ks.store_key_256(&[0u8; 32], KeyKind::Object).unwrap();
         ks.load_key_256(sid).unwrap();
         ks.load_key_256(sid).unwrap();

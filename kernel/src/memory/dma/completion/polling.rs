@@ -14,8 +14,8 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::memory::dma::core::types::{DmaTransactionId, DmaError};
 use crate::memory::dma::completion::handler::DMA_COMPLETION;
+use crate::memory::dma::core::types::{DmaError, DmaTransactionId};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES
@@ -53,25 +53,25 @@ pub enum PollResult {
 
 pub struct PollStats {
     /// Polls ayant réussi (Done).
-    pub successes:    AtomicU64,
+    pub successes: AtomicU64,
     /// Polls ayant échoué (Error).
-    pub errors:       AtomicU64,
+    pub errors: AtomicU64,
     /// Polls ayant expiré.
-    pub timeouts:     AtomicU64,
+    pub timeouts: AtomicU64,
     /// Cycles TSC totaux consommés par les polls réussis.
     pub cycles_total: AtomicU64,
     /// Cycles TSC max sur un poll réussi (worst-case latency).
-    pub cycles_max:   AtomicU64,
+    pub cycles_max: AtomicU64,
 }
 
 impl PollStats {
     const fn new() -> Self {
         PollStats {
-            successes:    AtomicU64::new(0),
-            errors:       AtomicU64::new(0),
-            timeouts:     AtomicU64::new(0),
+            successes: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            timeouts: AtomicU64::new(0),
             cycles_total: AtomicU64::new(0),
-            cycles_max:   AtomicU64::new(0),
+            cycles_max: AtomicU64::new(0),
         }
     }
 }
@@ -105,7 +105,9 @@ pub fn spin_poll(txn_id: DmaTransactionId, timeout_cycles: u64) -> PollResult {
             Some(Ok(bytes)) => {
                 let elapsed = read_tsc().wrapping_sub(start);
                 POLL_STATS.successes.fetch_add(1, Ordering::Relaxed);
-                POLL_STATS.cycles_total.fetch_add(elapsed, Ordering::Relaxed);
+                POLL_STATS
+                    .cycles_total
+                    .fetch_add(elapsed, Ordering::Relaxed);
                 // Mise à jour du max sans verrou (approximation acceptable).
                 let old_max = POLL_STATS.cycles_max.load(Ordering::Relaxed);
                 if elapsed > old_max {
@@ -200,7 +202,9 @@ fn read_tsc() -> u64 {
         ((hi as u64) << 32) | (lo as u64)
     }
     #[cfg(not(target_arch = "x86_64"))]
-    { 0 }
+    {
+        0
+    }
 }
 
 /// Instruction `pause` (REPNE NOP) — réduit la contention sur le cache cohérence.

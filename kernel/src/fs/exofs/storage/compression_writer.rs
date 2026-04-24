@@ -18,9 +18,9 @@
 //   - Zstd → table zstd simple (stub documenté, à remplacer par la crate
 //              zstd-sys quand disponible dans le noyau).
 
-use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::storage::compression_choice::CompressionType;
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -41,9 +41,9 @@ pub const COMPRESS_HEADER_SIZE: usize = 16;
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct CompressedBlockHeader {
-    pub magic:         u32,
-    pub algo:          u8,
-    pub _pad:          [u8; 3],
+    pub magic: u32,
+    pub algo: u8,
+    pub _pad: [u8; 3],
     pub original_size: u32,
     pub compressed_size: u32,
 }
@@ -51,10 +51,10 @@ pub struct CompressedBlockHeader {
 impl CompressedBlockHeader {
     pub fn new(algo: CompressionType, original: u32, compressed: u32) -> Self {
         Self {
-            magic:           COMPRESSED_BLOCK_MAGIC,
-            algo:            algo.to_u8(),
-            _pad:            [0; 3],
-            original_size:   original,
+            magic: COMPRESSED_BLOCK_MAGIC,
+            algo: algo.to_u8(),
+            _pad: [0; 3],
+            original_size: original,
             compressed_size: compressed,
         }
     }
@@ -62,7 +62,7 @@ impl CompressedBlockHeader {
     pub fn to_bytes(&self) -> [u8; COMPRESS_HEADER_SIZE] {
         let mut out = [0u8; COMPRESS_HEADER_SIZE];
         out[0..4].copy_from_slice(&self.magic.to_le_bytes());
-        out[4]   = self.algo;
+        out[4] = self.algo;
         out[5..8].copy_from_slice(&self._pad);
         out[8..12].copy_from_slice(&self.original_size.to_le_bytes());
         out[12..16].copy_from_slice(&self.compressed_size.to_le_bytes());
@@ -70,13 +70,23 @@ impl CompressedBlockHeader {
     }
 
     pub fn from_bytes(b: &[u8]) -> ExofsResult<Self> {
-        if b.len() < COMPRESS_HEADER_SIZE { return Err(ExofsError::InvalidSize); }
+        if b.len() < COMPRESS_HEADER_SIZE {
+            return Err(ExofsError::InvalidSize);
+        }
         let magic = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
-        if magic != COMPRESSED_BLOCK_MAGIC { return Err(ExofsError::BadMagic); }
-        let algo         = b[4];
-        let original     = u32::from_le_bytes([b[8],  b[9],  b[10], b[11]]);
-        let compressed   = u32::from_le_bytes([b[12], b[13], b[14], b[15]]);
-        Ok(Self { magic, algo, _pad: [0; 3], original_size: original, compressed_size: compressed })
+        if magic != COMPRESSED_BLOCK_MAGIC {
+            return Err(ExofsError::BadMagic);
+        }
+        let algo = b[4];
+        let original = u32::from_le_bytes([b[8], b[9], b[10], b[11]]);
+        let compressed = u32::from_le_bytes([b[12], b[13], b[14], b[15]]);
+        Ok(Self {
+            magic,
+            algo,
+            _pad: [0; 3],
+            original_size: original,
+            compressed_size: compressed,
+        })
     }
 }
 
@@ -86,25 +96,31 @@ impl CompressedBlockHeader {
 
 pub struct CompressResult {
     /// Données compressées (avec en-tête intégré).
-    pub data:          Vec<u8>,
+    pub data: Vec<u8>,
     /// Algorithme utilisé.
-    pub algo:          CompressionType,
+    pub algo: CompressionType,
     /// Taille originale.
     pub original_size: u32,
     /// Ratio en permille (1000 = pas de compression).
-    pub ratio_milli:   u32,
+    pub ratio_milli: u32,
 }
 
 impl CompressResult {
-    pub fn ratio_pct(&self) -> u32 { self.ratio_milli / 10 }
+    pub fn ratio_pct(&self) -> u32 {
+        self.ratio_milli / 10
+    }
 
     pub fn is_effective(&self) -> bool {
         self.ratio_milli < 900 // ≥ 10% de gain
     }
 
     /// Taille des données compressées.
-    pub fn len(&self) -> usize { self.data.len() }
-    pub fn is_empty(&self) -> bool { self.data.is_empty() }
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,20 +136,34 @@ pub struct CompressWriter {
 }
 
 impl CompressWriter {
-    pub fn new(algo: CompressionType) -> Self { Self { algo } }
-    pub fn none()  -> Self { Self { algo: CompressionType::None } }
-    pub fn lz4()   -> Self { Self { algo: CompressionType::Lz4  } }
-    pub fn zstd()  -> Self { Self { algo: CompressionType::Zstd } }
+    pub fn new(algo: CompressionType) -> Self {
+        Self { algo }
+    }
+    pub fn none() -> Self {
+        Self {
+            algo: CompressionType::None,
+        }
+    }
+    pub fn lz4() -> Self {
+        Self {
+            algo: CompressionType::Lz4,
+        }
+    }
+    pub fn zstd() -> Self {
+        Self {
+            algo: CompressionType::Zstd,
+        }
+    }
 
     /// Compresse `data` et retourne un `CompressResult`.
     pub fn compress(&self, data: &[u8]) -> ExofsResult<CompressResult> {
-        if data.len() > MAX_COMPRESS_INPUT { return Err(ExofsError::InvalidSize); }
+        if data.len() > MAX_COMPRESS_INPUT {
+            return Err(ExofsError::InvalidSize);
+        }
 
         let original_size = data.len() as u32;
         let (compressed, effective_algo) = match self.algo {
-            CompressionType::None => {
-                (data.to_vec_safe()?, CompressionType::None)
-            }
+            CompressionType::None => (data.to_vec_safe()?, CompressionType::None),
             CompressionType::Lz4 => {
                 let c = lz4_compress(data)?;
                 // Si la compression augmente la taille, stocker sans compression.
@@ -154,10 +184,11 @@ impl CompressWriter {
         };
 
         let compressed_size = compressed.len() as u32;
-        let hdr             = CompressedBlockHeader::new(effective_algo, original_size, compressed_size);
-        let hdr_bytes       = hdr.to_bytes();
+        let hdr = CompressedBlockHeader::new(effective_algo, original_size, compressed_size);
+        let hdr_bytes = hdr.to_bytes();
 
-        let total = COMPRESS_HEADER_SIZE.checked_add(compressed.len())
+        let total = COMPRESS_HEADER_SIZE
+            .checked_add(compressed.len())
             .ok_or(ExofsError::Overflow)?;
         let mut out: Vec<u8> = Vec::new();
         out.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
@@ -178,7 +209,9 @@ impl CompressWriter {
         })
     }
 
-    pub fn algorithm(&self) -> CompressionType { self.algo }
+    pub fn algorithm(&self) -> CompressionType {
+        self.algo
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -192,7 +225,8 @@ trait ToVecSafe {
 impl ToVecSafe for [u8] {
     fn to_vec_safe(&self) -> ExofsResult<Vec<u8>> {
         let mut v: Vec<u8> = Vec::new();
-        v.try_reserve(self.len()).map_err(|_| ExofsError::NoMemory)?;
+        v.try_reserve(self.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         v.extend_from_slice(self);
         Ok(v)
     }
@@ -216,21 +250,24 @@ fn lz4_compress(input: &[u8]) -> ExofsResult<Vec<u8>> {
 
     let mut pos = 0usize;
     while pos < input.len() {
-        let remaining      = input.len() - pos;
-        let literal_run    = remaining.min(255 * 15 + 15);
-        let literal_len    = if literal_run < 15 {
+        let remaining = input.len() - pos;
+        let literal_run = remaining.min(255 * 15 + 15);
+        let literal_len = if literal_run < 15 {
             out.push((literal_run as u8) << 4);
         } else {
             out.push(0xF0u8);
             let extra = literal_run - 15;
-            let full   = extra / 255;
-            let rem    = extra % 255;
-            for _ in 0..full { out.push(255u8); }
+            let full = extra / 255;
+            let rem = extra % 255;
+            for _ in 0..full {
+                out.push(255u8);
+            }
             out.push(rem as u8);
         };
         let _ = literal_len;
 
-        out.try_reserve(literal_run).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(literal_run)
+            .map_err(|_| ExofsError::NoMemory)?;
         out.extend_from_slice(&input[pos..pos + literal_run]);
         pos = pos.checked_add(literal_run).ok_or(ExofsError::Overflow)?;
     }
@@ -256,7 +293,8 @@ fn zstd_compress(input: &[u8]) -> ExofsResult<Vec<u8>> {
 
     let mut out: Vec<u8> = Vec::new();
     let capacity = input.len().saturating_add(32);
-    out.try_reserve(capacity).map_err(|_| ExofsError::NoMemory)?;
+    out.try_reserve(capacity)
+        .map_err(|_| ExofsError::NoMemory)?;
 
     // Frame header.
     out.extend_from_slice(&ZSTD_MAGIC);
@@ -275,9 +313,10 @@ fn zstd_compress(input: &[u8]) -> ExofsResult<Vec<u8>> {
 
     // Block header : type = Raw_Block (literals).
     let block_size = input.len() as u32;
-    let bh_val     = (block_size << 3) | 0x01; // type=1 (raw), last_block=1
+    let bh_val = (block_size << 3) | 0x01; // type=1 (raw), last_block=1
     out.extend_from_slice(&bh_val.to_le_bytes());
-    out.try_reserve(input.len()).map_err(|_| ExofsError::NoMemory)?;
+    out.try_reserve(input.len())
+        .map_err(|_| ExofsError::NoMemory)?;
     out.extend_from_slice(input);
 
     // Content checksum (optionnel, on l'omet).
@@ -292,7 +331,9 @@ fn zstd_compress(input: &[u8]) -> ExofsResult<Vec<u8>> {
 mod tests {
     use super::*;
 
-    fn make_data(n: usize, fill: u8) -> Vec<u8> { vec![fill; n] }
+    fn make_data(n: usize, fill: u8) -> Vec<u8> {
+        vec![fill; n]
+    }
 
     #[test]
     fn test_compress_none() {
@@ -307,12 +348,15 @@ mod tests {
 
     #[test]
     fn test_header_roundtrip() {
-        let hdr  = CompressedBlockHeader::new(CompressionType::Lz4, 4096, 2048);
-        let raw  = hdr.to_bytes();
+        let hdr = CompressedBlockHeader::new(CompressionType::Lz4, 4096, 2048);
+        let raw = hdr.to_bytes();
         let hdr2 = CompressedBlockHeader::from_bytes(&raw).unwrap();
         assert_eq!(hdr2.original_size, 4096);
         assert_eq!(hdr2.compressed_size, 2048);
-        assert_eq!(CompressionType::from_u8(hdr2.algo).unwrap(), CompressionType::Lz4);
+        assert_eq!(
+            CompressionType::from_u8(hdr2.algo).unwrap(),
+            CompressionType::Lz4
+        );
     }
 
     #[test]

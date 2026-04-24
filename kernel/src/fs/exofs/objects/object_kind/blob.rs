@@ -8,13 +8,11 @@
 //   SEC-04   : jamais de logging du contenu binaire
 //   ARITH-02 : checked_add / saturating_* partout
 
-
 use core::fmt;
 use core::mem;
 
 use crate::fs::exofs::core::{
-    BlobId, ObjectId, EpochId, DiskOffset,
-    ExofsError, ExofsResult, blake3_hash, compute_blob_id,
+    blake3_hash, compute_blob_id, BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId,
 };
 use crate::fs::exofs::objects::physical_blob::{CompressionType, PhysicalBlobInMemory};
 
@@ -37,12 +35,12 @@ pub const BLOB_DISK_ALIGN: u64 = 512;
 
 // ── Flags de Blob on-disk ──────────────────────────────────────────────────────
 
-pub const BLOB_FLAG_COMPRESSED:  u16 = 1 << 0;
-pub const BLOB_FLAG_ENCRYPTED:   u16 = 1 << 1;
-pub const BLOB_FLAG_PINNED:      u16 = 1 << 2; // Ne pas GC même si ref_count == 0
-pub const BLOB_FLAG_DEDUPLICATED:u16 = 1 << 3; // Part d'un Blob partagé (dedup)
-pub const BLOB_FLAG_SEALED:      u16 = 1 << 4; // Immuable, jamais écrasé
-pub const BLOB_FLAG_PARTIAL:     u16 = 1 << 5; // Blob partiel (upload en cours)
+pub const BLOB_FLAG_COMPRESSED: u16 = 1 << 0;
+pub const BLOB_FLAG_ENCRYPTED: u16 = 1 << 1;
+pub const BLOB_FLAG_PINNED: u16 = 1 << 2; // Ne pas GC même si ref_count == 0
+pub const BLOB_FLAG_DEDUPLICATED: u16 = 1 << 3; // Part d'un Blob partagé (dedup)
+pub const BLOB_FLAG_SEALED: u16 = 1 << 4; // Immuable, jamais écrasé
+pub const BLOB_FLAG_PARTIAL: u16 = 1 << 5; // Blob partiel (upload en cours)
 
 // ── BlobDescriptorDisk ─────────────────────────────────────────────────────────
 
@@ -70,20 +68,20 @@ pub const BLOB_FLAG_PARTIAL:     u16 = 1 << 5; // Blob partiel (upload en cours)
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct BlobDescriptorDisk {
-    pub magic:        u32,
-    pub blob_id:      [u8; 32],
-    pub object_id:    [u8; 32],
-    pub disk_offset:  u64,
-    pub raw_size:     u64,
-    pub stored_size:  u64,
+    pub magic: u32,
+    pub blob_id: [u8; 32],
+    pub object_id: [u8; 32],
+    pub disk_offset: u64,
+    pub raw_size: u64,
+    pub stored_size: u64,
     pub epoch_create: u64,
-    pub flags:        u16,
-    pub compression:  u8,
-    pub hash_algo:    u8,
-    pub version:      u8,
-    pub _pad:         [u8; 3],
-    pub ref_count:    u32,
-    pub checksum:     [u8; 16],
+    pub flags: u16,
+    pub compression: u8,
+    pub hash_algo: u8,
+    pub version: u8,
+    pub _pad: [u8; 3],
+    pub ref_count: u32,
+    pub checksum: [u8; 16],
 }
 
 const _: () = assert!(
@@ -128,8 +126,10 @@ impl fmt::Debug for BlobDescriptorDisk {
             f,
             "BlobDescriptorDisk {{ raw_size: {}, stored_size: {}, \
              flags: {:#x}, compression: {} }}",
-            { self.raw_size }, { self.stored_size },
-            { self.flags }, { self.compression },
+            { self.raw_size },
+            { self.stored_size },
+            { self.flags },
+            { self.compression },
         )
     }
 }
@@ -141,25 +141,25 @@ impl fmt::Debug for BlobDescriptorDisk {
 /// Correspond à un objet LogicalObject de kind `ObjectKind::Blob`.
 pub struct BlobDescriptor {
     /// Identifiant du Blob (Blake3 des données brutes).
-    pub blob_id:      BlobId,
+    pub blob_id: BlobId,
     /// Objet propriétaire.
-    pub object_id:    ObjectId,
+    pub object_id: ObjectId,
     /// Offset disque du payload.
-    pub disk_offset:  DiskOffset,
+    pub disk_offset: DiskOffset,
     /// Taille des données brutes (AVANT compression).
-    pub raw_size:     u64,
+    pub raw_size: u64,
     /// Taille stockée sur disque (compressée ou identique à raw_size).
-    pub stored_size:  u64,
+    pub stored_size: u64,
     /// Epoch de création.
     pub epoch_create: EpochId,
     /// Flags (BLOB_FLAG_*).
-    pub flags:        u16,
+    pub flags: u16,
     /// Type de compression.
-    pub compression:  CompressionType,
+    pub compression: CompressionType,
     /// Compteur de références.
-    pub ref_count:    u32,
+    pub ref_count: u32,
     /// Hint de déduplication : None si non dédupliqué.
-    pub dedup_hint:   Option<BlobId>,
+    pub dedup_hint: Option<BlobId>,
 }
 
 impl BlobDescriptor {
@@ -167,8 +167,8 @@ impl BlobDescriptor {
 
     /// Crée un nouveau BlobDescriptor pour un blob inline (jamais compressé).
     pub fn new_inline(
-        data:         &[u8],
-        object_id:    ObjectId,
+        data: &[u8],
+        object_id: ObjectId,
         epoch_create: EpochId,
     ) -> ExofsResult<Self> {
         let raw_size = data.len() as u64;
@@ -177,21 +177,21 @@ impl BlobDescriptor {
         Ok(Self {
             blob_id,
             object_id,
-            disk_offset:  DiskOffset(0),
+            disk_offset: DiskOffset(0),
             raw_size,
-            stored_size:  raw_size,
+            stored_size: raw_size,
             epoch_create,
-            flags:        0,
-            compression:  CompressionType::None,
-            ref_count:    1,
-            dedup_hint:   None,
+            flags: 0,
+            compression: CompressionType::None,
+            ref_count: 1,
+            dedup_hint: None,
         })
     }
 
     /// Crée un BlobDescriptor depuis un P-Blob physique déjà alloué.
     pub fn from_physical(
-        blob:         &PhysicalBlobInMemory,
-        object_id:    ObjectId,
+        blob: &PhysicalBlobInMemory,
+        object_id: ObjectId,
         epoch_create: EpochId,
     ) -> Self {
         let mut flags = 0u16;
@@ -199,16 +199,16 @@ impl BlobDescriptor {
             flags |= BLOB_FLAG_COMPRESSED;
         }
         Self {
-            blob_id:     blob.blob_id,
+            blob_id: blob.blob_id,
             object_id,
             disk_offset: blob.data_offset,
-            raw_size:    blob.original_size,
+            raw_size: blob.original_size,
             stored_size: blob.data_size,
             epoch_create,
             flags,
             compression: blob.compress_type,
-            ref_count:   blob.ref_count(),
-            dedup_hint:  None,
+            ref_count: blob.ref_count(),
+            dedup_hint: None,
         }
     }
 
@@ -217,19 +217,19 @@ impl BlobDescriptor {
     /// HDR-03 : `d.verify()` en premier.
     pub fn from_disk(d: &BlobDescriptorDisk) -> ExofsResult<Self> {
         d.verify()?;
-        let compression = CompressionType::from_u8(d.compression)
-            .ok_or(ExofsError::InvalidArgument)?;
+        let compression =
+            CompressionType::from_u8(d.compression).ok_or(ExofsError::InvalidArgument)?;
         Ok(Self {
-            blob_id:     BlobId(d.blob_id),
-            object_id:   ObjectId(d.object_id),
+            blob_id: BlobId(d.blob_id),
+            object_id: ObjectId(d.object_id),
             disk_offset: DiskOffset(d.disk_offset),
-            raw_size:    d.raw_size,
+            raw_size: d.raw_size,
             stored_size: d.stored_size,
             epoch_create: EpochId(d.epoch_create),
-            flags:       d.flags,
+            flags: d.flags,
             compression,
-            ref_count:   d.ref_count,
-            dedup_hint:  None,
+            ref_count: d.ref_count,
+            dedup_hint: None,
         })
     }
 
@@ -238,20 +238,20 @@ impl BlobDescriptor {
     /// Sérialise vers on-disk avec checksum.
     pub fn to_disk(&self) -> BlobDescriptorDisk {
         let mut d = BlobDescriptorDisk {
-            magic:        BLOB_DESCRIPTOR_MAGIC,
-            blob_id:      self.blob_id.0,
-            object_id:    self.object_id.0,
-            disk_offset:  self.disk_offset.0,
-            raw_size:     self.raw_size,
-            stored_size:  self.stored_size,
+            magic: BLOB_DESCRIPTOR_MAGIC,
+            blob_id: self.blob_id.0,
+            object_id: self.object_id.0,
+            disk_offset: self.disk_offset.0,
+            raw_size: self.raw_size,
+            stored_size: self.stored_size,
             epoch_create: self.epoch_create.0,
-            flags:        self.flags,
-            compression:  self.compression as u8,
-            hash_algo:    BLOB_HASH_ALGO,
-            version:      BLOB_DESCRIPTOR_VERSION,
-            _pad:         [0; 3],
-            ref_count:    self.ref_count,
-            checksum:     [0; 16],
+            flags: self.flags,
+            compression: self.compression as u8,
+            hash_algo: BLOB_HASH_ALGO,
+            version: BLOB_DESCRIPTOR_VERSION,
+            _pad: [0; 3],
+            ref_count: self.ref_count,
+            checksum: [0; 16],
         };
         d.checksum = d.compute_checksum();
         d
@@ -355,15 +355,15 @@ impl fmt::Debug for BlobDescriptor {
 /// Paramètres de création d'un nouveau Blob ExoFS.
 pub struct BlobCreateParams {
     /// Objet propriétaire.
-    pub object_id:    ObjectId,
+    pub object_id: ObjectId,
     /// Epoch de création.
-    pub epoch:        EpochId,
+    pub epoch: EpochId,
     /// Type de compression souhaité.
-    pub compression:  CompressionType,
+    pub compression: CompressionType,
     /// Forcer l'épinglage (ne jamais GC).
-    pub pinned:       bool,
+    pub pinned: bool,
     /// Hint de déduplication (None = désactivé).
-    pub dedup_hint:   Option<BlobId>,
+    pub dedup_hint: Option<BlobId>,
 }
 
 impl BlobCreateParams {
@@ -373,8 +373,8 @@ impl BlobCreateParams {
             object_id,
             epoch,
             compression: CompressionType::None,
-            pinned:      false,
-            dedup_hint:  None,
+            pinned: false,
+            dedup_hint: None,
         }
     }
 
@@ -409,19 +409,19 @@ impl BlobCreateParams {
 #[derive(Default, Debug)]
 pub struct BlobStats {
     /// Nombre total de BlobDescriptors actifs.
-    pub total:            u64,
+    pub total: u64,
     /// Total des données brutes (octet).
-    pub total_raw_bytes:  u64,
+    pub total_raw_bytes: u64,
     /// Total des données stockées (octet, après compression).
     pub total_stored_bytes: u64,
     /// Nombre de Blobs dédupliqués.
-    pub dedup_count:      u64,
+    pub dedup_count: u64,
     /// Nombre de Blobs compressés.
     pub compressed_count: u64,
     /// Nombre de Blobs épinglés.
-    pub pinned_count:     u64,
+    pub pinned_count: u64,
     /// Nombre de Blobs éligibles au GC (ref_count == 0).
-    pub gc_eligible:      u64,
+    pub gc_eligible: u64,
 }
 
 impl BlobStats {
@@ -432,12 +432,20 @@ impl BlobStats {
     /// Enregistre un nouveau BlobDescriptor dans les stats.
     pub fn record(&mut self, b: &BlobDescriptor) {
         self.total = self.total.saturating_add(1);
-        self.total_raw_bytes    = self.total_raw_bytes.saturating_add(b.raw_size);
+        self.total_raw_bytes = self.total_raw_bytes.saturating_add(b.raw_size);
         self.total_stored_bytes = self.total_stored_bytes.saturating_add(b.stored_size);
-        if b.is_deduplicated()  { self.dedup_count      = self.dedup_count.saturating_add(1); }
-        if b.is_compressed()    { self.compressed_count = self.compressed_count.saturating_add(1); }
-        if b.is_pinned()        { self.pinned_count     = self.pinned_count.saturating_add(1); }
-        if b.ref_count == 0     { self.gc_eligible      = self.gc_eligible.saturating_add(1); }
+        if b.is_deduplicated() {
+            self.dedup_count = self.dedup_count.saturating_add(1);
+        }
+        if b.is_compressed() {
+            self.compressed_count = self.compressed_count.saturating_add(1);
+        }
+        if b.is_pinned() {
+            self.pinned_count = self.pinned_count.saturating_add(1);
+        }
+        if b.ref_count == 0 {
+            self.gc_eligible = self.gc_eligible.saturating_add(1);
+        }
     }
 
     /// Ratio d'économie de stockage grâce à la compression, ×100.
@@ -445,9 +453,7 @@ impl BlobStats {
         if self.total_raw_bytes == 0 {
             return 100;
         }
-        100u64.saturating_sub(
-            (self.total_stored_bytes * 100) / self.total_raw_bytes
-        )
+        100u64.saturating_sub((self.total_stored_bytes * 100) / self.total_raw_bytes)
     }
 }
 
@@ -457,9 +463,13 @@ impl fmt::Display for BlobStats {
             f,
             "BlobStats {{ total: {}, raw: {} B, stored: {} B, \
              dedup: {}, compressed: {}, pinned: {}, gc_eligible: {} }}",
-            self.total, self.total_raw_bytes, self.total_stored_bytes,
-            self.dedup_count, self.compressed_count,
-            self.pinned_count, self.gc_eligible,
+            self.total,
+            self.total_raw_bytes,
+            self.total_stored_bytes,
+            self.dedup_count,
+            self.compressed_count,
+            self.pinned_count,
+            self.gc_eligible,
         )
     }
 }
@@ -500,14 +510,14 @@ mod tests {
     #[test]
     fn test_blob_verify_content_ok() {
         let data = b"hello exofs";
-        let id   = blob_compute_id(data);
+        let id = blob_compute_id(data);
         assert!(blob_verify_content(data, &id));
     }
 
     #[test]
     fn test_blob_verify_content_tampered() {
-        let data  = b"hello exofs";
-        let id    = blob_compute_id(data);
+        let data = b"hello exofs";
+        let id = blob_compute_id(data);
         let tampered = b"hello ExoFS";
         assert!(!blob_verify_content(tampered, &id));
     }
@@ -515,16 +525,16 @@ mod tests {
     #[test]
     fn test_compression_ratio() {
         let d = BlobDescriptor {
-            blob_id:     BlobId([0; 32]),
-            object_id:   ObjectId([1; 32]),
+            blob_id: BlobId([0; 32]),
+            object_id: ObjectId([1; 32]),
             disk_offset: DiskOffset(0),
-            raw_size:    1000,
+            raw_size: 1000,
             stored_size: 500,
             epoch_create: EpochId(1),
-            flags:       BLOB_FLAG_COMPRESSED,
+            flags: BLOB_FLAG_COMPRESSED,
             compression: CompressionType::Lz4,
-            ref_count:   1,
-            dedup_hint:  None,
+            ref_count: 1,
+            dedup_hint: None,
         };
         assert_eq!(d.compression_ratio_x100(), 50);
     }
@@ -532,16 +542,16 @@ mod tests {
     #[test]
     fn test_to_disk_roundtrip() {
         let orig = BlobDescriptor {
-            blob_id:     BlobId([0xAA; 32]),
-            object_id:   ObjectId([0xBB; 32]),
+            blob_id: BlobId([0xAA; 32]),
+            object_id: ObjectId([0xBB; 32]),
             disk_offset: DiskOffset(4096),
-            raw_size:    2048,
+            raw_size: 2048,
             stored_size: 2048,
             epoch_create: EpochId(42),
-            flags:       0,
+            flags: 0,
             compression: CompressionType::None,
-            ref_count:   3,
-            dedup_hint:  None,
+            ref_count: 3,
+            dedup_hint: None,
         };
         let disk = orig.to_disk();
         disk.verify().expect("verify doit réussir");

@@ -71,16 +71,22 @@ impl SchedulerService {
         let class = SchedulingClass::from_u32(raw_class).unwrap_or(SchedulingClass::Cfs);
         let profile = self.advisor.recommend(raw_nice, 8, class);
 
-        match self
-            .threads
-            .register(sender_pid, tid, profile.nice, profile.class, affinity_mask, profile.priority_weight, flags)
-        {
+        match self.threads.register(
+            sender_pid,
+            tid,
+            profile.nice,
+            profile.class,
+            affinity_mask,
+            profile.priority_weight,
+            flags,
+        ) {
             Ok(snapshot) => {
                 self.stats.note_register(snapshot);
                 SchedulerReply::ok(
                     snapshot.tid as u64,
                     snapshot.priority_weight as u64,
-                    ((self.threads.active_count() as u64) << 32) | (snapshot.affinity_mask & 0xffff_ffff),
+                    ((self.threads.active_count() as u64) << 32)
+                        | (snapshot.affinity_mask & 0xffff_ffff),
                     snapshot.class.as_u32() | ((snapshot.flags & 0xff) << 8),
                 )
             }
@@ -107,7 +113,9 @@ impl SchedulerService {
             Ok(snapshot) => snapshot,
             Err(err) => return SchedulerReply::error(err),
         };
-        let profile = self.advisor.recommend(raw_nice, latency_hint, existing.class);
+        let profile = self
+            .advisor
+            .recommend(raw_nice, latency_hint, existing.class);
         if let Err(err) = apply_kernel_priority(existing.pid, profile.nice) {
             self.stats.note_error(existing.pid, existing.tid, err);
             return SchedulerReply::error(err);
@@ -168,7 +176,10 @@ impl SchedulerService {
         };
 
         if matches!(class, SchedulingClass::Realtime | SchedulingClass::Deadline) {
-            if let Err(err) = self.realtime.admit(tid, runtime_us.max(1), period_us.max(runtime_us.max(1))) {
+            if let Err(err) =
+                self.realtime
+                    .admit(tid, runtime_us.max(1), period_us.max(runtime_us.max(1)))
+            {
                 self.stats.note_error(owner_pid, tid, err);
                 return SchedulerReply::error(err);
             }
@@ -186,9 +197,12 @@ impl SchedulerService {
 
         match self.threads.update_class(sender_pid, tid, class, flags) {
             Ok(mut snapshot) => {
-                if let Ok(updated) =
-                    self.threads.update_priority(sender_pid, tid, profile.nice, profile.priority_weight)
-                {
+                if let Ok(updated) = self.threads.update_priority(
+                    sender_pid,
+                    tid,
+                    profile.nice,
+                    profile.priority_weight,
+                ) {
                     snapshot = updated;
                 }
                 self.stats.note_policy(snapshot);
@@ -259,7 +273,11 @@ impl SchedulerService {
             return SchedulerReply::error(rc);
         }
         self.stats.note_yield(owner_pid, tid);
-        let yields = self.stats.snapshot(tid).map(|stats| stats.yield_count).unwrap_or(0);
+        let yields = self
+            .stats
+            .snapshot(tid)
+            .map(|stats| stats.yield_count)
+            .unwrap_or(0);
         SchedulerReply::ok(tid as u64, yields as u64, 0, 0)
     }
 
@@ -286,7 +304,10 @@ impl SchedulerService {
             ((stats.pid as u64) << 32) | stats.tid as u64,
             ((stats.yield_count as u64) << 32) | (stats.priority_weight as u64),
             rt.map(|entry| ((entry.runtime_us as u64) << 32) | entry.period_us as u64)
-                .unwrap_or(((stats.affinity_mask & 0xffff_ffff) << 32) | ((stats.last_error as i32 as u32) as u64)),
+                .unwrap_or(
+                    ((stats.affinity_mask & 0xffff_ffff) << 32)
+                        | ((stats.last_error as i32 as u32) as u64),
+                ),
             stats.class.as_u32()
                 | ((stats.priority_updates.min(0xff) as u32) << 8)
                 | ((stats.policy_updates.min(0xff) as u32) << 16)
@@ -385,8 +406,12 @@ fn dispatch(request: &SchedulerRequest) -> SchedulerReply {
         SCHED_MSG_SET_AFFINITY => service.handle_set_affinity(request.sender_pid, &request.payload),
         SCHED_MSG_YIELD => service.handle_yield(request.sender_pid, &request.payload),
         SCHED_MSG_GET_STAT => service.handle_get_stat(request.sender_pid, &request.payload),
-        SCHED_MSG_REALTIME_ADMIT => service.handle_realtime_admit(request.sender_pid, &request.payload),
-        SCHED_MSG_REALTIME_RELEASE => service.handle_realtime_release(request.sender_pid, &request.payload),
+        SCHED_MSG_REALTIME_ADMIT => {
+            service.handle_realtime_admit(request.sender_pid, &request.payload)
+        }
+        SCHED_MSG_REALTIME_RELEASE => {
+            service.handle_realtime_release(request.sender_pid, &request.payload)
+        }
         _ => SchedulerReply::error(exo_syscall_abi::EINVAL),
     }
 }
@@ -395,7 +420,9 @@ fn dispatch(request: &SchedulerRequest) -> SchedulerReply {
 fn panic(_info: &PanicInfo) -> ! {
     loop {
         // SAFETY: panic terminale pour un serveur no_std monothread.
-        unsafe { core::arch::asm!("hlt", options(nostack, nomem)); }
+        unsafe {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
     }
 }
 

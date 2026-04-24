@@ -12,7 +12,6 @@
 //
 // Couche 0 — pas de dépendance scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::AtomicBool;
 
 use super::node::{MAX_NUMA_NODES, NUMA_NODES};
@@ -52,7 +51,10 @@ impl NumaDistanceTable {
             dist[i][i] = NUMA_DISTANCE_LOCAL;
             i += 1;
         }
-        Self { dist, initialized: AtomicBool::new(true) }
+        Self {
+            dist,
+            initialized: AtomicBool::new(true),
+        }
     }
 
     /// Retourne la distance entre `from` et `to`.

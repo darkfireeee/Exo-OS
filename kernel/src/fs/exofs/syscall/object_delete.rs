@@ -2,15 +2,14 @@
 //!
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
-use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use super::validation::{
-    read_user_path_heap, exofs_err_to_errno,
-    verify_cap, CapabilityType, EFAULT,
-};
 use super::object_fd::OBJECT_TABLE;
+use super::validation::{
+    exofs_err_to_errno, read_user_path_heap, verify_cap, CapabilityType, EFAULT,
+};
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -19,15 +18,15 @@ use super::object_fd::OBJECT_TABLE;
 /// Flags de suppression.
 pub mod delete_flags {
     /// Forcer la suppression même si des fd sont ouverts (dangereux).
-    pub const FORCE:       u32 = 0x0001;
+    pub const FORCE: u32 = 0x0001;
     /// Supprimer les liens symboliques sans suivre leur cible.
-    pub const NO_FOLLOW:   u32 = 0x0002;
+    pub const NO_FOLLOW: u32 = 0x0002;
     /// Retourner OK si l'objet n'existe déjà plus (idempotent).
-    pub const IDEMPOTENT:  u32 = 0x0004;
+    pub const IDEMPOTENT: u32 = 0x0004;
     /// Supprimer récursivement (répertoires).
-    pub const RECURSIVE:   u32 = 0x0008;
+    pub const RECURSIVE: u32 = 0x0008;
     /// Masque de flags valides.
-    pub const VALID_MASK:  u32 = FORCE | NO_FOLLOW | IDEMPOTENT | RECURSIVE;
+    pub const VALID_MASK: u32 = FORCE | NO_FOLLOW | IDEMPOTENT | RECURSIVE;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,10 +37,10 @@ pub mod delete_flags {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DeleteResult {
-    pub blob_id:     [u8; 32],
+    pub blob_id: [u8; 32],
     pub bytes_freed: u64,
-    pub tombstoned:  u32,
-    pub _pad:        u32,
+    pub tombstoned: u32,
+    pub _pad: u32,
 }
 
 const _: () = assert!(core::mem::size_of::<DeleteResult>() == 48);
@@ -73,10 +72,10 @@ fn delete_blob(blob_id: BlobId, flags: u32) -> ExofsResult<DeleteResult> {
         None => {
             if flags & delete_flags::IDEMPOTENT != 0 {
                 return Ok(DeleteResult {
-                    blob_id:     *blob_id.as_bytes(),
+                    blob_id: *blob_id.as_bytes(),
                     bytes_freed: 0,
-                    tombstoned:  0,
-                    _pad:        0,
+                    tombstoned: 0,
+                    _pad: 0,
                 });
             }
             return Err(ExofsError::BlobNotFound);
@@ -96,10 +95,10 @@ fn delete_blob(blob_id: BlobId, flags: u32) -> ExofsResult<DeleteResult> {
     BLOB_CACHE.invalidate(&blob_id);
 
     Ok(DeleteResult {
-        blob_id:     *blob_id.as_bytes(),
+        blob_id: *blob_id.as_bytes(),
         bytes_freed,
-        tombstoned:  1,
-        _pad:        0,
+        tombstoned: 1,
+        _pad: 0,
     })
 }
 
@@ -110,8 +109,8 @@ fn delete_blob(blob_id: BlobId, flags: u32) -> ExofsResult<DeleteResult> {
 /// Supprime un objet à partir d'un chemin.
 fn delete_object_by_path(
     path_bytes: &[u8],
-    path_len:   usize,
-    flags:      u32,
+    path_len: usize,
+    flags: u32,
 ) -> ExofsResult<DeleteResult> {
     super::object_create::validate_create_path(path_bytes, path_len)?;
     let blob_id = BlobId::from_bytes_blake3(&path_bytes[..path_len]);
@@ -139,16 +138,18 @@ pub fn delete_by_fd(fd: u32, flags: u32) -> ExofsResult<DeleteResult> {
 pub fn sys_exofs_object_delete(
     path_ptr: u64,
     _path_len: u64,
-    flags:    u64,
-    out_ptr:  u64,
-    _a5:      u64,
+    flags: u64,
+    out_ptr: u64,
+    _a5: u64,
     cap_rights: u64,
 ) -> i64 {
-    if path_ptr == 0 { return EFAULT; }
+    if path_ptr == 0 {
+        return EFAULT;
+    }
 
     let mut path_buf: Vec<u8> = Vec::new();
     let actual_len = match read_user_path_heap(path_ptr, &mut path_buf) {
-        Ok(l)  => l,
+        Ok(l) => l,
         Err(e) => return e,
     };
 
@@ -158,7 +159,7 @@ pub fn sys_exofs_object_delete(
     }
 
     let result = match delete_object_by_path(&path_buf, actual_len, flags as u32) {
-        Ok(r)  => r,
+        Ok(r) => r,
         Err(e) => return exofs_err_to_errno(e),
     };
 
@@ -203,7 +204,9 @@ pub fn object_exists(blob_id: &BlobId) -> bool {
 /// RECUR-01 : while.
 pub fn batch_delete(ids: &[BlobId], flags: u32) -> ExofsResult<Vec<DeleteResult>> {
     let mut results: Vec<DeleteResult> = Vec::new();
-    results.try_reserve(ids.len()).map_err(|_| ExofsError::NoMemory)?;
+    results
+        .try_reserve(ids.len())
+        .map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < ids.len() {
         let r = delete_blob(ids[i], flags).unwrap_or_default();
@@ -251,7 +254,9 @@ mod tests {
     #[test]
     fn test_delete_by_path() {
         let path = b"/path/delete/obj";
-        BLOB_CACHE.insert(BlobId::from_bytes_blake3(path), b"x".to_vec()).unwrap();
+        BLOB_CACHE
+            .insert(BlobId::from_bytes_blake3(path), b"x".to_vec())
+            .unwrap();
         let r = delete_object_by_path(path, path.len(), 0).unwrap();
         assert_eq!(r.tombstoned, 1);
     }
@@ -331,11 +336,11 @@ mod tests {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TombstoneEntry {
-    pub blob_id:    [u8; 32],
-    pub epoch_id:   u64,
+    pub blob_id: [u8; 32],
+    pub epoch_id: u64,
     pub deleted_at: u64,
-    pub flags:      u32,
-    pub _pad:       u32,
+    pub flags: u32,
+    pub _pad: u32,
 }
 
 const _: () = assert!(core::mem::size_of::<TombstoneEntry>() == 56);
@@ -344,11 +349,11 @@ impl TombstoneEntry {
     /// Construit une entrée depuis un résultat de suppression.
     pub fn from_result(r: &DeleteResult, epoch: u64, ts: u64) -> Self {
         Self {
-            blob_id:    r.blob_id,
-            epoch_id:   epoch,
+            blob_id: r.blob_id,
+            epoch_id: epoch,
             deleted_at: ts,
-            flags:      0,
-            _pad:       0,
+            flags: 0,
+            _pad: 0,
         }
     }
 }
@@ -389,8 +394,7 @@ pub fn encode_tombstones(entries: &[TombstoneEntry]) -> ExofsResult<Vec<u8>> {
 /// Format répertoire : magic[4] + count[4] + entry_blob_id[32] * count.
 /// RECUR-01 : while, pas de récursion.
 pub fn delete_directory(dir_blob: BlobId, _flags: u32) -> ExofsResult<u64> {
-    let data = BLOB_CACHE.get(&dir_blob)
-        .ok_or(ExofsError::BlobNotFound)?;
+    let data = BLOB_CACHE.get(&dir_blob).ok_or(ExofsError::BlobNotFound)?;
 
     let mut total_freed = 0u64;
 
@@ -401,7 +405,9 @@ pub fn delete_directory(dir_blob: BlobId, _flags: u32) -> ExofsResult<u64> {
         let mut i = 0usize;
         while i < n {
             let off = 8usize.saturating_add(i.saturating_mul(32));
-            if off.saturating_add(32) > data.len() { break; }
+            if off.saturating_add(32) > data.len() {
+                break;
+            }
             let mut id_bytes = [0u8; 32];
             let mut k = 0usize;
             while k < 32 {
@@ -433,10 +439,10 @@ mod advanced_tests {
     #[test]
     fn test_tombstone_from_result() {
         let r = DeleteResult {
-            blob_id:    [0xABu8; 32],
+            blob_id: [0xABu8; 32],
             bytes_freed: 100,
-            tombstoned:  1,
-            _pad:        0,
+            tombstoned: 1,
+            _pad: 0,
         };
         let t = TombstoneEntry::from_result(&r, 7, 12345);
         assert_eq!(t.epoch_id, 7);
@@ -474,7 +480,10 @@ mod advanced_tests {
     fn test_delete_directory_empty() {
         let id = BlobId::from_bytes_blake3(b"/dir/empty/del");
         let mut hdr = [0u8; 8];
-        hdr[0] = 0xCA; hdr[1] = 0xFE; hdr[2] = 0xD0; hdr[3] = 0xD1;
+        hdr[0] = 0xCA;
+        hdr[1] = 0xFE;
+        hdr[2] = 0xD0;
+        hdr[3] = 0xD1;
         BLOB_CACHE.insert(id, hdr.to_vec()).unwrap();
         let freed = delete_directory(id, 0).unwrap();
         assert_eq!(freed, 8);

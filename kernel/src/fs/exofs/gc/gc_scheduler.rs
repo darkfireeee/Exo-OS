@@ -16,7 +16,6 @@
 //   ARITH-02 : saturating_*
 // ==============================================================================
 
-
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
@@ -44,39 +43,39 @@ pub const GC_MAX_URGENT_PASSES: u32 = 16;
 #[repr(u8)]
 pub enum ScheduleReason {
     /// Timer periodique.
-    Timer           = 0,
+    Timer = 0,
     /// Espace libre insuffisant.
-    LowFreeSpace    = 1,
+    LowFreeSpace = 1,
     /// Lag GC trop eleve.
-    HighLag         = 2,
+    HighLag = 2,
     /// Pression memoire.
-    MemPressure     = 3,
+    MemPressure = 3,
     /// Demande explicite (syscall 514).
-    Explicit        = 4,
+    Explicit = 4,
     /// Demarrage du systeme.
-    Bootstrap       = 5,
+    Bootstrap = 5,
 }
 
 impl ScheduleReason {
     pub fn name(self) -> &'static str {
         match self {
-            Self::Timer        => "timer",
+            Self::Timer => "timer",
             Self::LowFreeSpace => "low_free_space",
-            Self::HighLag      => "high_lag",
-            Self::MemPressure  => "mem_pressure",
-            Self::Explicit     => "explicit",
-            Self::Bootstrap    => "bootstrap",
+            Self::HighLag => "high_lag",
+            Self::MemPressure => "mem_pressure",
+            Self::Explicit => "explicit",
+            Self::Bootstrap => "bootstrap",
         }
     }
 
     fn from_trigger(reason: GcTriggerReason) -> Self {
         match reason {
-            GcTriggerReason::PeriodicTimer   => Self::Timer,
-            GcTriggerReason::LowFreeSpace    => Self::LowFreeSpace,
-            GcTriggerReason::HighLag         => Self::HighLag,
-            GcTriggerReason::MemoryPressure  => Self::MemPressure,
-            GcTriggerReason::UserRequest     => Self::Explicit,
-            GcTriggerReason::Bootstrap       => Self::Bootstrap,
+            GcTriggerReason::PeriodicTimer => Self::Timer,
+            GcTriggerReason::LowFreeSpace => Self::LowFreeSpace,
+            GcTriggerReason::HighLag => Self::HighLag,
+            GcTriggerReason::MemoryPressure => Self::MemPressure,
+            GcTriggerReason::UserRequest => Self::Explicit,
+            GcTriggerReason::Bootstrap => Self::Bootstrap,
         }
     }
 }
@@ -111,13 +110,13 @@ pub enum ScheduleDecision {
 /// Statistiques du planificateur.
 #[derive(Debug, Default, Clone)]
 pub struct GcSchedulerStats {
-    pub checks_performed:   u64,
-    pub runs_triggered:     u64,
-    pub runs_skipped:       u64,
-    pub urgent_passes:      u64,
-    pub explicit_requests:  u64,
-    pub last_trigger_tick:  u64,
-    pub last_reason:        Option<ScheduleReason>,
+    pub checks_performed: u64,
+    pub runs_triggered: u64,
+    pub runs_skipped: u64,
+    pub urgent_passes: u64,
+    pub explicit_requests: u64,
+    pub last_trigger_tick: u64,
+    pub last_reason: Option<ScheduleReason>,
 }
 
 impl fmt::Display for GcSchedulerStats {
@@ -140,15 +139,15 @@ impl fmt::Display for GcSchedulerStats {
 
 struct GcSchedulerInner {
     /// Tick du dernier declenchement.
-    last_run_tick:      u64,
+    last_run_tick: u64,
     /// Tick de la prochaine execution planifiee.
     next_scheduled_tick: u64,
     /// Passes urgentes consecutives.
-    urgent_count:       u32,
+    urgent_count: u32,
     /// GC est-il desactive ?
-    disabled:           bool,
+    disabled: bool,
     /// Stats.
-    stats:              GcSchedulerStats,
+    stats: GcSchedulerStats,
 }
 
 // ==============================================================================
@@ -157,36 +156,36 @@ struct GcSchedulerInner {
 
 /// Planificateur GC.
 pub struct GcScheduler {
-    inner:           SpinLock<GcSchedulerInner>,
+    inner: SpinLock<GcSchedulerInner>,
     /// Signal de declenchement urgent (atomique, non bloquant, GC-05).
-    trigger_signal:  AtomicBool,
+    trigger_signal: AtomicBool,
     /// Raison du signal urgent.
-    trigger_reason:  AtomicU8,
+    trigger_reason: AtomicU8,
     /// Epoch courante pour les decisions.
-    current_epoch:   AtomicU64,
+    current_epoch: AtomicU64,
 }
 
 impl GcScheduler {
     pub const fn new() -> Self {
         Self {
             inner: SpinLock::new(GcSchedulerInner {
-                last_run_tick:       0,
+                last_run_tick: 0,
                 next_scheduled_tick: 0,
-                urgent_count:        0,
-                disabled:            false,
-                stats:               GcSchedulerStats {
-                    checks_performed:  0,
-                    runs_triggered:    0,
-                    runs_skipped:      0,
-                    urgent_passes:     0,
+                urgent_count: 0,
+                disabled: false,
+                stats: GcSchedulerStats {
+                    checks_performed: 0,
+                    runs_triggered: 0,
+                    runs_skipped: 0,
+                    urgent_passes: 0,
                     explicit_requests: 0,
                     last_trigger_tick: 0,
-                    last_reason:       None,
+                    last_reason: None,
                 },
             }),
             trigger_signal: AtomicBool::new(false),
             trigger_reason: AtomicU8::new(ScheduleReason::Timer as u8),
-            current_epoch:  AtomicU64::new(0),
+            current_epoch: AtomicU64::new(0),
         }
     }
 
@@ -199,8 +198,7 @@ impl GcScheduler {
     pub fn check(&self, system_state: &GcSystemState) -> ScheduleDecision {
         {
             let mut g = self.inner.lock();
-            g.stats.checks_performed =
-                g.stats.checks_performed.saturating_add(1);
+            g.stats.checks_performed = g.stats.checks_performed.saturating_add(1);
 
             if g.disabled {
                 return ScheduleDecision::Disabled;
@@ -237,13 +235,17 @@ impl GcScheduler {
         let timer_interval = GC_TUNER.timer_interval_ticks();
         if elapsed >= timer_interval {
             self.record_trigger(ScheduleReason::Timer, current_tick);
-            return ScheduleDecision::RunNow { reason: ScheduleReason::Timer };
+            return ScheduleDecision::RunNow {
+                reason: ScheduleReason::Timer,
+            };
         }
 
         let remaining = timer_interval.saturating_sub(elapsed).max(1);
         let mut g = self.inner.lock();
         g.stats.runs_skipped = g.stats.runs_skipped.saturating_add(1);
-        ScheduleDecision::Wait { ticks_remaining: remaining }
+        ScheduleDecision::Wait {
+            ticks_remaining: remaining,
+        }
     }
 
     /// Enregistre qu'une passe GC vient de se terminer.
@@ -275,11 +277,9 @@ impl GcScheduler {
         self.trigger_signal.store(true, Ordering::Release);
 
         let mut g = self.inner.lock();
-        g.stats.explicit_requests =
-            g.stats.explicit_requests.saturating_add(1);
+        g.stats.explicit_requests = g.stats.explicit_requests.saturating_add(1);
         if reason == ScheduleReason::Explicit {
-            g.stats.urgent_passes =
-                g.stats.urgent_passes.saturating_add(1);
+            g.stats.urgent_passes = g.stats.urgent_passes.saturating_add(1);
         }
     }
 
@@ -316,8 +316,7 @@ impl GcScheduler {
 
     fn record_trigger(&self, reason: ScheduleReason, tick: u64) {
         let mut g = self.inner.lock();
-        g.stats.runs_triggered =
-            g.stats.runs_triggered.saturating_add(1);
+        g.stats.runs_triggered = g.stats.runs_triggered.saturating_add(1);
         g.stats.last_trigger_tick = tick;
         g.stats.last_reason = Some(reason);
     }
@@ -355,10 +354,10 @@ mod tests {
 
     fn state(free_pct: u32, lag: u64) -> GcSystemState {
         GcSystemState {
-            free_space_pct:   free_pct,
-            gc_lag_epochs:    lag,
-            cpu_load_pct:     10,
-            memory_pressure:  false,
+            free_space_pct: free_pct,
+            gc_lag_epochs: lag,
+            cpu_load_pct: 10,
+            memory_pressure: false,
             ticks_since_pass: 9_999_999,
         }
     }

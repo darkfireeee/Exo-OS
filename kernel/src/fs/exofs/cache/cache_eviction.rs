@@ -3,12 +3,11 @@
 //! Implémente LRU, LFU, CLOCK et ARC (simplifié) de façon itérative.
 //! Règles : RECUR-01 (zéro récursion), OOM-02 (try_reserve), ARITH-02.
 
-
 extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsResult, BlobId};
+use crate::fs::exofs::core::{BlobId, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EvictionAlgorithm
@@ -33,14 +32,14 @@ struct EntryMeta {
     /// Compteur d'ordre d'accès (LRU : order, LFU : freq).
     access_order: u64,
     /// Fréquence d'accès.
-    freq:         u64,
+    freq: u64,
     /// Bit CLOCK (true = référencé récemment).
-    clock_ref:    bool,
+    clock_ref: bool,
     /// Taille en octets.
-    size:         u64,
+    size: u64,
     /// Ticks d'insertion.
     #[allow(dead_code)]
-    inserted_at:  u64,
+    inserted_at: u64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -51,9 +50,9 @@ struct EntryMeta {
 pub struct EvictionPolicy {
     algorithm: EvictionAlgorithm,
     /// Métadonnées par BlobId.
-    entries:   BTreeMap<BlobId, EntryMeta>,
+    entries: BTreeMap<BlobId, EntryMeta>,
     /// Compteur monotone d'accès (horloge logique).
-    clock:     u64,
+    clock: u64,
     /// Pointeur CLOCK (index dans la liste ordonnée).
     clock_ptr: usize,
     /// Nombre total d'entrées.
@@ -67,10 +66,10 @@ impl EvictionPolicy {
     pub const fn new(algorithm: EvictionAlgorithm) -> Self {
         EvictionPolicy {
             algorithm,
-            entries:    BTreeMap::new(),
-            clock:      0,
-            clock_ptr:  0,
-            n_entries:  0,
+            entries: BTreeMap::new(),
+            clock: 0,
+            clock_ptr: 0,
+            n_entries: 0,
             total_size: 0,
         }
     }
@@ -80,14 +79,17 @@ impl EvictionPolicy {
     /// Enregistre une nouvelle entrée.
     pub fn insert(&mut self, blob: BlobId, size: u64) -> ExofsResult<()> {
         let clock = self.next_clock();
-        self.entries.insert(blob, EntryMeta {
-            access_order: clock,
-            freq:         1,
-            clock_ref:    true,
-            size,
-            inserted_at:  clock,
-        });
-        self.n_entries  = self.n_entries.wrapping_add(1);
+        self.entries.insert(
+            blob,
+            EntryMeta {
+                access_order: clock,
+                freq: 1,
+                clock_ref: true,
+                size,
+                inserted_at: clock,
+            },
+        );
+        self.n_entries = self.n_entries.wrapping_add(1);
         self.total_size = self.total_size.wrapping_add(size);
         Ok(())
     }
@@ -95,7 +97,7 @@ impl EvictionPolicy {
     /// Supprime une entrée.
     pub fn remove(&mut self, blob: &BlobId) {
         if let Some(meta) = self.entries.remove(blob) {
-            self.n_entries  = self.n_entries.saturating_sub(1);
+            self.n_entries = self.n_entries.saturating_sub(1);
             self.total_size = self.total_size.saturating_sub(meta.size);
         }
     }
@@ -105,8 +107,8 @@ impl EvictionPolicy {
         let clock = self.next_clock();
         if let Some(meta) = self.entries.get_mut(blob) {
             meta.access_order = clock;
-            meta.freq         = meta.freq.wrapping_add(1);
-            meta.clock_ref    = true;
+            meta.freq = meta.freq.wrapping_add(1);
+            meta.clock_ref = true;
         }
     }
 
@@ -120,10 +122,10 @@ impl EvictionPolicy {
     /// Retourne jusqu'à `limit` candidats à l'éviction selon l'algorithme.
     pub fn pick_eviction_candidates(&mut self, limit: usize) -> Vec<BlobId> {
         match self.algorithm {
-            EvictionAlgorithm::Lru   => self.pick_lru(limit),
-            EvictionAlgorithm::Lfu   => self.pick_lfu(limit),
+            EvictionAlgorithm::Lru => self.pick_lru(limit),
+            EvictionAlgorithm::Lfu => self.pick_lfu(limit),
             EvictionAlgorithm::Clock => self.pick_clock(limit),
-            EvictionAlgorithm::Arc   => self.pick_lru(limit), // ARC simplifié
+            EvictionAlgorithm::Arc => self.pick_lru(limit), // ARC simplifié
         }
     }
 
@@ -131,7 +133,8 @@ impl EvictionPolicy {
 
     fn pick_lru(&self, limit: usize) -> Vec<BlobId> {
         // Trie par access_order croissant → les plus petits sont les plus anciens.
-        let mut scored: Vec<(u64, BlobId)> = self.entries
+        let mut scored: Vec<(u64, BlobId)> = self
+            .entries
             .iter()
             .map(|(k, v)| (v.access_order, *k))
             .collect();
@@ -142,7 +145,8 @@ impl EvictionPolicy {
     // ── LFU — évince le moins fréquemment utilisé ─────────────────────────────
 
     fn pick_lfu(&self, limit: usize) -> Vec<BlobId> {
-        let mut scored: Vec<(u64, u64, BlobId)> = self.entries
+        let mut scored: Vec<(u64, u64, BlobId)> = self
+            .entries
             .iter()
             .map(|(k, v)| (v.freq, v.access_order, *k))
             .collect();
@@ -156,10 +160,12 @@ impl EvictionPolicy {
     fn pick_clock(&mut self, limit: usize) -> Vec<BlobId> {
         let keys: Vec<BlobId> = self.entries.keys().cloned().collect();
         let n = keys.len();
-        if n == 0 { return Vec::new(); }
+        if n == 0 {
+            return Vec::new();
+        }
 
-        let mut victims:  Vec<BlobId> = Vec::new();
-        let mut examined: usize       = 0;
+        let mut victims: Vec<BlobId> = Vec::new();
+        let mut examined: usize = 0;
         let max_scan = n.checked_mul(2).unwrap_or(n);
 
         while victims.len() < limit && examined < max_scan {
@@ -184,9 +190,15 @@ impl EvictionPolicy {
 
     // ── Statistiques ──────────────────────────────────────────────────────────
 
-    pub fn n_entries(&self)   -> usize { self.n_entries }
-    pub fn total_size(&self)  -> u64   { self.total_size }
-    pub fn algorithm(&self)   -> EvictionAlgorithm { self.algorithm }
+    pub fn n_entries(&self) -> usize {
+        self.n_entries
+    }
+    pub fn total_size(&self) -> u64 {
+        self.total_size
+    }
+    pub fn algorithm(&self) -> EvictionAlgorithm {
+        self.algorithm
+    }
 
     /// Retourne les N entrées les plus froides (fréquence la plus basse).
     pub fn coldest_n(&self, n: usize) -> Vec<BlobId> {
@@ -195,10 +207,8 @@ impl EvictionPolicy {
 
     /// Retourne les N entrées les plus chaudes (fréquence la plus haute).
     pub fn hottest_n(&self, n: usize) -> Vec<BlobId> {
-        let mut scored: Vec<(u64, BlobId)> = self.entries
-            .iter()
-            .map(|(k, v)| (v.freq, *k))
-            .collect();
+        let mut scored: Vec<(u64, BlobId)> =
+            self.entries.iter().map(|(k, v)| (v.freq, *k)).collect();
         scored.sort_unstable_by_key(|(f, _)| core::cmp::Reverse(*f));
         scored.into_iter().take(n).map(|(_, k)| k).collect()
     }
@@ -230,16 +240,20 @@ impl EvictionPolicy {
 mod tests {
     use super::*;
 
-    fn blob(b: u8) -> BlobId { BlobId([b; 32]) }
+    fn blob(b: u8) -> BlobId {
+        BlobId([b; 32])
+    }
 
-    #[test] fn test_insert_contains() {
+    #[test]
+    fn test_insert_contains() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lru);
         p.insert(blob(1), 100).unwrap();
         assert!(p.contains(&blob(1)));
         assert!(!p.contains(&blob(2)));
     }
 
-    #[test] fn test_remove() {
+    #[test]
+    fn test_remove() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lru);
         p.insert(blob(1), 100).unwrap();
         p.remove(&blob(1));
@@ -247,7 +261,8 @@ mod tests {
         assert_eq!(p.n_entries(), 0);
     }
 
-    #[test] fn test_lru_picks_oldest() {
+    #[test]
+    fn test_lru_picks_oldest() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lru);
         p.insert(blob(1), 100).unwrap();
         p.insert(blob(2), 100).unwrap();
@@ -256,23 +271,27 @@ mod tests {
         assert_eq!(victims[0], blob(2));
     }
 
-    #[test] fn test_lfu_picks_lowest_freq() {
+    #[test]
+    fn test_lfu_picks_lowest_freq() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lfu);
         p.insert(blob(1), 100).unwrap();
         p.insert(blob(2), 100).unwrap();
-        p.touch(&blob(2)); p.touch(&blob(2));
+        p.touch(&blob(2));
+        p.touch(&blob(2));
         let victims = p.pick_eviction_candidates(1);
         assert_eq!(victims[0], blob(1));
     }
 
-    #[test] fn test_touch_increments_freq() {
+    #[test]
+    fn test_touch_increments_freq() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lfu);
         p.insert(blob(1), 50).unwrap();
         p.touch(&blob(1));
         assert_eq!(p.freq_of(&blob(1)), Some(2));
     }
 
-    #[test] fn test_clock_gives_second_chance() {
+    #[test]
+    fn test_clock_gives_second_chance() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Clock);
         p.insert(blob(1), 100).unwrap();
         // Après insertion, clock_ref = true → second chance.
@@ -281,7 +300,8 @@ mod tests {
         assert!(v.is_empty() || v.len() > 0);
     }
 
-    #[test] fn test_n_entries_track() {
+    #[test]
+    fn test_n_entries_track() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lru);
         p.insert(blob(1), 100).unwrap();
         p.insert(blob(2), 200).unwrap();
@@ -290,7 +310,8 @@ mod tests {
         assert_eq!(p.n_entries(), 1);
     }
 
-    #[test] fn test_total_size_track() {
+    #[test]
+    fn test_total_size_track() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lru);
         p.insert(blob(1), 300).unwrap();
         p.insert(blob(2), 400).unwrap();
@@ -299,27 +320,33 @@ mod tests {
         assert_eq!(p.total_size(), 400);
     }
 
-    #[test] fn test_hottest_n() {
+    #[test]
+    fn test_hottest_n() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lfu);
         p.insert(blob(1), 100).unwrap();
         p.insert(blob(2), 100).unwrap();
-        for _ in 0..5 { p.touch(&blob(2)); }
+        for _ in 0..5 {
+            p.touch(&blob(2));
+        }
         let hot = p.hottest_n(1);
         assert_eq!(hot[0], blob(2));
     }
 
-    #[test] fn test_coldest_n() {
+    #[test]
+    fn test_coldest_n() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lfu);
         p.insert(blob(1), 100).unwrap();
         p.insert(blob(2), 100).unwrap();
-        for _ in 0..5 { p.touch(&blob(2)); }
+        for _ in 0..5 {
+            p.touch(&blob(2));
+        }
         let cold = p.coldest_n(1);
         assert_eq!(cold[0], blob(1));
     }
 
-    #[test] fn test_pick_empty_is_empty() {
+    #[test]
+    fn test_pick_empty_is_empty() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lru);
         assert!(p.pick_eviction_candidates(10).is_empty());
     }
 }
-

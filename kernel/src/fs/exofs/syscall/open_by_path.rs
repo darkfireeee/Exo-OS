@@ -16,15 +16,13 @@
 //! RECUR-01 : zéro boucle for.
 //! OOM-02   : try_reserve() avant push().
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
-use super::validation::{
-    read_user_path_heap, exofs_err_to_errno,
-    verify_cap, CapabilityType,
-    EFAULT, ENOENT,
-};
 use super::object_fd::OBJECT_TABLE;
+use super::validation::{
+    exofs_err_to_errno, read_user_path_heap, verify_cap, CapabilityType, EFAULT, ENOENT,
+};
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes flags open()
@@ -35,17 +33,17 @@ const O_RDONLY: u32 = 0x0000;
 #[allow(dead_code)]
 const O_WRONLY: u32 = 0x0001;
 #[allow(dead_code)]
-const O_RDWR:   u32 = 0x0002;
+const O_RDWR: u32 = 0x0002;
 #[allow(dead_code)]
-const O_CREAT:  u32 = 0x0040;
+const O_CREAT: u32 = 0x0040;
 #[allow(dead_code)]
-const O_TRUNC:  u32 = 0x0200;
+const O_TRUNC: u32 = 0x0200;
 #[allow(dead_code)]
 const O_APPEND: u32 = 0x0400;
 #[allow(dead_code)]
 const O_NONBLOCK: u32 = 0x0800;
 #[allow(dead_code)]
-const O_CLOEXEC:  u32 = 0x0008_0000;
+const O_CLOEXEC: u32 = 0x0008_0000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Logique combinée path_resolve + object_open
@@ -59,23 +57,38 @@ const O_CLOEXEC:  u32 = 0x0008_0000;
 ///
 /// La résolution et l'ouverture sont atomiques par rapport aux autres syscalls
 /// du même processus (aucune race entre les deux étapes).
-fn open_by_path_inner(path_bytes: &[u8], path_len: usize, flags: u32, mode: u32) -> ExofsResult<u32> {
-    if path_len == 0 { return Err(ExofsError::InvalidArgument); }
-    if flags & !0x000F_FFFFu32 != 0 { return Err(ExofsError::InvalidArgument); }
+fn open_by_path_inner(
+    path_bytes: &[u8],
+    path_len: usize,
+    flags: u32,
+    mode: u32,
+) -> ExofsResult<u32> {
+    if path_len == 0 {
+        return Err(ExofsError::InvalidArgument);
+    }
+    if flags & !0x000F_FFFFu32 != 0 {
+        return Err(ExofsError::InvalidArgument);
+    }
 
     // Dériver le BlobId depuis le chemin canonique (Blake3)
     let blob_id = BlobId::from_bytes_blake3(&path_bytes[..path_len]);
 
     // Ouvrir via la table de fd (crée l'entrée si O_CREAT)
     let open_args = crate::fs::exofs::syscall::object_open::OpenArgs {
-        flags:     flags,
-        mode:      mode,
-        epoch_id:  0,      // epoch courante
+        flags: flags,
+        mode: mode,
+        epoch_id: 0, // epoch courante
         owner_uid: 0,
         size_hint: 0,
         _reserved: [0u64; 2],
     };
-    OBJECT_TABLE.open(blob_id, open_args.flags, 0u64, open_args.epoch_id, open_args.owner_uid)
+    OBJECT_TABLE.open(
+        blob_id,
+        open_args.flags,
+        0u64,
+        open_args.epoch_id,
+        open_args.owner_uid,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,26 +106,30 @@ fn open_by_path_inner(path_bytes: &[u8], path_len: usize, flags: u32, mode: u32)
 /// RÈGLE 9 : copy_from_user via read_user_path_heap (null-terminated, heap).
 /// SYS-05  : Refuse ptr null. La longueur est inférée depuis le null-terminator.
 pub fn sys_exofs_open_by_path(
-    path_ptr:  u64,
-    flags:     u64,   // arg1 : musl envoie flags ici (pas path_len)
-    mode:      u64,   // arg2 : musl envoie mode ici
+    path_ptr: u64,
+    flags: u64, // arg1 : musl envoie flags ici (pas path_len)
+    mode: u64,  // arg2 : musl envoie mode ici
     _a4: u64,
     _a5: u64,
     cap_rights: u64,
 ) -> i64 {
     // SYS-05 : Refuser pointeur null
-    if path_ptr == 0 { return EFAULT; }
+    if path_ptr == 0 {
+        return EFAULT;
+    }
 
     // SYS-01 : copy_from_user — lit le chemin null-terminated sur le tas
     let mut path_bytes = Vec::new();
     let actual_len = match read_user_path_heap(path_ptr, &mut path_bytes) {
-        Ok(n)  => n,
+        Ok(n) => n,
         Err(e) => return e,
     };
-    if actual_len == 0 { return ENOENT; }
+    if actual_len == 0 {
+        return ENOENT;
+    }
 
     let flags32 = (flags & 0xFFFF_FFFF) as u32;
-    let mode32  = (mode  & 0xFFFF_FFFF) as u32;
+    let mode32 = (mode & 0xFFFF_FFFF) as u32;
 
     let needs_write = (flags32 & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) != 0;
     let cap = if needs_write {
@@ -125,7 +142,7 @@ pub fn sys_exofs_open_by_path(
     }
 
     match open_by_path_inner(&path_bytes, actual_len, flags32, mode32) {
-        Ok(fd)  => fd as i64,
-        Err(e)  => exofs_err_to_errno(e),
+        Ok(fd) => fd as i64,
+        Err(e) => exofs_err_to_errno(e),
     }
 }

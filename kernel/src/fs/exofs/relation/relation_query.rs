@@ -4,16 +4,15 @@
 //!  - RECUR-01 : aucune récursion
 //!  - OOM-02   : try_reserve avant tout push
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
 use super::relation::{Relation, RelationId};
-use super::relation_type::{RelationKind, RelationFilter, RelationDirection};
-use super::relation_storage::RELATION_STORAGE;
-use super::relation_index::RELATION_INDEX;
 use super::relation_graph::RELATION_GRAPH;
+use super::relation_index::RELATION_INDEX;
+use super::relation_storage::RELATION_STORAGE;
+use super::relation_type::{RelationDirection, RelationFilter, RelationKind};
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QueryResult
@@ -23,18 +22,24 @@ use super::relation_graph::RELATION_GRAPH;
 #[derive(Clone, Debug, Default)]
 pub struct QueryResult {
     pub relations: Vec<Relation>,
-    pub n_total:   usize,
+    pub n_total: usize,
     pub truncated: bool,
 }
 
 impl QueryResult {
     fn from_rels(rels: Vec<Relation>) -> Self {
         let n = rels.len();
-        QueryResult { relations: rels, n_total: n, truncated: false }
+        QueryResult {
+            relations: rels,
+            n_total: n,
+            truncated: false,
+        }
     }
 
     #[allow(dead_code)]
-    fn empty() -> Self { Self::default() }
+    fn empty() -> Self {
+        Self::default()
+    }
 
     /// Filtre les relations du résultat selon un prédicat.
     pub fn filter_by<F>(mut self, pred: F) -> Self
@@ -77,19 +82,13 @@ impl RelationQuery {
     }
 
     /// Relations dans la direction donnée.
-    pub fn in_direction(
-        blob:      &BlobId,
-        direction: RelationDirection,
-    ) -> ExofsResult<QueryResult> {
+    pub fn in_direction(blob: &BlobId, direction: RelationDirection) -> ExofsResult<QueryResult> {
         let ids = RELATION_INDEX.ids_in_direction(blob, direction);
         Self::load_ids(&ids)
     }
 
     /// Relations sortantes d un certain type.
-    pub fn outgoing_by_kind(
-        from: &BlobId,
-        kind: RelationKind,
-    ) -> ExofsResult<QueryResult> {
+    pub fn outgoing_by_kind(from: &BlobId, kind: RelationKind) -> ExofsResult<QueryResult> {
         let ids = RELATION_INDEX.ids_from(from);
         let mut rels: Vec<Relation> = Vec::new();
         for id in ids {
@@ -122,11 +121,7 @@ impl RelationQuery {
     }
 
     /// Vérifie l existence d une relation directe `from → to` d un certain type.
-    pub fn has_direct_relation(
-        from: &BlobId,
-        to:   &BlobId,
-        kind: RelationKind,
-    ) -> bool {
+    pub fn has_direct_relation(from: &BlobId, to: &BlobId, kind: RelationKind) -> bool {
         RELATION_GRAPH.has_typed_edge(from, to, kind)
     }
 
@@ -156,8 +151,7 @@ impl RelationQuery {
                 if let Some(r) = RELATION_STORAGE.load(id) {
                     let r = r?;
                     if !visited.contains_key(r.from.as_bytes()) {
-                        let new_depth = depth.checked_add(1)
-                            .ok_or(ExofsError::OffsetOverflow)?;
+                        let new_depth = depth.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
                         if new_depth <= max_depth {
                             visited.insert(*r.from.as_bytes(), new_depth);
                             out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
@@ -176,8 +170,9 @@ impl RelationQuery {
         match direction {
             RelationDirection::Outgoing => RELATION_INDEX.out_degree(blob),
             RelationDirection::Incoming => RELATION_INDEX.in_degree(blob),
-            RelationDirection::Both     =>
-                RELATION_INDEX.out_degree(blob) + RELATION_INDEX.in_degree(blob),
+            RelationDirection::Both => {
+                RELATION_INDEX.out_degree(blob) + RELATION_INDEX.in_degree(blob)
+            }
         }
     }
 
@@ -205,7 +200,8 @@ impl RelationQuery {
     // Helper interne : charge les relations depuis une liste d IDs.
     fn load_ids(ids: &[RelationId]) -> ExofsResult<QueryResult> {
         let mut rels: Vec<Relation> = Vec::new();
-        rels.try_reserve(ids.len()).map_err(|_| ExofsError::NoMemory)?;
+        rels.try_reserve(ids.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         for &id in ids {
             if let Some(r) = RELATION_STORAGE.load(id) {
                 rels.push(r?);
@@ -221,8 +217,8 @@ impl RelationQuery {
 
 /// Builder pour construire une requête complexe.
 pub struct QueryBuilder {
-    blob:      BlobId,
-    filter:    RelationFilter,
+    blob: BlobId,
+    filter: RelationFilter,
     max_items: Option<usize>,
 }
 
@@ -230,29 +226,34 @@ impl QueryBuilder {
     pub fn new(blob: BlobId) -> Self {
         QueryBuilder {
             blob,
-            filter:    RelationFilter::default(),
+            filter: RelationFilter::default(),
             max_items: None,
         }
     }
 
     pub fn kind(mut self, k: RelationKind) -> Self {
-        self.filter.kind = Some(k); self
+        self.filter.kind = Some(k);
+        self
     }
 
     pub fn direction(mut self, d: RelationDirection) -> Self {
-        self.filter.direction = Some(d); self
+        self.filter.direction = Some(d);
+        self
     }
 
     pub fn active_only(mut self) -> Self {
-        self.filter.active_only = true; self
+        self.filter.active_only = true;
+        self
     }
 
     pub fn min_weight(mut self, w: u32) -> Self {
-        self.filter.min_weight = Some(w); self
+        self.filter.min_weight = Some(w);
+        self
     }
 
     pub fn limit(mut self, n: usize) -> Self {
-        self.max_items = Some(n); self
+        self.max_items = Some(n);
+        self
     }
 
     pub fn execute(self) -> ExofsResult<QueryResult> {
@@ -270,128 +271,173 @@ impl QueryBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::relation_type::RelationType;
     use super::super::relation::RelationId;
-    use super::super::relation_storage::RelationStorage;
-    use super::super::relation_index::RelationIndex;
     use super::super::relation_graph::RelationGraph;
+    use super::super::relation_index::RelationIndex;
+    use super::super::relation_storage::RelationStorage;
+    use super::super::relation_type::RelationType;
+    use super::*;
 
-    fn blob(b: u8) -> BlobId { BlobId([b; 32]) }
+    fn blob(b: u8) -> BlobId {
+        BlobId([b; 32])
+    }
 
-    #[allow(dead_code)] fn setup_rel(
+    #[allow(dead_code)]
+    fn setup_rel(
         store: &RelationStorage,
-        idx:   &RelationIndex,
+        idx: &RelationIndex,
         graph: &RelationGraph,
-        id:    u64,
-        from:  BlobId,
-        to:    BlobId,
-        kind:  RelationKind,
+        id: u64,
+        from: BlobId,
+        to: BlobId,
+        kind: RelationKind,
     ) {
-        let rel = Relation::new(
-            RelationId(id), from, to,
-            RelationType::new(kind), 0,
-        );
+        let rel = Relation::new(RelationId(id), from, to, RelationType::new(kind), 0);
         store.persist(&rel).unwrap();
         idx.insert(&rel).unwrap();
         graph.add_relation(&rel).unwrap();
     }
 
-    #[test] fn test_query_result_limit() {
-        let rels: Vec<Relation> = (1u64..=5).map(|i| {
-            Relation::new(RelationId(i), blob(1), blob(2),
-                RelationType::new(RelationKind::CrossRef), 0)
-        }).collect();
+    #[test]
+    fn test_query_result_limit() {
+        let rels: Vec<Relation> = (1u64..=5)
+            .map(|i| {
+                Relation::new(
+                    RelationId(i),
+                    blob(1),
+                    blob(2),
+                    RelationType::new(RelationKind::CrossRef),
+                    0,
+                )
+            })
+            .collect();
         let qr = QueryResult::from_rels(rels).limit(3);
         assert_eq!(qr.relations.len(), 3);
         assert!(qr.truncated);
     }
 
-    #[test] fn test_query_result_filter() {
+    #[test]
+    fn test_query_result_filter() {
         let rels: Vec<Relation> = vec![
-            Relation::new(RelationId(1), blob(1), blob(2),
-                RelationType::new(RelationKind::Parent), 0),
-            Relation::new(RelationId(2), blob(1), blob(3),
-                RelationType::new(RelationKind::Clone), 0),
+            Relation::new(
+                RelationId(1),
+                blob(1),
+                blob(2),
+                RelationType::new(RelationKind::Parent),
+                0,
+            ),
+            Relation::new(
+                RelationId(2),
+                blob(1),
+                blob(3),
+                RelationType::new(RelationKind::Clone),
+                0,
+            ),
         ];
-        let qr = QueryResult::from_rels(rels)
-            .filter_by(|r| r.rel_type.kind == RelationKind::Parent);
+        let qr =
+            QueryResult::from_rels(rels).filter_by(|r| r.rel_type.kind == RelationKind::Parent);
         assert_eq!(qr.n_total, 1);
     }
 
-    #[test] fn test_builder_executes() {
+    #[test]
+    fn test_builder_executes() {
         let _store = RelationStorage::new_const();
-        let _idx   = RelationIndex::new_const();
+        let _idx = RelationIndex::new_const();
         let _graph = RelationGraph::new_const();
         // Pas de données : résultat vide.
         let qr = QueryBuilder::new(blob(50))
             .kind(RelationKind::Parent)
             .active_only()
-            .execute().unwrap();
+            .execute()
+            .unwrap();
         assert_eq!(qr.n_total, 0);
     }
 
-    #[test] fn test_query_result_not_truncated_when_exact() {
-        let rels: Vec<Relation> = (1u64..=3).map(|i| {
-            Relation::new(RelationId(i), blob(1), blob(2),
-                RelationType::new(RelationKind::CrossRef), 0)
-        }).collect();
+    #[test]
+    fn test_query_result_not_truncated_when_exact() {
+        let rels: Vec<Relation> = (1u64..=3)
+            .map(|i| {
+                Relation::new(
+                    RelationId(i),
+                    blob(1),
+                    blob(2),
+                    RelationType::new(RelationKind::CrossRef),
+                    0,
+                )
+            })
+            .collect();
         let qr = QueryResult::from_rels(rels).limit(10);
         assert!(!qr.truncated);
     }
 
-    #[test] fn test_query_result_empty() {
+    #[test]
+    fn test_query_result_empty() {
         let qr = QueryResult::empty();
         assert_eq!(qr.n_total, 0);
         assert!(!qr.truncated);
         assert!(qr.relations.is_empty());
     }
 
-    #[test] fn test_query_result_filter_all_out() {
-        let rels: Vec<Relation> = vec![
-            Relation::new(RelationId(10), blob(1), blob(2),
-                RelationType::new(RelationKind::Dedup), 0),
-        ];
-        let qr = QueryResult::from_rels(rels)
-            .filter_by(|r| r.rel_type.kind == RelationKind::Parent);
+    #[test]
+    fn test_query_result_filter_all_out() {
+        let rels: Vec<Relation> = vec![Relation::new(
+            RelationId(10),
+            blob(1),
+            blob(2),
+            RelationType::new(RelationKind::Dedup),
+            0,
+        )];
+        let qr =
+            QueryResult::from_rels(rels).filter_by(|r| r.rel_type.kind == RelationKind::Parent);
         assert_eq!(qr.n_total, 0);
         assert!(qr.relations.is_empty());
     }
 
-    #[test] fn test_reachable_from_empty_graph() {
+    #[test]
+    fn test_reachable_from_empty_graph() {
         let ids = RelationQuery::reachable_from(&blob(200), 4).unwrap();
         assert_eq!(ids.len(), 0);
     }
 
-    #[test] fn test_ancestors_of_empty_graph() {
+    #[test]
+    fn test_ancestors_of_empty_graph() {
         let ids = RelationQuery::ancestors_of(&blob(201), 4).unwrap();
         assert_eq!(ids.len(), 0);
     }
 
-    #[test] fn test_all_of_kind_empty() {
+    #[test]
+    fn test_all_of_kind_empty() {
         let qr = RelationQuery::all_of_kind(RelationKind::Snapshot).unwrap();
         // Le store global peut contenir d'autres relations, mais la fonction
         // ne doit pas paniquer.
         let _ = qr;
     }
 
-    #[test] fn test_builder_no_kind() {
+    #[test]
+    fn test_builder_no_kind() {
         let qr = QueryBuilder::new(blob(250)).execute().unwrap();
         let _ = qr; // Résultat vide ou non — ne doit pas paniquer.
     }
 
-    #[test] fn test_builder_max_depth() {
-        let qr = QueryBuilder::new(blob(251))
-            .limit(2)
-            .execute().unwrap();
+    #[test]
+    fn test_builder_max_depth() {
+        let qr = QueryBuilder::new(blob(251)).limit(2).execute().unwrap();
         let _ = qr;
     }
 
-    #[test] fn test_query_result_multiple_limits() {
-        let rels: Vec<Relation> = (1u64..=20).map(|i| {
-            Relation::new(RelationId(i), blob(2), blob(3),
-                RelationType::new(RelationKind::HardLink), 0)
-        }).collect();
+    #[test]
+    fn test_query_result_multiple_limits() {
+        let rels: Vec<Relation> = (1u64..=20)
+            .map(|i| {
+                Relation::new(
+                    RelationId(i),
+                    blob(2),
+                    blob(3),
+                    RelationType::new(RelationKind::HardLink),
+                    0,
+                )
+            })
+            .collect();
         let qr = QueryResult::from_rels(rels).limit(5);
         assert_eq!(qr.relations.len(), 5);
         assert!(qr.truncated);

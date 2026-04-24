@@ -3,10 +3,10 @@
 //! Point d'entrée de toute la logique spécifique à x86_64.
 //! Exporte les primitives utilisées par les couches supérieures.
 
-
 pub mod acpi;
 pub mod apic;
 pub mod boot;
+pub mod boot_display;
 pub mod cpu;
 pub mod exceptions;
 pub mod framebuffer_early;
@@ -15,13 +15,12 @@ pub mod idt;
 pub mod irq;
 pub mod memory_iface;
 pub mod paging;
-pub mod sched_iface;   // Pont FFI arch → scheduler (C ABI exports)
+pub mod sched_iface; // Pont FFI arch → scheduler (C ABI exports)
 pub mod smp;
 pub mod spectre;
 pub mod syscall;
 pub mod time;
 pub mod tss;
-pub mod boot_display;
 pub mod vga_early;
 pub mod virt;
 
@@ -51,11 +50,11 @@ static ARCH_INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Collecte les informations d'architecture post-init
 pub fn arch_info() -> ArchInfo {
     ArchInfo {
-        cpu_count:  smp::percpu::cpu_count(),
-        has_apic:   cpu::features::CPU_FEATURES.has_apic(),
+        cpu_count: smp::percpu::cpu_count(),
+        has_apic: cpu::features::CPU_FEATURES.has_apic(),
         has_x2apic: cpu::features::CPU_FEATURES.has_x2apic(),
-        has_acpi:   acpi::parser::acpi_available(),
-        page_size:  PAGE_SIZE,
+        has_acpi: acpi::parser::acpi_available(),
+        page_size: PAGE_SIZE,
     }
 }
 
@@ -68,11 +67,7 @@ pub fn halt_cpu() -> ! {
     loop {
         // SAFETY: cli+hlt atomique; IF=0 donc jamais réveillé — boucle infinie intentionnelle.
         unsafe {
-            core::arch::asm!(
-                "cli",
-                "hlt",
-                options(nomem, nostack)
-            );
+            core::arch::asm!("cli", "hlt", options(nomem, nostack));
         }
     }
 }
@@ -337,7 +332,9 @@ pub unsafe fn inl(port: u16) -> u32 {
 #[inline(always)]
 pub fn io_delay() {
     // SAFETY: port 0x80 est le port debug BIOS/POST — écriture sans effet
-    unsafe { outb(0x80, 0x00); }
+    unsafe {
+        outb(0x80, 0x00);
+    }
 }
 
 /// Primitive de pause CPU utilisée par les boucles lock-free / fast IPC.

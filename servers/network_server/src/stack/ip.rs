@@ -99,7 +99,10 @@ impl RouteTable {
         let mut idx = 0usize;
         while idx < self.routes.len() {
             let route = self.routes[idx];
-            if route.active && prefix_match(route.destination, target, route.prefix_len) && route.prefix_len >= best_prefix {
+            if route.active
+                && prefix_match(route.destination, target, route.prefix_len)
+                && route.prefix_len >= best_prefix
+            {
                 best_idx = Some(idx);
                 best_prefix = route.prefix_len;
             }

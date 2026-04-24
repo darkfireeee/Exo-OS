@@ -11,7 +11,6 @@
 //
 // Couche 0 : pas de dépendance vers scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -28,9 +27,9 @@ pub const CR4_SMEP_BIT: u64 = 1 << 20;
 #[repr(C)]
 pub struct SmepStats {
     /// Nombre d'activations de SMEP.
-    pub enable_count:   AtomicU64,
+    pub enable_count: AtomicU64,
     /// Nombre de désactivations temporaires (légitimes, ex. pour copie user).
-    pub disable_count:  AtomicU64,
+    pub disable_count: AtomicU64,
     /// Violations détectées par le fault handler.
     pub violation_count: AtomicU64,
     /// Appels redondants à `enable_smep` alors que déjà actif.
@@ -40,8 +39,8 @@ pub struct SmepStats {
 impl SmepStats {
     const fn new() -> Self {
         Self {
-            enable_count:    AtomicU64::new(0),
-            disable_count:   AtomicU64::new(0),
+            enable_count: AtomicU64::new(0),
+            disable_count: AtomicU64::new(0),
             violation_count: AtomicU64::new(0),
             redundant_enable: AtomicU64::new(0),
         }

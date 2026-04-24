@@ -14,13 +14,15 @@
 //   6. Équilibrage de charge (tous les BALANCE_INTERVAL_TICKS ticks)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use core::ptr::NonNull;
-use crate::scheduler::core::task::{ThreadControlBlock, SchedPolicy, CpuId, SCHED_NEED_RESCHED_BIT};
-use crate::scheduler::core::runqueue;
-use crate::scheduler::policies::{tick_check_preempt, rr_tick, timeslice_for};
-use crate::scheduler::smp::load_balance::{balance_cpu, BALANCE_INTERVAL_TICKS};
 use super::hrtimer;
+use crate::scheduler::core::runqueue;
+use crate::scheduler::core::task::{
+    CpuId, SchedPolicy, ThreadControlBlock, SCHED_NEED_RESCHED_BIT,
+};
+use crate::scheduler::policies::{rr_tick, tick_check_preempt, timeslice_for};
+use crate::scheduler::smp::load_balance::{balance_cpu, BALANCE_INTERVAL_TICKS};
+use core::ptr::NonNull;
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -44,8 +46,8 @@ static LAST_TCB_PTR: [AtomicUsize; 256] = {
     [ZERO; 256]
 };
 
-pub static TICK_COUNT:         AtomicU64 = AtomicU64::new(0);
-pub static TICK_PREEMPTIONS:   AtomicU64 = AtomicU64::new(0);
+pub static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
+pub static TICK_PREEMPTIONS: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Handler principal du tick
@@ -62,7 +64,7 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
 
     let tcb = match NonNull::new(current) {
         Some(p) => &mut *p.as_ptr(),
-        None    => return,
+        None => return,
     };
 
     // ── 1. Statistiques CPU (instrumentation globale) ────────────────────
@@ -98,7 +100,8 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
 
             // ── 3. Préemption CFS ───────────────────────────────────────
             if tick_check_preempt(tcb, elapsed, slice, nr) {
-                tcb.sched_state.fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
+                tcb.sched_state
+                    .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
                 ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
                 TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
             }
@@ -106,7 +109,8 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
         SchedPolicy::RoundRobin => {
             // ── 4. Quantum RR ──────────────────────────────────────────
             if rr_tick(tcb, elapsed) {
-                tcb.sched_state.fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
+                tcb.sched_state
+                    .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
                 ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
                 TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
             }
@@ -118,7 +122,8 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
             // `deadline_tick()`, ignoraient leur `runtime_ns` et s'exécutaient
             // indéfiniment sans respecter leur budget par période.
             if crate::scheduler::policies::deadline::deadline_tick(tcb, elapsed) {
-                tcb.sched_state.fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
+                tcb.sched_state
+                    .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
                 ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
                 TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
             }
@@ -183,8 +188,9 @@ pub unsafe fn init(_nr_cpus: usize) {
 pub unsafe extern "C" fn sched_ipi_reschedule(tcb_ptr: *mut u8) {
     let tcb = match NonNull::new(tcb_ptr as *mut ThreadControlBlock) {
         Some(p) => &mut *p.as_ptr(),
-        None    => return,  // boot ou idle sans TCB — ignorer
+        None => return, // boot ou idle sans TCB — ignorer
     };
-    tcb.sched_state.fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
+    tcb.sched_state
+        .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
     TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
 }

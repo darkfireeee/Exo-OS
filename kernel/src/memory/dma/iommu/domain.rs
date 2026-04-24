@@ -6,11 +6,11 @@
 //
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::types::PhysAddr;
-use crate::memory::dma::core::types::{IommuDomainId, IovaAddr, DmaError};
+use crate::memory::dma::core::types::{DmaError, IommuDomainId, IovaAddr};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES
@@ -30,13 +30,13 @@ pub const IDENTITY_DOMAIN_ID: IommuDomainId = IommuDomainId(0);
 #[repr(u8)]
 pub enum DomainType {
     /// Identité : IOVA == PhysAddr (passthrough total).
-    Identity    = 0,
+    Identity = 0,
     /// Traduction complète via tables de pages IOMMU.
-    Translated  = 1,
+    Translated = 1,
     /// Traduction partielle (hôte + passthrough sélectif).
-    Hybrid      = 2,
+    Hybrid = 2,
     /// Domaine de blocage : tous les accès DMA sont refusés.
-    Blocked     = 3,
+    Blocked = 3,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,15 +47,20 @@ pub enum DomainType {
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(C)]
 pub struct PciBdf {
-    pub bus:  u8,
-    pub dev:  u8,
+    pub bus: u8,
+    pub dev: u8,
     pub func: u8,
     _pad: u8,
 }
 
 impl PciBdf {
     pub const fn new(bus: u8, dev: u8, func: u8) -> Self {
-        PciBdf { bus, dev, func, _pad: 0 }
+        PciBdf {
+            bus,
+            dev,
+            func,
+            _pad: 0,
+        }
     }
     /// Encodes BDF as a 16-bit value (bus<<8 | dev<<3 | func).
     pub const fn as_u16(self) -> u16 {
@@ -70,17 +75,17 @@ impl PciBdf {
 /// Statistiques d'un domaine IOMMU.
 pub struct DomainStats {
     pub mappings_created: AtomicU64,
-    pub mappings_freed:   AtomicU64,
-    pub page_faults:      AtomicU64,
+    pub mappings_freed: AtomicU64,
+    pub page_faults: AtomicU64,
     pub tlb_invalidations: AtomicU64,
 }
 
 impl DomainStats {
     const fn new() -> Self {
         DomainStats {
-            mappings_created:  AtomicU64::new(0),
-            mappings_freed:    AtomicU64::new(0),
-            page_faults:       AtomicU64::new(0),
+            mappings_created: AtomicU64::new(0),
+            mappings_freed: AtomicU64::new(0),
+            page_faults: AtomicU64::new(0),
             tlb_invalidations: AtomicU64::new(0),
         }
     }
@@ -90,13 +95,13 @@ impl DomainStats {
 #[repr(C, align(64))]
 pub struct IommuDomain {
     /// Identifiant unique.
-    pub id:           IommuDomainId,
+    pub id: IommuDomainId,
     /// Type de domaine.
-    pub domain_type:  DomainType,
+    pub domain_type: DomainType,
     /// Adresse physique de la table de pages IOMMU (PML4 ou équivalent).
-    pub page_table:   AtomicU64,
+    pub page_table: AtomicU64,
     /// Actif ?
-    pub active:       AtomicBool,
+    pub active: AtomicBool,
     /// Nombre de périphériques attachés.
     pub device_count: AtomicU32,
     /// Périphériques BDF attachés à ce domaine.
@@ -115,33 +120,38 @@ pub struct IommuDomain {
 impl IommuDomain {
     const fn new_identity() -> Self {
         IommuDomain {
-            id:           IDENTITY_DOMAIN_ID,
-            domain_type:  DomainType::Identity,
-            page_table:   AtomicU64::new(0),
-            active:       AtomicBool::new(true),
+            id: IDENTITY_DOMAIN_ID,
+            domain_type: DomainType::Identity,
+            page_table: AtomicU64::new(0),
+            active: AtomicBool::new(true),
             device_count: AtomicU32::new(0),
-            devices:      Mutex::new([None; MAX_DEVICES_PER_DOMAIN]),
-            stats:        DomainStats::new(),
+            devices: Mutex::new([None; MAX_DEVICES_PER_DOMAIN]),
+            stats: DomainStats::new(),
             iova_counter: AtomicU64::new(0),
-            iova_base:    0,
-            iova_limit:   u64::MAX,
-            _pad:         [0u8; 4],
+            iova_base: 0,
+            iova_limit: u64::MAX,
+            _pad: [0u8; 4],
         }
     }
 
-    pub fn new(id: IommuDomainId, domain_type: DomainType, iova_base: u64, iova_limit: u64) -> Self {
+    pub fn new(
+        id: IommuDomainId,
+        domain_type: DomainType,
+        iova_base: u64,
+        iova_limit: u64,
+    ) -> Self {
         IommuDomain {
             id,
             domain_type,
-            page_table:   AtomicU64::new(0),
-            active:       AtomicBool::new(false),
+            page_table: AtomicU64::new(0),
+            active: AtomicBool::new(false),
             device_count: AtomicU32::new(0),
-            devices:      Mutex::new([None; MAX_DEVICES_PER_DOMAIN]),
-            stats:        DomainStats::new(),
+            devices: Mutex::new([None; MAX_DEVICES_PER_DOMAIN]),
+            stats: DomainStats::new(),
             iova_counter: AtomicU64::new(iova_base),
             iova_base,
             iova_limit,
-            _pad:         [0u8; 4],
+            _pad: [0u8; 4],
         }
     }
 
@@ -175,14 +185,23 @@ impl IommuDomain {
         let size_aligned = ((size + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
         let old = self.iova_counter.load(Ordering::Relaxed);
         let new = old + size_aligned as u64;
-        if new > self.iova_limit { return None; }
+        if new > self.iova_limit {
+            return None;
+        }
         // CAS pour atomicité.
-        match self.iova_counter.compare_exchange(old, new, Ordering::AcqRel, Ordering::Relaxed) {
+        match self
+            .iova_counter
+            .compare_exchange(old, new, Ordering::AcqRel, Ordering::Relaxed)
+        {
             Ok(_) => Some(IovaAddr::new(old)),
             Err(_) => {
                 // Réessai simple — en cas de contention on incrémente directement.
-                let base = self.iova_counter.fetch_add(size_aligned as u64, Ordering::Relaxed);
-                if base + size_aligned as u64 > self.iova_limit { return None; }
+                let base = self
+                    .iova_counter
+                    .fetch_add(size_aligned as u64, Ordering::Relaxed);
+                if base + size_aligned as u64 > self.iova_limit {
+                    return None;
+                }
                 Some(IovaAddr::new(base))
             }
         }
@@ -191,7 +210,11 @@ impl IommuDomain {
     /// Retourne l'adresse physique de la table de pages IOMMU.
     pub fn page_table_phys(&self) -> Option<PhysAddr> {
         let p = self.page_table.load(Ordering::Acquire);
-        if p == 0 { None } else { Some(PhysAddr::new(p)) }
+        if p == 0 {
+            None
+        } else {
+            Some(PhysAddr::new(p))
+        }
     }
 
     /// Définit la table de pages (unsafe — doit être appelé depuis init IOMMU).
@@ -202,9 +225,15 @@ impl IommuDomain {
         self.page_table.store(phys.as_u64(), Ordering::Release);
     }
 
-    pub fn activate(&self) { self.active.store(true, Ordering::Release); }
-    pub fn deactivate(&self) { self.active.store(false, Ordering::Release); }
-    pub fn is_active(&self) -> bool { self.active.load(Ordering::Acquire) }
+    pub fn activate(&self) {
+        self.active.store(true, Ordering::Release);
+    }
+    pub fn deactivate(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -213,7 +242,7 @@ impl IommuDomain {
 
 pub struct IommuDomainTable {
     domains: Mutex<IommuDomainTableInner>,
-    count:   AtomicU32,
+    count: AtomicU32,
 }
 
 struct IommuDomainTableInner {
@@ -292,12 +321,16 @@ impl IommuDomainTable {
 
     /// Accès en lecture seule à un domaine.
     pub fn with_domain<T, F: FnOnce(&IommuDomain) -> T>(
-        &self, id: IommuDomainId, f: F
+        &self,
+        id: IommuDomainId,
+        f: F,
     ) -> Option<T> {
         let inner = self.domains.lock();
         for slot in inner.slots.iter() {
             if let Some(ref dom) = slot {
-                if dom.id == id { return Some(f(dom)); }
+                if dom.id == id {
+                    return Some(f(dom));
+                }
             }
         }
         None
@@ -305,18 +338,24 @@ impl IommuDomainTable {
 
     /// Accès mutable à un domaine (pour initialisation).
     pub fn with_domain_mut<T, F: FnOnce(&mut IommuDomain) -> T>(
-        &self, id: IommuDomainId, f: F
+        &self,
+        id: IommuDomainId,
+        f: F,
     ) -> Option<T> {
         let mut inner = self.domains.lock();
         for slot in inner.slots.iter_mut() {
             if let Some(ref mut dom) = slot {
-                if dom.id == id { return Some(f(dom)); }
+                if dom.id == id {
+                    return Some(f(dom));
+                }
             }
         }
         None
     }
 
-    pub fn domain_count(&self) -> u32 { self.count.load(Ordering::Relaxed) }
+    pub fn domain_count(&self) -> u32 {
+        self.count.load(Ordering::Relaxed)
+    }
 }
 
 pub static IOMMU_DOMAINS: IommuDomainTable = IommuDomainTable::new();

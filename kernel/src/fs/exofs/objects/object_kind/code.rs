@@ -8,13 +8,11 @@
 //   ONDISK-01: CodeDescriptorDisk #[repr(C, packed)]
 //   ARITH-02 : checked_add / saturating_* partout
 
-
 use core::fmt;
 use core::mem;
 
 use crate::fs::exofs::core::{
-    BlobId, ObjectId, EpochId, DiskOffset,
-    ExofsError, ExofsResult, blake3_hash, compute_blob_id,
+    blake3_hash, compute_blob_id, BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId,
 };
 
 // ── Constantes ──────────────────────────────────────────────────────────────────
@@ -39,13 +37,13 @@ pub const CODE_PUBKEY_LEN: usize = 32;
 
 // ── Flags Code ─────────────────────────────────────────────────────────────────
 
-pub const CODE_FLAG_ELF_VERIFIED:    u16 = 1 << 0; // Headers ELF vérifiés
+pub const CODE_FLAG_ELF_VERIFIED: u16 = 1 << 0; // Headers ELF vérifiés
 pub const CODE_FLAG_SIGNATURE_VALID: u16 = 1 << 1; // Signature Ed25519 vérifiée
-pub const CODE_FLAG_PRIVILEGED:      u16 = 1 << 2; // Peut s'exécuter en Ring 0
-pub const CODE_FLAG_STRIPPED:        u16 = 1 << 3; // Sections debug retirées
-pub const CODE_FLAG_PIE:             u16 = 1 << 4; // Position-Independent Exec
-pub const CODE_FLAG_SEALED:          u16 = 1 << 5; // Immuable, jamais recompilé
-pub const CODE_FLAG_TRUSTED:         u16 = 1 << 6; // Approuvé par la Trusted CA
+pub const CODE_FLAG_PRIVILEGED: u16 = 1 << 2; // Peut s'exécuter en Ring 0
+pub const CODE_FLAG_STRIPPED: u16 = 1 << 3; // Sections debug retirées
+pub const CODE_FLAG_PIE: u16 = 1 << 4; // Position-Independent Exec
+pub const CODE_FLAG_SEALED: u16 = 1 << 5; // Immuable, jamais recompilé
+pub const CODE_FLAG_TRUSTED: u16 = 1 << 6; // Approuvé par la Trusted CA
 
 // ── ELF class & machine ────────────────────────────────────────────────────────
 
@@ -72,11 +70,11 @@ impl ElfClass {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u16)]
 pub enum ElfMachine {
-    X86    = 0x0003,
+    X86 = 0x0003,
     X86_64 = 0x003E,
-    Arm    = 0x0028,
-    Arm64  = 0x00B7,
-    RiscV  = 0x00F3,
+    Arm = 0x0028,
+    Arm64 = 0x00B7,
+    RiscV = 0x00F3,
     Unknown = 0xFFFF,
 }
 
@@ -88,7 +86,7 @@ impl ElfMachine {
             0x0028 => Self::Arm,
             0x00B7 => Self::Arm64,
             0x00F3 => Self::RiscV,
-            _      => Self::Unknown,
+            _ => Self::Unknown,
         }
     }
 }
@@ -118,21 +116,21 @@ impl ElfMachine {
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct CodeDescriptorDisk {
-    pub magic:       u32,
-    pub blob_id:     [u8; 32],
-    pub object_id:   [u8; 32],
+    pub magic: u32,
+    pub blob_id: [u8; 32],
+    pub object_id: [u8; 32],
     pub disk_offset: u64,
-    pub size:        u64,
-    pub epoch_create:u64,
-    pub flags:       u16,
-    pub elf_class:   u8,
-    pub version:     u8,
+    pub size: u64,
+    pub epoch_create: u64,
+    pub flags: u16,
+    pub elf_class: u8,
+    pub version: u8,
     pub elf_machine: u16,
-    pub _pad0:       [u8; 2],
-    pub signature:   [u8; 32], // hash de la signature Ed25519
+    pub _pad0: [u8; 2],
+    pub signature: [u8; 32], // hash de la signature Ed25519
     pub pubkey_hash: [u8; 32],
-    pub _pad1:       [u8; 12],
-    pub checksum:    [u8; 16],
+    pub _pad1: [u8; 12],
+    pub checksum: [u8; 16],
 }
 
 const _: () = assert!(
@@ -171,7 +169,9 @@ impl fmt::Debug for CodeDescriptorDisk {
         write!(
             f,
             "CodeDescriptorDisk {{ size: {}, flags: {:#x}, elf_class: {} }}",
-            { self.size }, { self.flags }, { self.elf_class },
+            { self.size },
+            { self.flags },
+            { self.elf_class },
         )
     }
 }
@@ -202,14 +202,14 @@ pub enum CodeValidationResult {
 impl fmt::Display for CodeValidationResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Valid                => write!(f, "valid"),
-            Self::BadElfMagic         => write!(f, "bad ELF magic"),
+            Self::Valid => write!(f, "valid"),
+            Self::BadElfMagic => write!(f, "bad ELF magic"),
             Self::UnsupportedElfClass => write!(f, "unsupported ELF class"),
-            Self::UnknownMachine      => write!(f, "unknown ELF machine"),
-            Self::TooLarge            => write!(f, "code too large"),
-            Self::BlobIdMismatch      => write!(f, "blob_id mismatch"),
-            Self::SignatureInvalid    => write!(f, "signature invalid"),
-            Self::Partial             => write!(f, "partial upload"),
+            Self::UnknownMachine => write!(f, "unknown ELF machine"),
+            Self::TooLarge => write!(f, "code too large"),
+            Self::BlobIdMismatch => write!(f, "blob_id mismatch"),
+            Self::SignatureInvalid => write!(f, "signature invalid"),
+            Self::Partial => write!(f, "partial upload"),
         }
     }
 }
@@ -219,25 +219,25 @@ impl fmt::Display for CodeValidationResult {
 /// Descripteur in-memory d'un objet Code ExoFS.
 pub struct CodeDescriptor {
     /// BlobId du code (Blake3 brut).
-    pub blob_id:      BlobId,
+    pub blob_id: BlobId,
     /// Objet propriétaire.
-    pub object_id:    ObjectId,
+    pub object_id: ObjectId,
     /// Offset disque du payload.
-    pub disk_offset:  DiskOffset,
+    pub disk_offset: DiskOffset,
     /// Taille en octets.
-    pub size:         u64,
+    pub size: u64,
     /// Epoch de création.
     pub epoch_create: EpochId,
     /// Flags (CODE_FLAG_*).
-    pub flags:        u16,
+    pub flags: u16,
     /// Classe ELF.
-    pub elf_class:    ElfClass,
+    pub elf_class: ElfClass,
     /// Architecture machine.
-    pub elf_machine:  ElfMachine,
+    pub elf_machine: ElfMachine,
     /// Hash de la clé publique de signature.
-    pub pubkey_hash:  [u8; 32],
+    pub pubkey_hash: [u8; 32],
     /// Hash de la signature Ed25519.
-    pub signature:    [u8; 32],
+    pub signature: [u8; 32],
 }
 
 impl CodeDescriptor {
@@ -247,10 +247,10 @@ impl CodeDescriptor {
     ///
     /// Ne fait PAS la vérification de signature (doit être faite séparément).
     pub fn new(
-        data:        &[u8],
-        object_id:   ObjectId,
+        data: &[u8],
+        object_id: ObjectId,
         disk_offset: DiskOffset,
-        epoch:       EpochId,
+        epoch: EpochId,
     ) -> ExofsResult<Self> {
         if data.len() as u64 > CODE_MAX_SIZE {
             return Err(ExofsError::Overflow);
@@ -262,7 +262,11 @@ impl CodeDescriptor {
         }
         // HASH-01 : BlobId sur données brutes.
         let blob_id = compute_blob_id(data);
-        let elf_class   = if data.len() > 4 { ElfClass::from_u8(data[4]) } else { ElfClass::Unknown };
+        let elf_class = if data.len() > 4 {
+            ElfClass::from_u8(data[4])
+        } else {
+            ElfClass::Unknown
+        };
         let elf_machine = if data.len() > 19 {
             let m = u16::from_le_bytes([data[18], data[19]]);
             ElfMachine::from_u16(m)
@@ -273,13 +277,13 @@ impl CodeDescriptor {
             blob_id,
             object_id,
             disk_offset,
-            size:         data.len() as u64,
+            size: data.len() as u64,
             epoch_create: epoch,
-            flags:        CODE_FLAG_ELF_VERIFIED,
+            flags: CODE_FLAG_ELF_VERIFIED,
             elf_class,
             elf_machine,
-            pubkey_hash:  [0u8; 32],
-            signature:    [0u8; 32],
+            pubkey_hash: [0u8; 32],
+            signature: [0u8; 32],
         })
     }
 
@@ -287,16 +291,16 @@ impl CodeDescriptor {
     pub fn from_disk(d: &CodeDescriptorDisk) -> ExofsResult<Self> {
         d.verify()?;
         Ok(Self {
-            blob_id:      BlobId(d.blob_id),
-            object_id:    ObjectId(d.object_id),
-            disk_offset:  DiskOffset(d.disk_offset),
-            size:         d.size,
+            blob_id: BlobId(d.blob_id),
+            object_id: ObjectId(d.object_id),
+            disk_offset: DiskOffset(d.disk_offset),
+            size: d.size,
             epoch_create: EpochId(d.epoch_create),
-            flags:        d.flags,
-            elf_class:    ElfClass::from_u8(d.elf_class),
-            elf_machine:  ElfMachine::from_u16(d.elf_machine),
-            pubkey_hash:  d.pubkey_hash,
-            signature:    d.signature,
+            flags: d.flags,
+            elf_class: ElfClass::from_u8(d.elf_class),
+            elf_machine: ElfMachine::from_u16(d.elf_machine),
+            pubkey_hash: d.pubkey_hash,
+            signature: d.signature,
         })
     }
 
@@ -304,21 +308,21 @@ impl CodeDescriptor {
 
     pub fn to_disk(&self) -> CodeDescriptorDisk {
         let mut d = CodeDescriptorDisk {
-            magic:        CODE_DESCRIPTOR_MAGIC,
-            blob_id:      self.blob_id.0,
-            object_id:    self.object_id.0,
-            disk_offset:  self.disk_offset.0,
-            size:         self.size,
+            magic: CODE_DESCRIPTOR_MAGIC,
+            blob_id: self.blob_id.0,
+            object_id: self.object_id.0,
+            disk_offset: self.disk_offset.0,
+            size: self.size,
             epoch_create: self.epoch_create.0,
-            flags:        self.flags,
-            elf_class:    self.elf_class as u8,
-            version:      CODE_DESCRIPTOR_VERSION,
-            elf_machine:  self.elf_machine as u16,
-            _pad0:        [0; 2],
-            signature:    self.signature,
-            pubkey_hash:  self.pubkey_hash,
-            _pad1:        [0; 12],
-            checksum:     [0; 16],
+            flags: self.flags,
+            elf_class: self.elf_class as u8,
+            version: CODE_DESCRIPTOR_VERSION,
+            elf_machine: self.elf_machine as u16,
+            _pad0: [0; 2],
+            signature: self.signature,
+            pubkey_hash: self.pubkey_hash,
+            _pad1: [0; 12],
+            checksum: [0; 16],
         };
         d.checksum = d.compute_checksum();
         d
@@ -348,14 +352,10 @@ impl CodeDescriptor {
     ///
     /// La vérification Ed25519 est effectuée AVANT cet appel par le
     /// scheduler/security, ici on stocke seulement les hashes.
-    pub fn record_signature(
-        &mut self,
-        pubkey_hash: [u8; 32],
-        sig_hash:    [u8; 32],
-    ) {
+    pub fn record_signature(&mut self, pubkey_hash: [u8; 32], sig_hash: [u8; 32]) {
         self.pubkey_hash = pubkey_hash;
-        self.signature   = sig_hash;
-        self.flags      |= CODE_FLAG_SIGNATURE_VALID;
+        self.signature = sig_hash;
+        self.flags |= CODE_FLAG_SIGNATURE_VALID;
     }
 
     /// Marque ce code comme approuvé (CODE_FLAG_TRUSTED).
@@ -394,7 +394,9 @@ impl fmt::Display for CodeDescriptor {
             f,
             "CodeDescriptor {{ size: {}, machine: {:?}, class: {:?}, \
              flags: {:#x}, trusted: {} }}",
-            self.size, self.elf_machine, self.elf_class,
+            self.size,
+            self.elf_machine,
+            self.elf_class,
             self.flags,
             self.flags & CODE_FLAG_TRUSTED != 0,
         )
@@ -446,26 +448,36 @@ pub fn code_is_valid(data: &[u8], blob_id: &BlobId) -> bool {
 /// Statistiques agrégées des objets Code.
 #[derive(Default, Debug)]
 pub struct CodeStats {
-    pub total:          u64,
-    pub privileged:     u64,
-    pub trusted:        u64,
-    pub signed:         u64,
-    pub pie_count:      u64,
-    pub x86_64_count:   u64,
-    pub arm64_count:    u64,
-    pub total_bytes:    u64,
+    pub total: u64,
+    pub privileged: u64,
+    pub trusted: u64,
+    pub signed: u64,
+    pub pie_count: u64,
+    pub x86_64_count: u64,
+    pub arm64_count: u64,
+    pub total_bytes: u64,
 }
 
 impl CodeStats {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn record(&mut self, c: &CodeDescriptor) {
-        self.total          = self.total.saturating_add(1);
-        self.total_bytes    = self.total_bytes.saturating_add(c.size);
-        if c.is_privileged()         { self.privileged  = self.privileged.saturating_add(1); }
-        if c.flags & CODE_FLAG_TRUSTED != 0  { self.trusted    = self.trusted.saturating_add(1); }
-        if c.has_valid_signature()   { self.signed      = self.signed.saturating_add(1); }
-        if c.flags & CODE_FLAG_PIE != 0      { self.pie_count  = self.pie_count.saturating_add(1); }
+        self.total = self.total.saturating_add(1);
+        self.total_bytes = self.total_bytes.saturating_add(c.size);
+        if c.is_privileged() {
+            self.privileged = self.privileged.saturating_add(1);
+        }
+        if c.flags & CODE_FLAG_TRUSTED != 0 {
+            self.trusted = self.trusted.saturating_add(1);
+        }
+        if c.has_valid_signature() {
+            self.signed = self.signed.saturating_add(1);
+        }
+        if c.flags & CODE_FLAG_PIE != 0 {
+            self.pie_count = self.pie_count.saturating_add(1);
+        }
         if matches!(c.elf_machine, ElfMachine::X86_64) {
             self.x86_64_count = self.x86_64_count.saturating_add(1);
         }
@@ -481,8 +493,12 @@ impl fmt::Display for CodeStats {
             f,
             "CodeStats {{ total: {}, privileged: {}, trusted: {}, \
              signed: {}, PIE: {}, bytes: {} }}",
-            self.total, self.privileged, self.trusted,
-            self.signed, self.pie_count, self.total_bytes,
+            self.total,
+            self.privileged,
+            self.trusted,
+            self.signed,
+            self.pie_count,
+            self.total_bytes,
         )
     }
 }
@@ -497,7 +513,8 @@ mod tests {
         let mut elf = alloc::vec![0u8; 64];
         elf[0..4].copy_from_slice(&ELF_MAGIC);
         elf[4] = 2; // ELF64
-        elf[18] = 0x3E; elf[19] = 0x00; // x86_64
+        elf[18] = 0x3E;
+        elf[19] = 0x00; // x86_64
         elf
     }
 
@@ -509,7 +526,10 @@ mod tests {
     #[test]
     fn test_validate_elf_bad_magic() {
         let data = [0u8; 64];
-        assert_eq!(validate_elf_header(&data), CodeValidationResult::BadElfMagic);
+        assert_eq!(
+            validate_elf_header(&data),
+            CodeValidationResult::BadElfMagic
+        );
     }
 
     #[test]
@@ -525,8 +545,8 @@ mod tests {
 
     #[test]
     fn test_code_is_valid_tampered() {
-        let elf  = make_fake_elf();
-        let id   = compute_blob_id(&elf);
+        let elf = make_fake_elf();
+        let id = compute_blob_id(&elf);
         let mut tampered = elf.clone();
         tampered[63] ^= 0xFF;
         assert!(!code_is_valid(&tampered, &id));

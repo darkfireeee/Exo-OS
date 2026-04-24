@@ -4,10 +4,9 @@
 // Contrôle de tache POSIX (tcsetpgrp / SIGTTIN / SIGTTOU) — Exo-OS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU32, Ordering};
-use crate::process::core::pid::Pid;
 use super::pgrp::PgId;
+use crate::process::core::pid::Pid;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobControlError {
@@ -22,9 +21,9 @@ pub enum JobControlError {
 #[repr(C)]
 pub struct ControlTerminal {
     /// PGID du groupe de processus au premier plan.
-    pub fg_pgid:  AtomicU32,
+    pub fg_pgid: AtomicU32,
     /// Numéro du terminal (minor number).
-    pub tty_dev:  AtomicU32,
+    pub tty_dev: AtomicU32,
     /// SID qui élève ce terminal.
     pub owner_sid: AtomicU32,
 }
@@ -32,8 +31,8 @@ pub struct ControlTerminal {
 impl ControlTerminal {
     pub const fn new() -> Self {
         Self {
-            fg_pgid:   AtomicU32::new(0),
-            tty_dev:   AtomicU32::new(0),
+            fg_pgid: AtomicU32::new(0),
+            tty_dev: AtomicU32::new(0),
             owner_sid: AtomicU32::new(0),
         }
     }
@@ -51,7 +50,9 @@ unsafe impl Sync for CttyTable {}
 impl CttyTable {
     const fn new() -> Self {
         const EMPTY: ControlTerminal = ControlTerminal::new();
-        Self { slots: [EMPTY; MAX_CTTY] }
+        Self {
+            slots: [EMPTY; MAX_CTTY],
+        }
     }
 
     fn find_by_sid(&self, sid: u32) -> Option<&ControlTerminal> {
@@ -77,22 +78,22 @@ impl CttyTable {
 static CTTY_TABLE: CttyTable = CttyTable::new();
 
 /// tcsetpgrp(fd, pgid) : définit le groupe de premier plan du TTY.
-pub fn tcsetpgrp(
-    caller_pid: Pid,
-    pgid:       PgId,
-) -> Result<(), JobControlError> {
+pub fn tcsetpgrp(caller_pid: Pid, pgid: PgId) -> Result<(), JobControlError> {
     use crate::process::core::registry::PROCESS_REGISTRY;
-    let pcb = PROCESS_REGISTRY.find_by_pid(caller_pid)
+    let pcb = PROCESS_REGISTRY
+        .find_by_pid(caller_pid)
         .ok_or(JobControlError::NotTerminal)?;
     let sid = pcb.session_id();
 
     // Trouver le terminal de contrôle de cette session.
-    let ctty = CTTY_TABLE.find_by_sid(sid)
+    let ctty = CTTY_TABLE
+        .find_by_sid(sid)
         .ok_or(JobControlError::NotTerminal)?;
 
     // Vérifier que le groupe cible est dans la même session.
     use super::pgrp::PGROUP_TABLE;
-    let pgrp = PGROUP_TABLE.find(pgid)
+    let pgrp = PGROUP_TABLE
+        .find(pgid)
         .ok_or(JobControlError::NoSuchGroup)?;
     if pgrp.sid.load(Ordering::Acquire) != sid {
         return Err(JobControlError::NotSameSession);
@@ -105,10 +106,12 @@ pub fn tcsetpgrp(
 /// tcgetpgrp() : retourne le PGID du groupe de premier plan.
 pub fn tcgetpgrp(caller_pid: Pid) -> Result<PgId, JobControlError> {
     use crate::process::core::registry::PROCESS_REGISTRY;
-    let pcb = PROCESS_REGISTRY.find_by_pid(caller_pid)
+    let pcb = PROCESS_REGISTRY
+        .find_by_pid(caller_pid)
         .ok_or(JobControlError::NotTerminal)?;
     let sid = pcb.session_id();
-    let ctty = CTTY_TABLE.find_by_sid(sid)
+    let ctty = CTTY_TABLE
+        .find_by_sid(sid)
         .ok_or(JobControlError::NotTerminal)?;
     Ok(PgId(ctty.fg_pgid.load(Ordering::Acquire)))
 }
@@ -122,12 +125,12 @@ pub fn check_tty_output(caller_pid: Pid) -> bool {
 
     let pcb = match PROCESS_REGISTRY.find_by_pid(caller_pid) {
         Some(p) => p,
-        None    => return true,
+        None => return true,
     };
     let sid = pcb.session_id();
     let ctty = match CTTY_TABLE.find_by_sid(sid) {
         Some(c) => c,
-        None    => return true, // Pas de TTY de contrôle : OK
+        None => return true, // Pas de TTY de contrôle : OK
     };
     let fg = ctty.fg_pgid.load(Ordering::Acquire);
     let my_pgid = pcb.pgroup_id();
@@ -148,12 +151,12 @@ pub fn check_tty_input(caller_pid: Pid) -> bool {
 
     let pcb = match PROCESS_REGISTRY.find_by_pid(caller_pid) {
         Some(p) => p,
-        None    => return true,
+        None => return true,
     };
     let sid = pcb.session_id();
     let ctty = match CTTY_TABLE.find_by_sid(sid) {
         Some(c) => c,
-        None    => return true,
+        None => return true,
     };
     let fg = ctty.fg_pgid.load(Ordering::Acquire);
     let my_pgid = pcb.pgroup_id();

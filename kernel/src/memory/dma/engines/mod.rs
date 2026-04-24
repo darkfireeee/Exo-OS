@@ -8,18 +8,22 @@
 //   nvme_dma  : NVMe PCIe queues
 //   virtio_dma: VirtIO virtqueue
 
-pub mod ioat;
-pub mod idxd;
 pub mod ahci_dma;
+pub mod idxd;
+pub mod ioat;
 pub mod nvme_dma;
 pub mod virtio_dma;
 
 // Re-exports principaux
-pub use ioat::{IoatEngine, IOAT_ENGINE, ioat_init, ioat_submit, ioat_poll};
-pub use idxd::{IdxdEngine, IDXD_ENGINE, idxd_init, idxd_submit, idxd_poll};
-pub use ahci_dma::{AhciDmaEngine, AHCI_DMA, ahci_dma_init, ahci_dma_read, ahci_dma_write, ahci_dma_poll};
-pub use nvme_dma::{NvmeDmaEngine, NVME_DMA, nvme_dma_init, nvme_read, nvme_write, nvme_poll};
-pub use virtio_dma::{VirtioDmaEngine, VIRTIO_DMA, virtio_dma_init, virtio_dma_submit, virtio_dma_poll};
+pub use ahci_dma::{
+    ahci_dma_init, ahci_dma_poll, ahci_dma_read, ahci_dma_write, AhciDmaEngine, AHCI_DMA,
+};
+pub use idxd::{idxd_init, idxd_poll, idxd_submit, IdxdEngine, IDXD_ENGINE};
+pub use ioat::{ioat_init, ioat_poll, ioat_submit, IoatEngine, IOAT_ENGINE};
+pub use nvme_dma::{nvme_dma_init, nvme_poll, nvme_read, nvme_write, NvmeDmaEngine, NVME_DMA};
+pub use virtio_dma::{
+    virtio_dma_init, virtio_dma_poll, virtio_dma_submit, VirtioDmaEngine, VIRTIO_DMA,
+};
 
 /// Trait commun à tous les moteurs DMA matériels.
 pub trait DmaEngine: Send + Sync {

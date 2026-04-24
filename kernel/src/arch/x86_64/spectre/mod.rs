@@ -6,16 +6,13 @@
 //! - `ssbd`       : Speculative Store Bypass Disable (Spectre variant 4)
 //! - `ibrs`       : Indirect Branch Restricted Speculation + STIBP + IBPB
 
+pub mod ibrs;
 pub mod kpti;
 pub mod retpoline;
 pub mod ssbd;
-pub mod ibrs;
 
-pub use kpti::{kpti_enabled, kpti_switch_to_user, kpti_switch_to_kernel};
-pub use ibrs::{
-    apply_ibrs, apply_stibp, flush_ibpb,
-    ibrs_enabled, stibp_enabled,
-};
+pub use ibrs::{apply_ibrs, apply_stibp, flush_ibpb, ibrs_enabled, stibp_enabled};
+pub use kpti::{kpti_enabled, kpti_switch_to_kernel, kpti_switch_to_user};
 pub use ssbd::{apply_ssbd_for_thread, ssbd_enabled};
 
 use super::cpu::features;

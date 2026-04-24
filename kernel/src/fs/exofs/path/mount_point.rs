@@ -5,7 +5,6 @@
 //!  - ONDISK-03: pas d'AtomicU64 dans les structs repr(C)
 //!  - ARITH-02 : arithmétique vérifiée
 
-
 extern crate alloc;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
@@ -20,10 +19,10 @@ use crate::scheduler::sync::spinlock::SpinLock;
 pub const MOUNT_TABLE_MAX: usize = 64;
 
 /// Drapeaux de montage.
-pub const MOUNT_FLAG_READONLY: u32  = 0x0001;
-pub const MOUNT_FLAG_NOEXEC:   u32  = 0x0002;
-pub const MOUNT_FLAG_NOSUID:   u32  = 0x0004;
-pub const MOUNT_FLAG_BIND:     u32  = 0x0008;
+pub const MOUNT_FLAG_READONLY: u32 = 0x0001;
+pub const MOUNT_FLAG_NOEXEC: u32 = 0x0002;
+pub const MOUNT_FLAG_NOSUID: u32 = 0x0004;
+pub const MOUNT_FLAG_BIND: u32 = 0x0008;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MountPoint
@@ -33,17 +32,17 @@ pub const MOUNT_FLAG_BIND:     u32  = 0x0008;
 #[derive(Clone)]
 pub struct MountPoint {
     /// OID du répertoire sur lequel le montage s'effectue.
-    pub dir_oid:      ObjectId,
+    pub dir_oid: ObjectId,
     /// Nom du point de montage (souvent le dernier composant du chemin).
-    pub name:         [u8; NAME_MAX + 1],
+    pub name: [u8; NAME_MAX + 1],
     /// Longueur valide du nom.
-    pub name_len:     u16,
+    pub name_len: u16,
     /// OID racine du système de fichiers monté.
-    pub mounted_oid:  ObjectId,
+    pub mounted_oid: ObjectId,
     /// Drapeaux du montage (MOUNT_FLAG_*).
-    pub flags:        u32,
+    pub flags: u32,
     /// Identifiant unique de ce montage.
-    pub mount_id:     u32,
+    pub mount_id: u32,
     /// Tick de création.
     pub created_tick: u64,
 }
@@ -51,11 +50,11 @@ pub struct MountPoint {
 impl MountPoint {
     /// Constructeur.
     pub fn new(
-        dir_oid:     ObjectId,
-        name:        &[u8],
+        dir_oid: ObjectId,
+        name: &[u8],
         mounted_oid: ObjectId,
-        flags:       u32,
-        mount_id:    u32,
+        flags: u32,
+        mount_id: u32,
     ) -> ExofsResult<Self> {
         if name.is_empty() || name.len() > NAME_MAX {
             return Err(ExofsError::InvalidPathComponent);
@@ -64,8 +63,8 @@ impl MountPoint {
         name_buf[..name.len()].copy_from_slice(name);
         Ok(MountPoint {
             dir_oid,
-            name:         name_buf,
-            name_len:     name.len() as u16,
+            name: name_buf,
+            name_len: name.len() as u16,
             mounted_oid,
             flags,
             mount_id,
@@ -102,12 +101,12 @@ impl MountPoint {
 impl Default for MountPoint {
     fn default() -> Self {
         MountPoint {
-            dir_oid:      ObjectId([0u8; 32]),
-            name:         [0u8; NAME_MAX + 1],
-            name_len:     0,
-            mounted_oid:  ObjectId([0u8; 32]),
-            flags:        0,
-            mount_id:     0,
+            dir_oid: ObjectId([0u8; 32]),
+            name: [0u8; NAME_MAX + 1],
+            name_len: 0,
+            mounted_oid: ObjectId([0u8; 32]),
+            flags: 0,
+            mount_id: 0,
             created_tick: 0,
         }
     }
@@ -118,19 +117,19 @@ impl Default for MountPoint {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EMPTY_MOUNT: MountPoint = MountPoint {
-    dir_oid:      ObjectId([0u8; 32]),
-    name:         [0u8; NAME_MAX + 1],
-    name_len:     0,
-    mounted_oid:  ObjectId([0u8; 32]),
-    flags:        0,
-    mount_id:     0,
+    dir_oid: ObjectId([0u8; 32]),
+    name: [0u8; NAME_MAX + 1],
+    name_len: 0,
+    mounted_oid: ObjectId([0u8; 32]),
+    flags: 0,
+    mount_id: 0,
     created_tick: 0,
 };
 
 struct MountTableInner {
-    entries:  [MountPoint; MOUNT_TABLE_MAX],
-    count:    usize,
-    next_id:  u32,
+    entries: [MountPoint; MOUNT_TABLE_MAX],
+    count: usize,
+    next_id: u32,
 }
 
 impl MountTableInner {
@@ -138,9 +137,9 @@ impl MountTableInner {
         // On ne peut pas encore appeler `Default::default()` en const fn
         // donc on initialise manuellement.
         MountTableInner {
-            entries:  [EMPTY_MOUNT; MOUNT_TABLE_MAX],
-            count:    0,
-            next_id:  1,
+            entries: [EMPTY_MOUNT; MOUNT_TABLE_MAX],
+            count: 0,
+            next_id: 1,
         }
     }
 
@@ -157,9 +156,7 @@ impl MountTableInner {
     /// Trouve le point de montage dont le dir_oid correspond.
     fn find_by_dir(&self, oid: &ObjectId) -> Option<usize> {
         for i in 0..MOUNT_TABLE_MAX {
-            if self.entries[i].name_len != 0
-                && self.entries[i].dir_oid.0 == oid.0
-            {
+            if self.entries[i].name_len != 0 && self.entries[i].dir_oid.0 == oid.0 {
                 return Some(i);
             }
         }
@@ -169,9 +166,7 @@ impl MountTableInner {
     /// Trouve par mount_id.
     fn find_by_id(&self, id: u32) -> Option<usize> {
         for i in 0..MOUNT_TABLE_MAX {
-            if self.entries[i].name_len != 0
-                && self.entries[i].mount_id == id
-            {
+            if self.entries[i].name_len != 0 && self.entries[i].mount_id == id {
                 return Some(i);
             }
         }
@@ -184,11 +179,17 @@ impl MountTableInner {
         }
         let slot = self.free_slot().ok_or(ExofsError::NoSpace)?;
         let id = self.next_id;
-        self.next_id = self.next_id.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or(ExofsError::OffsetOverflow)?;
         let mut mp = mp;
         mp.mount_id = id;
         self.entries[slot] = mp;
-        self.count = self.count.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
+        self.count = self
+            .count
+            .checked_add(1)
+            .ok_or(ExofsError::OffsetOverflow)?;
         Ok(id)
     }
 
@@ -229,10 +230,10 @@ impl MountTable {
     /// Retourne le `mount_id` attribué.
     pub fn register(
         &self,
-        dir_oid:     ObjectId,
-        name:        &[u8],
+        dir_oid: ObjectId,
+        name: &[u8],
         mounted_oid: ObjectId,
-        flags:       u32,
+        flags: u32,
     ) -> ExofsResult<u32> {
         let mp = MountPoint::new(dir_oid, name, mounted_oid, flags, 0)?;
         let mut guard = self.inner.lock();
@@ -256,15 +257,15 @@ impl MountTable {
     /// Retourne l'OID monté si trouvé.
     pub fn lookup_mount(&self, dir_oid: &ObjectId) -> Option<ObjectId> {
         let guard = self.inner.lock();
-        guard.find_by_dir(dir_oid)
+        guard
+            .find_by_dir(dir_oid)
             .map(|i| guard.entries[i].mounted_oid.clone())
     }
 
     /// Retourne une copie clonée de l'entrée pour `dir_oid`.
     pub fn get_entry(&self, dir_oid: &ObjectId) -> Option<MountPoint> {
         let guard = self.inner.lock();
-        guard.find_by_dir(dir_oid)
-            .map(|i| guard.entries[i].clone())
+        guard.find_by_dir(dir_oid).map(|i| guard.entries[i].clone())
     }
 
     /// Nombre de montages actifs.
@@ -276,7 +277,7 @@ impl MountTable {
     pub fn is_readonly(&self, dir_oid: &ObjectId) -> bool {
         let guard = self.inner.lock();
         match guard.find_by_dir(dir_oid) {
-            None    => false,
+            None => false,
             Some(i) => guard.entries[i].is_readonly(),
         }
     }
@@ -320,10 +321,10 @@ pub static MOUNT_TABLE: MountTable = MountTable::new_const();
 /// Enregistre un point de montage dans la table globale.
 #[inline]
 pub fn register_mount(
-    dir_oid:     ObjectId,
-    name:        &[u8],
+    dir_oid: ObjectId,
+    name: &[u8],
     mounted_oid: ObjectId,
-    flags:       u32,
+    flags: u32,
 ) -> ExofsResult<u32> {
     MOUNT_TABLE.register(dir_oid, name, mounted_oid, flags)
 }
@@ -354,45 +355,57 @@ pub fn is_mount_point(dir_oid: &ObjectId) -> bool {
 mod tests {
     use super::*;
 
-    fn oid(b: u8) -> ObjectId { let mut a = [0u8; 32]; a[0] = b; ObjectId(a) }
+    fn oid(b: u8) -> ObjectId {
+        let mut a = [0u8; 32];
+        a[0] = b;
+        ObjectId(a)
+    }
 
-    #[test] fn test_register_lookup() {
+    #[test]
+    fn test_register_lookup() {
         let tbl = MountTable::new_const();
         tbl.register(oid(1), b"mnt", oid(99), 0).unwrap();
         let r = tbl.lookup_mount(&oid(1)).unwrap();
         assert_eq!(r.0[0], 99);
     }
 
-    #[test] fn test_unregister() {
+    #[test]
+    fn test_unregister() {
         let tbl = MountTable::new_const();
         tbl.register(oid(2), b"mnt2", oid(88), 0).unwrap();
         tbl.unregister_by_dir(&oid(2)).unwrap();
         assert!(tbl.lookup_mount(&oid(2)).is_none());
     }
 
-    #[test] fn test_readonly_flag() {
+    #[test]
+    fn test_readonly_flag() {
         let tbl = MountTable::new_const();
-        tbl.register(oid(3), b"ro", oid(77), MOUNT_FLAG_READONLY).unwrap();
+        tbl.register(oid(3), b"ro", oid(77), MOUNT_FLAG_READONLY)
+            .unwrap();
         assert!(tbl.is_readonly(&oid(3)));
     }
 
-    #[test] fn test_table_full() {
+    #[test]
+    fn test_table_full() {
         let tbl = MountTable::new_const();
         for i in 0u8..64 {
-            tbl.register(oid(i), b"x", oid(i.wrapping_add(100)), 0).unwrap();
+            tbl.register(oid(i), b"x", oid(i.wrapping_add(100)), 0)
+                .unwrap();
         }
         let extra = tbl.register(oid(200), b"z", oid(201), 0);
         assert!(extra.is_err());
     }
 
-    #[test] fn test_count() {
+    #[test]
+    fn test_count() {
         let tbl = MountTable::new_const();
         tbl.register(oid(5), b"a", oid(50), 0).unwrap();
         tbl.register(oid(6), b"b", oid(60), 0).unwrap();
         assert_eq!(tbl.count(), 2);
     }
 
-    #[test] fn test_flush() {
+    #[test]
+    fn test_flush() {
         let tbl = MountTable::new_const();
         tbl.register(oid(7), b"c", oid(70), 0).unwrap();
         tbl.flush();

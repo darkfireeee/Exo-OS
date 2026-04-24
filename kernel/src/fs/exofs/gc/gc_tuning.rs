@@ -14,9 +14,8 @@
 //   ARITH-02 : saturation sur tous les calculs
 // ==============================================================================
 
-
 use core::fmt;
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::fs::exofs::gc::gc_metrics::GcMetricsSnapshot;
 use crate::scheduler::sync::spinlock::SpinLock;
@@ -59,15 +58,15 @@ pub const GC_URGENT_MAX_PASSES: u32 = 16;
 #[repr(u8)]
 pub enum GcTriggerReason {
     /// Espace libre trop bas.
-    LowFreeSpace  = 0,
+    LowFreeSpace = 0,
     /// Timer periodique.
     PeriodicTimer = 1,
     /// GC lag trop eleve.
-    HighLag       = 2,
+    HighLag = 2,
     /// Demande explicite (syscall SYS_EXOFS_GC_TRIGGER = 514).
-    UserRequest   = 3,
+    UserRequest = 3,
     /// Demarrage initial.
-    Bootstrap     = 4,
+    Bootstrap = 4,
     /// Pression memoire kernel.
     MemoryPressure = 5,
 }
@@ -75,11 +74,11 @@ pub enum GcTriggerReason {
 impl GcTriggerReason {
     pub fn name(self) -> &'static str {
         match self {
-            GcTriggerReason::LowFreeSpace   => "LowFreeSpace",
-            GcTriggerReason::PeriodicTimer  => "PeriodicTimer",
-            GcTriggerReason::HighLag        => "HighLag",
-            GcTriggerReason::UserRequest    => "UserRequest",
-            GcTriggerReason::Bootstrap      => "Bootstrap",
+            GcTriggerReason::LowFreeSpace => "LowFreeSpace",
+            GcTriggerReason::PeriodicTimer => "PeriodicTimer",
+            GcTriggerReason::HighLag => "HighLag",
+            GcTriggerReason::UserRequest => "UserRequest",
+            GcTriggerReason::Bootstrap => "Bootstrap",
             GcTriggerReason::MemoryPressure => "MemoryPressure",
         }
     }
@@ -88,11 +87,11 @@ impl GcTriggerReason {
     pub fn priority(self) -> u32 {
         match self {
             GcTriggerReason::MemoryPressure => 5,
-            GcTriggerReason::LowFreeSpace   => 4,
-            GcTriggerReason::HighLag        => 3,
-            GcTriggerReason::UserRequest    => 2,
-            GcTriggerReason::PeriodicTimer  => 1,
-            GcTriggerReason::Bootstrap      => 0,
+            GcTriggerReason::LowFreeSpace => 4,
+            GcTriggerReason::HighLag => 3,
+            GcTriggerReason::UserRequest => 2,
+            GcTriggerReason::PeriodicTimer => 1,
+            GcTriggerReason::Bootstrap => 0,
         }
     }
 }
@@ -115,13 +114,13 @@ pub struct GcTuningParams {
     /// Intervalle timer en ticks logiques.
     pub timer_interval_ticks: u64,
     /// Aggressivite (0..=100) : influence la profondeur de scan.
-    pub aggressiveness:       u32,
+    pub aggressiveness: u32,
     /// Lag max acceptable en epochs.
-    pub max_lag_epochs:       u64,
+    pub max_lag_epochs: u64,
     /// Max passes consecutives en mode urgent.
-    pub urgent_max_passes:    u32,
+    pub urgent_max_passes: u32,
     /// true : mode urgence actif (espace critique).
-    pub urgent_mode:          bool,
+    pub urgent_mode: bool,
 }
 
 impl Default for GcTuningParams {
@@ -129,10 +128,10 @@ impl Default for GcTuningParams {
         Self {
             free_space_threshold: GC_FREE_SPACE_THRESHOLD_DEFAULT,
             timer_interval_ticks: GC_TIMER_INTERVAL_DEFAULT_TICKS,
-            aggressiveness:       GC_AGGRESSIVENESS_DEFAULT,
-            max_lag_epochs:       GC_MAX_LAG_EPOCHS,
-            urgent_max_passes:    GC_URGENT_MAX_PASSES,
-            urgent_mode:          false,
+            aggressiveness: GC_AGGRESSIVENESS_DEFAULT,
+            max_lag_epochs: GC_MAX_LAG_EPOCHS,
+            urgent_max_passes: GC_URGENT_MAX_PASSES,
+            urgent_mode: false,
         }
     }
 }
@@ -156,15 +155,15 @@ impl GcTuningParams {
 #[derive(Debug, Clone, Default)]
 pub struct GcSystemState {
     /// Pourcentage d'espace disque libre (0..=100).
-    pub free_space_pct:    u32,
+    pub free_space_pct: u32,
     /// Lag GC en epochs (current_epoch - oldest_uncollected).
-    pub gc_lag_epochs:     u64,
+    pub gc_lag_epochs: u64,
     /// Charge CPU en pourcent (0..=100).
-    pub cpu_load_pct:      u32,
+    pub cpu_load_pct: u32,
     /// Pression memoire : true si l'allocateur signale une pression elevee.
-    pub memory_pressure:   bool,
+    pub memory_pressure: bool,
     /// Ticks logiques depuis la derniere passe GC.
-    pub ticks_since_pass:  u64,
+    pub ticks_since_pass: u64,
 }
 
 // ==============================================================================
@@ -183,29 +182,29 @@ pub struct GcAutoTuner {
 }
 
 struct GcAutoTunerInner {
-    params:         GcTuningParams,
-    last_reason:    Option<GcTriggerReason>,
-    tune_count:     u64,
+    params: GcTuningParams,
+    last_reason: Option<GcTriggerReason>,
+    tune_count: u64,
 }
 
 impl GcAutoTuner {
     pub const fn new() -> Self {
         Self {
             inner: SpinLock::new(GcAutoTunerInner {
-                params:      GcTuningParams {
+                params: GcTuningParams {
                     free_space_threshold: GC_FREE_SPACE_THRESHOLD_DEFAULT,
                     timer_interval_ticks: GC_TIMER_INTERVAL_DEFAULT_TICKS,
-                    aggressiveness:       GC_AGGRESSIVENESS_DEFAULT,
-                    max_lag_epochs:       GC_MAX_LAG_EPOCHS,
-                    urgent_max_passes:    GC_URGENT_MAX_PASSES,
-                    urgent_mode:          false,
+                    aggressiveness: GC_AGGRESSIVENESS_DEFAULT,
+                    max_lag_epochs: GC_MAX_LAG_EPOCHS,
+                    urgent_max_passes: GC_URGENT_MAX_PASSES,
+                    urgent_mode: false,
                 },
                 last_reason: None,
-                tune_count:  0,
+                tune_count: 0,
             }),
-            urgent_passes:  AtomicU32::new(0),
+            urgent_passes: AtomicU32::new(0),
             last_tune_tick: AtomicU64::new(0),
-            force_trigger:  AtomicBool::new(false),
+            force_trigger: AtomicBool::new(false),
         }
     }
 
@@ -234,24 +233,28 @@ impl GcAutoTuner {
             // Mode urgence : aggressivite maximale, seuil abaisse.
             g.params.aggressiveness = GC_AGGRESSIVENESS_MAX;
             g.params.free_space_threshold = 40;
-            g.params.timer_interval_ticks =
-                GC_TIMER_INTERVAL_DEFAULT_TICKS / 4;
+            g.params.timer_interval_ticks = GC_TIMER_INTERVAL_DEFAULT_TICKS / 4;
         } else if state.free_space_pct < g.params.free_space_threshold {
             // Espace faible mais pas critique.
-            g.params.aggressiveness = g.params.aggressiveness
+            g.params.aggressiveness = g
+                .params
+                .aggressiveness
                 .saturating_add(10)
                 .min(GC_AGGRESSIVENESS_MAX);
-            g.params.timer_interval_ticks =
-                GC_TIMER_INTERVAL_DEFAULT_TICKS / 2;
+            g.params.timer_interval_ticks = GC_TIMER_INTERVAL_DEFAULT_TICKS / 2;
         } else {
             // Etat normal : potentiellement reduire l'aggressivite.
             let ratio = metrics.collect_ratio_x100();
             if ratio < GC_MIN_USEFUL_COLLECT_RATIO as u64 {
                 // GC peu utile : espacer les passes.
-                g.params.aggressiveness = g.params.aggressiveness
+                g.params.aggressiveness = g
+                    .params
+                    .aggressiveness
                     .saturating_sub(5)
                     .max(GC_AGGRESSIVENESS_MIN);
-                g.params.timer_interval_ticks = g.params.timer_interval_ticks
+                g.params.timer_interval_ticks = g
+                    .params
+                    .timer_interval_ticks
                     .saturating_add(GC_TIMER_INTERVAL_DEFAULT_TICKS / 4)
                     .min(GC_TIMER_INTERVAL_DEFAULT_TICKS * 4);
             } else {
@@ -270,7 +273,7 @@ impl GcAutoTuner {
     /// GC-05 : non bloquant, lecture atomique des parametres.
     pub fn should_trigger(
         &self,
-        state:       &GcSystemState,
+        state: &GcSystemState,
         current_tick: u64,
     ) -> Option<GcTriggerReason> {
         // Declenchement force explicite.
@@ -343,7 +346,11 @@ impl GcAutoTuner {
 
     /// Valide les paramètres actuels.
     pub fn validate_params(&self) -> Result<(), ()> {
-        if self.inner.lock().params.validate() { Ok(()) } else { Err(()) }
+        if self.inner.lock().params.validate() {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 
     /// Intervalle du timer en ticks.
@@ -369,10 +376,10 @@ mod tests {
 
     fn default_state() -> GcSystemState {
         GcSystemState {
-            free_space_pct:   50,
-            gc_lag_epochs:    1,
-            cpu_load_pct:     20,
-            memory_pressure:  false,
+            free_space_pct: 50,
+            gc_lag_epochs: 1,
+            cpu_load_pct: 20,
+            memory_pressure: false,
             ticks_since_pass: 1000,
         }
     }
@@ -445,7 +452,11 @@ mod tests {
 
     #[test]
     fn test_trigger_reason_priority() {
-        assert!(GcTriggerReason::MemoryPressure.priority() > GcTriggerReason::LowFreeSpace.priority());
-        assert!(GcTriggerReason::LowFreeSpace.priority() > GcTriggerReason::PeriodicTimer.priority());
+        assert!(
+            GcTriggerReason::MemoryPressure.priority() > GcTriggerReason::LowFreeSpace.priority()
+        );
+        assert!(
+            GcTriggerReason::LowFreeSpace.priority() > GcTriggerReason::PeriodicTimer.priority()
+        );
     }
 }

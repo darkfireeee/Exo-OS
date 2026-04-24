@@ -14,8 +14,8 @@
 // RÈGLE EVENT-01 : pas de Vec, pas de Box. Les tables sont statiques.
 // RÈGLE EVENT-02 : le spin-wait inclut un compteur de timeout.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::IpcError;
 
@@ -205,7 +205,11 @@ unsafe impl Send for IpcCountingEvent {}
 
 impl IpcCountingEvent {
     pub const fn new(id: u32, initial: u32, max_count: u32) -> Self {
-        let cap = if max_count > MAX_EVENT_COUNT { MAX_EVENT_COUNT } else { max_count };
+        let cap = if max_count > MAX_EVENT_COUNT {
+            MAX_EVENT_COUNT
+        } else {
+            max_count
+        };
         let init = if initial > cap { cap } else { initial };
         Self {
             id,
@@ -279,12 +283,11 @@ impl IpcCountingEvent {
             if old == 0 {
                 return false;
             }
-            if self.count.compare_exchange_weak(
-                old,
-                old - 1,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            ).is_ok() {
+            if self
+                .count
+                .compare_exchange_weak(old, old - 1, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
                 return true;
             }
         }
@@ -347,12 +350,11 @@ impl IpcEventTable {
     fn alloc(&self, id: u32, mode: EventMode) -> Option<usize> {
         for i in 0..MAX_IPC_EVENTS {
             if !self.slots[i].occupied.load(Ordering::Relaxed) {
-                if self.slots[i].occupied.compare_exchange(
-                    false,
-                    true,
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                ).is_ok() {
+                if self.slots[i]
+                    .occupied
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
                     let ptr = self.slots[i].event.as_ptr() as *mut IpcEvent;
                     // SAFETY: CAS AcqRel garantit l'exclusivité; MaybeUninit<IpcEvent> write-once.
                     unsafe {
@@ -381,12 +383,11 @@ impl IpcEventTable {
         if idx >= MAX_IPC_EVENTS {
             return false;
         }
-        if self.slots[idx].occupied.compare_exchange(
-            true,
-            false,
-            Ordering::AcqRel,
-            Ordering::Relaxed,
-        ).is_ok() {
+        if self.slots[idx]
+            .occupied
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
             self.count.fetch_sub(1, Ordering::Relaxed);
             return true;
         }
@@ -413,12 +414,18 @@ pub fn event_create(id: u32, mode: EventMode) -> Option<usize> {
 
 /// Positionne l'événement `idx`.
 pub fn event_set(idx: usize) -> Result<(), IpcError> {
-    IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle).map(|e| e.set())
+    IPC_EVENT_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)
+        .map(|e| e.set())
 }
 
 /// Efface l'événement `idx`.
 pub fn event_clear(idx: usize) -> Result<(), IpcError> {
-    IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle).map(|e| e.clear())
+    IPC_EVENT_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)
+        .map(|e| e.clear())
 }
 
 /// Vérifie l'état de l'événement sans attendre.
@@ -428,7 +435,10 @@ pub fn event_is_set(idx: usize) -> Option<bool> {
 
 /// Attend l'événement `idx` avec spin-max.
 pub fn event_wait(idx: usize, spin_max: u64) -> Result<(), IpcError> {
-    IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?.wait(spin_max)
+    IPC_EVENT_TABLE
+        .get(idx)
+        .ok_or(IpcError::InvalidHandle)?
+        .wait(spin_max)
 }
 
 /// Détruit un événement (libère son slot).

@@ -14,12 +14,11 @@
 //! - **ARITH-02** : `checked_add` / `wrapping_add` sur tous les calculs d index.
 //! - **OOM-02** : pas d allocation heap — tous les buckets sont inline.
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
+use super::path_component::{siphash_keyed, PathComponent, NAME_MAX};
 use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
-use super::path_component::{PathComponent, NAME_MAX, siphash_keyed};
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -38,34 +37,41 @@ const DELETED_HASH: u64 = u64::MAX;
 #[derive(Clone)]
 pub struct TreeEntry {
     /// Hash FNV-1a du nom (0 = vide, u64::MAX = supprimé).
-    pub hash:   u64,
+    pub hash: u64,
     /// Identifiant d objet associé.
-    pub oid:    ObjectId,
+    pub oid: ObjectId,
     /// Nom du composant (stockage inline, jamais heap).
-    pub name:   [u8; NAME_MAX + 1],
+    pub name: [u8; NAME_MAX + 1],
     pub name_len: u16,
     /// Kind brut (0 = Directory, 1 = File, 2 = Symlink, …).
-    pub kind:   u8,
+    pub kind: u8,
 }
 
 impl TreeEntry {
     /// Crée un bucket vide.
     const fn empty() -> Self {
         TreeEntry {
-            hash:     EMPTY_HASH,
-            oid:      ObjectId::INVALID,
-            name:     [0u8; NAME_MAX + 1],
+            hash: EMPTY_HASH,
+            oid: ObjectId::INVALID,
+            name: [0u8; NAME_MAX + 1],
             name_len: 0,
-            kind:     0,
+            kind: 0,
         }
     }
 
     /// `true` si le slot est libre.
-    #[inline] pub fn is_empty(&self)   -> bool { self.hash == EMPTY_HASH }
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.hash == EMPTY_HASH
+    }
     /// `true` si le slot a été supprimé (tombstone).
-    #[inline] pub fn is_deleted(&self) -> bool { self.hash == DELETED_HASH }
+    #[inline]
+    pub fn is_deleted(&self) -> bool {
+        self.hash == DELETED_HASH
+    }
     /// `true` si le slot est occupé.
-    #[inline] pub fn is_occupied(&self) -> bool {
+    #[inline]
+    pub fn is_occupied(&self) -> bool {
         self.hash != EMPTY_HASH && self.hash != DELETED_HASH
     }
 
@@ -89,9 +95,12 @@ impl core::fmt::Debug for TreeEntry {
         } else if self.is_deleted() {
             write!(f, "<deleted>")
         } else {
-            write!(f, "TreeEntry {{ name: {:?}, kind: {} }}",
+            write!(
+                f,
+                "TreeEntry {{ name: {:?}, kind: {} }}",
                 core::str::from_utf8(self.name_bytes()).unwrap_or("?"),
-                self.kind)
+                self.kind
+            )
         }
     }
 }
@@ -102,20 +111,20 @@ impl core::fmt::Debug for TreeEntry {
 ///
 /// Taille fixe, pas d allocation dynamique. Max [`TREE_MAX_LOAD`] entrées.
 pub struct PathIndexTree {
-    buckets:    [TreeEntry; TREE_BUCKETS],
-    count:      usize,
+    buckets: [TreeEntry; TREE_BUCKETS],
+    count: usize,
     /// Nombre de tombstones actifs (aide à décider un rebuild).
     tombstones: usize,
     /// Clé secrète SipHash-2-4 (PATH-01). Générée aléatoirement au montage.
-    key:        [u8; 16],
+    key: [u8; 16],
 }
 
 impl PathIndexTree {
     /// Crée une table vide avec clé aléatoire fournie au montage (PATH-01).
     pub fn new_with_key(key: [u8; 16]) -> Self {
         PathIndexTree {
-            buckets:    core::array::from_fn(|_| TreeEntry::empty()),
-            count:      0,
+            buckets: core::array::from_fn(|_| TreeEntry::empty()),
+            count: 0,
             tombstones: 0,
             key,
         }
@@ -123,14 +132,25 @@ impl PathIndexTree {
 
     /// Crée une table vide avec clé nulle (usage tests / pré-montage uniquement).
     /// ⚠️ PATH-02 : clé nulle = vulnérable HashDoS. Utiliser new_with_key() en production.
-    pub fn new() -> Self { Self::new_with_key([0u8; 16]) }
+    pub fn new() -> Self {
+        Self::new_with_key([0u8; 16])
+    }
 
     /// Nombre d entrées actives.
-    #[inline] pub fn len(&self) -> usize { self.count }
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.count
+    }
     /// `true` si aucune entrée.
-    #[inline] pub fn is_empty(&self) -> bool { self.count == 0 }
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
     /// `true` si la table est pleine (facteur de charge atteint).
-    #[inline] pub fn is_full(&self) -> bool { self.count >= TREE_MAX_LOAD }
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.count >= TREE_MAX_LOAD
+    }
 
     /// Insère une entrée dans la table.
     ///
@@ -139,9 +159,11 @@ impl PathIndexTree {
     /// - [`ExofsError::PathTooLong`] si le nom dépasse `NAME_MAX`.
     /// - [`ExofsError::ObjectAlreadyExists`] si une entrée avec ce nom existe déjà.
     pub fn insert(&mut self, comp: &PathComponent, oid: ObjectId, kind: u8) -> ExofsResult<()> {
-        if self.is_full() { return Err(ExofsError::NoSpace); }
-        let name  = comp.as_bytes();
-        let hash  = Self::safe_hash(siphash_keyed(&self.key, name));
+        if self.is_full() {
+            return Err(ExofsError::NoSpace);
+        }
+        let name = comp.as_bytes();
+        let hash = Self::safe_hash(siphash_keyed(&self.key, name));
         let start = (hash as usize) & (TREE_BUCKETS - 1);
         let mut first_tomb: Option<usize> = None;
         let mut idx = start;
@@ -152,14 +174,19 @@ impl PathIndexTree {
                 // Insérer ici (ou au tombstone si trouvé plus tôt).
                 let dest = first_tomb.unwrap_or(idx);
                 self.write_entry(dest, hash, oid, name, kind);
-                self.count = self.count.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
+                self.count = self
+                    .count
+                    .checked_add(1)
+                    .ok_or(ExofsError::OffsetOverflow)?;
                 if first_tomb.is_some() {
                     self.tombstones = self.tombstones.saturating_sub(1);
                 }
                 return Ok(());
             }
             if b.is_deleted() {
-                if first_tomb.is_none() { first_tomb = Some(idx); }
+                if first_tomb.is_none() {
+                    first_tomb = Some(idx);
+                }
             } else if b.matches(hash, name) {
                 return Err(ExofsError::ObjectAlreadyExists);
             }
@@ -183,8 +210,12 @@ impl PathIndexTree {
         let mut idx = start;
         for _ in 0..TREE_BUCKETS {
             let b = &self.buckets[idx];
-            if b.is_empty() { return None; }
-            if b.matches(hash, name) { return Some(b); }
+            if b.is_empty() {
+                return None;
+            }
+            if b.matches(hash, name) {
+                return Some(b);
+            }
             idx = idx.wrapping_add(1) & (TREE_BUCKETS - 1);
         }
         None
@@ -201,11 +232,15 @@ impl PathIndexTree {
         let mut idx = start;
         for _ in 0..TREE_BUCKETS {
             let b = &self.buckets[idx];
-            if b.is_empty() { return Err(ExofsError::ObjectNotFound); }
+            if b.is_empty() {
+                return Err(ExofsError::ObjectNotFound);
+            }
             if b.matches(hash, name) {
                 self.buckets[idx].hash = DELETED_HASH;
                 self.count = self.count.saturating_sub(1);
-                self.tombstones = self.tombstones.checked_add(1)
+                self.tombstones = self
+                    .tombstones
+                    .checked_add(1)
                     .ok_or(ExofsError::OffsetOverflow)?;
                 return Ok(());
             }
@@ -225,7 +260,9 @@ impl PathIndexTree {
         let mut idx = start;
         for _ in 0..TREE_BUCKETS {
             let b = &mut self.buckets[idx];
-            if b.is_empty() { return Err(ExofsError::ObjectNotFound); }
+            if b.is_empty() {
+                return Err(ExofsError::ObjectNotFound);
+            }
             if b.is_occupied() && b.hash == hash && b.name_bytes() == name {
                 b.oid = new_oid;
                 return Ok(());
@@ -277,7 +314,9 @@ impl PathIndexTree {
 
     /// Vide la table.
     pub fn clear(&mut self) {
-        for b in &mut self.buckets { *b = TreeEntry::empty(); }
+        for b in &mut self.buckets {
+            *b = TreeEntry::empty();
+        }
         self.count = 0;
         self.tombstones = 0;
     }
@@ -295,13 +334,18 @@ impl PathIndexTree {
                 let b = &self.buckets[idx];
                 if b.is_empty() || b.is_deleted() {
                     self.write_entry(idx, safe_hash, oid.clone(), name, kind);
-                    self.count = self.count.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
+                    self.count = self
+                        .count
+                        .checked_add(1)
+                        .ok_or(ExofsError::OffsetOverflow)?;
                     inserted = true;
                     break;
                 }
                 idx = idx.wrapping_add(1) & (TREE_BUCKETS - 1);
             }
-            if !inserted { return Err(ExofsError::NoSpace); }
+            if !inserted {
+                return Err(ExofsError::NoSpace);
+            }
         }
         Ok(())
     }
@@ -311,13 +355,17 @@ impl PathIndexTree {
     /// Transforme le hash brut en hash safe (évite 0 et u64::MAX réservés).
     #[inline]
     fn safe_hash(h: u64) -> u64 {
-        if h == EMPTY_HASH || h == DELETED_HASH { h.wrapping_add(1) } else { h }
+        if h == EMPTY_HASH || h == DELETED_HASH {
+            h.wrapping_add(1)
+        } else {
+            h
+        }
     }
 
     fn write_entry(&mut self, idx: usize, hash: u64, oid: ObjectId, name: &[u8], kind: u8) {
         let b = &mut self.buckets[idx];
         b.hash = hash;
-        b.oid  = oid;
+        b.oid = oid;
         b.name_len = name.len() as u16;
         b.name[..name.len()].copy_from_slice(name);
         b.kind = kind;
@@ -325,7 +373,9 @@ impl PathIndexTree {
 }
 
 impl Default for PathIndexTree {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Itérateur ─────────────────────────────────────────────────────────────────
@@ -333,7 +383,7 @@ impl Default for PathIndexTree {
 /// Itérateur sur les entrées occupées de [`PathIndexTree`].
 pub struct TreeIter<'a> {
     tree: &'a PathIndexTree,
-    idx:  usize,
+    idx: usize,
 }
 
 impl<'a> Iterator for TreeIter<'a> {
@@ -342,7 +392,9 @@ impl<'a> Iterator for TreeIter<'a> {
         while self.idx < TREE_BUCKETS {
             let b = &self.tree.buckets[self.idx];
             self.idx = self.idx.wrapping_add(1);
-            if b.is_occupied() { return Some(b); }
+            if b.is_occupied() {
+                return Some(b);
+            }
         }
         None
     }
@@ -357,8 +409,8 @@ pub struct TreeEntryRef<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::path_component::validate_component;
+    use super::*;
 
     fn fake_oid(b: u8) -> ObjectId {
         let mut arr = [0u8; 32];
@@ -366,7 +418,8 @@ mod tests {
         ObjectId(arr)
     }
 
-    #[test] fn test_insert_find() {
+    #[test]
+    fn test_insert_find() {
         let mut t = PathIndexTree::new();
         let c = validate_component(b"hello").unwrap();
         t.insert(&c, fake_oid(1), 0).unwrap();
@@ -374,13 +427,18 @@ mod tests {
         assert_eq!(e.name_bytes(), b"hello");
         assert_eq!(e.oid.0[0], 1);
     }
-    #[test] fn test_duplicate_insert() {
+    #[test]
+    fn test_duplicate_insert() {
         let mut t = PathIndexTree::new();
         let c = validate_component(b"dup").unwrap();
         t.insert(&c, fake_oid(1), 0).unwrap();
-        assert!(matches!(t.insert(&c, fake_oid(2), 0), Err(ExofsError::ObjectAlreadyExists)));
+        assert!(matches!(
+            t.insert(&c, fake_oid(2), 0),
+            Err(ExofsError::ObjectAlreadyExists)
+        ));
     }
-    #[test] fn test_remove() {
+    #[test]
+    fn test_remove() {
         let mut t = PathIndexTree::new();
         let c = validate_component(b"bye").unwrap();
         t.insert(&c, fake_oid(1), 0).unwrap();
@@ -388,12 +446,14 @@ mod tests {
         assert!(t.find(&c).is_none());
         assert_eq!(t.len(), 0);
     }
-    #[test] fn test_remove_not_found() {
+    #[test]
+    fn test_remove_not_found() {
         let mut t = PathIndexTree::new();
         let c = validate_component(b"x").unwrap();
         assert!(matches!(t.remove(&c), Err(ExofsError::ObjectNotFound)));
     }
-    #[test] fn test_full() {
+    #[test]
+    fn test_full() {
         let mut t = PathIndexTree::new();
         for i in 0u8..=191 {
             let name = [b'a' + (i % 26), b'0' + (i / 26)];
@@ -401,9 +461,13 @@ mod tests {
             t.insert(&c, fake_oid(i), 0).unwrap();
         }
         let extra = validate_component(b"extra").unwrap();
-        assert!(matches!(t.insert(&extra, fake_oid(0), 0), Err(ExofsError::NoSpace)));
+        assert!(matches!(
+            t.insert(&extra, fake_oid(0), 0),
+            Err(ExofsError::NoSpace)
+        ));
     }
-    #[test] fn test_compact() {
+    #[test]
+    fn test_compact() {
         let mut t = PathIndexTree::new();
         for i in 0u8..10 {
             let name = [b'a' + i];
@@ -416,7 +480,8 @@ mod tests {
         assert_eq!(t.len(), 9);
         assert_eq!(t.tombstones, 0);
     }
-    #[test] fn test_iter_count() {
+    #[test]
+    fn test_iter_count() {
         let mut t = PathIndexTree::new();
         for i in 0u8..5 {
             let name = [b'x' + i];
@@ -425,7 +490,8 @@ mod tests {
         }
         assert_eq!(t.iter().count(), 5);
     }
-    #[test] fn test_update_oid() {
+    #[test]
+    fn test_update_oid() {
         let mut t = PathIndexTree::new();
         let c = validate_component(b"upd").unwrap();
         t.insert(&c, fake_oid(1), 0).unwrap();

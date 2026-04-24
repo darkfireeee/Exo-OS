@@ -21,11 +21,10 @@ mod xdp;
 use dpdk_bridge::{BackendMode, DpdkBridge};
 use socket::api::{
     read_u16, read_u32, read_u64, recv_request, register_endpoint, send_heartbeat, send_reply,
-    NetworkReply, NetworkRequest, NETWORK_MSG_BACKEND_SET, NETWORK_MSG_BIND,
-    NETWORK_MSG_CLOSE, NETWORK_MSG_CONNECT, NETWORK_MSG_DRIVER_ATTACH, NETWORK_MSG_HEARTBEAT,
-    NETWORK_MSG_ICMP_ECHO, NETWORK_MSG_LINK_SET, NETWORK_MSG_RECV, NETWORK_MSG_ROUTE_ADD,
-    NETWORK_MSG_ROUTE_QUERY, NETWORK_MSG_SEND, NETWORK_MSG_SOCKET_OPEN, NETWORK_MSG_STATS,
-    NETWORK_MSG_XDP_ATTACH,
+    NetworkReply, NetworkRequest, NETWORK_MSG_BACKEND_SET, NETWORK_MSG_BIND, NETWORK_MSG_CLOSE,
+    NETWORK_MSG_CONNECT, NETWORK_MSG_DRIVER_ATTACH, NETWORK_MSG_HEARTBEAT, NETWORK_MSG_ICMP_ECHO,
+    NETWORK_MSG_LINK_SET, NETWORK_MSG_RECV, NETWORK_MSG_ROUTE_ADD, NETWORK_MSG_ROUTE_QUERY,
+    NETWORK_MSG_SEND, NETWORK_MSG_SOCKET_OPEN, NETWORK_MSG_STATS, NETWORK_MSG_XDP_ATTACH,
 };
 use socket::bsd_socket::{SocketKind, SocketTable};
 use socket::io_uring_sock::{InflightQueue, OperationKind};
@@ -106,7 +105,10 @@ impl NetworkService {
             local_port = self.udp_ports.allocate();
         }
 
-        match self.sockets.bind(sender_pid, handle, local_addr, local_port) {
+        match self
+            .sockets
+            .bind(sender_pid, handle, local_addr, local_port)
+        {
             Ok(snapshot) => NetworkReply::ok(
                 snapshot.handle,
                 snapshot.local_addr as u64,
@@ -141,12 +143,18 @@ impl NetworkService {
         };
         if socket.local_port == 0 {
             let port = self.udp_ports.allocate();
-            if let Err(err) = self.sockets.assign_ephemeral_port(sender_pid, handle, socket.local_addr, port) {
+            if let Err(err) =
+                self.sockets
+                    .assign_ephemeral_port(sender_pid, handle, socket.local_addr, port)
+            {
                 return NetworkReply::error(err);
             }
         }
 
-        match self.sockets.connect(sender_pid, handle, remote_addr, remote_port) {
+        match self
+            .sockets
+            .connect(sender_pid, handle, remote_addr, remote_port)
+        {
             Ok(snapshot) => {
                 if snapshot.kind == SocketKind::Tcp {
                     self.tcp.activate(snapshot.handle);
@@ -224,7 +232,9 @@ impl NetworkService {
         }
 
         // Boucle locale minimale : un socket connecté reçoit une complétion bornée.
-        let _ = self.sockets.inject_rx(handle, len.min(self.udp_ports.budget().max_datagram));
+        let _ = self
+            .sockets
+            .inject_rx(handle, len.min(self.udp_ports.budget().max_datagram));
 
         NetworkReply::ok(
             updated.handle,
@@ -282,7 +292,12 @@ impl NetworkService {
             Ok(snapshot) => {
                 self.tcp.close(handle);
                 let cancelled = self.inflight.cancel_handle(handle);
-                NetworkReply::ok(snapshot.handle, cancelled as u64, snapshot.tx_bytes, snapshot.flags)
+                NetworkReply::ok(
+                    snapshot.handle,
+                    cancelled as u64,
+                    snapshot.tx_bytes,
+                    snapshot.flags,
+                )
             }
             Err(err) => NetworkReply::error(err),
         }
@@ -318,7 +333,14 @@ impl NetworkService {
             Err(err) => return NetworkReply::error(err),
         };
 
-        match self.routes.add_route(destination, prefix_len, next_hop, metric, interface_id, flags) {
+        match self.routes.add_route(
+            destination,
+            prefix_len,
+            next_hop,
+            metric,
+            interface_id,
+            flags,
+        ) {
             Ok(route) => NetworkReply::ok(
                 route.destination as u64,
                 route.next_hop as u64,
@@ -391,7 +413,9 @@ impl NetworkService {
             snapshot.driver_pid as u64,
             snapshot.mtu as u64,
             mac_low64(snapshot.mac),
-            snapshot.link_state.as_u32() | (backend.mode.as_u32() << 8) | ((snapshot.queue_pairs as u32) << 16),
+            snapshot.link_state.as_u32()
+                | (backend.mode.as_u32() << 8)
+                | ((snapshot.queue_pairs as u32) << 16),
         )
     }
 
@@ -425,7 +449,8 @@ impl NetworkService {
             snapshot.driver_pid as u64,
             self.ethernet.snapshot().tx_frames,
             self.ethernet.snapshot().rx_frames,
-            snapshot.link_state.as_u32() | ((self.ethernet.snapshot().drop_frames.min(u32::MAX as u64) as u32) << 8),
+            snapshot.link_state.as_u32()
+                | ((self.ethernet.snapshot().drop_frames.min(u32::MAX as u64) as u32) << 8),
         )
     }
 
@@ -453,7 +478,9 @@ impl NetworkService {
         NetworkReply::ok(
             echo.token,
             target as u64,
-            ((latency_ms as u64) << 48) | ((echo.payload_len as u64) << 32) | echo.last_latency_ms as u64,
+            ((latency_ms as u64) << 48)
+                | ((echo.payload_len as u64) << 32)
+                | echo.last_latency_ms as u64,
             echo.completed_count.saturating_add(1) | (echo.sent_count.min(0xffff) << 16),
         )
     }
@@ -613,7 +640,9 @@ fn dispatch(request: &NetworkRequest) -> NetworkReply {
         NETWORK_MSG_CLOSE => service.handle_close(request.sender_pid, &request.payload),
         NETWORK_MSG_ROUTE_ADD => service.handle_route_add(request.sender_pid, &request.payload),
         NETWORK_MSG_ROUTE_QUERY => service.handle_route_query(&request.payload),
-        NETWORK_MSG_DRIVER_ATTACH => service.handle_driver_attach(request.sender_pid, &request.payload),
+        NETWORK_MSG_DRIVER_ATTACH => {
+            service.handle_driver_attach(request.sender_pid, &request.payload)
+        }
         NETWORK_MSG_LINK_SET => service.handle_link_set(request.sender_pid, &request.payload),
         NETWORK_MSG_ICMP_ECHO => service.handle_icmp_echo(&request.payload),
         NETWORK_MSG_STATS => service.handle_stats(request.sender_pid, &request.payload),
@@ -627,7 +656,9 @@ fn dispatch(request: &NetworkRequest) -> NetworkReply {
 fn panic(_info: &PanicInfo) -> ! {
     loop {
         // SAFETY: panic terminale pour un serveur no_std monothread.
-        unsafe { core::arch::asm!("hlt", options(nostack, nomem)); }
+        unsafe {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
     }
 }
 

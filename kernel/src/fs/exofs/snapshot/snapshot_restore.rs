@@ -9,15 +9,14 @@
 //!   WRITE-02 : vérifier bytes_written == expected
 //!   OOM-02   : try_reserve avant chaque push
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId, SnapshotId};
-use crate::fs::exofs::core::blob_id::verify_blob_id;
 use super::snapshot::flags;
 use super::snapshot_list::SNAPSHOT_LIST;
+use crate::fs::exofs::core::blob_id::verify_blob_id;
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult, SnapshotId};
 
 // ─────────────────────────────────────────────────────────────
 // Traits
@@ -59,7 +58,12 @@ pub struct RestoreOptions {
 
 impl Default for RestoreOptions {
     fn default() -> Self {
-        Self { verify_integrity: true, resilient: false, max_blobs: 0, skip_existing: false }
+        Self {
+            verify_integrity: true,
+            resilient: false,
+            max_blobs: 0,
+            skip_existing: false,
+        }
     }
 }
 
@@ -69,19 +73,19 @@ impl Default for RestoreOptions {
 
 #[derive(Debug, Clone)]
 pub struct RestoreResult {
-    pub snap_id:        SnapshotId,
-    pub n_blobs_ok:     u64,
-    pub n_blobs_error:  u64,
-    pub n_blobs_skip:   u64,
+    pub snap_id: SnapshotId,
+    pub n_blobs_ok: u64,
+    pub n_blobs_error: u64,
+    pub n_blobs_skip: u64,
     pub bytes_restored: u64,
-    pub errors:         Vec<RestoreError>,
-    pub truncated:      bool,
+    pub errors: Vec<RestoreError>,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct RestoreError {
     pub blob_id: BlobId,
-    pub kind:    RestoreErrorKind,
+    pub kind: RestoreErrorKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +106,9 @@ pub struct SnapshotRestore {
 
 impl SnapshotRestore {
     pub const fn new() -> Self {
-        Self { aborted: AtomicBool::new(false) }
+        Self {
+            aborted: AtomicBool::new(false),
+        }
     }
 
     // ── Point d'entrée ───────────────────────────────────────────────
@@ -111,9 +117,9 @@ impl SnapshotRestore {
     pub fn restore<S: SnapshotBlobSource, D: RestoreSink>(
         &self,
         snap_id: SnapshotId,
-        source:  &S,
-        dest:    &mut D,
-        opts:    RestoreOptions,
+        source: &S,
+        dest: &mut D,
+        opts: RestoreOptions,
     ) -> ExofsResult<RestoreResult> {
         // Vérifier que le snapshot existe
         let _snap_ref = SNAPSHOT_LIST.get_ref(snap_id)?;
@@ -140,18 +146,26 @@ impl SnapshotRestore {
     fn run_pipeline<S: SnapshotBlobSource, D: RestoreSink>(
         &self,
         snap_id: SnapshotId,
-        source:  &S,
-        dest:    &mut D,
-        opts:    RestoreOptions,
+        source: &S,
+        dest: &mut D,
+        opts: RestoreOptions,
     ) -> ExofsResult<RestoreResult> {
         let blob_ids = source.list_blobs(snap_id)?;
         let mut result = RestoreResult {
             snap_id,
-            n_blobs_ok: 0, n_blobs_error: 0, n_blobs_skip: 0,
-            bytes_restored: 0, errors: Vec::new(), truncated: false,
+            n_blobs_ok: 0,
+            n_blobs_error: 0,
+            n_blobs_skip: 0,
+            bytes_restored: 0,
+            errors: Vec::new(),
+            truncated: false,
         };
 
-        let limit = if opts.max_blobs > 0 { opts.max_blobs } else { usize::MAX };
+        let limit = if opts.max_blobs > 0 {
+            opts.max_blobs
+        } else {
+            usize::MAX
+        };
 
         for (i, blob_id) in blob_ids.iter().enumerate() {
             if self.aborted.load(Ordering::Acquire) {
@@ -170,8 +184,14 @@ impl SnapshotRestore {
                 }
                 Err(kind) => {
                     result.n_blobs_error += 1;
-                    result.errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-                    result.errors.push(RestoreError { blob_id: *blob_id, kind });
+                    result
+                        .errors
+                        .try_reserve(1)
+                        .map_err(|_| ExofsError::NoMemory)?;
+                    result.errors.push(RestoreError {
+                        blob_id: *blob_id,
+                        kind,
+                    });
                     if !opts.resilient {
                         dest.abort();
                         return Err(ExofsError::ChecksumMismatch);
@@ -195,12 +215,13 @@ impl SnapshotRestore {
         &self,
         blob_id: BlobId,
         snap_id: SnapshotId,
-        source:  &S,
-        dest:    &mut D,
-        opts:    RestoreOptions,
+        source: &S,
+        dest: &mut D,
+        opts: RestoreOptions,
     ) -> Result<usize, RestoreErrorKind> {
         // Lecture depuis la source
-        let data = source.read_blob(snap_id, blob_id)
+        let data = source
+            .read_blob(snap_id, blob_id)
             .map_err(|_| RestoreErrorKind::ReadFailed)?;
 
         // HASH-02 : vérifier l'intégrité sur données RAW
@@ -213,7 +234,8 @@ impl SnapshotRestore {
         let expected = data.len();
 
         // WRITE-02 : vérifier bytes_written == expected
-        let written = dest.write_blob(blob_id, &data)
+        let written = dest
+            .write_blob(blob_id, &data)
             .map_err(|_| RestoreErrorKind::WriteFailed)?;
         if written != expected {
             return Err(RestoreErrorKind::ShortWrite);
@@ -249,7 +271,12 @@ pub struct NullRestoreSink {
 }
 
 impl NullRestoreSink {
-    pub fn new() -> Self { Self { bytes_received: 0, blobs_received: 0 } }
+    pub fn new() -> Self {
+        Self {
+            bytes_received: 0,
+            blobs_received: 0,
+        }
+    }
 }
 
 impl RestoreSink for NullRestoreSink {
@@ -258,7 +285,9 @@ impl RestoreSink for NullRestoreSink {
         self.blobs_received += 1;
         Ok(data.len()) // WRITE-02 : retours corrects
     }
-    fn finalize(&mut self) -> ExofsResult<()> { Ok(()) }
+    fn finalize(&mut self) -> ExofsResult<()> {
+        Ok(())
+    }
     fn abort(&mut self) {}
 }
 
@@ -274,11 +303,19 @@ pub struct MemBlobSource {
 
 impl MemBlobSource {
     pub fn new() -> Self {
-        Self { entries: alloc::collections::BTreeMap::new(), snap_blobs: alloc::collections::BTreeMap::new() }
+        Self {
+            entries: alloc::collections::BTreeMap::new(),
+            snap_blobs: alloc::collections::BTreeMap::new(),
+        }
     }
 
     /// OOM-02 : try_reserve avant push
-    pub fn add_blob(&mut self, snap_id: SnapshotId, blob_id: BlobId, data: Vec<u8>) -> ExofsResult<()> {
+    pub fn add_blob(
+        &mut self,
+        snap_id: SnapshotId,
+        blob_id: BlobId,
+        data: Vec<u8>,
+    ) -> ExofsResult<()> {
         self.entries.insert(*blob_id.as_bytes(), data);
         let list = self.snap_blobs.entry(snap_id.0).or_insert_with(Vec::new);
         list.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
@@ -289,7 +326,8 @@ impl MemBlobSource {
 
 impl SnapshotBlobSource for MemBlobSource {
     fn read_blob(&self, _: SnapshotId, blob_id: BlobId) -> ExofsResult<Vec<u8>> {
-        self.entries.get(blob_id.as_bytes())
+        self.entries
+            .get(blob_id.as_bytes())
             .cloned()
             .ok_or(ExofsError::NotFound)
     }
@@ -305,20 +343,27 @@ impl SnapshotBlobSource for MemBlobSource {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
-    use crate::fs::exofs::core::blob_id::compute_blob_id;
-    use super::super::snapshot::{Snapshot, make_snapshot_name};
+    use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::snapshot_list::SnapshotList;
+    use super::*;
+    use crate::fs::exofs::core::blob_id::compute_blob_id;
+    use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
 
     fn push_snap(list: &SnapshotList, id: u64) {
         list.register(Snapshot {
-            id: SnapshotId(id), epoch_id: EpochId(1), parent_id: None,
-            root_blob: BlobId([0u8;32]), created_at: 0, n_blobs: 1,
-            total_bytes: 0, flags: 0,
-            blob_catalog_offset: DiskOffset(0), blob_catalog_size: 0,
+            id: SnapshotId(id),
+            epoch_id: EpochId(1),
+            parent_id: None,
+            root_blob: BlobId([0u8; 32]),
+            created_at: 0,
+            n_blobs: 1,
+            total_bytes: 0,
+            flags: 0,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
             name: make_snapshot_name(b"restore-test"),
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -331,7 +376,9 @@ mod tests {
         source.add_blob(SnapshotId(1), bid, raw.to_vec()).unwrap();
         let mut sink = NullRestoreSink::new();
         let restore = SnapshotRestore::new();
-        let result = restore.restore(SnapshotId(1), &source, &mut sink, RestoreOptions::default()).unwrap();
+        let result = restore
+            .restore(SnapshotId(1), &source, &mut sink, RestoreOptions::default())
+            .unwrap();
         assert_eq!(result.n_blobs_ok, 1);
         assert_eq!(result.n_blobs_error, 0);
         assert_eq!(sink.bytes_received, raw.len() as u64);
@@ -345,7 +392,9 @@ mod tests {
         let bid = compute_blob_id(raw);
         let mut source = MemBlobSource::new();
         // Injecte des données corrompues (HASH-02 : la vérification doit échouer)
-        source.add_blob(SnapshotId(2), bid, b"corrupted data".to_vec()).unwrap();
+        source
+            .add_blob(SnapshotId(2), bid, b"corrupted data".to_vec())
+            .unwrap();
         let mut sink = NullRestoreSink::new();
         let restore = SnapshotRestore::new();
         let err = restore.restore(SnapshotId(2), &source, &mut sink, RestoreOptions::default());
@@ -358,11 +407,19 @@ mod tests {
         push_snap(&list, 3);
         let bid = compute_blob_id(b"real");
         let mut source = MemBlobSource::new();
-        source.add_blob(SnapshotId(3), bid, b"fake".to_vec()).unwrap();
+        source
+            .add_blob(SnapshotId(3), bid, b"fake".to_vec())
+            .unwrap();
         let mut sink = NullRestoreSink::new();
-        let opts = RestoreOptions { verify_integrity: true, resilient: true, ..Default::default() };
+        let opts = RestoreOptions {
+            verify_integrity: true,
+            resilient: true,
+            ..Default::default()
+        };
         let restore = SnapshotRestore::new();
-        let result = restore.restore(SnapshotId(3), &source, &mut sink, opts).unwrap();
+        let result = restore
+            .restore(SnapshotId(3), &source, &mut sink, opts)
+            .unwrap();
         assert_eq!(result.n_blobs_error, 1);
     }
 

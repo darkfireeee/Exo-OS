@@ -4,9 +4,8 @@
 // Un thread détaché libère ses ressources automatiquement à la terminaison.
 // Aucun join() n'est possible après detach().
 
-
-use core::sync::atomic::Ordering;
 use crate::process::core::tcb::ProcessThread;
+use core::sync::atomic::Ordering;
 
 /// Erreur de detach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,12 +28,11 @@ pub fn thread_detach(target: *mut ProcessThread) -> Result<(), DetachError> {
     let thread = unsafe { &*target };
 
     // CAS : false → true (atomique).
-    match thread.detached.compare_exchange(
-        false, true,
-        Ordering::AcqRel,
-        Ordering::Relaxed,
-    ) {
-        Ok(_)  => Ok(()),
+    match thread
+        .detached
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+    {
+        Ok(_) => Ok(()),
         Err(_) => Err(DetachError::AlreadyDetached),
     }
 }

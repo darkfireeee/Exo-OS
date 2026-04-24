@@ -7,100 +7,48 @@
 // - barrier      : barrière cyclique N-threads
 // - rendezvous   : rendez-vous N-voies et échange symétrique bilatéral
 
-pub mod futex;
-pub mod wait_queue;
-pub mod event;
 pub mod barrier;
+pub mod event;
+pub mod futex;
 pub mod rendezvous;
 pub mod sched_hooks;
+pub mod wait_queue;
 
 // Re-exports : futex
 pub use futex::{
-    FutexKey,
-    WaiterState,
-    FutexIpcStats,
-    futex_wait,
-    futex_wake,
-    futex_wake_all,
-    futex_cancel,
-    futex_requeue,
-    futex_stats,
+    futex_cancel, futex_requeue, futex_stats, futex_wait, futex_wake, futex_wake_all,
+    FutexIpcStats, FutexKey, WaiterState,
 };
 
 // Re-exports : wait_queue
 pub use wait_queue::{
-    IpcWaiter,
-    IpcWaitQueue,
-    IpcWaitQueueStats,
-    WakePolicy,
-    WakeReason,
-    MAX_IPC_WAITERS,
+    IpcWaitQueue, IpcWaitQueueStats, IpcWaiter, WakePolicy, WakeReason, MAX_IPC_WAITERS,
 };
 
 // Re-exports : event
 pub use event::{
-    IpcEvent,
-    IpcEventStats,
-    IpcCountingEvent,
-    EventMode,
-    MAX_EVENT_COUNT,
+    event_clear, event_count, event_create, event_destroy, event_is_set, event_set, event_stats,
+    event_wait, EventMode, IpcCountingEvent, IpcEvent, IpcEventStats, MAX_EVENT_COUNT,
     MAX_IPC_EVENTS,
-    event_create,
-    event_set,
-    event_clear,
-    event_is_set,
-    event_wait,
-    event_destroy,
-    event_count,
-    event_stats,
 };
 
 // Re-exports : barrier
 pub use barrier::{
-    IpcBarrier,
-    IpcBarrierStats,
-    BarrierResult,
-    MAX_BARRIER_PARTIES,
-    MAX_IPC_BARRIERS,
-    barrier_create,
-    barrier_arrive_and_wait,
-    barrier_arrive,
-    barrier_wait_phase,
-    barrier_generation,
-    barrier_reset,
-    barrier_destroy,
-    barrier_count,
-    barrier_stats,
+    barrier_arrive, barrier_arrive_and_wait, barrier_count, barrier_create, barrier_destroy,
+    barrier_generation, barrier_reset, barrier_stats, barrier_wait_phase, BarrierResult,
+    IpcBarrier, IpcBarrierStats, MAX_BARRIER_PARTIES, MAX_IPC_BARRIERS,
 };
 
 // Re-exports : rendezvous
 pub use rendezvous::{
-    IpcRendezvous,
-    IpcRendezvousStats,
-    RendezvousState,
-    ExchangeSlot,
-    ExchangeState,
-    MAX_RENDEZVOUS_PARTIES,
-    MAX_RENDEZVOUS_ENTRIES,
-    MAX_EXCHANGE_SLOTS,
-    MAX_EXCHANGE_SIZE,
-    rendezvous_create,
-    rendezvous_meet,
-    rendezvous_rearm,
-    rendezvous_destroy,
-    rendezvous_arrived,
-    rendezvous_stats,
-    exchange_create,
-    exchange_swap,
-    exchange_destroy,
+    exchange_create, exchange_destroy, exchange_swap, rendezvous_arrived, rendezvous_create,
+    rendezvous_destroy, rendezvous_meet, rendezvous_rearm, rendezvous_stats, ExchangeSlot,
+    ExchangeState, IpcRendezvous, IpcRendezvousStats, RendezvousState, MAX_EXCHANGE_SIZE,
+    MAX_EXCHANGE_SLOTS, MAX_RENDEZVOUS_ENTRIES, MAX_RENDEZVOUS_PARTIES,
 };
 
 // Re-exports : sched_hooks
 pub use sched_hooks::{
-    install_block_hook,
-    block_current,
-    wake_thread,
-    hooks_installed,
-    current_tid as sched_current_tid,
-    BlockFn as SchedBlockFn,
+    block_current, current_tid as sched_current_tid, hooks_installed, install_block_hook,
+    wake_thread, BlockFn as SchedBlockFn,
 };

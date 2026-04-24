@@ -5,12 +5,11 @@
 //!
 //! OOM-02 / ARITH-02 / RECUR-01 respectés.
 
-
-use alloc::vec::Vec;
-use alloc::collections::BTreeMap;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use super::key_storage::{KeySlotId, KeyKind, KeyStorage};
 use super::entropy::ENTROPY_POOL;
+use super::key_storage::{KeyKind, KeySlotId, KeyStorage};
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -34,11 +33,11 @@ pub enum RotationReason {
 impl core::fmt::Display for RotationReason {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Scheduled         => write!(f, "Scheduled"),
+            Self::Scheduled => write!(f, "Scheduled"),
             Self::UsageLimitReached => write!(f, "UsageLimitReached"),
-            Self::SecurityAlert     => write!(f, "SecurityAlert"),
-            Self::Manual            => write!(f, "Manual"),
-            Self::Initial           => write!(f, "Initial"),
+            Self::SecurityAlert => write!(f, "SecurityAlert"),
+            Self::Manual => write!(f, "Manual"),
+            Self::Initial => write!(f, "Initial"),
         }
     }
 }
@@ -46,11 +45,11 @@ impl core::fmt::Display for RotationReason {
 /// Entrée de suivi de rotation pour un slot.
 #[derive(Debug, Clone)]
 pub struct RotationEntry {
-    pub slot_id:        KeySlotId,
+    pub slot_id: KeySlotId,
     pub rotation_count: u64,
-    pub last_reason:    RotationReason,
-    pub last_ts:        u64,
-    pub new_slot_id:    Option<KeySlotId>,
+    pub last_reason: RotationReason,
+    pub last_ts: u64,
+    pub new_slot_id: Option<KeySlotId>,
 }
 
 /// Résultat d'une rotation de slot.
@@ -58,8 +57,8 @@ pub struct RotationEntry {
 pub struct RotationResult {
     pub old_slot: KeySlotId,
     pub new_slot: KeySlotId,
-    pub kind:     KeyKind,
-    pub reason:   RotationReason,
+    pub kind: KeyKind,
+    pub reason: RotationReason,
 }
 
 /// Politique de rotation d'un slot.
@@ -80,11 +79,11 @@ pub enum RotationSchedule {
 /// Gestionnaire de rotation de clés.
 pub struct KeyRotation {
     /// Entrées de suivi par slot.
-    entries:  BTreeMap<KeySlotId, RotationEntry>,
+    entries: BTreeMap<KeySlotId, RotationEntry>,
     /// Politiques par slot.
     policies: BTreeMap<KeySlotId, RotationSchedule>,
     /// Historique compact (ring buffer).
-    history:  Vec<RotationResult>,
+    history: Vec<RotationResult>,
     /// Taille maximale de l'historique.
     hist_cap: usize,
 }
@@ -93,22 +92,25 @@ impl KeyRotation {
     /// Crée un gestionnaire de rotation.
     pub fn new(hist_cap: usize) -> Self {
         Self {
-            entries:  BTreeMap::new(),
+            entries: BTreeMap::new(),
             policies: BTreeMap::new(),
-            history:  Vec::new(),
+            history: Vec::new(),
             hist_cap: hist_cap.max(16),
         }
     }
 
     /// Enregistre un slot pour la rotation avec une politique donnée.
     pub fn register(&mut self, slot: KeySlotId, schedule: RotationSchedule) -> ExofsResult<()> {
-        self.entries.insert(slot, RotationEntry {
-            slot_id:        slot,
-            rotation_count: 0,
-            last_reason:    RotationReason::Initial,
-            last_ts:        ENTROPY_POOL.random_u64(),
-            new_slot_id:    None,
-        });
+        self.entries.insert(
+            slot,
+            RotationEntry {
+                slot_id: slot,
+                rotation_count: 0,
+                last_reason: RotationReason::Initial,
+                last_ts: ENTROPY_POOL.random_u64(),
+                new_slot_id: None,
+            },
+        );
         self.policies.insert(slot, schedule);
         Ok(())
     }
@@ -128,9 +130,9 @@ impl KeyRotation {
     pub fn rotate_one(
         &mut self,
         old_slot: KeySlotId,
-        kind:     KeyKind,
-        reason:   RotationReason,
-        storage:  &KeyStorage,
+        kind: KeyKind,
+        reason: RotationReason,
+        storage: &KeyStorage,
     ) -> ExofsResult<RotationResult> {
         // Génération d'un nouveau matériel.
         let raw_vec = ENTROPY_POOL.random_bytes(32)?;
@@ -149,22 +151,33 @@ impl KeyRotation {
         // Mise à jour de l'entrée de suivi.
         if let Some(entry) = self.entries.get_mut(&old_slot) {
             entry.rotation_count = entry.rotation_count.saturating_add(1);
-            entry.last_reason    = reason;
-            entry.last_ts        = ENTROPY_POOL.random_u64();
-            entry.new_slot_id    = Some(new_slot);
+            entry.last_reason = reason;
+            entry.last_ts = ENTROPY_POOL.random_u64();
+            entry.new_slot_id = Some(new_slot);
         }
 
         // Nouvel enregistrement du slot.
-        let schedule = self.policies.get(&old_slot).copied().unwrap_or(RotationSchedule::OnDemand);
+        let schedule = self
+            .policies
+            .get(&old_slot)
+            .copied()
+            .unwrap_or(RotationSchedule::OnDemand);
         self.register(new_slot, schedule)?;
 
-        let result = RotationResult { old_slot, new_slot, kind, reason };
+        let result = RotationResult {
+            old_slot,
+            new_slot,
+            kind,
+            reason,
+        };
 
         // Historique.
         if self.history.len() >= self.hist_cap {
             self.history.remove(0);
         }
-        self.history.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.history
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.history.push(result.clone());
 
         Ok(result)
@@ -175,15 +188,17 @@ impl KeyRotation {
     /// OOM-02.
     pub fn rotate_batch(
         &mut self,
-        batch:   &[(KeySlotId, KeyKind)],
-        reason:  RotationReason,
+        batch: &[(KeySlotId, KeyKind)],
+        reason: RotationReason,
         storage: &KeyStorage,
     ) -> ExofsResult<Vec<RotationResult>> {
         let mut results: Vec<RotationResult> = Vec::new();
-        results.try_reserve(batch.len()).map_err(|_| ExofsError::NoMemory)?;
+        results
+            .try_reserve(batch.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         for &(slot, kind) in batch {
             match self.rotate_one(slot, kind, reason, storage) {
-                Ok(r)  => results.push(r),
+                Ok(r) => results.push(r),
                 Err(e) => return Err(e),
             }
         }
@@ -214,18 +229,24 @@ impl KeyRotation {
     pub fn recent_history(&self, n: usize) -> ExofsResult<Vec<RotationResult>> {
         let start = self.history.len().saturating_sub(n);
         let mut out: Vec<RotationResult> = Vec::new();
-        out.try_reserve(n.min(self.history.len())).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(n.min(self.history.len()))
+            .map_err(|_| ExofsError::NoMemory)?;
         out.extend_from_slice(&self.history[start..]);
         Ok(out)
     }
 
     /// Nombre de rotations enregistrées pour un slot.
     pub fn rotation_count(&self, slot: KeySlotId) -> u64 {
-        self.entries.get(&slot).map(|e| e.rotation_count).unwrap_or(0)
+        self.entries
+            .get(&slot)
+            .map(|e| e.rotation_count)
+            .unwrap_or(0)
     }
 
     /// Nombre total de slots enregistrés.
-    pub fn registered_count(&self) -> usize { self.entries.len() }
+    pub fn registered_count(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -234,78 +255,98 @@ impl KeyRotation {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::key_storage::KeyStorage;
+    use super::*;
 
-    fn ks() -> KeyStorage { KeyStorage::new_const() }
+    fn ks() -> KeyStorage {
+        KeyStorage::new_const()
+    }
 
-    #[test] fn test_rotate_one_ok() {
-        let ks    = ks();
-        let old   = ks.store_key_256(&[1u8; 32], KeyKind::Volume).unwrap();
+    #[test]
+    fn test_rotate_one_ok() {
+        let ks = ks();
+        let old = ks.store_key_256(&[1u8; 32], KeyKind::Volume).unwrap();
         let mut r = KeyRotation::new(8);
         r.register(old, RotationSchedule::OnDemand).unwrap();
-        let res   = r.rotate_one(old, KeyKind::Volume, RotationReason::Manual, &ks).unwrap();
+        let res = r
+            .rotate_one(old, KeyKind::Volume, RotationReason::Manual, &ks)
+            .unwrap();
         assert_ne!(res.old_slot, res.new_slot);
         assert_eq!(res.kind, KeyKind::Volume);
     }
 
-    #[test] fn test_old_slot_revoked_after_rotation() {
-        let ks  = ks();
+    #[test]
+    fn test_old_slot_revoked_after_rotation() {
+        let ks = ks();
         let old = ks.store_key_256(&[2u8; 32], KeyKind::Master).unwrap();
         let mut r = KeyRotation::new(8);
         r.register(old, RotationSchedule::OnDemand).unwrap();
-        r.rotate_one(old, KeyKind::Master, RotationReason::Scheduled, &ks).unwrap();
+        r.rotate_one(old, KeyKind::Master, RotationReason::Scheduled, &ks)
+            .unwrap();
         assert!(ks.load_key_256(old).is_err());
     }
 
-    #[test] fn test_rotate_batch_count() {
-        let ks   = ks();
-        let s1   = ks.store_key_256(&[1u8; 32], KeyKind::Object).unwrap();
-        let s2   = ks.store_key_256(&[2u8; 32], KeyKind::Object).unwrap();
+    #[test]
+    fn test_rotate_batch_count() {
+        let ks = ks();
+        let s1 = ks.store_key_256(&[1u8; 32], KeyKind::Object).unwrap();
+        let s2 = ks.store_key_256(&[2u8; 32], KeyKind::Object).unwrap();
         let mut r = KeyRotation::new(16);
         r.register(s1, RotationSchedule::OnDemand).unwrap();
         r.register(s2, RotationSchedule::OnDemand).unwrap();
-        let results = r.rotate_batch(
-            &[(s1, KeyKind::Object), (s2, KeyKind::Object)],
-            RotationReason::SecurityAlert, &ks).unwrap();
+        let results = r
+            .rotate_batch(
+                &[(s1, KeyKind::Object), (s2, KeyKind::Object)],
+                RotationReason::SecurityAlert,
+                &ks,
+            )
+            .unwrap();
         assert_eq!(results.len(), 2);
     }
 
-    #[test] fn test_rotation_count_increments() {
-        let ks  = ks();
-        let s   = ks.store_key_256(&[0u8; 32], KeyKind::Derived).unwrap();
+    #[test]
+    fn test_rotation_count_increments() {
+        let ks = ks();
+        let s = ks.store_key_256(&[0u8; 32], KeyKind::Derived).unwrap();
         let mut r = KeyRotation::new(8);
         r.register(s, RotationSchedule::OnDemand).unwrap();
-        r.rotate_one(s, KeyKind::Derived, RotationReason::Manual, &ks).unwrap();
+        r.rotate_one(s, KeyKind::Derived, RotationReason::Manual, &ks)
+            .unwrap();
         assert_eq!(r.rotation_count(s), 1);
     }
 
-    #[test] fn test_recent_history_limited() {
-        let ks  = ks();
+    #[test]
+    fn test_recent_history_limited() {
+        let ks = ks();
         let mut r = KeyRotation::new(4);
         for i in 0u8..6 {
             let s = ks.store_key_256(&[i; 32], KeyKind::Session).unwrap();
             r.register(s, RotationSchedule::OnDemand).unwrap();
-            r.rotate_one(s, KeyKind::Session, RotationReason::Scheduled, &ks).unwrap();
+            r.rotate_one(s, KeyKind::Session, RotationReason::Scheduled, &ks)
+                .unwrap();
         }
         let hist = r.recent_history(3).unwrap();
         assert_eq!(hist.len(), 3);
     }
 
-    #[test] fn test_due_for_rotation_after_uses() {
-        let ks  = ks();
-        let s   = ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
+    #[test]
+    fn test_due_for_rotation_after_uses() {
+        let ks = ks();
+        let s = ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
         // Simuler 5 accès.
-        for _ in 0..5 { ks.load_key_256(s).unwrap(); }
+        for _ in 0..5 {
+            ks.load_key_256(s).unwrap();
+        }
         let mut r = KeyRotation::new(8);
         r.register(s, RotationSchedule::AfterNUses(5)).unwrap();
         let due = r.due_for_rotation(&ks).unwrap();
         assert!(due.contains(&s));
     }
 
-    #[test] fn test_unregister_removes() {
-        let ks  = ks();
-        let s   = ks.store_key_256(&[0u8; 32], KeyKind::Master).unwrap();
+    #[test]
+    fn test_unregister_removes() {
+        let ks = ks();
+        let s = ks.store_key_256(&[0u8; 32], KeyKind::Master).unwrap();
         let mut r = KeyRotation::new(8);
         r.register(s, RotationSchedule::OnDemand).unwrap();
         assert_eq!(r.registered_count(), 1);
@@ -328,20 +369,27 @@ pub enum SecurityLevel {
 
 /// Gestionnaire d'alerte déclenchant des rotations forcées.
 pub struct SecurityRotationTrigger {
-    level:   SecurityLevel,
+    level: SecurityLevel,
     manager: KeyRotation,
 }
 
 impl SecurityRotationTrigger {
     pub fn new(hist_cap: usize) -> Self {
-        Self { level: SecurityLevel::Normal, manager: KeyRotation::new(hist_cap) }
+        Self {
+            level: SecurityLevel::Normal,
+            manager: KeyRotation::new(hist_cap),
+        }
     }
 
     /// Élève le niveau de sécurité.
-    pub fn elevate(&mut self, new_level: SecurityLevel) { self.level = new_level; }
+    pub fn elevate(&mut self, new_level: SecurityLevel) {
+        self.level = new_level;
+    }
 
     /// Retourne `true` si une rotation forcée est nécessaire.
-    pub fn rotation_required(&self) -> bool { self.level >= SecurityLevel::Elevated }
+    pub fn rotation_required(&self) -> bool {
+        self.level >= SecurityLevel::Elevated
+    }
 
     /// Force la rotation de tous les slots enregistrés selon le niveau d'alerte.
     ///
@@ -349,9 +397,11 @@ impl SecurityRotationTrigger {
     pub fn force_rotate_all(
         &mut self,
         storage: &KeyStorage,
-        kinds:   &[(KeySlotId, KeyKind)],
+        kinds: &[(KeySlotId, KeyKind)],
     ) -> ExofsResult<Vec<RotationResult>> {
-        if !self.rotation_required() { return Ok(Vec::new()); }
+        if !self.rotation_required() {
+            return Ok(Vec::new());
+        }
         let reason = if self.level >= SecurityLevel::Critical {
             RotationReason::SecurityAlert
         } else {
@@ -361,26 +411,36 @@ impl SecurityRotationTrigger {
     }
 
     /// Accès au manager interne.
-    pub fn manager_ref(&self) -> &KeyRotation { &self.manager }
-    pub fn manager_mut(&mut self) -> &mut KeyRotation { &mut self.manager }
+    pub fn manager_ref(&self) -> &KeyRotation {
+        &self.manager
+    }
+    pub fn manager_mut(&mut self) -> &mut KeyRotation {
+        &mut self.manager
+    }
 }
 
 /// Planificateur périodique de rotation (basé sur un compteur d'époques).
 pub struct EpochRotationScheduler {
-    epoch:         u64,
-    epoch_period:  u64,
+    epoch: u64,
+    epoch_period: u64,
     last_rotation: u64,
 }
 
 impl EpochRotationScheduler {
     pub fn new(period: u64) -> Self {
-        Self { epoch: 0, epoch_period: period.max(1), last_rotation: 0 }
+        Self {
+            epoch: 0,
+            epoch_period: period.max(1),
+            last_rotation: 0,
+        }
     }
 
     /// Avance l'epoch d'une unité.
     ///
     /// ARITH-02 : wrapping_add.
-    pub fn tick(&mut self) { self.epoch = self.epoch.wrapping_add(1); }
+    pub fn tick(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+    }
 
     /// Retourne `true` si la période de rotation est écoulée.
     pub fn is_due(&self) -> bool {
@@ -388,43 +448,55 @@ impl EpochRotationScheduler {
     }
 
     /// Marque la rotation comme effectuée à l'epoch courante.
-    pub fn mark_done(&mut self) { self.last_rotation = self.epoch; }
+    pub fn mark_done(&mut self) {
+        self.last_rotation = self.epoch;
+    }
 
-    pub fn current_epoch(&self) -> u64 { self.epoch }
+    pub fn current_epoch(&self) -> u64 {
+        self.epoch
+    }
 }
 
 #[cfg(test)]
 mod scheduler_tests {
-    use super::*;
     use super::super::key_storage::KeyStorage;
+    use super::*;
 
-    #[test] fn test_security_trigger_normal_no_rotation() {
+    #[test]
+    fn test_security_trigger_normal_no_rotation() {
         let ks = KeyStorage::new_const();
         let mut t = SecurityRotationTrigger::new(8);
         let r = t.force_rotate_all(&ks, &[]).unwrap();
         assert!(r.is_empty());
     }
 
-    #[test] fn test_security_trigger_elevated_rotation() {
+    #[test]
+    fn test_security_trigger_elevated_rotation() {
         let ks = KeyStorage::new_const();
-        let s  = ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
+        let s = ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
         let mut t = SecurityRotationTrigger::new(8);
-        t.manager_mut().register(s, RotationSchedule::OnDemand).unwrap();
+        t.manager_mut()
+            .register(s, RotationSchedule::OnDemand)
+            .unwrap();
         t.elevate(SecurityLevel::Elevated);
         assert!(t.rotation_required());
         let r = t.force_rotate_all(&ks, &[(s, KeyKind::Volume)]).unwrap();
         assert_eq!(r.len(), 1);
     }
 
-    #[test] fn test_epoch_scheduler_due() {
+    #[test]
+    fn test_epoch_scheduler_due() {
         let mut sched = EpochRotationScheduler::new(10);
-        for _ in 0..10 { sched.tick(); }
+        for _ in 0..10 {
+            sched.tick();
+        }
         assert!(sched.is_due());
         sched.mark_done();
         assert!(!sched.is_due());
     }
 
-    #[test] fn test_epoch_tick_wrapping() {
+    #[test]
+    fn test_epoch_tick_wrapping() {
         let mut sched = EpochRotationScheduler::new(1);
         sched.tick();
         assert!(sched.is_due());

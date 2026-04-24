@@ -21,68 +21,25 @@ pub mod vfs_compat;
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use fcntl_lock::{
-    FCNTL_LOCK_TABLE,
-    LockKind,
-    FcntlCmd,
-    ByteRangeLock,
-    LockInfo,
-    MAX_LOCKS_PER_OBJECT,
+    ByteRangeLock, FcntlCmd, LockInfo, LockKind, FCNTL_LOCK_TABLE, MAX_LOCKS_PER_OBJECT,
     MAX_OBJECTS_LOCKED,
 };
 
 pub use inode_emulation::{
-    INODE_EMULATION,
-    ObjectIno,
-    InodeEntry,
-    INO_ROOT,
-    INO_RESERVED,
-    INO_MAX_CACHE,
-    encode_inode_entry,
-    decode_inode_entry,
-    inode_flags,
+    decode_inode_entry, encode_inode_entry, inode_flags, InodeEntry, ObjectIno, INODE_EMULATION,
+    INO_MAX_CACHE, INO_RESERVED, INO_ROOT,
 };
 
 pub use mmap::{
-    MMAP_TABLE,
-    MmapEntry,
-    MappingState,
-    map_flags,
-    map_prot,
-    MMAP_PAGE_SIZE,
-    MMAP_MAX_MAPPINGS,
-    align_up,
-    pages_for,
-    ranges_overlap,
-    validate_page_aligned,
+    align_up, map_flags, map_prot, pages_for, ranges_overlap, validate_page_aligned, MappingState,
+    MmapEntry, MMAP_MAX_MAPPINGS, MMAP_PAGE_SIZE, MMAP_TABLE,
 };
 
 pub use vfs_compat::{
-    VfsInode,
-    VfsDirent,
-    VfsFd,
-    VFS_ROOT_INO,
-    VFS_NAME_MAX,
-    file_mode,
-    open_flags,
-    register_exofs_vfs_ops,
-    vfs_is_registered,
-    root_inode,
-    vfs_lookup,
-    vfs_create,
-    vfs_open,
-    vfs_close,
-    vfs_read,
-    vfs_write,
-    vfs_getattr,
-    vfs_mkdir,
-    vfs_unlink,
-    vfs_rmdir,
-    vfs_rename,
-    vfs_readdir,
-    vfs_truncate,
-    vfs_symlink,
-    vfs_close_all_pid,
-    vfs_open_count,
+    file_mode, open_flags, register_exofs_vfs_ops, root_inode, vfs_close, vfs_close_all_pid,
+    vfs_create, vfs_getattr, vfs_is_registered, vfs_lookup, vfs_mkdir, vfs_open, vfs_open_count,
+    vfs_read, vfs_readdir, vfs_rename, vfs_rmdir, vfs_symlink, vfs_truncate, vfs_unlink, vfs_write,
+    VfsDirent, VfsFd, VfsInode, VFS_NAME_MAX, VFS_ROOT_INO,
 };
 
 use crate::fs::exofs::core::ExofsResult;
@@ -94,7 +51,7 @@ use crate::fs::exofs::core::ExofsResult;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 static BRIDGE_INITIALIZED: AtomicBool = AtomicBool::new(false);
-static BRIDGE_INIT_COUNT:  AtomicU64  = AtomicU64::new(0);
+static BRIDGE_INIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static BRIDGE_SHUTDOWN_COUNT: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,43 +63,43 @@ static BRIDGE_SHUTDOWN_COUNT: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PosixBridgeStats {
     /// Nombre de verrous actifs (toutes tables confondues).
-    pub lock_count:         usize,
+    pub lock_count: usize,
     /// Nombre d'objets verrouillés distincts.
-    pub locked_objects:     usize,
+    pub locked_objects: usize,
     /// Nombre d'inodes en cache.
-    pub inode_count:        usize,
+    pub inode_count: usize,
     /// Prochain ino qui sera alloué.
-    pub next_ino:           ObjectIno,
+    pub next_ino: ObjectIno,
     /// Nombre de mappings mémoire actifs.
-    pub mmap_count:         usize,
+    pub mmap_count: usize,
     /// Nombre d'octets totaux mappés.
-    pub mmap_total_bytes:   u64,
+    pub mmap_total_bytes: u64,
     /// Nombre de descripteurs de fichiers ouverts.
-    pub open_fd_count:      usize,
+    pub open_fd_count: usize,
     /// Le VFS ExoFS est-il enregistré ?
-    pub vfs_registered:     bool,
+    pub vfs_registered: bool,
     /// Le pont a-t-il été initialisé ?
-    pub initialized:        bool,
+    pub initialized: bool,
     /// Nombre d'initialisations depuis le démarrage.
-    pub init_count:         u64,
+    pub init_count: u64,
     /// Nombre d'arrêts depuis le démarrage.
-    pub shutdown_count:     u64,
+    pub shutdown_count: u64,
 }
 
 /// Collecte les statistiques de tous les sous-modules.
 pub fn posix_bridge_stats() -> PosixBridgeStats {
     PosixBridgeStats {
-        lock_count:       FCNTL_LOCK_TABLE.total_lock_count(),
-        locked_objects:   FCNTL_LOCK_TABLE.locked_object_count(),
-        inode_count:      INODE_EMULATION.count(),
-        next_ino:         INODE_EMULATION.peek_next_ino(),
-        mmap_count:       MMAP_TABLE.mapping_count(),
+        lock_count: FCNTL_LOCK_TABLE.total_lock_count(),
+        locked_objects: FCNTL_LOCK_TABLE.locked_object_count(),
+        inode_count: INODE_EMULATION.count(),
+        next_ino: INODE_EMULATION.peek_next_ino(),
+        mmap_count: MMAP_TABLE.mapping_count(),
         mmap_total_bytes: MMAP_TABLE.total_mapped_bytes(),
-        open_fd_count:    vfs_open_count(),
-        vfs_registered:   vfs_is_registered(),
-        initialized:      BRIDGE_INITIALIZED.load(Ordering::Acquire),
-        init_count:       BRIDGE_INIT_COUNT.load(Ordering::Relaxed),
-        shutdown_count:   BRIDGE_SHUTDOWN_COUNT.load(Ordering::Relaxed),
+        open_fd_count: vfs_open_count(),
+        vfs_registered: vfs_is_registered(),
+        initialized: BRIDGE_INITIALIZED.load(Ordering::Acquire),
+        init_count: BRIDGE_INIT_COUNT.load(Ordering::Relaxed),
+        shutdown_count: BRIDGE_SHUTDOWN_COUNT.load(Ordering::Relaxed),
     }
 }
 
@@ -156,7 +113,10 @@ pub fn posix_bridge_stats() -> PosixBridgeStats {
 /// - Enregistre ExoFS comme opérateur VFS (idem no-op si déjà fait).
 /// - Idempotent : plusieurs appels sont sans danger.
 pub fn posix_bridge_init() -> ExofsResult<()> {
-    if BRIDGE_INITIALIZED.compare_exchange(false, true, Ordering::Release, Ordering::Relaxed).is_err() {
+    if BRIDGE_INITIALIZED
+        .compare_exchange(false, true, Ordering::Release, Ordering::Relaxed)
+        .is_err()
+    {
         // Déjà initialisé — incrément du compteur mais pas d'erreur.
         BRIDGE_INIT_COUNT.fetch_add(1, Ordering::Relaxed);
         return Ok(());
@@ -203,8 +163,12 @@ pub fn posix_bridge_check() -> usize {
     let mut anomalies = 0usize;
     // Vérifie que la racine est enregistrée si le pont est initialisé.
     if BRIDGE_INITIALIZED.load(Ordering::Acquire) {
-        if !INODE_EMULATION.contains_ino(INO_ROOT) { anomalies = anomalies.wrapping_add(1); }
-        if !vfs_is_registered() { anomalies = anomalies.wrapping_add(1); }
+        if !INODE_EMULATION.contains_ino(INO_ROOT) {
+            anomalies = anomalies.wrapping_add(1);
+        }
+        if !vfs_is_registered() {
+            anomalies = anomalies.wrapping_add(1);
+        }
     }
     anomalies
 }
@@ -219,9 +183,9 @@ pub fn total_lock_count() -> usize {
 // Constantes de version
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub const POSIX_BRIDGE_MAJOR: u8  = 1;
-pub const POSIX_BRIDGE_MINOR: u8  = 0;
-pub const POSIX_BRIDGE_PATCH: u8  = 0;
+pub const POSIX_BRIDGE_MAJOR: u8 = 1;
+pub const POSIX_BRIDGE_MINOR: u8 = 0;
+pub const POSIX_BRIDGE_PATCH: u8 = 0;
 pub const POSIX_BRIDGE_MAGIC: u32 = 0x5042_5247; // "PBRG"
 
 /// Retourne la version du pont sous forme d'u32 encodé.
@@ -265,7 +229,9 @@ mod tests {
         let b = AtomicBool::new(false);
         // Vérifie que compare_exchange retourne Err si déjà true.
         b.store(true, Ordering::Relaxed);
-        assert!(b.compare_exchange(false, true, Ordering::Release, Ordering::Relaxed).is_err());
+        assert!(b
+            .compare_exchange(false, true, Ordering::Release, Ordering::Relaxed)
+            .is_err());
     }
 
     #[test]
@@ -311,8 +277,8 @@ mod tests {
     #[test]
     fn test_inode_flags_values() {
         assert_eq!(inode_flags::DIRECTORY, 0x0001);
-        assert_eq!(inode_flags::SYMLINK,   0x0002);
-        assert_eq!(inode_flags::REGULAR,   0x0004);
+        assert_eq!(inode_flags::SYMLINK, 0x0002);
+        assert_eq!(inode_flags::REGULAR, 0x0004);
     }
 
     #[test]
@@ -362,12 +328,12 @@ impl Default for PosixBridgeConfig {
     fn default() -> Self {
         Self {
             max_locks_per_object: MAX_LOCKS_PER_OBJECT,
-            max_locked_objects:   MAX_OBJECTS_LOCKED,
-            max_inode_cache:      INO_MAX_CACHE,
-            max_mmap_entries:     MMAP_MAX_MAPPINGS,
-            max_open_fds:         vfs_compat::VFS_OPEN_MAX,
-            page_size:            MMAP_PAGE_SIZE,
-            version:              POSIX_BRIDGE_MAJOR,
+            max_locked_objects: MAX_OBJECTS_LOCKED,
+            max_inode_cache: INO_MAX_CACHE,
+            max_mmap_entries: MMAP_MAX_MAPPINGS,
+            max_open_fds: vfs_compat::VFS_OPEN_MAX,
+            page_size: MMAP_PAGE_SIZE,
+            version: POSIX_BRIDGE_MAJOR,
         }
     }
 }
@@ -377,12 +343,24 @@ impl PosixBridgeConfig {
     /// RECUR-01 : pas de boucle ici (contrôles indépendants).
     pub fn validate(&self) -> usize {
         let mut errors = 0usize;
-        if self.max_locks_per_object == 0   { errors = errors.wrapping_add(1); }
-        if self.max_locked_objects == 0     { errors = errors.wrapping_add(1); }
-        if self.max_inode_cache == 0        { errors = errors.wrapping_add(1); }
-        if self.max_mmap_entries == 0       { errors = errors.wrapping_add(1); }
-        if self.max_open_fds == 0           { errors = errors.wrapping_add(1); }
-        if !self.page_size.is_power_of_two() { errors = errors.wrapping_add(1); }
+        if self.max_locks_per_object == 0 {
+            errors = errors.wrapping_add(1);
+        }
+        if self.max_locked_objects == 0 {
+            errors = errors.wrapping_add(1);
+        }
+        if self.max_inode_cache == 0 {
+            errors = errors.wrapping_add(1);
+        }
+        if self.max_mmap_entries == 0 {
+            errors = errors.wrapping_add(1);
+        }
+        if self.max_open_fds == 0 {
+            errors = errors.wrapping_add(1);
+        }
+        if !self.page_size.is_power_of_two() {
+            errors = errors.wrapping_add(1);
+        }
         errors
     }
 }
@@ -395,22 +373,22 @@ impl PosixBridgeConfig {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PosixBridgeDiag {
-    pub magic:         u32,
-    pub version:       u32,
-    pub stats:         PosixBridgeStats,
+    pub magic: u32,
+    pub version: u32,
+    pub stats: PosixBridgeStats,
     pub config_errors: usize,
-    pub check_fail:    usize,
+    pub check_fail: usize,
 }
 
 /// Construit un rapport de diagnostic complet.
 pub fn posix_bridge_diag() -> PosixBridgeDiag {
     let cfg = PosixBridgeConfig::default();
     PosixBridgeDiag {
-        magic:         POSIX_BRIDGE_MAGIC,
-        version:       posix_bridge_version(),
-        stats:         posix_bridge_stats(),
+        magic: POSIX_BRIDGE_MAGIC,
+        version: posix_bridge_version(),
+        stats: posix_bridge_stats(),
         config_errors: cfg.validate(),
-        check_fail:    posix_bridge_check(),
+        check_fail: posix_bridge_check(),
     }
 }
 
@@ -423,17 +401,25 @@ pub fn posix_bridge_diag() -> PosixBridgeDiag {
 pub fn copy_name_to_buf<const N: usize>(name: &[u8], out: &mut [u8; N]) -> usize {
     let len = name.len().min(N).min(VFS_NAME_MAX);
     let mut i = 0usize;
-    while i < len { out[i] = name[i]; i = i.wrapping_add(1); }
+    while i < len {
+        out[i] = name[i];
+        i = i.wrapping_add(1);
+    }
     len
 }
 
 /// Compare deux noms de façon constante-time (évite les oracles temporels).
 /// ARITH-02 : wrapping additions.
 pub fn names_equal(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() { return false; }
+    if a.len() != b.len() {
+        return false;
+    }
     let mut diff = 0u8;
     let mut i = 0usize;
-    while i < a.len() { diff |= a[i] ^ b[i]; i = i.wrapping_add(1); }
+    while i < a.len() {
+        diff |= a[i] ^ b[i];
+        i = i.wrapping_add(1);
+    }
     diff == 0
 }
 
@@ -442,7 +428,9 @@ pub fn names_equal(a: &[u8], b: &[u8]) -> bool {
 pub fn strnlen(buf: &[u8], max: usize) -> usize {
     let limit = max.min(buf.len());
     let mut i = 0usize;
-    while i < limit && buf[i] != 0 { i = i.wrapping_add(1); }
+    while i < limit && buf[i] != 0 {
+        i = i.wrapping_add(1);
+    }
     i
 }
 
@@ -455,7 +443,12 @@ pub fn strnlen(buf: &[u8], max: usize) -> usize {
 pub fn atomic_saturating_inc(counter: &core::sync::atomic::AtomicU64, max: u64) {
     let mut cur = counter.load(Ordering::Relaxed);
     while cur < max {
-        match counter.compare_exchange_weak(cur, cur.saturating_add(1), Ordering::Relaxed, Ordering::Relaxed) {
+        match counter.compare_exchange_weak(
+            cur,
+            cur.saturating_add(1),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
             Ok(_) => break,
             Err(actual) => cur = actual,
         }
@@ -467,7 +460,12 @@ pub fn atomic_saturating_inc(counter: &core::sync::atomic::AtomicU64, max: u64) 
 pub fn atomic_saturating_dec(counter: &core::sync::atomic::AtomicU64) {
     let mut cur = counter.load(Ordering::Relaxed);
     while cur > 0 {
-        match counter.compare_exchange_weak(cur, cur.saturating_sub(1), Ordering::Relaxed, Ordering::Relaxed) {
+        match counter.compare_exchange_weak(
+            cur,
+            cur.saturating_sub(1),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
             Ok(_) => break,
             Err(actual) => cur = actual,
         }
@@ -481,21 +479,31 @@ pub fn atomic_saturating_dec(counter: &core::sync::atomic::AtomicU64) {
 /// Convertit un mode POSIX en flags inode ExoFS.
 pub fn mode_to_inode_flags(mode: u32) -> u32 {
     let ty = mode & file_mode::S_IFMT;
-    if ty == file_mode::S_IFDIR  { return inode_flags::DIRECTORY; }
-    if ty == file_mode::S_IFLNK  { return inode_flags::SYMLINK;   }
+    if ty == file_mode::S_IFDIR {
+        return inode_flags::DIRECTORY;
+    }
+    if ty == file_mode::S_IFLNK {
+        return inode_flags::SYMLINK;
+    }
     inode_flags::REGULAR
 }
 
 /// Convertit des flags inode ExoFS en bits de type mode POSIX.
 pub fn inode_flags_to_mode_type(flags: u32) -> u32 {
-    if flags & inode_flags::DIRECTORY != 0 { return file_mode::S_IFDIR; }
-    if flags & inode_flags::SYMLINK   != 0 { return file_mode::S_IFLNK; }
+    if flags & inode_flags::DIRECTORY != 0 {
+        return file_mode::S_IFDIR;
+    }
+    if flags & inode_flags::SYMLINK != 0 {
+        return file_mode::S_IFLNK;
+    }
     file_mode::S_IFREG
 }
 
 /// Retourne vrai si les open_flags nécessitent un accès en écriture.
 pub fn flags_require_write(flags: u32) -> bool {
-    flags & open_flags::O_WRONLY != 0 || flags & open_flags::O_RDWR != 0 || flags & open_flags::O_TRUNC != 0
+    flags & open_flags::O_WRONLY != 0
+        || flags & open_flags::O_RDWR != 0
+        || flags & open_flags::O_TRUNC != 0
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -566,23 +574,41 @@ mod tests_extra {
 
     #[test]
     fn test_mode_to_inode_flags() {
-        assert_eq!(mode_to_inode_flags(file_mode::S_IFDIR), inode_flags::DIRECTORY);
-        assert_eq!(mode_to_inode_flags(file_mode::S_IFLNK), inode_flags::SYMLINK);
-        assert_eq!(mode_to_inode_flags(file_mode::S_IFREG), inode_flags::REGULAR);
+        assert_eq!(
+            mode_to_inode_flags(file_mode::S_IFDIR),
+            inode_flags::DIRECTORY
+        );
+        assert_eq!(
+            mode_to_inode_flags(file_mode::S_IFLNK),
+            inode_flags::SYMLINK
+        );
+        assert_eq!(
+            mode_to_inode_flags(file_mode::S_IFREG),
+            inode_flags::REGULAR
+        );
     }
 
     #[test]
     fn test_inode_flags_to_mode_type() {
-        assert_eq!(inode_flags_to_mode_type(inode_flags::DIRECTORY), file_mode::S_IFDIR);
-        assert_eq!(inode_flags_to_mode_type(inode_flags::SYMLINK),   file_mode::S_IFLNK);
-        assert_eq!(inode_flags_to_mode_type(inode_flags::REGULAR),   file_mode::S_IFREG);
+        assert_eq!(
+            inode_flags_to_mode_type(inode_flags::DIRECTORY),
+            file_mode::S_IFDIR
+        );
+        assert_eq!(
+            inode_flags_to_mode_type(inode_flags::SYMLINK),
+            file_mode::S_IFLNK
+        );
+        assert_eq!(
+            inode_flags_to_mode_type(inode_flags::REGULAR),
+            file_mode::S_IFREG
+        );
     }
 
     #[test]
     fn test_flags_require_write() {
-        assert!( flags_require_write(open_flags::O_WRONLY));
-        assert!( flags_require_write(open_flags::O_RDWR));
-        assert!( flags_require_write(open_flags::O_TRUNC));
+        assert!(flags_require_write(open_flags::O_WRONLY));
+        assert!(flags_require_write(open_flags::O_RDWR));
+        assert!(flags_require_write(open_flags::O_TRUNC));
         assert!(!flags_require_write(open_flags::O_RDONLY));
     }
 

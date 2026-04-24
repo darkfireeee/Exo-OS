@@ -78,25 +78,13 @@ pub fn is_nvme_flush_registered() -> bool {
 // =============================================================================
 
 /// Nombre de barrières émises par phase (indexé 0=data, 1=root, 2=record).
-static BARRIERS_ISSUED: [AtomicU64; 3] = [
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-];
+static BARRIERS_ISSUED: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 
 /// Total de barrières ayant échoué par phase.
-static BARRIERS_FAILED: [AtomicU64; 3] = [
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-];
+static BARRIERS_FAILED: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 
 /// Temps cumulé (en cycles TSC) des 3 phases de barrier (pour la latence).
-static BARRIER_CYCLES: [AtomicU64; 3] = [
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-];
+static BARRIER_CYCLES: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 
 // =============================================================================
 // Exécution effective du flush NVMe
@@ -140,9 +128,7 @@ fn read_tsc() -> u64 {
     // SAFETY: instruction rdtsc disponible sur tous les x86_64 modernes.
     // Aucune dépendance mémoire nécessaire ici (mesure de temps, pas de barrière).
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-    unsafe {
-        core::arch::x86_64::_rdtsc()
-    }
+    unsafe { core::arch::x86_64::_rdtsc() }
 }
 
 #[cfg(not(target_arch = "x86_64"))]
@@ -228,10 +214,18 @@ pub struct ThreePhaseBarrierResult {
 
 impl ThreePhaseBarrierResult {
     fn ok(cycles: [u64; 3]) -> Self {
-        Self { success: true, failed_phase: 0, phase_cycles: cycles }
+        Self {
+            success: true,
+            failed_phase: 0,
+            phase_cycles: cycles,
+        }
     }
     fn fail(phase: u8, cycles: [u64; 3]) -> Self {
-        Self { success: false, failed_phase: phase, phase_cycles: cycles }
+        Self {
+            success: false,
+            failed_phase: phase,
+            phase_cycles: cycles,
+        }
     }
 }
 
@@ -274,15 +268,15 @@ pub fn execute_three_phase_barriers() -> ThreePhaseBarrierResult {
 #[derive(Copy, Clone, Debug)]
 pub struct BarrierStats {
     /// Nombre de barrières émises par phase [data, root, record].
-    pub issued:        [u64; 3],
+    pub issued: [u64; 3],
     /// Nombre de barrières ayant échoué par phase.
-    pub failed:        [u64; 3],
+    pub failed: [u64; 3],
     /// Cycles cumulés par phase.
-    pub total_cycles:  [u64; 3],
+    pub total_cycles: [u64; 3],
     /// Nombre de flushes sans hook enregistré.
-    pub unhook_count:  u64,
+    pub unhook_count: u64,
     /// Vrai si un hook NVMe est actif.
-    pub hook_active:   bool,
+    pub hook_active: bool,
 }
 
 impl BarrierStats {
@@ -308,9 +302,12 @@ impl fmt::Display for BarrierStats {
         write!(
             f,
             "BarrierStats{{ data:[{}ok/{}err] root:[{}ok/{}err] rec:[{}ok/{}err] hook={} }}",
-            self.issued[0], self.failed[0],
-            self.issued[1], self.failed[1],
-            self.issued[2], self.failed[2],
+            self.issued[0],
+            self.failed[0],
+            self.issued[1],
+            self.failed[1],
+            self.issued[2],
+            self.failed[2],
             self.hook_active,
         )
     }
@@ -335,20 +332,22 @@ pub fn barrier_stats_snapshot() -> BarrierStats {
             BARRIER_CYCLES[2].load(Ordering::Relaxed),
         ],
         unhook_count: UNHOOK_FLUSH_COUNT.load(Ordering::Relaxed),
-        hook_active:  is_nvme_flush_registered(),
+        hook_active: is_nvme_flush_registered(),
     }
 }
 
 /// Retourne le nombre total de barrières émises (diagnostics globaux).
 pub fn total_barriers_issued() -> u64 {
-    BARRIERS_ISSUED[0].load(Ordering::Relaxed)
+    BARRIERS_ISSUED[0]
+        .load(Ordering::Relaxed)
         .saturating_add(BARRIERS_ISSUED[1].load(Ordering::Relaxed))
         .saturating_add(BARRIERS_ISSUED[2].load(Ordering::Relaxed))
 }
 
 /// Retourne le nombre total de barrières ayant échoué.
 pub fn total_barriers_failed() -> u64 {
-    BARRIERS_FAILED[0].load(Ordering::Relaxed)
+    BARRIERS_FAILED[0]
+        .load(Ordering::Relaxed)
         .saturating_add(BARRIERS_FAILED[1].load(Ordering::Relaxed))
         .saturating_add(BARRIERS_FAILED[2].load(Ordering::Relaxed))
 }
@@ -399,4 +398,3 @@ pub fn reset_barrier_stats() {
     }
     UNHOOK_FLUSH_COUNT.store(0, Ordering::Relaxed);
 }
-

@@ -116,7 +116,12 @@ impl SocketTable {
         }
     }
 
-    pub fn open(&mut self, owner_pid: u32, kind: SocketKind, flags: u32) -> Result<SocketSnapshot, i64> {
+    pub fn open(
+        &mut self,
+        owner_pid: u32,
+        kind: SocketKind,
+        flags: u32,
+    ) -> Result<SocketSnapshot, i64> {
         let Some(idx) = self.sockets.iter().position(|entry| !entry.active) else {
             return Err(syscall::EMFILE);
         };
@@ -212,7 +217,12 @@ impl SocketTable {
         Ok(self.snapshot(idx))
     }
 
-    pub fn note_send(&mut self, owner_pid: u32, handle: u64, len: u32) -> Result<SocketSnapshot, i64> {
+    pub fn note_send(
+        &mut self,
+        owner_pid: u32,
+        handle: u64,
+        len: u32,
+    ) -> Result<SocketSnapshot, i64> {
         let idx = self.lookup_owned(owner_pid, handle)?;
         let socket = &mut self.sockets[idx];
         if socket.state != SocketState::Connected {
@@ -230,7 +240,12 @@ impl SocketTable {
         Ok(())
     }
 
-    pub fn take_rx(&mut self, owner_pid: u32, handle: u64, budget: u32) -> Result<SocketSnapshot, i64> {
+    pub fn take_rx(
+        &mut self,
+        owner_pid: u32,
+        handle: u64,
+        budget: u32,
+    ) -> Result<SocketSnapshot, i64> {
         let idx = self.lookup_owned(owner_pid, handle)?;
         let socket = &mut self.sockets[idx];
         if socket.pending_rx == 0 {

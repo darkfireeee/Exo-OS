@@ -5,9 +5,9 @@
 //! Responsabilités :
 //! 1. `fault_queue.rs` : Remontée robuste (lock-free) des accès IOMMU illégaux.
 
-pub mod fault_queue;
-pub mod fault_handler;
 pub mod domain_registry;
+pub mod fault_handler;
+pub mod fault_queue;
 
 use crate::memory::dma::core::mapping::IOVA_ALLOCATOR;
 use crate::memory::dma::core::types::IommuDomainId;

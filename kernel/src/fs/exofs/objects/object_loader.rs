@@ -8,18 +8,15 @@
 //   ARITH-02 : checked_add / saturating_* partout
 //   OOM-02   : try_reserve partout
 
-
+use alloc::sync::Arc;
 use core::fmt;
 use core::mem;
-use alloc::sync::Arc;
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, DiskOffset,
-};
+use crate::fs::exofs::core::{DiskOffset, ExofsError, ExofsResult};
+use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
 use crate::fs::exofs::objects::logical_object::{
     LogicalObject, LogicalObjectDisk, LogicalObjectRef,
 };
-use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
 use crate::scheduler::sync::rwlock::RwLock;
 
 // ── Type de fonction de lecture (DAG-01 : injection) ──────────────────────────
@@ -35,17 +32,17 @@ pub type ReadFn = fn(DiskOffset, &mut [u8]) -> ExofsResult<()>;
 /// Paramètres pour le chargement d'un LogicalObject.
 pub struct LoadParams {
     /// Offset disque du LogicalObjectDisk.
-    pub disk_offset:     DiskOffset,
+    pub disk_offset: DiskOffset,
     /// Vrai si les données inline doivent être vérifiées contre le BlobId.
-    pub verify_content:  bool,
+    pub verify_content: bool,
     /// Fonction de lecture injectée (DAG-01).
-    pub read_fn:         ReadFn,
+    pub read_fn: ReadFn,
 }
 
 impl LoadParams {
     pub fn new(offset: DiskOffset, verify: bool, read_fn: ReadFn) -> Self {
         Self {
-            disk_offset:    offset,
+            disk_offset: offset,
             verify_content: verify,
             read_fn,
         }
@@ -57,7 +54,7 @@ impl LoadParams {
 /// Résultat d'un chargement réussi.
 pub struct LoadResult {
     /// Référence à l'objet chargé.
-    pub object:     LogicalObjectRef,
+    pub object: LogicalObjectRef,
     /// Offset disque depuis lequel il a été lu.
     pub disk_offset: DiskOffset,
     /// Taille effective lue (LogicalObjectDisk = 256 B minimum).
@@ -93,9 +90,8 @@ impl ObjectLoader {
         (params.read_fn)(params.disk_offset, &mut buf)?;
 
         // SAFETY: LogicalObjectDisk est #[repr(C, packed)], buf est aligné.
-        let lod: LogicalObjectDisk = unsafe {
-            core::ptr::read_unaligned(buf.as_ptr() as *const LogicalObjectDisk)
-        };
+        let lod: LogicalObjectDisk =
+            unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const LogicalObjectDisk) };
 
         // HDR-03 : vérifie checksum et version AVANT toute utilisation.
         lod.verify()?;
@@ -112,9 +108,9 @@ impl ObjectLoader {
 
         let arc = Arc::new(RwLock::new(obj));
         Ok(LoadResult {
-            object:      arc,
+            object: arc,
             disk_offset: params.disk_offset,
-            bytes_read:  disk_size,
+            bytes_read: disk_size,
         })
     }
 
@@ -123,14 +119,13 @@ impl ObjectLoader {
     ///
     /// HDR-03 : `verify()` est appelé en premier sur le buffer.
     pub fn load_from_buf(
-        buf:         &[u8; 256],
+        buf: &[u8; 256],
         _disk_offset: DiskOffset,
         verify_content: bool,
     ) -> ExofsResult<LogicalObjectRef> {
         // SAFETY: LogicalObjectDisk est #[repr(C, packed)], même taille.
-        let lod: LogicalObjectDisk = unsafe {
-            core::ptr::read_unaligned(buf.as_ptr() as *const LogicalObjectDisk)
-        };
+        let lod: LogicalObjectDisk =
+            unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const LogicalObjectDisk) };
         lod.verify()?;
 
         let obj = LogicalObject::from_disk(&lod)?;
@@ -148,9 +143,9 @@ impl ObjectLoader {
     /// DAG-01 : toujours via `read_fn`.
     pub fn load_batch(
         base_offset: DiskOffset,
-        count:       usize,
-        verify:      bool,
-        read_fn:     ReadFn,
+        count: usize,
+        verify: bool,
+        read_fn: ReadFn,
     ) -> ExofsResult<alloc::vec::Vec<LoadResult>> {
         if count == 0 {
             return Ok(alloc::vec::Vec::new());
@@ -183,9 +178,7 @@ impl ObjectLoader {
     fn verify_inline_content(obj: &LogicalObject) -> ExofsResult<()> {
         if let Some(inline) = obj.physical_ref.as_inline() {
             inline.validate()?;
-            let computed = crate::fs::exofs::core::compute_blob_id(
-                inline.as_slice()
-            );
+            let computed = crate::fs::exofs::core::compute_blob_id(inline.as_slice());
             if computed != obj.blob_id {
                 return Err(ExofsError::Corrupt);
             }
@@ -199,12 +192,10 @@ impl ObjectLoader {
     ///
     /// Retourne les 256 octets avec le checksum calculé.
     pub fn serialize(obj_ref: &LogicalObjectRef) -> [u8; 256] {
-        let obj  = obj_ref.read();
+        let obj = obj_ref.read();
         let disk = obj.to_disk();
         // SAFETY: même size, même layout.
-        unsafe {
-            core::mem::transmute::<LogicalObjectDisk, [u8; 256]>(disk)
-        }
+        unsafe { core::mem::transmute::<LogicalObjectDisk, [u8; 256]>(disk) }
     }
 }
 
@@ -213,19 +204,23 @@ impl ObjectLoader {
 /// Statistiques du loader.
 #[derive(Default, Debug)]
 pub struct LoaderStats {
-    pub total_reads:      u64,
-    pub verify_failures:  u64,
-    pub inline_verified:  u64,
-    pub batch_reads:      u64,
-    pub cache_hits:       u64,
+    pub total_reads: u64,
+    pub verify_failures: u64,
+    pub inline_verified: u64,
+    pub batch_reads: u64,
+    pub cache_hits: u64,
 }
 
 impl LoaderStats {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn record_read(&mut self, from_cache: bool) {
         self.total_reads = self.total_reads.saturating_add(1);
-        if from_cache { self.cache_hits = self.cache_hits.saturating_add(1); }
+        if from_cache {
+            self.cache_hits = self.cache_hits.saturating_add(1);
+        }
     }
 
     pub fn record_verify_failure(&mut self) {
@@ -239,8 +234,11 @@ impl fmt::Display for LoaderStats {
             f,
             "LoaderStats {{ reads: {}, verify_fail: {}, inline_ok: {}, \
              batch: {}, cache_hits: {} }}",
-            self.total_reads, self.verify_failures, self.inline_verified,
-            self.batch_reads, self.cache_hits,
+            self.total_reads,
+            self.verify_failures,
+            self.inline_verified,
+            self.batch_reads,
+            self.cache_hits,
         )
     }
 }
@@ -254,25 +252,25 @@ mod tests {
 
     fn make_disk() -> [u8; 256] {
         let mut d = LogicalObjectDisk {
-            object_id:    [1u8; 32],
-            blob_id:      [2u8; 32],
+            object_id: [1u8; 32],
+            blob_id: [2u8; 32],
             epoch_create: 1,
             epoch_modify: 2,
-            blob_offset:  0,
-            data_size:    0,
-            flags:        0,
-            kind:         0,   // Blob
-            class:        1,   // Class1
-            ref_count:    1,
-            mode:         0o644,
-            uid:          0,
-            gid:          0,
-            version:      LOGICAL_OBJECT_VERSION,
-            _pad0:        [0; 3],
-            generation:   0,
-            _pad1:        [0; 64],
-            checksum:     [0; 32],
-            _pad2:        [0; 32],
+            blob_offset: 0,
+            data_size: 0,
+            flags: 0,
+            kind: 0,  // Blob
+            class: 1, // Class1
+            ref_count: 1,
+            mode: 0o644,
+            uid: 0,
+            gid: 0,
+            version: LOGICAL_OBJECT_VERSION,
+            _pad0: [0; 3],
+            generation: 0,
+            _pad1: [0; 64],
+            checksum: [0; 32],
+            _pad2: [0; 32],
         };
         d.checksum = d.compute_checksum();
         // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.

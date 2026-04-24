@@ -20,9 +20,9 @@
 // - OOM-02   : try_reserve avant tout push.
 // - ARITH-02 : checked_add pour byte_count.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::blob_id::blake3_hash;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Blake3State — accumulation incrémentale du hash
@@ -39,10 +39,14 @@ struct Blake3State {
 }
 
 impl Blake3State {
-    fn new() -> Self { Self { buf: Vec::new() } }
+    fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
 
     fn feed(&mut self, data: &[u8]) -> ExofsResult<()> {
-        self.buf.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        self.buf
+            .try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         self.buf.extend_from_slice(data);
         Ok(())
     }
@@ -51,7 +55,9 @@ impl Blake3State {
         blake3_hash(&self.buf)
     }
 
-    fn len(&self) -> usize { self.buf.len() }
+    fn len(&self) -> usize {
+        self.buf.len()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,13 +74,16 @@ pub const CHECKSUM_MAGIC: u32 = 0x4348_5333; // "CHS3"
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct ChecksumTag {
-    pub magic:    u32,
-    pub hash:     [u8; 32],
+    pub magic: u32,
+    pub hash: [u8; 32],
 }
 
 impl ChecksumTag {
     pub fn new(hash: [u8; 32]) -> Self {
-        Self { magic: CHECKSUM_MAGIC, hash }
+        Self {
+            magic: CHECKSUM_MAGIC,
+            hash,
+        }
     }
 
     pub fn to_bytes(&self) -> [u8; CHECKSUM_TAG_LEN] {
@@ -85,9 +94,13 @@ impl ChecksumTag {
     }
 
     pub fn from_bytes(b: &[u8]) -> ExofsResult<Self> {
-        if b.len() < CHECKSUM_TAG_LEN { return Err(ExofsError::InvalidSize); }
+        if b.len() < CHECKSUM_TAG_LEN {
+            return Err(ExofsError::InvalidSize);
+        }
         let magic = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
-        if magic != CHECKSUM_MAGIC { return Err(ExofsError::BadMagic); }
+        if magic != CHECKSUM_MAGIC {
+            return Err(ExofsError::BadMagic);
+        }
         let mut hash = [0u8; 32];
         hash.copy_from_slice(&b[4..36]);
         Ok(Self { magic, hash })
@@ -120,26 +133,28 @@ pub enum WriterState {
 /// // result.tag   = ChecksumTag { magic: 0x4348_5333, hash: [...] }
 /// ```
 pub struct ChecksumWriter {
-    state:  Blake3State,
+    state: Blake3State,
     status: WriterState,
 }
 
 /// Résultat de la finalisation.
 pub struct ChecksumResult {
     /// Données fournies (sans la balise).
-    pub data:    Vec<u8>,
+    pub data: Vec<u8>,
     /// Balise de checksum.
-    pub tag:     ChecksumTag,
+    pub tag: ChecksumTag,
     /// Hash brut (copie de tag.hash).
-    pub hash:    [u8; 32],
+    pub hash: [u8; 32],
     /// Octets totaux écrits (hors balise).
-    pub bytes:   u64,
+    pub bytes: u64,
 }
 
 impl ChecksumResult {
     /// Sérialise `data || tag` en un seul vecteur prêt à persister.
     pub fn framed(&self) -> ExofsResult<Vec<u8>> {
-        let total = self.data.len()
+        let total = self
+            .data
+            .len()
             .checked_add(CHECKSUM_TAG_LEN)
             .ok_or(ExofsError::Overflow)?;
         let mut out: Vec<u8> = Vec::new();
@@ -152,14 +167,23 @@ impl ChecksumResult {
 
 impl ChecksumWriter {
     pub fn new() -> Self {
-        Self { state: Blake3State::new(), status: WriterState::Open }
+        Self {
+            state: Blake3State::new(),
+            status: WriterState::Open,
+        }
     }
 
     /// Crée un writer avec pré-allocation de `capacity` octets.
     pub fn with_capacity(capacity: usize) -> ExofsResult<Self> {
         let mut state = Blake3State::new();
-        state.buf.try_reserve(capacity).map_err(|_| ExofsError::NoMemory)?;
-        Ok(Self { state, status: WriterState::Open })
+        state
+            .buf
+            .try_reserve(capacity)
+            .map_err(|_| ExofsError::NoMemory)?;
+        Ok(Self {
+            state,
+            status: WriterState::Open,
+        })
     }
 
     /// Ajoute des données au flux.
@@ -188,22 +212,33 @@ impl ChecksumWriter {
         if self.status == WriterState::Finalized {
             return Err(ExofsError::InvalidState);
         }
-        let hash  = self.state.digest();
-        let tag   = ChecksumTag::new(hash);
+        let hash = self.state.digest();
+        let tag = ChecksumTag::new(hash);
         let bytes = self.state.len() as u64;
-        let data  = self.state.buf;
+        let data = self.state.buf;
         self.status = WriterState::Finalized;
-        Ok(ChecksumResult { data, tag, hash, bytes })
+        Ok(ChecksumResult {
+            data,
+            tag,
+            hash,
+            bytes,
+        })
     }
 
     /// Nombre d'octets reçus jusqu'à présent.
-    pub fn byte_count(&self) -> u64 { self.state.len() as u64 }
+    pub fn byte_count(&self) -> u64 {
+        self.state.len() as u64
+    }
 
-    pub fn is_finalized(&self) -> bool { self.status == WriterState::Finalized }
+    pub fn is_finalized(&self) -> bool {
+        self.status == WriterState::Finalized
+    }
 }
 
 impl Default for ChecksumWriter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -215,9 +250,10 @@ impl Default for ChecksumWriter {
 /// # Règle HASH-02 : `buf` doit contenir les données BRUTES avant compression.
 pub fn append_checksum(buf: &mut Vec<u8>) -> ExofsResult<[u8; 32]> {
     let hash = blake3_hash(buf);
-    let tag  = ChecksumTag::new(hash);
-    let raw  = tag.to_bytes();
-    buf.try_reserve(CHECKSUM_TAG_LEN).map_err(|_| ExofsError::NoMemory)?;
+    let tag = ChecksumTag::new(hash);
+    let raw = tag.to_bytes();
+    buf.try_reserve(CHECKSUM_TAG_LEN)
+        .map_err(|_| ExofsError::NoMemory)?;
     buf.extend_from_slice(&raw);
     Ok(hash)
 }
@@ -240,7 +276,7 @@ pub fn split_framed(framed: &[u8]) -> ExofsResult<(&[u8], ChecksumTag)> {
         return Err(ExofsError::InvalidSize);
     }
     let data_end = framed.len() - CHECKSUM_TAG_LEN;
-    let tag      = ChecksumTag::from_bytes(&framed[data_end..])?;
+    let tag = ChecksumTag::from_bytes(&framed[data_end..])?;
     Ok((&framed[..data_end], tag))
 }
 
@@ -291,7 +327,7 @@ mod tests {
     fn test_split_framed() {
         let mut w = ChecksumWriter::new();
         w.write(b"payload").unwrap();
-        let r     = w.finalize().unwrap();
+        let r = w.finalize().unwrap();
         let framed = r.framed().unwrap();
         let (data, tag) = split_framed(&framed).unwrap();
         assert_eq!(data, b"payload");
@@ -322,8 +358,8 @@ mod tests {
     #[test]
     fn test_checksum_tag_roundtrip() {
         let hash = [0xABu8; 32];
-        let tag  = ChecksumTag::new(hash);
-        let raw  = tag.to_bytes();
+        let tag = ChecksumTag::new(hash);
+        let raw = tag.to_bytes();
         let tag2 = ChecksumTag::from_bytes(&raw).unwrap();
         assert_eq!(tag2.magic, CHECKSUM_MAGIC);
         assert_eq!(tag2.hash, hash);
@@ -339,8 +375,8 @@ use crate::fs::exofs::core::DiskOffset;
 #[derive(Clone, Debug)]
 pub struct BlockChecksumEntry {
     pub offset: DiskOffset,
-    pub hash:   [u8; 32],
-    pub valid:  bool,
+    pub hash: [u8; 32],
+    pub valid: bool,
 }
 
 /// Table non-ordonnée de checksums par offset disque.
@@ -351,7 +387,11 @@ pub struct BlockChecksumMap {
 }
 
 impl BlockChecksumMap {
-    pub fn new() -> Self { Self { entries: Vec::new() } }
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
 
     pub fn with_capacity(cap: usize) -> ExofsResult<Self> {
         let mut e = Vec::new();
@@ -361,17 +401,23 @@ impl BlockChecksumMap {
 
     /// Enregistre le checksum d'un bloc.
     pub fn record(&mut self, offset: DiskOffset, data: &[u8]) -> ExofsResult<[u8; 32]> {
-        let hash  = blake3_hash(data);
-        self.entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        let hash = blake3_hash(data);
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         // Mise à jour si déjà présent.
         for e in &mut self.entries {
             if e.offset == offset {
-                e.hash  = hash;
+                e.hash = hash;
                 e.valid = true;
                 return Ok(hash);
             }
         }
-        self.entries.push(BlockChecksumEntry { offset, hash, valid: true });
+        self.entries.push(BlockChecksumEntry {
+            offset,
+            hash,
+            valid: true,
+        });
         Ok(hash)
     }
 
@@ -379,7 +425,9 @@ impl BlockChecksumMap {
     pub fn verify(&self, offset: DiskOffset, data: &[u8]) -> ExofsResult<bool> {
         for e in &self.entries {
             if e.offset == offset {
-                if !e.valid { return Err(ExofsError::InvalidState); }
+                if !e.valid {
+                    return Err(ExofsError::InvalidState);
+                }
                 return Ok(blake3_hash(data) == e.hash);
             }
         }
@@ -389,18 +437,32 @@ impl BlockChecksumMap {
     /// Invalide un bloc (ex: après écriture).
     pub fn invalidate(&mut self, offset: DiskOffset) {
         for e in &mut self.entries {
-            if e.offset == offset { e.valid = false; }
+            if e.offset == offset {
+                e.valid = false;
+            }
         }
     }
 
-    pub fn entry_count(&self)    -> usize { self.entries.len() }
-    pub fn valid_count(&self)    -> usize { self.entries.iter().filter(|e| e.valid).count() }
-    pub fn invalid_count(&self)  -> usize { self.entries.iter().filter(|e| !e.valid).count() }
-    pub fn contains(&self, off: DiskOffset) -> bool { self.entries.iter().any(|e| e.offset == off) }
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn valid_count(&self) -> usize {
+        self.entries.iter().filter(|e| e.valid).count()
+    }
+    pub fn invalid_count(&self) -> usize {
+        self.entries.iter().filter(|e| !e.valid).count()
+    }
+    pub fn contains(&self, off: DiskOffset) -> bool {
+        self.entries.iter().any(|e| e.offset == off)
+    }
 
     /// Liste des blocs invalides.
     pub fn invalid_offsets(&self) -> Vec<DiskOffset> {
-        self.entries.iter().filter(|e| !e.valid).map(|e| e.offset).collect()
+        self.entries
+            .iter()
+            .filter(|e| !e.valid)
+            .map(|e| e.offset)
+            .collect()
     }
 }
 
@@ -415,29 +477,37 @@ impl BlockChecksumMap {
 /// authentifie tous les précédents.
 pub struct ChecksumChainer {
     chain_hash: [u8; 32],
-    segment:    u32,
+    segment: u32,
 }
 
 impl ChecksumChainer {
     /// Initialise avec un IV (ex : BlobId du blob en cours).
     pub fn new(iv: [u8; 32]) -> Self {
-        Self { chain_hash: iv, segment: 0 }
+        Self {
+            chain_hash: iv,
+            segment: 0,
+        }
     }
 
     /// Chaîne un nouveau segment.
     pub fn feed_segment(&mut self, data: &[u8]) -> ExofsResult<[u8; 32]> {
         let mut buf: Vec<u8> = Vec::new();
-        buf.try_reserve(32 + data.len()).map_err(|_| ExofsError::NoMemory)?;
+        buf.try_reserve(32 + data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         buf.extend_from_slice(&self.chain_hash);
         buf.extend_from_slice(data);
-        let new_hash    = blake3_hash(&buf);
+        let new_hash = blake3_hash(&buf);
         self.chain_hash = new_hash;
-        self.segment    = self.segment.wrapping_add(1);
+        self.segment = self.segment.wrapping_add(1);
         Ok(new_hash)
     }
 
-    pub fn current_hash(&self) -> [u8; 32] { self.chain_hash }
-    pub fn segment_index(&self) -> u32      { self.segment }
+    pub fn current_hash(&self) -> [u8; 32] {
+        self.chain_hash
+    }
+    pub fn segment_index(&self) -> u32 {
+        self.segment
+    }
 }
 
 #[cfg(test)]
@@ -448,7 +518,7 @@ mod tests_extra {
     fn test_block_checksum_map() {
         let mut m = BlockChecksumMap::new();
         let data = b"block contents";
-        let off  = DiskOffset(4096);
+        let off = DiskOffset(4096);
         m.record(off, data).unwrap();
         assert!(m.verify(off, data).unwrap());
         assert!(!m.verify(off, b"different").unwrap());
@@ -457,7 +527,7 @@ mod tests_extra {
     #[test]
     fn test_block_checksum_invalidate() {
         let mut m = BlockChecksumMap::new();
-        let off   = DiskOffset(0);
+        let off = DiskOffset(0);
         m.record(off, b"data").unwrap();
         m.invalidate(off);
         assert_eq!(m.valid_count(), 0);
@@ -466,7 +536,7 @@ mod tests_extra {
 
     #[test]
     fn test_chainer_deterministic() {
-        let iv   = [0u8; 32];
+        let iv = [0u8; 32];
         let mut c1 = ChecksumChainer::new(iv);
         let mut c2 = ChecksumChainer::new(iv);
         let h1 = c1.feed_segment(b"same data").unwrap();
@@ -476,7 +546,7 @@ mod tests_extra {
 
     #[test]
     fn test_chainer_diverges_on_different_data() {
-        let iv   = [0u8; 32];
+        let iv = [0u8; 32];
         let mut c1 = ChecksumChainer::new(iv);
         let mut c2 = ChecksumChainer::new(iv);
         let h1 = c1.feed_segment(b"data_A").unwrap();

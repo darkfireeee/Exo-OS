@@ -17,7 +17,6 @@
 //   REFCNT-01: ref_count check avant tout acces objet
 // ==============================================================================
 
-
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use core::fmt;
@@ -51,7 +50,7 @@ pub enum TriColor {
     /// Non atteint. Candidat a la collecte si encore Blanc a la fin.
     White = 0,
     /// Atteint mais enfants non encore explores. Dans la file grise.
-    Grey  = 1,
+    Grey = 1,
     /// Atteint et tous ses enfants explores. Definitivement vivant.
     Black = 2,
 }
@@ -73,7 +72,7 @@ impl TriColor {
     pub fn name(self) -> &'static str {
         match self {
             TriColor::White => "White",
-            TriColor::Grey  => "Grey",
+            TriColor::Grey => "Grey",
             TriColor::Black => "Black",
         }
     }
@@ -93,30 +92,30 @@ impl fmt::Display for TriColor {
 #[derive(Debug, Clone)]
 pub struct BlobNode {
     /// Identifiant unique du blob.
-    pub id:           BlobId,
+    pub id: BlobId,
     /// Couleur courante dans l'algorithme.
-    pub color:        TriColor,
+    pub color: TriColor,
     /// Taille physique en octets (pour bytes_freed).
-    pub phys_size:    u64,
+    pub phys_size: u64,
     /// Epoch de creation du blob.
     pub create_epoch: u64,
     /// Epoch du dernier acces connu.
-    pub last_epoch:   u64,
+    pub last_epoch: u64,
     /// Compteur de references au debut de la passe.
-    pub ref_count:    u32,
+    pub ref_count: u32,
     /// true si ce blob est epingle (GC-07 : EPOCH_PINNED).
-    pub pinned:       bool,
+    pub pinned: bool,
 }
 
 impl BlobNode {
     /// Cree un nouveau noeud avec couleur initiale Blanc.
     pub fn new(
-        id:           BlobId,
-        phys_size:    u64,
+        id: BlobId,
+        phys_size: u64,
         create_epoch: u64,
-        last_epoch:   u64,
-        ref_count:    u32,
-        pinned:       bool,
+        last_epoch: u64,
+        ref_count: u32,
+        pinned: bool,
     ) -> Self {
         Self {
             id,
@@ -134,9 +133,7 @@ impl BlobNode {
     ///   - ref_count == 0, ET
     ///   - non epingle (GC-07)
     pub fn is_collectible(&self) -> bool {
-        self.color == TriColor::White
-            && self.ref_count == 0
-            && !self.pinned
+        self.color == TriColor::White && self.ref_count == 0 && !self.pinned
     }
 
     /// Passe ce noeud en Gris (premiere atteinte).
@@ -182,7 +179,7 @@ impl TricolorWorkspace {
             .map_err(|_| ExofsError::NoMemory)?;
 
         Ok(Self {
-            nodes:      BTreeMap::new(),
+            nodes: BTreeMap::new(),
             grey_queue,
             mark_stats: MarkStats::default(),
         })
@@ -225,7 +222,7 @@ impl TricolorWorkspace {
         // Ne rien faire si le blob n'est pas dans l'index.
         let node = match self.nodes.get_mut(&id) {
             Some(n) => n,
-            None    => return Ok(()),
+            None => return Ok(()),
         };
 
         if node.color != TriColor::White {
@@ -256,8 +253,10 @@ impl TricolorWorkspace {
         for &id in roots {
             self.grey(id)?;
         }
-        self.mark_stats.roots_greyed =
-            self.mark_stats.roots_greyed.saturating_add(roots.len() as u64);
+        self.mark_stats.roots_greyed = self
+            .mark_stats
+            .roots_greyed
+            .saturating_add(roots.len() as u64);
         Ok(())
     }
 
@@ -275,8 +274,7 @@ impl TricolorWorkspace {
         match self.nodes.get_mut(id) {
             Some(n) if n.color == TriColor::Grey => {
                 n.mark_black();
-                self.mark_stats.marked_black =
-                    self.mark_stats.marked_black.saturating_add(1);
+                self.mark_stats.marked_black = self.mark_stats.marked_black.saturating_add(1);
                 true
             }
             _ => false,
@@ -310,12 +308,12 @@ impl TricolorWorkspace {
     /// Compte les blobs par couleur.
     pub fn color_counts(&self) -> (usize, usize, usize) {
         let mut white = 0usize;
-        let mut grey  = 0usize;
+        let mut grey = 0usize;
         let mut black = 0usize;
         for node in self.nodes.values() {
             match node.color {
                 TriColor::White => white += 1,
-                TriColor::Grey  => grey  += 1,
+                TriColor::Grey => grey += 1,
                 TriColor::Black => black += 1,
             }
         }
@@ -348,19 +346,19 @@ impl TricolorWorkspace {
 #[derive(Debug, Default, Clone)]
 pub struct MarkStats {
     /// Blobs grises depuis les racines.
-    pub roots_greyed:     u64,
+    pub roots_greyed: u64,
     /// Total des blobs grises (racines + propagation).
-    pub greyed:           u64,
+    pub greyed: u64,
     /// Blobs marques Noirs.
-    pub marked_black:     u64,
+    pub marked_black: u64,
     /// Blobs traverses par le marker.
-    pub traversed:        u64,
+    pub traversed: u64,
     /// Nombre de fois que la file grise a deborde (GC-03 : Err retourne).
-    pub queue_overflows:  u64,
+    pub queue_overflows: u64,
     /// Edges de relation traverses (GC-02).
-    pub relation_edges:   u64,
+    pub relation_edges: u64,
     /// Iterations du marquage.
-    pub mark_iterations:  u64,
+    pub mark_iterations: u64,
 }
 
 impl fmt::Display for MarkStats {
@@ -388,11 +386,11 @@ impl fmt::Display for MarkStats {
 #[derive(Debug, Default, Clone)]
 pub struct SweepResult {
     /// Blobs effectivement collectes (etaient Blancs avec ref_count=0).
-    pub blobs_swept:    u64,
+    pub blobs_swept: u64,
     /// Octets liberes.
-    pub bytes_freed:    u64,
+    pub bytes_freed: u64,
     /// Blobs Blancs mais non collectes (EPOCH_PINNED ou ref_count > 0).
-    pub blobs_skipped:  u64,
+    pub blobs_skipped: u64,
     /// Blobs ajoutes a la DeferredDeleteQueue.
     pub deferred_count: u64,
 }
@@ -402,10 +400,7 @@ impl fmt::Display for SweepResult {
         write!(
             f,
             "SweepResult[swept={} freed={}B skipped={} deferred={}]",
-            self.blobs_swept,
-            self.bytes_freed,
-            self.blobs_skipped,
-            self.deferred_count,
+            self.blobs_swept, self.bytes_freed, self.blobs_skipped, self.deferred_count,
         )
     }
 }
@@ -425,7 +420,9 @@ pub fn grey_queue_has_room(workspace: &TricolorWorkspace) -> bool {
 pub fn grey_queue_fill_ratio_x100(workspace: &TricolorWorkspace) -> u64 {
     let len = workspace.grey_queue_len() as u64;
     let max = MAX_GC_GREY_QUEUE as u64;
-    if max == 0 { return 100; }
+    if max == 0 {
+        return 100;
+    }
     len.saturating_mul(100) / max
 }
 
@@ -544,13 +541,17 @@ mod tests {
     #[test]
     fn test_tricolor_display() {
         assert_eq!(TriColor::White.to_string(), "White");
-        assert_eq!(TriColor::Grey.to_string(),  "Grey");
+        assert_eq!(TriColor::Grey.to_string(), "Grey");
         assert_eq!(TriColor::Black.to_string(), "Black");
     }
 
     #[test]
     fn test_mark_stats_display() {
-        let s = MarkStats { greyed: 42, marked_black: 30, ..Default::default() };
+        let s = MarkStats {
+            greyed: 42,
+            marked_black: 30,
+            ..Default::default()
+        };
         let d = alloc::format!("{}", s);
         assert!(d.contains("greyed=42"));
     }

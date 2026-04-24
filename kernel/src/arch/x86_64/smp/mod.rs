@@ -10,10 +10,10 @@
 //! 5. AP appelle `ap_entry()` — initialise GDT, IDT, TSS, LAPIC, FPU
 //! 6. AP se signale "online" et entre dans la boucle scheduler idle
 
+pub mod hotplug;
 pub mod init;
 pub mod percpu;
-pub mod hotplug;
 
-pub use init::{smp_boot_aps, ap_entry, smp_cpu_count};
-pub use percpu::{PerCpuData, per_cpu, per_cpu_mut, init_percpu_for_bsp, init_percpu_for_ap};
-pub use hotplug::{cpu_online, cpu_offline, cpu_is_online};
+pub use hotplug::{cpu_is_online, cpu_offline, cpu_online};
+pub use init::{ap_entry, smp_boot_aps, smp_boot_complete, smp_cpu_count};
+pub use percpu::{init_percpu_for_ap, init_percpu_for_bsp, per_cpu, per_cpu_mut, PerCpuData};

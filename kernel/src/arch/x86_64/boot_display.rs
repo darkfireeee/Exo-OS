@@ -39,8 +39,14 @@ fn draw_vga_shell() {
     vga_early::set_cursor(0, 0);
     vga_early::write_centered("  Exo-OS  --  Boot verification path  ", title);
     vga_early::write_char(b'\n', text_attr());
-    vga_early::write_str("  VGA fallback active. Framebuffer will attach after arch_boot_init.\n", accent_attr());
-    vga_early::write_str("  Module progress below follows the real init sequence.\n\n", accent_attr());
+    vga_early::write_str(
+        "  VGA fallback active. Framebuffer will attach after arch_boot_init.\n",
+        accent_attr(),
+    );
+    vga_early::write_str(
+        "  Module progress below follows the real init sequence.\n\n",
+        accent_attr(),
+    );
     vga_early::write_hline(vga_early::attr(vga_early::DARK_GRAY, vga_early::BLACK));
     vga_early::write_str("  Waiting for architecture handoff...\n\n", text_attr());
     vga_early::write_str("  Modules:\n", accent_attr());

@@ -10,9 +10,8 @@
 //! ## Précision cible
 //! Calibration à ±0.01% (< 100 ppm)
 
-
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use super::features::CPU_FEATURES;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ── TSC globals ───────────────────────────────────────────────────────────────
 
@@ -147,7 +146,9 @@ pub fn tsc_delay_ms(ms: u64) {
 /// Convertit des cycles TSC en nanosecondes
 pub fn tsc_cycles_to_ns(cycles: u64) -> u64 {
     let hz = TSC_HZ.load(Ordering::Relaxed);
-    if hz == 0 { return cycles; }
+    if hz == 0 {
+        return cycles;
+    }
     // ns = cycles * 1_000_000_000 / hz
     (cycles as u128 * 1_000_000_000 / hz as u128) as u64
 }
@@ -155,7 +156,7 @@ pub fn tsc_cycles_to_ns(cycles: u64) -> u64 {
 /// Retourne le temps écoulé depuis le boot en nanosecondes (monotone)
 pub fn tsc_ns_since_boot() -> u64 {
     let boot = TSC_BOOT_VALUE.load(Ordering::Relaxed);
-    let now  = read_tsc();
+    let now = read_tsc();
     tsc_cycles_to_ns(now.wrapping_sub(boot))
 }
 
@@ -166,8 +167,8 @@ const PIT_CALIBRATE_COUNT: u16 = 11931;
 
 /// Port PIT canal 2 (speaker — peut être utilisé sans déclencher de son)
 const PIT_CHANNEL2: u16 = 0x42;
-const PIT_CONTROL:  u16 = 0x43;
-const PIT_GATE:     u16 = 0x61;
+const PIT_CONTROL: u16 = 0x43;
+const PIT_GATE: u16 = 0x61;
 
 /// PIT fréquence base en Hz
 const PIT_BASE_HZ: u64 = 1_193_182;
@@ -177,7 +178,7 @@ const PIT_BASE_HZ: u64 = 1_193_182;
 /// Durée : environ 10ms (bloquant)
 /// Précision : ±1% (suffisant pour init, HPET affinera si disponible)
 pub fn calibrate_tsc_with_pit() -> u64 {
-    use super::super::{outb, inb, io_delay};
+    use super::super::{inb, io_delay, outb};
 
     // 1. Configurer PIT canal 2 en mode 0 (one-shot)
     // SAFETY: ports PIT valides — utilisation standard
@@ -209,9 +210,14 @@ pub fn calibrate_tsc_with_pit() -> u64 {
     const MAX_ITER: u32 = 10_000;
     loop {
         let val = unsafe { inb(PIT_GATE) };
-        if val & 0x20 != 0 { pit_ok = true; break; }
+        if val & 0x20 != 0 {
+            pit_ok = true;
+            break;
+        }
         counter = counter.wrapping_add(1);
-        if counter >= MAX_ITER { break; }
+        if counter >= MAX_ITER {
+            break;
+        }
         core::hint::spin_loop();
     }
     if !pit_ok {
@@ -262,7 +268,9 @@ pub fn calibrate_tsc_cpuid() -> Option<u64> {
         (eax, ebx_r as u32, ecx, edx)
     };
 
-    if eax == 0 || ebx == 0 { return None; }
+    if eax == 0 || ebx == 0 {
+        return None;
+    }
 
     // Fréquence TSC = ecx * ebx / eax (Hz)
     // ecx = crystal clock Hz (ou 0 → utiliser valeur standard)
@@ -280,15 +288,15 @@ pub fn calibrate_tsc_cpuid() -> Option<u64> {
 ///
 /// Appelé depuis `early_init.rs` après init CPU features et PIC/APIC.
 pub fn init_tsc(cpu_logical_id: u32) {
-    use super::msr;
     use super::features::CPU_FEATURES;
+    use super::msr;
 
     // Enregistrer la valeur TSC au boot
     let boot_tsc = read_tsc();
     TSC_BOOT_VALUE.store(boot_tsc, Ordering::Release);
 
     // Vérifier TSC invariant (CPUID 0x80000007 EDX bit 8)
-    let (_,_,_,edx_ext7) = {
+    let (_, _, _, edx_ext7) = {
         let (ecx, edx): (u32, u32);
         // SAFETY: CPUID non-privilégié ; xchg pour préserver rbx
         unsafe {
@@ -314,8 +322,7 @@ pub fn init_tsc(cpu_logical_id: u32) {
     // pas pendant la boucle d'attente busy-poll (comportement fréquent en TCG/KVM
     // avant init APIC). Elle pourra être réactivée post-boot une fois le timer APIC
     // ou HPET initialisé, via recalibrate_tsc_with_hpet().
-    let hz = calibrate_tsc_cpuid()
-        .unwrap_or(1_000_000_000); // 1 GHz : fallback sûr ; sera recalibré post-APIC
+    let hz = calibrate_tsc_cpuid().unwrap_or(1_000_000_000); // 1 GHz : fallback sûr ; sera recalibré post-APIC
 
     // Arrondir à multiple de 100 kHz pour stabilité
     let hz_rounded = (hz + 50_000) / 100_000 * 100_000;
@@ -327,23 +334,33 @@ pub fn init_tsc(cpu_logical_id: u32) {
     // Configurer TSC_AUX avec le CPU ID logique (utilisé par RDTSCP)
     if CPU_FEATURES.has_rdtscp() {
         // SAFETY: MSR_TSC_AUX toujours disponible si RDTSCP supporté
-        unsafe { msr::write_msr(msr::MSR_TSC_AUX, cpu_logical_id as u64); }
+        unsafe {
+            msr::write_msr(msr::MSR_TSC_AUX, cpu_logical_id as u64);
+        }
     }
 
     // Activer NXE dans EFER si NX disponible
     if CPU_FEATURES.has_nx() {
         // SAFETY: activation NXE dans EFER — requis pour protections mémoire
-        unsafe { msr::set_msr_bits(msr::MSR_IA32_EFER, msr::EFER_NXE); }
+        unsafe {
+            msr::set_msr_bits(msr::MSR_IA32_EFER, msr::EFER_NXE);
+        }
     }
 }
 
 // ── Accesseurs ─────────────────────────────────────────────────────────────────
 
 /// Retourne la fréquence TSC en Hz
-#[inline(always)] pub fn tsc_hz()  -> u64 { TSC_HZ.load(Ordering::Relaxed)  }
+#[inline(always)]
+pub fn tsc_hz() -> u64 {
+    TSC_HZ.load(Ordering::Relaxed)
+}
 
 /// Retourne la fréquence TSC en kHz
-#[inline(always)] pub fn tsc_khz() -> u64 { TSC_KHZ.load(Ordering::Relaxed) }
+#[inline(always)]
+pub fn tsc_khz() -> u64 {
+    TSC_KHZ.load(Ordering::Relaxed)
+}
 
 /// Convertit des millisecondes en cycles TSC
 ///
@@ -351,7 +368,9 @@ pub fn init_tsc(cpu_logical_id: u32) {
 #[inline(always)]
 pub fn tsc_ms_to_cycles(ms: u64) -> u64 {
     let hz = TSC_HZ.load(Ordering::Relaxed);
-    if hz == 0 { return 0; }
+    if hz == 0 {
+        return 0;
+    }
     // ms * hz / 1_000 — évite l'overflow u64 pour ms < 4_000_000 à 4 GHz
     ms.saturating_mul(hz) / 1_000
 }
@@ -362,15 +381,23 @@ pub fn tsc_ms_to_cycles(ms: u64) -> u64 {
 #[inline(always)]
 pub fn tsc_us_to_cycles(us: u64) -> u64 {
     let hz = TSC_HZ.load(Ordering::Relaxed);
-    if hz == 0 { return 0; }
+    if hz == 0 {
+        return 0;
+    }
     us.saturating_mul(hz) / 1_000_000
 }
 
 /// Retourne `true` si le TSC est invariant (stable à travers les C-states)
-#[inline(always)] pub fn tsc_invariant() -> bool { TSC_INVARIANT.load(Ordering::Relaxed) }
+#[inline(always)]
+pub fn tsc_invariant() -> bool {
+    TSC_INVARIANT.load(Ordering::Relaxed)
+}
 
 /// Retourne `true` si la calibration TSC est terminée
-#[inline(always)] pub fn tsc_calibrated() -> bool { TSC_CALIBRATED.load(Ordering::Relaxed) }
+#[inline(always)]
+pub fn tsc_calibrated() -> bool {
+    TSC_CALIBRATED.load(Ordering::Relaxed)
+}
 
 /// Écrit la fréquence TSC calibrée (appelé par le module calibration/).
 /// Met à jour TSC_HZ, TSC_KHZ et TSC_CALIBRATED en Release.
@@ -409,9 +436,13 @@ pub fn tsc_overflow_count() -> u64 {
 ///
 /// Retourne `true` et met à jour `TSC_HZ` / `TSC_KHZ` si succès.
 pub fn recalibrate_tsc_with_pm_timer() -> bool {
-    use super::super::acpi::pm_timer::{pm_timer_available, pm_timer_is_32bit, pm_timer_read, PM_TIMER_FREQ_HZ};
+    use super::super::acpi::pm_timer::{
+        pm_timer_available, pm_timer_is_32bit, pm_timer_read, PM_TIMER_FREQ_HZ,
+    };
 
-    if !pm_timer_available() { return false; }
+    if !pm_timer_available() {
+        return false;
+    }
 
     const MEASURE_MS: u64 = 10;
     // Limites d'itérations (pas TSC) : le RDTSC guest en QEMU/TCG peut avancer
@@ -432,47 +463,65 @@ pub fn recalibrate_tsc_with_pm_timer() -> bool {
     // Sur bare-metal : inl ~10ns, PM timer ~0.036 tick/iter → besoin de ~1M iter
     //   → utilise TSC fallback pour le timeout, mais avec calibration correcte.
     // Compromis final : 1000 iterations max + sortie dès que target atteint.
-    const MAX_SYNC_ITERS:    u32 = 500;
+    const MAX_SYNC_ITERS: u32 = 500;
     const MAX_MEASURE_ITERS: u32 = 2_000;
 
-    let mask: u64 = if pm_timer_is_32bit() { 0xFFFF_FFFF } else { 0x00FF_FFFF };
+    let mask: u64 = if pm_timer_is_32bit() {
+        0xFFFF_FFFF
+    } else {
+        0x00FF_FFFF
+    };
     let ticks_target = (PM_TIMER_FREQ_HZ as u64 * MEASURE_MS) / 1000; // ~35 795
 
     // ── Synchronisation : attendre que le PM Timer avance d'au moins 1 tick ──
     let sync_start = pm_timer_read();
     let mut synced = false;
     for _ in 0..MAX_SYNC_ITERS {
-        if pm_timer_read() != sync_start { synced = true; break; }
+        if pm_timer_read() != sync_start {
+            synced = true;
+            break;
+        }
         core::hint::spin_loop();
     }
-    if !synced { return false; }
+    if !synced {
+        return false;
+    }
 
     // ── Mesure : TSC delta pendant ticks_target PM Timer ticks (~10ms réels) ──
     let tsc_start = read_tsc_begin();
-    let pm_start  = pm_timer_read() as u64;
-    let mut done  = false;
+    let pm_start = pm_timer_read() as u64;
+    let mut done = false;
 
     for _ in 0..MAX_MEASURE_ITERS {
-        let pm_now  = pm_timer_read() as u64;
+        let pm_now = pm_timer_read() as u64;
         let elapsed = if pm_now >= pm_start {
             pm_now - pm_start
         } else {
             (mask + 1).wrapping_sub(pm_start).wrapping_add(pm_now)
         };
-        if elapsed >= ticks_target { done = true; break; }
+        if elapsed >= ticks_target {
+            done = true;
+            break;
+        }
         core::hint::spin_loop();
     }
-    if !done { return false; }
+    if !done {
+        return false;
+    }
 
     let (tsc_end, _) = read_tsc_end();
     let tsc_delta = tsc_end.wrapping_sub(tsc_start);
-    if tsc_delta == 0 { return false; }
+    if tsc_delta == 0 {
+        return false;
+    }
 
     // hz = tsc_delta * (1_000 / MEASURE_MS) = tsc_delta * 100
     let hz_raw = tsc_delta.saturating_mul(1000 / MEASURE_MS);
 
     // Sanity check : [10 MHz, 10 GHz]
-    if hz_raw < 10_000_000 || hz_raw > 10_000_000_000 { return false; }
+    if hz_raw < 10_000_000 || hz_raw > 10_000_000_000 {
+        return false;
+    }
 
     let hz = (hz_raw + 50_000) / 100_000 * 100_000;
     TSC_HZ.store(hz, Ordering::Release);
@@ -490,44 +539,62 @@ pub fn recalibrate_tsc_with_pm_timer() -> bool {
 pub fn recalibrate_tsc_with_hpet() -> bool {
     use super::super::acpi::hpet::{hpet_available, hpet_read_counter, hpet_us_to_ticks};
 
-    if !hpet_available() { return false; }
+    if !hpet_available() {
+        return false;
+    }
 
     // Limites d'itérations (pas cycles TSC — RDTSC guest QEMU/TCG tourne 50-100× lentement).
     // HPET MMIO read ≈ 50µs/QEMU ou <10ns/bare-metal.
     // 100 sync reads = 5ms QEMU, <1µs bare-metal.
     // 500 measure reads = 25ms QEMU (HPET avance fast), <5µs bare-metal.
-    const MAX_SYNC_ITERS:    u32 = 100;
+    const MAX_SYNC_ITERS: u32 = 100;
     const MAX_MEASURE_ITERS: u32 = 500;
 
     // Synchronisation : attendre que le HPET avance d'au moins 1 tick
-    let sync      = hpet_read_counter();
+    let sync = hpet_read_counter();
     let mut synced = false;
     for _ in 0..MAX_SYNC_ITERS {
-        if hpet_read_counter() != sync { synced = true; break; }
+        if hpet_read_counter() != sync {
+            synced = true;
+            break;
+        }
         core::hint::spin_loop();
     }
-    if !synced { return false; }
+    if !synced {
+        return false;
+    }
 
     // Mesure TSC début
-    let tsc_start  = read_tsc_begin();
+    let tsc_start = read_tsc_begin();
     let hpet_start = hpet_read_counter();
 
     let ticks_10ms = hpet_us_to_ticks(10_000);
-    if ticks_10ms == 0 { return false; }
+    if ticks_10ms == 0 {
+        return false;
+    }
 
     let mut done = false;
     for _ in 0..MAX_MEASURE_ITERS {
-        if hpet_read_counter().wrapping_sub(hpet_start) >= ticks_10ms { done = true; break; }
+        if hpet_read_counter().wrapping_sub(hpet_start) >= ticks_10ms {
+            done = true;
+            break;
+        }
         core::hint::spin_loop();
     }
-    if !done { return false; }
+    if !done {
+        return false;
+    }
 
     let (tsc_end, _) = read_tsc_end();
     let tsc_delta = tsc_end.wrapping_sub(tsc_start);
-    if tsc_delta == 0 { return false; }
+    if tsc_delta == 0 {
+        return false;
+    }
 
     let hz_raw = (tsc_delta as u128 * 100) as u64; // ×100 car 10ms = 1/100 s
-    if hz_raw < 10_000_000 || hz_raw > 10_000_000_000 { return false; }
+    if hz_raw < 10_000_000 || hz_raw > 10_000_000_000 {
+        return false;
+    }
 
     let hz = (hz_raw + 50_000) / 100_000 * 100_000;
     TSC_HZ.store(hz, Ordering::Release);

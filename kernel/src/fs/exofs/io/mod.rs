@@ -13,7 +13,6 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -51,7 +50,7 @@ pub use buffered_io::{BufferedReader, BufferedWriter, IoBuffer, RingBuffer};
 pub use direct_io::{BlockSize, DirectIo, DirectIoBuffer, DirectIoConfig};
 
 // scatter_gather
-pub use scatter_gather::{PhysSgList, PhysSegment, SgEngine, SgFragment, SgList};
+pub use scatter_gather::{PhysSegment, PhysSgList, SgEngine, SgFragment, SgList};
 
 // async_io
 pub use async_io::{AsyncIoHandle, AsyncIoQueue, AsyncOpKind, AsyncState, ASYNC_IO_QUEUE};
@@ -63,12 +62,12 @@ pub use io_batch::{BatchResult, BatchStats, IoBatch, IoBatchEntry};
 pub use io_uring::{IoUringCqe, IoUringQueue, IoUringSqe, SqeOpcode};
 
 // prefetch
-pub use prefetch::{PrefetchConfig, PrefetchEntry, PrefetchQueue, Prefetcher, PrefetchStrategy};
+pub use prefetch::{PrefetchConfig, PrefetchEntry, PrefetchQueue, PrefetchStrategy, Prefetcher};
 
 // readahead
 pub use readahead::{
-    BlockAccessLog, ReadaheadEngine, ReadaheadPolicy, ReadaheadScheduler,
-    ReadaheadStats, ReadaheadWindow,
+    BlockAccessLog, ReadaheadEngine, ReadaheadPolicy, ReadaheadScheduler, ReadaheadStats,
+    ReadaheadWindow,
 };
 
 // writeback
@@ -90,34 +89,34 @@ pub use io_stats::{IoOpKind, IoStats, IoStatsSnapshot, IO_STATS};
 /// Configuration globale du module I/O ExoFS.
 #[derive(Clone, Copy, Debug)]
 pub struct IoConfig {
-    pub stats_enabled:       bool,
-    pub default_block_size:  u32,
-    pub verify_checksums:    bool,
-    pub max_pending_writes:  u32,
-    pub readahead_enabled:   bool,
-    pub writeback_enabled:   bool,
+    pub stats_enabled: bool,
+    pub default_block_size: u32,
+    pub verify_checksums: bool,
+    pub max_pending_writes: u32,
+    pub readahead_enabled: bool,
+    pub writeback_enabled: bool,
 }
 
 impl IoConfig {
     pub fn default_config() -> Self {
         Self {
-            stats_enabled:      true,
+            stats_enabled: true,
             default_block_size: 4096,
-            verify_checksums:   true,
+            verify_checksums: true,
             max_pending_writes: 256,
-            readahead_enabled:  true,
-            writeback_enabled:  true,
+            readahead_enabled: true,
+            writeback_enabled: true,
         }
     }
 
     pub fn minimal() -> Self {
         Self {
-            stats_enabled:      false,
+            stats_enabled: false,
             default_block_size: 512,
-            verify_checksums:   false,
+            verify_checksums: false,
             max_pending_writes: 64,
-            readahead_enabled:  false,
-            writeback_enabled:  false,
+            readahead_enabled: false,
+            writeback_enabled: false,
         }
     }
 
@@ -126,7 +125,9 @@ impl IoConfig {
             512 | 1024 | 2048 | 4096 | 8192 => {}
             _ => return Err(ExofsError::InvalidArgument),
         }
-        if self.max_pending_writes == 0 { return Err(ExofsError::InvalidArgument); }
+        if self.max_pending_writes == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         Ok(())
     }
 }
@@ -142,13 +143,15 @@ pub enum IoHealthStatus {
 }
 
 impl IoHealthStatus {
-    pub fn is_ok(&self) -> bool { matches!(self, Self::Ok) }
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Self::Ok)
+    }
 
     pub fn to_str(&self) -> &'static str {
         match self {
-            Self::Ok      => "ok",
+            Self::Ok => "ok",
             Self::Degraded => "degraded",
-            Self::Error   => "error",
+            Self::Error => "error",
         }
     }
 }
@@ -158,18 +161,20 @@ impl IoHealthStatus {
 /// Snapshot de métriques agrégées du module I/O.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct IoModuleSummary {
-    pub total_reads:          u64,
-    pub total_writes:         u64,
-    pub total_errors:         u64,
-    pub bytes_read:           u64,
-    pub bytes_written:        u64,
-    pub pending_writeback:    u64,
+    pub total_reads: u64,
+    pub total_writes: u64,
+    pub total_errors: u64,
+    pub bytes_read: u64,
+    pub bytes_written: u64,
+    pub pending_writeback: u64,
     pub readahead_hint_count: u64,
-    pub async_ops_pending:    u64,
+    pub async_ops_pending: u64,
 }
 
 impl IoModuleSummary {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn total_ops(&self) -> u64 {
         self.total_reads.saturating_add(self.total_writes)
@@ -177,7 +182,9 @@ impl IoModuleSummary {
 
     pub fn error_rate_pct10(&self) -> u64 {
         let total = self.total_ops();
-        if total == 0 { return 0; }
+        if total == 0 {
+            return 0;
+        }
         self.total_errors
             .saturating_mul(1000)
             .checked_div(total)
@@ -189,11 +196,11 @@ impl IoModuleSummary {
 
 /// Pilote principal du module I/O — lifecycle + santé.
 pub struct IoModule {
-    config:       IoConfig,
-    initialized:  AtomicBool,
-    error_count:  AtomicU64,
-    op_count:     AtomicU64,
-    bytes_total:  AtomicU64,
+    config: IoConfig,
+    initialized: AtomicBool,
+    error_count: AtomicU64,
+    op_count: AtomicU64,
+    bytes_total: AtomicU64,
 }
 
 // SAFETY : champs atomiques uniquement.
@@ -206,14 +213,16 @@ impl IoModule {
             config,
             initialized: AtomicBool::new(false),
             error_count: AtomicU64::new(0),
-            op_count:    AtomicU64::new(0),
+            op_count: AtomicU64::new(0),
             bytes_total: AtomicU64::new(0),
         }
     }
 
     /// Initialise le module ; idempotent.
     pub fn init(&self) -> ExofsResult<()> {
-        if self.initialized.load(Ordering::Acquire) { return Ok(()); }
+        if self.initialized.load(Ordering::Acquire) {
+            return Ok(());
+        }
         self.config.validate()?;
         self.initialized.store(true, Ordering::Release);
         Ok(())
@@ -221,25 +230,33 @@ impl IoModule {
 
     /// Contrôle de santé basique.
     pub fn health_check(&self) -> IoHealthStatus {
-        if !self.initialized.load(Ordering::Acquire) { return IoHealthStatus::Error; }
+        if !self.initialized.load(Ordering::Acquire) {
+            return IoHealthStatus::Error;
+        }
         let errs = self.error_count.load(Ordering::Relaxed);
-        let ops  = self.op_count.load(Ordering::Relaxed);
-        if ops == 0 { return IoHealthStatus::Ok; }
+        let ops = self.op_count.load(Ordering::Relaxed);
+        if ops == 0 {
+            return IoHealthStatus::Ok;
+        }
         // Dégradé si > 5 % d'erreurs (ARITH-02: checked_div)
         let rate = errs.saturating_mul(100).checked_div(ops).unwrap_or(0);
-        if rate == 0 { IoHealthStatus::Ok }
-        else if rate < 5 { IoHealthStatus::Degraded }
-        else { IoHealthStatus::Error }
+        if rate == 0 {
+            IoHealthStatus::Ok
+        } else if rate < 5 {
+            IoHealthStatus::Degraded
+        } else {
+            IoHealthStatus::Error
+        }
     }
 
     /// Résumé agrégé.
     pub fn summary(&self) -> IoModuleSummary {
         IoModuleSummary {
-            total_reads:       self.op_count.load(Ordering::Relaxed),
-            total_writes:      0,
-            total_errors:      self.error_count.load(Ordering::Relaxed),
-            bytes_read:        self.bytes_total.load(Ordering::Relaxed),
-            bytes_written:     0,
+            total_reads: self.op_count.load(Ordering::Relaxed),
+            total_writes: 0,
+            total_errors: self.error_count.load(Ordering::Relaxed),
+            bytes_read: self.bytes_total.load(Ordering::Relaxed),
+            bytes_written: 0,
             pending_writeback: WRITEBACK_QUEUE.pending_count(),
             ..IoModuleSummary::default()
         }
@@ -254,17 +271,19 @@ impl IoModule {
         self.error_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn config(&self) -> &IoConfig { &self.config }
+    pub fn config(&self) -> &IoConfig {
+        &self.config
+    }
 }
 
 /// Instance globale du module I/O.
 pub static IO_MODULE: IoModule = IoModule::new_const(IoConfig {
-    stats_enabled:      true,
+    stats_enabled: true,
     default_block_size: 4096,
-    verify_checksums:   true,
+    verify_checksums: true,
     max_pending_writes: 256,
-    readahead_enabled:  true,
-    writeback_enabled:  true,
+    readahead_enabled: true,
+    writeback_enabled: true,
 });
 
 // ─── Fonctions utilitaires ────────────────────────────────────────────────────
@@ -378,7 +397,7 @@ mod tests {
     #[test]
     fn test_module_summary_error_rate() {
         let mut s = IoModuleSummary::new();
-        s.total_reads  = 90;
+        s.total_reads = 90;
         s.total_writes = 10;
         s.total_errors = 5;
         // 5 / 100 * 1000 = 50

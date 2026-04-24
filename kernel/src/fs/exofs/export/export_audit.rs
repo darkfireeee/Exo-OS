@@ -13,7 +13,6 @@
 //! RECUR-01 : pas de récursion — boucles while/for.
 //! ARITH-02 : saturating_* / wrapping_* sur les compteurs.
 
-
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -33,70 +32,70 @@ pub static EXPORT_AUDIT: ExportAuditLog = ExportAuditLog::new_const();
 #[repr(u8)]
 pub enum ExportEvent {
     /// Session d'export démarrée.
-    ExportStarted       = 0,
+    ExportStarted = 0,
     /// Session d'export terminée avec succès.
-    ExportCompleted     = 1,
+    ExportCompleted = 1,
     /// Session d'export interrompue par erreur.
-    ExportFailed        = 2,
+    ExportFailed = 2,
     /// Session d'import démarrée.
-    ImportStarted       = 3,
+    ImportStarted = 3,
     /// Session d'import terminée avec succès.
-    ImportCompleted     = 4,
+    ImportCompleted = 4,
     /// Session d'import interrompue par erreur.
-    ImportFailed        = 5,
+    ImportFailed = 5,
     /// Blob exporté vers l'archive.
-    BlobExported        = 6,
+    BlobExported = 6,
     /// Blob importé depuis l'archive.
-    BlobImported        = 7,
+    BlobImported = 7,
     /// Tombstone exporté.
-    TombstoneExported   = 8,
+    TombstoneExported = 8,
     /// Tombstone importé.
-    TombstoneImported   = 9,
+    TombstoneImported = 9,
     /// Erreur CRC32C détectée sur un payload.
-    CrcError            = 10,
+    CrcError = 10,
     /// BlobId ne correspond pas au hash des données (RÈGLE 11).
-    BlobIdMismatch      = 11,
+    BlobIdMismatch = 11,
     /// Magic invalide détecté dans l'archive (RÈGLE 8).
-    MagicError          = 12,
+    MagicError = 12,
     /// Conflit de blob résolu (blob déjà présent).
-    ConflictResolved    = 13,
+    ConflictResolved = 13,
     /// Entrée ignorée (filtrée par politique).
-    EntrySkipped        = 14,
+    EntrySkipped = 14,
     /// Archive compressée.
-    CompressionApplied  = 15,
+    CompressionApplied = 15,
     /// Archive décompressée.
-    DecompressionDone   = 16,
+    DecompressionDone = 16,
     /// Vérification d'intégrité réussie.
-    IntegrityVerified   = 17,
+    IntegrityVerified = 17,
     /// Vérification d'intégrité échouée.
-    IntegrityFailed     = 18,
+    IntegrityFailed = 18,
     /// Checkpoint de reprise enregistré.
-    CheckpointSaved     = 19,
+    CheckpointSaved = 19,
     /// Session d'export/import démarrée (alias générique).
-    SessionStarted      = 20,
+    SessionStarted = 20,
     /// Session d'export/import terminée avec succès (alias générique).
-    SessionCompleted    = 21,
+    SessionCompleted = 21,
     /// Session d'export/import interrompue par erreur (alias générique).
-    SessionFailed       = 22,
+    SessionFailed = 22,
     /// Export incrémental effectué.
-    IncrementalExport   = 23,
+    IncrementalExport = 23,
     /// Événement inconnu / réservé.
-    Unknown             = 255,
+    Unknown = 255,
 }
 
 impl ExportEvent {
     pub fn from_u8(v: u8) -> Self {
         match v {
-            0  => Self::ExportStarted,
-            1  => Self::ExportCompleted,
-            2  => Self::ExportFailed,
-            3  => Self::ImportStarted,
-            4  => Self::ImportCompleted,
-            5  => Self::ImportFailed,
-            6  => Self::BlobExported,
-            7  => Self::BlobImported,
-            8  => Self::TombstoneExported,
-            9  => Self::TombstoneImported,
+            0 => Self::ExportStarted,
+            1 => Self::ExportCompleted,
+            2 => Self::ExportFailed,
+            3 => Self::ImportStarted,
+            4 => Self::ImportCompleted,
+            5 => Self::ImportFailed,
+            6 => Self::BlobExported,
+            7 => Self::BlobImported,
+            8 => Self::TombstoneExported,
+            9 => Self::TombstoneImported,
             10 => Self::CrcError,
             11 => Self::BlobIdMismatch,
             12 => Self::MagicError,
@@ -107,21 +106,29 @@ impl ExportEvent {
             17 => Self::IntegrityVerified,
             18 => Self::IntegrityFailed,
             19 => Self::CheckpointSaved,
-            _  => Self::Unknown,
+            _ => Self::Unknown,
         }
     }
 
     /// Retourne true si l'événement représente une erreur.
     pub fn is_error(&self) -> bool {
-        matches!(self,
-            Self::ExportFailed | Self::ImportFailed | Self::CrcError |
-            Self::BlobIdMismatch | Self::MagicError | Self::IntegrityFailed
+        matches!(
+            self,
+            Self::ExportFailed
+                | Self::ImportFailed
+                | Self::CrcError
+                | Self::BlobIdMismatch
+                | Self::MagicError
+                | Self::IntegrityFailed
         )
     }
 
     /// Retourne true si l'événement concerne un blob individuel.
     pub fn is_blob_event(&self) -> bool {
-        matches!(self, Self::BlobExported | Self::BlobImported | Self::BlobIdMismatch)
+        matches!(
+            self,
+            Self::BlobExported | Self::BlobImported | Self::BlobIdMismatch
+        )
     }
 }
 
@@ -205,7 +212,9 @@ impl ExportAuditEntry {
     }
 
     /// Retourne true si l'entrée représente une erreur.
-    pub fn is_error(&self) -> bool { self.event.is_error() }
+    pub fn is_error(&self) -> bool {
+        self.event.is_error()
+    }
 }
 
 // ─── Statistiques d'audit ────────────────────────────────────────────────────
@@ -213,28 +222,36 @@ impl ExportAuditEntry {
 /// Compteurs agrégés des événements d'audit.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExportAuditStats {
-    pub exports_started:    u32,
-    pub exports_completed:  u32,
-    pub exports_failed:     u32,
-    pub imports_started:    u32,
-    pub imports_completed:  u32,
-    pub imports_failed:     u32,
-    pub blobs_exported:     u64,
-    pub blobs_imported:     u64,
+    pub exports_started: u32,
+    pub exports_completed: u32,
+    pub exports_failed: u32,
+    pub imports_started: u32,
+    pub imports_completed: u32,
+    pub imports_failed: u32,
+    pub blobs_exported: u64,
+    pub blobs_imported: u64,
     pub tombstones_exported: u32,
-    pub crc_errors:         u32,
-    pub magic_errors:       u32,
+    pub crc_errors: u32,
+    pub magic_errors: u32,
     pub blob_id_mismatches: u32,
-    pub total_events:       u64,
+    pub total_events: u64,
 }
 
 impl ExportAuditStats {
     pub const fn new() -> Self {
         Self {
-            exports_started: 0, exports_completed: 0, exports_failed: 0,
-            imports_started: 0, imports_completed: 0, imports_failed: 0,
-            blobs_exported: 0, blobs_imported: 0, tombstones_exported: 0,
-            crc_errors: 0, magic_errors: 0, blob_id_mismatches: 0,
+            exports_started: 0,
+            exports_completed: 0,
+            exports_failed: 0,
+            imports_started: 0,
+            imports_completed: 0,
+            imports_failed: 0,
+            blobs_exported: 0,
+            blobs_imported: 0,
+            tombstones_exported: 0,
+            crc_errors: 0,
+            magic_errors: 0,
+            blob_id_mismatches: 0,
             total_events: 0,
         }
     }
@@ -242,27 +259,49 @@ impl ExportAuditStats {
     fn record(&mut self, event: ExportEvent) {
         self.total_events = self.total_events.saturating_add(1);
         match event {
-            ExportEvent::ExportStarted      => self.exports_started    = self.exports_started.saturating_add(1),
-            ExportEvent::ExportCompleted    => self.exports_completed  = self.exports_completed.saturating_add(1),
-            ExportEvent::ExportFailed       => self.exports_failed     = self.exports_failed.saturating_add(1),
-            ExportEvent::ImportStarted      => self.imports_started    = self.imports_started.saturating_add(1),
-            ExportEvent::ImportCompleted    => self.imports_completed  = self.imports_completed.saturating_add(1),
-            ExportEvent::ImportFailed       => self.imports_failed     = self.imports_failed.saturating_add(1),
-            ExportEvent::BlobExported       => self.blobs_exported     = self.blobs_exported.saturating_add(1),
-            ExportEvent::BlobImported       => self.blobs_imported     = self.blobs_imported.saturating_add(1),
-            ExportEvent::TombstoneExported  => self.tombstones_exported = self.tombstones_exported.saturating_add(1),
-            ExportEvent::CrcError           => self.crc_errors         = self.crc_errors.saturating_add(1),
-            ExportEvent::MagicError         => self.magic_errors       = self.magic_errors.saturating_add(1),
-            ExportEvent::BlobIdMismatch     => self.blob_id_mismatches = self.blob_id_mismatches.saturating_add(1),
+            ExportEvent::ExportStarted => {
+                self.exports_started = self.exports_started.saturating_add(1)
+            }
+            ExportEvent::ExportCompleted => {
+                self.exports_completed = self.exports_completed.saturating_add(1)
+            }
+            ExportEvent::ExportFailed => {
+                self.exports_failed = self.exports_failed.saturating_add(1)
+            }
+            ExportEvent::ImportStarted => {
+                self.imports_started = self.imports_started.saturating_add(1)
+            }
+            ExportEvent::ImportCompleted => {
+                self.imports_completed = self.imports_completed.saturating_add(1)
+            }
+            ExportEvent::ImportFailed => {
+                self.imports_failed = self.imports_failed.saturating_add(1)
+            }
+            ExportEvent::BlobExported => {
+                self.blobs_exported = self.blobs_exported.saturating_add(1)
+            }
+            ExportEvent::BlobImported => {
+                self.blobs_imported = self.blobs_imported.saturating_add(1)
+            }
+            ExportEvent::TombstoneExported => {
+                self.tombstones_exported = self.tombstones_exported.saturating_add(1)
+            }
+            ExportEvent::CrcError => self.crc_errors = self.crc_errors.saturating_add(1),
+            ExportEvent::MagicError => self.magic_errors = self.magic_errors.saturating_add(1),
+            ExportEvent::BlobIdMismatch => {
+                self.blob_id_mismatches = self.blob_id_mismatches.saturating_add(1)
+            }
             _ => {}
         }
     }
 
     /// Retourne true si aucune erreur n'a été enregistrée.
     pub fn is_clean(&self) -> bool {
-        self.exports_failed == 0 && self.imports_failed == 0
-        && self.crc_errors == 0 && self.magic_errors == 0
-        && self.blob_id_mismatches == 0
+        self.exports_failed == 0
+            && self.imports_failed == 0
+            && self.crc_errors == 0
+            && self.magic_errors == 0
+            && self.blob_id_mismatches == 0
     }
 }
 
@@ -299,7 +338,11 @@ impl ExportAuditLog {
 
     /// Acquiert le spinlock (busy-wait, Ring0 safe).
     fn acquire(&self) {
-        while self.lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .lock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
@@ -370,7 +413,9 @@ impl ExportAuditLog {
     /// Copie les N dernières entrées dans `out` (RECUR-01 : boucle while).
     /// Retourne le nombre d'entrées copiées.
     pub fn last_n(&self, out: &mut [ExportAuditEntry]) -> usize {
-        if out.is_empty() { return 0; }
+        if out.is_empty() {
+            return 0;
+        }
         self.acquire();
         let head = self.head.load(Ordering::Relaxed) as usize;
         let total = self.seq.load(Ordering::Relaxed) as usize;
@@ -390,7 +435,9 @@ impl ExportAuditLog {
 
     /// Retourne la dernière entrée enregistrée, ou None si le journal est vide.
     pub fn last_entry(&self) -> Option<ExportAuditEntry> {
-        if self.seq.load(Ordering::Relaxed) == 0 { return None; }
+        if self.seq.load(Ordering::Relaxed) == 0 {
+            return None;
+        }
         self.acquire();
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = (head.wrapping_sub(1)) & RING_MASK;
@@ -409,7 +456,9 @@ impl ExportAuditLog {
         let mut count = 0usize;
         let mut i = 0usize;
         while i < got {
-            if buf[i].is_error() { count = count.saturating_add(1); }
+            if buf[i].is_error() {
+                count = count.saturating_add(1);
+            }
             i = i.wrapping_add(1);
         }
         count
@@ -494,7 +543,11 @@ impl ExportSession {
     /// Démarre la session.
     pub fn start(&mut self, audit: &ExportAuditLog) {
         self.state = SessionState::Running;
-        let event = if self.is_import { ExportEvent::ImportStarted } else { ExportEvent::ExportStarted };
+        let event = if self.is_import {
+            ExportEvent::ImportStarted
+        } else {
+            ExportEvent::ExportStarted
+        };
         audit.log_event(self.session_id, event);
     }
 
@@ -518,14 +571,22 @@ impl ExportSession {
     /// Termine la session avec succès.
     pub fn complete(&mut self, audit: &ExportAuditLog) {
         self.state = SessionState::Completed;
-        let event = if self.is_import { ExportEvent::ImportCompleted } else { ExportEvent::ExportCompleted };
+        let event = if self.is_import {
+            ExportEvent::ImportCompleted
+        } else {
+            ExportEvent::ExportCompleted
+        };
         audit.log_event(self.session_id, event);
     }
 
     /// Termine la session avec échec.
     pub fn fail(&mut self, audit: &ExportAuditLog) {
         self.state = SessionState::Failed;
-        let event = if self.is_import { ExportEvent::ImportFailed } else { ExportEvent::ExportFailed };
+        let event = if self.is_import {
+            ExportEvent::ImportFailed
+        } else {
+            ExportEvent::ExportFailed
+        };
         audit.log_event(self.session_id, event);
     }
 
@@ -535,7 +596,9 @@ impl ExportSession {
     }
 
     /// Retourne true si aucune erreur n'a été enregistrée.
-    pub fn is_clean(&self) -> bool { self.errors == 0 }
+    pub fn is_clean(&self) -> bool {
+        self.errors == 0
+    }
 }
 
 // ─── Configuration de session ────────────────────────────────────────────────

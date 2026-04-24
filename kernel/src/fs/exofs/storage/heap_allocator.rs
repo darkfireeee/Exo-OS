@@ -14,13 +14,13 @@
 // - OOM-02   : (non applicable ici, états internes dans HeapFreeMap).
 // - LOCK-04  : SpinLock léger — pas d'I/O dedans.
 
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::sync::spinlock::SpinLock;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, DiskOffset};
+use crate::fs::exofs::core::{DiskOffset, ExofsError, ExofsResult};
+use crate::fs::exofs::storage::heap_coalesce::{CoalesceOptions, HeapCoalescer};
 use crate::fs::exofs::storage::heap_free_map::HeapFreeMap;
-use crate::fs::exofs::storage::heap_coalesce::{HeapCoalescer, CoalesceOptions};
 use crate::fs::exofs::storage::layout::BLOCK_SIZE;
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
+use crate::scheduler::sync::spinlock::SpinLock;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Extent — description d'un bloc alloué
@@ -32,14 +32,15 @@ pub struct Extent {
     /// Offset de début (en octets depuis le début du disque).
     pub offset: DiskOffset,
     /// Taille allouée en octets (multiple de BLOCK_SIZE).
-    pub size:   u64,
+    pub size: u64,
 }
 
 impl Extent {
     /// Offset de fin (exclusif).
     #[inline]
     pub fn end(&self) -> ExofsResult<DiskOffset> {
-        self.offset.0
+        self.offset
+            .0
             .checked_add(self.size)
             .ok_or(ExofsError::OffsetOverflow)
             .map(DiskOffset)
@@ -83,9 +84,9 @@ impl Default for AllocationPolicy {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct HeapAllocatorState {
-    free_map:      HeapFreeMap,
+    free_map: HeapFreeMap,
     /// Dernier bloc alloué (hint pour NextFit).
-    last_alloc:    u64,
+    last_alloc: u64,
     /// Compteur d'allocations depuis la dernière coalescence.
     allocs_since_coalesce: u64,
 }
@@ -93,8 +94,8 @@ struct HeapAllocatorState {
 impl HeapAllocatorState {
     fn new(total_blocks: u64) -> Result<Self, ExofsError> {
         Ok(Self {
-            free_map:             HeapFreeMap::new(total_blocks)?,
-            last_alloc:           0,
+            free_map: HeapFreeMap::new(total_blocks)?,
+            last_alloc: 0,
             allocs_since_coalesce: 0,
         })
     }
@@ -102,15 +103,11 @@ impl HeapAllocatorState {
     /// Cherche `n_blocks` blocs libres contigus selon la politique.
     fn find_blocks(&mut self, n_blocks: u64, policy: AllocationPolicy) -> Option<u64> {
         match policy {
-            AllocationPolicy::FirstFit => {
-                self.free_map.find_free_run(n_blocks)
-            }
+            AllocationPolicy::FirstFit => self.free_map.find_free_run(n_blocks),
             AllocationPolicy::NextFit => {
                 self.free_map.find_free_run_hint(n_blocks, self.last_alloc)
             }
-            AllocationPolicy::BestFit => {
-                self.best_fit(n_blocks)
-            }
+            AllocationPolicy::BestFit => self.best_fit(n_blocks),
         }
     }
 
@@ -118,11 +115,11 @@ impl HeapAllocatorState {
     fn best_fit(&self, n_blocks: u64) -> Option<u64> {
         let runs = self.free_map.free_runs().ok()?;
         let mut best_start: Option<u64> = None;
-        let mut best_len:   u64         = u64::MAX;
+        let mut best_len: u64 = u64::MAX;
 
         for run in &runs {
             if run.len >= n_blocks && run.len < best_len {
-                best_len  = run.len;
+                best_len = run.len;
                 best_start = Some(run.start);
             }
         }
@@ -138,20 +135,20 @@ impl HeapAllocatorState {
 ///
 /// Thread-safe via `SpinLock`.
 pub struct HeapAllocator {
-    state:         SpinLock<HeapAllocatorState>,
+    state: SpinLock<HeapAllocatorState>,
     /// Offset de début du heap en octets (pour convertir bloc → DiskOffset).
-    heap_start:    u64,
+    heap_start: u64,
     /// Taille d'un bloc en octets (toujours BLOCK_SIZE = 4096).
-    block_size:    u64,
+    block_size: u64,
     /// Politique d'allocation par défaut.
-    policy:        AllocationPolicy,
+    policy: AllocationPolicy,
     /// Nombre total de blocs.
-    total_blocks:  u64,
+    total_blocks: u64,
     // ── Statistiques atomiques ──────────────────────────────────────────────
-    n_allocs:      AtomicU64,
-    n_frees:       AtomicU64,
-    n_failures:    AtomicU64,
-    bytes_alloc:   AtomicU64,
+    n_allocs: AtomicU64,
+    n_frees: AtomicU64,
+    n_failures: AtomicU64,
+    bytes_alloc: AtomicU64,
 }
 
 impl HeapAllocator {
@@ -161,23 +158,23 @@ impl HeapAllocator {
     pub fn new(heap_start: u64, total_blocks: u64) -> Result<Self, ExofsError> {
         let state = HeapAllocatorState::new(total_blocks)?;
         Ok(Self {
-            state:        SpinLock::new(state),
+            state: SpinLock::new(state),
             heap_start,
-            block_size:   BLOCK_SIZE,
-            policy:       AllocationPolicy::NextFit,
+            block_size: BLOCK_SIZE,
+            policy: AllocationPolicy::NextFit,
             total_blocks,
-            n_allocs:     AtomicU64::new(0),
-            n_frees:      AtomicU64::new(0),
-            n_failures:   AtomicU64::new(0),
-            bytes_alloc:  AtomicU64::new(0),
+            n_allocs: AtomicU64::new(0),
+            n_frees: AtomicU64::new(0),
+            n_failures: AtomicU64::new(0),
+            bytes_alloc: AtomicU64::new(0),
         })
     }
 
     /// Crée un allocateur avec une politique explicite.
     pub fn new_with_policy(
-        heap_start:   u64,
+        heap_start: u64,
         total_blocks: u64,
-        policy:       AllocationPolicy,
+        policy: AllocationPolicy,
     ) -> Result<Self, ExofsError> {
         let mut alloc = Self::new(heap_start, total_blocks)?;
         alloc.policy = policy;
@@ -209,7 +206,10 @@ impl HeapAllocator {
 
         // Déclencher la coalescence si nécessaire.
         if HeapCoalescer::should_coalesce(&state.free_map, 15) {
-            let opts = CoalesceOptions { apply: true, ..Default::default() };
+            let opts = CoalesceOptions {
+                apply: true,
+                ..Default::default()
+            };
             let _ = HeapCoalescer::run(&mut state.free_map, &opts);
         }
 
@@ -236,7 +236,8 @@ impl HeapAllocator {
         let block_offset = block_start
             .checked_mul(self.block_size)
             .ok_or(ExofsError::OffsetOverflow)?;
-        let disk_offset = self.heap_start
+        let disk_offset = self
+            .heap_start
             .checked_add(block_offset)
             .ok_or(ExofsError::OffsetOverflow)
             .map(DiskOffset)?;
@@ -245,7 +246,10 @@ impl HeapAllocator {
         self.bytes_alloc.fetch_add(alloc_size, Ordering::Relaxed);
         STORAGE_STATS.inc_heap_alloc(alloc_size);
 
-        Ok(Extent { offset: disk_offset, size: alloc_size })
+        Ok(Extent {
+            offset: disk_offset,
+            size: alloc_size,
+        })
     }
 
     // ── Libération ────────────────────────────────────────────────────────────
@@ -264,7 +268,9 @@ impl HeapAllocator {
         }
 
         // Calculer le numéro de bloc relatif au heap.
-        let rel_offset = extent.offset.0
+        let rel_offset = extent
+            .offset
+            .0
             .checked_sub(self.heap_start)
             .ok_or(ExofsError::OffsetOverflow)?;
 
@@ -273,7 +279,7 @@ impl HeapAllocator {
         }
 
         let block_start = rel_offset / self.block_size;
-        let n_blocks    = extent.size / self.block_size;
+        let n_blocks = extent.size / self.block_size;
 
         if block_start.saturating_add(n_blocks) > self.total_blocks {
             return Err(ExofsError::InvalidArgument);
@@ -292,9 +298,10 @@ impl HeapAllocator {
         }
 
         self.n_frees.fetch_add(1, Ordering::Relaxed);
-        self.bytes_alloc
-            .fetch_sub(self.bytes_alloc.load(Ordering::Relaxed).min(extent.size),
-                       Ordering::Relaxed);
+        self.bytes_alloc.fetch_sub(
+            self.bytes_alloc.load(Ordering::Relaxed).min(extent.size),
+            Ordering::Relaxed,
+        );
         STORAGE_STATS.inc_heap_free(extent.size);
 
         Ok(())
@@ -362,10 +369,12 @@ impl HeapAllocator {
 
     /// Force une passe de coalescence.
     pub fn coalesce(&self) -> ExofsResult<()> {
-        let opts = CoalesceOptions { apply: true, ..Default::default() };
+        let opts = CoalesceOptions {
+            apply: true,
+            ..Default::default()
+        };
         let mut state = self.state.lock();
-        HeapCoalescer::run(&mut state.free_map, &opts)
-            .map(|_| ())
+        HeapCoalescer::run(&mut state.free_map, &opts).map(|_| ())
     }
 
     // ── Réinitialisation ─────────────────────────────────────────────────────
@@ -413,8 +422,8 @@ fn round_up_blocks(size: u64, block_size: u64) -> ExofsResult<u64> {
 mod tests {
     use super::*;
 
-    const HEAP_START: u64 = 1024 * 1024;   // 1 MB
-    const N_BLOCKS:   u64 = 1024;          // 4 MB de heap
+    const HEAP_START: u64 = 1024 * 1024; // 1 MB
+    const N_BLOCKS: u64 = 1024; // 4 MB de heap
 
     fn make_allocator() -> HeapAllocator {
         HeapAllocator::new(HEAP_START, N_BLOCKS).unwrap()
@@ -433,7 +442,7 @@ mod tests {
     fn test_alloc_rounds_up() {
         let a = make_allocator();
         let ext = a.alloc(1).unwrap();
-        assert_eq!(ext.size, 4096);     // arrondi à BLOCK_SIZE
+        assert_eq!(ext.size, 4096); // arrondi à BLOCK_SIZE
     }
 
     #[test]

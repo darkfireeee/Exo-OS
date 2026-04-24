@@ -17,15 +17,12 @@
 //   DAG-01 : pas d'import de arch/, ipc/, process/
 // ==============================================================================
 
-
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::fs::exofs::core::EpochId;
 use crate::fs::exofs::gc::blob_gc::BLOB_GC;
-use crate::fs::exofs::gc::gc_scheduler::{
-    ScheduleDecision, ScheduleReason, GC_SCHEDULER,
-};
+use crate::fs::exofs::gc::gc_scheduler::{ScheduleDecision, ScheduleReason, GC_SCHEDULER};
 use crate::fs::exofs::gc::gc_state::GC_STATE;
 use crate::fs::exofs::gc::gc_tuning::GcSystemState;
 
@@ -50,23 +47,23 @@ pub const GC_FAILURE_COOLDOWN_ITERS: u64 = 50;
 #[derive(Debug, Default, Clone)]
 pub struct GcThreadStats {
     /// Iterations totales de la boucle.
-    pub iterations:          u64,
+    pub iterations: u64,
     /// Passes lancees.
-    pub passes_launched:     u64,
+    pub passes_launched: u64,
     /// Passes reussies.
-    pub passes_succeeded:    u64,
+    pub passes_succeeded: u64,
     /// Passes echouees.
-    pub passes_failed:       u64,
+    pub passes_failed: u64,
     /// Conseils "Wait" recus du scheduler.
-    pub wait_decisions:      u64,
+    pub wait_decisions: u64,
     /// Conseils "AlreadyRunning".
-    pub already_running:     u64,
+    pub already_running: u64,
     /// Ticks logiques depenses en cooldown.
-    pub cooldown_iters:      u64,
+    pub cooldown_iters: u64,
     /// Ticks totaux traites.
-    pub total_ticks:         u64,
+    pub total_ticks: u64,
     /// Dernier epoch connu.
-    pub last_epoch:          EpochId,
+    pub last_epoch: EpochId,
 }
 
 impl fmt::Display for GcThreadStats {
@@ -91,11 +88,11 @@ impl fmt::Display for GcThreadStats {
 /// Signaux de controle du thread GC.
 pub struct GcThreadControl {
     /// Demande d'arret propre.
-    pub shutdown:     AtomicBool,
+    pub shutdown: AtomicBool,
     /// Le thread est actif.
-    pub running:      AtomicBool,
+    pub running: AtomicBool,
     /// Nombre consecutif d'echecs.
-    pub fail_count:   AtomicU32,
+    pub fail_count: AtomicU32,
     /// Epoch courante.
     pub current_epoch: AtomicU64,
 }
@@ -103,9 +100,9 @@ pub struct GcThreadControl {
 impl GcThreadControl {
     pub const fn new() -> Self {
         Self {
-            shutdown:      AtomicBool::new(false),
-            running:       AtomicBool::new(false),
-            fail_count:    AtomicU32::new(0),
+            shutdown: AtomicBool::new(false),
+            running: AtomicBool::new(false),
+            fail_count: AtomicU32::new(0),
             current_epoch: AtomicU64::new(0),
         }
     }
@@ -151,22 +148,22 @@ impl GcThreadControl {
 pub struct GcThread {
     pub control: GcThreadControl,
     // Stats internes (non proteges par spinlock — lecture atomique ok).
-    iterations:      AtomicU64,
+    iterations: AtomicU64,
     passes_launched: AtomicU64,
-    passes_ok:       AtomicU64,
-    passes_fail:     AtomicU64,
-    wait_count:      AtomicU64,
+    passes_ok: AtomicU64,
+    passes_fail: AtomicU64,
+    wait_count: AtomicU64,
 }
 
 impl GcThread {
     pub const fn new() -> Self {
         Self {
-            control:         GcThreadControl::new(),
-            iterations:      AtomicU64::new(0),
+            control: GcThreadControl::new(),
+            iterations: AtomicU64::new(0),
             passes_launched: AtomicU64::new(0),
-            passes_ok:       AtomicU64::new(0),
-            passes_fail:     AtomicU64::new(0),
-            wait_count:      AtomicU64::new(0),
+            passes_ok: AtomicU64::new(0),
+            passes_fail: AtomicU64::new(0),
+            wait_count: AtomicU64::new(0),
         }
     }
 
@@ -265,10 +262,10 @@ impl GcThread {
         // Ici on uses des valeurs conservatrices sures pour le no_std.
         // NB: pas d'import arch/ (DAG-01).
         GcSystemState {
-            free_space_pct:   50,
-            gc_lag_epochs:    0,
-            cpu_load_pct:     0,
-            memory_pressure:  false,
+            free_space_pct: 50,
+            gc_lag_epochs: 0,
+            cpu_load_pct: 0,
+            memory_pressure: false,
             ticks_since_pass: GC_STATE.advance_tick(),
         }
     }
@@ -290,15 +287,15 @@ impl GcThread {
     /// Statistiques du thread.
     pub fn stats(&self) -> GcThreadStats {
         GcThreadStats {
-            iterations:       self.iterations.load(Ordering::Relaxed),
-            passes_launched:  self.passes_launched.load(Ordering::Relaxed),
+            iterations: self.iterations.load(Ordering::Relaxed),
+            passes_launched: self.passes_launched.load(Ordering::Relaxed),
             passes_succeeded: self.passes_ok.load(Ordering::Relaxed),
-            passes_failed:    self.passes_fail.load(Ordering::Relaxed),
-            wait_decisions:   self.wait_count.load(Ordering::Relaxed),
-            already_running:  0,
-            cooldown_iters:   0,
-            total_ticks:      GC_STATE.snapshot().logical_tick,
-            last_epoch:       self.control.epoch(),
+            passes_failed: self.passes_fail.load(Ordering::Relaxed),
+            wait_decisions: self.wait_count.load(Ordering::Relaxed),
+            already_running: 0,
+            cooldown_iters: 0,
+            total_ticks: GC_STATE.snapshot().logical_tick,
+            last_epoch: self.control.epoch(),
         }
     }
 

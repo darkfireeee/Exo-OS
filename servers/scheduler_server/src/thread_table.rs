@@ -63,7 +63,11 @@ impl ThreadTable {
         priority_weight: u32,
         flags: u32,
     ) -> Result<ThreadSnapshot, i64> {
-        if let Some(idx) = self.records.iter().position(|record| record.active && record.tid == tid) {
+        if let Some(idx) = self
+            .records
+            .iter()
+            .position(|record| record.active && record.tid == tid)
+        {
             self.records[idx] = ThreadRecord {
                 active: true,
                 pid,
@@ -120,7 +124,12 @@ impl ThreadTable {
         Ok(self.snapshot(idx))
     }
 
-    pub fn set_affinity(&mut self, pid: u32, tid: u32, affinity_mask: u64) -> Result<ThreadSnapshot, i64> {
+    pub fn set_affinity(
+        &mut self,
+        pid: u32,
+        tid: u32,
+        affinity_mask: u64,
+    ) -> Result<ThreadSnapshot, i64> {
         let idx = self.lookup_owned(pid, tid)?;
         self.records[idx].affinity_mask = affinity_mask.max(1);
         Ok(self.snapshot(idx))
@@ -132,7 +141,10 @@ impl ThreadTable {
     }
 
     pub fn snapshot_any(&self, tid: u32) -> Option<ThreadSnapshot> {
-        let idx = self.records.iter().position(|record| record.active && record.tid == tid)?;
+        let idx = self
+            .records
+            .iter()
+            .position(|record| record.active && record.tid == tid)?;
         Some(self.snapshot(idx))
     }
 
@@ -148,7 +160,11 @@ impl ThreadTable {
     }
 
     fn lookup_owned(&self, pid: u32, tid: u32) -> Result<usize, i64> {
-        let Some(idx) = self.records.iter().position(|record| record.active && record.tid == tid) else {
+        let Some(idx) = self
+            .records
+            .iter()
+            .position(|record| record.active && record.tid == tid)
+        else {
             return Err(syscall::ENOENT);
         };
         if self.records[idx].pid != pid {

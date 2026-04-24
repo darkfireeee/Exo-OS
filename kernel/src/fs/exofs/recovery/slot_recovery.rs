@@ -11,13 +11,12 @@
 //! - **ARITH-02** : `checked_add` pour les calculs d'offset.
 //! - **WRITE-02** : vérification `bytes_written == 128` après écriture slot.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId};
-use crate::fs::exofs::core::blob_id::blake3_hash;
 use super::boot_recovery::BlockDevice;
 use super::recovery_audit::RECOVERY_AUDIT;
+use crate::fs::exofs::core::blob_id::blake3_hash;
+use crate::fs::exofs::core::{EpochId, ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -97,31 +96,31 @@ impl SlotId {
 #[derive(Clone, Copy, Debug)]
 pub struct SlotHeaderDisk {
     /// Magic "EXOF_SLT".
-    pub magic:          u64,
+    pub magic: u64,
     /// Version du format.
-    pub version:        u8,
+    pub version: u8,
     /// Slot ID (0/1/2).
-    pub slot_id:        u8,
+    pub slot_id: u8,
     /// Flags.
-    pub flags:          u16,
+    pub flags: u16,
     /// Rembourrage.
-    pub _pad0:          u32,
+    pub _pad0: u32,
     /// Epoch courante.
-    pub epoch_id:       u64,
+    pub epoch_id: u64,
     /// Epoch précédente (pour rollback).
-    pub prev_epoch_id:  u64,
+    pub prev_epoch_id: u64,
     /// Blob ID de la racine du volume.
-    pub root_blob_id:   [u8; 32],
+    pub root_blob_id: [u8; 32],
     /// LBA du superbloc.
     pub superblock_lba: u64,
     /// LBA du journal d'epoch.
-    pub journal_lba:    u64,
+    pub journal_lba: u64,
     /// Nombre total de blobs alloués.
-    pub total_blobs:    u64,
+    pub total_blobs: u64,
     /// Nombre de blobs libres.
-    pub free_blobs:     u64,
+    pub free_blobs: u64,
     /// Blake3 des octets [0..96).
-    pub header_hash:    [u8; 32],
+    pub header_hash: [u8; 32],
 }
 
 const _: () = assert!(
@@ -144,9 +143,7 @@ impl SlotHeaderDisk {
     /// 3. header_hash == Blake3(buf[0..96])
     pub fn from_bytes(buf: &[u8; SLOT_HEADER_SIZE]) -> ExofsResult<Self> {
         // 1. Magic EN PREMIER.
-        let magic = u64::from_le_bytes(
-            buf[0..8].try_into().map_err(|_| ExofsError::InvalidMagic)?,
-        );
+        let magic = u64::from_le_bytes(buf[0..8].try_into().map_err(|_| ExofsError::InvalidMagic)?);
         if magic != SLOT_MAGIC {
             return Err(ExofsError::InvalidMagic);
         }
@@ -158,9 +155,13 @@ impl SlotHeaderDisk {
 
         // 3. Checksum Blake3 sur bytes[0..96].
         let computed: [u8; 32] = blake3_hash(
-            buf[0..96].try_into().map_err(|_| ExofsError::InvalidArgument)?,
+            buf[0..96]
+                .try_into()
+                .map_err(|_| ExofsError::InvalidArgument)?,
         );
-        let stored: [u8; 32] = buf[96..128].try_into().map_err(|_| ExofsError::InvalidArgument)?;
+        let stored: [u8; 32] = buf[96..128]
+            .try_into()
+            .map_err(|_| ExofsError::InvalidArgument)?;
         if computed != stored {
             return Err(ExofsError::ChecksumMismatch);
         }
@@ -172,9 +173,7 @@ impl SlotHeaderDisk {
     /// Calcule et écrit le hash dans le champ `header_hash` (HDR-03).
     pub fn finalize_hash(&mut self) {
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let raw = unsafe {
-            core::slice::from_raw_parts(self as *const _ as *const u8, 96)
-        };
+        let raw = unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, 96) };
         self.header_hash = blake3_hash(raw.try_into().unwrap_or(&[0u8; 96]));
     }
 
@@ -199,42 +198,42 @@ pub struct SlotRecoveryResult {
     /// Slot sélectionné.
     pub selected_slot: SlotId,
     /// EpochId du slot sélectionné.
-    pub epoch_id:      EpochId,
+    pub epoch_id: EpochId,
     /// EpochId précédente (pour rollback possible).
     pub prev_epoch_id: EpochId,
     /// `true` si le dirty flag était positionné.
-    pub dirty_flag:    bool,
+    pub dirty_flag: bool,
     /// `true` si un replay est nécessaire.
-    pub needs_replay:  bool,
+    pub needs_replay: bool,
     /// Blob ID racine du slot sélectionné.
-    pub root_blob_id:  [u8; 32],
+    pub root_blob_id: [u8; 32],
     /// LBA du journal d'epoch.
-    pub journal_lba:   u64,
+    pub journal_lba: u64,
     /// LBA du superbloc.
     pub superblock_lba: u64,
     /// Slots validés avec succès.
-    pub valid_slots:   u8,
+    pub valid_slots: u8,
 }
 
 // ── Entrée de candidat (sélection interne) ────────────────────────────────────
 
 #[derive(Clone, Copy)]
 struct SlotCandidate {
-    valid:  bool,
+    valid: bool,
     slot_id: SlotId,
     header: SlotHeaderDisk,
     #[allow(dead_code)]
-    lba:    u64,
+    lba: u64,
 }
 
 impl SlotCandidate {
     const fn invalid() -> Self {
         Self {
-            valid:   false,
+            valid: false,
             slot_id: SLOT_A,
             // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
-            header:  unsafe { core::mem::zeroed() },
-            lba:     0,
+            header: unsafe { core::mem::zeroed() },
+            lba: 0,
         }
     }
 }
@@ -275,7 +274,12 @@ impl SlotRecovery {
 
             match SlotHeaderDisk::from_bytes(&buf) {
                 Ok(hdr) => {
-                    candidates[i] = SlotCandidate { valid: true, slot_id, header: hdr, lba };
+                    candidates[i] = SlotCandidate {
+                        valid: true,
+                        slot_id,
+                        header: hdr,
+                        lba,
+                    };
                     valid_mask |= 1 << i;
                 }
                 Err(ExofsError::InvalidMagic) => {
@@ -295,22 +299,22 @@ impl SlotRecovery {
             .max_by_key(|c| c.header.epoch_id)
             .ok_or(ExofsError::InvalidMagic)?;
 
-        let hdr      = &best.header;
-        let dirty    = hdr.is_dirty();
-        let replay   = dirty || hdr.is_committing();
+        let hdr = &best.header;
+        let dirty = hdr.is_dirty();
+        let replay = dirty || hdr.is_committing();
 
         RECOVERY_AUDIT.record_slot_selected(best.slot_id.0, hdr.epoch_id);
 
         Ok(SlotRecoveryResult {
-            selected_slot:  best.slot_id,
-            epoch_id:       EpochId(hdr.epoch_id),
-            prev_epoch_id:  EpochId(hdr.prev_epoch_id),
-            dirty_flag:     dirty,
-            needs_replay:   replay,
-            root_blob_id:   hdr.root_blob_id,
-            journal_lba:    hdr.journal_lba,
+            selected_slot: best.slot_id,
+            epoch_id: EpochId(hdr.epoch_id),
+            prev_epoch_id: EpochId(hdr.prev_epoch_id),
+            dirty_flag: dirty,
+            needs_replay: replay,
+            root_blob_id: hdr.root_blob_id,
+            journal_lba: hdr.journal_lba,
             superblock_lba: hdr.superblock_lba,
-            valid_slots:    valid_mask,
+            valid_slots: valid_mask,
         })
     }
 
@@ -336,9 +340,9 @@ impl SlotRecovery {
     /// # HDR-03
     /// `finalize_hash` appelé avant l'écriture.
     pub fn write_slot(
-        device:  &mut dyn BlockDevice,
+        device: &mut dyn BlockDevice,
         slot_id: SlotId,
-        header:  &mut SlotHeaderDisk,
+        header: &mut SlotHeaderDisk,
     ) -> ExofsResult<()> {
         if !slot_id.is_valid() {
             return Err(ExofsError::InvalidArgument);
@@ -384,11 +388,10 @@ impl SlotRecovery {
     ///
     /// # OOM-02
     /// `try_reserve(SLOT_COUNT)` avant les pushes.
-    pub fn validate_all(
-        device: &dyn BlockDevice,
-    ) -> ExofsResult<Vec<SlotValidationInfo>> {
+    pub fn validate_all(device: &dyn BlockDevice) -> ExofsResult<Vec<SlotValidationInfo>> {
         let mut out = Vec::new();
-        out.try_reserve(SLOT_COUNT).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(SLOT_COUNT)
+            .map_err(|_| ExofsError::NoMemory)?;
 
         for i in 0..SLOT_COUNT {
             let slot_id = SlotId(i as u8);
@@ -399,27 +402,27 @@ impl SlotRecovery {
                 SlotValidationInfo {
                     slot_id,
                     lba,
-                    valid:      false,
-                    epoch_id:   0,
-                    dirty:      false,
-                    io_error:   true,
+                    valid: false,
+                    epoch_id: 0,
+                    dirty: false,
+                    io_error: true,
                 }
             } else {
                 match SlotHeaderDisk::from_bytes(&buf) {
                     Ok(hdr) => SlotValidationInfo {
                         slot_id,
                         lba,
-                        valid:    true,
+                        valid: true,
                         epoch_id: hdr.epoch_id,
-                        dirty:    hdr.is_dirty(),
+                        dirty: hdr.is_dirty(),
                         io_error: false,
                     },
                     Err(_) => SlotValidationInfo {
                         slot_id,
                         lba,
-                        valid:    false,
+                        valid: false,
                         epoch_id: 0,
-                        dirty:    false,
+                        dirty: false,
                         io_error: false,
                     },
                 }
@@ -437,15 +440,15 @@ impl SlotRecovery {
     /// # WRITE-02
     /// Flush après l'écriture.
     pub fn promote_slot(
-        device:   &mut dyn BlockDevice,
-        slot_id:  SlotId,
+        device: &mut dyn BlockDevice,
+        slot_id: SlotId,
         epoch_id: EpochId,
         root_blob_id: &[u8; 32],
     ) -> ExofsResult<()> {
         let mut hdr = Self::read_slot(device, slot_id)?;
-        hdr.epoch_id     = epoch_id.0;
+        hdr.epoch_id = epoch_id.0;
         hdr.root_blob_id = *root_blob_id;
-        hdr.flags        = hdr.flags & !0x01; // Effacer dirty flag.
+        hdr.flags = hdr.flags & !0x01; // Effacer dirty flag.
         Self::write_slot(device, slot_id, &mut hdr)
     }
 
@@ -470,15 +473,15 @@ impl SlotRecovery {
 #[derive(Clone, Copy, Debug)]
 pub struct SlotValidationInfo {
     /// SlotId contrôlé.
-    pub slot_id:  SlotId,
+    pub slot_id: SlotId,
     /// LBA de lecture.
-    pub lba:      u64,
+    pub lba: u64,
     /// `true` si la lecture + validation HDR-03 ont réussi.
-    pub valid:    bool,
+    pub valid: bool,
     /// EpochId lue (0 si invalide).
     pub epoch_id: u64,
     /// `true` si le dirty flag est positionné.
-    pub dirty:    bool,
+    pub dirty: bool,
     /// `true` si une erreur I/O est survenue.
     pub io_error: bool,
 }
@@ -502,7 +505,7 @@ mod tests {
     fn test_slot_header_roundtrip() {
         // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
         let mut hdr: SlotHeaderDisk = unsafe { core::mem::zeroed() };
-        hdr.magic   = SLOT_MAGIC;
+        hdr.magic = SLOT_MAGIC;
         hdr.version = SLOT_FORMAT_VERSION;
         hdr.slot_id = 0;
         hdr.epoch_id = 42;
@@ -535,15 +538,15 @@ mod tests {
     #[test]
     fn test_slot_recovery_result_fields() {
         let r = SlotRecoveryResult {
-            selected_slot:   SLOT_A,
-            epoch_id:        EpochId(5),
-            prev_epoch_id:   EpochId(4),
-            dirty_flag:      false,
-            needs_replay:    false,
-            root_blob_id:    [0; 32],
-            journal_lba:     0x1000,
-            superblock_lba:  0x0800,
-            valid_slots:     0b111,
+            selected_slot: SLOT_A,
+            epoch_id: EpochId(5),
+            prev_epoch_id: EpochId(4),
+            dirty_flag: false,
+            needs_replay: false,
+            root_blob_id: [0; 32],
+            journal_lba: 0x1000,
+            superblock_lba: 0x0800,
+            valid_slots: 0b111,
         };
         assert_eq!(r.epoch_id, EpochId(5));
         assert!(!r.dirty_flag);

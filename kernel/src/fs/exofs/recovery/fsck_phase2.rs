@@ -10,16 +10,15 @@
 //! - **HDR-03** : magic de chaque en-tête de blob vérifié EN PREMIER.
 //! - **ARITH-02** : `checked_add` pour les offsets et compteurs.
 
-
 extern crate alloc;
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
-use crate::fs::exofs::core::blob_id::verify_blob_id;
 use super::boot_recovery::BlockDevice;
 use super::fsck_phase1::Phase1Report;
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
+use crate::fs::exofs::core::blob_id::verify_blob_id;
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -58,12 +57,12 @@ pub const PHASE2_MAX_BLOBS: usize = 1_048_576;
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct BlobHeaderDisk {
-    pub magic:    u64,
-    pub version:  u8,
-    pub flags:    u8,
-    pub _pad0:    u16,
+    pub magic: u64,
+    pub version: u8,
+    pub flags: u8,
+    pub _pad0: u16,
     pub ref_count: u32,
-    pub blob_id:  [u8; 32],
+    pub blob_id: [u8; 32],
     pub data_len: u64,
     pub data_lba: u64,
     pub parent_id: [u8; 32],
@@ -79,7 +78,7 @@ impl BlobHeaderDisk {
     ///
     /// # HDR-03 — magic EN PREMIER.
     pub fn from_bytes(buf: &[u8; BLOB_HEADER_SIZE]) -> ExofsResult<Self> {
-        let magic = u64::from_le_bytes(buf[0..8].try_into().unwrap_or([0;8]));
+        let magic = u64::from_le_bytes(buf[0..8].try_into().unwrap_or([0; 8]));
         if magic != BLOB_HEADER_MAGIC {
             return Err(ExofsError::InvalidMagic);
         }
@@ -92,20 +91,30 @@ impl BlobHeaderDisk {
 
     /// `true` si ce blob est marqué supprimé.
     #[inline]
-    pub fn is_deleted(&self) -> bool { self.flags & 0x01 != 0 }
+    pub fn is_deleted(&self) -> bool {
+        self.flags & 0x01 != 0
+    }
 
     /// `true` si ce blob est compressé.
     #[inline]
-    pub fn is_compressed(&self) -> bool { self.flags & 0x02 != 0 }
+    pub fn is_compressed(&self) -> bool {
+        self.flags & 0x02 != 0
+    }
 
     /// Retourne le `BlobId`.
     #[inline]
-    pub fn blob_id(&self) -> BlobId { BlobId(self.blob_id) }
+    pub fn blob_id(&self) -> BlobId {
+        BlobId(self.blob_id)
+    }
 
     /// Retourne le `BlobId` parent (tous-zéros = pas de parent).
     #[inline]
     pub fn parent_blob_id(&self) -> Option<BlobId> {
-        if self.parent_id == [0u8; 32] { None } else { Some(BlobId(self.parent_id)) }
+        if self.parent_id == [0u8; 32] {
+            None
+        } else {
+            Some(BlobId(self.parent_id))
+        }
     }
 }
 
@@ -116,34 +125,34 @@ impl BlobHeaderDisk {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase2ErrorKind {
     /// BlobId calculé ≠ BlobId stocké (HASH-02).
-    BlobIdMismatch        = 0x01,
+    BlobIdMismatch = 0x01,
     /// Checksum des données invalide.
-    DataChecksumInvalid   = 0x02,
+    DataChecksumInvalid = 0x02,
     /// Magic de l'en-tête blob invalide.
-    BlobHeaderBadMagic    = 0x03,
+    BlobHeaderBadMagic = 0x03,
     /// Compteur de référence incohérent.
-    RefCountMismatch      = 0x04,
+    RefCountMismatch = 0x04,
     /// Blob parent introuvable.
-    ParentNotFound        = 0x05,
+    ParentNotFound = 0x05,
     /// Cycle détecté dans la chaîne de blobs.
-    CycleDetected         = 0x06,
+    CycleDetected = 0x06,
     /// Données du blob illisibles (erreur I/O).
-    IoError               = 0xFE,
+    IoError = 0xFE,
     /// Hash des données invalide (alias de DataChecksumInvalid).
-    DataHashMismatch      = 0x10,
+    DataHashMismatch = 0x10,
     /// Checksum de l'en-tête invalide.
-    HeaderBadChecksum     = 0x11,
+    HeaderBadChecksum = 0x11,
     /// Magic de l'en-tête invalide (alias de BlobHeaderBadMagic).
-    HeaderBadMagic        = 0x12,
+    HeaderBadMagic = 0x12,
 }
 
 /// Une entrée d'erreur de la phase 2.
 #[derive(Clone, Copy, Debug)]
 pub struct Phase2Error {
-    pub kind:    Phase2ErrorKind,
+    pub kind: Phase2ErrorKind,
     pub blob_id: [u8; 32],
-    pub lba:     u64,
-    pub detail:  u64,
+    pub lba: u64,
+    pub detail: u64,
 }
 
 // ── Compteur de références ────────────────────────────────────────────────────
@@ -157,7 +166,9 @@ pub struct BlobRefCounter {
 impl BlobRefCounter {
     /// Construit un compteur vide.
     pub fn new() -> Self {
-        Self { map: BTreeMap::new() }
+        Self {
+            map: BTreeMap::new(),
+        }
     }
 
     /// Incrémente le compteur pour un `BlobId`.
@@ -210,27 +221,31 @@ impl BlobRefCounter {
 #[derive(Clone, Debug)]
 pub struct Phase2Report {
     /// Erreurs détectées.
-    pub errors:         Vec<Phase2Error>,
+    pub errors: Vec<Phase2Error>,
     /// Nombre de blobs parcourus.
-    pub blobs_walked:   u64,
+    pub blobs_walked: u64,
     /// Nombre de blobs avec hash valide.
-    pub blobs_ok:       u64,
+    pub blobs_ok: u64,
     /// Nombre de blobs avec hash invalide.
     pub blobs_hash_err: u64,
     /// Nombre de blobs orphans détectés.
-    pub orphans:        u64,
+    pub orphans: u64,
     /// Table de comptage de référence construite.
-    pub ref_counter:    BlobRefCounter,
+    pub ref_counter: BlobRefCounter,
 }
 
 impl Phase2Report {
     /// `true` si aucune erreur.
     #[inline]
-    pub fn is_clean(&self) -> bool { self.errors.is_empty() }
+    pub fn is_clean(&self) -> bool {
+        self.errors.is_empty()
+    }
 
     /// Nombre d'erreurs.
     #[inline]
-    pub fn error_count(&self) -> usize { self.errors.len() }
+    pub fn error_count(&self) -> usize {
+        self.errors.len()
+    }
 }
 
 // ── Entrée de la table d'allocation ──────────────────────────────────────────
@@ -240,9 +255,9 @@ impl Phase2Report {
 #[derive(Clone, Copy, Debug)]
 pub struct AllocEntry {
     /// BlobId.
-    pub blob_id:  [u8; 32],
+    pub blob_id: [u8; 32],
     /// LBA de l'en-tête de blob.
-    pub hdr_lba:  u64,
+    pub hdr_lba: u64,
     /// LBA des données.
     pub data_lba: u64,
     /// Longueur des données.
@@ -258,9 +273,9 @@ pub const ALLOC_ENTRY_SIZE: usize = core::mem::size_of::<AllocEntry>();
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Phase2Options {
     /// Nombre maximal d'erreurs avant abandon (0 = pas de limite).
-    pub max_errors:          usize,
+    pub max_errors: usize,
     /// Reconstruire la table de références si incohérente.
-    pub rebuild_ref_table:   bool,
+    pub rebuild_ref_table: bool,
 }
 
 // ── Exécuteur de la phase 2 ─────────────────────────────────────────────
@@ -272,11 +287,15 @@ impl FsckPhase2 {
     /// Exécute la phase 2 avec options (exécute la phase 1 en interne pour obtenir le superbloc).
     pub fn run_with_options(
         device: &dyn BlockDevice,
-        opts:   &Phase2Options,
+        opts: &Phase2Options,
     ) -> ExofsResult<Phase2Report> {
         use super::fsck_phase1::FsckPhase1;
-        let phase1  = FsckPhase1::run(device)?;
-        let max_blobs = if opts.max_errors == 0 { PHASE2_MAX_BLOBS } else { opts.max_errors };
+        let phase1 = FsckPhase1::run(device)?;
+        let max_blobs = if opts.max_errors == 0 {
+            PHASE2_MAX_BLOBS
+        } else {
+            opts.max_errors
+        };
         Self::run(device, &phase1, max_blobs)
     }
 
@@ -284,23 +303,23 @@ impl FsckPhase2 {
     ///
     /// Requiert le rapport de la phase 1 pour obtenir le superbloc.
     pub fn run(
-        device:    &dyn BlockDevice,
-        phase1:    &Phase1Report,
+        device: &dyn BlockDevice,
+        phase1: &Phase1Report,
         max_blobs: usize,
     ) -> ExofsResult<Phase2Report> {
         RECOVERY_LOG.log_phase_start(2);
 
         let sb = match &phase1.superblock {
             Some(s) => *s,
-            None    => {
+            None => {
                 // Pas de superbloc = impossible de lire les blobs.
                 let report = Phase2Report {
-                    errors:         Vec::new(),
-                    blobs_walked:   0,
-                    blobs_ok:       0,
+                    errors: Vec::new(),
+                    blobs_walked: 0,
+                    blobs_ok: 0,
                     blobs_hash_err: 0,
-                    orphans:        0,
-                    ref_counter:    BlobRefCounter::new(),
+                    orphans: 0,
+                    ref_counter: BlobRefCounter::new(),
                 };
                 RECOVERY_LOG.log_phase_done(2, 0);
                 return Ok(report);
@@ -310,11 +329,11 @@ impl FsckPhase2 {
         let max_blobs = max_blobs.min(PHASE2_MAX_BLOBS);
         let alloc_lba = sb.alloc_lba;
 
-        let mut errors:   Vec<Phase2Error> = Vec::new();
-        let mut blobs_walked:   u64 = 0;
-        let mut blobs_ok:       u64 = 0;
+        let mut errors: Vec<Phase2Error> = Vec::new();
+        let mut blobs_walked: u64 = 0;
+        let mut blobs_ok: u64 = 0;
         let mut blobs_hash_err: u64 = 0;
-        let orphans:        u64 = 0;
+        let orphans: u64 = 0;
         let mut ref_counter = BlobRefCounter::new();
 
         // Parcourir la table d'allocation bloc par bloc.
@@ -333,12 +352,12 @@ impl FsckPhase2 {
             }
 
             for i in 0..entries_per_block {
-                if total_read >= max_blobs { break 'outer; }
+                if total_read >= max_blobs {
+                    break 'outer;
+                }
 
                 // ARITH-02 : checked mul pour l'offset.
-                let off = i
-                    .checked_mul(ALLOC_ENTRY_SIZE)
-                    .unwrap_or(usize::MAX);
+                let off = i.checked_mul(ALLOC_ENTRY_SIZE).unwrap_or(usize::MAX);
                 if off.checked_add(ALLOC_ENTRY_SIZE).unwrap_or(usize::MAX) > block_buf.len() {
                     break 'outer;
                 }
@@ -362,10 +381,10 @@ impl FsckPhase2 {
                 if device.read_block(entry.hdr_lba, &mut hdr_buf).is_err() {
                     errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     errors.push(Phase2Error {
-                        kind:    Phase2ErrorKind::IoError,
+                        kind: Phase2ErrorKind::IoError,
                         blob_id: entry.blob_id,
-                        lba:     entry.hdr_lba,
-                        detail:  0,
+                        lba: entry.hdr_lba,
+                        detail: 0,
                     });
                     total_read += 1;
                     continue;
@@ -378,10 +397,10 @@ impl FsckPhase2 {
                         RECOVERY_AUDIT.record_invalid_magic(entry.hdr_lba, 0);
                         errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                         errors.push(Phase2Error {
-                            kind:    Phase2ErrorKind::BlobHeaderBadMagic,
+                            kind: Phase2ErrorKind::BlobHeaderBadMagic,
                             blob_id: entry.blob_id,
-                            lba:     entry.hdr_lba,
-                            detail:  0,
+                            lba: entry.hdr_lba,
+                            detail: 0,
                         });
                         total_read += 1;
                         continue;
@@ -408,10 +427,10 @@ impl FsckPhase2 {
                             RECOVERY_AUDIT.record_checksum_invalid(hdr.data_lba, 0, 0);
                             errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                             errors.push(Phase2Error {
-                                kind:    Phase2ErrorKind::BlobIdMismatch,
+                                kind: Phase2ErrorKind::BlobIdMismatch,
                                 blob_id: hdr.blob_id,
-                                lba:     hdr.data_lba,
-                                detail:  hdr.data_len,
+                                lba: hdr.data_lba,
+                                detail: hdr.data_len,
                             });
                         }
                     }
@@ -432,11 +451,13 @@ impl FsckPhase2 {
             // Avancer au bloc suivant de la table.
             lba = match lba.checked_add(1) {
                 Some(l) => l,
-                None    => break,
+                None => break,
             };
 
             // Limiter le parcours.
-            if total_read >= max_blobs { break; }
+            if total_read >= max_blobs {
+                break;
+            }
         }
 
         let error_count = errors.len() as u32;
@@ -491,12 +512,12 @@ mod tests {
     #[test]
     fn test_phase2_report_clean() {
         let r = Phase2Report {
-            errors:         Vec::new(),
-            blobs_walked:   50,
-            blobs_ok:       50,
+            errors: Vec::new(),
+            blobs_walked: 50,
+            blobs_ok: 50,
             blobs_hash_err: 0,
-            orphans:        0,
-            ref_counter:    BlobRefCounter::new(),
+            orphans: 0,
+            ref_counter: BlobRefCounter::new(),
         };
         assert!(r.is_clean());
     }

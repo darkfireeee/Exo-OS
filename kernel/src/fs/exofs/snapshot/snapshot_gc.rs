@@ -7,14 +7,13 @@
 //!   OOM-02   : try_reserve avant chaque push
 //!   ARITH-02 : checked_add pour accumulations
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
 use super::snapshot::flags;
+use super::snapshot_delete::{DeleteOptions, SnapshotDeleter};
 use super::snapshot_list::SNAPSHOT_LIST;
-use super::snapshot_delete::{SnapshotDeleter, DeleteOptions};
+use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
 
 // ─────────────────────────────────────────────────────────────
 // Politique de rétention
@@ -48,9 +47,18 @@ impl Default for SnapshotRetentionPolicy {
 }
 
 impl SnapshotRetentionPolicy {
-    pub fn max_count(mut self, n: usize) -> Self { self.max_count = n; self }
-    pub fn max_age(mut self, ticks: u64) -> Self { self.max_age_ticks = ticks; self }
-    pub fn max_bytes(mut self, bytes: u64) -> Self { self.max_total_bytes = bytes; self }
+    pub fn max_count(mut self, n: usize) -> Self {
+        self.max_count = n;
+        self
+    }
+    pub fn max_age(mut self, ticks: u64) -> Self {
+        self.max_age_ticks = ticks;
+        self
+    }
+    pub fn max_bytes(mut self, bytes: u64) -> Self {
+        self.max_total_bytes = bytes;
+        self
+    }
 
     /// Retourne true si aucune limite n'est définie
     pub fn is_unlimited(&self) -> bool {
@@ -86,8 +94,13 @@ pub struct SnapshotGcReport {
 impl SnapshotGcReport {
     fn new(policy: SnapshotRetentionPolicy) -> Self {
         Self {
-            n_deleted: 0, bytes_freed: 0, deleted_ids: Vec::new(),
-            n_skipped: 0, n_errors: 0, duration_ticks: 0, policy,
+            n_deleted: 0,
+            bytes_freed: 0,
+            deleted_ids: Vec::new(),
+            n_skipped: 0,
+            n_errors: 0,
+            duration_ticks: 0,
+            policy,
             remaining_count: 0,
         }
     }
@@ -108,10 +121,10 @@ pub enum GcReason {
 /// Snapshot candidat à la suppression
 #[derive(Debug, Clone, Copy)]
 pub struct GcCandidate {
-    pub id:          SnapshotId,
-    pub created_at:  u64,
+    pub id: SnapshotId,
+    pub created_at: u64,
     pub total_bytes: u64,
-    pub reason:      GcReason,
+    pub reason: GcReason,
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -173,12 +186,15 @@ impl SnapshotGc {
                 Ok(result) => {
                     report.bytes_freed = report.bytes_freed.saturating_add(result.freed_bytes);
                     report.n_deleted = report.n_deleted.saturating_add(1);
-                    report.deleted_ids.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                    report
+                        .deleted_ids
+                        .try_reserve(1)
+                        .map_err(|_| ExofsError::NoMemory)?;
                     report.deleted_ids.push(snap_ref.id);
                 }
                 Err(_) => {
                     report.n_skipped = report.n_skipped.saturating_add(1);
-                    report.n_errors  = report.n_errors.saturating_add(1);
+                    report.n_errors = report.n_errors.saturating_add(1);
                 }
             }
         }
@@ -193,7 +209,9 @@ impl SnapshotGc {
         report: &mut SnapshotGcReport,
     ) -> ExofsResult<()> {
         let current = SNAPSHOT_LIST.count();
-        if current <= policy.max_count { return Ok(()); }
+        if current <= policy.max_count {
+            return Ok(());
+        }
 
         let excess = current - policy.max_count;
         // Récupère tous les refs triés par created_at croissant (plus anciens en premier)
@@ -202,25 +220,32 @@ impl SnapshotGc {
 
         let mut deleted = 0usize;
         for snap_ref in all {
-            if deleted >= excess { break; }
+            if deleted >= excess {
+                break;
+            }
             if policy.respect_protected && snap_ref.flags & flags::PROTECTED != 0 {
                 report.n_skipped = report.n_skipped.saturating_add(1);
                 continue;
             }
             // Vérifier que l'id n'est pas déjà supprimé lors de cette passe
-            if SNAPSHOT_LIST.get(snap_ref.id).is_err() { continue; }
+            if SNAPSHOT_LIST.get(snap_ref.id).is_err() {
+                continue;
+            }
 
             match SnapshotDeleter::delete(snap_ref.id, opts) {
                 Ok(result) => {
                     report.bytes_freed = report.bytes_freed.saturating_add(result.freed_bytes);
-                    report.n_deleted   = report.n_deleted.saturating_add(1);
-                    report.deleted_ids.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                    report.n_deleted = report.n_deleted.saturating_add(1);
+                    report
+                        .deleted_ids
+                        .try_reserve(1)
+                        .map_err(|_| ExofsError::NoMemory)?;
                     report.deleted_ids.push(snap_ref.id);
                     deleted += 1;
                 }
                 Err(_) => {
                     report.n_skipped = report.n_skipped.saturating_add(1);
-                    report.n_errors  = report.n_errors.saturating_add(1);
+                    report.n_errors = report.n_errors.saturating_add(1);
                 }
             }
         }
@@ -235,30 +260,39 @@ impl SnapshotGc {
         report: &mut SnapshotGcReport,
     ) -> ExofsResult<()> {
         let mut current_bytes = SNAPSHOT_LIST.total_bytes();
-        if current_bytes <= policy.max_total_bytes { return Ok(()); }
+        if current_bytes <= policy.max_total_bytes {
+            return Ok(());
+        }
 
         let mut all = SNAPSHOT_LIST.all_refs()?;
         all.sort_by_key(|s| s.created_at); // plus anciens en premier
 
         for snap_ref in all {
-            if current_bytes <= policy.max_total_bytes { break; }
+            if current_bytes <= policy.max_total_bytes {
+                break;
+            }
             if policy.respect_protected && snap_ref.flags & flags::PROTECTED != 0 {
                 report.n_skipped = report.n_skipped.saturating_add(1);
                 continue;
             }
-            if SNAPSHOT_LIST.get(snap_ref.id).is_err() { continue; }
+            if SNAPSHOT_LIST.get(snap_ref.id).is_err() {
+                continue;
+            }
 
             match SnapshotDeleter::delete(snap_ref.id, opts) {
                 Ok(result) => {
                     report.bytes_freed = report.bytes_freed.saturating_add(result.freed_bytes);
                     current_bytes = current_bytes.saturating_sub(result.freed_bytes);
                     report.n_deleted = report.n_deleted.saturating_add(1);
-                    report.deleted_ids.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                    report
+                        .deleted_ids
+                        .try_reserve(1)
+                        .map_err(|_| ExofsError::NoMemory)?;
                     report.deleted_ids.push(snap_ref.id);
                 }
                 Err(_) => {
                     report.n_skipped = report.n_skipped.saturating_add(1);
-                    report.n_errors  = report.n_errors.saturating_add(1);
+                    report.n_errors = report.n_errors.saturating_add(1);
                 }
             }
         }
@@ -274,9 +308,18 @@ impl SnapshotGc {
         if policy.max_age_ticks > 0 {
             let aged = SNAPSHOT_LIST.older_than(now, policy.max_age_ticks)?;
             for s in aged {
-                if policy.respect_protected && s.flags & flags::PROTECTED != 0 { continue; }
-                candidates.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-                candidates.push(GcCandidate { id: s.id, created_at: s.created_at, total_bytes: s.total_bytes, reason: GcReason::AgeExceeded });
+                if policy.respect_protected && s.flags & flags::PROTECTED != 0 {
+                    continue;
+                }
+                candidates
+                    .try_reserve(1)
+                    .map_err(|_| ExofsError::NoMemory)?;
+                candidates.push(GcCandidate {
+                    id: s.id,
+                    created_at: s.created_at,
+                    total_bytes: s.total_bytes,
+                    reason: GcReason::AgeExceeded,
+                });
             }
         }
 
@@ -286,9 +329,18 @@ impl SnapshotGc {
                 let mut all = SNAPSHOT_LIST.all_refs()?;
                 all.sort_by_key(|s| s.created_at);
                 for s in all.iter().take(excess) {
-                    if policy.respect_protected && s.flags & flags::PROTECTED != 0 { continue; }
-                    candidates.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-                    candidates.push(GcCandidate { id: s.id, created_at: s.created_at, total_bytes: s.total_bytes, reason: GcReason::CountExceeded });
+                    if policy.respect_protected && s.flags & flags::PROTECTED != 0 {
+                        continue;
+                    }
+                    candidates
+                        .try_reserve(1)
+                        .map_err(|_| ExofsError::NoMemory)?;
+                    candidates.push(GcCandidate {
+                        id: s.id,
+                        created_at: s.created_at,
+                        total_bytes: s.total_bytes,
+                        reason: GcReason::CountExceeded,
+                    });
                 }
             }
         }
@@ -301,7 +353,9 @@ impl SnapshotGc {
         let candidates = Self::dry_run(policy, now)?;
         let mut total: u64 = 0;
         for c in candidates {
-            total = total.checked_add(c.total_bytes).ok_or(ExofsError::Overflow)?;
+            total = total
+                .checked_add(c.total_bytes)
+                .ok_or(ExofsError::Overflow)?;
         }
         Ok(total)
     }
@@ -313,19 +367,26 @@ impl SnapshotGc {
 
 #[cfg(test)]
 mod tests {
+    use super::super::snapshot::{make_snapshot_name, Snapshot};
+    use super::super::snapshot_list::SnapshotList;
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
-    use super::super::snapshot::{Snapshot, make_snapshot_name};
-    use super::super::snapshot_list::SnapshotList;
 
     fn push_snap_age(list: &SnapshotList, id: u64, created_at: u64, bytes: u64) {
         list.register(Snapshot {
-            id: SnapshotId(id), epoch_id: EpochId(1), parent_id: None,
-            root_blob: BlobId([0u8;32]), created_at,
-            n_blobs: 0, total_bytes: bytes, flags: 0,
-            blob_catalog_offset: DiskOffset(0), blob_catalog_size: 0,
+            id: SnapshotId(id),
+            epoch_id: EpochId(1),
+            parent_id: None,
+            root_blob: BlobId([0u8; 32]),
+            created_at,
+            n_blobs: 0,
+            total_bytes: bytes,
+            flags: 0,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
             name: make_snapshot_name(b"gc-test"),
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -363,13 +424,24 @@ mod tests {
     fn gc_protected_skipped() {
         let list = SnapshotList::new_const();
         list.register(Snapshot {
-            id: SnapshotId(20), epoch_id: EpochId(1), parent_id: None,
-            root_blob: BlobId([0u8;32]), created_at: 10,
-            n_blobs: 0, total_bytes: 0, flags: flags::PROTECTED,
-            blob_catalog_offset: DiskOffset(0), blob_catalog_size: 0,
+            id: SnapshotId(20),
+            epoch_id: EpochId(1),
+            parent_id: None,
+            root_blob: BlobId([0u8; 32]),
+            created_at: 10,
+            n_blobs: 0,
+            total_bytes: 0,
+            flags: flags::PROTECTED,
+            blob_catalog_offset: DiskOffset(0),
+            blob_catalog_size: 0,
             name: make_snapshot_name(b"protected"),
-        }).unwrap();
-        let policy = SnapshotRetentionPolicy { max_age_ticks: 500, respect_protected: true, ..Default::default() };
+        })
+        .unwrap();
+        let policy = SnapshotRetentionPolicy {
+            max_age_ticks: 500,
+            respect_protected: true,
+            ..Default::default()
+        };
         let report = SnapshotGc::run(policy, 1000).unwrap();
         assert_eq!(report.n_deleted, 0);
         assert!(report.n_skipped > 0);

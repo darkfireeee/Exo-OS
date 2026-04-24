@@ -17,7 +17,7 @@
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, EpochId};
+use crate::fs::exofs::core::{EpochId, ExofsError, ExofsResult};
 use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
 use crate::scheduler::sync::spinlock::SpinLock;
 
@@ -40,24 +40,24 @@ const SLOT_FREE: u64 = 0;
 #[repr(u8)]
 pub enum PinReason {
     /// Pin acquis pour un snapshot.
-    Snapshot  = 0,
+    Snapshot = 0,
     /// Pin acquis pour une lecture audit.
-    Audit     = 1,
+    Audit = 1,
     /// Pin acquis pour un export.
-    Export    = 2,
+    Export = 2,
     /// Pin acquis pour réplication.
-    Replica   = 3,
+    Replica = 3,
     /// Usage interne.
-    Internal  = 255,
+    Internal = 255,
 }
 
 impl fmt::Display for PinReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Snapshot => write!(f, "snapshot"),
-            Self::Audit    => write!(f, "audit"),
-            Self::Export   => write!(f, "export"),
-            Self::Replica  => write!(f, "replica"),
+            Self::Audit => write!(f, "audit"),
+            Self::Export => write!(f, "export"),
+            Self::Replica => write!(f, "replica"),
             Self::Internal => write!(f, "internal"),
         }
     }
@@ -67,13 +67,13 @@ impl fmt::Display for PinReason {
 #[derive(Copy, Clone, Debug)]
 struct PinEntry {
     /// EpochId épinglé (0 = slot libre, cf SLOT_FREE).
-    epoch_id:  u64,
+    epoch_id: u64,
     /// Compteur de références sur ce pin.
     ref_count: u32,
     /// Token d'identification du pinner (snapshot_id, PID, etc.).
-    owner:     u32,
+    owner: u32,
     /// Raison du pin.
-    reason:    PinReason,
+    reason: PinReason,
     /// Timestamp d'acquisition (TSC).
     acquired_at: u64,
 }
@@ -81,10 +81,10 @@ struct PinEntry {
 impl PinEntry {
     const fn empty() -> Self {
         Self {
-            epoch_id:    SLOT_FREE,
-            ref_count:   0,
-            owner:       0,
-            reason:      PinReason::Internal,
+            epoch_id: SLOT_FREE,
+            ref_count: 0,
+            owner: 0,
+            reason: PinReason::Internal,
             acquired_at: 0,
         }
     }
@@ -102,7 +102,7 @@ impl PinEntry {
 struct PinTableInner {
     entries: [PinEntry; MAX_EPOCH_PINS],
     /// Nombre de slots occupés.
-    count:   usize,
+    count: usize,
     /// Total de pins acquis depuis le boot.
     total_acquired: u64,
     /// Total de pins relâchés depuis le boot.
@@ -114,10 +114,10 @@ struct PinTableInner {
 impl PinTableInner {
     const fn new() -> Self {
         Self {
-            entries:         [PinEntry::empty(); MAX_EPOCH_PINS],
-            count:           0,
-            total_acquired:  0,
-            total_released:  0,
+            entries: [PinEntry::empty(); MAX_EPOCH_PINS],
+            count: 0,
+            total_acquired: 0,
+            total_released: 0,
             peak_concurrent: 0,
         }
     }
@@ -127,9 +127,9 @@ impl PinTableInner {
     /// Retourne l'indice du slot alloué.
     fn pin(
         &mut self,
-        epoch_id:    EpochId,
-        owner:       u32,
-        reason:      PinReason,
+        epoch_id: EpochId,
+        owner: u32,
+        reason: PinReason,
         acquired_at: u64,
     ) -> ExofsResult<usize> {
         if epoch_id.0 == SLOT_FREE {
@@ -137,10 +137,7 @@ impl PinTableInner {
         }
         // Cherche d'abord un slot déjà occupé avec le même (epoch_id, owner).
         for (i, entry) in self.entries.iter_mut().enumerate() {
-            if !entry.is_free()
-                && entry.epoch_id == epoch_id.0
-                && entry.owner    == owner
-            {
+            if !entry.is_free() && entry.epoch_id == epoch_id.0 && entry.owner == owner {
                 entry.ref_count = entry.ref_count.saturating_add(1);
                 return Ok(i);
             }
@@ -149,8 +146,8 @@ impl PinTableInner {
         for (i, entry) in self.entries.iter_mut().enumerate() {
             if entry.is_free() {
                 *entry = PinEntry {
-                    epoch_id:    epoch_id.0,
-                    ref_count:   1,
+                    epoch_id: epoch_id.0,
+                    ref_count: 1,
                     owner,
                     reason,
                     acquired_at,
@@ -191,7 +188,7 @@ impl PinTableInner {
         for entry in &self.entries {
             if !entry.is_free() {
                 min_epoch = Some(match min_epoch {
-                    None       => entry.epoch_id,
+                    None => entry.epoch_id,
                     Some(prev) => prev.min(entry.epoch_id),
                 });
             }
@@ -201,7 +198,9 @@ impl PinTableInner {
 
     /// Vrai si l'epoch est actuellement épinglé.
     fn is_pinned(&self, epoch_id: EpochId) -> bool {
-        self.entries.iter().any(|e| !e.is_free() && e.epoch_id == epoch_id.0)
+        self.entries
+            .iter()
+            .any(|e| !e.is_free() && e.epoch_id == epoch_id.0)
     }
 
     /// Nombre de pins actifs.
@@ -213,11 +212,11 @@ impl PinTableInner {
     /// Retourne un snapshot des métriques.
     fn stats_snapshot(&self) -> PinTableStats {
         PinTableStats {
-            active_pins:      self.count as u64,
-            peak_concurrent:  self.peak_concurrent,
-            total_acquired:   self.total_acquired,
-            total_released:   self.total_released,
-            oldest_pinned:    self.oldest_pinned_epoch(),
+            active_pins: self.count as u64,
+            peak_concurrent: self.peak_concurrent,
+            total_acquired: self.total_acquired,
+            total_released: self.total_released,
+            oldest_pinned: self.oldest_pinned_epoch(),
         }
     }
 }
@@ -226,8 +225,7 @@ impl PinTableInner {
 // Singleton global
 // =============================================================================
 
-static EPOCH_PIN_TABLE: SpinLock<PinTableInner> =
-    SpinLock::new(PinTableInner::new());
+static EPOCH_PIN_TABLE: SpinLock<PinTableInner> = SpinLock::new(PinTableInner::new());
 
 /// Compteur global de pins acquis (accessible sans lock pour monitoring).
 static GLOBAL_PIN_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -241,9 +239,9 @@ static GLOBAL_PIN_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Quand l'EpochPin est droppé, l'epoch est automatiquement désépinglé.
 pub struct EpochPin {
     epoch_id: EpochId,
-    slot:     usize,
-    owner:    u32,
-    reason:   PinReason,
+    slot: usize,
+    owner: u32,
+    reason: PinReason,
 }
 
 impl EpochPin {
@@ -258,19 +256,28 @@ impl EpochPin {
 
     /// Épingle avec une raison explicite et un timestamp.
     pub fn acquire_with_reason(
-        epoch_id:    EpochId,
-        owner:       u32,
-        reason:      PinReason,
+        epoch_id: EpochId,
+        owner: u32,
+        reason: PinReason,
         acquired_at: u64,
     ) -> ExofsResult<Self> {
         let mut table = EPOCH_PIN_TABLE.lock();
-        let slot = table.pin(epoch_id, owner, reason, acquired_at)
-            .map_err(|e| { EPOCH_STATS.inc_pins_failed(); e })?;
+        let slot = table
+            .pin(epoch_id, owner, reason, acquired_at)
+            .map_err(|e| {
+                EPOCH_STATS.inc_pins_failed();
+                e
+            })?;
         GLOBAL_PIN_COUNT.fetch_add(1, Ordering::Relaxed);
         EPOCH_STATS.inc_pins_acquired();
         let cur = table.active_count() as u64;
         EPOCH_STATS.update_pin_max(cur);
-        Ok(Self { epoch_id, slot, owner, reason })
+        Ok(Self {
+            epoch_id,
+            slot,
+            owner,
+            reason,
+        })
     }
 
     /// Retourne l'EpochId épinglé.
@@ -318,10 +325,10 @@ impl fmt::Debug for EpochPin {
 /// Vue instantanée d'un pin actif (lecture seule, pour diagnostic).
 #[derive(Copy, Clone, Debug)]
 pub struct PinSnapshot {
-    pub epoch_id:    EpochId,
-    pub owner:       u32,
-    pub ref_count:   u32,
-    pub reason:      PinReason,
+    pub epoch_id: EpochId,
+    pub owner: u32,
+    pub ref_count: u32,
+    pub reason: PinReason,
     pub acquired_at: u64,
 }
 
@@ -335,10 +342,10 @@ pub fn list_active_pins() -> alloc::vec::Vec<PinSnapshot> {
         if !entry.is_free() {
             let _ = result.try_reserve(1);
             result.push(PinSnapshot {
-                epoch_id:    EpochId(entry.epoch_id),
-                owner:       entry.owner,
-                ref_count:   entry.ref_count,
-                reason:      entry.reason,
+                epoch_id: EpochId(entry.epoch_id),
+                owner: entry.owner,
+                ref_count: entry.ref_count,
+                reason: entry.reason,
                 acquired_at: entry.acquired_at,
             });
         }
@@ -382,15 +389,15 @@ pub fn pin_table_stats() -> PinTableStats {
 #[derive(Copy, Clone, Debug)]
 pub struct PinTableStats {
     /// Nombre de pins actifs en ce moment.
-    pub active_pins:     u64,
+    pub active_pins: u64,
     /// Pic maximum de pins simultanés.
     pub peak_concurrent: u64,
     /// Total de pins acquis depuis le boot.
-    pub total_acquired:  u64,
+    pub total_acquired: u64,
     /// Total de pins relâchés depuis le boot.
-    pub total_released:  u64,
+    pub total_released: u64,
     /// Epoch le plus ancien épinglé (None = aucun pin actif).
-    pub oldest_pinned:   Option<EpochId>,
+    pub oldest_pinned: Option<EpochId>,
 }
 
 impl fmt::Display for PinTableStats {
@@ -416,9 +423,10 @@ pub fn validate_pin_table() -> bool {
     let table = EPOCH_PIN_TABLE.lock();
     let active = table.entries.iter().filter(|e| !e.is_free()).count();
     // Un slot actif ne doit jamais avoir epoch_id == 0.
-    let no_zero = table.entries.iter()
+    let no_zero = table
+        .entries
+        .iter()
         .filter(|e| !e.is_free())
         .all(|e| e.epoch_id != SLOT_FREE);
     active == table.count && no_zero
 }
-

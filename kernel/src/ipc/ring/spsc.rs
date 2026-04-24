@@ -18,17 +18,14 @@
 // PERFORMANCE CIBLE : > 50 millions de msgs/s en SPSC par canal @ 3 GHz.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, Ordering, fence};
-use core::cell::UnsafeCell;
-use crate::ipc::core::{
-    IpcError, MsgFlags, MessageId, alloc_message_id,
-    RING_SIZE, RING_MASK,
-    array_index_nospec,
-};
-use crate::ipc::core::transfer::MessageHeader;
-use crate::ipc::core::{IpcFastMsg};
 use super::slot::SlotCell;
+use crate::ipc::core::transfer::MessageHeader;
+use crate::ipc::core::IpcFastMsg;
+use crate::ipc::core::{
+    alloc_message_id, array_index_nospec, IpcError, MessageId, MsgFlags, RING_MASK, RING_SIZE,
+};
+use core::cell::UnsafeCell;
+use core::sync::atomic::{fence, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Capacité SPSC — alias public de RING_SIZE
@@ -77,8 +74,8 @@ impl SpscRing {
     pub const fn new() -> Self {
         const INIT_CELL: SlotCell = SlotCell::new_at(0);
         Self {
-            head:  CachePad(AtomicU64::new(0), [0u8; 56]),
-            tail:  CachePad(AtomicU64::new(0), [0u8; 56]),
+            head: CachePad(AtomicU64::new(0), [0u8; 56]),
+            tail: CachePad(AtomicU64::new(0), [0u8; 56]),
             cells: UnsafeCell::new([INIT_CELL; RING_SIZE]),
         }
     }
@@ -113,11 +110,7 @@ impl SpscRing {
     /// - `Err(WouldBlock)`: ring plein (non bloquant).
     /// - `Err(MessageTooLarge)`: len > MAX_MSG_SIZE.
     #[inline]
-    pub fn push_copy(
-        &self,
-        src:   &[u8],
-        flags: MsgFlags,
-    ) -> Result<MessageId, IpcError> {
+    pub fn push_copy(&self, src: &[u8], flags: MsgFlags) -> Result<MessageId, IpcError> {
         if src.len() > crate::ipc::core::MAX_MSG_SIZE {
             return Err(IpcError::MessageTooLarge);
         }
@@ -137,11 +130,7 @@ impl SpscRing {
             let slot = (*cell.slot.get()).assume_init_mut();
             slot.header = MessageHeader::new_inline(id, flags, src.len());
             if !src.is_empty() {
-                core::ptr::copy_nonoverlapping(
-                    src.as_ptr(),
-                    slot.payload.as_mut_ptr(),
-                    src.len(),
-                );
+                core::ptr::copy_nonoverlapping(src.as_ptr(), slot.payload.as_mut_ptr(), src.len());
             }
         }
 
@@ -157,7 +146,7 @@ impl SpscRing {
     pub fn push_zerocopy(
         &self,
         zc_ref: crate::ipc::core::transfer::ZeroCopyRef,
-        flags:  MsgFlags,
+        flags: MsgFlags,
     ) -> Result<MessageId, IpcError> {
         let pos = self.head.0.load(Ordering::Relaxed);
         let cell = self.cell_at(pos);
@@ -165,7 +154,7 @@ impl SpscRing {
             return Err(IpcError::QueueFull);
         }
         let id = alloc_message_id();
-        let f  = MsgFlags(flags.0 | MsgFlags::ZEROCOPY.0);
+        let f = MsgFlags(flags.0 | MsgFlags::ZEROCOPY.0);
         // SAFETY: SPSC — seul producteur actif.
         unsafe {
             let slot = (*cell.slot.get()).assume_init_mut();
@@ -190,9 +179,9 @@ impl SpscRing {
     /// - `Err(QueueEmpty)` : ring vide.
     #[inline]
     pub fn pop_into(&self, dst: &mut [u8]) -> Result<(usize, MsgFlags), IpcError> {
-        let pos  = self.tail.0.load(Ordering::Relaxed);
+        let pos = self.tail.0.load(Ordering::Relaxed);
         let cell = self.cell_at(pos);
-        let seq  = cell.load_seq();
+        let seq = cell.load_seq();
 
         // Slot disponible si seq == pos + 1.
         if seq != pos + 1 {
@@ -211,11 +200,7 @@ impl SpscRing {
                 return Err(IpcError::MessageTooLarge);
             }
             if ln > 0 {
-                core::ptr::copy_nonoverlapping(
-                    slot.payload.as_ptr(),
-                    dst.as_mut_ptr(),
-                    ln,
-                );
+                core::ptr::copy_nonoverlapping(slot.payload.as_ptr(), dst.as_mut_ptr(), ln);
             }
             (h, ln)
         };
@@ -231,7 +216,7 @@ impl SpscRing {
     /// Retourne l'en-tête sans copier le payload.
     #[inline]
     pub fn peek_header(&self) -> Option<MessageHeader> {
-        let pos  = self.tail.0.load(Ordering::Relaxed);
+        let pos = self.tail.0.load(Ordering::Relaxed);
         let cell = self.cell_at(pos);
         if cell.load_seq() != pos + 1 {
             return None;
@@ -244,7 +229,7 @@ impl SpscRing {
     /// Retourne vrai si le ring est vide.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        let pos  = self.tail.0.load(Ordering::Relaxed);
+        let pos = self.tail.0.load(Ordering::Relaxed);
         let cell = self.cell_at(pos);
         cell.load_seq() != pos + 1
     }
@@ -252,7 +237,7 @@ impl SpscRing {
     /// Retourne vrai si le ring est plein.
     #[inline(always)]
     pub fn is_full(&self) -> bool {
-        let pos  = self.head.0.load(Ordering::Relaxed);
+        let pos = self.head.0.load(Ordering::Relaxed);
         let cell = self.cell_at(pos);
         cell.load_seq() != pos
     }
@@ -287,7 +272,10 @@ static SPSC_INIT: AtomicU64 = AtomicU64::new(0);
 
 /// Initialise tous les rings de la table statique (appelé au boot IPC).
 pub fn init_spsc_rings() {
-    if SPSC_INIT.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+    if SPSC_INIT
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
         for ring in &SPSC_RINGS {
             ring.init();
         }
@@ -320,7 +308,7 @@ pub unsafe fn spsc_fast_write(msg: *const IpcFastMsg, channel_id: u64) -> u64 {
     };
 
     match ring.push_copy(&m.data[..len.min(64)], flags) {
-        Ok(_)  => 0,
+        Ok(_) => 0,
         Err(e) => e as u64,
     }
 }
@@ -338,7 +326,10 @@ pub unsafe fn spsc_fast_read(dst: *mut IpcFastMsg, channel_id: u64) -> u64 {
     let buf = &mut m.data[..];
 
     match ring.pop_into(buf) {
-        Ok(n)  => { m.len = n.0 as u16; 0 },
+        Ok(n) => {
+            m.len = n.0 as u16;
+            0
+        }
         Err(e) => e as u64,
     }
 }
@@ -347,24 +338,23 @@ pub unsafe fn spsc_fast_read(dst: *mut IpcFastMsg, channel_id: u64) -> u64 {
 ///
 /// # Safety
 /// `dst` doit être un pointeur valide vers une `IpcFastMsg`.
-pub unsafe fn spsc_wait_reply(
-    dst:        *mut IpcFastMsg,
-    channel_id: u64,
-    timeout_ns: u64,
-) -> u64 {
+pub unsafe fn spsc_wait_reply(dst: *mut IpcFastMsg, channel_id: u64, timeout_ns: u64) -> u64 {
     // Polling avec compteur de spin avant yield.
     const SPIN_LIMIT: u64 = 10_000;
     let ring = match ring_for(channel_id) {
         Ok(ring) => ring,
         Err(err) => return err as u64,
     };
-    let m    = &mut *dst;
-    let buf  = &mut m.data[..];
+    let m = &mut *dst;
+    let buf = &mut m.data[..];
 
     let mut spins: u64 = 0;
     loop {
         match ring.pop_into(buf) {
-            Ok(n) => { m.len = n.0 as u16; return 0; },
+            Ok(n) => {
+                m.len = n.0 as u16;
+                return 0;
+            }
             Err(IpcError::QueueEmpty) => {}
             Err(e) => return e as u64,
         }
@@ -372,7 +362,9 @@ pub unsafe fn spsc_wait_reply(
         if spins > SPIN_LIMIT {
             // Yield au scheduler pour laisser d'autres threads tourner.
             // SAFETY: appel kernel safe depuis contexte kernel.
-            extern "C" { fn arch_cpu_relax(); }
+            extern "C" {
+                fn arch_cpu_relax();
+            }
             arch_cpu_relax();
         }
         if timeout_ns > 0 {

@@ -50,38 +50,46 @@ pub const A_LIVENESS_MIRROR_OFFSET: u64 = 0x0100;
 // ─── Offsets SSR ─────────────────────────────────────────────────────────────
 
 /// `[0x0000]` Magic / version SSR (u64).
-pub const SSR_MAGIC_OFFSET:        usize = 0x0000;
+pub const SSR_MAGIC_OFFSET: usize = 0x0000;
 /// `[0x0008]` Handoff flag Kernel B → A (u64 atomique).
 pub const SSR_HANDOFF_FLAG_OFFSET: usize = 0x0008;
 /// `[0x0040]` Ring de commandes B → A (64 octets).
-pub const SSR_CMD_B2A_OFFSET:      usize = 0x0040;
+pub const SSR_CMD_B2A_OFFSET: usize = 0x0040;
 /// `[0x0080]` Freeze ACK par cœur — u32 × 256 = 1 KiO.
-pub const SSR_FREEZE_ACK_OFFSET:   usize = 0x0080;
+pub const SSR_FREEZE_ACK_OFFSET: usize = 0x0080;
 /// `[0x4080]` Snapshots PMC par cœur — 64 B × 256 = 16 KiO.
-pub const SSR_PMC_OFFSET:          usize = 0x4080;
+pub const SSR_PMC_OFFSET: usize = 0x4080;
 /// `[0xC000]` Journal d'audit (8 KiO).
-pub const SSR_LOG_AUDIT_OFFSET:    usize = 0xC000;
+pub const SSR_LOG_AUDIT_OFFSET: usize = 0xC000;
 /// `[0xE000]` Métriques agrégées (8 KiO jusqu'à la fin SSR).
-pub const SSR_METRICS_OFFSET:      usize = 0xE000;
+pub const SSR_METRICS_OFFSET: usize = 0xE000;
 
 // ─── Assertions statiques (vérifiées à la compilation) ───────────────────────
 
-const _: () = assert!(SSR_SIZE == 0x1_0000,
-    "SSR: taille doit être 64 KiO (0x10000)");
+const _: () = assert!(
+    SSR_SIZE == 0x1_0000,
+    "SSR: taille doit être 64 KiO (0x10000)"
+);
 
 const _: () = assert!(
     SSR_FREEZE_ACK_OFFSET + SSR_MAX_CORES_LAYOUT * 4 <= SSR_PMC_OFFSET,
-    "SSR: zone freeze_ack dépasse la zone PMC");
+    "SSR: zone freeze_ack dépasse la zone PMC"
+);
 
 const _: () = assert!(
     SSR_PMC_OFFSET + SSR_MAX_CORES_LAYOUT * SSR_PMC_SNAPSHOT_SIZE <= SSR_LOG_AUDIT_OFFSET,
-    "SSR: zone PMC dépasse la zone log_audit");
+    "SSR: zone PMC dépasse la zone log_audit"
+);
 
-const _: () = assert!(SSR_LOG_AUDIT_OFFSET < SSR_METRICS_OFFSET,
-    "SSR: zone log_audit doit précéder la zone métriques");
+const _: () = assert!(
+    SSR_LOG_AUDIT_OFFSET < SSR_METRICS_OFFSET,
+    "SSR: zone log_audit doit précéder la zone métriques"
+);
 
-const _: () = assert!(SSR_METRICS_OFFSET < SSR_SIZE,
-    "SSR: zone métriques doit être dans la SSR");
+const _: () = assert!(
+    SSR_METRICS_OFFSET < SSR_SIZE,
+    "SSR: zone métriques doit être dans la SSR"
+);
 
 // ─── Nombre de cœurs actifs au runtime ───────────────────────────────────────
 
@@ -98,8 +106,10 @@ pub fn active_cores() -> u32 {
 /// Initialise le nombre de cœurs (appelé UNE SEULE FOIS par stage0).
 #[inline(always)]
 pub fn init_core_count(n: u32) {
-    debug_assert!(n as usize <= SSR_MAX_CORES_LAYOUT,
-        "nombre de cœurs dépasse SSR_MAX_CORES_LAYOUT");
+    debug_assert!(
+        n as usize <= SSR_MAX_CORES_LAYOUT,
+        "nombre de cœurs dépasse SSR_MAX_CORES_LAYOUT"
+    );
     MAX_CORES_RUNTIME.store(n, Ordering::Release);
 }
 
@@ -132,21 +142,27 @@ mod tests {
     fn freeze_ack_bounds() {
         assert_eq!(freeze_ack_offset(0), SSR_FREEZE_ACK_OFFSET);
         let last = freeze_ack_offset(SSR_MAX_CORES_LAYOUT as u32 - 1);
-        assert!(last + 4 <= SSR_PMC_OFFSET,
-            "dernier freeze_ack dépasse la zone PMC");
+        assert!(
+            last + 4 <= SSR_PMC_OFFSET,
+            "dernier freeze_ack dépasse la zone PMC"
+        );
     }
 
     #[test]
     fn pmc_snapshot_bounds() {
         assert_eq!(pmc_snapshot_offset(0), SSR_PMC_OFFSET);
         let last = pmc_snapshot_offset(SSR_MAX_CORES_LAYOUT as u32 - 1);
-        assert!(last + SSR_PMC_SNAPSHOT_SIZE <= SSR_LOG_AUDIT_OFFSET,
-            "dernier snapshot PMC dépasse la zone log_audit");
+        assert!(
+            last + SSR_PMC_SNAPSHOT_SIZE <= SSR_LOG_AUDIT_OFFSET,
+            "dernier snapshot PMC dépasse la zone log_audit"
+        );
     }
 
     #[test]
     fn layout_fits_in_ssr() {
-        assert!(SSR_METRICS_OFFSET + 0x2000 <= SSR_SIZE,
-            "zone métriques + fin dépasse SSR_SIZE");
+        assert!(
+            SSR_METRICS_OFFSET + 0x2000 <= SSR_SIZE,
+            "zone métriques + fin dépasse SSR_SIZE"
+        );
     }
 }

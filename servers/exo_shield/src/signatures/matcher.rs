@@ -26,11 +26,11 @@ pub const MAX_SCAN_RESULTS: usize = 32;
 #[repr(C)]
 pub enum MatchType {
     /// Correspondance exacte byte-à-byte.
-    Exact    = 0,
+    Exact = 0,
     /// Correspondance avec joker (*).
     Wildcard = 1,
     /// Correspondance approximative (score ≥ seuil).
-    Fuzzy    = 2,
+    Fuzzy = 2,
 }
 
 /// Résultat d'une correspondance de signature.
@@ -409,11 +409,11 @@ impl ScanResult {
 #[repr(C)]
 pub enum ScanMode {
     /// Correspondance exacte uniquement.
-    ExactOnly    = 0,
+    ExactOnly = 0,
     /// Exact + wildcard.
     WithWildcard = 1,
     /// Exact + wildcard + fuzzy.
-    Full         = 2,
+    Full = 2,
 }
 
 /// Scanne un buffer complet contre toutes les signatures actives.
@@ -558,7 +558,12 @@ pub fn scan_buffer(buffer: &[u8], mode: ScanMode, fuzzy_threshold: u8) -> ScanRe
 ///
 /// # Retour
 /// - Un `MatchResult` si correspondance trouvée, ou `MatchResult::empty()`.
-pub fn scan_with_signature(buffer: &[u8], sig_id: u32, mode: ScanMode, fuzzy_threshold: u8) -> MatchResult {
+pub fn scan_with_signature(
+    buffer: &[u8],
+    sig_id: u32,
+    mode: ScanMode,
+    fuzzy_threshold: u8,
+) -> MatchResult {
     let entry = match database::get_by_id(sig_id) {
         Some(e) => e,
         None => return MatchResult::empty(),
@@ -612,7 +617,11 @@ pub fn scan_with_signature(buffer: &[u8], sig_id: u32, mode: ScanMode, fuzzy_thr
 
     // Fuzzy
     if mode == ScanMode::Full && !pattern.is_empty() && buffer.len() >= pattern.len() {
-        let eff_threshold = if fuzzy_threshold == 0 { DEFAULT_FUZZY_THRESHOLD } else { fuzzy_threshold };
+        let eff_threshold = if fuzzy_threshold == 0 {
+            DEFAULT_FUZZY_THRESHOLD
+        } else {
+            fuzzy_threshold
+        };
         let score = match_threshold(pattern, buffer, 0, eff_threshold);
         if score > 0 {
             return MatchResult {

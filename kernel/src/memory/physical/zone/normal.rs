@@ -5,8 +5,8 @@
 // Les allocations noyau ordinaires proviennent de cette zone.
 // Couche 0 — aucune dépendance externe.
 
-use crate::memory::core::{PhysAddr, ZoneType, ZONE_DMA32_END};
 use super::ZoneDescriptor;
+use crate::memory::core::{PhysAddr, ZoneType, ZONE_DMA32_END};
 
 /// Zone NORMAL — mémoire principale du système (>= 4 GiB sur 64 bits).
 pub struct NormalZone {
@@ -18,7 +18,7 @@ impl NormalZone {
     /// `mem_end_phys` = limite haute de la RAM dans cette zone.
     pub const fn new(numa_node: u8, mem_end_phys: PhysAddr, reserved_frames: usize) -> Self {
         let phys_start = PhysAddr::new(ZONE_DMA32_END as u64);
-        let phys_end   = if mem_end_phys.as_u64() > phys_start.as_u64() {
+        let phys_end = if mem_end_phys.as_u64() > phys_start.as_u64() {
             mem_end_phys
         } else {
             phys_start
@@ -36,7 +36,7 @@ impl NormalZone {
                 phys_end,
                 total,
                 reserved_frames,
-            )
+            ),
         }
     }
 

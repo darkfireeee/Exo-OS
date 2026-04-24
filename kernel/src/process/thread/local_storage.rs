@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 // Architecture x86_64 :
-//   Le segment GS est utilisé pour les données TLS.  
+//   Le segment GS est utilisé pour les données TLS.
 //   GS.base (MSR_GS_BASE = 0xC0000101) = adresse du bloc TLS statique.
 //   SWAPGS bascule entre le GS kernel (ptr CPU state) et le GS userspace (TLS).
 //
@@ -15,10 +15,9 @@
 //   • TLS dynamique (dlopen / __tls_get_addr) : hors scope noyau.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU32, Ordering};
-use core::cell::UnsafeCell;
 use alloc::boxed::Box;
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Taille maximale d'un bloc TLS statique (64 KiB).
 pub const TLS_MAX_SIZE: usize = 65536;
@@ -29,7 +28,9 @@ pub struct TlsKey(pub u32);
 
 impl TlsKey {
     pub const INVALID: Self = Self(u32::MAX);
-    pub fn is_valid(self) -> bool { self.0 != u32::MAX }
+    pub fn is_valid(self) -> bool {
+        self.0 != u32::MAX
+    }
 }
 
 /// Bloc TLS statique d'un thread.
@@ -38,13 +39,13 @@ impl TlsKey {
 /// suivie du .tbss (zéro-initialisé).
 pub struct TlsBlock {
     /// Données TLS (tdata + tbss).
-    data:         Box<[u8]>,
+    data: Box<[u8]>,
     /// Taille du segment tdata.
-    tdata_size:   usize,
+    tdata_size: usize,
     /// Taille totale (tdata + tbss).
-    total_size:   usize,
+    total_size: usize,
     /// Adresse userspace de base du bloc TLS.
-    user_base:    u64,
+    user_base: u64,
 }
 
 impl TlsBlock {
@@ -67,18 +68,26 @@ impl TlsBlock {
 
     /// Pointeur vers les données (pour écriture de GS.base).
     #[inline(always)]
-    pub fn as_ptr(&self) -> *const u8 { self.data.as_ptr() }
+    pub fn as_ptr(&self) -> *const u8 {
+        self.data.as_ptr()
+    }
 
     #[inline(always)]
-    pub fn as_mut_ptr(&mut self) -> *mut u8 { self.data.as_mut_ptr() }
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.data.as_mut_ptr()
+    }
 
     /// Adresse userspace de ce bloc.
     #[inline(always)]
-    pub fn user_base(&self) -> u64 { self.user_base }
+    pub fn user_base(&self) -> u64 {
+        self.user_base
+    }
 
     /// Taille totale en bytes.
     #[inline(always)]
-    pub fn size(&self) -> usize { self.total_size }
+    pub fn size(&self) -> usize {
+        self.total_size
+    }
 
     /// Clone le bloc TLS pour un nouveau thread (fork ou pthread_create).
     pub fn clone_for_thread(&self, new_user_base: u64) -> Option<Self> {
@@ -87,7 +96,7 @@ impl TlsBlock {
             data,
             tdata_size: self.tdata_size,
             total_size: self.total_size,
-            user_base:  new_user_base,
+            user_base: new_user_base,
         })
     }
 }
@@ -100,15 +109,15 @@ const MAX_TLS_KEYS: usize = 1024;
 
 /// Entrée de la table des clés TLS dynamiques.
 struct TlsKeyEntry {
-    used:        bool,
-    destructor:  Option<u64>,  // pointeur userspace vers la fonction destructeur
+    used: bool,
+    destructor: Option<u64>, // pointeur userspace vers la fonction destructeur
 }
 
 /// Registre global des clés TLS dynamiques (pthread_key_create/destroy).
 pub struct TlsRegistry {
-    keys:     UnsafeCell<[TlsKeyEntry; MAX_TLS_KEYS]>,
-    n_used:   AtomicU32,
-    lock:     crate::scheduler::sync::spinlock::SpinLock<()>,
+    keys: UnsafeCell<[TlsKeyEntry; MAX_TLS_KEYS]>,
+    n_used: AtomicU32,
+    lock: crate::scheduler::sync::spinlock::SpinLock<()>,
 }
 
 // SAFETY: TlsRegistry est accédé via SpinLock.
@@ -117,9 +126,16 @@ unsafe impl Sync for TlsRegistry {}
 pub static TLS_REGISTRY: TlsRegistry = TlsRegistry {
     // SAFETY: TlsKeyEntry n'est pas Copy, initialiser manuellement pour les 1024 entrées.
     // Option: utiliser une construction const via const fn.
-    keys: UnsafeCell::new([const { TlsKeyEntry { used: false, destructor: None } }; MAX_TLS_KEYS]),
+    keys: UnsafeCell::new(
+        [const {
+            TlsKeyEntry {
+                used: false,
+                destructor: None,
+            }
+        }; MAX_TLS_KEYS],
+    ),
     n_used: AtomicU32::new(0),
-    lock:   crate::scheduler::sync::spinlock::SpinLock::new(()),
+    lock: crate::scheduler::sync::spinlock::SpinLock::new(()),
 };
 
 impl TlsRegistry {
@@ -130,7 +146,7 @@ impl TlsRegistry {
         let keys = unsafe { &mut *self.keys.get() };
         for (i, entry) in keys.iter_mut().enumerate() {
             if !entry.used {
-                entry.used       = true;
+                entry.used = true;
                 entry.destructor = destructor;
                 self.n_used.fetch_add(1, Ordering::Relaxed);
                 return Some(TlsKey(i as u32));
@@ -141,12 +157,14 @@ impl TlsRegistry {
 
     /// Libère une clé TLS (pthread_key_delete).
     pub fn free_key(&self, key: TlsKey) -> bool {
-        if key.0 as usize >= MAX_TLS_KEYS { return false; }
+        if key.0 as usize >= MAX_TLS_KEYS {
+            return false;
+        }
         let _g = self.lock.lock();
         // SAFETY: accès sous spinlock.
         let entry = unsafe { &mut (*self.keys.get())[key.0 as usize] };
         if entry.used {
-            entry.used       = false;
+            entry.used = false;
             entry.destructor = None;
             self.n_used.fetch_sub(1, Ordering::Relaxed);
             true
@@ -157,10 +175,16 @@ impl TlsRegistry {
 
     /// Retourne le destructeur associé à une clé (None si inexistant).
     pub fn get_destructor(&self, key: TlsKey) -> Option<u64> {
-        if key.0 as usize >= MAX_TLS_KEYS { return None; }
+        if key.0 as usize >= MAX_TLS_KEYS {
+            return None;
+        }
         // SAFETY: lecture légère sans lock (conservative).
         let entry = unsafe { &(*self.keys.get())[key.0 as usize] };
-        if entry.used { entry.destructor } else { None }
+        if entry.used {
+            entry.destructor
+        } else {
+            None
+        }
     }
 }
 

@@ -6,7 +6,7 @@ use virtio_drivers::{BufferDirection, Hal, PhysAddr, PAGE_SIZE};
 pub struct ExoHal;
 
 // Simulation de l'allocateur DMA pour satisfaire virtio_drivers (en vrai `no_std`).
-// Dans le noyau Exo-OS complet, `kernel::memory::physical::allocator::allocate_pages` 
+// Dans le noyau Exo-OS complet, `kernel::memory::physical::allocator::allocate_pages`
 // sera pointé ici.
 unsafe impl Hal for ExoHal {
     fn dma_alloc(pages: usize, _direction: BufferDirection) -> (PhysAddr, NonNull<u8>) {

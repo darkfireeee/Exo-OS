@@ -11,10 +11,9 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─── Taille de bloc valide ────────────────────────────────────────────────────
 
@@ -22,19 +21,23 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
 pub enum BlockSize {
-    B512  = 512,
+    B512 = 512,
     B4096 = 4096,
 }
 
 impl BlockSize {
-    pub fn as_u32(self) -> u32 { self as u32 }
-    pub fn as_usize(self) -> usize { self as u32 as usize }
+    pub fn as_u32(self) -> u32 {
+        self as u32
+    }
+    pub fn as_usize(self) -> usize {
+        self as u32 as usize
+    }
 
     pub fn from_u32(v: u32) -> ExofsResult<Self> {
         match v {
-            512  => Ok(BlockSize::B512),
+            512 => Ok(BlockSize::B512),
             4096 => Ok(BlockSize::B4096),
-            _    => Err(ExofsError::InvalidArgument),
+            _ => Err(ExofsError::InvalidArgument),
         }
     }
 
@@ -45,7 +48,8 @@ impl BlockSize {
 
     /// Retourne le nombre de blocs nécessaires pour `bytes` octets (ARITH-02).
     pub fn blocks_for(self, bytes: u64) -> u64 {
-        bytes.checked_add(self as u64 - 1)
+        bytes
+            .checked_add(self as u64 - 1)
             .map(|v| v / self as u64)
             .unwrap_or(u64::MAX)
     }
@@ -64,17 +68,27 @@ pub struct DirectIoConfig {
 
 impl DirectIoConfig {
     pub fn default_512() -> Self {
-        Self { block_size: BlockSize::B512, bypass_cache: true,
-            verify_write: false, max_blocks_per_op: 128 }
+        Self {
+            block_size: BlockSize::B512,
+            bypass_cache: true,
+            verify_write: false,
+            max_blocks_per_op: 128,
+        }
     }
 
     pub fn default_4k() -> Self {
-        Self { block_size: BlockSize::B4096, bypass_cache: true,
-            verify_write: false, max_blocks_per_op: 64 }
+        Self {
+            block_size: BlockSize::B4096,
+            bypass_cache: true,
+            verify_write: false,
+            max_blocks_per_op: 64,
+        }
     }
 
     pub fn validate(&self) -> ExofsResult<()> {
-        if self.max_blocks_per_op == 0 { return Err(ExofsError::InvalidArgument); }
+        if self.max_blocks_per_op == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         Ok(())
     }
 }
@@ -89,10 +103,15 @@ pub struct AlignedBlock512 {
 }
 
 impl AlignedBlock512 {
-    pub fn new() -> Self { Self { data: [0u8; 512] } }
+    pub fn new() -> Self {
+        Self { data: [0u8; 512] }
+    }
     pub fn fill(&mut self, byte: u8) {
         let mut i = 0usize;
-        while i < 512 { self.data[i] = byte; i = i.wrapping_add(1); }
+        while i < 512 {
+            self.data[i] = byte;
+            i = i.wrapping_add(1);
+        }
     }
 }
 
@@ -108,19 +127,31 @@ pub struct DirectIoBuffer {
 impl DirectIoBuffer {
     /// Crée un buffer de `n_blocks` blocs (OOM-02).
     pub fn new(n_blocks: u32, block_size: BlockSize) -> ExofsResult<Self> {
-        if n_blocks == 0 { return Err(ExofsError::InvalidArgument); }
+        if n_blocks == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         let mut blocks: Vec<AlignedBlock512> = Vec::new();
-        blocks.try_reserve(n_blocks as usize).map_err(|_| ExofsError::NoMemory)?;
+        blocks
+            .try_reserve(n_blocks as usize)
+            .map_err(|_| ExofsError::NoMemory)?;
         let mut i = 0u32;
         while i < n_blocks {
             blocks.push(AlignedBlock512::new());
             i = i.saturating_add(1);
         }
-        Ok(Self { blocks, block_size, n_blocks })
+        Ok(Self {
+            blocks,
+            block_size,
+            n_blocks,
+        })
     }
 
-    pub fn n_blocks(&self) -> u32 { self.n_blocks }
-    pub fn block_size(&self) -> BlockSize { self.block_size }
+    pub fn n_blocks(&self) -> u32 {
+        self.n_blocks
+    }
+    pub fn block_size(&self) -> BlockSize {
+        self.block_size
+    }
 
     pub fn total_bytes(&self) -> u64 {
         (self.n_blocks as u64).saturating_mul(self.block_size.as_u32() as u64)
@@ -128,19 +159,25 @@ impl DirectIoBuffer {
 
     /// Retourne le bloc `idx` (ARITH-02).
     pub fn block(&self, idx: u32) -> ExofsResult<&AlignedBlock512> {
-        if idx >= self.n_blocks { return Err(ExofsError::OffsetOverflow); }
+        if idx >= self.n_blocks {
+            return Err(ExofsError::OffsetOverflow);
+        }
         Ok(&self.blocks[idx as usize])
     }
 
     pub fn block_mut(&mut self, idx: u32) -> ExofsResult<&mut AlignedBlock512> {
-        if idx >= self.n_blocks { return Err(ExofsError::OffsetOverflow); }
+        if idx >= self.n_blocks {
+            return Err(ExofsError::OffsetOverflow);
+        }
         Ok(&mut self.blocks[idx as usize])
     }
 
     /// Copie les données d'un slice dans les blocs (RECUR-01 : while).
     pub fn write_from_slice(&mut self, data: &[u8]) -> ExofsResult<()> {
         let max_bytes = self.total_bytes() as usize;
-        if data.len() > max_bytes { return Err(ExofsError::InvalidArgument); }
+        if data.len() > max_bytes {
+            return Err(ExofsError::InvalidArgument);
+        }
         let bs = self.block_size.as_usize();
         let mut written = 0usize;
         let mut blk_idx = 0u32;
@@ -188,10 +225,15 @@ pub struct DirectIoStats {
 }
 
 impl DirectIoStats {
-    pub fn new() -> Self { Self::default() }
-    pub fn is_clean(&self) -> bool { self.reads_err == 0 && self.writes_err == 0 }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn is_clean(&self) -> bool {
+        self.reads_err == 0 && self.writes_err == 0
+    }
     pub fn total_ops(&self) -> u64 {
-        self.reads_ok.saturating_add(self.writes_ok)
+        self.reads_ok
+            .saturating_add(self.writes_ok)
             .saturating_add(self.reads_err)
             .saturating_add(self.writes_err)
     }
@@ -208,7 +250,10 @@ pub struct DirectIo {
 impl DirectIo {
     pub fn new(config: DirectIoConfig) -> ExofsResult<Self> {
         config.validate()?;
-        Ok(Self { config, stats: DirectIoStats::new() })
+        Ok(Self {
+            config,
+            stats: DirectIoStats::new(),
+        })
     }
 
     pub fn default_512() -> Self {
@@ -218,12 +263,16 @@ impl DirectIo {
 
     /// Valide un accès LBA → vérifier l'alignement et la limite.
     fn validate_access(&self, lba: u64, n_blocks: u32) -> ExofsResult<()> {
-        if n_blocks == 0 { return Err(ExofsError::InvalidArgument); }
+        if n_blocks == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         if n_blocks > self.config.max_blocks_per_op {
             return Err(ExofsError::InvalidArgument);
         }
         // Vérifier absence de dépassement arithmétique (ARITH-02)
-        let _ = lba.checked_add(n_blocks as u64).ok_or(ExofsError::OffsetOverflow)?;
+        let _ = lba
+            .checked_add(n_blocks as u64)
+            .ok_or(ExofsError::OffsetOverflow)?;
         Ok(())
     }
 
@@ -241,7 +290,9 @@ impl DirectIo {
         let byte_offset = (lba as usize).saturating_mul(bs);
         let byte_len = (buf.n_blocks() as usize).saturating_mul(bs);
 
-        let end = byte_offset.checked_add(byte_len).ok_or(ExofsError::OffsetOverflow)?;
+        let end = byte_offset
+            .checked_add(byte_len)
+            .ok_or(ExofsError::OffsetOverflow)?;
         if end > device_data.len() {
             self.stats.reads_err = self.stats.reads_err.saturating_add(1);
             return Err(ExofsError::IoError);
@@ -273,7 +324,9 @@ impl DirectIo {
         let byte_offset = (lba as usize).saturating_mul(bs);
         let byte_len = (buf.n_blocks() as usize).saturating_mul(bs);
 
-        let end = byte_offset.checked_add(byte_len).ok_or(ExofsError::OffsetOverflow)?;
+        let end = byte_offset
+            .checked_add(byte_len)
+            .ok_or(ExofsError::OffsetOverflow)?;
         if end > device_data.len() {
             self.stats.writes_err = self.stats.writes_err.saturating_add(1);
             return Err(ExofsError::IoError);
@@ -293,8 +346,12 @@ impl DirectIo {
         Ok(buf.n_blocks())
     }
 
-    pub fn stats(&self) -> &DirectIoStats { &self.stats }
-    pub fn reset_stats(&mut self) { self.stats = DirectIoStats::new(); }
+    pub fn stats(&self) -> &DirectIoStats {
+        &self.stats
+    }
+    pub fn reset_stats(&mut self) {
+        self.stats = DirectIoStats::new();
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -327,7 +384,7 @@ mod tests {
     #[test]
     fn test_direct_io_buffer_write_read() {
         let mut buf = DirectIoBuffer::new(2, BlockSize::B512).expect("ok");
-        let _data = b"hello_direct_io_test_data_here____________padding_to_1024__" ;
+        let _data = b"hello_direct_io_test_data_here____________padding_to_1024__";
         // on écrit exactement 512 bytes
         let mut src = [0x55u8; 512];
         src[..5].copy_from_slice(b"hello");
@@ -399,12 +456,18 @@ mod tests {
         let mut blk = AlignedBlock512::new();
         blk.fill(0xCC);
         let mut i = 0;
-        while i < 512 { assert_eq!(blk.data[i], 0xCC); i += 1; }
+        while i < 512 {
+            assert_eq!(blk.data[i], 0xCC);
+            i += 1;
+        }
     }
 
     #[test]
     fn test_max_blocks_per_op() {
-        let cfg = DirectIoConfig { max_blocks_per_op: 2, ..DirectIoConfig::default_512() };
+        let cfg = DirectIoConfig {
+            max_blocks_per_op: 2,
+            ..DirectIoConfig::default_512()
+        };
         let mut dio = DirectIo::new(cfg).expect("ok");
         let device = [0u8; 4096];
         let mut buf = DirectIoBuffer::new(4, BlockSize::B512).expect("ok"); // 4 > max

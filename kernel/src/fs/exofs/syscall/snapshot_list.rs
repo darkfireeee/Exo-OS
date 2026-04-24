@@ -4,16 +4,17 @@
 //! des snapshots dans un blob de registre dédié.
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
-use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use super::validation::{
-    exofs_err_to_errno, write_user_buf, EFAULT, EINVAL,
-    verify_cap, CapabilityType,
-};
 use super::object_fd::OBJECT_TABLE;
-use super::snapshot_create::{SnapshotRef, check_snapshot_magic, snapshot_epoch_from_blob, snapshot_source_size_from_blob};
+use super::snapshot_create::{
+    check_snapshot_magic, snapshot_epoch_from_blob, snapshot_source_size_from_blob, SnapshotRef,
+};
+use super::validation::{
+    exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT, EINVAL,
+};
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -28,18 +29,18 @@ pub const SNAPSHOT_LIST_MAX: usize = 64;
 
 pub mod list_flags {
     pub const BY_SOURCE_ID: u32 = 0x0001;
-    pub const SORT_EPOCH:   u32 = 0x0002;
+    pub const SORT_EPOCH: u32 = 0x0002;
     pub const INCLUDE_SIZE: u32 = 0x0004;
-    pub const VALID_MASK:   u32 = BY_SOURCE_ID | SORT_EPOCH | INCLUDE_SIZE;
+    pub const VALID_MASK: u32 = BY_SOURCE_ID | SORT_EPOCH | INCLUDE_SIZE;
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct SnapshotListArgs {
-    pub flags:       u32,
+    pub flags: u32,
     pub max_results: u32,
-    pub epoch_min:   u64,
-    pub epoch_max:   u64,
+    pub epoch_min: u64,
+    pub epoch_max: u64,
 }
 
 const _: () = assert!(core::mem::size_of::<SnapshotListArgs>() == 24);
@@ -47,9 +48,9 @@ const _: () = assert!(core::mem::size_of::<SnapshotListArgs>() == 24);
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SnapshotListResult {
-    pub count:   u32,
-    pub total:   u32,
-    pub _pad:    u64,
+    pub count: u32,
+    pub total: u32,
+    pub _pad: u64,
 }
 
 const _: () = assert!(core::mem::size_of::<SnapshotListResult>() == 16);
@@ -64,8 +65,14 @@ fn registry_id(source: BlobId) -> BlobId {
     let mut buf = [0u8; 36];
     let sb = source.as_bytes();
     let mut i = 0usize;
-    while i < 32 { buf[i] = sb[i]; i = i.wrapping_add(1); }
-    buf[32] = 0x53; buf[33] = 0x4C; buf[34] = 0x49; buf[35] = 0x53;
+    while i < 32 {
+        buf[i] = sb[i];
+        i = i.wrapping_add(1);
+    }
+    buf[32] = 0x53;
+    buf[33] = 0x4C;
+    buf[34] = 0x49;
+    buf[35] = 0x53;
     BlobId::from_bytes_blake3(&buf)
 }
 
@@ -79,11 +86,15 @@ const REGISTRY_HEADER: usize = 8;
 fn load_registry(reg_id: BlobId) -> ExofsResult<Vec<[u8; 32]>> {
     let data = match BLOB_CACHE.get(&reg_id) {
         Some(d) => d,
-        None    => return Ok(Vec::new()),
+        None => return Ok(Vec::new()),
     };
-    if data.len() < REGISTRY_HEADER { return Ok(Vec::new()); }
+    if data.len() < REGISTRY_HEADER {
+        return Ok(Vec::new());
+    }
     let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-    if magic != REGISTRY_MAGIC { return Err(ExofsError::InvalidMagic); }
+    if magic != REGISTRY_MAGIC {
+        return Err(ExofsError::InvalidMagic);
+    }
     let count = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
     let available = (data.len().saturating_sub(REGISTRY_HEADER)) / 32;
     let n = count.min(available).min(SNAPSHOT_LIST_MAX);
@@ -94,7 +105,10 @@ fn load_registry(reg_id: BlobId) -> ExofsResult<Vec<[u8; 32]>> {
         let off = REGISTRY_HEADER.saturating_add(i.saturating_mul(32));
         let mut id = [0u8; 32];
         let mut j = 0usize;
-        while j < 32 { id[j] = data[off + j]; j = j.wrapping_add(1); }
+        while j < 32 {
+            id[j] = data[off + j];
+            j = j.wrapping_add(1);
+        }
         ids.push(id);
         i = i.wrapping_add(1);
     }
@@ -109,14 +123,23 @@ fn save_registry(reg_id: BlobId, ids: &[[u8; 32]]) -> ExofsResult<()> {
     buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
     let magic = REGISTRY_MAGIC.to_le_bytes();
     let mut i = 0usize;
-    while i < 4 { buf.push(magic[i]); i = i.wrapping_add(1); }
+    while i < 4 {
+        buf.push(magic[i]);
+        i = i.wrapping_add(1);
+    }
     let count = (ids.len() as u32).to_le_bytes();
     let mut j = 0usize;
-    while j < 4 { buf.push(count[j]); j = j.wrapping_add(1); }
+    while j < 4 {
+        buf.push(count[j]);
+        j = j.wrapping_add(1);
+    }
     let mut k = 0usize;
     while k < ids.len() {
         let mut m = 0usize;
-        while m < 32 { buf.push(ids[k][m]); m = m.wrapping_add(1); }
+        while m < 32 {
+            buf.push(ids[k][m]);
+            m = m.wrapping_add(1);
+        }
         k = k.wrapping_add(1);
     }
     BLOB_CACHE.insert(reg_id, buf.to_vec())
@@ -126,7 +149,9 @@ fn save_registry(reg_id: BlobId, ids: &[[u8; 32]]) -> ExofsResult<()> {
 pub fn register_snapshot(source: BlobId, snap_id: &[u8; 32]) -> ExofsResult<()> {
     let reg_id = registry_id(source);
     let mut ids = load_registry(reg_id)?;
-    if ids.len() >= SNAPSHOT_LIST_MAX { return Err(ExofsError::QuotaExceeded); }
+    if ids.len() >= SNAPSHOT_LIST_MAX {
+        return Err(ExofsError::QuotaExceeded);
+    }
     ids.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
     ids.push(*snap_id);
     save_registry(reg_id, &ids)
@@ -149,24 +174,33 @@ fn list_snapshots(source: BlobId, args: &SnapshotListArgs) -> ExofsResult<Vec<Sn
     while i < ids.len() && results.len() < max {
         let snap_blob_id = BlobId(ids[i]);
         if let Some(data) = BLOB_CACHE.get(&snap_blob_id) {
-            if !check_snapshot_magic(&data) { i = i.wrapping_add(1); continue; }
+            if !check_snapshot_magic(&data) {
+                i = i.wrapping_add(1);
+                continue;
+            }
             let epoch = match snapshot_epoch_from_blob(&data) {
-                Ok(v)  => v,
-                Err(_) => { i = i.wrapping_add(1); continue; }
+                Ok(v) => v,
+                Err(_) => {
+                    i = i.wrapping_add(1);
+                    continue;
+                }
             };
             if epoch < args.epoch_min || epoch > args.epoch_max {
                 i = i.wrapping_add(1);
                 continue;
             }
             let size = match snapshot_source_size_from_blob(&data) {
-                Ok(v)  => v,
-                Err(_) => { i = i.wrapping_add(1); continue; }
+                Ok(v) => v,
+                Err(_) => {
+                    i = i.wrapping_add(1);
+                    continue;
+                }
             };
             let r = SnapshotRef {
                 snapshot_id: ids[i],
-                source_id:   *source.as_bytes(),
-                epoch_id:    epoch,
-                size_bytes:  size,
+                source_id: *source.as_bytes(),
+                epoch_id: epoch,
+                size_bytes: size,
             };
             results.push(r);
         }
@@ -199,12 +233,12 @@ fn sort_by_epoch(v: &mut Vec<SnapshotRef>) {
 
 /// `exofs_snapshot_list(fd, out_buf_ptr, out_count_ptr, args_ptr, _, _) → 0 ou errno`
 pub fn sys_exofs_snapshot_list(
-    fd:            u64,
-    out_buf_ptr:   u64,
+    fd: u64,
+    out_buf_ptr: u64,
     out_count_ptr: u64,
-    args_ptr:      u64,
-    _a5:           u64,
-    cap_rights:    u64,
+    args_ptr: u64,
+    _a5: u64,
+    cap_rights: u64,
 ) -> i64 {
     let blob_id = match OBJECT_TABLE.blob_id_of(fd as u32) {
         Ok(id) => id,
@@ -219,35 +253,41 @@ pub fn sys_exofs_snapshot_list(
         }
     } else {
         SnapshotListArgs {
-            flags:       0,
+            flags: 0,
             max_results: SNAPSHOT_LIST_MAX as u32,
-            epoch_min:   0,
-            epoch_max:   u64::MAX,
+            epoch_min: 0,
+            epoch_max: u64::MAX,
         }
     };
 
-    if args.flags & !list_flags::VALID_MASK != 0 { return EINVAL; }
+    if args.flags & !list_flags::VALID_MASK != 0 {
+        return EINVAL;
+    }
 
     if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsSnapshotList) {
         return e;
     }
 
     let snapshots = match list_snapshots(blob_id, &args) {
-        Ok(v)  => v,
+        Ok(v) => v,
         Err(e) => return exofs_err_to_errno(e),
     };
 
     if out_buf_ptr != 0 {
         let enc = match super::snapshot_create::encode_snapshot_refs(&snapshots) {
-            Ok(b)  => b,
+            Ok(b) => b,
             Err(e) => return exofs_err_to_errno(e),
         };
-        if let Err(e) = write_user_buf(out_buf_ptr, &enc) { return e; }
+        if let Err(e) = write_user_buf(out_buf_ptr, &enc) {
+            return e;
+        }
     }
 
     if out_count_ptr != 0 {
         let count_bytes = (snapshots.len() as u64).to_le_bytes();
-        if let Err(e) = write_user_buf(out_count_ptr, &count_bytes) { return e; }
+        if let Err(e) = write_user_buf(out_count_ptr, &count_bytes) {
+            return e;
+        }
     }
 
     0i64
@@ -269,8 +309,8 @@ pub fn snapshot_count(source: BlobId) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::snapshot_create::SNAPSHOT_MAGIC;
+    use super::*;
 
     fn src(path: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
@@ -283,10 +323,16 @@ mod tests {
         // Créer un blob vide avec magic pour la liste
         let mut data = [0u8; 24];
         let mag = SNAPSHOT_MAGIC.to_le_bytes();
-        data[0] = mag[0]; data[1] = mag[1]; data[2] = mag[2]; data[3] = mag[3];
+        data[0] = mag[0];
+        data[1] = mag[1];
+        data[2] = mag[2];
+        data[3] = mag[3];
         let ep = epoch.to_le_bytes();
         let mut i = 0usize;
-        while i < 8 { data[8 + i] = ep[i]; i = i.wrapping_add(1); }
+        while i < 8 {
+            data[8 + i] = ep[i];
+            i = i.wrapping_add(1);
+        }
         BLOB_CACHE.insert(sid, data.to_vec()).unwrap();
         register_snapshot(source, sid.as_bytes()).unwrap();
     }
@@ -313,7 +359,12 @@ mod tests {
     fn test_list_basic() {
         let s = src(b"/list/basic");
         create_and_register(s, 10, b"snap");
-        let args = SnapshotListArgs { flags: 0, max_results: 10, epoch_min: 0, epoch_max: u64::MAX };
+        let args = SnapshotListArgs {
+            flags: 0,
+            max_results: 10,
+            epoch_min: 0,
+            epoch_max: u64::MAX,
+        };
         let v = list_snapshots(s, &args).unwrap();
         assert!(!v.is_empty());
     }
@@ -323,11 +374,19 @@ mod tests {
         let s = src(b"/list/filter");
         create_and_register(s, 5, b"f1");
         create_and_register(s, 50, b"f2");
-        let args = SnapshotListArgs { flags: 0, max_results: 10, epoch_min: 10, epoch_max: 100 };
+        let args = SnapshotListArgs {
+            flags: 0,
+            max_results: 10,
+            epoch_min: 10,
+            epoch_max: 100,
+        };
         let v = list_snapshots(s, &args).unwrap();
         // Seul epoch=50 passe le filtre
         let mut i = 0usize;
-        while i < v.len() { assert!(v[i].epoch_id >= 10); i = i.wrapping_add(1); }
+        while i < v.len() {
+            assert!(v[i].epoch_id >= 10);
+            i = i.wrapping_add(1);
+        }
     }
 
     #[test]
@@ -336,7 +395,12 @@ mod tests {
         create_and_register(s, 30, b"s1");
         create_and_register(s, 10, b"s2");
         create_and_register(s, 20, b"s3");
-        let args = SnapshotListArgs { flags: list_flags::SORT_EPOCH, max_results: 10, epoch_min: 0, epoch_max: u64::MAX };
+        let args = SnapshotListArgs {
+            flags: list_flags::SORT_EPOCH,
+            max_results: 10,
+            epoch_min: 0,
+            epoch_max: u64::MAX,
+        };
         let v = list_snapshots(s, &args).unwrap();
         let mut i = 1usize;
         while i < v.len() {
@@ -348,7 +412,12 @@ mod tests {
     #[test]
     fn test_list_no_snapshots() {
         let s = src(b"/list/empty");
-        let args = SnapshotListArgs { flags: 0, max_results: 10, epoch_min: 0, epoch_max: u64::MAX };
+        let args = SnapshotListArgs {
+            flags: 0,
+            max_results: 10,
+            epoch_min: 0,
+            epoch_max: u64::MAX,
+        };
         let v = list_snapshots(s, &args).unwrap();
         assert!(v.is_empty());
     }
@@ -373,7 +442,10 @@ mod tests {
 
     #[test]
     fn test_sort_single() {
-        let mut v = alloc::vec![SnapshotRef { epoch_id: 5, ..SnapshotRef::default() }];
+        let mut v = alloc::vec![SnapshotRef {
+            epoch_id: 5,
+            ..SnapshotRef::default()
+        }];
         sort_by_epoch(&mut v);
         assert_eq!(v[0].epoch_id, 5);
     }
@@ -385,7 +457,10 @@ mod tests {
         let mut i = 0usize;
         while i < SNAPSHOT_LIST_MAX {
             let id = [i as u8; 32];
-            if register_snapshot(s, &id).is_err() { _ok = false; break; }
+            if register_snapshot(s, &id).is_err() {
+                _ok = false;
+                break;
+            }
             i = i.wrapping_add(1);
         }
         // La prochaine insertion doit échouer
@@ -403,16 +478,23 @@ pub fn unregister_snapshot(source: BlobId, snap_id: &[u8; 32]) -> ExofsResult<()
     let reg_id = registry_id(source);
     let ids = load_registry(reg_id)?;
     let mut new_ids: Vec<[u8; 32]> = Vec::new();
-    new_ids.try_reserve(ids.len()).map_err(|_| ExofsError::NoMemory)?;
+    new_ids
+        .try_reserve(ids.len())
+        .map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < ids.len() {
         let mut eq = true;
         let mut j = 0usize;
         while j < 32 {
-            if ids[i][j] != snap_id[j] { eq = false; break; }
+            if ids[i][j] != snap_id[j] {
+                eq = false;
+                break;
+            }
             j = j.wrapping_add(1);
         }
-        if !eq { new_ids.push(ids[i]); }
+        if !eq {
+            new_ids.push(ids[i]);
+        }
         i = i.wrapping_add(1);
     }
     save_registry(reg_id, &new_ids)
@@ -420,10 +502,17 @@ pub fn unregister_snapshot(source: BlobId, snap_id: &[u8; 32]) -> ExofsResult<()
 
 /// Retourne le snapshot le plus récent (epoch la plus haute) ou None.
 pub fn latest_snapshot(source: BlobId) -> ExofsResult<Option<SnapshotRef>> {
-    let args = SnapshotListArgs { flags: list_flags::SORT_EPOCH, max_results: SNAPSHOT_LIST_MAX as u32, epoch_min: 0, epoch_max: u64::MAX };
+    let args = SnapshotListArgs {
+        flags: list_flags::SORT_EPOCH,
+        max_results: SNAPSHOT_LIST_MAX as u32,
+        epoch_min: 0,
+        epoch_max: u64::MAX,
+    };
     let refs = list_snapshots(source, &args)?;
     let n = refs.len();
-    if n == 0 { return Ok(None); }
+    if n == 0 {
+        return Ok(None);
+    }
     Ok(Some(refs[n - 1]))
 }
 

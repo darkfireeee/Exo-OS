@@ -16,8 +16,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ipc::core::types::{IpcError, ProcessId};
 use crate::ipc::shared_memory::descriptor::{
-    ShmPermissions, ShmId,
-    shm_create, shm_destroy, shm_region_count, MAX_SHM_REGIONS,
+    shm_create, shm_destroy, shm_region_count, ShmId, ShmPermissions, MAX_SHM_REGIONS,
 };
 use crate::ipc::shared_memory::pool::shm_pool_stats;
 
@@ -182,7 +181,9 @@ pub fn shm_alloc(
     let class = ShmSizeClass::for_size(requested_bytes);
     let n_pages = class.pages();
 
-    CLASS_COUNTERS[class as usize].allocs.fetch_add(1, Ordering::Relaxed);
+    CLASS_COUNTERS[class as usize]
+        .allocs
+        .fetch_add(1, Ordering::Relaxed);
 
     match shm_create(owner, perms, n_pages) {
         Ok(desc_idx) => {
@@ -202,7 +203,9 @@ pub fn shm_alloc(
             })
         }
         Err(e) => {
-            CLASS_COUNTERS[class as usize].failures.fetch_add(1, Ordering::Relaxed);
+            CLASS_COUNTERS[class as usize]
+                .failures
+                .fetch_add(1, Ordering::Relaxed);
             ALLOC_FAIL.fetch_add(1, Ordering::Relaxed);
             Err(e)
         }
@@ -249,7 +252,9 @@ pub fn shm_alloc_pages(
 /// Libère la région SHM décrite par `handle`.
 pub fn shm_free(handle: ShmHandle) -> Result<(), IpcError> {
     let class = handle.size_class;
-    CLASS_COUNTERS[class as usize].frees.fetch_add(1, Ordering::Relaxed);
+    CLASS_COUNTERS[class as usize]
+        .frees
+        .fetch_add(1, Ordering::Relaxed);
     FREE_TOTAL.fetch_add(1, Ordering::Relaxed);
     BYTES_FREED.fetch_add(handle.size_bytes as u64, Ordering::Relaxed);
     shm_destroy(handle.desc_idx)
@@ -257,8 +262,7 @@ pub fn shm_free(handle: ShmHandle) -> Result<(), IpcError> {
 
 /// Libère la région SHM par son index de descripteur.
 pub fn shm_free_by_idx(desc_idx: usize) -> Result<(), IpcError> {
-    let size_bytes = crate::ipc::shared_memory::descriptor::shm_get_size(desc_idx)
-        .unwrap_or(0);
+    let size_bytes = crate::ipc::shared_memory::descriptor::shm_get_size(desc_idx).unwrap_or(0);
     FREE_TOTAL.fetch_add(1, Ordering::Relaxed);
     BYTES_FREED.fetch_add(size_bytes, Ordering::Relaxed);
     shm_destroy(desc_idx)
@@ -277,6 +281,5 @@ pub fn shm_free_page_count() -> usize {
 /// Vérifie si l'allocateur peut satisfaire une allocation de `n_pages`.
 pub fn shm_can_alloc(n_pages: usize) -> bool {
     let stats = shm_pool_stats();
-    stats.free_pages >= n_pages
-        && shm_region_count() < MAX_SHM_REGIONS
+    stats.free_pages >= n_pages && shm_region_count() < MAX_SHM_REGIONS
 }

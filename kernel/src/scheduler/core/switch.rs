@@ -17,16 +17,19 @@
 //   ZONE NO-ALLOC : aucune allocation dans ce chemin chaud
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicUsize, Ordering};
-use super::task::{ThreadControlBlock, TaskState};
 use super::preempt::MAX_CPUS;
-use crate::scheduler::fpu;
+use super::task::{TaskState, ThreadControlBlock};
 use crate::arch::x86_64::{
-    cpu::{features::CPU_FEATURES, msr::{self, MSR_FS_BASE, MSR_KERNEL_GS_BASE, MSR_IA32_PL0_SSP}},
+    cpu::{
+        features::CPU_FEATURES,
+        msr::{self, MSR_FS_BASE, MSR_IA32_PL0_SSP, MSR_KERNEL_GS_BASE},
+    },
     smp::percpu,
     tss,
 };
 use crate::memory::virt::page_table::kpti_split::user_cr3_for_cpu;
+use crate::scheduler::fpu;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pointeur "thread courant" par CPU — mis à jour à chaque context switch
@@ -114,11 +117,7 @@ extern "C" {
     /// - `old_kernel_rsp` : `*mut u64` pointant vers `TCB::kstack_ptr` du thread sortant
     /// - `new_kernel_rsp` : valeur du `TCB::kstack_ptr` du thread entrant
     /// - `new_cr3`        : registre CR3 du thread entrant (0 = pas de switch CR3)
-    fn context_switch_asm(
-        old_kernel_rsp: *mut u64,
-        new_kernel_rsp:  u64,
-        new_cr3:         u64,
-    );
+    fn context_switch_asm(old_kernel_rsp: *mut u64, new_kernel_rsp: u64, new_cr3: u64);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,10 +165,7 @@ pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
 /// # RÈGLE ABSOLUE
 /// Cette fonction NE doit JAMAIS appeler `process::signal::*`.
 /// Elle ne fait que lire `signal_pending` via `check_signal_pending()`.
-pub unsafe fn context_switch(
-    prev: &mut ThreadControlBlock,
-    next: &mut ThreadControlBlock,
-) {
+pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadControlBlock) {
     // ── Étape 1 : Lazy FPU save (RÈGLE SWITCH-02) ─────────────────────────────
     // Sauvegarder l'état FPU du thread sortant si elle était chargée (CR0.TS=0).
     // Note : CR0.TS sera remis à 1 après le switch (step 7 ci-dessous).
@@ -207,8 +203,8 @@ pub unsafe fn context_switch(
     //   → TLS Ring 3 corrompu après chaque context switch entre threads différents.
     //
     // SAFETY: rdmsr en Ring 0 sur MSR valides et supportés (x86_64 requis).
-    prev.fs_base       = unsafe { msr::read_msr(MSR_FS_BASE) };
-    prev.user_gs_base  = unsafe { msr::read_msr(MSR_KERNEL_GS_BASE) };
+    prev.fs_base = unsafe { msr::read_msr(MSR_FS_BASE) };
+    prev.user_gs_base = unsafe { msr::read_msr(MSR_KERNEL_GS_BASE) };
 
     // ── Étape 3 : Transition d'état de prev ──────────────────────────────────
     // Si le thread sortant était Running → il redevient Runnable (sera ré-enfilé).
@@ -220,16 +216,16 @@ pub unsafe fn context_switch(
 
     // ── Étape 4 : ASM context switch ─────────────────────────────────────────
     // CR3 switch uniquement si les espaces d'adressage diffèrent (KPTI-aware).
-    let new_cr3 = if prev.cr3_phys != next.cr3_phys { next.cr3_phys } else { 0 };
+    let new_cr3 = if prev.cr3_phys != next.cr3_phys {
+        next.cr3_phys
+    } else {
+        0
+    };
 
     // SAFETY: prev.kstack_ptr et next.kstack_ptr pointent vers des stacks kernel
     // valides, alloués au boot et jamais libérés pendant la durée de vie du thread.
     // context_switch_asm garantit la sauvegarde complète des callee-saved ABI.
-    context_switch_asm(
-        &mut prev.kstack_ptr as *mut u64,
-        next.kstack_ptr,
-        new_cr3,
-    );
+    context_switch_asm(&mut prev.kstack_ptr as *mut u64, next.kstack_ptr, new_cr3);
 
     // ─────────────────────────────────────────────────────────────────────────
     // ──── À PARTIR D'ICI : on est dans le contexte de `next` ────────────────
@@ -274,7 +270,9 @@ pub unsafe fn context_switch(
     // P1-5: rafraîchir le slot GS:[0x00] avec la pile kernel du thread entrant.
     // L'entrée syscall (`mov rsp, gs:[0x00]`) doit toujours pointer sur le
     // contexte kernel du thread courant pour éviter toute corruption silencieuse.
-    unsafe { percpu::set_kernel_rsp(next.kstack_ptr); }
+    unsafe {
+        percpu::set_kernel_rsp(next.kstack_ptr);
+    }
 
     // Publier ensuite l'état `next` aux autres CPUs.
     core::sync::atomic::fence(Ordering::SeqCst);
@@ -287,7 +285,9 @@ pub unsafe fn context_switch(
     // chargée. Le handler #NM (lazy.rs) fera XRSTOR et remettra CR0.TS=0.
     // SAFETY: cr0_set_ts modifie CR0.TS en Ring 0 — opération sûre au boot
     // et lors de chaque context switch.
-    unsafe { fpu::lazy::cr0_set_ts(); }
+    unsafe {
+        fpu::lazy::cr0_set_ts();
+    }
     next.set_fpu_loaded(false);
 
     // ── Étape 7 : TSS.RSP0 obligatoire (V7-C-03) ─────────────────────────────
@@ -329,11 +329,11 @@ pub unsafe fn context_switch(
 ///
 /// Appelé depuis : sys_sched_yield(), mutex_lock() (contention), condvar_wait().
 pub unsafe fn schedule_yield(
-    rq:      &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
+    rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
     current: &mut ThreadControlBlock,
 ) {
-    use core::ptr::NonNull;
     use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
+    use core::ptr::NonNull;
 
     // Ré-enqueuer le courant AVANT de choisir le suivant (round-robin CFS).
     // SAFETY: current est une référence mutable valide, non nulle par construction.
@@ -377,13 +377,14 @@ pub unsafe fn schedule_yield(
 /// - `current` doit avoir son état déjà positionné sur Sleeping/Uninterruptible.
 ///   Ne PAS appeler si on souhaite conserver l'état Running ou Runnable.
 pub unsafe fn schedule_block(
-    rq:      &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
+    rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
     current: &mut ThreadControlBlock,
 ) {
-    use core::ptr::NonNull;
     use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
+    use core::ptr::NonNull;
 
     let current_ptr = NonNull::new_unchecked(current as *mut ThreadControlBlock);
+    let idle_thread = rq.idle_thread;
 
     match pick_next_task(rq, Some(current_ptr)) {
         PickResult::Switch(next) => {
@@ -391,16 +392,30 @@ pub unsafe fn schedule_block(
                 // SAFETY: next provient de la run queue et est valide.
                 context_switch(current, &mut *next.as_ptr());
             } else {
-                // Seul thread disponible — impossible de bloquer réellement.
-                // Remettre en Runnable + ré-enqueuer pour éviter le gel.
-                current.set_state(TaskState::Runnable);
-                rq.enqueue(current_ptr);
+                match idle_thread {
+                    Some(idle) if !core::ptr::eq(current, idle.as_ptr()) => {
+                        context_switch(current, &mut *idle.as_ptr());
+                    }
+                    _ => {
+                        // Fallback de sécurité : si aucun idle n'est encore câblé,
+                        // conserver l'ancien comportement plutôt que geler le CPU.
+                        current.set_state(TaskState::Runnable);
+                        rq.enqueue(current_ptr);
+                    }
+                }
             }
         }
         PickResult::KeepRunning | PickResult::GoIdle => {
-            // Aucun thread prêt → on ne peut pas bloquer, spin.
-            current.set_state(TaskState::Runnable);
-            rq.enqueue(current_ptr);
+            match idle_thread {
+                Some(idle) if !core::ptr::eq(current, idle.as_ptr()) => {
+                    context_switch(current, &mut *idle.as_ptr());
+                }
+                _ => {
+                    // Fallback transitoire tant qu'aucun idle n'est lié à cette RQ.
+                    current.set_state(TaskState::Runnable);
+                    rq.enqueue(current_ptr);
+                }
+            }
         }
     }
 }
@@ -412,7 +427,7 @@ pub unsafe fn schedule_block(
 /// Préemption désactivée requise.
 #[inline(always)]
 pub unsafe fn wake_enqueue(
-    rq:  &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
+    rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
     tcb: core::ptr::NonNull<ThreadControlBlock>,
 ) {
     use crate::scheduler::core::task::TaskState;

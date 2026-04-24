@@ -45,7 +45,6 @@
 //   - À NE PAS utiliser pour des buffers larges (overhead copie côté lecteur)
 // ═════════════════════════════════════════════════════════════════════════════
 
-
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -64,7 +63,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 #[repr(C)]
 pub struct SeqLock<T: Copy> {
     /// Compteur séquentiel : pair = stable, impair = write en cours.
-    seq:  AtomicU64,
+    seq: AtomicU64,
     /// Données protégées.
     data: UnsafeCell<T>,
 }
@@ -79,7 +78,7 @@ impl<T: Copy> SeqLock<T> {
     /// Le compteur démarre à 0 (pair = état stable).
     pub const fn new(value: T) -> Self {
         Self {
-            seq:  AtomicU64::new(0),
+            seq: AtomicU64::new(0),
             data: UnsafeCell::new(value),
         }
     }
@@ -280,13 +279,16 @@ impl<'a> Drop for SeqWriteGuard<'a> {
 ///
 /// Utilisé par `ktime.rs` pour les champs individuels (tsc_hz, ns_base…).
 pub struct SeqLockU64 {
-    seq:   AtomicU64,
+    seq: AtomicU64,
     value: AtomicU64,
 }
 
 impl SeqLockU64 {
     pub const fn new(v: u64) -> Self {
-        Self { seq: AtomicU64::new(0), value: AtomicU64::new(v) }
+        Self {
+            seq: AtomicU64::new(0),
+            value: AtomicU64::new(v),
+        }
     }
 
     /// Lecture cohérente — ISR-safe, wait-free.
@@ -294,10 +296,15 @@ impl SeqLockU64 {
     pub fn read(&self) -> u64 {
         loop {
             let seq1 = self.seq.load(Ordering::Acquire);
-            if seq1 & 1 != 0 { core::hint::spin_loop(); continue; }
-            let v    = self.value.load(Ordering::Acquire);
+            if seq1 & 1 != 0 {
+                core::hint::spin_loop();
+                continue;
+            }
+            let v = self.value.load(Ordering::Acquire);
             let seq2 = self.seq.load(Ordering::Acquire);
-            if seq1 == seq2 { return v; }
+            if seq1 == seq2 {
+                return v;
+            }
             core::hint::spin_loop();
         }
     }
@@ -325,11 +332,17 @@ mod tests {
     use super::*;
 
     #[derive(Clone, Copy, Debug, PartialEq)]
-    struct ClockSnapshot { ns: u64, hz: u64 }
+    struct ClockSnapshot {
+        ns: u64,
+        hz: u64,
+    }
 
     #[test]
     fn test_seqlock_read_write() {
-        let lock = SeqLock::new(ClockSnapshot { ns: 0, hz: 3_000_000_000 });
+        let lock = SeqLock::new(ClockSnapshot {
+            ns: 0,
+            hz: 3_000_000_000,
+        });
 
         // Vérifier la valeur initiale.
         let snap = lock.read();
@@ -337,7 +350,12 @@ mod tests {
         assert_eq!(snap.hz, 3_000_000_000);
 
         // Write.
-        unsafe { lock.write(ClockSnapshot { ns: 1_000_000, hz: 3_200_000_000 }); }
+        unsafe {
+            lock.write(ClockSnapshot {
+                ns: 1_000_000,
+                hz: 3_200_000_000,
+            });
+        }
 
         let snap2 = lock.read();
         assert_eq!(snap2.ns, 1_000_000);
@@ -357,7 +375,9 @@ mod tests {
     fn test_seqlock_u64() {
         let lock = SeqLockU64::new(42);
         assert_eq!(lock.read(), 42);
-        unsafe { lock.write(99); }
+        unsafe {
+            lock.write(99);
+        }
         assert_eq!(lock.read(), 99);
     }
 }

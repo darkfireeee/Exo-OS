@@ -20,14 +20,13 @@
 //   EDEADLK   = détection de deadlock
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU32, Ordering};
 use crate::process::core::pcb::ProcessControlBlock;
 use crate::process::core::tcb::ProcessThread;
-use crate::process::thread::creation::{create_thread, ThreadCreateParams, ThreadAttr};
-use crate::process::thread::join::thread_join;
+use crate::process::thread::creation::{create_thread, ThreadAttr, ThreadCreateParams};
 use crate::process::thread::detach::thread_detach;
+use crate::process::thread::join::thread_join;
 use crate::scheduler::sync::wait_queue::WaitQueue;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 /// File d'attente globale pour les mutex pthread (slow path).
 static MUTEX_WQ: WaitQueue = WaitQueue::new();
@@ -37,12 +36,12 @@ static MUTEX_WQ: WaitQueue = WaitQueue::new();
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const ESUCCESS: i32 = 0;
-pub const EAGAIN:   i32 = 11;
-pub const ENOMEM:   i32 = 12;
-pub const EBUSY:    i32 = 16;
-pub const EINVAL:   i32 = 22;
-pub const EDEADLK:  i32 = 35;
-pub const ETIMEDOUT:i32 = 110;
+pub const EAGAIN: i32 = 11;
+pub const ENOMEM: i32 = 12;
+pub const EBUSY: i32 = 16;
+pub const EINVAL: i32 = 22;
+pub const EDEADLK: i32 = 35;
+pub const ETIMEDOUT: i32 = 110;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PTHREAD_CREATE — syscall clone() wrapper
@@ -65,10 +64,10 @@ pub const ETIMEDOUT:i32 = 110;
 /// # Safety
 /// `pcb` doit pointer vers le PCB du thread appelant.
 pub fn PTHREAD_CREATE(
-    pcb:        *const ProcessControlBlock,
+    pcb: *const ProcessControlBlock,
     start_func: u64,
-    arg:        u64,
-    stack_ptr:  u64,
+    arg: u64,
+    stack_ptr: u64,
     stack_size: u64,
     pthread_out: u64,
     target_cpu: u32,
@@ -78,9 +77,9 @@ pub fn PTHREAD_CREATE(
         attr: ThreadAttr {
             stack_size,
             stack_addr: stack_ptr,
-            policy:     crate::scheduler::core::task::SchedPolicy::Normal,
-            priority:   crate::scheduler::core::task::Priority::NORMAL_DEFAULT,
-            detached:   false,
+            policy: crate::scheduler::core::task::SchedPolicy::Normal,
+            priority: crate::scheduler::core::task::Priority::NORMAL_DEFAULT,
+            detached: false,
             cpu_affinity: -1,
             sigaltstack_size: 0,
         },
@@ -102,8 +101,8 @@ pub fn PTHREAD_CREATE(
             ESUCCESS
         }
         Err(e) => match e {
-            crate::process::thread::creation::ThreadCreateError::TidExhausted   => -EAGAIN,
-            crate::process::thread::creation::ThreadCreateError::OutOfMemory    => -ENOMEM,
+            crate::process::thread::creation::ThreadCreateError::TidExhausted => -EAGAIN,
+            crate::process::thread::creation::ThreadCreateError::OutOfMemory => -ENOMEM,
             crate::process::thread::creation::ThreadCreateError::ProcessExiting => -EINVAL,
             _ => -EINVAL,
         },
@@ -116,21 +115,23 @@ pub fn PTHREAD_CREATE(
 /// `thread_ptr` doit pointer vers un ProcessThread valide.
 /// `caller_tcb` doit être le TCB du thread appelant.
 pub fn PTHREAD_JOIN(
-    thread_ptr:  *const ProcessThread,
-    caller_tcb:  &crate::scheduler::core::task::ThreadControlBlock,
-    retval_out:  *mut u64,
+    thread_ptr: *const ProcessThread,
+    caller_tcb: &crate::scheduler::core::task::ThreadControlBlock,
+    retval_out: *mut u64,
 ) -> i32 {
     match thread_join(thread_ptr, caller_tcb) {
         Ok(val) => {
             if !retval_out.is_null() {
                 // SAFETY: retval_out validé par le syscall.
-                unsafe { *retval_out = val; }
+                unsafe {
+                    *retval_out = val;
+                }
             }
             ESUCCESS
         }
         Err(e) => match e {
-            crate::process::thread::join::JoinError::Detached      => -EINVAL,
-            crate::process::thread::join::JoinError::Interrupted   => -4, // EINTR
+            crate::process::thread::join::JoinError::Detached => -EINVAL,
+            crate::process::thread::join::JoinError::Interrupted => -4, // EINTR
             _ => -EINVAL,
         },
     }
@@ -139,7 +140,7 @@ pub fn PTHREAD_JOIN(
 /// Implémentation kernel de pthread_detach().
 pub fn PTHREAD_DETACH(thread_ptr: *mut ProcessThread) -> i32 {
     match thread_detach(thread_ptr) {
-        Ok(_)  => ESUCCESS,
+        Ok(_) => ESUCCESS,
         Err(_) => -EINVAL,
     }
 }
@@ -155,11 +156,7 @@ pub fn PTHREAD_SELF(thread: &ProcessThread) -> u64 {
 ///
 /// # Safety
 /// `thread` et `pcb` doivent correspondre au thread courant.
-pub fn PTHREAD_EXIT(
-    thread:     &mut ProcessThread,
-    pcb:        &ProcessControlBlock,
-    retval:     u64,
-) -> ! {
+pub fn PTHREAD_EXIT(thread: &mut ProcessThread, pcb: &ProcessControlBlock, retval: u64) -> ! {
     crate::process::lifecycle::exit::do_exit_thread(thread, pcb, retval)
 }
 
@@ -172,29 +169,31 @@ pub fn PTHREAD_EXIT(
 #[repr(C, align(16))]
 pub struct PthreadMutex {
     /// 0 = libre, 1 = acquis, 2 = acquis par des threads en attente.
-    pub state:   AtomicU32,
+    pub state: AtomicU32,
     /// TID du détenteur courant (debugging).
-    pub owner:   AtomicU32,
+    pub owner: AtomicU32,
     /// Nombre de threads en attente.
     pub waiters: AtomicU32,
     /// Type : 0=NORMAL, 1=ERRORCHECK, 2=RECURSIVE.
-    pub mtype:   u32,
+    pub mtype: u32,
     /// Compteur de verrouillage récursif (type RECURSIVE uniquement).
     pub recursive_count: AtomicU32,
     _pad: [u32; 3],
 }
 
-const _: () = assert!(core::mem::size_of::<PthreadMutex>() == 32, "PthreadMutex must be 32B");
+const _: () = assert!(
+    core::mem::size_of::<PthreadMutex>() == 32,
+    "PthreadMutex must be 32B"
+);
 
 /// Initialise un PthreadMutex.
 ///
 /// # Safety
 /// `mutex_ptr` = adresse userspace d'un PthreadMutex validé par le syscall.
-pub unsafe fn PTHREAD_MUTEX_INIT(
-    mutex_ptr: *mut PthreadMutex,
-    mtype:     u32,
-) -> i32 {
-    if mutex_ptr.is_null() { return -EINVAL; }
+pub unsafe fn PTHREAD_MUTEX_INIT(mutex_ptr: *mut PthreadMutex, mtype: u32) -> i32 {
+    if mutex_ptr.is_null() {
+        return -EINVAL;
+    }
     // SAFETY: mutex_ptr validé par le syscall via vérification userspace.
     (*mutex_ptr).state.store(0, Ordering::Release);
     (*mutex_ptr).owner.store(0, Ordering::Relaxed);
@@ -209,14 +208,19 @@ pub unsafe fn PTHREAD_MUTEX_INIT(
 /// # Safety
 /// `mutex_ptr` = adresse userspace d'un PthreadMutex validé, `owner_tid` = TID du thread appelant.
 pub unsafe fn PTHREAD_MUTEX_LOCK(
-    mutex_ptr:  *mut PthreadMutex,
-    owner_tid:  u32,
+    mutex_ptr: *mut PthreadMutex,
+    owner_tid: u32,
     caller_tcb: &crate::scheduler::core::task::ThreadControlBlock,
 ) -> i32 {
-    if mutex_ptr.is_null() { return -EINVAL; }
+    if mutex_ptr.is_null() {
+        return -EINVAL;
+    }
     let m = &*mutex_ptr;
     // Fast path : CAS 0 → 1.
-    if m.state.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_ok() {
+    if m.state
+        .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+    {
         m.owner.store(owner_tid, Ordering::Relaxed);
         return ESUCCESS;
     }
@@ -231,13 +235,18 @@ pub unsafe fn PTHREAD_MUTEX_LOCK(
             m.waiters.fetch_sub(1, Ordering::Relaxed);
             return -4; // EINTR
         }
-        if m.state.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_ok() {
+        if m.state
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             m.owner.store(owner_tid, Ordering::Relaxed);
             m.waiters.fetch_sub(1, Ordering::Relaxed);
             return ESUCCESS;
         }
         // SAFETY: MUTEX_WQ EmergencyPool (WAITQ-01); caller_tcb TCB courant, pas d'alias &mut actif.
-        unsafe { MUTEX_WQ.wait_interruptible(caller_tcb as *const _ as *mut _); }
+        unsafe {
+            MUTEX_WQ.wait_interruptible(caller_tcb as *const _ as *mut _);
+        }
     }
 }
 
@@ -245,11 +254,10 @@ pub unsafe fn PTHREAD_MUTEX_LOCK(
 ///
 /// # Safety
 /// `mutex_ptr` validé par le syscall.
-pub unsafe fn PTHREAD_MUTEX_UNLOCK(
-    mutex_ptr: *mut PthreadMutex,
-    caller_tid: u32,
-) -> i32 {
-    if mutex_ptr.is_null() { return -EINVAL; }
+pub unsafe fn PTHREAD_MUTEX_UNLOCK(mutex_ptr: *mut PthreadMutex, caller_tid: u32) -> i32 {
+    if mutex_ptr.is_null() {
+        return -EINVAL;
+    }
     let m = &*mutex_ptr;
     if m.mtype == 1 && m.owner.load(Ordering::Relaxed) != caller_tid {
         return -EPERM;
@@ -265,7 +273,9 @@ pub unsafe fn PTHREAD_MUTEX_UNLOCK(
 
 /// Détruit un PthreadMutex.
 pub unsafe fn PTHREAD_MUTEX_DESTROY(mutex_ptr: *mut PthreadMutex) -> i32 {
-    if mutex_ptr.is_null() { return -EINVAL; }
+    if mutex_ptr.is_null() {
+        return -EINVAL;
+    }
     let m = &*mutex_ptr;
     if m.state.load(Ordering::Relaxed) != 0 {
         return -EBUSY; // Ne pas détruire un mutex tenu.

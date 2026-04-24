@@ -14,7 +14,6 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add.
 
-
 // ─── Sous-modules ─────────────────────────────────────────────────────────────
 pub mod exoar_format;
 pub mod exoar_reader;
@@ -30,79 +29,62 @@ pub mod tar_compat;
 
 // Format ExoAR
 pub use exoar_format::{
-    ExoarHeader, ExoarEntryHeader, ExoarFooter, ExoarSummary,
-    ExoarEntryKind, ExoarEntryInfo,
-    EXOAR_MAGIC, EXOAR_ENTRY_MAGIC, EXOAR_FOOTER_MAGIC, EXOAR_VERSION,
-    EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD,
-    ARCHIVE_FLAG_INCREMENTAL, ARCHIVE_FLAG_VERIFIED, ARCHIVE_FLAG_SNAPSHOT,
-    ENTRY_FLAG_TOMBSTONE, ENTRY_FLAG_COMPRESSED, ENTRY_FLAG_ENCRYPTED,
-    crc32c_compute, crc32c_verify,
+    crc32c_compute, crc32c_verify, ExoarEntryHeader, ExoarEntryInfo, ExoarEntryKind, ExoarFooter,
+    ExoarHeader, ExoarSummary, ARCHIVE_FLAG_INCREMENTAL, ARCHIVE_FLAG_SNAPSHOT,
+    ARCHIVE_FLAG_VERIFIED, ENTRY_FLAG_COMPRESSED, ENTRY_FLAG_ENCRYPTED, ENTRY_FLAG_TOMBSTONE,
+    EXOAR_ENTRY_MAGIC, EXOAR_FOOTER_MAGIC, EXOAR_MAGIC, EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD,
+    EXOAR_VERSION,
 };
 
 // Lecture ExoAR
 pub use exoar_reader::{
-    ArchiveSource, BlobReceiver,
-    ExoarReadError, ExoarReaderConfig, ExoarReadReport, ExoarReader, ExoarScanner,
-    SliceSource, CollectingReceiver,
+    ArchiveSource, BlobReceiver, CollectingReceiver, ExoarReadError, ExoarReadReport, ExoarReader,
+    ExoarReaderConfig, ExoarScanner, SliceSource,
 };
 
 // Écriture ExoAR
 pub use exoar_writer::{
-    ArchiveSink, ExoarWriteError, ExoarWriteOptions, ExoarWriteStats,
-    ExoarWriter, ExoarBufferedWriter, SinkVec,
+    ArchiveSink, ExoarBufferedWriter, ExoarWriteError, ExoarWriteOptions, ExoarWriteStats,
+    ExoarWriter, SinkVec,
 };
 
 // Audit
 pub use export_audit::{
-    ExportEvent, ExportAuditEntry, ExportAuditStats, ExportAuditLog, EXPORT_AUDIT,
-    SessionState, ExportSession, ExportSessionConfig,
-    EXPORT_AUDIT_RING,
+    ExportAuditEntry, ExportAuditLog, ExportAuditStats, ExportEvent, ExportSession,
+    ExportSessionConfig, SessionState, EXPORT_AUDIT, EXPORT_AUDIT_RING,
 };
 
 // Export incrémental
 pub use incremental_export::{
-    EpochId, EpochRange, DiffSet,
-    IncrementalBlobSource, IncrementalExportConfig, IncrementalExportResult,
-    IncrementalExport, SnapshotExport, MultiEpochExportSummary,
+    DiffSet, EpochId, EpochRange, IncrementalBlobSource, IncrementalExport,
+    IncrementalExportConfig, IncrementalExportResult, MultiEpochExportSummary, SnapshotExport,
 };
 
 // Métadonnées
 pub use metadata_export::{
-    TextSink, VecTextSink,
-    BlobMeta, SnapshotMeta, ChunkMeta,
-    MetadataExporter, ManifestBlobEntry, ExportManifest,
-    MetadataBinaryWriter, MetaBinaryHeader,
-    META_BINARY_MAGIC,
+    BlobMeta, ChunkMeta, ExportManifest, ManifestBlobEntry, MetaBinaryHeader, MetadataBinaryWriter,
+    MetadataExporter, SnapshotMeta, TextSink, VecTextSink, META_BINARY_MAGIC,
 };
 
 // Export streaming
 pub use stream_export::{
-    BlobDataProvider, StreamSink,
-    FilterMode, StreamFilter, StreamExportConfig,
-    StreamExportReport, StreamCheckpoint,
-    StreamExporter, StreamExportBatch, BatchState,
+    BatchState, BlobDataProvider, FilterMode, StreamCheckpoint, StreamExportBatch,
+    StreamExportConfig, StreamExportReport, StreamExporter, StreamFilter, StreamSink,
 };
 
 // Import streaming
 pub use stream_import::{
-    BlobWriter, ConflictResolver, TombstoneHandler,
-    ImportEntryHeader, ImportCheckpoint,
-    StreamImportConfig, StreamImportReport,
-    ImportSource, SliceImportSource,
-    StreamImporter, ImportStreamBuilder,
-    IMPORT_ENTRY_MAGIC, IMPORT_FLAG_TOMBSTONE, IMPORT_FLAG_VERIFIED,
+    BlobWriter, ConflictResolver, ImportCheckpoint, ImportEntryHeader, ImportSource,
+    ImportStreamBuilder, SliceImportSource, StreamImportConfig, StreamImportReport, StreamImporter,
+    TombstoneHandler, IMPORT_ENTRY_MAGIC, IMPORT_FLAG_TOMBSTONE, IMPORT_FLAG_VERIFIED,
 };
 
 // Compatibilité tar
 pub use tar_compat::{
-    TarBlock, TarHeader, TarEntryKind, TarEntry,
-    TarSink, TarSource, TarEmitter, TarEmitStats,
-    TarParser, TarParseReport,
-    TarToExoarConverter, TarToExoarResult,
-    ExoarToTarConverter,
-    VecTarSink, SliceTarSource,
-    tar_checksum_compute, tar_checksum_verify,
-    TAR_BLOCK_SIZE, TAR_MAGIC, TAR_VERSION, TAR_NAME_MAX,
+    tar_checksum_compute, tar_checksum_verify, ExoarToTarConverter, SliceTarSource, TarBlock,
+    TarEmitStats, TarEmitter, TarEntry, TarEntryKind, TarHeader, TarParseReport, TarParser,
+    TarSink, TarSource, TarToExoarConverter, TarToExoarResult, VecTarSink, TAR_BLOCK_SIZE,
+    TAR_MAGIC, TAR_NAME_MAX, TAR_VERSION,
 };
 
 // ─── Erreurs et résultats kernel ─────────────────────────────────────────────
@@ -138,8 +120,12 @@ impl ExportConfig {
     /// Configuration par défaut — vérification activée, audit activé.
     pub fn default_config(session_id: u32) -> Self {
         Self {
-            session_id, audit_enabled: true, verify_blob_ids: true,
-            block_size: 65536, max_entries: 0, generate_manifest: true,
+            session_id,
+            audit_enabled: true,
+            verify_blob_ids: true,
+            block_size: 65536,
+            max_entries: 0,
+            generate_manifest: true,
             conflict: ConflictResolver::Skip,
             tombstone_mode: TombstoneHandler::Delete,
         }
@@ -148,8 +134,12 @@ impl ExportConfig {
     /// Configuration stricte — toute erreur interrompt l'opération.
     pub fn strict(session_id: u32) -> Self {
         Self {
-            session_id, audit_enabled: true, verify_blob_ids: true,
-            block_size: 65536, max_entries: 0, generate_manifest: true,
+            session_id,
+            audit_enabled: true,
+            verify_blob_ids: true,
+            block_size: 65536,
+            max_entries: 0,
+            generate_manifest: true,
             conflict: ConflictResolver::Fail,
             tombstone_mode: TombstoneHandler::FailIfPresent,
         }
@@ -158,8 +148,12 @@ impl ExportConfig {
     /// Configuration rapide — pas de vérification blob_id (performance).
     pub fn fast(session_id: u32) -> Self {
         Self {
-            session_id, audit_enabled: false, verify_blob_ids: false,
-            block_size: 131072, max_entries: 0, generate_manifest: false,
+            session_id,
+            audit_enabled: false,
+            verify_blob_ids: false,
+            block_size: 131072,
+            max_entries: 0,
+            generate_manifest: false,
             conflict: ConflictResolver::Skip,
             tombstone_mode: TombstoneHandler::Delete,
         }
@@ -190,7 +184,8 @@ impl ExportConfig {
             block_size: self.block_size,
             max_blobs: self.max_entries,
             include_tombstones: true,
-            epoch_min: 0, epoch_max: u64::MAX,
+            epoch_min: 0,
+            epoch_max: u64::MAX,
         }
     }
 }
@@ -230,7 +225,9 @@ pub struct ExportModuleSummary {
 }
 
 impl ExportModuleSummary {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn record_export(&mut self, blobs: u64, bytes: u64) {
         self.total_exports = self.total_exports.saturating_add(1);
@@ -250,7 +247,9 @@ impl ExportModuleSummary {
         self.total_errors = self.total_errors.saturating_add(1);
     }
 
-    pub fn is_clean(&self) -> bool { self.total_errors == 0 }
+    pub fn is_clean(&self) -> bool {
+        self.total_errors == 0
+    }
 }
 
 // ─── Façade du module export ──────────────────────────────────────────────────
@@ -267,7 +266,10 @@ pub struct ExportModule {
 impl ExportModule {
     /// Initialise le module d'export avec la configuration donnée.
     pub fn init(config: ExportConfig) -> Self {
-        Self { config, summary: ExportModuleSummary::new() }
+        Self {
+            config,
+            summary: ExportModuleSummary::new(),
+        }
     }
 
     /// Exporte un snapshot complet des blobs vers un `ExoarBufferedWriter`.
@@ -314,10 +316,8 @@ impl ExportModule {
 
         let (buf, _) = writer.finalize()?;
 
-        self.summary.record_export(
-            self.summary.total_blobs_exported,
-            buf.len() as u64,
-        );
+        self.summary
+            .record_export(self.summary.total_blobs_exported, buf.len() as u64);
 
         if self.config.audit_enabled {
             EXPORT_AUDIT.log_event(0, ExportEvent::SessionCompleted);
@@ -358,7 +358,8 @@ impl ExportModule {
         }
 
         let (buf, _) = writer.finalize()?;
-        self.summary.record_export(added_blobs.len() as u64, buf.len() as u64);
+        self.summary
+            .record_export(added_blobs.len() as u64, buf.len() as u64);
         Ok(buf)
     }
 
@@ -400,7 +401,8 @@ impl ExportModule {
         let mut src = SliceImportSource::new(builder.as_slice());
         let report = importer.run(&mut src, writer)?;
 
-        self.summary.record_import(report.blobs_imported, report.bytes_written);
+        self.summary
+            .record_import(report.blobs_imported, report.bytes_written);
         if report.has_errors() {
             self.summary.record_error();
         }
@@ -408,7 +410,11 @@ impl ExportModule {
         if self.config.audit_enabled {
             EXPORT_AUDIT.log_event(
                 0,
-                if report.is_clean() { ExportEvent::SessionCompleted } else { ExportEvent::SessionFailed },
+                if report.is_clean() {
+                    ExportEvent::SessionCompleted
+                } else {
+                    ExportEvent::SessionFailed
+                },
             );
         }
         Ok(report)
@@ -435,10 +441,14 @@ impl ExportModule {
     }
 
     /// Retourne le résumé des opérations.
-    pub fn summary(&self) -> &ExportModuleSummary { &self.summary }
+    pub fn summary(&self) -> &ExportModuleSummary {
+        &self.summary
+    }
 
     /// Retourne la configuration actuelle.
-    pub fn config(&self) -> &ExportConfig { &self.config }
+    pub fn config(&self) -> &ExportConfig {
+        &self.config
+    }
 }
 
 // ─── Fonctions de commodité ───────────────────────────────────────────────────
@@ -449,7 +459,8 @@ pub fn export_blob_to_archive(blob_id: &[u8; 32], data: &[u8]) -> ExofsResult<Ve
     let mut writer = ExoarBufferedWriter::new(opts);
     writer.begin()?;
     writer.write_blob(blob_id, data, 0, 0)?;
-    let (buf, _) = writer.finalize()
+    let (buf, _) = writer
+        .finalize()
         .map_err(|_| crate::fs::exofs::core::ExofsError::InternalError)?;
     Ok(buf)
 }
@@ -491,7 +502,9 @@ pub fn exoar_to_tar(archive: &[u8], mtime: u64) -> ExofsResult<Vec<u8>> {
     let mut converter = ExoarToTarConverter::new();
     // Prépare les triplets (blob_id, name, data)
     let mut triplets: Vec<([u8; 32], Vec<u8>, Vec<u8>)> = Vec::new();
-    triplets.try_reserve(blobs.len()).map_err(|_| ExofsError::NoMemory)?;
+    triplets
+        .try_reserve(blobs.len())
+        .map_err(|_| ExofsError::NoMemory)?;
 
     // RECUR-01 : boucle while
     let mut i = 0usize;
@@ -499,7 +512,8 @@ pub fn exoar_to_tar(archive: &[u8], mtime: u64) -> ExofsResult<Vec<u8>> {
         let (bid, data) = &blobs[i];
         let name = hex_name_from_id(bid);
         let mut d = Vec::new();
-        d.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        d.try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         d.extend_from_slice(data);
         triplets.push((*bid, name, d));
         i = i.wrapping_add(1);
@@ -507,10 +521,15 @@ pub fn exoar_to_tar(archive: &[u8], mtime: u64) -> ExofsResult<Vec<u8>> {
 
     // Construction des références
     let mut refs: Vec<([u8; 32], &[u8], &[u8])> = Vec::new();
-    refs.try_reserve(triplets.len()).map_err(|_| ExofsError::NoMemory)?;
+    refs.try_reserve(triplets.len())
+        .map_err(|_| ExofsError::NoMemory)?;
     let mut j = 0usize;
     while j < triplets.len() {
-        refs.push((triplets[j].0, triplets[j].1.as_slice(), triplets[j].2.as_slice()));
+        refs.push((
+            triplets[j].0,
+            triplets[j].1.as_slice(),
+            triplets[j].2.as_slice(),
+        ));
         j = j.wrapping_add(1);
     }
 
@@ -541,7 +560,10 @@ mod tests {
     use super::*;
 
     fn dummy_blob_id(n: u8) -> [u8; 32] {
-        let mut id = [0u8; 32]; id[0] = n; id[1] = 0xFF; id
+        let mut id = [0u8; 32];
+        id[0] = n;
+        id[1] = 0xFF;
+        id
     }
 
     #[test]

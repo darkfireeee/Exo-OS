@@ -5,8 +5,8 @@
 // Conservée pour compatibilité architecturale.
 // Couche 0 — aucune dépendance externe.
 
-use crate::memory::core::{PhysAddr, ZoneType};
 use super::ZoneDescriptor;
+use crate::memory::core::{PhysAddr, ZoneType};
 
 /// Zone HIGH — mémoire haute 32 bits uniquement (vide sur x86_64).
 pub struct HighZone {
@@ -24,7 +24,7 @@ impl HighZone {
                 PhysAddr::new(0),
                 0,
                 0,
-            )
+            ),
         }
     }
 

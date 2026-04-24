@@ -31,12 +31,16 @@ pub mod sync;
 pub mod timer;
 
 // Re-exports principaux.
-pub use self::core::task::{ThreadControlBlock, ThreadId, ProcessId, CpuId, TaskState, SchedPolicy};
-pub use self::core::preempt::{PreemptGuard, IrqGuard};
-pub use self::core::runqueue::{run_queue, init_percpu as rq_init_percpu};
 pub use self::core::pick_next::pick_next_task;
-pub use self::core::switch::{context_switch, schedule_yield, schedule_block, wake_enqueue,
-                             block_current_thread, current_thread_raw};
+pub use self::core::preempt::{IrqGuard, PreemptGuard};
+pub use self::core::runqueue::{init_percpu as rq_init_percpu, run_queue};
+pub use self::core::switch::{
+    block_current_thread, context_switch, current_thread_raw, schedule_block, schedule_yield,
+    wake_enqueue,
+};
+pub use self::core::task::{
+    CpuId, ProcessId, SchedPolicy, TaskState, ThreadControlBlock, ThreadId,
+};
 pub use self::timer::clock::monotonic_ns;
 pub use self::timer::tick::scheduler_tick;
 
@@ -56,7 +60,10 @@ pub struct SchedInitParams {
 
 impl Default for SchedInitParams {
     fn default() -> Self {
-        Self { nr_cpus: 1, nr_nodes: 1 }
+        Self {
+            nr_cpus: 1,
+            nr_nodes: 1,
+        }
     }
 }
 
@@ -70,7 +77,9 @@ impl Default for SchedInitParams {
 pub unsafe fn init(params: &SchedInitParams) {
     // BUG-FIX H : clamp nr_cpus à MAX_CPUS pour éviter des accès out-of-bounds
     // sur PER_CPU_RQ (64 entrées) si l'appelant passe nr_cpus > 64.
-    let nr_cpus  = params.nr_cpus.clamp(1, crate::scheduler::core::preempt::MAX_CPUS);
+    let nr_cpus = params
+        .nr_cpus
+        .clamp(1, crate::scheduler::core::preempt::MAX_CPUS);
     let nr_nodes = params.nr_nodes.max(1);
     // tsc_hz vient de ktime_get_ns() (time_init() appelé avant) — RÈGLE SCHED-INIT-01.
 

@@ -4,15 +4,14 @@
 //!  - OOM-02   : try_reserve systématique
 //!  - ARITH-02 : arithmétique vérifiée
 
-
 extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
-use crate::scheduler::sync::spinlock::SpinLock;
 use super::relation::{Relation, RelationId};
 use super::relation_type::RelationDirection;
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
+use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -27,9 +26,9 @@ pub const INDEX_MAX_ENTRIES: usize = 131072;
 
 #[derive(Clone, Debug, Default)]
 pub struct IndexStats {
-    pub n_from_keys:   usize,
-    pub n_to_keys:     usize,
-    pub n_total_ids:   usize,
+    pub n_from_keys: usize,
+    pub n_to_keys: usize,
+    pub n_total_ids: usize,
     pub total_inserts: u64,
     pub total_removes: u64,
 }
@@ -42,19 +41,19 @@ struct IndexInner {
     /// by_from[blob_key] = Vec<RelationId> des relations sortantes.
     by_from: BTreeMap<[u8; 32], Vec<RelationId>>,
     /// by_to[blob_key]   = Vec<RelationId> des relations entrantes.
-    by_to:   BTreeMap<[u8; 32], Vec<RelationId>>,
-    stats:   IndexStats,
+    by_to: BTreeMap<[u8; 32], Vec<RelationId>>,
+    stats: IndexStats,
 }
 
 impl IndexInner {
     const fn new_empty() -> Self {
         IndexInner {
             by_from: BTreeMap::new(),
-            by_to:   BTreeMap::new(),
-            stats:   IndexStats {
-                n_from_keys:   0,
-                n_to_keys:     0,
-                n_total_ids:   0,
+            by_to: BTreeMap::new(),
+            stats: IndexStats {
+                n_from_keys: 0,
+                n_to_keys: 0,
+                n_total_ids: 0,
                 total_inserts: 0,
                 total_removes: 0,
             },
@@ -64,11 +63,13 @@ impl IndexInner {
     fn insert_pair(
         map: &mut BTreeMap<[u8; 32], Vec<RelationId>>,
         key: [u8; 32],
-        id:  RelationId,
+        id: RelationId,
     ) -> ExofsResult<()> {
         if let Some(v) = map.get_mut(&key) {
             // Déduplique : ne pas insérer si déjà présent.
-            if v.contains(&id) { return Ok(()); }
+            if v.contains(&id) {
+                return Ok(());
+            }
             v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             v.push(id);
         } else {
@@ -80,34 +81,32 @@ impl IndexInner {
         Ok(())
     }
 
-    fn remove_pair(
-        map: &mut BTreeMap<[u8; 32], Vec<RelationId>>,
-        key: [u8; 32],
-        id:  RelationId,
-    ) {
+    fn remove_pair(map: &mut BTreeMap<[u8; 32], Vec<RelationId>>, key: [u8; 32], id: RelationId) {
         if let Some(v) = map.get_mut(&key) {
             v.retain(|r| *r != id);
-            if v.is_empty() { map.remove(&key); }
+            if v.is_empty() {
+                map.remove(&key);
+            }
         }
     }
 
     fn insert_relation(&mut self, rel: &Relation) -> ExofsResult<()> {
         Self::insert_pair(&mut self.by_from, *rel.from.as_bytes(), rel.id)?;
-        Self::insert_pair(&mut self.by_to,   *rel.to.as_bytes(),   rel.id)?;
+        Self::insert_pair(&mut self.by_to, *rel.to.as_bytes(), rel.id)?;
         self.stats.total_inserts = self.stats.total_inserts.wrapping_add(1);
-        self.stats.n_from_keys   = self.by_from.len();
-        self.stats.n_to_keys     = self.by_to.len();
+        self.stats.n_from_keys = self.by_from.len();
+        self.stats.n_to_keys = self.by_to.len();
         self.stats.n_total_ids = self.stats.n_total_ids.wrapping_add(1);
         Ok(())
     }
 
     fn remove_relation(&mut self, rel: &Relation) {
         Self::remove_pair(&mut self.by_from, *rel.from.as_bytes(), rel.id);
-        Self::remove_pair(&mut self.by_to,   *rel.to.as_bytes(),   rel.id);
+        Self::remove_pair(&mut self.by_to, *rel.to.as_bytes(), rel.id);
         self.stats.total_removes = self.stats.total_removes.wrapping_add(1);
-        self.stats.n_from_keys   = self.by_from.len();
-        self.stats.n_to_keys     = self.by_to.len();
-        self.stats.n_total_ids   = self.stats.n_total_ids.saturating_sub(1);
+        self.stats.n_from_keys = self.by_from.len();
+        self.stats.n_to_keys = self.by_to.len();
+        self.stats.n_total_ids = self.stats.n_total_ids.saturating_sub(1);
     }
 
     fn ids_from(&self, blob: &[u8; 32]) -> Vec<RelationId> {
@@ -122,7 +121,7 @@ impl IndexInner {
         self.by_from.clear();
         self.by_to.clear();
         self.stats.n_from_keys = 0;
-        self.stats.n_to_keys   = 0;
+        self.stats.n_to_keys = 0;
         self.stats.n_total_ids = 0;
     }
 }
@@ -143,7 +142,9 @@ pub struct RelationIndex {
 impl RelationIndex {
     /// Constructeur `const` pour initialisation statique.
     pub const fn new_const() -> Self {
-        RelationIndex { inner: SpinLock::new(IndexInner::new_empty()) }
+        RelationIndex {
+            inner: SpinLock::new(IndexInner::new_empty()),
+        }
     }
 
     /// Indexe une nouvelle relation.
@@ -167,11 +168,7 @@ impl RelationIndex {
     }
 
     /// IDs des relations dans la direction donnée.
-    pub fn ids_in_direction(
-        &self,
-        blob:      &BlobId,
-        direction: RelationDirection,
-    ) -> Vec<RelationId> {
+    pub fn ids_in_direction(&self, blob: &BlobId, direction: RelationDirection) -> Vec<RelationId> {
         match direction {
             RelationDirection::Outgoing => self.ids_from(blob),
             RelationDirection::Incoming => self.ids_to(blob),
@@ -200,16 +197,20 @@ impl RelationIndex {
 
     /// Nombre de relations sortantes du blob.
     pub fn out_degree(&self, blob: &BlobId) -> usize {
-        self.inner.lock()
-            .by_from.get(blob.as_bytes())
+        self.inner
+            .lock()
+            .by_from
+            .get(blob.as_bytes())
             .map(|v| v.len())
             .unwrap_or(0)
     }
 
     /// Nombre de relations entrantes vers le blob.
     pub fn in_degree(&self, blob: &BlobId) -> usize {
-        self.inner.lock()
-            .by_to.get(blob.as_bytes())
+        self.inner
+            .lock()
+            .by_to
+            .get(blob.as_bytes())
             .map(|v| v.len())
             .unwrap_or(0)
     }
@@ -228,7 +229,7 @@ impl RelationIndex {
             }
         }
         guard.stats.n_from_keys = guard.by_from.len();
-        guard.stats.n_to_keys   = guard.by_to.len();
+        guard.stats.n_to_keys = guard.by_to.len();
         all
     }
 
@@ -272,14 +273,18 @@ pub fn are_directly_connected(a: &BlobId, b: &BlobId) -> bool {
     let ids_in = RELATION_INDEX.ids_to(a);
     // Naive : vérifie via IDs to/from de b
     let b_out = RELATION_INDEX.ids_from(b);
-    let b_in  = RELATION_INDEX.ids_to(b);
+    let b_in = RELATION_INDEX.ids_to(b);
     // Deux blobs sont connectés si a est dans la même composante
     // (au moins un ID commun entre les listes).
     for id in &ids_out {
-        if b_in.contains(id) { return true; }
+        if b_in.contains(id) {
+            return true;
+        }
     }
     for id in &ids_in {
-        if b_out.contains(id) { return true; }
+        if b_out.contains(id) {
+            return true;
+        }
     }
     false
 }
@@ -306,19 +311,25 @@ pub fn index_health() -> IndexStats {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::relation_type::{RelationKind, RelationType};
+    use super::*;
 
-    fn blob(b: u8) -> BlobId { BlobId([b; 32]) }
+    fn blob(b: u8) -> BlobId {
+        BlobId([b; 32])
+    }
 
     fn rel(id: u64, from: BlobId, to: BlobId) -> Relation {
         Relation::new(
-            RelationId(id), from, to,
-            RelationType::new(RelationKind::Parent), 0,
+            RelationId(id),
+            from,
+            to,
+            RelationType::new(RelationKind::Parent),
+            0,
         )
     }
 
-    #[test] fn test_insert_ids_from() {
+    #[test]
+    fn test_insert_ids_from() {
         let idx = RelationIndex::new_const();
         let r = rel(1, blob(1), blob(2));
         idx.insert(&r).unwrap();
@@ -326,7 +337,8 @@ mod tests {
         assert_eq!(ids, vec![RelationId(1)]);
     }
 
-    #[test] fn test_insert_ids_to() {
+    #[test]
+    fn test_insert_ids_to() {
         let idx = RelationIndex::new_const();
         let r = rel(2, blob(3), blob(4));
         idx.insert(&r).unwrap();
@@ -334,7 +346,8 @@ mod tests {
         assert_eq!(ids, vec![RelationId(2)]);
     }
 
-    #[test] fn test_remove() {
+    #[test]
+    fn test_remove() {
         let idx = RelationIndex::new_const();
         let r = rel(3, blob(5), blob(6));
         idx.insert(&r).unwrap();
@@ -343,7 +356,8 @@ mod tests {
         assert!(idx.ids_to(&blob(6)).is_empty());
     }
 
-    #[test] fn test_deduplicate_insert() {
+    #[test]
+    fn test_deduplicate_insert() {
         let idx = RelationIndex::new_const();
         let r = rel(4, blob(7), blob(8));
         idx.insert(&r).unwrap();
@@ -351,7 +365,8 @@ mod tests {
         assert_eq!(idx.out_degree(&blob(7)), 1);
     }
 
-    #[test] fn test_degrees() {
+    #[test]
+    fn test_degrees() {
         let idx = RelationIndex::new_const();
         idx.insert(&rel(5, blob(10), blob(20))).unwrap();
         idx.insert(&rel(6, blob(10), blob(21))).unwrap();
@@ -359,7 +374,8 @@ mod tests {
         assert_eq!(idx.in_degree(&blob(20)), 1);
     }
 
-    #[test] fn test_remove_all_for_blob() {
+    #[test]
+    fn test_remove_all_for_blob() {
         let idx = RelationIndex::new_const();
         idx.insert(&rel(7, blob(30), blob(31))).unwrap();
         idx.insert(&rel(8, blob(32), blob(30))).unwrap();
@@ -369,15 +385,17 @@ mod tests {
         assert!(!idx.has_incoming(&blob(30)));
     }
 
-    #[test] fn test_both_direction() {
+    #[test]
+    fn test_both_direction() {
         let idx = RelationIndex::new_const();
-        idx.insert(&rel(9,  blob(40), blob(41))).unwrap();
+        idx.insert(&rel(9, blob(40), blob(41))).unwrap();
         idx.insert(&rel(10, blob(42), blob(40))).unwrap();
         let both = idx.ids_in_direction(&blob(40), RelationDirection::Both);
         assert_eq!(both.len(), 2);
     }
 
-    #[test] fn test_flush_clears() {
+    #[test]
+    fn test_flush_clears() {
         let idx = RelationIndex::new_const();
         idx.insert(&rel(11, blob(50), blob(51))).unwrap();
         idx.flush();
@@ -385,19 +403,22 @@ mod tests {
         assert_eq!(idx.in_degree(&blob(51)), 0);
     }
 
-    #[test] fn test_has_no_outgoing_initially() {
+    #[test]
+    fn test_has_no_outgoing_initially() {
         let idx = RelationIndex::new_const();
         assert!(!idx.has_outgoing(&blob(99)));
     }
 
-    #[test] fn test_stats() {
+    #[test]
+    fn test_stats() {
         let idx = RelationIndex::new_const();
         idx.insert(&rel(12, blob(60), blob(61))).unwrap();
         let s = idx.stats();
         assert!(s.n_from_keys > 0 || s.n_to_keys > 0);
     }
 
-    #[test] fn test_ids_from_filtered() {
+    #[test]
+    fn test_ids_from_filtered() {
         let idx = RelationIndex::new_const();
         idx.insert(&rel(13, blob(70), blob(71))).unwrap();
         idx.insert(&rel(14, blob(70), blob(72))).unwrap();

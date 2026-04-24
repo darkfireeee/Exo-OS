@@ -7,8 +7,8 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::memory::heap::thread_local::cache::{CPU_CACHES, MAX_CPUS, CACHED_SIZE_CLASSES};
 use crate::memory::heap::allocator::size_classes::HEAP_SIZE_CLASSES;
+use crate::memory::heap::thread_local::cache::{CACHED_SIZE_CLASSES, CPU_CACHES, MAX_CPUS};
 use crate::memory::physical::allocator::slub::SLUB_CACHES;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -17,25 +17,25 @@ use crate::memory::physical::allocator::slub::SLUB_CACHES;
 
 pub struct DrainStats {
     /// Nombre total d'opérations de drain déclenchées.
-    pub total_drains:        AtomicU64,
+    pub total_drains: AtomicU64,
     /// Nombre d'objets rendus au SLUB en tout.
-    pub objects_drained:     AtomicU64,
+    pub objects_drained: AtomicU64,
     /// Drains déclenchés par pression mémoire (OOM shrink).
-    pub pressure_drains:     AtomicU64,
+    pub pressure_drains: AtomicU64,
     /// Drains déclenchés par context switch.
     pub context_switch_drains: AtomicU64,
     /// Drains déclenchés explicitement (shutdown / quiesce).
-    pub explicit_drains:     AtomicU64,
+    pub explicit_drains: AtomicU64,
 }
 
 impl DrainStats {
     const fn new() -> Self {
         DrainStats {
-            total_drains:          AtomicU64::new(0),
-            objects_drained:       AtomicU64::new(0),
-            pressure_drains:       AtomicU64::new(0),
+            total_drains: AtomicU64::new(0),
+            objects_drained: AtomicU64::new(0),
+            pressure_drains: AtomicU64::new(0),
             context_switch_drains: AtomicU64::new(0),
-            explicit_drains:       AtomicU64::new(0),
+            explicit_drains: AtomicU64::new(0),
         }
     }
 }
@@ -73,17 +73,22 @@ fn drain_class_inner(cpu_id: usize, class_idx: usize, policy: DrainPolicy) -> us
         DrainPolicy::Full | DrainPolicy::AllCpus => {
             while let Some(ptr) = cache.magazines[class_idx].loaded.pop() {
                 // SAFETY: ptr a été alloué par SLUB_CACHES[slub_idx].
-                unsafe { SLUB_CACHES[slub_idx].free(ptr); }
+                unsafe {
+                    SLUB_CACHES[slub_idx].free(ptr);
+                }
                 count += 1;
             }
-            while let Some(_ptr) = cache.magazines[class_idx].prev.pop() {                // SAFETY: ptr alloqué par SLUB_CACHES[slub_idx].                unsafe { SLUB_CACHES[slub_idx].free(ptr); }
+            while let Some(_ptr) = cache.magazines[class_idx].prev.pop() {
+                // SAFETY: ptr alloqué par SLUB_CACHES[slub_idx].                unsafe { SLUB_CACHES[slub_idx].free(ptr); }
                 count += 1;
             }
         }
         DrainPolicy::Partial => {
             while let Some(ptr) = cache.magazines[class_idx].prev.pop() {
                 // SAFETY: ptr alloqu\u00e9 par SLUB_CACHES[slub_idx] (drain partial).
-                unsafe { SLUB_CACHES[slub_idx].free(ptr); }
+                unsafe {
+                    SLUB_CACHES[slub_idx].free(ptr);
+                }
                 count += 1;
             }
         }
@@ -97,7 +102,9 @@ fn drain_class_inner(cpu_id: usize, class_idx: usize, policy: DrainPolicy) -> us
 /// Doit être appelé depuis le CPU `cpu_id` (ou depuis un contexte où aucun autre
 /// thread ne peut accéder au cache de ce CPU).
 pub unsafe fn drain_cpu(cpu_id: usize, policy: DrainPolicy) {
-    if cpu_id >= MAX_CPUS { return; }
+    if cpu_id >= MAX_CPUS {
+        return;
+    }
 
     let mut total_objects = 0u64;
 
@@ -106,7 +113,9 @@ pub unsafe fn drain_cpu(cpu_id: usize, policy: DrainPolicy) {
     }
 
     DRAIN_STATS.total_drains.fetch_add(1, Ordering::Relaxed);
-    DRAIN_STATS.objects_drained.fetch_add(total_objects, Ordering::Relaxed);
+    DRAIN_STATS
+        .objects_drained
+        .fetch_add(total_objects, Ordering::Relaxed);
 }
 
 /// Drain déclenché lors d'un context switch.
@@ -117,7 +126,9 @@ pub unsafe fn drain_cpu(cpu_id: usize, policy: DrainPolicy) {
 pub unsafe fn drain_on_context_switch(cpu_id: usize) {
     // Drain partiel sur context switch pour limiter la latence.
     drain_cpu(cpu_id, DrainPolicy::Partial);
-    DRAIN_STATS.context_switch_drains.fetch_add(1, Ordering::Relaxed);
+    DRAIN_STATS
+        .context_switch_drains
+        .fetch_add(1, Ordering::Relaxed);
 }
 
 /// Drain déclenché par pression mémoire (shrinker de l'OOM killer).
@@ -138,13 +149,17 @@ pub unsafe fn drain_on_memory_pressure(cpu_id: usize) {
 pub unsafe fn drain_all_cpus() {
     for cpu_id in 0..MAX_CPUS {
         let cache = CPU_CACHES.get_mut(cpu_id);
-        if !cache.active { continue; }
+        if !cache.active {
+            continue;
+        }
 
         let mut total = 0u64;
         for class_idx in 0..CACHED_SIZE_CLASSES {
             total += drain_class_inner(cpu_id, class_idx, DrainPolicy::AllCpus) as u64;
         }
-        DRAIN_STATS.objects_drained.fetch_add(total, Ordering::Relaxed);
+        DRAIN_STATS
+            .objects_drained
+            .fetch_add(total, Ordering::Relaxed);
     }
     DRAIN_STATS.total_drains.fetch_add(1, Ordering::Relaxed);
     DRAIN_STATS.explicit_drains.fetch_add(1, Ordering::Relaxed);
@@ -156,9 +171,13 @@ pub unsafe fn drain_all_cpus() {
 /// # Safety
 /// Même conditions que `drain_cpu`.
 pub unsafe fn drain_cpu_class(cpu_id: usize, class_idx: usize, policy: DrainPolicy) {
-    if cpu_id >= MAX_CPUS || class_idx >= CACHED_SIZE_CLASSES { return; }
+    if cpu_id >= MAX_CPUS || class_idx >= CACHED_SIZE_CLASSES {
+        return;
+    }
     let count = drain_class_inner(cpu_id, class_idx, policy);
-    DRAIN_STATS.objects_drained.fetch_add(count as u64, Ordering::Relaxed);
+    DRAIN_STATS
+        .objects_drained
+        .fetch_add(count as u64, Ordering::Relaxed);
     DRAIN_STATS.total_drains.fetch_add(1, Ordering::Relaxed);
 }
 

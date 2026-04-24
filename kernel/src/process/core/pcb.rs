@@ -15,14 +15,13 @@
 //     enregistrés as handle — pas de type concret fs/.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, AtomicPtr, Ordering};
-use alloc::vec::Vec;
-use alloc::boxed::Box;
 use super::pid::Pid;
+use crate::process::signal::default::SigHandlerTable;
 use crate::scheduler::core::task::ThreadId;
 use crate::scheduler::sync::spinlock::SpinLock;
-use crate::process::signal::default::SigHandlerTable;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ProcessState — machine d'états du processus
@@ -33,17 +32,17 @@ use crate::process::signal::default::SigHandlerTable;
 #[repr(u8)]
 pub enum ProcessState {
     /// En cours de création (fork / execve non terminé).
-    Creating    = 0,
+    Creating = 0,
     /// Au moins un thread actif.
-    Running     = 1,
+    Running = 1,
     /// Tous les threads bloqués.
-    Sleeping    = 2,
+    Sleeping = 2,
     /// Arrêté via SIGSTOP (tous threads Stopped).
-    Stopped     = 3,
+    Stopped = 3,
     /// exit() appelé, en attente de waitpid() par le parent.
-    Zombie      = 4,
+    Zombie = 4,
     /// Ressources libérées (après reap).
-    Dead        = 5,
+    Dead = 5,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,27 +51,27 @@ pub enum ProcessState {
 
 pub mod process_flags {
     /// fork() par copy-on-write (CLONE_VM absent).
-    pub const FORKED:           u32 = 1 << 0;
+    pub const FORKED: u32 = 1 << 0;
     /// execve() effectué au moins une fois.
-    pub const EXEC_DONE:        u32 = 1 << 1;
+    pub const EXEC_DONE: u32 = 1 << 1;
     /// Processus leader de session.
-    pub const SESSION_LEADER:   u32 = 1 << 2;
+    pub const SESSION_LEADER: u32 = 1 << 2;
     /// Processus démonisé (no ctty).
-    pub const DAEMON:           u32 = 1 << 3;
+    pub const DAEMON: u32 = 1 << 3;
     /// Undergoing exit — ne pas envoyer de nouveaux signaux.
-    pub const EXITING:          u32 = 1 << 4;
+    pub const EXITING: u32 = 1 << 4;
     /// Setuid actif.
-    pub const SETUID:           u32 = 1 << 5;
+    pub const SETUID: u32 = 1 << 5;
     /// Setgid actif.
-    pub const SETGID:           u32 = 1 << 6;
+    pub const SETGID: u32 = 1 << 6;
     /// Dump core interdit (prctl(PR_SET_DUMPABLE, 0)).
-    pub const NO_DUMP:          u32 = 1 << 7;
+    pub const NO_DUMP: u32 = 1 << 7;
     /// Processus soumis à ptrace.
-    pub const TRACED:           u32 = 1 << 8;
+    pub const TRACED: u32 = 1 << 8;
     /// Processus dans un namespace PID (non-init).
-    pub const IN_PID_NS:        u32 = 1 << 9;
+    pub const IN_PID_NS: u32 = 1 << 9;
     /// Vfork en attente — libérer le parent bloqué.
-    pub const VFORK_DONE:       u32 = 1 << 10;
+    pub const VFORK_DONE: u32 = 1 << 10;
 }
 
 pub use process_flags as ProcessFlags;
@@ -87,11 +86,11 @@ pub use process_flags as ProcessFlags;
 #[derive(Copy, Clone, Debug)]
 pub struct FileDescriptor {
     /// Numéro fd (0=stdin, 1=stdout, 2=stderr, 3+...).
-    pub fd:     i32,
+    pub fd: i32,
     /// Handle opaque vers l'entrée fs/ (index dans la table vfs).
     pub handle: u64,
     /// Flags O_CLOEXEC, O_NONBLOCK...
-    pub flags:  u32,
+    pub flags: u32,
 }
 
 /// Table des fichiers ouverts d'un processus (partagée entre threads via fork+CLONE_FILES).
@@ -120,16 +119,28 @@ impl OpenFileTable {
             fd_limit,
             descriptors,
             next_hint: 3,
-            open_count:  AtomicU64::new(0),
+            open_count: AtomicU64::new(0),
             close_count: AtomicU64::new(0),
         }
     }
 
     /// Installe le triplet stdin/stdout/stderr.
     pub fn install_std_fds(&mut self, stdin: u64, stdout: u64, stderr: u64) {
-        self.descriptors[0] = Some(FileDescriptor { fd: 0, handle: stdin,  flags: 0 });
-        self.descriptors[1] = Some(FileDescriptor { fd: 1, handle: stdout, flags: 0 });
-        self.descriptors[2] = Some(FileDescriptor { fd: 2, handle: stderr, flags: 0 });
+        self.descriptors[0] = Some(FileDescriptor {
+            fd: 0,
+            handle: stdin,
+            flags: 0,
+        });
+        self.descriptors[1] = Some(FileDescriptor {
+            fd: 1,
+            handle: stdout,
+            flags: 0,
+        });
+        self.descriptors[2] = Some(FileDescriptor {
+            fd: 2,
+            handle: stderr,
+            flags: 0,
+        });
     }
 
     /// Alloue le prochain fd disponible et y associe le handle.
@@ -142,14 +153,22 @@ impl OpenFileTable {
         for idx in start..limit {
             if idx < self.descriptors.len() {
                 if self.descriptors[idx].is_none() {
-                    self.descriptors[idx] = Some(FileDescriptor { fd: idx as i32, handle, flags });
+                    self.descriptors[idx] = Some(FileDescriptor {
+                        fd: idx as i32,
+                        handle,
+                        flags,
+                    });
                     self.next_hint = idx + 1;
                     self.open_count.fetch_add(1, Ordering::Relaxed);
                     return idx as i32;
                 }
             } else {
                 // Étendre le vecteur.
-                self.descriptors.push(Some(FileDescriptor { fd: idx as i32, handle, flags }));
+                self.descriptors.push(Some(FileDescriptor {
+                    fd: idx as i32,
+                    handle,
+                    flags,
+                }));
                 self.next_hint = idx + 1;
                 self.open_count.fetch_add(1, Ordering::Relaxed);
                 return idx as i32;
@@ -158,7 +177,11 @@ impl OpenFileTable {
         // Rescan depuis 0 au cas où il y a des trous avant start.
         for idx in 3..start {
             if idx < self.descriptors.len() && self.descriptors[idx].is_none() {
-                self.descriptors[idx] = Some(FileDescriptor { fd: idx as i32, handle, flags });
+                self.descriptors[idx] = Some(FileDescriptor {
+                    fd: idx as i32,
+                    handle,
+                    flags,
+                });
                 self.next_hint = idx + 1;
                 self.open_count.fetch_add(1, Ordering::Relaxed);
                 return idx as i32;
@@ -205,10 +228,10 @@ impl OpenFileTable {
     /// Clone la table pour fork() (les handles sont dupliqués).
     pub fn clone_for_fork(&self) -> Self {
         Self {
-            fd_limit:    self.fd_limit,
+            fd_limit: self.fd_limit,
             descriptors: self.descriptors.clone(),
-            next_hint:   self.next_hint,
-            open_count:  AtomicU64::new(self.open_count.load(Ordering::Relaxed)),
+            next_hint: self.next_hint,
+            open_count: AtomicU64::new(self.open_count.load(Ordering::Relaxed)),
             close_count: AtomicU64::new(0),
         }
     }
@@ -227,8 +250,8 @@ impl OpenFileTable {
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct Credentials {
-    pub uid:  u32,
-    pub gid:  u32,
+    pub uid: u32,
+    pub gid: u32,
     pub euid: u32,
     pub egid: u32,
     pub suid: u32,
@@ -240,12 +263,27 @@ pub struct Credentials {
 
 impl Credentials {
     pub const ROOT: Self = Self {
-        uid: 0, gid: 0, euid: 0, egid: 0,
-        suid: 0, sgid: 0, fsuid: 0, fsgid: 0,
+        uid: 0,
+        gid: 0,
+        euid: 0,
+        egid: 0,
+        suid: 0,
+        sgid: 0,
+        fsuid: 0,
+        fsgid: 0,
     };
 
     pub fn new(uid: u32, gid: u32) -> Self {
-        Self { uid, gid, euid: uid, egid: gid, suid: uid, sgid: gid, fsuid: uid, fsgid: gid }
+        Self {
+            uid,
+            gid,
+            euid: uid,
+            egid: gid,
+            suid: uid,
+            sgid: gid,
+            fsuid: uid,
+            fsgid: gid,
+        }
     }
 
     #[inline(always)]
@@ -265,120 +303,120 @@ impl Credentials {
 pub struct ProcessControlBlock {
     // ── Identité ──────────────────────────────────────────────────────────────
     /// PID du processus.
-    pub pid:            Pid,
+    pub pid: Pid,
     /// PID du processus parent.
-    pub ppid:           AtomicU32,
+    pub ppid: AtomicU32,
     /// PID du leader de thread group (= pid du premier thread, tgid POSIX).
-    pub tgid:           Pid,
+    pub tgid: Pid,
     /// Session ID.
-    pub sid:            AtomicU32,
+    pub sid: AtomicU32,
     /// Process group ID.
-    pub pgid:           AtomicU32,
+    pub pgid: AtomicU32,
 
     // ── État ──────────────────────────────────────────────────────────────────
     /// État courant du processus.
-    pub state:          AtomicU32,   // ProcessState as u32
+    pub state: AtomicU32, // ProcessState as u32
     /// Flags de processus (process_flags::*).
-    pub flags:          AtomicU32,
+    pub flags: AtomicU32,
     /// Code de sortie (renseigné par exit()).
-    pub exit_code:      AtomicU32,
+    pub exit_code: AtomicU32,
 
     // ── Threads ───────────────────────────────────────────────────────────────
     /// Nombre de threads actifs dans ce processus.
-    pub thread_count:   AtomicU32,
+    pub thread_count: AtomicU32,
     /// ID du thread principal (TID = PID au sens POSIX).
-    pub main_thread:    ThreadId,
+    pub main_thread: ThreadId,
 
     // ── Ressources ────────────────────────────────────────────────────────────
     /// Credentials (uid/gid...).
-    pub creds:          SpinLock<Credentials>,
+    pub creds: SpinLock<Credentials>,
     /// Table des fichiers ouverts.
-    pub files:          SpinLock<OpenFileTable>,
+    pub files: SpinLock<OpenFileTable>,
 
     // ── Mémoire virtuelle ──────────────────────────────────────────────────────
     /// Pointeur opaque vers l'espace d'adressage virtuel (géré par memory/virt/).
     /// Type réel : *mut memory::virt::address_space::user::UserAddressSpace.
-    pub address_space:  AtomicUsize,  // *mut opaque
+    pub address_space: AtomicUsize, // *mut opaque
     /// CR3 courant (base de la PML4 physique).
-    pub cr3:            AtomicU64,
+    pub cr3: AtomicU64,
     /// taille du heap brk courant (bytes au-dessus de brk_start).
-    pub brk_current:    AtomicU64,
-    pub brk_start:      AtomicU64,
+    pub brk_current: AtomicU64,
+    pub brk_start: AtomicU64,
 
     // ── Compteurs de performance ───────────────────────────────────────────────
     /// Temps CPU utilisateur total (ns).
-    pub utime_ns:       AtomicU64,
+    pub utime_ns: AtomicU64,
     /// Temps CPU système total (ns).
-    pub stime_ns:       AtomicU64,
+    pub stime_ns: AtomicU64,
     /// Major page faults (swap-in).
-    pub major_faults:   AtomicU64,
+    pub major_faults: AtomicU64,
     /// Minor page faults (demand paging).
-    pub minor_faults:   AtomicU64,
+    pub minor_faults: AtomicU64,
     /// Octets lus depuis des devices.
-    pub io_read_bytes:  AtomicU64,
+    pub io_read_bytes: AtomicU64,
     /// Octets écrits vers des devices.
     pub io_write_bytes: AtomicU64,
 
     // ── Signaux ────────────────────────────────────────────────────────────────
     /// Table des handlers de signaux installés (partagée entre tous les threads).
-    pub sig_handlers:   SpinLock<SigHandlerTable>,
+    pub sig_handlers: SpinLock<SigHandlerTable>,
     /// Pointeur vers le ProcessThread principal (TID = PID).
     pub main_thread_rawptr: AtomicPtr<crate::process::core::tcb::ProcessThread>,
 
     // ── Namespaces ────────────────────────────────────────────────────────────
     /// Index (handle) dans la table de PID namespaces.
-    pub pid_ns:         u32,
+    pub pid_ns: u32,
     /// Index dans la table de mount namespaces.
-    pub mnt_ns:         u32,
+    pub mnt_ns: u32,
     /// Index dans la table de net namespaces.
-    pub net_ns:         u32,
+    pub net_ns: u32,
     /// Index dans la table d'UTS namespaces.
-    pub uts_ns:         u32,
+    pub uts_ns: u32,
     /// Index dans la table de user namespaces.
-    pub user_ns:        u32,
+    pub user_ns: u32,
 }
 
 impl ProcessControlBlock {
     /// Crée un nouveau PCB pour `fork()` / `create_process()`.
     pub fn new(
-        pid:         Pid,
-        ppid:        Pid,
-        tgid:        Pid,
+        pid: Pid,
+        ppid: Pid,
+        tgid: Pid,
         main_thread: ThreadId,
-        creds:       Credentials,
-        fd_limit:    usize,
-        cr3:         u64,
-        addr_space:  usize,
+        creds: Credentials,
+        fd_limit: usize,
+        cr3: u64,
+        addr_space: usize,
     ) -> Box<Self> {
         Box::new(ProcessControlBlock {
             pid,
-            ppid:           AtomicU32::new(ppid.0),
+            ppid: AtomicU32::new(ppid.0),
             tgid,
-            sid:            AtomicU32::new(0),
-            pgid:           AtomicU32::new(pid.0),
-            state:          AtomicU32::new(ProcessState::Creating as u32),
-            flags:          AtomicU32::new(0),
-            exit_code:      AtomicU32::new(0),
-            thread_count:   AtomicU32::new(1),
+            sid: AtomicU32::new(0),
+            pgid: AtomicU32::new(pid.0),
+            state: AtomicU32::new(ProcessState::Creating as u32),
+            flags: AtomicU32::new(0),
+            exit_code: AtomicU32::new(0),
+            thread_count: AtomicU32::new(1),
             main_thread,
-            creds:          SpinLock::new(creds),
-            files:          SpinLock::new(OpenFileTable::new(fd_limit)),
-            address_space:  AtomicUsize::new(addr_space),
-            cr3:            AtomicU64::new(cr3),
-            brk_current:    AtomicU64::new(0),
-            brk_start:      AtomicU64::new(0),
-            utime_ns:       AtomicU64::new(0),
-            stime_ns:       AtomicU64::new(0),
-            major_faults:   AtomicU64::new(0),
-            minor_faults:   AtomicU64::new(0),
-            io_read_bytes:  AtomicU64::new(0),
+            creds: SpinLock::new(creds),
+            files: SpinLock::new(OpenFileTable::new(fd_limit)),
+            address_space: AtomicUsize::new(addr_space),
+            cr3: AtomicU64::new(cr3),
+            brk_current: AtomicU64::new(0),
+            brk_start: AtomicU64::new(0),
+            utime_ns: AtomicU64::new(0),
+            stime_ns: AtomicU64::new(0),
+            major_faults: AtomicU64::new(0),
+            minor_faults: AtomicU64::new(0),
+            io_read_bytes: AtomicU64::new(0),
             io_write_bytes: AtomicU64::new(0),
-            sig_handlers:   SpinLock::new(SigHandlerTable::new()),
+            sig_handlers: SpinLock::new(SigHandlerTable::new()),
             main_thread_rawptr: AtomicPtr::new(core::ptr::null_mut()),
-            pid_ns:  0,
-            mnt_ns:  0,
-            net_ns:  0,
-            uts_ns:  0,
+            pid_ns: 0,
+            mnt_ns: 0,
+            net_ns: 0,
+            uts_ns: 0,
             user_ns: 0,
         })
     }
@@ -408,7 +446,8 @@ impl ProcessControlBlock {
 
     #[inline(always)]
     pub fn set_exiting(&self) {
-        self.flags.fetch_or(process_flags::EXITING, Ordering::Release);
+        self.flags
+            .fetch_or(process_flags::EXITING, Ordering::Release);
     }
 
     /// Incrémente le compteur de threads actifs.
@@ -454,7 +493,7 @@ impl ProcessControlBlock {
     #[inline]
     pub fn set_uid(&self, uid: u32) {
         let mut c = self.creds.lock();
-        c.uid   = uid;
+        c.uid = uid;
         c.fsuid = uid;
     }
 
@@ -462,7 +501,7 @@ impl ProcessControlBlock {
     #[inline]
     pub fn set_gid(&self, gid: u32) {
         let mut c = self.creds.lock();
-        c.gid   = gid;
+        c.gid = gid;
         c.fsgid = gid;
     }
 
@@ -495,18 +534,32 @@ impl ProcessControlBlock {
     pub fn set_resuid(&self, ruid: u32, euid: u32, suid: u32) {
         let mut c = self.creds.lock();
         // Convention POSIX : (u32::MAX) = ne pas modifier
-        if ruid != u32::MAX { c.uid  = ruid; c.fsuid = ruid; }
-        if euid != u32::MAX { c.euid = euid; }
-        if suid != u32::MAX { c.suid = suid; }
+        if ruid != u32::MAX {
+            c.uid = ruid;
+            c.fsuid = ruid;
+        }
+        if euid != u32::MAX {
+            c.euid = euid;
+        }
+        if suid != u32::MAX {
+            c.suid = suid;
+        }
     }
 
     /// `setresgid(rgid, egid, sgid)` — u32::MAX signifie "ne pas changer".
     #[inline]
     pub fn set_resgid(&self, rgid: u32, egid: u32, sgid: u32) {
         let mut c = self.creds.lock();
-        if rgid != u32::MAX { c.gid  = rgid; c.fsgid = rgid; }
-        if egid != u32::MAX { c.egid = egid; }
-        if sgid != u32::MAX { c.sgid = sgid; }
+        if rgid != u32::MAX {
+            c.gid = rgid;
+            c.fsgid = rgid;
+        }
+        if egid != u32::MAX {
+            c.egid = egid;
+        }
+        if sgid != u32::MAX {
+            c.sgid = sgid;
+        }
     }
 
     /// Pointeur vers l'espace d'adressage (opaque).
@@ -521,27 +574,39 @@ impl ProcessControlBlock {
 
     /// PID du processus.
     #[inline(always)]
-    pub fn pid(&self) -> Pid { self.pid }
+    pub fn pid(&self) -> Pid {
+        self.pid
+    }
 
     /// PID du parent.
     #[inline(always)]
-    pub fn ppid(&self) -> Pid { Pid(self.ppid.load(Ordering::Acquire)) }
+    pub fn ppid(&self) -> Pid {
+        Pid(self.ppid.load(Ordering::Acquire))
+    }
 
     /// PGID.
     #[inline(always)]
-    pub fn pgroup_id(&self) -> u32 { self.pgid.load(Ordering::Acquire) }
+    pub fn pgroup_id(&self) -> u32 {
+        self.pgid.load(Ordering::Acquire)
+    }
 
     /// Définit le PGID.
     #[inline(always)]
-    pub fn set_pgroup_id(&self, pgid: u32) { self.pgid.store(pgid, Ordering::Release); }
+    pub fn set_pgroup_id(&self, pgid: u32) {
+        self.pgid.store(pgid, Ordering::Release);
+    }
 
     /// SID.
     #[inline(always)]
-    pub fn session_id(&self) -> u32 { self.sid.load(Ordering::Acquire) }
+    pub fn session_id(&self) -> u32 {
+        self.sid.load(Ordering::Acquire)
+    }
 
     /// Définit le SID.
     #[inline(always)]
-    pub fn set_session_id(&self, sid: u32) { self.sid.store(sid, Ordering::Release); }
+    pub fn set_session_id(&self, sid: u32) {
+        self.sid.store(sid, Ordering::Release);
+    }
 
     /// Vrai si ce processus est leader de session (SID == PID).
     #[inline(always)]
@@ -558,18 +623,13 @@ impl ProcessControlBlock {
     /// Pointeur vers le thread principal du processus (TID = PID).
     /// Null si pas encore initialisé.
     #[inline(always)]
-    pub fn main_thread_ptr(
-        &self,
-    ) -> *mut crate::process::core::tcb::ProcessThread {
+    pub fn main_thread_ptr(&self) -> *mut crate::process::core::tcb::ProcessThread {
         self.main_thread_rawptr.load(Ordering::Acquire)
     }
 
     /// Définit le pointeur vers le thread principal.
     #[inline(always)]
-    pub fn set_main_thread_ptr(
-        &self,
-        ptr: *mut crate::process::core::tcb::ProcessThread,
-    ) {
+    pub fn set_main_thread_ptr(&self, ptr: *mut crate::process::core::tcb::ProcessThread) {
         self.main_thread_rawptr.store(ptr, Ordering::Release);
     }
 }

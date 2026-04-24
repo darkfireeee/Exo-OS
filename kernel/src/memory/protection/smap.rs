@@ -12,7 +12,6 @@
 //
 // Couche 0 : aucune dépendance scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -30,10 +29,10 @@ pub const RFLAGS_AC_BIT: u64 = 1 << 18;
 
 #[repr(C)]
 pub struct SmapStats {
-    pub enable_count:    AtomicU64,
-    pub disable_count:   AtomicU64,
-    pub stac_count:      AtomicU64,
-    pub clac_count:      AtomicU64,
+    pub enable_count: AtomicU64,
+    pub disable_count: AtomicU64,
+    pub stac_count: AtomicU64,
+    pub clac_count: AtomicU64,
     pub violation_count: AtomicU64,
     pub redundant_enable: AtomicU64,
 }
@@ -41,10 +40,10 @@ pub struct SmapStats {
 impl SmapStats {
     const fn new() -> Self {
         Self {
-            enable_count:    AtomicU64::new(0),
-            disable_count:   AtomicU64::new(0),
-            stac_count:      AtomicU64::new(0),
-            clac_count:      AtomicU64::new(0),
+            enable_count: AtomicU64::new(0),
+            disable_count: AtomicU64::new(0),
+            stac_count: AtomicU64::new(0),
+            clac_count: AtomicU64::new(0),
             violation_count: AtomicU64::new(0),
             redundant_enable: AtomicU64::new(0),
         }

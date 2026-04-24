@@ -4,16 +4,13 @@
 //! filters, rate tracking, and alert generation. All state is stored
 //! in static arrays (no heap).
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 use super::core::{
-    ThreatLevel, ThreatCategory, ThreatRecord,
-    MAX_SIG_NAME, record_threat, score_to_level,
-    compute_threat_score, containment_for_level,
-    stat_threats_inc, stat_critical_inc,
-    update_risk_profile, mark_process_contained,
-    ContainmentAction,
+    compute_threat_score, containment_for_level, mark_process_contained, record_threat,
+    score_to_level, stat_critical_inc, stat_threats_inc, update_risk_profile, ContainmentAction,
+    ThreatCategory, ThreatLevel, ThreatRecord, MAX_SIG_NAME,
 };
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -38,8 +35,8 @@ const RATE_WINDOW_TICKS: u64 = 100;
 
 /// Default rate thresholds.
 const DEFAULT_SYSCALL_RATE_LIMIT: u32 = 10000;
-const DEFAULT_NET_RATE_LIMIT:     u32 = 5000;
-const DEFAULT_FS_RATE_LIMIT:      u32 = 8000;
+const DEFAULT_NET_RATE_LIMIT: u32 = 5000;
+const DEFAULT_FS_RATE_LIMIT: u32 = 8000;
 const DEFAULT_ANOMALY_RATE_LIMIT: u32 = 100;
 
 // ── Event Types ─────────────────────────────────────────────────────────────
@@ -48,14 +45,14 @@ const DEFAULT_ANOMALY_RATE_LIMIT: u32 = 100;
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EventType {
-    Syscall      = 0,
-    Network      = 1,
-    Filesystem   = 2,
-    Memory       = 3,
-    Process      = 4,
-    Ipc          = 5,
-    Signal       = 6,
-    Capability   = 7,
+    Syscall = 0,
+    Network = 1,
+    Filesystem = 2,
+    Memory = 3,
+    Process = 4,
+    Ipc = 5,
+    Signal = 6,
+    Capability = 7,
     Custom(u8),
 }
 
@@ -76,15 +73,15 @@ impl EventType {
 
     pub fn as_u8(self) -> u8 {
         match self {
-            EventType::Syscall    => 0,
-            EventType::Network    => 1,
+            EventType::Syscall => 0,
+            EventType::Network => 1,
             EventType::Filesystem => 2,
-            EventType::Memory     => 3,
-            EventType::Process    => 4,
-            EventType::Ipc        => 5,
-            EventType::Signal     => 6,
+            EventType::Memory => 3,
+            EventType::Process => 4,
+            EventType::Ipc => 5,
+            EventType::Signal => 6,
             EventType::Capability => 7,
-            EventType::Custom(v)  => v,
+            EventType::Custom(v) => v,
         }
     }
 }
@@ -95,25 +92,25 @@ impl EventType {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct MonitoredEvent {
-    pub pid:        u32,
+    pub pid: u32,
     pub event_type: EventType,
-    pub opcode:     u32,     // specific operation code
-    pub arg0:       u64,     // event-specific argument
-    pub arg1:       u64,     // event-specific argument
-    pub timestamp:  u64,
-    pub severity:   ThreatLevel,
+    pub opcode: u32, // specific operation code
+    pub arg0: u64,   // event-specific argument
+    pub arg1: u64,   // event-specific argument
+    pub timestamp: u64,
+    pub severity: ThreatLevel,
 }
 
 impl MonitoredEvent {
     pub const fn empty() -> Self {
         MonitoredEvent {
-            pid:        0,
+            pid: 0,
             event_type: EventType::Syscall,
-            opcode:     0,
-            arg0:       0,
-            arg1:       0,
-            timestamp:  0,
-            severity:   ThreatLevel::Low,
+            opcode: 0,
+            arg0: 0,
+            arg1: 0,
+            timestamp: 0,
+            severity: ThreatLevel::Low,
         }
     }
 }
@@ -124,24 +121,24 @@ impl MonitoredEvent {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct EventFilter {
-    pub id:          u32,
-    pub event_type:  EventType,
-    pub pid:         u32,      // 0 = all processes
-    pub opcode_mask: u32,      // match opcodes where (opcode & mask) != 0
+    pub id: u32,
+    pub event_type: EventType,
+    pub pid: u32,         // 0 = all processes
+    pub opcode_mask: u32, // match opcodes where (opcode & mask) != 0
     pub min_severity: ThreatLevel,
-    pub action:      FilterAction,
-    pub enabled:     bool,
+    pub action: FilterAction,
+    pub enabled: bool,
 }
 
 /// Action to take when a filter matches.
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FilterAction {
-    Pass      = 0,  // allow, no alert
-    Log       = 1,  // log the event
-    Alert     = 2,  // generate alert
-    Block     = 3,  // block the event
-    Quarantine= 4,  // quarantine the process
+    Pass = 0,       // allow, no alert
+    Log = 1,        // log the event
+    Alert = 2,      // generate alert
+    Block = 3,      // block the event
+    Quarantine = 4, // quarantine the process
 }
 
 impl FilterAction {
@@ -160,13 +157,13 @@ impl FilterAction {
 impl EventFilter {
     pub const fn empty() -> Self {
         EventFilter {
-            id:           0,
-            event_type:   EventType::Syscall,
-            pid:          0,
-            opcode_mask:  0,
+            id: 0,
+            event_type: EventType::Syscall,
+            pid: 0,
+            opcode_mask: 0,
             min_severity: ThreatLevel::Low,
-            action:       FilterAction::Log,
-            enabled:      false,
+            action: FilterAction::Log,
+            enabled: false,
         }
     }
 
@@ -201,33 +198,33 @@ impl EventFilter {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RateEntry {
-    pub pid:             u32,
-    pub syscall_count:   u32,
-    pub net_count:       u32,
-    pub fs_count:        u32,
-    pub anomaly_count:   u32,
-    pub window_start:    u64,
-    pub syscall_rate:    u32,   // events per window
-    pub net_rate:        u32,
-    pub fs_rate:         u32,
-    pub anomaly_rate:    u32,
-    pub active:          bool,
+    pub pid: u32,
+    pub syscall_count: u32,
+    pub net_count: u32,
+    pub fs_count: u32,
+    pub anomaly_count: u32,
+    pub window_start: u64,
+    pub syscall_rate: u32, // events per window
+    pub net_rate: u32,
+    pub fs_rate: u32,
+    pub anomaly_rate: u32,
+    pub active: bool,
 }
 
 impl RateEntry {
     pub const fn empty() -> Self {
         RateEntry {
-            pid:           0,
+            pid: 0,
             syscall_count: 0,
-            net_count:     0,
-            fs_count:      0,
+            net_count: 0,
+            fs_count: 0,
             anomaly_count: 0,
-            window_start:  0,
-            syscall_rate:  0,
-            net_rate:      0,
-            fs_rate:       0,
-            anomaly_rate:  0,
-            active:        false,
+            window_start: 0,
+            syscall_rate: 0,
+            net_rate: 0,
+            fs_rate: 0,
+            anomaly_rate: 0,
+            active: false,
         }
     }
 }
@@ -238,31 +235,31 @@ impl RateEntry {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Alert {
-    pub id:          u32,
-    pub pid:         u32,
-    pub level:       ThreatLevel,
-    pub category:    ThreatCategory,
-    pub alert_type:  u8,     // 0=rate, 1=filter, 2=anomaly, 3=behavioral
+    pub id: u32,
+    pub pid: u32,
+    pub level: ThreatLevel,
+    pub category: ThreatCategory,
+    pub alert_type: u8, // 0=rate, 1=filter, 2=anomaly, 3=behavioral
     pub description: [u8; MAX_ALERT_DESC],
-    pub desc_len:    u8,
-    pub timestamp:   u64,
+    pub desc_len: u8,
+    pub timestamp: u64,
     pub acknowledged: bool,
-    pub contained:   bool,
+    pub contained: bool,
 }
 
 impl Alert {
     pub const fn empty() -> Self {
         Alert {
-            id:           0,
-            pid:          0,
-            level:        ThreatLevel::Low,
-            category:     ThreatCategory::None,
-            alert_type:   0,
-            description:  [0u8; MAX_ALERT_DESC],
-            desc_len:     0,
-            timestamp:    0,
+            id: 0,
+            pid: 0,
+            level: ThreatLevel::Low,
+            category: ThreatCategory::None,
+            alert_type: 0,
+            description: [0u8; MAX_ALERT_DESC],
+            desc_len: 0,
+            timestamp: 0,
             acknowledged: false,
-            contained:    false,
+            contained: false,
         }
     }
 }
@@ -271,41 +268,41 @@ impl Alert {
 
 /// The main event monitor that tracks processes and applies filters.
 struct EventMonitor {
-    filters:     [EventFilter; MAX_EVENT_FILTERS],
+    filters: [EventFilter; MAX_EVENT_FILTERS],
     filter_count: u32,
     filter_next_id: u32,
-    rates:       [RateEntry; MAX_RATE_ENTRIES],
-    alerts:      [Alert; MAX_ALERTS],
+    rates: [RateEntry; MAX_RATE_ENTRIES],
+    alerts: [Alert; MAX_ALERTS],
     alert_count: u32,
     alert_next_id: u32,
-    monitored:   [MonitoredProc; MAX_MONITORED_PROCS],
+    monitored: [MonitoredProc; MAX_MONITORED_PROCS],
     monitor_count: u32,
-    init_done:   bool,
+    init_done: bool,
 }
 
 /// A monitored process entry.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct MonitoredProc {
-    pid:          u32,
-    watch_level:  ThreatLevel,
+    pid: u32,
+    watch_level: ThreatLevel,
     syscall_limit: u32,
-    net_limit:    u32,
-    fs_limit:     u32,
+    net_limit: u32,
+    fs_limit: u32,
     anomaly_limit: u32,
-    active:       bool,
+    active: bool,
 }
 
 impl MonitoredProc {
     const fn empty() -> Self {
         MonitoredProc {
-            pid:           0,
-            watch_level:   ThreatLevel::Low,
+            pid: 0,
+            watch_level: ThreatLevel::Low,
             syscall_limit: DEFAULT_SYSCALL_RATE_LIMIT,
-            net_limit:     DEFAULT_NET_RATE_LIMIT,
-            fs_limit:      DEFAULT_FS_RATE_LIMIT,
+            net_limit: DEFAULT_NET_RATE_LIMIT,
+            fs_limit: DEFAULT_FS_RATE_LIMIT,
             anomaly_limit: DEFAULT_ANOMALY_RATE_LIMIT,
-            active:        false,
+            active: false,
         }
     }
 }
@@ -313,16 +310,16 @@ impl MonitoredProc {
 impl EventMonitor {
     const fn new() -> Self {
         EventMonitor {
-            filters:       [EventFilter::empty(); MAX_EVENT_FILTERS],
-            filter_count:  0,
+            filters: [EventFilter::empty(); MAX_EVENT_FILTERS],
+            filter_count: 0,
             filter_next_id: 1,
-            rates:         [RateEntry::empty(); MAX_RATE_ENTRIES],
-            alerts:        [Alert::empty(); MAX_ALERTS],
-            alert_count:   0,
+            rates: [RateEntry::empty(); MAX_RATE_ENTRIES],
+            alerts: [Alert::empty(); MAX_ALERTS],
+            alert_count: 0,
             alert_next_id: 1,
-            monitored:     [MonitoredProc::empty(); MAX_MONITORED_PROCS],
+            monitored: [MonitoredProc::empty(); MAX_MONITORED_PROCS],
             monitor_count: 0,
-            init_done:     false,
+            init_done: false,
         }
     }
 
@@ -490,7 +487,9 @@ impl EventMonitor {
     fn get_alerts_by_pid(&self, pid: u32, out: &mut [Alert], max: usize) -> usize {
         let mut written = 0usize;
         for i in 0..MAX_ALERTS {
-            if written >= max { break; }
+            if written >= max {
+                break;
+            }
             if self.alerts[i].id != 0 && self.alerts[i].pid == pid {
                 out[written] = self.alerts[i];
                 written += 1;
@@ -521,15 +520,18 @@ impl EventMonitor {
         for i in 0..MAX_MONITORED_PROCS {
             if !self.monitored[i].active {
                 self.monitored[i] = MonitoredProc {
-                    pid:           pid,
-                    watch_level:   watch_level,
+                    pid: pid,
+                    watch_level: watch_level,
                     syscall_limit: DEFAULT_SYSCALL_RATE_LIMIT,
-                    net_limit:     DEFAULT_NET_RATE_LIMIT,
-                    fs_limit:      DEFAULT_FS_RATE_LIMIT,
+                    net_limit: DEFAULT_NET_RATE_LIMIT,
+                    fs_limit: DEFAULT_FS_RATE_LIMIT,
                     anomaly_limit: DEFAULT_ANOMALY_RATE_LIMIT,
-                    active:        true,
+                    active: true,
                 };
-                self.monitor_count = self.monitor_count.saturating_add(1).min(MAX_MONITORED_PROCS as u32);
+                self.monitor_count = self
+                    .monitor_count
+                    .saturating_add(1)
+                    .min(MAX_MONITORED_PROCS as u32);
                 return true;
             }
         }
@@ -585,13 +587,12 @@ impl EventMonitor {
 
     /// Update rate tracking for a process event.
     fn update_rate(&mut self, pid: u32, event_type: EventType, tick: u64) -> RateResult {
-        let (sysc_limit, net_limit, fs_limit, anom_limit) =
-            self.get_proc_limits(pid).unwrap_or((
-                DEFAULT_SYSCALL_RATE_LIMIT,
-                DEFAULT_NET_RATE_LIMIT,
-                DEFAULT_FS_RATE_LIMIT,
-                DEFAULT_ANOMALY_RATE_LIMIT,
-            ));
+        let (sysc_limit, net_limit, fs_limit, anom_limit) = self.get_proc_limits(pid).unwrap_or((
+            DEFAULT_SYSCALL_RATE_LIMIT,
+            DEFAULT_NET_RATE_LIMIT,
+            DEFAULT_FS_RATE_LIMIT,
+            DEFAULT_ANOMALY_RATE_LIMIT,
+        ));
 
         // Find or create rate entry
         let mut entry_idx = usize::MAX;
@@ -606,17 +607,17 @@ impl EventMonitor {
             for i in 0..MAX_RATE_ENTRIES {
                 if !self.rates[i].active {
                     self.rates[i] = RateEntry {
-                        pid:           pid,
+                        pid: pid,
                         syscall_count: 0,
-                        net_count:     0,
-                        fs_count:      0,
+                        net_count: 0,
+                        fs_count: 0,
                         anomaly_count: 0,
-                        window_start:  tick,
-                        syscall_rate:  0,
-                        net_rate:      0,
-                        fs_rate:       0,
-                        anomaly_rate:  0,
-                        active:        true,
+                        window_start: tick,
+                        syscall_rate: 0,
+                        net_rate: 0,
+                        fs_rate: 0,
+                        anomaly_rate: 0,
+                        active: true,
                     };
                     entry_idx = i;
                     break;
@@ -625,7 +626,11 @@ impl EventMonitor {
         }
 
         if entry_idx == usize::MAX {
-            return RateResult { exceeded: false, rate: 0, limit: 0 };
+            return RateResult {
+                exceeded: false,
+                rate: 0,
+                limit: 0,
+            };
         }
 
         let entry = &mut self.rates[entry_idx];
@@ -634,7 +639,11 @@ impl EventMonitor {
         let elapsed = tick.saturating_sub(entry.window_start);
         if elapsed >= RATE_WINDOW_TICKS {
             // Compute rates from counts
-            let window_factor = if elapsed > 0 { RATE_WINDOW_TICKS as u32 * 1000 / (elapsed as u32) } else { 1000 };
+            let window_factor = if elapsed > 0 {
+                RATE_WINDOW_TICKS as u32 * 1000 / (elapsed as u32)
+            } else {
+                1000
+            };
             entry.syscall_rate = entry.syscall_count.saturating_mul(window_factor) / 1000;
             entry.net_rate = entry.net_count.saturating_mul(window_factor) / 1000;
             entry.fs_rate = entry.fs_count.saturating_mul(window_factor) / 1000;
@@ -721,9 +730,9 @@ impl EventMonitor {
     fn process_event(&mut self, event: &MonitoredEvent, tick: u64) -> EventProcessingResult {
         let mut result = EventProcessingResult {
             action_taken: FilterAction::Pass,
-            alert_id:     0,
+            alert_id: 0,
             rate_exceeded: false,
-            contained:    false,
+            contained: false,
         };
 
         // Step 1: Rate tracking
@@ -752,14 +761,7 @@ impl EventMonitor {
             FilterAction::Pass => {}
             FilterAction::Log => {
                 // Just update risk profile (no alert)
-                update_risk_profile(
-                    event.pid,
-                    rate_result.rate,
-                    0,
-                    0,
-                    0,
-                    tick,
-                );
+                update_risk_profile(event.pid, rate_result.rate, 0, 0, 0, tick);
             }
             FilterAction::Alert => {
                 self.generate_alert(
@@ -789,14 +791,7 @@ impl EventMonitor {
                     tick,
                 );
                 result.alert_id = alert_id.unwrap_or(0);
-                update_risk_profile(
-                    event.pid,
-                    rate_result.rate,
-                    0,
-                    0,
-                    2,
-                    tick,
-                );
+                update_risk_profile(event.pid, rate_result.rate, 0, 0, 2, tick);
             }
             FilterAction::Quarantine => {
                 let alert_id = self.generate_alert(
@@ -860,15 +855,15 @@ impl EventMonitor {
 
 struct RateResult {
     exceeded: bool,
-    rate:     u32,
-    limit:    u32,
+    rate: u32,
+    limit: u32,
 }
 
 struct EventProcessingResult {
     action_taken: FilterAction,
-    alert_id:     u32,
+    alert_id: u32,
     rate_exceeded: bool,
-    contained:    bool,
+    contained: bool,
 }
 
 // ── Global State ────────────────────────────────────────────────────────────
@@ -876,11 +871,11 @@ struct EventProcessingResult {
 static EVENT_MONITOR: Mutex<EventMonitor> = Mutex::new(EventMonitor::new());
 
 static STATS_EVENTS_PROCESSED: AtomicU64 = AtomicU64::new(0);
-static STATS_EVENTS_FILTERED:  AtomicU64 = AtomicU64::new(0);
-static STATS_RATE_EXCEEDED:    AtomicU64 = AtomicU64::new(0);
+static STATS_EVENTS_FILTERED: AtomicU64 = AtomicU64::new(0);
+static STATS_RATE_EXCEEDED: AtomicU64 = AtomicU64::new(0);
 static STATS_ALERTS_GENERATED: AtomicU64 = AtomicU64::new(0);
 static STATS_PROCESSES_CONTAINED: AtomicU64 = AtomicU64::new(0);
-static STATS_REALTIME_INIT:    AtomicBool = AtomicBool::new(false);
+static STATS_REALTIME_INIT: AtomicBool = AtomicBool::new(false);
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -902,10 +897,10 @@ pub fn realtime_is_init() -> bool {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct EventProcessResult {
-    pub alert_id:      u32,
-    pub action:        FilterAction,
+    pub alert_id: u32,
+    pub action: FilterAction,
     pub rate_exceeded: bool,
-    pub contained:     bool,
+    pub contained: bool,
 }
 
 /// Submit an event for real-time processing.
@@ -924,10 +919,10 @@ pub fn submit_event(event: &MonitoredEvent, tick: u64) -> EventProcessResult {
     }
 
     EventProcessResult {
-        alert_id:      result.alert_id,
-        action:        result.action_taken,
+        alert_id: result.alert_id,
+        action: result.action_taken,
         rate_exceeded: result.rate_exceeded,
-        contained:     result.contained,
+        contained: result.contained,
     }
 }
 
@@ -1023,22 +1018,22 @@ pub fn generate_manual_alert(
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RealtimeStats {
-    pub events_processed:     u64,
-    pub events_filtered:      u64,
-    pub rate_exceeded:        u64,
-    pub alerts_generated:     u64,
-    pub processes_contained:  u64,
+    pub events_processed: u64,
+    pub events_filtered: u64,
+    pub rate_exceeded: u64,
+    pub alerts_generated: u64,
+    pub processes_contained: u64,
     pub unacknowledged_alerts: u32,
 }
 
 /// Retrieve current real-time monitoring statistics.
 pub fn get_realtime_stats() -> RealtimeStats {
     RealtimeStats {
-        events_processed:     STATS_EVENTS_PROCESSED.load(Ordering::Relaxed),
-        events_filtered:      STATS_EVENTS_FILTERED.load(Ordering::Relaxed),
-        rate_exceeded:        STATS_RATE_EXCEEDED.load(Ordering::Relaxed),
-        alerts_generated:     STATS_ALERTS_GENERATED.load(Ordering::Relaxed),
-        processes_contained:  STATS_PROCESSES_CONTAINED.load(Ordering::Relaxed),
+        events_processed: STATS_EVENTS_PROCESSED.load(Ordering::Relaxed),
+        events_filtered: STATS_EVENTS_FILTERED.load(Ordering::Relaxed),
+        rate_exceeded: STATS_RATE_EXCEEDED.load(Ordering::Relaxed),
+        alerts_generated: STATS_ALERTS_GENERATED.load(Ordering::Relaxed),
+        processes_contained: STATS_PROCESSES_CONTAINED.load(Ordering::Relaxed),
         unacknowledged_alerts: unacknowledged_alert_count(),
     }
 }

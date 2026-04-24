@@ -2,18 +2,21 @@
 //
 // Module core du scheduler — réexporte toutes les API publiques.
 
-pub mod task;
+pub mod boot_idle;
+pub mod pick_next;
 pub mod preempt;
 pub mod runqueue;
-pub mod pick_next;
 pub mod switch;
+pub mod task;
 
-pub use task::{
-    ThreadControlBlock, ThreadId, ProcessId, CpuId, Priority,
-    SchedPolicy, TaskState, DeadlineParams,
-    TaskStats, task_flags,
+pub use boot_idle::{bind_boot_idle_threads, ensure_boot_idle_tcb, publish_current_boot_idle};
+pub use pick_next::{account_time, pick_next_task, PickResult};
+pub use preempt::{
+    assert_preempt_disabled, assert_preempt_enabled, IrqGuard, PreemptGuard, MAX_CPUS,
 };
-pub use preempt::{PreemptGuard, IrqGuard, assert_preempt_disabled, assert_preempt_enabled, MAX_CPUS};
-pub use runqueue::{PerCpuRunQueue, RunQueueStats, run_queue, init_percpu, MAX_TASKS_PER_CPU};
-pub use pick_next::{pick_next_task, account_time, PickResult};
-pub use switch::{context_switch, schedule_yield, check_signal_pending};
+pub use runqueue::{init_percpu, run_queue, PerCpuRunQueue, RunQueueStats, MAX_TASKS_PER_CPU};
+pub use switch::{check_signal_pending, context_switch, schedule_yield};
+pub use task::{
+    task_flags, CpuId, DeadlineParams, Priority, ProcessId, SchedPolicy, TaskState, TaskStats,
+    ThreadControlBlock, ThreadId,
+};

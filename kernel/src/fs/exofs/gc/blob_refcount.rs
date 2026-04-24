@@ -17,7 +17,6 @@
 //   ARITH-02  : checked_add / saturating_* partout
 // ==============================================================================
 
-
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::fmt;
@@ -48,9 +47,9 @@ pub const DEFERRED_QUEUE_MAX: usize = 4096;
 /// Separe les donnees atomiques des meta-donnees protegees par verrou.
 struct RefEntry {
     /// Compteur de references live (REFCNT-01 : atomique + check).
-    count:        AtomicU32,
+    count: AtomicU32,
     /// Taille physique du blob en octets.
-    phys_size:    u64,
+    phys_size: u64,
     /// Epoch de creation du blob.
     create_epoch: u64,
 }
@@ -58,9 +57,12 @@ struct RefEntry {
 impl RefEntry {
     /// Cree une entree avec ref_count initial (GC-08 : toujours >= 1).
     fn new(initial: u32, phys_size: u64, create_epoch: u64) -> Self {
-        debug_assert!(initial >= 1, "GC-09: ref_count doit etre >= 1 a la creation");
+        debug_assert!(
+            initial >= 1,
+            "GC-09: ref_count doit etre >= 1 a la creation"
+        );
         Self {
-            count:        AtomicU32::new(initial),
+            count: AtomicU32::new(initial),
             phys_size,
             create_epoch,
         }
@@ -80,12 +82,12 @@ impl RefEntry {
 #[derive(Debug, Clone)]
 pub struct DeferredDeleteEntry {
     /// Blob a supprimer.
-    pub blob_id:        BlobId,
+    pub blob_id: BlobId,
     /// Taille physique pour les metriques.
-    pub phys_size:      u64,
+    pub phys_size: u64,
     /// Epoch a partir de laquelle la suppression peut s'effectuer.
     /// = epoch_queued + GC_MIN_DEFERRED_EPOCHS.
-    pub min_epoch:      u64,
+    pub min_epoch: u64,
 }
 
 // ==============================================================================
@@ -98,15 +100,15 @@ pub struct RefcountStats {
     /// Nombre de blobs enregistres.
     pub blobs_registered: u64,
     /// Nombre de blobs deregistres.
-    pub blobs_removed:    u64,
+    pub blobs_removed: u64,
     /// Nombre total d'increments.
-    pub inc_total:        u64,
+    pub inc_total: u64,
     /// Nombre total de decrements.
-    pub dec_total:        u64,
+    pub dec_total: u64,
     /// Nombre de blobs passes a 0 (candidats GC).
-    pub zeroed_count:     u64,
+    pub zeroed_count: u64,
     /// Entrees dans la DeferredDeleteQueue.
-    pub deferred_queued:  u64,
+    pub deferred_queued: u64,
     /// Entrees effectivement supprimees depuis la DeferredDeleteQueue.
     pub deferred_flushed: u64,
 }
@@ -134,25 +136,25 @@ impl fmt::Display for RefcountStats {
 
 struct BlobRefcountInner {
     /// Table principale BlobId -> RefEntry.
-    map:     BTreeMap<BlobId, RefEntry>,
+    map: BTreeMap<BlobId, RefEntry>,
     /// File de suppression differee (GC-01).
     deferred: Vec<DeferredDeleteEntry>,
     /// Statistiques.
-    stats:    RefcountStats,
+    stats: RefcountStats,
 }
 
 impl BlobRefcountInner {
     const fn new() -> Self {
         Self {
-            map:      BTreeMap::new(),
+            map: BTreeMap::new(),
             deferred: Vec::new(),
-            stats:    RefcountStats {
+            stats: RefcountStats {
                 blobs_registered: 0,
-                blobs_removed:    0,
-                inc_total:        0,
-                dec_total:        0,
-                zeroed_count:     0,
-                deferred_queued:  0,
+                blobs_removed: 0,
+                inc_total: 0,
+                dec_total: 0,
+                zeroed_count: 0,
+                deferred_queued: 0,
                 deferred_flushed: 0,
             },
         }
@@ -177,7 +179,7 @@ pub struct BlobRefcount {
 impl BlobRefcount {
     pub const fn new() -> Self {
         Self {
-            inner:            SpinLock::new(BlobRefcountInner::new()),
+            inner: SpinLock::new(BlobRefcountInner::new()),
             total_phys_bytes: AtomicU64::new(0),
         }
     }
@@ -190,12 +192,7 @@ impl BlobRefcount {
     /// GC-09 : panicke si initial == 0.
     /// RACE-01 : l'appelant doit appeler cette methode IMMEDIATEMENT apres
     ///           avoir alloue le blob, avant toute autre utilisation.
-    pub fn register(
-        &self,
-        id:           BlobId,
-        phys_size:    u64,
-        create_epoch: EpochId,
-    ) -> ExofsResult<()> {
+    pub fn register(&self, id: BlobId, phys_size: u64, create_epoch: EpochId) -> ExofsResult<()> {
         let mut g = self.inner.lock();
 
         if g.map.contains_key(&id) {
@@ -211,7 +208,8 @@ impl BlobRefcount {
         g.map.insert(id, entry);
 
         // Mise a jour atomique des bytes physiques.
-        self.total_phys_bytes.fetch_add(phys_size, Ordering::Relaxed);
+        self.total_phys_bytes
+            .fetch_add(phys_size, Ordering::Relaxed);
 
         g.stats.blobs_registered = g.stats.blobs_registered.saturating_add(1);
         Ok(())
@@ -231,11 +229,10 @@ impl BlobRefcount {
                 // Boucle compare_exchange (REFCNT-01).
                 loop {
                     let current = entry.count.load(Ordering::Acquire);
-                    let next = current
-                        .checked_add(1)
-                        .ok_or(ExofsError::InternalError)?;
+                    let next = current.checked_add(1).ok_or(ExofsError::InternalError)?;
                     match entry.count.compare_exchange_weak(
-                        current, next,
+                        current,
+                        next,
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     ) {
@@ -278,7 +275,8 @@ impl BlobRefcount {
                     }
                     let next = current - 1; // Safe : current > 0
                     match entry.count.compare_exchange_weak(
-                        current, next,
+                        current,
+                        next,
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     ) {
@@ -288,17 +286,15 @@ impl BlobRefcount {
 
                             if next == 0 {
                                 // Candidat GC — ajouter a la DeferredDeleteQueue (GC-01).
-                                g.stats.zeroed_count =
-                                    g.stats.zeroed_count.saturating_add(1);
-                                let min_epoch = current_epoch
-                                    .0
-                                    .saturating_add(GC_MIN_DEFERRED_EPOCHS);
+                                g.stats.zeroed_count = g.stats.zeroed_count.saturating_add(1);
+                                let min_epoch =
+                                    current_epoch.0.saturating_add(GC_MIN_DEFERRED_EPOCHS);
                                 // Verifier que la queue n'est pas pleine.
                                 if g.deferred.len() < DEFERRED_QUEUE_MAX {
                                     // OOM-02.
                                     if g.deferred.try_reserve(1).is_ok() {
                                         g.deferred.push(DeferredDeleteEntry {
-                                            blob_id:   *id,
+                                            blob_id: *id,
                                             phys_size,
                                             min_epoch,
                                         });
@@ -339,7 +335,8 @@ impl BlobRefcount {
     /// Retourne (EpochId::INVALID, 0) si le blob est inconnu.
     pub fn get_epoch_and_size(&self, id: &BlobId) -> (EpochId, u64) {
         let g = self.inner.lock();
-        g.map.get(id)
+        g.map
+            .get(id)
             .map(|e| (EpochId(e.create_epoch), e.phys_size))
             .unwrap_or((EpochId::INVALID, 0))
     }
@@ -363,9 +360,7 @@ impl BlobRefcount {
         let mut g = self.inner.lock();
         match g.map.get(id) {
             None => Err(ExofsError::BlobNotFound),
-            Some(e) if e.count.load(Ordering::Acquire) != 0 => {
-                Err(ExofsError::Logic)
-            }
+            Some(e) if e.count.load(Ordering::Acquire) != 0 => Err(ExofsError::Logic),
             Some(e) => {
                 let phys = e.phys_size;
                 g.map.remove(id);
@@ -387,7 +382,7 @@ impl BlobRefcount {
         let current = current_epoch.0;
 
         // Partition : ready = min_epoch <= current, reste = les autres.
-        let mut ready  = Vec::new();
+        let mut ready = Vec::new();
         let mut remain = Vec::new();
 
         for entry in g.deferred.drain(..) {
@@ -404,8 +399,7 @@ impl BlobRefcount {
         }
         // Sinon : on perd les entrees non-matures — elles seront re-queues au prochain dec().
 
-        g.stats.deferred_flushed =
-            g.stats.deferred_flushed.saturating_add(ready.len() as u64);
+        g.stats.deferred_flushed = g.stats.deferred_flushed.saturating_add(ready.len() as u64);
         ready
     }
 
@@ -508,7 +502,7 @@ mod tests {
         let id = make_blob_id(5);
         table.register(id, 1024, epoch(1)).unwrap();
         table.dec(&id, epoch(3)).unwrap(); // min_epoch = 3 + 2 = 5
-        // Epoch 4 : pas encore pret.
+                                           // Epoch 4 : pas encore pret.
         let ready = table.flush_deferred(epoch(4));
         assert!(ready.is_empty());
         // Epoch 5 : pret.

@@ -20,19 +20,19 @@
 //! - ARITH-02: arithmétique saturating/checked.
 //! - RECUR-01: aucune récursivité.
 
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use hkdf::Hkdf;
 use sha2::Sha256;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Délégation au module security::crypto::kdf
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::security::crypto::{
-    hkdf_extract as security_hkdf_extract,
-    blake3_kdf,         // blake3_kdf(context, material) → DerivedKey32
+    blake3_kdf,          // blake3_kdf(context, material) → DerivedKey32
     derive_fs_block_key, // derive_fs_block_key(vk, block_id) → DerivedKey32
+    hkdf_extract as security_hkdf_extract,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,13 +40,13 @@ use crate::security::crypto::{
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Taille d'une clé dérivée standard (256 bits).
-pub const DERIVED_KEY_LEN:  usize = 32;
+pub const DERIVED_KEY_LEN: usize = 32;
 /// Longueur maximale de sortie HKDF = 255 × 32 (BLAKE3 output size).
-pub const HKDF_MAX_OUTPUT:  usize = 255 * 32;
+pub const HKDF_MAX_OUTPUT: usize = 255 * 32;
 /// Nombre d'itérations minimum pour l'étirement de passphrase (Argon2id).
-pub const KDF_MIN_ITERS:    u8    = 3;
+pub const KDF_MIN_ITERS: u8 = 3;
 /// Nombre d'itérations recommandé (Argon2id time_cost=3, cf. S-16).
-pub const KDF_DEFAULT_ITERS: u8   = 3;
+pub const KDF_DEFAULT_ITERS: u8 = 3;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // KeyPurpose — domaine de séparation par type de clé
@@ -78,10 +78,10 @@ impl KeyPurpose {
         match self {
             Self::DataEncryption => b"ExoFS-DataEncryption-v1",
             Self::Authentication => b"ExoFS-Authentication-v1",
-            Self::Session        => b"ExoFS-Session-v1",
-            Self::Wrapping       => b"ExoFS-Wrapping-v1",
-            Self::BlobObject     => b"ExoFS-BlobObject-v1",
-            Self::Custom(s)      => s.as_bytes(),
+            Self::Session => b"ExoFS-Session-v1",
+            Self::Wrapping => b"ExoFS-Wrapping-v1",
+            Self::BlobObject => b"ExoFS-BlobObject-v1",
+            Self::Custom(s) => s.as_bytes(),
         }
     }
 }
@@ -98,19 +98,27 @@ pub struct DerivedKey {
 
 impl DerivedKey {
     /// Construit depuis un tableau de bytes.
-    pub fn from_bytes(b: [u8; DERIVED_KEY_LEN]) -> Self { Self { bytes: b } }
+    pub fn from_bytes(b: [u8; DERIVED_KEY_LEN]) -> Self {
+        Self { bytes: b }
+    }
 
     /// Retourne une référence aux bytes de la clé.
-    pub fn as_bytes(&self) -> &[u8; DERIVED_KEY_LEN] { &self.bytes }
+    pub fn as_bytes(&self) -> &[u8; DERIVED_KEY_LEN] {
+        &self.bytes
+    }
 
     /// Copie les bytes dans un tableau destination.
-    pub fn copy_to(&self, dst: &mut [u8; DERIVED_KEY_LEN]) { *dst = self.bytes; }
+    pub fn copy_to(&self, dst: &mut [u8; DERIVED_KEY_LEN]) {
+        *dst = self.bytes;
+    }
 }
 
 impl Drop for DerivedKey {
     fn drop(&mut self) {
         for b in self.bytes.iter_mut() {
-            unsafe { core::ptr::write_volatile(b, 0u8); }
+            unsafe {
+                core::ptr::write_volatile(b, 0u8);
+            }
         }
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     }
@@ -141,15 +149,18 @@ impl KeyDerivation {
     ///
     /// OOM-02 : utilise `try_reserve`.
     pub fn hkdf_expand(prk: &[u8; 32], info: &[u8], length: usize) -> ExofsResult<Vec<u8>> {
-        if length == 0 { return Ok(Vec::new()); }
-        if length > HKDF_MAX_OUTPUT { return Err(ExofsError::InvalidArgument); }
+        if length == 0 {
+            return Ok(Vec::new());
+        }
+        if length > HKDF_MAX_OUTPUT {
+            return Err(ExofsError::InvalidArgument);
+        }
 
         let mut out = Vec::new();
         out.try_reserve(length).map_err(|_| ExofsError::NoMemory)?;
         out.resize(length, 0u8);
 
-        let hkdf = Hkdf::<Sha256>::from_prk(prk)
-            .map_err(|_| ExofsError::InvalidArgument)?;
+        let hkdf = Hkdf::<Sha256>::from_prk(prk).map_err(|_| ExofsError::InvalidArgument)?;
         hkdf.expand(info, &mut out)
             .map_err(|_| ExofsError::InvalidArgument)?;
         Ok(out)
@@ -171,7 +182,9 @@ impl KeyDerivation {
     pub fn derive_key(secret: &[u8], salt: &[u8], context: &[u8]) -> ExofsResult<DerivedKey> {
         // Matériel = secret || salt
         let mut material = Vec::new();
-        material.try_reserve(secret.len() + salt.len()).map_err(|_| ExofsError::NoMemory)?;
+        material
+            .try_reserve(secret.len() + salt.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         material.extend_from_slice(secret);
         material.extend_from_slice(salt);
 
@@ -182,8 +195,8 @@ impl KeyDerivation {
 
     /// Dérive une clé pour un usage (KeyPurpose) spécifique.
     pub fn derive_for_purpose(
-        secret:  &[u8],
-        salt:    &[u8],
+        secret: &[u8],
+        salt: &[u8],
         purpose: KeyPurpose,
     ) -> ExofsResult<DerivedKey> {
         Self::derive_key(secret, salt, purpose.as_context())
@@ -194,11 +207,13 @@ impl KeyDerivation {
     /// OOM-02 : pré-alloue le vecteur résultat.
     pub fn derive_batch(
         secret: &[u8],
-        salt:   &[u8],
-        infos:  &[&[u8]],
+        salt: &[u8],
+        infos: &[&[u8]],
     ) -> ExofsResult<Vec<DerivedKey>> {
         let mut result = Vec::new();
-        result.try_reserve(infos.len()).map_err(|_| ExofsError::NoMemory)?;
+        result
+            .try_reserve(infos.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         for info in infos {
             result.push(Self::derive_key(secret, salt, info)?);
         }
@@ -215,7 +230,7 @@ impl KeyDerivation {
     /// Retourne une erreur si `passphrase` est vide ou si `iterations` < KDF_MIN_ITERS.
     pub fn derive_from_passphrase(
         passphrase: &[u8],
-        salt:       &[u8; 32],
+        salt: &[u8; 32],
         iterations: u8,
     ) -> ExofsResult<DerivedKey> {
         if passphrase.is_empty() {
@@ -231,13 +246,11 @@ impl KeyDerivation {
             iterations as u32, // t_cost
             4,                 // p_cost
             Some(32),          // output length
-        ).map_err(|_| ExofsError::InvalidArgument)?;
+        )
+        .map_err(|_| ExofsError::InvalidArgument)?;
 
-        let argon2 = argon2::Argon2::new(
-            argon2::Algorithm::Argon2id,
-            argon2::Version::V0x13,
-            params,
-        );
+        let argon2 =
+            argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
 
         let mut output = [0u8; 32];
         let mut memory = Vec::new();
@@ -256,7 +269,7 @@ impl KeyDerivation {
     /// Étirement avec les paramètres par défaut (S-16 : m=65536, t=3, p=4).
     pub fn derive_from_passphrase_default(
         passphrase: &[u8],
-        salt:       &[u8; 32],
+        salt: &[u8; 32],
     ) -> ExofsResult<DerivedKey> {
         Self::derive_from_passphrase(passphrase, salt, KDF_DEFAULT_ITERS)
     }
@@ -266,7 +279,7 @@ impl KeyDerivation {
     /// Identique à `derive_from_passphrase_default` pour compatibilité.
     pub fn derive_from_passphrase_argon2(
         passphrase: &[u8],
-        salt:       &[u8; 32],
+        salt: &[u8; 32],
     ) -> ExofsResult<[u8; 32]> {
         let dk = Self::derive_from_passphrase_default(passphrase, salt)?;
         Ok(*dk.as_bytes())
@@ -278,8 +291,8 @@ impl KeyDerivation {
     ///
     /// Utilise `security::crypto::kdf::derive_fs_block_key` avec blob_id comme index.
     pub fn derive_object_key(volume_key: &[u8; 32], blob_id: u64) -> ExofsResult<DerivedKey> {
-        let dk = derive_fs_block_key(volume_key, blob_id)
-            .map_err(|_| ExofsError::InvalidArgument)?;
+        let dk =
+            derive_fs_block_key(volume_key, blob_id).map_err(|_| ExofsError::InvalidArgument)?;
         Ok(DerivedKey::from_bytes(*dk.as_bytes()))
     }
 
@@ -307,9 +320,9 @@ impl KeyDerivation {
     ///
     /// Comparaison constant-time via `subtle::ConstantTimeEq`.
     pub fn verify_derived_key(
-        dk:      &DerivedKey,
-        secret:  &[u8],
-        salt:    &[u8],
+        dk: &DerivedKey,
+        secret: &[u8],
+        salt: &[u8],
         context: &[u8],
     ) -> ExofsResult<bool> {
         use subtle::ConstantTimeEq;
@@ -370,8 +383,10 @@ mod tests {
 
     #[test]
     fn test_derive_for_purpose_separation() {
-        let k1 = KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::DataEncryption).unwrap();
-        let k2 = KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::Authentication).unwrap();
+        let k1 =
+            KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::DataEncryption).unwrap();
+        let k2 =
+            KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::Authentication).unwrap();
         assert_ne!(k1.as_bytes(), k2.as_bytes());
     }
 

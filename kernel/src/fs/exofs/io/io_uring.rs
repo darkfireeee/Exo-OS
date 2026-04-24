@@ -12,12 +12,11 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
-use core::cell::UnsafeCell;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─── SqeOpcode ────────────────────────────────────────────────────────────────
 
@@ -25,36 +24,47 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
 pub enum SqeOpcode {
-    Nop      = 0,
-    Read     = 1,
-    Write    = 2,
-    Flush    = 3,
-    Discard  = 4,
-    Fsync    = 5,
-    Readv    = 6,
-    Writev   = 7,
+    Nop = 0,
+    Read = 1,
+    Write = 2,
+    Flush = 3,
+    Discard = 4,
+    Fsync = 5,
+    Readv = 6,
+    Writev = 7,
 }
 
 impl SqeOpcode {
     pub fn from_u8(v: u8) -> ExofsResult<Self> {
         match v {
-            0 => Ok(SqeOpcode::Nop),    1 => Ok(SqeOpcode::Read),
-            2 => Ok(SqeOpcode::Write),  3 => Ok(SqeOpcode::Flush),
-            4 => Ok(SqeOpcode::Discard),5 => Ok(SqeOpcode::Fsync),
-            6 => Ok(SqeOpcode::Readv),  7 => Ok(SqeOpcode::Writev),
+            0 => Ok(SqeOpcode::Nop),
+            1 => Ok(SqeOpcode::Read),
+            2 => Ok(SqeOpcode::Write),
+            3 => Ok(SqeOpcode::Flush),
+            4 => Ok(SqeOpcode::Discard),
+            5 => Ok(SqeOpcode::Fsync),
+            6 => Ok(SqeOpcode::Readv),
+            7 => Ok(SqeOpcode::Writev),
             _ => Err(ExofsError::InvalidArgument),
         }
     }
     pub fn as_str(self) -> &'static str {
         match self {
-            SqeOpcode::Nop     => "nop",   SqeOpcode::Read  => "read",
-            SqeOpcode::Write   => "write", SqeOpcode::Flush => "flush",
-            SqeOpcode::Discard => "discard", SqeOpcode::Fsync => "fsync",
-            SqeOpcode::Readv   => "readv", SqeOpcode::Writev => "writev",
+            SqeOpcode::Nop => "nop",
+            SqeOpcode::Read => "read",
+            SqeOpcode::Write => "write",
+            SqeOpcode::Flush => "flush",
+            SqeOpcode::Discard => "discard",
+            SqeOpcode::Fsync => "fsync",
+            SqeOpcode::Readv => "readv",
+            SqeOpcode::Writev => "writev",
         }
     }
     pub fn is_io(self) -> bool {
-        matches!(self, SqeOpcode::Read | SqeOpcode::Write | SqeOpcode::Readv | SqeOpcode::Writev)
+        matches!(
+            self,
+            SqeOpcode::Read | SqeOpcode::Write | SqeOpcode::Readv | SqeOpcode::Writev
+        )
     }
 }
 
@@ -64,17 +74,17 @@ impl SqeOpcode {
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct IoUringSqe {
-    pub opcode:  u8,
-    pub flags:   u8,
-    pub ioprio:  u16,
-    pub fd:      i32,
-    pub off:     u64,
-    pub addr:    u64,
-    pub len:     u32,
+    pub opcode: u8,
+    pub flags: u8,
+    pub ioprio: u16,
+    pub fd: i32,
+    pub off: u64,
+    pub addr: u64,
+    pub len: u32,
     pub op_flags: u32,
     pub user_data: u64,
     pub blob_id: [u8; 32],
-    pub pad:     [u64; 6],   // padding jusqu'à 128 bytes
+    pub pad: [u64; 6], // padding jusqu'à 128 bytes
 }
 
 impl IoUringSqe {
@@ -83,20 +93,27 @@ impl IoUringSqe {
     pub fn new_read(blob_id: [u8; 32], off: u64, len: u32, user_data: u64) -> Self {
         let mut s = Self::zeroed();
         s.opcode = SqeOpcode::Read as u8;
-        s.blob_id = blob_id; s.off = off; s.len = len; s.user_data = user_data;
+        s.blob_id = blob_id;
+        s.off = off;
+        s.len = len;
+        s.user_data = user_data;
         s
     }
 
     pub fn new_write(blob_id: [u8; 32], off: u64, len: u32, user_data: u64) -> Self {
         let mut s = Self::zeroed();
         s.opcode = SqeOpcode::Write as u8;
-        s.blob_id = blob_id; s.off = off; s.len = len; s.user_data = user_data;
+        s.blob_id = blob_id;
+        s.off = off;
+        s.len = len;
+        s.user_data = user_data;
         s
     }
 
     pub fn new_flush(user_data: u64) -> Self {
         let mut s = Self::zeroed();
-        s.opcode = SqeOpcode::Flush as u8; s.user_data = user_data;
+        s.opcode = SqeOpcode::Flush as u8;
+        s.user_data = user_data;
         s
     }
 
@@ -105,8 +122,12 @@ impl IoUringSqe {
         unsafe { core::mem::zeroed() }
     }
 
-    pub fn opcode(&self) -> ExofsResult<SqeOpcode> { SqeOpcode::from_u8(self.opcode) }
-    pub fn is_valid(&self) -> bool { self.opcode <= SqeOpcode::Writev as u8 }
+    pub fn opcode(&self) -> ExofsResult<SqeOpcode> {
+        SqeOpcode::from_u8(self.opcode)
+    }
+    pub fn is_valid(&self) -> bool {
+        self.opcode <= SqeOpcode::Writev as u8
+    }
 }
 
 // ─── IoUringCqe ───────────────────────────────────────────────────────────────
@@ -116,27 +137,49 @@ impl IoUringSqe {
 #[repr(C)]
 pub struct IoUringCqe {
     pub user_data: u64,
-    pub result:    i32,   // bytes transférés (>0) ou -errno (<0)
-    pub flags:     u32,
+    pub result: i32, // bytes transférés (>0) ou -errno (<0)
+    pub flags: u32,
 }
 
 impl IoUringCqe {
-    pub fn ok(user_data: u64, bytes: i32) -> Self { Self { user_data, result: bytes, flags: 0 } }
-    pub fn err(user_data: u64, code: i32) -> Self { Self { user_data, result: code, flags: 1 } }
-    pub fn is_ok(&self) -> bool { self.result >= 0 }
-    pub fn is_err(&self) -> bool { self.result < 0 }
-    pub fn bytes(&self) -> Option<u32> { if self.result >= 0 { Some(self.result as u32) } else { None } }
+    pub fn ok(user_data: u64, bytes: i32) -> Self {
+        Self {
+            user_data,
+            result: bytes,
+            flags: 0,
+        }
+    }
+    pub fn err(user_data: u64, code: i32) -> Self {
+        Self {
+            user_data,
+            result: code,
+            flags: 1,
+        }
+    }
+    pub fn is_ok(&self) -> bool {
+        self.result >= 0
+    }
+    pub fn is_err(&self) -> bool {
+        self.result < 0
+    }
+    pub fn bytes(&self) -> Option<u32> {
+        if self.result >= 0 {
+            Some(self.result as u32)
+        } else {
+            None
+        }
+    }
 }
 
 // ─── IoUringSq ────────────────────────────────────────────────────────────────
 
 /// Ring de soumission (SQ) avec spinlock AtomicU64.
 pub struct IoUringSq {
-    ring:  UnsafeCell<Vec<IoUringSqe>>,
-    head:  AtomicU64,
-    tail:  AtomicU64,
+    ring: UnsafeCell<Vec<IoUringSqe>>,
+    head: AtomicU64,
+    tail: AtomicU64,
     depth: usize,
-    lock:  AtomicU64,
+    lock: AtomicU64,
     submitted: AtomicU64,
 }
 
@@ -146,45 +189,75 @@ unsafe impl Send for IoUringSq {}
 
 impl IoUringSq {
     pub fn new(depth: usize) -> ExofsResult<Self> {
-        if depth == 0 || depth > 65536 { return Err(ExofsError::InvalidArgument); }
+        if depth == 0 || depth > 65536 {
+            return Err(ExofsError::InvalidArgument);
+        }
         let mut v = Vec::new();
         v.try_reserve(depth).map_err(|_| ExofsError::NoMemory)?;
         let mut i = 0usize;
-        while i < depth { v.push(IoUringSqe::zeroed()); i = i.wrapping_add(1); }
+        while i < depth {
+            v.push(IoUringSqe::zeroed());
+            i = i.wrapping_add(1);
+        }
         Ok(Self {
-            ring: UnsafeCell::new(v), head: AtomicU64::new(0), tail: AtomicU64::new(0),
-            depth, lock: AtomicU64::new(0), submitted: AtomicU64::new(0),
+            ring: UnsafeCell::new(v),
+            head: AtomicU64::new(0),
+            tail: AtomicU64::new(0),
+            depth,
+            lock: AtomicU64::new(0),
+            submitted: AtomicU64::new(0),
         })
     }
 
     fn acquire(&self) {
-        while self.lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .lock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
-    fn release(&self) { self.lock.store(0, Ordering::Release); }
+    fn release(&self) {
+        self.lock.store(0, Ordering::Release);
+    }
 
     pub fn available(&self) -> usize {
-        let len = self.tail.load(Ordering::Relaxed).wrapping_sub(self.head.load(Ordering::Relaxed));
+        let len = self
+            .tail
+            .load(Ordering::Relaxed)
+            .wrapping_sub(self.head.load(Ordering::Relaxed));
         self.depth.saturating_sub(len as usize)
     }
 
     pub fn len(&self) -> usize {
-        self.tail.load(Ordering::Relaxed).wrapping_sub(self.head.load(Ordering::Relaxed)) as usize
+        self.tail
+            .load(Ordering::Relaxed)
+            .wrapping_sub(self.head.load(Ordering::Relaxed)) as usize
     }
 
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
-    pub fn submitted_total(&self) -> u64 { self.submitted.load(Ordering::Relaxed) }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    pub fn submitted_total(&self) -> u64 {
+        self.submitted.load(Ordering::Relaxed)
+    }
 
     /// Soumet un SQE dans le ring.
     pub fn push_sqe(&self, sqe: IoUringSqe) -> ExofsResult<()> {
-        if !sqe.is_valid() { return Err(ExofsError::InvalidArgument); }
+        if !sqe.is_valid() {
+            return Err(ExofsError::InvalidArgument);
+        }
         self.acquire();
         let result = (|| {
-            if self.available() == 0 { return Err(ExofsError::Resource); }
+            if self.available() == 0 {
+                return Err(ExofsError::Resource);
+            }
             let tail = self.tail.load(Ordering::Relaxed) as usize % self.depth;
             // SAFETY: tail < depth, accès sous spinlock.
-            unsafe { (&mut *self.ring.get())[tail] = sqe; }
+            unsafe {
+                (&mut *self.ring.get())[tail] = sqe;
+            }
             self.tail.fetch_add(1, Ordering::Relaxed);
             self.submitted.fetch_add(1, Ordering::Relaxed);
             Ok(())
@@ -214,11 +287,11 @@ impl IoUringSq {
 
 /// Ring de complétion (CQ).
 pub struct IoUringCq {
-    ring:  UnsafeCell<Vec<IoUringCqe>>,
-    head:  AtomicU64,
-    tail:  AtomicU64,
+    ring: UnsafeCell<Vec<IoUringCqe>>,
+    head: AtomicU64,
+    tail: AtomicU64,
     depth: usize,
-    lock:  AtomicU64,
+    lock: AtomicU64,
     reaped: AtomicU64,
 }
 
@@ -227,30 +300,52 @@ unsafe impl Send for IoUringCq {}
 
 impl IoUringCq {
     pub fn new(depth: usize) -> ExofsResult<Self> {
-        if depth == 0 || depth > 131072 { return Err(ExofsError::InvalidArgument); }
+        if depth == 0 || depth > 131072 {
+            return Err(ExofsError::InvalidArgument);
+        }
         let mut v = Vec::new();
         v.try_reserve(depth).map_err(|_| ExofsError::NoMemory)?;
         let mut i = 0usize;
-        while i < depth { v.push(IoUringCqe { user_data: 0, result: 0, flags: 0 }); i = i.wrapping_add(1); }
+        while i < depth {
+            v.push(IoUringCqe {
+                user_data: 0,
+                result: 0,
+                flags: 0,
+            });
+            i = i.wrapping_add(1);
+        }
         Ok(Self {
-            ring: UnsafeCell::new(v), head: AtomicU64::new(0), tail: AtomicU64::new(0),
-            depth, lock: AtomicU64::new(0), reaped: AtomicU64::new(0),
+            ring: UnsafeCell::new(v),
+            head: AtomicU64::new(0),
+            tail: AtomicU64::new(0),
+            depth,
+            lock: AtomicU64::new(0),
+            reaped: AtomicU64::new(0),
         })
     }
 
     fn acquire(&self) {
-        while self.lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .lock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
-    fn release(&self) { self.lock.store(0, Ordering::Release); }
+    fn release(&self) {
+        self.lock.store(0, Ordering::Release);
+    }
 
     pub fn has_pending(&self) -> bool {
         self.tail.load(Ordering::Relaxed) != self.head.load(Ordering::Relaxed)
     }
 
     pub fn available(&self) -> usize {
-        let len = self.tail.load(Ordering::Relaxed).wrapping_sub(self.head.load(Ordering::Relaxed));
+        let len = self
+            .tail
+            .load(Ordering::Relaxed)
+            .wrapping_sub(self.head.load(Ordering::Relaxed));
         self.depth.saturating_sub(len as usize)
     }
 
@@ -258,10 +353,14 @@ impl IoUringCq {
     pub fn push_cqe(&self, cqe: IoUringCqe) -> ExofsResult<()> {
         self.acquire();
         let result = (|| {
-            if self.available() == 0 { return Err(ExofsError::Resource); }
+            if self.available() == 0 {
+                return Err(ExofsError::Resource);
+            }
             let tail = self.tail.load(Ordering::Relaxed) as usize % self.depth;
             // SAFETY: tail < depth, spinlock.
-            unsafe { (&mut *self.ring.get())[tail] = cqe; }
+            unsafe {
+                (&mut *self.ring.get())[tail] = cqe;
+            }
             self.tail.fetch_add(1, Ordering::Relaxed);
             Ok(())
         })();
@@ -286,7 +385,9 @@ impl IoUringCq {
         result
     }
 
-    pub fn reaped_total(&self) -> u64 { self.reaped.load(Ordering::Relaxed) }
+    pub fn reaped_total(&self) -> u64 {
+        self.reaped.load(Ordering::Relaxed)
+    }
 }
 
 // ─── IoUringQueue ─────────────────────────────────────────────────────────────
@@ -307,7 +408,9 @@ impl IoUringQueue {
         })
     }
 
-    fn alloc_id(&self) -> u64 { self.next_id.fetch_add(1, Ordering::Relaxed) }
+    fn alloc_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
 
     /// Soumet une lecture.
     pub fn submit_read(&self, blob_id: [u8; 32], off: u64, len: u32) -> ExofsResult<u64> {
@@ -361,7 +464,11 @@ impl IoUringQueue {
 mod tests {
     use super::*;
 
-    fn make_id(n: u8) -> [u8; 32] { let mut id = [0u8; 32]; id[0] = n; id }
+    fn make_id(n: u8) -> [u8; 32] {
+        let mut id = [0u8; 32];
+        id[0] = n;
+        id
+    }
 
     #[test]
     fn test_sqe_opcode_from_u8() {

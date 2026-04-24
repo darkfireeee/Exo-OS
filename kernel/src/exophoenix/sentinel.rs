@@ -12,7 +12,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crate::arch::x86_64::apic::{local_apic, x2apic};
 use crate::arch::x86_64::cpu::{features::CPU_FEATURES, msr};
 use crate::arch::x86_64::time::ktime_get_ns;
-use crate::exophoenix::{handoff, ssr, stage0, PHOENIX_STATE, PhoenixState};
+use crate::exophoenix::{handoff, ssr, stage0, PhoenixState, PHOENIX_STATE};
 use crate::memory::core::{KERNEL_IMAGE_MAX_SIZE, KERNEL_LOAD_PHYS_ADDR, PAGE_SIZE, PHYS_MAP_BASE};
 use crate::memory::virt::page_table::{phys_to_table_ref, read_cr3};
 
@@ -226,7 +226,9 @@ fn generate_liveness_nonce() -> u64 {
 
 #[inline(always)]
 fn read_a_liveness_mirror_pull() -> u64 {
-    let mirror_virt = PHYS_MAP_BASE.as_u64().saturating_add(A_LIVENESS_MIRROR_PHYS);
+    let mirror_virt = PHYS_MAP_BASE
+        .as_u64()
+        .saturating_add(A_LIVENESS_MIRROR_PHYS);
     // SAFETY: lecture volatile d'une zone physique connue via physmap (PULL explicite).
     unsafe { read_volatile(mirror_virt as *const u64) }
 }
@@ -289,7 +291,11 @@ fn pmc_anomaly_score() -> u32 {
         PMC_BASELINE[i].store(ctrs[i], Ordering::Relaxed);
     }
 
-    if anomalies >= 3 { SCORE_PMC_ANOMALY } else { 0 }
+    if anomalies >= 3 {
+        SCORE_PMC_ANOMALY
+    } else {
+        0
+    }
 }
 
 fn run_introspection_cycle() -> u32 {

@@ -28,32 +28,40 @@ pub struct Rights(pub u32);
 
 impl Rights {
     /// Droit de lecture.
-    pub const READ:    Self = Rights(0x01);
+    pub const READ: Self = Rights(0x01);
     /// Droit d'écriture.
-    pub const WRITE:   Self = Rights(0x02);
+    pub const WRITE: Self = Rights(0x02);
     /// Droit d'exécution.
-    pub const EXEC:    Self = Rights(0x04);
+    pub const EXEC: Self = Rights(0x04);
     /// Droit d'inspection (SYS_EXOFS_GET_CONTENT_HASH).
     pub const INSPECT: Self = Rights(0x08);
     /// Droit de délégation — transmettre ce token à un autre processus.
-    pub const GRANT:   Self = Rights(0x10);
+    pub const GRANT: Self = Rights(0x10);
     /// Tous les droits (READ | WRITE | EXEC | INSPECT | GRANT).
-    pub const ALL:     Self = Rights(0x1F);
+    pub const ALL: Self = Rights(0x1F);
     /// Aucun droit.
-    pub const NONE:    Self = Rights(0x00);
+    pub const NONE: Self = Rights(0x00);
 
     /// `true` si lecture autorisée.
     #[inline(always)]
-    pub fn can_read(self)   -> bool { self.0 & Self::READ.0   != 0 }
+    pub fn can_read(self) -> bool {
+        self.0 & Self::READ.0 != 0
+    }
     /// `true` si écriture autorisée.
     #[inline(always)]
-    pub fn can_write(self)  -> bool { self.0 & Self::WRITE.0  != 0 }
+    pub fn can_write(self) -> bool {
+        self.0 & Self::WRITE.0 != 0
+    }
     /// `true` si exécution autorisée.
     #[inline(always)]
-    pub fn can_exec(self)   -> bool { self.0 & Self::EXEC.0   != 0 }
+    pub fn can_exec(self) -> bool {
+        self.0 & Self::EXEC.0 != 0
+    }
     /// `true` si inspection autorisée.
     #[inline(always)]
-    pub fn can_inspect(self)-> bool { self.0 & Self::INSPECT.0!= 0 }
+    pub fn can_inspect(self) -> bool {
+        self.0 & Self::INSPECT.0 != 0
+    }
 
     /// `true` si `self` contient tous les droits de `other`.
     #[inline(always)]
@@ -81,23 +89,23 @@ impl Rights {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapabilityType {
     /// Connexion au directory service IPC.
-    IpcBroker      = 1,
+    IpcBroker = 1,
     /// Allocation mémoire via memory_server.
-    MemoryServer   = 2,
+    MemoryServer = 2,
     /// Driver PCI Ring 1. BDF encodé dans `CapToken.object_id[0..3]`.
-    DriverPci      = 3,
+    DriverPci = 3,
     /// Administration système (SYS_PCI_CLAIM, SYS_PCI_SET_TOPOLOGY...).
     SysDeviceAdmin = 4,
     /// Accès ExoFS (read/write/stat...).
-    ExoFsAccess    = 5,
+    ExoFsAccess = 5,
     /// Communication avec crypto_server.
-    CryptoServer   = 6,
+    CryptoServer = 6,
     /// Interface ExoPhoenix — exo_shield uniquement.
-    ExoPhoenix     = 7,
+    ExoPhoenix = 7,
     /// Accès VFS (server vfs_server).
-    VfsServer      = 8,
+    VfsServer = 8,
     /// Politique de scheduling (scheduller_server).
-    SchedulerServer= 9,
+    SchedulerServer = 9,
 }
 
 impl CapabilityType {
@@ -136,13 +144,13 @@ pub struct CapToken {
     /// Génération anti-replay — incrémentée à chaque émission. `0` = révoqué.
     pub generation: u64,
     /// Ressource cible. Pour `DriverPci` : bytes[0..3] = BDF compact.
-    pub object_id:  ObjectId,
+    pub object_id: ObjectId,
     /// Droits accordés sur la ressource.
-    pub rights:     u32,
+    pub rights: u32,
     /// Discriminant du type (`CapabilityType as u16`).
-    pub type_id:    u16,
+    pub type_id: u16,
     /// Padding alignement — RÉSERVÉ, doit être zéro.
-    pub _pad:       [u8; 2],
+    pub _pad: [u8; 2],
 }
 
 const _: () = assert!(core::mem::size_of::<CapToken>() == 48);
@@ -165,21 +173,22 @@ const _: () = assert!(core::mem::size_of::<CapToken>() == 48);
 /// 3. Appeler APRÈS une opération → le token doit être vérifié EN PREMIER.
 pub fn verify_cap_token(token: &CapToken, expected: CapabilityType) -> bool {
     // Comparaison constant-time du type_id (CORR-52)
-    let type_match = token.type_id
+    let type_match = token
+        .type_id
         .to_le_bytes()
         .ct_eq(&(expected as u16).to_le_bytes());
 
     // generation != 0 → token non révoqué
-    let gen_nonzero = !token.generation
-        .to_le_bytes()
-        .ct_eq(&[0u8; 8]);
+    let gen_nonzero = !token.generation.to_le_bytes().ct_eq(&[0u8; 8]);
 
     let result = bool::from(type_match & gen_nonzero);
 
     if !result {
         // CAP-01 : arrêt immédiat si token invalide — aucune exception
-        panic!("SECURITY: CapToken invalide (type={:#x}, gen={}) — arrêt immédiat",
-               token.type_id, token.generation);
+        panic!(
+            "SECURITY: CapToken invalide (type={:#x}, gen={}) — arrêt immédiat",
+            token.type_id, token.generation
+        );
     }
 
     result
@@ -188,7 +197,13 @@ pub fn verify_cap_token(token: &CapToken, expected: CapabilityType) -> bool {
 /// Construit un `CapToken` pour un driver PCI avec BDF encodé.
 ///
 /// Utilisé par le kernel lors de l'émission des capabilities aux drivers.
-pub fn make_driver_pci_cap(generation: u64, bus: u8, device: u8, function: u8, rights: Rights) -> CapToken {
+pub fn make_driver_pci_cap(
+    generation: u64,
+    bus: u8,
+    device: u8,
+    function: u8,
+    rights: Rights,
+) -> CapToken {
     let mut object_id = ObjectId([0u8; 32]);
     object_id.0[0] = bus;
     object_id.0[1] = device;
@@ -210,10 +225,10 @@ mod tests {
     fn make_valid_token(cap_type: CapabilityType) -> CapToken {
         CapToken {
             generation: 1,
-            object_id:  ObjectId([0u8; 32]),
-            rights:     Rights::READ.0,
-            type_id:    cap_type as u16,
-            _pad:       [0u8; 2],
+            object_id: ObjectId([0u8; 32]),
+            rights: Rights::READ.0,
+            type_id: cap_type as u16,
+            _pad: [0u8; 2],
         }
     }
 

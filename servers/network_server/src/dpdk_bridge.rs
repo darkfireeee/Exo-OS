@@ -49,7 +49,12 @@ impl DpdkBridge {
         }
     }
 
-    pub fn configure(&mut self, mode: BackendMode, queue_pairs: u16, lcore_mask: u64) -> BackendSnapshot {
+    pub fn configure(
+        &mut self,
+        mode: BackendMode,
+        queue_pairs: u16,
+        lcore_mask: u64,
+    ) -> BackendSnapshot {
         self.mode = mode;
         self.queue_pairs = queue_pairs.max(1);
         self.lcore_mask = lcore_mask.max(1);

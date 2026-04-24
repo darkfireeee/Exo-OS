@@ -15,11 +15,11 @@
 
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
-use crate::memory::core::{VirtAddr, Frame, AllocError, PAGE_SIZE};
+use super::handler::FaultAllocator;
+use super::{FaultContext, FaultResult};
+use crate::memory::core::{AllocError, Frame, VirtAddr, PAGE_SIZE};
 use crate::memory::swap::{SwapError, SwapSlot, SWAP_BACKEND};
 use crate::memory::virt::vma::VmaDescriptor;
-use super::{FaultContext, FaultResult};
-use super::handler::FaultAllocator;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TRAIT SwapInProvider (Couche 0 — injection de dépendance)
@@ -40,8 +40,8 @@ pub trait SwapInProvider: Sync {
     fn read_swap_page(
         &self,
         swap_device: u8,
-        swap_block:  u64,
-        dest_frame:  Frame,
+        swap_block: u64,
+        dest_frame: Frame,
     ) -> Result<(), AllocError>;
 }
 
@@ -76,7 +76,9 @@ static BACKEND_SWAP_IN_PROVIDER: BackendSwapInProvider = BackendSwapInProvider;
 fn map_swap_error(err: SwapError) -> AllocError {
     match err {
         SwapError::NoSlot | SwapError::DeviceFull => AllocError::OutOfMemory,
-        SwapError::NoDevice | SwapError::InvalidSlot | SwapError::NotEnabled => AllocError::InvalidParams,
+        SwapError::NoDevice | SwapError::InvalidSlot | SwapError::NotEnabled => {
+            AllocError::InvalidParams
+        }
         SwapError::IoError | SwapError::Corrupted => AllocError::WouldBlock,
     }
 }
@@ -87,7 +89,9 @@ pub fn register_backend_swap_provider() {
     // utilisée uniquement pour sérialiser le provider dans le registre global.
     let fat: FatPtr = unsafe { core::mem::transmute(provider) };
     // SAFETY: `provider` est statique et reste valide pendant toute la vie du noyau.
-    unsafe { register_swap_provider(fat.data, fat.vtable); }
+    unsafe {
+        register_swap_provider(fat.data, fat.vtable);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,7 +99,7 @@ pub fn register_backend_swap_provider() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Pointeur sur le SwapInProvider actif (fat pointer — data + vtable).
-static SWAP_PROVIDER_DATA:   AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static SWAP_PROVIDER_DATA: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 static SWAP_PROVIDER_VTABLE: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Enregistre le fournisseur de swap-in global.
@@ -107,13 +111,13 @@ static SWAP_PROVIDER_VTABLE: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut(
 ///   un objet `dyn SwapInProvider` de durée de vie `'static`.
 /// - Appel single-threaded.
 pub unsafe fn register_swap_provider(data_ptr: *const (), vtable: *const ()) {
-    SWAP_PROVIDER_DATA  .store(data_ptr as *mut (), Ordering::Release);
-    SWAP_PROVIDER_VTABLE.store(vtable   as *mut (), Ordering::Release);
+    SWAP_PROVIDER_DATA.store(data_ptr as *mut (), Ordering::Release);
+    SWAP_PROVIDER_VTABLE.store(vtable as *mut (), Ordering::Release);
 }
 
 /// Désenregistre le provider de swap (pour les tests ou hot-unplug).
 pub fn unregister_swap_provider() {
-    SWAP_PROVIDER_DATA  .store(core::ptr::null_mut(), Ordering::Release);
+    SWAP_PROVIDER_DATA.store(core::ptr::null_mut(), Ordering::Release);
     SWAP_PROVIDER_VTABLE.store(core::ptr::null_mut(), Ordering::Release);
 }
 
@@ -129,31 +133,31 @@ pub fn swap_provider_present() -> bool {
 
 pub struct SwapInStats {
     /// Nombre de faults de swap-in reçus.
-    pub total:           AtomicU64,
+    pub total: AtomicU64,
     /// Pages rechargées avec succès depuis le swap.
-    pub success:         AtomicU64,
+    pub success: AtomicU64,
     /// Faults où aucun provider n'était enregistré → zero-fill fallback.
-    pub no_provider:     AtomicU64,
+    pub no_provider: AtomicU64,
     /// Erreurs I/O du provider (lecture swap échouée).
-    pub io_errors:       AtomicU64,
+    pub io_errors: AtomicU64,
     /// OOM pendant l'allocation du frame de destination.
-    pub oom_count:       AtomicU64,
+    pub oom_count: AtomicU64,
     /// Erreurs de mapping après lecture réussie.
-    pub map_errors:      AtomicU64,
+    pub map_errors: AtomicU64,
     /// PTE nuls (page jamais swapée, demand paging fallback).
-    pub null_pte:        AtomicU64,
+    pub null_pte: AtomicU64,
 }
 
 impl SwapInStats {
     pub const fn new() -> Self {
         SwapInStats {
-            total:       AtomicU64::new(0),
-            success:     AtomicU64::new(0),
+            total: AtomicU64::new(0),
+            success: AtomicU64::new(0),
             no_provider: AtomicU64::new(0),
-            io_errors:   AtomicU64::new(0),
-            oom_count:   AtomicU64::new(0),
-            map_errors:  AtomicU64::new(0),
-            null_pte:    AtomicU64::new(0),
+            io_errors: AtomicU64::new(0),
+            oom_count: AtomicU64::new(0),
+            map_errors: AtomicU64::new(0),
+            null_pte: AtomicU64::new(0),
         }
     }
 }
@@ -172,9 +176,11 @@ pub static SWAP_IN_STATS: SwapInStats = SwapInStats::new();
 /// Retourne `None` si `pte_raw == 0` (PTE jamais écrite).
 #[inline]
 fn decode_swap_pte(pte_raw: u64) -> Option<(u8, u64)> {
-    if pte_raw == 0 { return None; }
+    if pte_raw == 0 {
+        return None;
+    }
     let device = ((pte_raw >> 8) & 0xF) as u8;
-    let block  = (pte_raw >> 12) & ((1u64 << 52) - 1);
+    let block = (pte_raw >> 12) & ((1u64 << 52) - 1);
     Some((device, block))
 }
 
@@ -191,8 +197,8 @@ fn decode_swap_pte(pte_raw: u64) -> Option<(u8, u64)> {
 /// 5. Appelle `SwapInProvider::read_swap_page()` pour remplir le frame.
 /// 6. Mappe le frame dans l'espace d'adressage avec les flags de la VMA.
 pub fn handle_swap_in<A: FaultAllocator>(
-    ctx:  &FaultContext,
-    vma:  &VmaDescriptor,
+    ctx: &FaultContext,
+    vma: &VmaDescriptor,
     alloc: &A,
 ) -> FaultResult {
     SWAP_IN_STATS.total.fetch_add(1, Ordering::Relaxed);
@@ -212,35 +218,44 @@ pub fn handle_swap_in<A: FaultAllocator>(
     };
 
     // Récupérer le provider enregistré.
-    let data_ptr = SWAP_PROVIDER_DATA  .load(Ordering::Acquire);
-    let vtable   = SWAP_PROVIDER_VTABLE.load(Ordering::Acquire);
+    let data_ptr = SWAP_PROVIDER_DATA.load(Ordering::Acquire);
+    let vtable = SWAP_PROVIDER_VTABLE.load(Ordering::Acquire);
 
     if data_ptr.is_null() || vtable.is_null() {
         // Aucun provider → zero-fill et continuer (sous-optimal mais pas plantant).
         SWAP_IN_STATS.no_provider.fetch_add(1, Ordering::Relaxed);
         let frame = match alloc.alloc_zeroed() {
-            Ok(f)  => f,
+            Ok(f) => f,
             Err(_) => {
                 SWAP_IN_STATS.oom_count.fetch_add(1, Ordering::Relaxed);
-                return FaultResult::Oom { addr: ctx.fault_addr };
+                return FaultResult::Oom {
+                    addr: ctx.fault_addr,
+                };
             }
         };
         return match alloc.map_page(page_addr, frame, vma.page_flags) {
-            Ok(_)  => { vma.record_fault(); FaultResult::Handled }
+            Ok(_) => {
+                vma.record_fault();
+                FaultResult::Handled
+            }
             Err(_) => {
                 alloc.free_frame(frame);
                 SWAP_IN_STATS.map_errors.fetch_add(1, Ordering::Relaxed);
-                FaultResult::Oom { addr: ctx.fault_addr }
+                FaultResult::Oom {
+                    addr: ctx.fault_addr,
+                }
             }
         };
     }
 
     // Allouer le frame de destination (non-zéro, le provider le remplira).
     let frame = match alloc.alloc_nonzeroed() {
-        Ok(f)  => f,
+        Ok(f) => f,
         Err(_) => {
             SWAP_IN_STATS.oom_count.fetch_add(1, Ordering::Relaxed);
-            return FaultResult::Oom { addr: ctx.fault_addr };
+            return FaultResult::Oom {
+                addr: ctx.fault_addr,
+            };
         }
     };
 
@@ -264,7 +279,9 @@ pub fn handle_swap_in<A: FaultAllocator>(
                 Err(_) => {
                     alloc.free_frame(frame);
                     SWAP_IN_STATS.map_errors.fetch_add(1, Ordering::Relaxed);
-                    FaultResult::Oom { addr: ctx.fault_addr }
+                    FaultResult::Oom {
+                        addr: ctx.fault_addr,
+                    }
                 }
             }
         }
@@ -273,7 +290,9 @@ pub fn handle_swap_in<A: FaultAllocator>(
             alloc.free_frame(frame);
             SWAP_IN_STATS.io_errors.fetch_add(1, Ordering::Relaxed);
             // Retourner OOM (la page restera swapée, le process sera réessayé ou tué).
-            FaultResult::Oom { addr: ctx.fault_addr }
+            FaultResult::Oom {
+                addr: ctx.fault_addr,
+            }
         }
     }
 }

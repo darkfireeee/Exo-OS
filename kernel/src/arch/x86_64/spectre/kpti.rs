@@ -8,10 +8,9 @@
 //! Le changement de CR3 se fait dans `switch_asm.s` (entre PUSH/POP des registres).
 //! Ce module gère uniquement la détection, l'état global, et les helpers de switch.
 
-
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crate::arch::x86_64::smp::percpu;
 use crate::arch::x86_64::smp::percpu::MAX_CPUS;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ── État global KPTI ──────────────────────────────────────────────────────────
 
@@ -24,11 +23,11 @@ pub fn kpti_enabled() -> bool {
 
 // ── Bit PCID ─────────────────────────────────────────────────────────────────
 
-const CR3_PCID_MASK:    u64 = 0xFFF;
+const CR3_PCID_MASK: u64 = 0xFFF;
 const CR3_NO_FLUSH_BIT: u64 = 1u64 << 63;
 
 pub const PCID_KERNEL: u64 = 0;
-pub const PCID_USER:   u64 = 1;
+pub const PCID_USER: u64 = 1;
 
 // ── CR3 per-CPU — FIX-KPTI-01 : remplace les deux AtomicU64 globaux ──────────
 //
@@ -41,13 +40,17 @@ pub const PCID_USER:   u64 = 1;
 #[repr(C, align(128))]
 struct Cr3Slot {
     kernel: AtomicU64,
-    user:   AtomicU64,
-    _pad:   [u8; 112],
+    user: AtomicU64,
+    _pad: [u8; 112],
 }
 
 impl Cr3Slot {
     const fn new() -> Self {
-        Self { kernel: AtomicU64::new(0), user: AtomicU64::new(0), _pad: [0u8; 112] }
+        Self {
+            kernel: AtomicU64::new(0),
+            user: AtomicU64::new(0),
+            _pad: [0u8; 112],
+        }
     }
 }
 
@@ -69,7 +72,7 @@ fn current_cpu_slot() -> &'static Cr3Slot {
 pub fn set_current_cr3(cr3_kernel: u64, cr3_user: u64) {
     let slot = current_cpu_slot();
     slot.kernel.store(cr3_kernel, Ordering::Release);
-    slot.user.store(cr3_user,   Ordering::Release);
+    slot.user.store(cr3_user, Ordering::Release);
 }
 
 // ── Switch Kernel → User CR3 ─────────────────────────────────────────────────
@@ -77,10 +80,14 @@ pub fn set_current_cr3(cr3_kernel: u64, cr3_user: u64) {
 /// Bascule vers les tables de pages user (à exécuter avant IRETQ vers Ring 3)
 #[inline]
 pub unsafe fn kpti_switch_to_user() {
-    if !KPTI_ENABLED.load(Ordering::Relaxed) { return; }
-    let slot     = current_cpu_slot();
+    if !KPTI_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let slot = current_cpu_slot();
     let cr3_user = slot.user.load(Ordering::Acquire);
-    if cr3_user == 0 { return; }
+    if cr3_user == 0 {
+        return;
+    }
     let features = super::super::cpu::features::cpu_features();
     let cr3 = if features.has_pcid() {
         cr3_user | PCID_USER | CR3_NO_FLUSH_BIT
@@ -93,10 +100,14 @@ pub unsafe fn kpti_switch_to_user() {
 /// Bascule vers les tables de pages kernel (au retour vers Ring 0)
 #[inline]
 pub unsafe fn kpti_switch_to_kernel() {
-    if !KPTI_ENABLED.load(Ordering::Relaxed) { return; }
-    let slot       = current_cpu_slot();
+    if !KPTI_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let slot = current_cpu_slot();
     let cr3_kernel = slot.kernel.load(Ordering::Acquire);
-    if cr3_kernel == 0 { return; }
+    if cr3_kernel == 0 {
+        return;
+    }
     let features = super::super::cpu::features::cpu_features();
     let cr3 = if features.has_pcid() {
         cr3_kernel | PCID_KERNEL | CR3_NO_FLUSH_BIT
@@ -116,27 +127,34 @@ pub fn init_kpti() {
     if features.has_smep() {
         let mut cr4: u64;
         // SAFETY: lecture CR4
-        unsafe { core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack, nomem)); }
+        unsafe {
+            core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack, nomem));
+        }
         cr4 |= 1 << 20; // SMEP
-        // SAFETY: écriture CR4 — activation SMEP
-        unsafe { core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, nomem)); }
+                        // SAFETY: écriture CR4 — activation SMEP
+        unsafe {
+            core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, nomem));
+        }
     }
 
     // Activer SMAP si disponible (empêche le kernel d'accéder aux données user sans STAC/CLAC)
     if features.has_smap() {
         let mut cr4: u64;
         // SAFETY: lecture CR4
-        unsafe { core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack, nomem)); }
+        unsafe {
+            core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack, nomem));
+        }
         cr4 |= 1 << 21; // SMAP
-        // SAFETY: écriture CR4 — activation SMAP
-        unsafe { core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, nomem)); }
+                        // SAFETY: écriture CR4 — activation SMAP
+        unsafe {
+            core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, nomem));
+        }
     }
 
     let cpu_id = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
     let kernel_pml4_phys = crate::memory::virt::page_table::read_cr3();
-    let trampoline_phys = crate::memory::core::PhysAddr::new(
-        crate::arch::x86_64::smp::init::TRAMPOLINE_PHYS,
-    );
+    let trampoline_phys =
+        crate::memory::core::PhysAddr::new(crate::arch::x86_64::smp::init::TRAMPOLINE_PHYS);
 
     let user_shadow = unsafe {
         crate::memory::virt::page_table::kpti_split::build_user_shadow_pml4(kernel_pml4_phys)
@@ -157,7 +175,10 @@ pub fn init_kpti() {
             KPTI_ENABLED.store(true, Ordering::Release);
         }
         Err(_) => {
-            log::warn!("KPTI: impossible d'allouer la user_pml4 shadow sur CPU {}", cpu_id);
+            log::warn!(
+                "KPTI: impossible d'allouer la user_pml4 shadow sur CPU {}",
+                cpu_id
+            );
         }
     }
 }

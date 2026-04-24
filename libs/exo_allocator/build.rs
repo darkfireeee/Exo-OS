@@ -3,7 +3,7 @@ use std::path::Path;
 
 fn main() {
     let vendor_path = Path::new("vendor/mimalloc");
-    
+
     if !vendor_path.exists() {
         panic!("Mimalloc sources not found in vendor/mimalloc");
     }

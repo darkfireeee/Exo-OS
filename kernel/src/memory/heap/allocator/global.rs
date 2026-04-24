@@ -4,9 +4,9 @@
 // Délègue vers l'allocateur hybride (SLUB + large).
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-use core::alloc::{GlobalAlloc, Layout};
-use crate::memory::core::AllocFlags;
 use super::hybrid;
+use crate::memory::core::AllocFlags;
+use core::alloc::{GlobalAlloc, Layout};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GLOBAL ALLOCATOR
@@ -28,12 +28,14 @@ unsafe impl GlobalAlloc for KernelAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         match hybrid::alloc(layout.size(), layout.align(), AllocFlags::NONE) {
             Ok(ptr) => ptr.as_ptr(),
-            Err(_)  => core::ptr::null_mut(),
+            Err(_) => core::ptr::null_mut(),
         }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        if ptr.is_null() { return; }
+        if ptr.is_null() {
+            return;
+        }
         if let Some(nn) = core::ptr::NonNull::new(ptr) {
             hybrid::free(nn, layout.size());
         }
@@ -43,7 +45,7 @@ unsafe impl GlobalAlloc for KernelAllocator {
         let flags = AllocFlags::ZEROED;
         match hybrid::alloc(layout.size(), layout.align(), flags) {
             Ok(ptr) => ptr.as_ptr(),
-            Err(_)  => core::ptr::null_mut(),
+            Err(_) => core::ptr::null_mut(),
         }
     }
 
@@ -53,11 +55,13 @@ unsafe impl GlobalAlloc for KernelAllocator {
         }
         // Allouer le nouveau bloc
         let new_layout = match Layout::from_size_align(new_size, layout.align()) {
-            Ok(l)  => l,
+            Ok(l) => l,
             Err(_) => return core::ptr::null_mut(),
         };
         let new_ptr = self.alloc(new_layout);
-        if new_ptr.is_null() { return core::ptr::null_mut(); }
+        if new_ptr.is_null() {
+            return core::ptr::null_mut();
+        }
         // Copier les données
         let copy_size = layout.size().min(new_size);
         // SAFETY: ptr est valide (alloué précédemment), copy_size <= les deux tailles.

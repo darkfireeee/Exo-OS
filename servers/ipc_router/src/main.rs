@@ -21,9 +21,9 @@
 //! - SYS_IPC_SEND      = 300 (envoie un message)
 //! - SYS_GETPID        = 39  (récupère notre PID)
 
-use exo_syscall_abi as syscall;
 use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use exo_syscall_abi as syscall;
 
 mod exocordon;
 mod security_gate;
@@ -31,17 +31,17 @@ mod security_gate;
 /// Registre d'endpoints : max 64 services simultanés.
 /// Chaque entrée = (nom hash 32-bit, endpoint_id 32-bit).
 struct Registry {
-    names:     [u32; 64],
+    names: [u32; 64],
     endpoints: [u32; 64],
-    count:     AtomicU32,
+    count: AtomicU32,
 }
 
 impl Registry {
     const fn new() -> Self {
         Self {
-            names:     [0u32; 64],
+            names: [0u32; 64],
             endpoints: [0u32; 64],
-            count:     AtomicU32::new(0),
+            count: AtomicU32::new(0),
         }
     }
 
@@ -60,7 +60,9 @@ impl Registry {
     fn register(&mut self, name: &[u8], endpoint: u32) -> bool {
         let h = Self::hash_name(name);
         let n = self.count.load(Ordering::Relaxed) as usize;
-        if n >= 64 { return false; }
+        if n >= 64 {
+            return false;
+        }
         self.names[n] = h;
         self.endpoints[n] = endpoint;
         self.count.store((n + 1) as u32, Ordering::Release);
@@ -74,7 +76,9 @@ impl Registry {
         let n = self.count.load(Ordering::Acquire) as usize;
         let mut i = 0usize;
         while i < n {
-            if self.names[i] == h { return Some(self.endpoints[i]); }
+            if self.names[i] == h {
+                return Some(self.endpoints[i]);
+            }
             i += 1;
         }
         None
@@ -85,14 +89,14 @@ impl Registry {
 #[repr(C)]
 struct IpcMessage {
     sender_pid: u32,
-    msg_type:   u32,
+    msg_type: u32,
     /// 0 = REGISTER, 1 = ROUTE, 2 = HEARTBEAT
-    payload:    [u8; 120],
+    payload: [u8; 120],
 }
 
-const IPC_MSG_REGISTER:   u32 = 0;
-const IPC_MSG_ROUTE:      u32 = 1;
-const IPC_MSG_HEARTBEAT:  u32 = 2;
+const IPC_MSG_REGISTER: u32 = 0;
+const IPC_MSG_ROUTE: u32 = 1;
+const IPC_MSG_HEARTBEAT: u32 = 2;
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
 const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
 const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
@@ -111,13 +115,17 @@ pub extern "C" fn _start() -> ! {
             syscall::SYS_IPC_REGISTER,
             name.as_ptr() as u64,
             name.len() as u64,
-            2u64,  // endpoint_id = PID 2 par convention
+            2u64, // endpoint_id = PID 2 par convention
         )
     };
 
     // ── 2. Boucle principale : receive → dispatch ──────────────────────────
     let mut registry = Registry::new();
-    let mut msg = IpcMessage { sender_pid: 0, msg_type: 0, payload: [0u8; 120] };
+    let mut msg = IpcMessage {
+        sender_pid: 0,
+        msg_type: 0,
+        payload: [0u8; 120],
+    };
 
     while RUNNING.load(Ordering::Relaxed) {
         // Attendre le prochain message (bloquant).
@@ -134,15 +142,19 @@ pub extern "C" fn _start() -> ! {
             IPC_RECV_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
             continue;
         }
-        if r < 0 { continue; } // EINTR ou erreur temporaire
+        if r < 0 {
+            continue;
+        } // EINTR ou erreur temporaire
 
         match msg.msg_type {
             IPC_MSG_REGISTER => {
                 // payload[0..4] = endpoint_id (LE), payload[4..] = nom
                 if msg.payload.len() >= 5 {
                     let ep = u32::from_le_bytes([
-                        msg.payload[0], msg.payload[1],
-                        msg.payload[2], msg.payload[3],
+                        msg.payload[0],
+                        msg.payload[1],
+                        msg.payload[2],
+                        msg.payload[3],
                     ]);
                     let name_len = msg.payload[4] as usize;
                     let name_end = 5usize.saturating_add(name_len).min(msg.payload.len());
@@ -154,8 +166,10 @@ pub extern "C" fn _start() -> ! {
                 // payload[0..4] = dest_endpoint, payload[4..] = données
                 if msg.payload.len() >= 4 {
                     let dest = u32::from_le_bytes([
-                        msg.payload[0], msg.payload[1],
-                        msg.payload[2], msg.payload[3],
+                        msg.payload[0],
+                        msg.payload[1],
+                        msg.payload[2],
+                        msg.payload[3],
                     ]);
                     // Vérification via security_gate (IPC-04 + ExoCordon + audit violations).
                     let sg_verdict = security_gate::check_message(
@@ -175,7 +189,8 @@ pub extern "C" fn _start() -> ! {
                             msg.payload[4..].as_ptr() as u64,
                             (msg.payload.len() - 4) as u64,
                             msg.sender_pid as u64,
-                            0, 0,
+                            0,
+                            0,
                         )
                     };
                 }
@@ -190,7 +205,9 @@ pub extern "C" fn _start() -> ! {
                         msg.sender_pid as u64,
                         pid_bytes.as_ptr() as u64,
                         4,
-                        0, 0, 0,
+                        0,
+                        0,
+                        0,
                     )
                 };
             }
@@ -199,11 +216,19 @@ pub extern "C" fn _start() -> ! {
     }
 
     // Ne devrait jamais arriver — boucle infinie de sécurité.
-    loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
+    }
 }
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     // En cas de panique inattendue : halt et attendre le watchdog init.
-    loop { unsafe { core::arch::asm!("hlt", options(nostack, nomem)); } }
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
+    }
 }

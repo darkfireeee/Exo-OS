@@ -40,13 +40,12 @@
 //   RÈGLE PIT-QEMU-01 : PIT non disponible marqué Degraded sur QEMU TCG.
 // ════════════════════════════════════════════════════════════════════════════════
 
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use core::sync::atomic::{AtomicU32, AtomicBool, AtomicU64, Ordering};
-
-pub mod tsc;
 pub mod hpet;
-pub mod pm_timer;
 pub mod pit;
+pub mod pm_timer;
+pub mod tsc;
 
 // ── Trait ClockSource ─────────────────────────────────────────────────────────
 
@@ -78,22 +77,22 @@ pub enum SourceId {
 impl SourceId {
     pub fn as_str(self) -> &'static str {
         match self {
-            SourceId::Tsc     => "TSC",
-            SourceId::Hpet    => "HPET",
+            SourceId::Tsc => "TSC",
+            SourceId::Hpet => "HPET",
             SourceId::PmTimer => "PM_TIMER",
-            SourceId::Pit     => "PIT",
-            SourceId::None    => "NONE",
+            SourceId::Pit => "PIT",
+            SourceId::None => "NONE",
         }
     }
 
     /// Rating par défaut de la source.
     pub fn default_rating(self) -> u32 {
         match self {
-            SourceId::Tsc     => 400,
-            SourceId::Hpet    => 300,
+            SourceId::Tsc => 400,
+            SourceId::Hpet => 300,
             SourceId::PmTimer => 200,
-            SourceId::Pit     => 50,
-            SourceId::None    => 0,
+            SourceId::Pit => 50,
+            SourceId::None => 0,
         }
     }
 }
@@ -116,10 +115,10 @@ pub enum SourceStatus {
 impl SourceStatus {
     pub fn as_str(self) -> &'static str {
         match self {
-            SourceStatus::Available   => "OK",
-            SourceStatus::Degraded    => "DEGRADED",
+            SourceStatus::Available => "OK",
+            SourceStatus::Degraded => "DEGRADED",
             SourceStatus::Unavailable => "UNAVAIL",
-            SourceStatus::Untested    => "UNTESTED",
+            SourceStatus::Untested => "UNTESTED",
         }
     }
 
@@ -133,7 +132,7 @@ impl SourceStatus {
 /// Entrée du registre de sources.
 #[derive(Debug, Clone, Copy)]
 pub struct SourceEntry {
-    pub id:     SourceId,
+    pub id: SourceId,
     pub status: SourceStatus,
     pub rating: u32,
 }
@@ -157,31 +156,40 @@ static REGISTRY: [AtomicU32; NUM_SOURCES * 2] = {
 };
 
 /// Index des sources dans REGISTRY.
-const IDX_TSC:      usize = 0;
-const IDX_HPET:     usize = 1;
-const IDX_PMTIMER:  usize = 2;
-const IDX_PIT:      usize = 3;
+const IDX_TSC: usize = 0;
+const IDX_HPET: usize = 1;
+const IDX_PMTIMER: usize = 2;
+const IDX_PIT: usize = 3;
 
 // Encodage : index*2 = status, index*2+1 = rating.
 fn read_entry(idx: usize) -> SourceEntry {
-    let ids = [SourceId::Tsc, SourceId::Hpet, SourceId::PmTimer, SourceId::Pit];
+    let ids = [
+        SourceId::Tsc,
+        SourceId::Hpet,
+        SourceId::PmTimer,
+        SourceId::Pit,
+    ];
     let status_raw = REGISTRY[idx * 2].load(Ordering::Relaxed);
-    let rating     = REGISTRY[idx * 2 + 1].load(Ordering::Relaxed);
+    let rating = REGISTRY[idx * 2 + 1].load(Ordering::Relaxed);
     let status = match status_raw {
         1 => SourceStatus::Available,
         2 => SourceStatus::Degraded,
         3 => SourceStatus::Unavailable,
         _ => SourceStatus::Untested,
     };
-    SourceEntry { id: ids[idx], status, rating }
+    SourceEntry {
+        id: ids[idx],
+        status,
+        rating,
+    }
 }
 
 fn write_entry(idx: usize, status: SourceStatus, rating: u32) {
     let status_raw: u32 = match status {
-        SourceStatus::Available   => 1,
-        SourceStatus::Degraded    => 2,
+        SourceStatus::Available => 1,
+        SourceStatus::Degraded => 2,
         SourceStatus::Unavailable => 3,
-        SourceStatus::Untested    => 0,
+        SourceStatus::Untested => 0,
     };
     REGISTRY[idx * 2].store(status_raw, Ordering::Relaxed);
     REGISTRY[idx * 2 + 1].store(rating, Ordering::Relaxed);
@@ -194,19 +202,23 @@ static REGISTRY_INIT_DONE: AtomicBool = AtomicBool::new(false);
 /// Initialise et probe toutes les sources disponibles.
 /// À appeler depuis `time_init()` après initialisation ACPI et TSC.
 pub fn init_sources() {
-    if REGISTRY_INIT_DONE.swap(true, Ordering::Relaxed) { return; }
+    if REGISTRY_INIT_DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
 
     // TSC : toujours présent ; invariant détermine le rating.
     tsc::init_tsc_source();
-    let tsc_rating  = tsc::tsc_rating();
+    let tsc_rating = tsc::tsc_rating();
     write_entry(IDX_TSC, SourceStatus::Available, tsc_rating);
 
     // HPET : disponible si `hpet_available()`.
     hpet::init_hpet_source();
     if hpet::available() {
-        let r = if hpet::HpetSource.available() { 
-            hpet::HpetSource.rating() 
-        } else { 0 };
+        let r = if hpet::HpetSource.available() {
+            hpet::HpetSource.rating()
+        } else {
+            0
+        };
         write_entry(IDX_HPET, SourceStatus::Available, r);
     } else {
         write_entry(IDX_HPET, SourceStatus::Unavailable, 0);
@@ -235,9 +247,15 @@ pub fn init_sources() {
 /// Retourne la meilleure source pour la calibration du TSC (PAS le TSC lui-même).
 /// Ordre : HPET > PM Timer > PIT > None.
 pub fn best_source_for_calibration() -> SourceId {
-    if read_entry(IDX_HPET).status.is_usable()    { return SourceId::Hpet; }
-    if read_entry(IDX_PMTIMER).status.is_usable() { return SourceId::PmTimer; }
-    if read_entry(IDX_PIT).status.is_usable()     { return SourceId::Pit; }
+    if read_entry(IDX_HPET).status.is_usable() {
+        return SourceId::Hpet;
+    }
+    if read_entry(IDX_PMTIMER).status.is_usable() {
+        return SourceId::PmTimer;
+    }
+    if read_entry(IDX_PIT).status.is_usable() {
+        return SourceId::Pit;
+    }
     SourceId::None
 }
 
@@ -248,31 +266,37 @@ pub fn best_runtime_source() -> SourceId {
     if tsc.status.is_usable() && tsc.rating >= 350 {
         return SourceId::Tsc;
     }
-    if read_entry(IDX_HPET).status.is_usable()    { return SourceId::Hpet; }
-    if read_entry(IDX_PMTIMER).status.is_usable() { return SourceId::PmTimer; }
-    if read_entry(IDX_PIT).status.is_usable()     { return SourceId::Pit; }
+    if read_entry(IDX_HPET).status.is_usable() {
+        return SourceId::Hpet;
+    }
+    if read_entry(IDX_PMTIMER).status.is_usable() {
+        return SourceId::PmTimer;
+    }
+    if read_entry(IDX_PIT).status.is_usable() {
+        return SourceId::Pit;
+    }
     SourceId::None
 }
 
 /// Lit la valeur courante de la source demandée (en ticks bruts).
 pub fn read_source(id: SourceId) -> u64 {
     match id {
-        SourceId::Tsc     => tsc::rdtsc_read(),
-        SourceId::Hpet    => hpet::read(),
+        SourceId::Tsc => tsc::rdtsc_read(),
+        SourceId::Hpet => hpet::read(),
         SourceId::PmTimer => pm_timer::read(),
-        SourceId::Pit     => pit::read_latch_ch2() as u64,
-        SourceId::None    => 0,
+        SourceId::Pit => pit::read_latch_ch2() as u64,
+        SourceId::None => 0,
     }
 }
 
 /// Retourne la fréquence en Hz de la source demandée.
 pub fn source_freq_hz(id: SourceId) -> u64 {
     match id {
-        SourceId::Tsc     => tsc::tsc_freq_hz(),
-        SourceId::Hpet    => hpet::freq_hz(),
+        SourceId::Tsc => tsc::tsc_freq_hz(),
+        SourceId::Hpet => hpet::freq_hz(),
         SourceId::PmTimer => pm_timer::freq_hz(),
-        SourceId::Pit     => pit::PIT_FREQ_HZ,
-        SourceId::None    => 0,
+        SourceId::Pit => pit::PIT_FREQ_HZ,
+        SourceId::None => 0,
     }
 }
 
@@ -287,7 +311,7 @@ pub fn source_health_check() -> bool {
     HEALTH_CHECK_COUNT.fetch_add(1, Ordering::Relaxed);
 
     let hpet_ok = read_entry(IDX_HPET).status.is_usable();
-    let pm_ok   = read_entry(IDX_PMTIMER).status.is_usable();
+    let pm_ok = read_entry(IDX_PMTIMER).status.is_usable();
 
     if !hpet_ok || !pm_ok {
         // Pas assez de sources pour la cross-vérification.
@@ -296,15 +320,15 @@ pub fn source_health_check() -> bool {
 
     // Mesurer un intervalle avec les deux sources simultanément.
     let hpet_start = hpet::read();
-    let pm_start   = pm_timer::read();
+    let pm_start = pm_timer::read();
 
     // Attendre ~100 µs (mesure approximative via spin_loop).
     // Pas de vrai wait ici car cette fonction est appelée periodiquement.
-    let hpet_end   = hpet::read();
-    let pm_end     = pm_timer::read();
+    let hpet_end = hpet::read();
+    let pm_end = pm_timer::read();
 
     let hpet_delta = hpet::delta(hpet_start, hpet_end);
-    let pm_delta   = pm_timer::delta(pm_start, pm_end);
+    let pm_delta = pm_timer::delta(pm_start, pm_end);
 
     if hpet_delta == 0 || pm_delta == 0 {
         return true; // Pas assez de temps écoulé.
@@ -312,20 +336,27 @@ pub fn source_health_check() -> bool {
 
     // Convertir en nanosecondes pour comparer.
     let hpet_ns = hpet::ticks_to_ns(hpet_delta);
-    let pm_ns   = pm_timer::ticks_to_ns(pm_delta);
+    let pm_ns = pm_timer::ticks_to_ns(pm_delta);
 
     if hpet_ns == 0 || pm_ns == 0 {
         return true;
     }
 
     // Divergence en centièmes de % = |hpet_ns - pm_ns| × 10000 / pm_ns.
-    let diff = if hpet_ns > pm_ns { hpet_ns - pm_ns } else { pm_ns - hpet_ns };
+    let diff = if hpet_ns > pm_ns {
+        hpet_ns - pm_ns
+    } else {
+        pm_ns - hpet_ns
+    };
     let divergence_x100 = (diff as u128 * 10_000) / pm_ns as u128;
 
     if divergence_x100 > 500 {
         // Divergence > 5% → marquer HPET comme dégradé.
-        write_entry(IDX_HPET, SourceStatus::Degraded,
-                    read_entry(IDX_HPET).rating);
+        write_entry(
+            IDX_HPET,
+            SourceStatus::Degraded,
+            read_entry(IDX_HPET).rating,
+        );
         return false;
     }
 
@@ -335,11 +366,11 @@ pub fn source_health_check() -> bool {
 /// Met à jour le statut d'une source (pour les mises à jour dynamiques).
 pub fn update_source_status(id: SourceId, status: SourceStatus) {
     let idx = match id {
-        SourceId::Tsc     => IDX_TSC,
-        SourceId::Hpet    => IDX_HPET,
+        SourceId::Tsc => IDX_TSC,
+        SourceId::Hpet => IDX_HPET,
         SourceId::PmTimer => IDX_PMTIMER,
-        SourceId::Pit     => IDX_PIT,
-        SourceId::None    => return,
+        SourceId::Pit => IDX_PIT,
+        SourceId::None => return,
     };
     let current_rating = read_entry(idx).rating;
     write_entry(idx, status, current_rating);
@@ -348,11 +379,11 @@ pub fn update_source_status(id: SourceId, status: SourceStatus) {
 /// Met à jour le rating d'une source (ex: TSC upgrader après calibration réussie).
 pub fn update_source_rating(id: SourceId, rating: u32) {
     let idx = match id {
-        SourceId::Tsc     => IDX_TSC,
-        SourceId::Hpet    => IDX_HPET,
+        SourceId::Tsc => IDX_TSC,
+        SourceId::Hpet => IDX_HPET,
         SourceId::PmTimer => IDX_PMTIMER,
-        SourceId::Pit     => IDX_PIT,
-        SourceId::None    => return,
+        SourceId::Pit => IDX_PIT,
+        SourceId::None => return,
     };
     let current_status = read_entry(idx).status;
     write_entry(idx, current_status, rating);

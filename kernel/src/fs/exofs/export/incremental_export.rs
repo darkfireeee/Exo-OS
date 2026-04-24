@@ -15,12 +15,11 @@
 //! OOM-02   : try_reserve avant tout push.
 //! ARITH-02 : saturating_* sur tous les compteurs.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
+use super::exoar_writer::{ArchiveSink, ExoarWriteOptions, ExoarWriter};
+use super::export_audit::{ExportEvent, ExportSession, EXPORT_AUDIT};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use super::export_audit::{EXPORT_AUDIT, ExportEvent, ExportSession};
-use super::exoar_writer::{ExoarWriter, ExoarWriteOptions, ArchiveSink};
+use alloc::vec::Vec;
 
 // ─── Identifiant d'epoch ─────────────────────────────────────────────────────
 
@@ -32,13 +31,18 @@ impl EpochId {
     pub const ZERO: Self = Self(0);
     pub const MAX: Self = Self(u64::MAX);
 
-    #[inline] pub fn value(&self) -> u64 { self.0 }
+    #[inline]
+    pub fn value(&self) -> u64 {
+        self.0
+    }
 
     pub fn next(&self) -> Self {
         Self(self.0.saturating_add(1))
     }
 
-    pub fn is_zero(&self) -> bool { self.0 == 0 }
+    pub fn is_zero(&self) -> bool {
+        self.0 == 0
+    }
 }
 
 // ─── Plage d'epochs ──────────────────────────────────────────────────────────
@@ -73,7 +77,9 @@ impl EpochRange {
     }
 
     /// Retourne true si la plage est un snapshot complet (base = 0).
-    pub fn is_full_snapshot(&self) -> bool { self.base.is_zero() }
+    pub fn is_full_snapshot(&self) -> bool {
+        self.base.is_zero()
+    }
 }
 
 // ─── DiffSet ─────────────────────────────────────────────────────────────────
@@ -92,19 +98,27 @@ pub struct DiffSet {
 impl DiffSet {
     /// Crée un DiffSet vide.
     pub fn new(range: EpochRange) -> Self {
-        Self { added: Vec::new(), deleted: Vec::new(), range }
+        Self {
+            added: Vec::new(),
+            deleted: Vec::new(),
+            range,
+        }
     }
 
     /// Ajoute un BlobId dans la liste des ajouts — OOM-02 : try_reserve.
     pub fn push_added(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
-        self.added.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.added
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.added.push(blob_id);
         Ok(())
     }
 
     /// Ajoute un BlobId dans la liste des suppressions — OOM-02 : try_reserve.
     pub fn push_deleted(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
-        self.deleted.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.deleted
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.deleted.push(blob_id);
         Ok(())
     }
@@ -223,9 +237,14 @@ pub struct IncrementalExportResult {
 impl IncrementalExportResult {
     pub const fn new() -> Self {
         Self {
-            blobs_exported: 0, tombstones_exported: 0,
-            bytes_exported: 0, blobs_skipped: 0, errors: 0,
-            epoch_base: 0, epoch_target: 0, archive_size: 0,
+            blobs_exported: 0,
+            tombstones_exported: 0,
+            bytes_exported: 0,
+            blobs_skipped: 0,
+            errors: 0,
+            epoch_base: 0,
+            epoch_target: 0,
+            archive_size: 0,
             success: false,
         }
     }
@@ -234,9 +253,13 @@ impl IncrementalExportResult {
         self.blobs_exported.saturating_add(self.tombstones_exported)
     }
 
-    pub fn is_empty(&self) -> bool { self.total_entries() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.total_entries() == 0
+    }
 
-    pub fn has_errors(&self) -> bool { self.errors > 0 }
+    pub fn has_errors(&self) -> bool {
+        self.errors > 0
+    }
 }
 
 // ─── Moteur d'export incrémental ─────────────────────────────────────────────
@@ -260,11 +283,7 @@ impl IncrementalExport {
 
     /// Exécute l'export incrémental vers `sink`.
     /// RECUR-01 : deux boucles while (blobs ajoutés, blobs supprimés).
-    pub fn run<S, Src>(
-        &self,
-        sink: &mut S,
-        source: &Src,
-    ) -> ExofsResult<IncrementalExportResult>
+    pub fn run<S, Src>(&self, sink: &mut S, source: &Src) -> ExofsResult<IncrementalExportResult>
     where
         S: ArchiveSink,
         Src: IncrementalBlobSource,
@@ -272,7 +291,7 @@ impl IncrementalExport {
         self.config.validate()?;
 
         let mut result = IncrementalExportResult::new();
-        result.epoch_base   = self.config.epoch_base.value();
+        result.epoch_base = self.config.epoch_base.value();
         result.epoch_target = self.config.epoch_target.value();
 
         // Démarrer la session d'audit
@@ -302,13 +321,25 @@ impl IncrementalExport {
         })?;
 
         // ── Phase 1 : blobs ajoutés (RECUR-01 : boucle while) ──────────────
-        let max_blobs = if self.config.max_blobs == 0 { u32::MAX } else { self.config.max_blobs };
-        let max_bytes = if self.config.max_bytes == 0 { u64::MAX } else { self.config.max_bytes };
+        let max_blobs = if self.config.max_blobs == 0 {
+            u32::MAX
+        } else {
+            self.config.max_blobs
+        };
+        let max_bytes = if self.config.max_bytes == 0 {
+            u64::MAX
+        } else {
+            self.config.max_bytes
+        };
 
         let mut blob_idx = 0usize;
         while blob_idx < diff.added.len() {
-            if result.blobs_exported >= max_blobs { break; }
-            if result.bytes_exported >= max_bytes  { break; }
+            if result.blobs_exported >= max_blobs {
+                break;
+            }
+            if result.bytes_exported >= max_bytes {
+                break;
+            }
 
             let blob_id = &diff.added[blob_idx];
             let epoch = match source.blob_epoch(blob_id) {
@@ -343,13 +374,14 @@ impl IncrementalExport {
                 }
             };
 
-            writer.write_blob(sink, blob_id, &data, 0, epoch)
+            writer
+                .write_blob(sink, blob_id, &data, 0, epoch)
                 .map_err(|e| ExofsError::from(e))?;
 
             let sz = data.len() as u64;
             session.record_blob(blob_id, sz, &EXPORT_AUDIT);
-            result.blobs_exported   = result.blobs_exported.saturating_add(1);
-            result.bytes_exported   = result.bytes_exported.saturating_add(sz);
+            result.blobs_exported = result.blobs_exported.saturating_add(1);
+            result.bytes_exported = result.bytes_exported.saturating_add(sz);
             blob_idx = blob_idx.wrapping_add(1);
         }
 
@@ -359,7 +391,8 @@ impl IncrementalExport {
             while del_idx < diff.deleted.len() {
                 let blob_id = &diff.deleted[del_idx];
                 let epoch = source.blob_epoch(blob_id).unwrap_or(EpochId::ZERO).value();
-                writer.write_tombstone(sink, blob_id, epoch)
+                writer
+                    .write_tombstone(sink, blob_id, epoch)
                     .map_err(|e| ExofsError::from(e))?;
                 EXPORT_AUDIT.log_event(self.config.session_id, ExportEvent::TombstoneExported);
                 result.tombstones_exported = result.tombstones_exported.saturating_add(1);
@@ -391,7 +424,9 @@ pub struct SnapshotExport {
 impl SnapshotExport {
     pub fn new(session_id: u32, epoch_target: EpochId) -> Self {
         let cfg = IncrementalExportConfig::snapshot(session_id, epoch_target);
-        Self { export: IncrementalExport::new(cfg) }
+        Self {
+            export: IncrementalExport::new(cfg),
+        }
     }
 
     pub fn run<S, Src>(&self, sink: &mut S, source: &Src) -> ExofsResult<IncrementalExportResult>
@@ -416,17 +451,26 @@ pub struct MultiEpochExportSummary {
 
 impl MultiEpochExportSummary {
     pub const fn new() -> Self {
-        Self { archives_created: 0, total_blobs: 0, total_bytes: 0, total_errors: 0 }
+        Self {
+            archives_created: 0,
+            total_blobs: 0,
+            total_bytes: 0,
+            total_errors: 0,
+        }
     }
 
     pub fn merge(&mut self, result: &IncrementalExportResult) {
         self.archives_created = self.archives_created.saturating_add(1);
-        self.total_blobs = self.total_blobs.saturating_add(result.blobs_exported as u64);
+        self.total_blobs = self
+            .total_blobs
+            .saturating_add(result.blobs_exported as u64);
         self.total_bytes = self.total_bytes.saturating_add(result.bytes_exported);
         self.total_errors = self.total_errors.saturating_add(result.errors);
     }
 
-    pub fn has_errors(&self) -> bool { self.total_errors > 0 }
+    pub fn has_errors(&self) -> bool {
+        self.total_errors > 0
+    }
 }
 
 // ─── Source de test (mock) ────────────────────────────────────────────────────
@@ -440,7 +484,11 @@ pub struct MockBlobSource {
 
 impl MockBlobSource {
     pub fn new(current_epoch: EpochId) -> Self {
-        Self { blobs: Vec::new(), deleted: Vec::new(), current_epoch }
+        Self {
+            blobs: Vec::new(),
+            deleted: Vec::new(),
+            current_epoch,
+        }
     }
 
     pub fn add_blob(&mut self, id: [u8; 32], data: &[u8], epoch: EpochId) {
@@ -477,7 +525,8 @@ impl IncrementalBlobSource for MockBlobSource {
         for (id, data, _) in &self.blobs {
             if id == blob_id {
                 let mut v = Vec::new();
-                v.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+                v.try_reserve(data.len())
+                    .map_err(|_| ExofsError::NoMemory)?;
                 v.extend_from_slice(data);
                 return Ok(v);
             }
@@ -487,23 +536,29 @@ impl IncrementalBlobSource for MockBlobSource {
 
     fn blob_epoch(&self, blob_id: &[u8; 32]) -> ExofsResult<EpochId> {
         for (id, _, epoch) in &self.blobs {
-            if id == blob_id { return Ok(*epoch); }
+            if id == blob_id {
+                return Ok(*epoch);
+            }
         }
         for (id, epoch) in &self.deleted {
-            if id == blob_id { return Ok(*epoch); }
+            if id == blob_id {
+                return Ok(*epoch);
+            }
         }
         Err(ExofsError::ObjectNotFound)
     }
 
-    fn current_epoch(&self) -> EpochId { self.current_epoch }
+    fn current_epoch(&self) -> EpochId {
+        self.current_epoch
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::exoar_reader::{CollectingReceiver, ExoarReader, SliceSource};
     use super::super::exoar_writer::SinkVec;
-    use super::super::exoar_reader::{ExoarReader, SliceSource, CollectingReceiver};
+    use super::*;
 
     fn make_id(tag: u8) -> [u8; 32] {
         let mut id = [0u8; 32];
@@ -569,8 +624,8 @@ mod tests {
     #[test]
     fn test_incremental_only_new_blobs() {
         let mut src = MockBlobSource::new(EpochId(10));
-        src.add_blob(make_id(1), b"old", EpochId(2));  // avant base
-        src.add_blob(make_id(2), b"new", EpochId(7));  // dans plage
+        src.add_blob(make_id(1), b"old", EpochId(2)); // avant base
+        src.add_blob(make_id(2), b"new", EpochId(7)); // dans plage
         let cfg = IncrementalExportConfig::new(1, EpochId(5), EpochId(10));
         let exporter = IncrementalExport::new(cfg);
         let mut sink = SinkVec::new();
@@ -612,7 +667,9 @@ mod tests {
     #[test]
     fn test_max_blobs_limit() {
         let mut src = MockBlobSource::new(EpochId(5));
-        for i in 0..10u8 { src.add_blob(make_id(i), b"data", EpochId(1)); }
+        for i in 0..10u8 {
+            src.add_blob(make_id(i), b"data", EpochId(1));
+        }
         let mut cfg = IncrementalExportConfig::new(1, EpochId(0), EpochId(5));
         cfg.max_blobs = 3;
         let exporter = IncrementalExport::new(cfg);

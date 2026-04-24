@@ -13,10 +13,10 @@
 //
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU8, AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
-use crate::memory::dma::core::types::DmaChannelId;
 use crate::memory::dma::channels::manager::MAX_DMA_CHANNELS;
+use crate::memory::dma::core::types::DmaChannelId;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES
@@ -39,27 +39,27 @@ pub const MAX_AFFINITY_CPUS: usize = 64;
 #[repr(C, align(16))]
 struct AffinityEntry {
     /// CPU préféré pour IRQ et traitement des completions (255 = aucun).
-    preferred_cpu:  AtomicU8,
+    preferred_cpu: AtomicU8,
     /// Nœud NUMA préféré pour les allocations mémoire (255 = aucun).
-    numa_node:      AtomicU8,
+    numa_node: AtomicU8,
     /// Masque des CPUs autorisés à traiter les IRQ de ce canal (64 bits max).
     /// Bit i = 1 → CPU i peut traiter les interruptions de ce canal.
     /// 0 = non configuré (tous les CPUs autorisés).
-    cpu_mask:       AtomicU64,
+    cpu_mask: AtomicU64,
     /// Nombre de fois que ce canal a été sélectionné depuis son CPU préféré.
-    local_hits:     AtomicU32,
+    local_hits: AtomicU32,
     /// Nombre de fois que ce canal a été sélectionné depuis un CPU non-préféré.
-    remote_hits:    AtomicU32,
+    remote_hits: AtomicU32,
 }
 
 impl AffinityEntry {
     const fn new() -> Self {
         AffinityEntry {
             preferred_cpu: AtomicU8::new(CPU_AFFINITY_NONE),
-            numa_node:     AtomicU8::new(NUMA_NODE_NONE),
-            cpu_mask:      AtomicU64::new(0),
-            local_hits:    AtomicU32::new(0),
-            remote_hits:   AtomicU32::new(0),
+            numa_node: AtomicU8::new(NUMA_NODE_NONE),
+            cpu_mask: AtomicU64::new(0),
+            local_hits: AtomicU32::new(0),
+            remote_hits: AtomicU32::new(0),
         }
     }
 }
@@ -74,7 +74,7 @@ impl AffinityEntry {
 pub struct DmaAffinityTable {
     entries: [AffinityEntry; MAX_DMA_CHANNELS],
     /// Statistiques globales.
-    pub stats_local_total:  AtomicU64,
+    pub stats_local_total: AtomicU64,
     pub stats_remote_total: AtomicU64,
 }
 
@@ -88,7 +88,7 @@ impl DmaAffinityTable {
         const ENTRY: AffinityEntry = AffinityEntry::new();
         DmaAffinityTable {
             entries: [ENTRY; MAX_DMA_CHANNELS],
-            stats_local_total:  AtomicU64::new(0),
+            stats_local_total: AtomicU64::new(0),
             stats_remote_total: AtomicU64::new(0),
         }
     }
@@ -165,7 +165,9 @@ impl DmaAffinityTable {
     /// Met à jour les compteurs `local_hits` / `remote_hits` selon que
     /// `cpu_id` correspond au CPU préféré du canal ou non.
     pub fn record_usage(&self, channel: DmaChannelId, cpu_id: u8) {
-        if (channel.0 as usize) >= MAX_DMA_CHANNELS { return; }
+        if (channel.0 as usize) >= MAX_DMA_CHANNELS {
+            return;
+        }
         let entry = &self.entries[channel.0 as usize];
         let pref = entry.preferred_cpu.load(Ordering::Relaxed);
         if pref == CPU_AFFINITY_NONE || pref == cpu_id {
@@ -191,25 +193,25 @@ impl DmaAffinityTable {
     pub fn best_for_cpu<'a>(
         &self,
         candidates: &'a [DmaChannelId],
-        cpu_id:     u8,
+        cpu_id: u8,
     ) -> Option<DmaChannelId> {
-        let mut best_exact:   Option<DmaChannelId> = None;
+        let mut best_exact: Option<DmaChannelId> = None;
         let mut best_partial: Option<DmaChannelId> = None;
-        let mut best_any:     Option<DmaChannelId> = None;
+        let mut best_any: Option<DmaChannelId> = None;
 
         for &ch in candidates {
-            if (ch.0 as usize) >= MAX_DMA_CHANNELS { continue; }
+            if (ch.0 as usize) >= MAX_DMA_CHANNELS {
+                continue;
+            }
             let entry = &self.entries[ch.0 as usize];
-            let pref  = entry.preferred_cpu.load(Ordering::Relaxed);
-            let mask  = entry.cpu_mask.load(Ordering::Relaxed);
+            let pref = entry.preferred_cpu.load(Ordering::Relaxed);
+            let mask = entry.cpu_mask.load(Ordering::Relaxed);
 
             if pref != CPU_AFFINITY_NONE && pref == cpu_id {
                 best_exact = Some(ch);
                 break; // Match parfait, pas besoin de continuer.
             }
-            if mask != 0 && mask & (1u64 << (cpu_id as u64)) != 0
-                && best_partial.is_none()
-            {
+            if mask != 0 && mask & (1u64 << (cpu_id as u64)) != 0 && best_partial.is_none() {
                 best_partial = Some(ch);
             }
             if best_any.is_none() {
@@ -222,9 +224,9 @@ impl DmaAffinityTable {
 
     /// Taux de localité global : proportion des accès depuis le CPU préféré.
     pub fn locality_rate(&self) -> u32 {
-        let local  = self.stats_local_total.load(Ordering::Relaxed);
+        let local = self.stats_local_total.load(Ordering::Relaxed);
         let remote = self.stats_remote_total.load(Ordering::Relaxed);
-        let total  = local + remote;
+        let total = local + remote;
         if total == 0 {
             return 100;
         }

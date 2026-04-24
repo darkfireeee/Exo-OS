@@ -6,9 +6,7 @@
 
 use core::ops::{Index, IndexMut};
 
-use crate::memory::core::{
-    PhysAddr, VirtAddr, Frame, PageFlags, PAGE_SIZE, PHYS_MAP_BASE,
-};
+use crate::memory::core::{Frame, PageFlags, PhysAddr, VirtAddr, PAGE_SIZE, PHYS_MAP_BASE};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ENTRÉE DE TABLE DE PAGES (PageTableEntry)
@@ -29,46 +27,85 @@ impl PageTableEntry {
     pub const EMPTY: PageTableEntry = PageTableEntry(0);
 
     // ── Bits de flags ────────────────────────────────────────────────────────
-    pub const FLAG_PRESENT:       u64 = 1 << 0;
-    pub const FLAG_WRITABLE:      u64 = 1 << 1;
-    pub const FLAG_USER:          u64 = 1 << 2;
+    pub const FLAG_PRESENT: u64 = 1 << 0;
+    pub const FLAG_WRITABLE: u64 = 1 << 1;
+    pub const FLAG_USER: u64 = 1 << 2;
     pub const FLAG_WRITE_THROUGH: u64 = 1 << 3;
-    pub const FLAG_NO_CACHE:      u64 = 1 << 4;
-    pub const FLAG_ACCESSED:      u64 = 1 << 5;
-    pub const FLAG_DIRTY:         u64 = 1 << 6;
-    pub const FLAG_HUGE_PAGE:     u64 = 1 << 7;   // PSE bit dans PD/PDPT
-    pub const FLAG_GLOBAL:        u64 = 1 << 8;
-    pub const FLAG_COW:           u64 = 1 << 9;   // Disponible OS
-    pub const FLAG_PINNED:        u64 = 1 << 10;  // Disponible OS
-    pub const FLAG_NO_EXECUTE:    u64 = 1 << 63;
+    pub const FLAG_NO_CACHE: u64 = 1 << 4;
+    pub const FLAG_ACCESSED: u64 = 1 << 5;
+    pub const FLAG_DIRTY: u64 = 1 << 6;
+    pub const FLAG_HUGE_PAGE: u64 = 1 << 7; // PSE bit dans PD/PDPT
+    pub const FLAG_GLOBAL: u64 = 1 << 8;
+    pub const FLAG_COW: u64 = 1 << 9; // Disponible OS
+    pub const FLAG_PINNED: u64 = 1 << 10; // Disponible OS
+    pub const FLAG_NO_EXECUTE: u64 = 1 << 63;
 
     /// Masque des bits d'adresse physique.
     const PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 
-    #[inline] pub fn new(frame: Frame, flags: u64) -> Self {
+    #[inline]
+    pub fn new(frame: Frame, flags: u64) -> Self {
         PageTableEntry(frame.start_address().as_u64() | flags)
     }
 
-    #[inline] pub fn from_raw(raw: u64) -> Self { PageTableEntry(raw) }
-    #[inline] pub fn raw(self) -> u64 { self.0 }
-    #[inline] pub fn is_present(self)   -> bool { self.0 & Self::FLAG_PRESENT       != 0 }
-    #[inline] pub fn is_writable(self)  -> bool { self.0 & Self::FLAG_WRITABLE      != 0 }
-    #[inline] pub fn is_user(self)      -> bool { self.0 & Self::FLAG_USER          != 0 }
-    #[inline] pub fn is_huge(self)      -> bool { self.0 & Self::FLAG_HUGE_PAGE     != 0 }
-    #[inline] pub fn is_global(self)    -> bool { self.0 & Self::FLAG_GLOBAL        != 0 }
-    #[inline] pub fn is_no_execute(self)-> bool { self.0 & Self::FLAG_NO_EXECUTE    != 0 }
-    #[inline] pub fn is_cow(self)       -> bool { self.0 & Self::FLAG_COW           != 0 }
-    #[inline] pub fn is_pinned(self)    -> bool { self.0 & Self::FLAG_PINNED        != 0 }
-    #[inline] pub fn is_accessed(self)  -> bool { self.0 & Self::FLAG_ACCESSED      != 0 }
-    #[inline] pub fn is_dirty(self)     -> bool { self.0 & Self::FLAG_DIRTY         != 0 }
+    #[inline]
+    pub fn from_raw(raw: u64) -> Self {
+        PageTableEntry(raw)
+    }
+    #[inline]
+    pub fn raw(self) -> u64 {
+        self.0
+    }
+    #[inline]
+    pub fn is_present(self) -> bool {
+        self.0 & Self::FLAG_PRESENT != 0
+    }
+    #[inline]
+    pub fn is_writable(self) -> bool {
+        self.0 & Self::FLAG_WRITABLE != 0
+    }
+    #[inline]
+    pub fn is_user(self) -> bool {
+        self.0 & Self::FLAG_USER != 0
+    }
+    #[inline]
+    pub fn is_huge(self) -> bool {
+        self.0 & Self::FLAG_HUGE_PAGE != 0
+    }
+    #[inline]
+    pub fn is_global(self) -> bool {
+        self.0 & Self::FLAG_GLOBAL != 0
+    }
+    #[inline]
+    pub fn is_no_execute(self) -> bool {
+        self.0 & Self::FLAG_NO_EXECUTE != 0
+    }
+    #[inline]
+    pub fn is_cow(self) -> bool {
+        self.0 & Self::FLAG_COW != 0
+    }
+    #[inline]
+    pub fn is_pinned(self) -> bool {
+        self.0 & Self::FLAG_PINNED != 0
+    }
+    #[inline]
+    pub fn is_accessed(self) -> bool {
+        self.0 & Self::FLAG_ACCESSED != 0
+    }
+    #[inline]
+    pub fn is_dirty(self) -> bool {
+        self.0 & Self::FLAG_DIRTY != 0
+    }
 
     /// Adresse physique encodée dans cette entrée.
-    #[inline] pub fn phys_addr(self) -> PhysAddr {
+    #[inline]
+    pub fn phys_addr(self) -> PhysAddr {
         PhysAddr::new(self.0 & Self::PHYS_MASK)
     }
 
     /// Frame physique pointé par cette entrée.
-    #[inline] pub fn frame(self) -> Option<Frame> {
+    #[inline]
+    pub fn frame(self) -> Option<Frame> {
         if self.is_present() {
             Some(Frame::containing(self.phys_addr()))
         } else {
@@ -77,49 +114,104 @@ impl PageTableEntry {
     }
 
     /// Active un flag.
-    #[inline] pub fn set_flag(&mut self, flag: u64)   { self.0 |=  flag; }
+    #[inline]
+    pub fn set_flag(&mut self, flag: u64) {
+        self.0 |= flag;
+    }
     /// Désactive un flag.
-    #[inline] pub fn clear_flag(&mut self, flag: u64) { self.0 &= !flag; }
+    #[inline]
+    pub fn clear_flag(&mut self, flag: u64) {
+        self.0 &= !flag;
+    }
 
     /// Efface complètement l'entrée.
-    #[inline] pub fn clear(&mut self) { self.0 = 0; }
+    #[inline]
+    pub fn clear(&mut self) {
+        self.0 = 0;
+    }
 
     /// Convertit les PageFlags kernel en bits d'entrée x86_64.
     pub fn from_page_flags(frame: Frame, flags: PageFlags) -> Self {
         let mut raw = frame.start_address().as_u64();
-        if flags.contains(PageFlags::PRESENT)      { raw |= Self::FLAG_PRESENT; }
-        if flags.contains(PageFlags::WRITABLE)     { raw |= Self::FLAG_WRITABLE; }
-        if flags.contains(PageFlags::USER)         { raw |= Self::FLAG_USER; }
-        if flags.contains(PageFlags::WRITE_THROUGH){ raw |= Self::FLAG_WRITE_THROUGH; }
-        if flags.contains(PageFlags::NO_CACHE)     { raw |= Self::FLAG_NO_CACHE; }
-        if flags.contains(PageFlags::GLOBAL)       { raw |= Self::FLAG_GLOBAL; }
-        if flags.contains(PageFlags::NO_EXECUTE)   { raw |= Self::FLAG_NO_EXECUTE; }
-        if flags.contains(PageFlags::COW)          { raw |= Self::FLAG_COW; }
-        if flags.contains(PageFlags::PINNED)       { raw |= Self::FLAG_PINNED; }
+        if flags.contains(PageFlags::PRESENT) {
+            raw |= Self::FLAG_PRESENT;
+        }
+        if flags.contains(PageFlags::WRITABLE) {
+            raw |= Self::FLAG_WRITABLE;
+        }
+        if flags.contains(PageFlags::USER) {
+            raw |= Self::FLAG_USER;
+        }
+        if flags.contains(PageFlags::WRITE_THROUGH) {
+            raw |= Self::FLAG_WRITE_THROUGH;
+        }
+        if flags.contains(PageFlags::NO_CACHE) {
+            raw |= Self::FLAG_NO_CACHE;
+        }
+        if flags.contains(PageFlags::GLOBAL) {
+            raw |= Self::FLAG_GLOBAL;
+        }
+        if flags.contains(PageFlags::NO_EXECUTE) {
+            raw |= Self::FLAG_NO_EXECUTE;
+        }
+        if flags.contains(PageFlags::COW) {
+            raw |= Self::FLAG_COW;
+        }
+        if flags.contains(PageFlags::PINNED) {
+            raw |= Self::FLAG_PINNED;
+        }
         PageTableEntry(raw)
     }
 
     /// Extrait les PageFlags depuis une entrée.
     pub fn to_page_flags(self) -> PageFlags {
         let mut f = PageFlags::EMPTY;
-        if self.0 & Self::FLAG_PRESENT       != 0 { f = f.set(PageFlags::PRESENT); }
-        if self.0 & Self::FLAG_WRITABLE      != 0 { f = f.set(PageFlags::WRITABLE); }
-        if self.0 & Self::FLAG_USER          != 0 { f = f.set(PageFlags::USER); }
-        if self.0 & Self::FLAG_WRITE_THROUGH != 0 { f = f.set(PageFlags::WRITE_THROUGH); }
-        if self.0 & Self::FLAG_NO_CACHE      != 0 { f = f.set(PageFlags::NO_CACHE); }
-        if self.0 & Self::FLAG_ACCESSED      != 0 { f = f.set(PageFlags::ACCESSED); }
-        if self.0 & Self::FLAG_DIRTY         != 0 { f = f.set(PageFlags::DIRTY); }
-        if self.0 & Self::FLAG_GLOBAL        != 0 { f = f.set(PageFlags::GLOBAL); }
-        if self.0 & Self::FLAG_NO_EXECUTE    != 0 { f = f.set(PageFlags::NO_EXECUTE); }
-        if self.0 & Self::FLAG_COW           != 0 { f = f.set(PageFlags::COW); }
-        if self.0 & Self::FLAG_PINNED        != 0 { f = f.set(PageFlags::PINNED); }
+        if self.0 & Self::FLAG_PRESENT != 0 {
+            f = f.set(PageFlags::PRESENT);
+        }
+        if self.0 & Self::FLAG_WRITABLE != 0 {
+            f = f.set(PageFlags::WRITABLE);
+        }
+        if self.0 & Self::FLAG_USER != 0 {
+            f = f.set(PageFlags::USER);
+        }
+        if self.0 & Self::FLAG_WRITE_THROUGH != 0 {
+            f = f.set(PageFlags::WRITE_THROUGH);
+        }
+        if self.0 & Self::FLAG_NO_CACHE != 0 {
+            f = f.set(PageFlags::NO_CACHE);
+        }
+        if self.0 & Self::FLAG_ACCESSED != 0 {
+            f = f.set(PageFlags::ACCESSED);
+        }
+        if self.0 & Self::FLAG_DIRTY != 0 {
+            f = f.set(PageFlags::DIRTY);
+        }
+        if self.0 & Self::FLAG_GLOBAL != 0 {
+            f = f.set(PageFlags::GLOBAL);
+        }
+        if self.0 & Self::FLAG_NO_EXECUTE != 0 {
+            f = f.set(PageFlags::NO_EXECUTE);
+        }
+        if self.0 & Self::FLAG_COW != 0 {
+            f = f.set(PageFlags::COW);
+        }
+        if self.0 & Self::FLAG_PINNED != 0 {
+            f = f.set(PageFlags::PINNED);
+        }
         f
     }
 }
 
 impl core::fmt::Debug for PageTableEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "PTE({:#018x} phys={:#x} flags={:?})", self.0, self.0 & Self::PHYS_MASK, self.to_page_flags())
+        write!(
+            f,
+            "PTE({:#018x} phys={:#x} flags={:?})",
+            self.0,
+            self.0 & Self::PHYS_MASK,
+            self.to_page_flags()
+        )
     }
 }
 
@@ -136,22 +228,37 @@ pub struct PageTable {
 impl PageTable {
     /// Crée une table vide (toutes les entrées = 0).
     pub const fn new() -> Self {
-        PageTable { entries: [PageTableEntry::EMPTY; 512] }
+        PageTable {
+            entries: [PageTableEntry::EMPTY; 512],
+        }
     }
 
     /// Efface toutes les entrées.
     pub fn zero(&mut self) {
-        for e in &mut self.entries { e.clear(); }
+        for e in &mut self.entries {
+            e.clear();
+        }
     }
 
     /// Efface les entrées user (indices 0..256).
     pub fn zero_user_half(&mut self) {
-        for e in &mut self.entries[0..256] { e.clear(); }
+        for e in &mut self.entries[0..256] {
+            e.clear();
+        }
     }
 
-    #[inline] pub fn iter(&self)     -> core::slice::Iter<'_, PageTableEntry>     { self.entries.iter() }
-    #[inline] pub fn iter_mut(&mut self) -> core::slice::IterMut<'_, PageTableEntry> { self.entries.iter_mut() }
-    #[inline] pub fn len(&self) -> usize { 512 }
+    #[inline]
+    pub fn iter(&self) -> core::slice::Iter<'_, PageTableEntry> {
+        self.entries.iter()
+    }
+    #[inline]
+    pub fn iter_mut(&mut self) -> core::slice::IterMut<'_, PageTableEntry> {
+        self.entries.iter_mut()
+    }
+    #[inline]
+    pub fn len(&self) -> usize {
+        512
+    }
 
     /// Adresse physique de cette table (via le physmap).
     pub fn phys_addr(&self) -> PhysAddr {
@@ -161,7 +268,9 @@ impl PageTable {
             PhysAddr::new(virt - PHYS_MAP_BASE.as_u64())
         } else {
             // Fallback pour les tables dans le segment .bss kernel.
-            PhysAddr::new(virt - crate::memory::core::layout::KERNEL_START.as_u64() + KERNEL_PHYS_BASE)
+            PhysAddr::new(
+                virt - crate::memory::core::layout::KERNEL_START.as_u64() + KERNEL_PHYS_BASE,
+            )
         }
     }
 }
@@ -169,10 +278,17 @@ impl PageTable {
 /// Base physique du kernel (supposée 1 MiB pour x86_64 standard).
 const KERNEL_PHYS_BASE: u64 = 0x0010_0000;
 
-impl Index<usize>    for PageTable { type Output = PageTableEntry;
-    fn index(&self, i: usize) -> &Self::Output { &self.entries[i] } }
+impl Index<usize> for PageTable {
+    type Output = PageTableEntry;
+    fn index(&self, i: usize) -> &Self::Output {
+        &self.entries[i]
+    }
+}
 impl IndexMut<usize> for PageTable {
-    fn index_mut(&mut self, i: usize) -> &mut Self::Output { &mut self.entries[i] } }
+    fn index_mut(&mut self, i: usize) -> &mut Self::Output {
+        &mut self.entries[i]
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NIVEAUX DE TABLE
@@ -218,9 +334,9 @@ impl PageTableLevel {
     pub fn page_size(self) -> usize {
         match self {
             PageTableLevel::L4 => 512 * 1024 * 1024 * 1024, // 512 GiB (non utilisé)
-            PageTableLevel::L3 => 1024 * 1024 * 1024,        // 1 GiB
-            PageTableLevel::L2 => 2 * 1024 * 1024,           // 2 MiB
-            PageTableLevel::L1 => PAGE_SIZE,                  // 4 KiB
+            PageTableLevel::L3 => 1024 * 1024 * 1024,       // 1 GiB
+            PageTableLevel::L2 => 2 * 1024 * 1024,          // 2 MiB
+            PageTableLevel::L1 => PAGE_SIZE,                // 4 KiB
         }
     }
 }
@@ -265,7 +381,9 @@ pub unsafe fn phys_to_table_mut<'a>(phys: PhysAddr) -> &'a mut PageTable {
 pub fn read_cr3() -> PhysAddr {
     let val: u64;
     // SAFETY: lecture de CR3, opération x86_64 standard au niveau ring 0.
-    unsafe { core::arch::asm!("mov {}, cr3", out(reg) val, options(nomem, nostack)); }
+    unsafe {
+        core::arch::asm!("mov {}, cr3", out(reg) val, options(nomem, nostack));
+    }
     PhysAddr::new(val & !0xFFF)
 }
 

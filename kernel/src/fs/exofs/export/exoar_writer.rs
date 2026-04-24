@@ -15,16 +15,13 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_* / wrapping_* sur tous les compteurs.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::exoar_format::{
-    ExoarHeader, ExoarEntryHeader, ExoarFooter,
-    ARCHIVE_FLAG_INCREMENTAL, ENTRY_FLAG_TOMBSTONE,
-    EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD,
-    crc32c_update, crc32c_compute,
+    crc32c_compute, crc32c_update, ExoarEntryHeader, ExoarFooter, ExoarHeader,
+    ARCHIVE_FLAG_INCREMENTAL, ENTRY_FLAG_TOMBSTONE, EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD,
 };
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 use core::mem::size_of;
 
 // ─── Trait de sortie ─────────────────────────────────────────────────────────
@@ -60,12 +57,12 @@ pub enum ExoarWriteError {
 impl From<ExoarWriteError> for ExofsError {
     fn from(e: ExoarWriteError) -> Self {
         match e {
-            ExoarWriteError::AlreadyFinalized   => ExofsError::InvalidArgument,
-            ExoarWriteError::NotStarted         => ExofsError::InvalidArgument,
-            ExoarWriteError::TooManyEntries     => ExofsError::OffsetOverflow,
-            ExoarWriteError::PayloadTooLarge    => ExofsError::OffsetOverflow,
-            ExoarWriteError::OutOfMemory        => ExofsError::NoMemory,
-            ExoarWriteError::IoError            => ExofsError::IoFailed,
+            ExoarWriteError::AlreadyFinalized => ExofsError::InvalidArgument,
+            ExoarWriteError::NotStarted => ExofsError::InvalidArgument,
+            ExoarWriteError::TooManyEntries => ExofsError::OffsetOverflow,
+            ExoarWriteError::PayloadTooLarge => ExofsError::OffsetOverflow,
+            ExoarWriteError::OutOfMemory => ExofsError::NoMemory,
+            ExoarWriteError::IoError => ExofsError::IoFailed,
         }
     }
 }
@@ -206,7 +203,9 @@ impl ExoarWriter {
     }
 
     /// Retourne les statistiques courantes (lecture seule).
-    pub fn stats(&self) -> &ExoarWriteStats { &self.stats }
+    pub fn stats(&self) -> &ExoarWriteStats {
+        &self.stats
+    }
 
     /// Écrit l'en-tête de l'archive. Doit être appelé en premier.
     /// RÈGLE 8 : magic écrit EN PREMIER.
@@ -220,7 +219,8 @@ impl ExoarWriter {
             self.options.epoch_target,
         );
         let bytes = hdr.as_bytes();
-        sink.write_all(bytes).map_err(|_| ExoarWriteError::IoError)?;
+        sink.write_all(bytes)
+            .map_err(|_| ExoarWriteError::IoError)?;
         self.stats.running_crc = crc32c_update(self.stats.running_crc, bytes);
         self.stats.archive_bytes = self.stats.archive_bytes.saturating_add(bytes.len() as u64);
         self.state = WriterState::Writing;
@@ -260,9 +260,13 @@ impl ExoarWriter {
         ehdr.epoch = epoch;
 
         let hdr_bytes = ehdr.as_bytes();
-        sink.write_all(hdr_bytes).map_err(|_| ExoarWriteError::IoError)?;
+        sink.write_all(hdr_bytes)
+            .map_err(|_| ExoarWriteError::IoError)?;
         self.stats.running_crc = crc32c_update(self.stats.running_crc, hdr_bytes);
-        self.stats.archive_bytes = self.stats.archive_bytes.saturating_add(hdr_bytes.len() as u64);
+        self.stats.archive_bytes = self
+            .stats
+            .archive_bytes
+            .saturating_add(hdr_bytes.len() as u64);
 
         if !data.is_empty() {
             sink.write_all(data).map_err(|_| ExoarWriteError::IoError)?;
@@ -282,7 +286,9 @@ impl ExoarWriter {
         blob_id: &[u8; 32],
         epoch: u64,
     ) -> Result<(), ExoarWriteError> {
-        if !self.options.write_tombstones { return Ok(()); }
+        if !self.options.write_tombstones {
+            return Ok(());
+        }
         if self.state != WriterState::Writing {
             return Err(if self.state == WriterState::Finalized {
                 ExoarWriteError::AlreadyFinalized
@@ -299,15 +305,22 @@ impl ExoarWriter {
         ehdr.epoch = epoch;
 
         let hdr_bytes = ehdr.as_bytes();
-        sink.write_all(hdr_bytes).map_err(|_| ExoarWriteError::IoError)?;
+        sink.write_all(hdr_bytes)
+            .map_err(|_| ExoarWriteError::IoError)?;
         self.stats.running_crc = crc32c_update(self.stats.running_crc, hdr_bytes);
-        self.stats.archive_bytes = self.stats.archive_bytes.saturating_add(hdr_bytes.len() as u64);
+        self.stats.archive_bytes = self
+            .stats
+            .archive_bytes
+            .saturating_add(hdr_bytes.len() as u64);
         self.stats.tombstones_written = self.stats.tombstones_written.saturating_add(1);
         Ok(())
     }
 
     /// Finalise l'archive (écrit le footer). Ne peut être appelé qu'une fois.
-    pub fn finalize<S: ArchiveSink>(&mut self, sink: &mut S) -> Result<ExoarWriteStats, ExoarWriteError> {
+    pub fn finalize<S: ArchiveSink>(
+        &mut self,
+        sink: &mut S,
+    ) -> Result<ExoarWriteStats, ExoarWriteError> {
         if self.state == WriterState::Finalized {
             return Err(ExoarWriteError::AlreadyFinalized);
         }
@@ -315,21 +328,30 @@ impl ExoarWriter {
             return Err(ExoarWriteError::NotStarted);
         }
 
-        let total_size = self.stats.archive_bytes.saturating_add(size_of::<ExoarFooter>() as u64);
+        let total_size = self
+            .stats
+            .archive_bytes
+            .saturating_add(size_of::<ExoarFooter>() as u64);
         let ftr = ExoarFooter::new(
             self.stats.total_entries(),
             self.stats.running_crc,
             total_size,
         );
         let ftr_bytes = ftr.as_bytes();
-        sink.write_all(ftr_bytes).map_err(|_| ExoarWriteError::IoError)?;
-        self.stats.archive_bytes = self.stats.archive_bytes.saturating_add(ftr_bytes.len() as u64);
+        sink.write_all(ftr_bytes)
+            .map_err(|_| ExoarWriteError::IoError)?;
+        self.stats.archive_bytes = self
+            .stats
+            .archive_bytes
+            .saturating_add(ftr_bytes.len() as u64);
         self.state = WriterState::Finalized;
         Ok(self.stats)
     }
 
     /// Retourne true si l'archive est finalisée.
-    pub fn is_finalized(&self) -> bool { self.state == WriterState::Finalized }
+    pub fn is_finalized(&self) -> bool {
+        self.state == WriterState::Finalized
+    }
 }
 
 // ─── Écrivain bufferisé ───────────────────────────────────────────────────────
@@ -350,15 +372,25 @@ impl ExoarBufferedWriter {
         }
     }
 
-    pub fn with_capacity(options: ExoarWriteOptions, capacity: usize) -> Result<Self, ExoarWriteError> {
+    pub fn with_capacity(
+        options: ExoarWriteOptions,
+        capacity: usize,
+    ) -> Result<Self, ExoarWriteError> {
         let mut buffer = Vec::new();
-        buffer.try_reserve(capacity).map_err(|_| ExoarWriteError::OutOfMemory)?;
-        Ok(Self { inner: ExoarWriter::new(options), buffer })
+        buffer
+            .try_reserve(capacity)
+            .map_err(|_| ExoarWriteError::OutOfMemory)?;
+        Ok(Self {
+            inner: ExoarWriter::new(options),
+            buffer,
+        })
     }
 
     /// Commence l'écriture de l'archive.
     pub fn begin(&mut self) -> Result<(), ExoarWriteError> {
-        let mut sink = BufSink { buf: &mut self.buffer };
+        let mut sink = BufSink {
+            buf: &mut self.buffer,
+        };
         self.inner.begin(&mut sink)
     }
 
@@ -370,28 +402,43 @@ impl ExoarBufferedWriter {
         flags: u8,
         epoch: u64,
     ) -> Result<(), ExoarWriteError> {
-        let mut sink = BufSink { buf: &mut self.buffer };
-        self.inner.write_blob(&mut sink, blob_id, data, flags, epoch)
+        let mut sink = BufSink {
+            buf: &mut self.buffer,
+        };
+        self.inner
+            .write_blob(&mut sink, blob_id, data, flags, epoch)
     }
 
     /// Écrit un tombstone dans le buffer.
-    pub fn write_tombstone(&mut self, blob_id: &[u8; 32], epoch: u64) -> Result<(), ExoarWriteError> {
-        let mut sink = BufSink { buf: &mut self.buffer };
+    pub fn write_tombstone(
+        &mut self,
+        blob_id: &[u8; 32],
+        epoch: u64,
+    ) -> Result<(), ExoarWriteError> {
+        let mut sink = BufSink {
+            buf: &mut self.buffer,
+        };
         self.inner.write_tombstone(&mut sink, blob_id, epoch)
     }
 
     /// Finalise l'archive et retourne le buffer complet.
     pub fn finalize(mut self) -> Result<(Vec<u8>, ExoarWriteStats), ExoarWriteError> {
-        let mut sink = BufSink { buf: &mut self.buffer };
+        let mut sink = BufSink {
+            buf: &mut self.buffer,
+        };
         let stats = self.inner.finalize(&mut sink)?;
         Ok((self.buffer, stats))
     }
 
     /// Retourne une référence au buffer sans finaliser.
-    pub fn buffer(&self) -> &[u8] { &self.buffer }
+    pub fn buffer(&self) -> &[u8] {
+        &self.buffer
+    }
 
     /// Retourne les statistiques courantes.
-    pub fn stats(&self) -> &ExoarWriteStats { self.inner.stats() }
+    pub fn stats(&self) -> &ExoarWriteStats {
+        self.inner.stats()
+    }
 }
 
 /// Sink interne vers un Vec<u8> (utilisé par ExoarBufferedWriter).
@@ -401,12 +448,16 @@ struct BufSink<'a> {
 
 impl<'a> ArchiveSink for BufSink<'a> {
     fn write_all(&mut self, data: &[u8]) -> ExofsResult<()> {
-        self.buf.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        self.buf
+            .try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         self.buf.extend_from_slice(data);
         Ok(())
     }
 
-    fn bytes_written(&self) -> u64 { self.buf.len() as u64 }
+    fn bytes_written(&self) -> u64 {
+        self.buf.len() as u64
+    }
 }
 
 // ─── SinkVec (implémentation publique de ArchiveSink) ────────────────────────
@@ -418,7 +469,9 @@ pub struct SinkVec {
 }
 
 impl SinkVec {
-    pub fn new() -> Self { Self { buf: Vec::new() } }
+    pub fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
 
     pub fn with_capacity(cap: usize) -> Result<Self, ExofsError> {
         let mut buf = Vec::new();
@@ -426,20 +479,32 @@ impl SinkVec {
         Ok(Self { buf })
     }
 
-    pub fn into_inner(self) -> Vec<u8> { self.buf }
-    pub fn as_slice(&self) -> &[u8] { &self.buf }
-    pub fn len(&self) -> usize { self.buf.len() }
-    pub fn is_empty(&self) -> bool { self.buf.is_empty() }
+    pub fn into_inner(self) -> Vec<u8> {
+        self.buf
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buf
+    }
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
 }
 
 impl ArchiveSink for SinkVec {
     fn write_all(&mut self, data: &[u8]) -> ExofsResult<()> {
-        self.buf.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+        self.buf
+            .try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         self.buf.extend_from_slice(data);
         Ok(())
     }
 
-    fn bytes_written(&self) -> u64 { self.buf.len() as u64 }
+    fn bytes_written(&self) -> u64 {
+        self.buf.len() as u64
+    }
 }
 
 // ─── blake3 inline ────────────────────────────────────────────────────────────
@@ -455,9 +520,13 @@ pub fn compute_blob_id(data: &[u8]) -> [u8; 32] {
     let mut i = 0usize;
     while i < data.len() {
         let b = data[i] as u64;
-        state[0] = state[0].wrapping_add(b).wrapping_mul(0x9E37_79B9_7F4A_7C15u64);
+        state[0] = state[0]
+            .wrapping_add(b)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15u64);
         state[1] ^= state[0].rotate_left(23);
-        state[2] = state[2].wrapping_add(state[1]).wrapping_mul(0x6C62_272E_07BB_0142u64);
+        state[2] = state[2]
+            .wrapping_add(state[1])
+            .wrapping_mul(0x6C62_272E_07BB_0142u64);
         state[3] ^= state[2].rotate_right(17);
         state[0] = state[0].wrapping_add(state[3]);
         i = i.wrapping_add(1);
@@ -468,7 +537,10 @@ pub fn compute_blob_id(data: &[u8]) -> [u8; 32] {
         let bytes = state[idx].to_le_bytes();
         let base = idx.wrapping_mul(8);
         let mut k = 0usize;
-        while k < 8 { out[base.wrapping_add(k)] = bytes[k]; k = k.wrapping_add(1); }
+        while k < 8 {
+            out[base.wrapping_add(k)] = bytes[k];
+            k = k.wrapping_add(1);
+        }
         idx = idx.wrapping_add(1);
     }
     out
@@ -477,8 +549,8 @@ pub fn compute_blob_id(data: &[u8]) -> [u8; 32] {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
+    use super::super::exoar_reader::{CollectingReceiver, ExoarReader, SliceSource};
     use super::*;
-    use super::super::exoar_reader::{ExoarReader, SliceSource, CollectingReceiver};
 
     fn make_blob_id(tag: u8) -> [u8; 32] {
         let mut id = [0u8; 32];
@@ -620,7 +692,8 @@ mod tests {
         let mut w = ExoarBufferedWriter::new(ExoarWriteOptions::default());
         w.begin().expect("begin");
         let size_after_header = w.buffer().len();
-        w.write_blob(&make_blob_id(1), b"payload", 0, 0).expect("write");
+        w.write_blob(&make_blob_id(1), b"payload", 0, 0)
+            .expect("write");
         let size_after_entry = w.buffer().len();
         assert!(size_after_entry > size_after_header);
     }

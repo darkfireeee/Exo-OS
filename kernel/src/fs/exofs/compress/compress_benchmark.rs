@@ -7,12 +7,11 @@
 //! RÈGLE ARITH-02 : arithmétique checked/saturating.
 //! RÈGLE RECUR-01 : aucune récursivité.
 
-
-use alloc::vec::Vec;
 use crate::fs::exofs::compress::algorithm::CompressionAlgorithm;
 use crate::fs::exofs::compress::lz4_wrapper::Lz4Compressor;
 use crate::fs::exofs::compress::zstd_wrapper::ZstdCompressor;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BenchResult
@@ -21,18 +20,20 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 /// Résultat d'un benchmark de compression pour un algorithme.
 #[derive(Debug, Clone)]
 pub struct BenchResult {
-    pub algorithm:        CompressionAlgorithm,
-    pub compressed_size:  usize,
-    pub compress_ticks:   u64,
+    pub algorithm: CompressionAlgorithm,
+    pub compressed_size: usize,
+    pub compress_ticks: u64,
     pub decompress_ticks: u64,
     /// Ratio compressé/original en % (100 = aucun bénéfice).
-    pub ratio_percent:    u64,
-    pub original_size:    usize,
+    pub ratio_percent: u64,
+    pub original_size: usize,
 }
 
 impl BenchResult {
     /// `true` si la compression apporte un bénéfice réel (< 95%).
-    pub fn is_beneficial(&self) -> bool { self.ratio_percent < 95 }
+    pub fn is_beneficial(&self) -> bool {
+        self.ratio_percent < 95
+    }
 
     /// Économie en bytes (saturating).
     pub fn bytes_saved(&self) -> usize {
@@ -53,8 +54,8 @@ impl BenchResult {
 /// Bilan comparatif LZ4 vs Zstd.
 #[derive(Debug, Clone)]
 pub struct BenchSummary {
-    pub lz4:             BenchResult,
-    pub zstd:            BenchResult,
+    pub lz4: BenchResult,
+    pub zstd: BenchResult,
     pub is_compressible: bool,
 }
 
@@ -88,7 +89,10 @@ impl BenchSummary {
 
     /// `true` si LZ4 est équivalent ou meilleur que Zstd (gain Zstd < 5%).
     pub fn prefer_lz4(&self) -> bool {
-        let zstd_gain = self.lz4.ratio_percent.saturating_sub(self.zstd.ratio_percent);
+        let zstd_gain = self
+            .lz4
+            .ratio_percent
+            .saturating_sub(self.zstd.ratio_percent);
         zstd_gain < 5
     }
 }
@@ -103,17 +107,18 @@ pub struct CompressBenchmark;
 impl CompressBenchmark {
     /// Benchmark LZ4 + Zstd sur `sample`, retourne le bilan comparatif.
     pub fn run(sample: &[u8]) -> ExofsResult<BenchSummary> {
-        let lz4  = Self::bench_algo(sample, CompressionAlgorithm::Lz4)?;
+        let lz4 = Self::bench_algo(sample, CompressionAlgorithm::Lz4)?;
         let zstd = Self::bench_algo(sample, CompressionAlgorithm::Zstd)?;
         let is_compressible = lz4.is_beneficial() || zstd.is_beneficial();
-        Ok(BenchSummary { lz4, zstd, is_compressible })
+        Ok(BenchSummary {
+            lz4,
+            zstd,
+            is_compressible,
+        })
     }
 
     /// Benchmark d'un algorithme unique.
-    pub fn bench_algo(
-        data: &[u8],
-        algo: CompressionAlgorithm,
-    ) -> ExofsResult<BenchResult> {
+    pub fn bench_algo(data: &[u8], algo: CompressionAlgorithm) -> ExofsResult<BenchResult> {
         let original_size = data.len();
         let mut compressed = Vec::new();
 
@@ -126,11 +131,13 @@ impl CompressBenchmark {
                 ZstdCompressor::compress(data, &mut compressed, 3)?;
             }
             CompressionAlgorithm::None => {
-                compressed.try_reserve(data.len()).map_err(|_| ExofsError::NoMemory)?;
+                compressed
+                    .try_reserve(data.len())
+                    .map_err(|_| ExofsError::NoMemory)?;
                 compressed.extend_from_slice(data);
             }
         }
-        let compress_ticks  = crate::arch::time::read_ticks().saturating_sub(t0);
+        let compress_ticks = crate::arch::time::read_ticks().saturating_sub(t0);
         let compressed_size = compressed.len();
 
         let mut decompressed = Vec::new();
@@ -174,9 +181,13 @@ impl CompressBenchmark {
 
     /// Recommande l'algorithme optimal pour un échantillon donné.
     pub fn recommend(sample: &[u8]) -> ExofsResult<CompressionAlgorithm> {
-        if sample.is_empty() { return Ok(CompressionAlgorithm::None); }
+        if sample.is_empty() {
+            return Ok(CompressionAlgorithm::None);
+        }
         let summary = Self::run(sample)?;
-        if !summary.is_compressible { return Ok(CompressionAlgorithm::None); }
+        if !summary.is_compressible {
+            return Ok(CompressionAlgorithm::None);
+        }
         Ok(summary.best_algorithm())
     }
 }
@@ -195,72 +206,88 @@ mod tests {
         v
     }
 
-    #[test] fn test_bench_baseline_ratio_100() {
+    #[test]
+    fn test_bench_baseline_ratio_100() {
         let data = compressible(1024);
-        let r    = CompressBenchmark::bench_baseline(&data).unwrap();
+        let r = CompressBenchmark::bench_baseline(&data).unwrap();
         assert_eq!(r.ratio_percent, 100);
     }
 
-    #[test] fn test_bench_algo_lz4() {
+    #[test]
+    fn test_bench_algo_lz4() {
         let data = compressible(2048);
-        let r    = CompressBenchmark::bench_algo(&data, CompressionAlgorithm::Lz4).unwrap();
+        let r = CompressBenchmark::bench_algo(&data, CompressionAlgorithm::Lz4).unwrap();
         assert_eq!(r.algorithm, CompressionAlgorithm::Lz4);
         assert!(r.ratio_percent < 100);
     }
 
-    #[test] fn test_bench_algo_zstd() {
+    #[test]
+    fn test_bench_algo_zstd() {
         let data = compressible(2048);
-        let r    = CompressBenchmark::bench_algo(&data, CompressionAlgorithm::Zstd).unwrap();
+        let r = CompressBenchmark::bench_algo(&data, CompressionAlgorithm::Zstd).unwrap();
         assert_eq!(r.algorithm, CompressionAlgorithm::Zstd);
         assert!(r.ratio_percent < 100);
     }
 
-    #[test] fn test_bench_run_both_algos() {
-        let data    = compressible(4096);
+    #[test]
+    fn test_bench_run_both_algos() {
+        let data = compressible(4096);
         let summary = CompressBenchmark::run(&data).unwrap();
-        assert_eq!(summary.lz4.algorithm,  CompressionAlgorithm::Lz4);
+        assert_eq!(summary.lz4.algorithm, CompressionAlgorithm::Lz4);
         assert_eq!(summary.zstd.algorithm, CompressionAlgorithm::Zstd);
     }
 
-    #[test] fn test_is_compressible_uniform() {
+    #[test]
+    fn test_is_compressible_uniform() {
         let summary = CompressBenchmark::run(&compressible(4096)).unwrap();
         assert!(summary.is_compressible);
     }
 
-    #[test] fn test_recommend_empty() {
+    #[test]
+    fn test_recommend_empty() {
         let r = CompressBenchmark::recommend(&[]).unwrap();
         assert_eq!(r, CompressionAlgorithm::None);
     }
 
-    #[test] fn test_combined_score() {
+    #[test]
+    fn test_combined_score() {
         let r = BenchResult {
-            algorithm: CompressionAlgorithm::Lz4, compressed_size: 500,
-            compress_ticks: 100, decompress_ticks: 20,
-            ratio_percent: 50,   original_size: 1000,
+            algorithm: CompressionAlgorithm::Lz4,
+            compressed_size: 500,
+            compress_ticks: 100,
+            decompress_ticks: 20,
+            ratio_percent: 50,
+            original_size: 1000,
         };
         assert_eq!(r.combined_score(), 50 * 101);
     }
 
-    #[test] fn test_bytes_saved() {
+    #[test]
+    fn test_bytes_saved() {
         let r = BenchResult {
-            algorithm: CompressionAlgorithm::Zstd, compressed_size: 300,
-            compress_ticks: 200, decompress_ticks: 40,
-            ratio_percent: 30,   original_size: 1000,
+            algorithm: CompressionAlgorithm::Zstd,
+            compressed_size: 300,
+            compress_ticks: 200,
+            decompress_ticks: 40,
+            ratio_percent: 30,
+            original_size: 1000,
         };
         assert_eq!(r.bytes_saved(), 700);
     }
 
-    #[test] fn test_best_ratio_algo() {
-        let data    = compressible(4096);
+    #[test]
+    fn test_best_ratio_algo() {
+        let data = compressible(4096);
         let summary = CompressBenchmark::run(&data).unwrap();
-        let best    = summary.best_ratio_algorithm();
+        let best = summary.best_ratio_algorithm();
         assert!(best == CompressionAlgorithm::Lz4 || best == CompressionAlgorithm::Zstd);
     }
 
-    #[test] fn test_prefer_lz4_when_identical() {
-        let data    = compressible(4096);
+    #[test]
+    fn test_prefer_lz4_when_identical() {
+        let data = compressible(4096);
         let summary = CompressBenchmark::run(&data).unwrap();
-        let _       = summary.prefer_lz4();
+        let _ = summary.prefer_lz4();
     }
 }
 
@@ -272,17 +299,17 @@ mod tests {
 /// Utilisé par le scheduler adaptatif pour affiner la recommandation.
 pub struct BenchHistory {
     /// Recommandations récentes (circulaire).
-    entries:  [CompressionAlgorithm; 8],
-    head:     usize,
-    count:    usize,
+    entries: [CompressionAlgorithm; 8],
+    head: usize,
+    count: usize,
 }
 
 impl BenchHistory {
     pub const fn new() -> Self {
         Self {
             entries: [CompressionAlgorithm::None; 8],
-            head:    0,
-            count:   0,
+            head: 0,
+            count: 0,
         }
     }
 
@@ -290,21 +317,27 @@ impl BenchHistory {
     pub fn push(&mut self, algo: CompressionAlgorithm) {
         self.entries[self.head] = algo;
         self.head = (self.head + 1) % 8;
-        if self.count < 8 { self.count = self.count.saturating_add(1); }
+        if self.count < 8 {
+            self.count = self.count.saturating_add(1);
+        }
     }
 
     /// Nombre de fois que LZ4 a été recommandé parmi les N derniers.
     pub fn lz4_count(&self) -> usize {
         let mut n = 0usize;
         for i in 0..self.count {
-            if self.entries[i] == CompressionAlgorithm::Lz4 { n += 1; }
+            if self.entries[i] == CompressionAlgorithm::Lz4 {
+                n += 1;
+            }
         }
         n
     }
 
     /// Recommandation majoritaire de l'historique.
     pub fn majority_vote(&self) -> CompressionAlgorithm {
-        if self.count == 0 { return CompressionAlgorithm::None; }
+        if self.count == 0 {
+            return CompressionAlgorithm::None;
+        }
         if self.lz4_count() * 2 >= self.count {
             CompressionAlgorithm::Lz4
         } else {
@@ -312,19 +345,26 @@ impl BenchHistory {
         }
     }
 
-    pub fn is_empty(&self) -> bool { self.count == 0 }
-    pub fn len(&self) -> usize { self.count }
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+    pub fn len(&self) -> usize {
+        self.count
+    }
 }
 
 impl Default for BenchHistory {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
 mod history_tests {
     use super::*;
 
-    #[test] fn test_push_and_majority_vote_lz4() {
+    #[test]
+    fn test_push_and_majority_vote_lz4() {
         let mut h = BenchHistory::new();
         h.push(CompressionAlgorithm::Lz4);
         h.push(CompressionAlgorithm::Lz4);
@@ -332,7 +372,8 @@ mod history_tests {
         assert_eq!(h.majority_vote(), CompressionAlgorithm::Lz4);
     }
 
-    #[test] fn test_push_and_majority_vote_zstd() {
+    #[test]
+    fn test_push_and_majority_vote_zstd() {
         let mut h = BenchHistory::new();
         h.push(CompressionAlgorithm::Zstd);
         h.push(CompressionAlgorithm::Zstd);
@@ -340,19 +381,24 @@ mod history_tests {
         assert_eq!(h.majority_vote(), CompressionAlgorithm::Zstd);
     }
 
-    #[test] fn test_empty_history() {
+    #[test]
+    fn test_empty_history() {
         let h = BenchHistory::new();
         assert!(h.is_empty());
         assert_eq!(h.majority_vote(), CompressionAlgorithm::None);
     }
 
-    #[test] fn test_history_circular_wrap() {
+    #[test]
+    fn test_history_circular_wrap() {
         let mut h = BenchHistory::new();
-        for _ in 0..10 { h.push(CompressionAlgorithm::Lz4); }
+        for _ in 0..10 {
+            h.push(CompressionAlgorithm::Lz4);
+        }
         assert_eq!(h.len(), 8); // Capacité max
     }
 
-    #[test] fn test_lz4_count() {
+    #[test]
+    fn test_lz4_count() {
         let mut h = BenchHistory::new();
         h.push(CompressionAlgorithm::Lz4);
         h.push(CompressionAlgorithm::Zstd);
@@ -362,7 +408,8 @@ mod history_tests {
 
     // ── Tests supplémentaires ─────────────────────────────────────────────────
 
-    #[test] fn test_bench_summary_is_compressible_flag() {
+    #[test]
+    fn test_bench_summary_is_compressible_flag() {
         let s = BenchSummary {
             lz4: BenchResult {
                 algorithm: CompressionAlgorithm::Lz4,
@@ -385,7 +432,8 @@ mod history_tests {
         assert!(s.is_compressible);
     }
 
-    #[test] fn test_bench_result_ratio() {
+    #[test]
+    fn test_bench_result_ratio() {
         let r = BenchResult {
             algorithm: CompressionAlgorithm::Lz4,
             compressed_size: 50,
@@ -397,13 +445,15 @@ mod history_tests {
         assert_eq!(r.ratio_percent, 50);
     }
 
-    #[test] fn test_history_majority_empty() {
+    #[test]
+    fn test_history_majority_empty() {
         let h = BenchHistory::new();
         // Sur historique vide, le vote majoritaire ne doit pas paniquer.
         let _ = h.majority_vote();
     }
 
-    #[test] fn test_history_majority_lz4_wins() {
+    #[test]
+    fn test_history_majority_lz4_wins() {
         let mut h = BenchHistory::new();
         h.push(CompressionAlgorithm::Lz4);
         h.push(CompressionAlgorithm::Lz4);
@@ -411,13 +461,17 @@ mod history_tests {
         assert_eq!(h.majority_vote(), CompressionAlgorithm::Lz4);
     }
 
-    #[test] fn test_history_len_saturates_at_capacity() {
+    #[test]
+    fn test_history_len_saturates_at_capacity() {
         let mut h = BenchHistory::new();
-        for _ in 0..20 { h.push(CompressionAlgorithm::Lz4); }
+        for _ in 0..20 {
+            h.push(CompressionAlgorithm::Lz4);
+        }
         assert!(h.len() <= 8);
     }
 
-    #[test] fn test_bench_result_saved_bytes() {
+    #[test]
+    fn test_bench_result_saved_bytes() {
         let r = BenchResult {
             algorithm: CompressionAlgorithm::Lz4,
             compressed_size: 40,
@@ -428,7 +482,8 @@ mod history_tests {
         };
         assert_eq!(r.bytes_saved(), 60);
     }
-    #[test] fn test_bench_result_is_beneficial() {
+    #[test]
+    fn test_bench_result_is_beneficial() {
         let r = BenchResult {
             algorithm: CompressionAlgorithm::Zstd,
             compressed_size: 80,

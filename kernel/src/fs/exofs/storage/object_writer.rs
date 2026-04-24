@@ -13,19 +13,16 @@
 //!   ARITH-02 : checked_add / checked_mul systématiques
 //!   OOM-02   : try_reserve avant tout Vec::push
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, BlobId, ObjectId, DiskOffset, EpochId,
-};
-use crate::fs::exofs::core::blob_id::{compute_blob_id, blake3_hash};
-use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
-use crate::fs::exofs::storage::layout::{BLOCK_SIZE, align_up};
-use crate::fs::exofs::storage::blob_writer::{BlobWriter, BlobWriterConfig, BlobWriteResult};
+use crate::fs::exofs::core::blob_id::{blake3_hash, compute_blob_id};
+use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId};
+use crate::fs::exofs::storage::blob_writer::{BlobWriteResult, BlobWriter, BlobWriterConfig};
 use crate::fs::exofs::storage::compression_choice::{CompressionType, ContentHint};
+use crate::fs::exofs::storage::layout::{align_up, BLOCK_SIZE};
+use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -60,11 +57,11 @@ pub const OBJECT_MAX_BLOBS: usize = 65536;
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectType {
-    Regular     = 0,
-    Directory   = 1,
-    Symlink     = 2,
-    Device      = 3,
-    Metadata    = 4,
+    Regular = 0,
+    Directory = 1,
+    Symlink = 2,
+    Device = 3,
+    Metadata = 4,
 }
 
 /// En-tête objet sur disque (OBJECT_HEADER_SIZE = 128 octets)
@@ -173,7 +170,10 @@ impl Default for ObjectWriterConfig {
 
 impl ObjectWriterConfig {
     pub fn new(epoch: EpochId) -> Self {
-        Self { epoch, ..Default::default() }
+        Self {
+            epoch,
+            ..Default::default()
+        }
     }
 
     pub fn with_type(mut self, t: ObjectType) -> Self {
@@ -311,19 +311,25 @@ impl ObjectWriter {
         let content_hash = blake3_hash(data);
 
         // ── 3. Découpage en blobs ─────────────────────────────────────
-        let (blobs, disk_size) = Self::write_blobs(
-            data, config, alloc_fn, write_fn, dedup_check,
-        )?;
+        let (blobs, disk_size) = Self::write_blobs(data, config, alloc_fn, write_fn, dedup_check)?;
 
         let blob_count = blobs.len() as u32;
         let content_size = data.len() as u64;
 
         // ── 4. Construction de l'ObjectWriteResult ────────────────────
-        OBJECT_WRITER_STATS.total_objects.fetch_add(1, Ordering::Relaxed);
-        OBJECT_WRITER_STATS.total_bytes_written.fetch_add(disk_size, Ordering::Relaxed);
-        OBJECT_WRITER_STATS.total_blobs_created.fetch_add(blob_count as u64, Ordering::Relaxed);
+        OBJECT_WRITER_STATS
+            .total_objects
+            .fetch_add(1, Ordering::Relaxed);
+        OBJECT_WRITER_STATS
+            .total_bytes_written
+            .fetch_add(disk_size, Ordering::Relaxed);
+        OBJECT_WRITER_STATS
+            .total_blobs_created
+            .fetch_add(blob_count as u64, Ordering::Relaxed);
         if blob_count > 1 {
-            OBJECT_WRITER_STATS.multi_blob_objects.fetch_add(1, Ordering::Relaxed);
+            OBJECT_WRITER_STATS
+                .multi_blob_objects
+                .fetch_add(1, Ordering::Relaxed);
         }
         STORAGE_STATS.add_write(disk_size);
 
@@ -360,10 +366,18 @@ impl ObjectWriter {
         let offset = alloc_fn(n_blocks)?;
 
         let mut flags: u8 = 0;
-        if result.blob_count == 1 { flags |= 0b0000_0001; } // inline
-        if result.blob_count > 1 { flags |= 0b0000_0010; }  // multi-blob
+        if result.blob_count == 1 {
+            flags |= 0b0000_0001;
+        } // inline
+        if result.blob_count > 1 {
+            flags |= 0b0000_0010;
+        } // multi-blob
 
-        let extent_map_off = if result.blob_count > 1 { result.header_offset.0 } else { 0 };
+        let extent_map_off = if result.blob_count > 1 {
+            result.header_offset.0
+        } else {
+            0
+        };
 
         let mut hdr = ObjectHeaderDisk {
             magic: OBJECT_HEADER_MAGIC,
@@ -391,12 +405,16 @@ impl ObjectWriter {
         // Écriture (WRITE-02)
         let written = write_fn(offset, &hdr_bytes)?;
         if written != OBJECT_HEADER_SIZE {
-            OBJECT_WRITER_STATS.write_errors.fetch_add(1, Ordering::Relaxed);
+            OBJECT_WRITER_STATS
+                .write_errors
+                .fetch_add(1, Ordering::Relaxed);
             STORAGE_STATS.inc_io_error();
             return Err(ExofsError::ShortWrite);
         }
 
-        OBJECT_WRITER_STATS.header_writes.fetch_add(1, Ordering::Relaxed);
+        OBJECT_WRITER_STATS
+            .header_writes
+            .fetch_add(1, Ordering::Relaxed);
         Ok(offset)
     }
 
@@ -418,9 +436,13 @@ impl ObjectWriter {
         // blob_ref = [blob_id: 32B][offset: 8B][size: 4B]
         const BLOB_REF_SIZE: usize = 44;
         let count = blobs.len();
-        let map_size = 4usize.checked_add(
-            count.checked_mul(BLOB_REF_SIZE).ok_or(ExofsError::Overflow)?
-        ).ok_or(ExofsError::Overflow)?;
+        let map_size = 4usize
+            .checked_add(
+                count
+                    .checked_mul(BLOB_REF_SIZE)
+                    .ok_or(ExofsError::Overflow)?,
+            )
+            .ok_or(ExofsError::Overflow)?;
 
         let n_blocks = BlobWriter::size_to_blocks(map_size as u64);
         let offset = alloc_fn(n_blocks)?;
@@ -473,7 +495,8 @@ impl ObjectWriter {
         }
 
         let mut refs = Vec::new();
-        refs.try_reserve(n_chunks).map_err(|_| ExofsError::NoMemory)?;
+        refs.try_reserve(n_chunks)
+            .map_err(|_| ExofsError::NoMemory)?;
 
         let mut total_disk = 0u64;
         let mut chunk_idx = 0u32;
@@ -558,7 +581,11 @@ impl UpdateObjectWriter {
     where
         RewriteFn: Fn(u32, &[u8]) -> ExofsResult<BlobWriteResult>,
     {
-        if patch.logical_offset.checked_add(patch.data.len() as u64).is_none() {
+        if patch
+            .logical_offset
+            .checked_add(patch.data.len() as u64)
+            .is_none()
+        {
             return Err(ExofsError::Overflow);
         }
 
@@ -571,8 +598,7 @@ impl UpdateObjectWriter {
         }
 
         // Appliquer le patch en mémoire
-        full_data[patch.logical_offset as usize..patch_end]
-            .copy_from_slice(&patch.data);
+        full_data[patch.logical_offset as usize..patch_end].copy_from_slice(&patch.data);
 
         // Identifier les chunks affectés
         let first_chunk = patch.logical_offset as usize / chunk_size;
@@ -604,10 +630,7 @@ impl UpdateObjectWriter {
 // ─────────────────────────────────────────────────────────────
 
 /// Valide la configuration avant d'écrire un objet
-pub fn validate_object_write(
-    data_len: usize,
-    config: &ObjectWriterConfig,
-) -> ExofsResult<()> {
+pub fn validate_object_write(data_len: usize, config: &ObjectWriterConfig) -> ExofsResult<()> {
     if data_len == 0 {
         return Err(ExofsError::InvalidArgument);
     }
@@ -686,14 +709,21 @@ mod tests {
             oid,
             &data,
             &config,
-            |n| { let o = DiskOffset(alloc_off); alloc_off += n * BLOCK_SIZE as u64; Ok(o) },
+            |n| {
+                let o = DiskOffset(alloc_off);
+                alloc_off += n * BLOCK_SIZE as u64;
+                Ok(o)
+            },
             |off, buf| {
                 let s = off.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+                if s + buf.len() <= disk.len() {
+                    disk[s..s + buf.len()].copy_from_slice(buf);
+                }
                 Ok(buf.len())
             },
             |_| None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(result.blob_count, 1);
         assert_eq!(result.content_size, data.len() as u64);
@@ -712,18 +742,29 @@ mod tests {
         let mut off = 0u64;
 
         let result = ObjectWriter::write_object(
-            oid, &data, &config,
-            |n| { let o = DiskOffset(off); off += n * BLOCK_SIZE as u64; Ok(o) },
+            oid,
+            &data,
+            &config,
+            |n| {
+                let o = DiskOffset(off);
+                off += n * BLOCK_SIZE as u64;
+                Ok(o)
+            },
             |o, buf| {
                 let s = o.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+                if s + buf.len() <= disk.len() {
+                    disk[s..s + buf.len()].copy_from_slice(buf);
+                }
                 Ok(buf.len())
             },
             |_| None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(result.blob_count, 4);
-        OBJECT_WRITER_STATS.multi_blob_objects.load(Ordering::Relaxed);
+        OBJECT_WRITER_STATS
+            .multi_blob_objects
+            .load(Ordering::Relaxed);
     }
 
     #[test]
@@ -735,25 +776,42 @@ mod tests {
         let mut off = 0u64;
 
         let result = ObjectWriter::write_object(
-            oid, &data, &config,
-            |n| { let o = DiskOffset(off); off += n * BLOCK_SIZE as u64; Ok(o) },
+            oid,
+            &data,
+            &config,
+            |n| {
+                let o = DiskOffset(off);
+                off += n * BLOCK_SIZE as u64;
+                Ok(o)
+            },
             |o, buf| {
                 let s = o.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+                if s + buf.len() <= disk.len() {
+                    disk[s..s + buf.len()].copy_from_slice(buf);
+                }
                 Ok(buf.len())
             },
             |_| None,
-        ).unwrap();
+        )
+        .unwrap();
 
         let hdr_offset = ObjectWriter::write_header(
-            &result, &config,
-            |n| { let o = DiskOffset(off); off += n * BLOCK_SIZE as u64; Ok(o) },
+            &result,
+            &config,
+            |n| {
+                let o = DiskOffset(off);
+                off += n * BLOCK_SIZE as u64;
+                Ok(o)
+            },
             |o, buf| {
                 let s = o.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+                if s + buf.len() <= disk.len() {
+                    disk[s..s + buf.len()].copy_from_slice(buf);
+                }
                 Ok(buf.len())
             },
-        ).unwrap();
+        )
+        .unwrap();
 
         // Vérification en-tête sur disque
         let raw = &disk[hdr_offset.0 as usize..hdr_offset.0 as usize + OBJECT_HEADER_SIZE];
@@ -766,25 +824,42 @@ mod tests {
     #[test]
     fn extent_map_written_and_parseable() {
         let blobs = vec![
-            BlobRef { blob_id: BlobId([0xAA; 32]), offset: DiskOffset(4096), size: 512, chunk_index: 0 },
-            BlobRef { blob_id: BlobId([0xBB; 32]), offset: DiskOffset(8192), size: 512, chunk_index: 1 },
+            BlobRef {
+                blob_id: BlobId([0xAA; 32]),
+                offset: DiskOffset(4096),
+                size: 512,
+                chunk_index: 0,
+            },
+            BlobRef {
+                blob_id: BlobId([0xBB; 32]),
+                offset: DiskOffset(8192),
+                size: 512,
+                chunk_index: 1,
+            },
         ];
         let mut disk = make_disk(65536);
         let mut off = 0u64;
 
         let emap_off = ObjectWriter::write_extent_map(
             &blobs,
-            |n| { let o = DiskOffset(off); off += n * BLOCK_SIZE as u64; Ok(o) },
+            |n| {
+                let o = DiskOffset(off);
+                off += n * BLOCK_SIZE as u64;
+                Ok(o)
+            },
             |o, buf| {
                 let s = o.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+                if s + buf.len() <= disk.len() {
+                    disk[s..s + buf.len()].copy_from_slice(buf);
+                }
                 Ok(buf.len())
             },
-        ).unwrap();
+        )
+        .unwrap();
 
         // Parse count
         let s = emap_off.0 as usize;
-        let count = u32::from_le_bytes([disk[s], disk[s+1], disk[s+2], disk[s+3]]);
+        let count = u32::from_le_bytes([disk[s], disk[s + 1], disk[s + 2], disk[s + 3]]);
         assert_eq!(count, 2);
     }
 

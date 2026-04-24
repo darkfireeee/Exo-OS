@@ -13,9 +13,9 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, Ordering};
-use core::ops::{Deref, DerefMut};
 use core::marker::PhantomData;
+use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SpinLock<T> — verrou tournant simple
@@ -23,7 +23,7 @@ use core::marker::PhantomData;
 
 pub struct SpinLock<T> {
     locked: AtomicBool,
-    data:   UnsafeCell<T>,
+    data: UnsafeCell<T>,
 }
 
 unsafe impl<T: Send> Send for SpinLock<T> {}
@@ -33,7 +33,7 @@ impl<T> SpinLock<T> {
     pub const fn new(value: T) -> Self {
         Self {
             locked: AtomicBool::new(false),
-            data:   UnsafeCell::new(value),
+            data: UnsafeCell::new(value),
         }
     }
 
@@ -42,7 +42,8 @@ impl<T> SpinLock<T> {
         loop {
             // Essai optimiste (non-serialisant) avant le LOCK CMPXCHG.
             if !self.locked.load(Ordering::Relaxed) {
-                if self.locked
+                if self
+                    .locked
                     .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
                 {
@@ -51,7 +52,10 @@ impl<T> SpinLock<T> {
             }
             core::hint::spin_loop();
         }
-        SpinLockGuard { lock: self, _pd: PhantomData }
+        SpinLockGuard {
+            lock: self,
+            _pd: PhantomData,
+        }
     }
 
     /// Essai sans blocage. Retourne `None` si le verrou est déjà pris.
@@ -59,7 +63,10 @@ impl<T> SpinLock<T> {
         self.locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .ok()
-            .map(|_| SpinLockGuard { lock: self, _pd: PhantomData })
+            .map(|_| SpinLockGuard {
+                lock: self,
+                _pd: PhantomData,
+            })
     }
 
     /// Libère sans garde (interne).
@@ -70,7 +77,7 @@ impl<T> SpinLock<T> {
 
 pub struct SpinLockGuard<'a, T> {
     lock: &'a SpinLock<T>,
-    _pd:  PhantomData<*mut ()>,  // !Send
+    _pd: PhantomData<*mut ()>, // !Send
 }
 
 impl<'a, T> Deref for SpinLockGuard<'a, T> {
@@ -91,7 +98,9 @@ impl<'a, T> DerefMut for SpinLockGuard<'a, T> {
 impl<'a, T> Drop for SpinLockGuard<'a, T> {
     fn drop(&mut self) {
         // SAFETY: unlock() ne doit être appelé qu'une fois — garanti par Drop.
-        unsafe { self.lock.unlock(); }
+        unsafe {
+            self.lock.unlock();
+        }
     }
 }
 
@@ -108,7 +117,9 @@ unsafe impl<T: Send> Sync for IrqSpinLock<T> {}
 
 impl<T> IrqSpinLock<T> {
     pub const fn new(value: T) -> Self {
-        Self { inner: SpinLock::new(value) }
+        Self {
+            inner: SpinLock::new(value),
+        }
     }
 
     /// Acquiert le verrou en désactivant les IRQ. Les IRQ sont restaurées lors
@@ -116,7 +127,7 @@ impl<T> IrqSpinLock<T> {
     pub fn lock_irq(&self) -> IrqSpinLockGuard<'_, T> {
         // Sauvegarder les IRQ et les désactiver.
         let rflags = save_and_disable_irq();
-        let guard  = self.inner.lock();
+        let guard = self.inner.lock();
         IrqSpinLockGuard { guard, rflags }
     }
 
@@ -133,17 +144,21 @@ impl<T> IrqSpinLock<T> {
 }
 
 pub struct IrqSpinLockGuard<'a, T> {
-    guard:  SpinLockGuard<'a, T>,
+    guard: SpinLockGuard<'a, T>,
     rflags: u64,
 }
 
 impl<'a, T> Deref for IrqSpinLockGuard<'a, T> {
     type Target = T;
-    fn deref(&self) -> &T { &*self.guard }
+    fn deref(&self) -> &T {
+        &*self.guard
+    }
 }
 
 impl<'a, T> DerefMut for IrqSpinLockGuard<'a, T> {
-    fn deref_mut(&mut self) -> &mut T { &mut *self.guard }
+    fn deref_mut(&mut self) -> &mut T {
+        &mut *self.guard
+    }
 }
 
 impl<'a, T> Drop for IrqSpinLockGuard<'a, T> {
@@ -177,6 +192,8 @@ pub fn save_and_disable_irq() -> u64 {
 pub fn restore_irq(rflags: u64) {
     if rflags & (1 << 9) != 0 {
         // SAFETY: sti restaure l'état IRQ sauvegardé; bit IF était 1, on le remet à 1.
-        unsafe { core::arch::asm!("sti", options(nomem, nostack, preserves_flags)); }
+        unsafe {
+            core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
+        }
     }
 }

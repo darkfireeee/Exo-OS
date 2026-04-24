@@ -9,21 +9,17 @@
 //!   OOM-02  : try_reserve avant tout Vec::push / extend
 //!   ARITH-02: checked_add systématique sur offsets
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, BlobId, ObjectId, DiskOffset,
-};
 use crate::fs::exofs::core::blob_id::blake3_hash;
-use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
+use crate::fs::exofs::core::{BlobId, DiskOffset, ExofsError, ExofsResult, ObjectId};
 use crate::fs::exofs::storage::blob_reader::{BlobReader, BlobVerifyMode};
 use crate::fs::exofs::storage::object_writer::{
-    ObjectHeaderDisk, ObjectType, BlobRef,
-    OBJECT_HEADER_MAGIC, OBJECT_HEADER_SIZE,
+    BlobRef, ObjectHeaderDisk, ObjectType, OBJECT_HEADER_MAGIC, OBJECT_HEADER_SIZE,
 };
+use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -212,9 +208,10 @@ impl ObjectReader {
         } else {
             // Blob unique : offset de l'en-tête + OBJECT_HEADER_SIZE
             let blob_off = DiskOffset(
-                header_offset.0
+                header_offset
+                    .0
                     .checked_add(OBJECT_HEADER_SIZE as u64)
-                    .ok_or(ExofsError::Overflow)?
+                    .ok_or(ExofsError::Overflow)?,
             );
             alloc::vec![BlobRef {
                 blob_id: BlobId([0u8; 32]),
@@ -230,18 +227,26 @@ impl ObjectReader {
             _ => BlobVerifyMode::None,
         };
 
-        let (data, disk_payload, retrieved_blobs) =
-            Self::read_and_assemble(&blob_refs, &read_fn, blob_verify, meta.content_size as usize)?;
+        let (data, disk_payload, retrieved_blobs) = Self::read_and_assemble(
+            &blob_refs,
+            &read_fn,
+            blob_verify,
+            meta.content_size as usize,
+        )?;
 
         // ── 5. Vérification content_hash ──────────────────────────
         let hash_verified = if mode == ObjectVerifyMode::Full {
             let computed = blake3_hash(&data);
             if computed != meta.content_hash {
-                OBJECT_READER_STATS.content_hash_mismatch.fetch_add(1, Ordering::Relaxed);
+                OBJECT_READER_STATS
+                    .content_hash_mismatch
+                    .fetch_add(1, Ordering::Relaxed);
                 STORAGE_STATS.inc_io_error();
                 return Err(ExofsError::ChecksumMismatch);
             }
-            OBJECT_READER_STATS.content_hash_ok.fetch_add(1, Ordering::Relaxed);
+            OBJECT_READER_STATS
+                .content_hash_ok
+                .fetch_add(1, Ordering::Relaxed);
             true
         } else {
             false
@@ -249,8 +254,12 @@ impl ObjectReader {
 
         // ── Statistiques ──────────────────────────────────────────
         let total_disk = (OBJECT_HEADER_SIZE as u64).saturating_add(disk_payload);
-        OBJECT_READER_STATS.total_reads.fetch_add(1, Ordering::Relaxed);
-        OBJECT_READER_STATS.total_bytes_read.fetch_add(total_disk, Ordering::Relaxed);
+        OBJECT_READER_STATS
+            .total_reads
+            .fetch_add(1, Ordering::Relaxed);
+        OBJECT_READER_STATS
+            .total_bytes_read
+            .fetch_add(total_disk, Ordering::Relaxed);
         STORAGE_STATS.add_read(total_disk);
 
         Ok(ObjectReadResult {
@@ -263,10 +272,7 @@ impl ObjectReader {
     }
 
     /// Lit uniquement les métadonnées (en-tête)
-    pub fn read_meta<ReadFn>(
-        header_offset: DiskOffset,
-        read_fn: ReadFn,
-    ) -> ExofsResult<ObjectMeta>
+    pub fn read_meta<ReadFn>(header_offset: DiskOffset, read_fn: ReadFn) -> ExofsResult<ObjectMeta>
     where
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
@@ -285,12 +291,16 @@ impl ObjectReader {
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
         let raw = read_fn(offset, OBJECT_HEADER_SIZE).map_err(|e| {
-            OBJECT_READER_STATS.read_errors.fetch_add(1, Ordering::Relaxed);
+            OBJECT_READER_STATS
+                .read_errors
+                .fetch_add(1, Ordering::Relaxed);
             e
         })?;
 
         if raw.len() < OBJECT_HEADER_SIZE {
-            OBJECT_READER_STATS.read_errors.fetch_add(1, Ordering::Relaxed);
+            OBJECT_READER_STATS
+                .read_errors
+                .fetch_add(1, Ordering::Relaxed);
             return Err(ExofsError::InvalidSize);
         }
 
@@ -299,16 +309,22 @@ impl ObjectReader {
 
         if mode != ObjectVerifyMode::None {
             if hdr.magic != OBJECT_HEADER_MAGIC {
-                OBJECT_READER_STATS.header_bad_magic.fetch_add(1, Ordering::Relaxed);
+                OBJECT_READER_STATS
+                    .header_bad_magic
+                    .fetch_add(1, Ordering::Relaxed);
                 STORAGE_STATS.inc_checksum_error();
                 return Err(ExofsError::BadMagic);
             }
             if !hdr.verify_checksum() {
-                OBJECT_READER_STATS.header_bad_checksum.fetch_add(1, Ordering::Relaxed);
+                OBJECT_READER_STATS
+                    .header_bad_checksum
+                    .fetch_add(1, Ordering::Relaxed);
                 STORAGE_STATS.inc_checksum_error();
                 return Err(ExofsError::ChecksumMismatch);
             }
-            OBJECT_READER_STATS.header_ok.fetch_add(1, Ordering::Relaxed);
+            OBJECT_READER_STATS
+                .header_ok
+                .fetch_add(1, Ordering::Relaxed);
             STORAGE_STATS.inc_checksum_ok();
         }
 
@@ -343,10 +359,16 @@ impl ObjectReader {
     {
         // Taille : 4 (count) + count * 44
         let map_size = 4usize
-            .checked_add(count.checked_mul(BLOB_REF_DISK_SIZE).ok_or(ExofsError::Overflow)?)
+            .checked_add(
+                count
+                    .checked_mul(BLOB_REF_DISK_SIZE)
+                    .ok_or(ExofsError::Overflow)?,
+            )
             .ok_or(ExofsError::Overflow)?;
 
-        OBJECT_READER_STATS.extent_map_reads.fetch_add(1, Ordering::Relaxed);
+        OBJECT_READER_STATS
+            .extent_map_reads
+            .fetch_add(1, Ordering::Relaxed);
 
         let buf = read_fn(offset, map_size)?;
         if buf.len() < map_size {
@@ -370,9 +392,11 @@ impl ObjectReader {
             let mut blob_id_bytes = [0u8; 32];
             blob_id_bytes.copy_from_slice(&buf[pos..pos + 32]);
 
-            let off_bytes: [u8; 8] = buf[pos+32..pos+40].try_into()
+            let off_bytes: [u8; 8] = buf[pos + 32..pos + 40]
+                .try_into()
                 .map_err(|_| ExofsError::InvalidArgument)?;
-            let sz_bytes: [u8; 4] = buf[pos+40..pos+44].try_into()
+            let sz_bytes: [u8; 4] = buf[pos + 40..pos + 44]
+                .try_into()
                 .map_err(|_| ExofsError::InvalidArgument)?;
 
             let disk_offset = u64::from_le_bytes(off_bytes);
@@ -385,7 +409,9 @@ impl ObjectReader {
                 chunk_index: chunk_idx as u32,
             });
 
-            pos = pos.checked_add(BLOB_REF_DISK_SIZE).ok_or(ExofsError::Overflow)?;
+            pos = pos
+                .checked_add(BLOB_REF_DISK_SIZE)
+                .ok_or(ExofsError::Overflow)?;
         }
 
         Ok(refs)
@@ -414,11 +440,15 @@ impl ObjectReader {
         }
 
         let mut assembled = Vec::new();
-        assembled.try_reserve(expected_size).map_err(|_| ExofsError::NoMemory)?;
+        assembled
+            .try_reserve(expected_size)
+            .map_err(|_| ExofsError::NoMemory)?;
 
         let mut total_disk = 0u64;
         let mut retrieved = Vec::new();
-        retrieved.try_reserve(blob_refs.len()).map_err(|_| ExofsError::NoMemory)?;
+        retrieved
+            .try_reserve(blob_refs.len())
+            .map_err(|_| ExofsError::NoMemory)?;
 
         // Trier par chunk_index pour assembler dans le bon ordre
         let mut sorted: Vec<&BlobRef> = blob_refs.iter().collect();
@@ -434,14 +464,13 @@ impl ObjectReader {
         }
 
         for bref in &sorted {
-            let res = BlobReader::read_blob(
-                bref.offset,
-                |off, sz| read_fn(off, sz),
-                verify,
-            ).map_err(|e| {
-                OBJECT_READER_STATS.read_errors.fetch_add(1, Ordering::Relaxed);
-                e
-            })?;
+            let res = BlobReader::read_blob(bref.offset, |off, sz| read_fn(off, sz), verify)
+                .map_err(|e| {
+                    OBJECT_READER_STATS
+                        .read_errors
+                        .fetch_add(1, Ordering::Relaxed);
+                    e
+                })?;
 
             total_disk = total_disk.saturating_add(res.disk_bytes_read);
 
@@ -450,7 +479,9 @@ impl ObjectReader {
                 return Err(ExofsError::InvalidSize);
             }
 
-            assembled.try_reserve(res.data.len()).map_err(|_| ExofsError::NoMemory)?;
+            assembled
+                .try_reserve(res.data.len())
+                .map_err(|_| ExofsError::NoMemory)?;
             assembled.extend_from_slice(&res.data);
 
             retrieved.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
@@ -524,7 +555,8 @@ impl ObjectRangeReader {
         let meta = ObjectReader::read_meta(header_offset, |o, sz| read_fn(o, sz))?;
 
         // Vérification des bornes
-        let end = range.logical_offset
+        let end = range
+            .logical_offset
             .checked_add(range.length as u64)
             .ok_or(ExofsError::Overflow)?;
         if end > meta.content_size {
@@ -540,9 +572,17 @@ impl ObjectRangeReader {
             )?
         } else {
             let blob_off = DiskOffset(
-                header_offset.0.checked_add(OBJECT_HEADER_SIZE as u64).ok_or(ExofsError::Overflow)?
+                header_offset
+                    .0
+                    .checked_add(OBJECT_HEADER_SIZE as u64)
+                    .ok_or(ExofsError::Overflow)?,
             );
-            alloc::vec![BlobRef { blob_id: BlobId([0u8;32]), offset: blob_off, size: meta.content_size as u32, chunk_index: 0 }]
+            alloc::vec![BlobRef {
+                blob_id: BlobId([0u8; 32]),
+                offset: blob_off,
+                size: meta.content_size as u32,
+                chunk_index: 0
+            }]
         };
 
         if blob_refs.is_empty() {
@@ -558,17 +598,18 @@ impl ObjectRangeReader {
         let last_chunk = ((end as usize) - 1) / chunk_size;
 
         let mut result = Vec::new();
-        result.try_reserve(range.length).map_err(|_| ExofsError::NoMemory)?;
+        result
+            .try_reserve(range.length)
+            .map_err(|_| ExofsError::NoMemory)?;
 
         for bref in &sorted_refs {
             let ci = bref.chunk_index as usize;
-            if ci < first_chunk || ci > last_chunk { continue; }
+            if ci < first_chunk || ci > last_chunk {
+                continue;
+            }
 
-            let blob_res = BlobReader::read_blob(
-                bref.offset,
-                |o, sz| read_fn(o, sz),
-                BlobVerifyMode::Full,
-            )?;
+            let blob_res =
+                BlobReader::read_blob(bref.offset, |o, sz| read_fn(o, sz), BlobVerifyMode::Full)?;
 
             // Calculer l'offset dans ce chunk
             let chunk_start_logical = ci * chunk_size;
@@ -584,7 +625,9 @@ impl ObjectRangeReader {
             };
 
             if in_chunk_start < in_chunk_end && in_chunk_end <= blob_res.data.len() {
-                result.try_reserve(in_chunk_end - in_chunk_start).map_err(|_| ExofsError::NoMemory)?;
+                result
+                    .try_reserve(in_chunk_end - in_chunk_start)
+                    .map_err(|_| ExofsError::NoMemory)?;
                 result.extend_from_slice(&blob_res.data[in_chunk_start..in_chunk_end]);
             }
         }
@@ -614,11 +657,16 @@ impl ObjectScanner {
     }
 
     /// Lit la prochaine entrée de métadonnées
-    pub fn next_meta<ReadFn>(&mut self, read_fn: &ReadFn) -> Option<ExofsResult<(DiskOffset, ObjectMeta)>>
+    pub fn next_meta<ReadFn>(
+        &mut self,
+        read_fn: &ReadFn,
+    ) -> Option<ExofsResult<(DiskOffset, ObjectMeta)>>
     where
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
-        if self.pos >= self.offsets.len() { return None; }
+        if self.pos >= self.offsets.len() {
+            return None;
+        }
         let off = self.offsets[self.pos];
         self.pos += 1;
         Some(ObjectReader::read_meta(off, |o, sz| read_fn(o, sz)).map(|m| (off, m)))
@@ -645,7 +693,9 @@ pub struct ObjectIntegrityReport {
 
 impl ObjectIntegrityReport {
     pub fn success_rate_pct(&self) -> u64 {
-        if self.checked == 0 { return 100; }
+        if self.checked == 0 {
+            return 100;
+        }
         self.ok.saturating_mul(100) / self.checked
     }
 }
@@ -703,14 +753,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
     use crate::fs::exofs::core::{EpochId, ObjectId};
     use crate::fs::exofs::storage::layout::BLOCK_SIZE;
-    use crate::fs::exofs::storage::object_writer::{
-        ObjectWriter, ObjectWriterConfig, ObjectType,
-    };
+    use crate::fs::exofs::storage::object_writer::{ObjectType, ObjectWriter, ObjectWriterConfig};
+    use alloc::vec;
 
-    fn oid(n: u8) -> ObjectId { ObjectId([n; 32]) }
+    fn oid(n: u8) -> ObjectId {
+        ObjectId([n; 32])
+    }
 
     fn write_object_to_disk(disk: &mut Vec<u8>, oid: ObjectId, data: &[u8]) -> DiskOffset {
         let config = ObjectWriterConfig::new(EpochId(1))
@@ -719,27 +769,44 @@ mod tests {
         let mut off = 0u64;
 
         let result = ObjectWriter::write_object(
-            oid, data, &config,
-            |n| { let o = DiskOffset(off); off += n * BLOCK_SIZE as u64; Ok(o) },
+            oid,
+            data,
+            &config,
+            |n| {
+                let o = DiskOffset(off);
+                off += n * BLOCK_SIZE as u64;
+                Ok(o)
+            },
             |o, buf| {
                 let s = o.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+                if s + buf.len() <= disk.len() {
+                    disk[s..s + buf.len()].copy_from_slice(buf);
+                }
                 Ok(buf.len())
             },
             |_| None,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Écrire l'en-tête
         let mut off2 = off;
         let hdr_off = ObjectWriter::write_header(
-            &result, &config,
-            |n| { let o2 = DiskOffset(off2); off2 += n * BLOCK_SIZE as u64; Ok(o2) },
+            &result,
+            &config,
+            |n| {
+                let o2 = DiskOffset(off2);
+                off2 += n * BLOCK_SIZE as u64;
+                Ok(o2)
+            },
             |o, buf| {
                 let s = o.0 as usize;
-                if s + buf.len() <= disk.len() { disk[s..s+buf.len()].copy_from_slice(buf); }
+                if s + buf.len() <= disk.len() {
+                    disk[s..s + buf.len()].copy_from_slice(buf);
+                }
                 Ok(buf.len())
             },
-        ).unwrap();
+        )
+        .unwrap();
 
         hdr_off
     }
@@ -752,7 +819,7 @@ mod tests {
 
         let read_fn = |o: DiskOffset, sz: usize| -> ExofsResult<Vec<u8>> {
             let s = o.0 as usize;
-            Ok(disk[s..s+sz].to_vec())
+            Ok(disk[s..s + sz].to_vec())
         };
 
         let meta = ObjectReader::read_meta(hdr_off, read_fn).unwrap();
@@ -764,11 +831,14 @@ mod tests {
     fn bad_magic_detected_on_object() {
         let mut disk = vec![0u8; 65536];
         // Magic invalide
-        disk[0] = 0xFF; disk[1] = 0xFF; disk[2] = 0xFF; disk[3] = 0xFF;
+        disk[0] = 0xFF;
+        disk[1] = 0xFF;
+        disk[2] = 0xFF;
+        disk[3] = 0xFF;
 
         let read_fn = |o: DiskOffset, sz: usize| -> ExofsResult<Vec<u8>> {
             let s = o.0 as usize;
-            Ok(disk[s..s+sz].to_vec())
+            Ok(disk[s..s + sz].to_vec())
         };
 
         let r = ObjectReader::read_meta(DiskOffset(0), read_fn);
@@ -785,7 +855,7 @@ mod tests {
         let read_fn = |o: DiskOffset, sz: usize| -> ExofsResult<Vec<u8>> {
             reads.fetch_add(1, Ordering::Relaxed);
             let s = o.0 as usize;
-            Ok(disk[s..s+sz].to_vec())
+            Ok(disk[s..s + sz].to_vec())
         };
 
         let r = ObjectReader::read_object(hdr_off, read_fn, ObjectVerifyMode::HeaderOnly).unwrap();
@@ -806,7 +876,7 @@ mod tests {
 
         let read_fn = |o: DiskOffset, sz: usize| -> ExofsResult<Vec<u8>> {
             let s = o.0 as usize;
-            Ok(disk[s..s+sz].to_vec())
+            Ok(disk[s..s + sz].to_vec())
         };
 
         let mut scanner = ObjectScanner::new(offsets);
@@ -826,7 +896,7 @@ mod tests {
 
         let read_fn = |o: DiskOffset, sz: usize| -> ExofsResult<Vec<u8>> {
             let s = o.0 as usize;
-            Ok(disk[s..s+sz].to_vec())
+            Ok(disk[s..s + sz].to_vec())
         };
 
         let report = verify_objects(&[hdr_off], &read_fn);

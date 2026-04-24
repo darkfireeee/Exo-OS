@@ -17,15 +17,15 @@
 #![no_std]
 #![forbid(unsafe_op_in_unsafe_fn)]
 
-pub mod slab;
 pub mod bump;
 pub mod mimalloc;
-pub mod telemetry;
 pub mod oom;
+pub mod slab;
+pub mod telemetry;
 
-pub use slab::SlabAllocator;
 pub use bump::BumpAllocator;
 pub use mimalloc::Mimalloc;
+pub use slab::SlabAllocator;
 
 /// Allocator error types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

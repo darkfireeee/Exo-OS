@@ -41,25 +41,25 @@ pub const BEHAVIOR_PATTERN_SIZE: usize = 16;
 #[repr(C)]
 pub enum BehaviorType {
     /// Appel système inhabituel.
-    SyscallAnomaly    = 0,
+    SyscallAnomaly = 0,
     /// Accès mémoire suspect.
-    MemoryAnomaly     = 1,
+    MemoryAnomaly = 1,
     /// Activité réseau anormale.
-    NetworkAnomaly    = 2,
+    NetworkAnomaly = 2,
     /// Schéma IPC suspect.
-    IpcAnomaly        = 3,
+    IpcAnomaly = 3,
     /// Accès fichier suspect.
     FileAccessAnomaly = 4,
     /// escalation de privilèges.
     PrivilegeEscalation = 5,
     /// Exécution de code suspect.
-    CodeExecution     = 6,
+    CodeExecution = 6,
     /// Persistance (auto-start, etc.).
-    Persistence       = 7,
+    Persistence = 7,
     /// Fuite de données.
-    DataExfiltration  = 8,
+    DataExfiltration = 8,
     /// Comportement personnalisé.
-    Custom            = 9,
+    Custom = 9,
 }
 
 impl BehaviorType {
@@ -86,13 +86,13 @@ impl BehaviorType {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum CompareOp {
-    Eq      = 0,  // ==
-    Ne      = 1,  // !=
-    Gt      = 2,  // >
-    Ge      = 3,  // >=
-    Lt      = 4,  // <
-    Le      = 5,  // <=
-    Between = 6,  // min <= x <= max
+    Eq = 0,      // ==
+    Ne = 1,      // !=
+    Gt = 2,      // >
+    Ge = 3,      // >=
+    Lt = 4,      // <
+    Le = 5,      // <=
+    Between = 6, // min <= x <= max
 }
 
 impl CompareOp {
@@ -592,7 +592,8 @@ pub fn evaluate(pid: u32, metrics: &[u64], data: &[u8]) -> HeuristicResult {
 
     // Mettre à jour le score du processus avec le plafond
     if let Some(sidx) = score_idx {
-        engine.process_scores[sidx].score = engine.process_scores[sidx].score.min(MAX_HEURISTIC_SCORE);
+        engine.process_scores[sidx].score =
+            engine.process_scores[sidx].score.min(MAX_HEURISTIC_SCORE);
     }
 
     result

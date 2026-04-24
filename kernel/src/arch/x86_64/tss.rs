@@ -17,7 +17,6 @@
 //! - IST6 : Debug (#DB)
 //! - IST7 : réserve
 
-
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::cpu::topology::MAX_CPUS;
@@ -61,8 +60,7 @@ const GUARDED_IST_STACKS_PER_CPU: usize = 3; // ExoPhoenix + #PF + NMI fallback
 const GUARDED_IST_SLOT_SIZE: usize = IST_GUARD_SIZE + IST_STACK_SIZE;
 
 /// Taille totale du pool early pour toutes les piles IST Kernel B.
-const EARLY_IST_POOL_SIZE: usize =
-    MAX_CPUS * GUARDED_IST_STACKS_PER_CPU * GUARDED_IST_SLOT_SIZE;
+const EARLY_IST_POOL_SIZE: usize = MAX_CPUS * GUARDED_IST_STACKS_PER_CPU * GUARDED_IST_SLOT_SIZE;
 
 // ── Structure TSS ─────────────────────────────────────────────────────────────
 
@@ -70,14 +68,14 @@ const EARLY_IST_POOL_SIZE: usize =
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct TaskStateSegment {
-    _reserved0:  u32,
+    _reserved0: u32,
     /// Piles par niveau de privilège (RSP0 = entrée Ring 3 → Ring 0)
-    pub rsp:     [u64; 3],   // RSP0, RSP1, RSP2
-    _reserved1:  u64,
+    pub rsp: [u64; 3], // RSP0, RSP1, RSP2
+    _reserved1: u64,
     /// Interrupt Stack Table (7 entrées)
-    pub ist:     [u64; 7],   // IST1-IST7
-    _reserved2:  u64,
-    _reserved3:  u16,
+    pub ist: [u64; 7], // IST1-IST7
+    _reserved2: u64,
+    _reserved3: u16,
     /// Offset de l'I/O Permission Bitmap (mettre à taille du TSS = pas de IOPB)
     pub iopb_offset: u16,
 }
@@ -85,12 +83,12 @@ pub struct TaskStateSegment {
 impl TaskStateSegment {
     pub const fn zero() -> Self {
         Self {
-            _reserved0:  0,
-            rsp:         [0u64; 3],
-            _reserved1:  0,
-            ist:         [0u64; 7],
-            _reserved2:  0,
-            _reserved3:  0,
+            _reserved0: 0,
+            rsp: [0u64; 3],
+            _reserved1: 0,
+            ist: [0u64; 7],
+            _reserved2: 0,
+            _reserved3: 0,
             iopb_offset: core::mem::size_of::<TaskStateSegment>() as u16,
         }
     }
@@ -103,13 +101,13 @@ impl TaskStateSegment {
 #[derive(Clone, Copy)]
 struct PerCpuStacks {
     /// Pile Double Fault
-    df_stack:  [u8; IST_STACK_SIZE],
+    df_stack: [u8; IST_STACK_SIZE],
     /// Pile NMI
     nmi_stack: [u8; IST_STACK_SIZE],
     /// Pile Machine Check
-    mc_stack:  [u8; IST_STACK_SIZE],
+    mc_stack: [u8; IST_STACK_SIZE],
     /// Pile Debug
-    db_stack:  [u8; IST_STACK_SIZE],
+    db_stack: [u8; IST_STACK_SIZE],
     /// Pile IST5 (réservée)
     ist5_stack: [u8; IST_STACK_SIZE],
     /// Pile IST6 (réservée)
@@ -121,10 +119,10 @@ struct PerCpuStacks {
 impl PerCpuStacks {
     const fn zero() -> Self {
         Self {
-            df_stack:   [0u8; IST_STACK_SIZE],
-            nmi_stack:  [0u8; IST_STACK_SIZE],
-            mc_stack:   [0u8; IST_STACK_SIZE],
-            db_stack:   [0u8; IST_STACK_SIZE],
+            df_stack: [0u8; IST_STACK_SIZE],
+            nmi_stack: [0u8; IST_STACK_SIZE],
+            mc_stack: [0u8; IST_STACK_SIZE],
+            db_stack: [0u8; IST_STACK_SIZE],
             ist5_stack: [0u8; IST_STACK_SIZE],
             ist6_stack: [0u8; IST_STACK_SIZE],
             ist7_stack: [0u8; IST_STACK_SIZE],
@@ -133,8 +131,8 @@ impl PerCpuStacks {
 }
 
 /// TSS statiques per-CPU (limite : MAX_CPUS)
-static mut CPU_TSS:    [TaskStateSegment; MAX_CPUS] = [TaskStateSegment::zero(); MAX_CPUS];
-static mut CPU_STACKS: [PerCpuStacks;    MAX_CPUS] = const {
+static mut CPU_TSS: [TaskStateSegment; MAX_CPUS] = [TaskStateSegment::zero(); MAX_CPUS];
+static mut CPU_STACKS: [PerCpuStacks; MAX_CPUS] = const {
     let arr = [PerCpuStacks::zero(); MAX_CPUS];
     arr
 };
@@ -197,23 +195,23 @@ pub fn init_tss_for_cpu(cpu_id: usize, kernel_rsp0: u64) {
 
     // Kernel B (Phase 3.1) : 3 IST critiques allouées depuis un pool early,
     // sans heap, avec guard page logique (slot dédié non utilisé).
-    let exophoenix_top   = alloc_guarded_stack(cpu_id, "exophoenix");
-    let page_fault_top   = alloc_guarded_stack(cpu_id, "page_fault");
+    let exophoenix_top = alloc_guarded_stack(cpu_id, "exophoenix");
+    let page_fault_top = alloc_guarded_stack(cpu_id, "page_fault");
     let nmi_fallback_top = alloc_guarded_stack(cpu_id, "nmi_fallback");
 
     // IST1–7 : sommet des piles dédiées (la pile croît vers le bas)
-    let df_top  = stacks.df_stack.as_ptr()   as u64 + IST_STACK_SIZE as u64;
-    let mc_top  = stacks.mc_stack.as_ptr()   as u64 + IST_STACK_SIZE as u64;
-    let db_top  = stacks.db_stack.as_ptr()   as u64 + IST_STACK_SIZE as u64;
+    let df_top = stacks.df_stack.as_ptr() as u64 + IST_STACK_SIZE as u64;
+    let mc_top = stacks.mc_stack.as_ptr() as u64 + IST_STACK_SIZE as u64;
+    let db_top = stacks.db_stack.as_ptr() as u64 + IST_STACK_SIZE as u64;
     let ist7_top = stacks.ist7_stack.as_ptr() as u64 + IST_STACK_SIZE as u64;
 
     tss.ist[IST_EXOPHOENIX_IPI] = exophoenix_top;
-    tss.ist[IST_PAGE_FAULT]     = page_fault_top;
-    tss.ist[IST_NMI]            = nmi_fallback_top;
-    tss.ist[IST_DOUBLE_FAULT]   = df_top;
-    tss.ist[IST_MACHINE_CHECK]  = mc_top;
-    tss.ist[IST_DEBUG]          = db_top;
-    tss.ist[6]                  = ist7_top;
+    tss.ist[IST_PAGE_FAULT] = page_fault_top;
+    tss.ist[IST_NMI] = nmi_fallback_top;
+    tss.ist[IST_DOUBLE_FAULT] = df_top;
+    tss.ist[IST_MACHINE_CHECK] = mc_top;
+    tss.ist[IST_DEBUG] = db_top;
+    tss.ist[6] = ist7_top;
 
     // IOPB : pointé au-delà du TSS → accès I/O interdit depuis Ring 3
     tss.iopb_offset = core::mem::size_of::<TaskStateSegment>() as u16;
@@ -249,7 +247,9 @@ pub unsafe fn tss_ptr_mut(cpu_id: usize) -> *mut TaskStateSegment {
 #[inline(always)]
 pub unsafe fn update_rsp0(cpu_id: usize, rsp0: u64) {
     // SAFETY: délégué à l'appelant — mise à jour atomique du champ rsp[0]
-    unsafe { CPU_TSS[cpu_id].rsp[0] = rsp0; }
+    unsafe {
+        CPU_TSS[cpu_id].rsp[0] = rsp0;
+    }
 }
 
 /// Charge le TSS dans le registre TR via LTR
@@ -281,18 +281,21 @@ pub fn tss_ready() -> bool {
 ///
 /// Retourne `Err(&str)` si une pile est mal alignée.
 pub fn validate_ist_alignment(cpu_id: usize) -> Result<(), &'static str> {
-    if cpu_id >= MAX_CPUS { return Err("cpu_id hors bornes"); }
+    if cpu_id >= MAX_CPUS {
+        return Err("cpu_id hors bornes");
+    }
     // SAFETY: cpu_id < MAX_CPUS vérifié ci-dessus ; CPU_TSS est un tableau statique
     // dont l'index cpu_id n'est accédé qu'en lecture ici — pas de race possible.
     // SAFETY: Lecture non-concurrente d'un TSS initialisé par ce CPU.
     // Utilise read_unaligned car TaskStateSegment est repr(packed).
     let tss_ptr = unsafe { &CPU_TSS[cpu_id] as *const TaskStateSegment };
-    let ist_copy: [u64; 7] = unsafe {
-        core::ptr::read_unaligned(core::ptr::addr_of!((*tss_ptr).ist))
-    };
+    let ist_copy: [u64; 7] =
+        unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*tss_ptr).ist)) };
 
     for (i, &ist_addr) in ist_copy.iter().enumerate() {
-        if ist_addr == 0 { continue; }
+        if ist_addr == 0 {
+            continue;
+        }
         if ist_addr % 16 != 0 {
             return Err("IST stack non aligné sur 16 bytes");
         }

@@ -4,42 +4,39 @@
 //! Les relations sont stockées dans un blob de registre dédié.
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
+use super::validation::{exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT};
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use super::validation::{
-    exofs_err_to_errno, write_user_buf, EFAULT,
-    verify_cap, CapabilityType,
-};
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub const RELATION_MAGIC:   u32   = 0x52454C41; // "RELA"
-pub const RELATION_MAX:     usize = 128;
-pub const RELATION_NAME_MAX:usize = 64;
+pub const RELATION_MAGIC: u32 = 0x52454C41; // "RELA"
+pub const RELATION_MAX: usize = 128;
+pub const RELATION_NAME_MAX: usize = 64;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types de relation
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod rel_kind {
-    pub const HARDLINK:  u8 = 0;
-    pub const SYMLINK:   u8 = 1;
-    pub const PARENT:    u8 = 2;
-    pub const CHILD:     u8 = 3;
-    pub const SNAPSHOT:  u8 = 4;
+    pub const HARDLINK: u8 = 0;
+    pub const SYMLINK: u8 = 1;
+    pub const PARENT: u8 = 2;
+    pub const CHILD: u8 = 3;
+    pub const SNAPSHOT: u8 = 4;
     pub const REFERENCE: u8 = 5;
-    pub const CUSTOM:    u8 = 6;
+    pub const CUSTOM: u8 = 6;
 }
 
 pub mod rel_flags {
     pub const BIDIRECTIONAL: u32 = 0x0001;
-    pub const UNIQUE:        u32 = 0x0002;
-    pub const PERSISTENT:    u32 = 0x0004;
-    pub const VALID_MASK:    u32 = BIDIRECTIONAL | UNIQUE | PERSISTENT;
+    pub const UNIQUE: u32 = 0x0002;
+    pub const PERSISTENT: u32 = 0x0004;
+    pub const VALID_MASK: u32 = BIDIRECTIONAL | UNIQUE | PERSISTENT;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,13 +49,13 @@ pub mod rel_flags {
 pub struct Relation {
     pub source_id: [u8; 32],
     pub target_id: [u8; 32],
-    pub kind:      u8,
-    pub _pad:      [u8; 7],
-    pub flags:     u32,
-    pub _pad2:     u32,
-    pub name:      [u8; RELATION_NAME_MAX],
-    pub name_len:  u8,
-    pub _pad3:     [u8; 7],
+    pub kind: u8,
+    pub _pad: [u8; 7],
+    pub flags: u32,
+    pub _pad2: u32,
+    pub name: [u8; RELATION_NAME_MAX],
+    pub name_len: u8,
+    pub _pad3: [u8; 7],
 }
 
 impl Default for Relation {
@@ -66,13 +63,13 @@ impl Default for Relation {
         Self {
             source_id: [0u8; 32],
             target_id: [0u8; 32],
-            kind:      0,
-            _pad:      [0u8; 7],
-            flags:     0,
-            _pad2:     0,
-            name:      [0u8; RELATION_NAME_MAX],
-            name_len:  0,
-            _pad3:     [0u8; 7],
+            kind: 0,
+            _pad: [0u8; 7],
+            flags: 0,
+            _pad2: 0,
+            name: [0u8; RELATION_NAME_MAX],
+            name_len: 0,
+            _pad3: [0u8; 7],
         }
     }
 }
@@ -81,33 +78,63 @@ const _: () = assert!(core::mem::size_of::<Relation>() <= 256);
 
 impl Relation {
     pub fn new(
-        src:   &[u8; 32],
-        tgt:   &[u8; 32],
-        kind:  u8,
+        src: &[u8; 32],
+        tgt: &[u8; 32],
+        kind: u8,
         flags: u32,
-        name:  &[u8],
+        name: &[u8],
     ) -> ExofsResult<Self> {
-        if flags & !rel_flags::VALID_MASK != 0 { return Err(ExofsError::InvalidArgument); }
+        if flags & !rel_flags::VALID_MASK != 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         let nl = name.len().min(RELATION_NAME_MAX) as u8;
-        let mut r = Relation { kind, flags, name_len: nl, ..Self::default() };
+        let mut r = Relation {
+            kind,
+            flags,
+            name_len: nl,
+            ..Self::default()
+        };
         let mut i = 0usize;
-        while i < 32 { r.source_id[i] = src[i]; i = i.wrapping_add(1); }
+        while i < 32 {
+            r.source_id[i] = src[i];
+            i = i.wrapping_add(1);
+        }
         let mut j = 0usize;
-        while j < 32 { r.target_id[j] = tgt[j]; j = j.wrapping_add(1); }
+        while j < 32 {
+            r.target_id[j] = tgt[j];
+            j = j.wrapping_add(1);
+        }
         let mut k = 0usize;
-        while k < nl as usize { r.name[k] = name[k]; k = k.wrapping_add(1); }
+        while k < nl as usize {
+            r.name[k] = name[k];
+            k = k.wrapping_add(1);
+        }
         Ok(r)
     }
 
-    pub fn name_bytes(&self) -> &[u8] { &self.name[..self.name_len as usize] }
+    pub fn name_bytes(&self) -> &[u8] {
+        &self.name[..self.name_len as usize]
+    }
 
     pub fn matches(&self, src: &[u8; 32], tgt: &[u8; 32]) -> bool {
         let mut se = true;
         let mut i = 0usize;
-        while i < 32 { if self.source_id[i] != src[i] { se = false; break; } i = i.wrapping_add(1); }
+        while i < 32 {
+            if self.source_id[i] != src[i] {
+                se = false;
+                break;
+            }
+            i = i.wrapping_add(1);
+        }
         let mut te = true;
         let mut j = 0usize;
-        while j < 32 { if self.target_id[j] != tgt[j] { te = false; break; } j = j.wrapping_add(1); }
+        while j < 32 {
+            if self.target_id[j] != tgt[j] {
+                te = false;
+                break;
+            }
+            j = j.wrapping_add(1);
+        }
         se && te
     }
 }
@@ -124,8 +151,12 @@ const REL_ENTRY: usize = core::mem::size_of::<Relation>();
 fn rel_registry_id(source: &[u8; 32]) -> BlobId {
     let mut buf = [0u8; 34];
     let mut i = 0usize;
-    while i < 32 { buf[i] = source[i]; i = i.wrapping_add(1); }
-    buf[32] = 0x52; buf[33] = 0x45; // "RE"
+    while i < 32 {
+        buf[i] = source[i];
+        i = i.wrapping_add(1);
+    }
+    buf[32] = 0x52;
+    buf[33] = 0x45; // "RE"
     BlobId::from_bytes_blake3(&buf)
 }
 
@@ -134,11 +165,15 @@ fn rel_registry_id(source: &[u8; 32]) -> BlobId {
 fn load_relations(reg_id: BlobId) -> ExofsResult<Vec<Relation>> {
     let data = match BLOB_CACHE.get(&reg_id) {
         Some(d) => d,
-        None    => return Ok(Vec::new()),
+        None => return Ok(Vec::new()),
     };
-    if data.len() < REL_HDR { return Ok(Vec::new()); }
+    if data.len() < REL_HDR {
+        return Ok(Vec::new());
+    }
     let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-    if magic != RELATION_MAGIC { return Err(ExofsError::InvalidMagic); }
+    if magic != RELATION_MAGIC {
+        return Err(ExofsError::InvalidMagic);
+    }
     let count = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
     let available = (data.len().saturating_sub(REL_HDR)) / REL_ENTRY;
     let n = count.min(available).min(RELATION_MAX);
@@ -153,7 +188,10 @@ fn load_relations(reg_id: BlobId) -> ExofsResult<Vec<Relation>> {
             core::slice::from_raw_parts_mut(&mut r as *mut Relation as *mut u8, REL_ENTRY)
         };
         let mut j = 0usize;
-        while j < REL_ENTRY { dst[j] = data[off + j]; j = j.wrapping_add(1); }
+        while j < REL_ENTRY {
+            dst[j] = data[off + j];
+            j = j.wrapping_add(1);
+        }
         rels.push(r);
         i = i.wrapping_add(1);
     }
@@ -168,10 +206,16 @@ fn save_relations(reg_id: BlobId, rels: &[Relation]) -> ExofsResult<()> {
     buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
     let magic = RELATION_MAGIC.to_le_bytes();
     let mut i = 0usize;
-    while i < 4 { buf.push(magic[i]); i = i.wrapping_add(1); }
+    while i < 4 {
+        buf.push(magic[i]);
+        i = i.wrapping_add(1);
+    }
     let cnt = (rels.len() as u32).to_le_bytes();
     let mut j = 0usize;
-    while j < 4 { buf.push(cnt[j]); j = j.wrapping_add(1); }
+    while j < 4 {
+        buf.push(cnt[j]);
+        j = j.wrapping_add(1);
+    }
     let mut k = 0usize;
     while k < rels.len() {
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
@@ -179,7 +223,10 @@ fn save_relations(reg_id: BlobId, rels: &[Relation]) -> ExofsResult<()> {
             core::slice::from_raw_parts(&rels[k] as *const Relation as *const u8, REL_ENTRY)
         };
         let mut m = 0usize;
-        while m < REL_ENTRY { buf.push(raw[m]); m = m.wrapping_add(1); }
+        while m < REL_ENTRY {
+            buf.push(raw[m]);
+            m = m.wrapping_add(1);
+        }
         k = k.wrapping_add(1);
     }
     BLOB_CACHE.insert(reg_id, buf.to_vec())
@@ -191,11 +238,11 @@ fn save_relations(reg_id: BlobId, rels: &[Relation]) -> ExofsResult<()> {
 
 /// Crée une relation entre source et target.
 pub fn create_relation(
-    src:   &[u8; 32],
-    tgt:   &[u8; 32],
-    kind:  u8,
+    src: &[u8; 32],
+    tgt: &[u8; 32],
+    kind: u8,
     flags: u32,
-    name:  &[u8],
+    name: &[u8],
 ) -> ExofsResult<Relation> {
     let reg_id = rel_registry_id(src);
     let mut rels = load_relations(reg_id)?;
@@ -208,7 +255,9 @@ pub fn create_relation(
             i = i.wrapping_add(1);
         }
     }
-    if rels.len() >= RELATION_MAX { return Err(ExofsError::QuotaExceeded); }
+    if rels.len() >= RELATION_MAX {
+        return Err(ExofsError::QuotaExceeded);
+    }
     let rel = Relation::new(src, tgt, kind, flags, name)?;
     rels.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
     rels.push(rel);
@@ -235,13 +284,13 @@ pub fn create_relation(
 pub struct RelationCreateArgs {
     pub source_id: [u8; 32],
     pub target_id: [u8; 32],
-    pub kind:      u8,
-    pub _pad:      [u8; 7],
-    pub flags:     u32,
-    pub _pad2:     u32,
-    pub name_ptr:  u64,
-    pub name_len:  u32,
-    pub _pad3:     u32,
+    pub kind: u8,
+    pub _pad: [u8; 7],
+    pub flags: u32,
+    pub _pad2: u32,
+    pub name_ptr: u64,
+    pub name_len: u32,
+    pub _pad3: u32,
     pub _reserved: [u8; 8],
 }
 
@@ -253,18 +302,21 @@ const _: () = assert!(
 /// `exofs_relation_create(args_ptr, out_ptr, _, _, _, _) → 0 ou errno`
 pub fn sys_exofs_relation_create(
     args_ptr: u64,
-    out_ptr:  u64,
-    _a3:      u64,
-    _a4:      u64,
-    _a5:      u64,
+    out_ptr: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
     cap_rights: u64,
 ) -> i64 {
-    if args_ptr == 0 { return EFAULT; }
+    if args_ptr == 0 {
+        return EFAULT;
+    }
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-    let args = match unsafe { super::validation::copy_struct_from_user::<RelationCreateArgs>(args_ptr) } {
-        Ok(a)  => a,
-        Err(_) => return EFAULT,
-    };
+    let args =
+        match unsafe { super::validation::copy_struct_from_user::<RelationCreateArgs>(args_ptr) } {
+            Ok(a) => a,
+            Err(_) => return EFAULT,
+        };
     let mut name_buf: Vec<u8> = Vec::new();
     if args.name_ptr != 0 && args.name_len > 0 {
         let nl = (args.name_len as usize).min(RELATION_NAME_MAX);
@@ -273,22 +325,32 @@ pub fn sys_exofs_relation_create(
         unsafe {
             let src = args.name_ptr as *const u8;
             let mut i = 0usize;
-            while i < nl { name_buf.push(*src.add(i)); i = i.wrapping_add(1); }
+            while i < nl {
+                name_buf.push(*src.add(i));
+                i = i.wrapping_add(1);
+            }
         }
     }
     if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsRelationCreate) {
         return e;
     }
-    let rel = match create_relation(&args.source_id, &args.target_id, args.kind, args.flags, &name_buf) {
-        Ok(r)  => r,
+    let rel = match create_relation(
+        &args.source_id,
+        &args.target_id,
+        args.kind,
+        args.flags,
+        &name_buf,
+    ) {
+        Ok(r) => r,
         Err(e) => return exofs_err_to_errno(e),
     };
     if out_ptr != 0 {
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let bytes = unsafe {
-            core::slice::from_raw_parts(&rel as *const Relation as *const u8, REL_ENTRY)
-        };
-        if let Err(e) = write_user_buf(out_ptr, bytes) { return e; }
+        let bytes =
+            unsafe { core::slice::from_raw_parts(&rel as *const Relation as *const u8, REL_ENTRY) };
+        if let Err(e) = write_user_buf(out_ptr, bytes) {
+            return e;
+        }
     }
     0i64
 }
@@ -311,7 +373,9 @@ pub fn relation_count(source: &[u8; 32]) -> usize {
 mod tests {
     use super::*;
 
-    fn id(s: &[u8]) -> [u8; 32] { *BlobId::from_bytes_blake3(s).as_bytes() }
+    fn id(s: &[u8]) -> [u8; 32] {
+        *BlobId::from_bytes_blake3(s).as_bytes()
+    }
 
     #[test]
     fn test_create_basic() {
@@ -392,10 +456,14 @@ pub fn delete_relation(src: &[u8; 32], tgt: &[u8; 32], kind: u8) -> ExofsResult<
     let reg_id = rel_registry_id(src);
     let rels = load_relations(reg_id)?;
     let mut new_rels: Vec<Relation> = Vec::new();
-    new_rels.try_reserve(rels.len()).map_err(|_| ExofsError::NoMemory)?;
+    new_rels
+        .try_reserve(rels.len())
+        .map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < rels.len() {
-        if !(rels[i].matches(src, tgt) && rels[i].kind == kind) { new_rels.push(rels[i]); }
+        if !(rels[i].matches(src, tgt) && rels[i].kind == kind) {
+            new_rels.push(rels[i]);
+        }
         i = i.wrapping_add(1);
     }
     save_relations(reg_id, &new_rels)
@@ -405,12 +473,14 @@ pub fn delete_relation(src: &[u8; 32], tgt: &[u8; 32], kind: u8) -> ExofsResult<
 pub fn relation_exists(src: &[u8; 32], tgt: &[u8; 32], kind: u8) -> bool {
     let reg_id = rel_registry_id(src);
     let rels = match load_relations(reg_id) {
-        Ok(v)  => v,
+        Ok(v) => v,
         Err(_) => return false,
     };
     let mut i = 0usize;
     while i < rels.len() {
-        if rels[i].matches(src, tgt) && rels[i].kind == kind { return true; }
+        if rels[i].matches(src, tgt) && rels[i].kind == kind {
+            return true;
+        }
         i = i.wrapping_add(1);
     }
     false
@@ -436,7 +506,10 @@ pub fn encode_relations(rels: &[Relation]) -> ExofsResult<Vec<u8>> {
             core::slice::from_raw_parts(&rels[i] as *const Relation as *const u8, REL_ENTRY)
         };
         let mut j = 0usize;
-        while j < REL_ENTRY { buf.push(raw[j]); j = j.wrapping_add(1); }
+        while j < REL_ENTRY {
+            buf.push(raw[j]);
+            j = j.wrapping_add(1);
+        }
         i = i.wrapping_add(1);
     }
     Ok(buf)
@@ -446,7 +519,9 @@ pub fn encode_relations(rels: &[Relation]) -> ExofsResult<Vec<u8>> {
 mod advanced_tests {
     use super::*;
 
-    fn id(s: &[u8]) -> [u8; 32] { *BlobId::from_bytes_blake3(s).as_bytes() }
+    fn id(s: &[u8]) -> [u8; 32] {
+        *BlobId::from_bytes_blake3(s).as_bytes()
+    }
 
     #[test]
     fn test_delete_relation() {
@@ -505,8 +580,14 @@ mod advanced_tests {
             let t_bytes = (i as u64).to_le_bytes();
             let mut tid = [0u8; 32];
             let mut j = 0usize;
-            while j < 8 { tid[j] = t_bytes[j]; j = j.wrapping_add(1); }
-            if create_relation(&s, &tid, rel_kind::CHILD, 0, b"").is_err() { _ok = false; break; }
+            while j < 8 {
+                tid[j] = t_bytes[j];
+                j = j.wrapping_add(1);
+            }
+            if create_relation(&s, &tid, rel_kind::CHILD, 0, b"").is_err() {
+                _ok = false;
+                break;
+            }
             i = i.wrapping_add(1);
         }
         assert!(create_relation(&s, &[0xFF; 32], rel_kind::CHILD, 0, b"").is_err());

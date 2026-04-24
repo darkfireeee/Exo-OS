@@ -6,9 +6,8 @@
 //   SEC-04    : jamais de contenu secret dans les logs/stats
 //   ARITH-02  : checked_add / saturating_*
 
-
-use core::fmt;
 use alloc::sync::Arc;
+use core::fmt;
 
 use crate::fs::exofs::core::{BlobId, DiskOffset, ExofsError, ExofsResult};
 use crate::fs::exofs::objects::inline_data::InlineData;
@@ -69,7 +68,7 @@ impl PhysicalRef {
     pub fn blob_id(&self) -> Option<BlobId> {
         match self {
             Self::Blob(b) => Some(b.blob_id),
-            _             => None,
+            _ => None,
         }
     }
 
@@ -77,7 +76,7 @@ impl PhysicalRef {
     pub fn disk_offset(&self) -> Option<DiskOffset> {
         match self {
             Self::Blob(b) => Some(b.data_offset),
-            _             => None,
+            _ => None,
         }
     }
 
@@ -88,18 +87,18 @@ impl PhysicalRef {
     /// - Empty  → 0.
     pub fn size(&self) -> u64 {
         match self {
-            Self::Blob(b)   => b.data_size,
+            Self::Blob(b) => b.data_size,
             Self::Inline(d) => d.len() as u64,
-            Self::Empty     => 0,
+            Self::Empty => 0,
         }
     }
 
     /// Retourne la taille originale (avant compression).
     pub fn original_size(&self) -> u64 {
         match self {
-            Self::Blob(b)   => b.original_size,
+            Self::Blob(b) => b.original_size,
             Self::Inline(d) => d.len() as u64,
-            Self::Empty     => 0,
+            Self::Empty => 0,
         }
     }
 
@@ -125,7 +124,7 @@ impl PhysicalRef {
     pub fn as_blob(&self) -> Option<&Arc<PhysicalBlobInMemory>> {
         match self {
             Self::Blob(b) => Some(b),
-            _             => None,
+            _ => None,
         }
     }
 
@@ -133,7 +132,7 @@ impl PhysicalRef {
     pub fn as_inline(&self) -> Option<&InlineData> {
         match self {
             Self::Inline(d) => Some(d),
-            _               => None,
+            _ => None,
         }
     }
 
@@ -141,7 +140,7 @@ impl PhysicalRef {
     pub fn as_inline_mut(&mut self) -> Option<&mut InlineData> {
         match self {
             Self::Inline(d) => Some(d),
-            _               => None,
+            _ => None,
         }
     }
 
@@ -160,7 +159,7 @@ impl PhysicalRef {
     pub fn dec_ref(&self) -> u32 {
         match self {
             Self::Blob(b) => b.dec_ref(),
-            _             => 0,
+            _ => 0,
         }
     }
 
@@ -168,7 +167,7 @@ impl PhysicalRef {
     pub fn ref_count(&self) -> u32 {
         match self {
             Self::Blob(b) => b.ref_count(),
-            _             => 0,
+            _ => 0,
         }
     }
 
@@ -179,9 +178,9 @@ impl PhysicalRef {
     /// Pour les variants non-Blob, retourne toujours `true` (rien à vérifier).
     pub fn verify_content(&self, data: &[u8]) -> bool {
         match self {
-            Self::Blob(b)   => b.verify_content(data),
+            Self::Blob(b) => b.verify_content(data),
             Self::Inline(d) => d.ct_eq(data) || d.verify_hash(),
-            Self::Empty     => data.is_empty(),
+            Self::Empty => data.is_empty(),
         }
     }
 
@@ -197,7 +196,7 @@ impl PhysicalRef {
                 Ok(())
             }
             Self::Inline(d) => d.validate(),
-            Self::Empty     => Ok(()),
+            Self::Empty => Ok(()),
         }
     }
 
@@ -216,9 +215,9 @@ impl PhysicalRef {
     /// Retourne une description textuelle du type de référence.
     pub fn kind_str(&self) -> &'static str {
         match self {
-            Self::Blob(_)   => "blob",
+            Self::Blob(_) => "blob",
             Self::Inline(_) => "inline",
-            Self::Empty     => "empty",
+            Self::Empty => "empty",
         }
     }
 }
@@ -258,31 +257,31 @@ impl fmt::Debug for PhysicalRef {
 #[derive(Default, Debug, Clone)]
 pub struct PhysicalRefStats {
     /// Nombre de refs créées (all variants).
-    pub created:          u64,
+    pub created: u64,
     /// Nombre de refs Blob créées.
-    pub blob_refs:        u64,
+    pub blob_refs: u64,
     /// Nombre de refs Inline créées.
-    pub inline_refs:      u64,
+    pub inline_refs: u64,
     /// Nombre de promotions inline→blob.
-    pub promotions:       u64,
+    pub promotions: u64,
     /// Nombre d'erreurs de validation.
-    pub validate_errors:  u64,
+    pub validate_errors: u64,
     /// Nombre de vérifications de contenu réussies.
-    pub verify_ok:        u64,
+    pub verify_ok: u64,
     /// Nombre d'erreurs de vérification.
-    pub verify_errors:    u64,
+    pub verify_errors: u64,
 }
 
 impl PhysicalRefStats {
     pub const fn new() -> Self {
         Self {
-            created:         0,
-            blob_refs:       0,
-            inline_refs:     0,
-            promotions:      0,
+            created: 0,
+            blob_refs: 0,
+            inline_refs: 0,
+            promotions: 0,
             validate_errors: 0,
-            verify_ok:       0,
-            verify_errors:   0,
+            verify_ok: 0,
+            verify_errors: 0,
         }
     }
 }
@@ -373,7 +372,7 @@ mod tests {
             EpochId(1),
         ));
         let r = PhysicalRef::from_blob(b);
-        assert!( r.verify_content(data));
+        assert!(r.verify_content(data));
         assert!(!r.verify_content(b"wrong"));
     }
 }

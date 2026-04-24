@@ -19,11 +19,11 @@
 // RÈGLE OOM-02   : try_reserve avant push.
 
 use core::fmt;
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::fs::exofs::core::{ExofsResult, EpochId, EPOCH_MAX_OBJECTS};
-use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
+use crate::fs::exofs::core::{EpochId, ExofsResult, EPOCH_MAX_OBJECTS};
 use crate::fs::exofs::epoch::epoch_delta::EpochDelta;
+use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
 
 // =============================================================================
 // Raisons de flush
@@ -49,12 +49,12 @@ pub enum FlushReason {
 impl fmt::Display for FlushReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FlushReason::Periodic        => write!(f, "Periodic"),
-            FlushReason::DeltaFull       => write!(f, "DeltaFull"),
-            FlushReason::Explicit        => write!(f, "Explicit"),
-            FlushReason::Umount          => write!(f, "Umount"),
-            FlushReason::MemoryPressure  => write!(f, "MemoryPressure"),
-            FlushReason::Forced          => write!(f, "Forced"),
+            FlushReason::Periodic => write!(f, "Periodic"),
+            FlushReason::DeltaFull => write!(f, "DeltaFull"),
+            FlushReason::Explicit => write!(f, "Explicit"),
+            FlushReason::Umount => write!(f, "Umount"),
+            FlushReason::MemoryPressure => write!(f, "MemoryPressure"),
+            FlushReason::Forced => write!(f, "Forced"),
         }
     }
 }
@@ -73,7 +73,7 @@ pub enum WritebackDecision {
     /// Commit immédiat requis (delta saturé).
     CommitImmediate { reason: FlushReason },
     /// Commit forcé (fsync, umount, pression mémoire).
-    CommitForced    { reason: FlushReason },
+    CommitForced { reason: FlushReason },
 }
 
 impl WritebackDecision {
@@ -86,10 +86,10 @@ impl WritebackDecision {
     /// Retourne la raison du flush si applicable.
     pub fn flush_reason(&self) -> Option<FlushReason> {
         match self {
-            WritebackDecision::Hold                        => None,
-            WritebackDecision::CommitPeriodic              => Some(FlushReason::Periodic),
-            WritebackDecision::CommitImmediate { reason }  => Some(*reason),
-            WritebackDecision::CommitForced    { reason }  => Some(*reason),
+            WritebackDecision::Hold => None,
+            WritebackDecision::CommitPeriodic => Some(FlushReason::Periodic),
+            WritebackDecision::CommitImmediate { reason } => Some(*reason),
+            WritebackDecision::CommitForced { reason } => Some(*reason),
         }
     }
 }
@@ -151,17 +151,20 @@ impl BackpressurePolicy {
     /// Retourne `true` si les writers doivent être ralentis.
     #[inline]
     pub fn should_throttle(&self) -> bool {
-        matches!(self, BackpressurePolicy::Throttle | BackpressurePolicy::Block)
+        matches!(
+            self,
+            BackpressurePolicy::Throttle | BackpressurePolicy::Block
+        )
     }
 }
 
 impl fmt::Display for BackpressurePolicy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BackpressurePolicy::None     => write!(f, "None"),
-            BackpressurePolicy::Warn     => write!(f, "Warn"),
+            BackpressurePolicy::None => write!(f, "None"),
+            BackpressurePolicy::Warn => write!(f, "Warn"),
             BackpressurePolicy::Throttle => write!(f, "Throttle"),
-            BackpressurePolicy::Block    => write!(f, "Block"),
+            BackpressurePolicy::Block => write!(f, "Block"),
         }
     }
 }
@@ -174,15 +177,15 @@ impl fmt::Display for BackpressurePolicy {
 #[derive(Copy, Clone, Debug)]
 pub struct WritebackCycleResult {
     /// Epoch committé (None si aucun commit effectué).
-    pub committed_epoch:  Option<EpochId>,
+    pub committed_epoch: Option<EpochId>,
     /// Nombre d'objets commités.
-    pub object_count:     u32,
+    pub object_count: u32,
     /// Durée du cycle en cycles TSC.
-    pub duration_cycles:  u64,
+    pub duration_cycles: u64,
     /// Décision qui a déclenché ce cycle.
-    pub decision:         WritebackDecision,
+    pub decision: WritebackDecision,
     /// Politique de backpressure au moment du cycle.
-    pub backpressure:     BackpressurePolicy,
+    pub backpressure: BackpressurePolicy,
 }
 
 impl WritebackCycleResult {
@@ -190,10 +193,10 @@ impl WritebackCycleResult {
     pub const fn noop() -> Self {
         Self {
             committed_epoch: None,
-            object_count:    0,
+            object_count: 0,
             duration_cycles: 0,
-            decision:        WritebackDecision::Hold,
-            backpressure:    BackpressurePolicy::None,
+            decision: WritebackDecision::Hold,
+            backpressure: BackpressurePolicy::None,
         }
     }
 }
@@ -219,7 +222,7 @@ impl FlushSchedule {
     /// Crée un planificateur avec les valeurs par défaut.
     pub const fn new() -> Self {
         Self {
-            min_interval_ticks:    AtomicU64::new(10_000_000),
+            min_interval_ticks: AtomicU64::new(10_000_000),
             coalesce_window_ticks: AtomicU64::new(1_000_000),
             preempt_threshold_pct: AtomicU32::new(50),
         }
@@ -227,7 +230,8 @@ impl FlushSchedule {
 
     /// Définit l'intervalle minimum entre commits périodiques.
     pub fn set_interval(&self, ticks: u64) {
-        self.min_interval_ticks.store(ticks.max(1), Ordering::Relaxed);
+        self.min_interval_ticks
+            .store(ticks.max(1), Ordering::Relaxed);
     }
 
     /// Définit la fenêtre de coalescence.
@@ -268,38 +272,38 @@ pub static FLUSH_SCHEDULE: FlushSchedule = FlushSchedule::new();
 /// Contrôleur du thread de writeback — état atomique partagé.
 pub struct WritebackController {
     /// Vrai si le thread de writeback est actif.
-    running:                AtomicBool,
+    running: AtomicBool,
     /// TSC du dernier commit effectué.
-    last_commit_tsc:        AtomicU64,
+    last_commit_tsc: AtomicU64,
     /// Nombre de commits périodiques depuis le démarrage.
-    periodic_commits:       AtomicU64,
+    periodic_commits: AtomicU64,
     /// Nombre de commits immédiats (delta saturé) depuis le démarrage.
-    immediate_commits:      AtomicU64,
+    immediate_commits: AtomicU64,
     /// Nombre de commits forcés (fsync, umount) depuis le démarrage.
-    forced_commits:         AtomicU64,
+    forced_commits: AtomicU64,
     /// Nombre d'épisodes de backpressure (throttle ou block).
-    backpressure_episodes:  AtomicU64,
+    backpressure_episodes: AtomicU64,
     /// Nombre total d'objets commités.
     total_objects_committed: AtomicU64,
     /// Vrai si un commit forcé est en attente.
-    force_pending:          AtomicBool,
+    force_pending: AtomicBool,
     /// Raison du commit forcé en attente (encodée comme u32).
-    force_reason_raw:       AtomicU32,
+    force_reason_raw: AtomicU32,
 }
 
 impl WritebackController {
     /// Crée un contrôleur initial.
     pub const fn new() -> Self {
         Self {
-            running:                 AtomicBool::new(false),
-            last_commit_tsc:         AtomicU64::new(0),
-            periodic_commits:        AtomicU64::new(0),
-            immediate_commits:       AtomicU64::new(0),
-            forced_commits:          AtomicU64::new(0),
-            backpressure_episodes:   AtomicU64::new(0),
+            running: AtomicBool::new(false),
+            last_commit_tsc: AtomicU64::new(0),
+            periodic_commits: AtomicU64::new(0),
+            immediate_commits: AtomicU64::new(0),
+            forced_commits: AtomicU64::new(0),
+            backpressure_episodes: AtomicU64::new(0),
             total_objects_committed: AtomicU64::new(0),
-            force_pending:           AtomicBool::new(false),
-            force_reason_raw:        AtomicU32::new(0),
+            force_pending: AtomicBool::new(false),
+            force_reason_raw: AtomicU32::new(0),
         }
     }
 
@@ -341,7 +345,10 @@ impl WritebackController {
         EPOCH_STATS.add_objects_committed(object_count as u64);
 
         // Annule le force_pending si c'était un commit forcé.
-        if matches!(reason, FlushReason::Forced | FlushReason::Explicit | FlushReason::Umount) {
+        if matches!(
+            reason,
+            FlushReason::Forced | FlushReason::Explicit | FlushReason::Umount
+        ) {
             self.force_pending.store(false, Ordering::Relaxed);
         }
     }
@@ -349,7 +356,7 @@ impl WritebackController {
     /// Retourne `true` si un flush périodique est dû (TSC dépassé).
     #[inline]
     pub fn needs_periodic_flush(&self, tsc_now: u64) -> bool {
-        let last     = self.last_commit_tsc.load(Ordering::Relaxed);
+        let last = self.last_commit_tsc.load(Ordering::Relaxed);
         let interval = FLUSH_SCHEDULE.interval_ticks();
         tsc_now.saturating_sub(last) >= interval
     }
@@ -357,11 +364,11 @@ impl WritebackController {
     /// Force un commit au prochain tick du writeback.
     pub fn request_force_commit(&self, reason: FlushReason) {
         let raw = match reason {
-            FlushReason::Explicit       => 1u32,
-            FlushReason::Umount         => 2u32,
+            FlushReason::Explicit => 1u32,
+            FlushReason::Umount => 2u32,
             FlushReason::MemoryPressure => 3u32,
-            FlushReason::Forced         => 4u32,
-            _                           => 4u32,
+            FlushReason::Forced => 4u32,
+            _ => 4u32,
         };
         self.force_reason_raw.store(raw, Ordering::Relaxed);
         self.force_pending.store(true, Ordering::Release);
@@ -391,13 +398,13 @@ impl WritebackController {
     /// Collecte un snapshot des statistiques du contrôleur.
     pub fn stats(&self) -> WritebackStats {
         WritebackStats {
-            running:                 self.running.load(Ordering::Relaxed),
-            periodic_commits:        self.periodic_commits.load(Ordering::Relaxed),
-            immediate_commits:       self.immediate_commits.load(Ordering::Relaxed),
-            forced_commits:          self.forced_commits.load(Ordering::Relaxed),
-            backpressure_episodes:   self.backpressure_episodes.load(Ordering::Relaxed),
+            running: self.running.load(Ordering::Relaxed),
+            periodic_commits: self.periodic_commits.load(Ordering::Relaxed),
+            immediate_commits: self.immediate_commits.load(Ordering::Relaxed),
+            forced_commits: self.forced_commits.load(Ordering::Relaxed),
+            backpressure_episodes: self.backpressure_episodes.load(Ordering::Relaxed),
             total_objects_committed: self.total_objects_committed.load(Ordering::Relaxed),
-            last_commit_tsc:         self.last_commit_tsc.load(Ordering::Relaxed),
+            last_commit_tsc: self.last_commit_tsc.load(Ordering::Relaxed),
         }
     }
 }
@@ -413,19 +420,19 @@ pub static WRITEBACK_CTL: WritebackController = WritebackController::new();
 #[derive(Debug, Copy, Clone)]
 pub struct WritebackStats {
     /// Vrai si le thread de writeback est actif.
-    pub running:                 bool,
+    pub running: bool,
     /// Commits périodiques effectués.
-    pub periodic_commits:        u64,
+    pub periodic_commits: u64,
     /// Commits immédiats (delta saturé).
-    pub immediate_commits:       u64,
+    pub immediate_commits: u64,
     /// Commits forcés (fsync, umount, etc.).
-    pub forced_commits:          u64,
+    pub forced_commits: u64,
     /// Épisodes de backpressure (throttle + block).
-    pub backpressure_episodes:   u64,
+    pub backpressure_episodes: u64,
     /// Total des objets commités.
     pub total_objects_committed: u64,
     /// TSC du dernier commit.
-    pub last_commit_tsc:         u64,
+    pub last_commit_tsc: u64,
 }
 
 impl WritebackStats {
@@ -540,7 +547,7 @@ pub struct GroupCommitEntry {
     /// Nombre d'objets dans cette écriture.
     pub object_count: u32,
     /// Vrai si c'est un fsync (commit forcé).
-    pub is_sync:      bool,
+    pub is_sync: bool,
 }
 
 /// Capacité maximale du buffer de group commit.
@@ -551,15 +558,15 @@ pub const GROUP_COMMIT_CAPACITY: usize = 32;
 /// Protégé par le EPOCH_COMMIT_LOCK externe, donc pas de SpinLock interne.
 pub struct GroupCommitBuffer {
     /// Entrées en attente de commit.
-    entries:    [GroupCommitEntry; GROUP_COMMIT_CAPACITY],
+    entries: [GroupCommitEntry; GROUP_COMMIT_CAPACITY],
     /// Nombre d'entrées valides.
-    count:      usize,
+    count: usize,
     /// TSC de la première entrée ajoutée dans la fenêtre courante.
     window_start_tsc: u64,
     /// Nombre total de flushes effectués.
-    total_flushes:    u64,
+    total_flushes: u64,
     /// Nombre total d'entrées coalesçées.
-    total_coalesced:  u64,
+    total_coalesced: u64,
 }
 
 impl GroupCommitBuffer {
@@ -568,14 +575,14 @@ impl GroupCommitBuffer {
         const EMPTY_ENTRY: GroupCommitEntry = GroupCommitEntry {
             submitted_at: 0,
             object_count: 0,
-            is_sync:      false,
+            is_sync: false,
         };
         Self {
-            entries:          [EMPTY_ENTRY; GROUP_COMMIT_CAPACITY],
-            count:            0,
+            entries: [EMPTY_ENTRY; GROUP_COMMIT_CAPACITY],
+            count: 0,
             window_start_tsc: 0,
-            total_flushes:    0,
-            total_coalesced:  0,
+            total_flushes: 0,
+            total_coalesced: 0,
         }
     }
 
@@ -608,9 +615,9 @@ impl GroupCommitBuffer {
             }
         }
         let coalesced = self.count as u64;
-        self.total_flushes    = self.total_flushes.saturating_add(1);
-        self.total_coalesced  = self.total_coalesced.saturating_add(coalesced);
-        self.count            = 0;
+        self.total_flushes = self.total_flushes.saturating_add(1);
+        self.total_coalesced = self.total_coalesced.saturating_add(coalesced);
+        self.count = 0;
         self.window_start_tsc = 0;
         GroupCommitSummary {
             entries_coalesced: coalesced as u32,
@@ -649,8 +656,8 @@ impl GroupCommitBuffer {
     /// Statistiques du buffer de group commit.
     pub fn stats(&self) -> GroupCommitStats {
         GroupCommitStats {
-            pending:         self.count as u32,
-            total_flushes:   self.total_flushes,
+            pending: self.count as u32,
+            total_flushes: self.total_flushes,
             total_coalesced: self.total_coalesced,
         }
     }
@@ -662,18 +669,18 @@ pub struct GroupCommitSummary {
     /// Nombre d'entrées coalesçées dans ce flush.
     pub entries_coalesced: u32,
     /// Nombre total d'objets.
-    pub total_objects:     u32,
+    pub total_objects: u32,
     /// Vrai si au moins un fsync était en attente.
-    pub has_sync:          bool,
+    pub has_sync: bool,
 }
 
 /// Statistiques du GroupCommitBuffer.
 #[derive(Debug, Copy, Clone)]
 pub struct GroupCommitStats {
     /// Entrées actuellement en attente.
-    pub pending:         u32,
+    pub pending: u32,
     /// Nombre de flushes effectués.
-    pub total_flushes:   u64,
+    pub total_flushes: u64,
     /// Nombre total d'entrées coalesçées.
     pub total_coalesced: u64,
 }

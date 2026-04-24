@@ -13,10 +13,9 @@
 //! ARITH-02 : saturating_*, checked_div, wrapping_add/mul.
 //! SAFETY   : chaque bloc `unsafe` est documenté avec sa justification.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─── SgFragment ───────────────────────────────────────────────────────────────
 
@@ -40,7 +39,10 @@ impl SgFragment {
     ///
     /// SAFETY: le slice doit rester valide aussi longtemps que ce fragment.
     pub fn from_slice(s: &mut [u8]) -> Self {
-        Self { ptr: s.as_mut_ptr(), len: s.len() }
+        Self {
+            ptr: s.as_mut_ptr(),
+            len: s.len(),
+        }
     }
 
     /// Crée un fragment en lecture seule (ptr const casté en mut).
@@ -48,17 +50,24 @@ impl SgFragment {
     /// SAFETY: ce fragment ne doit pas être utilisé pour scatter_write.
     pub fn from_const_slice(s: &[u8]) -> Self {
         // SAFETY: utilisé uniquement en lecture — jamais écrit via ce ptr.
-        Self { ptr: s.as_ptr() as *mut u8, len: s.len() }
+        Self {
+            ptr: s.as_ptr() as *mut u8,
+            len: s.len(),
+        }
     }
 
-    pub fn is_empty(&self) -> bool { self.len == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 
     /// Lit `buf.len()` octets depuis ce fragment.
     ///
     /// SAFETY: `ptr` doit pointer vers au moins `self.len` octets valides.
     pub fn read_into(&self, buf: &mut [u8]) -> ExofsResult<usize> {
         let n = buf.len().min(self.len);
-        if n == 0 { return Ok(0); }
+        if n == 0 {
+            return Ok(0);
+        }
         // SAFETY: n ≤ self.len, la mémoire est valide par invariant de struct.
         unsafe {
             core::ptr::copy_nonoverlapping(self.ptr, buf.as_mut_ptr(), n);
@@ -71,7 +80,9 @@ impl SgFragment {
     /// SAFETY: même invariant que `read_into`.
     pub fn write_from(&self, src: &[u8]) -> ExofsResult<usize> {
         let n = src.len().min(self.len);
-        if n == 0 { return Ok(0); }
+        if n == 0 {
+            return Ok(0);
+        }
         // SAFETY: n ≤ self.len.
         unsafe {
             core::ptr::copy_nonoverlapping(src.as_ptr(), self.ptr, n);
@@ -89,25 +100,39 @@ pub struct SgList {
 }
 
 impl SgList {
-    pub fn new() -> Self { Self { fragments: Vec::new(), total_bytes: 0 } }
+    pub fn new() -> Self {
+        Self {
+            fragments: Vec::new(),
+            total_bytes: 0,
+        }
+    }
 
     /// Ajoute un fragment (OOM-02).
     pub fn add(&mut self, frag: SgFragment) -> ExofsResult<()> {
-        self.fragments.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+        self.fragments
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.total_bytes = self.total_bytes.saturating_add(frag.len as u64);
         self.fragments.push(frag);
         Ok(())
     }
 
-    pub fn fragment_count(&self) -> usize { self.fragments.len() }
-    pub fn total_bytes(&self) -> u64 { self.total_bytes }
-    pub fn is_empty(&self) -> bool { self.fragments.is_empty() }
+    pub fn fragment_count(&self) -> usize {
+        self.fragments.len()
+    }
+    pub fn total_bytes(&self) -> u64 {
+        self.total_bytes
+    }
+    pub fn is_empty(&self) -> bool {
+        self.fragments.is_empty()
+    }
 
     /// Gather : lit toutes les données des fragments vers `sink` (RECUR-01 : while).
     ///
     /// SAFETY: chaque fragment doit pointer vers une mémoire valide.
     pub fn gather_read(&self, sink: &mut Vec<u8>) -> ExofsResult<u64> {
-        sink.try_reserve(self.total_bytes as usize).map_err(|_| ExofsError::NoMemory)?;
+        sink.try_reserve(self.total_bytes as usize)
+            .map_err(|_| ExofsError::NoMemory)?;
         let mut i = 0usize;
         let mut copied = 0u64;
         while i < self.fragments.len() {
@@ -145,7 +170,10 @@ impl SgList {
         Ok(offset as u64)
     }
 
-    pub fn clear(&mut self) { self.fragments.clear(); self.total_bytes = 0; }
+    pub fn clear(&mut self) {
+        self.fragments.clear();
+        self.total_bytes = 0;
+    }
 }
 
 // ─── PhysSegment ─────────────────────────────────────────────────────────────
@@ -160,19 +188,31 @@ pub struct PhysSegment {
 }
 
 impl PhysSegment {
-    pub const FLAG_READ:  u32 = 0x01;
+    pub const FLAG_READ: u32 = 0x01;
     pub const FLAG_WRITE: u32 = 0x02;
 
     pub fn read_segment(phys_addr: u64, len: u32) -> Self {
-        Self { phys_addr, len, flags: Self::FLAG_READ }
+        Self {
+            phys_addr,
+            len,
+            flags: Self::FLAG_READ,
+        }
     }
 
     pub fn write_segment(phys_addr: u64, len: u32) -> Self {
-        Self { phys_addr, len, flags: Self::FLAG_WRITE }
+        Self {
+            phys_addr,
+            len,
+            flags: Self::FLAG_WRITE,
+        }
     }
 
-    pub fn is_read(&self)  -> bool { self.flags & Self::FLAG_READ != 0 }
-    pub fn is_write(&self) -> bool { self.flags & Self::FLAG_WRITE != 0 }
+    pub fn is_read(&self) -> bool {
+        self.flags & Self::FLAG_READ != 0
+    }
+    pub fn is_write(&self) -> bool {
+        self.flags & Self::FLAG_WRITE != 0
+    }
 
     /// Vérifie que ce segment ne déborde pas (ARITH-02).
     pub fn end_addr(&self) -> Option<u64> {
@@ -189,7 +229,12 @@ pub struct PhysSgList {
 }
 
 impl PhysSgList {
-    pub fn new() -> Self { Self { segs: Vec::new(), total_bytes: 0 } }
+    pub fn new() -> Self {
+        Self {
+            segs: Vec::new(),
+            total_bytes: 0,
+        }
+    }
 
     /// Ajoute un segment (OOM-02).
     pub fn add(&mut self, seg: PhysSegment) -> ExofsResult<()> {
@@ -201,8 +246,12 @@ impl PhysSgList {
         Ok(())
     }
 
-    pub fn segment_count(&self) -> usize { self.segs.len() }
-    pub fn total_bytes(&self) -> u64 { self.total_bytes }
+    pub fn segment_count(&self) -> usize {
+        self.segs.len()
+    }
+    pub fn total_bytes(&self) -> u64 {
+        self.total_bytes
+    }
     pub fn segment(&self, idx: usize) -> ExofsResult<&PhysSegment> {
         self.segs.get(idx).ok_or(ExofsError::InvalidArgument)
     }
@@ -210,7 +259,9 @@ impl PhysSgList {
     /// Vérifie l'absence d'overlap entre segments (RECUR-01 : while).
     pub fn validate_no_overlap(&self) -> ExofsResult<()> {
         let n = self.segs.len();
-        if n < 2 { return Ok(()); }
+        if n < 2 {
+            return Ok(());
+        }
         // On fait un check simplifié (O(n²) acceptable pour petites listes DMA)
         let mut i = 0usize;
         while i < n {
@@ -231,7 +282,10 @@ impl PhysSgList {
         Ok(())
     }
 
-    pub fn clear(&mut self) { self.segs.clear(); self.total_bytes = 0; }
+    pub fn clear(&mut self) {
+        self.segs.clear();
+        self.total_bytes = 0;
+    }
 }
 
 // ─── SgStats ─────────────────────────────────────────────────────────────────
@@ -247,9 +301,15 @@ pub struct SgStats {
 }
 
 impl SgStats {
-    pub fn new() -> Self { Self::default() }
-    pub fn is_clean(&self) -> bool { self.errors == 0 }
-    pub fn total_ops(&self) -> u64 { self.gather_ops.saturating_add(self.scatter_ops) }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn is_clean(&self) -> bool {
+        self.errors == 0
+    }
+    pub fn total_ops(&self) -> u64 {
+        self.gather_ops.saturating_add(self.scatter_ops)
+    }
 }
 
 // ─── SgEngine ─────────────────────────────────────────────────────────────────
@@ -260,7 +320,11 @@ pub struct SgEngine {
 }
 
 impl SgEngine {
-    pub fn new() -> Self { Self { stats: SgStats::new() } }
+    pub fn new() -> Self {
+        Self {
+            stats: SgStats::new(),
+        }
+    }
 
     /// Gather : lit tous les fragments d'une SgList vers un Vec.
     pub fn gather(&mut self, list: &SgList, sink: &mut Vec<u8>) -> ExofsResult<u64> {
@@ -292,8 +356,12 @@ impl SgEngine {
         }
     }
 
-    pub fn stats(&self) -> &SgStats { &self.stats }
-    pub fn reset_stats(&mut self) { self.stats = SgStats::new(); }
+    pub fn stats(&self) -> &SgStats {
+        &self.stats
+    }
+    pub fn reset_stats(&mut self) {
+        self.stats = SgStats::new();
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -361,8 +429,12 @@ mod tests {
     #[test]
     fn test_phys_sg_list_add() {
         let mut plist = PhysSgList::new();
-        plist.add(PhysSegment::read_segment(0x1000, 512)).expect("ok");
-        plist.add(PhysSegment::read_segment(0x2000, 512)).expect("ok");
+        plist
+            .add(PhysSegment::read_segment(0x1000, 512))
+            .expect("ok");
+        plist
+            .add(PhysSegment::read_segment(0x2000, 512))
+            .expect("ok");
         assert_eq!(plist.segment_count(), 2);
         assert_eq!(plist.total_bytes(), 1024);
     }
@@ -370,16 +442,24 @@ mod tests {
     #[test]
     fn test_phys_sg_list_no_overlap() {
         let mut plist = PhysSgList::new();
-        plist.add(PhysSegment::read_segment(0x1000, 0x100)).expect("ok");
-        plist.add(PhysSegment::read_segment(0x2000, 0x100)).expect("ok");
+        plist
+            .add(PhysSegment::read_segment(0x1000, 0x100))
+            .expect("ok");
+        plist
+            .add(PhysSegment::read_segment(0x2000, 0x100))
+            .expect("ok");
         assert!(plist.validate_no_overlap().is_ok());
     }
 
     #[test]
     fn test_phys_sg_list_overlap_detected() {
         let mut plist = PhysSgList::new();
-        plist.add(PhysSegment::read_segment(0x1000, 0x200)).expect("ok");
-        plist.add(PhysSegment::read_segment(0x1100, 0x100)).expect("ok"); // overlap!
+        plist
+            .add(PhysSegment::read_segment(0x1000, 0x200))
+            .expect("ok");
+        plist
+            .add(PhysSegment::read_segment(0x1100, 0x100))
+            .expect("ok"); // overlap!
         assert!(plist.validate_no_overlap().is_err());
     }
 

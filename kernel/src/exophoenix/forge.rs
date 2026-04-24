@@ -62,12 +62,12 @@ fn load_a_image_from_exofs() -> Result<&'static [u8], ForgeError> {
 // ── Étape 2 : parser ELF — safe Rust uniquement ───────────────────────────
 
 struct ElfImage<'a> {
-    text:   &'a [u8],
+    text: &'a [u8],
     rodata: &'a [u8],
-    data:   &'a [u8],
+    data: &'a [u8],
     bss_start: u64,
-    bss_size:  usize,
-    entry:     u64,
+    bss_size: usize,
+    entry: u64,
 }
 
 fn parse_elf_safe(image: &[u8]) -> Result<ElfImage<'_>, ForgeError> {
@@ -88,11 +88,14 @@ fn parse_elf_safe(image: &[u8]) -> Result<ElfImage<'_>, ForgeError> {
     let mut bss_size: usize = 0;
 
     for section in elf.section_iter() {
-        let Ok(name) = section.get_name(&elf) else { continue; };
+        let Ok(name) = section.get_name(&elf) else {
+            continue;
+        };
 
         match name {
             ".text" | ".rodata" | ".data" => {
-                let off = usize::try_from(section.offset()).map_err(|_| ForgeError::ElfParseFailed)?;
+                let off =
+                    usize::try_from(section.offset()).map_err(|_| ForgeError::ElfParseFailed)?;
                 let sz = usize::try_from(section.size()).map_err(|_| ForgeError::ElfParseFailed)?;
                 let end = off.checked_add(sz).ok_or(ForgeError::ElfParseFailed)?;
                 if end > image.len() {
@@ -108,7 +111,8 @@ fn parse_elf_safe(image: &[u8]) -> Result<ElfImage<'_>, ForgeError> {
             }
             ".bss" => {
                 bss_start = section.address();
-                bss_size = usize::try_from(section.size()).map_err(|_| ForgeError::ElfParseFailed)?;
+                bss_size =
+                    usize::try_from(section.size()).map_err(|_| ForgeError::ElfParseFailed)?;
             }
             _ => {}
         }
@@ -262,9 +266,7 @@ fn drain_dma_queues(bus: u8, device: u8, func: u8) {
 #[inline(always)]
 fn read_apic_ticks() -> u32 {
     match stage0::B_FEATURES.apic_mode() {
-        stage0::BootApicMode::X2Apic => unsafe {
-            msr::read_msr(x2apic::X2APIC_TIMER_CCR) as u32
-        },
+        stage0::BootApicMode::X2Apic => unsafe { msr::read_msr(x2apic::X2APIC_TIMER_CCR) as u32 },
         stage0::BootApicMode::XApic => local_apic::timer_current_count(),
     }
 }
@@ -306,7 +308,9 @@ fn current_slot() -> Option<usize> {
 fn for_each_target_slot(self_slot: Option<usize>, mut f: impl FnMut(usize)) {
     let mut seen_slots = 0u64;
     for apic_id in 0u16..=255u16 {
-        let Some(slot) = stage0::apic_slot(apic_id as u32) else { continue };
+        let Some(slot) = stage0::apic_slot(apic_id as u32) else {
+            continue;
+        };
         if Some(slot) == self_slot || slot >= 64 {
             continue;
         }
@@ -331,7 +335,8 @@ fn all_tlb_acks_observed(self_slot: Option<usize>) -> bool {
         if !all_ok {
             return;
         }
-        let ack = unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
+        let ack =
+            unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
         if ack != ssr::TLB_ACK_DONE {
             all_ok = false;
         }
@@ -361,20 +366,22 @@ fn wait_for_tlb_acks(self_slot: Option<usize>, timeout_us: u64) -> bool {
 fn iotlb_flush_after_flr() {
     let blocked = stage0::blocked_domain_id();
     if INTEL_VTD.is_initialized() && INTEL_VTD.unit_count() > 0 {
-        unsafe { INTEL_VTD.flush_iotlb_domain(blocked as u16, 0); }
+        unsafe {
+            INTEL_VTD.flush_iotlb_domain(blocked as u16, 0);
+        }
     } else if AMD_IOMMU.is_initialized() {
         core::sync::atomic::fence(Ordering::SeqCst);
     }
 }
 
-fn reload_driver_binary_from_exofs(
-    bus: u8, device: u8, func: u8,
-) -> Result<(), ForgeError> {
+fn reload_driver_binary_from_exofs(bus: u8, device: u8, func: u8) -> Result<(), ForgeError> {
     let bdf_key = ((bus as u32) << 16) | ((device as u32) << 8) | func as u32;
     let blob_id = stage0::driver_blob_id(bdf_key).ok_or(ForgeError::DriverResetFailed)?;
 
     // Vérifie la disponibilité du binaire dans ExoFS cache (phase actuelle).
-    let _data = BLOB_CACHE.get(&blob_id).ok_or(ForgeError::DriverResetFailed)?;
+    let _data = BLOB_CACHE
+        .get(&blob_id)
+        .ok_or(ForgeError::DriverResetFailed)?;
 
     // TODO ExoPhoenix Phase suivante: mapper le binaire Ring1 + signaler redémarrage driver.
     Ok(())
@@ -384,7 +391,9 @@ fn reset_all_ring1_drivers() -> Result<(), ForgeError> {
     // Itérer sur les devices connus de B_DEVICE_TABLE (construite au Stage 0)
     let device_count = stage0::b_device_count();
     for i in 0..device_count {
-        let Some(dev) = stage0::b_device(i) else { continue };
+        let Some(dev) = stage0::b_device(i) else {
+            continue;
+        };
         // G3 : séquence obligatoire — FLR → drain → IOTLB → reload
         pci_function_level_reset(dev.bus, dev.device, dev.function)?;
         drain_dma_queues(dev.bus, dev.device, dev.function);
@@ -425,16 +434,13 @@ fn checklist_madt_hash() -> Result<(), ForgeError> {
     }
 
     // MADT SDT length à +4.
-    let madt_len = unsafe {
-        core::ptr::read_unaligned((acpi.madt_phys as usize + 4) as *const u32)
-    } as usize;
+    let madt_len =
+        unsafe { core::ptr::read_unaligned((acpi.madt_phys as usize + 4) as *const u32) } as usize;
     if !(36..=256 * 1024).contains(&madt_len) {
         return Err(ForgeError::ChecklistFailed("madt_len_invalid"));
     }
 
-    let madt_bytes = unsafe {
-        core::slice::from_raw_parts(acpi.madt_phys as *const u8, madt_len)
-    };
+    let madt_bytes = unsafe { core::slice::from_raw_parts(acpi.madt_phys as *const u8, madt_len) };
     let current = crate::security::crypto::blake3::blake3_hash(madt_bytes);
     let expected = stage0::madt_hash();
     if current != expected {
@@ -510,7 +516,7 @@ fn run_postconstruction_checklist() -> Result<(), ForgeError> {
     // Ordre obligatoire — ne pas modifier
     checklist_facs_ro()?;
     checklist_madt_hash()?;
-    checklist_tlb_shootdown();   // pas de ? — toujours exécuté
+    checklist_tlb_shootdown(); // pas de ? — toujours exécuté
     checklist_idt_has_exophoenix_vectors()?;
     Ok(())
 }

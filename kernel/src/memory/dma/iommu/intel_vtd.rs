@@ -6,7 +6,7 @@
 // COUCHE 0 — aucune dépendance externe.
 // Référence : Intel VT-d Architecture Specification, Rev 3.4.
 
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::DmaError;
@@ -17,41 +17,41 @@ use crate::memory::dma::core::types::DmaError;
 
 pub mod vtd_regs {
     /// Version register.
-    pub const VER:       usize = 0x000;
+    pub const VER: usize = 0x000;
     /// Capability register.
-    pub const CAP:       usize = 0x008;
+    pub const CAP: usize = 0x008;
     /// Extended capability register.
-    pub const ECAP:      usize = 0x010;
+    pub const ECAP: usize = 0x010;
     /// Global command register.
-    pub const GCMD:      usize = 0x018;
+    pub const GCMD: usize = 0x018;
     /// Global status register.
-    pub const GSTS:      usize = 0x01C;
+    pub const GSTS: usize = 0x01C;
     /// Root table address register.
-    pub const RTADDR:    usize = 0x020;
+    pub const RTADDR: usize = 0x020;
     /// Context command register.
-    pub const CCMD:      usize = 0x028;
+    pub const CCMD: usize = 0x028;
     /// Fault status register.
-    pub const FSTS:      usize = 0x034;
+    pub const FSTS: usize = 0x034;
     /// Fault event control register.
-    pub const FECTL:     usize = 0x038;
+    pub const FECTL: usize = 0x038;
     /// Invalidation queue head register.
-    pub const IQH:       usize = 0x080;
+    pub const IQH: usize = 0x080;
     /// Invalidation queue tail register.
-    pub const IQT:       usize = 0x088;
+    pub const IQT: usize = 0x088;
     /// Invalidation queue address register.
-    pub const IQA:       usize = 0x090;
+    pub const IQA: usize = 0x090;
     /// Invalidation completion status register.
-    pub const ICS:       usize = 0x09C;
+    pub const ICS: usize = 0x09C;
 }
 
 /// Bits du registre GCMD.
 pub mod gcmd_bits {
-    pub const TE:    u32 = 1 << 31;   // Translation Enable
-    pub const SRTP:  u32 = 1 << 30;   // Set Root Table Pointer
-    pub const SFL:   u32 = 1 << 28;   // Set Fault Log
-    pub const QIE:   u32 = 1 << 26;   // Queued Invalidation Enable
-    pub const SIRTP: u32 = 1 << 24;   // Set Interrupt Remapping Table Pointer
-    pub const IRE:   u32 = 1 << 25;   // Interrupt Remapping Enable
+    pub const TE: u32 = 1 << 31; // Translation Enable
+    pub const SRTP: u32 = 1 << 30; // Set Root Table Pointer
+    pub const SFL: u32 = 1 << 28; // Set Fault Log
+    pub const QIE: u32 = 1 << 26; // Queued Invalidation Enable
+    pub const SIRTP: u32 = 1 << 24; // Set Interrupt Remapping Table Pointer
+    pub const IRE: u32 = 1 << 25; // Interrupt Remapping Enable
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,7 +71,10 @@ impl RootEntry {
     pub const EMPTY: Self = RootEntry { lo: 0, hi: 0 };
     pub const PRESENT: u64 = 1;
 
-    #[inline] pub fn is_present(self) -> bool { self.lo & Self::PRESENT != 0 }
+    #[inline]
+    pub fn is_present(self) -> bool {
+        self.lo & Self::PRESENT != 0
+    }
     #[inline]
     pub fn context_table_phys(self) -> PhysAddr {
         PhysAddr::new(self.lo & 0xFFFF_FFFF_FFFF_F000)
@@ -92,7 +95,9 @@ pub struct RootTable {
 impl RootTable {
     pub fn zero(&mut self) {
         // SAFETY: RootEntry est Copy et 0-initialisable.
-        unsafe { core::ptr::write_bytes(self.entries.as_mut_ptr(), 0, 256); }
+        unsafe {
+            core::ptr::write_bytes(self.entries.as_mut_ptr(), 0, 256);
+        }
     }
 }
 
@@ -111,7 +116,10 @@ impl ContextEntry {
     pub const TT_TRANSLATED: u64 = 0b00 << 2;
     pub const TT_PASSTHROUGH: u64 = 0b10 << 2;
 
-    #[inline] pub fn is_present(self) -> bool { self.lo & Self::PRESENT != 0 }
+    #[inline]
+    pub fn is_present(self) -> bool {
+        self.lo & Self::PRESENT != 0
+    }
 
     /// Configure pour un domaine traduit.
     pub fn set_translated(&mut self, sl_phys: PhysAddr, domain_id: u16, aw: u8) {
@@ -137,7 +145,9 @@ pub struct ContextTable {
 impl ContextTable {
     pub fn zero(&mut self) {
         // SAFETY: self.entries est un tableau contigu de 256 ContextEntry; write_bytes écrase proprement.
-        unsafe { core::ptr::write_bytes(self.entries.as_mut_ptr(), 0, 256); }
+        unsafe {
+            core::ptr::write_bytes(self.entries.as_mut_ptr(), 0, 256);
+        }
     }
 }
 
@@ -155,9 +165,9 @@ pub struct DmarUnit {
     /// Taille de la région MMIO (généralement 4096).
     pub mmio_size: u64,
     /// Capacités (registre CAP).
-    pub cap:   u64,
+    pub cap: u64,
     /// Capacités étendues (registre ECAP).
-    pub ecap:  u64,
+    pub ecap: u64,
     /// Root Table physique pour cette unit.
     pub root_table_phys: AtomicU64,
     /// Activé ?
@@ -169,13 +179,13 @@ pub struct DmarUnit {
 impl DmarUnit {
     const fn new_uninit() -> Self {
         DmarUnit {
-            mmio_base:       0,
-            mmio_size:       0,
-            cap:             0,
-            ecap:            0,
+            mmio_base: 0,
+            mmio_size: 0,
+            cap: 0,
+            ecap: 0,
             root_table_phys: AtomicU64::new(0),
-            enabled:         AtomicBool::new(false),
-            initialized:     AtomicBool::new(false),
+            enabled: AtomicBool::new(false),
+            initialized: AtomicBool::new(false),
         }
     }
 
@@ -213,10 +223,10 @@ impl DmarUnit {
     pub unsafe fn init(&mut self, mmio_base: u64, mmio_size: u64) {
         self.mmio_base = mmio_base;
         self.mmio_size = mmio_size;
-        self.cap  = (self.read32(vtd_regs::CAP) as u64)
-                  | ((self.read32(vtd_regs::CAP + 4) as u64) << 32);
-        self.ecap = (self.read32(vtd_regs::ECAP) as u64)
-                  | ((self.read32(vtd_regs::ECAP + 4) as u64) << 32);
+        self.cap =
+            (self.read32(vtd_regs::CAP) as u64) | ((self.read32(vtd_regs::CAP + 4) as u64) << 32);
+        self.ecap =
+            (self.read32(vtd_regs::ECAP) as u64) | ((self.read32(vtd_regs::ECAP + 4) as u64) << 32);
     }
 
     /// Configure la Root Table pour cette DRHD.
@@ -232,10 +242,13 @@ impl DmarUnit {
         let mut timeout = 1_000_000u32;
         while timeout > 0 {
             let gsts = self.read32(vtd_regs::GSTS);
-            if gsts & (1 << 30) != 0 { break; } // RTPS bit
+            if gsts & (1 << 30) != 0 {
+                break;
+            } // RTPS bit
             timeout -= 1;
         }
-        self.root_table_phys.store(rt_phys.as_u64(), Ordering::Release);
+        self.root_table_phys
+            .store(rt_phys.as_u64(), Ordering::Release);
     }
 
     /// Active la translation DMA sur cette DRHD.
@@ -247,7 +260,9 @@ impl DmarUnit {
         let mut timeout = 1_000_000u32;
         while timeout > 0 {
             let gsts = self.read32(vtd_regs::GSTS);
-            if gsts & (1 << 31) != 0 { break; } // TES bit
+            if gsts & (1 << 31) != 0 {
+                break;
+            } // TES bit
             timeout -= 1;
         }
         self.enabled.store(true, Ordering::Release);
@@ -268,9 +283,11 @@ impl DmarUnit {
         // Attendre ICC = 0.
         let mut timeout = 1_000_000u32;
         while timeout > 0 {
-            let val = (self.read32(vtd_regs::CCMD + 4) as u64) << 32
-                    | self.read32(vtd_regs::CCMD) as u64;
-            if val & (1u64 << 63) == 0 { break; }
+            let val =
+                (self.read32(vtd_regs::CCMD + 4) as u64) << 32 | self.read32(vtd_regs::CCMD) as u64;
+            if val & (1u64 << 63) == 0 {
+                break;
+            }
             timeout -= 1;
         }
     }
@@ -281,8 +298,8 @@ impl DmarUnit {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct IntelVtd {
-    units:  [DmarUnit; MAX_DRHD],
-    count:  AtomicU32,
+    units: [DmarUnit; MAX_DRHD],
+    count: AtomicU32,
     initialized: AtomicBool,
 }
 
@@ -294,12 +311,16 @@ impl IntelVtd {
     const fn new() -> Self {
         IntelVtd {
             units: [
-                DmarUnit::new_uninit(), DmarUnit::new_uninit(),
-                DmarUnit::new_uninit(), DmarUnit::new_uninit(),
-                DmarUnit::new_uninit(), DmarUnit::new_uninit(),
-                DmarUnit::new_uninit(), DmarUnit::new_uninit(),
+                DmarUnit::new_uninit(),
+                DmarUnit::new_uninit(),
+                DmarUnit::new_uninit(),
+                DmarUnit::new_uninit(),
+                DmarUnit::new_uninit(),
+                DmarUnit::new_uninit(),
+                DmarUnit::new_uninit(),
+                DmarUnit::new_uninit(),
             ],
-            count:       AtomicU32::new(0),
+            count: AtomicU32::new(0),
             initialized: AtomicBool::new(false),
         }
     }
@@ -310,7 +331,9 @@ impl IntelVtd {
     /// Appelé depuis le parseur ACPI DMAR, avant `global_init()`.
     pub unsafe fn register_drhd(&self, mmio_base: u64, mmio_size: u64) -> Result<(), DmaError> {
         let idx = self.count.load(Ordering::Relaxed) as usize;
-        if idx >= MAX_DRHD { return Err(DmaError::OutOfMemory); }
+        if idx >= MAX_DRHD {
+            return Err(DmaError::OutOfMemory);
+        }
 
         let unit_ptr = &self.units[idx] as *const DmarUnit as *mut DmarUnit;
         (*unit_ptr).init(mmio_base, mmio_size);
@@ -343,11 +366,15 @@ impl IntelVtd {
     /// # Safety
     /// CPL 0, VT-d initialisé.
     pub unsafe fn flush_iotlb_domain(&self, domain_id: u16, _iova: u64) {
-        if !self.initialized.load(Ordering::Acquire) { return; }
+        if !self.initialized.load(Ordering::Acquire) {
+            return;
+        }
         let count = self.count.load(Ordering::Relaxed) as usize;
         for i in 0..count {
             let unit = &self.units[i];
-            if !unit.initialized.load(Ordering::Acquire) { continue; }
+            if !unit.initialized.load(Ordering::Acquire) {
+                continue;
+            }
 
             // Invalidation de contexte (domain-global) via CCMD.
             // DI = 0b01 = Domain-Selective invalidation.
@@ -360,7 +387,9 @@ impl IntelVtd {
             let mut timeout = 1_000_000u32;
             while timeout > 0 {
                 let hi = unit.read32(vtd_regs::CCMD + 4) as u64;
-                if hi & (1 << 31) == 0 { break; }   // ICC cleared
+                if hi & (1 << 31) == 0 {
+                    break;
+                } // ICC cleared
                 timeout -= 1;
             }
 
@@ -370,13 +399,15 @@ impl IntelVtd {
             const IOTLB_REG_HI: usize = 0x10C;
             let iotlb_cmd: u32 = (1u32 << 31)                  // IVT = 1 (invalidate)
                                | (0b010u32 << 4)               // IIRG = 010 = domain
-                               | ((domain_id as u32) << 16);  // domain id  
+                               | ((domain_id as u32) << 16); // domain id
             unit.write32(IOTLB_REG_HI, iotlb_cmd);
 
             // Attendre fin (IVT → 0).
             let mut timeout = 1_000_000u32;
             while timeout > 0 {
-                if unit.read32(IOTLB_REG_HI) & (1 << 31) == 0 { break; }
+                if unit.read32(IOTLB_REG_HI) & (1 << 31) == 0 {
+                    break;
+                }
                 timeout -= 1;
             }
         }

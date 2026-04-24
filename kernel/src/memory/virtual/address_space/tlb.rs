@@ -32,18 +32,18 @@ pub enum TlbFlushType {
 
 pub struct TlbStats {
     pub single_flushes: AtomicU64,
-    pub range_flushes:  AtomicU64,
-    pub full_flushes:   AtomicU64,
-    pub ipi_sent:       AtomicU64,
+    pub range_flushes: AtomicU64,
+    pub full_flushes: AtomicU64,
+    pub ipi_sent: AtomicU64,
 }
 
 impl TlbStats {
     pub const fn new() -> Self {
         TlbStats {
             single_flushes: AtomicU64::new(0),
-            range_flushes:  AtomicU64::new(0),
-            full_flushes:   AtomicU64::new(0),
-            ipi_sent:       AtomicU64::new(0),
+            range_flushes: AtomicU64::new(0),
+            full_flushes: AtomicU64::new(0),
+            ipi_sent: AtomicU64::new(0),
         }
     }
 }
@@ -107,38 +107,38 @@ pub unsafe fn flush_range(start: VirtAddr, end: VirtAddr) {
 /// Pending TLB shootdown — une opération à exécuter sur les CPUs cibles.
 pub struct TlbShootdownRequest {
     pub flush_type: TlbFlushType,
-    pub cpu_mask:   u64,  // Bitmask des CPUs cibles (max 64 CPUs)
-    pub completed:  AtomicU64,  // Bitmask des CPUs ayant terminé
+    pub cpu_mask: u64,        // Bitmask des CPUs cibles (max 64 CPUs)
+    pub completed: AtomicU64, // Bitmask des CPUs ayant terminé
 }
 
 /// File d'attente de TLB shootdowns globale.
 pub struct TlbShootdownQueue {
-    inner:     Mutex<TlbShootdownInner>,
-    pending:   AtomicUsize,
+    inner: Mutex<TlbShootdownInner>,
+    pending: AtomicUsize,
 }
 
 struct TlbShootdownInner {
     requests: [TlbShootdownEntry; 8],
-    head:     usize,
-    tail:     usize,
+    head: usize,
+    tail: usize,
 }
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
 struct TlbShootdownEntry {
-    active:     bool,
+    active: bool,
     flush_type: TlbFlushType,
-    cpu_mask:   u64,
-    completed:  u64,
+    cpu_mask: u64,
+    completed: u64,
 }
 
 impl TlbShootdownEntry {
     const fn empty() -> Self {
         TlbShootdownEntry {
-            active:     false,
+            active: false,
             flush_type: TlbFlushType::All,
-            cpu_mask:   0,
-            completed:  0,
+            cpu_mask: 0,
+            completed: 0,
         }
     }
 }
@@ -166,10 +166,10 @@ impl TlbShootdownQueue {
             let next = (tail + 1) % 8;
             if next != inner.head {
                 inner.requests[tail] = TlbShootdownEntry {
-                    active:     true,
+                    active: true,
                     flush_type,
                     cpu_mask,
-                    completed:  0,
+                    completed: 0,
                 };
                 inner.tail = next;
                 self.pending.fetch_add(1, Ordering::Release);
@@ -186,16 +186,22 @@ impl TlbShootdownQueue {
     ///
     /// SAFETY: Doit être appelé depuis le handler d'interruption APIC.
     pub unsafe fn handle_remote(&self, cpu_id: u8) {
-        if self.pending.load(Ordering::Acquire) == 0 { return; }
+        if self.pending.load(Ordering::Acquire) == 0 {
+            return;
+        }
         let inner = self.inner.lock();
         for entry in &inner.requests {
-            if !entry.active { continue; }
-            if (entry.cpu_mask >> cpu_id) & 1 == 0 { continue; }
+            if !entry.active {
+                continue;
+            }
+            if (entry.cpu_mask >> cpu_id) & 1 == 0 {
+                continue;
+            }
             match entry.flush_type {
-                TlbFlushType::Single(addr)          => flush_single(addr),
-                TlbFlushType::Range { start, end }  => flush_range(start, end),
-                TlbFlushType::All                   => flush_all(),
-                TlbFlushType::Global                => flush_all_including_global(),
+                TlbFlushType::Single(addr) => flush_single(addr),
+                TlbFlushType::Range { start, end } => flush_range(start, end),
+                TlbFlushType::All => flush_all(),
+                TlbFlushType::Global => flush_all_including_global(),
             }
         }
         // V-04 — Signaler que ce CPU a complété son flush (pour shootdown_sync).
@@ -254,7 +260,9 @@ pub unsafe fn shootdown(flush_type: TlbFlushType, cpu_mask: u64) {
 /// SAFETY: Ne pas appeler depuis un contexte IRQ. `cpu_count` doit refléter le
 ///         nombre réel de CPUs actifs (max 64).
 pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
-    if cpu_count == 0 { return; }
+    if cpu_count == 0 {
+        return;
+    }
     let n = cpu_count.min(64) as usize;
     let all_mask: u64 = if n >= 64 { !0u64 } else { (1u64 << n) - 1 };
 
@@ -268,7 +276,9 @@ pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
     for cpu_id in 0..n {
         loop {
             let ack = TLB_SHOOTDOWN_ACK[cpu_id].load(Ordering::Acquire);
-            if ack >= target_seq { break; }
+            if ack >= target_seq {
+                break;
+            }
             core::hint::spin_loop();
         }
     }

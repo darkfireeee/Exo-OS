@@ -24,7 +24,7 @@ pub struct IoVec {
     /// Adresse Ring 3 — DOIT être validée par `copy_from_user()` avant usage.
     pub base: u64,
     /// Longueur en bytes.
-    pub len:  u64,
+    pub len: u64,
 }
 
 // Assertions ABI compile-time (CORR-45)
@@ -59,7 +59,8 @@ impl IoVec {
                 return Err(IoVecError::InvalidAddress { index: i });
             }
             // Pas d'overflow arithmétique sur base + len
-            v.base.checked_add(v.len)
+            v.base
+                .checked_add(v.len)
                 .ok_or(IoVecError::AddressOverflow { index: i })?;
             // Accumulation du total
             total = total.saturating_add(v.len);
@@ -79,12 +80,12 @@ pub enum IoVecError {
     /// L'adresse de base du vecteur `index` est nulle ou non alignée.
     InvalidAddress {
         /// Indice du vecteur invalide.
-        index: usize
+        index: usize,
     },
     /// Addition `base + len` déborde un `u64`.
     AddressOverflow {
         /// Indice du vecteur en débordement.
-        index: usize
+        index: usize,
     },
     /// La somme des `len` dépasse `usize::MAX`.
     TotalLengthExceeded,

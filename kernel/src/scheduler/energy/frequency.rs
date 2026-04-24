@@ -12,8 +12,8 @@
 // (liaison max) à Pn (minimum).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use crate::scheduler::smp::topology::MAX_CPUS;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 const MAX_PSTATES: usize = 16;
 
@@ -31,14 +31,20 @@ static PSTATE_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Appelé une seule fois avant toute utilisation de la fréquence.
 pub unsafe fn set_pstate_table(freqs_mhz: &[u32]) {
     let n = freqs_mhz.len().min(MAX_PSTATES);
-    for i in 0..n { PSTATE_TABLE[i] = freqs_mhz[i]; }
+    for i in 0..n {
+        PSTATE_TABLE[i] = freqs_mhz[i];
+    }
     PSTATE_COUNT.store(n as u32, Ordering::Release);
 }
 
 /// Fréquence du P-state `p` en MHz. Retourne 0 si hors bornes.
 pub fn pstate_freq_mhz(p: usize) -> u32 {
     let n = PSTATE_COUNT.load(Ordering::Relaxed) as usize;
-    if p < n { unsafe { PSTATE_TABLE[p] } } else { 0 }
+    if p < n {
+        unsafe { PSTATE_TABLE[p] }
+    } else {
+        0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,7 +58,11 @@ static CURRENT_PSTATE: [AtomicU32; MAX_CPUS] = {
 };
 
 pub fn current_pstate(cpu: usize) -> u32 {
-    if cpu < MAX_CPUS { CURRENT_PSTATE[cpu].load(Ordering::Relaxed) } else { 0 }
+    if cpu < MAX_CPUS {
+        CURRENT_PSTATE[cpu].load(Ordering::Relaxed)
+    } else {
+        0
+    }
 }
 
 /// Retourne la fréquence courante du CPU `cpu` en MHz.
@@ -73,7 +83,9 @@ extern "C" {
 /// # Safety
 /// Appelé avec préemption désactivée.
 pub unsafe fn set_pstate(cpu: usize, p: u32) {
-    if cpu >= MAX_CPUS { return; }
+    if cpu >= MAX_CPUS {
+        return;
+    }
     let n = PSTATE_COUNT.load(Ordering::Relaxed);
     let p = p.min(n.saturating_sub(1));
     CURRENT_PSTATE[cpu].store(p, Ordering::Relaxed);
@@ -90,9 +102,11 @@ pub unsafe fn set_pstate(cpu: usize, p: u32) {
 /// budget_at_current_freq = budget_at_max × (freq_max / freq_current)
 /// (avec freq_max = PSTATE_TABLE[0])
 pub fn scale_budget_ns(budget_ns: u64, cpu: usize) -> u64 {
-    let freq_max  = pstate_freq_mhz(0);
-    let freq_cur  = current_freq_mhz(cpu);
-    if freq_cur == 0 || freq_max == 0 { return budget_ns; }
+    let freq_max = pstate_freq_mhz(0);
+    let freq_cur = current_freq_mhz(cpu);
+    if freq_cur == 0 || freq_max == 0 {
+        return budget_ns;
+    }
     // Scaling integer-safe : budget × freq_max / freq_cur
     ((budget_ns as u128 * freq_max as u128) / freq_cur as u128) as u64
 }

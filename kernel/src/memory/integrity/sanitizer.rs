@@ -19,7 +19,6 @@
 //
 // COUCHE 0 — pas de dépendance scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::memory::core::layout::KERNEL_HEAP_START;
@@ -47,9 +46,9 @@ pub const fn shadow_partial(k: u8) -> u8 {
     debug_assert!(k > 0 && k < 8);
     k
 }
-pub const SHADOW_REDZONE:    u8 = 0xFA;
-pub const SHADOW_FREED:      u8 = 0xFD;
-pub const SHADOW_UNINIT:     u8 = 0xFF;
+pub const SHADOW_REDZONE: u8 = 0xFA;
+pub const SHADOW_FREED: u8 = 0xFD;
+pub const SHADOW_UNINIT: u8 = 0xFF;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Activation globale
@@ -79,25 +78,25 @@ pub fn kasan_disable() {
 
 #[repr(C)]
 pub struct KasanStats {
-    pub enable_count:    AtomicU64,
-    pub uaf_detected:    AtomicU64,
+    pub enable_count: AtomicU64,
+    pub uaf_detected: AtomicU64,
     pub overflow_detected: AtomicU64,
     pub uninit_detected: AtomicU64,
-    pub poison_calls:    AtomicU64,
-    pub unpoison_calls:  AtomicU64,
-    pub shadow_writes:   AtomicU64,
+    pub poison_calls: AtomicU64,
+    pub unpoison_calls: AtomicU64,
+    pub shadow_writes: AtomicU64,
 }
 
 impl KasanStats {
     const fn new() -> Self {
         Self {
-            enable_count:     AtomicU64::new(0),
-            uaf_detected:     AtomicU64::new(0),
+            enable_count: AtomicU64::new(0),
+            uaf_detected: AtomicU64::new(0),
             overflow_detected: AtomicU64::new(0),
-            uninit_detected:  AtomicU64::new(0),
-            poison_calls:     AtomicU64::new(0),
-            unpoison_calls:   AtomicU64::new(0),
-            shadow_writes:    AtomicU64::new(0),
+            uninit_detected: AtomicU64::new(0),
+            poison_calls: AtomicU64::new(0),
+            unpoison_calls: AtomicU64::new(0),
+            shadow_writes: AtomicU64::new(0),
         }
     }
 }
@@ -151,16 +150,19 @@ pub unsafe fn kasan_poison(addr: u64, size: usize, poison_val: u8) {
     }
     KASAN_STATS.poison_calls.fetch_add(1, Ordering::Relaxed);
     let words = size / 8;
-    let rem   = (size % 8) as u8;
+    let rem = (size % 8) as u8;
     for i in 0..words as u64 {
         write_shadow(addr + i * 8, poison_val);
     }
     if rem > 0 {
         // Dernier mot partiel : seuls `rem` octets accessibles.
-        write_shadow(addr + words as u64 * 8, match poison_val {
-            SHADOW_ACCESSIBLE => shadow_partial(rem),
-            _                 => poison_val,
-        });
+        write_shadow(
+            addr + words as u64 * 8,
+            match poison_val {
+                SHADOW_ACCESSIBLE => shadow_partial(rem),
+                _ => poison_val,
+            },
+        );
     }
 }
 
@@ -187,9 +189,9 @@ pub unsafe fn kasan_poison_redzone(obj_addr: u64, obj_size: usize, redzone_size:
     if !kasan_is_enabled() {
         return;
     }
-    let left_rz  = obj_addr.wrapping_sub(redzone_size as u64);
+    let left_rz = obj_addr.wrapping_sub(redzone_size as u64);
     let right_rz = obj_addr + obj_size as u64;
-    kasan_poison(left_rz,  redzone_size, SHADOW_REDZONE);
+    kasan_poison(left_rz, redzone_size, SHADOW_REDZONE);
     kasan_poison(right_rz, redzone_size, SHADOW_REDZONE);
 }
 
@@ -200,10 +202,20 @@ pub unsafe fn kasan_poison_redzone(obj_addr: u64, obj_size: usize, redzone_size:
 /// Résultat d'un check KASAN.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KasanError {
-    UseAfterFree { addr: u64 },
-    BufferOverflow { addr: u64 },
-    UninitMemory { addr: u64 },
-    PartialAccess { addr: u64, accessible: u8, requested: u8 },
+    UseAfterFree {
+        addr: u64,
+    },
+    BufferOverflow {
+        addr: u64,
+    },
+    UninitMemory {
+        addr: u64,
+    },
+    PartialAccess {
+        addr: u64,
+        accessible: u8,
+        requested: u8,
+    },
 }
 
 /// Vérifie l'accès à `addr` pour `size` octets.
@@ -225,24 +237,28 @@ pub unsafe fn kasan_check_access(addr: u64, size: usize) -> Result<(), KasanErro
         let shadow = read_shadow(cur);
         let err = match shadow {
             SHADOW_ACCESSIBLE => None,
-            SHADOW_FREED      => {
+            SHADOW_FREED => {
                 KASAN_STATS.uaf_detected.fetch_add(1, Ordering::Relaxed);
                 Some(KasanError::UseAfterFree { addr: cur })
             }
-            SHADOW_REDZONE    => {
-                KASAN_STATS.overflow_detected.fetch_add(1, Ordering::Relaxed);
+            SHADOW_REDZONE => {
+                KASAN_STATS
+                    .overflow_detected
+                    .fetch_add(1, Ordering::Relaxed);
                 Some(KasanError::BufferOverflow { addr: cur })
             }
-            SHADOW_UNINIT     => {
+            SHADOW_UNINIT => {
                 KASAN_STATS.uninit_detected.fetch_add(1, Ordering::Relaxed);
                 Some(KasanError::UninitMemory { addr: cur })
             }
             partial if partial > 0 && partial < 8 => {
                 // Vérifier si l'accès dépasse les `partial` octets valides.
                 let byte_in_word = (cur & 7) as u8;
-                let end_in_word  = (byte_in_word + size as u8).min(8);
+                let end_in_word = (byte_in_word + size as u8).min(8);
                 if end_in_word > partial {
-                    KASAN_STATS.overflow_detected.fetch_add(1, Ordering::Relaxed);
+                    KASAN_STATS
+                        .overflow_detected
+                        .fetch_add(1, Ordering::Relaxed);
                     Some(KasanError::PartialAccess {
                         addr: cur,
                         accessible: partial,
@@ -271,15 +287,23 @@ pub unsafe fn kasan_check_access(addr: u64, size: usize) -> Result<(), KasanErro
 /// Log minimal + panic.
 pub fn kasan_report(error: KasanError, ip: u64) -> ! {
     match error {
-        KasanError::UseAfterFree { addr } =>
-            panic!("KASAN: use-after-free at {:#x} ip={:#x}", addr, ip),
-        KasanError::BufferOverflow { addr } =>
-            panic!("KASAN: buffer-overflow at {:#x} ip={:#x}", addr, ip),
-        KasanError::UninitMemory { addr } =>
-            panic!("KASAN: uninit-memory read at {:#x} ip={:#x}", addr, ip),
-        KasanError::PartialAccess { addr, accessible, requested } =>
-            panic!("KASAN: partial-access at {:#x} accessible={} requested={} ip={:#x}",
-                   addr, accessible, requested, ip),
+        KasanError::UseAfterFree { addr } => {
+            panic!("KASAN: use-after-free at {:#x} ip={:#x}", addr, ip)
+        }
+        KasanError::BufferOverflow { addr } => {
+            panic!("KASAN: buffer-overflow at {:#x} ip={:#x}", addr, ip)
+        }
+        KasanError::UninitMemory { addr } => {
+            panic!("KASAN: uninit-memory read at {:#x} ip={:#x}", addr, ip)
+        }
+        KasanError::PartialAccess {
+            addr,
+            accessible,
+            requested,
+        } => panic!(
+            "KASAN: partial-access at {:#x} accessible={} requested={} ip={:#x}",
+            addr, accessible, requested, ip
+        ),
     }
 }
 

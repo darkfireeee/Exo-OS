@@ -33,5 +33,7 @@ where
 #[allow(dead_code)]
 #[inline]
 pub fn is_critical(name: &str) -> bool {
-    metadata(name).map(|service| service.critical).unwrap_or(false)
+    metadata(name)
+        .map(|service| service.critical)
+        .unwrap_or(false)
 }

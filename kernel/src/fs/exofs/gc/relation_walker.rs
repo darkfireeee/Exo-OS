@@ -18,12 +18,11 @@
 //   DAG-01 : pas d'import de ipc/, process/, arch/
 // ==============================================================================
 
-
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::fs::exofs::core::{BlobId, ObjectId, ExofsError, ExofsResult};
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult, ObjectId};
 use crate::fs::exofs::gc::tricolor::TricolorWorkspace;
 use crate::scheduler::sync::spinlock::SpinLock;
 
@@ -62,13 +61,13 @@ pub struct RelationEdge {
 #[derive(Debug, Default, Clone)]
 pub struct WalkStats {
     /// Nombre de relations traversees.
-    pub relations_walked:  u64,
+    pub relations_walked: u64,
     /// Objets visites durant la traversee.
-    pub objects_visited:   u64,
+    pub objects_visited: u64,
     /// BlobIds grises depuis les relations.
-    pub blobs_greyed:      u64,
+    pub blobs_greyed: u64,
     /// Cycles detectes durant la traversee.
-    pub cycles_found:      u64,
+    pub cycles_found: u64,
     /// Erreurs de type GcQueueFull.
     pub queue_full_errors: u64,
 }
@@ -93,11 +92,11 @@ impl fmt::Display for WalkStats {
 
 struct RelationWalkerInner {
     /// Toutes les aretes de relations connues.
-    edges:  Vec<RelationEdge>,
+    edges: Vec<RelationEdge>,
     /// Index : ObjectId -> indices dans `edges` (src).
     // Pour iteration efficace : obj -> ses aretes sortantes.
     // Approximation : parcours lineaire (OK pour <= 65536 relations).
-    stats:  WalkStats,
+    stats: WalkStats,
 }
 
 // ==============================================================================
@@ -115,10 +114,10 @@ impl RelationWalker {
             inner: SpinLock::new(RelationWalkerInner {
                 edges: Vec::new(),
                 stats: WalkStats {
-                    relations_walked:  0,
-                    objects_visited:   0,
-                    blobs_greyed:      0,
-                    cycles_found:      0,
+                    relations_walked: 0,
+                    objects_visited: 0,
+                    blobs_greyed: 0,
+                    cycles_found: 0,
                     queue_full_errors: 0,
                 },
             }),
@@ -174,7 +173,7 @@ impl RelationWalker {
     /// Retourne les stats de la traversee.
     pub fn walk_and_grey(
         &self,
-        roots:     &[ObjectId],
+        roots: &[ObjectId],
         workspace: &mut TricolorWorkspace,
     ) -> ExofsResult<WalkStats> {
         let edges_snap: Vec<RelationEdge> = {
@@ -182,8 +181,8 @@ impl RelationWalker {
             g.edges.clone()
         };
 
-        let mut visited: BTreeSet<ObjectId>    = BTreeSet::new();
-        let mut stack:   Vec<ObjectId>         = Vec::new();
+        let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
+        let mut stack: Vec<ObjectId> = Vec::new();
         let mut stats = WalkStats::default();
 
         // Amorcer la pile depuis les racines.
@@ -213,12 +212,10 @@ impl RelationWalker {
                 if let Some(src_blob) = edge.src_blob {
                     match workspace.grey(src_blob) {
                         Ok(()) => {
-                            stats.blobs_greyed =
-                                stats.blobs_greyed.saturating_add(1);
+                            stats.blobs_greyed = stats.blobs_greyed.saturating_add(1);
                         }
                         Err(ExofsError::GcQueueFull) => {
-                            stats.queue_full_errors =
-                                stats.queue_full_errors.saturating_add(1);
+                            stats.queue_full_errors = stats.queue_full_errors.saturating_add(1);
                             // GC-03 : file pleine, on reporte le grisement.
                             // La passe suivante collectera ce noeud.
                         }
@@ -230,12 +227,10 @@ impl RelationWalker {
                 if let Some(dst_blob) = edge.dst_blob {
                     match workspace.grey(dst_blob) {
                         Ok(()) => {
-                            stats.blobs_greyed =
-                                stats.blobs_greyed.saturating_add(1);
+                            stats.blobs_greyed = stats.blobs_greyed.saturating_add(1);
                         }
                         Err(ExofsError::GcQueueFull) => {
-                            stats.queue_full_errors =
-                                stats.queue_full_errors.saturating_add(1);
+                            stats.queue_full_errors = stats.queue_full_errors.saturating_add(1);
                         }
                         Err(_) => {}
                     }
@@ -254,13 +249,18 @@ impl RelationWalker {
         // Mise a jour des stats globales.
         {
             let mut g = self.inner.lock();
-            g.stats.relations_walked = g.stats.relations_walked
+            g.stats.relations_walked = g
+                .stats
+                .relations_walked
                 .saturating_add(stats.relations_walked);
-            g.stats.objects_visited = g.stats.objects_visited
+            g.stats.objects_visited = g
+                .stats
+                .objects_visited
                 .saturating_add(stats.objects_visited);
-            g.stats.blobs_greyed = g.stats.blobs_greyed
-                .saturating_add(stats.blobs_greyed);
-            g.stats.queue_full_errors = g.stats.queue_full_errors
+            g.stats.blobs_greyed = g.stats.blobs_greyed.saturating_add(stats.blobs_greyed);
+            g.stats.queue_full_errors = g
+                .stats
+                .queue_full_errors
                 .saturating_add(stats.queue_full_errors);
         }
 
@@ -270,7 +270,8 @@ impl RelationWalker {
     /// Retourne toutes les destinations d'un objet (aretes sortantes).
     pub fn destinations_of(&self, obj: &ObjectId) -> Vec<ObjectId> {
         let g = self.inner.lock();
-        g.edges.iter()
+        g.edges
+            .iter()
             .filter(|e| &e.src == obj)
             .map(|e| e.dst)
             .collect()
@@ -279,7 +280,8 @@ impl RelationWalker {
     /// Retourne toutes les sources pointant vers un objet (aretes entrantes).
     pub fn sources_of(&self, obj: &ObjectId) -> Vec<ObjectId> {
         let g = self.inner.lock();
-        g.edges.iter()
+        g.edges
+            .iter()
             .filter(|e| &e.dst == obj)
             .map(|e| e.src)
             .collect()
@@ -295,8 +297,7 @@ impl RelationWalker {
         };
 
         let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
-        let mut queue: alloc::collections::VecDeque<ObjectId> =
-            alloc::collections::VecDeque::new();
+        let mut queue: alloc::collections::VecDeque<ObjectId> = alloc::collections::VecDeque::new();
 
         queue.push_back(*from);
         visited.insert(*from);
@@ -335,21 +336,25 @@ pub static RELATION_WALKER: RelationWalker = RelationWalker::new();
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::exofs::gc::tricolor::TricolorWorkspace;
     use crate::fs::exofs::gc::tricolor::BlobNode;
+    use crate::fs::exofs::gc::tricolor::TricolorWorkspace;
 
     fn oid(b: u8) -> ObjectId {
-        let mut a = [0u8; 32]; a[0] = b; ObjectId(a)
+        let mut a = [0u8; 32];
+        a[0] = b;
+        ObjectId(a)
     }
 
     fn bid(b: u8) -> BlobId {
-        let mut a = [0u8; 32]; a[0] = b; BlobId(a)
+        let mut a = [0u8; 32];
+        a[0] = b;
+        BlobId(a)
     }
 
     fn edge(s: u8, d: u8, sb: Option<u8>, db: Option<u8>) -> RelationEdge {
         RelationEdge {
-            src:      oid(s),
-            dst:      oid(d),
+            src: oid(s),
+            dst: oid(d),
             src_blob: sb.map(bid),
             dst_blob: db.map(bid),
         }

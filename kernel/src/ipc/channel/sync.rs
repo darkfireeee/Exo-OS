@@ -11,20 +11,20 @@
 //   - Intégration WaitQueue scheduler pour suspension efficace
 //   - Pas d'allocation : tout est statique ou sur la pile
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use crate::ipc::core::types::{ChannelId, IpcError, MsgFlags, MessageId, alloc_channel_id, alloc_message_id};
-use crate::ipc::core::constants::{
-    MAX_MSG_SIZE, SYNC_CHANNEL_TIMEOUT_NS,
+use crate::ipc::core::constants::{MAX_MSG_SIZE, SYNC_CHANNEL_TIMEOUT_NS};
+use crate::ipc::core::types::{
+    alloc_channel_id, alloc_message_id, ChannelId, IpcError, MessageId, MsgFlags,
 };
 use crate::ipc::ring::zerocopy::ZeroCopyRef;
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
 // IPC-04 (v6) : vérification capability via security::access_control (appel direct)
+use crate::security::access_control::{check_access, AccessError, ObjectKind};
 use crate::security::capability::{CapTable, CapToken, Rights};
-use crate::security::access_control::{check_access, ObjectKind, AccessError};
 
 // ---------------------------------------------------------------------------
 // États internes d'un rendez-vous en cours
@@ -121,7 +121,8 @@ impl SyncSlot {
         self.sender_tid.store(0, Ordering::Relaxed);
         self.receiver_tid.store(0, Ordering::Relaxed);
         self.sequence.fetch_add(1, Ordering::Release);
-        self.state.store(RendezVousState::Idle as u32, Ordering::Release);
+        self.state
+            .store(RendezVousState::Idle as u32, Ordering::Release);
     }
 }
 
@@ -210,10 +211,9 @@ impl SyncChannel {
         // Signaler toute attente en cours
         let state = self.slot.state.load(Ordering::Acquire);
         if RendezVousState::from_u32(state) == RendezVousState::SenderWaiting {
-            self.slot.state.store(
-                RendezVousState::Cancelled as u32,
-                Ordering::Release,
-            );
+            self.slot
+                .state
+                .store(RendezVousState::Cancelled as u32, Ordering::Release);
         }
     }
 
@@ -250,10 +250,10 @@ impl SyncChannel {
             loop {
                 core::hint::spin_loop();
                 spins += 1;
-                let s = RendezVousState::from_u32(
-                    self.slot.state.load(Ordering::Acquire),
-                );
-                if s == RendezVousState::Idle { break; }
+                let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
+                if s == RendezVousState::Idle {
+                    break;
+                }
                 if self.is_closed() {
                     return Err(IpcError::Closed);
                 }
@@ -265,7 +265,9 @@ impl SyncChannel {
                     );
                     // Blocage réel — sera réveillé quand l'émetteur précédent termine.
                     // SAFETY: block_current() sûr si depth()==0 (debug_assert ci-dessus), my_tid valide.
-                    unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
+                    unsafe {
+                        crate::ipc::sync::sched_hooks::block_current(my_tid);
+                    }
                     spins = 0;
                 }
                 if spins > 1_000_000 {
@@ -292,29 +294,32 @@ impl SyncChannel {
         // récepteur puisse nous réveiller après avoir pris le message.
         let my_tid = crate::ipc::sync::sched_hooks::current_tid();
         self.slot.sender_tid.store(my_tid, Ordering::Relaxed);
-        self.slot.state.store(
-            RendezVousState::SenderWaiting as u32,
-            Ordering::Release,
-        );
+        self.slot
+            .state
+            .store(RendezVousState::SenderWaiting as u32, Ordering::Release);
 
         // Attendre ReceiverAcked ou Cancelled.
         // Stratégie : spin court (≤ 64 tours) puis blocage réel via scheduler.
         let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
         let mut spins: u64 = 0;
-        let spin_hard_limit = if timeout_ns == 0 { u64::MAX } else { timeout_ns / 10 };
+        let spin_hard_limit = if timeout_ns == 0 {
+            u64::MAX
+        } else {
+            timeout_ns / 10
+        };
 
         loop {
             core::hint::spin_loop();
             spins += 1;
-            let s = RendezVousState::from_u32(
-                self.slot.state.load(Ordering::Acquire),
-            );
+            let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
             match s {
                 RendezVousState::ReceiverAcked => {
                     // SAFETY: slot.state == ReceiverAcked, seul l'émetteur reset ici
                     unsafe { self.slot.reset() };
                     self.stats.sends_ok.fetch_add(1, Ordering::Relaxed);
-                    self.stats.total_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
+                    self.stats
+                        .total_bytes
+                        .fetch_add(data.len() as u64, Ordering::Relaxed);
                     IPC_STATS.record(StatEvent::MessageSent);
                     return Ok(mid);
                 }
@@ -328,7 +333,9 @@ impl SyncChannel {
             }
 
             if self.is_closed() {
-                self.slot.state.store(RendezVousState::Idle as u32, Ordering::Release);
+                self.slot
+                    .state
+                    .store(RendezVousState::Idle as u32, Ordering::Release);
                 self.stats.sends_cancelled.fetch_add(1, Ordering::Relaxed);
                 return Err(IpcError::Closed);
             }
@@ -357,14 +364,20 @@ impl SyncChannel {
                     "SyncChannel::send (attente ack): block_current() avec PreemptGuard actif"
                 );
                 // SAFETY: block_current() sûr si PreemptGuard::depth() == 0.
-                unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
+                unsafe {
+                    crate::ipc::sync::sched_hooks::block_current(my_tid);
+                }
                 spins = 0;
             }
         }
     }
 
     /// Envoi zero-copy : partage une page physique via ZeroCopyRef.
-    pub fn send_zerocopy(&self, zc_ref: ZeroCopyRef, flags: MsgFlags) -> Result<MessageId, IpcError> {
+    pub fn send_zerocopy(
+        &self,
+        zc_ref: ZeroCopyRef,
+        flags: MsgFlags,
+    ) -> Result<MessageId, IpcError> {
         if self.is_closed() {
             return Err(IpcError::Closed);
         }
@@ -384,23 +397,22 @@ impl SyncChannel {
         self.slot.flags.store(f.bits(), Ordering::Relaxed);
 
         // SAFETY: seul l'émetteur écrit zc_ref ici (état Idle)
-        unsafe { *self.slot.zc_ref.get() = zc_ref; }
+        unsafe {
+            *self.slot.zc_ref.get() = zc_ref;
+        }
 
         // Enregistrer le TID avant la transition pour le réveil par le récepteur.
         let my_tid = crate::ipc::sync::sched_hooks::current_tid();
         self.slot.sender_tid.store(my_tid, Ordering::Relaxed);
-        self.slot.state.store(
-            RendezVousState::SenderWaiting as u32,
-            Ordering::Release,
-        );
+        self.slot
+            .state
+            .store(RendezVousState::SenderWaiting as u32, Ordering::Release);
 
         let mut spins: u64 = 0;
         loop {
             core::hint::spin_loop();
             spins += 1;
-            let s = RendezVousState::from_u32(
-                self.slot.state.load(Ordering::Acquire),
-            );
+            let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
             if s == RendezVousState::ReceiverAcked {
                 // SAFETY: ReceiverAcked — seul l'émetteur réinitialise (protocole 1-émetteur).
                 unsafe { self.slot.reset() };
@@ -425,7 +437,9 @@ impl SyncChannel {
                     "SyncChannel::send_zerocopy: block_current() avec PreemptGuard actif"
                 );
                 // SAFETY: block_current() sûr si depth()==0 (debug_assert ci-dessus, send_zerocopy).
-                unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
+                unsafe {
+                    crate::ipc::sync::sched_hooks::block_current(my_tid);
+                }
                 spins = 0;
             }
             if spins > 2_000_000 {
@@ -450,7 +464,11 @@ impl SyncChannel {
     /// - `Ok((MessageId, longueur_copiée, MsgFlags))` — message reçu
     /// - `Err(IpcError::WouldBlock)` — aucun émetteur prêt (si NOWAIT)
     /// - `Err(IpcError::Closed)` — canal fermé
-    pub fn recv(&self, buf: &mut [u8], flags: MsgFlags) -> Result<(MessageId, usize, MsgFlags), IpcError> {
+    pub fn recv(
+        &self,
+        buf: &mut [u8],
+        flags: MsgFlags,
+    ) -> Result<(MessageId, usize, MsgFlags), IpcError> {
         if self.is_closed() {
             return Err(IpcError::Closed);
         }
@@ -458,9 +476,7 @@ impl SyncChannel {
         // Attendre qu'un émetteur soit là.
         // Stratégie : spin court (≤ 64) puis blocage réel.
         if flags.contains(MsgFlags::NOWAIT) {
-            let s = RendezVousState::from_u32(
-                self.slot.state.load(Ordering::Acquire),
-            );
+            let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
             if s != RendezVousState::SenderWaiting {
                 self.stats.recvs_would_block.fetch_add(1, Ordering::Relaxed);
                 return Err(IpcError::WouldBlock);
@@ -470,10 +486,10 @@ impl SyncChannel {
             self.slot.receiver_tid.store(my_tid, Ordering::Relaxed);
             let mut spins: u32 = 0;
             loop {
-                let s = RendezVousState::from_u32(
-                    self.slot.state.load(Ordering::Acquire),
-                );
-                if s == RendezVousState::SenderWaiting { break; }
+                let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
+                if s == RendezVousState::SenderWaiting {
+                    break;
+                }
                 if self.is_closed() {
                     return Err(IpcError::Closed);
                 }
@@ -486,7 +502,9 @@ impl SyncChannel {
                         "SyncChannel::recv: block_current() appelé avec PreemptGuard actif"
                     );
                     // SAFETY: block_current() sûr si depth()==0 (debug_assert ci-dessus, recv path).
-                    unsafe { crate::ipc::sync::sched_hooks::block_current(my_tid); }
+                    unsafe {
+                        crate::ipc::sync::sched_hooks::block_current(my_tid);
+                    }
                     spins = 0;
                 }
                 if spins > 2_000_000 {
@@ -510,10 +528,9 @@ impl SyncChannel {
             // Mode zero-copy : retourner la référence sans copie de données
             let copy_len = 0usize.min(buf.len());
             let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
-            self.slot.state.store(
-                RendezVousState::ReceiverAcked as u32,
-                Ordering::Release,
-            );
+            self.slot
+                .state
+                .store(RendezVousState::ReceiverAcked as u32, Ordering::Release);
             // Réveiller l'émetteur s'il est bloqué.
             if sender_tid != 0 {
                 crate::ipc::sync::sched_hooks::wake_thread(sender_tid);
@@ -535,10 +552,9 @@ impl SyncChannel {
 
         // Signaler l'émetteur — transition vers ReceiverAcked.
         let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
-        self.slot.state.store(
-            RendezVousState::ReceiverAcked as u32,
-            Ordering::Release,
-        );
+        self.slot
+            .state
+            .store(RendezVousState::ReceiverAcked as u32, Ordering::Release);
         // Réveiller l'émetteur s'il est bloqué dans le scheduler.
         if sender_tid != 0 {
             crate::ipc::sync::sched_hooks::wake_thread(sender_tid);
@@ -555,9 +571,7 @@ impl SyncChannel {
     /// Reçoit une référence zero-copy depuis le canal.
     /// Retourne `Some(ZeroCopyRef)` si le message courant est en mode ZC.
     pub fn recv_zerocopy(&self) -> Option<ZeroCopyRef> {
-        let s = RendezVousState::from_u32(
-            self.slot.state.load(Ordering::Acquire),
-        );
+        let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
         if s != RendezVousState::SenderWaiting {
             return None;
         }
@@ -568,10 +582,9 @@ impl SyncChannel {
         }
         // SAFETY: état SenderWaiting et flag ZEROCOPY — l'émetteur a écrit zc_ref
         let zc = unsafe { *self.slot.zc_ref.get() };
-        self.slot.state.store(
-            RendezVousState::ReceiverAcked as u32,
-            Ordering::Release,
-        );
+        self.slot
+            .state
+            .store(RendezVousState::ReceiverAcked as u32, Ordering::Release);
         self.stats.recvs_ok.fetch_add(1, Ordering::Relaxed);
         IPC_STATS.record(StatEvent::MessageReceived);
         Some(zc)
@@ -613,17 +626,23 @@ impl SyncChannel {
     #[inline]
     pub fn send_checked(
         &self,
-        data:   &[u8],
-        flags:  MsgFlags,
-        table:  &CapTable,
-        token:  CapToken,
+        data: &[u8],
+        flags: MsgFlags,
+        table: &CapTable,
+        token: CapToken,
     ) -> Result<MessageId, IpcError> {
         // IPC-04 (v6) : vérification capability — appel direct security/access_control/
-        check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_SEND, "ipc::channel")
-            .map_err(|e| match e {
-                AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-                _ => IpcError::PermissionDenied,
-            })?;
+        check_access(
+            table,
+            token,
+            ObjectKind::IpcChannel,
+            Rights::IPC_SEND,
+            "ipc::channel",
+        )
+        .map_err(|e| match e {
+            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+            _ => IpcError::PermissionDenied,
+        })?;
         self.send(data, flags)
     }
 
@@ -633,17 +652,23 @@ impl SyncChannel {
     #[inline]
     pub fn recv_checked(
         &self,
-        buf:   &mut [u8],
+        buf: &mut [u8],
         flags: MsgFlags,
         table: &CapTable,
         token: CapToken,
     ) -> Result<(MessageId, usize, MsgFlags), IpcError> {
         // IPC-04 (v6) : vérification capability — appel direct security/access_control/
-        check_access(table, token, ObjectKind::IpcChannel, Rights::IPC_RECV, "ipc::channel")
-            .map_err(|e| match e {
-                AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-                _ => IpcError::PermissionDenied,
-            })?;
+        check_access(
+            table,
+            token,
+            ObjectKind::IpcChannel,
+            Rights::IPC_RECV,
+            "ipc::channel",
+        )
+        .map_err(|e| match e {
+            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
+            _ => IpcError::PermissionDenied,
+        })?;
         self.recv(buf, flags)
     }
 }
@@ -667,8 +692,7 @@ pub struct SyncChannelSnapshot {
 pub const SYNC_CHANNEL_TABLE_SIZE: usize = 512;
 
 /// Table statique globale de canaux synchrones alloués
-static SYNC_CHANNEL_TABLE: SpinLock<SyncChannelTable> =
-    SpinLock::new(SyncChannelTable::new());
+static SYNC_CHANNEL_TABLE: SpinLock<SyncChannelTable> = SpinLock::new(SyncChannelTable::new());
 
 pub struct SyncChannelTable {
     slots: [MaybeUninit<SyncChannel>; SYNC_CHANNEL_TABLE_SIZE],
@@ -755,9 +779,11 @@ pub fn sync_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<Mes
 }
 
 /// Reçoit depuis le canal synchrone identifié par `idx`.
-pub fn sync_channel_recv(idx: usize, buf: &mut [u8], flags: MsgFlags)
-    -> Result<(MessageId, usize, MsgFlags), IpcError>
-{
+pub fn sync_channel_recv(
+    idx: usize,
+    buf: &mut [u8],
+    flags: MsgFlags,
+) -> Result<(MessageId, usize, MsgFlags), IpcError> {
     let tbl = SYNC_CHANNEL_TABLE.lock();
     if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
         return Err(IpcError::InvalidHandle);
@@ -804,8 +830,8 @@ pub fn sync_channel_count() -> usize {
 /// Utilisé par la couche syscall. Les appels kernel-interne peuvent utiliser
 /// `sync_channel_send()` directement.
 pub fn sync_channel_send_checked(
-    idx:   usize,
-    data:  &[u8],
+    idx: usize,
+    data: &[u8],
     flags: MsgFlags,
     table: &CapTable,
     token: CapToken,
@@ -823,8 +849,8 @@ pub fn sync_channel_send_checked(
 
 /// Reçoit depuis le canal synchrone `idx` avec vérification capability (IPC-04 v6).
 pub fn sync_channel_recv_checked(
-    idx:   usize,
-    buf:   &mut [u8],
+    idx: usize,
+    buf: &mut [u8],
     flags: MsgFlags,
     table: &CapTable,
     token: CapToken,

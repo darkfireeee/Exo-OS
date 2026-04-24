@@ -15,13 +15,11 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use crate::ipc::core::types::{IpcError, ProcessId};
 use crate::ipc::core::constants::SHM_POOL_PAGES;
-use crate::ipc::shared_memory::pool::{
-    shm_page_alloc, shm_page_free,
-};
-use crate::ipc::shared_memory::descriptor::{ShmPermissions, shm_create};
+use crate::ipc::core::types::{IpcError, ProcessId};
 use crate::ipc::shared_memory::allocator::{ShmHandle, ShmSizeClass};
+use crate::ipc::shared_memory::descriptor::{shm_create, ShmPermissions};
+use crate::ipc::shared_memory::pool::{shm_page_alloc, shm_page_free};
 
 // ---------------------------------------------------------------------------
 // Configuration NUMA
@@ -98,7 +96,8 @@ impl NumaBitmap {
             // Seulement `rem` bits valides dans le dernier mot
             self.bits[full_words].store((1u64 << rem) - 1, Ordering::Relaxed);
         }
-        self.free_count.store(NUMA_PAGES_PER_NODE, Ordering::Release);
+        self.free_count
+            .store(NUMA_PAGES_PER_NODE, Ordering::Release);
     }
 
     /// Alloue une page locale. Retourne son index dans le pool global, ou None.
@@ -108,10 +107,13 @@ impl NumaBitmap {
         for (wi, word) in self.bits.iter().enumerate() {
             loop {
                 let v = word.load(Ordering::Acquire);
-                if v == 0 { break; }
+                if v == 0 {
+                    break;
+                }
                 let bit = v.trailing_zeros() as usize;
                 let mask = 1u64 << bit;
-                match word.compare_exchange_weak(v, v & !mask, Ordering::AcqRel, Ordering::Acquire) {
+                match word.compare_exchange_weak(v, v & !mask, Ordering::AcqRel, Ordering::Acquire)
+                {
                     Ok(_) => {
                         let local_idx = wi * 64 + bit;
                         if local_idx < NUMA_PAGES_PER_NODE {
@@ -231,7 +233,9 @@ impl NumaManager {
     /// # SAFETY
     /// Doit être appelé après `init_shm_pool()`, une seule fois.
     pub unsafe fn init(&self, n_nodes: usize) {
-        if n_nodes == 0 { return; }
+        if n_nodes == 0 {
+            return;
+        }
         let nodes = n_nodes.min(MAX_NUMA_NODES);
         self.active_nodes.store(nodes, Ordering::Relaxed);
 
@@ -352,9 +356,7 @@ pub fn numa_shm_alloc(
         return Err(IpcError::InvalidArgument);
     }
 
-    let size_class = ShmSizeClass::for_size(
-        n_pages * crate::ipc::shared_memory::page::PAGE_SIZE,
-    );
+    let size_class = ShmSizeClass::for_size(n_pages * crate::ipc::shared_memory::page::PAGE_SIZE);
 
     // Allouer les pages NUMA-aware
     let mut page_indices = [0u32; crate::ipc::shared_memory::descriptor::MAX_SHM_PAGES_PER_DESC];

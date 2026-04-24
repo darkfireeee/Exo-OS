@@ -11,28 +11,33 @@
 //! Le code assembleur du trampoline est dans `boot/trampoline_asm.rs`.
 //! Il est copié à l'adresse 0x6000 (page trampoline = 6).
 
-use core::sync::atomic::{AtomicBool, Ordering};
-use super::super::cpu::tsc;
-use super::super::apic::ipi;
 use super::super::acpi::madt;
+use super::super::apic::ipi;
+use super::super::cpu::tsc;
 use super::percpu;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
 /// Adresse physique du trampoline AP (doit être < 1 MiB, aligné sur page)
 pub const TRAMPOLINE_PHYS: u64 = 0x6000;
-pub const TRAMPOLINE_PAGE: u8  = 6; // SIPI vector = adresse / 4096
+pub const TRAMPOLINE_PAGE: u8 = 6; // SIPI vector = adresse / 4096
 
 /// Délais ACPI SMP (Intel MP Spec Section B.4)
-const INIT_IPI_DELAY_MS:    u64 = 10;   // 10ms après INIT IPI
-const STARTUP_IPI_DELAY_MS: u64 = 1;    // 1ms entre les deux SIPI
-const AP_STARTUP_TIMEOUT_MS:u64 = 100;  // timeout d'attente par AP
+const INIT_IPI_DELAY_MS: u64 = 10; // 10ms après INIT IPI
+const STARTUP_IPI_DELAY_MS: u64 = 1; // 1ms entre les deux SIPI
+const AP_STARTUP_TIMEOUT_MS: u64 = 100; // timeout d'attente par AP
 
 static SMP_BOOT_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Retourne le nombre de CPUs logical online
 pub fn smp_cpu_count() -> u32 {
     percpu::cpu_count()
+}
+
+#[inline]
+pub fn smp_boot_complete() -> bool {
+    SMP_BOOT_DONE.load(Ordering::Acquire)
 }
 
 // ── Handshake BSP ↔ AP ───────────────────────────────────────────────────────
@@ -45,7 +50,9 @@ const HANDSHAKE_OFFSET: u64 = 0x10; // offset dans le trampoline
 
 fn write_trampoline_u32(offset: u64, val: u32) {
     // SAFETY: trampoline mappé en identité, offset validé
-    unsafe { core::ptr::write_volatile((TRAMPOLINE_PHYS + offset) as *mut u32, val); }
+    unsafe {
+        core::ptr::write_volatile((TRAMPOLINE_PHYS + offset) as *mut u32, val);
+    }
 }
 
 fn read_trampoline_u32(offset: u64) -> u32 {
@@ -65,7 +72,9 @@ pub fn smp_boot_aps(madt_info: &madt::MadtInfo, bsp_lapic_id: u32) {
 
     for i in 0..(n as usize) {
         let apic_id = apic_ids[i];
-        if apic_id == bsp_lapic_id { continue; } // skip BSP
+        if apic_id == bsp_lapic_id {
+            continue;
+        } // skip BSP
 
         boot_ap(apic_id as u8);
     }
@@ -93,7 +102,9 @@ fn boot_ap(dest_apic_id: u8) {
     let deadline = tsc::read_tsc() + tsc::tsc_ms_to_cycles(AP_STARTUP_TIMEOUT_MS);
     loop {
         let sig = read_trampoline_u32(HANDSHAKE_OFFSET);
-        if sig == AP_ALIVE_MAGIC { break; }
+        if sig == AP_ALIVE_MAGIC {
+            break;
+        }
         if tsc::read_tsc() > deadline {
             // AP non-réactif : ignorer (peut être absent ou désactivé dans MADT)
             break;
@@ -135,11 +146,19 @@ pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: 
     // 6. FPU
     super::super::cpu::fpu::init_fpu_for_cpu();
 
+    // 6b. Publier un TCB idle de bootstrap pour cet AP avant STI.
+    // L'AP exécute déjà sa boucle `hlt`; ce TCB représente donc le contexte
+    // courant du CPU jusqu'au premier vrai switch scheduler.
+    let _ = crate::scheduler::core::publish_current_boot_idle(cpu_id, kernel_stack_top);
+
     // 7. Mitigations spectre
     super::super::spectre::apply_mitigations_ap();
 
     // 8. Signaler au BSP que l'AP est prêt
-    core::ptr::write_volatile((TRAMPOLINE_PHYS + HANDSHAKE_OFFSET) as *mut u32, AP_ALIVE_MAGIC);
+    core::ptr::write_volatile(
+        (TRAMPOLINE_PHYS + HANDSHAKE_OFFSET) as *mut u32,
+        AP_ALIVE_MAGIC,
+    );
 
     // 8b. RÈGLE BOOT-SEC (V-26) : attendre que le sous-système de sécurité
     //     soit initialisé (SECURITY_READY) avant toute IPC.

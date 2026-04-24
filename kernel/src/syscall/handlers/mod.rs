@@ -5,9 +5,9 @@
 //! Toute logique métier est déléguée aux modules internes (fd::, process::, etc.).
 
 pub mod fd;
+pub mod fs_posix;
+pub mod memory;
+pub mod misc;
 pub mod process;
 pub mod signal;
-pub mod memory;
 pub mod time;
-pub mod misc;
-pub mod fs_posix;

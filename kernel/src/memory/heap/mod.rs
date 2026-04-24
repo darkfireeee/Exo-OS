@@ -15,14 +15,14 @@
 //     vmalloc       — allocateur vmalloc pour grandes allocations
 
 pub mod allocator;
-pub mod thread_local;
 pub mod large;
+pub mod thread_local;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORTS PUBLIQUES
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use allocator::{heap_alloc, heap_free, heap_init, HEAP_STATS};
 pub use allocator::global::KERNEL_ALLOCATOR;
-pub use thread_local::drain::{drain_on_context_switch, drain_on_memory_pressure, drain_all_cpus};
-pub use large::vmalloc::{VMALLOC_STATS};
+pub use allocator::{heap_alloc, heap_free, heap_init, HEAP_STATS};
+pub use large::vmalloc::VMALLOC_STATS;
+pub use thread_local::drain::{drain_all_cpus, drain_on_context_switch, drain_on_memory_pressure};

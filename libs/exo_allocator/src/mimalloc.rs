@@ -33,15 +33,11 @@ unsafe impl GlobalAlloc for Mimalloc {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        unsafe {
-            mi_calloc(1, layout.size()) as *mut u8
-        }
+        unsafe { mi_calloc(1, layout.size()) as *mut u8 }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, _layout: Layout, new_size: usize) -> *mut u8 {
-        unsafe {
-            mi_realloc(ptr as *mut c_void, new_size) as *mut u8
-        }
+        unsafe { mi_realloc(ptr as *mut c_void, new_size) as *mut u8 }
     }
 }
 

@@ -8,8 +8,8 @@
 
 pub mod database;
 pub mod matcher;
-pub mod yara;
 pub mod update;
+pub mod yara;
 
 /// Initialise tous les sous-modules de signatures.
 pub fn signatures_init() {

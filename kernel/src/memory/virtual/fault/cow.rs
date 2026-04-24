@@ -3,17 +3,17 @@
 // CoW fault handler — gère un write sur une page marquée Copy-on-Write.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-use crate::memory::core::{VirtAddr, PageFlags, PAGE_SIZE};
-use crate::memory::cow::tracker::COW_TRACKER;
-use crate::memory::virt::vma::VmaDescriptor;
-use crate::memory::virt::address_space::tlb::flush_single;
-use super::{FaultContext, FaultResult};
 use super::handler::FaultAllocator;
+use super::{FaultContext, FaultResult};
+use crate::memory::core::{PageFlags, VirtAddr, PAGE_SIZE};
+use crate::memory::cow::tracker::COW_TRACKER;
+use crate::memory::virt::address_space::tlb::flush_single;
+use crate::memory::virt::vma::VmaDescriptor;
 
 /// Traite un CoW fault (write sur page en lecture seule avec flag COW).
 pub fn handle_cow_fault<A: FaultAllocator>(
-    ctx:  &FaultContext,
-    vma:  &VmaDescriptor,
+    ctx: &FaultContext,
+    vma: &VmaDescriptor,
     alloc: &A,
 ) -> FaultResult {
     let page_addr = VirtAddr::new(ctx.fault_addr.as_u64() & !(PAGE_SIZE as u64 - 1));
@@ -35,17 +35,21 @@ pub fn handle_cow_fault<A: FaultAllocator>(
     // que la page est partagée (via un compteur dans FrameDesc), on copie.
     // Ici : toujours copier (chemin safe).
     let new_frame = match alloc.alloc_nonzeroed() {
-        Ok(f)  => f,
-        Err(_) => return FaultResult::Oom { addr: ctx.fault_addr },
+        Ok(f) => f,
+        Err(_) => {
+            return FaultResult::Oom {
+                addr: ctx.fault_addr,
+            }
+        }
     };
 
     // Copier les données de l'ancien frame vers le nouveau.
     // SAFETY: Les deux frames sont mappés dans le physmap kernel.
     unsafe {
         let src = (crate::memory::core::layout::PHYS_MAP_BASE.as_u64()
-                   + old_frame.start_address().as_u64()) as *const u8;
+            + old_frame.start_address().as_u64()) as *const u8;
         let dst = (crate::memory::core::layout::PHYS_MAP_BASE.as_u64()
-                   + new_frame.start_address().as_u64()) as *mut u8;
+            + new_frame.start_address().as_u64()) as *mut u8;
         // SAFETY: src et dst sont des frames physiques distincts, taille PAGE_SIZE.
         core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE);
     }
@@ -60,12 +64,16 @@ pub fn handle_cow_fault<A: FaultAllocator>(
             }
             vma.record_cow_break();
             // SAFETY: adresse canonique.
-            unsafe { flush_single(page_addr); }
+            unsafe {
+                flush_single(page_addr);
+            }
             FaultResult::Handled
         }
         Err(_) => {
             alloc.free_frame(new_frame);
-            FaultResult::Oom { addr: ctx.fault_addr }
+            FaultResult::Oom {
+                addr: ctx.fault_addr,
+            }
         }
     }
 }

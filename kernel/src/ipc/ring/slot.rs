@@ -15,13 +15,12 @@
 // attend seq == pos + 1.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
-use core::mem::MaybeUninit;
-use core::cell::UnsafeCell;
-use crate::ipc::core::transfer::RingSlot;
 use crate::ipc::core::constants::RING_SIZE;
+use crate::ipc::core::transfer::RingSlot;
 use crate::ipc::core::types::array_index_nospec;
+use core::cell::UnsafeCell;
+use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SlotCell — cellule atomique d'un ring
@@ -37,7 +36,7 @@ pub struct SlotCell {
     /// Numéro de séquence atomique — détermine qui peut accéder au slot.
     pub sequence: AtomicU64,
     /// Données inlinées dans le slot.
-    pub slot:     UnsafeCell<MaybeUninit<RingSlot>>,
+    pub slot: UnsafeCell<MaybeUninit<RingSlot>>,
     /// Padding pour éviter la false sharing (compléter à 64 bytes minimum).
     _pad: [u8; 0],
 }
@@ -52,8 +51,8 @@ impl SlotCell {
     pub const fn new_at(index: u64) -> Self {
         Self {
             sequence: AtomicU64::new(index),
-            slot:     UnsafeCell::new(MaybeUninit::uninit()),
-            _pad:     [],
+            slot: UnsafeCell::new(MaybeUninit::uninit()),
+            _pad: [],
         }
     }
 
@@ -129,18 +128,22 @@ impl RingBuffer {
 /// Garde RAII sur un slot ring.
 /// Au Drop, avance la séquence pour signaler la fin de la lecture/écriture.
 pub struct SlotWriteGuard<'a> {
-    cell:   &'a SlotCell,
+    cell: &'a SlotCell,
     /// Séquence à écrire au Drop (= pos + 1 pour signaler "données disponibles").
     commit_seq: u64,
     /// Abort au lieu de commit si Drop est appelé sans commit().
-    aborted:    bool,
+    aborted: bool,
 }
 
 impl<'a> SlotWriteGuard<'a> {
     /// Crée une garde d'écriture.
     /// `commit_seq` est pos + 1 pour un ring standard.
     pub fn new(cell: &'a SlotCell, commit_seq: u64) -> Self {
-        Self { cell, commit_seq, aborted: false }
+        Self {
+            cell,
+            commit_seq,
+            aborted: false,
+        }
     }
 
     /// Accède aux données du slot pour écriture.
@@ -173,22 +176,29 @@ impl<'a> Drop for SlotWriteGuard<'a> {
         if !self.aborted {
             // Restaurer pour éviter la corruption du ring.
             self.cell.store_seq(self.commit_seq.wrapping_sub(1));
-            debug_assert!(false, "SlotWriteGuard droppé sans commit ni abort — ring corrompu");
+            debug_assert!(
+                false,
+                "SlotWriteGuard droppé sans commit ni abort — ring corrompu"
+            );
         }
     }
 }
 
 /// Garde RAII sur un slot ring en lecture.
 pub struct SlotReadGuard<'a> {
-    cell:        &'a SlotCell,
+    cell: &'a SlotCell,
     /// Séquence à écrire au Drop (= pos + RING_SIZE pour réutiliser le slot).
     release_seq: u64,
-    released:    bool,
+    released: bool,
 }
 
 impl<'a> SlotReadGuard<'a> {
     pub fn new(cell: &'a SlotCell, release_seq: u64) -> Self {
-        Self { cell, release_seq, released: false }
+        Self {
+            cell,
+            release_seq,
+            released: false,
+        }
     }
 
     /// Accède aux données du slot en lecture.
@@ -211,7 +221,10 @@ impl<'a> Drop for SlotReadGuard<'a> {
     fn drop(&mut self) {
         if !self.released {
             self.cell.store_seq(self.release_seq);
-            debug_assert!(false, "SlotReadGuard droppé sans release — slot jamais libéré");
+            debug_assert!(
+                false,
+                "SlotReadGuard droppé sans release — slot jamais libéré"
+            );
         }
     }
 }

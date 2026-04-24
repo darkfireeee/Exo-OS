@@ -4,9 +4,9 @@
 // des frames partagés entre processus (fork/mmap shared).
 // COUCHE 0 — aucune dépendance externe.
 
+use crate::memory::core::types::Frame;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
-use crate::memory::core::types::Frame;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TABLE DE COMPTAGE CoW
@@ -27,9 +27,9 @@ const SLOT_DELETED: u64 = u64::MAX;
 #[repr(C, align(16))]
 struct CowEntry {
     /// Numéro de frame (0 = slot libre, u64::MAX = tombstone supprimé).
-    frame_idx:  AtomicU64,
+    frame_idx: AtomicU64,
     /// Nombre de mappages de ce frame (refcount CoW).
-    ref_count:  AtomicU32,
+    ref_count: AtomicU32,
     _pad: u32,
 }
 
@@ -51,8 +51,8 @@ pub struct CowTracker {
     /// Verrou global protégeant inc/dec contre les races TOCTOU.
     lock: Mutex<()>,
     pub tracked_count: AtomicU64,
-    pub inc_count:     AtomicU64,
-    pub dec_count:     AtomicU64,
+    pub inc_count: AtomicU64,
+    pub dec_count: AtomicU64,
     pub collision_max: AtomicU32,
 }
 
@@ -67,8 +67,8 @@ impl CowTracker {
             table: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
             lock: Mutex::new(()),
             tracked_count: AtomicU64::new(0),
-            inc_count:     AtomicU64::new(0),
-            dec_count:     AtomicU64::new(0),
+            inc_count: AtomicU64::new(0),
+            dec_count: AtomicU64::new(0),
             collision_max: AtomicU32::new(0),
         }
     }
@@ -176,8 +176,12 @@ impl CowTracker {
             let slot = (start + probe) & COW_TABLE_MASK;
             let entry = &self.table[slot];
             let existing = entry.frame_idx.load(Ordering::Acquire);
-            if existing == SLOT_EMPTY { return 1; }
-            if existing == SLOT_DELETED { continue; }
+            if existing == SLOT_EMPTY {
+                return 1;
+            }
+            if existing == SLOT_DELETED {
+                continue;
+            }
             if existing == idx {
                 return entry.ref_count.load(Ordering::Acquire);
             }
@@ -187,7 +191,9 @@ impl CowTracker {
 
     /// Indique si un frame est partagé (refcount ≥ 2).
     #[inline]
-    pub fn is_shared(&self, frame: Frame) -> bool { self.ref_count(frame) >= 2 }
+    pub fn is_shared(&self, frame: Frame) -> bool {
+        self.ref_count(frame) >= 2
+    }
 }
 
 pub static COW_TRACKER: CowTracker = CowTracker::new();

@@ -3,34 +3,31 @@
 //! Création d'un snapshot (point de sauvegarde figé) d'un blob ExoFS.
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
-use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use super::validation::{
-    exofs_err_to_errno, write_user_buf,
-    verify_cap, CapabilityType, EFAULT,
-};
 use super::object_fd::OBJECT_TABLE;
+use super::validation::{exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT};
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const SNAPSHOT_NAME_MAX: usize = 128;
-pub const SNAPSHOT_MAGIC:    u32   = 0x534E_4150; // "SNAP"
-pub const SNAPSHOT_VER:      u8    = 1;
+pub const SNAPSHOT_MAGIC: u32 = 0x534E_4150; // "SNAP"
+pub const SNAPSHOT_VER: u8 = 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Flags
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod snap_flags {
-    pub const ATOMIC:      u32 = 0x0001;
-    pub const READ_ONLY:   u32 = 0x0002;
-    pub const COW:         u32 = 0x0004;
-    pub const NAMED:       u32 = 0x0008;
-    pub const VALID_MASK:  u32 = ATOMIC | READ_ONLY | COW | NAMED;
+    pub const ATOMIC: u32 = 0x0001;
+    pub const READ_ONLY: u32 = 0x0002;
+    pub const COW: u32 = 0x0004;
+    pub const NAMED: u32 = 0x0008;
+    pub const VALID_MASK: u32 = ATOMIC | READ_ONLY | COW | NAMED;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,12 +37,12 @@ pub mod snap_flags {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct SnapshotCreateArgs {
-    pub flags:     u32,
-    pub _pad:      u32,
-    pub epoch_id:  u64,
+    pub flags: u32,
+    pub _pad: u32,
+    pub epoch_id: u64,
     pub parent_id: [u8; 32],
-    pub name_ptr:  u64,
-    pub name_len:  u64,
+    pub name_ptr: u64,
+    pub name_len: u64,
 }
 
 const _: () = assert!(core::mem::size_of::<SnapshotCreateArgs>() == 64);
@@ -57,12 +54,12 @@ const _: () = assert!(core::mem::size_of::<SnapshotCreateArgs>() == 64);
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SnapshotCreateResult {
-    pub snapshot_id:   [u8; 32],
-    pub blob_id:       [u8; 32],
-    pub size_bytes:    u64,
-    pub epoch_id:      u64,
-    pub flags:         u32,
-    pub _pad:          u32,
+    pub snapshot_id: [u8; 32],
+    pub blob_id: [u8; 32],
+    pub size_bytes: u64,
+    pub epoch_id: u64,
+    pub flags: u32,
+    pub _pad: u32,
 }
 
 const _: () = assert!(core::mem::size_of::<SnapshotCreateResult>() == 88);
@@ -76,14 +73,23 @@ fn snapshot_id(source: BlobId, epoch_id: u64, name: &[u8]) -> BlobId {
     let mut buf: [u8; 8 + 32 + SNAPSHOT_NAME_MAX + 2] = [0u8; 8 + 32 + SNAPSHOT_NAME_MAX + 2];
     let sb = source.as_bytes();
     let mut i = 0usize;
-    while i < 32 { buf[i] = sb[i]; i = i.wrapping_add(1); }
+    while i < 32 {
+        buf[i] = sb[i];
+        i = i.wrapping_add(1);
+    }
     let ep = epoch_id.to_le_bytes();
     let mut j = 0usize;
-    while j < 8 { buf[32 + j] = ep[j]; j = j.wrapping_add(1); }
+    while j < 8 {
+        buf[32 + j] = ep[j];
+        j = j.wrapping_add(1);
+    }
     let nl = name.len().min(SNAPSHOT_NAME_MAX);
     let mut k = 0usize;
-    while k < nl { buf[40 + k] = name[k]; k = k.wrapping_add(1); }
-    buf[40 + nl]     = 0xAA;
+    while k < nl {
+        buf[40 + k] = name[k];
+        k = k.wrapping_add(1);
+    }
+    buf[40 + nl] = 0xAA;
     buf[40 + nl + 1] = 0xBB;
     BlobId::from_bytes_blake3(&buf[..40 + nl + 2])
 }
@@ -97,9 +103,9 @@ fn snapshot_id(source: BlobId, epoch_id: u64, name: &[u8]) -> BlobId {
 
 fn build_snapshot_blob(
     source_data: &[u8],
-    epoch_id:    u64,
-    flags:       u32,
-    name:        &[u8],
+    epoch_id: u64,
+    flags: u32,
+    name: &[u8],
 ) -> ExofsResult<Vec<u8>> {
     if name.len() > SNAPSHOT_NAME_MAX {
         return Err(ExofsError::PathTooLong);
@@ -113,23 +119,39 @@ fn build_snapshot_blob(
     // magic
     let mag = SNAPSHOT_MAGIC.to_le_bytes();
     let mut i = 0usize;
-    while i < 4 { buf.push(mag[i]); i = i.wrapping_add(1); }
+    while i < 4 {
+        buf.push(mag[i]);
+        i = i.wrapping_add(1);
+    }
     buf.push(SNAPSHOT_VER);
     buf.push((flags & 0xFF) as u8);
-    buf.push(0u8); buf.push(0u8); // _pad
+    buf.push(0u8);
+    buf.push(0u8); // _pad
     let ep = epoch_id.to_le_bytes();
     let mut j = 0usize;
-    while j < 8 { buf.push(ep[j]); j = j.wrapping_add(1); }
+    while j < 8 {
+        buf.push(ep[j]);
+        j = j.wrapping_add(1);
+    }
     let sz = (source_data.len() as u64).to_le_bytes();
     let mut k = 0usize;
-    while k < 8 { buf.push(sz[k]); k = k.wrapping_add(1); }
+    while k < 8 {
+        buf.push(sz[k]);
+        k = k.wrapping_add(1);
+    }
     buf.push((nl & 0xFF) as u8);
-    buf.push((nl >> 8)   as u8);
+    buf.push((nl >> 8) as u8);
     let mut m = 0usize;
-    while m < nl { buf.push(name[m]); m = m.wrapping_add(1); }
+    while m < nl {
+        buf.push(name[m]);
+        m = m.wrapping_add(1);
+    }
     // contenu
     let mut n = 0usize;
-    while n < source_data.len() { buf.push(source_data[n]); n = n.wrapping_add(1); }
+    while n < source_data.len() {
+        buf.push(source_data[n]);
+        n = n.wrapping_add(1);
+    }
     Ok(buf)
 }
 
@@ -139,26 +161,33 @@ fn build_snapshot_blob(
 
 pub(crate) fn create_snapshot(
     source_blob: BlobId,
-    epoch_id:    u64,
-    flags:       u32,
-    name:        &[u8],
+    epoch_id: u64,
+    flags: u32,
+    name: &[u8],
 ) -> ExofsResult<SnapshotCreateResult> {
-    if flags & !snap_flags::VALID_MASK != 0 { return Err(ExofsError::InvalidArgument); }
-    if name.len() > SNAPSHOT_NAME_MAX { return Err(ExofsError::PathTooLong); }
-    let source_data = BLOB_CACHE.get(&source_blob)
+    if flags & !snap_flags::VALID_MASK != 0 {
+        return Err(ExofsError::InvalidArgument);
+    }
+    if name.len() > SNAPSHOT_NAME_MAX {
+        return Err(ExofsError::PathTooLong);
+    }
+    let source_data = BLOB_CACHE
+        .get(&source_blob)
         .ok_or(ExofsError::BlobNotFound)?;
     let size = source_data.len() as u64;
     let snap_key = snapshot_id(source_blob, epoch_id, name);
-    if BLOB_CACHE.get(&snap_key).is_some() { return Err(ExofsError::ObjectAlreadyExists); }
+    if BLOB_CACHE.get(&snap_key).is_some() {
+        return Err(ExofsError::ObjectAlreadyExists);
+    }
     let snap_blob = build_snapshot_blob(&source_data, epoch_id, flags, name)?;
     BLOB_CACHE.insert(snap_key, snap_blob.to_vec())?;
     Ok(SnapshotCreateResult {
         snapshot_id: *snap_key.as_bytes(),
-        blob_id:     *source_blob.as_bytes(),
-        size_bytes:  size,
+        blob_id: *source_blob.as_bytes(),
+        size_bytes: size,
         epoch_id,
         flags,
-        _pad:        0,
+        _pad: 0,
     })
 }
 
@@ -168,11 +197,11 @@ pub(crate) fn create_snapshot(
 
 /// `exofs_snapshot_create(fd, out_ptr, args_ptr, _, _, _) → 0 ou errno`
 pub fn sys_exofs_snapshot_create(
-    fd:      u64,
+    fd: u64,
     out_ptr: u64,
-    args_ptr:u64,
-    _a4:     u64,
-    _a5:     u64,
+    args_ptr: u64,
+    _a4: u64,
+    _a5: u64,
     cap_rights: u64,
 ) -> i64 {
     let blob_id = match OBJECT_TABLE.blob_id_of(fd as u32) {
@@ -183,17 +212,17 @@ pub fn sys_exofs_snapshot_create(
     let args = if args_ptr != 0 {
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
         match unsafe { super::validation::copy_struct_from_user::<SnapshotCreateArgs>(args_ptr) } {
-            Ok(a)  => a,
+            Ok(a) => a,
             Err(_) => return EFAULT,
         }
     } else {
         SnapshotCreateArgs {
-            flags:     snap_flags::READ_ONLY,
-            _pad:      0,
-            epoch_id:  0,
+            flags: snap_flags::READ_ONLY,
+            _pad: 0,
+            epoch_id: 0,
             parent_id: [0u8; 32],
-            name_ptr:  0,
-            name_len:  0,
+            name_ptr: 0,
+            name_len: 0,
         }
     };
 
@@ -211,7 +240,10 @@ pub fn sys_exofs_snapshot_create(
         unsafe {
             let src = args.name_ptr as *const u8;
             let mut i = 0usize;
-            while i < nl { name_buf.push(*src.add(i)); i = i.wrapping_add(1); }
+            while i < nl {
+                name_buf.push(*src.add(i));
+                i = i.wrapping_add(1);
+            }
         }
     }
 
@@ -220,7 +252,7 @@ pub fn sys_exofs_snapshot_create(
     }
 
     let result = match create_snapshot(blob_id, args.epoch_id, args.flags, &name_buf) {
-        Ok(r)  => r,
+        Ok(r) => r,
         Err(e) => return exofs_err_to_errno(e),
     };
 
@@ -232,7 +264,9 @@ pub fn sys_exofs_snapshot_create(
                 core::mem::size_of::<SnapshotCreateResult>(),
             )
         };
-        if let Err(e) = write_user_buf(out_ptr, bytes) { return e; }
+        if let Err(e) = write_user_buf(out_ptr, bytes) {
+            return e;
+        }
     }
     0i64
 }
@@ -262,7 +296,9 @@ mod tests {
 
     fn make_source(path: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, b"source data for snapshot".to_vec()).unwrap();
+        BLOB_CACHE
+            .insert(id, b"source data for snapshot".to_vec())
+            .unwrap();
         id
     }
 
@@ -367,9 +403,9 @@ mod tests {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SnapshotRef {
     pub snapshot_id: [u8; 32],
-    pub source_id:   [u8; 32],
-    pub epoch_id:    u64,
-    pub size_bytes:  u64,
+    pub source_id: [u8; 32],
+    pub epoch_id: u64,
+    pub size_bytes: u64,
 }
 
 const _: () = assert!(core::mem::size_of::<SnapshotRef>() == 80);
@@ -388,7 +424,10 @@ pub fn encode_snapshot_refs(refs: &[SnapshotRef]) -> ExofsResult<Vec<u8>> {
             core::slice::from_raw_parts(&refs[i] as *const SnapshotRef as *const u8, entry_size)
         };
         let mut j = 0usize;
-        while j < entry_size { buf.push(raw[j]); j = j.wrapping_add(1); }
+        while j < entry_size {
+            buf.push(raw[j]);
+            j = j.wrapping_add(1);
+        }
         i = i.wrapping_add(1);
     }
     Ok(buf)
@@ -397,7 +436,9 @@ pub fn encode_snapshot_refs(refs: &[SnapshotRef]) -> ExofsResult<Vec<u8>> {
 /// Désérialise une liste de SnapshotRef depuis des octets.
 pub fn decode_snapshot_refs(data: &[u8]) -> ExofsResult<Vec<SnapshotRef>> {
     let entry_size = core::mem::size_of::<SnapshotRef>();
-    if data.len() % entry_size != 0 { return Err(ExofsError::CorruptedStructure); }
+    if data.len() % entry_size != 0 {
+        return Err(ExofsError::CorruptedStructure);
+    }
     let count = data.len() / entry_size;
     let mut out: Vec<SnapshotRef> = Vec::new();
     out.try_reserve(count).map_err(|_| ExofsError::NoMemory)?;
@@ -410,7 +451,10 @@ pub fn decode_snapshot_refs(data: &[u8]) -> ExofsResult<Vec<SnapshotRef>> {
             core::slice::from_raw_parts_mut(&mut r as *mut SnapshotRef as *mut u8, entry_size)
         };
         let mut j = 0usize;
-        while j < entry_size { dst[j] = data[off + j]; j = j.wrapping_add(1); }
+        while j < entry_size {
+            dst[j] = data[off + j];
+            j = j.wrapping_add(1);
+        }
         out.push(r);
         i = i.wrapping_add(1);
     }
@@ -424,27 +468,31 @@ pub fn snapshot_header_size(name_len: usize) -> usize {
 
 /// Extrait l'epoch_id depuis le blob snapshot (bytes 8..16 après magic+version+flags+pad).
 pub fn snapshot_epoch_from_blob(data: &[u8]) -> ExofsResult<u64> {
-    if data.len() < 16 { return Err(ExofsError::CorruptedStructure); }
+    if data.len() < 16 {
+        return Err(ExofsError::CorruptedStructure);
+    }
     let ep = u64::from_le_bytes([
-        data[8], data[9], data[10], data[11],
-        data[12], data[13], data[14], data[15],
+        data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15],
     ]);
     Ok(ep)
 }
 
 /// Extrait la taille de la source depuis le blob snapshot (bytes 16..24).
 pub fn snapshot_source_size_from_blob(data: &[u8]) -> ExofsResult<u64> {
-    if data.len() < 24 { return Err(ExofsError::CorruptedStructure); }
+    if data.len() < 24 {
+        return Err(ExofsError::CorruptedStructure);
+    }
     let sz = u64::from_le_bytes([
-        data[16], data[17], data[18], data[19],
-        data[20], data[21], data[22], data[23],
+        data[16], data[17], data[18], data[19], data[20], data[21], data[22], data[23],
     ]);
     Ok(sz)
 }
 
 /// Vérifie le magic header d'un blob snapshot.
 pub fn check_snapshot_magic(data: &[u8]) -> bool {
-    if data.len() < 4 { return false; }
+    if data.len() < 4 {
+        return false;
+    }
     let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
     magic == SNAPSHOT_MAGIC
 }
@@ -467,8 +515,16 @@ mod advanced_tests {
     #[test]
     fn test_encode_decode_roundtrip() {
         let refs = [
-            SnapshotRef { epoch_id: 1, size_bytes: 100, ..SnapshotRef::default() },
-            SnapshotRef { epoch_id: 2, size_bytes: 200, ..SnapshotRef::default() },
+            SnapshotRef {
+                epoch_id: 1,
+                size_bytes: 100,
+                ..SnapshotRef::default()
+            },
+            SnapshotRef {
+                epoch_id: 2,
+                size_bytes: 200,
+                ..SnapshotRef::default()
+            },
         ];
         let enc = encode_snapshot_refs(&refs).unwrap();
         let dec = decode_snapshot_refs(&enc).unwrap();

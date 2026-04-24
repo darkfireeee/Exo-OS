@@ -32,17 +32,17 @@ pub const MAX_EVAL_RESULTS: usize = 16;
 #[repr(C)]
 pub enum ConditionType {
     /// Égalité exacte (field[offset..offset+len] == value).
-    Equals     = 0,
+    Equals = 0,
     /// Contient (field contient value comme sous-séquence).
-    Contains   = 1,
+    Contains = 1,
     /// Supérieur à (valeur numérique en little-endian > threshold).
     GreaterThan = 2,
     /// Inférieur à (valeur numérique en little-endian < threshold).
-    LessThan    = 3,
+    LessThan = 3,
     /// Non égal.
-    NotEquals   = 4,
+    NotEquals = 4,
     /// Correspondance de bits (AND bit-à-bit).
-    BitwiseAnd  = 5,
+    BitwiseAnd = 5,
 }
 
 impl ConditionType {
@@ -66,15 +66,15 @@ impl ConditionType {
 #[repr(C)]
 pub enum FieldType {
     /// Buffer de données brut.
-    RawData  = 0,
+    RawData = 0,
     /// En-tête réseau.
     NetHeader = 1,
     /// Charge utile (payload).
-    Payload   = 2,
+    Payload = 2,
     /// Métadonnées de fichier.
-    FileMeta  = 3,
+    FileMeta = 3,
     /// Registre mémoire.
-    Memory    = 4,
+    Memory = 4,
 }
 
 impl FieldType {
@@ -240,7 +240,7 @@ pub enum LogicOp {
     /// ET logique (défaut).
     And = 0,
     /// OU logique.
-    Or  = 1,
+    Or = 1,
 }
 
 impl LogicOp {
@@ -260,15 +260,15 @@ impl LogicOp {
 #[repr(C)]
 pub enum RuleAction {
     /// Alerte uniquement (journalisation).
-    Alert  = 0,
+    Alert = 0,
     /// Blocage de l'opération.
-    Block  = 1,
+    Block = 1,
     /// Journalisation silencieuse.
-    Log    = 2,
+    Log = 2,
     /// Quarantaine.
     Quarantine = 3,
     /// Terminer le processus.
-    Kill   = 4,
+    Kill = 4,
 }
 
 impl RuleAction {
@@ -626,8 +626,7 @@ pub fn parse_condition(data: &[u8]) -> Condition {
     value.copy_from_slice(&data[5..13]);
 
     let threshold = u64::from_le_bytes([
-        data[13], data[14], data[15], data[16],
-        data[17], data[18], data[19], data[20],
+        data[13], data[14], data[15], data[16], data[17], data[18], data[19], data[20],
     ]);
 
     let logic_op = match LogicOp::from_u8(data[21]) {

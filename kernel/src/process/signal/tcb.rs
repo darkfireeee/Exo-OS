@@ -21,7 +21,6 @@
 //! `SigactionEntry` = 32 bytes × 64 = 2048 bytes + header ≈ 2112 bytes.
 //! Respecte la limite de 4096 bytes par TCB implicite dans le document.
 
-
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,13 +37,13 @@ pub struct SigactionEntry {
     /// Adresse virtuelle du gestionnaire (0 = SIG_DFL, 1 = SIG_IGN).
     pub handler_vaddr: u64,
     /// Flags SA_* (SA_RESTART, SA_SIGINFO, SA_ONSTACK, …).
-    pub flags:         u32,
+    pub flags: u32,
     /// Padding pour alignement sur 8 bytes.
-    pub _pad:          u32,
+    pub _pad: u32,
     /// Masque de signaux à bloquer pendant l'exécution du handler.
-    pub mask:          u64,
+    pub mask: u64,
     /// Adresse de la fonction restorer (`__kernel_sigreturn`).
-    pub restorer:      u64,
+    pub restorer: u64,
 }
 
 impl SigactionEntry {
@@ -52,49 +51,58 @@ impl SigactionEntry {
     pub const fn default_dfl() -> Self {
         Self {
             handler_vaddr: 0,
-            flags:         0,
-            _pad:          0,
-            mask:          0,
-            restorer:      0,
+            flags: 0,
+            _pad: 0,
+            mask: 0,
+            restorer: 0,
         }
     }
     /// Entrée "SIG_IGN" (ignorer le signal).
     pub const fn sig_ign() -> Self {
         Self {
             handler_vaddr: 1,
-            flags:         0,
-            _pad:          0,
-            mask:          0,
-            restorer:      0,
+            flags: 0,
+            _pad: 0,
+            mask: 0,
+            restorer: 0,
         }
     }
     /// Retourne true si ce handler représente SIG_DFL.
-    #[inline] pub fn is_dfl(&self) -> bool { self.handler_vaddr == 0 }
+    #[inline]
+    pub fn is_dfl(&self) -> bool {
+        self.handler_vaddr == 0
+    }
     /// Retourne true si ce handler représente SIG_IGN.
-    #[inline] pub fn is_ign(&self) -> bool { self.handler_vaddr == 1 }
+    #[inline]
+    pub fn is_ign(&self) -> bool {
+        self.handler_vaddr == 1
+    }
     /// Retourne true si c'est un vrai gestionnaire utilisateur.
-    #[inline] pub fn is_user(&self) -> bool { self.handler_vaddr > 1 }
+    #[inline]
+    pub fn is_user(&self) -> bool {
+        self.handler_vaddr > 1
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes SA_* flags
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub const SA_NOCLDSTOP:  u32 = 0x0000_0001;
-pub const SA_NOCLDWAIT:  u32 = 0x0000_0002;
-pub const SA_SIGINFO:    u32 = 0x0000_0004;
-pub const SA_ONSTACK:    u32 = 0x0800_0000;
-pub const SA_RESTART:    u32 = 0x1000_0000;
-pub const SA_NODEFER:    u32 = 0x4000_0000;
-pub const SA_RESETHAND:  u32 = 0x8000_0000;
+pub const SA_NOCLDSTOP: u32 = 0x0000_0001;
+pub const SA_NOCLDWAIT: u32 = 0x0000_0002;
+pub const SA_SIGINFO: u32 = 0x0000_0004;
+pub const SA_ONSTACK: u32 = 0x0800_0000;
+pub const SA_RESTART: u32 = 0x1000_0000;
+pub const SA_NODEFER: u32 = 0x4000_0000;
+pub const SA_RESETHAND: u32 = 0x8000_0000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes signaux
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub const NSIG:      usize = 64;
-pub const SIG_DFL:   u64   = 0;
-pub const SIG_IGN:   u64   = 1;
+pub const NSIG: usize = 64;
+pub const SIG_DFL: u64 = 0;
+pub const SIG_IGN: u64 = 1;
 
 /// Magic vérifié par rt_sigreturn (SIG-13/SIG-14).
 pub const SIGNAL_FRAME_MAGIC: u32 = 0x5349_474E; // 'SIGN'
@@ -115,35 +123,35 @@ pub const SIGNAL_FRAME_MAGIC: u32 = 0x5349_474E; // 'SIGN'
 pub struct SignalTcb {
     /// Bitmask des signaux bloqués (sigprocmask).
     /// Bit i == 1 → signal (i+1) bloqué.
-    pub blocked:        AtomicU64,
+    pub blocked: AtomicU64,
 
     /// Bitmask des signaux en attente de livraison.
     /// Bit i == 1 → signal (i+1) en attente.
-    pub pending:        AtomicU64,
+    pub pending: AtomicU64,
 
     /// Table des gestionnaires (64 entrées, une par signal POSIX).
     /// SIG-02 : entrées PAR VALEUR, pas AtomicPtr.
     /// SIG-16 : handler_vaddr==0 → SIG_DFL, ==1 → SIG_IGN.
-    pub handlers:       [SigactionEntry; NSIG],
+    pub handlers: [SigactionEntry; NSIG],
 
     /// 0 = thread hors handler signal ; 1 = thread dans handler signal.
     /// Sémantique CAS : in_handler.compare_exchange(0, 1) avant d'entrer.
-    pub in_handler:     AtomicU32,
+    pub in_handler: AtomicU32,
 
     /// Padding pour alignement sur 8 bytes du champ suivant.
-    pub _pad1:          u32,
+    pub _pad1: u32,
 
     /// Adresse de base du sigaltstack (0 = non configuré).
-    pub altstack_sp:    AtomicU64,
+    pub altstack_sp: AtomicU64,
 
     /// Taille du sigaltstack (0 = non configuré).
-    pub altstack_size:  AtomicU64,
+    pub altstack_size: AtomicU64,
 
     /// Flags du sigaltstack : SS_DISABLE=4, SS_ONSTACK=1, SS_AUTODISARM=0x80000000.
     pub altstack_flags: AtomicU32,
 
     /// Padding final pour aligner à 64 bytes.
-    pub _pad2:          [u8; 4],
+    pub _pad2: [u8; 4],
 }
 
 // Vérification statique de la taille (doit rester < 4096 bytes).
@@ -158,15 +166,15 @@ impl SignalTcb {
     pub const fn new() -> Self {
         // SAFETY: AtomicU64::new(0) et AtomicU32::new(0) sont const-constructibles.
         Self {
-            blocked:        AtomicU64::new(0),
-            pending:        AtomicU64::new(0),
-            handlers:       [SigactionEntry::default_dfl(); NSIG],
-            in_handler:     AtomicU32::new(0),
-            _pad1:          0,
-            altstack_sp:    AtomicU64::new(0),
-            altstack_size:  AtomicU64::new(0),
+            blocked: AtomicU64::new(0),
+            pending: AtomicU64::new(0),
+            handlers: [SigactionEntry::default_dfl(); NSIG],
+            in_handler: AtomicU32::new(0),
+            _pad1: 0,
+            altstack_sp: AtomicU64::new(0),
+            altstack_size: AtomicU64::new(0),
             altstack_flags: AtomicU32::new(0),
-            _pad2:          [0u8; 4],
+            _pad2: [0u8; 4],
         }
     }
 
@@ -178,7 +186,11 @@ impl SignalTcb {
     #[inline]
     pub fn get_action(&self, sig: u8) -> Option<SigactionEntry> {
         let idx = sig.checked_sub(1)? as usize;
-        if idx < NSIG { Some(self.handlers[idx]) } else { None }
+        if idx < NSIG {
+            Some(self.handlers[idx])
+        } else {
+            None
+        }
     }
 
     /// Remplace le handler du signal `sig` (1-indexé).
@@ -187,9 +199,14 @@ impl SignalTcb {
     /// `sig` DOIT être dans \[1..=64\] (vérifié par validate_signal() dans les handlers).
     /// SIGKILL (9) et SIGSTOP (19) ne peuvent pas être redéfinis (SIG-07).
     pub fn set_action(&mut self, sig: u8, entry: SigactionEntry) -> bool {
-        if sig == 9 || sig == 19 { return false; } // SIG-07 : SIGKILL/SIGSTOP non masquables
+        if sig == 9 || sig == 19 {
+            return false;
+        } // SIG-07 : SIGKILL/SIGSTOP non masquables
         match sig.checked_sub(1).map(|i| i as usize) {
-            Some(idx) if idx < NSIG => { self.handlers[idx] = entry; true }
+            Some(idx) if idx < NSIG => {
+                self.handlers[idx] = entry;
+                true
+            }
             _ => false,
         }
     }
@@ -257,7 +274,9 @@ impl SignalTcb {
     /// Configure le sigaltstack. Retourne false si taille < MINSIGSTKSZ (2048).
     pub fn set_altstack(&self, sp: u64, size: u64, flags: u32) -> bool {
         const MINSIGSTKSZ: u64 = 2048;
-        if size > 0 && size < MINSIGSTKSZ { return false; }
+        if size > 0 && size < MINSIGSTKSZ {
+            return false;
+        }
         self.altstack_sp.store(sp, Ordering::Release);
         self.altstack_size.store(size, Ordering::Release);
         self.altstack_flags.store(flags, Ordering::Release);
@@ -273,5 +292,7 @@ impl SignalTcb {
 }
 
 impl Default for SignalTcb {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

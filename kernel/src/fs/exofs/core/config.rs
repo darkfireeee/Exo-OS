@@ -8,26 +8,26 @@
 // Cette structure est initialisée au montage depuis les options de montage
 // et les constantes par défaut. Elle est ensuite immuable.
 
-use core::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use crate::fs::exofs::core::error::ExofsError;
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// Configuration runtime ExoFS — fixée au montage, immuable après.
 pub struct ExofsConfig {
     // ── Caches ───────────────────────────────────────────────────────────────
     /// Taille du cache d'objets logiques (en nombre d'entrées).
-    pub object_cache_size:  AtomicUsize,
+    pub object_cache_size: AtomicUsize,
     /// Taille du cache de blobs physiques (en nombre d'entrées).
-    pub blob_cache_size:    AtomicUsize,
+    pub blob_cache_size: AtomicUsize,
     /// Taille du cache de chemins dentry (en nombre d'entrées).
-    pub path_cache_size:    AtomicUsize,
+    pub path_cache_size: AtomicUsize,
     /// Taille du cache d'extents (en nombre d'entrées).
-    pub extent_cache_size:  AtomicUsize,
+    pub extent_cache_size: AtomicUsize,
 
     // ── GC ───────────────────────────────────────────────────────────────────
     /// Seuil espace libre GC en % (déclenche GC si free < threshold).
     pub gc_free_threshold_pct: AtomicU64,
     /// Intervalle du timer GC en secondes.
-    pub gc_timer_secs:      AtomicU64,
+    pub gc_timer_secs: AtomicU64,
     /// Délai minimum entre déduplication et GC en epochs.
     pub gc_min_epoch_delay: AtomicU64,
     /// Nombre maximum d'objets GC par cycle (évite les latences).
@@ -37,23 +37,23 @@ pub struct ExofsConfig {
     /// Intervalle writeback en millisecondes.
     pub writeback_interval_ms: AtomicU64,
     /// Nombre maximum d'objets dirty avant writeback forcé.
-    pub writeback_dirty_max:   AtomicUsize,
+    pub writeback_dirty_max: AtomicUsize,
 
     // ── Compression ──────────────────────────────────────────────────────────
     /// Taille minimale pour activer la compression (en octets).
-    pub compress_min_size:  AtomicUsize,
+    pub compress_min_size: AtomicUsize,
     /// Niveau de compression (1 = rapide, 9 = meilleur ratio).
-    pub compress_level:     AtomicUsize,
+    pub compress_level: AtomicUsize,
 
     // ── Déduplication ────────────────────────────────────────────────────────
     /// Taille minimale pour la déduplication (en octets).
-    pub dedup_min_size:     AtomicUsize,
+    pub dedup_min_size: AtomicUsize,
 
     // ── I/O ──────────────────────────────────────────────────────────────────
     /// Profondeur de la file de requêtes I/O.
-    pub io_queue_depth:     AtomicUsize,
+    pub io_queue_depth: AtomicUsize,
     /// Taille du buffer de lecture préventive (octets, 0 = désactivé).
-    pub readahead_size:     AtomicU64,
+    pub readahead_size: AtomicU64,
 
     // ── Sécurité ─────────────────────────────────────────────────────────────
     /// Vrai si les checksums sont vérifiés systématiquement en lecture.
@@ -66,21 +66,21 @@ impl ExofsConfig {
     /// Crée une configuration avec les valeurs par défaut équilibrées.
     pub const fn default_config() -> Self {
         Self {
-            object_cache_size:  AtomicUsize::new(4096),
-            blob_cache_size:    AtomicUsize::new(8192),
-            path_cache_size:    AtomicUsize::new(10_000),
-            extent_cache_size:  AtomicUsize::new(4096),
+            object_cache_size: AtomicUsize::new(4096),
+            blob_cache_size: AtomicUsize::new(8192),
+            path_cache_size: AtomicUsize::new(10_000),
+            extent_cache_size: AtomicUsize::new(4096),
             gc_free_threshold_pct: AtomicU64::new(20),
-            gc_timer_secs:      AtomicU64::new(60),
+            gc_timer_secs: AtomicU64::new(60),
             gc_min_epoch_delay: AtomicU64::new(2),
             gc_max_objects_per_cycle: AtomicU64::new(1000),
             writeback_interval_ms: AtomicU64::new(1),
-            writeback_dirty_max:   AtomicUsize::new(500),
-            compress_min_size:  AtomicUsize::new(512),
-            compress_level:     AtomicUsize::new(3),
-            dedup_min_size:     AtomicUsize::new(4096),
-            io_queue_depth:     AtomicUsize::new(32),
-            readahead_size:     AtomicU64::new(131_072), // 128 KiB
+            writeback_dirty_max: AtomicUsize::new(500),
+            compress_min_size: AtomicUsize::new(512),
+            compress_level: AtomicUsize::new(3),
+            dedup_min_size: AtomicUsize::new(4096),
+            io_queue_depth: AtomicUsize::new(32),
+            readahead_size: AtomicU64::new(131_072), // 128 KiB
             verify_checksums_on_read: AtomicUsize::new(1),
             require_encryption_for_secrets: AtomicUsize::new(1),
         }
@@ -88,36 +88,101 @@ impl ExofsConfig {
 
     // ── Accesseurs ────────────────────────────────────────────────────────────
 
-    #[inline] pub fn object_cache_size(&self)  -> usize { self.object_cache_size.load(Ordering::Relaxed) }
-    #[inline] pub fn blob_cache_size(&self)    -> usize { self.blob_cache_size.load(Ordering::Relaxed) }
-    #[inline] pub fn path_cache_size(&self)    -> usize { self.path_cache_size.load(Ordering::Relaxed) }
-    #[inline] pub fn extent_cache_size(&self)  -> usize { self.extent_cache_size.load(Ordering::Relaxed) }
-    #[inline] pub fn gc_free_threshold_pct(&self) -> u64 { self.gc_free_threshold_pct.load(Ordering::Relaxed) }
-    #[inline] pub fn gc_timer_secs(&self)      -> u64 { self.gc_timer_secs.load(Ordering::Relaxed) }
-    #[inline] pub fn gc_min_epoch_delay(&self) -> u64 { self.gc_min_epoch_delay.load(Ordering::Relaxed) }
-    #[inline] pub fn gc_max_objects_per_cycle(&self) -> u64 { self.gc_max_objects_per_cycle.load(Ordering::Relaxed) }
-    #[inline] pub fn writeback_interval_ms(&self) -> u64 { self.writeback_interval_ms.load(Ordering::Relaxed) }
-    #[inline] pub fn writeback_dirty_max(&self) -> usize { self.writeback_dirty_max.load(Ordering::Relaxed) }
-    #[inline] pub fn compress_min_size(&self)  -> usize { self.compress_min_size.load(Ordering::Relaxed) }
-    #[inline] pub fn compress_level(&self)     -> usize { self.compress_level.load(Ordering::Relaxed) }
-    #[inline] pub fn dedup_min_size(&self)     -> usize { self.dedup_min_size.load(Ordering::Relaxed) }
-    #[inline] pub fn io_queue_depth(&self)     -> usize { self.io_queue_depth.load(Ordering::Relaxed) }
-    #[inline] pub fn readahead_size(&self)     -> u64   { self.readahead_size.load(Ordering::Relaxed) }
-    #[inline] pub fn verify_checksums(&self)   -> bool  { self.verify_checksums_on_read.load(Ordering::Relaxed) != 0 }
-    #[inline] pub fn require_encryption_for_secrets(&self) -> bool {
+    #[inline]
+    pub fn object_cache_size(&self) -> usize {
+        self.object_cache_size.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn blob_cache_size(&self) -> usize {
+        self.blob_cache_size.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn path_cache_size(&self) -> usize {
+        self.path_cache_size.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn extent_cache_size(&self) -> usize {
+        self.extent_cache_size.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn gc_free_threshold_pct(&self) -> u64 {
+        self.gc_free_threshold_pct.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn gc_timer_secs(&self) -> u64 {
+        self.gc_timer_secs.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn gc_min_epoch_delay(&self) -> u64 {
+        self.gc_min_epoch_delay.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn gc_max_objects_per_cycle(&self) -> u64 {
+        self.gc_max_objects_per_cycle.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn writeback_interval_ms(&self) -> u64 {
+        self.writeback_interval_ms.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn writeback_dirty_max(&self) -> usize {
+        self.writeback_dirty_max.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn compress_min_size(&self) -> usize {
+        self.compress_min_size.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn compress_level(&self) -> usize {
+        self.compress_level.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn dedup_min_size(&self) -> usize {
+        self.dedup_min_size.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn io_queue_depth(&self) -> usize {
+        self.io_queue_depth.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn readahead_size(&self) -> u64 {
+        self.readahead_size.load(Ordering::Relaxed)
+    }
+    #[inline]
+    pub fn verify_checksums(&self) -> bool {
+        self.verify_checksums_on_read.load(Ordering::Relaxed) != 0
+    }
+    #[inline]
+    pub fn require_encryption_for_secrets(&self) -> bool {
         self.require_encryption_for_secrets.load(Ordering::Relaxed) != 0
     }
 
     // ── Setters ────────────────────────────────────────────────────────────────
 
-    pub fn set_object_cache_size(&self, n: usize)  { self.object_cache_size.store(n, Ordering::Relaxed); }
-    pub fn set_blob_cache_size(&self, n: usize)    { self.blob_cache_size.store(n, Ordering::Relaxed); }
-    pub fn set_path_cache_size(&self, n: usize)    { self.path_cache_size.store(n, Ordering::Relaxed); }
-    pub fn set_gc_timer_secs(&self, n: u64)        { self.gc_timer_secs.store(n, Ordering::Relaxed); }
-    pub fn set_gc_free_threshold_pct(&self, n: u64) { self.gc_free_threshold_pct.store(n, Ordering::Relaxed); }
-    pub fn set_writeback_interval_ms(&self, n: u64) { self.writeback_interval_ms.store(n, Ordering::Relaxed); }
-    pub fn set_compress_level(&self, n: usize)     { self.compress_level.store(n, Ordering::Relaxed); }
-    pub fn set_readahead_size(&self, n: u64)       { self.readahead_size.store(n, Ordering::Relaxed); }
+    pub fn set_object_cache_size(&self, n: usize) {
+        self.object_cache_size.store(n, Ordering::Relaxed);
+    }
+    pub fn set_blob_cache_size(&self, n: usize) {
+        self.blob_cache_size.store(n, Ordering::Relaxed);
+    }
+    pub fn set_path_cache_size(&self, n: usize) {
+        self.path_cache_size.store(n, Ordering::Relaxed);
+    }
+    pub fn set_gc_timer_secs(&self, n: u64) {
+        self.gc_timer_secs.store(n, Ordering::Relaxed);
+    }
+    pub fn set_gc_free_threshold_pct(&self, n: u64) {
+        self.gc_free_threshold_pct.store(n, Ordering::Relaxed);
+    }
+    pub fn set_writeback_interval_ms(&self, n: u64) {
+        self.writeback_interval_ms.store(n, Ordering::Relaxed);
+    }
+    pub fn set_compress_level(&self, n: usize) {
+        self.compress_level.store(n, Ordering::Relaxed);
+    }
+    pub fn set_readahead_size(&self, n: u64) {
+        self.readahead_size.store(n, Ordering::Relaxed);
+    }
 
     /// Valide la configuration — retourne une erreur si un paramètre est hors limites.
     pub fn validate(&self) -> Result<(), ExofsError> {
@@ -178,7 +243,8 @@ impl ConfigProfile {
                 cfg.set_gc_free_threshold_pct(30);
                 cfg.set_writeback_interval_ms(1);
                 cfg.verify_checksums_on_read.store(1, Ordering::Relaxed);
-                cfg.require_encryption_for_secrets.store(1, Ordering::Relaxed);
+                cfg.require_encryption_for_secrets
+                    .store(1, Ordering::Relaxed);
                 cfg.set_compress_level(6);
             }
             ConfigProfile::Development => {
@@ -202,19 +268,19 @@ impl ConfigProfile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MountOptions {
     /// Montage en lecture seule.
-    pub read_only:          bool,
+    pub read_only: bool,
     /// Mode dégradé (montage malgré corruption mineure).
-    pub degraded:           bool,
+    pub degraded: bool,
     /// Profil de configuration à appliquer.
-    pub profile:            Option<ConfigProfile>,
+    pub profile: Option<ConfigProfile>,
     /// Désactive le GC automatique.
-    pub no_gc:              bool,
+    pub no_gc: bool,
     /// Désactive la déduplication.
-    pub no_dedup:           bool,
+    pub no_dedup: bool,
     /// Désactive la compression.
-    pub no_compress:        bool,
+    pub no_compress: bool,
     /// Active le mode debug.
-    pub debug:              bool,
+    pub debug: bool,
     /// Taille de cache d'objets override (0 = utiliser le profil).
     pub object_cache_override: usize,
     /// Taille du readahead override en octets (0 = profil).
@@ -224,19 +290,22 @@ pub struct MountOptions {
 impl MountOptions {
     /// Options de montage par défaut (read-write, profil balanced).
     pub const DEFAULT: Self = Self {
-        read_only:              false,
-        degraded:               false,
-        profile:                None,
-        no_gc:                  false,
-        no_dedup:               false,
-        no_compress:            false,
-        debug:                  false,
-        object_cache_override:  0,
-        readahead_override:     0,
+        read_only: false,
+        degraded: false,
+        profile: None,
+        no_gc: false,
+        no_dedup: false,
+        no_compress: false,
+        debug: false,
+        object_cache_override: 0,
+        readahead_override: 0,
     };
 
     /// Options de montage lecture seule.
-    pub const READ_ONLY: Self = Self { read_only: true, ..Self::DEFAULT };
+    pub const READ_ONLY: Self = Self {
+        read_only: true,
+        ..Self::DEFAULT
+    };
 
     /// Applique ces options à la configuration globale.
     pub fn apply(&self, cfg: &ExofsConfig) {
@@ -267,7 +336,6 @@ impl MountOptions {
 /// Configuration globale ExoFS — initialisée au montage.
 pub static EXOFS_CONFIG: ExofsConfig = ExofsConfig::default_config();
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // ConfigUpdate — delta de configuration pour hot-reload
 // ─────────────────────────────────────────────────────────────────────────────
@@ -296,15 +364,19 @@ impl ExofsConfig {
     /// le lecteur et l'écrivain.
     pub fn apply_update(&self, update: ConfigUpdate) {
         match update {
-            ConfigUpdate::ObjectCacheSize(v)    => self.object_cache_size.store(v, Ordering::Release),
-            ConfigUpdate::BlobCacheSize(v)      => self.blob_cache_size.store(v, Ordering::Release),
-            ConfigUpdate::PathCacheSize(v)      => self.path_cache_size.store(v, Ordering::Release),
-            ConfigUpdate::GcFreeThresholdPct(v) => self.gc_free_threshold_pct.store(v, Ordering::Release),
-            ConfigUpdate::GcTimerSecs(v)        => self.gc_timer_secs.store(v, Ordering::Release),
-            ConfigUpdate::GcMinEpochDelay(v)    => self.gc_min_epoch_delay.store(v, Ordering::Release),
-            ConfigUpdate::WritebackIntervalMs(v)=> self.writeback_interval_ms.store(v, Ordering::Release),
-            ConfigUpdate::CompressMinSize(v)    => self.compress_min_size.store(v, Ordering::Release),
-            ConfigUpdate::DedupMinSize(v)       => self.dedup_min_size.store(v, Ordering::Release),
+            ConfigUpdate::ObjectCacheSize(v) => self.object_cache_size.store(v, Ordering::Release),
+            ConfigUpdate::BlobCacheSize(v) => self.blob_cache_size.store(v, Ordering::Release),
+            ConfigUpdate::PathCacheSize(v) => self.path_cache_size.store(v, Ordering::Release),
+            ConfigUpdate::GcFreeThresholdPct(v) => {
+                self.gc_free_threshold_pct.store(v, Ordering::Release)
+            }
+            ConfigUpdate::GcTimerSecs(v) => self.gc_timer_secs.store(v, Ordering::Release),
+            ConfigUpdate::GcMinEpochDelay(v) => self.gc_min_epoch_delay.store(v, Ordering::Release),
+            ConfigUpdate::WritebackIntervalMs(v) => {
+                self.writeback_interval_ms.store(v, Ordering::Release)
+            }
+            ConfigUpdate::CompressMinSize(v) => self.compress_min_size.store(v, Ordering::Release),
+            ConfigUpdate::DedupMinSize(v) => self.dedup_min_size.store(v, Ordering::Release),
         }
     }
 
@@ -331,59 +403,68 @@ impl ExofsConfig {
 /// puis on l'applique à `EXOFS_CONFIG` via `ConfigBuilder::apply_to()`.
 #[derive(Copy, Clone, Debug)]
 pub struct ConfigBuilder {
-    object_cache_size:    usize,
-    blob_cache_size:      usize,
-    path_cache_size:      usize,
+    object_cache_size: usize,
+    blob_cache_size: usize,
+    path_cache_size: usize,
     gc_free_threshold_pct: u64,
-    gc_timer_secs:        u64,
-    gc_min_epoch_delay:   u64,
+    gc_timer_secs: u64,
+    gc_min_epoch_delay: u64,
     writeback_interval_ms: u64,
-    compress_min_size:    usize,
-    dedup_min_size:       usize,
+    compress_min_size: usize,
+    dedup_min_size: usize,
 }
 
 impl ConfigBuilder {
     /// Starts from the default configuration.
     pub const fn new() -> Self {
         Self {
-            object_cache_size:     4096,
-            blob_cache_size:       8192,
-            path_cache_size:       2048,
+            object_cache_size: 4096,
+            blob_cache_size: 8192,
+            path_cache_size: 2048,
             gc_free_threshold_pct: 20,
-            gc_timer_secs:         30,
-            gc_min_epoch_delay:    2,
+            gc_timer_secs: 30,
+            gc_min_epoch_delay: 2,
             writeback_interval_ms: 500,
-            compress_min_size:     4096,
-            dedup_min_size:        4096,
+            compress_min_size: 4096,
+            dedup_min_size: 4096,
         }
     }
 
     pub const fn object_cache_size(mut self, v: usize) -> Self {
-        self.object_cache_size = v; self
+        self.object_cache_size = v;
+        self
     }
     pub const fn blob_cache_size(mut self, v: usize) -> Self {
-        self.blob_cache_size = v; self
+        self.blob_cache_size = v;
+        self
     }
     pub const fn path_cache_size(mut self, v: usize) -> Self {
-        self.path_cache_size = v; self
+        self.path_cache_size = v;
+        self
     }
     pub const fn gc_free_threshold_pct(mut self, v: u64) -> Self {
-        self.gc_free_threshold_pct = v; self
+        self.gc_free_threshold_pct = v;
+        self
     }
     pub const fn gc_timer_secs(mut self, v: u64) -> Self {
-        self.gc_timer_secs = v; self
+        self.gc_timer_secs = v;
+        self
     }
     pub const fn gc_min_epoch_delay(mut self, v: u64) -> Self {
-        self.gc_min_epoch_delay = v; self
+        self.gc_min_epoch_delay = v;
+        self
     }
     pub const fn writeback_interval_ms(mut self, v: u64) -> Self {
-        self.writeback_interval_ms = v; self
+        self.writeback_interval_ms = v;
+        self
     }
     pub const fn compress_min_size(mut self, v: usize) -> Self {
-        self.compress_min_size = v; self
+        self.compress_min_size = v;
+        self
     }
     pub const fn dedup_min_size(mut self, v: usize) -> Self {
-        self.dedup_min_size = v; self
+        self.dedup_min_size = v;
+        self
     }
 
     /// Valide la cohérence interne.
@@ -391,11 +472,21 @@ impl ConfigBuilder {
     /// Retourne `Ok(())` si tous les paramètres sont dans des plages acceptables,
     /// ou une description d'erreur en cas de problème.
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.object_cache_size == 0   { return Err("object_cache_size ne peut pas être nul"); }
-        if self.blob_cache_size == 0     { return Err("blob_cache_size ne peut pas être nul"); }
-        if self.gc_free_threshold_pct > 95 { return Err("gc_free_threshold_pct doit être ≤ 95"); }
-        if self.gc_timer_secs == 0       { return Err("gc_timer_secs ne peut pas être nul"); }
-        if self.writeback_interval_ms == 0 { return Err("writeback_interval_ms ne peut pas être nul"); }
+        if self.object_cache_size == 0 {
+            return Err("object_cache_size ne peut pas être nul");
+        }
+        if self.blob_cache_size == 0 {
+            return Err("blob_cache_size ne peut pas être nul");
+        }
+        if self.gc_free_threshold_pct > 95 {
+            return Err("gc_free_threshold_pct doit être ≤ 95");
+        }
+        if self.gc_timer_secs == 0 {
+            return Err("gc_timer_secs ne peut pas être nul");
+        }
+        if self.writeback_interval_ms == 0 {
+            return Err("writeback_interval_ms ne peut pas être nul");
+        }
         Ok(())
     }
 
@@ -416,7 +507,9 @@ impl ConfigBuilder {
 }
 
 impl Default for ConfigBuilder {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -431,15 +524,15 @@ impl Default for ConfigBuilder {
 /// cohérente (ex. lors d'un montage ou d'un export de configuration).
 #[derive(Copy, Clone, Debug)]
 pub struct ConfigSnapshot {
-    pub object_cache_size:     usize,
-    pub blob_cache_size:       usize,
-    pub path_cache_size:       usize,
+    pub object_cache_size: usize,
+    pub blob_cache_size: usize,
+    pub path_cache_size: usize,
     pub gc_free_threshold_pct: u64,
-    pub gc_timer_secs:         u64,
-    pub gc_min_epoch_delay:    u64,
+    pub gc_timer_secs: u64,
+    pub gc_min_epoch_delay: u64,
     pub writeback_interval_ms: u64,
-    pub compress_min_size:     usize,
-    pub dedup_min_size:        usize,
+    pub compress_min_size: usize,
+    pub dedup_min_size: usize,
 }
 
 impl ExofsConfig {
@@ -447,15 +540,15 @@ impl ExofsConfig {
     pub fn snapshot(&self) -> ConfigSnapshot {
         use core::sync::atomic::Ordering::Acquire;
         ConfigSnapshot {
-            object_cache_size:     self.object_cache_size.load(Acquire),
-            blob_cache_size:       self.blob_cache_size.load(Acquire),
-            path_cache_size:       self.path_cache_size.load(Acquire),
+            object_cache_size: self.object_cache_size.load(Acquire),
+            blob_cache_size: self.blob_cache_size.load(Acquire),
+            path_cache_size: self.path_cache_size.load(Acquire),
             gc_free_threshold_pct: self.gc_free_threshold_pct.load(Acquire),
-            gc_timer_secs:         self.gc_timer_secs.load(Acquire),
-            gc_min_epoch_delay:    self.gc_min_epoch_delay.load(Acquire),
+            gc_timer_secs: self.gc_timer_secs.load(Acquire),
+            gc_min_epoch_delay: self.gc_min_epoch_delay.load(Acquire),
             writeback_interval_ms: self.writeback_interval_ms.load(Acquire),
-            compress_min_size:     self.compress_min_size.load(Acquire),
-            dedup_min_size:        self.dedup_min_size.load(Acquire),
+            compress_min_size: self.compress_min_size.load(Acquire),
+            dedup_min_size: self.dedup_min_size.load(Acquire),
         }
     }
 }
@@ -470,15 +563,15 @@ impl ConfigSnapshot {
     /// ```
     pub fn to_builder(self) -> ConfigBuilder {
         ConfigBuilder {
-            object_cache_size:     self.object_cache_size,
-            blob_cache_size:       self.blob_cache_size,
-            path_cache_size:       self.path_cache_size,
+            object_cache_size: self.object_cache_size,
+            blob_cache_size: self.blob_cache_size,
+            path_cache_size: self.path_cache_size,
             gc_free_threshold_pct: self.gc_free_threshold_pct,
-            gc_timer_secs:         self.gc_timer_secs,
-            gc_min_epoch_delay:    self.gc_min_epoch_delay,
+            gc_timer_secs: self.gc_timer_secs,
+            gc_min_epoch_delay: self.gc_min_epoch_delay,
             writeback_interval_ms: self.writeback_interval_ms,
-            compress_min_size:     self.compress_min_size,
-            dedup_min_size:        self.dedup_min_size,
+            compress_min_size: self.compress_min_size,
+            dedup_min_size: self.dedup_min_size,
         }
     }
 }

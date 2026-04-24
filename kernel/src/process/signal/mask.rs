@@ -8,16 +8,15 @@
 // Bit i = signal (i+1) est bloqué.
 // SIGKILL (bit 8) et SIGSTOP (bit 18) ne peuvent être bloqués : ignorés.
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::scheduler::core::task::ThreadControlBlock;
 use super::default::Signal;
+use crate::scheduler::core::task::ThreadControlBlock;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub const SIG_BLOCK:   i32 = 0;
+pub const SIG_BLOCK: i32 = 0;
 pub const SIG_UNBLOCK: i32 = 1;
 pub const SIG_SETMASK: i32 = 2;
 
@@ -25,8 +24,7 @@ pub const SIG_SETMASK: i32 = 2;
 /// Bit i correspond au signal (i+1).
 /// SIGKILL = bit 8, SIGSTOP = bit 18.
 const NON_BLOCKABLE: u64 =
-    (1u64 << (Signal::SIGKILL  as u8 - 1)) |
-    (1u64 << (Signal::SIGSTOP  as u8 - 1));
+    (1u64 << (Signal::SIGKILL as u8 - 1)) | (1u64 << (Signal::SIGSTOP as u8 - 1));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SigMask — valeur pure (pas atomique)
@@ -39,24 +37,30 @@ pub struct SigMask(pub u64);
 
 impl SigMask {
     pub const EMPTY: Self = Self(0);
-    pub const FULL:  Self = Self(!NON_BLOCKABLE);
+    pub const FULL: Self = Self(!NON_BLOCKABLE);
 
     #[inline(always)]
     pub fn set(&mut self, sig: u8) {
-        if sig == 0 || sig > 64 { return; }
+        if sig == 0 || sig > 64 {
+            return;
+        }
         self.0 |= 1u64 << (sig - 1);
         self.0 &= !NON_BLOCKABLE;
     }
 
     #[inline(always)]
     pub fn clear(&mut self, sig: u8) {
-        if sig == 0 || sig > 64 { return; }
+        if sig == 0 || sig > 64 {
+            return;
+        }
         self.0 &= !(1u64 << (sig - 1));
     }
 
     #[inline(always)]
     pub fn is_set(&self, sig: u8) -> bool {
-        if sig == 0 || sig > 64 { return false; }
+        if sig == 0 || sig > 64 {
+            return false;
+        }
         self.0 & (1u64 << (sig - 1)) != 0
     }
 
@@ -77,7 +81,9 @@ impl SigMask {
 }
 
 impl From<u64> for SigMask {
-    fn from(v: u64) -> Self { SigMask(v & !NON_BLOCKABLE) }
+    fn from(v: u64) -> Self {
+        SigMask(v & !NON_BLOCKABLE)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,7 +96,9 @@ impl From<u64> for SigMask {
 pub struct SigSet(AtomicU64);
 
 impl SigSet {
-    pub const fn empty() -> Self { Self(AtomicU64::new(0)) }
+    pub const fn empty() -> Self {
+        Self(AtomicU64::new(0))
+    }
 
     #[inline(always)]
     pub fn load(&self) -> SigMask {
@@ -105,14 +113,18 @@ impl SigSet {
     /// Définit le bit du signal sans lock (atomique fetch_or).
     #[inline(always)]
     pub fn set_signal(&self, sig: u8) {
-        if sig == 0 || sig > 64 { return; }
+        if sig == 0 || sig > 64 {
+            return;
+        }
         self.0.fetch_or(1u64 << (sig - 1), Ordering::AcqRel);
     }
 
     /// Efface le bit du signal sans lock.
     #[inline(always)]
     pub fn clear_signal(&self, sig: u8) {
-        if sig == 0 || sig > 64 { return; }
+        if sig == 0 || sig > 64 {
+            return;
+        }
         self.0.fetch_and(!(1u64 << (sig - 1)), Ordering::AcqRel);
     }
 
@@ -125,8 +137,11 @@ impl SigSet {
     /// Premier signal non-bloqué en attente (0 = aucun).
     pub fn first_pending(&self, mask: SigMask) -> u8 {
         let pending = self.0.load(Ordering::Acquire) & !mask.0;
-        if pending == 0 { 0 }
-        else { pending.trailing_zeros() as u8 + 1 }
+        if pending == 0 {
+            0
+        } else {
+            pending.trailing_zeros() as u8 + 1
+        }
     }
 }
 
@@ -148,18 +163,18 @@ pub enum SigmaskError {
 /// `set` : nouveau masque (Some) ou NULL (None).
 /// Retourne l'ancien masque.
 pub fn sigprocmask(
-    tcb:   &ThreadControlBlock,
-    how:   i32,
-    set:   Option<SigMask>,
+    tcb: &ThreadControlBlock,
+    how: i32,
+    set: Option<SigMask>,
 ) -> Result<SigMask, SigmaskError> {
     let old = SigMask(tcb.signal_mask.load(Ordering::Acquire));
     if let Some(new_set) = set {
         let safe_set = SigMask(new_set.0 & !NON_BLOCKABLE);
         let updated = match how {
-            SIG_BLOCK   => SigMask((old.0 | safe_set.0) & !NON_BLOCKABLE),
+            SIG_BLOCK => SigMask((old.0 | safe_set.0) & !NON_BLOCKABLE),
             SIG_UNBLOCK => SigMask(old.0 & !safe_set.0),
             SIG_SETMASK => SigMask(safe_set.0 & !NON_BLOCKABLE),
-            _           => return Err(SigmaskError::InvalidHow),
+            _ => return Err(SigmaskError::InvalidHow),
         };
         tcb.signal_mask.store(updated.0, Ordering::Release);
     }
@@ -176,9 +191,9 @@ pub fn sigprocmask(
 pub fn reset_signals_on_exec(tcb: &ThreadControlBlock) {
     // Acquérir le pointeur vers le PCB pour réinitialiser la table des handlers.
     // Le PCB contient le champ `sig_handlers: SpinLock<SigHandlerTable>`.
-    
-    use crate::process::core::registry::PROCESS_REGISTRY;
+
     use crate::process::core::pid::Pid;
+    use crate::process::core::registry::PROCESS_REGISTRY;
 
     let pid = Pid(tcb.pid.0);
     if let Some(pcb) = PROCESS_REGISTRY.find_by_pid(pid) {

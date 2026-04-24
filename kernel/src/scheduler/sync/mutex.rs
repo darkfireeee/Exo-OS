@@ -14,14 +14,14 @@
 //                   via IrqGuard (imposé par l'appelant).
 // ═══════════════════════════════════════════════════════════════════════════════
 
+use crate::scheduler::core::task::{TaskState, ThreadControlBlock};
+use crate::scheduler::sync::wait_queue::{WaitNode, WaitQueue};
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use crate::scheduler::sync::wait_queue::{WaitQueue, WaitNode};
-use crate::scheduler::core::task::{ThreadControlBlock, TaskState};
 
 /// Compteurs d'instrumentation.
 pub static KMUTEX_CONTENTIONS: AtomicU64 = AtomicU64::new(0);
-pub static KMUTEX_ACQUIRES:    AtomicU64 = AtomicU64::new(0);
+pub static KMUTEX_ACQUIRES: AtomicU64 = AtomicU64::new(0);
 
 /// Mutex bloquant. Le thread est mis en attente (TaskState::Sleeping) si le
 /// verrou est déjà pris, et réveillé lors du release().
@@ -29,8 +29,8 @@ pub struct KMutex<T> {
     /// TID du propriétaire courant. 0 = libre.
     owner_tid: AtomicU32,
     /// File d'attente des threads bloqués sur ce mutex.
-    waiters:   UnsafeCell<WaitQueue>,
-    data:      UnsafeCell<T>,
+    waiters: UnsafeCell<WaitQueue>,
+    data: UnsafeCell<T>,
 }
 
 unsafe impl<T: Send> Send for KMutex<T> {}
@@ -40,8 +40,8 @@ impl<T> KMutex<T> {
     pub const fn new(value: T) -> Self {
         Self {
             owner_tid: AtomicU32::new(0),
-            waiters:   UnsafeCell::new(WaitQueue::new()),
-            data:      UnsafeCell::new(value),
+            waiters: UnsafeCell::new(WaitQueue::new()),
+            data: UnsafeCell::new(value),
         }
     }
 
@@ -82,7 +82,8 @@ impl<T> KMutex<T> {
         tcb: *mut ThreadControlBlock,
     ) -> KMutexGuard<'_, T> {
         // Fast path (non-contended) : CAS sans allocation.
-        if self.owner_tid
+        if self
+            .owner_tid
             .compare_exchange(0, tid, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
@@ -135,7 +136,8 @@ impl<T> KMutex<T> {
             }
 
             // Retenter l'acquisition après réveil.
-            if self.owner_tid
+            if self
+                .owner_tid
                 .compare_exchange(0, tid, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
             {
@@ -179,13 +181,21 @@ pub struct KMutexGuard<'a, T> {
 
 impl<'a, T> core::ops::Deref for KMutexGuard<'a, T> {
     type Target = T;
-    fn deref(&self) -> &T { unsafe { &*self.mutex.data.get() } }
+    fn deref(&self) -> &T {
+        unsafe { &*self.mutex.data.get() }
+    }
 }
 
 impl<'a, T> core::ops::DerefMut for KMutexGuard<'a, T> {
-    fn deref_mut(&mut self) -> &mut T { unsafe { &mut *self.mutex.data.get() } }
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.mutex.data.get() }
+    }
 }
 
 impl<'a, T> Drop for KMutexGuard<'a, T> {
-    fn drop(&mut self) { unsafe { self.mutex.release(); } }
+    fn drop(&mut self) {
+        unsafe {
+            self.mutex.release();
+        }
+    }
 }

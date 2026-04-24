@@ -14,11 +14,10 @@
 //! 2. (Alternative) Réveiller depuis la boucle halt via IPI wakeup
 //!    si le CPU était juste en veille légère
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::arch::x86_64::cpu::topology::MAX_CPUS;
-use super::super::cpu::tsc;
 use super::super::apic::ipi;
+use super::super::cpu::tsc;
+use crate::arch::x86_64::cpu::topology::MAX_CPUS;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ── Masque de CPUs online ─────────────────────────────────────────────────────
 
@@ -45,7 +44,9 @@ const _: () = assert!(
 #[inline]
 pub fn cpu_is_online(cpu_id: u32) -> bool {
     let id = cpu_id as usize;
-    if id >= MAX_CPUS { return false; }
+    if id >= MAX_CPUS {
+        return false;
+    }
     let word = id / 64;
     let bit = id % 64;
     CPU_ONLINE_MASK[word].load(Ordering::Acquire) & (1u64 << bit) != 0
@@ -55,7 +56,9 @@ pub fn cpu_is_online(cpu_id: u32) -> bool {
 #[inline]
 pub fn set_cpu_online(cpu_id: u32) {
     let id = cpu_id as usize;
-    if id >= MAX_CPUS { return; }
+    if id >= MAX_CPUS {
+        return;
+    }
     let word = id / 64;
     let bit = id % 64;
     CPU_ONLINE_MASK[word].fetch_or(1u64 << bit, Ordering::AcqRel);
@@ -65,7 +68,9 @@ pub fn set_cpu_online(cpu_id: u32) {
 #[inline]
 pub fn set_cpu_offline(cpu_id: u32) {
     let id = cpu_id as usize;
-    if id >= MAX_CPUS { return; }
+    if id >= MAX_CPUS {
+        return;
+    }
     let word = id / 64;
     let bit = id % 64;
     CPU_ONLINE_MASK[word].fetch_and(!(1u64 << bit), Ordering::AcqRel);
@@ -93,14 +98,18 @@ pub fn all_cpus_online(count: u32) -> bool {
 ///
 /// Retourne `true` si le CPU est online après 100ms.
 pub fn cpu_online(cpu_id: u32, lapic_id: u32) -> bool {
-    if cpu_is_online(cpu_id) { return true; }
+    if cpu_is_online(cpu_id) {
+        return true;
+    }
 
     // Tenter un IPI wakeup d'abord (CPU en halt léger)
     ipi::send_ipi_wakeup(lapic_id);
 
     let deadline = tsc::read_tsc() + tsc::tsc_ms_to_cycles(100);
     while tsc::read_tsc() < deadline {
-        if cpu_is_online(cpu_id) { return true; }
+        if cpu_is_online(cpu_id) {
+            return true;
+        }
         tsc::tsc_delay_us(1000); // 1ms poll
     }
 
@@ -113,7 +122,9 @@ pub fn cpu_online(cpu_id: u32, lapic_id: u32) -> bool {
 
     let deadline = tsc::read_tsc() + tsc::tsc_ms_to_cycles(200);
     while tsc::read_tsc() < deadline {
-        if cpu_is_online(cpu_id) { return true; }
+        if cpu_is_online(cpu_id) {
+            return true;
+        }
         tsc::tsc_delay_us(1000);
     }
 
@@ -127,14 +138,20 @@ pub fn cpu_online(cpu_id: u32, lapic_id: u32) -> bool {
 ///
 /// Retourne `true` si le CPU est offline après 500ms.
 pub fn cpu_offline(cpu_id: u32, lapic_id: u32) -> bool {
-    if !cpu_is_online(cpu_id) { return true; }
-    if cpu_id == 0 { return false; } // BSP ne peut pas se mettre offline
+    if !cpu_is_online(cpu_id) {
+        return true;
+    }
+    if cpu_id == 0 {
+        return false;
+    } // BSP ne peut pas se mettre offline
 
     ipi::send_ipi_cpu_hotplug(lapic_id);
 
     let deadline = tsc::read_tsc() + tsc::tsc_ms_to_cycles(500);
     while tsc::read_tsc() < deadline {
-        if !cpu_is_online(cpu_id) { return true; }
+        if !cpu_is_online(cpu_id) {
+            return true;
+        }
         tsc::tsc_delay_us(1000);
     }
 
@@ -148,14 +165,18 @@ pub fn cpu_offline(cpu_id: u32, lapic_id: u32) -> bool {
 pub fn hotplug_cpu_halt(cpu_id: u32) -> ! {
     // Masquer toutes les interruptions locales sauf l'IPI wakeup
     // SAFETY: désactivation interruptions sur ce CPU avant halt
-    unsafe { core::arch::asm!("cli", options(nostack, nomem)); }
+    unsafe {
+        core::arch::asm!("cli", options(nostack, nomem));
+    }
 
     set_cpu_offline(cpu_id);
 
     // Boucle halt (réactivable par IPI wakeup + STI dans le handler)
     loop {
         // SAFETY: halt sûr — seule sortie = NMI ou IPI wakeup (si STI pré-halt)
-        unsafe { core::arch::asm!("sti\n\thlt\n\tcli", options(nostack, nomem)); }
+        unsafe {
+            core::arch::asm!("sti\n\thlt\n\tcli", options(nostack, nomem));
+        }
     }
 }
 

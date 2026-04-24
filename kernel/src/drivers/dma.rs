@@ -2,7 +2,7 @@
 //!
 //! DMA Manager GI-03
 //! Responsable : allocation DMA, mappings, cleanup
-//! 
+//!
 //! Spécification GI-03 §5 - sys_dma_map. ORDRE IMPÉRATIF : COW AVANT query_perms (FIX-68)
 //! 0 TODO, 0 STUB.
 
@@ -11,18 +11,20 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::{Mutex, RwLock};
 
-use crate::memory::{
-    alloc_page, alloc_pages, free_page, free_pages, phys_to_virt, AllocFlags, Frame, PageFlags,
-    PhysAddr, VirtAddr,
-};
-use crate::memory::dma::core::types::{IommuDomainId, DmaDirection, IovaAddr, DmaError, DmaMapFlags};
 use crate::memory::dma::core::mapping::IOVA_ALLOCATOR;
+use crate::memory::dma::core::types::{
+    DmaDirection, DmaError, DmaMapFlags, IommuDomainId, IovaAddr,
+};
 use crate::memory::physical::frame::descriptor::{FrameFlags, FRAME_DESCRIPTORS};
+use crate::memory::virt::page_table::{FrameAllocatorForWalk, PageTableWalker, WalkResult};
 use crate::memory::virt::{
     handle_page_fault, shootdown_sync, FaultAllocator, FaultCause, FaultContext, FaultResult,
     TlbFlushType, UserAddressSpace, VmaBacking, VmaDescriptor, VmaFlags,
 };
-use crate::memory::virt::page_table::{FrameAllocatorForWalk, PageTableWalker, WalkResult};
+use crate::memory::{
+    alloc_page, alloc_pages, free_page, free_pages, phys_to_virt, AllocFlags, Frame, PageFlags,
+    PhysAddr, VirtAddr,
+};
 use crate::process::core::pid::Pid;
 use crate::process::PROCESS_REGISTRY;
 
@@ -215,10 +217,16 @@ impl FaultAllocator for UserFaultAllocator<'_> {
 mod page_tables {
     use super::*;
 
-    pub fn resolve_cow_or_fault(pid: u32, vaddr: usize, prot: PageProtection) -> Result<(), CowError> {
+    pub fn resolve_cow_or_fault(
+        pid: u32,
+        vaddr: usize,
+        prot: PageProtection,
+    ) -> Result<(), CowError> {
         let user_as = user_as_for_pid(pid).ok_or(CowError::InvalidAddress)?;
         let page_addr = VirtAddr::new(align_down(vaddr) as u64);
-        let vma_ptr = user_as.find_vma(page_addr).ok_or(CowError::InvalidAddress)?;
+        let vma_ptr = user_as
+            .find_vma(page_addr)
+            .ok_or(CowError::InvalidAddress)?;
         let vma = unsafe { &*vma_ptr };
 
         let cause = if prot.requires_write() {
@@ -243,7 +251,7 @@ mod page_tables {
             }
         }
     }
-    
+
     pub fn query_perms_single(pid: u32, vaddr: usize) -> Option<PageProtection> {
         let user_as = user_as_for_pid(pid)?;
         let page_addr = VirtAddr::new(align_down(vaddr) as u64);
@@ -260,13 +268,14 @@ mod page_tables {
                 let vma_ptr = user_as.find_vma(page_addr)?;
                 let vma = unsafe { &*vma_ptr };
                 Some(PageProtection {
-                    writable: vma.flags.contains(VmaFlags::WRITE) || vma.flags.contains(VmaFlags::COW),
+                    writable: vma.flags.contains(VmaFlags::WRITE)
+                        || vma.flags.contains(VmaFlags::COW),
                 })
             }
             WalkResult::AllocError(_) => None,
         }
     }
-    
+
     pub fn pin_user_page(pid: u32, vaddr: usize) -> Option<PinnedPage> {
         let user_as = user_as_for_pid(pid)?;
         let page_addr = VirtAddr::new(align_down(vaddr) as u64);
@@ -383,34 +392,33 @@ pub fn sys_dma_map(
 
         // Étape 1 : COW AVANT query_perms (FIX-68 obligatoire)
         if matches!(dir, DmaDirection::FromDevice | DmaDirection::Bidirection) {
-            page_tables::resolve_cow_or_fault(pid, vpage, PageProtection::WRITE)
-                .map_err(|e| {
-                    rollback_pinned_pages(&pinned);
-                    match e {
-                        CowError::OutOfMemory => DmaError::OutOfMemory,
-                        _ => DmaError::InvalidParams,
-                    }
-                })?;
+            page_tables::resolve_cow_or_fault(pid, vpage, PageProtection::WRITE).map_err(|e| {
+                rollback_pinned_pages(&pinned);
+                match e {
+                    CowError::OutOfMemory => DmaError::OutOfMemory,
+                    _ => DmaError::InvalidParams,
+                }
+            })?;
         }
 
         // Étape 2 : Vérifier les permissions APRÈS COW
-        let perms = page_tables::query_perms_single(pid, vpage)
-            .ok_or_else(|| {
-                rollback_pinned_pages(&pinned);
-                DmaError::InvalidParams
-            })?;
+        let perms = page_tables::query_perms_single(pid, vpage).ok_or_else(|| {
+            rollback_pinned_pages(&pinned);
+            DmaError::InvalidParams
+        })?;
 
-        if matches!(dir, DmaDirection::FromDevice | DmaDirection::Bidirection) && !perms.is_writable() {
+        if matches!(dir, DmaDirection::FromDevice | DmaDirection::Bidirection)
+            && !perms.is_writable()
+        {
             rollback_pinned_pages(&pinned);
             return Err(DmaError::IommuFault);
         }
 
         // Étape 3 : Épingler la page (empêche swap pendant DMA)
-        let p = page_tables::pin_user_page(pid, vpage)
-            .ok_or_else(|| {
-                rollback_pinned_pages(&pinned);
-                DmaError::InvalidParams
-            })?;
+        let p = page_tables::pin_user_page(pid, vpage).ok_or_else(|| {
+            rollback_pinned_pages(&pinned);
+            DmaError::InvalidParams
+        })?;
         pinned.push(p);
     }
 
@@ -430,7 +438,8 @@ pub fn sys_dma_map(
             Ok(iova) => iova,
             Err(err) => {
                 for rollback_idx in 0..mapped_count {
-                    let rollback_iova = IovaAddr(iova_base.as_u64() + (rollback_idx * PAGE_SIZE) as u64);
+                    let rollback_iova =
+                        IovaAddr(iova_base.as_u64() + (rollback_idx * PAGE_SIZE) as u64);
                     let _ = IOVA_ALLOCATOR.unmap(rollback_iova, domain_id);
                 }
                 rollback_pinned_pages(&pinned);
@@ -443,7 +452,8 @@ pub fn sys_dma_map(
         } else if mapped_iova.as_u64() != iova_base.as_u64() + (idx * PAGE_SIZE) as u64 {
             let _ = IOVA_ALLOCATOR.unmap(mapped_iova, domain_id);
             for rollback_idx in 0..mapped_count {
-                let rollback_iova = IovaAddr(iova_base.as_u64() + (rollback_idx * PAGE_SIZE) as u64);
+                let rollback_iova =
+                    IovaAddr(iova_base.as_u64() + (rollback_idx * PAGE_SIZE) as u64);
                 let _ = IOVA_ALLOCATOR.unmap(rollback_iova, domain_id);
             }
             rollback_pinned_pages(&pinned);
@@ -466,15 +476,18 @@ pub fn sys_dma_map(
 
 pub fn sys_dma_unmap(iova: IovaAddr, domain: IommuDomainId) -> Result<(), DmaError> {
     let mut table = DMA_MAP_TABLE.write();
-    if let Some(pos) = table.iter().position(|r| r.iova_base == iova && r.domain == domain) {
+    if let Some(pos) = table
+        .iter()
+        .position(|r| r.iova_base == iova && r.domain == domain)
+    {
         let record = table.remove(pos);
         let page_count = (record.size + PAGE_SIZE - 1) / PAGE_SIZE;
-        
+
         for i in 0..page_count {
             let u_iova = IovaAddr((record.iova_base.as_u64()) + (i * PAGE_SIZE) as u64);
             let _ = IOVA_ALLOCATOR.unmap(u_iova, domain);
         }
-        
+
         for p in record.pinned_pages {
             p.unpin();
         }
@@ -571,8 +584,8 @@ pub fn sys_dma_alloc_for_pid(
     }
 
     let order = order_for_size(size);
-    let frame = alloc_pages(order, alloc_flags_from_dma_flags(flags))
-        .map_err(|_| DmaError::OutOfMemory)?;
+    let frame =
+        alloc_pages(order, alloc_flags_from_dma_flags(flags)).map_err(|_| DmaError::OutOfMemory)?;
     let phys = frame.start_address();
     let virt = phys_to_virt(phys).as_u64();
 
@@ -604,7 +617,8 @@ pub fn sys_dma_free_for_pid(
     let mut table = DMA_ALLOC_TABLE.write();
     let Some(pos) = table
         .iter()
-        .position(|record| record.pid == pid && record.iova == iova && record.domain == domain) else {
+        .position(|record| record.pid == pid && record.iova == iova && record.domain == domain)
+    else {
         return Err(DmaError::InvalidParams);
     };
 
@@ -615,13 +629,19 @@ pub fn sys_dma_free_for_pid(
 }
 
 pub fn sys_dma_sync_for_pid(
-    pid: u32, 
-    iova: IovaAddr, 
-    size: usize, 
-    dir: DmaDirection
+    pid: u32,
+    iova: IovaAddr,
+    size: usize,
+    dir: DmaDirection,
 ) -> Result<(), DmaError> {
-    let owned_alloc = DMA_ALLOC_TABLE.read().iter().any(|record| record.pid == pid && record.iova == iova);
-    let owned_map = DMA_MAP_TABLE.read().iter().any(|record| record.pid == pid && record.iova_base == iova);
+    let owned_alloc = DMA_ALLOC_TABLE
+        .read()
+        .iter()
+        .any(|record| record.pid == pid && record.iova == iova);
+    let owned_map = DMA_MAP_TABLE
+        .read()
+        .iter()
+        .any(|record| record.pid == pid && record.iova_base == iova);
 
     if !owned_alloc && !owned_map {
         return Err(DmaError::InvalidParams);
@@ -722,9 +742,9 @@ pub fn sys_mmio_map_for_pid(_pid: u32, _phys: PhysAddr, _size: usize) -> Result<
 
 pub fn sys_mmio_unmap_for_pid(_pid: u32, _virt_addr: u64, _size: usize) -> Result<(), MmioError> {
     let mut table = MMIO_MAP_TABLE.write();
-    let Some(pos) = table
-        .iter()
-        .position(|record| record.pid == _pid && record.virt_base == _virt_addr && record.size == _size) else {
+    let Some(pos) = table.iter().position(|record| {
+        record.pid == _pid && record.virt_base == _virt_addr && record.size == _size
+    }) else {
         return Err(MmioError::NotMapped);
     };
 

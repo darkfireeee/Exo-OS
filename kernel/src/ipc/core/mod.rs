@@ -4,20 +4,18 @@
 
 core::arch::global_asm!(include_str!("fastcall_asm.s"), options(att_syntax));
 
-pub mod types;
 pub mod constants;
 pub mod sequence;
 pub mod transfer;
+pub mod types;
 
-pub use types::{
-    MessageId, ChannelId, EndpointId, Cookie, ProcessId,
-    MsgFlags, MessageFlags, MessageType, IpcError, IpcCapError,
-    alloc_message_id, alloc_channel_id, alloc_endpoint_id,
-    array_index_nospec,
-};
 pub use constants::*;
-pub use sequence::{SeqSender, SeqReceiver, SeqPair, SeqCheck};
-pub use transfer::{MessageHeader, RingSlot, ZeroCopyRef, TransferEngine, TransferStats};
+pub use sequence::{SeqCheck, SeqPair, SeqReceiver, SeqSender};
+pub use transfer::{MessageHeader, RingSlot, TransferEngine, TransferStats, ZeroCopyRef};
+pub use types::{
+    alloc_channel_id, alloc_endpoint_id, alloc_message_id, array_index_nospec, ChannelId, Cookie,
+    EndpointId, IpcCapError, IpcError, MessageFlags, MessageId, MessageType, MsgFlags, ProcessId,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FFI — fonctions ASM fast path (fastcall_asm.s)
@@ -31,22 +29,22 @@ pub struct IpcFastMsg {
     /// Identifiant du message (0 = allouer).
     pub msg_id: u64,
     /// Drapeaux MsgFlags.
-    pub flags:  u32,
+    pub flags: u32,
     /// Longueur des données (0..=64).
-    pub len:    u16,
-    pub _pad:   u16,
+    pub len: u16,
+    pub _pad: u16,
     /// Données inline (max 64 bytes pour le fast path).
-    pub data:   [u8; 64],
+    pub data: [u8; 64],
 }
 
 impl IpcFastMsg {
     pub const fn zeroed() -> Self {
         Self {
             msg_id: 0,
-            flags:  0,
-            len:    0,
-            _pad:   0,
-            data:   [0u8; 64],
+            flags: 0,
+            len: 0,
+            _pad: 0,
+            data: [0u8; 64],
         }
     }
 }
@@ -83,7 +81,7 @@ pub extern "C" fn ipc_ring_fast_read(dst: *mut IpcFastMsg, channel_id: u64) -> u
 
 #[no_mangle]
 pub extern "C" fn ipc_ring_fast_wait_reply(
-    dst:        *mut IpcFastMsg,
+    dst: *mut IpcFastMsg,
     channel_id: u64,
     timeout_ns: u64,
 ) -> u64 {

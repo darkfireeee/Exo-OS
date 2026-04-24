@@ -4,20 +4,19 @@
 //! comme GRUB2 EFI ou Limine). Dans ce cas, la memory map est fournie par
 //! ExitBootServices() sous forme d'une table de descripteurs EFI.
 
-
 // ── Types mémoire EFI ─────────────────────────────────────────────────────────
 
-pub const EFI_CONVENTIONAL_MEMORY:  u32 = 7;
-pub const EFI_LOADER_CODE:          u32 = 1;
-pub const EFI_LOADER_DATA:          u32 = 2;
-pub const EFI_BOOT_SERVICES_CODE:   u32 = 3;
-pub const EFI_BOOT_SERVICES_DATA:   u32 = 4;
-pub const EFI_RUNTIME_SERVICES_CODE:u32 = 5;
-pub const EFI_RUNTIME_SERVICES_DATA:u32 = 6;
-pub const EFI_UNUSABLE_MEMORY:      u32 = 8;
-pub const EFI_ACPI_RECLAIM:         u32 = 9;
-pub const EFI_ACPI_MEMORY_NVS:      u32 = 10;
-pub const EFI_MEMORY_MAPPED_IO:     u32 = 11;
+pub const EFI_CONVENTIONAL_MEMORY: u32 = 7;
+pub const EFI_LOADER_CODE: u32 = 1;
+pub const EFI_LOADER_DATA: u32 = 2;
+pub const EFI_BOOT_SERVICES_CODE: u32 = 3;
+pub const EFI_BOOT_SERVICES_DATA: u32 = 4;
+pub const EFI_RUNTIME_SERVICES_CODE: u32 = 5;
+pub const EFI_RUNTIME_SERVICES_DATA: u32 = 6;
+pub const EFI_UNUSABLE_MEMORY: u32 = 8;
+pub const EFI_ACPI_RECLAIM: u32 = 9;
+pub const EFI_ACPI_MEMORY_NVS: u32 = 10;
+pub const EFI_MEMORY_MAPPED_IO: u32 = 11;
 
 /// Attributs EFI Memory
 pub const EFI_MEMORY_WB: u64 = 1 << 3; // Write-Back
@@ -30,12 +29,12 @@ pub const EFI_MEMORY_UC: u64 = 1 << 0; // Uncacheable
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct EfiMemoryDescriptor {
-    pub mem_type:        u32,
-    pub _pad:            u32,
-    pub physical_start:  u64,
-    pub virtual_start:   u64,
+    pub mem_type: u32,
+    pub _pad: u32,
+    pub physical_start: u64,
+    pub virtual_start: u64,
     pub number_of_pages: u64,
-    pub attribute:       u64,
+    pub attribute: u64,
 }
 
 impl EfiMemoryDescriptor {
@@ -43,9 +42,11 @@ impl EfiMemoryDescriptor {
     pub fn is_usable(&self) -> bool {
         matches!(
             self.mem_type,
-            EFI_CONVENTIONAL_MEMORY |
-            EFI_LOADER_CODE | EFI_LOADER_DATA |
-            EFI_BOOT_SERVICES_CODE | EFI_BOOT_SERVICES_DATA
+            EFI_CONVENTIONAL_MEMORY
+                | EFI_LOADER_CODE
+                | EFI_LOADER_DATA
+                | EFI_BOOT_SERVICES_CODE
+                | EFI_BOOT_SERVICES_DATA
         )
     }
 
@@ -60,28 +61,37 @@ impl EfiMemoryDescriptor {
 /// Memory map UEFI — référence à la table fournie par le bootloader
 #[derive(Debug, Clone, Copy)]
 pub struct UefiMemoryMap {
-    pub base_addr:   u64,  // Adresse physique du premier descripteur
-    pub map_size:    u64,  // Taille totale en octets
-    pub desc_size:   u32,  // Taille d'un descripteur (peut différer de sizeof EfiMemoryDescriptor)
-    pub desc_version:u32,  // Version (1)
+    pub base_addr: u64,    // Adresse physique du premier descripteur
+    pub map_size: u64,     // Taille totale en octets
+    pub desc_size: u32,    // Taille d'un descripteur (peut différer de sizeof EfiMemoryDescriptor)
+    pub desc_version: u32, // Version (1)
     pub total_memory_kb: u64,
     pub entry_count: u32,
 }
 
 impl UefiMemoryMap {
     pub const fn zeroed() -> Self {
-        Self { base_addr: 0, map_size: 0, desc_size: 0, desc_version: 0,
-               total_memory_kb: 0, entry_count: 0 }
+        Self {
+            base_addr: 0,
+            map_size: 0,
+            desc_size: 0,
+            desc_version: 0,
+            total_memory_kb: 0,
+            entry_count: 0,
+        }
     }
 
     /// Itère les descripteurs EFI
     pub fn iter(&self) -> UefiMemMapIterator {
-        UefiMemMapIterator { map: *self, offset: 0 }
+        UefiMemMapIterator {
+            map: *self,
+            offset: 0,
+        }
     }
 }
 
 pub struct UefiMemMapIterator {
-    map:    UefiMemoryMap,
+    map: UefiMemoryMap,
     offset: u64,
 }
 
@@ -89,7 +99,9 @@ impl Iterator for UefiMemMapIterator {
     type Item = EfiMemoryDescriptor;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.offset >= self.map.map_size { return None; }
+        if self.offset >= self.map.map_size {
+            return None;
+        }
         let addr = self.map.base_addr + self.offset;
         // SAFETY: adresse dans la memory map UEFI, taille desc_size validée
         let desc = unsafe { core::ptr::read_volatile(addr as *const EfiMemoryDescriptor) };
@@ -104,10 +116,10 @@ impl Iterator for UefiMemMapIterator {
 ///
 /// Appelé depuis le bootloader stub ou depuis le tag Multiboot2 EFI.
 pub fn parse_uefi_memmap(
-    map_addr:    u64,
-    map_size:    u64,
-    desc_size:   u32,
-    desc_version:u32,
+    map_addr: u64,
+    map_size: u64,
+    desc_size: u32,
+    desc_version: u32,
 ) -> UefiMemoryMap {
     let mut uefi = UefiMemoryMap {
         base_addr: map_addr,
@@ -115,7 +127,11 @@ pub fn parse_uefi_memmap(
         desc_size,
         desc_version,
         total_memory_kb: 0,
-        entry_count: if desc_size > 0 { (map_size / desc_size as u64) as u32 } else { 0 },
+        entry_count: if desc_size > 0 {
+            (map_size / desc_size as u64) as u32
+        } else {
+            0
+        },
     };
 
     // Calculer la mémoire disponible totale

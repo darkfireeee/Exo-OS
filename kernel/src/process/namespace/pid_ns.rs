@@ -4,8 +4,8 @@
 // Espace de noms PID (CLONE_NEWPID) — Exo-OS Couche 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use crate::scheduler::sync::spinlock::SpinLock;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 #[allow(dead_code)]
 const MAX_PID_NS: usize = 64;
@@ -24,7 +24,9 @@ impl NsPidBitmap {
     const FREE_WORD: AtomicU64 = AtomicU64::new(u64::MAX);
 
     pub const fn new() -> Self {
-        Self { words: [Self::FREE_WORD; NS_PID_WORDS] }
+        Self {
+            words: [Self::FREE_WORD; NS_PID_WORDS],
+        }
     }
 
     /// Alloue le premier PID libre ≥ `min`.
@@ -32,7 +34,9 @@ impl NsPidBitmap {
         let start = (min / 64) as usize;
         for w in start..NS_PID_WORDS {
             let val = self.words[w].load(Ordering::Relaxed);
-            if val == 0 { continue; }
+            if val == 0 {
+                continue;
+            }
             let bit = val.trailing_zeros();
             let mask = 1u64 << bit;
             if self.words[w]
@@ -40,7 +44,9 @@ impl NsPidBitmap {
                 .is_ok()
             {
                 let id = w as u32 * 64 + bit;
-                if id >= min && id <= NS_PID_MAX { return Some(id); }
+                if id >= min && id <= NS_PID_MAX {
+                    return Some(id);
+                }
                 self.words[w].fetch_or(mask, Ordering::Relaxed);
             }
         }
@@ -62,32 +68,32 @@ unsafe impl Sync for NsPidBitmap {}
 #[repr(C)]
 pub struct PidNamespace {
     /// Index unique du namespace.
-    pub id:         u32,
+    pub id: u32,
     /// Profondeur (0 = racine).
-    pub level:      u32,
+    pub level: u32,
     /// PID parent du namespace (PID 1 dans ce namespace).
-    pub init_pid:   AtomicU32,
+    pub init_pid: AtomicU32,
     /// Nombre de processus vivants.
-    pub pop:        AtomicU32,
+    pub pop: AtomicU32,
     /// Compteur de références.
-    pub refcount:   AtomicU32,
+    pub refcount: AtomicU32,
     /// Validité.
-    pub valid:      AtomicU32,
+    pub valid: AtomicU32,
     /// Allocateur de PIDs local.
-    pub bitmap:     NsPidBitmap,
+    pub bitmap: NsPidBitmap,
     pub alloc_lock: SpinLock<()>,
 }
 
 impl PidNamespace {
     const fn new_root() -> Self {
         Self {
-            id:         0,
-            level:      0,
-            init_pid:   AtomicU32::new(1),
-            pop:        AtomicU32::new(0),
-            refcount:   AtomicU32::new(1),
-            valid:      AtomicU32::new(1),
-            bitmap:     NsPidBitmap::new(),
+            id: 0,
+            level: 0,
+            init_pid: AtomicU32::new(1),
+            pop: AtomicU32::new(0),
+            refcount: AtomicU32::new(1),
+            valid: AtomicU32::new(1),
+            bitmap: NsPidBitmap::new(),
             alloc_lock: SpinLock::new(()),
         }
     }

@@ -5,13 +5,12 @@
 // évitant les contentions sur le buddy global (512 frames par CPU).
 // Couche 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
-use core::cell::UnsafeCell;
 use crate::memory::core::{
-    Frame, PhysAddr, AllocFlags, AllocError,
-    PER_CPU_POOL_SIZE, PER_CPU_DRAIN_THRESHOLD, PER_CPU_REFILL_THRESHOLD,
-    MAX_CPUS,
+    AllocError, AllocFlags, Frame, PhysAddr, MAX_CPUS, PER_CPU_DRAIN_THRESHOLD, PER_CPU_POOL_SIZE,
+    PER_CPU_REFILL_THRESHOLD,
 };
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PER-CPU FRAME POOL
@@ -38,21 +37,21 @@ pub struct PerCpuFramePool {
     /// UnsafeCell car modifié uniquement par le CPU propriétaire.
     frames: UnsafeCell<[u64; PER_CPU_POOL_SIZE]>,
     /// Index de production (prochaine case libre).
-    head:   AtomicUsize,
+    head: AtomicUsize,
     /// Index de consommation (prochain frame à allouer).
-    tail:   AtomicUsize,
+    tail: AtomicUsize,
     /// Compteur de frames disponibles snapshot (approximation).
-    count:  AtomicUsize,
+    count: AtomicUsize,
     /// CPU ID propriétaire de ce pool (-1 = non initialisé).
     cpu_id: AtomicUsize,
     /// Statistiques d'allocation depuis ce pool.
-    alloc_hits:   AtomicU64,
+    alloc_hits: AtomicU64,
     /// Statistiques d'échecs (pool vide → fallback buddy).
     alloc_misses: AtomicU64,
     /// Statistiques de réapprovisionnements.
-    refills:      AtomicU64,
+    refills: AtomicU64,
     /// Statistiques de vidanges.
-    drains:       AtomicU64,
+    drains: AtomicU64,
     /// Padding pour occuper exactement 2 cache lines (128 bytes).
     _pad: [u8; 64],
 }
@@ -70,16 +69,16 @@ impl PerCpuFramePool {
     /// Crée un pool vide non initialisé.
     pub const fn new_uninit() -> Self {
         PerCpuFramePool {
-            frames:       UnsafeCell::new([0u64; PER_CPU_POOL_SIZE]),
-            head:         AtomicUsize::new(0),
-            tail:         AtomicUsize::new(0),
-            count:        AtomicUsize::new(0),
-            cpu_id:       AtomicUsize::new(usize::MAX),
-            alloc_hits:   AtomicU64::new(0),
+            frames: UnsafeCell::new([0u64; PER_CPU_POOL_SIZE]),
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+            count: AtomicUsize::new(0),
+            cpu_id: AtomicUsize::new(usize::MAX),
+            alloc_hits: AtomicU64::new(0),
             alloc_misses: AtomicU64::new(0),
-            refills:      AtomicU64::new(0),
-            drains:       AtomicU64::new(0),
-            _pad:         [0u8; _PAD_POOL],
+            refills: AtomicU64::new(0),
+            drains: AtomicU64::new(0),
+            _pad: [0u8; _PAD_POOL],
         }
     }
 
@@ -109,7 +108,8 @@ impl PerCpuFramePool {
         let frames_ptr = self.frames.get();
         let tail = self.tail.load(Ordering::Relaxed);
         let pfn = unsafe { (*frames_ptr)[tail % PER_CPU_POOL_SIZE] };
-        self.tail.store((tail + 1) & (PER_CPU_POOL_SIZE - 1), Ordering::Relaxed);
+        self.tail
+            .store((tail + 1) & (PER_CPU_POOL_SIZE - 1), Ordering::Relaxed);
         self.count.fetch_sub(1, Ordering::Relaxed);
         self.alloc_hits.fetch_add(1, Ordering::Relaxed);
         Some(Frame::containing(PhysAddr::new(pfn << 12)))
@@ -130,7 +130,8 @@ impl PerCpuFramePool {
         unsafe {
             (*frames_ptr)[head % PER_CPU_POOL_SIZE] = frame.pfn();
         }
-        self.head.store((head + 1) & (PER_CPU_POOL_SIZE - 1), Ordering::Relaxed);
+        self.head
+            .store((head + 1) & (PER_CPU_POOL_SIZE - 1), Ordering::Relaxed);
         self.count.fetch_add(1, Ordering::Relaxed);
         true
     }
@@ -168,13 +169,13 @@ impl PerCpuFramePool {
     /// Retourne les statistiques de ce pool.
     pub fn stats(&self) -> PerCpuPoolStats {
         PerCpuPoolStats {
-            cpu_id:       self.cpu_id.load(Ordering::Relaxed),
-            count:        self.count.load(Ordering::Relaxed),
-            capacity:     PER_CPU_POOL_SIZE,
-            alloc_hits:   self.alloc_hits.load(Ordering::Relaxed),
+            cpu_id: self.cpu_id.load(Ordering::Relaxed),
+            count: self.count.load(Ordering::Relaxed),
+            capacity: PER_CPU_POOL_SIZE,
+            alloc_hits: self.alloc_hits.load(Ordering::Relaxed),
             alloc_misses: self.alloc_misses.load(Ordering::Relaxed),
-            refills:      self.refills.load(Ordering::Relaxed),
-            drains:       self.drains.load(Ordering::Relaxed),
+            refills: self.refills.load(Ordering::Relaxed),
+            drains: self.drains.load(Ordering::Relaxed),
         }
     }
 
@@ -184,8 +185,12 @@ impl PerCpuFramePool {
     pub fn refill(&self, frames: impl Iterator<Item = Frame>) -> usize {
         let mut count = 0;
         for frame in frames {
-            if self.is_full() { break; }
-            if self.push(frame) { count += 1; }
+            if self.is_full() {
+                break;
+            }
+            if self.push(frame) {
+                count += 1;
+            }
         }
         if count > 0 {
             self.refills.fetch_add(1, Ordering::Relaxed);
@@ -199,7 +204,9 @@ impl PerCpuFramePool {
     pub fn drain(&self, drain_fn: impl FnMut(Frame)) -> usize {
         let target = PER_CPU_POOL_SIZE / 2; // Vidanger jusqu'à 50% plein
         let current = self.count.load(Ordering::Relaxed);
-        if current <= target { return 0; }
+        if current <= target {
+            return 0;
+        }
 
         let mut drain_fn = drain_fn;
         let to_drain = current - target;
@@ -207,8 +214,11 @@ impl PerCpuFramePool {
 
         for _ in 0..to_drain {
             match self.pop() {
-                Some(frame) => { drain_fn(frame); drained += 1; }
-                None        => break,
+                Some(frame) => {
+                    drain_fn(frame);
+                    drained += 1;
+                }
+                None => break,
             }
         }
 
@@ -231,21 +241,24 @@ const _PAD_POOL: usize = {
 /// Statistiques d'un per-CPU pool.
 #[derive(Copy, Clone, Debug)]
 pub struct PerCpuPoolStats {
-    pub cpu_id:       usize,
-    pub count:        usize,
-    pub capacity:     usize,
-    pub alloc_hits:   u64,
+    pub cpu_id: usize,
+    pub count: usize,
+    pub capacity: usize,
+    pub alloc_hits: u64,
     pub alloc_misses: u64,
-    pub refills:      u64,
-    pub drains:       u64,
-
+    pub refills: u64,
+    pub drains: u64,
 }
 
 impl PerCpuPoolStats {
     /// Taux de hit du cache (0.0 - 1.0).
     pub fn hit_rate(&self) -> f64 {
         let total = self.alloc_hits + self.alloc_misses;
-        if total == 0 { 1.0 } else { self.alloc_hits as f64 / total as f64 }
+        if total == 0 {
+            1.0
+        } else {
+            self.alloc_hits as f64 / total as f64
+        }
     }
 }
 
@@ -255,9 +268,9 @@ impl PerCpuPoolStats {
 
 /// Table globale des per-CPU pools — MAX_CPUS entrées statiques.
 pub struct PerCpuPoolTable {
-    pools:        [PerCpuFramePool; MAX_CPUS],
-    nr_cpus:      AtomicUsize,
-    initialized:  AtomicUsize,  // bitmask (atomique, max 256 CPUs sur u64×4)
+    pools: [PerCpuFramePool; MAX_CPUS],
+    nr_cpus: AtomicUsize,
+    initialized: AtomicUsize, // bitmask (atomique, max 256 CPUs sur u64×4)
 }
 
 // SAFETY: PerCpuPoolTable est thread-safe via ses AtomicUsize internes
@@ -302,9 +315,7 @@ impl PerCpuPoolTable {
     /// `cpu_id` doit être l'ID du CPU en cours d'exécution.
     #[inline(always)]
     pub fn alloc_from_cpu(&self, cpu_id: usize, _flags: AllocFlags) -> Result<Frame, AllocError> {
-        self.get(cpu_id)
-            .pop()
-            .ok_or(AllocError::WouldBlock) // Signale le besoin de fallback buddy
+        self.get(cpu_id).pop().ok_or(AllocError::WouldBlock) // Signale le besoin de fallback buddy
     }
 
     /// Libère un frame vers le pool du CPU courant.

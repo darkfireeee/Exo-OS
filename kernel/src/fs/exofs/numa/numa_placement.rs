@@ -2,11 +2,11 @@
 // ExoFS NUMA — Stratégies de placement de blobs sur les nœuds NUMA
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
+use super::numa_affinity::{NumaNodeId, MAX_NUMA_NODES};
+use super::numa_stats::NUMA_STATS;
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
-use super::numa_affinity::{MAX_NUMA_NODES, NumaNodeId};
-use super::numa_stats::NUMA_STATS;
 
 // ─── PlacementStrategy ────────────────────────────────────────────────────────
 
@@ -15,13 +15,13 @@ use super::numa_stats::NUMA_STATS;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlacementStrategy {
     /// Distribution cyclique entre nœuds actifs.
-    RoundRobin  = 0,
+    RoundRobin = 0,
     /// Nœud de la tâche courante (hash de l'id blob).
-    LocalFirst  = 1,
+    LocalFirst = 1,
     /// Nœud avec le moins d'octets alloués (NUMA_STATS).
-    LeastUsed   = 2,
+    LeastUsed = 2,
     /// Nœud fixe imposé par le gestionnaire.
-    Pinned      = 3,
+    Pinned = 3,
     /// Hash cohérent sur l'identifiant du blob.
     ContentHash = 4,
 }
@@ -39,10 +39,10 @@ impl PlacementStrategy {
     }
     pub fn name(self) -> &'static str {
         match self {
-            Self::RoundRobin  => "round-robin",
-            Self::LocalFirst  => "local-first",
-            Self::LeastUsed   => "least-used",
-            Self::Pinned      => "pinned",
+            Self::RoundRobin => "round-robin",
+            Self::LocalFirst => "local-first",
+            Self::LeastUsed => "least-used",
+            Self::Pinned => "pinned",
             Self::ContentHash => "content-hash",
         }
     }
@@ -54,29 +54,43 @@ impl PlacementStrategy {
 #[derive(Clone, Copy, Debug)]
 pub struct PlacementHint {
     /// Id optionnel du blob à placer.
-    pub blob_id:     Option<BlobId>,
+    pub blob_id: Option<BlobId>,
     /// CPU demandeur, pour LocalFirst.
-    pub cpu_id:      Option<u32>,
+    pub cpu_id: Option<u32>,
     /// Nœud forcé, pour Pinned.
     pub pinned_node: Option<NumaNodeId>,
     /// Taille du blob en octets.
-    pub data_bytes:  u64,
+    pub data_bytes: u64,
 }
 
 impl PlacementHint {
     pub const fn simple(blob_id: Option<BlobId>) -> Self {
-        Self { blob_id, cpu_id: None, pinned_node: None, data_bytes: 0 }
+        Self {
+            blob_id,
+            cpu_id: None,
+            pinned_node: None,
+            data_bytes: 0,
+        }
     }
-    pub fn with_cpu(mut self, cpu: u32) -> Self { self.cpu_id = Some(cpu); self }
-    pub fn with_pin(mut self, node: NumaNodeId) -> Self { self.pinned_node = Some(node); self }
-    pub fn with_size(mut self, bytes: u64) -> Self { self.data_bytes = bytes; self }
+    pub fn with_cpu(mut self, cpu: u32) -> Self {
+        self.cpu_id = Some(cpu);
+        self
+    }
+    pub fn with_pin(mut self, node: NumaNodeId) -> Self {
+        self.pinned_node = Some(node);
+        self
+    }
+    pub fn with_size(mut self, bytes: u64) -> Self {
+        self.data_bytes = bytes;
+        self
+    }
 }
 
 // ─── PlacementResult ─────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug)]
 pub struct PlacementResult {
-    pub node:     NumaNodeId,
+    pub node: NumaNodeId,
     pub strategy: PlacementStrategy,
     /// Score de charge du nœud sélectionné au moment du placement.
     pub load_score: u64,
@@ -86,12 +100,12 @@ pub struct PlacementResult {
 
 /// Moteur de placement NUMA des blobs.
 pub struct NumaPlacement {
-    strategy:     AtomicU8,
-    n_nodes:      AtomicU8,
-    rr_counter:   AtomicU64,
-    pinned_node:  AtomicU8,
+    strategy: AtomicU8,
+    n_nodes: AtomicU8,
+    rr_counter: AtomicU64,
+    pinned_node: AtomicU8,
     /// Compteur de placements total.
-    place_count:  AtomicU64,
+    place_count: AtomicU64,
     /// Compteur de placements refusés (node invalide).
     place_errors: AtomicU64,
 }
@@ -99,18 +113,20 @@ pub struct NumaPlacement {
 impl NumaPlacement {
     pub const fn new_const() -> Self {
         Self {
-            strategy:     AtomicU8::new(PlacementStrategy::RoundRobin as u8),
-            n_nodes:      AtomicU8::new(1),
-            rr_counter:   AtomicU64::new(0),
-            pinned_node:  AtomicU8::new(0),
-            place_count:  AtomicU64::new(0),
+            strategy: AtomicU8::new(PlacementStrategy::RoundRobin as u8),
+            n_nodes: AtomicU8::new(1),
+            rr_counter: AtomicU64::new(0),
+            pinned_node: AtomicU8::new(0),
+            place_count: AtomicU64::new(0),
             place_errors: AtomicU64::new(0),
         }
     }
 
     /// Initialise le moteur de placement.
     pub fn init(&self, n_nodes: u8, strategy: PlacementStrategy) -> ExofsResult<()> {
-        if n_nodes == 0 { return Err(ExofsError::InvalidArgument); }
+        if n_nodes == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         let n = n_nodes.min(MAX_NUMA_NODES as u8);
         self.n_nodes.store(n, Ordering::Relaxed);
         self.strategy.store(strategy as u8, Ordering::Relaxed);
@@ -120,36 +136,50 @@ impl NumaPlacement {
 
     /// Fixe le nœud de l'épinglage (stratégie Pinned).
     pub fn set_pinned_node(&self, node: NumaNodeId) -> ExofsResult<()> {
-        if !node.is_valid() { return Err(ExofsError::InvalidArgument); }
+        if !node.is_valid() {
+            return Err(ExofsError::InvalidArgument);
+        }
         self.pinned_node.store(node.0, Ordering::Relaxed);
         Ok(())
     }
 
-    pub fn n_nodes(&self) -> usize { self.n_nodes.load(Ordering::Relaxed) as usize }
+    pub fn n_nodes(&self) -> usize {
+        self.n_nodes.load(Ordering::Relaxed) as usize
+    }
     pub fn strategy(&self) -> PlacementStrategy {
         PlacementStrategy::from_u8(self.strategy.load(Ordering::Relaxed))
     }
-    pub fn place_count(&self) -> u64  { self.place_count.load(Ordering::Relaxed) }
-    pub fn place_errors(&self) -> u64 { self.place_errors.load(Ordering::Relaxed) }
+    pub fn place_count(&self) -> u64 {
+        self.place_count.load(Ordering::Relaxed)
+    }
+    pub fn place_errors(&self) -> u64 {
+        self.place_errors.load(Ordering::Relaxed)
+    }
 
     // ── Placement ─────────────────────────────────────────────────────────────
 
     /// Retourne le nœud préféré pour un placement donné.
     pub fn preferred_node(&self, hint: &PlacementHint) -> ExofsResult<PlacementResult> {
         let n = self.n_nodes.load(Ordering::Relaxed) as usize;
-        if n == 0 { return Err(ExofsError::InvalidArgument); }
+        if n == 0 {
+            return Err(ExofsError::InvalidArgument);
+        }
         if n == 1 {
             self.place_count.fetch_add(1, Ordering::Relaxed);
             let score = NUMA_STATS.node_stats(0).load_score();
-            return Ok(PlacementResult { node: NumaNodeId(0), strategy: self.strategy(), load_score: score });
+            return Ok(PlacementResult {
+                node: NumaNodeId(0),
+                strategy: self.strategy(),
+                load_score: score,
+            });
         }
 
         let strat = PlacementStrategy::from_u8(self.strategy.load(Ordering::Relaxed));
         let node_idx = match strat {
-            PlacementStrategy::RoundRobin  => self._round_robin(n),
-            PlacementStrategy::LocalFirst  => self._local_first(hint, n),
-            PlacementStrategy::LeastUsed   => self._least_used(n),
-            PlacementStrategy::Pinned      => self._pinned(n),
+            PlacementStrategy::RoundRobin => self._round_robin(n),
+            PlacementStrategy::LocalFirst => self._local_first(hint, n),
+            PlacementStrategy::LeastUsed => self._least_used(n),
+            PlacementStrategy::Pinned => self._pinned(n),
             PlacementStrategy::ContentHash => self._content_hash(hint, n),
         };
 
@@ -160,17 +190,15 @@ impl NumaPlacement {
         self.place_count.fetch_add(1, Ordering::Relaxed);
         let score = NUMA_STATS.node_stats(node_idx).load_score();
         Ok(PlacementResult {
-            node:       NumaNodeId(node_idx as u8),
-            strategy:   strat,
+            node: NumaNodeId(node_idx as u8),
+            strategy: strat,
             load_score: score,
         })
     }
 
     /// Retourne le nœud préféré (simple, sans résultat étendu).
     pub fn node_for(&self, hint: &PlacementHint) -> usize {
-        self.preferred_node(hint)
-            .map(|r| r.node.idx())
-            .unwrap_or(0)
+        self.preferred_node(hint).map(|r| r.node.idx()).unwrap_or(0)
     }
 
     // ── Stratégies privées ────────────────────────────────────────────────────
@@ -200,7 +228,10 @@ impl NumaPlacement {
         let mut i = 0usize;
         while i < n {
             let score = NUMA_STATS.node_stats(i).load_score();
-            if score < best_score { best_score = score; best = i; }
+            if score < best_score {
+                best_score = score;
+                best = i;
+            }
             i = i.wrapping_add(1);
         }
         best
@@ -208,7 +239,11 @@ impl NumaPlacement {
 
     fn _pinned(&self, n: usize) -> usize {
         let p = self.pinned_node.load(Ordering::Relaxed) as usize;
-        if p < n { p } else { 0 }
+        if p < n {
+            p
+        } else {
+            0
+        }
     }
 
     fn _content_hash(&self, hint: &PlacementHint, n: usize) -> usize {
@@ -229,9 +264,7 @@ impl NumaPlacement {
     // ── Statistiques ──────────────────────────────────────────────────────────
 
     /// Distribution des placements par nœud (RECUR-01).
-    pub fn node_distribution(&self, _n_samples: usize)
-        -> ExofsResult<Vec<(NumaNodeId, u64)>>
-    {
+    pub fn node_distribution(&self, _n_samples: usize) -> ExofsResult<Vec<(NumaNodeId, u64)>> {
         let n = self.n_nodes.load(Ordering::Relaxed) as usize;
         let mut v = Vec::new();
         v.try_reserve(n).map_err(|_| ExofsError::NoMemory)?;
@@ -248,9 +281,13 @@ impl NumaPlacement {
 
     /// Vérifie que le nœud `node` est valide pour ce moteur.
     pub fn validate_node(&self, node: NumaNodeId) -> ExofsResult<()> {
-        if !node.is_valid() { return Err(ExofsError::InvalidArgument); }
+        if !node.is_valid() {
+            return Err(ExofsError::InvalidArgument);
+        }
         let n = self.n_nodes.load(Ordering::Relaxed) as usize;
-        if node.idx() >= n { return Err(ExofsError::InvalidArgument); }
+        if node.idx() >= n {
+            return Err(ExofsError::InvalidArgument);
+        }
         Ok(())
     }
 
@@ -271,7 +308,9 @@ pub static NUMA_PLACEMENT: NumaPlacement = NumaPlacement::new_const();
 mod tests {
     use super::*;
 
-    fn hint() -> PlacementHint { PlacementHint::simple(None) }
+    fn hint() -> PlacementHint {
+        PlacementHint::simple(None)
+    }
 
     fn init_p(n: u8, s: PlacementStrategy) -> NumaPlacement {
         let p = NumaPlacement::new_const();
@@ -322,8 +361,10 @@ mod tests {
     #[test]
     fn test_content_hash_stable() {
         let p = init_p(4, PlacementStrategy::ContentHash);
-        let bid = BlobId([1,2,3,4,5,6,7,8, 0,0,0,0,0,0,0,0,
-                          0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0]);
+        let bid = BlobId([
+            1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ]);
         let h = PlacementHint::simple(Some(bid));
         let node1 = p.node_for(&h);
         let node2 = p.node_for(&h);
@@ -387,8 +428,8 @@ mod tests {
 
     #[test]
     fn test_strategy_name() {
-        assert_eq!(PlacementStrategy::RoundRobin.name(),  "round-robin");
-        assert_eq!(PlacementStrategy::LeastUsed.name(),   "least-used");
+        assert_eq!(PlacementStrategy::RoundRobin.name(), "round-robin");
+        assert_eq!(PlacementStrategy::LeastUsed.name(), "least-used");
         assert_eq!(PlacementStrategy::ContentHash.name(), "content-hash");
     }
 

@@ -18,10 +18,9 @@
 //! OOM-02   : try_reserve avant push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add.
 
-
 extern crate alloc;
-use alloc::vec::Vec;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -49,16 +48,16 @@ pub const TAR_LINKNAME_MAX: usize = 100;
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
 pub enum TarEntryKind {
-    Regular    = b'0',
-    HardLink   = b'1',
-    Symlink    = b'2',
+    Regular = b'0',
+    HardLink = b'1',
+    Symlink = b'2',
     CharDevice = b'3',
     BlockDevice = b'4',
-    Directory  = b'5',
-    Fifo       = b'6',
-    GlobalPax  = b'g',
+    Directory = b'5',
+    Fifo = b'6',
+    GlobalPax = b'g',
     ExtendedPax = b'x',
-    Unknown    = b'?',
+    Unknown = b'?',
 }
 
 impl TarEntryKind {
@@ -77,10 +76,18 @@ impl TarEntryKind {
         }
     }
 
-    pub fn as_byte(self) -> u8 { self as u8 }
-    pub fn is_regular(self) -> bool { matches!(self, TarEntryKind::Regular) }
-    pub fn is_directory(self) -> bool { matches!(self, TarEntryKind::Directory) }
-    pub fn has_data(self) -> bool { matches!(self, TarEntryKind::Regular) }
+    pub fn as_byte(self) -> u8 {
+        self as u8
+    }
+    pub fn is_regular(self) -> bool {
+        matches!(self, TarEntryKind::Regular)
+    }
+    pub fn is_directory(self) -> bool {
+        matches!(self, TarEntryKind::Directory)
+    }
+    pub fn has_data(self) -> bool {
+        matches!(self, TarEntryKind::Regular)
+    }
 }
 
 // ─── Bloc tar ─────────────────────────────────────────────────────────────────
@@ -91,10 +98,18 @@ impl TarEntryKind {
 pub struct TarBlock(pub [u8; TAR_BLOCK_SIZE]);
 
 impl TarBlock {
-    pub const fn zero() -> Self { Self([0u8; TAR_BLOCK_SIZE]) }
-    pub fn as_bytes(&self) -> &[u8] { &self.0 }
-    pub fn as_mut_bytes(&mut self) -> &mut [u8] { &mut self.0 }
-    pub fn is_zero(&self) -> bool { self.0.iter().all(|&b| b == 0) }
+    pub const fn zero() -> Self {
+        Self([0u8; TAR_BLOCK_SIZE])
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+    pub fn as_mut_bytes(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+    pub fn is_zero(&self) -> bool {
+        self.0.iter().all(|&b| b == 0)
+    }
 }
 
 // ─── En-tête tar ustar ────────────────────────────────────────────────────────
@@ -104,23 +119,23 @@ impl TarBlock {
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct TarHeader {
-    pub name:     [u8; 100], // 0
-    pub mode:     [u8; 8],   // 100
-    pub uid:      [u8; 8],   // 108
-    pub gid:      [u8; 8],   // 116
-    pub size:     [u8; 12],  // 124
-    pub mtime:    [u8; 12],  // 136
+    pub name: [u8; 100],     // 0
+    pub mode: [u8; 8],       // 100
+    pub uid: [u8; 8],        // 108
+    pub gid: [u8; 8],        // 116
+    pub size: [u8; 12],      // 124
+    pub mtime: [u8; 12],     // 136
     pub checksum: [u8; 8],   // 148
     pub typeflag: u8,        // 156
     pub linkname: [u8; 100], // 157
-    pub magic:    [u8; 6],   // 257
-    pub version:  [u8; 2],   // 263
-    pub uname:    [u8; 32],  // 265
-    pub gname:    [u8; 32],  // 297
+    pub magic: [u8; 6],      // 257
+    pub version: [u8; 2],    // 263
+    pub uname: [u8; 32],     // 265
+    pub gname: [u8; 32],     // 297
     pub devmajor: [u8; 8],   // 329
     pub devminor: [u8; 8],   // 337
-    pub prefix:   [u8; 155], // 345
-    pub _pad:     [u8; 12],  // 500
+    pub prefix: [u8; 155],   // 345
+    pub _pad: [u8; 12],      // 500
 }
 
 const _: () = assert!(core::mem::size_of::<TarHeader>() == TAR_BLOCK_SIZE);
@@ -210,12 +225,7 @@ impl TarHeader {
 
     pub fn as_bytes(&self) -> &[u8] {
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        unsafe {
-            core::slice::from_raw_parts(
-                self as *const Self as *const u8,
-                TAR_BLOCK_SIZE,
-            )
-        }
+        unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, TAR_BLOCK_SIZE) }
     }
 
     pub fn from_block(block: &TarBlock) -> Self {
@@ -271,7 +281,11 @@ pub struct TarEmitter {
 }
 
 impl TarEmitter {
-    pub fn new() -> Self { Self { stats: TarEmitStats::default() } }
+    pub fn new() -> Self {
+        Self {
+            stats: TarEmitStats::default(),
+        }
+    }
 
     /// Émet un blob sous forme d'entrée tar régulière.
     /// Le nom est dérivé du blob_id hex (RECUR-01 : pas de récursion).
@@ -328,7 +342,9 @@ impl TarEmitter {
         Ok(())
     }
 
-    pub fn stats(&self) -> &TarEmitStats { &self.stats }
+    pub fn stats(&self) -> &TarEmitStats {
+        &self.stats
+    }
 }
 
 // ─── Parser tar ───────────────────────────────────────────────────────────────
@@ -343,7 +359,9 @@ pub struct TarParseReport {
 }
 
 impl TarParseReport {
-    pub fn has_errors(&self) -> bool { self.errors > 0 }
+    pub fn has_errors(&self) -> bool {
+        self.errors > 0
+    }
 }
 
 /// Parse un flux tar et retourne les entrées.
@@ -355,8 +373,18 @@ pub struct TarParser {
 }
 
 impl TarParser {
-    pub fn new() -> Self { Self { report: TarParseReport::default(), strict_checksum: false } }
-    pub fn strict() -> Self { Self { report: TarParseReport::default(), strict_checksum: true } }
+    pub fn new() -> Self {
+        Self {
+            report: TarParseReport::default(),
+            strict_checksum: false,
+        }
+    }
+    pub fn strict() -> Self {
+        Self {
+            report: TarParseReport::default(),
+            strict_checksum: true,
+        }
+    }
 
     /// Parse le flux tar et retourne a list d'entrées.
     pub fn parse_all<S: TarSource>(&mut self, src: &mut S) -> ExofsResult<Vec<TarEntry>> {
@@ -365,12 +393,16 @@ impl TarParser {
         let mut block = TarBlock::zero();
 
         loop {
-            if !src.read_block(&mut block)? { break; }
+            if !src.read_block(&mut block)? {
+                break;
+            }
             self.report.blocks_consumed = self.report.blocks_consumed.saturating_add(1);
 
             if block.is_zero() {
                 consecutive_zeros = consecutive_zeros.saturating_add(1);
-                if consecutive_zeros >= 2 { break; } // Fin d'archive POSIX
+                if consecutive_zeros >= 2 {
+                    break;
+                } // Fin d'archive POSIX
                 continue;
             }
             consecutive_zeros = 0;
@@ -397,7 +429,8 @@ impl TarParser {
 
             // Copie du nom — OOM-02
             let mut name: Vec<u8> = Vec::new();
-            name.try_reserve(name_raw.len()).map_err(|_| ExofsError::NoMemory)?;
+            name.try_reserve(name_raw.len())
+                .map_err(|_| ExofsError::NoMemory)?;
             name.extend_from_slice(name_raw);
 
             // Lecture des données (blocs entiers)
@@ -405,7 +438,8 @@ impl TarParser {
             let mut data: Vec<u8> = Vec::new();
 
             if kind.has_data() && size > 0 {
-                data.try_reserve(size as usize).map_err(|_| ExofsError::NoMemory)?;
+                data.try_reserve(size as usize)
+                    .map_err(|_| ExofsError::NoMemory)?;
                 let mut remaining = size;
                 let mut db = 0u64;
                 // RECUR-01 : boucle while sur les blocs de données
@@ -426,21 +460,31 @@ impl TarParser {
                 let mut db = 0u64;
                 while db < blocks_needed {
                     let mut _skip = TarBlock::zero();
-                    if !src.read_block(&mut _skip)? { break; }
+                    if !src.read_block(&mut _skip)? {
+                        break;
+                    }
                     self.report.blocks_consumed = self.report.blocks_consumed.saturating_add(1);
                     db = db.wrapping_add(1);
                 }
             }
 
             entries.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-            entries.push(TarEntry { kind, name, size, mtime, data });
+            entries.push(TarEntry {
+                kind,
+                name,
+                size,
+                mtime,
+                data,
+            });
             self.report.entries_parsed = self.report.entries_parsed.saturating_add(1);
         }
 
         Ok(entries)
     }
 
-    pub fn report(&self) -> &TarParseReport { &self.report }
+    pub fn report(&self) -> &TarParseReport {
+        &self.report
+    }
 }
 
 // ─── Convertisseur tar → ExoAR ────────────────────────────────────────────────
@@ -455,7 +499,9 @@ pub struct TarToExoarResult {
 }
 
 impl TarToExoarResult {
-    pub fn has_errors(&self) -> bool { self.errors > 0 }
+    pub fn has_errors(&self) -> bool {
+        self.errors > 0
+    }
 }
 
 /// Convertit un flux tar en liste de (blob_id, data) utilisable par ExoarWriter.
@@ -466,14 +512,15 @@ pub struct TarToExoarConverter {
 }
 
 impl TarToExoarConverter {
-    pub fn new() -> Self { Self { result: TarToExoarResult::default() } }
+    pub fn new() -> Self {
+        Self {
+            result: TarToExoarResult::default(),
+        }
+    }
 
     /// Parse le flux tar et converti les entrées Regular en blobs.
     /// Retourne Vec<(blob_id, data)>.
-    pub fn convert<S: TarSource>(
-        &mut self,
-        src: &mut S,
-    ) -> ExofsResult<Vec<([u8; 32], Vec<u8>)>> {
+    pub fn convert<S: TarSource>(&mut self, src: &mut S) -> ExofsResult<Vec<([u8; 32], Vec<u8>)>> {
         let mut parser = TarParser::new();
         let entries = parser.parse_all(src)?;
         self.result.errors = self.result.errors.saturating_add(parser.report().errors);
@@ -488,7 +535,8 @@ impl TarToExoarConverter {
                 // RÈGLE 11 : blob_id = blake3(données brutes AVANT compression)
                 let blob_id = inline_blake3(&entry.data);
                 let mut data: Vec<u8> = Vec::new();
-                data.try_reserve(entry.data.len()).map_err(|_| ExofsError::NoMemory)?;
+                data.try_reserve(entry.data.len())
+                    .map_err(|_| ExofsError::NoMemory)?;
                 data.extend_from_slice(&entry.data);
                 blobs.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                 blobs.push((blob_id, data));
@@ -512,7 +560,11 @@ pub struct ExoarToTarConverter {
 }
 
 impl ExoarToTarConverter {
-    pub fn new() -> Self { Self { emitter: TarEmitter::new() } }
+    pub fn new() -> Self {
+        Self {
+            emitter: TarEmitter::new(),
+        }
+    }
 
     /// Convertit une liste de (blob_id, name, data) en flux tar.
     pub fn convert<S: TarSink>(
@@ -532,7 +584,9 @@ impl ExoarToTarConverter {
         Ok(())
     }
 
-    pub fn stats(&self) -> &TarEmitStats { self.emitter.stats() }
+    pub fn stats(&self) -> &TarEmitStats {
+        self.emitter.stats()
+    }
 }
 
 // ─── Implémentations de TarSink / TarSource sur Vec<u8> ──────────────────────
@@ -544,19 +598,32 @@ pub struct VecTarSink {
 }
 
 impl VecTarSink {
-    pub fn new() -> Self { Self { buf: Vec::new(), blocks: 0 } }
-    pub fn as_slice(&self) -> &[u8] { &self.buf }
-    pub fn len(&self) -> usize { self.buf.len() }
+    pub fn new() -> Self {
+        Self {
+            buf: Vec::new(),
+            blocks: 0,
+        }
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buf
+    }
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
 }
 
 impl TarSink for VecTarSink {
     fn write_block(&mut self, block: &TarBlock) -> ExofsResult<()> {
-        self.buf.try_reserve(TAR_BLOCK_SIZE).map_err(|_| ExofsError::NoMemory)?;
+        self.buf
+            .try_reserve(TAR_BLOCK_SIZE)
+            .map_err(|_| ExofsError::NoMemory)?;
         self.buf.extend_from_slice(&block.0);
         self.blocks = self.blocks.saturating_add(1);
         Ok(())
     }
-    fn blocks_written(&self) -> u64 { self.blocks }
+    fn blocks_written(&self) -> u64 {
+        self.blocks
+    }
 }
 
 /// TarSource depuis un slice.
@@ -567,7 +634,13 @@ pub struct SliceTarSource<'a> {
 }
 
 impl<'a> SliceTarSource<'a> {
-    pub fn new(data: &'a [u8]) -> Self { Self { data, pos: 0, blocks: 0 } }
+    pub fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            pos: 0,
+            blocks: 0,
+        }
+    }
 }
 
 impl<'a> TarSource for SliceTarSource<'a> {
@@ -575,12 +648,16 @@ impl<'a> TarSource for SliceTarSource<'a> {
         if self.pos.saturating_add(TAR_BLOCK_SIZE) > self.data.len() {
             return Ok(false);
         }
-        block.0.copy_from_slice(&self.data[self.pos..self.pos + TAR_BLOCK_SIZE]);
+        block
+            .0
+            .copy_from_slice(&self.data[self.pos..self.pos + TAR_BLOCK_SIZE]);
         self.pos = self.pos.wrapping_add(TAR_BLOCK_SIZE);
         self.blocks = self.blocks.saturating_add(1);
         Ok(true)
     }
-    fn blocks_read(&self) -> u64 { self.blocks }
+    fn blocks_read(&self) -> u64 {
+        self.blocks
+    }
 }
 
 // ─── Fonctions de checksum tar ────────────────────────────────────────────────
@@ -650,7 +727,9 @@ fn parse_octal8(buf: &[u8; 8]) -> u64 {
     let mut i = 0usize;
     while i < 8 {
         let b = buf[i];
-        if b < b'0' || b > b'7' { break; }
+        if b < b'0' || b > b'7' {
+            break;
+        }
         val = val.wrapping_mul(8).wrapping_add((b - b'0') as u64);
         i = i.wrapping_add(1);
     }
@@ -663,7 +742,9 @@ fn parse_octal12(buf: &[u8; 12]) -> u64 {
     let mut i = 0usize;
     while i < 12 {
         let b = buf[i];
-        if b < b'0' || b > b'7' { break; }
+        if b < b'0' || b > b'7' {
+            break;
+        }
         val = val.wrapping_mul(8).wrapping_add((b - b'0') as u64);
         i = i.wrapping_add(1);
     }
@@ -673,7 +754,9 @@ fn parse_octal12(buf: &[u8; 12]) -> u64 {
 /// Retourne la partie non-nulle d'un slice (name trimming).
 fn trim_nul(s: &[u8]) -> &[u8] {
     let mut end = s.len();
-    while end > 0 && s[end - 1] == 0 { end -= 1; }
+    while end > 0 && s[end - 1] == 0 {
+        end -= 1;
+    }
     &s[..end]
 }
 
@@ -688,8 +771,14 @@ fn array_ref512(s: &[u8]) -> &[u8; 512] {
 
 fn inline_blake3(data: &[u8]) -> [u8; 32] {
     let mut state = [
-        0x6b08_c647u32, 0xbb67_ae85, 0x3c6e_f372, 0xa54f_f53a,
-        0x510e_527f, 0x9b05_688c, 0x1f83_d9ab, 0x5be0_cd19,
+        0x6b08_c647u32,
+        0xbb67_ae85,
+        0x3c6e_f372,
+        0xa54f_f53a,
+        0x510e_527f,
+        0x9b05_688c,
+        0x1f83_d9ab,
+        0x5be0_cd19,
     ];
     let mut i = 0usize;
     while i < data.len() {
@@ -782,7 +871,9 @@ mod tests {
         let mut emitter = TarEmitter::new();
         let data = b"hello world tar";
         let bid = inline_blake3(data);
-        emitter.emit_blob(&mut sink, &bid, data, b"hello.txt", 0).expect("emit ok");
+        emitter
+            .emit_blob(&mut sink, &bid, data, b"hello.txt", 0)
+            .expect("emit ok");
         emitter.finalize(&mut sink).expect("finalize ok");
 
         let mut src = SliceTarSource::new(sink.as_slice());
@@ -801,7 +892,9 @@ mod tests {
             let data = [i; 512];
             let bid = inline_blake3(&data);
             let name = [b'a' + i, b'.', b'b', b'i', b'n'];
-            emitter.emit_blob(&mut sink, &bid, &data, &name, 0).expect("emit ok");
+            emitter
+                .emit_blob(&mut sink, &bid, &data, &name, 0)
+                .expect("emit ok");
         }
         emitter.finalize(&mut sink).expect("finalize ok");
 
@@ -815,7 +908,9 @@ mod tests {
     fn test_tar_directory_emit_parse() {
         let mut sink = VecTarSink::new();
         let mut emitter = TarEmitter::new();
-        emitter.emit_directory(&mut sink, b"mydir/", 999).expect("dir ok");
+        emitter
+            .emit_directory(&mut sink, b"mydir/", 999)
+            .expect("dir ok");
         emitter.finalize(&mut sink).expect("finalize ok");
 
         let mut src = SliceTarSource::new(sink.as_slice());
@@ -831,7 +926,9 @@ mod tests {
         let mut emitter = TarEmitter::new();
         let data = b"blob data to convert";
         let bid = inline_blake3(data);
-        emitter.emit_blob(&mut sink, &bid, data, b"blob.bin", 0).expect("ok");
+        emitter
+            .emit_blob(&mut sink, &bid, data, b"blob.bin", 0)
+            .expect("ok");
         emitter.finalize(&mut sink).expect("ok");
 
         let mut src = SliceTarSource::new(sink.as_slice());

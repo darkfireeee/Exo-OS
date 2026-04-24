@@ -5,15 +5,14 @@
 //! RECUR-01 : while, pas de for.
 //! OOM-02   : try_reserve avant push.
 
-use alloc::vec::Vec;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::fs::exofs::core::types::BlobId;
+use super::object_fd::{open_flags, OBJECT_TABLE};
 use super::validation::{
-    read_user_path_heap, exofs_err_to_errno,
-    validate_open_flags,
-    verify_cap, CapabilityType, EFAULT,
+    exofs_err_to_errno, read_user_path_heap, validate_open_flags, verify_cap, CapabilityType,
+    EFAULT,
 };
-use super::object_fd::{OBJECT_TABLE, open_flags};
+use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Arguments userspace
@@ -26,11 +25,11 @@ use super::object_fd::{OBJECT_TABLE, open_flags};
 #[derive(Clone, Copy, Debug)]
 pub struct OpenArgs {
     /// Flags d'ouverture (O_RDONLY, O_RDWR, O_CREAT, …).
-    pub flags:     u32,
+    pub flags: u32,
     /// Permissions POSIX de création (si O_CREAT actif).
-    pub mode:      u32,
+    pub mode: u32,
     /// Epoch explicite à ouvrir (0 = epoch courante).
-    pub epoch_id:  u64,
+    pub epoch_id: u64,
     /// Owner UID de l'appelant.
     pub owner_uid: u64,
     /// Taille attendue (hint au kernel, 0 = inconnue).
@@ -44,9 +43,9 @@ const _: () = assert!(core::mem::size_of::<OpenArgs>() == 48);
 impl OpenArgs {
     fn defaults() -> Self {
         Self {
-            flags:     open_flags::O_RDONLY,
-            mode:      0o644,
-            epoch_id:  0,
+            flags: open_flags::O_RDONLY,
+            mode: 0o644,
+            epoch_id: 0,
             owner_uid: 0,
             size_hint: 0,
             _reserved: [0u64; 2],
@@ -61,11 +60,7 @@ impl OpenArgs {
 /// Ouvre un objet ExoFS identifié par son chemin.
 ///
 /// Retourne le fd (u32) ou une ExofsError.
-fn open_object(
-    path_bytes: &[u8],
-    path_len:   usize,
-    args:       &OpenArgs,
-) -> ExofsResult<u32> {
+fn open_object(path_bytes: &[u8], path_len: usize, args: &OpenArgs) -> ExofsResult<u32> {
     // Valider les flags.
     if args.flags & !0x07FF != 0 {
         return Err(ExofsError::InvalidArgument);
@@ -95,10 +90,7 @@ fn read_open_args(args_ptr: u64, flags_fallback: u32) -> Result<OpenArgs, i64> {
     // RÈGLE 9 : copy_from_user pour structure userspace.
     let _a = OpenArgs::defaults();
     // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-    unsafe {
-        super::validation::copy_struct_from_user::<OpenArgs>(args_ptr)
-            .map_err(|_| EFAULT)
-    }
+    unsafe { super::validation::copy_struct_from_user::<OpenArgs>(args_ptr).map_err(|_| EFAULT) }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -114,26 +106,28 @@ fn read_open_args(args_ptr: u64, flags_fallback: u32) -> Result<OpenArgs, i64> {
 /// - `args_ptr`   : pointeur optionnel vers `OpenArgs` (0 = valeurs par défaut).
 /// - Retourne     : fd (≥ 4) en cas de succès, errno négatif sinon.
 pub fn sys_exofs_object_open(
-    path_ptr:   u64,
-    _path_len:   u64,
-    flags:      u64,
+    path_ptr: u64,
+    _path_len: u64,
+    flags: u64,
     out_fd_ptr: u64,
-    args_ptr:   u64,
+    args_ptr: u64,
     cap_rights: u64,
 ) -> i64 {
     // 1. Validation de base.
-    if path_ptr == 0 { return EFAULT; }
+    if path_ptr == 0 {
+        return EFAULT;
+    }
 
     // 2. Lire le chemin (heap, RÈGLE 10).
     let mut path_buf: Vec<u8> = Vec::new();
     let actual_len = match read_user_path_heap(path_ptr, &mut path_buf) {
-        Ok(l)  => l,
+        Ok(l) => l,
         Err(e) => return e,
     };
 
     // 3. Lire les OpenArgs.
     let open_args = match read_open_args(args_ptr, flags as u32) {
-        Ok(a)  => a,
+        Ok(a) => a,
         Err(e) => return e,
     };
 
@@ -199,7 +193,10 @@ mod tests {
 
     #[test]
     fn test_open_rdonly_default_args() {
-        let args = OpenArgs { flags: open_flags::O_RDONLY, ..OpenArgs::defaults() };
+        let args = OpenArgs {
+            flags: open_flags::O_RDONLY,
+            ..OpenArgs::defaults()
+        };
         let path = make_path("/test/file1");
         let fd = open_object(&path, path.len() - 1, &args).unwrap();
         assert!(fd >= super::super::object_fd::FD_RESERVED);
@@ -208,7 +205,10 @@ mod tests {
 
     #[test]
     fn test_open_rdwr() {
-        let args = OpenArgs { flags: open_flags::O_RDWR, ..OpenArgs::defaults() };
+        let args = OpenArgs {
+            flags: open_flags::O_RDWR,
+            ..OpenArgs::defaults()
+        };
         let path = make_path("/test/rw");
         let fd = open_object(&path, path.len() - 1, &args).unwrap();
         assert!(OBJECT_TABLE.check_readable(fd).is_ok());
@@ -218,7 +218,10 @@ mod tests {
 
     #[test]
     fn test_open_wronly() {
-        let args = OpenArgs { flags: open_flags::O_WRONLY, ..OpenArgs::defaults() };
+        let args = OpenArgs {
+            flags: open_flags::O_WRONLY,
+            ..OpenArgs::defaults()
+        };
         let path = make_path("/w/only");
         let fd = open_object(&path, path.len() - 1, &args).unwrap();
         assert!(OBJECT_TABLE.check_readable(fd).is_err());
@@ -228,7 +231,10 @@ mod tests {
 
     #[test]
     fn test_open_bad_flags_rejected() {
-        let args = OpenArgs { flags: 0xDEAD_BEEF, ..OpenArgs::defaults() };
+        let args = OpenArgs {
+            flags: 0xDEAD_BEEF,
+            ..OpenArgs::defaults()
+        };
         let path = make_path("/bad");
         assert!(open_object(&path, path.len() - 1, &args).is_err());
     }
@@ -266,7 +272,11 @@ mod tests {
 
     #[test]
     fn test_open_with_size_hint() {
-        let args = OpenArgs { flags: open_flags::O_RDONLY, size_hint: 4096, ..OpenArgs::defaults() };
+        let args = OpenArgs {
+            flags: open_flags::O_RDONLY,
+            size_hint: 4096,
+            ..OpenArgs::defaults()
+        };
         let path = make_path("/sized/blob");
         let fd = open_object(&path, path.len() - 1, &args).unwrap();
         let entry = OBJECT_TABLE.get(fd).unwrap();
@@ -276,7 +286,11 @@ mod tests {
 
     #[test]
     fn test_open_with_epoch_id() {
-        let args = OpenArgs { flags: open_flags::O_RDONLY, epoch_id: 42, ..OpenArgs::defaults() };
+        let args = OpenArgs {
+            flags: open_flags::O_RDONLY,
+            epoch_id: 42,
+            ..OpenArgs::defaults()
+        };
         let path = make_path("/epoch/42");
         let fd = open_object(&path, path.len() - 1, &args).unwrap();
         let entry = OBJECT_TABLE.get(fd).unwrap();
@@ -323,19 +337,19 @@ mod tests {
 #[derive(Clone, Copy, Debug)]
 pub struct OpenResult {
     /// Numéro de fd attribué.
-    pub fd:        u32,
+    pub fd: u32,
     /// Padding.
-    pub _pad:      u32,
+    pub _pad: u32,
     /// BlobId de l'objet (32 octets).
-    pub blob_id:   [u8; 32],
+    pub blob_id: [u8; 32],
     /// Taille actuelle de l'objet en octets.
-    pub size:      u64,
+    pub size: u64,
     /// Epoch au moment de l'ouverture.
-    pub epoch_id:  u64,
+    pub epoch_id: u64,
     /// Flags effectivement appliqués.
-    pub flags:     u32,
+    pub flags: u32,
     /// Padding.
-    pub _pad2:     u32,
+    pub _pad2: u32,
     /// Réservé pour extensions ABI futures.
     pub _reserved: [u8; 8],
 }
@@ -348,20 +362,28 @@ const _: () = assert!(
 /// Ouvre un fd et remplit un `OpenResult`.
 pub fn open_object_full(
     path_bytes: &[u8],
-    path_len:   usize,
-    args:       &OpenArgs,
+    path_len: usize,
+    args: &OpenArgs,
 ) -> ExofsResult<OpenResult> {
-    if args.flags & !0x07FF != 0 { return Err(ExofsError::InvalidArgument); }
+    if args.flags & !0x07FF != 0 {
+        return Err(ExofsError::InvalidArgument);
+    }
     let blob_id = BlobId::from_bytes_blake3(&path_bytes[..path_len]);
-    let fd = OBJECT_TABLE.open(blob_id, args.flags, args.size_hint, args.epoch_id, args.owner_uid)?;
+    let fd = OBJECT_TABLE.open(
+        blob_id,
+        args.flags,
+        args.size_hint,
+        args.epoch_id,
+        args.owner_uid,
+    )?;
     Ok(OpenResult {
         fd,
-        _pad:    0,
+        _pad: 0,
         blob_id: *blob_id.as_bytes(),
-        size:    args.size_hint,
-        epoch_id:args.epoch_id,
-        flags:   args.flags,
-        _pad2:   0,
+        size: args.size_hint,
+        epoch_id: args.epoch_id,
+        flags: args.flags,
+        _pad2: 0,
         _reserved: [0u8; 8],
     })
 }
@@ -371,8 +393,20 @@ pub fn open_object_full(
 /// `access` : 0 = lecture, 1 = écriture, 2 = les deux.
 pub fn check_access_flags(flags: u32, access: u8) -> ExofsResult<()> {
     match access {
-        0 => if !open_flags::can_read(flags)  { Err(ExofsError::PermissionDenied) } else { Ok(()) },
-        1 => if !open_flags::can_write(flags) { Err(ExofsError::PermissionDenied) } else { Ok(()) },
+        0 => {
+            if !open_flags::can_read(flags) {
+                Err(ExofsError::PermissionDenied)
+            } else {
+                Ok(())
+            }
+        }
+        1 => {
+            if !open_flags::can_write(flags) {
+                Err(ExofsError::PermissionDenied)
+            } else {
+                Ok(())
+            }
+        }
         2 => {
             if !open_flags::can_read(flags) || !open_flags::can_write(flags) {
                 Err(ExofsError::PermissionDenied)
@@ -409,7 +443,11 @@ mod tests_extended {
 
     #[test]
     fn test_open_object_full_ok() {
-        let args = OpenArgs { flags: open_flags::O_RDWR, size_hint: 512, ..OpenArgs::defaults() };
+        let args = OpenArgs {
+            flags: open_flags::O_RDWR,
+            size_hint: 512,
+            ..OpenArgs::defaults()
+        };
         let path = b"/full/result";
         let r = open_object_full(path, path.len(), &args).unwrap();
         assert!(r.fd >= super::super::object_fd::FD_RESERVED);
@@ -459,7 +497,10 @@ mod tests_extended {
 
     #[test]
     fn test_open_object_full_bad_flags() {
-        let args = OpenArgs { flags: 0xDEAD_CAFE, ..OpenArgs::defaults() };
+        let args = OpenArgs {
+            flags: 0xDEAD_CAFE,
+            ..OpenArgs::defaults()
+        };
         let path = b"/bad/flags";
         assert!(open_object_full(path, path.len(), &args).is_err());
     }

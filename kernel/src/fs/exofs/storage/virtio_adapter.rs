@@ -1,6 +1,6 @@
-use exo_virtio_blk::ExoVirtioBlkDevice;
-use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
 use crate::fs::exofs::core::ExofsResult;
+use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
+use exo_virtio_blk::ExoVirtioBlkDevice;
 use spin::Mutex;
 
 pub struct VirtioBlockAdapter {
@@ -18,12 +18,14 @@ impl VirtioBlockAdapter {
 impl BlockDevice for VirtioBlockAdapter {
     fn read_block(&self, lba: u64, buf: &mut [u8]) -> ExofsResult<()> {
         let dev = self.device.lock();
-        dev.read_block(lba, buf).map_err(|_| crate::fs::exofs::core::error::ExofsError::IoError)
+        dev.read_block(lba, buf)
+            .map_err(|_| crate::fs::exofs::core::error::ExofsError::IoError)
     }
 
     fn write_block(&self, lba: u64, buf: &[u8]) -> ExofsResult<()> {
         let dev = self.device.lock();
-        dev.write_block(lba, buf).map_err(|_| crate::fs::exofs::core::error::ExofsError::IoError)
+        dev.write_block(lba, buf)
+            .map_err(|_| crate::fs::exofs::core::error::ExofsError::IoError)
     }
 
     fn block_size(&self) -> u32 {

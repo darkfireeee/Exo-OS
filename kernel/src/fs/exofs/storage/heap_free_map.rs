@@ -13,8 +13,8 @@
 // - ARITH-02 : checked_add pour les index de blocs.
 // - LOCK-04  : la carte est protégée par SpinLock à l'extérieur (dans HeapAllocator).
 
-use alloc::vec::Vec;
 use crate::fs::exofs::core::ExofsError;
+use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -33,7 +33,7 @@ pub struct FreeRun {
     /// Index du premier bloc (inclusif).
     pub start: u64,
     /// Nombre de blocs dans le run.
-    pub len:   u64,
+    pub len: u64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -49,13 +49,13 @@ pub struct FreeRun {
 /// pour ne jamais être sélectionnés comme libres.
 pub struct HeapFreeMap {
     /// Tableau de mots bitmap (u64 → 64 blocs).
-    bits:         Vec<u64>,
+    bits: Vec<u64>,
     /// Nombre total de blocs représentés.
     total_blocks: u64,
     /// Nombre de blocs libres (mise à jour à chaque mark_used/mark_free).
-    free_count:   u64,
+    free_count: u64,
     /// Plus haut bloc utilisé connu (approximatif — optimisation du scan).
-    high_water:   u64,
+    high_water: u64,
 }
 
 impl HeapFreeMap {
@@ -70,14 +70,15 @@ impl HeapFreeMap {
         }
         let n_words = words_for_blocks(total_blocks);
         let mut bits: Vec<u64> = Vec::new();
-        bits.try_reserve(n_words).map_err(|_| ExofsError::NoMemory)?;
+        bits.try_reserve(n_words)
+            .map_err(|_| ExofsError::NoMemory)?;
         bits.resize(n_words, 0u64);
 
         // Masquer les bits au-delà de total_blocks dans le dernier mot.
         let rem = total_blocks % BLOCKS_PER_WORD;
         if rem != 0 && n_words > 0 {
             let last_valid_mask = (1u64 << rem) - 1;
-            bits[n_words - 1] = !last_valid_mask;   // bits au-delà = 1 (occupé)
+            bits[n_words - 1] = !last_valid_mask; // bits au-delà = 1 (occupé)
         }
 
         Ok(Self {
@@ -97,8 +98,9 @@ impl HeapFreeMap {
         }
         let n_words = words_for_blocks(total_blocks);
         let mut bits: Vec<u64> = Vec::new();
-        bits.try_reserve(n_words).map_err(|_| ExofsError::NoMemory)?;
-        bits.resize(n_words, u64::MAX);   // tous occupés
+        bits.try_reserve(n_words)
+            .map_err(|_| ExofsError::NoMemory)?;
+        bits.resize(n_words, u64::MAX); // tous occupés
 
         Ok(Self {
             bits,
@@ -113,7 +115,9 @@ impl HeapFreeMap {
     /// Retourne `true` si le bloc `block` est libre.
     #[inline]
     pub fn is_free(&self, block: u64) -> bool {
-        if block >= self.total_blocks { return false; }
+        if block >= self.total_blocks {
+            return false;
+        }
         let (word, bit) = word_bit(block);
         (self.bits[word] >> bit) & 1 == 0
     }
@@ -144,7 +148,9 @@ impl HeapFreeMap {
 
     /// Ratio d'utilisation en pourcentage (0..=100).
     pub fn used_pct(&self) -> u64 {
-        if self.total_blocks == 0 { return 0; }
+        if self.total_blocks == 0 {
+            return 0;
+        }
         (self.used_blocks() as u128 * 100 / self.total_blocks as u128) as u64
     }
 
@@ -156,12 +162,14 @@ impl HeapFreeMap {
     ///
     /// # Règle ARITH-02 : checked_add pour run_len.
     pub fn find_free_run(&self, n: u64) -> Option<u64> {
-        if n == 0 || n > self.free_count { return None; }
+        if n == 0 || n > self.free_count {
+            return None;
+        }
 
         let mut run_start: u64 = 0;
-        let mut run_len:   u64 = 0;
+        let mut run_len: u64 = 0;
 
-        let n_words  = self.bits.len();
+        let n_words = self.bits.len();
         let mut word_idx = 0;
 
         while word_idx < n_words {
@@ -169,7 +177,7 @@ impl HeapFreeMap {
 
             // Optimisation : si le mot entier est plein, saute-le.
             if word == u64::MAX {
-                run_len   = 0;
+                run_len = 0;
                 word_idx += 1;
                 continue;
             }
@@ -180,13 +188,19 @@ impl HeapFreeMap {
                     .checked_mul(BLOCKS_PER_WORD)
                     .and_then(|w| w.checked_add(bit))?;
 
-                if block >= self.total_blocks { return None; }
+                if block >= self.total_blocks {
+                    return None;
+                }
 
                 if (word >> bit) & 1 == 0 {
                     // Bloc libre.
-                    if run_len == 0 { run_start = block; }
+                    if run_len == 0 {
+                        run_start = block;
+                    }
                     run_len = run_len.checked_add(1)?;
-                    if run_len >= n { return Some(run_start); }
+                    if run_len >= n {
+                        return Some(run_start);
+                    }
                 } else {
                     // Bloc occupé — réinitialise le run.
                     run_len = 0;
@@ -216,13 +230,17 @@ impl HeapFreeMap {
     /// Cherche un run de `n` blocs libres en partant de `start_block`.
     fn find_free_run_from(&self, n: u64, start_block: u64) -> Option<u64> {
         let mut run_start = 0u64;
-        let mut run_len   = 0u64;
+        let mut run_len = 0u64;
 
         for block in start_block..self.total_blocks {
             if self.is_free(block) {
-                if run_len == 0 { run_start = block; }
+                if run_len == 0 {
+                    run_start = block;
+                }
                 run_len = run_len.checked_add(1)?;
-                if run_len >= n { return Some(run_start); }
+                if run_len >= n {
+                    return Some(run_start);
+                }
             } else {
                 run_len = 0;
             }
@@ -244,7 +262,7 @@ impl HeapFreeMap {
             if self.bits[word] & (1 << bit) == 0 {
                 // Était libre → marquer occupé.
                 self.bits[word] |= 1 << bit;
-                self.free_count  = self.free_count.saturating_sub(1);
+                self.free_count = self.free_count.saturating_sub(1);
             }
             marked = marked.saturating_add(1);
 
@@ -268,7 +286,7 @@ impl HeapFreeMap {
             if self.bits[word] & (1 << bit) != 0 {
                 // Était occupé → marquer libre.
                 self.bits[word] &= !(1 << bit);
-                self.free_count  = self.free_count.saturating_add(1);
+                self.free_count = self.free_count.saturating_add(1);
             }
             freed = freed.saturating_add(1);
         }
@@ -293,18 +311,21 @@ impl HeapFreeMap {
     pub fn free_runs(&self) -> Result<Vec<FreeRun>, ExofsError> {
         let mut runs: Vec<FreeRun> = Vec::new();
         let mut run_start = 0u64;
-        let mut in_run    = false;
+        let mut in_run = false;
 
         for block in 0..self.total_blocks {
             if self.is_free(block) {
                 if !in_run {
                     run_start = block;
-                    in_run    = true;
+                    in_run = true;
                 }
             } else if in_run {
                 let len = block - run_start;
                 runs.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-                runs.push(FreeRun { start: run_start, len });
+                runs.push(FreeRun {
+                    start: run_start,
+                    len,
+                });
                 in_run = false;
             }
         }
@@ -314,7 +335,7 @@ impl HeapFreeMap {
             runs.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             runs.push(FreeRun {
                 start: run_start,
-                len:   self.total_blocks - run_start,
+                len: self.total_blocks - run_start,
             });
         }
         Ok(runs)
@@ -322,12 +343,15 @@ impl HeapFreeMap {
 
     /// Nombre de runs libres (utile pour mesurer la fragmentation).
     pub fn free_run_count(&self) -> u64 {
-        let mut count  = 0u64;
+        let mut count = 0u64;
         let mut in_run = false;
 
         for block in 0..self.total_blocks {
             if self.is_free(block) {
-                if !in_run { count += 1; in_run = true; }
+                if !in_run {
+                    count += 1;
+                    in_run = true;
+                }
             } else {
                 in_run = false;
             }
@@ -337,13 +361,15 @@ impl HeapFreeMap {
 
     /// Longueur du plus grand run libre.
     pub fn largest_free_run(&self) -> u64 {
-        let mut max_len   = 0u64;
-        let mut run_len   = 0u64;
+        let mut max_len = 0u64;
+        let mut run_len = 0u64;
 
         for block in 0..self.total_blocks {
             if self.is_free(block) {
                 run_len += 1;
-                if run_len > max_len { max_len = run_len; }
+                if run_len > max_len {
+                    max_len = run_len;
+                }
             } else {
                 run_len = 0;
             }
@@ -353,9 +379,13 @@ impl HeapFreeMap {
 
     /// Taux de fragmentation : 0 = compact, 100 = très fragmenté.
     pub fn fragmentation_pct(&self) -> u8 {
-        if self.free_count == 0 { return 0; }
+        if self.free_count == 0 {
+            return 0;
+        }
         let runs = self.free_run_count();
-        if runs <= 1 { return 0; }
+        if runs <= 1 {
+            return 0;
+        }
         // Fragmentation = (runs - 1) / free_count × 100.
         (((runs.saturating_sub(1)) as u128 * 100) / self.free_count as u128).min(100) as u8
     }
@@ -456,14 +486,14 @@ mod tests {
         // total_blocks = 65 → 2 mots (128 bits) → bits 65..127 = 1 (occupé).
         assert!(m.is_free(0));
         assert!(m.is_free(64));
-        assert!(!m.is_free(65));   // hors bornes → false
+        assert!(!m.is_free(65)); // hors bornes → false
     }
 
     #[test]
     fn test_largest_free_run() {
         let mut m = HeapFreeMap::new(20).unwrap();
-        m.mark_used(5, 5);   // blocs 5..9 occupés
-        // Deux runs libres : [0..4] (5 blocs) et [10..19] (10 blocs).
+        m.mark_used(5, 5); // blocs 5..9 occupés
+                           // Deux runs libres : [0..4] (5 blocs) et [10..19] (10 blocs).
         assert_eq!(m.largest_free_run(), 10);
     }
 }

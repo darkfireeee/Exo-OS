@@ -17,9 +17,8 @@
 //! gs:[0x40]  = *   — réservé (futur)
 //! ```
 
-
-use core::sync::atomic::{AtomicU32, Ordering};
 use crate::arch::x86_64::cpu::msr;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 pub const MAX_CPUS: usize = 256;
 
@@ -41,18 +40,18 @@ pub fn cpu_count() -> u32 {
 #[repr(C, align(64))]
 pub struct PerCpuData {
     // Champs accédés depuis l'ASM — offsets FIXES (voir module doc)
-    pub kernel_rsp:    u64,   // 0x00
-    pub user_rsp:      u64,   // 0x08
-    pub cpu_id:        u64,   // 0x10
-    pub lapic_id:      u64,   // 0x18
-    pub current_tcb:   u64,   // 0x20 (pointeur opaque, cast vers TCB extern)
-    pub idle_rsp:      u64,   // 0x28
-    pub preempt_count: u64,   // 0x30
-    pub irq_depth:     u64,   // 0x38
+    pub kernel_rsp: u64,    // 0x00
+    pub user_rsp: u64,      // 0x08
+    pub cpu_id: u64,        // 0x10
+    pub lapic_id: u64,      // 0x18
+    pub current_tcb: u64,   // 0x20 (pointeur opaque, cast vers TCB extern)
+    pub idle_rsp: u64,      // 0x28
+    pub preempt_count: u64, // 0x30
+    pub irq_depth: u64,     // 0x38
 
     // Données Rust (offsets non contraints par l'ASM)
-    pub online:        bool,
-    pub bsp:           bool,
+    pub online: bool,
+    pub bsp: bool,
     pub nmi_in_progress: bool,
 
     /// Compteur de context switches sur ce CPU
@@ -62,7 +61,7 @@ pub struct PerCpuData {
     /// Horodatage TSC du dernier context switch
     pub last_switch_tsc: u64,
     /// Horodatage TSC du dernier tick timer
-    pub last_tick_tsc:   u64,
+    pub last_tick_tsc: u64,
 
     _pad: [u8; 0], // garantit l'alignement 64
 }
@@ -71,11 +70,21 @@ impl PerCpuData {
     #[allow(dead_code)]
     const fn zeroed() -> Self {
         Self {
-            kernel_rsp: 0, user_rsp: 0, cpu_id: 0, lapic_id: 0,
-            current_tcb: 0, idle_rsp: 0, preempt_count: 0, irq_depth: 0,
-            online: false, bsp: false, nmi_in_progress: false,
-            ctx_switch_count: 0, irq_counts: [0u64; 256],
-            last_switch_tsc: 0, last_tick_tsc: 0,
+            kernel_rsp: 0,
+            user_rsp: 0,
+            cpu_id: 0,
+            lapic_id: 0,
+            current_tcb: 0,
+            idle_rsp: 0,
+            preempt_count: 0,
+            irq_depth: 0,
+            online: false,
+            bsp: false,
+            nmi_in_progress: false,
+            ctx_switch_count: 0,
+            irq_counts: [0u64; 256],
+            last_switch_tsc: 0,
+            last_tick_tsc: 0,
             _pad: [],
         }
     }
@@ -95,7 +104,7 @@ unsafe impl Sync for PerCpuTable {}
 
 static PER_CPU_TABLE: PerCpuTable = PerCpuTable(
     // SAFETY: [0u8; size_of::<[PerCpuData; MAX_CPUS]>] valide pour #[repr(C,align(64))] zeros-init.
-    unsafe { core::mem::transmute([0u8; core::mem::size_of::<[PerCpuData; MAX_CPUS]>()]) }
+    unsafe { core::mem::transmute([0u8; core::mem::size_of::<[PerCpuData; MAX_CPUS]>()]) },
 );
 
 // ── Accès par CPU ID ──────────────────────────────────────────────────────────
@@ -127,7 +136,9 @@ pub unsafe fn per_cpu_mut(cpu_id: usize) -> &'static mut PerCpuData {
 pub fn current_cpu_id() -> u32 {
     let id: u64;
     // SAFETY: GS:[0x10] est initialisé lors de l'init percpu de ce CPU
-    unsafe { core::arch::asm!("mov {}, gs:[0x10]", out(reg) id, options(nostack, nomem)); }
+    unsafe {
+        core::arch::asm!("mov {}, gs:[0x10]", out(reg) id, options(nostack, nomem));
+    }
     id as u32
 }
 
@@ -229,22 +240,29 @@ pub unsafe fn read_kernel_rsp() -> u64 {
 pub fn init_percpu_for_bsp(kernel_stack_top: u64, lapic_id: u32) {
     // SAFETY: accès exclusif au CPU 0 lors du boot (APs pas encore démarrés)
     let data = unsafe { per_cpu_mut(0) };
-    data.cpu_id    = 0;
-    data.lapic_id  = lapic_id as u64;
+    data.cpu_id = 0;
+    data.lapic_id = lapic_id as u64;
     // NOTE P1-5: initialisation du thread de boot uniquement.
     // Après le premier context switch, `set_kernel_rsp()` maintient
     // l'invariant gs:[0x00] == pile kernel du thread courant.
     data.kernel_rsp = kernel_stack_top;
-    data.online    = true;
-    data.bsp       = true;
+    data.online = true;
+    data.bsp = true;
 
     // Pointer GS_BASE vers cette structure
     let addr = data as *const PerCpuData as u64;
     // SAFETY: MSR_GS_BASE write depuis Ring 0
-    unsafe { msr::write_msr(msr::MSR_GS_BASE, addr); }
-    // MSR_KERNEL_GS_BASE = même adresse (SWAPGS échange les deux)
+    unsafe {
+        msr::write_msr(msr::MSR_GS_BASE, addr);
+    }
+    // MSR_KERNEL_GS_BASE contient le GS userspace "shadow".
+    // Au boot il n'existe pas encore de TLS userspace valide, donc la valeur
+    // initiale doit rester nulle et surtout pas pointer vers la zone per-CPU.
     // SAFETY: MSR_KERNEL_GS_BASE write
-    unsafe { msr::write_msr(msr::MSR_KERNEL_GS_BASE, addr); }
+    unsafe {
+        msr::write_msr(msr::MSR_KERNEL_GS_BASE, 0);
+    }
+    crate::arch::x86_64::memory_barrier();
 
     ONLINE_CPU_COUNT.fetch_add(1, Ordering::Release);
 }
@@ -253,23 +271,26 @@ pub fn init_percpu_for_bsp(kernel_stack_top: u64, lapic_id: u32) {
 ///
 /// Appelé depuis le trampoline AP, avant l'activation du scheduler.
 pub fn init_percpu_for_ap(cpu_id: u32, kernel_stack_top: u64, lapic_id: u32) {
-    if cpu_id as usize >= MAX_CPUS { return; }
+    if cpu_id as usize >= MAX_CPUS {
+        return;
+    }
     // SAFETY: cpu_id unique, AP initialise ses propres données
     let data = unsafe { per_cpu_mut(cpu_id as usize) };
-    data.cpu_id    = cpu_id as u64;
-    data.lapic_id  = lapic_id as u64;
+    data.cpu_id = cpu_id as u64;
+    data.lapic_id = lapic_id as u64;
     // NOTE P1-5: valeur initiale pour le thread AP d'amorçage.
     // Le scheduler rafraîchit ensuite ce slot via `set_kernel_rsp()`.
     data.kernel_rsp = kernel_stack_top;
-    data.online    = true;
-    data.bsp       = false;
+    data.online = true;
+    data.bsp = false;
 
     let addr = data as *const PerCpuData as u64;
     // SAFETY: MSR writes depuis Ring 0 sur l'AP courant
     unsafe {
         msr::write_msr(msr::MSR_GS_BASE, addr);
-        msr::write_msr(msr::MSR_KERNEL_GS_BASE, addr);
+        msr::write_msr(msr::MSR_KERNEL_GS_BASE, 0);
     }
+    crate::arch::x86_64::memory_barrier();
 
     ONLINE_CPU_COUNT.fetch_add(1, Ordering::Release);
 }
@@ -280,14 +301,18 @@ pub fn init_percpu_for_ap(cpu_id: u32, kernel_stack_top: u64, lapic_id: u32) {
 #[inline]
 pub fn preempt_disable() {
     // SAFETY: accès GS:[0x30] depuis Ring 0, non-réentrant par construction
-    unsafe { core::arch::asm!("addq $1, gs:[0x30]", options(nostack)); }
+    unsafe {
+        core::arch::asm!("addq $1, gs:[0x30]", options(nostack));
+    }
 }
 
 /// Active la préemption (décrémente preempt_count)
 #[inline]
 pub fn preempt_enable() {
     // SAFETY: accès GS:[0x30] depuis Ring 0
-    unsafe { core::arch::asm!("subq $1, gs:[0x30]", options(nostack)); }
+    unsafe {
+        core::arch::asm!("subq $1, gs:[0x30]", options(nostack));
+    }
 }
 
 /// Retourne `true` si la préemption est désactivée sur le CPU courant
@@ -295,7 +320,9 @@ pub fn preempt_enable() {
 pub fn preempt_is_disabled() -> bool {
     let count: u64;
     // SAFETY: lecture GS:[0x30]
-    unsafe { core::arch::asm!("mov {}, gs:[0x30]", out(reg) count, options(nostack, nomem)); }
+    unsafe {
+        core::arch::asm!("mov {}, gs:[0x30]", out(reg) count, options(nostack, nomem));
+    }
     count != 0
 }
 

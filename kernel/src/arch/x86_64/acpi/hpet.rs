@@ -11,9 +11,8 @@
 //! - 0x0F0 : MAIN_CTR — compteur principal 64 bits
 //! - 0x100+N*0x20 : Timer N comparateurs
 
-
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::arch::x86_64::memory_iface::KERNEL_FAULT_ALLOC;
 use crate::memory::core::{fixmap_slot_addr, Frame, PageFlags, PhysAddr, FIXMAP_HPET};
@@ -23,41 +22,41 @@ use crate::memory::virt::address_space::tlb;
 // ── Offsets registres HPET ────────────────────────────────────────────────────
 
 #[allow(dead_code)]
-const HPET_GCAP_ID:   u64 = 0x000; // capabilities (64 bits)
-const HPET_GEN_CFG:   u64 = 0x010; // config globale (64 bits)
+const HPET_GCAP_ID: u64 = 0x000; // capabilities (64 bits)
+const HPET_GEN_CFG: u64 = 0x010; // config globale (64 bits)
 #[allow(dead_code)]
 const HPET_GINTR_STA: u64 = 0x020; // interrupt status
-const HPET_MAIN_CTR:  u64 = 0x0F0; // compteur principal (64 bits)
+const HPET_MAIN_CTR: u64 = 0x0F0; // compteur principal (64 bits)
 #[allow(dead_code)]
-const HPET_T0_CFG:    u64 = 0x100; // Timer 0 config (64 bits)
+const HPET_T0_CFG: u64 = 0x100; // Timer 0 config (64 bits)
 #[allow(dead_code)]
-const HPET_T0_CMP:    u64 = 0x108; // Timer 0 comparateur (64 bits)
+const HPET_T0_CMP: u64 = 0x108; // Timer 0 comparateur (64 bits)
 
 // Bits GEN_CFG
-const HPET_ENABLE:    u64 = 1 << 0;
+const HPET_ENABLE: u64 = 1 << 0;
 #[allow(dead_code)]
-const HPET_LEG_RT:    u64 = 1 << 1; // Legacy Replacement Mapping
+const HPET_LEG_RT: u64 = 1 << 1; // Legacy Replacement Mapping
 
 // GCAP_ID champs
-const HPET_CLK_PERIOD_SHIFT: u32 = 32;  // bits 63:32 = période en femtosecondes
+const HPET_CLK_PERIOD_SHIFT: u32 = 32; // bits 63:32 = période en femtosecondes
 #[allow(dead_code)]
-const HPET_NUM_TIMERS_SHIFT: u32 = 8;   // bits 12:8 = nombre de timers - 1
+const HPET_NUM_TIMERS_SHIFT: u32 = 8; // bits 12:8 = nombre de timers - 1
 
 // ── État HPET ─────────────────────────────────────────────────────────────────
 
 /// Informations HPET
 #[derive(Debug, Clone, Copy)]
 pub struct HpetInfo {
-    pub mmio_base:      u64,   // Adresse MMIO physique
-    pub clock_period_fs:u32,   // Période d'horloge en femtosecondes
-    pub freq_hz:        u64,   // Fréquence en Hz
-    pub n_timers:       u8,    // Nombre de timers (au moins 3)
-    pub is_64bit:       bool,  // Compteur principal 64 bits
+    pub mmio_base: u64,       // Adresse MMIO physique
+    pub clock_period_fs: u32, // Période d'horloge en femtosecondes
+    pub freq_hz: u64,         // Fréquence en Hz
+    pub n_timers: u8,         // Nombre de timers (au moins 3)
+    pub is_64bit: bool,       // Compteur principal 64 bits
 }
 
-static HPET_BASE:      AtomicU64 = AtomicU64::new(0);
+static HPET_BASE: AtomicU64 = AtomicU64::new(0);
 static HPET_PERIOD_FS: AtomicU32 = AtomicU32::new(0);
-static HPET_FREQ_HZ:   AtomicU64 = AtomicU64::new(0);
+static HPET_FREQ_HZ: AtomicU64 = AtomicU64::new(0);
 
 // ── Structures table ACPI HPET ────────────────────────────────────────────────
 
@@ -66,10 +65,10 @@ static HPET_FREQ_HZ:   AtomicU64 = AtomicU64::new(0);
 #[allow(dead_code)]
 struct AcpiHpetTable {
     event_timer_block_id: u32,
-    base_address:         [u8; 12], // Generic Address Structure (GAS)
-    hpet_number:          u8,
-    minimum_clock_tick:   u16,
-    page_protection:      u8,
+    base_address: [u8; 12], // Generic Address Structure (GAS)
+    hpet_number: u8,
+    minimum_clock_tick: u16,
+    page_protection: u8,
 }
 
 // ── Lecture / écriture HPET MMIO ─────────────────────────────────────────────
@@ -88,7 +87,9 @@ fn hpet_read(offset: u64) -> u64 {
 fn hpet_write(offset: u64, val: u64) {
     let base = HPET_BASE.load(Ordering::Relaxed);
     // SAFETY: base HPET validée lors de l'init
-    unsafe { write_volatile((base + offset) as *mut u64, val); }
+    unsafe {
+        write_volatile((base + offset) as *mut u64, val);
+    }
 }
 
 // ── Initialisation ────────────────────────────────────────────────────────────
@@ -100,13 +101,17 @@ fn hpet_write(offset: u64, val: u64) {
 /// accéder aux registres (le MMIO HPET à 0xFED00000 dépasse notre
 /// identity map de 1 GiB — l'accès MMIO aura lieu après init mémoire).
 pub fn init_hpet(hpet_table_phys: u64) -> Option<HpetInfo> {
-    if hpet_table_phys == 0 || hpet_table_phys >= 0x4000_0000 { return None; }
+    if hpet_table_phys == 0 || hpet_table_phys >= 0x4000_0000 {
+        return None;
+    }
 
     use super::parser::SdtHeader;
     // SAFETY: adresse passée par le parseur ACPI (dans notre identity map)
     let header = unsafe { &*(hpet_table_phys as *const SdtHeader) };
     let sig = unsafe { core::ptr::read_unaligned(&raw const (*header).signature) };
-    if &sig != b"HPET" { return None; }
+    if &sig != b"HPET" {
+        return None;
+    }
 
     // GAS base address : offset SdtHeader(36) + block_id(4) + GAS header(4) = 44
     // Dans la GAS (Generic Address Structure) l'adresse 64 bits est aux derniers 8 octets
@@ -141,7 +146,9 @@ pub fn hpet_read_counter() -> u64 {
 /// Convertit des µs en ticks HPET
 pub fn hpet_us_to_ticks(us: u64) -> u64 {
     let freq = HPET_FREQ_HZ.load(Ordering::Relaxed);
-    if freq == 0 { return 0; }
+    if freq == 0 {
+        return 0;
+    }
     us.saturating_mul(freq) / 1_000_000
 }
 
@@ -185,7 +192,9 @@ pub fn hpet_available() -> bool {
 /// Retourne `true` si le HPET est maintenant opérationnel.
 pub fn init_hpet_post_memory() -> bool {
     let hpet_phys = HPET_BASE.load(Ordering::Acquire);
-    if hpet_phys == 0 { return false; }
+    if hpet_phys == 0 {
+        return false;
+    }
 
     // ── 1. Mapping MMIO fixmap ───────────────────────────────────────────────
     let hpet_page_phys = PhysAddr::new(hpet_phys & !0xFFF);
@@ -206,7 +215,9 @@ pub fn init_hpet_post_memory() -> bool {
             return false;
         }
         // SAFETY: invalidation locale de l'entrée fixmap nouvellement mappée.
-        unsafe { tlb::flush_single(hpet_fix_virt); }
+        unsafe {
+            tlb::flush_single(hpet_fix_virt);
+        }
     }
 
     let virt = hpet_fix_virt.as_u64().saturating_add(hpet_page_off);
@@ -241,13 +252,18 @@ pub fn init_hpet_post_memory() -> bool {
     let mut ok = false;
     for _ in 0u32..100 {
         let c = unsafe { core::ptr::read_volatile((virt + HPET_MAIN_CTR) as *const u64) };
-        if c != counter_start { ok = true; break; }
+        if c != counter_start {
+            ok = true;
+            break;
+        }
         core::hint::spin_loop();
     }
 
     if !ok {
         // HPET ne compte pas — désactiver et signaler échec
-        unsafe { core::ptr::write_volatile((virt + HPET_GEN_CFG) as *mut u64, 0); }
+        unsafe {
+            core::ptr::write_volatile((virt + HPET_GEN_CFG) as *mut u64, 0);
+        }
         HPET_FREQ_HZ.store(0, Ordering::Release);
         return false;
     }

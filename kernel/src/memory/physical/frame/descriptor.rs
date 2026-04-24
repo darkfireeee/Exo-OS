@@ -5,8 +5,8 @@
 // dans le tableau global `FRAME_TABLE`.
 // Couche 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU32, AtomicU8, AtomicU16, Ordering};
 use crate::memory::core::types::ZoneType;
+use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU8, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FRAME FLAGS — état et propriétés d'un frame
@@ -20,35 +20,35 @@ pub struct FrameFlags(u16);
 
 impl FrameFlags {
     /// Frame libre (non alloué).
-    pub const FREE:         FrameFlags = FrameFlags(1 << 0);
+    pub const FREE: FrameFlags = FrameFlags(1 << 0);
     /// Frame alloué par le kernel.
-    pub const KERNEL:       FrameFlags = FrameFlags(1 << 1);
+    pub const KERNEL: FrameFlags = FrameFlags(1 << 1);
     /// Frame alloué pour userspace.
-    pub const USER:         FrameFlags = FrameFlags(1 << 2);
+    pub const USER: FrameFlags = FrameFlags(1 << 2);
     /// Frame utilisé pour DMA (no-cache, no-swap, no-CoW).
-    pub const DMA:          FrameFlags = FrameFlags(1 << 3);
+    pub const DMA: FrameFlags = FrameFlags(1 << 3);
     /// Frame verrouillé en RAM (ne pas swapper/migrer).
-    pub const PINNED:       FrameFlags = FrameFlags(1 << 4);
+    pub const PINNED: FrameFlags = FrameFlags(1 << 4);
     /// Frame Copy-on-Write (partagé entre processus, copie à l'écriture).
-    pub const COW:          FrameFlags = FrameFlags(1 << 5);
+    pub const COW: FrameFlags = FrameFlags(1 << 5);
     /// Frame sale (modifié depuis la dernière synchronisation disque).
-    pub const DIRTY:        FrameFlags = FrameFlags(1 << 6);
+    pub const DIRTY: FrameFlags = FrameFlags(1 << 6);
     /// Frame accédé récemment (LRU clock bit).
-    pub const ACCESSED:     FrameFlags = FrameFlags(1 << 7);
+    pub const ACCESSED: FrameFlags = FrameFlags(1 << 7);
     /// Frame appartenant à une huge page (2 MiB).
-    pub const HUGE_PAGE:    FrameFlags = FrameFlags(1 << 8);
+    pub const HUGE_PAGE: FrameFlags = FrameFlags(1 << 8);
     /// Frame appartenant à une page de swap.
-    pub const SWAP:         FrameFlags = FrameFlags(1 << 9);
+    pub const SWAP: FrameFlags = FrameFlags(1 << 9);
     /// Frame dans un per-CPU pool (hot cache).
-    pub const IN_CPU_POOL:  FrameFlags = FrameFlags(1 << 10);
+    pub const IN_CPU_POOL: FrameFlags = FrameFlags(1 << 10);
     /// Frame partagé entre plusieurs processus (SHM/mmap).
-    pub const SHARED:       FrameFlags = FrameFlags(1 << 11);
+    pub const SHARED: FrameFlags = FrameFlags(1 << 11);
     /// Frame en cours de migration inter-nœuds NUMA.
-    pub const MIGRATING:    FrameFlags = FrameFlags(1 << 12);
+    pub const MIGRATING: FrameFlags = FrameFlags(1 << 12);
     /// Frame réservé par le firmware/BIOS (jamais alloué).
-    pub const RESERVED:     FrameFlags = FrameFlags(1 << 13);
+    pub const RESERVED: FrameFlags = FrameFlags(1 << 13);
     /// Frame de la liste LRU active (LRU policy).
-    pub const LRU_ACTIVE:   FrameFlags = FrameFlags(1 << 14);
+    pub const LRU_ACTIVE: FrameFlags = FrameFlags(1 << 14);
     /// Frame de la liste LRU inactive.
     pub const LRU_INACTIVE: FrameFlags = FrameFlags(1 << 15);
 
@@ -75,7 +75,9 @@ impl FrameFlags {
     }
 
     #[inline(always)]
-    pub const fn bits(self) -> u16 { self.0 }
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,21 +103,21 @@ impl FrameFlags {
 #[repr(C, align(32))]
 pub struct FrameDesc {
     /// Compteur de références atomique — 0 = frame libre.
-    pub refcount:   AtomicU32,
+    pub refcount: AtomicU32,
     /// Drapeaux d'état atomiques.
-    pub flags:      AtomicU16,
+    pub flags: AtomicU16,
     /// Zone mémoire du frame.
-    pub zone:       u8,
+    pub zone: u8,
     /// Nœud NUMA d'appartenance.
-    pub numa_node:  u8,
+    pub numa_node: u8,
     /// Ordre buddy courant (0..11). BUDDY_MAX_ORDER+1 = hors-buddy.
-    pub order:      AtomicU8,
+    pub order: AtomicU8,
     /// Génération LRU (clock bit, incrémenté à chaque scan).
-    pub lru_gen:    AtomicU8,
+    pub lru_gen: AtomicU8,
     /// Nombre de mappings actifs de ce frame (pour writable/COW accounting).
-    pub mapcount:   AtomicU16,
+    pub mapcount: AtomicU16,
     /// Réservé pour usage futur (padding à 32 bytes).
-    _pad:           [u8; 20],
+    _pad: [u8; 20],
 }
 
 const _: () = assert!(
@@ -132,14 +134,14 @@ impl FrameDesc {
     #[inline]
     pub const fn new_free(zone: ZoneType, numa_node: u8) -> Self {
         FrameDesc {
-            refcount:  AtomicU32::new(0),
-            flags:     AtomicU16::new(FrameFlags::FREE.0),
-            zone:      zone as u8,
+            refcount: AtomicU32::new(0),
+            flags: AtomicU16::new(FrameFlags::FREE.0),
+            zone: zone as u8,
             numa_node,
-            order:     AtomicU8::new(0),
-            lru_gen:   AtomicU8::new(0),
-            mapcount:  AtomicU16::new(0),
-            _pad:      [0u8; 20],
+            order: AtomicU8::new(0),
+            lru_gen: AtomicU8::new(0),
+            mapcount: AtomicU16::new(0),
+            _pad: [0u8; 20],
         }
     }
 
@@ -184,7 +186,10 @@ impl FrameDesc {
             // Double-free : on remet le compteur à 0 pour éviter le wrap u32::MAX
             self.refcount.store(0, Ordering::Release);
             // En debug : panique pour faciliter la détection
-            debug_assert!(false, "dec_ref avec refcount déjà à 0 — double-free détecté");
+            debug_assert!(
+                false,
+                "dec_ref avec refcount déjà à 0 — double-free détecté"
+            );
             return false;
         }
         prev == 1
@@ -328,13 +333,18 @@ impl FrameDesc {
     #[inline]
     pub fn mark_allocated(&self, kernel: bool) -> bool {
         let prev_flags = FrameFlags(
-            self.flags.fetch_and(!FrameFlags::FREE.bits(), Ordering::AcqRel)
+            self.flags
+                .fetch_and(!FrameFlags::FREE.bits(), Ordering::AcqRel),
         );
         if !prev_flags.contains(FrameFlags::FREE) {
             debug_assert!(false, "mark_allocated: frame n'était pas FREE");
             return false;
         }
-        let access_flag = if kernel { FrameFlags::KERNEL } else { FrameFlags::USER };
+        let access_flag = if kernel {
+            FrameFlags::KERNEL
+        } else {
+            FrameFlags::USER
+        };
         self.set_flag(access_flag);
         self.refcount.store(1, Ordering::Release);
         true
@@ -397,7 +407,9 @@ pub struct FrameDescEntry {
 
 impl FrameDescEntry {
     const fn new() -> Self {
-        FrameDescEntry { flags: AtomicU16::new(0) }
+        FrameDescEntry {
+            flags: AtomicU16::new(0),
+        }
     }
 
     /// Retourne les flags courants.
@@ -455,7 +467,8 @@ impl FrameDescriptorTable {
         debug_assert!(
             pfn < MAX_PHYS_FRAMES,
             "FrameDescriptorTable::get: PFN {} hors limites (max {})",
-            pfn, MAX_PHYS_FRAMES
+            pfn,
+            MAX_PHYS_FRAMES
         );
         // SAFETY: tableau[pfn] est valide pour pfn < MAX_PHYS_FRAMES.
         &self.entries[pfn.min(MAX_PHYS_FRAMES - 1)]

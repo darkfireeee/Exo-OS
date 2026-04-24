@@ -17,14 +17,13 @@
 //         Une période de drain est obligatoire.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::ipc::core::types::{EndpointId, IpcError, alloc_endpoint_id};
-use crate::ipc::core::constants::MAX_ENDPOINTS;
-use crate::scheduler::core::task::ThreadId;
-use crate::scheduler::sync::spinlock::SpinLock;
 use super::descriptor::{EndpointDesc, EndpointName, EndpointState};
 use super::registry::{register_endpoint, unregister_endpoint};
+use crate::ipc::core::constants::MAX_ENDPOINTS;
+use crate::ipc::core::types::{alloc_endpoint_id, EndpointId, IpcError};
+use crate::scheduler::core::task::ThreadId;
+use crate::scheduler::sync::spinlock::SpinLock;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EndpointPool — pool statique d'EndpointDesc
@@ -35,7 +34,7 @@ use super::registry::{register_endpoint, unregister_endpoint};
 #[repr(u8)]
 #[allow(dead_code)]
 enum SlotState {
-    Free  = 0,
+    Free = 0,
     InUse = 1,
 }
 
@@ -85,7 +84,7 @@ impl EndpointPool {
     fn free(&self, idx: usize) {
         debug_assert!(idx < MAX_ENDPOINTS, "idx hors bornes");
         let word = idx / 64;
-        let bit  = idx % 64;
+        let bit = idx % 64;
         let mask = 1u64 << bit;
         self.bitmap[word].fetch_and(!mask, Ordering::Release);
         self.active.fetch_sub(1, Ordering::Relaxed);
@@ -136,14 +135,14 @@ impl EndpointDescBox {
 /// `Ok(EndpointId)` — l'identifiant unique de l'endpoint créé.
 pub fn endpoint_create(name: &[u8], owner: ThreadId) -> Result<EndpointId, IpcError> {
     let ep_name = EndpointName::from_bytes(name)?;
-    let ep_id   = alloc_endpoint_id();
+    let ep_id = alloc_endpoint_id();
 
     let idx = EP_POOL_BITMAP.alloc().ok_or(IpcError::ResourceExhausted)?;
     let desc = EndpointDesc::new(ep_id, ep_name, owner);
 
     {
         let mut pool = EP_POOL_DESCS.lock();
-        pool[idx]    = Some(EndpointDescBox::init(desc));
+        pool[idx] = Some(EndpointDescBox::init(desc));
     }
 
     // Enregistrement dans le registre nom → id.
@@ -151,7 +150,7 @@ pub fn endpoint_create(name: &[u8], owner: ThreadId) -> Result<EndpointId, IpcEr
         // Rollback : libérer le slot.
         {
             let mut pool = EP_POOL_DESCS.lock();
-            pool[idx]    = None;
+            pool[idx] = None;
         }
         EP_POOL_BITMAP.free(idx);
         return Err(e);
@@ -171,7 +170,8 @@ pub fn endpoint_listen(ep_id: EndpointId) -> Result<(), IpcError> {
 /// Les nouvelles connexions sont refusées.
 pub fn endpoint_close(ep_id: EndpointId) -> Result<(), IpcError> {
     with_endpoint(ep_id, |desc| {
-        desc.state.store(EndpointState::Draining as u32, Ordering::Release);
+        desc.state
+            .store(EndpointState::Draining as u32, Ordering::Release);
         Ok(())
     })
 }
@@ -193,7 +193,14 @@ pub fn endpoint_destroy(name: &[u8], ep_id: EndpointId) -> Result<(), IpcError> 
             })
             .map(|idx| {
                 // SAFETY: slot is Some.
-                unsafe { pool[idx].as_ref().unwrap().as_ref().active_conns.load(Ordering::Acquire) }
+                unsafe {
+                    pool[idx]
+                        .as_ref()
+                        .unwrap()
+                        .as_ref()
+                        .active_conns
+                        .load(Ordering::Acquire)
+                }
             })
     };
 

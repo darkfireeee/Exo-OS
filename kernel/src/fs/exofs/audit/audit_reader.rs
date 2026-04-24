@@ -8,13 +8,12 @@
 //!  - OOM-02   : try_reserve systématique
 //!  - ARITH-02 : arithmétique vérifiée
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use super::audit_entry::{AuditEntry, AuditOp, AuditResult, AuditSeverity, AuditSummary};
 use super::audit_log::{AuditLog, AUDIT_LOG, RING_SIZE};
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -43,7 +42,7 @@ pub enum ReadDirection {
 /// Statistiques cumulées d'un `AuditReader`.
 #[derive(Clone, Debug, Default)]
 pub struct ReaderStats {
-    pub total_read:    u64,
+    pub total_read: u64,
     pub total_skipped: u64,
     pub total_invalid: u64,
 }
@@ -70,14 +69,14 @@ pub struct AuditReader {
 impl AuditReader {
     /// Crée un reader positionné au début (entrée la plus ancienne disponible).
     pub fn new() -> Self {
-        let head  = AUDIT_LOG.next_seq();
+        let head = AUDIT_LOG.next_seq();
         let count = AUDIT_LOG.available() as u64;
         let start = head.wrapping_sub(count);
         AuditReader {
-            cursor:       start,
-            direction:    ReadDirection::Forward,
+            cursor: start,
+            direction: ReadDirection::Forward,
             min_severity: None,
-            stats:        ReaderStats::default(),
+            stats: ReaderStats::default(),
         }
     }
 
@@ -85,19 +84,19 @@ impl AuditReader {
     pub fn from_tail() -> Self {
         let head = AUDIT_LOG.next_seq();
         AuditReader {
-            cursor:       head.saturating_sub(1),
-            direction:    ReadDirection::Backward,
+            cursor: head.saturating_sub(1),
+            direction: ReadDirection::Backward,
             min_severity: None,
-            stats:        ReaderStats::default(),
+            stats: ReaderStats::default(),
         }
     }
 
     /// Crée un reader avec un log explicite (utile pour les tests).
     pub fn with_log_at(log: &AuditLog, direction: ReadDirection) -> Self {
-        let head  = log.next_seq();
+        let head = log.next_seq();
         let count = log.available() as u64;
         let cursor = match direction {
-            ReadDirection::Forward  => head.wrapping_sub(count),
+            ReadDirection::Forward => head.wrapping_sub(count),
             ReadDirection::Backward => head.saturating_sub(1),
         };
         AuditReader {
@@ -128,18 +127,22 @@ impl AuditReader {
 
     /// Variante qui prend un log explicite (utile pour les tests).
     pub fn next_from(&mut self, log: &AuditLog) -> Option<AuditEntry> {
-        let head  = log.next_seq();
+        let head = log.next_seq();
         let count = log.available() as u64;
         let oldest = head.wrapping_sub(count);
 
         loop {
             // Borne de fin.
             match self.direction {
-                ReadDirection::Forward  => {
-                    if self.cursor >= head { return None; }
+                ReadDirection::Forward => {
+                    if self.cursor >= head {
+                        return None;
+                    }
                 }
                 ReadDirection::Backward => {
-                    if self.cursor < oldest || head == 0 { return None; }
+                    if self.cursor < oldest || head == 0 {
+                        return None;
+                    }
                 }
             }
 
@@ -147,11 +150,13 @@ impl AuditReader {
 
             // Avance le curseur.
             match self.direction {
-                ReadDirection::Forward  => {
+                ReadDirection::Forward => {
                     self.cursor = self.cursor.wrapping_add(1);
                 }
                 ReadDirection::Backward => {
-                    if self.cursor == 0 { return None; }
+                    if self.cursor == 0 {
+                        return None;
+                    }
                     self.cursor = self.cursor.wrapping_sub(1);
                 }
             }
@@ -185,8 +190,11 @@ impl AuditReader {
         let mut i = 0usize;
         while i < cap {
             match self.next() {
-                Some(e) => { out.push(e); i += 1; }
-                None    => break,
+                Some(e) => {
+                    out.push(e);
+                    i += 1;
+                }
+                None => break,
             }
         }
         Ok(out)
@@ -208,7 +216,7 @@ impl AuditReader {
             match self.next() {
                 Some(e) if pred(&e) => return Some(e),
                 Some(_) => {}
-                None    => return None,
+                None => return None,
             }
         }
     }
@@ -226,7 +234,7 @@ impl AuditReader {
                     out.push(e);
                 }
                 Some(_) => {}
-                None    => break,
+                None => break,
             }
         }
         Ok(out)
@@ -256,7 +264,7 @@ impl AuditReader {
     pub fn entries_in_tick_range(
         &mut self,
         from_tick: u64,
-        to_tick:   u64,
+        to_tick: u64,
     ) -> ExofsResult<Vec<AuditEntry>> {
         self.collect_if(|e| e.tick >= from_tick && e.tick <= to_tick)
     }
@@ -265,25 +273,35 @@ impl AuditReader {
 
     /// Calcule un résumé de toutes les entrées disponibles (repart du début).
     pub fn summarize(&mut self) -> AuditSummary {
-        self.seek(AUDIT_LOG.next_seq().wrapping_sub(AUDIT_LOG.available() as u64));
+        self.seek(
+            AUDIT_LOG
+                .next_seq()
+                .wrapping_sub(AUDIT_LOG.available() as u64),
+        );
         let mut summary = AuditSummary::default();
         loop {
             match self.next() {
                 Some(e) => summary.feed(&e),
-                None    => break,
+                None => break,
             }
         }
         summary
     }
 
     /// Statistiques du reader.
-    pub fn stats(&self) -> &ReaderStats { &self.stats }
+    pub fn stats(&self) -> &ReaderStats {
+        &self.stats
+    }
 
     /// Réinitialise les statistiques.
-    pub fn reset_stats(&mut self) { self.stats = ReaderStats::default(); }
+    pub fn reset_stats(&mut self) {
+        self.stats = ReaderStats::default();
+    }
 
     /// Position courante du curseur (séquence absolue).
-    pub fn cursor(&self) -> u64 { self.cursor }
+    pub fn cursor(&self) -> u64 {
+        self.cursor
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -297,8 +315,19 @@ pub fn last_n_entries(n: usize) -> ExofsResult<Vec<AuditEntry>> {
     buf.try_reserve(cap).map_err(|_| ExofsError::NoMemory)?;
     let avail = AUDIT_LOG.available();
     let actual = cap.min(avail);
-    buf.resize(actual, AuditEntry::new(0, 0, 0, 0, [0u8; 32],
-        AuditOp::Read, AuditResult::Success, 0));
+    buf.resize(
+        actual,
+        AuditEntry::new(
+            0,
+            0,
+            0,
+            0,
+            [0u8; 32],
+            AuditOp::Read,
+            AuditResult::Success,
+            0,
+        ),
+    );
     let n_read = AUDIT_LOG.read_recent_into(&mut buf, actual);
     buf.truncate(n_read);
     Ok(buf)
@@ -317,22 +346,33 @@ pub fn quick_summary() -> AuditSummary {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::audit_log::AuditLog;
+    use super::*;
 
     fn push_entry(log: &AuditLog, op: AuditOp, result: AuditResult, uid: u64) {
-        log.push(AuditEntry::new(1, uid, 0, 0, [0u8; 32], op, result, log.next_seq()));
+        log.push(AuditEntry::new(
+            1,
+            uid,
+            0,
+            0,
+            [0u8; 32],
+            op,
+            result,
+            log.next_seq(),
+        ));
     }
 
-    #[test] fn test_new_reader_empty_log() {
+    #[test]
+    fn test_new_reader_empty_log() {
         let log = AuditLog::new_const();
         let mut r = AuditReader::with_log_at(&log, ReadDirection::Forward);
         assert!(r.next_from(&log).is_none());
     }
 
-    #[test] fn test_forward_reads_in_order() {
+    #[test]
+    fn test_forward_reads_in_order() {
         let log = AuditLog::new_const();
-        push_entry(&log, AuditOp::Read,  AuditResult::Success, 1);
+        push_entry(&log, AuditOp::Read, AuditResult::Success, 1);
         push_entry(&log, AuditOp::Write, AuditResult::Success, 2);
         let mut r = AuditReader::with_log_at(&log, ReadDirection::Forward);
         let e1 = r.next_from(&log).unwrap();
@@ -340,36 +380,39 @@ mod tests {
         assert!(e1.seq <= e2.seq);
     }
 
-    #[test] fn test_backward_reads_last_first() {
+    #[test]
+    fn test_backward_reads_last_first() {
         let log = AuditLog::new_const();
-        push_entry(&log, AuditOp::Read,   AuditResult::Success, 1);
+        push_entry(&log, AuditOp::Read, AuditResult::Success, 1);
         push_entry(&log, AuditOp::Delete, AuditResult::Success, 2);
         let mut r = AuditReader::with_log_at(&log, ReadDirection::Backward);
         let e = r.next_from(&log).unwrap();
         assert_eq!(e.op, AuditOp::Delete as u8);
     }
 
-    #[test] fn test_find_by_op() {
+    #[test]
+    fn test_find_by_op() {
         let log = AuditLog::new_const();
-        push_entry(&log, AuditOp::Read,  AuditResult::Success, 1);
+        push_entry(&log, AuditOp::Read, AuditResult::Success, 1);
         push_entry(&log, AuditOp::Write, AuditResult::Success, 2);
         let mut r = AuditReader::with_log_at(&log, ReadDirection::Forward);
         let e = r.find(|e| e.op == AuditOp::Write as u8);
         assert!(e.is_some());
     }
 
-    #[test] fn test_min_severity_filters() {
+    #[test]
+    fn test_min_severity_filters() {
         let log = AuditLog::new_const();
         push_entry(&log, AuditOp::Read, AuditResult::Success, 1); // Info
-        push_entry(&log, AuditOp::Read, AuditResult::Denied,  2); // Critical
-        // Lire avec filtre min_severity = Critical sur le log global.
-        // On vérifie surtout que la méthode ne panique pas.
-        let mut r = AuditReader::new()
-            .min_severity(AuditSeverity::Critical);
+        push_entry(&log, AuditOp::Read, AuditResult::Denied, 2); // Critical
+                                                                 // Lire avec filtre min_severity = Critical sur le log global.
+                                                                 // On vérifie surtout que la méthode ne panique pas.
+        let mut r = AuditReader::new().min_severity(AuditSeverity::Critical);
         let _ = r.read_n(10).unwrap();
     }
 
-    #[test] fn test_read_all_returns_vec() {
+    #[test]
+    fn test_read_all_returns_vec() {
         let log = AuditLog::new_const();
         push_entry(&log, AuditOp::Create, AuditResult::Success, 1);
         let mut r = AuditReader::with_log_at(&log, ReadDirection::Forward);
@@ -377,7 +420,8 @@ mod tests {
         assert!(!all.is_empty());
     }
 
-    #[test] fn test_entries_by_actor() {
+    #[test]
+    fn test_entries_by_actor() {
         let log = AuditLog::new_const();
         push_entry(&log, AuditOp::Read, AuditResult::Success, 99);
         push_entry(&log, AuditOp::Read, AuditResult::Success, 42);
@@ -386,7 +430,8 @@ mod tests {
         assert_eq!(v.len(), 1);
     }
 
-    #[test] fn test_stats_counts_reads() {
+    #[test]
+    fn test_stats_counts_reads() {
         let log = AuditLog::new_const();
         push_entry(&log, AuditOp::Read, AuditResult::Success, 1);
         let mut r = AuditReader::with_log_at(&log, ReadDirection::Forward);
@@ -394,18 +439,21 @@ mod tests {
         assert_eq!(r.stats().total_read, 1);
     }
 
-    #[test] fn test_last_n_entries() {
+    #[test]
+    fn test_last_n_entries() {
         let v = last_n_entries(2).unwrap();
         // Le log global contient au moins une entrée grâce aux autres tests.
         let _ = v;
     }
 
-    #[test] fn test_quick_summary() {
+    #[test]
+    fn test_quick_summary() {
         let _s = quick_summary();
         // assert!(s.total >= 0);
     }
 
-    #[test] fn test_seek_and_reread() {
+    #[test]
+    fn test_seek_and_reread() {
         let log = AuditLog::new_const();
         push_entry(&log, AuditOp::GcTrigger, AuditResult::Success, 1);
         let mut r = AuditReader::with_log_at(&log, ReadDirection::Forward);

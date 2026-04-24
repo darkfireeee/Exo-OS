@@ -1,4 +1,4 @@
-﻿// kernel/src/memory/physical/frame/reclaim.rs
+// kernel/src/memory/physical/frame/reclaim.rs
 //
 // Récupération (reclaim) de frames — implémentation de l'algorithme CLOCK
 // à deux mains (active list / inactive list).
@@ -25,8 +25,8 @@ use spin::Mutex;
 
 use crate::memory::core::constants::MAX_CPUS;
 use crate::memory::core::types::{Frame, PhysAddr};
-use crate::memory::physical::frame::descriptor::{FrameFlags, FRAME_DESCRIPTORS};
 use crate::memory::physical::allocator::free_page;
+use crate::memory::physical::frame::descriptor::{FrameFlags, FRAME_DESCRIPTORS};
 use crate::memory::swap::backend::SWAP_BACKEND;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ pub const MAX_SWAP_PER_PASS: usize = 64;
 const PF_MEMALLOC_BIT: u32 = 1 << 0;
 /// Bit PF_KSWAPD dans le flags per-CPU (bit 1).
 #[allow(dead_code)]
-const PF_KSWAPD_BIT:   u32 = 1 << 1;
+const PF_KSWAPD_BIT: u32 = 1 << 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FLAGS PAR-CPU
@@ -88,7 +88,9 @@ pub fn leave_memalloc(cpu_id: usize) {
 /// Retourne `true` si le CPU courant est en train de reclaimer.
 #[inline]
 pub fn in_memalloc(cpu_id: usize) -> bool {
-    if cpu_id >= RECLAIM_MAX_CPUS { return false; }
+    if cpu_id >= RECLAIM_MAX_CPUS {
+        return false;
+    }
     RECLAIM_FLAGS[cpu_id].load(Ordering::Relaxed) & PF_MEMALLOC_BIT != 0
 }
 
@@ -99,36 +101,41 @@ pub fn in_memalloc(cpu_id: usize) -> bool {
 /// Entrée d'une liste LRU.
 #[derive(Copy, Clone)]
 struct LruEntry {
-    pfn:   u64,
+    pfn: u64,
     valid: bool,
 }
 
 impl LruEntry {
-    const EMPTY: LruEntry = LruEntry { pfn: 0, valid: false };
+    const EMPTY: LruEntry = LruEntry {
+        pfn: 0,
+        valid: false,
+    };
 }
 
 struct LruList {
     entries: [LruEntry; LRU_LIST_SIZE],
-    head:    usize,  // prochain slot à insérer
-    tail:    usize,  // prochain slot à retirer (FIFO)
-    count:   usize,
+    head: usize, // prochain slot à insérer
+    tail: usize, // prochain slot à retirer (FIFO)
+    count: usize,
     /// Pointeur d'horloge (scan CLOCK).
-    clock:   usize,
+    clock: usize,
 }
 
 impl LruList {
     const fn new() -> Self {
         LruList {
             entries: [LruEntry::EMPTY; LRU_LIST_SIZE],
-            head:    0,
-            tail:    0,
-            count:   0,
-            clock:   0,
+            head: 0,
+            tail: 0,
+            count: 0,
+            clock: 0,
         }
     }
 
     fn push(&mut self, pfn: u64) -> bool {
-        if self.count >= LRU_LIST_SIZE { return false; }
+        if self.count >= LRU_LIST_SIZE {
+            return false;
+        }
         self.entries[self.head] = LruEntry { pfn, valid: true };
         self.head = (self.head + 1) & (LRU_LIST_SIZE - 1);
         self.count += 1;
@@ -142,7 +149,9 @@ impl LruList {
             self.entries[self.tail] = LruEntry::EMPTY;
             self.tail = (self.tail + 1) & (LRU_LIST_SIZE - 1);
             self.count -= 1;
-            if e.valid { return Some(e.pfn); }
+            if e.valid {
+                return Some(e.pfn);
+            }
         }
         None
     }
@@ -152,7 +161,9 @@ impl LruList {
         for e in self.entries.iter_mut() {
             if e.valid && e.pfn == pfn {
                 e.valid = false;
-                if self.count > 0 { self.count -= 1; }
+                if self.count > 0 {
+                    self.count -= 1;
+                }
                 break;
             }
         }
@@ -167,20 +178,24 @@ impl LruList {
             if self.entries[idx].valid {
                 return Some(self.entries[idx].pfn);
             }
-            if self.clock == start { break; }
+            if self.clock == start {
+                break;
+            }
         }
         None
     }
 
     #[inline]
-    fn len(&self) -> usize { self.count }
+    fn len(&self) -> usize {
+        self.count
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATICS PROTÉGÉS PAR MUTEX
 // ─────────────────────────────────────────────────────────────────────────────
 
-static ACTIVE_LIST:   Mutex<LruList> = Mutex::new(LruList::new());
+static ACTIVE_LIST: Mutex<LruList> = Mutex::new(LruList::new());
 static INACTIVE_LIST: Mutex<LruList> = Mutex::new(LruList::new());
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -191,26 +206,26 @@ pub struct ReclaimStats {
     /// Frames libérés directement (frame_flags: FREE / non DIRTY).
     pub freed_direct: AtomicU64,
     /// Frames envoyés en swap puis libérés.
-    pub swapped_out:  AtomicU64,
+    pub swapped_out: AtomicU64,
     /// Frames promus de inactive → active (bit ACCESSED).
-    pub promoted:     AtomicU64,
+    pub promoted: AtomicU64,
     /// Frames dégradés de active → inactive.
-    pub demoted:      AtomicU64,
+    pub demoted: AtomicU64,
     /// Frames sautés (PINNED / DMA).
-    pub skipped:      AtomicU64,
+    pub skipped: AtomicU64,
     /// Nb de fois que le swap a échoué.
-    pub swap_errors:  AtomicU64,
+    pub swap_errors: AtomicU64,
 }
 
 impl ReclaimStats {
     const fn new() -> Self {
         ReclaimStats {
             freed_direct: AtomicU64::new(0),
-            swapped_out:  AtomicU64::new(0),
-            promoted:     AtomicU64::new(0),
-            demoted:      AtomicU64::new(0),
-            skipped:      AtomicU64::new(0),
-            swap_errors:  AtomicU64::new(0),
+            swapped_out: AtomicU64::new(0),
+            promoted: AtomicU64::new(0),
+            demoted: AtomicU64::new(0),
+            skipped: AtomicU64::new(0),
+            swap_errors: AtomicU64::new(0),
         }
     }
 }
@@ -223,10 +238,10 @@ pub static RECLAIM_STATS: ReclaimStats = ReclaimStats::new();
 
 #[derive(Copy, Clone, Debug)]
 pub struct ReclaimResult {
-    pub freed:    usize,
-    pub swapped:  usize,
+    pub freed: usize,
+    pub swapped: usize,
     pub promoted: usize,
-    pub skipped:  usize,
+    pub skipped: usize,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -300,13 +315,18 @@ fn frame_is_reclaimable(pfn: u64) -> bool {
 #[inline]
 fn frame_is_accessed(pfn: u64) -> bool {
     let frame = frame_from_pfn(pfn);
-    FRAME_DESCRIPTORS.get(frame).flags().contains(FrameFlags::ACCESSED)
+    FRAME_DESCRIPTORS
+        .get(frame)
+        .flags()
+        .contains(FrameFlags::ACCESSED)
 }
 
 #[inline]
 fn frame_clear_accessed(pfn: u64) {
     let frame = frame_from_pfn(pfn);
-    FRAME_DESCRIPTORS.get(frame).clear_flag(FrameFlags::ACCESSED);
+    FRAME_DESCRIPTORS
+        .get(frame)
+        .clear_flag(FrameFlags::ACCESSED);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -325,7 +345,12 @@ fn frame_clear_accessed(pfn: u64) {
 /// 4. Si le frame est DIRTY → swap out puis libérer.
 /// 5. Sinon → libérer directement.
 pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
-    let mut result = ReclaimResult { freed: 0, swapped: 0, promoted: 0, skipped: 0 };
+    let mut result = ReclaimResult {
+        freed: 0,
+        swapped: 0,
+        promoted: 0,
+        skipped: 0,
+    };
 
     if cpu_id < RECLAIM_MAX_CPUS && in_memalloc(cpu_id) {
         // Récursion détectée — ne pas reclaimer.
@@ -350,7 +375,7 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
 
         let pfn = match pfn {
             Some(p) => p,
-            None    => break, // liste vide
+            None => break, // liste vide
         };
 
         // Frame PINNED / DMA → sauter.
@@ -381,7 +406,7 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
                 // Retirer de la liste inactive et libérer le frame physique.
                 INACTIVE_LIST.lock().remove(pfn);
                 let _ = free_page(frame);
-                result.freed   += 1;
+                result.freed += 1;
                 result.swapped += 1;
                 RECLAIM_STATS.swapped_out.fetch_add(1, Ordering::Relaxed);
                 RECLAIM_STATS.freed_direct.fetch_add(1, Ordering::Relaxed);
@@ -422,11 +447,11 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
 unsafe fn try_swap_out(frame: Frame) -> bool {
     let (dev_idx, slot) = match SWAP_BACKEND.alloc_slot() {
         Ok(pair) => pair,
-        Err(_)   => return false,
+        Err(_) => return false,
     };
     // Écrire PAGE_SIZE octets depuis la physmap vers le swap device.
     match SWAP_BACKEND.write_page(dev_idx, slot, frame.phys_addr()) {
-        Ok(_)  => true,
+        Ok(_) => true,
         Err(_) => {
             // Libérer le slot si l'écriture échoue.
             SWAP_BACKEND.free_slot(dev_idx, slot);
@@ -441,7 +466,7 @@ unsafe fn try_swap_out(frame: Frame) -> bool {
 
 /// Retourne le nombre de frames dans chaque liste.
 pub fn lru_counts() -> (usize, usize) {
-    let active   = ACTIVE_LIST.lock().len();
+    let active = ACTIVE_LIST.lock().len();
     let inactive = INACTIVE_LIST.lock().len();
     (active, inactive)
 }

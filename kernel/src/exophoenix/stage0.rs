@@ -16,15 +16,15 @@ use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, 
 
 use crate::arch::x86_64;
 use crate::arch::x86_64::acpi::{madt, parser};
-use crate::arch::x86_64::apic::{ipi, x2apic};
 use crate::arch::x86_64::apic::local_apic;
+use crate::arch::x86_64::apic::{ipi, x2apic};
 use crate::arch::x86_64::cpu::{features::CPU_FEATURES, msr, tsc};
 use crate::arch::x86_64::smp::init::TRAMPOLINE_PAGE;
 use crate::arch::x86_64::time::sources::pit;
-use crate::exophoenix::{sentinel, PHOENIX_STATE, PhoenixState};
+use crate::exophoenix::{sentinel, PhoenixState, PHOENIX_STATE};
 use crate::fs::exofs::core::types::BlobId;
 use crate::memory::core::{AllocFlags, PageFlags, VirtAddr, PAGE_SIZE};
-use crate::memory::dma::iommu::domain::{DomainType, IOMMU_DOMAINS, PciBdf};
+use crate::memory::dma::iommu::domain::{DomainType, PciBdf, IOMMU_DOMAINS};
 use crate::memory::dma::iommu::{AMD_IOMMU, IDENTITY_DOMAIN_ID, INTEL_VTD};
 use crate::memory::integrity::{register_guard_region, GuardRegionKind};
 use crate::memory::physical::allocator::buddy;
@@ -289,18 +289,34 @@ fn detect_invariant_tsc() -> bool {
 /// l'appelant peut passer `false` puis mettre à jour ensuite.
 pub fn init_feature_probe(hpet_available: bool) {
     B_FEATURES.set_apic_mode(detect_apic_mode());
-    B_FEATURES.pks_available.store(CPU_FEATURES.has_pks(), Ordering::Release);
-    B_FEATURES.invpcid_available.store(CPU_FEATURES.has_invpcid(), Ordering::Release);
-    B_FEATURES.pcid_available.store(CPU_FEATURES.has_pcid(), Ordering::Release);
-    B_FEATURES.smep_available.store(CPU_FEATURES.has_smep(), Ordering::Release);
-    B_FEATURES.smap_available.store(CPU_FEATURES.has_smap(), Ordering::Release);
+    B_FEATURES
+        .pks_available
+        .store(CPU_FEATURES.has_pks(), Ordering::Release);
+    B_FEATURES
+        .invpcid_available
+        .store(CPU_FEATURES.has_invpcid(), Ordering::Release);
+    B_FEATURES
+        .pcid_available
+        .store(CPU_FEATURES.has_pcid(), Ordering::Release);
+    B_FEATURES
+        .smep_available
+        .store(CPU_FEATURES.has_smep(), Ordering::Release);
+    B_FEATURES
+        .smap_available
+        .store(CPU_FEATURES.has_smap(), Ordering::Release);
 
     let pmc_version = detect_pmc_version();
     B_FEATURES.pmc_version.store(pmc_version, Ordering::Release);
-    B_FEATURES.pmc_available.store(pmc_version != 0, Ordering::Release);
+    B_FEATURES
+        .pmc_available
+        .store(pmc_version != 0, Ordering::Release);
 
-    B_FEATURES.invariant_tsc.store(detect_invariant_tsc(), Ordering::Release);
-    B_FEATURES.hpet_available.store(hpet_available, Ordering::Release);
+    B_FEATURES
+        .invariant_tsc
+        .store(detect_invariant_tsc(), Ordering::Release);
+    B_FEATURES
+        .hpet_available
+        .store(hpet_available, Ordering::Release);
 
     let cr4 = x86_64::read_cr4();
     let vmx_active = CPU_FEATURES.has_vmx() && (cr4 & CR4_VMXE != 0);
@@ -323,7 +339,9 @@ pub fn install_b_page_tables() -> u64 {
 
     if (current_cr3 & !0xFFF) != target_phys {
         // SAFETY: target_phys est la PML4 noyau active, bootstrap ring0.
-        unsafe { x86_64::write_cr3(new_cr3); }
+        unsafe {
+            x86_64::write_cr3(new_cr3);
+        }
     }
 
     B_STAGE0_CR3.store(new_cr3, Ordering::Release);
@@ -361,7 +379,9 @@ pub fn setup_b_stack_with_guard_page() -> u64 {
 pub fn init_b_tss(stack_top: u64) {
     crate::arch::x86_64::tss::init_tss_for_cpu(0, stack_top);
     // SAFETY: descripteur TSS kernel valide dans la GDT BSP.
-    unsafe { crate::arch::x86_64::tss::load_tss(crate::arch::x86_64::gdt::GDT_TSS_SEL); }
+    unsafe {
+        crate::arch::x86_64::tss::load_tss(crate::arch::x86_64::gdt::GDT_TSS_SEL);
+    }
 }
 
 /// Étape 4 : IDT stubs (F1/F2/F3/#PF/NMI) — on garde les vecteurs ExoPhoenix inactifs.
@@ -387,9 +407,8 @@ fn parse_facs_from_fadt(fadt_phys: u64) -> u64 {
 
     // SdtHeader.length à offset +4.
     // SAFETY: zone ACPI identity-mappée et validée grossièrement ci-dessus.
-    let fadt_len = unsafe {
-        core::ptr::read_unaligned((fadt_phys as usize + 4) as *const u32)
-    } as usize;
+    let fadt_len =
+        unsafe { core::ptr::read_unaligned((fadt_phys as usize + 4) as *const u32) } as usize;
 
     if fadt_len < 40 {
         return 0;
@@ -397,21 +416,22 @@ fn parse_facs_from_fadt(fadt_phys: u64) -> u64 {
 
     // ACPI 1.0 FACS 32-bit (firmware_ctrl) à offset 36.
     // SAFETY: fadt_len vérifié >= 40.
-    let facs32 = unsafe {
-        core::ptr::read_unaligned((fadt_phys as usize + 36) as *const u32)
-    } as u64;
+    let facs32 =
+        unsafe { core::ptr::read_unaligned((fadt_phys as usize + 36) as *const u32) } as u64;
 
     // ACPI 2.0+ X_FIRMWARE_CTRL à offset 132 (si table assez grande).
     let facs64 = if fadt_len >= 140 {
         // SAFETY: fadt_len vérifié >= 140.
-        unsafe {
-            core::ptr::read_unaligned((fadt_phys as usize + 132) as *const u64)
-        }
+        unsafe { core::ptr::read_unaligned((fadt_phys as usize + 132) as *const u64) }
     } else {
         0
     };
 
-    if facs64 != 0 { facs64 } else { facs32 }
+    if facs64 != 0 {
+        facs64
+    } else {
+        facs32
+    }
 }
 
 /// Étape 5 : parse ACPI MADT/FADT/FACS.
@@ -606,7 +626,9 @@ fn apic_timer_write(reg: u32, val: u32) {
         BootApicMode::X2Apic => {
             let msr_reg = apic_reg_to_x2apic_msr(reg);
             // SAFETY: registre x2APIC standard, ring0 bootstrap.
-            unsafe { msr::write_msr(msr_reg, val as u64); }
+            unsafe {
+                msr::write_msr(msr_reg, val as u64);
+            }
         }
     }
 }
@@ -729,7 +751,9 @@ impl IommuDriver for IntelIommuDriver {
 
     fn flush_iotlb(&self, blocked_domain_id: u32) {
         // SAFETY: Stage0 kernel ring0 ; la flush est idempotente et bornée au domaine bloqué.
-        unsafe { INTEL_VTD.flush_iotlb_domain(blocked_domain_id as u16, 0); }
+        unsafe {
+            INTEL_VTD.flush_iotlb_domain(blocked_domain_id as u16, 0);
+        }
     }
 }
 
@@ -811,7 +835,8 @@ fn acpi_table_len(table_phys: u64) -> Option<usize> {
         return None;
     }
     // SAFETY: ACPI identity-map bootstrap ; lecture header SDT length @ +4.
-    let len = unsafe { core::ptr::read_unaligned((table_phys as usize + 4) as *const u32) } as usize;
+    let len =
+        unsafe { core::ptr::read_unaligned((table_phys as usize + 4) as *const u32) } as usize;
     if len < 36 || len > ACPI_MAX_TABLE_LEN {
         None
     } else {
@@ -858,7 +883,9 @@ pub fn mark_facs_ro_in_a_pts(facs_phys: u64) -> bool {
 
     if updated {
         // SAFETY: invalidation locale d'une seule page après remap flags.
-        unsafe { tlb::flush_single(facs_virt); }
+        unsafe {
+            tlb::flush_single(facs_virt);
+        }
     }
 
     FACS_RO_MARKED.store(updated, Ordering::Release);
@@ -916,7 +943,9 @@ pub fn init_pool_r3_from_stage0_size(pool_r3_size_bytes: u64) -> bool {
     let blocked_domain = IOMMU_BLOCKED_DOMAIN_ID.load(Ordering::Acquire);
     if INTEL_VTD.is_initialized() {
         // SAFETY: flush ciblée domaine Stage0 après update policy.
-        unsafe { INTEL_VTD.flush_iotlb_domain(blocked_domain as u16, 0); }
+        unsafe {
+            INTEL_VTD.flush_iotlb_domain(blocked_domain as u16, 0);
+        }
     } else if AMD_IOMMU.is_initialized() {
         core::sync::atomic::fence(Ordering::SeqCst);
     }
@@ -938,7 +967,10 @@ pub fn arm_apic_watchdog(ms: u64) -> u64 {
     let ticks = watchdog_us.saturating_mul(ticks_per_us);
     let initial_count = ticks.min(u32::MAX as u64) as u32;
 
-    apic_timer_write(local_apic::LAPIC_LVT_TIMER, local_apic::TIMER_MODE_ONESHOT | crate::arch::x86_64::idt::VEC_IRQ_TIMER as u32);
+    apic_timer_write(
+        local_apic::LAPIC_LVT_TIMER,
+        local_apic::TIMER_MODE_ONESHOT | crate::arch::x86_64::idt::VEC_IRQ_TIMER as u32,
+    );
     apic_timer_write(local_apic::LAPIC_TIMER_DCR, 0x3);
     apic_timer_write(local_apic::LAPIC_TIMER_ICR, initial_count);
 
@@ -951,7 +983,9 @@ pub fn arm_apic_watchdog(ms: u64) -> u64 {
 pub fn stage0_init_all_steps() -> Stage0Summary {
     // SAFETY: Stage0 s'exécute sur Kernel B avant la prise de contrôle normale
     // de Kernel A ; ExoSeal phase 0 est idempotent.
-    unsafe { crate::security::exoseal::exoseal_boot_phase0(); }
+    unsafe {
+        crate::security::exoseal::exoseal_boot_phase0();
+    }
 
     // 1) Page tables de B
     let b_cr3 = install_b_page_tables();
@@ -1022,10 +1056,12 @@ pub fn stage0_init() -> ! {
         log::error!("FORGE: hash Kernel A non initialisé — ExoPhoenix désactivé (degraded)");
         PHOENIX_STATE.store(PhoenixState::Degraded as u8, Ordering::Release);
         loop {
-            unsafe { core::arch::asm!("hlt", options(nostack, nomem)); }
+            unsafe {
+                core::arch::asm!("hlt", options(nostack, nomem));
+            }
         }
     }
-    
+
     // BUG-GX-05 FIX: synchroniser le count de cœurs dans la SSR
     let n_cores = crate::arch::x86_64::smp::init::smp_cpu_count();
     exo_phoenix_ssr::init_core_count(n_cores.min(exo_phoenix_ssr::SSR_MAX_CORES_LAYOUT as u32));

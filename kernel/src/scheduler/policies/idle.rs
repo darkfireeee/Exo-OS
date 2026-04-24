@@ -16,8 +16,8 @@
 // pour choisir le C-state optimal selon l'inactivité prévue.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU64, Ordering};
 use crate::scheduler::core::task::{ThreadControlBlock, SCHED_IDLE_BIT};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Métriques idle

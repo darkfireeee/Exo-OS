@@ -45,7 +45,9 @@ impl FormatVersion {
 
     /// Crée une FormatVersion depuis deux entiers.
     #[inline]
-    pub const fn new(major: u16, minor: u16) -> Self { Self { major, minor } }
+    pub const fn new(major: u16, minor: u16) -> Self {
+        Self { major, minor }
+    }
 
     /// Désérialisation depuis 4 octets on-disk (little-endian).
     #[inline]
@@ -115,28 +117,37 @@ pub struct FeatureFlags(pub u32);
 
 impl FeatureFlags {
     /// Bit 0 : déduplication activée (chunk-store présent).
-    pub const DEDUP:       Self = Self(1 << 0);
+    pub const DEDUP: Self = Self(1 << 0);
     /// Bit 1 : compression activée (le format Lz4 ou Zstd est utilisé).
     pub const COMPRESSION: Self = Self(1 << 1);
     /// Bit 2 : chiffrement de blobs activé (AES-256-GCM).
-    pub const ENCRYPTION:  Self = Self(1 << 2);
+    pub const ENCRYPTION: Self = Self(1 << 2);
     /// Bit 3 : snapshots activés (slot epoch permanent présent).
-    pub const SNAPSHOTS:   Self = Self(1 << 3);
+    pub const SNAPSHOTS: Self = Self(1 << 3);
     /// Bit 4 : relations typées activées (relation graph stocké).
-    pub const RELATIONS:   Self = Self(1 << 4);
+    pub const RELATIONS: Self = Self(1 << 4);
     /// Bit 5 : quota namespaces activés.
-    pub const QUOTAS:      Self = Self(1 << 5);
+    pub const QUOTAS: Self = Self(1 << 5);
     /// Bit 6 : NUMA placement hints stockés dans les blobs.
-    pub const NUMA_HINTS:  Self = Self(1 << 6);
+    pub const NUMA_HINTS: Self = Self(1 << 6);
     /// Bit 7 : PathIndex v2 (support des noms UTF-8 normalisés).
-    pub const PATH_V2:     Self = Self(1 << 7);
+    pub const PATH_V2: Self = Self(1 << 7);
 
     /// Masque de toutes les features connues par ce kernel.
     pub const KNOWN: Self = Self(0x0000_00FF);
 
-    #[inline] pub fn has(self, flag: Self) -> bool { self.0 & flag.0 == flag.0 }
-    #[inline] pub fn set(&mut self, flag: Self) { self.0 |= flag.0; }
-    #[inline] pub fn clear(&mut self, flag: Self) { self.0 &= !flag.0; }
+    #[inline]
+    pub fn has(self, flag: Self) -> bool {
+        self.0 & flag.0 == flag.0
+    }
+    #[inline]
+    pub fn set(&mut self, flag: Self) {
+        self.0 |= flag.0;
+    }
+    #[inline]
+    pub fn clear(&mut self, flag: Self) {
+        self.0 &= !flag.0;
+    }
 
     /// Vrai si ce flag-set contient des features inconnues du kernel courant.
     #[inline]
@@ -174,7 +185,7 @@ pub enum MountCompatibility {
 ///   3. Mineur futur sans features inconnues → ReadOnly (VER-01).
 ///   4. Sinon → ReadWrite.
 pub fn negotiate_mount(
-    disk_version:  FormatVersion,
+    disk_version: FormatVersion,
     disk_features: FeatureFlags,
 ) -> MountCompatibility {
     // Règle VER-02 : majeur différent = rejet absolu.
@@ -200,13 +211,13 @@ pub fn negotiate_mount(
 #[derive(Clone, Debug)]
 pub struct VersionNegotiationResult {
     /// Résultat final de compatibilité.
-    pub compat:    MountCompatibility,
+    pub compat: MountCompatibility,
     /// Version trouvée sur le disque.
-    pub disk_ver:  FormatVersion,
+    pub disk_ver: FormatVersion,
     /// Features trouvées sur le disque.
     pub disk_feat: FeatureFlags,
     /// Raison lisible de la décision.
-    pub reason:    &'static str,
+    pub reason: &'static str,
     /// Features inconnues détectées (bits masqués).
     pub unknown_features: u32,
 }
@@ -225,43 +236,43 @@ impl VersionNegotiationResult {
 
 /// Négociation détaillée avec raison.
 pub fn negotiate_mount_detailed(
-    disk_version:  FormatVersion,
+    disk_version: FormatVersion,
     disk_features: FeatureFlags,
 ) -> VersionNegotiationResult {
     let unknown = disk_features.unknown_features();
 
     if disk_version.major != FORMAT_VERSION_MAJOR {
         return VersionNegotiationResult {
-            compat:           MountCompatibility::Rejected,
-            disk_ver:         disk_version,
-            disk_feat:        disk_features,
-            reason:           "incompatible major version (VER-02)",
+            compat: MountCompatibility::Rejected,
+            disk_ver: disk_version,
+            disk_feat: disk_features,
+            reason: "incompatible major version (VER-02)",
             unknown_features: unknown,
         };
     }
     if unknown != 0 {
         return VersionNegotiationResult {
-            compat:           MountCompatibility::ReadOnly,
-            disk_ver:         disk_version,
-            disk_feat:        disk_features,
-            reason:           "unknown feature flags present (VER-03)",
+            compat: MountCompatibility::ReadOnly,
+            disk_ver: disk_version,
+            disk_feat: disk_features,
+            reason: "unknown feature flags present (VER-03)",
             unknown_features: unknown,
         };
     }
     if disk_version.minor > FORMAT_VERSION_MINOR {
         return VersionNegotiationResult {
-            compat:           MountCompatibility::ReadOnly,
-            disk_ver:         disk_version,
-            disk_feat:        disk_features,
-            reason:           "future minor version, degraded to read-only (VER-01)",
+            compat: MountCompatibility::ReadOnly,
+            disk_ver: disk_version,
+            disk_feat: disk_features,
+            reason: "future minor version, degraded to read-only (VER-01)",
             unknown_features: 0,
         };
     }
     VersionNegotiationResult {
-        compat:           MountCompatibility::ReadWrite,
-        disk_ver:         disk_version,
-        disk_feat:        disk_features,
-        reason:           "fully compatible",
+        compat: MountCompatibility::ReadWrite,
+        disk_ver: disk_version,
+        disk_feat: disk_features,
+        reason: "fully compatible",
         unknown_features: 0,
     }
 }
@@ -276,27 +287,55 @@ pub struct FeatureFlagsBuilder(u32);
 
 impl FeatureFlagsBuilder {
     /// Commence avec aucun flag.
-    pub fn new() -> Self { Self(0) }
+    pub fn new() -> Self {
+        Self(0)
+    }
 
     /// Active la déduplication.
-    pub fn dedup(mut self) -> Self { self.0 |= FeatureFlags::DEDUP.0; self }
+    pub fn dedup(mut self) -> Self {
+        self.0 |= FeatureFlags::DEDUP.0;
+        self
+    }
     /// Active la compression.
-    pub fn compression(mut self) -> Self { self.0 |= FeatureFlags::COMPRESSION.0; self }
+    pub fn compression(mut self) -> Self {
+        self.0 |= FeatureFlags::COMPRESSION.0;
+        self
+    }
     /// Active le chiffrement.
-    pub fn encryption(mut self) -> Self { self.0 |= FeatureFlags::ENCRYPTION.0; self }
+    pub fn encryption(mut self) -> Self {
+        self.0 |= FeatureFlags::ENCRYPTION.0;
+        self
+    }
     /// Active les snapshots.
-    pub fn snapshots(mut self) -> Self { self.0 |= FeatureFlags::SNAPSHOTS.0; self }
+    pub fn snapshots(mut self) -> Self {
+        self.0 |= FeatureFlags::SNAPSHOTS.0;
+        self
+    }
     /// Active les relations.
-    pub fn relations(mut self) -> Self { self.0 |= FeatureFlags::RELATIONS.0; self }
+    pub fn relations(mut self) -> Self {
+        self.0 |= FeatureFlags::RELATIONS.0;
+        self
+    }
     /// Active les quotas.
-    pub fn quotas(mut self) -> Self { self.0 |= FeatureFlags::QUOTAS.0; self }
+    pub fn quotas(mut self) -> Self {
+        self.0 |= FeatureFlags::QUOTAS.0;
+        self
+    }
     /// Active les hints NUMA.
-    pub fn numa_hints(mut self) -> Self { self.0 |= FeatureFlags::NUMA_HINTS.0; self }
+    pub fn numa_hints(mut self) -> Self {
+        self.0 |= FeatureFlags::NUMA_HINTS.0;
+        self
+    }
     /// Active le format de path v2.
-    pub fn path_v2(mut self) -> Self { self.0 |= FeatureFlags::PATH_V2.0; self }
+    pub fn path_v2(mut self) -> Self {
+        self.0 |= FeatureFlags::PATH_V2.0;
+        self
+    }
 
     /// Construit le FeatureFlags final.
-    pub fn build(self) -> FeatureFlags { FeatureFlags(self.0) }
+    pub fn build(self) -> FeatureFlags {
+        FeatureFlags(self.0)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -307,11 +346,11 @@ impl FeatureFlagsBuilder {
 #[derive(Copy, Clone, Debug)]
 pub struct FeatureDependency {
     /// Feature dépendante.
-    pub feature:  FeatureFlags,
+    pub feature: FeatureFlags,
     /// Feature requise (prérequis).
     pub requires: FeatureFlags,
     /// Description lisible.
-    pub desc:     &'static str,
+    pub desc: &'static str,
 }
 
 /// Tableau des dépendances entre features.
@@ -319,14 +358,14 @@ pub struct FeatureDependency {
 /// Exemple : ENCRYPTION requiert SNAPSHOTS (pour le recovery key store).
 static FEATURE_DEPS: &[FeatureDependency] = &[
     FeatureDependency {
-        feature:  FeatureFlags::ENCRYPTION,
+        feature: FeatureFlags::ENCRYPTION,
         requires: FeatureFlags::SNAPSHOTS,
-        desc:     "ENCRYPTION requires SNAPSHOTS (key store recovery)",
+        desc: "ENCRYPTION requires SNAPSHOTS (key store recovery)",
     },
     FeatureDependency {
-        feature:  FeatureFlags::PATH_V2,
+        feature: FeatureFlags::PATH_V2,
         requires: FeatureFlags::RELATIONS,
-        desc:     "PATH_V2 requires RELATIONS (typed edges)",
+        desc: "PATH_V2 requires RELATIONS (typed edges)",
     },
 ];
 
@@ -353,21 +392,19 @@ pub fn check_feature_dependencies(flags: FeatureFlags) -> Option<&'static Featur
 /// Entrée dans l'historique des versions du format ExoFS.
 #[derive(Copy, Clone, Debug)]
 pub struct VersionHistoryEntry {
-    pub version:     FormatVersion,
+    pub version: FormatVersion,
     pub description: &'static str,
     pub added_features: u32,
     pub deprecated_features: u32,
 }
 
 /// Table statique des versions du format ExoFS.
-static VERSION_HISTORY: &[VersionHistoryEntry] = &[
-    VersionHistoryEntry {
-        version: FormatVersion { major: 1, minor: 0 },
-        description: "Initial ExoFS format — blobs, code, config, secret, pathindex, relation",
-        added_features: FeatureFlags::DEDUP.0 | FeatureFlags::COMPRESSION.0 | FeatureFlags::SNAPSHOTS.0,
-        deprecated_features: 0,
-    },
-];
+static VERSION_HISTORY: &[VersionHistoryEntry] = &[VersionHistoryEntry {
+    version: FormatVersion { major: 1, minor: 0 },
+    description: "Initial ExoFS format — blobs, code, config, secret, pathindex, relation",
+    added_features: FeatureFlags::DEDUP.0 | FeatureFlags::COMPRESSION.0 | FeatureFlags::SNAPSHOTS.0,
+    deprecated_features: 0,
+}];
 
 /// Retourne l'entrée d'historique pour une version donnée, ou None.
 /// RECUR-01 : while.
@@ -375,7 +412,9 @@ pub fn version_history_entry(v: FormatVersion) -> Option<&'static VersionHistory
     let mut i = 0usize;
     while i < VERSION_HISTORY.len() {
         let e = &VERSION_HISTORY[i];
-        if e.version.major == v.major && e.version.minor == v.minor { return Some(e); }
+        if e.version.major == v.major && e.version.minor == v.minor {
+            return Some(e);
+        }
         i = i.wrapping_add(1);
     }
     None
@@ -388,8 +427,8 @@ pub fn version_history_entry(v: FormatVersion) -> Option<&'static VersionHistory
 /// Descripteur d'un chemin de migration entre deux versions.
 #[derive(Copy, Clone, Debug)]
 pub struct MigrationDescriptor {
-    pub from:   FormatVersion,
-    pub to:     FormatVersion,
+    pub from: FormatVersion,
+    pub to: FormatVersion,
     /// Estimation du coût en epochs.
     pub estimated_epochs: u32,
     /// Migration peut se faire à chaud (sans démonter le volume).
@@ -400,10 +439,7 @@ pub struct MigrationDescriptor {
 /// Retourne le descripteur de migration applicable, si disponible.
 ///
 /// Retourne None si aucune migration auto n'est disponible.
-pub fn find_migration_path(
-    from: FormatVersion,
-    to:   FormatVersion,
-) -> Option<MigrationDescriptor> {
+pub fn find_migration_path(from: FormatVersion, to: FormatVersion) -> Option<MigrationDescriptor> {
     // Pour l'instant seule une migration 1.0→1.x est définie.
     if from.major == 1 && to.major == 1 && to.minor > from.minor {
         Some(MigrationDescriptor {
@@ -427,14 +463,30 @@ pub fn find_migration_path(
 /// Exemple : DEDUP = 5 → 0.5% d'overhead de métadonnées.
 /// ARITH-02 : valeurs raw u32.
 pub fn feature_overhead_pct10(feature: u32) -> u32 {
-    if feature == FeatureFlags::DEDUP.0       { return 5;  }
-    if feature == FeatureFlags::COMPRESSION.0 { return 3;  }
-    if feature == FeatureFlags::ENCRYPTION.0  { return 10; }
-    if feature == FeatureFlags::SNAPSHOTS.0   { return 8;  }
-    if feature == FeatureFlags::RELATIONS.0   { return 4;  }
-    if feature == FeatureFlags::QUOTAS.0      { return 2;  }
-    if feature == FeatureFlags::NUMA_HINTS.0  { return 1;  }
-    if feature == FeatureFlags::PATH_V2.0     { return 3;  }
+    if feature == FeatureFlags::DEDUP.0 {
+        return 5;
+    }
+    if feature == FeatureFlags::COMPRESSION.0 {
+        return 3;
+    }
+    if feature == FeatureFlags::ENCRYPTION.0 {
+        return 10;
+    }
+    if feature == FeatureFlags::SNAPSHOTS.0 {
+        return 8;
+    }
+    if feature == FeatureFlags::RELATIONS.0 {
+        return 4;
+    }
+    if feature == FeatureFlags::QUOTAS.0 {
+        return 2;
+    }
+    if feature == FeatureFlags::NUMA_HINTS.0 {
+        return 1;
+    }
+    if feature == FeatureFlags::PATH_V2.0 {
+        return 3;
+    }
     0
 }
 
@@ -463,7 +515,7 @@ pub fn total_features_overhead_pct10(flags: FeatureFlags) -> u32 {
 ///   - features sans dépendances manquantes.
 ///   - overhead total < 50% (protection contre la corruption).
 pub fn validate_version_on_disk(
-    version:  FormatVersion,
+    version: FormatVersion,
     features: FeatureFlags,
 ) -> Result<(), &'static str> {
     // Version majeure inconnue.
@@ -513,7 +565,11 @@ pub fn version_less_than(a: FormatVersion, b: FormatVersion) -> bool {
 
 /// Retourne la version la plus récente entre deux candidates.
 pub fn version_max(a: FormatVersion, b: FormatVersion) -> FormatVersion {
-    if version_less_than(a, b) { b } else { a }
+    if version_less_than(a, b) {
+        b
+    } else {
+        a
+    }
 }
 
 /// Vrai si une feature est requise pour une opération donnée.
@@ -522,12 +578,11 @@ pub fn version_max(a: FormatVersion, b: FormatVersion) -> FormatVersion {
 /// Par exemple, un snapshot requiert SNAPSHOTS.
 pub fn feature_required_for(op: &str, features: FeatureFlags) -> bool {
     match op {
-        "snapshot"   => features.has(FeatureFlags::SNAPSHOTS),
-        "dedup"      => features.has(FeatureFlags::DEDUP),
-        "compress"   => features.has(FeatureFlags::COMPRESSION),
-        "encrypt"    => features.has(FeatureFlags::ENCRYPTION),
-        "quota"      => features.has(FeatureFlags::QUOTAS),
-        _           => true, // feature inconnue → admis par défaut
+        "snapshot" => features.has(FeatureFlags::SNAPSHOTS),
+        "dedup" => features.has(FeatureFlags::DEDUP),
+        "compress" => features.has(FeatureFlags::COMPRESSION),
+        "encrypt" => features.has(FeatureFlags::ENCRYPTION),
+        "quota" => features.has(FeatureFlags::QUOTAS),
+        _ => true, // feature inconnue → admis par défaut
     }
 }
-

@@ -5,15 +5,14 @@
 //!  - ARITH-02 : arithmétique vérifiée
 //!  - RECUR-01 : aucune récursion
 
-
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
-use crate::fs::exofs::core::{ExofsError, ExofsResult, BlobId};
-use super::relation_storage::RELATION_STORAGE;
 use super::relation_graph::RELATION_GRAPH;
 use super::relation_index::RELATION_INDEX;
+use super::relation_storage::RELATION_STORAGE;
+use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
+use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BlobExistsChecker
@@ -68,17 +67,17 @@ impl GcPolicy {
 #[derive(Clone, Debug, Default)]
 pub struct RelationGcReport {
     /// Nombre de relations examinées.
-    pub examined:   u32,
+    pub examined: u32,
     /// Nombre de relations supprimées.
-    pub purged:     u32,
+    pub purged: u32,
     /// Nombre de relations conservées.
-    pub kept:       u32,
+    pub kept: u32,
     /// Nombre d'erreurs rencontrées.
-    pub errors:     u32,
+    pub errors: u32,
     /// Ticks de début du GC.
     pub started_at: u64,
     /// Ticks de fin du GC.
-    pub ended_at:   u64,
+    pub ended_at: u64,
 }
 
 impl RelationGcReport {
@@ -89,12 +88,16 @@ impl RelationGcReport {
 
     /// Taux de purge (purged / examined), en pourcents.
     pub fn purge_rate_pct(&self) -> u32 {
-        if self.examined == 0 { return 0; }
+        if self.examined == 0 {
+            return 0;
+        }
         ((self.purged as u64 * 100) / self.examined as u64) as u32
     }
 
     /// `true` si aucune erreur.
-    pub fn is_clean(&self) -> bool { self.errors == 0 }
+    pub fn is_clean(&self) -> bool {
+        self.errors == 0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,9 +107,9 @@ impl RelationGcReport {
 /// Relation identifiée comme candidate à la purge.
 #[derive(Clone, Debug)]
 pub struct GcCandidate {
-    pub blob_from:  [u8; 32],
-    pub blob_to:    [u8; 32],
-    pub reason:     GcReason,
+    pub blob_from: [u8; 32],
+    pub blob_to: [u8; 32],
+    pub reason: GcReason,
 }
 
 /// Raison de la candidature.
@@ -133,10 +136,7 @@ impl RelationGc {
     /// Purge les relations orphelines selon la politique donnée.
     ///
     /// Itératif (RECUR-01) — simple boucle `for` sur les relations.
-    pub fn run(
-        checker: &dyn BlobExistsChecker,
-        policy:  GcPolicy,
-    ) -> ExofsResult<RelationGcReport> {
+    pub fn run(checker: &dyn BlobExistsChecker, policy: GcPolicy) -> ExofsResult<RelationGcReport> {
         let started_at = exofs_ticks();
         let all = RELATION_STORAGE.load_all()?;
         let now_ticks = exofs_ticks();
@@ -146,20 +146,18 @@ impl RelationGc {
         };
 
         for rel in all {
-            report.examined = report.examined.checked_add(1)
+            report.examined = report
+                .examined
+                .checked_add(1)
                 .ok_or(ExofsError::OffsetOverflow)?;
 
             let from_key = rel.from.as_bytes();
-            let to_key   = rel.to.as_bytes();
+            let to_key = rel.to.as_bytes();
 
             let should_purge = match policy {
-                GcPolicy::OrphansOnly => {
-                    !checker.exists(from_key) || !checker.exists(to_key)
-                }
+                GcPolicy::OrphansOnly => !checker.exists(from_key) || !checker.exists(to_key),
                 GcPolicy::IncludeDeleted => {
-                    !rel.is_active()
-                    || !checker.exists(from_key)
-                    || !checker.exists(to_key)
+                    !rel.is_active() || !checker.exists(from_key) || !checker.exists(to_key)
                 }
                 GcPolicy::ByAge { max_age_ticks } => {
                     let age = now_ticks.saturating_sub(rel.created_at);
@@ -168,9 +166,9 @@ impl RelationGc {
                 GcPolicy::Full => {
                     let age = now_ticks.saturating_sub(rel.created_at);
                     !rel.is_active()
-                    || !checker.exists(from_key)
-                    || !checker.exists(to_key)
-                    || age > u64::MAX / 2
+                        || !checker.exists(from_key)
+                        || !checker.exists(to_key)
+                        || age > u64::MAX / 2
                 }
             };
 
@@ -178,10 +176,14 @@ impl RelationGc {
                 RELATION_GRAPH.remove_relation(&rel);
                 RELATION_INDEX.remove(&rel);
                 RELATION_STORAGE.remove(rel.id);
-                report.purged = report.purged.checked_add(1)
+                report.purged = report
+                    .purged
+                    .checked_add(1)
                     .ok_or(ExofsError::OffsetOverflow)?;
             } else {
-                report.kept = report.kept.checked_add(1)
+                report.kept = report
+                    .kept
+                    .checked_add(1)
                     .ok_or(ExofsError::OffsetOverflow)?;
             }
         }
@@ -197,7 +199,7 @@ impl RelationGc {
         let blob = BlobId(*key);
 
         let from_ids = RELATION_INDEX.ids_from(&blob);
-        let to_ids   = RELATION_INDEX.ids_to(&blob);
+        let to_ids = RELATION_INDEX.ids_to(&blob);
 
         let mut n_purged = 0u32;
 
@@ -208,9 +210,7 @@ impl RelationGc {
                         RELATION_GRAPH.remove_relation(&rel);
                         RELATION_INDEX.remove(&rel);
                         RELATION_STORAGE.remove(*id);
-                        n_purged = n_purged
-                            .checked_add(1)
-                            .ok_or(ExofsError::OffsetOverflow)?;
+                        n_purged = n_purged.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
                     }
                     Err(_) => {
                         // Relation corrompue — supprime quand même du store.
@@ -227,36 +227,40 @@ impl RelationGc {
     /// Collecte les candidats à la purge sans les supprimer.
     ///
     /// Utile pour inspecter ce qui serait purgé avant de lancer un vrai GC.
-    pub fn dry_run(
-        checker: &dyn BlobExistsChecker,
-    ) -> ExofsResult<Vec<GcCandidate>> {
+    pub fn dry_run(checker: &dyn BlobExistsChecker) -> ExofsResult<Vec<GcCandidate>> {
         let all = RELATION_STORAGE.load_all()?;
         let mut candidates: Vec<GcCandidate> = Vec::new();
 
         for rel in all {
             let from_key = rel.from.as_bytes();
-            let to_key   = rel.to.as_bytes();
+            let to_key = rel.to.as_bytes();
 
             if !checker.exists(from_key) {
-                candidates.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                candidates
+                    .try_reserve(1)
+                    .map_err(|_| ExofsError::NoMemory)?;
                 candidates.push(GcCandidate {
                     blob_from: *from_key,
-                    blob_to:   *to_key,
-                    reason:    GcReason::FromBlobMissing,
+                    blob_to: *to_key,
+                    reason: GcReason::FromBlobMissing,
                 });
             } else if !checker.exists(to_key) {
-                candidates.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                candidates
+                    .try_reserve(1)
+                    .map_err(|_| ExofsError::NoMemory)?;
                 candidates.push(GcCandidate {
                     blob_from: *from_key,
-                    blob_to:   *to_key,
-                    reason:    GcReason::ToBlobMissing,
+                    blob_to: *to_key,
+                    reason: GcReason::ToBlobMissing,
                 });
             } else if !rel.is_active() {
-                candidates.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                candidates
+                    .try_reserve(1)
+                    .map_err(|_| ExofsError::NoMemory)?;
                 candidates.push(GcCandidate {
                     blob_from: *from_key,
-                    blob_to:   *to_key,
-                    reason:    GcReason::SoftDeleted,
+                    blob_to: *to_key,
+                    reason: GcReason::SoftDeleted,
                 });
             }
         }
@@ -273,7 +277,7 @@ impl RelationGc {
 #[derive(Clone, Debug)]
 pub struct GcTrigger {
     /// Déclenche si le nombre de relations dépasse ce seuil.
-    pub max_relations:  usize,
+    pub max_relations: usize,
     /// Déclenche si N ticks se sont écoulés depuis le dernier GC.
     pub min_interval_ticks: u64,
 }
@@ -281,7 +285,7 @@ pub struct GcTrigger {
 impl Default for GcTrigger {
     fn default() -> Self {
         GcTrigger {
-            max_relations:      60000,
+            max_relations: 60000,
             min_interval_ticks: 1_000_000,
         }
     }
@@ -289,34 +293,37 @@ impl Default for GcTrigger {
 
 /// Planificateur de GC — décide quand il est opportun de lancer un GC.
 pub struct GcScheduler {
-    trigger:         GcTrigger,
-    last_gc_tick:    u64,
-    total_gc_runs:   u64,
+    trigger: GcTrigger,
+    last_gc_tick: u64,
+    total_gc_runs: u64,
 }
 
 impl GcScheduler {
     /// Crée un planificateur avec les triggers par défaut.
     pub fn new() -> Self {
         GcScheduler {
-            trigger:       GcTrigger::default(),
-            last_gc_tick:  0,
+            trigger: GcTrigger::default(),
+            last_gc_tick: 0,
             total_gc_runs: 0,
         }
     }
 
     /// Crée avec des triggers explicites.
     pub fn with_trigger(trigger: GcTrigger) -> Self {
-        GcScheduler { trigger, last_gc_tick: 0, total_gc_runs: 0 }
+        GcScheduler {
+            trigger,
+            last_gc_tick: 0,
+            total_gc_runs: 0,
+        }
     }
 
     /// `true` si un GC devrait être lancé maintenant.
     pub fn should_run(&self) -> bool {
-        let now      = exofs_ticks();
-        let n_rels   = RELATION_STORAGE.count();
+        let now = exofs_ticks();
+        let n_rels = RELATION_STORAGE.count();
         let interval = now.saturating_sub(self.last_gc_tick);
 
-        n_rels >= self.trigger.max_relations
-            || interval >= self.trigger.min_interval_ticks
+        n_rels >= self.trigger.max_relations || interval >= self.trigger.min_interval_ticks
     }
 
     /// Lance le GC si les conditions sont remplies.
@@ -325,17 +332,21 @@ impl GcScheduler {
     pub fn maybe_run(
         &mut self,
         checker: &dyn BlobExistsChecker,
-        policy:  GcPolicy,
+        policy: GcPolicy,
     ) -> ExofsResult<Option<RelationGcReport>> {
-        if !self.should_run() { return Ok(None); }
+        if !self.should_run() {
+            return Ok(None);
+        }
         let report = RelationGc::run(checker, policy)?;
-        self.last_gc_tick  = exofs_ticks();
+        self.last_gc_tick = exofs_ticks();
         self.total_gc_runs = self.total_gc_runs.wrapping_add(1);
         Ok(Some(report))
     }
 
     /// Nombre total de GC exécutés depuis la création.
-    pub fn total_runs(&self) -> u64 { self.total_gc_runs }
+    pub fn total_runs(&self) -> u64 {
+        self.total_gc_runs
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -351,47 +362,64 @@ mod tests {
     // use super::super::relation_index::RelationIndex;
     // use super::super::relation_graph::RelationGraph;
 
-    #[allow(dead_code)] fn blob(b: u8) -> BlobId { BlobId([b; 32]) }
+    #[allow(dead_code)]
+    fn blob(b: u8) -> BlobId {
+        BlobId([b; 32])
+    }
 
     /// Checker qui marque tous les blobs comme existants.
     struct AllExist;
     impl BlobExistsChecker for AllExist {
-        fn exists(&self, _key: &[u8; 32]) -> bool { true }
+        fn exists(&self, _key: &[u8; 32]) -> bool {
+            true
+        }
     }
 
     /// Checker qui marque tous les blobs comme supprimés.
-    #[allow(dead_code)] struct NoneExist;
+    #[allow(dead_code)]
+    struct NoneExist;
     impl BlobExistsChecker for NoneExist {
-        fn exists(&self, _key: &[u8; 32]) -> bool { false }
+        fn exists(&self, _key: &[u8; 32]) -> bool {
+            false
+        }
     }
 
-    #[test] fn test_gc_report_defaults() {
+    #[test]
+    fn test_gc_report_defaults() {
         let r = RelationGcReport::default();
         assert!(r.is_clean());
         assert_eq!(r.purge_rate_pct(), 0);
         assert_eq!(r.duration_ticks(), 0);
     }
 
-    #[test] fn test_gc_report_purge_rate() {
+    #[test]
+    fn test_gc_report_purge_rate() {
         let r = RelationGcReport {
-            examined: 10, purged: 4, ..Default::default()
+            examined: 10,
+            purged: 4,
+            ..Default::default()
         };
         assert_eq!(r.purge_rate_pct(), 40);
     }
 
-    #[test] fn test_gc_policy_variants() {
+    #[test]
+    fn test_gc_policy_variants() {
         assert!(!GcPolicy::OrphansOnly.purge_deleted());
         assert!(GcPolicy::IncludeDeleted.purge_deleted());
         assert!(GcPolicy::Full.purge_deleted());
-        assert!(GcPolicy::ByAge { max_age_ticks: 100 }.purge_by_age().is_some());
+        assert!(GcPolicy::ByAge { max_age_ticks: 100 }
+            .purge_by_age()
+            .is_some());
     }
 
-    #[test] fn test_gc_reason_variants() {
+    #[test]
+    fn test_gc_reason_variants() {
         let r = GcReason::FromBlobMissing;
         assert_eq!(r, GcReason::FromBlobMissing);
     }
 
-    #[test] fn test_dry_run_all_exist() {
+    #[test]
+    fn test_dry_run_all_exist() {
         // Toutes les relations ont their blobs existants → aucun candidat.
         let candidates = RelationGc::dry_run(&AllExist).unwrap();
         // Des relations globales peuvent exister dans le store global —
@@ -399,18 +427,24 @@ mod tests {
         let _ = candidates;
     }
 
-    #[test] fn test_scheduler_new() {
+    #[test]
+    fn test_scheduler_new() {
         let s = GcScheduler::new();
         assert_eq!(s.total_runs(), 0);
     }
 
-    #[test] fn test_scheduler_with_trigger() {
-        let t = GcTrigger { max_relations: 100, min_interval_ticks: 50 };
+    #[test]
+    fn test_scheduler_with_trigger() {
+        let t = GcTrigger {
+            max_relations: 100,
+            min_interval_ticks: 50,
+        };
         let s = GcScheduler::with_trigger(t.clone());
         assert_eq!(s.trigger.max_relations, 100);
     }
 
-    #[test] fn test_purge_blob_missing() {
+    #[test]
+    fn test_purge_blob_missing() {
         // Blob inexistant → aucune relation à purger.
         let n = RelationGc::purge_blob(&[0xABu8; 32]).unwrap();
         // On ne sait pas combien il y en a dans le store global,
@@ -418,7 +452,8 @@ mod tests {
         let _ = n;
     }
 
-    #[test] fn test_gc_run_all_exist() {
+    #[test]
+    fn test_gc_run_all_exist() {
         let checker = AllExist;
         let report = RelationGc::run(&checker, GcPolicy::OrphansOnly).unwrap();
         // Aucun orphelin car tous les blobs existent.
@@ -427,11 +462,12 @@ mod tests {
         let _ = report;
     }
 
-    #[test] fn test_gc_candidate_struct() {
+    #[test]
+    fn test_gc_candidate_struct() {
         let c = GcCandidate {
             blob_from: [1u8; 32],
-            blob_to:   [2u8; 32],
-            reason:    GcReason::ToBlobMissing,
+            blob_to: [2u8; 32],
+            reason: GcReason::ToBlobMissing,
         };
         assert_eq!(c.reason, GcReason::ToBlobMissing);
     }

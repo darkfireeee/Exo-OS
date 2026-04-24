@@ -19,7 +19,6 @@
 //
 // COUCHE 0 — pas de dépendance scheduler/process/ipc/fs.
 
-
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
@@ -46,17 +45,17 @@ pub const MAX_SHRINKERS: usize = 32;
 /// Entrée dans la table de shrinkers.
 pub struct ShrinkerEntry {
     /// Callback à appeler.
-    pub callback:    ShrinkerFn,
+    pub callback: ShrinkerFn,
     /// Nom du sous-système (pour debug/stats), max 15 chars + NUL.
-    pub name:        [u8; 16],
+    pub name: [u8; 16],
     /// L'entrée est active.
-    pub active:      bool,
+    pub active: bool,
     /// Priorité : les shrinkers de haute priorité sont appelés en premier.
     /// Valeur plus petite = plus haute priorité.
-    pub priority:    u8,
+    pub priority: u8,
     /// Statistiques du shrinker.
     pub total_freed: AtomicU64,
-    pub call_count:  AtomicU64,
+    pub call_count: AtomicU64,
 }
 
 impl ShrinkerEntry {
@@ -70,7 +69,7 @@ impl ShrinkerEntry {
             active: true,
             priority,
             total_freed: AtomicU64::new(0),
-            call_count:  AtomicU64::new(0),
+            call_count: AtomicU64::new(0),
         }
     }
 }
@@ -87,7 +86,7 @@ pub struct ShrinkerId(pub usize);
 
 struct ShrinkerTableInner {
     entries: [Option<ShrinkerEntry>; MAX_SHRINKERS],
-    count:   usize,
+    count: usize,
 }
 
 impl ShrinkerTableInner {
@@ -109,22 +108,22 @@ static SHRINKER_TABLE: Mutex<ShrinkerTableInner> = Mutex::new(ShrinkerTableInner
 #[repr(C)]
 pub struct ShrinkerStats {
     /// Nombre total d'appels `run_shrinkers`.
-    pub run_count:      AtomicU64,
+    pub run_count: AtomicU64,
     /// Pages totales libérées par tous les shrinkers.
-    pub pages_freed:    AtomicU64,
+    pub pages_freed: AtomicU64,
     /// Nombre de fois ou l'objectif n'a pas pu être atteint.
-    pub goal_missed:    AtomicU64,
+    pub goal_missed: AtomicU64,
     /// Nombre de shrinkers enregistrés.
-    pub registered:     AtomicUsize,
+    pub registered: AtomicUsize,
 }
 
 impl ShrinkerStats {
     const fn new() -> Self {
         Self {
-            run_count:   AtomicU64::new(0),
+            run_count: AtomicU64::new(0),
             pages_freed: AtomicU64::new(0),
             goal_missed: AtomicU64::new(0),
-            registered:  AtomicUsize::new(0),
+            registered: AtomicUsize::new(0),
         }
     }
 }
@@ -159,7 +158,9 @@ pub fn register_shrinker(callback: ShrinkerFn, name: &[u8], priority: u8) -> Opt
 /// Désenregistre un shrinker par son ID.
 pub fn unregister_shrinker(id: ShrinkerId) -> bool {
     let mut table = SHRINKER_TABLE.lock();
-    if id.0 >= MAX_SHRINKERS { return false; }
+    if id.0 >= MAX_SHRINKERS {
+        return false;
+    }
     if table.entries[id.0].is_some() {
         table.entries[id.0] = None;
         table.count -= 1;
@@ -203,14 +204,16 @@ pub fn run_shrinkers(target_pages: u64) -> u64 {
     }
 
     let mut total_freed = 0u64;
-    let mut remaining   = target_pages;
+    let mut remaining = target_pages;
 
     for k in 0..snap_len {
         if let Some((_, cb, idx)) = snapshot[k] {
-            if remaining == 0 { break; }
+            if remaining == 0 {
+                break;
+            }
             let freed = cb(remaining);
-            total_freed  += freed;
-            remaining     = remaining.saturating_sub(freed);
+            total_freed += freed;
+            remaining = remaining.saturating_sub(freed);
 
             // Mise à jour stats de l'entrée.
             let table = SHRINKER_TABLE.lock();
@@ -221,7 +224,9 @@ pub fn run_shrinkers(target_pages: u64) -> u64 {
         }
     }
 
-    SHRINKER_STATS.pages_freed.fetch_add(total_freed, Ordering::Relaxed);
+    SHRINKER_STATS
+        .pages_freed
+        .fetch_add(total_freed, Ordering::Relaxed);
     if total_freed < target_pages {
         SHRINKER_STATS.goal_missed.fetch_add(1, Ordering::Relaxed);
     }
@@ -239,7 +244,9 @@ pub fn shrink_all(pages: u64) -> u64 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Shrinker de secours no-op (enregistré en priorité basse pour les tests).
-fn nop_shrinker(_target: u64) -> u64 { 0 }
+fn nop_shrinker(_target: u64) -> u64 {
+    0
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Initialisation

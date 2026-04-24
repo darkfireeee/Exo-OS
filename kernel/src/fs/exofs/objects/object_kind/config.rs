@@ -8,14 +8,11 @@
 //   ARITH-02  : checked_add / saturating_* partout
 //   RECUR-01  : itératif seulement
 
-
+use alloc::vec::Vec;
 use core::fmt;
 use core::mem;
-use alloc::vec::Vec;
 
-use crate::fs::exofs::core::{
-    ObjectId, EpochId, ExofsError, ExofsResult, blake3_hash,
-};
+use crate::fs::exofs::core::{blake3_hash, EpochId, ExofsError, ExofsResult, ObjectId};
 
 // ── Constantes ──────────────────────────────────────────────────────────────────
 
@@ -44,8 +41,8 @@ pub const CONFIG_ENTRY_MAGIC: u16 = 0xCEA1;
 
 pub const CONFIG_ENTRY_FLAG_REQUIRED: u8 = 1 << 0; // Entrée obligatoire
 pub const CONFIG_ENTRY_FLAG_READONLY: u8 = 1 << 1; // Ne peut pas être écrasée
-pub const CONFIG_ENTRY_FLAG_DELETED:  u8 = 1 << 2; // Marquée supprimée (tombstone)
-pub const CONFIG_ENTRY_FLAG_SECRET:   u8 = 1 << 3; // Valeur opaque (chiffrée)
+pub const CONFIG_ENTRY_FLAG_DELETED: u8 = 1 << 2; // Marquée supprimée (tombstone)
+pub const CONFIG_ENTRY_FLAG_SECRET: u8 = 1 << 3; // Valeur opaque (chiffrée)
 
 // ── ConfigEntryDisk ─────────────────────────────────────────────────────────────
 
@@ -66,16 +63,16 @@ pub const CONFIG_ENTRY_FLAG_SECRET:   u8 = 1 << 3; // Valeur opaque (chiffrée)
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct ConfigEntryDisk {
-    pub magic:       u16,
-    pub flags:       u8,
-    pub _pad0:       u8,
-    pub key_len:     u8,
-    pub val_len_hi:  u8,
-    pub val_len_lo:  u8,
-    pub _pad1:       u8,
-    pub key:         [u8; CONFIG_KEY_LEN],
-    pub value:       [u8; CONFIG_VALUE_LEN],
-    pub checksum:    [u8; 32],
+    pub magic: u16,
+    pub flags: u8,
+    pub _pad0: u8,
+    pub key_len: u8,
+    pub val_len_hi: u8,
+    pub val_len_lo: u8,
+    pub _pad1: u8,
+    pub key: [u8; CONFIG_KEY_LEN],
+    pub value: [u8; CONFIG_VALUE_LEN],
+    pub checksum: [u8; 32],
 }
 
 const _: () = assert!(
@@ -121,13 +118,13 @@ impl fmt::Debug for ConfigEntryDisk {
 #[derive(Clone)]
 pub struct ConfigEntry {
     /// Clé ASCII (longueur variée ≤ CONFIG_KEY_LEN).
-    pub key:     [u8; CONFIG_KEY_LEN],
+    pub key: [u8; CONFIG_KEY_LEN],
     pub key_len: u8,
     /// Valeur (longueur variée ≤ CONFIG_VALUE_LEN).
-    pub value:   [u8; CONFIG_VALUE_LEN],
+    pub value: [u8; CONFIG_VALUE_LEN],
     pub val_len: u16,
     /// Flags (CONFIG_ENTRY_FLAG_*).
-    pub flags:   u8,
+    pub flags: u8,
 }
 
 impl ConfigEntry {
@@ -136,11 +133,11 @@ impl ConfigEntry {
     /// Crée une entrée vide.
     pub fn empty() -> Self {
         Self {
-            key:     [0u8; CONFIG_KEY_LEN],
+            key: [0u8; CONFIG_KEY_LEN],
             key_len: 0,
-            value:   [0u8; CONFIG_VALUE_LEN],
+            value: [0u8; CONFIG_VALUE_LEN],
             val_len: 0,
-            flags:   0,
+            flags: 0,
         }
     }
 
@@ -165,11 +162,11 @@ impl ConfigEntry {
         d.verify()?;
         let val_len = (({ d.val_len_hi } as u16) << 8) | { d.val_len_lo } as u16;
         Ok(Self {
-            key:     { d.key },
+            key: { d.key },
             key_len: { d.key_len },
-            value:   { d.value },
+            value: { d.value },
             val_len,
-            flags:   { d.flags },
+            flags: { d.flags },
         })
     }
 
@@ -177,16 +174,16 @@ impl ConfigEntry {
 
     pub fn to_disk(&self) -> ConfigEntryDisk {
         let mut d = ConfigEntryDisk {
-            magic:      CONFIG_ENTRY_MAGIC,
-            flags:      self.flags,
-            _pad0:      0,
-            key_len:    self.key_len,
+            magic: CONFIG_ENTRY_MAGIC,
+            flags: self.flags,
+            _pad0: 0,
+            key_len: self.key_len,
             val_len_hi: (self.val_len >> 8) as u8,
             val_len_lo: (self.val_len & 0xFF) as u8,
-            _pad1:      0,
-            key:        self.key,
-            value:      self.value,
-            checksum:   [0u8; 32],
+            _pad1: 0,
+            key: self.key,
+            value: self.value,
+            checksum: [0u8; 32],
         };
         d.checksum = d.compute_checksum();
         d
@@ -236,12 +233,17 @@ impl fmt::Display for ConfigEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // SEC-04 : ne pas loguer les valeurs marquées SECRET.
         if self.flags & CONFIG_ENTRY_FLAG_SECRET != 0 {
-            write!(f, "ConfigEntry {{ key: {:?}, value: <secret> }}", self.key_bytes())
+            write!(
+                f,
+                "ConfigEntry {{ key: {:?}, value: <secret> }}",
+                self.key_bytes()
+            )
         } else {
             write!(
                 f,
                 "ConfigEntry {{ key: {:?}, val_len: {} }}",
-                self.key_bytes(), self.val_len
+                self.key_bytes(),
+                self.val_len
             )
         }
     }
@@ -260,13 +262,13 @@ impl fmt::Debug for ConfigEntry {
 /// Garde un vecteur trié par clé pour la recherche binaire (RECUR-01 : itératif).
 pub struct ConfigStore {
     /// Objet propriétaire.
-    pub object_id:    ObjectId,
+    pub object_id: ObjectId,
     /// Epoch de dernière modification.
     pub epoch_modify: EpochId,
     /// Entrées, triées par clé.
-    entries:          Vec<ConfigEntry>,
+    entries: Vec<ConfigEntry>,
     /// Version (incrémentée à chaque modification).
-    pub version:      u64,
+    pub version: u64,
 }
 
 impl ConfigStore {
@@ -276,8 +278,8 @@ impl ConfigStore {
         Self {
             object_id,
             epoch_modify: epoch,
-            entries:      Vec::new(),
-            version:      0,
+            entries: Vec::new(),
+            version: 0,
         }
     }
 
@@ -287,10 +289,7 @@ impl ConfigStore {
     pub fn set(&mut self, key: &[u8], value: &[u8], now: EpochId) -> ExofsResult<()> {
         if self.entries.len() >= CONFIG_MAX_ENTRIES {
             // Cherche d'abord un tombstone à réutiliser.
-            let tombstone = self
-                .entries
-                .iter_mut()
-                .find(|e| e.is_deleted());
+            let tombstone = self.entries.iter_mut().find(|e| e.is_deleted());
             if let Some(slot) = tombstone {
                 let new = ConfigEntry::from_slices(key, value)?;
                 *slot = new;
@@ -376,13 +375,10 @@ impl ConfigStore {
 
     /// Sérialise toutes les entrées non-supprimées.
     pub fn to_disk_vec(&self) -> ExofsResult<Vec<ConfigEntryDisk>> {
-        let active: Vec<&ConfigEntry> = self
-            .entries
-            .iter()
-            .filter(|e| !e.is_deleted())
-            .collect();
+        let active: Vec<&ConfigEntry> = self.entries.iter().filter(|e| !e.is_deleted()).collect();
         let mut out = Vec::new();
-        out.try_reserve(active.len()).map_err(|_| ExofsError::NoMemory)?;
+        out.try_reserve(active.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         for e in active {
             out.push(e.to_disk());
         }
@@ -399,7 +395,10 @@ impl ConfigStore {
             return Err(ExofsError::Overflow);
         }
         let mut store = Self::new(object_id, epoch);
-        store.entries.try_reserve(entries.len()).map_err(|_| ExofsError::NoMemory)?;
+        store
+            .entries
+            .try_reserve(entries.len())
+            .map_err(|_| ExofsError::NoMemory)?;
         for d in entries.iter() {
             let entry = ConfigEntry::from_disk(d)?;
             store.entries.push(entry);
@@ -466,23 +465,31 @@ impl fmt::Debug for ConfigStore {
 /// Statistiques des objets Config.
 #[derive(Default, Debug)]
 pub struct ConfigStats {
-    pub total_stores:    u64,
-    pub total_entries:   u64,
+    pub total_stores: u64,
+    pub total_entries: u64,
     pub tombstone_count: u64,
-    pub secret_entries:  u64,
-    pub readonly_entries:u64,
+    pub secret_entries: u64,
+    pub readonly_entries: u64,
 }
 
 impl ConfigStats {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn record(&mut self, store: &ConfigStore) {
         self.total_stores = self.total_stores.saturating_add(1);
         for e in store.entries.iter() {
             self.total_entries = self.total_entries.saturating_add(1);
-            if e.is_deleted()  { self.tombstone_count  = self.tombstone_count.saturating_add(1); }
-            if e.flags & CONFIG_ENTRY_FLAG_SECRET != 0   { self.secret_entries   = self.secret_entries.saturating_add(1); }
-            if e.flags & CONFIG_ENTRY_FLAG_READONLY != 0 { self.readonly_entries = self.readonly_entries.saturating_add(1); }
+            if e.is_deleted() {
+                self.tombstone_count = self.tombstone_count.saturating_add(1);
+            }
+            if e.flags & CONFIG_ENTRY_FLAG_SECRET != 0 {
+                self.secret_entries = self.secret_entries.saturating_add(1);
+            }
+            if e.flags & CONFIG_ENTRY_FLAG_READONLY != 0 {
+                self.readonly_entries = self.readonly_entries.saturating_add(1);
+            }
         }
     }
 }
@@ -493,8 +500,11 @@ impl fmt::Display for ConfigStats {
             f,
             "ConfigStats {{ stores: {}, entries: {}, tombstones: {}, \
              secrets: {}, readonly: {} }}",
-            self.total_stores, self.total_entries, self.tombstone_count,
-            self.secret_entries, self.readonly_entries,
+            self.total_stores,
+            self.total_entries,
+            self.tombstone_count,
+            self.secret_entries,
+            self.readonly_entries,
         )
     }
 }

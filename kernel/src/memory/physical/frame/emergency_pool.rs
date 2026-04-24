@@ -13,9 +13,9 @@
 // Utilisateurs légitimes : scheduler/sync/wait_queue.rs UNIQUEMENT.
 // Couche 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use crate::memory::core::constants::EMERGENCY_POOL_SIZE;
 
@@ -28,9 +28,9 @@ use crate::memory::core::constants::EMERGENCY_POOL_SIZE;
 #[repr(C, align(64))]
 pub struct WaitNode {
     /// Thread ID en attente (0 = nœud libre).
-    pub thread_id:  AtomicUsize,
+    pub thread_id: AtomicUsize,
     /// Prochain nœud dans la liste chaînée (null = fin).
-    pub next:       AtomicUsize,   // *mut WaitNode comme usize
+    pub next: AtomicUsize, // *mut WaitNode comme usize
     /// Résultat de réveil (0 = signalé proprement, autre = erreur/timeout).
     pub wakeup_result: AtomicUsize,
     /// Timestamp d'entrée en attente (nanosecondes monotoniques, debug).
@@ -56,11 +56,11 @@ impl WaitNode {
     #[inline(always)]
     pub const fn new_free() -> Self {
         WaitNode {
-            thread_id:      AtomicUsize::new(0),
-            next:           AtomicUsize::new(Self::NULL_PTR),
-            wakeup_result:  AtomicUsize::new(0),
-            enqueue_ts:     AtomicUsize::new(0),
-            _pad:           [0u8; 64 - 4 * core::mem::size_of::<AtomicUsize>()],
+            thread_id: AtomicUsize::new(0),
+            next: AtomicUsize::new(Self::NULL_PTR),
+            wakeup_result: AtomicUsize::new(0),
+            enqueue_ts: AtomicUsize::new(0),
+            _pad: [0u8; 64 - 4 * core::mem::size_of::<AtomicUsize>()],
         }
     }
 
@@ -134,7 +134,7 @@ pub struct EmergencyPool {
     /// Compteur d'allocations actuelles (telémétrie).
     alloc_count: AtomicUsize,
     /// Pic d'allocations simultanées (high watermark — telémétrie).
-    peak_alloc:  AtomicUsize,
+    peak_alloc: AtomicUsize,
     /// Compteur d'échecs d'allocation (pool épuisé).
     exhausted_count: AtomicUsize,
 }
@@ -149,13 +149,13 @@ impl EmergencyPool {
     /// DOIT être placée dans une statique (UnsafeCell nécessite Sync).
     pub const fn new_uninit() -> Self {
         EmergencyPool {
-            nodes:           UnsafeCell::new(
+            nodes: UnsafeCell::new(
                 // SAFETY: MaybeUninit::uninit() est safe en context const.
-                [const { MaybeUninit::uninit() }; EMERGENCY_POOL_SIZE]
+                [const { MaybeUninit::uninit() }; EMERGENCY_POOL_SIZE],
             ),
-            initialized:     AtomicBool::new(false),
-            alloc_count:     AtomicUsize::new(0),
-            peak_alloc:      AtomicUsize::new(0),
+            initialized: AtomicBool::new(false),
+            alloc_count: AtomicUsize::new(0),
+            peak_alloc: AtomicUsize::new(0),
             exhausted_count: AtomicUsize::new(0),
         }
     }
@@ -215,7 +215,10 @@ impl EmergencyPool {
                 let mut peak = self.peak_alloc.load(Ordering::Relaxed);
                 while new_count > peak {
                     match self.peak_alloc.compare_exchange_weak(
-                        peak, new_count, Ordering::Relaxed, Ordering::Relaxed
+                        peak,
+                        new_count,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
                     ) {
                         Ok(_) => break,
                         Err(p) => peak = p,
@@ -254,8 +257,9 @@ impl EmergencyPool {
     #[inline]
     pub fn owns(&self, node: &WaitNode) -> bool {
         let pool_start = self.nodes.get() as usize;
-        let pool_end   = pool_start + core::mem::size_of::<[MaybeUninit<WaitNode>; EMERGENCY_POOL_SIZE]>();
-        let node_addr  = node as *const WaitNode as usize;
+        let pool_end =
+            pool_start + core::mem::size_of::<[MaybeUninit<WaitNode>; EMERGENCY_POOL_SIZE]>();
+        let node_addr = node as *const WaitNode as usize;
         node_addr >= pool_start && node_addr < pool_end
     }
 
@@ -263,11 +267,11 @@ impl EmergencyPool {
     #[inline]
     pub fn stats(&self) -> EmergencyPoolStats {
         EmergencyPoolStats {
-            capacity:        EMERGENCY_POOL_SIZE,
-            allocated:       self.alloc_count.load(Ordering::Relaxed),
-            peak_allocated:  self.peak_alloc.load(Ordering::Relaxed),
+            capacity: EMERGENCY_POOL_SIZE,
+            allocated: self.alloc_count.load(Ordering::Relaxed),
+            peak_allocated: self.peak_alloc.load(Ordering::Relaxed),
             exhausted_count: self.exhausted_count.load(Ordering::Relaxed),
-            initialized:     self.initialized.load(Ordering::Relaxed),
+            initialized: self.initialized.load(Ordering::Relaxed),
         }
     }
 
@@ -299,7 +303,8 @@ impl EmergencyPool {
         let nodes: &[MaybeUninit<WaitNode>; EMERGENCY_POOL_SIZE] =
             // SAFETY: nodes_ptr valide post-init(); accès immutable.
             unsafe { &*nodes_ptr };
-        nodes.iter()
+        nodes
+            .iter()
             .map(|n| unsafe { n.assume_init_ref() })
             .filter(|n| n.is_free())
             .count()
@@ -309,11 +314,11 @@ impl EmergencyPool {
 /// Statistiques de l'EmergencyPool pour la télémétrie/debug.
 #[derive(Copy, Clone, Debug)]
 pub struct EmergencyPoolStats {
-    pub capacity:        usize,
-    pub allocated:       usize,
-    pub peak_allocated:  usize,
+    pub capacity: usize,
+    pub allocated: usize,
+    pub peak_allocated: usize,
     pub exhausted_count: usize,
-    pub initialized:     bool,
+    pub initialized: bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -421,15 +426,15 @@ const _: () = assert!(
 /// Dépendance zéro vers le scheduler ou les types du scheduler.
 struct SchedNodePool {
     /// 64 blocs de 64 bytes alignés — en .bss, jamais désalloués.
-    blocks:        UnsafeCell<[RawBlock64; SCHED_POOL_SIZE]>,
+    blocks: UnsafeCell<[RawBlock64; SCHED_POOL_SIZE]>,
     /// Bitset libre : bit N = 1 → bloc N disponible.
     /// Initialisé à 0xFFFF_FFFF_FFFF_FFFF (tous libres).
-    free_bits:     AtomicU64,
-    initialized:   AtomicBool,
+    free_bits: AtomicU64,
+    initialized: AtomicBool,
     /// Compteur d'allocations actives (diagnostic).
-    alloc_count:   AtomicUsize,
+    alloc_count: AtomicUsize,
     /// Compteur de fois où le pool était épuisé (diagnostic).
-    exhausted:     AtomicUsize,
+    exhausted: AtomicUsize,
 }
 
 unsafe impl Sync for SchedNodePool {}
@@ -439,11 +444,11 @@ impl SchedNodePool {
     const fn new_uninit() -> Self {
         SchedNodePool {
             // SAFETY: RawBlock64 = [u8; 64], tous-zéros valide + pas de drop.
-            blocks:      UnsafeCell::new(unsafe { core::mem::zeroed() }),
-            free_bits:   AtomicU64::new(0),   // sera mis à !0 dans init()
+            blocks: UnsafeCell::new(unsafe { core::mem::zeroed() }),
+            free_bits: AtomicU64::new(0), // sera mis à !0 dans init()
             initialized: AtomicBool::new(false),
             alloc_count: AtomicUsize::new(0),
-            exhausted:   AtomicUsize::new(0),
+            exhausted: AtomicUsize::new(0),
         }
     }
 
@@ -476,7 +481,10 @@ impl SchedNodePool {
             let idx = bits.trailing_zeros() as usize;
             let new_bits = bits & !(1u64 << idx);
             match self.free_bits.compare_exchange_weak(
-                bits, new_bits, Ordering::AcqRel, Ordering::Acquire
+                bits,
+                new_bits,
+                Ordering::AcqRel,
+                Ordering::Acquire,
             ) {
                 Ok(_) => {
                     self.alloc_count.fetch_add(1, Ordering::Relaxed);
@@ -484,7 +492,7 @@ impl SchedNodePool {
                     let blocks_ptr = self.blocks.get();
                     return unsafe { (*blocks_ptr)[idx].data.as_mut_ptr() };
                 }
-                Err(_) => continue,  // retry CAS
+                Err(_) => continue, // retry CAS
             }
         }
     }
@@ -494,17 +502,19 @@ impl SchedNodePool {
     /// # Safety
     /// `ptr` doit être un pointeur retourné par `alloc()` de ce pool.
     unsafe fn free(&self, ptr: *mut u8) {
-        if ptr.is_null() { return; }
+        if ptr.is_null() {
+            return;
+        }
         let blocks_base = unsafe { (*self.blocks.get()).as_ptr() as usize };
-        let ptr_addr    = ptr as usize;
+        let ptr_addr = ptr as usize;
         // Vérification de borne (défensif)
-        let pool_size   = core::mem::size_of::<[RawBlock64; SCHED_POOL_SIZE]>();
+        let pool_size = core::mem::size_of::<[RawBlock64; SCHED_POOL_SIZE]>();
         if ptr_addr < blocks_base || ptr_addr >= blocks_base + pool_size {
             debug_assert!(false, "SchedNodePool::free() — pointeur hors bornes");
             return;
         }
         let offset = ptr_addr - blocks_base;
-        let idx    = offset / 64;
+        let idx = offset / 64;
         // Remettre le bit à 1 (bloc libre) de façon atomique
         self.free_bits.fetch_or(1u64 << idx, Ordering::Release);
         self.alloc_count.fetch_sub(1, Ordering::Relaxed);

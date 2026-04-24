@@ -7,22 +7,20 @@
 //   ARITH-02  : checked_add / saturating_* partout
 //   HDR-03    : verify() AVANT tout accès au payload
 
-
+use alloc::sync::Arc;
 use core::fmt;
 use core::mem;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use alloc::sync::Arc;
 
-use crate::fs::exofs::core::{
-    ObjectId, BlobId, EpochId, DiskOffset,
-    ExofsError, ExofsResult, blake3_hash,
-};
-use crate::fs::exofs::core::object_kind::ObjectKind;
-use crate::fs::exofs::core::object_class::ObjectClass;
 use crate::fs::exofs::core::flags::ObjectFlags;
+use crate::fs::exofs::core::object_class::ObjectClass;
+use crate::fs::exofs::core::object_kind::ObjectKind;
+use crate::fs::exofs::core::{
+    blake3_hash, BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, ObjectId,
+};
+use crate::fs::exofs::objects::extent_tree::ExtentTree;
 use crate::fs::exofs::objects::object_meta::ObjectMeta;
 use crate::fs::exofs::objects::physical_ref::PhysicalRef;
-use crate::fs::exofs::objects::extent_tree::ExtentTree;
 use crate::scheduler::sync::rwlock::RwLock;
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
@@ -66,40 +64,40 @@ pub const LOGICAL_OBJECT_VERSION: u8 = 1;
 #[derive(Copy, Clone)]
 pub struct LogicalObjectDisk {
     /// Identifiant de l'objet (32 octets).
-    pub object_id:    [u8; 32],
+    pub object_id: [u8; 32],
     /// BlobId du contenu actuel (HASH-01 : Blake3 avant compression).
-    pub blob_id:      [u8; 32],
+    pub blob_id: [u8; 32],
     /// Epoch de création.
     pub epoch_create: u64,
     /// Epoch de dernière modification.
     pub epoch_modify: u64,
     /// Offset disque du P-Blob (0 si inline ou vide).
-    pub blob_offset:  u64,
+    pub blob_offset: u64,
     /// Taille des données en octets.
-    pub data_size:    u64,
+    pub data_size: u64,
     /// Flags (ObjectFlags en u16).
-    pub flags:        u16,
+    pub flags: u16,
     /// Kind (ObjectKind en u8).
-    pub kind:         u8,
+    pub kind: u8,
     /// Class (ObjectClass en u8).
-    pub class:        u8,
+    pub class: u8,
     /// Compteur de références au dernier commit (plain u32).
-    pub ref_count:    u32,
+    pub ref_count: u32,
     /// Mode POSIX.
-    pub mode:         u32,
+    pub mode: u32,
     /// UID numérique.
-    pub uid:          u32,
+    pub uid: u32,
     /// GID numérique.
-    pub gid:          u32,
+    pub gid: u32,
     /// Version du format.
-    pub version:      u8,
-    pub _pad0:        [u8; 3],
+    pub version: u8,
+    pub _pad0: [u8; 3],
     /// Compteur de génération CoW.
-    pub generation:   u64,
-    pub _pad1:        [u8; 64],
+    pub generation: u64,
+    pub _pad1: [u8; 64],
     /// Checksum Blake3 des 192 premiers octets.
-    pub checksum:     [u8; 32],
-    pub _pad2:        [u8; 32],
+    pub checksum: [u8; 32],
+    pub _pad2: [u8; 32],
 }
 
 // Validation taille en compile-time.
@@ -119,7 +117,7 @@ impl LogicalObjectDisk {
 
     /// Règle HDR-03 : vérifie le checksum AVANT tout accès au payload.
     pub fn verify(&self) -> ExofsResult<()> {
-        let stored   = { self.checksum };
+        let stored = { self.checksum };
         let computed = self.compute_checksum();
         if stored != computed {
             return Err(ExofsError::Corrupt);
@@ -162,37 +160,37 @@ impl fmt::Debug for LogicalObjectDisk {
 pub struct LogicalObject {
     // ── Cache line 1 — hot path ──────────────────────────────────────────────
     /// Identifiant unique de l'objet.
-    pub object_id:    ObjectId,
+    pub object_id: ObjectId,
     /// Kind de l'objet (1 octet, souvent lu).
-    pub kind:         ObjectKind,
+    pub kind: ObjectKind,
     /// Class de l'objet (Class1 = immuable/copie, Class2 = mutable/shared).
-    pub class:        ObjectClass,
+    pub class: ObjectClass,
     /// Flags de l'objet (INLINE_DATA, DELETED, …).
-    pub flags:        ObjectFlags,
+    pub flags: ObjectFlags,
     /// Compteur de références atomique (REFCNT-01).
-    pub ref_count:    AtomicU32,
+    pub ref_count: AtomicU32,
     /// Epoch de dernière modification (atomic pour lecture sans lock).
-    pub epoch_last:   AtomicU64,
+    pub epoch_last: AtomicU64,
     /// Nombre de liens durs (nlink, atomique pour inc/dec rapide).
-    pub link_count:   AtomicU32,
+    pub link_count: AtomicU32,
 
     // ── Cache line 2+ — cold path ────────────────────────────────────────────
     /// BlobId du contenu actuel.
-    pub blob_id:      BlobId,
+    pub blob_id: BlobId,
     /// Epoch de création.
     pub epoch_create: EpochId,
     /// Offset disque du P-Blob (ou 0 si inline/empty).
-    pub disk_offset:  DiskOffset,
+    pub disk_offset: DiskOffset,
     /// Taille des données en octets.
-    pub data_size:    u64,
+    pub data_size: u64,
     /// Compteur de génération CoW (incrémenté à chaque écriture).
-    pub generation:   u64,
+    pub generation: u64,
     /// Métadonnées étendues (permissions, timestamps, MIME, xattrs).
-    pub meta:         ObjectMeta,
+    pub meta: ObjectMeta,
     /// Référence à la ressource physique (Blob, Inline ou Empty).
     pub physical_ref: PhysicalRef,
     /// Arbre des extents (mapping logique → disque).
-    pub extent_tree:  ExtentTree,
+    pub extent_tree: ExtentTree,
 }
 
 impl LogicalObject {
@@ -205,8 +203,7 @@ impl LogicalObject {
         // HDR-03 : vérifier le checksum AVANT d'utiliser les champs.
         d.verify()?;
 
-        let kind = ObjectKind::from_u8(d.kind)
-            .ok_or(ExofsError::InvalidObjectKind)?;
+        let kind = ObjectKind::from_u8(d.kind).ok_or(ExofsError::InvalidObjectKind)?;
         let class = match d.class {
             1 => ObjectClass::Class1,
             2 => ObjectClass::Class2,
@@ -215,41 +212,41 @@ impl LogicalObject {
 
         // Construire les métadonnées minimales depuis les champs du disk.
         let meta = ObjectMeta {
-            mode:           d.mode,
-            uid:            d.uid,
-            gid:            d.gid,
-            nlink:          1,
-            atime_tsc:      0,
-            mtime_tsc:      d.epoch_modify.saturating_mul(1000),
-            ctime_tsc:      d.epoch_create.saturating_mul(1000),
-            mime_type:      [0u8; 64],
-            mime_len:       0,
+            mode: d.mode,
+            uid: d.uid,
+            gid: d.gid,
+            nlink: 1,
+            atime_tsc: 0,
+            mtime_tsc: d.epoch_modify.saturating_mul(1000),
+            ctime_tsc: d.epoch_create.saturating_mul(1000),
+            mime_type: [0u8; 64],
+            mime_len: 0,
             owner_cap_hash: [0u8; 32],
-            extra_flags:    0,
-            xattrs:         core::array::from_fn(|_| {
+            extra_flags: 0,
+            xattrs: core::array::from_fn(|_| {
                 crate::fs::exofs::objects::object_meta::XAttrEntry::empty()
             }),
-            xattr_count:    0,
+            xattr_count: 0,
         };
 
         let epoch_last = d.epoch_modify;
 
         Ok(Self {
-            object_id:    ObjectId(d.object_id),
+            object_id: ObjectId(d.object_id),
             kind,
             class,
-            flags:        ObjectFlags(d.flags),
-            ref_count:    AtomicU32::new(d.ref_count),
-            epoch_last:   AtomicU64::new(epoch_last),
-            link_count:   AtomicU32::new(1),
-            blob_id:      BlobId(d.blob_id),
+            flags: ObjectFlags(d.flags),
+            ref_count: AtomicU32::new(d.ref_count),
+            epoch_last: AtomicU64::new(epoch_last),
+            link_count: AtomicU32::new(1),
+            blob_id: BlobId(d.blob_id),
             epoch_create: EpochId(d.epoch_create),
-            disk_offset:  DiskOffset(d.blob_offset),
-            data_size:    d.data_size,
-            generation:   d.generation,
+            disk_offset: DiskOffset(d.blob_offset),
+            data_size: d.data_size,
+            generation: d.generation,
             meta,
             physical_ref: PhysicalRef::empty(),
-            extent_tree:  ExtentTree::new(),
+            extent_tree: ExtentTree::new(),
         })
     }
 
@@ -262,25 +259,25 @@ impl LogicalObject {
             ObjectClass::Class2 => 2u8,
         };
         let mut d = LogicalObjectDisk {
-            object_id:    self.object_id.0,
-            blob_id:      self.blob_id.0,
+            object_id: self.object_id.0,
+            blob_id: self.blob_id.0,
             epoch_create: self.epoch_create.0,
             epoch_modify: self.epoch_last.load(Ordering::Relaxed),
-            blob_offset:  self.disk_offset.0,
-            data_size:    self.data_size,
-            flags:        self.flags.0,
-            kind:         self.kind as u8,
-            class:        class_u8,
-            ref_count:    self.ref_count.load(Ordering::Relaxed),
-            mode:         self.meta.mode,
-            uid:          self.meta.uid,
-            gid:          self.meta.gid,
-            version:      LOGICAL_OBJECT_VERSION,
-            _pad0:        [0u8; 3],
-            generation:   self.generation,
-            _pad1:        [0u8; 64],
-            checksum:     [0u8; 32],
-            _pad2:        [0u8; 32],
+            blob_offset: self.disk_offset.0,
+            data_size: self.data_size,
+            flags: self.flags.0,
+            kind: self.kind as u8,
+            class: class_u8,
+            ref_count: self.ref_count.load(Ordering::Relaxed),
+            mode: self.meta.mode,
+            uid: self.meta.uid,
+            gid: self.meta.gid,
+            version: LOGICAL_OBJECT_VERSION,
+            _pad0: [0u8; 3],
+            generation: self.generation,
+            _pad1: [0u8; 64],
+            checksum: [0u8; 32],
+            _pad2: [0u8; 32],
         };
         d.checksum = d.compute_checksum();
         d
@@ -348,7 +345,7 @@ impl LogicalObject {
                 Ordering::AcqRel,
                 Ordering::Relaxed,
             ) {
-                Ok(_)  => return cur - 1,
+                Ok(_) => return cur - 1,
                 Err(_) => continue, // Retry ABA-safe.
             }
         }
@@ -372,7 +369,7 @@ impl LogicalObject {
     /// Met à jour l'offset disque (après une écriture CoW).
     pub fn set_disk_offset(&mut self, new_offset: DiskOffset, new_gen: u64) {
         self.disk_offset = new_offset;
-        self.generation  = new_gen;
+        self.generation = new_gen;
     }
 
     /// Met à jour le BlobId et la taille (après une nouvelle écriture).
@@ -381,12 +378,12 @@ impl LogicalObject {
     /// AVANT cet appel.
     pub fn update_blob_id(
         &mut self,
-        new_blob_id:   BlobId,
+        new_blob_id: BlobId,
         new_data_size: u64,
-        now_epoch:     EpochId,
-        now_tsc:       u64,
+        now_epoch: EpochId,
+        now_tsc: u64,
     ) {
-        self.blob_id   = new_blob_id;
+        self.blob_id = new_blob_id;
         self.data_size = new_data_size;
         self.generation = self.generation.saturating_add(1);
         self.epoch_last.store(now_epoch.0, Ordering::Release);
@@ -419,8 +416,7 @@ impl LogicalObject {
     /// Valide la cohérence interne du `LogicalObject`.
     pub fn validate(&self) -> ExofsResult<()> {
         // Un PathIndex doit toujours être Class2 (LOBJ-01).
-        if matches!(self.kind, ObjectKind::PathIndex)
-            && !matches!(self.class, ObjectClass::Class2)
+        if matches!(self.kind, ObjectKind::PathIndex) && !matches!(self.class, ObjectClass::Class2)
         {
             return Err(ExofsError::Corrupt);
         }
@@ -429,9 +425,7 @@ impl LogicalObject {
             return Err(ExofsError::Corrupt);
         }
         // data_size doit être cohérent avec physical_ref.
-        if self.data_size != self.physical_ref.size()
-            && !self.physical_ref.is_empty()
-        {
+        if self.data_size != self.physical_ref.size() && !self.physical_ref.is_empty() {
             // Avertissement seulement (certains états transitoires sont valides).
         }
         self.meta.validate()?;
@@ -516,25 +510,25 @@ mod tests {
 
     fn make_test_disk() -> LogicalObjectDisk {
         let mut d = LogicalObjectDisk {
-            object_id:    [1u8; 32],
-            blob_id:      [2u8; 32],
+            object_id: [1u8; 32],
+            blob_id: [2u8; 32],
             epoch_create: 10,
             epoch_modify: 20,
-            blob_offset:  0x4000,
-            data_size:    1024,
-            flags:        0,
-            kind:         0, // ObjectKind::Blob
-            class:        1, // Class1
-            ref_count:    1,
-            mode:         0o644,
-            uid:          1000,
-            gid:          1000,
-            version:      LOGICAL_OBJECT_VERSION,
-            _pad0:        [0; 3],
-            generation:   5,
-            _pad1:        [0; 64],
-            checksum:     [0; 32],
-            _pad2:        [0; 32],
+            blob_offset: 0x4000,
+            data_size: 1024,
+            flags: 0,
+            kind: 0,  // ObjectKind::Blob
+            class: 1, // Class1
+            ref_count: 1,
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+            version: LOGICAL_OBJECT_VERSION,
+            _pad0: [0; 3],
+            generation: 5,
+            _pad1: [0; 64],
+            checksum: [0; 32],
+            _pad2: [0; 32],
         };
         d.checksum = d.compute_checksum();
         d
@@ -542,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_from_disk_verify() {
-        let d  = make_test_disk();
+        let d = make_test_disk();
         let lo = LogicalObject::from_disk(&d).expect("from_disk doit réussir");
         assert_eq!(lo.data_size, 1024);
         assert_eq!(lo.generation, 5);
@@ -557,16 +551,16 @@ mod tests {
 
     #[test]
     fn test_to_disk_roundtrip() {
-        let d   = make_test_disk();
-        let lo  = LogicalObject::from_disk(&d).unwrap();
-        let d2  = lo.to_disk();
+        let d = make_test_disk();
+        let lo = LogicalObject::from_disk(&d).unwrap();
+        let d2 = lo.to_disk();
         assert_eq!({ d.data_size }, { d2.data_size });
         assert_eq!({ d.generation }, { d2.generation });
     }
 
     #[test]
     fn test_refcount_dec_underflow_would_panic() {
-        let d  = make_test_disk();
+        let d = make_test_disk();
         let lo = LogicalObject::from_disk(&d).unwrap();
         assert_eq!(lo.ref_count(), 1);
         let new_val = lo.dec_ref();
@@ -584,8 +578,8 @@ mod tests {
         let v1 = ObjectVersion::new(1, 0);
         let v2 = ObjectVersion::new(1, 5);
         let v3 = ObjectVersion::new(2, 0);
-        assert!( v2.is_newer_than(&v1));
-        assert!( v3.is_newer_than(&v2));
+        assert!(v2.is_newer_than(&v1));
+        assert!(v3.is_newer_than(&v2));
         assert!(!v1.is_newer_than(&v2));
     }
 }

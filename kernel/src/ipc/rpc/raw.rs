@@ -16,12 +16,11 @@
 // RÈGLE IPC-CALL-01 : call_raw est TOUJOURS synchrone (pas de callback).
 // RÈGLE IPC-CALL-02 : les mailboxes éphémères sont libérées après chaque appel.
 
-
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::ipc::core::types::{EndpointId, IpcError};
-use crate::ipc::core::constants::MAX_MSG_SIZE;
 use crate::ipc::channel::raw as channel_raw;
+use crate::ipc::core::constants::MAX_MSG_SIZE;
+use crate::ipc::core::types::{EndpointId, IpcError};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteur de cookies — unique par appel, jamais réutilisé dans la session.
@@ -46,17 +45,17 @@ pub const CALL_MAGIC: u32 = 0x4558_4F43; // "EXOC"
 #[derive(Copy, Clone)]
 struct RawCallHeader {
     /// Magic de validation.
-    magic:       u32,
+    magic: u32,
     /// Longueur du payload qui suit (sans cet en-tête).
     payload_len: u32,
     /// Cookie de corrélation (unique par appel).
-    cookie:      u64,
+    cookie: u64,
     /// Endpoint de réponse éphémère.
-    reply_ep:    u64,
+    reply_ep: u64,
 }
 
 const CALL_HEADER_SIZE: usize = core::mem::size_of::<RawCallHeader>();
-pub const MAX_CALL_PAYLOAD:  usize = MAX_MSG_SIZE - CALL_HEADER_SIZE;
+pub const MAX_CALL_PAYLOAD: usize = MAX_MSG_SIZE - CALL_HEADER_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EndpointId éphémère — basé sur le cookie pour unicité
@@ -88,17 +87,17 @@ fn ephemeral_ep(cookie: u64) -> Option<EndpointId> {
 /// - `NotFound`         : serveur introuvable (mailbox non ouverte)
 /// - `Timeout`          : le serveur n'a pas répondu dans le délai
 pub fn call_raw(
-    server_ep:  EndpointId,
-    msg:        &[u8],
-    reply_buf:  &mut [u8],
+    server_ep: EndpointId,
+    msg: &[u8],
+    reply_buf: &mut [u8],
 ) -> Result<usize, IpcError> {
     if msg.len() > MAX_CALL_PAYLOAD {
         return Err(IpcError::MessageTooLarge);
     }
 
     // 1. Allouer un cookie et un endpoint de réponse éphémère.
-    let cookie      = next_cookie();
-    let reply_ep    = ephemeral_ep(cookie).ok_or(IpcError::InternalError)?;
+    let cookie = next_cookie();
+    let reply_ep = ephemeral_ep(cookie).ok_or(IpcError::InternalError)?;
 
     if !channel_raw::mailbox_open(reply_ep) {
         return Err(IpcError::OutOfResources);
@@ -106,20 +105,17 @@ pub fn call_raw(
 
     // 2. Construire le message : en-tête + payload.
     let header = RawCallHeader {
-        magic:       CALL_MAGIC,
+        magic: CALL_MAGIC,
         payload_len: msg.len() as u32,
         cookie,
-        reply_ep:    reply_ep.get(),
+        reply_ep: reply_ep.get(),
     };
 
     let mut call_buf = [0u8; MAX_MSG_SIZE];
     // Sérialiser l'en-tête (little-endian natif, repr(C)).
     // SAFETY: RawCallHeader est repr(C) et call_buf est suffisamment grand.
     unsafe {
-        core::ptr::write_unaligned(
-            call_buf.as_mut_ptr() as *mut RawCallHeader,
-            header,
-        );
+        core::ptr::write_unaligned(call_buf.as_mut_ptr() as *mut RawCallHeader, header);
     }
     call_buf[CALL_HEADER_SIZE..CALL_HEADER_SIZE + msg.len()].copy_from_slice(msg);
 
@@ -148,18 +144,16 @@ pub fn call_raw(
 
     // Vérifier l'en-tête de réponse.
     // SAFETY: n >= CALL_HEADER_SIZE, raw_reply est aligné.
-    let reply_hdr: RawCallHeader = unsafe {
-        core::ptr::read_unaligned(raw_reply.as_ptr() as *const RawCallHeader)
-    };
+    let reply_hdr: RawCallHeader =
+        unsafe { core::ptr::read_unaligned(raw_reply.as_ptr() as *const RawCallHeader) };
     if reply_hdr.magic != CALL_MAGIC || reply_hdr.cookie != cookie {
         return Err(IpcError::ProtocolError);
     }
 
     let payload_len = reply_hdr.payload_len as usize;
-    let copy_len    = payload_len.min(reply_buf.len()).min(MAX_CALL_PAYLOAD);
-    reply_buf[..copy_len].copy_from_slice(
-        &raw_reply[CALL_HEADER_SIZE..CALL_HEADER_SIZE + copy_len]
-    );
+    let copy_len = payload_len.min(reply_buf.len()).min(MAX_CALL_PAYLOAD);
+    reply_buf[..copy_len]
+        .copy_from_slice(&raw_reply[CALL_HEADER_SIZE..CALL_HEADER_SIZE + copy_len]);
     Ok(copy_len)
 }
 
@@ -170,51 +164,52 @@ pub fn call_raw(
 /// Résultat du parsing d'un message reçu via la mailbox d'un serveur.
 pub struct CallRequest<'a> {
     /// Payload de la requête (sans l'en-tête).
-    pub payload:   &'a [u8],
+    pub payload: &'a [u8],
     /// Cookie de corrélation (à copier dans la réponse).
-    pub cookie:    u64,
+    pub cookie: u64,
     /// Endpoint de réponse (extrait des derniers octets).
-    pub reply_ep:  Option<EndpointId>,
+    pub reply_ep: Option<EndpointId>,
 }
 
 /// Parse un message brut reçu (côté serveur).
 ///
 /// Retourne `None` si `buf` n'est pas un message call_raw valide.
 pub fn parse_call<'a>(buf: &'a [u8]) -> Option<CallRequest<'a>> {
-    if buf.len() < CALL_HEADER_SIZE { return None; }
+    if buf.len() < CALL_HEADER_SIZE {
+        return None;
+    }
     // SAFETY: buf.len() >= CALL_HEADER_SIZE.
-    let hdr: RawCallHeader = unsafe {
-        core::ptr::read_unaligned(buf.as_ptr() as *const RawCallHeader)
-    };
-    if hdr.magic != CALL_MAGIC { return None; }
+    let hdr: RawCallHeader =
+        unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const RawCallHeader) };
+    if hdr.magic != CALL_MAGIC {
+        return None;
+    }
 
     let payload_len = hdr.payload_len as usize;
-    if buf.len() < CALL_HEADER_SIZE + payload_len { return None; }
+    if buf.len() < CALL_HEADER_SIZE + payload_len {
+        return None;
+    }
 
     let reply_ep = EndpointId::new(hdr.reply_ep);
 
     Some(CallRequest {
-        payload:  &buf[CALL_HEADER_SIZE..CALL_HEADER_SIZE + payload_len],
-        cookie:   hdr.cookie,
+        payload: &buf[CALL_HEADER_SIZE..CALL_HEADER_SIZE + payload_len],
+        cookie: hdr.cookie,
         reply_ep,
     })
 }
 
 /// Construit et envoie une réponse vers `reply_ep` (côté serveur).
-pub fn send_reply(
-    reply_ep:    EndpointId,
-    cookie:      u64,
-    reply_data:  &[u8],
-) -> Result<(), IpcError> {
+pub fn send_reply(reply_ep: EndpointId, cookie: u64, reply_data: &[u8]) -> Result<(), IpcError> {
     if reply_data.len() > MAX_CALL_PAYLOAD {
         return Err(IpcError::MessageTooLarge);
     }
 
     let header = RawCallHeader {
-        magic:       CALL_MAGIC,
+        magic: CALL_MAGIC,
         payload_len: reply_data.len() as u32,
         cookie,
-        reply_ep:    reply_ep.get(),
+        reply_ep: reply_ep.get(),
     };
 
     let mut buf = [0u8; MAX_MSG_SIZE];
@@ -224,8 +219,7 @@ pub fn send_reply(
     }
     buf[CALL_HEADER_SIZE..CALL_HEADER_SIZE + reply_data.len()].copy_from_slice(reply_data);
 
-    channel_raw::send_raw(reply_ep, &buf[..CALL_HEADER_SIZE + reply_data.len()], 0)
-        .map(|_| ())
+    channel_raw::send_raw(reply_ep, &buf[..CALL_HEADER_SIZE + reply_data.len()], 0).map(|_| ())
 }
 
 #[cfg(test)]

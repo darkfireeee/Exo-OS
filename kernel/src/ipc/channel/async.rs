@@ -16,13 +16,15 @@
 //   2. Event-driven : enregistrer un waker → être notifié → appeler `try_recv()`
 //   3. Completion callback : enregistrer un `fn(*mut ()) -> ()` appelé à réception
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use crate::ipc::core::types::{ChannelId, IpcError, MsgFlags, MessageId, alloc_channel_id, alloc_message_id};
 use crate::ipc::core::constants::MAX_MSG_SIZE;
+use crate::ipc::core::types::{
+    alloc_channel_id, alloc_message_id, ChannelId, IpcError, MessageId, MsgFlags,
+};
 use crate::ipc::ring::spsc::SpscRing;
-use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
+use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ---------------------------------------------------------------------------
@@ -308,7 +310,9 @@ impl AsyncChannel {
         match self.ring.push_copy(data, flags) {
             Ok(_) => {
                 self.stats.sends_ok.fetch_add(1, Ordering::Relaxed);
-                self.stats.bytes_transferred.fetch_add(data.len() as u64, Ordering::Relaxed);
+                self.stats
+                    .bytes_transferred
+                    .fetch_add(data.len() as u64, Ordering::Relaxed);
                 self.pending.fetch_add(1, Ordering::Relaxed);
                 IPC_STATS.record(StatEvent::MessageSent);
 
@@ -316,7 +320,9 @@ impl AsyncChannel {
                 let tbl = self.wakers.lock();
                 if tbl.count() > 0 {
                     tbl.fire_all();
-                    self.stats.waker_fires.fetch_add(tbl.count() as u64, Ordering::Relaxed);
+                    self.stats
+                        .waker_fires
+                        .fetch_add(tbl.count() as u64, Ordering::Relaxed);
                 }
 
                 Ok(mid)
@@ -449,7 +455,7 @@ impl AsyncChannelTable {
 }
 
 static ASYNC_CHANNEL_TABLE: SpinLock<AsyncChannelTable> =
-        // SAFETY: SpinLock<AsyncChannelTable> tout-zéro valide: AtomicBool false = déverrouillé, table vide.
+    // SAFETY: SpinLock<AsyncChannelTable> tout-zéro valide: AtomicBool false = déverrouillé, table vide.
     unsafe { core::mem::zeroed() };
 
 // ---------------------------------------------------------------------------
@@ -463,12 +469,18 @@ pub fn async_channel_create() -> Result<usize, IpcError> {
 }
 
 /// Enregistre un waker sur le canal `idx`.
-pub fn async_channel_register_waker(idx: usize, f: WakeFn, data: *mut ()) -> Result<usize, IpcError> {
+pub fn async_channel_register_waker(
+    idx: usize,
+    f: WakeFn,
+    data: *mut (),
+) -> Result<usize, IpcError> {
     let tbl = ASYNC_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static AsyncChannel = unsafe { &*(chan as *const AsyncChannel) };
     drop(tbl);
-    chan_ref.register_waker(f, data).ok_or(IpcError::OutOfResources)
+    chan_ref
+        .register_waker(f, data)
+        .ok_or(IpcError::OutOfResources)
 }
 
 /// Désenregistre un waker.
@@ -477,7 +489,11 @@ pub fn async_channel_unregister_waker(chan_idx: usize, waker_idx: usize) -> Resu
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static AsyncChannel = unsafe { &*(chan as *const AsyncChannel) };
     drop(tbl);
-    if chan_ref.unregister_waker(waker_idx) { Ok(()) } else { Err(IpcError::InvalidHandle) }
+    if chan_ref.unregister_waker(waker_idx) {
+        Ok(())
+    } else {
+        Err(IpcError::InvalidHandle)
+    }
 }
 
 /// Envoie `data` sur le canal asynchrone `idx`.

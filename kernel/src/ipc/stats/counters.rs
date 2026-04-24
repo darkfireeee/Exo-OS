@@ -168,21 +168,51 @@ impl IpcStats {
         // donc on énumère explicitement.
         Self {
             counters: [
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
             ],
         }
     }
@@ -198,7 +228,9 @@ impl IpcStats {
     /// Enregistre N occurrences d'un événement.
     #[inline(always)]
     pub fn record_n(&self, event: StatEvent, n: u64) {
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
         self.counters[event as usize].fetch_add(n, Ordering::Relaxed);
     }
 
@@ -264,31 +296,51 @@ impl IpcStatsSnapshot {
     }
 
     /// Messages envoyés
-    pub fn messages_sent(&self) -> u64 { self.get(StatEvent::MessageSent) }
+    pub fn messages_sent(&self) -> u64 {
+        self.get(StatEvent::MessageSent)
+    }
     /// Messages reçus
-    pub fn messages_received(&self) -> u64 { self.get(StatEvent::MessageReceived) }
+    pub fn messages_received(&self) -> u64 {
+        self.get(StatEvent::MessageReceived)
+    }
     /// Messages abandonnés
-    pub fn messages_dropped(&self) -> u64 { self.get(StatEvent::MessageDropped) }
+    pub fn messages_dropped(&self) -> u64 {
+        self.get(StatEvent::MessageDropped)
+    }
 
     /// Allocations SHM
-    pub fn shm_allocated(&self) -> u64 { self.get(StatEvent::ShmAllocated) }
+    pub fn shm_allocated(&self) -> u64 {
+        self.get(StatEvent::ShmAllocated)
+    }
     /// Libérations SHM
-    pub fn shm_freed(&self) -> u64 { self.get(StatEvent::ShmFreed) }
+    pub fn shm_freed(&self) -> u64 {
+        self.get(StatEvent::ShmFreed)
+    }
 
     /// Appels RPC
-    pub fn rpc_calls(&self) -> u64 { self.get(StatEvent::RpcCall) }
+    pub fn rpc_calls(&self) -> u64 {
+        self.get(StatEvent::RpcCall)
+    }
     /// Timeouts RPC
-    pub fn rpc_timeouts(&self) -> u64 { self.get(StatEvent::RpcTimeout) }
+    pub fn rpc_timeouts(&self) -> u64 {
+        self.get(StatEvent::RpcTimeout)
+    }
 
     /// Futex waits
-    pub fn futex_waits(&self) -> u64 { self.get(StatEvent::FutexWait) }
+    pub fn futex_waits(&self) -> u64 {
+        self.get(StatEvent::FutexWait)
+    }
     /// Futex wakes
-    pub fn futex_wakes(&self) -> u64 { self.get(StatEvent::FutexWake) }
+    pub fn futex_wakes(&self) -> u64 {
+        self.get(StatEvent::FutexWake)
+    }
 
     /// Taux de drop messages (0-100 si sent > 0)
     pub fn message_drop_rate_pct(&self) -> u64 {
         let sent = self.messages_sent();
-        if sent == 0 { return 0; }
+        if sent == 0 {
+            return 0;
+        }
         (self.messages_dropped() * 100) / sent
     }
 

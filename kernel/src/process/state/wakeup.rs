@@ -12,11 +12,10 @@
 //   process/ l'implémente ici (ProcessWakeupHandler).
 //   process/mod.rs::init() appelle register_with_dma() pour s'enregistrer.
 
-
-use core::sync::atomic::Ordering;
+use crate::memory::dma::core::types::{DmaError, DmaTransactionId};
 use crate::memory::dma::core::wakeup_iface::DmaWakeupHandler;
-use crate::memory::dma::core::types::{DmaTransactionId, DmaError};
 use crate::scheduler::sync::wait_queue::WaitQueue;
+use core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // File d'attente globale pour les threads en attente de DMA
@@ -36,7 +35,7 @@ const DMA_COMPLETION_SLOTS: usize = 256;
 #[repr(C)]
 struct DmaCompletionSlot {
     /// TID cible (0 = slot libre).
-    tid:    core::sync::atomic::AtomicU64,
+    tid: core::sync::atomic::AtomicU64,
     /// ID de transaction.
     txn_id: core::sync::atomic::AtomicU64,
     /// Résultat (0 = OK, errno négatif = erreur).
@@ -46,7 +45,7 @@ struct DmaCompletionSlot {
 impl DmaCompletionSlot {
     const fn empty() -> Self {
         Self {
-            tid:    core::sync::atomic::AtomicU64::new(0),
+            tid: core::sync::atomic::AtomicU64::new(0),
             txn_id: core::sync::atomic::AtomicU64::new(0),
             result: core::sync::atomic::AtomicI64::new(0),
         }
@@ -64,7 +63,11 @@ static DMA_COMPLETIONS: [DmaCompletionSlot; DMA_COMPLETION_SLOTS] = {
 fn store_completion(tid: u64, txn_id: u64, result: i64) {
     // Cherche un slot libre par round-robin simple.
     for slot in &DMA_COMPLETIONS {
-        if slot.tid.compare_exchange(0, tid, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+        if slot
+            .tid
+            .compare_exchange(0, tid, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
             slot.txn_id.store(txn_id, Ordering::Release);
             slot.result.store(result, Ordering::Release);
             return;
@@ -102,18 +105,18 @@ pub struct ProcessWakeupHandler;
 #[inline]
 fn dma_error_to_errno(e: DmaError) -> i64 {
     match e {
-        DmaError::NoChannel        => -11,   // EAGAIN
-        DmaError::OutOfMemory      => -12,   // ENOMEM
-        DmaError::InvalidParams    => -22,   // EINVAL
-        DmaError::Timeout          => -110,  // ETIMEDOUT
-        DmaError::HardwareError    => -5,    // EIO
-        DmaError::IommuFault       => -14,   // EFAULT
-        DmaError::NotInitialized   => -6,    // ENXIO
-        DmaError::AlreadySubmitted => -22,   // EINVAL
-        DmaError::Cancelled        => -125,  // ECANCELED
-        DmaError::MisalignedBuffer => -22,   // EINVAL
-        DmaError::WrongZone        => -22,   // EINVAL
-        DmaError::NotSupported     => -95,   // ENOTSUP
+        DmaError::NoChannel => -11,        // EAGAIN
+        DmaError::OutOfMemory => -12,      // ENOMEM
+        DmaError::InvalidParams => -22,    // EINVAL
+        DmaError::Timeout => -110,         // ETIMEDOUT
+        DmaError::HardwareError => -5,     // EIO
+        DmaError::IommuFault => -14,       // EFAULT
+        DmaError::NotInitialized => -6,    // ENXIO
+        DmaError::AlreadySubmitted => -22, // EINVAL
+        DmaError::Cancelled => -125,       // ECANCELED
+        DmaError::MisalignedBuffer => -22, // EINVAL
+        DmaError::WrongZone => -22,        // EINVAL
+        DmaError::NotSupported => -95,     // ENOTSUP
     }
 }
 
@@ -122,14 +125,14 @@ impl DmaWakeupHandler for ProcessWakeupHandler {
     /// Réveille le thread `tid` en attente dans DMA_WAIT_QUEUE.
     fn wake_on_completion(
         &self,
-        tid:    u64,
+        tid: u64,
         txn_id: DmaTransactionId,
         result: Result<usize, DmaError>,
     ) {
         // Convertit le résultat en i64 (bytes ou errno négatif)
         let result_i64 = match result {
-            Ok(bytes)  => bytes as i64,
-            Err(e)     => dma_error_to_errno(e),
+            Ok(bytes) => bytes as i64,
+            Err(e) => dma_error_to_errno(e),
         };
         // Stocker le résultat pour que le thread puisse le lire après réveil.
         store_completion(tid, txn_id.0, result_i64);
@@ -140,11 +143,7 @@ impl DmaWakeupHandler for ProcessWakeupHandler {
 
     /// Appelé par le driver DMA en cas d'erreur fatale sur un canal.
     /// Réveille tous les threads en attente sur ce canal.
-    fn wake_all_on_error(
-        &self,
-        channel_id: u32,
-        error:      DmaError,
-    ) {
+    fn wake_all_on_error(&self, channel_id: u32, error: DmaError) {
         let errno = dma_error_to_errno(error);
         // Marquer toutes les transactions de ce canal comme échouées.
         for slot in &DMA_COMPLETIONS {
@@ -181,8 +180,8 @@ pub fn register_with_dma() {
 /// Le thread courant se bloque dans DMA_WAIT_QUEUE jusqu'à réveil.
 /// Retourne le résultat ou -EINTR si signal reçu.
 pub fn wait_for_dma(
-    tcb:    &crate::scheduler::core::task::ThreadControlBlock,
-    tid:    u64,
+    tcb: &crate::scheduler::core::task::ThreadControlBlock,
+    tid: u64,
     txn_id: u64,
 ) -> i64 {
     loop {
@@ -195,6 +194,8 @@ pub fn wait_for_dma(
             return -4; // -EINTR
         }
         // SAFETY: tcb pointe vers le TCB courant, pas d'alias &mut actif.
-        unsafe { DMA_WAIT_QUEUE.wait_interruptible(tcb as *const _ as *mut _); }
+        unsafe {
+            DMA_WAIT_QUEUE.wait_interruptible(tcb as *const _ as *mut _);
+        }
     }
 }

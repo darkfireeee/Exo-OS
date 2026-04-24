@@ -17,11 +17,10 @@
 //              ou FUSION_MAX_DELAY_TICKS ticks de scheduler).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::ipc::core::{IpcError, MsgFlags};
-use crate::ipc::core::constants::FUSION_BATCH_THRESHOLD;
 use super::spsc::SpscRing;
+use crate::ipc::core::constants::FUSION_BATCH_THRESHOLD;
+use crate::ipc::core::{IpcError, MsgFlags};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BatchBuffer — tampon local pour les messages en attente d'envoi
@@ -34,19 +33,19 @@ pub const MAX_BATCH_SIZE: usize = 32;
 #[derive(Clone)]
 pub struct BatchEntry {
     /// Flags du message.
-    pub flags:  MsgFlags,
+    pub flags: MsgFlags,
     /// Longueur du payload.
-    pub len:    u16,
+    pub len: u16,
     /// Payload inline (max 4080 bytes, mais en pratique ≤ 512 pour batching).
-    pub data:   [u8; 512],
+    pub data: [u8; 512],
 }
 
 impl BatchEntry {
     pub const fn zeroed() -> Self {
         Self {
             flags: MsgFlags(0),
-            len:   0,
-            data:  [0u8; 512],
+            len: 0,
+            data: [0u8; 512],
         }
     }
 }
@@ -66,8 +65,8 @@ impl BatchBuffer {
     pub const fn new() -> Self {
         const ZERO: BatchEntry = BatchEntry::zeroed();
         Self {
-            entries:     [ZERO; MAX_BATCH_SIZE],
-            count:       0,
+            entries: [ZERO; MAX_BATCH_SIZE],
+            count: 0,
             expire_tick: AtomicU64::new(0),
         }
     }
@@ -87,7 +86,7 @@ impl BatchBuffer {
         if idx < MAX_BATCH_SIZE {
             let entry = &mut self.entries[idx];
             entry.flags = flags;
-            entry.len   = len as u16;
+            entry.len = len as u16;
             entry.data[..len].copy_from_slice(&src[..len]);
             self.count += 1;
         }
@@ -115,7 +114,7 @@ impl BatchBuffer {
             let entry = &self.entries[i];
             let data = &entry.data[..entry.len as usize];
             match ring.push_copy(data, entry.flags) {
-                Ok(_)  => sent += 1,
+                Ok(_) => sent += 1,
                 Err(_) => break, // ring plein — réessayer au prochain tick
             }
         }
@@ -149,7 +148,7 @@ pub struct BatchReceiveResult {
     /// Nombre de messages reçus.
     pub received: usize,
     /// Bytes totaux transférés.
-    pub bytes:    usize,
+    pub bytes: usize,
 }
 
 /// Vide autant de messages que possible depuis un ring vers un tableau de buffers.
@@ -164,10 +163,10 @@ pub struct BatchReceiveResult {
 pub fn batch_receive(
     ring: &SpscRing,
     bufs: &mut [([u8; crate::ipc::core::MAX_MSG_SIZE], usize)],
-    max:  usize,
+    max: usize,
 ) -> BatchReceiveResult {
     let mut received = 0;
-    let mut bytes    = 0;
+    let mut bytes = 0;
     let limit = max.min(bufs.len()).min(MAX_BATCH_SIZE);
 
     for buf in bufs.iter_mut().take(limit) {

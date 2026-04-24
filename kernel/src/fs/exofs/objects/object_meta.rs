@@ -7,10 +7,9 @@
 //   NO-STD-07 : pas de HashMap — BTreeMap ou tableau fixe
 //   SEC-04    : jamais de contenu secret dans dumps / Display
 
-
+use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use core::fmt;
 use core::mem;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
@@ -29,7 +28,7 @@ pub const TIMESTAMP_INVALID: u64 = 0;
 /// Mode UNIX par défaut : rw-r--r-- (0o644).
 pub const MODE_DEFAULT_FILE: u32 = 0o644;
 /// Mode UNIX par défaut répertoire : rwxr-xr-x (0o755).
-pub const MODE_DEFAULT_DIR: u32  = 0o755;
+pub const MODE_DEFAULT_DIR: u32 = 0o755;
 
 /// Nombre maximal d'attributs étendus inline.
 pub const XATTR_MAX_INLINE: usize = 8;
@@ -64,29 +63,29 @@ pub const XATTR_VAL_MAX_LEN: usize = 128;
 #[derive(Clone, Copy)]
 pub struct ObjectMetaDisk {
     /// Mode UNIX (permissions + type d'objet dans les 4 MSB).
-    pub mode:           u32,
+    pub mode: u32,
     /// UID numérique du propriétaire.
-    pub uid:            u32,
+    pub uid: u32,
     /// GID numérique du groupe.
-    pub gid:            u32,
+    pub gid: u32,
     /// Nombre de liens durs.
-    pub nlink:          u32,
+    pub nlink: u32,
     /// Timestamp dernier accès (TSC µ-secondes depuis boot).
-    pub atime_tsc:      u64,
+    pub atime_tsc: u64,
     /// Timestamp dernière modification du contenu.
-    pub mtime_tsc:      u64,
+    pub mtime_tsc: u64,
     /// Timestamp dernière modification des métadonnées.
-    pub ctime_tsc:      u64,
+    pub ctime_tsc: u64,
     /// Type MIME de l'objet (ASCII/UTF-8, zéro-padé).
-    pub mime_type:      [u8; MIME_TYPE_LEN],
+    pub mime_type: [u8; MIME_TYPE_LEN],
     /// Hash Blake3 de la capability du propriétaire.
     pub owner_cap_hash: [u8; OWNER_CAP_HASH_LEN],
     /// Flags supplémentaires (immutable, append-only, …).
-    pub extra_flags:    u32,
+    pub extra_flags: u32,
     /// Padding pour atteindre exactement 256 octets.
-    pub _pad:           [u8; 84],
+    pub _pad: [u8; 84],
     /// Checksum CRC32 des 252 octets précédents.
-    pub checksum:       u32,
+    pub checksum: u32,
 }
 
 // Validation statique du layout en compile-time.
@@ -98,15 +97,15 @@ pub struct ObjectMetaDisk {
 // ── Flags supplémentaires ──────────────────────────────────────────────────────
 
 /// Objet immuable (aucune écriture autorisée).
-pub const META_FLAG_IMMUTABLE:     u32 = 1 << 0;
+pub const META_FLAG_IMMUTABLE: u32 = 1 << 0;
 /// Mode append-only.
-pub const META_FLAG_APPEND_ONLY:   u32 = 1 << 1;
+pub const META_FLAG_APPEND_ONLY: u32 = 1 << 1;
 /// Données chiffrées (hint pour le cache).
-pub const META_FLAG_ENCRYPTED:     u32 = 1 << 2;
+pub const META_FLAG_ENCRYPTED: u32 = 1 << 2;
 /// MIME type explicitement défini par l'utilisateur.
 pub const META_FLAG_MIME_EXPLICIT: u32 = 1 << 3;
 /// Attribut étendu présent.
-pub const META_FLAG_HAS_XATTR:     u32 = 1 << 4;
+pub const META_FLAG_HAS_XATTR: u32 = 1 << 4;
 
 // ── Attribut étendu inline ─────────────────────────────────────────────────────
 
@@ -114,11 +113,11 @@ pub const META_FLAG_HAS_XATTR:     u32 = 1 << 4;
 #[derive(Clone)]
 pub struct XAttrEntry {
     /// Clé en UTF-8, zéro-padée à `XATTR_KEY_MAX_LEN`.
-    pub key:     [u8; XATTR_KEY_MAX_LEN],
+    pub key: [u8; XATTR_KEY_MAX_LEN],
     /// Longueur réelle de la clé.
     pub key_len: u8,
     /// Valeur brute.
-    pub value:   [u8; XATTR_VAL_MAX_LEN],
+    pub value: [u8; XATTR_VAL_MAX_LEN],
     /// Longueur réelle de la valeur.
     pub val_len: u16,
 }
@@ -127,9 +126,9 @@ impl XAttrEntry {
     /// Crée un slot vide (sentinelle).
     pub const fn empty() -> Self {
         Self {
-            key:     [0u8; XATTR_KEY_MAX_LEN],
+            key: [0u8; XATTR_KEY_MAX_LEN],
             key_len: 0,
-            value:   [0u8; XATTR_VAL_MAX_LEN],
+            value: [0u8; XATTR_VAL_MAX_LEN],
             val_len: 0,
         }
     }
@@ -156,7 +155,11 @@ impl XAttrEntry {
 impl fmt::Debug for XAttrEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let key_str = core::str::from_utf8(self.key_slice()).unwrap_or("<non-utf8>");
-        write!(f, "XAttrEntry {{ key: {:?}, val_len: {} }}", key_str, self.val_len)
+        write!(
+            f,
+            "XAttrEntry {{ key: {:?}, val_len: {} }}",
+            key_str, self.val_len
+        )
     }
 }
 
@@ -170,31 +173,31 @@ impl fmt::Debug for XAttrEntry {
 #[derive(Clone)]
 pub struct ObjectMeta {
     /// Mode UNIX (permissions, type dans les 4 MSB).
-    pub mode:           u32,
+    pub mode: u32,
     /// UID numérique.
-    pub uid:            u32,
+    pub uid: u32,
     /// GID numérique.
-    pub gid:            u32,
+    pub gid: u32,
     /// Nombre de liens durs.
-    pub nlink:          u32,
+    pub nlink: u32,
     /// Timestamp dernier accès (TSC µs).
-    pub atime_tsc:      u64,
+    pub atime_tsc: u64,
     /// Timestamp dernière modification du contenu (TSC µs).
-    pub mtime_tsc:      u64,
+    pub mtime_tsc: u64,
     /// Timestamp dernière modification des métadonnées (TSC µs).
-    pub ctime_tsc:      u64,
+    pub ctime_tsc: u64,
     /// MIME type (ASCII/UTF-8, `\0`-terminé dans le tableau).
-    pub mime_type:      [u8; MIME_TYPE_LEN],
+    pub mime_type: [u8; MIME_TYPE_LEN],
     /// Longueur réelle du MIME type (0 = non défini).
-    pub mime_len:       usize,
+    pub mime_len: usize,
     /// Hash Blake3 de la capability du propriétaire.
     pub owner_cap_hash: [u8; OWNER_CAP_HASH_LEN],
     /// Flags supplementaires (META_FLAG_*).
-    pub extra_flags:    u32,
+    pub extra_flags: u32,
     /// Tableau d'attributs étendus inline (slots libres = is_empty()).
-    pub xattrs:         [XAttrEntry; XATTR_MAX_INLINE],
+    pub xattrs: [XAttrEntry; XATTR_MAX_INLINE],
     /// Nombre d'attributs étendus actuellement utilisés.
-    pub xattr_count:    usize,
+    pub xattr_count: usize,
 }
 
 impl ObjectMeta {
@@ -208,19 +211,19 @@ impl ObjectMeta {
     /// * `now_tsc` — horodatage TSC courant (µs depuis boot).
     pub fn new_file(uid: u32, gid: u32, now_tsc: u64) -> Self {
         Self {
-            mode:           MODE_DEFAULT_FILE,
+            mode: MODE_DEFAULT_FILE,
             uid,
             gid,
-            nlink:          1,
-            atime_tsc:      now_tsc,
-            mtime_tsc:      now_tsc,
-            ctime_tsc:      now_tsc,
-            mime_type:      [0u8; MIME_TYPE_LEN],
-            mime_len:       0,
+            nlink: 1,
+            atime_tsc: now_tsc,
+            mtime_tsc: now_tsc,
+            ctime_tsc: now_tsc,
+            mime_type: [0u8; MIME_TYPE_LEN],
+            mime_len: 0,
             owner_cap_hash: [0u8; OWNER_CAP_HASH_LEN],
-            extra_flags:    0,
-            xattrs:         core::array::from_fn(|_| XAttrEntry::empty()),
-            xattr_count:    0,
+            extra_flags: 0,
+            xattrs: core::array::from_fn(|_| XAttrEntry::empty()),
+            xattr_count: 0,
         }
     }
 
@@ -229,7 +232,7 @@ impl ObjectMeta {
     /// `nlink` vaut 2 (`.` et parent).
     pub fn new_dir(uid: u32, gid: u32, now_tsc: u64) -> Self {
         let mut m = Self::new_file(uid, gid, now_tsc);
-        m.mode  = MODE_DEFAULT_DIR;
+        m.mode = MODE_DEFAULT_DIR;
         m.nlink = 2;
         m
     }
@@ -238,29 +241,31 @@ impl ObjectMeta {
     ///
     /// Retourne `ExofsError::Corrupt` si le checksum ne correspond pas.
     pub fn from_disk(d: &ObjectMetaDisk) -> ExofsResult<Self> {
-        let stored  = d.checksum;
+        let stored = d.checksum;
         let computed = crc32_of_meta(d);
         if stored != computed {
             return Err(ExofsError::Corrupt);
         }
-        let mime_len = d.mime_type.iter()
+        let mime_len = d
+            .mime_type
+            .iter()
             .position(|&b| b == 0)
             .unwrap_or(MIME_TYPE_LEN);
 
         Ok(Self {
-            mode:           d.mode,
-            uid:            d.uid,
-            gid:            d.gid,
-            nlink:          d.nlink,
-            atime_tsc:      d.atime_tsc,
-            mtime_tsc:      d.mtime_tsc,
-            ctime_tsc:      d.ctime_tsc,
-            mime_type:      d.mime_type,
+            mode: d.mode,
+            uid: d.uid,
+            gid: d.gid,
+            nlink: d.nlink,
+            atime_tsc: d.atime_tsc,
+            mtime_tsc: d.mtime_tsc,
+            ctime_tsc: d.ctime_tsc,
+            mime_type: d.mime_type,
             mime_len,
             owner_cap_hash: d.owner_cap_hash,
-            extra_flags:    d.extra_flags,
-            xattrs:         core::array::from_fn(|_| XAttrEntry::empty()),
-            xattr_count:    0,
+            extra_flags: d.extra_flags,
+            xattrs: core::array::from_fn(|_| XAttrEntry::empty()),
+            xattr_count: 0,
         })
     }
 
@@ -269,18 +274,18 @@ impl ObjectMeta {
     /// Sérialise vers la représentation disque avec checksum CRC32 calculé.
     pub fn to_disk(&self) -> ObjectMetaDisk {
         let mut d = ObjectMetaDisk {
-            mode:           self.mode,
-            uid:            self.uid,
-            gid:            self.gid,
-            nlink:          self.nlink,
-            atime_tsc:      self.atime_tsc,
-            mtime_tsc:      self.mtime_tsc,
-            ctime_tsc:      self.ctime_tsc,
-            mime_type:      self.mime_type,
+            mode: self.mode,
+            uid: self.uid,
+            gid: self.gid,
+            nlink: self.nlink,
+            atime_tsc: self.atime_tsc,
+            mtime_tsc: self.mtime_tsc,
+            ctime_tsc: self.ctime_tsc,
+            mime_type: self.mime_type,
             owner_cap_hash: self.owner_cap_hash,
-            extra_flags:    self.extra_flags,
-            _pad:           [0u8; 84],
-            checksum:       0,
+            extra_flags: self.extra_flags,
+            _pad: [0u8; 84],
+            checksum: 0,
         };
         d.checksum = crc32_of_meta(&d);
         d
@@ -329,16 +334,16 @@ impl ObjectMeta {
     pub fn set_mime(&mut self, src: &[u8]) -> ExofsResult<()> {
         if src.is_empty() {
             self.mime_type = [0u8; MIME_TYPE_LEN];
-            self.mime_len  = 0;
+            self.mime_len = 0;
             self.extra_flags &= !META_FLAG_MIME_EXPLICIT;
             return Ok(());
         }
         let effective = src.iter().position(|&b| b == 0).unwrap_or(src.len());
-        let copy_len  = effective.min(MIME_TYPE_LEN);
+        let copy_len = effective.min(MIME_TYPE_LEN);
 
         self.mime_type = [0u8; MIME_TYPE_LEN];
         self.mime_type[..copy_len].copy_from_slice(&src[..copy_len]);
-        self.mime_len  = copy_len;
+        self.mime_len = copy_len;
         self.extra_flags |= META_FLAG_MIME_EXPLICIT;
         Ok(())
     }
@@ -380,8 +385,12 @@ impl ObjectMeta {
 
     /// Change le propriétaire/groupe. Met à jour ctime.
     pub fn chown(&mut self, new_uid: Option<u32>, new_gid: Option<u32>, now_tsc: u64) {
-        if let Some(u) = new_uid { self.uid = u; }
-        if let Some(g) = new_gid { self.gid = g; }
+        if let Some(u) = new_uid {
+            self.uid = u;
+        }
+        if let Some(g) = new_gid {
+            self.gid = g;
+        }
         self.update_ctime(now_tsc);
     }
 
@@ -418,16 +427,22 @@ impl ObjectMeta {
     /// Positionne ou efface le flag immutable.
     #[inline]
     pub fn set_immutable(&mut self, v: bool, now_tsc: u64) {
-        if v { self.extra_flags |=  META_FLAG_IMMUTABLE; }
-        else { self.extra_flags &= !META_FLAG_IMMUTABLE; }
+        if v {
+            self.extra_flags |= META_FLAG_IMMUTABLE;
+        } else {
+            self.extra_flags &= !META_FLAG_IMMUTABLE;
+        }
         self.update_ctime(now_tsc);
     }
 
     /// Positionne ou efface le flag append-only.
     #[inline]
     pub fn set_append_only(&mut self, v: bool, now_tsc: u64) {
-        if v { self.extra_flags |=  META_FLAG_APPEND_ONLY; }
-        else { self.extra_flags &= !META_FLAG_APPEND_ONLY; }
+        if v {
+            self.extra_flags |= META_FLAG_APPEND_ONLY;
+        } else {
+            self.extra_flags &= !META_FLAG_APPEND_ONLY;
+        }
         self.update_ctime(now_tsc);
     }
 
@@ -447,12 +462,7 @@ impl ObjectMeta {
     ///
     /// Retourne `ExofsError::NoSpace` si la table inline est pleine et que la clé
     /// n'est pas déjà présente.
-    pub fn xattr_set(
-        &mut self,
-        key:     &[u8],
-        value:   &[u8],
-        now_tsc: u64,
-    ) -> ExofsResult<()> {
+    pub fn xattr_set(&mut self, key: &[u8], value: &[u8], now_tsc: u64) -> ExofsResult<()> {
         if key.is_empty() || key.len() > XATTR_KEY_MAX_LEN {
             return Err(ExofsError::InvalidArgument);
         }
@@ -462,7 +472,7 @@ impl ObjectMeta {
         // Mise à jour si la clé existe déjà.
         for entry in self.xattrs.iter_mut() {
             if !entry.is_empty() && entry.key_slice() == key {
-                entry.value   = [0u8; XATTR_VAL_MAX_LEN];
+                entry.value = [0u8; XATTR_VAL_MAX_LEN];
                 entry.value[..value.len()].copy_from_slice(value);
                 entry.val_len = value.len() as u16;
                 self.update_ctime(now_tsc);
@@ -475,10 +485,10 @@ impl ObjectMeta {
         }
         for entry in self.xattrs.iter_mut() {
             if entry.is_empty() {
-                entry.key     = [0u8; XATTR_KEY_MAX_LEN];
+                entry.key = [0u8; XATTR_KEY_MAX_LEN];
                 entry.key[..key.len()].copy_from_slice(key);
                 entry.key_len = key.len() as u8;
-                entry.value   = [0u8; XATTR_VAL_MAX_LEN];
+                entry.value = [0u8; XATTR_VAL_MAX_LEN];
                 entry.value[..value.len()].copy_from_slice(value);
                 entry.val_len = value.len() as u16;
                 self.xattr_count = self.xattr_count.saturating_add(1);
@@ -510,7 +520,8 @@ impl ObjectMeta {
 
     /// Itère sur toutes les clés xattr inline non vides.
     pub fn xattr_list(&self) -> impl Iterator<Item = &[u8]> {
-        self.xattrs.iter()
+        self.xattrs
+            .iter()
             .filter(|e| !e.is_empty())
             .map(|e| e.key_slice())
     }
@@ -542,7 +553,7 @@ impl ObjectMeta {
     /// Mode POSIX régulier (fichier) — rw-r--r--.
     pub const MODE_FILE: u32 = MODE_DEFAULT_FILE;
     /// Mode POSIX répertoire — rwxr-xr-x.
-    pub const MODE_DIR:  u32 = MODE_DEFAULT_DIR;
+    pub const MODE_DIR: u32 = MODE_DEFAULT_DIR;
 }
 
 // ── Display ────────────────────────────────────────────────────────────────────
@@ -578,31 +589,31 @@ impl fmt::Debug for ObjectMeta {
 #[derive(Default, Debug)]
 pub struct ObjectMetaStats {
     /// Nombre de serialisations vers disque.
-    pub to_disk_count:   u64,
+    pub to_disk_count: u64,
     /// Nombre de déserialisations depuis disque.
     pub from_disk_count: u64,
     /// Nombre d'échecs de checksum CRC32.
     pub checksum_errors: u64,
     /// Nombre de mises à jour de permissions.
-    pub chmod_count:     u64,
+    pub chmod_count: u64,
     /// Nombre de changements de propriétaire.
-    pub chown_count:     u64,
+    pub chown_count: u64,
     /// Nombre d'opérations xattr set.
     pub xattr_set_count: u64,
     /// Nombre d'opérations xattr remove.
-    pub xattr_rm_count:  u64,
+    pub xattr_rm_count: u64,
 }
 
 impl ObjectMetaStats {
     pub const fn new() -> Self {
         Self {
-            to_disk_count:   0,
+            to_disk_count: 0,
             from_disk_count: 0,
             checksum_errors: 0,
-            chmod_count:     0,
-            chown_count:     0,
+            chmod_count: 0,
+            chown_count: 0,
             xattr_set_count: 0,
-            xattr_rm_count:  0,
+            xattr_rm_count: 0,
         }
     }
 }
@@ -671,7 +682,7 @@ mod tests {
     fn test_to_disk_from_disk_roundtrip() {
         let mut m = ObjectMeta::new_file(500, 500, 9999);
         m.set_mime(b"text/plain").unwrap();
-        let d  = m.to_disk();
+        let d = m.to_disk();
         let m2 = ObjectMeta::from_disk(&d).expect("from_disk should succeed");
         assert_eq!(m2.uid, 500);
         assert_eq!(m2.mime_as_str(), "text/plain");
@@ -688,7 +699,7 @@ mod tests {
 
     #[test]
     fn test_crc_corruption_detected() {
-        let m  = ObjectMeta::new_file(0, 0, 1);
+        let m = ObjectMeta::new_file(0, 0, 1);
         let mut d = m.to_disk();
         d.uid ^= 0xFF;
         assert!(ObjectMeta::from_disk(&d).is_err());

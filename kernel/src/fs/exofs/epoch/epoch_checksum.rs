@@ -8,11 +8,7 @@
 // Centralise les appels à blake3_hash pour les structures epoch.
 // Chaque utilisation documente PRÉCISÉMENT quels octets sont hachés.
 
-
-use crate::fs::exofs::core::{
-    ExofsError, ExofsResult, blake3_hash,
-    EPOCH_ROOT_MAGIC, EXOFS_MAGIC,
-};
+use crate::fs::exofs::core::{blake3_hash, ExofsError, ExofsResult, EPOCH_ROOT_MAGIC, EXOFS_MAGIC};
 use crate::fs::exofs::epoch::epoch_record::EpochRecord;
 
 // =============================================================================
@@ -183,9 +179,7 @@ pub fn verify_page_integrity(page_data: &[u8], magic_expected: u32) -> ExofsResu
         return Err(ExofsError::CorruptedStructure);
     }
     // RÈGLE V-13 : magic EN PREMIER.
-    let magic = u32::from_le_bytes([
-        page_data[0], page_data[1], page_data[2], page_data[3],
-    ]);
+    let magic = u32::from_le_bytes([page_data[0], page_data[1], page_data[2], page_data[3]]);
     if magic != magic_expected {
         return Err(ExofsError::InvalidMagic);
     }
@@ -231,10 +225,10 @@ impl IncrementalChecksum {
     /// Crée un nouveau contexte de checksum incrémental.
     pub fn new() -> Self {
         IncrementalChecksum {
-            buf:          [0u8; 4096],
-            buf_pos:      0,
+            buf: [0u8; 4096],
+            buf_pos: 0,
             intermediate: None,
-            total_bytes:  0,
+            total_bytes: 0,
         }
     }
 
@@ -244,8 +238,7 @@ impl IncrementalChecksum {
         while !remaining.is_empty() {
             let space = 4096 - self.buf_pos;
             let to_copy = remaining.len().min(space);
-            self.buf[self.buf_pos..self.buf_pos + to_copy]
-                .copy_from_slice(&remaining[..to_copy]);
+            self.buf[self.buf_pos..self.buf_pos + to_copy].copy_from_slice(&remaining[..to_copy]);
             self.buf_pos += to_copy;
             self.total_bytes = self.total_bytes.saturating_add(to_copy as u64);
             remaining = &remaining[to_copy..];
@@ -277,8 +270,7 @@ impl IncrementalChecksum {
                 // Chaînage : hash(prev_hash || buf_tail).
                 let mut combined = [0u8; 32 + 4096];
                 combined[..32].copy_from_slice(&prev_hash);
-                combined[32..32 + self.buf_pos]
-                    .copy_from_slice(&self.buf[..self.buf_pos]);
+                combined[32..32 + self.buf_pos].copy_from_slice(&self.buf[..self.buf_pos]);
                 blake3_hash(&combined[..32 + self.buf_pos])
             }
         }

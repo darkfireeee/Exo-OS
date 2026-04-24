@@ -108,7 +108,9 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
 
 #[inline]
 pub fn metadata(name: &str) -> Option<&'static ServiceMetadata> {
-    CANONICAL_SERVICES.iter().find(|service| service.name == name)
+    CANONICAL_SERVICES
+        .iter()
+        .find(|service| service.name == name)
 }
 
 #[inline]

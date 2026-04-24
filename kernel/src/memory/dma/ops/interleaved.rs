@@ -15,14 +15,12 @@
 //
 // COUCHE 0 — aucune dépendance externe.
 
-use core::sync::atomic::{AtomicU64, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use spin::Mutex;
 
-use crate::memory::dma::core::types::{
-    DmaChannelId, DmaTransactionId, DmaError,
-};
-use crate::memory::core::types::PhysAddr;
 use crate::memory::core::layout::PHYS_MAP_BASE;
+use crate::memory::core::types::PhysAddr;
+use crate::memory::dma::core::types::{DmaChannelId, DmaError, DmaTransactionId};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES
@@ -45,21 +43,21 @@ pub const MAX_INTERLEAVED_TRANSFERS: usize = 32;
 #[derive(Copy, Clone, Debug)]
 pub struct InterleavedStride {
     /// Adresse physique de départ.
-    pub base:    PhysAddr,
+    pub base: PhysAddr,
     /// Stride en octets entre deux chunks consécutifs.
     /// 0 = contiguë (même que scatter-gather ordinaire).
-    pub stride:  usize,
+    pub stride: usize,
 }
 
 /// Configuration d'un transfert DMA interleaved.
 #[derive(Copy, Clone)]
 pub struct InterleavedConfig {
     /// Canal DMA.
-    pub channel:     DmaChannelId,
+    pub channel: DmaChannelId,
     /// Pattern source.
-    pub src:         InterleavedStride,
+    pub src: InterleavedStride,
     /// Pattern destination.
-    pub dst:         InterleavedStride,
+    pub dst: InterleavedStride,
     /// Taille de chaque chunk en octets.
     pub chunk_bytes: usize,
     /// Nombre de chunks.
@@ -144,43 +142,49 @@ pub unsafe fn sw_interleaved_copy(config: &InterleavedConfig) -> Result<usize, I
 #[repr(u8)]
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum IxferState {
-    Free       = 0,
+    Free = 0,
     InProgress = 1,
-    Done       = 2,
-    Error      = 3,
+    Done = 2,
+    Error = 3,
 }
 
 /// Un transfert interleaved asynchrone en cours.
 struct InterleavedXfer {
-    config:          InterleavedConfig,
-    state:           AtomicU8,
-    txn_id:          DmaTransactionId,
+    config: InterleavedConfig,
+    state: AtomicU8,
+    txn_id: DmaTransactionId,
     /// Chunks déjà soumis au moteur DMA.
     chunks_submitted: AtomicU32,
     /// Chunks complétés avec succès.
-    chunks_done:      AtomicU32,
+    chunks_done: AtomicU32,
     /// Chunks en erreur.
-    chunks_error:     AtomicU32,
+    chunks_error: AtomicU32,
     /// Octets totaux transférés.
-    bytes_done:       AtomicU64,
+    bytes_done: AtomicU64,
 }
 
 impl InterleavedXfer {
     const fn new() -> Self {
         InterleavedXfer {
             config: InterleavedConfig {
-                channel:     DmaChannelId(u32::MAX),
-                src:         InterleavedStride { base: PhysAddr::new(0), stride: 0 },
-                dst:         InterleavedStride { base: PhysAddr::new(0), stride: 0 },
+                channel: DmaChannelId(u32::MAX),
+                src: InterleavedStride {
+                    base: PhysAddr::new(0),
+                    stride: 0,
+                },
+                dst: InterleavedStride {
+                    base: PhysAddr::new(0),
+                    stride: 0,
+                },
                 chunk_bytes: 0,
                 chunk_count: 0,
             },
-            state:            AtomicU8::new(IxferState::Free as u8),
-            txn_id:           DmaTransactionId::INVALID,
+            state: AtomicU8::new(IxferState::Free as u8),
+            txn_id: DmaTransactionId::INVALID,
             chunks_submitted: AtomicU32::new(0),
-            chunks_done:      AtomicU32::new(0),
-            chunks_error:     AtomicU32::new(0),
-            bytes_done:       AtomicU64::new(0),
+            chunks_done: AtomicU32::new(0),
+            chunks_error: AtomicU32::new(0),
+            bytes_done: AtomicU64::new(0),
         }
     }
 
@@ -190,7 +194,7 @@ impl InterleavedXfer {
 
     #[allow(dead_code)]
     fn is_done(&self) -> bool {
-        let done  = self.chunks_done.load(Ordering::Acquire) as usize;
+        let done = self.chunks_done.load(Ordering::Acquire) as usize;
         let total = self.config.chunk_count;
         done >= total && total > 0
     }
@@ -199,7 +203,8 @@ impl InterleavedXfer {
     pub fn on_chunk_complete(&self, success: bool) {
         if success {
             let done = self.chunks_done.fetch_add(1, Ordering::AcqRel) + 1;
-            self.bytes_done.fetch_add(self.config.chunk_bytes as u64, Ordering::Relaxed);
+            self.bytes_done
+                .fetch_add(self.config.chunk_bytes as u64, Ordering::Relaxed);
             if done >= self.config.chunk_count as u32 {
                 self.state.store(IxferState::Done as u8, Ordering::Release);
             }
@@ -212,12 +217,11 @@ impl InterleavedXfer {
     /// Résultat du transfert (si terminé).
     pub fn result(&self) -> Option<Result<usize, DmaError>> {
         match self.state.load(Ordering::Acquire) {
-            s if s == IxferState::Done as u8 =>
-                Some(Ok(self.bytes_done.load(Ordering::Relaxed) as usize)),
-            s if s == IxferState::Error as u8 =>
-                Some(Err(DmaError::HardwareError)),
-            _ =>
-                None,
+            s if s == IxferState::Done as u8 => {
+                Some(Ok(self.bytes_done.load(Ordering::Relaxed) as usize))
+            }
+            s if s == IxferState::Error as u8 => Some(Err(DmaError::HardwareError)),
+            _ => None,
         }
     }
 }
@@ -233,7 +237,9 @@ struct InterleavedTable {
 impl InterleavedTable {
     const fn new() -> Self {
         const X: InterleavedXfer = InterleavedXfer::new();
-        InterleavedTable { xfers: [X; MAX_INTERLEAVED_TRANSFERS] }
+        InterleavedTable {
+            xfers: [X; MAX_INTERLEAVED_TRANSFERS],
+        }
     }
 
     fn alloc(&mut self) -> Option<usize> {
@@ -260,9 +266,9 @@ unsafe impl Send for InterleavedManager {}
 impl InterleavedManager {
     pub const fn new() -> Self {
         InterleavedManager {
-            inner:        Mutex::new(InterleavedTable::new()),
-            submitted:    AtomicU64::new(0),
-            completed:    AtomicU64::new(0),
+            inner: Mutex::new(InterleavedTable::new()),
+            submitted: AtomicU64::new(0),
+            completed: AtomicU64::new(0),
             sw_fallbacks: AtomicU64::new(0),
         }
     }
@@ -274,10 +280,7 @@ impl InterleavedManager {
     /// Si le canal ne supporte pas le mode interleaved, retourne
     /// `Err(InterleavedError::ChannelUnsupported)`. Utilise alors
     /// `sw_interleaved_copy` comme fallback synchrone.
-    pub fn submit_async(
-        &self,
-        config: InterleavedConfig,
-    ) -> Result<usize, InterleavedError> {
+    pub fn submit_async(&self, config: InterleavedConfig) -> Result<usize, InterleavedError> {
         config.validate()?;
 
         let mut table = self.inner.lock();
@@ -285,13 +288,14 @@ impl InterleavedManager {
 
         let txn = DmaTransactionId::generate();
         let xfer = &mut table.xfers[idx];
-        xfer.config           = config;
-        xfer.txn_id           = txn;
+        xfer.config = config;
+        xfer.txn_id = txn;
         xfer.chunks_submitted.store(0, Ordering::Relaxed);
         xfer.chunks_done.store(0, Ordering::Relaxed);
         xfer.chunks_error.store(0, Ordering::Relaxed);
         xfer.bytes_done.store(0, Ordering::Relaxed);
-        xfer.state.store(IxferState::InProgress as u8, Ordering::Release);
+        xfer.state
+            .store(IxferState::InProgress as u8, Ordering::Release);
 
         self.submitted.fetch_add(1, Ordering::Relaxed);
         Ok(idx)
@@ -323,7 +327,9 @@ impl InterleavedManager {
     pub fn release(&self, xfer_idx: usize) {
         let table = self.inner.lock();
         if xfer_idx < MAX_INTERLEAVED_TRANSFERS {
-            table.xfers[xfer_idx].state.store(IxferState::Free as u8, Ordering::Release);
+            table.xfers[xfer_idx]
+                .state
+                .store(IxferState::Free as u8, Ordering::Release);
         }
     }
 }

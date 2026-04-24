@@ -44,7 +44,11 @@ impl TcpControlPlane {
     }
 
     pub fn activate(&mut self, handle: u64) {
-        if let Some(idx) = self.flows.iter().position(|entry| entry.active && entry.handle == handle) {
+        if let Some(idx) = self
+            .flows
+            .iter()
+            .position(|entry| entry.active && entry.handle == handle)
+        {
             self.flows[idx].rtt_ms = 3;
             return;
         }
@@ -62,7 +66,11 @@ impl TcpControlPlane {
     }
 
     pub fn note_send(&mut self, handle: u64, len: u32) {
-        if let Some(idx) = self.flows.iter().position(|entry| entry.active && entry.handle == handle) {
+        if let Some(idx) = self
+            .flows
+            .iter()
+            .position(|entry| entry.active && entry.handle == handle)
+        {
             let flow = &mut self.flows[idx];
             flow.sent_bytes = flow.sent_bytes.saturating_add(len as u64);
             flow.cwnd_bytes = flow.cwnd_bytes.saturating_add((len / 4).max(256));
@@ -70,7 +78,11 @@ impl TcpControlPlane {
     }
 
     pub fn note_recv(&mut self, handle: u64, len: u32) {
-        if let Some(idx) = self.flows.iter().position(|entry| entry.active && entry.handle == handle) {
+        if let Some(idx) = self
+            .flows
+            .iter()
+            .position(|entry| entry.active && entry.handle == handle)
+        {
             let flow = &mut self.flows[idx];
             flow.recv_bytes = flow.recv_bytes.saturating_add(len as u64);
             flow.rtt_ms = flow.rtt_ms.saturating_add(1).min(250);
@@ -78,13 +90,20 @@ impl TcpControlPlane {
     }
 
     pub fn close(&mut self, handle: u64) {
-        if let Some(idx) = self.flows.iter().position(|entry| entry.active && entry.handle == handle) {
+        if let Some(idx) = self
+            .flows
+            .iter()
+            .position(|entry| entry.active && entry.handle == handle)
+        {
             self.flows[idx] = FlowRecord::empty();
         }
     }
 
     pub fn snapshot(&self, handle: u64) -> Option<TcpSnapshot> {
-        let flow = self.flows.iter().find(|entry| entry.active && entry.handle == handle)?;
+        let flow = self
+            .flows
+            .iter()
+            .find(|entry| entry.active && entry.handle == handle)?;
         Some(TcpSnapshot {
             handle: flow.handle,
             cwnd_bytes: flow.cwnd_bytes,
