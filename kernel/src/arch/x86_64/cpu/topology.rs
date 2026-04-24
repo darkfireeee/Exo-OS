@@ -191,10 +191,10 @@ fn detect_topo_shifts(prefer_leaf_1f: bool) -> (u32, u32, u32) {
 
 /// Parse la topologie du BSP depuis CPUID
 fn parse_bsp_topology() -> CpuDescriptor {
-    use super::features::CPU_FEATURES;
+    use super::features::cpu_features_or_none;
 
     // Lire APIC ID (32 bits si x2APIC, 8 bits sinon)
-    let apic_id = if CPU_FEATURES.has_x2apic() {
+    let apic_id = if cpu_features_or_none().map_or(false, |features| features.has_x2apic()) {
         let (_eax, _ecx, edx): (u32, u32, u32);
         // SAFETY: CPUID 0xB non-privilégié ; xchg pour préserver rbx
         unsafe {

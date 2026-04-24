@@ -18,7 +18,7 @@ use crate::arch::x86_64;
 use crate::arch::x86_64::acpi::{madt, parser};
 use crate::arch::x86_64::apic::local_apic;
 use crate::arch::x86_64::apic::{ipi, x2apic};
-use crate::arch::x86_64::cpu::{features::CPU_FEATURES, msr, tsc};
+use crate::arch::x86_64::cpu::{msr, tsc};
 use crate::arch::x86_64::smp::init::TRAMPOLINE_PAGE;
 use crate::arch::x86_64::time::sources::pit;
 use crate::exophoenix::{sentinel, PhoenixState, PHOENIX_STATE};
@@ -288,22 +288,24 @@ fn detect_invariant_tsc() -> bool {
 /// `hpet_available` est injecté par le parseur ACPI (étape 5) ; avant parse ACPI,
 /// l'appelant peut passer `false` puis mettre à jour ensuite.
 pub fn init_feature_probe(hpet_available: bool) {
+    let features = crate::arch::x86_64::cpu::features::cpu_features_or_none();
+
     B_FEATURES.set_apic_mode(detect_apic_mode());
     B_FEATURES
         .pks_available
-        .store(CPU_FEATURES.has_pks(), Ordering::Release);
+        .store(features.map_or(false, |cpu| cpu.has_pks()), Ordering::Release);
     B_FEATURES
         .invpcid_available
-        .store(CPU_FEATURES.has_invpcid(), Ordering::Release);
+        .store(features.map_or(false, |cpu| cpu.has_invpcid()), Ordering::Release);
     B_FEATURES
         .pcid_available
-        .store(CPU_FEATURES.has_pcid(), Ordering::Release);
+        .store(features.map_or(false, |cpu| cpu.has_pcid()), Ordering::Release);
     B_FEATURES
         .smep_available
-        .store(CPU_FEATURES.has_smep(), Ordering::Release);
+        .store(features.map_or(false, |cpu| cpu.has_smep()), Ordering::Release);
     B_FEATURES
         .smap_available
-        .store(CPU_FEATURES.has_smap(), Ordering::Release);
+        .store(features.map_or(false, |cpu| cpu.has_smap()), Ordering::Release);
 
     let pmc_version = detect_pmc_version();
     B_FEATURES.pmc_version.store(pmc_version, Ordering::Release);
@@ -319,7 +321,7 @@ pub fn init_feature_probe(hpet_available: bool) {
         .store(hpet_available, Ordering::Release);
 
     let cr4 = x86_64::read_cr4();
-    let vmx_active = CPU_FEATURES.has_vmx() && (cr4 & CR4_VMXE != 0);
+    let vmx_active = features.map_or(false, |cpu| cpu.has_vmx()) && (cr4 & CR4_VMXE != 0);
     B_FEATURES.vmx_active.store(vmx_active, Ordering::Release);
 }
 
@@ -699,7 +701,9 @@ pub fn init_local_apic_dispatch() {
         BootApicMode::X2Apic => {
             x2apic::mask_all_lvt_x2apic();
             local_apic::set_spurious_vector(crate::arch::x86_64::idt::VEC_SPURIOUS);
-            if CPU_FEATURES.has_tsc_deadline() {
+            if crate::arch::x86_64::cpu::features::cpu_features_or_none()
+                .map_or(false, |features| features.has_tsc_deadline())
+            {
                 local_apic::timer_init_tsc_deadline(crate::arch::x86_64::idt::VEC_IRQ_TIMER);
             } else {
                 local_apic::timer_init_oneshot(crate::arch::x86_64::idt::VEC_IRQ_TIMER);
@@ -708,7 +712,9 @@ pub fn init_local_apic_dispatch() {
         BootApicMode::XApic => {
             local_apic::init_local_apic();
             local_apic::set_spurious_vector(crate::arch::x86_64::idt::VEC_SPURIOUS);
-            if CPU_FEATURES.has_tsc_deadline() {
+            if crate::arch::x86_64::cpu::features::cpu_features_or_none()
+                .map_or(false, |features| features.has_tsc_deadline())
+            {
                 local_apic::timer_init_tsc_deadline(crate::arch::x86_64::idt::VEC_IRQ_TIMER);
             } else {
                 local_apic::timer_init_oneshot(crate::arch::x86_64::idt::VEC_IRQ_TIMER);

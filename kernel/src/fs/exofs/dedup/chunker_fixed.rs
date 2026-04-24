@@ -19,7 +19,7 @@ use alloc::vec::Vec;
 /// Taille de chunk par défaut pour le chunker fixe (4 KiB).
 pub const FIXED_DEFAULT_CHUNK_SIZE: usize = 4096;
 /// Taille minimale acceptée.
-pub const FIXED_MIN_CHUNK_SIZE: usize = 512;
+pub const FIXED_MIN_CHUNK_SIZE: usize = 1;
 /// Taille maximale acceptée (64 KiB).
 pub const FIXED_MAX_CHUNK_SIZE: usize = 65536;
 

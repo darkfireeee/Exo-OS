@@ -371,7 +371,9 @@ pub fn pmc_snapshot(tcb: &ThreadControlBlock) -> PmcSnapshot {
 /// The offset is computed from the logical CPU ID (TSC_AUX or APIC ID).
 fn write_snapshot_to_ssr(snap: &PmcSnapshot) {
     // Determine current CPU ID
-    let cpu_id = if crate::arch::x86_64::cpu::features::CPU_FEATURES.has_rdtscp() {
+    let cpu_id = if crate::arch::x86_64::cpu::features::cpu_features_or_none()
+        .map_or(false, |features| features.has_rdtscp())
+    {
         let (_, aux) = unsafe { msr::rdtscp() };
         aux
     } else {

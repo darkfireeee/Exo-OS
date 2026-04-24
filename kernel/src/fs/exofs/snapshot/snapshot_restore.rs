@@ -344,13 +344,14 @@ impl SnapshotBlobSource for MemBlobSource {
 #[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
-    use super::super::snapshot_list::SnapshotList;
+    use super::super::reset_for_test;
+    use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
     use super::*;
     use crate::fs::exofs::core::blob_id::compute_blob_id;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
 
-    fn push_snap(list: &SnapshotList, id: u64) {
-        list.register(Snapshot {
+    fn push_snap(_list: &SnapshotList, id: u64) {
+        SNAPSHOT_LIST.register(Snapshot {
             id: SnapshotId(id),
             epoch_id: EpochId(1),
             parent_id: None,
@@ -368,6 +369,7 @@ mod tests {
 
     #[test]
     fn restore_null_sink_ok() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 1);
         let raw = b"hello world";
@@ -386,6 +388,7 @@ mod tests {
 
     #[test]
     fn restore_corrupted_blob_detected() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 2);
         let raw = b"original data";
@@ -403,6 +406,7 @@ mod tests {
 
     #[test]
     fn resilient_mode_continues_on_error() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 3);
         let bid = compute_blob_id(b"real");
@@ -425,6 +429,7 @@ mod tests {
 
     #[test]
     fn abort_stops_restore() {
+        let _guard = reset_for_test();
         let restore = SnapshotRestore::new();
         restore.abort();
         assert!(restore.is_aborted());

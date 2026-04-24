@@ -152,15 +152,11 @@ impl SeqReceiver {
                 }
             }
         } else {
-            // seq < expected — ancien message.
-            let behind = expected - seq;
-            if behind < SEQ_WINDOW_SIZE {
-                // Dans la fenêtre passée — doublon.
-                self.duplicate_count.fetch_add(1, Ordering::Relaxed);
-                SeqCheck::Duplicate
-            } else {
-                SeqCheck::TooOld
-            }
+            // seq < expected — message déjà dépassé/consommé.
+            // Le protocole Exo-OS classe ce cas en `TooOld`; `Duplicate` est
+            // réservé aux messages futurs déjà tamponnés dans la fenêtre.
+            let _behind = expected - seq;
+            SeqCheck::TooOld
         }
     }
 

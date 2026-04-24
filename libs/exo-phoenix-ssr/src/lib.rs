@@ -53,6 +53,10 @@ pub const A_LIVENESS_MIRROR_OFFSET: u64 = 0x0100;
 pub const SSR_MAGIC_OFFSET: usize = 0x0000;
 /// `[0x0008]` Handoff flag Kernel B → A (u64 atomique).
 pub const SSR_HANDOFF_FLAG_OFFSET: usize = 0x0008;
+/// `[0x0010]` Nonce de liveness Kernel B → A (u64 atomique).
+pub const SSR_LIVENESS_NONCE_OFFSET: usize = 0x0010;
+/// `[0x0018]` Seqlock SSR partagé entre noyaux (u64 atomique).
+pub const SSR_SEQLOCK_OFFSET: usize = 0x0018;
 /// `[0x0040]` Ring de commandes B → A (64 octets).
 pub const SSR_CMD_B2A_OFFSET: usize = 0x0040;
 /// `[0x0080]` Freeze ACK par cœur — u32 × 256 = 1 KiO.

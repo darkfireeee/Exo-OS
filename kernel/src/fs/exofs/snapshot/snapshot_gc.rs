@@ -368,12 +368,13 @@ impl SnapshotGc {
 #[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
-    use super::super::snapshot_list::SnapshotList;
+    use super::super::reset_for_test;
+    use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
 
-    fn push_snap_age(list: &SnapshotList, id: u64, created_at: u64, bytes: u64) {
-        list.register(Snapshot {
+    fn push_snap_age(_list: &SnapshotList, id: u64, created_at: u64, bytes: u64) {
+        SNAPSHOT_LIST.register(Snapshot {
             id: SnapshotId(id),
             epoch_id: EpochId(1),
             parent_id: None,
@@ -391,6 +392,7 @@ mod tests {
 
     #[test]
     fn unlimited_policy_does_nothing() {
+        let _guard = reset_for_test();
         let policy = SnapshotRetentionPolicy::default();
         let report = SnapshotGc::run(policy, 9999).unwrap();
         assert_eq!(report.n_deleted, 0);
@@ -398,6 +400,7 @@ mod tests {
 
     #[test]
     fn dry_run_by_age() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap_age(&list, 1, 100, 0);
         push_snap_age(&list, 2, 200, 0);
@@ -412,6 +415,7 @@ mod tests {
 
     #[test]
     fn estimate_freed_arithmetic() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap_age(&list, 10, 100, 1024);
         push_snap_age(&list, 11, 200, 2048);
@@ -422,8 +426,10 @@ mod tests {
 
     #[test]
     fn gc_protected_skipped() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
-        list.register(Snapshot {
+        let _ = list;
+        SNAPSHOT_LIST.register(Snapshot {
             id: SnapshotId(20),
             epoch_id: EpochId(1),
             parent_id: None,

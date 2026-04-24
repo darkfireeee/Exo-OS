@@ -417,7 +417,8 @@ impl SnapshotDiff {
 #[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
-    use super::super::snapshot_list::SnapshotList;
+    use super::super::reset_for_test;
+    use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
     use super::*;
     use crate::fs::exofs::core::blob_id::compute_blob_id;
     use crate::fs::exofs::core::{DiskOffset, EpochId, SnapshotId};
@@ -448,9 +449,11 @@ mod tests {
 
     #[test]
     fn diff_added_removed() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
-        list.register(make_snap(1)).unwrap();
-        list.register(make_snap(2)).unwrap();
+        let _ = list;
+        SNAPSHOT_LIST.register(make_snap(1)).unwrap();
+        SNAPSHOT_LIST.register(make_snap(2)).unwrap();
 
         let b1 = compute_blob_id(b"data1");
         let b2 = compute_blob_id(b"data2");
@@ -475,6 +478,7 @@ mod tests {
 
     #[test]
     fn diff_identical_snapshots() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         let b = compute_blob_id(b"shared");
         let mut s1 = make_snap(10);
@@ -483,17 +487,20 @@ mod tests {
         s1.n_blobs = 1;
         s2.root_blob = b;
         s2.n_blobs = 1;
-        list.register(s1).unwrap();
-        list.register(s2).unwrap();
+        let _ = list;
+        SNAPSHOT_LIST.register(s1).unwrap();
+        SNAPSHOT_LIST.register(s2).unwrap();
         let identical = SnapshotDiff::is_identical(SnapshotId(10), SnapshotId(11)).unwrap();
         assert!(identical);
     }
 
     #[test]
     fn diff_max_entries_truncation() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
-        list.register(make_snap(20)).unwrap();
-        list.register(make_snap(21)).unwrap();
+        let _ = list;
+        SNAPSHOT_LIST.register(make_snap(20)).unwrap();
+        SNAPSHOT_LIST.register(make_snap(21)).unwrap();
         let blobs: alloc::vec::Vec<(BlobId, u64)> = (0u8..10)
             .map(|i| {
                 let mut b = [0u8; 32];

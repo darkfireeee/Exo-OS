@@ -21,7 +21,7 @@ use super::preempt::MAX_CPUS;
 use super::task::{TaskState, ThreadControlBlock};
 use crate::arch::x86_64::{
     cpu::{
-        features::CPU_FEATURES,
+        features::cpu_features_or_none,
         msr::{self, MSR_FS_BASE, MSR_IA32_PL0_SSP, MSR_KERNEL_GS_BASE},
     },
     smp::percpu,
@@ -178,6 +178,10 @@ pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
 /// Cette fonction NE doit JAMAIS appeler `process::signal::*`.
 /// Elle ne fait que lire `signal_pending` via `check_signal_pending()`.
 pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadControlBlock) {
+    let features = cpu_features_or_none();
+    let has_pks = features.map_or(false, |cpu| cpu.has_pks());
+    let has_cet_ss = features.map_or(false, |cpu| cpu.has_cet_ss());
+
     // ── Étape 1 : Lazy FPU save (RÈGLE SWITCH-02) ─────────────────────────────
     // Sauvegarder l'état FPU du thread sortant si elle était chargée (CR0.TS=0).
     // Note : CR0.TS sera remis à 1 après le switch (step 7 ci-dessous).
@@ -188,7 +192,7 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     }
 
     // Sauvegarde PKRS (S6) si le CPU supporte PKS.
-    if CPU_FEATURES.has_pks() {
+    if has_pks {
         // SAFETY: accès MSR ring0, capability vérifiée via CPUID.
         prev.pkrs = unsafe { msr::read_msr(msr::MSR_IA32_PKRS) as u32 };
     }
@@ -198,7 +202,7 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     // Intel SDM Vol.1 §8.3.3 : en mode software task switch, la sauvegarde du
     // Shadow Stack Pointer est à la charge du noyau. Si CET n'est pas actif,
     // le MSR 0x6A4 n'existe pas → on court-circuite via has_cet_ss().
-    if CPU_FEATURES.has_cet_ss() {
+    if has_cet_ss {
         // SAFETY: MSR 0x6A4 existant si has_cet_ss() == true. Ring 0.
         let ssp = unsafe { msr::read_msr(MSR_IA32_PL0_SSP) };
         prev.set_pl0_ssp(ssp);
@@ -254,7 +258,7 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     }
 
     // Restauration PKRS (S6) côté thread entrant.
-    if CPU_FEATURES.has_pks() {
+    if has_pks {
         // SAFETY: accès MSR ring0, capability vérifiée via CPUID.
         unsafe { msr::write_msr(msr::MSR_IA32_PKRS, next.pkrs as u64) };
     }
@@ -265,7 +269,7 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     // avant tout retour vers userspace. Si next n'a jamais utilisé CET
     // (pl0_ssp() == 0), écrire 0 est safe — désactive le shadow stack pour ce
     // thread jusqu'à activation explicite via ExoCage.
-    if CPU_FEATURES.has_cet_ss() {
+    if has_cet_ss {
         let ssp = next.pl0_ssp();
         // SAFETY: MSR 0x6A4 existant si has_cet_ss(), Ring 0, valeur par-thread.
         unsafe { msr::write_msr(MSR_IA32_PL0_SSP, ssp) };
@@ -275,22 +279,15 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     // Marquer `next` comme Running.
     next.set_state(TaskState::Running);
 
-    // Mettre à jour d'abord les slots GS locaux : c'est la source de vérité
-    // pour le CPU courant pendant les entrées syscall/exception.
-    percpu::set_current_tcb(next as *mut ThreadControlBlock);
-
-    // P1-5: rafraîchir le slot GS:[0x00] avec la pile kernel du thread entrant.
-    // L'entrée syscall (`mov rsp, gs:[0x00]`) doit toujours pointer sur le
-    // contexte kernel du thread courant pour éviter toute corruption silencieuse.
+    // Rafraîchir d'abord la pile noyau d'entrée et TSS.RSP0 pour fermer la
+    // fenêtre où une entrée Ring 3->0 verrait encore la pile de `prev`.
     unsafe {
+        tss::update_rsp0(next.current_cpu().0 as usize, next.kstack_ptr);
         percpu::set_kernel_rsp(next.kstack_ptr);
     }
 
-    // Publier ensuite l'état `next` aux autres CPUs.
-    core::sync::atomic::fence(Ordering::SeqCst);
-    // SAFETY: cpu() est monotone pendant l'exécution d'un thread sur ce CPU.
-    CURRENT_THREAD_PER_CPU[next.current_cpu().0 as usize]
-        .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
+    // Mettre à jour ensuite le slot GS canonique du thread courant.
+    percpu::set_current_tcb(next as *mut ThreadControlBlock);
 
     // ── Étape 6 : CR0.TS = 1 — Lazy FPU (V7-C-02) ───────────────────────────
     // Déclenche #NM si `next` utilise une instruction FPU/SSE sans l'avoir
@@ -302,16 +299,11 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     }
     next.set_fpu_loaded(false);
 
-    // ── Étape 7 : TSS.RSP0 obligatoire (V7-C-03) ─────────────────────────────
-    // Met à jour TSS.RSP0 avec le haut de pile kernel de `next`.
-    //
-    // ERREUR SILENCIEUSE S-08 : si oublié, la prochaine interruption Ring 3→0
-    // empilera sur la pile de l'ANCIEN thread → corruption silencieuse.
-    //
-    // SAFETY: next.current_cpu().0 < MAX_CPUS et next.kstack_ptr est valide.
-    unsafe {
-        tss::update_rsp0(next.current_cpu().0 as usize, next.kstack_ptr);
-    }
+    // Publier ensuite l'état `next` aux autres CPUs.
+    core::sync::atomic::fence(Ordering::SeqCst);
+    // SAFETY: cpu() est monotone pendant l'exécution d'un thread sur ce CPU.
+    CURRENT_THREAD_PER_CPU[next.current_cpu().0 as usize]
+        .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
 
     // ── Étape 8 : Restaurer FS/GS base de `next` (CORR-11) ──────────────────
     //

@@ -54,8 +54,10 @@ pub struct ReaderStats {
 /// Curseur de lecture positionnable sur le ring-buffer d'audit.
 ///
 /// Le curseur pointe sur une position absolue (séquence). Il avance ou
-/// recule d'une entrée à la fois. Utilise le `AUDIT_LOG` global.
+/// recule d'une entrée à la fois.
 pub struct AuditReader {
+    /// Source de lecture liée à ce reader.
+    log: *const AuditLog,
     /// Position absolue courante dans le ring (indice séquentiel).
     cursor: u64,
     /// Sens de lecture.
@@ -73,6 +75,7 @@ impl AuditReader {
         let count = AUDIT_LOG.available() as u64;
         let start = head.wrapping_sub(count);
         AuditReader {
+            log: &AUDIT_LOG as *const AuditLog,
             cursor: start,
             direction: ReadDirection::Forward,
             min_severity: None,
@@ -84,6 +87,7 @@ impl AuditReader {
     pub fn from_tail() -> Self {
         let head = AUDIT_LOG.next_seq();
         AuditReader {
+            log: &AUDIT_LOG as *const AuditLog,
             cursor: head.saturating_sub(1),
             direction: ReadDirection::Backward,
             min_severity: None,
@@ -100,6 +104,7 @@ impl AuditReader {
             ReadDirection::Backward => head.saturating_sub(1),
         };
         AuditReader {
+            log: log as *const AuditLog,
             cursor,
             direction,
             min_severity: None,
@@ -122,7 +127,9 @@ impl AuditReader {
     ///
     /// Retourne `None` si le curseur est sorti des bornes disponibles.
     pub fn next(&mut self) -> Option<AuditEntry> {
-        self.next_from(&AUDIT_LOG)
+        let log = self.log;
+        // SAFETY: voir `AuditReader::log`.
+        self.next_from(unsafe { &*log })
     }
 
     /// Variante qui prend un log explicite (utile pour les tests).
@@ -273,11 +280,10 @@ impl AuditReader {
 
     /// Calcule un résumé de toutes les entrées disponibles (repart du début).
     pub fn summarize(&mut self) -> AuditSummary {
-        self.seek(
-            AUDIT_LOG
-                .next_seq()
-                .wrapping_sub(AUDIT_LOG.available() as u64),
-        );
+        let log = self.log;
+        // SAFETY: voir `AuditReader::log`.
+        let log = unsafe { &*log };
+        self.seek(log.next_seq().wrapping_sub(log.available() as u64));
         let mut summary = AuditSummary::default();
         loop {
             match self.next() {

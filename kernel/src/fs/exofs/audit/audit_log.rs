@@ -1,6 +1,8 @@
 //! audit_log.rs — Ring-buffer lock-free pour le journal d'audit ExoFS (no_std).
 //!
-//! Ring-buffer de 65 536 entrées fixes (64 Ko de méta + 6 Mo de données).
+//! Ring-buffer de 65 536 entrées fixes en production.
+//! Sous `#[cfg(test)]`, la capacité est réduite pour éviter d'allouer plusieurs
+//! mégaoctets sur la pile des threads de test.
 //! Les écritures sont lock-free via `fetch_add` atomique.
 //! Les lectures sont diagnostiques (pas de garantie stricte de cohérence
 //! en cas de lecture concurrente intense, acceptable pour l'audit).
@@ -18,6 +20,10 @@ use core::sync::atomic::{AtomicU64, Ordering};
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Nombre d'entrées dans le ring-buffer (puissance de 2 pour masquage rapide).
+#[cfg(test)]
+pub const RING_SIZE: usize = 1024;
+/// Taille de production du journal d'audit.
+#[cfg(not(test))]
 pub const RING_SIZE: usize = 65536;
 
 /// Masque pour le calcul de l'index mod RING_SIZE sans division.

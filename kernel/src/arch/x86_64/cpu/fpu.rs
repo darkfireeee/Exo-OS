@@ -462,7 +462,8 @@ pub unsafe extern "C" fn arch_fxrstor64(area: *const u8) {
 /// Lit uniquement les feature flags, aucun effet de bord.
 #[no_mangle]
 pub extern "C" fn arch_has_xsave() -> u8 {
-    super::features::CPU_FEATURES.has_xsave() as u8
+    super::features::cpu_features_or_none()
+        .map_or(false, |features| features.has_xsave()) as u8
 }
 
 /// Retourne 1 si le CPU supporte AVX (YMM registers), 0 sinon (C ABI export).
@@ -471,5 +472,6 @@ pub extern "C" fn arch_has_xsave() -> u8 {
 /// Lit uniquement les feature flags, aucun effet de bord.
 #[no_mangle]
 pub extern "C" fn arch_has_avx() -> u8 {
-    super::features::CPU_FEATURES.has_avx() as u8
+    super::features::cpu_features_or_none()
+        .map_or(false, |features| features.has_avx()) as u8
 }

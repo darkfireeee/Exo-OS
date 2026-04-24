@@ -304,12 +304,13 @@ pub struct ProtectStats {
 #[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
-    use super::super::snapshot_list::SnapshotList;
+    use super::super::reset_for_test;
+    use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
 
-    fn push_snap(list: &SnapshotList, id: u64) {
-        list.register(Snapshot {
+    fn push_snap(_list: &SnapshotList, id: u64) {
+        SNAPSHOT_LIST.register(Snapshot {
             id: SnapshotId(id),
             epoch_id: EpochId(1),
             parent_id: None,
@@ -327,18 +328,20 @@ mod tests {
 
     #[test]
     fn protect_and_is_protected() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 1);
         let p = SnapshotProtect::new_const();
         p.protect(SnapshotId(1), 0).unwrap();
         assert!(p.is_protected(SnapshotId(1)));
         // Flag dans la liste
-        let snap = list.get(SnapshotId(1)).unwrap();
+        let snap = SNAPSHOT_LIST.get(SnapshotId(1)).unwrap();
         assert!(snap.is_protected());
     }
 
     #[test]
     fn unprotect_without_worm() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 2);
         let p = SnapshotProtect::new_const();
@@ -349,6 +352,7 @@ mod tests {
 
     #[test]
     fn worm_blocks_early_unprotect() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 3);
         let p = SnapshotProtect::new_const();
@@ -360,6 +364,7 @@ mod tests {
 
     #[test]
     fn worm_allows_unprotect_after_expiry() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 4);
         let p = SnapshotProtect::new_const();
@@ -370,6 +375,7 @@ mod tests {
 
     #[test]
     fn expired_worm_list() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 10);
         push_snap(&list, 11);
@@ -383,6 +389,7 @@ mod tests {
 
     #[test]
     fn stats_count_correct() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 20);
         push_snap(&list, 21);

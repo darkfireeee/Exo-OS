@@ -92,12 +92,14 @@ pub struct ObjectHeaderDisk {
     pub content_hash: [u8; 32],
     /// Checksum de cet en-tête (4 premiers octets de blake3 sur les 124 premiers bytes)
     pub header_checksum: [u8; 4],
+    /// Padding explicite pour conserver un format disque stable à 128 octets.
+    pub _pad1: [u8; 20],
 }
 
-// const _: () = assert!(
-//     core::mem::size_of::<ObjectHeaderDisk>() == OBJECT_HEADER_SIZE,
-//     "ObjectHeaderDisk doit faire exactement 128 octets"
-// );
+const _: () = assert!(
+    core::mem::size_of::<ObjectHeaderDisk>() == OBJECT_HEADER_SIZE,
+    "ObjectHeaderDisk doit faire exactement 128 octets"
+);
 
 impl ObjectHeaderDisk {
     /// Calcule le checksum de l'en-tête (sur les 124 premiers octets)
@@ -108,8 +110,9 @@ impl ObjectHeaderDisk {
 
     /// Vérifie le checksum de cet en-tête (HDR-03)
     pub fn verify_checksum(&self) -> bool {
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        let raw: [u8; OBJECT_HEADER_SIZE] = unsafe { core::mem::transmute_copy(self) };
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C)] — taille vérifiée par const assert.
+        let mut raw: [u8; OBJECT_HEADER_SIZE] = unsafe { core::mem::transmute_copy(self) };
+        raw[104..108].fill(0);
         let mut raw124 = [0u8; 124];
         raw124.copy_from_slice(&raw[..124]);
         let expected = Self::compute_checksum(&raw124);
@@ -118,7 +121,7 @@ impl ObjectHeaderDisk {
 
     /// Retourne les octets bruts
     pub fn as_bytes(&self) -> [u8; OBJECT_HEADER_SIZE] {
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C)] — taille vérifiée par const assert.
         unsafe { core::mem::transmute_copy(self) }
     }
 }
@@ -392,6 +395,7 @@ impl ObjectWriter {
             extent_map_offset: extent_map_off,
             content_hash: result.content_hash,
             header_checksum: [0u8; 4],
+            _pad1: [0u8; 20],
         };
 
         // Calcul du checksum (HDR-03)
@@ -684,6 +688,7 @@ mod tests {
             extent_map_offset: 0,
             content_hash: [0u8; 32],
             header_checksum: [0u8; 4],
+            _pad1: [0u8; 20],
         };
         let raw = hdr.as_bytes();
         let mut raw124 = [0u8; 124];

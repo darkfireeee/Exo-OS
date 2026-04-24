@@ -99,16 +99,16 @@ pub struct PathIndexPageHeader {
     pub epoch_modify: u64,
     /// Numéro de page (pour les PathIndex multi-page).
     pub page_no: u32,
-    /// _pad pour aligner sur 64 octets.
-    pub _pad: [u8; 8],
+    /// Padding explicite pour conserver un en-tête de 64 octets.
+    pub _pad: [u8; 4],
     /// Checksum Blake3 des 56 premiers octets, tronqué à 8 octets.
     pub checksum: [u8; 8],
 }
 
-// const _: () = assert!(
-//     mem::size_of::<PathIndexPageHeader>() == 64,
-//     "PathIndexPageHeader doit être 64 octets (ONDISK-01)"
-// );
+const _: () = assert!(
+    mem::size_of::<PathIndexPageHeader>() == 64,
+    "PathIndexPageHeader doit être 64 octets (ONDISK-01)"
+);
 
 impl PathIndexPageHeader {
     pub fn compute_checksum(&self) -> [u8; 8] {
@@ -327,7 +327,7 @@ impl PathIndexPage {
             page_id: self.page_id.0,
             epoch_modify: self.epoch_modify.0,
             page_no: self.page_no,
-            _pad: [0; 8],
+            _pad: [0; 4],
             checksum: [0; 8],
         };
         h.checksum = h.compute_checksum();

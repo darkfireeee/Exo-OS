@@ -672,6 +672,23 @@ impl CpuFeaturesCell {
         // SAFETY: après init() l'inner est read-only — aucune mutation possible
         unsafe { &*self.inner.get() }
     }
+
+    /// Retourne `true` si les features CPU ont déjà été initialisées.
+    #[inline(always)]
+    pub fn is_initialized(&self) -> bool {
+        self.initialized.load(Ordering::Acquire)
+    }
+
+    /// Variante non panicante : `None` si l'init n'a pas encore eu lieu.
+    #[inline(always)]
+    pub fn get_if_initialized(&self) -> Option<&CpuFeatures> {
+        if self.is_initialized() {
+            // SAFETY: après init() l'inner est read-only — aucune mutation possible.
+            Some(unsafe { &*self.inner.get() })
+        } else {
+            None
+        }
+    }
 }
 
 impl core::ops::Deref for CpuFeaturesCell {
@@ -705,6 +722,25 @@ pub fn init_cpu_features() {
 #[inline(always)]
 pub fn cpu_features() -> &'static CpuFeatures {
     CPU_FEATURES.get()
+}
+
+/// Retourne les features CPU si elles sont disponibles dans le contexte courant.
+///
+/// - bare-metal (`target_os = "none"`) : exige l'initialisation normale et
+///   conserve le contrat strict du boot ;
+/// - tests/host : retourne `None` tant que `init_cpu_features()` n'a pas été
+///   appelé, ce qui permet aux chemins de fallback de rester sûrs.
+#[cfg(target_os = "none")]
+#[inline(always)]
+pub fn cpu_features_or_none() -> Option<&'static CpuFeatures> {
+    Some(CPU_FEATURES.get())
+}
+
+/// Variante host/test de `cpu_features_or_none()`.
+#[cfg(not(target_os = "none"))]
+#[inline(always)]
+pub fn cpu_features_or_none() -> Option<&'static CpuFeatures> {
+    CPU_FEATURES.get_if_initialized()
 }
 
 // ── Instrumentation CPUID ─────────────────────────────────────────────────────

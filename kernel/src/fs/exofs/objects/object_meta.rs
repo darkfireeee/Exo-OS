@@ -56,8 +56,8 @@ pub const XATTR_VAL_MAX_LEN: usize = 128;
 /// 40..103 mime_type      [u8;64]
 /// 104..135 owner_cap_hash [u8;32]
 /// 136..139 extra_flags   u32
-/// 140..223 _pad          [u8;84]
-/// 224..255 checksum      u32  (CRC32 des 252 premiers octets)
+/// 140..251 _pad          [u8;112]
+/// 252..255 checksum      u32  (CRC32 des 252 premiers octets)
 /// ```
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
@@ -83,16 +83,16 @@ pub struct ObjectMetaDisk {
     /// Flags supplémentaires (immutable, append-only, …).
     pub extra_flags: u32,
     /// Padding pour atteindre exactement 256 octets.
-    pub _pad: [u8; 84],
+    pub _pad: [u8; 112],
     /// Checksum CRC32 des 252 octets précédents.
     pub checksum: u32,
 }
 
 // Validation statique du layout en compile-time.
-// const _ASSERT_META_DISK_256: () = assert!(
-//     mem::size_of::<ObjectMetaDisk>() == 256,
-//     "ObjectMetaDisk doit faire exactement 256 octets (ONDISK-01)"
-// );
+const _ASSERT_META_DISK_256: () = assert!(
+    mem::size_of::<ObjectMetaDisk>() == 256,
+    "ObjectMetaDisk doit faire exactement 256 octets (ONDISK-01)"
+);
 
 // ── Flags supplémentaires ──────────────────────────────────────────────────────
 
@@ -284,7 +284,7 @@ impl ObjectMeta {
             mime_type: self.mime_type,
             owner_cap_hash: self.owner_cap_hash,
             extra_flags: self.extra_flags,
-            _pad: [0u8; 84],
+            _pad: [0u8; 112],
             checksum: 0,
         };
         d.checksum = crc32_of_meta(&d);

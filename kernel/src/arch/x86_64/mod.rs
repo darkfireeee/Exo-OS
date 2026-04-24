@@ -27,6 +27,7 @@ pub mod virt;
 use core::sync::atomic::AtomicBool;
 
 use super::ArchInfo;
+use crate::arch::x86_64::cpu::features::cpu_features_or_none;
 
 // ── Constantes globales ───────────────────────────────────────────────────────
 
@@ -49,10 +50,11 @@ static ARCH_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Collecte les informations d'architecture post-init
 pub fn arch_info() -> ArchInfo {
+    let features = cpu_features_or_none();
     ArchInfo {
         cpu_count: smp::percpu::cpu_count(),
-        has_apic: cpu::features::CPU_FEATURES.has_apic(),
-        has_x2apic: cpu::features::CPU_FEATURES.has_x2apic(),
+        has_apic: features.map_or(false, |cpu| cpu.has_apic()),
+        has_x2apic: features.map_or(false, |cpu| cpu.has_x2apic()),
         has_acpi: acpi::parser::acpi_available(),
         page_size: PAGE_SIZE,
     }

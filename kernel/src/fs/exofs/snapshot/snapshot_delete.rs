@@ -292,13 +292,14 @@ impl SnapshotDeleter {
 #[cfg(test)]
 mod tests {
     use super::super::snapshot::{flags, make_snapshot_name};
-    use super::super::snapshot_list::SnapshotList;
+    use super::super::reset_for_test;
+    use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId};
 
-    fn push_snap(list: &SnapshotList, id: u64, bytes: u64, parent: Option<u64>, flags: u32) {
+    fn push_snap(_list: &SnapshotList, id: u64, bytes: u64, parent: Option<u64>, flags: u32) {
         use super::super::snapshot::Snapshot;
-        list.register(Snapshot {
+        SNAPSHOT_LIST.register(Snapshot {
             id: SnapshotId(id),
             epoch_id: EpochId(1),
             parent_id: parent.map(SnapshotId),
@@ -316,9 +317,10 @@ mod tests {
 
     #[test]
     fn cannot_delete_protected_without_force() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 1, 0, None, flags::PROTECTED);
-        let snap = list.get(SnapshotId(1)).unwrap();
+        let snap = SNAPSHOT_LIST.get(SnapshotId(1)).unwrap();
         let opts = DeleteOptions::default();
         let err = SnapshotDeleter::check_preconditions(&snap, opts);
         assert!(matches!(err, Err(ExofsError::InvalidState)));
@@ -348,6 +350,7 @@ mod tests {
 
     #[test]
     fn deny_reason_has_children() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 1, 0, None, 0);
         push_snap(&list, 2, 0, Some(1), 0);
@@ -357,6 +360,7 @@ mod tests {
 
     #[test]
     fn estimate_cascade_freed_correct() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 10, 1000, None, 0);
         push_snap(&list, 11, 2000, Some(10), 0);
@@ -366,6 +370,7 @@ mod tests {
 
     #[test]
     fn deletion_order_children_first() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 1, 0, None, 0);
         push_snap(&list, 2, 0, Some(1), 0);

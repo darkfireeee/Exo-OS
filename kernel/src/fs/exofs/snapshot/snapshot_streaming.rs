@@ -56,17 +56,15 @@ pub struct StreamChunkHeader {
     pub blob_id: [u8; 32],
     /// Taille du payload (octets)
     pub payload_len: u32,
-    /// _padding
-    pub _pad1: [u8; 4],
     /// Blake3 checksum de l'en-tête (sans les 4 derniers octets du slot)
     /// NB : champ checksum = hash des 60 premiers octets de l'en-tête
     pub checksum: [u8; 4],
 }
 
-// const _SCH_SIZE: () = assert!(
-//     core::mem::size_of::<StreamChunkHeader>() == STREAM_CHUNK_HDR_SIZE,
-//     "StreamChunkHeader doit faire exactement 64 octets"
-// );
+const _SCH_SIZE: () = assert!(
+    core::mem::size_of::<StreamChunkHeader>() == STREAM_CHUNK_HDR_SIZE,
+    "StreamChunkHeader doit faire exactement 64 octets"
+);
 
 impl StreamChunkHeader {
     /// Calcule le checksum Blake3 (4 premiers octets du hash sur les 60 premiers octets)
@@ -388,7 +386,6 @@ impl SnapshotStreamer {
             snap_id: snap_id.0,
             blob_id: *blob_id.as_bytes(),
             payload_len,
-            _pad1: [0u8; 4],
             checksum: [0u8; 4],
         };
         hdr.finalize();
@@ -443,14 +440,15 @@ impl SnapshotStreamer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::reset_for_test;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
     // use crate::fs::exofs::core::blob_id::compute_blob_id;
     use super::super::snapshot::{make_snapshot_name, Snapshot};
-    use super::super::snapshot_list::SnapshotList;
+    use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
 
-    fn push_snap(list: &SnapshotList, id: u64, n_blobs: u64) {
+    fn push_snap(_list: &SnapshotList, id: u64, n_blobs: u64) {
         let root = BlobId([id as u8; 32]);
-        list.register(Snapshot {
+        SNAPSHOT_LIST.register(Snapshot {
             id: SnapshotId(id),
             epoch_id: EpochId(1),
             parent_id: None,
@@ -468,6 +466,7 @@ mod tests {
 
     #[test]
     fn stream_chunk_header_size() {
+        let _guard = reset_for_test();
         assert_eq!(
             core::mem::size_of::<StreamChunkHeader>(),
             STREAM_CHUNK_HDR_SIZE
@@ -476,6 +475,7 @@ mod tests {
 
     #[test]
     fn stream_chunk_header_roundtrip() {
+        let _guard = reset_for_test();
         let snap_id = SnapshotId(42);
         let bid = BlobId([0xAA; 32]);
         let streamer = SnapshotStreamer::new();
@@ -485,6 +485,7 @@ mod tests {
 
     #[test]
     fn stream_bad_magic_detected() {
+        let _guard = reset_for_test();
         let snap_id = SnapshotId(1);
         let bid = BlobId([0u8; 32]);
         let streamer = SnapshotStreamer::new();
@@ -495,6 +496,7 @@ mod tests {
 
     #[test]
     fn stream_produces_output() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 1, 1);
         let mut source = MemStreamBlobSource::new();
@@ -516,6 +518,7 @@ mod tests {
 
     #[test]
     fn abort_stops_stream() {
+        let _guard = reset_for_test();
         let streamer = SnapshotStreamer::new();
         streamer.abort();
         assert!(streamer.is_aborted());

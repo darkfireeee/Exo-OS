@@ -135,16 +135,16 @@ pub struct ExoSuperblockDisk {
     pub last_fsck_epoch: u64,
     /// Timestamp du dernier commit
     pub last_commit_time: u64,
-    /// _padding pour atteindre 448 octets avant checksum
-    pub _pad1: [u8; 104],
+    /// _padding pour atteindre 480 octets avant checksum
+    pub _pad1: [u8; 272],
     /// Checksum Blake3 sur les 480 premiers octets
     pub checksum: [u8; 32],
 }
 
-// const _SB_SIZE: () = assert!(
-//     core::mem::size_of::<ExoSuperblockDisk>() == SUPERBLOCK_DISK_SIZE,
-//     "ExoSuperblockDisk doit faire exactement 512 octets"
-// );
+const _: () = assert!(
+    core::mem::size_of::<ExoSuperblockDisk>() == SUPERBLOCK_DISK_SIZE,
+    "ExoSuperblockDisk doit faire exactement 512 octets"
+);
 
 impl ExoSuperblockDisk {
     /// Calcule le checksum Blake3 sur les SUPERBLOCK_DISK_SIZE - 32 premiers octets
@@ -220,7 +220,7 @@ impl ExoSuperblockDisk {
             epoch_current: 1,
             last_fsck_epoch: 0,
             last_commit_time: created_at,
-            _pad1: [0u8; 104],
+            _pad1: [0u8; 272],
             checksum: [0u8; 32],
         };
 

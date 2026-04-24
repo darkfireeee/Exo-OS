@@ -21,7 +21,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::xchacha20_poly1305::chacha20_block;
-use crate::arch::x86_64::cpu::features::CPU_FEATURES;
+use crate::arch::x86_64::cpu::features::cpu_features_or_none;
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
@@ -56,7 +56,7 @@ fn rdrand64() -> Result<u64, RngError> {
     #[cfg(target_arch = "x86_64")]
     {
         // Évite #UD si l'instruction RDRAND n'est pas supportée par le CPU/VM.
-        if !CPU_FEATURES.has_rdrand() {
+        if !cpu_features_or_none().map_or(false, |features| features.has_rdrand()) {
             return Err(RngError::RdrandExhausted);
         }
 

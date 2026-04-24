@@ -342,12 +342,13 @@ impl SnapshotQuotaTable {
 #[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
-    use super::super::snapshot_list::SnapshotList;
+    use super::super::reset_for_test;
+    use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
 
-    fn push_snap(list: &SnapshotList, id: u64) {
-        list.register(Snapshot {
+    fn push_snap(_list: &SnapshotList, id: u64) {
+        SNAPSHOT_LIST.register(Snapshot {
             id: SnapshotId(id),
             epoch_id: EpochId(1),
             parent_id: None,
@@ -365,6 +366,7 @@ mod tests {
 
     #[test]
     fn set_and_get_quota() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 1);
         let qt = SnapshotQuotaTable::new_const();
@@ -376,6 +378,7 @@ mod tests {
 
     #[test]
     fn can_allocate_within_quota() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 2);
         let qt = SnapshotQuotaTable::new_const();
@@ -385,6 +388,7 @@ mod tests {
 
     #[test]
     fn allocation_exceeds_quota_rejected() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 3);
         let qt = SnapshotQuotaTable::new_const();
@@ -395,6 +399,7 @@ mod tests {
 
     #[test]
     fn global_quota_respected() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 4);
         let qt = SnapshotQuotaTable::new_const();
@@ -409,6 +414,7 @@ mod tests {
 
     #[test]
     fn update_usage_negative_saturates() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 5);
         let qt = SnapshotQuotaTable::new_const();
@@ -421,6 +427,7 @@ mod tests {
 
     #[test]
     fn exceeded_snapshots_detected() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 6);
         let qt = SnapshotQuotaTable::new_const();

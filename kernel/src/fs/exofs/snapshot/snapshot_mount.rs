@@ -300,12 +300,13 @@ pub struct MountStats {
 #[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
-    use super::super::snapshot_list::SnapshotList;
+    use super::super::reset_for_test;
+    use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
 
-    fn push_snap(list: &SnapshotList, id: u64) {
-        list.register(Snapshot {
+    fn push_snap(_list: &SnapshotList, id: u64) {
+        SNAPSHOT_LIST.register(Snapshot {
             id: SnapshotId(id),
             epoch_id: EpochId(1),
             parent_id: None,
@@ -323,6 +324,7 @@ mod tests {
 
     #[test]
     fn mount_and_umount() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 1);
         let reg = SnapshotMountRegistry::new_const();
@@ -336,6 +338,7 @@ mod tests {
 
     #[test]
     fn busy_mount_blocks_umount() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 2);
         let reg = SnapshotMountRegistry::new_const();
@@ -351,6 +354,7 @@ mod tests {
 
     #[test]
     fn force_umount_ignores_busy() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 3);
         let reg = SnapshotMountRegistry::new_const();
@@ -364,6 +368,7 @@ mod tests {
 
     #[test]
     fn find_by_path() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 4);
         let reg = SnapshotMountRegistry::new_const();
@@ -376,6 +381,7 @@ mod tests {
 
     #[test]
     fn open_count_overflow_safe() {
+        let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 5);
         let reg = SnapshotMountRegistry::new_const();

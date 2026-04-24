@@ -29,7 +29,7 @@
 
 use subtle::ConstantTimeEq;
 
-use crate::arch::x86_64::cpu::features::CPU_FEATURES;
+use crate::arch::x86_64::cpu::features::cpu_features_or_none;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes publiques
@@ -422,7 +422,7 @@ struct Aes256GcmCipher {
 impl Aes256GcmCipher {
     fn new(key: &[u8; 32]) -> Self {
         let round_keys = aes256_expand_key(key);
-        let has_aesni = CPU_FEATURES.has_aes();
+        let has_aesni = cpu_features_or_none().map_or(false, |features| features.has_aes());
         Self {
             round_keys,
             has_aesni,

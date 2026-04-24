@@ -10,7 +10,7 @@ use core::ptr::read_volatile;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::arch::x86_64::apic::{local_apic, x2apic};
-use crate::arch::x86_64::cpu::{features::CPU_FEATURES, msr};
+use crate::arch::x86_64::cpu::msr;
 use crate::arch::x86_64::time::ktime_get_ns;
 use crate::exophoenix::{handoff, ssr, stage0, PhoenixState, PHOENIX_STATE};
 use crate::memory::core::{KERNEL_IMAGE_MAX_SIZE, KERNEL_LOAD_PHYS_ADDR, PAGE_SIZE, PHYS_MAP_BASE};
@@ -200,7 +200,9 @@ fn walk_a_page_tables_iterative() -> u32 {
 
 #[inline(always)]
 fn generate_liveness_nonce() -> u64 {
-    if CPU_FEATURES.has_rdrand() {
+    if crate::arch::x86_64::cpu::features::cpu_features_or_none()
+        .map_or(false, |features| features.has_rdrand())
+    {
         for _ in 0..10 {
             let value: u64;
             let ok: u8;

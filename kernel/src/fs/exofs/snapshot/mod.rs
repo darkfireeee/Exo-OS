@@ -56,6 +56,9 @@
 //! SNAPSHOT_QUOTA    — table des quotas
 //! ```
 
+#[cfg(test)]
+extern crate std;
+
 // ─────────────────────────────────────────────────────────────
 // Sous-modules
 // ─────────────────────────────────────────────────────────────
@@ -151,6 +154,16 @@ pub fn shutdown() {
     SNAPSHOT_PROTECT.clear();
     SNAPSHOT_MOUNT.clear();
     SNAPSHOT_QUOTA.clear();
+}
+
+#[cfg(test)]
+static SNAPSHOT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub fn reset_for_test() -> std::sync::MutexGuard<'static, ()> {
+    let guard = SNAPSHOT_TEST_LOCK.lock().unwrap();
+    shutdown();
+    guard
 }
 
 /// Vérifie la cohérence interne du sous-système (assertions de santé)

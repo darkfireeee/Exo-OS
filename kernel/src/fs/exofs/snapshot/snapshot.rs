@@ -27,8 +27,10 @@ pub const SNAPSHOT_HEADER_SIZE: usize = 256;
 /// Version courante
 pub const SNAPSHOT_FORMAT_VERSION: u8 = 1;
 
-/// Longueur max du nom d'un snapshot
-pub const SNAPSHOT_NAME_LEN: usize = 128;
+/// Longueur max du nom d'un snapshot.
+///
+/// Cette valeur est bornée par le format on-disk de 256 octets.
+pub const SNAPSHOT_NAME_LEN: usize = 112;
 
 /// Nombre maximal de snapshots simultanés
 pub const SNAPSHOT_MAX_COUNT: usize = 1024;
@@ -69,20 +71,14 @@ pub mod flags {
 pub struct SnapshotHeaderDisk {
     /// Magic "SNAP" — vérifié EN PREMIER (HDR-03)
     pub magic: u32,
-    /// Version du format
-    pub version: u8,
     /// Flags (flags::*)
     pub flags: u32,
-    /// _padding
-    pub _pad0: [u8; 3],
     /// Identifiant unique du snapshot
     pub id: u64,
     /// Époque de création
     pub epoch_id: u64,
     /// Identifiant du snapshot parent (0 = racine)
     pub parent_id: u64,
-    /// Racine Merkle des blob ids (Blake3 concaténé — HASH-02)
-    pub root_blob: [u8; 32],
     /// Timestamp de création (ticks)
     pub created_at: u64,
     /// Nombre de blobs contenus
@@ -91,22 +87,26 @@ pub struct SnapshotHeaderDisk {
     pub total_bytes: u64,
     /// Offset disque du catalogue de blobs (0 = inline)
     pub blob_catalog_offset: u64,
+    /// Racine Merkle des blob ids (Blake3 concaténé — HASH-02)
+    pub root_blob: [u8; 32],
     /// Taille du catalogue de blobs sur disque
     pub blob_catalog_size: u32,
     /// Longueur du nom (en octets)
     pub name_len: u16,
-    /// _padding
-    pub _pad1: [u8; 6],
+    /// Version du format
+    pub version: u8,
+    /// Padding explicite pour conserver un format disque stable à 256 octets.
+    pub _pad0: [u8; 9],
     /// Nom du snapshot (UTF-8 null-padded)
     pub name: [u8; SNAPSHOT_NAME_LEN],
     /// Checksum Blake3 sur les SNAPSHOT_HEADER_SIZE - 32 premiers octets
     pub checksum: [u8; 32],
 }
 
-// const _SH_SIZE: () = assert!(
-//     core::mem::size_of::<SnapshotHeaderDisk>() == SNAPSHOT_HEADER_SIZE,
-//     "SnapshotHeaderDisk doit faire exactement 256 octets"
-// );
+const _SH_SIZE: () = assert!(
+    core::mem::size_of::<SnapshotHeaderDisk>() == SNAPSHOT_HEADER_SIZE,
+    "SnapshotHeaderDisk doit faire exactement 256 octets"
+);
 
 impl SnapshotHeaderDisk {
     /// Calcule le checksum Blake3 de l'en-tête (sur les 224 premiers octets)
@@ -252,20 +252,19 @@ impl Snapshot {
     pub fn to_header_disk(&self) -> SnapshotHeaderDisk {
         let mut hdr = SnapshotHeaderDisk {
             magic: SNAPSHOT_MAGIC,
-            version: SNAPSHOT_FORMAT_VERSION,
             flags: self.flags,
-            _pad0: [0u8; 3],
             id: self.id.0,
             epoch_id: self.epoch_id.0,
             parent_id: self.parent_id.map_or(0, |p| p.0),
-            root_blob: *self.root_blob.as_bytes(),
             created_at: self.created_at,
             n_blobs: self.n_blobs,
             total_bytes: self.total_bytes,
             blob_catalog_offset: self.blob_catalog_offset.0,
+            root_blob: *self.root_blob.as_bytes(),
             blob_catalog_size: self.blob_catalog_size,
             name_len: self.name_len(),
-            _pad1: [0u8; 6],
+            version: SNAPSHOT_FORMAT_VERSION,
+            _pad0: [0u8; 9],
             name: [0u8; SNAPSHOT_NAME_LEN],
             checksum: [0u8; 32],
         };

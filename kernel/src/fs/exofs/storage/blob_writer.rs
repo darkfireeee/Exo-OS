@@ -84,7 +84,8 @@ const _: () = assert!(
 impl BlobHeaderDisk {
     /// Vérifie le checksum d'en-tête (HDR-03)
     pub fn verify_header_checksum(&self) -> bool {
-        let raw = self.as_bytes();
+        let mut raw = self.as_bytes();
+        raw[56..60].fill(0);
         // Checksum = 4 premiers octets du Blake3 sur les 60 premiers bytes
         let h = crate::fs::exofs::core::blob_id::blake3_hash(&raw[..60]);
         self.header_checksum == [h[0], h[1], h[2], h[3]]
@@ -98,7 +99,7 @@ impl BlobHeaderDisk {
 
     /// Accès brut (pour calcul checksum)
     fn as_bytes(&self) -> [u8; BLOB_HEADER_SIZE] {
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C)] — taille vérifiée par const assert.
         unsafe { core::mem::transmute(*self) }
     }
 }
@@ -569,7 +570,7 @@ impl BlobWriter {
         };
 
         // Calcul du checksum sur les 60 premiers octets (avant injection)
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
+        // SAFETY: cast byte-by-byte d'une struct #[repr(C)] — taille vérifiée par const assert.
         let raw: [u8; BLOB_HEADER_SIZE] = unsafe { core::mem::transmute(hdr) };
         let mut raw60 = [0u8; 60];
         raw60.copy_from_slice(&raw[..60]);

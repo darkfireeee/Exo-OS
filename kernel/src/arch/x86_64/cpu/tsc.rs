@@ -10,7 +10,7 @@
 //! ## Précision cible
 //! Calibration à ±0.01% (< 100 ppm)
 
-use super::features::CPU_FEATURES;
+use super::features::cpu_features_or_none;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ── TSC globals ───────────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ pub fn read_tsc_end() -> (u64, u32) {
     let hi: u32;
     let aux: u32;
 
-    if CPU_FEATURES.has_rdtscp() {
+    if cpu_features_or_none().map_or(false, |features| features.has_rdtscp()) {
         // SAFETY: RDTSCP supporté matériellement.
         unsafe {
             core::arch::asm!(
@@ -288,7 +288,6 @@ pub fn calibrate_tsc_cpuid() -> Option<u64> {
 ///
 /// Appelé depuis `early_init.rs` après init CPU features et PIC/APIC.
 pub fn init_tsc(cpu_logical_id: u32) {
-    use super::features::CPU_FEATURES;
     use super::msr;
 
     // Enregistrer la valeur TSC au boot
@@ -332,7 +331,7 @@ pub fn init_tsc(cpu_logical_id: u32) {
     TSC_CALIBRATED.store(true, Ordering::Release);
 
     // Configurer TSC_AUX avec le CPU ID logique (utilisé par RDTSCP)
-    if CPU_FEATURES.has_rdtscp() {
+    if cpu_features_or_none().map_or(false, |features| features.has_rdtscp()) {
         // SAFETY: MSR_TSC_AUX toujours disponible si RDTSCP supporté
         unsafe {
             msr::write_msr(msr::MSR_TSC_AUX, cpu_logical_id as u64);
@@ -340,7 +339,7 @@ pub fn init_tsc(cpu_logical_id: u32) {
     }
 
     // Activer NXE dans EFER si NX disponible
-    if CPU_FEATURES.has_nx() {
+    if cpu_features_or_none().map_or(false, |features| features.has_nx()) {
         // SAFETY: activation NXE dans EFER — requis pour protections mémoire
         unsafe {
             msr::set_msr_bits(msr::MSR_IA32_EFER, msr::EFER_NXE);
