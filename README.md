@@ -61,7 +61,7 @@ ExoOS is built around three core design principles:
 
 **Dual-kernel fault tolerance (ExoPhoenix)** — A dedicated sentinel kernel (Kernel B) runs on Core 0 and continuously monitors the primary kernel (Kernel A). On anomaly detection, Kernel B freezes all Kernel A cores via IPI, snapshots RAM state, and restores a clean execution environment without requiring a full reboot.
 
-**Hardware-enforced containment (ExoShield)** — A multi-layer AI and process containment module combining Intel CET shadow stacks (ExoCage), temporal capability budgets (ExoKairos), static IOMMU NIC policy, and an append-only tamper-evident audit ledger (ExoLedger P0).
+**Hardware-enforced containment (ExoShield)** and process containment module combining Intel CET shadow stacks (ExoCage), temporal capability budgets (ExoKairos), static IOMMU NIC policy, and an append-only tamper-evident audit ledger (ExoLedger P0).
 
 ---
 
@@ -244,11 +244,6 @@ java -Xmx10g -XX:+UseParallelGC \
 
 This project is in early development. Architecture specifications and TLA+ models are in `docs/`. Issues and discussions welcome.
 
----
-
-## License
-
-TBD — open source license to be determined prior to Phase 1 release.
 
 ---
 
