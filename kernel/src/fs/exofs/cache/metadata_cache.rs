@@ -133,9 +133,7 @@ impl MetadataCache {
         r
     }
 
-    pub fn insert(&self, mut meta: MetaEntry) -> ExofsResult<()> {
-        let now = crate::arch::time::read_ticks();
-        meta.cached_tick = now;
+    pub fn insert(&self, meta: MetaEntry) -> ExofsResult<()> {
         let inode_id = meta.inode_id;
         let mut inner = self.inner.lock();
         if inner.map.len() >= inner.max {

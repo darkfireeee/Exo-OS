@@ -288,6 +288,9 @@ impl HeapAllocator {
         {
             let mut state = self.state.lock();
             state.free_map.mark_free(block_start, n_blocks);
+            if block_start < state.last_alloc {
+                state.last_alloc = block_start;
+            }
 
             // Tentative de fusion buddy.
             let _ = HeapCoalescer::try_merge_buddies(

@@ -438,7 +438,10 @@ impl QuotaNamespace {
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < NAMESPACE_MAX {
-            if entries[i].occupied && entries[i].parent_id == parent_id {
+            if entries[i].occupied
+                && entries[i].parent_id == parent_id
+                && entries[i].id != parent_id
+            {
                 v.try_reserve(1).map_err(|_| {
                     self.release();
                     ExofsError::NoMemory

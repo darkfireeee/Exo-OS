@@ -102,8 +102,8 @@ impl CompressionThreshold {
         if original_len == 0 {
             return false;
         }
-        let ratio = (compressed_len as u64).saturating_mul(100) / (original_len as u64);
-        ratio <= self.ratio_threshold
+        (compressed_len as u64).saturating_mul(100)
+            <= self.ratio_threshold.saturating_mul(original_len as u64)
     }
 
     /// Décision complète : doit-on stocker compressé ?

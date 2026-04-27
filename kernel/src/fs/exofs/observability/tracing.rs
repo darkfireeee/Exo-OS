@@ -198,7 +198,10 @@ impl TraceFilter {
 
     pub fn matches(&self, evt: &TraceEvent) -> bool {
         let lvl = TraceLevel::from_u8(evt.level);
-        lvl >= self.min_level && (evt.component & self.component_mask) != 0
+        self.min_level.is_active()
+            && lvl.is_active()
+            && lvl <= self.min_level
+            && (evt.component & self.component_mask) != 0
     }
 }
 
@@ -236,7 +239,8 @@ impl TraceRing {
 
     pub fn push(&self, evt: TraceEvent) {
         let lvl = TraceLevel::from_u8(evt.level);
-        if lvl < self.min_level() {
+        let min_level = self.min_level();
+        if !min_level.is_active() || !lvl.is_active() || lvl > min_level {
             return;
         }
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % TRACE_RING_SIZE;

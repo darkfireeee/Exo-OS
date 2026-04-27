@@ -157,6 +157,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     // ── Étape 7 : FPU / SSE / AVX ────────────────────────────────────────────
     probe!(b'7');
     super::super::cpu::fpu::init_fpu_for_cpu();
+    crate::security::exoargos::init_pmu();
 
     // ── Étape 8 : Détection hyperviseur ──────────────────────────────────────
     probe!(b'8');

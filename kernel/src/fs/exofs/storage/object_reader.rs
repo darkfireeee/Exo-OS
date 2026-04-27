@@ -206,13 +206,18 @@ impl ObjectReader {
                 &read_fn,
             )?
         } else {
-            // Blob unique : offset de l'en-tête + OBJECT_HEADER_SIZE
-            let blob_off = DiskOffset(
-                header_offset
-                    .0
-                    .checked_add(OBJECT_HEADER_SIZE as u64)
-                    .ok_or(ExofsError::Overflow)?,
-            );
+            // Objet mono-blob: le flag bit0 signale qu`extent_map_offset` pointe
+            // directement vers le blob, même si cet offset vaut 0.
+            let blob_off = if meta.is_inline() {
+                meta.extent_map_offset
+            } else {
+                DiskOffset(
+                    header_offset
+                        .0
+                        .checked_add(OBJECT_HEADER_SIZE as u64)
+                        .ok_or(ExofsError::Overflow)?,
+                )
+            };
             alloc::vec![BlobRef {
                 blob_id: BlobId([0u8; 32]),
                 offset: blob_off,
@@ -223,7 +228,13 @@ impl ObjectReader {
 
         // ── 3 + 4. Lecture et assemblage des blobs ────────────────
         let blob_verify = match mode {
-            ObjectVerifyMode::Full | ObjectVerifyMode::HeaderAndBlobs => BlobVerifyMode::Full,
+            ObjectVerifyMode::Full | ObjectVerifyMode::HeaderAndBlobs => {
+                if meta.has_extent_map() {
+                    BlobVerifyMode::Full
+                } else {
+                    BlobVerifyMode::HeaderOnly
+                }
+            }
             _ => BlobVerifyMode::None,
         };
 
@@ -571,12 +582,16 @@ impl ObjectRangeReader {
                 &read_fn,
             )?
         } else {
-            let blob_off = DiskOffset(
-                header_offset
-                    .0
-                    .checked_add(OBJECT_HEADER_SIZE as u64)
-                    .ok_or(ExofsError::Overflow)?,
-            );
+            let blob_off = if meta.is_inline() {
+                meta.extent_map_offset
+            } else {
+                DiskOffset(
+                    header_offset
+                        .0
+                        .checked_add(OBJECT_HEADER_SIZE as u64)
+                        .ok_or(ExofsError::Overflow)?,
+                )
+            };
             alloc::vec![BlobRef {
                 blob_id: BlobId([0u8; 32]),
                 offset: blob_off,
@@ -601,6 +616,11 @@ impl ObjectRangeReader {
         result
             .try_reserve(range.length)
             .map_err(|_| ExofsError::NoMemory)?;
+        let blob_verify = if meta.has_extent_map() {
+            BlobVerifyMode::Full
+        } else {
+            BlobVerifyMode::HeaderOnly
+        };
 
         for bref in &sorted_refs {
             let ci = bref.chunk_index as usize;
@@ -608,8 +628,7 @@ impl ObjectRangeReader {
                 continue;
             }
 
-            let blob_res =
-                BlobReader::read_blob(bref.offset, |o, sz| read_fn(o, sz), BlobVerifyMode::Full)?;
+            let blob_res = BlobReader::read_blob(bref.offset, |o, sz| read_fn(o, sz), blob_verify)?;
 
             // Calculer l'offset dans ce chunk
             let chunk_start_logical = ci * chunk_size;

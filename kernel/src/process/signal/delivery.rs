@@ -112,6 +112,15 @@ pub struct SyscallFrame {
     pub user_rcx: u64,
     pub user_r8: u64,
     pub user_r9: u64,
+    pub user_r10: u64,
+    pub user_r12: u64,
+    pub user_r13: u64,
+    pub user_r14: u64,
+    pub user_r15: u64,
+    pub user_rbx: u64,
+    pub user_rbp: u64,
+    pub user_fs_base: u64,
+    pub user_gs_base: u64,
     pub user_cs: u64,
     pub user_ss: u64,
 }
@@ -349,6 +358,15 @@ pub unsafe extern "C" fn proc_signal_on_exception_return(tcb_ptr: *mut u8, excfr
         user_rcx: exc.rcx,
         user_r8: exc.r8,
         user_r9: exc.r9,
+        user_r10: exc.r10,
+        user_r12: exc.r12,
+        user_r13: exc.r13,
+        user_r14: exc.r14,
+        user_r15: exc.r15,
+        user_rbx: exc.rbx,
+        user_rbp: exc.rbp,
+        user_fs_base: thread.sched_tcb.fs_base,
+        user_gs_base: thread.sched_tcb.user_gs_base,
         user_cs: exc.cs,
         user_ss: exc.ss,
     };
@@ -369,6 +387,13 @@ pub unsafe extern "C" fn proc_signal_on_exception_return(tcb_ptr: *mut u8, excfr
     exc_mut.rcx = frame.user_rcx;
     exc_mut.r8 = frame.user_r8;
     exc_mut.r9 = frame.user_r9;
+    exc_mut.r10 = frame.user_r10;
+    exc_mut.r12 = frame.user_r12;
+    exc_mut.r13 = frame.user_r13;
+    exc_mut.r14 = frame.user_r14;
+    exc_mut.r15 = frame.user_r15;
+    exc_mut.rbx = frame.user_rbx;
+    exc_mut.rbp = frame.user_rbp;
     exc_mut.cs = frame.user_cs;
     exc_mut.ss = frame.user_ss;
 }

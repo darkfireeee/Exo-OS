@@ -115,7 +115,7 @@ impl DebugCommand {
         DebugCommandId::from_u8(self.id)
     }
     pub fn is_empty(&self) -> bool {
-        self.id == 0
+        self.id == 0 && self.arg_u64 == 0 && self.arg_bytes.iter().all(|&b| b == 0)
     }
 }
 
@@ -222,7 +222,10 @@ impl DebugResponse {
         self.status().is_ok()
     }
     pub fn is_empty(&self) -> bool {
-        self.status == 0 && self.cmd_id == 0
+        self.status == 0
+            && self.cmd_id == 0
+            && self.data_u64 == 0
+            && self.msg.iter().all(|&b| b == 0)
     }
 
     pub fn msg_to_vec(&self) -> ExofsResult<Vec<u8>> {
@@ -296,13 +299,14 @@ impl DebugQueue {
         }
         let idx = self.cmd_tail.fetch_add(1, Ordering::Relaxed) as usize % DEBUG_QUEUE_SIZE;
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        let cmd = unsafe { (*self.commands.get())[idx] };
+        let cmd = unsafe {
+            let slot = &mut (*self.commands.get())[idx];
+            let cmd = *slot;
+            *slot = DebugCommand::zeroed();
+            cmd
+        };
         self.cmd_count.fetch_sub(1, Ordering::Relaxed);
-        if cmd.is_empty() {
-            None
-        } else {
-            Some(cmd)
-        }
+        Some(cmd)
     }
 
     pub fn push_response(&self, resp: DebugResponse) -> ExofsResult<()> {
@@ -326,13 +330,14 @@ impl DebugQueue {
         }
         let idx = self.resp_tail.fetch_add(1, Ordering::Relaxed) as usize % DEBUG_QUEUE_SIZE;
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        let resp = unsafe { (*self.responses.get())[idx] };
+        let resp = unsafe {
+            let slot = &mut (*self.responses.get())[idx];
+            let resp = *slot;
+            *slot = DebugResponse::zeroed();
+            resp
+        };
         self.resp_count.fetch_sub(1, Ordering::Relaxed);
-        if resp.is_empty() {
-            None
-        } else {
-            Some(resp)
-        }
+        Some(resp)
     }
 
     pub fn cmd_pending(&self) -> u64 {

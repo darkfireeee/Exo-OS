@@ -110,27 +110,24 @@ impl MpmcRing {
             return Err(IpcError::MessageTooLarge);
         }
         loop {
-            let pos = self.head_atomic().fetch_add(1, Ordering::AcqRel);
+            let pos = self.head_atomic().load(Ordering::Acquire);
             let cell = self.cell_at(pos);
-
-            // Attendre que la séquence de la cellule == pos (libre).
-            let mut spin = 0u32;
-            loop {
-                let seq = cell.load_seq();
-                let diff = (seq as i64).wrapping_sub(pos as i64);
-                if diff == 0 {
-                    break; // slot libre → on peut écrire
-                }
-                if diff < 0 {
-                    // Ring plein — le head a dépassé le tail d'un tour.
-                    return Err(IpcError::QueueFull);
-                }
-                // diff > 0 : un autre producteur a pris ce slot avant nous (rare).
-                spin += 1;
-                if spin > 1_000 {
-                    return Err(IpcError::QueueFull);
-                }
+            let seq = cell.load_seq();
+            let diff = (seq as i64).wrapping_sub(pos as i64);
+            if diff < 0 {
+                return Err(IpcError::QueueFull);
+            }
+            if diff != 0 {
                 core::hint::spin_loop();
+                continue;
+            }
+            if self
+                .head_atomic()
+                .compare_exchange_weak(pos, pos + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                core::hint::spin_loop();
+                continue;
             }
 
             let id = alloc_message_id();
@@ -157,25 +154,24 @@ impl MpmcRing {
     /// Reçoit un message dans `dst`.
     pub fn pop_into(&self, dst: &mut [u8]) -> Result<(usize, MsgFlags), IpcError> {
         loop {
-            let pos = self.tail_atomic().fetch_add(1, Ordering::AcqRel);
+            let pos = self.tail_atomic().load(Ordering::Acquire);
             let cell = self.cell_at(pos);
-
-            let mut spin = 0u32;
-            loop {
-                let seq = cell.load_seq();
-                let diff = (seq as i64).wrapping_sub((pos + 1) as i64);
-                if diff < 0 {
-                    // Ring vide.
-                    return Err(IpcError::QueueEmpty);
-                }
-                if diff == 0 {
-                    break; // données disponibles
-                }
-                spin += 1;
-                if spin > 1_000 {
-                    return Err(IpcError::QueueEmpty);
-                }
+            let seq = cell.load_seq();
+            let diff = (seq as i64).wrapping_sub((pos + 1) as i64);
+            if diff < 0 {
+                return Err(IpcError::QueueEmpty);
+            }
+            if diff != 0 {
                 core::hint::spin_loop();
+                continue;
+            }
+            if self
+                .tail_atomic()
+                .compare_exchange_weak(pos, pos + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                core::hint::spin_loop();
+                continue;
             }
 
             let (len, msg_flags) = unsafe {

@@ -326,8 +326,9 @@ extern "C" fn do_debug(frame: *mut ExceptionFrame) {
     if frame.from_userspace() {
         // SIGTRAP → ptrace/GDB
         exception_return_to_user(frame);
+    } else {
+        kernel_panic_exception("#DB kernel", frame);
     }
-    // Kernel debug : ignorer silencieusement (breakpoint hardware noyau)
 }
 
 /// Handler #NMI — Non-Maskable Interrupt
@@ -664,9 +665,14 @@ extern "C" fn do_simd_fp(frame: *mut ExceptionFrame) {
 /// Handler #VE — Virtualization Exception
 #[no_mangle]
 extern "C" fn do_virtualization(frame: *mut ExceptionFrame) {
-    let _ = frame;
+    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    let frame = unsafe { &mut *frame };
     EXC_COUNTERS[20].fetch_add(1, Ordering::Relaxed);
-    // Intel EPT Violation — géré par le module virt/ si VMX actif
+    if frame.from_userspace() {
+        exception_return_to_user(frame);
+    } else {
+        kernel_panic_exception("#VE virtualization kernel", frame);
+    }
 }
 
 /// Handler #CP — Control Protection Exception (CET)

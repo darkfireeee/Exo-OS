@@ -70,16 +70,20 @@ impl QuotaLimits {
 
     /// Valide les limites : soft ≤ hard pour chaque dimension.
     pub fn validate(&self) -> ExofsResult<()> {
-        if self.soft_bytes > self.hard_bytes {
+        if !Self::pair_is_valid(self.soft_bytes, self.hard_bytes) {
             return Err(ExofsError::InvalidArgument);
         }
-        if self.soft_blobs > self.hard_blobs {
+        if !Self::pair_is_valid(self.soft_blobs, self.hard_blobs) {
             return Err(ExofsError::InvalidArgument);
         }
-        if self.soft_inodes > self.hard_inodes {
+        if !Self::pair_is_valid(self.soft_inodes, self.hard_inodes) {
             return Err(ExofsError::InvalidArgument);
         }
         Ok(())
+    }
+
+    const fn pair_is_valid(soft: u64, hard: u64) -> bool {
+        soft == u64::MAX || hard == u64::MAX || soft <= hard
     }
 
     /// Vrai si toutes les limites sont à MAX (non contraignant).

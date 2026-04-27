@@ -136,7 +136,7 @@ impl SpscRing {
 
         // Release : rend le slot visible au consommateur.
         cell.store_seq(pos + 1);
-        self.head.0.store(pos + 1, Ordering::Relaxed);
+        self.head.0.store(pos + 1, Ordering::Release);
         Ok(id)
     }
 
@@ -166,7 +166,7 @@ impl SpscRing {
             );
         }
         cell.store_seq(pos + 1);
-        self.head.0.store(pos + 1, Ordering::Relaxed);
+        self.head.0.store(pos + 1, Ordering::Release);
         Ok(id)
     }
 
@@ -196,7 +196,7 @@ impl SpscRing {
             if ln > dst.len() {
                 // Libérer le slot quand même pour ne pas bloquer le ring.
                 cell.store_seq(pos + RING_SIZE as u64);
-                self.tail.0.store(pos + 1, Ordering::Relaxed);
+                self.tail.0.store(pos + 1, Ordering::Release);
                 return Err(IpcError::MessageTooLarge);
             }
             if ln > 0 {
@@ -208,7 +208,7 @@ impl SpscRing {
 
         // Libère le slot : pos + RING_SIZE = prochain tour du producteur.
         cell.store_seq(pos + RING_SIZE as u64);
-        self.tail.0.store(pos + 1, Ordering::Relaxed);
+        self.tail.0.store(pos + 1, Ordering::Release);
         Ok((len, MsgFlags(header.flags)))
     }
 

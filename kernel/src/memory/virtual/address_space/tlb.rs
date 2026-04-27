@@ -265,12 +265,33 @@ pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
     }
     let n = cpu_count.min(64) as usize;
     let all_mask: u64 = if n >= 64 { !0u64 } else { (1u64 << n) - 1 };
+    let current_cpu = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
 
     // Avancer la séquence — les CPUs devront ACK avec >= target_seq.
     let target_seq = TLB_SHOOTDOWN_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
 
-    // Envoyer les IPIs aux CPUs cibles.
-    TLB_QUEUE.request(flush_type, all_mask);
+    // TLB-01: l'émetteur purge d'abord son propre TLB.
+    match flush_type {
+        TlbFlushType::Single(addr) => flush_single(addr),
+        TlbFlushType::Range { start, end } => flush_range(start, end),
+        TlbFlushType::All => flush_all(),
+        TlbFlushType::Global => flush_all_including_global(),
+    }
+
+    if current_cpu < n {
+        TLB_SHOOTDOWN_ACK[current_cpu].store(target_seq, Ordering::Release);
+    }
+
+    let remote_mask = if current_cpu < 64 {
+        all_mask & !(1u64 << current_cpu)
+    } else {
+        all_mask
+    };
+
+    // Envoyer les IPIs uniquement aux CPUs distants.
+    if remote_mask != 0 {
+        TLB_QUEUE.request(flush_type, remote_mask);
+    }
 
     // Attendre que tous les CPUs cibles aient complété leur flush.
     for cpu_id in 0..n {

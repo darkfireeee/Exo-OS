@@ -22,6 +22,7 @@
 //! - SYS_IPC_REGISTER = 304, SYS_IPC_RECV = 301, SYS_IPC_SEND = 300
 
 use core::panic::PanicInfo;
+use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 use exo_syscall_abi as syscall;
 
@@ -62,7 +63,13 @@ impl MountEntry {
 }
 
 static MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
-static mut MOUNTS: [MountEntry; 32] = [MountEntry::empty(); 32];
+const MAX_MOUNTS: usize = 32;
+
+struct MountTable(UnsafeCell<[MountEntry; MAX_MOUNTS]>);
+
+unsafe impl Sync for MountTable {}
+
+static MOUNTS: MountTable = MountTable(UnsafeCell::new([MountEntry::empty(); MAX_MOUNTS]));
 static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 
 fn fnv32(s: &[u8]) -> u32 {
@@ -142,9 +149,10 @@ fn handle_mount(payload: &[u8]) -> VfsReply {
 
     let mut free_idx = None;
     unsafe {
-        for i in 0..MOUNTS.len() {
-            if MOUNTS[i].active && MOUNTS[i].path_hash == path_hash {
-                MOUNTS[i] = MountEntry {
+        let mounts = &mut *MOUNTS.0.get();
+        for i in 0..MAX_MOUNTS {
+            if mounts[i].active && mounts[i].path_hash == path_hash {
+                mounts[i] = MountEntry {
                     fs_type: fs,
                     path_hash,
                     root_blob,
@@ -157,7 +165,7 @@ fn handle_mount(payload: &[u8]) -> VfsReply {
                     _pad: [0; 40],
                 };
             }
-            if free_idx.is_none() && !MOUNTS[i].active {
+            if free_idx.is_none() && !mounts[i].active {
                 free_idx = Some(i);
             }
         }
@@ -176,7 +184,8 @@ fn handle_mount(payload: &[u8]) -> VfsReply {
     };
 
     unsafe {
-        MOUNTS[idx] = MountEntry {
+        let mounts = &mut *MOUNTS.0.get();
+        mounts[idx] = MountEntry {
             fs_type: fs,
             path_hash,
             root_blob,
@@ -285,9 +294,10 @@ fn handle_umount(payload: &[u8]) -> VfsReply {
 
     let path_hash = fnv32(&payload[..path_len]);
     unsafe {
-        for i in 0..MOUNTS.len() {
-            if MOUNTS[i].active && MOUNTS[i].path_hash == path_hash {
-                MOUNTS[i] = MountEntry::empty();
+        let mounts = &mut *MOUNTS.0.get();
+        for i in 0..MAX_MOUNTS {
+            if mounts[i].active && mounts[i].path_hash == path_hash {
+                mounts[i] = MountEntry::empty();
                 MOUNT_COUNT
                     .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |count| {
                         Some(count.saturating_sub(1))
@@ -351,9 +361,10 @@ fn mount_default_namespaces() {
     };
 
     unsafe {
-        MOUNTS[0] = proc_entry;
-        MOUNTS[1] = sys_entry;
-        MOUNTS[2] = dev_entry;
+        let mounts = &mut *MOUNTS.0.get();
+        mounts[0] = proc_entry;
+        mounts[1] = sys_entry;
+        mounts[2] = dev_entry;
     }
     MOUNT_COUNT.store(3, Ordering::Release);
 }

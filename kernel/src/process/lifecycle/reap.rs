@@ -18,6 +18,7 @@ use crate::process::core::pcb::ProcessState;
 use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR};
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::lifecycle::create::{create_kthread, KthreadParams};
+use crate::process::lifecycle::fork::AddressSpaceCloner;
 use crate::scheduler::core::task::Priority;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -148,6 +149,17 @@ fn reap_entry(entry: ReaperEntry) {
     if is_last_thread {
         // Retirer de la registry et libérer le PCB.
         if let Ok(pcb_box) = PROCESS_REGISTRY.remove(pid) {
+            let addr_space_ptr = pcb_box.address_space.load(Ordering::Acquire);
+            let closed_handles = {
+                let mut files = pcb_box.files.lock();
+                files.close_all()
+            };
+            drop(closed_handles);
+            crate::fs::exofs::posix_bridge::vfs_close_all_pid(pid.0);
+            if addr_space_ptr != 0 {
+                crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER
+                    .free_addr_space(addr_space_ptr);
+            }
             // Le PCB (Box<ProcessControlBlock>) est libéré ici par RAII.
             drop(pcb_box);
             // Libérer le PID.

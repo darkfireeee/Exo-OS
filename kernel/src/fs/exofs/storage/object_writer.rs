@@ -74,7 +74,7 @@ pub struct ObjectHeaderDisk {
     pub version: u8,
     /// Type d'objet (ObjectType)
     pub object_type: u8,
-    /// Flags (bit0=inline, bit1=multi-blob, bit2=encrypted)
+    /// Flags (bit0=single-blob direct, bit1=multi-blob, bit2=encrypted)
     pub flags: u8,
     /// Réservé
     pub _reserved0: u8,
@@ -86,7 +86,10 @@ pub struct ObjectHeaderDisk {
     pub object_id: [u8; 32],
     /// Époque de création
     pub epoch: u64,
-    /// Offset de l'ExtentMap sur disque (0 si inline)
+    /// Offset de localisation des données:
+    /// - premier blob pour les objets mono-blob
+    /// - ExtentMap pour les objets multi-blobs
+    /// - 0 si objet vide
     pub extent_map_offset: u64,
     /// Checksum Blake3 du contenu complet (blake3 sur données brutes)
     pub content_hash: [u8; 32],
@@ -376,11 +379,7 @@ impl ObjectWriter {
             flags |= 0b0000_0010;
         } // multi-blob
 
-        let extent_map_off = if result.blob_count > 1 {
-            result.header_offset.0
-        } else {
-            0
-        };
+        let extent_map_off = result.blobs.first().map(|b| b.offset.0).unwrap_or(0);
 
         let mut hdr = ObjectHeaderDisk {
             magic: OBJECT_HEADER_MAGIC,

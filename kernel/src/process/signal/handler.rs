@@ -79,6 +79,8 @@ pub struct UContext {
     pub uc_stack: SigAltStack,
     pub uc_mcontext: GRegs,
     pub uc_sigmask: u64,
+    pub uc_fs_base: u64,
+    pub uc_gs_base: u64,
     pub _fpregs_mem: [u8; 512], // espace pour FXSAVE
 }
 
@@ -171,7 +173,16 @@ pub struct UContextRegs {
     pub rcx: u64,
     pub r8: u64,
     pub r9: u64,
+    pub r10: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
+    pub rbx: u64,
+    pub rbp: u64,
     pub rflags: u64,
+    pub fs_base: u64,
+    pub gs_base: u64,
     pub signal_mask: u64,
 }
 
@@ -204,7 +215,16 @@ pub fn verify_and_extract_uc(uc_ptr: u64) -> Option<UContextRegs> {
         rcx: mc.rcx,
         r8: mc.r8,
         r9: mc.r9,
+        r10: mc.r10,
+        r12: mc.r12,
+        r13: mc.r13,
+        r14: mc.r14,
+        r15: mc.r15,
+        rbx: mc.rbx,
+        rbp: mc.rbp,
         rflags: mc.eflags,
+        fs_base: uc.uc_fs_base,
+        gs_base: uc.uc_gs_base,
         signal_mask: uc.uc_sigmask,
     };
 
@@ -297,11 +317,20 @@ pub fn setup_signal_frame(
                 rcx: frame.user_rcx,
                 r8: frame.user_r8,
                 r9: frame.user_r9,
+                r10: frame.user_r10,
+                r12: frame.user_r12,
+                r13: frame.user_r13,
+                r14: frame.user_r14,
+                r15: frame.user_r15,
+                rbx: frame.user_rbx,
+                rbp: frame.user_rbp,
                 cs: frame.user_cs as u16,
                 eflags: frame.user_rflags,
                 ..Default::default()
             },
             uc_sigmask: thread.sched_tcb.signal_mask.load(Ordering::Acquire),
+            uc_fs_base: thread.sched_tcb.fs_base,
+            uc_gs_base: thread.sched_tcb.user_gs_base,
             _fpregs_mem: [0u8; 512],
         },
     };
@@ -356,7 +385,16 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
     let rcx_saved = mc.rcx;
     let r8_saved = mc.r8;
     let r9_saved = mc.r9;
+    let r10_saved = mc.r10;
+    let r12_saved = mc.r12;
+    let r13_saved = mc.r13;
+    let r14_saved = mc.r14;
+    let r15_saved = mc.r15;
+    let rbx_saved = mc.rbx;
+    let rbp_saved = mc.rbp;
     let rflags_saved = mc.eflags;
+    let fs_base_saved = uc.uc_fs_base;
+    let gs_base_saved = uc.uc_gs_base;
     let mask_saved = uc.uc_sigmask;
 
     // Vérification magic constant-time (SIG-13 / SIG-14).
@@ -376,7 +414,19 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
     frame.user_rcx = rcx_saved;
     frame.user_r8 = r8_saved;
     frame.user_r9 = r9_saved;
+    frame.user_r10 = r10_saved;
+    frame.user_r12 = r12_saved;
+    frame.user_r13 = r13_saved;
+    frame.user_r14 = r14_saved;
+    frame.user_r15 = r15_saved;
+    frame.user_rbx = rbx_saved;
+    frame.user_rbp = rbp_saved;
     frame.user_rflags = rflags_saved;
+    frame.user_fs_base = fs_base_saved;
+    frame.user_gs_base = gs_base_saved;
+    thread.sched_tcb.fs_base = fs_base_saved;
+    thread.sched_tcb.user_gs_base = gs_base_saved;
+    thread.tls_gs_base.store(fs_base_saved, Ordering::Release);
 
     // Restaurer le masque de signal sauvegardé (sans SIGKILL/SIGSTOP).
     use super::mask::SigMask;

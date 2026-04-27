@@ -211,7 +211,8 @@ impl CryptoAuditLog {
     ///
     /// OOM-02.
     pub fn tail(&self, n: usize) -> ExofsResult<Vec<AuditEntry>> {
-        let n = n.min(AUDIT_RING_SIZE);
+        let written = self.total_written().min(AUDIT_RING_SIZE as u64) as usize;
+        let n = n.min(written);
         let mut out: Vec<AuditEntry> = Vec::new();
         out.try_reserve(n).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
@@ -388,9 +389,6 @@ impl CryptoAuditLog {
             auth_failures: 0,
         };
         for e in &entries {
-            if e.seq == 0 && e.ts == 0 {
-                continue;
-            } // slot vide
             s.total_events = s.total_events.saturating_add(1);
             if !e.is_success() {
                 s.total_errors = s.total_errors.saturating_add(1);

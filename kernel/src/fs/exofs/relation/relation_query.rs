@@ -57,6 +57,7 @@ impl QueryResult {
             self.relations.truncate(max);
             self.truncated = true;
         }
+        self.n_total = self.relations.len();
         self
     }
 }
@@ -130,7 +131,9 @@ impl RelationQuery {
     pub fn reachable_from(start: &BlobId, max_depth: u32) -> ExofsResult<Vec<BlobId>> {
         use super::relation_walker::RelationWalker;
         let w = RelationWalker::new(max_depth);
-        Ok(w.bfs(start)?.visited)
+        let mut visited = w.bfs(start)?.visited;
+        visited.retain(|blob| blob.as_bytes() != start.as_bytes());
+        Ok(visited)
     }
 
     /// Cherche les blobs qui peuvent atteindre `target` en remontant les arcs.

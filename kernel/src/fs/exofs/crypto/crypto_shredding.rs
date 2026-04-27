@@ -216,11 +216,14 @@ impl CryptoShredder {
 ///
 /// ARITH-02 : wrapping_mul.
 pub fn pseudorandom_pattern(seed: u64, pass_idx: u8) -> u8 {
+    let pass_mix = (pass_idx as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93);
     let v = seed
+        .wrapping_add(pass_mix)
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(pass_idx as u64)
-        .rotate_right(7);
-    (v & 0xFF) as u8
+        .rotate_right(7)
+        ^ pass_mix.rotate_left(11)
+        ^ seed.rotate_left((pass_idx & 7) as u32);
+    ((v ^ (v >> 8) ^ (v >> 16) ^ (v >> 24)) & 0xFF) as u8
 }
 
 /// Calcule le nombre d'octets total à effacer dans un batch.

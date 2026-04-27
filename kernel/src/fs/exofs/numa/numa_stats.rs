@@ -127,6 +127,22 @@ impl NumaStats {
         node < MAX_NUMA_NODES
     }
 
+    #[inline]
+    fn is_active_stats(stats: &NumaNodeStats) -> bool {
+        stats.allocs != 0
+            || stats.frees != 0
+            || stats.bytes_alloc != 0
+            || stats.bytes_freed != 0
+            || stats.migrations_out != 0
+            || stats.migrations_in != 0
+            || stats.read_ops != 0
+            || stats.write_ops != 0
+            || stats.read_bytes != 0
+            || stats.write_bytes != 0
+            || stats.errors != 0
+            || stats.pressure_events != 0
+    }
+
     // ── Enregistrements ───────────────────────────────────────────────────────
 
     /// Enregistre une allocation de `bytes` sur le nœud.
@@ -231,16 +247,23 @@ impl NumaStats {
     pub fn least_loaded_node(&self) -> usize {
         let mut best_node = 0usize;
         let mut best_score = u64::MAX;
+        let mut found_active = false;
         let mut i = 0usize;
         while i < MAX_NUMA_NODES {
-            let s = self.node_stats(i).load_score();
+            let stats = self.node_stats(i);
+            if !Self::is_active_stats(&stats) {
+                i = i.wrapping_add(1);
+                continue;
+            }
+            let s = stats.load_score();
             if s < best_score {
                 best_score = s;
                 best_node = i;
+                found_active = true;
             }
             i = i.wrapping_add(1);
         }
-        best_node
+        if found_active { best_node } else { 0 }
     }
 
     /// Nœud avec le plus grand score de charge (RECUR-01).
@@ -263,22 +286,26 @@ impl NumaStats {
     pub fn imbalance_ppt(&self) -> u64 {
         let mut max_score = 0u64;
         let mut min_score = u64::MAX;
+        let mut active_nodes = 0usize;
         let mut i = 0usize;
         while i < MAX_NUMA_NODES {
-            let s = self.node_stats(i).load_score();
+            let stats = self.node_stats(i);
+            if !Self::is_active_stats(&stats) {
+                i = i.wrapping_add(1);
+                continue;
+            }
+            let s = stats.load_score();
             if s > max_score {
                 max_score = s;
             }
             if s < min_score {
                 min_score = s;
             }
+            active_nodes = active_nodes.wrapping_add(1);
             i = i.wrapping_add(1);
         }
-        if max_score == 0 || min_score == u64::MAX {
+        if active_nodes == 0 || max_score == 0 || min_score == u64::MAX {
             return 0;
-        }
-        if min_score == u64::MAX {
-            min_score = 0;
         }
         max_score
             .saturating_sub(min_score)

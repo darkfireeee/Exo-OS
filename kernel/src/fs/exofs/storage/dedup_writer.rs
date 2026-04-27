@@ -234,7 +234,7 @@ impl DedupWriter {
         let blob_id = compute_blob_id(raw_data);
         let guard = self.index.lock();
 
-        if let Some(entry) = guard.lookup(&blob_id) {
+        if let Some(entry) = guard.lookup(&blob_id).filter(|entry| entry.ref_count > 0) {
             let offset = entry.offset;
             let saved = raw_data.len() as u64;
             drop(guard);
@@ -274,11 +274,7 @@ impl DedupWriter {
     /// Décrémente le compteur de références.
     /// Retourne `Some(remaining)` ou `None` si non trouvé.
     pub fn dec_ref(&self, blob_id: &BlobId) -> Option<u32> {
-        let rc = self.index.lock().dec_ref(blob_id)?;
-        if rc == 0 {
-            self.index.lock().remove(blob_id);
-        }
-        Some(rc)
+        self.index.lock().dec_ref(blob_id)
     }
 
     /// Supprime un blob de l'index (gc).

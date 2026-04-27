@@ -252,6 +252,13 @@ fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
     frame.rdx = regs.rdx;
     frame.r8 = regs.r8;
     frame.r9 = regs.r9;
+    frame.r10 = regs.r10;
+    frame.r12 = regs.r12;
+    frame.r13 = regs.r13;
+    frame.r14 = regs.r14;
+    frame.r15 = regs.r15;
+    frame.rbx = regs.rbx;
+    frame.rbp = regs.rbp;
     // RSP userspace mis à jour dans gs:[0x08] ET dans frame.rsp.
     // SAFETY: GS kernel actif, gs:[0x08] = user_rsp slot du PerCpuData.
     unsafe {
@@ -274,9 +281,22 @@ fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
         const NON_MASKABLE: u64 = (1u64 << 8) | (1u64 << 18);
         let safe_mask = regs.signal_mask & !NON_MASKABLE;
         // SAFETY: tcb_ptr est non-nul et valide (maintenu par le scheduler).
-        let tcb = unsafe { &*(tcb_ptr as *const ThreadControlBlock) };
+        let tcb = unsafe { &mut *(tcb_ptr as *mut ThreadControlBlock) };
         tcb.signal_mask
             .store(safe_mask, core::sync::atomic::Ordering::Release);
+        tcb.fs_base = regs.fs_base;
+        tcb.user_gs_base = regs.gs_base;
+        #[cfg(target_os = "none")]
+        unsafe {
+            crate::arch::x86_64::cpu::msr::write_msr(
+                crate::arch::x86_64::cpu::msr::MSR_FS_BASE,
+                regs.fs_base,
+            );
+            crate::arch::x86_64::cpu::msr::write_msr(
+                crate::arch::x86_64::cpu::msr::MSR_KERNEL_GS_BASE,
+                regs.gs_base,
+            );
+        }
     }
 }
 
@@ -392,6 +412,9 @@ fn check_and_deliver_signals(frame: &mut SyscallFrame) {
         return;
     }
 
+    // SAFETY: thread_ptr maintenu par pcb, valide dans ce contexte.
+    let thread = unsafe { &mut *thread_ptr };
+
     let mut d_frame = DeliveryFrame {
         user_rip: frame.rcx,    // RIP de retour (sauvé par SYSCALL hw dans RCX)
         user_rflags: frame.r11, // RFLAGS (sauvé par SYSCALL hw dans R11)
@@ -403,12 +426,20 @@ fn check_and_deliver_signals(frame: &mut SyscallFrame) {
         user_rcx: frame.rcx, // userspace RCX = même que RIP retour (SYSCALL)
         user_r8: frame.r8,
         user_r9: frame.r9,
+        user_r10: frame.r10,
+        user_r12: frame.r12,
+        user_r13: frame.r13,
+        user_r14: frame.r14,
+        user_r15: frame.r15,
+        user_rbx: frame.rbx,
+        user_rbp: frame.rbp,
+        user_fs_base: thread.sched_tcb.fs_base,
+        user_gs_base: thread.sched_tcb.user_gs_base,
         user_cs: 0x1B, // CS ring3 (non sauvé par SYSCALL mais requis)
         user_ss: 0x23, // SS ring3
     };
 
-    // SAFETY: thread_ptr maintenu par pcb, valide dans ce contexte.
-    handle_pending_signals(unsafe { &mut *thread_ptr }, &mut d_frame);
+    handle_pending_signals(thread, &mut d_frame);
 
     // Répercuter les modifications potentielles (ex. RIP redirigé, RSP vers sigaltstack).
     frame.rcx = d_frame.user_rip;
@@ -419,6 +450,13 @@ fn check_and_deliver_signals(frame: &mut SyscallFrame) {
     frame.rdx = d_frame.user_rdx;
     frame.r8 = d_frame.user_r8;
     frame.r9 = d_frame.user_r9;
+    frame.r10 = d_frame.user_r10;
+    frame.r12 = d_frame.user_r12;
+    frame.r13 = d_frame.user_r13;
+    frame.r14 = d_frame.user_r14;
+    frame.r15 = d_frame.user_r15;
+    frame.rbx = d_frame.user_rbx;
+    frame.rbp = d_frame.user_rbp;
 
     // RSP userspace : mettre à jour gs:[0x08] si modifié (sigaltstack / setup_signal_frame).
     if d_frame.user_rsp != frame.rsp {

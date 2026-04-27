@@ -59,7 +59,7 @@ impl CompressLevel {
     pub const fn prev(self) -> Self {
         match self {
             Self::None => Self::None,
-            Self::Fast => Self::None,
+            Self::Fast => Self::Fast,
             Self::Default => Self::Fast,
             Self::Best => Self::Default,
             Self::Maximum => Self::Best,

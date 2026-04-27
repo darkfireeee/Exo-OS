@@ -264,6 +264,11 @@ fn zstd_compress_bound(n: usize) -> usize {
 /// Produit un Zstd Frame valide contenant les données en mode Raw_Literals.
 fn zstd_compress_raw(src: &[u8], dst: &mut [u8]) -> Option<usize> {
     let mut p = 0usize;
+    let use_rle = src
+        .first()
+        .copied()
+        .map(|first| src.iter().all(|&b| b == first))
+        .unwrap_or(false);
 
     // Magic (4 octets).
     if p + 4 > dst.len() {
@@ -279,9 +284,10 @@ fn zstd_compress_raw(src: &[u8], dst: &mut [u8]) -> Option<usize> {
     dst[p] = 0x00;
     p += 1;
 
-    // Block Header (3 octets) : Last_Block=1, Block_Type=Raw(0b00), Block_Size.
+    // Block Header (3 octets) : Last_Block=1, Block_Type=Raw(0b00) ou RLE(0b01), Block_Size.
     let bsize = src.len() as u32;
-    let bh = (bsize << 3) | 0x01u32; // Last_Block bit
+    let block_type = if use_rle { 0x02u32 } else { 0x00u32 };
+    let bh = (bsize << 3) | block_type | 0x01u32; // Last_Block bit
     if p + 3 > dst.len() {
         return None;
     }
@@ -290,12 +296,20 @@ fn zstd_compress_raw(src: &[u8], dst: &mut [u8]) -> Option<usize> {
     dst[p + 2] = ((bh >> 16) & 0xFF) as u8;
     p += 3;
 
-    // Données brutes.
-    if p + src.len() > dst.len() {
-        return None;
+    if use_rle {
+        if p >= dst.len() {
+            return None;
+        }
+        dst[p] = src[0];
+        p += 1;
+    } else {
+        // Données brutes.
+        if p + src.len() > dst.len() {
+            return None;
+        }
+        dst[p..p + src.len()].copy_from_slice(src);
+        p += src.len();
     }
-    dst[p..p + src.len()].copy_from_slice(src);
-    p += src.len();
 
     Some(p)
 }

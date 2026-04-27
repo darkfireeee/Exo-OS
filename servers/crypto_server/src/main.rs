@@ -32,6 +32,7 @@
 
 extern crate blake3;
 
+use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use exo_syscall_abi as syscall;
@@ -115,14 +116,18 @@ impl KeySlot {
 static KS_HANDLE_CTR: AtomicU32 = AtomicU32::new(1);
 
 // SAFETY: Accès uniquement depuis le thread unique du crypto_server (single-threaded server).
-static mut KS_SLOTS: [KeySlot; KS_MAX] = {
+struct KeySlots(UnsafeCell<[KeySlot; KS_MAX]>);
+
+unsafe impl Sync for KeySlots {}
+
+static KS_SLOTS: KeySlots = KeySlots(UnsafeCell::new({
     const S: KeySlot = KeySlot::new();
     [S; KS_MAX]
-};
+}));
 
 /// Insère une clé, retourne un handle opaque non-nul, ou 0 si table pleine.
 fn ks_insert(key: &[u8; KS_KEY_SIZE], key_type: u8, owner_pid: u32) -> u32 {
-    let slots = unsafe { &mut KS_SLOTS };
+    let slots = unsafe { &mut *KS_SLOTS.0.get() };
     for slot in slots.iter_mut() {
         if slot.handle.load(Ordering::Relaxed) == 0 {
             let h = KS_HANDLE_CTR.fetch_add(1, Ordering::Relaxed);
@@ -148,7 +153,7 @@ fn ks_get(handle: u32, owner_pid: u32) -> Option<[u8; KS_KEY_SIZE]> {
     if handle == 0 {
         return None;
     }
-    let slots = unsafe { &KS_SLOTS };
+    let slots = unsafe { &*KS_SLOTS.0.get() };
     for slot in slots.iter() {
         if slot.handle.load(Ordering::Acquire) == handle
             && slot.owner_pid.load(Ordering::Relaxed) == owner_pid

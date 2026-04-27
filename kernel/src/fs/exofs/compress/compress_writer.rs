@@ -228,7 +228,7 @@ impl CompressionPipeline {
             && result.payload.len() >= COMPRESSION_HEADER_SIZE
         {
             let hdr = &result.payload[..COMPRESSION_HEADER_SIZE];
-            let stored_crc = u32::from_le_bytes([hdr[12], hdr[13], hdr[14], hdr[15]]);
+            let stored_crc = u32::from_le_bytes([hdr[24], hdr[25], hdr[26], hdr[27]]);
             let expected = crc32_simple(data);
             if stored_crc != expected {
                 return Err(ExofsError::InternalError);

@@ -473,7 +473,7 @@ impl PerfReport {
     }
 
     pub fn is_healthy(&self, max_page_faults: u64, min_cache_eff: u64) -> bool {
-        self.page_faults <= max_page_faults && self.cache_eff_pct10 >= min_cache_eff
+        self.page_faults < max_page_faults && self.cache_eff_pct10 >= min_cache_eff
     }
 }
 

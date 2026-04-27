@@ -23,6 +23,7 @@ use crate::memory::virt::VmaFlags;
 use crate::memory::VirtAddr;
 use crate::process::core::pcb::{process_flags, ProcessControlBlock, ProcessState};
 use crate::process::core::tcb::{ProcessThread, ThreadAddress};
+use crate::process::lifecycle::fork::AddressSpaceCloner;
 use crate::process::lifecycle::fork::notify_vfork_completion;
 use crate::process::signal::mask::block_all_except_kill;
 use crate::process::signal::mask::reset_signals_on_exec;
@@ -162,6 +163,8 @@ pub fn do_execve(
 
     // Obtenir le chargeur ELF (enregistré depuis fs/ au boot).
     let loader = ELF_LOADER.get().ok_or(ExecError::NoLoader)?;
+    let saved_signal_mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
+    let old_as_ptr = pcb.address_space.load(Ordering::Acquire);
 
     // Étape 3 (LAC-08 / PROC-03) : bloquer TOUS les signaux sauf SIGKILL/SIGSTOP
     // AVANT le chargement ELF. Empêche un signal livré entre load_elf() et
@@ -171,9 +174,16 @@ pub fn do_execve(
 
     // Charger le nouveau binaire dans l'espace d'adressage.
     let cr3_current = thread.sched_tcb.cr3_phys;
-    let elf_result = loader
-        .load_elf(path, argv, envp, cr3_current)
-        .map_err(ExecError::ElfLoadFailed)?;
+    let elf_result = match loader.load_elf(path, argv, envp, cr3_current) {
+        Ok(result) => result,
+        Err(err) => {
+            thread
+                .sched_tcb
+                .signal_mask
+                .store(saved_signal_mask, Ordering::Release);
+            return Err(ExecError::ElfLoadFailed(err));
+        }
+    };
 
     // PROC-VMA (V-17) : marquer la VMA SignalTcb DONTCOPY | DONTEXPAND.
     // Empêche un attaquant d'utiliser mmap(MAP_FIXED) pour écraser le SignalTcb.
@@ -199,9 +209,15 @@ pub fn do_execve(
 
     // Réinitialiser les signaux (handlers → SIG_DFL, masque → 0).
     reset_signals_on_exec(&thread.sched_tcb);
+    thread
+        .sched_tcb
+        .signal_mask
+        .store(saved_signal_mask, Ordering::Release);
 
     // Mettre à jour l'espace d'adressage dans le TCB scheduler.
     thread.sched_tcb.cr3_phys = elf_result.cr3;
+    thread.sched_tcb.fs_base = elf_result.tls_base;
+    thread.sched_tcb.user_gs_base = 0;
 
     // Mettre à jour les adresses du thread.
     // CORRECTION P2-03 : calculer et propager stack_base et stack_size au lieu de 0
@@ -236,6 +252,7 @@ pub fn do_execve(
         let cpu_id = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
         crate::arch::x86_64::smp::percpu::set_kernel_rsp(thread.sched_tcb.kstack_ptr);
         crate::arch::x86_64::tss::update_rsp0(cpu_id, thread.sched_tcb.kstack_ptr);
+        crate::arch::x86_64::write_cr3(elf_result.cr3);
     }
 
     // BUG-04 / PROC-01 fix: écrire IA32_FS_BASE MSR immédiatement.
@@ -243,17 +260,20 @@ pub fn do_execve(
     // le nouveau TLS base doit être actif avant la première instruction userspace.
     // Sans cet WRMSR, %fs pointe vers l'ancienne base → crash userspace dès le
     // premier accès TLS (thread_local!, pthread_self…).
-    if elf_result.tls_base != 0 {
+    #[cfg(target_os = "none")]
+    unsafe {
         // SAFETY: WRMSR sur MSR_FS_BASE = 0xC000_0100 est toujours défini sur
         // x86_64 (AMD64 v0), et le MSR est writable depuis Ring 0. Le contexte
         // est celui du thread courant sur ce CPU — effet local, aucune contention.
-        #[cfg(target_os = "none")]
-        unsafe {
-            crate::arch::x86_64::cpu::msr::write_msr(
-                crate::arch::x86_64::cpu::msr::MSR_FS_BASE,
-                elf_result.tls_base,
-            );
-        }
+        crate::arch::x86_64::cpu::msr::write_msr(
+            crate::arch::x86_64::cpu::msr::MSR_FS_BASE,
+            elf_result.tls_base,
+        );
+        // execve() repart d'une image neuve : ne pas réinjecter l'ancien GS userspace.
+        crate::arch::x86_64::cpu::msr::write_msr(
+            crate::arch::x86_64::cpu::msr::MSR_KERNEL_GS_BASE,
+            0,
+        );
     }
 
     // Mettre à jour le PCB avec le nouvel espace d'adressage.
@@ -271,6 +291,10 @@ pub fn do_execve(
     );
     pcb.flags
         .fetch_and(!process_flags::FORKED, Ordering::Release);
+
+    if old_as_ptr != 0 && old_as_ptr != elf_result.addr_space_ptr {
+        crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER.free_addr_space(old_as_ptr);
+    }
 
     // Transition vers Running.
     pcb.set_state(ProcessState::Running);

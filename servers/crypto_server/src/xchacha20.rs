@@ -20,7 +20,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use chacha20poly1305::{
-    aead::{AeadInPlace, Error as AeadError, KeyInit},
+    aead::{AeadInPlace, KeyInit},
     XChaCha20Poly1305,
 };
 

@@ -225,6 +225,19 @@ impl OpenFileTable {
         closed_handles
     }
 
+    /// Ferme tous les descripteurs ouverts du processus.
+    pub fn close_all(&mut self) -> Vec<u64> {
+        let mut closed_handles = Vec::new();
+        for slot in &mut self.descriptors {
+            if let Some(fd_entry) = slot.take() {
+                closed_handles.push(fd_entry.handle);
+                self.close_count.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.next_hint = 3;
+        closed_handles
+    }
+
     /// Clone la table pour fork() (les handles sont dupliqués).
     pub fn clone_for_fork(&self) -> Self {
         Self {

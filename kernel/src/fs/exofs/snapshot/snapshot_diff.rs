@@ -214,16 +214,6 @@ impl SnapshotDiff {
         let left_ref = SNAPSHOT_LIST.get_ref(left_id)?;
         let right_ref = SNAPSHOT_LIST.get_ref(right_id)?;
 
-        // Optimisation : racines identiques => aucun diff
-        if left_ref.n_blobs == right_ref.n_blobs {
-            // Comparaison rapide des root_blob
-            let left_snap = SNAPSHOT_LIST.get(left_id)?;
-            let right_snap = SNAPSHOT_LIST.get(right_id)?;
-            if left_snap.root_blob.ct_eq(&right_snap.root_blob) {
-                return Self::empty_report(left_ref, right_ref, left_snap.n_blobs);
-            }
-        }
-
         let mut left_blobs = enumerator.list_blobs_with_sizes(left_id)?;
         let mut right_blobs = enumerator.list_blobs_with_sizes(right_id)?;
 
@@ -336,27 +326,6 @@ impl SnapshotDiff {
             bytes_added,
             bytes_removed,
             truncated,
-        })
-    }
-
-    // ── Rapport vide (snapshots identiques) ──────────────────────────
-
-    fn empty_report(
-        left_ref: SnapshotRef,
-        right_ref: SnapshotRef,
-        n_blobs: u64,
-    ) -> ExofsResult<SnapshotDiffReport> {
-        Ok(SnapshotDiffReport {
-            left: left_ref,
-            right: right_ref,
-            entries: Vec::new(),
-            n_added: 0,
-            n_removed: 0,
-            n_modified: 0,
-            n_unchanged: n_blobs,
-            bytes_added: 0,
-            bytes_removed: 0,
-            truncated: false,
         })
     }
 

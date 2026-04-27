@@ -18,7 +18,7 @@
 extern crate alloc;
 use super::exoar_format::{
     crc32c_update, crc32c_verify, ExoarEntryHeader, ExoarFooter, ExoarHeader, ExoarSummary,
-    EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD,
+    EXOAR_ENTRY_MAGIC, EXOAR_FOOTER_MAGIC, EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD,
 };
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
@@ -240,6 +240,11 @@ pub struct ExoarReader {
     config: ExoarReaderConfig,
 }
 
+enum ArchiveRecord {
+    Entry([u8; size_of::<ExoarEntryHeader>()]),
+    Footer([u8; size_of::<ExoarFooter>()]),
+}
+
 impl ExoarReader {
     pub const fn new(config: ExoarReaderConfig) -> Self {
         Self { config }
@@ -288,27 +293,37 @@ impl ExoarReader {
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         report.header_flags = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.flags)) };
 
-        let max_entries = self
-            .config
-            .effective_max_entries()
-            .min(entry_count_declared);
+        let max_entries = self.config.effective_max_entries();
         let max_payload = self.config.effective_max_payload();
 
         // CRC global accumulé
-        let mut global_crc = crc32c_update(0, &hdr_buf);
+        let mut _global_crc = crc32c_update(0, &hdr_buf);
+        let mut footer_buf: Option<[u8; size_of::<ExoarFooter>()]> = None;
+        let mut stop_dispatch = false;
 
         // 2. Lire les entrées — boucle while (RECUR-01).
         let mut entry_idx: u32 = 0;
-        while entry_idx < max_entries {
-            // Lire l'en-tête d'entrée — RÈGLE 8 : magic EN PREMIER.
-            let mut ehdr_buf = [0u8; size_of::<ExoarEntryHeader>()];
-            match source.read_exact(&mut ehdr_buf) {
-                Ok(_) => {}
-                Err(_) => {
-                    return Err(ExoarReadError::TruncatedArchive);
-                }
+        loop {
+            if entry_count_declared != 0 && entry_idx >= entry_count_declared {
+                break;
             }
-            global_crc = crc32c_update(global_crc, &ehdr_buf);
+
+            let ehdr_buf = if entry_count_declared == 0 {
+                match Self::read_stream_record(source)? {
+                    ArchiveRecord::Entry(buf) => buf,
+                    ArchiveRecord::Footer(buf) => {
+                        footer_buf = Some(buf);
+                        break;
+                    }
+                }
+            } else {
+                let mut buf = [0u8; size_of::<ExoarEntryHeader>()];
+                source
+                    .read_exact(&mut buf)
+                    .map_err(|_| ExoarReadError::TruncatedArchive)?;
+                buf
+            };
+            _global_crc = crc32c_update(_global_crc, &ehdr_buf);
 
             let ehdr =
                 ExoarEntryHeader::from_bytes(&ehdr_buf).ok_or(ExoarReadError::BadEntryMagic)?;
@@ -331,7 +346,7 @@ impl ExoarReader {
                 source
                     .read_exact(&mut payload)
                     .map_err(|_| ExoarReadError::IoError)?;
-                global_crc = crc32c_update(global_crc, &payload);
+                _global_crc = crc32c_update(_global_crc, &payload);
             }
 
             // Vérifier CRC32C du payload
@@ -362,38 +377,48 @@ impl ExoarReader {
                 }
             }
 
-            // Dispatcher vers le receiver
-            if ehdr.is_tombstone() {
-                report.tombstones_processed = report.tombstones_processed.saturating_add(1);
-                if !self.config.skip_tombstones {
-                    receiver.receive_tombstone(&ehdr.blob_id);
+            if !stop_dispatch && report.entries_read < max_entries {
+                // Dispatcher vers le receiver
+                if ehdr.is_tombstone() {
+                    report.tombstones_processed = report.tombstones_processed.saturating_add(1);
+                    if !self.config.skip_tombstones {
+                        receiver.receive_tombstone(&ehdr.blob_id);
+                    }
+                } else {
+                    let keep_reading = receiver.receive_blob(&ehdr.blob_id, &payload, ehdr.flags);
+                    if !keep_reading {
+                        stop_dispatch = true;
+                    }
                 }
+                let ps_tracked = payload_size;
+                if ps_tracked > report.max_payload_seen {
+                    report.max_payload_seen = ps_tracked;
+                }
+                report.entries_read = report.entries_read.saturating_add(1);
             } else {
-                let keep_reading = receiver.receive_blob(&ehdr.blob_id, &payload, ehdr.flags);
-                if !keep_reading {
-                    break;
-                }
+                report.entries_skipped = report.entries_skipped.saturating_add(1);
             }
-
-            let ps_tracked = payload_size;
-            if ps_tracked > report.max_payload_seen {
-                report.max_payload_seen = ps_tracked;
-            }
-            report.entries_read = report.entries_read.saturating_add(1);
             entry_idx = entry_idx.saturating_add(1);
         }
 
         // 3. Lire et valider le footer — RÈGLE 8.
-        let mut ftr_buf = [0u8; size_of::<ExoarFooter>()];
-        source
-            .read_exact(&mut ftr_buf)
-            .map_err(|_| ExoarReadError::TruncatedArchive)?;
+        let mut ftr_buf = footer_buf.unwrap_or([0u8; size_of::<ExoarFooter>()]);
+        if footer_buf.is_none() {
+            source
+                .read_exact(&mut ftr_buf)
+                .map_err(|_| ExoarReadError::TruncatedArchive)?;
+        }
         let ftr = ExoarFooter::from_bytes(&ftr_buf).ok_or(ExoarReadError::BadFooterMagic)?;
 
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ftr_entry_count: u32 =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.entry_count)) };
-        if ftr_entry_count != entry_count_declared {
+        let expected_entry_count = if entry_count_declared == 0 {
+            entry_idx
+        } else {
+            entry_count_declared
+        };
+        if ftr_entry_count != expected_entry_count {
             return Err(ExoarReadError::EntryCountMismatch);
         }
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
@@ -451,18 +476,33 @@ impl ExoarScanner {
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         report.header_flags = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.flags)) };
 
-        let max_entries = self.config.effective_max_entries().min(entry_count);
+        let max_entries = self.config.effective_max_entries();
         let max_payload = self.config.effective_max_payload();
 
-        let mut global_crc = crc32c_update(0, &hdr_buf);
+        let mut _global_crc = crc32c_update(0, &hdr_buf);
         let mut entry_idx: u32 = 0;
+        let mut footer_buf: Option<[u8; size_of::<ExoarFooter>()]> = None;
 
-        while entry_idx < max_entries {
-            let mut ehdr_buf = [0u8; size_of::<ExoarEntryHeader>()];
-            source
-                .read_exact(&mut ehdr_buf)
-                .map_err(|_| ExoarReadError::TruncatedArchive)?;
-            global_crc = crc32c_update(global_crc, &ehdr_buf);
+        loop {
+            if entry_count != 0 && entry_idx >= entry_count {
+                break;
+            }
+            let ehdr_buf = if entry_count == 0 {
+                match ExoarReader::read_stream_record(source)? {
+                    ArchiveRecord::Entry(buf) => buf,
+                    ArchiveRecord::Footer(buf) => {
+                        footer_buf = Some(buf);
+                        break;
+                    }
+                }
+            } else {
+                let mut buf = [0u8; size_of::<ExoarEntryHeader>()];
+                source
+                    .read_exact(&mut buf)
+                    .map_err(|_| ExoarReadError::TruncatedArchive)?;
+                buf
+            };
+            _global_crc = crc32c_update(_global_crc, &ehdr_buf);
 
             let ehdr =
                 ExoarEntryHeader::from_bytes(&ehdr_buf).ok_or(ExoarReadError::BadEntryMagic)?;
@@ -485,7 +525,7 @@ impl ExoarScanner {
                     .read_exact(&mut payload_buf[..chunk])
                     .map_err(|_| ExoarReadError::IoError)?;
                 local_crc = crc32c_update(local_crc, &payload_buf[..chunk]);
-                global_crc = crc32c_update(global_crc, &payload_buf[..chunk]);
+                _global_crc = crc32c_update(_global_crc, &payload_buf[..chunk]);
                 remaining = remaining.saturating_sub(chunk as u64);
             }
 
@@ -502,23 +542,30 @@ impl ExoarScanner {
                 report.payloads_verified = report.payloads_verified.saturating_add(1);
             }
 
-            if ehdr.is_tombstone() {
-                report.tombstones_processed = report.tombstones_processed.saturating_add(1);
+            if report.entries_read < max_entries {
+                if ehdr.is_tombstone() {
+                    report.tombstones_processed = report.tombstones_processed.saturating_add(1);
+                }
+                report.entries_read = report.entries_read.saturating_add(1);
+            } else {
+                report.entries_skipped = report.entries_skipped.saturating_add(1);
             }
-            report.entries_read = report.entries_read.saturating_add(1);
             entry_idx = entry_idx.saturating_add(1);
         }
 
-        let mut ftr_buf = [0u8; size_of::<ExoarFooter>()];
-        source
-            .read_exact(&mut ftr_buf)
-            .map_err(|_| ExoarReadError::TruncatedArchive)?;
+        let mut ftr_buf = footer_buf.unwrap_or([0u8; size_of::<ExoarFooter>()]);
+        if footer_buf.is_none() {
+            source
+                .read_exact(&mut ftr_buf)
+                .map_err(|_| ExoarReadError::TruncatedArchive)?;
+        }
         let ftr = ExoarFooter::from_bytes(&ftr_buf).ok_or(ExoarReadError::BadFooterMagic)?;
 
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ftr_count: u32 =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.entry_count)) };
-        if ftr_count != entry_count {
+        let expected_count = if entry_count == 0 { entry_idx } else { entry_count };
+        if ftr_count != expected_count {
             return Err(ExoarReadError::EntryCountMismatch);
         }
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
@@ -527,6 +574,36 @@ impl ExoarScanner {
         report.bytes_consumed = source.bytes_read();
         report.archive_valid = !report.has_errors();
         Ok(report)
+    }
+}
+
+impl ExoarReader {
+    fn read_stream_record<S: ArchiveSource>(source: &mut S) -> Result<ArchiveRecord, ExoarReadError> {
+        let mut magic_buf = [0u8; 4];
+        source
+            .read_exact(&mut magic_buf)
+            .map_err(|_| ExoarReadError::TruncatedArchive)?;
+        let magic = u32::from_le_bytes(magic_buf);
+
+        if magic == EXOAR_ENTRY_MAGIC {
+            let mut buf = [0u8; size_of::<ExoarEntryHeader>()];
+            buf[..4].copy_from_slice(&magic_buf);
+            source
+                .read_exact(&mut buf[4..])
+                .map_err(|_| ExoarReadError::TruncatedArchive)?;
+            return Ok(ArchiveRecord::Entry(buf));
+        }
+
+        if magic == EXOAR_FOOTER_MAGIC {
+            let mut buf = [0u8; size_of::<ExoarFooter>()];
+            buf[..4].copy_from_slice(&magic_buf);
+            source
+                .read_exact(&mut buf[4..])
+                .map_err(|_| ExoarReadError::TruncatedArchive)?;
+            return Ok(ArchiveRecord::Footer(buf));
+        }
+
+        Err(ExoarReadError::BadEntryMagic)
     }
 }
 

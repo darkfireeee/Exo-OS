@@ -24,11 +24,8 @@
 
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use exo_exo_shield::{behavioral, engine, signatures};
 use exo_syscall_abi as syscall;
-
-mod behavioral;
-mod engine;
-mod signatures;
 
 // ── Message Types ───────────────────────────────────────────────────────────
 

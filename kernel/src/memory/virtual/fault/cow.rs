@@ -9,6 +9,9 @@ use crate::memory::core::{PageFlags, VirtAddr, PAGE_SIZE};
 use crate::memory::cow::tracker::COW_TRACKER;
 use crate::memory::virt::address_space::tlb::flush_single;
 use crate::memory::virt::vma::VmaDescriptor;
+use spin::Mutex;
+
+static COW_FAULT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Traite un CoW fault (write sur page en lecture seule avec flag COW).
 pub fn handle_cow_fault<A: FaultAllocator>(
@@ -16,6 +19,8 @@ pub fn handle_cow_fault<A: FaultAllocator>(
     vma: &VmaDescriptor,
     alloc: &A,
 ) -> FaultResult {
+    // Sérialise la casse CoW d'une même PTE tant qu'aucun verrou PTE dédié n'existe.
+    let _guard = COW_FAULT_LOCK.lock();
     let page_addr = VirtAddr::new(ctx.fault_addr.as_u64() & !(PAGE_SIZE as u64 - 1));
 
     // Trouver le frame physique actuel via la traduction d'adresse.
