@@ -199,15 +199,6 @@ pub fn match_wildcard(pattern: &[u8], data: &[u8], offset: usize) -> Option<(usi
     }
 
     // Calculer la longueur de la correspondance
-    let first_seg_pos = if segments[0].is_empty() {
-        offset
-    } else {
-        match match_exact(segments[0], data, offset) {
-            Some(p) => p,
-            None => return None,
-        }
-    };
-
     // Vérifier que le premier segment commence au bon endroit
     // si le pattern ne commence pas par '*'
     let match_start = if pattern[0] == b'*' {

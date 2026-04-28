@@ -413,16 +413,7 @@ pub unsafe fn schedule_block(
                         context_switch(current, &mut *idle.as_ptr());
                     }
                     _ => {
-                        // Garde-fou ultime: si l'idle per-CPU n'est vraiment pas
-                        // publiable, on évite le gel dur mais on laisse une trace
-                        // claire en debug.
-                        debug_assert!(
-                            false,
-                            "schedule_block: idle_thread absent sur cpu {}",
-                            rq.cpu.0
-                        );
-                        current.set_state(TaskState::Runnable);
-                        rq.enqueue(current_ptr);
+                        panic!("schedule_block: idle_thread absent sur cpu {}", rq.cpu.0);
                     }
                 }
             }
@@ -433,13 +424,10 @@ pub unsafe fn schedule_block(
                     context_switch(current, &mut *idle.as_ptr());
                 }
                 _ => {
-                    debug_assert!(
-                        false,
+                    panic!(
                         "schedule_block: pick_next sans idle_thread sur cpu {}",
                         rq.cpu.0
                     );
-                    current.set_state(TaskState::Runnable);
-                    rq.enqueue(current_ptr);
                 }
             }
         }

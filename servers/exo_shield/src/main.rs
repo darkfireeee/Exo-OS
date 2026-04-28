@@ -42,9 +42,6 @@ const SHIELD_OK: u32 = 0;
 const SHIELD_ERR_ARGS: u32 = 1;
 const SHIELD_ERR_BUSY: u32 = 2;
 const SHIELD_ERR_NOT_FOUND: u32 = 3;
-const SHIELD_ERR_UNAUTHORIZED: u32 = 4;
-const SHIELD_ERR_THREAT_EXISTS: u32 = 5;
-const SHIELD_ERR_QUEUE_FULL: u32 = 6;
 const SHIELD_ERR_NOT_CONTAINED: u32 = 7;
 
 // ── IPC Message Structures ──────────────────────────────────────────────────
@@ -169,13 +166,16 @@ fn handle_scan_request(req: &ShieldRequest) -> ShieldReply {
     engine::stat_scan_executed(result.matched);
 
     // Also queue for periodic tracking
-    if let Some(scan_id) = engine::queue_scan(target_pid, scan_type, priority, tick) {
+    let queued_scan_id = if let Some(scan_id) = engine::queue_scan(target_pid, scan_type, priority, tick) {
         engine::stat_scan_queued();
-    }
+        scan_id
+    } else {
+        0
+    };
 
     // Build reply
     let mut reply = ShieldReply::new(SHIELD_OK);
-    reply.data[0..4].copy_from_slice(&result.scan_id.to_le_bytes());
+    reply.data[0..4].copy_from_slice(&queued_scan_id.to_le_bytes());
     reply.data[4..8].copy_from_slice(&result.composite.to_le_bytes());
     reply.data[8] = result.max_severity.as_u8();
     reply.data[9] = if result.matched { 1 } else { 0 };
@@ -415,7 +415,6 @@ fn handle_threat_query(req: &ShieldRequest) -> ShieldReply {
 ///   [1..]    policy-specific data
 fn handle_policy_update(req: &ShieldRequest) -> ShieldReply {
     let policy_type = req.payload[0];
-    let tick = current_tick();
 
     match policy_type {
         0 => {

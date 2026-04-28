@@ -14,7 +14,7 @@
 //! - NS-01 : uniquement core::sync::atomic + spin, pas de heap
 //! - Zéro stub, zéro TODO, zéro placeholder
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 // ── Constantes ───────────────────────────────────────────────────────────────

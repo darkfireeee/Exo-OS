@@ -263,6 +263,15 @@ pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
     if cpu_count == 0 {
         return;
     }
+    if cpu_count <= 1 || !crate::arch::x86_64::smp::smp_boot_complete() {
+        match flush_type {
+            TlbFlushType::Single(addr) => flush_single(addr),
+            TlbFlushType::Range { start, end } => flush_range(start, end),
+            TlbFlushType::All => flush_all(),
+            TlbFlushType::Global => flush_all_including_global(),
+        }
+        return;
+    }
     let n = cpu_count.min(64) as usize;
     let all_mask: u64 = if n >= 64 { !0u64 } else { (1u64 << n) - 1 };
     let current_cpu = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;

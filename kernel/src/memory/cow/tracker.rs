@@ -164,14 +164,14 @@ impl CowTracker {
                 return new_rc;
             }
         }
-        0 // Non trouvé → considéré comme déjà libéré
+        u32::MAX // Non trouvé → sentinelle explicite, ne surtout pas libérer le frame
     }
 
     /// Retourne le refcount actuel sans modifier.
     pub fn ref_count(&self, frame: Frame) -> u32 {
         let idx = frame.phys_addr().as_u64() / 4096;
         let start = Self::hash(idx);
-        // Lecture seule : pas besoin du verrou (les tombstones ne mentent pas).
+        let _guard = self.lock.lock();
         for probe in 0..COW_TABLE_SIZE {
             let slot = (start + probe) & COW_TABLE_MASK;
             let entry = &self.table[slot];
@@ -197,3 +197,27 @@ impl CowTracker {
 }
 
 pub static COW_TRACKER: CowTracker = CowTracker::new();
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::core::PhysAddr;
+
+    fn frame_at(addr: u64) -> Frame {
+        Frame::containing(PhysAddr::new(addr))
+    }
+
+    #[test]
+    fn dec_on_untracked_frame_returns_sentinel() {
+        let tracker = CowTracker::new();
+        assert_eq!(tracker.dec(frame_at(0x4000)), u32::MAX);
+    }
+
+    #[test]
+    fn ref_count_reads_consistent_tracked_value() {
+        let tracker = CowTracker::new();
+        let frame = frame_at(0x8000);
+        assert_eq!(tracker.inc(frame), 2);
+        assert_eq!(tracker.ref_count(frame), 2);
+    }
+}

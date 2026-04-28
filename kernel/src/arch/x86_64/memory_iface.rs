@@ -280,6 +280,21 @@ impl FaultAllocator for KernelFaultAllocator {
     fn translate(&self, virt: VirtAddr) -> Option<PhysAddr> {
         crate::memory::virt::address_space::KERNEL_AS.translate(virt)
     }
+
+    fn read_pte_raw(&self, virt: VirtAddr) -> u64 {
+        let walker = crate::memory::virt::page_table::PageTableWalker::new(
+            crate::memory::virt::address_space::KERNEL_AS.pml4_phys(),
+        );
+        walker.read_pte_raw(virt)
+    }
+
+    fn compare_exchange_pte_raw(&self, virt: VirtAddr, current: u64, new: u64) -> Result<(), u64> {
+        let walker = crate::memory::virt::page_table::PageTableWalker::new(
+            crate::memory::virt::address_space::KERNEL_AS.pml4_phys(),
+        );
+        // SAFETY: `virt` désigne une PTE feuille déjà présente sur l'espace noyau.
+        unsafe { walker.compare_exchange_leaf_raw(virt, current, new) }
+    }
 }
 
 /// Instance globale de l'allocateur kernel pour le fault handler.

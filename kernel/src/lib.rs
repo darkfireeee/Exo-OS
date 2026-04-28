@@ -103,6 +103,18 @@ pub use arch::x86_64::cpu::{
     tsc::read_tsc,
 };
 
+fn process_oom_kill_sender(pid: u64) -> bool {
+    let Ok(pid32) = u32::try_from(pid) else {
+        return false;
+    };
+
+    crate::process::signal::delivery::send_signal_to_pid(
+        crate::process::core::pid::Pid(pid32),
+        crate::process::signal::default::Signal::SIGKILL,
+    )
+    .is_ok()
+}
+
 /// Séquence d'initialisation des couches (appelée depuis `kernel_main` dans main.rs).
 ///
 /// Suit l'ordre DOC2 + DOC3 :
@@ -213,6 +225,7 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     crate::process::lifecycle::reap::init_reaper();
     kdb(b'd'); // avant register_with_dma
     crate::process::state::wakeup::register_with_dma();
+    crate::memory::register_oom_kill_sender(process_oom_kill_sender);
     drop(process_irq_guard);
     kdb(b'P'); // Phase 4 done (process init + reaper kthread)
     crate::arch::x86_64::boot_display::stage_ok("PROCESS");

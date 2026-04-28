@@ -4,13 +4,12 @@
 //! filters, rate tracking, and alert generation. All state is stored
 //! in static arrays (no heap).
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
 
 use super::core::{
-    compute_threat_score, containment_for_level, mark_process_contained, record_threat,
-    score_to_level, stat_critical_inc, stat_threats_inc, update_risk_profile, ContainmentAction,
-    ThreatCategory, ThreatLevel, ThreatRecord, MAX_SIG_NAME,
+    mark_process_contained, record_threat, stat_critical_inc, stat_threats_inc,
+    update_risk_profile, ThreatCategory, ThreatLevel, ThreatRecord,
 };
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -629,7 +628,6 @@ impl EventMonitor {
             return RateResult {
                 exceeded: false,
                 rate: 0,
-                limit: 0,
             };
         }
 
@@ -712,7 +710,6 @@ impl EventMonitor {
         RateResult {
             exceeded: current_rate > limit,
             rate: current_rate,
-            limit: limit,
         }
     }
 
@@ -844,7 +841,7 @@ impl EventMonitor {
         alert.contained = false;
 
         let id = self.add_alert(&alert);
-        if let Some(aid) = id {
+        if id.is_some() {
             STATS_ALERTS_GENERATED.fetch_add(1, Ordering::Relaxed);
         }
         id
@@ -856,7 +853,6 @@ impl EventMonitor {
 struct RateResult {
     exceeded: bool,
     rate: u32,
-    limit: u32,
 }
 
 struct EventProcessingResult {

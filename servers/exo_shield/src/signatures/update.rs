@@ -251,7 +251,7 @@ impl Fe {
         // On utilise la méthode square-and-multiply
 
         let mut result = Fe::one();
-        let mut base = *self;
+        let base = *self;
 
         // Exposant = p - 2
         // En binaire : 255 bits, on traite du bit le plus significatif au moins significatif
@@ -521,7 +521,7 @@ fn sqrt_candidate(x: &Fe) -> Fe {
     ];
 
     let mut result = Fe::one();
-    let mut base = *x;
+    let base = *x;
 
     for limb_idx in (0..4).rev() {
         let exp_val = exp_limbs[limb_idx];
@@ -1154,6 +1154,13 @@ pub fn apply_update(header: &SignatureUpdateHeader, payload: &[u8], merge: bool)
         if added_id != 0 {
             applied += 1;
         }
+    }
+
+    if header.signature_count > 0 && applied == 0 {
+        let _ = rollback();
+        UPDATE_STATUS.store(UpdateStatus::Failed as u8, Ordering::Release);
+        TOTAL_UPDATES_FAILED.fetch_add(1, Ordering::Relaxed);
+        return UpdateStatus::Failed;
     }
 
     // 6. Mettre à jour la version

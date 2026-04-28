@@ -144,7 +144,6 @@ impl ContainmentAction {
 // ── Scoring System ──────────────────────────────────────────────────────────
 
 /// Score thresholds mapping to threat levels.
-const SCORE_LOW: u32 = 0;
 const SCORE_MEDIUM: u32 = 250;
 const SCORE_HIGH: u32 = 500;
 const SCORE_CRITICAL: u32 = 750;

@@ -23,7 +23,7 @@
 
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use exo_ipc_router::{exocordon, security_gate};
+use exo_ipc_router::security_gate;
 use exo_syscall_abi as syscall;
 
 /// Registre d'endpoints : max 64 services simultanés.

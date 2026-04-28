@@ -103,6 +103,9 @@ Exo-OS est un système d'exploitation expérimental en **Rust x86\_64** adoptant
 | 4 | IPC | Channel/endpoint/SHM — jamais tenus lors d'appels FS |
 | 5 (acquérir en dernier) | FS | **DOIT relâcher AVANT tout appel IPC** |
 
+Cette hiérarchie est aujourd'hui une convention documentée et revue dans le code.
+Elle n'est pas encore imposée par un trait ou un validateur formel au build.
+
 ### 2.3 Constantes MAX\_CPUS / MAX\_CORES
 
 | Constante | Valeur | Fichier | Note |
@@ -121,7 +124,7 @@ Exo-OS est un système d'exploitation expérimental en **Rust x86\_64** adoptant
 ```
 arch/x86_64/
 ├── boot/
-│   ├── early_init.rs   18 étapes boot (voir §3.1.1)
+│   ├── early_init.rs   14 étapes boot arch + handoff vers `kernel_init()` (voir §3.1.1)
 │   ├── multiboot2.rs   Multiboot2 header parsing
 │   ├── uefi.rs         UEFI boot (implémenté, non câblé — Phase 3)
 │   └── memory_map.rs   E820/UEFI → memory/
@@ -134,7 +137,7 @@ arch/x86_64/
 └── memory_iface.rs     register_tlb_ipi_sender() — APRÈS memory/ init (step 11)
 ```
 
-#### 3.1.1 Séquence boot — 18 étapes
+#### 3.1.1 Séquence boot — 14 étapes arch + phases `kernel_init()`
 
 | Étape | Action | Règle |
 |-------|--------|-------|
@@ -147,12 +150,15 @@ arch/x86_64/
 | 12 | KERNEL\_AS + protections (NX/SMEP/SMAP/PKU) | |
 | **13** | **Enregistrer IPI TLB sender** auprès de `memory/` ← APRÈS buddy (step 11) | MEM-01 |
 | 14 | Parser ACPI (MADT, HPET, SRAT) + calibrer TSC | |
-| 14\* | Vérification `MAX_CORES_RUNTIME` ≤ `SSR_MAX_CORES_LAYOUT` (V7-C-05) | SMP check |
-| 14.5 | Allouer per-AP kernel stacks via buddy + init PerCpuData | SMP requis |
-| **15** | Init scheduler + RunQueues → démarrer APs (INIT/SIPI) → **spin-wait** | CVE-EXO-001 |
-| 16 | Init IPC + SHM pool | |
-| 17 | Monter ExoFS + `boot_recovery_sequence` | |
-| **18** | `security::init()` → `SECURITY_READY.store(true)` ← **APs franchissent spin-wait** | CVE-EXO-001 |
+| 14\* | Vérification `MAX_CORES_RUNTIME` ≤ `SSR_MAX_CORES_LAYOUT` (V7-C-05) + stacks AP | SMP check |
+
+Ensuite, `kernel/src/lib.rs::kernel_init()` enchaîne les phases runtime suivantes :
+- Phase 2a–2d : mémoire, temps, drivers
+- Phase 3 : scheduler + publication des idle threads
+- Phase 4 : process + reaper + wakeups DMA
+- Phase 5 : security
+- Phase 6 : IPC + SHM + hooks VMM
+- Phase 7 : ExoFS + ELF loader + bridge syscall/FS
 
 > **Step 14\* — vérification MAX\_CORES\_RUNTIME (V7-C-05)** :
 >

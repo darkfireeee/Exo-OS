@@ -8,6 +8,7 @@ use crate::memory::core::{AllocError, AllocFlags, Frame, PageFlags, PhysAddr, Vi
 use crate::memory::virt::page_table::x86_64::{
     phys_to_table_mut, phys_to_table_ref, PageTable, PageTableEntry, PageTableLevel,
 };
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RÉSULTAT D'UN WALK
@@ -226,7 +227,65 @@ impl PageTableWalker {
         Ok(())
     }
 
+    /// Lit la valeur brute de la PTE feuille 4 KiB pour `virt`.
+    /// Retourne `0` si la page n'est pas mappée ou si une huge page est rencontrée.
+    pub fn read_pte_raw(&self, virt: VirtAddr) -> u64 {
+        let Some(entry_ptr) = self.leaf_entry_ptr(virt) else {
+            return 0;
+        };
+        // SAFETY: `entry_ptr` pointe vers une PTE 4 KiB valide tant que la table existe.
+        unsafe { (*entry_ptr).raw() }
+    }
+
+    /// Effectue un compare/exchange atomique sur une PTE feuille 4 KiB.
+    ///
+    /// Retourne `Err(actual_raw)` si l'entrée n'est plus égale à `expected`,
+    /// ou `Err(0)` si aucune PTE feuille n'existe pour cette adresse.
+    pub unsafe fn compare_exchange_leaf_raw(
+        &self,
+        virt: VirtAddr,
+        expected: u64,
+        new: u64,
+    ) -> Result<(), u64> {
+        let Some(entry_ptr) = self.leaf_entry_ptr(virt) else {
+            return Err(0);
+        };
+
+        let atomic_ptr = entry_ptr.cast::<AtomicU64>();
+        match (*atomic_ptr).compare_exchange(expected, new, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => Ok(()),
+            Err(actual) => Err(actual),
+        }
+    }
+
     // ─── helper : s'assure qu'un niveau intermédiaire existe ─────────────────
+
+    fn leaf_entry_ptr(&self, virt: VirtAddr) -> Option<*mut PageTableEntry> {
+        // SAFETY: `pml4_phys` référence une hiérarchie valide pendant la vie de l'AS.
+        let pml4 = unsafe { phys_to_table_mut(self.pml4_phys) };
+        let l4_entry = pml4[virt.p4_index()];
+        if !l4_entry.is_present() {
+            return None;
+        }
+
+        // SAFETY: l'entrée présente pointe vers un PDPT valide.
+        let pdpt = unsafe { phys_to_table_mut(l4_entry.phys_addr()) };
+        let l3_entry = pdpt[virt.p3_index()];
+        if !l3_entry.is_present() || l3_entry.is_huge() {
+            return None;
+        }
+
+        // SAFETY: l'entrée présente pointe vers un PD valide.
+        let pd = unsafe { phys_to_table_mut(l3_entry.phys_addr()) };
+        let l2_entry = pd[virt.p2_index()];
+        if !l2_entry.is_present() || l2_entry.is_huge() {
+            return None;
+        }
+
+        // SAFETY: l'entrée présente pointe vers un PT valide.
+        let pt = unsafe { phys_to_table_mut(l2_entry.phys_addr()) };
+        Some((&mut pt[virt.p1_index()]) as *mut PageTableEntry)
+    }
 
     fn ensure_table<A: FrameAllocatorForWalk>(
         &self,

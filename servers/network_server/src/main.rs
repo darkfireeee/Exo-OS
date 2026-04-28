@@ -477,7 +477,7 @@ impl NetworkService {
         let _ = self.inflight.submit_echo(echo.token, payload_len as u32);
         NetworkReply::ok(
             echo.token,
-            target as u64,
+            echo.target as u64,
             ((latency_ms as u64) << 48)
                 | ((echo.payload_len as u64) << 32)
                 | echo.last_latency_ms as u64,

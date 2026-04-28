@@ -8,7 +8,7 @@
 //! - CAP-01 : vérification de capacité avant toute modification
 //! - Zéro stub, zéro TODO, zéro placeholder
 
-use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
 // ── Constantes ───────────────────────────────────────────────────────────────

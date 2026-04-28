@@ -8,10 +8,8 @@ use super::{FaultContext, FaultResult};
 use crate::memory::core::{PageFlags, VirtAddr, PAGE_SIZE};
 use crate::memory::cow::tracker::COW_TRACKER;
 use crate::memory::virt::address_space::tlb::flush_single;
+use crate::memory::virt::page_table::PageTableEntry;
 use crate::memory::virt::vma::VmaDescriptor;
-use spin::Mutex;
-
-static COW_FAULT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Traite un CoW fault (write sur page en lecture seule avec flag COW).
 pub fn handle_cow_fault<A: FaultAllocator>(
@@ -19,20 +17,20 @@ pub fn handle_cow_fault<A: FaultAllocator>(
     vma: &VmaDescriptor,
     alloc: &A,
 ) -> FaultResult {
-    // Sérialise la casse CoW d'une même PTE tant qu'aucun verrou PTE dédié n'existe.
-    let _guard = COW_FAULT_LOCK.lock();
     let page_addr = VirtAddr::new(ctx.fault_addr.as_u64() & !(PAGE_SIZE as u64 - 1));
 
-    // Trouver le frame physique actuel via la traduction d'adresse.
-    let phys = match alloc.translate(page_addr) {
-        Some(p) => p,
-        None => {
-            // Page pas encore mappée + flag COW → demand paging d'abord.
-            return super::demand_paging::handle_demand_paging(ctx, vma, alloc);
-        }
+    let old_raw = alloc.read_pte_raw(page_addr);
+    let old_entry = PageTableEntry::from_raw(old_raw);
+    let old_frame = match old_entry.frame() {
+        Some(frame) => frame,
+        None => match alloc.translate(page_addr) {
+            Some(phys) => crate::memory::core::Frame::containing(phys),
+            None => {
+                // Page pas encore mappée + flag COW → demand paging d'abord.
+                return super::demand_paging::handle_demand_paging(ctx, vma, alloc);
+            }
+        },
     };
-
-    let old_frame = crate::memory::core::Frame::containing(phys);
 
     // Construire un AtomicRefCount temporaire pour décider si copie est nécessaire.
     // En production, la table de refcounts est FRAME_TABLE (non créée ici pour Couche 0).
@@ -61,7 +59,8 @@ pub fn handle_cow_fault<A: FaultAllocator>(
 
     // Remap la page avec les nouveaux flags (writable, supprimer COW).
     let new_flags = vma.page_flags & !PageFlags::COW | PageFlags::WRITABLE;
-    match alloc.map_page(page_addr, new_frame, new_flags) {
+    let new_raw = PageTableEntry::from_page_flags(new_frame, new_flags).raw();
+    match alloc.compare_exchange_pte_raw(page_addr, old_raw, new_raw) {
         Ok(_) => {
             let remaining = COW_TRACKER.dec(old_frame);
             if remaining == 0 {
@@ -74,10 +73,17 @@ pub fn handle_cow_fault<A: FaultAllocator>(
             }
             FaultResult::Handled
         }
-        Err(_) => {
+        Err(actual_raw) => {
             alloc.free_frame(new_frame);
-            FaultResult::Oom {
-                addr: ctx.fault_addr,
+            let actual = PageTableEntry::from_raw(actual_raw);
+            if actual.is_present() {
+                // Un autre CPU a probablement gagné la course et a déjà cassé le CoW.
+                unsafe {
+                    flush_single(page_addr);
+                }
+                FaultResult::Handled
+            } else {
+                super::demand_paging::handle_demand_paging(ctx, vma, alloc)
             }
         }
     }

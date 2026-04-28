@@ -330,34 +330,48 @@ const _: () = assert!(core::mem::offset_of!(EpollEventAbi, data_bytes) == 4);
 #[repr(C, align(64))]
 pub struct ThreadControlBlock {
     // ─── Cache Line 1 [0..63] ─────────────────────────────────────────
-    /// [0]  Pointeur vers CapTable partagée du processus (u64 pour #[repr(C)])
-    pub cap_table_ptr:  u64,
+    /// [0]  Thread ID global unique
+    pub tid:            u64,
     /// [8]  RSP Ring 0 — source pour TSS.RSP0 (V7-C-03)
     pub kstack_ptr:     u64,
-    /// [16] Thread ID global unique
-    pub tid:            u64,
-    /// [24] AtomicU8 logiquement : RUNNING/BLOCKED/ZOMBIE/DEAD
+    /// [16] Priorité / policy (cache line hot path)
+    pub priority_policy: u64,
+    /// [24] AtomicU64 : état scheduler + flags. Le PID n'est PAS encodé ici.
     pub sched_state:    u64,
-    /// [32] MSR 0xC0000100 — FS.base (TLS userspace)
-    pub fs_base:        u64,
-    /// [40] MSR 0xC0000101 — GS.base valeur USERSPACE (voir GI-02 §4)
-    pub user_gs_base:   u64,
-    /// [48] Intel PKS (0 sur AMD/sans PKS)
-    pub pkrs:           u32,
-    /// [52] Padding alignement — NE PAS UTILISER
-    pub _pad_cl1:       u32,
+    /// [32] vruntime CFS (ns)
+    pub vruntime:       u64,
+    /// [40] deadline EDF absolue (ns depuis boot)
+    pub deadline_abs:   u64,
+    /// [48] Bitmask d'affinité CPU
+    pub cpu_affinity:   u64,
     /// [56] Adresse physique PML4 — LU PAR switch_asm.s
     pub cr3_phys:       u64,
     // ─── Cache Lines 2-3 [64..191] : GPRs ────────────────────────────
-    /// [64..183] 15 GPRs : rax,rbx,rcx,rdx,rsi,rdi,rbp,r8..r14
-    pub gpr:            [u64; 15],
-    /// [184..191] Padding alignement
-    pub _pad_gpr:       [u8; 8],
+    /// [64] CPU courant (`AtomicU64`)
+    pub cpu_id:         u64,
+    /// [72] MSR 0xC0000100 — FS.base (TLS userspace)
+    pub fs_base:        u64,
+    /// [80] MSR 0xC0000102 — valeur GS userspace restaurée au retour Ring 3
+    pub user_gs_base:   u64,
+    /// [88] Intel PKS (0 sur AMD/sans PKS)
+    pub pkrs:           u32,
+    /// [92] PID du processus propriétaire (champ direct)
+    pub pid:            u32,
+    /// [96] Masque de signaux bloqués
+    pub signal_mask:    u64,
+    /// [104] Budget EDF
+    pub dl_runtime:     u64,
+    /// [112] Période EDF
+    pub dl_period:      u64,
+    /// [120] Padding alignement
+    pub _pad_cl2:       [u8; 8],
     // ─── Cache Line 4 [192..255] ──────────────────────────────────────
-    pub rip:            u64,   // [192]
-    pub rsp_user:       u64,   // [200]
-    pub rflags:         u64,   // [208]
-    pub cs_ss:          u64,   // [216] cs<<32 | ss
+    pub run_time_acc:   u64,   // [128]
+    pub switch_count:   u64,   // [136]
+    pub cold_reserve:   [u8; 88], // [144..231]
+    pub fpu_state_ptr:  u64,   // [232]
+    pub rq_next:        u64,   // [240]
+    pub rq_prev:        u64,   // [248]
     pub cr2:            u64,   // [224] diagnostic #PF — JAMAIS restauré via MOV CR2
     /// [232] *mut XSaveArea — null si thread jamais utilisé FPU (Lazy FPU)
     pub fpu_state_ptr:  u64,

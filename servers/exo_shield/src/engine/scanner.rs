@@ -237,7 +237,6 @@ static SCAN_QUEUE: Mutex<ScanQueue> = Mutex::new(ScanQueue::new());
 
 struct ScanQueue {
     requests: [ScanRequest; SCAN_QUEUE_MAX],
-    head: u32,
     tail: u32,
     count: u32,
     next_id: u32,
@@ -247,7 +246,6 @@ impl ScanQueue {
     const fn new() -> Self {
         ScanQueue {
             requests: [ScanRequest::empty(); SCAN_QUEUE_MAX],
-            head: 0,
             tail: 0,
             count: 0,
             next_id: 1,
@@ -367,6 +365,11 @@ impl ProfileStore {
         if idx >= NUM_PROFILES {
             return false;
         }
+        if !self.profiles[idx].enabled && profile.enabled {
+            self.count = self.count.saturating_add(1);
+        } else if self.profiles[idx].enabled && !profile.enabled {
+            self.count = self.count.saturating_sub(1);
+        }
         self.profiles[idx] = *profile;
         self.profiles[idx].enabled = true;
         true
@@ -380,6 +383,9 @@ impl ProfileStore {
     }
 
     fn active_profile(&self) -> Option<ScanProfile> {
+        if self.count == 0 {
+            return None;
+        }
         for i in 0..NUM_PROFILES {
             if self.profiles[i].enabled {
                 return Some(self.profiles[i]);
@@ -632,9 +638,16 @@ pub fn execute_scan(
 
     let mut total_score = 0u32;
     let mut sig_fill = 0usize;
+    let scan_data = if scan_type == 1 && data.len() > 256 {
+        &data[..256]
+    } else {
+        data
+    };
+    let run_signature_phase = scan_type != 3;
+    let run_hash_phase = heuristic_level >= 2 && matches!(scan_type, 0 | 2);
 
     // Phase 1: Signature matching
-    {
+    if run_signature_phase {
         let db = SIG_DB.lock();
         for i in 0..MAX_SIGNATURES {
             let sig = &db.entries[i];
@@ -648,7 +661,7 @@ pub fn execute_scan(
             if pat_len == 0 || pat_len > 16 {
                 continue;
             }
-            let matches = match_pattern(data, &sig.pattern[..pat_len]);
+            let matches = match_pattern(scan_data, &sig.pattern[..pat_len]);
             if matches > 0 {
                 result.matched = true;
                 result.match_count += matches;
@@ -666,7 +679,7 @@ pub fn execute_scan(
 
     // Phase 2: Heuristic analysis (based on heuristic_level)
     if heuristic_level > 0 {
-        let h_score = heuristic_analyze(data);
+        let h_score = heuristic_analyze(scan_data);
         if h_score > 0 {
             // Scale heuristic score based on aggressiveness level
             let scaled = match heuristic_level {
@@ -686,8 +699,8 @@ pub fn execute_scan(
     }
 
     // Phase 3: Hash-based heuristic matching
-    if heuristic_level >= 2 {
-        let hash = fnv1a_hash(data);
+    if run_hash_phase {
+        let hash = fnv1a_hash(scan_data);
         let db = SIG_DB.lock();
         for i in 0..MAX_SIGNATURES {
             let sig = &db.entries[i];
