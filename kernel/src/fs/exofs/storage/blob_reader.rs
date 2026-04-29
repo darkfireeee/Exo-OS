@@ -184,10 +184,7 @@ impl BlobReader {
 
         // ── 2. Vérification en-tête (HDR-03) ──────────────────────
         let hdr = match mode {
-            BlobVerifyMode::None => {
-                // SAFETY: taille vérifiée ci-dessus
-                unsafe { &*(hdr_raw.as_ptr() as *const BlobHeaderDisk) }
-            }
+            BlobVerifyMode::None => BlobHeaderDisk::from_bytes(&hdr_raw[..BLOB_HEADER_SIZE])?,
             _ => match verify_blob_header(&hdr_raw) {
                 Ok(h) => {
                     BLOB_READER_STATS.header_ok.fetch_add(1, Ordering::Relaxed);
@@ -666,6 +663,8 @@ where
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::EpochId;
@@ -713,7 +712,7 @@ mod tests {
             Ok(v)
         };
 
-        let r = BlobReader::read_blob(DiskOffset(0), read_fn, BlobVerifyMode::Full).unwrap();
+        let r = BlobReader::read_blob(DiskOffset(0), read_fn, BlobVerifyMode::Full).test_unwrap();
         assert_eq!(&r.data[..data.len()], data);
         assert!(r.id_verified);
         assert_eq!(r.original_size as usize, data.len());
@@ -748,7 +747,7 @@ mod tests {
             Ok(disk[s..s + sz].to_vec())
         };
 
-        let info = BlobReader::read_header(DiskOffset(0), read_fn).unwrap();
+        let info = BlobReader::read_header(DiskOffset(0), read_fn).test_unwrap();
         assert_eq!(info.original_size as usize, data.len());
         assert_eq!(info.algo, CompressionType::None);
     }
@@ -806,7 +805,7 @@ mod tests {
             Ok(disk[s..s + sz].to_vec())
         };
 
-        let results = BatchBlobReader::read_all(&requests, &read_fn).unwrap();
+        let results = BatchBlobReader::read_all(&requests, &read_fn).test_unwrap();
         assert_eq!(results.len(), 3);
         for r in &results {
             assert!(r.result.is_ok());

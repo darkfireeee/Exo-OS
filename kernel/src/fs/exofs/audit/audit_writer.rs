@@ -314,6 +314,8 @@ pub fn record_perm_denied(actor_uid: u64, object_id: u64, op: AuditOp) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     // use super::super::audit_log::AuditLog;
@@ -326,39 +328,39 @@ mod tests {
     fn test_write_read_is_ok() {
         let mut w = writer();
         w.write(1, [0u8; 32], AuditOp::Read, AuditResult::Success)
-            .unwrap();
-        let e = AUDIT_LOG.read_last().unwrap();
+            .test_unwrap();
+        let e = AUDIT_LOG.read_last().test_unwrap();
         assert!(e.is_valid());
     }
 
     #[test]
     fn test_record_create() {
         let mut w = writer();
-        w.record_create(99, [1u8; 32]).unwrap();
-        let e = AUDIT_LOG.read_last().unwrap();
+        w.record_create(99, [1u8; 32]).test_unwrap();
+        let e = AUDIT_LOG.read_last().test_unwrap();
         assert_eq!(e.op, AuditOp::Create as u8);
     }
 
     #[test]
     fn test_record_denied() {
         let mut w = writer();
-        w.record_denied(1, [0u8; 32], AuditOp::Write).unwrap();
-        let e = AUDIT_LOG.read_last().unwrap();
+        w.record_denied(1, [0u8; 32], AuditOp::Write).test_unwrap();
+        let e = AUDIT_LOG.read_last().test_unwrap();
         assert_eq!(e.result, AuditResult::Denied as u8);
     }
 
     #[test]
     fn test_stats_increments() {
         let mut w = writer();
-        w.record_read(1, [0u8; 32]).unwrap();
-        w.record_write(2, [0u8; 32]).unwrap();
+        w.record_read(1, [0u8; 32]).test_unwrap();
+        w.record_write(2, [0u8; 32]).test_unwrap();
         assert_eq!(w.stats().total_written, 2);
     }
 
     #[test]
     fn test_buffered_flush() {
         let mut w = AuditWriter::new(WriterContext::kernel(), WritePolicy::Buffered);
-        w.record_read(10, [0u8; 32]).unwrap();
+        w.record_read(10, [0u8; 32]).test_unwrap();
         assert_eq!(w.pending(), 1);
         let n = w.flush();
         assert_eq!(n, 1);
@@ -382,7 +384,7 @@ mod tests {
                 )
             })
             .collect();
-        let n = w.write_batch(&entries).unwrap();
+        let n = w.write_batch(&entries).test_unwrap();
         assert_eq!(n, 4);
     }
 
@@ -426,23 +428,23 @@ mod tests {
     #[test]
     fn test_kernel_writer() {
         let mut w = AuditWriter::kernel_immediate();
-        w.record_crypto_key(0, AuditResult::Success).unwrap();
-        let e = AUDIT_LOG.read_last().unwrap();
+        w.record_crypto_key(0, AuditResult::Success).test_unwrap();
+        let e = AUDIT_LOG.read_last().test_unwrap();
         assert_eq!(e.op, AuditOp::CryptoKey as u8);
     }
 
     #[test]
     fn test_write_policy_change() {
         let mut w = writer();
-        w.record_policy_change(5).unwrap();
-        let e = AUDIT_LOG.read_last().unwrap();
+        w.record_policy_change(5).test_unwrap();
+        let e = AUDIT_LOG.read_last().test_unwrap();
         assert!(e.is_security());
     }
 
     #[test]
     fn test_reset_stats() {
         let mut w = writer();
-        w.record_read(1, [0u8; 32]).unwrap();
+        w.record_read(1, [0u8; 32]).test_unwrap();
         w.reset_stats();
         assert_eq!(w.stats().total_written, 0);
     }
@@ -450,8 +452,8 @@ mod tests {
     #[test]
     fn test_write_checksum_fail() {
         let mut w = writer();
-        w.record_checksum_fail(77).unwrap();
-        let e = AUDIT_LOG.read_last().unwrap();
+        w.record_checksum_fail(77).test_unwrap();
+        let e = AUDIT_LOG.read_last().test_unwrap();
         assert_eq!(e.op, AuditOp::ChecksumFail as u8);
         assert_eq!(e.result, AuditResult::Error as u8);
     }
@@ -459,7 +461,7 @@ mod tests {
     #[test]
     fn test_buffered_no_flush_until_explicit() {
         let mut w = AuditWriter::new(WriterContext::kernel(), WritePolicy::Buffered);
-        w.record_delete(10, [0u8; 32]).unwrap();
+        w.record_delete(10, [0u8; 32]).test_unwrap();
         assert_eq!(w.pending(), 1);
         assert!(!w.is_flushed());
     }
@@ -477,8 +479,8 @@ mod tests {
             AuditResult::Success,
             0,
         );
-        w.write_entry(e).unwrap();
-        let last = AUDIT_LOG.read_last().unwrap();
+        w.write_entry(e).test_unwrap();
+        let last = AUDIT_LOG.read_last().test_unwrap();
         assert_eq!(last.op, AuditOp::Rename as u8);
     }
 }

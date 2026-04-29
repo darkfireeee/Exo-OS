@@ -347,6 +347,8 @@ impl ExtentCache {
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -357,7 +359,7 @@ mod tests {
     #[test]
     fn test_insert_get() {
         let c = ExtentCache::new_const();
-        c.insert(blob(1), 0, alloc::vec![0u8; 128]).unwrap();
+        c.insert(blob(1), 0, alloc::vec![0u8; 128]).test_unwrap();
         assert!(c.get(&blob(1), 0).is_some());
     }
 
@@ -370,16 +372,16 @@ mod tests {
     #[test]
     fn test_used_bytes() {
         let c = ExtentCache::new_const();
-        c.insert(blob(1), 0, alloc::vec![0u8; 256]).unwrap();
+        c.insert(blob(1), 0, alloc::vec![0u8; 256]).test_unwrap();
         assert_eq!(c.used_bytes(), 256);
     }
 
     #[test]
     fn test_invalidate_blob_removes_extents() {
         let c = ExtentCache::new_const();
-        c.insert(blob(1), 0, alloc::vec![0u8; 128]).unwrap();
-        c.insert(blob(1), 4096, alloc::vec![0u8; 128]).unwrap();
-        c.insert(blob(2), 0, alloc::vec![0u8; 128]).unwrap();
+        c.insert(blob(1), 0, alloc::vec![0u8; 128]).test_unwrap();
+        c.insert(blob(1), 4096, alloc::vec![0u8; 128]).test_unwrap();
+        c.insert(blob(2), 0, alloc::vec![0u8; 128]).test_unwrap();
         c.invalidate_blob(&blob(1));
         assert!(c.get(&blob(1), 0).is_none());
         assert!(c.get(&blob(2), 0).is_some());
@@ -388,8 +390,8 @@ mod tests {
     #[test]
     fn test_mark_dirty() {
         let c = ExtentCache::new_const();
-        c.insert(blob(1), 0, alloc::vec![0u8; 64]).unwrap();
-        c.mark_dirty(&blob(1), 0).unwrap();
+        c.insert(blob(1), 0, alloc::vec![0u8; 64]).test_unwrap();
+        c.mark_dirty(&blob(1), 0).test_unwrap();
     }
 
     #[test]
@@ -401,9 +403,9 @@ mod tests {
     #[test]
     fn test_get_covering_range() {
         let c = ExtentCache::new_const();
-        c.insert(blob(1), 0, alloc::vec![1u8; 64]).unwrap();
-        c.insert(blob(1), 64, alloc::vec![2u8; 64]).unwrap();
-        c.insert(blob(1), 4096, alloc::vec![3u8; 64]).unwrap();
+        c.insert(blob(1), 0, alloc::vec![1u8; 64]).test_unwrap();
+        c.insert(blob(1), 64, alloc::vec![2u8; 64]).test_unwrap();
+        c.insert(blob(1), 4096, alloc::vec![3u8; 64]).test_unwrap();
         let covering = c.get_covering(&blob(1), 0, 128);
         assert_eq!(covering.len(), 2);
     }
@@ -411,7 +413,7 @@ mod tests {
     #[test]
     fn test_flush_all() {
         let c = ExtentCache::new_const();
-        c.insert(blob(1), 0, alloc::vec![0u8; 32]).unwrap();
+        c.insert(blob(1), 0, alloc::vec![0u8; 32]).test_unwrap();
         c.flush_all();
         assert_eq!(c.n_entries(), 0);
     }
@@ -419,16 +421,16 @@ mod tests {
     #[test]
     fn test_n_entries() {
         let c = ExtentCache::new_const();
-        c.insert(blob(1), 0, alloc::vec![0u8; 16]).unwrap();
-        c.insert(blob(1), 1024, alloc::vec![0u8; 16]).unwrap();
+        c.insert(blob(1), 0, alloc::vec![0u8; 16]).test_unwrap();
+        c.insert(blob(1), 1024, alloc::vec![0u8; 16]).test_unwrap();
         assert_eq!(c.n_entries(), 2);
     }
 
     #[test]
     fn test_mark_all_dirty() {
         let c = ExtentCache::new_const();
-        c.insert(blob(1), 0, alloc::vec![0u8; 64]).unwrap();
-        c.insert(blob(1), 4096, alloc::vec![0u8; 64]).unwrap();
+        c.insert(blob(1), 0, alloc::vec![0u8; 64]).test_unwrap();
+        c.insert(blob(1), 4096, alloc::vec![0u8; 64]).test_unwrap();
         c.mark_all_dirty(&blob(1));
         let offs = c.dirty_offsets(&blob(1));
         assert_eq!(offs.len(), 2);
@@ -437,16 +439,16 @@ mod tests {
     #[test]
     fn test_dirty_offsets_empty_when_clean() {
         let c = ExtentCache::new_const();
-        c.insert(blob(1), 0, alloc::vec![0u8; 32]).unwrap();
+        c.insert(blob(1), 0, alloc::vec![0u8; 32]).test_unwrap();
         assert!(c.dirty_offsets(&blob(1)).is_empty());
     }
 
     #[test]
     fn test_invalidate_range() {
         let c = ExtentCache::new_const();
-        c.insert(blob(1), 0, alloc::vec![0u8; 64]).unwrap();
-        c.insert(blob(1), 512, alloc::vec![0u8; 64]).unwrap();
-        c.insert(blob(1), 8192, alloc::vec![0u8; 64]).unwrap();
+        c.insert(blob(1), 0, alloc::vec![0u8; 64]).test_unwrap();
+        c.insert(blob(1), 512, alloc::vec![0u8; 64]).test_unwrap();
+        c.insert(blob(1), 8192, alloc::vec![0u8; 64]).test_unwrap();
         c.invalidate_range(&blob(1), 0, 1024);
         assert!(c.get(&blob(1), 0).is_none());
         assert!(c.get(&blob(1), 512).is_none());
@@ -456,30 +458,30 @@ mod tests {
     #[test]
     fn test_dirty_bytes() {
         let c = ExtentCache::new_const();
-        c.insert(blob(1), 0, alloc::vec![0u8; 256]).unwrap();
-        c.mark_dirty(&blob(1), 0).unwrap();
+        c.insert(blob(1), 0, alloc::vec![0u8; 256]).test_unwrap();
+        c.mark_dirty(&blob(1), 0).test_unwrap();
         assert_eq!(c.dirty_bytes(), 256);
     }
 
     #[test]
     fn test_n_entries_after_insert() {
         let c = ExtentCache::new_const();
-        c.insert(blob(2), 0, alloc::vec![0u8; 64]).unwrap();
-        c.insert(blob(2), 512, alloc::vec![0u8; 64]).unwrap();
+        c.insert(blob(2), 0, alloc::vec![0u8; 64]).test_unwrap();
+        c.insert(blob(2), 512, alloc::vec![0u8; 64]).test_unwrap();
         assert_eq!(c.n_entries(), 2);
     }
 
     #[test]
     fn test_used_bytes_after_insert() {
         let c = ExtentCache::new_const();
-        c.insert(blob(3), 0, alloc::vec![0u8; 128]).unwrap();
+        c.insert(blob(3), 0, alloc::vec![0u8; 128]).test_unwrap();
         assert_eq!(c.used_bytes(), 128);
     }
 
     #[test]
     fn test_flush_all_clears() {
         let c = ExtentCache::new_const();
-        c.insert(blob(4), 0, alloc::vec![0u8; 64]).unwrap();
+        c.insert(blob(4), 0, alloc::vec![0u8; 64]).test_unwrap();
         c.flush_all();
         assert_eq!(c.n_entries(), 0);
     }
@@ -493,8 +495,8 @@ mod tests {
     #[test]
     fn test_evict_n() {
         let c = ExtentCache::new_const();
-        c.insert(blob(5), 0, alloc::vec![0u8; 32]).unwrap();
-        c.insert(blob(5), 64, alloc::vec![0u8; 32]).unwrap();
+        c.insert(blob(5), 0, alloc::vec![0u8; 32]).test_unwrap();
+        c.insert(blob(5), 64, alloc::vec![0u8; 32]).test_unwrap();
         let freed = c.evict_n(1);
         assert!(freed >= 32);
     }

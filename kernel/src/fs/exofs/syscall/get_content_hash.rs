@@ -288,12 +288,14 @@ pub fn hash_incremental(data: &[u8]) -> ExofsResult<[u8; HASH_SIZE]> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn insert(path: &[u8], data: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, data.to_vec()).unwrap();
+        BLOB_CACHE.insert(id, data.to_vec()).test_unwrap();
         id
     }
 
@@ -328,7 +330,7 @@ mod tests {
     #[test]
     fn test_hash_range() {
         let data = b"hello world";
-        let h = hash_range(data, 0, 5).unwrap();
+        let h = hash_range(data, 0, 5).test_unwrap();
         assert_eq!(h, hash_data(b"hello"));
     }
 
@@ -341,7 +343,7 @@ mod tests {
     #[test]
     fn test_hash_blob_ok() {
         let id = insert(b"/hash/blob", b"content");
-        let r = hash_blob(id, 0).unwrap();
+        let r = hash_blob(id, 0).test_unwrap();
         assert_eq!(r.bytes_hashed, 7);
         assert_ne!(r.hash, [0u8; 32]);
     }
@@ -364,15 +366,15 @@ mod tests {
             0xABu8, 0xCD, 0xEF, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0,
         ];
-        let hex = hash_to_hex(&h).unwrap();
+        let hex = hash_to_hex(&h).test_unwrap();
         assert_eq!(&hex[..8], b"abcdef01");
     }
 
     #[test]
     fn test_hash_from_hex_roundtrip() {
         let h = hash_data(b"roundtrip");
-        let hex = hash_to_hex(&h).unwrap();
-        let back = hash_from_hex(&hex).unwrap();
+        let hex = hash_to_hex(&h).test_unwrap();
+        let back = hash_from_hex(&hex).test_unwrap();
         assert_eq!(back, h);
     }
 
@@ -389,7 +391,7 @@ mod tests {
     #[test]
     fn test_hash_incremental_small() {
         let data = b"small";
-        let h1 = hash_incremental(data).unwrap();
+        let h1 = hash_incremental(data).test_unwrap();
         let h2 = hash_data(data);
         assert_eq!(h1, h2);
     }
@@ -513,14 +515,14 @@ mod advanced_tests {
 
     #[test]
     fn test_merkle_root_empty() {
-        let r = merkle_root(&[]).unwrap();
+        let r = merkle_root(&[]).test_unwrap();
         assert_eq!(r, [0u8; 32]);
     }
 
     #[test]
     fn test_merkle_root_single() {
         let h = hash_data(b"leaf");
-        let r = merkle_root(&[h]).unwrap();
+        let r = merkle_root(&[h]).test_unwrap();
         assert_eq!(r, h);
     }
 
@@ -528,27 +530,27 @@ mod advanced_tests {
     fn test_merkle_root_two_leaves() {
         let h1 = hash_data(b"a");
         let h2 = hash_data(b"b");
-        let r = merkle_root(&[h1, h2]).unwrap();
+        let r = merkle_root(&[h1, h2]).test_unwrap();
         assert_eq!(r, combine_hashes(&h1, &h2));
     }
 
     #[test]
     fn test_chunk_hashes_empty() {
-        let c = chunk_hashes(b"", 1024).unwrap();
+        let c = chunk_hashes(b"", 1024).test_unwrap();
         assert_eq!(c.len(), 1);
     }
 
     #[test]
     fn test_chunk_hashes_exact() {
         let data = [0u8; 4096];
-        let c = chunk_hashes(&data, 4096).unwrap();
+        let c = chunk_hashes(&data, 4096).test_unwrap();
         assert_eq!(c.len(), 1);
     }
 
     #[test]
     fn test_chunk_hashes_multiple() {
         let data = [0u8; 5000];
-        let c = chunk_hashes(&data, 4096).unwrap();
+        let c = chunk_hashes(&data, 4096).test_unwrap();
         assert_eq!(c.len(), 2);
     }
 
@@ -560,8 +562,8 @@ mod advanced_tests {
     #[test]
     fn test_blob_merkle_root_ok() {
         let id = BlobId::from_bytes_blake3(b"/merkle/test");
-        BLOB_CACHE.insert(id, b"blob data here".to_vec()).unwrap();
-        let r = blob_merkle_root(id).unwrap();
+        BLOB_CACHE.insert(id, b"blob data here".to_vec()).test_unwrap();
+        let r = blob_merkle_root(id).test_unwrap();
         assert_ne!(r, [0u8; 32]);
     }
 

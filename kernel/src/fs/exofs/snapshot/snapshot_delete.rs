@@ -290,6 +290,8 @@ impl SnapshotDeleter {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::snapshot::{flags, make_snapshot_name};
     use super::super::reset_for_test;
@@ -312,7 +314,7 @@ mod tests {
             blob_catalog_size: 0,
             name: make_snapshot_name(b"t"),
         })
-        .unwrap();
+        .test_unwrap();
     }
 
     #[test]
@@ -320,7 +322,7 @@ mod tests {
         let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         push_snap(&list, 1, 0, None, flags::PROTECTED);
-        let snap = SNAPSHOT_LIST.get(SnapshotId(1)).unwrap();
+        let snap = SNAPSHOT_LIST.get(SnapshotId(1)).test_unwrap();
         let opts = DeleteOptions::default();
         let err = SnapshotDeleter::check_preconditions(&snap, opts);
         assert!(matches!(err, Err(ExofsError::InvalidState)));
@@ -364,7 +366,7 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 10, 1000, None, 0);
         push_snap(&list, 11, 2000, Some(10), 0);
-        let freed = SnapshotDeleter::estimate_cascade_freed(SnapshotId(10)).unwrap();
+        let freed = SnapshotDeleter::estimate_cascade_freed(SnapshotId(10)).test_unwrap();
         assert_eq!(freed, 3000);
     }
 
@@ -375,9 +377,9 @@ mod tests {
         push_snap(&list, 1, 0, None, 0);
         push_snap(&list, 2, 0, Some(1), 0);
         push_snap(&list, 3, 0, Some(2), 0);
-        let order = SnapshotDeleter::deletion_order(SnapshotId(1)).unwrap();
+        let order = SnapshotDeleter::deletion_order(SnapshotId(1)).test_unwrap();
         // 3 doit apparaître avant 2, qui doit apparaître avant 1
-        let pos = |id: u64| order.iter().position(|s| s.0 == id).unwrap();
+        let pos = |id: u64| order.iter().position(|s| s.0 == id).test_unwrap();
         assert!(pos(3) < pos(2));
         assert!(pos(2) < pos(1));
     }

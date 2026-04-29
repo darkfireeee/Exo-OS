@@ -640,6 +640,8 @@ fn inline_blake3(data: &[u8]) -> [u8; 32] {
 // ─── MockBlobWriter ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 struct MockWriter {
     blobs: Vec<([u8; 32], Vec<u8>)>,
     deleted: Vec<[u8; 32]>,
@@ -715,35 +717,35 @@ mod tests {
     #[test]
     fn test_conflict_skip() {
         let r = ConflictResolver::Skip.resolve(&make_id(1), EpochId(3), Some(EpochId(2)));
-        assert_eq!(r.expect("skip ok"), false);
+        assert_eq!(r.test_expect("skip ok"), false);
     }
 
     #[test]
     fn test_conflict_overwrite() {
         let r = ConflictResolver::Overwrite.resolve(&make_id(1), EpochId(3), Some(EpochId(2)));
-        assert_eq!(r.expect("overwrite ok"), true);
+        assert_eq!(r.test_expect("overwrite ok"), true);
     }
 
     #[test]
     fn test_conflict_keep_newer() {
         let r = ConflictResolver::KeepNewer.resolve(&make_id(1), EpochId(5), Some(EpochId(3)));
-        assert_eq!(r.expect("newer ok"), true);
+        assert_eq!(r.test_expect("newer ok"), true);
         let r2 = ConflictResolver::KeepNewer.resolve(&make_id(1), EpochId(2), Some(EpochId(5)));
-        assert_eq!(r2.expect("older ok"), false);
+        assert_eq!(r2.test_expect("older ok"), false);
     }
 
     #[test]
     fn test_tombstone_handler_delete() {
         let r = TombstoneHandler::Delete.handle(&make_id(1), true);
-        assert_eq!(r.expect("delete ok"), true);
+        assert_eq!(r.test_expect("delete ok"), true);
         let r2 = TombstoneHandler::Delete.handle(&make_id(1), false);
-        assert_eq!(r2.expect("delete absent ok"), false);
+        assert_eq!(r2.test_expect("delete absent ok"), false);
     }
 
     #[test]
     fn test_tombstone_handler_ignore() {
         let r = TombstoneHandler::Ignore.handle(&make_id(1), true);
-        assert_eq!(r.expect("ignore ok"), false);
+        assert_eq!(r.test_expect("ignore ok"), false);
     }
 
     #[test]
@@ -751,7 +753,7 @@ mod tests {
         let data = [1u8, 2, 3, 4, 5];
         let mut src = SliceImportSource::new(&data);
         let mut buf = [0u8; 3];
-        src.read_exact(&mut buf).expect("ok");
+        src.read_exact(&mut buf).test_expect("ok");
         assert_eq!(buf, [1, 2, 3]);
         assert_eq!(src.bytes_read(), 3);
     }
@@ -759,10 +761,10 @@ mod tests {
     #[test]
     fn test_import_empty_stream() {
         let cfg = StreamImportConfig::default(1);
-        let mut importer = StreamImporter::new(cfg).expect("ok");
+        let mut importer = StreamImporter::new(cfg).test_expect("ok");
         let mut src = SliceImportSource::new(&[]);
         let mut writer = MockWriter::new();
-        let report = importer.run(&mut src, &mut writer).expect("ok");
+        let report = importer.run(&mut src, &mut writer).test_expect("ok");
         assert_eq!(report.blobs_imported, 0);
         assert!(report.is_complete);
     }
@@ -772,16 +774,16 @@ mod tests {
         let data = b"single blob data";
         let blob_id = inline_blake3(data);
         let mut builder = ImportStreamBuilder::new();
-        builder.append_blob(blob_id, data).expect("ok");
+        builder.append_blob(blob_id, data).test_expect("ok");
 
         let cfg = StreamImportConfig {
             verify_blob_id: false,
             ..StreamImportConfig::default(1)
         };
-        let mut importer = StreamImporter::new(cfg).expect("ok");
+        let mut importer = StreamImporter::new(cfg).test_expect("ok");
         let mut src = SliceImportSource::new(builder.as_slice());
         let mut writer = MockWriter::new();
-        let report = importer.run(&mut src, &mut writer).expect("ok");
+        let report = importer.run(&mut src, &mut writer).test_expect("ok");
         assert_eq!(report.blobs_imported, 1);
         assert_eq!(writer.blobs.len(), 1);
     }
@@ -792,16 +794,16 @@ mod tests {
         for i in 0u8..5 {
             let data = [i; 64];
             let bid = inline_blake3(&data);
-            builder.append_blob(bid, &data).expect("ok");
+            builder.append_blob(bid, &data).test_expect("ok");
         }
         let cfg = StreamImportConfig {
             verify_blob_id: false,
             ..StreamImportConfig::default(1)
         };
-        let mut importer = StreamImporter::new(cfg).expect("ok");
+        let mut importer = StreamImporter::new(cfg).test_expect("ok");
         let mut src = SliceImportSource::new(builder.as_slice());
         let mut writer = MockWriter::new();
-        let report = importer.run(&mut src, &mut writer).expect("ok");
+        let report = importer.run(&mut src, &mut writer).test_expect("ok");
         assert_eq!(report.blobs_imported, 5);
         assert_eq!(writer.blobs.len(), 5);
     }
@@ -811,15 +813,15 @@ mod tests {
         let mut writer = MockWriter::new();
         let data = b"to delete";
         let bid = make_id(42);
-        writer.write_blob(&bid, data).expect("pre-populate");
+        writer.write_blob(&bid, data).test_expect("pre-populate");
 
         let mut builder = ImportStreamBuilder::new();
-        builder.append_tombstone(bid).expect("ok");
+        builder.append_tombstone(bid).test_expect("ok");
 
         let cfg = StreamImportConfig::default(1);
-        let mut importer = StreamImporter::new(cfg).expect("ok");
+        let mut importer = StreamImporter::new(cfg).test_expect("ok");
         let mut src = SliceImportSource::new(builder.as_slice());
-        let report = importer.run(&mut src, &mut writer).expect("ok");
+        let report = importer.run(&mut src, &mut writer).test_expect("ok");
         assert_eq!(report.tombstones_applied, 1);
         assert!(!writer.blob_exists(&bid));
     }
@@ -829,19 +831,19 @@ mod tests {
         let mut writer = MockWriter::new();
         let data = b"existing blob";
         let bid = make_id(10);
-        writer.write_blob(&bid, data).expect("pre-populate");
+        writer.write_blob(&bid, data).test_expect("pre-populate");
 
         let mut builder = ImportStreamBuilder::new();
-        builder.append_blob(bid, b"new version").expect("ok");
+        builder.append_blob(bid, b"new version").test_expect("ok");
 
         let cfg = StreamImportConfig {
             verify_blob_id: false,
             conflict: ConflictResolver::Skip,
             ..StreamImportConfig::default(1)
         };
-        let mut importer = StreamImporter::new(cfg).expect("ok");
+        let mut importer = StreamImporter::new(cfg).test_expect("ok");
         let mut src = SliceImportSource::new(builder.as_slice());
-        let report = importer.run(&mut src, &mut writer).expect("ok");
+        let report = importer.run(&mut src, &mut writer).test_expect("ok");
         assert_eq!(report.blobs_skipped, 1);
         assert_eq!(report.blobs_imported, 0);
     }
@@ -859,8 +861,8 @@ mod tests {
     #[test]
     fn test_builder_stream_layout() {
         let mut builder = ImportStreamBuilder::new();
-        builder.append_blob(make_id(1), b"data").expect("ok");
-        builder.append_tombstone(make_id(2)).expect("ok");
+        builder.append_blob(make_id(1), b"data").test_expect("ok");
+        builder.append_tombstone(make_id(2)).test_expect("ok");
         // Taille attendue : 52 + 4 (data) + 52 (tombstone)
         assert_eq!(builder.len(), 52 + 4 + 52);
     }

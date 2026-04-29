@@ -318,6 +318,8 @@ pub static PERF_RATE: PerfRateWindow = PerfRateWindow::new_const();
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -402,7 +404,7 @@ mod tests {
         let w = PerfRateWindow::new_const();
         w.push_iops(10);
         w.push_iops(20);
-        let v = w.to_vec().expect("ok");
+        let v = w.to_vec().test_expect("ok");
         assert_eq!(v.len(), 2);
     }
 

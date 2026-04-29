@@ -237,6 +237,8 @@ impl EvictionPolicy {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -247,7 +249,7 @@ mod tests {
     #[test]
     fn test_insert_contains() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lru);
-        p.insert(blob(1), 100).unwrap();
+        p.insert(blob(1), 100).test_unwrap();
         assert!(p.contains(&blob(1)));
         assert!(!p.contains(&blob(2)));
     }
@@ -255,7 +257,7 @@ mod tests {
     #[test]
     fn test_remove() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lru);
-        p.insert(blob(1), 100).unwrap();
+        p.insert(blob(1), 100).test_unwrap();
         p.remove(&blob(1));
         assert!(!p.contains(&blob(1)));
         assert_eq!(p.n_entries(), 0);
@@ -264,8 +266,8 @@ mod tests {
     #[test]
     fn test_lru_picks_oldest() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lru);
-        p.insert(blob(1), 100).unwrap();
-        p.insert(blob(2), 100).unwrap();
+        p.insert(blob(1), 100).test_unwrap();
+        p.insert(blob(2), 100).test_unwrap();
         p.touch(&blob(1));
         let victims = p.pick_eviction_candidates(1);
         assert_eq!(victims[0], blob(2));
@@ -274,8 +276,8 @@ mod tests {
     #[test]
     fn test_lfu_picks_lowest_freq() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lfu);
-        p.insert(blob(1), 100).unwrap();
-        p.insert(blob(2), 100).unwrap();
+        p.insert(blob(1), 100).test_unwrap();
+        p.insert(blob(2), 100).test_unwrap();
         p.touch(&blob(2));
         p.touch(&blob(2));
         let victims = p.pick_eviction_candidates(1);
@@ -285,7 +287,7 @@ mod tests {
     #[test]
     fn test_touch_increments_freq() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lfu);
-        p.insert(blob(1), 50).unwrap();
+        p.insert(blob(1), 50).test_unwrap();
         p.touch(&blob(1));
         assert_eq!(p.freq_of(&blob(1)), Some(2));
     }
@@ -293,7 +295,7 @@ mod tests {
     #[test]
     fn test_clock_gives_second_chance() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Clock);
-        p.insert(blob(1), 100).unwrap();
+        p.insert(blob(1), 100).test_unwrap();
         // Après insertion, clock_ref = true → second chance.
         let v = p.pick_eviction_candidates(1);
         // Après un scan, le bit est effacé mais pas encore évincé.
@@ -303,8 +305,8 @@ mod tests {
     #[test]
     fn test_n_entries_track() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lru);
-        p.insert(blob(1), 100).unwrap();
-        p.insert(blob(2), 200).unwrap();
+        p.insert(blob(1), 100).test_unwrap();
+        p.insert(blob(2), 200).test_unwrap();
         assert_eq!(p.n_entries(), 2);
         p.remove(&blob(1));
         assert_eq!(p.n_entries(), 1);
@@ -313,8 +315,8 @@ mod tests {
     #[test]
     fn test_total_size_track() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lru);
-        p.insert(blob(1), 300).unwrap();
-        p.insert(blob(2), 400).unwrap();
+        p.insert(blob(1), 300).test_unwrap();
+        p.insert(blob(2), 400).test_unwrap();
         assert_eq!(p.total_size(), 700);
         p.remove(&blob(1));
         assert_eq!(p.total_size(), 400);
@@ -323,8 +325,8 @@ mod tests {
     #[test]
     fn test_hottest_n() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lfu);
-        p.insert(blob(1), 100).unwrap();
-        p.insert(blob(2), 100).unwrap();
+        p.insert(blob(1), 100).test_unwrap();
+        p.insert(blob(2), 100).test_unwrap();
         for _ in 0..5 {
             p.touch(&blob(2));
         }
@@ -335,8 +337,8 @@ mod tests {
     #[test]
     fn test_coldest_n() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Lfu);
-        p.insert(blob(1), 100).unwrap();
-        p.insert(blob(2), 100).unwrap();
+        p.insert(blob(1), 100).test_unwrap();
+        p.insert(blob(2), 100).test_unwrap();
         for _ in 0..5 {
             p.touch(&blob(2));
         }

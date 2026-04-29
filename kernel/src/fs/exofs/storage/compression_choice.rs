@@ -286,6 +286,8 @@ impl CompressionPolicy {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -345,7 +347,7 @@ mod tests {
     #[test]
     fn test_compression_type_roundtrip() {
         for v in [0u8, 1, 2] {
-            let ct = CompressionType::from_u8(v).unwrap();
+            let ct = CompressionType::from_u8(v).test_unwrap();
             assert_eq!(ct.to_u8(), v);
         }
         assert!(CompressionType::from_u8(99).is_err());

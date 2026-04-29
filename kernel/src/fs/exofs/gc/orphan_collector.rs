@@ -323,6 +323,8 @@ pub static ORPHAN_COLLECTOR: OrphanCollector = OrphanCollector::new();
 // ==============================================================================
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::{BlobId, ObjectId};
@@ -346,7 +348,7 @@ mod tests {
     fn test_empty_scan_no_objects() {
         let collector = OrphanCollector::new();
         let scan = EpochScanSnapshot::empty();
-        let result = collector.collect_orphans(&scan, EpochId(5)).unwrap();
+        let result = collector.collect_orphans(&scan, EpochId(5)).test_unwrap();
         assert_eq!(result.objects_analyzed, 0);
         assert_eq!(result.objects_orphaned, 0);
     }

@@ -424,6 +424,8 @@ pub fn sys_exofs_object_set_meta(args_ptr: u64, cap_token: u64) -> i64 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -436,9 +438,9 @@ mod tests {
     #[test]
     fn test_meta_set_get() {
         let id = mk_blob(b"/meta/setget");
-        meta_set(id, b"author", b"alice").unwrap();
+        meta_set(id, b"author", b"alice").test_unwrap();
         let mut out: Vec<u8> = Vec::new();
-        let n = meta_get(id, b"author", &mut out).unwrap();
+        let n = meta_get(id, b"author", &mut out).test_unwrap();
         assert_eq!(n, 5);
         assert_eq!(&out, b"alice");
     }
@@ -446,18 +448,18 @@ mod tests {
     #[test]
     fn test_meta_overwrite() {
         let id = mk_blob(b"/meta/overwrite");
-        meta_set(id, b"x", b"1").unwrap();
-        meta_set(id, b"x", b"2").unwrap();
+        meta_set(id, b"x", b"1").test_unwrap();
+        meta_set(id, b"x", b"2").test_unwrap();
         let mut out: Vec<u8> = Vec::new();
-        meta_get(id, b"x", &mut out).unwrap();
+        meta_get(id, b"x", &mut out).test_unwrap();
         assert_eq!(&out, b"2");
     }
 
     #[test]
     fn test_meta_delete() {
         let id = mk_blob(b"/meta/del");
-        meta_set(id, b"k", b"v").unwrap();
-        meta_delete(id, b"k").unwrap();
+        meta_set(id, b"k", b"v").test_unwrap();
+        meta_delete(id, b"k").test_unwrap();
         let mut out: Vec<u8> = Vec::new();
         assert!(meta_get(id, b"k", &mut out).is_err());
     }
@@ -465,9 +467,9 @@ mod tests {
     #[test]
     fn test_meta_clear() {
         let id = mk_blob(b"/meta/clear");
-        meta_set(id, b"a", b"1").unwrap();
-        meta_set(id, b"b", b"2").unwrap();
-        meta_clear(id).unwrap();
+        meta_set(id, b"a", b"1").test_unwrap();
+        meta_set(id, b"b", b"2").test_unwrap();
+        meta_clear(id).test_unwrap();
         let mut out: Vec<u8> = Vec::new();
         assert!(meta_get(id, b"a", &mut out).is_err());
     }
@@ -481,7 +483,7 @@ mod tests {
 
     #[test]
     fn test_meta_entry_new_ok() {
-        let e = MetaEntry::new(b"key", b"value").unwrap();
+        let e = MetaEntry::new(b"key", b"value").test_unwrap();
         assert_eq!(e.key_len, 3);
         assert_eq!(e.value_len, 5);
     }
@@ -493,7 +495,7 @@ mod tests {
 
     #[test]
     fn test_meta_entry_key_eq() {
-        let e = MetaEntry::new(b"hello", b"world").unwrap();
+        let e = MetaEntry::new(b"hello", b"world").test_unwrap();
         assert!(e.key_eq(b"hello"));
         assert!(!e.key_eq(b"HELLO"));
     }
@@ -501,11 +503,11 @@ mod tests {
     #[test]
     fn test_serialize_deserialize_roundtrip() {
         let entries = [
-            MetaEntry::new(b"k1", b"v1").unwrap(),
-            MetaEntry::new(b"k2", b"v2").unwrap(),
+            MetaEntry::new(b"k1", b"v1").test_unwrap(),
+            MetaEntry::new(b"k2", b"v2").test_unwrap(),
         ];
-        let raw = serialize_entries(&entries).unwrap();
-        let back = deserialize_entries(&raw).unwrap();
+        let raw = serialize_entries(&entries).test_unwrap();
+        let back = deserialize_entries(&raw).test_unwrap();
         assert_eq!(back.len(), 2);
         assert!(back[0].key_eq(b"k1"));
     }
@@ -513,10 +515,10 @@ mod tests {
     #[test]
     fn test_meta_multiple_keys() {
         let id = mk_blob(b"/meta/multi");
-        meta_set(id, b"name", b"exofs").unwrap();
-        meta_set(id, b"version", b"42").unwrap();
+        meta_set(id, b"name", b"exofs").test_unwrap();
+        meta_set(id, b"version", b"42").test_unwrap();
         let mut out: Vec<u8> = Vec::new();
-        meta_get(id, b"version", &mut out).unwrap();
+        meta_get(id, b"version", &mut out).test_unwrap();
         assert_eq!(&out, b"42");
     }
 

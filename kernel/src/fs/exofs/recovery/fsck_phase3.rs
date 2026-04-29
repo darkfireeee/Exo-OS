@@ -693,6 +693,8 @@ impl FsckPhase3 {
 // ── Tests unitaires ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -734,7 +736,7 @@ mod tests {
         let bytes = hdr.to_bytes();
         let parsed = SnapshotHeaderDisk::from_bytes(&bytes);
         assert!(parsed.is_ok(), "from_bytes doit réussir après build");
-        assert_eq!(parsed.unwrap().snapshot_id, 42);
+        assert_eq!(parsed.test_unwrap().snapshot_id, 42);
     }
 
     /// Flag `is_deleted`.
@@ -828,7 +830,7 @@ mod tests {
     fn test_context_register() {
         let mut ctx = Phase3Context::new();
         ctx.register(1, 0x4000, 0, 0)
-            .expect("register doit reussir");
+            .test_expect("register doit reussir");
         assert!(ctx.contains(1));
         assert_eq!(ctx.depth_of(1), Some(0));
     }
@@ -837,10 +839,10 @@ mod tests {
     #[test]
     fn test_context_add_child() {
         let mut ctx = Phase3Context::new();
-        ctx.register(10, 0x5000, 0, 0).unwrap();
-        ctx.add_child(10).unwrap();
-        ctx.add_child(10).unwrap();
-        assert_eq!(*ctx.children.get(&10).unwrap(), 2);
+        ctx.register(10, 0x5000, 0, 0).test_unwrap();
+        ctx.add_child(10).test_unwrap();
+        ctx.add_child(10).test_unwrap();
+        assert_eq!(*ctx.children.get(&10).test_unwrap(), 2);
     }
 
     /// Options par défaut.

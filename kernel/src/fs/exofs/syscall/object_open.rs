@@ -6,11 +6,11 @@
 //! OOM-02   : try_reserve avant push.
 
 use super::object_fd::{open_flags, OBJECT_TABLE};
+use super::object_store;
 use super::validation::{
     exofs_err_to_errno, read_user_path_heap, validate_open_flags, verify_cap, CapabilityType,
     EFAULT,
 };
-use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
@@ -60,23 +60,39 @@ impl OpenArgs {
 /// Ouvre un objet ExoFS identifié par son chemin.
 ///
 /// Retourne le fd (u32) ou une ExofsError.
-fn open_object(path_bytes: &[u8], path_len: usize, args: &OpenArgs) -> ExofsResult<u32> {
+pub(crate) fn open_object(path_bytes: &[u8], path_len: usize, args: &OpenArgs) -> ExofsResult<u32> {
     // Valider les flags.
     if args.flags & !0x07FF != 0 {
         return Err(ExofsError::InvalidArgument);
     }
+    validate_flags_combination(args.flags)?;
 
-    // Dériver le BlobId du chemin (Blake3 du chemin canonique).
-    let blob_id = BlobId::from_bytes_blake3(&path_bytes[..path_len]);
+    let resolved = super::path_resolve::resolve_path_to_blob(&path_bytes[..path_len], 0)?;
+    let blob_id = crate::fs::exofs::core::types::BlobId(resolved.blob_id);
+    let persisted_size = if args.size_hint != 0 {
+        args.size_hint
+    } else {
+        object_store::persisted_size(&blob_id).unwrap_or(0)
+    };
 
     // Ouvrir via la table de fd.
-    OBJECT_TABLE.open(
+    let fd = OBJECT_TABLE.open(
         blob_id,
         args.flags,
-        args.size_hint,
+        persisted_size,
         args.epoch_id,
         args.owner_uid,
-    )
+    )?;
+
+    if args.flags & open_flags::O_TRUNC != 0 {
+        if let Err(err) = super::object_write::truncate_blob(blob_id, 0) {
+            OBJECT_TABLE.close(fd);
+            return Err(err);
+        }
+        OBJECT_TABLE.set_size(fd, 0)?;
+    }
+
+    Ok(fd)
 }
 
 /// Lit les OpenArgs depuis userspace (ou retourne les valeurs par défaut si
@@ -175,13 +191,15 @@ pub use super::object_fd::open_flags as flags;
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn make_path(s: &str) -> Vec<u8> {
         let b = s.as_bytes();
         let mut v = Vec::new();
-        v.try_reserve(b.len().saturating_add(1)).unwrap();
+        v.try_reserve(b.len().saturating_add(1)).test_unwrap();
         let mut i = 0usize;
         while i < b.len() {
             v.push(b[i]);
@@ -198,7 +216,7 @@ mod tests {
             ..OpenArgs::defaults()
         };
         let path = make_path("/test/file1");
-        let fd = open_object(&path, path.len() - 1, &args).unwrap();
+        let fd = open_object(&path, path.len() - 1, &args).test_unwrap();
         assert!(fd >= super::super::object_fd::FD_RESERVED);
         OBJECT_TABLE.close(fd);
     }
@@ -210,7 +228,7 @@ mod tests {
             ..OpenArgs::defaults()
         };
         let path = make_path("/test/rw");
-        let fd = open_object(&path, path.len() - 1, &args).unwrap();
+        let fd = open_object(&path, path.len() - 1, &args).test_unwrap();
         assert!(OBJECT_TABLE.check_readable(fd).is_ok());
         assert!(OBJECT_TABLE.check_writable(fd).is_ok());
         OBJECT_TABLE.close(fd);
@@ -223,7 +241,7 @@ mod tests {
             ..OpenArgs::defaults()
         };
         let path = make_path("/w/only");
-        let fd = open_object(&path, path.len() - 1, &args).unwrap();
+        let fd = open_object(&path, path.len() - 1, &args).test_unwrap();
         assert!(OBJECT_TABLE.check_readable(fd).is_err());
         assert!(OBJECT_TABLE.check_writable(fd).is_ok());
         OBJECT_TABLE.close(fd);
@@ -244,8 +262,8 @@ mod tests {
         let args = OpenArgs::defaults();
         let p1 = make_path("/file/alpha");
         let p2 = make_path("/file/beta");
-        let fd1 = open_object(&p1, p1.len() - 1, &args).unwrap();
-        let fd2 = open_object(&p2, p2.len() - 1, &args).unwrap();
+        let fd1 = open_object(&p1, p1.len() - 1, &args).test_unwrap();
+        let fd2 = open_object(&p2, p2.len() - 1, &args).test_unwrap();
         assert_ne!(fd1, fd2);
         OBJECT_TABLE.close(fd1);
         OBJECT_TABLE.close(fd2);
@@ -256,10 +274,10 @@ mod tests {
         let args = OpenArgs::defaults();
         let p1 = make_path("/unique/path/a");
         let p2 = make_path("/unique/path/a");
-        let fd1 = open_object(&p1, p1.len() - 1, &args).unwrap();
-        let fd2 = open_object(&p2, p2.len() - 1, &args).unwrap();
-        let b1 = OBJECT_TABLE.blob_id_of(fd1).unwrap();
-        let b2 = OBJECT_TABLE.blob_id_of(fd2).unwrap();
+        let fd1 = open_object(&p1, p1.len() - 1, &args).test_unwrap();
+        let fd2 = open_object(&p2, p2.len() - 1, &args).test_unwrap();
+        let b1 = OBJECT_TABLE.blob_id_of(fd1).test_unwrap();
+        let b2 = OBJECT_TABLE.blob_id_of(fd2).test_unwrap();
         assert_eq!(b1.0, b2.0);
         OBJECT_TABLE.close(fd1);
         OBJECT_TABLE.close(fd2);
@@ -278,8 +296,8 @@ mod tests {
             ..OpenArgs::defaults()
         };
         let path = make_path("/sized/blob");
-        let fd = open_object(&path, path.len() - 1, &args).unwrap();
-        let entry = OBJECT_TABLE.get(fd).unwrap();
+        let fd = open_object(&path, path.len() - 1, &args).test_unwrap();
+        let entry = OBJECT_TABLE.get(fd).test_unwrap();
         assert_eq!(entry.size, 4096);
         OBJECT_TABLE.close(fd);
     }
@@ -292,8 +310,8 @@ mod tests {
             ..OpenArgs::defaults()
         };
         let path = make_path("/epoch/42");
-        let fd = open_object(&path, path.len() - 1, &args).unwrap();
-        let entry = OBJECT_TABLE.get(fd).unwrap();
+        let fd = open_object(&path, path.len() - 1, &args).test_unwrap();
+        let entry = OBJECT_TABLE.get(fd).test_unwrap();
         assert_eq!(entry.epoch_id, 42);
         OBJECT_TABLE.close(fd);
     }
@@ -312,7 +330,7 @@ mod tests {
 
     #[test]
     fn test_read_open_args_fallback() {
-        let a = read_open_args(0, open_flags::O_WRONLY).unwrap();
+        let a = read_open_args(0, open_flags::O_WRONLY).test_unwrap();
         assert_eq!(a.flags, open_flags::O_WRONLY);
     }
 
@@ -321,7 +339,7 @@ mod tests {
         let before = OBJECT_TABLE.open_count();
         let args = OpenArgs::defaults();
         let path = make_path("/cnt/test");
-        let fd = open_object(&path, path.len() - 1, &args).unwrap();
+        let fd = open_object(&path, path.len() - 1, &args).test_unwrap();
         assert_eq!(OBJECT_TABLE.open_count(), before + 1);
         OBJECT_TABLE.close(fd);
         assert_eq!(OBJECT_TABLE.open_count(), before);
@@ -365,24 +383,15 @@ pub fn open_object_full(
     path_len: usize,
     args: &OpenArgs,
 ) -> ExofsResult<OpenResult> {
-    if args.flags & !0x07FF != 0 {
-        return Err(ExofsError::InvalidArgument);
-    }
-    let blob_id = BlobId::from_bytes_blake3(&path_bytes[..path_len]);
-    let fd = OBJECT_TABLE.open(
-        blob_id,
-        args.flags,
-        args.size_hint,
-        args.epoch_id,
-        args.owner_uid,
-    )?;
+    let fd = open_object(path_bytes, path_len, args)?;
+    let entry = OBJECT_TABLE.get(fd)?;
     Ok(OpenResult {
         fd,
         _pad: 0,
-        blob_id: *blob_id.as_bytes(),
-        size: args.size_hint,
-        epoch_id: args.epoch_id,
-        flags: args.flags,
+        blob_id: entry.blob_id.0,
+        size: entry.size,
+        epoch_id: entry.epoch_id,
+        flags: entry.flags,
         _pad2: 0,
         _reserved: [0u8; 8],
     })
@@ -449,7 +458,7 @@ mod tests_extended {
             ..OpenArgs::defaults()
         };
         let path = b"/full/result";
-        let r = open_object_full(path, path.len(), &args).unwrap();
+        let r = open_object_full(path, path.len(), &args).test_unwrap();
         assert!(r.fd >= super::super::object_fd::FD_RESERVED);
         assert_eq!(r.size, 512);
         assert_eq!(r.flags, open_flags::O_RDWR);

@@ -441,6 +441,8 @@ pub static CYCLE_DETECTOR: CycleDetector = CycleDetector::new();
 // ==============================================================================
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::BlobId;
@@ -454,14 +456,14 @@ mod tests {
     #[test]
     fn test_empty_graph_no_cycles() {
         let detector = CycleDetector::new();
-        let cycles = detector.detect_cycles(&[]).unwrap();
+        let cycles = detector.detect_cycles(&[]).test_unwrap();
         assert!(cycles.is_empty());
     }
 
     #[test]
     fn test_single_node_no_cycle() {
         let detector = CycleDetector::new();
-        let cycles = detector.detect_cycles(&[bid(1)]).unwrap();
+        let cycles = detector.detect_cycles(&[bid(1)]).test_unwrap();
         // Pas d'aretes = pas de cycle.
         assert!(cycles.is_empty());
     }

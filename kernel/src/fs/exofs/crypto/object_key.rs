@@ -283,82 +283,89 @@ mod tests {
     use super::super::volume_key::{VolumeId, VolumeKey};
     use super::*;
 
+    fn ok<T, E: core::fmt::Debug>(res: Result<T, E>) -> T {
+        match res {
+            Ok(value) => value,
+            Err(err) => panic!("unexpected error: {err:?}"),
+        }
+    }
+
     fn vk() -> VolumeKey {
-        VolumeKey::generate(VolumeId(1)).unwrap()
+        ok(VolumeKey::generate(VolumeId(1)))
     }
 
     #[test]
     fn test_derive_ok() {
         let vk = vk();
-        let ok = ObjectKey::derive(&vk, BlobKeyId(1)).unwrap();
-        assert_eq!(ok.raw_bytes().len(), 32);
+        let object_key = ok(ObjectKey::derive(&vk, BlobKeyId(1)));
+        assert_eq!(object_key.raw_bytes().len(), 32);
     }
 
     #[test]
     fn test_different_blobs_different_keys() {
         let vk = vk();
-        let ok1 = ObjectKey::derive(&vk, BlobKeyId(1)).unwrap();
-        let ok2 = ObjectKey::derive(&vk, BlobKeyId(2)).unwrap();
-        assert_ne!(ok1.raw_bytes(), ok2.raw_bytes());
+        let object_key_1 = ok(ObjectKey::derive(&vk, BlobKeyId(1)));
+        let object_key_2 = ok(ObjectKey::derive(&vk, BlobKeyId(2)));
+        assert_ne!(object_key_1.raw_bytes(), object_key_2.raw_bytes());
     }
 
     #[test]
     fn test_ephemeral_generation() {
-        let ok = ObjectKey::generate_ephemeral(BlobKeyId(99)).unwrap();
-        assert!(!ok.is_revoked());
+        let object_key = ok(ObjectKey::generate_ephemeral(BlobKeyId(99)));
+        assert!(!object_key.is_revoked());
     }
 
     #[test]
     fn test_record_use_increments() {
         let vk = vk();
-        let mut ok = ObjectKey::derive(&vk, BlobKeyId(1)).unwrap();
-        ok.record_use().unwrap();
-        ok.record_use().unwrap();
-        assert_eq!(ok.use_count(), 2);
+        let mut object_key = ok(ObjectKey::derive(&vk, BlobKeyId(1)));
+        ok(object_key.record_use());
+        ok(object_key.record_use());
+        assert_eq!(object_key.use_count(), 2);
     }
 
     #[test]
     fn test_revoke_zeroes_key() {
         let vk = vk();
-        let mut ok = ObjectKey::derive(&vk, BlobKeyId(1)).unwrap();
-        ok.revoke();
-        assert!(ok.is_revoked());
-        assert_eq!(*ok.raw_bytes(), [0u8; 32]);
+        let mut object_key = ok(ObjectKey::derive(&vk, BlobKeyId(1)));
+        object_key.revoke();
+        assert!(object_key.is_revoked());
+        assert_eq!(*object_key.raw_bytes(), [0u8; 32]);
     }
 
     #[test]
     fn test_record_use_after_revoke_fails() {
         let vk = vk();
-        let mut ok = ObjectKey::derive(&vk, BlobKeyId(1)).unwrap();
-        ok.revoke();
-        assert!(ok.record_use().is_err());
+        let mut object_key = ok(ObjectKey::derive(&vk, BlobKeyId(1)));
+        object_key.revoke();
+        assert!(object_key.record_use().is_err());
     }
 
     #[test]
     fn test_subkey_data_ok() {
         let vk = vk();
-        let ok = ObjectKey::derive(&vk, BlobKeyId(1)).unwrap();
-        let dk = ok.data_key().unwrap();
-        assert_eq!(dk.len(), 32);
+        let object_key = ok(ObjectKey::derive(&vk, BlobKeyId(1)));
+        let data_key = ok(object_key.data_key());
+        assert_eq!(data_key.len(), 32);
     }
 
     #[test]
     fn test_subkey_integrity_different() {
         let vk = vk();
-        let ok = ObjectKey::derive(&vk, BlobKeyId(1)).unwrap();
-        let dk = ok.data_key().unwrap();
-        let ik = ok.integrity_key().unwrap();
-        assert_ne!(dk, ik);
+        let object_key = ok(ObjectKey::derive(&vk, BlobKeyId(1)));
+        let data_key = ok(object_key.data_key());
+        let integrity_key = ok(object_key.integrity_key());
+        assert_ne!(data_key, integrity_key);
     }
 
     #[test]
     fn test_pool_insert_revoke() {
         let vk = vk();
         let mut pool = ObjectKeyPool::new();
-        let ok = ObjectKey::derive(&vk, BlobKeyId(5)).unwrap();
-        pool.insert(ok).unwrap();
+        let object_key = ok(ObjectKey::derive(&vk, BlobKeyId(5)));
+        ok(pool.insert(object_key));
         assert_eq!(pool.active_count(), 1);
-        pool.revoke(BlobKeyId(5)).unwrap();
+        ok(pool.revoke(BlobKeyId(5)));
         assert_eq!(pool.active_count(), 0);
         assert_eq!(pool.revoked_count(), 1);
         assert!(pool.is_revoked(BlobKeyId(5)));
@@ -367,8 +374,8 @@ mod tests {
     #[test]
     fn test_pool_double_revoke_ok() {
         let mut pool = ObjectKeyPool::new();
-        pool.revoke(BlobKeyId(99)).unwrap();
-        pool.revoke(BlobKeyId(99)).unwrap(); // idempotent
+        ok(pool.revoke(BlobKeyId(99)));
+        ok(pool.revoke(BlobKeyId(99))); // idempotent
         assert_eq!(pool.revoked_count(), 1);
     }
 
@@ -469,46 +476,53 @@ mod rotation_tests {
     use super::super::volume_key::{VolumeId, VolumeKey};
     use super::*;
 
+    fn ok<T, E: core::fmt::Debug>(res: Result<T, E>) -> T {
+        match res {
+            Ok(value) => value,
+            Err(err) => panic!("unexpected error: {err:?}"),
+        }
+    }
+
     fn vk() -> VolumeKey {
-        VolumeKey::generate(VolumeId(2)).unwrap()
+        ok(VolumeKey::generate(VolumeId(2)))
     }
 
     #[test]
     fn test_policy_never() {
         let vk = vk();
-        let mut ok = ObjectKey::derive(&vk, BlobKeyId(1)).unwrap();
-        ok.record_use().unwrap();
-        assert!(!RotationPolicy::Never.should_rotate(&ok));
+        let mut object_key = ok(ObjectKey::derive(&vk, BlobKeyId(1)));
+        ok(object_key.record_use());
+        assert!(!RotationPolicy::Never.should_rotate(&object_key));
     }
 
     #[test]
     fn test_policy_once() {
         let vk = vk();
-        let mut ok = ObjectKey::derive(&vk, BlobKeyId(1)).unwrap();
-        assert!(!RotationPolicy::Once.should_rotate(&ok));
-        ok.record_use().unwrap();
-        assert!(RotationPolicy::Once.should_rotate(&ok));
+        let mut object_key = ok(ObjectKey::derive(&vk, BlobKeyId(1)));
+        assert!(!RotationPolicy::Once.should_rotate(&object_key));
+        ok(object_key.record_use());
+        assert!(RotationPolicy::Once.should_rotate(&object_key));
     }
 
     #[test]
     fn test_policy_after_n() {
         let vk = vk();
-        let mut ok = ObjectKey::derive(&vk, BlobKeyId(1)).unwrap();
+        let mut object_key = ok(ObjectKey::derive(&vk, BlobKeyId(1)));
         for _ in 0..4 {
-            ok.record_use().unwrap();
+            ok(object_key.record_use());
         }
-        assert!(!RotationPolicy::AfterNUses(5).should_rotate(&ok));
-        ok.record_use().unwrap();
-        assert!(RotationPolicy::AfterNUses(5).should_rotate(&ok));
+        assert!(!RotationPolicy::AfterNUses(5).should_rotate(&object_key));
+        ok(object_key.record_use());
+        assert!(RotationPolicy::AfterNUses(5).should_rotate(&object_key));
     }
 
     #[test]
     fn test_rotator_evaluate_marks_pending() {
         let vk = vk();
-        let mut ok = ObjectKey::derive(&vk, BlobKeyId(10)).unwrap();
-        ok.record_use().unwrap();
+        let mut object_key = ok(ObjectKey::derive(&vk, BlobKeyId(10)));
+        ok(object_key.record_use());
         let mut rot = ObjectKeyRotator::new(RotationPolicy::Once);
-        let needs = rot.evaluate(&ok).unwrap();
+        let needs = ok(rot.evaluate(&object_key));
         assert!(needs);
         assert_eq!(rot.pending_count(), 1);
     }
@@ -516,11 +530,11 @@ mod rotation_tests {
     #[test]
     fn test_rotator_mark_rotated() {
         let vk = vk();
-        let mut ok = ObjectKey::derive(&vk, BlobKeyId(10)).unwrap();
-        ok.record_use().unwrap();
+        let mut object_key = ok(ObjectKey::derive(&vk, BlobKeyId(10)));
+        ok(object_key.record_use());
         let mut rot = ObjectKeyRotator::new(RotationPolicy::Once);
-        rot.evaluate(&ok).unwrap();
-        rot.mark_rotated(BlobKeyId(10)).unwrap();
+        ok(rot.evaluate(&object_key));
+        ok(rot.mark_rotated(BlobKeyId(10)));
         assert_eq!(rot.pending_count(), 0);
         assert_eq!(rot.rotated_ids().len(), 1);
     }

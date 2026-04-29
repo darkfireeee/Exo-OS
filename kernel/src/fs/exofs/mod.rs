@@ -26,6 +26,8 @@ pub mod syscall;
 
 /// Tests unitaires, intégration, fuzz (spec 2.0)
 #[cfg(test)]
+pub mod test_support;
+#[cfg(test)]
 pub mod tests;
 
 use crate::fs::exofs::core::error::ExofsError;

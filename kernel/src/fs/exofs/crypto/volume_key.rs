@@ -370,46 +370,53 @@ mod tests {
     use super::*;
     // use super::super::master_key::MasterKey;
 
+    fn ok<T, E: core::fmt::Debug>(res: Result<T, E>) -> T {
+        match res {
+            Ok(value) => value,
+            Err(err) => panic!("unexpected error: {err:?}"),
+        }
+    }
+
     fn mk() -> MasterKey {
-        MasterKey::generate().unwrap()
+        ok(MasterKey::generate())
     }
 
     #[test]
     fn test_generate_ok() {
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
         assert_eq!(vk.raw_bytes().len(), 32);
     }
 
     #[test]
     fn test_derive_from_master_ok() {
         let mk = mk();
-        let vk = VolumeKey::derive_from_master(&mk, VolumeId(42)).unwrap();
+        let vk = ok(VolumeKey::derive_from_master(&mk, VolumeId(42)));
         assert_eq!(vk.raw_bytes().len(), 32);
     }
 
     #[test]
     fn test_derive_from_master_different_vols() {
         let mk = mk();
-        let vk1 = VolumeKey::derive_from_master(&mk, VolumeId(1)).unwrap();
-        let vk2 = VolumeKey::derive_from_master(&mk, VolumeId(2)).unwrap();
+        let vk1 = ok(VolumeKey::derive_from_master(&mk, VolumeId(1)));
+        let vk2 = ok(VolumeKey::derive_from_master(&mk, VolumeId(2)));
         assert_ne!(vk1.raw_bytes(), vk2.raw_bytes());
     }
 
     #[test]
     fn test_wrap_unwrap_roundtrip() {
         let mk = mk();
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
         let orig = *vk.raw_bytes();
-        let wrap = vk.wrap(&mk).unwrap();
-        let vk2 = VolumeKey::unwrap(&wrap, &mk).unwrap();
+        let wrap = ok(vk.wrap(&mk));
+        let vk2 = ok(VolumeKey::unwrap(&wrap, &mk));
         assert_eq!(*vk2.raw_bytes(), orig);
     }
 
     #[test]
     fn test_wrap_wrong_magic_fails() {
         let mk = mk();
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
-        let mut wrap = vk.wrap(&mk).unwrap();
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
+        let mut wrap = ok(vk.wrap(&mk));
         wrap.magic = 0xDEAD;
         assert!(VolumeKey::unwrap(&wrap, &mk).is_err());
     }
@@ -417,8 +424,8 @@ mod tests {
     #[test]
     fn test_wrap_tampered_ct_fails() {
         let mk = mk();
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
-        let mut wrap = vk.wrap(&mk).unwrap();
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
+        let mut wrap = ok(vk.wrap(&mk));
         wrap.ct[0] ^= 0xFF;
         assert!(VolumeKey::unwrap(&wrap, &mk).is_err());
     }
@@ -432,33 +439,33 @@ mod tests {
 
     #[test]
     fn test_derive_object_key_ok() {
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
-        let ok = vk.derive_object_key(99).unwrap();
-        assert_eq!(ok.len(), 32);
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
+        let object_key = ok(vk.derive_object_key(99));
+        assert_eq!(object_key.len(), 32);
     }
 
     #[test]
     fn test_derive_object_key_different_blobs() {
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
-        let ok1 = vk.derive_object_key(1).unwrap();
-        let ok2 = vk.derive_object_key(2).unwrap();
-        assert_ne!(ok1, ok2);
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
+        let object_key_1 = ok(vk.derive_object_key(1));
+        let object_key_2 = ok(vk.derive_object_key(2));
+        assert_ne!(object_key_1, object_key_2);
     }
 
     #[test]
     fn test_derive_batch_count() {
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
-        let batch = vk.derive_object_keys_batch(&[1, 2, 3, 4]).unwrap();
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
+        let batch = ok(vk.derive_object_keys_batch(&[1, 2, 3, 4]));
         assert_eq!(batch.len(), 4);
     }
 
     #[test]
     fn test_serialise_roundtrip() {
         let mk = mk();
-        let vk = VolumeKey::generate(VolumeId(7)).unwrap();
-        let wrap = vk.wrap(&mk).unwrap();
+        let vk = ok(VolumeKey::generate(VolumeId(7)));
+        let wrap = ok(vk.wrap(&mk));
         let b = wrap.to_bytes();
-        let restored = WrappedVolumeKey::from_bytes(&b).unwrap();
+        let restored = ok(WrappedVolumeKey::from_bytes(&b));
         assert_eq!(restored.magic, VOLUME_KEY_MAGIC);
     }
 }
@@ -540,50 +547,57 @@ mod cache_tests {
     use super::*;
     // use super::super::master_key::MasterKey;
 
+    fn ok<T, E: core::fmt::Debug>(res: Result<T, E>) -> T {
+        match res {
+            Ok(value) => value,
+            Err(err) => panic!("unexpected error: {err:?}"),
+        }
+    }
+
     #[test]
     fn test_cache_basic() {
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
-        let mut c = ObjectKeyCache::new(4).unwrap();
-        let k1 = c.get_or_derive(&vk, 10).unwrap();
-        let k2 = c.get_or_derive(&vk, 10).unwrap(); // depuis cache
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
+        let mut c = ok(ObjectKeyCache::new(4));
+        let k1 = ok(c.get_or_derive(&vk, 10));
+        let k2 = ok(c.get_or_derive(&vk, 10)); // depuis cache
         assert_eq!(k1, k2);
         assert_eq!(c.len(), 1);
     }
 
     #[test]
     fn test_cache_eviction() {
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
-        let mut c = ObjectKeyCache::new(2).unwrap();
-        c.get_or_derive(&vk, 1).unwrap();
-        c.get_or_derive(&vk, 2).unwrap();
-        c.get_or_derive(&vk, 3).unwrap(); // éviction de 1
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
+        let mut c = ok(ObjectKeyCache::new(2));
+        ok(c.get_or_derive(&vk, 1));
+        ok(c.get_or_derive(&vk, 2));
+        ok(c.get_or_derive(&vk, 3)); // éviction de 1
         assert_eq!(c.len(), 2);
     }
 
     #[test]
     fn test_cache_invalidate() {
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
-        let mut c = ObjectKeyCache::new(4).unwrap();
-        c.get_or_derive(&vk, 5).unwrap();
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
+        let mut c = ok(ObjectKeyCache::new(4));
+        ok(c.get_or_derive(&vk, 5));
         c.invalidate(5);
         assert!(c.is_empty());
     }
 
     #[test]
     fn test_cache_clear() {
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
-        let mut c = ObjectKeyCache::new(4).unwrap();
-        c.get_or_derive(&vk, 1).unwrap();
-        c.get_or_derive(&vk, 2).unwrap();
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
+        let mut c = ok(ObjectKeyCache::new(4));
+        ok(c.get_or_derive(&vk, 1));
+        ok(c.get_or_derive(&vk, 2));
         c.clear();
         assert!(c.is_empty());
     }
 
     #[test]
     fn test_cache_zero_capacity_no_cache() {
-        let vk = VolumeKey::generate(VolumeId(1)).unwrap();
-        let mut c = ObjectKeyCache::new(0).unwrap();
-        c.get_or_derive(&vk, 1).unwrap();
+        let vk = ok(VolumeKey::generate(VolumeId(1)));
+        let mut c = ok(ObjectKeyCache::new(0));
+        ok(c.get_or_derive(&vk, 1));
         assert!(c.is_empty()); // pas de mise en cache
     }
 }

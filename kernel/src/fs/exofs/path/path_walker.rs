@@ -350,6 +350,8 @@ pub fn walk_parent<B: WalkerBackend>(
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -393,7 +395,7 @@ mod tests {
     #[test]
     fn test_walk_simple() {
         let b = FlatBackend { root: oid(1) };
-        let res = walk_path(oid(1), b"/bin", &b).unwrap();
+        let res = walk_path(oid(1), b"/bin", &b).test_unwrap();
         assert_eq!(res.0[0], 2);
     }
 
@@ -405,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_basename() {
-        let c = basename(b"/a/b/filename").unwrap();
+        let c = basename(b"/a/b/filename").test_unwrap();
         assert_eq!(c.as_bytes(), b"filename");
     }
 

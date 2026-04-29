@@ -516,6 +516,8 @@ impl LayoutMap {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -532,7 +534,7 @@ mod tests {
     #[test]
     fn test_heap_zone() {
         let disk = 64 * 1024 * 1024u64;
-        let hz = heap_zone(disk).unwrap();
+        let hz = heap_zone(disk).test_unwrap();
         assert_eq!(hz.start.0, HEAP_START_OFFSET);
         // La fin doit être à disk - 8 KB (epoch_slot_c).
         assert_eq!(hz.start.0 + hz.len, disk - EPOCH_SLOT_C_FROM_END);
@@ -540,20 +542,20 @@ mod tests {
 
     #[test]
     fn test_align_up_4k() {
-        let off = align_up(DiskOffset(4097), 4096).unwrap();
+        let off = align_up(DiskOffset(4097), 4096).test_unwrap();
         assert_eq!(off.0, 8192);
     }
 
     #[test]
     fn test_round_up_block_size() {
-        assert_eq!(round_up_block_size(1).unwrap(), 4096);
-        assert_eq!(round_up_block_size(4096).unwrap(), 4096);
-        assert_eq!(round_up_block_size(4097).unwrap(), 8192);
+        assert_eq!(round_up_block_size(1).test_unwrap(), 4096);
+        assert_eq!(round_up_block_size(4096).test_unwrap(), 4096);
+        assert_eq!(round_up_block_size(4097).test_unwrap(), 8192);
     }
 
     #[test]
     fn test_layout_map_new() {
-        let lm = LayoutMap::new(64 * 1024 * 1024).unwrap();
+        let lm = LayoutMap::new(64 * 1024 * 1024).test_unwrap();
         assert!(lm.heap_blocks > 0);
         assert!(lm.is_in_heap(DiskOffset(HEAP_START_OFFSET)));
         assert!(!lm.is_in_heap(DiskOffset(0)));
@@ -561,9 +563,9 @@ mod tests {
 
     #[test]
     fn test_zone_overlaps() {
-        let z1 = DiskZone::new(DiskOffset(0), 4096).unwrap();
-        let z2 = DiskZone::new(DiskOffset(2048), 4096).unwrap();
-        let z3 = DiskZone::new(DiskOffset(8192), 4096).unwrap();
+        let z1 = DiskZone::new(DiskOffset(0), 4096).test_unwrap();
+        let z2 = DiskZone::new(DiskOffset(2048), 4096).test_unwrap();
+        let z3 = DiskZone::new(DiskOffset(8192), 4096).test_unwrap();
         assert!(z1.overlaps(&z2));
         assert!(!z1.overlaps(&z3));
     }
@@ -571,7 +573,7 @@ mod tests {
     #[test]
     fn test_superblock_mirrors() {
         let disk = 32 * 1024 * 1024u64;
-        let mirrors = superblock_mirror_offsets(disk).unwrap();
+        let mirrors = superblock_mirror_offsets(disk).test_unwrap();
         assert_eq!(mirrors[0].0, 0);
         assert_eq!(mirrors[1].0, SB_MIRROR_12K_OFFSET);
         assert_eq!(mirrors[2].0, disk - SB_MIRROR_END_FROM_END);

@@ -328,6 +328,8 @@ fn zstd_compress(input: &[u8]) -> ExofsResult<Vec<u8>> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -339,9 +341,9 @@ mod tests {
     fn test_compress_none() {
         let w = CompressWriter::none();
         let d = make_data(1024, 0xAB);
-        let r = w.compress(&d).unwrap();
+        let r = w.compress(&d).test_unwrap();
         // En mode None, les données doivent être intactes (headers mis à part).
-        let hdr = CompressedBlockHeader::from_bytes(&r.data).unwrap();
+        let hdr = CompressedBlockHeader::from_bytes(&r.data).test_unwrap();
         assert_eq!(hdr.original_size as usize, d.len());
         assert_eq!(r.algo, CompressionType::None);
     }
@@ -350,11 +352,11 @@ mod tests {
     fn test_header_roundtrip() {
         let hdr = CompressedBlockHeader::new(CompressionType::Lz4, 4096, 2048);
         let raw = hdr.to_bytes();
-        let hdr2 = CompressedBlockHeader::from_bytes(&raw).unwrap();
+        let hdr2 = CompressedBlockHeader::from_bytes(&raw).test_unwrap();
         assert_eq!(hdr2.original_size, 4096);
         assert_eq!(hdr2.compressed_size, 2048);
         assert_eq!(
-            CompressionType::from_u8(hdr2.algo).unwrap(),
+            CompressionType::from_u8(hdr2.algo).test_unwrap(),
             CompressionType::Lz4
         );
     }
@@ -363,8 +365,8 @@ mod tests {
     fn test_compress_lz4_produces_header() {
         let w = CompressWriter::lz4();
         let d = make_data(2048, 0x00);
-        let r = w.compress(&d).unwrap();
-        let hdr = CompressedBlockHeader::from_bytes(&r.data).unwrap();
+        let r = w.compress(&d).test_unwrap();
+        let hdr = CompressedBlockHeader::from_bytes(&r.data).test_unwrap();
         assert_eq!(hdr.magic, COMPRESSED_BLOCK_MAGIC);
         assert_eq!(hdr.original_size, 2048);
     }
@@ -373,8 +375,8 @@ mod tests {
     fn test_compress_zstd_produces_header() {
         let w = CompressWriter::zstd();
         let d = make_data(4096, 0x42);
-        let r = w.compress(&d).unwrap();
-        let hdr = CompressedBlockHeader::from_bytes(&r.data).unwrap();
+        let r = w.compress(&d).test_unwrap();
+        let hdr = CompressedBlockHeader::from_bytes(&r.data).test_unwrap();
         assert_eq!(hdr.original_size, 4096);
     }
 
@@ -382,7 +384,7 @@ mod tests {
     fn test_compress_small_input_still_works() {
         let w = CompressWriter::lz4();
         let d = b"hi".to_vec();
-        let r = w.compress(&d).unwrap();
+        let r = w.compress(&d).test_unwrap();
         assert!(!r.data.is_empty());
     }
 }

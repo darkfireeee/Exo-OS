@@ -484,6 +484,8 @@ pub static NUMA_MIGRATION: NumaMigration = NumaMigration::new_const();
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -599,7 +601,7 @@ mod tests {
             imbalance_trigger_ppt: 100,
             auto_enabled: true,
         };
-        m.configure(p).unwrap();
+        m.configure(p).test_unwrap();
         assert_eq!(m.policy().max_concurrent, 2);
     }
 
@@ -618,7 +620,7 @@ mod tests {
     #[test]
     fn test_rebalance_empty_list() {
         let m = NumaMigration::new_const();
-        let results = m.rebalance(&MockLocator, &[], 0).unwrap();
+        let results = m.rebalance(&MockLocator, &[], 0).test_unwrap();
         assert!(results.is_empty());
     }
 
@@ -626,7 +628,7 @@ mod tests {
     fn test_rebalance_single_blob() {
         let m = NumaMigration::new_const();
         let blobs = [zero_blob()];
-        let results = m.rebalance(&MockLocator, &blobs, 0).unwrap();
+        let results = m.rebalance(&MockLocator, &blobs, 0).test_unwrap();
         assert_eq!(results.len(), 1);
     }
 

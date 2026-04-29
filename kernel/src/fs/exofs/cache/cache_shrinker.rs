@@ -178,6 +178,8 @@ impl CacheShrinker {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -202,14 +204,14 @@ mod tests {
     #[test]
     fn test_register_and_count() {
         let mut s = CacheShrinker::new_const();
-        s.register(make_entry("blob", 1024, 0)).unwrap();
+        s.register(make_entry("blob", 1024, 0)).test_unwrap();
         assert_eq!(s.n_caches(), 1);
     }
 
     #[test]
     fn test_shrink_to_target_exact() {
         let mut s = CacheShrinker::new_const();
-        s.register(make_entry("a", 2048, 0)).unwrap();
+        s.register(make_entry("a", 2048, 0)).test_unwrap();
         let req = ShrinkRequest {
             bytes_to_free: 1024,
             urgent: false,
@@ -240,7 +242,7 @@ mod tests {
             priority: 10,
             shrink_fn: dummy_shrink,
         })
-        .unwrap();
+        .test_unwrap();
         s.register(CacheEntry {
             name: "low",
             used: 100,
@@ -248,7 +250,7 @@ mod tests {
             priority: 0,
             shrink_fn: shrink_a,
         })
-        .unwrap();
+        .test_unwrap();
         // Le shrinker doit trier par priorité croissante.
         let req = ShrinkRequest {
             bytes_to_free: 100,
@@ -261,8 +263,8 @@ mod tests {
     #[test]
     fn test_shrink_all() {
         let mut s = CacheShrinker::new_const();
-        s.register(make_entry("a", 500, 0)).unwrap();
-        s.register(make_entry("b", 300, 1)).unwrap();
+        s.register(make_entry("a", 500, 0)).test_unwrap();
+        s.register(make_entry("b", 300, 1)).test_unwrap();
         let r = s.shrink_all();
         assert_eq!(r.freed_bytes, 800);
     }
@@ -270,15 +272,15 @@ mod tests {
     #[test]
     fn test_total_used() {
         let mut s = CacheShrinker::new_const();
-        s.register(make_entry("a", 100, 0)).unwrap();
-        s.register(make_entry("b", 200, 1)).unwrap();
+        s.register(make_entry("a", 100, 0)).test_unwrap();
+        s.register(make_entry("b", 200, 1)).test_unwrap();
         assert_eq!(s.total_used(), 300);
     }
 
     #[test]
     fn test_fill_pct() {
         let mut s = CacheShrinker::new_const();
-        s.register(make_entry("a", 100, 0)).unwrap(); // cap = 200
+        s.register(make_entry("a", 100, 0)).test_unwrap(); // cap = 200
         assert_eq!(s.fill_pct(), 50);
     }
 
@@ -286,7 +288,7 @@ mod tests {
     fn test_register_overflow() {
         let mut s = CacheShrinker::new_const();
         for i in 0u8..8 {
-            s.register(make_entry("x", i as u64, 0)).unwrap();
+            s.register(make_entry("x", i as u64, 0)).test_unwrap();
         }
         assert!(s.register(make_entry("overflow", 0, 0)).is_err());
     }

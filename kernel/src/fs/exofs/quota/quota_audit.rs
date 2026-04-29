@@ -554,6 +554,8 @@ impl<'a> AuditSession<'a> {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::quota::quota_policy::QuotaKind;
@@ -632,7 +634,7 @@ mod tests {
     fn test_audit_log_push_and_latest() {
         let log = QuotaAuditLog::new_const();
         log.log_soft_breach(k(1), 900, 1000);
-        let l = log.latest().expect("some");
+        let l = log.latest().test_expect("some");
         assert_eq!(l.entity_id, 1);
         assert_eq!(l.event_kind(), Some(QuotaEvent::SoftBreach));
     }
@@ -655,7 +657,7 @@ mod tests {
         log.log_soft_breach(k(5), 0, 0);
         log.log_entity_created(k(6));
         let f = AuditFilter::for_entity(5);
-        let v = log.last_n_filtered(10, &f).expect("ok");
+        let v = log.last_n_filtered(10, &f).test_expect("ok");
         assert_eq!(v.len(), 2);
     }
 
@@ -685,14 +687,14 @@ mod tests {
         sess.soft_breach(800, 1000);
         sess.hard_denial(1100, 1000);
         assert_eq!(sess.event_count(), 2);
-        let h = sess.history(5).expect("ok");
+        let h = sess.history(5).test_expect("ok");
         assert_eq!(h.len(), 2);
     }
 
     #[test]
     fn test_audit_msg_to_vec() {
         let e = QuotaAuditEntry::new(0, k(1), QuotaEvent::LimitSet, 0, 100, "testmsg");
-        let v = e.msg_to_vec().expect("ok");
+        let v = e.msg_to_vec().test_expect("ok");
         assert_eq!(&v, b"testmsg");
     }
 }

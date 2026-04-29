@@ -354,6 +354,8 @@ impl GcScheduler {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     // use super::super::relation::{Relation, RelationId};
@@ -421,7 +423,7 @@ mod tests {
     #[test]
     fn test_dry_run_all_exist() {
         // Toutes les relations ont their blobs existants → aucun candidat.
-        let candidates = RelationGc::dry_run(&AllExist).unwrap();
+        let candidates = RelationGc::dry_run(&AllExist).test_unwrap();
         // Des relations globales peuvent exister dans le store global —
         // on vérifie seulement que la fonction ne panique pas.
         let _ = candidates;
@@ -446,7 +448,7 @@ mod tests {
     #[test]
     fn test_purge_blob_missing() {
         // Blob inexistant → aucune relation à purger.
-        let n = RelationGc::purge_blob(&[0xABu8; 32]).unwrap();
+        let n = RelationGc::purge_blob(&[0xABu8; 32]).test_unwrap();
         // On ne sait pas combien il y en a dans le store global,
         // mais la fonction ne doit pas paniquer.
         let _ = n;
@@ -455,7 +457,7 @@ mod tests {
     #[test]
     fn test_gc_run_all_exist() {
         let checker = AllExist;
-        let report = RelationGc::run(&checker, GcPolicy::OrphansOnly).unwrap();
+        let report = RelationGc::run(&checker, GcPolicy::OrphansOnly).test_unwrap();
         // Aucun orphelin car tous les blobs existent.
         assert!(report.is_clean());
         // purged peut être 0 ou plus selon l'état du store global.

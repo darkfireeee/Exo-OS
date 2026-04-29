@@ -650,6 +650,8 @@ impl ExportSessionConfig {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -692,7 +694,7 @@ mod tests {
         assert!(log.last_entry().is_none());
         log.log_event(1, ExportEvent::ExportStarted);
         log.log_event(1, ExportEvent::ExportCompleted);
-        let e = log.last_entry().expect("has entry");
+        let e = log.last_entry().test_expect("has entry");
         assert_eq!(e.event, ExportEvent::ExportCompleted);
     }
 
@@ -714,7 +716,7 @@ mod tests {
             log.log_event(i, ExportEvent::BlobExported);
         }
         assert_eq!(log.total_events(), 600);
-        let e = log.last_entry().expect("has entry");
+        let e = log.last_entry().test_expect("has entry");
         assert_eq!(e.event, ExportEvent::BlobExported);
     }
 

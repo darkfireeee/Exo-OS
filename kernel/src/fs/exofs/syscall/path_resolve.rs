@@ -283,13 +283,15 @@ pub fn sys_exofs_path_resolve(
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_parse_absolute_path() {
         let path = b"/foo/bar/baz";
-        let c = PathComponents::parse(path).unwrap();
+        let c = PathComponents::parse(path).test_unwrap();
         assert!(c.absolute);
         assert_eq!(c.count, 3);
         assert_eq!(c.parts[0], b"foo");
@@ -300,7 +302,7 @@ mod tests {
     #[test]
     fn test_parse_relative_path() {
         let path = b"hello/world";
-        let c = PathComponents::parse(path).unwrap();
+        let c = PathComponents::parse(path).test_unwrap();
         assert!(!c.absolute);
         assert_eq!(c.count, 2);
     }
@@ -308,14 +310,14 @@ mod tests {
     #[test]
     fn test_parse_double_slash_skipped() {
         let path = b"//foo//bar";
-        let c = PathComponents::parse(path).unwrap();
+        let c = PathComponents::parse(path).test_unwrap();
         assert_eq!(c.count, 2);
     }
 
     #[test]
     fn test_parse_dot_skipped() {
         let path = b"/foo/./bar";
-        let c = PathComponents::parse(path).unwrap();
+        let c = PathComponents::parse(path).test_unwrap();
         assert_eq!(c.count, 2);
     }
 
@@ -332,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_resolve_simple_path() {
-        let r = resolve_path_to_blob(b"/data/myfile", 0).unwrap();
+        let r = resolve_path_to_blob(b"/data/myfile", 0).test_unwrap();
         // BlobId non-nul.
         let all_zero = r.blob_id.iter().all(|&b| b == 0);
         assert!(!all_zero);
@@ -340,21 +342,21 @@ mod tests {
 
     #[test]
     fn test_resolve_two_paths_different_blobs() {
-        let r1 = resolve_path_to_blob(b"/a/b", 0).unwrap();
-        let r2 = resolve_path_to_blob(b"/a/c", 0).unwrap();
+        let r1 = resolve_path_to_blob(b"/a/b", 0).test_unwrap();
+        let r2 = resolve_path_to_blob(b"/a/c", 0).test_unwrap();
         assert_ne!(r1.blob_id, r2.blob_id);
     }
 
     #[test]
     fn test_resolve_same_path_same_blob() {
-        let r1 = resolve_path_to_blob(b"/stable/path", 0).unwrap();
-        let r2 = resolve_path_to_blob(b"/stable/path", 0).unwrap();
+        let r1 = resolve_path_to_blob(b"/stable/path", 0).test_unwrap();
+        let r2 = resolve_path_to_blob(b"/stable/path", 0).test_unwrap();
         assert_eq!(r1.blob_id, r2.blob_id);
     }
 
     #[test]
     fn test_object_id_differs_from_blob_id() {
-        let r = resolve_path_to_blob(b"/test/obj", 0).unwrap();
+        let r = resolve_path_to_blob(b"/test/obj", 0).test_unwrap();
         assert_ne!(r.blob_id, r.object_id);
     }
 
@@ -389,7 +391,7 @@ mod tests {
         // Composant de 256 octets → PathTooLong.
         let long_component = [b'a'; 256];
         let mut path: Vec<u8> = Vec::new();
-        path.try_reserve(260).unwrap();
+        path.try_reserve(260).test_unwrap();
         path.push(b'/');
         path.extend_from_slice(&long_component[..]);
         path.push(0u8); // NUL

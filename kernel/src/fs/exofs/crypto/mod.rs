@@ -257,6 +257,8 @@ pub fn derive_key_simple(secret: &[u8], salt: &[u8; 32]) -> ExofsResult<[u8; 32]
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -267,24 +269,24 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_convenience() {
         let k = key32();
-        let p = encrypt_with_key(&k, b"integration test").unwrap();
-        let d = decrypt_with_key(&k, &p).unwrap();
+        let p = encrypt_with_key(&k, b"integration test").test_unwrap();
+        let d = decrypt_with_key(&k, &p).test_unwrap();
         assert_eq!(d, b"integration test");
     }
 
     #[test]
     fn test_generate_key_not_zero() {
-        let k = generate_key().unwrap();
+        let k = generate_key().test_unwrap();
         assert_ne!(k, [0u8; 32]);
     }
 
     #[test]
     fn test_derive_key_simple() {
         let salt = [0xAA; 32];
-        let k1 = derive_key_simple(b"password", &salt).unwrap();
-        let k2 = derive_key_simple(b"password", &salt).unwrap();
+        let k1 = derive_key_simple(b"password", &salt).test_unwrap();
+        let k2 = derive_key_simple(b"password", &salt).test_unwrap();
         assert_eq!(k1, k2);
-        let k3 = derive_key_simple(b"other", &salt).unwrap();
+        let k3 = derive_key_simple(b"other", &salt).test_unwrap();
         assert_ne!(k1, k3);
     }
 
@@ -322,16 +324,16 @@ mod tests {
 
     #[test]
     fn test_shred_blob_via_module() {
-        let m = CryptoModule::default_module().unwrap();
+        let m = CryptoModule::default_module().test_unwrap();
         let nw = NullOverwriter;
-        let res = m.shred_blob(100, 4096, None, &nw).unwrap();
+        let res = m.shred_blob(100, 4096, None, &nw).test_unwrap();
         assert_eq!(res.blob_id, 100);
         assert!(res.physical_ok);
     }
 
     #[test]
     fn test_audit_summary_initially_zero() {
-        let m = CryptoModule::default_module().unwrap();
+        let m = CryptoModule::default_module().test_unwrap();
         // Pas de garantie de zéro (log global), juste valide.
         let _s = m.audit_summary();
     }

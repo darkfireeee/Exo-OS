@@ -366,6 +366,8 @@ impl SnapshotGc {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::reset_for_test;
@@ -387,14 +389,14 @@ mod tests {
             blob_catalog_size: 0,
             name: make_snapshot_name(b"gc-test"),
         })
-        .unwrap();
+        .test_unwrap();
     }
 
     #[test]
     fn unlimited_policy_does_nothing() {
         let _guard = reset_for_test();
         let policy = SnapshotRetentionPolicy::default();
-        let report = SnapshotGc::run(policy, 9999).unwrap();
+        let report = SnapshotGc::run(policy, 9999).test_unwrap();
         assert_eq!(report.n_deleted, 0);
     }
 
@@ -406,7 +408,7 @@ mod tests {
         push_snap_age(&list, 2, 200, 0);
         push_snap_age(&list, 3, 8000, 0);
         let policy = SnapshotRetentionPolicy::default().max_age(500);
-        let candidates = SnapshotGc::dry_run(policy, 1000).unwrap();
+        let candidates = SnapshotGc::dry_run(policy, 1000).test_unwrap();
         let ids: alloc::vec::Vec<u64> = candidates.iter().map(|c| c.id.0).collect();
         assert!(ids.contains(&1));
         assert!(ids.contains(&2));
@@ -420,7 +422,7 @@ mod tests {
         push_snap_age(&list, 10, 100, 1024);
         push_snap_age(&list, 11, 200, 2048);
         let policy = SnapshotRetentionPolicy::default().max_age(500);
-        let freed = SnapshotGc::estimate_freed(policy, 1000).unwrap();
+        let freed = SnapshotGc::estimate_freed(policy, 1000).test_unwrap();
         assert_eq!(freed, 3072);
     }
 
@@ -442,13 +444,13 @@ mod tests {
             blob_catalog_size: 0,
             name: make_snapshot_name(b"protected"),
         })
-        .unwrap();
+        .test_unwrap();
         let policy = SnapshotRetentionPolicy {
             max_age_ticks: 500,
             respect_protected: true,
             ..Default::default()
         };
-        let report = SnapshotGc::run(policy, 1000).unwrap();
+        let report = SnapshotGc::run(policy, 1000).test_unwrap();
         assert_eq!(report.n_deleted, 0);
         assert!(report.n_skipped > 0);
     }

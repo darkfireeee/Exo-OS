@@ -265,6 +265,8 @@ pub fn check_magic(buf: &[u8]) -> ExofsResult<()> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::secret_writer::SecretWriter;
     use super::*;
@@ -282,14 +284,14 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
         let data = b"Hello ExoFS secret!";
-        let payload = writer().encrypt(data).unwrap();
-        let plain = reader().decrypt(&payload).unwrap();
+        let payload = writer().encrypt(data).test_unwrap();
+        let plain = reader().decrypt(&payload).test_unwrap();
         assert_eq!(plain, data);
     }
 
     #[test]
     fn test_invalid_magic() {
-        let mut payload = writer().encrypt(b"test data").unwrap();
+        let mut payload = writer().encrypt(b"test data").test_unwrap();
         payload[0] = 0x00; // corrompt le magic
         assert_eq!(
             reader().decrypt(&payload).unwrap_err(),
@@ -299,14 +301,14 @@ mod tests {
 
     #[test]
     fn test_truncated_payload() {
-        let payload = writer().encrypt(b"short").unwrap();
+        let payload = writer().encrypt(b"short").test_unwrap();
         let trunc = &payload[..20];
         assert!(reader().decrypt(trunc).is_err());
     }
 
     #[test]
     fn test_tampered_ciphertext() {
-        let mut payload = writer().encrypt(b"secret value").unwrap();
+        let mut payload = writer().encrypt(b"secret value").test_unwrap();
         let last = payload.len() - 1;
         payload[last] ^= 0xFF; // flip bit
         assert!(reader().decrypt(&payload).is_err());
@@ -315,39 +317,39 @@ mod tests {
     #[test]
     fn test_peek_plaintext_len() {
         let data = b"length check";
-        let payload = writer().encrypt(data).unwrap();
-        let len = SecretReader::peek_plaintext_len(&payload).unwrap();
+        let payload = writer().encrypt(data).test_unwrap();
+        let len = SecretReader::peek_plaintext_len(&payload).test_unwrap();
         assert_eq!(len, data.len() as u64);
     }
 
     #[test]
     fn test_has_valid_magic() {
-        let payload = writer().encrypt(b"x").unwrap();
+        let payload = writer().encrypt(b"x").test_unwrap();
         assert!(SecretReader::has_valid_magic(&payload));
         assert!(!SecretReader::has_valid_magic(&[0x00, 0x01, 0x02, 0x03]));
     }
 
     #[test]
     fn test_validate_header_ok() {
-        let payload = writer().encrypt(b"validate").unwrap();
-        let h = SecretReader::validate_header(&payload).unwrap();
+        let payload = writer().encrypt(b"validate").test_unwrap();
+        let h = SecretReader::validate_header(&payload).test_unwrap();
         assert_eq!(h.plaintext_len, 8);
     }
 
     #[test]
     fn test_decrypt_batch() {
         let data = b"batch";
-        let p1 = writer().encrypt(data).unwrap();
-        let p2 = writer().encrypt(data).unwrap();
+        let p1 = writer().encrypt(data).test_unwrap();
+        let p2 = writer().encrypt(data).test_unwrap();
         let batch = alloc::vec![p1.as_slice(), p2.as_slice()];
-        let results = reader().decrypt_batch(&batch).unwrap();
+        let results = reader().decrypt_batch(&batch).test_unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0], data);
     }
 
     #[test]
     fn test_expected_payload_size() {
-        let sz = expected_payload_size(100).unwrap();
+        let sz = expected_payload_size(100).test_unwrap();
         assert_eq!(sz, SECRET_HEADER_SIZE + 100);
     }
 
@@ -372,9 +374,9 @@ mod tests {
     #[test]
     fn test_verbose_decrypt() {
         let data = b"verbose result";
-        let p = writer().encrypt(data).unwrap();
+        let p = writer().encrypt(data).test_unwrap();
         let vr = VerboseSecretReader::new(&key32());
-        let res = vr.decrypt_verbose(&p).unwrap();
+        let res = vr.decrypt_verbose(&p).test_unwrap();
         assert_eq!(res.plaintext, data);
         assert_eq!(res.plaintext_len, data.len());
     }
@@ -626,32 +628,32 @@ mod tests_extended {
 
     #[test]
     fn test_streaming_single_chunk() {
-        let payload = writer().encrypt(b"stream chunk").unwrap();
+        let payload = writer().encrypt(b"stream chunk").test_unwrap();
         let mut sr = StreamingSecretReader::new(&key32(), 4096);
-        sr.push_chunk(&payload).unwrap();
+        sr.push_chunk(&payload).test_unwrap();
         assert!(sr.is_ready());
-        let plain = sr.finalize().unwrap();
+        let plain = sr.finalize().test_unwrap();
         assert_eq!(plain, b"stream chunk");
     }
 
     #[test]
     fn test_streaming_multi_chunk() {
-        let payload = writer().encrypt(b"multi chunk data").unwrap();
+        let payload = writer().encrypt(b"multi chunk data").test_unwrap();
         let mid = payload.len() / 2;
         let mut sr = StreamingSecretReader::new(&key32(), 4096);
-        sr.push_chunk(&payload[..mid]).unwrap();
+        sr.push_chunk(&payload[..mid]).test_unwrap();
         assert!(!sr.is_ready());
-        sr.push_chunk(&payload[mid..]).unwrap();
+        sr.push_chunk(&payload[mid..]).test_unwrap();
         assert!(sr.is_ready());
-        let plain = sr.finalize().unwrap();
+        let plain = sr.finalize().test_unwrap();
         assert_eq!(plain, b"multi chunk data");
     }
 
     #[test]
     fn test_streaming_reset() {
-        let payload = writer().encrypt(b"reset").unwrap();
+        let payload = writer().encrypt(b"reset").test_unwrap();
         let mut sr = StreamingSecretReader::new(&key32(), 4096);
-        sr.push_chunk(&payload).unwrap();
+        sr.push_chunk(&payload).test_unwrap();
         assert!(sr.is_ready());
         sr.reset();
         assert_eq!(sr.state(), StreamState::Ready);
@@ -676,16 +678,16 @@ mod tests_extended {
     #[test]
     fn test_header_len_is_coherent() {
         let data = b"coherent";
-        let payload = writer().encrypt(data).unwrap();
-        let h = SecretHeader::parse(&payload).unwrap();
+        let payload = writer().encrypt(data).test_unwrap();
+        let h = SecretHeader::parse(&payload).test_unwrap();
         assert!(h.len_is_coherent(payload.len()));
     }
 
     #[test]
     fn test_header_len_is_not_coherent() {
         let data = b"incoherent";
-        let payload = writer().encrypt(data).unwrap();
-        let h = SecretHeader::parse(&payload).unwrap();
+        let payload = writer().encrypt(data).test_unwrap();
+        let h = SecretHeader::parse(&payload).test_unwrap();
         assert!(!h.len_is_coherent(payload.len() + 1));
     }
 }

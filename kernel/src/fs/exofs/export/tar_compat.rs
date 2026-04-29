@@ -802,6 +802,8 @@ fn inline_blake3(data: &[u8]) -> [u8; 32] {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -873,12 +875,12 @@ mod tests {
         let bid = inline_blake3(data);
         emitter
             .emit_blob(&mut sink, &bid, data, b"hello.txt", 0)
-            .expect("emit ok");
-        emitter.finalize(&mut sink).expect("finalize ok");
+            .test_expect("emit ok");
+        emitter.finalize(&mut sink).test_expect("finalize ok");
 
         let mut src = SliceTarSource::new(sink.as_slice());
         let mut parser = TarParser::new();
-        let entries = parser.parse_all(&mut src).expect("parse ok");
+        let entries = parser.parse_all(&mut src).test_expect("parse ok");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, b"hello.txt");
         assert_eq!(entries[0].data, data);
@@ -894,13 +896,13 @@ mod tests {
             let name = [b'a' + i, b'.', b'b', b'i', b'n'];
             emitter
                 .emit_blob(&mut sink, &bid, &data, &name, 0)
-                .expect("emit ok");
+                .test_expect("emit ok");
         }
-        emitter.finalize(&mut sink).expect("finalize ok");
+        emitter.finalize(&mut sink).test_expect("finalize ok");
 
         let mut src = SliceTarSource::new(sink.as_slice());
         let mut parser = TarParser::new();
-        let entries = parser.parse_all(&mut src).expect("parse ok");
+        let entries = parser.parse_all(&mut src).test_expect("parse ok");
         assert_eq!(entries.len(), 5);
     }
 
@@ -910,12 +912,12 @@ mod tests {
         let mut emitter = TarEmitter::new();
         emitter
             .emit_directory(&mut sink, b"mydir/", 999)
-            .expect("dir ok");
-        emitter.finalize(&mut sink).expect("finalize ok");
+            .test_expect("dir ok");
+        emitter.finalize(&mut sink).test_expect("finalize ok");
 
         let mut src = SliceTarSource::new(sink.as_slice());
         let mut parser = TarParser::new();
-        let entries = parser.parse_all(&mut src).expect("ok");
+        let entries = parser.parse_all(&mut src).test_expect("ok");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].kind, TarEntryKind::Directory);
     }
@@ -928,12 +930,12 @@ mod tests {
         let bid = inline_blake3(data);
         emitter
             .emit_blob(&mut sink, &bid, data, b"blob.bin", 0)
-            .expect("ok");
-        emitter.finalize(&mut sink).expect("ok");
+            .test_expect("ok");
+        emitter.finalize(&mut sink).test_expect("ok");
 
         let mut src = SliceTarSource::new(sink.as_slice());
         let mut converter = TarToExoarConverter::new();
-        let blobs = converter.convert(&mut src).expect("ok");
+        let blobs = converter.convert(&mut src).test_expect("ok");
         assert_eq!(blobs.len(), 1);
         assert_eq!(blobs[0].1, data);
     }
@@ -951,7 +953,7 @@ mod tests {
 
         let mut sink = VecTarSink::new();
         let mut converter = ExoarToTarConverter::new();
-        converter.convert(&mut sink, blobs, 0).expect("ok");
+        converter.convert(&mut sink, blobs, 0).test_expect("ok");
         assert_eq!(converter.stats().entries_emitted, 2);
         // Le flux doit contenir au moins 4 blocs (2 headers + 2 data_blocks + 2 zeros)
         assert!(sink.blocks_written() >= 4);

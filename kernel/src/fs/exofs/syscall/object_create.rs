@@ -256,13 +256,15 @@ pub fn validate_create_path(path: &[u8], len: usize) -> ExofsResult<()> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn path(s: &str) -> Vec<u8> {
         let b = s.as_bytes();
         let mut v = Vec::new();
-        v.try_reserve(b.len()).unwrap();
+        v.try_reserve(b.len()).test_unwrap();
         let mut i = 0usize;
         while i < b.len() {
             v.push(b[i]);
@@ -275,7 +277,7 @@ mod tests {
     fn test_create_basic() {
         let args = CreateArgs::defaults();
         let p = path("/create/test/file1");
-        let r = create_object(&p, p.len(), &args).unwrap();
+        let r = create_object(&p, p.len(), &args).test_unwrap();
         assert!(r.fd >= super::super::object_fd::FD_RESERVED);
         OBJECT_TABLE.close(r.fd);
     }
@@ -289,7 +291,7 @@ mod tests {
             ..CreateArgs::defaults()
         };
         let p = path("/excl/unique/obj");
-        let r = create_object(&p, p.len(), &args).unwrap();
+        let r = create_object(&p, p.len(), &args).test_unwrap();
         OBJECT_TABLE.close(r.fd);
         // Deuxième création avec O_EXCL → erreur.
         assert!(create_object(&p, p.len(), &args).is_err());
@@ -331,7 +333,7 @@ mod tests {
         let mut args = CreateArgs::defaults();
         args.initial_size = 256;
         let p = path("/create/sized");
-        let r = create_object(&p, p.len(), &args).unwrap();
+        let r = create_object(&p, p.len(), &args).test_unwrap();
         let sz = BLOB_CACHE
             .get(&BlobId::from_bytes_blake3(&p))
             .map(|d| d.len())
@@ -349,7 +351,7 @@ mod tests {
     fn test_blob_object_id_differ() {
         let args = CreateArgs::defaults();
         let p = path("/id/differ/test");
-        let r = create_object(&p, p.len(), &args).unwrap();
+        let r = create_object(&p, p.len(), &args).test_unwrap();
         assert_ne!(r.blob_id, r.object_id);
         OBJECT_TABLE.close(r.fd);
     }
@@ -524,7 +526,7 @@ mod extended_tests {
     fn test_create_directory_object() {
         let id = BlobId::from_bytes_blake3(b"/dirobj/test");
         assert!(create_directory_object(id).is_ok());
-        let blob = BLOB_CACHE.get(&id).unwrap();
+        let blob = BLOB_CACHE.get(&id).test_unwrap();
         assert_eq!(blob.len(), 8);
         assert_eq!(blob[0], 0xCA);
     }
@@ -534,7 +536,7 @@ mod extended_tests {
         let id = BlobId::from_bytes_blake3(b"/symlink/obj");
         let target = b"/some/target/path";
         assert!(create_symlink_object(id, target).is_ok());
-        let stored = BLOB_CACHE.get(&id).unwrap();
+        let stored = BLOB_CACHE.get(&id).test_unwrap();
         assert_eq!(stored.len(), target.len());
     }
 }

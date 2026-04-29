@@ -514,6 +514,8 @@ pub fn verify_epoch_journal(epoch_id: u64) -> ExofsResult<bool> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -557,7 +559,7 @@ mod tests {
             checksum: 0,
             hints: 0,
         };
-        let res = do_commit(&args).unwrap();
+        let res = do_commit(&args).test_unwrap();
         assert_eq!(res.sealed_epoch, 1);
         assert_eq!(res.new_epoch, 2);
     }
@@ -572,7 +574,7 @@ mod tests {
             checksum: 0,
             hints: 0,
         };
-        let res = do_commit(&args).unwrap();
+        let res = do_commit(&args).test_unwrap();
         assert_eq!(res.new_epoch, res.sealed_epoch);
     }
 

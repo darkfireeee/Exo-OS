@@ -364,6 +364,8 @@ pub fn remove_relations_batch(ids: &[RelationId]) -> BatchResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::relation_type::RelationType;
     use super::*;
@@ -385,16 +387,16 @@ mod tests {
     fn test_batch_add_ops() {
         let mut b = RelationBatch::new();
         b.add_insert(blob(1), blob(2), RelationType::new(RelationKind::Parent))
-            .unwrap();
+            .test_unwrap();
         b.add_insert(blob(3), blob(4), RelationType::new(RelationKind::Clone))
-            .unwrap();
+            .test_unwrap();
         assert_eq!(b.len(), 2);
     }
 
     #[test]
     fn test_batch_remove_not_found_best_effort() {
         let mut b = RelationBatch::with_policy(BatchPolicy::BestEffort);
-        b.add_remove(RelationId(9999999)).unwrap();
+        b.add_remove(RelationId(9999999)).test_unwrap();
         let res = b.commit();
         // BestEffort : pas de panique, juste un failed.
         assert_eq!(res.failed, 1);
@@ -403,8 +405,8 @@ mod tests {
     #[test]
     fn test_batch_remove_not_found_fail_fast() {
         let mut b = RelationBatch::with_policy(BatchPolicy::FailFast);
-        b.add_remove(RelationId(8888888)).unwrap();
-        b.add_remove(RelationId(7777777)).unwrap();
+        b.add_remove(RelationId(8888888)).test_unwrap();
+        b.add_remove(RelationId(7777777)).test_unwrap();
         let res = b.commit();
         // FailFast : s'arrête au premier échec.
         assert!(res.first_err.is_some());
@@ -431,7 +433,7 @@ mod tests {
             .policy(BatchPolicy::BestEffort)
             .remove(RelationId(111))
             .build()
-            .unwrap();
+            .test_unwrap();
         assert_eq!(b.len(), 1);
     }
 
@@ -440,7 +442,7 @@ mod tests {
         let b = BatchBuilder::new()
             .insert(blob(10), blob(11), RelationKind::Snapshot)
             .build()
-            .unwrap();
+            .test_unwrap();
         assert_eq!(b.len(), 1);
     }
 
@@ -455,7 +457,7 @@ mod tests {
         let mut b = RelationBatch::new();
         for _i in 0..BATCH_MAX_OPS {
             b.add_insert(blob(0), blob(1), RelationType::new(RelationKind::Parent))
-                .unwrap();
+                .test_unwrap();
         }
         // La prochaine doit échouer.
         let err = b.add_insert(blob(0), blob(1), RelationType::new(RelationKind::Parent));
@@ -465,7 +467,7 @@ mod tests {
     #[test]
     fn test_batch_clear() {
         let mut b = RelationBatch::new();
-        b.add_remove(RelationId(42)).unwrap();
+        b.add_remove(RelationId(42)).test_unwrap();
         b.clear();
         assert!(b.is_empty());
     }

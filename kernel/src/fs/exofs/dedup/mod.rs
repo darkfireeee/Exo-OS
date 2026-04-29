@@ -207,56 +207,58 @@ pub fn current_stats() -> DedupStatsSummary {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_module_init_default() {
-        let m = DedupModule::init_default().unwrap();
+        let m = DedupModule::init_default().test_unwrap();
         assert!(m.config.validate().is_ok());
     }
 
     #[test]
     fn test_module_dedup_blob() {
-        let m = DedupModule::init_default().unwrap();
+        let m = DedupModule::init_default().test_unwrap();
         let data = &[0xA5u8; 8192];
-        let r = m.dedup(data).unwrap();
+        let r = m.dedup(data).test_unwrap();
         assert!(r.n_chunks > 0 || r.logical_bytes == data.len() as u64);
     }
 
     #[test]
     fn test_module_dedup_batch() {
-        let m = DedupModule::init_default().unwrap();
+        let m = DedupModule::init_default().test_unwrap();
         let d1 = &[0x11u8; 8192] as &[u8];
         let d2 = &[0x22u8; 8192] as &[u8];
-        let res = m.dedup_batch(&[d1, d2]).unwrap();
+        let res = m.dedup_batch(&[d1, d2]).test_unwrap();
         assert_eq!(res.len(), 2);
     }
 
     #[test]
     fn test_module_health_check() {
-        let m = DedupModule::init_default().unwrap();
+        let m = DedupModule::init_default().test_unwrap();
         let h = m.health_check();
         assert!(h.overall_ok);
     }
 
     #[test]
     fn test_module_stats_snapshot() {
-        let m = DedupModule::init_default().unwrap();
+        let m = DedupModule::init_default().test_unwrap();
         let s = m.stats_snapshot();
         assert!(s.is_consistent());
     }
 
     #[test]
     fn test_module_summary() {
-        let m = DedupModule::init_default().unwrap();
+        let m = DedupModule::init_default().test_unwrap();
         let _ = m.summary();
     }
 
     #[test]
     fn test_convenience_dedup_blob() {
         let data = &[0x55u8; 8192];
-        let r = dedup_blob(data).unwrap();
+        let r = dedup_blob(data).test_unwrap();
         assert!(r.logical_bytes == 8192);
     }
 
@@ -287,7 +289,7 @@ mod tests {
     fn test_cdc_chunker_via_module() {
         let c = CdcChunker::default_chunker();
         let d = &[0xFEu8; CDC_AVG_SIZE * 2];
-        let cs = c.chunk(d).unwrap();
+        let cs = c.chunk(d).test_unwrap();
         assert!(!cs.is_empty());
     }
 }
@@ -388,14 +390,14 @@ mod tests_gc {
 
     #[test]
     fn test_gc_empty_state() {
-        let r = DedupGarbageCollector::full_collect().unwrap();
+        let r = DedupGarbageCollector::full_collect().test_unwrap();
         let _ = r.orphan_blobs_cleaned; // accès sans panique
     }
 
     #[test]
     fn test_module_gc() {
-        let m = DedupModule::init_default().unwrap();
-        let r = m.gc().unwrap();
+        let m = DedupModule::init_default().test_unwrap();
+        let r = m.gc().test_unwrap();
         assert_eq!(r.orphan_blobs_cleaned, 0);
         assert_eq!(r.orphan_chunks_cleaned, 0);
     }
@@ -408,22 +410,22 @@ mod tests_gc {
 
     #[test]
     fn test_full_dedup_pipeline_via_module() {
-        let m = DedupModule::init_default().unwrap();
+        let m = DedupModule::init_default().test_unwrap();
         let data = &[0xEEu8; CDC_AVG_SIZE];
-        let r = m.dedup(data).unwrap();
+        let r = m.dedup(data).test_unwrap();
         assert!(r.logical_bytes > 0);
         let h = m.health_check();
         assert!(h.overall_ok);
-        let gc = m.gc().unwrap();
+        let gc = m.gc().test_unwrap();
         let _ = gc.bytes_reclaimed;
     }
 
     #[test]
     fn test_dedup_same_blob_twice() {
-        let m = DedupModule::init_default().unwrap();
+        let m = DedupModule::init_default().test_unwrap();
         let data = &[0xEEu8; CDC_AVG_SIZE];
-        let r1 = m.dedup(data).unwrap();
-        let r2 = m.dedup(data).unwrap();
+        let r1 = m.dedup(data).test_unwrap();
+        let r2 = m.dedup(data).test_unwrap();
         // Le second appel doit reconnaître le blob.
         assert!(!r2.is_new);
         assert_eq!(r1.blob_id.as_bytes(), r2.blob_id.as_bytes());

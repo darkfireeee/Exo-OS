@@ -289,6 +289,8 @@ impl ReadaheadEngine {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -493,30 +495,30 @@ mod tests_scheduler {
 
     #[test]
     fn test_scheduler_new() {
-        let s = ReadaheadScheduler::new(4, ReadaheadPolicy::Fixed).expect("ok");
+        let s = ReadaheadScheduler::new(4, ReadaheadPolicy::Fixed).test_expect("ok");
         assert_eq!(s.stream_count(), 4);
     }
 
     #[test]
     fn test_scheduler_hint_invalid_stream() {
-        let mut s = ReadaheadScheduler::new(2, ReadaheadPolicy::Fixed).expect("ok");
+        let mut s = ReadaheadScheduler::new(2, ReadaheadPolicy::Fixed).test_expect("ok");
         assert!(s.hint_access(5, 10).is_err());
     }
 
     #[test]
     fn test_scheduler_next_blocks() {
-        let mut s = ReadaheadScheduler::new(2, ReadaheadPolicy::Fixed).expect("ok");
-        s.hint_access(0, 4).expect("ok");
-        let blocks = s.next_blocks(0).expect("ok");
+        let mut s = ReadaheadScheduler::new(2, ReadaheadPolicy::Fixed).test_expect("ok");
+        s.hint_access(0, 4).test_expect("ok");
+        let blocks = s.next_blocks(0).test_expect("ok");
         assert!(!blocks.is_empty());
     }
 
     #[test]
     fn test_scheduler_aggregate_stats() {
-        let mut s = ReadaheadScheduler::new(2, ReadaheadPolicy::Fixed).expect("ok");
-        s.adjust_window(0, 0).expect("ok");
-        s.hint_access(0, 1).expect("ok");
-        s.hint_access(0, 2).expect("ok");
+        let mut s = ReadaheadScheduler::new(2, ReadaheadPolicy::Fixed).test_expect("ok");
+        s.adjust_window(0, 0).test_expect("ok");
+        s.hint_access(0, 1).test_expect("ok");
+        s.hint_access(0, 2).test_expect("ok");
         let agg = s.aggregate_stats();
         // au moins une fenêtre créée
         assert_eq!(agg.windows_created, 1);
@@ -524,8 +526,8 @@ mod tests_scheduler {
 
     #[test]
     fn test_scheduler_reset_stats() {
-        let mut s = ReadaheadScheduler::new(2, ReadaheadPolicy::Fixed).expect("ok");
-        s.adjust_window(0, 0).expect("ok");
+        let mut s = ReadaheadScheduler::new(2, ReadaheadPolicy::Fixed).test_expect("ok");
+        s.adjust_window(0, 0).test_expect("ok");
         s.reset_all_stats();
         let agg = s.aggregate_stats();
         assert_eq!(agg.windows_created, 0);

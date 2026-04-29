@@ -388,14 +388,16 @@ pub fn validate_boundaries(bounds: &[ChunkBoundary], total: u64) -> ExofsResult<
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_chunk_boundary_new_ok() {
-        let b = ChunkBoundary::new(0, 4096).unwrap();
+        let b = ChunkBoundary::new(0, 4096).test_unwrap();
         assert_eq!(b.length, 4096);
-        assert_eq!(b.end_offset().unwrap(), 4096);
+        assert_eq!(b.end_offset().test_unwrap(), 4096);
     }
 
     #[test]
@@ -410,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_chunk_boundary_contains_offset() {
-        let b = ChunkBoundary::new(100, 50).unwrap();
+        let b = ChunkBoundary::new(100, 50).test_unwrap();
         assert!(b.contains_offset(100));
         assert!(b.contains_offset(149));
         assert!(!b.contains_offset(150));
@@ -419,35 +421,35 @@ mod tests {
 
     #[test]
     fn test_chunk_boundary_overlap() {
-        let b1 = ChunkBoundary::new(0, 100).unwrap();
-        let b2 = ChunkBoundary::new(50, 100).unwrap();
-        let b3 = ChunkBoundary::new(100, 100).unwrap();
+        let b1 = ChunkBoundary::new(0, 100).test_unwrap();
+        let b2 = ChunkBoundary::new(50, 100).test_unwrap();
+        let b3 = ChunkBoundary::new(100, 100).test_unwrap();
         assert!(b1.overlaps(&b2));
         assert!(!b1.overlaps(&b3));
     }
 
     #[test]
     fn test_dedup_chunk_new_ok() {
-        let b = ChunkBoundary::new(0, 4).unwrap();
-        let c = DedupChunk::new(b, [0u8; 32], 42, &[1, 2, 3, 4]).unwrap();
+        let b = ChunkBoundary::new(0, 4).test_unwrap();
+        let c = DedupChunk::new(b, [0u8; 32], 42, &[1, 2, 3, 4]).test_unwrap();
         assert!(c.has_data());
         assert!(c.is_consistent());
     }
 
     #[test]
     fn test_dedup_chunk_size_mismatch() {
-        let b = ChunkBoundary::new(0, 4).unwrap();
+        let b = ChunkBoundary::new(0, 4).test_unwrap();
         assert!(DedupChunk::new(b, [0u8; 32], 0, &[1, 2, 3]).is_err());
     }
 
     #[test]
     fn test_chunk_stats_from_boundaries() {
         let bs = alloc::vec![
-            ChunkBoundary::new(0, 100).unwrap(),
-            ChunkBoundary::new(100, 200).unwrap(),
-            ChunkBoundary::new(300, 150).unwrap(),
+            ChunkBoundary::new(0, 100).test_unwrap(),
+            ChunkBoundary::new(100, 200).test_unwrap(),
+            ChunkBoundary::new(300, 150).test_unwrap(),
         ];
-        let s = ChunkStats::from_boundaries(&bs).unwrap();
+        let s = ChunkStats::from_boundaries(&bs).test_unwrap();
         assert_eq!(s.total_chunks, 3);
         assert_eq!(s.min_chunk_size, 100);
         assert_eq!(s.max_chunk_size, 200);
@@ -457,8 +459,8 @@ mod tests {
     #[test]
     fn test_validate_boundaries_ok() {
         let bs = alloc::vec![
-            ChunkBoundary::new(0, 100).unwrap(),
-            ChunkBoundary::new(100, 50).unwrap(),
+            ChunkBoundary::new(0, 100).test_unwrap(),
+            ChunkBoundary::new(100, 50).test_unwrap(),
         ];
         assert!(validate_boundaries(&bs, 150).is_ok());
     }
@@ -466,25 +468,25 @@ mod tests {
     #[test]
     fn test_validate_boundaries_gap() {
         let bs = alloc::vec![
-            ChunkBoundary::new(0, 100).unwrap(),
-            ChunkBoundary::new(110, 50).unwrap(),
+            ChunkBoundary::new(0, 100).test_unwrap(),
+            ChunkBoundary::new(110, 50).test_unwrap(),
         ];
         assert!(validate_boundaries(&bs, 160).is_err());
     }
 
     #[test]
     fn test_align_up() {
-        assert_eq!(align_up(100, 512).unwrap(), 512);
-        assert_eq!(align_up(512, 512).unwrap(), 512);
-        assert_eq!(align_up(513, 512).unwrap(), 1024);
+        assert_eq!(align_up(100, 512).test_unwrap(), 512);
+        assert_eq!(align_up(512, 512).test_unwrap(), 512);
+        assert_eq!(align_up(513, 512).test_unwrap(), 1024);
     }
 
     #[test]
     fn test_chunk_list_find_by_offset() {
         let mut list = ChunkList::new();
-        let b = ChunkBoundary::new(0, 10).unwrap();
+        let b = ChunkBoundary::new(0, 10).test_unwrap();
         list.push(DedupChunk::metadata_only(b, [0u8; 32], 0))
-            .unwrap();
+            .test_unwrap();
         assert!(list.find_by_offset(5).is_some());
         assert!(list.find_by_offset(10).is_none());
     }

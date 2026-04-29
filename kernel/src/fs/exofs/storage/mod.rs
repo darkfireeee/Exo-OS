@@ -336,6 +336,8 @@ impl StorageHealthReport {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::{DiskOffset, EpochId, ObjectId};
@@ -353,7 +355,7 @@ mod tests {
             }
             Ok(buf.len())
         })
-        .unwrap();
+        .test_unwrap();
         disk
     }
 
@@ -393,7 +395,7 @@ mod tests {
             v[..e - s].copy_from_slice(&disk[s..e]);
             Ok(v)
         })
-        .unwrap();
+        .test_unwrap();
 
         let snap = mgr.snapshot();
         assert_eq!(snap.disk_size, DISK_SZ);
@@ -421,7 +423,7 @@ mod tests {
             },
             |_| None,
         )
-        .unwrap();
+        .test_unwrap();
 
         assert_eq!(result.original_size, data.len() as u64);
         assert!(!result.dedup_hit);
@@ -434,7 +436,7 @@ mod tests {
             },
             BlobVerifyMode::Full,
         )
-        .unwrap();
+        .test_unwrap();
 
         assert_eq!(&read_result.data[..data.len()], data);
         assert!(read_result.id_verified);
@@ -469,7 +471,7 @@ mod tests {
             },
             |_| None,
         )
-        .unwrap();
+        .test_unwrap();
 
         assert_eq!(result.content_size, data.len() as u64);
         assert_eq!(result.blob_count, 1);

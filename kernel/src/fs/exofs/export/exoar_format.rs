@@ -516,6 +516,8 @@ pub fn crc32c_verify(data: &[u8], expected: u32) -> bool {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -632,7 +634,7 @@ mod tests {
         let blob_id = [5u8; 32];
         let hdr = ExoarEntryHeader::new(blob_id, 256, 512);
         let bytes = hdr.as_bytes();
-        let parsed = ExoarEntryHeader::from_bytes(bytes).expect("parse ok");
+        let parsed = ExoarEntryHeader::from_bytes(bytes).test_expect("parse ok");
         assert_eq!(parsed.blob_id, blob_id);
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         assert_eq!(

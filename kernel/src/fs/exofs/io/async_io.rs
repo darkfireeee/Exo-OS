@@ -480,6 +480,8 @@ pub static ASYNC_IO_QUEUE: AsyncIoQueue = AsyncIoQueue::new_const();
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -491,8 +493,8 @@ mod tests {
 
     #[test]
     fn test_async_op_kind_from_u8() {
-        assert_eq!(AsyncOpKind::from_u8(0).expect("ok"), AsyncOpKind::Read);
-        assert_eq!(AsyncOpKind::from_u8(1).expect("ok"), AsyncOpKind::Write);
+        assert_eq!(AsyncOpKind::from_u8(0).test_expect("ok"), AsyncOpKind::Read);
+        assert_eq!(AsyncOpKind::from_u8(1).test_expect("ok"), AsyncOpKind::Write);
         assert!(AsyncOpKind::from_u8(99).is_err());
     }
 
@@ -509,7 +511,7 @@ mod tests {
     fn test_handle_lifecycle() {
         let h = AsyncIoHandle::new(1, AsyncOpKind::Read, make_id(1));
         assert_eq!(h.state(), AsyncState::Pending);
-        h.mark_running().expect("ok");
+        h.mark_running().test_expect("ok");
         assert_eq!(h.state(), AsyncState::Running);
         h.complete(512);
         assert!(h.is_ok());
@@ -534,7 +536,7 @@ mod tests {
     #[test]
     fn test_queue_submit() {
         let q = AsyncIoQueue::new_const();
-        let id = q.submit(AsyncOpKind::Read, make_id(1)).expect("ok");
+        let id = q.submit(AsyncOpKind::Read, make_id(1)).test_expect("ok");
         assert!(id > 0);
         assert_eq!(q.pending_count(), 1);
     }
@@ -542,34 +544,34 @@ mod tests {
     #[test]
     fn test_queue_complete() {
         let q = AsyncIoQueue::new_const();
-        let id = q.submit(AsyncOpKind::Write, make_id(2)).expect("ok");
-        q.complete(id, 1024).expect("ok");
+        let id = q.submit(AsyncOpKind::Write, make_id(2)).test_expect("ok");
+        q.complete(id, 1024).test_expect("ok");
         assert_eq!(q.completed_total(), 1);
     }
 
     #[test]
     fn test_queue_fail() {
         let q = AsyncIoQueue::new_const();
-        let id = q.submit(AsyncOpKind::Read, make_id(3)).expect("ok");
-        q.fail(id, -1).expect("ok");
+        let id = q.submit(AsyncOpKind::Read, make_id(3)).test_expect("ok");
+        q.fail(id, -1).test_expect("ok");
         assert_eq!(q.failed_total(), 1);
     }
 
     #[test]
     fn test_queue_cancel() {
         let q = AsyncIoQueue::new_const();
-        let id = q.submit(AsyncOpKind::Read, make_id(4)).expect("ok");
-        q.cancel(id).expect("ok");
+        let id = q.submit(AsyncOpKind::Read, make_id(4)).test_expect("ok");
+        q.cancel(id).test_expect("ok");
     }
 
     #[test]
     fn test_queue_pop_done() {
         let q = AsyncIoQueue::new_const();
-        let id = q.submit(AsyncOpKind::Read, make_id(5)).expect("ok");
-        q.complete(id, 256).expect("ok");
+        let id = q.submit(AsyncOpKind::Read, make_id(5)).test_expect("ok");
+        q.complete(id, 256).test_expect("ok");
         let done = q.pop_done();
         assert!(done.is_some());
-        let (oid, state, bytes) = done.expect("ok");
+        let (oid, state, bytes) = done.test_expect("ok");
         assert_eq!(oid, id);
         assert_eq!(state, AsyncState::Completed);
         assert_eq!(bytes, 256);
@@ -580,11 +582,11 @@ mod tests {
         let q = AsyncIoQueue::new_const();
         let mut ids = Vec::new();
         for i in 0u8..10 {
-            ids.push(q.submit(AsyncOpKind::Read, make_id(i)).expect("ok"));
+            ids.push(q.submit(AsyncOpKind::Read, make_id(i)).test_expect("ok"));
         }
         assert_eq!(q.pending_count(), 10);
         for id in &ids {
-            q.complete(*id, 64).expect("ok");
+            q.complete(*id, 64).test_expect("ok");
         }
         assert_eq!(q.completed_total(), 10);
     }
@@ -592,8 +594,8 @@ mod tests {
     #[test]
     fn test_queue_stats_reset() {
         let q = AsyncIoQueue::new_const();
-        let id = q.submit(AsyncOpKind::Flush, make_id(0)).expect("ok");
-        q.complete(id, 0).expect("ok");
+        let id = q.submit(AsyncOpKind::Flush, make_id(0)).test_expect("ok");
+        q.complete(id, 0).test_expect("ok");
         q.reset_stats();
         assert_eq!(q.submitted_total(), 0);
     }
@@ -601,7 +603,7 @@ mod tests {
     #[test]
     fn test_mark_running() {
         let q = AsyncIoQueue::new_const();
-        let id = q.submit(AsyncOpKind::Write, make_id(9)).expect("ok");
-        q.mark_running(id).expect("ok");
+        let id = q.submit(AsyncOpKind::Write, make_id(9)).test_expect("ok");
+        q.mark_running(id).test_expect("ok");
     }
 }

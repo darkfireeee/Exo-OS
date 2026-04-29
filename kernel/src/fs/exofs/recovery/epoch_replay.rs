@@ -513,6 +513,8 @@ impl JournalValidationReport {
 // ── Tests unitaires ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -526,7 +528,7 @@ mod tests {
         rec.data_len = 512;
         rec.seq_num = 0;
         let bytes = rec.to_bytes();
-        let rec2 = EpochRecord::from_bytes(&bytes).unwrap();
+        let rec2 = EpochRecord::from_bytes(&bytes).test_unwrap();
         assert_eq!(rec2.epoch_id, 7);
         assert_eq!(rec2.data_lba, 0x5000);
     }

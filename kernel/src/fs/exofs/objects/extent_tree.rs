@@ -544,6 +544,8 @@ impl fmt::Display for ExtentTreeStats {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::DiskOffset;
@@ -560,9 +562,9 @@ mod tests {
     #[test]
     fn test_insert_and_find() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0, 0x1000)).unwrap();
-        tree.insert(mk_extent(0x1000, 0x1000)).unwrap();
-        tree.insert(mk_extent(0x2000, 0x1000)).unwrap();
+        tree.insert(mk_extent(0, 0x1000)).test_unwrap();
+        tree.insert(mk_extent(0x1000, 0x1000)).test_unwrap();
+        tree.insert(mk_extent(0x2000, 0x1000)).test_unwrap();
 
         assert!(tree.find_extent_for_offset(0x500).is_some());
         assert!(tree.find_extent_for_offset(0x1800).is_some());
@@ -572,7 +574,7 @@ mod tests {
     #[test]
     fn test_overlap_rejected() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0, 0x2000)).unwrap();
+        tree.insert(mk_extent(0, 0x2000)).test_unwrap();
         // Chevauchement : doit échouer.
         assert!(tree.insert(mk_extent(0x1000, 0x1000)).is_err());
     }
@@ -581,7 +583,7 @@ mod tests {
     fn test_merge_contiguous() {
         let mut tree = ExtentTree::new();
         for lo in (0u64..8).map(|i| i * 0x1000) {
-            tree.insert(mk_extent(lo, 0x1000)).unwrap();
+            tree.insert(mk_extent(lo, 0x1000)).test_unwrap();
         }
         let n = tree.merge_contiguous();
         // Tous les extents contigus ont été fusionnés en un seul.
@@ -593,7 +595,7 @@ mod tests {
     fn test_spill_over_inline() {
         let mut tree = ExtentTree::new();
         for i in 0..12u64 {
-            tree.insert(mk_extent(i * 0x1000, 0x1000)).unwrap();
+            tree.insert(mk_extent(i * 0x1000, 0x1000)).test_unwrap();
         }
         assert_eq!(tree.len(), 12);
         // Les 4 derniers sont dans le spill.
@@ -603,16 +605,16 @@ mod tests {
     #[test]
     fn test_total_data_size() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0, 0x1000)).unwrap();
-        tree.insert(mk_extent(0x2000, 0x2000)).unwrap();
+        tree.insert(mk_extent(0, 0x1000)).test_unwrap();
+        tree.insert(mk_extent(0x2000, 0x2000)).test_unwrap();
         assert_eq!(tree.total_data_size(), 0x3000);
     }
 
     #[test]
     fn test_sparse_size() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0, 0x1000)).unwrap(); // dense
-        tree.insert(mk_sparse(0x2000, 0x1000)).unwrap(); // sparse
+        tree.insert(mk_extent(0, 0x1000)).test_unwrap(); // dense
+        tree.insert(mk_sparse(0x2000, 0x1000)).test_unwrap(); // sparse
         assert_eq!(tree.sparse_size(), 0x1000);
         assert_eq!(tree.allocated_data_size(), 0x1000);
     }
@@ -620,9 +622,9 @@ mod tests {
     #[test]
     fn test_remove_at_offset() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0, 0x1000)).unwrap();
-        tree.insert(mk_extent(0x1000, 0x1000)).unwrap();
-        let removed = tree.remove_at_offset(0x500).unwrap();
+        tree.insert(mk_extent(0, 0x1000)).test_unwrap();
+        tree.insert(mk_extent(0x1000, 0x1000)).test_unwrap();
+        let removed = tree.remove_at_offset(0x500).test_unwrap();
         assert_eq!(removed.logical_offset, 0);
         assert_eq!(tree.len(), 1);
     }
@@ -630,18 +632,18 @@ mod tests {
     #[test]
     fn test_validate_sorted() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0x2000, 0x1000)).unwrap();
-        tree.insert(mk_extent(0, 0x1000)).unwrap(); // inséré avant
-        tree.validate().unwrap(); // doit être trié
+        tree.insert(mk_extent(0x2000, 0x1000)).test_unwrap();
+        tree.insert(mk_extent(0, 0x1000)).test_unwrap(); // inséré avant
+        tree.validate().test_unwrap(); // doit être trié
     }
 
     #[test]
     fn test_disk_roundtrip() {
         let mut tree = ExtentTree::new();
-        tree.insert(mk_extent(0, 0x1000)).unwrap();
-        tree.insert(mk_extent(0x2000, 0x1000)).unwrap();
-        let disk = tree.to_disk_vec().unwrap();
-        let tree2 = ExtentTree::from_disk_slice(&disk).unwrap();
+        tree.insert(mk_extent(0, 0x1000)).test_unwrap();
+        tree.insert(mk_extent(0x2000, 0x1000)).test_unwrap();
+        let disk = tree.to_disk_vec().test_unwrap();
+        let tree2 = ExtentTree::from_disk_slice(&disk).test_unwrap();
         assert_eq!(tree2.len(), 2);
         assert_eq!(tree2.total_data_size(), tree.total_data_size());
     }

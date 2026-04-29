@@ -342,6 +342,8 @@ impl SnapshotBlobSource for MemBlobSource {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::reset_for_test;
@@ -364,7 +366,7 @@ mod tests {
             blob_catalog_size: 0,
             name: make_snapshot_name(b"restore-test"),
         })
-        .unwrap();
+        .test_unwrap();
     }
 
     #[test]
@@ -375,12 +377,12 @@ mod tests {
         let raw = b"hello world";
         let bid = compute_blob_id(raw);
         let mut source = MemBlobSource::new();
-        source.add_blob(SnapshotId(1), bid, raw.to_vec()).unwrap();
+        source.add_blob(SnapshotId(1), bid, raw.to_vec()).test_unwrap();
         let mut sink = NullRestoreSink::new();
         let restore = SnapshotRestore::new();
         let result = restore
             .restore(SnapshotId(1), &source, &mut sink, RestoreOptions::default())
-            .unwrap();
+            .test_unwrap();
         assert_eq!(result.n_blobs_ok, 1);
         assert_eq!(result.n_blobs_error, 0);
         assert_eq!(sink.bytes_received, raw.len() as u64);
@@ -397,7 +399,7 @@ mod tests {
         // Injecte des données corrompues (HASH-02 : la vérification doit échouer)
         source
             .add_blob(SnapshotId(2), bid, b"corrupted data".to_vec())
-            .unwrap();
+            .test_unwrap();
         let mut sink = NullRestoreSink::new();
         let restore = SnapshotRestore::new();
         let err = restore.restore(SnapshotId(2), &source, &mut sink, RestoreOptions::default());
@@ -413,7 +415,7 @@ mod tests {
         let mut source = MemBlobSource::new();
         source
             .add_blob(SnapshotId(3), bid, b"fake".to_vec())
-            .unwrap();
+            .test_unwrap();
         let mut sink = NullRestoreSink::new();
         let opts = RestoreOptions {
             verify_integrity: true,
@@ -423,7 +425,7 @@ mod tests {
         let restore = SnapshotRestore::new();
         let result = restore
             .restore(SnapshotId(3), &source, &mut sink, opts)
-            .unwrap();
+            .test_unwrap();
         assert_eq!(result.n_blobs_error, 1);
     }
 

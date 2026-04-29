@@ -612,6 +612,8 @@ impl IoBatchQueue {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -627,8 +629,8 @@ mod tests {
     fn test_batch_write() {
         let mut b = IoBatch::new();
         let data = vec![1u8; 4096];
-        b.add_write(DiskOffset(0), data).unwrap();
-        let report = b.submit(&mock_write, &mock_read).unwrap();
+        b.add_write(DiskOffset(0), data).test_unwrap();
+        let report = b.submit(&mock_write, &mock_read).test_unwrap();
         assert!(report.all_succeeded());
         assert_eq!(report.stats.bytes_written, 4096);
     }
@@ -636,8 +638,8 @@ mod tests {
     #[test]
     fn test_coalesce_two_writes() {
         let mut b = IoBatch::new().no_sort();
-        b.add_write(DiskOffset(0), vec![0xAAu8; 4096]).unwrap();
-        b.add_write(DiskOffset(4096), vec![0xBBu8; 4096]).unwrap();
+        b.add_write(DiskOffset(0), vec![0xAAu8; 4096]).test_unwrap();
+        b.add_write(DiskOffset(4096), vec![0xBBu8; 4096]).test_unwrap();
         b.coalesce_writes();
         // Après coalescence, une seule op.
         assert_eq!(b.ops.len(), 1);
@@ -647,8 +649,8 @@ mod tests {
     #[test]
     fn test_batch_read() {
         let mut b = IoBatch::new();
-        b.add_read(DiskOffset(4096), 4096).unwrap();
-        let report = b.submit(&mock_write, &mock_read).unwrap();
+        b.add_read(DiskOffset(4096), 4096).test_unwrap();
+        let report = b.submit(&mock_write, &mock_read).test_unwrap();
         assert!(report.all_succeeded());
         assert_eq!(report.stats.bytes_read, 4096);
     }
@@ -656,8 +658,8 @@ mod tests {
     #[test]
     fn test_double_submit_fails() {
         let mut b = IoBatch::new();
-        b.add_read(DiskOffset(0), 512).unwrap();
-        b.submit(&mock_write, &mock_read).unwrap();
+        b.add_read(DiskOffset(0), 512).test_unwrap();
+        b.submit(&mock_write, &mock_read).test_unwrap();
         assert!(b.submit(&mock_write, &mock_read).is_err());
     }
 }

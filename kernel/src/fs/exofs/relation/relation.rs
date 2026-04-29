@@ -314,6 +314,8 @@ impl RelationBuilder {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -337,7 +339,7 @@ mod tests {
             12345,
         );
         let on_disk = rel.to_on_disk();
-        let back = Relation::from_on_disk(&on_disk).unwrap();
+        let back = Relation::from_on_disk(&on_disk).test_unwrap();
         assert_eq!(back.id, RelationId(42));
         assert_eq!(back.rel_type.kind, RelationKind::Parent);
         assert_eq!(back.from.as_bytes(), &[0xAA; 32]);
@@ -387,7 +389,7 @@ mod tests {
             .kind(RelationKind::Snapshot)
             .weight(5)
             .build()
-            .unwrap();
+            .test_unwrap();
         assert_eq!(rel.rel_type.kind, RelationKind::Snapshot);
         assert_eq!(rel.rel_type.weight, RelationWeight(5));
     }

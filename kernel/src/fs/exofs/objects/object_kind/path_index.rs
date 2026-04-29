@@ -528,6 +528,8 @@ impl fmt::Display for PathIndexStats {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -553,8 +555,8 @@ mod tests {
     fn test_insert_and_lookup() {
         let mut page = PathIndexPage::new(ObjectId([0; 32]), 0, EpochId(1));
         let entry =
-            PathIndexEntry::new(b"myfile", ObjectId([1; 32]), [0u8; 16], ObjectKind::Blob).unwrap();
-        page.insert(entry, EpochId(2)).unwrap();
+            PathIndexEntry::new(b"myfile", ObjectId([1; 32]), [0u8; 16], ObjectKind::Blob).test_unwrap();
+        page.insert(entry, EpochId(2)).test_unwrap();
         assert!(page.lookup(b"myfile").is_some());
         assert!(page.lookup(b"other").is_none());
     }
@@ -564,9 +566,9 @@ mod tests {
         let mut page = PathIndexPage::new(ObjectId([0; 32]), 0, EpochId(1));
         let entry =
             PathIndexEntry::new(b"toremove", ObjectId([2; 32]), [0u8; 16], ObjectKind::Blob)
-                .unwrap();
-        page.insert(entry, EpochId(1)).unwrap();
-        page.remove(b"toremove", EpochId(2)).unwrap();
+                .test_unwrap();
+        page.insert(entry, EpochId(1)).test_unwrap();
+        page.remove(b"toremove", EpochId(2)).test_unwrap();
         assert!(page.lookup(b"toremove").is_none());
         assert_eq!(page.len(), 0);
     }

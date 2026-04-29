@@ -337,6 +337,8 @@ pub fn flush_all(write_fn: &mut dyn FnMut(&[u8; 32], u32) -> ExofsResult<u64>) -
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -369,14 +371,14 @@ mod tests {
     #[test]
     fn test_health_ok_after_init() {
         let m = IoModule::new_const(IoConfig::default_config());
-        m.init().expect("init ok");
+        m.init().test_expect("init ok");
         assert_eq!(m.health_check(), IoHealthStatus::Ok);
     }
 
     #[test]
     fn test_health_degraded() {
         let m = IoModule::new_const(IoConfig::default_config());
-        m.init().expect("init ok");
+        m.init().test_expect("init ok");
         // 1 op + 1 erreur = 100% → Error
         m.record_op(0);
         m.record_error();
@@ -386,7 +388,7 @@ mod tests {
     #[test]
     fn test_summary_total_ops() {
         let m = IoModule::new_const(IoConfig::default_config());
-        m.init().expect("ok");
+        m.init().test_expect("ok");
         m.record_op(512);
         m.record_op(256);
         let s = m.summary();
@@ -423,8 +425,8 @@ mod tests {
     #[test]
     fn test_module_init_idempotent() {
         let m = IoModule::new_const(IoConfig::default_config());
-        m.init().expect("first ok");
-        m.init().expect("second ok"); // idempotent
+        m.init().test_expect("first ok");
+        m.init().test_expect("second ok"); // idempotent
     }
 
     #[test]

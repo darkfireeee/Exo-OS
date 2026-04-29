@@ -506,6 +506,8 @@ pub static QUOTA_ENFORCER: QuotaEnforcer = QuotaEnforcer::new_const();
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::quota::quota_policy::{QuotaKind, QuotaLimits};
@@ -516,7 +518,7 @@ mod tests {
         let mut limits = QuotaLimits::unlimited();
         limits.hard_bytes = hard_bytes;
         limits.soft_bytes = hard_bytes / 2;
-        QUOTA_TRACKER.set_limits(key, limits).unwrap();
+        QUOTA_TRACKER.set_limits(key, limits).test_unwrap();
         QUOTA_TRACKER.reset_usage(key).unwrap_or(());
         key
     }
@@ -525,7 +527,7 @@ mod tests {
     fn test_allow_under_limit() {
         let enforcer = QuotaEnforcer::new_const();
         let key = setup_key(100, 10_000);
-        let r = enforcer.check_bytes(key, 1_000, 0).unwrap();
+        let r = enforcer.check_bytes(key, 1_000, 0).test_unwrap();
         assert!(r.is_allowed());
         assert_eq!(r.action, EnforcementAction::Allow);
     }
@@ -535,8 +537,8 @@ mod tests {
         let enforcer = QuotaEnforcer::new_const();
         let key = setup_key(101, 1_000);
         // Remplir l'usage
-        QUOTA_TRACKER.add_bytes(key, 900).unwrap();
-        let r = enforcer.check_bytes(key, 200, 0).unwrap();
+        QUOTA_TRACKER.add_bytes(key, 900).test_unwrap();
+        let r = enforcer.check_bytes(key, 200, 0).test_unwrap();
         assert!(r.is_denied());
         assert_eq!(r.action, EnforcementAction::Deny);
     }
@@ -546,8 +548,8 @@ mod tests {
         let enforcer = QuotaEnforcer::new_const();
         let key = setup_key(102, 10_000);
         // Usage 6000 > soft 5000
-        QUOTA_TRACKER.add_bytes(key, 5_500).unwrap();
-        let r = enforcer.check_bytes(key, 600, 0).unwrap();
+        QUOTA_TRACKER.add_bytes(key, 5_500).test_unwrap();
+        let r = enforcer.check_bytes(key, 600, 0).test_unwrap();
         assert!(r.is_allowed());
         assert_eq!(r.action, EnforcementAction::AllowWithWarning);
     }
@@ -587,9 +589,9 @@ mod tests {
         let key = QuotaKey::new(QuotaKind::User, 103);
         let mut limits = QuotaLimits::unlimited();
         limits.hard_inodes = 10;
-        QUOTA_TRACKER.set_limits(key, limits).unwrap();
-        QUOTA_TRACKER.add_inodes(key, 9).unwrap();
-        let r = enforcer.check_inodes(key, 5, 0).unwrap();
+        QUOTA_TRACKER.set_limits(key, limits).test_unwrap();
+        QUOTA_TRACKER.add_inodes(key, 9).test_unwrap();
+        let r = enforcer.check_inodes(key, 5, 0).test_unwrap();
         assert!(r.is_denied());
     }
 
@@ -600,9 +602,9 @@ mod tests {
         let mut limits = QuotaLimits::unlimited();
         limits.hard_blobs = 100;
         limits.soft_blobs = 50;
-        QUOTA_TRACKER.set_limits(key, limits).unwrap();
-        QUOTA_TRACKER.add_blobs(key, 40).unwrap();
-        let r = enforcer.check_blobs(key, 15, 0).unwrap();
+        QUOTA_TRACKER.set_limits(key, limits).test_unwrap();
+        QUOTA_TRACKER.add_blobs(key, 40).test_unwrap();
+        let r = enforcer.check_blobs(key, 15, 0).test_unwrap();
         assert!(r.is_allowed());
         assert_eq!(r.action, EnforcementAction::AllowWithWarning);
     }
@@ -625,8 +627,8 @@ mod tests {
     fn test_stats_tracking() {
         let enforcer = QuotaEnforcer::new_const();
         let key = setup_key(107, 10_000);
-        enforcer.check_bytes(key, 100, 0).unwrap();
-        enforcer.check_bytes(key, 100, 0).unwrap();
+        enforcer.check_bytes(key, 100, 0).test_unwrap();
+        enforcer.check_bytes(key, 100, 0).test_unwrap();
         let s = enforcer.stats();
         assert_eq!(s.checks_total, 2);
         assert_eq!(s.allowed, 2);

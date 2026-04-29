@@ -351,6 +351,8 @@ pub fn all_namespaces() -> ExofsResult<Vec<Namespace>> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -363,50 +365,50 @@ mod tests {
     #[test]
     fn test_init_root() {
         let tbl = NamespaceTable::new_const();
-        tbl.init_root(oid(1)).unwrap();
-        let r = tbl.root_of(ROOT_NAMESPACE_ID).unwrap();
+        tbl.init_root(oid(1)).test_unwrap();
+        let r = tbl.root_of(ROOT_NAMESPACE_ID).test_unwrap();
         assert_eq!(r.0[0], 1);
     }
 
     #[test]
     fn test_register_find() {
         let tbl = NamespaceTable::new_const();
-        tbl.init_root(oid(1)).unwrap();
-        let id = tbl.register(b"ns1", oid(10), 0).unwrap();
-        let n = tbl.get(id).unwrap();
+        tbl.init_root(oid(1)).test_unwrap();
+        let id = tbl.register(b"ns1", oid(10), 0).test_unwrap();
+        let n = tbl.get(id).test_unwrap();
         assert_eq!(n.name_str(), b"ns1");
     }
 
     #[test]
     fn test_unregister_root_denied() {
         let tbl = NamespaceTable::new_const();
-        tbl.init_root(oid(1)).unwrap();
+        tbl.init_root(oid(1)).test_unwrap();
         assert!(tbl.unregister(ROOT_NAMESPACE_ID).is_err());
     }
 
     #[test]
     fn test_by_name() {
         let tbl = NamespaceTable::new_const();
-        tbl.init_root(oid(1)).unwrap();
-        tbl.register(b"myns", oid(5), 0).unwrap();
-        let n = tbl.find_by_name(b"myns").unwrap();
+        tbl.init_root(oid(1)).test_unwrap();
+        tbl.register(b"myns", oid(5), 0).test_unwrap();
+        let n = tbl.find_by_name(b"myns").test_unwrap();
         assert_eq!(n.root_oid.0[0], 5);
     }
 
     #[test]
     fn test_count() {
         let tbl = NamespaceTable::new_const();
-        tbl.init_root(oid(1)).unwrap();
-        tbl.register(b"a", oid(2), 0).unwrap();
-        tbl.register(b"b", oid(3), 0).unwrap();
+        tbl.init_root(oid(1)).test_unwrap();
+        tbl.register(b"a", oid(2), 0).test_unwrap();
+        tbl.register(b"b", oid(3), 0).test_unwrap();
         assert_eq!(tbl.count(), 3); // root + a + b
     }
 
     #[test]
     fn test_flush_non_root() {
         let tbl = NamespaceTable::new_const();
-        tbl.init_root(oid(1)).unwrap();
-        tbl.register(b"x", oid(20), 0).unwrap();
+        tbl.init_root(oid(1)).test_unwrap();
+        tbl.register(b"x", oid(20), 0).test_unwrap();
         tbl.flush_non_root();
         assert_eq!(tbl.count(), 1); // seule la racine reste
     }

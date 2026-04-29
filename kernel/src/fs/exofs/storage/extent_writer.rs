@@ -316,6 +316,8 @@ impl ExtentMap {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -331,7 +333,7 @@ mod tests {
     fn test_write_basic() {
         let w = ExtentWriter::new();
         let buf = vec![0xABu8; 4096];
-        let r = w.write(DiskOffset(0), &buf, &mock_write).unwrap();
+        let r = w.write(DiskOffset(0), &buf, &mock_write).test_unwrap();
         assert_eq!(r.bytes_written, 4096);
         assert_eq!(r.extent.size, 4096);
     }
@@ -348,7 +350,7 @@ mod tests {
     fn test_write_blocks_multi() {
         let w = ExtentWriter::new();
         let buf = vec![0x42u8; 12288]; // 3 blocs
-        let r = w.write_blocks(DiskOffset(0), &buf, &mock_write).unwrap();
+        let r = w.write_blocks(DiskOffset(0), &buf, &mock_write).test_unwrap();
         assert_eq!(r.bytes_written, 12288);
         assert_eq!(r.segments, 3);
     }
@@ -356,7 +358,7 @@ mod tests {
     #[test]
     fn test_split_into_segments() {
         let data = vec![1u8; 5000]; // > 1 bloc
-        let segs = ExtentWriter::split_into_segments(DiskOffset(0), &data).unwrap();
+        let segs = ExtentWriter::split_into_segments(DiskOffset(0), &data).test_unwrap();
         assert_eq!(segs.len(), 2);
         assert_eq!(segs[0].data.len(), 4096);
     }
@@ -364,8 +366,8 @@ mod tests {
     #[test]
     fn test_extent_map() {
         let mut m = ExtentMap::new();
-        m.add(Extent::new(DiskOffset(0), 4096)).unwrap();
-        m.add(Extent::new(DiskOffset(4096), 8192)).unwrap();
+        m.add(Extent::new(DiskOffset(0), 4096)).test_unwrap();
+        m.add(Extent::new(DiskOffset(4096), 8192)).test_unwrap();
         assert_eq!(m.total_bytes(), 12288);
         assert!(m.find_extent(DiskOffset(4096)).is_some());
     }
@@ -522,7 +524,7 @@ mod tests_extra {
             Extent::new(DiskOffset(8192), 4096),
         ];
         let data = vec![0x11u8; 8192];
-        let r = w.write_scattered(&exts, &data, &mock_write).unwrap();
+        let r = w.write_scattered(&exts, &data, &mock_write).test_unwrap();
         assert_eq!(r.total_written, 8192);
         assert_eq!(r.segments, 2);
     }
@@ -531,7 +533,7 @@ mod tests_extra {
     fn test_zero_extent() {
         let w = ExtentWriter::new();
         let ext = Extent::new(DiskOffset(0), 8192);
-        let n = w.zero_extent(&ext, &mock_write).unwrap();
+        let n = w.zero_extent(&ext, &mock_write).test_unwrap();
         assert_eq!(n, 8192);
     }
 
@@ -556,7 +558,7 @@ mod tests_extra {
     fn test_stats_snapshot() {
         let w = ExtentWriter::new();
         let buf = vec![0u8; 1024];
-        w.write(DiskOffset(0), &buf, &mock_write).unwrap();
+        w.write(DiskOffset(0), &buf, &mock_write).test_unwrap();
         let s = w.stats();
         assert_eq!(s.bytes_written, 1024);
         assert_eq!(s.errors, 0);

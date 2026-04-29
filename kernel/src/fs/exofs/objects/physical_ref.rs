@@ -304,6 +304,8 @@ impl fmt::Display for PhysicalRefStats {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::EpochId;
@@ -330,7 +332,7 @@ mod tests {
 
     #[test]
     fn test_inline_ref() {
-        let r = PhysicalRef::from_inline_data(b"hello").unwrap();
+        let r = PhysicalRef::from_inline_data(b"hello").test_unwrap();
         assert!(r.is_inline());
         assert_eq!(r.size(), 5);
         assert!(r.blob_id().is_none());
@@ -356,7 +358,7 @@ mod tests {
         let r = PhysicalRef::from_blob(Arc::clone(&b));
         r.inc_ref();
         assert_eq!(b.ref_count(), 2);
-        r.dec_ref().unwrap();
+        r.dec_ref().test_unwrap();
         assert_eq!(b.ref_count(), 1);
     }
 

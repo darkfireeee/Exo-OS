@@ -375,6 +375,8 @@ pub static INLINE_GC: InlineGc = InlineGc::new();
 // ==============================================================================
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::ObjectId;
@@ -396,7 +398,7 @@ mod tests {
     fn test_register_and_count() {
         let gc = InlineGc::new();
         let e = InlineObjectEntry::new(oid(1), 64, EpochId(0));
-        gc.register(e).unwrap();
+        gc.register(e).test_unwrap();
         assert_eq!(gc.count(), 1);
     }
 
@@ -404,10 +406,10 @@ mod tests {
     fn test_collect_orphan() {
         let gc = InlineGc::new();
         // Objet inline avec ref_count = 0.
-        gc.register(entry(1, 128)).unwrap();
+        gc.register(entry(1, 128)).test_unwrap();
 
         let snap = EpochScanSnapshot::empty();
-        let result = gc.collect(&snap).unwrap();
+        let result = gc.collect(&snap).test_unwrap();
         // ref_count=0 et non atteignable -> collecte.
         assert_eq!(result.collected, 1);
         assert_eq!(result.bytes_freed, 128);
@@ -419,7 +421,7 @@ mod tests {
         let gc = InlineGc::new();
         let mut e = InlineObjectEntry::new(oid(2), 64, EpochId(0));
         e.ref_count = 0;
-        gc.register(e).unwrap();
+        gc.register(e).test_unwrap();
 
         // L'objet oid(2) est dans le scan snapshot (reachable).
         let mut snap = EpochScanSnapshot::empty();
@@ -434,7 +436,7 @@ mod tests {
             is_deleted: false,
         });
 
-        let result = gc.collect(&snap).unwrap();
+        let result = gc.collect(&snap).test_unwrap();
         // Reachable => saute.
         assert_eq!(result.collected, 0);
         assert_eq!(gc.count(), 1);
@@ -444,13 +446,13 @@ mod tests {
     fn test_inc_dec_ref() {
         let gc = InlineGc::new();
         gc.register(InlineObjectEntry::new(oid(3), 32, EpochId(0)))
-            .unwrap();
+            .test_unwrap();
         assert_eq!(gc.ref_count_of(&oid(3)), Some(1));
 
-        gc.inc_ref(&oid(3)).unwrap();
+        gc.inc_ref(&oid(3)).test_unwrap();
         assert_eq!(gc.ref_count_of(&oid(3)), Some(2));
 
-        gc.dec_ref(&oid(3)).unwrap();
+        gc.dec_ref(&oid(3)).test_unwrap();
         assert_eq!(gc.ref_count_of(&oid(3)), Some(1));
     }
 

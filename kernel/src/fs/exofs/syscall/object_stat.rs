@@ -275,12 +275,14 @@ pub fn stat_batch(blob_ids: &[BlobId], flags: u32) -> ExofsResult<Vec<ObjectStat
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn insert(path: &[u8], data: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, data.to_vec()).unwrap();
+        BLOB_CACHE.insert(id, data.to_vec()).test_unwrap();
         id
     }
 
@@ -292,7 +294,7 @@ mod tests {
     #[test]
     fn test_stat_blob_basic() {
         let id = insert(b"/stat/basic", b"hello");
-        let s = stat_blob(id, 0).unwrap();
+        let s = stat_blob(id, 0).test_unwrap();
         assert_eq!(s.size, 5);
     }
 
@@ -305,14 +307,14 @@ mod tests {
     #[test]
     fn test_stat_with_hash() {
         let id = insert(b"/stat/hash", b"content");
-        let s = stat_blob(id, stat_flags::INCLUDE_HASH).unwrap();
+        let s = stat_blob(id, stat_flags::INCLUDE_HASH).test_unwrap();
         assert_ne!(s.content_hash, [0u8; 32]);
     }
 
     #[test]
     fn test_stat_object_id_differs() {
         let id = insert(b"/stat/ids", b"xyz");
-        let s = stat_blob(id, 0).unwrap();
+        let s = stat_blob(id, 0).test_unwrap();
         assert_ne!(s.blob_id, s.object_id);
     }
 
@@ -320,7 +322,7 @@ mod tests {
     fn test_stat_by_path_ok() {
         let path = b"/statpath/test";
         insert(path, b"data");
-        let s = stat_by_path(path, path.len(), 0).unwrap();
+        let s = stat_by_path(path, path.len(), 0).test_unwrap();
         assert_eq!(s.size, 4);
     }
 
@@ -345,14 +347,14 @@ mod tests {
     fn test_is_directory_true() {
         let id = BlobId::from_bytes_blake3(b"/isdir/yes");
         let hdr = [0xCAu8, 0xFE, 0xD0, 0xD1, 0, 0, 0, 0];
-        BLOB_CACHE.insert(id, hdr.to_vec()).unwrap();
+        BLOB_CACHE.insert(id, hdr.to_vec()).test_unwrap();
         assert!(is_directory(&id));
     }
 
     #[test]
     fn test_stat_batch() {
         let ids = [insert(b"/batch/s1", b"a"), insert(b"/batch/s2", b"bb")];
-        let results = stat_batch(&ids, 0).unwrap();
+        let results = stat_batch(&ids, 0).test_unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[1].size, 2);
     }
@@ -506,7 +508,7 @@ mod advanced_tests {
 
     fn insert(path: &[u8], data: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, data.to_vec()).unwrap();
+        BLOB_CACHE.insert(id, data.to_vec()).test_unwrap();
         id
     }
 
@@ -532,8 +534,8 @@ mod advanced_tests {
     #[test]
     fn test_same_object_true() {
         let id = insert(b"/same/obj/a", b"x");
-        let s1 = stat_blob(id, 0).unwrap();
-        let s2 = stat_blob(id, 0).unwrap();
+        let s1 = stat_blob(id, 0).test_unwrap();
+        let s2 = stat_blob(id, 0).test_unwrap();
         assert!(same_object(&s1, &s2));
     }
 
@@ -541,17 +543,17 @@ mod advanced_tests {
     fn test_same_object_false() {
         let id1 = insert(b"/same/obj/b1", b"x");
         let id2 = insert(b"/same/obj/b2", b"y");
-        let s1 = stat_blob(id1, 0).unwrap();
-        let s2 = stat_blob(id2, 0).unwrap();
+        let s1 = stat_blob(id1, 0).test_unwrap();
+        let s2 = stat_blob(id2, 0).test_unwrap();
         assert!(!same_object(&s1, &s2));
     }
 
     #[test]
     fn test_serialize_deserialize() {
         let id = insert(b"/serde/stat", b"test123");
-        let s = stat_blob(id, 0).unwrap();
-        let bytes = serialize_stat(&s).unwrap();
-        let s2 = deserialize_stat(&bytes).unwrap();
+        let s = stat_blob(id, 0).test_unwrap();
+        let bytes = serialize_stat(&s).test_unwrap();
+        let s2 = deserialize_stat(&bytes).test_unwrap();
         assert_eq!(s.size, s2.size);
     }
 
@@ -563,7 +565,7 @@ mod advanced_tests {
     #[test]
     fn test_compact_stat() {
         let id = insert(b"/compact/stat", b"abc");
-        let s = stat_blob(id, 0).unwrap();
+        let s = stat_blob(id, 0).test_unwrap();
         let c = CompactStat::from_full(&s);
         assert_eq!(c.size, 3);
     }
@@ -582,14 +584,14 @@ mod advanced_tests {
     #[test]
     fn test_is_content_known_true() {
         let id = insert(b"/hash/known", b"data for hash");
-        let s = stat_blob(id, stat_flags::INCLUDE_HASH).unwrap();
+        let s = stat_blob(id, stat_flags::INCLUDE_HASH).test_unwrap();
         assert!(is_content_known(&s));
     }
 
     #[test]
     fn test_same_content_identical() {
         let id = insert(b"/same/content", b"payload");
-        let s = stat_blob(id, stat_flags::INCLUDE_HASH).unwrap();
+        let s = stat_blob(id, stat_flags::INCLUDE_HASH).test_unwrap();
         assert!(same_content(&s, &s));
     }
 
@@ -597,8 +599,8 @@ mod advanced_tests {
     fn test_same_content_different() {
         let id1 = insert(b"/diff/c1", b"aaa");
         let id2 = insert(b"/diff/c2", b"bbb");
-        let s1 = stat_blob(id1, stat_flags::INCLUDE_HASH).unwrap();
-        let s2 = stat_blob(id2, stat_flags::INCLUDE_HASH).unwrap();
+        let s1 = stat_blob(id1, stat_flags::INCLUDE_HASH).test_unwrap();
+        let s2 = stat_blob(id2, stat_flags::INCLUDE_HASH).test_unwrap();
         assert!(!same_content(&s1, &s2));
     }
 }

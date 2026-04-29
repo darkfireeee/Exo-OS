@@ -491,6 +491,8 @@ impl DebugStats {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -521,7 +523,7 @@ mod tests {
     fn test_response_ok() {
         let r = DebugResponse::ok(DebugCommandId::GetStatus, 99, "ok");
         assert!(r.is_ok());
-        let v = r.msg_to_vec().expect("ok");
+        let v = r.msg_to_vec().test_expect("ok");
         assert_eq!(&v, b"ok");
     }
 
@@ -542,7 +544,7 @@ mod tests {
     fn test_queue_push_pop_cmd() {
         let q = DebugQueue::new_const();
         let cmd = DebugCommand::new(DebugCommandId::DumpMetrics, 0);
-        q.push_cmd(cmd).expect("ok");
+        q.push_cmd(cmd).test_expect("ok");
         assert_eq!(q.cmd_pending(), 1);
         let got = q.pop_cmd();
         assert!(got.is_some());
@@ -553,7 +555,7 @@ mod tests {
     fn test_queue_push_pop_response() {
         let q = DebugQueue::new_const();
         let r = DebugResponse::ok(DebugCommandId::Noop, 0, "test");
-        q.push_response(r).expect("ok");
+        q.push_response(r).test_expect("ok");
         assert_eq!(q.resp_pending(), 1);
         let got = q.pop_response();
         assert!(got.is_some());
@@ -565,7 +567,7 @@ mod tests {
         let mut i = 0usize;
         while i < DEBUG_QUEUE_SIZE {
             q.push_cmd(DebugCommand::new(DebugCommandId::Noop, 0))
-                .expect("push");
+                .test_expect("push");
             i = i.wrapping_add(1);
         }
         let r = q.push_cmd(DebugCommand::new(DebugCommandId::Noop, 0));
@@ -586,12 +588,12 @@ mod tests {
         let q = DebugQueue::new_const();
         let sess = DebugSession::new(&q);
         q.push_cmd(DebugCommand::new(DebugCommandId::GetStatus, 0))
-            .expect("push");
-        let processed = sess.process_pending().expect("ok");
+            .test_expect("push");
+        let processed = sess.process_pending().test_expect("ok");
         assert_eq!(processed, 1);
         let resp = q.pop_response();
         assert!(resp.is_some());
-        assert!(resp.unwrap().is_ok());
+        assert!(resp.test_unwrap().is_ok());
     }
 
     #[test]
@@ -614,10 +616,10 @@ mod tests {
     fn test_queue_drain_responses() {
         let q = DebugQueue::new_const();
         q.push_response(DebugResponse::ok(DebugCommandId::Noop, 0, "a"))
-            .expect("ok");
+            .test_expect("ok");
         q.push_response(DebugResponse::ok(DebugCommandId::Noop, 1, "b"))
-            .expect("ok");
-        let v = q.drain_responses().expect("drain");
+            .test_expect("ok");
+        let v = q.drain_responses().test_expect("drain");
         assert_eq!(v.len(), 2);
     }
 }

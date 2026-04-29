@@ -380,6 +380,8 @@ impl ContentHash {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -428,22 +430,22 @@ mod tests {
     #[test]
     fn test_hash_data_returns_result() {
         let ch = ch();
-        let r = ch.hash_data(b"test blob data").unwrap();
+        let r = ch.hash_data(b"test blob data").test_unwrap();
         assert_ne!(r.blake3, [0u8; 32]);
     }
 
     #[test]
     fn test_cache_hit() {
         let ch = ch();
-        ch.hash_data(b"cached").unwrap();
-        ch.hash_data(b"cached").unwrap();
+        ch.hash_data(b"cached").test_unwrap();
+        ch.hash_data(b"cached").test_unwrap();
         assert!(ch.cache_hit_count() >= 1);
     }
 
     #[test]
     fn test_is_known() {
         let ch = ch();
-        let r = ch.hash_data(b"known data").unwrap();
+        let r = ch.hash_data(b"known data").test_unwrap();
         assert!(ch.is_known(&r.blake3));
         assert!(!ch.is_known(&[0u8; 32]));
     }
@@ -467,7 +469,7 @@ mod tests {
     fn test_hash_batch() {
         let ch = ch();
         let items: &[&[u8]] = &[b"a", b"b", b"c"];
-        let results = ch.hash_batch(items).unwrap();
+        let results = ch.hash_batch(items).test_unwrap();
         assert_eq!(results.len(), 3);
     }
 
@@ -475,7 +477,7 @@ mod tests {
     fn test_find_duplicates() {
         let ch = ch();
         let items: &[&[u8]] = &[b"dup", b"unique", b"dup"];
-        let dups = ch.find_duplicates_in_batch(items).unwrap();
+        let dups = ch.find_duplicates_in_batch(items).test_unwrap();
         assert_eq!(dups.len(), 1);
         assert_eq!(dups[0], (0, 2));
     }
@@ -483,7 +485,7 @@ mod tests {
     #[test]
     fn test_evict() {
         let ch = ch();
-        let r = ch.hash_data(b"evict me").unwrap();
+        let r = ch.hash_data(b"evict me").test_unwrap();
         ch.evict(&r.blake3);
         assert!(!ch.is_known(&r.blake3));
     }
@@ -491,7 +493,7 @@ mod tests {
     #[test]
     fn test_clear() {
         let ch = ch();
-        ch.hash_data(b"x").unwrap();
+        ch.hash_data(b"x").test_unwrap();
         ch.clear();
         assert_eq!(ch.cache_len(), 0);
     }
@@ -499,7 +501,7 @@ mod tests {
     #[test]
     fn test_summary() {
         let ch = ch();
-        ch.hash_data(b"summary test").unwrap();
+        ch.hash_data(b"summary test").test_unwrap();
         let s = ch.summary();
         assert!(s.computations >= 1);
     }
@@ -508,6 +510,6 @@ mod tests {
     fn test_shard_key() {
         let r = ContentHashResult::compute(b"shard");
         let k = r.shard_key();
-        assert_eq!(k, u64::from_le_bytes(r.blake3[..8].try_into().unwrap()));
+        assert_eq!(k, u64::from_le_bytes(r.blake3[..8].try_into().test_unwrap()));
     }
 }

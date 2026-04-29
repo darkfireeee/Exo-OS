@@ -295,6 +295,8 @@ impl DedupPolicyPreset {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -344,7 +346,7 @@ mod tests {
             DedupPolicy::default(),
             "big",
         ))
-        .unwrap();
+        .test_unwrap();
         let p = eng.evaluate(1024 * 1024);
         assert!(p.mode.is_active());
         let p2 = eng.evaluate(100);
@@ -361,7 +363,7 @@ mod tests {
                 DedupPolicy::disabled(),
                 "noop",
             ))
-            .unwrap();
+            .test_unwrap();
         }
         let overflow = eng.push_rule(DedupPolicyRule::new(
             PolicyCondition::AlwaysFalse,

@@ -540,6 +540,8 @@ impl RecoveryLog {
 // ── Tests unitaires (cfg(test)) ───────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -550,7 +552,7 @@ mod tests {
         log.log(RecoveryLogCategory::BootStart, 42);
         assert_eq!(log.len(), 1);
         assert_eq!(log.total_written(), 1);
-        let entries = log.read_recent(10).unwrap();
+        let entries = log.read_recent(10).test_unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries[0].category as u8,

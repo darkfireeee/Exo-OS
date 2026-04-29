@@ -355,6 +355,8 @@ impl Default for CompressionProfile {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -414,7 +416,7 @@ mod tests {
     #[test]
     fn test_validate_decompressed_size_ok() {
         assert!(validate_decompressed_size(1024).is_ok());
-        assert_eq!(validate_decompressed_size(1024).unwrap(), 1024);
+        assert_eq!(validate_decompressed_size(1024).test_unwrap(), 1024);
     }
 
     #[test]
@@ -468,7 +470,7 @@ mod tests {
     fn test_compression_profile_roundtrip() {
         let p = CompressionProfile::default_lz4();
         let b = p.to_bytes();
-        let p2 = CompressionProfile::from_bytes(b).unwrap();
+        let p2 = CompressionProfile::from_bytes(b).test_unwrap();
         assert_eq!(p, p2);
     }
 

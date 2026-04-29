@@ -421,6 +421,8 @@ pub fn validate_lock(lock: &ByteRangeLock) -> ExofsResult<()> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -459,37 +461,37 @@ mod tests {
     #[test]
     fn test_read_write_conflict() {
         let t = tbl();
-        t.acquire(mk(1, 100, 0, 512, LockKind::Read)).unwrap();
+        t.acquire(mk(1, 100, 0, 512, LockKind::Read)).test_unwrap();
         assert!(t.acquire(mk(1, 200, 0, 512, LockKind::Write)).is_err());
     }
 
     #[test]
     fn test_write_write_conflict() {
         let t = tbl();
-        t.acquire(mk(1, 100, 0, 512, LockKind::Write)).unwrap();
+        t.acquire(mk(1, 100, 0, 512, LockKind::Write)).test_unwrap();
         assert!(t.acquire(mk(1, 200, 0, 512, LockKind::Write)).is_err());
     }
 
     #[test]
     fn test_no_overlap_no_conflict() {
         let t = tbl();
-        t.acquire(mk(1, 100, 0, 256, LockKind::Write)).unwrap();
+        t.acquire(mk(1, 100, 0, 256, LockKind::Write)).test_unwrap();
         assert!(t.acquire(mk(1, 200, 256, 256, LockKind::Write)).is_ok());
     }
 
     #[test]
     fn test_release() {
         let t = tbl();
-        t.acquire(mk(1, 100, 0, 512, LockKind::Write)).unwrap();
-        t.release(1, 100, 0, 0, 0).unwrap();
+        t.acquire(mk(1, 100, 0, 512, LockKind::Write)).test_unwrap();
+        t.release(1, 100, 0, 0, 0).test_unwrap();
         assert_eq!(t.lock_count_for(1), 0);
     }
 
     #[test]
     fn test_release_all_pid() {
         let t = tbl();
-        t.acquire(mk(1, 100, 0, 256, LockKind::Write)).unwrap();
-        t.acquire(mk(2, 100, 0, 256, LockKind::Write)).unwrap();
+        t.acquire(mk(1, 100, 0, 256, LockKind::Write)).test_unwrap();
+        t.acquire(mk(2, 100, 0, 256, LockKind::Write)).test_unwrap();
         t.release_all_pid(100);
         assert_eq!(t.locked_object_count(), 0);
     }
@@ -497,11 +499,11 @@ mod tests {
     #[test]
     fn test_test_lock_conflict() {
         let t = tbl();
-        t.acquire(mk(1, 100, 0, 512, LockKind::Write)).unwrap();
+        t.acquire(mk(1, 100, 0, 512, LockKind::Write)).test_unwrap();
         let candidate = mk(1, 200, 0, 512, LockKind::Write);
-        let info = t.test_lock(&candidate).unwrap();
+        let info = t.test_lock(&candidate).test_unwrap();
         assert!(info.is_some());
-        assert_eq!(info.unwrap().conflicting_pid, 100);
+        assert_eq!(info.test_unwrap().conflicting_pid, 100);
     }
 
     #[test]
@@ -524,7 +526,7 @@ mod tests {
     #[test]
     fn test_same_pid_no_conflict() {
         let t = tbl();
-        t.acquire(mk(1, 100, 0, 512, LockKind::Write)).unwrap();
+        t.acquire(mk(1, 100, 0, 512, LockKind::Write)).test_unwrap();
         // Même pid → pas de conflit (règle POSIX)
         assert!(t.acquire(mk(1, 100, 0, 512, LockKind::Write)).is_ok());
     }

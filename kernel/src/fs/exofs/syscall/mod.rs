@@ -18,6 +18,7 @@ pub mod object_delete;
 pub mod object_fd;
 pub mod object_open;
 pub mod object_read;
+pub mod object_store;
 pub mod object_set_meta;
 pub mod object_stat;
 pub mod object_write;
@@ -381,6 +382,8 @@ pub fn reset_all_counters() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -419,7 +422,7 @@ mod tests {
     #[test]
     fn test_syscall_number_roundtrip() {
         let name = b"exofs_object_create";
-        let nr = syscall_number(name).unwrap();
+        let nr = syscall_number(name).test_unwrap();
         assert_eq!(nr, SYS_EXOFS_OBJECT_CREATE);
     }
 

@@ -16,11 +16,13 @@
 //! RECUR-01 : while, pas de for.
 
 use super::object_fd::OBJECT_TABLE;
+use super::object_store;
 use super::validation::{
     exofs_err_to_errno, validate_fd, validate_user_ptr, verify_cap, write_user_buf, CapabilityType,
     EINVAL, EXOFS_LIST_MAX, EXOFS_NAME_MAX,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::path::path_index::PathIndex;
 use alloc::vec::Vec;
@@ -85,8 +87,7 @@ pub struct ExofsDirEntry {
 fn list_dir_entries(fd: u32, max_entries: usize) -> ExofsResult<Vec<ExofsDirEntry>> {
     // Récupérer le BlobId du répertoire depuis la table de fds
     let blob_id = OBJECT_TABLE.blob_id_of(fd)?;
-    // Charger le contenu depuis le blob cache
-    let data = BLOB_CACHE.get(&blob_id).ok_or(ExofsError::ObjectNotFound)?;
+    let data = load_directory_blob(&blob_id)?;
     // Désérialiser en PathIndex
     let idx = PathIndex::from_bytes(&data).map_err(|_| ExofsError::CorruptedStructure)?;
     let all_entries = idx.entries();
@@ -121,6 +122,17 @@ fn list_dir_entries(fd: u32, max_entries: usize) -> ExofsResult<Vec<ExofsDirEntr
         i = i.saturating_add(1);
     }
     Ok(result)
+}
+
+fn load_directory_blob(blob_id: &BlobId) -> ExofsResult<Vec<u8>> {
+    if let Some(data) = BLOB_CACHE.get(blob_id) {
+        return Ok(data.into_vec());
+    }
+    if let Some(data) = object_store::load_blob_data_if_available(blob_id)? {
+        BLOB_CACHE.insert(*blob_id, data.clone())?;
+        return Ok(data);
+    }
+    Err(ExofsError::ObjectNotFound)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -209,7 +221,7 @@ pub fn sys_exofs_readdir(
         return EINVAL;
     }
     // SYS-01 : valider le pointeur de destination
-    if let Err(e) = validate_user_ptr(buf_ptr, buf_len as usize) {
+    if let Err(e) = validate_user_ptr(buf_ptr, core::mem::align_of::<LinuxDirent64>()) {
         return e;
     }
     // Valider le fd

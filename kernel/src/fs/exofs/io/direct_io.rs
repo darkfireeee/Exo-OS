@@ -257,8 +257,11 @@ impl DirectIo {
     }
 
     pub fn default_512() -> Self {
-        Self::new(DirectIoConfig::default_512())
-            .expect("DirectIoConfig::default_512() toujours valide")
+        let config = DirectIoConfig::default_512();
+        Self {
+            config,
+            stats: DirectIoStats::new(),
+        }
     }
 
     /// Valide un accès LBA → vérifier l'alignement et la limite.
@@ -356,13 +359,15 @@ impl DirectIo {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_block_size_from_u32() {
-        assert_eq!(BlockSize::from_u32(512).expect("ok"), BlockSize::B512);
-        assert_eq!(BlockSize::from_u32(4096).expect("ok"), BlockSize::B4096);
+        assert_eq!(BlockSize::from_u32(512).test_expect("ok"), BlockSize::B512);
+        assert_eq!(BlockSize::from_u32(4096).test_expect("ok"), BlockSize::B4096);
         assert!(BlockSize::from_u32(1024).is_err());
     }
 
@@ -383,14 +388,14 @@ mod tests {
 
     #[test]
     fn test_direct_io_buffer_write_read() {
-        let mut buf = DirectIoBuffer::new(2, BlockSize::B512).expect("ok");
+        let mut buf = DirectIoBuffer::new(2, BlockSize::B512).test_expect("ok");
         let _data = b"hello_direct_io_test_data_here____________padding_to_1024__";
         // on écrit exactement 512 bytes
         let mut src = [0x55u8; 512];
         src[..5].copy_from_slice(b"hello");
-        buf.write_from_slice(&src).expect("ok");
+        buf.write_from_slice(&src).test_expect("ok");
         let mut out = [0u8; 512];
-        buf.read_to_slice(&mut out).expect("ok");
+        buf.read_to_slice(&mut out).test_expect("ok");
         assert_eq!(&out[..5], b"hello");
     }
 
@@ -399,9 +404,9 @@ mod tests {
         let mut device = [0u8; 4096];
         device[512..517].copy_from_slice(b"block");
         let mut dio = DirectIo::default_512();
-        let mut buf = DirectIoBuffer::new(1, BlockSize::B512).expect("ok");
-        dio.read_aligned(&device, 1, &mut buf).expect("ok");
-        let blk = buf.block(0).expect("ok");
+        let mut buf = DirectIoBuffer::new(1, BlockSize::B512).test_expect("ok");
+        dio.read_aligned(&device, 1, &mut buf).test_expect("ok");
+        let blk = buf.block(0).test_expect("ok");
         assert_eq!(&blk.data[..5], b"block");
     }
 
@@ -409,9 +414,9 @@ mod tests {
     fn test_direct_io_write_aligned() {
         let mut device = [0u8; 4096];
         let mut dio = DirectIo::default_512();
-        let mut buf = DirectIoBuffer::new(1, BlockSize::B512).expect("ok");
-        buf.block_mut(0).expect("ok").data[..5].copy_from_slice(b"write");
-        dio.write_aligned(&mut device, 0, &buf).expect("ok");
+        let mut buf = DirectIoBuffer::new(1, BlockSize::B512).test_expect("ok");
+        buf.block_mut(0).test_expect("ok").data[..5].copy_from_slice(b"write");
+        dio.write_aligned(&mut device, 0, &buf).test_expect("ok");
         assert_eq!(&device[..5], b"write");
     }
 
@@ -419,7 +424,7 @@ mod tests {
     fn test_direct_io_out_of_bounds() {
         let device = [0u8; 512];
         let mut dio = DirectIo::default_512();
-        let mut buf = DirectIoBuffer::new(2, BlockSize::B512).expect("ok"); // 2 blocs = 1024 bytes
+        let mut buf = DirectIoBuffer::new(2, BlockSize::B512).test_expect("ok"); // 2 blocs = 1024 bytes
         assert!(dio.read_aligned(&device, 0, &mut buf).is_err());
         assert_eq!(dio.stats().reads_err, 1);
     }
@@ -428,9 +433,9 @@ mod tests {
     fn test_direct_io_stats() {
         let mut device = [0u8; 4096];
         let mut dio = DirectIo::default_512();
-        let mut buf = DirectIoBuffer::new(1, BlockSize::B512).expect("ok");
-        dio.read_aligned(&device, 0, &mut buf).expect("ok");
-        dio.write_aligned(&mut device, 1, &buf).expect("ok");
+        let mut buf = DirectIoBuffer::new(1, BlockSize::B512).test_expect("ok");
+        dio.read_aligned(&device, 0, &mut buf).test_expect("ok");
+        dio.write_aligned(&mut device, 1, &buf).test_expect("ok");
         assert_eq!(dio.stats().reads_ok, 1);
         assert_eq!(dio.stats().writes_ok, 1);
         assert!(dio.stats().is_clean());
@@ -440,8 +445,8 @@ mod tests {
     fn test_reset_stats() {
         let device = [0u8; 4096];
         let mut dio = DirectIo::default_512();
-        let mut buf = DirectIoBuffer::new(1, BlockSize::B512).expect("ok");
-        dio.read_aligned(&device, 0, &mut buf).expect("ok");
+        let mut buf = DirectIoBuffer::new(1, BlockSize::B512).test_expect("ok");
+        dio.read_aligned(&device, 0, &mut buf).test_expect("ok");
         dio.reset_stats();
         assert_eq!(dio.stats().reads_ok, 0);
     }
@@ -468,21 +473,21 @@ mod tests {
             max_blocks_per_op: 2,
             ..DirectIoConfig::default_512()
         };
-        let mut dio = DirectIo::new(cfg).expect("ok");
+        let mut dio = DirectIo::new(cfg).test_expect("ok");
         let device = [0u8; 4096];
-        let mut buf = DirectIoBuffer::new(4, BlockSize::B512).expect("ok"); // 4 > max
+        let mut buf = DirectIoBuffer::new(4, BlockSize::B512).test_expect("ok"); // 4 > max
         assert!(dio.read_aligned(&device, 0, &mut buf).is_err());
     }
 
     #[test]
     fn test_buffer_total_bytes() {
-        let buf = DirectIoBuffer::new(4, BlockSize::B512).expect("ok");
+        let buf = DirectIoBuffer::new(4, BlockSize::B512).test_expect("ok");
         assert_eq!(buf.total_bytes(), 2048);
     }
 
     #[test]
     fn test_block_index_out_of_range() {
-        let buf = DirectIoBuffer::new(2, BlockSize::B512).expect("ok");
+        let buf = DirectIoBuffer::new(2, BlockSize::B512).test_expect("ok");
         assert!(buf.block(2).is_err());
         assert!(buf.block(10).is_err());
     }

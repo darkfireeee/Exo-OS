@@ -246,6 +246,8 @@ impl fmt::Display for LoaderStats {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::objects::logical_object::LOGICAL_OBJECT_VERSION;
@@ -280,7 +282,7 @@ mod tests {
     #[test]
     fn test_load_from_buf_ok() {
         let buf = make_disk();
-        let obj_ref = ObjectLoader::load_from_buf(&buf, DiskOffset(0), false).unwrap();
+        let obj_ref = ObjectLoader::load_from_buf(&buf, DiskOffset(0), false).test_unwrap();
         let obj = obj_ref.read();
         assert_eq!(obj.data_size, 0);
     }
@@ -296,10 +298,10 @@ mod tests {
     #[test]
     fn test_serialize_roundtrip() {
         let buf = make_disk();
-        let obj_ref = ObjectLoader::load_from_buf(&buf, DiskOffset(0), false).unwrap();
+        let obj_ref = ObjectLoader::load_from_buf(&buf, DiskOffset(0), false).test_unwrap();
         let out = ObjectLoader::serialize(&obj_ref);
         // Le checksum doit être cohérent.
-        let obj2 = ObjectLoader::load_from_buf(&out, DiskOffset(0), false).unwrap();
+        let obj2 = ObjectLoader::load_from_buf(&out, DiskOffset(0), false).test_unwrap();
         let o1 = obj_ref.read();
         let o2 = obj2.read();
         assert_eq!(o1.data_size, o2.data_size);

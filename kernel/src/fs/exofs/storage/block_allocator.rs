@@ -364,6 +364,8 @@ impl BlockAllocator {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -371,22 +373,22 @@ mod tests {
     const N_BLOCKS: u64 = 512;
 
     fn make() -> BlockAllocator {
-        BlockAllocator::new(HEAP_START, N_BLOCKS).unwrap()
+        BlockAllocator::new(HEAP_START, N_BLOCKS).test_unwrap()
     }
 
     #[test]
     fn test_alloc_commit() {
         let a = make();
-        let ext = a.alloc_extent(4096).unwrap();
-        a.commit_extent(ext.offset, 4096).unwrap();
+        let ext = a.alloc_extent(4096).test_unwrap();
+        a.commit_extent(ext.offset, 4096).test_unwrap();
         assert_eq!(a.n_commits(), 1);
     }
 
     #[test]
     fn test_alloc_rollback() {
         let a = make();
-        let ext = a.alloc_extent(4096).unwrap();
-        a.rollback_extent(ext.offset).unwrap();
+        let ext = a.alloc_extent(4096).test_unwrap();
+        a.rollback_extent(ext.offset).test_unwrap();
         assert_eq!(a.n_rollbacks(), 1);
     }
 
@@ -400,9 +402,9 @@ mod tests {
     #[test]
     fn test_free_committed() {
         let a = make();
-        let ext = a.alloc_extent(4096).unwrap();
-        a.commit_extent(ext.offset, 4096).unwrap();
-        a.free_committed(ext.offset).unwrap();
+        let ext = a.alloc_extent(4096).test_unwrap();
+        a.commit_extent(ext.offset, 4096).test_unwrap();
+        a.free_committed(ext.offset).test_unwrap();
     }
 
     #[test]
@@ -414,10 +416,10 @@ mod tests {
     #[test]
     fn test_gc_freed() {
         let a = make();
-        let ext = a.alloc_extent(4096).unwrap();
-        a.commit_extent(ext.offset, 4096).unwrap();
-        a.free_committed(ext.offset).unwrap();
-        let freed = a.gc_freed_handles().unwrap();
+        let ext = a.alloc_extent(4096).test_unwrap();
+        a.commit_extent(ext.offset, 4096).test_unwrap();
+        a.free_committed(ext.offset).test_unwrap();
+        let freed = a.gc_freed_handles().test_unwrap();
         assert_eq!(freed, 0); // déjà drainé lors du free
     }
 }

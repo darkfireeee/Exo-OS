@@ -276,6 +276,8 @@ impl CacheTier {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -354,7 +356,7 @@ mod tests {
     #[test]
     fn test_resize() {
         let mut p = CachePolicy::new(CacheConfig::minimal());
-        p.resize(64 * 1024 * 1024).unwrap();
+        p.resize(64 * 1024 * 1024).test_unwrap();
         assert_eq!(p.config.max_bytes, 64 * 1024 * 1024);
     }
 

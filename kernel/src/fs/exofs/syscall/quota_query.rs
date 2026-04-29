@@ -397,6 +397,8 @@ pub fn sys_exofs_quota_query(
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -417,7 +419,7 @@ mod tests {
 
     #[test]
     fn test_get_quota_default_unlimited() {
-        let q = get_quota(0xDEAD_BEEF).unwrap();
+        let q = get_quota(0xDEAD_BEEF).test_unwrap();
         assert_eq!(q.hard_bytes, QUOTA_UNLIMITED);
         assert_eq!(q.hard_objects, QUOTA_UNLIMITED);
     }
@@ -439,8 +441,8 @@ mod tests {
             flags: quota_flags::SOFT_LIMIT | quota_flags::HARD_LIMIT,
             _pad: 0,
         };
-        set_quota(&set).unwrap();
-        let q = get_quota(uid).unwrap();
+        set_quota(&set).test_unwrap();
+        let q = get_quota(uid).test_unwrap();
         assert_eq!(q.hard_bytes, 1024);
         assert_eq!(q.hard_objects, 20);
     }
@@ -457,7 +459,7 @@ mod tests {
             flags: quota_flags::HARD_LIMIT,
             _pad: 0,
         };
-        set_quota(&set).unwrap();
+        set_quota(&set).test_unwrap();
         assert!(check_quota(uid, 200, 0).is_err());
     }
 
@@ -466,7 +468,7 @@ mod tests {
         let uid = 0x99u64;
         quota_add_usage(uid, 512, 3).ok();
         quota_sub_usage(uid, 100, 1).ok();
-        let q = get_quota(uid).unwrap();
+        let q = get_quota(uid).test_unwrap();
         // usage peut être 0 si l'entrée n'existait pas avant
         let _ = q.used_bytes;
     }

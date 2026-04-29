@@ -470,6 +470,8 @@ pub static BLOB_REFCOUNT: BlobRefcount = BlobRefcount::new();
 // ==============================================================================
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -494,7 +496,7 @@ mod tests {
     fn test_register_and_get() {
         let table = BlobRefcount::new();
         let id = make_blob_id(1);
-        table.register(id, 4096, epoch(1)).unwrap();
+        table.register(id, 4096, epoch(1)).test_unwrap();
         assert_eq!(table.get(&id), Some(1));
         assert_eq!(table.phys_size(&id), Some(4096));
         assert_eq!(table.blob_count(), 1);
@@ -504,7 +506,7 @@ mod tests {
     fn test_register_duplicate_fails() {
         let table = BlobRefcount::new();
         let id = make_blob_id(2);
-        table.register(id, 1024, epoch(1)).unwrap();
+        table.register(id, 1024, epoch(1)).test_unwrap();
         let r = table.register(id, 1024, epoch(1));
         assert!(r.is_err());
     }
@@ -513,10 +515,10 @@ mod tests {
     fn test_inc_dec() {
         let table = BlobRefcount::new();
         let id = make_blob_id(3);
-        table.register(id, 512, epoch(1)).unwrap();
-        assert_eq!(table.inc(&id).unwrap(), 2);
-        assert_eq!(table.inc(&id).unwrap(), 3);
-        let (new_count, _) = table.dec(&id, epoch(10)).unwrap();
+        table.register(id, 512, epoch(1)).test_unwrap();
+        assert_eq!(table.inc(&id).test_unwrap(), 2);
+        assert_eq!(table.inc(&id).test_unwrap(), 3);
+        let (new_count, _) = table.dec(&id, epoch(10)).test_unwrap();
         assert_eq!(new_count, 2);
     }
 
@@ -524,8 +526,8 @@ mod tests {
     fn test_dec_to_zero_adds_deferred() {
         let table = BlobRefcount::new();
         let id = make_blob_id(4);
-        table.register(id, 2048, epoch(5)).unwrap();
-        let (new_count, _) = table.dec(&id, epoch(10)).unwrap();
+        table.register(id, 2048, epoch(5)).test_unwrap();
+        let (new_count, _) = table.dec(&id, epoch(10)).test_unwrap();
         assert_eq!(new_count, 0);
         assert_eq!(table.deferred_len(), 1);
     }
@@ -534,8 +536,8 @@ mod tests {
     fn test_flush_deferred_respects_min_epoch() {
         let table = BlobRefcount::new();
         let id = make_blob_id(5);
-        table.register(id, 1024, epoch(1)).unwrap();
-        table.dec(&id, epoch(3)).unwrap(); // min_epoch = 3 + 2 = 5
+        table.register(id, 1024, epoch(1)).test_unwrap();
+        table.dec(&id, epoch(3)).test_unwrap(); // min_epoch = 3 + 2 = 5
                                            // Epoch 4 : pas encore pret.
         let ready = table.flush_deferred(epoch(4));
         assert!(ready.is_empty());
@@ -549,11 +551,11 @@ mod tests {
     fn test_queue_zero_requeues_ready_blob_without_underflow() {
         let table = BlobRefcount::new();
         let id = make_blob_id(42);
-        table.register(id, 1024, epoch(1)).unwrap();
-        table.dec(&id, epoch(3)).unwrap();
+        table.register(id, 1024, epoch(1)).test_unwrap();
+        table.dec(&id, epoch(3)).test_unwrap();
         let ready = table.flush_deferred(epoch(5));
         assert_eq!(ready.len(), 1);
-        assert_eq!(table.queue_zero(&id, epoch(6)).unwrap(), 1024);
+        assert_eq!(table.queue_zero(&id, epoch(6)).test_unwrap(), 1024);
         assert_eq!(table.deferred_len(), 1);
     }
 
@@ -564,8 +566,8 @@ mod tests {
 
         for i in 0..COUNT {
             let id = make_blob_id_u16(i);
-            table.register(id, 4096, epoch(1)).unwrap();
-            table.dec(&id, epoch(4)).unwrap();
+            table.register(id, 4096, epoch(1)).test_unwrap();
+            table.dec(&id, epoch(4)).test_unwrap();
         }
 
         let ready = table.flush_deferred(epoch(6));
@@ -573,7 +575,7 @@ mod tests {
 
         for i in 0..COUNT {
             let id = make_blob_id_u16(i);
-            assert_eq!(table.queue_zero(&id, epoch(7)).unwrap(), 4096);
+            assert_eq!(table.queue_zero(&id, epoch(7)).test_unwrap(), 4096);
         }
 
         assert_eq!(table.deferred_len(), COUNT as usize);
@@ -583,9 +585,9 @@ mod tests {
     fn test_remove_zero() {
         let table = BlobRefcount::new();
         let id = make_blob_id(6);
-        table.register(id, 8192, epoch(1)).unwrap();
-        table.dec(&id, epoch(10)).unwrap();
-        let freed = table.remove_zero(&id).unwrap();
+        table.register(id, 8192, epoch(1)).test_unwrap();
+        table.dec(&id, epoch(10)).test_unwrap();
+        let freed = table.remove_zero(&id).test_unwrap();
         assert_eq!(freed, 8192);
         assert_eq!(table.get(&id), None);
     }
@@ -594,7 +596,7 @@ mod tests {
     fn test_remove_nonzero_fails() {
         let table = BlobRefcount::new();
         let id = make_blob_id(7);
-        table.register(id, 1024, epoch(1)).unwrap();
+        table.register(id, 1024, epoch(1)).test_unwrap();
         // ref_count = 1, pas 0
         let r = table.remove_zero(&id);
         assert!(r.is_err());
@@ -605,9 +607,9 @@ mod tests {
         let table = BlobRefcount::new();
         let id1 = make_blob_id(10);
         let id2 = make_blob_id(11);
-        table.register(id1, 512, epoch(1)).unwrap();
-        table.register(id2, 1024, epoch(1)).unwrap();
-        table.dec(&id1, epoch(5)).unwrap(); // id1 -> ref=0
+        table.register(id1, 512, epoch(1)).test_unwrap();
+        table.register(id2, 1024, epoch(1)).test_unwrap();
+        table.dec(&id1, epoch(5)).test_unwrap(); // id1 -> ref=0
         let zeros = table.collect_zero_refs();
         assert_eq!(zeros.len(), 1);
         assert_eq!(zeros[0].0, id1);
@@ -617,9 +619,9 @@ mod tests {
     fn test_stats() {
         let table = BlobRefcount::new();
         let id = make_blob_id(20);
-        table.register(id, 512, epoch(1)).unwrap();
-        table.inc(&id).unwrap();
-        table.dec(&id, epoch(10)).unwrap();
+        table.register(id, 512, epoch(1)).test_unwrap();
+        table.inc(&id).test_unwrap();
+        table.dec(&id, epoch(10)).test_unwrap();
         let s = table.stats();
         assert_eq!(s.blobs_registered, 1);
         assert_eq!(s.inc_total, 1);

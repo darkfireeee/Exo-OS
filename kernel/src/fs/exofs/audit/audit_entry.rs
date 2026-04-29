@@ -472,6 +472,8 @@ impl AuditSummary {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -542,7 +544,7 @@ mod tests {
             .result(AuditResult::Success)
             .seq(5)
             .build()
-            .unwrap();
+            .test_unwrap();
         assert!(e.is_valid());
         assert!(e.is_mutating());
     }

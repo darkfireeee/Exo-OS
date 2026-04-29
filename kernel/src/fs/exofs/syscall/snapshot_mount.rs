@@ -259,6 +259,8 @@ pub fn unmount_snapshot(fd: u32) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::snapshot_create::{create_snapshot, snap_flags};
     use super::*;
@@ -267,8 +269,8 @@ mod tests {
         let src_id = BlobId::from_bytes_blake3(path);
         BLOB_CACHE
             .insert(src_id, b"snapshot source data".to_vec())
-            .unwrap();
-        let r = create_snapshot(src_id, epoch, snap_flags::READ_ONLY, b"").unwrap();
+            .test_unwrap();
+        let r = create_snapshot(src_id, epoch, snap_flags::READ_ONLY, b"").test_unwrap();
         BlobId(r.snapshot_id)
     }
 
@@ -280,7 +282,7 @@ mod tests {
             _pad: 0,
             epoch_id: 0,
         };
-        let r = mount_snapshot(sid, &args).unwrap();
+        let r = mount_snapshot(sid, &args).test_unwrap();
         assert!(r.fd >= 4);
         assert_eq!(r.epoch_id, 3);
         OBJECT_TABLE.close(r.fd);
@@ -294,7 +296,7 @@ mod tests {
             _pad: 0,
             epoch_id: 0,
         };
-        let r = mount_snapshot(sid, &args).unwrap();
+        let r = mount_snapshot(sid, &args).test_unwrap();
         assert!(r.fd >= 4);
         OBJECT_TABLE.close(r.fd);
     }
@@ -330,7 +332,7 @@ mod tests {
     #[test]
     fn test_is_valid_snapshot_false() {
         let id = BlobId::from_bytes_blake3(b"/mount/invalid");
-        BLOB_CACHE.insert(id, b"no magic".to_vec()).unwrap();
+        BLOB_CACHE.insert(id, b"no magic".to_vec()).test_unwrap();
         assert!(!is_valid_snapshot(id));
     }
 
@@ -354,7 +356,7 @@ mod tests {
             _pad: 0,
             epoch_id: 0,
         };
-        let r = mount_snapshot(sid, &args).unwrap();
+        let r = mount_snapshot(sid, &args).test_unwrap();
         unmount_snapshot(r.fd); // ne doit pas paniquer
     }
 
@@ -497,8 +499,8 @@ mod advanced_tests {
 
     fn make_snap(path: &[u8], epoch: u64) -> BlobId {
         let src_id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(src_id, b"body data".to_vec()).unwrap();
-        let r = create_snapshot(src_id, epoch, snap_flags::READ_ONLY, b"").unwrap();
+        BLOB_CACHE.insert(src_id, b"body data".to_vec()).test_unwrap();
+        let r = create_snapshot(src_id, epoch, snap_flags::READ_ONLY, b"").test_unwrap();
         BlobId(r.snapshot_id)
     }
 
@@ -521,13 +523,13 @@ mod advanced_tests {
 
     #[test]
     fn test_encode_mount_entries_empty() {
-        assert!(encode_mount_entries(&[]).unwrap().is_empty());
+        assert!(encode_mount_entries(&[]).test_unwrap().is_empty());
     }
 
     #[test]
     fn test_encode_mount_entries_one() {
         let e = MountEntry::default();
-        let buf = encode_mount_entries(&[e]).unwrap();
+        let buf = encode_mount_entries(&[e]).test_unwrap();
         assert_eq!(buf.len(), 64);
     }
 
@@ -552,7 +554,7 @@ mod advanced_tests {
             _pad: 0,
             epoch_id: 0,
         };
-        let r = mount_snapshot(sid, &args).unwrap();
+        let r = mount_snapshot(sid, &args).test_unwrap();
         assert!(is_snapshot_fd(r.fd));
         OBJECT_TABLE.close(r.fd);
     }

@@ -341,6 +341,8 @@ pub fn check_heap_space(heap: &ExofsHeap, size: u64) -> ExofsResult<()> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::storage::layout::HEAP_START_OFFSET;
@@ -348,7 +350,7 @@ mod tests {
     const DISK_SIZE: u64 = 64 * 1024 * 1024; // 64 MB
 
     fn make_heap() -> ExofsHeap {
-        ExofsHeap::new(DISK_SIZE).unwrap()
+        ExofsHeap::new(DISK_SIZE).test_unwrap()
     }
 
     #[test]
@@ -361,17 +363,17 @@ mod tests {
     #[test]
     fn test_alloc_and_free() {
         let h = make_heap();
-        let ext = h.alloc(8192).unwrap();
+        let ext = h.alloc(8192).test_unwrap();
         assert_eq!(ext.size, 8192);
         assert!(h.extent_in_bounds(&ext));
-        h.free(ext).unwrap();
+        h.free(ext).test_unwrap();
         assert_eq!(h.free_bytes(), h.total_bytes());
     }
 
     #[test]
     fn test_alloc_blocks() {
         let h = make_heap();
-        let ext = h.alloc_blocks(3).unwrap();
+        let ext = h.alloc_blocks(3).test_unwrap();
         assert_eq!(ext.size, 3 * BLOCK_SIZE);
     }
 
@@ -399,7 +401,7 @@ mod tests {
     #[test]
     fn test_required_heap_size() {
         // 100 blobs × 4096 bytes + 10% overhead = 100 × 4096 × 1.1 = 450560.
-        let s = required_heap_size(100, 4096, 10).unwrap();
+        let s = required_heap_size(100, 4096, 10).test_unwrap();
         assert_eq!(s, 100 * 4096 + (100 * 4096 / 10));
     }
 

@@ -435,6 +435,8 @@ impl fmt::Display for BuildStats {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -445,7 +447,7 @@ mod tests {
         let (obj_ref, blob_id) = ObjectBuilder::new(ObjectKind::Blob, ObjectClass::Class1, epoch)
             .with_owner(1000, 100)
             .build_with_data(data)
-            .unwrap();
+            .test_unwrap();
 
         let obj = obj_ref.read();
         assert_eq!(obj.data_size, data.len() as u64);
@@ -461,7 +463,7 @@ mod tests {
         let epoch = EpochId(1);
         let obj_ref = ObjectBuilder::new(ObjectKind::PathIndex, ObjectClass::Class2, epoch)
             .build_empty()
-            .unwrap();
+            .test_unwrap();
         let obj = obj_ref.read();
         assert_eq!(obj.data_size, 0);
         assert!(!obj.is_inline());
@@ -488,7 +490,7 @@ mod tests {
     fn test_blob_class1_factory() {
         let data = b"executable code here";
         let (obj_ref, _bid) =
-            ObjectBuilder::blob_class1(data, [0u8; 32], 0, 0, EpochId(3)).unwrap();
+            ObjectBuilder::blob_class1(data, [0u8; 32], 0, 0, EpochId(3)).test_unwrap();
         let obj = obj_ref.read();
         assert!(matches!(obj.kind, ObjectKind::Blob));
         assert!(matches!(obj.class, ObjectClass::Class1));

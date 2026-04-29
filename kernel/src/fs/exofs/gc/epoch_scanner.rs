@@ -464,6 +464,8 @@ pub static EPOCH_SCANNER: EpochScanner = EpochScanner::new();
 // ==============================================================================
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::{BlobId, EpochId, ObjectId};
@@ -505,7 +507,7 @@ mod tests {
     #[test]
     fn test_scan_empty_roots() {
         let scanner = EpochScanner::new();
-        let snap = scanner.scan(&[]).unwrap();
+        let snap = scanner.scan(&[]).test_unwrap();
         assert_eq!(snap.root_objects.len(), 0);
         assert_eq!(snap.live_count(), 0);
     }
@@ -515,9 +517,9 @@ mod tests {
         let scanner = EpochScanner::new();
         let mut root = EpochRootInMemory::new(eid(42));
         root.add_modified(oid(1), offset(1024), EpochRootEntry::FLAG_MODIFIED)
-            .unwrap();
+            .test_unwrap();
 
-        let snap = scanner.scan(&[Some(&root), None, None]).unwrap();
+        let snap = scanner.scan(&[Some(&root), None, None]).test_unwrap();
         assert_eq!(snap.live_count(), 1);
         assert_eq!(snap.stats.slots_valid, 1);
     }
@@ -526,9 +528,9 @@ mod tests {
     fn test_scan_deleted_not_live() {
         let scanner = EpochScanner::new();
         let mut root = EpochRootInMemory::new(eid(10));
-        root.add_deleted(oid(5)).unwrap();
+        root.add_deleted(oid(5)).test_unwrap();
 
-        let snap = scanner.scan(&[Some(&root), None, None]).unwrap();
+        let snap = scanner.scan(&[Some(&root), None, None]).test_unwrap();
         assert!(snap.is_deleted(&oid(5)));
         assert_eq!(snap.live_count(), 0);
         assert_eq!(snap.stats.deleted_roots, 1);
@@ -539,19 +541,19 @@ mod tests {
         let scanner = EpochScanner::new();
         let mut root = EpochRootInMemory::new(eid(5));
         root.add_modified(oid(1), offset(512), EpochRootEntry::FLAG_CREATED)
-            .unwrap();
+            .test_unwrap();
 
         // Lookup: oid(1) -> [bid(10), bid(11)]
         let mut map = BTreeMap::new();
         map.insert(oid(1), alloc::vec![bid(10), bid(11)]);
         let lookup = SimpleLookup { map };
 
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         ws.insert_node(BlobNode::new(bid(10), 512, 1, 5, 0, false));
         ws.insert_node(BlobNode::new(bid(11), 256, 1, 5, 0, false));
 
-        let snap = scanner.scan(&[Some(&root), None, None]).unwrap();
-        let count = scanner.build_grey_set(&snap, &mut ws, &lookup).unwrap();
+        let snap = scanner.scan(&[Some(&root), None, None]).test_unwrap();
+        let count = scanner.build_grey_set(&snap, &mut ws, &lookup).test_unwrap();
 
         assert_eq!(count, 2);
         assert_eq!(ws.grey_queue_len(), 2);
@@ -564,21 +566,21 @@ mod tests {
         let mut root_a = EpochRootInMemory::new(eid(1));
         root_a
             .add_modified(oid(1), offset(0), EpochRootEntry::FLAG_CREATED)
-            .unwrap();
+            .test_unwrap();
 
         let mut root_b = EpochRootInMemory::new(eid(2));
         root_b
             .add_modified(oid(2), offset(0), EpochRootEntry::FLAG_MODIFIED)
-            .unwrap();
+            .test_unwrap();
 
         let mut root_c = EpochRootInMemory::new(eid(3));
         root_c
             .add_modified(oid(3), offset(0), EpochRootEntry::FLAG_MODIFIED)
-            .unwrap();
+            .test_unwrap();
 
         let snap = scanner
             .scan(&[Some(&root_a), Some(&root_b), Some(&root_c)])
-            .unwrap();
+            .test_unwrap();
         assert_eq!(snap.stats.slots_valid, 3);
         assert_eq!(snap.live_count(), 3);
     }

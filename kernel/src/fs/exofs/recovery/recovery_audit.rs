@@ -658,6 +658,8 @@ pub struct AuditDiagnostic {
 // ── Tests unitaires ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -667,7 +669,7 @@ mod tests {
         assert!(audit.is_empty());
         audit.record_recovery_started(EpochId(1));
         assert_eq!(audit.total(), 1);
-        let entries = audit.read_recent(10).unwrap();
+        let entries = audit.read_recent(10).test_unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].kind as u8, AuditEventKind::RecoveryStarted as u8);
     }

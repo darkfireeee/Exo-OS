@@ -384,6 +384,8 @@ impl SnapshotDiff {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::reset_for_test;
@@ -421,8 +423,8 @@ mod tests {
         let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         let _ = list;
-        SNAPSHOT_LIST.register(make_snap(1)).unwrap();
-        SNAPSHOT_LIST.register(make_snap(2)).unwrap();
+        SNAPSHOT_LIST.register(make_snap(1)).test_unwrap();
+        SNAPSHOT_LIST.register(make_snap(2)).test_unwrap();
 
         let b1 = compute_blob_id(b"data1");
         let b2 = compute_blob_id(b"data2");
@@ -439,7 +441,7 @@ mod tests {
             &enumerator,
             DiffOptions::default(),
         )
-        .unwrap();
+        .test_unwrap();
         assert_eq!(report.n_added, 1);
         assert_eq!(report.n_removed, 1);
         assert!(!report.has_changes() || report.has_changes()); // OK
@@ -457,9 +459,9 @@ mod tests {
         s2.root_blob = b;
         s2.n_blobs = 1;
         let _ = list;
-        SNAPSHOT_LIST.register(s1).unwrap();
-        SNAPSHOT_LIST.register(s2).unwrap();
-        let identical = SnapshotDiff::is_identical(SnapshotId(10), SnapshotId(11)).unwrap();
+        SNAPSHOT_LIST.register(s1).test_unwrap();
+        SNAPSHOT_LIST.register(s2).test_unwrap();
+        let identical = SnapshotDiff::is_identical(SnapshotId(10), SnapshotId(11)).test_unwrap();
         assert!(identical);
     }
 
@@ -468,8 +470,8 @@ mod tests {
         let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         let _ = list;
-        SNAPSHOT_LIST.register(make_snap(20)).unwrap();
-        SNAPSHOT_LIST.register(make_snap(21)).unwrap();
+        SNAPSHOT_LIST.register(make_snap(20)).test_unwrap();
+        SNAPSHOT_LIST.register(make_snap(21)).test_unwrap();
         let blobs: alloc::vec::Vec<(BlobId, u64)> = (0u8..10)
             .map(|i| {
                 let mut b = [0u8; 32];
@@ -486,7 +488,7 @@ mod tests {
             include_unchanged: false,
         };
         let report =
-            SnapshotDiff::compare(SnapshotId(20), SnapshotId(21), &enumerator, opts).unwrap();
+            SnapshotDiff::compare(SnapshotId(20), SnapshotId(21), &enumerator, opts).test_unwrap();
         assert!(report.truncated);
         assert_eq!(report.entries.len(), 3);
     }

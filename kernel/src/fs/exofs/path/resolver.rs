@@ -339,6 +339,8 @@ pub fn resolve_parent<R: PathResolver>(path: &[u8], resolver: &R) -> ExofsResult
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -375,7 +377,7 @@ mod tests {
     #[test]
     fn test_resolve_simple() {
         let r = MockResolver;
-        let res = resolve_path(b"/usr/bin", &r).unwrap();
+        let res = resolve_path(b"/usr/bin", &r).test_unwrap();
         assert_eq!(res.0[0], 11);
     }
 
@@ -389,14 +391,14 @@ mod tests {
     fn test_resolve_symlink() {
         let r = MockResolver;
         // /lnk → /usr/bin
-        let res = resolve_path(b"/lnk", &r).unwrap();
+        let res = resolve_path(b"/lnk", &r).test_unwrap();
         assert_eq!(res.0[0], 11);
     }
 
     #[test]
     fn test_resolve_no_follow() {
         let r = MockResolver;
-        let res = resolve_no_follow(b"/lnk", &r).unwrap();
+        let res = resolve_no_follow(b"/lnk", &r).test_unwrap();
         // Avec no_follow_last, on doit rester sur le symlink lui-même
         assert_eq!(res.oid.0[0], 20);
     }
@@ -411,7 +413,7 @@ mod tests {
     #[test]
     fn test_resolve_parent() {
         let r = MockResolver;
-        let p = resolve_parent(b"/usr/bin", &r).unwrap();
+        let p = resolve_parent(b"/usr/bin", &r).test_unwrap();
         assert_eq!(p.0[0], 10);
     }
 }

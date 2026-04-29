@@ -305,6 +305,8 @@ pub static NUMA_PLACEMENT: NumaPlacement = NumaPlacement::new_const();
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -314,7 +316,7 @@ mod tests {
 
     fn init_p(n: u8, s: PlacementStrategy) -> NumaPlacement {
         let p = NumaPlacement::new_const();
-        p.init(n, s).unwrap();
+        p.init(n, s).test_unwrap();
         p
     }
 
@@ -343,7 +345,7 @@ mod tests {
     #[test]
     fn test_pinned_strategy() {
         let p = init_p(4, PlacementStrategy::Pinned);
-        p.set_pinned_node(NumaNodeId(2)).unwrap();
+        p.set_pinned_node(NumaNodeId(2)).test_unwrap();
         let mut i = 0usize;
         while i < 5 {
             assert_eq!(p.node_for(&hint()), 2);
@@ -436,7 +438,7 @@ mod tests {
     #[test]
     fn test_node_distribution_len() {
         let p = init_p(3, PlacementStrategy::RoundRobin);
-        let d = p.node_distribution(10).unwrap();
+        let d = p.node_distribution(10).test_unwrap();
         assert_eq!(d.len(), 3);
     }
 }

@@ -601,6 +601,8 @@ impl StreamSink for VecStreamSink {
 // ─── MockBlobDataProvider ─────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 struct MockProvider {
     blobs: Vec<([u8; 32], Vec<u8>, EpochId)>,
 }
@@ -717,11 +719,11 @@ mod tests {
     fn test_export_zero_blobs() {
         let provider = MockProvider::new();
         let cfg = StreamExportConfig::default(1);
-        let mut exporter = StreamExporter::new(cfg).expect("ok");
+        let mut exporter = StreamExporter::new(cfg).test_expect("ok");
         let mut sink = VecStreamSink::new();
         let report = exporter
             .run(&provider, &mut sink, &[], &[], StreamFilter::accept_all())
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(report.blobs_exported, 0);
         assert!(report.is_complete);
     }
@@ -734,12 +736,12 @@ mod tests {
             verify_blob_id: false,
             ..StreamExportConfig::default(1)
         };
-        let mut exporter = StreamExporter::new(cfg).expect("ok");
+        let mut exporter = StreamExporter::new(cfg).test_expect("ok");
         let mut sink = VecStreamSink::new();
         let ids = [bid];
         let report = exporter
             .run(&provider, &mut sink, &ids, &[], StreamFilter::accept_all())
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(report.blobs_exported, 1);
         assert_eq!(sink.entry_count(), 1);
         assert!(report.is_complete);
@@ -757,11 +759,11 @@ mod tests {
             verify_blob_id: false,
             ..StreamExportConfig::default(1)
         };
-        let mut exporter = StreamExporter::new(cfg).expect("ok");
+        let mut exporter = StreamExporter::new(cfg).test_expect("ok");
         let mut sink = VecStreamSink::new();
         let report = exporter
             .run(&provider, &mut sink, &ids, &[], StreamFilter::accept_all())
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(report.blobs_exported, 5);
         assert_eq!(report.bytes_exported, 320);
     }
@@ -770,7 +772,7 @@ mod tests {
     fn test_export_with_tombstones() {
         let provider = MockProvider::new();
         let cfg = StreamExportConfig::default(1);
-        let mut exporter = StreamExporter::new(cfg).expect("ok");
+        let mut exporter = StreamExporter::new(cfg).test_expect("ok");
         let mut sink = VecStreamSink::new();
         let tombs = [make_id(11), make_id(22)];
         let report = exporter
@@ -781,7 +783,7 @@ mod tests {
                 &tombs,
                 StreamFilter::accept_all(),
             )
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(report.tombstones_emitted, 2);
     }
 
@@ -797,11 +799,11 @@ mod tests {
             max_blobs: 4,
             ..StreamExportConfig::default(1)
         };
-        let mut exporter = StreamExporter::new(cfg).expect("ok");
+        let mut exporter = StreamExporter::new(cfg).test_expect("ok");
         let mut sink = VecStreamSink::new();
         let report = exporter
             .run(&provider, &mut sink, &ids, &[], StreamFilter::accept_all())
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(report.blobs_exported, 4);
     }
 
@@ -810,7 +812,7 @@ mod tests {
         let cfg = StreamExportConfig::default(5);
         let mut batch = StreamExportBatch::new(1, cfg);
         for i in 0u8..3 {
-            batch.add_blob(make_id(i)).expect("ok");
+            batch.add_blob(make_id(i)).test_expect("ok");
         }
         assert_eq!(batch.blob_count(), 3);
         assert_eq!(batch.state, BatchState::Pending);
@@ -829,10 +831,10 @@ mod tests {
         };
         let mut batch = StreamExportBatch::new(1, cfg);
         for id in &actual_ids {
-            batch.add_blob(*id).expect("ok");
+            batch.add_blob(*id).test_expect("ok");
         }
         let mut sink = VecStreamSink::new();
-        let report = batch.run(&provider, &mut sink).expect("ok");
+        let report = batch.run(&provider, &mut sink).test_expect("ok");
         assert_eq!(report.blobs_exported, 3);
         assert!(batch.is_done());
     }
@@ -857,9 +859,9 @@ mod tests {
     #[test]
     fn test_vec_stream_sink() {
         let mut sink = VecStreamSink::new();
-        sink.begin_entry(&[0u8; 32], 4).expect("ok");
-        sink.write_chunk(b"data").expect("ok");
-        sink.end_entry().expect("ok");
+        sink.begin_entry(&[0u8; 32], 4).test_expect("ok");
+        sink.write_chunk(b"data").test_expect("ok");
+        sink.end_entry().test_expect("ok");
         assert_eq!(sink.bytes_written(), 4);
         assert_eq!(sink.entry_count(), 1);
         assert_eq!(sink.as_slice(), b"data");

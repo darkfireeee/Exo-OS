@@ -312,6 +312,8 @@ pub fn relations_of_kind(source: &[u8; 32], kind: u8) -> ExofsResult<Vec<Relatio
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::relation_create::{create_relation, rel_kind};
     use super::*;
@@ -342,7 +344,7 @@ mod tests {
     #[test]
     fn test_query_outgoing() {
         let s = setup(b"/rq/out");
-        let targets = outgoing_targets(&s).unwrap();
+        let targets = outgoing_targets(&s).test_unwrap();
         assert_eq!(targets.len(), 2);
     }
 
@@ -352,7 +354,7 @@ mod tests {
         let t = id(b"/rq/kind/t");
         create_relation(&s, &t, rel_kind::PARENT, 0, b"").ok();
         create_relation(&s, &t, rel_kind::CHILD, 0, b"").ok();
-        let children = relations_of_kind(&s, rel_kind::CHILD).unwrap();
+        let children = relations_of_kind(&s, rel_kind::CHILD).test_unwrap();
         assert_eq!(children.len(), 1);
     }
 
@@ -372,7 +374,7 @@ mod tests {
             _pad2: 0,
             _reserved: [0; 8],
         };
-        let rels = query_relations(&args).unwrap();
+        let rels = query_relations(&args).test_unwrap();
         if rels.len() >= 2 {
             assert!(
                 name_lt(rels[0].name_bytes(), rels[1].name_bytes())
@@ -406,7 +408,7 @@ mod tests {
             _pad2: 0,
             _reserved: [0; 8],
         };
-        let rels = query_relations(&args).unwrap();
+        let rels = query_relations(&args).test_unwrap();
         assert!(rels.is_empty());
     }
 
@@ -440,7 +442,7 @@ mod tests {
             _pad2: 0,
             _reserved: [0; 8],
         };
-        let rels = query_relations(&args).unwrap();
+        let rels = query_relations(&args).test_unwrap();
         assert!(rels.len() <= QUERY_MAX_RESULTS);
     }
 }

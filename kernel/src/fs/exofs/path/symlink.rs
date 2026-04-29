@@ -451,6 +451,8 @@ pub fn checked_symlink_target(raw: &[u8], oid: ObjectId) -> ExofsResult<SymlinkT
 
 // -- Tests supplémentaires ---------------------------------------------------
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod extra_tests {
     use super::*;
 
@@ -462,17 +464,17 @@ mod extra_tests {
 
     #[test]
     fn test_resolve_context_follow() {
-        let mut ctx = SymlinkResolveContext::new(b"/a/b", 5).unwrap();
-        ctx.follow(b"/c/d").unwrap();
+        let mut ctx = SymlinkResolveContext::new(b"/a/b", 5).test_unwrap();
+        ctx.follow(b"/c/d").test_unwrap();
         assert_eq!(ctx.current(), b"/c/d");
         assert_eq!(ctx.depth, 1);
     }
 
     #[test]
     fn test_resolve_context_exhaustion() {
-        let mut ctx = SymlinkResolveContext::new(b"/loop", 2).unwrap();
-        ctx.follow(b"/loop").unwrap();
-        ctx.follow(b"/loop").unwrap();
+        let mut ctx = SymlinkResolveContext::new(b"/loop", 2).test_unwrap();
+        ctx.follow(b"/loop").test_unwrap();
+        ctx.follow(b"/loop").test_unwrap();
         assert!(ctx.is_exhausted());
         assert!(ctx.follow(b"/loop").is_err());
     }
@@ -487,7 +489,7 @@ mod extra_tests {
 
     #[test]
     fn test_validate_target_ok() {
-        validate_symlink_target(b"/valid").unwrap();
+        validate_symlink_target(b"/valid").test_unwrap();
     }
 
     #[test]
@@ -499,7 +501,7 @@ mod extra_tests {
     #[test]
     fn test_checked_target() {
         let oid = fake_oid(10);
-        let t = checked_symlink_target(b"/usr/local", oid).unwrap();
+        let t = checked_symlink_target(b"/usr/local", oid).test_unwrap();
         assert_eq!(t.as_bytes(), b"/usr/local");
     }
 }
@@ -516,13 +518,13 @@ mod tests {
 
     #[test]
     fn test_symlink_target_new() {
-        let t = SymlinkTarget::new(b"/home/user", fake_oid(1)).unwrap();
+        let t = SymlinkTarget::new(b"/home/user", fake_oid(1)).test_unwrap();
         assert_eq!(t.as_bytes(), b"/home/user");
         assert!(t.is_absolute);
     }
     #[test]
     fn test_symlink_target_relative() {
-        let t = SymlinkTarget::new(b"../other", fake_oid(2)).unwrap();
+        let t = SymlinkTarget::new(b"../other", fake_oid(2)).test_unwrap();
         assert!(!t.is_absolute);
     }
     #[test]
@@ -536,15 +538,15 @@ mod tests {
     fn test_store_lookup() {
         let store = SymlinkStore::new_const();
         let oid = fake_oid(4);
-        store.store(&oid, b"/var/run").unwrap();
-        let res = store.lookup(&oid).unwrap();
+        store.store(&oid, b"/var/run").test_unwrap();
+        let res = store.lookup(&oid).test_unwrap();
         assert_eq!(res, b"/var/run");
     }
     #[test]
     fn test_store_invalidate() {
         let store = SymlinkStore::new_const();
         let oid = fake_oid(5);
-        store.store(&oid, b"/tmp").unwrap();
+        store.store(&oid, b"/tmp").test_unwrap();
         store.invalidate(&oid);
         assert!(store.lookup(&oid).is_none());
     }
@@ -561,7 +563,7 @@ mod tests {
             40,
             |_| None, // Aucun composant est un symlink.
         )
-        .unwrap();
+        .test_unwrap();
         assert_eq!(res.depth, 0);
         assert!(res.is_absolute);
     }

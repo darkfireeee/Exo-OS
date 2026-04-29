@@ -277,6 +277,8 @@ pub static RELATION_GRAPH: RelationGraph = RelationGraph::new_const();
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::relation_type::RelationType;
     use super::*;
@@ -298,7 +300,7 @@ mod tests {
     #[test]
     fn test_add_neighbors() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(1, blob(1), blob(2))).unwrap();
+        g.add_relation(&rel(1, blob(1), blob(2))).test_unwrap();
         let n = g.get_neighbors(&blob(1));
         assert_eq!(n.len(), 1);
         assert_eq!(n[0].as_bytes(), &[2u8; 32]);
@@ -308,7 +310,7 @@ mod tests {
     fn test_remove_edge() {
         let g = RelationGraph::new_const();
         let r = rel(2, blob(3), blob(4));
-        g.add_relation(&r).unwrap();
+        g.add_relation(&r).test_unwrap();
         g.remove_relation(&r);
         assert!(g.get_neighbors(&blob(3)).is_empty());
     }
@@ -316,15 +318,15 @@ mod tests {
     #[test]
     fn test_out_degree() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(3, blob(5), blob(6))).unwrap();
-        g.add_relation(&rel(4, blob(5), blob(7))).unwrap();
+        g.add_relation(&rel(3, blob(5), blob(6))).test_unwrap();
+        g.add_relation(&rel(4, blob(5), blob(7))).test_unwrap();
         assert_eq!(g.out_degree(&blob(5)), 2);
     }
 
     #[test]
     fn test_has_direct_edge() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(5, blob(10), blob(11))).unwrap();
+        g.add_relation(&rel(5, blob(10), blob(11))).test_unwrap();
         assert!(g.has_direct_edge(&blob(10), &blob(11)));
         assert!(!g.has_direct_edge(&blob(11), &blob(10)));
     }
@@ -333,23 +335,23 @@ mod tests {
     fn test_no_duplicate() {
         let g = RelationGraph::new_const();
         let r = rel(6, blob(20), blob(21));
-        g.add_relation(&r).unwrap();
-        g.add_relation(&r).unwrap();
+        g.add_relation(&r).test_unwrap();
+        g.add_relation(&r).test_unwrap();
         assert_eq!(g.out_degree(&blob(20)), 1);
     }
 
     #[test]
     fn test_n_edges() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(7, blob(30), blob(31))).unwrap();
-        g.add_relation(&rel(8, blob(30), blob(32))).unwrap();
+        g.add_relation(&rel(7, blob(30), blob(31))).test_unwrap();
+        g.add_relation(&rel(8, blob(30), blob(32))).test_unwrap();
         assert_eq!(g.n_edges(), 2);
     }
 
     #[test]
     fn test_stats() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(9, blob(40), blob(41))).unwrap();
+        g.add_relation(&rel(9, blob(40), blob(41))).test_unwrap();
         let s = g.stats();
         assert_eq!(s.n_nodes, 1);
         assert_eq!(s.total_adds, 1);
@@ -358,8 +360,8 @@ mod tests {
     #[test]
     fn test_n_nodes_increments() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(10, blob(50), blob(51))).unwrap();
-        g.add_relation(&rel(11, blob(52), blob(53))).unwrap();
+        g.add_relation(&rel(10, blob(50), blob(51))).test_unwrap();
+        g.add_relation(&rel(11, blob(52), blob(53))).test_unwrap();
         // 2 sources distinctes → 2 nœuds.
         assert_eq!(g.n_nodes(), 2);
     }
@@ -367,7 +369,7 @@ mod tests {
     #[test]
     fn test_get_neighbors_by_kind() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(12, blob(60), blob(61))).unwrap();
+        g.add_relation(&rel(12, blob(60), blob(61))).test_unwrap();
         let nbrs = g.get_neighbors_by_kind(&blob(60), RelationKind::Parent);
         assert_eq!(nbrs.len(), 1);
         let nbrs_clone = g.get_neighbors_by_kind(&blob(60), RelationKind::Clone);
@@ -377,8 +379,8 @@ mod tests {
     #[test]
     fn test_get_edges_from() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(13, blob(70), blob(71))).unwrap();
-        g.add_relation(&rel(14, blob(70), blob(72))).unwrap();
+        g.add_relation(&rel(13, blob(70), blob(71))).test_unwrap();
+        g.add_relation(&rel(14, blob(70), blob(72))).test_unwrap();
         let edges = g.get_edges_from(&blob(70));
         assert_eq!(edges.len(), 2);
     }
@@ -386,7 +388,7 @@ mod tests {
     #[test]
     fn test_all_edges() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(15, blob(80), blob(81))).unwrap();
+        g.add_relation(&rel(15, blob(80), blob(81))).test_unwrap();
         let all = g.all_edges();
         assert!(!all.is_empty());
     }
@@ -394,7 +396,7 @@ mod tests {
     #[test]
     fn test_has_typed_edge() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(16, blob(90), blob(91))).unwrap();
+        g.add_relation(&rel(16, blob(90), blob(91))).test_unwrap();
         assert!(g.has_typed_edge(&blob(90), &blob(91), RelationKind::Parent));
         assert!(!g.has_typed_edge(&blob(90), &blob(91), RelationKind::Clone));
     }
@@ -402,7 +404,7 @@ mod tests {
     #[test]
     fn test_flush_resets() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(17, blob(100), blob(101))).unwrap();
+        g.add_relation(&rel(17, blob(100), blob(101))).test_unwrap();
         g.flush();
         assert_eq!(g.n_nodes(), 0);
         assert_eq!(g.n_edges(), 0);
@@ -411,7 +413,7 @@ mod tests {
     #[test]
     fn test_get_strong_edges_empty() {
         let g = RelationGraph::new_const();
-        g.add_relation(&rel(18, blob(110), blob(111))).unwrap();
+        g.add_relation(&rel(18, blob(110), blob(111))).test_unwrap();
         // rel() crée des relations avec weight 0 → pas strong
         let strong = g.get_strong_edges(&blob(110));
         assert!(strong.is_empty());
@@ -421,7 +423,7 @@ mod tests {
     fn test_stats_removes() {
         let g = RelationGraph::new_const();
         let r = rel(19, blob(120), blob(121));
-        g.add_relation(&r).unwrap();
+        g.add_relation(&r).test_unwrap();
         g.remove_relation(&r);
         let s = g.stats();
         assert!(s.total_removes >= 1);

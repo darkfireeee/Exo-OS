@@ -367,6 +367,8 @@ impl FilterChain {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -424,7 +426,7 @@ mod tests {
             entry(AuditOp::Read, AuditResult::Success, 3),
         ];
         let f = AuditFilter::new(FilterCriteria::by_op(AuditOp::Read));
-        let out = f.apply(&entries).unwrap();
+        let out = f.apply(&entries).test_unwrap();
         assert_eq!(out.len(), 2);
     }
 
@@ -434,7 +436,7 @@ mod tests {
             .map(|i| entry(AuditOp::Read, AuditResult::Success, i))
             .collect();
         let f = AuditFilter::passthrough();
-        let out = f.apply_limit(&entries, 3).unwrap();
+        let out = f.apply_limit(&entries, 3).test_unwrap();
         assert_eq!(out.len(), 3);
     }
 
@@ -455,7 +457,7 @@ mod tests {
             entry(AuditOp::Read, AuditResult::Success, 2),
         ];
         let f = AuditFilter::new(FilterCriteria::mutating_only());
-        let (yes, no) = f.partition(&entries).unwrap();
+        let (yes, no) = f.partition(&entries).test_unwrap();
         assert_eq!(yes.len(), 1);
         assert_eq!(no.len(), 1);
     }
@@ -472,12 +474,12 @@ mod tests {
         let mut chain = FilterChain::new();
         chain
             .push(AuditFilter::new(FilterCriteria::mutating_only()))
-            .unwrap();
+            .test_unwrap();
         chain
             .push(AuditFilter::new(FilterCriteria::by_result(
                 AuditResult::Success,
             )))
-            .unwrap();
+            .test_unwrap();
         assert!(chain.matches(&entry(AuditOp::Write, AuditResult::Success, 1)));
         assert!(!chain.matches(&entry(AuditOp::Write, AuditResult::Denied, 1)));
         assert!(!chain.matches(&entry(AuditOp::Read, AuditResult::Success, 1)));
@@ -518,7 +520,7 @@ mod tests {
             entry(AuditOp::Read, AuditResult::Success, 3),
         ];
         let f = AuditFilter::new(FilterCriteria::by_op(AuditOp::Read));
-        let idxs = f.matching_indices(&entries).unwrap();
+        let idxs = f.matching_indices(&entries).test_unwrap();
         assert_eq!(idxs, [0, 2]);
     }
 
@@ -533,7 +535,7 @@ mod tests {
     fn test_filter_chain_len() {
         let mut c = FilterChain::new();
         assert!(c.is_empty());
-        c.push(AuditFilter::passthrough()).unwrap();
+        c.push(AuditFilter::passthrough()).test_unwrap();
         assert_eq!(c.len(), 1);
     }
 
@@ -552,7 +554,7 @@ mod tests {
             ..Default::default()
         };
         let f = AuditFilter::new(c);
-        let out = f.apply(&entries).unwrap();
+        let out = f.apply(&entries).test_unwrap();
         assert_eq!(out.len(), 2);
     }
 }

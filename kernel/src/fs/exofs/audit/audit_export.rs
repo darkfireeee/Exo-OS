@@ -361,6 +361,8 @@ fn push_u64_decimal(s: &mut String, mut n: u64) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::audit_entry::{AuditEntry, AuditOp, AuditResult};
     use super::super::audit_filter::FilterCriteria;
@@ -389,7 +391,7 @@ mod tests {
         let mut exp = AuditExporter::new();
         let res = exp
             .export_from(&log, &ExportRange::All, ExportFormat::Raw)
-            .unwrap();
+            .test_unwrap();
         assert_eq!(
             res.stats.byte_size,
             res.stats.n_exported as usize * AUDIT_ENTRY_SIZE
@@ -403,8 +405,8 @@ mod tests {
         let mut exp = AuditExporter::new();
         let res = exp
             .export_from(&log, &ExportRange::LastN(2), ExportFormat::Text)
-            .unwrap();
-        let text = core::str::from_utf8(&res.data).unwrap();
+            .test_unwrap();
+        let text = core::str::from_utf8(&res.data).test_unwrap();
         assert!(
             text.contains("[AUDIT]"),
             "expected [AUDIT] in {:?}",
@@ -419,7 +421,7 @@ mod tests {
         let mut exp = AuditExporter::new();
         let res = exp
             .export_from(&log, &ExportRange::LastN(2), ExportFormat::Raw)
-            .unwrap();
+            .test_unwrap();
         assert!(res.stats.n_exported <= 2);
     }
 
@@ -447,7 +449,7 @@ mod tests {
         let mut exp = AuditExporter::with_filter(filter);
         let res = exp
             .export_from(&log, &ExportRange::All, ExportFormat::Raw)
-            .unwrap();
+            .test_unwrap();
         assert_eq!(res.stats.n_exported, 2);
     }
 
@@ -457,7 +459,7 @@ mod tests {
         let mut exp = AuditExporter::new();
         let res = exp
             .export_from(&log, &ExportRange::All, ExportFormat::Raw)
-            .unwrap();
+            .test_unwrap();
         assert_eq!(res.stats.n_exported, 0);
         assert!(res.data.is_empty());
     }
@@ -468,7 +470,7 @@ mod tests {
         push_n(&log, 2);
         let mut exp = AuditExporter::new();
         exp.export_from(&log, &ExportRange::All, ExportFormat::Raw)
-            .unwrap();
+            .test_unwrap();
         assert!(exp.total_exported() >= 2);
     }
 
@@ -502,7 +504,7 @@ mod tests {
         let mut exp = AuditExporter::new();
         let res = exp
             .export_from(&log, &ExportRange::SeqRange(start, end), ExportFormat::Raw)
-            .unwrap();
+            .test_unwrap();
         let _ = res; // Pas de panique.
     }
 

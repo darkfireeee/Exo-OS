@@ -370,6 +370,8 @@ pub static MARKER: Marker = Marker::new();
 // ==============================================================================
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::BlobId;
@@ -388,11 +390,11 @@ mod tests {
     #[test]
     fn test_mark_single_node() {
         let marker = Marker::new();
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         ws.insert_node(node(1, 0));
-        ws.grey(bid(1)).unwrap();
+        ws.grey(bid(1)).test_unwrap();
 
-        let result = marker.run_mark_phase(&mut ws).unwrap();
+        let result = marker.run_mark_phase(&mut ws).test_unwrap();
         assert_eq!(result.nodes_blackened, 1);
         assert!(result.phase_complete);
     }
@@ -400,9 +402,9 @@ mod tests {
     #[test]
     fn test_mark_phase_complete_on_empty_queue() {
         let marker = Marker::new();
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         // File vide -> phase complete immediatement.
-        let result = marker.run_mark_phase(&mut ws).unwrap();
+        let result = marker.run_mark_phase(&mut ws).test_unwrap();
         assert!(result.phase_complete);
         assert_eq!(result.nodes_processed, 0);
     }
@@ -410,14 +412,14 @@ mod tests {
     #[test]
     fn test_mark_multiple_nodes() {
         let marker = Marker::new();
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
 
         for i in 1u8..=10 {
             ws.insert_node(node(i, 0));
-            ws.grey(bid(i)).unwrap();
+            ws.grey(bid(i)).test_unwrap();
         }
 
-        let result = marker.run_mark_phase(&mut ws).unwrap();
+        let result = marker.run_mark_phase(&mut ws).test_unwrap();
         assert_eq!(result.nodes_blackened, 10);
         assert!(result.phase_complete);
     }
@@ -430,14 +432,14 @@ mod tests {
             max_batches: 2, // Forcer interruption.
             walk_relations: false,
         });
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         // 5 noeuds, max 2 batches de taille 1 -> interrompu.
         for i in 1u8..=5 {
             ws.insert_node(node(i, 0));
-            ws.grey(bid(i)).unwrap();
+            ws.grey(bid(i)).test_unwrap();
         }
 
-        let result = marker.run_mark_phase(&mut ws).unwrap();
+        let result = marker.run_mark_phase(&mut ws).test_unwrap();
         assert!(result.interrupted);
         assert!(!result.phase_complete);
         // 2 batches de 1 = 2 noeuds traites.
@@ -450,10 +452,10 @@ mod tests {
         // mais on peut s'assurer que le code compiles et fonctionne pour
         // des blobs non pines (create_epoch = 0).
         let marker = Marker::new();
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         ws.insert_node(BlobNode::new(bid(1), 512, 0, 0, 0, false)); // epoch=0, non pine
-        ws.grey(bid(1)).unwrap();
-        let result = marker.run_mark_phase(&mut ws).unwrap();
+        ws.grey(bid(1)).test_unwrap();
+        let result = marker.run_mark_phase(&mut ws).test_unwrap();
         assert_eq!(result.nodes_blackened, 1);
     }
 }

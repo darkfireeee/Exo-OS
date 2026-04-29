@@ -156,14 +156,16 @@ impl DedupReader {
 
         // 2. Consulter l'index.
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
-        let guard = index.entry_count(); // Accès public pour valider l'index actif.
-        let _ = guard;
-
-        // L'index DedupWriter expose pas de lookup direct (SpinLock interne) ;
-        // on appelle check() avec des données vides pour simuler un lookup.
-        // En production, DedupWriter exposerait un `lookup_by_id()`.
-        // Ici on retourne NotFound si non en cache.
-        Err(ExofsError::NotFound)
+        let entry = index.lookup_by_id(blob_id).ok_or(ExofsError::NotFound)?;
+        let result = ResolveResult {
+            blob_id: entry.blob_id,
+            offset: entry.offset,
+            size: entry.size,
+            cached: false,
+        };
+        let mut cache = self.cache.lock();
+        cache.insert(entry.blob_id, entry.offset, entry.size)?;
+        Ok(result)
     }
 
     /// Résout depuis une entrée connue (après lecture du superblock ou de l'arbre).
@@ -270,18 +272,9 @@ impl<'a> DedupReadPipeline<'a> {
         blob_id: &BlobId,
         read_fn: &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
     ) -> ExofsResult<Vec<u8>> {
-        // Essai depuis le cache du reader.
-        {
-            let mut cache = self.reader.cache.lock();
-            if let Some(r) = cache.lookup(blob_id) {
-                drop(cache);
-                self.reader.cache_hits.fetch_add(1, Ordering::Relaxed);
-                return self
-                    .reader
-                    .read_and_verify(blob_id, r.offset, r.size, read_fn);
-            }
-        }
-        Err(ExofsError::NotFound)
+        let resolved = self.reader.resolve(blob_id, self.writer)?;
+        self.reader
+            .read_and_verify(blob_id, resolved.offset, resolved.size, read_fn)
     }
 }
 
@@ -289,6 +282,8 @@ impl<'a> DedupReadPipeline<'a> {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,12 +307,28 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_hits_writer_index_and_caches_entry() {
+        let reader = DedupReader::new();
+        let writer = DedupWriter::new();
+        let data = b"writer indexed blob";
+        let id = compute_blob_id(data);
+        writer
+            .register(id, DiskOffset(12288), data.len() as u64)
+            .test_unwrap();
+
+        let resolved = reader.resolve(&id, &writer).test_unwrap();
+        assert_eq!(resolved.offset, DiskOffset(12288));
+        assert!(!resolved.cached);
+        assert_eq!(reader.cache_size(), 1);
+    }
+
+    #[test]
     fn test_resolve_from_entry() {
         let reader = DedupReader::new();
         let data = b"dedup blob data";
         let id = compute_blob_id(data);
         let entry = DedupEntry::new(id, DiskOffset(4096), data.len() as u64);
-        let r = reader.resolve_from_entry(&entry).unwrap();
+        let r = reader.resolve_from_entry(&entry).test_unwrap();
         assert_eq!(r.offset, DiskOffset(4096));
         assert_eq!(reader.cache_size(), 1);
     }
@@ -331,7 +342,7 @@ mod tests {
         let rfn = mock_read(buf);
         let result = reader.read_and_verify(&id, DiskOffset(0), data.len() as u64, &rfn);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), data);
+        assert_eq!(result.test_unwrap(), data);
     }
 
     #[test]
@@ -340,10 +351,24 @@ mod tests {
         let data = b"cache test data";
         let id = compute_blob_id(data);
         let entry = DedupEntry::new(id, DiskOffset(0), data.len() as u64);
-        reader.resolve_from_entry(&entry).unwrap();
+        reader.resolve_from_entry(&entry).test_unwrap();
         assert_eq!(reader.cache_size(), 1);
         reader.invalidate(&id);
         assert_eq!(reader.cache_size(), 0);
+    }
+
+    #[test]
+    fn test_pipeline_reads_blob_via_writer_index() {
+        let reader = DedupReader::new();
+        let writer = DedupWriter::new();
+        let data = b"pipeline dedup payload";
+        let id = compute_blob_id(data);
+        writer
+            .register(id, DiskOffset(4096), data.len() as u64)
+            .test_unwrap();
+        let pipeline = DedupReadPipeline::new(&reader, &writer);
+        let result = pipeline.read_blob(&id, &mock_read(data.to_vec())).test_unwrap();
+        assert_eq!(result, data);
     }
 }
 

@@ -431,6 +431,8 @@ pub fn grey_queue_fill_ratio_x100(workspace: &TricolorWorkspace) -> u64 {
 // ==============================================================================
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -446,7 +448,7 @@ mod tests {
 
     #[test]
     fn test_tricolor_new_and_insert() {
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         let id = make_blob_id(1);
         ws.insert_node(make_node(id));
         assert_eq!(ws.len(), 1);
@@ -455,11 +457,11 @@ mod tests {
 
     #[test]
     fn test_grey_and_blacken() {
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         let id = make_blob_id(2);
         ws.insert_node(make_node(id));
 
-        ws.grey(id).unwrap();
+        ws.grey(id).test_unwrap();
         assert_eq!(ws.color_of(&id), Some(TriColor::Grey));
         assert_eq!(ws.grey_queue_len(), 1);
 
@@ -472,17 +474,17 @@ mod tests {
 
     #[test]
     fn test_grey_already_grey_ignored() {
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         let id = make_blob_id(3);
         ws.insert_node(make_node(id));
-        ws.grey(id).unwrap();
-        ws.grey(id).unwrap(); // doublon
+        ws.grey(id).test_unwrap();
+        ws.grey(id).test_unwrap(); // doublon
         assert_eq!(ws.grey_queue_len(), 1); // pas double
     }
 
     #[test]
     fn test_collect_white_with_ref_zero() {
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         let id = make_blob_id(4);
         ws.insert_node(BlobNode::new(id, 1024, 1, 2, 0, false));
         let whites = ws.collect_white();
@@ -492,7 +494,7 @@ mod tests {
 
     #[test]
     fn test_collect_white_skips_pinned() {
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         let id = make_blob_id(5);
         ws.insert_node(BlobNode::new(id, 1024, 1, 2, 0, true)); // pinned=true
         let whites = ws.collect_white();
@@ -501,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_collect_white_skips_nonzero_ref() {
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         let id = make_blob_id(6);
         ws.insert_node(BlobNode::new(id, 1024, 1, 2, 1, false)); // ref_count=1
         let whites = ws.collect_white();
@@ -510,15 +512,15 @@ mod tests {
 
     #[test]
     fn test_color_counts() {
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         let id1 = make_blob_id(7);
         let id2 = make_blob_id(8);
         let id3 = make_blob_id(9);
         ws.insert_node(make_node(id1));
         ws.insert_node(make_node(id2));
         ws.insert_node(make_node(id3));
-        ws.grey(id1).unwrap();
-        ws.grey(id2).unwrap();
+        ws.grey(id1).test_unwrap();
+        ws.grey(id2).test_unwrap();
         ws.blacken(&id1);
         let (w, g, b) = ws.color_counts();
         assert_eq!(w, 1);
@@ -528,12 +530,12 @@ mod tests {
 
     #[test]
     fn test_grey_roots() {
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         let ids: Vec<BlobId> = (10..15).map(make_blob_id).collect();
         for &id in &ids {
             ws.insert_node(make_node(id));
         }
-        ws.grey_roots(&ids).unwrap();
+        ws.grey_roots(&ids).test_unwrap();
         assert_eq!(ws.grey_queue_len(), 5);
         assert_eq!(ws.mark_stats.roots_greyed, 5);
     }

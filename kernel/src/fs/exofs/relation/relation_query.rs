@@ -273,6 +273,8 @@ impl QueryBuilder {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::relation::RelationId;
     use super::super::relation_graph::RelationGraph;
@@ -296,9 +298,9 @@ mod tests {
         kind: RelationKind,
     ) {
         let rel = Relation::new(RelationId(id), from, to, RelationType::new(kind), 0);
-        store.persist(&rel).unwrap();
-        idx.insert(&rel).unwrap();
-        graph.add_relation(&rel).unwrap();
+        store.persist(&rel).test_unwrap();
+        idx.insert(&rel).test_unwrap();
+        graph.add_relation(&rel).test_unwrap();
     }
 
     #[test]
@@ -352,7 +354,7 @@ mod tests {
             .kind(RelationKind::Parent)
             .active_only()
             .execute()
-            .unwrap();
+            .test_unwrap();
         assert_eq!(qr.n_total, 0);
     }
 
@@ -398,19 +400,19 @@ mod tests {
 
     #[test]
     fn test_reachable_from_empty_graph() {
-        let ids = RelationQuery::reachable_from(&blob(200), 4).unwrap();
+        let ids = RelationQuery::reachable_from(&blob(200), 4).test_unwrap();
         assert_eq!(ids.len(), 0);
     }
 
     #[test]
     fn test_ancestors_of_empty_graph() {
-        let ids = RelationQuery::ancestors_of(&blob(201), 4).unwrap();
+        let ids = RelationQuery::ancestors_of(&blob(201), 4).test_unwrap();
         assert_eq!(ids.len(), 0);
     }
 
     #[test]
     fn test_all_of_kind_empty() {
-        let qr = RelationQuery::all_of_kind(RelationKind::Snapshot).unwrap();
+        let qr = RelationQuery::all_of_kind(RelationKind::Snapshot).test_unwrap();
         // Le store global peut contenir d'autres relations, mais la fonction
         // ne doit pas paniquer.
         let _ = qr;
@@ -418,13 +420,13 @@ mod tests {
 
     #[test]
     fn test_builder_no_kind() {
-        let qr = QueryBuilder::new(blob(250)).execute().unwrap();
+        let qr = QueryBuilder::new(blob(250)).execute().test_unwrap();
         let _ = qr; // Résultat vide ou non — ne doit pas paniquer.
     }
 
     #[test]
     fn test_builder_max_depth() {
-        let qr = QueryBuilder::new(blob(251)).limit(2).execute().unwrap();
+        let qr = QueryBuilder::new(blob(251)).limit(2).execute().test_unwrap();
         let _ = qr;
     }
 

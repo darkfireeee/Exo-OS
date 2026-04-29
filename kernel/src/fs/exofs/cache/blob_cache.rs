@@ -317,6 +317,8 @@ impl BlobCache {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -327,7 +329,7 @@ mod tests {
     #[test]
     fn test_insert_and_get() {
         let c = BlobCache::new_const();
-        c.insert(blob(1), alloc::vec![0u8; 64]).unwrap();
+        c.insert(blob(1), alloc::vec![0u8; 64]).test_unwrap();
         assert!(c.get(&blob(1)).is_some());
     }
 
@@ -341,7 +343,7 @@ mod tests {
     #[test]
     fn test_hit_increments_counter() {
         let c = BlobCache::new_const();
-        c.insert(blob(1), alloc::vec![0u8; 32]).unwrap();
+        c.insert(blob(1), alloc::vec![0u8; 32]).test_unwrap();
         c.get(&blob(1));
         assert_eq!(c.hits(), 1);
     }
@@ -349,7 +351,7 @@ mod tests {
     #[test]
     fn test_invalidate_removes_entry() {
         let c = BlobCache::new_const();
-        c.insert(blob(1), alloc::vec![0u8; 32]).unwrap();
+        c.insert(blob(1), alloc::vec![0u8; 32]).test_unwrap();
         c.invalidate(&blob(1));
         assert!(c.get(&blob(1)).is_none());
     }
@@ -357,10 +359,10 @@ mod tests {
     #[test]
     fn test_mark_dirty_and_clean() {
         let c = BlobCache::new_const();
-        c.insert(blob(1), alloc::vec![0u8; 32]).unwrap();
-        c.mark_dirty(&blob(1)).unwrap();
+        c.insert(blob(1), alloc::vec![0u8; 32]).test_unwrap();
+        c.mark_dirty(&blob(1)).test_unwrap();
         assert_eq!(c.dirty_ids().len(), 1);
-        c.mark_clean(&blob(1)).unwrap();
+        c.mark_clean(&blob(1)).test_unwrap();
         assert_eq!(c.dirty_ids().len(), 0);
     }
 
@@ -373,14 +375,14 @@ mod tests {
     #[test]
     fn test_used_bytes_tracks_insertions() {
         let c = BlobCache::new_const();
-        c.insert(blob(1), alloc::vec![0u8; 128]).unwrap();
+        c.insert(blob(1), alloc::vec![0u8; 128]).test_unwrap();
         assert_eq!(c.used_bytes(), 128);
     }
 
     #[test]
     fn test_used_bytes_decreases_on_invalidate() {
         let c = BlobCache::new_const();
-        c.insert(blob(1), alloc::vec![0u8; 128]).unwrap();
+        c.insert(blob(1), alloc::vec![0u8; 128]).test_unwrap();
         c.invalidate(&blob(1));
         assert_eq!(c.used_bytes(), 0);
     }
@@ -389,14 +391,14 @@ mod tests {
     fn test_contains() {
         let c = BlobCache::new_const();
         assert!(!c.contains(&blob(5)));
-        c.insert(blob(5), alloc::vec![0u8; 8]).unwrap();
+        c.insert(blob(5), alloc::vec![0u8; 8]).test_unwrap();
         assert!(c.contains(&blob(5)));
     }
 
     #[test]
     fn test_flush_all() {
         let c = BlobCache::new_const();
-        c.insert(blob(1), alloc::vec![0u8; 64]).unwrap();
+        c.insert(blob(1), alloc::vec![0u8; 64]).test_unwrap();
         c.flush_all();
         assert_eq!(c.n_entries(), 0);
     }
@@ -404,7 +406,7 @@ mod tests {
     #[test]
     fn test_hit_ratio_pct() {
         let c = BlobCache::new_const();
-        c.insert(blob(1), alloc::vec![0u8; 16]).unwrap();
+        c.insert(blob(1), alloc::vec![0u8; 16]).test_unwrap();
         c.get(&blob(1));
         c.get(&blob(1));
         c.get(&blob(2));

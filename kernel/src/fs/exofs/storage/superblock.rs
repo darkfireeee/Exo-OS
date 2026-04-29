@@ -638,6 +638,8 @@ pub fn superblock_mirror_offsets(disk_size: u64) -> [DiskOffset; SB_MIRROR_COUNT
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use alloc::vec;
@@ -688,7 +690,7 @@ mod tests {
                 }
                 Ok(buf.len())
             })
-            .unwrap();
+            .test_unwrap();
 
         let mgr2 = SuperblockManager::mount(TEST_DISK, |off, sz| {
             let s = off.0 as usize;
@@ -698,7 +700,7 @@ mod tests {
             v[..avail].copy_from_slice(&disk[s..e]);
             Ok(v)
         })
-        .unwrap();
+        .test_unwrap();
 
         let snap = mgr2.snapshot();
         assert_eq!(snap.disk_size, TEST_DISK);
@@ -715,7 +717,7 @@ mod tests {
             }
             Ok(buf.len())
         })
-        .unwrap();
+        .test_unwrap();
 
         let ep1 = mgr.current_epoch().0;
         mgr.commit(1000, |off, buf| {
@@ -725,7 +727,7 @@ mod tests {
             }
             Ok(buf.len())
         })
-        .unwrap();
+        .test_unwrap();
         let ep2 = mgr.current_epoch().0;
         assert!(ep2 > ep1);
     }
@@ -757,7 +759,7 @@ mod tests {
             v[..e - s].copy_from_slice(&disk[s..e]);
             Ok(v)
         })
-        .unwrap();
+        .test_unwrap();
 
         assert_eq!(mgr.current_epoch().0, 999);
     }
@@ -775,7 +777,7 @@ mod tests {
             }
             Ok(buf.len())
         })
-        .unwrap();
+        .test_unwrap();
 
         // Le format doit écrire exactement 3 miroirs
         assert_eq!(write_calls, SB_MIRROR_COUNT as u32);

@@ -242,6 +242,8 @@ pub fn total_shred_size(batch: &[(u64, u64)]) -> ExofsResult<u64> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::key_storage::KeyStorage;
     use super::*;
@@ -256,7 +258,7 @@ mod tests {
     #[test]
     fn test_shred_blob_crypto_only() {
         let s = CryptoShredder::crypto_only();
-        let r = s.shred_blob(1, 4096, None, None, &nw()).unwrap();
+        let r = s.shred_blob(1, 4096, None, None, &nw()).test_unwrap();
         assert_eq!(r.blob_id, 1);
         assert_eq!(r.size, 4096);
         assert_eq!(r.passes, 0);
@@ -270,9 +272,9 @@ mod tests {
                 &[0u8; 32],
                 crate::fs::exofs::crypto::key_storage::KeyKind::Object,
             )
-            .unwrap();
+            .test_unwrap();
         let s = CryptoShredder::new(OverwriteStrategy::SinglePass);
-        let r = s.shred_blob(42, 1024, Some(sid), Some(&ks), &nw()).unwrap();
+        let r = s.shred_blob(42, 1024, Some(sid), Some(&ks), &nw()).test_unwrap();
         assert!(r.crypto_ok);
         assert!(CryptoShredder::verify_shred(&ks, sid));
     }
@@ -280,7 +282,7 @@ mod tests {
     #[test]
     fn test_shred_dod_three_passes() {
         let s = CryptoShredder::dod_three_pass();
-        let r = s.shred_blob(99, 512, None, None, &nw()).unwrap();
+        let r = s.shred_blob(99, 512, None, None, &nw()).test_unwrap();
         assert_eq!(r.passes, 3);
         assert!(r.physical_ok);
     }
@@ -289,14 +291,14 @@ mod tests {
     fn test_shred_batch_count() {
         let s = CryptoShredder::crypto_only();
         let batch: &[(u64, u64)] = &[(1, 100), (2, 200), (3, 300)];
-        let results = s.shred_batch(batch, &[], None, &nw()).unwrap();
+        let results = s.shred_batch(batch, &[], None, &nw()).test_unwrap();
         assert_eq!(results.len(), 3);
     }
 
     #[test]
     fn test_total_shred_size_ok() {
         let batch: &[(u64, u64)] = &[(1, 1000), (2, 2000)];
-        assert_eq!(total_shred_size(batch).unwrap(), 3000);
+        assert_eq!(total_shred_size(batch).test_unwrap(), 3000);
     }
 
     #[test]
@@ -335,7 +337,7 @@ mod tests {
                 &[0u8; 32],
                 crate::fs::exofs::crypto::key_storage::KeyKind::Object,
             )
-            .unwrap();
+            .test_unwrap();
         assert!(!CryptoShredder::verify_shred(&ks, sid));
     }
 }
@@ -563,11 +565,11 @@ mod tests_scheduler {
         let mut sched = ShredScheduler::new(16);
         sched
             .register(1, 512, ShredPolicy::AfterNAccesses(2), None, 0)
-            .unwrap();
+            .test_unwrap();
         sched.record_access(1);
-        assert!(sched.due_for_shred(0).unwrap().is_empty());
+        assert!(sched.due_for_shred(0).test_unwrap().is_empty());
         sched.record_access(1);
-        let due = sched.due_for_shred(0).unwrap();
+        let due = sched.due_for_shred(0).test_unwrap();
         assert_eq!(due, alloc::vec![1u64]);
     }
 
@@ -577,9 +579,9 @@ mod tests_scheduler {
         let mut sched = ShredScheduler::new(16);
         sched
             .register(2, 1024, ShredPolicy::Ephemeral, None, 0)
-            .unwrap();
+            .test_unwrap();
         sched.record_access(2);
-        let results = sched.execute_due(0, None, &nw(), &s).unwrap();
+        let results = sched.execute_due(0, None, &nw(), &s).test_unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(sched.registered_count(), 0);
     }
@@ -587,7 +589,7 @@ mod tests_scheduler {
     #[test]
     fn test_scheduler_capacity_overflow() {
         let mut sched = ShredScheduler::new(1);
-        sched.register(1, 100, ShredPolicy::Never, None, 0).unwrap();
+        sched.register(1, 100, ShredPolicy::Never, None, 0).test_unwrap();
         let err = sched.register(2, 100, ShredPolicy::Never, None, 0);
         assert!(err.is_err());
     }
@@ -597,7 +599,7 @@ mod tests_scheduler {
         let mut sched = ShredScheduler::new(16);
         sched
             .register(10, 200, ShredPolicy::Never, None, 0)
-            .unwrap();
+            .test_unwrap();
         assert_eq!(sched.registered_count(), 1);
         sched.unregister(10);
         assert_eq!(sched.registered_count(), 0);
@@ -606,16 +608,16 @@ mod tests_scheduler {
     #[test]
     fn test_registered_blobs_list() {
         let mut sched = ShredScheduler::new(16);
-        sched.register(7, 100, ShredPolicy::Never, None, 0).unwrap();
-        sched.register(8, 100, ShredPolicy::Never, None, 0).unwrap();
-        let blobs = sched.registered_blobs().unwrap();
+        sched.register(7, 100, ShredPolicy::Never, None, 0).test_unwrap();
+        sched.register(8, 100, ShredPolicy::Never, None, 0).test_unwrap();
+        let blobs = sched.registered_blobs().test_unwrap();
         assert_eq!(blobs.len(), 2);
     }
 
     #[test]
     fn test_shred_result_fields() {
         let s = CryptoShredder::new(OverwriteStrategy::DodThreePass);
-        let r = s.shred_blob(77, 4096, None, None, &nw()).unwrap();
+        let r = s.shred_blob(77, 4096, None, None, &nw()).test_unwrap();
         assert_eq!(r.blob_id, 77);
         assert_eq!(r.passes, 3);
         assert!(r.physical_ok);

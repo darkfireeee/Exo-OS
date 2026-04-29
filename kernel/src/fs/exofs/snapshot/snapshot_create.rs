@@ -332,6 +332,8 @@ pub fn entries_from_raw(raw_data: &[&[u8]]) -> ExofsResult<Vec<BlobEntry>> {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::blob_id::compute_blob_id;
@@ -352,7 +354,7 @@ mod tests {
     #[test]
     fn create_empty_snapshot() {
         let params = base_params(b"empty-snap");
-        let result = SnapshotCreator::create_empty(&params).unwrap();
+        let result = SnapshotCreator::create_empty(&params).test_unwrap();
         assert_eq!(result.n_blobs, 0);
         assert_eq!(result.total_bytes, 0);
     }
@@ -365,12 +367,12 @@ mod tests {
         let mut set = SnapshotBlobSet::new();
         // HASH-02 : compute_blob_id sur données RAW
         set.push(BlobEntry::new(compute_blob_id(raw1), raw1.len() as u64))
-            .unwrap();
+            .test_unwrap();
         set.push(BlobEntry::new(compute_blob_id(raw2), raw2.len() as u64))
-            .unwrap();
+            .test_unwrap();
 
         let params = base_params(b"snap-with-blobs");
-        let result = SnapshotCreator::create(&params, set).unwrap();
+        let result = SnapshotCreator::create(&params, set).test_unwrap();
         assert_eq!(result.n_blobs, 2);
         assert_eq!(result.total_bytes, (raw1.len() + raw2.len()) as u64);
     }
@@ -383,7 +385,7 @@ mod tests {
         let mut set = SnapshotBlobSet::new();
         let raw = b"too much data";
         set.push(BlobEntry::new(compute_blob_id(raw), raw.len() as u64))
-            .unwrap();
+            .test_unwrap();
 
         let err = SnapshotCreator::create(&params, set);
         assert!(matches!(err, Err(ExofsError::InvalidSize)));
@@ -402,8 +404,8 @@ mod tests {
         let mut set = SnapshotBlobSet::new();
         // Simule un dépassement avec u64::MAX
         set.push(BlobEntry::new(BlobId([0u8; 32]), u64::MAX))
-            .unwrap();
-        set.push(BlobEntry::new(BlobId([1u8; 32]), 1)).unwrap();
+            .test_unwrap();
+        set.push(BlobEntry::new(BlobId([1u8; 32]), 1)).test_unwrap();
         let err = set.total_bytes();
         assert!(matches!(err, Err(ExofsError::Overflow)));
     }
@@ -413,10 +415,10 @@ mod tests {
         let mut set1 = SnapshotBlobSet::new();
         let mut set2 = SnapshotBlobSet::new();
         let bid = compute_blob_id(b"data");
-        set1.push(BlobEntry::new(bid, 4)).unwrap();
-        set2.push(BlobEntry::new(bid, 4)).unwrap();
-        let r1 = set1.compute_root_blob().unwrap();
-        let r2 = set2.compute_root_blob().unwrap();
+        set1.push(BlobEntry::new(bid, 4)).test_unwrap();
+        set2.push(BlobEntry::new(bid, 4)).test_unwrap();
+        let r1 = set1.compute_root_blob().test_unwrap();
+        let r2 = set2.compute_root_blob().test_unwrap();
         assert!(r1.ct_eq(&r2));
     }
 }

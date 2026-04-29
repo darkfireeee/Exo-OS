@@ -324,6 +324,8 @@ impl CdcStats {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -333,13 +335,13 @@ mod tests {
 
     #[test]
     fn test_cdc_empty_data() {
-        assert!(cdc().chunk(&[]).unwrap().is_empty());
+        assert!(cdc().chunk(&[]).test_unwrap().is_empty());
     }
 
     #[test]
     fn test_cdc_small_data_single_chunk() {
         let data = &[0u8; CDC_MIN_SIZE - 1];
-        let chunks = cdc().chunk(data).unwrap();
+        let chunks = cdc().chunk(data).test_unwrap();
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].boundary.length as usize, CDC_MIN_SIZE - 1);
     }
@@ -348,7 +350,7 @@ mod tests {
     fn test_cdc_respects_min_size() {
         let data = &[0u8; CDC_AVG_SIZE * 4];
         let cdc = cdc();
-        let cs = cdc.chunk(data).unwrap();
+        let cs = cdc.chunk(data).test_unwrap();
         for c in &cs {
             if c.boundary.offset > 0 {
                 assert!(
@@ -362,7 +364,7 @@ mod tests {
     #[test]
     fn test_cdc_respects_max_size() {
         let data = &[0u8; CDC_MAX_SIZE * 2];
-        let cs = cdc().chunk(data).unwrap();
+        let cs = cdc().chunk(data).test_unwrap();
         for c in &cs {
             assert!((c.boundary.length as usize) <= CDC_MAX_SIZE);
         }
@@ -372,7 +374,7 @@ mod tests {
     fn test_cdc_boundaries_cover_entire_data() {
         let data = &[0u8; CDC_AVG_SIZE * 3];
         let cdc = cdc();
-        let bounds = cdc.boundaries(data).unwrap();
+        let bounds = cdc.boundaries(data).test_unwrap();
         let total: u64 = bounds.iter().map(|b| b.length as u64).sum();
         assert_eq!(total, data.len() as u64);
     }
@@ -380,8 +382,8 @@ mod tests {
     #[test]
     fn test_cdc_deterministic() {
         let data = &[0xABu8; CDC_AVG_SIZE * 2];
-        let c1 = cdc().chunk(data).unwrap();
-        let c2 = cdc().chunk(data).unwrap();
+        let c1 = cdc().chunk(data).test_unwrap();
+        let c2 = cdc().chunk(data).test_unwrap();
         assert_eq!(c1.len(), c2.len());
         for (a, b) in c1.iter().zip(c2.iter()) {
             assert_eq!(a.blake3, b.blake3);
@@ -393,8 +395,8 @@ mod tests {
     fn test_cdc_fingerprints_differ() {
         let d1 = &[0x00u8; CDC_AVG_SIZE * 2];
         let d2 = &[0xFFu8; CDC_AVG_SIZE * 2];
-        let c1 = cdc().chunk(d1).unwrap();
-        let c2 = cdc().chunk(d2).unwrap();
+        let c1 = cdc().chunk(d1).test_unwrap();
+        let c2 = cdc().chunk(d2).test_unwrap();
         // Au moins un chunk différent.
         let any_diff = c1.iter().zip(c2.iter()).any(|(a, b)| a.blake3 != b.blake3);
         assert!(any_diff);
@@ -410,8 +412,8 @@ mod tests {
     fn test_cdc_stats() {
         let data = &[0u8; CDC_AVG_SIZE * 3];
         let cdc = cdc();
-        let chunks = cdc.chunk(data).unwrap();
-        let stats = CdcStats::compute(&chunks, &cdc.config).unwrap();
+        let chunks = cdc.chunk(data).test_unwrap();
+        let stats = CdcStats::compute(&chunks, &cdc.config).test_unwrap();
         assert!(stats.base.total_chunks > 0);
     }
 
@@ -508,16 +510,16 @@ mod tests_adaptive {
     #[test]
     fn test_adaptive_large() {
         let data = &[0u8; CDC_MAX_SIZE * 10];
-        let adapt = AdaptiveCdcChunker::new().unwrap();
-        let cs = adapt.chunk_adaptive(data).unwrap();
+        let adapt = AdaptiveCdcChunker::new().test_unwrap();
+        let cs = adapt.chunk_adaptive(data).test_unwrap();
         assert!(!cs.is_empty());
     }
 
     #[test]
     fn test_adaptive_small() {
         let data = &[0x55u8; CDC_MIN_SIZE * 3];
-        let adapt = AdaptiveCdcChunker::new().unwrap();
-        let cs = adapt.chunk_adaptive(data).unwrap();
+        let adapt = AdaptiveCdcChunker::new().test_unwrap();
+        let cs = adapt.chunk_adaptive(data).test_unwrap();
         assert!(!cs.is_empty());
     }
 

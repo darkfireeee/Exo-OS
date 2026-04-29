@@ -386,85 +386,87 @@ fn constant_time_eq_32(a: &[u8; 32], b: &[u8; 32]) -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_generate_ok() {
-        let mk = MasterKey::generate().unwrap();
+        let mk = MasterKey::generate().test_unwrap();
         assert_ne!(*mk.raw_bytes(), [0u8; 32]);
     }
 
     #[test]
     fn test_generate_different_each_time() {
-        let a = MasterKey::generate().unwrap();
-        let b = MasterKey::generate().unwrap();
+        let a = MasterKey::generate().test_unwrap();
+        let b = MasterKey::generate().test_unwrap();
         assert_ne!(a.raw_bytes(), b.raw_bytes());
     }
 
     #[test]
     fn test_id_stable() {
-        let mk = MasterKey::generate().unwrap();
+        let mk = MasterKey::generate().test_unwrap();
         assert_eq!(mk.id(), mk.id());
     }
 
     #[test]
     fn test_derive_from_passphrase_ok() {
-        let mk = MasterKey::derive_from_passphrase(b"secret", &[1u8; 32]).unwrap();
+        let mk = MasterKey::derive_from_passphrase(b"secret", &[1u8; 32]).test_unwrap();
         assert_eq!(mk.raw_bytes().len(), 32);
     }
 
     #[test]
     fn test_wrap_unwrap_roundtrip() {
-        let mk = MasterKey::generate().unwrap();
+        let mk = MasterKey::generate().test_unwrap();
         let orig = *mk.raw_bytes();
-        let wrapped = mk.wrap_with_passphrase(b"passphrase").unwrap();
-        let mk2 = MasterKey::unwrap_from_passphrase(&wrapped, b"passphrase").unwrap();
+        let wrapped = mk.wrap_with_passphrase(b"passphrase").test_unwrap();
+        let mk2 = MasterKey::unwrap_from_passphrase(&wrapped, b"passphrase").test_unwrap();
         assert_eq!(*mk2.raw_bytes(), orig);
     }
 
     #[test]
     fn test_wrap_wrong_passphrase_fails() {
-        let mk = MasterKey::generate().unwrap();
-        let wrapped = mk.wrap_with_passphrase(b"correct").unwrap();
+        let mk = MasterKey::generate().test_unwrap();
+        let wrapped = mk.wrap_with_passphrase(b"correct").test_unwrap();
         assert!(MasterKey::unwrap_from_passphrase(&wrapped, b"wrong").is_err());
     }
 
     #[test]
     fn test_wrap_wrong_magic_fails() {
-        let mk = MasterKey::generate().unwrap();
-        let mut wrapped = mk.wrap_with_passphrase(b"pass").unwrap();
+        let mk = MasterKey::generate().test_unwrap();
+        let mut wrapped = mk.wrap_with_passphrase(b"pass").test_unwrap();
         wrapped.magic = 0xDEAD_BEEF;
         assert!(MasterKey::unwrap_from_passphrase(&wrapped, b"pass").is_err());
     }
 
     #[test]
     fn test_wrap_tampered_ct_fails() {
-        let mk = MasterKey::generate().unwrap();
-        let mut wrapped = mk.wrap_with_passphrase(b"pass").unwrap();
+        let mk = MasterKey::generate().test_unwrap();
+        let mut wrapped = mk.wrap_with_passphrase(b"pass").test_unwrap();
         wrapped.ciphertext[0] ^= 0xFF;
         assert!(MasterKey::unwrap_from_passphrase(&wrapped, b"pass").is_err());
     }
 
     #[test]
     fn test_derive_volume_key_ok() {
-        let mk = MasterKey::generate().unwrap();
-        let vk = mk.derive_volume_key(1).unwrap();
+        let mk = MasterKey::generate().test_unwrap();
+        let vk = mk.derive_volume_key(1).test_unwrap();
         assert_eq!(vk.len(), 32);
     }
 
     #[test]
     fn test_derive_volume_different_ids() {
-        let mk = MasterKey::generate().unwrap();
-        let vk1 = mk.derive_volume_key(1).unwrap();
-        let vk2 = mk.derive_volume_key(2).unwrap();
+        let mk = MasterKey::generate().test_unwrap();
+        let vk1 = mk.derive_volume_key(1).test_unwrap();
+        let vk2 = mk.derive_volume_key(2).test_unwrap();
         assert_ne!(vk1, vk2);
     }
 
     #[test]
     fn test_derive_index_key_ok() {
-        let mk = MasterKey::generate().unwrap();
-        let ik = mk.derive_index_key(42).unwrap();
+        let mk = MasterKey::generate().test_unwrap();
+        let ik = mk.derive_index_key(42).test_unwrap();
         assert_eq!(ik.len(), 32);
     }
 

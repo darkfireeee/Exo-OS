@@ -478,6 +478,8 @@ impl FsckPhase2 {
 // ── Tests unitaires ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -492,8 +494,8 @@ mod tests {
     fn test_blob_ref_counter() {
         let mut counter = BlobRefCounter::new();
         let id = [1u8; 32];
-        counter.increment(&id).unwrap();
-        counter.increment(&id).unwrap();
+        counter.increment(&id).test_unwrap();
+        counter.increment(&id).test_unwrap();
         assert_eq!(counter.count(&id), 2);
         assert_eq!(counter.unique_count(), 1);
     }
@@ -504,7 +506,7 @@ mod tests {
         for i in 0..10u8 {
             let mut id = [0u8; 32];
             id[0] = i;
-            counter.increment(&id).unwrap();
+            counter.increment(&id).test_unwrap();
         }
         assert_eq!(counter.unique_count(), 10);
     }

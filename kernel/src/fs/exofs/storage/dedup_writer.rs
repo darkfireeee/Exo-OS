@@ -294,6 +294,9 @@ impl DedupWriter {
     pub fn entry_count(&self) -> usize {
         self.index.lock().total_entries()
     }
+    pub fn lookup_by_id(&self, blob_id: &BlobId) -> Option<DedupEntry> {
+        self.index.lock().lookup(blob_id).cloned()
+    }
     pub fn load_factor_pct(&self) -> u32 {
         self.index.lock().load_factor_pct()
     }
@@ -321,6 +324,8 @@ impl Default for DedupWriter {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -342,7 +347,7 @@ mod tests {
         let data = b"duplicate blob content 1234567890";
         let dec = w.check(data);
         let id = *dec.blob_id();
-        w.register(id, make_offset(1), data.len() as u64).unwrap();
+        w.register(id, make_offset(1), data.len() as u64).test_unwrap();
 
         let dec2 = w.check(data);
         assert!(dec2.is_hit());
@@ -355,7 +360,7 @@ mod tests {
         let data = b"some data ABCDEF0123456";
         let dec = w.check(data);
         let id = *dec.blob_id();
-        w.register(id, make_offset(2), data.len() as u64).unwrap();
+        w.register(id, make_offset(2), data.len() as u64).test_unwrap();
         w.check(data);
         assert_eq!(w.bytes_saved(), data.len() as u64);
     }
@@ -366,7 +371,7 @@ mod tests {
         let data = b"content to dedup";
         let dec = w.check(data);
         let id = *dec.blob_id();
-        w.register(id, make_offset(3), data.len() as u64).unwrap();
+        w.register(id, make_offset(3), data.len() as u64).test_unwrap();
         assert_eq!(w.entry_count(), 1);
         w.unregister(&id);
         assert_eq!(w.entry_count(), 0);
@@ -467,10 +472,10 @@ mod tests_extra {
         let data = b"gc test data 12345";
         let dec = w.check(data);
         let id = *dec.blob_id();
-        w.register(id, DiskOffset(0), data.len() as u64).unwrap();
+        w.register(id, DiskOffset(0), data.len() as u64).test_unwrap();
         // Décrémente à 0.
         w.dec_ref(&id);
-        let report = w.gc().unwrap();
+        let report = w.gc().test_unwrap();
         assert_eq!(report.entries_removed, 1);
     }
 
@@ -481,11 +486,11 @@ mod tests_extra {
         let dec = w1.check(data);
         let id = *dec.blob_id();
         w1.register(id, DiskOffset(8192), data.len() as u64)
-            .unwrap();
+            .test_unwrap();
 
-        let snap = w1.snapshot().unwrap();
+        let snap = w1.snapshot().test_unwrap();
         let w2 = DedupWriter::new();
-        w2.restore_snapshot(&snap).unwrap();
+        w2.restore_snapshot(&snap).test_unwrap();
         assert_eq!(w2.entry_count(), 1);
     }
 
@@ -495,7 +500,7 @@ mod tests_extra {
         let d1 = b"orphan candidate data 1234";
         let dec = w.check(d1);
         w.register(*dec.blob_id(), DiskOffset(0), d1.len() as u64)
-            .unwrap();
+            .test_unwrap();
         let orphans = w.orphans();
         assert!(!orphans.is_empty());
     }

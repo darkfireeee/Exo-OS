@@ -347,6 +347,8 @@ impl IoBatch {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -358,8 +360,8 @@ mod tests {
 
     fn make_store() -> VecBatchStore {
         let mut store = VecBatchStore::new();
-        store.insert(make_id(1), b"hello batch").expect("ok");
-        store.insert(make_id(2), b"world batch").expect("ok");
+        store.insert(make_id(1), b"hello batch").test_expect("ok");
+        store.insert(make_id(2), b"world batch").test_expect("ok");
         store
     }
 
@@ -367,9 +369,9 @@ mod tests {
     fn test_batch_read() {
         let mut store = make_store();
         let mut batch = IoBatch::default();
-        batch.add_read(make_id(1)).expect("ok");
-        batch.add_read(make_id(2)).expect("ok");
-        let result = batch.execute(&mut store).expect("ok");
+        batch.add_read(make_id(1)).test_expect("ok");
+        batch.add_read(make_id(2)).test_expect("ok");
+        let result = batch.execute(&mut store).test_expect("ok");
         assert_eq!(result.entries_ok, 2);
         assert!(result.is_all_ok());
     }
@@ -378,8 +380,8 @@ mod tests {
     fn test_batch_write() {
         let mut store = VecBatchStore::new();
         let mut batch = IoBatch::default();
-        batch.add_write(make_id(3), b"new entry").expect("ok");
-        let result = batch.execute(&mut store).expect("ok");
+        batch.add_write(make_id(3), b"new entry").test_expect("ok");
+        let result = batch.execute(&mut store).test_expect("ok");
         assert_eq!(result.entries_ok, 1);
     }
 
@@ -387,9 +389,9 @@ mod tests {
     fn test_batch_mixed() {
         let mut store = make_store();
         let mut batch = IoBatch::default();
-        batch.add_read(make_id(1)).expect("ok");
-        batch.add_write(make_id(3), b"write data").expect("ok");
-        let result = batch.execute(&mut store).expect("ok");
+        batch.add_read(make_id(1)).test_expect("ok");
+        batch.add_write(make_id(3), b"write data").test_expect("ok");
+        let result = batch.execute(&mut store).test_expect("ok");
         assert_eq!(result.entries_ok, 2);
     }
 
@@ -397,8 +399,8 @@ mod tests {
     fn test_batch_not_found() {
         let mut store = VecBatchStore::new();
         let mut batch = IoBatch::default();
-        batch.add_read(make_id(99)).expect("ok");
-        let result = batch.execute(&mut store).expect("ok");
+        batch.add_read(make_id(99)).test_expect("ok");
+        let result = batch.execute(&mut store).test_expect("ok");
         assert_eq!(result.entries_err, 1);
         assert!(!result.is_all_ok());
     }
@@ -406,8 +408,8 @@ mod tests {
     #[test]
     fn test_batch_max_entries() {
         let mut batch = IoBatch::new(2);
-        batch.add_read(make_id(1)).expect("ok");
-        batch.add_read(make_id(2)).expect("ok");
+        batch.add_read(make_id(1)).test_expect("ok");
+        batch.add_read(make_id(2)).test_expect("ok");
         assert!(batch.add_read(make_id(3)).is_err());
     }
 
@@ -415,8 +417,8 @@ mod tests {
     fn test_batch_stats_accumulate() {
         let mut store = make_store();
         let mut batch = IoBatch::default();
-        batch.add_read(make_id(1)).expect("ok");
-        batch.execute(&mut store).expect("ok");
+        batch.add_read(make_id(1)).test_expect("ok");
+        batch.execute(&mut store).test_expect("ok");
         assert_eq!(batch.stats().batches_executed, 1);
         assert_eq!(batch.stats().entries_ok, 1);
     }
@@ -424,7 +426,7 @@ mod tests {
     #[test]
     fn test_batch_clear() {
         let mut batch = IoBatch::default();
-        batch.add_read(make_id(1)).expect("ok");
+        batch.add_read(make_id(1)).test_expect("ok");
         batch.clear();
         assert!(batch.is_empty());
     }
@@ -441,7 +443,7 @@ mod tests {
     fn test_batch_result_partial_success_rate() {
         let mut r = BatchResult::new();
         r.add_ok(100);
-        r.add_err(1, ExofsError::BlobNotFound).expect("ok");
+        r.add_err(1, ExofsError::BlobNotFound).test_expect("ok");
         assert_eq!(r.success_rate_pct10(), 500); // 50%
     }
 
@@ -464,8 +466,8 @@ mod tests {
     #[test]
     fn test_vec_batch_store_read_partial() {
         let mut store = VecBatchStore::new();
-        store.insert(make_id(1), b"hello world").expect("ok");
-        let (data, bytes) = store.read(&make_id(1), 6, 5).expect("ok");
+        store.insert(make_id(1), b"hello world").test_expect("ok");
+        let (data, bytes) = store.read(&make_id(1), 6, 5).test_expect("ok");
         assert_eq!(data, b"world");
         assert_eq!(bytes, 5);
     }

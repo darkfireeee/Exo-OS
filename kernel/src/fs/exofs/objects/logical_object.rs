@@ -498,6 +498,8 @@ impl fmt::Display for ObjectVersion {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -530,7 +532,7 @@ mod tests {
     #[test]
     fn test_from_disk_verify() {
         let d = make_test_disk();
-        let lo = LogicalObject::from_disk(&d).expect("from_disk doit réussir");
+        let lo = LogicalObject::from_disk(&d).test_expect("from_disk doit réussir");
         assert_eq!(lo.data_size, 1024);
         assert_eq!(lo.generation, 5);
     }
@@ -545,7 +547,7 @@ mod tests {
     #[test]
     fn test_to_disk_roundtrip() {
         let d = make_test_disk();
-        let lo = LogicalObject::from_disk(&d).unwrap();
+        let lo = LogicalObject::from_disk(&d).test_unwrap();
         let d2 = lo.to_disk();
         assert_eq!({ d.data_size }, { d2.data_size });
         assert_eq!({ d.generation }, { d2.generation });
@@ -554,17 +556,17 @@ mod tests {
     #[test]
     fn test_refcount_dec_to_zero() {
         let d = make_test_disk();
-        let lo = LogicalObject::from_disk(&d).unwrap();
+        let lo = LogicalObject::from_disk(&d).test_unwrap();
         assert_eq!(lo.ref_count(), 1);
-        let new_val = lo.dec_ref().unwrap();
+        let new_val = lo.dec_ref().test_unwrap();
         assert_eq!(new_val, 0);
     }
 
     #[test]
     fn test_refcount_underflow_returns_error() {
         let d = make_test_disk();
-        let lo = LogicalObject::from_disk(&d).unwrap();
-        assert_eq!(lo.dec_ref().unwrap(), 0);
+        let lo = LogicalObject::from_disk(&d).test_unwrap();
+        assert_eq!(lo.dec_ref().test_unwrap(), 0);
         assert_eq!(lo.dec_ref(), Err(ExofsError::RefCountUnderflow));
     }
 

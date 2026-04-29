@@ -499,6 +499,8 @@ pub fn blob_offset_aligned(offset: DiskOffset) -> bool {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -554,8 +556,8 @@ mod tests {
             dedup_hint: None,
         };
         let disk = orig.to_disk();
-        disk.verify().expect("verify doit réussir");
-        let back = BlobDescriptor::from_disk(&disk).expect("from_disk doit réussir");
+        disk.verify().test_expect("verify doit réussir");
+        let back = BlobDescriptor::from_disk(&disk).test_expect("from_disk doit réussir");
         assert_eq!(back.raw_size, 2048);
         assert_eq!(back.ref_count, 3);
     }

@@ -319,6 +319,8 @@ pub static CHUNK_CACHE: ChunkCache = ChunkCache::new_const(CHUNK_CACHE_DEFAULT_C
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::chunk_fingerprint::ChunkFingerprint;
     use super::*;
@@ -329,27 +331,27 @@ mod tests {
 
     #[test]
     fn test_cache_insert_get() {
-        let c = ChunkCache::new(64).unwrap();
+        let c = ChunkCache::new(64).test_unwrap();
         let data = b"hello world cache";
         let fp = make_fp(data);
-        c.insert(fp, data).unwrap();
-        let got = c.get(&fp.blake3).unwrap();
+        c.insert(fp, data).test_unwrap();
+        let got = c.get(&fp.blake3).test_unwrap();
         assert_eq!(got, data);
     }
 
     #[test]
     fn test_cache_miss() {
-        let c = ChunkCache::new(64).unwrap();
+        let c = ChunkCache::new(64).test_unwrap();
         let key = [0u8; 32];
         assert!(c.get(&key).is_none());
     }
 
     #[test]
     fn test_cache_stats_hits() {
-        let c = ChunkCache::new(64).unwrap();
+        let c = ChunkCache::new(64).test_unwrap();
         let data = b"stats test";
         let fp = make_fp(data);
-        c.insert(fp, data).unwrap();
+        c.insert(fp, data).test_unwrap();
         c.get(&fp.blake3);
         c.get(&fp.blake3);
         let s = c.stats();
@@ -360,42 +362,42 @@ mod tests {
     #[test]
     fn test_cache_eviction_on_full() {
         let cap = 4usize;
-        let c = ChunkCache::new(cap).unwrap();
+        let c = ChunkCache::new(cap).test_unwrap();
         for i in 0..cap + 1 {
             let data: Vec<u8> = (0..16).map(|b| b ^ i as u8).collect();
             let fp = make_fp(&data);
-            c.insert(fp, &data).unwrap();
+            c.insert(fp, &data).test_unwrap();
         }
         assert!(c.len() <= cap);
     }
 
     #[test]
     fn test_cache_clear() {
-        let c = ChunkCache::new(64).unwrap();
+        let c = ChunkCache::new(64).test_unwrap();
         let data = b"to be cleared";
         let fp = make_fp(data);
-        c.insert(fp, data).unwrap();
+        c.insert(fp, data).test_unwrap();
         c.clear();
         assert!(c.is_empty());
     }
 
     #[test]
     fn test_cache_remove() {
-        let c = ChunkCache::new(64).unwrap();
+        let c = ChunkCache::new(64).test_unwrap();
         let data = b"removable";
         let fp = make_fp(data);
-        c.insert(fp, data).unwrap();
+        c.insert(fp, data).test_unwrap();
         assert!(c.remove(&fp.blake3));
         assert!(c.get(&fp.blake3).is_none());
     }
 
     #[test]
     fn test_cache_contains() {
-        let c = ChunkCache::new(64).unwrap();
+        let c = ChunkCache::new(64).test_unwrap();
         let data = b"contains check";
         let fp = make_fp(data);
         assert!(!c.contains(&fp.blake3));
-        c.insert(fp, data).unwrap();
+        c.insert(fp, data).test_unwrap();
         assert!(c.contains(&fp.blake3));
     }
 
@@ -407,11 +409,11 @@ mod tests {
 
     #[test]
     fn test_evict_n() {
-        let c = ChunkCache::new(64).unwrap();
+        let c = ChunkCache::new(64).test_unwrap();
         for i in 0u8..10 {
             let data = [i; 32];
             let fp = make_fp(&data);
-            c.insert(fp, &data).unwrap();
+            c.insert(fp, &data).test_unwrap();
         }
         let before = c.len();
         c.evict_n(3);

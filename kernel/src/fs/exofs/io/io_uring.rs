@@ -118,8 +118,19 @@ impl IoUringSqe {
     }
 
     pub fn zeroed() -> Self {
-        // SAFETY: IoUringSqe est repr(C), tous les champs sont des entiers.
-        unsafe { core::mem::zeroed() }
+        Self {
+            opcode: 0,
+            flags: 0,
+            ioprio: 0,
+            fd: 0,
+            off: 0,
+            addr: 0,
+            len: 0,
+            op_flags: 0,
+            user_data: 0,
+            blob_id: [0u8; 32],
+            pad: [0u64; 6],
+        }
     }
 
     pub fn opcode(&self) -> ExofsResult<SqeOpcode> {
@@ -183,8 +194,11 @@ pub struct IoUringSq {
     submitted: AtomicU64,
 }
 
-// SAFETY: accès sous spinlock exclusif.
+// SAFETY: tous les accès au `Vec` interne passent par le spinlock `lock`,
+// et aucune référence vers le contenu de `ring` ne s'échappe hors des sections critiques.
 unsafe impl Sync for IoUringSq {}
+// SAFETY: la structure ne contient pas de pointeurs auto-référentiels et reste
+// sûre à déplacer entre threads sous les mêmes invariants de verrouillage.
 unsafe impl Send for IoUringSq {}
 
 impl IoUringSq {
@@ -296,6 +310,8 @@ pub struct IoUringCq {
 }
 
 unsafe impl Sync for IoUringCq {}
+// SAFETY: la file de complétion partage le même modèle d'exclusion mutuelle
+// que la SQ et ne publie que des copies d'entrées.
 unsafe impl Send for IoUringCq {}
 
 impl IoUringCq {
@@ -464,6 +480,20 @@ impl IoUringQueue {
 mod tests {
     use super::*;
 
+    fn ok<T, E: core::fmt::Debug>(res: Result<T, E>) -> T {
+        match res {
+            Ok(value) => value,
+            Err(err) => panic!("unexpected error: {err:?}"),
+        }
+    }
+
+    fn some<T>(value: Option<T>) -> T {
+        match value {
+            Some(inner) => inner,
+            None => panic!("unexpected None"),
+        }
+    }
+
     fn make_id(n: u8) -> [u8; 32] {
         let mut id = [0u8; 32];
         id[0] = n;
@@ -472,7 +502,7 @@ mod tests {
 
     #[test]
     fn test_sqe_opcode_from_u8() {
-        assert_eq!(SqeOpcode::from_u8(1).expect("ok"), SqeOpcode::Read);
+        assert_eq!(ok(SqeOpcode::from_u8(1)), SqeOpcode::Read);
         assert!(SqeOpcode::from_u8(99).is_err());
     }
 
@@ -496,58 +526,58 @@ mod tests {
 
     #[test]
     fn test_sq_push_pop() {
-        let sq = IoUringSq::new(8).expect("ok");
+        let sq = ok(IoUringSq::new(8));
         let sqe = IoUringSqe::new_write(make_id(1), 0, 128, 1);
-        sq.push_sqe(sqe).expect("ok");
+        ok(sq.push_sqe(sqe));
         assert_eq!(sq.len(), 1);
-        let popped = sq.pop_sqe().expect("some");
+        let popped = some(sq.pop_sqe());
         assert_eq!(popped.user_data, 1);
         assert!(sq.is_empty());
     }
 
     #[test]
     fn test_sq_full() {
-        let sq = IoUringSq::new(2).expect("ok");
-        sq.push_sqe(IoUringSqe::new_flush(1)).expect("ok");
-        sq.push_sqe(IoUringSqe::new_flush(2)).expect("ok");
+        let sq = ok(IoUringSq::new(2));
+        ok(sq.push_sqe(IoUringSqe::new_flush(1)));
+        ok(sq.push_sqe(IoUringSqe::new_flush(2)));
         assert!(sq.push_sqe(IoUringSqe::new_flush(3)).is_err());
     }
 
     #[test]
     fn test_cq_push_pop() {
-        let cq = IoUringCq::new(8).expect("ok");
-        cq.push_cqe(IoUringCqe::ok(1, 100)).expect("ok");
+        let cq = ok(IoUringCq::new(8));
+        ok(cq.push_cqe(IoUringCqe::ok(1, 100)));
         assert!(cq.has_pending());
-        let c = cq.pop_cqe().expect("some");
+        let c = some(cq.pop_cqe());
         assert_eq!(c.user_data, 1);
         assert!(!cq.has_pending());
     }
 
     #[test]
     fn test_io_uring_queue_submit_read() {
-        let q = IoUringQueue::new(16, 32).expect("ok");
-        let id = q.submit_read(make_id(1), 0, 512).expect("ok");
+        let q = ok(IoUringQueue::new(16, 32));
+        let id = ok(q.submit_read(make_id(1), 0, 512));
         assert!(id > 0);
         assert_eq!(q.sq.len(), 1);
     }
 
     #[test]
     fn test_io_uring_queue_process() {
-        let q = IoUringQueue::new(16, 32).expect("ok");
-        q.submit_read(make_id(1), 0, 128).expect("ok");
-        q.submit_write(make_id(2), 0, 256).expect("ok");
-        let processed = q.process_submissions().expect("ok");
+        let q = ok(IoUringQueue::new(16, 32));
+        ok(q.submit_read(make_id(1), 0, 128));
+        ok(q.submit_write(make_id(2), 0, 256));
+        let processed = ok(q.process_submissions());
         assert_eq!(processed, 2);
         assert!(q.cq.has_pending());
     }
 
     #[test]
     fn test_io_uring_queue_reap() {
-        let q = IoUringQueue::new(16, 32).expect("ok");
-        q.submit_flush().expect("ok");
-        q.process_submissions().expect("ok");
+        let q = ok(IoUringQueue::new(16, 32));
+        ok(q.submit_flush());
+        ok(q.process_submissions());
         let mut out = Vec::new();
-        let reaped = q.reap_completions(&mut out).expect("ok");
+        let reaped = ok(q.reap_completions(&mut out));
         assert_eq!(reaped, 1);
         assert_eq!(out.len(), 1);
     }
@@ -560,17 +590,17 @@ mod tests {
 
     #[test]
     fn test_submitted_total() {
-        let sq = IoUringSq::new(8).expect("ok");
-        sq.push_sqe(IoUringSqe::new_flush(1)).expect("ok");
-        sq.push_sqe(IoUringSqe::new_flush(2)).expect("ok");
+        let sq = ok(IoUringSq::new(8));
+        ok(sq.push_sqe(IoUringSqe::new_flush(1)));
+        ok(sq.push_sqe(IoUringSqe::new_flush(2)));
         assert_eq!(sq.submitted_total(), 2);
     }
 
     #[test]
     fn test_reaped_total() {
-        let cq = IoUringCq::new(8).expect("ok");
-        cq.push_cqe(IoUringCqe::ok(1, 0)).expect("ok");
-        cq.push_cqe(IoUringCqe::ok(2, 0)).expect("ok");
+        let cq = ok(IoUringCq::new(8));
+        ok(cq.push_cqe(IoUringCqe::ok(1, 0)));
+        ok(cq.push_cqe(IoUringCqe::ok(2, 0)));
         cq.pop_cqe();
         assert_eq!(cq.reaped_total(), 1);
     }

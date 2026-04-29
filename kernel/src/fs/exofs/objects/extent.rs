@@ -556,6 +556,8 @@ impl ExtentBuilder {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -585,7 +587,7 @@ mod tests {
     #[test]
     fn test_split_at() {
         let e = ObjectExtent::new(0, DiskOffset(0x8000), 0x4000, 0);
-        let (left, right) = e.split_at(0x2000).unwrap();
+        let (left, right) = e.split_at(0x2000).test_unwrap();
         assert_eq!(left.physical.len, 0x2000);
         assert_eq!(right.physical.len, 0x2000);
         assert_eq!(right.logical_offset, 0x2000);
@@ -596,7 +598,7 @@ mod tests {
     fn test_try_merge() {
         let mut a = ObjectExtent::new(0, DiskOffset(0), 0x1000, 0);
         let b = ObjectExtent::new(0x1000, DiskOffset(0x1000), 0x1000, 0);
-        a.try_merge(&b).unwrap();
+        a.try_merge(&b).test_unwrap();
         assert_eq!(a.physical.len, 0x2000);
     }
 
@@ -623,7 +625,7 @@ mod tests {
             .len(0x1000)
             .cow()
             .build()
-            .unwrap();
+            .test_unwrap();
         assert!(e.is_cow());
         assert_eq!(e.logical_offset, 0x2000);
     }

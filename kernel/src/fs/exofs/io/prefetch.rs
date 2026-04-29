@@ -350,6 +350,8 @@ impl Prefetcher {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -374,11 +376,11 @@ mod tests {
             PrefetchStrategy::Sequential,
             0,
         ))
-        .expect("ok");
+        .test_expect("ok");
         q.enqueue(PrefetchEntry::new(make_id(2), PrefetchStrategy::Random, 0))
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(q.len(), 2);
-        let e = q.dequeue().expect("some");
+        let e = q.dequeue().test_expect("some");
         assert_eq!(q.len(), 1);
         assert!(e.blob_id[0] == 1 || e.blob_id[0] == 2);
     }
@@ -388,9 +390,9 @@ mod tests {
         let mut q = PrefetchQueue::new(8);
         let id = make_id(5);
         q.enqueue(PrefetchEntry::new(id, PrefetchStrategy::Sequential, 0))
-            .expect("ok");
+            .test_expect("ok");
         q.enqueue(PrefetchEntry::new(id, PrefetchStrategy::Sequential, 1))
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(q.len(), 1); // déduplication
     }
 
@@ -400,15 +402,15 @@ mod tests {
         q.enqueue(
             PrefetchEntry::new(make_id(1), PrefetchStrategy::Sequential, 0).with_priority(10),
         )
-        .expect("ok");
+        .test_expect("ok");
         q.enqueue(
             PrefetchEntry::new(make_id(2), PrefetchStrategy::Sequential, 0).with_priority(200),
         )
-        .expect("ok");
+        .test_expect("ok");
         q.enqueue(
             PrefetchEntry::new(make_id(3), PrefetchStrategy::Sequential, 0).with_priority(100),
         )
-        .expect("ok");
+        .test_expect("ok");
         // la priorité 10 doit avoir été évincée
         assert_eq!(q.len(), 2);
     }
@@ -421,13 +423,13 @@ mod tests {
             PrefetchStrategy::Sequential,
             0,
         ))
-        .expect("ok");
+        .test_expect("ok");
         q.enqueue(PrefetchEntry::new(
             make_id(2),
             PrefetchStrategy::Sequential,
             0,
         ))
-        .expect("ok");
+        .test_expect("ok");
         let evicted = q.evict_expired(20_000, 5_000);
         assert_eq!(evicted, 2);
         assert!(q.is_empty());
@@ -435,27 +437,27 @@ mod tests {
 
     #[test]
     fn test_prefetcher_trigger() {
-        let mut p = Prefetcher::new(PrefetchConfig::default()).expect("ok");
+        let mut p = Prefetcher::new(PrefetchConfig::default()).test_expect("ok");
         p.trigger(make_id(1), PrefetchStrategy::Sequential)
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(p.stats().triggered, 1);
         assert_eq!(p.queue_len(), 1);
     }
 
     #[test]
     fn test_prefetcher_next_candidate() {
-        let mut p = Prefetcher::new(PrefetchConfig::default()).expect("ok");
+        let mut p = Prefetcher::new(PrefetchConfig::default()).test_expect("ok");
         p.trigger(make_id(1), PrefetchStrategy::Sequential)
-            .expect("ok");
-        let cand = p.next_candidate().expect("some");
+            .test_expect("ok");
+        let cand = p.next_candidate().test_expect("some");
         assert_eq!(cand.blob_id[0], 1);
     }
 
     #[test]
     fn test_prefetcher_stats() {
-        let mut p = Prefetcher::new(PrefetchConfig::default()).expect("ok");
+        let mut p = Prefetcher::new(PrefetchConfig::default()).test_expect("ok");
         p.trigger(make_id(1), PrefetchStrategy::Sequential)
-            .expect("ok");
+            .test_expect("ok");
         p.report_ok();
         p.report_hit();
         p.report_miss();
@@ -466,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_hit_ratio() {
-        let mut p = Prefetcher::new(PrefetchConfig::default()).expect("ok");
+        let mut p = Prefetcher::new(PrefetchConfig::default()).test_expect("ok");
         p.report_hit();
         p.report_hit();
         p.report_miss();
@@ -475,9 +477,9 @@ mod tests {
 
     #[test]
     fn test_prefetcher_disabled_strategy() {
-        let mut p = Prefetcher::new(PrefetchConfig::default()).expect("ok");
+        let mut p = Prefetcher::new(PrefetchConfig::default()).test_expect("ok");
         p.trigger(make_id(1), PrefetchStrategy::Disabled)
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(p.queue_len(), 0); // rien ajouté
     }
 
@@ -487,9 +489,9 @@ mod tests {
             ttl_ticks: 100,
             ..PrefetchConfig::default()
         };
-        let mut p = Prefetcher::new(cfg).expect("ok");
+        let mut p = Prefetcher::new(cfg).test_expect("ok");
         p.trigger(make_id(1), PrefetchStrategy::Sequential)
-            .expect("ok");
+            .test_expect("ok");
         p.advance_tick(200);
         assert_eq!(p.queue_len(), 0);
         assert_eq!(p.stats().evictions, 1);

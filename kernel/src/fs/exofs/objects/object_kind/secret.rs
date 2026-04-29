@@ -452,6 +452,8 @@ impl fmt::Display for SecretStats {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -484,7 +486,7 @@ mod tests {
             EpochId(1),
             SecretCipher::Aes256Gcm,
         )
-        .unwrap();
+        .test_unwrap();
         assert!(s.verify_plaintext_id(data).is_ok());
         assert!(s.verify_plaintext_id(b"tampered").is_err());
     }
@@ -505,10 +507,10 @@ mod tests {
             EpochId(5),
             SecretCipher::ChaCha20Poly1305,
         )
-        .unwrap();
+        .test_unwrap();
         let disk = orig.to_disk();
-        disk.verify().expect("verify doit réussir");
-        let back = SecretDescriptor::from_disk(&disk).unwrap();
+        disk.verify().test_expect("verify doit réussir");
+        let back = SecretDescriptor::from_disk(&disk).test_unwrap();
         assert_eq!(back.plaintext_size, data.len() as u64);
         assert!(matches!(back.cipher, SecretCipher::ChaCha20Poly1305));
     }

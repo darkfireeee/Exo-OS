@@ -408,6 +408,8 @@ pub struct TreeEntryRef<'a> {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::path_component::validate_component;
     use super::*;
@@ -421,17 +423,17 @@ mod tests {
     #[test]
     fn test_insert_find() {
         let mut t = PathIndexTree::new();
-        let c = validate_component(b"hello").unwrap();
-        t.insert(&c, fake_oid(1), 0).unwrap();
-        let e = t.find(&c).unwrap();
+        let c = validate_component(b"hello").test_unwrap();
+        t.insert(&c, fake_oid(1), 0).test_unwrap();
+        let e = t.find(&c).test_unwrap();
         assert_eq!(e.name_bytes(), b"hello");
         assert_eq!(e.oid.0[0], 1);
     }
     #[test]
     fn test_duplicate_insert() {
         let mut t = PathIndexTree::new();
-        let c = validate_component(b"dup").unwrap();
-        t.insert(&c, fake_oid(1), 0).unwrap();
+        let c = validate_component(b"dup").test_unwrap();
+        t.insert(&c, fake_oid(1), 0).test_unwrap();
         assert!(matches!(
             t.insert(&c, fake_oid(2), 0),
             Err(ExofsError::ObjectAlreadyExists)
@@ -440,16 +442,16 @@ mod tests {
     #[test]
     fn test_remove() {
         let mut t = PathIndexTree::new();
-        let c = validate_component(b"bye").unwrap();
-        t.insert(&c, fake_oid(1), 0).unwrap();
-        t.remove(&c).unwrap();
+        let c = validate_component(b"bye").test_unwrap();
+        t.insert(&c, fake_oid(1), 0).test_unwrap();
+        t.remove(&c).test_unwrap();
         assert!(t.find(&c).is_none());
         assert_eq!(t.len(), 0);
     }
     #[test]
     fn test_remove_not_found() {
         let mut t = PathIndexTree::new();
-        let c = validate_component(b"x").unwrap();
+        let c = validate_component(b"x").test_unwrap();
         assert!(matches!(t.remove(&c), Err(ExofsError::ObjectNotFound)));
     }
     #[test]
@@ -457,10 +459,10 @@ mod tests {
         let mut t = PathIndexTree::new();
         for i in 0u8..=191 {
             let name = [b'a' + (i % 26), b'0' + (i / 26)];
-            let c = validate_component(&name).unwrap();
-            t.insert(&c, fake_oid(i), 0).unwrap();
+            let c = validate_component(&name).test_unwrap();
+            t.insert(&c, fake_oid(i), 0).test_unwrap();
         }
-        let extra = validate_component(b"extra").unwrap();
+        let extra = validate_component(b"extra").test_unwrap();
         assert!(matches!(
             t.insert(&extra, fake_oid(0), 0),
             Err(ExofsError::NoSpace)
@@ -471,12 +473,12 @@ mod tests {
         let mut t = PathIndexTree::new();
         for i in 0u8..10 {
             let name = [b'a' + i];
-            let c = validate_component(&name).unwrap();
-            t.insert(&c, fake_oid(i), 0).unwrap();
+            let c = validate_component(&name).test_unwrap();
+            t.insert(&c, fake_oid(i), 0).test_unwrap();
         }
-        let c = validate_component(b"a").unwrap();
-        t.remove(&c).unwrap();
-        t.compact().unwrap();
+        let c = validate_component(b"a").test_unwrap();
+        t.remove(&c).test_unwrap();
+        t.compact().test_unwrap();
         assert_eq!(t.len(), 9);
         assert_eq!(t.tombstones, 0);
     }
@@ -485,17 +487,17 @@ mod tests {
         let mut t = PathIndexTree::new();
         for i in 0u8..5 {
             let name = [b'x' + i];
-            let c = validate_component(&name).unwrap();
-            t.insert(&c, fake_oid(i), 0).unwrap();
+            let c = validate_component(&name).test_unwrap();
+            t.insert(&c, fake_oid(i), 0).test_unwrap();
         }
         assert_eq!(t.iter().count(), 5);
     }
     #[test]
     fn test_update_oid() {
         let mut t = PathIndexTree::new();
-        let c = validate_component(b"upd").unwrap();
-        t.insert(&c, fake_oid(1), 0).unwrap();
-        t.update_oid(&c, fake_oid(99)).unwrap();
-        assert_eq!(t.find(&c).unwrap().oid.0[0], 99);
+        let c = validate_component(b"upd").test_unwrap();
+        t.insert(&c, fake_oid(1), 0).test_unwrap();
+        t.update_oid(&c, fake_oid(99)).test_unwrap();
+        assert_eq!(t.find(&c).test_unwrap().oid.0[0], 99);
     }
 }

@@ -420,6 +420,8 @@ impl<'a> AlertManager<'a> {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -459,7 +461,7 @@ mod tests {
         log.push(AlertLevel::Critical, AlertCode(0), b"crit");
         let mut out = Vec::new();
         log.last_n(10, Some(AlertLevel::Error), &mut out)
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|a| a.level >= AlertLevel::Error));
     }
@@ -497,7 +499,7 @@ mod tests {
     #[test]
     fn test_msg_to_vec() {
         let a = Alert::new(0, AlertLevel::Info, AlertCode(0), b"hello");
-        let v = a.msg_to_vec().expect("ok");
+        let v = a.msg_to_vec().test_expect("ok");
         assert_eq!(&v[..], b"hello");
     }
 
@@ -508,7 +510,7 @@ mod tests {
         mgr.emit(AlertLevel::Info, AlertCode(0), b"drop");
         mgr.emit(AlertLevel::Error, AlertCode::CORRUPTION, b"keep");
         let mut out = Vec::new();
-        mgr.collect_filtered(10, &mut out).expect("ok");
+        mgr.collect_filtered(10, &mut out).test_expect("ok");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].level, AlertLevel::Error);
     }

@@ -330,13 +330,15 @@ fn zstd_decompress(input: &[u8], expected_size: usize) -> ExofsResult<Vec<u8>> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::storage::compression_writer::CompressWriter;
 
     fn roundtrip(algo: CompressionType, data: &[u8]) -> bool {
         let w = CompressWriter::new(algo);
-        let c = w.compress(data).unwrap();
+        let c = w.compress(data).test_unwrap();
         let r = DecompressReader::decompress(&c.data);
         if let Ok(result) = r {
             result.data == data
@@ -369,8 +371,8 @@ mod tests {
     #[test]
     fn test_read_header() {
         let w = CompressWriter::none();
-        let c = w.compress(b"test").unwrap();
-        let h = DecompressReader::read_header(&c.data).unwrap();
+        let c = w.compress(b"test").test_unwrap();
+        let h = DecompressReader::read_header(&c.data).test_unwrap();
         assert_eq!(h.magic, COMPRESSED_BLOCK_MAGIC);
     }
 
@@ -378,8 +380,8 @@ mod tests {
     fn test_original_size() {
         let data = b"ExoFS test 1234567890";
         let w = CompressWriter::none();
-        let c = w.compress(data).unwrap();
-        let sz = DecompressReader::original_size(&c.data).unwrap();
+        let c = w.compress(data).test_unwrap();
+        let sz = DecompressReader::original_size(&c.data).test_unwrap();
         assert_eq!(sz as usize, data.len());
     }
 }
@@ -512,14 +514,14 @@ mod tests_extra {
     use crate::fs::exofs::storage::compression_writer::CompressWriter;
 
     fn make_frame(data: &[u8]) -> Vec<u8> {
-        CompressWriter::none().compress(data).unwrap().data
+        CompressWriter::none().compress(data).test_unwrap().data
     }
 
     #[test]
     fn test_batch_decompress_all_ok() {
         let f1 = make_frame(b"hello");
         let f2 = make_frame(b"world");
-        let report = decompress_batch(&[f1.as_slice(), f2.as_slice()]).unwrap();
+        let report = decompress_batch(&[f1.as_slice(), f2.as_slice()]).test_unwrap();
         assert!(report.all_ok());
         assert_eq!(report.ok_count, 2);
     }
@@ -539,7 +541,7 @@ mod tests_extra {
     fn test_required_output_capacity() {
         let data = b"ExoFS reader test";
         let f = make_frame(data);
-        let cap = required_output_capacity(&f).unwrap();
+        let cap = required_output_capacity(&f).test_unwrap();
         assert_eq!(cap, data.len());
     }
 }

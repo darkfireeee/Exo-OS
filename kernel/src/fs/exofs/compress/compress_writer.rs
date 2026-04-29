@@ -282,6 +282,8 @@ pub(crate) fn crc32_simple(data: &[u8]) -> u32 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -305,7 +307,7 @@ mod tests {
     #[test]
     fn test_empty() {
         let w = CompressWriter::new(CompressPolicy::default());
-        let r = w.compress(&[]).unwrap();
+        let r = w.compress(&[]).test_unwrap();
         assert_eq!(r.original_size, 0);
         assert!(r.payload.is_empty());
     }
@@ -313,14 +315,14 @@ mod tests {
     #[test]
     fn test_lz4_compresses_uniform() {
         let w = CompressWriter::new(CompressPolicy::lz4_fast());
-        let r = w.compress(&uniform(2048)).unwrap();
+        let r = w.compress(&uniform(2048)).test_unwrap();
         assert!(r.total_size() > 0);
     }
 
     #[test]
     fn test_compression_ratio_lz4() {
         let w = CompressWriter::new(CompressPolicy::lz4_fast());
-        let r = w.compress(&uniform(8192)).unwrap();
+        let r = w.compress(&uniform(8192)).test_unwrap();
         if r.algorithm != CompressionAlgorithm::None {
             assert!(r.compression_ratio() < 1.0);
         }
@@ -329,7 +331,7 @@ mod tests {
     #[test]
     fn test_space_saved_positive() {
         let w = CompressWriter::new(CompressPolicy::lz4_fast());
-        let r = w.compress(&uniform(8192)).unwrap();
+        let r = w.compress(&uniform(8192)).test_unwrap();
         if r.algorithm != CompressionAlgorithm::None {
             assert!(r.space_saved() > 0);
         }
@@ -339,7 +341,7 @@ mod tests {
     fn test_store_raw_incompressible() {
         let w = CompressWriter::new(CompressPolicy::default());
         let data = pseudo_random(200);
-        let r = w.compress(&data).unwrap();
+        let r = w.compress(&data).test_unwrap();
         // Doit soit stocker brut soit compresser — ne doit pas échouer.
         assert!(r.total_size() > 0 || r.original_size == 0);
     }
@@ -366,7 +368,7 @@ mod tests {
     #[test]
     fn test_pipeline_validate_ok() {
         let p = CompressionPipeline::new(CompressPolicy::lz4_fast());
-        let r = p.compress_and_validate(&uniform(4096)).unwrap();
+        let r = p.compress_and_validate(&uniform(4096)).test_unwrap();
         assert!(r.total_size() > 0);
     }
 
@@ -382,7 +384,7 @@ mod tests {
             CompressPolicy::default(),
             CompressionThreshold::aggressive(),
         );
-        let r = w.compress(&uniform(2048)).unwrap();
+        let r = w.compress(&uniform(2048)).test_unwrap();
         assert!(r.total_size() > 0);
     }
 
@@ -390,7 +392,7 @@ mod tests {
     fn test_zstd_roundtrip_via_pipeline() {
         let p = CompressionPipeline::new(CompressPolicy::zstd_default());
         let data = uniform(1024);
-        let r = p.compress_and_validate(&data).unwrap();
+        let r = p.compress_and_validate(&data).test_unwrap();
         assert!(r.total_size() > 0);
     }
 
@@ -399,7 +401,7 @@ mod tests {
     #[test]
     fn test_compress_small_data_no_panic() {
         let w = CompressWriter::new(CompressPolicy::default());
-        let r = w.compress(b"hi").unwrap();
+        let r = w.compress(b"hi").test_unwrap();
         assert!(r.total_size() > 0 || r.original_size == 2);
     }
 
@@ -407,7 +409,7 @@ mod tests {
     fn test_build_result_total_correct() {
         let w = CompressWriter::new(CompressPolicy::lz4_fast());
         let data = uniform(1024);
-        let r = w.compress(&data).unwrap();
+        let r = w.compress(&data).test_unwrap();
         assert_eq!(r.total_size(), r.payload.len());
     }
 
@@ -427,7 +429,7 @@ mod tests {
     #[test]
     fn test_compress_writer_default_policy() {
         let w = CompressWriter::new(CompressPolicy::default());
-        let r = w.compress(&uniform(512)).unwrap();
+        let r = w.compress(&uniform(512)).test_unwrap();
         assert!(r.total_size() > 0);
     }
 
@@ -442,7 +444,7 @@ mod tests {
     fn test_space_saved_zero_for_raw() {
         let w = CompressWriter::new(CompressPolicy::None);
         let data = uniform(256);
-        let r = w.compress(&data).unwrap();
+        let r = w.compress(&data).test_unwrap();
         assert_eq!(r.space_saved(), 0);
     }
 
@@ -450,7 +452,7 @@ mod tests {
     fn test_compression_result_structured() {
         let w = CompressWriter::new(CompressPolicy::lz4_fast());
         let data = uniform(2048);
-        let r = w.compress(&data).unwrap();
+        let r = w.compress(&data).test_unwrap();
         // Vérifie la cohérence interne du résultat.
         assert!(r.original_size == data.len());
     }

@@ -446,6 +446,8 @@ impl BlockCache {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -470,10 +472,10 @@ mod tests {
         let off = DiskOffset(4096);
         let mut buf = vec![0u8; BLK];
 
-        c.read_block(off, &mut buf, &mock_read).unwrap();
+        c.read_block(off, &mut buf, &mock_read).test_unwrap();
         assert_eq!(c.miss_count(), 1);
 
-        c.read_block(off, &mut buf, &mock_read).unwrap();
+        c.read_block(off, &mut buf, &mock_read).test_unwrap();
         assert_eq!(c.hit_count(), 1);
     }
 
@@ -483,10 +485,10 @@ mod tests {
         let off = DiskOffset(4096);
         let data = vec![0xFFu8; BLK];
 
-        c.write_block_dirty(off, &data).unwrap();
+        c.write_block_dirty(off, &data).test_unwrap();
         assert_eq!(c.dirty_count(), 1);
 
-        c.flush_dirty(&mock_write).unwrap();
+        c.flush_dirty(&mock_write).test_unwrap();
         assert_eq!(c.dirty_count(), 0);
         assert_eq!(c.flush_count(), 1);
     }
@@ -496,7 +498,7 @@ mod tests {
         let c = make_cache();
         let off = DiskOffset(4096);
         let mut buf = vec![0u8; BLK];
-        c.read_block(off, &mut buf, &mock_read).unwrap();
+        c.read_block(off, &mut buf, &mock_read).test_unwrap();
         assert_eq!(c.cached_count(), 1);
         c.invalidate(off);
         assert_eq!(c.cached_count(), 0);
@@ -506,12 +508,12 @@ mod tests {
     fn test_eviction_lru() {
         let c = BlockCache::new(2);
         let mut buf = vec![0u8; BLK];
-        c.read_block(DiskOffset(0), &mut buf, &mock_read).unwrap();
+        c.read_block(DiskOffset(0), &mut buf, &mock_read).test_unwrap();
         c.read_block(DiskOffset(4096), &mut buf, &mock_read)
-            .unwrap();
+            .test_unwrap();
         // Cache plein, 3ème lecture → éviction du plus ancien.
         c.read_block(DiskOffset(8192), &mut buf, &mock_read)
-            .unwrap();
+            .test_unwrap();
         assert_eq!(c.cached_count(), 2);
         assert_eq!(c.eviction_count(), 1);
     }

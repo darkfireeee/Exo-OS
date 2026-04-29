@@ -380,6 +380,8 @@ impl LatencyWindow {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -492,7 +494,7 @@ mod tests {
         let w = LatencyWindow::new_const();
         w.push(10);
         w.push(20);
-        let v = w.to_vec().expect("ok");
+        let v = w.to_vec().test_expect("ok");
         assert_eq!(v.len(), 2);
     }
 

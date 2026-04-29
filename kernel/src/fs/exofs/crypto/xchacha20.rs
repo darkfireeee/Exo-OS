@@ -236,6 +236,8 @@ impl AeadContext {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -257,8 +259,8 @@ mod tests {
         let k = test_key();
         let n = test_nonce();
         let plain = b"ExoFS test payload";
-        let (ct, tag) = XChaCha20Poly1305::encrypt(&k, &n, &[], plain).unwrap();
-        let dec = XChaCha20Poly1305::decrypt(&k, &n, &[], &ct, &tag).unwrap();
+        let (ct, tag) = XChaCha20Poly1305::encrypt(&k, &n, &[], plain).test_unwrap();
+        let dec = XChaCha20Poly1305::decrypt(&k, &n, &[], &ct, &tag).test_unwrap();
         assert_eq!(&dec, plain);
     }
 
@@ -268,7 +270,7 @@ mod tests {
         let k = test_key();
         let n = test_nonce();
         let plain = b"ExoFS auth test";
-        let (ct, mut tag) = XChaCha20Poly1305::encrypt(&k, &n, &[], plain).unwrap();
+        let (ct, mut tag) = XChaCha20Poly1305::encrypt(&k, &n, &[], plain).test_unwrap();
         tag.0[0] ^= 0xFF; // Corrompre le tag
         assert!(XChaCha20Poly1305::decrypt(&k, &n, &[], &ct, &tag).is_err());
     }
@@ -279,7 +281,7 @@ mod tests {
         let k = test_key();
         let n = test_nonce();
         let plain = b"ExoFS auth test";
-        let (mut ct, tag) = XChaCha20Poly1305::encrypt(&k, &n, &[], plain).unwrap();
+        let (mut ct, tag) = XChaCha20Poly1305::encrypt(&k, &n, &[], plain).test_unwrap();
         if !ct.is_empty() {
             ct[0] ^= 0xFF;
         }
@@ -312,9 +314,9 @@ mod tests {
         let n = test_nonce();
         let plain = b"secret data";
         let aad = b"authenticated header";
-        let (ct, tag) = XChaCha20Poly1305::encrypt(&k, &n, aad, plain).unwrap();
+        let (ct, tag) = XChaCha20Poly1305::encrypt(&k, &n, aad, plain).test_unwrap();
         // Décryptage réussit avec le bon AAD
-        let dec = XChaCha20Poly1305::decrypt(&k, &n, aad, &ct, &tag).unwrap();
+        let dec = XChaCha20Poly1305::decrypt(&k, &n, aad, &ct, &tag).test_unwrap();
         assert_eq!(&dec, plain);
         // Décryptage échoue avec un AAD différent
         assert!(XChaCha20Poly1305::decrypt(&k, &n, b"wrong aad", &ct, &tag).is_err());

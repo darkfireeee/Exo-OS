@@ -298,6 +298,8 @@ pub struct MountStats {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::reset_for_test;
@@ -319,7 +321,7 @@ mod tests {
             blob_catalog_size: 0,
             name: make_snapshot_name(b"m-test"),
         })
-        .unwrap();
+        .test_unwrap();
     }
 
     #[test]
@@ -330,9 +332,9 @@ mod tests {
         let reg = SnapshotMountRegistry::new_const();
         let mid = reg
             .mount(SnapshotId(1), b"/snap/1", MountOptions::default(), 0)
-            .unwrap();
+            .test_unwrap();
         assert!(reg.is_snap_mounted(SnapshotId(1)));
-        reg.umount(mid).unwrap();
+        reg.umount(mid).test_unwrap();
         assert!(!reg.is_snap_mounted(SnapshotId(1)));
     }
 
@@ -344,12 +346,12 @@ mod tests {
         let reg = SnapshotMountRegistry::new_const();
         let mid = reg
             .mount(SnapshotId(2), b"/snap/2", MountOptions::default(), 0)
-            .unwrap();
-        reg.open(mid).unwrap();
+            .test_unwrap();
+        reg.open(mid).test_unwrap();
         let err = reg.umount(mid);
         assert!(matches!(err, Err(ExofsError::InvalidState)));
-        reg.close(mid).unwrap();
-        reg.umount(mid).unwrap();
+        reg.close(mid).test_unwrap();
+        reg.umount(mid).test_unwrap();
     }
 
     #[test]
@@ -360,9 +362,9 @@ mod tests {
         let reg = SnapshotMountRegistry::new_const();
         let mid = reg
             .mount(SnapshotId(3), b"/snap/3", MountOptions::default(), 0)
-            .unwrap();
-        reg.open(mid).unwrap();
-        reg.force_umount(mid).unwrap();
+            .test_unwrap();
+        reg.open(mid).test_unwrap();
+        reg.force_umount(mid).test_unwrap();
         assert!(!reg.is_snap_mounted(SnapshotId(3)));
     }
 
@@ -373,10 +375,10 @@ mod tests {
         push_snap(&list, 4);
         let reg = SnapshotMountRegistry::new_const();
         reg.mount(SnapshotId(4), b"/mnt/snap4", MountOptions::default(), 0)
-            .unwrap();
+            .test_unwrap();
         let mp = reg.find_by_path(b"/mnt/snap4");
         assert!(mp.is_some());
-        assert_eq!(mp.unwrap().snap_id, SnapshotId(4));
+        assert_eq!(mp.test_unwrap().snap_id, SnapshotId(4));
     }
 
     #[test]
@@ -387,10 +389,10 @@ mod tests {
         let reg = SnapshotMountRegistry::new_const();
         let mid = reg
             .mount(SnapshotId(5), b"/snap/5", MountOptions::default(), 0)
-            .unwrap();
+            .test_unwrap();
         {
             let mut g = reg.mounts.lock();
-            g.get_mut(&mid.0).unwrap().open_count = u64::MAX;
+            g.get_mut(&mid.0).test_unwrap().open_count = u64::MAX;
         }
         let err = reg.open(mid);
         assert!(matches!(err, Err(ExofsError::Overflow)));

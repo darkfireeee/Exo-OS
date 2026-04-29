@@ -215,6 +215,8 @@ impl<'a> CompressedBlobView<'a> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use alloc::vec;
@@ -247,7 +249,7 @@ mod tests {
     fn test_roundtrip_to_from_bytes() {
         let h = CompressionHeader::new(CompressionAlgorithm::Zstd, 3, 2048, 512, 0xABCD);
         let bytes = h.to_bytes();
-        let h2 = CompressionHeader::from_bytes(&bytes).unwrap();
+        let h2 = CompressionHeader::from_bytes(&bytes).test_unwrap();
         assert_eq!(h.magic, h2.magic);
         assert_eq!(h.algorithm, h2.algorithm);
         assert_eq!(h.original_size, h2.original_size);
@@ -334,7 +336,7 @@ mod tests {
         let h_bytes = make_valid_header_bytes(10);
         let mut buf = vec![0u8; 32 + 10];
         buf[..32].copy_from_slice(&h_bytes);
-        let view = CompressedBlobView::parse(&buf).unwrap();
+        let view = CompressedBlobView::parse(&buf).test_unwrap();
         assert_eq!(view.algorithm(), CompressionAlgorithm::Lz4);
         assert_eq!(view.original_size(), 1000);
     }
@@ -445,7 +447,7 @@ mod header_builder_tests {
             .compressed(50)
             .build();
         let b = h.to_bytes();
-        let h2 = CompressionHeader::from_bytes(&b).unwrap();
+        let h2 = CompressionHeader::from_bytes(&b).test_unwrap();
         assert!(h2.is_valid());
         assert_eq!(h2.algorithm(), CompressionAlgorithm::Lz4);
     }

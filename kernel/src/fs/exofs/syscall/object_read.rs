@@ -7,6 +7,7 @@
 //! ARITH-02 : saturating_*/checked_div pour calculs d'offset.
 
 use super::object_fd::OBJECT_TABLE;
+use super::object_store;
 use super::validation::{
     exofs_err_to_errno, validate_count, validate_fd, validate_offset, verify_cap, write_user_buf,
     CapabilityType, EFAULT, ENOMEM,
@@ -14,6 +15,7 @@ use super::validation::{
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,6 +77,24 @@ pub struct ReadResult {
 // Logique de lecture
 // ─────────────────────────────────────────────────────────────────────────────
 
+fn resolve_blob_data(blob_id: BlobId) -> ExofsResult<Box<[u8]>> {
+    if let Some(data) = BLOB_CACHE.get(&blob_id) {
+        return Ok(data);
+    }
+
+    if let Some(loaded) = object_store::load_blob_data_if_available(&blob_id)? {
+        let mut cache_copy = Vec::new();
+        cache_copy
+            .try_reserve(loaded.len())
+            .map_err(|_| ExofsError::NoMemory)?;
+        cache_copy.extend_from_slice(&loaded);
+        BLOB_CACHE.insert(blob_id, cache_copy)?;
+        return Ok(loaded.into_boxed_slice());
+    }
+
+    Err(ExofsError::BlobNotFound)
+}
+
 /// Lit `count` octets depuis le blob `blob_id` à partir de `offset`.
 ///
 /// Remplit `buf` et retourne le nombre d'octets lus.
@@ -88,7 +108,7 @@ fn read_blob(
     buf: &mut [u8],
 ) -> ExofsResult<ReadResult> {
     // Récupérer le blob depuis le cache.
-    let data = BLOB_CACHE.get(&blob_id).ok_or(ExofsError::BlobNotFound)?;
+    let data = resolve_blob_data(blob_id)?;
     let blob_size = data.len();
 
     if offset >= blob_size as u64 {
@@ -287,6 +307,8 @@ pub fn align_up(offset: u64, align: u64) -> Option<u64> {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
     use super::super::validation::{EBADF, EINVAL, ERANGE};
@@ -514,7 +536,7 @@ mod tests_extended {
     fn test_scatter_read_empty_segments() {
         let blob = BlobId([0xCCu8; 32]);
         let segs: &[ReadSegment] = &[];
-        let r = scatter_read(blob, segs).unwrap();
+        let r = scatter_read(blob, segs).test_unwrap();
         assert_eq!(r, 0);
     }
 }

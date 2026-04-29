@@ -315,8 +315,7 @@ impl ObjectReader {
             return Err(ExofsError::InvalidSize);
         }
 
-        // SAFETY: taille vérifiée
-        let hdr: &ObjectHeaderDisk = unsafe { &*(raw.as_ptr() as *const ObjectHeaderDisk) };
+        let hdr = ObjectHeaderDisk::from_bytes(&raw)?;
 
         if mode != ObjectVerifyMode::None {
             if hdr.magic != OBJECT_HEADER_MAGIC {
@@ -770,6 +769,8 @@ where
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::{EpochId, ObjectId};
@@ -805,7 +806,7 @@ mod tests {
             },
             |_| None,
         )
-        .unwrap();
+        .test_unwrap();
 
         // Écrire l'en-tête
         let mut off2 = off;
@@ -825,7 +826,7 @@ mod tests {
                 Ok(buf.len())
             },
         )
-        .unwrap();
+        .test_unwrap();
 
         hdr_off
     }
@@ -841,7 +842,7 @@ mod tests {
             Ok(disk[s..s + sz].to_vec())
         };
 
-        let meta = ObjectReader::read_meta(hdr_off, read_fn).unwrap();
+        let meta = ObjectReader::read_meta(hdr_off, read_fn).test_unwrap();
         assert_eq!(meta.content_size, data.len() as u64);
         assert_eq!(meta.blob_count, 1);
     }
@@ -877,7 +878,7 @@ mod tests {
             Ok(disk[s..s + sz].to_vec())
         };
 
-        let r = ObjectReader::read_object(hdr_off, read_fn, ObjectVerifyMode::HeaderOnly).unwrap();
+        let r = ObjectReader::read_object(hdr_off, read_fn, ObjectVerifyMode::HeaderOnly).test_unwrap();
         assert!(r.data.is_empty());
         // N'a dû lire qu'une fois (juste l'en-tête)
         assert_eq!(reads.load(Ordering::Relaxed), 1);

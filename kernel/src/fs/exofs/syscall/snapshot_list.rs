@@ -308,13 +308,15 @@ pub fn snapshot_count(source: BlobId) -> usize {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::snapshot_create::SNAPSHOT_MAGIC;
     use super::*;
 
     fn src(path: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, b"src".to_vec()).unwrap();
+        BLOB_CACHE.insert(id, b"src".to_vec()).test_unwrap();
         id
     }
 
@@ -333,8 +335,8 @@ mod tests {
             data[8 + i] = ep[i];
             i = i.wrapping_add(1);
         }
-        BLOB_CACHE.insert(sid, data.to_vec()).unwrap();
-        register_snapshot(source, sid.as_bytes()).unwrap();
+        BLOB_CACHE.insert(sid, data.to_vec()).test_unwrap();
+        register_snapshot(source, sid.as_bytes()).test_unwrap();
     }
 
     #[test]
@@ -365,7 +367,7 @@ mod tests {
             epoch_min: 0,
             epoch_max: u64::MAX,
         };
-        let v = list_snapshots(s, &args).unwrap();
+        let v = list_snapshots(s, &args).test_unwrap();
         assert!(!v.is_empty());
     }
 
@@ -380,7 +382,7 @@ mod tests {
             epoch_min: 10,
             epoch_max: 100,
         };
-        let v = list_snapshots(s, &args).unwrap();
+        let v = list_snapshots(s, &args).test_unwrap();
         // Seul epoch=50 passe le filtre
         let mut i = 0usize;
         while i < v.len() {
@@ -401,7 +403,7 @@ mod tests {
             epoch_min: 0,
             epoch_max: u64::MAX,
         };
-        let v = list_snapshots(s, &args).unwrap();
+        let v = list_snapshots(s, &args).test_unwrap();
         let mut i = 1usize;
         while i < v.len() {
             assert!(v[i].epoch_id >= v[i - 1].epoch_id);
@@ -418,7 +420,7 @@ mod tests {
             epoch_min: 0,
             epoch_max: u64::MAX,
         };
-        let v = list_snapshots(s, &args).unwrap();
+        let v = list_snapshots(s, &args).test_unwrap();
         assert!(v.is_empty());
     }
 
@@ -522,7 +524,7 @@ mod extra_tests {
 
     fn src(p: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(p);
-        BLOB_CACHE.insert(id, b"x".to_vec()).unwrap();
+        BLOB_CACHE.insert(id, b"x".to_vec()).test_unwrap();
         id
     }
 
@@ -530,15 +532,15 @@ mod extra_tests {
     fn test_unregister_snapshot() {
         let s = src(b"/list/unreg");
         let id = [0xBBu8; 32];
-        register_snapshot(s, &id).unwrap();
+        register_snapshot(s, &id).test_unwrap();
         assert_eq!(snapshot_count(s), 1);
-        unregister_snapshot(s, &id).unwrap();
+        unregister_snapshot(s, &id).test_unwrap();
         assert_eq!(snapshot_count(s), 0);
     }
 
     #[test]
     fn test_latest_snapshot_none() {
         let s = src(b"/list/latest/none");
-        assert!(latest_snapshot(s).unwrap().is_none());
+        assert!(latest_snapshot(s).test_unwrap().is_none());
     }
 }

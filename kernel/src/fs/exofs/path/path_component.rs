@@ -520,12 +520,14 @@ pub fn siphash_keyed(key: &[u8; 16], data: &[u8]) -> u64 {
 // ── Tests unitaires ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_validate_ok() {
-        let c = validate_component(b"hello").unwrap();
+        let c = validate_component(b"hello").test_unwrap();
         assert_eq!(c.as_bytes(), b"hello");
         assert!(!c.is_dot());
         assert!(!c.is_dotdot());
@@ -561,37 +563,37 @@ mod tests {
     }
     #[test]
     fn test_dot_dotdot() {
-        assert!(validate_component(b".").unwrap().is_dot());
-        assert!(validate_component(b"..").unwrap().is_dotdot());
+        assert!(validate_component(b".").test_unwrap().is_dot());
+        assert!(validate_component(b"..").test_unwrap().is_dotdot());
     }
     #[test]
     fn test_parser_absolute() {
-        let mut p = PathParser::new(b"/home/user/file.txt").unwrap();
+        let mut p = PathParser::new(b"/home/user/file.txt").test_unwrap();
         assert!(p.is_absolute());
-        assert_eq!(p.next_component().unwrap().unwrap().as_bytes(), b"home");
-        assert_eq!(p.next_component().unwrap().unwrap().as_bytes(), b"user");
-        assert_eq!(p.next_component().unwrap().unwrap().as_bytes(), b"file.txt");
-        assert!(p.next_component().unwrap().is_none());
+        assert_eq!(p.next_component().test_unwrap().test_unwrap().as_bytes(), b"home");
+        assert_eq!(p.next_component().test_unwrap().test_unwrap().as_bytes(), b"user");
+        assert_eq!(p.next_component().test_unwrap().test_unwrap().as_bytes(), b"file.txt");
+        assert!(p.next_component().test_unwrap().is_none());
     }
     #[test]
     fn test_parser_relative() {
-        let mut p = PathParser::new(b"a/b").unwrap();
+        let mut p = PathParser::new(b"a/b").test_unwrap();
         assert!(!p.is_absolute());
-        assert_eq!(p.next_component().unwrap().unwrap().as_bytes(), b"a");
-        assert_eq!(p.next_component().unwrap().unwrap().as_bytes(), b"b");
+        assert_eq!(p.next_component().test_unwrap().test_unwrap().as_bytes(), b"a");
+        assert_eq!(p.next_component().test_unwrap().test_unwrap().as_bytes(), b"b");
     }
     #[test]
     fn test_parser_double_slash() {
-        let mut p = PathParser::new(b"//a//b//").unwrap();
-        let comps = p.collect_all().unwrap();
+        let mut p = PathParser::new(b"//a//b//").test_unwrap();
+        let comps = p.collect_all().test_unwrap();
         assert_eq!(comps.len(), 2);
         assert_eq!(comps[0].as_bytes(), b"a");
         assert_eq!(comps[1].as_bytes(), b"b");
     }
     #[test]
     fn test_component_buf_normalize() {
-        let mut buf = PathComponentBuf::from_path(b"/a/b/../c/./d").unwrap();
-        buf.normalize().unwrap();
+        let mut buf = PathComponentBuf::from_path(b"/a/b/../c/./d").test_unwrap();
+        buf.normalize().test_unwrap();
         assert_eq!(buf.len(), 3);
         assert_eq!(buf.as_slice()[0].as_bytes(), b"a");
         assert_eq!(buf.as_slice()[1].as_bytes(), b"c");
@@ -606,14 +608,14 @@ mod tests {
     }
     #[test]
     fn test_component_ordering() {
-        let a = validate_component(b"alpha").unwrap();
-        let b = validate_component(b"beta").unwrap();
+        let a = validate_component(b"alpha").test_unwrap();
+        let b = validate_component(b"beta").test_unwrap();
         assert!(a < b);
     }
     #[test]
     fn test_to_bytes_root() {
         let buf = PathComponentBuf::new();
-        let bytes = buf.to_bytes().unwrap();
+        let bytes = buf.to_bytes().test_unwrap();
         assert_eq!(bytes, b"/");
     }
 }

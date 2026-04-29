@@ -489,6 +489,8 @@ pub struct SlotValidationInfo {
 // ── Tests unitaires ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -512,7 +514,7 @@ mod tests {
         hdr.finalize_hash();
 
         let bytes = hdr.to_bytes();
-        let hdr2 = SlotHeaderDisk::from_bytes(&bytes).unwrap();
+        let hdr2 = SlotHeaderDisk::from_bytes(&bytes).test_unwrap();
         assert_eq!(hdr2.epoch_id, 42);
         assert_eq!(hdr2.magic, SLOT_MAGIC);
     }

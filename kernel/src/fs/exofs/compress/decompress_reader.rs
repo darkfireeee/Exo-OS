@@ -225,6 +225,8 @@ impl DecompressReader {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::compress::compress_choice::CompressPolicy;
@@ -238,15 +240,15 @@ mod tests {
 
     fn roundtrip_lz4(data: &[u8]) -> Vec<u8> {
         let writer = CompressWriter::new(CompressPolicy::lz4_fast());
-        let blob = writer.compress(data).unwrap();
+        let blob = writer.compress(data).test_unwrap();
         let mut reader = DecompressReader::new();
-        reader.decompress(&blob.payload).unwrap()
+        reader.decompress(&blob.payload).test_unwrap()
     }
 
     #[test]
     fn test_empty_payload() {
         let mut r = DecompressReader::new();
-        let out = r.decompress(&[]).unwrap();
+        let out = r.decompress(&[]).test_unwrap();
         assert!(out.is_empty());
     }
 
@@ -254,7 +256,7 @@ mod tests {
     fn test_raw_passthrough() {
         let data = b"no header here";
         let mut r = DecompressReader::new();
-        let out = r.decompress(data).unwrap();
+        let out = r.decompress(data).test_unwrap();
         assert_eq!(out.as_slice(), data);
     }
 
@@ -271,7 +273,7 @@ mod tests {
     #[test]
     fn test_is_compressed_true() {
         let writer = CompressWriter::new(CompressPolicy::lz4_fast());
-        let blob = writer.compress(&uniform(2048)).unwrap();
+        let blob = writer.compress(&uniform(2048)).test_unwrap();
         if blob.algorithm != CompressionAlgorithm::None {
             assert!(DecompressReader::is_compressed(&blob.payload));
         }
@@ -283,7 +285,7 @@ mod tests {
         let dec = roundtrip_lz4(&data);
         // Si compressé, le roundtrip doit être identique.
         let writer = CompressWriter::new(CompressPolicy::lz4_fast());
-        let blob = writer.compress(&data).unwrap();
+        let blob = writer.compress(&data).test_unwrap();
         if blob.algorithm == CompressionAlgorithm::Lz4 {
             assert_eq!(dec, data);
         }
@@ -292,14 +294,14 @@ mod tests {
     #[test]
     fn test_stats_increment() {
         let mut r = DecompressReader::new();
-        let _ = r.decompress(b"raw data").unwrap();
+        let _ = r.decompress(b"raw data").test_unwrap();
         assert_eq!(r.stats().total, 1);
     }
 
     #[test]
     fn test_reset_stats() {
         let mut r = DecompressReader::new();
-        let _ = r.decompress(b"test").unwrap();
+        let _ = r.decompress(b"test").test_unwrap();
         r.reset_stats();
         assert_eq!(r.stats().total, 0);
     }
@@ -327,7 +329,7 @@ mod tests {
         let mut r = DecompressReader::new();
         let out = r
             .decompress_raw(data, CompressionAlgorithm::None, data.len())
-            .unwrap();
+            .test_unwrap();
         assert_eq!(out.as_slice(), data);
     }
 
@@ -335,7 +337,7 @@ mod tests {
     fn test_fast_mode_no_crc_error() {
         // En mode rapide (sans CRC), la décompression ne vérifie pas le CRC.
         let mut r = DecompressReader::fast_mode();
-        let out = r.decompress(b"plain text no header").unwrap();
+        let out = r.decompress(b"plain text no header").test_unwrap();
         assert_eq!(out.as_slice(), b"plain text no header");
     }
 
@@ -345,9 +347,9 @@ mod tests {
     fn test_roundtrip_zstd() {
         let data = uniform(2048);
         let writer = CompressWriter::new(CompressPolicy::zstd_default());
-        let blob = writer.compress(&data).unwrap();
+        let blob = writer.compress(&data).test_unwrap();
         let mut r = DecompressReader::new();
-        let dec = r.decompress(&blob.payload).unwrap();
+        let dec = r.decompress(&blob.payload).test_unwrap();
         // Si le writer a compressé (pas brut), le roundtrip est exact.
         if blob.algorithm != CompressionAlgorithm::None {
             assert_eq!(dec, data);
@@ -358,10 +360,10 @@ mod tests {
     fn test_stats_lz4_increments() {
         let data = uniform(4096);
         let writer = CompressWriter::new(CompressPolicy::lz4_fast());
-        let blob = writer.compress(&data).unwrap();
+        let blob = writer.compress(&data).test_unwrap();
         if blob.algorithm == CompressionAlgorithm::Lz4 {
             let mut r = DecompressReader::new();
-            let _ = r.decompress(&blob.payload).unwrap();
+            let _ = r.decompress(&blob.payload).test_unwrap();
             assert!(r.stats().lz4 >= 1);
         }
     }
@@ -379,37 +381,37 @@ mod tests {
     fn test_decompress_raw_lz4() {
         let data = uniform(512);
         let mut comp = Vec::new();
-        Lz4Compressor::compress(&data, &mut comp).unwrap();
+        Lz4Compressor::compress(&data, &mut comp).test_unwrap();
         let mut r = DecompressReader::new();
         let dec = r
             .decompress_raw(&comp, CompressionAlgorithm::Lz4, data.len())
-            .unwrap();
+            .test_unwrap();
         assert_eq!(dec, data);
     }
 
     #[test]
     fn test_decompress_raw_zstd() {
         let data = uniform(256);
-        let comp = ZstdCompressor::compress_to_vec(&data, 3).unwrap();
+        let comp = ZstdCompressor::compress_to_vec(&data, 3).test_unwrap();
         let mut r = DecompressReader::new();
         let dec = r
             .decompress_raw(&comp, CompressionAlgorithm::Zstd, data.len())
-            .unwrap();
+            .test_unwrap();
         assert_eq!(dec, data);
     }
 
     #[test]
     fn test_total_increments_on_raw_passthrough() {
         let mut r = DecompressReader::new();
-        let _ = r.decompress(b"raw1").unwrap();
-        let _ = r.decompress(b"raw2").unwrap();
+        let _ = r.decompress(b"raw1").test_unwrap();
+        let _ = r.decompress(b"raw2").test_unwrap();
         assert_eq!(r.stats().total, 2);
     }
 
     #[test]
     fn test_stats_raw_counter() {
         let mut r = DecompressReader::new();
-        let _ = r.decompress(b"plain").unwrap();
+        let _ = r.decompress(b"plain").test_unwrap();
         assert!(r.stats().raw >= 1);
     }
     #[test]
@@ -421,7 +423,7 @@ mod tests {
     fn test_decompress_small_raw_no_magic() {
         let data = b"small";
         let mut r = DecompressReader::new();
-        let out = r.decompress(data).unwrap();
+        let out = r.decompress(data).test_unwrap();
         assert_eq!(out.len(), data.len());
     }
     #[test]
@@ -436,8 +438,8 @@ mod tests {
         let mut reader = DecompressReader::new();
         for i in 0u8..10 {
             let data = vec![i; 128];
-            let blob = w.compress(&data).unwrap();
-            let dec = reader.decompress(&blob.payload).unwrap();
+            let blob = w.compress(&data).test_unwrap();
+            let dec = reader.decompress(&blob.payload).test_unwrap();
             assert_eq!(dec.len(), data.len());
         }
     }
@@ -448,7 +450,7 @@ mod tests {
     #[test]
     fn test_stats_raw_no_header() {
         let mut r = DecompressReader::new();
-        let _ = r.decompress(b"xyzw no magic here at all").unwrap();
+        let _ = r.decompress(b"xyzw no magic here at all").test_unwrap();
         assert!(r.stats().raw >= 1);
     }
     #[test]

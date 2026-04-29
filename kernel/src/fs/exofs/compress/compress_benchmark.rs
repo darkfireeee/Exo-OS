@@ -197,6 +197,8 @@ impl CompressBenchmark {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -209,14 +211,14 @@ mod tests {
     #[test]
     fn test_bench_baseline_ratio_100() {
         let data = compressible(1024);
-        let r = CompressBenchmark::bench_baseline(&data).unwrap();
+        let r = CompressBenchmark::bench_baseline(&data).test_unwrap();
         assert_eq!(r.ratio_percent, 100);
     }
 
     #[test]
     fn test_bench_algo_lz4() {
         let data = compressible(2048);
-        let r = CompressBenchmark::bench_algo(&data, CompressionAlgorithm::Lz4).unwrap();
+        let r = CompressBenchmark::bench_algo(&data, CompressionAlgorithm::Lz4).test_unwrap();
         assert_eq!(r.algorithm, CompressionAlgorithm::Lz4);
         assert!(r.ratio_percent < 100);
     }
@@ -224,7 +226,7 @@ mod tests {
     #[test]
     fn test_bench_algo_zstd() {
         let data = compressible(2048);
-        let r = CompressBenchmark::bench_algo(&data, CompressionAlgorithm::Zstd).unwrap();
+        let r = CompressBenchmark::bench_algo(&data, CompressionAlgorithm::Zstd).test_unwrap();
         assert_eq!(r.algorithm, CompressionAlgorithm::Zstd);
         assert!(r.ratio_percent < 100);
     }
@@ -232,20 +234,20 @@ mod tests {
     #[test]
     fn test_bench_run_both_algos() {
         let data = compressible(4096);
-        let summary = CompressBenchmark::run(&data).unwrap();
+        let summary = CompressBenchmark::run(&data).test_unwrap();
         assert_eq!(summary.lz4.algorithm, CompressionAlgorithm::Lz4);
         assert_eq!(summary.zstd.algorithm, CompressionAlgorithm::Zstd);
     }
 
     #[test]
     fn test_is_compressible_uniform() {
-        let summary = CompressBenchmark::run(&compressible(4096)).unwrap();
+        let summary = CompressBenchmark::run(&compressible(4096)).test_unwrap();
         assert!(summary.is_compressible);
     }
 
     #[test]
     fn test_recommend_empty() {
-        let r = CompressBenchmark::recommend(&[]).unwrap();
+        let r = CompressBenchmark::recommend(&[]).test_unwrap();
         assert_eq!(r, CompressionAlgorithm::None);
     }
 
@@ -278,7 +280,7 @@ mod tests {
     #[test]
     fn test_best_ratio_algo() {
         let data = compressible(4096);
-        let summary = CompressBenchmark::run(&data).unwrap();
+        let summary = CompressBenchmark::run(&data).test_unwrap();
         let best = summary.best_ratio_algorithm();
         assert!(best == CompressionAlgorithm::Lz4 || best == CompressionAlgorithm::Zstd);
     }
@@ -286,7 +288,7 @@ mod tests {
     #[test]
     fn test_prefer_lz4_when_identical() {
         let data = compressible(4096);
-        let summary = CompressBenchmark::run(&data).unwrap();
+        let summary = CompressBenchmark::run(&data).test_unwrap();
         let _ = summary.prefer_lz4();
     }
 }

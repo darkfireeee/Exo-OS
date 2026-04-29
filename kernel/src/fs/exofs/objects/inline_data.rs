@@ -447,6 +447,8 @@ fn crc32_continue(mut crc: u32, data: &[u8]) -> u32 {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -459,41 +461,41 @@ mod tests {
     #[test]
     fn test_write_read_roundtrip() {
         let mut d = InlineData::empty();
-        d.write_at(0, b"hello world").unwrap();
+        d.write_at(0, b"hello world").test_unwrap();
         let mut out = [0u8; 11];
-        let n = d.read_at(0, &mut out).unwrap();
+        let n = d.read_at(0, &mut out).test_unwrap();
         assert_eq!(n, 11);
         assert_eq!(&out, b"hello world");
     }
 
     #[test]
     fn test_append_and_truncate() {
-        let mut d = InlineData::from_slice(b"abc").unwrap();
-        d.append(b"def").unwrap();
+        let mut d = InlineData::from_slice(b"abc").test_unwrap();
+        d.append(b"def").test_unwrap();
         assert_eq!(d.as_slice(), b"abcdef");
-        d.truncate(3).unwrap();
+        d.truncate(3).test_unwrap();
         assert_eq!(d.as_slice(), b"abc");
     }
 
     #[test]
     fn test_hash_invalidated_on_update() {
-        let mut d = InlineData::from_slice(b"data").unwrap();
+        let mut d = InlineData::from_slice(b"data").test_unwrap();
         d.compute_hash();
         assert!(d.hash_valid);
-        d.update(b"other").unwrap();
+        d.update(b"other").test_unwrap();
         assert!(!d.hash_valid);
     }
 
     #[test]
     fn test_ct_eq() {
-        let d = InlineData::from_slice(b"secret").unwrap();
+        let d = InlineData::from_slice(b"secret").test_unwrap();
         assert!(d.ct_eq(b"secret"));
         assert!(!d.ct_eq(b"other"));
     }
 
     #[test]
     fn test_zeroize() {
-        let mut d = InlineData::from_slice(b"sensitive data").unwrap();
+        let mut d = InlineData::from_slice(b"sensitive data").test_unwrap();
         d.zeroize();
         assert!(d.is_empty());
         assert_eq!(d.as_slice(), b"");
@@ -503,7 +505,7 @@ mod tests {
     fn test_overflow_protection() {
         let mut d = InlineData::empty();
         let big = [0u8; INLINE_DATA_MAX];
-        d.update(&big).unwrap();
+        d.update(&big).test_unwrap();
         assert!(d.append(b"x").is_err()); // Dépasse capacité.
     }
 }

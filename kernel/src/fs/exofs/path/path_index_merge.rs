@@ -437,6 +437,8 @@ pub fn safe_merge(
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::path_component::validate_component;
     use super::*;
@@ -451,8 +453,8 @@ mod tests {
         let mut idx = PathIndex::new(fake_oid(0));
         for i in 0..n {
             let name = alloc::format!("{}{:03}", prefix as char, i).into_bytes();
-            idx.insert(&validate_component(&name).unwrap(), fake_oid(i as u8), 0)
-                .unwrap();
+            idx.insert(&validate_component(&name).test_unwrap(), fake_oid(i as u8), 0)
+                .test_unwrap();
         }
         idx
     }
@@ -461,7 +463,7 @@ mod tests {
     fn test_merge_basic() {
         let low = make_index(b'a', 5);
         let high = make_index(b'b', 5);
-        let res = PathIndexMerger::merge(&low, &high, fake_oid(0)).unwrap();
+        let res = PathIndexMerger::merge(&low, &high, fake_oid(0)).test_unwrap();
         assert_eq!(res.total_count, 10);
     }
     #[test]
@@ -483,7 +485,7 @@ mod tests {
     fn test_with_metrics() {
         let low = make_index(b'e', 3);
         let high = make_index(b'f', 3);
-        let (res, m) = PathIndexMerger::merge_with_metrics(&low, &high, fake_oid(0)).unwrap();
+        let (res, m) = PathIndexMerger::merge_with_metrics(&low, &high, fake_oid(0)).test_unwrap();
         assert_eq!(res.total_count, 6);
         assert_eq!(m.total_before, 6);
     }
@@ -491,10 +493,10 @@ mod tests {
     fn test_duplicate_handling() {
         let mut low = PathIndex::new(fake_oid(0));
         let mut high = PathIndex::new(fake_oid(0));
-        let c = validate_component(b"shared").unwrap();
-        low.insert(&c, fake_oid(1), 0).unwrap();
-        high.insert(&c, fake_oid(2), 0).unwrap();
-        let res = PathIndexMerger::merge(&low, &high, fake_oid(0)).unwrap();
+        let c = validate_component(b"shared").test_unwrap();
+        low.insert(&c, fake_oid(1), 0).test_unwrap();
+        high.insert(&c, fake_oid(2), 0).test_unwrap();
+        let res = PathIndexMerger::merge(&low, &high, fake_oid(0)).test_unwrap();
         assert_eq!(res.total_count, 1);
         assert!(res.reclaimed > 0);
     }
@@ -509,23 +511,23 @@ mod tests {
         let a = make_index(b'i', 3);
         let b = make_index(b'j', 3);
         let c = make_index(b'k', 3);
-        let res = PathIndexMerger::merge_many(&[&a, &b, &c], fake_oid(0)).unwrap();
+        let res = PathIndexMerger::merge_many(&[&a, &b, &c], fake_oid(0)).test_unwrap();
         assert_eq!(res.total_count, 9);
     }
     #[test]
     fn test_merge_empty() {
         let idx = make_index(b'l', 3);
         let empty = PathIndex::new(fake_oid(0));
-        let res = PathIndexMerger::merge(&idx, &empty, fake_oid(0)).unwrap();
+        let res = PathIndexMerger::merge(&idx, &empty, fake_oid(0)).test_unwrap();
         assert_eq!(res.total_count, 3);
     }
     #[test]
     fn test_conflict_reject() {
         let mut low = PathIndex::new(fake_oid(0));
         let mut high = PathIndex::new(fake_oid(0));
-        let c = validate_component(b"conflict").unwrap();
-        low.insert(&c, fake_oid(1), 0).unwrap();
-        high.insert(&c, fake_oid(2), 0).unwrap();
+        let c = validate_component(b"conflict").test_unwrap();
+        low.insert(&c, fake_oid(1), 0).test_unwrap();
+        high.insert(&c, fake_oid(2), 0).test_unwrap();
         assert!(matches!(
             merge_with_policy(&low, &high, fake_oid(0), MergeConflictPolicy::Reject),
             Err(ExofsError::ObjectAlreadyExists)

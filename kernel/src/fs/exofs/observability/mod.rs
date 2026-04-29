@@ -323,6 +323,8 @@ pub fn health_status() -> HealthStatus {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -383,7 +385,7 @@ mod tests {
     fn test_module_snapshot() {
         let m = ObservabilityModule::new_const();
         let _ = m.init(ObservabilityConfig::default_config(), 0);
-        let snap = m.full_snapshot().expect("snapshot");
+        let snap = m.full_snapshot().test_expect("snapshot");
         let _ = snap.is_healthy();
         let _ = snap.total_io_bytes();
     }
@@ -392,8 +394,8 @@ mod tests {
     fn test_snapshot_metrics_to_vec() {
         let m = ObservabilityModule::new_const();
         let _ = m.init(ObservabilityConfig::default_config(), 0);
-        let snap = m.full_snapshot().expect("snapshot");
-        let v = snap.metrics_to_vec().expect("vec");
+        let snap = m.full_snapshot().test_expect("snapshot");
+        let v = snap.metrics_to_vec().test_expect("vec");
         assert_eq!(v.len(), metrics::MetricId::COUNT);
     }
 

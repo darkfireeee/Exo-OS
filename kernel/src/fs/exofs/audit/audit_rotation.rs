@@ -307,6 +307,8 @@ impl AuditRotation {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::audit_entry::{AuditEntry, AuditOp, AuditResult};
     use super::*;
@@ -344,7 +346,7 @@ mod tests {
     fn test_force_rotate_creates_segment() {
         let mut r = AuditRotation::with_config(RotationConfig::minimal());
         fill_log(2);
-        let rep = r.force_rotate().unwrap();
+        let rep = r.force_rotate().test_unwrap();
         assert!(rep.n_archived >= 2);
         assert_eq!(r.n_segments(), 1);
         assert_eq!(r.total_rotations(), 1);
@@ -354,10 +356,10 @@ mod tests {
     fn test_segment_entry_at() {
         let mut r = AuditRotation::with_config(RotationConfig::minimal());
         fill_log(3);
-        r.force_rotate().unwrap();
-        let seg = r.segment(0).unwrap();
+        r.force_rotate().test_unwrap();
+        let seg = r.segment(0).test_unwrap();
         assert!(!seg.is_empty());
-        let e = seg.entry_at(0).unwrap();
+        let e = seg.entry_at(0).test_unwrap();
         assert!(e.is_valid());
     }
 
@@ -368,11 +370,11 @@ mod tests {
             ..RotationConfig::minimal()
         });
         fill_log(1);
-        r.force_rotate().unwrap();
+        r.force_rotate().test_unwrap();
         fill_log(1);
-        r.force_rotate().unwrap();
+        r.force_rotate().test_unwrap();
         fill_log(1);
-        r.force_rotate().unwrap();
+        r.force_rotate().test_unwrap();
         // Ne dépasse jamais max_segments.
         assert!(r.n_segments() <= 2);
     }
@@ -381,7 +383,7 @@ mod tests {
     fn test_rotation_report_duration() {
         let mut r = AuditRotation::with_config(RotationConfig::minimal());
         fill_log(1);
-        let rep = r.force_rotate().unwrap();
+        let rep = r.force_rotate().test_unwrap();
         // La durée est en ticks — peut être 0 sur machine rapide, jamais négatif.
         assert!(rep.duration_ticks() < u64::MAX);
     }
@@ -390,7 +392,7 @@ mod tests {
     fn test_clear_segments() {
         let mut r = AuditRotation::with_config(RotationConfig::minimal());
         fill_log(1);
-        r.force_rotate().unwrap();
+        r.force_rotate().test_unwrap();
         r.clear_segments();
         assert_eq!(r.n_segments(), 0);
     }
@@ -399,7 +401,7 @@ mod tests {
     fn test_reason_manual() {
         let mut r = AuditRotation::with_config(RotationConfig::minimal());
         fill_log(1);
-        let rep = r.force_rotate().unwrap();
+        let rep = r.force_rotate().test_unwrap();
         assert_eq!(rep.reason, RotationReason::Manual);
     }
 
@@ -414,8 +416,8 @@ mod tests {
     fn test_segment_byte_len() {
         let mut r = AuditRotation::with_config(RotationConfig::minimal());
         fill_log(2);
-        r.force_rotate().unwrap();
-        let seg = r.segment(0).unwrap();
+        r.force_rotate().test_unwrap();
+        let seg = r.segment(0).test_unwrap();
         assert_eq!(seg.byte_len(), seg.n_entries as usize * AUDIT_ENTRY_SIZE);
     }
 
@@ -423,9 +425,9 @@ mod tests {
     fn test_total_rotations_increments() {
         let mut r = AuditRotation::with_config(RotationConfig::minimal());
         fill_log(1);
-        r.force_rotate().unwrap();
+        r.force_rotate().test_unwrap();
         fill_log(1);
-        r.force_rotate().unwrap();
+        r.force_rotate().test_unwrap();
         assert_eq!(r.total_rotations(), 2);
     }
 
@@ -449,7 +451,7 @@ mod tests {
     fn test_rotation_report_has_stats_before() {
         let mut r = AuditRotation::with_config(RotationConfig::minimal());
         fill_log(1);
-        let rep = r.force_rotate().unwrap();
+        let rep = r.force_rotate().test_unwrap();
         // stats_before.total_pushed doit être ≥ 1.
         assert!(rep.stats_before.total_pushed >= 1);
     }

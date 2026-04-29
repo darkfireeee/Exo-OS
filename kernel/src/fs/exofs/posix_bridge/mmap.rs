@@ -554,6 +554,8 @@ pub fn ranges_overlap(a: u64, la: u64, b: u64, lb: u64) -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::map_flags::*;
     use super::map_prot::*;
@@ -581,7 +583,7 @@ mod tests {
         let t = make_table();
         let va = t
             .mmap(1, 0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, 42)
-            .unwrap();
+            .test_unwrap();
         assert!(va >= MMAP_BASE_VIRT);
         assert_eq!(t.mapping_count(), 1);
     }
@@ -591,24 +593,24 @@ mod tests {
         let t = make_table();
         let va = t
             .mmap(2, 0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, 1)
-            .unwrap();
-        let entry = t.find_mapping(va).unwrap();
+            .test_unwrap();
+        let entry = t.find_mapping(va).test_unwrap();
         assert_eq!(entry.promoted, 1);
     }
 
     #[test]
     fn test_mmap_private_cow() {
         let t = make_table();
-        let va = t.mmap(3, 0, 4096, PROT_READ, MAP_PRIVATE, 1).unwrap();
-        let entry = t.find_mapping(va).unwrap();
+        let va = t.mmap(3, 0, 4096, PROT_READ, MAP_PRIVATE, 1).test_unwrap();
+        let entry = t.find_mapping(va).test_unwrap();
         assert_eq!(entry.cow_active, 1);
     }
 
     #[test]
     fn test_munmap() {
         let t = make_table();
-        let va = t.mmap(4, 0, 4096, PROT_READ, MAP_PRIVATE, 1).unwrap();
-        t.munmap(va, 4096).unwrap();
+        let va = t.mmap(4, 0, 4096, PROT_READ, MAP_PRIVATE, 1).test_unwrap();
+        t.munmap(va, 4096).test_unwrap();
         assert!(t.find_mapping(va).is_none());
     }
 
@@ -626,9 +628,9 @@ mod tests {
         let t = make_table();
         let va = t
             .mmap(5, 0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, 1)
-            .unwrap();
-        t.msync(va, 4096).unwrap();
-        let entry = t.find_mapping(va).unwrap();
+            .test_unwrap();
+        t.msync(va, 4096).test_unwrap();
+        let entry = t.find_mapping(va).test_unwrap();
         assert_eq!(entry.state as u8, MappingState::Dirty as u8);
     }
 
@@ -637,16 +639,16 @@ mod tests {
         let t = make_table();
         let va = t
             .mmap(6, 0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, 1)
-            .unwrap();
-        t.mprotect(va, PROT_READ).unwrap();
-        let e = t.find_mapping(va).unwrap();
+            .test_unwrap();
+        t.mprotect(va, PROT_READ).test_unwrap();
+        let e = t.find_mapping(va).test_unwrap();
         assert!(!e.is_writable());
     }
 
     #[test]
     fn test_mprotect_invalid_prot() {
         let t = make_table();
-        let va = t.mmap(7, 0, 4096, PROT_READ, MAP_PRIVATE, 1).unwrap();
+        let va = t.mmap(7, 0, 4096, PROT_READ, MAP_PRIVATE, 1).test_unwrap();
         assert!(matches!(
             t.mprotect(va, 0xFF),
             Err(ExofsError::InvalidArgument)
@@ -656,12 +658,12 @@ mod tests {
     #[test]
     fn test_munmap_all_pid() {
         let t = make_table();
-        t.mmap(8, 0, 4096, PROT_READ, MAP_PRIVATE, 10).unwrap();
-        t.mmap(9, 0, 4096, PROT_READ, MAP_PRIVATE, 10).unwrap();
-        t.mmap(10, 0, 4096, PROT_READ, MAP_PRIVATE, 20).unwrap();
+        t.mmap(8, 0, 4096, PROT_READ, MAP_PRIVATE, 10).test_unwrap();
+        t.mmap(9, 0, 4096, PROT_READ, MAP_PRIVATE, 10).test_unwrap();
+        t.mmap(10, 0, 4096, PROT_READ, MAP_PRIVATE, 20).test_unwrap();
         t.munmap_all_pid(10);
-        assert_eq!(t.mappings_for_pid(10).unwrap().len(), 0);
-        assert_eq!(t.mappings_for_pid(20).unwrap().len(), 1);
+        assert_eq!(t.mappings_for_pid(10).test_unwrap().len(), 0);
+        assert_eq!(t.mappings_for_pid(20).test_unwrap().len(), 1);
     }
 
     #[test]
@@ -681,8 +683,8 @@ mod tests {
     #[test]
     fn test_compact() {
         let t = make_table();
-        let va = t.mmap(11, 0, 4096, PROT_READ, MAP_PRIVATE, 1).unwrap();
-        t.munmap(va, 4096).unwrap();
+        let va = t.mmap(11, 0, 4096, PROT_READ, MAP_PRIVATE, 1).test_unwrap();
+        t.munmap(va, 4096).test_unwrap();
         t.compact();
         assert_eq!(t.mapping_count(), 0);
     }

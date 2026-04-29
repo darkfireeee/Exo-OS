@@ -165,6 +165,8 @@ pub fn write_array<const N: usize>(
 }
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -233,10 +235,10 @@ mod tests {
     fn test_read_write_bytes_across_partial_blocks() {
         let mut device = MockBlockDevice::new(16, 4);
         let payload = *b"abcdefghijklmnopqrstuvwxyz";
-        write_bytes_at(&mut device, 0, 6, &payload).unwrap();
+        write_bytes_at(&mut device, 0, 6, &payload).test_unwrap();
 
         let mut out = [0u8; 26];
-        read_bytes_at(&device, 0, 6, &mut out).unwrap();
+        read_bytes_at(&device, 0, 6, &mut out).test_unwrap();
         assert_eq!(out, payload);
     }
 
@@ -257,10 +259,10 @@ mod tests {
                 idx = idx.wrapping_add(1);
             }
 
-            write_bytes_at(&mut device, 2, offset, &payload).unwrap();
+            write_bytes_at(&mut device, 2, offset, &payload).test_unwrap();
 
             let mut out = vec![0u8; len];
-            read_bytes_at(&device, 2, offset, &mut out).unwrap();
+            read_bytes_at(&device, 2, offset, &mut out).test_unwrap();
             assert_eq!(out, payload);
             round = round.wrapping_add(1);
         }

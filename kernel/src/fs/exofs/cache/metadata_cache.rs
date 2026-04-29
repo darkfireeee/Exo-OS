@@ -315,6 +315,8 @@ impl MetadataCache {
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -325,7 +327,7 @@ mod tests {
     #[test]
     fn test_insert_get() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
+        c.insert(mk(1)).test_unwrap();
         assert!(c.get(1).is_some());
     }
 
@@ -338,7 +340,7 @@ mod tests {
     #[test]
     fn test_invalidate() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
+        c.insert(mk(1)).test_unwrap();
         c.invalidate(1);
         assert!(c.get(1).is_none());
     }
@@ -346,8 +348,8 @@ mod tests {
     #[test]
     fn test_mark_dirty() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
-        c.mark_dirty(1).unwrap();
+        c.insert(mk(1)).test_unwrap();
+        c.mark_dirty(1).test_unwrap();
         assert_eq!(c.dirty_ids().len(), 1);
     }
 
@@ -360,17 +362,17 @@ mod tests {
     #[test]
     fn test_update() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
-        c.update(1, |m| m.size = 9999).unwrap();
-        assert_eq!(c.get(1).unwrap().size, 9999);
+        c.insert(mk(1)).test_unwrap();
+        c.update(1, |m| m.size = 9999).test_unwrap();
+        assert_eq!(c.get(1).test_unwrap().size, 9999);
     }
 
     #[test]
     fn test_invalidate_batch() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
-        c.insert(mk(2)).unwrap();
-        c.insert(mk(3)).unwrap();
+        c.insert(mk(1)).test_unwrap();
+        c.insert(mk(2)).test_unwrap();
+        c.insert(mk(3)).test_unwrap();
         c.invalidate_batch(&[1, 2]);
         assert_eq!(c.n_entries(), 1);
     }
@@ -380,7 +382,7 @@ mod tests {
         let c = MetadataCache::new_const();
         let mut m = mk(1);
         m.cached_tick = 0;
-        c.insert(m).unwrap();
+        c.insert(m).test_unwrap();
         let evicted = c.evict_stale(10000, 100);
         assert_eq!(evicted, 1);
     }
@@ -388,8 +390,8 @@ mod tests {
     #[test]
     fn test_flush_all() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
-        c.insert(mk(2)).unwrap();
+        c.insert(mk(1)).test_unwrap();
+        c.insert(mk(2)).test_unwrap();
         c.flush_all();
         assert_eq!(c.n_entries(), 0);
     }
@@ -397,7 +399,7 @@ mod tests {
     #[test]
     fn test_by_kind_file() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
+        c.insert(mk(1)).test_unwrap();
         c.insert(MetaEntry::new(
             2,
             0,
@@ -411,7 +413,7 @@ mod tests {
             0,
             0,
         ))
-        .unwrap();
+        .test_unwrap();
         assert_eq!(c.by_kind(MetaKind::File).len(), 1);
         assert_eq!(c.by_kind(MetaKind::Directory).len(), 1);
     }
@@ -420,7 +422,7 @@ mod tests {
     fn test_insert_batch() {
         let c = MetadataCache::new_const();
         let batch: alloc::vec::Vec<MetaEntry> = (0..5).map(|i| mk(i)).collect();
-        let n = c.insert_batch(&batch).unwrap();
+        let n = c.insert_batch(&batch).test_unwrap();
         assert_eq!(n, 5);
         assert_eq!(c.n_entries(), 5);
     }
@@ -428,27 +430,27 @@ mod tests {
     #[test]
     fn test_update_size() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
-        c.update_size(1, 9999).unwrap();
-        assert_eq!(c.get(1).unwrap().size, 9999);
+        c.insert(mk(1)).test_unwrap();
+        c.update_size(1, 9999).test_unwrap();
+        assert_eq!(c.get(1).test_unwrap().size, 9999);
     }
 
     #[test]
     fn test_n_dirty() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
-        c.insert(mk(2)).unwrap();
-        c.mark_dirty(1).unwrap();
+        c.insert(mk(1)).test_unwrap();
+        c.insert(mk(2)).test_unwrap();
+        c.mark_dirty(1).test_unwrap();
         assert_eq!(c.n_dirty(), 1);
     }
 
     #[test]
     fn test_invalidate_all_dirty() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
-        c.insert(mk(2)).unwrap();
-        c.mark_dirty(1).unwrap();
-        c.mark_dirty(2).unwrap();
+        c.insert(mk(1)).test_unwrap();
+        c.insert(mk(2)).test_unwrap();
+        c.mark_dirty(1).test_unwrap();
+        c.mark_dirty(2).test_unwrap();
         c.invalidate_all_dirty();
         assert_eq!(c.n_entries(), 0);
     }
@@ -456,7 +458,7 @@ mod tests {
     #[test]
     fn test_stats_report() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
+        c.insert(mk(1)).test_unwrap();
         let s = c.stats();
         assert_eq!(s.n_entries, 1);
         assert_eq!(s.n_files, 1);
@@ -465,8 +467,8 @@ mod tests {
     #[test]
     fn test_flush_all_empties_cache() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
-        c.insert(mk(2)).unwrap();
+        c.insert(mk(1)).test_unwrap();
+        c.insert(mk(2)).test_unwrap();
         c.flush_all();
         assert_eq!(c.n_entries(), 0);
     }
@@ -480,7 +482,7 @@ mod tests {
     #[test]
     fn test_remove_existing() {
         let c = MetadataCache::new_const();
-        c.insert(mk(1)).unwrap();
+        c.insert(mk(1)).test_unwrap();
         c.invalidate(1);
         assert!(c.get(1).is_none());
     }
@@ -488,16 +490,16 @@ mod tests {
     #[test]
     fn test_n_entries_increments() {
         let c = MetadataCache::new_const();
-        c.insert(mk(3)).unwrap();
-        c.insert(mk(4)).unwrap();
+        c.insert(mk(3)).test_unwrap();
+        c.insert(mk(4)).test_unwrap();
         assert_eq!(c.n_entries(), 2);
     }
 
     #[test]
     fn test_mark_dirty_then_not_dirty_after_flush() {
         let c = MetadataCache::new_const();
-        c.insert(mk(5)).unwrap();
-        c.mark_dirty(5).unwrap();
+        c.insert(mk(5)).test_unwrap();
+        c.mark_dirty(5).test_unwrap();
         c.invalidate_all_dirty();
         assert!(c.get(5).is_none());
     }
@@ -505,8 +507,8 @@ mod tests {
     #[test]
     fn test_stats_dirty_count() {
         let c = MetadataCache::new_const();
-        c.insert(mk(6)).unwrap();
-        c.mark_dirty(6).unwrap();
+        c.insert(mk(6)).test_unwrap();
+        c.mark_dirty(6).test_unwrap();
         let s = c.stats();
         assert!(s.n_dirty >= 1);
     }

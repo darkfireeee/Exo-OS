@@ -541,6 +541,8 @@ pub struct CheckpointDiagnostic {
 // ── Tests unitaires ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -549,8 +551,8 @@ mod tests {
         let store = CheckpointStore::new_const();
         let id = store
             .save(RecoveryPhase::Phase1Done, EpochId(42), 2, 0)
-            .unwrap();
-        let cp = store.get(id).unwrap();
+            .test_unwrap();
+        let cp = store.get(id).test_unwrap();
         assert_eq!(cp.phase, RecoveryPhase::Phase1Done);
         assert_eq!(cp.epoch_id, EpochId(42));
         assert_eq!(cp.error_count, 2);
@@ -561,11 +563,11 @@ mod tests {
         let store = CheckpointStore::new_const();
         store
             .save(RecoveryPhase::SlotRead, EpochId(1), 0, 0)
-            .unwrap();
+            .test_unwrap();
         store
             .save(RecoveryPhase::Phase2Done, EpochId(1), 0, 0)
-            .unwrap();
-        let furthest = store.furthest_phase().unwrap();
+            .test_unwrap();
+        let furthest = store.furthest_phase().test_unwrap();
         assert_eq!(furthest.phase, RecoveryPhase::Phase2Done);
     }
 
@@ -574,7 +576,7 @@ mod tests {
         let cp = Checkpoint::new(CheckpointId(1), RecoveryPhase::Complete, EpochId(99), 0, 3);
         let hdr = cp.to_disk_header();
         let bytes = hdr.to_bytes();
-        let cp2 = CheckpointStore::deserialize_and_validate(&bytes).unwrap();
+        let cp2 = CheckpointStore::deserialize_and_validate(&bytes).test_unwrap();
         assert_eq!(cp2.phase, RecoveryPhase::Complete);
         assert_eq!(cp2.epoch_id, EpochId(99));
         assert_eq!(cp2.repair_count, 3);
@@ -594,7 +596,7 @@ mod tests {
         for i in 0..(CHECKPOINT_MAX_IN_MEMORY + 5) {
             store
                 .save(RecoveryPhase::None, EpochId(i as u64), 0, 0)
-                .unwrap();
+                .test_unwrap();
         }
         assert_eq!(store.count(), CHECKPOINT_MAX_IN_MEMORY);
     }
@@ -604,7 +606,7 @@ mod tests {
         let store = CheckpointStore::new_const();
         store
             .save(RecoveryPhase::SlotRead, EpochId(1), 0, 0)
-            .unwrap();
+            .test_unwrap();
         store.clear();
         assert_eq!(store.count(), 0);
     }

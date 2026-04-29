@@ -283,6 +283,8 @@ pub fn scatter_read(
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -298,7 +300,7 @@ mod tests {
     #[test]
     fn test_read_basic() {
         let r = ExtentReader::new();
-        let result = r.read(DiskOffset(0), 4096, &mock_read).unwrap();
+        let result = r.read(DiskOffset(0), 4096, &mock_read).test_unwrap();
         assert_eq!(result.bytes_read, 4096);
         assert_eq!(result.data[0], 0xCC);
     }
@@ -306,7 +308,7 @@ mod tests {
     #[test]
     fn test_read_blocks_multi() {
         let r = ExtentReader::new();
-        let result = r.read_blocks(DiskOffset(0), 12288, &mock_read).unwrap();
+        let result = r.read_blocks(DiskOffset(0), 12288, &mock_read).test_unwrap();
         assert_eq!(result.bytes_read, 12288);
         assert_eq!(result.segments, 3);
     }
@@ -314,7 +316,7 @@ mod tests {
     #[test]
     fn test_read_eof_terminates() {
         let r = ExtentReader::new();
-        let result = r.read_blocks(DiskOffset(0), 4096, &mock_read_eof).unwrap();
+        let result = r.read_blocks(DiskOffset(0), 4096, &mock_read_eof).test_unwrap();
         assert_eq!(result.bytes_read, 0);
     }
 
@@ -325,7 +327,7 @@ mod tests {
             Extent::new(DiskOffset(4096), 512),
         ];
         let r = ExtentReader::new();
-        let items = scatter_read(&extents, &r, &mock_read).unwrap();
+        let items = scatter_read(&extents, &r, &mock_read).test_unwrap();
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|i| i.ok));
     }
@@ -454,7 +456,7 @@ mod tests_extra {
             Extent::new(DiskOffset(4096), 512),
         ];
         let r = ExtentReader::new();
-        let data = r.gather_read(&extents, &mock_read).unwrap();
+        let data = r.gather_read(&extents, &mock_read).test_unwrap();
         assert_eq!(data.len(), 1024);
         assert!(data.iter().all(|&b| b == 0xDD));
     }
@@ -463,7 +465,7 @@ mod tests_extra {
     fn test_read_partial() {
         let extent = Extent::new(DiskOffset(0), 8192);
         let r = ExtentReader::new();
-        let result = r.read_partial(&extent, 0, 512, &mock_read).unwrap();
+        let result = r.read_partial(&extent, 0, 512, &mock_read).test_unwrap();
         assert_eq!(result.bytes_read, 512);
     }
 
@@ -479,9 +481,9 @@ mod tests_extra {
         let extent = Extent::new(DiskOffset(0), 12288);
         let mut it = ExtentBlockIterator::new(&extent);
         assert_eq!(it.remaining_blocks(), 3);
-        let b0 = it.next_block().unwrap();
+        let b0 = it.next_block().test_unwrap();
         assert_eq!(b0, DiskOffset(0));
-        let b1 = it.next_block().unwrap();
+        let b1 = it.next_block().test_unwrap();
         assert_eq!(b1, DiskOffset(4096));
         assert_eq!(it.remaining_blocks(), 1);
     }

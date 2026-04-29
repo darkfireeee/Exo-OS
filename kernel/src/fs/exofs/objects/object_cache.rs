@@ -366,6 +366,8 @@ impl fmt::Display for ObjectCacheStats {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::objects::logical_object::{
@@ -396,7 +398,7 @@ mod tests {
             _pad2: [0; 32],
         };
         d.checksum = d.compute_checksum();
-        let obj = LogicalObject::from_disk(&d).unwrap();
+        let obj = LogicalObject::from_disk(&d).test_unwrap();
         let oid = obj.object_id;
         let arc = Arc::new(crate::scheduler::sync::rwlock::RwLock::new(obj));
         (oid, arc)
@@ -406,7 +408,7 @@ mod tests {
     fn test_insert_and_get() {
         let cache = ObjectCache::new();
         let (id, obj) = make_obj(1);
-        cache.insert(id, obj.clone()).unwrap();
+        cache.insert(id, obj.clone()).test_unwrap();
         assert!(cache.get(&id).is_some());
         assert_eq!(cache.len(), 1);
     }
@@ -422,7 +424,7 @@ mod tests {
     fn test_invalidate() {
         let cache = ObjectCache::new();
         let (id, obj) = make_obj(2);
-        cache.insert(id, obj).unwrap();
+        cache.insert(id, obj).test_unwrap();
         cache.invalidate(&id);
         assert!(cache.get(&id).is_none());
     }
@@ -432,7 +434,7 @@ mod tests {
         let capacity = 4;
         let cache = ObjectCache::with_capacity(capacity);
         let (id0, obj0) = make_obj(0);
-        cache.insert(id0, obj0).unwrap();
+        cache.insert(id0, obj0).test_unwrap();
         cache.pin(&id0);
         // Remplissage au-delà de la capacité.
         for i in 1..=(capacity + 2) {
@@ -449,7 +451,7 @@ mod tests {
         let cache = ObjectCache::new();
         for i in 0..10u8 {
             let (id, obj) = make_obj(i);
-            cache.insert(id, obj).unwrap();
+            cache.insert(id, obj).test_unwrap();
         }
         cache.flush();
         assert_eq!(cache.len(), 0);
@@ -459,7 +461,7 @@ mod tests {
     fn test_stats_hit_ratio() {
         let cache = ObjectCache::new();
         let (id, obj) = make_obj(99);
-        cache.insert(id, obj).unwrap();
+        cache.insert(id, obj).test_unwrap();
         let _ = cache.get(&id);
         let _ = cache.get(&id);
         let _ = cache.get(&ObjectId([0u8; 32])); // miss

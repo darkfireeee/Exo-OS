@@ -512,6 +512,8 @@ impl fmt::Display for ConfigStats {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -522,7 +524,7 @@ mod tests {
     #[test]
     fn test_set_get() {
         let mut s = make_store();
-        s.set(b"key1", b"value1", EpochId(2)).unwrap();
+        s.set(b"key1", b"value1", EpochId(2)).test_unwrap();
         assert_eq!(s.get(b"key1"), Some(b"value1".as_ref()));
         assert_eq!(s.get(b"key2"), None);
     }
@@ -530,8 +532,8 @@ mod tests {
     #[test]
     fn test_remove() {
         let mut s = make_store();
-        s.set(b"x", b"y", EpochId(1)).unwrap();
-        s.remove(b"x", EpochId(2)).unwrap();
+        s.set(b"x", b"y", EpochId(1)).test_unwrap();
+        s.remove(b"x", EpochId(2)).test_unwrap();
         assert_eq!(s.get(b"x"), None);
     }
 
@@ -542,10 +544,10 @@ mod tests {
 
     #[test]
     fn test_entry_roundtrip() {
-        let e = ConfigEntry::from_slices(b"hostname", b"exo-os").unwrap();
+        let e = ConfigEntry::from_slices(b"hostname", b"exo-os").test_unwrap();
         let d = e.to_disk();
-        d.verify().unwrap();
-        let back = ConfigEntry::from_disk(&d).unwrap();
+        d.verify().test_unwrap();
+        let back = ConfigEntry::from_disk(&d).test_unwrap();
         assert_eq!(back.key_bytes(), b"hostname");
         assert_eq!(back.value_bytes(), b"exo-os");
     }
@@ -559,9 +561,9 @@ mod tests {
     #[test]
     fn test_version_increments() {
         let mut s = make_store();
-        s.set(b"k", b"v", EpochId(1)).unwrap();
+        s.set(b"k", b"v", EpochId(1)).test_unwrap();
         assert_eq!(s.version, 1);
-        s.set(b"k", b"v2", EpochId(2)).unwrap();
+        s.set(b"k", b"v2", EpochId(2)).test_unwrap();
         assert_eq!(s.version, 2);
     }
 }

@@ -310,6 +310,8 @@ pub fn index_health() -> IndexStats {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::relation_type::{RelationKind, RelationType};
     use super::*;
@@ -332,7 +334,7 @@ mod tests {
     fn test_insert_ids_from() {
         let idx = RelationIndex::new_const();
         let r = rel(1, blob(1), blob(2));
-        idx.insert(&r).unwrap();
+        idx.insert(&r).test_unwrap();
         let ids = idx.ids_from(&blob(1));
         assert_eq!(ids, vec![RelationId(1)]);
     }
@@ -341,7 +343,7 @@ mod tests {
     fn test_insert_ids_to() {
         let idx = RelationIndex::new_const();
         let r = rel(2, blob(3), blob(4));
-        idx.insert(&r).unwrap();
+        idx.insert(&r).test_unwrap();
         let ids = idx.ids_to(&blob(4));
         assert_eq!(ids, vec![RelationId(2)]);
     }
@@ -350,7 +352,7 @@ mod tests {
     fn test_remove() {
         let idx = RelationIndex::new_const();
         let r = rel(3, blob(5), blob(6));
-        idx.insert(&r).unwrap();
+        idx.insert(&r).test_unwrap();
         idx.remove(&r);
         assert!(idx.ids_from(&blob(5)).is_empty());
         assert!(idx.ids_to(&blob(6)).is_empty());
@@ -360,16 +362,16 @@ mod tests {
     fn test_deduplicate_insert() {
         let idx = RelationIndex::new_const();
         let r = rel(4, blob(7), blob(8));
-        idx.insert(&r).unwrap();
-        idx.insert(&r).unwrap(); // doublon
+        idx.insert(&r).test_unwrap();
+        idx.insert(&r).test_unwrap(); // doublon
         assert_eq!(idx.out_degree(&blob(7)), 1);
     }
 
     #[test]
     fn test_degrees() {
         let idx = RelationIndex::new_const();
-        idx.insert(&rel(5, blob(10), blob(20))).unwrap();
-        idx.insert(&rel(6, blob(10), blob(21))).unwrap();
+        idx.insert(&rel(5, blob(10), blob(20))).test_unwrap();
+        idx.insert(&rel(6, blob(10), blob(21))).test_unwrap();
         assert_eq!(idx.out_degree(&blob(10)), 2);
         assert_eq!(idx.in_degree(&blob(20)), 1);
     }
@@ -377,8 +379,8 @@ mod tests {
     #[test]
     fn test_remove_all_for_blob() {
         let idx = RelationIndex::new_const();
-        idx.insert(&rel(7, blob(30), blob(31))).unwrap();
-        idx.insert(&rel(8, blob(32), blob(30))).unwrap();
+        idx.insert(&rel(7, blob(30), blob(31))).test_unwrap();
+        idx.insert(&rel(8, blob(32), blob(30))).test_unwrap();
         let removed = idx.remove_all_for_blob(&blob(30));
         assert_eq!(removed.len(), 2);
         assert!(!idx.has_outgoing(&blob(30)));
@@ -388,8 +390,8 @@ mod tests {
     #[test]
     fn test_both_direction() {
         let idx = RelationIndex::new_const();
-        idx.insert(&rel(9, blob(40), blob(41))).unwrap();
-        idx.insert(&rel(10, blob(42), blob(40))).unwrap();
+        idx.insert(&rel(9, blob(40), blob(41))).test_unwrap();
+        idx.insert(&rel(10, blob(42), blob(40))).test_unwrap();
         let both = idx.ids_in_direction(&blob(40), RelationDirection::Both);
         assert_eq!(both.len(), 2);
     }
@@ -397,7 +399,7 @@ mod tests {
     #[test]
     fn test_flush_clears() {
         let idx = RelationIndex::new_const();
-        idx.insert(&rel(11, blob(50), blob(51))).unwrap();
+        idx.insert(&rel(11, blob(50), blob(51))).test_unwrap();
         idx.flush();
         assert_eq!(idx.out_degree(&blob(50)), 0);
         assert_eq!(idx.in_degree(&blob(51)), 0);
@@ -412,7 +414,7 @@ mod tests {
     #[test]
     fn test_stats() {
         let idx = RelationIndex::new_const();
-        idx.insert(&rel(12, blob(60), blob(61))).unwrap();
+        idx.insert(&rel(12, blob(60), blob(61))).test_unwrap();
         let s = idx.stats();
         assert!(s.n_from_keys > 0 || s.n_to_keys > 0);
     }
@@ -420,8 +422,8 @@ mod tests {
     #[test]
     fn test_ids_from_filtered() {
         let idx = RelationIndex::new_const();
-        idx.insert(&rel(13, blob(70), blob(71))).unwrap();
-        idx.insert(&rel(14, blob(70), blob(72))).unwrap();
+        idx.insert(&rel(13, blob(70), blob(71))).test_unwrap();
+        idx.insert(&rel(14, blob(70), blob(72))).test_unwrap();
         let ids = idx.ids_from(&blob(70));
         assert_eq!(ids.len(), 2);
     }

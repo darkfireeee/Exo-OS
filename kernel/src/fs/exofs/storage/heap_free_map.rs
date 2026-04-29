@@ -428,12 +428,14 @@ fn word_bit(block: u64) -> (usize, u64) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_new_all_free() {
-        let m = HeapFreeMap::new(128).unwrap();
+        let m = HeapFreeMap::new(128).test_unwrap();
         assert_eq!(m.free_blocks(), 128);
         assert!(m.is_free(0));
         assert!(m.is_free(127));
@@ -441,7 +443,7 @@ mod tests {
 
     #[test]
     fn test_mark_used_and_free() {
-        let mut m = HeapFreeMap::new(64).unwrap();
+        let mut m = HeapFreeMap::new(64).test_unwrap();
         m.mark_used(10, 5);
         assert_eq!(m.free_blocks(), 59);
         assert!(!m.is_free(10));
@@ -455,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_find_free_run() {
-        let mut m = HeapFreeMap::new(64).unwrap();
+        let mut m = HeapFreeMap::new(64).test_unwrap();
         m.mark_used(0, 10);
         let run = m.find_free_run(5);
         assert_eq!(run, Some(10));
@@ -463,14 +465,14 @@ mod tests {
 
     #[test]
     fn test_find_free_run_none() {
-        let mut m = HeapFreeMap::new(20).unwrap();
+        let mut m = HeapFreeMap::new(20).test_unwrap();
         m.mark_used(0, 20);
         assert!(m.find_free_run(1).is_none());
     }
 
     #[test]
     fn test_fragmentation_pct() {
-        let mut m = HeapFreeMap::new(10).unwrap();
+        let mut m = HeapFreeMap::new(10).test_unwrap();
         // Pattern: libre, occupé, libre, occupé, libre → 3 runs libres.
         m.mark_used(1, 1);
         m.mark_used(3, 1);
@@ -482,7 +484,7 @@ mod tests {
     #[test]
     fn test_full_boundary_bits() {
         // Vérifie que les blocs extra au-delà de total_blocks sont bien à "occupé".
-        let m = HeapFreeMap::new(65).unwrap();
+        let m = HeapFreeMap::new(65).test_unwrap();
         // total_blocks = 65 → 2 mots (128 bits) → bits 65..127 = 1 (occupé).
         assert!(m.is_free(0));
         assert!(m.is_free(64));
@@ -491,7 +493,7 @@ mod tests {
 
     #[test]
     fn test_largest_free_run() {
-        let mut m = HeapFreeMap::new(20).unwrap();
+        let mut m = HeapFreeMap::new(20).test_unwrap();
         m.mark_used(5, 5); // blocs 5..9 occupés
                            // Deux runs libres : [0..4] (5 blocs) et [10..19] (10 blocs).
         assert_eq!(m.largest_free_run(), 10);

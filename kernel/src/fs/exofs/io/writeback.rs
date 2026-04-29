@@ -366,6 +366,8 @@ impl WritebackWorker {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -379,9 +381,9 @@ mod tests {
     fn test_queue_enqueue_dequeue() {
         let q = WritebackQueue::new_const();
         q.enqueue(WritebackEntry::new(make_id(1), 0, 512, 128))
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(q.pending_count(), 1);
-        let e = q.dequeue().expect("some");
+        let e = q.dequeue().test_expect("some");
         assert_eq!(e.blob_id[0], 1);
         assert!(q.is_empty());
     }
@@ -390,8 +392,8 @@ mod tests {
     fn test_queue_peek() {
         let q = WritebackQueue::new_const();
         q.enqueue(WritebackEntry::new(make_id(2), 0, 256, 100))
-            .expect("ok");
-        let peek = q.peek_next().expect("some");
+            .test_expect("ok");
+        let peek = q.peek_next().test_expect("some");
         assert_eq!(peek.blob_id[0], 2);
         assert_eq!(q.pending_count(), 1); // pas consommé
     }
@@ -400,11 +402,11 @@ mod tests {
     fn test_queue_collect_urgent() {
         let q = WritebackQueue::new_const();
         q.enqueue(WritebackEntry::new(make_id(1), 0, 100, 0))
-            .expect("ok"); // age=1000 > 500
+            .test_expect("ok"); // age=1000 > 500
         q.enqueue(WritebackEntry::new(make_id(2), 900, 100, 0))
-            .expect("ok"); //age=100 < 500
+            .test_expect("ok"); //age=100 < 500
         let mut urgent = Vec::new();
-        q.collect_urgent(1000, 500, &mut urgent).expect("ok");
+        q.collect_urgent(1000, 500, &mut urgent).test_expect("ok");
         assert_eq!(urgent.len(), 1);
         assert_eq!(urgent[0].blob_id[0], 1);
     }
@@ -421,11 +423,11 @@ mod tests {
     fn test_worker_process_one() {
         let q = WritebackQueue::new_const();
         q.enqueue(WritebackEntry::new(make_id(5), 0, 128, 0))
-            .expect("ok");
+            .test_expect("ok");
         let cfg = WritebackConfig::default();
-        let mut worker = WritebackWorker::new(cfg).expect("ok");
+        let mut worker = WritebackWorker::new(cfg).test_expect("ok");
         let mut write_fn = |_id: &[u8; 32], size: u32| -> ExofsResult<u64> { Ok(size as u64) };
-        let done = worker.process_one(&q, &mut write_fn).expect("ok");
+        let done = worker.process_one(&q, &mut write_fn).test_expect("ok");
         assert!(done);
         assert_eq!(worker.stats().entries_ok, 1);
     }
@@ -434,12 +436,12 @@ mod tests {
     fn test_worker_retry_on_error() {
         let q = WritebackQueue::new_const();
         q.enqueue(WritebackEntry::new(make_id(6), 0, 64, 0))
-            .expect("ok");
+            .test_expect("ok");
         let cfg = WritebackConfig::default();
-        let mut worker = WritebackWorker::new(cfg).expect("ok");
+        let mut worker = WritebackWorker::new(cfg).test_expect("ok");
         let mut write_fn =
             |_id: &[u8; 32], _size: u32| -> ExofsResult<u64> { Err(ExofsError::IoError) };
-        worker.process_one(&q, &mut write_fn).expect("ok");
+        worker.process_one(&q, &mut write_fn).test_expect("ok");
         assert_eq!(worker.stats().entries_failed, 1);
         assert_eq!(worker.stats().retries_total, 1);
         assert_eq!(q.pending_count(), 1); // réenqueué
@@ -450,15 +452,15 @@ mod tests {
         let q = WritebackQueue::new_const();
         for i in 0u8..4 {
             q.enqueue(WritebackEntry::new(make_id(i), 0, 64, 0))
-                .expect("ok");
+                .test_expect("ok");
         }
         let cfg = WritebackConfig {
             flush_batch_size: 4,
             ..WritebackConfig::default()
         };
-        let mut worker = WritebackWorker::new(cfg).expect("ok");
+        let mut worker = WritebackWorker::new(cfg).test_expect("ok");
         let mut write_fn = |_: &[u8; 32], size: u32| -> ExofsResult<u64> { Ok(size as u64) };
-        let done = worker.flush_batch(&q, &mut write_fn).expect("ok");
+        let done = worker.flush_batch(&q, &mut write_fn).test_expect("ok");
         assert_eq!(done, 4);
         assert!(q.is_empty());
     }
@@ -586,7 +588,7 @@ mod tests_helpers {
         entries.push(WritebackEntry::new(make_id(1), 10, 32, 0));
         entries.push(WritebackEntry::new(make_id(1), 20, 64, 0)); // plus récent
         entries.push(WritebackEntry::new(make_id(2), 5, 128, 0));
-        dedup_entries(&mut entries).expect("ok");
+        dedup_entries(&mut entries).test_expect("ok");
         assert_eq!(entries.len(), 2);
         let has_id1 = entries
             .iter()

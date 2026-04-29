@@ -399,6 +399,8 @@ pub static QUOTA_REPORTER: QuotaReporter = QuotaReporter::new();
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::quota::quota_policy::{QuotaKind, QuotaLimits};
@@ -409,10 +411,10 @@ mod tests {
         let mut l = QuotaLimits::unlimited();
         l.hard_bytes = hard;
         l.soft_bytes = soft;
-        QUOTA_TRACKER.set_limits(key, l).unwrap();
+        QUOTA_TRACKER.set_limits(key, l).test_unwrap();
         QUOTA_TRACKER.reset_usage(key).unwrap_or(());
         if used > 0 {
-            QUOTA_TRACKER.add_bytes(key, used).unwrap();
+            QUOTA_TRACKER.add_bytes(key, used).test_unwrap();
         }
         key
     }
@@ -481,7 +483,7 @@ mod tests {
     #[test]
     fn test_report_is_clean() {
         let _ = setup(200, 100_000, 50_000, 100);
-        let r = QuotaReport::from_tracker().unwrap();
+        let r = QuotaReport::from_tracker().test_unwrap();
         // Peut contenir d'autres entrées de tests précédents, on vérifie juste que ça compile
         let _ = r.is_clean();
     }
@@ -489,7 +491,7 @@ mod tests {
     #[test]
     fn test_report_at_risk() {
         let _ = setup(201, 1_000, 500, 950);
-        let r = QuotaReport::from_tracker().unwrap();
+        let r = QuotaReport::from_tracker().test_unwrap();
         let at_risk = r.at_risk();
         // Au moins une entrée at-risk (la nôtre)
         assert!(!at_risk.is_empty());
@@ -499,7 +501,7 @@ mod tests {
     fn test_top_consumers() {
         let _ = setup(202, 100_000, 50_000, 80_000);
         let _ = setup(203, 100_000, 50_000, 10_000);
-        let r = QuotaReport::from_tracker().unwrap();
+        let r = QuotaReport::from_tracker().test_unwrap();
         let top = r.top_consumers(2);
         assert!(top.len() <= 2);
         if top.len() == 2 {
@@ -510,7 +512,7 @@ mod tests {
     #[test]
     fn test_reporter_summary_line() {
         let _ = setup(204, 100_000, 50_000, 0);
-        let line = QUOTA_REPORTER.summary_line().unwrap();
+        let line = QUOTA_REPORTER.summary_line().test_unwrap();
         let s = core::str::from_utf8(&line).unwrap_or("").trim();
         assert!(s.starts_with("entries="));
     }
@@ -518,7 +520,7 @@ mod tests {
     #[test]
     fn test_reporter_full_report() {
         let _ = setup(205, 100_000, 50_000, 1000);
-        let r = QUOTA_REPORTER.full_report().unwrap();
+        let r = QUOTA_REPORTER.full_report().test_unwrap();
         assert!(r.entry_count() > 0);
     }
 
@@ -541,7 +543,7 @@ mod tests {
     #[test]
     fn test_global_bytes_ppt() {
         let _ = setup(206, 1_000, 500, 500);
-        let ppt = QUOTA_REPORTER.global_bytes_ppt().unwrap();
+        let ppt = QUOTA_REPORTER.global_bytes_ppt().test_unwrap();
         assert!(ppt > 0);
     }
 }

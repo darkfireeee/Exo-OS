@@ -334,6 +334,8 @@ pub static RELATION_WALKER: RelationWalker = RelationWalker::new();
 // ==============================================================================
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::gc::tricolor::BlobNode;
@@ -363,32 +365,32 @@ mod tests {
     #[test]
     fn test_add_and_count() {
         let w = RelationWalker::new();
-        w.add_edge(edge(1, 2, Some(10), Some(20))).unwrap();
-        w.add_edge(edge(2, 3, None, None)).unwrap();
+        w.add_edge(edge(1, 2, Some(10), Some(20))).test_unwrap();
+        w.add_edge(edge(2, 3, None, None)).test_unwrap();
         assert_eq!(w.edge_count(), 2);
     }
 
     #[test]
     fn test_no_duplicate_edges() {
         let w = RelationWalker::new();
-        w.add_edge(edge(1, 2, Some(10), Some(20))).unwrap();
-        w.add_edge(edge(1, 2, Some(10), Some(20))).unwrap(); // doublon
+        w.add_edge(edge(1, 2, Some(10), Some(20))).test_unwrap();
+        w.add_edge(edge(1, 2, Some(10), Some(20))).test_unwrap(); // doublon
         assert_eq!(w.edge_count(), 1);
     }
 
     #[test]
     fn test_walk_and_grey_blobs() {
         let w = RelationWalker::new();
-        w.add_edge(edge(1, 2, Some(10), Some(20))).unwrap();
+        w.add_edge(edge(1, 2, Some(10), Some(20))).test_unwrap();
 
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         let b10 = bid(10);
         let b20 = bid(20);
         ws.insert_node(BlobNode::new(b10, 512, 1, 2, 0, false));
         ws.insert_node(BlobNode::new(b20, 512, 1, 2, 0, false));
 
         let roots = [oid(1)];
-        let stats = w.walk_and_grey(&roots, &mut ws).unwrap();
+        let stats = w.walk_and_grey(&roots, &mut ws).test_unwrap();
         assert_eq!(stats.blobs_greyed, 2);
         assert_eq!(ws.grey_queue_len(), 2);
     }
@@ -396,8 +398,8 @@ mod tests {
     #[test]
     fn test_destinations_of() {
         let w = RelationWalker::new();
-        w.add_edge(edge(5, 6, None, None)).unwrap();
-        w.add_edge(edge(5, 7, None, None)).unwrap();
+        w.add_edge(edge(5, 6, None, None)).test_unwrap();
+        w.add_edge(edge(5, 7, None, None)).test_unwrap();
         let dsts = w.destinations_of(&oid(5));
         assert_eq!(dsts.len(), 2);
     }
@@ -405,8 +407,8 @@ mod tests {
     #[test]
     fn test_is_reachable() {
         let w = RelationWalker::new();
-        w.add_edge(edge(1, 2, None, None)).unwrap();
-        w.add_edge(edge(2, 3, None, None)).unwrap();
+        w.add_edge(edge(1, 2, None, None)).test_unwrap();
+        w.add_edge(edge(2, 3, None, None)).test_unwrap();
         assert!(w.is_reachable(&oid(1), &oid(3)));
         assert!(!w.is_reachable(&oid(3), &oid(1)));
     }
@@ -414,8 +416,8 @@ mod tests {
     #[test]
     fn test_remove_object() {
         let w = RelationWalker::new();
-        w.add_edge(edge(1, 2, None, None)).unwrap();
-        w.add_edge(edge(3, 4, None, None)).unwrap();
+        w.add_edge(edge(1, 2, None, None)).test_unwrap();
+        w.add_edge(edge(3, 4, None, None)).test_unwrap();
         w.remove_object(&oid(2)); // supprime les aretes impliquant oid(2)
         assert_eq!(w.edge_count(), 1);
     }

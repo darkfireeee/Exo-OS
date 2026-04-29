@@ -291,6 +291,8 @@ pub fn snapshot_exists(source: BlobId, epoch_id: u64, name: &[u8]) -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -298,14 +300,14 @@ mod tests {
         let id = BlobId::from_bytes_blake3(path);
         BLOB_CACHE
             .insert(id, b"source data for snapshot".to_vec())
-            .unwrap();
+            .test_unwrap();
         id
     }
 
     #[test]
     fn test_create_snapshot_ok() {
         let src = make_source(b"/snap/src1");
-        let r = create_snapshot(src, 1, snap_flags::READ_ONLY, b"snap1").unwrap();
+        let r = create_snapshot(src, 1, snap_flags::READ_ONLY, b"snap1").test_unwrap();
         assert_eq!(r.epoch_id, 1);
         assert_ne!(r.snapshot_id, [0u8; 32]);
     }
@@ -313,7 +315,7 @@ mod tests {
     #[test]
     fn test_create_snapshot_duplicate() {
         let src = make_source(b"/snap/dup");
-        create_snapshot(src, 2, snap_flags::READ_ONLY, b"snap_dup").unwrap();
+        create_snapshot(src, 2, snap_flags::READ_ONLY, b"snap_dup").test_unwrap();
         assert!(create_snapshot(src, 2, snap_flags::READ_ONLY, b"snap_dup").is_err());
     }
 
@@ -332,7 +334,7 @@ mod tests {
     #[test]
     fn test_snapshot_exists_true() {
         let src = make_source(b"/snap/ex2");
-        create_snapshot(src, 10, snap_flags::READ_ONLY, b"check").unwrap();
+        create_snapshot(src, 10, snap_flags::READ_ONLY, b"check").test_unwrap();
         assert!(snapshot_exists(src, 10, b"check"));
     }
 
@@ -349,8 +351,8 @@ mod tests {
     #[test]
     fn test_different_epochs_different_snapshots() {
         let src = make_source(b"/snap/ep");
-        let r1 = create_snapshot(src, 1, 0, b"").unwrap();
-        let r2 = create_snapshot(src, 2, 0, b"").unwrap();
+        let r1 = create_snapshot(src, 1, 0, b"").test_unwrap();
+        let r2 = create_snapshot(src, 2, 0, b"").test_unwrap();
         assert_ne!(r1.snapshot_id, r2.snapshot_id);
     }
 
@@ -377,18 +379,18 @@ mod tests {
     #[test]
     fn test_snapshot_blob_content_preserved() {
         let src_id = make_source(b"/snap/content");
-        let r = create_snapshot(src_id, 7, 0, b"").unwrap();
+        let r = create_snapshot(src_id, 7, 0, b"").test_unwrap();
         let sid = BlobId(r.snapshot_id);
-        let data = BLOB_CACHE.get(&sid).unwrap();
+        let data = BLOB_CACHE.get(&sid).test_unwrap();
         assert!(data.len() > 24); // plus grand que le header
     }
 
     #[test]
     fn test_snapshot_blob_magic() {
         let src = make_source(b"/snap/magic");
-        let r = create_snapshot(src, 0, 0, b"").unwrap();
+        let r = create_snapshot(src, 0, 0, b"").test_unwrap();
         let sid = BlobId(r.snapshot_id);
-        let data = BLOB_CACHE.get(&sid).unwrap();
+        let data = BLOB_CACHE.get(&sid).test_unwrap();
         let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
         assert_eq!(magic, SNAPSHOT_MAGIC);
     }
@@ -503,7 +505,7 @@ mod advanced_tests {
 
     fn make_src(path: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, b"data".to_vec()).unwrap();
+        BLOB_CACHE.insert(id, b"data".to_vec()).test_unwrap();
         id
     }
 
@@ -526,15 +528,15 @@ mod advanced_tests {
                 ..SnapshotRef::default()
             },
         ];
-        let enc = encode_snapshot_refs(&refs).unwrap();
-        let dec = decode_snapshot_refs(&enc).unwrap();
+        let enc = encode_snapshot_refs(&refs).test_unwrap();
+        let dec = decode_snapshot_refs(&enc).test_unwrap();
         assert_eq!(dec.len(), 2);
         assert_eq!(dec[0].epoch_id, 1);
     }
 
     #[test]
     fn test_encode_empty() {
-        assert!(encode_snapshot_refs(&[]).unwrap().is_empty());
+        assert!(encode_snapshot_refs(&[]).test_unwrap().is_empty());
     }
 
     #[test]
@@ -550,27 +552,27 @@ mod advanced_tests {
     #[test]
     fn test_snapshot_epoch_from_blob() {
         let src = make_src(b"/snap/adv/ep");
-        let r = create_snapshot(src, 99, 0, b"ep").unwrap();
+        let r = create_snapshot(src, 99, 0, b"ep").test_unwrap();
         let sid = BlobId(r.snapshot_id);
-        let data = BLOB_CACHE.get(&sid).unwrap();
-        assert_eq!(snapshot_epoch_from_blob(&data).unwrap(), 99);
+        let data = BLOB_CACHE.get(&sid).test_unwrap();
+        assert_eq!(snapshot_epoch_from_blob(&data).test_unwrap(), 99);
     }
 
     #[test]
     fn test_snapshot_source_size_from_blob() {
         let src = make_src(b"/snap/adv/sz");
-        let r = create_snapshot(src, 0, 0, b"").unwrap();
+        let r = create_snapshot(src, 0, 0, b"").test_unwrap();
         let sid = BlobId(r.snapshot_id);
-        let data = BLOB_CACHE.get(&sid).unwrap();
-        assert_eq!(snapshot_source_size_from_blob(&data).unwrap(), 4);
+        let data = BLOB_CACHE.get(&sid).test_unwrap();
+        assert_eq!(snapshot_source_size_from_blob(&data).test_unwrap(), 4);
     }
 
     #[test]
     fn test_check_snapshot_magic() {
         let src = make_src(b"/snap/mag2");
-        let r = create_snapshot(src, 0, 0, b"").unwrap();
+        let r = create_snapshot(src, 0, 0, b"").test_unwrap();
         let sid = BlobId(r.snapshot_id);
-        let data = BLOB_CACHE.get(&sid).unwrap();
+        let data = BLOB_CACHE.get(&sid).test_unwrap();
         assert!(check_snapshot_magic(&data));
     }
 

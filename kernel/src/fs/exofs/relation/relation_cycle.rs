@@ -355,6 +355,8 @@ impl TopologicalSorter {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -367,7 +369,7 @@ mod tests {
     #[test]
     fn test_detect_isolated_no_cycle() {
         // Nœud sans arcs sortants → pas de cycle.
-        let r = RelationCycleDetector::detect_from(b(99), 10).unwrap();
+        let r = RelationCycleDetector::detect_from(b(99), 10).test_unwrap();
         assert!(!r.has_cycle);
     }
 
@@ -390,21 +392,21 @@ mod tests {
     #[test]
     fn test_is_safe_to_add_self_loop() {
         // from == to → cycle immédiat.
-        let safe = RelationCycleDetector::is_safe_to_add(&b(10), &b(10), 5).unwrap();
+        let safe = RelationCycleDetector::is_safe_to_add(&b(10), &b(10), 5).test_unwrap();
         assert!(!safe);
     }
 
     #[test]
     fn test_is_safe_no_existing_arc() {
         // Pas d'arc entre 20 et 21 → sûr d'ajouter.
-        let safe = RelationCycleDetector::is_safe_to_add(&b(20), &b(21), 5).unwrap();
+        let safe = RelationCycleDetector::is_safe_to_add(&b(20), &b(21), 5).test_unwrap();
         assert!(safe);
     }
 
     #[test]
     fn test_detect_global_empty() {
         // Graphe vide (ou nœuds sans arcs globaux vers des blobs fictifs).
-        let r = RelationCycleDetector::detect_global(10).unwrap();
+        let r = RelationCycleDetector::detect_global(10).test_unwrap();
         // Pas de cycle dans un graphe vide.
         assert!(!r.has_cycle);
     }
@@ -416,7 +418,7 @@ mod tests {
         // 1 → 2 → 3
         let nodes = alloc::vec![b(1), b(2), b(3)];
         let edges = alloc::vec![(b(1), b(2)), (b(2), b(3))];
-        let res = TopologicalSorter::sort(&nodes, &edges).unwrap();
+        let res = TopologicalSorter::sort(&nodes, &edges).test_unwrap();
         assert!(!res.has_cycle);
         assert_eq!(res.order.len(), 3);
         // 1 doit précéder 2 et 3.
@@ -424,17 +426,17 @@ mod tests {
             .order
             .iter()
             .position(|b| *b.as_bytes() == [1u8; 32])
-            .unwrap();
+            .test_unwrap();
         let pos2 = res
             .order
             .iter()
             .position(|b| *b.as_bytes() == [2u8; 32])
-            .unwrap();
+            .test_unwrap();
         let pos3 = res
             .order
             .iter()
             .position(|b| *b.as_bytes() == [3u8; 32])
-            .unwrap();
+            .test_unwrap();
         assert!(pos1 < pos2);
         assert!(pos2 < pos3);
     }
@@ -444,7 +446,7 @@ mod tests {
         // 1 → 2 → 1 (cycle)
         let nodes = alloc::vec![b(1), b(2)];
         let edges = alloc::vec![(b(1), b(2)), (b(2), b(1))];
-        let res = TopologicalSorter::sort(&nodes, &edges).unwrap();
+        let res = TopologicalSorter::sort(&nodes, &edges).test_unwrap();
         assert!(res.has_cycle);
     }
 
@@ -452,7 +454,7 @@ mod tests {
     fn test_topo_sort_single_node() {
         let nodes = alloc::vec![b(5)];
         let edges: Vec<(BlobId, BlobId)> = alloc::vec![];
-        let res = TopologicalSorter::sort(&nodes, &edges).unwrap();
+        let res = TopologicalSorter::sort(&nodes, &edges).test_unwrap();
         assert!(!res.has_cycle);
         assert_eq!(res.order.len(), 1);
     }
@@ -462,7 +464,7 @@ mod tests {
         // 1 → 2, 1 → 3, 2 → 4, 3 → 4
         let nodes = alloc::vec![b(1), b(2), b(3), b(4)];
         let edges = alloc::vec![(b(1), b(2)), (b(1), b(3)), (b(2), b(4)), (b(3), b(4))];
-        let res = TopologicalSorter::sort(&nodes, &edges).unwrap();
+        let res = TopologicalSorter::sort(&nodes, &edges).test_unwrap();
         assert!(!res.has_cycle);
         assert_eq!(res.order.len(), 4);
     }

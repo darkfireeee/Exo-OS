@@ -396,6 +396,8 @@ impl FingerprintSet {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -471,7 +473,7 @@ mod tests {
         let prefix = fp.prefix_u64();
         assert_eq!(
             prefix,
-            u64::from_le_bytes(fp.blake3[..8].try_into().unwrap())
+            u64::from_le_bytes(fp.blake3[..8].try_into().test_unwrap())
         );
     }
 
@@ -485,7 +487,7 @@ mod tests {
     fn test_fingerprint_set_contains() {
         let mut set = FingerprintSet::new();
         let fp = ChunkFingerprint::compute(b"data");
-        set.insert(fp).unwrap();
+        set.insert(fp).test_unwrap();
         assert!(set.contains(&fp));
         let other = ChunkFingerprint::compute(b"other");
         assert!(!set.contains(&other));
@@ -495,9 +497,9 @@ mod tests {
     fn test_fingerprint_set_duplicates() {
         let mut set = FingerprintSet::new();
         let fp = ChunkFingerprint::compute(b"dup");
-        set.insert(fp).unwrap();
-        set.insert(fp).unwrap();
-        let dups = set.duplicates().unwrap();
+        set.insert(fp).test_unwrap();
+        set.insert(fp).test_unwrap();
+        let dups = set.duplicates().test_unwrap();
         assert_eq!(dups.len(), 1);
     }
 

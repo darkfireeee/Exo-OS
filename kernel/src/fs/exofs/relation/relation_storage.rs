@@ -329,6 +329,8 @@ pub fn verify_store_integrity() -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::relation_type::RelationType;
     use super::*;
@@ -351,15 +353,15 @@ mod tests {
     fn test_persist_load() {
         let store = RelationStorage::new_const();
         let rel = make_rel(1);
-        store.persist(&rel).unwrap();
-        let back = store.load(RelationId(1)).unwrap().unwrap();
+        store.persist(&rel).test_unwrap();
+        let back = store.load(RelationId(1)).test_unwrap().test_unwrap();
         assert_eq!(back.id, RelationId(1));
     }
 
     #[test]
     fn test_remove() {
         let store = RelationStorage::new_const();
-        store.persist(&make_rel(2)).unwrap();
+        store.persist(&make_rel(2)).test_unwrap();
         assert!(store.remove(RelationId(2)));
         assert!(!store.remove(RelationId(2)));
     }
@@ -367,17 +369,17 @@ mod tests {
     #[test]
     fn test_count() {
         let store = RelationStorage::new_const();
-        store.persist(&make_rel(3)).unwrap();
-        store.persist(&make_rel(4)).unwrap();
+        store.persist(&make_rel(3)).test_unwrap();
+        store.persist(&make_rel(4)).test_unwrap();
         assert_eq!(store.count(), 2);
     }
 
     #[test]
     fn test_load_all() {
         let store = RelationStorage::new_const();
-        store.persist(&make_rel(5)).unwrap();
-        store.persist(&make_rel(6)).unwrap();
-        let all = store.load_all().unwrap();
+        store.persist(&make_rel(5)).test_unwrap();
+        store.persist(&make_rel(6)).test_unwrap();
+        let all = store.load_all().test_unwrap();
         assert_eq!(all.len(), 2);
     }
 
@@ -393,7 +395,7 @@ mod tests {
     #[test]
     fn test_flush() {
         let store = RelationStorage::new_const();
-        store.persist(&make_rel(10)).unwrap();
+        store.persist(&make_rel(10)).test_unwrap();
         store.flush();
         assert_eq!(store.count(), 0);
     }
@@ -402,21 +404,21 @@ mod tests {
     fn test_update() {
         let store = RelationStorage::new_const();
         let mut rel = make_rel(20);
-        store.persist(&rel).unwrap();
+        store.persist(&rel).test_unwrap();
         rel.mark_deleted(9999);
-        store.update(&rel).unwrap();
-        let back = store.load(RelationId(20)).unwrap().unwrap();
+        store.update(&rel).test_unwrap();
+        let back = store.load(RelationId(20)).test_unwrap().test_unwrap();
         assert!(!back.is_active());
     }
 
     #[test]
     fn test_load_by_kind() {
         let store = RelationStorage::new_const();
-        store.persist(&make_rel(30)).unwrap();
+        store.persist(&make_rel(30)).test_unwrap();
         let mut rel2 = make_rel(31);
         rel2.rel_type = RelationType::new(RelationKind::Clone);
-        store.persist(&rel2).unwrap();
-        let parents = store.load_by_kind(RelationKind::Parent).unwrap();
+        store.persist(&rel2).test_unwrap();
+        let parents = store.load_by_kind(RelationKind::Parent).test_unwrap();
         assert_eq!(parents.len(), 1);
     }
 }

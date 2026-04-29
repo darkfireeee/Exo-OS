@@ -394,6 +394,8 @@ fn zstd_decompress_frame(src: &[u8], dst: &mut [u8]) -> Option<usize> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -433,7 +435,7 @@ mod tests {
     #[test]
     fn test_compress_empty() {
         let mut out = Vec::new();
-        let n = ZstdCompressor::compress(&[], &mut out, 3).unwrap();
+        let n = ZstdCompressor::compress(&[], &mut out, 3).test_unwrap();
         assert_eq!(n, 0);
         assert!(out.is_empty());
     }
@@ -441,24 +443,24 @@ mod tests {
     #[test]
     fn test_roundtrip_uniform() {
         let input = uniform_data(512, 0x77);
-        let compressed = ZstdCompressor::compress_to_vec(&input, 3).unwrap();
-        let decompressed = ZstdCompressor::decompress_to_vec(&compressed, input.len()).unwrap();
+        let compressed = ZstdCompressor::compress_to_vec(&input, 3).test_unwrap();
+        let decompressed = ZstdCompressor::decompress_to_vec(&compressed, input.len()).test_unwrap();
         assert_eq!(decompressed, input);
     }
 
     #[test]
     fn test_roundtrip_random() {
         let input = pseudo_random(256);
-        let compressed = ZstdCompressor::compress_to_vec(&input, 3).unwrap();
-        let decompressed = ZstdCompressor::decompress_to_vec(&compressed, input.len()).unwrap();
+        let compressed = ZstdCompressor::compress_to_vec(&input, 3).test_unwrap();
+        let decompressed = ZstdCompressor::decompress_to_vec(&compressed, input.len()).test_unwrap();
         assert_eq!(decompressed, input);
     }
 
     #[test]
     fn test_roundtrip_text() {
         let text = b"Zstd Test Frame ExoFS kernel module -- Ring 0 no_std Rust.";
-        let compressed = ZstdCompressor::compress_to_vec(text, 9).unwrap();
-        let decompressed = ZstdCompressor::decompress_to_vec(&compressed, text.len()).unwrap();
+        let compressed = ZstdCompressor::compress_to_vec(text, 9).test_unwrap();
+        let decompressed = ZstdCompressor::decompress_to_vec(&compressed, text.len()).test_unwrap();
         assert_eq!(decompressed.as_slice(), text);
     }
 
@@ -478,20 +480,20 @@ mod tests {
     #[test]
     fn test_decoder_total_decoded() {
         let input = uniform_data(200, 0xAB);
-        let comp = ZstdCompressor::compress_to_vec(&input, 3).unwrap();
+        let comp = ZstdCompressor::compress_to_vec(&input, 3).test_unwrap();
         let mut dec = ZstdDecoder::new();
         let mut out = Vec::new();
-        dec.decode(&comp, &mut out).unwrap();
+        dec.decode(&comp, &mut out).test_unwrap();
         assert_eq!(dec.total_decoded(), input.len());
     }
 
     #[test]
     fn test_decoder_reset() {
         let input = uniform_data(100, 0x10);
-        let comp = ZstdCompressor::compress_to_vec(&input, 3).unwrap();
+        let comp = ZstdCompressor::compress_to_vec(&input, 3).test_unwrap();
         let mut dec = ZstdDecoder::new();
         let mut out = Vec::new();
-        dec.decode(&comp, &mut out).unwrap();
+        dec.decode(&comp, &mut out).test_unwrap();
         dec.reset();
         assert_eq!(dec.total_decoded(), 0);
     }
@@ -507,8 +509,8 @@ mod tests {
     #[test]
     fn test_roundtrip_large() {
         let input = uniform_data(8192, 0x55);
-        let compressed = ZstdCompressor::compress_to_vec(&input, 3).unwrap();
-        let decompressed = ZstdCompressor::decompress_to_vec(&compressed, input.len()).unwrap();
+        let compressed = ZstdCompressor::compress_to_vec(&input, 3).test_unwrap();
+        let decompressed = ZstdCompressor::decompress_to_vec(&compressed, input.len()).test_unwrap();
         assert_eq!(decompressed.len(), input.len());
     }
 
@@ -530,8 +532,8 @@ mod tests {
     #[test]
     fn test_roundtrip_binary() {
         let data: Vec<u8> = (0u8..=255).collect();
-        let comp = ZstdCompressor::compress_to_vec(&data, 3).unwrap();
-        let dec = ZstdCompressor::decompress_to_vec(&comp, data.len()).unwrap();
+        let comp = ZstdCompressor::compress_to_vec(&data, 3).test_unwrap();
+        let dec = ZstdCompressor::decompress_to_vec(&comp, data.len()).test_unwrap();
         assert_eq!(dec, data);
     }
 }

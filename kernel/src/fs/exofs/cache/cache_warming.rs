@@ -182,6 +182,8 @@ impl CacheWarmer {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -195,24 +197,24 @@ mod tests {
     #[test]
     fn test_enqueue_and_len() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
-        w.enqueue(entry(1, 5, 100)).unwrap();
-        w.enqueue(entry(2, 3, 200)).unwrap();
+        w.enqueue(entry(1, 5, 100)).test_unwrap();
+        w.enqueue(entry(2, 3, 200)).test_unwrap();
         assert_eq!(w.queue_len(), 2);
     }
 
     #[test]
     fn test_enqueue_overflow() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 2);
-        w.enqueue(entry(1, 1, 1)).unwrap();
-        w.enqueue(entry(2, 1, 1)).unwrap();
+        w.enqueue(entry(1, 1, 1)).test_unwrap();
+        w.enqueue(entry(2, 1, 1)).test_unwrap();
         assert!(w.enqueue(entry(3, 1, 1)).is_err());
     }
 
     #[test]
     fn test_sort_by_frequency() {
         let mut w = CacheWarmer::new(WarmingStrategy::ByFrequency, 10);
-        w.enqueue(entry(1, 1, 0)).unwrap();
-        w.enqueue(entry(2, 9, 0)).unwrap();
+        w.enqueue(entry(1, 1, 0)).test_unwrap();
+        w.enqueue(entry(2, 9, 0)).test_unwrap();
         w.sort_queue();
         let batch = w.next_batch(1);
         assert_eq!(batch[0].blob_id, blob(2));
@@ -221,8 +223,8 @@ mod tests {
     #[test]
     fn test_sort_by_recency() {
         let mut w = CacheWarmer::new(WarmingStrategy::ByRecency, 10);
-        w.enqueue(entry(1, 1, 50)).unwrap();
-        w.enqueue(entry(2, 1, 200)).unwrap();
+        w.enqueue(entry(1, 1, 50)).test_unwrap();
+        w.enqueue(entry(2, 1, 200)).test_unwrap();
         w.sort_queue();
         let batch = w.next_batch(1);
         assert_eq!(batch[0].blob_id, blob(2));
@@ -231,8 +233,8 @@ mod tests {
     #[test]
     fn test_selective_filters() {
         let mut w = CacheWarmer::new(WarmingStrategy::Selective { min_score: 5000 }, 10);
-        w.enqueue(entry(1, 1, 0)).unwrap(); // score = 1000
-        w.enqueue(entry(2, 6, 0)).unwrap(); // score = 6000
+        w.enqueue(entry(1, 1, 0)).test_unwrap(); // score = 1000
+        w.enqueue(entry(2, 6, 0)).test_unwrap(); // score = 6000
         w.sort_queue();
         assert_eq!(w.queue_len(), 1);
         assert_eq!(w.queue[0].blob_id, blob(2));
@@ -242,7 +244,7 @@ mod tests {
     fn test_next_batch_reduces_queue() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
         for i in 0..5u8 {
-            w.enqueue(entry(i, 1, 0)).unwrap();
+            w.enqueue(entry(i, 1, 0)).test_unwrap();
         }
         let b = w.next_batch(3);
         assert_eq!(b.len(), 3);
@@ -252,8 +254,8 @@ mod tests {
     #[test]
     fn test_warmed_counter() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
-        w.enqueue(entry(1, 1, 0)).unwrap();
-        w.enqueue(entry(2, 1, 0)).unwrap();
+        w.enqueue(entry(1, 1, 0)).test_unwrap();
+        w.enqueue(entry(2, 1, 0)).test_unwrap();
         w.next_batch(2);
         assert_eq!(w.warmed(), 2);
     }
@@ -261,15 +263,15 @@ mod tests {
     #[test]
     fn test_queued_bytes() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
-        w.enqueue(WarmEntry::new(blob(1), 1, 0, 1024)).unwrap();
+        w.enqueue(WarmEntry::new(blob(1), 1, 0, 1024)).test_unwrap();
         assert_eq!(w.queued_bytes(), 1024);
     }
 
     #[test]
     fn test_dedup_with() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
-        w.enqueue(entry(1, 1, 0)).unwrap();
-        w.enqueue(entry(2, 1, 0)).unwrap();
+        w.enqueue(entry(1, 1, 0)).test_unwrap();
+        w.enqueue(entry(2, 1, 0)).test_unwrap();
         w.dedup_with(|b| *b == blob(1));
         assert_eq!(w.queue_len(), 1);
         assert_eq!(w.skipped(), 1);
@@ -278,7 +280,7 @@ mod tests {
     #[test]
     fn test_clear() {
         let mut w = CacheWarmer::new(WarmingStrategy::Sequential, 10);
-        w.enqueue(entry(1, 1, 0)).unwrap();
+        w.enqueue(entry(1, 1, 0)).test_unwrap();
         w.clear();
         assert!(w.is_empty());
     }

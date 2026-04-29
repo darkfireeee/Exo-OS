@@ -416,6 +416,8 @@ pub static HEALTH: HealthCheck = HealthCheck::new_const();
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -521,7 +523,7 @@ mod tests {
         let mut out = Vec::new();
         h.probe_ring()
             .last_n_for_probe(HealthProbeId::SpaceUsage, 10, &mut out)
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(out.len(), 2);
     }
 

@@ -442,6 +442,8 @@ impl TraceSummary {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -468,7 +470,7 @@ mod tests {
         assert_eq!(evt.tick, 42);
         assert_eq!(evt.component, ComponentId::IO.0);
         assert_eq!(evt.level, TraceLevel::Info as u8);
-        let v = evt.msg_to_vec().expect("ok");
+        let v = evt.msg_to_vec().test_expect("ok");
         assert_eq!(&v, b"hello");
     }
 
@@ -492,7 +494,7 @@ mod tests {
         let r = make_ring();
         r.set_min_level(TraceLevel::Trace);
         r.emit(1, ComponentId::IO, TraceLevel::Info, "test");
-        let l = r.latest().expect("some");
+        let l = r.latest().test_expect("some");
         assert_eq!(l.tick, 1);
     }
 
@@ -503,7 +505,7 @@ mod tests {
         r.emit(1, ComponentId::IO, TraceLevel::Error, "err");
         r.emit(2, ComponentId::CORE, TraceLevel::Info, "info");
         let f = TraceFilter::for_component(ComponentId::IO);
-        let v = r.last_n_filtered(10, &f).expect("ok");
+        let v = r.last_n_filtered(10, &f).test_expect("ok");
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].component, ComponentId::IO.0);
     }
@@ -533,7 +535,7 @@ mod tests {
         let sess = TraceSession::new(&r, ComponentId::GC);
         sess.info("gc started");
         sess.warn("gc slow");
-        let v = sess.collect(10).expect("ok");
+        let v = sess.collect(10).test_expect("ok");
         assert_eq!(v.len(), 2);
     }
 
@@ -544,7 +546,7 @@ mod tests {
         let sess = TraceSession::new(&r, ComponentId::CACHE);
         sess.bump_tick();
         sess.info("step");
-        let l = r.latest().expect("latest");
+        let l = r.latest().test_expect("latest");
         assert_eq!(l.tick, 1);
     }
 
@@ -555,7 +557,7 @@ mod tests {
         r.emit(1, ComponentId::CORE, TraceLevel::Error, "e1");
         r.emit(2, ComponentId::CORE, TraceLevel::Error, "e2");
         r.emit(3, ComponentId::CORE, TraceLevel::Info, "i1");
-        let s = TraceSummary::from_ring(&r).expect("ok");
+        let s = TraceSummary::from_ring(&r).test_expect("ok");
         assert_eq!(s.error_count, 2);
         assert_eq!(s.info_count, 1);
         assert!(s.has_errors());
@@ -569,7 +571,7 @@ mod tests {
         r.emit(2, ComponentId::CORE, TraceLevel::Info, "i");
         r.emit(3, ComponentId::CORE, TraceLevel::Info, "i");
         r.emit(4, ComponentId::CORE, TraceLevel::Info, "i");
-        let s = TraceSummary::from_ring(&r).expect("ok");
+        let s = TraceSummary::from_ring(&r).test_expect("ok");
         assert_eq!(s.error_ratio_ppt(), 250); // 1/4 × 1000
     }
 

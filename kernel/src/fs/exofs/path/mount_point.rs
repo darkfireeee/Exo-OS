@@ -352,6 +352,8 @@ pub fn is_mount_point(dir_oid: &ObjectId) -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -364,16 +366,16 @@ mod tests {
     #[test]
     fn test_register_lookup() {
         let tbl = MountTable::new_const();
-        tbl.register(oid(1), b"mnt", oid(99), 0).unwrap();
-        let r = tbl.lookup_mount(&oid(1)).unwrap();
+        tbl.register(oid(1), b"mnt", oid(99), 0).test_unwrap();
+        let r = tbl.lookup_mount(&oid(1)).test_unwrap();
         assert_eq!(r.0[0], 99);
     }
 
     #[test]
     fn test_unregister() {
         let tbl = MountTable::new_const();
-        tbl.register(oid(2), b"mnt2", oid(88), 0).unwrap();
-        tbl.unregister_by_dir(&oid(2)).unwrap();
+        tbl.register(oid(2), b"mnt2", oid(88), 0).test_unwrap();
+        tbl.unregister_by_dir(&oid(2)).test_unwrap();
         assert!(tbl.lookup_mount(&oid(2)).is_none());
     }
 
@@ -381,7 +383,7 @@ mod tests {
     fn test_readonly_flag() {
         let tbl = MountTable::new_const();
         tbl.register(oid(3), b"ro", oid(77), MOUNT_FLAG_READONLY)
-            .unwrap();
+            .test_unwrap();
         assert!(tbl.is_readonly(&oid(3)));
     }
 
@@ -390,7 +392,7 @@ mod tests {
         let tbl = MountTable::new_const();
         for i in 0u8..64 {
             tbl.register(oid(i), b"x", oid(i.wrapping_add(100)), 0)
-                .unwrap();
+                .test_unwrap();
         }
         let extra = tbl.register(oid(200), b"z", oid(201), 0);
         assert!(extra.is_err());
@@ -399,15 +401,15 @@ mod tests {
     #[test]
     fn test_count() {
         let tbl = MountTable::new_const();
-        tbl.register(oid(5), b"a", oid(50), 0).unwrap();
-        tbl.register(oid(6), b"b", oid(60), 0).unwrap();
+        tbl.register(oid(5), b"a", oid(50), 0).test_unwrap();
+        tbl.register(oid(6), b"b", oid(60), 0).test_unwrap();
         assert_eq!(tbl.count(), 2);
     }
 
     #[test]
     fn test_flush() {
         let tbl = MountTable::new_const();
-        tbl.register(oid(7), b"c", oid(70), 0).unwrap();
+        tbl.register(oid(7), b"c", oid(70), 0).test_unwrap();
         tbl.flush();
         assert_eq!(tbl.count(), 0);
     }

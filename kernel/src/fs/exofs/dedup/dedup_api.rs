@@ -303,19 +303,21 @@ impl DedupBatchReport {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     // use super::super::dedup_policy::DedupPolicy;
 
     fn api() -> DedupApi {
-        DedupApi::with_default_policy().unwrap()
+        DedupApi::with_default_policy().test_unwrap()
     }
 
     #[test]
     fn test_dedup_new_blob() {
         let api = api();
         let data = &[0x42u8; 8192];
-        let r = api.dedup_blob(data).unwrap();
+        let r = api.dedup_blob(data).test_unwrap();
         assert!(r.is_new);
         assert_eq!(r.logical_bytes, 8192);
         assert!(r.n_chunks > 0);
@@ -325,7 +327,7 @@ mod tests {
     fn test_dedup_small_blob_skipped() {
         let api = api();
         let data = &[0u8; 100]; // < POLICY_DEFAULT_MIN_BLOB_SIZE
-        let r = api.dedup_blob(data).unwrap();
+        let r = api.dedup_blob(data).test_unwrap();
         assert_eq!(r.n_chunks, 0); // aucun chunk → skipped
     }
 
@@ -334,7 +336,7 @@ mod tests {
         let api = api();
         let d1 = &[0xAAu8; 8192] as &[u8];
         let d2 = &[0xBBu8; 16384] as &[u8];
-        let res = api.dedup_batch(&[d1, d2]).unwrap();
+        let res = api.dedup_batch(&[d1, d2]).test_unwrap();
         assert_eq!(res.len(), 2);
     }
 
@@ -343,7 +345,7 @@ mod tests {
         let api = api();
         let d1 = &[0xCCu8; 8192] as &[u8];
         let d2 = &[0xDDu8; 8192] as &[u8];
-        let res = api.dedup_batch(&[d1, d2]).unwrap();
+        let res = api.dedup_batch(&[d1, d2]).test_unwrap();
         let report = DedupBatchReport::from_results(&res);
         assert_eq!(report.total_blobs, 2);
     }
@@ -377,7 +379,7 @@ mod tests {
     fn test_is_known() {
         let api = api();
         let data = &[0x77u8; 8192];
-        let res = api.dedup_blob(data).unwrap();
+        let res = api.dedup_blob(data).test_unwrap();
         assert!(api.is_known(&res.blob_id));
     }
 }
@@ -457,31 +459,31 @@ mod tests_health {
 
     #[test]
     fn test_health_check_clean_state() {
-        let api = DedupApi::with_default_policy().unwrap();
+        let api = DedupApi::with_default_policy().test_unwrap();
         let h = api.health_check();
         assert!(h.overall_ok);
     }
 
     #[test]
     fn test_summary_after_dedup() {
-        let api = DedupApi::with_default_policy().unwrap();
+        let api = DedupApi::with_default_policy().test_unwrap();
         let data = &[0x99u8; 8192];
-        api.dedup_blob(data).unwrap();
+        api.dedup_blob(data).test_unwrap();
         let s = api.summary();
         assert!(s.total_blobs > 0);
     }
 
     #[test]
     fn test_verify_integrity_passes() {
-        let api = DedupApi::with_default_policy().unwrap();
+        let api = DedupApi::with_default_policy().test_unwrap();
         assert!(api.verify_integrity().is_ok());
     }
 
     #[test]
     fn test_dedup_disabled_policy() {
-        let api = DedupApi::new(super::super::dedup_policy::DedupPolicy::disabled()).unwrap();
+        let api = DedupApi::new(super::super::dedup_policy::DedupPolicy::disabled()).test_unwrap();
         let d = &[0x11u8; 8192];
-        let r = api.dedup_blob(d).unwrap();
+        let r = api.dedup_blob(d).test_unwrap();
         assert_eq!(r.n_chunks, 0);
     }
 }

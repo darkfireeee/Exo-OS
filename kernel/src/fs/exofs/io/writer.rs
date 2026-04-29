@@ -258,7 +258,12 @@ impl BlobWriter {
     }
 
     pub fn default() -> Self {
-        Self::new(WriteConfig::default()).expect("WriteConfig::default() is always valid")
+        let config = WriteConfig::default();
+        Self {
+            config,
+            stats: WriterStats::new(),
+            pending: PendingWriteBuffer::new(config.max_pending),
+        }
     }
 
     /// Écrit un blob dans le store, avec vérification optionnelle.
@@ -460,6 +465,20 @@ impl BlobStoreWrite for VecStoreMut {
 mod tests {
     use super::*;
 
+    fn ok<T, E: core::fmt::Debug>(res: Result<T, E>) -> T {
+        match res {
+            Ok(value) => value,
+            Err(err) => panic!("unexpected error: {err:?}"),
+        }
+    }
+
+    fn some<T>(value: Option<T>) -> T {
+        match value {
+            Some(inner) => inner,
+            None => panic!("unexpected None"),
+        }
+    }
+
     fn make_id(tag: u8) -> [u8; 32] {
         let mut id = [0u8; 32];
         id[0] = tag;
@@ -469,32 +488,32 @@ mod tests {
     #[test]
     fn test_write_auto_flush() {
         let mut store = VecStoreMut::new();
-        let mut writer = BlobWriter::new(WriteConfig::fast()).expect("ok");
+        let mut writer = ok(BlobWriter::new(WriteConfig::fast()));
         let id = make_id(1);
-        writer.write(&mut store, id, b"hello").expect("ok");
+        ok(writer.write(&mut store, id, b"hello"));
         assert!(!store.contains(&id)); // buffered
     }
 
     #[test]
     fn test_flush_writes_to_store() {
         let mut store = VecStoreMut::new();
-        let mut writer = BlobWriter::new(WriteConfig::fast()).expect("ok");
+        let mut writer = ok(BlobWriter::new(WriteConfig::fast()));
         let id = make_id(2);
-        writer.write(&mut store, id, b"flushed data").expect("ok");
-        writer.flush(&mut store).expect("ok");
+        ok(writer.write(&mut store, id, b"flushed data"));
+        ok(writer.flush(&mut store));
         assert!(store.contains(&id));
-        assert_eq!(store.get(&id).expect("ok"), b"flushed data");
+        assert_eq!(some(store.get(&id)), b"flushed data");
     }
 
     #[test]
     fn test_delete_buffered() {
         let mut store = VecStoreMut::new();
         let id = make_id(3);
-        store.write_blob(&id, b"to delete").expect("ok");
-        let mut writer = BlobWriter::new(WriteConfig::fast()).expect("ok");
-        writer.delete(&mut store, id).expect("ok");
+        ok(store.write_blob(&id, b"to delete"));
+        let mut writer = ok(BlobWriter::new(WriteConfig::fast()));
+        ok(writer.delete(&mut store, id));
         assert_eq!(writer.pending_count(), 1);
-        writer.flush(&mut store).expect("ok");
+        ok(writer.flush(&mut store));
         assert!(!store.contains(&id));
     }
 
@@ -506,9 +525,9 @@ mod tests {
             auto_flush: false,
             ..WriteConfig::fast()
         };
-        let mut writer = BlobWriter::new(cfg).expect("ok");
-        writer.write(&mut store, make_id(1), b"a").expect("ok");
-        writer.write(&mut store, make_id(2), b"b").expect("ok");
+        let mut writer = ok(BlobWriter::new(cfg));
+        ok(writer.write(&mut store, make_id(1), b"a"));
+        ok(writer.write(&mut store, make_id(2), b"b"));
         // La 3e entrée doit produire une erreur Resource
         assert!(writer.write(&mut store, make_id(3), b"c").is_err());
     }
@@ -516,10 +535,8 @@ mod tests {
     #[test]
     fn test_discard() {
         let mut store = VecStoreMut::new();
-        let mut writer = BlobWriter::new(WriteConfig::fast()).expect("ok");
-        writer
-            .write(&mut store, make_id(1), b"discard me")
-            .expect("ok");
+        let mut writer = ok(BlobWriter::new(WriteConfig::fast()));
+        ok(writer.write(&mut store, make_id(1), b"discard me"));
         writer.discard();
         assert_eq!(writer.pending_count(), 0);
     }
@@ -527,10 +544,10 @@ mod tests {
     #[test]
     fn test_stats_tracking() {
         let mut store = VecStoreMut::new();
-        let mut writer = BlobWriter::new(WriteConfig::fast()).expect("ok");
-        writer.write(&mut store, make_id(1), b"a").expect("ok");
-        writer.write(&mut store, make_id(2), b"bb").expect("ok");
-        writer.flush(&mut store).expect("ok");
+        let mut writer = ok(BlobWriter::new(WriteConfig::fast()));
+        ok(writer.write(&mut store, make_id(1), b"a"));
+        ok(writer.write(&mut store, make_id(2), b"bb"));
+        ok(writer.flush(&mut store));
         assert_eq!(writer.stats().blobs_written, 2);
     }
 
@@ -538,39 +555,39 @@ mod tests {
     fn test_write_then_delete_then_flush() {
         let mut store = VecStoreMut::new();
         let id = make_id(5);
-        let mut writer = BlobWriter::new(WriteConfig::fast()).expect("ok");
-        writer.write(&mut store, id, b"ephemeral").expect("ok");
-        writer.flush(&mut store).expect("ok");
+        let mut writer = ok(BlobWriter::new(WriteConfig::fast()));
+        ok(writer.write(&mut store, id, b"ephemeral"));
+        ok(writer.flush(&mut store));
         assert!(store.contains(&id));
-        writer.delete(&mut store, id).expect("ok");
-        writer.flush(&mut store).expect("ok");
+        ok(writer.delete(&mut store, id));
+        ok(writer.flush(&mut store));
         assert!(!store.contains(&id));
     }
 
     #[test]
     fn test_flush_count() {
         let mut store = VecStoreMut::new();
-        let mut writer = BlobWriter::new(WriteConfig::fast()).expect("ok");
-        writer.flush(&mut store).expect("ok");
-        writer.flush(&mut store).expect("ok");
+        let mut writer = ok(BlobWriter::new(WriteConfig::fast()));
+        ok(writer.flush(&mut store));
+        ok(writer.flush(&mut store));
         assert_eq!(store.flush_count(), 2);
     }
 
     #[test]
     fn test_pending_bytes() {
         let mut store = VecStoreMut::new();
-        let mut writer = BlobWriter::new(WriteConfig::fast()).expect("ok");
-        writer.write(&mut store, make_id(1), b"abc").expect("ok");
-        writer.write(&mut store, make_id(2), b"de").expect("ok");
+        let mut writer = ok(BlobWriter::new(WriteConfig::fast()));
+        ok(writer.write(&mut store, make_id(1), b"abc"));
+        ok(writer.write(&mut store, make_id(2), b"de"));
         assert_eq!(writer.pending_bytes(), 5);
     }
 
     #[test]
     fn test_reset_stats() {
         let mut store = VecStoreMut::new();
-        let mut writer = BlobWriter::new(WriteConfig::fast()).expect("ok");
-        writer.write(&mut store, make_id(1), b"data").expect("ok");
-        writer.flush(&mut store).expect("ok");
+        let mut writer = ok(BlobWriter::new(WriteConfig::fast()));
+        ok(writer.write(&mut store, make_id(1), b"data"));
+        ok(writer.flush(&mut store));
         writer.reset_stats();
         assert_eq!(writer.stats().blobs_written, 0);
     }
@@ -582,7 +599,7 @@ mod tests {
             ..WriteConfig::fast()
         };
         let mut store = VecStoreMut::new();
-        let mut writer = BlobWriter::new(cfg).expect("ok");
+        let mut writer = ok(BlobWriter::new(cfg));
         // Suppression d'un blob inexistant
         assert!(writer.delete(&mut store, make_id(0xFF)).is_err());
     }
@@ -595,7 +612,7 @@ mod tests {
             auto_flush: true,
             ..WriteConfig::safe()
         };
-        let mut writer = BlobWriter::new(cfg).expect("ok");
+        let mut writer = ok(BlobWriter::new(cfg));
         assert!(writer
             .write(&mut store, make_id(1), b"too large data")
             .is_err());
@@ -608,8 +625,8 @@ mod tests {
             auto_flush: true,
             ..WriteConfig::fast()
         };
-        let mut writer = BlobWriter::new(cfg).expect("ok");
-        writer.write(&mut store, make_id(1), b"clean").expect("ok");
+        let mut writer = ok(BlobWriter::new(cfg));
+        ok(writer.write(&mut store, make_id(1), b"clean"));
         assert!(writer.stats().is_clean());
     }
 
@@ -621,9 +638,9 @@ mod tests {
         let mut v = Vec::new();
         v.extend_from_slice(b"pending");
         let entry = WriteEntry::write_entry(id, v, 0);
-        buf.add(entry).expect("ok");
+        ok(buf.add(entry));
         assert_eq!(buf.len(), 1);
-        buf.flush_to(&mut store).expect("ok");
+        ok(buf.flush_to(&mut store));
         assert!(store.contains(&id));
         assert_eq!(buf.len(), 0);
     }

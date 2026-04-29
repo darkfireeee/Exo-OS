@@ -623,6 +623,8 @@ fn hex_lower(data: &[u8]) -> String {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -635,22 +637,22 @@ mod tests {
     #[test]
     fn test_vec_text_sink_write() {
         let mut sink = VecTextSink::new();
-        sink.write_str("hello").expect("ok");
-        sink.write_str(" world").expect("ok");
+        sink.write_str("hello").test_expect("ok");
+        sink.write_str(" world").test_expect("ok");
         assert_eq!(sink.as_str(), "hello world");
     }
 
     #[test]
     fn test_write_kv() {
         let mut sink = VecTextSink::new();
-        sink.write_kv("key", "value").expect("ok");
+        sink.write_kv("key", "value").test_expect("ok");
         assert_eq!(sink.as_str(), "key=value\n");
     }
 
     #[test]
     fn test_write_section() {
         let mut sink = VecTextSink::new();
-        sink.write_section("blob").expect("ok");
+        sink.write_section("blob").test_expect("ok");
         assert_eq!(sink.as_str(), "[blob]\n");
     }
 
@@ -659,7 +661,7 @@ mod tests {
         let bid = make_blob_id(42);
         let meta = BlobMeta::new(bid, 1024, EpochId(5));
         let mut sink = VecTextSink::new();
-        MetadataExporter::write_blob_meta(&mut sink, &meta).expect("ok");
+        MetadataExporter::write_blob_meta(&mut sink, &meta).test_expect("ok");
         let s = sink.as_str();
         assert!(s.contains("[blob]"));
         assert!(s.contains("size=1024"));
@@ -670,7 +672,7 @@ mod tests {
     fn test_snapshot_meta_serialization() {
         let meta = SnapshotMeta::new(7, EpochId(12));
         let mut sink = VecTextSink::new();
-        MetadataExporter::write_snapshot_meta(&mut sink, &meta).expect("ok");
+        MetadataExporter::write_snapshot_meta(&mut sink, &meta).test_expect("ok");
         let s = sink.as_str();
         assert!(s.contains("[snapshot]"));
         assert!(s.contains("snapshot_id=7"));
@@ -681,9 +683,9 @@ mod tests {
         let mut manifest = ExportManifest::new(1, EpochId(0), EpochId(5));
         let bid = make_blob_id(10);
         let entry = ManifestBlobEntry::new(bid, 256, EpochId(3), 0xABCD1234);
-        manifest.add_entry(entry).expect("add ok");
+        manifest.add_entry(entry).test_expect("add ok");
         let mut sink = VecTextSink::new();
-        manifest.write_text(&mut sink).expect("write ok");
+        manifest.write_text(&mut sink).test_expect("write ok");
         let s = sink.as_str();
         assert!(s.contains("[manifest]"));
         assert!(s.contains("blob_count=1"));
@@ -693,9 +695,9 @@ mod tests {
     #[test]
     fn test_manifest_with_tombstone() {
         let mut manifest = ExportManifest::new(1, EpochId(0), EpochId(5));
-        manifest.add_tombstone(make_blob_id(99)).expect("ok");
+        manifest.add_tombstone(make_blob_id(99)).test_expect("ok");
         let mut sink = VecTextSink::new();
-        manifest.write_text(&mut sink).expect("ok");
+        manifest.write_text(&mut sink).test_expect("ok");
         let s = sink.as_str();
         assert!(s.contains("[tombstones]"));
     }
@@ -706,14 +708,14 @@ mod tests {
         let bid = make_blob_id(5);
         manifest
             .add_entry(ManifestBlobEntry::new(bid, 100, EpochId(1), 0))
-            .expect("ok");
+            .test_expect("ok");
         assert!(manifest.validate());
 
         let mut manifest2 = ExportManifest::new(1, EpochId(0), EpochId(5));
         // Entrée avec blob_id = [0; 32] invalide
         manifest2
             .add_entry(ManifestBlobEntry::new([0u8; 32], 100, EpochId(1), 0))
-            .expect("ok");
+            .test_expect("ok");
         assert!(!manifest2.validate());
     }
 
@@ -721,7 +723,7 @@ mod tests {
     fn test_binary_writer_header_magic() {
         let manifest = ExportManifest::new(7, EpochId(1), EpochId(5));
         let mut writer = MetadataBinaryWriter::new();
-        let n = writer.write_manifest(&manifest).expect("ok");
+        let n = writer.write_manifest(&manifest).test_expect("ok");
         assert!(n >= 40); // au moins la taille du header
         let magic =
             u32::from_le_bytes([writer.buf[0], writer.buf[1], writer.buf[2], writer.buf[3]]);
@@ -735,10 +737,10 @@ mod tests {
             let bid = make_blob_id(i);
             manifest
                 .add_entry(ManifestBlobEntry::new(bid, 64, EpochId(1), 0))
-                .expect("ok");
+                .test_expect("ok");
         }
         let mut writer = MetadataBinaryWriter::new();
-        let n = writer.write_manifest(&manifest).expect("ok");
+        let n = writer.write_manifest(&manifest).test_expect("ok");
         // header (40) + 5 entries × 64 = 360
         assert_eq!(n, 40 + 5 * 64);
     }
@@ -776,7 +778,7 @@ mod tests {
             BlobMeta::new(make_blob_id(2), 200, EpochId(2)),
         ];
         let mut sink = VecTextSink::new();
-        MetadataExporter::write_blob_list(&mut sink, &blobs).expect("ok");
+        MetadataExporter::write_blob_list(&mut sink, &blobs).test_expect("ok");
         let s = sink.as_str();
         assert!(s.contains("count=2"));
     }

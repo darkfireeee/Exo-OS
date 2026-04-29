@@ -308,16 +308,18 @@ impl PathCache {
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_insert_and_lookup() {
         let c = PathCache::new_const();
-        c.insert(b"/foo/bar", 42, 0).unwrap();
+        c.insert(b"/foo/bar", 42, 0).test_unwrap();
         let r = c.lookup(b"/foo/bar");
         assert!(r.is_some());
-        assert_eq!(r.unwrap().inode_id, 42);
+        assert_eq!(r.test_unwrap().inode_id, 42);
     }
 
     #[test]
@@ -329,7 +331,7 @@ mod tests {
     #[test]
     fn test_invalidate_path() {
         let c = PathCache::new_const();
-        c.insert(b"/a/b", 1, 0).unwrap();
+        c.insert(b"/a/b", 1, 0).test_unwrap();
         c.invalidate_path(b"/a/b");
         assert!(c.lookup(b"/a/b").is_none());
     }
@@ -337,9 +339,9 @@ mod tests {
     #[test]
     fn test_invalidate_prefix() {
         let c = PathCache::new_const();
-        c.insert(b"/a", 1, 0).unwrap();
-        c.insert(b"/a/b", 2, 0).unwrap();
-        c.insert(b"/z", 3, 0).unwrap();
+        c.insert(b"/a", 1, 0).test_unwrap();
+        c.insert(b"/a/b", 2, 0).test_unwrap();
+        c.insert(b"/z", 3, 0).test_unwrap();
         c.invalidate_prefix(b"/a");
         assert_eq!(c.n_entries(), 1);
     }
@@ -347,8 +349,8 @@ mod tests {
     #[test]
     fn test_invalidate_inode() {
         let c = PathCache::new_const();
-        c.insert(b"/x", 7, 0).unwrap();
-        c.insert(b"/y", 7, 0).unwrap();
+        c.insert(b"/x", 7, 0).test_unwrap();
+        c.insert(b"/y", 7, 0).test_unwrap();
         c.invalidate_inode(7);
         assert_eq!(c.n_entries(), 0);
     }
@@ -356,7 +358,7 @@ mod tests {
     #[test]
     fn test_hits_misses() {
         let c = PathCache::new_const();
-        c.insert(b"/p", 1, 0).unwrap();
+        c.insert(b"/p", 1, 0).test_unwrap();
         c.lookup(b"/p");
         c.lookup(b"/q");
         assert_eq!(c.hits(), 1);
@@ -366,7 +368,7 @@ mod tests {
     #[test]
     fn test_evict_stale() {
         let c = PathCache::new_const();
-        c.insert(b"/old", 1, 0).unwrap();
+        c.insert(b"/old", 1, 0).test_unwrap();
         // Force le tick à 0 via update direct.
         {
             c.inner
@@ -382,15 +384,15 @@ mod tests {
     #[test]
     fn test_depth_counted() {
         let c = PathCache::new_const();
-        c.insert(b"/a/b/c", 1, 0).unwrap();
-        let e = c.lookup(b"/a/b/c").unwrap();
+        c.insert(b"/a/b/c", 1, 0).test_unwrap();
+        let e = c.lookup(b"/a/b/c").test_unwrap();
         assert_eq!(e.depth, 3);
     }
 
     #[test]
     fn test_flush_all() {
         let c = PathCache::new_const();
-        c.insert(b"/x", 1, 0).unwrap();
+        c.insert(b"/x", 1, 0).test_unwrap();
         c.flush_all();
         assert_eq!(c.n_entries(), 0);
     }
@@ -398,8 +400,8 @@ mod tests {
     #[test]
     fn test_rename() {
         let c = PathCache::new_const();
-        c.insert(b"/old", 42, 0).unwrap();
-        c.rename(b"/old", b"/new").unwrap();
+        c.insert(b"/old", 42, 0).test_unwrap();
+        c.rename(b"/old", b"/new").test_unwrap();
         assert!(c.lookup(b"/old").is_none());
         assert!(c.lookup(b"/new").is_some());
     }
@@ -407,8 +409,8 @@ mod tests {
     #[test]
     fn test_hottest_n() {
         let c = PathCache::new_const();
-        c.insert(b"/hot", 1, 0).unwrap();
-        c.insert(b"/cold", 2, 0).unwrap();
+        c.insert(b"/hot", 1, 0).test_unwrap();
+        c.insert(b"/cold", 2, 0).test_unwrap();
         // accéder plusieurs fois à /hot
         c.lookup(b"/hot");
         c.lookup(b"/hot");
@@ -421,14 +423,14 @@ mod tests {
     fn test_insert_batch() {
         let c = PathCache::new_const();
         let batch = [(b"/a" as &[u8], 1u64, 0u32), (b"/b", 2, 0)];
-        let n = c.insert_batch(&batch).unwrap();
+        let n = c.insert_batch(&batch).test_unwrap();
         assert_eq!(n, 2);
     }
 
     #[test]
     fn test_depth_histogram() {
         let c = PathCache::new_const();
-        c.insert(b"/a/b/c", 1, 0).unwrap();
+        c.insert(b"/a/b/c", 1, 0).test_unwrap();
         let h = c.depth_histogram();
         assert_eq!(h[3], 1);
     }
@@ -436,7 +438,7 @@ mod tests {
     #[test]
     fn test_contains() {
         let c = PathCache::new_const();
-        c.insert(b"/foo", 1, 0).unwrap();
+        c.insert(b"/foo", 1, 0).test_unwrap();
         assert!(c.contains(b"/foo"));
         assert!(!c.contains(b"/bar"));
     }
@@ -444,7 +446,7 @@ mod tests {
     #[test]
     fn test_flush_all_clears() {
         let c = PathCache::new_const();
-        c.insert(b"/x", 1, 0).unwrap();
+        c.insert(b"/x", 1, 0).test_unwrap();
         c.flush_all();
         assert_eq!(c.n_entries(), 0);
     }
@@ -452,7 +454,7 @@ mod tests {
     #[test]
     fn test_remove_existing_path() {
         let c = PathCache::new_const();
-        c.insert(b"/rem", 2, 0).unwrap();
+        c.insert(b"/rem", 2, 0).test_unwrap();
         c.invalidate_path(b"/rem");
         assert!(!c.contains(b"/rem"));
     }
@@ -466,17 +468,17 @@ mod tests {
     #[test]
     fn test_n_entries_after_inserts() {
         let c = PathCache::new_const();
-        c.insert(b"/a", 1, 0).unwrap();
-        c.insert(b"/b", 2, 0).unwrap();
+        c.insert(b"/a", 1, 0).test_unwrap();
+        c.insert(b"/b", 2, 0).test_unwrap();
         assert_eq!(c.n_entries(), 2);
     }
 
     #[test]
     fn test_depth_histogram_multiple_depths() {
         let c = PathCache::new_const();
-        c.insert(b"/a", 1, 0).unwrap();
-        c.insert(b"/a/b", 2, 0).unwrap();
-        c.insert(b"/a/b/c", 3, 0).unwrap();
+        c.insert(b"/a", 1, 0).test_unwrap();
+        c.insert(b"/a/b", 2, 0).test_unwrap();
+        c.insert(b"/a/b/c", 3, 0).test_unwrap();
         let h = c.depth_histogram();
         assert_eq!(h[1], 1);
         assert_eq!(h[2], 1);

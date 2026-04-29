@@ -180,8 +180,11 @@ pub struct KeyStorage {
     total_keys: AtomicU64,
 }
 
-// SAFETY: KeyStorage est protégé par un lock atomique.
+// SAFETY: `table` n'est accessible qu'après acquisition du spinlock `lock`,
+// ce qui garantit un accès exclusif à la mutabilité intérieure.
 unsafe impl Sync for KeyStorage {}
+// SAFETY: la structure ne contient pas de références empruntées et reste sûre à
+// déplacer entre threads tant que le protocole de verrouillage est respecté.
 unsafe impl Send for KeyStorage {}
 
 /// Instance globale.
@@ -303,6 +306,13 @@ impl KeyStorage {
 mod tests {
     use super::*;
 
+    fn ok<T, E: core::fmt::Debug>(res: Result<T, E>) -> T {
+        match res {
+            Ok(value) => value,
+            Err(err) => panic!("unexpected error: {err:?}"),
+        }
+    }
+
     fn ks() -> KeyStorage {
         KeyStorage::new_const()
     }
@@ -311,23 +321,23 @@ mod tests {
     fn test_store_load_roundtrip() {
         let ks = ks();
         let key = [0x42u8; 32];
-        let sid = ks.store_key_256(&key, KeyKind::Master).unwrap();
-        assert_eq!(ks.load_key_256(sid).unwrap(), key);
+        let sid = ok(ks.store_key_256(&key, KeyKind::Master));
+        assert_eq!(ok(ks.load_key_256(sid)), key);
     }
 
     #[test]
     fn test_store_different_slots() {
         let ks = ks();
-        let s1 = ks.store_key_256(&[1u8; 32], KeyKind::Volume).unwrap();
-        let s2 = ks.store_key_256(&[2u8; 32], KeyKind::Object).unwrap();
+        let s1 = ok(ks.store_key_256(&[1u8; 32], KeyKind::Volume));
+        let s2 = ok(ks.store_key_256(&[2u8; 32], KeyKind::Object));
         assert_ne!(s1, s2);
     }
 
     #[test]
     fn test_revoke_zeroes_key() {
         let ks = ks();
-        let sid = ks.store_key_256(&[0xABu8; 32], KeyKind::Derived).unwrap();
-        ks.revoke_key(sid).unwrap();
+        let sid = ok(ks.store_key_256(&[0xABu8; 32], KeyKind::Derived));
+        ok(ks.revoke_key(sid));
         // Après révocation, load doit échouer.
         assert!(ks.load_key_256(sid).is_err());
     }
@@ -335,8 +345,8 @@ mod tests {
     #[test]
     fn test_remove_key() {
         let ks = ks();
-        let sid = ks.store_key_256(&[0u8; 32], KeyKind::Session).unwrap();
-        ks.remove_key(sid).unwrap();
+        let sid = ok(ks.store_key_256(&[0u8; 32], KeyKind::Session));
+        ok(ks.remove_key(sid));
         assert!(ks.load_key_256(sid).is_err());
     }
 
@@ -349,39 +359,39 @@ mod tests {
     #[test]
     fn test_key_kind_ok() {
         let ks = ks();
-        let sid = ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
-        assert_eq!(ks.key_kind(sid).unwrap(), KeyKind::Volume);
+        let sid = ok(ks.store_key_256(&[0u8; 32], KeyKind::Volume));
+        assert_eq!(ok(ks.key_kind(sid)), KeyKind::Volume);
     }
 
     #[test]
     fn test_list_active_slots_count() {
         let ks = ks();
-        ks.store_key_256(&[1u8; 32], KeyKind::Master).unwrap();
-        ks.store_key_256(&[2u8; 32], KeyKind::Volume).unwrap();
-        let active = ks.list_active_slots().unwrap();
+        ok(ks.store_key_256(&[1u8; 32], KeyKind::Master));
+        ok(ks.store_key_256(&[2u8; 32], KeyKind::Volume));
+        let active = ok(ks.list_active_slots());
         assert_eq!(active.len(), 2);
     }
 
     #[test]
     fn test_total_count() {
         let ks = ks();
-        ks.store_key_256(&[0u8; 32], KeyKind::Derived).unwrap();
+        ok(ks.store_key_256(&[0u8; 32], KeyKind::Derived));
         assert!(ks.total_count() >= 1);
     }
 
     #[test]
     fn test_slot_state_active() {
         let ks = ks();
-        let sid = ks.store_key_256(&[0u8; 32], KeyKind::Master).unwrap();
-        assert_eq!(ks.slot_state(sid).unwrap(), SlotState::Active);
+        let sid = ok(ks.store_key_256(&[0u8; 32], KeyKind::Master));
+        assert_eq!(ok(ks.slot_state(sid)), SlotState::Active);
     }
 
     #[test]
     fn test_slot_state_after_revoke() {
         let ks = ks();
-        let sid = ks.store_key_256(&[0u8; 32], KeyKind::Master).unwrap();
-        ks.revoke_key(sid).unwrap();
-        assert_eq!(ks.slot_state(sid).unwrap(), SlotState::Revoked);
+        let sid = ok(ks.store_key_256(&[0u8; 32], KeyKind::Master));
+        ok(ks.revoke_key(sid));
+        assert_eq!(ok(ks.slot_state(sid)), SlotState::Revoked);
     }
 }
 
@@ -505,6 +515,13 @@ impl KeyStorage {
 mod extended_tests {
     use super::*;
 
+    fn ok<T, E: core::fmt::Debug>(res: Result<T, E>) -> T {
+        match res {
+            Ok(value) => value,
+            Err(err) => panic!("unexpected error: {err:?}"),
+        }
+    }
+
     fn ks() -> KeyStorage {
         KeyStorage::new_const()
     }
@@ -512,8 +529,8 @@ mod extended_tests {
     #[test]
     fn test_slot_info_ok() {
         let ks = ks();
-        let sid = ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
-        let info = ks.slot_info(sid).unwrap();
+        let sid = ok(ks.store_key_256(&[0u8; 32], KeyKind::Volume));
+        let info = ok(ks.slot_info(sid));
         assert_eq!(info.kind, KeyKind::Volume);
         assert_eq!(info.state, SlotState::Active);
     }
@@ -521,37 +538,37 @@ mod extended_tests {
     #[test]
     fn test_retype_ok() {
         let ks = ks();
-        let sid = ks.store_key_256(&[0u8; 32], KeyKind::Session).unwrap();
-        ks.retype_slot(sid, KeyKind::Derived).unwrap();
-        assert_eq!(ks.key_kind(sid).unwrap(), KeyKind::Derived);
+        let sid = ok(ks.store_key_256(&[0u8; 32], KeyKind::Session));
+        ok(ks.retype_slot(sid, KeyKind::Derived));
+        assert_eq!(ok(ks.key_kind(sid)), KeyKind::Derived);
     }
 
     #[test]
     fn test_expire_slot() {
         let ks = ks();
-        let sid = ks.store_key_256(&[0u8; 32], KeyKind::Master).unwrap();
-        ks.expire_slot(sid).unwrap();
-        assert_eq!(ks.slot_state(sid).unwrap(), SlotState::Expired);
+        let sid = ok(ks.store_key_256(&[0u8; 32], KeyKind::Master));
+        ok(ks.expire_slot(sid));
+        assert_eq!(ok(ks.slot_state(sid)), SlotState::Expired);
         assert!(ks.load_key_256(sid).is_err());
     }
 
     #[test]
     fn test_list_by_kind() {
         let ks = ks();
-        ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
-        ks.store_key_256(&[1u8; 32], KeyKind::Volume).unwrap();
-        ks.store_key_256(&[2u8; 32], KeyKind::Master).unwrap();
-        let vols = ks.list_by_kind(KeyKind::Volume).unwrap();
+        ok(ks.store_key_256(&[0u8; 32], KeyKind::Volume));
+        ok(ks.store_key_256(&[1u8; 32], KeyKind::Volume));
+        ok(ks.store_key_256(&[2u8; 32], KeyKind::Master));
+        let vols = ok(ks.list_by_kind(KeyKind::Volume));
         assert_eq!(vols.len(), 2);
     }
 
     #[test]
     fn test_purge_inactive() {
         let ks = ks();
-        let s1 = ks.store_key_256(&[0u8; 32], KeyKind::Session).unwrap();
-        let s2 = ks.store_key_256(&[1u8; 32], KeyKind::Session).unwrap();
-        ks.revoke_key(s1).unwrap();
-        let purged = ks.purge_inactive().unwrap();
+        let s1 = ok(ks.store_key_256(&[0u8; 32], KeyKind::Session));
+        let s2 = ok(ks.store_key_256(&[1u8; 32], KeyKind::Session));
+        ok(ks.revoke_key(s1));
+        let purged = ok(ks.purge_inactive());
         assert_eq!(purged, 1);
         assert!(ks.load_key_256(s2).is_ok()); // s2 toujours actif
     }
@@ -559,9 +576,9 @@ mod extended_tests {
     #[test]
     fn test_access_count_increments() {
         let ks = ks();
-        let sid = ks.store_key_256(&[0u8; 32], KeyKind::Object).unwrap();
-        ks.load_key_256(sid).unwrap();
-        ks.load_key_256(sid).unwrap();
-        assert_eq!(ks.access_count(sid).unwrap(), 2);
+        let sid = ok(ks.store_key_256(&[0u8; 32], KeyKind::Object));
+        ok(ks.load_key_256(sid));
+        ok(ks.load_key_256(sid));
+        assert_eq!(ok(ks.access_count(sid)), 2);
     }
 }

@@ -393,13 +393,15 @@ impl IoBuffer {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_ring_push_pop() {
-        let mut ring = RingBuffer::new(16).expect("ok");
-        assert_eq!(ring.push_slice(b"hello").expect("ok"), 5);
+        let mut ring = RingBuffer::new(16).test_expect("ok");
+        assert_eq!(ring.push_slice(b"hello").test_expect("ok"), 5);
         let mut out = [0u8; 5];
         assert_eq!(ring.pop_slice(&mut out), 5);
         assert_eq!(&out, b"hello");
@@ -407,26 +409,26 @@ mod tests {
 
     #[test]
     fn test_ring_overflow() {
-        let mut ring = RingBuffer::new(4).expect("ok");
-        assert_eq!(ring.push_slice(b"abcde").expect("ok"), 4); // tronqué
+        let mut ring = RingBuffer::new(4).test_expect("ok");
+        assert_eq!(ring.push_slice(b"abcde").test_expect("ok"), 4); // tronqué
         assert!(ring.is_full());
     }
 
     #[test]
     fn test_ring_wrap_around() {
-        let mut ring = RingBuffer::new(4).expect("ok");
-        ring.push_slice(b"ab").expect("ok");
+        let mut ring = RingBuffer::new(4).test_expect("ok");
+        ring.push_slice(b"ab").test_expect("ok");
         let mut out = [0u8; 2];
         ring.pop_slice(&mut out);
-        ring.push_slice(b"cd").expect("ok");
+        ring.push_slice(b"cd").test_expect("ok");
         ring.pop_slice(&mut out);
         assert_eq!(&out, b"cd");
     }
 
     #[test]
     fn test_ring_clear() {
-        let mut ring = RingBuffer::new(8).expect("ok");
-        ring.push_slice(b"data").expect("ok");
+        let mut ring = RingBuffer::new(8).test_expect("ok");
+        ring.push_slice(b"data").test_expect("ok");
         ring.clear();
         assert!(ring.is_empty());
     }
@@ -434,8 +436,8 @@ mod tests {
     #[test]
     fn test_buffered_reader_fill_read() {
         let mut src = SliceSource::new(b"buffered read test");
-        let mut reader = BufferedReader::new(64).expect("ok");
-        reader.fill(&mut src).expect("ok");
+        let mut reader = BufferedReader::new(64).test_expect("ok");
+        reader.fill(&mut src).test_expect("ok");
         assert_eq!(reader.available(), 18);
         let mut buf = [0u8; 18];
         assert_eq!(reader.read(&mut buf), 18);
@@ -445,8 +447,8 @@ mod tests {
     #[test]
     fn test_buffered_reader_partial() {
         let mut src = SliceSource::new(b"partial");
-        let mut reader = BufferedReader::new(4).expect("ok");
-        reader.fill(&mut src).expect("ok");
+        let mut reader = BufferedReader::new(4).test_expect("ok");
+        reader.fill(&mut src).test_expect("ok");
         let mut out = [0u8; 4];
         reader.read(&mut out);
         assert_eq!(&out, b"part");
@@ -455,9 +457,9 @@ mod tests {
     #[test]
     fn test_buffered_writer_flush() {
         let mut sink = VecSink::new();
-        let mut writer = BufferedWriter::new(32).expect("ok");
-        writer.write(b"write test").expect("ok");
-        let flushed = writer.flush(&mut sink).expect("ok");
+        let mut writer = BufferedWriter::new(32).test_expect("ok");
+        writer.write(b"write test").test_expect("ok");
+        let flushed = writer.flush(&mut sink).test_expect("ok");
         assert_eq!(flushed, 10);
         assert_eq!(sink.as_slice(), b"write test");
     }
@@ -465,37 +467,37 @@ mod tests {
     #[test]
     fn test_buffered_writer_multi_flush() {
         let mut sink = VecSink::new();
-        let mut writer = BufferedWriter::new(32).expect("ok");
-        writer.write(b"abc").expect("ok");
-        writer.flush(&mut sink).expect("ok");
-        writer.write(b"def").expect("ok");
-        writer.flush(&mut sink).expect("ok");
+        let mut writer = BufferedWriter::new(32).test_expect("ok");
+        writer.write(b"abc").test_expect("ok");
+        writer.flush(&mut sink).test_expect("ok");
+        writer.write(b"def").test_expect("ok");
+        writer.flush(&mut sink).test_expect("ok");
         assert_eq!(sink.as_slice(), b"abcdef");
         assert_eq!(writer.flush_calls(), 2);
     }
 
     #[test]
     fn test_io_buffer_write_read() {
-        let mut buf = IoBuffer::new(32).expect("ok");
-        buf.write_at(0, b"test data").expect("ok");
+        let mut buf = IoBuffer::new(32).test_expect("ok");
+        buf.write_at(0, b"test data").test_expect("ok");
         let mut out = [0u8; 9];
-        buf.read_at(0, &mut out).expect("ok");
+        buf.read_at(0, &mut out).test_expect("ok");
         assert_eq!(&out, b"test data");
     }
 
     #[test]
     fn test_io_buffer_offset_overflow() {
-        let buf = IoBuffer::new(4).expect("ok");
+        let buf = IoBuffer::new(4).test_expect("ok");
         let mut out = [0u8; 8];
         assert!(buf.read_at(0, &mut out).is_err());
     }
 
     #[test]
     fn test_io_buffer_fill() {
-        let mut buf = IoBuffer::new(8).expect("ok");
+        let mut buf = IoBuffer::new(8).test_expect("ok");
         buf.fill(0xAB);
         let mut out = [0u8; 8];
-        buf.read_at(0, &mut out).expect("ok");
+        buf.read_at(0, &mut out).test_expect("ok");
         let mut i = 0;
         while i < 8 {
             assert_eq!(out[i], 0xAB);
@@ -505,8 +507,8 @@ mod tests {
 
     #[test]
     fn test_io_buffer_equals() {
-        let mut a = IoBuffer::new(4).expect("ok");
-        let mut b = IoBuffer::new(4).expect("ok");
+        let mut a = IoBuffer::new(4).test_expect("ok");
+        let mut b = IoBuffer::new(4).test_expect("ok");
         a.fill(1);
         b.fill(1);
         assert!(a.equals(&b));
@@ -518,15 +520,15 @@ mod tests {
     fn test_slice_source_eof() {
         let mut src = SliceSource::new(b"hi");
         let mut buf = [0u8; 2];
-        src.read(&mut buf).expect("ok");
+        src.read(&mut buf).test_expect("ok");
         assert!(src.is_eof());
     }
 
     #[test]
     fn test_peek_does_not_consume() {
         let mut src = SliceSource::new(b"peek test");
-        let mut reader = BufferedReader::new(32).expect("ok");
-        reader.fill(&mut src).expect("ok");
+        let mut reader = BufferedReader::new(32).test_expect("ok");
+        reader.fill(&mut src).test_expect("ok");
         let mut out1 = [0u8; 4];
         let mut out2 = [0u8; 4];
         reader.peek(&mut out1);

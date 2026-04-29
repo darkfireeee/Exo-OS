@@ -265,6 +265,8 @@ impl SimilarityDetector {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -275,8 +277,8 @@ mod tests {
     #[test]
     fn test_identical_data() {
         let d = &[0xAAu8; 2048];
-        let s1 = BlobSignature::compute(blob(1), d).unwrap();
-        let s2 = BlobSignature::compute(blob(2), d).unwrap();
+        let s1 = BlobSignature::compute(blob(1), d).test_unwrap();
+        let s2 = BlobSignature::compute(blob(2), d).test_unwrap();
         assert_eq!(s1.similarity_pct(&s2), 100);
     }
 
@@ -284,8 +286,8 @@ mod tests {
     fn test_different_data() {
         let d1 = &[0x00u8; 2048];
         let d2 = &[0xFFu8; 2048];
-        let s1 = BlobSignature::compute(blob(1), d1).unwrap();
-        let s2 = BlobSignature::compute(blob(2), d2).unwrap();
+        let s1 = BlobSignature::compute(blob(1), d1).test_unwrap();
+        let s2 = BlobSignature::compute(blob(2), d2).test_unwrap();
         assert!(s1.similarity_pct(&s2) < 50);
     }
 
@@ -294,8 +296,8 @@ mod tests {
         let mut d1 = alloc::vec![0u8; 2048];
         let d2 = d1.clone();
         d1[0] = 0xFF; // légère différence
-        let s1 = BlobSignature::compute(blob(1), &d1).unwrap();
-        let s2 = BlobSignature::compute(blob(2), &d2).unwrap();
+        let s1 = BlobSignature::compute(blob(1), &d1).test_unwrap();
+        let s2 = BlobSignature::compute(blob(2), &d2).test_unwrap();
         let pct = s1.similarity_pct(&s2);
         assert!(pct > 50); // majoritairement similaires
     }
@@ -303,10 +305,10 @@ mod tests {
     #[test]
     fn test_find_similar_pairs() {
         let d = &[0xBBu8; 2048];
-        let s1 = BlobSignature::compute(blob(1), d).unwrap();
-        let s2 = BlobSignature::compute(blob(2), d).unwrap();
+        let s1 = BlobSignature::compute(blob(1), d).test_unwrap();
+        let s2 = BlobSignature::compute(blob(2), d).test_unwrap();
         let d = SimilarityDetector::default();
-        let r = d.find_similar_pairs(&[s1, s2]).unwrap();
+        let r = d.find_similar_pairs(&[s1, s2]).test_unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].similarity_pct, 100);
     }
@@ -319,13 +321,13 @@ mod tests {
     #[test]
     fn test_from_chunk_hashes() {
         let keys: Vec<[u8; 32]> = (0..16).map(|i| [i; 32]).collect();
-        let s = BlobSignature::from_chunk_hashes(blob(1), &keys).unwrap();
+        let s = BlobSignature::from_chunk_hashes(blob(1), &keys).test_unwrap();
         assert_eq!(s.minhash.len(), MIN_HASH_COUNT);
     }
 
     #[test]
     fn test_empty_data() {
-        let s = BlobSignature::compute(blob(1), &[]).unwrap();
+        let s = BlobSignature::compute(blob(1), &[]).test_unwrap();
         assert_eq!(s.minhash.len(), MIN_HASH_COUNT);
     }
 
@@ -334,11 +336,11 @@ mod tests {
         let d1 = &[0x00u8; 2048];
         let d2: Vec<u8> = (0..2048).map(|i| i as u8).collect();
         let d3 = &[0x00u8; 2048]; // identique à d1
-        let s1 = BlobSignature::compute(blob(1), d1).unwrap();
-        let s2 = BlobSignature::compute(blob(2), &d2).unwrap();
-        let s3 = BlobSignature::compute(blob(3), d3).unwrap();
-        let det = SimilarityDetector::new(0).unwrap(); // seuil à 0 pour tout capturer.
-        let ranked = det.find_and_rank(&[s1, s2, s3]).unwrap();
+        let s1 = BlobSignature::compute(blob(1), d1).test_unwrap();
+        let s2 = BlobSignature::compute(blob(2), &d2).test_unwrap();
+        let s3 = BlobSignature::compute(blob(3), d3).test_unwrap();
+        let det = SimilarityDetector::new(0).test_unwrap(); // seuil à 0 pour tout capturer.
+        let ranked = det.find_and_rank(&[s1, s2, s3]).test_unwrap();
         // La paire (1,3) doit être en premier (100%).
         if !ranked.is_empty() {
             assert!(ranked[0].similarity_pct >= ranked[ranked.len() - 1].similarity_pct);
@@ -426,34 +428,34 @@ mod tests_store {
 
     #[test]
     fn test_store_insert_query() {
-        let mut store = SignatureStore::new(16).unwrap();
+        let mut store = SignatureStore::new(16).test_unwrap();
         let d = &[0x55u8; 2048];
-        let ref_sig = BlobSignature::compute(blob(0), d).unwrap();
-        let sig2 = BlobSignature::compute(blob(1), d).unwrap();
-        store.insert(sig2).unwrap();
-        let det = SimilarityDetector::new(80).unwrap();
-        let res = store.query(&ref_sig, &det).unwrap();
+        let ref_sig = BlobSignature::compute(blob(0), d).test_unwrap();
+        let sig2 = BlobSignature::compute(blob(1), d).test_unwrap();
+        store.insert(sig2).test_unwrap();
+        let det = SimilarityDetector::new(80).test_unwrap();
+        let res = store.query(&ref_sig, &det).test_unwrap();
         assert_eq!(res.len(), 1);
     }
 
     #[test]
     fn test_store_capacity_limit() {
-        let mut store = SignatureStore::new(1).unwrap();
+        let mut store = SignatureStore::new(1).test_unwrap();
         let d = &[0u8; 512];
         store
-            .insert(BlobSignature::compute(blob(1), d).unwrap())
-            .unwrap();
-        let overflow = store.insert(BlobSignature::compute(blob(2), d).unwrap());
+            .insert(BlobSignature::compute(blob(1), d).test_unwrap())
+            .test_unwrap();
+        let overflow = store.insert(BlobSignature::compute(blob(2), d).test_unwrap());
         assert!(overflow.is_err());
     }
 
     #[test]
     fn test_store_clear() {
-        let mut store = SignatureStore::new(8).unwrap();
+        let mut store = SignatureStore::new(8).test_unwrap();
         let d = &[0xCCu8; 512];
         store
-            .insert(BlobSignature::compute(blob(1), d).unwrap())
-            .unwrap();
+            .insert(BlobSignature::compute(blob(1), d).test_unwrap())
+            .test_unwrap();
         store.clear();
         assert!(store.is_empty());
     }
@@ -461,8 +463,8 @@ mod tests_store {
     #[test]
     fn test_minhash_deterministic() {
         let d = &[0xABu8; 4096];
-        let h1 = compute_minhash(d, MIN_HASH_COUNT).unwrap();
-        let h2 = compute_minhash(d, MIN_HASH_COUNT).unwrap();
+        let h1 = compute_minhash(d, MIN_HASH_COUNT).test_unwrap();
+        let h2 = compute_minhash(d, MIN_HASH_COUNT).test_unwrap();
         assert_eq!(h1, h2);
     }
 

@@ -538,6 +538,8 @@ impl fmt::Display for PhysicalBlobTable {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -557,10 +559,10 @@ mod tests {
         assert_eq!(b.ref_count(), 1);
         b.inc_ref();
         assert_eq!(b.ref_count(), 2);
-        let new = b.dec_ref().unwrap();
+        let new = b.dec_ref().test_unwrap();
         assert_eq!(new, 1);
         assert!(!b.is_orphan());
-        let new2 = b.dec_ref().unwrap();
+        let new2 = b.dec_ref().test_unwrap();
         assert_eq!(new2, 0);
         assert!(b.is_orphan());
     }
@@ -577,7 +579,7 @@ mod tests {
     fn test_from_disk_roundtrip() {
         let b = make_blob(0x4000, b"roundtrip");
         let d = b.to_disk();
-        let b2 = PhysicalBlobInMemory::from_disk(&d).unwrap();
+        let b2 = PhysicalBlobInMemory::from_disk(&d).test_unwrap();
         assert_eq!(b.blob_id.0, b2.blob_id.0);
         assert_eq!(b.data_offset.0, b2.data_offset.0);
     }
@@ -587,8 +589,8 @@ mod tests {
         let mut table = PhysicalBlobTable::new();
         let b1 = make_blob(0, b"same content");
         let b2 = make_blob(0, b"same content"); // même BlobId
-        table.insert_or_dedup(b1).unwrap();
-        table.insert_or_dedup(b2).unwrap();
+        table.insert_or_dedup(b1).test_unwrap();
+        table.insert_or_dedup(b2).test_unwrap();
         // Ne doit avoir qu'une seule entrée.
         assert_eq!(table.len(), 1);
     }
@@ -596,7 +598,7 @@ mod tests {
     #[test]
     fn test_compression_type_roundtrip() {
         for v in [0u8, 1, 2, 3] {
-            let ct = CompressionType::from_u8(v).unwrap();
+            let ct = CompressionType::from_u8(v).test_unwrap();
             assert_eq!(ct.as_u8(), v);
         }
         assert!(CompressionType::from_u8(99).is_none());

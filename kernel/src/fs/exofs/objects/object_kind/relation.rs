@@ -569,6 +569,8 @@ impl fmt::Display for RelationStats {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -586,8 +588,8 @@ mod tests {
             EpochId(1),
         );
         let disk = rel.to_disk();
-        disk.verify().unwrap();
-        let back = RelationDescriptor::from_disk(&disk).unwrap();
+        disk.verify().test_unwrap();
+        let back = RelationDescriptor::from_disk(&disk).test_unwrap();
         assert!(matches!(back.kind, RelationKind::Parent));
     }
 
@@ -604,14 +606,14 @@ mod tests {
                 RelationDescriptor::new(a, b, RelationKind::Parent, EpochId(1)),
                 EpochId(1),
             )
-            .unwrap();
+            .test_unwrap();
         // b → c
         table
             .add(
                 RelationDescriptor::new(b, c, RelationKind::Parent, EpochId(1)),
                 EpochId(1),
             )
-            .unwrap();
+            .test_unwrap();
         // c → a serait un cycle
         assert!(table.would_create_cycle(&c, &a, RelationKind::Parent));
         assert!(!table.would_create_cycle(&c, &ObjectId([99; 32]), RelationKind::Parent));
@@ -628,7 +630,7 @@ mod tests {
                 RelationDescriptor::new(a, b, RelationKind::Alias, EpochId(1)),
                 EpochId(1),
             )
-            .unwrap();
+            .test_unwrap();
         let res = table.add(
             RelationDescriptor::new(a, b, RelationKind::Alias, EpochId(2)),
             EpochId(2),

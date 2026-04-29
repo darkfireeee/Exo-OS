@@ -299,6 +299,8 @@ pub static REFERENCE_TRACKER: ReferenceTracker = ReferenceTracker::new();
 // ==============================================================================
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -320,8 +322,8 @@ mod tests {
         let obj = oid(1);
         let b1 = bid(10);
         let b2 = bid(11);
-        t.add_obj_ref(obj, b1).unwrap();
-        t.add_obj_ref(obj, b2).unwrap();
+        t.add_obj_ref(obj, b1).test_unwrap();
+        t.add_obj_ref(obj, b2).test_unwrap();
         let refs = t.get_obj_refs(&obj);
         assert_eq!(refs.len(), 2);
     }
@@ -331,8 +333,8 @@ mod tests {
         let t = ReferenceTracker::new();
         let obj = oid(2);
         let b = bid(20);
-        t.add_obj_ref(obj, b).unwrap();
-        t.add_obj_ref(obj, b).unwrap(); // doublon
+        t.add_obj_ref(obj, b).test_unwrap();
+        t.add_obj_ref(obj, b).test_unwrap(); // doublon
         let refs = t.get_obj_refs(&obj);
         assert_eq!(refs.len(), 1);
     }
@@ -342,7 +344,7 @@ mod tests {
         let t = ReferenceTracker::new();
         let parent = bid(30);
         let child = bid(31);
-        t.add_blob_ref(parent, child).unwrap();
+        t.add_blob_ref(parent, child).test_unwrap();
         let subs = t.get_refs(&parent);
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0], child);
@@ -355,10 +357,10 @@ mod tests {
         let b1 = bid(40);
         let b2 = bid(41);
         let b3 = bid(42);
-        t.add_obj_ref(obj, b1).unwrap();
-        t.add_blob_ref(b1, b2).unwrap();
-        t.add_blob_ref(b2, b3).unwrap();
-        let all = t.all_reachable_blobs(&obj).unwrap();
+        t.add_obj_ref(obj, b1).test_unwrap();
+        t.add_blob_ref(b1, b2).test_unwrap();
+        t.add_blob_ref(b2, b3).test_unwrap();
+        let all = t.all_reachable_blobs(&obj).test_unwrap();
         assert_eq!(all.len(), 3);
         assert!(all.contains(&b1));
         assert!(all.contains(&b2));
@@ -372,10 +374,10 @@ mod tests {
         let obj = oid(4);
         let b1 = bid(50);
         let b2 = bid(51);
-        t.add_obj_ref(obj, b1).unwrap();
-        t.add_blob_ref(b1, b2).unwrap();
-        t.add_blob_ref(b2, b1).unwrap(); // cycle
-        let all = t.all_reachable_blobs(&obj).unwrap();
+        t.add_obj_ref(obj, b1).test_unwrap();
+        t.add_blob_ref(b1, b2).test_unwrap();
+        t.add_blob_ref(b2, b1).test_unwrap(); // cycle
+        let all = t.all_reachable_blobs(&obj).test_unwrap();
         // Doit terminer et contenir les 2 blobs.
         assert_eq!(all.len(), 2);
     }
@@ -385,7 +387,7 @@ mod tests {
         let t = ReferenceTracker::new();
         let obj = oid(5);
         let b = bid(60);
-        t.add_obj_ref(obj, b).unwrap();
+        t.add_obj_ref(obj, b).test_unwrap();
         t.remove_obj(&obj);
         assert!(t.get_obj_refs(&obj).is_empty());
     }
@@ -393,8 +395,8 @@ mod tests {
     #[test]
     fn test_stats() {
         let t = ReferenceTracker::new();
-        t.add_obj_ref(oid(6), bid(70)).unwrap();
-        t.add_obj_ref(oid(6), bid(71)).unwrap();
+        t.add_obj_ref(oid(6), bid(70)).test_unwrap();
+        t.add_obj_ref(oid(6), bid(71)).test_unwrap();
         let s = t.stats();
         assert_eq!(s.obj_blob_refs, 2);
     }

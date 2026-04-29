@@ -352,6 +352,8 @@ pub static SWEEPER: Sweeper = Sweeper::new();
 // ==============================================================================
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::BlobId;
@@ -371,8 +373,8 @@ mod tests {
     #[test]
     fn test_sweep_empty_workspace() {
         let sweeper = Sweeper::new();
-        let mut ws = TricolorWorkspace::new().unwrap();
-        let result = sweeper.run_sweep_phase(&mut ws).unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
+        let result = sweeper.run_sweep_phase(&mut ws).test_unwrap();
         assert_eq!(result.white_blobs_found, 0);
         assert!(result.phase_complete);
     }
@@ -380,27 +382,27 @@ mod tests {
     #[test]
     fn test_sweep_finds_white_blobs() {
         let sweeper = Sweeper::new();
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         // Inserer 3 noeuds blancs (non grises, non noircis).
         ws.insert_node(white_node(1));
         ws.insert_node(white_node(2));
         ws.insert_node(white_node(3));
         // Tous sont blancs.
-        let result = sweeper.run_sweep_phase(&mut ws).unwrap();
+        let result = sweeper.run_sweep_phase(&mut ws).test_unwrap();
         assert_eq!(result.white_blobs_found, 3);
     }
 
     #[test]
     fn test_sweep_black_nodes_not_sweeped() {
         let sweeper = Sweeper::new();
-        let mut ws = TricolorWorkspace::new().unwrap();
+        let mut ws = TricolorWorkspace::new().test_unwrap();
         // Noeud grey -> black (marque vivant)
         ws.insert_node(white_node(1));
-        ws.grey(bid(1)).unwrap();
+        ws.grey(bid(1)).test_unwrap();
         ws.blacken(&bid(1));
         // Noeud blanc
         ws.insert_node(white_node(2));
-        let result = sweeper.run_sweep_phase(&mut ws).unwrap();
+        let result = sweeper.run_sweep_phase(&mut ws).test_unwrap();
         // Seul le noeud blanc est trouve.
         assert_eq!(result.white_blobs_found, 1);
     }

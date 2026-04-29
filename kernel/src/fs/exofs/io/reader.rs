@@ -423,6 +423,8 @@ pub(crate) fn inline_blake3(data: &[u8]) -> [u8; 32] {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -435,15 +437,15 @@ mod tests {
     fn store_with(data: &'static [u8]) -> (VecStore, [u8; 32]) {
         let id = make_id(data[0]);
         let mut store = VecStore::new();
-        store.insert(id, data).expect("ok");
+        store.insert(id, data).test_expect("ok");
         (store, id)
     }
 
     #[test]
     fn test_read_fast_mode() {
         let (store, id) = store_with(b"fast mode test data");
-        let mut reader = BlobReader::new(ReadConfig::fast()).expect("ok");
-        let (data, result) = reader.read(&store, &id).expect("ok");
+        let mut reader = BlobReader::new(ReadConfig::fast()).test_expect("ok");
+        let (data, result) = reader.read(&store, &id).test_expect("ok");
         assert_eq!(data, b"fast mode test data");
         assert!(result.verify_ok);
     }
@@ -460,9 +462,9 @@ mod tests {
     #[test]
     fn test_stats_track_reads() {
         let (store, id) = store_with(b"tracking test");
-        let mut reader = BlobReader::new(ReadConfig::fast()).expect("ok");
-        reader.read(&store, &id).expect("ok");
-        reader.read(&store, &id).expect("ok");
+        let mut reader = BlobReader::new(ReadConfig::fast()).test_expect("ok");
+        reader.read(&store, &id).test_expect("ok");
+        reader.read(&store, &id).test_expect("ok");
         assert_eq!(reader.stats().blobs_read, 2);
         assert_eq!(reader.stats().bytes_read, 26);
     }
@@ -471,8 +473,8 @@ mod tests {
     fn test_partial_read() {
         let (store, id) = store_with(b"partial read test");
         let cfg = ReadConfig::partial(8, 4);
-        let mut reader = BlobReader::new(cfg).expect("ok");
-        let (data, _) = reader.read(&store, &id).expect("ok");
+        let mut reader = BlobReader::new(cfg).test_expect("ok");
+        let (data, _) = reader.read(&store, &id).test_expect("ok");
         assert_eq!(data, b"read");
         assert_eq!(reader.stats().partial_reads, 1);
     }
@@ -483,13 +485,13 @@ mod tests {
         let ids: Vec<[u8; 32]> = (0u8..4)
             .map(|i| {
                 let id = make_id(i);
-                store.insert(id, &[i, i + 1, i + 2]).expect("ok");
+                store.insert(id, &[i, i + 1, i + 2]).test_expect("ok");
                 id
             })
             .collect();
-        let mut reader = BlobReader::new(ReadConfig::fast()).expect("ok");
+        let mut reader = BlobReader::new(ReadConfig::fast()).test_expect("ok");
         let mut out = Vec::new();
-        let count = reader.read_batch(&store, &ids, &mut out).expect("ok");
+        let count = reader.read_batch(&store, &ids, &mut out).test_expect("ok");
         assert_eq!(count, 4);
         assert_eq!(out.len(), 4);
     }
@@ -500,17 +502,17 @@ mod tests {
         let mut ids = Vec::new();
         for i in 0u8..5 {
             let id = make_id(i);
-            store.insert(id, &[i]).expect("ok");
+            store.insert(id, &[i]).test_expect("ok");
             ids.push(id);
         }
         let cfg = ReadConfig {
             max_blobs: 3,
             ..ReadConfig::fast()
         };
-        let mut reader = BlobReader::new(cfg).expect("ok");
+        let mut reader = BlobReader::new(cfg).test_expect("ok");
         // Après 3 lectures, la 4e doit échouer
         for i in 0..3 {
-            reader.read(&store, &ids[i]).expect("ok");
+            reader.read(&store, &ids[i]).test_expect("ok");
         }
         assert!(reader.read(&store, &ids[3]).is_err());
     }
@@ -520,7 +522,7 @@ mod tests {
         let data = b"verify only";
         let id = inline_blake3(data);
         let mut store = VecStore::new();
-        store.insert(id, data).expect("ok");
+        store.insert(id, data).test_expect("ok");
         let mut reader = BlobReader::default();
         // Avec faux id, la vérif doit échouer
         let wrong_id = make_id(0x55);
@@ -530,8 +532,8 @@ mod tests {
     #[test]
     fn test_reset_stats() {
         let (store, id) = store_with(b"reset test");
-        let mut reader = BlobReader::new(ReadConfig::fast()).expect("ok");
-        reader.read(&store, &id).expect("ok");
+        let mut reader = BlobReader::new(ReadConfig::fast()).test_expect("ok");
+        reader.read(&store, &id).test_expect("ok");
         reader.reset_stats();
         assert_eq!(reader.stats().blobs_read, 0);
     }
@@ -553,8 +555,8 @@ mod tests {
     #[test]
     fn test_stats_is_clean() {
         let (store, id) = store_with(b"clean test");
-        let mut reader = BlobReader::new(ReadConfig::fast()).expect("ok");
-        reader.read(&store, &id).expect("ok");
+        let mut reader = BlobReader::new(ReadConfig::fast()).test_expect("ok");
+        reader.read(&store, &id).test_expect("ok");
         assert!(reader.stats().is_clean());
     }
 
@@ -566,7 +568,7 @@ mod tests {
         let store = SliceStore::new(&entries);
         assert!(store.contains(&id));
         assert_eq!(store.blob_size(&id), Some(data.len() as u64));
-        let result = store.read_blob(&id).expect("ok");
+        let result = store.read_blob(&id).test_expect("ok");
         assert_eq!(result, data.as_ref());
     }
 }

@@ -666,6 +666,8 @@ pub fn crc32_compute(data: &[u8]) -> u32 {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -681,9 +683,9 @@ mod tests {
     #[test]
     fn test_to_disk_from_disk_roundtrip() {
         let mut m = ObjectMeta::new_file(500, 500, 9999);
-        m.set_mime(b"text/plain").unwrap();
+        m.set_mime(b"text/plain").test_unwrap();
         let d = m.to_disk();
-        let m2 = ObjectMeta::from_disk(&d).expect("from_disk should succeed");
+        let m2 = ObjectMeta::from_disk(&d).test_expect("from_disk should succeed");
         assert_eq!(m2.uid, 500);
         assert_eq!(m2.mime_as_str(), "text/plain");
     }
@@ -691,9 +693,9 @@ mod tests {
     #[test]
     fn test_xattr_set_get_remove() {
         let mut m = ObjectMeta::new_file(0, 0, 1);
-        m.xattr_set(b"user.tag", b"hello", 2).unwrap();
+        m.xattr_set(b"user.tag", b"hello", 2).test_unwrap();
         assert_eq!(m.xattr_get(b"user.tag"), Some(b"hello".as_slice()));
-        m.xattr_remove(b"user.tag", 3).unwrap();
+        m.xattr_remove(b"user.tag", 3).test_unwrap();
         assert_eq!(m.xattr_get(b"user.tag"), None);
     }
 
@@ -726,7 +728,7 @@ mod tests {
         let mut m = ObjectMeta::new_file(0, 0, 0);
         for i in 0..XATTR_MAX_INLINE {
             let key = [b'a' + i as u8; 4];
-            m.xattr_set(&key, b"v", 0).unwrap();
+            m.xattr_set(&key, b"v", 0).test_unwrap();
         }
         assert!(m.xattr_set(b"overflow", b"v", 0).is_err());
     }

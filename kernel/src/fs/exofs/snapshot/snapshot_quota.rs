@@ -340,6 +340,8 @@ impl SnapshotQuotaTable {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::reset_for_test;
@@ -361,7 +363,7 @@ mod tests {
             blob_catalog_size: 0,
             name: make_snapshot_name(b"q-test"),
         })
-        .unwrap();
+        .test_unwrap();
     }
 
     #[test]
@@ -370,8 +372,8 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 1);
         let qt = SnapshotQuotaTable::new_const();
-        qt.set(SnapshotId(1), 1024, 10).unwrap();
-        let entry = qt.get(SnapshotId(1)).unwrap();
+        qt.set(SnapshotId(1), 1024, 10).test_unwrap();
+        let entry = qt.get(SnapshotId(1)).test_unwrap();
         assert_eq!(entry.max_bytes, 1024);
         assert_eq!(entry.max_blobs, 10);
     }
@@ -382,7 +384,7 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 2);
         let qt = SnapshotQuotaTable::new_const();
-        qt.set(SnapshotId(2), 4096, 5).unwrap();
+        qt.set(SnapshotId(2), 4096, 5).test_unwrap();
         assert!(qt.check_allocation(SnapshotId(2), 1000, 2).is_ok());
     }
 
@@ -392,7 +394,7 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 3);
         let qt = SnapshotQuotaTable::new_const();
-        qt.set(SnapshotId(3), 100, 0).unwrap();
+        qt.set(SnapshotId(3), 100, 0).test_unwrap();
         let err = qt.check_allocation(SnapshotId(3), 200, 0);
         assert!(matches!(err, Err(ExofsError::InvalidSize)));
     }
@@ -407,7 +409,7 @@ mod tests {
             max_total_bytes: 500,
             ..Default::default()
         });
-        qt.update_usage(SnapshotId(4), 400, 0).unwrap();
+        qt.update_usage(SnapshotId(4), 400, 0).test_unwrap();
         let err = qt.check_allocation(SnapshotId(4), 200, 0);
         assert!(matches!(err, Err(ExofsError::InvalidSize)));
     }
@@ -418,10 +420,10 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 5);
         let qt = SnapshotQuotaTable::new_const();
-        qt.set(SnapshotId(5), 0, 0).unwrap();
-        qt.update_usage(SnapshotId(5), 100, 5).unwrap();
-        qt.update_usage(SnapshotId(5), -200, -10).unwrap(); // ne déborde pas
-        let e = qt.get(SnapshotId(5)).unwrap();
+        qt.set(SnapshotId(5), 0, 0).test_unwrap();
+        qt.update_usage(SnapshotId(5), 100, 5).test_unwrap();
+        qt.update_usage(SnapshotId(5), -200, -10).test_unwrap(); // ne déborde pas
+        let e = qt.get(SnapshotId(5)).test_unwrap();
         assert_eq!(e.used_bytes, 0);
     }
 
@@ -431,9 +433,9 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 6);
         let qt = SnapshotQuotaTable::new_const();
-        qt.set(SnapshotId(6), 50, 0).unwrap();
-        qt.update_usage(SnapshotId(6), 100, 0).unwrap();
-        let exceeded = qt.exceeded_snapshots().unwrap();
+        qt.set(SnapshotId(6), 50, 0).test_unwrap();
+        qt.update_usage(SnapshotId(6), 100, 0).test_unwrap();
+        let exceeded = qt.exceeded_snapshots().test_unwrap();
         assert!(exceeded.iter().any(|id| id.0 == 6));
     }
 }

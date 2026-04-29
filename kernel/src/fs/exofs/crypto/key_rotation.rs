@@ -254,6 +254,8 @@ impl KeyRotation {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::key_storage::KeyStorage;
     use super::*;
@@ -265,12 +267,12 @@ mod tests {
     #[test]
     fn test_rotate_one_ok() {
         let ks = ks();
-        let old = ks.store_key_256(&[1u8; 32], KeyKind::Volume).unwrap();
+        let old = ks.store_key_256(&[1u8; 32], KeyKind::Volume).test_unwrap();
         let mut r = KeyRotation::new(8);
-        r.register(old, RotationSchedule::OnDemand).unwrap();
+        r.register(old, RotationSchedule::OnDemand).test_unwrap();
         let res = r
             .rotate_one(old, KeyKind::Volume, RotationReason::Manual, &ks)
-            .unwrap();
+            .test_unwrap();
         assert_ne!(res.old_slot, res.new_slot);
         assert_eq!(res.kind, KeyKind::Volume);
     }
@@ -278,40 +280,40 @@ mod tests {
     #[test]
     fn test_old_slot_revoked_after_rotation() {
         let ks = ks();
-        let old = ks.store_key_256(&[2u8; 32], KeyKind::Master).unwrap();
+        let old = ks.store_key_256(&[2u8; 32], KeyKind::Master).test_unwrap();
         let mut r = KeyRotation::new(8);
-        r.register(old, RotationSchedule::OnDemand).unwrap();
+        r.register(old, RotationSchedule::OnDemand).test_unwrap();
         r.rotate_one(old, KeyKind::Master, RotationReason::Scheduled, &ks)
-            .unwrap();
+            .test_unwrap();
         assert!(ks.load_key_256(old).is_err());
     }
 
     #[test]
     fn test_rotate_batch_count() {
         let ks = ks();
-        let s1 = ks.store_key_256(&[1u8; 32], KeyKind::Object).unwrap();
-        let s2 = ks.store_key_256(&[2u8; 32], KeyKind::Object).unwrap();
+        let s1 = ks.store_key_256(&[1u8; 32], KeyKind::Object).test_unwrap();
+        let s2 = ks.store_key_256(&[2u8; 32], KeyKind::Object).test_unwrap();
         let mut r = KeyRotation::new(16);
-        r.register(s1, RotationSchedule::OnDemand).unwrap();
-        r.register(s2, RotationSchedule::OnDemand).unwrap();
+        r.register(s1, RotationSchedule::OnDemand).test_unwrap();
+        r.register(s2, RotationSchedule::OnDemand).test_unwrap();
         let results = r
             .rotate_batch(
                 &[(s1, KeyKind::Object), (s2, KeyKind::Object)],
                 RotationReason::SecurityAlert,
                 &ks,
             )
-            .unwrap();
+            .test_unwrap();
         assert_eq!(results.len(), 2);
     }
 
     #[test]
     fn test_rotation_count_increments() {
         let ks = ks();
-        let s = ks.store_key_256(&[0u8; 32], KeyKind::Derived).unwrap();
+        let s = ks.store_key_256(&[0u8; 32], KeyKind::Derived).test_unwrap();
         let mut r = KeyRotation::new(8);
-        r.register(s, RotationSchedule::OnDemand).unwrap();
+        r.register(s, RotationSchedule::OnDemand).test_unwrap();
         r.rotate_one(s, KeyKind::Derived, RotationReason::Manual, &ks)
-            .unwrap();
+            .test_unwrap();
         assert_eq!(r.rotation_count(s), 1);
     }
 
@@ -320,35 +322,35 @@ mod tests {
         let ks = ks();
         let mut r = KeyRotation::new(4);
         for i in 0u8..6 {
-            let s = ks.store_key_256(&[i; 32], KeyKind::Session).unwrap();
-            r.register(s, RotationSchedule::OnDemand).unwrap();
+            let s = ks.store_key_256(&[i; 32], KeyKind::Session).test_unwrap();
+            r.register(s, RotationSchedule::OnDemand).test_unwrap();
             r.rotate_one(s, KeyKind::Session, RotationReason::Scheduled, &ks)
-                .unwrap();
+                .test_unwrap();
         }
-        let hist = r.recent_history(3).unwrap();
+        let hist = r.recent_history(3).test_unwrap();
         assert_eq!(hist.len(), 3);
     }
 
     #[test]
     fn test_due_for_rotation_after_uses() {
         let ks = ks();
-        let s = ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
+        let s = ks.store_key_256(&[0u8; 32], KeyKind::Volume).test_unwrap();
         // Simuler 5 accès.
         for _ in 0..5 {
-            ks.load_key_256(s).unwrap();
+            ks.load_key_256(s).test_unwrap();
         }
         let mut r = KeyRotation::new(8);
-        r.register(s, RotationSchedule::AfterNUses(5)).unwrap();
-        let due = r.due_for_rotation(&ks).unwrap();
+        r.register(s, RotationSchedule::AfterNUses(5)).test_unwrap();
+        let due = r.due_for_rotation(&ks).test_unwrap();
         assert!(due.contains(&s));
     }
 
     #[test]
     fn test_unregister_removes() {
         let ks = ks();
-        let s = ks.store_key_256(&[0u8; 32], KeyKind::Master).unwrap();
+        let s = ks.store_key_256(&[0u8; 32], KeyKind::Master).test_unwrap();
         let mut r = KeyRotation::new(8);
-        r.register(s, RotationSchedule::OnDemand).unwrap();
+        r.register(s, RotationSchedule::OnDemand).test_unwrap();
         assert_eq!(r.registered_count(), 1);
         r.unregister(s);
         assert_eq!(r.registered_count(), 0);
@@ -466,21 +468,21 @@ mod scheduler_tests {
     fn test_security_trigger_normal_no_rotation() {
         let ks = KeyStorage::new_const();
         let mut t = SecurityRotationTrigger::new(8);
-        let r = t.force_rotate_all(&ks, &[]).unwrap();
+        let r = t.force_rotate_all(&ks, &[]).test_unwrap();
         assert!(r.is_empty());
     }
 
     #[test]
     fn test_security_trigger_elevated_rotation() {
         let ks = KeyStorage::new_const();
-        let s = ks.store_key_256(&[0u8; 32], KeyKind::Volume).unwrap();
+        let s = ks.store_key_256(&[0u8; 32], KeyKind::Volume).test_unwrap();
         let mut t = SecurityRotationTrigger::new(8);
         t.manager_mut()
             .register(s, RotationSchedule::OnDemand)
-            .unwrap();
+            .test_unwrap();
         t.elevate(SecurityLevel::Elevated);
         assert!(t.rotation_required());
-        let r = t.force_rotate_all(&ks, &[(s, KeyKind::Volume)]).unwrap();
+        let r = t.force_rotate_all(&ks, &[(s, KeyKind::Volume)]).test_unwrap();
         assert_eq!(r.len(), 1);
     }
 

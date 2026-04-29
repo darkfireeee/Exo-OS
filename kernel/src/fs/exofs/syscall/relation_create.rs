@@ -370,6 +370,8 @@ pub fn relation_count(source: &[u8; 32]) -> usize {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -381,7 +383,7 @@ mod tests {
     fn test_create_basic() {
         let s = id(b"/rel/src1");
         let t = id(b"/rel/tgt1");
-        let r = create_relation(&s, &t, rel_kind::HARDLINK, 0, b"").unwrap();
+        let r = create_relation(&s, &t, rel_kind::HARDLINK, 0, b"").test_unwrap();
         assert_eq!(r.kind, rel_kind::HARDLINK);
     }
 
@@ -389,7 +391,7 @@ mod tests {
     fn test_create_unique_conflict() {
         let s = id(b"/rel/uniq/s");
         let t = id(b"/rel/uniq/t");
-        create_relation(&s, &t, rel_kind::CHILD, rel_flags::UNIQUE, b"").unwrap();
+        create_relation(&s, &t, rel_kind::CHILD, rel_flags::UNIQUE, b"").test_unwrap();
         assert!(create_relation(&s, &t, rel_kind::CHILD, rel_flags::UNIQUE, b"").is_err());
     }
 
@@ -398,8 +400,8 @@ mod tests {
         let s = id(b"/rel/count");
         let t1 = id(b"/rel/t1");
         let t2 = id(b"/rel/t2");
-        create_relation(&s, &t1, rel_kind::CHILD, 0, b"").unwrap();
-        create_relation(&s, &t2, rel_kind::CHILD, 0, b"").unwrap();
+        create_relation(&s, &t1, rel_kind::CHILD, 0, b"").test_unwrap();
+        create_relation(&s, &t2, rel_kind::CHILD, 0, b"").test_unwrap();
         assert_eq!(relation_count(&s), 2);
     }
 
@@ -407,7 +409,7 @@ mod tests {
     fn test_bidirectional() {
         let s = id(b"/rel/bi/s");
         let t = id(b"/rel/bi/t");
-        create_relation(&s, &t, rel_kind::PARENT, rel_flags::BIDIRECTIONAL, b"").unwrap();
+        create_relation(&s, &t, rel_kind::PARENT, rel_flags::BIDIRECTIONAL, b"").test_unwrap();
         assert_eq!(relation_count(&t), 1);
     }
 
@@ -422,7 +424,7 @@ mod tests {
     fn test_relation_with_name() {
         let s = id(b"/rel/name/s");
         let t = id(b"/rel/name/t");
-        let r = create_relation(&s, &t, rel_kind::REFERENCE, 0, b"mylink").unwrap();
+        let r = create_relation(&s, &t, rel_kind::REFERENCE, 0, b"mylink").test_unwrap();
         assert_eq!(r.name_bytes(), b"mylink");
     }
 
@@ -440,7 +442,7 @@ mod tests {
     fn test_relation_matches() {
         let s = id(b"/rel/match/s");
         let t = id(b"/rel/match/t");
-        let r = Relation::new(&s, &t, 0, 0, b"").unwrap();
+        let r = Relation::new(&s, &t, 0, 0, b"").test_unwrap();
         assert!(r.matches(&s, &t));
         assert!(!r.matches(&t, &s));
     }
@@ -527,9 +529,9 @@ mod advanced_tests {
     fn test_delete_relation() {
         let s = id(b"/rdel/s");
         let t = id(b"/rdel/t");
-        create_relation(&s, &t, rel_kind::CHILD, 0, b"").unwrap();
+        create_relation(&s, &t, rel_kind::CHILD, 0, b"").test_unwrap();
         assert_eq!(relation_count(&s), 1);
-        delete_relation(&s, &t, rel_kind::CHILD).unwrap();
+        delete_relation(&s, &t, rel_kind::CHILD).test_unwrap();
         assert_eq!(relation_count(&s), 0);
     }
 
@@ -537,7 +539,7 @@ mod advanced_tests {
     fn test_relation_exists_true() {
         let s = id(b"/rex/s");
         let t = id(b"/rex/t");
-        create_relation(&s, &t, rel_kind::PARENT, 0, b"").unwrap();
+        create_relation(&s, &t, rel_kind::PARENT, 0, b"").test_unwrap();
         assert!(relation_exists(&s, &t, rel_kind::PARENT));
     }
 
@@ -552,8 +554,8 @@ mod advanced_tests {
     fn test_clear_relations() {
         let s = id(b"/rclear/s");
         let t = id(b"/rclear/t");
-        create_relation(&s, &t, rel_kind::CHILD, 0, b"").unwrap();
-        clear_relations(&s).unwrap();
+        create_relation(&s, &t, rel_kind::CHILD, 0, b"").test_unwrap();
+        clear_relations(&s).test_unwrap();
         assert_eq!(relation_count(&s), 0);
     }
 
@@ -561,14 +563,14 @@ mod advanced_tests {
     fn test_encode_relations() {
         let s = id(b"/renc/s");
         let t = id(b"/renc/t");
-        let r = create_relation(&s, &t, rel_kind::CUSTOM, 0, b"foo").unwrap();
-        let buf = encode_relations(&[r]).unwrap();
+        let r = create_relation(&s, &t, rel_kind::CUSTOM, 0, b"foo").test_unwrap();
+        let buf = encode_relations(&[r]).test_unwrap();
         assert_eq!(buf.len(), REL_ENTRY);
     }
 
     #[test]
     fn test_encode_empty() {
-        assert!(encode_relations(&[]).unwrap().is_empty());
+        assert!(encode_relations(&[]).test_unwrap().is_empty());
     }
 
     #[test]

@@ -412,12 +412,14 @@ pub fn join_components(comps: &[PathComponent]) -> ExofsResult<alloc::vec::Vec<u
 
 // -- Tests supplémentaires ────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod extra_tests {
     use super::*;
 
     #[test]
     fn test_verify_ok() {
-        PathNormalizer::verify(b"/home/user/file").unwrap();
+        PathNormalizer::verify(b"/home/user/file").test_unwrap();
     }
     #[test]
     fn test_verify_double_slash() {
@@ -425,7 +427,7 @@ mod extra_tests {
     }
     #[test]
     fn test_split_canonical() {
-        let comps = split_canonical(b"/a/b/c").unwrap();
+        let comps = split_canonical(b"/a/b/c").test_unwrap();
         assert_eq!(comps.len(), 3);
         assert_eq!(comps[0].as_bytes(), b"a");
         assert_eq!(comps[2].as_bytes(), b"c");
@@ -434,20 +436,20 @@ mod extra_tests {
     fn test_join_components() {
         use super::super::path_component::validate_component;
         let comps = [
-            validate_component(b"home").unwrap(),
-            validate_component(b"user").unwrap(),
+            validate_component(b"home").test_unwrap(),
+            validate_component(b"user").test_unwrap(),
         ];
-        let path = join_components(&comps).unwrap();
+        let path = join_components(&comps).test_unwrap();
         assert_eq!(path, b"/home/user");
     }
     #[test]
     fn test_can_verify_and_return() {
-        let p = PathNormalizer::verify_and_return(b"/proc/1/status").unwrap();
+        let p = PathNormalizer::verify_and_return(b"/proc/1/status").test_unwrap();
         assert_eq!(p.as_bytes(), b"/proc/1/status");
     }
     #[test]
     fn test_canonicalize_multi_dotdot() {
-        let r = canonicalize_to_vec(b"/a/b/c/../../d").unwrap();
+        let r = canonicalize_to_vec(b"/a/b/c/../../d").test_unwrap();
         assert_eq!(r, b"/a/d");
     }
 }
@@ -458,7 +460,7 @@ mod tests {
     use super::*;
 
     fn canon(input: &[u8]) -> Vec<u8> {
-        canonicalize_to_vec(input).unwrap()
+        canonicalize_to_vec(input).test_unwrap()
     }
 
     #[test]
@@ -500,17 +502,17 @@ mod tests {
     }
     #[test]
     fn test_canonical_path_basename() {
-        let c = CanonicalPath::new(b"/home/user/file.txt").unwrap();
-        assert_eq!(c.basename().unwrap(), b"file.txt");
+        let c = CanonicalPath::new(b"/home/user/file.txt").test_unwrap();
+        assert_eq!(c.basename().test_unwrap(), b"file.txt");
     }
     #[test]
     fn test_canonical_path_dirname() {
-        let c = CanonicalPath::new(b"/home/user/file.txt").unwrap();
+        let c = CanonicalPath::new(b"/home/user/file.txt").test_unwrap();
         assert_eq!(c.dirname(), b"/home/user");
     }
     #[test]
     fn test_is_prefix_of() {
-        let c = CanonicalPath::new(b"/home").unwrap();
+        let c = CanonicalPath::new(b"/home").test_unwrap();
         assert!(c.is_prefix_of(b"/home/user"));
         assert!(!c.is_prefix_of(b"/homeother"));
     }

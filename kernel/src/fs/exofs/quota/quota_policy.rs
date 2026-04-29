@@ -397,6 +397,8 @@ impl PolicyPresets {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -561,7 +563,7 @@ mod tests {
             hard_inodes: u64::MAX,
             grace_ticks: 0,
         };
-        let p2 = p.with_limits(lim).expect("ok");
+        let p2 = p.with_limits(lim).test_expect("ok");
         assert_eq!(p2.limits.hard_bytes, 200);
     }
 

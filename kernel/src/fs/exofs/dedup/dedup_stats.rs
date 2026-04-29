@@ -267,6 +267,8 @@ pub static DEDUP_STATS: DedupStats = DedupStats::new_const();
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -319,21 +321,21 @@ mod tests {
 
     #[test]
     fn test_history_push_pop() {
-        let mut h = DedupStatsHistory::new(4).unwrap();
+        let mut h = DedupStatsHistory::new(4).test_unwrap();
         let s = DedupStats::new_const();
-        h.push(s.snapshot()).unwrap();
-        h.push(s.snapshot()).unwrap();
+        h.push(s.snapshot()).test_unwrap();
+        h.push(s.snapshot()).test_unwrap();
         assert_eq!(h.len(), 2);
         assert!(h.latest().is_some());
     }
 
     #[test]
     fn test_history_circular() {
-        let mut h = DedupStatsHistory::new(2).unwrap();
+        let mut h = DedupStatsHistory::new(2).test_unwrap();
         let s = DedupStats::new_const();
-        h.push(s.snapshot()).unwrap();
-        h.push(s.snapshot()).unwrap();
-        h.push(s.snapshot()).unwrap(); // remplace le premier
+        h.push(s.snapshot()).test_unwrap();
+        h.push(s.snapshot()).test_unwrap();
+        h.push(s.snapshot()).test_unwrap(); // remplace le premier
         assert_eq!(h.len(), 2);
     }
 

@@ -481,6 +481,8 @@ pub fn nodes_at_depth(start: &BlobId, depth: u32) -> ExofsResult<Vec<BlobId>> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -506,7 +508,7 @@ mod tests {
     #[test]
     fn test_bfs_isolated_node() {
         let w = RelationWalker::new(10);
-        let res = w.bfs(&b(99)).unwrap();
+        let res = w.bfs(&b(99)).test_unwrap();
         // Pas d'arcs depuis ce nœud → seul lui est visité.
         assert_eq!(res.n_visited(), 1);
         assert_eq!(res.depth_reached, 0);
@@ -516,23 +518,23 @@ mod tests {
     #[test]
     fn test_dfs_isolated_node() {
         let w = RelationWalker::new(5);
-        let res = w.dfs(&b(70)).unwrap();
+        let res = w.dfs(&b(70)).test_unwrap();
         assert_eq!(res.n_visited(), 1);
     }
 
     #[test]
     fn test_find_path_not_reachable() {
         let w = RelationWalker::new(5);
-        let res = w.find_path(&b(50), &b(51)).unwrap();
+        let res = w.find_path(&b(50), &b(51)).test_unwrap();
         assert!(res.is_none());
     }
 
     #[test]
     fn test_find_path_self() {
         let w = RelationWalker::new(5);
-        let res = w.find_path(&b(30), &b(30)).unwrap();
+        let res = w.find_path(&b(30), &b(30)).test_unwrap();
         assert!(res.is_some());
-        let path = res.unwrap();
+        let path = res.test_unwrap();
         assert_eq!(path.len(), 1);
         assert_eq!(path[0].as_bytes(), b(30).as_bytes());
     }
@@ -540,13 +542,13 @@ mod tests {
     #[test]
     fn test_is_reachable_self() {
         let w = RelationWalker::new(5);
-        assert!(w.is_reachable(&b(80), &b(80)).unwrap());
+        assert!(w.is_reachable(&b(80), &b(80)).test_unwrap());
     }
 
     #[test]
     fn test_is_reachable_no_arc() {
         let w = RelationWalker::new(5);
-        assert!(!w.is_reachable(&b(10), &b(11)).unwrap());
+        assert!(!w.is_reachable(&b(10), &b(11)).test_unwrap());
     }
 
     #[test]
@@ -556,7 +558,7 @@ mod tests {
             ..Default::default()
         };
         let w = RelationWalker::with_options(opts);
-        let res = w.bfs(&b(40)).unwrap();
+        let res = w.bfs(&b(40)).test_unwrap();
         assert!(res.truncated);
         assert_eq!(res.n_visited(), 1);
     }
@@ -564,7 +566,7 @@ mod tests {
     #[test]
     fn test_step_walker_visits_start() {
         let opts = WalkOptions::default();
-        let mut sw = RelationStepWalker::new(b(20), opts).unwrap();
+        let mut sw = RelationStepWalker::new(b(20), opts).test_unwrap();
         match sw.step() {
             StepResult::Visited(blob) => {
                 assert_eq!(blob.as_bytes(), b(20).as_bytes());
@@ -580,20 +582,20 @@ mod tests {
     #[test]
     fn test_step_walker_is_done() {
         let opts = WalkOptions::default();
-        let sw = RelationStepWalker::new(b(10), opts).unwrap();
+        let sw = RelationStepWalker::new(b(10), opts).test_unwrap();
         // La queue contient le nœud de départ donc !is_done().
         assert!(!sw.is_done());
     }
 
     #[test]
     fn test_hop_distance_same() {
-        let d = hop_distance(&b(30), &b(30)).unwrap();
+        let d = hop_distance(&b(30), &b(30)).test_unwrap();
         assert_eq!(d, Some(0));
     }
 
     #[test]
     fn test_hop_distance_unreachable() {
-        let d = hop_distance(&b(1), &b(200)).unwrap();
+        let d = hop_distance(&b(1), &b(200)).test_unwrap();
         assert!(d.is_none());
     }
 
@@ -613,14 +615,14 @@ mod tests {
     #[test]
     fn test_step_walker_finish() {
         let opts = WalkOptions::default();
-        let sw = RelationStepWalker::new(b(55), opts).unwrap();
+        let sw = RelationStepWalker::new(b(55), opts).test_unwrap();
         let result = sw.finish();
         assert_eq!(result.n_visited(), 1);
     }
 
     #[test]
     fn test_nodes_at_depth_zero() {
-        let res = nodes_at_depth(&b(60), 0).unwrap();
+        let res = nodes_at_depth(&b(60), 0).test_unwrap();
         // À profondeur 0, on retourne le nœud de départ.
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].as_bytes(), b(60).as_bytes());
@@ -628,7 +630,7 @@ mod tests {
 
     #[test]
     fn test_reachable_from_all_isolated() {
-        let res = reachable_from_all(&b(77)).unwrap();
+        let res = reachable_from_all(&b(77)).test_unwrap();
         assert_eq!(res.len(), 1);
     }
 }

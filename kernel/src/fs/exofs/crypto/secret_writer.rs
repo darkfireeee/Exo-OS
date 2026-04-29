@@ -320,6 +320,8 @@ pub fn is_valid_payload_size(size: usize) -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::secret_reader::SecretReader;
     use super::*;
@@ -336,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_encrypt_produces_payload() {
-        let p = writer().encrypt(b"some data").unwrap();
+        let p = writer().encrypt(b"some data").test_unwrap();
         assert!(p.len() > SECRET_HEADER_SIZE);
     }
 
@@ -351,28 +353,28 @@ mod tests {
     #[test]
     fn test_payload_starts_with_magic() {
         use super::super::secret_reader::SECRET_MAGIC;
-        let p = writer().encrypt(b"magic check").unwrap();
+        let p = writer().encrypt(b"magic check").test_unwrap();
         assert_eq!(&p[0..4], &SECRET_MAGIC);
     }
 
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
         let data = b"roundtrip data";
-        let payload = writer().encrypt(data).unwrap();
-        let plain = reader().decrypt(&payload).unwrap();
+        let payload = writer().encrypt(data).test_unwrap();
+        let plain = reader().decrypt(&payload).test_unwrap();
         assert_eq!(plain, data);
     }
 
     #[test]
     fn test_encrypt_verbose_fields() {
-        let res = writer().encrypt_verbose(b"verbose").unwrap();
+        let res = writer().encrypt_verbose(b"verbose").test_unwrap();
         assert_eq!(res.plain_len, 7);
         assert!(!res.payload.is_empty());
     }
 
     #[test]
     fn test_encrypt_as_blob() {
-        let blob = writer().encrypt_as_blob(b"blob data", 42).unwrap();
+        let blob = writer().encrypt_as_blob(b"blob data", 42).test_unwrap();
         assert_eq!(blob.blob_id, 42);
         assert_eq!(blob.plain_len, 9);
         assert_eq!(blob.ciphertext_len(), 9);
@@ -384,14 +386,14 @@ mod tests {
         let nonce = Nonce([0u8; 24]);
         let tag = Tag([0u8; 16]);
         let ct = &[0xAA; 10];
-        let p = build_payload(&nonce, &tag, ct).unwrap();
+        let p = build_payload(&nonce, &tag, ct).test_unwrap();
         assert_eq!(p.len(), SECRET_HEADER_SIZE + 10);
         assert_eq!(&p[0..4], &SECRET_MAGIC);
     }
 
     #[test]
     fn test_payload_size_for_ok() {
-        let sz = payload_size_for(100).unwrap();
+        let sz = payload_size_for(100).test_unwrap();
         assert_eq!(sz, SECRET_HEADER_SIZE + 100);
     }
 
@@ -409,10 +411,10 @@ mod tests {
     #[test]
     fn test_batch_encrypt() {
         let items: &[&[u8]] = &[b"one", b"two", b"three"];
-        let results = writer().encrypt_batch(items).unwrap();
+        let results = writer().encrypt_batch(items).test_unwrap();
         assert_eq!(results.len(), 3);
         for (i, r) in results.iter().enumerate() {
-            let plain = reader().decrypt(r).unwrap();
+            let plain = reader().decrypt(r).test_unwrap();
             assert_eq!(plain, items[i]);
         }
     }
@@ -420,23 +422,23 @@ mod tests {
     #[test]
     fn test_pool_add_and_encrypt() {
         let mut pool = SecretWriterPool::new(4);
-        let id = pool.add_writer(&key32()).unwrap();
-        let payload = pool.encrypt_with(id, b"pool test").unwrap();
-        let plain = reader().decrypt(&payload).unwrap();
+        let id = pool.add_writer(&key32()).test_unwrap();
+        let payload = pool.encrypt_with(id, b"pool test").test_unwrap();
+        let plain = reader().decrypt(&payload).test_unwrap();
         assert_eq!(plain, b"pool test");
     }
 
     #[test]
     fn test_pool_capacity_limit() {
         let mut pool = SecretWriterPool::new(1);
-        pool.add_writer(&key32()).unwrap();
+        pool.add_writer(&key32()).test_unwrap();
         assert!(pool.add_writer(&key32()).is_err());
     }
 
     #[test]
     fn test_pool_remove() {
         let mut pool = SecretWriterPool::new(4);
-        let id = pool.add_writer(&key32()).unwrap();
+        let id = pool.add_writer(&key32()).test_unwrap();
         assert_eq!(pool.len(), 1);
         pool.remove(id);
         assert_eq!(pool.len(), 0);
@@ -450,8 +452,8 @@ mod tests {
 
     #[test]
     fn test_different_plaintexts_different_pay() {
-        let p1 = writer().encrypt(b"aaa").unwrap();
-        let p2 = writer().encrypt(b"bbb").unwrap();
+        let p1 = writer().encrypt(b"aaa").test_unwrap();
+        let p2 = writer().encrypt(b"bbb").test_unwrap();
         // Les payloads sont différents (données différentes).
         assert_ne!(p1[SECRET_HEADER_SIZE..], p2[SECRET_HEADER_SIZE..]);
     }
@@ -459,8 +461,8 @@ mod tests {
     #[test]
     fn test_nonce_freshness() {
         // Deux chiffrements du même plaintext génèrent des nonces différents.
-        let p1 = writer().encrypt(b"same").unwrap();
-        let p2 = writer().encrypt(b"same").unwrap();
+        let p1 = writer().encrypt(b"same").test_unwrap();
+        let p2 = writer().encrypt(b"same").test_unwrap();
         assert_ne!(&p1[4..28], &p2[4..28]);
     }
 }
@@ -581,7 +583,7 @@ mod tests_envelope {
     #[test]
     fn test_seal_ok() {
         let mut w = EnvelopeWriter::new(&key32());
-        let env = w.seal(b"secret data", b"test.label", 100).unwrap();
+        let env = w.seal(b"secret data", b"test.label", 100).test_unwrap();
         assert_eq!(env.envelope_id, 1);
         assert_eq!(env.plain_len, 11);
         assert!(!env.payload.is_empty());
@@ -590,8 +592,8 @@ mod tests_envelope {
     #[test]
     fn test_seal_decrypt() {
         let mut w = EnvelopeWriter::new(&key32());
-        let env = w.seal(b"my secret", b"my.key", 0).unwrap();
-        let plain = reader().decrypt(&env.payload).unwrap();
+        let env = w.seal(b"my secret", b"my.key", 0).test_unwrap();
+        let plain = reader().decrypt(&env.payload).test_unwrap();
         assert_eq!(plain, b"my secret");
     }
 
@@ -599,15 +601,15 @@ mod tests_envelope {
     fn test_seal_label_truncation() {
         let mut w = EnvelopeWriter::new(&key32());
         let long_lbl = &[b'X'; 64];
-        let env = w.seal(b"data", long_lbl, 0).unwrap();
+        let env = w.seal(b"data", long_lbl, 0).test_unwrap();
         assert_eq!(env.label_str().len(), 32);
     }
 
     #[test]
     fn test_seal_increments_id() {
         let mut w = EnvelopeWriter::new(&key32());
-        let e1 = w.seal(b"first", b"k1", 0).unwrap();
-        let e2 = w.seal(b"second", b"k2", 0).unwrap();
+        let e1 = w.seal(b"first", b"k1", 0).test_unwrap();
+        let e2 = w.seal(b"second", b"k2", 0).test_unwrap();
         assert_eq!(e1.envelope_id, 1);
         assert_eq!(e2.envelope_id, 2);
     }
@@ -616,23 +618,23 @@ mod tests_envelope {
     fn test_seal_batch_ok() {
         let mut w = EnvelopeWriter::new(&key32());
         let items = [(b"aa" as &[u8], b"l1" as &[u8]), (b"bb", b"l2")];
-        let results = w.seal_batch(&items, 0).unwrap();
+        let results = w.seal_batch(&items, 0).test_unwrap();
         assert_eq!(results.len(), 2);
-        let p0 = reader().decrypt(&results[0].payload).unwrap();
+        let p0 = reader().decrypt(&results[0].payload).test_unwrap();
         assert_eq!(p0, b"aa");
     }
 
     #[test]
     fn test_payload_len_ok() {
         let mut w = EnvelopeWriter::new(&key32());
-        let env = w.seal(b"x", b"k", 0).unwrap();
+        let env = w.seal(b"x", b"k", 0).test_unwrap();
         assert_eq!(env.payload_len(), SECRET_HEADER_SIZE + 1);
     }
 
     #[test]
     fn test_label_str_no_null() {
         let mut w = EnvelopeWriter::new(&key32());
-        let env = w.seal(b"data", b"hello", 0).unwrap();
+        let env = w.seal(b"data", b"hello", 0).test_unwrap();
         assert_eq!(env.label_str(), b"hello");
     }
 

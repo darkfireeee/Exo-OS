@@ -233,22 +233,24 @@ pub fn hashes_match(a: &[u8], b: &[u8]) -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::storage::checksum_writer::ChecksumWriter;
 
     fn make_framed(data: &[u8]) -> Vec<u8> {
         let mut w = ChecksumWriter::new();
-        w.write(data).unwrap();
-        let r = w.finalize().unwrap();
-        r.framed().unwrap()
+        w.write(data).test_unwrap();
+        let r = w.finalize().test_unwrap();
+        r.framed().test_unwrap()
     }
 
     #[test]
     fn test_reader_valid() {
         let framed = make_framed(b"hello");
-        let reader = ChecksumReader::new(&framed).unwrap();
-        let data = reader.data_verified().unwrap();
+        let reader = ChecksumReader::new(&framed).test_unwrap();
+        let data = reader.data_verified().test_unwrap();
         assert_eq!(data, b"hello");
     }
 
@@ -265,7 +267,7 @@ mod tests {
     fn test_reader_corrupted_data() {
         let mut framed = make_framed(b"hello world");
         framed[0] ^= 0x01; // Corruption dans le payload.
-        let reader = ChecksumReader::new(&framed).unwrap();
+        let reader = ChecksumReader::new(&framed).test_unwrap();
         assert!(reader.data_verified().is_err());
     }
 
@@ -274,24 +276,24 @@ mod tests {
         let data = b"chunk1chunk2chunk3";
         let expected = blake3_hash(data);
         let mut v = ChecksumStreamVerifier::new(expected);
-        v.feed(b"chunk1").unwrap();
-        v.feed(b"chunk2").unwrap();
-        v.feed(b"chunk3").unwrap();
-        assert!(v.finalize().unwrap());
+        v.feed(b"chunk1").test_unwrap();
+        v.feed(b"chunk2").test_unwrap();
+        v.feed(b"chunk3").test_unwrap();
+        assert!(v.finalize().test_unwrap());
     }
 
     #[test]
     fn test_stream_verifier_wrong() {
         let expected = [0u8; 32];
         let mut v = ChecksumStreamVerifier::new(expected);
-        v.feed(b"data").unwrap();
-        assert!(!v.finalize().unwrap());
+        v.feed(b"data").test_unwrap();
+        assert!(!v.finalize().test_unwrap());
     }
 
     #[test]
     fn test_read_and_verify() {
         let framed = make_framed(b"ExoFS integrity");
-        let data = read_and_verify(&framed).unwrap();
+        let data = read_and_verify(&framed).test_unwrap();
         assert_eq!(&data, b"ExoFS integrity");
     }
 
@@ -299,7 +301,7 @@ mod tests {
     fn test_extract_hash() {
         let raw = b"some bytes";
         let framed = make_framed(raw);
-        let hash = extract_hash(&framed).unwrap();
+        let hash = extract_hash(&framed).test_unwrap();
         let expect = blake3_hash(raw);
         assert_eq!(hash, expect);
     }
@@ -463,8 +465,8 @@ mod tests_extra {
 
     fn make_framed(data: &[u8]) -> Vec<u8> {
         let mut w = ChecksumWriter::new();
-        w.write(data).unwrap();
-        w.finalize().unwrap().framed().unwrap()
+        w.write(data).test_unwrap();
+        w.finalize().test_unwrap().framed().test_unwrap()
     }
 
     #[test]
@@ -475,7 +477,7 @@ mod tests_extra {
             (DiskOffset(0), f1.as_slice()),
             (DiskOffset(4096), f2.as_slice()),
         ];
-        let report = BatchFrameVerifier::verify_all(&frames).unwrap();
+        let report = BatchFrameVerifier::verify_all(&frames).test_unwrap();
         assert!(report.all_ok());
         assert_eq!(report.total(), 2);
     }
@@ -489,7 +491,7 @@ mod tests_extra {
             (DiskOffset(0), f1.as_slice()),
             (DiskOffset(4096), f2.as_slice()),
         ];
-        let report = BatchFrameVerifier::verify_all(&frames).unwrap();
+        let report = BatchFrameVerifier::verify_all(&frames).test_unwrap();
         assert!(!report.all_ok());
         assert_eq!(report.fail_count, 1);
     }
@@ -497,7 +499,7 @@ mod tests_extra {
     #[test]
     fn test_read_with_mode_strict() {
         let framed = make_framed(b"strict");
-        let (data, valid) = read_with_mode(&framed, VerifyMode::Strict).unwrap();
+        let (data, valid) = read_with_mode(&framed, VerifyMode::Strict).test_unwrap();
         assert!(valid);
         assert_eq!(&data, b"strict");
     }
@@ -506,7 +508,7 @@ mod tests_extra {
     fn test_read_with_mode_permissive_corrupt() {
         let mut framed = make_framed(b"permissive test");
         framed[0] ^= 0x01;
-        let (_, valid) = read_with_mode(&framed, VerifyMode::Permissive).unwrap();
+        let (_, valid) = read_with_mode(&framed, VerifyMode::Permissive).test_unwrap();
         assert!(!valid);
     }
 

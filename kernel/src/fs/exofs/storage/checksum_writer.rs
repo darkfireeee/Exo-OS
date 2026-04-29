@@ -291,15 +291,17 @@ pub fn verify_framed(framed: &[u8]) -> ExofsResult<bool> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_checksum_writer_basic() {
         let mut w = ChecksumWriter::new();
-        w.write(b"hello").unwrap();
-        w.write(b" world").unwrap();
-        let r = w.finalize().unwrap();
+        w.write(b"hello").test_unwrap();
+        w.write(b" world").test_unwrap();
+        let r = w.finalize().test_unwrap();
         assert_eq!(r.bytes, 11);
         assert_eq!(r.data, b"hello world");
         assert_eq!(r.hash, r.tag.hash);
@@ -308,28 +310,28 @@ mod tests {
     #[test]
     fn test_framed_roundtrip() {
         let mut w = ChecksumWriter::new();
-        w.write(b"ExoFS checksum test data").unwrap();
-        let r = w.finalize().unwrap();
-        let framed = r.framed().unwrap();
-        assert!(verify_framed(&framed).unwrap());
+        w.write(b"ExoFS checksum test data").test_unwrap();
+        let r = w.finalize().test_unwrap();
+        let framed = r.framed().test_unwrap();
+        assert!(verify_framed(&framed).test_unwrap());
     }
 
     #[test]
     fn test_append_checksum() {
         let mut buf = b"test".to_vec();
-        let hash = append_checksum(&mut buf).unwrap();
+        let hash = append_checksum(&mut buf).test_unwrap();
         assert_eq!(buf.len(), 4 + CHECKSUM_TAG_LEN);
-        assert!(verify_framed(&buf).unwrap());
+        assert!(verify_framed(&buf).test_unwrap());
         let _ = hash;
     }
 
     #[test]
     fn test_split_framed() {
         let mut w = ChecksumWriter::new();
-        w.write(b"payload").unwrap();
-        let r = w.finalize().unwrap();
-        let framed = r.framed().unwrap();
-        let (data, tag) = split_framed(&framed).unwrap();
+        w.write(b"payload").test_unwrap();
+        let r = w.finalize().test_unwrap();
+        let framed = r.framed().test_unwrap();
+        let (data, tag) = split_framed(&framed).test_unwrap();
         assert_eq!(data, b"payload");
         assert_eq!(tag.magic, CHECKSUM_MAGIC);
     }
@@ -339,18 +341,18 @@ mod tests {
         let mut framed_vec: Vec<u8>;
         {
             let mut w = ChecksumWriter::new();
-            w.write(b"sensitive data").unwrap();
-            let r = w.finalize().unwrap();
-            framed_vec = r.framed().unwrap();
+            w.write(b"sensitive data").test_unwrap();
+            let r = w.finalize().test_unwrap();
+            framed_vec = r.framed().test_unwrap();
         }
         framed_vec[0] ^= 0xFF; // Corruption.
-        assert!(!verify_framed(&framed_vec).unwrap());
+        assert!(!verify_framed(&framed_vec).test_unwrap());
     }
 
     #[test]
     fn test_double_finalize_fails() {
         let w = ChecksumWriter::new();
-        let _r = w.finalize().unwrap();
+        let _r = w.finalize().test_unwrap();
         // La seconde finalisation doit échouer (moved).
         // (Rust guarantit ceci par le système de move, pas besoin d'assertion.)
     }
@@ -360,7 +362,7 @@ mod tests {
         let hash = [0xABu8; 32];
         let tag = ChecksumTag::new(hash);
         let raw = tag.to_bytes();
-        let tag2 = ChecksumTag::from_bytes(&raw).unwrap();
+        let tag2 = ChecksumTag::from_bytes(&raw).test_unwrap();
         assert_eq!(tag2.magic, CHECKSUM_MAGIC);
         assert_eq!(tag2.hash, hash);
     }
@@ -519,16 +521,16 @@ mod tests_extra {
         let mut m = BlockChecksumMap::new();
         let data = b"block contents";
         let off = DiskOffset(4096);
-        m.record(off, data).unwrap();
-        assert!(m.verify(off, data).unwrap());
-        assert!(!m.verify(off, b"different").unwrap());
+        m.record(off, data).test_unwrap();
+        assert!(m.verify(off, data).test_unwrap());
+        assert!(!m.verify(off, b"different").test_unwrap());
     }
 
     #[test]
     fn test_block_checksum_invalidate() {
         let mut m = BlockChecksumMap::new();
         let off = DiskOffset(0);
-        m.record(off, b"data").unwrap();
+        m.record(off, b"data").test_unwrap();
         m.invalidate(off);
         assert_eq!(m.valid_count(), 0);
         assert_eq!(m.invalid_count(), 1);
@@ -539,8 +541,8 @@ mod tests_extra {
         let iv = [0u8; 32];
         let mut c1 = ChecksumChainer::new(iv);
         let mut c2 = ChecksumChainer::new(iv);
-        let h1 = c1.feed_segment(b"same data").unwrap();
-        let h2 = c2.feed_segment(b"same data").unwrap();
+        let h1 = c1.feed_segment(b"same data").test_unwrap();
+        let h2 = c2.feed_segment(b"same data").test_unwrap();
         assert_eq!(h1, h2);
     }
 
@@ -549,8 +551,8 @@ mod tests_extra {
         let iv = [0u8; 32];
         let mut c1 = ChecksumChainer::new(iv);
         let mut c2 = ChecksumChainer::new(iv);
-        let h1 = c1.feed_segment(b"data_A").unwrap();
-        let h2 = c2.feed_segment(b"data_B").unwrap();
+        let h1 = c1.feed_segment(b"data_A").test_unwrap();
+        let h2 = c2.feed_segment(b"data_B").test_unwrap();
         assert_ne!(h1, h2);
     }
 }

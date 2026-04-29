@@ -450,6 +450,8 @@ impl Drop for PathCacheScope {
 
 // -- Tests --
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     fn fake_oid(b: u8) -> ObjectId {
@@ -462,7 +464,7 @@ mod tests {
         let c = PathCache::new_const();
         let h = fnv1a_hash(b"/home/user");
         c.insert(h, fake_oid(42));
-        assert_eq!(c.lookup(h).unwrap().0[0], 42);
+        assert_eq!(c.lookup(h).test_unwrap().0[0], 42);
     }
     #[test]
     fn test_miss() {

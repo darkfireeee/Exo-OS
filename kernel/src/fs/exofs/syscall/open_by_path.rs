@@ -16,11 +16,9 @@
 //! RECUR-01 : zéro boucle for.
 //! OOM-02   : try_reserve() avant push().
 
-use super::object_fd::OBJECT_TABLE;
 use super::validation::{
     exofs_err_to_errno, read_user_path_heap, verify_cap, CapabilityType, EFAULT, ENOENT,
 };
-use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
@@ -70,10 +68,6 @@ fn open_by_path_inner(
         return Err(ExofsError::InvalidArgument);
     }
 
-    // Dériver le BlobId depuis le chemin canonique (Blake3)
-    let blob_id = BlobId::from_bytes_blake3(&path_bytes[..path_len]);
-
-    // Ouvrir via la table de fd (crée l'entrée si O_CREAT)
     let open_args = crate::fs::exofs::syscall::object_open::OpenArgs {
         flags: flags,
         mode: mode,
@@ -82,13 +76,7 @@ fn open_by_path_inner(
         size_hint: 0,
         _reserved: [0u64; 2],
     };
-    OBJECT_TABLE.open(
-        blob_id,
-        open_args.flags,
-        0u64,
-        open_args.epoch_id,
-        open_args.owner_uid,
-    )
+    super::object_open::open_object(path_bytes, path_len, &open_args)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

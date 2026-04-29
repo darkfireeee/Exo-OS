@@ -366,6 +366,8 @@ impl SgEngine {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -374,7 +376,7 @@ mod tests {
         let mut data = [1u8, 2, 3, 4, 5];
         let frag = SgFragment::from_slice(&mut data);
         let mut buf = [0u8; 5];
-        let n = frag.read_into(&mut buf).expect("ok");
+        let n = frag.read_into(&mut buf).test_expect("ok");
         assert_eq!(n, 5);
         assert_eq!(buf, [1, 2, 3, 4, 5]);
     }
@@ -383,7 +385,7 @@ mod tests {
     fn test_sg_fragment_write() {
         let mut data = [0u8; 5];
         let frag = SgFragment::from_slice(&mut data);
-        frag.write_from(b"hello").expect("ok");
+        frag.write_from(b"hello").test_expect("ok");
         assert_eq!(data, *b"hello");
     }
 
@@ -392,10 +394,10 @@ mod tests {
         let mut a = [1u8, 2, 3];
         let mut b = [4u8, 5, 6];
         let mut list = SgList::new();
-        list.add(SgFragment::from_slice(&mut a)).expect("ok");
-        list.add(SgFragment::from_slice(&mut b)).expect("ok");
+        list.add(SgFragment::from_slice(&mut a)).test_expect("ok");
+        list.add(SgFragment::from_slice(&mut b)).test_expect("ok");
         let mut sink = Vec::new();
-        let n = list.gather_read(&mut sink).expect("ok");
+        let n = list.gather_read(&mut sink).test_expect("ok");
         assert_eq!(n, 6);
         assert_eq!(sink, vec![1, 2, 3, 4, 5, 6]);
     }
@@ -405,9 +407,9 @@ mod tests {
         let mut a = [0u8; 3];
         let mut b = [0u8; 3];
         let mut list = SgList::new();
-        list.add(SgFragment::from_slice(&mut a)).expect("ok");
-        list.add(SgFragment::from_slice(&mut b)).expect("ok");
-        list.scatter_write(&[1, 2, 3, 4, 5, 6]).expect("ok");
+        list.add(SgFragment::from_slice(&mut a)).test_expect("ok");
+        list.add(SgFragment::from_slice(&mut b)).test_expect("ok");
+        list.scatter_write(&[1, 2, 3, 4, 5, 6]).test_expect("ok");
         assert_eq!(a, [1, 2, 3]);
         assert_eq!(b, [4, 5, 6]);
     }
@@ -416,7 +418,7 @@ mod tests {
     fn test_sg_list_scatter_too_large() {
         let mut a = [0u8; 2];
         let mut list = SgList::new();
-        list.add(SgFragment::from_slice(&mut a)).expect("ok");
+        list.add(SgFragment::from_slice(&mut a)).test_expect("ok");
         assert!(list.scatter_write(b"too long").is_err());
     }
 
@@ -431,10 +433,10 @@ mod tests {
         let mut plist = PhysSgList::new();
         plist
             .add(PhysSegment::read_segment(0x1000, 512))
-            .expect("ok");
+            .test_expect("ok");
         plist
             .add(PhysSegment::read_segment(0x2000, 512))
-            .expect("ok");
+            .test_expect("ok");
         assert_eq!(plist.segment_count(), 2);
         assert_eq!(plist.total_bytes(), 1024);
     }
@@ -444,10 +446,10 @@ mod tests {
         let mut plist = PhysSgList::new();
         plist
             .add(PhysSegment::read_segment(0x1000, 0x100))
-            .expect("ok");
+            .test_expect("ok");
         plist
             .add(PhysSegment::read_segment(0x2000, 0x100))
-            .expect("ok");
+            .test_expect("ok");
         assert!(plist.validate_no_overlap().is_ok());
     }
 
@@ -456,10 +458,10 @@ mod tests {
         let mut plist = PhysSgList::new();
         plist
             .add(PhysSegment::read_segment(0x1000, 0x200))
-            .expect("ok");
+            .test_expect("ok");
         plist
             .add(PhysSegment::read_segment(0x1100, 0x100))
-            .expect("ok"); // overlap!
+            .test_expect("ok"); // overlap!
         assert!(plist.validate_no_overlap().is_err());
     }
 
@@ -467,10 +469,10 @@ mod tests {
     fn test_sg_engine_gather_stats() {
         let mut a = [1u8, 2, 3];
         let mut list = SgList::new();
-        list.add(SgFragment::from_slice(&mut a)).expect("ok");
+        list.add(SgFragment::from_slice(&mut a)).test_expect("ok");
         let mut engine = SgEngine::new();
         let mut sink = Vec::new();
-        engine.gather(&list, &mut sink).expect("ok");
+        engine.gather(&list, &mut sink).test_expect("ok");
         assert_eq!(engine.stats().gather_ops, 1);
         assert_eq!(engine.stats().bytes_gathered, 3);
     }
@@ -479,9 +481,9 @@ mod tests {
     fn test_sg_engine_scatter_stats() {
         let mut a = [0u8; 3];
         let mut list = SgList::new();
-        list.add(SgFragment::from_slice(&mut a)).expect("ok");
+        list.add(SgFragment::from_slice(&mut a)).test_expect("ok");
         let mut engine = SgEngine::new();
-        engine.scatter(&list, &[9, 8, 7]).expect("ok");
+        engine.scatter(&list, &[9, 8, 7]).test_expect("ok");
         assert_eq!(engine.stats().scatter_ops, 1);
     }
 
@@ -489,9 +491,9 @@ mod tests {
     fn test_sg_engine_reset_stats() {
         let mut a = [0u8; 3];
         let mut list = SgList::new();
-        list.add(SgFragment::from_slice(&mut a)).expect("ok");
+        list.add(SgFragment::from_slice(&mut a)).test_expect("ok");
         let mut engine = SgEngine::new();
-        engine.scatter(&list, &[1, 2, 3]).expect("ok");
+        engine.scatter(&list, &[1, 2, 3]).test_expect("ok");
         engine.reset_stats();
         assert_eq!(engine.stats().scatter_ops, 0);
     }
@@ -501,8 +503,8 @@ mod tests {
         let mut a = [0u8; 10];
         let mut b = [0u8; 20];
         let mut list = SgList::new();
-        list.add(SgFragment::from_slice(&mut a)).expect("ok");
-        list.add(SgFragment::from_slice(&mut b)).expect("ok");
+        list.add(SgFragment::from_slice(&mut a)).test_expect("ok");
+        list.add(SgFragment::from_slice(&mut b)).test_expect("ok");
         assert_eq!(list.total_bytes(), 30);
     }
 
@@ -511,7 +513,7 @@ mod tests {
         let data = b"const source";
         let frag = SgFragment::from_const_slice(data);
         let mut buf = [0u8; 12];
-        frag.read_into(&mut buf).expect("ok");
+        frag.read_into(&mut buf).test_expect("ok");
         assert_eq!(&buf, b"const source");
     }
 }

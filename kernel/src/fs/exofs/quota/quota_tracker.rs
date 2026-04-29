@@ -566,6 +566,8 @@ pub static QUOTA_TRACKER: QuotaTracker = QuotaTracker::new_const();
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::quota::quota_policy::QuotaKind;
@@ -607,8 +609,8 @@ mod tests {
         let t = QuotaTracker::new_const();
         let k = make_key(1);
         let l = make_limits(1000);
-        t.set_limits(k, l).expect("ok");
-        let got = t.get_limits(k).expect("found");
+        t.set_limits(k, l).test_expect("ok");
+        let got = t.get_limits(k).test_expect("found");
         assert_eq!(got.hard_bytes, 1000);
     }
 
@@ -617,8 +619,8 @@ mod tests {
         let t = QuotaTracker::new_const();
         let k = make_key(2);
         let l = make_limits(1000);
-        t.set_limits(k, l).expect("ok");
-        let new_total = t.add_bytes(k, 400).expect("ok");
+        t.set_limits(k, l).test_expect("ok");
+        let new_total = t.add_bytes(k, 400).test_expect("ok");
         assert_eq!(new_total, 400);
         assert_eq!(t.total_bytes(), 400);
     }
@@ -627,9 +629,9 @@ mod tests {
     fn test_sub_bytes() {
         let t = QuotaTracker::new_const();
         let k = make_key(3);
-        t.set_limits(k, make_limits(1000)).expect("ok");
-        t.add_bytes(k, 800).expect("ok");
-        let r = t.sub_bytes(k, 300).expect("ok");
+        t.set_limits(k, make_limits(1000)).test_expect("ok");
+        t.add_bytes(k, 800).test_expect("ok");
+        let r = t.sub_bytes(k, 300).test_expect("ok");
         assert_eq!(r, 500);
         assert_eq!(t.total_bytes(), 500);
     }
@@ -638,10 +640,10 @@ mod tests {
     fn test_add_blobs_and_inodes() {
         let t = QuotaTracker::new_const();
         let k = make_key(4);
-        t.set_limits(k, QuotaLimits::unlimited()).expect("ok");
-        t.add_blobs(k, 10).expect("ok");
-        t.add_inodes(k, 5).expect("ok");
-        let u = t.get_usage(k).expect("found");
+        t.set_limits(k, QuotaLimits::unlimited()).test_expect("ok");
+        t.add_blobs(k, 10).test_expect("ok");
+        t.add_inodes(k, 5).test_expect("ok");
+        let u = t.get_usage(k).test_expect("found");
         assert_eq!(u.blobs_used, 10);
         assert_eq!(u.inodes_used, 5);
     }
@@ -650,9 +652,9 @@ mod tests {
     fn test_remove_entry() {
         let t = QuotaTracker::new_const();
         let k = make_key(5);
-        t.set_limits(k, make_limits(500)).expect("ok");
+        t.set_limits(k, make_limits(500)).test_expect("ok");
         assert_eq!(t.count(), 1);
-        t.remove(k).expect("ok");
+        t.remove(k).test_expect("ok");
         assert_eq!(t.count(), 0);
         assert!(t.get_usage(k).is_none());
     }
@@ -667,9 +669,9 @@ mod tests {
     #[test]
     fn test_snapshot_all() {
         let t = QuotaTracker::new_const();
-        t.set_limits(make_key(10), make_limits(1000)).expect("ok");
-        t.set_limits(make_key(11), make_limits(2000)).expect("ok");
-        let snap = t.snapshot_all().expect("ok");
+        t.set_limits(make_key(10), make_limits(1000)).test_expect("ok");
+        t.set_limits(make_key(11), make_limits(2000)).test_expect("ok");
+        let snap = t.snapshot_all().test_expect("ok");
         assert_eq!(snap.len(), 2);
     }
 
@@ -677,9 +679,9 @@ mod tests {
     fn test_hard_exceeded_keys() {
         let t = QuotaTracker::new_const();
         let k = make_key(20);
-        t.set_limits(k, make_limits(100)).expect("ok");
-        t.add_bytes(k, 150).expect("ok");
-        let keys = t.hard_exceeded_keys().expect("ok");
+        t.set_limits(k, make_limits(100)).test_expect("ok");
+        t.add_bytes(k, 150).test_expect("ok");
+        let keys = t.hard_exceeded_keys().test_expect("ok");
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0], k);
     }
@@ -688,12 +690,12 @@ mod tests {
     fn test_soft_breach_tick() {
         let t = QuotaTracker::new_const();
         let k = make_key(30);
-        t.set_limits(k, make_limits(1000)).expect("ok");
+        t.set_limits(k, make_limits(1000)).test_expect("ok");
         t.record_soft_breach(k, 42);
-        let e = t.get_entry(k).expect("found");
+        let e = t.get_entry(k).test_expect("found");
         assert_eq!(e.soft_breach_tick, 42);
         t.clear_soft_breach(k);
-        let e2 = t.get_entry(k).expect("found");
+        let e2 = t.get_entry(k).test_expect("found");
         assert_eq!(e2.soft_breach_tick, 0);
     }
 
@@ -718,10 +720,10 @@ mod tests {
     fn test_reset_usage() {
         let t = QuotaTracker::new_const();
         let k = make_key(50);
-        t.set_limits(k, make_limits(1000)).expect("ok");
-        t.add_bytes(k, 500).expect("ok");
-        t.reset_usage(k).expect("ok");
-        let u = t.get_usage(k).expect("found");
+        t.set_limits(k, make_limits(1000)).test_expect("ok");
+        t.add_bytes(k, 500).test_expect("ok");
+        t.reset_usage(k).test_expect("ok");
+        let u = t.get_usage(k).test_expect("found");
         assert_eq!(u.bytes_used, 0);
         assert_eq!(t.total_bytes(), 0);
     }

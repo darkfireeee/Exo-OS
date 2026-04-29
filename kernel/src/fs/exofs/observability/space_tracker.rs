@@ -345,6 +345,8 @@ impl FragmentationInfo {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -565,7 +567,7 @@ mod tests_history {
         let h = SpaceHistory::new_const();
         h.record(10, 1);
         h.record(20, 2);
-        let v = h.to_vec().expect("ok");
+        let v = h.to_vec().test_expect("ok");
         assert_eq!(v.len(), 2);
     }
 }

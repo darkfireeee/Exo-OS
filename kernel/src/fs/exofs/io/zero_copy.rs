@@ -414,6 +414,8 @@ impl ZeroCopyStats {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -431,7 +433,7 @@ mod tests {
         let data = [10u8, 20, 30];
         let mut s = ZeroCopySlice::new(&data);
         let mut buf = [0u8; 2];
-        let n = s.read_into(&mut buf).expect("ok");
+        let n = s.read_into(&mut buf).test_expect("ok");
         assert_eq!(n, 2);
         assert_eq!(&buf, &[10u8, 20]);
         assert_eq!(s.remaining(), 1);
@@ -448,7 +450,7 @@ mod tests {
     fn test_slice_drain_to_vec() {
         let data = [1u8, 2, 3];
         let mut s = ZeroCopySlice::new(&data);
-        let v = s.drain_to_vec().expect("ok");
+        let v = s.drain_to_vec().test_expect("ok");
         assert_eq!(&v[..], &[1u8, 2, 3]);
         assert!(s.is_exhausted());
     }
@@ -457,7 +459,7 @@ mod tests {
     fn test_window_as_slice() {
         let data = [0u8, 1, 2, 3, 4];
         let s = ZeroCopySlice::new(&data);
-        let w = ZeroCopyWindow::new(&s, 1, 3).expect("ok");
+        let w = ZeroCopyWindow::new(&s, 1, 3).test_expect("ok");
         assert_eq!(w.as_slice(), &[1u8, 2, 3]);
     }
 
@@ -465,8 +467,8 @@ mod tests {
     fn test_window_sub_window() {
         let data: Vec<u8> = (0u8..20).collect();
         let s = ZeroCopySlice::new(&data);
-        let w = ZeroCopyWindow::new(&s, 5, 10).expect("ok");
-        let sw = w.sub_window(2, 3).expect("ok");
+        let w = ZeroCopyWindow::new(&s, 5, 10).test_expect("ok");
+        let sw = w.sub_window(2, 3).test_expect("ok");
         assert_eq!(sw.as_slice(), &[7u8, 8, 9]);
     }
 
@@ -474,8 +476,8 @@ mod tests {
     fn test_window_to_vec() {
         let data = [100u8, 101, 102, 103];
         let s = ZeroCopySlice::new(&data);
-        let w = ZeroCopyWindow::new(&s, 1, 2).expect("ok");
-        let v = w.to_vec().expect("ok");
+        let w = ZeroCopyWindow::new(&s, 1, 2).test_expect("ok");
+        let v = w.to_vec().test_expect("ok");
         assert_eq!(&v[..], &[101u8, 102]);
     }
 
@@ -483,7 +485,7 @@ mod tests {
     fn test_reader_read_u32_be() {
         let data = 0xDEADBEEFu32.to_be_bytes();
         let mut r = ZeroCopyReader::new(&data);
-        let v = r.read_u32_be().expect("ok");
+        let v = r.read_u32_be().test_expect("ok");
         assert_eq!(v, 0xDEADBEEF);
     }
 
@@ -491,7 +493,7 @@ mod tests {
     fn test_reader_read_u64_be() {
         let data = 0x0102030405060708u64.to_be_bytes();
         let mut r = ZeroCopyReader::new(&data);
-        let v = r.read_u64_be().expect("ok");
+        let v = r.read_u64_be().test_expect("ok");
         assert_eq!(v, 0x0102030405060708);
     }
 
@@ -499,9 +501,9 @@ mod tests {
     fn test_writer_write_u32_read_back() {
         let mut buf = [0u8; 8];
         let mut w = ZeroCopyWriter::new(&mut buf);
-        w.write_u32_be(0xCAFEBABE).expect("ok");
+        w.write_u32_be(0xCAFEBABE).test_expect("ok");
         assert_eq!(
-            u32::from_be_bytes(buf[..4].try_into().expect("4")),
+            u32::from_be_bytes(buf[..4].try_into().test_expect("4")),
             0xCAFEBABE
         );
     }
@@ -510,7 +512,7 @@ mod tests {
     fn test_writer_zeros() {
         let mut buf = [0xffu8; 8];
         let mut w = ZeroCopyWriter::new(&mut buf);
-        w.write_zeros(4).expect("ok");
+        w.write_zeros(4).test_expect("ok");
         assert_eq!(&buf[..4], &[0u8; 4]);
     }
 
@@ -527,7 +529,7 @@ mod tests {
         let b = [4u8, 5, 6];
         let mut pipe = ZeroCopyPipe::new(&a, &b);
         let mut out = [0u8; 6];
-        let n = pipe.read(&mut out).expect("ok");
+        let n = pipe.read(&mut out).test_expect("ok");
         assert_eq!(n, 6);
         assert_eq!(&out, &[1u8, 2, 3, 4, 5, 6]);
     }

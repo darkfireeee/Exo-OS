@@ -459,6 +459,8 @@ impl ThroughputThresholds {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -498,7 +500,7 @@ mod tests {
             bytes_read: 100,
             bytes_written: 50,
         });
-        let l = w.latest().expect("some");
+        let l = w.latest().test_expect("some");
         assert_eq!(l.bytes_read, 100);
         assert_eq!(l.bytes_written, 50);
     }
@@ -527,7 +529,7 @@ mod tests {
             bytes_read: 10,
             bytes_written: 20,
         });
-        let v = w.to_vec().expect("ok");
+        let v = w.to_vec().test_expect("ok");
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].bytes_written, 20);
     }
@@ -569,7 +571,7 @@ mod tests {
         let t = ThroughputTracker::new_const();
         t.record_read(1000);
         t.flush_period(1);
-        let snap = t.snapshot().expect("ok");
+        let snap = t.snapshot().test_expect("ok");
         assert_eq!(snap.read_ratio_ppt(), 1000);
         assert_eq!(snap.write_ratio_ppt(), 0);
     }

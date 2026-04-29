@@ -20,6 +20,7 @@ use super::exoar_format::{
     crc32c_compute, crc32c_update, ExoarEntryHeader, ExoarFooter, ExoarHeader,
     ARCHIVE_FLAG_INCREMENTAL, ENTRY_FLAG_TOMBSTONE, EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD,
 };
+use crate::fs::exofs::core::blob_id;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::mem::size_of;
@@ -512,41 +513,12 @@ impl ArchiveSink for SinkVec {
 /// Calcule le BlobId d'un slice de données (RÈGLE 11 : blake3 AVANT compression).
 /// En production, utiliser le vrai blake3 via crate::fs::exofs::dedup::content_hash.
 pub fn compute_blob_id(data: &[u8]) -> [u8; 32] {
-    let mut state = [0u64; 4];
-    state[0] = 0x6C62_272E_07BB_0142u64;
-    state[1] = 0x6295_C58D_5935_4F4Eu64;
-    state[2] = 0xD8A2_5D4F_5C3A_2B1Eu64;
-    state[3] = 0xA3F6_C1D2_E5B7_8940u64;
-    let mut i = 0usize;
-    while i < data.len() {
-        let b = data[i] as u64;
-        state[0] = state[0]
-            .wrapping_add(b)
-            .wrapping_mul(0x9E37_79B9_7F4A_7C15u64);
-        state[1] ^= state[0].rotate_left(23);
-        state[2] = state[2]
-            .wrapping_add(state[1])
-            .wrapping_mul(0x6C62_272E_07BB_0142u64);
-        state[3] ^= state[2].rotate_right(17);
-        state[0] = state[0].wrapping_add(state[3]);
-        i = i.wrapping_add(1);
-    }
-    let mut out = [0u8; 32];
-    let mut idx = 0usize;
-    while idx < 4 {
-        let bytes = state[idx].to_le_bytes();
-        let base = idx.wrapping_mul(8);
-        let mut k = 0usize;
-        while k < 8 {
-            out[base.wrapping_add(k)] = bytes[k];
-            k = k.wrapping_add(1);
-        }
-        idx = idx.wrapping_add(1);
-    }
-    out
+    *blob_id::compute_blob_id(data).as_bytes()
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
+#[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
     use super::super::exoar_reader::{CollectingReceiver, ExoarReader, SliceSource};
@@ -561,8 +533,8 @@ mod tests {
     #[test]
     fn test_write_empty_archive() {
         let mut w = ExoarBufferedWriter::new(ExoarWriteOptions::default());
-        w.begin().expect("begin ok");
-        let (buf, stats) = w.finalize().expect("finalize ok");
+        w.begin().test_expect("begin ok");
+        let (buf, stats) = w.finalize().test_expect("finalize ok");
         assert_eq!(stats.blobs_written, 0);
         assert!(buf.len() >= 128 + 32); // header + footer minimum
     }
@@ -572,16 +544,16 @@ mod tests {
         let bid = make_blob_id(1);
         let data = b"hello world";
         let mut w = ExoarBufferedWriter::new(ExoarWriteOptions::default());
-        w.begin().expect("begin");
-        w.write_blob(&bid, data, 0, 0).expect("write blob");
-        let (buf, stats) = w.finalize().expect("finalize");
+        w.begin().test_expect("begin");
+        w.write_blob(&bid, data, 0, 0).test_expect("write blob");
+        let (buf, stats) = w.finalize().test_expect("finalize");
         assert_eq!(stats.blobs_written, 1);
         assert_eq!(stats.payload_bytes, data.len() as u64);
         // Relire l'archive
         let mut src = SliceSource::new(&buf);
         let reader = ExoarReader::with_default_config();
         let mut rcv = CollectingReceiver::new();
-        let report = reader.read(&mut src, &mut rcv).expect("read ok");
+        let report = reader.read(&mut src, &mut rcv).test_expect("read ok");
         assert_eq!(report.entries_read, 1);
         assert_eq!(rcv.blobs[0].0, bid);
         assert_eq!(rcv.blobs[0].1, data.as_slice());
@@ -595,17 +567,17 @@ mod tests {
             (make_blob_id(3), b"third much longer blob data"),
         ];
         let mut w = ExoarBufferedWriter::new(ExoarWriteOptions::default());
-        w.begin().expect("begin");
+        w.begin().test_expect("begin");
         for (bid, data) in &blobs {
-            w.write_blob(bid, data, 0, 0).expect("write");
+            w.write_blob(bid, data, 0, 0).test_expect("write");
         }
-        let (buf, stats) = w.finalize().expect("finalize");
+        let (buf, stats) = w.finalize().test_expect("finalize");
         assert_eq!(stats.blobs_written, 3);
 
         let mut src = SliceSource::new(&buf);
         let reader = ExoarReader::with_default_config();
         let mut rcv = CollectingReceiver::new();
-        let report = reader.read(&mut src, &mut rcv).expect("read");
+        let report = reader.read(&mut src, &mut rcv).test_expect("read");
         assert_eq!(report.entries_read, 3);
     }
 
@@ -614,9 +586,9 @@ mod tests {
         let bid = make_blob_id(99);
         let opt = ExoarWriteOptions::incremental(1, 2);
         let mut w = ExoarBufferedWriter::new(opt);
-        w.begin().expect("begin");
-        w.write_tombstone(&bid, 2).expect("tombstone");
-        let (_, stats) = w.finalize().expect("finalize");
+        w.begin().test_expect("begin");
+        w.write_tombstone(&bid, 2).test_expect("tombstone");
+        let (_, stats) = w.finalize().test_expect("finalize");
         assert_eq!(stats.tombstones_written, 1);
         assert_eq!(stats.blobs_written, 0);
     }
@@ -625,8 +597,8 @@ mod tests {
     fn test_finalize_twice_error() {
         let mut sink = SinkVec::new();
         let mut w = ExoarWriter::new(ExoarWriteOptions::default());
-        w.begin(&mut sink).expect("begin");
-        w.finalize(&mut sink).expect("first finalize");
+        w.begin(&mut sink).test_expect("begin");
+        w.finalize(&mut sink).test_expect("first finalize");
         let result = w.finalize(&mut sink);
         assert!(matches!(result, Err(ExoarWriteError::AlreadyFinalized)));
     }
@@ -644,7 +616,7 @@ mod tests {
     fn test_payload_too_large() {
         let mut sink = SinkVec::new();
         let mut w = ExoarWriter::new(ExoarWriteOptions::default());
-        w.begin(&mut sink).expect("begin");
+        w.begin(&mut sink).test_expect("begin");
         // Créer un fake "large" payload en manipulant directement la taille
         // On ne peut pas allouer 256 MiB dans un test, donc on vérifie via
         // une entrée avec taille déclarée incorrecte — on skip ce test UI
@@ -657,7 +629,7 @@ mod tests {
     #[test]
     fn test_sink_vec_basic() {
         let mut sink = SinkVec::new();
-        sink.write_all(b"hello").expect("write");
+        sink.write_all(b"hello").test_expect("write");
         assert_eq!(sink.len(), 5);
         assert_eq!(sink.bytes_written(), 5);
         assert_eq!(sink.as_slice(), b"hello");
@@ -690,10 +662,10 @@ mod tests {
     #[test]
     fn test_archive_grows_with_entries() {
         let mut w = ExoarBufferedWriter::new(ExoarWriteOptions::default());
-        w.begin().expect("begin");
+        w.begin().test_expect("begin");
         let size_after_header = w.buffer().len();
         w.write_blob(&make_blob_id(1), b"payload", 0, 0)
-            .expect("write");
+            .test_expect("write");
         let size_after_entry = w.buffer().len();
         assert!(size_after_entry > size_after_header);
     }

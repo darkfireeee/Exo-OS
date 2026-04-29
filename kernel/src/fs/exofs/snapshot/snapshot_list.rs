@@ -323,6 +323,8 @@ pub enum ListConsistencyError {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::snapshot::make_snapshot_name;
     use super::*;
@@ -347,8 +349,8 @@ mod tests {
     #[test]
     fn register_and_get() {
         let list = SnapshotList::new_const();
-        list.register(make_snap(10, 4096, None)).unwrap();
-        let got = list.get(SnapshotId(10)).unwrap();
+        list.register(make_snap(10, 4096, None)).test_unwrap();
+        let got = list.get(SnapshotId(10)).test_unwrap();
         assert_eq!(got.total_bytes, 4096);
         assert_eq!(list.count(), 1);
     }
@@ -356,9 +358,9 @@ mod tests {
     #[test]
     fn remove_updates_stats() {
         let list = SnapshotList::new_const();
-        list.register(make_snap(1, 1024, None)).unwrap();
-        list.register(make_snap(2, 2048, Some(1))).unwrap();
-        list.remove(SnapshotId(1)).unwrap();
+        list.register(make_snap(1, 1024, None)).test_unwrap();
+        list.register(make_snap(2, 2048, Some(1))).test_unwrap();
+        list.remove(SnapshotId(1)).test_unwrap();
         assert_eq!(list.count(), 1);
         assert_eq!(list.total_bytes(), 2048);
     }
@@ -374,16 +376,16 @@ mod tests {
             } else {
                 Some(2)
             };
-            list.register(make_snap(i, 0, parent)).unwrap();
+            list.register(make_snap(i, 0, parent)).test_unwrap();
         }
-        let children = list.children_of(SnapshotId(1)).unwrap();
+        let children = list.children_of(SnapshotId(1)).test_unwrap();
         assert_eq!(children.len(), 2);
     }
 
     #[test]
     fn duplicate_register_fails() {
         let list = SnapshotList::new_const();
-        list.register(make_snap(5, 0, None)).unwrap();
+        list.register(make_snap(5, 0, None)).test_unwrap();
         assert!(matches!(
             list.register(make_snap(5, 0, None)),
             Err(ExofsError::InvalidState)
@@ -393,7 +395,7 @@ mod tests {
     #[test]
     fn consistency_ok() {
         let list = SnapshotList::new_const();
-        list.register(make_snap(20, 512, None)).unwrap();
+        list.register(make_snap(20, 512, None)).test_unwrap();
         assert!(list.verify_consistency().is_ok());
     }
 
@@ -401,9 +403,9 @@ mod tests {
     fn all_refs_sorted() {
         let list = SnapshotList::new_const();
         for i in [3u64, 1, 2] {
-            list.register(make_snap(i, 0, None)).unwrap();
+            list.register(make_snap(i, 0, None)).test_unwrap();
         }
-        let refs = list.all_refs().unwrap();
+        let refs = list.all_refs().test_unwrap();
         assert_eq!(refs[0].id.0, 1);
         assert_eq!(refs[2].id.0, 3);
     }

@@ -460,6 +460,8 @@ pub fn decode_inode_entry(buf: &[u8]) -> Option<InodeEntry> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -475,30 +477,30 @@ mod tests {
     #[test]
     fn test_get_or_alloc_deterministic() {
         let e = emu();
-        let ino1 = e.get_or_alloc(42).unwrap();
-        let ino2 = e.get_or_alloc(42).unwrap();
+        let ino1 = e.get_or_alloc(42).test_unwrap();
+        let ino2 = e.get_or_alloc(42).test_unwrap();
         assert_eq!(ino1, ino2);
     }
 
     #[test]
     fn test_different_oids_different_inos() {
         let e = emu();
-        let a = e.get_or_alloc(1).unwrap();
-        let b = e.get_or_alloc(2).unwrap();
+        let a = e.get_or_alloc(1).test_unwrap();
+        let b = e.get_or_alloc(2).test_unwrap();
         assert_ne!(a, b);
     }
 
     #[test]
     fn test_ino_to_object() {
         let e = emu();
-        let ino = e.get_or_alloc(77).unwrap();
+        let ino = e.get_or_alloc(77).test_unwrap();
         assert_eq!(e.ino_to_object(ino), Some(77));
     }
 
     #[test]
     fn test_release() {
         let e = emu();
-        let ino = e.get_or_alloc(55).unwrap();
+        let ino = e.get_or_alloc(55).test_unwrap();
         e.release(55);
         assert!(e.ino_to_object(ino).is_none());
     }
@@ -506,31 +508,31 @@ mod tests {
     #[test]
     fn test_update_size() {
         let e = emu();
-        let ino = e.get_or_alloc(10).unwrap();
-        e.update_size(ino, 1024).unwrap();
-        assert_eq!(e.get_entry(ino).unwrap().size, 1024);
+        let ino = e.get_or_alloc(10).test_unwrap();
+        e.update_size(ino, 1024).test_unwrap();
+        assert_eq!(e.get_entry(ino).test_unwrap().size, 1024);
     }
 
     #[test]
     fn test_link_count_increment() {
         let e = emu();
-        let ino = e.get_or_alloc(20).unwrap();
-        let lc = e.update_link_count(ino, 2).unwrap();
+        let ino = e.get_or_alloc(20).test_unwrap();
+        let lc = e.update_link_count(ino, 2).test_unwrap();
         assert_eq!(lc, 3);
     }
 
     #[test]
     fn test_link_count_no_underflow() {
         let e = emu();
-        let ino = e.get_or_alloc(30).unwrap();
-        let lc = e.update_link_count(ino, -100).unwrap();
+        let ino = e.get_or_alloc(30).test_unwrap();
+        let lc = e.update_link_count(ino, -100).test_unwrap();
         assert_eq!(lc, 0);
     }
 
     #[test]
     fn test_ensure_root() {
         let e = emu();
-        e.ensure_root().unwrap();
+        e.ensure_root().test_unwrap();
         assert!(e.contains_ino(INO_ROOT));
     }
 
@@ -547,7 +549,7 @@ mod tests {
             access_ts: 12345,
         };
         let buf = encode_inode_entry(&entry);
-        let decoded = decode_inode_entry(&buf).unwrap();
+        let decoded = decode_inode_entry(&buf).test_unwrap();
         assert_eq!(decoded.ino, 42);
         assert_eq!(decoded.object_id, 99);
         assert_eq!(decoded.size, 4096);
@@ -557,18 +559,18 @@ mod tests {
     #[test]
     fn test_count() {
         let e = emu();
-        e.get_or_alloc(1).unwrap();
-        e.get_or_alloc(2).unwrap();
-        e.get_or_alloc(3).unwrap();
+        e.get_or_alloc(1).test_unwrap();
+        e.get_or_alloc(2).test_unwrap();
+        e.get_or_alloc(3).test_unwrap();
         assert_eq!(e.count(), 3);
     }
 
     #[test]
     fn test_all_inos() {
         let e = emu();
-        e.get_or_alloc(5).unwrap();
-        e.get_or_alloc(6).unwrap();
-        let inos = e.all_inos().unwrap();
+        e.get_or_alloc(5).test_unwrap();
+        e.get_or_alloc(6).test_unwrap();
+        let inos = e.all_inos().test_unwrap();
         assert_eq!(inos.len(), 2);
     }
 }

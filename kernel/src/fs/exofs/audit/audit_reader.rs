@@ -351,6 +351,8 @@ pub fn quick_summary() -> AuditSummary {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::audit_log::AuditLog;
     use super::*;
@@ -381,8 +383,8 @@ mod tests {
         push_entry(&log, AuditOp::Read, AuditResult::Success, 1);
         push_entry(&log, AuditOp::Write, AuditResult::Success, 2);
         let mut r = AuditReader::with_log_at(&log, ReadDirection::Forward);
-        let e1 = r.next_from(&log).unwrap();
-        let e2 = r.next_from(&log).unwrap();
+        let e1 = r.next_from(&log).test_unwrap();
+        let e2 = r.next_from(&log).test_unwrap();
         assert!(e1.seq <= e2.seq);
     }
 
@@ -392,7 +394,7 @@ mod tests {
         push_entry(&log, AuditOp::Read, AuditResult::Success, 1);
         push_entry(&log, AuditOp::Delete, AuditResult::Success, 2);
         let mut r = AuditReader::with_log_at(&log, ReadDirection::Backward);
-        let e = r.next_from(&log).unwrap();
+        let e = r.next_from(&log).test_unwrap();
         assert_eq!(e.op, AuditOp::Delete as u8);
     }
 
@@ -414,7 +416,7 @@ mod tests {
                                                                  // Lire avec filtre min_severity = Critical sur le log global.
                                                                  // On vérifie surtout que la méthode ne panique pas.
         let mut r = AuditReader::new().min_severity(AuditSeverity::Critical);
-        let _ = r.read_n(10).unwrap();
+        let _ = r.read_n(10).test_unwrap();
     }
 
     #[test]
@@ -422,7 +424,7 @@ mod tests {
         let log = AuditLog::new_const();
         push_entry(&log, AuditOp::Create, AuditResult::Success, 1);
         let mut r = AuditReader::with_log_at(&log, ReadDirection::Forward);
-        let all = r.read_all().unwrap();
+        let all = r.read_all().test_unwrap();
         assert!(!all.is_empty());
     }
 
@@ -432,7 +434,7 @@ mod tests {
         push_entry(&log, AuditOp::Read, AuditResult::Success, 99);
         push_entry(&log, AuditOp::Read, AuditResult::Success, 42);
         let mut r = AuditReader::with_log_at(&log, ReadDirection::Forward);
-        let v = r.collect_if(|e| e.actor_uid == 99).unwrap();
+        let v = r.collect_if(|e| e.actor_uid == 99).test_unwrap();
         assert_eq!(v.len(), 1);
     }
 
@@ -447,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_last_n_entries() {
-        let v = last_n_entries(2).unwrap();
+        let v = last_n_entries(2).test_unwrap();
         // Le log global contient au moins une entrée grâce aux autres tests.
         let _ = v;
     }

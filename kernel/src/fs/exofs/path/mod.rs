@@ -164,6 +164,8 @@ pub fn verify_health() -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod integration_tests {
     use super::*;
     use crate::fs::exofs::core::ObjectId;
@@ -177,13 +179,13 @@ mod integration_tests {
     #[test]
     fn test_canonicalize_reexport() {
         let mut buf = [0u8; PATH_MAX];
-        let n = canonicalize_path(b"/a/../b", &mut buf).unwrap();
+        let n = canonicalize_path(b"/a/../b", &mut buf).test_unwrap();
         assert_eq!(&buf[..n], b"/b");
     }
 
     #[test]
     fn test_validate_component_reexport() {
-        validate_component(b"hello").unwrap();
+        validate_component(b"hello").test_unwrap();
         assert!(validate_component(b"").is_err());
         assert!(validate_component(b"bad/comp").is_err());
     }

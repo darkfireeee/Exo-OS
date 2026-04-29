@@ -360,6 +360,8 @@ pub static METRICS_HISTORY: MetricsHistory = MetricsHistory::new_const();
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -468,7 +470,7 @@ mod tests {
         h.record(1, MetricsSnapshot::default());
         h.record(2, MetricsSnapshot::default());
         let mut out = Vec::new();
-        h.last_n(2, &mut out).expect("ok");
+        h.last_n(2, &mut out).test_expect("ok");
         assert_eq!(out.len(), 2);
     }
 

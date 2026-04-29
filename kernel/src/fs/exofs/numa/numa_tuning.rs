@@ -367,6 +367,8 @@ pub static NUMA_POLICY: NumaPolicy = NumaPolicy::new_const();
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -377,7 +379,7 @@ mod tests {
     #[test]
     fn test_configure_ok() {
         let p = fresh_policy();
-        p.configure(200, true, 50_000).unwrap();
+        p.configure(200, true, 50_000).test_unwrap();
         assert_eq!(p.threshold_ppt(), 200);
         assert!(p.auto_enabled());
     }
@@ -397,7 +399,7 @@ mod tests {
     #[test]
     fn test_evaluate_disabled_returns_no_change() {
         let p = fresh_policy();
-        p.configure(200, false, 1000).unwrap();
+        p.configure(200, false, 1000).test_unwrap();
         let r = p.evaluate(100_000);
         assert_eq!(r.event, TuningEvent::NoChange);
     }
@@ -405,7 +407,7 @@ mod tests {
     #[test]
     fn test_evaluate_before_interval_no_change() {
         let p = fresh_policy();
-        p.configure(200, true, 100_000).unwrap();
+        p.configure(200, true, 100_000).test_unwrap();
         // Premier appel OK
         p.evaluate(100_000);
         // Deuxième appel trop tôt
@@ -416,7 +418,7 @@ mod tests {
     #[test]
     fn test_evaluate_after_interval_triggers() {
         let p = fresh_policy();
-        p.configure(200, true, 1_000).unwrap();
+        p.configure(200, true, 1_000).test_unwrap();
         let r = p.evaluate(1_000);
         // Doit avoir été évalué (pas NoChange si intervalle atteint)
         // Mais sans données de charge il ne change rien
@@ -427,7 +429,7 @@ mod tests {
     #[test]
     fn test_force_strategy_override() {
         let p = fresh_policy();
-        p.configure(200, true, 1).unwrap();
+        p.configure(200, true, 1).test_unwrap();
         p.force_strategy(Some(PlacementStrategy::RoundRobin));
         let r = p.evaluate(1);
         assert_eq!(r.event, TuningEvent::ManualOverride);
@@ -444,7 +446,7 @@ mod tests {
     #[test]
     fn test_set_node_capacity_ok() {
         let p = fresh_policy();
-        p.set_node_capacity(0, 8_000_000_000).unwrap();
+        p.set_node_capacity(0, 8_000_000_000).test_unwrap();
         assert_eq!(
             p.node_capacity_bytes[0].load(Ordering::Relaxed),
             8_000_000_000
@@ -483,7 +485,7 @@ mod tests {
     #[test]
     fn test_reset() {
         let p = fresh_policy();
-        p.configure(200, true, 1).unwrap();
+        p.configure(200, true, 1).test_unwrap();
         p.evaluate(1);
         p.reset();
         assert_eq!(p.evaluations(), 0);
@@ -500,7 +502,7 @@ mod tests {
     #[test]
     fn test_report_is_balanced() {
         let p = fresh_policy();
-        p.configure(300, true, 1).unwrap();
+        p.configure(300, true, 1).test_unwrap();
         // Déséquilibre 0 < threshold 300 → balanced
         let r = p._make_report(
             TuningEvent::NoChange,

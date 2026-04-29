@@ -336,6 +336,8 @@ impl KeyDerivation {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -350,7 +352,7 @@ mod tests {
     fn test_hkdf_expand_lengths() {
         let prk = KeyDerivation::hkdf_extract(b"salt", b"ikm");
         for l in [1, 16, 32, 64, 100] {
-            let v = KeyDerivation::hkdf_expand(&prk, b"info", l).unwrap();
+            let v = KeyDerivation::hkdf_expand(&prk, b"info", l).test_unwrap();
             assert_eq!(v.len(), l);
         }
     }
@@ -358,7 +360,7 @@ mod tests {
     #[test]
     fn test_hkdf_expand_empty() {
         let prk = KeyDerivation::hkdf_extract(b"", b"ikm");
-        assert!(KeyDerivation::hkdf_expand(&prk, b"", 0).unwrap().is_empty());
+        assert!(KeyDerivation::hkdf_expand(&prk, b"", 0).test_unwrap().is_empty());
     }
 
     #[test]
@@ -369,24 +371,24 @@ mod tests {
 
     #[test]
     fn test_derive_key_deterministic() {
-        let k1 = KeyDerivation::derive_key(b"secret", b"salt", b"ctx").unwrap();
-        let k2 = KeyDerivation::derive_key(b"secret", b"salt", b"ctx").unwrap();
+        let k1 = KeyDerivation::derive_key(b"secret", b"salt", b"ctx").test_unwrap();
+        let k2 = KeyDerivation::derive_key(b"secret", b"salt", b"ctx").test_unwrap();
         assert_eq!(k1.as_bytes(), k2.as_bytes());
     }
 
     #[test]
     fn test_derive_key_context_separation() {
-        let k1 = KeyDerivation::derive_key(b"s", b"salt", b"a").unwrap();
-        let k2 = KeyDerivation::derive_key(b"s", b"salt", b"b").unwrap();
+        let k1 = KeyDerivation::derive_key(b"s", b"salt", b"a").test_unwrap();
+        let k2 = KeyDerivation::derive_key(b"s", b"salt", b"b").test_unwrap();
         assert_ne!(k1.as_bytes(), k2.as_bytes());
     }
 
     #[test]
     fn test_derive_for_purpose_separation() {
         let k1 =
-            KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::DataEncryption).unwrap();
+            KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::DataEncryption).test_unwrap();
         let k2 =
-            KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::Authentication).unwrap();
+            KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::Authentication).test_unwrap();
         assert_ne!(k1.as_bytes(), k2.as_bytes());
     }
 
@@ -397,30 +399,30 @@ mod tests {
 
     #[test]
     fn test_derive_from_passphrase_deterministic() {
-        let k1 = KeyDerivation::derive_from_passphrase(b"hunter2", &[1u8; 32], 3).unwrap();
-        let k2 = KeyDerivation::derive_from_passphrase(b"hunter2", &[1u8; 32], 3).unwrap();
+        let k1 = KeyDerivation::derive_from_passphrase(b"hunter2", &[1u8; 32], 3).test_unwrap();
+        let k2 = KeyDerivation::derive_from_passphrase(b"hunter2", &[1u8; 32], 3).test_unwrap();
         assert_eq!(k1.as_bytes(), k2.as_bytes());
     }
 
     #[test]
     fn test_derive_from_passphrase_salt_changes_key() {
-        let k1 = KeyDerivation::derive_from_passphrase(b"pass", &[1u8; 32], 3).unwrap();
-        let k2 = KeyDerivation::derive_from_passphrase(b"pass", &[2u8; 32], 3).unwrap();
+        let k1 = KeyDerivation::derive_from_passphrase(b"pass", &[1u8; 32], 3).test_unwrap();
+        let k2 = KeyDerivation::derive_from_passphrase(b"pass", &[2u8; 32], 3).test_unwrap();
         assert_ne!(k1.as_bytes(), k2.as_bytes());
     }
 
     #[test]
     fn test_derive_object_key_unique() {
         let vk = [0x42u8; 32];
-        let k1 = KeyDerivation::derive_object_key(&vk, 1).unwrap();
-        let k2 = KeyDerivation::derive_object_key(&vk, 2).unwrap();
+        let k1 = KeyDerivation::derive_object_key(&vk, 1).test_unwrap();
+        let k2 = KeyDerivation::derive_object_key(&vk, 2).test_unwrap();
         assert_ne!(k1.as_bytes(), k2.as_bytes());
     }
 
     #[test]
     fn test_derive_batch() {
         let infos: &[&[u8]] = &[b"a", b"b", b"c"];
-        let keys = KeyDerivation::derive_batch(b"sec", b"s", infos).unwrap();
+        let keys = KeyDerivation::derive_batch(b"sec", b"s", infos).test_unwrap();
         assert_eq!(keys.len(), 3);
         // Toutes différentes
         assert_ne!(keys[0].as_bytes(), keys[1].as_bytes());
@@ -429,13 +431,13 @@ mod tests {
 
     #[test]
     fn test_verify_derived_key_ok() {
-        let k = KeyDerivation::derive_key(b"sec", b"salt", b"ctx").unwrap();
-        assert!(KeyDerivation::verify_derived_key(&k, b"sec", b"salt", b"ctx").unwrap());
+        let k = KeyDerivation::derive_key(b"sec", b"salt", b"ctx").test_unwrap();
+        assert!(KeyDerivation::verify_derived_key(&k, b"sec", b"salt", b"ctx").test_unwrap());
     }
 
     #[test]
     fn test_verify_derived_key_fail() {
-        let k = KeyDerivation::derive_key(b"sec", b"salt", b"ctx").unwrap();
-        assert!(!KeyDerivation::verify_derived_key(&k, b"other", b"salt", b"ctx").unwrap());
+        let k = KeyDerivation::derive_key(b"sec", b"salt", b"ctx").test_unwrap();
+        assert!(!KeyDerivation::verify_derived_key(&k, b"other", b"salt", b"ctx").test_unwrap());
     }
 }

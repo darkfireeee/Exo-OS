@@ -327,6 +327,8 @@ pub fn cache_total_size() -> ExofsResult<u64> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -392,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_collect_candidates_zero_max() {
-        let v = collect_candidates(0).unwrap();
+        let v = collect_candidates(0).test_unwrap();
         assert!(v.is_empty());
     }
 

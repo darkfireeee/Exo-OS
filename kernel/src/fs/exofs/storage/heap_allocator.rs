@@ -422,6 +422,8 @@ fn round_up_blocks(size: u64, block_size: u64) -> ExofsResult<u64> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -429,13 +431,13 @@ mod tests {
     const N_BLOCKS: u64 = 1024; // 4 MB de heap
 
     fn make_allocator() -> HeapAllocator {
-        HeapAllocator::new(HEAP_START, N_BLOCKS).unwrap()
+        HeapAllocator::new(HEAP_START, N_BLOCKS).test_unwrap()
     }
 
     #[test]
     fn test_alloc_basic() {
         let a = make_allocator();
-        let ext = a.alloc(4096).unwrap();
+        let ext = a.alloc(4096).test_unwrap();
         assert_eq!(ext.offset.0, HEAP_START);
         assert_eq!(ext.size, 4096);
         assert_eq!(a.n_allocs(), 1);
@@ -444,26 +446,26 @@ mod tests {
     #[test]
     fn test_alloc_rounds_up() {
         let a = make_allocator();
-        let ext = a.alloc(1).unwrap();
+        let ext = a.alloc(1).test_unwrap();
         assert_eq!(ext.size, 4096); // arrondi à BLOCK_SIZE
     }
 
     #[test]
     fn test_alloc_and_free() {
         let a = make_allocator();
-        let ext = a.alloc(4096).unwrap();
-        a.free_extent(ext).unwrap();
+        let ext = a.alloc(4096).test_unwrap();
+        a.free_extent(ext).test_unwrap();
         assert_eq!(a.n_frees(), 1);
         // Réallouer la même zone.
-        let ext2 = a.alloc(4096).unwrap();
+        let ext2 = a.alloc(4096).test_unwrap();
         assert_eq!(ext2.offset.0, HEAP_START);
     }
 
     #[test]
     fn test_alloc_out_of_space() {
-        let a = HeapAllocator::new(HEAP_START, 2).unwrap();
-        let _e1 = a.alloc(4096).unwrap();
-        let _e2 = a.alloc(4096).unwrap();
+        let a = HeapAllocator::new(HEAP_START, 2).test_unwrap();
+        let _e1 = a.alloc(4096).test_unwrap();
+        let _e2 = a.alloc(4096).test_unwrap();
         assert!(a.alloc(4096).is_err());
         assert_eq!(a.n_failures(), 1);
     }
@@ -472,7 +474,7 @@ mod tests {
     fn test_free_bytes() {
         let a = make_allocator();
         let init_free = a.free_bytes();
-        let _e = a.alloc(4096 * 10).unwrap();
+        let _e = a.alloc(4096 * 10).test_unwrap();
         assert!(a.free_bytes() < init_free);
     }
 

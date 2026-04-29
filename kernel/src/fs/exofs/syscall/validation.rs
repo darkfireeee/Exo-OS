@@ -546,6 +546,8 @@ pub fn exofs_ret(r: ExofsResult<i64>) -> i64 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -584,8 +586,8 @@ mod tests {
 
     #[test]
     fn test_validate_fd_ok() {
-        assert_eq!(validate_fd(4).unwrap(), 4u32);
-        assert_eq!(validate_fd(65535).unwrap(), 65535u32);
+        assert_eq!(validate_fd(4).test_unwrap(), 4u32);
+        assert_eq!(validate_fd(65535).test_unwrap(), 65535u32);
     }
 
     #[test]
@@ -601,8 +603,8 @@ mod tests {
 
     #[test]
     fn test_validate_count_ok() {
-        assert_eq!(validate_count(1).unwrap(), 1);
-        assert_eq!(validate_count(4096).unwrap(), 4096);
+        assert_eq!(validate_count(1).test_unwrap(), 1);
+        assert_eq!(validate_count(4096).test_unwrap(), 4096);
     }
 
     #[test]
@@ -707,9 +709,9 @@ mod tests {
 
     #[test]
     fn test_validate_meta_len_ok() {
-        assert_eq!(validate_meta_len(1).unwrap(), 1);
+        assert_eq!(validate_meta_len(1).test_unwrap(), 1);
         assert_eq!(
-            validate_meta_len(EXOFS_META_MAX as u64).unwrap(),
+            validate_meta_len(EXOFS_META_MAX as u64).test_unwrap(),
             EXOFS_META_MAX
         );
     }

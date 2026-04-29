@@ -356,13 +356,15 @@ impl RelationFilter {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_kind_roundtrip() {
         for v in 0x01u8..=0x0C {
-            let k = RelationKind::from_u8(v).unwrap();
+            let k = RelationKind::from_u8(v).test_unwrap();
             assert_eq!(k.to_u8(), v);
         }
     }

@@ -313,6 +313,8 @@ pub static CHUNK_INDEX: ChunkIndex = ChunkIndex::new_const();
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::chunk_fingerprint::ChunkFingerprint;
     use super::*;
@@ -329,7 +331,7 @@ mod tests {
     fn test_insert_new_chunk() {
         let idx = ChunkIndex::new_const();
         let f = fp(b"data1");
-        let new = idx.insert(f, blob(), 32).unwrap();
+        let new = idx.insert(f, blob(), 32).test_unwrap();
         assert!(new);
         assert!(idx.contains(&f.blake3));
     }
@@ -338,10 +340,10 @@ mod tests {
     fn test_insert_existing_increments_ref() {
         let idx = ChunkIndex::new_const();
         let f = fp(b"shared");
-        idx.insert(f, blob(), 64).unwrap();
-        let new = idx.insert(f, blob(), 64).unwrap();
+        idx.insert(f, blob(), 64).test_unwrap();
+        let new = idx.insert(f, blob(), 64).test_unwrap();
         assert!(!new);
-        let e = idx.lookup(&f.blake3).unwrap();
+        let e = idx.lookup(&f.blake3).test_unwrap();
         assert_eq!(e.ref_count, 2);
     }
 
@@ -349,7 +351,7 @@ mod tests {
     fn test_decrement_ref_removes_orphan() {
         let idx = ChunkIndex::new_const();
         let f = fp(b"orphan");
-        idx.insert(f, blob(), 16).unwrap();
+        idx.insert(f, blob(), 16).test_unwrap();
         let removed = idx.decrement_ref(&f.blake3);
         assert!(removed);
         assert!(!idx.contains(&f.blake3));
@@ -359,21 +361,21 @@ mod tests {
     fn test_decrement_ref_keeps_shared() {
         let idx = ChunkIndex::new_const();
         let f = fp(b"keep");
-        idx.insert(f, blob(), 16).unwrap();
-        idx.insert(f, blob(), 16).unwrap();
+        idx.insert(f, blob(), 16).test_unwrap();
+        idx.insert(f, blob(), 16).test_unwrap();
         let removed = idx.decrement_ref(&f.blake3);
         assert!(!removed);
-        assert_eq!(idx.lookup(&f.blake3).unwrap().ref_count, 1);
+        assert_eq!(idx.lookup(&f.blake3).test_unwrap().ref_count, 1);
     }
 
     #[test]
     fn test_stats() {
         let idx = ChunkIndex::new_const();
         let f1 = fp(b"a");
-        idx.insert(f1, blob(), 10).unwrap();
+        idx.insert(f1, blob(), 10).test_unwrap();
         let f2 = fp(b"b");
-        idx.insert(f2, blob(), 20).unwrap();
-        idx.insert(f1, blob(), 10).unwrap(); // shared
+        idx.insert(f2, blob(), 20).test_unwrap();
+        idx.insert(f1, blob(), 10).test_unwrap(); // shared
         let s = idx.stats();
         assert_eq!(s.total_entries, 2);
         assert_eq!(s.shared_chunks, 1);
@@ -384,7 +386,7 @@ mod tests {
     fn test_clear() {
         let idx = ChunkIndex::new_const();
         let f = fp(b"clear");
-        idx.insert(f, blob(), 8).unwrap();
+        idx.insert(f, blob(), 8).test_unwrap();
         idx.clear();
         assert!(idx.is_empty());
     }
@@ -393,12 +395,12 @@ mod tests {
     fn test_orphan_keys() {
         let idx = ChunkIndex::new_const();
         let f = fp(b"orp");
-        idx.insert(f, blob(), 4).unwrap();
+        idx.insert(f, blob(), 4).test_unwrap();
         // force ref_count à 0
         idx.acquire();
-        idx.map().get_mut(&f.blake3).unwrap().ref_count = 0;
+        idx.map().get_mut(&f.blake3).test_unwrap().ref_count = 0;
         idx.release();
-        let orphans = idx.orphan_keys().unwrap();
+        let orphans = idx.orphan_keys().test_unwrap();
         assert_eq!(orphans.len(), 1);
     }
 }
@@ -457,16 +459,16 @@ mod tests_snapshot {
     #[test]
     fn test_snapshot_empty() {
         let idx = ChunkIndex::new_const();
-        let s = idx.snapshot().unwrap();
+        let s = idx.snapshot().test_unwrap();
         assert!(s.entries.is_empty());
     }
 
     #[test]
     fn test_snapshot_matches_inserted() {
         let idx = ChunkIndex::new_const();
-        idx.insert(fp(b"snap1"), blob(), 8).unwrap();
-        idx.insert(fp(b"snap2"), blob(), 16).unwrap();
-        let s = idx.snapshot().unwrap();
+        idx.insert(fp(b"snap1"), blob(), 8).test_unwrap();
+        idx.insert(fp(b"snap2"), blob(), 16).test_unwrap();
+        let s = idx.snapshot().test_unwrap();
         assert_eq!(s.entries.len(), 2);
     }
 }

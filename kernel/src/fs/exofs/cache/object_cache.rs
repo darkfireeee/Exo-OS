@@ -322,6 +322,8 @@ impl ObjectCache {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -340,7 +342,7 @@ mod tests {
     #[test]
     fn test_insert_get() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 64)).unwrap();
+        c.insert(mk(1, 64)).test_unwrap();
         assert!(c.get(&blob(1)).is_some());
     }
 
@@ -353,7 +355,7 @@ mod tests {
     #[test]
     fn test_invalidate() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 32)).unwrap();
+        c.insert(mk(1, 32)).test_unwrap();
         c.invalidate(&blob(1));
         assert!(c.get(&blob(1)).is_none());
     }
@@ -361,31 +363,31 @@ mod tests {
     #[test]
     fn test_mark_dirty() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 32)).unwrap();
-        c.mark_dirty(&blob(1)).unwrap();
+        c.insert(mk(1, 32)).test_unwrap();
+        c.mark_dirty(&blob(1)).test_unwrap();
         assert_eq!(c.dirty_ids().len(), 1);
     }
 
     #[test]
     fn test_used_bytes() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 128)).unwrap();
+        c.insert(mk(1, 128)).test_unwrap();
         assert_eq!(c.used_bytes(), 128);
     }
 
     #[test]
     fn test_update_data() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 64)).unwrap();
+        c.insert(mk(1, 64)).test_unwrap();
         c.update_data(&blob(1), alloc::vec![0u8; 256].into_boxed_slice())
-            .unwrap();
+            .test_unwrap();
         assert_eq!(c.used_bytes(), 256);
     }
 
     #[test]
     fn test_ref_count_pin() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 32)).unwrap();
+        c.insert(mk(1, 32)).test_unwrap();
         c.get(&blob(1)); // ref_count => 1
         assert!(c.inner.lock().map[&blob(1)].is_pinned());
         c.release(&blob(1));
@@ -395,7 +397,7 @@ mod tests {
     #[test]
     fn test_flush_all() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 32)).unwrap();
+        c.insert(mk(1, 32)).test_unwrap();
         c.flush_all();
         assert_eq!(c.n_entries(), 0);
     }
@@ -403,8 +405,8 @@ mod tests {
     #[test]
     fn test_evict_n() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 64)).unwrap();
-        c.insert(mk(2, 64)).unwrap();
+        c.insert(mk(1, 64)).test_unwrap();
+        c.insert(mk(2, 64)).test_unwrap();
         let freed = c.evict_n(1);
         assert!(freed <= 128);
     }
@@ -418,14 +420,14 @@ mod tests {
     #[test]
     fn test_ids_by_kind() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 32)).unwrap();
+        c.insert(mk(1, 32)).test_unwrap();
         c.insert(CachedObject::new(
             blob(2),
             ObjectKind::Superblock,
             alloc::vec![0u8;32].into_boxed_slice(),
             0,
         ))
-        .unwrap();
+        .test_unwrap();
         assert_eq!(c.ids_by_kind(ObjectKind::BtreeNode).len(), 1);
         assert_eq!(c.count_by_kind(ObjectKind::Superblock), 1);
     }
@@ -433,9 +435,9 @@ mod tests {
     #[test]
     fn test_flush_dirty_only() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 32)).unwrap();
-        c.insert(mk(2, 32)).unwrap();
-        c.mark_dirty(&blob(1)).unwrap();
+        c.insert(mk(1, 32)).test_unwrap();
+        c.insert(mk(2, 32)).test_unwrap();
+        c.mark_dirty(&blob(1)).test_unwrap();
         c.flush_dirty_only();
         assert_eq!(c.n_entries(), 1);
     }
@@ -443,7 +445,7 @@ mod tests {
     #[test]
     fn test_pinned_bytes() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 64)).unwrap();
+        c.insert(mk(1, 64)).test_unwrap();
         c.get(&blob(1)); // pin
         assert_eq!(c.pinned_bytes(), 64);
     }
@@ -451,8 +453,8 @@ mod tests {
     #[test]
     fn test_evict_oldest_of_kind() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 64)).unwrap();
-        c.insert(mk(2, 64)).unwrap();
+        c.insert(mk(1, 64)).test_unwrap();
+        c.insert(mk(2, 64)).test_unwrap();
         let freed = c.evict_oldest_of_kind(ObjectKind::BtreeNode);
         assert!(freed.is_some());
     }
@@ -460,7 +462,7 @@ mod tests {
     #[test]
     fn test_flush_all_clears() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 64)).unwrap();
+        c.insert(mk(1, 64)).test_unwrap();
         c.flush_all();
         assert_eq!(c.n_entries(), 0);
     }
@@ -468,7 +470,7 @@ mod tests {
     #[test]
     fn test_used_bytes_zero_after_flush() {
         let c = ObjectCache::new_const();
-        c.insert(mk(1, 128)).unwrap();
+        c.insert(mk(1, 128)).test_unwrap();
         c.flush_all();
         assert_eq!(c.used_bytes(), 0);
     }
@@ -482,16 +484,16 @@ mod tests {
     #[test]
     fn test_n_entries_after_multiple_inserts() {
         let c = ObjectCache::new_const();
-        c.insert(mk(3, 32)).unwrap();
-        c.insert(mk(4, 32)).unwrap();
-        c.insert(mk(5, 32)).unwrap();
+        c.insert(mk(3, 32)).test_unwrap();
+        c.insert(mk(4, 32)).test_unwrap();
+        c.insert(mk(5, 32)).test_unwrap();
         assert_eq!(c.n_entries(), 3);
     }
 
     #[test]
     fn test_pinned_bytes_zero_initially() {
         let c = ObjectCache::new_const();
-        c.insert(mk(6, 64)).unwrap();
+        c.insert(mk(6, 64)).test_unwrap();
         // Pas de get() → pas de pin.
         assert_eq!(c.pinned_bytes(), 0);
     }

@@ -386,6 +386,8 @@ pub fn split_with_metrics(
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::path_component::validate_component;
     use super::*;
@@ -401,8 +403,8 @@ mod tests {
         idx.split_threshold = n as u32;
         for i in 0..n {
             let name: Vec<u8> = format!("entry{:04}", i).into_bytes();
-            let c = validate_component(&name).unwrap();
-            idx.insert(&c, fake_oid(i as u8), 0).unwrap();
+            let c = validate_component(&name).test_unwrap();
+            idx.insert(&c, fake_oid(i as u8), 0).test_unwrap();
         }
         idx
     }
@@ -410,7 +412,7 @@ mod tests {
     #[test]
     fn test_split_basic() {
         let mut idx = make_index(10);
-        let res = PathIndexSplitter::split(&mut idx, fake_oid(0)).unwrap();
+        let res = PathIndexSplitter::split(&mut idx, fake_oid(0)).test_unwrap();
         assert_eq!(res.low_count + res.high_count, 10);
         assert!(res.low_count > 0);
         assert!(res.high_count > 0);
@@ -419,8 +421,8 @@ mod tests {
     #[test]
     fn test_split_too_small() {
         let mut idx = PathIndex::new(fake_oid(0));
-        let c = validate_component(b"only").unwrap();
-        idx.insert(&c, fake_oid(1), 0).unwrap();
+        let c = validate_component(b"only").test_unwrap();
+        idx.insert(&c, fake_oid(1), 0).test_unwrap();
         assert!(matches!(
             PathIndexSplitter::split(&mut idx, fake_oid(0)),
             Err(ExofsError::InvalidArgument)
@@ -431,8 +433,8 @@ mod tests {
     fn test_verify_split() {
         let mut idx = make_index(8);
         let original = idx.len();
-        let res = PathIndexSplitter::split(&mut idx, fake_oid(0)).unwrap();
-        PathIndexSplitter::verify_split(&res, original).unwrap();
+        let res = PathIndexSplitter::split(&mut idx, fake_oid(0)).test_unwrap();
+        PathIndexSplitter::verify_split(&res, original).test_unwrap();
     }
 
     #[test]
@@ -445,16 +447,16 @@ mod tests {
     #[test]
     fn test_split_at_hash() {
         let mut idx = make_index(10);
-        let pivot = PathIndexSplitter::optimal_pivot(&idx).unwrap();
+        let pivot = PathIndexSplitter::optimal_pivot(&idx).test_unwrap();
         let original = idx.len();
-        let res = PathIndexSplitter::split_at_hash(&mut idx, fake_oid(0), pivot).unwrap();
+        let res = PathIndexSplitter::split_at_hash(&mut idx, fake_oid(0), pivot).test_unwrap();
         assert_eq!(res.low_count + res.high_count, original);
     }
 
     #[test]
     fn test_estimate_size() {
         let idx = make_index(10);
-        let (low, high) = PathIndexSplitter::estimate_split_size(&idx).unwrap();
+        let (low, high) = PathIndexSplitter::estimate_split_size(&idx).test_unwrap();
         assert!(low > 148);
         assert!(high > 148);
     }

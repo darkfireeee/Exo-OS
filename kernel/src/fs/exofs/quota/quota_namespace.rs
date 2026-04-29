@@ -545,6 +545,8 @@ impl NamespaceStats {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::quota::quota_policy::PolicyPresets;
@@ -585,11 +587,11 @@ mod tests {
     #[test]
     fn test_registry_add_and_get() {
         let ns = QuotaNamespace::new_const();
-        ns.init_root(default_policy(), 0).expect("root");
+        ns.init_root(default_policy(), 0).test_expect("root");
         let id = ns
             .add(NamespaceId::ROOT, default_policy(), "myns", 10)
-            .expect("add");
-        let got = ns.get(id).expect("found");
+            .test_expect("add");
+        let got = ns.get(id).test_expect("found");
         assert_eq!(got.name_str(), "myns");
         assert_eq!(got.parent_id, NamespaceId::ROOT);
     }
@@ -597,9 +599,9 @@ mod tests {
     #[test]
     fn test_registry_duplicate_name() {
         let ns = QuotaNamespace::new_const();
-        ns.init_root(default_policy(), 0).expect("root");
+        ns.init_root(default_policy(), 0).test_expect("root");
         ns.add(NamespaceId::ROOT, default_policy(), "dup", 0)
-            .expect("first");
+            .test_expect("first");
         assert!(ns
             .add(NamespaceId::ROOT, default_policy(), "dup", 0)
             .is_err());
@@ -608,12 +610,12 @@ mod tests {
     #[test]
     fn test_registry_remove() {
         let ns = QuotaNamespace::new_const();
-        ns.init_root(default_policy(), 0).expect("root");
+        ns.init_root(default_policy(), 0).test_expect("root");
         let id = ns
             .add(NamespaceId::ROOT, default_policy(), "torm", 0)
-            .expect("ok");
+            .test_expect("ok");
         assert!(ns.get(id).is_some());
-        ns.remove(id).expect("remove");
+        ns.remove(id).test_expect("remove");
         assert!(ns.get(id).is_none());
     }
 
@@ -626,55 +628,55 @@ mod tests {
     #[test]
     fn test_registry_remove_nonempty() {
         let ns = QuotaNamespace::new_const();
-        ns.init_root(default_policy(), 0).expect("root");
+        ns.init_root(default_policy(), 0).test_expect("root");
         let id = ns
             .add(NamespaceId::ROOT, default_policy(), "nonempty", 0)
-            .expect("ok");
-        ns.inc_entity(id).expect("inc");
+            .test_expect("ok");
+        ns.inc_entity(id).test_expect("inc");
         assert!(ns.remove(id).is_err());
     }
 
     #[test]
     fn test_registry_set_policy() {
         let ns = QuotaNamespace::new_const();
-        ns.init_root(default_policy(), 0).expect("root");
+        ns.init_root(default_policy(), 0).test_expect("root");
         let id = ns
             .add(NamespaceId::ROOT, default_policy(), "p", 0)
-            .expect("ok");
+            .test_expect("ok");
         let new_p = PolicyPresets::sandbox();
-        ns.set_policy(id, new_p).expect("set");
-        let got = ns.get(id).expect("found");
+        ns.set_policy(id, new_p).test_expect("set");
+        let got = ns.get(id).test_expect("found");
         assert_eq!(got.policy.limits.hard_bytes, new_p.limits.hard_bytes);
     }
 
     #[test]
     fn test_registry_entity_count() {
         let ns = QuotaNamespace::new_const();
-        ns.init_root(default_policy(), 0).expect("root");
+        ns.init_root(default_policy(), 0).test_expect("root");
         let id = ns
             .add(NamespaceId::ROOT, default_policy(), "cnt", 0)
-            .expect("ok");
-        ns.inc_entity(id).expect("inc");
-        ns.inc_entity(id).expect("inc");
-        let e = ns.get(id).expect("found");
+            .test_expect("ok");
+        ns.inc_entity(id).test_expect("inc");
+        ns.inc_entity(id).test_expect("inc");
+        let e = ns.get(id).test_expect("found");
         assert_eq!(e.entity_count, 2);
-        ns.dec_entity(id).expect("dec");
-        let e2 = ns.get(id).expect("found");
+        ns.dec_entity(id).test_expect("dec");
+        let e2 = ns.get(id).test_expect("found");
         assert_eq!(e2.entity_count, 1);
     }
 
     #[test]
     fn test_registry_children_of() {
         let ns = QuotaNamespace::new_const();
-        ns.init_root(default_policy(), 0).expect("root");
+        ns.init_root(default_policy(), 0).test_expect("root");
         let c1 = ns
             .add(NamespaceId::ROOT, default_policy(), "c1", 0)
-            .expect("c1");
+            .test_expect("c1");
         let c2 = ns
             .add(NamespaceId::ROOT, default_policy(), "c2", 0)
-            .expect("c2");
-        let _ = ns.add(c1, default_policy(), "gc1", 0).expect("gc1");
-        let children = ns.children_of(NamespaceId::ROOT).expect("ok");
+            .test_expect("c2");
+        let _ = ns.add(c1, default_policy(), "gc1", 0).test_expect("gc1");
+        let children = ns.children_of(NamespaceId::ROOT).test_expect("ok");
         assert_eq!(children.len(), 2);
         assert!(children.contains(&c1));
         assert!(children.contains(&c2));
@@ -683,12 +685,12 @@ mod tests {
     #[test]
     fn test_registry_list_all() {
         let ns = QuotaNamespace::new_const();
-        ns.init_root(default_policy(), 0).expect("root");
+        ns.init_root(default_policy(), 0).test_expect("root");
         ns.add(NamespaceId::ROOT, default_policy(), "a", 0)
-            .expect("a");
+            .test_expect("a");
         ns.add(NamespaceId::ROOT, default_policy(), "b", 0)
-            .expect("b");
-        let all = ns.list_all().expect("ok");
+            .test_expect("b");
+        let all = ns.list_all().test_expect("ok");
         assert_eq!(all.len(), 3); // root + a + b
     }
 

@@ -15,6 +15,9 @@
 use super::audit_entry::{AuditEntry, AuditResult, AuditSeverity, AUDIT_ENTRY_SIZE};
 use core::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes du ring-buffer
 // ─────────────────────────────────────────────────────────────────────────────
@@ -343,7 +346,7 @@ mod tests {
     fn test_read_last_returns_last_pushed() {
         let log = AuditLog::new_const();
         push_simple(&log, AuditOp::Write, AuditResult::Success);
-        let e = log.read_last().unwrap();
+        let e = log.read_last().test_unwrap();
         assert!(e.is_valid());
         assert_eq!(e.op, AuditOp::Write as u8);
     }

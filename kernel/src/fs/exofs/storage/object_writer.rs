@@ -48,6 +48,8 @@ pub const OBJECT_MAX_SIZE: usize = 4 * 1024 * 1024 * 1024;
 
 /// Nombre maximal de blobs par objet
 pub const OBJECT_MAX_BLOBS: usize = 65536;
+/// Taille disque d'une référence de blob dans l'ExtentMap.
+const OBJECT_BLOB_REF_DISK_SIZE: usize = 44;
 
 // ─────────────────────────────────────────────────────────────
 // Structures disque (repr C — ONDISK-03)
@@ -113,8 +115,7 @@ impl ObjectHeaderDisk {
 
     /// Vérifie le checksum de cet en-tête (HDR-03)
     pub fn verify_checksum(&self) -> bool {
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C)] — taille vérifiée par const assert.
-        let mut raw: [u8; OBJECT_HEADER_SIZE] = unsafe { core::mem::transmute_copy(self) };
+        let mut raw = self.as_bytes();
         raw[104..108].fill(0);
         let mut raw124 = [0u8; 124];
         raw124.copy_from_slice(&raw[..124]);
@@ -124,8 +125,72 @@ impl ObjectHeaderDisk {
 
     /// Retourne les octets bruts
     pub fn as_bytes(&self) -> [u8; OBJECT_HEADER_SIZE] {
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C)] — taille vérifiée par const assert.
-        unsafe { core::mem::transmute_copy(self) }
+        let mut raw = [0u8; OBJECT_HEADER_SIZE];
+        raw[0..4].copy_from_slice(&self.magic.to_le_bytes());
+        raw[4] = self.version;
+        raw[5] = self.object_type;
+        raw[6] = self.flags;
+        raw[7] = self._reserved0;
+        raw[8..12].copy_from_slice(&self.blob_count.to_le_bytes());
+        raw[16..24].copy_from_slice(&self.content_size.to_le_bytes());
+        raw[24..56].copy_from_slice(&self.object_id);
+        raw[56..64].copy_from_slice(&self.epoch.to_le_bytes());
+        raw[64..72].copy_from_slice(&self.extent_map_offset.to_le_bytes());
+        raw[72..104].copy_from_slice(&self.content_hash);
+        raw[104..108].copy_from_slice(&self.header_checksum);
+        raw[108..128].copy_from_slice(&self._pad1);
+        raw
+    }
+
+    pub fn from_bytes(raw: &[u8]) -> ExofsResult<Self> {
+        if raw.len() < OBJECT_HEADER_SIZE {
+            return Err(ExofsError::InvalidSize);
+        }
+
+        let mut object_id = [0u8; 32];
+        object_id.copy_from_slice(&raw[24..56]);
+        let mut content_hash = [0u8; 32];
+        content_hash.copy_from_slice(&raw[72..104]);
+        let mut header_checksum = [0u8; 4];
+        header_checksum.copy_from_slice(&raw[104..108]);
+        let mut pad1 = [0u8; 20];
+        pad1.copy_from_slice(&raw[108..128]);
+
+        Ok(Self {
+            magic: u32::from_le_bytes(
+                raw[0..4]
+                    .try_into()
+                    .map_err(|_| ExofsError::CorruptedStructure)?,
+            ),
+            version: raw[4],
+            object_type: raw[5],
+            flags: raw[6],
+            _reserved0: raw[7],
+            blob_count: u32::from_le_bytes(
+                raw[8..12]
+                    .try_into()
+                    .map_err(|_| ExofsError::CorruptedStructure)?,
+            ),
+            content_size: u64::from_le_bytes(
+                raw[16..24]
+                    .try_into()
+                    .map_err(|_| ExofsError::CorruptedStructure)?,
+            ),
+            object_id,
+            epoch: u64::from_le_bytes(
+                raw[56..64]
+                    .try_into()
+                    .map_err(|_| ExofsError::CorruptedStructure)?,
+            ),
+            extent_map_offset: u64::from_le_bytes(
+                raw[64..72]
+                    .try_into()
+                    .map_err(|_| ExofsError::CorruptedStructure)?,
+            ),
+            content_hash,
+            header_checksum,
+            _pad1: pad1,
+        })
     }
 }
 
@@ -212,6 +277,7 @@ impl ObjectWriterConfig {
 pub struct ObjectWriteResult {
     pub object_id: ObjectId,
     pub header_offset: DiskOffset,
+    pub extent_map_offset: DiskOffset,
     pub content_size: u64,
     pub disk_size: u64,
     pub blob_count: u32,
@@ -299,8 +365,8 @@ impl ObjectWriter {
         object_id: ObjectId,
         data: &[u8],
         config: &ObjectWriterConfig,
-        alloc_fn: AllocFn,
-        write_fn: WriteFn,
+        mut alloc_fn: AllocFn,
+        mut write_fn: WriteFn,
         dedup_check: DedupFn,
     ) -> ExofsResult<ObjectWriteResult>
     where
@@ -317,10 +383,20 @@ impl ObjectWriter {
         let content_hash = blake3_hash(data);
 
         // ── 3. Découpage en blobs ─────────────────────────────────────
-        let (blobs, disk_size) = Self::write_blobs(data, config, alloc_fn, write_fn, dedup_check)?;
+        let (blobs, mut disk_size) =
+            Self::write_blobs(data, config, &mut alloc_fn, &mut write_fn, dedup_check)?;
 
         let blob_count = blobs.len() as u32;
         let content_size = data.len() as u64;
+        let extent_map_offset = if blob_count > 1 {
+            let off = Self::write_extent_map(&blobs, |n| alloc_fn(n), |o, buf| write_fn(o, buf))?;
+            disk_size = disk_size
+                .checked_add(Self::extent_map_disk_size(blobs.len())?)
+                .ok_or(ExofsError::Overflow)?;
+            off
+        } else {
+            blobs.first().map(|b| b.offset).unwrap_or(DiskOffset(0))
+        };
 
         // ── 4. Construction de l'ObjectWriteResult ────────────────────
         OBJECT_WRITER_STATS
@@ -340,11 +416,10 @@ impl ObjectWriter {
         STORAGE_STATS.add_write(disk_size);
 
         // L'ObjectHeader sera écrit séparément via write_header()
-        let first_offset = blobs.first().map(|b| b.offset).unwrap_or(DiskOffset(0));
-
         Ok(ObjectWriteResult {
             object_id,
-            header_offset: first_offset,
+            header_offset: DiskOffset(0),
+            extent_map_offset,
             content_size,
             disk_size,
             blob_count,
@@ -379,8 +454,6 @@ impl ObjectWriter {
             flags |= 0b0000_0010;
         } // multi-blob
 
-        let extent_map_off = result.blobs.first().map(|b| b.offset.0).unwrap_or(0);
-
         let mut hdr = ObjectHeaderDisk {
             magic: OBJECT_HEADER_MAGIC,
             version: OBJECT_FORMAT_VERSION,
@@ -391,7 +464,7 @@ impl ObjectWriter {
             content_size: result.content_size,
             object_id: result.object_id.0,
             epoch: config.epoch.0,
-            extent_map_offset: extent_map_off,
+            extent_map_offset: result.extent_map_offset.0,
             content_hash: result.content_hash,
             header_checksum: [0u8; 4],
             _pad1: [0u8; 20],
@@ -437,12 +510,11 @@ impl ObjectWriter {
 
         // Format : [count: u32 LE][blob_ref: 44B each]
         // blob_ref = [blob_id: 32B][offset: 8B][size: 4B]
-        const BLOB_REF_SIZE: usize = 44;
         let count = blobs.len();
         let map_size = 4usize
             .checked_add(
                 count
-                    .checked_mul(BLOB_REF_SIZE)
+                    .checked_mul(OBJECT_BLOB_REF_DISK_SIZE)
                     .ok_or(ExofsError::Overflow)?,
             )
             .ok_or(ExofsError::Overflow)?;
@@ -545,6 +617,17 @@ impl ObjectWriter {
         }
 
         Ok((refs, total_disk))
+    }
+
+    fn extent_map_disk_size(blob_count: usize) -> ExofsResult<u64> {
+        let bytes = 4usize
+            .checked_add(
+                blob_count
+                    .checked_mul(OBJECT_BLOB_REF_DISK_SIZE)
+                    .ok_or(ExofsError::Overflow)?,
+            )
+            .ok_or(ExofsError::Overflow)?;
+        align_up(DiskOffset(bytes as u64), BLOCK_SIZE as u64).map(|offset| offset.0)
     }
 }
 
@@ -655,6 +738,8 @@ pub fn validate_object_write(data_len: usize, config: &ObjectWriterConfig) -> Ex
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use alloc::vec;
@@ -704,7 +789,7 @@ mod tests {
             .no_dedup()
             .with_chunk_size(512 * 1024);
 
-        validate_object_write(data.len(), &config).unwrap();
+        validate_object_write(data.len(), &config).test_unwrap();
 
         let mut disk = make_disk(65536);
         let mut alloc_off = 0u64;
@@ -727,7 +812,7 @@ mod tests {
             },
             |_| None,
         )
-        .unwrap();
+        .test_unwrap();
 
         assert_eq!(result.blob_count, 1);
         assert_eq!(result.content_size, data.len() as u64);
@@ -763,7 +848,7 @@ mod tests {
             },
             |_| None,
         )
-        .unwrap();
+        .test_unwrap();
 
         assert_eq!(result.blob_count, 4);
         OBJECT_WRITER_STATS
@@ -797,7 +882,7 @@ mod tests {
             },
             |_| None,
         )
-        .unwrap();
+        .test_unwrap();
 
         let hdr_offset = ObjectWriter::write_header(
             &result,
@@ -815,12 +900,12 @@ mod tests {
                 Ok(buf.len())
             },
         )
-        .unwrap();
+        .test_unwrap();
 
         // Vérification en-tête sur disque
         let raw = &disk[hdr_offset.0 as usize..hdr_offset.0 as usize + OBJECT_HEADER_SIZE];
         // SAFETY: validité des données vérifiée par les gardes ci-dessus.
-        let hdr: &ObjectHeaderDisk = unsafe { &*(raw.as_ptr() as *const ObjectHeaderDisk) };
+        let hdr = ObjectHeaderDisk::from_bytes(raw).test_unwrap();
         assert_eq!(hdr.magic, OBJECT_HEADER_MAGIC);
         assert!(hdr.verify_checksum());
     }
@@ -859,7 +944,7 @@ mod tests {
                 Ok(buf.len())
             },
         )
-        .unwrap();
+        .test_unwrap();
 
         // Parse count
         let s = emap_off.0 as usize;

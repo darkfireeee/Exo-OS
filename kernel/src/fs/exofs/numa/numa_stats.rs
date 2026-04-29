@@ -398,6 +398,8 @@ pub static NUMA_STATS: NumaStats = NumaStats::new_const();
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -513,7 +515,7 @@ mod tests {
     #[test]
     fn test_all_nodes_returns_8() {
         let s = NumaStats::new_const();
-        let v = s.all_nodes().unwrap();
+        let v = s.all_nodes().test_unwrap();
         assert_eq!(v.len(), MAX_NUMA_NODES);
     }
 

@@ -302,6 +302,8 @@ pub struct ProtectStats {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::reset_for_test;
@@ -323,7 +325,7 @@ mod tests {
             blob_catalog_size: 0,
             name: make_snapshot_name(b"p-test"),
         })
-        .unwrap();
+        .test_unwrap();
     }
 
     #[test]
@@ -332,10 +334,10 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 1);
         let p = SnapshotProtect::new_const();
-        p.protect(SnapshotId(1), 0).unwrap();
+        p.protect(SnapshotId(1), 0).test_unwrap();
         assert!(p.is_protected(SnapshotId(1)));
         // Flag dans la liste
-        let snap = SNAPSHOT_LIST.get(SnapshotId(1)).unwrap();
+        let snap = SNAPSHOT_LIST.get(SnapshotId(1)).test_unwrap();
         assert!(snap.is_protected());
     }
 
@@ -345,8 +347,8 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 2);
         let p = SnapshotProtect::new_const();
-        p.protect(SnapshotId(2), 0).unwrap();
-        p.unprotect(SnapshotId(2), 999).unwrap();
+        p.protect(SnapshotId(2), 0).test_unwrap();
+        p.unprotect(SnapshotId(2), 999).test_unwrap();
         assert!(!p.is_protected(SnapshotId(2)));
     }
 
@@ -356,7 +358,7 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 3);
         let p = SnapshotProtect::new_const();
-        p.protect_worm(SnapshotId(3), 1000, 0).unwrap();
+        p.protect_worm(SnapshotId(3), 1000, 0).test_unwrap();
         // Trop tôt
         let err = p.unprotect(SnapshotId(3), 500);
         assert!(matches!(err, Err(ExofsError::InvalidState)));
@@ -368,8 +370,8 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 4);
         let p = SnapshotProtect::new_const();
-        p.protect_worm(SnapshotId(4), 500, 0).unwrap();
-        p.unprotect(SnapshotId(4), 600).unwrap();
+        p.protect_worm(SnapshotId(4), 500, 0).test_unwrap();
+        p.unprotect(SnapshotId(4), 600).test_unwrap();
         assert!(!p.is_protected(SnapshotId(4)));
     }
 
@@ -380,9 +382,9 @@ mod tests {
         push_snap(&list, 10);
         push_snap(&list, 11);
         let p = SnapshotProtect::new_const();
-        p.protect_worm(SnapshotId(10), 500, 0).unwrap();
-        p.protect_worm(SnapshotId(11), 2000, 0).unwrap();
-        let expired = p.expired_worm(1000).unwrap();
+        p.protect_worm(SnapshotId(10), 500, 0).test_unwrap();
+        p.protect_worm(SnapshotId(11), 2000, 0).test_unwrap();
+        let expired = p.expired_worm(1000).test_unwrap();
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0].0, 10);
     }
@@ -394,8 +396,8 @@ mod tests {
         push_snap(&list, 20);
         push_snap(&list, 21);
         let p = SnapshotProtect::new_const();
-        p.protect(SnapshotId(20), 0).unwrap();
-        p.protect_worm(SnapshotId(21), 999, 0).unwrap();
+        p.protect(SnapshotId(20), 0).test_unwrap();
+        p.protect_worm(SnapshotId(21), 999, 0).test_unwrap();
         let s = p.stats();
         assert_eq!(s.n_protected, 2);
         assert_eq!(s.n_worm, 1);

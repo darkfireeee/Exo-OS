@@ -620,6 +620,8 @@ impl FsckRepair {
 // ── Tests unitaires ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -650,7 +652,7 @@ mod tests {
         };
         log.push(rec);
         assert_eq!(log.total(), 1);
-        let recent = log.read_recent(1).unwrap();
+        let recent = log.read_recent(1).test_unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].tick, 42);
     }
@@ -667,7 +669,7 @@ mod tests {
                 error_code: if ok { 0 } else { 0x02 },
             });
         }
-        let fails = log.read_failures(10).unwrap();
+        let fails = log.read_failures(10).test_unwrap();
         assert_eq!(fails.len(), 2); // tick 1 et 3.
     }
 
@@ -683,7 +685,7 @@ mod tests {
             });
         }
         assert_eq!(log.total(), REPAIR_LOG_CAPACITY + 1);
-        let recent = log.read_recent(REPAIR_LOG_CAPACITY).unwrap();
+        let recent = log.read_recent(REPAIR_LOG_CAPACITY).test_unwrap();
         assert_eq!(recent.len(), REPAIR_LOG_CAPACITY);
     }
 

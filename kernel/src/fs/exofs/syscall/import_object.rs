@@ -304,6 +304,8 @@ pub fn import_source_blob_id(data: &[u8]) -> ExofsResult<BlobId> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::export_object;
     use super::*;
@@ -318,7 +320,7 @@ mod tests {
         let content = payload();
         let bid = BlobId::from_bytes_blake3(content);
         BLOB_CACHE.insert(bid, content.to_vec()).ok();
-        export_object::export_blob_pub(&bid, 0).unwrap()
+        export_object::export_blob_pub(&bid, 0).test_unwrap()
     }
 
     #[test]
@@ -360,7 +362,7 @@ mod tests {
     #[test]
     fn test_import_dry_run_raw() {
         let data = b"dry run raw";
-        let bid = import_dry_run(data, true).unwrap();
+        let bid = import_dry_run(data, true).test_unwrap();
         assert_eq!(*bid.as_bytes(), *BlobId::from_bytes_blake3(data).as_bytes());
     }
 
@@ -371,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_batch_import_empty() {
-        let ids = batch_import(&[], 0).unwrap();
+        let ids = batch_import(&[], 0).test_unwrap();
         assert!(ids.is_empty());
     }
 
@@ -503,29 +505,29 @@ mod tests_extra {
     #[test]
     fn test_import_and_verify_raw() {
         let data = b"verify me please";
-        let bid = import_and_verify(data, import_flags::RAW).unwrap();
-        let r = read_imported(&bid).unwrap();
+        let bid = import_and_verify(data, import_flags::RAW).test_unwrap();
+        let r = read_imported(&bid).test_unwrap();
         assert_eq!(r.len(), data.len());
     }
 
     #[test]
     fn test_imports_equal_idempotent() {
         let a = b"same data";
-        assert!(imports_are_equal(a, a, true).unwrap());
+        assert!(imports_are_equal(a, a, true).test_unwrap());
     }
 
     #[test]
     fn test_imports_not_equal() {
         let a = b"data A";
         let b = b"data B";
-        assert!(!imports_are_equal(a, b, true).unwrap());
+        assert!(!imports_are_equal(a, b, true).test_unwrap());
     }
 
     #[test]
     fn test_import_copy_with_salt() {
         let src = BlobId::from_bytes_blake3(b"copy_src");
         BLOB_CACHE.insert(src, b"original".to_vec()).ok();
-        let dst = import_copy_with_salt(&src, b"salt123").unwrap();
+        let dst = import_copy_with_salt(&src, b"salt123").test_unwrap();
         assert_ne!(src.as_bytes(), dst.as_bytes());
     }
 

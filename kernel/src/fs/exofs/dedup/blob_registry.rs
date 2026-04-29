@@ -316,6 +316,8 @@ pub static BLOB_REGISTRY: BlobRegistry = BlobRegistry::new_const();
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -330,7 +332,7 @@ mod tests {
     fn test_register_new() {
         let reg = BlobRegistry::new_const();
         let id = make_blob(1);
-        let new = reg.register(id.clone(), 1024, keys(4)).unwrap();
+        let new = reg.register(id.clone(), 1024, keys(4)).test_unwrap();
         assert!(new);
         assert!(reg.contains(&id));
     }
@@ -339,10 +341,10 @@ mod tests {
     fn test_register_existing_increments_ref() {
         let reg = BlobRegistry::new_const();
         let id = make_blob(2);
-        reg.register(id.clone(), 1024, keys(4)).unwrap();
-        let new = reg.register(id.clone(), 1024, keys(4)).unwrap();
+        reg.register(id.clone(), 1024, keys(4)).test_unwrap();
+        let new = reg.register(id.clone(), 1024, keys(4)).test_unwrap();
         assert!(!new);
-        let e = reg.lookup(&id).unwrap();
+        let e = reg.lookup(&id).test_unwrap();
         assert_eq!(e.ref_count, 2);
     }
 
@@ -350,7 +352,7 @@ mod tests {
     fn test_deregister_removes_orphan() {
         let reg = BlobRegistry::new_const();
         let id = make_blob(3);
-        reg.register(id.clone(), 512, keys(2)).unwrap();
+        reg.register(id.clone(), 512, keys(2)).test_unwrap();
         let removed = reg.deregister(&id);
         assert!(removed);
         assert!(!reg.contains(&id));
@@ -360,18 +362,18 @@ mod tests {
     fn test_deregister_keeps_shared() {
         let reg = BlobRegistry::new_const();
         let id = make_blob(4);
-        reg.register(id.clone(), 512, keys(2)).unwrap();
-        reg.register(id.clone(), 512, keys(2)).unwrap();
+        reg.register(id.clone(), 512, keys(2)).test_unwrap();
+        reg.register(id.clone(), 512, keys(2)).test_unwrap();
         let removed = reg.deregister(&id);
         assert!(!removed);
-        assert_eq!(reg.lookup(&id).unwrap().ref_count, 1);
+        assert_eq!(reg.lookup(&id).test_unwrap().ref_count, 1);
     }
 
     #[test]
     fn test_stats() {
         let reg = BlobRegistry::new_const();
-        reg.register(make_blob(5), 100, keys(1)).unwrap();
-        reg.register(make_blob(6), 200, keys(2)).unwrap();
+        reg.register(make_blob(5), 100, keys(1)).test_unwrap();
+        reg.register(make_blob(6), 200, keys(2)).test_unwrap();
         let s = reg.stats();
         assert_eq!(s.total_blobs, 2);
         assert_eq!(s.total_bytes, 300);
@@ -381,14 +383,14 @@ mod tests {
     #[test]
     fn test_verify_integrity_ok() {
         let reg = BlobRegistry::new_const();
-        reg.register(make_blob(7), 50, keys(3)).unwrap();
+        reg.register(make_blob(7), 50, keys(3)).test_unwrap();
         assert!(reg.verify_integrity().is_ok());
     }
 
     #[test]
     fn test_clear() {
         let reg = BlobRegistry::new_const();
-        reg.register(make_blob(8), 64, keys(1)).unwrap();
+        reg.register(make_blob(8), 64, keys(1)).test_unwrap();
         reg.clear();
         assert!(reg.is_empty());
     }
@@ -470,19 +472,19 @@ mod tests_extra {
     #[test]
     fn test_all_summaries() {
         let r = BlobRegistry::new_const();
-        r.register(bid(10), 100, ks(2)).unwrap();
-        r.register(bid(11), 200, ks(3)).unwrap();
-        let s = r.all_summaries().unwrap();
+        r.register(bid(10), 100, ks(2)).test_unwrap();
+        r.register(bid(11), 200, ks(3)).test_unwrap();
+        let s = r.all_summaries().test_unwrap();
         assert_eq!(s.len(), 2);
     }
 
     #[test]
     fn test_large_blobs() {
         let r = BlobRegistry::new_const();
-        r.register(bid(20), 50, ks(1)).unwrap();
-        r.register(bid(21), 500, ks(2)).unwrap();
-        r.register(bid(22), 5000, ks(3)).unwrap();
-        let large = r.large_blobs(100).unwrap();
+        r.register(bid(20), 50, ks(1)).test_unwrap();
+        r.register(bid(21), 500, ks(2)).test_unwrap();
+        r.register(bid(22), 5000, ks(3)).test_unwrap();
+        let large = r.large_blobs(100).test_unwrap();
         assert_eq!(large.len(), 2);
     }
 
@@ -490,8 +492,8 @@ mod tests_extra {
     fn test_count_shared() {
         let r = BlobRegistry::new_const();
         let id = bid(30);
-        r.register(id.clone(), 64, ks(1)).unwrap();
-        r.register(id.clone(), 64, ks(1)).unwrap();
+        r.register(id.clone(), 64, ks(1)).test_unwrap();
+        r.register(id.clone(), 64, ks(1)).test_unwrap();
         assert_eq!(r.count_shared_above(2), 1);
     }
 
@@ -499,12 +501,12 @@ mod tests_extra {
     fn test_orphan_blobs() {
         let r = BlobRegistry::new_const();
         let id = bid(40);
-        r.register(id.clone(), 32, ks(1)).unwrap();
+        r.register(id.clone(), 32, ks(1)).test_unwrap();
         // Forcer orphelin depuis l'extérieur
         r.acquire();
-        r.map().get_mut(id.as_bytes()).unwrap().ref_count = 0;
+        r.map().get_mut(id.as_bytes()).test_unwrap().ref_count = 0;
         r.release();
-        let orphans = r.orphan_blobs().unwrap();
+        let orphans = r.orphan_blobs().test_unwrap();
         assert_eq!(orphans.len(), 1);
     }
 

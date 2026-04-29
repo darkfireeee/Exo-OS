@@ -332,6 +332,8 @@ pub fn export_embedded_epoch(data: &[u8]) -> ExofsResult<u64> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -363,7 +365,7 @@ mod tests {
     fn test_build_header_roundtrip() {
         let bid = make_bid(b"hdr_rtrip");
         let hdr_bytes = build_header(&bid, 1024, 42, 0);
-        let hdr = check_export_header(&hdr_bytes).unwrap();
+        let hdr = check_export_header(&hdr_bytes).test_unwrap();
         assert_eq!(hdr.magic, EXPORT_MAGIC);
         assert_eq!(hdr.version, EXPORT_VERSION);
         assert_eq!(hdr.data_size, 1024);
@@ -413,9 +415,9 @@ mod tests {
         let bid = make_bid(b"export_rtrip_data");
         let content = b"Hello ExoFS export!";
         BLOB_CACHE.insert(bid, content.to_vec()).ok();
-        let exported = export_blob(&bid, 0).unwrap();
+        let exported = export_blob(&bid, 0).test_unwrap();
         assert!(exported.len() > EXPORT_HDR_SIZE);
-        let payload = extract_payload(&exported).unwrap();
+        let payload = extract_payload(&exported).test_unwrap();
         let mut i = 0usize;
         while i < content.len() {
             assert_eq!(payload[i], content[i]);
@@ -581,7 +583,7 @@ mod tests_batch {
 
     #[test]
     fn test_batch_export_empty() {
-        let (bufs, res) = batch_export(&[], 0).unwrap();
+        let (bufs, res) = batch_export(&[], 0).test_unwrap();
         assert!(bufs.is_empty());
         assert_eq!(res.exported, 0);
     }
@@ -591,8 +593,8 @@ mod tests_batch {
         let a: Vec<u8> = alloc::vec![0x01, 0x02, 0x03];
         let b: Vec<u8> = alloc::vec![0xAA, 0xBB];
         let bufs = alloc::vec![a.clone(), b.clone()];
-        let merged = concat_exports(&bufs).unwrap();
-        let split = split_concat_exports(&merged).unwrap();
+        let merged = concat_exports(&bufs).test_unwrap();
+        let split = split_concat_exports(&merged).test_unwrap();
         assert_eq!(split.len(), 2);
         assert_eq!(split[0], a);
         assert_eq!(split[1], b);
@@ -603,7 +605,7 @@ mod tests_batch {
         let bid = make_bid(b"export_integ_test");
         let content = b"ExoFS integrity check";
         BLOB_CACHE.insert(bid, content.to_vec()).ok();
-        let exported = super::export_blob(&bid, 0).unwrap();
+        let exported = super::export_blob(&bid, 0).test_unwrap();
         // La vérification peut ne pas matcher le BlobId car le BlobId de l'en-tête
         // est celui du blob source, pas le hash du payload — comportement attendu.
         let _ = verify_export_integrity(&exported);

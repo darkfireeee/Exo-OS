@@ -276,48 +276,50 @@ impl BatchFixedChunker {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn chunker() -> FixedChunker {
-        FixedChunker::new(4).unwrap()
+        FixedChunker::new(4).test_unwrap()
     }
 
     #[test]
     fn test_chunk_count() {
-        let c = FixedChunker::new(4).unwrap();
-        assert_eq!(c.chunk_count_for(8).unwrap(), 2);
-        assert_eq!(c.chunk_count_for(9).unwrap(), 3);
-        assert_eq!(c.chunk_count_for(0).unwrap(), 0);
+        let c = FixedChunker::new(4).test_unwrap();
+        assert_eq!(c.chunk_count_for(8).test_unwrap(), 2);
+        assert_eq!(c.chunk_count_for(9).test_unwrap(), 3);
+        assert_eq!(c.chunk_count_for(0).test_unwrap(), 0);
     }
 
     #[test]
     fn test_chunk_produces_correct_count() {
         let c = chunker();
         let data = &[0u8; 10];
-        let chunks = c.chunk(data).unwrap();
+        let chunks = c.chunk(data).test_unwrap();
         assert_eq!(chunks.len(), 3); // 4+4+2
     }
 
     #[test]
     fn test_last_chunk_undersized() {
-        let c = FixedChunker::new(8).unwrap();
+        let c = FixedChunker::new(8).test_unwrap();
         let data = &[1u8; 10];
-        let chunks = c.chunk(data).unwrap();
-        assert_eq!(chunks.last().unwrap().len(), 2);
+        let chunks = c.chunk(data).test_unwrap();
+        assert_eq!(chunks.last().test_unwrap().len(), 2);
     }
 
     #[test]
     fn test_chunk_empty_data() {
         let c = chunker();
-        assert!(c.chunk(&[]).unwrap().is_empty());
+        assert!(c.chunk(&[]).test_unwrap().is_empty());
     }
 
     #[test]
     fn test_chunk_data_preserved() {
-        let c = FixedChunker::new(3).unwrap();
+        let c = FixedChunker::new(3).test_unwrap();
         let data = &[1u8, 2, 3, 4, 5, 6];
-        let chunks = c.chunk(data).unwrap();
+        let chunks = c.chunk(data).test_unwrap();
         assert_eq!(chunks[0].data.as_slice(), &[1u8, 2, 3]);
         assert_eq!(chunks[1].data.as_slice(), &[4u8, 5, 6]);
     }
@@ -326,8 +328,8 @@ mod tests {
     fn test_boundaries_match_chunk() {
         let c = chunker();
         let data = &[0u8; 12];
-        let bounds = c.boundaries(data).unwrap();
-        let chunks = c.chunk(data).unwrap();
+        let bounds = c.boundaries(data).test_unwrap();
+        let chunks = c.chunk(data).test_unwrap();
         assert_eq!(bounds.len(), chunks.len());
     }
 
@@ -335,8 +337,8 @@ mod tests {
     fn test_chunk_blake3_deterministic() {
         let c = chunker();
         let data = &[0xABu8; 8];
-        let c1 = c.chunk(data).unwrap();
-        let c2 = c.chunk(data).unwrap();
+        let c1 = c.chunk(data).test_unwrap();
+        let c2 = c.chunk(data).test_unwrap();
         assert_eq!(c1[0].blake3, c2[0].blake3);
     }
 
@@ -352,10 +354,10 @@ mod tests {
 
     #[test]
     fn test_batch_chunker() {
-        let bc = BatchFixedChunker::new(4).unwrap();
+        let bc = BatchFixedChunker::new(4).test_unwrap();
         let b1 = &[0u8; 8];
         let b2 = &[1u8; 12];
-        let r = bc.chunk_batch(&[b1, b2]).unwrap();
+        let r = bc.chunk_batch(&[b1, b2]).test_unwrap();
         assert_eq!(r.len(), 2);
         assert_eq!(r[0].chunks.len(), 2);
         assert_eq!(r[1].chunks.len(), 3);
@@ -363,8 +365,8 @@ mod tests {
 
     #[test]
     fn test_batch_all_fingerprints() {
-        let bc = BatchFixedChunker::new(4).unwrap();
-        let fps = bc.all_fingerprints(&[&[0u8; 8]]).unwrap();
+        let bc = BatchFixedChunker::new(4).test_unwrap();
+        let fps = bc.all_fingerprints(&[&[0u8; 8]]).test_unwrap();
         assert_eq!(fps.len(), 2);
     }
 
@@ -376,8 +378,8 @@ mod tests {
             pad_last_chunk: false,
             compute_fast_hash: false,
         };
-        let c = FixedChunker::with_config(cfg).unwrap();
-        let ch = c.chunk(&[0u8; 8]).unwrap();
+        let c = FixedChunker::with_config(cfg).test_unwrap();
+        let ch = c.chunk(&[0u8; 8]).test_unwrap();
         assert!(!ch[0].has_data());
     }
 }
@@ -521,15 +523,15 @@ mod tests_extended {
 
     #[test]
     fn test_sliding_window_single_chunk() {
-        let sw = SlidingWindowChunker::new(4, 2).unwrap();
-        let fps = sw.slide_fingerprints(&[0u8; 3]).unwrap();
+        let sw = SlidingWindowChunker::new(4, 2).test_unwrap();
+        let fps = sw.slide_fingerprints(&[0u8; 3]).test_unwrap();
         assert_eq!(fps.len(), 1);
     }
 
     #[test]
     fn test_sliding_window_multiple() {
-        let sw = SlidingWindowChunker::new(4, 2).unwrap();
-        let fps = sw.slide_fingerprints(&[0u8; 10]).unwrap();
+        let sw = SlidingWindowChunker::new(4, 2).test_unwrap();
+        let fps = sw.slide_fingerprints(&[0u8; 10]).test_unwrap();
         assert!(fps.len() >= 3);
     }
 
@@ -541,7 +543,7 @@ mod tests_extended {
 
     #[test]
     fn test_sliding_window_count() {
-        let sw = SlidingWindowChunker::new(4, 2).unwrap();
+        let sw = SlidingWindowChunker::new(4, 2).test_unwrap();
         assert_eq!(sw.window_count(10), 4); // (10-4)/2+1 = 4
     }
 
@@ -553,24 +555,24 @@ mod tests_extended {
 
     #[test]
     fn test_aligned_chunker_chunk() {
-        let ac = AlignedFixedChunker::new(512, 512).unwrap();
+        let ac = AlignedFixedChunker::new(512, 512).test_unwrap();
         let data = &[0xABu8; 1000];
-        let chunks = ac.chunk_aligned(data).unwrap();
+        let chunks = ac.chunk_aligned(data).test_unwrap();
         assert_eq!(chunks.len(), 2); // 512 + 488
     }
 
     #[test]
     fn test_aligned_chunk_size() {
-        let ac = AlignedFixedChunker::new(1000, 512).unwrap();
-        let s = ac.aligned_chunk_size().unwrap();
+        let ac = AlignedFixedChunker::new(1000, 512).test_unwrap();
+        let s = ac.aligned_chunk_size().test_unwrap();
         assert_eq!(s, 1024); // arrondi à 512
     }
 
     #[test]
     fn test_fixed_chunker_stats() {
-        let c = FixedChunker::new(4).unwrap();
-        let chunks = c.chunk(&[0u8; 12]).unwrap();
-        let stats = ChunkStats::from_chunks(&chunks).unwrap();
+        let c = FixedChunker::new(4).test_unwrap();
+        let chunks = c.chunk(&[0u8; 12]).test_unwrap();
+        let stats = ChunkStats::from_chunks(&chunks).test_unwrap();
         assert_eq!(stats.total_chunks, 3);
         assert_eq!(stats.total_bytes, 12);
     }

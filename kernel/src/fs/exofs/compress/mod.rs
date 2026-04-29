@@ -234,6 +234,8 @@ pub fn is_compressed_blob(payload: &[u8]) -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod integration_tests {
     use super::*;
 
@@ -257,8 +259,8 @@ mod integration_tests {
     #[test]
     fn test_compress_decompress_roundtrip_lz4() {
         let data = uniform(4096, 0xAA);
-        let blob = compress_blob(&data, CompressPolicy::lz4_fast()).unwrap();
-        let dec = decompress_blob(&blob).unwrap();
+        let blob = compress_blob(&data, CompressPolicy::lz4_fast()).test_unwrap();
+        let dec = decompress_blob(&blob).test_unwrap();
         // Si compressé : roundtrip exact. Si brut : identique.
         assert!(dec.len() == data.len() || dec == data);
     }
@@ -266,15 +268,15 @@ mod integration_tests {
     #[test]
     fn test_compress_decompress_roundtrip_zstd() {
         let data = uniform(2048, 0x77);
-        let blob = compress_blob(&data, CompressPolicy::zstd_default()).unwrap();
-        let dec = decompress_blob(&blob).unwrap();
+        let blob = compress_blob(&data, CompressPolicy::zstd_default()).test_unwrap();
+        let dec = decompress_blob(&blob).test_unwrap();
         assert!(dec.len() == data.len() || !dec.is_empty());
     }
 
     #[test]
     fn test_is_compressed_after_compress() {
         let data = uniform(1024, 0x11);
-        let blob = compress_blob(&data, CompressPolicy::lz4_fast()).unwrap();
+        let blob = compress_blob(&data, CompressPolicy::lz4_fast()).test_unwrap();
         // Peut être compressé ou brut selon la décision adaptative.
         let _ = is_compressed_blob(&blob);
     }
@@ -282,14 +284,14 @@ mod integration_tests {
     #[test]
     fn test_compress_validated_ok() {
         let data = uniform(2048, 0x33);
-        let blob = compress_validated(&data, CompressPolicy::lz4_fast()).unwrap();
+        let blob = compress_validated(&data, CompressPolicy::lz4_fast()).test_unwrap();
         assert!(!blob.is_empty() || data.is_empty());
     }
 
     #[test]
     fn test_empty_roundtrip() {
-        let blob = compress_blob(&[], CompressPolicy::default()).unwrap();
-        let dec = decompress_blob(&blob).unwrap();
+        let blob = compress_blob(&[], CompressPolicy::default()).test_unwrap();
+        let dec = decompress_blob(&blob).test_unwrap();
         assert!(dec.is_empty());
     }
 
@@ -300,7 +302,7 @@ mod integration_tests {
             ..CompressorConfig::default_config()
         });
         let data = uniform(64, 0xFF);
-        let out = module.compress(&data).unwrap();
+        let out = module.compress(&data).test_unwrap();
         // Données trop petites → stockage brut.
         assert_eq!(out.as_slice(), data.as_slice());
     }
@@ -309,7 +311,7 @@ mod integration_tests {
     fn test_module_decompress_raw() {
         let module = CompressModule::new();
         let data = b"raw not compressed";
-        let out = module.decompress(data).unwrap();
+        let out = module.decompress(data).test_unwrap();
         assert_eq!(out.as_slice(), data);
     }
 
@@ -334,8 +336,8 @@ mod integration_tests {
     #[test]
     fn test_compress_random_no_panic() {
         let data = pseudo_random(512);
-        let blob = compress_blob(&data, CompressPolicy::default()).unwrap();
-        let dec = decompress_blob(&blob).unwrap();
+        let blob = compress_blob(&data, CompressPolicy::default()).test_unwrap();
+        let dec = decompress_blob(&blob).test_unwrap();
         assert_eq!(dec.len(), data.len());
     }
 
@@ -344,7 +346,7 @@ mod integration_tests {
     #[test]
     fn test_compress_blob_returns_nonempty_for_nonempty_input() {
         let data = uniform(256, 0x42);
-        let blob = compress_blob(&data, CompressPolicy::default()).unwrap();
+        let blob = compress_blob(&data, CompressPolicy::default()).test_unwrap();
         assert!(blob.len() > 0);
     }
 
@@ -356,13 +358,13 @@ mod integration_tests {
     #[test]
     fn test_module_config_dense() {
         let m = CompressModule::with_config(CompressorConfig::dense_config());
-        let r = m.compress(&uniform(200, 0x99)).unwrap();
+        let r = m.compress(&uniform(200, 0x99)).test_unwrap();
         assert!(!r.is_empty() || true);
     }
 
     #[test]
     fn test_compress_validated_empty() {
-        let blob = compress_validated(&[], CompressPolicy::default()).unwrap();
+        let blob = compress_validated(&[], CompressPolicy::default()).test_unwrap();
         assert!(blob.is_empty());
     }
 
@@ -381,7 +383,7 @@ mod integration_tests {
     #[test]
     fn test_decompress_blob_passthrough_raw() {
         let data = b"raw payload";
-        let dec = decompress_blob(data).unwrap();
+        let dec = decompress_blob(data).test_unwrap();
         assert_eq!(dec.as_slice(), data);
     }
 
@@ -407,7 +409,7 @@ mod integration_tests {
     #[test]
     fn test_compress_validated_non_empty() {
         let data = vec![0x11u8; 512];
-        let b = compress_validated(&data, CompressPolicy::lz4_fast()).unwrap();
+        let b = compress_validated(&data, CompressPolicy::lz4_fast()).test_unwrap();
         assert!(b.len() > 0);
     }
     #[test]
@@ -429,7 +431,7 @@ mod integration_tests {
     #[test]
     fn test_compress_blob_zstd_policy() {
         let data = vec![0xBBu8; 256];
-        let b = compress_blob(&data, CompressPolicy::zstd_default()).unwrap();
+        let b = compress_blob(&data, CompressPolicy::zstd_default()).test_unwrap();
         assert!(!b.is_empty());
     }
     #[test]
@@ -440,18 +442,18 @@ mod integration_tests {
     #[test]
     fn test_module_compress_returns_data() {
         let m = CompressModule::new();
-        let r = m.compress(&vec![0u8; 512]).unwrap();
+        let r = m.compress(&vec![0u8; 512]).test_unwrap();
         assert!(!r.is_empty());
     }
     #[test]
     fn test_compress_blob_empty_returns_empty() {
-        let b = compress_blob(&[], CompressPolicy::default()).unwrap();
+        let b = compress_blob(&[], CompressPolicy::default()).test_unwrap();
         assert!(b.is_empty());
     }
     #[test]
     fn test_decompress_non_compressed_returns_same() {
         let d = b"hello";
-        let r = decompress_blob(d).unwrap();
+        let r = decompress_blob(d).test_unwrap();
         assert_eq!(r.as_slice(), d);
     }
     #[test]

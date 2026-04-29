@@ -361,6 +361,8 @@ pub fn quota_set_limits(key: QuotaKey, limits: QuotaLimits) -> ExofsResult<()> {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -378,51 +380,51 @@ mod tests {
     #[test]
     fn test_module_init() {
         let m = QuotaModule::new_const();
-        m.init(QuotaConfig::default_config(), 0).unwrap();
+        m.init(QuotaConfig::default_config(), 0).test_unwrap();
         assert!(m.state().is_ready());
     }
 
     #[test]
     fn test_module_double_init_ok() {
         let m = QuotaModule::new_const();
-        m.init(QuotaConfig::default_config(), 0).unwrap();
-        m.init(QuotaConfig::default_config(), 1).unwrap();
+        m.init(QuotaConfig::default_config(), 0).test_unwrap();
+        m.init(QuotaConfig::default_config(), 1).test_unwrap();
         assert!(m.state().is_ready());
     }
 
     #[test]
     fn test_check_write_allowed() {
         let m = QuotaModule::new_const();
-        m.init(QuotaConfig::default_config(), 0).unwrap();
+        m.init(QuotaConfig::default_config(), 0).test_unwrap();
         let key = mk_key(300);
-        m.set_limits(key, mk_limits(100_000)).unwrap();
+        m.set_limits(key, mk_limits(100_000)).test_unwrap();
         assert!(m.check_write(key, 1_000, 0, 0, 0).is_ok());
     }
 
     #[test]
     fn test_check_write_denied() {
         let m = QuotaModule::new_const();
-        m.init(QuotaConfig::default_config(), 0).unwrap();
+        m.init(QuotaConfig::default_config(), 0).test_unwrap();
         let key = mk_key(301);
-        m.set_limits(key, mk_limits(500)).unwrap();
+        m.set_limits(key, mk_limits(500)).test_unwrap();
         // Remplir le tracker
-        QUOTA_TRACKER.add_bytes(key, 400).unwrap();
+        QUOTA_TRACKER.add_bytes(key, 400).test_unwrap();
         assert!(m.check_write(key, 200, 0, 0, 0).is_err());
     }
 
     #[test]
     fn test_record_and_release() {
         let m = QuotaModule::new_const();
-        m.init(QuotaConfig::default_config(), 0).unwrap();
+        m.init(QuotaConfig::default_config(), 0).test_unwrap();
         let key = mk_key(302);
-        m.set_limits(key, mk_limits(100_000)).unwrap();
+        m.set_limits(key, mk_limits(100_000)).test_unwrap();
         QUOTA_TRACKER.reset_usage(key).unwrap_or(());
-        m.record_write(key, 5_000, 2, 1).unwrap();
-        let u = QUOTA_TRACKER.get_usage(key).unwrap();
+        m.record_write(key, 5_000, 2, 1).test_unwrap();
+        let u = QUOTA_TRACKER.get_usage(key).test_unwrap();
         assert_eq!(u.bytes_used, 5_000);
         assert_eq!(u.blobs_used, 2);
-        m.release_write(key, 1_000, 1, 0).unwrap();
-        let u2 = QUOTA_TRACKER.get_usage(key).unwrap();
+        m.release_write(key, 1_000, 1, 0).test_unwrap();
+        let u2 = QUOTA_TRACKER.get_usage(key).test_unwrap();
         assert_eq!(u2.bytes_used, 4_000);
         assert_eq!(u2.blobs_used, 1);
     }
@@ -430,10 +432,10 @@ mod tests {
     #[test]
     fn test_remove_entity() {
         let m = QuotaModule::new_const();
-        m.init(QuotaConfig::default_config(), 0).unwrap();
+        m.init(QuotaConfig::default_config(), 0).test_unwrap();
         let key = mk_key(303);
-        m.set_limits(key, mk_limits(10_000)).unwrap();
-        m.remove_entity(key).unwrap();
+        m.set_limits(key, mk_limits(10_000)).test_unwrap();
+        m.remove_entity(key).test_unwrap();
         assert!(QUOTA_TRACKER.get_usage(key).is_none());
     }
 
@@ -441,7 +443,7 @@ mod tests {
     fn test_config_default() {
         let c = QuotaConfig::default_config();
         assert!(c.enabled);
-        c.validate().unwrap();
+        c.validate().test_unwrap();
     }
 
     #[test]
@@ -449,7 +451,7 @@ mod tests {
         let c = QuotaConfig::strict();
         assert!(c.strict_mode);
         assert_eq!(c.grace_ticks_default, 0);
-        c.validate().unwrap();
+        c.validate().test_unwrap();
     }
 
     #[test]
@@ -460,31 +462,31 @@ mod tests {
 
     #[test]
     fn test_quota_init_fn() {
-        quota_init(0).unwrap();
+        quota_init(0).test_unwrap();
     }
 
     #[test]
     fn test_quota_check_write_fn() {
-        quota_init(0).unwrap();
+        quota_init(0).test_unwrap();
         let key = mk_key(304);
-        quota_set_limits(key, mk_limits(100_000)).unwrap();
+        quota_set_limits(key, mk_limits(100_000)).test_unwrap();
         assert!(quota_check_write(key, 500, 0).is_ok());
     }
 
     #[test]
     fn test_report_via_module() {
         let m = QuotaModule::new_const();
-        m.init(QuotaConfig::default_config(), 0).unwrap();
+        m.init(QuotaConfig::default_config(), 0).test_unwrap();
         let key = mk_key(305);
-        m.set_limits(key, mk_limits(10_000)).unwrap();
-        let r = m.report().unwrap();
+        m.set_limits(key, mk_limits(10_000)).test_unwrap();
+        let r = m.report().test_unwrap();
         assert!(r.entry_count() > 0);
     }
 
     #[test]
     fn test_enforcement_stats_accessible() {
         let m = QuotaModule::new_const();
-        m.init(QuotaConfig::default_config(), 0).unwrap();
+        m.init(QuotaConfig::default_config(), 0).test_unwrap();
         let s = m.enforcement_stats();
         let _ = s.denial_rate_ppt();
     }

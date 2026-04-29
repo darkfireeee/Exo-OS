@@ -341,6 +341,8 @@ pub fn numa_preferred_node(blob_id: Option<BlobId>) -> usize {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -353,8 +355,8 @@ mod tests {
 
     #[test]
     fn test_config_validate_ok() {
-        default_cfg().validate().unwrap();
-        multi_cfg().validate().unwrap();
+        default_cfg().validate().test_unwrap();
+        multi_cfg().validate().test_unwrap();
     }
 
     #[test]
@@ -374,30 +376,30 @@ mod tests {
     #[test]
     fn test_module_init() {
         let m = NumaModule::new_const();
-        m.init(default_cfg(), 0).unwrap();
+        m.init(default_cfg(), 0).test_unwrap();
         assert!(m.state().is_ready());
     }
 
     #[test]
     fn test_module_double_init_ok() {
         let m = NumaModule::new_const();
-        m.init(default_cfg(), 0).unwrap();
-        m.init(default_cfg(), 1).unwrap();
+        m.init(default_cfg(), 0).test_unwrap();
+        m.init(default_cfg(), 1).test_unwrap();
         assert_eq!(m.state(), NumaModuleState::Ready);
     }
 
     #[test]
     fn test_preferred_node_single_node() {
         let m = NumaModule::new_const();
-        m.init(default_cfg(), 0).unwrap();
-        let n = m.preferred_node_for(None).unwrap();
+        m.init(default_cfg(), 0).test_unwrap();
+        let n = m.preferred_node_for(None).test_unwrap();
         assert_eq!(n, NumaNodeId(0));
     }
 
     #[test]
     fn test_record_alloc_and_stat() {
         let m = NumaModule::new_const();
-        m.init(default_cfg(), 0).unwrap();
+        m.init(default_cfg(), 0).test_unwrap();
         NUMA_STATS.reset_all();
         m.record_alloc(NumaNodeId(0), 4096);
         assert_eq!(NUMA_STATS.node_stats(0).allocs, 1);
@@ -406,7 +408,7 @@ mod tests {
     #[test]
     fn test_record_free_and_stat() {
         let m = NumaModule::new_const();
-        m.init(default_cfg(), 0).unwrap();
+        m.init(default_cfg(), 0).test_unwrap();
         NUMA_STATS.reset_all();
         m.record_alloc(NumaNodeId(0), 8192);
         m.record_free(NumaNodeId(0), 4096);
@@ -416,7 +418,7 @@ mod tests {
     #[test]
     fn test_record_io() {
         let m = NumaModule::new_const();
-        m.init(default_cfg(), 0).unwrap();
+        m.init(default_cfg(), 0).test_unwrap();
         NUMA_STATS.reset_all();
         m.record_io(NumaNodeId(0), 1024, 512);
         let s = NUMA_STATS.node_stats(0);
@@ -427,23 +429,23 @@ mod tests {
     #[test]
     fn test_register_cpu() {
         let m = NumaModule::new_const();
-        m.init(default_cfg(), 0).unwrap();
-        m.register_cpu(CpuId(10), NumaNodeId(0)).unwrap();
+        m.init(default_cfg(), 0).test_unwrap();
+        m.register_cpu(CpuId(10), NumaNodeId(0)).test_unwrap();
         assert_eq!(m.node_of_cpu(CpuId(10)), Some(NumaNodeId(0)));
     }
 
     #[test]
     fn test_all_node_stats_len() {
         let m = NumaModule::new_const();
-        m.init(multi_cfg(), 0).unwrap();
-        let stats = m.all_node_stats().unwrap();
+        m.init(multi_cfg(), 0).test_unwrap();
+        let stats = m.all_node_stats().test_unwrap();
         assert_eq!(stats.len(), 4);
     }
 
     #[test]
     fn test_is_healthy_initial() {
         let m = NumaModule::new_const();
-        m.init(default_cfg(), 0).unwrap();
+        m.init(default_cfg(), 0).test_unwrap();
         NUMA_STATS.reset_all();
         NUMA_MIGRATION.reset_stats();
         assert!(m.is_healthy());
@@ -451,17 +453,17 @@ mod tests {
 
     #[test]
     fn test_numa_init_fn_single() {
-        numa_init(1, 0).unwrap();
+        numa_init(1, 0).test_unwrap();
     }
 
     #[test]
     fn test_numa_init_fn_multi() {
-        numa_init(4, 0).unwrap();
+        numa_init(4, 0).test_unwrap();
     }
 
     #[test]
     fn test_numa_preferred_node_fn() {
-        numa_init(1, 0).unwrap();
+        numa_init(1, 0).test_unwrap();
         let n = numa_preferred_node(None);
         assert_eq!(n, 0);
     }

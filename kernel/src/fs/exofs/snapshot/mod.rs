@@ -57,6 +57,8 @@
 //! ```
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 extern crate std;
 
 // ─────────────────────────────────────────────────────────────
@@ -161,7 +163,7 @@ static SNAPSHOT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 pub fn reset_for_test() -> std::sync::MutexGuard<'static, ()> {
-    let guard = SNAPSHOT_TEST_LOCK.lock().unwrap();
+    let guard = SNAPSHOT_TEST_LOCK.lock().test_unwrap();
     shutdown();
     guard
 }

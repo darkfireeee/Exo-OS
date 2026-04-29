@@ -393,6 +393,8 @@ pub fn make_snapshot_name(src: &[u8]) -> [u8; SNAPSHOT_NAME_LEN] {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -479,7 +481,7 @@ mod tests {
             name: make_snapshot_name(b"prod-snapshot"),
         };
         let hdr = snap.to_header_disk();
-        let snap2 = Snapshot::from_header_disk(&hdr).unwrap();
+        let snap2 = Snapshot::from_header_disk(&hdr).test_unwrap();
         assert_eq!(snap2.id.0, snap.id.0);
         assert_eq!(snap2.n_blobs, snap.n_blobs);
         assert_eq!(snap2.parent_id, snap.parent_id);

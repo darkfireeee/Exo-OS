@@ -556,6 +556,8 @@ fn hex_name_from_id(id: &[u8; 32]) -> Vec<u8> {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -611,10 +613,10 @@ mod tests {
     fn test_export_blob_to_archive_roundtrip() {
         let bid = dummy_blob_id(7);
         let data = b"roundtrip test data";
-        let archive = export_blob_to_archive(&bid, data).expect("export ok");
+        let archive = export_blob_to_archive(&bid, data).test_expect("export ok");
         assert!(!archive.is_empty());
 
-        let ok = verify_archive(&archive).expect("verify ok");
+        let ok = verify_archive(&archive).test_expect("verify ok");
         assert!(ok);
     }
 
@@ -622,9 +624,9 @@ mod tests {
     fn test_import_first_from_archive() {
         let bid = dummy_blob_id(9);
         let data = b"import first test";
-        let archive = export_blob_to_archive(&bid, data).expect("export ok");
+        let archive = export_blob_to_archive(&bid, data).test_expect("export ok");
 
-        let (got_id, got_data) = import_first_from_archive(&archive).expect("import ok");
+        let (got_id, got_data) = import_first_from_archive(&archive).test_expect("import ok");
         assert_eq!(got_id, bid);
         assert_eq!(got_data, data);
     }
@@ -632,7 +634,7 @@ mod tests {
     #[test]
     fn test_verify_archive_invalid() {
         let bad = b"this is not an archive";
-        let ok = verify_archive(bad).expect("no panic");
+        let ok = verify_archive(bad).test_expect("no panic");
         assert!(!ok);
     }
 
@@ -653,7 +655,7 @@ mod tests {
 
     #[test]
     fn test_verify_archive_empty() {
-        let ok = verify_archive(&[]).expect("no panic");
+        let ok = verify_archive(&[]).test_expect("no panic");
         assert!(!ok);
     }
 

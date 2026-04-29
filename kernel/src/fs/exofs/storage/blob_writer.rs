@@ -74,6 +74,8 @@ pub struct BlobHeaderDisk {
     pub blob_id: [u8; 32],
     /// Checksum de CET en-tête (Blake3 sur les 56 premiers octets)
     pub header_checksum: [u8; 4],
+    /// Réservé pour garder un format disque déterministe sur 64 octets.
+    pub _reserved1: [u8; 4],
 }
 
 const _: () = assert!(
@@ -84,10 +86,12 @@ const _: () = assert!(
 impl BlobHeaderDisk {
     /// Vérifie le checksum d'en-tête (HDR-03)
     pub fn verify_header_checksum(&self) -> bool {
-        let mut raw = self.as_bytes();
-        raw[56..60].fill(0);
+        let raw = self.as_bytes();
+        let mut raw60 = [0u8; 60];
+        raw60.copy_from_slice(&raw[..60]);
+        raw60[56..60].fill(0);
         // Checksum = 4 premiers octets du Blake3 sur les 60 premiers bytes
-        let h = crate::fs::exofs::core::blob_id::blake3_hash(&raw[..60]);
+        let h = crate::fs::exofs::core::blob_id::blake3_hash(&raw60);
         self.header_checksum == [h[0], h[1], h[2], h[3]]
     }
 
@@ -97,10 +101,65 @@ impl BlobHeaderDisk {
         [h[0], h[1], h[2], h[3]]
     }
 
-    /// Accès brut (pour calcul checksum)
+    /// Sérialise l'en-tête dans sa forme disque canonique.
     fn as_bytes(&self) -> [u8; BLOB_HEADER_SIZE] {
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C)] — taille vérifiée par const assert.
-        unsafe { core::mem::transmute(*self) }
+        let mut raw = [0u8; BLOB_HEADER_SIZE];
+        raw[0..4].copy_from_slice(&self.magic.to_le_bytes());
+        raw[4] = self.version;
+        raw[5] = self.compression_algo;
+        raw[6] = self.flags;
+        raw[7] = self._reserved0;
+        raw[8..12].copy_from_slice(&self.original_size.to_le_bytes());
+        raw[12..16].copy_from_slice(&self.stored_size.to_le_bytes());
+        raw[16..24].copy_from_slice(&self.epoch.to_le_bytes());
+        raw[24..56].copy_from_slice(&self.blob_id);
+        raw[56..60].copy_from_slice(&self.header_checksum);
+        raw[60..64].copy_from_slice(&self._reserved1);
+        raw
+    }
+
+    /// Désérialise un en-tête blob depuis sa représentation disque.
+    pub fn from_bytes(raw: &[u8]) -> ExofsResult<Self> {
+        if raw.len() < BLOB_HEADER_SIZE {
+            return Err(ExofsError::InvalidSize);
+        }
+
+        let mut blob_id = [0u8; 32];
+        blob_id.copy_from_slice(&raw[24..56]);
+        let mut header_checksum = [0u8; 4];
+        header_checksum.copy_from_slice(&raw[56..60]);
+        let mut reserved1 = [0u8; 4];
+        reserved1.copy_from_slice(&raw[60..64]);
+
+        Ok(Self {
+            magic: u32::from_le_bytes(
+                raw[0..4]
+                    .try_into()
+                    .map_err(|_| ExofsError::CorruptedStructure)?,
+            ),
+            version: raw[4],
+            compression_algo: raw[5],
+            flags: raw[6],
+            _reserved0: raw[7],
+            original_size: u32::from_le_bytes(
+                raw[8..12]
+                    .try_into()
+                    .map_err(|_| ExofsError::CorruptedStructure)?,
+            ),
+            stored_size: u32::from_le_bytes(
+                raw[12..16]
+                    .try_into()
+                    .map_err(|_| ExofsError::CorruptedStructure)?,
+            ),
+            epoch: u64::from_le_bytes(
+                raw[16..24]
+                    .try_into()
+                    .map_err(|_| ExofsError::CorruptedStructure)?,
+            ),
+            blob_id,
+            header_checksum,
+            _reserved1: reserved1,
+        })
     }
 }
 
@@ -484,8 +543,7 @@ impl BlobWriter {
 
         // Construction de l'en-tête (HDR-03)
         let header = Self::build_header(&ctx, blob_id, config)?;
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        let hdr_bytes: [u8; BLOB_HEADER_SIZE] = unsafe { core::mem::transmute(header) };
+        let hdr_bytes = header.as_bytes();
 
         // Écriture de l'en-tête (WRITE-02)
         let written_hdr = write_fn(base_offset, &hdr_bytes)?;
@@ -567,13 +625,14 @@ impl BlobWriter {
             epoch,
             blob_id: blob_id.0,
             header_checksum: [0u8; 4],
+            _reserved1: [0u8; 4],
         };
 
         // Calcul du checksum sur les 60 premiers octets (avant injection)
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C)] — taille vérifiée par const assert.
-        let raw: [u8; BLOB_HEADER_SIZE] = unsafe { core::mem::transmute(hdr) };
+        let raw = hdr.as_bytes();
         let mut raw60 = [0u8; 60];
         raw60.copy_from_slice(&raw[..60]);
+        raw60[56..60].fill(0);
         hdr.header_checksum = BlobHeaderDisk::compute_header_checksum(&raw60);
 
         Ok(hdr)
@@ -733,12 +792,11 @@ where
 }
 
 /// Vérifie l'en-tête d'un blob lu (HDR-03)
-pub fn verify_blob_header(raw: &[u8]) -> ExofsResult<&BlobHeaderDisk> {
+pub fn verify_blob_header(raw: &[u8]) -> ExofsResult<BlobHeaderDisk> {
     if raw.len() < BLOB_HEADER_SIZE {
         return Err(ExofsError::InvalidSize);
     }
-    // SAFETY: taille vérifiée ci-dessus, repr(C) garanti
-    let hdr: &BlobHeaderDisk = unsafe { &*(raw.as_ptr() as *const BlobHeaderDisk) };
+    let hdr = BlobHeaderDisk::from_bytes(&raw[..BLOB_HEADER_SIZE])?;
     if hdr.magic != BLOB_HEADER_MAGIC {
         return Err(ExofsError::BadMagic);
     }
@@ -760,6 +818,8 @@ pub fn blob_total_disk_size(stored_size: u32) -> u64 {
 // Tests unitaires
 // ─────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -801,7 +861,7 @@ mod tests {
 
         let result = BlobWriter::write_blob(&data, &config, alloc_fn, write_fn, dedup_fn);
         assert!(result.is_ok());
-        let r = result.unwrap();
+        let r = result.test_unwrap();
         assert_eq!(r.original_size, 512);
         assert!(!r.dedup_hit);
     }
@@ -826,7 +886,7 @@ mod tests {
         let _ = BlobWriter::write_blob(&data, &config, alloc_fn, write_fn, |_| None);
         let hdr = verify_blob_header(&disk[..BLOB_HEADER_SIZE]);
         assert!(hdr.is_ok());
-        let h = hdr.unwrap();
+        let h = hdr.test_unwrap();
         assert_eq!(h.magic, BLOB_HEADER_MAGIC);
         assert_eq!(h.original_size, 256);
     }
@@ -846,7 +906,7 @@ mod tests {
         };
 
         let r = BlobWriter::write_blob(&data, &config, alloc_fn, write_fn, |_bid| Some(existing))
-            .unwrap();
+            .test_unwrap();
 
         assert!(r.dedup_hit);
         assert_eq!(r.offset.0, existing.0);
@@ -866,7 +926,7 @@ mod tests {
         let config = BlobWriterConfig::new(EpochId(2)).no_dedup();
         let mut bw = BatchBlobWriter::new(config);
         for i in 0..4u8 {
-            bw.add(i as usize, &make_data(64, i)).unwrap();
+            bw.add(i as usize, &make_data(64, i)).test_unwrap();
         }
         assert_eq!(bw.pending_count(), 4);
 
@@ -888,7 +948,7 @@ mod tests {
                 },
                 |_| None,
             )
-            .unwrap();
+            .test_unwrap();
 
         assert_eq!(results.len(), 4);
         for r in results {

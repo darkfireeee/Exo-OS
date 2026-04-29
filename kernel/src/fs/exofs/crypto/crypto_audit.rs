@@ -277,6 +277,8 @@ impl CryptoAuditLog {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -288,7 +290,7 @@ mod tests {
     fn test_record_and_tail_one() {
         let log = fresh();
         log.record(AuditKind::KeyGenerated, None, 1000, true);
-        let tail = log.tail(1).unwrap();
+        let tail = log.tail(1).test_unwrap();
         assert_eq!(tail[0].kind, AuditKind::KeyGenerated);
         assert!(tail[0].is_success());
     }
@@ -296,7 +298,7 @@ mod tests {
     #[test]
     fn test_tail_empty_zero() {
         let log = fresh();
-        let t = log.tail(0).unwrap();
+        let t = log.tail(0).test_unwrap();
         assert!(t.is_empty());
     }
 
@@ -315,7 +317,7 @@ mod tests {
         log.record(AuditKind::KeyRevoked, Some(KeySlotId(1)), 0, true);
         log.record(AuditKind::BlobEncrypted, None, 0, true);
         log.record(AuditKind::KeyRevoked, Some(KeySlotId(2)), 0, true);
-        let revoked = log.filter_by_kind(AuditKind::KeyRevoked).unwrap();
+        let revoked = log.filter_by_kind(AuditKind::KeyRevoked).test_unwrap();
         assert!(revoked.iter().all(|e| e.kind == AuditKind::KeyRevoked));
     }
 
@@ -324,7 +326,7 @@ mod tests {
         let log = fresh();
         log.record(AuditKind::AuthFailure, None, 0, false);
         log.record(AuditKind::BlobDecrypted, None, 0, true);
-        let errs = log.filter_errors().unwrap();
+        let errs = log.filter_errors().test_unwrap();
         assert!(errs.iter().all(|e| !e.is_success()));
     }
 
@@ -343,7 +345,7 @@ mod tests {
             log.record(AuditKind::BlobEncrypted, None, i, true);
         }
         assert_eq!(log.total_written(), 300);
-        let t = log.tail(AUDIT_RING_SIZE).unwrap();
+        let t = log.tail(AUDIT_RING_SIZE).test_unwrap();
         assert_eq!(t.len(), AUDIT_RING_SIZE);
     }
 
@@ -358,7 +360,7 @@ mod tests {
     fn test_slot_id_in_entry() {
         let log = fresh();
         log.record(AuditKind::KeyLoaded, Some(KeySlotId(42)), 0, true);
-        let t = log.tail(1).unwrap();
+        let t = log.tail(1).test_unwrap();
         assert_eq!(t[0].slot_id, Some(KeySlotId(42)));
     }
 }
@@ -456,7 +458,7 @@ mod extended_audit_tests {
         let l = fl();
         l.record(AuditKind::KeyGenerated, None, 0, true);
         l.record(AuditKind::KeyRotated, None, 0, true);
-        let s = l.summary().unwrap();
+        let s = l.summary().test_unwrap();
         assert!(s.key_ops >= 2);
     }
 
@@ -464,7 +466,7 @@ mod extended_audit_tests {
     fn test_summary_counts_errors() {
         let l = fl();
         l.record(AuditKind::AuthFailure, None, 0, false);
-        let s = l.summary().unwrap();
+        let s = l.summary().test_unwrap();
         assert!(s.total_errors >= 1);
         assert!(s.auth_failures >= 1);
     }
@@ -475,7 +477,7 @@ mod extended_audit_tests {
         let sid = KeySlotId(77);
         l.record(AuditKind::KeyLoaded, Some(sid), 0, true);
         l.record(AuditKind::BlobEncrypted, None, 0, true);
-        let r = l.filter_by_slot(sid).unwrap();
+        let r = l.filter_by_slot(sid).test_unwrap();
         assert!(r.iter().all(|e| e.slot_id == Some(sid)));
         assert!(!r.is_empty());
     }
@@ -486,7 +488,7 @@ mod extended_audit_tests {
         for _ in 0..10 {
             l.record(AuditKind::BlobEncrypted, None, 0, true);
         }
-        let r = l.range(2, 5).unwrap();
+        let r = l.range(2, 5).test_unwrap();
         assert!(r.iter().all(|e| e.seq >= 2 && e.seq <= 5));
     }
 

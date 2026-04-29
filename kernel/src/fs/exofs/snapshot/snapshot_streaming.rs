@@ -438,6 +438,8 @@ impl SnapshotStreamer {
 // ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use super::super::reset_for_test;
@@ -461,7 +463,7 @@ mod tests {
             blob_catalog_size: 0,
             name: make_snapshot_name(b"stream-test"),
         })
-        .unwrap();
+        .test_unwrap();
     }
 
     #[test]
@@ -500,7 +502,7 @@ mod tests {
         let list = SnapshotList::new_const();
         push_snap(&list, 1, 1);
         let mut source = MemStreamBlobSource::new();
-        source.add(SnapshotId(1), b"hello kernel").unwrap();
+        source.add(SnapshotId(1), b"hello kernel").test_unwrap();
         let streamer = SnapshotStreamer::new();
         let mut writer = VecStreamWriter::new();
         let result = streamer
@@ -510,7 +512,7 @@ mod tests {
                 &mut writer,
                 StreamOptions::default(),
             )
-            .unwrap();
+            .test_unwrap();
         assert!(result.bytes_sent > 0);
         // Au moins : manifest + 1 blob + END = 3 chunks
         assert!(result.n_chunks >= 3);

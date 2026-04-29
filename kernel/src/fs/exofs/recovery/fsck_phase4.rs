@@ -541,6 +541,8 @@ impl Phase2Report {
 // ── Tests unitaires ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::fs::exofs::core::ExofsError;
@@ -570,9 +572,9 @@ mod tests {
 
     #[test]
     fn test_data_blocks_exact() {
-        assert_eq!(FsckPhase4::data_blocks(512, 512).unwrap(), 1);
-        assert_eq!(FsckPhase4::data_blocks(513, 512).unwrap(), 2);
-        assert_eq!(FsckPhase4::data_blocks(0, 512).unwrap(), 0);
+        assert_eq!(FsckPhase4::data_blocks(512, 512).test_unwrap(), 1);
+        assert_eq!(FsckPhase4::data_blocks(513, 512).test_unwrap(), 2);
+        assert_eq!(FsckPhase4::data_blocks(0, 512).test_unwrap(), 0);
     }
 
     #[test]
@@ -619,8 +621,8 @@ mod tests {
     #[test]
     fn test_table_entry_lba() {
         let table = LostFoundTable::new(100, 0x8000);
-        let lba0 = table.entry_lba(0, 512).unwrap();
-        let lba1 = table.entry_lba(1, 512).unwrap();
+        let lba0 = table.entry_lba(0, 512).test_unwrap();
+        let lba1 = table.entry_lba(1, 512).test_unwrap();
         // entry_lba(0) = base + 1 (header) + 0 * 1 = 0x8001
         assert_eq!(lba0, 0x8001);
         // entry_lba(1) = base + 1 + 1 = 0x8002

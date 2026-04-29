@@ -7,6 +7,7 @@
 //! ARITH-02 : saturating_*/checked_add pour offsets.
 
 use super::object_fd::OBJECT_TABLE;
+use super::object_store;
 use super::validation::{
     exofs_err_to_errno, read_user_buf, validate_count, validate_fd, validate_offset, verify_cap,
     CapabilityType, EFAULT,
@@ -72,6 +73,18 @@ pub struct WriteResult {
 // Logique d'écriture
 // ─────────────────────────────────────────────────────────────────────────────
 
+fn load_existing_blob(blob_id: BlobId) -> ExofsResult<Option<Vec<u8>>> {
+    if let Some(data) = BLOB_CACHE.get(&blob_id) {
+        let mut copy = Vec::new();
+        copy.try_reserve(data.len())
+            .map_err(|_| ExofsError::NoMemory)?;
+        copy.extend_from_slice(&data);
+        return Ok(Some(copy));
+    }
+
+    object_store::load_blob_data_if_available(&blob_id)
+}
+
 /// Écrit `data` dans le blob `blob_id` à l'offset `offset`.
 ///
 /// Si le blob n'existe pas, le crée. Si le blob existait, réécrit entièrement
@@ -83,7 +96,7 @@ fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteRes
         .ok_or(ExofsError::OffsetOverflow)?;
 
     // Lire le contenu existant (ou créer un blob vide).
-    let existing = BLOB_CACHE.get(&blob_id);
+    let existing = load_existing_blob(blob_id)?;
     let existing_size = existing.as_ref().map(|d| d.len()).unwrap_or(0) as u64;
     let new_size = write_end.max(existing_size);
 
@@ -123,33 +136,9 @@ fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteRes
     BLOB_CACHE.mark_dirty(&blob_id).ok();
 
     // ── Phase 6 : Persistance Block Device ─────────────────────────
-    // Dépassement du comportement exclusif en RAM pour initier les
-    // écritures réelles sur pointeur virtio_blk (NVMe/Qemu emulé).
-    if let Some(dev) = crate::fs::exofs::storage::virtio_adapter::GLOBAL_DISK
-        .lock()
-        .as_mut()
-    {
-        use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
-        let block_size = dev.block_size() as usize;
-        let dlen = new_content.len();
-        let mut idx = 0;
-        let mut base_lba = (blob_id.0[0] as u64) * 100; // Naive LBA routing
-
-        while idx < dlen {
-            let chunk_size = core::cmp::min(block_size, dlen - idx);
-            let mut block_buf = alloc::vec![0u8; block_size];
-            let mut i = 0;
-            while i < chunk_size {
-                block_buf[i] = new_content[idx.wrapping_add(i)];
-                i = i.wrapping_add(1);
-            }
-            let _ = dev.write_block(base_lba, &block_buf);
-            base_lba = base_lba.wrapping_add(1);
-            idx = idx.wrapping_add(chunk_size);
-        }
-        let _ = dev.flush();
+    if object_store::persist_blob_data_if_disk(blob_id, &new_content, true)? {
+        let _ = BLOB_CACHE.mark_clean(&blob_id);
     }
-    // ───────────────────────────────────────────────────────────────
 
     Ok(WriteResult {
         bytes_written: dlen,
@@ -317,6 +306,8 @@ pub fn new_write_offset(offset: u64, written: usize) -> u64 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::validation::{EBADF, ERANGE};
     use super::*;
@@ -366,7 +357,7 @@ mod tests {
     fn test_scatter_write_empty() {
         let blob = BlobId([0xDDu8; 32]);
         let segs: &[WriteSegment] = &[];
-        let r = scatter_write(blob, segs).unwrap();
+        let r = scatter_write(blob, segs).test_unwrap();
         assert_eq!(r, 0);
     }
 
@@ -398,9 +389,9 @@ mod tests {
         let blob = BlobId::from_bytes_blake3(b"/write/test/fd");
         let fd = OBJECT_TABLE
             .open(blob, open_flags::O_WRONLY, 0, 0, 0)
-            .unwrap();
+            .test_unwrap();
         let data = [0xABu8; 16];
-        let r = write_fd(fd, 0, &data, false, false).unwrap();
+        let r = write_fd(fd, 0, &data, false, false).test_unwrap();
         assert_eq!(r.bytes_written, 16);
         OBJECT_TABLE.close(fd);
     }
@@ -411,7 +402,7 @@ mod tests {
         let blob = BlobId::from_bytes_blake3(b"/write/test/ro");
         let fd = OBJECT_TABLE
             .open(blob, open_flags::O_RDONLY, 0, 0, 0)
-            .unwrap();
+            .test_unwrap();
         let data = [0u8; 16];
         assert!(write_fd(fd, 0, &data, false, false).is_err());
         OBJECT_TABLE.close(fd);
@@ -431,7 +422,7 @@ pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
         return Err(ExofsError::NoSpace);
     }
 
-    let existing = BLOB_CACHE.get(&blob_id);
+    let existing = load_existing_blob(blob_id)?;
     let current_size = existing.as_ref().map(|d| d.len()).unwrap_or(0);
 
     if new_size == current_size {
@@ -458,31 +449,9 @@ pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
     BLOB_CACHE.mark_dirty(&blob_id).ok();
 
     // ── Phase 6 : Persistance Block Device (Truncate) ─────────────
-    if let Some(dev) = crate::fs::exofs::storage::virtio_adapter::GLOBAL_DISK
-        .lock()
-        .as_mut()
-    {
-        use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
-        let block_size = dev.block_size() as usize;
-        let dlen = new_content.len();
-        let mut idx = 0;
-        let mut base_lba = (blob_id.0[0] as u64) * 100;
-
-        while idx < dlen {
-            let chunk_size = core::cmp::min(block_size, dlen - idx);
-            let mut block_buf = alloc::vec![0u8; block_size];
-            let mut i = 0;
-            while i < chunk_size {
-                block_buf[i] = new_content[idx.wrapping_add(i)];
-                i = i.wrapping_add(1);
-            }
-            let _ = dev.write_block(base_lba, &block_buf);
-            base_lba = base_lba.wrapping_add(1);
-            idx = idx.wrapping_add(chunk_size);
-        }
-        let _ = dev.flush();
+    if object_store::persist_blob_data_if_disk(blob_id, &new_content, true)? {
+        let _ = BLOB_CACHE.mark_clean(&blob_id);
     }
-    // ──────────────────────────────────────────────────────────────
 
     Ok(())
 }
@@ -506,8 +475,8 @@ mod tests_trunc {
     fn test_truncate_blob_extend() {
         let b = BlobId::from_bytes_blake3(b"trunc_extend_test");
         let data = [0xAAu8; 64];
-        BLOB_CACHE.insert(b, data.to_vec()).unwrap();
-        truncate_blob(b, 128).unwrap();
+        BLOB_CACHE.insert(b, data.to_vec()).test_unwrap();
+        truncate_blob(b, 128).test_unwrap();
         let new_size = BLOB_CACHE.get(&b).map(|d| d.len()).unwrap_or(0);
         assert_eq!(new_size, 128);
     }
@@ -516,8 +485,8 @@ mod tests_trunc {
     fn test_truncate_blob_shrink() {
         let b = BlobId::from_bytes_blake3(b"trunc_shrink_test");
         let data = [0xBBu8; 128];
-        BLOB_CACHE.insert(b, data.to_vec()).unwrap();
-        truncate_blob(b, 32).unwrap();
+        BLOB_CACHE.insert(b, data.to_vec()).test_unwrap();
+        truncate_blob(b, 32).test_unwrap();
         let new_size = BLOB_CACHE.get(&b).map(|d| d.len()).unwrap_or(0);
         assert_eq!(new_size, 32);
     }
@@ -526,8 +495,8 @@ mod tests_trunc {
     fn test_clear_blob() {
         let b = BlobId::from_bytes_blake3(b"clear_test_blob");
         let data = [0xCCu8; 64];
-        BLOB_CACHE.insert(b, data.to_vec()).unwrap();
-        clear_blob(b).unwrap();
+        BLOB_CACHE.insert(b, data.to_vec()).test_unwrap();
+        clear_blob(b).test_unwrap();
         let new_size = BLOB_CACHE.get(&b).map(|d| d.len()).unwrap_or(0);
         assert_eq!(new_size, 0);
     }

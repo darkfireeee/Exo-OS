@@ -20,6 +20,7 @@ use super::exoar_format::{
     crc32c_update, crc32c_verify, ExoarEntryHeader, ExoarFooter, ExoarHeader, ExoarSummary,
     EXOAR_ENTRY_MAGIC, EXOAR_FOOTER_MAGIC, EXOAR_MAX_ENTRIES, EXOAR_MAX_PAYLOAD,
 };
+use crate::fs::exofs::core::blob_id;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::mem::size_of;
@@ -368,7 +369,7 @@ impl ExoarReader {
 
             // Vérifier BlobId = blake3(données brutes) — RÈGLE 11
             if self.config.verify_blob_id && !ehdr.is_tombstone() && !payload.is_empty() {
-                let computed = blake3_hash_simple(&payload);
+                let computed = *blob_id::compute_blob_id(&payload).as_bytes();
                 if computed != ehdr.blob_id {
                     report.blob_id_errors = report.blob_id_errors.saturating_add(1);
                     if !self.config.skip_blob_id_errors {
@@ -694,45 +695,9 @@ impl BlobReceiver for CollectingReceiver {
 
 // ─── blake3 inline minimal ───────────────────────────────────────────────────
 
-/// Calcule un blake3 simplifié (fnv1a-like fallback en no_std si blake3 indisponible).
-/// RÈGLE 11 : BlobId = blake3(données brutes AVANT compression/chiffrement).
-/// En production, remplacer par le vrai blake3 du module content_hash.
-fn blake3_hash_simple(data: &[u8]) -> [u8; 32] {
-    let mut state = [0u64; 4];
-    state[0] = 0x6C62_272E_07BB_0142;
-    state[1] = 0x6295_C58D_5935_4F4E;
-    state[2] = 0xD8A2_5D4F_5C3A_2B1E;
-    state[3] = 0xA3F6_C1D2_E5B7_8940;
-    let mut i = 0usize;
-    while i < data.len() {
-        let byte = data[i] as u64;
-        state[0] = state[0]
-            .wrapping_add(byte)
-            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        state[1] ^= state[0].rotate_left(23);
-        state[2] = state[2]
-            .wrapping_add(state[1])
-            .wrapping_mul(0x6C62_272E_07BB_0142);
-        state[3] ^= state[2].rotate_right(17);
-        state[0] = state[0].wrapping_add(state[3]);
-        i = i.wrapping_add(1);
-    }
-    let mut out = [0u8; 32];
-    let mut idx = 0usize;
-    while idx < 4 {
-        let bytes = state[idx].to_le_bytes();
-        let base = idx.wrapping_mul(8);
-        let mut k = 0usize;
-        while k < 8 {
-            out[base.wrapping_add(k)] = bytes[k];
-            k = k.wrapping_add(1);
-        }
-        idx = idx.wrapping_add(1);
-    }
-    out
-}
-
 // ─── Tests ───────────────────────────────────────────────────────────────────
+#[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
     use super::super::exoar_format::crc32c_compute;
@@ -764,7 +729,7 @@ mod tests {
         let mut src = SliceSource::new(&archive);
         let reader = ExoarReader::with_default_config();
         let mut rcv = CollectingReceiver::new();
-        let report = reader.read(&mut src, &mut rcv).expect("read ok");
+        let report = reader.read(&mut src, &mut rcv).test_expect("read ok");
         assert_eq!(report.entries_read, 0);
         assert!(report.archive_valid);
     }
@@ -777,7 +742,7 @@ mod tests {
         let mut src = SliceSource::new(&archive);
         let reader = ExoarReader::with_default_config();
         let mut rcv = CollectingReceiver::new();
-        let report = reader.read(&mut src, &mut rcv).expect("read ok");
+        let report = reader.read(&mut src, &mut rcv).test_expect("read ok");
         assert_eq!(report.entries_read, 1);
         assert_eq!(rcv.blobs.len(), 1);
         assert_eq!(rcv.blobs[0].0, bid);
@@ -796,7 +761,7 @@ mod tests {
         let mut src = SliceSource::new(&archive);
         let reader = ExoarReader::with_default_config();
         let mut rcv = CollectingReceiver::new();
-        let report = reader.read(&mut src, &mut rcv).expect("read ok");
+        let report = reader.read(&mut src, &mut rcv).test_expect("read ok");
         assert_eq!(report.entries_read, 3);
         assert_eq!(rcv.blobs.len(), 3);
     }
@@ -842,7 +807,7 @@ mod tests {
         let cfg = ExoarReaderConfig::recovery();
         let reader = ExoarReader::new(cfg);
         let mut rcv = CollectingReceiver::new();
-        let report = reader.read(&mut src, &mut rcv).expect("recovery ok");
+        let report = reader.read(&mut src, &mut rcv).test_expect("recovery ok");
         assert_eq!(report.crc_errors, 1);
     }
 
@@ -851,7 +816,7 @@ mod tests {
         let archive = build_archive(&[], 0);
         let mut src = SliceSource::new(&archive);
         let scanner = ExoarScanner::default();
-        let report = scanner.scan(&mut src).expect("scan ok");
+        let report = scanner.scan(&mut src).test_expect("scan ok");
         assert_eq!(report.entries_read, 0);
         assert!(report.archive_valid);
     }
@@ -863,7 +828,7 @@ mod tests {
         let archive = build_archive(&[(&b1, b"payload_a"), (&b2, b"payload_b")], 0);
         let mut src = SliceSource::new(&archive);
         let scanner = ExoarScanner::default();
-        let report = scanner.scan(&mut src).expect("scan ok");
+        let report = scanner.scan(&mut src).test_expect("scan ok");
         assert_eq!(report.entries_read, 2);
     }
 
@@ -898,10 +863,10 @@ mod tests {
     fn test_slice_source_skip() {
         let data = [0u8, 1, 2, 3, 4, 5, 6, 7];
         let mut src = SliceSource::new(&data);
-        src.skip(4).expect("skip ok");
+        src.skip(4).test_expect("skip ok");
         assert_eq!(src.bytes_read(), 4);
         let mut buf = [0u8; 1];
-        src.read_exact(&mut buf).expect("read ok");
+        src.read_exact(&mut buf).test_expect("read ok");
         assert_eq!(buf[0], 4);
     }
 

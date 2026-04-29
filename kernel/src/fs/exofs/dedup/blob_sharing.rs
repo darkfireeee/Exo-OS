@@ -298,6 +298,8 @@ pub static BLOB_SHARING: BlobSharing = BlobSharing::new_const();
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -311,22 +313,22 @@ mod tests {
     #[test]
     fn test_add_ref_new() {
         let bs = BlobSharing::new_const();
-        bs.add_ref(chunk(1), blob(10)).unwrap();
+        bs.add_ref(chunk(1), blob(10)).test_unwrap();
         assert!(!bs.is_shared(&chunk(1)));
     }
 
     #[test]
     fn test_add_ref_shared() {
         let bs = BlobSharing::new_const();
-        bs.add_ref(chunk(2), blob(20)).unwrap();
-        bs.add_ref(chunk(2), blob(21)).unwrap();
+        bs.add_ref(chunk(2), blob(20)).test_unwrap();
+        bs.add_ref(chunk(2), blob(21)).test_unwrap();
         assert!(bs.is_shared(&chunk(2)));
     }
 
     #[test]
     fn test_remove_ref_cleans_up() {
         let bs = BlobSharing::new_const();
-        bs.add_ref(chunk(3), blob(30)).unwrap();
+        bs.add_ref(chunk(3), blob(30)).test_unwrap();
         bs.remove_ref(&chunk(3), &blob(30));
         assert!(bs.is_empty());
     }
@@ -334,9 +336,9 @@ mod tests {
     #[test]
     fn test_blobs_for_chunk() {
         let bs = BlobSharing::new_const();
-        bs.add_ref(chunk(4), blob(40)).unwrap();
-        bs.add_ref(chunk(4), blob(41)).unwrap();
-        let blobs = bs.blobs_for_chunk(&chunk(4)).unwrap();
+        bs.add_ref(chunk(4), blob(40)).test_unwrap();
+        bs.add_ref(chunk(4), blob(41)).test_unwrap();
+        let blobs = bs.blobs_for_chunk(&chunk(4)).test_unwrap();
         assert_eq!(blobs.len(), 2);
     }
 
@@ -344,8 +346,8 @@ mod tests {
     fn test_remove_blob_refs() {
         let bs = BlobSharing::new_const();
         let keys = [chunk(5), chunk(6)];
-        bs.add_ref(chunk(5), blob(50)).unwrap();
-        bs.add_ref(chunk(6), blob(50)).unwrap();
+        bs.add_ref(chunk(5), blob(50)).test_unwrap();
+        bs.add_ref(chunk(6), blob(50)).test_unwrap();
         bs.remove_blob_refs(&keys, &blob(50));
         assert!(bs.is_empty());
     }
@@ -353,8 +355,8 @@ mod tests {
     #[test]
     fn test_stats() {
         let bs = BlobSharing::new_const();
-        bs.add_ref(chunk(7), blob(70)).unwrap();
-        bs.add_ref(chunk(7), blob(71)).unwrap();
+        bs.add_ref(chunk(7), blob(70)).test_unwrap();
+        bs.add_ref(chunk(7), blob(71)).test_unwrap();
         let s = bs.stats();
         assert_eq!(s.total_shared_chunks, 1);
         assert_eq!(s.max_sharing_degree, 2);
@@ -363,10 +365,10 @@ mod tests {
     #[test]
     fn test_all_shared_chunks() {
         let bs = BlobSharing::new_const();
-        bs.add_ref(chunk(8), blob(80)).unwrap();
-        bs.add_ref(chunk(8), blob(81)).unwrap();
-        bs.add_ref(chunk(9), blob(90)).unwrap(); // non partagé
-        let shared = bs.all_shared_chunks().unwrap();
+        bs.add_ref(chunk(8), blob(80)).test_unwrap();
+        bs.add_ref(chunk(8), blob(81)).test_unwrap();
+        bs.add_ref(chunk(9), blob(90)).test_unwrap(); // non partagé
+        let shared = bs.all_shared_chunks().test_unwrap();
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0], chunk(8));
     }
@@ -374,7 +376,7 @@ mod tests {
     #[test]
     fn test_verify_integrity() {
         let bs = BlobSharing::new_const();
-        bs.add_ref(chunk(10), blob(100)).unwrap();
+        bs.add_ref(chunk(10), blob(100)).test_unwrap();
         assert!(bs.verify_integrity().is_ok());
     }
 }
@@ -468,8 +470,8 @@ mod tests_deletion {
     fn test_analyze_deletion_sole_owner() {
         let bs = BlobSharing::new_const();
         let k = chunk(0xAA);
-        bs.add_ref(k, blob(1)).unwrap();
-        let analysis = bs.analyze_deletion(&[k], &blob(1)).unwrap();
+        bs.add_ref(k, blob(1)).test_unwrap();
+        let analysis = bs.analyze_deletion(&[k], &blob(1)).test_unwrap();
         assert_eq!(analysis.chunks_to_delete.len(), 1);
         assert!(analysis.chunks_to_keep.is_empty());
         assert!(analysis.dependent_blobs.is_empty());
@@ -479,9 +481,9 @@ mod tests_deletion {
     fn test_analyze_deletion_shared() {
         let bs = BlobSharing::new_const();
         let k = chunk(0xBB);
-        bs.add_ref(k, blob(1)).unwrap();
-        bs.add_ref(k, blob(2)).unwrap();
-        let analysis = bs.analyze_deletion(&[k], &blob(1)).unwrap();
+        bs.add_ref(k, blob(1)).test_unwrap();
+        bs.add_ref(k, blob(2)).test_unwrap();
+        let analysis = bs.analyze_deletion(&[k], &blob(1)).test_unwrap();
         assert!(analysis.chunks_to_delete.is_empty());
         assert_eq!(analysis.chunks_to_keep.len(), 1);
         assert_eq!(analysis.dependent_blobs.len(), 1);

@@ -251,6 +251,8 @@ pub fn generate_unique_id() -> u64 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -273,7 +275,7 @@ mod tests {
     #[test]
     fn test_random_bytes_len() {
         init_crypto_test_env();
-        let b = ENTROPY_POOL.random_bytes(16).unwrap();
+        let b = ENTROPY_POOL.random_bytes(16).test_unwrap();
         assert_eq!(b.len(), 16);
     }
 
@@ -304,7 +306,7 @@ mod tests {
     #[test]
     fn test_generate_salt_not_zero() {
         init_crypto_test_env();
-        let s = generate_salt().unwrap();
+        let s = generate_salt().test_unwrap();
         // Un sel tout-zéro = CSPRNG non-initialisé (bug grave)
         // En host test, security::crypto::rng retourne au moins TSC
         let _ = s;

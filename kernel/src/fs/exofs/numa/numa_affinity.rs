@@ -112,7 +112,11 @@ pub struct AffinityMap {
     lock: AtomicU64,
 }
 
+// SAFETY: `inner` est protégé par le spinlock `lock`, ce qui sérialise toutes
+// les lectures/écritures sur les tableaux CPU↔NUMA.
 unsafe impl Sync for AffinityMap {}
+// SAFETY: aucun emprunt interne ne dépend de l'adresse de la structure; le
+// déplacement inter-thread reste sûr sous le même protocole de verrouillage.
 unsafe impl Send for AffinityMap {}
 
 impl AffinityMap {
@@ -386,6 +390,20 @@ pub static AFFINITY_MAP: AffinityMap = AffinityMap::new_const();
 mod tests {
     use super::*;
 
+    fn ok<T, E: core::fmt::Debug>(res: Result<T, E>) -> T {
+        match res {
+            Ok(value) => value,
+            Err(err) => panic!("unexpected error: {err:?}"),
+        }
+    }
+
+    fn some<T>(value: Option<T>) -> T {
+        match value {
+            Some(inner) => inner,
+            None => panic!("unexpected None"),
+        }
+    }
+
     #[test]
     fn test_numa_node_id_valid() {
         assert!(NumaNodeId(0).is_valid());
@@ -404,8 +422,8 @@ mod tests {
     #[test]
     fn test_register_node() {
         let m = AffinityMap::new_const();
-        m.register_node(NumaNodeId(0), 8192).unwrap();
-        let e = m.node_entry(NumaNodeId(0)).unwrap();
+        ok(m.register_node(NumaNodeId(0), 8192));
+        let e = some(m.node_entry(NumaNodeId(0)));
         assert_eq!(e.memory_mb, 8192);
         assert!(e.active);
     }
@@ -413,9 +431,9 @@ mod tests {
     #[test]
     fn test_register_cpu() {
         let m = AffinityMap::new_const();
-        m.register_node(NumaNodeId(0), 4096).unwrap();
-        m.register_cpu(CpuId(0), NumaNodeId(0)).unwrap();
-        m.register_cpu(CpuId(1), NumaNodeId(0)).unwrap();
+        ok(m.register_node(NumaNodeId(0), 4096));
+        ok(m.register_cpu(CpuId(0), NumaNodeId(0)));
+        ok(m.register_cpu(CpuId(1), NumaNodeId(0)));
         assert_eq!(m.node_of_cpu(CpuId(0)), Some(NumaNodeId(0)));
         assert_eq!(m.cpu_count_of_node(NumaNodeId(0)), 2);
     }
@@ -443,9 +461,9 @@ mod tests {
     #[test]
     fn test_set_distance() {
         let m = AffinityMap::new_const();
-        m.register_node(NumaNodeId(0), 4096).unwrap();
-        m.register_node(NumaNodeId(1), 4096).unwrap();
-        m.set_distance(NumaNodeId(0), NumaNodeId(1), 40).unwrap();
+        ok(m.register_node(NumaNodeId(0), 4096));
+        ok(m.register_node(NumaNodeId(1), 4096));
+        ok(m.set_distance(NumaNodeId(0), NumaNodeId(1), 40));
         assert_eq!(m.distance(NumaNodeId(0), NumaNodeId(1)), 40);
         assert_eq!(m.distance(NumaNodeId(1), NumaNodeId(0)), 40);
     }
@@ -453,21 +471,21 @@ mod tests {
     #[test]
     fn test_nearest_node() {
         let m = AffinityMap::new_const();
-        m.register_node(NumaNodeId(0), 4096).unwrap();
-        m.register_node(NumaNodeId(1), 4096).unwrap();
-        m.register_node(NumaNodeId(2), 4096).unwrap();
-        m.set_distance(NumaNodeId(0), NumaNodeId(1), 40).unwrap();
-        m.set_distance(NumaNodeId(0), NumaNodeId(2), 20).unwrap();
-        let near = m.nearest_node(NumaNodeId(0)).unwrap();
+        ok(m.register_node(NumaNodeId(0), 4096));
+        ok(m.register_node(NumaNodeId(1), 4096));
+        ok(m.register_node(NumaNodeId(2), 4096));
+        ok(m.set_distance(NumaNodeId(0), NumaNodeId(1), 40));
+        ok(m.set_distance(NumaNodeId(0), NumaNodeId(2), 20));
+        let near = some(m.nearest_node(NumaNodeId(0)));
         assert_eq!(near, NumaNodeId(2));
     }
 
     #[test]
     fn test_active_nodes() {
         let m = AffinityMap::new_const();
-        m.register_node(NumaNodeId(0), 4096).unwrap();
-        m.register_node(NumaNodeId(2), 4096).unwrap();
-        let nodes = m.active_nodes().unwrap();
+        ok(m.register_node(NumaNodeId(0), 4096));
+        ok(m.register_node(NumaNodeId(2), 4096));
+        let nodes = ok(m.active_nodes());
         assert_eq!(nodes.len(), 2);
         assert!(nodes.contains(&NumaNodeId(0)));
         assert!(nodes.contains(&NumaNodeId(2)));
@@ -476,10 +494,10 @@ mod tests {
     #[test]
     fn test_cpus_of_node() {
         let m = AffinityMap::new_const();
-        m.register_node(NumaNodeId(0), 4096).unwrap();
-        m.register_cpu(CpuId(10), NumaNodeId(0)).unwrap();
-        m.register_cpu(CpuId(11), NumaNodeId(0)).unwrap();
-        let cpus = m.cpus_of_node(NumaNodeId(0)).unwrap();
+        ok(m.register_node(NumaNodeId(0), 4096));
+        ok(m.register_cpu(CpuId(10), NumaNodeId(0)));
+        ok(m.register_cpu(CpuId(11), NumaNodeId(0)));
+        let cpus = ok(m.cpus_of_node(NumaNodeId(0)));
         assert_eq!(cpus.len(), 2);
         assert!(cpus.contains(&CpuId(10)));
         assert!(cpus.contains(&CpuId(11)));
@@ -488,21 +506,21 @@ mod tests {
     #[test]
     fn test_largest_memory_node() {
         let m = AffinityMap::new_const();
-        m.register_node(NumaNodeId(0), 4096).unwrap();
-        m.register_node(NumaNodeId(1), 16384).unwrap();
-        let n = m.largest_memory_node().unwrap();
+        ok(m.register_node(NumaNodeId(0), 4096));
+        ok(m.register_node(NumaNodeId(1), 16384));
+        let n = some(m.largest_memory_node());
         assert_eq!(n, NumaNodeId(1));
     }
 
     #[test]
     fn test_cpu_migration_between_nodes() {
         let m = AffinityMap::new_const();
-        m.register_node(NumaNodeId(0), 4096).unwrap();
-        m.register_node(NumaNodeId(1), 4096).unwrap();
-        m.register_cpu(CpuId(5), NumaNodeId(0)).unwrap();
+        ok(m.register_node(NumaNodeId(0), 4096));
+        ok(m.register_node(NumaNodeId(1), 4096));
+        ok(m.register_cpu(CpuId(5), NumaNodeId(0)));
         assert_eq!(m.cpu_count_of_node(NumaNodeId(0)), 1);
         // Déplacer vers nœud 1
-        m.register_cpu(CpuId(5), NumaNodeId(1)).unwrap();
+        ok(m.register_cpu(CpuId(5), NumaNodeId(1)));
         assert_eq!(m.cpu_count_of_node(NumaNodeId(0)), 0);
         assert_eq!(m.cpu_count_of_node(NumaNodeId(1)), 1);
     }
@@ -510,8 +528,8 @@ mod tests {
     #[test]
     fn test_reset() {
         let m = AffinityMap::new_const();
-        m.register_node(NumaNodeId(0), 4096).unwrap();
-        m.register_cpu(CpuId(0), NumaNodeId(0)).unwrap();
+        ok(m.register_node(NumaNodeId(0), 4096));
+        ok(m.register_cpu(CpuId(0), NumaNodeId(0)));
         m.reset();
         assert!(m.node_of_cpu(CpuId(0)).is_none());
         assert_eq!(m.active_node_count(), 0);

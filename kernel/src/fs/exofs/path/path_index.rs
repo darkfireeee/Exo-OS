@@ -644,6 +644,8 @@ fn bytes_of_entry(e: &PathIndexEntry) -> [u8; 44] {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::path_component::validate_component;
     use super::*;
@@ -663,10 +665,10 @@ mod tests {
     #[test]
     fn test_insert_lookup() {
         let mut idx = PathIndex::new(fake_oid(0));
-        let c = validate_component(b"hello").unwrap();
-        idx.insert(&c, fake_oid(1), 0).unwrap();
+        let c = validate_component(b"hello").test_unwrap();
+        idx.insert(&c, fake_oid(1), 0).test_unwrap();
         assert_eq!(idx.len(), 1);
-        let (oid, kind) = idx.lookup(&c).unwrap();
+        let (oid, kind) = idx.lookup(&c).test_unwrap();
         assert_eq!(oid.0[0], 1);
         assert_eq!(kind, 0);
     }
@@ -674,9 +676,9 @@ mod tests {
     #[test]
     fn test_remove() {
         let mut idx = PathIndex::new(fake_oid(0));
-        let c = validate_component(b"bye").unwrap();
-        idx.insert(&c, fake_oid(2), 1).unwrap();
-        idx.remove(&c).unwrap();
+        let c = validate_component(b"bye").test_unwrap();
+        idx.insert(&c, fake_oid(2), 1).test_unwrap();
+        idx.remove(&c).test_unwrap();
         assert!(idx.lookup(&c).is_none());
     }
 
@@ -685,14 +687,14 @@ mod tests {
         let mut idx = PathIndex::new(fake_oid(0));
         for i in 0u8..5 {
             let name = [b'a' + i];
-            idx.insert(&validate_component(&name).unwrap(), fake_oid(i), i % 2)
-                .unwrap();
+            idx.insert(&validate_component(&name).test_unwrap(), fake_oid(i), i % 2)
+                .test_unwrap();
         }
-        let bytes = idx.serialize().unwrap();
-        let idx2 = PathIndex::from_bytes(&bytes).unwrap();
+        let bytes = idx.serialize().test_unwrap();
+        let idx2 = PathIndex::from_bytes(&bytes).test_unwrap();
         assert_eq!(idx2.len(), 5);
         for i in 0u8..5 {
-            let c = validate_component(&[b'a' + i]).unwrap();
+            let c = validate_component(&[b'a' + i]).test_unwrap();
             assert!(idx2.lookup(&c).is_some());
         }
     }
@@ -718,8 +720,8 @@ mod tests {
         let mut idx = PathIndex::new(fake_oid(0));
         idx.split_threshold = 3;
         for i in 0u8..3 {
-            idx.insert(&validate_component(&[b'a' + i]).unwrap(), fake_oid(i), 0)
-                .unwrap();
+            idx.insert(&validate_component(&[b'a' + i]).test_unwrap(), fake_oid(i), 0)
+                .test_unwrap();
         }
         assert!(idx.needs_split());
     }

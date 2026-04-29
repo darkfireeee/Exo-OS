@@ -355,18 +355,20 @@ impl HeapCoalescer {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn make_map(total: u64) -> HeapFreeMap {
-        HeapFreeMap::new(total).unwrap()
+        HeapFreeMap::new(total).test_unwrap()
     }
 
     #[test]
     fn test_coalesce_no_fragmentation() {
         let mut m = make_map(64);
         let opts = CoalesceOptions::default();
-        let rep = HeapCoalescer::run(&mut m, &opts).unwrap();
+        let rep = HeapCoalescer::run(&mut m, &opts).test_unwrap();
         // Pas de fragmentation → aucune fusion.
         assert_eq!(rep.merges, 0);
     }

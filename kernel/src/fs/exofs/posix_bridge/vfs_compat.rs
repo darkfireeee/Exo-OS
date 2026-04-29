@@ -10,6 +10,11 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::posix_bridge::inode_emulation::{
     inode_flags, InodeEntry, ObjectIno, INODE_EMULATION,
 };
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::BlobId;
+use crate::fs::exofs::syscall::object_store;
+use alloc::collections::btree_map::Entry;
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -291,6 +296,21 @@ impl OpenFdTable {
     fn active_count(&self) -> usize {
         self.fd_count.load(Ordering::Acquire)
     }
+
+    #[cfg(test)]
+    fn reset_all(&self) {
+        self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let fds = unsafe { &mut *self.fds.get() };
+        let mut i = 0usize;
+        while i < fds.len() {
+            fds[i] = None;
+            i = i.wrapping_add(1);
+        }
+        self.fd_count.store(0, Ordering::Release);
+        self.next_fd.store(3, Ordering::Release);
+        self.lock_release();
+    }
 }
 
 static FD_TABLE: OpenFdTable = OpenFdTable::new();
@@ -299,6 +319,229 @@ static FD_TABLE: OpenFdTable = OpenFdTable::new();
 // Registre VFS
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[derive(Clone, Debug)]
+struct DirRecord {
+    ino: ObjectIno,
+    kind: u8,
+    name: Vec<u8>,
+}
+
+struct DirectoryRegistry {
+    entries: UnsafeCell<BTreeMap<ObjectIno, Vec<DirRecord>>>,
+    spinlock: AtomicU64,
+}
+
+unsafe impl Sync for DirectoryRegistry {}
+unsafe impl Send for DirectoryRegistry {}
+
+impl DirectoryRegistry {
+    const fn new() -> Self {
+        Self {
+            entries: UnsafeCell::new(BTreeMap::new()),
+            spinlock: AtomicU64::new(0),
+        }
+    }
+
+    fn lock_acquire(&self) {
+        while self
+            .spinlock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            core::hint::spin_loop();
+        }
+    }
+
+    fn lock_release(&self) {
+        self.spinlock.store(0, Ordering::Release);
+    }
+
+    fn map(&self) -> &mut BTreeMap<ObjectIno, Vec<DirRecord>> {
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        unsafe { &mut *self.entries.get() }
+    }
+
+    fn ensure_dir(&self, ino: ObjectIno) -> ExofsResult<()> {
+        self.lock_acquire();
+        let map = self.map();
+        if let Entry::Vacant(entry) = map.entry(ino) {
+            entry.insert(Vec::new());
+        }
+        self.lock_release();
+        Ok(())
+    }
+
+    fn lookup(&self, parent_ino: ObjectIno, name: &[u8]) -> Option<DirRecord> {
+        self.lock_acquire();
+        let result = self
+            .map()
+            .get(&parent_ino)
+            .and_then(|records| records.iter().find(|record| record.name == name))
+            .cloned();
+        self.lock_release();
+        result
+    }
+
+    fn insert(
+        &self,
+        parent_ino: ObjectIno,
+        ino: ObjectIno,
+        name: &[u8],
+        kind: u8,
+    ) -> ExofsResult<()> {
+        let mut name_vec = Vec::new();
+        name_vec
+            .try_reserve(name.len())
+            .map_err(|_| ExofsError::NoMemory)?;
+        name_vec.extend_from_slice(name);
+
+        self.lock_acquire();
+        let map = self.map();
+        if let Entry::Vacant(entry) = map.entry(parent_ino) {
+            entry.insert(Vec::new());
+        }
+        let records = match map.get_mut(&parent_ino) {
+            Some(records) => records,
+            None => {
+                self.lock_release();
+                return Err(ExofsError::InternalError);
+            }
+        };
+        if records.iter().any(|record| record.name == name) {
+            self.lock_release();
+            return Err(ExofsError::ObjectAlreadyExists);
+        }
+        if records.try_reserve(1).is_err() {
+            self.lock_release();
+            return Err(ExofsError::NoMemory);
+        }
+        records.push(DirRecord {
+            ino,
+            kind,
+            name: name_vec,
+        });
+        self.lock_release();
+
+        if kind == 4 {
+            self.ensure_dir(ino)?;
+        }
+        Ok(())
+    }
+
+    fn list(&self, parent_ino: ObjectIno) -> ExofsResult<Vec<DirRecord>> {
+        self.lock_acquire();
+        let records = match self.map().get(&parent_ino).cloned() {
+            Some(records) => records,
+            None => {
+                self.lock_release();
+                return Err(ExofsError::ObjectNotFound);
+            }
+        };
+        self.lock_release();
+        Ok(records)
+    }
+
+    fn has_children(&self, parent_ino: ObjectIno) -> bool {
+        self.lock_acquire();
+        let result = self
+            .map()
+            .get(&parent_ino)
+            .map(|records| !records.is_empty())
+            .unwrap_or(false);
+        self.lock_release();
+        result
+    }
+
+    fn remove(&self, parent_ino: ObjectIno, name: &[u8]) -> Option<DirRecord> {
+        self.lock_acquire();
+        let map = self.map();
+        let result = map.get_mut(&parent_ino).and_then(|records| {
+            records
+                .iter()
+                .position(|record| record.name == name)
+                .map(|idx| records.swap_remove(idx))
+        });
+        self.lock_release();
+        result
+    }
+
+    fn rename(
+        &self,
+        old_parent: ObjectIno,
+        old_name: &[u8],
+        new_parent: ObjectIno,
+        new_name: &[u8],
+    ) -> ExofsResult<DirRecord> {
+        let mut new_name_vec = Vec::new();
+        new_name_vec
+            .try_reserve(new_name.len())
+            .map_err(|_| ExofsError::NoMemory)?;
+        new_name_vec.extend_from_slice(new_name);
+
+        self.lock_acquire();
+        let map = self.map();
+        if map
+            .get(&new_parent)
+            .map(|records| records.iter().any(|record| record.name == new_name))
+            .unwrap_or(false)
+        {
+            self.lock_release();
+            return Err(ExofsError::ObjectAlreadyExists);
+        }
+        let record = {
+            let old_records = match map.get_mut(&old_parent) {
+                Some(records) => records,
+                None => {
+                    self.lock_release();
+                    return Err(ExofsError::ObjectNotFound);
+                }
+            };
+            let idx = match old_records.iter().position(|record| record.name == old_name) {
+                Some(idx) => idx,
+                None => {
+                    self.lock_release();
+                    return Err(ExofsError::ObjectNotFound);
+                }
+            };
+            old_records.swap_remove(idx)
+        };
+        let mut updated = record;
+        updated.name = new_name_vec;
+        if let Entry::Vacant(entry) = map.entry(new_parent) {
+            entry.insert(Vec::new());
+        }
+        let new_records = match map.get_mut(&new_parent) {
+            Some(records) => records,
+            None => {
+                self.lock_release();
+                return Err(ExofsError::InternalError);
+            }
+        };
+        if new_records.try_reserve(1).is_err() {
+            self.lock_release();
+            return Err(ExofsError::NoMemory);
+        }
+        new_records.push(updated.clone());
+        self.lock_release();
+        Ok(updated)
+    }
+
+    fn remove_dir(&self, ino: ObjectIno) {
+        self.lock_acquire();
+        self.map().remove(&ino);
+        self.lock_release();
+    }
+
+    #[cfg(test)]
+    fn reset_all(&self) {
+        self.lock_acquire();
+        self.map().clear();
+        self.map().insert(VFS_ROOT_INO, Vec::new());
+        self.lock_release();
+    }
+}
+
+static DIRECTORY_REGISTRY: DirectoryRegistry = DirectoryRegistry::new();
 static VFS_REGISTERED: AtomicBool = AtomicBool::new(false);
 
 /// Enregistre ExoFS comme opérateur VFS actif.
@@ -310,6 +553,7 @@ pub fn register_exofs_vfs_ops() -> ExofsResult<()> {
         return Err(ExofsError::ObjectAlreadyExists);
     }
     INODE_EMULATION.ensure_root()?;
+    DIRECTORY_REGISTRY.ensure_dir(VFS_ROOT_INO)?;
     Ok(())
 }
 
@@ -328,7 +572,6 @@ pub fn root_inode() -> ObjectIno {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Résout `name` dans le répertoire `parent_ino`. Retourne l'ino fils.
-/// En l'absence d'un vrai FS backing, utilise la table inode pour le lookup.
 pub fn vfs_lookup(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<ObjectIno> {
     if name.is_empty() {
         return Err(ExofsError::InvalidArgument);
@@ -343,14 +586,10 @@ pub fn vfs_lookup(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<ObjectIno> 
     if parent.flags & inode_flags::DIRECTORY == 0 {
         return Err(ExofsError::NotADirectory);
     }
-    // On cherche dans la table un objet ayant pour parent_ino ce répertoire.
-    // Ici : hash(parent_ino, name) → oid synthétique pour les structures statiques.
-    let name_hash = hash_name(parent_ino, name);
-    // Cherche si già registré.
-    if let Some(e) = INODE_EMULATION.get_entry_by_oid(name_hash) {
-        return Ok(e.ino);
-    }
-    Err(ExofsError::ObjectNotFound)
+    DIRECTORY_REGISTRY
+        .lookup(parent_ino, name)
+        .map(|record| record.ino)
+        .ok_or(ExofsError::ObjectNotFound)
 }
 
 /// Crée le mapping d'un fichier sous `parent_ino`. Retourne l'ino créé.
@@ -383,7 +622,12 @@ pub fn vfs_create(
     } else {
         inode_flags::REGULAR
     };
-    INODE_EMULATION.get_or_alloc_flags(oid, flags, 0, uid)
+    let ino = INODE_EMULATION.get_or_alloc_flags(oid, flags, 0, uid)?;
+    if let Err(err) = DIRECTORY_REGISTRY.insert(parent_ino, ino, name, inode_kind(flags)) {
+        INODE_EMULATION.release_ino(ino);
+        return Err(err);
+    }
+    Ok(ino)
 }
 
 /// Ouvre un inode et retourne un fd.
@@ -396,6 +640,14 @@ pub fn vfs_open(ino: ObjectIno, flags: u32, pid: u32) -> ExofsResult<u64> {
             return Err(ExofsError::PermissionDenied);
         }
     }
+    if flags & open_flags::O_TRUNC != 0 {
+        if entry.flags & inode_flags::DIRECTORY != 0 {
+            return Err(ExofsError::WrongObjectKind);
+        }
+        let blob_id = blob_id_for_object(entry.object_id);
+        persist_inode_data(blob_id, &[])?;
+        INODE_EMULATION.update_size(ino, 0)?;
+    }
     FD_TABLE.open_fd(ino, flags, pid)
 }
 
@@ -404,8 +656,6 @@ pub fn vfs_close(fd: u64) -> ExofsResult<()> {
     FD_TABLE.close_fd(fd)
 }
 
-/// Lit des données depuis un fd (simule : copie zéros, retourne la longueur).
-/// En intégration complète, on irait lire dans BLOB_CACHE.
 pub fn vfs_read(fd: u64, buf: &mut [u8], count: usize) -> ExofsResult<usize> {
     if count == 0 {
         return Ok(0);
@@ -417,18 +667,19 @@ pub fn vfs_read(fd: u64, buf: &mut [u8], count: usize) -> ExofsResult<usize> {
     let entry = INODE_EMULATION
         .get_entry(desc.ino)
         .ok_or(ExofsError::ObjectNotFound)?;
-    let readable = count
-        .min(buf.len())
-        .min(entry.size.saturating_sub(desc.offset) as usize);
+    if entry.flags & inode_flags::DIRECTORY != 0 {
+        return Err(ExofsError::WrongObjectKind);
+    }
+    let data = load_inode_data(&entry)?;
+    let start = desc.offset as usize;
+    if start >= data.len() {
+        return Ok(0);
+    }
+    let readable = count.min(buf.len()).min(data.len().saturating_sub(start));
     if readable == 0 {
         return Ok(0);
     }
-    // ZeroFill — un vrai impl lirait BLOB_CACHE ici.
-    let mut i = 0usize;
-    while i < readable {
-        buf[i] = 0;
-        i = i.wrapping_add(1);
-    }
+    buf[..readable].copy_from_slice(&data[start..start + readable]);
     let new_offset = desc.offset.saturating_add(readable as u64);
     FD_TABLE.update_offset(fd, new_offset);
     Ok(readable)
@@ -443,13 +694,32 @@ pub fn vfs_write(fd: u64, buf: &[u8], count: usize) -> ExofsResult<usize> {
     if desc.flags & open_flags::O_WRONLY == 0 && desc.flags & open_flags::O_RDWR == 0 {
         return Err(ExofsError::PermissionDenied);
     }
-    let written = count.min(buf.len());
-    let new_offset = desc.offset.saturating_add(written as u64);
-    FD_TABLE.update_offset(fd, new_offset);
-    // Met à jour la taille si l'offset dépasse l'ancienne taille.
     let entry = INODE_EMULATION
         .get_entry(desc.ino)
         .ok_or(ExofsError::ObjectNotFound)?;
+    if entry.flags & inode_flags::DIRECTORY != 0 {
+        return Err(ExofsError::WrongObjectKind);
+    }
+    let written = count.min(buf.len());
+    let mut data = load_inode_data(&entry)?;
+    let start_offset = if desc.flags & open_flags::O_APPEND != 0 {
+        data.len()
+    } else {
+        desc.offset as usize
+    };
+    let end_offset = start_offset
+        .checked_add(written)
+        .ok_or(ExofsError::OffsetOverflow)?;
+    if end_offset > data.len() {
+        data.try_reserve(end_offset.saturating_sub(data.len()))
+            .map_err(|_| ExofsError::NoMemory)?;
+        data.resize(end_offset, 0u8);
+    }
+    data[start_offset..end_offset].copy_from_slice(&buf[..written]);
+    let blob_id = blob_id_for_object(entry.object_id);
+    persist_inode_data(blob_id, &data)?;
+    let new_offset = end_offset as u64;
+    FD_TABLE.update_offset(fd, new_offset);
     if new_offset > entry.size {
         INODE_EMULATION.update_size(desc.ino, new_offset)?;
     }
@@ -487,15 +757,19 @@ pub fn vfs_unlink(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<()> {
     if name.is_empty() {
         return Err(ExofsError::InvalidArgument);
     }
-    let oid = hash_name(parent_ino, name);
+    let record = DIRECTORY_REGISTRY
+        .remove(parent_ino, name)
+        .ok_or(ExofsError::ObjectNotFound)?;
     let entry = INODE_EMULATION
-        .get_entry_by_oid(oid)
+        .get_entry(record.ino)
         .ok_or(ExofsError::ObjectNotFound)?;
     // Ne peut pas unlink un répertoire.
     if entry.flags & inode_flags::DIRECTORY != 0 {
+        let _ = DIRECTORY_REGISTRY.insert(parent_ino, record.ino, &record.name, record.kind);
         return Err(ExofsError::NotADirectory);
     }
-    INODE_EMULATION.release(oid);
+    BLOB_CACHE.invalidate(&blob_id_for_object(entry.object_id));
+    INODE_EMULATION.release_ino(record.ino);
     Ok(())
 }
 
@@ -504,15 +778,23 @@ pub fn vfs_rmdir(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<()> {
     if name.is_empty() {
         return Err(ExofsError::InvalidArgument);
     }
-    let oid = hash_name(parent_ino, name);
+    let record = DIRECTORY_REGISTRY
+        .lookup(parent_ino, name)
+        .ok_or(ExofsError::ObjectNotFound)?;
     let entry = INODE_EMULATION
-        .get_entry_by_oid(oid)
+        .get_entry(record.ino)
         .ok_or(ExofsError::ObjectNotFound)?;
     if entry.flags & inode_flags::DIRECTORY == 0 {
         return Err(ExofsError::NotADirectory);
     }
-    // Ici on vérifie l'absence d'enfants (simplification : non implémenté au niveau table).
-    INODE_EMULATION.release(oid);
+    if DIRECTORY_REGISTRY.has_children(record.ino) {
+        return Err(ExofsError::DirectoryNotEmpty);
+    }
+    DIRECTORY_REGISTRY
+        .remove(parent_ino, name)
+        .ok_or(ExofsError::ObjectNotFound)?;
+    DIRECTORY_REGISTRY.remove_dir(record.ino);
+    INODE_EMULATION.release_ino(record.ino);
     Ok(())
 }
 
@@ -544,24 +826,11 @@ pub fn vfs_rename(
     if np.flags & inode_flags::DIRECTORY == 0 {
         return Err(ExofsError::NotADirectory);
     }
-    // Cherche l'entrée source.
-    let old_oid = hash_name(old_parent, old_name);
-    let _src = INODE_EMULATION
-        .get_entry_by_oid(old_oid)
+    let src = DIRECTORY_REGISTRY
+        .lookup(old_parent, old_name)
         .ok_or(ExofsError::ObjectNotFound)?;
-    // Vérifie absence de destination.
-    let new_oid = hash_name(new_parent, new_name);
-    if INODE_EMULATION.contains_oid(new_oid) {
-        return Err(ExofsError::ObjectAlreadyExists);
-    }
-    // Effectue le rename : la table inode ne stocke pas le nom, donc on retire l'ancien
-    // et crée le nouveau (avec le même ino = cas d'un déplacement de nom).
-    let _ = (op, np);
-    let flags = _src.flags;
-    let size = _src.size;
-    let uid = _src.uid;
-    INODE_EMULATION.release(old_oid);
-    INODE_EMULATION.get_or_alloc_flags(new_oid, flags, size, uid)?;
+    let _ = DIRECTORY_REGISTRY.rename(old_parent, old_name, new_parent, new_name)?;
+    let _ = (op, np, src);
     Ok(())
 }
 
@@ -574,13 +843,21 @@ pub fn vfs_readdir(parent_ino: ObjectIno, _offset: u64) -> ExofsResult<Vec<VfsDi
     if entry.flags & inode_flags::DIRECTORY == 0 {
         return Err(ExofsError::NotADirectory);
     }
+    let records = DIRECTORY_REGISTRY.list(parent_ino)?;
     let mut out: Vec<VfsDirent> = Vec::new();
-    out.try_reserve(2).map_err(|_| ExofsError::NoMemory)?;
+    out.try_reserve(records.len().saturating_add(2))
+        .map_err(|_| ExofsError::NoMemory)?;
     // Toujours inclure "." et ".."
-    let dot = make_dirent(parent_ino, b".", 1);
-    let dotdot = make_dirent(VFS_ROOT_INO, b"..", 2);
+    let dot = make_dirent(parent_ino, b".", 4);
+    let dotdot = make_dirent(VFS_ROOT_INO, b"..", 4);
     out.push(dot);
     out.push(dotdot);
+    let mut i = 0usize;
+    while i < records.len() {
+        let record = &records[i];
+        out.push(make_dirent(record.ino, &record.name, record.kind));
+        i = i.wrapping_add(1);
+    }
     Ok(out)
 }
 
@@ -590,8 +867,18 @@ pub fn vfs_truncate(ino: ObjectIno, new_size: u64) -> ExofsResult<()> {
         .get_entry(ino)
         .ok_or(ExofsError::ObjectNotFound)?;
     if e.flags & inode_flags::DIRECTORY != 0 {
-        return Err(ExofsError::NotADirectory);
+        return Err(ExofsError::WrongObjectKind);
     }
+    let mut data = load_inode_data(&e)?;
+    let new_len = new_size as usize;
+    if new_len > data.len() {
+        data.try_reserve(new_len.saturating_sub(data.len()))
+            .map_err(|_| ExofsError::NoMemory)?;
+        data.resize(new_len, 0u8);
+    } else {
+        data.truncate(new_len);
+    }
+    persist_inode_data(blob_id_for_object(e.object_id), &data)?;
     INODE_EMULATION.update_size(ino, new_size)
 }
 
@@ -608,7 +895,12 @@ pub fn vfs_symlink(parent_ino: ObjectIno, name: &[u8], uid: u64) -> ExofsResult<
     if INODE_EMULATION.contains_oid(oid) {
         return Err(ExofsError::ObjectAlreadyExists);
     }
-    INODE_EMULATION.get_or_alloc_flags(oid, inode_flags::SYMLINK, 0, uid)
+    let ino = INODE_EMULATION.get_or_alloc_flags(oid, inode_flags::SYMLINK, 0, uid)?;
+    if let Err(err) = DIRECTORY_REGISTRY.insert(parent_ino, ino, name, inode_kind(inode_flags::SYMLINK)) {
+        INODE_EMULATION.release_ino(ino);
+        return Err(err);
+    }
+    Ok(ino)
 }
 
 /// Ferme tous les fd d'un pid (exit/kill).
@@ -621,9 +913,49 @@ pub fn vfs_open_count() -> usize {
     FD_TABLE.active_count()
 }
 
+#[cfg(test)]
+pub fn reset_vfs_state_for_test() {
+    FD_TABLE.reset_all();
+    DIRECTORY_REGISTRY.reset_all();
+    INODE_EMULATION.clear();
+    BLOB_CACHE.flush_all();
+    object_store::OBJECT_STORE.reset_all();
+    VFS_REGISTERED.store(false, Ordering::Release);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers internes
 // ─────────────────────────────────────────────────────────────────────────────
+
+fn blob_id_for_object(object_id: u64) -> BlobId {
+    BlobId::from_bytes_blake3(&object_id.to_le_bytes())
+}
+
+fn load_inode_data(entry: &InodeEntry) -> ExofsResult<Vec<u8>> {
+    let blob_id = blob_id_for_object(entry.object_id);
+    if let Some(data) = BLOB_CACHE.get(&blob_id) {
+        return Ok(data.into_vec());
+    }
+    if let Some(data) = object_store::load_blob_data_if_available(&blob_id)? {
+        BLOB_CACHE.insert(blob_id, data.clone())?;
+        return Ok(data);
+    }
+    Ok(Vec::new())
+}
+
+fn persist_inode_data(blob_id: BlobId, data: &[u8]) -> ExofsResult<()> {
+    let mut cached = Vec::new();
+    cached
+        .try_reserve(data.len())
+        .map_err(|_| ExofsError::NoMemory)?;
+    cached.extend_from_slice(data);
+    BLOB_CACHE.insert(blob_id, cached)?;
+    BLOB_CACHE.mark_dirty(&blob_id)?;
+    if object_store::persist_blob_data_if_disk(blob_id, data, true)? {
+        BLOB_CACHE.mark_clean(&blob_id)?;
+    }
+    Ok(())
+}
 
 /// Convertit un InodeEntry en VfsInode.
 fn entry_to_vfs_inode(e: &InodeEntry) -> VfsInode {
@@ -713,6 +1045,8 @@ fn hash_name(parent_ino: ObjectIno, name: &[u8]) -> u64 {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -817,19 +1151,19 @@ mod tests {
     #[test]
     fn test_fd_table_open_close() {
         let fdt = OpenFdTable::new();
-        let fd = fdt.open_fd(5, open_flags::O_RDONLY, 1).unwrap();
+        let fd = fdt.open_fd(5, open_flags::O_RDONLY, 1).test_unwrap();
         assert!(fdt.get_fd(fd).is_some());
-        fdt.close_fd(fd).unwrap();
+        fdt.close_fd(fd).test_unwrap();
         assert!(fdt.get_fd(fd).is_none());
     }
 
     #[test]
     fn test_fd_table_update_offset() {
         let fdt = OpenFdTable::new();
-        let fd = fdt.open_fd(7, open_flags::O_RDONLY, 1).unwrap();
+        let fd = fdt.open_fd(7, open_flags::O_RDONLY, 1).test_unwrap();
         fdt.update_offset(fd, 512);
-        let d = fdt.get_fd(fd).unwrap();
+        let d = fdt.get_fd(fd).test_unwrap();
         assert_eq!(d.offset, 512);
-        fdt.close_fd(fd).unwrap();
+        fdt.close_fd(fd).test_unwrap();
     }
 }

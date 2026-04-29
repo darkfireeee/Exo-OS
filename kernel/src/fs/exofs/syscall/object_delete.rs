@@ -221,19 +221,21 @@ pub fn batch_delete(ids: &[BlobId], flags: u32) -> ExofsResult<Vec<DeleteResult>
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn make_blob(path: &[u8], data: &[u8]) -> BlobId {
         let id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(id, data.to_vec()).unwrap();
+        BLOB_CACHE.insert(id, data.to_vec()).test_unwrap();
         id
     }
 
     #[test]
     fn test_delete_existing() {
         let id = make_blob(b"/delete/existing", b"data");
-        let r = delete_blob(id, 0).unwrap();
+        let r = delete_blob(id, 0).test_unwrap();
         assert_eq!(r.bytes_freed, 4);
         assert_eq!(r.tombstoned, 1);
     }
@@ -247,7 +249,7 @@ mod tests {
     #[test]
     fn test_delete_idempotent() {
         let id = BlobId::from_bytes_blake3(b"/idempotent/del");
-        let r = delete_blob(id, delete_flags::IDEMPOTENT).unwrap();
+        let r = delete_blob(id, delete_flags::IDEMPOTENT).test_unwrap();
         assert_eq!(r.bytes_freed, 0);
     }
 
@@ -256,8 +258,8 @@ mod tests {
         let path = b"/path/delete/obj";
         BLOB_CACHE
             .insert(BlobId::from_bytes_blake3(path), b"x".to_vec())
-            .unwrap();
-        let r = delete_object_by_path(path, path.len(), 0).unwrap();
+            .test_unwrap();
+        let r = delete_object_by_path(path, path.len(), 0).test_unwrap();
         assert_eq!(r.tombstoned, 1);
     }
 
@@ -294,7 +296,7 @@ mod tests {
             make_blob(b"/batch/del/2", b"bb"),
             make_blob(b"/batch/del/3", b"ccc"),
         ];
-        let results = batch_delete(&ids, delete_flags::FORCE).unwrap();
+        let results = batch_delete(&ids, delete_flags::FORCE).test_unwrap();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].bytes_freed, 1);
         assert_eq!(results[1].bytes_freed, 2);
@@ -322,7 +324,7 @@ mod tests {
     fn test_delete_already_deleted_idempotent() {
         let id = make_blob(b"/already/gone2", b"z");
         silent_delete(id);
-        let r = delete_blob(id, delete_flags::IDEMPOTENT).unwrap();
+        let r = delete_blob(id, delete_flags::IDEMPOTENT).test_unwrap();
         assert_eq!(r.bytes_freed, 0);
     }
 }
@@ -451,7 +453,7 @@ mod advanced_tests {
 
     #[test]
     fn test_encode_tombstones_empty() {
-        let buf = encode_tombstones(&[]).unwrap();
+        let buf = encode_tombstones(&[]).test_unwrap();
         assert!(buf.is_empty());
     }
 
@@ -459,14 +461,14 @@ mod advanced_tests {
     fn test_encode_tombstones_one() {
         let r = DeleteResult::default();
         let e = TombstoneEntry::from_result(&r, 1, 2);
-        let buf = encode_tombstones(&[e]).unwrap();
+        let buf = encode_tombstones(&[e]).test_unwrap();
         assert_eq!(buf.len(), 56);
     }
 
     #[test]
     fn test_encode_tombstones_multiple() {
         let entries = [TombstoneEntry::default(); 4];
-        let buf = encode_tombstones(&entries).unwrap();
+        let buf = encode_tombstones(&entries).test_unwrap();
         assert_eq!(buf.len(), 56 * 4);
     }
 
@@ -484,8 +486,8 @@ mod advanced_tests {
         hdr[1] = 0xFE;
         hdr[2] = 0xD0;
         hdr[3] = 0xD1;
-        BLOB_CACHE.insert(id, hdr.to_vec()).unwrap();
-        let freed = delete_directory(id, 0).unwrap();
+        BLOB_CACHE.insert(id, hdr.to_vec()).test_unwrap();
+        let freed = delete_directory(id, 0).test_unwrap();
         assert_eq!(freed, 8);
         assert!(!object_exists(&id));
     }

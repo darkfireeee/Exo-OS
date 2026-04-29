@@ -555,6 +555,8 @@ impl IncrementalBlobSource for MockBlobSource {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
+use crate::fs::exofs::test_support::TestUnwrapExt;
+#[cfg(test)]
 mod tests {
     use super::super::exoar_reader::{CollectingReceiver, ExoarReader, SliceSource};
     use super::super::exoar_writer::SinkVec;
@@ -579,8 +581,8 @@ mod tests {
     fn test_diff_set_push() {
         let r = EpochRange::new(EpochId(0), EpochId(10));
         let mut ds = DiffSet::new(r);
-        ds.push_added(make_id(1)).expect("push ok");
-        ds.push_deleted(make_id(2)).expect("push ok");
+        ds.push_added(make_id(1)).test_expect("push ok");
+        ds.push_deleted(make_id(2)).test_expect("push ok");
         assert_eq!(ds.added.len(), 1);
         assert_eq!(ds.deleted.len(), 1);
         assert_eq!(ds.total_blobs(), 2);
@@ -592,7 +594,7 @@ mod tests {
         let cfg = IncrementalExportConfig::new(1, EpochId(0), EpochId(10));
         let exporter = IncrementalExport::new(cfg);
         let mut sink = SinkVec::new();
-        let result = exporter.run(&mut sink, &src).expect("export ok");
+        let result = exporter.run(&mut sink, &src).test_expect("export ok");
         assert_eq!(result.blobs_exported, 0);
         assert_eq!(result.tombstones_exported, 0);
         assert!(result.success);
@@ -605,7 +607,7 @@ mod tests {
         let cfg = IncrementalExportConfig::new(1, EpochId(0), EpochId(5));
         let exporter = IncrementalExport::new(cfg);
         let mut sink = SinkVec::new();
-        let result = exporter.run(&mut sink, &src).expect("export ok");
+        let result = exporter.run(&mut sink, &src).test_expect("export ok");
         assert_eq!(result.blobs_exported, 1);
         assert!(result.bytes_exported > 0);
     }
@@ -617,7 +619,7 @@ mod tests {
         let cfg = IncrementalExportConfig::new(2, EpochId(5), EpochId(10));
         let exporter = IncrementalExport::new(cfg);
         let mut sink = SinkVec::new();
-        let result = exporter.run(&mut sink, &src).expect("export");
+        let result = exporter.run(&mut sink, &src).test_expect("export");
         assert_eq!(result.tombstones_exported, 1);
     }
 
@@ -629,7 +631,7 @@ mod tests {
         let cfg = IncrementalExportConfig::new(1, EpochId(5), EpochId(10));
         let exporter = IncrementalExport::new(cfg);
         let mut sink = SinkVec::new();
-        let result = exporter.run(&mut sink, &src).expect("export");
+        let result = exporter.run(&mut sink, &src).test_expect("export");
         assert_eq!(result.blobs_exported, 1); // seulement le blob epoch 7
     }
 
@@ -640,7 +642,7 @@ mod tests {
         src.add_blob(make_id(2), b"snap2", EpochId(3));
         let exporter = SnapshotExport::new(10, EpochId(5));
         let mut sink = SinkVec::new();
-        let result = exporter.run(&mut sink, &src).expect("snapshot");
+        let result = exporter.run(&mut sink, &src).test_expect("snapshot");
         assert_eq!(result.blobs_exported, 2);
         assert!(result.success);
     }
@@ -655,12 +657,12 @@ mod tests {
         let cfg = IncrementalExportConfig::new(5, EpochId(0), EpochId(3));
         let exporter = IncrementalExport::new(cfg);
         let mut sink = SinkVec::new();
-        exporter.run(&mut sink, &src).expect("export");
+        exporter.run(&mut sink, &src).test_expect("export");
         let data = sink.into_inner();
         let mut slsrc = SliceSource::new(&data);
         let reader = ExoarReader::with_default_config();
         let mut rcv = CollectingReceiver::new();
-        let report = reader.read(&mut slsrc, &mut rcv).expect("read");
+        let report = reader.read(&mut slsrc, &mut rcv).test_expect("read");
         assert_eq!(report.entries_read, 2);
     }
 
@@ -674,7 +676,7 @@ mod tests {
         cfg.max_blobs = 3;
         let exporter = IncrementalExport::new(cfg);
         let mut sink = SinkVec::new();
-        let result = exporter.run(&mut sink, &src).expect("export");
+        let result = exporter.run(&mut sink, &src).test_expect("export");
         assert_eq!(result.blobs_exported, 3);
     }
 
