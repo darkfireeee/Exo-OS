@@ -179,6 +179,58 @@ unsafe fn wrpkrs(val: u64) {
     msr::write_msr(MSR_IA32_PKRS, val);
 }
 
+#[inline(always)]
+fn apply_domain_permission(pkrs: u64, domain: PksDomain, perm: PksPermission) -> u64 {
+    let mask = domain.mask();
+    let perm_bits = (perm.bits() as u64) << domain.shift();
+    (pkrs & !mask) | perm_bits
+}
+
+#[inline(always)]
+unsafe fn write_pkrs_shadowed(new_val: u64) {
+    // SAFETY: l'appelant garantit Ring 0 et une valeur PKRS valide.
+    unsafe {
+        wrpkrs(new_val);
+    }
+    CURRENT_PKRS.store(new_val, Ordering::Release);
+}
+
+/// Garde RAII restaurant la valeur PKRS précédente à la sortie du scope.
+///
+/// Cette garde est pensée pour des sections critiques très courtes :
+/// accès ponctuel à des données protégées par PKS sans laisser un domaine
+/// restauré plus longtemps que nécessaire.
+#[must_use = "conserver la garde pendant toute la durée de l'accès PKS"]
+pub(crate) struct ScopedPkrsAccess {
+    previous_pkrs: u64,
+    active: bool,
+}
+
+impl ScopedPkrsAccess {
+    #[inline(always)]
+    const fn inactive() -> Self {
+        Self {
+            previous_pkrs: 0,
+            active: false,
+        }
+    }
+}
+
+impl Drop for ScopedPkrsAccess {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+
+        // SAFETY: la garde ne peut être active que si PKS est disponible et
+        // qu'une valeur PKRS précédente valide a été sauvegardée.
+        unsafe {
+            wrpkrs(self.previous_pkrs);
+        }
+        CURRENT_PKRS.store(self.previous_pkrs, Ordering::Release);
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // revoke_domain — Révocation O(1) d'un domaine PKS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -207,17 +259,14 @@ pub unsafe fn revoke_domain(domain: PksDomain) {
         return; // PKS non disponible — noop silencieux
     }
 
-    let shift = domain.shift();
-    let mask = domain.mask();
-    let revoke_bits = (PksPermission::Disabled.bits() as u64) << shift;
-
     // Read-Modify-Write du MSR PKRS
     let cur = CURRENT_PKRS.load(Ordering::Relaxed);
-    let new_val = (cur & !mask) | revoke_bits;
+    let new_val = apply_domain_permission(cur, domain, PksPermission::Disabled);
 
     // SAFETY: Ring 0, PKS supporté, valeur PKRS valide.
-    wrpkrs(new_val);
-    CURRENT_PKRS.store(new_val, Ordering::Release);
+    unsafe {
+        write_pkrs_shadowed(new_val);
+    }
 
     // Instrumentation
     REVOKE_COUNT[domain.pkey() as usize].fetch_add(1, Ordering::Relaxed);
@@ -240,16 +289,13 @@ pub unsafe fn restore_domain(domain: PksDomain) {
         return;
     }
 
-    let shift = domain.shift();
-    let mask = domain.mask();
-    let restore_bits = (PksPermission::ReadWrite.bits() as u64) << shift;
-
     let cur = CURRENT_PKRS.load(Ordering::Relaxed);
-    let new_val = (cur & !mask) | restore_bits;
+    let new_val = apply_domain_permission(cur, domain, PksPermission::ReadWrite);
 
     // SAFETY: Ring 0, PKS supporté, valeur PKRS valide.
-    wrpkrs(new_val);
-    CURRENT_PKRS.store(new_val, Ordering::Release);
+    unsafe {
+        write_pkrs_shadowed(new_val);
+    }
 }
 
 /// Restaure un domaine PKS avec une permission spécifique.
@@ -261,16 +307,42 @@ pub unsafe fn restore_domain_with_permission(domain: PksDomain, perm: PksPermiss
         return;
     }
 
-    let shift = domain.shift();
-    let mask = domain.mask();
-    let perm_bits = (perm.bits() as u64) << shift;
-
     let cur = CURRENT_PKRS.load(Ordering::Relaxed);
-    let new_val = (cur & !mask) | perm_bits;
+    let new_val = apply_domain_permission(cur, domain, perm);
 
     // SAFETY: Ring 0, PKS supporté, valeur PKRS valide.
-    wrpkrs(new_val);
-    CURRENT_PKRS.store(new_val, Ordering::Release);
+    unsafe {
+        write_pkrs_shadowed(new_val);
+    }
+}
+
+/// Restaure temporairement un domaine PKS et restaure automatiquement PKRS
+/// à la sortie du scope.
+///
+/// # Safety
+/// - Ring 0 uniquement
+/// - Le scope protégé ne doit pas modifier lui-même IA32_PKRS
+/// - À réserver à de très courtes sections critiques sans allocation
+pub(crate) unsafe fn scoped_domain_access(
+    domain: PksDomain,
+    perm: PksPermission,
+) -> ScopedPkrsAccess {
+    if !PKS_AVAILABLE.load(Ordering::Acquire) {
+        return ScopedPkrsAccess::inactive();
+    }
+
+    let previous_pkrs = CURRENT_PKRS.load(Ordering::Acquire);
+    let new_val = apply_domain_permission(previous_pkrs, domain, perm);
+
+    // SAFETY: Ring 0, PKS supporté, valeur PKRS valide.
+    unsafe {
+        write_pkrs_shadowed(new_val);
+    }
+
+    ScopedPkrsAccess {
+        previous_pkrs,
+        active: true,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -444,8 +516,9 @@ pub unsafe fn restore_pkrs_from_tcb(tcb: &crate::scheduler::core::task::ThreadCo
         return;
     }
     let pkrs_val = tcb.pkrs as u64;
-    wrpkrs(pkrs_val);
-    CURRENT_PKRS.store(pkrs_val, Ordering::Release);
+    unsafe {
+        write_pkrs_shadowed(pkrs_val);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -478,5 +551,46 @@ pub fn exoveil_stats() -> ExoVeilStats {
         caps_revokes: REVOKE_COUNT[PksDomain::Caps.pkey() as usize].load(Ordering::Relaxed),
         creds_revokes: REVOKE_COUNT[PksDomain::Credentials.pkey() as usize].load(Ordering::Relaxed),
         tcbhot_revokes: REVOKE_COUNT[PksDomain::TcbHot.pkey() as usize].load(Ordering::Relaxed),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_domain_permission, PksDomain, PksPermission};
+
+    #[test]
+    fn apply_domain_permission_updates_only_target_domain() {
+        let initial = 0x5555_5555_5555_5555u64;
+        let updated =
+            apply_domain_permission(initial, PksDomain::Credentials, PksPermission::ReadOnly);
+
+        assert_eq!(
+            (updated >> PksDomain::Credentials.shift()) & 0b11,
+            PksPermission::ReadOnly.bits()
+        );
+        assert_eq!(
+            updated & !PksDomain::Credentials.mask(),
+            initial & !PksDomain::Credentials.mask()
+        );
+    }
+
+    #[test]
+    fn apply_domain_permission_can_restore_rw_after_revoke() {
+        let revoked = apply_domain_permission(
+            0,
+            PksDomain::Caps,
+            PksPermission::Disabled,
+        );
+        let restored = apply_domain_permission(
+            revoked,
+            PksDomain::Caps,
+            PksPermission::ReadWrite,
+        );
+
+        assert_eq!(
+            (restored >> PksDomain::Caps.shift()) & 0b11,
+            PksPermission::ReadWrite.bits()
+        );
+        assert_eq!(restored & !PksDomain::Caps.mask(), revoked & !PksDomain::Caps.mask());
     }
 }

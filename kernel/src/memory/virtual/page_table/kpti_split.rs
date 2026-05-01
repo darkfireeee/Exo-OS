@@ -95,9 +95,10 @@ impl KptiTable {
             return;
         }
         let pml4 = self.states[cpu_id].kernel_pml4;
-        if pml4.as_u64() != 0 {
-            write_cr3(pml4);
+        if pml4.as_u64() == 0 {
+            panic!("KPTI: kernel_pml4 non initialisee pour le CPU {}", cpu_id);
         }
+        write_cr3(pml4);
     }
 
     /// Switch vers la PML4 user pour ce CPU.
@@ -109,9 +110,10 @@ impl KptiTable {
             return;
         }
         let pml4 = self.states[cpu_id].user_pml4;
-        if pml4.as_u64() != 0 {
-            write_cr3(pml4);
+        if pml4.as_u64() == 0 {
+            panic!("KPTI: user_pml4 non initialisee pour le CPU {}", cpu_id);
         }
+        write_cr3(pml4);
     }
 
     /// Retourne les PML4 pour un CPU.

@@ -583,6 +583,8 @@ pub unsafe extern "C" fn emergency_pool_free_wait_node(node: *mut u8) {
 mod tests {
     use super::*;
 
+    static SCHED_POOL_TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
     #[test]
     fn emergency_pool_init_is_idempotent() {
         let pool = EmergencyPool::new_uninit();
@@ -634,5 +636,60 @@ mod tests {
 
         assert_eq!(pool.allocated_count(), 0);
         assert_eq!(pool.free_count(), EMERGENCY_POOL_SIZE);
+    }
+
+    #[test]
+    fn sched_node_pool_alloc_free_smoke() {
+        let _guard = SCHED_POOL_TEST_LOCK.lock();
+
+        unsafe {
+            init_sched_pool();
+        }
+
+        let ptr = unsafe { emergency_pool_alloc_wait_node() };
+        assert!(
+            !ptr.is_null(),
+            "SchedNodePool should return one block after init"
+        );
+
+        unsafe {
+            emergency_pool_free_wait_node(ptr);
+        }
+    }
+
+    #[test]
+    fn sched_node_pool_capacity_stress() {
+        let _guard = SCHED_POOL_TEST_LOCK.lock();
+
+        unsafe {
+            init_sched_pool();
+        }
+
+        let mut blocks: [*mut u8; SCHED_POOL_SIZE] = [core::ptr::null_mut(); SCHED_POOL_SIZE];
+        for (idx, slot) in blocks.iter_mut().enumerate() {
+            let ptr = unsafe { emergency_pool_alloc_wait_node() };
+            assert!(!ptr.is_null(), "allocation {} should succeed", idx);
+            *slot = ptr;
+        }
+
+        assert!(
+            unsafe { emergency_pool_alloc_wait_node() }.is_null(),
+            "SchedNodePool should report exhaustion once all blocks are allocated"
+        );
+
+        for ptr in blocks {
+            unsafe {
+                emergency_pool_free_wait_node(ptr);
+            }
+        }
+
+        let ptr = unsafe { emergency_pool_alloc_wait_node() };
+        assert!(
+            !ptr.is_null(),
+            "SchedNodePool should be reusable after a full alloc/free cycle"
+        );
+        unsafe {
+            emergency_pool_free_wait_node(ptr);
+        }
     }
 }

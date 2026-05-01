@@ -49,7 +49,7 @@ pub const CACHE_LINE_MASK: usize = CACHE_LINE_SIZE - 1;
 // BUDDY ALLOCATOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ordre maximum du buddy allocator (2^11 = 2048 pages = 8 MiB)
+/// Ordre maximum du buddy allocator (2^12 = 4096 pages = 16 MiB)
 pub const BUDDY_MAX_ORDER: usize = 12;
 
 /// Nombre de niveaux du buddy allocator
@@ -78,7 +78,7 @@ pub const SLAB_MAX_OBJ_SIZE: usize = 2048;
 pub const SLAB_MAX_OBJS_PER_PAGE: usize = PAGE_SIZE / SLAB_MIN_OBJ_SIZE;
 
 /// Seuil : au-dessus de cette taille, le slab dispatch vers buddy direct
-pub const SLAB_LARGE_THRESHOLD: usize = 4096;
+pub const SLAB_LARGE_THRESHOLD: usize = SLAB_MAX_OBJ_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PER-CPU POOLS
@@ -225,6 +225,10 @@ const _: () = assert!(
     "EmergencyPool trop petit (< 256) — risque DoS par épuisement (SCHED-POOL)"
 );
 const _: () = assert!(BUDDY_MAX_ORDER <= 20, "BUDDY_MAX_ORDER excessif");
+const _: () = assert!(
+    SLAB_LARGE_THRESHOLD <= SLAB_MAX_OBJ_SIZE,
+    "SLAB_LARGE_THRESHOLD ne peut pas depasser SLAB_MAX_OBJ_SIZE"
+);
 const _: () = assert!(MAX_CPUS <= 4096, "MAX_CPUS dépasse la limite x2APIC");
 const _: () = assert!(
     ZONE_DMA_END == 16 * 1024 * 1024,

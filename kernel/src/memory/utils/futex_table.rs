@@ -83,6 +83,15 @@ impl FutexWaiter {
     }
 }
 
+const _: () = assert!(
+    core::mem::size_of::<FutexWaiter>() == 56,
+    "FutexWaiter doit garder un layout ABI x86_64 de 56 bytes"
+);
+const _: () = assert!(
+    core::mem::align_of::<FutexWaiter>() == 8,
+    "FutexWaiter doit rester aligne sur 8 bytes"
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Bucket de hash
 // ─────────────────────────────────────────────────────────────────────────────

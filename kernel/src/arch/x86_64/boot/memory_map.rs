@@ -81,6 +81,16 @@ impl SlabPageProvider for KernelSlabProvider {
 /// Instance statique du provider (durée de vie 'static requise par slab).
 static KERNEL_SLAB_PROVIDER: KernelSlabProvider = KernelSlabProvider;
 
+#[inline]
+fn assert_buddy_has_free_frames(origin: &str) {
+    let free = crate::memory::physical::allocator::BUDDY.total_free_frames();
+    assert!(
+        free > 0,
+        "{}: buddy initialise sans aucune frame libre",
+        origin
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // LIMITES PHYSIQUES DU SYSTÈME
 // ─────────────────────────────────────────────────────────────────────────────
@@ -293,6 +303,7 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
             init_phase2b_buddy_free_region(PhysAddr::new(s), PhysAddr::new(e));
         });
     }
+    assert_buddy_has_free_frames("multiboot2");
 
     // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ─────────
     // SAFETY: le fournisseur est 'static et Sync.
@@ -406,6 +417,7 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
             init_phase2b_buddy_free_region(PhysAddr::new(s), PhysAddr::new(e));
         });
     }
+    assert_buddy_has_free_frames("uefi");
     // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ─────────
     register_slab_page_provider(&KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider);
     // ── Phase 3 & 4 ──────────────────────────────────────────────────────────
@@ -676,6 +688,7 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
             init_phase2b_buddy_free_region(PhysAddr::new(s), PhysAddr::new(e));
         });
     }
+    assert_buddy_has_free_frames("boot-info");
 
     // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ───────
     // SAFETY: le fournisseur est 'static et Sync.

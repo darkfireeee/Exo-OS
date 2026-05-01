@@ -48,6 +48,7 @@ use spin::Once;
 
 use crate::security::capability::rights::Rights;
 use crate::security::capability::token::CapToken;
+use crate::security::exoveil::{self, PksDomain, PksPermission};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes ExoKairos
@@ -388,6 +389,9 @@ pub mod cap_deadline_table {
     /// # Safety
     /// Ring 0 uniquement. La table est protégée par PKS Credentials.
     pub unsafe fn insert(oid: ObjectId, deadline_tsc: u64) {
+        let _guard = unsafe {
+            exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite)
+        };
         let oid_val = oid.as_u64();
 
         // Recherche séquentielle (Phase 3.1 — sera hash table en Phase 3.2)
@@ -437,6 +441,9 @@ pub mod cap_deadline_table {
     /// # RÈGLE EXOKAIROS-01
     /// Accès constant-time pour empêcher l'attaque par timing.
     pub fn get_const_time(oid: ObjectId) -> u64 {
+        let _guard = unsafe {
+            exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadOnly)
+        };
         let oid_val = oid.as_u64();
         let mut result = u64::MAX; // deadline = MAX signifie "pas trouvé" → Expiré
 
@@ -466,6 +473,9 @@ pub mod cap_deadline_table {
     ///
     /// Appelé lors de la révocation d'une capability temporelle.
     pub fn remove(oid: ObjectId) {
+        let _guard = unsafe {
+            exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite)
+        };
         let oid_val = oid.as_u64();
 
         unsafe {
@@ -563,6 +573,9 @@ static KERNEL_SECRET: Once<[u8; 32]> = Once::new();
 /// Doit être appelé UNE SEULE FOIS au boot, avant que Kernel A ne démarre.
 /// Le secret doit provenir d'une source CSPRNG (RDRAND + ChaCha20).
 pub fn init_kernel_secret(secret: &[u8; 32]) {
+    let _guard = unsafe {
+        exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite)
+    };
     KERNEL_SECRET.call_once(|| *secret);
 }
 
@@ -572,6 +585,9 @@ pub fn init_kernel_secret(secret: &[u8; 32]) {
 /// Ne doit jamais être appelé depuis Ring 1 ou Ring 3.
 /// En Phase 3.2, cette lecture sera protégée par PKS Credentials.
 fn get_kernel_secret() -> [u8; 32] {
+    let _guard = unsafe {
+        exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadOnly)
+    };
     *KERNEL_SECRET
         .get()
         .expect("KERNEL_SECRET non initialisé — exoseal_boot_phase0 doit précéder verify()")
@@ -619,5 +635,73 @@ pub fn exokairos_stats() -> ExoKairosStats {
     ExoKairosStats {
         deadline_table_used: cap_deadline_table::used_count(),
         secret_initialized: KERNEL_SECRET.get().is_some(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cap_deadline_table, DEADLINE_TABLE_SIZE};
+    use crate::security::capability::token::ObjectId;
+    use spin::Mutex;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn test_oid(raw: u64) -> ObjectId {
+        ObjectId::from_raw(0x4558_4f4b_0000_0000 | raw)
+    }
+
+    #[test]
+    fn deadline_table_round_trip_smoke() {
+        let _guard = TEST_LOCK.lock();
+        let oid = test_oid(1);
+        cap_deadline_table::remove(oid);
+        let before = cap_deadline_table::used_count();
+
+        unsafe {
+            cap_deadline_table::insert(oid, 0x1234_5678_9abc_def0);
+        }
+        assert_eq!(cap_deadline_table::get_const_time(oid), 0x1234_5678_9abc_def0);
+        assert_eq!(cap_deadline_table::used_count(), before + 1);
+
+        unsafe {
+            cap_deadline_table::insert(oid, 0x0fed_cba9_8765_4321);
+        }
+        assert_eq!(cap_deadline_table::get_const_time(oid), 0x0fed_cba9_8765_4321);
+        assert_eq!(cap_deadline_table::used_count(), before + 1);
+
+        cap_deadline_table::remove(oid);
+        assert_eq!(cap_deadline_table::get_const_time(oid), u64::MAX);
+        assert_eq!(cap_deadline_table::used_count(), before);
+    }
+
+    #[test]
+    fn deadline_table_capacity_stress() {
+        let _guard = TEST_LOCK.lock();
+        let before = cap_deadline_table::used_count();
+
+        assert_eq!(
+            before, 0,
+            "deadline table unexpectedly pre-populated before stress test"
+        );
+
+        for idx in 0..DEADLINE_TABLE_SIZE {
+            let oid = test_oid(0x1000 + idx as u64);
+            cap_deadline_table::remove(oid);
+            unsafe {
+                cap_deadline_table::insert(oid, 0x1000_0000 + idx as u64);
+            }
+        }
+
+        for idx in 0..DEADLINE_TABLE_SIZE {
+            let oid = test_oid(0x1000 + idx as u64);
+            assert_eq!(cap_deadline_table::get_const_time(oid), 0x1000_0000 + idx as u64);
+        }
+        assert_eq!(cap_deadline_table::used_count(), DEADLINE_TABLE_SIZE);
+
+        for idx in 0..DEADLINE_TABLE_SIZE {
+            let oid = test_oid(0x1000 + idx as u64);
+            cap_deadline_table::remove(oid);
+        }
+        assert_eq!(cap_deadline_table::used_count(), 0);
     }
 }

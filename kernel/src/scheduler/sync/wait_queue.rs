@@ -47,6 +47,15 @@ pub struct WaitNode {
     _pad: u32,
 }
 
+const _: () = assert!(
+    core::mem::size_of::<WaitNode>() <= 64,
+    "scheduler::WaitNode doit tenir dans un bloc SchedNodePool de 64 bytes"
+);
+const _: () = assert!(
+    core::mem::align_of::<WaitNode>() <= 64,
+    "scheduler::WaitNode requiert un alignement incompatible avec SchedNodePool"
+);
+
 impl WaitNode {
     pub const EXCLUSIVE: u32 = 1 << 0;
 
@@ -295,9 +304,10 @@ pub static WAITQ_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 pub unsafe fn init() {
     // Vérification : tenter une alloc/free de test depuis l'EmergencyPool.
     let test = emergency_pool_alloc_wait_node();
-    if !test.is_null() {
-        emergency_pool_free_wait_node(test);
+    if test.is_null() {
+        panic!(
+            "WaitQueue: SchedNodePool/EmergencyPool non initialise - appeler memory::physical::frame::emergency_pool::init() avant scheduler::init()"
+        );
     }
-    // Sinon, l'EmergencyPool n'est pas initialisé — erreur fatale
-    // gérée par l'appelant (scheduler::init affiche un kernel panic).
+    emergency_pool_free_wait_node(test);
 }

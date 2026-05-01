@@ -195,7 +195,9 @@ impl VirtAddr {
     }
 
     /// Crée sans vérification.
-    /// SAFETY: L'appelant garantit que addr est une adresse canonique valide.
+    /// SAFETY: L'appelant garantit que `addr` est une valeur virtuelle brute
+    /// acceptable dans son contexte. Cela inclut des sentinelles non canoniques
+    /// comme `USER_END`, donc cette fonction ne canonicalise rien.
     #[inline(always)]
     pub const unsafe fn new_unchecked(addr: u64) -> Self {
         VirtAddr(addr)
@@ -225,6 +227,7 @@ impl VirtAddr {
     /// alignée correctement, et que la durée de vie est valide.
     #[inline(always)]
     pub const unsafe fn as_ptr<T>(self) -> *const T {
+        debug_assert!(self.is_canonical());
         self.0 as *const T
     }
 
@@ -232,6 +235,7 @@ impl VirtAddr {
     /// SAFETY: Comme as_ptr, plus : la page doit être writable.
     #[inline(always)]
     pub const unsafe fn as_mut_ptr<T>(self) -> *mut T {
+        debug_assert!(self.is_canonical());
         self.0 as *mut T
     }
 

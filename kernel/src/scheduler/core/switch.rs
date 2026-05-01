@@ -222,6 +222,12 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     prev.fs_base = unsafe { msr::read_msr(MSR_FS_BASE) };
     prev.user_gs_base = unsafe { msr::read_msr(MSR_KERNEL_GS_BASE) };
 
+    // ExoArgos documente une capture PMU sur le thread sortant au moment du
+    // context switch. Le hook restait orphelin ; on l'active ici sur le vrai
+    // chemin chaud. pmc_snapshot() se protège lui-même si le PMU n'est pas
+    // initialisé ou si le sujet n'est pas le thread courant.
+    let _ = crate::security::exoargos::pmc_snapshot(prev);
+
     // ── Étape 3 : Transition d'état de prev ──────────────────────────────────
     // Si le thread sortant était Running → il redevient Runnable (sera ré-enfilé).
     // Si il était dans un état bloquant (Sleeping, Uninterruptible) → on ne change pas.
@@ -253,7 +259,12 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     // stale sur ce CPU après migration/changement d'espace d'adressage.
     if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
         let cpu_id = percpu::current_cpu_id() as usize;
-        let user_cr3 = user_cr3_for_cpu(cpu_id).unwrap_or(next.cr3_phys);
+        let user_cr3 = user_cr3_for_cpu(cpu_id).unwrap_or_else(|| {
+            panic!(
+                "KPTI actif mais user CR3 absent pour le CPU {} pendant le context switch",
+                cpu_id
+            )
+        });
         crate::arch::x86_64::spectre::kpti::set_current_cr3(next.cr3_phys, user_cr3);
     }
 
