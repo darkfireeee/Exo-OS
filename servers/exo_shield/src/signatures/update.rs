@@ -2,7 +2,7 @@
 //!
 //! Système de mise à jour des signatures avec :
 //! - Suivi de version
-//! - Vérification Ed25519 (arithmétique de champ complète)
+//! - Vérification Ed25519 déléguée au `crypto_server`
 //! - Rollback (pile de 8 snapshots)
 //! - Planification via TSC
 //!
@@ -11,6 +11,7 @@
 //! - Zéro stub, zéro TODO, zéro placeholder
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use exo_syscall_abi as syscall;
 use spin::Mutex;
 
 use super::database;
@@ -28,6 +29,20 @@ pub const ED25519_SIGNATURE_SIZE: usize = 64;
 
 /// Taille d'un bloc de mise à jour.
 const MAX_UPDATE_PAYLOAD: usize = 4096;
+const CRYPTO_SERVER_ENDPOINT: u64 = 4;
+const EXO_SHIELD_SERVICE_PID: u64 = 10;
+const EXO_SHIELD_CRYPTO_REPLY_ENDPOINT: u64 = (EXO_SHIELD_SERVICE_PID << 32) | 0x5349_4755;
+const CRYPTO_PROTOCOL_VERSION: u8 = 3;
+const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 224;
+const CRYPTO_REPLY_DATA_SIZE: usize = 228;
+const VERIFY_UPDATE_CHUNK_SIZE: usize = CRYPTO_REQUEST_PAYLOAD_SIZE - 7;
+const CRYPTO_VERIFY: u32 = 6;
+const VERIFY_OP_BEGIN: u8 = 0;
+const VERIFY_OP_UPDATE: u8 = 1;
+const VERIFY_OP_FINAL: u8 = 2;
+const CRYPTO_OK: u32 = 0;
+const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
+const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
 
 // ── Lecture TSC ──────────────────────────────────────────────────────────────
 
@@ -44,6 +59,195 @@ fn read_tsc() -> u64 {
         );
     }
     ((hi as u64) << 32) | lo as u64
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CryptoRequest {
+    sender_endpoint: u64,
+    msg_type: u32,
+    payload_len: u16,
+    version: u8,
+    flags: u8,
+    cap_token: syscall::ExoCapTokenWire,
+    payload: [u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CryptoReply {
+    status: u32,
+    key_handle: u32,
+    data_len: u16,
+    version: u8,
+    flags: u8,
+    data: [u8; CRYPTO_REPLY_DATA_SIZE],
+}
+
+impl CryptoReply {
+    const fn empty() -> Self {
+        Self {
+            status: 0,
+            key_handle: 0,
+            data_len: 0,
+            version: 0,
+            flags: 0,
+            data: [0u8; CRYPTO_REPLY_DATA_SIZE],
+        }
+    }
+}
+
+static CRYPTO_VERIFY_IPC_LOCK: Mutex<()> = Mutex::new(());
+static CRYPTO_SERVICE_TOKEN: Mutex<syscall::ExoCapTokenWire> =
+    Mutex::new(syscall::ExoCapTokenWire::empty());
+
+fn register_crypto_reply_endpoint() -> bool {
+    let name = b"exo_shield_sigupd";
+    let rc = unsafe {
+        syscall::syscall3(
+            syscall::SYS_IPC_REGISTER,
+            name.as_ptr() as u64,
+            name.len() as u64,
+            EXO_SHIELD_CRYPTO_REPLY_ENDPOINT,
+        )
+    };
+    rc >= 0
+}
+
+fn crypto_ipc_roundtrip(req: &CryptoRequest) -> Option<CryptoReply> {
+    let send_rc = unsafe {
+        syscall::syscall6(
+            syscall::SYS_IPC_SEND,
+            CRYPTO_SERVER_ENDPOINT,
+            req as *const CryptoRequest as u64,
+            core::mem::size_of::<CryptoRequest>() as u64,
+            0,
+            0,
+            0,
+        )
+    };
+    if send_rc < 0 {
+        return None;
+    }
+
+    let mut reply = CryptoReply::empty();
+    let recv_rc = unsafe {
+        syscall::syscall4(
+            syscall::SYS_EXO_IPC_RECV,
+            EXO_SHIELD_CRYPTO_REPLY_ENDPOINT,
+            &mut reply as *mut CryptoReply as u64,
+            core::mem::size_of::<CryptoReply>() as u64,
+            IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,
+        )
+    };
+    if recv_rc as usize != core::mem::size_of::<CryptoReply>() {
+        return None;
+    }
+    if reply.version != CRYPTO_PROTOCOL_VERSION {
+        return None;
+    }
+    Some(reply)
+}
+
+fn ensure_crypto_service_token() -> bool {
+    let mut token = CRYPTO_SERVICE_TOKEN.lock();
+    if !token.is_empty() {
+        return true;
+    }
+
+    let rc = unsafe {
+        syscall::exo_cap_create(
+            syscall::EXO_CAP_TYPE_IPC_ENDPOINT,
+            syscall::EXO_CAP_RIGHT_IPC_SEND,
+            CRYPTO_SERVER_ENDPOINT as u32,
+            &mut *token,
+        )
+    };
+    rc >= 0 && !token.is_empty()
+}
+
+fn crypto_verify_finalize(ctx_handle: u32) -> Option<CryptoReply> {
+    let mut req = CryptoRequest {
+        sender_endpoint: EXO_SHIELD_CRYPTO_REPLY_ENDPOINT,
+        msg_type: CRYPTO_VERIFY,
+        payload_len: 5,
+        version: CRYPTO_PROTOCOL_VERSION,
+        flags: 0,
+        cap_token: *CRYPTO_SERVICE_TOKEN.lock(),
+        payload: [0u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
+    };
+    req.payload[0] = VERIFY_OP_FINAL;
+    req.payload[1..5].copy_from_slice(&ctx_handle.to_le_bytes());
+    crypto_ipc_roundtrip(&req)
+}
+
+fn crypto_verify_ed25519(
+    public_key: &[u8; ED25519_PUBLIC_KEY_SIZE],
+    message: &[u8],
+    signature: &[u8; ED25519_SIGNATURE_SIZE],
+) -> bool {
+    if message.is_empty()
+        || message.len() > u16::MAX as usize
+        || !register_crypto_reply_endpoint()
+        || !ensure_crypto_service_token()
+    {
+        return false;
+    }
+
+    let _guard = CRYPTO_VERIFY_IPC_LOCK.lock();
+    let cap_token = *CRYPTO_SERVICE_TOKEN.lock();
+
+    let mut begin = CryptoRequest {
+        sender_endpoint: EXO_SHIELD_CRYPTO_REPLY_ENDPOINT,
+        msg_type: CRYPTO_VERIFY,
+        payload_len: 99,
+        version: CRYPTO_PROTOCOL_VERSION,
+        flags: 0,
+        cap_token,
+        payload: [0u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
+    };
+    begin.payload[0] = VERIFY_OP_BEGIN;
+    begin.payload[1..33].copy_from_slice(public_key);
+    begin.payload[33..97].copy_from_slice(signature);
+    begin.payload[97..99].copy_from_slice(&(message.len() as u16).to_le_bytes());
+
+    let Some(begin_reply) = crypto_ipc_roundtrip(&begin) else {
+        return false;
+    };
+    if begin_reply.status != CRYPTO_OK || begin_reply.key_handle == 0 {
+        return false;
+    }
+
+    let ctx_handle = begin_reply.key_handle;
+    for chunk in message.chunks(VERIFY_UPDATE_CHUNK_SIZE) {
+        let mut update = CryptoRequest {
+            sender_endpoint: EXO_SHIELD_CRYPTO_REPLY_ENDPOINT,
+            msg_type: CRYPTO_VERIFY,
+            payload_len: (7 + chunk.len()) as u16,
+            version: CRYPTO_PROTOCOL_VERSION,
+            flags: 0,
+            cap_token,
+            payload: [0u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
+        };
+        update.payload[0] = VERIFY_OP_UPDATE;
+        update.payload[1..5].copy_from_slice(&ctx_handle.to_le_bytes());
+        update.payload[5..7].copy_from_slice(&(chunk.len() as u16).to_le_bytes());
+        update.payload[7..7 + chunk.len()].copy_from_slice(chunk);
+
+        let Some(update_reply) = crypto_ipc_roundtrip(&update) else {
+            let _ = crypto_verify_finalize(ctx_handle);
+            return false;
+        };
+        if update_reply.status != CRYPTO_OK || update_reply.key_handle != ctx_handle {
+            let _ = crypto_verify_finalize(ctx_handle);
+            return false;
+        }
+    }
+
+    matches!(
+        crypto_verify_finalize(ctx_handle),
+        Some(reply) if reply.status == CRYPTO_OK
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -829,6 +1033,21 @@ impl SignatureUpdateHeader {
     }
 }
 
+const SIGNATURE_UPDATE_SIGNATURE_OFFSET: usize = core::mem::size_of::<UpdateVersion>()
+    + core::mem::size_of::<u32>()
+    + core::mem::size_of::<u32>()
+    + ED25519_PUBLIC_KEY_SIZE;
+
+const _: () = assert!(
+    SIGNATURE_UPDATE_SIGNATURE_OFFSET
+        + ED25519_SIGNATURE_SIZE
+        + core::mem::size_of::<u64>()
+        + core::mem::size_of::<u32>()
+        + 4
+        == core::mem::size_of::<SignatureUpdateHeader>(),
+    "SignatureUpdateHeader layout inattendu"
+);
+
 // ── Entrée de signature encodée pour mise à jour ─────────────────────────────
 
 /// Signature encodée dans un payload de mise à jour.
@@ -992,7 +1211,29 @@ pub fn remove_trusted_key(key: &[u8; ED25519_PUBLIC_KEY_SIZE]) -> bool {
 
 /// Vérifie la signature Ed25519 d'une mise à jour avec les clés de confiance.
 fn verify_update_signature(header: &SignatureUpdateHeader, payload: &[u8]) -> bool {
-    let mgr = UPDATE_MANAGER.lock();
+    let mut trusted_keys = [[0u8; ED25519_PUBLIC_KEY_SIZE]; 4];
+    let trusted_key_count = {
+        let mgr = UPDATE_MANAGER.lock();
+        for i in 0..mgr.trusted_key_count {
+            trusted_keys[i] = mgr.trusted_keys[i];
+        }
+        mgr.trusted_key_count
+    };
+
+    let mut publisher_trusted = false;
+    for trusted_key in trusted_keys.iter().take(trusted_key_count) {
+        let mut diff = 0u8;
+        for i in 0..ED25519_PUBLIC_KEY_SIZE {
+            diff |= trusted_key[i] ^ header.publisher_key[i];
+        }
+        if diff == 0 {
+            publisher_trusted = true;
+            break;
+        }
+    }
+    if !publisher_trusted {
+        return false;
+    }
 
     // Construire le message à vérifier : header (sans signature) || payload
     let header_size = core::mem::size_of::<SignatureUpdateHeader>();
@@ -1010,25 +1251,14 @@ fn verify_update_signature(header: &SignatureUpdateHeader, payload: &[u8]) -> bo
         )
     };
     msg[..header_size].copy_from_slice(header_bytes);
-    // Mettre les octets de signature à 0 dans le message
-    let sig_offset = header_size - ED25519_SIGNATURE_SIZE - 8; // avant checksum+reserved
-    for i in 0..ED25519_SIGNATURE_SIZE {
-        msg[sig_offset + i] = 0;
-    }
+    msg[SIGNATURE_UPDATE_SIGNATURE_OFFSET
+        ..SIGNATURE_UPDATE_SIGNATURE_OFFSET + ED25519_SIGNATURE_SIZE]
+        .fill(0);
     if !payload.is_empty() {
         msg[header_size..header_size + payload.len()].copy_from_slice(payload);
     }
 
-    // Essayer chaque clé de confiance
-    for i in 0..mgr.trusted_key_count {
-        let mut sig = [0u8; ED25519_SIGNATURE_SIZE];
-        sig.copy_from_slice(&header.signature);
-        if verify_ed25519(&mgr.trusted_keys[i], &msg[..msg_len], &sig) {
-            return true;
-        }
-    }
-
-    false
+    crypto_verify_ed25519(&header.publisher_key, &msg[..msg_len], &header.signature)
 }
 
 /// Vérifie le CRC32 du payload.
@@ -1278,6 +1508,8 @@ pub fn get_update_stats() -> UpdateStats {
 
 /// Initialise le gestionnaire de mise à jour.
 pub fn update_init() {
+    let _ = register_crypto_reply_endpoint();
+    let _ = ensure_crypto_service_token();
     let mut mgr = UPDATE_MANAGER.lock();
     mgr.current_version = UpdateVersion::new(1, 0, 0, 0);
     mgr.rollback_depth = 0;

@@ -24,6 +24,7 @@
 use super::rights::Rights;
 use super::table::CapTable;
 use super::token::{stat_denied, stat_verified, CapObjectType, CapToken};
+use subtle::{Choice, ConstantTimeEq};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CapError — erreurs de vérification et de révocation
@@ -125,15 +126,15 @@ pub fn verify(table: &CapTable, token: CapToken, required_rights: Rights) -> Res
         .as_ref()
         .map(|e| e.rights)
         .unwrap_or(Rights::empty());
-    let entry_found = entry_opt.is_some();
+    let entry_found = Choice::from(entry_opt.is_some() as u8);
 
     // 4. Les deux comparaisons sont TOUJOURS effectuées — pas d'évaluation courte.
-    let gen_ok = stored_gen == token.generation();
-    let rights_ok = stored_rights.contains(required_rights);
+    let gen_ok = stored_gen.ct_eq(&token.generation());
+    let rights_ok = stored_rights.contains_ct(required_rights);
     let access_ok = entry_found & gen_ok & rights_ok;
 
     // 5. Résultat unifié — Denied dans TOUS les cas d'échec (CAP-05).
-    if token_invalid | !access_ok {
+    if token_invalid | !bool::from(access_ok) {
         stat_denied();
         return Err(CapError::Denied);
     }

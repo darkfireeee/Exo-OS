@@ -32,6 +32,13 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::rights::Rights;
 
+/// Taille canonique sérialisée d'un `CapToken` sur le fil.
+///
+/// Le layout mémoire `repr(C)` complet fait 24 octets à cause de l'alignement,
+/// mais le format d'échange stable ne transporte que les champs utiles
+/// `(object_id, rights, generation, type_tag)`.
+pub const CAP_TOKEN_WIRE_SIZE: usize = 20;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteur global de tokens créés — instrumentation
 // ─────────────────────────────────────────────────────────────────────────────
@@ -253,8 +260,8 @@ impl CapToken {
 
     /// Convertit en tableau de 20 bytes (pour stockage en espace utilisateur via copy_to_user).
     #[inline(always)]
-    pub fn to_bytes(self) -> [u8; 20] {
-        let mut buf = [0u8; 20];
+    pub fn to_bytes(self) -> [u8; CAP_TOKEN_WIRE_SIZE] {
+        let mut buf = [0u8; CAP_TOKEN_WIRE_SIZE];
         buf[0..8].copy_from_slice(&self.object_id.0.to_ne_bytes());
         buf[8..12].copy_from_slice(&self.rights.bits().to_ne_bytes());
         buf[12..16].copy_from_slice(&self.generation.to_ne_bytes());
@@ -266,7 +273,7 @@ impl CapToken {
     /// Reconstruit depuis des bytes (utilisé par le syscall handler côté kernel).
     /// Retourne None si le type_tag est inconnu.
     #[inline(always)]
-    pub fn from_bytes(b: &[u8; 20]) -> Option<Self> {
+    pub fn from_bytes(b: &[u8; CAP_TOKEN_WIRE_SIZE]) -> Option<Self> {
         let oid = u64::from_ne_bytes(b[0..8].try_into().ok()?);
         let r = u32::from_ne_bytes(b[8..12].try_into().ok()?);
         let gen = u32::from_ne_bytes(b[12..16].try_into().ok()?);

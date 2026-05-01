@@ -20,6 +20,7 @@
 
 use core::fmt;
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Sub};
+use subtle::{Choice, ConstantTimeEq};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Rights — type principal
@@ -142,6 +143,12 @@ impl Rights {
         (self.0 & required.0) == required.0
     }
 
+    /// Variante constant-time de `contains()` pour les hot paths sensibles.
+    #[inline(always)]
+    pub fn contains_ct(self, required: Rights) -> Choice {
+        (self.0 & required.0).ct_eq(&required.0)
+    }
+
     /// Vérifie que `self` est un sous-ensemble strict ou égal de `parent`.
     /// Utilisé pour valider la délégation — PROPRIÉTÉ PROUVÉE Coq.
     #[inline(always)]
@@ -171,6 +178,12 @@ impl Rights {
     #[inline(always)]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
+    }
+
+    /// Comparaison constant-time de deux jeux de droits.
+    #[inline(always)]
+    pub fn ct_eq(self, other: Rights) -> Choice {
+        self.0.ct_eq(&other.0)
     }
 
     /// Retourne un Rights sans aucun droit (sentinel pour « entrée absente »).

@@ -29,3 +29,16 @@ pub enum PhoenixState {
 }
 
 pub static PHOENIX_STATE: AtomicU8 = AtomicU8::new(PhoenixState::BootStage0 as u8);
+
+#[inline(always)]
+pub(crate) fn take_slot_once(seen: &mut [u64; 4], slot: usize) -> bool {
+    if slot >= ssr::MAX_CORES {
+        return false;
+    }
+
+    let word = slot / u64::BITS as usize;
+    let bit = 1u64 << (slot % u64::BITS as usize);
+    let was_seen = seen[word] & bit != 0;
+    seen[word] |= bit;
+    !was_seen
+}

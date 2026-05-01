@@ -296,14 +296,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "exo-exo-shield"
-version = "0.1.0"
-dependencies = [
- "exo-syscall-abi",
- "spin",
-]
-
-[[package]]
 name = "exo-init-server"
 version = "0.1.0"
 dependencies = [
@@ -375,6 +367,14 @@ version = "0.1.0"
 
 [[package]]
 name = "exo-scheduler-server"
+version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
+ "spin",
+]
+
+[[package]]
+name = "exo-shield"
 version = "0.1.0"
 dependencies = [
  "exo-syscall-abi",

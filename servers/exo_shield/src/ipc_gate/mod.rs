@@ -10,6 +10,7 @@
 
 pub mod policy;
 pub mod audit;
+pub mod access;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
@@ -25,4 +26,9 @@ pub use audit::{
     record_audit, query_audit, query_audit_filtered, export_audit,
     query_audit_by_time, query_audit_pair,
     get_audit_stats, audit_init,
+};
+
+pub use access::{
+    classify_service_cap_requirement, ServiceCapRequirement,
+    EXO_SHIELD_CAP_TOKEN_LEN, EXO_SHIELD_CAP_TOKEN_OFFSET,
 };

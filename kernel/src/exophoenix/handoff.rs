@@ -33,6 +33,25 @@ static FORGE_FAILURE_COUNT: AtomicU32 = AtomicU32::new(0);
 
 const APICBASE_ADDR_MASK: u64 = 0xFFFF_FFFF_F000;
 const LAPIC_ID_REG_OFFSET: usize = 0x20;
+const CRYPTO_SERVER_ENDPOINT_ID: u64 = 4;
+const CRYPTO_PROTOCOL_V2: u8 = 2;
+const PHOENIX_WAKE_ENTROPY: u32 = 255;
+const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 224;
+
+#[repr(C)]
+struct PhoenixWakeRequest {
+    sender_endpoint: u64,
+    msg_type: u32,
+    payload_len: u16,
+    version: u8,
+    flags: u8,
+    payload: [u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
+}
+
+const _: () = assert!(
+    core::mem::size_of::<PhoenixWakeRequest>() <= crate::ipc::core::constants::MAX_MSG_SIZE,
+    "PhoenixWakeRequest dépasse MAX_MSG_SIZE"
+);
 
 #[inline(always)]
 fn xapic_mmio_base() -> usize {
@@ -94,6 +113,40 @@ fn handoff_flag_acquire() -> u64 {
     unsafe { ssr::ssr_atomic(ssr::SSR_HANDOFF_FLAG).load(Ordering::Acquire) }
 }
 
+fn phoenix_wake_entropy() -> u64 {
+    crate::arch::x86_64::cpu::tsc::read_tsc()
+        ^ ((current_apic_id() as u64) << 32)
+        ^ handoff_flag_acquire()
+        ^ read_apic_timestamp_ticks() as u64
+        ^ FORGE_FAILURE_COUNT.load(Ordering::Acquire) as u64
+}
+
+fn notify_crypto_server_phoenix_wake() -> Result<(), &'static str> {
+    let endpoint = crate::ipc::core::types::EndpointId::new(CRYPTO_SERVER_ENDPOINT_ID)
+        .ok_or("phoenix_wake_invalid_endpoint")?;
+
+    let mut request = PhoenixWakeRequest {
+        sender_endpoint: 0,
+        msg_type: PHOENIX_WAKE_ENTROPY,
+        payload_len: 8,
+        version: CRYPTO_PROTOCOL_V2,
+        flags: 0,
+        payload: [0u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
+    };
+    request.payload[..8].copy_from_slice(&phoenix_wake_entropy().to_le_bytes());
+
+    let request_bytes = unsafe {
+        core::slice::from_raw_parts(
+            &request as *const PhoenixWakeRequest as *const u8,
+            core::mem::size_of::<PhoenixWakeRequest>(),
+        )
+    };
+
+    crate::ipc::channel::raw::send_raw(endpoint, request_bytes, 0)
+        .map(|_| ())
+        .map_err(|_| "phoenix_wake_send_failed")
+}
+
 fn for_each_mapped_apic_slot(mut f: impl FnMut(u8, usize)) {
     for apic_id in 0u16..=255u16 {
         let apic = apic_id as u8;
@@ -104,19 +157,14 @@ fn for_each_mapped_apic_slot(mut f: impl FnMut(u8, usize)) {
 }
 
 fn reset_freeze_acks_for_targets(self_slot: Option<usize>) {
-    let mut seen_slots: u64 = 0;
+    let mut seen_slots = [0u64; 4];
     for_each_mapped_apic_slot(|_, slot| {
         if Some(slot) == self_slot {
             return;
         }
-        if slot >= 64 {
+        if !super::take_slot_once(&mut seen_slots, slot) {
             return;
         }
-        let bit = 1u64 << slot;
-        if seen_slots & bit != 0 {
-            return;
-        }
-        seen_slots |= bit;
         // SAFETY: offset borné par slot map stage0.
         unsafe {
             ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).store(0, Ordering::Release);
@@ -125,7 +173,7 @@ fn reset_freeze_acks_for_targets(self_slot: Option<usize>) {
 }
 
 fn all_freeze_acks_observed(self_slot: Option<usize>) -> bool {
-    let mut seen_slots: u64 = 0;
+    let mut seen_slots = [0u64; 4];
     let mut all_ok = true;
 
     for_each_mapped_apic_slot(|_, slot| {
@@ -135,15 +183,9 @@ fn all_freeze_acks_observed(self_slot: Option<usize>) -> bool {
         if Some(slot) == self_slot {
             return;
         }
-        if slot >= 64 {
-            all_ok = false;
+        if !super::take_slot_once(&mut seen_slots, slot) {
             return;
         }
-        let bit = 1u64 << slot;
-        if seen_slots & bit != 0 {
-            return;
-        }
-        seen_slots |= bit;
         // SAFETY: offset borné par slot map stage0.
         let ack =
             unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
@@ -352,6 +394,7 @@ fn try_forge_reconstruct_with_policy() -> Result<(), &'static str> {
     for _ in 0..MAX_FORGE_ATTEMPTS {
         match forge::reconstruct_kernel_a() {
             Ok(()) => {
+                notify_crypto_server_phoenix_wake()?;
                 FORGE_FAILURE_COUNT.store(0, Ordering::Release);
                 PHOENIX_STATE.store(PhoenixState::Restore as u8, Ordering::Release);
                 set_handoff_flag_release(HANDOFF_NORMAL);

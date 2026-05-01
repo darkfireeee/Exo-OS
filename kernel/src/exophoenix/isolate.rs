@@ -46,19 +46,17 @@ fn current_slot() -> Option<usize> {
 }
 
 fn for_each_target_slot(self_slot: Option<usize>, mut f: impl FnMut(usize)) {
-    let mut seen_slots = 0u64;
+    let mut seen_slots = [0u64; 4];
     for apic_id in 0u16..=255u16 {
         let Some(slot) = stage0::apic_slot(apic_id as u32) else {
             continue;
         };
-        if Some(slot) == self_slot || slot >= 64 {
+        if Some(slot) == self_slot {
             continue;
         }
-        let bit = 1u64 << slot;
-        if seen_slots & bit != 0 {
+        if !super::take_slot_once(&mut seen_slots, slot) {
             continue;
         }
-        seen_slots |= bit;
         f(slot);
     }
 }

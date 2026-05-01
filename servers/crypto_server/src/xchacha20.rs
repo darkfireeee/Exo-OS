@@ -75,6 +75,25 @@ pub fn xchacha20_init() {
     XCHACHA_INITIALIZED.store(true, Ordering::Release);
 }
 
+/// Reseed post-Phoenix : mélange une nouvelle entropie dans le sel des nonces
+/// sans jamais réutiliser un espace de compteur déjà exposé.
+pub fn xchacha20_reseed(entropy: u64) {
+    if !XCHACHA_INITIALIZED.load(Ordering::Acquire) {
+        xchacha20_init();
+    }
+
+    let counter = NONCE_COUNTER.fetch_add(1_000_000, Ordering::AcqRel);
+    let old_lo = NONCE_SALT_LO.load(Ordering::Acquire);
+    let old_hi = NONCE_SALT_HI.load(Ordering::Acquire);
+
+    let mixed_lo = old_lo ^ entropy ^ counter;
+    let mixed_hi = old_hi ^ entropy.rotate_left(17) ^ counter.rotate_left(31);
+
+    NONCE_SALT_LO.store(mixed_lo, Ordering::Release);
+    NONCE_SALT_HI.store(mixed_hi, Ordering::Release);
+    core::sync::atomic::fence(Ordering::SeqCst);
+}
+
 /// Construit le nonce[24] à partir du compteur et du sel.
 fn build_nonce() -> [u8; NONCE_SIZE] {
     let counter = NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);

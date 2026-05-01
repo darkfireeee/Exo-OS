@@ -80,6 +80,10 @@ pub const SYS_EXO_IPC_RECV_NB: u64 = 302;
 pub const SYS_EXO_IPC_CALL: u64 = 303;
 pub const SYS_EXO_IPC_CREATE: u64 = 304;
 pub const SYS_EXO_IPC_DESTROY: u64 = 305;
+pub const SYS_EXO_CAP_CREATE: u64 = 320;
+pub const SYS_EXO_CAP_DELEGATE: u64 = 321;
+pub const SYS_EXO_CAP_REVOKE: u64 = 322;
+pub const SYS_EXO_CAP_CHECK: u64 = 323;
 
 pub const SYS_EXOFS_PATH_RESOLVE: u64 = 500;
 pub const SYS_EXOFS_OBJECT_OPEN: u64 = 501;
@@ -87,6 +91,85 @@ pub const SYS_EXOFS_OBJECT_OPEN: u64 = 501;
 pub const SYS_IPC_REGISTER: u64 = SYS_EXO_IPC_CREATE;
 pub const SYS_IPC_RECV: u64 = SYS_EXO_IPC_RECV;
 pub const SYS_IPC_SEND: u64 = SYS_EXO_IPC_SEND;
+
+pub const EXO_CAP_TOKEN_WIRE_SIZE: usize = 20;
+
+pub const EXO_CAP_TYPE_IPC_ENDPOINT: u32 = 1;
+
+pub const EXO_CAP_RIGHT_IPC_CONNECT: u32 = 1 << 6;
+pub const EXO_CAP_RIGHT_IPC_SEND: u32 = 1 << 7;
+pub const EXO_CAP_RIGHT_IPC_RECV: u32 = 1 << 8;
+pub const EXO_CAP_RIGHT_IPC_MANAGE: u32 = 1 << 9;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct ExoCapTokenWire {
+    pub bytes: [u8; EXO_CAP_TOKEN_WIRE_SIZE],
+}
+
+impl ExoCapTokenWire {
+    #[inline(always)]
+    pub const fn empty() -> Self {
+        Self {
+            bytes: [0u8; EXO_CAP_TOKEN_WIRE_SIZE],
+        }
+    }
+
+    #[inline(always)]
+    pub fn object_id(self) -> u64 {
+        u64::from_ne_bytes([
+            self.bytes[0],
+            self.bytes[1],
+            self.bytes[2],
+            self.bytes[3],
+            self.bytes[4],
+            self.bytes[5],
+            self.bytes[6],
+            self.bytes[7],
+        ])
+    }
+
+    #[inline(always)]
+    pub fn is_empty(self) -> bool {
+        self.object_id() == 0
+    }
+}
+
+#[inline(always)]
+pub unsafe fn exo_cap_create(
+    cap_type: u32,
+    rights: u32,
+    target_pid: u32,
+    token_out: &mut ExoCapTokenWire,
+) -> i64 {
+    unsafe {
+        syscall4(
+            SYS_EXO_CAP_CREATE,
+            cap_type as u64,
+            rights as u64,
+            target_pid as u64,
+            token_out as *mut ExoCapTokenWire as u64,
+        )
+    }
+}
+
+#[inline(always)]
+pub unsafe fn exo_cap_check(
+    token: &ExoCapTokenWire,
+    required_rights: u32,
+    target_pid: u32,
+    expected_type: u32,
+) -> i64 {
+    unsafe {
+        syscall4(
+            SYS_EXO_CAP_CHECK,
+            token as *const ExoCapTokenWire as u64,
+            required_rights as u64,
+            target_pid as u64,
+            expected_type as u64,
+        )
+    }
+}
 
 pub const SYS_MMIO_MAP: u64 = 532;
 pub const SYS_MMIO_UNMAP: u64 = 533;

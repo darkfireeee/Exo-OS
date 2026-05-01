@@ -82,7 +82,8 @@ pub use capability::{
     revoke_handle as cap_revoke_handle, revoke_token, token_stats, verify, verify_and_get_rights,
     verify_ipc_recv, verify_ipc_send, verify_read, verify_read_write, verify_typed, CapError,
     CapNamespace, CapObjectType, CapTable, CapTableSnapshot, CapToken, DelegationChain,
-    DelegationEntry, KernelCapError, NamespaceId, ObjectId, Rights, TokenStats, CAP_TABLE_CAPACITY,
+    DelegationEntry, KernelCapError, NamespaceId, ObjectId, Rights, TokenStats,
+    CAP_TABLE_CAPACITY, CAP_TOKEN_WIRE_SIZE,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

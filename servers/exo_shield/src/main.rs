@@ -17,6 +17,10 @@
 //! - POLICY_UPDATE  (4) : update scanning/monitoring policies and filters
 //! - HEARTBEAT      (5) : liveness check
 //!
+//! Public request classes are audited and rate-limited through `ipc_gate`.
+//! Administrative mutations, cross-process actions, and detailed threat
+//! queries are capability-gated at request classification time.
+//!
 //! ## Architecture
 //! - engine::core     — threat scoring, records, risk profiles
 //! - engine::scanner  — signature & heuristic scanning with periodic scheduler
@@ -24,7 +28,11 @@
 
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use exo_exo_shield::{behavioral, engine, signatures};
+use exo_shield::{
+    behavioral, engine,
+    ipc_gate::{self, AuditEntry, PolicyAction, ServiceCapRequirement},
+    signatures,
+};
 use exo_syscall_abi as syscall;
 
 // ── Message Types ───────────────────────────────────────────────────────────
@@ -42,11 +50,16 @@ const SHIELD_OK: u32 = 0;
 const SHIELD_ERR_ARGS: u32 = 1;
 const SHIELD_ERR_BUSY: u32 = 2;
 const SHIELD_ERR_NOT_FOUND: u32 = 3;
+const SHIELD_ERR_DENIED: u32 = 4;
+const SHIELD_ERR_CAP: u32 = 5;
 const SHIELD_ERR_NOT_CONTAINED: u32 = 7;
 
 // ── IPC Message Structures ──────────────────────────────────────────────────
 
 /// Incoming IPC request (128 bytes).
+///
+/// When `ipc_gate` classifies a request as privileged, `payload[100..120]`
+/// carries an `ExoCapTokenWire` targeting endpoint 10.
 #[repr(C)]
 struct ShieldRequest {
     sender_pid: u32,
@@ -76,6 +89,7 @@ const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
 const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
 const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
 const EXO_SHIELD_PID: u64 = 10;
+const _: () = assert!(syscall::EXO_CAP_TOKEN_WIRE_SIZE == ipc_gate::EXO_SHIELD_CAP_TOKEN_LEN);
 
 // ── Global Statistics ───────────────────────────────────────────────────────
 
@@ -96,6 +110,21 @@ fn current_tick() -> u64 {
 
 fn advance_tick() {
     GLOBAL_TICK.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline(always)]
+fn read_tsc() -> u64 {
+    let lo: u32;
+    let hi: u32;
+    unsafe {
+        core::arch::asm!(
+            "rdtsc",
+            out("eax") lo,
+            out("edx") hi,
+            options(nostack, nomem),
+        );
+    }
+    ((hi as u64) << 32) | lo as u64
 }
 
 // ── Payload Parsing Helpers ─────────────────────────────────────────────────
@@ -126,6 +155,73 @@ fn read_u64_le(payload: &[u8], offset: usize) -> u64 {
         payload[offset + 6],
         payload[offset + 7],
     ])
+}
+
+fn extract_service_cap_token(req: &ShieldRequest) -> syscall::ExoCapTokenWire {
+    let mut token = syscall::ExoCapTokenWire::empty();
+    token.bytes.copy_from_slice(
+        &req.payload
+            [ipc_gate::EXO_SHIELD_CAP_TOKEN_OFFSET..ipc_gate::EXO_SHIELD_CAP_TOKEN_OFFSET
+                + ipc_gate::EXO_SHIELD_CAP_TOKEN_LEN],
+    );
+    token
+}
+
+fn record_request_audit(req: &ShieldRequest, action: u8, rule_id: u32, result: u8) {
+    ipc_gate::record_audit(AuditEntry {
+        src_pid: req.sender_pid,
+        dst_pid: EXO_SHIELD_PID as u32,
+        msg_type: req.msg_type,
+        action,
+        rule_id,
+        reply_nonce: 0,
+        result,
+        _pad: [0; 2],
+        timestamp: read_tsc(),
+    });
+}
+
+fn authorize_request(req: &ShieldRequest) -> Result<(), ShieldReply> {
+    let eval = ipc_gate::evaluate_policy(req.sender_pid, EXO_SHIELD_PID as u32, req.msg_type);
+    let action = PolicyAction::from_u8(eval.action);
+
+    if eval.rate_limit > 0 && action == PolicyAction::Deny {
+        record_request_audit(req, PolicyAction::Deny as u8, eval.matched_rule_id, 2);
+        return Err(ShieldReply::new(SHIELD_ERR_BUSY));
+    }
+
+    if action == PolicyAction::Deny {
+        record_request_audit(req, PolicyAction::Deny as u8, eval.matched_rule_id, 1);
+        return Err(ShieldReply::new(SHIELD_ERR_DENIED));
+    }
+
+    match ipc_gate::classify_service_cap_requirement(req.sender_pid, req.msg_type, &req.payload) {
+        ServiceCapRequirement::NotRequired => {}
+        ServiceCapRequirement::Malformed => {
+            record_request_audit(req, PolicyAction::Deny as u8, eval.matched_rule_id, 1);
+            return Err(ShieldReply::new(SHIELD_ERR_ARGS));
+        }
+        ServiceCapRequirement::Required => {
+            let token = extract_service_cap_token(req);
+            let cap_ok = !token.is_empty()
+                && unsafe {
+                    syscall::exo_cap_check(
+                        &token,
+                        syscall::EXO_CAP_RIGHT_IPC_SEND,
+                        EXO_SHIELD_PID as u32,
+                        syscall::EXO_CAP_TYPE_IPC_ENDPOINT,
+                    )
+                } == 0;
+
+            if !cap_ok {
+                record_request_audit(req, PolicyAction::Deny as u8, eval.matched_rule_id, 1);
+                return Err(ShieldReply::new(SHIELD_ERR_CAP));
+            }
+        }
+    }
+
+    record_request_audit(req, eval.action, eval.matched_rule_id, 0);
+    Ok(())
 }
 
 // ── Message Handlers ────────────────────────────────────────────────────────
@@ -166,7 +262,7 @@ fn handle_scan_request(req: &ShieldRequest) -> ShieldReply {
     engine::stat_scan_executed(result.matched);
 
     // Also queue for periodic tracking
-    let queued_scan_id =
+    let queued_scan_id: u32 =
         if let Some(scan_id) = engine::queue_scan(target_pid, scan_type, priority, tick) {
             engine::stat_scan_queued();
             scan_id
@@ -635,6 +731,11 @@ fn handle_request(req: &ShieldRequest) -> ShieldReply {
     REQUESTS_TOTAL.fetch_add(1, Ordering::Relaxed);
     advance_tick();
 
+    if let Err(reply) = authorize_request(req) {
+        REQUESTS_ERR.fetch_add(1, Ordering::Relaxed);
+        return reply;
+    }
+
     let reply = match req.msg_type {
         SCAN_REQUEST => handle_scan_request(req),
         EVENT_REPORT => handle_event_report(req),
@@ -709,6 +810,8 @@ fn perform_maintenance() {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // ── 0. Initialize all engine sub-modules ────────────────────────────────
+    ipc_gate::policy_init();
+    ipc_gate::audit_init();
     engine::engine_init();
     signatures::signatures_init();
     behavioral::behavioral_init();
@@ -733,8 +836,9 @@ pub extern "C" fn _start() -> ! {
 
     loop {
         let r = unsafe {
-            syscall::syscall3(
-                syscall::SYS_IPC_RECV,
+            syscall::syscall4(
+                syscall::SYS_EXO_IPC_RECV,
+                EXO_SHIELD_PID,
                 &mut req as *mut ShieldRequest as u64,
                 core::mem::size_of::<ShieldRequest>() as u64,
                 IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,

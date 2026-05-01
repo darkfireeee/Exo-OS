@@ -48,8 +48,8 @@ pub struct AuditEntry {
     pub timestamp: u64,
 }
 
-impl Default for AuditEntry {
-    fn default() -> Self {
+impl AuditEntry {
+    pub const fn empty() -> Self {
         Self {
             src_pid: 0,
             dst_pid: 0,
@@ -64,10 +64,17 @@ impl Default for AuditEntry {
     }
 }
 
-// Compile-time size assertion — AuditEntry should be 36 bytes.
+impl Default for AuditEntry {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+// Compile-time size assertion — repr(C) layout is 40 bytes on x86_64 due to
+// the final u64 timestamp alignment.
 const _: () = assert!(
-    core::mem::size_of::<AuditEntry>() == 36,
-    "AuditEntry must be 36 bytes for ABI compatibility"
+    core::mem::size_of::<AuditEntry>() == 40,
+    "AuditEntry must be 40 bytes for ABI compatibility"
 );
 
 /// Result of an audit query.
@@ -144,7 +151,7 @@ fn read_tsc() -> u64 {
 
 /// Audit ring buffer.
 static AUDIT_BUFFER: Mutex<[AuditEntry; MAX_AUDIT_ENTRIES]> = Mutex::new(
-    [AuditEntry::default(); MAX_AUDIT_ENTRIES],
+    [AuditEntry::empty(); MAX_AUDIT_ENTRIES],
 );
 
 /// Write index into the audit ring buffer.
@@ -259,6 +266,11 @@ impl AuditRingBuffer {
 /// The entry is written at the current write position, which wraps
 /// around when the buffer is full (overwriting the oldest entry).
 pub fn record_audit(entry: AuditEntry) {
+    let mut entry = entry;
+    if entry.timestamp == 0 {
+        entry.timestamp = read_tsc();
+    }
+
     let mut buffer = AUDIT_BUFFER.lock();
     let idx = AUDIT_WRITE_IDX.fetch_add(1, Ordering::AcqRel) as usize % MAX_AUDIT_ENTRIES;
     buffer[idx] = entry;
@@ -266,9 +278,15 @@ pub fn record_audit(entry: AuditEntry) {
 
     // Update action-specific counters
     match entry.action {
-        0 => AUDIT_ALLOWED.fetch_add(1, Ordering::Relaxed),
-        1 => AUDIT_DENIED.fetch_add(1, Ordering::Relaxed),
-        3 => AUDIT_RATE_LIMITED.fetch_add(1, Ordering::Relaxed),
+        0 => {
+            AUDIT_ALLOWED.fetch_add(1, Ordering::Relaxed);
+        }
+        1 => {
+            AUDIT_DENIED.fetch_add(1, Ordering::Relaxed);
+        }
+        3 => {
+            AUDIT_RATE_LIMITED.fetch_add(1, Ordering::Relaxed);
+        }
         _ => {}
     }
 }
@@ -334,18 +352,19 @@ pub fn query_audit(pid: u32, out: &mut [AuditEntry]) -> AuditResult {
 /// Exports audit entries to a binary format in a caller-provided buffer.
 ///
 /// ## Binary format
-/// Each entry is serialized as its raw 36-byte `#[repr(C)]` representation.
+/// Each entry is serialized as its raw 40-byte `#[repr(C)]` representation.
 /// A 16-byte header is prepended:
 /// - Bytes 0–3:  magic number `0xE5A1D700` (little-endian)
 /// - Bytes 4–7:  number of entries (u32 LE)
-/// - Bytes 8–11: entry size in bytes (u32 LE = 36)
+/// - Bytes 8–11: entry size in bytes (u32 LE = 40)
 /// - Bytes 12–15: reserved (0)
 ///
 /// Returns the total number of bytes written to the buffer.
 pub fn export_audit(filter: &AuditFilter, buf: &mut [u8]) -> usize {
     AUDIT_QUERIES.fetch_add(1, Ordering::Relaxed);
 
-    if buf.len() < 16 {
+    let export_len = buf.len().min(MAX_EXPORT_SIZE);
+    if export_len < 16 {
         return 0;
     }
 
@@ -353,16 +372,17 @@ pub fn export_audit(filter: &AuditFilter, buf: &mut [u8]) -> usize {
     let magic: u32 = 0xE5A1_D700;
     buf[0..4].copy_from_slice(&magic.to_le_bytes());
     // Entry count and size will be filled after counting
-    buf[8..12].copy_from_slice(&36u32.to_le_bytes());
+    buf[8..12].copy_from_slice(&(core::mem::size_of::<AuditEntry>() as u32).to_le_bytes());
     buf[12..16].copy_from_slice(&0u32.to_le_bytes());
 
     let buffer = AUDIT_BUFFER.lock();
     let head = AUDIT_WRITE_IDX.load(Ordering::Acquire) as usize;
     let mut entry_count = 0u32;
     let mut write_offset = 16usize;
+    let entry_size = core::mem::size_of::<AuditEntry>();
 
     for offset in 0..MAX_AUDIT_ENTRIES {
-        if write_offset + 36 > buf.len() {
+        if write_offset + entry_size > export_len {
             break;
         }
         let i = (head + MAX_AUDIT_ENTRIES - 1 - offset) % MAX_AUDIT_ENTRIES;
@@ -374,11 +394,11 @@ pub fn export_audit(filter: &AuditFilter, buf: &mut [u8]) -> usize {
             let entry_bytes = unsafe {
                 core::slice::from_raw_parts(
                     &buffer[i] as *const AuditEntry as *const u8,
-                    core::mem::size_of::<AuditEntry>(),
+                    entry_size,
                 )
             };
-            buf[write_offset..write_offset + 36].copy_from_slice(entry_bytes);
-            write_offset += 36;
+            buf[write_offset..write_offset + entry_size].copy_from_slice(entry_bytes);
+            write_offset += entry_size;
             entry_count += 1;
         }
     }

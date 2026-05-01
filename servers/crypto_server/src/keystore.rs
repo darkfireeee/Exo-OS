@@ -99,8 +99,8 @@ struct KeyEntry {
     creation_tsc: AtomicU64,
     /// Compteur d'utilisation (monotone).
     usage_count: AtomicU32,
-    /// PID du propriétaire (0 = kernel).
-    owner_pid: AtomicU32,
+    /// Principal propriétaire (ObjectId capability, 0 = kernel).
+    owner_principal: AtomicU64,
     /// Génération pour détection de réutilisation après révocation.
     generation: AtomicU32,
 }
@@ -113,7 +113,7 @@ impl KeyEntry {
             flags: AtomicU8::new(KeyFlags::Free as u8),
             creation_tsc: AtomicU64::new(0),
             usage_count: AtomicU32::new(0),
-            owner_pid: AtomicU32::new(0),
+            owner_principal: AtomicU64::new(0),
             generation: AtomicU32::new(0),
         }
     }
@@ -222,8 +222,8 @@ fn ct_eq_u8(a: &[u8], b: &[u8]) -> bool {
 ///
 /// # Sécurité
 /// - La clé est copiée dans le magasin, l'appelant peut shred sa copie.
-/// - owner_pid est enregistré pour le contrôle d'accès.
-pub fn insert_key(key: &[u8; KEY_SIZE], key_type: KeyType, owner_pid: u32) -> u32 {
+/// - `owner_principal` est enregistré pour le contrôle d'accès.
+pub fn insert_key(key: &[u8; KEY_SIZE], key_type: KeyType, owner_principal: u64) -> u32 {
     let mut table = KEY_TABLE.lock();
 
     // Recherche linéaire à partir du hint
@@ -243,7 +243,7 @@ pub fn insert_key(key: &[u8; KEY_SIZE], key_type: KeyType, owner_pid: u32) -> u3
             entry.flags.store(KeyFlags::Active as u8, Ordering::Release);
             entry.creation_tsc.store(read_tsc(), Ordering::Release);
             entry.usage_count.store(0, Ordering::Release);
-            entry.owner_pid.store(owner_pid, Ordering::Release);
+            entry.owner_principal.store(owner_principal, Ordering::Release);
             entry.generation.fetch_add(1, Ordering::AcqRel);
 
             let handle = (idx + 1) as u32;
@@ -260,14 +260,14 @@ pub fn insert_key(key: &[u8; KEY_SIZE], key_type: KeyType, owner_pid: u32) -> u3
 /// Récupère une référence vers la clé associée au handle.
 ///
 /// # Retour
-/// - `Some((key_slice, key_type))` si la clé est active et appartient au PID.
-/// - `None` si le handle est invalide, la clé est expirée/révoquée, ou le PID ne correspond pas.
+/// - `Some((key_slice, key_type))` si la clé est active et appartient au principal.
+/// - `None` si le handle est invalide, la clé est expirée/révoquée, ou le principal ne correspond pas.
 ///
 /// # Sécurité
 /// - Le pointeur n'est valide que pendant la durée du lock.
 /// - L'utilisation est comptée (usage_count).
 /// - CAP-01 : vérification du propriétaire.
-pub fn get_key(handle: u32, caller_pid: u32) -> Option<([u8; KEY_SIZE], KeyType)> {
+pub fn get_key(handle: u32, caller_principal: u64) -> Option<([u8; KEY_SIZE], KeyType)> {
     if handle == 0 || handle as usize > MAX_KEYS {
         return None;
     }
@@ -281,8 +281,8 @@ pub fn get_key(handle: u32, caller_pid: u32) -> Option<([u8; KEY_SIZE], KeyType)
     }
 
     // Vérifier le propriétaire (0 = kernel, accès toujours autorisé)
-    let owner = entry.owner_pid.load(Ordering::Acquire);
-    if owner != 0 && owner != caller_pid {
+    let owner = entry.owner_principal.load(Ordering::Acquire);
+    if owner != 0 && owner != caller_principal {
         return None;
     }
 
@@ -342,7 +342,7 @@ pub fn revoke_key(handle: u32) -> bool {
 ///
 /// # Retour
 /// Le même handle si succès (la clé est remplacée en place), 0 si échec.
-pub fn rotate_key(handle: u32, caller_pid: u32) -> u32 {
+pub fn rotate_key(handle: u32, caller_principal: u64) -> u32 {
     if handle == 0 || handle as usize > MAX_KEYS {
         return 0;
     }
@@ -356,8 +356,8 @@ pub fn rotate_key(handle: u32, caller_pid: u32) -> u32 {
     }
 
     // Vérifier le propriétaire
-    let owner = entry.owner_pid.load(Ordering::Acquire);
-    if owner != 0 && owner != caller_pid {
+    let owner = entry.owner_principal.load(Ordering::Acquire);
+    if owner != 0 && owner != caller_principal {
         return 0;
     }
 
@@ -379,8 +379,8 @@ pub fn rotate_key(handle: u32, caller_pid: u32) -> u32 {
     // Phase 2 : mélange avec entropie
     let entropy_bytes = [
         tsc_entropy.to_le_bytes(),
-        usage.to_le_bytes(),
-        gen.to_le_bytes(),
+        (usage as u64).to_le_bytes(),
+        (gen as u64).to_le_bytes(),
         (handle as u64).to_le_bytes(),
     ];
     for (i, chunk) in entropy_bytes.iter().enumerate() {
@@ -491,18 +491,44 @@ pub fn is_valid_handle(handle: u32) -> bool {
 
 /// Révoque toutes les clés d'un propriétaire (utilisé à la mort d'un processus).
 /// Retourne le nombre de clés révoquées.
-pub fn revoke_all_for_owner(owner_pid: u32) -> u32 {
+pub fn revoke_all_for_owner(owner_principal: u64) -> u32 {
     let mut count = 0u32;
     let mut table = KEY_TABLE.lock();
 
     for idx in 0..MAX_KEYS {
         let entry = &mut table[idx];
-        if entry.is_active() && entry.owner_pid.load(Ordering::Acquire) == owner_pid {
+        if entry.is_active()
+            && entry.owner_principal.load(Ordering::Acquire) == owner_principal
+        {
             crypto_shred(&mut entry.key);
             entry.flags.store(KeyFlags::Revoked as u8, Ordering::Release);
             entry.generation.fetch_add(1, Ordering::AcqRel);
             count += 1;
         }
+    }
+
+    if count > 0 {
+        ACTIVE_KEY_COUNT.fetch_sub(count, Ordering::Relaxed);
+    }
+    count
+}
+
+/// Révoque toutes les clés actives.
+/// Utilisé lors d'un restore ExoPhoenix pour invalider les sessions pré-forge.
+pub fn revoke_all_pre_phoenix() -> u32 {
+    let mut count = 0u32;
+    let mut table = KEY_TABLE.lock();
+
+    for idx in 0..MAX_KEYS {
+        let entry = &mut table[idx];
+        if !entry.is_active() {
+            continue;
+        }
+
+        crypto_shred(&mut entry.key);
+        entry.flags.store(KeyFlags::Revoked as u8, Ordering::Release);
+        entry.generation.fetch_add(1, Ordering::AcqRel);
+        count += 1;
     }
 
     if count > 0 {
@@ -523,7 +549,7 @@ pub fn keystore_init() {
         entry.key_type = 0;
         entry.creation_tsc.store(0, Ordering::Release);
         entry.usage_count.store(0, Ordering::Release);
-        entry.owner_pid.store(0, Ordering::Release);
+        entry.owner_principal.store(0, Ordering::Release);
         entry.generation.store(0, Ordering::Release);
     }
     NEXT_SLOT_HINT.store(0, Ordering::Release);

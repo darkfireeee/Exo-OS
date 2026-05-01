@@ -1205,18 +1205,44 @@ fn enforce_direct_ipc_policy(endpoint: u64) -> Result<(), i64> {
     }
 }
 
-/// `exo_cap_create(type, rights, target_pid)` → capability handle ou errno.
+/// `exo_cap_create(type, rights, target_pid, token_out_ptr)` → handle ou errno.
 pub fn sys_exo_cap_create(
     cap_type: u64,
     rights: u64,
     target: u64,
-    _a4: u64,
+    token_out_ptr: u64,
     _a5: u64,
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_EXO_CAP_CREATE);
-    match crate::security::capability::create(cap_type as u32, rights as u32, target as u32) {
-        Ok(handle) => handle as i64,
+    if token_out_ptr == 0 {
+        return EFAULT;
+    }
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    match crate::security::capability::create(
+        cap_type as u32,
+        rights as u32,
+        target as u32,
+        caller_pid,
+    ) {
+        Ok(token) => {
+            let token_bytes = token.to_bytes();
+            if copy_to_user(
+                token_out_ptr as *mut u8,
+                token_bytes.as_ptr(),
+                crate::security::capability::CAP_TOKEN_WIRE_SIZE,
+            )
+            .is_err()
+            {
+                return EFAULT;
+            }
+            token.object_id().as_u64() as i64
+        }
         Err(e) => e.to_kernel_errno() as i64,
     }
 }
@@ -1225,6 +1251,47 @@ pub fn sys_exo_cap_create(
 pub fn sys_exo_cap_revoke(handle: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_CAP_REVOKE);
     match crate::security::capability::revoke_handle(handle as u32) {
+        Ok(_) => 0,
+        Err(e) => e.to_kernel_errno() as i64,
+    }
+}
+
+/// `exo_cap_check(token_ptr, rights, target_pid, expected_type)` → 0 ou errno.
+pub fn sys_exo_cap_check(
+    token_ptr: u64,
+    required_rights: u64,
+    target_pid: u64,
+    expected_type: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_CAP_CHECK);
+    if token_ptr == 0 {
+        return EFAULT;
+    }
+
+    let mut token_bytes = [0u8; crate::security::capability::CAP_TOKEN_WIRE_SIZE];
+    if copy_from_user(
+        token_bytes.as_mut_ptr(),
+        token_ptr as *const u8,
+        token_bytes.len(),
+    )
+    .is_err()
+    {
+        return EFAULT;
+    }
+
+    let token = match crate::security::capability::CapToken::from_bytes(&token_bytes) {
+        Some(token) => token,
+        None => return EINVAL,
+    };
+
+    match crate::security::capability::check_token(
+        token,
+        required_rights as u32,
+        target_pid as u32,
+        expected_type as u32,
+    ) {
         Ok(_) => 0,
         Err(e) => e.to_kernel_errno() as i64,
     }
@@ -1890,6 +1957,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXO_IPC_DESTROY => sys_exo_ipc_destroy,
         SYS_EXO_CAP_CREATE => sys_exo_cap_create,
         SYS_EXO_CAP_REVOKE => sys_exo_cap_revoke,
+        SYS_EXO_CAP_CHECK => sys_exo_cap_check,
         SYS_EXO_LOG => sys_exo_log,
         // ── ExoFS (500–518) ────────────────────────────────────────────────
         SYS_EXOFS_PATH_RESOLVE => sys_exofs_path_resolve,

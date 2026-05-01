@@ -6,9 +6,9 @@
 //!
 //! ## Policy rules
 //! Each rule specifies:
-//! - Source PID (or wildcard 0 = any)
-//! - Destination PID (or wildcard 0 = any)
-//! - Message type filter (or wildcard 0 = any)
+//! - Source PID (or wildcard `u32::MAX` = any)
+//! - Destination PID (or wildcard `u32::MAX` = any)
+//! - Message type filter (or wildcard `u32::MAX` = any)
 //! - Action: Allow, Deny, AuditOnly, RateLimit
 //! - Priority: higher priority rules override lower ones
 //!
@@ -26,13 +26,25 @@ use spin::Mutex;
 const MAX_POLICY_ENTRIES: usize = 64;
 
 /// Wildcard PID — matches any source or destination.
-pub const WILDCARD_PID: u32 = 0;
+pub const WILDCARD_PID: u32 = u32::MAX;
 
 /// Wildcard message type — matches any IPC message type.
-pub const WILDCARD_MSG_TYPE: u32 = 0;
+pub const WILDCARD_MSG_TYPE: u32 = u32::MAX;
 
 /// Default rate limit (messages per second per PID pair).
 const DEFAULT_RATE_LIMIT: u32 = 1000;
+
+const KERNEL_PID: u32 = 0;
+const INIT_SERVER_PID: u32 = 1;
+const IPC_ROUTER_PID: u32 = 2;
+const EXO_SHIELD_PID: u32 = 10;
+
+const SCAN_REQUEST: u32 = 0;
+const EVENT_REPORT: u32 = 1;
+const QUARANTINE_CMD: u32 = 2;
+const THREAT_QUERY: u32 = 3;
+const POLICY_UPDATE: u32 = 4;
+const HEARTBEAT: u32 = 5;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -66,11 +78,11 @@ impl PolicyAction {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct PolicyRule {
-    /// Source PID (0 = wildcard — matches any source).
+    /// Source PID (`u32::MAX` = wildcard — matches any source).
     pub src_pid: u32,
-    /// Destination PID (0 = wildcard — matches any destination).
+    /// Destination PID (`u32::MAX` = wildcard — matches any destination).
     pub dst_pid: u32,
-    /// Message type filter (0 = wildcard — matches any message type).
+    /// Message type filter (`u32::MAX` = wildcard — matches any message type).
     pub msg_type: u32,
     /// Action to take when this rule matches.
     pub action: u8,
@@ -84,8 +96,8 @@ pub struct PolicyRule {
     pub rule_id: u32,
 }
 
-impl Default for PolicyRule {
-    fn default() -> Self {
+impl PolicyRule {
+    pub const fn empty() -> Self {
         Self {
             src_pid: 0,
             dst_pid: 0,
@@ -96,6 +108,12 @@ impl Default for PolicyRule {
             rate_limit: 0,
             rule_id: 0,
         }
+    }
+}
+
+impl Default for PolicyRule {
+    fn default() -> Self {
+        Self::empty()
     }
 }
 
@@ -125,6 +143,7 @@ impl Default for PolicyEvalResult {
 }
 
 /// Rate-limit tracking entry per (src, dst) pair.
+#[derive(Clone, Copy)]
 struct RateLimitEntry {
     src_pid: u32,
     dst_pid: u32,
@@ -164,7 +183,7 @@ fn read_tsc() -> u64 {
 
 /// Policy table — max 64 entries.
 static POLICY_TABLE: Mutex<[PolicyRule; MAX_POLICY_ENTRIES]> = Mutex::new(
-    [PolicyRule::default(); MAX_POLICY_ENTRIES],
+    [PolicyRule::empty(); MAX_POLICY_ENTRIES],
 );
 
 /// Number of active policy entries.
@@ -291,6 +310,17 @@ impl PolicyTable {
 pub fn evaluate_policy(src_pid: u32, dst_pid: u32, msg_type: u32) -> PolicyEvalResult {
     TOTAL_EVALUATIONS.fetch_add(1, Ordering::Relaxed);
 
+    // PID 0 is the kernel in Exo-OS, not a wildcard sender.
+    if src_pid == KERNEL_PID {
+        ALLOWED_BY_POLICY.fetch_add(1, Ordering::Relaxed);
+        return PolicyEvalResult {
+            action: PolicyAction::Allow as u8,
+            matched_rule_id: 0,
+            rate_limit: 0,
+            audit: 0,
+        };
+    }
+
     let table = POLICY_TABLE.lock();
     let count = POLICY_COUNT.load(Ordering::Acquire) as usize;
 
@@ -314,7 +344,11 @@ pub fn evaluate_policy(src_pid: u32, dst_pid: u32, msg_type: u32) -> PolicyEvalR
                 action: rule.action,
                 matched_rule_id: rule.rule_id,
                 rate_limit: 0,
-                audit: if action == PolicyAction::AuditOnly { 1 } else { 0 },
+                audit: if matches!(action, PolicyAction::AuditOnly | PolicyAction::RateLimit) {
+                    1
+                } else {
+                    0
+                },
             };
 
             match action {
@@ -352,8 +386,12 @@ pub fn evaluate_policy(src_pid: u32, dst_pid: u32, msg_type: u32) -> PolicyEvalR
             DEFAULT_APPLIED.fetch_add(1, Ordering::Relaxed);
             let default_action = PolicyAction::from_u8(DEFAULT_POLICY.load(Ordering::Acquire));
             match default_action {
-                PolicyAction::Allow => ALLOWED_BY_POLICY.fetch_add(1, Ordering::Relaxed),
-                PolicyAction::Deny => DENIED_BY_POLICY.fetch_add(1, Ordering::Relaxed),
+                PolicyAction::Allow => {
+                    ALLOWED_BY_POLICY.fetch_add(1, Ordering::Relaxed);
+                }
+                PolicyAction::Deny => {
+                    DENIED_BY_POLICY.fetch_add(1, Ordering::Relaxed);
+                }
                 _ => {}
             }
             PolicyEvalResult {
@@ -523,6 +561,14 @@ pub fn enumerate_policies(out: &mut [PolicyRule]) -> usize {
 
 /// Resets the policy subsystem and installs default rules.
 pub fn policy_init() {
+    let mut table = POLICY_TABLE.lock();
+    *table = [PolicyRule::default(); MAX_POLICY_ENTRIES];
+    drop(table);
+
+    let mut rate_table = RATE_LIMIT_TABLE.lock();
+    *rate_table = [RateLimitEntry::new(); 32];
+    drop(rate_table);
+
     POLICY_COUNT.store(0, Ordering::Release);
     NEXT_RULE_ID.store(1, Ordering::Release);
     DEFAULT_POLICY.store(PolicyAction::Deny as u8, Ordering::Release);
@@ -533,13 +579,134 @@ pub fn policy_init() {
     RATE_LIMITED.store(0, Ordering::Release);
     DEFAULT_APPLIED.store(0, Ordering::Release);
 
-    // Install default rules:
-    // 1. Kernel (PID 0) can send to anyone — Allow, priority 255
-    add_policy(0, WILDCARD_PID, WILDCARD_MSG_TYPE, PolicyAction::Allow, 255, false, 0);
+    // Install default rules for the live exo_shield endpoint (PID 10).
+    // Public telemetry paths stay open but audited / rate-limited, while
+    // mutating administrative paths are reserved to privileged senders.
 
-    // 2. Init (PID 1) can send to anyone — Allow, priority 200
-    add_policy(1, WILDCARD_PID, WILDCARD_MSG_TYPE, PolicyAction::Allow, 200, false, 0);
+    // 1. ipc_router can broker requests to exo_shield.
+    add_policy(
+        IPC_ROUTER_PID,
+        EXO_SHIELD_PID,
+        WILDCARD_MSG_TYPE,
+        PolicyAction::Allow,
+        240,
+        false,
+        0,
+    );
 
-    // 3. Anyone can send to exo_shield — AuditOnly, priority 100
-    add_policy(WILDCARD_PID, 5, WILDCARD_MSG_TYPE, PolicyAction::AuditOnly, 100, true, 0);
+    // 2. init_server is allowed to administer exo_shield directly.
+    add_policy(
+        INIT_SERVER_PID,
+        EXO_SHIELD_PID,
+        WILDCARD_MSG_TYPE,
+        PolicyAction::Allow,
+        230,
+        false,
+        0,
+    );
+
+    // 3. Administrative mutations are denied by default unless a higher
+    // priority privileged rule matched first.
+    add_policy(
+        WILDCARD_PID,
+        EXO_SHIELD_PID,
+        QUARANTINE_CMD,
+        PolicyAction::Deny,
+        220,
+        false,
+        0,
+    );
+    add_policy(
+        WILDCARD_PID,
+        EXO_SHIELD_PID,
+        POLICY_UPDATE,
+        PolicyAction::Deny,
+        220,
+        false,
+        0,
+    );
+
+    // 4. Public request classes remain available but throttled and audited.
+    add_policy(
+        WILDCARD_PID,
+        EXO_SHIELD_PID,
+        SCAN_REQUEST,
+        PolicyAction::RateLimit,
+        120,
+        false,
+        5,
+    );
+    add_policy(
+        WILDCARD_PID,
+        EXO_SHIELD_PID,
+        EVENT_REPORT,
+        PolicyAction::RateLimit,
+        120,
+        false,
+        20,
+    );
+    add_policy(
+        WILDCARD_PID,
+        EXO_SHIELD_PID,
+        THREAT_QUERY,
+        PolicyAction::RateLimit,
+        110,
+        false,
+        5,
+    );
+    add_policy(
+        WILDCARD_PID,
+        EXO_SHIELD_PID,
+        HEARTBEAT,
+        PolicyAction::RateLimit,
+        110,
+        false,
+        1,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spin::Mutex;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn policy_init_targets_actual_exo_shield_pid() {
+        let _guard = TEST_LOCK.lock();
+        policy_init();
+
+        let live = evaluate_policy(42, EXO_SHIELD_PID, SCAN_REQUEST);
+        assert_eq!(PolicyAction::from_u8(live.action), PolicyAction::RateLimit);
+
+        let stale_pid = evaluate_policy(42, 5, SCAN_REQUEST);
+        assert_eq!(PolicyAction::from_u8(stale_pid.action), PolicyAction::Deny);
+    }
+
+    #[test]
+    fn administrative_messages_require_privileged_sender() {
+        let _guard = TEST_LOCK.lock();
+        policy_init();
+
+        let denied = evaluate_policy(42, EXO_SHIELD_PID, POLICY_UPDATE);
+        assert_eq!(PolicyAction::from_u8(denied.action), PolicyAction::Deny);
+
+        let init_allowed = evaluate_policy(INIT_SERVER_PID, EXO_SHIELD_PID, QUARANTINE_CMD);
+        assert_eq!(PolicyAction::from_u8(init_allowed.action), PolicyAction::Allow);
+
+        let router_allowed = evaluate_policy(IPC_ROUTER_PID, EXO_SHIELD_PID, POLICY_UPDATE);
+        assert_eq!(PolicyAction::from_u8(router_allowed.action), PolicyAction::Allow);
+    }
+
+    #[test]
+    fn heartbeat_is_rate_limited_for_public_senders() {
+        let _guard = TEST_LOCK.lock();
+        policy_init();
+
+        let eval = evaluate_policy(77, EXO_SHIELD_PID, HEARTBEAT);
+        assert_eq!(PolicyAction::from_u8(eval.action), PolicyAction::RateLimit);
+        assert_eq!(eval.rate_limit, 10);
+        assert_eq!(eval.audit, 1);
+    }
 }

@@ -11,9 +11,9 @@
 //! [0x0008] handoff_flag    u64     ← Kernel B → A
 //! [0x0040] cmd_b2a         [u8;64] ← ring IPI B→A
 //! [0x0080] freeze_ack[]    u32×256 ← ACK isolation par cœur   (1 KiO)
-//! [0x4080] pmc_snapshot[]  [u8;64]×256 ← snapshots PMC        (16 KiO)
-//! [0xC000] log_audit       [u8;8192] ← journal audit           (8 KiO)
-//! [0xE000] metrics         [u8;8192] ← métriques agrégées      (8 KiO)
+//! [0x4000] pmc_snapshot[]  [u8;64]×256 ← snapshots PMC        (16 KiO)
+//! [0x8000] log_audit       [u8;16384] ← journal audit          (16 KiO)
+//! [0xC000] metrics         [u8;16384] ← métriques agrégées     (16 KiO)
 //! [0x10000] --- fin SSR ---
 //! ```
 
@@ -40,6 +40,10 @@ pub const KERNEL_B_APIC_ID: u32 = 0;
 
 /// Taille d'un snapshot PMC par cœur (octets).
 pub const SSR_PMC_SNAPSHOT_SIZE: usize = 64;
+/// Taille de la zone journal audit.
+pub const SSR_LOG_AUDIT_SIZE: usize = 16 * 1024;
+/// Taille de la zone métriques.
+pub const SSR_METRICS_SIZE: usize = 16 * 1024;
 
 /// Offset physique contractuel dans l'image Kernel A pour le miroir de liveness.
 ///
@@ -61,12 +65,12 @@ pub const SSR_SEQLOCK_OFFSET: usize = 0x0018;
 pub const SSR_CMD_B2A_OFFSET: usize = 0x0040;
 /// `[0x0080]` Freeze ACK par cœur — u32 × 256 = 1 KiO.
 pub const SSR_FREEZE_ACK_OFFSET: usize = 0x0080;
-/// `[0x4080]` Snapshots PMC par cœur — 64 B × 256 = 16 KiO.
-pub const SSR_PMC_OFFSET: usize = 0x4080;
-/// `[0xC000]` Journal d'audit (8 KiO).
-pub const SSR_LOG_AUDIT_OFFSET: usize = 0xC000;
-/// `[0xE000]` Métriques agrégées (8 KiO jusqu'à la fin SSR).
-pub const SSR_METRICS_OFFSET: usize = 0xE000;
+/// `[0x4000]` Snapshots PMC par cœur — 64 B × 256 = 16 KiO.
+pub const SSR_PMC_OFFSET: usize = 0x4000;
+/// `[0x8000]` Journal d'audit (16 KiO).
+pub const SSR_LOG_AUDIT_OFFSET: usize = 0x8000;
+/// `[0xC000]` Métriques agrégées (16 KiO).
+pub const SSR_METRICS_OFFSET: usize = 0xC000;
 
 // ─── Assertions statiques (vérifiées à la compilation) ───────────────────────
 
@@ -86,12 +90,12 @@ const _: () = assert!(
 );
 
 const _: () = assert!(
-    SSR_LOG_AUDIT_OFFSET < SSR_METRICS_OFFSET,
-    "SSR: zone log_audit doit précéder la zone métriques"
+    SSR_LOG_AUDIT_OFFSET + SSR_LOG_AUDIT_SIZE <= SSR_METRICS_OFFSET,
+    "SSR: zone log_audit dépasse la zone métriques"
 );
 
 const _: () = assert!(
-    SSR_METRICS_OFFSET < SSR_SIZE,
+    SSR_METRICS_OFFSET + SSR_METRICS_SIZE <= SSR_SIZE,
     "SSR: zone métriques doit être dans la SSR"
 );
 
@@ -165,7 +169,7 @@ mod tests {
     #[test]
     fn layout_fits_in_ssr() {
         assert!(
-            SSR_METRICS_OFFSET + 0x2000 <= SSR_SIZE,
+            SSR_METRICS_OFFSET + SSR_METRICS_SIZE <= SSR_SIZE,
             "zone métriques + fin dépasse SSR_SIZE"
         );
     }

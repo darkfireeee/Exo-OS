@@ -131,7 +131,7 @@ impl BootFeatures {
 
 pub static B_FEATURES: BootFeatures = BootFeatures::new();
 
-/// Table APIC ID (0..255) -> slot SSR (0..63), 0xFF = non assigné.
+/// Table APIC ID (0..255) -> slot SSR (0..255), 0xFF = non assigné.
 static APIC_TO_SLOT: [AtomicU8; 256] = [const { AtomicU8::new(0xFF) }; 256];
 
 /// Les vecteurs 0xF1/0xF2/0xF3 ne sont activés qu'une fois Stage 0 prêt.
@@ -600,7 +600,7 @@ pub fn build_apic_to_slot_from_real_madt(madt_phys: u64) -> usize {
 
     let info = madt::parse_madt(madt_phys);
     let mut mapped = 0usize;
-    for idx in 0..(info.cpu_count as usize).min(256).min(64) {
+    for idx in 0..(info.cpu_count as usize).min(256) {
         let apic_id = info.apic_ids[idx];
         if apic_id < 256 {
             APIC_TO_SLOT[apic_id as usize].store(idx as u8, Ordering::Release);

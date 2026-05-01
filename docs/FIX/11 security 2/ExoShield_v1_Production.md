@@ -1,10 +1,6 @@
 # ExoShield v1.0 — Spécification Production
 ## Module de Sécurité ExoOS — Version Finale Opérationnelle
 
-> Cette spécification décrit la **couche sécurité kernel / boot** d'Exo-OS.
-> Elle **ne décrit pas** le serveur Ring 1 `servers/exo_shield` (PID 10).
-> Pour le composant runtime utilisateur, voir `ExoShield_Server_v1.md`.
-
 > **Statut** : Prêt pour implémentation — Phase 3 ExoOS  
 > **Date** : Avril 2026  
 > **Genèse** : 4 rounds de consensus multi-IA (Claude, ChatGPT, Kimi, Gemini, Grok4, Qwen, Z-AI) + red-team adversariale complète  
