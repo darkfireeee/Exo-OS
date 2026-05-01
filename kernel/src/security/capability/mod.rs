@@ -33,8 +33,7 @@ pub mod verify;
 pub use rights::Rights;
 pub use table::{CapTable, CapTableSnapshot, CAP_TABLE_CAPACITY};
 pub use token::{
-    read_stats as token_stats, CapObjectType, CapToken, ObjectId, TokenStats,
-    CAP_TOKEN_WIRE_SIZE,
+    read_stats as token_stats, CapObjectType, CapToken, ObjectId, TokenStats, CAP_TOKEN_WIRE_SIZE,
 };
 
 // verify — v6 : extraits de revocation.rs
@@ -291,8 +290,7 @@ pub fn check_token(
     }
 
     let rights = Rights::from_bits(required_rights).ok_or(KernelCapError::InvalidArg)?;
-    let expected_type =
-        token::CapObjectType::from_u16(expected_type as u16);
+    let expected_type = token::CapObjectType::from_u16(expected_type as u16);
     if expected_type == token::CapObjectType::Invalid {
         return Err(KernelCapError::InvalidArg);
     }

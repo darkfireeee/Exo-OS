@@ -125,8 +125,10 @@ pub fn sys_exofs_open_by_path(
     } else {
         CapabilityType::ExoFsOpenByPathRead
     };
-    if let Err(e) = verify_cap(cap_rights, cap) {
-        return e;
+    if cap_rights != 0 {
+        if let Err(e) = verify_cap(cap_rights, cap) {
+            return e;
+        }
     }
 
     match open_by_path_inner(&path_bytes, actual_len, flags32, mode32) {

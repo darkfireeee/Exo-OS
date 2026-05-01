@@ -1,14 +1,29 @@
-//! # syscall/handlers/fs_posix.rs — Thin wrappers POSIX FS (stat, mkdir, unlink, getdents64)
+//! # syscall/handlers/fs_posix.rs — Thin wrappers POSIX FS de compatibilité
 //!
-//! RÈGLE SYS-03 : THIN WRAPPERS UNIQUEMENT.
-//! RÈGLE SYS-07 : verify_cap() appelé AVANT délégation vers fs/exofs/.
-//! RÈGLE LIB-04 : Pal::open() = 2 syscalls — PATH_RESOLVE → ObjectId → OBJECT_OPEN.
-//! RÈGLE LIB-05 : INTERDIT d'exposer ObjectId dans l'API POSIX.
-//! BUG-02 FIX   : SYS_EXOFS_READDIR (520) utilisé pour getdents64.
+//! RÈGLE SYS-03 : thin wrappers uniquement.
+//! Ces fonctions restent hors de la table de dispatch principale, mais elles
+//! doivent déléguer au même `fs_bridge` que `table.rs` lorsqu'une opération
+//! existe. Les vraies absences POSIX restent explicitement en `ENOSYS`.
 
-use crate::fs::exofs::syscall;
-use crate::syscall::errno::{EFAULT, EINVAL, ENOSYS};
-use crate::syscall::validation::{read_user_path, validate_fd, USER_ADDR_MAX};
+use crate::syscall::fast_path::syscall_current_pid;
+use crate::syscall::fs_bridge;
+use crate::syscall::numbers::{EFAULT, EINVAL, ENOSYS};
+use crate::syscall::validation::{read_user_path, validate_fd, validate_flags, USER_ADDR_MAX};
+
+const AT_FDCWD: i32 = -100;
+const AT_SYMLINK_NOFOLLOW: u64 = 0x100;
+const AT_REMOVEDIR: u64 = 0x200;
+const OPEN_FLAGS_MASK: u64 = 0x0040_1FFF;
+
+#[inline]
+fn current_pid() -> u32 {
+    syscall_current_pid()
+}
+
+#[inline]
+fn supports_at_dirfd(dirfd: i32, path: &[u8]) -> bool {
+    dirfd == AT_FDCWD || path.starts_with(b"/")
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Handler : stat / fstat / lstat / newfstatat
@@ -26,10 +41,7 @@ pub fn sys_stat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6:
     if stat_ptr == 0 || stat_ptr >= USER_ADDR_MAX {
         return EFAULT;
     }
-    // SYS-07 : verify_cap() implicite dans path_resolve (vérifie READ sur le parent)
-    // Délègue → fs/exofs/syscall/path_resolve puis object_stat
-    let _ = (path, stat_ptr);
-    ENOSYS
+    fs_bridge::bridge_result(fs_bridge::fs_stat(path.as_bytes(), stat_ptr, current_pid()))
 }
 
 /// `lstat(path, stat_ptr)` — ne suit pas les liens symboliques.
@@ -41,8 +53,11 @@ pub fn sys_lstat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6
     if stat_ptr == 0 || stat_ptr >= USER_ADDR_MAX {
         return EFAULT;
     }
-    let _ = (path, stat_ptr);
-    ENOSYS
+    fs_bridge::bridge_result(fs_bridge::fs_lstat(
+        path.as_bytes(),
+        stat_ptr,
+        current_pid(),
+    ))
 }
 
 /// `newfstatat(dirfd, path, stat_ptr, flags)`.
@@ -61,8 +76,21 @@ pub fn sys_newfstatat(
     if stat_ptr == 0 || stat_ptr >= USER_ADDR_MAX {
         return EFAULT;
     }
-    let _ = (dirfd, path, stat_ptr, flags);
-    ENOSYS
+    if flags & !AT_SYMLINK_NOFOLLOW != 0 {
+        return EINVAL;
+    }
+    if !supports_at_dirfd(dirfd as i32, path.as_bytes()) {
+        return EINVAL;
+    }
+    if flags & AT_SYMLINK_NOFOLLOW != 0 {
+        fs_bridge::bridge_result(fs_bridge::fs_lstat(
+            path.as_bytes(),
+            stat_ptr,
+            current_pid(),
+        ))
+    } else {
+        fs_bridge::bridge_result(fs_bridge::fs_stat(path.as_bytes(), stat_ptr, current_pid()))
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,9 +103,11 @@ pub fn sys_mkdir(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
-    // SYS-07 : verify_cap(WRITE) sur répertoire parent avant création
-    let _ = (path, mode);
-    ENOSYS
+    fs_bridge::bridge_result(fs_bridge::fs_mkdir(
+        path.as_bytes(),
+        mode as u32,
+        current_pid(),
+    ))
 }
 
 /// `rmdir(path)` → 0 ou errno.
@@ -86,8 +116,7 @@ pub fn sys_rmdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
-    let _ = path;
-    ENOSYS
+    fs_bridge::bridge_result(fs_bridge::fs_rmdir(path.as_bytes(), current_pid()))
 }
 
 /// `unlink(path)` → 0 ou errno.
@@ -96,9 +125,7 @@ pub fn sys_unlink(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
-    // Délègue → fs/exofs/syscall/object_delete
-    let _ = path;
-    ENOSYS
+    fs_bridge::bridge_result(fs_bridge::fs_unlink(path.as_bytes(), current_pid()))
 }
 
 /// `rename(old, new)` → 0 ou errno.
@@ -139,8 +166,11 @@ pub fn sys_symlink(target_ptr: u64, path_ptr: u64, _a3: u64, _a4: u64, _a5: u64,
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
-    let _ = (target, path);
-    ENOSYS
+    fs_bridge::bridge_result(fs_bridge::fs_symlink(
+        target.as_bytes(),
+        path.as_bytes(),
+        current_pid(),
+    ))
 }
 
 /// `readlink(path, buf, bufsize)` → octets écrits ou errno.
@@ -162,8 +192,12 @@ pub fn sys_readlink(
     if bufsize == 0 {
         return EINVAL;
     }
-    let _ = (path, buf_ptr, bufsize);
-    ENOSYS
+    fs_bridge::bridge_result(fs_bridge::fs_readlink(
+        path.as_bytes(),
+        buf_ptr,
+        bufsize as usize,
+        current_pid(),
+    ))
 }
 
 /// `getcwd(buf, size)` → longueur du chemin ou errno.
@@ -195,7 +229,7 @@ pub fn sys_chdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
 /// `getdents64(fd, buf, count)` → octets remplis ou errno.
 ///
 /// **BUG-02 FIX** : Ce syscall était absent (liste '???'). Sans lui : ls/find/opendir()
-/// sont impossibles. Délègue vers SYS_EXOFS_READDIR (520).
+/// sont impossibles. Délègue vers le même `fs_bridge` que la table principale.
 pub fn sys_getdents64(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let fd = match validate_fd(fd) {
         Ok(f) => f,
@@ -207,8 +241,12 @@ pub fn sys_getdents64(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6
     if count == 0 {
         return EINVAL;
     }
-    // Délègue → fs/exofs/syscall/readdir (SYS_EXOFS_READDIR = 520)
-    syscall::sys_exofs_readdir(fd as u64, buf_ptr, count, 0, 0, 0)
+    fs_bridge::bridge_result(fs_bridge::fs_getdents64(
+        fd as u32,
+        buf_ptr,
+        count as usize,
+        current_pid(),
+    ))
 }
 
 /// `openat(dirfd, path, flags, mode)`.
@@ -217,8 +255,17 @@ pub fn sys_openat(dirfd: u64, path_ptr: u64, flags: u64, mode: u64, _a5: u64, _a
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
-    let _ = (dirfd, path, flags, mode);
-    ENOSYS
+    let flags = match validate_flags(flags, OPEN_FLAGS_MASK) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    fs_bridge::bridge_result(fs_bridge::fs_openat(
+        dirfd as i32,
+        path.as_bytes(),
+        flags as u32,
+        mode as u32,
+        current_pid(),
+    ))
 }
 
 /// `mkdirat(dirfd, path, mode)`.
@@ -227,8 +274,14 @@ pub fn sys_mkdirat(dirfd: u64, path_ptr: u64, mode: u64, _a4: u64, _a5: u64, _a6
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
-    let _ = (dirfd, path, mode);
-    ENOSYS
+    if !supports_at_dirfd(dirfd as i32, path.as_bytes()) {
+        return EINVAL;
+    }
+    fs_bridge::bridge_result(fs_bridge::fs_mkdir(
+        path.as_bytes(),
+        mode as u32,
+        current_pid(),
+    ))
 }
 
 /// `unlinkat(dirfd, path, flags)`.
@@ -237,8 +290,17 @@ pub fn sys_unlinkat(dirfd: u64, path_ptr: u64, flags: u64, _a4: u64, _a5: u64, _
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
-    let _ = (dirfd, path, flags);
-    ENOSYS
+    if flags & !AT_REMOVEDIR != 0 {
+        return EINVAL;
+    }
+    if !supports_at_dirfd(dirfd as i32, path.as_bytes()) {
+        return EINVAL;
+    }
+    if flags & AT_REMOVEDIR != 0 {
+        fs_bridge::bridge_result(fs_bridge::fs_rmdir(path.as_bytes(), current_pid()))
+    } else {
+        fs_bridge::bridge_result(fs_bridge::fs_unlink(path.as_bytes(), current_pid()))
+    }
 }
 
 /// `renameat(olddirfd, old, newdirfd, new)`.
@@ -291,8 +353,11 @@ pub fn sys_truncate(path_ptr: u64, length: u64, _a3: u64, _a4: u64, _a5: u64, _a
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
-    let _ = (path, length);
-    ENOSYS
+    fs_bridge::bridge_result(fs_bridge::fs_truncate(
+        path.as_bytes(),
+        length,
+        current_pid(),
+    ))
 }
 
 /// `ftruncate(fd, length)`.
@@ -301,8 +366,7 @@ pub fn sys_ftruncate(fd: u64, length: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
         Ok(f) => f,
         Err(e) => return e.to_errno(),
     };
-    let _ = (fd, length);
-    ENOSYS
+    fs_bridge::bridge_result(fs_bridge::fs_ftruncate(fd as u32, length, current_pid()))
 }
 
 /// `fsync(fd)`.

@@ -573,9 +573,8 @@ static KERNEL_SECRET: Once<[u8; 32]> = Once::new();
 /// Doit être appelé UNE SEULE FOIS au boot, avant que Kernel A ne démarre.
 /// Le secret doit provenir d'une source CSPRNG (RDRAND + ChaCha20).
 pub fn init_kernel_secret(secret: &[u8; 32]) {
-    let _guard = unsafe {
-        exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite)
-    };
+    let _guard =
+        unsafe { exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite) };
     KERNEL_SECRET.call_once(|| *secret);
 }
 
@@ -585,9 +584,8 @@ pub fn init_kernel_secret(secret: &[u8; 32]) {
 /// Ne doit jamais être appelé depuis Ring 1 ou Ring 3.
 /// En Phase 3.2, cette lecture sera protégée par PKS Credentials.
 fn get_kernel_secret() -> [u8; 32] {
-    let _guard = unsafe {
-        exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadOnly)
-    };
+    let _guard =
+        unsafe { exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadOnly) };
     *KERNEL_SECRET
         .get()
         .expect("KERNEL_SECRET non initialisé — exoseal_boot_phase0 doit précéder verify()")
@@ -660,13 +658,19 @@ mod tests {
         unsafe {
             cap_deadline_table::insert(oid, 0x1234_5678_9abc_def0);
         }
-        assert_eq!(cap_deadline_table::get_const_time(oid), 0x1234_5678_9abc_def0);
+        assert_eq!(
+            cap_deadline_table::get_const_time(oid),
+            0x1234_5678_9abc_def0
+        );
         assert_eq!(cap_deadline_table::used_count(), before + 1);
 
         unsafe {
             cap_deadline_table::insert(oid, 0x0fed_cba9_8765_4321);
         }
-        assert_eq!(cap_deadline_table::get_const_time(oid), 0x0fed_cba9_8765_4321);
+        assert_eq!(
+            cap_deadline_table::get_const_time(oid),
+            0x0fed_cba9_8765_4321
+        );
         assert_eq!(cap_deadline_table::used_count(), before + 1);
 
         cap_deadline_table::remove(oid);
@@ -694,7 +698,10 @@ mod tests {
 
         for idx in 0..DEADLINE_TABLE_SIZE {
             let oid = test_oid(0x1000 + idx as u64);
-            assert_eq!(cap_deadline_table::get_const_time(oid), 0x1000_0000 + idx as u64);
+            assert_eq!(
+                cap_deadline_table::get_const_time(oid),
+                0x1000_0000 + idx as u64
+            );
         }
         assert_eq!(cap_deadline_table::used_count(), DEADLINE_TABLE_SIZE);
 

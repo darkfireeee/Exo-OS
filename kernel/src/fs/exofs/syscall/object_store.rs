@@ -6,11 +6,9 @@
 extern crate alloc;
 
 use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
-use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
 use crate::fs::exofs::storage::virtio_adapter;
 use crate::scheduler::sync::spinlock::SpinLock;
 
@@ -217,6 +215,8 @@ use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
+    use alloc::sync::Arc;
     use alloc::vec;
     use spin::Mutex;
 

@@ -282,6 +282,33 @@ fn snapshot_blob(blob_id: &BlobId) -> Result<Vec<u8>, FsBridgeError> {
 }
 
 #[inline]
+fn resize_regular_blob(blob_id: BlobId, length: u64) -> Result<(), FsBridgeError> {
+    if length > i64::MAX as u64 || length > usize::MAX as u64 {
+        return Err(FsBridgeError::Invalid);
+    }
+
+    let mut data = snapshot_blob(&blob_id)?;
+    if blob_is_directory(&data) {
+        return Err(FsBridgeError::IsDir);
+    }
+
+    let new_len = length as usize;
+    if new_len > data.len() {
+        data.try_reserve(new_len - data.len())
+            .map_err(|_| FsBridgeError::NoSpace)?;
+        data.resize(new_len, 0);
+    } else {
+        data.truncate(new_len);
+    }
+
+    BLOB_CACHE
+        .insert(blob_id, data)
+        .map_err(exofs_to_bridge_error)?;
+    let _ = BLOB_CACHE.mark_dirty(&blob_id);
+    Ok(())
+}
+
+#[inline]
 fn blob_id_to_object_id(blob_id: BlobId) -> ObjectId {
     ObjectId(*blob_id.as_bytes())
 }
@@ -1213,6 +1240,37 @@ pub fn fs_readlinkat(
     Err(FsBridgeError::Invalid)
 }
 
+/// `truncate(path, length)`.
+#[inline]
+pub fn fs_truncate(path: &[u8], length: u64, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let normalized_path = resolve_path_with_symlinks(path, true, false)?;
+    let (blob_id, _) = path_entry(&normalized_path)?;
+    resize_regular_blob(blob_id, length)?;
+    Ok(0)
+}
+
+/// `ftruncate(fd, length)`.
+#[inline]
+pub fn fs_ftruncate(fd: u32, length: u64, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    if !entry.can_write() {
+        return Err(FsBridgeError::PermDenied);
+    }
+    resize_regular_blob(entry.blob_id, length)?;
+    OBJECT_TABLE
+        .set_size(fd, length)
+        .map_err(exofs_to_bridge_error)?;
+    Ok(0)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper : conversion automatique pour les syscall handlers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1619,6 +1677,81 @@ mod tests {
             );
             assert_eq!(out, [idx as u8; 4]);
             assert_eq!(fs_close(fd, 62).unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn test_fs_truncate_and_ftruncate_resize_regular_file() {
+        init_bridge();
+
+        let path = b"/truncate/data.bin";
+        let payload = *b"abcdef";
+        let fd = fs_open(path, open_flags::O_CREAT | open_flags::O_RDWR, 0, 71).unwrap() as u32;
+        assert_eq!(
+            fs_write(fd, payload.as_ptr() as u64, payload.len(), 71).unwrap(),
+            payload.len() as i64
+        );
+
+        assert_eq!(fs_truncate(path, 3, 71).unwrap(), 0);
+        let mut stat_buf = LinuxStat::default();
+        assert_eq!(
+            fs_stat(path, &mut stat_buf as *mut _ as u64, 71).unwrap(),
+            0
+        );
+        assert_eq!(stat_buf.st_size, 3);
+
+        assert_eq!(fs_ftruncate(fd, 8, 71).unwrap(), 0);
+        assert_eq!(fs_lseek(fd, 0, SEEK_SET, 71).unwrap(), 0);
+        let mut out = [0xFFu8; 8];
+        assert_eq!(
+            fs_read(fd, out.as_mut_ptr() as u64, out.len(), 71).unwrap(),
+            out.len() as i64
+        );
+        assert_eq!(&out[..3], b"abc");
+        assert_eq!(&out[3..], &[0, 0, 0, 0, 0]);
+        assert_eq!(fs_close(fd, 71).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_fs_truncate_stress_shrink_and_grow_many_files() {
+        init_bridge();
+
+        for idx in 0..96u32 {
+            let mut path = [0u8; 40];
+            let prefix = b"/trunc/f";
+            path[..prefix.len()].copy_from_slice(prefix);
+            let path_len = prefix.len() + write_u32_hex(&mut path[prefix.len()..], idx);
+
+            let mut payload = [0u8; 24];
+            let write_len = 8 + (idx as usize % 16);
+            for (off, byte) in payload[..write_len].iter_mut().enumerate() {
+                *byte = idx.wrapping_add(off as u32) as u8;
+            }
+
+            let fd = fs_open(
+                &path[..path_len],
+                open_flags::O_CREAT | open_flags::O_RDWR | open_flags::O_TRUNC,
+                0,
+                72,
+            )
+            .unwrap() as u32;
+            assert_eq!(
+                fs_write(fd, payload.as_ptr() as u64, write_len, 72).unwrap(),
+                write_len as i64
+            );
+
+            let shrink_len = (idx as u64 % 5) + 1;
+            assert_eq!(fs_truncate(&path[..path_len], shrink_len, 72).unwrap(), 0);
+            let grow_len = shrink_len + 9;
+            assert_eq!(fs_ftruncate(fd, grow_len, 72).unwrap(), 0);
+
+            let mut stat_buf = LinuxStat::default();
+            assert_eq!(
+                fs_stat(&path[..path_len], &mut stat_buf as *mut _ as u64, 72).unwrap(),
+                0
+            );
+            assert_eq!(stat_buf.st_size, grow_len as i64);
+            assert_eq!(fs_close(fd, 72).unwrap(), 0);
         }
     }
 

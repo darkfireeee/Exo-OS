@@ -28,6 +28,8 @@ pub const VFS_NAME_MAX: usize = 255;
 pub const VFS_PATH_MAX: usize = 4096;
 pub const VFS_OPEN_MAX: usize = 1024;
 pub const VFS_READDIR_BATCH: usize = 64;
+/// Magic propre à la couche namespace/VFS.
+/// Il est volontairement distinct du magic superblock ExoFS (`0x4558_4F46`).
 pub const VFS_MAGIC: u32 = 0x5654_4654; // "VTFT"
 pub const VFS_VERSION: u8 = 1;
 

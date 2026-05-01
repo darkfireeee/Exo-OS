@@ -576,21 +576,16 @@ mod tests {
 
     #[test]
     fn apply_domain_permission_can_restore_rw_after_revoke() {
-        let revoked = apply_domain_permission(
-            0,
-            PksDomain::Caps,
-            PksPermission::Disabled,
-        );
-        let restored = apply_domain_permission(
-            revoked,
-            PksDomain::Caps,
-            PksPermission::ReadWrite,
-        );
+        let revoked = apply_domain_permission(0, PksDomain::Caps, PksPermission::Disabled);
+        let restored = apply_domain_permission(revoked, PksDomain::Caps, PksPermission::ReadWrite);
 
         assert_eq!(
             (restored >> PksDomain::Caps.shift()) & 0b11,
             PksPermission::ReadWrite.bits()
         );
-        assert_eq!(restored & !PksDomain::Caps.mask(), revoked & !PksDomain::Caps.mask());
+        assert_eq!(
+            restored & !PksDomain::Caps.mask(),
+            revoked & !PksDomain::Caps.mask()
+        );
     }
 }

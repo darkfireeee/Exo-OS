@@ -530,8 +530,8 @@ use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::exofs::core::ExofsError;
     use crate::fs::exofs::core::blob_id::compute_blob_id;
+    use crate::fs::exofs::core::ExofsError;
     use crate::fs::exofs::recovery::block_io::write_bytes;
     use crate::fs::exofs::recovery::fsck_phase2::BlobRefCounter;
     use alloc::vec::Vec;

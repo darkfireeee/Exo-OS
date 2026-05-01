@@ -374,9 +374,9 @@ impl FsckPhase2 {
 
                 let entry_bytes: &[u8; ALLOC_ENTRY_SIZE] =
                     match block_buf[off..off + ALLOC_ENTRY_SIZE].try_into() {
-                    Ok(b) => b,
-                    Err(_) => break 'outer,
-                };
+                        Ok(b) => b,
+                        Err(_) => break 'outer,
+                    };
 
                 // Vérifier si l'entrée est vide (BlobId nul = fin de table).
                 if entry_bytes.iter().all(|&b| b == 0) {
@@ -775,11 +775,8 @@ mod tests {
         assert_eq!(report.orphans, 1);
         assert_eq!(report.ref_counter.count(&root_blob_id), 1);
         assert_eq!(report.ref_counter.count(&orphan_blob_id), 0);
-        assert!(
-            report
-                .errors
-                .iter()
-                .any(|err| err.kind == Phase2ErrorKind::ParentNotFound && err.blob_id == orphan_blob_id)
-        );
+        assert!(report.errors.iter().any(
+            |err| err.kind == Phase2ErrorKind::ParentNotFound && err.blob_id == orphan_blob_id
+        ));
     }
 }

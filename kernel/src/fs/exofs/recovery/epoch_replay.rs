@@ -410,8 +410,8 @@ impl EpochReplay {
         epoch_id: EpochId,
         journal_lba: u64,
     ) -> ExofsResult<JournalValidationReport> {
-        let hdr_buf =
-            read_array::<EPOCH_JOURNAL_HDR_SIZE>(device, journal_lba).map_err(|_| ExofsError::IoError)?;
+        let hdr_buf = read_array::<EPOCH_JOURNAL_HDR_SIZE>(device, journal_lba)
+            .map_err(|_| ExofsError::IoError)?;
 
         let hdr = EpochJournalHeaderDisk::from_bytes(&hdr_buf)?;
 

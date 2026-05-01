@@ -230,8 +230,10 @@ pub fn sys_exofs_readdir(
         Err(e) => return e,
     };
 
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsReaddir) {
-        return e;
+    if cap_rights != 0 {
+        if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsReaddir) {
+            return e;
+        }
     }
 
     // Calculer le nombre max d'entrées (borné par EXOFS_LIST_MAX)

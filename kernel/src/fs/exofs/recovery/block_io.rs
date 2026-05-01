@@ -22,10 +22,7 @@ fn block_size(device: &dyn BlockDevice) -> ExofsResult<usize> {
     Ok(size)
 }
 
-fn block_geometry(
-    device: &dyn BlockDevice,
-    byte_offset: usize,
-) -> ExofsResult<(usize, usize)> {
+fn block_geometry(device: &dyn BlockDevice, byte_offset: usize) -> ExofsResult<(usize, usize)> {
     let block_size = block_size(device)?;
     Ok((byte_offset / block_size, byte_offset % block_size))
 }
@@ -75,19 +72,12 @@ pub fn read_bytes_at(
 
 /// Lit `out.len()` octets à partir du début de `base_lba`.
 #[inline]
-pub fn read_bytes(
-    device: &dyn BlockDevice,
-    base_lba: u64,
-    out: &mut [u8],
-) -> ExofsResult<()> {
+pub fn read_bytes(device: &dyn BlockDevice, base_lba: u64, out: &mut [u8]) -> ExofsResult<()> {
     read_bytes_at(device, base_lba, 0, out)
 }
 
 /// Lit un tableau de taille fixe à partir du début de `base_lba`.
-pub fn read_array<const N: usize>(
-    device: &dyn BlockDevice,
-    base_lba: u64,
-) -> ExofsResult<[u8; N]> {
+pub fn read_array<const N: usize>(device: &dyn BlockDevice, base_lba: u64) -> ExofsResult<[u8; N]> {
     let mut out = [0u8; N];
     read_bytes(device, base_lba, &mut out)?;
     Ok(out)
@@ -146,11 +136,7 @@ pub fn write_bytes_at(
 
 /// Écrit `data.len()` octets à partir du début de `base_lba`.
 #[inline]
-pub fn write_bytes(
-    device: &mut dyn BlockDevice,
-    base_lba: u64,
-    data: &[u8],
-) -> ExofsResult<()> {
+pub fn write_bytes(device: &mut dyn BlockDevice, base_lba: u64, data: &[u8]) -> ExofsResult<()> {
     write_bytes_at(device, base_lba, 0, data)
 }
 

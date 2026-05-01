@@ -9,6 +9,8 @@ description       = "Exo-OS server: vfs_server — namespaces /proc /sys /dev (b
 [[bin]]
 name = "exo-vfs-server"
 path = "src/main.rs"
+test = false
+bench = false
 
 [dependencies]
 spin.workspace = true

@@ -264,8 +264,27 @@ pub const SYS_PPOLL: u64 = 271;
 pub const SYS_UNSHARE: u64 = 272;
 pub const SYS_SPLICE: u64 = 275;
 pub const SYS_TEE: u64 = 276;
+pub const SYS_SYNC_FILE_RANGE: u64 = 277;
 pub const SYS_VMSPLICE: u64 = 278;
+pub const SYS_EPOLL_PWAIT: u64 = 281;
+pub const SYS_EVENTFD: u64 = 284;
+pub const SYS_FALLOCATE: u64 = 285;
+pub const SYS_EVENTFD2: u64 = 290;
+pub const SYS_EPOLL_CREATE1: u64 = 291;
+pub const SYS_DUP3: u64 = 292;
+pub const SYS_PIPE2: u64 = 293;
+pub const SYS_INOTIFY_INIT1: u64 = 294;
+pub const SYS_PREADV: u64 = 295;
+pub const SYS_PWRITEV: u64 = 296;
 pub const SYS_GETCPU: u64 = 309; // conflit: remappé en 298 côté Linux, voir compat
+pub const SYS_RENAMEAT2: u64 = 316;
+pub const SYS_GETRANDOM: u64 = 318;
+pub const SYS_COPY_FILE_RANGE: u64 = 326;
+pub const SYS_PREADV2: u64 = 327;
+pub const SYS_PWRITEV2: u64 = 328;
+pub const SYS_STATX: u64 = 332;
+pub const SYS_OPENAT2: u64 = 437;
+pub const SYS_EPOLL_PWAIT2: u64 = 441;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Bloc 300–399 : Syscalls natifs Exo-OS
@@ -471,12 +490,24 @@ pub const ENOTSUP: i64 = -95;
 #[inline(always)]
 pub const fn is_linux_compat(nr: u64) -> bool {
     nr < 300
+        || matches!(
+            nr,
+            SYS_GETCPU
+                | SYS_RENAMEAT2
+                | SYS_GETRANDOM
+                | SYS_COPY_FILE_RANGE
+                | SYS_PREADV2
+                | SYS_PWRITEV2
+                | SYS_STATX
+                | SYS_OPENAT2
+                | SYS_EPOLL_PWAIT2
+        )
 }
 
 /// Vérifie si un numéro syscall est natif Exo-OS
 #[inline(always)]
 pub const fn is_exoos_native(nr: u64) -> bool {
-    nr >= 300 && nr < 400
+    nr >= 300 && nr < 400 && !is_linux_compat(nr)
 }
 
 /// Vérifie si un numéro est dans la table valide

@@ -508,6 +508,30 @@ pub fn sys_readlinkat(
     ))
 }
 
+/// `truncate(path, length)`.
+pub fn sys_truncate(path_ptr: u64, length: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_TRUNCATE);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_truncate(path.as_bytes(), length, pid))
+}
+
+/// `ftruncate(fd, length)`.
+pub fn sys_ftruncate(fd: u64, length: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FTRUNCATE);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_ftruncate(fd as u32, length, pid))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers Mémoire (délégués vers memory/)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -865,6 +889,50 @@ pub fn sys_futex(uaddr: u64, op: u64, val: u64, timeout: u64, uaddr2: u64, val3:
         Ok(v) => v,
         Err(e) => e.to_kernel_errno() as i64,
     }
+}
+
+/// `getrandom(buf, buflen, flags)` — Linux-compatible syscall 318.
+pub fn sys_getrandom(buf_ptr: u64, len: u64, flags: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_GETRANDOM);
+    const GETRANDOM_MAX: usize = 256 * 1024;
+    const GRND_NONBLOCK: u64 = 0x0001;
+    const GRND_RANDOM: u64 = 0x0002;
+    const GRND_INSECURE: u64 = 0x0004;
+    let allowed_flags = GRND_NONBLOCK | GRND_RANDOM | GRND_INSECURE;
+    if flags & !allowed_flags != 0 {
+        return EINVAL;
+    }
+
+    let len = len as usize;
+    let _validated = match UserBuf::validate(buf_ptr, len, GETRANDOM_MAX) {
+        Ok(buf) => buf,
+        Err(e) => return e.to_errno(),
+    };
+    if len == 0 {
+        return 0;
+    }
+
+    if !crate::security::crypto::rng_is_ready() {
+        crate::security::crypto::rng_init();
+    }
+
+    let mut written = 0usize;
+    while written < len {
+        let mut chunk = [0u8; 64];
+        let n = core::cmp::min(chunk.len(), len.saturating_sub(written));
+        if crate::security::crypto::rng_fill(&mut chunk[..n]).is_err() {
+            return EAGAIN;
+        }
+        let dst = match buf_ptr.checked_add(written as u64) {
+            Some(addr) => addr,
+            None => return EFAULT,
+        };
+        if copy_to_user(dst as *mut u8, chunk.as_ptr(), n).is_err() {
+            return EFAULT;
+        }
+        written = written.saturating_add(n);
+    }
+    written as i64
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1921,6 +1989,8 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_RMDIR => sys_rmdir,
         SYS_UNLINK => sys_unlink,
         SYS_SYMLINK => sys_symlink,
+        SYS_TRUNCATE => sys_truncate,
+        SYS_FTRUNCATE => sys_ftruncate,
         SYS_OPENAT => sys_openat,
         SYS_GETDENTS64 => sys_getdents64,
         SYS_READLINK => sys_readlink,
@@ -1948,6 +2018,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         // ── Scheduler ──────────────────────────────────────────────────────
         SYS_NANOSLEEP => sys_nanosleep,
         SYS_FUTEX => sys_futex,
+        SYS_GETRANDOM => sys_getrandom,
         // ── IPC Exo-OS ─────────────────────────────────────────────────────
         SYS_EXO_IPC_SEND => sys_exo_ipc_send,
         SYS_EXO_IPC_RECV => sys_exo_ipc_recv,

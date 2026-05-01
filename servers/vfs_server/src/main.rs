@@ -1,5 +1,8 @@
 #![no_std]
 #![no_main]
+// The translation catalog intentionally exposes more services than the boot path
+// calls directly; every entry is consumed by IPC/syscall dispatch as it matures.
+#![allow(dead_code, unused_imports)]
 
 //! # vfs_server — PID 3, Virtual File System namespace
 //!
@@ -13,18 +16,22 @@
 //! ## Protocole IPC (msg_type)
 //! - VFS_MOUNT    (0) : monter un FS (device, mountpoint, fstype, flags)
 //! - VFS_UMOUNT   (1) : démonter un point de montage
-//! - VFS_RESOLVE  (2) : résoudre un chemin -> (blob_id, mount_id)
-//! - VFS_OPEN     (3) : ouvrir un fichier -> fd dans le namespace appelant
+//! - VFS_RESOLVE  (2) : résoudre un chemin -> blob_id bas 64 bits
+//! - VFS_OPEN     (3) : ouvrir un chemin -> fd dans le namespace appelant
 //!
 //! ## Syscalls utilisés
-//! - SYS_EXOFS_PATH_RESOLVE = 500 (résolution chemin → blob_id)
-//! - SYS_EXOFS_OBJECT_OPEN  = 501 (open blob → fd)
+//! - SYS_EXOFS_PATH_RESOLVE = 500 (path, len, flags, out, _, rights)
+//! - SYS_EXOFS_OPEN_BY_PATH = 519 (path, flags, mode, _, _, rights)
 //! - SYS_IPC_REGISTER = 304, SYS_IPC_RECV = 301, SYS_IPC_SEND = 300
 
 use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, Ordering};
 use exo_syscall_abi as syscall;
+
+mod compat;
+mod ops;
+mod translation_layer;
 
 // ── Table de montages ─────────────────────────────────────────────────────────
 
@@ -37,6 +44,18 @@ enum FsType {
     ProcFs = 2,
     SysFs = 3,
     DevFs = 4,
+}
+
+impl FsType {
+    fn from_wire(value: u8) -> Option<Self> {
+        match value {
+            compat::FS_EXOFS => Some(Self::ExoFs),
+            compat::FS_PROCFS => Some(Self::ProcFs),
+            compat::FS_SYSFS => Some(Self::SysFs),
+            compat::FS_DEVFS => Some(Self::DevFs),
+            _ => None,
+        }
+    }
 }
 
 /// Entrée de la table de montages.
@@ -82,10 +101,6 @@ fn fnv32(s: &[u8]) -> u32 {
 
 // ── Messages IPC ─────────────────────────────────────────────────────────────
 
-const VFS_MOUNT: u32 = 0;
-const VFS_UMOUNT: u32 = 1;
-const VFS_RESOLVE: u32 = 2;
-const VFS_OPEN: u32 = 3;
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
 const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
 const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
@@ -94,7 +109,7 @@ const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
 struct VfsRequest {
     sender_pid: u32,
     msg_type: u32,
-    payload: [u8; 120],
+    payload: [u8; ops::PATH_PAYLOAD_MAX],
 }
 
 #[repr(C)]
@@ -132,12 +147,9 @@ fn handle_mount(payload: &[u8]) -> VfsReply {
     let path_len = path.iter().position(|&b| b == 0).unwrap_or(path.len());
     let path_hash = fnv32(&path[..path_len]);
 
-    let fs = match fstype {
-        1 => FsType::ExoFs,
-        2 => FsType::ProcFs,
-        3 => FsType::SysFs,
-        4 => FsType::DevFs,
-        _ => {
+    let fs = match FsType::from_wire(fstype) {
+        Some(fs_type) => fs_type,
+        None => {
             return VfsReply {
                 status: -22,
                 blob_id: 0,
@@ -203,25 +215,33 @@ fn handle_mount(payload: &[u8]) -> VfsReply {
 }
 
 fn handle_resolve(payload: &[u8]) -> VfsReply {
-    // payload = chemin null-terminated
-    let path_len = payload
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(payload.len());
-    let path = &payload[..path_len];
+    let mut path = [0u8; ops::PATH_PAYLOAD_MAX + 1];
+    let path_len = match ops::path_payload_to_cstr(payload, &mut path) {
+        Ok(len) => len,
+        Err(status) => {
+            return VfsReply {
+                status,
+                blob_id: 0,
+                fd: -1,
+                _pad: [0; 40],
+            }
+        }
+    };
+    let mut resolved = syscall::ExofsPathResolveResult::default();
 
-    // Appel SYS_EXOFS_PATH_RESOLVE(path_ptr, path_len) → blob_id i64
-    let blob_id = unsafe {
-        syscall::syscall2(
-            syscall::SYS_EXOFS_PATH_RESOLVE,
+    let rc = unsafe {
+        syscall::exofs_path_resolve_raw(
             path.as_ptr() as u64,
             path_len as u64,
+            0,
+            &mut resolved,
+            ops::EXOFS_READ_RIGHTS,
         )
     };
 
-    if blob_id < 0 {
+    if rc < 0 {
         VfsReply {
-            status: blob_id,
+            status: rc,
             blob_id: 0,
             fd: -1,
             _pad: [0; 40],
@@ -229,7 +249,7 @@ fn handle_resolve(payload: &[u8]) -> VfsReply {
     } else {
         VfsReply {
             status: 0,
-            blob_id: blob_id as u64,
+            blob_id: resolved.blob_id_low64(),
             fd: -1,
             _pad: [0; 40],
         }
@@ -237,41 +257,63 @@ fn handle_resolve(payload: &[u8]) -> VfsReply {
 }
 
 fn handle_open(payload: &[u8]) -> VfsReply {
-    // payload[0..8] = blob_id u64, payload[8..12] = flags u32
-    if payload.len() < 12 {
-        return VfsReply {
-            status: -22,
-            blob_id: 0,
-            fd: -1,
-            _pad: [0; 40],
-        };
-    }
-    let blob_id = u64::from_le_bytes([
-        payload[0], payload[1], payload[2], payload[3], payload[4], payload[5], payload[6],
-        payload[7],
-    ]);
-    let _flags = u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
-
-    let fd = unsafe {
-        syscall::syscall3(
-            syscall::SYS_EXOFS_OBJECT_OPEN,
-            blob_id,
-            syscall::O_RDONLY,
-            0,
-        )
+    // Format préféré: payload[0..4] = flags u32 LE, payload[4..] = chemin C.
+    // Compatibilité: si payload[0] ressemble à un chemin, flags=O_RDONLY.
+    let (flags, path_payload) = match ops::open_payload_parts(payload) {
+        Ok(parts) => parts,
+        Err(status) => {
+            return VfsReply {
+                status,
+                blob_id: 0,
+                fd: -1,
+                _pad: [0; 40],
+            }
+        }
     };
+
+    let mut path = [0u8; ops::PATH_PAYLOAD_MAX + 1];
+    let path_len = match ops::path_payload_to_cstr(path_payload, &mut path) {
+        Ok(len) => len,
+        Err(status) => {
+            return VfsReply {
+                status,
+                blob_id: 0,
+                fd: -1,
+                _pad: [0; 40],
+            }
+        }
+    };
+
+    let rights = ops::exofs_rights_for_open(flags);
+
+    let fd = unsafe { syscall::exofs_open_by_path_raw(path.as_ptr() as u64, flags, 0, rights) };
 
     if fd < 0 {
         VfsReply {
             status: fd,
-            blob_id: blob_id,
+            blob_id: 0,
             fd: -1,
             _pad: [0; 40],
         }
     } else {
+        let mut resolved = syscall::ExofsPathResolveResult::default();
+        let resolve_rc = unsafe {
+            syscall::exofs_path_resolve_raw(
+                path.as_ptr() as u64,
+                path_len as u64,
+                0,
+                &mut resolved,
+                ops::EXOFS_READ_RIGHTS,
+            )
+        };
+        let blob_id = if resolve_rc < 0 {
+            0
+        } else {
+            resolved.blob_id_low64()
+        };
         VfsReply {
             status: 0,
-            blob_id: blob_id,
+            blob_id,
             fd,
             _pad: [0; 40],
         }
@@ -323,10 +365,10 @@ fn handle_umount(payload: &[u8]) -> VfsReply {
 
 fn handle_request(req: &VfsRequest) -> VfsReply {
     match req.msg_type {
-        VFS_MOUNT => handle_mount(&req.payload),
-        VFS_RESOLVE => handle_resolve(&req.payload),
-        VFS_OPEN => handle_open(&req.payload),
-        VFS_UMOUNT => handle_umount(&req.payload),
+        ops::VFS_MOUNT => handle_mount(&req.payload),
+        ops::VFS_RESOLVE => handle_resolve(&req.payload),
+        ops::VFS_OPEN => handle_open(&req.payload),
+        ops::VFS_UMOUNT => handle_umount(&req.payload),
         _ => VfsReply {
             status: -22,
             blob_id: 0,
@@ -338,35 +380,26 @@ fn handle_request(req: &VfsRequest) -> VfsReply {
 
 /// Monte les pseudo-filesystems de base au démarrage.
 fn mount_default_namespaces() {
-    // /proc (ProcFs, pas de blob racine)
-    let proc_entry = MountEntry {
-        fs_type: FsType::ProcFs,
-        path_hash: fnv32(b"/proc"),
-        root_blob: 0,
-        active: true,
-    };
-    // /sys (SysFs)
-    let sys_entry = MountEntry {
-        fs_type: FsType::SysFs,
-        path_hash: fnv32(b"/sys"),
-        root_blob: 0,
-        active: true,
-    };
-    // /dev (DevFs)
-    let dev_entry = MountEntry {
-        fs_type: FsType::DevFs,
-        path_hash: fnv32(b"/dev"),
-        root_blob: 0,
-        active: true,
-    };
+    debug_assert!(compat::magic_values_are_layered());
+    debug_assert!(translation_layer::translation_contract_is_sane());
 
     unsafe {
         let mounts = &mut *MOUNTS.0.get();
-        mounts[0] = proc_entry;
-        mounts[1] = sys_entry;
-        mounts[2] = dev_entry;
+        for (idx, spec) in compat::DEFAULT_PSEUDO_MOUNTS.iter().enumerate() {
+            if let Some(fs_type) = FsType::from_wire(spec.fs_type) {
+                mounts[idx] = MountEntry {
+                    fs_type,
+                    path_hash: fnv32(spec.path),
+                    root_blob: spec.root_blob,
+                    active: true,
+                };
+            }
+        }
     }
-    MOUNT_COUNT.store(3, Ordering::Release);
+    MOUNT_COUNT.store(
+        compat::DEFAULT_PSEUDO_MOUNTS.len() as u32,
+        Ordering::Release,
+    );
 }
 
 #[no_mangle]
@@ -389,7 +422,7 @@ pub extern "C" fn _start() -> ! {
     let mut req = VfsRequest {
         sender_pid: 0,
         msg_type: 0,
-        payload: [0u8; 120],
+        payload: [0u8; ops::PATH_PAYLOAD_MAX],
     };
 
     loop {

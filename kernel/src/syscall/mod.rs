@@ -129,6 +129,7 @@ pub use numbers::{
     SYS_GETGID,
     SYS_GETPID,
     SYS_GETPPID,
+    SYS_GETRANDOM,
     SYS_GETTID,
     SYS_GETUID,
     SYS_IOCTL,
