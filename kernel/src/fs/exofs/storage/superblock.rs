@@ -17,6 +17,7 @@ use crate::fs::exofs::core::{DiskOffset, EpochId, ExofsError, ExofsResult};
 use crate::fs::exofs::storage::layout::{BLOCK_SIZE, HEAP_START_OFFSET};
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
 use crate::scheduler::sync::spinlock::SpinLock;
+use core::fmt;
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -329,6 +330,20 @@ pub struct SuperblockManager {
 }
 
 impl SuperblockManager {
+    /// Retourne la taille du disque gérée par ce manager (octets).
+    pub fn disk_size(&self) -> u64 {
+        let disk = self.inner.disk_copy.lock();
+        disk.disk_size_bytes
+    }
+}
+
+impl fmt::Debug for SuperblockManager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SuperblockManager {{ disk_size: {} }}", self.disk_size())
+    }
+}
+
+impl SuperblockManager {
     // ── Initialisation ────────────────────────────────────────────────
 
     /// Monte un volume existant : lit et vérifie les 3 miroirs, récupère le meilleur.
@@ -338,6 +353,15 @@ impl SuperblockManager {
     where
         ReadFn: Fn(DiskOffset, usize) -> ExofsResult<Vec<u8>>,
     {
+        // RÈGLE FS-MOUNT-01 : refuser le montage sur un disque trop petit.
+        // Un disque < MIN_DISK_SIZE ne peut pas contenir les miroirs superblock
+        // + le heap minimum → comportement indéfini sans ce guard.
+        if disk_size < MIN_DISK_SIZE {
+            return Err(ExofsError::DiskTooSmall {
+                actual: disk_size,
+                minimum: MIN_DISK_SIZE,
+            });
+        }
         let offsets = Self::compute_mirror_offsets(disk_size);
         let best = Self::recover_best_mirror(&offsets, &read_fn)?;
 
@@ -365,7 +389,10 @@ impl SuperblockManager {
         WriteFn: FnMut(DiskOffset, &[u8]) -> ExofsResult<usize>,
     {
         if disk_size < MIN_DISK_SIZE {
-            return Err(ExofsError::InvalidSize);
+            return Err(ExofsError::DiskTooSmall {
+                actual: disk_size,
+                minimum: MIN_DISK_SIZE,
+            });
         }
 
         let sb = ExoSuperblockDisk::new_volume(disk_size, volume_name, uuid, created_at);
@@ -807,6 +834,6 @@ mod tests {
     fn min_disk_size_enforced() {
         let r =
             SuperblockManager::format(MIN_DISK_SIZE - 1, b"TooSmall", [0u8; 16], 0, |_, _| Ok(0));
-        assert!(matches!(r, Err(ExofsError::InvalidSize)));
+        assert!(matches!(r, Err(ExofsError::DiskTooSmall { .. })));
     }
 }

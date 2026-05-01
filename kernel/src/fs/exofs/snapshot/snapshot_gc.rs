@@ -369,27 +369,28 @@ impl SnapshotGc {
 use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
-    use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::reset_for_test;
+    use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
 
     fn push_snap_age(_list: &SnapshotList, id: u64, created_at: u64, bytes: u64) {
-        SNAPSHOT_LIST.register(Snapshot {
-            id: SnapshotId(id),
-            epoch_id: EpochId(1),
-            parent_id: None,
-            root_blob: BlobId([0u8; 32]),
-            created_at,
-            n_blobs: 0,
-            total_bytes: bytes,
-            flags: 0,
-            blob_catalog_offset: DiskOffset(0),
-            blob_catalog_size: 0,
-            name: make_snapshot_name(b"gc-test"),
-        })
-        .test_unwrap();
+        SNAPSHOT_LIST
+            .register(Snapshot {
+                id: SnapshotId(id),
+                epoch_id: EpochId(1),
+                parent_id: None,
+                root_blob: BlobId([0u8; 32]),
+                created_at,
+                n_blobs: 0,
+                total_bytes: bytes,
+                flags: 0,
+                blob_catalog_offset: DiskOffset(0),
+                blob_catalog_size: 0,
+                name: make_snapshot_name(b"gc-test"),
+            })
+            .test_unwrap();
     }
 
     #[test]
@@ -431,20 +432,21 @@ mod tests {
         let _guard = reset_for_test();
         let list = SnapshotList::new_const();
         let _ = list;
-        SNAPSHOT_LIST.register(Snapshot {
-            id: SnapshotId(20),
-            epoch_id: EpochId(1),
-            parent_id: None,
-            root_blob: BlobId([0u8; 32]),
-            created_at: 10,
-            n_blobs: 0,
-            total_bytes: 0,
-            flags: flags::PROTECTED,
-            blob_catalog_offset: DiskOffset(0),
-            blob_catalog_size: 0,
-            name: make_snapshot_name(b"protected"),
-        })
-        .test_unwrap();
+        SNAPSHOT_LIST
+            .register(Snapshot {
+                id: SnapshotId(20),
+                epoch_id: EpochId(1),
+                parent_id: None,
+                root_blob: BlobId([0u8; 32]),
+                created_at: 10,
+                n_blobs: 0,
+                total_bytes: 0,
+                flags: flags::PROTECTED,
+                blob_catalog_offset: DiskOffset(0),
+                blob_catalog_size: 0,
+                name: make_snapshot_name(b"protected"),
+            })
+            .test_unwrap();
         let policy = SnapshotRetentionPolicy {
             max_age_ticks: 500,
             respect_protected: true,

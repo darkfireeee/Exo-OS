@@ -12,6 +12,7 @@
 //! - **WRITE-02** : vérification `bytes_written == 128` après écriture slot.
 
 extern crate alloc;
+use super::block_io::{read_array, write_array};
 use super::boot_recovery::BlockDevice;
 use super::recovery_audit::RECOVERY_AUDIT;
 use crate::fs::exofs::core::blob_id::blake3_hash;
@@ -264,15 +265,11 @@ impl SlotRecovery {
         for i in 0..SLOT_COUNT {
             let slot_id = SlotId(i as u8);
             let lba = SLOT_DEFAULT_LBAS[i];
-            let mut buf = [0u8; SLOT_HEADER_SIZE];
 
             // Lecture — erreur I/O → slot invalide, on continue.
-            if device.read_block(lba, &mut buf).is_err() {
-                RECOVERY_AUDIT.record_invalid_magic(lba, 0);
-                continue;
-            }
-
-            match SlotHeaderDisk::from_bytes(&buf) {
+            match read_array::<SLOT_HEADER_SIZE>(device, lba)
+                .and_then(|buf| SlotHeaderDisk::from_bytes(&buf))
+            {
                 Ok(hdr) => {
                     candidates[i] = SlotCandidate {
                         valid: true,
@@ -327,8 +324,7 @@ impl SlotRecovery {
             return Err(ExofsError::InvalidArgument);
         }
         let lba = SLOT_DEFAULT_LBAS[slot_id.0 as usize];
-        let mut buf = [0u8; SLOT_HEADER_SIZE];
-        device.read_block(lba, &mut buf)?;
+        let buf = read_array::<SLOT_HEADER_SIZE>(device, lba)?;
         SlotHeaderDisk::from_bytes(&buf)
     }
 
@@ -361,7 +357,7 @@ impl SlotRecovery {
 
         // Barrière avant écriture (RÈGLE 7).
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        device.write_block(lba, &buf)?;
+        write_array(device, lba, &buf)?;
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
         // Flush NVMe.
@@ -380,7 +376,7 @@ impl SlotRecovery {
         let buf = [0u8; SLOT_HEADER_SIZE];
         let lba = SLOT_DEFAULT_LBAS[slot_id.0 as usize];
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        device.write_block(lba, &buf)?;
+        write_array(device, lba, &buf)?;
         device.flush()
     }
 
@@ -396,18 +392,7 @@ impl SlotRecovery {
         for i in 0..SLOT_COUNT {
             let slot_id = SlotId(i as u8);
             let lba = SLOT_DEFAULT_LBAS[i];
-            let mut buf = [0u8; SLOT_HEADER_SIZE];
-
-            let info = if device.read_block(lba, &mut buf).is_err() {
-                SlotValidationInfo {
-                    slot_id,
-                    lba,
-                    valid: false,
-                    epoch_id: 0,
-                    dirty: false,
-                    io_error: true,
-                }
-            } else {
+            let info = if let Ok(buf) = read_array::<SLOT_HEADER_SIZE>(device, lba) {
                 match SlotHeaderDisk::from_bytes(&buf) {
                     Ok(hdr) => SlotValidationInfo {
                         slot_id,
@@ -425,6 +410,15 @@ impl SlotRecovery {
                         dirty: false,
                         io_error: false,
                     },
+                }
+            } else {
+                SlotValidationInfo {
+                    slot_id,
+                    lba,
+                    valid: false,
+                    epoch_id: 0,
+                    dirty: false,
+                    io_error: true,
                 }
             };
 
@@ -493,6 +487,66 @@ use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
+    use spin::Mutex;
+
+    struct StrictBlockDevice {
+        storage: Mutex<Vec<u8>>,
+        block_size: u32,
+    }
+
+    impl StrictBlockDevice {
+        fn new(block_size: u32, blocks: usize) -> Self {
+            Self {
+                storage: Mutex::new(alloc::vec![0u8; block_size as usize * blocks]),
+                block_size,
+            }
+        }
+    }
+
+    impl BlockDevice for StrictBlockDevice {
+        fn read_block(&self, lba: u64, buf: &mut [u8]) -> ExofsResult<()> {
+            let block_size = self.block_size as usize;
+            if buf.len() != block_size {
+                return Err(ExofsError::InvalidArgument);
+            }
+            let start = lba as usize * block_size;
+            let end = start.saturating_add(block_size);
+            let storage = self.storage.lock();
+            if end > storage.len() {
+                return Err(ExofsError::IoError);
+            }
+            buf.copy_from_slice(&storage[start..end]);
+            Ok(())
+        }
+
+        fn write_block(&self, lba: u64, buf: &[u8]) -> ExofsResult<()> {
+            let block_size = self.block_size as usize;
+            if buf.len() != block_size {
+                return Err(ExofsError::InvalidArgument);
+            }
+            let start = lba as usize * block_size;
+            let end = start.saturating_add(block_size);
+            let mut storage = self.storage.lock();
+            if end > storage.len() {
+                return Err(ExofsError::IoError);
+            }
+            storage[start..end].copy_from_slice(buf);
+            Ok(())
+        }
+
+        fn block_size(&self) -> u32 {
+            self.block_size
+        }
+
+        fn total_blocks(&self) -> u64 {
+            self.storage.lock().len() as u64 / self.block_size as u64
+        }
+
+        fn flush(&self) -> ExofsResult<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn test_slot_id() {
@@ -553,5 +607,23 @@ mod tests {
         assert_eq!(r.epoch_id, EpochId(5));
         assert!(!r.dirty_flag);
         assert_eq!(r.valid_slots, 0b111);
+    }
+
+    #[test]
+    fn test_write_slot_roundtrip_on_strict_block_device() {
+        let mut device = StrictBlockDevice::new(4096, 1024);
+        let mut hdr: SlotHeaderDisk = unsafe { core::mem::zeroed() };
+        hdr.magic = SLOT_MAGIC;
+        hdr.version = SLOT_FORMAT_VERSION;
+        hdr.slot_id = SLOT_A.0;
+        hdr.epoch_id = 77;
+        hdr.root_blob_id = [0x5Au8; 32];
+        hdr.superblock_lba = 0x400;
+        hdr.journal_lba = 0x500;
+
+        SlotRecovery::write_slot(&mut device, SLOT_A, &mut hdr).test_unwrap();
+        let reread = SlotRecovery::read_slot(&device, SLOT_A).test_unwrap();
+        assert_eq!(reread.epoch_id, 77);
+        assert_eq!(reread.root_blob_id, [0x5Au8; 32]);
     }
 }

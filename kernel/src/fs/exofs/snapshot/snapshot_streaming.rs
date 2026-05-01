@@ -441,8 +441,8 @@ impl SnapshotStreamer {
 use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::reset_for_test;
+    use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
     // use crate::fs::exofs::core::blob_id::compute_blob_id;
     use super::super::snapshot::{make_snapshot_name, Snapshot};
@@ -450,20 +450,21 @@ mod tests {
 
     fn push_snap(_list: &SnapshotList, id: u64, n_blobs: u64) {
         let root = BlobId([id as u8; 32]);
-        SNAPSHOT_LIST.register(Snapshot {
-            id: SnapshotId(id),
-            epoch_id: EpochId(1),
-            parent_id: None,
-            root_blob: root,
-            created_at: 0,
-            n_blobs,
-            total_bytes: 0,
-            flags: 0,
-            blob_catalog_offset: DiskOffset(0),
-            blob_catalog_size: 0,
-            name: make_snapshot_name(b"stream-test"),
-        })
-        .test_unwrap();
+        SNAPSHOT_LIST
+            .register(Snapshot {
+                id: SnapshotId(id),
+                epoch_id: EpochId(1),
+                parent_id: None,
+                root_blob: root,
+                created_at: 0,
+                n_blobs,
+                total_bytes: 0,
+                flags: 0,
+                blob_catalog_offset: DiskOffset(0),
+                blob_catalog_size: 0,
+                name: make_snapshot_name(b"stream-test"),
+            })
+            .test_unwrap();
     }
 
     #[test]

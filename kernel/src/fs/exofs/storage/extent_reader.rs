@@ -308,7 +308,9 @@ mod tests {
     #[test]
     fn test_read_blocks_multi() {
         let r = ExtentReader::new();
-        let result = r.read_blocks(DiskOffset(0), 12288, &mock_read).test_unwrap();
+        let result = r
+            .read_blocks(DiskOffset(0), 12288, &mock_read)
+            .test_unwrap();
         assert_eq!(result.bytes_read, 12288);
         assert_eq!(result.segments, 3);
     }
@@ -316,7 +318,9 @@ mod tests {
     #[test]
     fn test_read_eof_terminates() {
         let r = ExtentReader::new();
-        let result = r.read_blocks(DiskOffset(0), 4096, &mock_read_eof).test_unwrap();
+        let result = r
+            .read_blocks(DiskOffset(0), 4096, &mock_read_eof)
+            .test_unwrap();
         assert_eq!(result.bytes_read, 0);
     }
 

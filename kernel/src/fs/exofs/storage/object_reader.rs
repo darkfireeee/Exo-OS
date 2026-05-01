@@ -878,7 +878,8 @@ mod tests {
             Ok(disk[s..s + sz].to_vec())
         };
 
-        let r = ObjectReader::read_object(hdr_off, read_fn, ObjectVerifyMode::HeaderOnly).test_unwrap();
+        let r =
+            ObjectReader::read_object(hdr_off, read_fn, ObjectVerifyMode::HeaderOnly).test_unwrap();
         assert!(r.data.is_empty());
         // N'a dû lire qu'une fois (juste l'en-tête)
         assert_eq!(reads.load(Ordering::Relaxed), 1);

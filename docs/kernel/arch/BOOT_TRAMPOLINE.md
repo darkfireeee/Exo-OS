@@ -1,251 +1,251 @@
-# Trampoline de Boot 32→64 bits — Documentation Technique
+# `boot/trampoline_asm.rs` — trampoline SMP 16 → 32 → 64 bits
 
-> Fichier source : `kernel/src/main.rs`  
-> Section assembleur : `.text.boot` (`.code32`)
+> Fichier source : `kernel/src/arch/x86_64/boot/trampoline_asm.rs`
 
----
-
-## 1. Contexte
-
-GRUB Multiboot2 entre dans le kernel en **mode protégé 32 bits** :
-
-| Registre | Valeur | Description |
-|----------|--------|-------------|
-| `EAX` | `0x36d76289` | Magic Multiboot2 |
-| `EBX` | `< 4 GiB` | Adresse physique de la structure Multiboot2 Info |
-| `PE` | 1 | Bit Protection Enable dans CR0 |
-| `PG` | 0 | Pagination désactivée |
-| `IF` | 0 | Interruptions désactivées |
-| `CS` | flat 32-bit | Base=0, Limit=4 GiB |
-
-Le noyau Rust est compilé en 64 bits (`x86_64-unknown-none`).
-Il est donc nécessaire d'activer le **Long Mode** avant d'appeler
-le premier code Rust.
+Ce trampoline est exécuté par chaque **Application Processor** après les
+`INIT` / `SIPI` envoyés par le BSP. Sa mission est unique : amener l’AP dans
+un état 64 bits minimal, charger la pile dédiée, puis appeler `ap_entry()`.
 
 ---
 
-## 2. Sections mémoire utilisées
+## 1. Rôle fonctionnel
 
-### `.bss` — Tables de pages de boot (zéro-initialisées)
+Le trampoline ne fait pas de politique système.
+Il sert uniquement à :
 
-```
-_boot_pml4    : 4096 octets (aligné 4 KiB) — PML4 root
-_boot_pdpt    : 4096 octets — Page-Directory Pointer Table
-_boot_pd      : 4096 octets — Page Directory (0..1 GiB)
-_boot_pd_high : 4096 octets — Page Directory (3..4 GiB, MMIO APIC)
-_mb2_saved_magic : 4 octets — sauvegarde EAX
-_mb2_saved_info  : 8 octets — sauvegarde EBX (zero-extended)
-```
-
-### `.rodata` — GDT 64 bits minimale
-
-```
-_boot_gdt:
-  [0x00] 0x0000000000000000  — null descriptor
-  [0x08] 0x00af9a000000ffff  — 64-bit code, DPL=0, L=1, P=1
-  [0x10] 0x00cf92000000ffff  — data,        DPL=0, D=1, P=1
-_boot_gdtr:
-  .short 23      — limit = 3*8 - 1
-  .long _boot_gdt — base (physique 32 bits)
-```
-
-### `.text.boot` — Code assembleur 32/64 bits
-
-Point d'entrée ELF : `_start` (mode `.code32`)
-
-### `.boot_stack` — Pile de boot BSP
-
-```
-_exo_boot_stack_top : sommet (64 KiB, type NOLOAD)
-```
+- passer du mode réel au mode protégé
+- activer `PAE`, `LME` et le paging nécessaire au long mode
+- charger la GDT temporaire du trampoline
+- restaurer les paramètres CPU localement utiles
+- transférer le contrôle à Rust via `ap_entry(cpu_id, lapic_id, kernel_stack_top)`
 
 ---
 
-## 3. Séquence d'exécution du trampoline
+## 2. Position mémoire et contrat d’exécution
 
-### Étape 1 : Sauvegarde des arguments Multiboot2
+Le trampoline est copié à l’adresse physique `0x6000`.
 
-```asm
-cli
-cld
-mov dword ptr [_mb2_saved_magic], eax   ; EAX = 0x36d76289
-mov dword ptr [_mb2_saved_info],  ebx   ; EBX = adresse Multiboot2 Info
-mov dword ptr [_mb2_saved_info+4], 0    ; zero-extend à 64 bits
-lea esp, [_exo_boot_stack_top]
-and esp, -16
-```
+### Pourquoi `0x6000`
 
-EAX et EBX seraient écrasés par la construction des page tables.
+- c’est l’emplacement classique de la page SIPI (`TRAMPOLINE_PAGE = 6`)
+- l’adresse est sous 1 MiB
+- elle est accessible très tôt avec l’identity mapping de boot
 
-### Étape 2 : Construction du PD — identity map 0..1 GiB
+### Contrat d’entrée
 
-```asm
-xor ecx, ecx
-_pd_loop:
-  mov eax, ecx
-  shl eax, 21           ; adresse physique = index × 2 MiB
-  or  eax, 0x83         ; flags : Present | R/W | PageSize (huge 2 MiB)
-  lea edi, [_boot_pd]
-  mov ebx, ecx
-  shl ebx, 3            ; offset = index × 8 octets
-  add edi, ebx
-  mov dword ptr [edi],     eax
-  mov dword ptr [edi + 4], 0
-  inc ecx
-  cmp ecx, 512
-  jl  _pd_loop
-```
+Au moment du `SIPI` :
 
-Résultat : 512 entrées × 2 MiB = **1 GiB identity-mapped**.
-
-### Étape 3 : Construction de `_boot_pd_high` — MMIO APIC
-
-Les registres MMIO du Local APIC et de l'I/O APIC sont situés dans
-le 4ème GiB (> 1 GiB), hors de l'identity map standard.
-
-```
-IOAPIC : physique 0xFEC00000
-LAPIC  : physique 0xFEE00000
-```
-
-Calcul des indices dans `_boot_pd_high` (PD couvrant 3..4 GiB) :
-```
-index = (phys - 3*GiB) / 2MiB
-  IOAPIC : (0xFEC00000 - 0xC0000000) / 0x200000 = 0x3EC00000 / 0x200000 = 502
-  LAPIC  : (0xFEE00000 - 0xC0000000) / 0x200000 = 0x3EE00000 / 0x200000 = 503
-```
-
-```asm
-; PD_high[502] = IOAPIC (offset 502×8 = 4016)
-lea edi, [_boot_pd_high]
-add edi, 4016
-mov dword ptr [edi],     0xFEC00083   ; phys 0xFEC00000 | P | R/W | PS
-mov dword ptr [edi + 4], 0
-
-; PD_high[503] = LAPIC (offset 503×8 = 4024)
-lea edi, [_boot_pd_high]
-add edi, 4024
-mov dword ptr [edi],     0xFEE00083   ; phys 0xFEE00000 | P | R/W | PS
-mov dword ptr [edi + 4], 0
-```
-
-### Étape 4 : Câblage de la hiérarchie de pages
-
-```asm
-; PDPT[0] → PD (identity 0..1 GiB)
-lea eax, [_boot_pd]
-or  eax, 0x03                          ; P | R/W
-mov dword ptr [_boot_pdpt],     eax
-mov dword ptr [_boot_pdpt + 4], 0
-
-; PDPT[3] → PD_high (MMIO APIC 3..4 GiB) ; offset = 3×8 = 24
-lea eax, [_boot_pd_high]
-or  eax, 0x03
-mov dword ptr [_boot_pdpt + 24], eax
-mov dword ptr [_boot_pdpt + 28], 0
-
-; PML4[0] → PDPT
-lea eax, [_boot_pdpt]
-or  eax, 0x03
-mov dword ptr [_boot_pml4],     eax
-mov dword ptr [_boot_pml4 + 4], 0
-```
-
-### Étape 5 : Activation du Long Mode
-
-```asm
-lgdt [_boot_gdtr]                  ; charger la GDT 64 bits
-
-lea eax, [_boot_pml4]
-mov cr3, eax                       ; CR3 = adresse physique PML4
-
-mov eax, cr4
-or  eax, 0x20                      ; CR4.PAE = 1 (Physical Address Extension)
-mov cr4, eax
-
-mov ecx, 0xC0000080                ; MSR EFER
-rdmsr
-or  eax, 0x100                     ; EFER.LME = 1 (Long Mode Enable)
-wrmsr
-
-mov eax, cr0
-or  eax, 0x80000000                ; CR0.PG = 1 → active Long Mode
-mov cr0, eax
-```
-
-### Étape 6 : Saut lointain vers CS=0x08 (mode 64 bits pur)
-
-```asm
-lea eax, [_start64]
-push dword ptr 0x08    ; CS = 0x08 (64-bit code descriptor)
-push eax               ; EIP = adresse de _start64
-retf                   ; far return : charge CS:EIP → mode 64 bits
-```
-
-Après le `retf`, le CPU est en mode 64 bits. Le premier code 64 bits est `_start64`.
+| Élément | Valeur attendue |
+|---|---|
+| mode CPU | réel 16 bits |
+| `CS:IP` | `0x0000:0x6000` |
+| `IF` | 0 |
+| trampoline copié | oui |
+| PML4 du BSP écrit dans le trampoline | oui |
 
 ---
 
-## 4. Code 64 bits : `_start64`
+## 3. Layout interne du trampoline
 
-```asm
-.code64
-_start64:
-  mov al, 'X'
-  out 0xe9, al             ; marqueur debug : trampoline réussi
+Le code et les données partagées vivent dans la même image.
 
-  mov ax, 0x10             ; DS = 0x10 (data descriptor)
-  mov ds, ax
-  mov es, ax
-  mov fs, ax
-  mov gs, ax
-  mov ss, ax
+```text
+0x6000 ─────────────────────────────────────────────
+0x0000 : code 16 bits
+0x0010 : handshake u32     (AP_ALIVE_MAGIC)
+0x0020 : pml4_phys u64     (CR3 du BSP)
+0x0028 : cpu_count u32     (réservé / diagnostic)
+0x0030 : code 32 bits
+0x0050 : GDT/GDTR temporaires
+0x0080 : code 64 bits
+0x00C0 : point d’entrée final 64 bits
+────────────────────────────────────────────────────
+```
 
-  lea rsp, [_exo_boot_stack_top]  ; charge RSP 64 bits
-  and rsp, -16
+### Vue ASCII du flux
 
-  ; Restaurer les arguments Multiboot2 pour kernel_main
-  mov edi, dword ptr [_mb2_saved_magic]   ; arg1 : mb2_magic (u32)
-  mov rsi, qword ptr [_mb2_saved_info]    ; arg2 : mb2_info  (u64)
-  xor rdx, rdx                            ; arg3 : rsdp_phys = 0 (auto-scan)
-
-  call kernel_main
+```text
+[16 bits] → [32 bits] → [64 bits] → ap_entry()
+   │            │           │
+   │            │           └─ pile AP + paramètres Rust
+   │            └─ PAE / CR3 / EFER.LME / CR0.PG
+   └─ segments + saut lointain
 ```
 
 ---
 
-## 5. Mapping virtuel résultant
+## 4. Séquence détaillée
 
+### 4.1 Phase 16 bits
+
+Le trampoline démarre avec :
+
+- désactivation des interruptions (`cli`)
+- remise à zéro des segments (`ds/es/ss = 0`)
+- chargement de la GDT temporaire
+- bascule vers le mode protégé avec `CR0.PE = 1`
+
+Ensuite il saute manuellement en 32 bits.
+
+### 4.2 Phase 32 bits
+
+Dans cette phase, le trampoline prépare le passage en long mode :
+
+- charge les segments noyau 32 bits
+- active `CR4.PAE`
+- charge `CR3` avec le PML4 du BSP
+- active `EFER.LME`
+- active `CR0.PG`
+
+#### Diagramme de transition
+
+```text
+CR0.PE=1
+   ↓
+mode protégé 32 bits
+   ↓
+CR4.PAE=1
+CR3 = PML4 BSP
+EFER.LME=1
+CR0.PG=1
+   ↓
+long mode armé
 ```
-Adresse virtuelle            Adresse physique     Contenu
-─────────────────────────────────────────────────────────────
-0x0000_0000_0000_0000        0x0000_0000_0000_0000  kernel ELF, BIOS area
-  ...                        ...                    (512 × huge pages 2MiB)
-0x0000_0000_3FFF_FFFF        0x0000_0000_3FFF_FFFF  fin identity map 1 GiB
 
-0x0000_00FE_C0_0000          0x00000000_FEC00000    IOAPIC MMIO (2 MiB page)
-0x0000_00FE_E0_0000          0x00000000_FEE00000    LAPIC MMIO  (2 MiB page)
-```
+### 4.3 Phase 64 bits
 
-> Adresses virtuelles = adresses physiques (identity mapping) → le code
-> d'init APIC peut utiliser directement des adresses physiques comme pointeurs.
+Une fois la transition validée, le trampoline :
+
+- charge la pile AP en `rsp`
+- aligne la pile sur 16 octets
+- lit `cpu_id` et `lapic_id` dans la zone partagée
+- appelle `ap_entry()`
 
 ---
 
-## 6. Contraintes et invariants
+## 5. GDT temporaire
 
-- Toutes les adresses de symboles doivent être < 1 GiB (kernel chargé à 1 MiB)
-- La stack de boot (64 KiB) doit être alignée sur 16 octets pour les appels Rust
-- `CR3` doit contenir une adresse physique 4 KiB-alignée
-- `EFER.LME` doit être mis **avant** `CR0.PG`
-- Le `retf` doit avoir CS correspondant à un descripteur 64 bits dans la GDT
+Le trampoline embarque sa propre GDT minimale.
+
+```text
+null descriptor
+descriptor code 64 bits
+descriptor data 32 bits
+```
+
+### Pourquoi une GDT temporaire
+
+Parce que l’AP doit survivre au saut entre les modes avant d’utiliser la
+GDT/IST complète configurée par `gdt::init_gdt_for_cpu()`.
 
 ---
 
-## 7. Remarques de sécurité
+## 6. Installation par le BSP
 
-Les pages APIC MMIO sont mappées avec le flag `P | R/W | PS`.
-Elles **ne disposent pas** du flag `NX` (no-execute) car la page directory
-de boot ne supporte pas les attributs étendus (PA high bits non utilisés ici).
-Après l'init complète de la mémoire virtuelle, ces pages seront remappées
-avec des attributs corrects (NX + UC = Uncacheable pour MMIO).
+La fonction Rust `install_trampoline()` fait trois choses :
+
+1. copie le trampoline en mémoire physique à `0x6000`
+2. récupère le `CR3` courant du BSP
+3. écrit ce `CR3` à l’offset `0x20`
+
+### Schéma
+
+```text
+trampoline binaire linker
+        │
+        ├─ copy_nonoverlapping()
+        │
+        ▼
+   phys 0x6000
+        │
+        └─ offset 0x20 = PML4 BSP
+```
+
+---
+
+## 7. Handshake BSP ↔ AP
+
+Le BSP surveille une valeur magique écrite par l’AP.
+
+```text
+BSP:  écrire 0 dans [0x6010]
+AP :  démarrer trampoline
+AP :  écrire AP_ALIVE_MAGIC dans [0x6010]
+BSP:  boucle d’attente jusqu’au signal
+```
+
+### Pourquoi ce handshake
+
+- il permet de distinguer un AP vivant d’un AP silencieux
+- il protège contre les chipsets qui nécessitent deux `SIPI`
+- il fournit un point de diagnostic simple pour le boot SMP
+
+---
+
+## 8. Paramètres transmis à `ap_entry()`
+
+```text
+cpu_id            → argument 1 (`edi`)
+lapic_id          → argument 2 (`esi`)
+kernel_stack_top  → argument 3 (`rdx`)
+```
+
+### Rôle de `ap_entry()`
+
+Une fois appelée, la partie assembleur du trampoline a fini son travail.
+Le Rust prend alors en charge :
+
+- `percpu` pour l’AP
+- GDT/TSS locaux
+- IDT partagée
+- `SYSCALL`
+- LAPIC
+- TSC
+- FPU
+- mitigations
+- publication du contexte d’attente avant `sti`
+
+---
+
+## 9. Mapping logique des zones
+
+```text
+0x6000  trampoline_start
+0x6010  AP handshake magic
+0x6020  PML4 physique BSP
+0x6028  cpu_count / réserves
+0x6050  GDT/GDTR temporaire
+0x6080  code 32 bits
+0x60C0  code 64 bits
+```
+
+---
+
+## 10. Contraintes et invariants
+
+- le trampoline doit rester sous 1 MiB
+- le BSP doit avoir publié un PML4 valide avant `smp_boot_aps()`
+- `TRAMPOLINE_PHYS` doit être identité-mappé pendant l’installation
+- la pile AP doit être accessible avant l’entrée 64 bits
+- le saut final ne doit jamais revenir ; un `hlt` de secours est prévu
+
+---
+
+## 11. Sécurité et robustesse
+
+### Ce que le trampoline ne doit pas faire
+
+- aucune allocation
+- aucun appel à l’allocateur dynamique
+- aucune dépendance à un scheduler déjà vivant
+- aucun accès mémoire hors contrat d’identity mapping
+
+### Risques couverts
+
+- AP absent ou désactivé dans la MADT
+- chipset nécessitant deux `SIPI`
+- AP qui n’atteint pas le long mode
+- AP qui n’exécute jamais `ap_entry()`
+
+Dans tous ces cas, le BSP retombe sur un timeout d’attente plutôt que de
+se bloquer définitivement.

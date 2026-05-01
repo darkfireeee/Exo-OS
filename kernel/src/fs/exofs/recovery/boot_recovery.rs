@@ -186,7 +186,12 @@ impl BootRecovery {
         // ── Étape 1 : sélection du slot ────────────────────────────────────
         let slot_result = super::slot_recovery::SlotRecovery::select_best(device).map_err(|e| {
             RECOVERY_LOG.log_error(0x01, 0);
-            RECOVERY_AUDIT.record_recovery_failed(EpochId(0), e as u32);
+            // Convertir l'erreur ExofsError en code errno POSIX (négatif),
+            // puis passer la valeur errno positive (u32) à l'audit pour lisibilité.
+            RECOVERY_AUDIT.record_recovery_failed(
+                EpochId(0),
+                (-crate::syscall::errno::exofs_err_to_errno(e)) as u32,
+            );
             e
         })?;
 

@@ -256,19 +256,16 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     ipc::ring::spsc::init_spsc_rings();
     // BUG-C2B FIX: réserver un pool SHM physique dédié avant l'initialisation IPC.
     const SHM_POOL_ORDER: usize = 8; // 2^8 pages = 256 pages = 1 MiB
-    let shm_pool = match crate::memory::alloc_pages(
-        SHM_POOL_ORDER,
-        crate::memory::AllocFlags::ZEROED,
-    ) {
-        Ok(pool) => pool,
-        Err(err) => {
-            panic!(
-                "ipc shm pool allocation failed: order={} err={:?}",
-                SHM_POOL_ORDER,
-                err
-            );
-        }
-    };
+    let shm_pool =
+        match crate::memory::alloc_pages(SHM_POOL_ORDER, crate::memory::AllocFlags::ZEROED) {
+            Ok(pool) => pool,
+            Err(err) => {
+                panic!(
+                    "ipc shm pool allocation failed: order={} err={:?}",
+                    SHM_POOL_ORDER, err
+                );
+            }
+        };
     crate::ipc::ipc_init(
         shm_pool.start_address().as_u64(),
         1, // nr_numa_nodes — à lire depuis ACPI NUMA si disponible

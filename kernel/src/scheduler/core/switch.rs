@@ -418,19 +418,17 @@ pub unsafe fn schedule_block(
                 }
             }
         }
-        PickResult::KeepRunning | PickResult::GoIdle => {
-            match idle_thread {
-                Some(idle) if !core::ptr::eq(current, idle.as_ptr()) => {
-                    context_switch(current, &mut *idle.as_ptr());
-                }
-                _ => {
-                    panic!(
-                        "schedule_block: pick_next sans idle_thread sur cpu {}",
-                        rq.cpu.0
-                    );
-                }
+        PickResult::KeepRunning | PickResult::GoIdle => match idle_thread {
+            Some(idle) if !core::ptr::eq(current, idle.as_ptr()) => {
+                context_switch(current, &mut *idle.as_ptr());
             }
-        }
+            _ => {
+                panic!(
+                    "schedule_block: pick_next sans idle_thread sur cpu {}",
+                    rq.cpu.0
+                );
+            }
+        },
     }
 }
 

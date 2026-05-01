@@ -12,6 +12,7 @@
 //! - **RÈGLE 7** : barrière `SeqCst` entre les trois phases data→root→record.
 
 extern crate alloc;
+use super::block_io::{read_array, read_bytes, read_bytes_at, write_bytes};
 use super::boot_recovery::BlockDevice;
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
@@ -68,13 +69,13 @@ pub struct EpochJournalHeaderDisk {
     /// Checksum CRC32 du champ `n_records` + `first_lba` + `epoch_id`.
     pub crc32: u32,
     /// Rembourrage final.
-    pub _pad2: [u8; 12],
+    pub _pad2: [u8; 20],
 }
 
-// const _: () = assert!(
-//     core::mem::size_of::<EpochJournalHeaderDisk>() == EPOCH_JOURNAL_HDR_SIZE,
-//     "EpochJournalHeaderDisk doit faire 64 octets"
-// );
+const _: () = assert!(
+    core::mem::size_of::<EpochJournalHeaderDisk>() == EPOCH_JOURNAL_HDR_SIZE,
+    "EpochJournalHeaderDisk doit faire 64 octets"
+);
 
 impl EpochJournalHeaderDisk {
     /// Désérialise depuis 64 octets avec vérification HDR-03.
@@ -268,9 +269,7 @@ impl EpochReplay {
         RECOVERY_LOG.log_replay_start(epoch_id.0);
 
         // ── Phase 0 : lecture de l'en-tête du journal ──────────────────────
-        let mut hdr_buf = [0u8; EPOCH_JOURNAL_HDR_SIZE];
-        device
-            .read_block(opts.journal_lba, &mut hdr_buf)
+        let hdr_buf = read_array::<EPOCH_JOURNAL_HDR_SIZE>(device, opts.journal_lba)
             .map_err(|_| ExofsError::IoError)?;
 
         let journal_hdr = EpochJournalHeaderDisk::from_bytes(&hdr_buf).map_err(|e| {
@@ -299,17 +298,11 @@ impl EpochReplay {
         let first_record_lba = journal_hdr.first_lba;
 
         for seq in 0..n_records {
-            // ARITH-02 : checked_add pour le LBA.
-            let rec_block_idx = (seq * EPOCH_RECORD_SIZE)
-                .checked_div(device.block_size() as usize)
-                .ok_or(ExofsError::OffsetOverflow)?;
-            let record_lba = first_record_lba
-                .checked_add(rec_block_idx as u64)
-                .ok_or(ExofsError::OffsetOverflow)?;
-
-            // Lire le bloc contenant l'enregistrement.
             let mut rec_buf = [0u8; EPOCH_RECORD_SIZE];
-            if device.read_block(record_lba, &mut rec_buf).is_err() {
+            let rec_offset = seq
+                .checked_mul(EPOCH_RECORD_SIZE)
+                .ok_or(ExofsError::OffsetOverflow)?;
+            if read_bytes_at(device, first_record_lba, rec_offset, &mut rec_buf).is_err() {
                 result.n_io_error = result.n_io_error.saturating_add(1);
                 if opts.stop_on_invalid {
                     break;
@@ -345,7 +338,7 @@ impl EpochReplay {
             // Lire les données source.
             let data_len = rec.data_len as usize;
             let mut data_buf = vec![0u8; data_len];
-            if device.read_block(rec.data_lba, &mut data_buf).is_err() {
+            if read_bytes(device, rec.data_lba, &mut data_buf).is_err() {
                 result.n_io_error = result.n_io_error.saturating_add(1);
                 if opts.stop_on_invalid {
                     break;
@@ -357,7 +350,7 @@ impl EpochReplay {
             let blob_id = rec.blob_id();
             if !verify_blob_id(&blob_id, &data_buf) {
                 // Vérification secondaire : comparer le data_hash Blake3.
-                let computed_hash = blake3_hash(data_buf.as_slice().try_into().unwrap_or(&[]));
+                let computed_hash = blake3_hash(&data_buf);
                 if computed_hash != rec.data_hash {
                     result.n_hash_fail = result.n_hash_fail.saturating_add(1);
                     RECOVERY_AUDIT.record_checksum_invalid(rec.data_lba, 0, 0);
@@ -380,7 +373,7 @@ impl EpochReplay {
             core::sync::atomic::fence(Ordering::SeqCst);
 
             // Écriture des données.
-            if device.write_block(rec.data_lba, &data_buf).is_err() {
+            if write_bytes(device, rec.data_lba, &data_buf).is_err() {
                 result.n_io_error = result.n_io_error.saturating_add(1);
                 if opts.stop_on_invalid {
                     break;
@@ -417,10 +410,8 @@ impl EpochReplay {
         epoch_id: EpochId,
         journal_lba: u64,
     ) -> ExofsResult<JournalValidationReport> {
-        let mut hdr_buf = [0u8; EPOCH_JOURNAL_HDR_SIZE];
-        device
-            .read_block(journal_lba, &mut hdr_buf)
-            .map_err(|_| ExofsError::IoError)?;
+        let hdr_buf =
+            read_array::<EPOCH_JOURNAL_HDR_SIZE>(device, journal_lba).map_err(|_| ExofsError::IoError)?;
 
         let hdr = EpochJournalHeaderDisk::from_bytes(&hdr_buf)?;
 
@@ -434,14 +425,11 @@ impl EpochReplay {
         let bad_hash = 0u32;
 
         for seq in 0..n_records.min(EPOCH_RECORD_MAX) {
-            let block_idx = (seq * EPOCH_RECORD_SIZE) / device.block_size() as usize;
-            let rec_lba = hdr
-                .first_lba
-                .checked_add(block_idx as u64)
-                .unwrap_or(u64::MAX);
-
             let mut buf = [0u8; EPOCH_RECORD_SIZE];
-            if device.read_block(rec_lba, &mut buf).is_err() {
+            let rec_offset = seq
+                .checked_mul(EPOCH_RECORD_SIZE)
+                .ok_or(ExofsError::OffsetOverflow)?;
+            if read_bytes_at(device, hdr.first_lba, rec_offset, &mut buf).is_err() {
                 break;
             }
 
@@ -517,6 +505,67 @@ use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::exofs::recovery::block_io::write_bytes_at;
+    use alloc::vec::Vec;
+    use spin::Mutex;
+
+    struct StrictBlockDevice {
+        storage: Mutex<Vec<u8>>,
+        block_size: u32,
+    }
+
+    impl StrictBlockDevice {
+        fn new(block_size: u32, blocks: usize) -> Self {
+            Self {
+                storage: Mutex::new(alloc::vec![0u8; block_size as usize * blocks]),
+                block_size,
+            }
+        }
+    }
+
+    impl BlockDevice for StrictBlockDevice {
+        fn read_block(&self, lba: u64, buf: &mut [u8]) -> ExofsResult<()> {
+            let block_size = self.block_size as usize;
+            if buf.len() != block_size {
+                return Err(ExofsError::InvalidArgument);
+            }
+            let start = lba as usize * block_size;
+            let end = start.saturating_add(block_size);
+            let storage = self.storage.lock();
+            if end > storage.len() {
+                return Err(ExofsError::IoError);
+            }
+            buf.copy_from_slice(&storage[start..end]);
+            Ok(())
+        }
+
+        fn write_block(&self, lba: u64, buf: &[u8]) -> ExofsResult<()> {
+            let block_size = self.block_size as usize;
+            if buf.len() != block_size {
+                return Err(ExofsError::InvalidArgument);
+            }
+            let start = lba as usize * block_size;
+            let end = start.saturating_add(block_size);
+            let mut storage = self.storage.lock();
+            if end > storage.len() {
+                return Err(ExofsError::IoError);
+            }
+            storage[start..end].copy_from_slice(buf);
+            Ok(())
+        }
+
+        fn block_size(&self) -> u32 {
+            self.block_size
+        }
+
+        fn total_blocks(&self) -> u64 {
+            self.storage.lock().len() as u64 / self.block_size as u64
+        }
+
+        fn flush(&self) -> ExofsResult<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn test_epoch_record_roundtrip() {
@@ -574,5 +623,56 @@ mod tests {
         assert_eq!(opts.journal_lba, EPOCH_JOURNAL_DEFAULT_LBA);
         assert!(!opts.dry_run);
         assert_eq!(opts.max_records, EPOCH_RECORD_MAX);
+    }
+
+    #[test]
+    fn test_validate_journal_reads_packed_records_on_strict_block_device() {
+        let mut device = StrictBlockDevice::new(4096, 256);
+        let journal_lba = 24;
+        let first_lba = 32;
+        let epoch_id = EpochId(9);
+
+        let hdr = EpochJournalHeaderDisk {
+            magic: EPOCH_JOURNAL_HDR_MAGIC,
+            version: 1,
+            flags: 0x03,
+            _pad0: [0u8; 6],
+            epoch_id: epoch_id.0,
+            n_records: 2,
+            _pad1: 0,
+            first_lba,
+            crc32: 0,
+            _pad2: [0u8; 20],
+        };
+        let hdr_raw: [u8; EPOCH_JOURNAL_HDR_SIZE] = unsafe { core::mem::transmute_copy(&hdr) };
+        write_bytes_at(&mut device, journal_lba, 0, &hdr_raw).test_unwrap();
+
+        let rec1 = EpochRecord {
+            magic: EPOCH_RECORD_MAGIC,
+            epoch_id: epoch_id.0,
+            blob_id: [0x11; 32],
+            data_lba: 100,
+            data_len: 128,
+            seq_num: 0,
+            data_hash: [0x22; 32],
+        };
+        let rec2 = EpochRecord {
+            magic: EPOCH_RECORD_MAGIC,
+            epoch_id: epoch_id.0,
+            blob_id: [0x33; 32],
+            data_lba: 104,
+            data_len: 256,
+            seq_num: 1,
+            data_hash: [0x44; 32],
+        };
+        write_bytes_at(&mut device, first_lba, 0, &rec1.to_bytes()).test_unwrap();
+        write_bytes_at(&mut device, first_lba, EPOCH_RECORD_SIZE, &rec2.to_bytes()).test_unwrap();
+
+        let report = EpochReplay::validate_journal(&device, epoch_id, journal_lba).test_unwrap();
+        assert_eq!(report.n_declared, 2);
+        assert_eq!(report.n_valid, 2);
+        assert_eq!(report.n_bad_magic, 0);
+        assert!(report.is_sealed);
+        assert!(report.is_committed);
     }
 }

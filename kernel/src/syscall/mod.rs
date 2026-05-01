@@ -201,6 +201,25 @@ pub use compat::compat_stats;
 /// Constantes open flags, mmap, prot — utilisées par table.rs et userland.
 pub use compat::posix::{mmap_flags, open_flags, prot_flags, seek_whence, signals};
 
+/// Pont POSIX/FS public — réutilisable par les handlers et l'intégration kernel.
+pub use fs_bridge::{
+    bridge_result as fs_bridge_result, fs_bridge_init, fs_close, fs_dup, fs_dup2, fs_fcntl,
+    fs_fstat, fs_getdents64, fs_lseek, fs_lstat, fs_mkdir, fs_open, fs_openat, fs_read,
+    fs_readlink, fs_readlinkat, fs_rmdir, fs_stat, fs_symlink, fs_symlinkat, fs_unlink, fs_write,
+    is_fs_ready, FsBridgeError,
+};
+
+/// Entrées syscall ExoFS natives exportées pour l'ABI et l'intégration userland.
+pub use crate::fs::exofs::syscall::{
+    dispatch_exofs_syscall, dispatch_exofs_syscall_counted, sys_exofs_epoch_commit,
+    sys_exofs_export_object, sys_exofs_gc_trigger, sys_exofs_get_content_hash,
+    sys_exofs_import_object, sys_exofs_object_create, sys_exofs_object_delete,
+    sys_exofs_object_open, sys_exofs_object_read, sys_exofs_object_set_meta, sys_exofs_object_stat,
+    sys_exofs_object_write, sys_exofs_open_by_path, sys_exofs_path_resolve, sys_exofs_quota_query,
+    sys_exofs_readdir, sys_exofs_relation_create, sys_exofs_relation_query,
+    sys_exofs_snapshot_create, sys_exofs_snapshot_list, sys_exofs_snapshot_mount, ExofsSyscallArgs,
+};
+
 // Lien vers le SyscallFrame défini dans arch/
 pub use crate::arch::x86_64::syscall::SyscallFrame;
 
@@ -244,5 +263,22 @@ pub fn module_stats() -> SyscallModuleStats {
         dispatch: dispatch_stats(),
         fast_path: fast_path_stats(),
         compat: compat_stats(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fs_syscall_exports_are_visible() {
+        let _ = fs_open;
+        let _ = fs_getdents64;
+        let _ = sys_exofs_open_by_path;
+        let _ = sys_exofs_readdir;
+        let _ = dispatch_exofs_syscall_counted;
+
+        assert!(is_exofs_syscall(SYS_EXOFS_OPEN_BY_PATH));
+        assert!(is_exofs_syscall(SYS_EXOFS_READDIR));
     }
 }

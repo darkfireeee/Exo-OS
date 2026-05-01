@@ -11,6 +11,7 @@
 //! - **ARITH-02** : `checked_add` pour les offsets et compteurs.
 
 extern crate alloc;
+use super::block_io::{read_array, read_bytes};
 use super::boot_recovery::BlockDevice;
 use super::fsck_phase1::Phase1Report;
 use super::recovery_audit::RECOVERY_AUDIT;
@@ -232,6 +233,8 @@ pub struct Phase2Report {
     pub orphans: u64,
     /// Table de comptage de référence construite.
     pub ref_counter: BlobRefCounter,
+    /// Entrées d'allocation validées pendant le scan.
+    pub alloc_entries: Vec<AllocEntry>,
 }
 
 impl Phase2Report {
@@ -245,6 +248,11 @@ impl Phase2Report {
     #[inline]
     pub fn error_count(&self) -> usize {
         self.errors.len()
+    }
+
+    /// Itère sur les entrées de la table d'allocation validées.
+    pub fn alloc_entries_iter(&self) -> core::slice::Iter<'_, AllocEntry> {
+        self.alloc_entries.iter()
     }
 }
 
@@ -320,6 +328,7 @@ impl FsckPhase2 {
                     blobs_hash_err: 0,
                     orphans: 0,
                     ref_counter: BlobRefCounter::new(),
+                    alloc_entries: Vec::new(),
                 };
                 RECOVERY_LOG.log_phase_done(2, 0);
                 return Ok(report);
@@ -333,8 +342,9 @@ impl FsckPhase2 {
         let mut blobs_walked: u64 = 0;
         let mut blobs_ok: u64 = 0;
         let mut blobs_hash_err: u64 = 0;
-        let orphans: u64 = 0;
         let mut ref_counter = BlobRefCounter::new();
+        let mut alloc_entries: Vec<AllocEntry> = Vec::new();
+        let mut parents: BTreeMap<[u8; 32], Option<[u8; 32]>> = BTreeMap::new();
 
         // Parcourir la table d'allocation bloc par bloc.
         let entries_per_block = (device.block_size() as usize)
@@ -362,7 +372,8 @@ impl FsckPhase2 {
                     break 'outer;
                 }
 
-                let entry_bytes: &[u8; 48] = match block_buf[off..off + 48].try_into() {
+                let entry_bytes: &[u8; ALLOC_ENTRY_SIZE] =
+                    match block_buf[off..off + ALLOC_ENTRY_SIZE].try_into() {
                     Ok(b) => b,
                     Err(_) => break 'outer,
                 };
@@ -377,18 +388,20 @@ impl FsckPhase2 {
                 let entry: AllocEntry = unsafe { core::mem::transmute_copy(entry_bytes) };
 
                 // Lire l'en-tête du blob.
-                let mut hdr_buf = [0u8; BLOB_HEADER_SIZE];
-                if device.read_block(entry.hdr_lba, &mut hdr_buf).is_err() {
-                    errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-                    errors.push(Phase2Error {
-                        kind: Phase2ErrorKind::IoError,
-                        blob_id: entry.blob_id,
-                        lba: entry.hdr_lba,
-                        detail: 0,
-                    });
-                    total_read += 1;
-                    continue;
-                }
+                let hdr_buf = match read_array::<BLOB_HEADER_SIZE>(device, entry.hdr_lba) {
+                    Ok(buf) => buf,
+                    Err(_) => {
+                        errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                        errors.push(Phase2Error {
+                            kind: Phase2ErrorKind::IoError,
+                            blob_id: entry.blob_id,
+                            lba: entry.hdr_lba,
+                            detail: 0,
+                        });
+                        total_read += 1;
+                        continue;
+                    }
+                };
 
                 // HDR-03 : magic EN PREMIER.
                 let hdr = match BlobHeaderDisk::from_bytes(&hdr_buf) {
@@ -413,11 +426,23 @@ impl FsckPhase2 {
 
                 blobs_walked = blobs_walked.checked_add(1).unwrap_or(u64::MAX);
 
+                let alloc_entry = AllocEntry {
+                    blob_id: hdr.blob_id,
+                    hdr_lba: entry.hdr_lba,
+                    data_lba: hdr.data_lba,
+                    data_len: hdr.data_len,
+                };
+                alloc_entries
+                    .try_reserve(1)
+                    .map_err(|_| ExofsError::NoMemory)?;
+                alloc_entries.push(alloc_entry);
+                parents.insert(hdr.blob_id, hdr.parent_blob_id().map(|parent| parent.0));
+
                 // Lire les données pour HASH-02.
                 let data_len = hdr.data_len as usize;
                 if data_len > 0 && data_len <= 64 * 1024 * 1024 {
                     let mut data_buf = alloc::vec![0u8; data_len];
-                    if device.read_block(hdr.data_lba, &mut data_buf).is_ok() {
+                    if read_bytes(device, hdr.data_lba, &mut data_buf).is_ok() {
                         // HASH-02 : verify_blob_id sur données RAW.
                         let blob_id = hdr.blob_id();
                         if verify_blob_id(&blob_id, &data_buf) {
@@ -436,16 +461,7 @@ impl FsckPhase2 {
                     }
                 }
 
-                // OOM-02 : try_reserve dans increment.
-                ref_counter.increment(&hdr.blob_id)?;
-
-                // Incrémenter le compteur du parent si présent.
-                if let Some(parent) = hdr.parent_blob_id() {
-                    ref_counter.increment(&parent.0)?;
-                }
-
                 total_read += 1;
-                blobs_walked = blobs_walked.checked_add(1).unwrap_or(u64::MAX);
             }
 
             // Avancer au bloc suivant de la table.
@@ -460,6 +476,28 @@ impl FsckPhase2 {
             }
         }
 
+        let mut orphans: u64 = 0;
+        let mut reachability_cache: BTreeMap<[u8; 32], bool> = BTreeMap::new();
+        for entry in &alloc_entries {
+            let (reachable, anomaly) =
+                Self::resolve_reachability(&entry.blob_id, &parents, &mut reachability_cache);
+            if reachable {
+                ref_counter.increment(&entry.blob_id)?;
+                continue;
+            }
+
+            orphans = orphans.checked_add(1).unwrap_or(u64::MAX);
+            if let Some(kind) = anomaly {
+                errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                errors.push(Phase2Error {
+                    kind,
+                    blob_id: entry.blob_id,
+                    lba: entry.hdr_lba,
+                    detail: 0,
+                });
+            }
+        }
+
         let error_count = errors.len() as u32;
         RECOVERY_LOG.log_phase_done(2, error_count);
         RECOVERY_AUDIT.record_phase_done(2, error_count);
@@ -471,7 +509,55 @@ impl FsckPhase2 {
             blobs_hash_err,
             orphans,
             ref_counter,
+            alloc_entries,
         })
+    }
+
+    fn resolve_reachability(
+        blob_id: &[u8; 32],
+        parents: &BTreeMap<[u8; 32], Option<[u8; 32]>>,
+        cache: &mut BTreeMap<[u8; 32], bool>,
+    ) -> (bool, Option<Phase2ErrorKind>) {
+        let mut cursor = *blob_id;
+        let mut path = Vec::new();
+        let mut anomaly = None;
+
+        loop {
+            if let Some(&reachable) = cache.get(&cursor) {
+                for seen in &path {
+                    cache.insert(*seen, reachable);
+                }
+                return (reachable, anomaly);
+            }
+
+            if path.contains(&cursor) {
+                anomaly = Some(Phase2ErrorKind::CycleDetected);
+                for seen in &path {
+                    cache.insert(*seen, false);
+                }
+                return (false, anomaly);
+            }
+
+            path.push(cursor);
+            match parents.get(&cursor) {
+                Some(Some(parent)) => {
+                    cursor = *parent;
+                }
+                Some(None) => {
+                    for seen in &path {
+                        cache.insert(*seen, true);
+                    }
+                    return (true, anomaly);
+                }
+                None => {
+                    anomaly = Some(Phase2ErrorKind::ParentNotFound);
+                    for seen in &path {
+                        cache.insert(*seen, false);
+                    }
+                    return (false, anomaly);
+                }
+            }
+        }
     }
 }
 
@@ -482,6 +568,126 @@ use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::exofs::core::blob_id::compute_blob_id;
+    use crate::fs::exofs::recovery::block_io::write_bytes;
+    use crate::fs::exofs::recovery::fsck_phase1::{Phase1Report, SuperblockDisk};
+    use alloc::vec::Vec;
+    use spin::Mutex;
+
+    struct StrictBlockDevice {
+        storage: Mutex<Vec<u8>>,
+        block_size: u32,
+    }
+
+    impl StrictBlockDevice {
+        fn new(block_size: u32, blocks: usize) -> Self {
+            Self {
+                storage: Mutex::new(alloc::vec![0u8; block_size as usize * blocks]),
+                block_size,
+            }
+        }
+    }
+
+    impl BlockDevice for StrictBlockDevice {
+        fn read_block(&self, lba: u64, buf: &mut [u8]) -> ExofsResult<()> {
+            let block_size = self.block_size as usize;
+            if buf.len() != block_size {
+                return Err(ExofsError::InvalidArgument);
+            }
+            let start = lba as usize * block_size;
+            let end = start.saturating_add(block_size);
+            let storage = self.storage.lock();
+            if end > storage.len() {
+                return Err(ExofsError::IoError);
+            }
+            buf.copy_from_slice(&storage[start..end]);
+            Ok(())
+        }
+
+        fn write_block(&self, lba: u64, buf: &[u8]) -> ExofsResult<()> {
+            let block_size = self.block_size as usize;
+            if buf.len() != block_size {
+                return Err(ExofsError::InvalidArgument);
+            }
+            let start = lba as usize * block_size;
+            let end = start.saturating_add(block_size);
+            let mut storage = self.storage.lock();
+            if end > storage.len() {
+                return Err(ExofsError::IoError);
+            }
+            storage[start..end].copy_from_slice(buf);
+            Ok(())
+        }
+
+        fn block_size(&self) -> u32 {
+            self.block_size
+        }
+
+        fn total_blocks(&self) -> u64 {
+            self.storage.lock().len() as u64 / self.block_size as u64
+        }
+
+        fn flush(&self) -> ExofsResult<()> {
+            Ok(())
+        }
+    }
+
+    fn write_blob(
+        device: &mut StrictBlockDevice,
+        hdr_lba: u64,
+        data_lba: u64,
+        data: &[u8],
+        parent_id: [u8; 32],
+    ) -> [u8; 32] {
+        let blob_id = compute_blob_id(data).0;
+        let hdr = BlobHeaderDisk {
+            magic: BLOB_HEADER_MAGIC,
+            version: 1,
+            flags: 0,
+            _pad0: 0,
+            ref_count: 1,
+            blob_id,
+            data_len: data.len() as u64,
+            data_lba,
+            parent_id,
+        };
+        let raw: [u8; BLOB_HEADER_SIZE] = unsafe { core::mem::transmute_copy(&hdr) };
+        write_bytes(device, hdr_lba, &raw).test_unwrap();
+        write_bytes(device, data_lba, data).test_unwrap();
+        blob_id
+    }
+
+    fn phase1_report(alloc_lba: u64, block_size: u32, total_blocks: u64) -> Phase1Report {
+        let sb = SuperblockDisk {
+            magic: 0,
+            version: 1,
+            flags: 0,
+            _pad0: 0,
+            block_size,
+            total_blocks,
+            free_blocks: total_blocks,
+            epoch_id: 0,
+            n_blobs: 0,
+            alloc_lba,
+            journal_lba: 0,
+            blob_region_start: 0,
+            blob_region_end: total_blocks,
+            snapshot_count: 0,
+            _pad1: 0,
+            uuid: [0u8; 16],
+            _reserved: [0u8; 120],
+            sb_hash: [0u8; 32],
+        };
+        Phase1Report {
+            errors: Vec::new(),
+            superblock: Some(sb),
+            superblock_ok: true,
+            superblock_corrupt: false,
+            alloc_table_ok: true,
+            blob_region_ok: true,
+            lbas_checked: 0,
+        }
+    }
 
     #[test]
     fn test_blob_header_bad_magic() {
@@ -520,6 +726,7 @@ mod tests {
             blobs_hash_err: 0,
             orphans: 0,
             ref_counter: BlobRefCounter::new(),
+            alloc_entries: Vec::new(),
         };
         assert!(r.is_clean());
     }
@@ -533,5 +740,46 @@ mod tests {
         assert!(!hdr.is_compressed());
         hdr.flags = 0x02;
         assert!(hdr.is_compressed());
+    }
+
+    #[test]
+    fn test_phase2_detects_parentless_reachability_and_orphans() {
+        let mut device = StrictBlockDevice::new(4096, 256);
+        let root_data = b"root-blob-data";
+        let orphan_data = b"orphan-blob-data";
+        let root_blob_id = write_blob(&mut device, 32, 40, root_data, [0u8; 32]);
+        let orphan_blob_id = write_blob(&mut device, 48, 56, orphan_data, [0xAB; 32]);
+
+        let root_entry = AllocEntry {
+            blob_id: root_blob_id,
+            hdr_lba: 32,
+            data_lba: 40,
+            data_len: root_data.len() as u64,
+        };
+        let orphan_entry = AllocEntry {
+            blob_id: orphan_blob_id,
+            hdr_lba: 48,
+            data_lba: 56,
+            data_len: orphan_data.len() as u64,
+        };
+        let mut alloc_bytes = [0u8; ALLOC_ENTRY_SIZE * 2];
+        let root_raw: [u8; ALLOC_ENTRY_SIZE] = unsafe { core::mem::transmute_copy(&root_entry) };
+        let orphan_raw: [u8; ALLOC_ENTRY_SIZE] =
+            unsafe { core::mem::transmute_copy(&orphan_entry) };
+        alloc_bytes[..ALLOC_ENTRY_SIZE].copy_from_slice(&root_raw);
+        alloc_bytes[ALLOC_ENTRY_SIZE..ALLOC_ENTRY_SIZE * 2].copy_from_slice(&orphan_raw);
+        write_bytes(&mut device, 16, &alloc_bytes).test_unwrap();
+
+        let report = FsckPhase2::run(&device, &phase1_report(16, 4096, 256), 8).test_unwrap();
+        assert_eq!(report.alloc_entries.len(), 2);
+        assert_eq!(report.orphans, 1);
+        assert_eq!(report.ref_counter.count(&root_blob_id), 1);
+        assert_eq!(report.ref_counter.count(&orphan_blob_id), 0);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|err| err.kind == Phase2ErrorKind::ParentNotFound && err.blob_id == orphan_blob_id)
+        );
     }
 }

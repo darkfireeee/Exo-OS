@@ -327,7 +327,9 @@ impl BlobRefcount {
                 if g.deferred.len() >= DEFERRED_QUEUE_MAX {
                     return Err(ExofsError::Resource);
                 }
-                g.deferred.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                g.deferred
+                    .try_reserve(1)
+                    .map_err(|_| ExofsError::NoMemory)?;
                 g.deferred.push(DeferredDeleteEntry {
                     blob_id: *id,
                     phys_size,
@@ -538,7 +540,7 @@ mod tests {
         let id = make_blob_id(5);
         table.register(id, 1024, epoch(1)).test_unwrap();
         table.dec(&id, epoch(3)).test_unwrap(); // min_epoch = 3 + 2 = 5
-                                           // Epoch 4 : pas encore pret.
+                                                // Epoch 4 : pas encore pret.
         let ready = table.flush_deferred(epoch(4));
         assert!(ready.is_empty());
         // Epoch 5 : pret.

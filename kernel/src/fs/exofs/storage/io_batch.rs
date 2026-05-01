@@ -639,7 +639,8 @@ mod tests {
     fn test_coalesce_two_writes() {
         let mut b = IoBatch::new().no_sort();
         b.add_write(DiskOffset(0), vec![0xAAu8; 4096]).test_unwrap();
-        b.add_write(DiskOffset(4096), vec![0xBBu8; 4096]).test_unwrap();
+        b.add_write(DiskOffset(4096), vec![0xBBu8; 4096])
+            .test_unwrap();
         b.coalesce_writes();
         // Après coalescence, une seule op.
         assert_eq!(b.ops.len(), 1);

@@ -14,8 +14,9 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
+use super::block_io::{read_bytes, write_bytes};
 use super::boot_recovery::BlockDevice;
-use super::fsck_phase2::{AllocEntry, Phase2Report};
+use super::fsck_phase2::Phase2Report;
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};
@@ -278,7 +279,7 @@ impl LostFoundTable {
     }
 
     /// Persiste l entrée i sur le device — WRITE-02.
-    fn write_entry(&self, idx: usize, device: &dyn BlockDevice) -> ExofsResult<()> {
+    fn write_entry(&self, idx: usize, device: &mut dyn BlockDevice) -> ExofsResult<()> {
         if idx >= self.entries.len() {
             return Err(ExofsError::InvalidArgument);
         }
@@ -293,13 +294,13 @@ impl LostFoundTable {
         // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         let raw: [u8; LOST_FOUND_ENTRY_SIZE] = unsafe { core::mem::transmute_copy(entry) };
         buf[..LOST_FOUND_ENTRY_SIZE].copy_from_slice(&raw);
-        // WRITE-02 : écrire et vérifier.
-        device.write_block(lba, &buf)?;
+        // WRITE-02 : écriture bloc-safe même si l'entrée est plus petite qu'un bloc.
+        write_bytes(device, lba, &buf)?;
         Ok(())
     }
 
     /// Persiste l en-tête de la région lost+found — WRITE-02.
-    fn write_header(&self, device: &dyn BlockDevice, tick: u64) -> ExofsResult<()> {
+    fn write_header(&self, device: &mut dyn BlockDevice, tick: u64) -> ExofsResult<()> {
         let block_size = device.block_size() as u64;
         let hdr = LostFoundHeaderDisk::build(
             self.entries.len() as u32,
@@ -311,7 +312,7 @@ impl LostFoundTable {
         // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
         let raw: [u8; LOST_FOUND_HDR_SIZE] = unsafe { core::mem::transmute_copy(&hdr) };
         buf[..LOST_FOUND_HDR_SIZE].copy_from_slice(&raw);
-        device.write_block(self.base_lba, &buf)?;
+        write_bytes(device, self.base_lba, &buf)?;
         Ok(())
     }
 }
@@ -372,7 +373,7 @@ impl FsckPhase4 {
             // Lire les données du blob pour vérification HASH-02.
             let mut data_buf = alloc::vec![0u8; read_len as usize];
             if opts.verify_data {
-                match device.read_block(entry.data_lba, &mut data_buf) {
+                match read_bytes(device, entry.data_lba, &mut data_buf) {
                     Ok(()) => {}
                     Err(_) => {
                         Self::push_err(
@@ -522,22 +523,6 @@ impl FsckPhase4 {
     }
 }
 
-// ── Type local BlobId pour la vérification hash ───────────────────────────────
-
-/// Wrapper léger autour d un identifiant de blob.
-#[allow(dead_code)]
-struct BlobId(pub [u8; 32]);
-
-// Extension de Phase2Report pour l itération des entrées d allocation.
-impl Phase2Report {
-    /// Itère sur les entrées de la table d'allocation.
-    /// NOTE : Phase2Report ne maintient pas de liste d'AllocEntry en mémoire ;
-    /// retourne un itérateur vide (stub compilable).
-    pub fn alloc_entries_iter(&self) -> core::iter::Empty<&AllocEntry> {
-        core::iter::empty()
-    }
-}
-
 // ── Tests unitaires ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -546,6 +531,69 @@ use crate::fs::exofs::test_support::TestUnwrapExt;
 mod tests {
     use super::*;
     use crate::fs::exofs::core::ExofsError;
+    use crate::fs::exofs::core::blob_id::compute_blob_id;
+    use crate::fs::exofs::recovery::block_io::write_bytes;
+    use crate::fs::exofs::recovery::fsck_phase2::BlobRefCounter;
+    use alloc::vec::Vec;
+    use spin::Mutex;
+
+    struct StrictBlockDevice {
+        storage: Mutex<Vec<u8>>,
+        block_size: u32,
+    }
+
+    impl StrictBlockDevice {
+        fn new(block_size: u32, blocks: usize) -> Self {
+            Self {
+                storage: Mutex::new(alloc::vec![0u8; block_size as usize * blocks]),
+                block_size,
+            }
+        }
+    }
+
+    impl BlockDevice for StrictBlockDevice {
+        fn read_block(&self, lba: u64, buf: &mut [u8]) -> ExofsResult<()> {
+            let block_size = self.block_size as usize;
+            if buf.len() != block_size {
+                return Err(ExofsError::InvalidArgument);
+            }
+            let start = lba as usize * block_size;
+            let end = start.saturating_add(block_size);
+            let storage = self.storage.lock();
+            if end > storage.len() {
+                return Err(ExofsError::IoError);
+            }
+            buf.copy_from_slice(&storage[start..end]);
+            Ok(())
+        }
+
+        fn write_block(&self, lba: u64, buf: &[u8]) -> ExofsResult<()> {
+            let block_size = self.block_size as usize;
+            if buf.len() != block_size {
+                return Err(ExofsError::InvalidArgument);
+            }
+            let start = lba as usize * block_size;
+            let end = start.saturating_add(block_size);
+            let mut storage = self.storage.lock();
+            if end > storage.len() {
+                return Err(ExofsError::IoError);
+            }
+            storage[start..end].copy_from_slice(buf);
+            Ok(())
+        }
+
+        fn block_size(&self) -> u32 {
+            self.block_size
+        }
+
+        fn total_blocks(&self) -> u64 {
+            self.storage.lock().len() as u64 / self.block_size as u64
+        }
+
+        fn flush(&self) -> ExofsResult<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn test_lost_found_hdr_zero() {
@@ -627,5 +675,42 @@ mod tests {
         assert_eq!(lba0, 0x8001);
         // entry_lba(1) = base + 1 + 1 = 0x8002
         assert_eq!(lba1, 0x8002);
+    }
+
+    #[test]
+    fn test_phase4_recovers_multiblock_orphan_on_strict_device() {
+        let mut device = StrictBlockDevice::new(4096, 512);
+        let data: Vec<u8> = (0..5000usize).map(|idx| (idx % 251) as u8).collect();
+        let blob_id = compute_blob_id(&data).0;
+        write_bytes(&mut device, 128, &data).test_unwrap();
+
+        let report = Phase2Report {
+            errors: Vec::new(),
+            blobs_walked: 1,
+            blobs_ok: 1,
+            blobs_hash_err: 0,
+            orphans: 1,
+            ref_counter: BlobRefCounter::new(),
+            alloc_entries: vec![super::super::fsck_phase2::AllocEntry {
+                blob_id,
+                hdr_lba: 96,
+                data_lba: 128,
+                data_len: data.len() as u64,
+            }],
+        };
+
+        let opts = Phase4Options {
+            lost_found_lba: 192,
+            capacity: 8,
+            dry_run: false,
+            max_errors: 8,
+            stop_on_io_err: true,
+            verify_data: true,
+        };
+        let result = FsckPhase4::run_with_options(&mut device, &report, &opts).test_unwrap();
+        assert_eq!(result.orphans_found, 1);
+        assert_eq!(result.orphans_recovered, 1);
+        assert_eq!(result.bytes_recovered, data.len() as u64);
+        assert!(result.errors.is_empty());
     }
 }

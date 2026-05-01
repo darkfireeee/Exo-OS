@@ -367,7 +367,10 @@ mod tests {
     #[test]
     fn test_block_size_from_u32() {
         assert_eq!(BlockSize::from_u32(512).test_expect("ok"), BlockSize::B512);
-        assert_eq!(BlockSize::from_u32(4096).test_expect("ok"), BlockSize::B4096);
+        assert_eq!(
+            BlockSize::from_u32(4096).test_expect("ok"),
+            BlockSize::B4096
+        );
         assert!(BlockSize::from_u32(1024).is_err());
     }
 

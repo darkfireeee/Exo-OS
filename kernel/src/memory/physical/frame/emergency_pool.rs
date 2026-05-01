@@ -595,7 +595,9 @@ mod tests {
         assert!(pool.is_initialized());
         assert_eq!(pool.allocated_count(), 0);
 
-        let node = pool.acquire(1).expect("pool should allocate after double init");
+        let node = pool
+            .acquire(1)
+            .expect("pool should allocate after double init");
         assert!(pool.owns(node));
         assert_eq!(pool.allocated_count(), 1);
 

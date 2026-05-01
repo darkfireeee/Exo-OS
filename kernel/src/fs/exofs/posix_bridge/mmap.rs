@@ -660,7 +660,8 @@ mod tests {
         let t = make_table();
         t.mmap(8, 0, 4096, PROT_READ, MAP_PRIVATE, 10).test_unwrap();
         t.mmap(9, 0, 4096, PROT_READ, MAP_PRIVATE, 10).test_unwrap();
-        t.mmap(10, 0, 4096, PROT_READ, MAP_PRIVATE, 20).test_unwrap();
+        t.mmap(10, 0, 4096, PROT_READ, MAP_PRIVATE, 20)
+            .test_unwrap();
         t.munmap_all_pid(10);
         assert_eq!(t.mappings_for_pid(10).test_unwrap().len(), 0);
         assert_eq!(t.mappings_for_pid(20).test_unwrap().len(), 1);

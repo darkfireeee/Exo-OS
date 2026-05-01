@@ -325,7 +325,9 @@ pub const GC_PRESSURE_HIGH_BLOBS: u64 = 100;
 pub const GC_PRESSURE_CRITICAL_BLOBS: u64 = 500;
 
 /// Délai minimal entre deux passes GC (secondes).
-pub const GC_MIN_EPOCH_DELAY_SECS: u64 = 2;
+/// Alias de `GC_MIN_EPOCH_DELAY` — utiliser la constante canonique.
+#[deprecated(note = "Utiliser GC_MIN_EPOCH_DELAY — doublon supprimé (RÈGLE CONST-01)")]
+pub const GC_MIN_EPOCH_DELAY_SECS: u64 = GC_MIN_EPOCH_DELAY;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Limites de taille par ObjectKind
@@ -464,8 +466,10 @@ pub const GC_QUEUE_MAX_BLOBS: u32 = 65536;
 // Limites d'inline data
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille maximale des données inline dans les métadonnées d'un objet (octets).
-pub const INLINE_DATA_MAX_BYTES: usize = 256;
+/// Alias de `INLINE_DATA_MAX` pour la compatibilité des métadonnées d'objet.
+/// RÈGLE CONST-01 : une seule valeur canonique — toujours utiliser `INLINE_DATA_MAX`.
+#[deprecated(note = "Utiliser INLINE_DATA_MAX (= 512) — cette constante était incohérente")]
+pub const INLINE_DATA_MAX_BYTES: usize = INLINE_DATA_MAX;
 
 /// Seuil de promotion inline→extent : si les données dépassent ce seuil,
 /// elles sont déplacées vers un extent dédié.

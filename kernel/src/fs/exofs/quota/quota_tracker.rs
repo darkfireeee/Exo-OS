@@ -669,8 +669,10 @@ mod tests {
     #[test]
     fn test_snapshot_all() {
         let t = QuotaTracker::new_const();
-        t.set_limits(make_key(10), make_limits(1000)).test_expect("ok");
-        t.set_limits(make_key(11), make_limits(2000)).test_expect("ok");
+        t.set_limits(make_key(10), make_limits(1000))
+            .test_expect("ok");
+        t.set_limits(make_key(11), make_limits(2000))
+            .test_expect("ok");
         let snap = t.snapshot_all().test_expect("ok");
         assert_eq!(snap.len(), 2);
     }

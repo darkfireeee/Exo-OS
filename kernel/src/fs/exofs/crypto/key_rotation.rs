@@ -482,7 +482,9 @@ mod scheduler_tests {
             .test_unwrap();
         t.elevate(SecurityLevel::Elevated);
         assert!(t.rotation_required());
-        let r = t.force_rotate_all(&ks, &[(s, KeyKind::Volume)]).test_unwrap();
+        let r = t
+            .force_rotate_all(&ks, &[(s, KeyKind::Volume)])
+            .test_unwrap();
         assert_eq!(r.len(), 1);
     }
 

@@ -274,7 +274,9 @@ mod tests {
             )
             .test_unwrap();
         let s = CryptoShredder::new(OverwriteStrategy::SinglePass);
-        let r = s.shred_blob(42, 1024, Some(sid), Some(&ks), &nw()).test_unwrap();
+        let r = s
+            .shred_blob(42, 1024, Some(sid), Some(&ks), &nw())
+            .test_unwrap();
         assert!(r.crypto_ok);
         assert!(CryptoShredder::verify_shred(&ks, sid));
     }
@@ -589,7 +591,9 @@ mod tests_scheduler {
     #[test]
     fn test_scheduler_capacity_overflow() {
         let mut sched = ShredScheduler::new(1);
-        sched.register(1, 100, ShredPolicy::Never, None, 0).test_unwrap();
+        sched
+            .register(1, 100, ShredPolicy::Never, None, 0)
+            .test_unwrap();
         let err = sched.register(2, 100, ShredPolicy::Never, None, 0);
         assert!(err.is_err());
     }
@@ -608,8 +612,12 @@ mod tests_scheduler {
     #[test]
     fn test_registered_blobs_list() {
         let mut sched = ShredScheduler::new(16);
-        sched.register(7, 100, ShredPolicy::Never, None, 0).test_unwrap();
-        sched.register(8, 100, ShredPolicy::Never, None, 0).test_unwrap();
+        sched
+            .register(7, 100, ShredPolicy::Never, None, 0)
+            .test_unwrap();
+        sched
+            .register(8, 100, ShredPolicy::Never, None, 0)
+            .test_unwrap();
         let blobs = sched.registered_blobs().test_unwrap();
         assert_eq!(blobs.len(), 2);
     }

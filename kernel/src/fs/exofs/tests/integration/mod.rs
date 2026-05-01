@@ -5,3 +5,4 @@ pub mod support;
 pub mod tier_4_pipeline;
 pub mod tier_5_comprehensive;
 pub mod tier_6_virtio_vfs;
+pub mod test_standard; 

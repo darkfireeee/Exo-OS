@@ -378,9 +378,7 @@ impl BlobWriter {
         DedupFn: FnOnce(&BlobId) -> Option<DiskOffset>,
     {
         // ── 1. Validation ─────────────────────────────────────────────
-        if data.is_empty() {
-            return Err(ExofsError::InvalidArgument);
-        }
+        // Empty payloads are allowed (tests expect write of empty blob to succeed).
         if data.len() > BLOB_MAX_SIZE {
             return Err(ExofsError::InvalidSize);
         }

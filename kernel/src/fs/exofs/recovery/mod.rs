@@ -36,6 +36,7 @@
 
 // ── Déclarations de sous-modules ──────────────────────────────────────────────
 
+pub mod block_io;
 pub mod boot_recovery;
 pub mod checkpoint;
 pub mod epoch_replay;

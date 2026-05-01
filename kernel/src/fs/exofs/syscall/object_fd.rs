@@ -839,8 +839,7 @@ mod tests {
 
         let mut seed = 0u32;
         while seed < 128 {
-            let fd = t
-                .open(make_blob(seed as u8), open_flags::O_RDWR, 0, 0, 0);
+            let fd = t.open(make_blob(seed as u8), open_flags::O_RDWR, 0, 0, 0);
             let fd = ok(fd);
             let mut fds = [0u32; 8];
             fds[0] = fd;

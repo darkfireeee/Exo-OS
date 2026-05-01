@@ -83,7 +83,11 @@ impl ObjectStore {
             }
         }
 
-        let baseline_lba = if total_blocks > DATA_LBA_START { DATA_LBA_START } else { 1 };
+        let baseline_lba = if total_blocks > DATA_LBA_START {
+            DATA_LBA_START
+        } else {
+            1
+        };
         let start_lba = if inner.next_lba == 0 {
             baseline_lba
         } else {
@@ -144,8 +148,12 @@ pub fn persist_blob_data_if_disk(blob_id: BlobId, data: &[u8], sync: bool) -> Ex
             return Err(ExofsError::InvalidSize);
         }
 
-        let mapping =
-            OBJECT_STORE.reserve_for_write(blob_id, data.len() as u64, block_size, device.total_blocks())?;
+        let mapping = OBJECT_STORE.reserve_for_write(
+            blob_id,
+            data.len() as u64,
+            block_size,
+            device.total_blocks(),
+        )?;
 
         let mut lba = mapping.base_lba;
         let mut pos = 0usize;
@@ -295,6 +303,8 @@ mod tests {
         let blob_id = BlobId([0x1C; 32]);
         let wrote = persist_blob_data_if_disk(blob_id, b"cache-only", true).test_unwrap();
         assert!(!wrote);
-        assert!(load_blob_data_if_available(&blob_id).test_unwrap().is_none());
+        assert!(load_blob_data_if_available(&blob_id)
+            .test_unwrap()
+            .is_none());
     }
 }

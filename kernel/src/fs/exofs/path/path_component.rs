@@ -570,17 +570,32 @@ mod tests {
     fn test_parser_absolute() {
         let mut p = PathParser::new(b"/home/user/file.txt").test_unwrap();
         assert!(p.is_absolute());
-        assert_eq!(p.next_component().test_unwrap().test_unwrap().as_bytes(), b"home");
-        assert_eq!(p.next_component().test_unwrap().test_unwrap().as_bytes(), b"user");
-        assert_eq!(p.next_component().test_unwrap().test_unwrap().as_bytes(), b"file.txt");
+        assert_eq!(
+            p.next_component().test_unwrap().test_unwrap().as_bytes(),
+            b"home"
+        );
+        assert_eq!(
+            p.next_component().test_unwrap().test_unwrap().as_bytes(),
+            b"user"
+        );
+        assert_eq!(
+            p.next_component().test_unwrap().test_unwrap().as_bytes(),
+            b"file.txt"
+        );
         assert!(p.next_component().test_unwrap().is_none());
     }
     #[test]
     fn test_parser_relative() {
         let mut p = PathParser::new(b"a/b").test_unwrap();
         assert!(!p.is_absolute());
-        assert_eq!(p.next_component().test_unwrap().test_unwrap().as_bytes(), b"a");
-        assert_eq!(p.next_component().test_unwrap().test_unwrap().as_bytes(), b"b");
+        assert_eq!(
+            p.next_component().test_unwrap().test_unwrap().as_bytes(),
+            b"a"
+        );
+        assert_eq!(
+            p.next_component().test_unwrap().test_unwrap().as_bytes(),
+            b"b"
+        );
     }
     #[test]
     fn test_parser_double_slash() {

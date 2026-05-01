@@ -118,10 +118,15 @@ pub enum ExofsError {
     ObjectTooLarge,
     /// Erreur interne inattendue (bug kernel).
     InternalError,
+    /// Tentative de vider le cache alors que N entrées dirty n'ont pas été
+    /// écrites sur disque — utiliser `collect_dirty()` + `mark_clean()` avant.
+    DirtyDataLoss(usize),
 
     // ── Montage / Boot ───────────────────────────────────────────────────────
     /// ExoFS est déjà initialisé (double appel à exofs_init).
     AlreadyMounted,
+    /// Le disque est trop petit pour contenir les structures ExoFS minimales.
+    DiskTooSmall { actual: u64, minimum: u64 },
     /// La séquence de recovery boot a échoué (aucun epoch récupérable).
     RecoveryFailed,
 
@@ -237,7 +242,15 @@ impl fmt::Display for ExofsError {
             Self::InvalidArgument => write!(f, "exofs: invalid argument"),
             Self::ObjectTooLarge => write!(f, "exofs: object too large"),
             Self::InternalError => write!(f, "exofs: internal error"),
+            Self::DirtyDataLoss(n) => write!(
+                f,
+                "exofs: flush_all() would lose {n} dirty blobs — flush to disk first"
+            ),
             Self::AlreadyMounted => write!(f, "exofs: already mounted"),
+            Self::DiskTooSmall { actual, minimum } => write!(
+                f,
+                "exofs: disk too small ({actual} bytes < minimum {minimum} bytes)"
+            ),
             Self::RecoveryFailed => write!(f, "exofs: recovery failed"),
             _ => write!(f, "exofs: error"),
         }
@@ -279,7 +292,9 @@ impl From<ExofsError> for FsError {
             ExofsError::NotSupported => FsError::NotSupported,
             ExofsError::InvalidArgument => FsError::InvalidArgument,
             ExofsError::InternalError => FsError::InternalError,
+            ExofsError::DirtyDataLoss(_) => FsError::InternalError,
             ExofsError::AlreadyMounted => FsError::InvalidArgument,
+            ExofsError::DiskTooSmall { .. } => FsError::InvalidArgument,
             ExofsError::RecoveryFailed => FsError::Corrupt,
             _ => FsError::InternalError,
         }

@@ -510,6 +510,9 @@ mod tests {
     fn test_shard_key() {
         let r = ContentHashResult::compute(b"shard");
         let k = r.shard_key();
-        assert_eq!(k, u64::from_le_bytes(r.blake3[..8].try_into().test_unwrap()));
+        assert_eq!(
+            k,
+            u64::from_le_bytes(r.blake3[..8].try_into().test_unwrap())
+        );
     }
 }

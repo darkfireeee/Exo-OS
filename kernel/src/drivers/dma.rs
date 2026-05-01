@@ -218,12 +218,7 @@ impl FaultAllocator for UserFaultAllocator<'_> {
         walker.read_pte_raw(virt)
     }
 
-    fn compare_exchange_pte_raw(
-        &self,
-        virt: VirtAddr,
-        current: u64,
-        new: u64,
-    ) -> Result<(), u64> {
+    fn compare_exchange_pte_raw(&self, virt: VirtAddr, current: u64, new: u64) -> Result<(), u64> {
         let walker = PageTableWalker::new(self.user_as.pml4_phys());
         // SAFETY: `virt` désigne une PTE 4 KiB appartenant à cet espace user.
         unsafe { walker.compare_exchange_leaf_raw(virt, current, new) }

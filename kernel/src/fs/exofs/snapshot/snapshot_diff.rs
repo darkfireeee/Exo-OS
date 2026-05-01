@@ -387,8 +387,8 @@ impl SnapshotDiff {
 use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
-    use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::reset_for_test;
+    use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
     use super::*;
     use crate::fs::exofs::core::blob_id::compute_blob_id;

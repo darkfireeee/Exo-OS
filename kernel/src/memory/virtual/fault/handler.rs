@@ -149,7 +149,12 @@ pub trait FaultAllocator: Sync {
     ///
     /// Retourne `Ok(())` si l'échange a réussi, ou `Err(actual_raw)` si la PTE
     /// observée ne correspondait plus à `current`.
-    fn compare_exchange_pte_raw(&self, virt: VirtAddr, _current: u64, _new: u64) -> Result<(), u64> {
+    fn compare_exchange_pte_raw(
+        &self,
+        virt: VirtAddr,
+        _current: u64,
+        _new: u64,
+    ) -> Result<(), u64> {
         Err(self.read_pte_raw(virt))
     }
 }

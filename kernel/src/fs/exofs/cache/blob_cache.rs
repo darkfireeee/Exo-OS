@@ -304,11 +304,54 @@ impl BlobCache {
         freed
     }
 
-    /// Vide entièrement le cache.
-    pub fn flush_all(&self) {
+    /// Vide entièrement le cache après avoir vérifié qu'il n'y a pas d'entrées dirty.
+    ///
+    /// # Erreur
+    /// Retourne `Err(ExofsError::DirtyDataLoss(n))` si `n` entrées dirty
+    /// seraient perdues. Appeler `flush_dirty_to_disk()` avant, ou utiliser
+    /// `flush_all_force()` uniquement en contexte de panique/arrêt d'urgence.
+    pub fn flush_all(&self) -> ExofsResult<()> {
         let mut inner = self.inner.lock();
+        let dirty_count = inner.map.values().filter(|e| e.dirty).count();
+        if dirty_count > 0 {
+            return Err(ExofsError::DirtyDataLoss(dirty_count));
+        }
         inner.map.clear();
         inner.used = 0;
+        Ok(())
+    }
+
+    /// Vide le cache sans vérification — UNIQUEMENT pour panic/shutdown d'urgence.
+    ///
+    /// # Safety sémantique
+    /// Les entrées dirty sont perdues sans écriture disque.
+    /// Ne pas appeler en dehors d'un contexte d'arrêt non-récupérable.
+    pub fn flush_all_force(&self) {
+        let mut inner = self.inner.lock();
+        let lost: u64 = inner
+            .map
+            .values()
+            .filter(|e| e.dirty)
+            .map(|e| e.len())
+            .sum();
+        if lost > 0 {
+            CACHE_STATS.record_eviction(lost);
+        }
+        inner.map.clear();
+        inner.used = 0;
+    }
+
+    /// Retourne les données de toutes les entrées dirty pour écriture disque.
+    ///
+    /// Le appelant est responsable d'appeler `mark_clean()` après écriture réussie.
+    pub fn collect_dirty(&self) -> Vec<(BlobId, Box<[u8]>)> {
+        let inner = self.inner.lock();
+        inner
+            .map
+            .iter()
+            .filter(|(_, e)| e.dirty)
+            .map(|(id, e)| (*id, e.data.clone().into_boxed_slice()))
+            .collect()
     }
 }
 
@@ -396,10 +439,28 @@ mod tests {
     }
 
     #[test]
-    fn test_flush_all() {
+    fn test_flush_all_clean_succeeds() {
         let c = BlobCache::new_const();
         c.insert(blob(1), alloc::vec![0u8; 64]).test_unwrap();
-        c.flush_all();
+        c.flush_all().test_unwrap();
+        assert_eq!(c.n_entries(), 0);
+    }
+
+    #[test]
+    fn test_flush_all_dirty_returns_err() {
+        let c = BlobCache::new_const();
+        c.insert(blob(1), alloc::vec![0u8; 64]).test_unwrap();
+        c.mark_dirty(&blob(1)).test_unwrap();
+        assert!(c.flush_all().is_err());
+        assert_eq!(c.n_entries(), 1);
+    }
+
+    #[test]
+    fn test_flush_all_force_clears_dirty() {
+        let c = BlobCache::new_const();
+        c.insert(blob(1), alloc::vec![0u8; 64]).test_unwrap();
+        c.mark_dirty(&blob(1)).test_unwrap();
+        c.flush_all_force();
         assert_eq!(c.n_entries(), 0);
     }
 

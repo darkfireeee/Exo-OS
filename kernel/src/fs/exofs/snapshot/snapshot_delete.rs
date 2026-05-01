@@ -293,28 +293,29 @@ impl SnapshotDeleter {
 use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
-    use super::super::snapshot::{flags, make_snapshot_name};
     use super::super::reset_for_test;
+    use super::super::snapshot::{flags, make_snapshot_name};
     use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
     use super::*;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId};
 
     fn push_snap(_list: &SnapshotList, id: u64, bytes: u64, parent: Option<u64>, flags: u32) {
         use super::super::snapshot::Snapshot;
-        SNAPSHOT_LIST.register(Snapshot {
-            id: SnapshotId(id),
-            epoch_id: EpochId(1),
-            parent_id: parent.map(SnapshotId),
-            root_blob: BlobId([0u8; 32]),
-            created_at: 100 + id,
-            n_blobs: 0,
-            total_bytes: bytes,
-            flags,
-            blob_catalog_offset: DiskOffset(0),
-            blob_catalog_size: 0,
-            name: make_snapshot_name(b"t"),
-        })
-        .test_unwrap();
+        SNAPSHOT_LIST
+            .register(Snapshot {
+                id: SnapshotId(id),
+                epoch_id: EpochId(1),
+                parent_id: parent.map(SnapshotId),
+                root_blob: BlobId([0u8; 32]),
+                created_at: 100 + id,
+                n_blobs: 0,
+                total_bytes: bytes,
+                flags,
+                blob_catalog_offset: DiskOffset(0),
+                blob_catalog_size: 0,
+                name: make_snapshot_name(b"t"),
+            })
+            .test_unwrap();
     }
 
     #[test]

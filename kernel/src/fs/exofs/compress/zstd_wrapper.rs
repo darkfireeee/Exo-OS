@@ -444,7 +444,8 @@ mod tests {
     fn test_roundtrip_uniform() {
         let input = uniform_data(512, 0x77);
         let compressed = ZstdCompressor::compress_to_vec(&input, 3).test_unwrap();
-        let decompressed = ZstdCompressor::decompress_to_vec(&compressed, input.len()).test_unwrap();
+        let decompressed =
+            ZstdCompressor::decompress_to_vec(&compressed, input.len()).test_unwrap();
         assert_eq!(decompressed, input);
     }
 
@@ -452,7 +453,8 @@ mod tests {
     fn test_roundtrip_random() {
         let input = pseudo_random(256);
         let compressed = ZstdCompressor::compress_to_vec(&input, 3).test_unwrap();
-        let decompressed = ZstdCompressor::decompress_to_vec(&compressed, input.len()).test_unwrap();
+        let decompressed =
+            ZstdCompressor::decompress_to_vec(&compressed, input.len()).test_unwrap();
         assert_eq!(decompressed, input);
     }
 
@@ -510,7 +512,8 @@ mod tests {
     fn test_roundtrip_large() {
         let input = uniform_data(8192, 0x55);
         let compressed = ZstdCompressor::compress_to_vec(&input, 3).test_unwrap();
-        let decompressed = ZstdCompressor::decompress_to_vec(&compressed, input.len()).test_unwrap();
+        let decompressed =
+            ZstdCompressor::decompress_to_vec(&compressed, input.len()).test_unwrap();
         assert_eq!(decompressed.len(), input.len());
     }
 

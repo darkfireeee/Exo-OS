@@ -21,8 +21,8 @@
 //! - SYS_EXOFS_OBJECT_OPEN  = 501 (open blob → fd)
 //! - SYS_IPC_REGISTER = 304, SYS_IPC_RECV = 301, SYS_IPC_SEND = 300
 
-use core::panic::PanicInfo;
 use core::cell::UnsafeCell;
+use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, Ordering};
 use exo_syscall_abi as syscall;
 

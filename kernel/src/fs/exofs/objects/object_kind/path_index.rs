@@ -554,8 +554,8 @@ mod tests {
     #[test]
     fn test_insert_and_lookup() {
         let mut page = PathIndexPage::new(ObjectId([0; 32]), 0, EpochId(1));
-        let entry =
-            PathIndexEntry::new(b"myfile", ObjectId([1; 32]), [0u8; 16], ObjectKind::Blob).test_unwrap();
+        let entry = PathIndexEntry::new(b"myfile", ObjectId([1; 32]), [0u8; 16], ObjectKind::Blob)
+            .test_unwrap();
         page.insert(entry, EpochId(2)).test_unwrap();
         assert!(page.lookup(b"myfile").is_some());
         assert!(page.lookup(b"other").is_none());

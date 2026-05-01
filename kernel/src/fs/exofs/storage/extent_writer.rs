@@ -350,7 +350,9 @@ mod tests {
     fn test_write_blocks_multi() {
         let w = ExtentWriter::new();
         let buf = vec![0x42u8; 12288]; // 3 blocs
-        let r = w.write_blocks(DiskOffset(0), &buf, &mock_write).test_unwrap();
+        let r = w
+            .write_blocks(DiskOffset(0), &buf, &mock_write)
+            .test_unwrap();
         assert_eq!(r.bytes_written, 12288);
         assert_eq!(r.segments, 3);
     }

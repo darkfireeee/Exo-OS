@@ -6,12 +6,12 @@
 //!
 //! RECUR-01 / OOM-02 / ARITH-02 — ExofsError exclusivement.
 
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::posix_bridge::inode_emulation::{
     inode_flags, InodeEntry, ObjectIno, INODE_EMULATION,
 };
-use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use crate::fs::exofs::core::BlobId;
 use crate::fs::exofs::syscall::object_store;
 use alloc::collections::btree_map::Entry;
 use alloc::collections::BTreeMap;
@@ -496,7 +496,10 @@ impl DirectoryRegistry {
                     return Err(ExofsError::ObjectNotFound);
                 }
             };
-            let idx = match old_records.iter().position(|record| record.name == old_name) {
+            let idx = match old_records
+                .iter()
+                .position(|record| record.name == old_name)
+            {
                 Some(idx) => idx,
                 None => {
                     self.lock_release();
@@ -896,7 +899,9 @@ pub fn vfs_symlink(parent_ino: ObjectIno, name: &[u8], uid: u64) -> ExofsResult<
         return Err(ExofsError::ObjectAlreadyExists);
     }
     let ino = INODE_EMULATION.get_or_alloc_flags(oid, inode_flags::SYMLINK, 0, uid)?;
-    if let Err(err) = DIRECTORY_REGISTRY.insert(parent_ino, ino, name, inode_kind(inode_flags::SYMLINK)) {
+    if let Err(err) =
+        DIRECTORY_REGISTRY.insert(parent_ino, ino, name, inode_kind(inode_flags::SYMLINK))
+    {
         INODE_EMULATION.release_ino(ino);
         return Err(err);
     }
@@ -918,7 +923,7 @@ pub fn reset_vfs_state_for_test() {
     FD_TABLE.reset_all();
     DIRECTORY_REGISTRY.reset_all();
     INODE_EMULATION.clear();
-    BLOB_CACHE.flush_all();
+    BLOB_CACHE.flush_all_force();
     object_store::OBJECT_STORE.reset_all();
     VFS_REGISTERED.store(false, Ordering::Release);
 }

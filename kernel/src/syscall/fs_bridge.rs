@@ -357,7 +357,9 @@ fn ensure_directory_chain(path: &[u8]) -> Result<(), FsBridgeError> {
     for comp in components.iter() {
         let parent_path = path_buf_to_bytes(&current)?;
         let next_comp = comp.clone();
-        current.push(next_comp.clone()).map_err(exofs_to_bridge_error)?;
+        current
+            .push(next_comp.clone())
+            .map_err(exofs_to_bridge_error)?;
         let current_path = path_buf_to_bytes(&current)?;
 
         match path_entry(&current_path) {
@@ -1233,7 +1235,7 @@ mod tests {
             fs_bridge_init();
         }
         OBJECT_TABLE.reset_all();
-        BLOB_CACHE.flush_all();
+        BLOB_CACHE.flush_all_force();
     }
 
     #[test]

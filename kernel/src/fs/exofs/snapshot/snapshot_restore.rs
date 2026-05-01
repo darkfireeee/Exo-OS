@@ -345,28 +345,29 @@ impl SnapshotBlobSource for MemBlobSource {
 use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
 mod tests {
-    use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::reset_for_test;
+    use super::super::snapshot::{make_snapshot_name, Snapshot};
     use super::super::snapshot_list::{SnapshotList, SNAPSHOT_LIST};
     use super::*;
     use crate::fs::exofs::core::blob_id::compute_blob_id;
     use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, SnapshotId};
 
     fn push_snap(_list: &SnapshotList, id: u64) {
-        SNAPSHOT_LIST.register(Snapshot {
-            id: SnapshotId(id),
-            epoch_id: EpochId(1),
-            parent_id: None,
-            root_blob: BlobId([0u8; 32]),
-            created_at: 0,
-            n_blobs: 1,
-            total_bytes: 0,
-            flags: 0,
-            blob_catalog_offset: DiskOffset(0),
-            blob_catalog_size: 0,
-            name: make_snapshot_name(b"restore-test"),
-        })
-        .test_unwrap();
+        SNAPSHOT_LIST
+            .register(Snapshot {
+                id: SnapshotId(id),
+                epoch_id: EpochId(1),
+                parent_id: None,
+                root_blob: BlobId([0u8; 32]),
+                created_at: 0,
+                n_blobs: 1,
+                total_bytes: 0,
+                flags: 0,
+                blob_catalog_offset: DiskOffset(0),
+                blob_catalog_size: 0,
+                name: make_snapshot_name(b"restore-test"),
+            })
+            .test_unwrap();
     }
 
     #[test]
@@ -377,7 +378,9 @@ mod tests {
         let raw = b"hello world";
         let bid = compute_blob_id(raw);
         let mut source = MemBlobSource::new();
-        source.add_blob(SnapshotId(1), bid, raw.to_vec()).test_unwrap();
+        source
+            .add_blob(SnapshotId(1), bid, raw.to_vec())
+            .test_unwrap();
         let mut sink = NullRestoreSink::new();
         let restore = SnapshotRestore::new();
         let result = restore

@@ -720,8 +720,12 @@ mod tests {
         let mut idx = PathIndex::new(fake_oid(0));
         idx.split_threshold = 3;
         for i in 0u8..3 {
-            idx.insert(&validate_component(&[b'a' + i]).test_unwrap(), fake_oid(i), 0)
-                .test_unwrap();
+            idx.insert(
+                &validate_component(&[b'a' + i]).test_unwrap(),
+                fake_oid(i),
+                0,
+            )
+            .test_unwrap();
         }
         assert!(idx.needs_split());
     }

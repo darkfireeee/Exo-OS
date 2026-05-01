@@ -263,7 +263,11 @@ impl NumaStats {
             }
             i = i.wrapping_add(1);
         }
-        if found_active { best_node } else { 0 }
+        if found_active {
+            best_node
+        } else {
+            0
+        }
     }
 
     /// Nœud avec le plus grand score de charge (RECUR-01).

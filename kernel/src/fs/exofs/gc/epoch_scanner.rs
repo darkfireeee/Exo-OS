@@ -553,7 +553,9 @@ mod tests {
         ws.insert_node(BlobNode::new(bid(11), 256, 1, 5, 0, false));
 
         let snap = scanner.scan(&[Some(&root), None, None]).test_unwrap();
-        let count = scanner.build_grey_set(&snap, &mut ws, &lookup).test_unwrap();
+        let count = scanner
+            .build_grey_set(&snap, &mut ws, &lookup)
+            .test_unwrap();
 
         assert_eq!(count, 2);
         assert_eq!(ws.grey_queue_len(), 2);

@@ -360,7 +360,9 @@ mod tests {
     #[test]
     fn test_hkdf_expand_empty() {
         let prk = KeyDerivation::hkdf_extract(b"", b"ikm");
-        assert!(KeyDerivation::hkdf_expand(&prk, b"", 0).test_unwrap().is_empty());
+        assert!(KeyDerivation::hkdf_expand(&prk, b"", 0)
+            .test_unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -385,10 +387,10 @@ mod tests {
 
     #[test]
     fn test_derive_for_purpose_separation() {
-        let k1 =
-            KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::DataEncryption).test_unwrap();
-        let k2 =
-            KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::Authentication).test_unwrap();
+        let k1 = KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::DataEncryption)
+            .test_unwrap();
+        let k2 = KeyDerivation::derive_for_purpose(b"s", b"salt", KeyPurpose::Authentication)
+            .test_unwrap();
         assert_ne!(k1.as_bytes(), k2.as_bytes());
     }
 

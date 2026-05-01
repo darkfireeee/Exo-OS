@@ -347,7 +347,8 @@ mod tests {
         let data = b"duplicate blob content 1234567890";
         let dec = w.check(data);
         let id = *dec.blob_id();
-        w.register(id, make_offset(1), data.len() as u64).test_unwrap();
+        w.register(id, make_offset(1), data.len() as u64)
+            .test_unwrap();
 
         let dec2 = w.check(data);
         assert!(dec2.is_hit());
@@ -360,7 +361,8 @@ mod tests {
         let data = b"some data ABCDEF0123456";
         let dec = w.check(data);
         let id = *dec.blob_id();
-        w.register(id, make_offset(2), data.len() as u64).test_unwrap();
+        w.register(id, make_offset(2), data.len() as u64)
+            .test_unwrap();
         w.check(data);
         assert_eq!(w.bytes_saved(), data.len() as u64);
     }
@@ -371,7 +373,8 @@ mod tests {
         let data = b"content to dedup";
         let dec = w.check(data);
         let id = *dec.blob_id();
-        w.register(id, make_offset(3), data.len() as u64).test_unwrap();
+        w.register(id, make_offset(3), data.len() as u64)
+            .test_unwrap();
         assert_eq!(w.entry_count(), 1);
         w.unregister(&id);
         assert_eq!(w.entry_count(), 0);
@@ -472,7 +475,8 @@ mod tests_extra {
         let data = b"gc test data 12345";
         let dec = w.check(data);
         let id = *dec.blob_id();
-        w.register(id, DiskOffset(0), data.len() as u64).test_unwrap();
+        w.register(id, DiskOffset(0), data.len() as u64)
+            .test_unwrap();
         // Décrémente à 0.
         w.dec_ref(&id);
         let report = w.gc().test_unwrap();

@@ -508,7 +508,8 @@ mod tests {
     fn test_eviction_lru() {
         let c = BlockCache::new(2);
         let mut buf = vec![0u8; BLK];
-        c.read_block(DiskOffset(0), &mut buf, &mock_read).test_unwrap();
+        c.read_block(DiskOffset(0), &mut buf, &mock_read)
+            .test_unwrap();
         c.read_block(DiskOffset(4096), &mut buf, &mock_read)
             .test_unwrap();
         // Cache plein, 3ème lecture → éviction du plus ancien.

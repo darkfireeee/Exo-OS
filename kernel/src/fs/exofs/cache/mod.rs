@@ -99,7 +99,7 @@ pub fn init() {
 /// du appelant (layer VFS).
 pub fn shutdown() {
     // Marquer comme propre et vider chaque cache.
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_CACHE.flush_all();
     EXTENT_CACHE.flush_all();
     METADATA_CACHE.flush_all();
@@ -295,7 +295,7 @@ pub fn reclaim_with_report(bytes: u64, aggression: ReclaimAggression) -> Reclaim
             // Flush supplémentaire si insuffisant.
             if f < bytes {
                 EXTENT_CACHE.flush_all();
-                BLOB_CACHE.flush_all();
+                let _ = BLOB_CACHE.flush_all();
             }
             f
         }

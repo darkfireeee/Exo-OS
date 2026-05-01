@@ -565,7 +565,11 @@ impl ExoarScanner {
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         let ftr_count: u32 =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.entry_count)) };
-        let expected_count = if entry_count == 0 { entry_idx } else { entry_count };
+        let expected_count = if entry_count == 0 {
+            entry_idx
+        } else {
+            entry_count
+        };
         if ftr_count != expected_count {
             return Err(ExoarReadError::EntryCountMismatch);
         }
@@ -579,7 +583,9 @@ impl ExoarScanner {
 }
 
 impl ExoarReader {
-    fn read_stream_record<S: ArchiveSource>(source: &mut S) -> Result<ArchiveRecord, ExoarReadError> {
+    fn read_stream_record<S: ArchiveSource>(
+        source: &mut S,
+    ) -> Result<ArchiveRecord, ExoarReadError> {
         let mut magic_buf = [0u8; 4];
         source
             .read_exact(&mut magic_buf)

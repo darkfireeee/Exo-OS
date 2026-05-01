@@ -247,6 +247,8 @@ pub fn exofs_err_to_errno(e: ExofsError) -> i64 {
         ExofsError::FutureEpoch => EINVAL,
         ExofsError::NvmeFlushFailed => EIO,
         ExofsError::RefCountUnderflow => EIO,
+        ExofsError::DirtyDataLoss(_) => EIO,
+        ExofsError::DiskTooSmall { .. } => ENOSPC,
     }
 }
 

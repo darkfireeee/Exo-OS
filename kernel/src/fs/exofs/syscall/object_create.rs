@@ -8,7 +8,9 @@ use super::validation::{
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
+use crate::fs::exofs::path::path_component::validate_component;
+use crate::fs::exofs::path::path_index::PathIndex;
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,10 +118,15 @@ fn create_object(
     if args.flags & !0x07FF != 0 {
         return Err(ExofsError::InvalidArgument);
     }
-    let _kind = ObjectKind::from_u8(args.kind).ok_or(ExofsError::InvalidArgument)?;
+    let kind = ObjectKind::from_u8(args.kind).ok_or(ExofsError::InvalidArgument)?;
 
     // Dériver le BlobId du chemin.
     let blob_id = BlobId::from_bytes_blake3(&path_bytes[..path_len]);
+
+    // Répercuter la création dans le répertoire parent pour que readdir
+    // puisse lister les enfants. Les répertoires eux-mêmes reçoivent aussi
+    // leur propre PathIndex vide plus bas.
+    update_parent_directory_index(path_bytes, path_len, kind, blob_id)?;
 
     // Vérifier l'exclusivité si O_EXCL.
     if args.flags & super::object_fd::open_flags::O_EXCL != 0 {
@@ -130,11 +137,21 @@ fn create_object(
 
     // O_TRUNC : vider le contenu existant.
     if args.flags & super::object_fd::open_flags::O_TRUNC != 0 {
-        let empty: [u8; 0] = [];
-        let _ = BLOB_CACHE.insert(blob_id, empty.to_vec());
+        if kind == ObjectKind::Directory {
+            let dir_index = PathIndex::new(ObjectId([0u8; 32]));
+            let bytes = dir_index.serialize()?;
+            BLOB_CACHE.insert(blob_id, bytes)?;
+        } else {
+            let empty: [u8; 0] = [];
+            let _ = BLOB_CACHE.insert(blob_id, empty.to_vec());
+        }
     } else if BLOB_CACHE.get(&blob_id).is_none() {
-        // Créer un blob vide uniquement s'il n'existe pas.
-        if args.initial_size > 0 {
+        // Créer un payload initial uniquement s'il n'existe pas.
+        if kind == ObjectKind::Directory {
+            let dir_index = PathIndex::new(ObjectId([0u8; 32]));
+            let bytes = dir_index.serialize()?;
+            BLOB_CACHE.insert(blob_id, bytes)?;
+        } else if args.initial_size > 0 {
             let sz = (args.initial_size as usize).min(super::object_write::WRITE_MAX_BYTES);
             let mut buf: Vec<u8> = Vec::new();
             buf.try_reserve(sz).map_err(|_| ExofsError::NoMemory)?;
@@ -172,6 +189,77 @@ fn create_object(
         epoch_id: args.epoch_id,
         _reserved: [0u8; 8],
     })
+}
+
+fn object_id_from_blob(blob_id: &BlobId) -> ObjectId {
+    let mut obj_bytes = [0u8; 32];
+    let bid_bytes = blob_id.as_bytes();
+    let mut i = 0usize;
+    while i < 32 {
+        obj_bytes[i] = bid_bytes[i] ^ 0x5A;
+        i = i.wrapping_add(1);
+    }
+    ObjectId(obj_bytes)
+}
+
+fn ensure_directory_blob(blob_id: BlobId, parent_oid: ObjectId) -> ExofsResult<()> {
+    if BLOB_CACHE.get(&blob_id).is_some() {
+        return Ok(());
+    }
+    let idx = PathIndex::new(parent_oid);
+    let bytes = idx.serialize()?;
+    BLOB_CACHE.insert(blob_id, bytes)?;
+    Ok(())
+}
+
+fn update_parent_directory_index(
+    path_bytes: &[u8],
+    path_len: usize,
+    kind: ObjectKind,
+    blob_id: BlobId,
+) -> ExofsResult<()> {
+    if path_len == 0 {
+        return Ok(());
+    }
+
+    let path = &path_bytes[..path_len];
+    let mut slash = None;
+    let mut i = path.len();
+    while i > 0 {
+        i -= 1;
+        if path[i] == b'/' {
+            slash = Some(i);
+            break;
+        }
+    }
+
+    let slash = match slash {
+        Some(s) if s > 0 => s,
+        _ => return Ok(()),
+    };
+
+    let parent_path = &path[..slash];
+    let name = &path[slash + 1..path_len];
+    if name.is_empty() {
+        return Ok(());
+    }
+
+    let parent_blob = BlobId::from_bytes_blake3(parent_path);
+    let parent_oid = object_id_from_blob(&parent_blob);
+    ensure_directory_blob(parent_blob, parent_oid)?;
+
+    let mut index = if let Some(bytes) = BLOB_CACHE.get(&parent_blob) {
+        PathIndex::from_bytes(&bytes).unwrap_or_else(|_| PathIndex::new(parent_oid))
+    } else {
+        PathIndex::new(parent_oid)
+    };
+
+    let comp = validate_component(name).map_err(|_| ExofsError::InvalidPathComponent)?;
+    let child_oid = object_id_from_blob(&blob_id);
+    let _ = index.insert(&comp, child_oid, kind as u8);
+    let bytes = index.serialize()?;
+    BLOB_CACHE.insert(parent_blob, bytes)?;
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -397,14 +485,9 @@ pub fn preallocate_object(blob_id: BlobId, size: usize) -> ExofsResult<()> {
 /// Crée un objet répertoire (kind == Directory) en insérant un en-tête vide
 /// qui matérialise l'entrée dans le cache.
 pub fn create_directory_object(blob_id: BlobId) -> ExofsResult<()> {
-    // Format minimal d'un répertoire : magic u32 (0xD1D0_CAFE) + entry_count u32.
-    let mut hdr = [0u8; 8];
-    hdr[0] = 0xCA;
-    hdr[1] = 0xFE;
-    hdr[2] = 0xD0;
-    hdr[3] = 0xD1;
-    // entry_count = 0
-    BLOB_CACHE.insert(blob_id, hdr.to_vec())
+    let idx = PathIndex::new(ObjectId([0u8; 32]));
+    let bytes = idx.serialize()?;
+    BLOB_CACHE.insert(blob_id, bytes)
 }
 
 /// Crée un objet lien symbolique avec sa cible.
@@ -527,8 +610,11 @@ mod extended_tests {
         let id = BlobId::from_bytes_blake3(b"/dirobj/test");
         assert!(create_directory_object(id).is_ok());
         let blob = BLOB_CACHE.get(&id).test_unwrap();
-        assert_eq!(blob.len(), 8);
-        assert_eq!(blob[0], 0xCA);
+        assert!(blob.len() >= 148);
+        assert_eq!(
+            &blob[0..4],
+            &crate::fs::exofs::path::path_index::PATH_INDEX_MAGIC.to_le_bytes()
+        );
     }
 
     #[test]

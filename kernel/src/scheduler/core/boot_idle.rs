@@ -10,7 +10,9 @@
 use super::preempt::MAX_CPUS;
 use super::runqueue::run_queue;
 use super::switch::CURRENT_THREAD_PER_CPU;
-use super::task::{CpuId, Priority, ProcessId, SchedPolicy, TaskState, ThreadControlBlock, ThreadId};
+use super::task::{
+    CpuId, Priority, ProcessId, SchedPolicy, TaskState, ThreadControlBlock, ThreadId,
+};
 use core::mem::MaybeUninit;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};

@@ -494,7 +494,10 @@ mod tests {
     #[test]
     fn test_async_op_kind_from_u8() {
         assert_eq!(AsyncOpKind::from_u8(0).test_expect("ok"), AsyncOpKind::Read);
-        assert_eq!(AsyncOpKind::from_u8(1).test_expect("ok"), AsyncOpKind::Write);
+        assert_eq!(
+            AsyncOpKind::from_u8(1).test_expect("ok"),
+            AsyncOpKind::Write
+        );
         assert!(AsyncOpKind::from_u8(99).is_err());
     }
 

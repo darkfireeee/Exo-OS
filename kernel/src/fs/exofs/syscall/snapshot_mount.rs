@@ -499,7 +499,9 @@ mod advanced_tests {
 
     fn make_snap(path: &[u8], epoch: u64) -> BlobId {
         let src_id = BlobId::from_bytes_blake3(path);
-        BLOB_CACHE.insert(src_id, b"body data".to_vec()).test_unwrap();
+        BLOB_CACHE
+            .insert(src_id, b"body data".to_vec())
+            .test_unwrap();
         let r = create_snapshot(src_id, epoch, snap_flags::READ_ONLY, b"").test_unwrap();
         BlobId(r.snapshot_id)
     }

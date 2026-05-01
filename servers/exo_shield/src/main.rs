@@ -166,12 +166,13 @@ fn handle_scan_request(req: &ShieldRequest) -> ShieldReply {
     engine::stat_scan_executed(result.matched);
 
     // Also queue for periodic tracking
-    let queued_scan_id = if let Some(scan_id) = engine::queue_scan(target_pid, scan_type, priority, tick) {
-        engine::stat_scan_queued();
-        scan_id
-    } else {
-        0
-    };
+    let queued_scan_id =
+        if let Some(scan_id) = engine::queue_scan(target_pid, scan_type, priority, tick) {
+            engine::stat_scan_queued();
+            scan_id
+        } else {
+            0
+        };
 
     // Build reply
     let mut reply = ShieldReply::new(SHIELD_OK);

@@ -426,7 +426,10 @@ mod tests {
 
     #[test]
     fn test_builder_max_depth() {
-        let qr = QueryBuilder::new(blob(251)).limit(2).execute().test_unwrap();
+        let qr = QueryBuilder::new(blob(251))
+            .limit(2)
+            .execute()
+            .test_unwrap();
         let _ = qr;
     }
 

@@ -367,7 +367,9 @@ mod tests {
             .register(id, DiskOffset(4096), data.len() as u64)
             .test_unwrap();
         let pipeline = DedupReadPipeline::new(&reader, &writer);
-        let result = pipeline.read_blob(&id, &mock_read(data.to_vec())).test_unwrap();
+        let result = pipeline
+            .read_blob(&id, &mock_read(data.to_vec()))
+            .test_unwrap();
         assert_eq!(result, data);
     }
 }

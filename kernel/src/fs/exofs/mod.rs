@@ -64,6 +64,7 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
 
     // Phase de montage du driver block virtio
     crate::fs::exofs::storage::virtio_adapter::init_global_disk();
+    register_storage_flush_barrier();
 
     // Phase 1 : Recovery boot — sélectionne l'Epoch valide
     boot_recovery_sequence(disk_size_bytes).map_err(|_| ExofsError::RecoveryFailed)?;
@@ -109,6 +110,12 @@ fn exofs_gc_kthread(_arg: usize) -> ! {
         // Yield le CPU via sys_sched_yield (fast-path) pour ne pas monopoliser le scheduler.
         crate::syscall::fast_path::sys_sched_yield();
     }
+}
+
+fn register_storage_flush_barrier() {
+    crate::fs::exofs::epoch::epoch_barriers::register_nvme_flush_fn(
+        crate::fs::exofs::storage::virtio_adapter::flush_global_disk,
+    );
 }
 
 /// Enregistre ExoFS dans la table VFS du kernel.

@@ -453,8 +453,12 @@ mod tests {
         let mut idx = PathIndex::new(fake_oid(0));
         for i in 0..n {
             let name = alloc::format!("{}{:03}", prefix as char, i).into_bytes();
-            idx.insert(&validate_component(&name).test_unwrap(), fake_oid(i as u8), 0)
-                .test_unwrap();
+            idx.insert(
+                &validate_component(&name).test_unwrap(),
+                fake_oid(i as u8),
+                0,
+            )
+            .test_unwrap();
         }
         idx
     }

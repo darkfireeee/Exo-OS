@@ -291,21 +291,26 @@ pub fn init_feature_probe(hpet_available: bool) {
     let features = crate::arch::x86_64::cpu::features::cpu_features_or_none();
 
     B_FEATURES.set_apic_mode(detect_apic_mode());
-    B_FEATURES
-        .pks_available
-        .store(features.map_or(false, |cpu| cpu.has_pks()), Ordering::Release);
-    B_FEATURES
-        .invpcid_available
-        .store(features.map_or(false, |cpu| cpu.has_invpcid()), Ordering::Release);
-    B_FEATURES
-        .pcid_available
-        .store(features.map_or(false, |cpu| cpu.has_pcid()), Ordering::Release);
-    B_FEATURES
-        .smep_available
-        .store(features.map_or(false, |cpu| cpu.has_smep()), Ordering::Release);
-    B_FEATURES
-        .smap_available
-        .store(features.map_or(false, |cpu| cpu.has_smap()), Ordering::Release);
+    B_FEATURES.pks_available.store(
+        features.map_or(false, |cpu| cpu.has_pks()),
+        Ordering::Release,
+    );
+    B_FEATURES.invpcid_available.store(
+        features.map_or(false, |cpu| cpu.has_invpcid()),
+        Ordering::Release,
+    );
+    B_FEATURES.pcid_available.store(
+        features.map_or(false, |cpu| cpu.has_pcid()),
+        Ordering::Release,
+    );
+    B_FEATURES.smep_available.store(
+        features.map_or(false, |cpu| cpu.has_smep()),
+        Ordering::Release,
+    );
+    B_FEATURES.smap_available.store(
+        features.map_or(false, |cpu| cpu.has_smap()),
+        Ordering::Release,
+    );
 
     let pmc_version = detect_pmc_version();
     B_FEATURES.pmc_version.store(pmc_version, Ordering::Release);

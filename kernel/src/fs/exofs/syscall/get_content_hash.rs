@@ -562,7 +562,9 @@ mod advanced_tests {
     #[test]
     fn test_blob_merkle_root_ok() {
         let id = BlobId::from_bytes_blake3(b"/merkle/test");
-        BLOB_CACHE.insert(id, b"blob data here".to_vec()).test_unwrap();
+        BLOB_CACHE
+            .insert(id, b"blob data here".to_vec())
+            .test_unwrap();
         let r = blob_merkle_root(id).test_unwrap();
         assert_ne!(r, [0u8; 32]);
     }

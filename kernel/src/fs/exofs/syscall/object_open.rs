@@ -11,7 +11,10 @@ use super::validation::{
     exofs_err_to_errno, read_user_path_heap, validate_open_flags, verify_cap, CapabilityType,
     EFAULT,
 };
+use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::fs::exofs::path::path_component::validate_component;
+use crate::fs::exofs::path::path_index::PathIndex;
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,6 +72,9 @@ pub(crate) fn open_object(path_bytes: &[u8], path_len: usize, args: &OpenArgs) -
 
     let resolved = super::path_resolve::resolve_path_to_blob(&path_bytes[..path_len], 0)?;
     let blob_id = crate::fs::exofs::core::types::BlobId(resolved.blob_id);
+
+    ensure_parent_directory_index(path_bytes, path_len, blob_id)?;
+
     let persisted_size = if args.size_hint != 0 {
         args.size_hint
     } else {
@@ -93,6 +99,66 @@ pub(crate) fn open_object(path_bytes: &[u8], path_len: usize, args: &OpenArgs) -
     }
 
     Ok(fd)
+}
+
+fn object_id_from_blob(blob_id: &BlobId) -> crate::fs::exofs::core::ObjectId {
+    let mut obj_bytes = [0u8; 32];
+    let bid_bytes = blob_id.as_bytes();
+    let mut i = 0usize;
+    while i < 32 {
+        obj_bytes[i] = bid_bytes[i] ^ 0x5A;
+        i = i.wrapping_add(1);
+    }
+    crate::fs::exofs::core::ObjectId(obj_bytes)
+}
+
+fn ensure_parent_directory_index(
+    path_bytes: &[u8],
+    path_len: usize,
+    blob_id: BlobId,
+) -> ExofsResult<()> {
+    if path_len == 0 {
+        return Ok(());
+    }
+
+    let path = &path_bytes[..path_len];
+    let mut slash = None;
+    let mut i = path.len();
+    while i > 0 {
+        i -= 1;
+        if path[i] == b'/' {
+            slash = Some(i);
+            break;
+        }
+    }
+
+    let slash = match slash {
+        Some(s) if s > 0 => s,
+        _ => return Ok(()),
+    };
+
+    let parent_path = &path[..slash];
+    let name = &path[slash + 1..path_len];
+    if name.is_empty() {
+        return Ok(());
+    }
+
+    let parent_blob = BlobId::from_bytes_blake3(parent_path);
+    let parent_oid = object_id_from_blob(&parent_blob);
+
+    let mut index =
+        if let Some(bytes) = crate::fs::exofs::cache::blob_cache::BLOB_CACHE.get(&parent_blob) {
+            PathIndex::from_bytes(&bytes).unwrap_or_else(|_| PathIndex::new(parent_oid))
+        } else {
+            PathIndex::new(parent_oid)
+        };
+
+    let comp = validate_component(name).map_err(|_| ExofsError::InvalidPathComponent)?;
+    let child_oid = object_id_from_blob(&blob_id);
+    let _ = index.insert(&comp, child_oid, 0);
+    let bytes = index.serialize()?;
+    crate::fs::exofs::cache::blob_cache::BLOB_CACHE.insert(parent_blob, bytes)?;
+    Ok(())
 }
 
 /// Lit les OpenArgs depuis userspace (ou retourne les valeurs par défaut si

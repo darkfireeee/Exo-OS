@@ -14,7 +14,6 @@
 //     et libère toutes les ressources.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use alloc::vec::Vec;
 use crate::process::core::pcb::ProcessState;
 use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR};
 use crate::process::core::registry::PROCESS_REGISTRY;
@@ -24,6 +23,7 @@ use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::switch::{current_thread_raw, schedule_block};
 use crate::scheduler::core::task::{CpuId, Priority, TaskState};
 use crate::scheduler::sync::wait_queue::{WaitNode, WaitQueue};
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
@@ -131,7 +131,10 @@ impl ReaperQueue {
     /// Enqueue un thread à reaper.
     /// Appelé depuis do_exit() au moment où un thread passe Dead.
     pub fn enqueue(&self, pid: Pid, tid: Tid) {
-        let entry = ReaperEntry { pid: pid.0, tid: tid.0 };
+        let entry = ReaperEntry {
+            pid: pid.0,
+            tid: tid.0,
+        };
         let enqueued = {
             let _producer_guard = self.producer_lock.lock();
             let head = self.head.load(Ordering::Relaxed);
