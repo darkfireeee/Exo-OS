@@ -1,5 +1,6 @@
 //! Syscall routing for POSIX services consumed by `vfs_server`.
 
+use super::musl::musl_bootstrap_by_syscall;
 use super::posix_services::service_by_syscall;
 use super::roles::{ServiceStatus, SyscallRoute, TranslationRole};
 use exo_syscall_abi as abi;
@@ -7,6 +8,15 @@ use exo_syscall_abi as abi;
 pub fn route_syscall(nr: u64) -> SyscallRoute {
     if (abi::SYS_EXOFS_FIRST..=abi::SYS_EXOFS_LAST).contains(&nr) {
         return SyscallRoute::NativeExofs;
+    }
+
+    if let Some(service) = musl_bootstrap_by_syscall(nr) {
+        return match service.role {
+            TranslationRole::KernelMechanism => SyscallRoute::KernelBridge(service.role),
+            TranslationRole::CompatRam => SyscallRoute::CompatOnly,
+            TranslationRole::Phase2 => SyscallRoute::Phase2,
+            _ => SyscallRoute::VfsServer(service.role),
+        };
     }
 
     match service_by_syscall(nr).map(|service| service.status) {

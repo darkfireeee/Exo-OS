@@ -23,6 +23,9 @@
 
 extern crate alloc;
 
+use crate::syscall::errno::{
+    E2BIG, EACCES, EAGAIN, EBUSY, EEXIST, EFAULT, EINTR, EINVAL, ENOENT, ENOMEM, ENOSYS, EPERM,
+};
 use crate::syscall::fast_path::Timespec;
 use crate::syscall::numbers::*;
 use crate::syscall::validation::{
@@ -186,6 +189,136 @@ pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64
     fs_bridge::bridge_result(fs_bridge::fs_write(fd as u32, buf_ptr, len, pid))
 }
 
+/// `pread64(fd, buf, count, offset)` → read without changing fd cursor.
+pub fn sys_pread64(fd: u64, buf_ptr: u64, count: u64, offset: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_PREAD64);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    let len = count as usize;
+    if len > IO_BUF_MAX {
+        return E2BIG;
+    }
+    let _validated_buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
+        Ok(b) => b,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_pread64(fd as u32, buf_ptr, len, offset, pid))
+}
+
+/// `pwrite64(fd, buf, count, offset)` → write without changing fd cursor.
+pub fn sys_pwrite64(fd: u64, buf_ptr: u64, count: u64, offset: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_PWRITE64);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    let len = count as usize;
+    if len > IO_BUF_MAX {
+        return E2BIG;
+    }
+    let _validated_buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
+        Ok(b) => b,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_pwrite64(fd as u32, buf_ptr, len, offset, pid))
+}
+
+/// `readv(fd, iov, iovcnt)`.
+pub fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_READV);
+    if iovcnt > u32::MAX as u64 {
+        return EINVAL;
+    }
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_readv(fd as u32, iov_ptr, iovcnt as u32, pid))
+}
+
+/// `writev(fd, iov, iovcnt)`.
+pub fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_WRITEV);
+    if iovcnt > u32::MAX as u64 {
+        return EINVAL;
+    }
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_writev(fd as u32, iov_ptr, iovcnt as u32, pid))
+}
+
+/// `preadv(fd, iov, iovcnt, offset)`.
+pub fn sys_preadv(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_PREADV);
+    if iovcnt > u32::MAX as u64 {
+        return EINVAL;
+    }
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_preadv(
+        fd as u32,
+        iov_ptr,
+        iovcnt as u32,
+        offset,
+        pid,
+    ))
+}
+
+/// `pwritev(fd, iov, iovcnt, offset)`.
+pub fn sys_pwritev(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_PWRITEV);
+    if iovcnt > u32::MAX as u64 {
+        return EINVAL;
+    }
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_pwritev(
+        fd as u32,
+        iov_ptr,
+        iovcnt as u32,
+        offset,
+        pid,
+    ))
+}
+
+/// `preadv2(fd, iov, iovcnt, offset, flags)`.
+pub fn sys_preadv2(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, flags: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_PREADV2);
+    if flags != 0 {
+        return ENOSYS;
+    }
+    sys_preadv(fd, iov_ptr, iovcnt, offset, 0, 0)
+}
+
+/// `pwritev2(fd, iov, iovcnt, offset, flags)`.
+pub fn sys_pwritev2(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, flags: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_PWRITEV2);
+    if flags != 0 {
+        return ENOSYS;
+    }
+    sys_pwritev(fd, iov_ptr, iovcnt, offset, 0, 0)
+}
+
 /// `open(path, flags, mode)` → fd ou errno.
 pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_OPEN);
@@ -205,6 +338,24 @@ pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u
     fs_bridge::bridge_result(fs_bridge::fs_open(
         path.as_bytes(),
         flags as u32,
+        mode as u32,
+        pid,
+    ))
+}
+
+/// `creat(path, mode)` → alias for `open(O_CREAT|O_WRONLY|O_TRUNC)`.
+pub fn sys_creat(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_CREAT);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::fs::exofs::syscall::object_fd::open_flags;
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_open(
+        path.as_bytes(),
+        open_flags::O_CREAT | open_flags::O_WRONLY | open_flags::O_TRUNC,
         mode as u32,
         pid,
     ))
@@ -294,6 +445,16 @@ pub fn sys_dup2(oldfd: u64, newfd: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) 
     fs_bridge::bridge_result(fs_bridge::fs_dup2(old as u32, new as u32, pid))
 }
 
+/// `dup3(oldfd, newfd, flags)`.
+pub fn sys_dup3(oldfd: u64, newfd: u64, flags: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_DUP3);
+    const O_CLOEXEC: u64 = 0o2000000;
+    if oldfd == newfd || flags & !O_CLOEXEC != 0 {
+        return EINVAL;
+    }
+    sys_dup2(oldfd, newfd, 0, 0, 0, 0)
+}
+
 /// `fcntl(fd, cmd, arg)`.
 pub fn sys_fcntl(fd: u64, cmd: u64, arg: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_FCNTL);
@@ -304,6 +465,240 @@ pub fn sys_fcntl(fd: u64, cmd: u64, arg: u64, _a4: u64, _a5: u64, _a6: u64) -> i
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_fcntl(fd as u32, cmd as u32, arg, pid))
+}
+
+/// `flock(fd, operation)`.
+pub fn sys_flock(fd: u64, operation: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FLOCK);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_flock(fd as u32, operation as u32, pid))
+}
+
+/// `pipe(pipefd)`.
+pub fn sys_pipe(fds_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_PIPE);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_pipe2(fds_ptr, 0, pid))
+}
+
+/// `pipe2(pipefd, flags)`.
+pub fn sys_pipe2(fds_ptr: u64, flags: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_PIPE2);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_pipe2(fds_ptr, flags as u32, pid))
+}
+
+/// `eventfd(initval)`.
+pub fn sys_eventfd(initval: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EVENTFD);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_eventfd2(initval as u32, 0, pid))
+}
+
+/// `eventfd2(initval, flags)`.
+pub fn sys_eventfd2(initval: u64, flags: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EVENTFD2);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_eventfd2(initval as u32, flags as u32, pid))
+}
+
+/// `inotify_init1(flags)`.
+pub fn sys_inotify_init1(flags: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_INOTIFY_INIT1);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_inotify_init1(flags as u32, pid))
+}
+
+/// `poll(fds, nfds, timeout)`.
+pub fn sys_poll(fds_ptr: u64, nfds: u64, timeout: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_POLL);
+    if nfds > 1024 {
+        return EINVAL;
+    }
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_poll(
+        fds_ptr,
+        nfds as usize,
+        timeout as i32,
+        pid,
+    ))
+}
+
+/// `ppoll(fds, nfds, timeout, sigmask, sigsetsize)`.
+pub fn sys_ppoll(
+    fds_ptr: u64,
+    nfds: u64,
+    timeout_ptr: u64,
+    sigmask_ptr: u64,
+    sigsetsize: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_PPOLL);
+    let _ = (timeout_ptr, sigmask_ptr, sigsetsize);
+    sys_poll(fds_ptr, nfds, 0, 0, 0, 0)
+}
+
+/// `select(nfds, readfds, writefds, exceptfds, timeout)`.
+pub fn sys_select(
+    nfds: u64,
+    readfds_ptr: u64,
+    writefds_ptr: u64,
+    exceptfds_ptr: u64,
+    timeout_ptr: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_SELECT);
+    if nfds > 1024 {
+        return EINVAL;
+    }
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_select(
+        nfds as usize,
+        readfds_ptr,
+        writefds_ptr,
+        exceptfds_ptr,
+        timeout_ptr,
+        pid,
+    ))
+}
+
+/// `pselect6(nfds, readfds, writefds, exceptfds, timeout, sigmask_pack)`.
+pub fn sys_pselect6(
+    nfds: u64,
+    readfds_ptr: u64,
+    writefds_ptr: u64,
+    exceptfds_ptr: u64,
+    timeout_ptr: u64,
+    sigmask_pack: u64,
+) -> i64 {
+    stat_inc(SYS_PSELECT6);
+    let _ = sigmask_pack;
+    sys_select(
+        nfds,
+        readfds_ptr,
+        writefds_ptr,
+        exceptfds_ptr,
+        timeout_ptr,
+        0,
+    )
+}
+
+/// `epoll_create(size)`.
+pub fn sys_epoll_create(size: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EPOLL_CREATE);
+    if size == 0 {
+        return EINVAL;
+    }
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_epoll_create1(0, pid))
+}
+
+/// `epoll_create1(flags)`.
+pub fn sys_epoll_create1(flags: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EPOLL_CREATE1);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_epoll_create1(flags as u32, pid))
+}
+
+/// `epoll_ctl(epfd, op, fd, event)`.
+pub fn sys_epoll_ctl(epfd: u64, op: u64, fd: u64, event_ptr: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EPOLL_CTL);
+    let epfd = match validate_fd(epfd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_epoll_ctl(
+        epfd as u32,
+        op as i32,
+        fd as u32,
+        event_ptr,
+        pid,
+    ))
+}
+
+/// `epoll_wait(epfd, events, maxevents, timeout)`.
+pub fn sys_epoll_wait(
+    epfd: u64,
+    events_ptr: u64,
+    maxevents: u64,
+    timeout: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EPOLL_WAIT);
+    let epfd = match validate_fd(epfd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_epoll_wait(
+        epfd as u32,
+        events_ptr,
+        maxevents as i32,
+        timeout as i32,
+        pid,
+    ))
+}
+
+/// `epoll_pwait(epfd, events, maxevents, timeout, sigmask, sigsetsize)`.
+pub fn sys_epoll_pwait(
+    epfd: u64,
+    events_ptr: u64,
+    maxevents: u64,
+    timeout: u64,
+    sigmask_ptr: u64,
+    sigsetsize: u64,
+) -> i64 {
+    stat_inc(SYS_EPOLL_PWAIT);
+    let _ = (sigmask_ptr, sigsetsize);
+    sys_epoll_wait(epfd, events_ptr, maxevents, timeout, 0, 0)
+}
+
+/// `epoll_pwait2(epfd, events, maxevents, timeout, sigmask, sigsetsize)`.
+pub fn sys_epoll_pwait2(
+    epfd: u64,
+    events_ptr: u64,
+    maxevents: u64,
+    timeout_ptr: u64,
+    sigmask_ptr: u64,
+    sigsetsize: u64,
+) -> i64 {
+    stat_inc(SYS_EPOLL_PWAIT2);
+    let _ = (timeout_ptr, sigmask_ptr, sigsetsize);
+    sys_epoll_wait(epfd, events_ptr, maxevents, 0, 0, 0)
+}
+
+/// `ioctl(fd, request, arg)`.
+pub fn sys_ioctl(fd: u64, request: u64, arg: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_IOCTL);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_ioctl(fd as u32, request, arg, pid))
 }
 
 /// `stat(path, stat_buf)`.
@@ -351,6 +746,53 @@ pub fn sys_lstat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6
     fs_bridge::bridge_result(fs_bridge::fs_lstat(path.as_bytes(), stat_ptr, pid))
 }
 
+/// `newfstatat(dirfd, path, stat_buf, flags)`.
+pub fn sys_newfstatat(
+    dirfd: u64,
+    path_ptr: u64,
+    stat_ptr: u64,
+    flags: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_NEWFSTATAT);
+    const AT_FDCWD_RAW: i64 = -100;
+    const AT_SYMLINK_NOFOLLOW: u64 = 0x100;
+    if dirfd as i64 != AT_FDCWD_RAW {
+        return ENOSYS;
+    }
+    if flags & !AT_SYMLINK_NOFOLLOW != 0 {
+        return ENOSYS;
+    }
+    if flags & AT_SYMLINK_NOFOLLOW != 0 {
+        sys_lstat(path_ptr, stat_ptr, 0, 0, 0, 0)
+    } else {
+        sys_stat(path_ptr, stat_ptr, 0, 0, 0, 0)
+    }
+}
+
+/// `access(path, mode)`.
+pub fn sys_access(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_ACCESS);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_access(path.as_bytes(), mode as u32, pid))
+}
+
+/// `faccessat(dirfd, path, mode, flags)`.
+pub fn sys_faccessat(dirfd: u64, path_ptr: u64, mode: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FACCESSAT);
+    const AT_FDCWD_RAW: i64 = -100;
+    if dirfd as i64 != AT_FDCWD_RAW || flags != 0 {
+        return ENOSYS;
+    }
+    sys_access(path_ptr, mode, 0, 0, 0, 0)
+}
+
 /// `mkdir(path, mode)`.
 pub fn sys_mkdir(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_MKDIR);
@@ -361,6 +803,16 @@ pub fn sys_mkdir(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_mkdir(path.as_bytes(), mode as u32, pid))
+}
+
+/// `mkdirat(dirfd, path, mode)`.
+pub fn sys_mkdirat(dirfd: u64, path_ptr: u64, mode: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_MKDIRAT);
+    const AT_FDCWD_RAW: i64 = -100;
+    if dirfd as i64 != AT_FDCWD_RAW {
+        return ENOSYS;
+    }
+    sys_mkdir(path_ptr, mode, 0, 0, 0, 0)
 }
 
 /// `rmdir(path)`.
@@ -385,6 +837,171 @@ pub fn sys_unlink(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_unlink(path.as_bytes(), pid))
+}
+
+/// `unlinkat(dirfd, path, flags)`.
+pub fn sys_unlinkat(dirfd: u64, path_ptr: u64, flags: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_UNLINKAT);
+    const AT_FDCWD_RAW: i64 = -100;
+    const AT_REMOVEDIR: u64 = 0x200;
+    if dirfd as i64 != AT_FDCWD_RAW {
+        return ENOSYS;
+    }
+    if flags & !AT_REMOVEDIR != 0 {
+        return EINVAL;
+    }
+    if flags & AT_REMOVEDIR != 0 {
+        sys_rmdir(path_ptr, 0, 0, 0, 0, 0)
+    } else {
+        sys_unlink(path_ptr, 0, 0, 0, 0, 0)
+    }
+}
+
+/// `rename(oldpath, newpath)`.
+pub fn sys_rename(
+    old_path_ptr: u64,
+    new_path_ptr: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_RENAME);
+    let old_path = match read_user_path(old_path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    let new_path = match read_user_path(new_path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_rename(
+        old_path.as_bytes(),
+        new_path.as_bytes(),
+        pid,
+    ))
+}
+
+/// `renameat(olddirfd, oldpath, newdirfd, newpath)`.
+pub fn sys_renameat(
+    olddirfd: u64,
+    old_path_ptr: u64,
+    newdirfd: u64,
+    new_path_ptr: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_RENAMEAT);
+    let old_path = match read_user_path(old_path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    let new_path = match read_user_path(new_path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_renameat(
+        olddirfd as i32,
+        old_path.as_bytes(),
+        newdirfd as i32,
+        new_path.as_bytes(),
+        pid,
+    ))
+}
+
+/// `renameat2(olddirfd, oldpath, newdirfd, newpath, flags)`.
+pub fn sys_renameat2(
+    olddirfd: u64,
+    old_path_ptr: u64,
+    newdirfd: u64,
+    new_path_ptr: u64,
+    flags: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_RENAMEAT2);
+    const AT_FDCWD_RAW: i64 = -100;
+    const RENAME_NOREPLACE: u64 = 1;
+    if olddirfd as i64 != AT_FDCWD_RAW || newdirfd as i64 != AT_FDCWD_RAW {
+        return ENOSYS;
+    }
+    if flags & !RENAME_NOREPLACE != 0 {
+        return EINVAL;
+    }
+    if flags & RENAME_NOREPLACE != 0 {
+        let new_path = match read_user_path(new_path_ptr) {
+            Ok(p) => p,
+            Err(e) => return e.to_errno(),
+        };
+        use crate::syscall::fs_bridge;
+        let pid = current_pid_u32();
+        match fs_bridge::fs_access(new_path.as_bytes(), 0, pid) {
+            Ok(_) => return EEXIST,
+            Err(fs_bridge::FsBridgeError::NotFound) => {}
+            Err(e) => return e.to_errno(),
+        }
+    }
+    sys_renameat(olddirfd, old_path_ptr, newdirfd, new_path_ptr, 0, 0)
+}
+
+/// `link(oldpath, newpath)`.
+pub fn sys_link(
+    old_path_ptr: u64,
+    new_path_ptr: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_LINK);
+    let old_path = match read_user_path(old_path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    let new_path = match read_user_path(new_path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_link(
+        old_path.as_bytes(),
+        new_path.as_bytes(),
+        pid,
+    ))
+}
+
+/// `linkat(olddirfd, oldpath, newdirfd, newpath, flags)`.
+pub fn sys_linkat(
+    olddirfd: u64,
+    old_path_ptr: u64,
+    newdirfd: u64,
+    new_path_ptr: u64,
+    flags: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_LINKAT);
+    let old_path = match read_user_path(old_path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    let new_path = match read_user_path(new_path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_linkat(
+        olddirfd as i32,
+        old_path.as_bytes(),
+        newdirfd as i32,
+        new_path.as_bytes(),
+        flags as u32,
+        pid,
+    ))
 }
 
 /// `symlink(target, linkpath)`.
@@ -530,6 +1147,382 @@ pub fn sys_ftruncate(fd: u64, length: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_ftruncate(fd as u32, length, pid))
+}
+
+/// `fsync(fd)`.
+pub fn sys_fsync(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FSYNC);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_fsync(fd as u32, false, pid))
+}
+
+/// `fdatasync(fd)`.
+pub fn sys_fdatasync(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FDATASYNC);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_fsync(fd as u32, true, pid))
+}
+
+/// `statfs(path, buf)`.
+pub fn sys_statfs(path_ptr: u64, statfs_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_STATFS);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    if statfs_ptr == 0 {
+        return EFAULT;
+    }
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_statfs(path.as_bytes(), statfs_ptr, pid))
+}
+
+/// `fstatfs(fd, buf)`.
+pub fn sys_fstatfs(fd: u64, statfs_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FSTATFS);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    if statfs_ptr == 0 {
+        return EFAULT;
+    }
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_fstatfs(fd as u32, statfs_ptr, pid))
+}
+
+/// `chmod(path, mode)`.
+pub fn sys_chmod(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_CHMOD);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_chmod(path.as_bytes(), mode as u32, pid))
+}
+
+/// `fchmod(fd, mode)`.
+pub fn sys_fchmod(fd: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FCHMOD);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_fchmod(fd as u32, mode as u32, pid))
+}
+
+/// `chown(path, uid, gid)`.
+pub fn sys_chown(path_ptr: u64, uid: u64, gid: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_CHOWN);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_chown(
+        path.as_bytes(),
+        uid as u32,
+        gid as u32,
+        pid,
+    ))
+}
+
+/// `fchown(fd, uid, gid)`.
+pub fn sys_fchown(fd: u64, uid: u64, gid: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FCHOWN);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_fchown(fd as u32, uid as u32, gid as u32, pid))
+}
+
+/// `lchown(path, uid, gid)`.
+pub fn sys_lchown(path_ptr: u64, uid: u64, gid: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_LCHOWN);
+    sys_chown(path_ptr, uid, gid, 0, 0, 0)
+}
+
+/// `fchmodat(dirfd, path, mode, flags)`.
+pub fn sys_fchmodat(dirfd: u64, path_ptr: u64, mode: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FCHMODAT);
+    const AT_FDCWD_RAW: i64 = -100;
+    const AT_SYMLINK_NOFOLLOW: u64 = 0x100;
+    if dirfd as i64 != AT_FDCWD_RAW || flags & !AT_SYMLINK_NOFOLLOW != 0 {
+        return ENOSYS;
+    }
+    sys_chmod(path_ptr, mode, 0, 0, 0, 0)
+}
+
+/// `fchownat(dirfd, path, uid, gid, flags)`.
+pub fn sys_fchownat(dirfd: u64, path_ptr: u64, uid: u64, gid: u64, flags: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FCHOWNAT);
+    const AT_FDCWD_RAW: i64 = -100;
+    const AT_SYMLINK_NOFOLLOW: u64 = 0x100;
+    if dirfd as i64 != AT_FDCWD_RAW || flags & !AT_SYMLINK_NOFOLLOW != 0 {
+        return ENOSYS;
+    }
+    sys_chown(path_ptr, uid, gid, 0, 0, 0)
+}
+
+/// `statx(dirfd, path, flags, mask, statxbuf)`.
+pub fn sys_statx(
+    dirfd: u64,
+    path_ptr: u64,
+    flags: u64,
+    mask: u64,
+    statx_ptr: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_STATX);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_statx(
+        dirfd as i32,
+        path.as_bytes(),
+        flags as u32,
+        mask as u32,
+        statx_ptr,
+        pid,
+    ))
+}
+
+/// `getcwd(buf, size)`.
+pub fn sys_getcwd(buf_ptr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_GETCWD);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_getcwd(buf_ptr, size as usize, pid))
+}
+
+/// `chdir(path)`.
+pub fn sys_chdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_CHDIR);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_chdir(path.as_bytes(), pid))
+}
+
+/// `fchdir(fd)`.
+pub fn sys_fchdir(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FCHDIR);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_fchdir(fd as u32, pid))
+}
+
+/// `umask(mask)`.
+pub fn sys_umask(mask: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_UMASK);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_umask(mask as u32, pid))
+}
+
+/// `getrlimit(resource, rlim)`.
+pub fn sys_getrlimit(resource: u64, rlim_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_GETRLIMIT);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_getrlimit(resource as u32, rlim_ptr, pid))
+}
+
+/// `setrlimit(resource, rlim)`.
+pub fn sys_setrlimit(resource: u64, rlim_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_SETRLIMIT);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_setrlimit(resource as u32, rlim_ptr, pid))
+}
+
+/// `copy_file_range(fd_in, off_in, fd_out, off_out, len, flags)`.
+pub fn sys_copy_file_range(
+    fd_in: u64,
+    off_in_ptr: u64,
+    fd_out: u64,
+    off_out_ptr: u64,
+    len: u64,
+    flags: u64,
+) -> i64 {
+    stat_inc(SYS_COPY_FILE_RANGE);
+    if len as usize as u64 != len || len as usize > IO_BUF_MAX {
+        return E2BIG;
+    }
+    let fd_in = match validate_fd(fd_in) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    let fd_out = match validate_fd(fd_out) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_copy_file_range(
+        fd_in as u32,
+        off_in_ptr,
+        fd_out as u32,
+        off_out_ptr,
+        len as usize,
+        flags as u32,
+        pid,
+    ))
+}
+
+/// `sendfile(out_fd, in_fd, offset, count)`.
+pub fn sys_sendfile(
+    out_fd: u64,
+    in_fd: u64,
+    offset_ptr: u64,
+    count: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_SENDFILE);
+    if count as usize as u64 != count || count as usize > IO_BUF_MAX {
+        return E2BIG;
+    }
+    let out_fd = match validate_fd(out_fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    let in_fd = match validate_fd(in_fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_sendfile(
+        out_fd as u32,
+        in_fd as u32,
+        offset_ptr,
+        count as usize,
+        pid,
+    ))
+}
+
+/// `fallocate(fd, mode, offset, len)`.
+pub fn sys_fallocate(fd: u64, mode: u64, offset: u64, len: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FALLOCATE);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_fallocate(
+        fd as u32,
+        mode as u32,
+        offset,
+        len,
+        pid,
+    ))
+}
+
+/// `sync()`.
+pub fn sys_sync(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_SYNC);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_sync(pid))
+}
+
+/// `sync_file_range(fd, offset, nbytes, flags)`.
+pub fn sys_sync_file_range(
+    fd: u64,
+    offset: u64,
+    nbytes: u64,
+    flags: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_SYNC_FILE_RANGE);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_sync_file_range(
+        fd as u32,
+        offset,
+        nbytes,
+        flags as u32,
+        pid,
+    ))
+}
+
+/// `fadvise64(fd, offset, len, advice)`.
+pub fn sys_fadvise64(fd: u64, offset: u64, len: u64, advice: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FADVISE64);
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_fadvise64(
+        fd as u32,
+        offset,
+        len,
+        advice as u32,
+        pid,
+    ))
+}
+
+/// `msync(addr, length, flags)`; accepted for RAM-backed ExoFS mappings.
+pub fn sys_msync(addr: u64, len: u64, flags: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_MSYNC);
+    const MS_ASYNC: u64 = 0x1;
+    const MS_INVALIDATE: u64 = 0x2;
+    const MS_SYNC: u64 = 0x4;
+    if addr == 0 || len == 0 || flags & !(MS_ASYNC | MS_INVALIDATE | MS_SYNC) != 0 {
+        return EINVAL;
+    }
+    0
+}
+
+/// `clock_gettime(clockid, tp)` slow-path wrapper.
+pub fn sys_clock_gettime(clk_id: u64, tp_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_CLOCK_GETTIME);
+    crate::syscall::fast_path::sys_clock_gettime(clk_id, tp_ptr)
+}
+
+/// `gettimeofday(tv, tz)` slow-path wrapper.
+pub fn sys_gettimeofday(tv_ptr: u64, tz_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_GETTIMEOFDAY);
+    crate::syscall::fast_path::sys_gettimeofday(tv_ptr, tz_ptr)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -769,6 +1762,19 @@ pub fn sys_wait4(
     crate::syscall::handlers::process::sys_wait4(pid, wstatus_ptr, options, rusage_ptr, 0, 0)
 }
 
+/// `waitid(idtype, id, infop, options, rusage)`.
+pub fn sys_waitid(
+    idtype: u64,
+    id: u64,
+    infop: u64,
+    options: u64,
+    rusage_ptr: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_WAITID);
+    crate::syscall::handlers::process::sys_waitid(idtype, id, infop, options, rusage_ptr, 0)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers Signaux (délégués vers process/signal/)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -866,6 +1872,53 @@ pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _
     let deadline = crate::scheduler::timer::clock::monotonic_ns().saturating_add(ns);
     loop {
         if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let _ = rem_ptr;
+    0
+}
+
+/// `clock_nanosleep(clockid, flags, req, rem)`.
+pub fn sys_clock_nanosleep(
+    clk_id: u64,
+    flags: u64,
+    req_ptr: u64,
+    rem_ptr: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_CLOCK_NANOSLEEP);
+    const TIMER_ABSTIME: u64 = 1;
+    const CLOCK_REALTIME: u64 = 0;
+    const CLOCK_MONOTONIC: u64 = 1;
+    const CLOCK_BOOTTIME: u64 = 7;
+    if flags & !TIMER_ABSTIME != 0 {
+        return EINVAL;
+    }
+    match clk_id {
+        CLOCK_REALTIME | CLOCK_MONOTONIC | CLOCK_BOOTTIME => {}
+        _ => return EINVAL,
+    }
+    if flags & TIMER_ABSTIME == 0 {
+        return sys_nanosleep(req_ptr, rem_ptr, 0, 0, 0, 0);
+    }
+    if req_ptr == 0 {
+        return EFAULT;
+    }
+    let ts = match read_user_typed::<Timespec>(req_ptr) {
+        Ok(t) => t,
+        Err(e) => return e.to_errno(),
+    };
+    if ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1_000_000_000 {
+        return EINVAL;
+    }
+    let target_ns = (ts.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec as u64);
+    loop {
+        if crate::scheduler::timer::clock::monotonic_ns() >= target_ns {
             break;
         }
         core::hint::spin_loop();
@@ -1976,26 +3029,88 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         // ── I/O, Fichiers ──────────────────────────────────────────────────
         SYS_READ => sys_read,
         SYS_WRITE => sys_write,
+        SYS_PREAD64 => sys_pread64,
+        SYS_PWRITE64 => sys_pwrite64,
+        SYS_READV => sys_readv,
+        SYS_WRITEV => sys_writev,
+        SYS_POLL => sys_poll,
+        SYS_SELECT => sys_select,
+        SYS_PPOLL => sys_ppoll,
+        SYS_PSELECT6 => sys_pselect6,
         SYS_OPEN => sys_open,
         SYS_CLOSE => sys_close,
         SYS_STAT => sys_stat,
         SYS_FSTAT => sys_fstat,
         SYS_LSTAT => sys_lstat,
+        SYS_NEWFSTATAT => sys_newfstatat,
+        SYS_STATX => sys_statx,
         SYS_LSEEK => sys_lseek,
         SYS_DUP => sys_dup,
         SYS_DUP2 => sys_dup2,
+        SYS_DUP3 => sys_dup3,
+        SYS_PIPE => sys_pipe,
+        SYS_PIPE2 => sys_pipe2,
         SYS_FCNTL => sys_fcntl,
+        SYS_FLOCK => sys_flock,
+        SYS_IOCTL => sys_ioctl,
+        SYS_FSYNC => sys_fsync,
+        SYS_FDATASYNC => sys_fdatasync,
+        SYS_SYNC => sys_sync,
+        SYS_SYNC_FILE_RANGE => sys_sync_file_range,
+        SYS_MSYNC => sys_msync,
         SYS_MKDIR => sys_mkdir,
+        SYS_MKDIRAT => sys_mkdirat,
         SYS_RMDIR => sys_rmdir,
         SYS_UNLINK => sys_unlink,
+        SYS_UNLINKAT => sys_unlinkat,
+        SYS_RENAME => sys_rename,
+        SYS_RENAMEAT => sys_renameat,
+        SYS_RENAMEAT2 => sys_renameat2,
+        SYS_LINK => sys_link,
+        SYS_LINKAT => sys_linkat,
+        SYS_CREAT => sys_creat,
+        SYS_ACCESS => sys_access,
+        SYS_FACCESSAT => sys_faccessat,
         SYS_SYMLINK => sys_symlink,
+        SYS_GETCWD => sys_getcwd,
+        SYS_CHDIR => sys_chdir,
+        SYS_FCHDIR => sys_fchdir,
         SYS_TRUNCATE => sys_truncate,
         SYS_FTRUNCATE => sys_ftruncate,
+        SYS_FALLOCATE => sys_fallocate,
+        SYS_COPY_FILE_RANGE => sys_copy_file_range,
+        SYS_SENDFILE => sys_sendfile,
+        SYS_FADVISE64 => sys_fadvise64,
+        SYS_CHMOD => sys_chmod,
+        SYS_FCHMOD => sys_fchmod,
+        SYS_FCHMODAT => sys_fchmodat,
+        SYS_CHOWN => sys_chown,
+        SYS_FCHOWN => sys_fchown,
+        SYS_LCHOWN => sys_lchown,
+        SYS_FCHOWNAT => sys_fchownat,
+        SYS_UMASK => sys_umask,
+        SYS_GETRLIMIT => sys_getrlimit,
+        SYS_SETRLIMIT => sys_setrlimit,
+        SYS_STATFS => sys_statfs,
+        SYS_FSTATFS => sys_fstatfs,
         SYS_OPENAT => sys_openat,
         SYS_GETDENTS64 => sys_getdents64,
         SYS_READLINK => sys_readlink,
         SYS_SYMLINKAT => sys_symlinkat,
         SYS_READLINKAT => sys_readlinkat,
+        SYS_EPOLL_CREATE => sys_epoll_create,
+        SYS_EPOLL_CREATE1 => sys_epoll_create1,
+        SYS_EPOLL_CTL => sys_epoll_ctl,
+        SYS_EPOLL_WAIT => sys_epoll_wait,
+        SYS_EPOLL_PWAIT => sys_epoll_pwait,
+        SYS_EPOLL_PWAIT2 => sys_epoll_pwait2,
+        SYS_EVENTFD => sys_eventfd,
+        SYS_EVENTFD2 => sys_eventfd2,
+        SYS_INOTIFY_INIT1 => sys_inotify_init1,
+        SYS_PREADV => sys_preadv,
+        SYS_PWRITEV => sys_pwritev,
+        SYS_PREADV2 => sys_preadv2,
+        SYS_PWRITEV2 => sys_pwritev2,
         // ── Mémoire ────────────────────────────────────────────────────────
         SYS_MMAP => sys_mmap,
         SYS_MUNMAP => sys_munmap,
@@ -2009,6 +3124,20 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXIT => sys_exit,
         SYS_EXIT_GROUP => sys_exit_group,
         SYS_WAIT4 => sys_wait4,
+        SYS_WAITID => sys_waitid,
+        SYS_GETPID => crate::syscall::handlers::misc::sys_getpid,
+        SYS_GETPPID => crate::syscall::handlers::misc::sys_getppid,
+        SYS_GETTID => crate::syscall::handlers::misc::sys_gettid,
+        SYS_GETUID => crate::syscall::handlers::misc::sys_getuid,
+        SYS_GETGID => crate::syscall::handlers::misc::sys_getgid,
+        SYS_GETEUID => crate::syscall::handlers::misc::sys_geteuid,
+        SYS_GETEGID => crate::syscall::handlers::misc::sys_getegid,
+        SYS_UNAME => crate::syscall::handlers::misc::sys_uname,
+        SYS_ARCH_PRCTL => crate::syscall::handlers::misc::sys_arch_prctl,
+        SYS_SET_TID_ADDRESS => crate::syscall::handlers::misc::sys_set_tid_address,
+        SYS_PRCTL => crate::syscall::handlers::misc::sys_prctl,
+        SYS_SYSINFO => crate::syscall::handlers::misc::sys_sysinfo,
+        SYS_GETCPU => crate::syscall::handlers::misc::sys_getcpu,
         // ── Signaux ────────────────────────────────────────────────────────
         SYS_KILL => sys_kill,
         SYS_TGKILL => sys_tgkill,
@@ -2016,6 +3145,10 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_RT_SIGPROCMASK => sys_rt_sigprocmask,
         SYS_SIGALTSTACK => sys_sigaltstack,
         // ── Scheduler ──────────────────────────────────────────────────────
+        SYS_SCHED_YIELD => crate::syscall::handlers::misc::sys_sched_yield,
+        SYS_CLOCK_GETTIME => sys_clock_gettime,
+        SYS_GETTIMEOFDAY => sys_gettimeofday,
+        SYS_CLOCK_NANOSLEEP => sys_clock_nanosleep,
         SYS_NANOSLEEP => sys_nanosleep,
         SYS_FUTEX => sys_futex,
         SYS_GETRANDOM => sys_getrandom,

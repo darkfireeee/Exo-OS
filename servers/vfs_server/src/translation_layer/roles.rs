@@ -23,6 +23,8 @@ pub enum ServiceClass {
     Descriptor,
     PseudoFs,
     Memory,
+    Process,
+    Time,
     Notification,
     Phase2,
 }

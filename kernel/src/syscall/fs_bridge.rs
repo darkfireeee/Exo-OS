@@ -23,7 +23,7 @@
 
 use alloc::vec::Vec;
 use core::mem::size_of;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::fs::exofs::cache::BLOB_CACHE;
 use crate::fs::exofs::core::{BlobId, ExofsError, ObjectId};
@@ -35,7 +35,7 @@ use crate::fs::exofs::path::symlink::{
     invalidate_symlink, is_valid_symlink_target, register_symlink, SYMLINK_MAX_DEPTH,
 };
 use crate::fs::exofs::syscall::object_fd::{open_flags, OBJECT_TABLE};
-use crate::syscall::validation::{copy_from_user, copy_to_user, write_user_typed};
+use crate::syscall::validation::{copy_from_user, copy_to_user, read_user_typed, write_user_typed};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // État du bridge — atomique pour thread-safety
@@ -95,6 +95,8 @@ pub enum FsBridgeError {
     Loop,
     /// Erreur I/O non spécifiée.
     Io,
+    /// Opération non bloquante sans donnée disponible.
+    WouldBlock,
 }
 
 impl FsBridgeError {
@@ -115,6 +117,7 @@ impl FsBridgeError {
             FsBridgeError::NotEmpty => -39,   // ENOTEMPTY
             FsBridgeError::Loop => -40,       // ELOOP
             FsBridgeError::Io => -5,          // EIO
+            FsBridgeError::WouldBlock => -11, // EAGAIN
         }
     }
 }
@@ -128,7 +131,37 @@ const F_GETFD: u32 = 1;
 const F_SETFD: u32 = 2;
 const F_GETFL: u32 = 3;
 const F_SETFL: u32 = 4;
+const F_GETLK: u32 = 5;
+const F_SETLK: u32 = 6;
+const F_SETLKW: u32 = 7;
+const F_RDLCK: i16 = 0;
+const F_WRLCK: i16 = 1;
+const F_UNLCK: i16 = 2;
+const FD_CLOEXEC: u64 = 1;
+const O_CLOEXEC: u32 = 0o2000000;
+const O_NONBLOCK: u32 = 0x0800;
+const EFD_SEMAPHORE: u32 = 0x0001;
+const LOCK_SH: u32 = 1;
+const LOCK_EX: u32 = 2;
+const LOCK_NB: u32 = 4;
+const LOCK_UN: u32 = 8;
+const POLLIN: i16 = 0x0001;
+const POLLOUT: i16 = 0x0004;
+const POLLNVAL: i16 = 0x0020;
+const EPOLL_CLOEXEC: u32 = O_CLOEXEC;
+const EPOLL_CTL_ADD: i32 = 1;
+const EPOLL_CTL_DEL: i32 = 2;
+const EPOLL_CTL_MOD: i32 = 3;
+const FIONREAD: u64 = 0x541B;
+const FALLOC_FL_KEEP_SIZE: u32 = 0x01;
+const SYNC_FILE_RANGE_WAIT_BEFORE: u32 = 0x01;
+const SYNC_FILE_RANGE_WRITE: u32 = 0x02;
+const SYNC_FILE_RANGE_WAIT_AFTER: u32 = 0x04;
+const RLIMIT_NOFILE: u32 = 7;
+const RLIMIT_NLIMITS: u32 = 16;
 const STAT_BLOCK_SIZE: i64 = 4096;
+const EXOFS_STATFS_MAGIC: u64 = 0x4558_4F46;
+const EXOFS_STATFS_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const STAT_MODE_DIR: u32 = 0o040000 | 0o755;
 const STAT_MODE_FILE: u32 = 0o100000 | 0o644;
 const STAT_MODE_SYMLINK: u32 = 0o120000 | 0o777;
@@ -139,8 +172,15 @@ const DT_UNKNOWN: u8 = 0;
 const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
 const DT_LNK: u8 = 10;
+const PSEUDO_PIPE_TAG: u8 = 0xF1;
+const PSEUDO_EVENTFD_TAG: u8 = 0xE7;
+const PSEUDO_EPOLL_TAG: u8 = 0xE9;
+const PSEUDO_INOTIFY_TAG: u8 = 0x1D;
 #[cfg(test)]
 const STAT_MODE_MASK: u32 = 0o170000;
+
+static NEXT_PSEUDO_ID: AtomicU64 = AtomicU64::new(1);
+static POSIX_UMASK: AtomicU32 = AtomicU32::new(0o022);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -181,6 +221,113 @@ struct LinuxDirent64 {
 }
 
 const DIRENT64_HEADER_SIZE: usize = size_of::<LinuxDirent64>();
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxIovec {
+    iov_base: u64,
+    iov_len: u64,
+}
+
+const _: () = assert!(size_of::<LinuxIovec>() == 16);
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxFlock {
+    l_type: i16,
+    l_whence: i16,
+    l_start: i64,
+    l_len: i64,
+    l_pid: i32,
+}
+
+const _: () = assert!(size_of::<LinuxFlock>() == 32);
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxStatFs {
+    f_type: u64,
+    f_bsize: u64,
+    f_blocks: u64,
+    f_bfree: u64,
+    f_bavail: u64,
+    f_files: u64,
+    f_ffree: u64,
+    f_fsid: [i32; 2],
+    f_namelen: u64,
+    f_frsize: u64,
+    f_flags: u64,
+    f_spare: [u64; 4],
+}
+
+const _: () = assert!(size_of::<LinuxStatFs>() == 120);
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxPollFd {
+    fd: i32,
+    events: i16,
+    revents: i16,
+}
+
+const _: () = assert!(size_of::<LinuxPollFd>() == 8);
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxEpollEvent {
+    events: u32,
+    data: u64,
+}
+
+const _: () = assert!(size_of::<LinuxEpollEvent>() == 16);
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxRlimit {
+    rlim_cur: u64,
+    rlim_max: u64,
+}
+
+const _: () = assert!(size_of::<LinuxRlimit>() == 16);
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxStatxTimestamp {
+    tv_sec: i64,
+    tv_nsec: u32,
+    __reserved: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxStatx {
+    stx_mask: u32,
+    stx_blksize: u32,
+    stx_attributes: u64,
+    stx_nlink: u32,
+    stx_uid: u32,
+    stx_gid: u32,
+    stx_mode: u16,
+    __spare0: u16,
+    stx_ino: u64,
+    stx_size: u64,
+    stx_blocks: u64,
+    stx_attributes_mask: u64,
+    stx_atime: LinuxStatxTimestamp,
+    stx_btime: LinuxStatxTimestamp,
+    stx_ctime: LinuxStatxTimestamp,
+    stx_mtime: LinuxStatxTimestamp,
+    stx_rdev_major: u32,
+    stx_rdev_minor: u32,
+    stx_dev_major: u32,
+    stx_dev_minor: u32,
+    stx_mnt_id: u64,
+    stx_dio_mem_align: u32,
+    stx_dio_offset_align: u32,
+    __spare3: [u64; 12],
+}
+
+const _: () = assert!(size_of::<LinuxStatx>() == 256);
 
 #[inline]
 fn exofs_to_bridge_error(err: ExofsError) -> FsBridgeError {
@@ -306,6 +453,277 @@ fn resize_regular_blob(blob_id: BlobId, length: u64) -> Result<(), FsBridgeError
         .map_err(exofs_to_bridge_error)?;
     let _ = BLOB_CACHE.mark_dirty(&blob_id);
     Ok(())
+}
+
+#[inline]
+fn read_blob_at(
+    blob_id: BlobId,
+    offset: u64,
+    buf_ptr: u64,
+    count: usize,
+) -> Result<i64, FsBridgeError> {
+    if buf_ptr == 0 && count != 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    if count == 0 {
+        return Ok(0);
+    }
+
+    let data = match BLOB_CACHE.get(&blob_id) {
+        Some(bytes) => bytes,
+        None => return Err(FsBridgeError::NotFound),
+    };
+    let start = offset as usize;
+    if start >= data.len() {
+        return Ok(0);
+    }
+
+    let read_len = count.min(data.len() - start);
+    copy_to_user(
+        buf_ptr as *mut u8,
+        data[start..start + read_len].as_ptr(),
+        read_len,
+    )
+    .map_err(|_| FsBridgeError::Fault)?;
+    Ok(read_len as i64)
+}
+
+#[inline]
+fn write_blob_at(
+    blob_id: BlobId,
+    offset: u64,
+    buf_ptr: u64,
+    count: usize,
+) -> Result<i64, FsBridgeError> {
+    if buf_ptr == 0 && count != 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    if count == 0 {
+        return Ok(0);
+    }
+    if offset > usize::MAX as u64 {
+        return Err(FsBridgeError::Invalid);
+    }
+
+    let mut input = Vec::new();
+    input.resize(count, 0);
+    copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
+        .map_err(|_| FsBridgeError::Fault)?;
+
+    let mut data = match BLOB_CACHE.get(&blob_id) {
+        Some(bytes) => bytes.into_vec(),
+        None => Vec::new(),
+    };
+    let start = offset as usize;
+    let end = start.checked_add(count).ok_or(FsBridgeError::NoSpace)?;
+    if data.len() < end {
+        data.try_reserve(end - data.len())
+            .map_err(|_| FsBridgeError::NoSpace)?;
+        data.resize(end, 0);
+    }
+    data[start..end].copy_from_slice(&input);
+
+    BLOB_CACHE
+        .insert(blob_id, data)
+        .map_err(exofs_to_bridge_error)?;
+    let _ = BLOB_CACHE.mark_dirty(&blob_id);
+    Ok(count as i64)
+}
+
+#[inline]
+fn read_blob_bytes_at(
+    blob_id: BlobId,
+    offset: u64,
+    count: usize,
+) -> Result<Vec<u8>, FsBridgeError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let data = match BLOB_CACHE.get(&blob_id) {
+        Some(bytes) => bytes,
+        None => return Err(FsBridgeError::NotFound),
+    };
+    let start = offset as usize;
+    if start >= data.len() {
+        return Ok(Vec::new());
+    }
+    let read_len = count.min(data.len() - start);
+    Ok(data[start..start + read_len].to_vec())
+}
+
+#[inline]
+fn write_blob_bytes_at(blob_id: BlobId, offset: u64, bytes: &[u8]) -> Result<i64, FsBridgeError> {
+    if bytes.is_empty() {
+        return Ok(0);
+    }
+    if offset > usize::MAX as u64 {
+        return Err(FsBridgeError::Invalid);
+    }
+
+    let mut data = match BLOB_CACHE.get(&blob_id) {
+        Some(existing) => existing.into_vec(),
+        None => Vec::new(),
+    };
+    let start = offset as usize;
+    let end = start
+        .checked_add(bytes.len())
+        .ok_or(FsBridgeError::NoSpace)?;
+    if data.len() < end {
+        data.try_reserve(end - data.len())
+            .map_err(|_| FsBridgeError::NoSpace)?;
+        data.resize(end, 0);
+    }
+    data[start..end].copy_from_slice(bytes);
+    BLOB_CACHE
+        .insert(blob_id, data)
+        .map_err(exofs_to_bridge_error)?;
+    let _ = BLOB_CACHE.mark_dirty(&blob_id);
+    Ok(bytes.len() as i64)
+}
+
+#[inline]
+fn pseudo_blob_id(tag: u8, seq: u64) -> BlobId {
+    let mut bytes = [0u8; 32];
+    bytes[0] = tag;
+    bytes[1] = b'E';
+    bytes[2] = b'X';
+    bytes[3] = b'O';
+    bytes[4..12].copy_from_slice(&seq.to_le_bytes());
+    BlobId(bytes)
+}
+
+#[inline]
+fn next_pseudo_blob(tag: u8) -> BlobId {
+    let seq = NEXT_PSEUDO_ID.fetch_add(1, Ordering::Relaxed);
+    pseudo_blob_id(tag, seq)
+}
+
+#[inline]
+fn is_pseudo_blob(blob_id: &BlobId, tag: u8) -> bool {
+    let bytes = blob_id.as_bytes();
+    bytes[0] == tag && bytes[1] == b'E' && bytes[2] == b'X' && bytes[3] == b'O'
+}
+
+#[inline]
+fn mark_blob_clean(blob_id: &BlobId) {
+    if BLOB_CACHE.contains(blob_id) {
+        let _ = BLOB_CACHE.mark_clean(blob_id);
+    }
+}
+
+#[inline]
+fn mark_all_blobs_clean() {
+    let dirty = BLOB_CACHE.dirty_ids();
+    let mut i = 0usize;
+    while i < dirty.len() {
+        let _ = BLOB_CACHE.mark_clean(&dirty[i]);
+        i += 1;
+    }
+}
+
+#[inline]
+fn eventfd_state(blob_id: BlobId) -> Result<(u64, u32), FsBridgeError> {
+    let data = snapshot_blob(&blob_id)?;
+    if data.len() < 8 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let value = u64::from_le_bytes([
+        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+    ]);
+    let flags = if data.len() > 8 { data[8] as u32 } else { 0 };
+    Ok((value, flags))
+}
+
+#[inline]
+fn store_eventfd_state(blob_id: BlobId, value: u64, flags: u32) -> Result<(), FsBridgeError> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&value.to_le_bytes());
+    data.push((flags & EFD_SEMAPHORE) as u8);
+    BLOB_CACHE
+        .insert(blob_id, data)
+        .map_err(exofs_to_bridge_error)?;
+    let _ = BLOB_CACHE.mark_dirty(&blob_id);
+    Ok(())
+}
+
+#[inline]
+fn fd_readiness(fd: u32) -> Result<(bool, bool), FsBridgeError> {
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let mut readable = entry.can_read();
+    let writable = entry.can_write();
+
+    if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
+        readable = blob_len(&entry.blob_id) != 0;
+    } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG) {
+        readable = eventfd_state(entry.blob_id)
+            .map(|(value, _)| value != 0)
+            .unwrap_or(false);
+    } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_INOTIFY_TAG) {
+        readable = false;
+    }
+
+    Ok((readable, writable))
+}
+
+#[inline]
+fn set_fdset_bit(set: &mut [u8], fd: usize, present: bool) {
+    let byte = fd / 8;
+    let bit = fd % 8;
+    if byte >= set.len() {
+        return;
+    }
+    let mask = 1u8 << bit;
+    if present {
+        set[byte] |= mask;
+    } else {
+        set[byte] &= !mask;
+    }
+}
+
+#[inline]
+fn fdset_bit(set: &[u8], fd: usize) -> bool {
+    let byte = fd / 8;
+    let bit = fd % 8;
+    byte < set.len() && (set[byte] & (1u8 << bit)) != 0
+}
+
+#[inline]
+fn flock_range_from_abi(fl: LinuxFlock) -> Result<(u64, u64), FsBridgeError> {
+    if fl.l_whence != SEEK_SET as i16 || fl.l_start < 0 || fl.l_len < 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let start = fl.l_start as u64;
+    let len = if fl.l_len == 0 {
+        u64::MAX.saturating_sub(start)
+    } else {
+        fl.l_len as u64
+    };
+    Ok((start, len))
+}
+
+#[inline]
+fn statfs_snapshot() -> LinuxStatFs {
+    let used = BLOB_CACHE.used_bytes();
+    let total = EXOFS_STATFS_TOTAL_BYTES.max(used);
+    let bsize = STAT_BLOCK_SIZE as u64;
+    let blocks = total / bsize;
+    let used_blocks = used.saturating_add(bsize - 1) / bsize;
+    let free = blocks.saturating_sub(used_blocks);
+
+    LinuxStatFs {
+        f_type: EXOFS_STATFS_MAGIC,
+        f_bsize: bsize,
+        f_blocks: blocks,
+        f_bfree: free,
+        f_bavail: free,
+        f_files: BLOB_CACHE.n_entries() as u64,
+        f_ffree: u64::MAX / 2,
+        f_fsid: [0x4558, 0x4F46],
+        f_namelen: 255,
+        f_frsize: bsize,
+        f_flags: 0,
+        f_spare: [0; 4],
+    }
 }
 
 #[inline]
@@ -555,6 +973,37 @@ fn linux_stat_for_blob(blob_id: BlobId, data: &[u8], owner_uid: u32, kind: u8) -
 }
 
 #[inline]
+fn linux_statx_for_blob(blob_id: BlobId, data: &[u8], owner_uid: u32, kind: u8) -> LinuxStatx {
+    let stat = linux_stat_for_blob(blob_id, data, owner_uid, kind);
+    LinuxStatx {
+        stx_mask: 0x0000_1FFF,
+        stx_blksize: stat.st_blksize as u32,
+        stx_attributes: 0,
+        stx_nlink: stat.st_nlink as u32,
+        stx_uid: stat.st_uid,
+        stx_gid: stat.st_gid,
+        stx_mode: stat.st_mode as u16,
+        __spare0: 0,
+        stx_ino: stat.st_ino,
+        stx_size: stat.st_size as u64,
+        stx_blocks: stat.st_blocks as u64,
+        stx_attributes_mask: 0,
+        stx_atime: LinuxStatxTimestamp::default(),
+        stx_btime: LinuxStatxTimestamp::default(),
+        stx_ctime: LinuxStatxTimestamp::default(),
+        stx_mtime: LinuxStatxTimestamp::default(),
+        stx_rdev_major: 0,
+        stx_rdev_minor: 0,
+        stx_dev_major: 0,
+        stx_dev_minor: 0,
+        stx_mnt_id: 1,
+        stx_dio_mem_align: 0,
+        stx_dio_offset_align: 0,
+        __spare3: [0; 12],
+    }
+}
+
+#[inline]
 fn path_entry(path: &[u8]) -> Result<(BlobId, u8), FsBridgeError> {
     ensure_root_directory()?;
     if path == b"/" {
@@ -660,6 +1109,48 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
         return Err(FsBridgeError::PermDenied);
     }
 
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
+        let data = BLOB_CACHE
+            .get(&entry.blob_id)
+            .map(|bytes| bytes.into_vec())
+            .unwrap_or_default();
+        if data.is_empty() {
+            return Err(FsBridgeError::WouldBlock);
+        }
+        let read_len = count.min(data.len());
+        copy_to_user(buf_ptr as *mut u8, data.as_ptr(), read_len)
+            .map_err(|_| FsBridgeError::Fault)?;
+        let remaining = data[read_len..].to_vec();
+        BLOB_CACHE
+            .insert(entry.blob_id, remaining)
+            .map_err(exofs_to_bridge_error)?;
+        let _ = BLOB_CACHE.mark_dirty(&entry.blob_id);
+        return Ok(read_len as i64);
+    }
+
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG) {
+        if count < size_of::<u64>() {
+            return Err(FsBridgeError::Invalid);
+        }
+        let (value, flags) = eventfd_state(entry.blob_id)?;
+        if value == 0 {
+            return Err(FsBridgeError::WouldBlock);
+        }
+        let out = if flags & EFD_SEMAPHORE != 0 { 1 } else { value };
+        let next = if flags & EFD_SEMAPHORE != 0 {
+            value.saturating_sub(1)
+        } else {
+            0
+        };
+        write_user_typed(buf_ptr, out).map_err(|_| FsBridgeError::Fault)?;
+        store_eventfd_state(entry.blob_id, next, flags)?;
+        return Ok(size_of::<u64>() as i64);
+    }
+
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_INOTIFY_TAG) {
+        return Err(FsBridgeError::WouldBlock);
+    }
+
     let data = match BLOB_CACHE.get(&entry.blob_id) {
         Some(bytes) => bytes,
         None if entry.size == 0 => return Ok(0),
@@ -702,6 +1193,39 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
         return Err(FsBridgeError::PermDenied);
     }
 
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
+        let mut input = Vec::new();
+        input.resize(count, 0);
+        copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
+            .map_err(|_| FsBridgeError::Fault)?;
+        let mut data = BLOB_CACHE
+            .get(&entry.blob_id)
+            .map(|bytes| bytes.into_vec())
+            .unwrap_or_default();
+        data.try_reserve(input.len())
+            .map_err(|_| FsBridgeError::NoSpace)?;
+        data.extend_from_slice(&input);
+        BLOB_CACHE
+            .insert(entry.blob_id, data)
+            .map_err(exofs_to_bridge_error)?;
+        let _ = BLOB_CACHE.mark_dirty(&entry.blob_id);
+        return Ok(count as i64);
+    }
+
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG) {
+        if count < size_of::<u64>() {
+            return Err(FsBridgeError::Invalid);
+        }
+        let add = read_user_typed::<u64>(buf_ptr).map_err(|_| FsBridgeError::Fault)?;
+        if add == u64::MAX {
+            return Err(FsBridgeError::Invalid);
+        }
+        let (value, flags) = eventfd_state(entry.blob_id)?;
+        let next = value.checked_add(add).ok_or(FsBridgeError::WouldBlock)?;
+        store_eventfd_state(entry.blob_id, next, flags)?;
+        return Ok(size_of::<u64>() as i64);
+    }
+
     let mut input = Vec::new();
     input.resize(count, 0);
     copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
@@ -736,6 +1260,134 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
     Ok(count as i64)
 }
 
+/// `pread64(fd, buf, count, offset)` without moving the shared file cursor.
+#[inline]
+pub fn fs_pread64(
+    fd: u32,
+    buf_ptr: u64,
+    count: usize,
+    offset: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    if !entry.can_read() {
+        return Err(FsBridgeError::PermDenied);
+    }
+    read_blob_at(entry.blob_id, offset, buf_ptr, count)
+}
+
+/// `pwrite64(fd, buf, count, offset)` without moving the shared file cursor.
+#[inline]
+pub fn fs_pwrite64(
+    fd: u32,
+    buf_ptr: u64,
+    count: usize,
+    offset: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    if !entry.can_write() {
+        return Err(FsBridgeError::PermDenied);
+    }
+    let written = write_blob_at(entry.blob_id, offset, buf_ptr, count)?;
+    let new_size = offset.saturating_add(written as u64).max(entry.size);
+    OBJECT_TABLE
+        .set_size(fd, new_size)
+        .map_err(exofs_to_bridge_error)?;
+    Ok(written)
+}
+
+#[inline]
+fn vectored_io<F>(iov_ptr: u64, iovcnt: u32, mut op: F) -> Result<i64, FsBridgeError>
+where
+    F: FnMut(u64, usize) -> Result<i64, FsBridgeError>,
+{
+    if iovcnt > 1024 {
+        return Err(FsBridgeError::Invalid);
+    }
+    if iovcnt == 0 {
+        return Ok(0);
+    }
+    if iov_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+
+    let mut total = 0i64;
+    let mut i = 0u32;
+    while i < iovcnt {
+        let addr = iov_ptr
+            .checked_add((i as u64).saturating_mul(size_of::<LinuxIovec>() as u64))
+            .ok_or(FsBridgeError::Fault)?;
+        let iov = read_user_typed::<LinuxIovec>(addr).map_err(|_| FsBridgeError::Fault)?;
+        if iov.iov_len != 0 {
+            if iov.iov_len > usize::MAX as u64 {
+                return Err(FsBridgeError::Invalid);
+            }
+            let n = op(iov.iov_base, iov.iov_len as usize)?;
+            total = total.checked_add(n).ok_or(FsBridgeError::Invalid)?;
+            if n == 0 || n < iov.iov_len as i64 {
+                break;
+            }
+        }
+        i = i.wrapping_add(1);
+    }
+    Ok(total)
+}
+
+/// `readv(fd, iov, iovcnt)`.
+#[inline]
+pub fn fs_readv(fd: u32, iov_ptr: u64, iovcnt: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    vectored_io(iov_ptr, iovcnt, |base, len| fs_read(fd, base, len, pid))
+}
+
+/// `writev(fd, iov, iovcnt)`.
+#[inline]
+pub fn fs_writev(fd: u32, iov_ptr: u64, iovcnt: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    vectored_io(iov_ptr, iovcnt, |base, len| fs_write(fd, base, len, pid))
+}
+
+/// `preadv(fd, iov, iovcnt, offset)`.
+#[inline]
+pub fn fs_preadv(
+    fd: u32,
+    iov_ptr: u64,
+    iovcnt: u32,
+    offset: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    let mut pos = offset;
+    vectored_io(iov_ptr, iovcnt, |base, len| {
+        let n = fs_pread64(fd, base, len, pos, pid)?;
+        pos = pos.saturating_add(n as u64);
+        Ok(n)
+    })
+}
+
+/// `pwritev(fd, iov, iovcnt, offset)`.
+#[inline]
+pub fn fs_pwritev(
+    fd: u32,
+    iov_ptr: u64,
+    iovcnt: u32,
+    offset: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    let mut pos = offset;
+    vectored_io(iov_ptr, iovcnt, |base, len| {
+        let n = fs_pwrite64(fd, base, len, pos, pid)?;
+        pos = pos.saturating_add(n as u64);
+        Ok(n)
+    })
+}
+
 /// `open(path, flags, mode)` → fd.
 #[inline]
 pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBridgeError> {
@@ -743,25 +1395,29 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
         return Err(FsBridgeError::NotReady);
     }
     let _ = mode;
-    if !open_flags::validate(flags) {
+    let fd_flags = flags & !(O_CLOEXEC | O_NONBLOCK);
+    if !open_flags::validate(fd_flags) {
         return Err(FsBridgeError::Invalid);
     }
 
     ensure_root_directory()?;
     let normalized_input = normalized_path_bytes(path)?;
-    if flags & open_flags::O_CREAT != 0 && normalized_input != b"/" {
+    if fd_flags & open_flags::O_CREAT != 0 && normalized_input != b"/" {
         let (parent_path, _) = split_parent_and_leaf(&normalized_input)?;
         ensure_directory_chain(&parent_path)?;
     }
     let normalized_path = resolve_path_with_symlinks(path, true, true)?;
     let existing_entry = path_entry(&normalized_path).ok();
-    let blob_id = blob_id_for_path(&normalized_path)?;
+    let blob_id = match existing_entry {
+        Some((existing_blob_id, _)) => existing_blob_id,
+        None => blob_id_for_path(&normalized_path)?,
+    };
     let exists = existing_entry.is_some();
 
-    if !exists && flags & open_flags::O_CREAT == 0 {
+    if !exists && fd_flags & open_flags::O_CREAT == 0 {
         return Err(FsBridgeError::NotFound);
     }
-    if exists && (flags & open_flags::O_CREAT != 0) && (flags & open_flags::O_EXCL != 0) {
+    if exists && (fd_flags & open_flags::O_CREAT != 0) && (fd_flags & open_flags::O_EXCL != 0) {
         return Err(FsBridgeError::Exists);
     }
     if !exists {
@@ -770,8 +1426,8 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
         ensure_blob_exists(blob_id)?;
         upsert_parent_entry(&parent_path, &leaf, blob_id, PATH_INDEX_KIND_FILE)?;
     }
-    if flags & open_flags::O_TRUNC != 0 {
-        if !open_flags::can_write(flags) {
+    if fd_flags & open_flags::O_TRUNC != 0 {
+        if !open_flags::can_write(fd_flags) {
             return Err(FsBridgeError::Invalid);
         }
         let existing = snapshot_blob(&blob_id)?;
@@ -786,9 +1442,9 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
 
     let size = blob_len(&blob_id) as u64;
     let fd = OBJECT_TABLE
-        .open(blob_id, flags, size, 0, pid as u64)
+        .open(blob_id, fd_flags, size, 0, pid as u64)
         .map_err(exofs_to_bridge_error)?;
-    if flags & open_flags::O_APPEND != 0 {
+    if fd_flags & open_flags::O_APPEND != 0 {
         OBJECT_TABLE
             .set_cursor(fd, size)
             .map_err(exofs_to_bridge_error)?;
@@ -998,7 +1654,6 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
     match cmd {
         F_DUPFD => OBJECT_TABLE
             .dup_from(fd, arg as u32)
@@ -1006,7 +1661,7 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
             .map_err(exofs_to_bridge_error),
         F_GETFD => Ok(0),
         F_SETFD => {
-            if arg != 0 {
+            if arg & !FD_CLOEXEC != 0 {
                 return Err(FsBridgeError::Invalid);
             }
             Ok(0)
@@ -1016,17 +1671,111 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
             .map(|entry| entry.flags as i64)
             .map_err(exofs_to_bridge_error),
         F_SETFL => {
-            let supported = open_flags::O_APPEND as u64;
+            let supported = (open_flags::O_APPEND | O_NONBLOCK) as u64;
             if arg & !supported != 0 {
                 return Err(FsBridgeError::Invalid);
             }
             OBJECT_TABLE
-                .set_status_flags(fd, arg as u32)
+                .set_status_flags(fd, (arg as u32) & !O_NONBLOCK)
                 .map(|flags| flags as i64)
                 .map_err(exofs_to_bridge_error)
         }
+        F_SETLK | F_SETLKW => {
+            let fl = read_user_typed::<LinuxFlock>(arg).map_err(|_| FsBridgeError::Fault)?;
+            let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+            let (start, length) = flock_range_from_abi(fl)?;
+            let object_id = inode_from_blob_id(&entry.blob_id);
+            use crate::fs::exofs::posix_bridge::fcntl_lock::{
+                make_lock, validate_lock, LockKind, FCNTL_LOCK_TABLE,
+            };
+            let kind = match fl.l_type {
+                F_RDLCK => LockKind::Read,
+                F_WRLCK => LockKind::Write,
+                F_UNLCK => LockKind::Unlock,
+                _ => return Err(FsBridgeError::Invalid),
+            };
+            let lock = make_lock(object_id, pid as u64, 0, start, length, kind);
+            if kind != LockKind::Unlock {
+                validate_lock(&lock).map_err(exofs_to_bridge_error)?;
+            }
+            FCNTL_LOCK_TABLE
+                .acquire(lock)
+                .map(|_| 0)
+                .map_err(exofs_to_bridge_error)
+        }
+        F_GETLK => {
+            let mut fl = read_user_typed::<LinuxFlock>(arg).map_err(|_| FsBridgeError::Fault)?;
+            let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+            let (start, length) = flock_range_from_abi(fl)?;
+            let object_id = inode_from_blob_id(&entry.blob_id);
+            use crate::fs::exofs::posix_bridge::fcntl_lock::{
+                make_lock, LockKind, FCNTL_LOCK_TABLE,
+            };
+            let kind = match fl.l_type {
+                F_RDLCK => LockKind::Read,
+                F_WRLCK => LockKind::Write,
+                F_UNLCK => LockKind::Unlock,
+                _ => return Err(FsBridgeError::Invalid),
+            };
+            let candidate = make_lock(object_id, pid as u64, 0, start, length, kind);
+            match FCNTL_LOCK_TABLE
+                .test_lock(&candidate)
+                .map_err(exofs_to_bridge_error)?
+            {
+                Some(info) => {
+                    fl.l_type = if info.kind == LockKind::Read as u8 {
+                        F_RDLCK
+                    } else {
+                        F_WRLCK
+                    };
+                    fl.l_whence = SEEK_SET as i16;
+                    fl.l_start = info.start as i64;
+                    fl.l_len = if info.length == u64::MAX {
+                        0
+                    } else {
+                        info.length as i64
+                    };
+                    fl.l_pid = info.conflicting_pid as i32;
+                }
+                None => {
+                    fl.l_type = F_UNLCK;
+                    fl.l_whence = SEEK_SET as i16;
+                    fl.l_start = 0;
+                    fl.l_len = 0;
+                    fl.l_pid = 0;
+                }
+            }
+            write_user_typed(arg, fl).map_err(|_| FsBridgeError::Fault)?;
+            Ok(0)
+        }
         _ => Err(FsBridgeError::Invalid),
     }
+}
+
+/// `flock(fd, operation)` translated to whole-file POSIX byte-range locks.
+#[inline]
+pub fn fs_flock(fd: u32, operation: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let clean = operation & !LOCK_NB;
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let kind = match clean {
+        LOCK_SH => crate::fs::exofs::posix_bridge::fcntl_lock::LockKind::Read,
+        LOCK_EX => crate::fs::exofs::posix_bridge::fcntl_lock::LockKind::Write,
+        LOCK_UN => crate::fs::exofs::posix_bridge::fcntl_lock::LockKind::Unlock,
+        _ => return Err(FsBridgeError::Invalid),
+    };
+    let object_id = inode_from_blob_id(&entry.blob_id);
+    use crate::fs::exofs::posix_bridge::fcntl_lock::{make_lock, validate_lock, FCNTL_LOCK_TABLE};
+    let lock = make_lock(object_id, pid as u64, 0, 0, u64::MAX, kind);
+    if kind != crate::fs::exofs::posix_bridge::fcntl_lock::LockKind::Unlock {
+        validate_lock(&lock).map_err(exofs_to_bridge_error)?;
+    }
+    FCNTL_LOCK_TABLE
+        .acquire(lock)
+        .map(|_| 0)
+        .map_err(exofs_to_bridge_error)
 }
 
 /// `mkdir(path, mode)`.
@@ -1116,6 +1865,146 @@ pub fn fs_unlink(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     BLOB_CACHE.invalidate(&blob_id);
     remove_parent_entry(&parent_path, &leaf)?;
     Ok(0)
+}
+
+/// `rename(oldpath, newpath)`.
+#[inline]
+pub fn fs_rename(old_path: &[u8], new_path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let old_normalized = resolve_path_with_symlinks(old_path, false, false)?;
+    let new_normalized = resolve_path_with_symlinks(new_path, false, true)?;
+    if old_normalized == new_normalized {
+        return Ok(0);
+    }
+    if old_normalized == b"/" || new_normalized == b"/" {
+        return Err(FsBridgeError::PermDenied);
+    }
+
+    let (old_parent, old_leaf) = split_parent_and_leaf(&old_normalized)?;
+    let (new_parent, new_leaf) = split_parent_and_leaf(&new_normalized)?;
+    ensure_directory_exists(&new_parent)?;
+
+    let (src_blob_id, src_kind) = path_entry(&old_normalized)?;
+    let src_data = snapshot_blob(&src_blob_id)?;
+    let src_is_dir = src_kind == PATH_INDEX_KIND_DIR || blob_is_directory(&src_data);
+    if src_is_dir
+        && new_normalized.len() > old_normalized.len()
+        && new_normalized.starts_with(&old_normalized)
+        && new_normalized[old_normalized.len()] == b'/'
+    {
+        return Err(FsBridgeError::Invalid);
+    }
+
+    match path_entry(&new_normalized) {
+        Ok((dst_blob_id, dst_kind)) => {
+            let dst_data = snapshot_blob(&dst_blob_id)?;
+            let dst_is_dir = dst_kind == PATH_INDEX_KIND_DIR || blob_is_directory(&dst_data);
+            if src_is_dir != dst_is_dir {
+                return if src_is_dir {
+                    Err(FsBridgeError::NotDir)
+                } else {
+                    Err(FsBridgeError::IsDir)
+                };
+            }
+            if dst_is_dir && path_index_entry_count(&dst_data).unwrap_or(0) != 0 {
+                return Err(FsBridgeError::NotEmpty);
+            }
+            if OBJECT_TABLE.open_count_for(&dst_blob_id) != 0 {
+                return Err(FsBridgeError::PermDenied);
+            }
+            remove_parent_entry(&new_parent, &new_leaf)?;
+            BLOB_CACHE.invalidate(&dst_blob_id);
+        }
+        Err(FsBridgeError::NotFound) => {}
+        Err(err) => return Err(err),
+    }
+
+    upsert_parent_entry(&new_parent, &new_leaf, src_blob_id, src_kind)?;
+    remove_parent_entry(&old_parent, &old_leaf)?;
+    let _ = BLOB_CACHE.mark_dirty(&src_blob_id);
+    Ok(0)
+}
+
+/// `renameat(olddirfd, oldpath, newdirfd, newpath)`.
+#[inline]
+pub fn fs_renameat(
+    olddirfd: i32,
+    old_path: &[u8],
+    newdirfd: i32,
+    new_path: &[u8],
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if olddirfd == AT_FDCWD || old_path.starts_with(b"/") {
+        if newdirfd == AT_FDCWD || new_path.starts_with(b"/") {
+            return fs_rename(old_path, new_path, pid);
+        }
+    }
+    Err(FsBridgeError::Invalid)
+}
+
+#[inline]
+fn fs_link_with_follow(
+    old_path: &[u8],
+    new_path: &[u8],
+    follow_last: bool,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let old_normalized = resolve_path_with_symlinks(old_path, follow_last, false)?;
+    let new_normalized = resolve_path_with_symlinks(new_path, false, true)?;
+    if new_normalized == b"/" {
+        return Err(FsBridgeError::PermDenied);
+    }
+    if path_entry(&new_normalized).is_ok() {
+        return Err(FsBridgeError::Exists);
+    }
+
+    let (src_blob_id, src_kind) = path_entry(&old_normalized)?;
+    let src_data = snapshot_blob(&src_blob_id)?;
+    if src_kind == PATH_INDEX_KIND_DIR || blob_is_directory(&src_data) {
+        return Err(FsBridgeError::PermDenied);
+    }
+
+    let (new_parent, new_leaf) = split_parent_and_leaf(&new_normalized)?;
+    ensure_directory_exists(&new_parent)?;
+    upsert_parent_entry(&new_parent, &new_leaf, src_blob_id, src_kind)?;
+    let _ = BLOB_CACHE.mark_dirty(&src_blob_id);
+    Ok(0)
+}
+
+/// `link(oldpath, newpath)`.
+#[inline]
+pub fn fs_link(old_path: &[u8], new_path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
+    fs_link_with_follow(old_path, new_path, true, pid)
+}
+
+/// `linkat(olddirfd, oldpath, newdirfd, newpath, flags)`.
+#[inline]
+pub fn fs_linkat(
+    olddirfd: i32,
+    old_path: &[u8],
+    newdirfd: i32,
+    new_path: &[u8],
+    flags: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    const AT_SYMLINK_FOLLOW: u32 = 0x400;
+    if olddirfd != AT_FDCWD && !old_path.starts_with(b"/") {
+        return Err(FsBridgeError::Invalid);
+    }
+    if newdirfd != AT_FDCWD && !new_path.starts_with(b"/") {
+        return Err(FsBridgeError::Invalid);
+    }
+    if flags & !AT_SYMLINK_FOLLOW != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    fs_link_with_follow(old_path, new_path, flags & AT_SYMLINK_FOLLOW != 0, pid)
 }
 
 /// `getdents64(fd, dirp, count)`.
@@ -1271,6 +2160,774 @@ pub fn fs_ftruncate(fd: u32, length: u64, pid: u32) -> Result<i64, FsBridgeError
     Ok(0)
 }
 
+/// `access(path, mode)`.
+#[inline]
+pub fn fs_access(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    if mode & !0x7 != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let normalized_path = resolve_path_with_symlinks(path, true, false)?;
+    let _ = path_entry(&normalized_path)?;
+    Ok(0)
+}
+
+/// `fsync(fd)` / `fdatasync(fd)`.
+#[inline]
+pub fn fs_fsync(fd: u32, data_only: bool, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = (data_only, pid);
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    if BLOB_CACHE.contains(&entry.blob_id) {
+        let _ = BLOB_CACHE.mark_clean(&entry.blob_id);
+    }
+    Ok(0)
+}
+
+/// `statfs(path, buf)`.
+#[inline]
+pub fn fs_statfs(path: &[u8], statfs_ptr: u64, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    if statfs_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    let normalized_path = resolve_path_with_symlinks(path, true, false)?;
+    let _ = path_entry(&normalized_path)?;
+    write_user_typed(statfs_ptr, statfs_snapshot()).map_err(|_| FsBridgeError::Fault)?;
+    Ok(0)
+}
+
+/// `fstatfs(fd, buf)`.
+#[inline]
+pub fn fs_fstatfs(fd: u32, statfs_ptr: u64, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    if statfs_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    let _ = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    write_user_typed(statfs_ptr, statfs_snapshot()).map_err(|_| FsBridgeError::Fault)?;
+    Ok(0)
+}
+
+/// Metadata permission calls are accepted once the target exists; ExoFS uses
+/// capabilities rather than Unix ownership bits for enforcement.
+#[inline]
+pub fn fs_chmod(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = (mode, pid);
+    let normalized_path = resolve_path_with_symlinks(path, false, false)?;
+    let _ = path_entry(&normalized_path)?;
+    Ok(0)
+}
+
+#[inline]
+pub fn fs_fchmod(fd: u32, mode: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = (mode, pid);
+    let _ = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    Ok(0)
+}
+
+#[inline]
+pub fn fs_chown(path: &[u8], uid: u32, gid: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = (uid, gid, pid);
+    let normalized_path = resolve_path_with_symlinks(path, false, false)?;
+    let _ = path_entry(&normalized_path)?;
+    Ok(0)
+}
+
+#[inline]
+pub fn fs_fchown(fd: u32, uid: u32, gid: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = (uid, gid, pid);
+    let _ = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    Ok(0)
+}
+
+/// `pipe2(pipefd, flags)`.
+#[inline]
+pub fn fs_pipe2(fds_ptr: u64, flags: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    if fds_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    if flags & !(O_CLOEXEC | O_NONBLOCK) != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+
+    let blob_id = next_pseudo_blob(PSEUDO_PIPE_TAG);
+    ensure_blob_exists(blob_id)?;
+    let read_fd = OBJECT_TABLE
+        .open(blob_id, open_flags::O_RDONLY, 0, 0, pid as u64)
+        .map_err(exofs_to_bridge_error)?;
+    let write_fd = match OBJECT_TABLE.open(
+        blob_id,
+        open_flags::O_WRONLY | open_flags::O_APPEND,
+        0,
+        0,
+        pid as u64,
+    ) {
+        Ok(fd) => fd,
+        Err(err) => {
+            let _ = OBJECT_TABLE.close(read_fd);
+            return Err(exofs_to_bridge_error(err));
+        }
+    };
+
+    let fds = [read_fd as i32, write_fd as i32];
+    if write_user_typed(fds_ptr, fds).is_err() {
+        let _ = OBJECT_TABLE.close(read_fd);
+        let _ = OBJECT_TABLE.close(write_fd);
+        return Err(FsBridgeError::Fault);
+    }
+    Ok(0)
+}
+
+/// `eventfd2(initval, flags)`.
+#[inline]
+pub fn fs_eventfd2(initval: u32, flags: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    if flags & !(O_CLOEXEC | O_NONBLOCK | EFD_SEMAPHORE) != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+
+    let blob_id = next_pseudo_blob(PSEUDO_EVENTFD_TAG);
+    store_eventfd_state(blob_id, initval as u64, flags)?;
+    OBJECT_TABLE
+        .open(
+            blob_id,
+            open_flags::O_RDWR,
+            size_of::<u64>() as u64,
+            0,
+            pid as u64,
+        )
+        .map(|fd| fd as i64)
+        .map_err(exofs_to_bridge_error)
+}
+
+/// `epoll_create1(flags)`.
+#[inline]
+pub fn fs_epoll_create1(flags: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    if flags & !EPOLL_CLOEXEC != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let blob_id = next_pseudo_blob(PSEUDO_EPOLL_TAG);
+    ensure_blob_exists(blob_id)?;
+    OBJECT_TABLE
+        .open(blob_id, open_flags::O_RDWR, 0, 0, pid as u64)
+        .map(|fd| fd as i64)
+        .map_err(exofs_to_bridge_error)
+}
+
+/// `epoll_ctl(epfd, op, fd, event)`.
+#[inline]
+pub fn fs_epoll_ctl(
+    epfd: u32,
+    op: i32,
+    fd: u32,
+    event_ptr: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let ep_entry = OBJECT_TABLE.get(epfd).map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&ep_entry.blob_id, PSEUDO_EPOLL_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let _ = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    match op {
+        EPOLL_CTL_ADD | EPOLL_CTL_MOD => {
+            if event_ptr == 0 {
+                return Err(FsBridgeError::Fault);
+            }
+            let _ =
+                read_user_typed::<LinuxEpollEvent>(event_ptr).map_err(|_| FsBridgeError::Fault)?;
+        }
+        EPOLL_CTL_DEL => {}
+        _ => return Err(FsBridgeError::Invalid),
+    }
+    Ok(0)
+}
+
+/// `epoll_wait(epfd, events, maxevents, timeout)`.
+#[inline]
+pub fn fs_epoll_wait(
+    epfd: u32,
+    events_ptr: u64,
+    maxevents: i32,
+    timeout: i32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = (timeout, pid);
+    if events_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    if maxevents <= 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let ep_entry = OBJECT_TABLE.get(epfd).map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&ep_entry.blob_id, PSEUDO_EPOLL_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    Ok(0)
+}
+
+/// `inotify_init1(flags)`; event production is a higher layer concern.
+#[inline]
+pub fn fs_inotify_init1(flags: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    if flags & !(O_CLOEXEC | O_NONBLOCK) != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let blob_id = next_pseudo_blob(PSEUDO_INOTIFY_TAG);
+    ensure_blob_exists(blob_id)?;
+    OBJECT_TABLE
+        .open(blob_id, open_flags::O_RDONLY, 0, 0, pid as u64)
+        .map(|fd| fd as i64)
+        .map_err(exofs_to_bridge_error)
+}
+
+/// `poll(fds, nfds, timeout)`.
+#[inline]
+pub fn fs_poll(fds_ptr: u64, nfds: usize, timeout: i32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = (timeout, pid);
+    if nfds > 1024 {
+        return Err(FsBridgeError::Invalid);
+    }
+    if nfds == 0 {
+        return Ok(0);
+    }
+    if fds_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+
+    let mut ready = 0i64;
+    let mut i = 0usize;
+    while i < nfds {
+        let addr = fds_ptr
+            .checked_add((i as u64).saturating_mul(size_of::<LinuxPollFd>() as u64))
+            .ok_or(FsBridgeError::Fault)?;
+        let mut pfd = read_user_typed::<LinuxPollFd>(addr).map_err(|_| FsBridgeError::Fault)?;
+        pfd.revents = 0;
+        if pfd.fd >= 0 {
+            match fd_readiness(pfd.fd as u32) {
+                Ok((readable, writable)) => {
+                    if readable && (pfd.events & POLLIN) != 0 {
+                        pfd.revents |= POLLIN;
+                    }
+                    if writable && (pfd.events & POLLOUT) != 0 {
+                        pfd.revents |= POLLOUT;
+                    }
+                }
+                Err(_) => {
+                    pfd.revents |= POLLNVAL;
+                }
+            }
+        }
+        if pfd.revents != 0 {
+            ready += 1;
+        }
+        write_user_typed(addr, pfd).map_err(|_| FsBridgeError::Fault)?;
+        i += 1;
+    }
+    Ok(ready)
+}
+
+/// `select(nfds, readfds, writefds, exceptfds, timeout)`.
+#[inline]
+pub fn fs_select(
+    nfds: usize,
+    readfds_ptr: u64,
+    writefds_ptr: u64,
+    exceptfds_ptr: u64,
+    timeout_ptr: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = (timeout_ptr, pid);
+    if nfds > 1024 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let bytes = nfds.saturating_add(7) / 8;
+    let mut readfds = vec_with_zeroes(bytes)?;
+    let mut writefds = vec_with_zeroes(bytes)?;
+    let mut exceptfds = vec_with_zeroes(bytes)?;
+
+    if readfds_ptr != 0 && bytes != 0 {
+        copy_from_user(readfds.as_mut_ptr(), readfds_ptr as *const u8, bytes)
+            .map_err(|_| FsBridgeError::Fault)?;
+    }
+    if writefds_ptr != 0 && bytes != 0 {
+        copy_from_user(writefds.as_mut_ptr(), writefds_ptr as *const u8, bytes)
+            .map_err(|_| FsBridgeError::Fault)?;
+    }
+    if exceptfds_ptr != 0 && bytes != 0 {
+        copy_from_user(exceptfds.as_mut_ptr(), exceptfds_ptr as *const u8, bytes)
+            .map_err(|_| FsBridgeError::Fault)?;
+    }
+
+    let mut ready = 0i64;
+    let mut fd = 0usize;
+    while fd < nfds {
+        if readfds_ptr != 0 && fdset_bit(&readfds, fd) {
+            let keep = fd_readiness(fd as u32)
+                .map(|(readable, _)| readable)
+                .unwrap_or(false);
+            set_fdset_bit(&mut readfds, fd, keep);
+            if keep {
+                ready += 1;
+            }
+        }
+        if writefds_ptr != 0 && fdset_bit(&writefds, fd) {
+            let keep = fd_readiness(fd as u32)
+                .map(|(_, writable)| writable)
+                .unwrap_or(false);
+            set_fdset_bit(&mut writefds, fd, keep);
+            if keep {
+                ready += 1;
+            }
+        }
+        if exceptfds_ptr != 0 && fdset_bit(&exceptfds, fd) {
+            set_fdset_bit(&mut exceptfds, fd, false);
+        }
+        fd += 1;
+    }
+
+    if readfds_ptr != 0 && bytes != 0 {
+        copy_to_user(readfds_ptr as *mut u8, readfds.as_ptr(), bytes)
+            .map_err(|_| FsBridgeError::Fault)?;
+    }
+    if writefds_ptr != 0 && bytes != 0 {
+        copy_to_user(writefds_ptr as *mut u8, writefds.as_ptr(), bytes)
+            .map_err(|_| FsBridgeError::Fault)?;
+    }
+    if exceptfds_ptr != 0 && bytes != 0 {
+        copy_to_user(exceptfds_ptr as *mut u8, exceptfds.as_ptr(), bytes)
+            .map_err(|_| FsBridgeError::Fault)?;
+    }
+    Ok(ready)
+}
+
+#[inline]
+fn vec_with_zeroes(len: usize) -> Result<Vec<u8>, FsBridgeError> {
+    let mut out = Vec::new();
+    out.try_reserve(len).map_err(|_| FsBridgeError::NoSpace)?;
+    out.resize(len, 0);
+    Ok(out)
+}
+
+/// `copy_file_range`.
+#[inline]
+pub fn fs_copy_file_range(
+    fd_in: u32,
+    off_in_ptr: u64,
+    fd_out: u32,
+    off_out_ptr: u64,
+    len: usize,
+    flags: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    if flags != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let in_entry = OBJECT_TABLE.get(fd_in).map_err(exofs_to_bridge_error)?;
+    let out_entry = OBJECT_TABLE.get(fd_out).map_err(exofs_to_bridge_error)?;
+    if !in_entry.can_read() || !out_entry.can_write() {
+        return Err(FsBridgeError::PermDenied);
+    }
+
+    let in_offset = if off_in_ptr == 0 {
+        in_entry.cursor
+    } else {
+        read_signed_offset(off_in_ptr)?
+    };
+    let out_offset = if off_out_ptr == 0 {
+        out_entry.cursor
+    } else {
+        read_signed_offset(off_out_ptr)?
+    };
+
+    let data = read_blob_bytes_at(in_entry.blob_id, in_offset, len)?;
+    if data.is_empty() {
+        return Ok(0);
+    }
+    let written = write_blob_bytes_at(out_entry.blob_id, out_offset, &data)? as u64;
+    if off_in_ptr == 0 {
+        OBJECT_TABLE
+            .set_cursor(fd_in, in_offset.saturating_add(written))
+            .map_err(exofs_to_bridge_error)?;
+    } else {
+        write_user_typed(off_in_ptr, (in_offset.saturating_add(written)) as i64)
+            .map_err(|_| FsBridgeError::Fault)?;
+    }
+    if off_out_ptr == 0 {
+        OBJECT_TABLE
+            .set_cursor(fd_out, out_offset.saturating_add(written))
+            .map_err(exofs_to_bridge_error)?;
+    } else {
+        write_user_typed(off_out_ptr, (out_offset.saturating_add(written)) as i64)
+            .map_err(|_| FsBridgeError::Fault)?;
+    }
+    OBJECT_TABLE
+        .set_size(fd_out, blob_len(&out_entry.blob_id) as u64)
+        .map_err(exofs_to_bridge_error)?;
+    Ok(written as i64)
+}
+
+/// `sendfile(out_fd, in_fd, offset, count)`.
+#[inline]
+pub fn fs_sendfile(
+    out_fd: u32,
+    in_fd: u32,
+    offset_ptr: u64,
+    count: usize,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let in_entry = OBJECT_TABLE.get(in_fd).map_err(exofs_to_bridge_error)?;
+    let out_entry = OBJECT_TABLE.get(out_fd).map_err(exofs_to_bridge_error)?;
+    if !in_entry.can_read() || !out_entry.can_write() {
+        return Err(FsBridgeError::PermDenied);
+    }
+    let in_offset = if offset_ptr == 0 {
+        in_entry.cursor
+    } else {
+        read_signed_offset(offset_ptr)?
+    };
+    let out_offset = out_entry.cursor;
+    let data = read_blob_bytes_at(in_entry.blob_id, in_offset, count)?;
+    if data.is_empty() {
+        return Ok(0);
+    }
+    let written = write_blob_bytes_at(out_entry.blob_id, out_offset, &data)? as u64;
+    if offset_ptr == 0 {
+        OBJECT_TABLE
+            .set_cursor(in_fd, in_offset.saturating_add(written))
+            .map_err(exofs_to_bridge_error)?;
+    } else {
+        write_user_typed(offset_ptr, (in_offset.saturating_add(written)) as i64)
+            .map_err(|_| FsBridgeError::Fault)?;
+    }
+    OBJECT_TABLE
+        .set_cursor(out_fd, out_offset.saturating_add(written))
+        .map_err(exofs_to_bridge_error)?;
+    OBJECT_TABLE
+        .set_size(out_fd, blob_len(&out_entry.blob_id) as u64)
+        .map_err(exofs_to_bridge_error)?;
+    Ok(written as i64)
+}
+
+#[inline]
+fn read_signed_offset(ptr: u64) -> Result<u64, FsBridgeError> {
+    let value = read_user_typed::<i64>(ptr).map_err(|_| FsBridgeError::Fault)?;
+    if value < 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    Ok(value as u64)
+}
+
+/// `fallocate(fd, mode, offset, len)`.
+#[inline]
+pub fn fs_fallocate(
+    fd: u32,
+    mode: u32,
+    offset: u64,
+    len: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    if len == 0 || mode & !FALLOC_FL_KEEP_SIZE != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    if !entry.can_write() {
+        return Err(FsBridgeError::PermDenied);
+    }
+    let end = offset.checked_add(len).ok_or(FsBridgeError::Invalid)?;
+    if mode & FALLOC_FL_KEEP_SIZE == 0 && end > blob_len(&entry.blob_id) as u64 {
+        resize_regular_blob(entry.blob_id, end)?;
+        OBJECT_TABLE
+            .set_size(fd, end)
+            .map_err(exofs_to_bridge_error)?;
+    } else {
+        ensure_blob_exists(entry.blob_id)?;
+    }
+    Ok(0)
+}
+
+/// `sync_file_range(fd, offset, nbytes, flags)`.
+#[inline]
+pub fn fs_sync_file_range(
+    fd: u32,
+    offset: u64,
+    nbytes: u64,
+    flags: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = (offset, nbytes, pid);
+    let allowed = SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER;
+    if flags & !allowed != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    mark_blob_clean(&entry.blob_id);
+    Ok(0)
+}
+
+/// `sync()`.
+#[inline]
+pub fn fs_sync(pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    mark_all_blobs_clean();
+    Ok(0)
+}
+
+/// `posix_fadvise/fadvise64`.
+#[inline]
+pub fn fs_fadvise64(
+    fd: u32,
+    offset: u64,
+    len: u64,
+    advice: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = (offset, len, pid);
+    if advice > 5 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let _ = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    Ok(0)
+}
+
+/// `ioctl(fd, request, arg)`.
+#[inline]
+pub fn fs_ioctl(fd: u32, request: u64, arg: u64, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    match request {
+        FIONREAD => {
+            if arg == 0 {
+                return Err(FsBridgeError::Fault);
+            }
+            let available = if is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG) {
+                eventfd_state(entry.blob_id)
+                    .map(|(value, _)| if value == 0 { 0 } else { 8 })
+                    .unwrap_or(0)
+            } else if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
+                blob_len(&entry.blob_id)
+            } else {
+                blob_len(&entry.blob_id).saturating_sub(entry.cursor as usize)
+            };
+            write_user_typed(arg, available as i32).map_err(|_| FsBridgeError::Fault)?;
+            Ok(0)
+        }
+        _ => Err(FsBridgeError::Invalid),
+    }
+}
+
+/// `statx(dirfd, path, flags, mask, statxbuf)`.
+#[inline]
+pub fn fs_statx(
+    dirfd: i32,
+    path: &[u8],
+    flags: u32,
+    mask: u32,
+    statx_ptr: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    const AT_SYMLINK_NOFOLLOW: u32 = 0x100;
+    const AT_EMPTY_PATH: u32 = 0x1000;
+    let _ = mask;
+    if statx_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    if dirfd != AT_FDCWD && !path.starts_with(b"/") {
+        return Err(FsBridgeError::Invalid);
+    }
+    let follow = flags & AT_SYMLINK_NOFOLLOW == 0;
+    let normalized_path = resolve_path_with_symlinks(path, follow, false)?;
+    let (blob_id, kind) = path_entry(&normalized_path)?;
+    let data = snapshot_blob(&blob_id)?;
+    let statx = linux_statx_for_blob(blob_id, &data, pid, kind);
+    write_user_typed(statx_ptr, statx).map_err(|_| FsBridgeError::Fault)?;
+    Ok(0)
+}
+
+/// `getcwd(buf, size)`; ExoFS currently exposes a process-neutral root cwd.
+#[inline]
+pub fn fs_getcwd(buf_ptr: u64, size: usize, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    if buf_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    if size < 2 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let cwd = [b'/', 0];
+    copy_to_user(buf_ptr as *mut u8, cwd.as_ptr(), cwd.len()).map_err(|_| FsBridgeError::Fault)?;
+    Ok(cwd.len() as i64)
+}
+
+/// `chdir(path)`.
+#[inline]
+pub fn fs_chdir(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let normalized_path = resolve_path_with_symlinks(path, true, false)?;
+    let (blob_id, kind) = path_entry(&normalized_path)?;
+    let data = snapshot_blob(&blob_id)?;
+    if kind != PATH_INDEX_KIND_DIR && !blob_is_directory(&data) {
+        return Err(FsBridgeError::NotDir);
+    }
+    Ok(0)
+}
+
+/// `fchdir(fd)`.
+#[inline]
+pub fn fs_fchdir(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let data = snapshot_blob(&entry.blob_id)?;
+    if !blob_is_directory(&data) {
+        return Err(FsBridgeError::NotDir);
+    }
+    Ok(0)
+}
+
+/// `umask(mask)`.
+#[inline]
+pub fn fs_umask(mask: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    let old = POSIX_UMASK.swap(mask & 0o777, Ordering::AcqRel);
+    Ok(old as i64)
+}
+
+/// `getrlimit(resource, rlim)`.
+#[inline]
+pub fn fs_getrlimit(resource: u32, rlim_ptr: u64, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    if resource >= RLIMIT_NLIMITS {
+        return Err(FsBridgeError::Invalid);
+    }
+    if rlim_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    let limit = if resource == RLIMIT_NOFILE {
+        LinuxRlimit {
+            rlim_cur: 65_536,
+            rlim_max: 65_536,
+        }
+    } else {
+        LinuxRlimit {
+            rlim_cur: u64::MAX,
+            rlim_max: u64::MAX,
+        }
+    };
+    write_user_typed(rlim_ptr, limit).map_err(|_| FsBridgeError::Fault)?;
+    Ok(0)
+}
+
+/// `setrlimit(resource, rlim)`.
+#[inline]
+pub fn fs_setrlimit(resource: u32, rlim_ptr: u64, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    if resource >= RLIMIT_NLIMITS {
+        return Err(FsBridgeError::Invalid);
+    }
+    if rlim_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    let limit = read_user_typed::<LinuxRlimit>(rlim_ptr).map_err(|_| FsBridgeError::Fault)?;
+    if limit.rlim_cur > limit.rlim_max {
+        return Err(FsBridgeError::Invalid);
+    }
+    Ok(0)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper : conversion automatique pour les syscall handlers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1380,6 +3037,20 @@ mod tests {
 
         let err = fs_openat(9, b"relative/exo.conf", open_flags::O_RDONLY, 0, 17).unwrap_err();
         assert_eq!(err, FsBridgeError::Invalid);
+    }
+
+    #[test]
+    fn test_fs_open_accepts_linux_descriptor_flags_as_noops() {
+        init_bridge();
+
+        let fd = fs_open(
+            b"/flags/nonblock.txt",
+            open_flags::O_CREAT | open_flags::O_RDWR | O_NONBLOCK | O_CLOEXEC,
+            0,
+            18,
+        )
+        .unwrap() as u32;
+        assert_eq!(fs_close(fd, 18).unwrap(), 0);
     }
 
     #[test]
@@ -1753,6 +3424,153 @@ mod tests {
             assert_eq!(stat_buf.st_size, grow_len as i64);
             assert_eq!(fs_close(fd, 72).unwrap(), 0);
         }
+    }
+
+    #[test]
+    fn test_fs_pipe2_eventfd_and_poll_roundtrip() {
+        init_bridge();
+
+        let mut fds = [0i32; 2];
+        assert_eq!(fs_pipe2(fds.as_mut_ptr() as u64, 0, 81).unwrap(), 0);
+
+        let payload = *b"pipe-data";
+        assert_eq!(
+            fs_write(fds[1] as u32, payload.as_ptr() as u64, payload.len(), 81).unwrap(),
+            payload.len() as i64
+        );
+
+        let mut pollfd = LinuxPollFd {
+            fd: fds[0],
+            events: POLLIN,
+            revents: 0,
+        };
+        assert_eq!(fs_poll(&mut pollfd as *mut _ as u64, 1, 0, 81).unwrap(), 1);
+        assert_ne!(pollfd.revents & POLLIN, 0);
+
+        let mut out = [0u8; 16];
+        let n = fs_read(fds[0] as u32, out.as_mut_ptr() as u64, out.len(), 81).unwrap() as usize;
+        assert_eq!(&out[..n], &payload);
+        assert_eq!(fs_close(fds[0] as u32, 81).unwrap(), 0);
+        assert_eq!(fs_close(fds[1] as u32, 81).unwrap(), 0);
+
+        let event_fd = fs_eventfd2(2, 0, 81).unwrap() as u32;
+        let add = 3u64;
+        assert_eq!(
+            fs_write(event_fd, &add as *const _ as u64, size_of::<u64>(), 81).unwrap(),
+            size_of::<u64>() as i64
+        );
+        let mut value = 0u64;
+        assert_eq!(
+            fs_read(event_fd, &mut value as *mut _ as u64, size_of::<u64>(), 81).unwrap(),
+            size_of::<u64>() as i64
+        );
+        assert_eq!(value, 5);
+        assert_eq!(fs_close(event_fd, 81).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_fs_link_and_inotify_compat_descriptors() {
+        init_bridge();
+
+        let fd = fs_open(
+            b"/links/source.txt",
+            open_flags::O_CREAT | open_flags::O_RDWR | open_flags::O_TRUNC,
+            0,
+            83,
+        )
+        .unwrap() as u32;
+        let payload = *b"hard-link";
+        assert_eq!(
+            fs_write(fd, payload.as_ptr() as u64, payload.len(), 83).unwrap(),
+            payload.len() as i64
+        );
+        assert_eq!(fs_close(fd, 83).unwrap(), 0);
+
+        assert_eq!(
+            fs_link(b"/links/source.txt", b"/links/alias.txt", 83).unwrap(),
+            0
+        );
+        let alias_fd = fs_open(b"/links/alias.txt", open_flags::O_RDONLY, 0, 83).unwrap() as u32;
+        let mut out = [0u8; 16];
+        let n = fs_read(alias_fd, out.as_mut_ptr() as u64, out.len(), 83).unwrap() as usize;
+        assert_eq!(&out[..n], &payload);
+        assert_eq!(fs_close(alias_fd, 83).unwrap(), 0);
+
+        let inotify_fd = fs_inotify_init1(O_NONBLOCK | O_CLOEXEC, 83).unwrap() as u32;
+        let mut pollfd = LinuxPollFd {
+            fd: inotify_fd as i32,
+            events: POLLIN,
+            revents: 0,
+        };
+        assert_eq!(fs_poll(&mut pollfd as *mut _ as u64, 1, 0, 83).unwrap(), 0);
+        assert_eq!(fs_close(inotify_fd, 83).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_fs_copy_range_sendfile_statx_and_cwd_compat() {
+        init_bridge();
+
+        let src = fs_open(
+            b"/copy/src.bin",
+            open_flags::O_CREAT | open_flags::O_RDWR | open_flags::O_TRUNC,
+            0,
+            82,
+        )
+        .unwrap() as u32;
+        let dst = fs_open(
+            b"/copy/dst.bin",
+            open_flags::O_CREAT | open_flags::O_RDWR | open_flags::O_TRUNC,
+            0,
+            82,
+        )
+        .unwrap() as u32;
+        let payload = *b"translation-layer";
+        assert_eq!(
+            fs_write(src, payload.as_ptr() as u64, payload.len(), 82).unwrap(),
+            payload.len() as i64
+        );
+        assert_eq!(fs_lseek(src, 0, SEEK_SET, 82).unwrap(), 0);
+        assert_eq!(
+            fs_copy_file_range(src, 0, dst, 0, payload.len(), 0, 82).unwrap(),
+            payload.len() as i64
+        );
+        assert_eq!(fs_lseek(dst, 0, SEEK_SET, 82).unwrap(), 0);
+        let mut out = [0u8; 32];
+        let n = fs_read(dst, out.as_mut_ptr() as u64, payload.len(), 82).unwrap() as usize;
+        assert_eq!(&out[..n], &payload);
+
+        let mut statx = LinuxStatx::default();
+        assert_eq!(
+            fs_statx(
+                AT_FDCWD,
+                b"/copy/dst.bin",
+                0,
+                0,
+                &mut statx as *mut _ as u64,
+                82
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(statx.stx_size, payload.len() as u64);
+
+        assert_eq!(fs_fallocate(dst, 0, 0, 64, 82).unwrap(), 0);
+        let mut stat = LinuxStat::default();
+        assert_eq!(fs_fstat(dst, &mut stat as *mut _ as u64, 82).unwrap(), 0);
+        assert_eq!(stat.st_size, 64);
+
+        let mut cwd = [0u8; 4];
+        assert_eq!(
+            fs_getcwd(cwd.as_mut_ptr() as u64, cwd.len(), 82).unwrap(),
+            2
+        );
+        assert_eq!(&cwd[..2], b"/\0");
+        assert_eq!(
+            fs_sync_file_range(dst, 0, 64, SYNC_FILE_RANGE_WRITE, 82).unwrap(),
+            0
+        );
+        assert_eq!(fs_close(src, 82).unwrap(), 0);
+        assert_eq!(fs_close(dst, 82).unwrap(), 0);
     }
 
     fn write_u32_hex(dst: &mut [u8], value: u32) -> usize {
