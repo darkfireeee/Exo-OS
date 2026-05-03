@@ -198,6 +198,8 @@ pub fn alloc_endpoint_id() -> EndpointId {
 pub struct MsgFlags(pub u32);
 
 impl MsgFlags {
+    /// Aucun flag positionné.
+    pub const EMPTY: Self = Self(0);
     /// Message temps-réel (priorité maximale dans les queues).
     pub const RT: Self = Self(1 << 0);
     /// Message de réponse (corrèle à un MessageId existant).
@@ -212,6 +214,11 @@ impl MsgFlags {
     pub const SYNC: Self = Self(1 << 5);
     /// Non bloquant : retourne immédiatement si queue pleine.
     pub const NOWAIT: Self = Self(1 << 6);
+
+    #[inline(always)]
+    pub const fn empty() -> Self {
+        Self::EMPTY
+    }
 
     #[inline(always)]
     pub fn contains(self, flag: Self) -> bool {
@@ -255,6 +262,13 @@ impl MsgFlags {
     #[inline(always)]
     pub fn is_empty(self) -> bool {
         self.0 == 0
+    }
+}
+
+impl From<MessageFlags> for MsgFlags {
+    #[inline(always)]
+    fn from(flags: MessageFlags) -> Self {
+        MsgFlags::from_bits_truncate(flags.bits() as u32)
     }
 }
 
@@ -368,6 +382,34 @@ impl fmt::Display for IpcError {
     }
 }
 
+impl IpcError {
+    /// Normalise les alias expressifs vers les variantes canoniques.
+    #[inline]
+    pub const fn normalize(self) -> Self {
+        match self {
+            Self::Closed => Self::ChannelClosed,
+            Self::Internal => Self::InternalError,
+            Self::Invalid | Self::InvalidArgument => Self::InvalidParam,
+            Self::Full | Self::QueueFull => Self::WouldBlock,
+            Self::NotFound => Self::EndpointNotFound,
+            Self::OutOfResources => Self::ResourceExhausted,
+            other => other,
+        }
+    }
+
+    /// Vrai pour toutes les variantes signifiant fermeture de canal/endpoint.
+    #[inline]
+    pub const fn is_closed(self) -> bool {
+        matches!(self.normalize(), Self::ChannelClosed)
+    }
+
+    /// Vrai pour les variantes de file pleine / opération non bloquante.
+    #[inline]
+    pub const fn is_queue_full(self) -> bool {
+        matches!(self.normalize(), Self::WouldBlock)
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MessageFlags — drapeaux bitmask pour les messages dans message/
 // ─────────────────────────────────────────────────────────────────────────────
@@ -398,6 +440,11 @@ impl MessageFlags {
 
     /// Retourne la valeur brute.
     #[inline(always)]
+    pub const fn empty() -> Self {
+        Self::NONE
+    }
+
+    #[inline(always)]
     pub fn bits(self) -> u16 {
         self.0
     }
@@ -416,6 +463,13 @@ impl MessageFlags {
     #[inline(always)]
     pub fn is_empty(self) -> bool {
         self.0 == 0
+    }
+}
+
+impl From<MsgFlags> for MessageFlags {
+    #[inline(always)]
+    fn from(flags: MsgFlags) -> Self {
+        MessageFlags::from_bits_truncate(flags.bits() as u16)
     }
 }
 

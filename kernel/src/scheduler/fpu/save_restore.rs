@@ -166,3 +166,20 @@ pub unsafe fn alloc_fpu_state(tcb: &mut ThreadControlBlock) -> bool {
     tcb.fpu_state_ptr = ptr as u64;
     true
 }
+
+/// Libère la zone FPU associée à un thread en fin de vie.
+///
+/// # Safety
+/// Le TCB ne doit plus pouvoir être planifié après cet appel.
+pub unsafe fn free_fpu_state(tcb: &mut ThreadControlBlock) {
+    use core::alloc::Layout;
+
+    let ptr = tcb.fpu_state_ptr as *mut u8;
+    if ptr.is_null() {
+        return;
+    }
+    tcb.fpu_state_ptr = 0;
+    tcb.set_fpu_loaded(false);
+    let layout = Layout::new::<FpuState>();
+    alloc::alloc::dealloc(ptr, layout);
+}

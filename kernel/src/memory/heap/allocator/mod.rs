@@ -13,4 +13,6 @@ pub use size_classes::{
 };
 
 pub use global::KERNEL_ALLOCATOR;
-pub use hybrid::{alloc as heap_alloc, free as heap_free, init as heap_init, HEAP_STATS};
+pub use hybrid::{
+    alloc as heap_alloc, free as heap_free, init as heap_init, is_heap_ready, HEAP_STATS,
+};

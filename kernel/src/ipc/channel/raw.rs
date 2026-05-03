@@ -17,8 +17,6 @@ use crate::ipc::core::constants::MAX_MSG_SIZE;
 use crate::ipc::core::types::{alloc_message_id, EndpointId, IpcError, MessageId};
 use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
-// IPC-04 (v6) : vérification capability via security::access_control
-use crate::security::access_control::{check_access, AccessError, ObjectKind};
 use crate::security::capability::{CapTable, CapToken, Rights};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -437,18 +435,7 @@ pub fn send_raw_checked(
     table: &CapTable,
     token: CapToken,
 ) -> Result<MessageId, IpcError> {
-    // IPC-04 (v6) : vérification capability — security::access_control
-    check_access(
-        table,
-        token,
-        ObjectKind::IpcChannel,
-        Rights::IPC_SEND,
-        "ipc::channel::raw",
-    )
-    .map_err(|e| match e {
-        AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-        _ => IpcError::PermissionDenied,
-    })?;
+    crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_SEND)?;
     send_raw(ep_id, data, flags)
 }
 
@@ -462,18 +449,7 @@ pub fn recv_raw_checked(
     table: &CapTable,
     token: CapToken,
 ) -> Result<usize, IpcError> {
-    // IPC-04 (v6) : vérification capability — security::access_control
-    check_access(
-        table,
-        token,
-        ObjectKind::IpcChannel,
-        Rights::IPC_RECV,
-        "ipc::channel::raw",
-    )
-    .map_err(|e| match e {
-        AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-        _ => IpcError::PermissionDenied,
-    })?;
+    crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_RECV)?;
     recv_raw(ep_id, buf, flags)
 }
 

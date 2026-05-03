@@ -640,6 +640,24 @@ impl ProcessControlBlock {
         self.main_thread_rawptr.load(Ordering::Acquire)
     }
 
+    /// Retourne un thread vivant pouvant recevoir un signal.
+    ///
+    /// La table multi-thread complète n'est pas encore matérialisée dans le PCB ;
+    /// on utilise donc le thread principal quand il n'est pas en fin de vie.
+    #[inline]
+    pub fn find_alive_thread(&self) -> *mut crate::process::core::tcb::ProcessThread {
+        let ptr = self.main_thread_ptr();
+        if ptr.is_null() {
+            return core::ptr::null_mut();
+        }
+        let state = unsafe { (&*ptr).state() };
+        match state {
+            crate::scheduler::core::task::TaskState::Zombie
+            | crate::scheduler::core::task::TaskState::Dead => core::ptr::null_mut(),
+            _ => ptr,
+        }
+    }
+
     /// Définit le pointeur vers le thread principal.
     #[inline(always)]
     pub fn set_main_thread_ptr(&self, ptr: *mut crate::process::core::tcb::ProcessThread) {

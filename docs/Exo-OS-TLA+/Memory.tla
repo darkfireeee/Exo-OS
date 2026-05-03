@@ -44,7 +44,9 @@ ReadAcquire(c, var) ==
     \* The magic of Acquire: merge the Release snapshot into the reader's view
     /\ AtomicReads' = [AtomicReads EXCEPT ![c] = 
                         [v \in VARS |-> 
-                            IF ReleaseFence[var][v] = 1 THEN 1 ELSE AtomicReads[c][v]]]
+                            IF ReleaseFence[var][v] # AtomicReads[c][v]
+                            THEN ReleaseFence[var][v]
+                            ELSE AtomicReads[c][v]]]
     /\ HappensBefore' = HappensBefore \cup {<<AtomicWrites[var].core, c>>}
     /\ AcquireFence' = AcquireFence \cup {<<c, var>>}
     /\ UNCHANGED <<AtomicWrites, ReleaseFence, VisibilityGap>>
@@ -110,7 +112,7 @@ S48_MaskedSinceReleaseVisible ==
 \* S49: IOMMU init Release implies payload slots are visible
 S49_IommuInitRelease ==
     \A c \in CORES :
-        (AtomicReads[c]["iommu_init"] = 1) =>
+        (<<c, "iommu_init">> \in AcquireFence) =>
             (AtomicReads[c]["iommu_slots"] = 1)
 
 =============================================================================

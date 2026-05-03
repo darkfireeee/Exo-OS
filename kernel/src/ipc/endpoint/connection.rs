@@ -18,7 +18,6 @@ use super::descriptor::{EndpointDesc, PendingConnection};
 use crate::ipc::core::constants::RPC_PROTOCOL_VERSION;
 use crate::ipc::core::types::{alloc_channel_id, ChannelId, Cookie, EndpointId, IpcError};
 use crate::scheduler::core::task::ThreadId;
-use crate::security::access_control::{check_access, ObjectKind};
 use crate::security::capability::{CapTable, CapToken, Rights};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -217,14 +216,8 @@ pub fn do_connect(
     token: CapToken,
 ) -> Result<ConnectResult, IpcError> {
     // Vérification capability : CONNECT requis.
-    check_access(
-        table,
-        token,
-        ObjectKind::IpcEndpoint,
-        Rights::IPC_CONNECT,
-        "ipc/endpoint",
-    )
-    .map_err(|_| IpcError::PermissionDenied)?;
+    crate::ipc::capability_bridge::check_endpoint_access(table, token, Rights::IPC_CONNECT)
+        .map_err(|_| IpcError::PermissionDenied)?;
 
     if !ep.is_listening() {
         return Err(IpcError::ConnRefused);

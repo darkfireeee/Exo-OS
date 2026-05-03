@@ -14,7 +14,7 @@
 // `ipc::ipc_install_vmm_hooks()`. Sans hook installé, shm_map() opère en
 // mode simulé (virt = phys) — acceptable en dev/test mono-processus.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::{IpcError, ProcessId};
 use crate::ipc::shared_memory::descriptor::{ShmPermissions, SHM_DESC_DIR};
@@ -59,15 +59,30 @@ static MAP_PAGE_HOOK: SpinLock<Option<MapPageFn>> = SpinLock::new(None);
 /// Hook optionnel de démappage de page
 pub type UnmapPageFn = unsafe fn(virt: u64, pid: u32) -> i32;
 static UNMAP_PAGE_HOOK: SpinLock<Option<UnmapPageFn>> = SpinLock::new(None);
+static VMM_HOOKS_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+#[inline]
+fn refresh_vmm_hooks_ready() {
+    let ready = MAP_PAGE_HOOK.lock().is_some() && UNMAP_PAGE_HOOK.lock().is_some();
+    VMM_HOOKS_INSTALLED.store(ready, Ordering::Release);
+}
 
 /// Enregistre le hook de mappage fourni par le memory manager.
 pub fn register_map_hook(f: MapPageFn) {
     *MAP_PAGE_HOOK.lock() = Some(f);
+    refresh_vmm_hooks_ready();
 }
 
 /// Enregistre le hook de démappage fourni par le memory manager.
 pub fn register_unmap_hook(f: UnmapPageFn) {
     *UNMAP_PAGE_HOOK.lock() = Some(f);
+    refresh_vmm_hooks_ready();
+}
+
+/// Retourne vrai si les hooks VMM réels sont installés.
+#[inline]
+pub fn vmm_hooks_ready() -> bool {
+    VMM_HOOKS_INSTALLED.load(Ordering::Acquire)
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +228,11 @@ pub fn shm_map(
     hint_virt: VirtAddr,
     requested_perms: ShmPermissions,
 ) -> Result<ShmMapResult, IpcError> {
+    #[cfg(not(feature = "dev_no_vmm"))]
+    if !vmm_hooks_ready() {
+        return Err(IpcError::MappingFailed);
+    }
+
     // Vérifier que la région existe et est active
     let (n_pages, region_perms, size_bytes) = {
         let dir = SHM_DESC_DIR.lock();

@@ -96,7 +96,7 @@ impl FrameFlags {
 ///   - zone     (1 byte,  u8)        : ZoneType (Dma/Dma32/Normal/High/Movable)
 ///   - numa_node(1 byte,  u8)        : nœud NUMA d'appartenance (0..MAX_NUMA_NODES)
 ///   - order    (1 byte,  AtomicU8)  : ordre buddy (0=4KiB, 9=2MiB, ...)
-///              si >=BUDDY_MAX_ORDER → dans pool DMA ou réservé
+///              si > BUDDY_MAX_ORDER → dans pool DMA ou réservé
 ///   - lru_gen  (1 byte,  AtomicU8)  : génération LRU (pour clock algorithm)
 ///   - mapcount (2 bytes, AtomicU16) : nombre de page tables qui mappent ce frame
 ///   - _pad     (20 bytes)           : alignement futur / 32 bytes total
@@ -110,7 +110,7 @@ pub struct FrameDesc {
     pub zone: u8,
     /// Nœud NUMA d'appartenance.
     pub numa_node: u8,
-    /// Ordre buddy courant (0..11). BUDDY_MAX_ORDER+1 = hors-buddy.
+    /// Ordre buddy courant (0..=12). BUDDY_MAX_ORDER+1 = hors-buddy.
     pub order: AtomicU8,
     /// Génération LRU (clock bit, incrémenté à chaque scan).
     pub lru_gen: AtomicU8,

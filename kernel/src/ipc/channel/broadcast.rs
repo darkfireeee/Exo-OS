@@ -25,8 +25,6 @@ use crate::ipc::core::types::{
 use crate::ipc::ring::spsc::SpscRing;
 use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
-// IPC-04 (v6) : vérification capability via security::access_control
-use crate::security::access_control::{check_access, AccessError, ObjectKind};
 use crate::security::capability::{CapTable, CapToken, Rights};
 
 // ---------------------------------------------------------------------------
@@ -402,18 +400,7 @@ impl BroadcastChannel {
         table: &CapTable,
         token: CapToken,
     ) -> Result<(MessageId, u32, u32), IpcError> {
-        // IPC-04 (v6) : vérification capability — appel direct security/access_control/
-        check_access(
-            table,
-            token,
-            ObjectKind::IpcChannel,
-            Rights::IPC_SEND,
-            "ipc::broadcast",
-        )
-        .map_err(|e| match e {
-            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-            _ => IpcError::PermissionDenied,
-        })?;
+        crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_SEND)?;
         self.publish(data, flags)
     }
 
@@ -427,18 +414,7 @@ impl BroadcastChannel {
         table: &CapTable,
         token: CapToken,
     ) -> Result<Option<SubscriberId>, IpcError> {
-        // IPC-04 (v6) : vérification capability — appel direct security/access_control/
-        check_access(
-            table,
-            token,
-            ObjectKind::IpcChannel,
-            Rights::IPC_RECV,
-            "ipc::broadcast",
-        )
-        .map_err(|e| match e {
-            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-            _ => IpcError::PermissionDenied,
-        })?;
+        crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_RECV)?;
         Ok(self.subscribe(owner_id))
     }
 
@@ -453,18 +429,7 @@ impl BroadcastChannel {
         table: &CapTable,
         token: CapToken,
     ) -> Result<(usize, MsgFlags), IpcError> {
-        // IPC-04 (v6) : vérification capability — appel direct security/access_control/
-        check_access(
-            table,
-            token,
-            ObjectKind::IpcChannel,
-            Rights::IPC_RECV,
-            "ipc::broadcast",
-        )
-        .map_err(|e| match e {
-            AccessError::ObjectNotFound { .. } => IpcError::EndpointNotFound,
-            _ => IpcError::PermissionDenied,
-        })?;
+        crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_RECV)?;
         self.recv(sub_id, buf)
     }
 }

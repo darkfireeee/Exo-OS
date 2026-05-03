@@ -628,7 +628,7 @@ impl ThreadControlBlock {
     // ── FIX-CET-01 : CET Shadow Stack Pointer per-thread ─────────────────────
     //
     // Utilise _cold_reserve[48..56] (offset TCB absolu = 144 + 48 = 192).
-    // Non-overlapping avec les champs ExoShield documentés (0..40).
+    // Non-overlapping avec les champs ExoShield documentés (0..48).
     // Valeur initiale = 0 (CET non activé pour ce thread).
 
     /// Lit MSR_IA32_PL0_SSP sauvegardé dans ce TCB.
@@ -641,7 +641,7 @@ impl ThreadControlBlock {
     /// Sauvegarde MSR_IA32_PL0_SSP dans ce TCB (_cold_reserve[48..56]).
     #[inline(always)]
     pub fn set_pl0_ssp(&mut self, ssp: u64) {
-        // SAFETY: offset 48..56 dans _cold_reserve[88], non-overlapping ExoShield (0..40).
+        // SAFETY: offset 48..56 dans _cold_reserve[88], non-overlapping ExoShield (0..48).
         unsafe {
             core::ptr::write_unaligned(self._cold_reserve.as_mut_ptr().add(48) as *mut u64, ssp)
         }

@@ -84,6 +84,10 @@ proptest          = { workspace = true }
 static_assertions = { workspace = true }
 num-traits        = { workspace = true }
 
+[features]
+default = []
+dev_no_vmm = []
+
 # ── Cible par défaut (peut être surchargée en ligne de commande) ─────────────
 
 # Utiliser : cargo build --target ../x86_64-exo-os.json -Z build-std=core,alloc

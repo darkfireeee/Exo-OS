@@ -276,7 +276,7 @@ fn reap_entry(entry: ReaperEntry) {
                 files.close_all()
             };
             drop(closed_handles);
-            crate::fs::exofs::posix_bridge::vfs_close_all_pid(pid.0);
+            crate::process::lifecycle::exit::close_all_pid_vfs(pid.0);
             if addr_space_ptr != 0 {
                 crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER
                     .free_addr_space(addr_space_ptr);

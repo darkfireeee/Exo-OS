@@ -92,7 +92,7 @@ pub struct FutexIpcStats {
 /// WakeFn injectée dans FutexWaiter : réveille réellement le thread via scheduler.
 /// Signature : fn(tid: u64, code: i32) — compatible avec memory::utils::futex_table.
 fn ipc_futex_wake_fn(tid: u64, _code: i32) {
-    super::sched_hooks::wake_thread(tid as u32);
+    super::sched_hooks::wake_thread(tid);
 }
 
 /// No-op de réveil (avant installation des hooks ou pour les callers sans scheduler).
@@ -125,7 +125,7 @@ pub unsafe fn futex_wait(
     _addr: &AtomicU32,
     key: FutexKey,
     expected: u32,
-    thread_id: u32,
+    thread_id: u64,
     spin_max: u64,
     wake_fn: Option<WakeFn>,
 ) -> Result<WaiterState, IpcError> {
@@ -134,8 +134,30 @@ pub unsafe fn futex_wait(
     let wfn = wake_fn.unwrap_or(ipc_futex_wake_fn);
 
     // Allouer le FutexWaiter sur la pile — sa durée de vie = durée du wait.
-    let mut waiter = FutexWaiter::new(key.0, expected, thread_id as u64, wfn);
+    let mut waiter = FutexWaiter::new(key.0, expected, thread_id, wfn);
     let wptr = &mut waiter as *mut FutexWaiter;
+    struct WaiterGuard {
+        ptr: *mut FutexWaiter,
+        active: bool,
+    }
+
+    impl WaiterGuard {
+        fn disarm(&mut self) {
+            self.active = false;
+        }
+    }
+
+    impl Drop for WaiterGuard {
+        fn drop(&mut self) {
+            if self.active {
+                unsafe {
+                    if !(*self.ptr).woken.load(Ordering::Acquire) {
+                        mem_futex_cancel(self.ptr);
+                    }
+                }
+            }
+        }
+    }
 
     // Déléguer l'enfilement à memory::utils::futex_table (RÈGLE IPC-02).
     let result = mem_futex_wait(key.0, expected, wptr, wfn);
@@ -144,6 +166,10 @@ pub unsafe fn futex_wait(
         FutexWaitResult::ValueMismatch => Ok(WaiterState::ValueMismatch),
 
         FutexWaitResult::Waiting => {
+            let mut guard = WaiterGuard {
+                ptr: wptr,
+                active: true,
+            };
             // Le waiter est dans le bucket de memory/utils/futex_table.
             // Stratégie : spin court puis blocage réel via sched_hooks.
             const SPIN_BEFORE_BLOCK: u64 = 64;
@@ -154,12 +180,14 @@ pub unsafe fn futex_wait(
                 spins += 1;
 
                 if waiter.woken.load(Ordering::Acquire) {
+                    guard.disarm();
                     return Ok(WaiterState::Woken);
                 }
 
                 // Timeout explicite (spin_max non nul).
                 if spin_max != 0 && spins >= spin_max {
                     mem_futex_cancel(wptr);
+                    guard.disarm();
                     return Err(IpcError::Timeout);
                 }
 
@@ -167,6 +195,7 @@ pub unsafe fn futex_wait(
                 if spins >= SPIN_BEFORE_BLOCK {
                     // Vérifier à nouveau avant de bloquer (évite réveil manqué).
                     if waiter.woken.load(Ordering::Acquire) {
+                        guard.disarm();
                         return Ok(WaiterState::Woken);
                     }
                     // Blocage réel — retourne après que ipc_futex_wake_fn a été appelée.

@@ -56,6 +56,12 @@ pub fn init() {
     HYBRID_ENABLED.store(true, Ordering::Release);
 }
 
+/// Retourne vrai quand l'allocateur heap kernel accepte les allocations.
+#[inline]
+pub fn is_heap_ready() -> bool {
+    HYBRID_ENABLED.load(Ordering::Acquire)
+}
+
 /// Alloue `size` octets avec `align` minimum.
 ///
 /// - Si size <= 2048 : utilise SLUB.

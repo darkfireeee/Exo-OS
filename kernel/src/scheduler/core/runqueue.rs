@@ -263,7 +263,7 @@ impl CfsRunQueue {
                 // SAFETY: tasks[mid] est Some car mid < self.count.
                 let mv = unsafe {
                     self.tasks[mid]
-                        .unwrap()
+                        .unwrap_unchecked()
                         .as_ref()
                         .vruntime
                         .load(Ordering::Acquire)
@@ -306,7 +306,7 @@ impl CfsRunQueue {
             // SAFETY: tasks[0] est Some car self.count > 0.
             let new_min = unsafe {
                 self.tasks[0]
-                    .unwrap()
+                    .unwrap_unchecked()
                     .as_ref()
                     .vruntime
                     .load(Ordering::Relaxed)

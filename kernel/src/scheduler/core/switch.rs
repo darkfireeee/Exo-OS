@@ -18,7 +18,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::preempt::MAX_CPUS;
-use super::task::{TaskState, ThreadControlBlock};
+use super::task::{CpuId, TaskState, ThreadControlBlock};
 use crate::arch::x86_64::{
     cpu::{
         features::cpu_features_or_none,
@@ -44,6 +44,19 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 /// - publication : effectuée APRÈS mise à jour des slots GS locaux
 pub static CURRENT_THREAD_PER_CPU: [AtomicUsize; MAX_CPUS] =
     [const { AtomicUsize::new(0) }; MAX_CPUS];
+
+/// Hook optionnel appelé sur le thread sortant avant la transition d'état.
+///
+/// Les couches supérieures l'installent au boot ; le scheduler garde seulement
+/// un pointeur de fonction pour éviter une dépendance directe sur security/.
+pub type ContextSwitchOutHook = fn(&ThreadControlBlock);
+
+static CONTEXT_SWITCH_OUT_HOOK: AtomicUsize = AtomicUsize::new(0);
+
+#[inline]
+pub fn install_context_switch_out_hook(hook: ContextSwitchOutHook) {
+    CONTEXT_SWITCH_OUT_HOOK.store(hook as usize, Ordering::Release);
+}
 
 /// Retourne le pointeur brut vers le TCB du thread courant sur ce CPU.
 ///
@@ -85,6 +98,11 @@ pub fn current_thread_raw() -> *mut ThreadControlBlock {
 /// - Le thread doit avoir un mécanisme de réveil en place (waiter.woken, etc.).
 pub unsafe fn block_current_thread() {
     use crate::scheduler::core::runqueue::run_queue;
+
+    debug_assert!(
+        crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
+        "block_current_thread: appelé avec PreemptGuard actif"
+    );
 
     let tcb_ptr = current_thread_raw();
     if tcb_ptr.is_null() {
@@ -227,11 +245,11 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     prev.fs_base = unsafe { msr::read_msr(MSR_FS_BASE) };
     prev.user_gs_base = unsafe { msr::read_msr(MSR_KERNEL_GS_BASE) };
 
-    // ExoArgos documente une capture PMU sur le thread sortant au moment du
-    // context switch. Le hook restait orphelin ; on l'active ici sur le vrai
-    // chemin chaud. pmc_snapshot() se protège lui-même si le PMU n'est pas
-    // initialisé ou si le sujet n'est pas le thread courant.
-    let _ = crate::security::exoargos::pmc_snapshot(prev);
+    let hook = CONTEXT_SWITCH_OUT_HOOK.load(Ordering::Acquire);
+    if hook != 0 {
+        let hook_fn: ContextSwitchOutHook = unsafe { core::mem::transmute(hook) };
+        hook_fn(prev);
+    }
 
     // ── Étape 3 : Transition d'état de prev ──────────────────────────────────
     // Si le thread sortant était Running → il redevient Runnable (sera ré-enfilé).
@@ -274,8 +292,10 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     // FIX-KPTI-01 : rafraîchir le slot CR3 per-CPU après le switch.
     // Sans cette mise à jour, kpti_switch_to_user/kernel peut relire un couple
     // stale sur ce CPU après migration/changement d'espace d'adressage.
+    let cpu_id = percpu::current_cpu_id() as usize;
+    next.assign_cpu(CpuId(cpu_id as u32));
+
     if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
-        let cpu_id = percpu::current_cpu_id() as usize;
         let user_cr3 = user_cr3_for_cpu(cpu_id).unwrap_or_else(|| {
             panic!(
                 "KPTI actif mais user CR3 absent pour le CPU {} pendant le context switch",
@@ -308,26 +328,24 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     next.set_state(TaskState::Running);
     next.switch_count = next.switch_count.wrapping_add(1);
 
-    // Mettre à jour d'abord le slot GS canonique du thread courant, puis la pile
-    // noyau d'entrée et TSS.RSP0 avec le sommet stable du thread entrant.
-    percpu::set_current_tcb(next as *mut ThreadControlBlock);
+    // Mettre à jour la pile noyau d'entrée et TSS.RSP0 avant de publier le TCB
+    // courant dans GS et dans la table cross-CPU.
     let next_kstack_top = next.kstack_top();
     unsafe {
         percpu::set_kernel_rsp(next_kstack_top);
-        tss::update_rsp0(next.current_cpu().0 as usize, next_kstack_top);
-    }
-
-    // Publier ensuite l'état `next` aux autres CPUs.
-    let publish_cpu = next.current_cpu().0 as usize;
-    if publish_cpu < MAX_CPUS {
-        let cpu_data = unsafe { percpu::per_cpu_mut(publish_cpu) };
-        cpu_data.ctx_switch_count = cpu_data.ctx_switch_count.wrapping_add(1);
-        cpu_data.last_switch_tsc = tsc::read_tsc();
+        tss::update_rsp0(cpu_id, next_kstack_top);
     }
     core::sync::atomic::fence(Ordering::SeqCst);
-    // SAFETY: cpu() est monotone pendant l'exécution d'un thread sur ce CPU.
-    CURRENT_THREAD_PER_CPU[next.current_cpu().0 as usize]
-        .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
+    percpu::set_current_tcb(next as *mut ThreadControlBlock);
+
+    // Publier ensuite l'état `next` aux autres CPUs.
+    if cpu_id < MAX_CPUS {
+        let cpu_data = unsafe { percpu::per_cpu_mut(cpu_id) };
+        cpu_data.ctx_switch_count = cpu_data.ctx_switch_count.wrapping_add(1);
+        cpu_data.last_switch_tsc = tsc::read_tsc();
+        CURRENT_THREAD_PER_CPU[cpu_id]
+            .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
+    }
 
     // ── Étape 8 : Restaurer FS/GS base de `next` (CORR-11) ──────────────────
     //
@@ -411,7 +429,7 @@ pub unsafe fn schedule_block(
     use core::ptr::NonNull;
 
     let current_ptr = NonNull::new_unchecked(current as *mut ThreadControlBlock);
-    let idle_thread = match rq.idle_thread {
+    let mut idle_thread = match rq.idle_thread {
         Some(idle) => Some(idle),
         None => {
             let recovered = crate::scheduler::core::boot_idle::published_boot_idle(rq.cpu.0);
@@ -425,6 +443,20 @@ pub unsafe fn schedule_block(
         }
     };
 
+    if idle_thread.is_none() {
+        for _ in 0..1024 {
+            if let Some(idle) = crate::scheduler::core::boot_idle::published_boot_idle(rq.cpu.0) {
+                rq.set_idle_thread(idle);
+                if rq.current.is_none() {
+                    rq.current = Some(idle);
+                }
+                idle_thread = Some(idle);
+                break;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
     match pick_next_task(rq, Some(current_ptr)) {
         PickResult::Switch(next) => {
             if !core::ptr::eq(current, next.as_ptr()) {
@@ -436,7 +468,8 @@ pub unsafe fn schedule_block(
                         context_switch(current, &mut *idle.as_ptr());
                     }
                     _ => {
-                        panic!("schedule_block: idle_thread absent sur cpu {}", rq.cpu.0);
+                        current.set_state(TaskState::Running);
+                        return;
                     }
                 }
             }
@@ -446,10 +479,8 @@ pub unsafe fn schedule_block(
                 context_switch(current, &mut *idle.as_ptr());
             }
             _ => {
-                panic!(
-                    "schedule_block: pick_next sans idle_thread sur cpu {}",
-                    rq.cpu.0
-                );
+                current.set_state(TaskState::Running);
+                return;
             }
         },
     }

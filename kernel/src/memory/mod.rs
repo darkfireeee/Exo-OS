@@ -20,7 +20,7 @@
 //   ├── numa/         — nœuds, distances, politique, migration
 //   └── utils/        — futex table (UNIQUE), OOM killer, shrinker
 //
-// Règles d'architecture (docs/refonte/regle_bonus.md) :
+// Règles d'architecture (docs/recast/regle_bonus.md) :
 //   • COUCHE 0 : aucune dépendance scheduler/process/ipc/fs.
 //   • Ordonnancement des locks : Memory → Scheduler → Security → IPC → FS.
 //   • RÈGLE IA-KERNEL-01 : tables .rodata statiques uniquement.
@@ -144,6 +144,7 @@ pub unsafe fn init(phys_start: PhysAddr, phys_end: PhysAddr, regions: &[(u64, u6
     }
     // Phase 1c — SLUB / slab
     physical::init_phase3_slab_slub();
+    cow::init();
     // Phase 1d — topologie NUMA (0xFF = tous les 8 nœuds actifs par défaut)
     physical::init_phase4_numa(0xFF);
 
@@ -157,7 +158,6 @@ pub unsafe fn init(phys_start: PhysAddr, phys_end: PhysAddr, regions: &[(u64, u6
 
     // ── Phase 4 : DMA ─────────────────────────────────────────────────────────
     dma::init();
-    virt::fault::swap_in::register_backend_swap_provider();
 
     // ── Phase 5 : protection matérielle ──────────────────────────────────────
     protection::init();
@@ -167,6 +167,7 @@ pub unsafe fn init(phys_start: PhysAddr, phys_end: PhysAddr, regions: &[(u64, u6
 
     // ── Phase 7 : utilitaires ────────────────────────────────────────────────
     utils::init();
+    virt::fault::swap_in::register_backend_swap_provider();
 
     // ── Phase 8 : NUMA ───────────────────────────────────────────────────────
     numa::init();

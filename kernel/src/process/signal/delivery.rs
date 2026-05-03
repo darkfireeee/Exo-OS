@@ -42,6 +42,9 @@ pub enum SendError {
 /// 4. Démande une préemption via raise_signal_pending().
 pub fn send_signal_to_pid(pid: Pid, sig: Signal) -> Result<(), SendError> {
     let sig_n = sig.number();
+    if sig_n == 0 || sig_n > 63 {
+        return Err(SendError::InvalidSignal);
+    }
     let pcb = PROCESS_REGISTRY
         .find_by_pid(pid)
         .ok_or(SendError::NoSuchProcess)?;
@@ -52,8 +55,8 @@ pub fn send_signal_to_pid(pid: Pid, sig: Signal) -> Result<(), SendError> {
         return Ok(());
     }
 
-    // Récupère le thread principal (TID == PID).
-    let thread_ptr = pcb.main_thread_ptr();
+    // Récupère un thread vivant du processus cible.
+    let thread_ptr = pcb.find_alive_thread();
     if thread_ptr.is_null() {
         return Err(SendError::NoSuchProcess);
     }

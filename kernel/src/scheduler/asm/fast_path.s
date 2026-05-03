@@ -19,21 +19,21 @@
 // Retourne  : 1 si NEED_RESCHED est positionné, 0 sinon
 // Registres modifiés : rax (valeur retour), rcx (scratch, sauvegardé par caller)
 //
-// NEED_RESCHED = bit 4 dans TCB::flags (AtomicU32 à l'offset +28 du TCB).
+// NEED_RESCHED = bit 11 dans TCB::sched_state (AtomicU64 à l'offset +24).
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Offsets dans ThreadControlBlock (doit rester synchronisé avec task.rs)
-.set TCB_FLAGS_OFFSET,        28    // AtomicU32 flags — cache line 1
-.set TCB_SIGNAL_PENDING_OFFSET, 48  // AtomicBool signal_pending
-.set NEED_RESCHED_BIT,        16    // = 1 << 4 (task_flags::NEED_RESCHED)
+.set TCB_SCHED_STATE_OFFSET,     24      // AtomicU64 sched_state — cache line 1
+.set SCHED_SIGNAL_PENDING_BIT,   256     // = 1 << 8
+.set SCHED_NEED_RESCHED_BIT,     2048    // = 1 << 11
 
 .global read_need_resched_flag
 .type read_need_resched_flag, @function
 
 read_need_resched_flag:
-    // Lecture atomique Relaxed du champ flags du TCB (rdi = ptr TCB)
-    movl    TCB_FLAGS_OFFSET(%rdi), %eax
-    andl    $NEED_RESCHED_BIT, %eax
+    // Lecture atomique Relaxed du champ sched_state du TCB (rdi = ptr TCB)
+    movq    TCB_SCHED_STATE_OFFSET(%rdi), %rax
+    testq   $SCHED_NEED_RESCHED_BIT, %rax
     setnz   %al
     movzbl  %al, %eax
     ret
@@ -53,7 +53,10 @@ read_need_resched_flag:
 .type check_signal_flag, @function
 
 check_signal_flag:
-    movzbl  TCB_SIGNAL_PENDING_OFFSET(%rdi), %eax
+    movq    TCB_SCHED_STATE_OFFSET(%rdi), %rax
+    testq   $SCHED_SIGNAL_PENDING_BIT, %rax
+    setnz   %al
+    movzbl  %al, %eax
     ret
 
 .size check_signal_flag, . - check_signal_flag

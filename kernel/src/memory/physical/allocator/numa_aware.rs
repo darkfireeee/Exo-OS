@@ -302,16 +302,37 @@ impl NumaAllocator {
     }
 }
 
-/// Modifie la politique NUMA du thread courant.
-/// (Stub — en production, utiliser une table par CPU.)
-static CURRENT_POLICY: AtomicU8 = AtomicU8::new(NumaPolicy::LocalFirst as u8);
+/// Nombre maximal de slots de politique NUMA par CPU.
+const MAX_NUMA_POLICY_CPUS: usize = 256;
+
+/// Politique NUMA courante par CPU.
+///
+/// Une politique globale unique faisait fuiter la préférence d'un CPU vers les
+/// autres CPUs. Les threads peuvent encore surcharger explicitement via
+/// `NumaAllocContext`, mais le contexte implicite est maintenant local au CPU.
+static CURRENT_POLICY_PER_CPU: [AtomicU8; MAX_NUMA_POLICY_CPUS] =
+    [const { AtomicU8::new(NumaPolicy::LocalFirst as u8) }; MAX_NUMA_POLICY_CPUS];
+
+#[inline]
+fn current_policy_cpu_slot() -> usize {
+    #[cfg(target_os = "none")]
+    {
+        let cpu = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
+        return cpu.min(MAX_NUMA_POLICY_CPUS - 1);
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        0
+    }
+}
 
 pub fn set_current_policy(policy: NumaPolicy) {
-    CURRENT_POLICY.store(policy as u8, Ordering::SeqCst);
+    CURRENT_POLICY_PER_CPU[current_policy_cpu_slot()].store(policy as u8, Ordering::Release);
 }
 
 pub fn get_current_policy() -> NumaPolicy {
-    match CURRENT_POLICY.load(Ordering::Relaxed) {
+    match CURRENT_POLICY_PER_CPU[current_policy_cpu_slot()].load(Ordering::Acquire) {
         0 => NumaPolicy::LocalFirst,
         1 => NumaPolicy::Interleave,
         2 => NumaPolicy::Bind,

@@ -6,7 +6,6 @@
 //! 100% compliant. 0 TODO, 0 STUB.
 
 use crate::drivers;
-use crate::fs::exofs::posix_bridge::vfs_close_all_pid;
 use crate::process::core::pcb::{process_flags, ProcessControlBlock, ProcessState};
 use crate::process::core::tcb::ProcessThread;
 use crate::process::signal::default::Signal;
@@ -15,6 +14,22 @@ use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::switch::schedule_block;
 use crate::scheduler::core::task::TaskState;
 use core::sync::atomic::Ordering;
+use spin::Once;
+
+pub type VfsCloseAllPidHook = fn(pid: u32);
+
+static VFS_CLOSE_ALL_PID_HOOK: Once<VfsCloseAllPidHook> = Once::new();
+
+pub fn register_vfs_close_all_pid_hook(hook: VfsCloseAllPidHook) {
+    let _ = VFS_CLOSE_ALL_PID_HOOK.call_once(|| hook);
+}
+
+#[inline]
+pub(crate) fn close_all_pid_vfs(pid: u32) {
+    if let Some(hook) = VFS_CLOSE_ALL_PID_HOOK.get() {
+        hook(pid);
+    }
+}
 
 #[inline(always)]
 fn halt_forever() -> ! {
@@ -42,11 +57,15 @@ fn mark_exit(
         files.close_all()
     };
     drop(closed_handles);
-    vfs_close_all_pid(pcb.pid.0);
+    close_all_pid_vfs(pcb.pid.0);
     drivers::driver_do_exit(pcb.pid.0);
 
     thread.join_result.store(join_result, Ordering::Release);
     thread.join_done.store(true, Ordering::Release);
+    thread.set_state(TaskState::Dead);
+    unsafe {
+        crate::scheduler::fpu::free_fpu_state(&mut thread.sched_tcb);
+    }
 
     let remaining_threads = pcb.dec_threads();
     if remaining_threads == 0 {
@@ -58,13 +77,18 @@ fn mark_exit(
         crate::process::lifecycle::fork::notify_vfork_completion(pcb.pid);
     }
 
-    thread.set_state(TaskState::Dead);
     crate::process::lifecycle::reap::REAPER_QUEUE.enqueue(thread.pid, thread.tid);
 }
 
 fn deschedule_exited_thread(thread: &mut ProcessThread) -> ! {
     unsafe {
         let cpu_id = thread.sched_tcb.current_cpu();
+        for _ in 0..1024 {
+            if crate::scheduler::core::boot_idle::published_boot_idle(cpu_id.0).is_some() {
+                break;
+            }
+            core::hint::spin_loop();
+        }
         let rq = run_queue(cpu_id);
         schedule_block(rq, &mut thread.sched_tcb);
     }

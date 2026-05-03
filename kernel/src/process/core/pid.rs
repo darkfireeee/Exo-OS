@@ -34,13 +34,14 @@ pub struct Pid(pub u32);
 pub struct Tid(pub u32);
 
 impl Pid {
-    pub const INVALID: Self = Self(0);
+    pub const INVALID: Self = Self(u32::MAX);
     pub const IDLE: Self = Self(0);
     pub const INIT: Self = Self(1);
+    pub const FIRST_USABLE: Self = Self(PID_FIRST_USABLE);
 
     #[inline(always)]
     pub fn is_valid(self) -> bool {
-        self.0 > 0
+        self.0 != Self::INVALID.0 && self.0 <= PID_MAX
     }
 
     #[inline(always)]
@@ -50,11 +51,12 @@ impl Pid {
 }
 
 impl Tid {
-    pub const INVALID: Self = Self(0);
+    pub const INVALID: Self = Self(u32::MAX);
+    pub const FIRST_USABLE: Self = Self(TID_FIRST_USABLE);
 
     #[inline(always)]
     pub fn is_valid(self) -> bool {
-        self.0 > 0
+        self.0 != Self::INVALID.0 && self.0 >= TID_FIRST_USABLE && self.0 <= TID_MAX
     }
 
     #[inline(always)]

@@ -207,8 +207,10 @@ pub fn do_execve(
     // un mécanisme de GC de handles (hors scope de ce module).
     drop(closed_handles);
 
-    // Réinitialiser les signaux (handlers → SIG_DFL, masque → 0).
+    // Réinitialiser les signaux et purger les signaux de l'ancienne image.
     reset_signals_on_exec(&thread.sched_tcb);
+    thread.sig_queue.clear();
+    thread.rt_sig_queue.clear();
     thread
         .sched_tcb
         .signal_mask
@@ -250,8 +252,9 @@ pub fn do_execve(
     #[cfg(target_os = "none")]
     unsafe {
         let cpu_id = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
-        crate::arch::x86_64::smp::percpu::set_kernel_rsp(thread.sched_tcb.kstack_ptr);
-        crate::arch::x86_64::tss::update_rsp0(cpu_id, thread.sched_tcb.kstack_ptr);
+        let kstack_top = thread.sched_tcb.kstack_top();
+        crate::arch::x86_64::smp::percpu::set_kernel_rsp(kstack_top);
+        crate::arch::x86_64::tss::update_rsp0(cpu_id, kstack_top);
         crate::arch::x86_64::write_cr3(elf_result.cr3);
     }
 

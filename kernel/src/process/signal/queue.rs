@@ -130,6 +130,11 @@ impl SigQueue {
     pub fn has_pending(&self, mask: u64) -> bool {
         self.pending.load(Ordering::Acquire) & !mask != 0
     }
+
+    #[inline(always)]
+    pub fn clear(&self) {
+        self.pending.store(0, Ordering::Release);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -225,6 +230,17 @@ impl RTRing {
     fn is_empty(&self) -> bool {
         self.count.load(Ordering::Acquire) == 0
     }
+
+    fn clear(&self) {
+        unsafe {
+            for entry in (*self.entries.get()).iter_mut() {
+                entry.valid = false;
+            }
+            *self.head.get() = 0;
+        }
+        self.tail.store(0, Ordering::Release);
+        self.count.store(0, Ordering::Release);
+    }
 }
 
 /// File de signaux temps-réel pour les 32 signaux RT (SIGRTMIN..SIGRTMAX).
@@ -291,5 +307,12 @@ impl RTSigQueue {
     pub fn has_pending(&self, rt_mask: u32) -> bool {
         let p = self.pending_mask.load(Ordering::Acquire) as u32;
         p & !rt_mask != 0
+    }
+
+    pub fn clear(&self) {
+        for ring in &self.rings {
+            ring.clear();
+        }
+        self.pending_mask.store(0, Ordering::Release);
     }
 }

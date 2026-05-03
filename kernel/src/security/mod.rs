@@ -179,6 +179,10 @@ pub use exoseal::{
 
 pub use ipc_policy::{check_direct_ipc, IpcPolicyResult};
 
+fn exoargos_context_switch_snapshot(tcb: &crate::scheduler::core::task::ThreadControlBlock) {
+    let _ = exoargos::pmc_snapshot(tcb);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports — ExoShield v1.0 Module 9 : ExoNmi
 // ─────────────────────────────────────────────────────────────────────────────
@@ -302,6 +306,9 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
     unsafe {
         exoargos::exoargos_init();
     }
+    crate::scheduler::core::switch::install_context_switch_out_hook(
+        exoargos_context_switch_snapshot,
+    );
     probe(b'v');
 
     // ── 12. ExoNmi — Progressive NMI Watchdog (ExoShield v1.0 Module 9) ───────

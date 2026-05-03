@@ -459,10 +459,17 @@ pub unsafe fn futex_wait(
 ///
 /// # Safety : `waiter` doit être dans la table.
 pub unsafe fn futex_cancel(waiter: *mut FutexWaiter) {
+    if waiter.is_null() {
+        return;
+    }
     let virt_addr = (*waiter).virt_addr;
     let idx = bucket_index(virt_addr);
     let mut bucket = FUTEX_TABLE.buckets[idx].inner.lock();
-    bucket.remove(waiter);
+    if bucket.remove(waiter) {
+        (*waiter).next = None;
+    }
+    (*waiter).wake_code = -1;
+    (*waiter).woken.store(true, Ordering::Release);
     FUTEX_STATS.timeouts.fetch_add(1, Ordering::Relaxed);
 }
 

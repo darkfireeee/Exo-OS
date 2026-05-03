@@ -74,6 +74,9 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
 
     // Phase 3 : Initialisation de la couche de compatibilité POSIX
     posix_bridge::posix_bridge_init()?;
+    crate::process::lifecycle::exit::register_vfs_close_all_pid_hook(
+        posix_bridge::vfs_close_all_pid,
+    );
 
     // Phase 4 : Threads background GC/writeback
     // Le kthread GC tourne en priorité basse — il appelle run_gc_two_phase() en boucle.

@@ -64,7 +64,7 @@ impl WakeReason {
 #[repr(C, align(64))]
 pub struct IpcWaiter {
     /// Thread en attente (TaskId opaque)
-    pub thread_id: AtomicU32,
+    pub thread_id: AtomicU64,
     /// Le waiter est actif (inscrit dans la queue)
     pub active: AtomicBool,
     /// Réveillé
@@ -87,7 +87,7 @@ unsafe impl Send for IpcWaiter {}
 impl IpcWaiter {
     pub const fn new() -> Self {
         Self {
-            thread_id: AtomicU32::new(0),
+            thread_id: AtomicU64::new(0),
             active: AtomicBool::new(false),
             woken: AtomicBool::new(false),
             reason: AtomicU32::new(0),
@@ -179,7 +179,7 @@ impl IpcWaitQueue {
 
     /// Inscrit le thread `thread_id` comme waiter avec un timeout optionnel.
     /// Retourne l'index du waiter, ou `None` si la queue est pleine.
-    pub fn enqueue(&self, thread_id: u32, timeout_ns: u64, now_ns: u64) -> Option<usize> {
+    pub fn enqueue(&self, thread_id: u64, timeout_ns: u64, now_ns: u64) -> Option<usize> {
         for i in 0..MAX_IPC_WAITERS {
             if !self.waiters[i].is_active() {
                 self.waiters[i]
@@ -336,7 +336,7 @@ impl IpcWaitQueue {
     }
 
     /// Réveille un waiter spécifique par son thread_id.
-    pub fn wake_thread(&self, thread_id: u32, reason: WakeReason) -> bool {
+    pub fn wake_thread(&self, thread_id: u64, reason: WakeReason) -> bool {
         for i in 0..MAX_IPC_WAITERS {
             let w = &self.waiters[i];
             if w.is_active() && w.thread_id.load(Ordering::Relaxed) == thread_id && !w.is_woken() {

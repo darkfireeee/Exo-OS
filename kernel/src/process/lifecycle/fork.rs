@@ -424,7 +424,7 @@ mod tests {
         cleanup_pid(pid);
         let pcb = ProcessControlBlock::new(
             pid,
-            Pid(1),
+            Pid::INIT,
             pid,
             ThreadId(pid.0 as u64),
             Credentials::ROOT,

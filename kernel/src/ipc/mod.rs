@@ -33,6 +33,7 @@
 // Sous-modules
 // ---------------------------------------------------------------------------
 
+pub mod capability_bridge;
 pub mod channel;
 pub mod core;
 pub mod endpoint;
@@ -46,6 +47,9 @@ pub mod sync;
 // ---------------------------------------------------------------------------
 // Re-exports principaux pour usage externe depuis kernel/
 // ---------------------------------------------------------------------------
+
+use ::core::sync::atomic::{AtomicU8, Ordering};
+use exo_types::IpcEndpoint;
 
 // core/ — types fondamentaux
 pub use core::{
@@ -62,6 +66,11 @@ pub use endpoint::{
     endpoint_destroy, endpoint_listen,
 };
 
+// capability_bridge/ — compat vers security::access_control
+pub use capability_bridge::{
+    capability_to_ipc_error, check_channel_access, check_endpoint_access, check_shm_access,
+};
+
 // channel/ — API channels
 pub use channel::sync::{
     sync_channel_create, sync_channel_destroy, sync_channel_recv, sync_channel_send,
@@ -70,7 +79,7 @@ pub use channel::sync::{
 // shared_memory/ — API SHM
 pub use shared_memory::{
     allocator::{shm_alloc, shm_free},
-    mapping::{register_map_hook, register_unmap_hook, shm_map, shm_unmap},
+    mapping::{register_map_hook, register_unmap_hook, shm_map, shm_unmap, vmm_hooks_ready},
     numa_aware::numa_init,
     pool::init_shm_pool,
 };
@@ -105,10 +114,13 @@ pub use rpc::{
 /// - octet 0  : numéro IRQ
 /// - octets 1..8 : wave generation little-endian
 pub fn send_irq_notification(
-    endpoint: &exo_types::IpcEndpoint,
+    endpoint: &IpcEndpoint,
     irq: u8,
     wave_gen: u64,
 ) -> Result<(), IpcError> {
+    if endpoint.pid == 0 {
+        return Err(IpcError::InvalidEndpoint);
+    }
     let endpoint_code = ((endpoint.pid as u64) << 32) | endpoint.chan_idx as u64;
     let endpoint_id = EndpointId::new(endpoint_code).ok_or(IpcError::NullEndpoint)?;
 
@@ -122,6 +134,12 @@ pub fn send_irq_notification(
 // ---------------------------------------------------------------------------
 // Initialisation globale IPC
 // ---------------------------------------------------------------------------
+
+const IPC_INIT_DONE: u8 = 1 << 0;
+const IPC_SCHED_HOOKS_DONE: u8 = 1 << 1;
+const IPC_VMM_HOOKS_DONE: u8 = 1 << 2;
+
+static IPC_INIT_STATE: AtomicU8 = AtomicU8::new(0);
 
 /// Initialise le sous-système IPC.
 ///
@@ -152,11 +170,27 @@ pub fn ipc_init(shm_base_phys: u64, n_numa_nodes: u32) {
     // 4. Log minimal d'initialisation (au niveau du kernel)
     // Note : on ne peut pas utiliser log!/println! ici (no_std), mais un hook
     // d'initialisation peut être fourni par l'arch layer via les callbacks.
+    IPC_INIT_STATE.fetch_or(IPC_INIT_DONE, Ordering::Release);
 }
 
 /// Retourne le snapshot des statistiques IPC globales.
 pub fn ipc_stats_snapshot() -> IpcStatsSnapshot {
     IPC_STATS.snapshot()
+}
+
+#[inline]
+pub fn ipc_initialized() -> bool {
+    IPC_INIT_STATE.load(Ordering::Acquire) & IPC_INIT_DONE != 0
+}
+
+#[inline]
+pub fn ipc_scheduler_hooks_ready() -> bool {
+    IPC_INIT_STATE.load(Ordering::Acquire) & IPC_SCHED_HOOKS_DONE != 0
+}
+
+#[inline]
+pub fn ipc_vmm_hooks_ready() -> bool {
+    IPC_INIT_STATE.load(Ordering::Acquire) & IPC_VMM_HOOKS_DONE != 0
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +209,7 @@ pub fn ipc_stats_snapshot() -> IpcStatsSnapshot {
 ///              Fournie par `scheduler::block_current_thread`.
 pub fn ipc_install_scheduler_hooks(block_fn: sync::sched_hooks::BlockFn) {
     sync::sched_hooks::install_block_hook(block_fn);
+    IPC_INIT_STATE.fetch_or(IPC_SCHED_HOOKS_DONE, Ordering::Release);
 }
 
 /// Connecte les hooks VMM de mappage/démappage SHM à l'IPC.
@@ -195,4 +230,5 @@ pub fn ipc_install_vmm_hooks(
 ) {
     shared_memory::mapping::register_map_hook(map_page_fn);
     shared_memory::mapping::register_unmap_hook(unmap_page_fn);
+    IPC_INIT_STATE.fetch_or(IPC_VMM_HOOKS_DONE, Ordering::Release);
 }

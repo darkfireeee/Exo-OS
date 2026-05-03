@@ -84,6 +84,9 @@ impl KernelStack {
     /// Pose un canari 8 bytes au bas (détection overflow).
     pub fn alloc(size: usize) -> Option<Self> {
         use alloc::alloc::{alloc, Layout};
+        if !crate::memory::heap::is_heap_ready() {
+            return None;
+        }
         let layout = Layout::from_size_align(size, 16).ok()?;
         // SAFETY: layout est valide, on vérifie le pointeur.
         let base = unsafe { alloc(layout) };
@@ -152,7 +155,7 @@ pub struct ProcessThread {
     // ── TCB scheduler (hot path) ───────────────────────────────────────────────
     /// TCB scheduler — propriété exclusive de ce ProcessThread.
     /// Borrowé de manière exclusive par le scheduler pour les context switches.
-    pub sched_tcb: Box<ThreadControlBlock>,
+    pub(crate) sched_tcb: Box<ThreadControlBlock>,
 
     // ── Stack kernel ───────────────────────────────────────────────────────────
     /// Stack kernel dédié à ce thread.
@@ -206,6 +209,9 @@ impl ProcessThread {
         policy: SchedPolicy,
         prio: Priority,
     ) -> Option<Box<Self>> {
+        if !crate::memory::heap::is_heap_ready() {
+            return None;
+        }
         let kstack = KernelStack::alloc(KSTACK_SIZE)?;
         let stack_top = kstack.top_addr();
 
@@ -247,7 +253,7 @@ impl ProcessThread {
     pub fn new_kthread(tid: Tid, cr3: u64) -> Option<Box<Self>> {
         Self::new(
             tid,
-            Pid(1),
+            Pid::INIT,
             cr3,
             SchedPolicy::Normal,
             Priority::NORMAL_DEFAULT,
@@ -301,6 +307,6 @@ impl ProcessThread {
 }
 
 // SAFETY: ProcessThread est accédé depuis un seul CPU à la fois (propriété scheduler).
-// Les champs atomiques permettent les lectures concurrentes.
+// Les champs atomiques permettent les lectures concurrentes ciblées ; la
+// structure complète ne doit pas être partagée comme référence Sync.
 unsafe impl Send for ProcessThread {}
-unsafe impl Sync for ProcessThread {}
