@@ -79,8 +79,8 @@ pub enum TaskState {
 ```
 
 **Transitions atomiques** via `task.try_transition(from, to)` (compare-and-swap) ou
-`task.force_transition(to)` pour les chemins kill/exit qui doivent avancer
-malgré un état transitoire.
+`task.force_transition(from, to)` quand l'appelant connaît l'état attendu et
+veut vérifier l'invariant en debug avant de forcer la progression en release.
 
 ### ThreadAiState — Profilage EMA inline (8 octets)
 

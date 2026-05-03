@@ -525,11 +525,25 @@ impl ThreadControlBlock {
         }
     }
 
-    /// Transition forcée — utilisée pour les chemins d'arrêt/kill où l'état
-    /// observé peut être transitoire et ne doit pas bloquer la progression.
+    /// Transition forcée — utilisée quand l'appelant connaît l'état attendu.
+    ///
+    /// En debug, l'invariant `from -> to` est vérifié par CAS. En release, la
+    /// transition avance quand même tout en conservant les flags de `sched_state`.
     #[inline(always)]
-    pub fn force_transition(&self, to: TaskState) {
-        self.set_task_state(to);
+    pub fn force_transition(&self, from: TaskState, to: TaskState) {
+        debug_assert!(
+            self.try_transition(from, to),
+            "force_transition: état attendu {:?}, trouvé {:?}",
+            from,
+            self.task_state()
+        );
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = from;
+            let old = self.sched_state.load(Ordering::Acquire);
+            let new = (old & !SCHED_STATE_MASK) | to as u64;
+            self.sched_state.store(new, Ordering::Release);
+        }
     }
 
     /// Lit le PID du thread (champ direct).
@@ -758,6 +772,41 @@ impl ThreadControlBlock {
 // modifiés uniquement par le CPU propriétaire (invariants scheduler).
 unsafe impl Send for ThreadControlBlock {}
 unsafe impl Sync for ThreadControlBlock {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_tcb() -> ThreadControlBlock {
+        ThreadControlBlock::new(
+            ThreadId(1),
+            ProcessId(1),
+            SchedPolicy::Normal,
+            Priority::NORMAL_DEFAULT,
+            0,
+            0x8000,
+        )
+    }
+
+    #[test]
+    fn force_transition_checks_from_and_preserves_sched_flags() {
+        let task = test_tcb();
+        task.set_signal_pending();
+
+        task.force_transition(TaskState::Runnable, TaskState::Running);
+
+        assert_eq!(task.task_state(), TaskState::Running);
+        assert!(task.has_signal_pending());
+    }
+
+    #[test]
+    fn try_transition_rejects_unexpected_state() {
+        let task = test_tcb();
+
+        assert!(!task.try_transition(TaskState::Sleeping, TaskState::Running));
+        assert_eq!(task.task_state(), TaskState::Runnable);
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Statistiques par thread — séparées du TCB.

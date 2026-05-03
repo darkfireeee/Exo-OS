@@ -290,36 +290,46 @@ pub unsafe fn map_4k_page(
 /// Démappage d'une page 4 KiB
 ///
 /// # SAFETY
-/// `pml4` est valide et l'adresse est mappée.
-pub unsafe fn unmap_4k_page(pml4: *mut PageTable, virt_addr: u64) -> Option<u64> {
+/// `pml4` est valide.
+pub unsafe fn unmap_4k_page(pml4: *mut PageTable, virt_addr: u64) -> Result<u64, PageTableError> {
+    if virt_addr as usize & (PAGE_SIZE - 1) != 0 {
+        return Err(PageTableError::InvalidAlignment);
+    }
+
     let idx = decompose_virt_addr(virt_addr);
     // SAFETY: `pml4` est un pointeur valide (unsafe fn), aligné 4 KiB, accès exclusif.
     let pml4 = unsafe { &mut *pml4 };
 
     let e_pml4 = pml4.entry(idx.pml4_idx);
     if !e_pml4.is_present() {
-        return None;
+        return Err(PageTableError::NotMapped);
     }
 
     // SAFETY: e_pml4 est présent — phys_addr() pointe vers une PageTable valide, alignée 4 KiB.
     let pdpt = unsafe { &mut *(e_pml4.phys_addr() as *mut PageTable) };
     let e_pdpt = pdpt.entry(idx.pdpt_idx);
     if !e_pdpt.is_present() {
-        return None;
+        return Err(PageTableError::NotMapped);
+    }
+    if e_pdpt.is_huge() {
+        return Err(PageTableError::HugePageConflict);
     }
 
     // SAFETY: e_pdpt est présent — même invariant que ci-dessus.
     let pd = unsafe { &mut *(e_pdpt.phys_addr() as *mut PageTable) };
     let e_pd = pd.entry(idx.pd_idx);
-    if !e_pd.is_present() || e_pd.is_huge() {
-        return None;
+    if !e_pd.is_present() {
+        return Err(PageTableError::NotMapped);
+    }
+    if e_pd.is_huge() {
+        return Err(PageTableError::HugePageConflict);
     }
 
     // SAFETY: e_pd est présent et non-huge — même invariant.
     let pt = unsafe { &mut *(e_pd.phys_addr() as *mut PageTable) };
     let entry = pt.entry_mut(idx.pt_idx);
     if !entry.is_present() {
-        return None;
+        return Err(PageTableError::NotMapped);
     }
 
     let phys = entry.phys_addr();
@@ -329,7 +339,7 @@ pub unsafe fn unmap_4k_page(pml4: *mut PageTable, virt_addr: u64) -> Option<u64>
     super::invlpg(virt_addr);
 
     PAGE_UNMAP_COUNT.fetch_add(1, Ordering::Relaxed);
-    Some(phys)
+    Ok(phys)
 }
 
 /// Traduit une adresse virtuelle en physique (page walk)
@@ -492,4 +502,42 @@ pub fn inc_tlb_shootdown() {
 }
 pub fn tlb_shootdown_count() -> usize {
     TLB_SHOOTDOWN_COUNT.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::boxed::Box;
+
+    #[test]
+    fn unmap_4k_page_reports_invalid_alignment() {
+        let mut pml4 = Box::new(PageTable::empty());
+
+        let err = unsafe { unmap_4k_page(&mut *pml4, 0x1001) }.unwrap_err();
+
+        assert_eq!(err, PageTableError::InvalidAlignment);
+    }
+
+    #[test]
+    fn unmap_4k_page_reports_not_mapped_for_empty_tree() {
+        let mut pml4 = Box::new(PageTable::empty());
+
+        let err = unsafe { unmap_4k_page(&mut *pml4, 0x4000) }.unwrap_err();
+
+        assert_eq!(err, PageTableError::NotMapped);
+    }
+
+    #[test]
+    fn unmap_4k_page_reports_huge_page_conflict_at_pdpt() {
+        let mut pml4 = Box::new(PageTable::empty());
+        let mut pdpt = Box::new(PageTable::empty());
+        let pdpt_addr = (&mut *pdpt as *mut PageTable) as u64;
+
+        *pml4.entry_mut(0) = PageTableEntry::new(pdpt_addr, PTE_PRESENT | PTE_WRITABLE);
+        *pdpt.entry_mut(0) = PageTableEntry::new(0, PTE_PRESENT | PTE_HUGE);
+
+        let err = unsafe { unmap_4k_page(&mut *pml4, 0) }.unwrap_err();
+
+        assert_eq!(err, PageTableError::HugePageConflict);
+    }
 }
