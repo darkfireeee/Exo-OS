@@ -17,6 +17,8 @@ use crate::exophoenix::{ssr, stage0};
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
+use alloc::boxed::Box;
+use spin::Mutex;
 use xmas_elf::ElfFile;
 
 // ── MARQUEURS POUR GPT-5.3-CODEX ─────────────────────────────────────────
@@ -50,13 +52,26 @@ pub fn kernel_a_hash_is_zero() -> bool {
 
 // ── Étape 1 : charger l'image de A depuis ExoFS ───────────────────────────
 
+static A_IMAGE_BUF: Mutex<Option<Box<[u8]>>> = Mutex::new(None);
+
 fn load_a_image_from_exofs() -> Result<&'static [u8], ForgeError> {
-    let blob_id = BlobId(A_IMAGE_HASH);
-    let data = BLOB_CACHE
-        .get(&blob_id)
+    let mut guard = A_IMAGE_BUF.lock();
+    if guard.is_none() {
+        let blob_id = BlobId(A_IMAGE_HASH);
+        *guard = Some(
+            BLOB_CACHE
+                .get(&blob_id)
+                .ok_or(ForgeError::ExoFsLoadFailed)?,
+        );
+    }
+    let slice = guard
+        .as_ref()
+        .map(|buf| buf.as_ref())
         .ok_or(ForgeError::ExoFsLoadFailed)?;
-    let leaked: &'static mut [u8] = alloc::boxed::Box::leak(data);
-    Ok(leaked)
+    let ptr = slice as *const [u8];
+    // SAFETY: A_IMAGE_BUF garde l'image jusqu'à la fin du kernel et ce code ne
+    // remplace pas le buffer après initialisation.
+    Ok(unsafe { &*ptr })
 }
 
 // ── Étape 2 : parser ELF — safe Rust uniquement ───────────────────────────

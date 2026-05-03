@@ -182,9 +182,8 @@ fn read_tsc() -> u64 {
 // ── Static storage ────────────────────────────────────────────────────────────
 
 /// Policy table — max 64 entries.
-static POLICY_TABLE: Mutex<[PolicyRule; MAX_POLICY_ENTRIES]> = Mutex::new(
-    [PolicyRule::empty(); MAX_POLICY_ENTRIES],
-);
+static POLICY_TABLE: Mutex<[PolicyRule; MAX_POLICY_ENTRIES]> =
+    Mutex::new([PolicyRule::empty(); MAX_POLICY_ENTRIES]);
 
 /// Number of active policy entries.
 static POLICY_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -196,9 +195,7 @@ static NEXT_RULE_ID: AtomicU32 = AtomicU32::new(1);
 static DEFAULT_POLICY: AtomicU8 = AtomicU8::new(PolicyAction::Deny as u8);
 
 /// Rate-limit tracking table (max 32 concurrent pairs).
-static RATE_LIMIT_TABLE: Mutex<[RateLimitEntry; 32]> = Mutex::new(
-    [RateLimitEntry::new(); 32],
-);
+static RATE_LIMIT_TABLE: Mutex<[RateLimitEntry; 32]> = Mutex::new([RateLimitEntry::new(); 32]);
 
 /// Statistics.
 static TOTAL_EVALUATIONS: AtomicU64 = AtomicU64::new(0);
@@ -480,7 +477,7 @@ pub fn remove_policy(rule_id: u32) -> bool {
     for i in 0..count.min(MAX_POLICY_ENTRIES) {
         if table[i].rule_id == rule_id {
             table[i].flags = 0; // Mark inactive
-            // Shift remaining entries to keep the table compact
+                                // Shift remaining entries to keep the table compact
             for j in i..(count - 1).min(MAX_POLICY_ENTRIES - 1) {
                 table[j] = table[j + 1];
             }
@@ -693,10 +690,16 @@ mod tests {
         assert_eq!(PolicyAction::from_u8(denied.action), PolicyAction::Deny);
 
         let init_allowed = evaluate_policy(INIT_SERVER_PID, EXO_SHIELD_PID, QUARANTINE_CMD);
-        assert_eq!(PolicyAction::from_u8(init_allowed.action), PolicyAction::Allow);
+        assert_eq!(
+            PolicyAction::from_u8(init_allowed.action),
+            PolicyAction::Allow
+        );
 
         let router_allowed = evaluate_policy(IPC_ROUTER_PID, EXO_SHIELD_PID, POLICY_UPDATE);
-        assert_eq!(PolicyAction::from_u8(router_allowed.action), PolicyAction::Allow);
+        assert_eq!(
+            PolicyAction::from_u8(router_allowed.action),
+            PolicyAction::Allow
+        );
     }
 
     #[test]

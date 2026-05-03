@@ -86,7 +86,8 @@ pub unsafe fn kpti_switch_to_user() {
     let slot = current_cpu_slot();
     let cr3_user = slot.user.load(Ordering::Acquire);
     if cr3_user == 0 {
-        panic!("KPTI actif mais aucun CR3 user n'est publie pour ce CPU");
+        log::warn!("KPTI actif mais aucun CR3 user n'est publie pour ce CPU");
+        return;
     }
     let features = super::super::cpu::features::cpu_features();
     let cr3 = if features.has_pcid() {
@@ -106,7 +107,8 @@ pub unsafe fn kpti_switch_to_kernel() {
     let slot = current_cpu_slot();
     let cr3_kernel = slot.kernel.load(Ordering::Acquire);
     if cr3_kernel == 0 {
-        panic!("KPTI actif mais aucun CR3 kernel n'est publie pour ce CPU");
+        log::warn!("KPTI actif mais aucun CR3 kernel n'est publie pour ce CPU");
+        return;
     }
     let features = super::super::cpu::features::cpu_features();
     let cr3 = if features.has_pcid() {

@@ -50,7 +50,7 @@ pub const EXC_SECURITY: u8 = 30;
 pub const IRQ_BASE: u8 = 32;
 
 /// Vecteur IRQ timer (APIC Local Timer)
-pub const VEC_IRQ_TIMER: u8 = 0x20;
+pub const VEC_IRQ_TIMER: u8 = IRQ_BASE;
 
 /// Vecteur IPI wakeup (scheduler)
 pub const VEC_IPI_WAKEUP: u8 = 0xF0;
@@ -308,7 +308,12 @@ pub fn init_idt() {
         EXC_DOUBLE_FAULT,
         exc_double_fault_handler as *const () as u64,
         IST_DOUBLE_FAULT as u8 + 1,
-        IdtEntryFlags::TRAP_GATE,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    debug_assert_eq!(
+        idt.entries[EXC_DOUBLE_FAULT as usize].flags,
+        IdtEntryFlags::INTERRUPT_GATE.0,
+        "#DF doit utiliser une interrupt gate (IF masqué)"
     );
     idt.set_handler(
         EXC_INVALID_TSS,
@@ -379,7 +384,7 @@ pub fn init_idt() {
 
     // ── IRQ hardware (vecteurs 32+) ───────────────────────────────────────────
     idt.set_handler(
-        IRQ_BASE,
+        VEC_IRQ_TIMER,
         irq_timer_handler as *const () as u64,
         0,
         IdtEntryFlags::INTERRUPT_GATE,

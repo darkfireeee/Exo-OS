@@ -391,8 +391,8 @@ const _: () = assert!(
 //     le champ de suivi de l'EmergencyPool.
 //
 // Solution :
-//   SchedNodePool gère 64 blocs de 64 bytes alignés 64 via un BITSET EXTERNE
-//   (AtomicU64) — le pool ne touche JAMAIS au contenu des blocs.
+//   SchedNodePool gère 256 blocs de 64 bytes alignés 64 via un BITSET EXTERNE
+//   ([AtomicU64; 4]) — le pool ne touche JAMAIS au contenu des blocs.
 //   Le scheduler possède la totalité du bloc et y écrit sa propre structure.
 //
 // CAS lock-free O(1) pour alloc/free via trailing_zeros sur le bitset.
@@ -401,8 +401,13 @@ const _: () = assert!(
 // RÈGLE WAITQ-01 : les blocs sont pré-alloués en .bss, zéro allocation heap.
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Nombre de blocs dans le SchedNodePool (doit être ≤ 64 pour le bitset u64).
-const SCHED_POOL_SIZE: usize = 64;
+/// Nombre de blocs dans le SchedNodePool.
+const SCHED_POOL_SIZE: usize = 256;
+const SCHED_POOL_WORDS: usize = SCHED_POOL_SIZE / 64;
+const _: () = assert!(
+    SCHED_POOL_WORDS * 64 == SCHED_POOL_SIZE,
+    "SCHED_POOL_SIZE doit être un multiple de 64"
+);
 
 /// Un bloc de mémoire opaque de 64 bytes aligné 64 — utilisé par le scheduler
 /// pour y construire son propre WaitNode (#[repr(C)]).
@@ -422,14 +427,14 @@ const _: () = assert!(
 
 /// Pool de blocs bruts pour scheduler/sync/wait_queue.rs.
 ///
-/// Utilise un bitmap AtomicU64 pour le suivi (bit N=1 ↔ bloc N libre).
+/// Utilise un bitmap [AtomicU64; 4] pour le suivi (bit N=1 ↔ bloc N libre).
 /// Dépendance zéro vers le scheduler ou les types du scheduler.
 struct SchedNodePool {
-    /// 64 blocs de 64 bytes alignés — en .bss, jamais désalloués.
+    /// 256 blocs de 64 bytes alignés — en .bss, jamais désalloués.
     blocks: UnsafeCell<[RawBlock64; SCHED_POOL_SIZE]>,
     /// Bitset libre : bit N = 1 → bloc N disponible.
-    /// Initialisé à 0xFFFF_FFFF_FFFF_FFFF (tous libres).
-    free_bits: AtomicU64,
+    /// Initialisé à u64::MAX pour chacun des 4 mots (tous libres).
+    free_bits: [AtomicU64; SCHED_POOL_WORDS],
     initialized: AtomicBool,
     /// Compteur d'allocations actives (diagnostic).
     alloc_count: AtomicUsize,
@@ -445,7 +450,7 @@ impl SchedNodePool {
         SchedNodePool {
             // SAFETY: RawBlock64 = [u8; 64], tous-zéros valide + pas de drop.
             blocks: UnsafeCell::new(unsafe { core::mem::zeroed() }),
-            free_bits: AtomicU64::new(0), // sera mis à !0 dans init()
+            free_bits: [const { AtomicU64::new(0) }; SCHED_POOL_WORDS],
             initialized: AtomicBool::new(false),
             alloc_count: AtomicUsize::new(0),
             exhausted: AtomicUsize::new(0),
@@ -457,11 +462,14 @@ impl SchedNodePool {
     /// # Safety
     /// Appelé depuis un seul CPU avant tout accès concurrent.
     unsafe fn init(&self) {
-        if self.initialized.load(Ordering::Acquire) {
-            return;
+        // Boot-idempotent : kernel_init() peut réappeler cette init après le
+        // chemin arch early. Aucun utilisateur scheduler ne doit encore tenir
+        // de bloc à ce stade, donc on republie explicitement tout le bitmap.
+        for word in &self.free_bits {
+            word.store(u64::MAX, Ordering::Release);
         }
-        // Marquer tous les blocs comme libres (64 blocs → 64 bits à 1)
-        self.free_bits.store(u64::MAX, Ordering::Release);
+        self.alloc_count.store(0, Ordering::Release);
+        self.exhausted.store(0, Ordering::Release);
         self.initialized.store(true, Ordering::Release);
     }
 
@@ -472,29 +480,33 @@ impl SchedNodePool {
         if !self.initialized.load(Ordering::Acquire) {
             return core::ptr::null_mut();
         }
-        loop {
-            let bits = self.free_bits.load(Ordering::Acquire);
-            if bits == 0 {
-                self.exhausted.fetch_add(1, Ordering::Relaxed);
-                return core::ptr::null_mut();
-            }
-            let idx = bits.trailing_zeros() as usize;
-            let new_bits = bits & !(1u64 << idx);
-            match self.free_bits.compare_exchange_weak(
-                bits,
-                new_bits,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    self.alloc_count.fetch_add(1, Ordering::Relaxed);
-                    // SAFETY: idx < SCHED_POOL_SIZE, blocks initialisé.
-                    let blocks_ptr = self.blocks.get();
-                    return unsafe { (*blocks_ptr)[idx].data.as_mut_ptr() };
+        for word_idx in 0..SCHED_POOL_WORDS {
+            loop {
+                let bits = self.free_bits[word_idx].load(Ordering::Acquire);
+                if bits == 0 {
+                    break;
                 }
-                Err(_) => continue, // retry CAS
+                let bit = bits.trailing_zeros() as usize;
+                let idx = word_idx * 64 + bit;
+                let new_bits = bits & !(1u64 << bit);
+                match self.free_bits[word_idx].compare_exchange_weak(
+                    bits,
+                    new_bits,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        self.alloc_count.fetch_add(1, Ordering::Relaxed);
+                        // SAFETY: idx < SCHED_POOL_SIZE par construction, blocks initialisé.
+                        let blocks_ptr = self.blocks.get();
+                        return unsafe { (*blocks_ptr)[idx].data.as_mut_ptr() };
+                    }
+                    Err(_) => continue, // retry CAS sur ce mot
+                }
             }
         }
+        self.exhausted.fetch_add(1, Ordering::Relaxed);
+        core::ptr::null_mut()
     }
 
     /// Libère un bloc précédemment alloué via `alloc()`.
@@ -516,7 +528,9 @@ impl SchedNodePool {
         let offset = ptr_addr - blocks_base;
         let idx = offset / 64;
         // Remettre le bit à 1 (bloc libre) de façon atomique
-        self.free_bits.fetch_or(1u64 << idx, Ordering::Release);
+        let word_idx = idx / 64;
+        let bit = idx % 64;
+        self.free_bits[word_idx].fetch_or(1u64 << bit, Ordering::Release);
         self.alloc_count.fetch_sub(1, Ordering::Relaxed);
     }
 }
@@ -577,6 +591,15 @@ pub unsafe extern "C" fn emergency_pool_alloc_wait_node() -> *mut u8 {
 #[no_mangle]
 pub unsafe extern "C" fn emergency_pool_free_wait_node(node: *mut u8) {
     SCHED_NODE_POOL.free(node);
+}
+
+/// Réinitialise/publie le pool de blocs scheduler pendant la séquence de boot.
+///
+/// Utilisé par `scheduler::sync::wait_queue::init()` comme garde-fou si le
+/// chemin arch early et `kernel_init()` ont été rejoués dans un ordre différent.
+#[no_mangle]
+pub unsafe extern "C" fn emergency_pool_init_wait_node_pool() {
+    init_sched_pool();
 }
 
 #[cfg(test)]

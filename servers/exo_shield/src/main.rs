@@ -160,9 +160,8 @@ fn read_u64_le(payload: &[u8], offset: usize) -> u64 {
 fn extract_service_cap_token(req: &ShieldRequest) -> syscall::ExoCapTokenWire {
     let mut token = syscall::ExoCapTokenWire::empty();
     token.bytes.copy_from_slice(
-        &req.payload
-            [ipc_gate::EXO_SHIELD_CAP_TOKEN_OFFSET..ipc_gate::EXO_SHIELD_CAP_TOKEN_OFFSET
-                + ipc_gate::EXO_SHIELD_CAP_TOKEN_LEN],
+        &req.payload[ipc_gate::EXO_SHIELD_CAP_TOKEN_OFFSET
+            ..ipc_gate::EXO_SHIELD_CAP_TOKEN_OFFSET + ipc_gate::EXO_SHIELD_CAP_TOKEN_LEN],
     );
     token
 }

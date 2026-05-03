@@ -12,7 +12,7 @@
 //! gs:[0x18]  = u64 : lapic_id      — APIC ID du CPU courant
 //! gs:[0x20]  = u64 : current_tcb   — pointeur TCB du thread courant
 //! gs:[0x28]  = u64 : idle_rsp      — RSP de la pile idle de ce CPU
-//! gs:[0x30]  = u64 : preempt_count — compteur de désactivation préemption
+//! gs:[0x30]  = u64 : réservé — préemption canonique dans scheduler::core::preempt
 //! gs:[0x38]  = u64 : irq_depth     — profondeur d'imbrication IRQ
 //! gs:[0x40]  = *   — réservé (futur)
 //! ```
@@ -46,7 +46,7 @@ pub struct PerCpuData {
     pub lapic_id: u64,      // 0x18
     pub current_tcb: u64,   // 0x20 (pointeur opaque, cast vers TCB extern)
     pub idle_rsp: u64,      // 0x28
-    pub preempt_count: u64, // 0x30
+    pub preempt_count: u64, // 0x30 réservé (ne pas utiliser comme compteur canonique)
     pub irq_depth: u64,     // 0x38
 
     // Données Rust (offsets non contraints par l'ASM)
@@ -262,8 +262,6 @@ pub fn init_percpu_for_bsp(kernel_stack_top: u64, lapic_id: u32) {
     unsafe {
         msr::write_msr(msr::MSR_KERNEL_GS_BASE, 0);
     }
-    crate::arch::x86_64::memory_barrier();
-
     ONLINE_CPU_COUNT.fetch_add(1, Ordering::Release);
 }
 
@@ -290,8 +288,6 @@ pub fn init_percpu_for_ap(cpu_id: u32, kernel_stack_top: u64, lapic_id: u32) {
         msr::write_msr(msr::MSR_GS_BASE, addr);
         msr::write_msr(msr::MSR_KERNEL_GS_BASE, 0);
     }
-    crate::arch::x86_64::memory_barrier();
-
     ONLINE_CPU_COUNT.fetch_add(1, Ordering::Release);
 }
 
@@ -299,31 +295,29 @@ pub fn init_percpu_for_ap(cpu_id: u32, kernel_stack_top: u64, lapic_id: u32) {
 
 /// Désactive la préemption (incrémente preempt_count)
 #[inline]
+#[deprecated(note = "utiliser scheduler::core::preempt::PreemptGuard")]
 pub fn preempt_disable() {
-    // SAFETY: accès GS:[0x30] depuis Ring 0, non-réentrant par construction
-    unsafe {
-        core::arch::asm!("addq $1, gs:[0x30]", options(nostack));
-    }
+    crate::scheduler::core::preempt::preempt_disable_for_arch_compat();
 }
 
 /// Active la préemption (décrémente preempt_count)
 #[inline]
+#[deprecated(note = "utiliser le Drop de scheduler::core::preempt::PreemptGuard")]
 pub fn preempt_enable() {
-    // SAFETY: accès GS:[0x30] depuis Ring 0
-    unsafe {
-        core::arch::asm!("subq $1, gs:[0x30]", options(nostack));
-    }
+    crate::scheduler::core::preempt::preempt_enable_for_arch_compat();
 }
 
 /// Retourne `true` si la préemption est désactivée sur le CPU courant
 #[inline]
+#[deprecated(note = "utiliser scheduler::core::preempt::is_preempt_disabled")]
 pub fn preempt_is_disabled() -> bool {
-    let count: u64;
-    // SAFETY: lecture GS:[0x30]
-    unsafe {
-        core::arch::asm!("mov {}, gs:[0x30]", out(reg) count, options(nostack, nomem));
-    }
-    count != 0
+    preempt_is_disabled_canonical()
+}
+
+/// Lecture canonique de l'état de préemption.
+#[inline]
+pub fn preempt_is_disabled_canonical() -> bool {
+    crate::scheduler::core::preempt::is_preempt_disabled()
 }
 
 // ── Préparation P2-7 : test gabarit kernel_rsp ──────────────────────────────

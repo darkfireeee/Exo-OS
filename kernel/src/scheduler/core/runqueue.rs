@@ -243,11 +243,11 @@ impl CfsRunQueue {
 
     /// Insère un thread CFS en maintenant le tri par vruntime.
     /// Insertion bisection O(log n) + déplacement O(n) dans le pire cas.
-    fn enqueue(&mut self, tcb: NonNull<ThreadControlBlock>) {
+    fn enqueue(&mut self, tcb: NonNull<ThreadControlBlock>) -> bool {
         if self.count >= MAX_TASKS_PER_CPU {
             // File pleine : le thread sera re-tenté au prochain tick.
             // En pratique impossible avec 512 slots per-CPU.
-            return;
+            return false;
         }
 
         // SAFETY: tcb est un NonNull valide — même invariant que enqueue().
@@ -284,6 +284,7 @@ impl CfsRunQueue {
         self.tasks[pos] = Some(tcb);
         self.count += 1;
         self.weight_sum = self.weight_sum.saturating_add(weight as u64);
+        true
     }
 
     /// Retire le thread avec le plus petit vruntime (tête du tableau trié).
@@ -310,9 +311,8 @@ impl CfsRunQueue {
                     .vruntime
                     .load(Ordering::Relaxed)
             };
-            // Intentionnel: min_vruntime est une borne approximative CFS.
-            // La cohérence stricte de décision est garantie par insert_sorted() en Acquire.
-            self.min_vruntime.store(new_min, Ordering::Relaxed);
+            // Publication Release: les lecteurs observent la borne après le retrait.
+            self.min_vruntime.store(new_min, Ordering::Release);
         }
 
         Some(tcb)
@@ -358,6 +358,8 @@ pub struct RunQueueStats {
     pub picks_rt: AtomicU64,
     /// Appels pick_next ayant retourné CFS.
     pub picks_cfs: AtomicU64,
+    /// Appels pick_next ayant retourné Deadline.
+    pub picks_dl: AtomicU64,
     /// Appels pick_next ayant retourné idle.
     pub picks_idle: AtomicU64,
     /// Nombre de threads en attente (snapshot).
@@ -374,6 +376,7 @@ impl RunQueueStats {
             picks_total: AtomicU64::new(0),
             picks_rt: AtomicU64::new(0),
             picks_cfs: AtomicU64::new(0),
+            picks_dl: AtomicU64::new(0),
             picks_idle: AtomicU64::new(0),
             nr_running: AtomicU32::new(0),
             load_avg: AtomicU64::new(0),
@@ -440,21 +443,26 @@ impl PerCpuRunQueue {
     pub fn enqueue(&mut self, tcb: NonNull<ThreadControlBlock>) {
         // SAFETY: tcb est un NonNull valide, préemption désactivée (invariant).
         let policy = unsafe { tcb.as_ref() }.policy;
-        match policy {
-            SchedPolicy::Fifo | SchedPolicy::RoundRobin => {
-                self.rt.enqueue(tcb);
-            }
-            SchedPolicy::Normal | SchedPolicy::Batch => {
-                self.cfs.enqueue(tcb);
-            }
+        let enqueued = match policy {
+            SchedPolicy::Fifo | SchedPolicy::RoundRobin => self.rt.enqueue(tcb),
+            SchedPolicy::Normal | SchedPolicy::Batch => self.cfs.enqueue(tcb),
             SchedPolicy::Deadline => {
                 // SCHED_DEADLINE → file EDF dédiée (échéance la plus proche en tête).
                 // SAFETY: préemption désactivée (INVARIANT), cpu.0 < MAX_CPUS garanti.
                 unsafe {
                     crate::scheduler::timer::deadline_timer::dl_enqueue(self.cpu.0 as usize, tcb);
                 }
+                true
             }
-            SchedPolicy::Idle => { /* géré par idle_thread */ }
+            SchedPolicy::Idle => false, /* géré par idle_thread */
+        };
+        if !enqueued {
+            debug_assert!(
+                policy == SchedPolicy::Idle,
+                "RunQueue::enqueue: file pleine ou échec d'enfilage pour {:?}",
+                policy
+            );
+            return;
         }
         let prev = self.stats.nr_running.fetch_add(1, Ordering::Relaxed);
         self.update_load_avg(prev as u64 + 1);
@@ -525,12 +533,7 @@ impl PerCpuRunQueue {
         // 1. Priorité absolue : file RT.
         if self.rt.count > 0 {
             self.stats.picks_rt.fetch_add(1, Ordering::Relaxed);
-            let tcb = self.rt.dequeue_highest()?;
-            // BUG-FIX B : décrémenter nr_running — le thread passe Runnable → Running.
-            // Avant ce correctif, nr_running ne décrémentait jamais ici, causant un
-            // compteur toujours gonflé (load-balancing aveugle, inutilisable).
-            self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
-            return Some(tcb);
+            return self.dequeue_highest_rt();
         }
 
         // 2. File DEADLINE (EDF — échéance la plus proche en tête).
@@ -538,8 +541,8 @@ impl PerCpuRunQueue {
         let dl_candidate =
             unsafe { crate::scheduler::timer::deadline_timer::dl_pick_next(self.cpu.0 as usize) };
         if let Some(tcb) = dl_candidate {
-            self.stats.picks_cfs.fetch_add(1, Ordering::Relaxed); // comptabilisé avec CFS
-                                                                  // BUG-FIX B (DL) : décrémenter nr_running pour thread DEADLINE.
+            self.stats.picks_dl.fetch_add(1, Ordering::Relaxed);
+            // BUG-FIX B (DL) : décrémenter nr_running pour thread DEADLINE.
             self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
             return Some(tcb);
         }
@@ -587,7 +590,7 @@ impl PerCpuRunQueue {
     /// Retourne le nombre de threads actifs (RT + CFS) sous forme de `usize`.
     #[inline(always)]
     pub fn nr_running_usize(&self) -> usize {
-        self.stats.nr_running.load(Ordering::Relaxed) as usize
+        self.stats.nr_running.load(Ordering::Acquire) as usize
     }
 
     /// Somme des poids CFS de tous les threads dans la file CFS (pour timeslice).

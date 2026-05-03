@@ -6,7 +6,7 @@
 //
 // RÈGLES (GI-02 + Corrections) :
 //   RÈGLE SWITCH-01 : check_signal_pending() LIT uniquement — jamais de livraison
-//   RÈGLE SWITCH-02 : Lazy FPU AVANT le switch, CR0.TS=1 APRÈS (V7-C-02)
+//   RÈGLE SWITCH-02 : Lazy FPU AVANT le switch, CR0.TS=1 AVANT l'ASM (TLA-01)
 //   RÈGLE SIGNAL-01 : scheduler/ NE connaît PAS process::signal::*
 //                     Il lit seulement le flag AtomicBool signal_pending du TCB
 //   RÈGLE SWITCH-ASM : switch_asm.s sauvegarde rbx,rbp,r12-r15 UNIQUEMENT (V7-C-02)
@@ -23,6 +23,7 @@ use crate::arch::x86_64::{
     cpu::{
         features::cpu_features_or_none,
         msr::{self, MSR_FS_BASE, MSR_IA32_PL0_SSP, MSR_KERNEL_GS_BASE},
+        tsc,
     },
     smp::percpu,
     tss,
@@ -121,9 +122,10 @@ core::arch::global_asm!(include_str!("../asm/switch_asm.s"), options(att_syntax)
 extern "C" {
     /// Context switch ASM complet.
     ///
-    /// Sauvegarde les registres callee-saved (rbx, rbp, r12-r15) + MXCSR + x87 FCW
-    /// du thread `old`, puis switche CR3 si nécessaire (KPTI), puis restaure
-    /// le contexte du thread `new`.
+    /// Sauvegarde/restaure uniquement les registres callee-saved ABI
+    /// (rbx, rbp, r12-r15) et la pile kernel du thread sortant. L'état FPU
+    /// (XSAVE/XRSTOR, MXCSR et x87 FCW compris) est géré par `scheduler::fpu`.
+    /// Le CR3 est switché si `new_cr3 != 0`.
     ///
     /// # Arguments (System V ABI)
     /// - `old_kernel_rsp` : `*mut u64` pointant vers `TCB::kstack_ptr` du thread sortant
@@ -162,12 +164,11 @@ pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
 /// 2. Sauvegarder PKRS (Intel PKS).
 /// 3. Sauvegarder FS.base et user_gs_base via rdmsr (CORR-11).
 /// 4. Marquer `prev` → Runnable.
-/// 5. Appeler `context_switch_asm(prev_rsp_ptr, next_rsp, next_cr3)`.
+/// 5. Poser CR0.TS=1, puis appeler `context_switch_asm(prev_rsp_ptr, next_rsp, next_cr3)`.
 ///    L'ASM sauvegarde/restaure 6 callee-saved GPRs. CR3 switché si différent.
 /// 6. Restaurer PKRS de `next`.
 /// 7. Marquer `next` → Running. Mettre à jour CURRENT_THREAD_PER_CPU.
-/// 8. Mettre CR0.TS = 1 (Lazy FPU — V7-C-02). set_fpu_loaded(false).
-/// 9. Mettre à jour TSS.RSP0 ← next.kstack_ptr (V7-C-03 OBLIGATOIRE).
+/// 8. Mettre à jour TSS.RSP0 ← next.kstack_top() (V7-C-03 OBLIGATOIRE).
 /// 10. Restaurer FS.base et user_gs_base de `next` via wrmsr (CORR-11).
 ///
 /// # Sécurité
@@ -184,12 +185,16 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
 
     // ── Étape 1 : Lazy FPU save (RÈGLE SWITCH-02) ─────────────────────────────
     // Sauvegarder l'état FPU du thread sortant si elle était chargée (CR0.TS=0).
-    // Note : CR0.TS sera remis à 1 après le switch (step 7 ci-dessous).
     if prev.fpu_loaded() {
         fpu::save_restore::xsave_current(prev);
-        // FPU_LOADED reste true jusqu'à step 9 (set_fpu_loaded(false) pour next).
-        // Si un IRQ arrive entre step 1 et step 5, la FPU est déjà sauvée.
     }
+    // TLA-01 : le bit TS doit être visible AVANT l'ASM de switch, juste après
+    // l'éventuelle sauvegarde XSAVE du sortant.
+    unsafe {
+        fpu::lazy::cr0_set_ts();
+    }
+    prev.set_fpu_loaded(false);
+    next.set_fpu_loaded(false);
 
     // Sauvegarde PKRS (S6) si le CPU supporte PKS.
     if has_pks {
@@ -244,6 +249,18 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         0
     };
 
+    // Comptabiliser le temps réellement passé en Running par `prev`.
+    let now_tsc = tsc::read_tsc();
+    let cpu_idx = percpu::current_cpu_id() as usize;
+    if cpu_idx < MAX_CPUS {
+        let cpu_data = unsafe { percpu::per_cpu_mut(cpu_idx) };
+        let last = cpu_data.last_switch_tsc;
+        if last != 0 {
+            let delta_ns = tsc::tsc_cycles_to_ns(now_tsc.wrapping_sub(last));
+            prev.run_time_acc = prev.run_time_acc.saturating_add(delta_ns);
+        }
+    }
+
     // SAFETY: prev.kstack_ptr et next.kstack_ptr pointent vers des stacks kernel
     // valides, alloués au boot et jamais libérés pendant la durée de vie du thread.
     // context_switch_asm garantit la sauvegarde complète des callee-saved ABI.
@@ -289,28 +306,24 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     // ── Étape 5 : Post-switch côté `next` ────────────────────────────────────
     // Marquer `next` comme Running.
     next.set_state(TaskState::Running);
+    next.switch_count = next.switch_count.wrapping_add(1);
 
-    // Rafraîchir d'abord la pile noyau d'entrée et TSS.RSP0 pour fermer la
-    // fenêtre où une entrée Ring 3->0 verrait encore la pile de `prev`.
-    unsafe {
-        tss::update_rsp0(next.current_cpu().0 as usize, next.kstack_ptr);
-        percpu::set_kernel_rsp(next.kstack_ptr);
-    }
-
-    // Mettre à jour ensuite le slot GS canonique du thread courant.
+    // Mettre à jour d'abord le slot GS canonique du thread courant, puis la pile
+    // noyau d'entrée et TSS.RSP0 avec le sommet stable du thread entrant.
     percpu::set_current_tcb(next as *mut ThreadControlBlock);
-
-    // ── Étape 6 : CR0.TS = 1 — Lazy FPU (V7-C-02) ───────────────────────────
-    // Déclenche #NM si `next` utilise une instruction FPU/SSE sans l'avoir
-    // chargée. Le handler #NM (lazy.rs) fera XRSTOR et remettra CR0.TS=0.
-    // SAFETY: cr0_set_ts modifie CR0.TS en Ring 0 — opération sûre au boot
-    // et lors de chaque context switch.
+    let next_kstack_top = next.kstack_top();
     unsafe {
-        fpu::lazy::cr0_set_ts();
+        percpu::set_kernel_rsp(next_kstack_top);
+        tss::update_rsp0(next.current_cpu().0 as usize, next_kstack_top);
     }
-    next.set_fpu_loaded(false);
 
     // Publier ensuite l'état `next` aux autres CPUs.
+    let publish_cpu = next.current_cpu().0 as usize;
+    if publish_cpu < MAX_CPUS {
+        let cpu_data = unsafe { percpu::per_cpu_mut(publish_cpu) };
+        cpu_data.ctx_switch_count = cpu_data.ctx_switch_count.wrapping_add(1);
+        cpu_data.last_switch_tsc = tsc::read_tsc();
+    }
     core::sync::atomic::fence(Ordering::SeqCst);
     // SAFETY: cpu() est monotone pendant l'exécution d'un thread sur ce CPU.
     CURRENT_THREAD_PER_CPU[next.current_cpu().0 as usize]
@@ -328,9 +341,8 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         msr::write_msr(MSR_KERNEL_GS_BASE, next.user_gs_base);
     }
 
-    // Vérifier signal pending (lecture pure, pas de livraison).
-    // La livraison effective sera faite par arch/syscall.rs au retour userspace.
-    let _sig = check_signal_pending(next); // résultat ignoré ici — arch/ s'en occupe
+    // La livraison des signaux reste dans arch/ au retour userspace. Lire ici
+    // sans consommer le résultat ne change aucun état utile du scheduler.
 
     // Instrumentation : l'appelant (tick handler) incrémente les stats switch.
 }

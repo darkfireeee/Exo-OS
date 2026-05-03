@@ -31,6 +31,8 @@ extern "C" {
     fn emergency_pool_alloc_wait_node() -> *mut WaitNode;
     /// Libère un WaitNode vers l'EmergencyPool.
     fn emergency_pool_free_wait_node(node: *mut WaitNode);
+    /// Publie/réinitialise le pool de blocs scheduler pendant le boot.
+    fn emergency_pool_init_wait_node_pool();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -302,6 +304,7 @@ pub static WAITQ_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 /// # Safety
 /// Appelé depuis `scheduler::init()`, après `memory::init()`.
 pub unsafe fn init() {
+    emergency_pool_init_wait_node_pool();
     // Vérification : tenter une alloc/free de test depuis l'EmergencyPool.
     let test = emergency_pool_alloc_wait_node();
     if test.is_null() {

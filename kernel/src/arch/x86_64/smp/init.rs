@@ -103,6 +103,7 @@ fn boot_ap(dest_apic_id: u8) {
     loop {
         let sig = read_trampoline_u32(HANDSHAKE_OFFSET);
         if sig == AP_ALIVE_MAGIC {
+            core::sync::atomic::fence(Ordering::Acquire);
             break;
         }
         if tsc::read_tsc() > deadline {
@@ -150,6 +151,9 @@ pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: 
     // L'AP exécute déjà sa boucle `hlt`; ce TCB représente donc le contexte
     // courant du CPU jusqu'au premier vrai switch scheduler.
     let _ = crate::scheduler::core::publish_current_boot_idle(cpu_id, kernel_stack_top);
+
+    // 6c. Initialisation locale scheduler AP (lazy FPU + compteurs tick).
+    crate::scheduler::init_ap(cpu_id);
 
     // 7. Mitigations spectre
     super::super::spectre::apply_mitigations_ap();

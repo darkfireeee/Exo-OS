@@ -149,7 +149,15 @@ pub fn is_fpu_used(tcb: &ThreadControlBlock) -> bool {
 /// Vrai si le Lazy FPU est initialisé sur ce CPU.
 #[inline(always)]
 pub fn is_initialized() -> bool {
-    FPU_LAZY_INITIALIZED.load(Ordering::Relaxed)
+    #[cfg(target_os = "none")]
+    {
+        // SAFETY: kernel ring0 ; CR0.TS est l'état canonique per-CPU.
+        unsafe { cr0_ts_is_set() }
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        FPU_LAZY_INITIALIZED.load(Ordering::Relaxed)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

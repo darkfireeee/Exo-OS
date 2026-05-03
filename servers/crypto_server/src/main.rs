@@ -274,7 +274,8 @@ fn finalize_verify_context(ctx_handle: u32, owner_principal: u64) -> Option<bool
         .ok()
         .map(|vk| {
             let sig = Signature::from_bytes(&ctx.signature);
-            vk.verify(&ctx.message[..ctx.total_len as usize], &sig).is_ok()
+            vk.verify(&ctx.message[..ctx.total_len as usize], &sig)
+                .is_ok()
         })
         .unwrap_or(false);
 
@@ -399,7 +400,8 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
             };
             let pt_len = pt_len as usize;
 
-            if 6 + pt_len > payload.len() || pt_len > reply.data.len().saturating_sub(NONCE_SIZE + TAG_SIZE)
+            if 6 + pt_len > payload.len()
+                || pt_len > reply.data.len().saturating_sub(NONCE_SIZE + TAG_SIZE)
             {
                 reply.status = CRYPTO_ERR_ARGS;
                 REQUESTS_ERR.fetch_add(1, Ordering::Relaxed);

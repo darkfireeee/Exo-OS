@@ -102,6 +102,23 @@ fn preempt_enable_raw() {
     );
 }
 
+/// Retourne `true` si la préemption est désactivée sur le CPU courant.
+#[inline(always)]
+pub fn is_preempt_disabled() -> bool {
+    let cpu = current_cpu_id();
+    PREEMPT_COUNT[cpu].0.load(Ordering::Relaxed) > 0
+}
+
+#[inline(always)]
+pub(crate) fn preempt_disable_for_arch_compat() {
+    preempt_disable_raw();
+}
+
+#[inline(always)]
+pub(crate) fn preempt_enable_for_arch_compat() {
+    preempt_enable_raw();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PreemptGuard — RAII obligatoire
 // ─────────────────────────────────────────────────────────────────────────────
@@ -141,8 +158,7 @@ impl PreemptGuard {
     /// Vérifie si la préemption est actuellement désactivée sur ce CPU.
     #[inline(always)]
     pub fn is_preempted_disabled() -> bool {
-        let cpu = current_cpu_id();
-        PREEMPT_COUNT[cpu].0.load(Ordering::Relaxed) > 0
+        is_preempt_disabled()
     }
 
     /// Retourne la profondeur d'imbrication actuelle (debug).

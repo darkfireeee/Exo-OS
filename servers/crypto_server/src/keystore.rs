@@ -127,22 +127,70 @@ impl KeyEntry {
 
 /// Table statique de clés. Pas de heap, pas d'allocation dynamique.
 static KEY_TABLE: Mutex<[KeyEntry; MAX_KEYS]> = Mutex::new([
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
-    KeyEntry::new(), KeyEntry::new(), KeyEntry::new(), KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
+    KeyEntry::new(),
 ]);
 
 /// Compteur pour le prochain slot disponible (recherche linéaire).
@@ -187,7 +235,9 @@ fn crypto_shred(buf: &mut [u8; KEY_SIZE]) {
     let mut seed: u64 = read_tsc();
     for b in buf.iter_mut() {
         // xoshiro256** minimal : mélange rapide
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let val = (seed ^ (seed >> 25)) as u8;
         unsafe { core::ptr::write_volatile(b, val) };
     }
@@ -232,7 +282,10 @@ pub fn insert_key(key: &[u8; KEY_SIZE], key_type: KeyType, owner_principal: u64)
         let idx = (hint + offset) % MAX_KEYS;
         let entry = &mut table[idx];
         let flags = entry.flags.load(Ordering::Acquire);
-        if flags == KeyFlags::Free as u8 || flags == KeyFlags::Revoked as u8 || flags == KeyFlags::Expired as u8 {
+        if flags == KeyFlags::Free as u8
+            || flags == KeyFlags::Revoked as u8
+            || flags == KeyFlags::Expired as u8
+        {
             // Si l'entrée était active, shred la clé précédente
             if flags != KeyFlags::Free as u8 {
                 crypto_shred(&mut entry.key);
@@ -243,7 +296,9 @@ pub fn insert_key(key: &[u8; KEY_SIZE], key_type: KeyType, owner_principal: u64)
             entry.flags.store(KeyFlags::Active as u8, Ordering::Release);
             entry.creation_tsc.store(read_tsc(), Ordering::Release);
             entry.usage_count.store(0, Ordering::Release);
-            entry.owner_principal.store(owner_principal, Ordering::Release);
+            entry
+                .owner_principal
+                .store(owner_principal, Ordering::Release);
             entry.generation.fetch_add(1, Ordering::AcqRel);
 
             let handle = (idx + 1) as u32;
@@ -328,7 +383,9 @@ pub fn revoke_key(handle: u32) -> bool {
     crypto_shred(&mut entry.key);
 
     // Marquer comme révoquée
-    entry.flags.store(KeyFlags::Revoked as u8, Ordering::Release);
+    entry
+        .flags
+        .store(KeyFlags::Revoked as u8, Ordering::Release);
     entry.generation.fetch_add(1, Ordering::AcqRel);
     ACTIVE_KEY_COUNT.fetch_sub(1, Ordering::Relaxed);
     true
@@ -386,7 +443,10 @@ pub fn rotate_key(handle: u32, caller_principal: u64) -> u32 {
     for (i, chunk) in entropy_bytes.iter().enumerate() {
         for (j, &b) in chunk.iter().enumerate() {
             let pos = (i * 8 + j) % KEY_SIZE;
-            new_key[pos] = new_key[pos].wrapping_add(b).wrapping_mul(0x9E).wrapping_add(0x37);
+            new_key[pos] = new_key[pos]
+                .wrapping_add(b)
+                .wrapping_mul(0x9E)
+                .wrapping_add(0x37);
         }
     }
 
@@ -432,7 +492,9 @@ pub fn expire_check() -> u32 {
         let creation = entry.creation_tsc.load(Ordering::Acquire);
         if now.wrapping_sub(creation) > KEY_MAX_LIFETIME_TSC {
             crypto_shred(&mut entry.key);
-            entry.flags.store(KeyFlags::Expired as u8, Ordering::Release);
+            entry
+                .flags
+                .store(KeyFlags::Expired as u8, Ordering::Release);
             entry.generation.fetch_add(1, Ordering::AcqRel);
             expired_count += 1;
         }
@@ -475,7 +537,12 @@ pub fn get_stats() -> KeystoreStats {
         }
     }
 
-    KeystoreStats { active, expired, revoked, free }
+    KeystoreStats {
+        active,
+        expired,
+        revoked,
+        free,
+    }
 }
 
 /// Vérifie qu'un handle est valide et actif (sans révéler la clé).
@@ -497,11 +564,11 @@ pub fn revoke_all_for_owner(owner_principal: u64) -> u32 {
 
     for idx in 0..MAX_KEYS {
         let entry = &mut table[idx];
-        if entry.is_active()
-            && entry.owner_principal.load(Ordering::Acquire) == owner_principal
-        {
+        if entry.is_active() && entry.owner_principal.load(Ordering::Acquire) == owner_principal {
             crypto_shred(&mut entry.key);
-            entry.flags.store(KeyFlags::Revoked as u8, Ordering::Release);
+            entry
+                .flags
+                .store(KeyFlags::Revoked as u8, Ordering::Release);
             entry.generation.fetch_add(1, Ordering::AcqRel);
             count += 1;
         }
@@ -526,7 +593,9 @@ pub fn revoke_all_pre_phoenix() -> u32 {
         }
 
         crypto_shred(&mut entry.key);
-        entry.flags.store(KeyFlags::Revoked as u8, Ordering::Release);
+        entry
+            .flags
+            .store(KeyFlags::Revoked as u8, Ordering::Release);
         entry.generation.fetch_add(1, Ordering::AcqRel);
         count += 1;
     }

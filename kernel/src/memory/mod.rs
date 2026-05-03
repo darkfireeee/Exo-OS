@@ -75,7 +75,7 @@ pub use self::core::{
 
 // Physical allocator — API d'allocation frames.
 // Note: alloc_zeroed_page n'existe pas dans physical — utiliser
-// alloc_page() + écriture manuelle ou heap_alloc_zeroed() pour la heap.
+// alloc_page(AllocFlags::ZEROED) pour une frame zéro-initialisée.
 pub use physical::{alloc_page, alloc_pages, free_page, free_pages};
 
 // Heap — allocateur global (SLUB / vmalloc).

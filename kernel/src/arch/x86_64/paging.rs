@@ -259,19 +259,23 @@ pub unsafe fn map_4k_page(
     flags: u64,
     alloc_page: impl Fn() -> Option<u64>,
 ) -> Result<(), PageTableError> {
+    if virt_addr as usize & (PAGE_SIZE - 1) != 0 || phys_addr as usize & (PAGE_SIZE - 1) != 0 {
+        return Err(PageTableError::InvalidAlignment);
+    }
     let idx = decompose_virt_addr(virt_addr);
+    let is_user_mapping = flags & PTE_USER != 0;
 
     // PML4 → PDPT
     // SAFETY: `pml4` est un pointeur valide passé par l'appelant (unsafe fn) vers la
     // table PML4 active. Alignement 4 KiB garanti. Accès exclusif garanti par l'appelant.
     let pml4 = unsafe { &mut *pml4 };
-    let pdpt = get_or_create_subtable(pml4, idx.pml4_idx, &alloc_page)?;
+    let pdpt = get_or_create_subtable(pml4, idx.pml4_idx, is_user_mapping, &alloc_page)?;
 
     // PDPT → PD
-    let pd = get_or_create_subtable(pdpt, idx.pdpt_idx, &alloc_page)?;
+    let pd = get_or_create_subtable(pdpt, idx.pdpt_idx, is_user_mapping, &alloc_page)?;
 
     // PD → PT
-    let pt = get_or_create_subtable(pd, idx.pd_idx, &alloc_page)?;
+    let pt = get_or_create_subtable(pd, idx.pd_idx, is_user_mapping, &alloc_page)?;
 
     // PT → page physique
     if pt.entry(idx.pt_idx).is_present() {
@@ -386,12 +390,17 @@ pub unsafe fn translate_virt(pml4: *const PageTable, virt_addr: u64) -> Option<u
 fn get_or_create_subtable<'a>(
     parent: &'a mut PageTable,
     idx: usize,
+    is_user_mapping: bool,
     alloc_page: &impl Fn() -> Option<u64>,
 ) -> Result<&'a mut PageTable, PageTableError> {
     let entry = parent.entry_mut(idx);
     if !entry.is_present() {
         let phys = alloc_page().ok_or(PageTableError::OutOfMemory)?;
-        *entry = PageTableEntry::new(phys, PTE_PRESENT | PTE_WRITABLE);
+        let mut flags = PTE_PRESENT | PTE_WRITABLE;
+        if is_user_mapping {
+            flags |= PTE_USER;
+        }
+        *entry = PageTableEntry::new(phys, flags);
 
         // Initialiser la sous-table à zéro
         // SAFETY: phys est une frame fraîchement allouée — pas de contenu préalable
@@ -399,6 +408,8 @@ fn get_or_create_subtable<'a>(
             let ptr = phys as *mut PageTable;
             (*ptr).clear();
         }
+    } else if is_user_mapping && !entry.is_user() {
+        entry.set_flags(PTE_USER);
     }
     // SAFETY: l'entrée est présente et pointe vers une PageTable valide
     Ok(unsafe { &mut *(entry.phys_addr() as *mut PageTable) })

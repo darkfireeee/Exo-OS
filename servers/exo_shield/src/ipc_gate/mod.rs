@@ -8,27 +8,25 @@
 //! - `policy` — Policy table & evaluation engine
 //! - `audit`  — Audit ring buffer & query/export
 
-pub mod policy;
-pub mod audit;
 pub mod access;
+pub mod audit;
+pub mod policy;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
 pub use policy::{
-    PolicyRule, PolicyAction, PolicyTable, PolicyEvalResult, PolicyStats,
-    evaluate_policy, add_policy, remove_policy, lookup_policy,
-    set_default_policy, get_default_policy, enumerate_policies,
-    get_policy_stats, policy_init,
+    add_policy, enumerate_policies, evaluate_policy, get_default_policy, get_policy_stats,
+    lookup_policy, policy_init, remove_policy, set_default_policy, PolicyAction, PolicyEvalResult,
+    PolicyRule, PolicyStats, PolicyTable,
 };
 
 pub use audit::{
-    AuditEntry, AuditResult, AuditRingBuffer, AuditFilter, AuditStats,
-    record_audit, query_audit, query_audit_filtered, export_audit,
-    query_audit_by_time, query_audit_pair,
-    get_audit_stats, audit_init,
+    audit_init, export_audit, get_audit_stats, query_audit, query_audit_by_time,
+    query_audit_filtered, query_audit_pair, record_audit, AuditEntry, AuditFilter, AuditResult,
+    AuditRingBuffer, AuditStats,
 };
 
 pub use access::{
-    classify_service_cap_requirement, ServiceCapRequirement,
-    EXO_SHIELD_CAP_TOKEN_LEN, EXO_SHIELD_CAP_TOKEN_OFFSET,
+    classify_service_cap_requirement, ServiceCapRequirement, EXO_SHIELD_CAP_TOKEN_LEN,
+    EXO_SHIELD_CAP_TOKEN_OFFSET,
 };

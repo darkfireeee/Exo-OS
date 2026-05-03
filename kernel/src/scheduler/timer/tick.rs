@@ -15,6 +15,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::hrtimer;
+use crate::scheduler::core::preempt::MAX_CPUS;
 use crate::scheduler::core::runqueue;
 use crate::scheduler::core::task::{
     CpuId, SchedPolicy, ThreadControlBlock, SCHED_NEED_RESCHED_BIT,
@@ -33,17 +34,17 @@ pub const TICK_NS: u64 = 1_000_000_000 / HZ;
 const GI03_DEFERRED_TICK_INTERVAL: u64 = 10;
 
 // Temps accumulé sur le CPU courant depuis la dernière sélection du thread (par CPU).
-static ELAPSED_NS: [AtomicU64; 256] = {
+static ELAPSED_NS: [AtomicU64; MAX_CPUS] = {
     const ZERO: AtomicU64 = AtomicU64::new(0);
-    [ZERO; 256]
+    [ZERO; MAX_CPUS]
 };
 
 /// Dernier pointeur TCB observé par CPU — permet de détecter un changement de thread
 /// et de remettre ELAPSED_NS à zéro pour ne pas imputer le temps de l'ancien thread
 /// au nouveau (BUG-FIX R).
-static LAST_TCB_PTR: [AtomicUsize; 256] = {
+static LAST_TCB_PTR: [AtomicUsize; MAX_CPUS] = {
     const ZERO: AtomicUsize = AtomicUsize::new(0);
-    [ZERO; 256]
+    [ZERO; MAX_CPUS]
 };
 
 pub static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -75,7 +76,7 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
     let nr = rq.nr_running_usize();
 
     // Accumuler l'elapsed sur ce CPU.
-    let cpu_idx = (cpu_id as usize).min(255);
+    let cpu_idx = (cpu_id as usize).min(MAX_CPUS - 1);
 
     // BUG-FIX R : remettre ELAPSED_NS à zéro quand un nouveau thread est détecté.
     // Sans ce correctif, un thread qui vient de prendre le CPU hérite du temps
@@ -159,6 +160,14 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
 pub unsafe fn init(_nr_cpus: usize) {
     TICK_COUNT.store(0, Ordering::Relaxed);
     TICK_PREEMPTIONS.store(0, Ordering::Relaxed);
+}
+
+/// Réinitialise les compteurs tick locaux d'un CPU AP avant publication.
+#[inline]
+pub fn reset_tick_counters(cpu_id: usize) {
+    let idx = cpu_id.min(MAX_CPUS - 1);
+    ELAPSED_NS[idx].store(0, Ordering::Relaxed);
+    LAST_TCB_PTR[idx].store(0, Ordering::Relaxed);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

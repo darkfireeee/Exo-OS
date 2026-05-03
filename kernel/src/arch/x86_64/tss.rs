@@ -5,17 +5,17 @@
 //!
 //! ## Structure mémoire
 //! - TSS 104 bytes (AMD64 ABI)
-//! - 7 piles IST (Interrupt Stack Table) — 16 KiB chacune
+//! - 4 piles IST statiques + 3 piles gardées early-pool
 //! - RSP0 : pile kernel (entrée Ring 3 → Ring 0)
 //!
 //! ## IST Assignments (Exo-OS)
 //! - IST1 : ExoPhoenix IPIs (0xF1/0xF2/0xF3)
 //! - IST2 : #PF (durcissement)
-//! - IST3 : NMI fallback
+//! - IST3 : NMI fallback (early-pool, gardée)
 //! - IST4 : Double Fault (#DF)
 //! - IST5 : Machine Check (#MC)
 //! - IST6 : Debug (#DB)
-//! - IST7 : réserve
+//! - IST7 : réserve statique
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -102,16 +102,10 @@ impl TaskStateSegment {
 struct PerCpuStacks {
     /// Pile Double Fault
     df_stack: [u8; IST_STACK_SIZE],
-    /// Pile NMI
-    nmi_stack: [u8; IST_STACK_SIZE],
     /// Pile Machine Check
     mc_stack: [u8; IST_STACK_SIZE],
     /// Pile Debug
     db_stack: [u8; IST_STACK_SIZE],
-    /// Pile IST5 (réservée)
-    ist5_stack: [u8; IST_STACK_SIZE],
-    /// Pile IST6 (réservée)
-    ist6_stack: [u8; IST_STACK_SIZE],
     /// Pile IST7 (réservée)
     ist7_stack: [u8; IST_STACK_SIZE],
 }
@@ -120,11 +114,8 @@ impl PerCpuStacks {
     const fn zero() -> Self {
         Self {
             df_stack: [0u8; IST_STACK_SIZE],
-            nmi_stack: [0u8; IST_STACK_SIZE],
             mc_stack: [0u8; IST_STACK_SIZE],
             db_stack: [0u8; IST_STACK_SIZE],
-            ist5_stack: [0u8; IST_STACK_SIZE],
-            ist6_stack: [0u8; IST_STACK_SIZE],
             ist7_stack: [0u8; IST_STACK_SIZE],
         }
     }

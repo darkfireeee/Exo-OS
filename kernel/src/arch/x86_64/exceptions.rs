@@ -560,7 +560,28 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
 
     let fault_addr = VirtAddr::new(fault_addr_raw);
     let from_kernel = frame.from_kernel();
-    let ctx = FaultContext::new(fault_addr, cause, from_kernel);
+    let mut ctx = FaultContext::new(fault_addr, cause, from_kernel);
+    if !from_kernel {
+        let tcb_raw = unsafe { super::smp::percpu::read_current_tcb() };
+        if tcb_raw != 0 {
+            let tcb =
+                unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
+            if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+                .find_by_pid(crate::process::core::pid::Pid(tcb.pid.0))
+            {
+                let as_ptr = pcb.address_space_ptr();
+                if !as_ptr.is_null() {
+                    let user_as = unsafe {
+                        &*(as_ptr as *const crate::memory::virt::address_space::UserAddressSpace)
+                    };
+                    user_as.record_fault();
+                    if let Some(vma) = user_as.find_vma(fault_addr) {
+                        ctx = ctx.with_vma(vma);
+                    }
+                }
+            }
+        }
+    }
 
     // Dispatcher vers le sous-système memory/
     let result = crate::memory::virt::fault::handler::handle_page_fault(&ctx, &KERNEL_FAULT_ALLOC);

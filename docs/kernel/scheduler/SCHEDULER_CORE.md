@@ -20,7 +20,7 @@
 ### Identifiants
 
 ```rust
-pub struct ThreadId(pub u32);     // identifiant unique de thread
+pub struct ThreadId(pub u64);     // identifiant unique de thread
 pub struct ProcessId(pub u32);    // identifiant de processus parent
 pub struct CpuId(pub u32);        // indice du CPU (0..MAX_CPUS-1)
 ```
@@ -68,15 +68,19 @@ nice +19 → poids 15      (×1/68 le poids nice 0)
 
 ```rust
 pub enum TaskState {
-    Running,   // Actuellement sur un CPU
-    Runnable,  // Prêt, dans une run queue
-    Blocked,   // En attente d'un événement (wait_queue)
-    Zombie,    // Terminé, en attente de join/reap
-    Dead,      // Totalement terminé
+    Runnable,
+    Running,
+    Sleeping,
+    Uninterruptible,
+    Stopped,
+    Zombie,
+    Dead,
 }
 ```
 
-**Transitions atomiques** via `task.try_transition(from, to)` (compare-and-swap).
+**Transitions atomiques** via `task.try_transition(from, to)` (compare-and-swap) ou
+`task.force_transition(to)` pour les chemins kill/exit qui doivent avancer
+malgré un état transitoire.
 
 ### ThreadAiState — Profilage EMA inline (8 octets)
 
@@ -106,30 +110,37 @@ pub struct DeadlineParams {
 
 ### ThreadControlBlock — Layout mémoire
 
-`#[repr(C, align(64))]` — exactement **128 octets** (SCHED-03) :
+`#[repr(C, align(64))]` — exactement **256 octets** (SCHED-03) :
 
 ```
 Offset  Size  Field
-  0       4   tid               ThreadId
-  4       4   pid               ProcessId
-  8       4   cpu               AtomicU32 (CpuId courant)
-  12      1   priority          Priority
-  13      1   policy            SchedPolicy (tag enum)
-  14      1   state             AtomicU8 (TaskState)
-  15      1   [pad]
-  16      8   vruntime          AtomicU64 (ns normalisé par poids)
-  24      8   kernel_rsp        u64 (RSP sauvegardé lors du switch)
-  32      8   cr3               u64 (adresse physique PML4)
-  40      8   fpu_state_ptr     *mut u8 (pointe FpuState, null si non init)
-  48      8   deadline          DeadlineParams (packed : runtime,deadline,period)
-  56      8   ai_state          ThreadAiState (avg_burst + avg_sleep)
-  64      8   flags             AtomicU32 (+ 4B pad)
-  72      8   affinity          u64 (bitmask 64 CPUs)
-  80      1   signal_pending    AtomicBool
-  81      1   fpu_loaded        AtomicBool (redondant avec FPU_LOADED flag)
-  82      6   [pad]
-  88     40   stats             TaskStats (interne, compteurs)
- 128      ←   fin (2 × cache line de 64 B)
+  0       8   tid               ThreadId
+  8       8   kstack_ptr         RSP sauvegardé par switch_asm.s
+ 16       1   priority          Priority
+ 17       1   policy            SchedPolicy
+ 24       8   sched_state        AtomicU64 (TaskState + flags)
+ 32       8   vruntime          AtomicU64
+ 40       8   deadline_abs       AtomicU64
+ 48       8   cpu_affinity       AtomicU64 (CPUs 0..63)
+ 56       8   cr3_phys           CR3/PML4 physique
+ 64       8   cpu_id             AtomicU64
+ 72       8   fs_base            TLS userspace
+ 80       8   user_gs_base       GS userspace
+ 88       4   pkrs               Intel PKS
+ 92       4   pid                ProcessId
+ 96       8   signal_mask        AtomicU64
+104       8   dl_runtime         SCHED_DEADLINE
+112       8   dl_period          SCHED_DEADLINE
+128       8   run_time_acc       Temps Running cumulé
+136       8   switch_count       Nombre de switches entrants
+144      88   _cold_reserve      ExoShield + scheduler cold fields
+176       8     kstack_top       Sommet stable de pile kernel
+192       8     pl0_ssp          CET Shadow Stack Pointer
+200      24     affinity_hi      CPUs 64..255
+232       8   fpu_state_ptr      ExoPhoenix offset hardcodé
+240       8   rq_next            RunQueue intrusive
+248       8   rq_prev            RunQueue intrusive
+256           fin (4 × cache line de 64 B)
 ```
 
 ### Flags TCB
@@ -151,7 +162,7 @@ Offset  Size  Field
 
 ```rust
 // Dans TCB :
-signal_pending: AtomicBool,
+signal_pending: bit SCHED_SIGNAL_BIT dans sched_state,
 signal_mask:    AtomicU64,
 
 // API scheduler (lecture uniquement) :
@@ -188,10 +199,11 @@ pub unsafe fn context_switch(
 **Séquence exacte** (SCHED-09) :
 
 1. Si `prev.fpu_loaded()` → `fpu::save_restore::xsave_current(prev)`
-2. `prev.set_state(Runnable)`
-3. `context_switch_asm(&mut prev.kernel_rsp, next.kernel_rsp, next.cr3)` ← bascule RSP
-4. `next.set_state(Running)`
-5. `next.set_fpu_loaded(false)` → CR0.TS sera mis à 1 lors du retour lazy
+2. Poser `CR0.TS=1`, puis marquer les états FPU comme non chargés
+3. Sauvegarder FS/GS, PKRS, CET et le temps Running de `prev`
+4. `context_switch_asm(&mut prev.kstack_ptr, next.kstack_ptr, next.cr3_phys)` ← bascule RSP/CR3
+5. Publier `next`, mettre `TSS.RSP0` et `gs:[0x00]` avec `next.kstack_top()`
+6. Restaurer FS/GS, PKRS, CET et incrémenter les compteurs de switch
 
 > Le `context_switch_asm` est implémenté dans `asm/switch_asm.s` (voir SCHEDULER_ASM.md).
 
@@ -216,8 +228,10 @@ pub unsafe fn schedule_yield(
 ### Constante
 
 ```rust
-pub const MAX_CPUS: usize = 64;
+pub const MAX_CPUS: usize = 256;
 ```
+
+La valeur canonique actuelle est `MAX_CPUS = 256`.
 
 ### Compteur de préemption
 

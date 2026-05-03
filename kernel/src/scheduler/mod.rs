@@ -124,8 +124,7 @@ pub unsafe fn init(params: &SchedInitParams) {
 pub unsafe fn init_ap(cpu_id: u32) {
     // CR0.TS=1 sur cet AP (FPU lazy).
     self::fpu::lazy::init();
+    self::timer::tick::reset_tick_counters(cpu_id as usize);
 
     // La run queue de ce CPU est déjà initialisée par init_percpu().
-    // Rien d'autre à faire.
-    let _ = cpu_id;
 }

@@ -291,6 +291,20 @@ fn is_canonical(addr: u64) -> bool {
     sign_bits == 0 || sign_bits == 0x1FFFF
 }
 
+#[inline(always)]
+fn is_user_return_addr(addr: u64) -> bool {
+    is_canonical(addr) && addr < crate::memory::core::layout::USER_END.as_u64()
+}
+
+#[inline(always)]
+unsafe fn write_saved_user_rsp(rsp: u64) {
+    core::arch::asm!(
+        "mov qword ptr gs:[0x08], {rsp}",
+        rsp = in(reg) rsp,
+        options(nostack, preserves_flags),
+    );
+}
+
 // ── Handler Rust SYSCALL ──────────────────────────────────────────────────────
 
 /// Table de dispatch syscall
@@ -326,8 +340,16 @@ pub extern "C" fn syscall_rust_handler(frame: *mut SyscallFrame) {
     // un fault en Ring 0 (errata Intel/AMD).
     // On force frame.rcx = 0 → processus faultera en Ring 3 à @0 (SIGSEGV),
     // jamais en Ring 0. Solution minimale sans dépendance process::signal ici.
-    if !is_canonical(frame.rcx) {
+    if !is_user_return_addr(frame.rcx) {
         frame.rcx = 0; // adresse 0 = non-mappée → #PF userspace, pas kernel
+    }
+    if !is_user_return_addr(frame.rsp) {
+        frame.rsp = 0;
+    }
+    // L'ASM restaure RSP depuis gs:[0x08], pas depuis la frame. Publier la
+    // valeur validée évite un SYSRETQ avec une pile userspace non canonique.
+    unsafe {
+        write_saved_user_rsp(frame.rsp);
     }
 }
 

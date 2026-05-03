@@ -23,6 +23,7 @@ static mut BOOT_IDLE_TCBS: [MaybeUninit<ThreadControlBlock>; MAX_CPUS] = {
     // SAFETY: tableau de MaybeUninit explicitement non initialisé.
     unsafe { MaybeUninit::uninit().assume_init() }
 };
+static BOOT_IDLE_CLAIMED: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 static BOOT_IDLE_INIT: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 
 unsafe fn boot_idle_slot(cpu_id: usize) -> &'static mut MaybeUninit<ThreadControlBlock> {
@@ -45,23 +46,32 @@ pub unsafe fn ensure_boot_idle_tcb(
     }
 
     if !BOOT_IDLE_INIT[idx].load(Ordering::Acquire) {
-        let mut idle = ThreadControlBlock::new(
-            ThreadId(BOOT_IDLE_TID_BASE + cpu_id as u64),
-            ProcessId(0),
-            SchedPolicy::Idle,
-            Priority::IDLE,
-            crate::arch::x86_64::read_cr3(),
-            kernel_stack_top,
-        );
-        idle.assign_cpu(CpuId(cpu_id));
-        idle.set_cpu_affinity_single(CpuId(cpu_id));
-        crate::scheduler::policies::mark_idle_thread(&mut idle);
+        if BOOT_IDLE_CLAIMED[idx]
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            while !BOOT_IDLE_INIT[idx].load(Ordering::Acquire) {
+                core::hint::spin_loop();
+            }
+        } else {
+            let mut idle = ThreadControlBlock::new(
+                ThreadId(BOOT_IDLE_TID_BASE + cpu_id as u64),
+                ProcessId(0),
+                SchedPolicy::Idle,
+                Priority::IDLE,
+                crate::arch::x86_64::read_cr3(),
+                kernel_stack_top,
+            );
+            idle.assign_cpu(CpuId(cpu_id));
+            idle.set_cpu_affinity_single(CpuId(cpu_id));
+            crate::scheduler::policies::mark_idle_thread(&mut idle);
 
-        // SAFETY: slot unique par CPU, initialisé une seule fois en pratique.
-        unsafe {
-            boot_idle_slot(idx).write(idle);
+            // SAFETY: slot unique par CPU, initialisé une seule fois en pratique.
+            unsafe {
+                boot_idle_slot(idx).write(idle);
+            }
+            BOOT_IDLE_INIT[idx].store(true, Ordering::Release);
         }
-        BOOT_IDLE_INIT[idx].store(true, Ordering::Release);
     }
 
     // SAFETY: le slot est initialisé juste au-dessus ou l'était déjà.

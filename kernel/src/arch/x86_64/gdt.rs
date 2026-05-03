@@ -277,6 +277,10 @@ pub unsafe fn init_gdt_for_cpu(cpu_id: usize, kernel_stack_top: u64) {
         tss::load_tss(GDT_TSS_SEL);
     }
 
+    assert!(
+        validate_star_layout(),
+        "GDT: layout STAR incompatible SYSCALL/SYSRET"
+    );
     GDT_INITIALIZED.store(true, Ordering::Release);
 }
 

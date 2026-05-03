@@ -89,7 +89,10 @@ pub struct AuditResult {
 
 impl Default for AuditResult {
     fn default() -> Self {
-        Self { matched: 0, written: 0 }
+        Self {
+            matched: 0,
+            written: 0,
+        }
     }
 }
 
@@ -150,9 +153,8 @@ fn read_tsc() -> u64 {
 // ── Static storage ────────────────────────────────────────────────────────────
 
 /// Audit ring buffer.
-static AUDIT_BUFFER: Mutex<[AuditEntry; MAX_AUDIT_ENTRIES]> = Mutex::new(
-    [AuditEntry::empty(); MAX_AUDIT_ENTRIES],
-);
+static AUDIT_BUFFER: Mutex<[AuditEntry; MAX_AUDIT_ENTRIES]> =
+    Mutex::new([AuditEntry::empty(); MAX_AUDIT_ENTRIES]);
 
 /// Write index into the audit ring buffer.
 static AUDIT_WRITE_IDX: AtomicU32 = AtomicU32::new(0);

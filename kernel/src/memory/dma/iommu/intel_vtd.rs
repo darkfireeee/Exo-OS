@@ -6,7 +6,7 @@
 // COUCHE 0 — aucune dépendance externe.
 // Référence : Intel VT-d Architecture Specification, Rev 3.4.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{compiler_fence, AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::DmaError;
@@ -98,6 +98,7 @@ impl RootTable {
         unsafe {
             core::ptr::write_bytes(self.entries.as_mut_ptr(), 0, 256);
         }
+        compiler_fence(Ordering::SeqCst);
     }
 }
 
@@ -148,6 +149,7 @@ impl ContextTable {
         unsafe {
             core::ptr::write_bytes(self.entries.as_mut_ptr(), 0, 256);
         }
+        compiler_fence(Ordering::SeqCst);
     }
 }
 

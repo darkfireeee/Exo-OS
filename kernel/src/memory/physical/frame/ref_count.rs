@@ -62,9 +62,21 @@ impl AtomicRefCount {
     /// Ne peut pas déborder (saturation à u32::MAX, panique en debug).
     #[inline(always)]
     pub fn inc(&self) -> u32 {
-        let prev = self.0.fetch_add(1, Ordering::Relaxed);
-        debug_assert_ne!(prev, u32::MAX, "AtomicRefCount overflow");
-        prev + 1
+        let mut cur = self.0.load(Ordering::Acquire);
+        loop {
+            if cur == u32::MAX {
+                debug_assert!(false, "AtomicRefCount overflow");
+                return u32::MAX;
+            }
+            let next = cur + 1;
+            match self
+                .0
+                .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => return next,
+                Err(observed) => cur = observed,
+            }
+        }
     }
 
     /// Décrémente le refcount.
@@ -75,18 +87,26 @@ impl AtomicRefCount {
     /// retourne `StillShared` pour éviter une libération incorrecte.
     #[inline]
     pub fn dec(&self) -> RefCountDecResult {
-        let prev = self.0.fetch_sub(1, Ordering::AcqRel);
-        if prev == 0 {
-            // Annuler le wrap vers u32::MAX
-            self.0.store(0, Ordering::Release);
-            debug_assert!(false, "AtomicRefCount underflow — double-free détecté");
-            return RefCountDecResult::StillShared;
-        }
-
-        match prev {
-            1 => RefCountDecResult::ShouldFree,
-            2 => RefCountDecResult::BecameExclusive,
-            _ => RefCountDecResult::StillShared,
+        let mut cur = self.0.load(Ordering::Acquire);
+        loop {
+            if cur == 0 {
+                debug_assert!(false, "AtomicRefCount underflow — double-free détecté");
+                return RefCountDecResult::StillShared;
+            }
+            let next = cur - 1;
+            match self
+                .0
+                .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => {
+                    return match cur {
+                        1 => RefCountDecResult::ShouldFree,
+                        2 => RefCountDecResult::BecameExclusive,
+                        _ => RefCountDecResult::StillShared,
+                    };
+                }
+                Err(observed) => cur = observed,
+            }
         }
     }
 

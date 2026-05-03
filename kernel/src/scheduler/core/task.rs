@@ -22,7 +22,7 @@
 //   bit  [10]   = FPU_LOADED flag
 //   bit  [11]   = NEED_RESCHED flag
 //   bits [31:12]= flags scheduler étendus (réservés)
-//   bits [63:32]= pid (ProcessId.0 as u32)
+//   bits [63:32]= réservés ; pid est le champ direct `pid` à l'offset [92]
 //
 // SÉCURITÉ ISR :
 //   - sched_state : AtomicU64 — accès atomiques [ISR-SAFE]
@@ -251,7 +251,9 @@ pub mod task_flags {
 //       [153] threat_score_u8    : u8    (0..=100)
 //       [160] pt_buffer_phys     : u64   (Phase 4, LBR/PT futur)
 //       [168] creation_tsc       : u64   (anti-réutilisation PID / audit)
-//       [176..200] réservé
+//       [176] kstack_top         : u64   (sommet stable de pile kernel)
+//       [184..192] réservé
+//       [192] pl0_ssp            : u64   (CET Shadow Stack Pointer)
 //       [200] affinity_hi[0]     : u64   (CPUs 64..127)
 //       [208] affinity_hi[1]     : u64   (CPUs 128..191)
 //       [216] affinity_hi[2]     : u64   (CPUs 192..255)
@@ -367,6 +369,14 @@ const _: () = assert!(
     "TCB audit: creation_tsc doit être à l'offset absolu 168"
 );
 const _: () = assert!(
+    offset_of!(ThreadControlBlock, _cold_reserve) + 32 == 176,
+    "TCB scheduler: kstack_top doit être à l'offset absolu 176"
+);
+const _: () = assert!(
+    offset_of!(ThreadControlBlock, _cold_reserve) + 32 + 8 <= 232,
+    "TCB scheduler: kstack_top doit rester avant fpu_state_ptr (232)"
+);
+const _: () = assert!(
     offset_of!(ThreadControlBlock, _cold_reserve) + 56 == 200,
     "TCB scheduler: affinity_hi[0] doit être à l'offset absolu 200"
 );
@@ -396,6 +406,8 @@ const _: () = assert!(
 // ─── impl ThreadControlBlock ─────────────────────────────────────────────────
 
 impl ThreadControlBlock {
+    const KSTACK_TOP_COLD_OFFSET: usize = 32;
+
     /// Crée un nouveau TCB utilisateur.
     pub fn new(
         tid: ThreadId,
@@ -408,6 +420,8 @@ impl ThreadControlBlock {
         let mut cold_reserve = [0u8; 88];
         let creation_tsc = crate::arch::x86_64::cpu::tsc::read_tsc();
         cold_reserve[24..32].copy_from_slice(&creation_tsc.to_le_bytes());
+        cold_reserve[Self::KSTACK_TOP_COLD_OFFSET..Self::KSTACK_TOP_COLD_OFFSET + 8]
+            .copy_from_slice(&kernel_stack_top.to_le_bytes());
         cold_reserve[56..64].copy_from_slice(&u64::MAX.to_le_bytes());
         cold_reserve[64..72].copy_from_slice(&u64::MAX.to_le_bytes());
         cold_reserve[72..80].copy_from_slice(&u64::MAX.to_le_bytes());
@@ -496,7 +510,7 @@ impl ThreadControlBlock {
     #[inline(always)]
     pub fn try_transition(&self, from: TaskState, to: TaskState) -> bool {
         loop {
-            let cur = self.sched_state.load(Ordering::Relaxed);
+            let cur = self.sched_state.load(Ordering::Acquire);
             if (cur & SCHED_STATE_MASK) as u8 != from as u8 {
                 return false;
             }
@@ -509,6 +523,13 @@ impl ThreadControlBlock {
                 Err(_) => continue,
             }
         }
+    }
+
+    /// Transition forcée — utilisée pour les chemins d'arrêt/kill où l'état
+    /// observé peut être transitoire et ne doit pas bloquer la progression.
+    #[inline(always)]
+    pub fn force_transition(&self, to: TaskState) {
+        self.set_task_state(to);
     }
 
     /// Lit le PID du thread (champ direct).
@@ -609,6 +630,31 @@ impl ThreadControlBlock {
         // SAFETY: offset 48..56 dans _cold_reserve[88], non-overlapping ExoShield (0..40).
         unsafe {
             core::ptr::write_unaligned(self._cold_reserve.as_mut_ptr().add(48) as *mut u64, ssp)
+        }
+    }
+
+    /// Sommet stable de la pile kernel du thread (`_cold_reserve[32..40]`).
+    #[inline(always)]
+    pub fn kstack_top(&self) -> u64 {
+        unsafe {
+            core::ptr::read_unaligned(
+                self._cold_reserve
+                    .as_ptr()
+                    .add(Self::KSTACK_TOP_COLD_OFFSET) as *const u64,
+            )
+        }
+    }
+
+    /// Initialise/rafraîchit le sommet stable de pile kernel.
+    #[inline(always)]
+    pub fn init_kstack_top(&mut self, kernel_stack_top: u64) {
+        unsafe {
+            core::ptr::write_unaligned(
+                self._cold_reserve
+                    .as_mut_ptr()
+                    .add(Self::KSTACK_TOP_COLD_OFFSET) as *mut u64,
+                kernel_stack_top,
+            )
         }
     }
 

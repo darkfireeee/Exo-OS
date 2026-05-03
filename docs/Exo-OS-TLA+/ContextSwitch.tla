@@ -7,9 +7,9 @@ CONSTANTS
 
 \* FIX: Explicitly define exactly 3 threads instead of 8 combinations!
 TCB_SET == {
-    [kstack_ptr |-> 100, fs_base |-> 10, user_gs_base |-> 30],
-    [kstack_ptr |-> 200, fs_base |-> 20, user_gs_base |-> 40],
-    [kstack_ptr |-> 300, fs_base |-> 50, user_gs_base |-> 60]
+    [kstack_ptr |-> 100, kstack_top |-> 128, fs_base |-> 10, user_gs_base |-> 30],
+    [kstack_ptr |-> 200, kstack_top |-> 228, fs_base |-> 20, user_gs_base |-> 40],
+    [kstack_ptr |-> 300, kstack_top |-> 328, fs_base |-> 50, user_gs_base |-> 60]
 }
 
 VARIABLES 
@@ -34,7 +34,7 @@ SymmetryCores == Permutations(CORES)
 --------------------------------------------------------------
 Init ==
     /\ CurrentTcb      = [c \in CORES |-> CHOOSE t \in TCB_SET : TRUE]
-    /\ TssRsp0         = [c \in CORES |-> CurrentTcb[c].kstack_ptr]
+    /\ TssRsp0         = [c \in CORES |-> CurrentTcb[c].kstack_top]
     /\ Cr0TsBit        = [c \in CORES |-> TRUE] 
     /\ FsBase          = [c \in CORES |-> CurrentTcb[c].fs_base]
     /\ UserGsBase      = [c \in CORES |-> CurrentTcb[c].user_gs_base]
@@ -90,11 +90,12 @@ Step6_7_Internal(c) ==
     /\ SwitchStage' = [SwitchStage EXCEPT ![c] = @ + 1]
     /\ UNCHANGED <<CurrentTcb, TssRsp0, Cr0TsBit, FsBase, UserGsBase, GsSlot20, FpuRegisters, XSaveArea, NextTcb>>
 
-Step8_UpdateTss(c) ==
+Step8_UpdateGsAndTss(c) ==
     /\ SwitchStage[c] = 8
-    /\ TssRsp0' = [TssRsp0 EXCEPT ![c] = CurrentTcb[c].kstack_ptr]
+    /\ GsSlot20' = [GsSlot20 EXCEPT ![c] = CurrentTcb[c]]
+    /\ TssRsp0' = [TssRsp0 EXCEPT ![c] = CurrentTcb[c].kstack_top]
     /\ SwitchStage' = [SwitchStage EXCEPT ![c] = 9]
-    /\ UNCHANGED <<CurrentTcb, Cr0TsBit, FsBase, UserGsBase, GsSlot20, FpuRegisters, XSaveArea, NextTcb>>
+    /\ UNCHANGED <<CurrentTcb, Cr0TsBit, FsBase, UserGsBase, FpuRegisters, XSaveArea, NextTcb>>
 
 Step9_10_RestoreMSRs(c) ==
     /\ SwitchStage[c] \in 9..10
@@ -105,10 +106,9 @@ Step9_10_RestoreMSRs(c) ==
 
 Step11_Finish(c) ==
     /\ SwitchStage[c] = 11
-    /\ GsSlot20' = [GsSlot20 EXCEPT ![c] = CurrentTcb[c]]
     /\ SwitchStage' = [SwitchStage EXCEPT ![c] = 0]
     /\ NextTcb' = [NextTcb EXCEPT ![c] = NULL]
-    /\ UNCHANGED <<CurrentTcb, TssRsp0, Cr0TsBit, FsBase, UserGsBase, FpuRegisters, XSaveArea>>
+    /\ UNCHANGED <<CurrentTcb, TssRsp0, Cr0TsBit, FsBase, UserGsBase, GsSlot20, FpuRegisters, XSaveArea>>
 
 Next == \E c \in CORES :
     \/ SysUseFpu(c)
@@ -118,7 +118,7 @@ Next == \E c \in CORES :
     \/ Step3_4_Internal(c)
     \/ Step5_AsmSwitch(c)
     \/ Step6_7_Internal(c)
-    \/ Step8_UpdateTss(c)
+    \/ Step8_UpdateGsAndTss(c)
     \/ Step9_10_RestoreMSRs(c)
     \/ Step11_Finish(c)
 
@@ -133,7 +133,7 @@ S25_STRESS_IrqFpuSafety ==
     \A c \in CORES : (~Cr0TsBit[c]) => (FpuRegisters[c] = CurrentTcb[c].kstack_ptr)
 
 S26_TssRsp0MatchesCurrentTcb ==
-    \A c \in CORES : (~SwitchInProgress(c) => TssRsp0[c] = CurrentTcb[c].kstack_ptr)
+    \A c \in CORES : (~SwitchInProgress(c) => TssRsp0[c] = CurrentTcb[c].kstack_top)
 
 S27_FsGsMatchNewThread ==
     \A c \in CORES : (~SwitchInProgress(c) => 

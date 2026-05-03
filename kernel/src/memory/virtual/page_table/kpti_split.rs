@@ -8,6 +8,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use crate::arch::x86_64::cpu::features::{cpu_features_or_none, CpuVendor};
 use crate::memory::core::{AllocError, AllocFlags, PhysAddr};
 use crate::memory::physical::allocator::buddy;
 use crate::memory::virt::page_table::x86_64::write_cr3;
@@ -96,7 +97,8 @@ impl KptiTable {
         }
         let pml4 = self.states[cpu_id].kernel_pml4;
         if pml4.as_u64() == 0 {
-            panic!("KPTI: kernel_pml4 non initialisee pour le CPU {}", cpu_id);
+            log::warn!("KPTI: kernel_pml4 non initialisee pour le CPU {}", cpu_id);
+            return;
         }
         write_cr3(pml4);
     }
@@ -111,7 +113,8 @@ impl KptiTable {
         }
         let pml4 = self.states[cpu_id].user_pml4;
         if pml4.as_u64() == 0 {
-            panic!("KPTI: user_pml4 non initialisee pour le CPU {}", cpu_id);
+            log::warn!("KPTI: user_pml4 non initialisee pour le CPU {}", cpu_id);
+            return;
         }
         write_cr3(pml4);
     }
@@ -157,9 +160,9 @@ pub fn user_cr3_for_cpu(cpu_id: usize) -> Option<u64> {
 ///
 /// La table user conserve:
 /// - la moitié user (entrées PML4 0..255)
-/// - l'entrée PML4[511] pour les stubs noyau nécessaires au retour d'exception/syscall
 ///
-/// Le reste de la moitié kernel n'est pas copié.
+/// Aucune entrée kernel haute (dont PML4[511]) n'est copiée : les stubs de
+/// transition doivent être explicitement mappés dans une page trampoline dédiée.
 ///
 /// # Safety
 /// Doit être appelé en ring0 quand `kernel_pml4_phys` référence une PML4 valide.
@@ -175,9 +178,6 @@ pub unsafe fn build_user_shadow_pml4(kernel_pml4_phys: PhysAddr) -> Result<PhysA
         user_pml4[i] = kernel_pml4[i];
     }
 
-    // Copier PML4[511] (stubs noyau hautes adresses / retour d'exception)
-    user_pml4[511] = kernel_pml4[511];
-
     Ok(user_pml4_phys)
 }
 
@@ -188,23 +188,13 @@ pub unsafe fn build_user_shadow_pml4(kernel_pml4_phys: PhysAddr) -> Result<PhysA
 /// Vérifie si le CPU courant supporte et requiert KPTI.
 /// Retourne false si Meltdown n'affecte pas ce CPU (AMD, post-2018 Intel).
 pub fn should_enable_kpti() -> bool {
-    // Vérification par CPUID
-    // SAFETY: CPUID lecture seule; xchg préserve rbx réservé par LLVM.
-    unsafe {
-        core::arch::asm!(
-            "xchg {tmp:r}, rbx",
-            "cpuid",
-            "xchg {tmp:r}, rbx",
-            inout("eax") 1u32 => _,
-            inout("ecx") 0u32 => _,
-            out("edx") _,
-            tmp = inout(reg) 0u64 => _,
-            options(nomem, nostack),
-        );
-    }
+    let Some(features) = cpu_features_or_none() else {
+        return true;
+    };
 
-    // Pour la sécurité, activer KPTI sur tous les systèmes Intel x86_64.
-    // En production : vérifier CPUID vendor + microcode level.
-    // Ici : activé par défaut (mode conservateur).
-    true
+    match features.vendor {
+        CpuVendor::Amd => false,
+        CpuVendor::Intel => !(features.has_arch_cap() && features.rdcl_no()),
+        CpuVendor::Unknown => true,
+    }
 }
