@@ -167,7 +167,10 @@ pub fn ipc_init(shm_base_phys: u64, n_numa_nodes: u32) {
     // 3. Enregistrer les stats IPC (reset compteurs)
     stats::counters::IPC_STATS.reset_all();
 
-    // 4. Log minimal d'initialisation (au niveau du kernel)
+    // 4. Connecter le provider SHM inverse vers memory::virtual.
+    shared_memory::memory_bridge::register_with_memory();
+
+    // 5. Log minimal d'initialisation (au niveau du kernel)
     // Note : on ne peut pas utiliser log!/println! ici (no_std), mais un hook
     // d'initialisation peut être fourni par l'arch layer via les callbacks.
     IPC_INIT_STATE.fetch_or(IPC_INIT_DONE, Ordering::Release);
@@ -218,8 +221,8 @@ pub fn ipc_install_scheduler_hooks(block_fn: sync::sched_hooks::BlockFn) {
 /// virtuelle est opérationnel et que les tables de pages des processus
 /// sont gérées.
 ///
-/// Sans ces hooks, `shm_map()` opère en mode simulé (virt = phys) —
-/// acceptable en dev/test mono-processus sans isolation d'espace d'adressage.
+/// Sans ces hooks, `shm_map()` retourne `MappingFailed` en production.
+/// Le mode simulé virt=phys existe uniquement avec la feature `dev_no_vmm`.
 ///
 /// - `map_page_fn`   : `unsafe fn(phys: u64, virt: u64, flags: u32, pid: u32) -> i32`
 ///                     0 = succès, non-zéro = erreur.

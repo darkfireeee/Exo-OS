@@ -29,6 +29,10 @@ use alloc::boxed::Box;
 use core::sync::atomic::Ordering;
 use spin::Once;
 
+pub use crate::memory::virt::address_space::fork_impl::{
+    AddrSpaceCloneError, AddressSpaceCloner, ClonedAddressSpace,
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ForkFlags — flags CLONE_* Linux-compatibles
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,42 +64,8 @@ impl ForkFlags {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trait AddressSpaceCloner — injection de dépendance vers memory/cow/
+// Injection de dépendance vers memory/cow/
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Résultat de la duplication CoW de l'espace d'adressage.
-pub struct ClonedAddressSpace {
-    /// CR3 du nouvel espace d'adressage (fils).
-    pub cr3: u64,
-    /// Pointeur opaque vers le UserAddressSpace fils.
-    pub addr_space_ptr: usize,
-}
-
-/// Erreur de clonage de l'espace d'adressage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AddrSpaceCloneError {
-    OutOfMemory,
-    InvalidSource,
-}
-
-/// Trait injecté par memory/ pour dupliquer un espace d'adressage en CoW.
-pub trait AddressSpaceCloner: Send + Sync {
-    /// Clone l'espace d'adressage référencé par `src_cr3`.
-    fn clone_cow(
-        &self,
-        src_cr3: u64,
-        src_space_ptr: usize,
-    ) -> Result<ClonedAddressSpace, AddrSpaceCloneError>;
-
-    /// Flush le TLB d'un espace d'adressage après marquage CoW.
-    fn flush_tlb_after_fork(&self, cr3: u64);
-
-    /// Libère un espace d'adressage cloné (appelé sur erreur post-clone).
-    ///
-    /// CORRECTION P0-01 : évite les fuites mémoire du PML4 en cas d'erreur
-    /// dans un chemin d'erreur tardif de do_fork() (RegistryError, InvalidCpu).
-    fn free_addr_space(&self, addr_space_ptr: usize);
-}
 
 static ADDR_SPACE_CLONER: Once<&'static dyn AddressSpaceCloner> = Once::new();
 static VFORK_WAIT_QUEUE: WaitQueue = WaitQueue::new();

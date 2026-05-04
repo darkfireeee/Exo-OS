@@ -210,8 +210,21 @@ impl ShmDescriptor {
     /// Décrémente le compteur de mappings actifs.
     /// Retourne `true` si plus aucun mapping actif.
     pub fn remove_mapping(&self) -> bool {
-        let prev = self.mapping_count.fetch_sub(1, Ordering::AcqRel);
-        prev == 1
+        let mut current = self.mapping_count.load(Ordering::Acquire);
+        loop {
+            if current == 0 {
+                return true;
+            }
+            match self.mapping_count.compare_exchange_weak(
+                current,
+                current - 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(prev) => return prev == 1,
+                Err(next) => current = next,
+            }
+        }
     }
 
     pub fn mapping_count(&self) -> u32 {
@@ -328,7 +341,11 @@ impl ShmDescDirectory {
     pub fn free(&mut self, idx: usize) -> bool {
         if idx < MAX_SHM_REGIONS && self.entries[idx].used {
             // SAFETY: used est true → desc est initialisé
-            unsafe { self.entries[idx].desc.assume_init_ref() }.destroy();
+            let desc = unsafe { self.entries[idx].desc.assume_init_ref() };
+            if desc.mapping_count() != 0 {
+                return false;
+            }
+            desc.destroy();
             // SAFETY: desc initialisé (used true); used → false immédiatement après, empêche double-drop.
             unsafe { self.entries[idx].desc.assume_init_drop() };
             self.entries[idx].used = false;
@@ -397,4 +414,27 @@ pub fn shm_destroy(idx: usize) -> Result<(), IpcError> {
 /// Retourne le nombre de régions SHM actives.
 pub fn shm_region_count() -> usize {
     SHM_DESC_DIR.lock().count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remove_mapping_on_zero_does_not_underflow() {
+        let desc = ShmDescriptor::new_uninit();
+
+        assert!(desc.remove_mapping());
+        assert_eq!(desc.mapping_count(), 0);
+    }
+
+    #[test]
+    fn add_remove_mapping_round_trip() {
+        let desc = ShmDescriptor::new_uninit();
+
+        desc.add_mapping();
+        assert_eq!(desc.mapping_count(), 1);
+        assert!(desc.remove_mapping());
+        assert_eq!(desc.mapping_count(), 0);
+    }
 }

@@ -192,15 +192,13 @@ pub fn endpoint_destroy(name: &[u8], ep_id: EndpointId) -> Result<(), IpcError> 
                 }
             })
             .map(|idx| {
-                // SAFETY: slot is Some.
-                unsafe {
-                    pool[idx]
-                        .as_ref()
-                        .unwrap()
-                        .as_ref()
-                        .active_conns
-                        .load(Ordering::Acquire)
-                }
+                pool[idx]
+                    .as_ref()
+                    .map(|desc| {
+                        // SAFETY: slot is Some and protected by EP_POOL_DESCS.
+                        unsafe { desc.as_ref().active_conns.load(Ordering::Acquire) }
+                    })
+                    .unwrap_or(u32::MAX)
             })
     };
 

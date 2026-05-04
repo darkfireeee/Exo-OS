@@ -114,10 +114,15 @@ pub unsafe fn block_current_thread() {
     }
 
     let tcb = &mut *tcb_ptr;
+    match tcb.state() {
+        TaskState::Runnable | TaskState::Running => {
+            return;
+        }
+        _ => {}
+    }
     let cpu_id = tcb.current_cpu();
     if (cpu_id.0 as usize) < MAX_CPUS {
         let rq = run_queue(cpu_id);
-        tcb.set_state(TaskState::Sleeping);
         schedule_block(rq, tcb);
         // Le thread reprend ici après que wake_enqueue() a été appelé.
     }
@@ -428,6 +433,13 @@ pub unsafe fn schedule_block(
     use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
     use core::ptr::NonNull;
 
+    if !matches!(
+        current.state(),
+        TaskState::Sleeping | TaskState::Uninterruptible | TaskState::Stopped | TaskState::Dead
+    ) {
+        return;
+    }
+
     let current_ptr = NonNull::new_unchecked(current as *mut ThreadControlBlock);
     let mut idle_thread = match rq.idle_thread {
         Some(idle) => Some(idle),
@@ -460,11 +472,29 @@ pub unsafe fn schedule_block(
     match pick_next_task(rq, Some(current_ptr)) {
         PickResult::Switch(next) => {
             if !core::ptr::eq(current, next.as_ptr()) {
+                if !matches!(
+                    current.state(),
+                    TaskState::Sleeping
+                        | TaskState::Uninterruptible
+                        | TaskState::Stopped
+                        | TaskState::Dead
+                ) {
+                    return;
+                }
                 // SAFETY: next provient de la run queue et est valide.
                 context_switch(current, &mut *next.as_ptr());
             } else {
                 match idle_thread {
                     Some(idle) if !core::ptr::eq(current, idle.as_ptr()) => {
+                        if !matches!(
+                            current.state(),
+                            TaskState::Sleeping
+                                | TaskState::Uninterruptible
+                                | TaskState::Stopped
+                                | TaskState::Dead
+                        ) {
+                            return;
+                        }
                         context_switch(current, &mut *idle.as_ptr());
                     }
                     _ => {
@@ -476,6 +506,15 @@ pub unsafe fn schedule_block(
         }
         PickResult::KeepRunning | PickResult::GoIdle => match idle_thread {
             Some(idle) if !core::ptr::eq(current, idle.as_ptr()) => {
+                if !matches!(
+                    current.state(),
+                    TaskState::Sleeping
+                        | TaskState::Uninterruptible
+                        | TaskState::Stopped
+                        | TaskState::Dead
+                ) {
+                    return;
+                }
                 context_switch(current, &mut *idle.as_ptr());
             }
             _ => {

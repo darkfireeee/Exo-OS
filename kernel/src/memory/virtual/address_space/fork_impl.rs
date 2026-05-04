@@ -17,10 +17,38 @@ use crate::memory::virt::page_table::x86_64::{
     phys_to_table_mut, phys_to_table_ref, PageTableEntry,
 };
 use crate::memory::virt::UserAddressSpace;
-use crate::process::lifecycle::fork::{
-    AddrSpaceCloneError, AddressSpaceCloner, ClonedAddressSpace,
-};
 use alloc::boxed::Box;
+
+/// Résultat de la duplication CoW de l'espace d'adressage.
+pub struct ClonedAddressSpace {
+    /// CR3 du nouvel espace d'adressage (fils).
+    pub cr3: u64,
+    /// Pointeur opaque vers le UserAddressSpace fils.
+    pub addr_space_ptr: usize,
+}
+
+/// Erreur de clonage de l'espace d'adressage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddrSpaceCloneError {
+    OutOfMemory,
+    InvalidSource,
+}
+
+/// Trait injecté dans process/ pour dupliquer un espace d'adressage en CoW.
+pub trait AddressSpaceCloner: Send + Sync {
+    /// Clone l'espace d'adressage référencé par `src_cr3`.
+    fn clone_cow(
+        &self,
+        src_cr3: u64,
+        src_space_ptr: usize,
+    ) -> Result<ClonedAddressSpace, AddrSpaceCloneError>;
+
+    /// Flush le TLB d'un espace d'adressage après marquage CoW.
+    fn flush_tlb_after_fork(&self, cr3: u64);
+
+    /// Libère un espace d'adressage cloné (appelé sur erreur post-clone).
+    fn free_addr_space(&self, addr_space_ptr: usize);
+}
 
 pub struct KernelAddressSpaceCloner;
 

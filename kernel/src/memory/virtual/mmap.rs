@@ -219,7 +219,6 @@ pub fn do_mmap(
         return Err(MmapError::InvalidAddress);
     }
 
-    user_as.stats.vma_count.fetch_add(1, Ordering::Relaxed);
     Ok(start.as_u64() as usize)
 }
 
@@ -256,7 +255,6 @@ pub fn do_munmap(addr: u64, _len: usize) -> Result<(), MmapError> {
             // Libérer le VmaDescriptor alloué par do_mmap / do_brk.
             // SAFETY: le pointeur est valide et nous sommes les propriétaires.
             let _ = unsafe { Box::from_raw(vma_ptr) };
-            user_as.stats.vma_count.fetch_sub(1, Ordering::Relaxed);
 
             // V-04 : traiter les pages par lots pour limiter la taille du buffer.
             //   1. Démappe les PTEs (flush TLB local intégré via unmap_page).
@@ -454,8 +452,6 @@ pub fn do_brk(addr: u64) -> Result<u64, MmapError> {
             let _ = unsafe { Box::from_raw(vma_ptr) };
             return Err(MmapError::OutOfVirtualMemory);
         }
-
-        user_as.stats.vma_count.fetch_add(1, Ordering::Relaxed);
     }
     // Réduction : on ne retire pas les VMAs (comportement Linux sur shrink).
 
@@ -483,6 +479,67 @@ pub enum ShmMapError {
     PermissionDenied,
 }
 
+/// Métadonnées minimales d'une région SHM fournies par la couche IPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShmRegionInfo {
+    pub n_pages: usize,
+    pub size_bytes: usize,
+}
+
+pub type ShmRegionInfoFn =
+    fn(desc_idx: usize, writable: bool) -> Result<ShmRegionInfo, ShmMapError>;
+pub type ShmPagePhysFn = fn(desc_idx: usize, page_idx: usize) -> Option<u64>;
+pub type ShmReleaseRegionFn = fn(desc_idx: usize);
+pub type ShmRegisterMappingFn = fn(
+    desc_idx: usize,
+    pid: u32,
+    virt_base: u64,
+    writable: bool,
+    n_pages: usize,
+) -> Result<usize, ShmMapError>;
+
+/// Callbacks IPC nécessaires pour mapper une région SHM sans importer IPC dans memory/.
+#[derive(Clone, Copy)]
+pub struct ShmProviderFns {
+    pub region_info: ShmRegionInfoFn,
+    pub page_phys: ShmPagePhysFn,
+    pub release_region: ShmReleaseRegionFn,
+    pub register_mapping: ShmRegisterMappingFn,
+}
+
+static SHM_REGION_INFO_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static SHM_PAGE_PHYS_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static SHM_RELEASE_REGION_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static SHM_REGISTER_MAPPING_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+
+pub fn register_shm_provider(provider: ShmProviderFns) {
+    SHM_REGION_INFO_FN.store(provider.region_info as *mut (), Ordering::Release);
+    SHM_PAGE_PHYS_FN.store(provider.page_phys as *mut (), Ordering::Release);
+    SHM_RELEASE_REGION_FN.store(provider.release_region as *mut (), Ordering::Release);
+    SHM_REGISTER_MAPPING_FN.store(provider.register_mapping as *mut (), Ordering::Release);
+}
+
+fn shm_provider() -> Option<ShmProviderFns> {
+    let region_info = SHM_REGION_INFO_FN.load(Ordering::Acquire);
+    let page_phys = SHM_PAGE_PHYS_FN.load(Ordering::Acquire);
+    let release_region = SHM_RELEASE_REGION_FN.load(Ordering::Acquire);
+    let register_mapping = SHM_REGISTER_MAPPING_FN.load(Ordering::Acquire);
+    if region_info.is_null()
+        || page_phys.is_null()
+        || release_region.is_null()
+        || register_mapping.is_null()
+    {
+        return None;
+    }
+    Some(ShmProviderFns {
+        // SAFETY: enregistré exclusivement via register_shm_provider avec les signatures attendues.
+        region_info: unsafe { core::mem::transmute(region_info) },
+        page_phys: unsafe { core::mem::transmute(page_phys) },
+        release_region: unsafe { core::mem::transmute(release_region) },
+        register_mapping: unsafe { core::mem::transmute(register_mapping) },
+    })
+}
+
 /// Résultat d'un mappage SHM dans un espace d'adressage.
 pub struct ShmMapIntoResult {
     /// Adresse virtuelle de base du mapping dans l'espace cible.
@@ -493,22 +550,39 @@ pub struct ShmMapIntoResult {
     pub mapping_idx: usize,
 }
 
+fn free_removed_vma(user_as: &UserAddressSpace, start: VirtAddr) {
+    if let Some(vma_ptr) = user_as.remove_vma(start) {
+        // SAFETY: remove_vma() transfère la propriété du descripteur à l'appelant.
+        let _ = unsafe { Box::from_raw(vma_ptr) };
+    }
+}
+
+fn rollback_shm_into_process(user_as: &UserAddressSpace, virt_base: VirtAddr, n_pages: usize) {
+    for i in 0..n_pages {
+        let v = VirtAddr::new(virt_base.as_u64().saturating_add((i * PAGE_SIZE) as u64));
+        unsafe {
+            user_as.unmap_page(v);
+        }
+    }
+    free_removed_vma(user_as, virt_base);
+}
+
 /// Mappe une région SHM existante dans l'espace d'adressage d'un processus.
 ///
 /// ## Opérations
 /// 1. Trouve un gap virtuel libre dans `user_as` (ou utilise `hint_virt`)
 /// 2. Enregistre une VMA de type `VmaBacking::Shared`
 /// 3. Mappe chaque frame physique SHM via `user_as.map_page()` (NO_COW)
-/// 4. Enregistre le mapping dans `SHM_MAPPING_TABLE` via `ipc::shm_map()`
+/// 4. Enregistre le mapping via le provider SHM injecté par la couche IPC
 ///
 /// ## Safety
 /// `user_as` doit être un pointeur valide vers un `UserAddressSpace` actif.
-/// Les frames SHM sont gérées par `ipc::shared_memory::pool` et ne sont
-/// jamais libérées tant qu'au moins un mapping reste actif.
+/// Les frames SHM sont fournies par le provider enregistré et ne sont jamais
+/// libérées tant qu'au moins un mapping reste actif.
 ///
 /// ## Arguments
 /// - `user_as`   : espace d'adressage du processus cible
-/// - `desc_idx`  : index de la région SHM dans `SHM_DESC_DIR`
+/// - `desc_idx`  : index opaque de la région SHM côté provider
 /// - `pid`       : PID du processus (pour les hooks VMM)
 /// - `hint_virt` : adresse virtuelle souhaitée (0 = auto)
 /// - `writable`  : autoriser l'écriture dans le mapping
@@ -519,27 +593,18 @@ pub fn map_shm_into_process(
     hint_virt: u64,
     writable: bool,
 ) -> Result<ShmMapIntoResult, ShmMapError> {
-    use crate::ipc::shared_memory::descriptor::SHM_DESC_DIR;
-    use crate::ipc::shared_memory::pool::shm_page_phys;
     use crate::memory::core::{Frame, PageFlags};
     use crate::memory::physical::allocator::buddy;
 
+    let provider = shm_provider().ok_or(ShmMapError::InvalidRegion)?;
+
     // ── 1. Lire les métadonnées de la région SHM ──────────────────────────
-    let (n_pages, size_bytes) = {
-        let dir = SHM_DESC_DIR.lock();
-        let desc = unsafe { dir.get(desc_idx) }.ok_or(ShmMapError::InvalidRegion)?;
-        if !desc.is_active() {
-            return Err(ShmMapError::InvalidRegion);
-        }
-        // Vérification permission : si writable demandé, la région doit
-        // autoriser l'écriture (bit 1 de ShmPermissions).
-        if writable && (desc.permissions & 0x2 == 0) {
-            return Err(ShmMapError::PermissionDenied);
-        }
-        (desc.page_count(), desc.size_bytes as usize)
-    };
+    let info = (provider.region_info)(desc_idx, writable)?;
+    let n_pages = info.n_pages;
+    let size_bytes = info.size_bytes;
 
     if n_pages == 0 {
+        (provider.release_region)(desc_idx);
         return Err(ShmMapError::InvalidRegion);
     }
 
@@ -551,9 +616,10 @@ pub fn map_shm_into_process(
     } else {
         None
     };
-    let virt_base = user_as
-        .find_free_gap(size_aligned, hint)
-        .ok_or(ShmMapError::OutOfVirtualMemory)?;
+    let virt_base = user_as.find_free_gap(size_aligned, hint).ok_or_else(|| {
+        (provider.release_region)(desc_idx);
+        ShmMapError::OutOfVirtualMemory
+    })?;
 
     let virt_end = VirtAddr::new(virt_base.as_u64() + size_aligned as u64);
 
@@ -584,6 +650,7 @@ pub fn map_shm_into_process(
     if !inserted {
         // SAFETY: on récupère la propriété que l'on avait.
         let _ = unsafe { Box::from_raw(vma_ptr) };
+        (provider.release_region)(desc_idx);
         return Err(ShmMapError::OutOfVirtualMemory);
     }
 
@@ -605,77 +672,33 @@ pub fn map_shm_into_process(
     let pt_alloc = PtAllocOnly;
 
     {
-        let dir = SHM_DESC_DIR.lock();
-        if let Some(desc) = unsafe { dir.get(desc_idx) } {
-            for i in 0..n_pages {
-                let pool_idx = desc.pages[i].load(core::sync::atomic::Ordering::Relaxed) as usize;
-                if let Some(phys) = shm_page_phys(pool_idx) {
-                    let frame = Frame::containing(crate::memory::core::PhysAddr::new(phys.0));
-                    let virt =
-                        VirtAddr::new(virt_base.as_u64().saturating_add((i * PAGE_SIZE) as u64));
-                    // SAFETY: virt est dans l'espace user du processus cible,
-                    // frame est une page SHM allouée et initialisée.
-                    if let Err(_) = unsafe { user_as.map_page(virt, frame, page_flags, &pt_alloc) }
-                    {
-                        // Rollback : démappe les pages déjà insérées
-                        for j in 0..i {
-                            let v = VirtAddr::new(
-                                virt_base.as_u64().saturating_add((j * PAGE_SIZE) as u64),
-                            );
-                            unsafe {
-                                user_as.unmap_page(v);
-                            }
-                        }
-                        user_as.remove_vma(virt_base);
-                        return Err(ShmMapError::AllocFailed);
-                    }
-                }
+        for i in 0..n_pages {
+            let Some(phys) = (provider.page_phys)(desc_idx, i) else {
+                rollback_shm_into_process(user_as, virt_base, i);
+                (provider.release_region)(desc_idx);
+                return Err(ShmMapError::InvalidRegion);
+            };
+            let frame = Frame::containing(crate::memory::core::PhysAddr::new(phys));
+            let virt = VirtAddr::new(virt_base.as_u64().saturating_add((i * PAGE_SIZE) as u64));
+            // SAFETY: virt est dans l'espace user du processus cible,
+            // frame est une page SHM allouée et initialisée.
+            if let Err(_) = unsafe { user_as.map_page(virt, frame, page_flags, &pt_alloc) } {
+                rollback_shm_into_process(user_as, virt_base, i);
+                (provider.release_region)(desc_idx);
+                return Err(ShmMapError::AllocFailed);
             }
         }
     }
 
     // ── 6. Enregistrer dans SHM_MAPPING_TABLE ────────────────────────────
-    use crate::ipc::shared_memory::mapping::SHM_MAPPING_TABLE;
-    let mapping_idx = {
-        let mut tbl = SHM_MAPPING_TABLE.lock();
-        tbl.alloc().ok_or_else(|| {
-            // Rollback mappings
-            for i in 0..n_pages {
-                let v = VirtAddr::new(virt_base.as_u64().saturating_add((i * PAGE_SIZE) as u64));
-                unsafe {
-                    user_as.unmap_page(v);
-                }
-            }
-            user_as.remove_vma(virt_base);
-            ShmMapError::AllocFailed
-        })?
-    };
-
-    {
-        let tbl = SHM_MAPPING_TABLE.lock();
-        let m = tbl.entry(mapping_idx).ok_or(ShmMapError::AllocFailed)?;
-        m.desc_idx
-            .store(desc_idx as u32, core::sync::atomic::Ordering::Relaxed);
-        m.process_id
-            .store(pid, core::sync::atomic::Ordering::Relaxed);
-        m.virt_base
-            .store(virt_base.as_u64(), core::sync::atomic::Ordering::Relaxed);
-        m.permissions.store(
-            if writable { 0x3 } else { 0x1 },
-            core::sync::atomic::Ordering::Relaxed,
-        );
-        m.mapped_pages
-            .store(n_pages as u32, core::sync::atomic::Ordering::Relaxed);
-        m.active.store(1, core::sync::atomic::Ordering::Release);
-    }
-
-    // Incrémenter le compteur de mappings sur le descripteur
-    {
-        let dir = SHM_DESC_DIR.lock();
-        if let Some(desc) = unsafe { dir.get(desc_idx) } {
-            desc.add_mapping();
-        }
-    }
+    let mapping_idx =
+        (provider.register_mapping)(desc_idx, pid, virt_base.as_u64(), writable, n_pages).map_err(
+            |err| {
+                rollback_shm_into_process(user_as, virt_base, n_pages);
+                (provider.release_region)(desc_idx);
+                err
+            },
+        )?;
 
     Ok(ShmMapIntoResult {
         virt_base: virt_base.as_u64(),

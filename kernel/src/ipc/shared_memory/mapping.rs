@@ -11,8 +11,8 @@
 //   4. Applique le flag NO_COW à toutes les pages mappées
 //
 // Les hooks de mappage (MapPageFn / UnmapPageFn) sont connectés au boot via
-// `ipc::ipc_install_vmm_hooks()`. Sans hook installé, shm_map() opère en
-// mode simulé (virt = phys) — acceptable en dev/test mono-processus.
+// `ipc::ipc_install_vmm_hooks()`. Sans hook installé, shm_map() échoue en
+// production ; le mode simulé virt=phys est limité à la feature `dev_no_vmm`.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -92,6 +92,10 @@ pub fn vmm_hooks_ready() -> bool {
 /// Nombre maximal de mappings actifs simultanément
 pub const MAX_SHM_MAPPINGS: usize = 2048;
 
+const SHM_MAPPING_FREE: u32 = 0;
+const SHM_MAPPING_RESERVED: u32 = 1;
+const SHM_MAPPING_ACTIVE: u32 = 2;
+
 /// Représente un mapping actif : (région, processus, adresse virtuelle)
 #[repr(C, align(64))]
 pub struct ShmMapping {
@@ -131,7 +135,11 @@ impl ShmMapping {
     }
 
     pub fn is_active(&self) -> bool {
-        self.active.load(Ordering::Acquire) != 0
+        self.active.load(Ordering::Acquire) == SHM_MAPPING_ACTIVE
+    }
+
+    pub(crate) fn mark_active(&self) {
+        self.active.store(SHM_MAPPING_ACTIVE, Ordering::Release);
     }
 
     pub fn process_id(&self) -> ProcessId {
@@ -171,7 +179,10 @@ impl ShmMappingTable {
 
     pub(crate) fn alloc(&mut self) -> Option<usize> {
         for i in 0..MAX_SHM_MAPPINGS {
-            if !self.entries[i].is_active() {
+            if self.entries[i].active.load(Ordering::Acquire) == SHM_MAPPING_FREE {
+                self.entries[i]
+                    .active
+                    .store(SHM_MAPPING_RESERVED, Ordering::Release);
                 self.count += 1;
                 return Some(i);
             }
@@ -179,10 +190,19 @@ impl ShmMappingTable {
         None
     }
 
-    fn free(&mut self, idx: usize) -> bool {
-        if idx < MAX_SHM_MAPPINGS && self.entries[idx].is_active() {
-            self.entries[idx].active.store(0, Ordering::Release);
-            self.count -= 1;
+    pub(crate) fn free(&mut self, idx: usize) -> bool {
+        if idx < MAX_SHM_MAPPINGS
+            && self.entries[idx].active.load(Ordering::Acquire) != SHM_MAPPING_FREE
+        {
+            let entry = &self.entries[idx];
+            entry.desc_idx.store(u32::MAX, Ordering::Relaxed);
+            entry.process_id.store(0, Ordering::Relaxed);
+            entry.virt_base.store(0, Ordering::Relaxed);
+            entry.permissions.store(0, Ordering::Relaxed);
+            entry.mapped_pages.store(0, Ordering::Relaxed);
+            entry.created_at.store(0, Ordering::Relaxed);
+            entry.active.store(SHM_MAPPING_FREE, Ordering::Release);
+            self.count = self.count.saturating_sub(1);
             true
         } else {
             false
@@ -261,7 +281,16 @@ pub fn shm_map(
     // Allouer un slot de mapping
     let mapping_idx = {
         let mut tbl = SHM_MAPPING_TABLE.lock();
-        tbl.alloc().ok_or(IpcError::OutOfResources)?
+        match tbl.alloc() {
+            Some(idx) => idx,
+            None => {
+                let dir = SHM_DESC_DIR.lock();
+                if let Some(desc) = unsafe { dir.get(desc_idx) } {
+                    desc.remove_mapping();
+                }
+                return Err(IpcError::OutOfResources);
+            }
+        }
     };
 
     // Calculer ou utiliser l'adresse virtuelle
@@ -332,7 +361,7 @@ pub fn shm_map(
         m.permissions
             .store(region_perms.0 as u32, Ordering::Relaxed);
         m.mapped_pages.store(n_pages as u32, Ordering::Relaxed);
-        m.active.store(1, Ordering::Release);
+        m.mark_active();
     }
 
     Ok(ShmMapResult {
@@ -382,4 +411,39 @@ pub fn shm_unmap(mapping_idx: usize) -> Result<(), IpcError> {
 /// Retourne le nombre de mappings actifs.
 pub fn shm_mapping_count() -> usize {
     SHM_MAPPING_TABLE.lock().count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mapping_table_reserves_slots_before_activation() {
+        let mut table = ShmMappingTable::new();
+
+        let first = table.alloc().expect("first reservation");
+        let second = table.alloc().expect("second reservation");
+
+        assert_ne!(first, second);
+        assert_eq!(table.count, 2);
+        assert!(!table.entries[first].is_active());
+        assert!(!table.entries[second].is_active());
+
+        table.entries[first].mark_active();
+        assert!(table.entries[first].is_active());
+        assert!(!table.entries[second].is_active());
+    }
+
+    #[test]
+    fn mapping_table_free_releases_reserved_slot_and_count() {
+        let mut table = ShmMappingTable::new();
+        let idx = table.alloc().expect("reservation");
+
+        assert_eq!(table.count, 1);
+        assert!(table.free(idx));
+        assert_eq!(table.count, 0);
+
+        let reused = table.alloc().expect("reused slot");
+        assert_eq!(reused, idx);
+    }
 }

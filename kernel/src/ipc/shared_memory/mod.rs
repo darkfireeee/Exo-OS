@@ -11,6 +11,7 @@
 pub mod allocator;
 pub mod descriptor;
 pub mod mapping;
+pub mod memory_bridge;
 pub mod numa_aware;
 pub mod page;
 pub mod pool;

@@ -93,10 +93,10 @@ pub unsafe fn pick_next_task(
                     if cur_ref.policy == crate::scheduler::core::task::SchedPolicy::RoundRobin {
                         rq.enqueue(cur);
                     }
-                    let next = rq
-                        .dequeue_highest_rt()
-                        .expect("RT queue non vide après bitmap check");
-                    return PickResult::Switch(next);
+                    if let Some(next) = rq.dequeue_highest_rt() {
+                        return PickResult::Switch(next);
+                    }
+                    return PickResult::KeepRunning;
                 }
             }
             // Pas de RT plus prioritaire → le courant continue.

@@ -50,7 +50,7 @@ impl DeadlineQueue {
         for i in 0..self.count {
             let d = unsafe {
                 self.tasks[i]
-                    .unwrap()
+                    .unwrap_unchecked()
                     .as_ref()
                     .deadline_abs
                     .load(core::sync::atomic::Ordering::Relaxed)
