@@ -22,7 +22,7 @@ use crate::process::signal::queue::{RTSigQueue, SigQueue};
 use crate::scheduler::core::task::{
     Priority, ProcessId, SchedPolicy, TaskState, ThreadControlBlock, ThreadId,
 };
-use alloc::alloc::{alloc, Layout};
+use alloc::alloc::{alloc, dealloc, Layout};
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 
@@ -45,11 +45,51 @@ fn try_box_new<T>(value: T) -> Option<Box<T>> {
     }
 }
 
+fn order_for_pages(pages: usize) -> usize {
+    let mut order = 0usize;
+    let mut cap = 1usize;
+    while cap < pages {
+        cap <<= 1;
+        order += 1;
+    }
+    order
+}
+
 /// Taille du stack kernel par thread (4 pages × 4096 = 16 384 bytes).
 pub const KSTACK_SIZE: usize = 16 * 1024;
+const KSTACK_PAGE_SIZE: usize = crate::memory::core::constants::PAGE_SIZE;
+const KSTACK_USABLE_PAGES: usize = KSTACK_SIZE / KSTACK_PAGE_SIZE;
+const KSTACK_TOTAL_PAGES: usize = KSTACK_USABLE_PAGES + 2;
+
+const _: () = assert!(KSTACK_SIZE % KSTACK_PAGE_SIZE == 0);
 
 /// Canari de stack pour détecter les débordements.
 const STACK_CANARY: u64 = 0xDEAD_BEEF_CAFE_BABE;
+
+struct KernelStackPtAlloc;
+
+impl crate::memory::virt::page_table::FrameAllocatorForWalk for KernelStackPtAlloc {
+    fn alloc_frame(
+        &self,
+        flags: crate::memory::core::AllocFlags,
+    ) -> Result<crate::memory::core::Frame, crate::memory::core::AllocError> {
+        crate::memory::alloc_page(flags)
+    }
+
+    fn free_frame(&self, frame: crate::memory::core::Frame) {
+        let _ = crate::memory::free_page(frame);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum KernelStackBacking {
+    Heap,
+    GuardedPhysmap {
+        frame: crate::memory::core::Frame,
+        order: usize,
+        guard_id: Option<crate::memory::integrity::GuardRegionId>,
+    },
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ThreadAddress — adresses de l'espace utilisateur d'un thread
@@ -90,8 +130,9 @@ impl ThreadAddress {
 
 /// Stack kernel alloué dynamiquement pour un thread.
 ///
-/// Le backend heap actuel pose un canari au bas du buffer. Une vraie guard page
-/// non-présente sera activée quand l'allocation de stacks passera par VMM.
+/// Le chemin normal alloue une région physique dédiée :
+/// `[guard !PRESENT][stack utile][guard !PRESENT]`. Si le noyau est encore trop
+/// tôt dans le boot pour modifier la PML4, le backend heap garde le canari bas.
 pub struct KernelStack {
     /// Pointeur vers la mémoire allouée (bas du buffer).
     base: *mut u8,
@@ -99,13 +140,17 @@ pub struct KernelStack {
     size: usize,
     /// Adresse du sommet (base + size, aligné 16).
     top: u64,
+    backing: KernelStackBacking,
 }
 
 impl KernelStack {
     /// Alloue un nouveau stack kernel de `size` bytes.
-    /// Pose un canari 8 bytes au bas (détection overflow).
-    pub fn alloc(size: usize) -> Option<Self> {
-        use alloc::alloc::{alloc, Layout};
+    /// Pose un canari 8 bytes au bas et, si possible, deux vraies pages garde.
+    pub fn alloc(size: usize, tid: Tid) -> Option<Self> {
+        Self::alloc_guarded(size, tid).or_else(|| Self::alloc_heap_canary(size))
+    }
+
+    fn alloc_heap_canary(size: usize) -> Option<Self> {
         if !crate::memory::heap::is_heap_ready() {
             return None;
         }
@@ -129,6 +174,90 @@ impl KernelStack {
             base,
             size,
             top: top_aligned,
+            backing: KernelStackBacking::Heap,
+        })
+    }
+
+    fn alloc_guarded(size: usize, tid: Tid) -> Option<Self> {
+        use crate::memory::core::{AllocFlags, Frame, PageFlags, PhysAddr, VirtAddr};
+
+        if size != KSTACK_SIZE
+            || crate::memory::virt::address_space::KERNEL_AS
+                .pml4_phys()
+                .as_u64()
+                == 0
+        {
+            return None;
+        }
+
+        let order = order_for_pages(KSTACK_TOTAL_PAGES);
+        let frame = crate::memory::physical::alloc_pages(order, AllocFlags::ZEROED).ok()?;
+        let phys_base = frame.start_address();
+        let low_guard_virt = crate::memory::phys_to_virt(phys_base);
+        let stack_base_virt = VirtAddr::new(low_guard_virt.as_u64() + KSTACK_PAGE_SIZE as u64);
+        let high_guard_virt = VirtAddr::new(
+            stack_base_virt.as_u64() + (KSTACK_USABLE_PAGES * KSTACK_PAGE_SIZE) as u64,
+        );
+
+        let low_guard_frame =
+            unsafe { crate::memory::virt::address_space::KERNEL_AS.unmap(low_guard_virt) };
+        let high_guard_frame =
+            unsafe { crate::memory::virt::address_space::KERNEL_AS.unmap(high_guard_virt) };
+
+        if low_guard_frame.is_none() || high_guard_frame.is_none() {
+            if let Some(frame) = low_guard_frame {
+                let _ = unsafe {
+                    crate::memory::virt::address_space::KERNEL_AS.map(
+                        low_guard_virt,
+                        frame,
+                        PageFlags::KERNEL_DATA,
+                        &KernelStackPtAlloc,
+                    )
+                };
+            }
+            if let Some(frame) = high_guard_frame {
+                let _ = unsafe {
+                    crate::memory::virt::address_space::KERNEL_AS.map(
+                        high_guard_virt,
+                        frame,
+                        PageFlags::KERNEL_DATA,
+                        &KernelStackPtAlloc,
+                    )
+                };
+            }
+            let _ = crate::memory::physical::free_pages(frame, order);
+            return None;
+        }
+
+        let guard_id = crate::memory::integrity::register_guard_region(
+            stack_base_virt.as_u64(),
+            size as u64,
+            crate::memory::integrity::GuardRegionKind::KernelThreadStack { tid: tid.0 as u64 },
+        );
+
+        let base = stack_base_virt.as_u64() as *mut u8;
+        unsafe {
+            core::ptr::write(base as *mut u64, STACK_CANARY);
+        }
+        let top = unsafe { base.add(size) } as u64;
+        let top_aligned = (top & !0xF) - 8;
+
+        let expected_low = Frame::from_phys_addr(phys_base);
+        let expected_high = Frame::from_phys_addr(PhysAddr::new(
+            phys_base.as_u64() + ((KSTACK_USABLE_PAGES + 1) * KSTACK_PAGE_SIZE) as u64,
+        ));
+        debug_assert_eq!(low_guard_frame, Some(expected_low));
+        debug_assert_eq!(high_guard_frame, Some(expected_high));
+
+        Some(Self {
+            base,
+            size,
+            top: top_aligned,
+            backing: KernelStackBacking::GuardedPhysmap {
+                frame,
+                order,
+                guard_id,
+            },
         })
     }
 
@@ -153,11 +282,65 @@ impl KernelStack {
 
 impl Drop for KernelStack {
     fn drop(&mut self) {
-        use alloc::alloc::{dealloc, Layout};
-        // SAFETY: base a été alloué avec ce layout.
-        unsafe {
-            let layout = Layout::from_size_align_unchecked(self.size, 16);
-            dealloc(self.base, layout);
+        match self.backing {
+            KernelStackBacking::Heap => {
+                // SAFETY: base a été alloué avec ce layout.
+                unsafe {
+                    let layout = Layout::from_size_align_unchecked(self.size, 16);
+                    dealloc(self.base, layout);
+                }
+            }
+            KernelStackBacking::GuardedPhysmap {
+                frame,
+                order,
+                guard_id,
+            } => {
+                if let Some(id) = guard_id {
+                    let _ = crate::memory::integrity::unregister_guard_region(id);
+                }
+
+                let low_guard_virt =
+                    crate::memory::core::VirtAddr::new(self.base as u64 - KSTACK_PAGE_SIZE as u64);
+                let high_guard_virt =
+                    crate::memory::core::VirtAddr::new(self.base as u64 + self.size as u64);
+                let low_frame = frame;
+                let high_frame =
+                    crate::memory::core::Frame::from_phys_addr(crate::memory::core::PhysAddr::new(
+                        frame.start_address().as_u64()
+                            + ((KSTACK_USABLE_PAGES + 1) * KSTACK_PAGE_SIZE) as u64,
+                    ));
+
+                let _ =
+                    unsafe { crate::memory::virt::address_space::KERNEL_AS.unmap(low_guard_virt) };
+                let _ =
+                    unsafe { crate::memory::virt::address_space::KERNEL_AS.unmap(high_guard_virt) };
+                let _ = unsafe {
+                    crate::memory::virt::address_space::KERNEL_AS.map(
+                        low_guard_virt,
+                        low_frame,
+                        crate::memory::core::PageFlags::KERNEL_DATA,
+                        &KernelStackPtAlloc,
+                    )
+                };
+                let _ = unsafe {
+                    crate::memory::virt::address_space::KERNEL_AS.map(
+                        high_guard_virt,
+                        high_frame,
+                        crate::memory::core::PageFlags::KERNEL_DATA,
+                        &KernelStackPtAlloc,
+                    )
+                };
+
+                if crate::memory::virt::address_space::KERNEL_AS
+                    .translate(low_guard_virt)
+                    .is_some()
+                    && crate::memory::virt::address_space::KERNEL_AS
+                        .translate(high_guard_virt)
+                        .is_some()
+                {
+                    let _ = crate::memory::physical::free_pages(frame, order);
+                }
+            }
         }
     }
 }
@@ -234,7 +417,7 @@ impl ProcessThread {
         if !crate::memory::heap::is_heap_ready() {
             return None;
         }
-        let kstack = KernelStack::alloc(KSTACK_SIZE)?;
+        let kstack = KernelStack::alloc(KSTACK_SIZE, tid)?;
         let stack_top = kstack.top_addr();
 
         let mut sched_tcb = try_box_new(ThreadControlBlock::new(

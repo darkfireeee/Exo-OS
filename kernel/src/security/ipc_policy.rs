@@ -1,5 +1,5 @@
 use crate::process::core::pid::Pid;
-use exo_types::{CapToken, CapabilityType};
+use exo_types::{CapToken, CapabilityType, Rights as ServiceRights};
 use spin::RwLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +82,12 @@ fn class_from_capability(cap_type: CapabilityType) -> ServiceClass {
 }
 
 pub fn register_service(pid: Pid, cap: &CapToken) -> bool {
-    if cap.generation == 0 || cap._pad != [0; 2] {
+    if cap.generation == 0
+        || cap._pad != [0; 2]
+        || !cap.object_id.is_valid()
+        || cap.rights == ServiceRights::NONE.0
+        || (cap.rights & !ServiceRights::ALL.0) != 0
+    {
         return false;
     }
 
@@ -250,7 +255,7 @@ mod tests {
     fn revoked_service_cap_cannot_register_dynamic_service() {
         let revoked_cap = CapToken {
             generation: 0,
-            object_id: exo_types::ObjectId([0u8; 32]),
+            object_id: exo_types::ObjectId::from_counter(49),
             rights: exo_types::Rights::READ.0,
             type_id: CapabilityType::CryptoServer as u16,
             _pad: [0; 2],
@@ -261,5 +266,26 @@ mod tests {
             check_direct_ipc(Pid(INIT_SERVER_PID), Pid(49)),
             IpcPolicyResult::UnknownService
         );
+    }
+
+    #[test]
+    fn malformed_service_cap_cannot_register_dynamic_service() {
+        let zero_object_cap = CapToken {
+            generation: 1,
+            object_id: exo_types::ObjectId::ZERO,
+            rights: exo_types::Rights::READ.0,
+            type_id: CapabilityType::CryptoServer as u16,
+            _pad: [0; 2],
+        };
+        assert!(!register_service(Pid(50), &zero_object_cap));
+
+        let bad_rights_cap = CapToken {
+            generation: 1,
+            object_id: exo_types::ObjectId::from_counter(50),
+            rights: exo_types::Rights::ALL.0 | 0x8000_0000,
+            type_id: CapabilityType::CryptoServer as u16,
+            _pad: [0; 2],
+        };
+        assert!(!register_service(Pid(51), &bad_rights_cap));
     }
 }

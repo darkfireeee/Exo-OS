@@ -82,6 +82,8 @@ pub struct GuardRegionId(pub u32);
 pub enum GuardRegionKind {
     /// Stack d'un CPU (kernel).
     KernelStack { cpu_id: u32 },
+    /// Stack kernel dédié à un thread.
+    KernelThreadStack { tid: u64 },
     /// Stack d'un thread user.
     UserStack { tid: u64 },
     /// Allocation vmalloc.
@@ -241,6 +243,9 @@ pub fn register_guard_region(
         GuardRegionKind::KernelStack { .. } | GuardRegionKind::UserStack { .. } => GUARD_STATS
             .stack_guards_placed
             .fetch_add(1, Ordering::Relaxed),
+        GuardRegionKind::KernelThreadStack { .. } => GUARD_STATS
+            .stack_guards_placed
+            .fetch_add(1, Ordering::Relaxed),
         GuardRegionKind::Vmalloc => GUARD_STATS
             .vmalloc_guards_placed
             .fetch_add(1, Ordering::Relaxed),
@@ -319,6 +324,10 @@ pub fn guard_page_violation_handler(virt: u64, kind: GuardRegionKind) -> ! {
             "GUARD PAGE VIOLATION: kernel stack overflow cpu={} virt={:#x}",
             cpu_id, virt
         ),
+        GuardRegionKind::KernelThreadStack { tid } => panic!(
+            "GUARD PAGE VIOLATION: kernel thread stack overflow tid={} virt={:#x}",
+            tid, virt
+        ),
         GuardRegionKind::UserStack { tid } => panic!(
             "GUARD PAGE VIOLATION: user stack overflow tid={} virt={:#x}",
             tid, virt
@@ -359,4 +368,39 @@ pub fn register_cpu_stack_guards(cpu_id: u32) -> Option<GuardRegionId> {
 /// Init guard pages — enregistre les pages garde pour le BSP (cpu_id=0).
 pub fn init() {
     register_cpu_stack_guards(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kernel_thread_stack_guard_region_catches_low_and_high_faults() {
+        let region_start = 0xFFFF_9000_1000_0000;
+        let region_size = (4 * PAGE_SIZE) as u64;
+        let id = register_guard_region(
+            region_start,
+            region_size,
+            GuardRegionKind::KernelThreadStack { tid: 77 },
+        )
+        .expect("guard slot");
+
+        match check_guard_fault(region_start - PAGE_SIZE as u64, 0) {
+            GuardFaultResult::GuardViolation {
+                kind: GuardRegionKind::KernelThreadStack { tid },
+                ..
+            } => assert_eq!(tid, 77),
+            other => panic!("expected low guard violation, got {other:?}"),
+        }
+
+        match check_guard_fault(region_start + region_size, GUARD_PTE_VALUE) {
+            GuardFaultResult::GuardViolation {
+                kind: GuardRegionKind::KernelThreadStack { tid },
+                ..
+            } => assert_eq!(tid, 77),
+            other => panic!("expected high guard violation, got {other:?}"),
+        }
+
+        assert!(unregister_guard_region(id));
+    }
 }

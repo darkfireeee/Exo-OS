@@ -332,15 +332,14 @@ pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u
         Ok(f) => f,
         Err(e) => return e.to_errno(),
     };
+    let mode = match checked_u32_sysarg(mode) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     // CORRECTION P0-04 : câbler vers fs_bridge
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_open(
-        path.as_bytes(),
-        flags as u32,
-        mode as u32,
-        pid,
-    ))
+    fs_bridge::bridge_result(fs_bridge::fs_open(path.as_bytes(), flags as u32, mode, pid))
 }
 
 /// `creat(path, mode)` → alias for `open(O_CREAT|O_WRONLY|O_TRUNC)`.
@@ -352,11 +351,15 @@ pub fn sys_creat(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     };
     use crate::fs::exofs::syscall::object_fd::open_flags;
     use crate::syscall::fs_bridge;
+    let mode = match checked_u32_sysarg(mode) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_open(
         path.as_bytes(),
         open_flags::O_CREAT | open_flags::O_WRONLY | open_flags::O_TRUNC,
-        mode as u32,
+        mode,
         pid,
     ))
 }
@@ -406,13 +409,21 @@ pub fn sys_openat(dirfd: u64, path_ptr: u64, flags: u64, mode: u64, _a5: u64, _a
         Ok(f) => f,
         Err(e) => return e.to_errno(),
     };
+    let dirfd = match checked_i32_sysarg(dirfd) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let mode = match checked_u32_sysarg(mode) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_openat(
-        dirfd as i32,
+        dirfd,
         path.as_bytes(),
         flags as u32,
-        mode as u32,
+        mode,
         pid,
     ))
 }
@@ -462,9 +473,13 @@ pub fn sys_fcntl(fd: u64, cmd: u64, arg: u64, _a4: u64, _a5: u64, _a6: u64) -> i
         Ok(f) => f,
         Err(e) => return e.to_errno(),
     };
+    let cmd = match checked_u32_sysarg(cmd) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_fcntl(fd as u32, cmd as u32, arg, pid))
+    fs_bridge::bridge_result(fs_bridge::fs_fcntl(fd as u32, cmd, arg, pid))
 }
 
 /// `flock(fd, operation)`.
@@ -474,9 +489,13 @@ pub fn sys_flock(fd: u64, operation: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
         Ok(f) => f,
         Err(e) => return e.to_errno(),
     };
+    let operation = match checked_u32_sysarg(operation) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_flock(fd as u32, operation as u32, pid))
+    fs_bridge::bridge_result(fs_bridge::fs_flock(fd as u32, operation, pid))
 }
 
 /// `pipe(pipefd)`.
@@ -490,33 +509,53 @@ pub fn sys_pipe(fds_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) 
 /// `pipe2(pipefd, flags)`.
 pub fn sys_pipe2(fds_ptr: u64, flags: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_PIPE2);
+    let flags = match checked_u32_sysarg(flags) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_pipe2(fds_ptr, flags as u32, pid))
+    fs_bridge::bridge_result(fs_bridge::fs_pipe2(fds_ptr, flags, pid))
 }
 
 /// `eventfd(initval)`.
 pub fn sys_eventfd(initval: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EVENTFD);
+    let initval = match checked_u32_sysarg(initval) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_eventfd2(initval as u32, 0, pid))
+    fs_bridge::bridge_result(fs_bridge::fs_eventfd2(initval, 0, pid))
 }
 
 /// `eventfd2(initval, flags)`.
 pub fn sys_eventfd2(initval: u64, flags: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EVENTFD2);
+    let initval = match checked_u32_sysarg(initval) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let flags = match checked_u32_sysarg(flags) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_eventfd2(initval as u32, flags as u32, pid))
+    fs_bridge::bridge_result(fs_bridge::fs_eventfd2(initval, flags, pid))
 }
 
 /// `inotify_init1(flags)`.
 pub fn sys_inotify_init1(flags: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_INOTIFY_INIT1);
+    let flags = match checked_u32_sysarg(flags) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_inotify_init1(flags as u32, pid))
+    fs_bridge::bridge_result(fs_bridge::fs_inotify_init1(flags, pid))
 }
 
 /// `poll(fds, nfds, timeout)`.
@@ -525,14 +564,13 @@ pub fn sys_poll(fds_ptr: u64, nfds: u64, timeout: u64, _a4: u64, _a5: u64, _a6: 
     if nfds > 1024 {
         return EINVAL;
     }
+    let timeout = match checked_i32_sysarg(timeout) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_poll(
-        fds_ptr,
-        nfds as usize,
-        timeout as i32,
-        pid,
-    ))
+    fs_bridge::bridge_result(fs_bridge::fs_poll(fds_ptr, nfds as usize, timeout, pid))
 }
 
 /// `ppoll(fds, nfds, timeout, sigmask, sigsetsize)`.
@@ -1536,16 +1574,25 @@ pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -
     if len == 0 {
         return EINVAL;
     }
-    let _len_pages = (len as usize + 4095) / 4096;
+    let len = match checked_usize_sysarg(len) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let prot = match checked_u32_sysarg(prot) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let flags = match checked_u32_sysarg(flags) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let fd = match checked_i32_sysarg(fd) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let _len_pages = (len + 4095) / 4096;
     // Déléguer à memory/virtual/mmap.rs
-    match crate::memory::virt::mmap::do_mmap(
-        addr,
-        len as usize,
-        prot as u32,
-        flags as u32,
-        fd as i32,
-        off,
-    ) {
+    match crate::memory::virt::mmap::do_mmap(addr, len, prot, flags, fd, off) {
         Ok(va) => va as i64,
         Err(e) => e.to_kernel_errno() as i64,
     }
@@ -1557,7 +1604,11 @@ pub fn sys_munmap(addr: u64, len: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
     if len == 0 {
         return EINVAL;
     }
-    match crate::memory::virt::mmap::do_munmap(addr, len as usize) {
+    let len = match checked_usize_sysarg(len) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    match crate::memory::virt::mmap::do_munmap(addr, len) {
         Ok(_) => 0,
         Err(e) => e.to_kernel_errno() as i64,
     }
@@ -1569,7 +1620,15 @@ pub fn sys_mprotect(addr: u64, len: u64, prot: u64, _a4: u64, _a5: u64, _a6: u64
     if len == 0 {
         return EINVAL;
     }
-    match crate::memory::virt::mmap::do_mprotect(addr, len as usize, prot as u32) {
+    let len = match checked_usize_sysarg(len) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let prot = match checked_u32_sysarg(prot) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    match crate::memory::virt::mmap::do_mprotect(addr, len, prot) {
         Ok(_) => 0,
         Err(e) => e.to_kernel_errno() as i64,
     }
@@ -2320,6 +2379,25 @@ fn checked_u32_sysarg(value: u64) -> Result<u32, i64> {
     }
 }
 
+#[inline]
+fn checked_i32_sysarg(value: u64) -> Result<i32, i64> {
+    let signed = value as i64;
+    if signed < i32::MIN as i64 || signed > i32::MAX as i64 {
+        Err(EINVAL)
+    } else {
+        Ok(signed as i32)
+    }
+}
+
+#[inline]
+fn checked_usize_sysarg(value: u64) -> Result<usize, i64> {
+    if value > usize::MAX as u64 {
+        Err(EINVAL)
+    } else {
+        Ok(value as usize)
+    }
+}
+
 /// `exo_cap_create(type, rights, target_pid, token_out_ptr)` → handle ou errno.
 pub fn sys_exo_cap_create(
     cap_type: u64,
@@ -2422,6 +2500,10 @@ pub fn sys_exo_cap_check(
         Ok(v) => v,
         Err(e) => return e,
     };
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 || caller_pid != target_pid {
+        return EACCES;
+    }
     let expected_type = match checked_u32_sysarg(expected_type) {
         Ok(v) => v,
         Err(e) => return e,
@@ -2451,6 +2533,25 @@ mod capability_syscall_arg_tests {
     #[test]
     fn checked_u32_sysarg_rejects_high_bits_in_syscall_abi() {
         assert_eq!(checked_u32_sysarg(u32::MAX as u64 + 1), Err(EINVAL));
+    }
+
+    #[test]
+    fn checked_i32_sysarg_accepts_sign_extended_negative_values() {
+        assert_eq!(checked_i32_sysarg(u64::MAX), Ok(-1));
+        assert_eq!(checked_i32_sysarg(i32::MIN as i64 as u64), Ok(i32::MIN));
+        assert_eq!(checked_i32_sysarg(i32::MAX as u64), Ok(i32::MAX));
+    }
+
+    #[test]
+    fn checked_i32_sysarg_rejects_non_canonical_positive_high_bits() {
+        assert_eq!(checked_i32_sysarg(i32::MAX as u64 + 1), Err(EINVAL));
+        assert_eq!(checked_i32_sysarg(0x8000_0000_0000_0000), Err(EINVAL));
+    }
+
+    #[test]
+    fn checked_usize_sysarg_accepts_native_width() {
+        assert_eq!(checked_usize_sysarg(0), Ok(0));
+        assert_eq!(checked_usize_sysarg(usize::MAX as u64), Ok(usize::MAX));
     }
 }
 

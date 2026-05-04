@@ -61,8 +61,13 @@ BSP_InitIommuFlag ==
 
 BSP_SetSecurityReady ==
     /\ AtomicWrites["iommu_init"].value = 1
+    /\ AtomicWrites["kstack_guard_ready"].value = 1
     /\ AtomicWrites["SECURITY_READY"].value = 0
     /\ WriteRelease(BSP, "SECURITY_READY", 1)
+
+BSP_InitKernelStackGuards ==
+    /\ AtomicWrites["kstack_guard_ready"].value = 0
+    /\ WriteRelease(BSP, "kstack_guard_ready", 1)
 
 Core_CasMaskedSince(c) ==
     /\ AtomicWrites["masked_since"].value = 0
@@ -82,6 +87,7 @@ Core_SyncMasked(c) ==
 Next ==
     \/ BSP_InitIommuSlots
     \/ BSP_InitIommuFlag
+    \/ BSP_InitKernelStackGuards
     \/ BSP_SetSecurityReady
     \/ \E c \in CORES : Core_CasMaskedSince(c)
     \/ \E c \in CORES : AP_SyncIommu(c)
@@ -110,5 +116,11 @@ S49_IommuInitRelease ==
     \A c \in CORES :
         (AtomicReads[c]["iommu_init"] = 1) =>
             (AtomicReads[c]["iommu_slots"] = 1)
+
+\* S50: SECURITY_READY is only published after kernel stack guards are ready
+S50_SecurityReadyAfterKernelStackGuards ==
+    \A c \in CORES :
+        (<<c, "SECURITY_READY">> \in AcquireFence) =>
+            (AtomicReads[c]["kstack_guard_ready"] = 1)
 
 =============================================================================

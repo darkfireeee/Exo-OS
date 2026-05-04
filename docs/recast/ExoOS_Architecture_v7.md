@@ -701,6 +701,7 @@ pub struct BootInfo {
 | TSS.RSP0 non mis à jour | ✅ CORRIGÉ | **v7** |
 | MXCSR/FCW dans switch\_asm | ✅ CORRIGÉ | **v7** |
 | BootInfo adresse physique | ✅ CORRIGÉ | **v7** |
+| Kernel thread stack guard pages | ✅ CORRIGÉ | **v7+** |
 | MAX\_CPUS preempt=64 | ⚠️ Phase 0 | — |
 
 ### 9.2 Vulnérabilités P0 restantes (à implémenter)
@@ -715,6 +716,10 @@ Résolu depuis l'intégration kernel : **CVE-EXO-001** est couvert par
 `security_init()` côté BSP avant `smp_boot_aps()` et par le spin-wait AP
 `is_security_ready()` en Acquire dans `arch/x86_64/smp/init.rs`.
 
+Résolu côté IPC/security : l'enregistrement dynamique de service rejette les
+tokens révoqués, les `ObjectId` nuls et les droits hors masque canonique; le
+syscall `exo_cap_check()` ne valide une capability IPC que depuis le PID cible.
+
 ### 9.3 Problèmes P1 (à implémenter)
 
 - **MEM-DMA-IRQ** : DMA ISR libère lock PUIS wakeup — Phase 2
@@ -726,7 +731,7 @@ Résolu depuis l'intégration kernel : **CVE-EXO-001** est couvert par
 
 ---
 
-## 10. Checklist de Conformité v7 (45 checks)
+## 10. Checklist de Conformité v7 (46 checks)
 
 | # | Vérification | Module | Statut |
 |---|-------------|--------|--------|
@@ -775,6 +780,7 @@ Résolu depuis l'intégration kernel : **CVE-EXO-001** est couvert par
 | S-43 | `exec()` : signal mask hérité du processus appelant | `process/exec.rs` | ✅ CORRIGÉ v6 |
 | **S-44** | `switch_asm.s` : PAS de MXCSR/FCW — Lazy FPU, seul CR0.TS=1 | `scheduler/asm/switch_asm.s` | ✅ CORRIGÉ **v7** |
 | **S-45** | `context_switch()` : `tss_set_rsp0(cpu, next.kstack_top())` obligatoire | `scheduler/core/switch.rs` | ✅ CORRIGÉ **v7** |
+| **S-46** | Stack kernel thread : `[guard !PRESENT][stack+canary][guard !PRESENT]` | `process/core/tcb.rs` + `memory/integrity/guard_pages.rs` | ✅ CORRIGÉ **v7+** |
 
 ---
 
@@ -790,10 +796,6 @@ Résolu depuis l'intégration kernel : **CVE-EXO-001** est couvert par
 - `verify()` constant-time via crate `subtle` no\_std — `ct_eq()` (LAC-01 / S-02)
 - Nonces XChaCha20 : `NONCE_COUNTER` + HKDF (LAC-04)
 - `key_storage.rs` Argon2id OWASP (LAC-06)
-- `SECURITY_READY` spin-wait ASM sur APs (CVE-EXO-001 / S-04)
-- Implémenter `context_switch()` v7 : `CR0.TS=1` avant l'ASM + `tss_set_rsp0(next.kstack_top())` après switch (S-44/S-45)
-- Implémenter `switch_asm.s` v7 : CR3 + 15 GPRs, sans MXCSR/FCW (S-44)
-- Implémenter `exec()` v7 : signal mask hérité + `tss_set_rsp0()` (S-43/S-45)
 - Mapper `BootInfo` en VMA de `init_server` avant lancement (V7-C-01)
 
 ### Phase 2 — Robustesse kernel

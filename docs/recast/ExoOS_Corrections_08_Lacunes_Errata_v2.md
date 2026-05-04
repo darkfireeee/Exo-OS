@@ -294,6 +294,14 @@ Aucun mécanisme de détection de stack overflow n'est documenté pour les piles
 
 ```rust
 // kernel/src/memory/stack.rs — CORR-48
+//
+// Statut implémentation kernel actuel :
+// - `kernel/src/process/core/tcb.rs::KernelStack` tente d'abord l'allocation
+//   physique dédiée `[guard !PRESENT][stack utile][guard !PRESENT]`.
+// - Les deux guard pages sont démapées dans le physmap via `KERNEL_AS.unmap()`
+//   et enregistrées dans `memory/integrity/guard_pages.rs`.
+// - Si la PML4 kernel n'est pas encore publiée, le chemin heap+canary reste le
+//   fallback de boot conservateur.
 
 /// Valeur de canary — choisie arbitrairement, non-null, non-triviale.
 const STACK_CANARY: u64 = 0xDEAD_C0DE_CAFE_BABE;
