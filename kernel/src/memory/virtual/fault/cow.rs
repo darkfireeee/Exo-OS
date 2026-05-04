@@ -32,11 +32,39 @@ pub fn handle_cow_fault<A: FaultAllocator>(
         },
     };
 
-    // Construire un AtomicRefCount temporaire pour décider si copie est nécessaire.
-    // En production, la table de refcounts est FRAME_TABLE (non créée ici pour Couche 0).
-    // Pour rester indépendant, on utilise l'heuristique : si le physmap montre
-    // que la page est partagée (via un compteur dans FrameDesc), on copie.
-    // Ici : toujours copier (chemin safe).
+    let writable_flags = old_entry
+        .to_page_flags()
+        .clear(PageFlags::COW)
+        .set(PageFlags::WRITABLE)
+        .set(PageFlags::PRESENT);
+
+    if COW_TRACKER.ref_count(old_frame) <= 1 {
+        let new_raw = PageTableEntry::from_page_flags(old_frame, writable_flags).raw();
+        match alloc.compare_exchange_pte_raw(page_addr, old_raw, new_raw) {
+            Ok(_) => {
+                let _ = COW_TRACKER.dec(old_frame);
+                vma.record_cow_break();
+                // SAFETY: adresse canonique.
+                unsafe {
+                    flush_single(page_addr);
+                }
+                return FaultResult::Handled;
+            }
+            Err(actual_raw) => {
+                let actual = PageTableEntry::from_raw(actual_raw);
+                if actual.is_present() && !actual.is_cow() {
+                    // Un autre CPU a déjà restauré l'écriture en place.
+                    unsafe {
+                        flush_single(page_addr);
+                    }
+                    return FaultResult::Handled;
+                }
+            }
+        }
+    }
+
+    // La page est encore partagée : copier vers un nouveau frame puis publier
+    // le PTE par CAS pour sérialiser les fautes concurrentes.
     let new_frame = match alloc.alloc_nonzeroed() {
         Ok(f) => f,
         Err(_) => {
@@ -58,8 +86,7 @@ pub fn handle_cow_fault<A: FaultAllocator>(
     }
 
     // Remap la page avec les nouveaux flags (writable, supprimer COW).
-    let new_flags = vma.page_flags & !PageFlags::COW | PageFlags::WRITABLE;
-    let new_raw = PageTableEntry::from_page_flags(new_frame, new_flags).raw();
+    let new_raw = PageTableEntry::from_page_flags(new_frame, writable_flags).raw();
     match alloc.compare_exchange_pte_raw(page_addr, old_raw, new_raw) {
         Ok(_) => {
             let remaining = COW_TRACKER.dec(old_frame);

@@ -56,6 +56,11 @@ pub struct CowTracker {
     pub collision_max: AtomicU32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CowTrackerError {
+    TableFull,
+}
+
 // SAFETY: CowTracker utilise un Mutex interne pour toutes les mutations.
 unsafe impl Sync for CowTracker {}
 unsafe impl Send for CowTracker {}
@@ -84,7 +89,7 @@ impl CowTracker {
 
     /// Incrémente le refcount CoW d'un frame.
     /// Si le frame n'est pas dans la table, l'y insère avec refcount=2.
-    pub fn inc(&self, frame: Frame) -> u32 {
+    pub fn try_inc(&self, frame: Frame) -> Result<u32, CowTrackerError> {
         let idx = frame.phys_addr().as_u64() / 4096;
         let start = Self::hash(idx);
         let _guard = self.lock.lock();
@@ -100,7 +105,7 @@ impl CowTracker {
                 // Slot trouvé — incrémente sous verrou.
                 let rc = entry.ref_count.fetch_add(1, Ordering::Relaxed) + 1;
                 self.inc_count.fetch_add(1, Ordering::Relaxed);
-                return rc;
+                return Ok(rc);
             }
             if existing == SLOT_EMPTY {
                 // Fin de chaîne — insérer dans le premier tombstone disponible
@@ -115,7 +120,7 @@ impl CowTracker {
                 if collisions > old_max {
                     self.collision_max.store(collisions, Ordering::Relaxed);
                 }
-                return 2;
+                return Ok(2);
             }
             if existing == SLOT_DELETED && first_tombstone.is_none() {
                 first_tombstone = Some(slot);
@@ -123,7 +128,15 @@ impl CowTracker {
             collisions += 1;
         }
         // Table pleine — cas dégénéré.
-        u32::MAX
+        Err(CowTrackerError::TableFull)
+    }
+
+    /// Incrémente le refcount CoW d'un frame.
+    ///
+    /// API historique conservée pour les chemins qui ne peuvent pas propager
+    /// d'erreur. Les nouveaux chemins critiques doivent utiliser `try_inc()`.
+    pub fn inc(&self, frame: Frame) -> u32 {
+        self.try_inc(frame).unwrap_or(u32::MAX)
     }
 
     /// Décrémente le refcount CoW d'un frame.

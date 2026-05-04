@@ -39,6 +39,14 @@ fn try_box_new<T>(value: T) -> Option<Box<T>> {
     }
 }
 
+#[inline]
+fn track_cow_frame(frame: Frame) -> Result<(), AddrSpaceCloneError> {
+    COW_TRACKER
+        .try_inc(frame)
+        .map(|_| ())
+        .map_err(|_| AddrSpaceCloneError::OutOfMemory)
+}
+
 /// Résultat de la duplication CoW de l'espace d'adressage.
 pub struct ClonedAddressSpace {
     /// CR3 du nouvel espace d'adressage (fils).
@@ -168,7 +176,10 @@ unsafe fn clone_userspace_tables(
         }
 
         let dst_pdpt_phys = alloc_zeroed_table()?;
-        clone_pdpt(src_entry.phys_addr(), dst_pdpt_phys)?;
+        if let Err(err) = clone_pdpt(src_entry.phys_addr(), dst_pdpt_phys) {
+            free_pdpt_tree(dst_pdpt_phys);
+            return Err(err);
+        }
         dst_pml4[l4_idx] = repoint_table_entry(src_entry, dst_pdpt_phys);
     }
 
@@ -189,7 +200,7 @@ unsafe fn clone_pdpt(
         }
         if src_entry.is_huge() {
             if let Some(frame) = src_entry.frame() {
-                let _ = COW_TRACKER.inc(frame);
+                track_cow_frame(frame)?;
             }
             let shared = shared_entry(src_entry);
             src_pdpt[l3_idx] = shared;
@@ -198,7 +209,10 @@ unsafe fn clone_pdpt(
         }
 
         let dst_pd_phys = alloc_zeroed_table()?;
-        clone_pd(src_entry.phys_addr(), dst_pd_phys)?;
+        if let Err(err) = clone_pd(src_entry.phys_addr(), dst_pd_phys) {
+            free_pd_tree(dst_pd_phys);
+            return Err(err);
+        }
         dst_pdpt[l3_idx] = repoint_table_entry(src_entry, dst_pd_phys);
     }
 
@@ -219,7 +233,7 @@ unsafe fn clone_pd(
         }
         if src_entry.is_huge() {
             if let Some(frame) = src_entry.frame() {
-                let _ = COW_TRACKER.inc(frame);
+                track_cow_frame(frame)?;
             }
             let shared = shared_entry(src_entry);
             src_pd[l2_idx] = shared;
@@ -228,14 +242,20 @@ unsafe fn clone_pd(
         }
 
         let dst_pt_phys = alloc_zeroed_table()?;
-        clone_pt(src_entry.phys_addr(), dst_pt_phys);
+        if let Err(err) = clone_pt(src_entry.phys_addr(), dst_pt_phys) {
+            free_pt_tree(dst_pt_phys);
+            return Err(err);
+        }
         dst_pd[l2_idx] = repoint_table_entry(src_entry, dst_pt_phys);
     }
 
     Ok(())
 }
 
-unsafe fn clone_pt(src_pt_phys: PhysAddr, dst_pt_phys: PhysAddr) {
+unsafe fn clone_pt(
+    src_pt_phys: PhysAddr,
+    dst_pt_phys: PhysAddr,
+) -> Result<(), AddrSpaceCloneError> {
     let src_pt = phys_to_table_mut(src_pt_phys);
     let dst_pt = phys_to_table_mut(dst_pt_phys);
 
@@ -243,13 +263,14 @@ unsafe fn clone_pt(src_pt_phys: PhysAddr, dst_pt_phys: PhysAddr) {
         let src_entry = src_pt[l1_idx];
         if src_entry.is_present() {
             if let Some(frame) = src_entry.frame() {
-                let _ = COW_TRACKER.inc(frame);
+                track_cow_frame(frame)?;
             }
             let shared = shared_entry(src_entry);
             src_pt[l1_idx] = shared;
             dst_pt[l1_idx] = shared;
         }
     }
+    Ok(())
 }
 
 #[inline]

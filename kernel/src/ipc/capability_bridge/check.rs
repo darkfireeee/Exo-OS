@@ -20,6 +20,9 @@ pub fn check_endpoint_access(
     token: CapToken,
     rights: Rights,
 ) -> Result<(), IpcError> {
+    if !crate::security::is_security_ready() {
+        return Err(IpcError::PermissionDenied);
+    }
     check_access(table, token, ObjectKind::IpcEndpoint, rights, "ipc")
         .map_err(capability_to_ipc_error)
 }
@@ -30,12 +33,18 @@ pub fn check_channel_access(
     token: CapToken,
     rights: Rights,
 ) -> Result<(), IpcError> {
+    if !crate::security::is_security_ready() {
+        return Err(IpcError::PermissionDenied);
+    }
     check_access(table, token, ObjectKind::IpcChannel, rights, "ipc")
         .map_err(capability_to_ipc_error)
 }
 
 #[inline]
 pub fn check_shm_access(table: &CapTable, token: CapToken, rights: Rights) -> Result<(), IpcError> {
+    if !crate::security::is_security_ready() {
+        return Err(IpcError::PermissionDenied);
+    }
     check_access(table, token, ObjectKind::ShmRegion, rights, "ipc")
         .map_err(capability_to_ipc_error)
 }

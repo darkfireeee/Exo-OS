@@ -501,7 +501,7 @@ fn handle_fork_like_inplace(
         do_fork, wait_for_vfork_completion, ForkContext, ForkError,
     };
     use crate::scheduler::core::task::ThreadControlBlock;
-    use crate::syscall::errno::{EAGAIN, EFAULT, EINTR, ENOMEM};
+    use crate::syscall::errno::{EAGAIN, EFAULT, EINTR, EINVAL, ENOMEM};
 
     // Lire TCB courant.
     // SAFETY: GS kernel actif, gs:[0x20] = pointeur TCB (PerCpuData).
@@ -543,7 +543,10 @@ fn handle_fork_like_inplace(
     match do_fork(&ctx) {
         Ok(result) => {
             if fork_flags.has(crate::process::lifecycle::fork::ForkFlags::VFORK) {
-                if wait_for_vfork_completion(result.child_pid, tcb).is_err() {
+                // SAFETY: tcb_ptr pointe le TCB courant; `do_fork` est terminé et
+                // aucune référence immutable au TCB n'est réutilisée après ce point.
+                let tcb_mut = unsafe { &mut *(tcb_ptr as *mut ThreadControlBlock) };
+                if wait_for_vfork_completion(result.child_pid, tcb_mut).is_err() {
                     return EINTR;
                 }
             }
@@ -556,6 +559,7 @@ fn handle_fork_like_inplace(
             | ForkError::InvalidCpu => EAGAIN,
             ForkError::OutOfMemory | ForkError::AddressSpaceCloneFailed => ENOMEM,
             ForkError::NoAddrCloner => EFAULT,
+            ForkError::UnsupportedFlag => EINVAL,
         },
     }
 }

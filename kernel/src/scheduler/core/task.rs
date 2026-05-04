@@ -235,7 +235,7 @@ pub mod task_flags {
 //   [72]  fs_base:     u64        FS base (TLS)
 //   [80]  user_gs_base:u64        GS base userspace
 //   [88]  pkrs:        u32        PKRS
-//   [92]  _pad1:       [u8; 4]
+//   [92]  pid:         ProcessId  PID direct (compat process/signal)
 //   [96]  signal_mask: AtomicU64  bitmask signaux bloqués
 //   [104] dl_runtime:  u64        budget EDF (ns/période)
 //   [112] dl_period:   u64        période EDF (ns)
@@ -316,6 +316,10 @@ const _: () = assert!(
 const _: () = assert!(
     offset_of!(ThreadControlBlock, cr3_phys) == 56,
     "TCB: cr3_phys doit être à l'offset 56 (switch_asm.s)"
+);
+const _: () = assert!(
+    offset_of!(ThreadControlBlock, pid) == 92,
+    "TCB: pid doit être à l'offset 92 (process/signal compat)"
 );
 const _: () = assert!(
     offset_of!(ThreadControlBlock, fpu_state_ptr) == 232,

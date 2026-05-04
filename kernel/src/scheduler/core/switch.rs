@@ -114,6 +114,17 @@ pub unsafe fn block_current_thread() {
     }
 
     let tcb = &mut *tcb_ptr;
+    debug_assert!(
+        matches!(
+            tcb.state(),
+            TaskState::Sleeping
+                | TaskState::Uninterruptible
+                | TaskState::Stopped
+                | TaskState::Dead
+        ),
+        "block_current_thread: état inattendu {:?}; l'appelant doit transitionner le thread avant blocage",
+        tcb.state()
+    );
     match tcb.state() {
         TaskState::Runnable | TaskState::Running => {
             return;
@@ -184,15 +195,18 @@ pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
 ///
 /// # Séquence (GI-02 complète)
 /// 1. Lazy FPU : si `prev` a utilisé la FPU → XSAVE (sans toucher MXCSR/FCW V7-C-02).
-/// 2. Sauvegarder PKRS (Intel PKS).
-/// 3. Sauvegarder FS.base et user_gs_base via rdmsr (CORR-11).
-/// 4. Marquer `prev` → Runnable.
-/// 5. Poser CR0.TS=1, puis appeler `context_switch_asm(prev_rsp_ptr, next_rsp, next_cr3)`.
+/// 2. Poser CR0.TS=1, puis marquer l'état FPU lazy comme non chargé.
+/// 3. Sauvegarder PKRS (Intel PKS).
+/// 4. Sauvegarder CET PL0_SSP si shadow stack actif.
+/// 5. Sauvegarder FS.base et user_gs_base via rdmsr (CORR-11).
+/// 6. Marquer `prev` → Runnable.
+/// 7. Calculer `next_cr3` et comptabiliser le runtime de `prev`.
+/// 8. Appeler `context_switch_asm(prev_rsp_ptr, next_rsp, next_cr3)`.
 ///    L'ASM sauvegarde/restaure 6 callee-saved GPRs. CR3 switché si différent.
-/// 6. Restaurer PKRS de `next`.
-/// 7. Marquer `next` → Running. Mettre à jour CURRENT_THREAD_PER_CPU.
-/// 8. Mettre à jour TSS.RSP0 ← next.kstack_top() (V7-C-03 OBLIGATOIRE).
-/// 10. Restaurer FS.base et user_gs_base de `next` via wrmsr (CORR-11).
+/// 9. Restaurer PKRS de `next`.
+/// 10. Restaurer CET PL0_SSP de `next` si shadow stack actif.
+/// 11. Marquer `next` → Running, puis mettre à jour GS current_tcb et TSS.RSP0.
+/// 12. Restaurer FS.base et user_gs_base de `next` via wrmsr (CORR-11).
 ///
 /// # Sécurité
 /// - Appelé avec préemption désactivée (IrqGuard ou PreemptGuard).
@@ -219,13 +233,13 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     prev.set_fpu_loaded(false);
     next.set_fpu_loaded(false);
 
-    // Sauvegarde PKRS (S6) si le CPU supporte PKS.
+    // ── Étape 3 : Sauvegarde PKRS (S6) si le CPU supporte PKS ───────────────
     if has_pks {
         // SAFETY: accès MSR ring0, capability vérifiée via CPUID.
         prev.pkrs = unsafe { msr::read_msr(msr::MSR_IA32_PKRS) as u32 };
     }
 
-    // ── FIX-CET-01 : Sauvegarder MSR_IA32_PL0_SSP si CET Shadow Stack actif ──
+    // ── Étape 4 : Sauvegarder MSR_IA32_PL0_SSP si CET Shadow Stack actif ────
     //
     // Intel SDM Vol.1 §8.3.3 : en mode software task switch, la sauvegarde du
     // Shadow Stack Pointer est à la charge du noyau. Si CET n'est pas actif,
@@ -236,7 +250,7 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         prev.set_pl0_ssp(ssp);
     }
 
-    // ── Étape 2 : Sauvegarder FS/GS base du thread sortant (CORR-11) ─────────
+    // ── Étape 5 : Sauvegarder FS/GS base du thread sortant (CORR-11) ─────────
     //
     // On est en Ring 0 → SWAPGS a été effectué à l'entrée kernel.
     //   MSR_FS_BASE       (0xC0000100) = FS.base courant (TLS userspace prev)
@@ -256,7 +270,7 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         hook_fn(prev);
     }
 
-    // ── Étape 3 : Transition d'état de prev ──────────────────────────────────
+    // ── Étape 6 : Transition d'état de prev ──────────────────────────────────
     // Si le thread sortant était Running → il redevient Runnable (sera ré-enfilé).
     // Si il était dans un état bloquant (Sleeping, Uninterruptible) → on ne change pas.
     let prev_state = prev.state();
@@ -264,7 +278,7 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         prev.set_state(TaskState::Runnable);
     }
 
-    // ── Étape 4 : ASM context switch ─────────────────────────────────────────
+    // ── Étape 7 : préparer CR3 + runtime, puis Étape 8 : ASM context switch ─
     // CR3 switch uniquement si les espaces d'adressage diffèrent (KPTI-aware).
     let new_cr3 = if prev.cr3_phys != next.cr3_phys {
         next.cr3_phys
@@ -310,13 +324,13 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         crate::arch::x86_64::spectre::kpti::set_current_cr3(next.cr3_phys, user_cr3);
     }
 
-    // Restauration PKRS (S6) côté thread entrant.
+    // ── Étape 9 : Restauration PKRS (S6) côté thread entrant ────────────────
     if has_pks {
         // SAFETY: accès MSR ring0, capability vérifiée via CPUID.
         unsafe { msr::write_msr(msr::MSR_IA32_PKRS, next.pkrs as u64) };
     }
 
-    // ── FIX-CET-01 : Restaurer MSR_IA32_PL0_SSP de `next` si CET actif ───────
+    // ── Étape 10 : Restaurer MSR_IA32_PL0_SSP de `next` si CET actif ────────
     //
     // On est maintenant dans le contexte de `next`. Restaurer son SSP Ring 0
     // avant tout retour vers userspace. Si next n'a jamais utilisé CET
@@ -328,7 +342,7 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         unsafe { msr::write_msr(MSR_IA32_PL0_SSP, ssp) };
     }
 
-    // ── Étape 5 : Post-switch côté `next` ────────────────────────────────────
+    // ── Étape 11 : Post-switch côté `next` ───────────────────────────────────
     // Marquer `next` comme Running.
     next.set_state(TaskState::Running);
     next.switch_count = next.switch_count.wrapping_add(1);
@@ -352,7 +366,7 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
             .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
     }
 
-    // ── Étape 8 : Restaurer FS/GS base de `next` (CORR-11) ──────────────────
+    // ── Étape 12 : Restaurer FS/GS base de `next` (CORR-11) ─────────────────
     //
     // Restaurer FS.base (TLS userspace) et user GS.base (valeur Ring 3).
     // Écrire user_gs_base dans MSR_KERNEL_GS_BASE (0xC0000102) : lors du

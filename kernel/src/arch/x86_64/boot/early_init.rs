@@ -258,6 +258,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         crate::memory::virt::address_space::KERNEL_AS.init(
             crate::memory::core::types::PhysAddr::new(super::super::read_cr3()),
         );
+        crate::memory::virt::fault::swap_in::register_backend_swap_provider();
 
         // ── Protections mémoire hardware (NX / SMEP / SMAP / PKU) ──────────────
         // Activées après l'init complète du sous-système mémoire (DOC2 §2.3)
@@ -305,6 +306,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         crate::memory::virt::address_space::KERNEL_AS.init(
             crate::memory::core::types::PhysAddr::new(super::super::read_cr3()),
         );
+        crate::memory::virt::fault::swap_in::register_backend_swap_provider();
 
         // Protections mémoire hardware (NX / SMEP / SMAP)
         crate::memory::protection::init();

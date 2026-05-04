@@ -68,7 +68,7 @@ Espace d'adressage x86_64 (4 niveaux, 48 bits) :
 | **IA-KERNEL-01** | Tables `.rodata` statiques uniquement — zéro inférence runtime. |
 | **EMERGENCY-01** | `EmergencyPool` initialisé EN PREMIER avant tout allocateur. |
 | **FUTEX-01** | `FutexTable` = singleton unique — indexé par adresse physique. |
-| **LOCK ORDER** | IPC < Scheduler < **Memory** < FS (jamais lock N si on tient N+1). |
+| **LOCK ORDER** | **Memory(1)** → Scheduler(2) → Security(3) → IPC(4) → FS(5). Ne jamais reprendre un lock de niveau inférieur après un niveau supérieur. |
 | **MEM-04** | `free_pages()` jamais appelé avant TLB shootdown complet. |
 | **NO-ALLOC ISR** | Aucun alloc/Box/Vec dans les ISR et handlers critiques. |
 | **UNSAFE CONTRACT** | Tout `unsafe { }` précédé d'un `// SAFETY:` obligatoire. |
@@ -87,6 +87,10 @@ Phase 6  — integrity/ : canary → guard pages → KASAN-lite
 Phase 7  — utils/    : futex_table → OOM killer → shrinker registry
 Phase 8  — numa/     : registre nœuds NUMA via ACPI SRAT (appel à physical/numa/)
 ```
+
+Le provider `virt::fault::swap_in::register_backend_swap_provider()` est publié
+par `arch/x86_64/boot/` après `KERNEL_AS.init()`, pas depuis `memory::init()`,
+afin de ne pas exposer un fault handler swap-in avant la Phase 2 virtuelle.
 
 ---
 

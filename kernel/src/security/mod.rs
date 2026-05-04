@@ -177,7 +177,10 @@ pub use exoseal::{
     nic_domain_id, nic_iommu_locked, verify_p0_fixes,
 };
 
-pub use ipc_policy::{check_direct_ipc, IpcPolicyResult};
+pub use ipc_policy::{
+    check_direct_ipc, register_service, register_service_class, unregister_service,
+    IpcPolicyResult, ServiceClass,
+};
 
 fn exoargos_context_switch_snapshot(tcb: &crate::scheduler::core::task::ThreadControlBlock) {
     let _ = exoargos::pmc_snapshot(tcb);

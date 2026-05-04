@@ -91,10 +91,10 @@ fn vfork_completion_reached(child_pid: Pid) -> bool {
 
 pub fn wait_for_vfork_completion(
     child_pid: Pid,
-    caller_tcb: &ThreadControlBlock,
+    caller_tcb: &mut ThreadControlBlock,
 ) -> Result<(), ()> {
     while !vfork_completion_reached(child_pid) {
-        let woke = unsafe { VFORK_WAIT_QUEUE.wait_interruptible(caller_tcb as *const _ as *mut _) };
+        let woke = unsafe { VFORK_WAIT_QUEUE.wait_interruptible(caller_tcb as *mut _) };
         if !woke && !vfork_completion_reached(child_pid) {
             return Err(());
         }
@@ -120,6 +120,7 @@ pub enum ForkError {
     RegistryError,
     NoAddrCloner,
     InvalidCpu,
+    UnsupportedFlag,
 }
 
 #[inline]
@@ -173,6 +174,10 @@ pub struct ForkResult {
 pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     let parent = ctx.parent_thread;
     let parent_pcb = ctx.parent_pcb;
+
+    if ctx.flags.has(ForkFlags::CLONE_NEWPID) {
+        return Err(ForkError::UnsupportedFlag);
+    }
 
     // 1. Allouer PID + TID fils.
     let child_pid_raw = PID_ALLOCATOR.alloc().map_err(|_| ForkError::PidExhausted)?;
@@ -277,6 +282,10 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         *frame_ptr.add(10) = ctx.child_rsp; // RSP  userspace
         *frame_ptr.add(11) = 0x23; // SS   ring3
         child_tcb.kstack_ptr = kstack_top - 96;
+        child_tcb.signal_mask.store(
+            parent.sched_tcb.signal_mask.load(Ordering::Acquire),
+            Ordering::Release,
+        );
     }
 
     // Copier les adresses utilisateur.

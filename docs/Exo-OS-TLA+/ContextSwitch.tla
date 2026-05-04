@@ -97,12 +97,17 @@ Step8_UpdateGsAndTss(c) ==
     /\ SwitchStage' = [SwitchStage EXCEPT ![c] = 9]
     /\ UNCHANGED <<CurrentTcb, Cr0TsBit, FsBase, UserGsBase, FpuRegisters, XSaveArea, NextTcb>>
 
-Step9_10_RestoreMSRs(c) ==
-    /\ SwitchStage[c] \in 9..10
-    /\ FsBase' = IF SwitchStage[c] = 9 THEN [FsBase EXCEPT ![c] = CurrentTcb[c].fs_base] ELSE FsBase
-    /\ UserGsBase' = IF SwitchStage[c] = 10 THEN [UserGsBase EXCEPT ![c] = CurrentTcb[c].user_gs_base] ELSE UserGsBase
-    /\ SwitchStage' = [SwitchStage EXCEPT ![c] = @ + 1]
-    /\ UNCHANGED <<CurrentTcb, TssRsp0, Cr0TsBit, GsSlot20, FpuRegisters, XSaveArea, NextTcb>>
+Step9_RestoreFsBase(c) ==
+    /\ SwitchStage[c] = 9
+    /\ FsBase' = [FsBase EXCEPT ![c] = CurrentTcb[c].fs_base]
+    /\ SwitchStage' = [SwitchStage EXCEPT ![c] = 10]
+    /\ UNCHANGED <<CurrentTcb, TssRsp0, Cr0TsBit, UserGsBase, GsSlot20, FpuRegisters, XSaveArea, NextTcb>>
+
+Step10_RestoreUserGsBase(c) ==
+    /\ SwitchStage[c] = 10
+    /\ UserGsBase' = [UserGsBase EXCEPT ![c] = CurrentTcb[c].user_gs_base]
+    /\ SwitchStage' = [SwitchStage EXCEPT ![c] = 11]
+    /\ UNCHANGED <<CurrentTcb, TssRsp0, Cr0TsBit, FsBase, GsSlot20, FpuRegisters, XSaveArea, NextTcb>>
 
 Step11_Finish(c) ==
     /\ SwitchStage[c] = 11
@@ -119,7 +124,8 @@ Next == \E c \in CORES :
     \/ Step5_AsmSwitch(c)
     \/ Step6_7_Internal(c)
     \/ Step8_UpdateGsAndTss(c)
-    \/ Step9_10_RestoreMSRs(c)
+    \/ Step9_RestoreFsBase(c)
+    \/ Step10_RestoreUserGsBase(c)
     \/ Step11_Finish(c)
 
 Spec == Init /\ [][Next]_vars
@@ -138,6 +144,9 @@ S26_TssRsp0MatchesCurrentTcb ==
 S27_FsGsMatchNewThread ==
     \A c \in CORES : (~SwitchInProgress(c) => 
             FsBase[c] = CurrentTcb[c].fs_base /\ UserGsBase[c] = CurrentTcb[c].user_gs_base)
+
+S27a_FsRestoredBeforeUserGs ==
+    \A c \in CORES : (SwitchStage[c] = 10 => FsBase[c] = CurrentTcb[c].fs_base)
 
 S28_GsSlot20MatchesCurrentTcb ==
     \A c \in CORES : (~SwitchInProgress(c) => GsSlot20[c] = CurrentTcb[c])

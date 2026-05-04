@@ -38,13 +38,22 @@ ProcessPanic(p) ==
     /\ ProcessStates' = [ProcessStates EXCEPT ![p] = "DYING"]
     /\ UNCHANGED <<InitServerNotified, FdTableState, FdObjectIds, WaitersOnFd, WaitersNotified, ExofsObjectExists, SystemPhase>>
 
-\* SRV-01: Kernel reaps the dying process and guarantees ChildDied IPC to init_server (PID 1)
-KernelReap(p) ==
+\* SRV-01: exit path publishes a zombie and guarantees ChildDied IPC to init_server (PID 1)
+KernelMarkZombie(p) ==
     /\ SystemPhase = "NORMAL"
     /\ ProcessStates[p] = "DYING"
-    /\ ProcessStates' = [ProcessStates EXCEPT ![p] = "DEAD"]
+    /\ ProcessStates' = [ProcessStates EXCEPT ![p] = "ZOMBIE"]
     /\ InitServerNotified' = [InitServerNotified EXCEPT ![p] = TRUE] \* Atomic guarantee
     /\ UNCHANGED <<FdTableState, FdObjectIds, WaitersOnFd, WaitersNotified, ExofsObjectExists, SystemPhase>>
+
+\* Async reaper/waitpid path. The implementation may run later, but it cannot
+\* clear the notification guarantee established while entering ZOMBIE.
+KernelReap(p) ==
+    /\ SystemPhase = "NORMAL"
+    /\ ProcessStates[p] = "ZOMBIE"
+    /\ InitServerNotified[p] = TRUE
+    /\ ProcessStates' = [ProcessStates EXCEPT ![p] = "DEAD"]
+    /\ UNCHANGED <<InitServerNotified, FdTableState, FdObjectIds, WaitersOnFd, WaitersNotified, ExofsObjectExists, SystemPhase>>
 
 --------------------------------------------------------------
 \* SYSTEM ACTIONS: PHOENIX RESTORE & FD STALENESS
@@ -88,6 +97,7 @@ FinishRestore ==
 
 Next ==
     \/ \E p \in PIDS : ProcessPanic(p)
+    \/ \E p \in PIDS : KernelMarkZombie(p)
     \/ \E p \in PIDS : KernelReap(p)
     \/ CrashAndRestore
     \/ \E p \in PIDS, f \in FDS : ValidateFd_MarkStale(p, f)
@@ -99,9 +109,9 @@ Spec == Init /\ [][Next]_vars
 --------------------------------------------------------------
 \* SAFETY PROPERTIES & INVARIANTS
 --------------------------------------------------------------
-\* S44: The kernel guarantees ChildDied delivery independently of the dying process state.
+\* S44: The kernel guarantees ChildDied delivery before a process can be reaped.
 S44_ChildDiedAlwaysDelivered ==
-    \A p \in PIDS : (ProcessStates[p] = "DEAD") => (InitServerNotified[p] = TRUE)
+    \A p \in PIDS : (ProcessStates[p] \in {"ZOMBIE", "DEAD"}) => (InitServerNotified[p] = TRUE)
 
 \* S45: mark_stale() prevents deadlocks. A stale FD immediately yields EIO to waiters.
 S45_StaleNotifiesWaiters ==

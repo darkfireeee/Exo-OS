@@ -8,10 +8,9 @@ VARIABLES
     AtomicReads,      \* Mapping: core -> (var -> value)  (Core's local view of memory)
     HappensBefore,    \* Set of <<writer_core, reader_core>> indicating sync edges
     ReleaseFence,     \* Snapshot of writer's local views at time of Release: var -> (var -> value)
-    AcquireFence,     \* Set of <<core, var>> representing successful acquires
-    VisibilityGap     \* BOOLEAN: Reserved to track stale reads
+    AcquireFence      \* Set of <<core, var>> representing successful acquires
 
-vars == <<AtomicWrites, AtomicReads, HappensBefore, ReleaseFence, AcquireFence, VisibilityGap>>
+vars == <<AtomicWrites, AtomicReads, HappensBefore, ReleaseFence, AcquireFence>>
 
 --------------------------------------------------------------
 \* INITIALIZATION
@@ -22,7 +21,6 @@ Init ==
     /\ HappensBefore = {}
     /\ ReleaseFence = [v \in VARS |-> [vx \in VARS |-> 0]]
     /\ AcquireFence = {}
-    /\ VisibilityGap = FALSE
 
 --------------------------------------------------------------
 \* ABSTRACT MEMORY MODEL (SNAPSHOT & MERGE)
@@ -30,14 +28,14 @@ Init ==
 WriteRelaxed(c, var, val) ==
     /\ AtomicWrites' = [AtomicWrites EXCEPT ![var] = [value |-> val, ordering |-> "Relaxed", core |-> c]]
     /\ AtomicReads' = [AtomicReads EXCEPT ![c][var] = val]
-    /\ UNCHANGED <<HappensBefore, ReleaseFence, AcquireFence, VisibilityGap>>
+    /\ UNCHANGED <<HappensBefore, ReleaseFence, AcquireFence>>
 
 WriteRelease(c, var, val) ==
     /\ AtomicWrites' = [AtomicWrites EXCEPT ![var] = [value |-> val, ordering |-> "Release", core |-> c]]
     /\ AtomicReads' = [AtomicReads EXCEPT ![c][var] = val]
     \* The magic of Release: snapshot the core's entire local view into the fence
     /\ ReleaseFence' = [ReleaseFence EXCEPT ![var] = AtomicReads'[c]]
-    /\ UNCHANGED <<HappensBefore, AcquireFence, VisibilityGap>>
+    /\ UNCHANGED <<HappensBefore, AcquireFence>>
 
 ReadAcquire(c, var) ==
     /\ AtomicWrites[var].ordering = "Release"
@@ -47,7 +45,7 @@ ReadAcquire(c, var) ==
                             IF ReleaseFence[var][v] = 1 THEN 1 ELSE AtomicReads[c][v]]]
     /\ HappensBefore' = HappensBefore \cup {<<AtomicWrites[var].core, c>>}
     /\ AcquireFence' = AcquireFence \cup {<<c, var>>}
-    /\ UNCHANGED <<AtomicWrites, ReleaseFence, VisibilityGap>>
+    /\ UNCHANGED <<AtomicWrites, ReleaseFence>>
 
 --------------------------------------------------------------
 \* SYSTEM ACTIONS (EXO-OS BOOT & INTERRUPTS)

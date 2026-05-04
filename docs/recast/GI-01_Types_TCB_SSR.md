@@ -331,54 +331,58 @@ const _: () = assert!(core::mem::offset_of!(EpollEventAbi, data_bytes) == 4);
 pub struct ThreadControlBlock {
     // ─── Cache Line 1 [0..63] ─────────────────────────────────────────
     /// [0]  Thread ID global unique
-    pub tid:            u64,
-    /// [8]  RSP Ring 0 — source pour TSS.RSP0 (V7-C-03)
-    pub kstack_ptr:     u64,
-    /// [16] Priorité / policy (cache line hot path)
-    pub priority_policy: u64,
+    pub tid: u64,
+    /// [8]  RSP sauvegardé/restauré par switch_asm.s
+    pub kstack_ptr: u64,
+    /// [16] Priorité scheduler
+    pub priority: Priority,
+    /// [17] Politique scheduler
+    pub policy: SchedPolicy,
+    /// [18] Padding alignement
+    pub _pad0: [u8; 6],
     /// [24] AtomicU64 : état scheduler + flags. Le PID n'est PAS encodé ici.
-    pub sched_state:    u64,
+    pub sched_state: AtomicU64,
     /// [32] vruntime CFS (ns)
-    pub vruntime:       u64,
+    pub vruntime: AtomicU64,
     /// [40] deadline EDF absolue (ns depuis boot)
-    pub deadline_abs:   u64,
+    pub deadline_abs: AtomicU64,
     /// [48] Bitmask d'affinité CPU
-    pub cpu_affinity:   u64,
+    pub cpu_affinity: AtomicU64,
     /// [56] Adresse physique PML4 — LU PAR switch_asm.s
-    pub cr3_phys:       u64,
-    // ─── Cache Lines 2-3 [64..191] : GPRs ────────────────────────────
+    pub cr3_phys: u64,
+    // ─── Cache Line 2 [64..127] ──────────────────────────────────────
     /// [64] CPU courant (`AtomicU64`)
-    pub cpu_id:         u64,
+    pub cpu_id: AtomicU64,
     /// [72] MSR 0xC0000100 — FS.base (TLS userspace)
-    pub fs_base:        u64,
+    pub fs_base: u64,
     /// [80] MSR 0xC0000102 — valeur GS userspace restaurée au retour Ring 3
-    pub user_gs_base:   u64,
+    pub user_gs_base: u64,
     /// [88] Intel PKS (0 sur AMD/sans PKS)
-    pub pkrs:           u32,
+    pub pkrs: u32,
     /// [92] PID du processus propriétaire (champ direct)
-    pub pid:            u32,
+    pub pid: ProcessId,
     /// [96] Masque de signaux bloqués
-    pub signal_mask:    u64,
+    pub signal_mask: AtomicU64,
     /// [104] Budget EDF
-    pub dl_runtime:     u64,
+    pub dl_runtime: u64,
     /// [112] Période EDF
-    pub dl_period:      u64,
+    pub dl_period: u64,
     /// [120] Padding alignement
-    pub _pad_cl2:       [u8; 8],
-    // ─── Cache Line 4 [192..255] ──────────────────────────────────────
-    pub run_time_acc:   u64,   // [128]
-    pub switch_count:   u64,   // [136]
-    pub cold_reserve:   [u8; 88], // [144..231]
-    pub fpu_state_ptr:  u64,   // [232]
-    pub rq_next:        u64,   // [240]
-    pub rq_prev:        u64,   // [248]
-    pub cr2:            u64,   // [224] diagnostic #PF — JAMAIS restauré via MOV CR2
+    pub _pad2: [u8; 8],
+    // ─── Cache Lines 3-4 [128..255] ──────────────────────────────────
+    pub run_time_acc: u64,      // [128]
+    pub switch_count: u64,      // [136]
+    /// [144..231] extensions froides :
+    /// [144] shadow_stack_token, [152] cet_flags, [153] threat_score_u8,
+    /// [160] pt_buffer_phys, [168] creation_tsc, [176] kstack_top,
+    /// [192] pl0_ssp, [200]/[208]/[216] affinity_hi[0..2].
+    pub _cold_reserve: [u8; 88],
     /// [232] *mut XSaveArea — null si thread jamais utilisé FPU (Lazy FPU)
-    pub fpu_state_ptr:  u64,
+    pub fpu_state_ptr: u64,
     /// [240] RunQueue intrusive — null si thread BLOCKED
-    pub rq_next:        u64,
+    pub rq_next: u64,
     /// [248] RunQueue intrusive — null si thread BLOCKED
-    pub rq_prev:        u64,
+    pub rq_prev: u64,
 }
 
 // ─── ASSERTIONS COMPILE-TIME OBLIGATOIRES ────────────────────────────────
@@ -387,7 +391,8 @@ const _: () = assert!(core::mem::align_of::<ThreadControlBlock>() == 64);
 // Offsets utilisés dans switch_asm.s — DOIVENT correspondre à l'ASM
 const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, kstack_ptr)   == 8);
 const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, cr3_phys)     == 56);
-const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, rip)          == 192);
+const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, pid)          == 92);
+const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, _cold_reserve) == 144);
 const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, fpu_state_ptr) == 232);
 const _: () = assert!(core::mem::offset_of!(ThreadControlBlock, rq_next)      == 240);
 ```

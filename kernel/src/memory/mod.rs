@@ -74,8 +74,6 @@ pub use self::core::{
 };
 
 // Physical allocator — API d'allocation frames.
-// Note: alloc_zeroed_page n'existe pas dans physical — utiliser
-// alloc_page(AllocFlags::ZEROED) pour une frame zéro-initialisée.
 pub use physical::{alloc_page, alloc_pages, free_page, free_pages};
 
 // Heap — allocateur global (SLUB / vmalloc).
@@ -131,6 +129,11 @@ pub use utils::{
 /// `virt::address_space::kernel::KERNEL_AS.init(pml4_phys)` doit être
 /// appelé séparément par le code arch/ **après** que la PML4 de boot a
 /// été construite et que cette fonction a retourné.
+///
+/// # Note swap-in
+/// `virt::fault::swap_in::register_backend_swap_provider()` est appelé
+/// séparément par `arch/x86_64/boot/` après `KERNEL_AS.init()`, quand
+/// l'espace d'adressage kernel est publié.
 pub unsafe fn init(phys_start: PhysAddr, phys_end: PhysAddr, regions: &[(u64, u64)]) {
     // ── Phase 1 : allocateur physique ────────────────────────────────────────
     // Phase 1a — bitmap de démarrage (EmergencyPool activé en premier)
@@ -167,8 +170,13 @@ pub unsafe fn init(phys_start: PhysAddr, phys_end: PhysAddr, regions: &[(u64, u6
 
     // ── Phase 7 : utilitaires ────────────────────────────────────────────────
     utils::init();
-    virt::fault::swap_in::register_backend_swap_provider();
 
     // ── Phase 8 : NUMA ───────────────────────────────────────────────────────
     numa::init();
+}
+
+/// Alloue une page physique déjà remise à zéro.
+#[inline]
+pub fn alloc_zeroed_page() -> Result<Frame, AllocError> {
+    physical::alloc_page(AllocFlags::ZEROED)
 }

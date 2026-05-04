@@ -181,7 +181,7 @@ Ensuite, `kernel/src/lib.rs::kernel_init()` enchaîne les phases runtime suivant
 
 > **V7-C-02 — switch\_asm.s ne touche PAS la FPU** : avec le modèle Lazy FPU, le context switch positionne uniquement `CR0.TS = 1` (déclenche `#NM` au prochain accès FPU). Ni `MXCSR`, ni `FCW`, ni `xsave`/`xrstor` dans `switch_asm.s`. L'état FPU complet (MXCSR, FCW, registres x87/SSE/AVX…) est géré exclusivement par `fpu/lazy.rs` via `XSaveArea`.
 
-> **V7-C-03 — TSS.RSP0 mis à jour à chaque switch** : sur x86\_64, lorsqu'un thread Ring 3 reçoit une interruption matérielle ou effectue un syscall, le CPU charge la pile kernel depuis `TSS.RSP0` (champ du Task State Segment du cœur courant). Si `switch.rs` ne met pas à jour `TSS.RSP0` avec le `kstack_ptr` du **nouveau thread**, la prochaine entrée en Ring 0 empilera sur la pile du thread précédent → corruption immédiate.
+> **V7-C-03 — TSS.RSP0 mis à jour à chaque switch** : sur x86\_64, lorsqu'un thread Ring 3 reçoit une interruption matérielle ou effectue un syscall, le CPU charge la pile kernel depuis `TSS.RSP0` (champ du Task State Segment du cœur courant). Si `switch.rs` ne met pas à jour `TSS.RSP0` avec `next.kstack_top()` (sommet stable stocké dans `_cold_reserve[32..40]`) du **nouveau thread**, la prochaine entrée en Ring 0 empilera sur la pile du thread précédent → corruption immédiate.
 
 ```
 scheduler/
@@ -189,12 +189,15 @@ scheduler/
 │   ├── task.rs         TCB 256B v7 (inchangé depuis v6)
 │   ├── switch.rs       context_switch() — séquence v7 :
 │   │   //  1. Si fpu_loaded(prev) → xsave64(prev.fpu_state_ptr)
-│   │   //  2. prev.set_state(Runnable)
-│   │   //  3. context_switch_asm(prev.kstack_ptr, next.kstack_ptr, next.cr3_phys)
-│   │   //  4. next.set_state(Running)
-│   │   //  5. set_cr0_ts()   ← CR0.TS=1 (Lazy FPU — V7-C-02)
-│   │   //  6. tss_set_rsp0(current_cpu(), next.kstack_ptr)  ← V7-C-03 OBLIGATOIRE
-│   ├── preempt.rs      MAX_CPUS=64 ⚠️ (cible 256 — Phase 0)
+│   │   //  2. set_cr0_ts()   ← CR0.TS=1 avant l'ASM (Lazy FPU — V7-C-02)
+│   │   //  3. sauver PKRS/CET/FS/GS côté prev
+│   │   //  4. prev.set_state(Runnable)
+│   │   //  5. context_switch_asm(&prev.kstack_ptr, next.kstack_ptr, next.cr3_phys)
+│   │   //  6. restaurer PKRS/CET côté next
+│   │   //  7. next.set_state(Running)
+│   │   //  8. tss_set_rsp0(current_cpu(), next.kstack_top())  ← V7-C-03 OBLIGATOIRE
+│   │   //  9. restaurer FS.base/user_gs_base côté next
+│   ├── preempt.rs      MAX_CPUS=256
 │   ├── runqueue.rs     intrusive via rq_next/rq_prev [240/248]
 │   │   // rq_next/rq_prev = null quand BLOCKED
 │   │   // WaitNode = structure séparée EmergencyPool
@@ -260,7 +263,7 @@ context_switch_asm:          // (prev_kstack_ptr*, next_kstack, next_cr3)
 | Champ | Offset | Taille | Rôle |
 |-------|--------|--------|------|
 | `tid` | [0] | 8 B | Thread ID — hot path IPC/syslog/debug |
-| `kstack_ptr` | [8] | 8 B | RSP Ring 0 — source de vérité pour `TSS.RSP0` (V7-C-03) **HARDCODÉ switch_asm.s** |
+| `kstack_ptr` | [8] | 8 B | RSP sauvegardé/restauré par `switch_asm.s` **HARDCODÉ switch_asm.s** |
 | `priority` | [16] | 1 B | Priorité scheduler |
 | `policy` | [17] | 1 B | Politique CFS/RT/EDF/IDLE |
 | `_pad0` | [18] | 6 B | Alignement |
@@ -271,7 +274,7 @@ context_switch_asm:          // (prev_kstack_ptr*, next_kstack, next_cr3)
 | `cr3_phys` | [56] | 8 B | Adresse physique PML4 — **HARDCODÉ switch_asm.s** |
 | `cpu_id` | [64] | 8 B | CPU courant (`AtomicU64`) |
 | `fs_base` | [72] | 8 B | MSR `0xC0000100` — TLS userspace (CORR-11) |
-| `gs_base` | [80] | 8 B | MSR `0xC0000102` — GS userspace sauvegardé (CORR-11) |
+| `user_gs_base` | [80] | 8 B | MSR `0xC0000102` — GS userspace sauvegardé (CORR-11) |
 | `pkrs` | [88] | 4 B | Intel PKS 32b |
 | `pid` | [92] | 4 B | ProcessId (compat PCB) |
 | `signal_mask` | [96] | 8 B | Bitmask signaux bloqués |
@@ -280,12 +283,13 @@ context_switch_asm:          // (prev_kstack_ptr*, next_kstack, next_cr3)
 | `_pad2` | [120] | 8 B | Alignement |
 | `run_time_acc` | [128] | 8 B | Temps CPU cumulé (ns) |
 | `switch_count` | [136] | 8 B | Nombre de context switches |
-| `_cold_reserve` | [144] | 88 B | Réservé extensions futures (144+88=232) |
+| `_cold_reserve` | [144] | 88 B | Extensions froides : shadow token, CET, audit, `kstack_top`, affinité haute CPU (144+88=232) |
 | `fpu_state_ptr` | [232] | 8 B | `*mut XSaveArea` — null si FPU jamais utilisée **HARDCODÉ ExoPhoenix** |
 | `rq_next` | [240] | 8 B | RunQueue intrusive — null si BLOCKED |
 | `rq_prev` | [248] | 8 B | RunQueue intrusive — null si BLOCKED |
 
 > **Offsets hardcodés immuables** : `[8]` kstack\_ptr, `[56]` cr3\_phys, `[232]` fpu\_state\_ptr, `[240]` rq\_next, `[248]` rq\_prev  
+> **Sous-champs `_cold_reserve`** : `[144] shadow_stack_token`, `[152] cet_flags`, `[153] threat_score_u8`, `[160] pt_buffer_phys`, `[168] creation_tsc`, `[176] kstack_top`, `[192] pl0_ssp`, `[200]/[208]/[216] affinity_hi[0..2]`.
 > **GPRs** : sur kstack uniquement (précédent Linux `pt_regs`). ExoPhoenix les lit via protocole kstack depuis `tcb.kstack_ptr`. Voir CORR-01 §4.  
 > **cap\_table\_ptr** : dans `ProcessControlBlock` (partagé entre threads). Kernel B accède au PCB, pas au TCB individuel.
 
@@ -304,16 +308,16 @@ process/exec.rs  — do_exec() séquence v7 :
   1. verify_cap(EXEC) + is_valid(object_id) + ObjectKind != Secret
   2. mask_all_signals_manual()
      // Masque tous les signaux sans RAII restaurateur
-  2.5 signal_queue.flush_all_except_sigkill()
+  3. signal_queue.flush_all_except_sigkill()
      // [ExoOS-spécifique] Flush pending signals — comportement défini, pas POSIX strict
-  3. reset_signal_handlers_to_sdf()
+  4. reset_signal_handlers_to_sdf()
      // Réinitialise handlers → SIG_DFL (AVANT reset du mask)
-  4. load_elf(object_id)
-  5. reset_tcb_context()
+  5. load_elf(object_id)
+  6. reset_tcb_context()
      // fs_base, user_gs_base, cr3_phys (nouveau PML4)
      tcb.signal_mask = CALLER_SIGNAL_MASK   // hérité (POSIX) ← V6-C-03
-  6. tss_set_rsp0(cpu, tcb.kstack_ptr)      // ← V7-C-03 : mettre à jour TSS.RSP0
-  7. return_to_new_userspace()
+  7. tss_set_rsp0(cpu, tcb.kstack_top())    // ← V7-C-03 : mettre à jour TSS.RSP0
+  8. return_to_new_userspace()
 ```
 
 ```
@@ -509,7 +513,7 @@ src/
 └── protocol.rs       Start, Stop, Status, Restart, ChildDied, PrepareIsolation, Ack
 ```
 
-### 6.4 servers/vfs\_server/ — PID 3
+### 6.4 servers/vfs\_server/ — PID dynamique
 
 ```
 src/
@@ -535,7 +539,7 @@ src/
 └── protocol.rs     Alloc, Free, MapShared, Protect, PrepareIsolation, Ack
 ```
 
-### 6.6 servers/crypto\_server/ — PID 4
+### 6.6 servers/crypto\_server/ — PID dynamique
 
 ```
 src/
@@ -767,7 +771,7 @@ pub struct BootInfo {
 | S-42 | `XSaveArea` size = CPUID leaf 0Dh sub-leaf 0 | `scheduler/fpu/` | ✅ SPÉCIFIÉ v6 |
 | S-43 | `exec()` : signal mask hérité du processus appelant | `process/exec.rs` | ✅ CORRIGÉ v6 |
 | **S-44** | `switch_asm.s` : PAS de MXCSR/FCW — Lazy FPU, seul CR0.TS=1 | `scheduler/asm/switch_asm.s` | ✅ CORRIGÉ **v7** |
-| **S-45** | `context_switch()` : `tss_set_rsp0(cpu, next.kstack_ptr)` obligatoire | `scheduler/core/switch.rs` | ✅ CORRIGÉ **v7** |
+| **S-45** | `context_switch()` : `tss_set_rsp0(cpu, next.kstack_top())` obligatoire | `scheduler/core/switch.rs` | ✅ CORRIGÉ **v7** |
 
 ---
 
@@ -784,7 +788,7 @@ pub struct BootInfo {
 - Nonces XChaCha20 : `NONCE_COUNTER` + HKDF (LAC-04)
 - `key_storage.rs` Argon2id OWASP (LAC-06)
 - `SECURITY_READY` spin-wait ASM sur APs (CVE-EXO-001 / S-04)
-- Implémenter `context_switch()` v7 : `tss_set_rsp0()` + `CR0.TS=1` (S-44/S-45)
+- Implémenter `context_switch()` v7 : `CR0.TS=1` avant l'ASM + `tss_set_rsp0(next.kstack_top())` après switch (S-44/S-45)
 - Implémenter `switch_asm.s` v7 : CR3 + 15 GPRs, sans MXCSR/FCW (S-44)
 - Implémenter `exec()` v7 : signal mask hérité + `tss_set_rsp0()` (S-43/S-45)
 - Mapper `BootInfo` en VMA de `init_server` avant lancement (V7-C-01)

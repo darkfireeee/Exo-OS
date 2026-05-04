@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 // Architecture :
-//   Le scheduler/core/task.rs définit `ThreadControlBlock` (128 bytes, hot path).
+//   Le scheduler/core/task.rs définit `ThreadControlBlock` (256 bytes, hot path).
 //   Ce fichier définit `ProcessThread` qui ENVELOPPE le TCB scheduler et ajoute
 //   les données niveau process (adresse de stack, TLS, signaux...) sans toucher
 //   aux 128 bytes du TCB scheduler.
@@ -89,9 +89,11 @@ impl ThreadAddress {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Stack kernel alloué dynamiquement pour un thread.
-/// La page la plus basse est une guard page (à mapper NX + non-present = trap overflow).
+///
+/// Le backend heap actuel pose un canari au bas du buffer. Une vraie guard page
+/// non-présente sera activée quand l'allocation de stacks passera par VMM.
 pub struct KernelStack {
-    /// Pointeur vers la mémoire allouée (bas du buffer, y compris garde).
+    /// Pointeur vers la mémoire allouée (bas du buffer).
     base: *mut u8,
     /// Taille totale en bytes.
     size: usize,

@@ -10,8 +10,8 @@
 // sur le même pair de comunicants.
 //
 // ALGORITHME :
-//   • Producteur : lit tail, accède cell[tail % N], écrit données, avance tail.
-//   • Consommateur : lit head, accède cell[head % N], lit données, avance head.
+//   • Producteur : lit head, accède cell[head % N], écrit données, avance head.
+//   • Consommateur : lit tail, accède cell[tail % N], lit données, avance tail.
 //   • Tail et Head sont sur des cache lines séparées (false-sharing éliminé).
 //   • Séquences dans chaque slot évitent d'avoir besoin d'un lock global.
 //

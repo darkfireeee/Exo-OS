@@ -21,7 +21,7 @@
 use crate::ipc::core::constants::MAX_ENDPOINTS;
 use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::scheduler::sync::spinlock::SpinLock;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hash FNV-1a 64 bits
@@ -283,6 +283,23 @@ impl NamedEndpointRegistry {
 
 /// Registre global des endpoints.
 pub static ENDPOINT_REGISTRY: NamedEndpointRegistry = NamedEndpointRegistry::new();
+static ENDPOINT_REGISTRY_READY: AtomicBool = AtomicBool::new(false);
+
+/// Initialise explicitement le registre global d'endpoints.
+///
+/// Le registre est alloué statiquement; cette fonction publie l'état prêt depuis
+/// `ipc_init()` pour éviter toute initialisation implicite dans un contexte IPC.
+///
+/// # Safety
+/// Appelé une seule fois au boot, avant tout endpoint_create()/lookup().
+pub unsafe fn init_endpoint_registry() {
+    ENDPOINT_REGISTRY_READY.store(true, Ordering::Release);
+}
+
+#[inline]
+pub fn endpoint_registry_initialized() -> bool {
+    ENDPOINT_REGISTRY_READY.load(Ordering::Acquire)
+}
 
 /// Enregistre un endpoint dans le registre global.
 pub fn register_endpoint(name: &[u8], ep_id: EndpointId) -> Result<(), IpcError> {

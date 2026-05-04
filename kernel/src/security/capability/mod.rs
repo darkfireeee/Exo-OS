@@ -349,6 +349,8 @@ pub fn capset(_hdrp: u64, _datap: u64) -> Result<(), KernelCapError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::core::pid::Pid;
+    use crate::security::ipc_policy::{register_service_class, unregister_service, ServiceClass};
 
     static INIT: std::sync::Once = std::sync::Once::new();
 
@@ -356,41 +358,65 @@ mod tests {
         INIT.call_once(init_capability_subsystem);
     }
 
+    fn register_test_service(pid: u32, class: ServiceClass) {
+        let pid = Pid(pid);
+        let _ = unregister_service(pid);
+        assert!(register_service_class(pid, class));
+    }
+
+    fn unregister_test_service(pid: u32) {
+        let _ = unregister_service(Pid(pid));
+    }
+
     #[test]
     fn service_token_roundtrip_for_allowed_route() {
         ensure_capability_init();
+        const CRYPTO_PID: u32 = 1101;
+        const EXO_SHIELD_PID: u32 = 1102;
+
+        register_test_service(CRYPTO_PID, ServiceClass::CryptoServer);
+        register_test_service(EXO_SHIELD_PID, ServiceClass::ExoShield);
 
         let token = create(
             CapObjectType::IpcEndpoint as u32,
             Rights::IPC_SEND.bits(),
-            4,
-            10,
+            CRYPTO_PID,
+            EXO_SHIELD_PID,
         )
         .expect("exo_shield -> crypto_server token");
 
         let verified = check_token(
             token,
             Rights::IPC_SEND.bits(),
-            4,
+            CRYPTO_PID,
             CapObjectType::IpcEndpoint as u32,
         )
         .expect("token accepted");
 
         assert_eq!(verified, token.object_id());
         let _ = revoke_handle(token.object_id().as_u64() as u32);
+        unregister_test_service(CRYPTO_PID);
+        unregister_test_service(EXO_SHIELD_PID);
     }
 
     #[test]
     fn service_token_creation_respects_ipc_policy() {
         ensure_capability_init();
+        const CRYPTO_PID: u32 = 1111;
+        const NETWORK_PID: u32 = 1112;
+
+        register_test_service(CRYPTO_PID, ServiceClass::CryptoServer);
+        register_test_service(NETWORK_PID, ServiceClass::NetworkServer);
 
         let result = create(
             CapObjectType::IpcEndpoint as u32,
             Rights::IPC_SEND.bits(),
-            4,
-            7,
+            NETWORK_PID,
+            CRYPTO_PID,
         );
 
         assert_eq!(result, Err(KernelCapError::PermissionDenied));
+        unregister_test_service(CRYPTO_PID);
+        unregister_test_service(NETWORK_PID);
     }
 }

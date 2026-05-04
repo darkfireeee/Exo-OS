@@ -167,10 +167,15 @@ pub fn ipc_init(shm_base_phys: u64, n_numa_nodes: u32) {
     // 3. Enregistrer les stats IPC (reset compteurs)
     stats::counters::IPC_STATS.reset_all();
 
-    // 4. Connecter le provider SHM inverse vers memory::virtual.
+    // 4. Publier le registre d'endpoints, statique mais initialisé explicitement.
+    unsafe {
+        endpoint::registry::init_endpoint_registry();
+    }
+
+    // 5. Connecter le provider SHM inverse vers memory::virtual.
     shared_memory::memory_bridge::register_with_memory();
 
-    // 5. Log minimal d'initialisation (au niveau du kernel)
+    // 6. Log minimal d'initialisation (au niveau du kernel)
     // Note : on ne peut pas utiliser log!/println! ici (no_std), mais un hook
     // d'initialisation peut être fourni par l'arch layer via les callbacks.
     IPC_INIT_STATE.fetch_or(IPC_INIT_DONE, Ordering::Release);

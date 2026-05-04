@@ -13,6 +13,15 @@ use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::scheduler::core::task::ThreadControlBlock;
 use core::sync::atomic::Ordering;
 
+/// Signaux supportés par le masque `AtomicU64` du TCB.
+///
+/// Le bit 0 reste réservé au signal invalide 0; les signaux standards occupent
+/// 1..31 et les signaux temps réel 32..63 inclus. Un hypothétique signal 64 ne
+/// peut pas être représenté sans élargir le masque.
+pub const MAX_SIGNAL_NUMBER: u8 = 63;
+pub const RT_SIGNAL_MIN: u8 = 32;
+pub const RT_SIGNAL_MAX: u8 = MAX_SIGNAL_NUMBER;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Erreurs
 // ─────────────────────────────────────────────────────────────────────────────
@@ -42,7 +51,7 @@ pub enum SendError {
 /// 4. Démande une préemption via raise_signal_pending().
 pub fn send_signal_to_pid(pid: Pid, sig: Signal) -> Result<(), SendError> {
     let sig_n = sig.number();
-    if sig_n == 0 || sig_n > 63 {
+    if sig_n == 0 || sig_n > MAX_SIGNAL_NUMBER {
         return Err(SendError::InvalidSignal);
     }
     let pcb = PROCESS_REGISTRY
@@ -66,7 +75,7 @@ pub fn send_signal_to_pid(pid: Pid, sig: Signal) -> Result<(), SendError> {
     let thread = unsafe { &*thread_ptr };
 
     // Mettre le signal en file.
-    if sig_n < 32 {
+    if sig_n < RT_SIGNAL_MIN {
         thread.sig_queue.enqueue(sig_n);
     } else {
         let info = SigInfo::kernel(sig_n);
@@ -85,10 +94,10 @@ pub fn send_signal_to_tcb(
     sig: u8,
     info: SigInfo,
 ) {
-    if sig == 0 || sig > 63 {
+    if sig == 0 || sig > MAX_SIGNAL_NUMBER {
         return;
     }
-    if sig < 32 {
+    if sig < RT_SIGNAL_MIN {
         thread.sig_queue.enqueue(sig);
     } else {
         thread.rt_sig_queue.enqueue(sig, info);
