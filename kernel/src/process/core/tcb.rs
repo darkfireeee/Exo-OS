@@ -22,8 +22,28 @@ use crate::process::signal::queue::{RTSigQueue, SigQueue};
 use crate::scheduler::core::task::{
     Priority, ProcessId, SchedPolicy, TaskState, ThreadControlBlock, ThreadId,
 };
+use alloc::alloc::{alloc, Layout};
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+
+fn try_box_new<T>(value: T) -> Option<Box<T>> {
+    let layout = Layout::new::<T>();
+    if layout.size() == 0 {
+        return None;
+    }
+
+    // SAFETY: `layout` matches T. A null allocation is converted to None, and
+    // a successful allocation is immediately initialized and owned by Box.
+    let raw = unsafe { alloc(layout) as *mut T };
+    if raw.is_null() {
+        return None;
+    }
+    // SAFETY: `raw` is uniquely owned and valid for writes of T.
+    unsafe {
+        raw.write(value);
+        Some(Box::from_raw(raw))
+    }
+}
 
 /// Taille du stack kernel par thread (4 pages × 4096 = 16 384 bytes).
 pub const KSTACK_SIZE: usize = 16 * 1024;
@@ -215,14 +235,14 @@ impl ProcessThread {
         let kstack = KernelStack::alloc(KSTACK_SIZE)?;
         let stack_top = kstack.top_addr();
 
-        let mut sched_tcb = Box::new(ThreadControlBlock::new(
+        let mut sched_tcb = try_box_new(ThreadControlBlock::new(
             ThreadId(tid.0 as u64),
             ProcessId(pid.0),
             policy,
             prio,
             cr3,
             stack_top,
-        ));
+        ))?;
 
         if crate::security::is_cet_global_enabled() {
             unsafe {
@@ -230,7 +250,7 @@ impl ProcessThread {
             }
         }
 
-        let thread = Box::new(Self {
+        let thread = try_box_new(Self {
             sched_tcb,
             kernel_stack: kstack,
             pid,
@@ -244,7 +264,7 @@ impl ProcessThread {
             join_result: AtomicU64::new(0),
             sig_queue: SigQueue::new(),
             rt_sig_queue: RTSigQueue::new(),
-        });
+        })?;
 
         Some(thread)
     }

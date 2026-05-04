@@ -13,6 +13,7 @@ use crate::arch::x86_64::apic::io_apic;
 use crate::arch::x86_64::apic::local_apic;
 use crate::drivers::device_server_ipc;
 use crate::ipc;
+use crate::process::core::pcb::ProcessState;
 use crate::process::core::pid::Pid;
 use crate::process::PROCESS_REGISTRY;
 use crate::scheduler::timer::clock::monotonic_ns;
@@ -42,7 +43,9 @@ pub fn irq_error_to_errno(err: IrqError) -> i64 {
 }
 
 fn process_is_alive(pid: u32) -> bool {
-    PROCESS_REGISTRY.find_by_pid(Pid(pid)).is_some()
+    PROCESS_REGISTRY.find_by_pid(Pid(pid)).is_some_and(|pcb| {
+        !pcb.is_exiting() && !matches!(pcb.state(), ProcessState::Zombie | ProcessState::Dead)
+    })
 }
 
 pub fn sys_irq_register_syscall(
@@ -189,6 +192,9 @@ fn sys_irq_register_common(
 
     {
         let mut handlers = route.handlers.write();
+        if handlers.try_reserve(1).is_err() {
+            return Err(IrqError::HandlerLimitReached);
+        }
         handlers.push(new_handler);
 
         if handlers.len() == 1 {

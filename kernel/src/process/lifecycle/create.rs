@@ -152,7 +152,7 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
     let thread_ptr = Box::into_raw(thread);
 
     // 3. Créer le PCB.
-    let pcb = ProcessControlBlock::new(
+    let pcb = ProcessControlBlock::try_new(
         pid,
         params.ppid,
         pid, // tgid = pid pour le thread principal
@@ -161,7 +161,17 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
         params.fd_limit,
         params.cr3,
         params.addr_space,
-    );
+    )
+    .ok_or_else(|| {
+        // SAFETY: thread_ptr a été créé par Box::into_raw juste au-dessus.
+        unsafe {
+            drop(Box::from_raw(thread_ptr));
+        }
+        PID_ALLOCATOR.free(pid_raw);
+        TID_ALLOCATOR.free(tid_raw);
+        CreateError::OutOfMemory
+    })?;
+    pcb.set_main_thread_ptr(thread_ptr);
 
     // 4. Insérer dans la registry.
     PROCESS_REGISTRY.insert(pcb).map_err(|_| {

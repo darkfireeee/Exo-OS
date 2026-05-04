@@ -1,21 +1,22 @@
 // kernel/src/process/thread/local_storage.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// TLS (Thread Local Storage) — gestion du segment GS pour x86_64
+// TLS (Thread Local Storage) — gestion du segment FS pour x86_64
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 // Architecture x86_64 :
-//   Le segment GS est utilisé pour les données TLS.
-//   GS.base (MSR_GS_BASE = 0xC0000101) = adresse du bloc TLS statique.
-//   SWAPGS bascule entre le GS kernel (ptr CPU state) et le GS userspace (TLS).
+//   Le segment FS est utilisé pour les données TLS utilisateur.
+//   FS.base (MSR_FS_BASE = 0xC0000100) = adresse du bloc TLS statique.
+//   SWAPGS ne touche que GS : le scheduler conserve user_gs_base séparément.
 //
 // Implémentation simplifiée :
 //   • TlsBlock : copie du .tdata/.tbss initialisé par execve() puis copié par clone().
-//   • set_gs_base() : écrit ARCH_SET_GS via wrmsrl(MSR_FS_BASE, addr).
+//   • set_fs_base() : écrit ARCH_SET_FS via wrmsrl(MSR_FS_BASE, addr).
 //   • TLS dynamique (dlopen / __tls_get_addr) : hors scope noyau.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -55,9 +56,12 @@ impl TlsBlock {
         if total == 0 || total > TLS_MAX_SIZE {
             return None;
         }
-        let mut data = alloc::vec![0u8; total].into_boxed_slice();
+        let mut data = Vec::new();
+        data.try_reserve_exact(total).ok()?;
+        data.resize(total, 0);
         data[..tdata.len()].copy_from_slice(tdata);
-        // tbss est déjà zéro par alloc::vec!
+        let data = data.into_boxed_slice();
+        // tbss est déjà zéro-initialisé par resize().
         Some(Self {
             data,
             tdata_size: tdata.len(),
@@ -91,7 +95,10 @@ impl TlsBlock {
 
     /// Clone le bloc TLS pour un nouveau thread (fork ou pthread_create).
     pub fn clone_for_thread(&self, new_user_base: u64) -> Option<Self> {
-        let data = self.data.to_vec().into_boxed_slice();
+        let mut data = Vec::new();
+        data.try_reserve_exact(self.data.len()).ok()?;
+        data.extend_from_slice(&self.data);
+        let data = data.into_boxed_slice();
         Some(Self {
             data,
             tdata_size: self.tdata_size,

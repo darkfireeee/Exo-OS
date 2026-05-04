@@ -143,6 +143,15 @@ impl TlbShootdownEntry {
     }
 }
 
+#[inline]
+fn coalesce_flush_type(a: TlbFlushType, b: TlbFlushType) -> TlbFlushType {
+    if a == b {
+        a
+    } else {
+        TlbFlushType::Global
+    }
+}
+
 impl TlbShootdownQueue {
     pub const fn new() -> Self {
         TlbShootdownQueue {
@@ -162,18 +171,27 @@ impl TlbShootdownQueue {
     pub unsafe fn request(&self, flush_type: TlbFlushType, cpu_mask: u64) {
         {
             let mut inner = self.inner.lock();
-            let tail = inner.tail;
-            let next = (tail + 1) % 8;
-            if next != inner.head {
-                inner.requests[tail] = TlbShootdownEntry {
-                    active: true,
-                    flush_type,
-                    cpu_mask,
-                    completed: 0,
-                };
-                inner.tail = next;
-                self.pending.fetch_add(1, Ordering::Release);
-            }
+            let slot = &mut inner.requests[0];
+            let merged_flush = if slot.active {
+                coalesce_flush_type(slot.flush_type, flush_type)
+            } else {
+                flush_type
+            };
+            let merged_mask = if slot.active {
+                slot.cpu_mask | cpu_mask
+            } else {
+                cpu_mask
+            };
+
+            *slot = TlbShootdownEntry {
+                active: true,
+                flush_type: merged_flush,
+                cpu_mask: merged_mask,
+                completed: 0,
+            };
+            inner.head = 0;
+            inner.tail = 1;
+            self.pending.store(1, Ordering::Release);
         }
         // Envoyer l'IPI (le vecteur sera configuré par le sous-système APIC).
         // Pour ne pas créer de dépendance circulaire Couche 0, l'IPI est envoyé

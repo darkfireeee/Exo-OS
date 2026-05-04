@@ -52,11 +52,10 @@ fn mark_exit(
     pcb.flags
         .fetch_or(process_flags::VFORK_DONE, Ordering::Release);
 
-    let closed_handles = {
+    {
         let mut files = pcb.files.lock();
-        files.close_all()
-    };
-    drop(closed_handles);
+        files.close_all_noalloc();
+    }
     close_all_pid_vfs(pcb.pid.0);
     drivers::driver_do_exit(pcb.pid.0);
 
@@ -69,11 +68,12 @@ fn mark_exit(
 
     let remaining_threads = pcb.dec_threads();
     if remaining_threads == 0 {
-        pcb.set_state(ProcessState::Zombie);
         let ppid = pcb.ppid();
         if ppid.0 != 0 {
             let _ = send_signal_to_pid(ppid, Signal::SIGCHLD);
         }
+        pcb.set_state(ProcessState::Zombie);
+        crate::process::lifecycle::wait::wake_waiting_parents(pcb.pid, ppid);
         crate::process::lifecycle::fork::notify_vfork_completion(pcb.pid);
     }
 

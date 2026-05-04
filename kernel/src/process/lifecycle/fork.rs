@@ -122,6 +122,15 @@ pub enum ForkError {
     InvalidCpu,
 }
 
+#[inline]
+fn rollback_child_allocations(cloned_as: &ClonedAddressSpace, pid_raw: u32, tid_raw: u32) {
+    if let Some(cl) = ADDR_SPACE_CLONER.get() {
+        cl.free_addr_space(cloned_as.addr_space_ptr);
+    }
+    PID_ALLOCATOR.free(pid_raw);
+    TID_ALLOCATOR.free(tid_raw);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // do_fork — implémentation principale
 // ─────────────────────────────────────────────────────────────────────────────
@@ -209,8 +218,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
 
     let child_thread = ProcessThread::new(child_tid, child_pid, cloned_as.cr3, policy, priority)
         .ok_or_else(|| {
-            PID_ALLOCATOR.free(child_pid_raw);
-            TID_ALLOCATOR.free(child_tid_raw);
+            rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw);
             ForkError::OutOfMemory
         })?;
 
@@ -280,29 +288,51 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
 
     // 4. Créer le PCB fils — hérite des namespaces, credentials, etc.
     let parent_creds = parent_pcb.creds.lock().clone();
+    let (fd_limit, cloned_files) = {
+        let f = parent_pcb.files.lock();
+        let fd_limit = f.open_fd_count().max(1024);
+        let cloned_files = if !ctx.flags.has(ForkFlags::CLONE_FILES) {
+            match f.try_clone_for_fork() {
+                Some(files) => Some(files),
+                None => {
+                    // SAFETY: child_thread_ptr provient de Box::into_raw et n'est pas publié.
+                    unsafe {
+                        drop(Box::from_raw(child_thread_ptr));
+                    }
+                    rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw);
+                    return Err(ForkError::OutOfMemory);
+                }
+            }
+        } else {
+            None
+        };
+        (fd_limit, cloned_files)
+    };
 
-    let mut child_pcb = ProcessControlBlock::new(
+    let mut child_pcb = ProcessControlBlock::try_new(
         child_pid,
         parent_pcb.pid, // ppid = parent pid
         child_pid,      // tgid = child pid (nouveau process group leader thread)
         ThreadId(child_tid_raw as u64),
         parent_creds,
-        {
-            let f = parent_pcb.files.lock();
-            f.open_fd_count().max(1024)
-        },
+        fd_limit,
         cloned_as.cr3,
         cloned_as.addr_space_ptr,
-    );
+    )
+    .ok_or_else(|| {
+        // SAFETY: child_thread_ptr provient de Box::into_raw et n'est pas publié.
+        unsafe {
+            drop(Box::from_raw(child_thread_ptr));
+        }
+        rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw);
+        ForkError::OutOfMemory
+    })?;
 
     // Copier les fds si !CLONE_FILES.
-    if !ctx.flags.has(ForkFlags::CLONE_FILES) {
-        let cloned_files = {
-            let f = parent_pcb.files.lock();
-            f.clone_for_fork()
-        };
+    if let Some(cloned_files) = cloned_files {
         *child_pcb.files.lock() = cloned_files;
     }
+    child_pcb.set_main_thread_ptr(child_thread_ptr);
 
     // Copier les namespaces.
     child_pcb.pid_ns.clone_from(&parent_pcb.pid_ns);
@@ -333,12 +363,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         unsafe {
             drop(Box::from_raw(child_thread_ptr));
         }
-        // CORRECTION P0-01 : libérer l'espace d'adressage cloné pour éviter la fuite mémoire
-        if let Some(cl) = ADDR_SPACE_CLONER.get() {
-            cl.free_addr_space(cloned_as.addr_space_ptr);
-        }
-        PID_ALLOCATOR.free(child_pid_raw);
-        TID_ALLOCATOR.free(child_tid_raw);
+        rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw);
         ForkError::RegistryError
     })?;
 
@@ -351,12 +376,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
             unsafe {
                 drop(Box::from_raw(child_thread_ptr));
             }
-            // CORRECTION P0-01 : libérer l'espace d'adressage cloné pour éviter la fuite mémoire
-            if let Some(cl) = ADDR_SPACE_CLONER.get() {
-                cl.free_addr_space(cloned_as.addr_space_ptr);
-            }
-            PID_ALLOCATOR.free(child_pid_raw);
-            TID_ALLOCATOR.free(child_tid_raw);
+            rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw);
             return Err(ForkError::InvalidCpu);
         }
         // SAFETY: cpu vérifié, child_thread_ptr valide.

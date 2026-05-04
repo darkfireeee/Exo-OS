@@ -85,6 +85,10 @@ pub enum ExecError {
     NameTooLong,
     /// Processus déjà en train de quitter.
     ProcessExiting,
+    /// Exec multi-thread refusé tant que THREAD-06 n'a pas tué les autres threads.
+    ThreadGroupNotSingle,
+    /// Allocation noyau échouée après le chargement ELF.
+    OutOfMemory,
     /// Aucun ElfLoader enregistré.
     NoLoader,
 }
@@ -150,6 +154,9 @@ pub fn do_execve(
     if pcb.is_exiting() {
         return Err(ExecError::ProcessExiting);
     }
+    if pcb.thread_count.load(Ordering::Acquire) != 1 {
+        return Err(ExecError::ThreadGroupNotSingle);
+    }
 
     // Valider la longueur du chemin et des arguments.
     if path.len() > 4096 {
@@ -201,6 +208,20 @@ pub fn do_execve(
     let closed_handles = {
         let mut files = pcb.files.lock();
         files.close_on_exec()
+    };
+    let closed_handles = match closed_handles {
+        Ok(handles) => handles,
+        Err(()) => {
+            thread
+                .sched_tcb
+                .signal_mask
+                .store(saved_signal_mask, Ordering::Release);
+            if elf_result.addr_space_ptr != 0 && elf_result.addr_space_ptr != old_as_ptr {
+                crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER
+                    .free_addr_space(elf_result.addr_space_ptr);
+            }
+            return Err(ExecError::OutOfMemory);
+        }
     };
     // Notifier fs/ de la fermeture (via handle opaque — pas d'import fs/).
     // NOTE: les handles sont simplement abandonnés ; fs/ les collectera via

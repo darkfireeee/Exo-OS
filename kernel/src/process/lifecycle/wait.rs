@@ -12,8 +12,9 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::process::core::pcb::ProcessState;
-use crate::process::core::pid::Pid;
+use crate::process::core::pid::{Pid, PID_ALLOCATOR};
 use crate::process::core::registry::PROCESS_REGISTRY;
+use crate::process::lifecycle::fork::AddressSpaceCloner;
 use core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -145,7 +146,7 @@ pub fn do_waitpid(
     caller_tcb: &crate::scheduler::core::task::ThreadControlBlock,
 ) -> Result<WaitResult, WaitError> {
     // Scan rapide : chercher un fils déjà Zombie dans la registry.
-    let result = scan_zombie_children(caller_pid, wait_pid, opts);
+    let result = reap_zombie_child(caller_pid, wait_pid, opts);
     if let Some(r) = result {
         return Ok(r);
     }
@@ -172,7 +173,7 @@ pub fn do_waitpid(
             WAIT_TABLE.wait_interruptible(caller_tcb as *const _ as *mut _);
         }
         // Réessàyer.
-        if let Some(r) = scan_zombie_children(caller_pid, wait_pid, opts) {
+        if let Some(r) = reap_zombie_child(caller_pid, wait_pid, opts) {
             return Ok(r);
         }
         if !has_children(caller_pid) {
@@ -187,10 +188,45 @@ pub fn wake_waiting_parents(child_pid: Pid, parent_pid: Pid) {
     WAIT_TABLE.notify_all();
 }
 
+#[derive(Clone, Copy)]
+struct ZombieCandidate {
+    pid: Pid,
+    code: u32,
+}
+
+fn reap_zombie_child(parent_pid: Pid, wait_pid: i32, opts: WaitOptions) -> Option<WaitResult> {
+    let candidate = scan_zombie_children(parent_pid, wait_pid, opts)?;
+    let pcb_box = PROCESS_REGISTRY.remove(candidate.pid).ok()?;
+
+    if pcb_box.ppid() != parent_pid || pcb_box.state() != ProcessState::Zombie {
+        let _ = PROCESS_REGISTRY.insert(pcb_box);
+        return None;
+    }
+
+    let addr_space_ptr = pcb_box.address_space.load(Ordering::Acquire);
+    {
+        let mut files = pcb_box.files.lock();
+        files.close_all_noalloc();
+    }
+    pcb_box.set_state(ProcessState::Dead);
+    drop(pcb_box);
+
+    if addr_space_ptr != 0 {
+        crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER
+            .free_addr_space(addr_space_ptr);
+    }
+    PID_ALLOCATOR.free(candidate.pid.0);
+    Some(WaitResult::exited(candidate.pid, candidate.code as u8))
+}
+
 /// Scanne la registry pour trouver un fils Zombie du parent.
-fn scan_zombie_children(parent_pid: Pid, wait_pid: i32, _opts: WaitOptions) -> Option<WaitResult> {
+fn scan_zombie_children(
+    parent_pid: Pid,
+    wait_pid: i32,
+    _opts: WaitOptions,
+) -> Option<ZombieCandidate> {
     let any_child = wait_pid < 0 || wait_pid == 0;
-    let mut found: Option<WaitResult> = None;
+    let mut found: Option<ZombieCandidate> = None;
 
     PROCESS_REGISTRY.for_each(|pcb| {
         if found.is_some() {
@@ -205,7 +241,7 @@ fn scan_zombie_children(parent_pid: Pid, wait_pid: i32, _opts: WaitOptions) -> O
         }
         if pcb.state() == ProcessState::Zombie {
             let code = pcb.exit_code.load(Ordering::Acquire);
-            found = Some(WaitResult::exited(pcb.pid, code as u8));
+            found = Some(ZombieCandidate { pid: pcb.pid, code });
         }
     });
     found

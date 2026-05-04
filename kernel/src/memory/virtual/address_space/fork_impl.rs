@@ -17,7 +17,27 @@ use crate::memory::virt::page_table::x86_64::{
     phys_to_table_mut, phys_to_table_ref, PageTableEntry,
 };
 use crate::memory::virt::UserAddressSpace;
+use alloc::alloc::{alloc, Layout};
 use alloc::boxed::Box;
+
+fn try_box_new<T>(value: T) -> Option<Box<T>> {
+    let layout = Layout::new::<T>();
+    if layout.size() == 0 {
+        return None;
+    }
+
+    // SAFETY: `layout` matches T. Null is converted to None, and a non-null
+    // allocation is initialized exactly once before Box takes ownership.
+    let raw = unsafe { alloc(layout) as *mut T };
+    if raw.is_null() {
+        return None;
+    }
+    // SAFETY: `raw` is a unique allocation large enough for T.
+    unsafe {
+        raw.write(value);
+        Some(Box::from_raw(raw))
+    }
+}
 
 /// Résultat de la duplication CoW de l'espace d'adressage.
 pub struct ClonedAddressSpace {
@@ -90,7 +110,15 @@ impl AddressSpaceCloner for KernelAddressSpaceCloner {
             0
         };
 
-        let child_as = Box::new(UserAddressSpace::new(child_pml4_phys, 0));
+        let child_as = match try_box_new(UserAddressSpace::new(child_pml4_phys, 0)) {
+            Some(addr_space) => addr_space,
+            None => {
+                unsafe {
+                    free_userspace_tables(child_pml4_phys);
+                }
+                return Err(AddrSpaceCloneError::OutOfMemory);
+            }
+        };
         if inherited_heap_end != 0 {
             child_as
                 .heap_end

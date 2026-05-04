@@ -19,9 +19,29 @@ use super::pid::Pid;
 use crate::process::signal::default::SigHandlerTable;
 use crate::scheduler::core::task::ThreadId;
 use crate::scheduler::sync::spinlock::SpinLock;
+use alloc::alloc::{alloc, Layout};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+
+fn try_box_new<T>(value: T) -> Option<Box<T>> {
+    let layout = Layout::new::<T>();
+    if layout.size() == 0 {
+        return None;
+    }
+
+    // SAFETY: `layout` is built for T; null is handled and the initialized
+    // allocation is immediately owned by Box.
+    let raw = unsafe { alloc(layout) as *mut T };
+    if raw.is_null() {
+        return None;
+    }
+    // SAFETY: `raw` points to a valid allocation for T and is not aliased.
+    unsafe {
+        raw.write(value);
+        Some(Box::from_raw(raw))
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ProcessState — machine d'états du processus
@@ -110,18 +130,26 @@ pub struct OpenFileTable {
 impl OpenFileTable {
     /// Crée une table vide avec les 3 fds standards pré-réservés (mais vides).
     pub fn new(fd_limit: usize) -> Self {
-        let mut descriptors = Vec::with_capacity(32.min(fd_limit));
+        Self::try_new(fd_limit).expect("OpenFileTable::new: allocation échouée")
+    }
+
+    /// Variante fallible utilisée par les chemins noyau qui doivent rester OOM-safe.
+    pub fn try_new(fd_limit: usize) -> Option<Self> {
+        let mut descriptors = Vec::new();
+        descriptors
+            .try_reserve_exact(32.min(fd_limit).max(3))
+            .ok()?;
         // Allouer slots 0,1,2 pour stdin/stdout/stderr (initialement None).
         descriptors.push(None); // stdin
         descriptors.push(None); // stdout
         descriptors.push(None); // stderr
-        Self {
+        Some(Self {
             fd_limit,
             descriptors,
             next_hint: 3,
             open_count: AtomicU64::new(0),
             close_count: AtomicU64::new(0),
-        }
+        })
     }
 
     /// Installe le triplet stdin/stdout/stderr.
@@ -164,6 +192,9 @@ impl OpenFileTable {
                 }
             } else {
                 // Étendre le vecteur.
+                if self.descriptors.try_reserve(1).is_err() {
+                    return -1;
+                }
                 self.descriptors.push(Some(FileDescriptor {
                     fd: idx as i32,
                     handle,
@@ -210,9 +241,17 @@ impl OpenFileTable {
     }
 
     /// Ferme tous les fds marqués O_CLOEXEC (appelé lors de execve).
-    pub fn close_on_exec(&mut self) -> Vec<u64> {
+    pub fn close_on_exec(&mut self) -> Result<Vec<u64>, ()> {
         const O_CLOEXEC: u32 = 0x80000;
         let mut closed_handles = Vec::new();
+        let close_count = self
+            .descriptors
+            .iter()
+            .filter(|slot| slot.as_ref().is_some_and(|fd| fd.flags & O_CLOEXEC != 0))
+            .count();
+        closed_handles
+            .try_reserve_exact(close_count)
+            .map_err(|_| ())?;
         for slot in &mut self.descriptors {
             if let Some(fd_entry) = slot {
                 if fd_entry.flags & O_CLOEXEC != 0 {
@@ -222,12 +261,20 @@ impl OpenFileTable {
             }
         }
         self.next_hint = 3;
-        closed_handles
+        Ok(closed_handles)
     }
 
     /// Ferme tous les descripteurs ouverts du processus.
-    pub fn close_all(&mut self) -> Vec<u64> {
+    pub fn close_all(&mut self) -> Result<Vec<u64>, ()> {
         let mut closed_handles = Vec::new();
+        let close_count = self
+            .descriptors
+            .iter()
+            .filter(|slot| slot.is_some())
+            .count();
+        closed_handles
+            .try_reserve_exact(close_count)
+            .map_err(|_| ())?;
         for slot in &mut self.descriptors {
             if let Some(fd_entry) = slot.take() {
                 closed_handles.push(fd_entry.handle);
@@ -235,18 +282,37 @@ impl OpenFileTable {
             }
         }
         self.next_hint = 3;
-        closed_handles
+        Ok(closed_handles)
+    }
+
+    /// Ferme tous les descripteurs sans allocation, pour les chemins exit/reap.
+    pub fn close_all_noalloc(&mut self) {
+        for slot in &mut self.descriptors {
+            if slot.take().is_some() {
+                self.close_count.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.next_hint = 3;
     }
 
     /// Clone la table pour fork() (les handles sont dupliqués).
     pub fn clone_for_fork(&self) -> Self {
-        Self {
+        self.try_clone_for_fork()
+            .expect("OpenFileTable::clone_for_fork: allocation échouée")
+    }
+
+    /// Clone fallible de la table pour fork().
+    pub fn try_clone_for_fork(&self) -> Option<Self> {
+        let mut descriptors = Vec::new();
+        descriptors.try_reserve_exact(self.descriptors.len()).ok()?;
+        descriptors.extend_from_slice(&self.descriptors);
+        Some(Self {
             fd_limit: self.fd_limit,
-            descriptors: self.descriptors.clone(),
+            descriptors,
             next_hint: self.next_hint,
             open_count: AtomicU64::new(self.open_count.load(Ordering::Relaxed)),
             close_count: AtomicU64::new(0),
-        }
+        })
     }
 
     /// Nombre de fds ouverts actuellement.
@@ -401,7 +467,32 @@ impl ProcessControlBlock {
         cr3: u64,
         addr_space: usize,
     ) -> Box<Self> {
-        Box::new(ProcessControlBlock {
+        Self::try_new(
+            pid,
+            ppid,
+            tgid,
+            main_thread,
+            creds,
+            fd_limit,
+            cr3,
+            addr_space,
+        )
+        .expect("ProcessControlBlock::new: allocation échouée")
+    }
+
+    /// Crée un PCB sans paniquer en cas d'OOM.
+    pub fn try_new(
+        pid: Pid,
+        ppid: Pid,
+        tgid: Pid,
+        main_thread: ThreadId,
+        creds: Credentials,
+        fd_limit: usize,
+        cr3: u64,
+        addr_space: usize,
+    ) -> Option<Box<Self>> {
+        let files = OpenFileTable::try_new(fd_limit)?;
+        try_box_new(ProcessControlBlock {
             pid,
             ppid: AtomicU32::new(ppid.0),
             tgid,
@@ -413,7 +504,7 @@ impl ProcessControlBlock {
             thread_count: AtomicU32::new(1),
             main_thread,
             creds: SpinLock::new(creds),
-            files: SpinLock::new(OpenFileTable::new(fd_limit)),
+            files: SpinLock::new(files),
             address_space: AtomicUsize::new(addr_space),
             cr3: AtomicU64::new(cr3),
             brk_current: AtomicU64::new(0),

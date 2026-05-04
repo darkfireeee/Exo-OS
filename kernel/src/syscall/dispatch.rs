@@ -750,6 +750,8 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
                 ExecError::ElfLoadFailed(ElfLoadError::InvalidElf) => EINVAL,
                 ExecError::ArgListTooLong => E2BIG,
                 ExecError::NameTooLong => EINVAL,
+                ExecError::OutOfMemory => ENOMEM,
+                ExecError::ThreadGroupNotSingle => EBUSY,
                 ExecError::NoLoader => ENOSYS,
                 _ => ENOSYS,
             };

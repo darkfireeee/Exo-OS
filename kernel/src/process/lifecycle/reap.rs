@@ -15,10 +15,9 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::process::core::pcb::ProcessState;
-use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR};
+use crate::process::core::pid::{Pid, Tid};
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::lifecycle::create::{create_kthread, KthreadParams};
-use crate::process::lifecycle::fork::AddressSpaceCloner;
 use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::switch::{current_thread_raw, schedule_block};
 use crate::scheduler::core::task::{CpuId, Priority, TaskState};
@@ -268,24 +267,8 @@ fn reap_entry(entry: ReaperEntry) {
         .unwrap_or(false);
 
     if is_last_thread {
-        // Retirer de la registry et libérer le PCB.
-        if let Ok(pcb_box) = PROCESS_REGISTRY.remove(pid) {
-            let addr_space_ptr = pcb_box.address_space.load(Ordering::Acquire);
-            let closed_handles = {
-                let mut files = pcb_box.files.lock();
-                files.close_all()
-            };
-            drop(closed_handles);
-            crate::process::lifecycle::exit::close_all_pid_vfs(pid.0);
-            if addr_space_ptr != 0 {
-                crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER
-                    .free_addr_space(addr_space_ptr);
-            }
-            // Le PCB (Box<ProcessControlBlock>) est libéré ici par RAII.
-            drop(pcb_box);
-            // Libérer le PID.
-            PID_ALLOCATOR.free(pid.0);
-        }
+        // WAIT-04/EXIT-03: un PCB Zombie reste observable jusqu'à waitpid().
+        // Le reaper ne retire donc pas le processus final de la registry.
     }
 
     REAPED_COUNT.fetch_add(1, Ordering::Relaxed);
