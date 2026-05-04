@@ -14,6 +14,8 @@ use spin::Mutex;
 use crate::arch::x86_64::memory_iface::KERNEL_FAULT_ALLOC;
 use crate::memory::core::{align_up, Frame, PageFlags, PhysAddr, VirtAddr, FIXMAP_BASE, PAGE_SIZE};
 use crate::memory::virt::address_space::kernel::KERNEL_AS;
+use crate::memory::virt::address_space::tlb;
+use core::sync::atomic::{compiler_fence, Ordering};
 
 use super::boot::early_init::{BootFramebufferFormat, BootInfo};
 
@@ -279,6 +281,14 @@ fn map_framebuffer_window(info: &BootInfo) -> Option<u64> {
                 .ok()?;
         }
     }
+
+    compiler_fence(Ordering::SeqCst);
+    // SAFETY: boot-time local flush on the BSP before the first framebuffer MMIO
+    // write; this makes release/SMP see newly-created upper-level page entries.
+    unsafe {
+        tlb::flush_all_including_global();
+    }
+    compiler_fence(Ordering::SeqCst);
 
     Some(FRAMEBUFFER_VIRT_BASE + page_off)
 }

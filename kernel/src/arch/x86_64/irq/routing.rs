@@ -363,6 +363,26 @@ pub fn revoke_all_irq(owner_pid: IrqOwnerPid) -> Result<(), IrqError> {
     Ok(())
 }
 
+/// Réinitialise les watchdogs IRQ après un cycle ExoPhoenix.
+///
+/// Les IRQ peuvent rester masquées pendant le gel/restauration ; conserver un
+/// `masked_since` ancien déclencherait des alarmes artificielles au wake.
+pub fn reset_all_masked_since() {
+    let table = IRQ_TABLE.read();
+    for (_, route_opt) in table.iter() {
+        let Some(route) = route_opt else {
+            continue;
+        };
+
+        if route.pending_acks.load(Ordering::Relaxed) > 0
+            || route.masked_since.load(Ordering::Relaxed) != 0
+        {
+            route.masked_since.store(0, Ordering::Release);
+            route.soft_alarmed.store(false, Ordering::Relaxed);
+        }
+    }
+}
+
 #[inline(never)]
 pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
     let irq_vector = IrqVector(vector);

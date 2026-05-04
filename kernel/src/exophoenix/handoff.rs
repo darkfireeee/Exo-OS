@@ -16,10 +16,10 @@ use crate::arch::x86_64::idt;
 use crate::exophoenix::{forge, ssr, stage0, PhoenixState, PHOENIX_STATE};
 use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
 
-const HANDOFF_NORMAL: u64 = 0;
-const HANDOFF_FREEZE_REQ: u64 = 1;
-const HANDOFF_FREEZE_ACK_ALL: u64 = 2;
-const HANDOFF_B_ACTIVE: u64 = 3;
+const HANDOFF_NORMAL: u64 = ssr::HANDOFF_NORMAL;
+const HANDOFF_FREEZE_REQ: u64 = ssr::HANDOFF_FREEZE_REQ;
+const HANDOFF_FREEZE_ACK_ALL: u64 = ssr::HANDOFF_FREEZE_ACK_ALL;
+const HANDOFF_B_ACTIVE: u64 = ssr::HANDOFF_B_ACTIVE;
 
 const SOFT_TIMEOUT_US: u64 = 100;
 const MAX_FORGE_ATTEMPTS: u32 = 3;
@@ -34,7 +34,7 @@ static FORGE_FAILURE_COUNT: AtomicU32 = AtomicU32::new(0);
 const APICBASE_ADDR_MASK: u64 = 0xFFFF_FFFF_F000;
 const LAPIC_ID_REG_OFFSET: usize = 0x20;
 const CRYPTO_SERVER_ENDPOINT_ID: u64 = 4;
-const CRYPTO_PROTOCOL_V2: u8 = 2;
+const CRYPTO_PROTOCOL_VERSION: u8 = 3;
 const PHOENIX_WAKE_ENTROPY: u32 = 255;
 const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 224;
 
@@ -125,15 +125,18 @@ fn notify_crypto_server_phoenix_wake() -> Result<(), &'static str> {
     let endpoint = crate::ipc::core::types::EndpointId::new(CRYPTO_SERVER_ENDPOINT_ID)
         .ok_or("phoenix_wake_invalid_endpoint")?;
 
+    let entropy = phoenix_wake_entropy();
+    let timestamp = crate::arch::x86_64::cpu::tsc::read_tsc();
     let mut request = PhoenixWakeRequest {
         sender_endpoint: 0,
         msg_type: PHOENIX_WAKE_ENTROPY,
-        payload_len: 8,
-        version: CRYPTO_PROTOCOL_V2,
+        payload_len: 16,
+        version: CRYPTO_PROTOCOL_VERSION,
         flags: 0,
         payload: [0u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
     };
-    request.payload[..8].copy_from_slice(&phoenix_wake_entropy().to_le_bytes());
+    request.payload[..8].copy_from_slice(&entropy.to_le_bytes());
+    request.payload[8..16].copy_from_slice(&timestamp.to_le_bytes());
 
     let request_bytes = unsafe {
         core::slice::from_raw_parts(
@@ -390,20 +393,40 @@ fn scan_and_release_spinlocks() {
     core::sync::atomic::fence(Ordering::SeqCst);
 }
 
+fn reset_irq_watchdogs_after_restore() {
+    crate::arch::x86_64::irq::routing::reset_all_masked_since();
+}
+
+fn release_frozen_cores_after_restore() {
+    set_handoff_flag_release(HANDOFF_B_ACTIVE);
+    core::sync::atomic::fence(Ordering::SeqCst);
+    set_handoff_flag_release(HANDOFF_NORMAL);
+}
+
 fn try_forge_reconstruct_with_policy() -> Result<(), &'static str> {
     for _ in 0..MAX_FORGE_ATTEMPTS {
         match forge::reconstruct_kernel_a() {
             Ok(()) => {
-                notify_crypto_server_phoenix_wake()?;
+                reset_irq_watchdogs_after_restore();
+                if let Err(err) = notify_crypto_server_phoenix_wake() {
+                    let failures = FORGE_FAILURE_COUNT.fetch_add(1, Ordering::AcqRel) + 1;
+                    if failures >= MAX_FORGE_ATTEMPTS {
+                        PHOENIX_STATE.store(PhoenixState::Degraded as u8, Ordering::Release);
+                        set_handoff_flag_release(HANDOFF_NORMAL);
+                        return Err(err);
+                    }
+                    continue;
+                }
                 FORGE_FAILURE_COUNT.store(0, Ordering::Release);
                 PHOENIX_STATE.store(PhoenixState::Restore as u8, Ordering::Release);
-                set_handoff_flag_release(HANDOFF_NORMAL);
+                release_frozen_cores_after_restore();
                 return Ok(());
             }
             Err(_) => {
                 let failures = FORGE_FAILURE_COUNT.fetch_add(1, Ordering::AcqRel) + 1;
                 if failures >= MAX_FORGE_ATTEMPTS {
                     PHOENIX_STATE.store(PhoenixState::Degraded as u8, Ordering::Release);
+                    set_handoff_flag_release(HANDOFF_NORMAL);
                     return Err("forge_reconstruct_failed_degraded");
                 }
             }
@@ -433,7 +456,6 @@ pub fn begin_isolation_soft() -> Result<(), &'static str> {
     stage_hard_revoke_iommu(true);
 
     PHOENIX_STATE.store(PhoenixState::IsolationHard as u8, Ordering::Release);
-    set_handoff_flag_release(HANDOFF_B_ACTIVE);
 
     try_forge_reconstruct_with_policy()
 }
@@ -451,5 +473,6 @@ pub fn begin_isolation_hard() -> Result<(), &'static str> {
     scan_and_release_spinlocks();
 
     PHOENIX_STATE.store(PhoenixState::Certif as u8, Ordering::Release);
+    set_handoff_flag_release(HANDOFF_NORMAL);
     Ok(())
 }

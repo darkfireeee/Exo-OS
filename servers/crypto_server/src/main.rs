@@ -325,6 +325,14 @@ fn authorize_request(req: &CryptoRequest) -> Result<u64, u32> {
     Ok(principal)
 }
 
+fn phoenix_wake_entropy_from_request(req: &CryptoRequest, payload: &[u8]) -> Option<u64> {
+    let compact_entropy = read_u64_le(&req.cap_token.bytes, 0).unwrap_or(0);
+    if req.sender_endpoint == 0 && compact_entropy != 0 {
+        return Some(compact_entropy);
+    }
+    read_u64_le(payload, 0)
+}
+
 fn handle_request(req: &CryptoRequest) -> CryptoReply {
     let mut reply = CryptoReply::new(CRYPTO_ERR_ARGS);
     REQUESTS_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -642,7 +650,7 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
         PHOENIX_WAKE_ENTROPY => {
             if req.sender_endpoint != 0 {
                 reply.status = CRYPTO_ERR_CAP;
-            } else if let Some(entropy) = read_u64_le(payload, 0) {
+            } else if let Some(entropy) = phoenix_wake_entropy_from_request(req, payload) {
                 xchacha20::xchacha20_reseed(entropy);
                 let _ = keystore::revoke_all_pre_phoenix();
                 reply.status = CRYPTO_OK;

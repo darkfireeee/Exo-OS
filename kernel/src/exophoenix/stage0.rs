@@ -1001,6 +1001,22 @@ pub fn stage0_init_all_steps() -> Stage0Summary {
     // 1) Page tables de B
     let b_cr3 = install_b_page_tables();
 
+    if let Err(err) = super::ssr::initialize_layout_v7() {
+        log::error!(
+            "SSR ExoPhoenix incompatible au boot: {:?} (attendu v{}.{} magic={:#x})",
+            err,
+            super::ssr::SSR_LAYOUT_MAJOR,
+            super::ssr::SSR_LAYOUT_MINOR,
+            exo_phoenix_ssr::SSR_MAGIC
+        );
+        PHOENIX_STATE.store(PhoenixState::Degraded as u8, Ordering::Release);
+        loop {
+            unsafe {
+                core::arch::asm!("hlt", options(nostack, nomem));
+            }
+        }
+    }
+
     // 0.5) Probe CPUID global (HPET faux jusqu'au parse ACPI)
     init_feature_probe(false);
 
@@ -1076,6 +1092,16 @@ pub fn stage0_init() -> ! {
     // BUG-GX-05 FIX: synchroniser le count de cœurs dans la SSR
     let n_cores = crate::arch::x86_64::smp::init::smp_cpu_count();
     exo_phoenix_ssr::init_core_count(n_cores.min(exo_phoenix_ssr::SSR_MAX_CORES_LAYOUT as u32));
+
+    if let Err(err) = super::ssr::validate_layout_v7() {
+        log::error!("SSR ExoPhoenix v7 invalide après init SMP: {:?}", err);
+        PHOENIX_STATE.store(PhoenixState::Degraded as u8, Ordering::Release);
+        loop {
+            unsafe {
+                core::arch::asm!("hlt", options(nostack, nomem));
+            }
+        }
+    }
 
     PHOENIX_STATE.store(PhoenixState::Normal as u8, Ordering::Release);
     let _ = send_sipi_once(CORE_A_SLOT, A_ENTRY_VECTOR);

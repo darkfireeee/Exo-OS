@@ -29,6 +29,49 @@ pub const SSR_BASE_PHYS: u64 = 0x0100_0000;
 /// Taille de la SSR en octets (64 KiB).
 pub const SSR_SIZE: usize = 0x1_0000;
 
+// ─── Magic / version v7 ─────────────────────────────────────────────────────
+
+/// Magic SSR ExoPhoenix (`EXPH` en ASCII).
+pub const SSR_MAGIC: u32 = 0x4558_5048;
+
+/// Version majeure du layout SSR. v7 est un changement incompatible avec v6.
+pub const SSR_LAYOUT_MAJOR: u16 = 7;
+
+/// Version mineure compatible du layout SSR.
+pub const SSR_LAYOUT_MINOR: u16 = 0;
+
+/// Mot de compatibilité stocké à `SSR_MAGIC_OFFSET`.
+pub const SSR_MAGIC_VERSION: u64 =
+    compose_magic_version(SSR_MAGIC, SSR_LAYOUT_MAJOR, SSR_LAYOUT_MINOR);
+
+#[inline(always)]
+pub const fn compose_magic_version(magic: u32, major: u16, minor: u16) -> u64 {
+    ((magic as u64) << 32) | ((major as u64) << 16) | minor as u64
+}
+
+#[inline(always)]
+pub const fn magic_from_magic_version(value: u64) -> u32 {
+    (value >> 32) as u32
+}
+
+#[inline(always)]
+pub const fn major_from_magic_version(value: u64) -> u16 {
+    ((value >> 16) & 0xFFFF) as u16
+}
+
+#[inline(always)]
+pub const fn minor_from_magic_version(value: u64) -> u16 {
+    (value & 0xFFFF) as u16
+}
+
+/// Vérifie que le mot SSR lu au boot est compatible avec la lib compilée.
+#[inline(always)]
+pub const fn is_compatible_magic_version(value: u64) -> bool {
+    magic_from_magic_version(value) == SSR_MAGIC
+        && major_from_magic_version(value) == SSR_LAYOUT_MAJOR
+        && minor_from_magic_version(value) <= SSR_LAYOUT_MINOR
+}
+
 // ─── Constantes de layout (CORR-02) ──────────────────────────────────────────
 
 /// Nombre maximal de cœurs supportés dans le layout SSR.
@@ -50,6 +93,13 @@ pub const SSR_METRICS_SIZE: usize = 16 * 1024;
 /// Kernel A doit écrire le nonce lu dans `SSR_LIVENESS_NONCE` à
 /// `KERNEL_LOAD_PHYS_ADDR + A_LIVENESS_MIRROR_OFFSET`.
 pub const A_LIVENESS_MIRROR_OFFSET: u64 = 0x0100;
+
+// ─── États du handoff ────────────────────────────────────────────────────────
+
+pub const HANDOFF_NORMAL: u64 = 0;
+pub const HANDOFF_FREEZE_REQ: u64 = 1;
+pub const HANDOFF_FREEZE_ACK_ALL: u64 = 2;
+pub const HANDOFF_B_ACTIVE: u64 = 3;
 
 // ─── Offsets SSR ─────────────────────────────────────────────────────────────
 
@@ -172,5 +222,24 @@ mod tests {
             SSR_METRICS_OFFSET + SSR_METRICS_SIZE <= SSR_SIZE,
             "zone métriques + fin dépasse SSR_SIZE"
         );
+    }
+
+    #[test]
+    fn magic_version_roundtrip() {
+        assert_eq!(magic_from_magic_version(SSR_MAGIC_VERSION), SSR_MAGIC);
+        assert_eq!(
+            major_from_magic_version(SSR_MAGIC_VERSION),
+            SSR_LAYOUT_MAJOR
+        );
+        assert_eq!(
+            minor_from_magic_version(SSR_MAGIC_VERSION),
+            SSR_LAYOUT_MINOR
+        );
+        assert!(is_compatible_magic_version(SSR_MAGIC_VERSION));
+        assert!(!is_compatible_magic_version(compose_magic_version(
+            SSR_MAGIC,
+            6,
+            0
+        )));
     }
 }

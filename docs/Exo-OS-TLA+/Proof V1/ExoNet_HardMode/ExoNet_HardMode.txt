@@ -1,0 +1,32 @@
+////OUTPUT
+
+
+
+PS C:\Users\xavie\Downloads\ExoNet_IPC.toolbox\new folder> java -Xmx4g -XX:+UseParallelGC -cp .\tla2tools.jar tlc2.TLC -simulate -depth 200 -workers auto -config ExoNet_HardMode.cfg ExoNet_HardMode
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running Random Simulation with seed 7555989180620619767 with 8 workers on 8 cores with 3641MB heap and 64MB offheap memory [pid: 30780] (Windows 11 10.0 amd64, Eclipse Adoptium 25.0.2 x86_64).
+Parsing file C:\Users\xavie\Downloads\ExoNet_IPC.toolbox\New folder\ExoNet_HardMode.tla
+Parsing file C:\Users\xavie\AppData\Local\Temp\Naturals.tla
+Parsing file C:\Users\xavie\AppData\Local\Temp\Sequences.tla
+Parsing file C:\Users\xavie\AppData\Local\Temp\FiniteSets.tla
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module ExoNet_HardMode
+Starting... (2026-05-04 19:37:49)
+Computed 1 initial states...
+Progress: 881402 states checked.
+Progress: 1920236 states checked.
+Progress: 3348734 states checked.
+Progress: 4886330 states checked.
+Progress: 6100468 states checked.
+Progress: 7222286 states checked.
+Progress: 8257714 states checked.
+Progress: 9636626 states checked.
+Progress: 11468928 states checked.
+Progress: 13260235 states checked.
+Progress: 15094663 states checked.
+Progress: 17005868 states checked.
+Progress: 18983074 states checked.
+Progress: 20955985 states checked.
+Progress: 22954282 states checked.

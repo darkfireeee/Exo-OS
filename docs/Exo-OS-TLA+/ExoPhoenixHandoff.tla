@@ -6,7 +6,9 @@ EXTENDS Naturals, FiniteSets, TLC
 (* 100% COMPLETION: Includes Standard (S1-S4, L1) and STRESS (S1-S3)       *)
 (***************************************************************************)
 
-CONSTANTS CORES_A, MAX_TIMER, TIMEOUT_TICKS
+CONSTANTS MAX_CORES, MAX_TIMER, TIMEOUT_TICKS
+
+CORES_A == 0..(MAX_CORES - 1)
 
 VARIABLES 
     CoreState,           

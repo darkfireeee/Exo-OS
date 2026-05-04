@@ -833,8 +833,9 @@ extern "C" fn do_ipi_reschedule(frame: *mut ExceptionFrame) {
 
     // Mode ExoPhoenix : 0xF1 = Freeze coopératif lock-free.
     if crate::exophoenix::stage0::exophoenix_vectors_active() {
-        // SAFETY: handler dédié no-alloc/no-lock, peut diverger volontairement.
+        // SAFETY: handler dédié no-alloc/no-lock ; il acquitte l'IPI lui-même.
         unsafe { crate::exophoenix::interrupts::handle_freeze_ipi() };
+        return;
     }
 
     // Lire le TCB courant (GS:[0x20] = current_tcb dans PerCpuData).

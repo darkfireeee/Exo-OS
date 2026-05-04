@@ -5,7 +5,7 @@ EXTENDS Naturals, Integers, Sequences, FiniteSets, TLC
 \* GLOBAL CONSTANTS
 \* =========================================================================
 CONSTANTS 
-    CORES, CORES_A, IRQS, MAX_PENDING_ACKS, MAX_OVERFLOWS, MAX_GEN, PIDS,
+    CORES, CORES_A, MAX_CORES, IRQS, MAX_PENDING_ACKS, MAX_OVERFLOWS, MAX_GEN, PIDS,
     MAX_TIMER, TIMEOUT_TICKS, MAX_TICKS, N_CYCLES
 
 \* =========================================================================

@@ -6,6 +6,7 @@ use core::sync::atomic::Ordering;
 
 use crate::arch::x86_64::apic::x2apic;
 use crate::arch::x86_64::cpu::msr;
+use crate::scheduler::core::task::ThreadControlBlock;
 
 use super::ssr;
 use super::stage0;
@@ -60,16 +61,39 @@ fn apic_ack() {
     }
 }
 
+unsafe fn save_current_fpu_before_freeze_ack() {
+    let tcb_raw = crate::arch::x86_64::smp::percpu::read_current_tcb();
+    if tcb_raw == 0 {
+        return;
+    }
+
+    let tcb = &mut *(tcb_raw as *mut ThreadControlBlock);
+    if !tcb.fpu_loaded() {
+        return;
+    }
+
+    if crate::scheduler::fpu::lazy::cr0_ts_is_set() {
+        tcb.set_fpu_loaded(false);
+        return;
+    }
+
+    crate::scheduler::fpu::xsave_current(tcb);
+    crate::scheduler::fpu::lazy::cr0_set_ts();
+}
+
 /// 0xF1 — Freeze coopératif.
 ///
 /// - CLI (IRQ maskables off ; NMI reste possible par design x86)
+/// - XSAVE éventuel avant ACK (CORR-15 / TLA S3)
 /// - ACK FREEZE en Release
-/// - boucle pause infinie
-pub unsafe fn handle_freeze_ipi() -> ! {
+/// - spin jusqu'à reprise Kernel B
+pub unsafe fn handle_freeze_ipi() {
     // SAFETY: instruction privilégiée en contexte handler IRQ ring0.
     unsafe {
         core::arch::asm!("cli", options(nostack, nomem));
     }
+
+    save_current_fpu_before_freeze_ack();
 
     if let Some(slot) = current_slot() {
         // SAFETY: SSR physique fixée/réservée ; offset borné via slot map.
@@ -81,11 +105,18 @@ pub unsafe fn handle_freeze_ipi() -> ! {
     }
 
     loop {
+        let handoff = unsafe { ssr::ssr_atomic(ssr::SSR_HANDOFF_FLAG).load(Ordering::Acquire) };
+        if handoff == ssr::HANDOFF_B_ACTIVE || handoff == ssr::HANDOFF_NORMAL {
+            break;
+        }
+
         // SAFETY: boucle de gel volontaire.
         unsafe {
             core::arch::asm!("pause", options(nostack, nomem));
         }
     }
+
+    apic_ack();
 }
 
 /// 0xF2 — PMC snapshot (heuristique, jamais source unique de vérité).

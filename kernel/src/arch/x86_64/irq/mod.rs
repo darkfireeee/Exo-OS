@@ -21,6 +21,7 @@ pub use routing::{
     dispatch_irq,
     irq_error_to_errno, // Helpers syscall
     parse_irq_source_kind,
+    reset_all_masked_since,
     revoke_all_irq,
     sys_irq_register_canonical as sys_irq_register,
     sys_irq_register_syscall,

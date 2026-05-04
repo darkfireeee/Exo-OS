@@ -25,6 +25,8 @@ build/kernel_stripped.elf
 /ssh/
 .rule_dor_exit.txt
 .sixth
+tla2tools.jar
+/states/
 
 # macOS
 .DS_Store
