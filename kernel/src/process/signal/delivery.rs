@@ -21,6 +21,7 @@ use core::sync::atomic::Ordering;
 pub const MAX_SIGNAL_NUMBER: u8 = 63;
 pub const RT_SIGNAL_MIN: u8 = 32;
 pub const RT_SIGNAL_MAX: u8 = MAX_SIGNAL_NUMBER;
+const RT_SIGNAL_MASK_SHIFT: u8 = RT_SIGNAL_MIN - 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Erreurs
@@ -50,7 +51,15 @@ pub enum SendError {
 /// 3. Pour un RT signal : empile dans la RTSigQueue du thread.
 /// 4. Démande une préemption via raise_signal_pending().
 pub fn send_signal_to_pid(pid: Pid, sig: Signal) -> Result<(), SendError> {
-    let sig_n = sig.number();
+    send_signal_number_to_pid(pid, sig.number())
+}
+
+/// Envoie un signal numerique a un processus cible par PID.
+///
+/// Contrairement a [`send_signal_to_pid`], ce chemin accepte aussi les signaux
+/// temps-reel 32..63, qui n'ont pas de variant dans l'enum des signaux POSIX
+/// standards.
+pub fn send_signal_number_to_pid(pid: Pid, sig_n: u8) -> Result<(), SendError> {
     if sig_n == 0 || sig_n > MAX_SIGNAL_NUMBER {
         return Err(SendError::InvalidSignal);
     }
@@ -176,7 +185,7 @@ pub fn handle_pending_signals(
             pair
         } else {
             // Essayer la queue RT.
-            let rt_mask = (mask >> 32) as u32;
+            let rt_mask = rt_mask_from_signal_mask(mask);
             if let Some(pair) = thread.rt_sig_queue.dequeue(rt_mask) {
                 pair
             } else {
@@ -201,10 +210,34 @@ pub fn handle_pending_signals(
 
     // Effacer le drapeau si plus rien en attente.
     let remaining_std = thread.sig_queue.pending.load(Ordering::Acquire) & !mask;
-    let remaining_rt =
-        (thread.rt_sig_queue.pending_mask.load(Ordering::Acquire) as u32) & !((mask >> 32) as u32);
+    let remaining_rt = (thread.rt_sig_queue.pending_mask.load(Ordering::Acquire) as u32)
+        & !rt_mask_from_signal_mask(mask);
     if remaining_std == 0 && remaining_rt == 0 {
         clear_signal_pending(thread);
+    }
+}
+
+#[inline]
+fn rt_mask_from_signal_mask(mask: u64) -> u32 {
+    (mask >> RT_SIGNAL_MASK_SHIFT) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rt_mask_from_signal_mask, RT_SIGNAL_MAX, RT_SIGNAL_MIN};
+
+    #[test]
+    fn rt_mask_maps_signal_32_to_first_rt_slot() {
+        let signal_32_mask = 1u64 << (RT_SIGNAL_MIN - 1);
+
+        assert_eq!(rt_mask_from_signal_mask(signal_32_mask), 1);
+    }
+
+    #[test]
+    fn rt_mask_maps_signal_63_to_last_rt_slot() {
+        let signal_63_mask = 1u64 << (RT_SIGNAL_MAX - 1);
+
+        assert_eq!(rt_mask_from_signal_mask(signal_63_mask), 1u32 << 31);
     }
 }
 

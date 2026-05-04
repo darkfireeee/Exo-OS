@@ -6,8 +6,10 @@
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
-use crate::memory::core::{VirtAddr, PAGE_SIZE};
+use crate::memory::core::{VirtAddr, MAX_CPUS, PAGE_SIZE};
 use crate::memory::virt::page_table::x86_64::invlpg;
+
+const TLB_MASK_BITS: usize = u64::BITS as usize;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPE D'INVALIDATION TLB
@@ -107,7 +109,8 @@ pub unsafe fn flush_range(start: VirtAddr, end: VirtAddr) {
 /// Pending TLB shootdown — une opération à exécuter sur les CPUs cibles.
 pub struct TlbShootdownRequest {
     pub flush_type: TlbFlushType,
-    pub cpu_mask: u64,        // Bitmask des CPUs cibles (max 64 CPUs)
+    pub base_cpu: usize,      // CPU logique correspondant au bit 0 du masque
+    pub cpu_mask: u64,        // Fenetre de 64 CPUs cibles
     pub completed: AtomicU64, // Bitmask des CPUs ayant terminé
 }
 
@@ -128,6 +131,7 @@ struct TlbShootdownInner {
 struct TlbShootdownEntry {
     active: bool,
     flush_type: TlbFlushType,
+    base_cpu: usize,
     cpu_mask: u64,
     completed: u64,
 }
@@ -137,6 +141,7 @@ impl TlbShootdownEntry {
         TlbShootdownEntry {
             active: false,
             flush_type: TlbFlushType::All,
+            base_cpu: 0,
             cpu_mask: 0,
             completed: 0,
         }
@@ -167,17 +172,19 @@ impl TlbShootdownQueue {
     /// Soumet une demande de TLB shootdown.
     /// Envoie un IPI aux CPUs cibles (via le vecteur IPI_TLB_SHOOTDOWN).
     ///
-    /// SAFETY: `cpu_mask` doit être un masque valide des CPUs actifs.
-    pub unsafe fn request(&self, flush_type: TlbFlushType, cpu_mask: u64) {
+    /// SAFETY: `cpu_mask` doit être un masque valide des CPUs actifs dans la
+    /// fenetre `[base_cpu, base_cpu + 64)`.
+    pub unsafe fn request(&self, flush_type: TlbFlushType, base_cpu: usize, cpu_mask: u64) {
         {
             let mut inner = self.inner.lock();
             let slot = &mut inner.requests[0];
-            let merged_flush = if slot.active {
+            let can_merge = slot.active && slot.base_cpu == base_cpu;
+            let merged_flush = if can_merge {
                 coalesce_flush_type(slot.flush_type, flush_type)
             } else {
                 flush_type
             };
-            let merged_mask = if slot.active {
+            let merged_mask = if can_merge {
                 slot.cpu_mask | cpu_mask
             } else {
                 cpu_mask
@@ -186,6 +193,7 @@ impl TlbShootdownQueue {
             *slot = TlbShootdownEntry {
                 active: true,
                 flush_type: merged_flush,
+                base_cpu,
                 cpu_mask: merged_mask,
                 completed: 0,
             };
@@ -196,7 +204,7 @@ impl TlbShootdownQueue {
         // Envoyer l'IPI (le vecteur sera configuré par le sous-système APIC).
         // Pour ne pas créer de dépendance circulaire Couche 0, l'IPI est envoyé
         // via un pointeur de fonction enregistré au boot.
-        Self::send_tlb_ipi(cpu_mask);
+        Self::send_tlb_ipi(base_cpu, cpu_mask);
         TLB_STATS.ipi_sent.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -212,7 +220,12 @@ impl TlbShootdownQueue {
             if !entry.active {
                 continue;
             }
-            if (entry.cpu_mask >> cpu_id) & 1 == 0 {
+            let logical_cpu = cpu_id as usize;
+            if logical_cpu < entry.base_cpu || logical_cpu >= entry.base_cpu + TLB_MASK_BITS {
+                continue;
+            }
+            let bit = logical_cpu - entry.base_cpu;
+            if (entry.cpu_mask >> bit) & 1 == 0 {
                 continue;
             }
             match entry.flush_type {
@@ -224,16 +237,16 @@ impl TlbShootdownQueue {
         }
         // V-04 — Signaler que ce CPU a complété son flush (pour shootdown_sync).
         let seq = TLB_SHOOTDOWN_SEQ.load(Ordering::Acquire);
-        if (cpu_id as usize) < 64 {
+        if (cpu_id as usize) < MAX_CPUS {
             TLB_SHOOTDOWN_ACK[cpu_id as usize].store(seq, Ordering::Release);
         }
     }
 
-    unsafe fn send_tlb_ipi(cpu_mask: u64) {
+    unsafe fn send_tlb_ipi(base_cpu: usize, cpu_mask: u64) {
         let fp = TLB_IPI_SENDER.load(Ordering::Acquire);
         if fp != 0 {
-            let f: unsafe fn(u64) = core::mem::transmute(fp);
-            f(cpu_mask);
+            let f: unsafe fn(usize, u64) = core::mem::transmute(fp);
+            f(base_cpu, cpu_mask);
         }
     }
 }
@@ -248,15 +261,16 @@ static TLB_IPI_SENDER: core::sync::atomic::AtomicUsize = core::sync::atomic::Ato
 pub static TLB_SHOOTDOWN_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// ACK par CPU — chaque CPU écrit la dernière séquence traitée.
-pub static TLB_SHOOTDOWN_ACK: [AtomicU64; 64] = {
+pub static TLB_SHOOTDOWN_ACK: [AtomicU64; MAX_CPUS] = {
     const A: AtomicU64 = AtomicU64::new(0);
-    [A; 64]
+    [A; MAX_CPUS]
 };
 
 /// Enregistre la fonction d'envoi d'IPI TLB (fournie par le sous-système APIC).
 ///
-/// SAFETY: `func` doit être une fonction valide prenant un cpu_mask en paramètre.
-pub unsafe fn register_tlb_ipi_sender(func: unsafe fn(u64)) {
+/// SAFETY: `func` doit être une fonction valide prenant une fenetre de CPUs
+/// `(base_cpu, cpu_mask)` en paramètre.
+pub unsafe fn register_tlb_ipi_sender(func: unsafe fn(usize, u64)) {
     TLB_IPI_SENDER.store(func as usize, Ordering::SeqCst);
 }
 
@@ -267,7 +281,7 @@ pub static TLB_QUEUE: TlbShootdownQueue = TlbShootdownQueue::new();
 ///
 /// SAFETY: `cpu_mask` est un masque valide, interruptions non désactivées.
 pub unsafe fn shootdown(flush_type: TlbFlushType, cpu_mask: u64) {
-    TLB_QUEUE.request(flush_type, cpu_mask);
+    TLB_QUEUE.request(flush_type, 0, cpu_mask);
 }
 
 /// Performe un TLB shootdown SYNCHRONE sur tous les CPUs actifs.
@@ -276,7 +290,7 @@ pub unsafe fn shootdown(flush_type: TlbFlushType, cpu_mask: u64) {
 /// cible ait mis à jour son ACK (V-04 : TLB shootdown complété avant free_pages).
 ///
 /// SAFETY: Ne pas appeler depuis un contexte IRQ. `cpu_count` doit refléter le
-///         nombre réel de CPUs actifs (max 64).
+///         nombre réel de CPUs actifs (max [`MAX_CPUS`]).
 pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
     if cpu_count == 0 {
         return;
@@ -290,8 +304,7 @@ pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
         }
         return;
     }
-    let n = cpu_count.min(64) as usize;
-    let all_mask: u64 = if n >= 64 { !0u64 } else { (1u64 << n) - 1 };
+    let n = (cpu_count as usize).min(MAX_CPUS);
     let current_cpu = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
 
     // Avancer la séquence — les CPUs devront ACK avec >= target_seq.
@@ -305,23 +318,45 @@ pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
         TlbFlushType::Global => flush_all_including_global(),
     }
 
-    if current_cpu < n {
+    if current_cpu < n && current_cpu < MAX_CPUS {
         TLB_SHOOTDOWN_ACK[current_cpu].store(target_seq, Ordering::Release);
     }
 
-    let remote_mask = if current_cpu < 64 {
-        all_mask & !(1u64 << current_cpu)
-    } else {
-        all_mask
-    };
+    let mut base_cpu = 0usize;
+    while base_cpu < n {
+        let mut remote_mask = chunk_mask(n, base_cpu);
+        if current_cpu >= base_cpu && current_cpu < base_cpu + TLB_MASK_BITS {
+            remote_mask &= !(1u64 << (current_cpu - base_cpu));
+        }
 
-    // Envoyer les IPIs uniquement aux CPUs distants.
-    if remote_mask != 0 {
-        TLB_QUEUE.request(flush_type, remote_mask);
+        // Envoyer les IPIs uniquement aux CPUs distants de cette fenetre.
+        if remote_mask != 0 {
+            TLB_QUEUE.request(flush_type, base_cpu, remote_mask);
+        }
+
+        // Attendre la fenetre courante avant de reutiliser le slot coalesce.
+        wait_for_acks(base_cpu, n, target_seq);
+        base_cpu += TLB_MASK_BITS;
     }
+}
 
-    // Attendre que tous les CPUs cibles aient complété leur flush.
-    for cpu_id in 0..n {
+#[inline]
+fn chunk_mask(cpu_count: usize, base_cpu: usize) -> u64 {
+    if base_cpu >= cpu_count {
+        return 0;
+    }
+    let width = (cpu_count - base_cpu).min(TLB_MASK_BITS);
+    if width >= TLB_MASK_BITS {
+        !0u64
+    } else {
+        (1u64 << width) - 1
+    }
+}
+
+#[inline]
+fn wait_for_acks(base_cpu: usize, cpu_count: usize, target_seq: u64) {
+    let end = (base_cpu + TLB_MASK_BITS).min(cpu_count).min(MAX_CPUS);
+    for cpu_id in base_cpu..end {
         loop {
             let ack = TLB_SHOOTDOWN_ACK[cpu_id].load(Ordering::Acquire);
             if ack >= target_seq {
@@ -329,5 +364,25 @@ pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
             }
             core::hint::spin_loop();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{chunk_mask, TLB_MASK_BITS};
+
+    #[test]
+    fn chunk_mask_covers_first_full_window() {
+        assert_eq!(chunk_mask(256, 0), !0u64);
+    }
+
+    #[test]
+    fn chunk_mask_covers_tail_window_without_overflowing() {
+        assert_eq!(chunk_mask(130, TLB_MASK_BITS * 2), 0b11);
+    }
+
+    #[test]
+    fn chunk_mask_is_empty_after_cpu_count() {
+        assert_eq!(chunk_mask(64, 64), 0);
     }
 }

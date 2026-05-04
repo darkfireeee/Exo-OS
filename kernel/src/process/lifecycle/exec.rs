@@ -175,8 +175,9 @@ pub fn do_execve(
 
     // Étape 3 (LAC-08 / PROC-03) : bloquer TOUS les signaux sauf SIGKILL/SIGSTOP
     // AVANT le chargement ELF. Empêche un signal livré entre load_elf() et
-    // reset_signals_on_exec() d'invoquer l'ancien handler dans un adress space
-    // partiellement remplacé. reset_signals_on_exec() débloque ultérieurement.
+    // reset_signals_on_exec() d'invoquer l'ancien handler dans un address space
+    // partiellement remplacé. Le masque appelant est restauré après la purge
+    // des signaux pending de l'ancienne image.
     block_all_except_kill(&thread.sched_tcb);
 
     // Charger le nouveau binaire dans l'espace d'adressage.

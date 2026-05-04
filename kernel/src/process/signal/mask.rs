@@ -25,6 +25,7 @@ pub const SIG_SETMASK: i32 = 2;
 /// SIGKILL = bit 8, SIGSTOP = bit 18.
 const NON_BLOCKABLE: u64 =
     (1u64 << (Signal::SIGKILL as u8 - 1)) | (1u64 << (Signal::SIGSTOP as u8 - 1));
+const VALID_SIGNAL_MASK: u64 = (1u64 << Signal::SIGRTMAX) - 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SigMask — valeur pure (pas atomique)
@@ -37,11 +38,11 @@ pub struct SigMask(pub u64);
 
 impl SigMask {
     pub const EMPTY: Self = Self(0);
-    pub const FULL: Self = Self(!NON_BLOCKABLE);
+    pub const FULL: Self = Self(VALID_SIGNAL_MASK & !NON_BLOCKABLE);
 
     #[inline(always)]
     pub fn set(&mut self, sig: u8) {
-        if sig == 0 || sig > 64 {
+        if sig == 0 || sig > Signal::SIGRTMAX {
             return;
         }
         self.0 |= 1u64 << (sig - 1);
@@ -50,7 +51,7 @@ impl SigMask {
 
     #[inline(always)]
     pub fn clear(&mut self, sig: u8) {
-        if sig == 0 || sig > 64 {
+        if sig == 0 || sig > Signal::SIGRTMAX {
             return;
         }
         self.0 &= !(1u64 << (sig - 1));
@@ -58,7 +59,7 @@ impl SigMask {
 
     #[inline(always)]
     pub fn is_set(&self, sig: u8) -> bool {
-        if sig == 0 || sig > 64 {
+        if sig == 0 || sig > Signal::SIGRTMAX {
             return false;
         }
         self.0 & (1u64 << (sig - 1)) != 0
@@ -82,7 +83,7 @@ impl SigMask {
 
 impl From<u64> for SigMask {
     fn from(v: u64) -> Self {
-        SigMask(v & !NON_BLOCKABLE)
+        SigMask(v & VALID_SIGNAL_MASK & !NON_BLOCKABLE)
     }
 }
 
@@ -107,13 +108,13 @@ impl SigSet {
 
     #[inline(always)]
     pub fn store(&self, m: SigMask) {
-        self.0.store(m.0, Ordering::Release);
+        self.0.store(SigMask::from(m.0).0, Ordering::Release);
     }
 
     /// Définit le bit du signal sans lock (atomique fetch_or).
     #[inline(always)]
     pub fn set_signal(&self, sig: u8) {
-        if sig == 0 || sig > 64 {
+        if sig == 0 || sig > Signal::SIGRTMAX {
             return;
         }
         self.0.fetch_or(1u64 << (sig - 1), Ordering::AcqRel);
@@ -122,7 +123,7 @@ impl SigSet {
     /// Efface le bit du signal sans lock.
     #[inline(always)]
     pub fn clear_signal(&self, sig: u8) {
-        if sig == 0 || sig > 64 {
+        if sig == 0 || sig > Signal::SIGRTMAX {
             return;
         }
         self.0.fetch_and(!(1u64 << (sig - 1)), Ordering::AcqRel);
@@ -167,7 +168,7 @@ pub fn sigprocmask(
     how: i32,
     set: Option<SigMask>,
 ) -> Result<SigMask, SigmaskError> {
-    let old = SigMask(tcb.signal_mask.load(Ordering::Acquire));
+    let old = SigMask::from(tcb.signal_mask.load(Ordering::Acquire));
     if let Some(new_set) = set {
         let safe_set = SigMask(new_set.0 & !NON_BLOCKABLE);
         let updated = match how {
@@ -210,9 +211,33 @@ pub fn reset_signals_on_exec(tcb: &ThreadControlBlock) {
 /// invoquerait l'ancien handler dans un espace d'adressage partiellement
 /// remplacé → comportement indéfini / exploit potentiel.
 ///
-/// Les signaux sont débloqués par reset_signals_on_exec() qui suit.
+/// Le masque appelant est restauré par do_execve() après reset des handlers et
+/// purge des files pending de l'ancienne image.
 pub fn block_all_except_kill(tcb: &ThreadControlBlock) {
     // SigMask::FULL = tous les signaux sauf SIGKILL (9) et SIGSTOP (19).
     // NON_BLOCKABLE est déjà masqué dans SigMask::FULL.
     tcb.signal_mask.store(SigMask::FULL.0, Ordering::Release);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SigMask, Signal, VALID_SIGNAL_MASK};
+
+    #[test]
+    fn full_mask_keeps_only_valid_signals() {
+        assert_eq!(SigMask::FULL.0 & !VALID_SIGNAL_MASK, 0);
+        assert!(!SigMask::FULL.is_set(Signal::SIGKILL as u8));
+        assert!(!SigMask::FULL.is_set(Signal::SIGSTOP as u8));
+        assert!(SigMask::FULL.is_set(Signal::SIGRTMAX));
+    }
+
+    #[test]
+    fn signal_64_is_not_representable() {
+        let mut mask = SigMask::EMPTY;
+
+        mask.set(64);
+
+        assert_eq!(mask.0, 0);
+        assert!(!mask.is_set(64));
+    }
 }

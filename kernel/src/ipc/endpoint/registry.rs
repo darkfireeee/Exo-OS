@@ -303,15 +303,24 @@ pub fn endpoint_registry_initialized() -> bool {
 
 /// Enregistre un endpoint dans le registre global.
 pub fn register_endpoint(name: &[u8], ep_id: EndpointId) -> Result<(), IpcError> {
+    if !endpoint_registry_initialized() {
+        return Err(IpcError::InternalError);
+    }
     ENDPOINT_REGISTRY.register(name, ep_id)
 }
 
 /// Recherche un endpoint dans le registre global.
 pub fn lookup_endpoint(name: &[u8]) -> Option<EndpointId> {
+    if !endpoint_registry_initialized() {
+        return None;
+    }
     ENDPOINT_REGISTRY.lookup(name)
 }
 
 /// Retire un endpoint du registre global.
 pub fn unregister_endpoint(name: &[u8]) -> bool {
+    if !endpoint_registry_initialized() {
+        return false;
+    }
     ENDPOINT_REGISTRY.unregister(name)
 }

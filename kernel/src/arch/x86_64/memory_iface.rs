@@ -157,8 +157,8 @@ pub unsafe fn flush_tlb_global() {
 
 /// Envoie un IPI TLB shootdown (vecteur 0xF2) à tous les CPUs du masque.
 ///
-/// Pour chaque bit `i` de `cpu_mask`, récupère le `lapic_id` du CPU `i`
-/// depuis la table per-CPU et envoie un IPI via le Local APIC.
+/// Pour chaque bit `i` de `cpu_mask`, récupère le `lapic_id` du CPU
+/// `base_cpu + i` depuis la table per-CPU et envoie un IPI via l'APIC actif.
 ///
 /// # Note
 /// Le CPU courant est exclu : le flush local a déjà été effectué par l'émetteur
@@ -166,25 +166,35 @@ pub unsafe fn flush_tlb_global() {
 ///
 /// # Safety
 /// - Doit être appelé depuis memory/ après dépôt de la requête dans `TLB_QUEUE`.
-/// - `cpu_mask` doit représenter uniquement les CPUs actuellement en ligne.
-unsafe fn send_tlb_ipi_to_mask(cpu_mask: u64) {
-    use super::apic::local_apic;
+/// - `cpu_mask` doit représenter uniquement les CPUs actuellement en ligne
+///   dans la fenetre `[base_cpu, base_cpu + 64)`.
+unsafe fn send_tlb_ipi_to_mask(base_cpu: usize, cpu_mask: u64) {
+    use super::apic::{self, local_apic, x2apic};
     use super::smp::percpu;
 
     let current = percpu::current_cpu_id() as usize;
 
-    // Itérer sur les 64 bits possibles du masque
-    for cpu_idx in 0..64usize {
-        if cpu_mask & (1u64 << cpu_idx) == 0 {
+    // Itérer sur les 64 bits possibles de la fenetre.
+    for bit in 0..64usize {
+        if cpu_mask & (1u64 << bit) == 0 {
             continue;
         }
+        let cpu_idx = base_cpu + bit;
         // Pas de self-IPI TLB — le flush local a déjà été effectué par l'émetteur
         if cpu_idx == current || cpu_idx >= MAX_CPUS {
             continue;
         }
-        let lapic_id = percpu::per_cpu(cpu_idx).lapic_id as u8;
+        let lapic_id = percpu::per_cpu(cpu_idx).lapic_id as u32;
         // Envoi IPI fixe vecteur 0xF2 (TLB shootdown, règle TLB-01 DOC2)
-        local_apic::send_ipi(lapic_id, IPI_TLB_SHOOTDOWN_VECTOR, local_apic::ICR_DM_FIXED);
+        if apic::is_x2apic() {
+            x2apic::send_ipi_x2apic(lapic_id, IPI_TLB_SHOOTDOWN_VECTOR, 0);
+        } else if lapic_id <= u8::MAX as u32 {
+            local_apic::send_ipi(
+                lapic_id as u8,
+                IPI_TLB_SHOOTDOWN_VECTOR,
+                local_apic::ICR_DM_FIXED,
+            );
+        }
     }
 }
 

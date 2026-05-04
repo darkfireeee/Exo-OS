@@ -148,26 +148,28 @@ Mais **aucun document ne spécifie explicitement** que `switch.rs` doit sauver/r
 // Séquence v8 (remplace séquence v7 §3.2 Architecture) :
 //
 //  1. Si fpu_loaded(prev) → xsave64(prev.fpu_state_ptr)
-//  2. Sauvegarder fs_base : prev.fs_base = rdmsr(0xC0000100)
-//  3. Sauvegarder user_gs_base : prev.user_gs_base = rdmsr(0xC0000101)
-//  4. prev.set_state(Runnable)
-//  5. context_switch_asm(prev.kstack_ptr, next.kstack_ptr, next.cr3_phys)
+//  2. set_cr0_ts()             ← CR0.TS=1 AVANT l'ASM (Lazy FPU — V7-C-02)
+//  3. Sauvegarder fs_base : prev.fs_base = rdmsr(0xC0000100)
+//  4. Sauvegarder user_gs_base : prev.user_gs_base = rdmsr(0xC0000102)
+//  5. prev.set_state(Runnable)
+//  6. context_switch_asm(prev.kstack_ptr, next.kstack_ptr, next.cr3_phys)
 //     ↳ dans switch_asm.s : push 6 callee-saved, swap RSP, pop 6 callee-saved
-//  6. next.set_state(Running)
-//  7. set_cr0_ts()             ← CR0.TS=1 (Lazy FPU — V7-C-02)
-//  8. tss_set_rsp0(cpu, next.kstack_ptr)  ← V7-C-03 OBLIGATOIRE
+//  7. next.set_state(Running)
+//  8. tss_set_rsp0(cpu, next.kstack_top())  ← V7-C-03 OBLIGATOIRE
 //  9. Restaurer fs_base : wrmsr(0xC0000100, next.fs_base)
-// 10. Restaurer user_gs_base : wrmsr(0xC0000101, next.user_gs_base)
+// 10. Restaurer user_gs_base : wrmsr(0xC0000102, next.user_gs_base)
+// 11. Publier current_tcb après restauration FS/GS
 
 pub fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadControlBlock) {
     // Étape 1 : Sauvegarder FPU si chargée (Lazy FPU)
     if prev.fpu_state_ptr != 0 && fpu::is_fpu_loaded_for(prev.tid) {
         fpu::xsave64(prev.fpu_state_ptr as *mut XSaveArea);
     }
+    unsafe { arch::set_cr0_ts(); }
 
     // Étapes 2-3 : Sauvegarder FS/GS base (CORR-11 — NOUVEAU)
     prev.fs_base      = unsafe { arch::rdmsr(0xC000_0100) };
-    prev.user_gs_base = unsafe { arch::rdmsr(0xC000_0101) };
+    prev.user_gs_base = unsafe { arch::rdmsr(0xC000_0102) };
 
     prev.set_state(ThreadState::Runnable);
 
@@ -183,11 +185,8 @@ pub fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadControlBlo
 
     next.set_state(ThreadState::Running);
 
-    // Étape 7 : Lazy FPU — déclenche #NM si le thread utilise FPU
-    unsafe { arch::set_cr0_ts(); }
-
-    // Étape 8 : TSS.RSP0 obligatoire (V7-C-03)
-    tss::set_rsp0(current_cpu(), next.kstack_ptr);
+    // Étape 7 : TSS.RSP0 obligatoire (V7-C-03)
+    tss::set_rsp0(current_cpu(), next.kstack_top());
 
     // Étapes 9-10 : Restaurer FS/GS base (CORR-11 — NOUVEAU)
     unsafe {
@@ -195,10 +194,11 @@ pub fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadControlBlo
         // Note : user_gs_base est restauré via WRMSR directement (pas via SWAPGS)
         // SWAPGS swap entre kernel GS et user GS à chaque entrée/sortie Ring 0.
         // Ici on est en Ring 0, donc GS.base contient le per-CPU data.
-        // On écrit user_gs_base dans le MSR 0xC0000101 qui correspond à
-        // la valeur userspace (sera swappée vers GS.base à SWAPGS iretq).
-        arch::wrmsr(0xC000_0101, next.user_gs_base);
+        // On écrit user_gs_base dans le MSR 0xC0000102 qui correspond à
+        // la valeur userspace cachée en Ring 0 (sera swappée vers GS.base).
+        arch::wrmsr(0xC000_0102, next.user_gs_base);
     }
+    percpu::set_current_tcb(next);
 }
 
 // switch_asm.s — pseudo-code v8 (INCHANGÉ par rapport à v7, CORR-11 est dans switch.rs)

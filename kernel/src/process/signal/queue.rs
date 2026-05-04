@@ -280,7 +280,7 @@ impl RTSigQueue {
         ok
     }
 
-    /// Défile le premier signal RT non-bloqué (mask = signal_mask >> 32).
+    /// Défile le premier signal RT non-bloqué (mask = signal_mask >> 31).
     pub fn dequeue(&self, rt_mask: u32) -> Option<(u8, SigInfo)> {
         let pending = self.pending_mask.load(Ordering::Acquire) as u32;
         let unblocked = pending & !rt_mask;

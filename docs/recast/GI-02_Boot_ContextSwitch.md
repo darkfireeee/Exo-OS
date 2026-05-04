@@ -244,6 +244,7 @@ pub fn context_switch(
         unsafe { fpu::xsave64(prev.fpu_state_ptr as *mut XSaveArea); }
         fpu::mark_fpu_not_loaded(prev.tid);
     }
+    unsafe { set_cr0_ts(); }
 
     // ─── Étape 2 : Sauvegarder FS.base du prev ────────────────────────
     // RDMSR sérialise les instructions → nécessaire pour mémoire cohérente
@@ -272,24 +273,23 @@ pub fn context_switch(
 
     next.set_state(ThreadState::Running);
 
-    // ─── Étape 5 : CR0.TS = 1 (Lazy FPU) ─────────────────────────────
-    // Déclenche #NM si next essaie d'utiliser la FPU sans l'avoir chargée
-    unsafe { set_cr0_ts(); }
-
-    // ─── Étape 6 : TSS.RSP0 obligatoire (V7-C-03) ─────────────────────
+    // ─── Étape 5 : TSS.RSP0 obligatoire (V7-C-03) ─────────────────────
     // ERREUR SILENCIEUSE si oublié :
     //   La prochaine IRQ Ring 3→Ring 0 empile sur la pile du PREV thread
     //   → Corruption silencieuse de la pile de prev
     //   → Pas de crash immédiat : crash aléatoire plus tard
-    tss::set_rsp0(current_cpu(), next.kstack_ptr);
+    tss::set_rsp0(current_cpu(), next.kstack_top());
 
-    // ─── Étape 7 : Restaurer FS.base du next ──────────────────────────
+    // ─── Étape 6 : Restaurer FS.base du next ──────────────────────────
     unsafe { wrmsr(IA32_FS_BASE, next.fs_base); }
 
-    // ─── Étape 8 : Restaurer user GS.base du next ─────────────────────
+    // ─── Étape 7 : Restaurer user GS.base du next ─────────────────────
     // Écrire dans KERNEL_GS_BASE (0xC0000102)
     // → Sera swappé dans GS.base par SWAPGS à IRETQ vers Ring 3
     unsafe { wrmsr(IA32_KERNEL_GS_BASE, next.user_gs_base); }
+
+    // ─── Étape 8 : Publier le TCB courant après restauration FS/GS ────
+    percpu::set_current_tcb(next);
 }
 
 // MSR helpers (wrappers safe autour de asm inline)
@@ -443,10 +443,10 @@ unsafe fn xrstor64(ptr: *const XSaveArea) {
 /// Met à jour TSS.RSP0 pour le CPU courant.
 ///
 /// DOIT être appelé APRÈS context_switch_asm() et AVANT la fin de context_switch().
-pub fn set_rsp0(cpu_id: usize, kstack_ptr: u64) {
+pub fn set_rsp0(cpu_id: usize, kstack_top: u64) {
     // Obtenir le TSS du CPU courant (un TSS par CPU en SMP)
     let tss = unsafe { &mut TSS_TABLE[cpu_id] };
-    tss.rsp0 = kstack_ptr;
+    tss.rsp0 = kstack_top;
     // Pas de flush requis — le CPU lit TSS.RSP0 à chaque entrée Ring 3→0
 }
 

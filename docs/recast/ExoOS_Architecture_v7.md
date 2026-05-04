@@ -710,7 +710,10 @@ pub struct BootInfo {
 | **LAC-01** | `verify()` constant-time — crate `subtle` no\_std, `ct_eq()` |
 | **LAC-04** | `NONCE_COUNTER` atomique + `HKDF(counter \|\| object_id \|\| rdrand)` |
 | **LAC-06** | `key_storage.rs` — Argon2id OWASP (m=65536, t=3, p=4), sel 128 bits |
-| **CVE-EXO-001** | `spin-wait` ASM sur APs avant `SECURITY_READY` |
+
+Résolu depuis l'intégration kernel : **CVE-EXO-001** est couvert par
+`security_init()` côté BSP avant `smp_boot_aps()` et par le spin-wait AP
+`is_security_ready()` en Acquire dans `arch/x86_64/smp/init.rs`.
 
 ### 9.3 Problèmes P1 (à implémenter)
 
@@ -730,7 +733,7 @@ pub struct BootInfo {
 | S-01 | `verify_cap()` avant tout accès ExoFS | `fs/exofs/syscall/*` | 🔴 Obligatoire |
 | S-02 | `verify()` constant-time (`subtle`, `ct_eq()`) | `security/capability/verify.rs` | 🔴 À implémenter |
 | S-03 | `check_access()` = wrapper de `verify()` | `security/access_control/` | 🔴 Vérifier |
-| S-04 | `SECURITY_READY` + APs spin-wait ASM step 15 | `security/mod.rs` + `arch/smp/` | 🔴 À implémenter |
+| S-04 | `SECURITY_READY` + APs spin-wait ASM step 15 | `security/mod.rs` + `arch/smp/` | ✅ CORRIGÉ |
 | S-05 | Blake3 AVANT compression | `fs/exofs/crypto/blake3.rs` | 🔴 Obligatoire |
 | S-06 | Nonce = `NONCE_COUNTER` + `HKDF(counter \|\| object_id)` | `fs/exofs/crypto/xchacha20.rs` | 🔴 À implémenter |
 | S-07 | Pipeline données→Blake3→LZ4→XChaCha20→disque | `secret_writer.rs` | 🔴 Obligatoire |

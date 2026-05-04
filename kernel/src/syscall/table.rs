@@ -30,7 +30,7 @@ use crate::syscall::fast_path::Timespec;
 use crate::syscall::numbers::*;
 use crate::syscall::validation::{
     copy_from_user, copy_to_user, read_user_path, read_user_typed, validate_fd, validate_flags,
-    validate_signal, write_user_typed, UserBuf, IO_BUF_MAX,
+    write_user_typed, UserBuf, IO_BUF_MAX,
 };
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -1786,22 +1786,7 @@ pub fn sys_waitid(
 /// La livraison effective se fait au retour userspace du thread cible.
 pub fn sys_kill(pid: u64, sig: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_KILL);
-    let sig_n = match validate_signal(sig) {
-        Ok(s) => s as u8,
-        Err(e) => return e.to_errno(),
-    };
-    if sig_n == 0 {
-        return 0;
-    } // Signal 0 = vérification d'existence seulement
-    let signal = match crate::process::signal::default::Signal::from_u8(sig_n) {
-        Some(s) => s,
-        None => return EINVAL,
-    };
-    use crate::process::core::pid::Pid;
-    match crate::process::signal::delivery::send_signal_to_pid(Pid(pid as u32), signal) {
-        Ok(_) => 0,
-        Err(_) => -3i64, // ESRCH
-    }
+    crate::syscall::handlers::signal::sys_kill(pid, sig, 0, 0, 0, 0)
 }
 
 /// `tgkill(tgid, tid, sig)` — câblé via send_signal_to_tcb lors de l'intégration.
@@ -2326,6 +2311,15 @@ fn enforce_direct_ipc_policy(endpoint: u64) -> Result<(), i64> {
     }
 }
 
+#[inline]
+fn checked_u32_sysarg(value: u64) -> Result<u32, i64> {
+    if value > u32::MAX as u64 {
+        Err(EINVAL)
+    } else {
+        Ok(value as u32)
+    }
+}
+
 /// `exo_cap_create(type, rights, target_pid, token_out_ptr)` → handle ou errno.
 pub fn sys_exo_cap_create(
     cap_type: u64,
@@ -2345,12 +2339,20 @@ pub fn sys_exo_cap_create(
         return EACCES;
     }
 
-    match crate::security::capability::create(
-        cap_type as u32,
-        rights as u32,
-        target as u32,
-        caller_pid,
-    ) {
+    let cap_type = match checked_u32_sysarg(cap_type) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let rights = match checked_u32_sysarg(rights) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let target = match checked_u32_sysarg(target) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    match crate::security::capability::create(cap_type, rights, target, caller_pid) {
         Ok(token) => {
             let token_bytes = token.to_bytes();
             if copy_to_user(
@@ -2371,7 +2373,12 @@ pub fn sys_exo_cap_create(
 /// `exo_cap_revoke(handle)`.
 pub fn sys_exo_cap_revoke(handle: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_CAP_REVOKE);
-    match crate::security::capability::revoke_handle(handle as u32) {
+    let handle = match checked_u32_sysarg(handle) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    match crate::security::capability::revoke_handle(handle) {
         Ok(_) => 0,
         Err(e) => e.to_kernel_errno() as i64,
     }
@@ -2407,14 +2414,43 @@ pub fn sys_exo_cap_check(
         None => return EINVAL,
     };
 
+    let required_rights = match checked_u32_sysarg(required_rights) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let target_pid = match checked_u32_sysarg(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let expected_type = match checked_u32_sysarg(expected_type) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
     match crate::security::capability::check_token(
         token,
-        required_rights as u32,
-        target_pid as u32,
-        expected_type as u32,
+        required_rights,
+        target_pid,
+        expected_type,
     ) {
         Ok(_) => 0,
         Err(e) => e.to_kernel_errno() as i64,
+    }
+}
+
+#[cfg(test)]
+mod capability_syscall_arg_tests {
+    use super::*;
+
+    #[test]
+    fn checked_u32_sysarg_accepts_full_u32_range() {
+        assert_eq!(checked_u32_sysarg(0), Ok(0));
+        assert_eq!(checked_u32_sysarg(u32::MAX as u64), Ok(u32::MAX));
+    }
+
+    #[test]
+    fn checked_u32_sysarg_rejects_high_bits_in_syscall_abi() {
+        assert_eq!(checked_u32_sysarg(u32::MAX as u64 + 1), Err(EINVAL));
     }
 }
 

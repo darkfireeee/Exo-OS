@@ -82,6 +82,10 @@ fn class_from_capability(cap_type: CapabilityType) -> ServiceClass {
 }
 
 pub fn register_service(pid: Pid, cap: &CapToken) -> bool {
+    if cap.generation == 0 || cap._pad != [0; 2] {
+        return false;
+    }
+
     let Some(cap_type) = CapabilityType::from_u16(cap.type_id) else {
         return false;
     };
@@ -238,6 +242,23 @@ mod tests {
         ));
         assert_eq!(
             check_direct_ipc(broker_alias, Pid(INIT_SERVER_PID)),
+            IpcPolicyResult::UnknownService
+        );
+    }
+
+    #[test]
+    fn revoked_service_cap_cannot_register_dynamic_service() {
+        let revoked_cap = CapToken {
+            generation: 0,
+            object_id: exo_types::ObjectId([0u8; 32]),
+            rights: exo_types::Rights::READ.0,
+            type_id: CapabilityType::CryptoServer as u16,
+            _pad: [0; 2],
+        };
+
+        assert!(!register_service(Pid(49), &revoked_cap));
+        assert_eq!(
+            check_direct_ipc(Pid(INIT_SERVER_PID), Pid(49)),
             IpcPolicyResult::UnknownService
         );
     }

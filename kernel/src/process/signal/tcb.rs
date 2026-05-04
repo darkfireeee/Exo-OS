@@ -196,7 +196,7 @@ impl SignalTcb {
     /// Remplace le handler du signal `sig` (1-indexé).
     ///
     /// # SÉCURITÉ
-    /// `sig` DOIT être dans \[1..=64\] (vérifié par validate_signal() dans les handlers).
+    /// `sig` DOIT être dans \[1..=63\] (vérifié par validate_signal() dans les handlers).
     /// SIGKILL (9) et SIGSTOP (19) ne peuvent pas être redéfinis (SIG-07).
     pub fn set_action(&mut self, sig: u8, entry: SigactionEntry) -> bool {
         if sig == 9 || sig == 19 {

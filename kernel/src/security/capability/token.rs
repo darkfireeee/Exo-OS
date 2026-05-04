@@ -279,6 +279,9 @@ impl CapToken {
         let gen = u32::from_ne_bytes(b[12..16].try_into().ok()?);
         let tt = u16::from_ne_bytes(b[16..18].try_into().ok()?);
         let obj_type = CapObjectType::from_u16(tt);
+        if obj_type == CapObjectType::Invalid {
+            return None;
+        }
         Some(Self {
             object_id: ObjectId(oid),
             rights: Rights::from_bits_truncate(r),
@@ -336,5 +339,40 @@ pub fn read_stats() -> TokenStats {
         issued: TOKENS_ISSUED.load(Ordering::Relaxed),
         verified: TOKENS_VERIFIED.load(Ordering::Relaxed),
         denied: TOKENS_DENIED.load(Ordering::Relaxed),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_wire_roundtrip_preserves_valid_type() {
+        let token = CapToken::new(
+            ObjectId::from_raw(0x1234),
+            Rights::IPC_SEND,
+            7,
+            CapObjectType::IpcEndpoint,
+        );
+
+        let decoded = CapToken::from_bytes(&token.to_bytes()).expect("valid token wire form");
+        assert_eq!(decoded.object_id(), token.object_id());
+        assert_eq!(decoded.rights(), token.rights());
+        assert_eq!(decoded.generation(), token.generation());
+        assert_eq!(decoded.object_type(), token.object_type());
+    }
+
+    #[test]
+    fn token_wire_rejects_unknown_type_tag() {
+        let mut bytes = CapToken::new(
+            ObjectId::from_raw(0x1234),
+            Rights::IPC_SEND,
+            7,
+            CapObjectType::IpcEndpoint,
+        )
+        .to_bytes();
+        bytes[16..18].copy_from_slice(&0xffffu16.to_ne_bytes());
+
+        assert!(CapToken::from_bytes(&bytes).is_none());
     }
 }

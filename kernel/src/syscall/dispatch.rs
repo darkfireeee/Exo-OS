@@ -277,9 +277,8 @@ fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
     }
     if tcb_ptr != 0 {
-        // Masque SIGKILL (bit 8) et SIGSTOP (bit 18) non-masquables (SIG-07).
-        const NON_MASKABLE: u64 = (1u64 << 8) | (1u64 << 18);
-        let safe_mask = regs.signal_mask & !NON_MASKABLE;
+        // Masque SIGKILL/SIGSTOP non-masquables et bits de signaux invalides.
+        let safe_mask = crate::process::signal::mask::SigMask::from(regs.signal_mask).0;
         // SAFETY: tcb_ptr est non-nul et valide (maintenu par le scheduler).
         let tcb = unsafe { &mut *(tcb_ptr as *mut ThreadControlBlock) };
         tcb.signal_mask

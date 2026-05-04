@@ -304,9 +304,9 @@ ExoPhoenix v6 utilise `gs_base` (ambigu — kernel ou userspace ?).
 Nommage canonique : **`user_gs_base`** dans tous les fichiers.  
 Commentaire à ajouter partout :
 ```rust
-/// MSR 0xC0000101 — GS.base valeur USERSPACE.
-/// Le kernel GS.base est géré par SWAPGS (per-CPU data).
-/// Cette valeur est restaurée au retour Ring 3 via WRMSR.
+/// MSR 0xC0000102 — user GS.base cachee pendant l'execution Ring 0.
+/// Le kernel GS.base actif reste la per-CPU data apres SWAPGS.
+/// Cette valeur devient GS.base Ring 3 au SWAPGS de sortie.
 pub user_gs_base: u64,
 ```
 

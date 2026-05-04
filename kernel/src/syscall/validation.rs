@@ -590,10 +590,13 @@ pub fn validate_pid(raw: u64) -> Result<u32, SyscallError> {
     Ok(raw as u32)
 }
 
-/// Valide un signal number (1..=64, POSIX + temps-réel).
+/// Valide un signal livrable (1..=63, POSIX + temps-reel).
+///
+/// `kill(pid, 0)` est une sonde d'existence : elle est traitee par le handler
+/// `kill` avant cet appel, car le signal 0 n'est jamais livrable.
 #[inline]
 pub fn validate_signal(raw: u64) -> Result<u32, SyscallError> {
-    if raw == 0 || raw > 64 {
+    if raw == 0 || raw > crate::process::signal::delivery::MAX_SIGNAL_NUMBER as u64 {
         return Err(SyscallError::Invalid);
     }
     Ok(raw as u32)
@@ -672,8 +675,8 @@ mod tests {
     fn test_validate_signal() {
         assert!(matches!(validate_signal(0), Err(SyscallError::Invalid)));
         assert!(validate_signal(1).is_ok());
-        assert!(validate_signal(64).is_ok());
-        assert!(matches!(validate_signal(65), Err(SyscallError::Invalid)));
+        assert!(validate_signal(63).is_ok());
+        assert!(matches!(validate_signal(64), Err(SyscallError::Invalid)));
     }
 
     #[test]

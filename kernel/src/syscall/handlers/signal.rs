@@ -194,20 +194,16 @@ pub fn sys_rt_sigprocmask(
         // SAFETY: set_ptr est une adresse userspace validée.
         let new_set = unsafe { core::ptr::read_volatile(set_ptr as *const u64) };
 
-        // Masques non-bloquables : SIGKILL (bit 8) et SIGSTOP (bit 18).
-        const NON_MASKABLE: u64 = (1u64 << 8) | (1u64 << 18);
-
         let computed = match how {
             0 => old_mask | new_set,  // SIG_BLOCK
             1 => old_mask & !new_set, // SIG_UNBLOCK
             2 => new_set,             // SIG_SETMASK
             _ => return EINVAL,
         };
-        // Forcer SIGKILL et SIGSTOP non-bloquables (SIG-07).
-        tcb.signal_mask.store(
-            computed & !NON_MASKABLE,
-            core::sync::atomic::Ordering::Release,
-        );
+        // Forcer SIGKILL/SIGSTOP non-bloquables et retirer le bit invalide 64.
+        let safe_mask = crate::process::signal::mask::SigMask::from(computed).0;
+        tcb.signal_mask
+            .store(safe_mask, core::sync::atomic::Ordering::Release);
     }
 
     0 // succès
@@ -226,19 +222,13 @@ pub fn sys_rt_sigreturn(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
 
 /// `kill(pid, sig)` → 0 ou errno.
 pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    use crate::process::signal::delivery::{send_signal_to_pid, SendError};
-    use crate::process::signal::Signal;
+    use crate::process::signal::delivery::{send_signal_number_to_pid, SendError};
 
-    let sig = match validate_signal(signum) {
-        Ok(s) => s,
-        Err(e) => return e.to_errno(),
-    };
-    let signal = match Signal::from_u8(sig as u8) {
-        Some(s) => s,
-        None => return EINVAL,
-    };
-
-    let target_pid = pid as i32;
+    let signed_pid = pid as i64;
+    if signed_pid > i32::MAX as i64 || signed_pid < i32::MIN as i64 {
+        return ESRCH;
+    }
+    let target_pid = signed_pid as i32;
     let real_pid: u32 = if target_pid <= 0 {
         // pid==0 : envoyer au groupe courant → approx. avec le PID courant.
         // pid<0  : groupes de processus — non implémenté.
@@ -259,7 +249,20 @@ pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
         target_pid as u32
     };
 
-    match send_signal_to_pid(Pid(real_pid), signal) {
+    if signum == 0 {
+        return if PROCESS_REGISTRY.find_by_pid(Pid(real_pid)).is_some() {
+            0
+        } else {
+            ESRCH
+        };
+    }
+
+    let sig = match validate_signal(signum) {
+        Ok(s) => s,
+        Err(e) => return e.to_errno(),
+    };
+
+    match send_signal_number_to_pid(Pid(real_pid), sig as u8) {
         Ok(()) => 0,
         Err(SendError::PermissionDenied) => EPERM,
         Err(_) => ESRCH,
@@ -273,11 +276,6 @@ pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
 pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     use crate::process::signal::delivery::send_signal_to_tcb;
     use crate::process::signal::queue::SigInfo;
-
-    let sig = match validate_signal(signum) {
-        Ok(s) => s,
-        Err(e) => return e.to_errno(),
-    };
 
     if tgid == 0 || tgid >= 4_194_304 {
         return ESRCH;
@@ -306,6 +304,15 @@ pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64
     if thread_ptr.is_null() {
         return ESRCH;
     }
+
+    if signum == 0 {
+        return 0;
+    }
+
+    let sig = match validate_signal(signum) {
+        Ok(s) => s,
+        Err(e) => return e.to_errno(),
+    };
 
     // SAFETY: thread_ptr maintenu par le PCB.
     let thread = unsafe { &*thread_ptr };

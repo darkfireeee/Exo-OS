@@ -205,8 +205,8 @@ pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
 ///    L'ASM sauvegarde/restaure 6 callee-saved GPRs. CR3 switché si différent.
 /// 9. Restaurer PKRS de `next`.
 /// 10. Restaurer CET PL0_SSP de `next` si shadow stack actif.
-/// 11. Marquer `next` → Running, puis mettre à jour GS current_tcb et TSS.RSP0.
-/// 12. Restaurer FS.base et user_gs_base de `next` via wrmsr (CORR-11).
+/// 11. Marquer `next` → Running, puis mettre à jour pile kernel/TSS.RSP0.
+/// 12. Restaurer FS.base puis user_gs_base, enfin publier GS current_tcb.
 ///
 /// # Sécurité
 /// - Appelé avec préemption désactivée (IrqGuard ou PreemptGuard).
@@ -347,23 +347,12 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     next.set_state(TaskState::Running);
     next.switch_count = next.switch_count.wrapping_add(1);
 
-    // Mettre à jour la pile noyau d'entrée et TSS.RSP0 avant de publier le TCB
-    // courant dans GS et dans la table cross-CPU.
+    // Mettre à jour la pile noyau d'entrée et TSS.RSP0 avant toute publication
+    // du TCB courant.
     let next_kstack_top = next.kstack_top();
     unsafe {
         percpu::set_kernel_rsp(next_kstack_top);
         tss::update_rsp0(cpu_id, next_kstack_top);
-    }
-    core::sync::atomic::fence(Ordering::SeqCst);
-    percpu::set_current_tcb(next as *mut ThreadControlBlock);
-
-    // Publier ensuite l'état `next` aux autres CPUs.
-    if cpu_id < MAX_CPUS {
-        let cpu_data = unsafe { percpu::per_cpu_mut(cpu_id) };
-        cpu_data.ctx_switch_count = cpu_data.ctx_switch_count.wrapping_add(1);
-        cpu_data.last_switch_tsc = tsc::read_tsc();
-        CURRENT_THREAD_PER_CPU[cpu_id]
-            .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
     }
 
     // ── Étape 12 : Restaurer FS/GS base de `next` (CORR-11) ─────────────────
@@ -376,6 +365,19 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     unsafe {
         msr::write_msr(MSR_FS_BASE, next.fs_base);
         msr::write_msr(MSR_KERNEL_GS_BASE, next.user_gs_base);
+    }
+
+    // Publier seulement après FS puis user-GS, conformément à ContextSwitch.tla.
+    core::sync::atomic::fence(Ordering::SeqCst);
+    percpu::set_current_tcb(next as *mut ThreadControlBlock);
+
+    // Publier ensuite l'état `next` aux autres CPUs.
+    if cpu_id < MAX_CPUS {
+        let cpu_data = unsafe { percpu::per_cpu_mut(cpu_id) };
+        cpu_data.ctx_switch_count = cpu_data.ctx_switch_count.wrapping_add(1);
+        cpu_data.last_switch_tsc = tsc::read_tsc();
+        CURRENT_THREAD_PER_CPU[cpu_id]
+            .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
     }
 
     // La livraison des signaux reste dans arch/ au retour userspace. Lire ici
