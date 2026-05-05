@@ -6,12 +6,13 @@ EXTENDS Naturals, FiniteSets, TLC
 (* 100% COMPLETION: Includes Standard (S1-S4, L1) and STRESS (S1-S3)       *)
 (***************************************************************************)
 
-CONSTANTS MAX_CORES, MAX_TIMER, TIMEOUT_TICKS
+CONSTANTS MAX_CORES, MAX_TIMER, TIMEOUT_TICKS, CLEAN_IMAGE_READY
 
 CORES_A == 0..(MAX_CORES - 1)
 
 VARIABLES 
     CoreState,           
+    KernelAHealth,
     FpuActive,           
     FpuSaved,            
     TlbShootdownActive,  
@@ -23,7 +24,7 @@ VARIABLES
     NonceSeed,           
     FreezeTimer          
 
-vars == << CoreState, FpuActive, FpuSaved, TlbShootdownActive, 
+vars == << CoreState, KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, 
            HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, 
            KernelBState, EpochID, NonceSeed, FreezeTimer >>
 
@@ -32,6 +33,7 @@ vars == << CoreState, FpuActive, FpuSaved, TlbShootdownActive,
 (* ========================================================================= *)
 TypeOK ==
     /\ CoreState \in [CORES_A -> {"RUNNING", "FREEZE_REQ_RECV", "XSAVE_DONE", "FREEZE_ACKED", "SPIN_WAITING", "RESUMED", "DEGRADED_ACK"}]
+    /\ KernelAHealth \in {"ALIVE", "PANICKED", "RELAUNCHED"}
     /\ FpuActive \in [CORES_A -> BOOLEAN]
     /\ FpuSaved \in [CORES_A -> BOOLEAN]
     /\ TlbShootdownActive \in BOOLEAN
@@ -42,6 +44,7 @@ TypeOK ==
     /\ EpochID \in Nat
     /\ NonceSeed \in Nat
     /\ FreezeTimer \in 0..MAX_TIMER
+    /\ CLEAN_IMAGE_READY \in BOOLEAN
 
 (* ========================================================================= *)
 (* 1.2 STANDARD PROPERTIES (S1, S2, S3, S4, L1)                              *)
@@ -60,6 +63,15 @@ S4_EpochMutatesOnRestore ==
     \A old_epoch \in 1..10 : 
         [] ((KernelBState = "SNAPSHOT_IN_PROGRESS" /\ EpochID = old_epoch) => 
             <> ((KernelBState = "RESTORING" /\ EpochID /= old_epoch) \/ KernelBState = "CRASHED"))
+
+R1_KernelAPanicDetected ==
+    [] (KernelAHealth = "PANICKED" => <> (HandoffFlag # 0))
+
+R2_RestoreUsesCleanExoFSImage ==
+    [] (KernelBState = "RESTORING" => CLEAN_IMAGE_READY)
+
+R3_ResumeRelaunchesKernelA ==
+    [] (KernelBState = "RESTORING" /\ KernelAHealth = "PANICKED" => <> (KernelAHealth = "RELAUNCHED"))
 
 L1_FreezeAlwaysTerminates ==
     [] (HandoffFlag = 1 => 
@@ -86,6 +98,7 @@ S3_STRESS_KernelBCrashDuringSnapshot ==
 
 Init ==
     /\ CoreState = [c \in CORES_A |-> "RUNNING"]
+    /\ KernelAHealth = "ALIVE"
     /\ FpuActive \in [CORES_A -> BOOLEAN] 
     /\ FpuSaved = [c \in CORES_A |-> FALSE]
     /\ TlbShootdownActive = FALSE
@@ -98,53 +111,69 @@ Init ==
     /\ FreezeTimer = 0
 
 KernelA_StartTlbShootdown ==
+    /\ KernelAHealth = "ALIVE"
     /\ ~TlbShootdownActive
     /\ HandoffFlag = 0
     /\ TlbShootdownActive' = TRUE
-    /\ UNCHANGED << CoreState, FpuActive, FpuSaved, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << CoreState, KernelAHealth, FpuActive, FpuSaved, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
 
 KernelA_EndTlbShootdown ==
+    /\ KernelAHealth = "ALIVE"
     /\ TlbShootdownActive
     /\ TlbShootdownActive' = FALSE
-    /\ UNCHANGED << CoreState, FpuActive, FpuSaved, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << CoreState, KernelAHealth, FpuActive, FpuSaved, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
+
+KernelA_SelfDestruct ==
+    /\ KernelAHealth = "ALIVE"
+    /\ HandoffFlag = 0
+    /\ ~TlbShootdownActive
+    /\ KernelAHealth' = "PANICKED"
+    /\ UNCHANGED << CoreState, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
+
+KernelB_DetectKernelADeath ==
+    /\ KernelAHealth = "PANICKED"
+    /\ KernelBState = "WATCHING"
+    /\ HandoffFlag = 0
+    /\ HandoffFlag' = 1
+    /\ UNCHANGED << CoreState, KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
 
 ExoNmi_Tick ==
     /\ NmiWatchdogStrikes < 3
     /\ NmiWatchdogStrikes' = NmiWatchdogStrikes + 1
     /\ \/ /\ NmiWatchdogStrikes' = 3 /\ HandoffFlag = 0 /\ HandoffFlag' = 1
        \/ /\ ~(NmiWatchdogStrikes' = 3 /\ HandoffFlag = 0) /\ HandoffFlag' = HandoffFlag
-    /\ UNCHANGED << CoreState, FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, KernelBState, EpochID, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << CoreState, KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, KernelBState, EpochID, NonceSeed, FreezeTimer >>
 
 KernelB_InitiateFreeze ==
     /\ KernelBState = "WATCHING"
     /\ HandoffFlag = 0
     /\ HandoffFlag' = 1
-    /\ UNCHANGED << CoreState, FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << CoreState, KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
 
 KernelA_ReceiveFreeze(c) ==
     /\ CoreState[c] = "RUNNING"
     /\ HandoffFlag = 1
     /\ ~TlbShootdownActive 
     /\ CoreState' = [CoreState EXCEPT ![c] = "FREEZE_REQ_RECV"]
-    /\ UNCHANGED << FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
 
 KernelA_DoXSave(c) ==
     /\ CoreState[c] = "FREEZE_REQ_RECV"
     /\ \/ /\ FpuActive[c] = TRUE /\ FpuSaved' = [FpuSaved EXCEPT ![c] = TRUE]
        \/ /\ FpuActive[c] = FALSE /\ FpuSaved' = FpuSaved 
     /\ CoreState' = [CoreState EXCEPT ![c] = "XSAVE_DONE"]
-    /\ UNCHANGED << FpuActive, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << KernelAHealth, FpuActive, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
 
 KernelA_AckFreeze(c) ==
     /\ CoreState[c] = "XSAVE_DONE"
     /\ FreezeAckBitmap' = FreezeAckBitmap \union {c}
     /\ CoreState' = [CoreState EXCEPT ![c] = "FREEZE_ACKED"]
-    /\ UNCHANGED << FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
 
 KernelA_SpinWait(c) ==
     /\ CoreState[c] = "FREEZE_ACKED"
     /\ CoreState' = [CoreState EXCEPT ![c] = "SPIN_WAITING"]
-    /\ UNCHANGED << FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
 
 KernelB_AllAcked ==
     /\ KernelBState \in {"WATCHING", "CRASHED"}
@@ -152,37 +181,39 @@ KernelB_AllAcked ==
     /\ HandoffFlag = 1
     /\ HandoffFlag' = 2
     /\ KernelBState' = "SNAPSHOT_IN_PROGRESS"
-    /\ UNCHANGED << CoreState, FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, NmiWatchdogStrikes, EpochID, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << CoreState, KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, NmiWatchdogStrikes, EpochID, NonceSeed, FreezeTimer >>
 
 KernelB_Crash ==
     /\ KernelBState = "SNAPSHOT_IN_PROGRESS"
     /\ KernelBState' = "CRASHED"
-    /\ UNCHANGED << CoreState, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, EpochID, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << CoreState, KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, EpochID, NonceSeed, FreezeTimer >>
 
 KernelA_TimeoutDegraded(c) ==
     /\ CoreState[c] = "SPIN_WAITING"
     /\ KernelBState = "CRASHED"
     /\ FreezeTimer >= TIMEOUT_TICKS
     /\ CoreState' = [CoreState EXCEPT ![c] = "DEGRADED_ACK"]
-    /\ UNCHANGED << FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer >>
 
 KernelB_FinishSnapshot ==
     /\ KernelBState = "SNAPSHOT_IN_PROGRESS"
     /\ KernelBState' = "SNAPSHOT_DONE"
     /\ EpochID' = EpochID + 1 
-    /\ UNCHANGED << CoreState, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, NonceSeed, FreezeTimer >>
+    /\ UNCHANGED << CoreState, KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, NonceSeed, FreezeTimer >>
 
 KernelB_Restore ==
     /\ KernelBState = "SNAPSHOT_DONE"
+    /\ CLEAN_IMAGE_READY
     /\ KernelBState' = "RESTORING"
     /\ NonceSeed' = NonceSeed + 1 
-    /\ UNCHANGED << CoreState, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, EpochID, FreezeTimer >>
+    /\ UNCHANGED << CoreState, KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, EpochID, FreezeTimer >>
 
 KernelB_ResumeA ==
     /\ KernelBState = "RESTORING"
     /\ HandoffFlag' = 3
     /\ KernelBState' = "WATCHING"
     /\ CoreState' = [c \in CORES_A |-> "RESUMED"]
+    /\ KernelAHealth' = "RELAUNCHED"
     /\ UNCHANGED << FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, NmiWatchdogStrikes, EpochID, NonceSeed, FreezeTimer >>
 
 \* FIXED: The Loop Closure! Kernel A goes back to RUNNING to allow future snapshots.
@@ -191,6 +222,7 @@ KernelA_ReturnToNormal ==
     /\ KernelBState = "WATCHING"
     /\ EpochID < 4   \* <---- THE FIX: Stop the simulation after 3 complete snapshot loops!
     /\ CoreState' = [c \in CORES_A |-> "RUNNING"]
+    /\ KernelAHealth' = "ALIVE"
     /\ FpuSaved' = [c \in CORES_A |-> FALSE]
     /\ FreezeAckBitmap' = {}
     /\ HandoffFlag' = 0
@@ -202,10 +234,11 @@ TickTimer ==
     /\ HandoffFlag \in {1, 2}
     /\ FreezeTimer < MAX_TIMER
     /\ FreezeTimer' = FreezeTimer + 1
-    /\ UNCHANGED << CoreState, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed >>
+    /\ UNCHANGED << CoreState, KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, HandoffFlag, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed >>
 
 Next ==
     \/ KernelA_StartTlbShootdown \/ KernelA_EndTlbShootdown
+    \/ KernelA_SelfDestruct \/ KernelB_DetectKernelADeath
     \/ ExoNmi_Tick
     \/ KernelB_InitiateFreeze \/ KernelB_AllAcked \/ KernelB_Crash
     \/ KernelB_FinishSnapshot \/ KernelB_Restore \/ KernelB_ResumeA

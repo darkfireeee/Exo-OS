@@ -1,0 +1,38 @@
+////OUTPUT
+
+PS C:\Users\xavie\Downloads\ExoNet_IPC.toolbox\New folder> java -Xmx4g -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC -workers auto -config ExoFS_Stress_Hard.cfg ExoFS_Stress_Hard
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 102 and seed -5616231161234744111 with 8 workers on 8 cores with 3641MB heap and 64MB offheap memory [pid: 25812] (Windows 11 10.0 amd64, Eclipse Adoptium 25.0.2 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file C:\Users\xavie\Downloads\ExoNet_IPC.toolbox\New folder\ExoFS_Stress_Hard.tla
+Parsing file C:\Users\xavie\AppData\Local\Temp\Integers.tla
+Parsing file C:\Users\xavie\AppData\Local\Temp\FiniteSets.tla
+Parsing file C:\Users\xavie\AppData\Local\Temp\Sequences.tla
+Parsing file C:\Users\xavie\AppData\Local\Temp\TLC.tla
+Parsing file C:\Users\xavie\AppData\Local\Temp\Naturals.tla
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module ExoFS_Stress_Hard
+Starting... (2026-05-04 23:00:30)
+Implied-temporal checking--satisfiability problem has 5 branches.
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-05-04 23:00:32.
+Checking 5 branches of temporal properties for the current state space with 3110 total distinct states at (2026-05-04 23:00:35)
+Finished checking temporal properties in 00s at 2026-05-04 23:00:35
+Progress(6) at 2026-05-04 23:00:35: 1?473 states generated (1?473 s/min), 623 distinct states found (623 ds/min), 427 states left on queue.
+Checking 5 branches of temporal properties for the current state space with 345970 total distinct states at (2026-05-04 23:01:35)
+Finished checking temporal properties in 19s at 2026-05-04 23:01:55
+Progress(11) at 2026-05-04 23:01:55: 185?292 states generated (183?819 s/min), 69?216 distinct states found (68?593 ds/min), 41?926 states left on queue.
+Progress(12) at 2026-05-04 23:02:55: 377?397 states generated (192?105 s/min), 137?636 distinct states found (68?420 ds/min), 82?121 states left on queue.
+Checking 5 branches of temporal properties for the current state space with 1179785 total distinct states at (2026-05-04 23:03:55)
+Finished checking temporal properties in 01min 48s at 2026-05-04 23:05:43
+Progress(12) at 2026-05-04 23:05:43: 658?070 states generated (280?673 s/min), 235?963 distinct states found (98?327 ds/min), 139?839 states left on queue.
+Progress(13) at 2026-05-04 23:06:43: 1?029?194 states generated (371?124 s/min), 368?267 distinct states found (132?304 ds/min), 217?962 states left on queue.
+Progress(13) at 2026-05-04 23:07:43: 1?380?287 states generated (351?093 s/min), 486?713 distinct states found (118?446 ds/min), 286?154 states left on queue.
+Progress(13) at 2026-05-04 23:08:43: 1?706?957 states generated (326?670 s/min), 602?581 distinct states found (115?868 ds/min), 355?541 states left on queue.
+Progress(13) at 2026-05-04 23:09:43: 2?040?163 states generated (333?206 s/min), 718?664 distinct states found (116?083 ds/min), 422?935 states left on queue.
+Progress(14) at 2026-05-04 23:10:43: 2?332?319 states generated (292?156 s/min), 821?542 distinct states found (102?878 ds/min), 483?128 states left on queue.
+Progress(14) at 2026-05-04 23:11:43: 2?735?710 states generated (403?391 s/min), 958?712 distinct states found (137?170 ds/min), 562?636 states left on queue.
+Checking 5 branches of temporal properties for the current state space with 5432105 total distinct states at (2026-05-04 23:12:43)

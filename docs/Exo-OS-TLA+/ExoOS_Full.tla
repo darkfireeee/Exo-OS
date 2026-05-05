@@ -6,14 +6,14 @@ EXTENDS Naturals, Integers, Sequences, FiniteSets, TLC
 \* =========================================================================
 CONSTANTS 
     CORES, CORES_A, MAX_CORES, IRQS, MAX_PENDING_ACKS, MAX_OVERFLOWS, MAX_GEN, PIDS,
-    MAX_TIMER, TIMEOUT_TICKS, MAX_TICKS, N_CYCLES
+    MAX_TIMER, TIMEOUT_TICKS, MAX_TICKS, N_CYCLES, CLEAN_IMAGE_READY
 
 \* =========================================================================
 \* GLOBAL SYSTEM VARIABLES
 \* =========================================================================
 VARIABLES
     \* Mod 1: Phoenix Handoff
-    CoreState, FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer,
+    CoreState, KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer,
     \* Mod 3: IRQ Routing
     PendingAcks, MaskedSince, OverflowCount, DispatchGen, LapicIsrBit, EoiSent,
     \* Mod 12: Adversarial
@@ -22,7 +22,7 @@ VARIABLES
     HandoffFlag,     
     BlacklistedIrqs  
 
-vars_phoenix == <<CoreState, FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer>>
+vars_phoenix == <<CoreState, KernelAHealth, FpuActive, FpuSaved, TlbShootdownActive, FreezeAckBitmap, NmiWatchdogStrikes, KernelBState, EpochID, NonceSeed, FreezeTimer>>
 vars_irq == <<PendingAcks, MaskedSince, OverflowCount, DispatchGen, LapicIsrBit, EoiSent>>
 vars_adv == <<Attacker, AttackSuccessful, SystemIntegrity, RecoveryInProgress, CryptoServerState, ExpiredTokens, LedgerP0Entries, PhoenixCycleCount, Ticks>>
 
@@ -30,10 +30,11 @@ vars_adv == <<Attacker, AttackSuccessful, SystemIntegrity, RecoveryInProgress, C
 \* SUBSYSTEM INSTANTIATION & MAPPING
 \* =========================================================================
 Phoenix == INSTANCE ExoPhoenixHandoff
-    WITH CoreState <- CoreState, FpuActive <- FpuActive, FpuSaved <- FpuSaved, 
+    WITH CoreState <- CoreState, KernelAHealth <- KernelAHealth, FpuActive <- FpuActive, FpuSaved <- FpuSaved, 
          TlbShootdownActive <- TlbShootdownActive, HandoffFlag <- HandoffFlag, 
          FreezeAckBitmap <- FreezeAckBitmap, NmiWatchdogStrikes <- NmiWatchdogStrikes, 
-         KernelBState <- KernelBState, EpochID <- EpochID, NonceSeed <- NonceSeed, FreezeTimer <- FreezeTimer
+         KernelBState <- KernelBState, EpochID <- EpochID, NonceSeed <- NonceSeed, FreezeTimer <- FreezeTimer,
+         CLEAN_IMAGE_READY <- CLEAN_IMAGE_READY
 
 IRQ == INSTANCE IrqRoutingStress
     WITH PendingAcks <- PendingAcks, MaskedSince <- MaskedSince, OverflowCount <- OverflowCount, 
