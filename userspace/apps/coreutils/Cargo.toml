@@ -1,0 +1,35 @@
+[package]
+name = "exo-coreutils"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "exo-ls"
+path = "src/bin/ls.rs"
+
+[[bin]]
+name = "exo-mkdir"
+path = "src/bin/mkdir.rs"
+
+[[bin]]
+name = "exo-rm"
+path = "src/bin/rm.rs"
+
+[[bin]]
+name = "exo-rmdir"
+path = "src/bin/rmdir.rs"
+
+[[bin]]
+name = "exo-touch"
+path = "src/bin/touch.rs"
+
+[[bin]]
+name = "exo-cat"
+path = "src/bin/cat.rs"
+
+[[bin]]
+name = "exo-echo"
+path = "src/bin/echo.rs"

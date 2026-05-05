@@ -7,7 +7,7 @@
 #   make qemu    → lance QEMU depuis l'ISO (x86_64, 256M RAM, sortie série stdio)
 #   make run     → alias de qemu
 
-.PHONY: all build release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu run clean check fmt test test-exofs info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection
+.PHONY: all build release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection
 
 # ── Outils ───────────────────────────────────────────────────────────────────
 CARGO          = cargo
@@ -31,6 +31,7 @@ KERNEL_A_REL    = target/exophoenix/kernel-a-release.elf
 QEMU = qemu-system-x86_64
 QEMU_FLAGS  = -machine q35
 QEMU_FLAGS += -m 256M
+QEMU_FLAGS += -boot d
 QEMU_FLAGS += -vga std
 QEMU_FLAGS += -serial stdio
 QEMU_FLAGS += -no-reboot
@@ -47,8 +48,12 @@ QEMU_FLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 QEMU_SAFE_SERIAL_LOG ?= /tmp/exoos-serial.log
 QEMU_SAFE_INT_LOG    ?= /tmp/exoos-qemu-int.log
 QEMU_SAFE_E9_LOG     ?= /tmp/exoos-e9.log
+QEMU_EXOFS_DISK      ?= target/qemu/exofs-root.img
+QEMU_EXOFS_DISK_SIZE ?= 512M
+QEMU_EXOFS_DRIVE_FLAGS = -drive if=none,file=$(QEMU_EXOFS_DISK),format=raw,id=exofs0,cache=writeback -device virtio-blk-pci,drive=exofs0
 QEMU_HEADLESS_SAFE_FLAGS  = -machine q35
 QEMU_HEADLESS_SAFE_FLAGS += -m 256M
+QEMU_HEADLESS_SAFE_FLAGS += -boot d
 QEMU_HEADLESS_SAFE_FLAGS += -vga std
 QEMU_HEADLESS_SAFE_FLAGS += -serial file:$(QEMU_SAFE_SERIAL_LOG)
 QEMU_HEADLESS_SAFE_FLAGS += -no-reboot
@@ -56,6 +61,13 @@ QEMU_HEADLESS_SAFE_FLAGS += -no-shutdown
 QEMU_HEADLESS_SAFE_FLAGS += -d int,cpu_reset -D $(QEMU_SAFE_INT_LOG)
 QEMU_HEADLESS_SAFE_FLAGS += -debugcon file:$(QEMU_SAFE_E9_LOG)
 QEMU_HEADLESS_SAFE_FLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
+
+$(QEMU_EXOFS_DISK):
+	@mkdir -p $(dir $(QEMU_EXOFS_DISK))
+	@if [ ! -f "$(QEMU_EXOFS_DISK)" ]; then \
+	    echo "$(BLUE)Creation disque ExoFS QEMU : $(QEMU_EXOFS_DISK) ($(QEMU_EXOFS_DISK_SIZE))$(NC)"; \
+	    truncate -s $(QEMU_EXOFS_DISK_SIZE) "$(QEMU_EXOFS_DISK)"; \
+	fi
 
 # Couleurs
 BLUE   = \033[0;34m
@@ -124,28 +136,28 @@ _make_iso:
 
 # ── Lancement QEMU ────────────────────────────────────────────────────────────
 ## 4. Lancer Exo-OS dans QEMU (depuis l'ISO debug)
-qemu: iso
+qemu: iso $(QEMU_EXOFS_DISK)
 	@echo "$(CYAN)Lancement QEMU — Ctrl+C pour quitter$(NC)"
 	@echo "$(YELLOW)Log interruptions : /tmp/qemu-exoos.log$(NC)"
-	$(QEMU) $(QEMU_FLAGS) -cdrom $(ISO_OUTPUT)
+	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) -cdrom $(ISO_OUTPUT)
 
 ## 4b. Lancer en mode release
-qemu-release: iso-release
+qemu-release: iso-release $(QEMU_EXOFS_DISK)
 	@echo "$(CYAN)Lancement QEMU (release)$(NC)"
-	$(QEMU) $(QEMU_FLAGS) -cdrom $(ISO_OUTPUT)
+	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) -cdrom $(ISO_OUTPUT)
 
 ## 4c. Lancer QEMU sans fenêtre graphique (serveur headless)
-qemu-nographic: iso
+qemu-nographic: iso $(QEMU_EXOFS_DISK)
 	@echo "$(CYAN)Lancement QEMU headless (sortie texte)$(NC)"
-	$(QEMU) $(QEMU_FLAGS) -cdrom $(ISO_OUTPUT) -nographic -display none
+	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) -cdrom $(ISO_OUTPUT) -nographic -display none
 
 ## 4d. Lancer QEMU headless "zéro surprise" (logs fichiers dédiés)
-qemu-headless-safe: iso
+qemu-headless-safe: iso $(QEMU_EXOFS_DISK)
 	@echo "$(CYAN)Lancement QEMU headless sûr (logs fichiers, sans stdio partagé)$(NC)"
 	@echo "$(YELLOW)Serial  : $(QEMU_SAFE_SERIAL_LOG)$(NC)"
 	@echo "$(YELLOW)INT log : $(QEMU_SAFE_INT_LOG)$(NC)"
 	@echo "$(YELLOW)E9 log  : $(QEMU_SAFE_E9_LOG)$(NC)"
-	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) -cdrom $(ISO_OUTPUT) -display none
+	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) -cdrom $(ISO_OUTPUT) -display none
 
 ## 4e. Lancer le test de résurrection ExoPhoenix en QEMU headless
 qemu-phoenix-resurrection: iso-phoenix-resurrection
@@ -187,6 +199,26 @@ test:
 test-exofs:
 	@echo "$(BLUE)Tests ExoFS (filtre fs::exofs::)...$(NC)"
 	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) test --lib $(CARGO_TEST_FLAGS) $(HOST_TEST_OVERRIDES) fs::exofs::
+
+test-drivers:
+	@echo "$(BLUE)Tests drivers shell/QEMU...$(NC)"
+	@$(CARGO) test --manifest-path drivers/input/ps2/Cargo.toml
+	@$(CARGO) test --manifest-path drivers/tty/Cargo.toml
+	@$(CARGO) test --manifest-path drivers/display/vga/Cargo.toml
+	@$(CARGO) test --manifest-path drivers/display/framebuffer/Cargo.toml
+	@$(CARGO) test --manifest-path drivers/storage/virtio_blk/Cargo.toml
+
+test-loader:
+	@echo "$(BLUE)Tests loader ELF...$(NC)"
+	@$(CARGO) test --manifest-path loader/Cargo.toml
+
+test-userspace:
+	@echo "$(BLUE)Tests userspace shell/coreutils...$(NC)"
+	@cd userspace && $(CARGO) test --workspace
+
+qemu-shell-smoke: iso $(QEMU_EXOFS_DISK)
+	@echo "$(CYAN)Smoke QEMU shell avec disque virtio persistant$(NC)"
+	@bash scripts/qemu/shell_smoke_qmp.sh "$(QEMU_EXOFS_DISK)"
 
 # ── Nettoyage ─────────────────────────────────────────────────────────────────
 clean:

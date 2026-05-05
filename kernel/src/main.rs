@@ -348,8 +348,13 @@ pub unsafe extern "C" fn kernel_main(
     // Debug : kernel_init terminé ('I' = 0x49)
     core::arch::asm!("mov al, 0x49", "out 0xe9, al", options(nostack, nomem));
 
-    // Mise à jour écran VGA : Phase 1 complète
+    // Mise à jour écran VGA/framebuffer : noyau initialisé, scheduler vivant.
     kernel::arch::x86_64::boot_display::boot_complete();
+    kernel::arch::x86_64::boot_display::userspace_status(
+        "USERSPACE HANDOFF: INIT NON DEMARRE",
+        "/sbin/exo-init-server n'est pas encore injecte dans le rootfs ExoFS.",
+        "IRQ idle actif: scheduling bloque tant que PID 1 n'existe pas.",
+    );
 
     // Debug : boot complet → '\n', 'O', 'K', '\n'
     core::arch::asm!(
@@ -367,11 +372,13 @@ pub unsafe extern "C" fn kernel_main(
     #[cfg(exophoenix_resurrection_test)]
     kernel::exophoenix::resurrection::trigger_self_destruct();
 
-    // ── Idle loop ─────────────────────────────────────────────────────────────
-    // Une fois le scheduler démarré, le APIC timer tick (vecteur 0x20) interrompra
-    // ce HLT et le scheduler planifiera l'idle task à la place de cette boucle.
+    // ── Idle scheduler ────────────────────────────────────────────────────────
+    // Fin de boot: ne pas utiliser halt_cpu() ici. `halt_cpu()` coupe IF avec
+    // `cli; hlt` et empeche tout kthread/PID1 enfile de prendre le CPU. La boucle
+    // idle scheduler ci-dessous garde les IRQ actives et tente un switch avant
+    // chaque HLT.
     #[cfg(not(exophoenix_resurrection_test))]
-    kernel::halt_cpu()
+    kernel::arch::x86_64::run_scheduler_idle()
 }
 
 // ── Gestionnaires panic / OOM ─────────────────────────────────────────────────

@@ -178,13 +178,11 @@ pub fn commit_epoch(input: CommitInput<'_>) -> ExofsResult<CommitResult> {
     );
 
     // Sérialise l'EpochRecord en tableau de 104 octets.
-    // SAFETY: EpochRecord est #[repr(C, packed)], plain types, taille 104.
-    let record_bytes: &[u8] =
-        unsafe { core::slice::from_raw_parts(&record as *const EpochRecord as *const u8, 104) };
+    let record_bytes = record.to_bytes();
 
     // Écriture physique dans le slot.
     let bytes_written =
-        (input.callbacks.write_fn)(record_bytes, input.slot_offset).map_err(|e| {
+        (input.callbacks.write_fn)(&record_bytes, input.slot_offset).map_err(|e| {
             lock.aborted_commits = lock.aborted_commits.saturating_add(1);
             EPOCH_STATS.inc_commits_aborted();
             e

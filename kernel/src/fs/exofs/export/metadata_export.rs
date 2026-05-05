@@ -345,14 +345,13 @@ impl ManifestBlobEntry {
         Self::new(meta.blob_id, meta.size, meta.epoch, meta.crc32)
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
+    pub fn as_bytes(&self) -> [u8; 64] {
+        let mut out = [0u8; 64];
+        // SAFETY: ManifestBlobEntry est #[repr(C)] et sa taille est vérifiée par const assert.
         unsafe {
-            core::slice::from_raw_parts(
-                self as *const Self as *const u8,
-                core::mem::size_of::<Self>(),
-            )
+            core::ptr::copy_nonoverlapping(self as *const Self as *const u8, out.as_mut_ptr(), 64);
         }
+        out
     }
 }
 
@@ -503,14 +502,13 @@ impl MetaBinaryHeader {
         m == META_BINARY_MAGIC
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
+    pub fn as_bytes(&self) -> [u8; 40] {
+        let mut out = [0u8; 40];
+        // SAFETY: MetaBinaryHeader est #[repr(C)] et sa taille est vérifiée par const assert.
         unsafe {
-            core::slice::from_raw_parts(
-                self as *const Self as *const u8,
-                core::mem::size_of::<Self>(),
-            )
+            core::ptr::copy_nonoverlapping(self as *const Self as *const u8, out.as_mut_ptr(), 40);
         }
+        out
     }
 }
 
@@ -543,12 +541,12 @@ impl MetadataBinaryWriter {
         self.buf
             .try_reserve(total)
             .map_err(|_| ExofsError::NoMemory)?;
-        self.buf.extend_from_slice(hdr_bytes);
+        self.buf.extend_from_slice(&hdr_bytes);
 
         // Entrées (RECUR-01 : boucle while)
         let mut i = 0usize;
         while i < manifest.entries.len() {
-            self.buf.extend_from_slice(manifest.entries[i].as_bytes());
+            self.buf.extend_from_slice(&manifest.entries[i].as_bytes());
             i = i.wrapping_add(1);
         }
         // Tombstones (RECUR-01 : boucle while)

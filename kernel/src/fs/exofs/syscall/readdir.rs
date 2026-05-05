@@ -18,8 +18,8 @@
 use super::object_fd::OBJECT_TABLE;
 use super::object_store;
 use super::validation::{
-    exofs_err_to_errno, validate_fd, validate_user_ptr, verify_cap, write_user_buf, CapabilityType,
-    EINVAL, EXOFS_LIST_MAX, EXOFS_NAME_MAX,
+    exofs_err_to_errno, kernel_struct_to_bytes, validate_fd, validate_user_ptr, verify_cap,
+    write_user_buf, CapabilityType, EINVAL, EXOFS_LIST_MAX, EXOFS_NAME_MAX,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
@@ -163,10 +163,7 @@ fn serialize_dirents(entries: &[ExofsDirEntry], buf_len: usize) -> ExofsResult<V
             d_reclen: reclen as u16,
             d_type: entry.kind,
         };
-        // SAFETY: LinuxDirent64 est #[repr(C)] avec layout stable.
-        let hdr_bytes = unsafe {
-            core::slice::from_raw_parts(&hdr as *const LinuxDirent64 as *const u8, HEADER_SIZE)
-        };
+        let hdr_bytes = kernel_struct_to_bytes::<_, HEADER_SIZE>(&hdr);
         out.try_reserve(reclen).map_err(|_| ExofsError::NoMemory)?;
         let mut j = 0usize;
         while j < HEADER_SIZE {

@@ -184,14 +184,13 @@ impl ImportEntryHeader {
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.blob_id)) }
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
+    pub fn as_bytes(&self) -> [u8; 52] {
+        let mut out = [0u8; 52];
+        // SAFETY: ImportEntryHeader est #[repr(C)] et sa taille est vérifiée par const assert.
         unsafe {
-            core::slice::from_raw_parts(
-                self as *const Self as *const u8,
-                core::mem::size_of::<Self>(),
-            )
+            core::ptr::copy_nonoverlapping(self as *const Self as *const u8, out.as_mut_ptr(), 52);
         }
+        out
     }
 }
 
@@ -577,7 +576,7 @@ impl ImportStreamBuilder {
         self.buf
             .try_reserve(total)
             .map_err(|_| ExofsError::NoMemory)?;
-        self.buf.extend_from_slice(hdr_bytes);
+        self.buf.extend_from_slice(&hdr_bytes);
         self.buf.extend_from_slice(data);
         Ok(())
     }
@@ -589,7 +588,7 @@ impl ImportStreamBuilder {
         self.buf
             .try_reserve(hdr_bytes.len())
             .map_err(|_| ExofsError::NoMemory)?;
-        self.buf.extend_from_slice(hdr_bytes);
+        self.buf.extend_from_slice(&hdr_bytes);
         Ok(())
     }
 

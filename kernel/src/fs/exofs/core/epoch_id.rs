@@ -8,10 +8,11 @@
 // RÈGLES :
 //   EPOCH-01 : EpochId monotone croissant, jamais décroissant.
 //   EPOCH-02 : Valeur 0 = invalide. Le premier epoch valide = 1.
-//   EPOCH-03 : Overflow u64 → panic (jamais silencieux, wrap interdit).
+//   EPOCH-03 : Overflow u64 → erreur explicite (jamais silencieux, wrap interdit).
 //   EPOCH-04 : Transitions d'état strictement séquentielles.
 //   EPOCH-05 : GC ne peut collecter qu'un epoch dans état GcEligible.
 
+use crate::fs::exofs::core::error::{ExofsError, ExofsResult};
 use crate::fs::exofs::core::types::EpochId;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -23,17 +24,26 @@ use core::sync::atomic::{AtomicU64, Ordering};
 /// Initialisé à 1 (0 = invalide, règle EPOCH-02).
 static EPOCH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// Alloue et retourne le prochain EpochId valide (incrémente atomiquement).
+/// Tente d'allouer le prochain EpochId valide (incrémente atomiquement).
+#[inline]
+pub fn try_next_epoch_id() -> ExofsResult<EpochId> {
+    let prev = EPOCH_COUNTER.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+        cur.checked_add(1).filter(|_| cur != u64::MAX)
+    });
+    let prev = prev.map_err(|_| ExofsError::EpochOverflow)?;
+    if prev == u64::MAX {
+        return Err(ExofsError::EpochOverflow);
+    }
+    Ok(EpochId(prev))
+}
+
+/// Alloue et retourne le prochain EpochId valide.
 ///
-/// # Panics
-/// Panique si le compteur atteint u64::MAX (règle EPOCH-03).
+/// Compatibilité avec les anciens appelants : en cas d'overflow, retourne la
+/// sentinelle `EpochId(u64::MAX)` sans avancer le compteur.
 #[inline]
 pub fn next_epoch_id() -> EpochId {
-    let prev = EPOCH_COUNTER.fetch_add(1, Ordering::SeqCst);
-    if prev == u64::MAX {
-        panic!("exofs: EpochId counter overflow — filesystem doit être reformaté");
-    }
-    EpochId(prev)
+    try_next_epoch_id().unwrap_or(EpochId(u64::MAX))
 }
 
 /// Retourne l'EpochId courant sans l'incrémenter.

@@ -19,6 +19,9 @@ use alloc::vec::Vec;
 
 use super::boot_recovery::BlockDevice;
 use super::fsck_phase2::BlobRefCounter;
+#[cfg(test)]
+use super::ondisk::zero_pod;
+use super::ondisk::{prefix_bytes, read_pod, write_pod};
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 use crate::fs::exofs::core::blob_id::blake3_hash;
@@ -127,8 +130,7 @@ impl SnapshotHeaderDisk {
         if computed != stored {
             return Err(ExofsError::ChecksumMismatch);
         }
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        Ok(unsafe { core::mem::transmute_copy(buf) })
+        read_pod(buf)
     }
 
     /// Construit un en-tête en mémoire (calcule le checksum).
@@ -161,18 +163,14 @@ impl SnapshotHeaderDisk {
             hdr_hash: [0u8; 32],
         };
         // Calculer le checksum sur les 224 premiers octets.
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        let raw: &[u8; SNAPSHOT_HDR_SIZE] = unsafe { core::mem::transmute(&hdr) };
-        // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
-        let body: &[u8; 224] = unsafe { &*(raw.as_ptr() as *const [u8; 224]) };
-        hdr.hdr_hash = blake3_hash(body);
+        let body = prefix_bytes::<Self, 224>(&hdr);
+        hdr.hdr_hash = blake3_hash(&body);
         hdr
     }
 
     /// Sérialise en tableau d octets.
     pub fn to_bytes(&self) -> [u8; SNAPSHOT_HDR_SIZE] {
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        unsafe { core::mem::transmute_copy(self) }
+        write_pod::<Self, SNAPSHOT_HDR_SIZE>(self)
     }
 
     /// `true` si le snapshot est marqué supprimé.
@@ -742,8 +740,7 @@ mod tests {
     /// Flag `is_deleted`.
     #[test]
     fn test_flag_deleted() {
-        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
-        let mut h: SnapshotHeaderDisk = unsafe { core::mem::zeroed() };
+        let mut h: SnapshotHeaderDisk = zero_pod();
         h.flags = 0x01;
         assert!(h.is_deleted());
         assert!(!h.is_locked());
@@ -752,8 +749,7 @@ mod tests {
     /// Flag `is_pinned`.
     #[test]
     fn test_flag_pinned() {
-        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
-        let mut h: SnapshotHeaderDisk = unsafe { core::mem::zeroed() };
+        let mut h: SnapshotHeaderDisk = zero_pod();
         h.flags = 0x08;
         assert!(h.is_pinned());
     }

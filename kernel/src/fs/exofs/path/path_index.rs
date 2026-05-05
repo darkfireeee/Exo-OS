@@ -580,7 +580,7 @@ fn read_header(data: &[u8]) -> ExofsResult<PathIndexHeader> {
         return Err(ExofsError::CorruptedStructure);
     }
     let mut hdr = PathIndexHeader::new([0u8; 32]);
-    // Copie octet par octet (no unsafe transmute).
+    // Copie octet par octet, sans cast de représentation.
     let src = &data[..size_of::<PathIndexHeader>()];
     let magic = u32::from_le_bytes([src[0], src[1], src[2], src[3]]);
     hdr.magic = magic;

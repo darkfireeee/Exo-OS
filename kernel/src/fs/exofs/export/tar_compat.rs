@@ -142,8 +142,25 @@ const _: () = assert!(core::mem::size_of::<TarHeader>() == TAR_BLOCK_SIZE);
 
 impl TarHeader {
     pub fn zero() -> Self {
-        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
-        unsafe { core::mem::zeroed() }
+        Self {
+            name: [0; 100],
+            mode: [0; 8],
+            uid: [0; 8],
+            gid: [0; 8],
+            size: [0; 12],
+            mtime: [0; 12],
+            checksum: [0; 8],
+            typeflag: 0,
+            linkname: [0; 100],
+            magic: [0; 6],
+            version: [0; 2],
+            uname: [0; 32],
+            gname: [0; 32],
+            devmajor: [0; 8],
+            devminor: [0; 8],
+            prefix: [0; 155],
+            _pad: [0; 12],
+        }
     }
 
     /// Crée un en-tête pour un fichier régulier ExoFS.
@@ -223,9 +240,17 @@ impl TarHeader {
         tar_checksum_verify(self)
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, TAR_BLOCK_SIZE) }
+    pub fn as_bytes(&self) -> [u8; TAR_BLOCK_SIZE] {
+        let mut out = [0u8; TAR_BLOCK_SIZE];
+        // SAFETY: TarHeader est #[repr(C)] et `out` a la taille validée par const assert.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                out.as_mut_ptr(),
+                TAR_BLOCK_SIZE,
+            );
+        }
+        out
     }
 
     pub fn from_block(block: &TarBlock) -> Self {
@@ -301,7 +326,7 @@ impl TarEmitter {
         // En-tête
         let mut hdr = TarHeader::new_regular(name, data.len() as u64, mtime);
         hdr.finalize_checksum();
-        let hdr_block = TarBlock(*array_ref512(hdr.as_bytes()));
+        let hdr_block = TarBlock(hdr.as_bytes());
         sink.write_block(&hdr_block)?;
 
         // Données par blocs de 512 bytes (RECUR-01 : boucle while)
@@ -328,7 +353,7 @@ impl TarEmitter {
     ) -> ExofsResult<()> {
         let mut hdr = TarHeader::new_directory(name, mtime);
         hdr.finalize_checksum();
-        let block = TarBlock(*array_ref512(hdr.as_bytes()));
+        let block = TarBlock(hdr.as_bytes());
         sink.write_block(&block)?;
         self.stats.dirs_emitted = self.stats.dirs_emitted.saturating_add(1);
         Ok(())
@@ -758,13 +783,6 @@ fn trim_nul(s: &[u8]) -> &[u8] {
         end -= 1;
     }
     &s[..end]
-}
-
-/// Copie un slice de 512 bytes dans un tableau [u8; 512].
-fn array_ref512(s: &[u8]) -> &[u8; 512] {
-    debug_assert_eq!(s.len(), 512);
-    // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
-    unsafe { &*(s.as_ptr() as *const [u8; 512]) }
 }
 
 // ─── blake3 inline minimal ────────────────────────────────────────────────────

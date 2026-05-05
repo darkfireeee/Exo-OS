@@ -14,6 +14,9 @@
 extern crate alloc;
 use super::block_io::{read_array, read_bytes, read_bytes_at, write_bytes};
 use super::boot_recovery::BlockDevice;
+#[cfg(test)]
+use super::ondisk::zero_pod;
+use super::ondisk::{read_pod, write_pod};
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};
@@ -93,8 +96,7 @@ impl EpochJournalHeaderDisk {
         if buf[8] != 1 {
             return Err(ExofsError::InvalidMagic);
         }
-        // SAFETY : buf est repr(C) aligné 1B.
-        Ok(unsafe { core::mem::transmute_copy(buf) })
+        read_pod(buf)
     }
 
     /// `true` si l'epoch est committée (toutes les données sont persistantes).
@@ -162,14 +164,12 @@ impl EpochRecord {
         if magic != EPOCH_RECORD_MAGIC {
             return Err(ExofsError::InvalidMagic);
         }
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        Ok(unsafe { core::mem::transmute_copy(buf) })
+        read_pod(buf)
     }
 
     /// Sérialise en 96 octets.
     pub fn to_bytes(&self) -> [u8; EPOCH_RECORD_SIZE] {
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        unsafe { core::mem::transmute_copy(self) }
+        write_pod::<Self, EPOCH_RECORD_SIZE>(self)
     }
 
     /// Retourne le `BlobId` de cet enregistrement.
@@ -569,8 +569,7 @@ mod tests {
 
     #[test]
     fn test_epoch_record_roundtrip() {
-        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
-        let mut rec: EpochRecord = unsafe { core::mem::zeroed() };
+        let mut rec: EpochRecord = zero_pod();
         rec.magic = EPOCH_RECORD_MAGIC;
         rec.epoch_id = 7;
         rec.data_lba = 0x5000;
@@ -644,7 +643,7 @@ mod tests {
             crc32: 0,
             _pad2: [0u8; 20],
         };
-        let hdr_raw: [u8; EPOCH_JOURNAL_HDR_SIZE] = unsafe { core::mem::transmute_copy(&hdr) };
+        let hdr_raw = write_pod::<_, EPOCH_JOURNAL_HDR_SIZE>(&hdr);
         write_bytes_at(&mut device, journal_lba, 0, &hdr_raw).test_unwrap();
 
         let rec1 = EpochRecord {

@@ -1539,6 +1539,130 @@ pub fn sys_fadvise64(fd: u64, offset: u64, len: u64, advice: u64, _a5: u64, _a6:
     ))
 }
 
+/// `mknod(path, mode, dev)`.
+pub fn sys_mknod(path_ptr: u64, mode: u64, dev: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_MKNOD);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_mknod(path.as_bytes(), mode as u32, dev, pid))
+}
+
+/// `mknodat(dirfd, path, mode, dev)`.
+pub fn sys_mknodat(dirfd: u64, path_ptr: u64, mode: u64, dev: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_MKNODAT);
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_mknodat(
+        dirfd as i32,
+        path.as_bytes(),
+        mode as u32,
+        dev,
+        pid,
+    ))
+}
+
+/// `socketpair(domain, type, protocol, sv)`.
+pub fn sys_socketpair(domain: u64, ty: u64, protocol: u64, sv_ptr: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_SOCKETPAIR);
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_socketpair(
+        domain as i32,
+        ty as i32,
+        protocol as i32,
+        sv_ptr,
+        pid,
+    ))
+}
+
+/// `splice(fd_in, off_in, fd_out, off_out, len, flags)`.
+pub fn sys_splice(
+    fd_in: u64,
+    off_in_ptr: u64,
+    fd_out: u64,
+    off_out_ptr: u64,
+    len: u64,
+    flags: u64,
+) -> i64 {
+    stat_inc(SYS_SPLICE);
+    if len as usize as u64 != len || len as usize > IO_BUF_MAX {
+        return E2BIG;
+    }
+    let fd_in = match validate_fd(fd_in) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    let fd_out = match validate_fd(fd_out) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_splice(
+        fd_in as u32,
+        off_in_ptr,
+        fd_out as u32,
+        off_out_ptr,
+        len as usize,
+        flags as u32,
+        pid,
+    ))
+}
+
+/// `tee(fd_in, fd_out, len, flags)`.
+pub fn sys_tee(fd_in: u64, fd_out: u64, len: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_TEE);
+    if len as usize as u64 != len || len as usize > IO_BUF_MAX {
+        return E2BIG;
+    }
+    let fd_in = match validate_fd(fd_in) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    let fd_out = match validate_fd(fd_out) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_tee(
+        fd_in as u32,
+        fd_out as u32,
+        len as usize,
+        flags as u32,
+        pid,
+    ))
+}
+
+/// `vmsplice(fd, iov, nr_segs, flags)`.
+pub fn sys_vmsplice(fd: u64, iov_ptr: u64, iovcnt: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_VMSPLICE);
+    if iovcnt > u32::MAX as u64 {
+        return EINVAL;
+    }
+    let fd = match validate_fd(fd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_vmsplice(
+        fd as u32,
+        iov_ptr,
+        iovcnt as u32,
+        flags as u32,
+        pid,
+    ))
+}
+
 /// `msync(addr, length, flags)`; accepted for RAM-backed ExoFS mappings.
 pub fn sys_msync(addr: u64, len: u64, flags: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_MSYNC);
@@ -1549,6 +1673,94 @@ pub fn sys_msync(addr: u64, len: u64, flags: u64, _a4: u64, _a5: u64, _a6: u64) 
         return EINVAL;
     }
     0
+}
+
+/// `mremap(old_addr, old_size, new_size, flags, new_addr)`.
+pub fn sys_mremap(
+    old_addr: u64,
+    old_size: u64,
+    new_size: u64,
+    flags: u64,
+    new_addr: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_MREMAP);
+    const MREMAP_MAYMOVE: u64 = 0x1;
+    const MREMAP_FIXED: u64 = 0x2;
+    const MREMAP_DONTUNMAP: u64 = 0x4;
+    const PROT_READ_WRITE: u32 = 0x1 | 0x2;
+    const MAP_PRIVATE_ANON: u32 = 0x02 | 0x20;
+
+    if old_addr == 0 || old_size == 0 || new_size == 0 {
+        return EINVAL;
+    }
+    if flags & !(MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
+        return EINVAL;
+    }
+    if flags & MREMAP_FIXED != 0 && (flags & MREMAP_MAYMOVE == 0 || new_addr == 0) {
+        return EINVAL;
+    }
+    let old_len = match checked_usize_sysarg(old_size) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let new_len = match checked_usize_sysarg(new_size) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if new_len <= old_len && flags & MREMAP_FIXED == 0 {
+        return old_addr as i64;
+    }
+    if flags & MREMAP_MAYMOVE == 0 {
+        return ENOMEM;
+    }
+
+    let hint = if flags & MREMAP_FIXED != 0 {
+        new_addr
+    } else {
+        0
+    };
+    let mapped = match crate::memory::virt::mmap::do_mmap(
+        hint,
+        new_len,
+        PROT_READ_WRITE,
+        MAP_PRIVATE_ANON,
+        -1,
+        0,
+    ) {
+        Ok(addr) => addr as u64,
+        Err(e) => return e.to_kernel_errno() as i64,
+    };
+
+    let copy_len = old_len.min(new_len);
+    if copy_len != 0 {
+        if copy_len > IO_BUF_MAX {
+            let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
+            return E2BIG;
+        }
+        if let Err(e) = UserBuf::validate(old_addr, copy_len, IO_BUF_MAX) {
+            let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
+            return e.to_errno();
+        }
+        if let Err(e) = UserBuf::validate(mapped, copy_len, IO_BUF_MAX) {
+            let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
+            return e.to_errno();
+        }
+        let mut bytes = Vec::new();
+        bytes.resize(copy_len, 0);
+        if let Err(e) = copy_from_user(bytes.as_mut_ptr(), old_addr as *const u8, copy_len) {
+            let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
+            return e.to_errno();
+        }
+        if let Err(e) = copy_to_user(mapped as *mut u8, bytes.as_ptr(), copy_len) {
+            let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
+            return e.to_errno();
+        }
+    }
+    if flags & MREMAP_DONTUNMAP == 0 {
+        let _ = crate::memory::virt::mmap::do_munmap(old_addr, old_len);
+    }
+    mapped as i64
 }
 
 /// `clock_gettime(clockid, tp)` slow-path wrapper.
@@ -3200,6 +3412,8 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_RMDIR => sys_rmdir,
         SYS_UNLINK => sys_unlink,
         SYS_UNLINKAT => sys_unlinkat,
+        SYS_MKNOD => sys_mknod,
+        SYS_MKNODAT => sys_mknodat,
         SYS_RENAME => sys_rename,
         SYS_RENAMEAT => sys_renameat,
         SYS_RENAMEAT2 => sys_renameat2,
@@ -3217,6 +3431,9 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_FALLOCATE => sys_fallocate,
         SYS_COPY_FILE_RANGE => sys_copy_file_range,
         SYS_SENDFILE => sys_sendfile,
+        SYS_SPLICE => sys_splice,
+        SYS_TEE => sys_tee,
+        SYS_VMSPLICE => sys_vmsplice,
         SYS_FADVISE64 => sys_fadvise64,
         SYS_CHMOD => sys_chmod,
         SYS_FCHMOD => sys_fchmod,
@@ -3244,12 +3461,14 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EVENTFD => sys_eventfd,
         SYS_EVENTFD2 => sys_eventfd2,
         SYS_INOTIFY_INIT1 => sys_inotify_init1,
+        SYS_SOCKETPAIR => sys_socketpair,
         SYS_PREADV => sys_preadv,
         SYS_PWRITEV => sys_pwritev,
         SYS_PREADV2 => sys_preadv2,
         SYS_PWRITEV2 => sys_pwritev2,
         // ── Mémoire ────────────────────────────────────────────────────────
         SYS_MMAP => sys_mmap,
+        SYS_MREMAP => sys_mremap,
         SYS_MUNMAP => sys_munmap,
         SYS_MPROTECT => sys_mprotect,
         SYS_BRK => sys_brk,

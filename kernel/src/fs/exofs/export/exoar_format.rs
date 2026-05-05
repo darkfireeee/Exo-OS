@@ -34,6 +34,20 @@ pub const EXOAR_MAX_ENTRIES: u32 = 0x0010_0000;
 /// Taille maximale d'un payload d'entrée (256 MiB).
 pub const EXOAR_MAX_PAYLOAD: u64 = 256 * 1024 * 1024;
 
+#[inline]
+fn pod_to_array<T: Copy, const N: usize>(value: &T) -> [u8; N] {
+    let mut out = [0u8; N];
+    if size_of::<T>() != N {
+        return out;
+    }
+    // SAFETY: `out` a exactement la taille de `T`; copie byte-à-byte sans
+    // fabriquer de référence typée aliasée.
+    unsafe {
+        core::ptr::copy_nonoverlapping(value as *const T as *const u8, out.as_mut_ptr(), N);
+    }
+    out
+}
+
 // ─── Flags d'archive ─────────────────────────────────────────────────────────
 pub const ARCHIVE_FLAG_INCREMENTAL: u32 = 0x0001;
 pub const ARCHIVE_FLAG_VERIFIED: u32 = 0x0002;
@@ -143,10 +157,9 @@ impl ExoarHeader {
         f & ARCHIVE_FLAG_INCREMENTAL != 0
     }
 
-    /// Sérialise en slice d'octets (pointeur vers self).
-    pub fn as_bytes(&self) -> &[u8] {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
+    /// Sérialise en octets.
+    pub fn as_bytes(&self) -> [u8; 128] {
+        pod_to_array::<Self, 128>(self)
     }
 
     /// Désérialise depuis un slice de bytes (magic EN PREMIER).
@@ -240,10 +253,9 @@ impl ExoarEntryHeader {
         self.flags & ENTRY_FLAG_HARDLINK != 0
     }
 
-    /// Sérialise en slice d'octets.
-    pub fn as_bytes(&self) -> &[u8] {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
+    /// Sérialise en octets.
+    pub fn as_bytes(&self) -> [u8; 96] {
+        pod_to_array::<Self, 96>(self)
     }
 
     /// Désérialise depuis un slice (RÈGLE 8 : magic EN PREMIER).
@@ -310,9 +322,8 @@ impl ExoarFooter {
         ec == expected_entries
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
+    pub fn as_bytes(&self) -> [u8; 32] {
+        pod_to_array::<Self, 32>(self)
     }
 
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
@@ -634,7 +645,7 @@ mod tests {
         let blob_id = [5u8; 32];
         let hdr = ExoarEntryHeader::new(blob_id, 256, 512);
         let bytes = hdr.as_bytes();
-        let parsed = ExoarEntryHeader::from_bytes(bytes).test_expect("parse ok");
+        let parsed = ExoarEntryHeader::from_bytes(&bytes).test_expect("parse ok");
         assert_eq!(parsed.blob_id, blob_id);
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
         assert_eq!(

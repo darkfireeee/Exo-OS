@@ -4,7 +4,10 @@
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
 use super::relation_create::{encode_relations, Relation, RELATION_MAGIC, RELATION_MAX};
-use super::validation::{exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT};
+use super::validation::{
+    copy_kernel_bytes_to_struct, exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType,
+    EFAULT,
+};
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -115,15 +118,7 @@ fn load_registry(reg_id: BlobId) -> ExofsResult<Vec<Relation>> {
     while i < n {
         let off = REL_HDR.saturating_add(i.saturating_mul(REL_ENTRY));
         let mut r = Relation::default();
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let dst = unsafe {
-            core::slice::from_raw_parts_mut(&mut r as *mut Relation as *mut u8, REL_ENTRY)
-        };
-        let mut j = 0usize;
-        while j < REL_ENTRY {
-            dst[j] = data[off + j];
-            j = j.wrapping_add(1);
-        }
+        copy_kernel_bytes_to_struct(&mut r, &data[off..off + REL_ENTRY])?;
         rels.push(r);
         i = i.wrapping_add(1);
     }

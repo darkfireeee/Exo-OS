@@ -10,7 +10,7 @@
 // RÈGLE V-08      : magic vérifié EN PREMIER avant tout accès au payload.
 
 use core::fmt;
-use core::mem::size_of;
+use core::mem::{size_of, MaybeUninit};
 
 use crate::fs::exofs::core::flags::EpochFlags;
 use crate::fs::exofs::core::{
@@ -135,10 +135,13 @@ impl EpochRecord {
     ///
     /// Utilisé pour initialiser/effacer un slot.
     pub fn zeroed() -> Self {
+        let mut rec = MaybeUninit::<Self>::uninit();
         // SAFETY: EpochRecord est #[repr(C, packed)] composé uniquement de types
-        // primitifs. Un zéro binaire est un état "vide" valide (magic=0 ≠ EXOFS_MAGIC).
-        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
-        unsafe { core::mem::zeroed() }
+        // primitifs. Un zéro binaire est un état "vide" valide (magic=0 != EXOFS_MAGIC).
+        unsafe {
+            core::ptr::write_bytes(rec.as_mut_ptr() as *mut u8, 0, size_of::<Self>());
+            rec.assume_init()
+        }
     }
 
     // =========================================================================
@@ -521,4 +524,4 @@ pub fn count_valid_records(
 // EpochRecord — 104 octets, struct on-disk
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Enregistrement d'un Epoch committé — écrit dans un Slot (A/B/C). [TODO: struct tronquée]
+// Définition finale ci-dessus: EpochRecord on-disk compact de 104 octets.

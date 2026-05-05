@@ -17,6 +17,7 @@
 
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+pub(crate) use exo_syscall_abi as syscall;
 
 mod boot_info;
 mod boot_sequence;
@@ -28,67 +29,6 @@ mod service_table;
 mod sigchld_handler;
 mod supervisor;
 mod watchdog;
-
-mod syscall {
-    #[inline(always)]
-    pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> i64 {
-        let ret: i64;
-        core::arch::asm!(
-            "syscall",
-            in("rax") nr,
-            in("rdi") a1, in("rsi") a2, in("rdx") a3,
-            in("r10") a4, in("r8")  a5, in("r9")  a6,
-            lateout("rax") ret,
-            out("rcx") _, out("r11") _,
-            options(nostack),
-        );
-        ret
-    }
-
-    #[inline(always)]
-    pub unsafe fn syscall4(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
-        syscall6(nr, a1, a2, a3, a4, 0, 0)
-    }
-    #[inline(always)]
-    pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> i64 {
-        syscall6(nr, a1, a2, a3, 0, 0, 0)
-    }
-    #[inline(always)]
-    pub unsafe fn syscall2(nr: u64, a1: u64, a2: u64) -> i64 {
-        syscall6(nr, a1, a2, 0, 0, 0, 0)
-    }
-    #[inline(always)]
-    pub unsafe fn syscall1(nr: u64, a1: u64) -> i64 {
-        syscall6(nr, a1, 0, 0, 0, 0, 0)
-    }
-    #[inline(always)]
-    pub unsafe fn syscall0(nr: u64) -> i64 {
-        syscall6(nr, 0, 0, 0, 0, 0, 0)
-    }
-
-    pub const SYS_FORK: u64 = 57;
-    pub const SYS_EXECVE: u64 = 59;
-    pub const SYS_EXIT: u64 = 60;
-    pub const SYS_WAIT4: u64 = 61;
-    pub const SYS_KILL: u64 = 62;
-    pub const SYS_SIGACTION: u64 = 13;
-    pub const SYS_NANOSLEEP: u64 = 35;
-    pub const SYS_GETPID: u64 = 39;
-    pub const SYS_IPC_SEND: u64 = 300;
-    pub const SYS_IPC_RECV: u64 = 301;
-    pub const SYS_IPC_REGISTER: u64 = 304;
-
-    // Flags wait4
-    pub const WNOHANG: u64 = 1;
-    // Flags sigaction
-    pub const SA_RESTART: u64 = 0x10000000;
-    pub const IPC_FLAG_TIMEOUT: u64 = 0x0001;
-    pub const EAGAIN: i64 = -11;
-    pub const EIO: i64 = -5;
-    pub const EINVAL: i64 = -22;
-    pub const ENOENT: i64 = -2;
-    pub const ETIMEDOUT: i64 = -110;
-}
 
 /// Descripteur d'un service supervisé.
 struct Service {
@@ -156,6 +96,8 @@ static SERVICES: [Service; service_table::SERVICE_COUNT] = [
     Service::new("virtio_drivers", service_table::VIRTIO_DRIVERS_BIN),
     Service::new("network_server", service_table::NETWORK_SERVER_BIN),
     Service::new("scheduler_server", service_table::SCHEDULER_SERVER_BIN),
+    Service::new("input_server", service_table::INPUT_SERVER_BIN),
+    Service::new("tty_server", service_table::TTY_SERVER_BIN),
     Service::new("exo_shield", service_table::EXO_SHIELD_BIN),
 ];
 

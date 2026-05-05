@@ -8,7 +8,10 @@ use super::object_fd::{open_flags, OBJECT_TABLE};
 use super::snapshot_create::{
     check_snapshot_magic, snapshot_epoch_from_blob, snapshot_source_size_from_blob,
 };
-use super::validation::{exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT};
+use super::validation::{
+    exofs_err_to_errno, kernel_struct_to_bytes, verify_cap, write_user_struct, CapabilityType,
+    EFAULT,
+};
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -216,14 +219,7 @@ pub fn sys_exofs_snapshot_mount(
     };
 
     if out_ptr != 0 {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                &result as *const SnapshotMountResult as *const u8,
-                core::mem::size_of::<SnapshotMountResult>(),
-            )
-        };
-        if let Err(e) = write_user_buf(out_ptr, bytes) {
+        if let Err(e) = write_user_struct(out_ptr, &result) {
             OBJECT_TABLE.close(result.fd);
             return e;
         }
@@ -419,6 +415,7 @@ const _: () = assert!(
     core::mem::size_of::<MountEntry>() == 64,
     "MountEntry ABI size changed — verifier table de montage snapshot"
 );
+const MOUNT_ENTRY_SIZE: usize = 64;
 
 /// Nombre maximum de montages simultanés.
 pub const MAX_MOUNTS: usize = 64;
@@ -431,16 +428,13 @@ static MOUNT_TABLE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU6
 /// Sérialise une liste de MountEntry vers userspace.
 /// OOM-02 : try_reserve. RECUR-01 : while.
 pub fn encode_mount_entries(entries: &[MountEntry]) -> ExofsResult<Vec<u8>> {
-    let esz = core::mem::size_of::<MountEntry>();
+    let esz = MOUNT_ENTRY_SIZE;
     let total = entries.len().saturating_mul(esz);
     let mut buf: Vec<u8> = Vec::new();
     buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < entries.len() {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let raw = unsafe {
-            core::slice::from_raw_parts(&entries[i] as *const MountEntry as *const u8, esz)
-        };
+        let raw = kernel_struct_to_bytes::<_, MOUNT_ENTRY_SIZE>(&entries[i]);
         let mut j = 0usize;
         while j < esz {
             buf.push(raw[j]);

@@ -4,8 +4,8 @@
 
 use super::object_fd::OBJECT_TABLE;
 use super::validation::{
-    exofs_err_to_errno, read_user_path_heap, verify_cap, write_user_buf, CapabilityType, EFAULT,
-    EINVAL,
+    copy_kernel_bytes_to_struct, exofs_err_to_errno, kernel_struct_to_bytes, read_user_path_heap,
+    verify_cap, write_user_struct, CapabilityType, EFAULT, EINVAL,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
@@ -60,6 +60,7 @@ const _: () = assert!(
     core::mem::size_of::<ObjectStat>() == 176,
     "ObjectStat ABI size changed — verifier syscall object_stat"
 );
+const OBJECT_STAT_SIZE: usize = 176;
 
 impl Default for ObjectStat {
     fn default() -> Self {
@@ -216,14 +217,7 @@ pub fn sys_exofs_object_stat(
         }
     };
 
-    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-    let bytes = unsafe {
-        core::slice::from_raw_parts(
-            &result as *const ObjectStat as *const u8,
-            core::mem::size_of::<ObjectStat>(),
-        )
-    };
-    match write_user_buf(out_ptr, bytes) {
+    match write_user_struct(out_ptr, &result) {
         Ok(_) => 0i64,
         Err(e) => e,
     }
@@ -408,11 +402,10 @@ pub fn same_object(a: &ObjectStat, b: &ObjectStat) -> bool {
 /// Sérialise un `ObjectStat` en octets bruts.
 /// OOM-02 : try_reserve. RECUR-01 : while.
 pub fn serialize_stat(s: &ObjectStat) -> ExofsResult<Vec<u8>> {
-    let size = core::mem::size_of::<ObjectStat>();
+    let size = OBJECT_STAT_SIZE;
     let mut buf: Vec<u8> = Vec::new();
     buf.try_reserve(size).map_err(|_| ExofsError::NoMemory)?;
-    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-    let raw = unsafe { core::slice::from_raw_parts(s as *const ObjectStat as *const u8, size) };
+    let raw = kernel_struct_to_bytes::<_, OBJECT_STAT_SIZE>(s);
     let mut i = 0usize;
     while i < size {
         buf.push(raw[i]);
@@ -423,19 +416,12 @@ pub fn serialize_stat(s: &ObjectStat) -> ExofsResult<Vec<u8>> {
 
 /// Désérialise un `ObjectStat` depuis un slice d'octets.
 pub fn deserialize_stat(bytes: &[u8]) -> ExofsResult<ObjectStat> {
-    let size = core::mem::size_of::<ObjectStat>();
+    let size = OBJECT_STAT_SIZE;
     if bytes.len() < size {
         return Err(ExofsError::InvalidArgument);
     }
     let mut s = ObjectStat::default();
-    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-    let dst =
-        unsafe { core::slice::from_raw_parts_mut(&mut s as *mut ObjectStat as *mut u8, size) };
-    let mut i = 0usize;
-    while i < size {
-        dst[i] = bytes[i];
-        i = i.wrapping_add(1);
-    }
+    copy_kernel_bytes_to_struct(&mut s, bytes)?;
     Ok(s)
 }
 

@@ -96,7 +96,7 @@ impl RelationOnDisk {
         if magic != RELATION_MAGIC {
             return Err(ExofsError::InvalidMagic);
         }
-        // Recopie manuelle (pas de transmute) pour éviter UB sur packed.
+        // Recopie manuelle pour éviter l'UB sur packed.
         let mut d: [u8; RELATION_ONDISK_SIZE] = [0u8; RELATION_ONDISK_SIZE];
         d.copy_from_slice(buf);
         // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).

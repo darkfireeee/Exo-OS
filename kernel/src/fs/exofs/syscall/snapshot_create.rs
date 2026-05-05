@@ -4,7 +4,10 @@
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
 use super::object_fd::OBJECT_TABLE;
-use super::validation::{exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT};
+use super::validation::{
+    copy_kernel_bytes_to_struct, exofs_err_to_errno, kernel_struct_to_bytes, verify_cap,
+    write_user_struct, CapabilityType, EFAULT,
+};
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -257,14 +260,7 @@ pub fn sys_exofs_snapshot_create(
     };
 
     if out_ptr != 0 {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                &result as *const SnapshotCreateResult as *const u8,
-                core::mem::size_of::<SnapshotCreateResult>(),
-            )
-        };
-        if let Err(e) = write_user_buf(out_ptr, bytes) {
+        if let Err(e) = write_user_struct(out_ptr, &result) {
             return e;
         }
     }
@@ -411,20 +407,18 @@ pub struct SnapshotRef {
 }
 
 const _: () = assert!(core::mem::size_of::<SnapshotRef>() == 80);
+const SNAPSHOT_REF_SIZE: usize = 80;
 
 /// Sérialise une liste de SnapshotRef en octets bruts.
 /// OOM-02 : try_reserve. RECUR-01 : while.
 pub fn encode_snapshot_refs(refs: &[SnapshotRef]) -> ExofsResult<Vec<u8>> {
-    let entry_size = core::mem::size_of::<SnapshotRef>();
+    let entry_size = SNAPSHOT_REF_SIZE;
     let total = refs.len().saturating_mul(entry_size);
     let mut buf: Vec<u8> = Vec::new();
     buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < refs.len() {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let raw = unsafe {
-            core::slice::from_raw_parts(&refs[i] as *const SnapshotRef as *const u8, entry_size)
-        };
+        let raw = kernel_struct_to_bytes::<_, SNAPSHOT_REF_SIZE>(&refs[i]);
         let mut j = 0usize;
         while j < entry_size {
             buf.push(raw[j]);
@@ -437,7 +431,7 @@ pub fn encode_snapshot_refs(refs: &[SnapshotRef]) -> ExofsResult<Vec<u8>> {
 
 /// Désérialise une liste de SnapshotRef depuis des octets.
 pub fn decode_snapshot_refs(data: &[u8]) -> ExofsResult<Vec<SnapshotRef>> {
-    let entry_size = core::mem::size_of::<SnapshotRef>();
+    let entry_size = SNAPSHOT_REF_SIZE;
     if data.len() % entry_size != 0 {
         return Err(ExofsError::CorruptedStructure);
     }
@@ -448,15 +442,7 @@ pub fn decode_snapshot_refs(data: &[u8]) -> ExofsResult<Vec<SnapshotRef>> {
     while i < count {
         let off = i.saturating_mul(entry_size);
         let mut r = SnapshotRef::default();
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let dst = unsafe {
-            core::slice::from_raw_parts_mut(&mut r as *mut SnapshotRef as *mut u8, entry_size)
-        };
-        let mut j = 0usize;
-        while j < entry_size {
-            dst[j] = data[off + j];
-            j = j.wrapping_add(1);
-        }
+        copy_kernel_bytes_to_struct(&mut r, &data[off..off + entry_size])?;
         out.push(r);
         i = i.wrapping_add(1);
     }

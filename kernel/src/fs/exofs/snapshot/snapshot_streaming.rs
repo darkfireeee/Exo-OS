@@ -69,10 +69,17 @@ const _SCH_SIZE: () = assert!(
 impl StreamChunkHeader {
     /// Calcule le checksum Blake3 (4 premiers octets du hash sur les 60 premiers octets)
     fn compute_checksum(&self) -> [u8; 4] {
-        let ptr = self as *const Self as *const u8;
-        // SAFETY: repr(C), taille connue
-        let body = unsafe { core::slice::from_raw_parts(ptr, STREAM_CHUNK_HDR_SIZE - 4) };
-        let h = blake3_hash(body);
+        let mut body = [0u8; STREAM_CHUNK_HDR_SIZE - 4];
+        // SAFETY: StreamChunkHeader est #[repr(C)] et la taille est vérifiée
+        // par const assert; on copie le préfixe couvert par le checksum court.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                body.as_mut_ptr(),
+                STREAM_CHUNK_HDR_SIZE - 4,
+            );
+        }
+        let h = blake3_hash(&body);
         [h[0], h[1], h[2], h[3]]
     }
 
@@ -99,10 +106,18 @@ impl StreamChunkHeader {
         Ok(())
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        let ptr = self as *const Self as *const u8;
-        // SAFETY: repr(C), taille fixe
-        unsafe { core::slice::from_raw_parts(ptr, STREAM_CHUNK_HDR_SIZE) }
+    pub fn as_bytes(&self) -> [u8; STREAM_CHUNK_HDR_SIZE] {
+        let mut out = [0u8; STREAM_CHUNK_HDR_SIZE];
+        // SAFETY: StreamChunkHeader est #[repr(C)] et `out` a la taille
+        // fixe validée par const assert.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                out.as_mut_ptr(),
+                STREAM_CHUNK_HDR_SIZE,
+            );
+        }
+        out
     }
 }
 
@@ -403,7 +418,7 @@ impl SnapshotStreamer {
     ) -> ExofsResult<usize> {
         // Écrire l'en-tête
         let hdr_bytes = hdr.as_bytes();
-        let n = writer.write(hdr_bytes)?;
+        let n = writer.write(&hdr_bytes)?;
         if n != hdr_bytes.len() {
             return Err(ExofsError::ShortWrite);
         } // WRITE-02

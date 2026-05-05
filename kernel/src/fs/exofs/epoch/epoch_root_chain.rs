@@ -160,10 +160,15 @@ pub fn serialize_epoch_root_chain(root: &EpochRootInMemory) -> ExofsResult<Vec<V
 
         // Sérialiser l'en-tête.
         let hdr_size = size_of::<EpochRootPageHeader>();
-        // SAFETY: EpochRootPageHeader est #[repr(C, packed)], Copy, 64 octets.
-        let hdr_bytes =
-            unsafe { core::slice::from_raw_parts(&hdr as *const _ as *const u8, hdr_size) };
-        page[..hdr_size].copy_from_slice(hdr_bytes);
+        // SAFETY: EpochRootPageHeader est POD, #[repr(C, packed)], et `page`
+        // contient au moins `hdr_size` octets.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &hdr as *const EpochRootPageHeader as *const u8,
+                page.as_mut_ptr(),
+                hdr_size,
+            );
+        }
 
         // Sérialiser les entrées de cette page.
         let entry_size = size_of::<EpochRootEntry>();
@@ -175,11 +180,16 @@ pub fn serialize_epoch_root_chain(root: &EpochRootInMemory) -> ExofsResult<Vec<V
                 None
             };
             if let Some(e) = entry {
-                // SAFETY: EpochRootEntry est #[repr(C, packed)], Copy, 48 octets.
-                let bytes =
-                    unsafe { core::slice::from_raw_parts(e as *const _ as *const u8, entry_size) };
                 if offset + entry_size <= CHECKSUM_OFFSET {
-                    page[offset..offset + entry_size].copy_from_slice(bytes);
+                    // SAFETY: EpochRootEntry est POD, #[repr(C, packed)], et
+                    // l'intervalle destination a été borné par CHECKSUM_OFFSET.
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            e as *const EpochRootEntry as *const u8,
+                            page[offset..].as_mut_ptr(),
+                            entry_size,
+                        );
+                    }
                 }
                 offset = offset.saturating_add(entry_size);
             }

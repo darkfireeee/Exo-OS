@@ -151,10 +151,17 @@ impl ExoSuperblockDisk {
     /// Calcule le checksum Blake3 sur les SUPERBLOCK_DISK_SIZE - 32 premiers octets
     pub fn compute_checksum(&self) -> [u8; 32] {
         let body_len = SUPERBLOCK_DISK_SIZE - 32;
-        let ptr = self as *const Self as *const u8;
-        // SAFETY: repr(C), taille vérifiée par static assert
-        let body = unsafe { core::slice::from_raw_parts(ptr, body_len) };
-        blake3_hash(body)
+        let mut body = [0u8; SUPERBLOCK_DISK_SIZE - 32];
+        // SAFETY: ExoSuperblockDisk est #[repr(C)] et la taille est vérifiée
+        // par const assert; on copie uniquement le préfixe sans le checksum.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                body.as_mut_ptr(),
+                body_len,
+            );
+        }
+        blake3_hash(&body)
     }
 
     /// HDR-03 : Vérifie magic EN PREMIER, puis le checksum
@@ -230,10 +237,18 @@ impl ExoSuperblockDisk {
     }
 
     /// Retourne les octets bruts
-    pub fn as_bytes(&self) -> &[u8] {
-        let ptr = self as *const Self as *const u8;
-        // SAFETY: repr(C), taille connue
-        unsafe { core::slice::from_raw_parts(ptr, SUPERBLOCK_DISK_SIZE) }
+    pub fn as_bytes(&self) -> [u8; SUPERBLOCK_DISK_SIZE] {
+        let mut out = [0u8; SUPERBLOCK_DISK_SIZE];
+        // SAFETY: ExoSuperblockDisk est #[repr(C)] et `out` a exactement la
+        // taille vérifiée par const assert.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                out.as_mut_ptr(),
+                SUPERBLOCK_DISK_SIZE,
+            );
+        }
+        out
     }
 
     /// Parse depuis un tampon
@@ -523,7 +538,7 @@ impl SuperblockManager {
         let mut last_err = ExofsError::ShortWrite;
 
         for (i, &off) in self.inner.mirror_offsets.iter().enumerate() {
-            match write_fn(off, bytes) {
+            match write_fn(off, &bytes) {
                 Ok(n) if n == SUPERBLOCK_DISK_SIZE => {
                     any_ok = true;
                 }
@@ -769,7 +784,7 @@ mod tests {
         let bytes = sb.as_bytes();
         for off in &offsets[..2] {
             let s = off.0 as usize;
-            disk[s..s + SUPERBLOCK_DISK_SIZE].copy_from_slice(bytes);
+            disk[s..s + SUPERBLOCK_DISK_SIZE].copy_from_slice(&bytes);
         }
 
         // Écrire un miroir tertiaire avec une époque plus élevée
@@ -777,7 +792,7 @@ mod tests {
         sb_newer.epoch_current = 999;
         sb_newer.finalize();
         let s = offsets[2].0 as usize;
-        disk[s..s + SUPERBLOCK_DISK_SIZE].copy_from_slice(sb_newer.as_bytes());
+        disk[s..s + SUPERBLOCK_DISK_SIZE].copy_from_slice(&sb_newer.as_bytes());
 
         let mgr = SuperblockManager::mount(TEST_DISK, |off, sz| {
             let s = off.0 as usize;

@@ -14,6 +14,9 @@ extern crate alloc;
 use super::block_io::{read_array, read_bytes};
 use super::boot_recovery::BlockDevice;
 use super::fsck_phase1::Phase1Report;
+use super::ondisk::read_pod;
+#[cfg(test)]
+use super::ondisk::{write_pod, zero_pod};
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 use crate::fs::exofs::core::blob_id::verify_blob_id;
@@ -86,8 +89,7 @@ impl BlobHeaderDisk {
         if buf[8] != 1 {
             return Err(ExofsError::InvalidMagic);
         }
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        Ok(unsafe { core::mem::transmute_copy(buf) })
+        read_pod(buf)
     }
 
     /// `true` si ce blob est marqué supprimé.
@@ -383,9 +385,7 @@ impl FsckPhase2 {
                     break 'outer;
                 }
 
-                // Lire l'entrée.
-                // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-                let entry: AllocEntry = unsafe { core::mem::transmute_copy(entry_bytes) };
+                let entry: AllocEntry = read_pod(entry_bytes)?;
 
                 // Lire l'en-tête du blob.
                 let hdr_buf = match read_array::<BLOB_HEADER_SIZE>(device, entry.hdr_lba) {
@@ -651,7 +651,7 @@ mod tests {
             data_lba,
             parent_id,
         };
-        let raw: [u8; BLOB_HEADER_SIZE] = unsafe { core::mem::transmute_copy(&hdr) };
+        let raw = write_pod::<_, BLOB_HEADER_SIZE>(&hdr);
         write_bytes(device, hdr_lba, &raw).test_unwrap();
         write_bytes(device, data_lba, data).test_unwrap();
         blob_id
@@ -733,8 +733,7 @@ mod tests {
 
     #[test]
     fn test_blob_header_flags() {
-        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
-        let mut hdr: BlobHeaderDisk = unsafe { core::mem::zeroed() };
+        let mut hdr: BlobHeaderDisk = zero_pod();
         hdr.flags = 0x01;
         assert!(hdr.is_deleted());
         assert!(!hdr.is_compressed());
@@ -763,9 +762,8 @@ mod tests {
             data_len: orphan_data.len() as u64,
         };
         let mut alloc_bytes = [0u8; ALLOC_ENTRY_SIZE * 2];
-        let root_raw: [u8; ALLOC_ENTRY_SIZE] = unsafe { core::mem::transmute_copy(&root_entry) };
-        let orphan_raw: [u8; ALLOC_ENTRY_SIZE] =
-            unsafe { core::mem::transmute_copy(&orphan_entry) };
+        let root_raw = write_pod::<_, ALLOC_ENTRY_SIZE>(&root_entry);
+        let orphan_raw = write_pod::<_, ALLOC_ENTRY_SIZE>(&orphan_entry);
         alloc_bytes[..ALLOC_ENTRY_SIZE].copy_from_slice(&root_raw);
         alloc_bytes[ALLOC_ENTRY_SIZE..ALLOC_ENTRY_SIZE * 2].copy_from_slice(&orphan_raw);
         write_bytes(&mut device, 16, &alloc_bytes).test_unwrap();

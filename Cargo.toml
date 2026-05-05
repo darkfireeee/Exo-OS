@@ -12,7 +12,12 @@ default-members = [
 ]
 members = [
     "kernel",
-   # "drivers",
+    "drivers/input/ps2",
+    "drivers/tty",
+    "drivers/display/vga",
+    "drivers/display/framebuffer",
+    "drivers/storage/virtio_blk",
+    "loader",
     "servers/crypto_server",
     "servers/device_server",
     "servers/exo_shield",
@@ -22,6 +27,8 @@ members = [
     "servers/network_server",
     "servers/scheduler_server",
     "servers/syscall_abi",
+    "servers/input_server",
+    "servers/tty_server",
     "servers/vfs_server",
 ]
 # libs/ gère son propre workspace Cargo.toml avec ses sous-crates std.

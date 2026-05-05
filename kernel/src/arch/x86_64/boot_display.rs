@@ -82,3 +82,21 @@ pub fn boot_complete() {
     vga_early::write_centered("[ Exo-OS boot complete ]", stage_attr());
     framebuffer_early::boot_complete();
 }
+
+/// Affiche un statut explicite pour le passage kernel -> userspace.
+pub fn userspace_status(title: &str, detail: &str, hint: &str) {
+    let warn_attr = vga_early::attr(vga_early::YELLOW, vga_early::BLACK);
+    let text = text_attr();
+    let accent = accent_attr();
+
+    vga_early::set_cursor(0, 20);
+    vga_early::write_hline(vga_early::attr(vga_early::DARK_GRAY, vga_early::BLACK));
+    vga_early::write_centered(title, warn_attr);
+    vga_early::write_str("  ", text);
+    vga_early::write_str(detail, text);
+    vga_early::write_char(b'\n', text);
+    vga_early::write_str("  ", text);
+    vga_early::write_str(hint, accent);
+
+    framebuffer_early::userspace_status(title, detail, hint);
+}

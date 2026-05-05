@@ -17,6 +17,7 @@ use alloc::vec::Vec;
 use super::block_io::{read_bytes, write_bytes};
 use super::boot_recovery::BlockDevice;
 use super::fsck_phase2::Phase2Report;
+use super::ondisk::{read_pod, write_pod};
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 use crate::fs::exofs::core::blob_id::{blake3_hash, verify_blob_id};
@@ -88,8 +89,7 @@ impl LostFoundHeaderDisk {
         if &full_hash[0..8] != stored {
             return Err(ExofsError::ChecksumMismatch);
         }
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        Ok(unsafe { core::mem::transmute_copy(buf) })
+        read_pod(buf)
     }
 
     pub fn build(n_entries: u32, capacity: u32, region_lba: u64, tick: u64) -> Self {
@@ -104,8 +104,7 @@ impl LostFoundHeaderDisk {
             _reserved: [0; 16],
             hdr_hash: [0; 8],
         };
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        let raw: [u8; LOST_FOUND_HDR_SIZE] = unsafe { core::mem::transmute_copy(&h) };
+        let raw = write_pod::<_, LOST_FOUND_HDR_SIZE>(&h);
         let padded = {
             let mut p = [0u8; 224];
             p[0..56].copy_from_slice(&raw[0..56]);
@@ -291,8 +290,7 @@ impl LostFoundTable {
         if buf.len() < LOST_FOUND_ENTRY_SIZE {
             return Err(ExofsError::InvalidArgument);
         }
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        let raw: [u8; LOST_FOUND_ENTRY_SIZE] = unsafe { core::mem::transmute_copy(entry) };
+        let raw = write_pod::<_, LOST_FOUND_ENTRY_SIZE>(entry);
         buf[..LOST_FOUND_ENTRY_SIZE].copy_from_slice(&raw);
         // WRITE-02 : écriture bloc-safe même si l'entrée est plus petite qu'un bloc.
         write_bytes(device, lba, &buf)?;
@@ -309,8 +307,7 @@ impl LostFoundTable {
             tick,
         );
         let mut buf = alloc::vec![0u8; block_size as usize];
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        let raw: [u8; LOST_FOUND_HDR_SIZE] = unsafe { core::mem::transmute_copy(&hdr) };
+        let raw = write_pod::<_, LOST_FOUND_HDR_SIZE>(&hdr);
         buf[..LOST_FOUND_HDR_SIZE].copy_from_slice(&raw);
         write_bytes(device, self.base_lba, &buf)?;
         Ok(())

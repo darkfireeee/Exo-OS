@@ -2,8 +2,8 @@
 
 use super::posix_services::{CORE_POSIX_SERVICES, PHASE2_POSIX_SERVICES};
 
-pub const CORE_TARGET_PERCENT: u32 = 95;
-pub const PHASE2_TARGET_PERCENT: u32 = 97;
+pub const CORE_TARGET_PERCENT: u32 = 100;
+pub const PHASE2_TARGET_PERCENT: u32 = 100;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CoverageSummary {

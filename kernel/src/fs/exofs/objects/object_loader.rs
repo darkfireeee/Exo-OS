@@ -70,6 +70,20 @@ pub struct LoadResult {
 pub struct ObjectLoader;
 
 impl ObjectLoader {
+    fn disk_to_bytes(disk: &LogicalObjectDisk) -> [u8; 256] {
+        let mut out = [0u8; 256];
+        // SAFETY: LogicalObjectDisk est #[repr(C)] et les appels sont protégés
+        // par les assertions de taille du module logical_object.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                disk as *const LogicalObjectDisk as *const u8,
+                out.as_mut_ptr(),
+                256,
+            );
+        }
+        out
+    }
+
     // ── Chargement principal ───────────────────────────────────────────────────
 
     /// Charge un `LogicalObject` depuis son offset disque.
@@ -194,8 +208,7 @@ impl ObjectLoader {
     pub fn serialize(obj_ref: &LogicalObjectRef) -> [u8; 256] {
         let obj = obj_ref.read();
         let disk = obj.to_disk();
-        // SAFETY: même size, même layout.
-        unsafe { core::mem::transmute::<LogicalObjectDisk, [u8; 256]>(disk) }
+        Self::disk_to_bytes(&disk)
     }
 }
 
@@ -275,8 +288,7 @@ mod tests {
             _pad2: [0; 32],
         };
         d.checksum = d.compute_checksum();
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        unsafe { core::mem::transmute::<LogicalObjectDisk, [u8; 256]>(d) }
+        ObjectLoader::disk_to_bytes(&d)
     }
 
     #[test]

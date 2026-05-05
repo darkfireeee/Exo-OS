@@ -67,6 +67,7 @@ pub const SYS_MPROTECT: u64 = 10;
 pub const SYS_MUNMAP: u64 = 11;
 pub const SYS_BRK: u64 = 12;
 pub const SYS_RT_SIGACTION: u64 = 13;
+pub const SYS_SIGACTION: u64 = SYS_RT_SIGACTION;
 pub const SYS_RT_SIGPROCMASK: u64 = 14;
 pub const SYS_RT_SIGRETURN: u64 = 15;
 pub const SYS_IOCTL: u64 = 16;
@@ -637,6 +638,8 @@ pub const MAP_FIXED: u64 = 0x10;
 pub const MAP_ANONYMOUS: u64 = 0x20;
 
 pub const IPC_FLAG_TIMEOUT: u64 = 0x0001;
+pub const WNOHANG: u64 = 1;
+pub const SA_RESTART: u64 = 0x10000000;
 pub const EPERM: i64 = -1;
 pub const ENOENT: i64 = -2;
 pub const EINTR: i64 = -4;

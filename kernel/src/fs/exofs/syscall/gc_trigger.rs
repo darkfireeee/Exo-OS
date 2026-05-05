@@ -5,7 +5,8 @@
 
 use super::object_fd::OBJECT_TABLE;
 use super::validation::{
-    copy_struct_from_user, exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT,
+    copy_struct_from_user, exofs_err_to_errno, verify_cap, write_user_struct, CapabilityType,
+    EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
@@ -213,14 +214,7 @@ pub fn sys_exofs_gc_trigger(
         Err(e) => return exofs_err_to_errno(e),
     };
     if result_ptr != 0 {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                &res as *const GcResult as *const u8,
-                core::mem::size_of::<GcResult>(),
-            )
-        };
-        if let Err(e) = write_user_buf(result_ptr, bytes) {
+        if let Err(e) = write_user_struct(result_ptr, &res) {
             return e;
         }
     }

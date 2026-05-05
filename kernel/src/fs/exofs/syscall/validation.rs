@@ -15,7 +15,7 @@ use crate::fs::exofs::core::rights::{
 };
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
-use core::mem;
+use core::mem::{self, MaybeUninit};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes de bornage
@@ -258,6 +258,63 @@ pub unsafe fn copy_struct_to_user<T: Copy>(ptr: u64, val: &T) -> ExofsResult<()>
         val as *const T as *const u8,
         mem::size_of::<T>(),
     )
+}
+
+/// Écrit une structure `T` vers userspace et convertit l'erreur en errno.
+#[inline]
+pub fn write_user_struct<T: Copy>(dst: u64, val: &T) -> Result<(), i64> {
+    if dst == 0 {
+        return Err(EFAULT);
+    }
+    // SAFETY: `copy_struct_to_user` valide l'alignement et copie exactement
+    // `size_of::<T>()` octets depuis une référence noyau valide.
+    unsafe { copy_struct_to_user::<T>(dst, val).map_err(|_| EFAULT) }
+}
+
+/// Copie une structure POD depuis un slice noyau.
+#[inline]
+pub fn read_kernel_struct_from_bytes<T: Copy>(src: &[u8]) -> ExofsResult<T> {
+    let size = mem::size_of::<T>();
+    if src.len() < size {
+        return Err(ExofsError::CorruptedStructure);
+    }
+    let mut out = MaybeUninit::<T>::uninit();
+    // SAFETY: `src` est borné à au moins `size_of::<T>()`; `out` pointe vers
+    // une zone non initialisée de même taille et ne recouvre pas `src`.
+    unsafe {
+        core::ptr::copy_nonoverlapping(src.as_ptr(), out.as_mut_ptr() as *mut u8, size);
+        Ok(out.assume_init())
+    }
+}
+
+/// Copie un slice noyau dans une structure POD existante.
+#[inline]
+pub fn copy_kernel_bytes_to_struct<T: Copy>(dst: &mut T, src: &[u8]) -> ExofsResult<()> {
+    let size = mem::size_of::<T>();
+    if src.len() < size {
+        return Err(ExofsError::CorruptedStructure);
+    }
+    // SAFETY: `dst` est une référence noyau valide de `size_of::<T>()` octets,
+    // et `src` a été borné à au moins cette taille.
+    unsafe {
+        core::ptr::copy_nonoverlapping(src.as_ptr(), dst as *mut T as *mut u8, size);
+    }
+    Ok(())
+}
+
+/// Sérialise une structure POD dans un tableau d'octets.
+#[inline]
+pub fn kernel_struct_to_bytes<T: Copy, const N: usize>(val: &T) -> [u8; N] {
+    let mut out = [0u8; N];
+    if mem::size_of::<T>() != N {
+        return out;
+    }
+    // SAFETY: `out` a exactement la taille de `T`; lecture byte-à-byte sans
+    // créer de référence typée aliasée.
+    unsafe {
+        core::ptr::copy_nonoverlapping(val as *const T as *const u8, out.as_mut_ptr(), N);
+    }
+    out
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

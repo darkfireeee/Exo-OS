@@ -74,6 +74,42 @@ pub fn halt_cpu() -> ! {
     }
 }
 
+/// Boucle idle de fin de boot avec scheduler et IRQ actifs.
+///
+/// A utiliser apres `kernel_init()`: le TCB idle de boot est publie, les run
+/// queues existent, et les kthreads/processus en attente doivent pouvoir prendre
+/// le CPU. Contrairement a `halt_cpu()`, cette boucle garde les interruptions
+/// actives et tente un scheduling explicite avant chaque `hlt`.
+pub fn run_scheduler_idle() -> ! {
+    loop {
+        // SAFETY: a ce stade l'IDT/LAPIC sont initialises. Garder IF=1 permet
+        // au timer, au clavier PS/2 et aux IPIs scheduler de reveiller le BSP.
+        unsafe {
+            enable_interrupts();
+        }
+
+        let switched = if crate::process::is_alive(crate::process::Pid::INIT.0) {
+            let cpu_id = smp::percpu::current_cpu_id();
+            unsafe {
+                crate::scheduler::core::switch::schedule_idle_cpu_once(
+                    crate::scheduler::core::task::CpuId(cpu_id),
+                )
+            }
+        } else {
+            false
+        };
+        if switched {
+            continue;
+        }
+
+        // SAFETY: attente idle interruptible. `sti` couvre le cas ou un appelant
+        // a coupe IF juste avant d'entrer ici; HLT se reveille sur la prochaine IRQ.
+        unsafe {
+            core::arch::asm!("sti", "hlt", options(nomem, nostack));
+        }
+    }
+}
+
 /// Retard spin-loop courte (en nanosecondes approximatif)
 #[inline(always)]
 pub fn spin_delay_cycles(cycles: u64) {

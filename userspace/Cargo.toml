@@ -9,8 +9,11 @@
 
 [workspace]
 resolver = "2"
-# Futurs membres : shell, coreutils, net_tools, compositor, package_manager
-members = []
+members = [
+    "libexo",
+    "apps/exosh",
+    "apps/coreutils",
+]
 
 [workspace.package]
 version  = "0.1.0"

@@ -121,8 +121,16 @@ impl CompressionHeader {
     ///
     /// SAFETY: Self est #[repr(C)], Plain Old Data, taille assertée 32.
     pub fn to_bytes(&self) -> [u8; COMPRESSION_HEADER_SIZE] {
-        // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-        unsafe { core::mem::transmute_copy(self) }
+        let mut out = [0u8; COMPRESSION_HEADER_SIZE];
+        // SAFETY: CompressionHeader est #[repr(C)] et la taille est vérifiée par const assert.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                out.as_mut_ptr(),
+                COMPRESSION_HEADER_SIZE,
+            );
+        }
+        out
     }
 
     /// Retourne l'algorithme parsé.

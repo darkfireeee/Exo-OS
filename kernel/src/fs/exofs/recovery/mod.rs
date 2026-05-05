@@ -46,6 +46,7 @@ pub mod fsck_phase2;
 pub mod fsck_phase3;
 pub mod fsck_phase4;
 pub mod fsck_repair;
+pub mod ondisk;
 pub mod recovery_audit;
 pub mod recovery_log;
 pub mod slot_recovery;

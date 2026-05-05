@@ -4,7 +4,10 @@
 //! Les relations sont stockées dans un blob de registre dédié.
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
-use super::validation::{exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT};
+use super::validation::{
+    copy_kernel_bytes_to_struct, exofs_err_to_errno, kernel_struct_to_bytes, verify_cap,
+    write_user_struct, CapabilityType, EFAULT,
+};
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -183,15 +186,7 @@ fn load_relations(reg_id: BlobId) -> ExofsResult<Vec<Relation>> {
     while i < n {
         let off = REL_HDR.saturating_add(i.saturating_mul(REL_ENTRY));
         let mut r = Relation::default();
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let dst = unsafe {
-            core::slice::from_raw_parts_mut(&mut r as *mut Relation as *mut u8, REL_ENTRY)
-        };
-        let mut j = 0usize;
-        while j < REL_ENTRY {
-            dst[j] = data[off + j];
-            j = j.wrapping_add(1);
-        }
+        copy_kernel_bytes_to_struct(&mut r, &data[off..off + REL_ENTRY])?;
         rels.push(r);
         i = i.wrapping_add(1);
     }
@@ -218,10 +213,7 @@ fn save_relations(reg_id: BlobId, rels: &[Relation]) -> ExofsResult<()> {
     }
     let mut k = 0usize;
     while k < rels.len() {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let raw = unsafe {
-            core::slice::from_raw_parts(&rels[k] as *const Relation as *const u8, REL_ENTRY)
-        };
+        let raw = kernel_struct_to_bytes::<_, REL_ENTRY>(&rels[k]);
         let mut m = 0usize;
         while m < REL_ENTRY {
             buf.push(raw[m]);
@@ -345,10 +337,7 @@ pub fn sys_exofs_relation_create(
         Err(e) => return exofs_err_to_errno(e),
     };
     if out_ptr != 0 {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let bytes =
-            unsafe { core::slice::from_raw_parts(&rel as *const Relation as *const u8, REL_ENTRY) };
-        if let Err(e) = write_user_buf(out_ptr, bytes) {
+        if let Err(e) = write_user_struct(out_ptr, &rel) {
             return e;
         }
     }
@@ -503,10 +492,7 @@ pub fn encode_relations(rels: &[Relation]) -> ExofsResult<Vec<u8>> {
     buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < rels.len() {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let raw = unsafe {
-            core::slice::from_raw_parts(&rels[i] as *const Relation as *const u8, REL_ENTRY)
-        };
+        let raw = kernel_struct_to_bytes::<_, REL_ENTRY>(&rels[i]);
         let mut j = 0usize;
         while j < REL_ENTRY {
             buf.push(raw[j]);

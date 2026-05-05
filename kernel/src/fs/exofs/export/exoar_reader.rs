@@ -714,18 +714,18 @@ mod tests {
         let mut out: Vec<u8> = Vec::new();
         let mut hdr = ExoarHeader::new(flags, 0, 1);
         hdr.entry_count = blobs.len() as u32;
-        out.extend_from_slice(hdr.as_bytes());
+        out.extend_from_slice(&hdr.as_bytes());
 
         for (blob_id, data) in blobs {
             let crc = crc32c_compute(data);
             let mut ehdr = ExoarEntryHeader::new(**blob_id, data.len() as u64, data.len() as u64);
             ehdr.payload_crc32 = crc;
-            out.extend_from_slice(ehdr.as_bytes());
+            out.extend_from_slice(&ehdr.as_bytes());
             out.extend_from_slice(data);
         }
 
         let ftr = ExoarFooter::new(blobs.len() as u32, 0, out.len() as u64 + 32);
-        out.extend_from_slice(ftr.as_bytes());
+        out.extend_from_slice(&ftr.as_bytes());
         out
     }
 

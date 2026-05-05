@@ -298,69 +298,44 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         }
     }
 
-    // SAFETY: prev.kstack_ptr et next.kstack_ptr pointent vers des stacks kernel
-    // valides, alloués au boot et jamais libérés pendant la durée de vie du thread.
-    // context_switch_asm garantit la sauvegarde complète des callee-saved ABI.
-    context_switch_asm(&mut prev.kstack_ptr as *mut u64, next.kstack_ptr, new_cr3);
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // ──── À PARTIR D'ICI : on est dans le contexte de `next` ────────────────
-    // (context_switch_asm a restauré la pile et les registres de `next`)
-    // ─────────────────────────────────────────────────────────────────────────
-
-    // FIX-KPTI-01 : rafraîchir le slot CR3 per-CPU après le switch.
-    // Sans cette mise à jour, kpti_switch_to_user/kernel peut relire un couple
-    // stale sur ce CPU après migration/changement d'espace d'adressage.
-    let cpu_id = percpu::current_cpu_id() as usize;
-    next.assign_cpu(CpuId(cpu_id as u32));
+    // Publier `next` AVANT le saut ASM.
+    //
+    // Un thread jamais schedule ne revient pas a l'instruction suivant
+    // `context_switch_asm`: son premier `ret` saute vers son trampoline de
+    // demarrage. Les etats per-CPU doivent donc deja designer `next` avant de
+    // charger sa pile kernel.
+    next.assign_cpu(CpuId(cpu_idx as u32));
 
     if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
-        let user_cr3 = user_cr3_for_cpu(cpu_id).unwrap_or_else(|| {
+        let user_cr3 = user_cr3_for_cpu(cpu_idx).unwrap_or_else(|| {
             panic!(
                 "KPTI actif mais user CR3 absent pour le CPU {} pendant le context switch",
-                cpu_id
+                cpu_idx
             )
         });
         crate::arch::x86_64::spectre::kpti::set_current_cr3(next.cr3_phys, user_cr3);
     }
 
-    // ── Étape 9 : Restauration PKRS (S6) côté thread entrant ────────────────
     if has_pks {
         // SAFETY: accès MSR ring0, capability vérifiée via CPUID.
         unsafe { msr::write_msr(msr::MSR_IA32_PKRS, next.pkrs as u64) };
     }
 
-    // ── Étape 10 : Restaurer MSR_IA32_PL0_SSP de `next` si CET actif ────────
-    //
-    // On est maintenant dans le contexte de `next`. Restaurer son SSP Ring 0
-    // avant tout retour vers userspace. Si next n'a jamais utilisé CET
-    // (pl0_ssp() == 0), écrire 0 est safe — désactive le shadow stack pour ce
-    // thread jusqu'à activation explicite via ExoCage.
     if has_cet_ss {
         let ssp = next.pl0_ssp();
         // SAFETY: MSR 0x6A4 existant si has_cet_ss(), Ring 0, valeur par-thread.
         unsafe { msr::write_msr(MSR_IA32_PL0_SSP, ssp) };
     }
 
-    // ── Étape 11 : Post-switch côté `next` ───────────────────────────────────
-    // Marquer `next` comme Running.
     next.set_state(TaskState::Running);
     next.switch_count = next.switch_count.wrapping_add(1);
 
-    // Mettre à jour la pile noyau d'entrée et TSS.RSP0 avant toute publication
-    // du TCB courant.
     let next_kstack_top = next.kstack_top();
     unsafe {
         percpu::set_kernel_rsp(next_kstack_top);
-        tss::update_rsp0(cpu_id, next_kstack_top);
+        tss::update_rsp0(cpu_idx, next_kstack_top);
     }
 
-    // ── Étape 12 : Restaurer FS/GS base de `next` (CORR-11) ─────────────────
-    //
-    // Restaurer FS.base (TLS userspace) et user GS.base (valeur Ring 3).
-    // Écrire user_gs_base dans MSR_KERNEL_GS_BASE (0xC0000102) : lors du
-    // SWAPGS à IRETQ vers Ring 3, cette valeur deviendra GS.base.
-    //
     // SAFETY: wrmsr en Ring 0 sur MSR valides et supportés.
     unsafe {
         msr::write_msr(MSR_FS_BASE, next.fs_base);
@@ -371,19 +346,18 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     core::sync::atomic::fence(Ordering::SeqCst);
     percpu::set_current_tcb(next as *mut ThreadControlBlock);
 
-    // Publier ensuite l'état `next` aux autres CPUs.
-    if cpu_id < MAX_CPUS {
-        let cpu_data = unsafe { percpu::per_cpu_mut(cpu_id) };
+    if cpu_idx < MAX_CPUS {
+        let cpu_data = unsafe { percpu::per_cpu_mut(cpu_idx) };
         cpu_data.ctx_switch_count = cpu_data.ctx_switch_count.wrapping_add(1);
         cpu_data.last_switch_tsc = tsc::read_tsc();
-        CURRENT_THREAD_PER_CPU[cpu_id]
+        CURRENT_THREAD_PER_CPU[cpu_idx]
             .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
     }
 
-    // La livraison des signaux reste dans arch/ au retour userspace. Lire ici
-    // sans consommer le résultat ne change aucun état utile du scheduler.
-
-    // Instrumentation : l'appelant (tick handler) incrémente les stats switch.
+    // SAFETY: prev.kstack_ptr et next.kstack_ptr pointent vers des stacks kernel
+    // valides, alloues au boot et jamais liberes pendant la duree de vie du thread.
+    // context_switch_asm garantit la sauvegarde complète des callee-saved ABI.
+    context_switch_asm(&mut prev.kstack_ptr as *mut u64, next.kstack_ptr, new_cr3);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -426,6 +400,55 @@ pub unsafe fn schedule_yield(
             current.set_state(TaskState::Running);
         }
     }
+}
+
+/// Une tentative de scheduling depuis le thread idle de boot du CPU courant.
+///
+/// `kernel_main` arrive ici sur le stack de boot BSP, avec un TCB idle deja
+/// publie comme `current_tcb`. La fin de boot ne doit pas faire `cli; hlt`,
+/// sinon les kthreads deja enfilees et les futurs processus utilisateur ne
+/// peuvent jamais prendre le CPU. Ce helper choisit un thread runnable, relache
+/// la section preempt avant le switch, puis bascule depuis le TCB idle courant.
+///
+/// Retourne `true` si un context switch a ete tente.
+///
+/// # Safety
+/// Le scheduler et la run queue du CPU doivent etre initialises, et le TCB
+/// courant doit etre le TCB idle publie pour ce CPU ou un TCB kernel valide.
+pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
+    use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
+    use crate::scheduler::core::preempt::PreemptGuard;
+    use crate::scheduler::core::runqueue::run_queue;
+    use core::ptr::NonNull;
+
+    let current_ptr = current_thread_raw();
+    let Some(current_nn) = NonNull::new(current_ptr) else {
+        return false;
+    };
+
+    let selected_next = {
+        let _preempt = PreemptGuard::new();
+        let rq = run_queue(cpu_id);
+        let current = &mut *current_nn.as_ptr();
+
+        if rq.nr_running_usize() == 0 && !current.need_resched() {
+            return false;
+        }
+        let _ = current.take_need_resched();
+
+        match pick_next_task(rq, Some(current_nn)) {
+            PickResult::Switch(next) if next != current_nn => Some(next),
+            PickResult::Switch(_) | PickResult::KeepRunning | PickResult::GoIdle => None,
+        }
+    };
+
+    let Some(next) = selected_next else {
+        return false;
+    };
+
+    let current = &mut *current_nn.as_ptr();
+    context_switch(current, &mut *next.as_ptr());
+    true
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // schedule_block — blocage du thread courant (sans ré-enfilage)

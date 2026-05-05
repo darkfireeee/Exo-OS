@@ -5,7 +5,7 @@
 
 use super::object_fd::OBJECT_TABLE;
 use super::validation::{
-    exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT, EINVAL,
+    exofs_err_to_errno, verify_cap, write_user_struct, CapabilityType, EFAULT, EINVAL,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
@@ -180,14 +180,7 @@ pub fn sys_exofs_get_content_hash(
         }
     };
 
-    // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-    let bytes = unsafe {
-        core::slice::from_raw_parts(
-            &result as *const ContentHashResult as *const u8,
-            core::mem::size_of::<ContentHashResult>(),
-        )
-    };
-    match write_user_buf(out_hash_ptr, bytes) {
+    match write_user_struct(out_hash_ptr, &result) {
         Ok(_) => 0i64,
         Err(e) => e,
     }

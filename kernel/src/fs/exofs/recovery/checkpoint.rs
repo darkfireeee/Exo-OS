@@ -12,6 +12,7 @@
 //! - **WRITE-02** : vérification `bytes_written == expected` après sérialisation.
 
 extern crate alloc;
+use super::ondisk::{prefix_bytes, read_pod, write_pod};
 use crate::fs::exofs::core::blob_id::blake3_hash;
 use crate::fs::exofs::core::{EpochId, ExofsError, ExofsResult};
 use crate::scheduler::sync::spinlock::SpinLock;
@@ -125,9 +126,8 @@ impl CheckpointHeaderDisk {
             _pad2: [0; 32],
         };
         // Calculer le hash sur les 64 premiers octets (metadata scalaire).
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let raw = unsafe { core::slice::from_raw_parts(&hdr as *const _ as *const u8, 64) };
-        hdr.header_hash = blake3_hash(raw);
+        let raw = prefix_bytes::<Self, 64>(&hdr);
+        hdr.header_hash = blake3_hash(&raw);
         hdr
     }
 
@@ -136,8 +136,7 @@ impl CheckpointHeaderDisk {
     /// # WRITE-02
     /// L'appelant doit vérifier que le buffer de destination fait bien 128B.
     pub fn to_bytes(&self) -> [u8; CHECKPOINT_HEADER_SIZE] {
-        // SAFETY: repr(C) 128B, copie directe.
-        unsafe { core::mem::transmute_copy(self) }
+        write_pod::<Self, CHECKPOINT_HEADER_SIZE>(self)
     }
 
     /// Désérialise depuis un buffer de 128 octets.
@@ -166,8 +165,7 @@ impl CheckpointHeaderDisk {
             return Err(ExofsError::ChecksumMismatch);
         }
 
-        // SAFETY: buf est repr(C) aligné 1B, taille vérifiée ci-dessus.
-        Ok(unsafe { core::mem::transmute_copy(buf) })
+        read_pod(buf)
     }
 
     /// Retourne `true` si le flag "dirty" est positionné.

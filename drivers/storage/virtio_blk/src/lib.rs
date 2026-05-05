@@ -2,18 +2,13 @@
 
 extern crate alloc;
 pub mod hal;
+pub mod virtqueue;
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use spin::Mutex;
 
-// ExoHal is a hardware abstraction layer we'll need for virtio-drivers
-// But since this is a complex integration, let's create a simpler abstract API
-// that the kernel will consume.
-
 pub struct ExoVirtioBlkDevice {
-    // Dans un vrai OS, on conserverait l'instance virtio_drivers::device::blk::VirtIOBlk<HalImpl, TransportImpl>
-    // Pour l'intégration initiale, nous mockons la file de messages Pci / MMIO pour valider le VFS.
     pub base_address: usize,
     capacity_bytes: usize,
     block_size: usize,
@@ -22,7 +17,6 @@ pub struct ExoVirtioBlkDevice {
 
 impl ExoVirtioBlkDevice {
     pub fn new(base_address: usize, disk_capacity_bytes: usize) -> Self {
-        // Init MMIO ou PCI ici
         Self {
             base_address,
             capacity_bytes: disk_capacity_bytes,
@@ -78,11 +72,6 @@ impl ExoVirtioBlkDevice {
         Ok(())
     }
 
-    /// Flush persistant du backend bloc.
-    ///
-    /// Le backend actuel est un disque mock en mémoire, donc les écritures sont
-    /// déjà visibles de manière synchrone. La fonction reste explicite pour que
-    /// les couches supérieures disposent d'un vrai point d'accroche de flush.
     pub fn flush(&self) -> Result<(), &'static str> {
         Ok(())
     }

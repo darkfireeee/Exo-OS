@@ -7,7 +7,7 @@ license.workspace = true
 description       = "Exo-OS server: exo_shield (bare-metal no_std)"
 
 [[bin]]
-name = "exo-exo-shield"
+name = "exo-shield"
 path = "src/main.rs"
 
 [dependencies]

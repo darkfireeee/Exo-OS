@@ -9,7 +9,8 @@
 // Les 3 barrières correspondent aux 3 phases du protocole de commit.
 
 use core::fmt;
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use spin::Mutex;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
@@ -24,10 +25,11 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 /// RÈGLE EPOCH-02 : omettre un flush = corruption certaine au prochain crash.
 type NvmeFlushFn = fn() -> ExofsResult<()>;
 
-/// Pointeur atomique vers la fonction de flush enregistrée.
+/// Hook de flush enregistré.
 ///
 /// Initialisé à `default_flush_stub` (no-op + log) jusqu'à l'enregistrement.
-static FLUSH_HOOK: AtomicUsize = AtomicUsize::new(0);
+static FLUSH_HOOK: Mutex<NvmeFlushFn> = Mutex::new(default_flush_stub);
+static FLUSH_REGISTERED: AtomicBool = AtomicBool::new(false);
 
 /// Stub par défaut : retourne immédiatement OK mais signale l'absence d'hook.
 ///
@@ -60,9 +62,10 @@ static UNHOOK_FLUSH_COUNT: AtomicU64 = AtomicU64::new(0);
 /// `flush_fn` : fonction bloquante qui soumet un Flush FUA au périphérique
 ///              NVMe sous-jacent et attend sa complétion.
 pub fn register_nvme_flush_fn(flush_fn: NvmeFlushFn) {
-    // Mis à jour atomiquement — si plusieurs appels concurrents, le dernier gagne.
-    // En pratique, call uniquement depuis le thread d'init (single-path).
-    FLUSH_HOOK.store(flush_fn as usize, Ordering::Release);
+    // Mis à jour sous verrou — si plusieurs appels concurrents, le dernier gagne.
+    // En pratique, appel uniquement depuis le thread d'init (single-path).
+    *FLUSH_HOOK.lock() = flush_fn;
+    FLUSH_REGISTERED.store(true, Ordering::Release);
     // Réinitialise le compteur de flushes non-hookés (on est maintenant hookés).
     UNHOOK_FLUSH_COUNT.store(0, Ordering::Relaxed);
 }
@@ -70,7 +73,7 @@ pub fn register_nvme_flush_fn(flush_fn: NvmeFlushFn) {
 /// Retourne vrai si un hook NVMe a été enregistré (différent du stub).
 #[inline]
 pub fn is_nvme_flush_registered() -> bool {
-    FLUSH_HOOK.load(Ordering::Relaxed) != 0
+    FLUSH_REGISTERED.load(Ordering::Acquire)
 }
 
 // =============================================================================
@@ -96,16 +99,7 @@ static BARRIER_CYCLES: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), A
 /// non-nécessaire sur le hot path du commit.
 #[inline(always)]
 fn nvme_flush_impl(phase_idx: usize) -> ExofsResult<()> {
-    // Charge le pointeur de fonction atomiquement.
-    // SAFETY: le pointeur est initialisé à une fonction valide (`default_flush_stub`)
-    // et mis à jour uniquement par `register_nvme_flush_fn` vers une autre fonction
-    // valide. La conversion usize → fn() est donc sûre.
-    let fn_ptr = FLUSH_HOOK.load(Ordering::Acquire);
-    if fn_ptr == 0 {
-        return default_flush_stub();
-    }
-    // SAFETY: cast byte-by-byte d'une struct #[repr(C, packed)] — taille vérifiée par const assert.
-    let flush: NvmeFlushFn = unsafe { core::mem::transmute(fn_ptr) };
+    let flush: NvmeFlushFn = *FLUSH_HOOK.lock();
 
     let t0 = read_tsc();
     let result = flush();

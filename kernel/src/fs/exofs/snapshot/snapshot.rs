@@ -112,10 +112,17 @@ impl SnapshotHeaderDisk {
     /// Calcule le checksum Blake3 de l'en-tête (sur les 224 premiers octets)
     pub fn compute_checksum(&self) -> [u8; 32] {
         let body_len = SNAPSHOT_HEADER_SIZE - 32;
-        let ptr = self as *const Self as *const u8;
-        // SAFETY: repr(C), taille connue statiquement
-        let body = unsafe { core::slice::from_raw_parts(ptr, body_len) };
-        blake3_hash(body)
+        let mut body = [0u8; SNAPSHOT_HEADER_SIZE - 32];
+        // SAFETY: SnapshotHeaderDisk est #[repr(C)] et la taille est vérifiée
+        // par const assert; on copie uniquement le préfixe couvert par le hash.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                body.as_mut_ptr(),
+                body_len,
+            );
+        }
+        blake3_hash(&body)
     }
 
     /// HDR-03 : vérifie magic EN PREMIER, puis checksum
@@ -143,10 +150,18 @@ impl SnapshotHeaderDisk {
     }
 
     /// Retourne le tableau d'octets bruts
-    pub fn as_bytes(&self) -> &[u8] {
-        let ptr = self as *const Self as *const u8;
-        // SAFETY: repr(C), taille fixe
-        unsafe { core::slice::from_raw_parts(ptr, SNAPSHOT_HEADER_SIZE) }
+    pub fn as_bytes(&self) -> [u8; SNAPSHOT_HEADER_SIZE] {
+        let mut out = [0u8; SNAPSHOT_HEADER_SIZE];
+        // SAFETY: SnapshotHeaderDisk est #[repr(C)] et `out` a la taille
+        // fixe validée par const assert.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Self as *const u8,
+                out.as_mut_ptr(),
+                SNAPSHOT_HEADER_SIZE,
+            );
+        }
+        out
     }
 
     /// Parse depuis un tampon brut

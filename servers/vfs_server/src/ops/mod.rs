@@ -15,6 +15,17 @@ pub const VFS_MOUNT: u32 = 0;
 pub const VFS_UMOUNT: u32 = 1;
 pub const VFS_RESOLVE: u32 = 2;
 pub const VFS_OPEN: u32 = 3;
+pub const VFS_CLOSE: u32 = 4;
+pub const VFS_READ: u32 = 5;
+pub const VFS_WRITE: u32 = 6;
+pub const VFS_STAT: u32 = 7;
+pub const VFS_GETDENTS: u32 = 8;
+pub const VFS_MKDIR: u32 = 9;
+pub const VFS_UNLINK: u32 = 10;
+pub const VFS_RMDIR: u32 = 11;
+pub const VFS_RENAME: u32 = 12;
+pub const VFS_TRUNCATE: u32 = 13;
+pub const VFS_FSYNC: u32 = 14;
 
 pub const PATH_PAYLOAD_MAX: usize = 120;
 
@@ -70,4 +81,28 @@ pub fn open_needs_write(flags: u64) -> bool {
 
 pub fn exofs_rights_for_open(flags: u64) -> u64 {
     crate::translation_layer::exofs_rights_for_open_flags(flags)
+}
+
+pub fn read_u64(payload: &[u8], off: usize) -> Result<u64, i64> {
+    if off
+        .checked_add(8)
+        .filter(|end| *end <= payload.len())
+        .is_none()
+    {
+        return Err(syscall::EINVAL);
+    }
+    Ok(u64::from_le_bytes([
+        payload[off],
+        payload[off + 1],
+        payload[off + 2],
+        payload[off + 3],
+        payload[off + 4],
+        payload[off + 5],
+        payload[off + 6],
+        payload[off + 7],
+    ]))
+}
+
+pub fn read_i64(payload: &[u8], off: usize) -> Result<i64, i64> {
+    read_u64(payload, off).map(|value| value as i64)
 }

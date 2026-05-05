@@ -1,0 +1,17 @@
+[package]
+name              = "exo-tty-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description       = "Exo-OS server: TTY line discipline (bare-metal no_std)"
+
+[[bin]]
+name = "exo-tty-server"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+exo-syscall-abi = { path = "../syscall_abi" }
+exo-tty = { path = "../../drivers/tty" }

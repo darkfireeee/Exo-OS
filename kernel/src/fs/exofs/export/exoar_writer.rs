@@ -220,9 +220,9 @@ impl ExoarWriter {
             self.options.epoch_target,
         );
         let bytes = hdr.as_bytes();
-        sink.write_all(bytes)
+        sink.write_all(&bytes)
             .map_err(|_| ExoarWriteError::IoError)?;
-        self.stats.running_crc = crc32c_update(self.stats.running_crc, bytes);
+        self.stats.running_crc = crc32c_update(self.stats.running_crc, &bytes);
         self.stats.archive_bytes = self.stats.archive_bytes.saturating_add(bytes.len() as u64);
         self.state = WriterState::Writing;
         Ok(())
@@ -261,9 +261,9 @@ impl ExoarWriter {
         ehdr.epoch = epoch;
 
         let hdr_bytes = ehdr.as_bytes();
-        sink.write_all(hdr_bytes)
+        sink.write_all(&hdr_bytes)
             .map_err(|_| ExoarWriteError::IoError)?;
-        self.stats.running_crc = crc32c_update(self.stats.running_crc, hdr_bytes);
+        self.stats.running_crc = crc32c_update(self.stats.running_crc, &hdr_bytes);
         self.stats.archive_bytes = self
             .stats
             .archive_bytes
@@ -306,9 +306,9 @@ impl ExoarWriter {
         ehdr.epoch = epoch;
 
         let hdr_bytes = ehdr.as_bytes();
-        sink.write_all(hdr_bytes)
+        sink.write_all(&hdr_bytes)
             .map_err(|_| ExoarWriteError::IoError)?;
-        self.stats.running_crc = crc32c_update(self.stats.running_crc, hdr_bytes);
+        self.stats.running_crc = crc32c_update(self.stats.running_crc, &hdr_bytes);
         self.stats.archive_bytes = self
             .stats
             .archive_bytes
@@ -339,7 +339,7 @@ impl ExoarWriter {
             total_size,
         );
         let ftr_bytes = ftr.as_bytes();
-        sink.write_all(ftr_bytes)
+        sink.write_all(&ftr_bytes)
             .map_err(|_| ExoarWriteError::IoError)?;
         self.stats.archive_bytes = self
             .stats

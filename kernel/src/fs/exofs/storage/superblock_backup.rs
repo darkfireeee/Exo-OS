@@ -20,7 +20,7 @@
 // - WRITE-02 : vérification bytes_written après chaque écriture.
 // - HDR-03   : verify() avant d'accéder aux données d'un superblock lu.
 
-use core::mem::size_of;
+use core::mem::{size_of, MaybeUninit};
 
 use crate::fs::exofs::core::{DiskOffset, ExofsError, ExofsResult};
 use crate::fs::exofs::storage::layout::{
@@ -122,16 +122,12 @@ pub fn write_superblock_mirrors(
 ) -> ExofsResult<u8> {
     let offsets = superblock_mirror_offsets(disk_size)?;
     let sb_size = size_of::<ExoSuperblockDisk>();
-
-    // SAFETY: ExoSuperblockDisk est #[repr(C, align(4096))], types plain uniquement.
-    let bytes = unsafe {
-        core::slice::from_raw_parts(sb as *const ExoSuperblockDisk as *const u8, sb_size)
-    };
+    let bytes = sb.as_bytes();
 
     let mut ok_count: u8 = 0;
 
     for (idx, offset) in offsets.iter().enumerate() {
-        match write_fn(bytes, *offset) {
+        match write_fn(&bytes, *offset) {
             Ok(n) if n == sb_size => {
                 ok_count += 1;
                 STORAGE_STATS.inc_sb_commit();
@@ -165,11 +161,8 @@ pub fn write_primary_superblock(
     write_fn: &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
 ) -> ExofsResult<()> {
     let sb_size = size_of::<ExoSuperblockDisk>();
-    // SAFETY: validité des données vérifiée par les gardes ci-dessus.
-    let bytes = unsafe {
-        core::slice::from_raw_parts(sb as *const ExoSuperblockDisk as *const u8, sb_size)
-    };
-    let n = write_fn(bytes, superblock_primary())?;
+    let bytes = sb.as_bytes();
+    let n = write_fn(&bytes, superblock_primary())?;
     if n != sb_size {
         return Err(ExofsError::PartialWrite);
     }
@@ -186,18 +179,15 @@ pub fn sync_secondary_mirrors(
     write_fn: &dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>,
 ) -> ExofsResult<()> {
     let sb_size = size_of::<ExoSuperblockDisk>();
-    // SAFETY: validité des données vérifiée par les gardes ci-dessus.
-    let bytes = unsafe {
-        core::slice::from_raw_parts(sb as *const ExoSuperblockDisk as *const u8, sb_size)
-    };
+    let bytes = sb.as_bytes();
 
     let mirror_12k = superblock_mirror_12k();
     let mirror_end = superblock_mirror_end(disk_size)?;
 
-    let ok1 = write_fn(bytes, mirror_12k)
+    let ok1 = write_fn(&bytes, mirror_12k)
         .map(|n| n == sb_size)
         .unwrap_or(false);
-    let ok2 = write_fn(bytes, mirror_end)
+    let ok2 = write_fn(&bytes, mirror_end)
         .map(|n| n == sb_size)
         .unwrap_or(false);
 
@@ -412,8 +402,16 @@ pub fn count_valid_mirrors(results: &[MirrorReadResult; 3]) -> u8 {
 
 /// Retourne un ExoSuperblockDisk zeroisé (utilisé pour les erreurs I/O).
 fn zeroed_superblock_disk() -> ExoSuperblockDisk {
+    let mut sb = MaybeUninit::<ExoSuperblockDisk>::uninit();
     // SAFETY: ExoSuperblockDisk est un type plain (#[repr(C)], pas de Drop).
-    unsafe { core::mem::zeroed() }
+    unsafe {
+        core::ptr::write_bytes(
+            sb.as_mut_ptr() as *mut u8,
+            0,
+            size_of::<ExoSuperblockDisk>(),
+        );
+        sb.assume_init()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

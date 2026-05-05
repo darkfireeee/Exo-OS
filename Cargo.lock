@@ -296,10 +296,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-framebuffer"
+version = "0.1.0"
+
+[[package]]
 name = "exo-init-server"
 version = "0.1.0"
 dependencies = [
+ "exo-syscall-abi",
  "spin",
+]
+
+[[package]]
+name = "exo-input-server"
+version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
 ]
 
 [[package]]
@@ -309,6 +321,10 @@ dependencies = [
  "exo-syscall-abi",
  "spin",
 ]
+
+[[package]]
+name = "exo-loader"
+version = "0.1.0"
 
 [[package]]
 name = "exo-memory-server"
@@ -366,6 +382,10 @@ name = "exo-phoenix-ssr"
 version = "0.2.0"
 
 [[package]]
+name = "exo-ps2-input"
+version = "0.1.0"
+
+[[package]]
 name = "exo-scheduler-server"
 version = "0.1.0"
 dependencies = [
@@ -386,6 +406,18 @@ name = "exo-syscall-abi"
 version = "0.1.0"
 
 [[package]]
+name = "exo-tty"
+version = "0.1.0"
+
+[[package]]
+name = "exo-tty-server"
+version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
+ "exo-tty",
+]
+
+[[package]]
 name = "exo-types"
 version = "0.1.0"
 dependencies = [
@@ -399,6 +431,10 @@ dependencies = [
  "exo-syscall-abi",
  "spin",
 ]
+
+[[package]]
+name = "exo-vga-text"
+version = "0.1.0"
 
 [[package]]
 name = "exo-virtio-blk"

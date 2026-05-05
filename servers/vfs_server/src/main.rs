@@ -18,6 +18,7 @@
 //! - VFS_UMOUNT   (1) : démonter un point de montage
 //! - VFS_RESOLVE  (2) : résoudre un chemin -> blob_id bas 64 bits
 //! - VFS_OPEN     (3) : ouvrir un chemin -> fd dans le namespace appelant
+//! - VFS_CLOSE..FSYNC (4..14) : operations POSIX de base, deleguees au kernel
 //!
 //! ## Syscalls utilisés
 //! - SYS_EXOFS_PATH_RESOLVE = 500 (path, len, flags, out, _, rights)
@@ -120,12 +121,21 @@ struct VfsReply {
     _pad: [u8; 40],
 }
 
-fn handle_mount(payload: &[u8]) -> VfsReply {
+fn handle_mount(sender_pid: u32, payload: &[u8]) -> VfsReply {
+    if sender_pid != 1 {
+        return VfsReply {
+            status: syscall::EPERM,
+            blob_id: 0,
+            fd: -1,
+            _pad: [0; 40],
+        };
+    }
+
     // payload[0] = fstype u8, payload[1..5] = flags u32 LE,
     // payload[5..13] = root_blob u64 LE, payload[13..] = chemin null-terminated
     if payload.len() < 14 {
         return VfsReply {
-            status: -22,
+            status: syscall::EINVAL,
             blob_id: 0,
             fd: -1,
             _pad: [0; 40],
@@ -151,7 +161,7 @@ fn handle_mount(payload: &[u8]) -> VfsReply {
         Some(fs_type) => fs_type,
         None => {
             return VfsReply {
-                status: -22,
+                status: syscall::EINVAL,
                 blob_id: 0,
                 fd: -1,
                 _pad: [0; 40],
@@ -187,7 +197,7 @@ fn handle_mount(payload: &[u8]) -> VfsReply {
         Some(i) => i,
         None => {
             return VfsReply {
-                status: -28,
+                status: syscall::ENOSPC,
                 blob_id: 0,
                 fd: -1,
                 _pad: [0; 40],
@@ -320,14 +330,23 @@ fn handle_open(payload: &[u8]) -> VfsReply {
     }
 }
 
-fn handle_umount(payload: &[u8]) -> VfsReply {
+fn handle_umount(sender_pid: u32, payload: &[u8]) -> VfsReply {
+    if sender_pid != 1 {
+        return VfsReply {
+            status: syscall::EPERM,
+            blob_id: 0,
+            fd: -1,
+            _pad: [0; 40],
+        };
+    }
+
     let path_len = payload
         .iter()
         .position(|&b| b == 0)
         .unwrap_or(payload.len());
     if path_len == 0 {
         return VfsReply {
-            status: -22,
+            status: syscall::EINVAL,
             blob_id: 0,
             fd: -1,
             _pad: [0; 40],
@@ -356,21 +375,225 @@ fn handle_umount(payload: &[u8]) -> VfsReply {
     }
 
     VfsReply {
-        status: -2,
+        status: syscall::ENOENT,
         blob_id: 0,
         fd: -1,
         _pad: [0; 40],
     }
 }
 
+fn reply_status(status: i64) -> VfsReply {
+    VfsReply {
+        status,
+        blob_id: 0,
+        fd: -1,
+        _pad: [0; 40],
+    }
+}
+
+fn reply_count(status: i64, count: i64) -> VfsReply {
+    VfsReply {
+        status,
+        blob_id: 0,
+        fd: count,
+        _pad: [0; 40],
+    }
+}
+
+fn handle_close(payload: &[u8]) -> VfsReply {
+    let fd = match ops::read_u64(payload, 0) {
+        Ok(fd) => fd,
+        Err(status) => return reply_status(status),
+    };
+    let rc = unsafe { syscall::syscall1(syscall::SYS_CLOSE, fd) };
+    if rc < 0 {
+        reply_status(rc)
+    } else {
+        reply_count(0, rc)
+    }
+}
+
+fn handle_read(payload: &[u8]) -> VfsReply {
+    let fd = match ops::read_u64(payload, 0) {
+        Ok(fd) => fd,
+        Err(status) => return reply_status(status),
+    };
+    let buf = match ops::read_u64(payload, 8) {
+        Ok(buf) => buf,
+        Err(status) => return reply_status(status),
+    };
+    let len = match ops::read_u64(payload, 16) {
+        Ok(len) => len,
+        Err(status) => return reply_status(status),
+    };
+    let rc = unsafe { syscall::syscall3(syscall::SYS_READ, fd, buf, len) };
+    if rc < 0 {
+        reply_status(rc)
+    } else {
+        reply_count(0, rc)
+    }
+}
+
+fn handle_write(payload: &[u8]) -> VfsReply {
+    let fd = match ops::read_u64(payload, 0) {
+        Ok(fd) => fd,
+        Err(status) => return reply_status(status),
+    };
+    let buf = match ops::read_u64(payload, 8) {
+        Ok(buf) => buf,
+        Err(status) => return reply_status(status),
+    };
+    let len = match ops::read_u64(payload, 16) {
+        Ok(len) => len,
+        Err(status) => return reply_status(status),
+    };
+    let rc = unsafe { syscall::syscall3(syscall::SYS_WRITE, fd, buf, len) };
+    if rc < 0 {
+        reply_status(rc)
+    } else {
+        reply_count(0, rc)
+    }
+}
+
+fn handle_path_mode(payload: &[u8], nr: u64) -> VfsReply {
+    let mode = match ops::read_u64(payload, 0) {
+        Ok(mode) => mode,
+        Err(status) => return reply_status(status),
+    };
+    let mut path = [0u8; ops::PATH_PAYLOAD_MAX + 1];
+    let path_len = match ops::path_payload_to_cstr(&payload[8..], &mut path) {
+        Ok(len) => len,
+        Err(status) => return reply_status(status),
+    };
+    let _ = path_len;
+    let rc = unsafe { syscall::syscall2(nr, path.as_ptr() as u64, mode) };
+    reply_status(if rc < 0 { rc } else { 0 })
+}
+
+fn handle_path_only(payload: &[u8], nr: u64) -> VfsReply {
+    let mut path = [0u8; ops::PATH_PAYLOAD_MAX + 1];
+    let path_len = match ops::path_payload_to_cstr(payload, &mut path) {
+        Ok(len) => len,
+        Err(status) => return reply_status(status),
+    };
+    let _ = path_len;
+    let rc = unsafe { syscall::syscall1(nr, path.as_ptr() as u64) };
+    reply_status(if rc < 0 { rc } else { 0 })
+}
+
+fn handle_stat(payload: &[u8]) -> VfsReply {
+    let stat_ptr = match ops::read_u64(payload, 0) {
+        Ok(ptr) => ptr,
+        Err(status) => return reply_status(status),
+    };
+    let mut path = [0u8; ops::PATH_PAYLOAD_MAX + 1];
+    let path_len = match ops::path_payload_to_cstr(&payload[8..], &mut path) {
+        Ok(len) => len,
+        Err(status) => return reply_status(status),
+    };
+    let _ = path_len;
+    let rc = unsafe { syscall::syscall2(syscall::SYS_STAT, path.as_ptr() as u64, stat_ptr) };
+    reply_status(if rc < 0 { rc } else { 0 })
+}
+
+fn handle_getdents(payload: &[u8]) -> VfsReply {
+    let fd = match ops::read_u64(payload, 0) {
+        Ok(fd) => fd,
+        Err(status) => return reply_status(status),
+    };
+    let buf = match ops::read_u64(payload, 8) {
+        Ok(buf) => buf,
+        Err(status) => return reply_status(status),
+    };
+    let len = match ops::read_u64(payload, 16) {
+        Ok(len) => len,
+        Err(status) => return reply_status(status),
+    };
+    let rc = unsafe { syscall::syscall3(syscall::SYS_GETDENTS64, fd, buf, len) };
+    if rc < 0 {
+        reply_status(rc)
+    } else {
+        reply_count(0, rc)
+    }
+}
+
+fn handle_rename(payload: &[u8]) -> VfsReply {
+    let old_len = match ops::read_u64(payload, 0) {
+        Ok(len) if len > 0 && len <= ops::PATH_PAYLOAD_MAX as u64 => len as usize,
+        Ok(_) => return reply_status(syscall::EINVAL),
+        Err(status) => return reply_status(status),
+    };
+    let old_start = 8usize;
+    let new_start = match old_start
+        .checked_add(old_len)
+        .and_then(|v| v.checked_add(1))
+    {
+        Some(start) if start < payload.len() => start,
+        _ => return reply_status(syscall::EINVAL),
+    };
+    let mut old_path = [0u8; ops::PATH_PAYLOAD_MAX + 1];
+    let mut new_path = [0u8; ops::PATH_PAYLOAD_MAX + 1];
+    let old = &payload[old_start..old_start + old_len];
+    old_path[..old_len].copy_from_slice(old);
+    old_path[old_len] = 0;
+    let new_len = match ops::path_payload_to_cstr(&payload[new_start..], &mut new_path) {
+        Ok(len) => len,
+        Err(status) => return reply_status(status),
+    };
+    let _ = new_len;
+    let rc = unsafe {
+        syscall::syscall2(
+            syscall::SYS_RENAME,
+            old_path.as_ptr() as u64,
+            new_path.as_ptr() as u64,
+        )
+    };
+    reply_status(if rc < 0 { rc } else { 0 })
+}
+
+fn handle_truncate(payload: &[u8]) -> VfsReply {
+    let len = match ops::read_u64(payload, 0) {
+        Ok(len) => len,
+        Err(status) => return reply_status(status),
+    };
+    let mut path = [0u8; ops::PATH_PAYLOAD_MAX + 1];
+    let path_len = match ops::path_payload_to_cstr(&payload[8..], &mut path) {
+        Ok(len) => len,
+        Err(status) => return reply_status(status),
+    };
+    let _ = path_len;
+    let rc = unsafe { syscall::syscall2(syscall::SYS_TRUNCATE, path.as_ptr() as u64, len) };
+    reply_status(if rc < 0 { rc } else { 0 })
+}
+
+fn handle_fsync(payload: &[u8]) -> VfsReply {
+    let fd = match ops::read_u64(payload, 0) {
+        Ok(fd) => fd,
+        Err(status) => return reply_status(status),
+    };
+    let rc = unsafe { syscall::syscall1(syscall::SYS_FSYNC, fd) };
+    reply_status(if rc < 0 { rc } else { 0 })
+}
+
 fn handle_request(req: &VfsRequest) -> VfsReply {
     match req.msg_type {
-        ops::VFS_MOUNT => handle_mount(&req.payload),
+        ops::VFS_MOUNT => handle_mount(req.sender_pid, &req.payload),
         ops::VFS_RESOLVE => handle_resolve(&req.payload),
         ops::VFS_OPEN => handle_open(&req.payload),
-        ops::VFS_UMOUNT => handle_umount(&req.payload),
+        ops::VFS_UMOUNT => handle_umount(req.sender_pid, &req.payload),
+        ops::VFS_CLOSE => handle_close(&req.payload),
+        ops::VFS_READ => handle_read(&req.payload),
+        ops::VFS_WRITE => handle_write(&req.payload),
+        ops::VFS_STAT => handle_stat(&req.payload),
+        ops::VFS_GETDENTS => handle_getdents(&req.payload),
+        ops::VFS_MKDIR => handle_path_mode(&req.payload, syscall::SYS_MKDIR),
+        ops::VFS_UNLINK => handle_path_only(&req.payload, syscall::SYS_UNLINK),
+        ops::VFS_RMDIR => handle_path_only(&req.payload, syscall::SYS_RMDIR),
+        ops::VFS_RENAME => handle_rename(&req.payload),
+        ops::VFS_TRUNCATE => handle_truncate(&req.payload),
+        ops::VFS_FSYNC => handle_fsync(&req.payload),
         _ => VfsReply {
-            status: -22,
+            status: syscall::EINVAL,
             blob_id: 0,
             fd: -1,
             _pad: [0; 40],

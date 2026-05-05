@@ -5,7 +5,8 @@
 //! RECUR-01 / OOM-02 / ARITH-02.
 
 use super::validation::{
-    copy_struct_from_user, exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT,
+    copy_kernel_bytes_to_struct, copy_struct_from_user, exofs_err_to_errno, kernel_struct_to_bytes,
+    verify_cap, write_user_struct, CapabilityType, EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
@@ -175,18 +176,7 @@ fn load_journal(epoch_id: u64) -> ExofsResult<Vec<EpochJournalEntry>> {
     while i < n {
         let off = EPOCH_HDR_SIZE.saturating_add(i.saturating_mul(EPOCH_ENTRY_SIZE));
         let mut e = EpochJournalEntry::default();
-        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
-        let dst = unsafe {
-            core::slice::from_raw_parts_mut(
-                &mut e as *mut EpochJournalEntry as *mut u8,
-                EPOCH_ENTRY_SIZE,
-            )
-        };
-        let mut j = 0usize;
-        while j < EPOCH_ENTRY_SIZE {
-            dst[j] = data[off + j];
-            j = j.wrapping_add(1);
-        }
+        copy_kernel_bytes_to_struct(&mut e, &data[off..off + EPOCH_ENTRY_SIZE])?;
         out.push(e);
         i = i.wrapping_add(1);
     }
@@ -234,13 +224,7 @@ fn save_journal(epoch_id: u64, entries: &[EpochJournalEntry], flags: u8) -> Exof
     buf.push(0); // _pad2
     let mut i = 0usize;
     while i < n {
-        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
-        let src = unsafe {
-            core::slice::from_raw_parts(
-                &entries[i] as *const EpochJournalEntry as *const u8,
-                EPOCH_ENTRY_SIZE,
-            )
-        };
+        let src = kernel_struct_to_bytes::<_, EPOCH_ENTRY_SIZE>(&entries[i]);
         let mut j = 0usize;
         while j < EPOCH_ENTRY_SIZE {
             buf.push(src[j]);
@@ -420,14 +404,7 @@ pub fn sys_exofs_epoch_commit(
         Err(e) => return exofs_err_to_errno(e),
     };
     if result_ptr != 0 {
-        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                &res as *const EpochCommitResult as *const u8,
-                core::mem::size_of::<EpochCommitResult>(),
-            )
-        };
-        if let Err(e) = write_user_buf(result_ptr, bytes) {
+        if let Err(e) = write_user_struct(result_ptr, &res) {
             return e;
         }
     }

@@ -4,7 +4,7 @@
 
 use super::object_fd::OBJECT_TABLE;
 use super::validation::{
-    exofs_err_to_errno, read_user_path_heap, verify_cap, write_user_buf, CapabilityType, EFAULT,
+    exofs_err_to_errno, read_user_path_heap, verify_cap, write_user_struct, CapabilityType, EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
@@ -308,14 +308,7 @@ pub fn sys_exofs_object_create(
 
     // Écrire le résultat vers userspace si demandé.
     if out_ptr != 0 {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                &result as *const CreateResult as *const u8,
-                core::mem::size_of::<CreateResult>(),
-            )
-        };
-        if let Err(e) = write_user_buf(out_ptr, bytes) {
+        if let Err(e) = write_user_struct(out_ptr, &result) {
             OBJECT_TABLE.close(result.fd);
             return e;
         }

@@ -1,0 +1,14 @@
+[package]
+name = "exo-vga-text"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "exo-vga-text"
+path = "src/main.rs"
+
+[features]
+default = []

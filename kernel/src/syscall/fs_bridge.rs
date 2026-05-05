@@ -176,6 +176,11 @@ const PSEUDO_PIPE_TAG: u8 = 0xF1;
 const PSEUDO_EVENTFD_TAG: u8 = 0xE7;
 const PSEUDO_EPOLL_TAG: u8 = 0xE9;
 const PSEUDO_INOTIFY_TAG: u8 = 0x1D;
+const PSEUDO_SOCKET_TAG: u8 = 0x5C;
+const SOCKET_HEADER_LEN: usize = 32;
+const S_IFMT: u32 = 0o170000;
+const S_IFIFO: u32 = 0o010000;
+const S_IFREG: u32 = 0o100000;
 #[cfg(test)]
 const STAT_MODE_MASK: u32 = 0o170000;
 
@@ -647,6 +652,117 @@ fn store_eventfd_state(blob_id: BlobId, value: u64, flags: u32) -> Result<(), Fs
 }
 
 #[inline]
+fn socket_blob_with_peer(peer: BlobId) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(peer.as_bytes());
+    data
+}
+
+#[inline]
+fn socket_peer_blob(blob_id: BlobId) -> Result<BlobId, FsBridgeError> {
+    let data = snapshot_blob(&blob_id)?;
+    if data.len() < SOCKET_HEADER_LEN {
+        return Err(FsBridgeError::Invalid);
+    }
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&data[..SOCKET_HEADER_LEN]);
+    Ok(BlobId(bytes))
+}
+
+#[inline]
+fn socket_payload_len(blob_id: BlobId) -> usize {
+    BLOB_CACHE
+        .get(&blob_id)
+        .map(|data| data.len().saturating_sub(SOCKET_HEADER_LEN))
+        .unwrap_or(0)
+}
+
+#[inline]
+fn read_socket_payload(
+    blob_id: BlobId,
+    count: usize,
+    consume: bool,
+) -> Result<Vec<u8>, FsBridgeError> {
+    let data = snapshot_blob(&blob_id)?;
+    if data.len() <= SOCKET_HEADER_LEN {
+        return Ok(Vec::new());
+    }
+    let read_len = count.min(data.len() - SOCKET_HEADER_LEN);
+    let out = data[SOCKET_HEADER_LEN..SOCKET_HEADER_LEN + read_len].to_vec();
+    if consume {
+        let mut next = data[..SOCKET_HEADER_LEN].to_vec();
+        next.extend_from_slice(&data[SOCKET_HEADER_LEN + read_len..]);
+        BLOB_CACHE
+            .insert(blob_id, next)
+            .map_err(exofs_to_bridge_error)?;
+        let _ = BLOB_CACHE.mark_dirty(&blob_id);
+    }
+    Ok(out)
+}
+
+#[inline]
+fn append_socket_payload(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBridgeError> {
+    if bytes.is_empty() {
+        return Ok(0);
+    }
+    let mut data = snapshot_blob(&blob_id)?;
+    if data.len() < SOCKET_HEADER_LEN {
+        return Err(FsBridgeError::Invalid);
+    }
+    data.try_reserve(bytes.len())
+        .map_err(|_| FsBridgeError::NoSpace)?;
+    data.extend_from_slice(bytes);
+    BLOB_CACHE
+        .insert(blob_id, data)
+        .map_err(exofs_to_bridge_error)?;
+    let _ = BLOB_CACHE.mark_dirty(&blob_id);
+    Ok(bytes.len() as i64)
+}
+
+#[inline]
+fn read_pipe_payload(
+    blob_id: BlobId,
+    count: usize,
+    consume: bool,
+) -> Result<Vec<u8>, FsBridgeError> {
+    let data = BLOB_CACHE
+        .get(&blob_id)
+        .map(|bytes| bytes.into_vec())
+        .unwrap_or_default();
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+    let read_len = count.min(data.len());
+    let out = data[..read_len].to_vec();
+    if consume {
+        BLOB_CACHE
+            .insert(blob_id, data[read_len..].to_vec())
+            .map_err(exofs_to_bridge_error)?;
+        let _ = BLOB_CACHE.mark_dirty(&blob_id);
+    }
+    Ok(out)
+}
+
+#[inline]
+fn append_pipe_payload(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBridgeError> {
+    if bytes.is_empty() {
+        return Ok(0);
+    }
+    let mut data = BLOB_CACHE
+        .get(&blob_id)
+        .map(|existing| existing.into_vec())
+        .unwrap_or_default();
+    data.try_reserve(bytes.len())
+        .map_err(|_| FsBridgeError::NoSpace)?;
+    data.extend_from_slice(bytes);
+    BLOB_CACHE
+        .insert(blob_id, data)
+        .map_err(exofs_to_bridge_error)?;
+    let _ = BLOB_CACHE.mark_dirty(&blob_id);
+    Ok(bytes.len() as i64)
+}
+
+#[inline]
 fn fd_readiness(fd: u32) -> Result<(bool, bool), FsBridgeError> {
     let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
     let mut readable = entry.can_read();
@@ -660,6 +776,8 @@ fn fd_readiness(fd: u32) -> Result<(bool, bool), FsBridgeError> {
             .unwrap_or(false);
     } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_INOTIFY_TAG) {
         readable = false;
+    } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        readable = socket_payload_len(entry.blob_id) != 0;
     }
 
     Ok((readable, writable))
@@ -1151,6 +1269,16 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
         return Err(FsBridgeError::WouldBlock);
     }
 
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        let data = read_socket_payload(entry.blob_id, count, true)?;
+        if data.is_empty() {
+            return Err(FsBridgeError::WouldBlock);
+        }
+        copy_to_user(buf_ptr as *mut u8, data.as_ptr(), data.len())
+            .map_err(|_| FsBridgeError::Fault)?;
+        return Ok(data.len() as i64);
+    }
+
     let data = match BLOB_CACHE.get(&entry.blob_id) {
         Some(bytes) => bytes,
         None if entry.size == 0 => return Ok(0),
@@ -1224,6 +1352,15 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
         let next = value.checked_add(add).ok_or(FsBridgeError::WouldBlock)?;
         store_eventfd_state(entry.blob_id, next, flags)?;
         return Ok(size_of::<u64>() as i64);
+    }
+
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        let mut input = Vec::new();
+        input.resize(count, 0);
+        copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
+            .map_err(|_| FsBridgeError::Fault)?;
+        let peer = socket_peer_blob(entry.blob_id)?;
+        return append_socket_payload(peer, &input);
     }
 
     let mut input = Vec::new();
@@ -2421,6 +2558,233 @@ pub fn fs_inotify_init1(flags: u32, pid: u32) -> Result<i64, FsBridgeError> {
         .map_err(exofs_to_bridge_error)
 }
 
+/// `socketpair(AF_UNIX, SOCK_STREAM|SOCK_DGRAM, 0, sv)`.
+#[inline]
+pub fn fs_socketpair(
+    domain: i32,
+    ty: i32,
+    protocol: i32,
+    sv_ptr: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    const AF_UNIX: i32 = 1;
+    const SOCK_STREAM: i32 = 1;
+    const SOCK_DGRAM: i32 = 2;
+    let clean_ty = ty & !((O_NONBLOCK | O_CLOEXEC) as i32);
+    if domain != AF_UNIX || protocol != 0 || (clean_ty != SOCK_STREAM && clean_ty != SOCK_DGRAM) {
+        return Err(FsBridgeError::Invalid);
+    }
+    if sv_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+
+    let a_blob = next_pseudo_blob(PSEUDO_SOCKET_TAG);
+    let b_blob = next_pseudo_blob(PSEUDO_SOCKET_TAG);
+    BLOB_CACHE
+        .insert(a_blob, socket_blob_with_peer(b_blob))
+        .map_err(exofs_to_bridge_error)?;
+    BLOB_CACHE
+        .insert(b_blob, socket_blob_with_peer(a_blob))
+        .map_err(exofs_to_bridge_error)?;
+
+    let a_fd = OBJECT_TABLE
+        .open(a_blob, open_flags::O_RDWR, 0, 0, pid as u64)
+        .map_err(exofs_to_bridge_error)?;
+    let b_fd = match OBJECT_TABLE.open(b_blob, open_flags::O_RDWR, 0, 0, pid as u64) {
+        Ok(fd) => fd,
+        Err(err) => {
+            let _ = OBJECT_TABLE.close(a_fd);
+            return Err(exofs_to_bridge_error(err));
+        }
+    };
+    let sv = [a_fd as i32, b_fd as i32];
+    if write_user_typed(sv_ptr, sv).is_err() {
+        let _ = OBJECT_TABLE.close(a_fd);
+        let _ = OBJECT_TABLE.close(b_fd);
+        return Err(FsBridgeError::Fault);
+    }
+    Ok(0)
+}
+
+/// `mknod(path, mode, dev)` for regular files/FIFOs in the ExoFS namespace.
+#[inline]
+pub fn fs_mknod(path: &[u8], mode: u32, dev: u64, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = (dev, pid);
+    let kind = mode & S_IFMT;
+    if kind != 0 && kind != S_IFREG && kind != S_IFIFO {
+        return Err(FsBridgeError::Invalid);
+    }
+    let fd = fs_open(
+        path,
+        open_flags::O_CREAT | open_flags::O_EXCL | open_flags::O_RDWR,
+        mode,
+        pid,
+    )? as u32;
+    let _ = OBJECT_TABLE.close(fd);
+    Ok(0)
+}
+
+/// `mknodat(dirfd, path, mode, dev)`.
+#[inline]
+pub fn fs_mknodat(
+    dirfd: i32,
+    path: &[u8],
+    mode: u32,
+    dev: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if dirfd == AT_FDCWD || path.starts_with(b"/") {
+        return fs_mknod(path, mode, dev, pid);
+    }
+    Err(FsBridgeError::Invalid)
+}
+
+/// `splice(fd_in, off_in, fd_out, off_out, len, flags)`.
+#[inline]
+pub fn fs_splice(
+    fd_in: u32,
+    off_in_ptr: u64,
+    fd_out: u32,
+    off_out_ptr: u64,
+    len: usize,
+    flags: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    if flags & !0x0F != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let in_entry = OBJECT_TABLE.get(fd_in).map_err(exofs_to_bridge_error)?;
+    let out_entry = OBJECT_TABLE.get(fd_out).map_err(exofs_to_bridge_error)?;
+    if !in_entry.can_read() || !out_entry.can_write() {
+        return Err(FsBridgeError::PermDenied);
+    }
+
+    let input_is_pipe = is_pseudo_blob(&in_entry.blob_id, PSEUDO_PIPE_TAG);
+    let output_is_pipe = is_pseudo_blob(&out_entry.blob_id, PSEUDO_PIPE_TAG);
+    let input_is_socket = is_pseudo_blob(&in_entry.blob_id, PSEUDO_SOCKET_TAG);
+    let output_is_socket = is_pseudo_blob(&out_entry.blob_id, PSEUDO_SOCKET_TAG);
+
+    let data = if input_is_pipe {
+        read_pipe_payload(in_entry.blob_id, len, true)?
+    } else if input_is_socket {
+        read_socket_payload(in_entry.blob_id, len, true)?
+    } else {
+        let offset = if off_in_ptr == 0 {
+            in_entry.cursor
+        } else {
+            read_signed_offset(off_in_ptr)?
+        };
+        let data = read_blob_bytes_at(in_entry.blob_id, offset, len)?;
+        if off_in_ptr == 0 {
+            OBJECT_TABLE
+                .set_cursor(fd_in, offset.saturating_add(data.len() as u64))
+                .map_err(exofs_to_bridge_error)?;
+        } else {
+            write_user_typed(
+                off_in_ptr,
+                (offset.saturating_add(data.len() as u64)) as i64,
+            )
+            .map_err(|_| FsBridgeError::Fault)?;
+        }
+        data
+    };
+    if data.is_empty() {
+        return Ok(0);
+    }
+
+    if output_is_pipe {
+        append_pipe_payload(out_entry.blob_id, &data)
+    } else if output_is_socket {
+        let peer = socket_peer_blob(out_entry.blob_id)?;
+        append_socket_payload(peer, &data)
+    } else {
+        let offset = if off_out_ptr == 0 {
+            out_entry.cursor
+        } else {
+            read_signed_offset(off_out_ptr)?
+        };
+        let written = write_blob_bytes_at(out_entry.blob_id, offset, &data)? as u64;
+        if off_out_ptr == 0 {
+            OBJECT_TABLE
+                .set_cursor(fd_out, offset.saturating_add(written))
+                .map_err(exofs_to_bridge_error)?;
+        } else {
+            write_user_typed(off_out_ptr, (offset.saturating_add(written)) as i64)
+                .map_err(|_| FsBridgeError::Fault)?;
+        }
+        OBJECT_TABLE
+            .set_size(fd_out, blob_len(&out_entry.blob_id) as u64)
+            .map_err(exofs_to_bridge_error)?;
+        Ok(written as i64)
+    }
+}
+
+/// `tee(fd_in, fd_out, len, flags)` duplicates pipe data without consuming it.
+#[inline]
+pub fn fs_tee(
+    fd_in: u32,
+    fd_out: u32,
+    len: usize,
+    flags: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    if flags & !0x0F != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let in_entry = OBJECT_TABLE.get(fd_in).map_err(exofs_to_bridge_error)?;
+    let out_entry = OBJECT_TABLE.get(fd_out).map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&in_entry.blob_id, PSEUDO_PIPE_TAG)
+        || !is_pseudo_blob(&out_entry.blob_id, PSEUDO_PIPE_TAG)
+    {
+        return Err(FsBridgeError::Invalid);
+    }
+    let data = read_pipe_payload(in_entry.blob_id, len, false)?;
+    append_pipe_payload(out_entry.blob_id, &data)
+}
+
+/// `vmsplice(fd, iov, nr_segs, flags)` writes user iovecs into a pipe.
+#[inline]
+pub fn fs_vmsplice(
+    fd: u32,
+    iov_ptr: u64,
+    iovcnt: u32,
+    flags: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let _ = pid;
+    if flags & !0x0F != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    if !entry.can_write() || !is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    vectored_io(iov_ptr, iovcnt, |base, len| {
+        let mut input = Vec::new();
+        input.resize(len, 0);
+        copy_from_user(input.as_mut_ptr(), base as *const u8, len)
+            .map_err(|_| FsBridgeError::Fault)?;
+        append_pipe_payload(entry.blob_id, &input)
+    })
+}
+
 /// `poll(fds, nfds, timeout)`.
 #[inline]
 pub fn fs_poll(fds_ptr: u64, nfds: usize, timeout: i32, pid: u32) -> Result<i64, FsBridgeError> {
@@ -2776,6 +3140,8 @@ pub fn fs_ioctl(fd: u32, request: u64, arg: u64, pid: u32) -> Result<i64, FsBrid
                     .unwrap_or(0)
             } else if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
                 blob_len(&entry.blob_id)
+            } else if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+                socket_payload_len(entry.blob_id)
             } else {
                 blob_len(&entry.blob_id).saturating_sub(entry.cursor as usize)
             };
@@ -3504,6 +3870,101 @@ mod tests {
         };
         assert_eq!(fs_poll(&mut pollfd as *mut _ as u64, 1, 0, 83).unwrap(), 0);
         assert_eq!(fs_close(inotify_fd, 83).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_fs_phase2_compat_splice_vmsplice_socketpair_mknod() {
+        init_bridge();
+
+        assert_eq!(
+            fs_mknod(b"/nodes/fifo0", S_IFIFO | 0o644, 0, 84).unwrap(),
+            0
+        );
+        let mut stat = LinuxStat::default();
+        assert_eq!(
+            fs_stat(b"/nodes/fifo0", &mut stat as *mut _ as u64, 84).unwrap(),
+            0
+        );
+
+        let mut pipe_a = [0i32; 2];
+        let mut pipe_b = [0i32; 2];
+        assert_eq!(fs_pipe2(pipe_a.as_mut_ptr() as u64, 0, 84).unwrap(), 0);
+        assert_eq!(fs_pipe2(pipe_b.as_mut_ptr() as u64, 0, 84).unwrap(), 0);
+
+        let vm_payload = *b"vmsplice";
+        let iov = LinuxIovec {
+            iov_base: vm_payload.as_ptr() as u64,
+            iov_len: vm_payload.len() as u64,
+        };
+        assert_eq!(
+            fs_vmsplice(pipe_a[1] as u32, &iov as *const _ as u64, 1, 0, 84).unwrap(),
+            vm_payload.len() as i64
+        );
+        assert_eq!(
+            fs_tee(pipe_a[0] as u32, pipe_b[1] as u32, vm_payload.len(), 0, 84).unwrap(),
+            vm_payload.len() as i64
+        );
+
+        let mut tee_out = [0u8; 16];
+        let n = fs_read(
+            pipe_b[0] as u32,
+            tee_out.as_mut_ptr() as u64,
+            tee_out.len(),
+            84,
+        )
+        .unwrap() as usize;
+        assert_eq!(&tee_out[..n], &vm_payload);
+
+        let file_fd = fs_open(
+            b"/splice/out.bin",
+            open_flags::O_CREAT | open_flags::O_RDWR | open_flags::O_TRUNC,
+            0,
+            84,
+        )
+        .unwrap() as u32;
+        assert_eq!(
+            fs_splice(pipe_a[0] as u32, 0, file_fd, 0, vm_payload.len(), 0, 84).unwrap(),
+            vm_payload.len() as i64
+        );
+        assert_eq!(fs_lseek(file_fd, 0, SEEK_SET, 84).unwrap(), 0);
+        let mut file_out = [0u8; 16];
+        let n =
+            fs_read(file_fd, file_out.as_mut_ptr() as u64, file_out.len(), 84).unwrap() as usize;
+        assert_eq!(&file_out[..n], &vm_payload);
+
+        let mut sv = [0i32; 2];
+        assert_eq!(
+            fs_socketpair(1, 1, 0, sv.as_mut_ptr() as u64, 84).unwrap(),
+            0
+        );
+        let sock_payload = *b"sock";
+        assert_eq!(
+            fs_write(
+                sv[0] as u32,
+                sock_payload.as_ptr() as u64,
+                sock_payload.len(),
+                84
+            )
+            .unwrap(),
+            sock_payload.len() as i64
+        );
+        let mut sock_out = [0u8; 8];
+        let n = fs_read(
+            sv[1] as u32,
+            sock_out.as_mut_ptr() as u64,
+            sock_out.len(),
+            84,
+        )
+        .unwrap() as usize;
+        assert_eq!(&sock_out[..n], &sock_payload);
+
+        assert_eq!(fs_close(file_fd, 84).unwrap(), 0);
+        assert_eq!(fs_close(pipe_a[0] as u32, 84).unwrap(), 0);
+        assert_eq!(fs_close(pipe_a[1] as u32, 84).unwrap(), 0);
+        assert_eq!(fs_close(pipe_b[0] as u32, 84).unwrap(), 0);
+        assert_eq!(fs_close(pipe_b[1] as u32, 84).unwrap(), 0);
+        assert_eq!(fs_close(sv[0] as u32, 84).unwrap(), 0);
+        assert_eq!(fs_close(sv[1] as u32, 84).unwrap(), 0);
     }
 
     #[test]

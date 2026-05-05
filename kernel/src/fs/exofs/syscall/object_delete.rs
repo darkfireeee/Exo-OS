@@ -4,7 +4,8 @@
 
 use super::object_fd::OBJECT_TABLE;
 use super::validation::{
-    exofs_err_to_errno, read_user_path_heap, verify_cap, CapabilityType, EFAULT,
+    exofs_err_to_errno, kernel_struct_to_bytes, read_user_path_heap, verify_cap, write_user_struct,
+    CapabilityType, EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
@@ -164,14 +165,7 @@ pub fn sys_exofs_object_delete(
     };
 
     if out_ptr != 0 {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                &result as *const DeleteResult as *const u8,
-                core::mem::size_of::<DeleteResult>(),
-            )
-        };
-        if let Err(e) = super::validation::write_user_buf(out_ptr, bytes) {
+        if let Err(e) = write_user_struct(out_ptr, &result) {
             return e;
         }
     }
@@ -346,6 +340,7 @@ pub struct TombstoneEntry {
 }
 
 const _: () = assert!(core::mem::size_of::<TombstoneEntry>() == 56);
+const TOMBSTONE_ENTRY_SIZE: usize = 56;
 
 impl TombstoneEntry {
     /// Construit une entrée depuis un résultat de suppression.
@@ -363,19 +358,13 @@ impl TombstoneEntry {
 /// Encode un bloc de tombstones en octets pour transmission userspace.
 /// OOM-02 : try_reserve. RECUR-01 : while.
 pub fn encode_tombstones(entries: &[TombstoneEntry]) -> ExofsResult<Vec<u8>> {
-    let entry_size = core::mem::size_of::<TombstoneEntry>();
+    let entry_size = TOMBSTONE_ENTRY_SIZE;
     let total = entries.len().saturating_mul(entry_size);
     let mut buf: Vec<u8> = Vec::new();
     buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < entries.len() {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let raw = unsafe {
-            core::slice::from_raw_parts(
-                &entries[i] as *const TombstoneEntry as *const u8,
-                entry_size,
-            )
-        };
+        let raw = kernel_struct_to_bytes::<_, TOMBSTONE_ENTRY_SIZE>(&entries[i]);
         let mut j = 0usize;
         while j < entry_size {
             buf.push(raw[j]);

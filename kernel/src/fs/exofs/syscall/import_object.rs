@@ -5,8 +5,8 @@
 
 use super::export_object::{check_export_header, extract_payload, EXPORT_HDR_SIZE};
 use super::validation::{
-    copy_struct_from_user, exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT,
-    EINVAL,
+    copy_struct_from_user, exofs_err_to_errno, verify_cap, write_user_struct, CapabilityType,
+    EFAULT, EINVAL,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
@@ -227,14 +227,7 @@ pub fn sys_exofs_import_object(
             fd,
             flags: args.flags,
         };
-        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                &res as *const ImportResult as *const u8,
-                core::mem::size_of::<ImportResult>(),
-            )
-        };
-        if let Err(e) = write_user_buf(result_ptr, bytes) {
+        if let Err(e) = write_user_struct(result_ptr, &res) {
             return e;
         }
     }

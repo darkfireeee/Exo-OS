@@ -5,8 +5,8 @@
 
 use super::object_fd::OBJECT_TABLE;
 use super::validation::{
-    copy_struct_from_user, exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT,
-    EINVAL, ERANGE,
+    copy_struct_from_user, exofs_err_to_errno, verify_cap, write_user_buf, write_user_struct,
+    CapabilityType, EFAULT, EINVAL, ERANGE,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
@@ -265,14 +265,7 @@ pub fn sys_exofs_export_object(
             flags: args.flags,
             _pad: 0,
         };
-        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                &res as *const ExportResult as *const u8,
-                core::mem::size_of::<ExportResult>(),
-            )
-        };
-        if let Err(e) = write_user_buf(result_ptr, bytes) {
+        if let Err(e) = write_user_struct(result_ptr, &res) {
             return e;
         }
     }

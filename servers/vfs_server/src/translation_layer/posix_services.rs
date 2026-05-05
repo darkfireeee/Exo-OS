@@ -605,59 +605,58 @@ pub const CORE_POSIX_SERVICES: &[PosixServiceSpec] = &[
         TranslationRole::KernelMechanism,
         ServiceStatus::Delegated,
     ),
-];
-
-pub const PHASE2_POSIX_SERVICES: &[PosixServiceSpec] = &[
     PosixServiceSpec::core(
         "splice",
         abi::SYS_SPLICE,
-        ServiceClass::Phase2,
-        TranslationRole::Phase2,
-        ServiceStatus::Phase2,
+        ServiceClass::FileIo,
+        TranslationRole::KernelMechanism,
+        ServiceStatus::Compat,
     ),
     PosixServiceSpec::core(
         "tee",
         abi::SYS_TEE,
-        ServiceClass::Phase2,
-        TranslationRole::Phase2,
-        ServiceStatus::Phase2,
+        ServiceClass::FileIo,
+        TranslationRole::KernelMechanism,
+        ServiceStatus::Compat,
     ),
     PosixServiceSpec::core(
         "vmsplice",
         abi::SYS_VMSPLICE,
-        ServiceClass::Phase2,
-        TranslationRole::Phase2,
-        ServiceStatus::Phase2,
+        ServiceClass::VectorIo,
+        TranslationRole::KernelMechanism,
+        ServiceStatus::Compat,
     ),
     PosixServiceSpec::core(
         "mremap",
         abi::SYS_MREMAP,
-        ServiceClass::Phase2,
-        TranslationRole::Phase2,
-        ServiceStatus::Phase2,
+        ServiceClass::Memory,
+        TranslationRole::KernelMechanism,
+        ServiceStatus::Compat,
     ),
     PosixServiceSpec::core(
         "mknod",
         abi::SYS_MKNOD,
-        ServiceClass::Phase2,
-        TranslationRole::Phase2,
-        ServiceStatus::Phase2,
+        ServiceClass::Namespace,
+        TranslationRole::VfsServer,
+        ServiceStatus::Compat,
     ),
     PosixServiceSpec::core(
         "mknodat",
         abi::SYS_MKNODAT,
-        ServiceClass::Phase2,
-        TranslationRole::Phase2,
-        ServiceStatus::Phase2,
+        ServiceClass::Namespace,
+        TranslationRole::VfsServer,
+        ServiceStatus::Compat,
     ),
     PosixServiceSpec::core(
         "socketpair",
         abi::SYS_SOCKETPAIR,
-        ServiceClass::Phase2,
-        TranslationRole::Phase2,
-        ServiceStatus::Phase2,
+        ServiceClass::Descriptor,
+        TranslationRole::CompatRam,
+        ServiceStatus::Compat,
     ),
 ];
+
+pub const PHASE2_POSIX_SERVICES: &[PosixServiceSpec] = &[];
 
 pub fn service_by_syscall(syscall: u64) -> Option<&'static PosixServiceSpec> {
     let mut i = 0usize;

@@ -14,6 +14,9 @@
 extern crate alloc;
 use super::block_io::{read_array, write_array};
 use super::boot_recovery::BlockDevice;
+#[cfg(test)]
+use super::ondisk::zero_pod;
+use super::ondisk::{prefix_bytes, read_pod, write_pod};
 use super::recovery_audit::RECOVERY_AUDIT;
 use crate::fs::exofs::core::blob_id::blake3_hash;
 use crate::fs::exofs::core::{EpochId, ExofsError, ExofsResult};
@@ -132,8 +135,7 @@ const _: () = assert!(
 impl SlotHeaderDisk {
     /// Sérialise en buffer de 128 octets.
     pub fn to_bytes(&self) -> [u8; SLOT_HEADER_SIZE] {
-        // SAFETY: repr(C) 128B.
-        unsafe { core::mem::transmute_copy(self) }
+        write_pod::<Self, SLOT_HEADER_SIZE>(self)
     }
 
     /// Désérialise depuis 128 octets.
@@ -167,15 +169,13 @@ impl SlotHeaderDisk {
             return Err(ExofsError::ChecksumMismatch);
         }
 
-        // SAFETY: buf est aligné, taille 128B vérifiée.
-        Ok(unsafe { core::mem::transmute_copy(buf) })
+        read_pod(buf)
     }
 
     /// Calcule et écrit le hash dans le champ `header_hash` (HDR-03).
     pub fn finalize_hash(&mut self) {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let raw = unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, 96) };
-        self.header_hash = blake3_hash(raw.try_into().unwrap_or(&[0u8; 96]));
+        let raw = prefix_bytes::<Self, 96>(self);
+        self.header_hash = blake3_hash(&raw);
     }
 
     /// `true` si le dirty flag est positionné.
@@ -232,8 +232,21 @@ impl SlotCandidate {
         Self {
             valid: false,
             slot_id: SLOT_A,
-            // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
-            header: unsafe { core::mem::zeroed() },
+            header: SlotHeaderDisk {
+                magic: 0,
+                version: 0,
+                slot_id: 0,
+                flags: 0,
+                _pad0: 0,
+                epoch_id: 0,
+                prev_epoch_id: 0,
+                root_blob_id: [0; 32],
+                superblock_lba: 0,
+                journal_lba: 0,
+                total_blobs: 0,
+                free_blobs: 0,
+                header_hash: [0; 32],
+            },
             lba: 0,
         }
     }
@@ -559,8 +572,7 @@ mod tests {
 
     #[test]
     fn test_slot_header_roundtrip() {
-        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
-        let mut hdr: SlotHeaderDisk = unsafe { core::mem::zeroed() };
+        let mut hdr: SlotHeaderDisk = zero_pod();
         hdr.magic = SLOT_MAGIC;
         hdr.version = SLOT_FORMAT_VERSION;
         hdr.slot_id = 0;
@@ -583,8 +595,7 @@ mod tests {
 
     #[test]
     fn test_dirty_flag() {
-        // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
-        let mut hdr: SlotHeaderDisk = unsafe { core::mem::zeroed() };
+        let mut hdr: SlotHeaderDisk = zero_pod();
         hdr.flags = 0x01;
         assert!(hdr.is_dirty());
         hdr.flags = 0x00;
@@ -612,7 +623,7 @@ mod tests {
     #[test]
     fn test_write_slot_roundtrip_on_strict_block_device() {
         let mut device = StrictBlockDevice::new(4096, 1024);
-        let mut hdr: SlotHeaderDisk = unsafe { core::mem::zeroed() };
+        let mut hdr: SlotHeaderDisk = zero_pod();
         hdr.magic = SLOT_MAGIC;
         hdr.version = SLOT_FORMAT_VERSION;
         hdr.slot_id = SLOT_A.0;

@@ -462,6 +462,28 @@ pub fn boot_complete() {
     );
 }
 
+/// Affiche le statut du handoff userspace sans masquer les modules deja OK.
+pub fn userspace_status(title: &str, detail: &str, hint: &str) {
+    let state = CONSOLE.lock();
+    let fb = state.fb;
+    if !fb.is_present() {
+        return;
+    }
+
+    let panel = panel_color(&fb);
+    let fg = text_color(&fb);
+    let warn = fb.encode_rgb(255, 209, 102);
+    let muted = muted_text_color(&fb);
+    let y = fb.height.saturating_sub(136);
+    let x = fb.width.saturating_sub(860) / 2;
+
+    fb.fill_rect(x, y, 860, 82, panel);
+    fb.fill_rect(x, y, 860, 2, warn);
+    fb.draw_text_centered(y + 10, title, SUBTITLE_SCALE, warn, panel);
+    fb.draw_text_centered(y + 44, detail, BODY_SCALE, fg, panel);
+    fb.draw_text_centered(y + 62, hint, BODY_SCALE, muted, panel);
+}
+
 #[cfg(test)]
 mod tests {
     use super::BootFramebufferFormat;

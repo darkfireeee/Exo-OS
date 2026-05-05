@@ -4,7 +4,8 @@
 //! RECUR-01 / OOM-02 / ARITH-02.
 
 use super::validation::{
-    copy_struct_from_user, exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType, EFAULT,
+    copy_kernel_bytes_to_struct, copy_struct_from_user, exofs_err_to_errno, kernel_struct_to_bytes,
+    verify_cap, write_user_struct, CapabilityType, EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
@@ -135,15 +136,7 @@ fn load_quota_entries(blob_id: BlobId) -> ExofsResult<Vec<QuotaEntry>> {
     while i < n {
         let off = QUOTA_HDR.saturating_add(i.saturating_mul(QUOTA_ENTRY_SIZE));
         let mut e = QuotaEntry::default();
-        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
-        let dst = unsafe {
-            core::slice::from_raw_parts_mut(&mut e as *mut QuotaEntry as *mut u8, QUOTA_ENTRY_SIZE)
-        };
-        let mut j = 0usize;
-        while j < QUOTA_ENTRY_SIZE {
-            dst[j] = data[off + j];
-            j = j.wrapping_add(1);
-        }
+        copy_kernel_bytes_to_struct(&mut e, &data[off..off + QUOTA_ENTRY_SIZE])?;
         out.push(e);
         i = i.wrapping_add(1);
     }
@@ -171,13 +164,7 @@ fn save_quota_entries(blob_id: BlobId, entries: &[QuotaEntry]) -> ExofsResult<()
     }
     let mut i = 0usize;
     while i < n {
-        // SAFETY: pointeur valide sur une struct repr(C), durée de vie bornée par la référence.
-        let src = unsafe {
-            core::slice::from_raw_parts(
-                &entries[i] as *const QuotaEntry as *const u8,
-                QUOTA_ENTRY_SIZE,
-            )
-        };
+        let src = kernel_struct_to_bytes::<_, QUOTA_ENTRY_SIZE>(&entries[i]);
         let mut j = 0usize;
         while j < QUOTA_ENTRY_SIZE {
             buf.push(src[j]);
@@ -378,14 +365,7 @@ pub fn sys_exofs_quota_query(
         Err(e) => return exofs_err_to_errno(e),
     };
     if result_ptr != 0 {
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                &info as *const QuotaInfo as *const u8,
-                core::mem::size_of::<QuotaInfo>(),
-            )
-        };
-        if let Err(e) = write_user_buf(result_ptr, bytes) {
+        if let Err(e) = write_user_struct(result_ptr, &info) {
             return e;
         }
     }
