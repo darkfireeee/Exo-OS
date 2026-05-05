@@ -282,9 +282,14 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     crate::arch::x86_64::boot_display::stage_ok("IPC");
 
     // ── Phase 7 : FS ─────────────────────────────────────────────────────────
-    let _ = crate::fs::exofs::exofs_init(
+    let exofs_ready = crate::fs::exofs::exofs_init(
         crate::fs::exofs::storage::virtio_adapter::default_global_disk_size_bytes(),
-    );
+    )
+    .is_ok();
+
+    if exofs_ready {
+        let _ = crate::exophoenix::forge::seed_kernel_a_image_blob();
+    }
 
     // CORRECTION P0-02 : enregistrer le chargeur ELF après exofs_init
     {

@@ -1079,8 +1079,8 @@ pub fn stage0_init_all_steps() -> Stage0Summary {
 pub fn stage0_init() -> ! {
     let _summary = stage0_init_all_steps();
 
-    if crate::exophoenix::forge::kernel_a_hash_is_zero() {
-        log::error!("FORGE: hash Kernel A non initialisé — ExoPhoenix désactivé (degraded)");
+    if !crate::exophoenix::forge::kernel_a_image_provisioned() {
+        log::error!("FORGE: image Kernel A absente — ExoPhoenix désactivé (degraded)");
         PHOENIX_STATE.store(PhoenixState::Degraded as u8, Ordering::Release);
         loop {
             unsafe {

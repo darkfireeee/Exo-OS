@@ -364,9 +364,13 @@ pub unsafe extern "C" fn kernel_main(
         options(nostack, nomem)
     );
 
+    #[cfg(exophoenix_resurrection_test)]
+    kernel::exophoenix::resurrection::trigger_self_destruct();
+
     // ── Idle loop ─────────────────────────────────────────────────────────────
     // Une fois le scheduler démarré, le APIC timer tick (vecteur 0x20) interrompra
     // ce HLT et le scheduler planifiera l'idle task à la place de cette boucle.
+    #[cfg(not(exophoenix_resurrection_test))]
     kernel::halt_cpu()
 }
 

@@ -337,9 +337,13 @@ extern "C" fn do_debug(frame: *mut ExceptionFrame) {
 /// NE PAS appeler de code qui pourrait provoquer une exception.
 #[no_mangle]
 extern "C" fn do_nmi(frame: *mut ExceptionFrame) {
-    let _ = frame;
+    let frame = unsafe { &mut *frame };
     EXC_COUNTERS[2].fetch_add(1, Ordering::Relaxed);
     NMI_COUNT.fetch_add(1, Ordering::Relaxed);
+
+    if crate::exophoenix::resurrection::handle_nmi(frame) {
+        return;
+    }
 
     // NMI handler : vérifier watchdog, hpet, mce
     // Minimal : incrémenter compteur sans allocation ni verrou
@@ -942,7 +946,11 @@ extern "C" fn do_ipi_panic(_frame: *mut ExceptionFrame) {
 /// Elle affiche uniquement les registres depuis la frame.
 #[cold]
 #[inline(never)]
-fn kernel_panic_exception(msg: &str, frame: &ExceptionFrame) -> ! {
+fn kernel_panic_exception(msg: &str, frame: &mut ExceptionFrame) {
+    if crate::exophoenix::resurrection::try_recover_exception(msg, frame) {
+        return;
+    }
+
     // Dans une implémentation complète : écrire sur un port série ou VGA buffer.
     // Pour l'instant : consommer les paramètres pour éviter les warnings.
     let _ = msg;

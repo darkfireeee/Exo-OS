@@ -29,7 +29,7 @@
 
 ExoOS is a from-scratch Rust microkernel featuring a dual-kernel fault-tolerant architecture (ExoPhoenix), hardware-enforced security (ExoShield), and a complete formal verification corpus of 12 TLA+ modules covering 60 safety and liveness properties.
 
-> **Status:** Architecture v7 finalized · Formal verification complete (12/12 modules) · First boot validated on QEMU · Implementation of P0 security patches in progress.
+> **Status:** Architecture v7 finalized · Formal verification complete (12/12 modules) · First boot validated on QEMU · ExoPhoenix release resurrection validated · Implementation of remaining P0 security patches in progress.
 
 ## Boot Milestone
 
@@ -49,7 +49,48 @@ Latest validated framebuffer capture:
 
 ![ExoOS QEMU boot milestone](docs/avancement/qemu_boot/exoos-qemu-latest.png)
 
-Detailed validation notes, script locations, and the VirtualBox text-mode workaround are documented in [`docs/avancement/BOOT_VALIDATION_2026-04-24.md`](docs/avancement/BOOT_VALIDATION_2026-04-24.md).
+Boot validation artifacts are stored in [`docs/avancement/qemu_boot/`](docs/avancement/qemu_boot/).
+
+---
+
+## ExoPhoenix Release Resurrection Milestone
+
+On 2026-05-05, ExoPhoenix was validated in QEMU on the optimized release path, not only on the debug proof ISO. The test injects a controlled Ring 0 divide-error (`#DE`) after a successful boot, lets Kernel B observe Kernel A collapse, locks the IOMMU handoff window, verifies the clean Kernel A image contract, reloads the clean ExoFS-backed image, and resumes on a healthy landing path.
+
+The release-only IDT failure found during the first proof pass was fixed by correcting the inline assembly contracts for `lgdt` and `lidt`: both instructions read their pseudo-descriptor from memory, so they must not be declared `nomem`. The relevant fix is in [`kernel/src/arch/x86_64/gdt.rs`](kernel/src/arch/x86_64/gdt.rs) and [`kernel/src/arch/x86_64/idt.rs`](kernel/src/arch/x86_64/idt.rs).
+
+Release proof excerpt:
+
+```text
+OK
+[ExoPhoenix] Test de résurrection: autodestruction Ring 0 armée
+[ExoPhoenix] Kernel A effondré: Division par zéro kernel
+[ExoPhoenix] Core 0: heartbeat Kernel A arrêté
+[ExoPhoenix] Handoff déclenché, IOMMU verrouillé
+[ExoPhoenix] Forge: contract OK
+[ExoPhoenix] ExoFS propre vérifié, image Kernel A rechargée
+[ExoPhoenix] Kernel A relancé depuis image saine
+[ExoPhoenix] RESURRECTION_OK
+```
+
+Validation results:
+
+| Check | Result |
+|---|---|
+| `make iso-release-phoenix-resurrection` | OK, produced `exo-os-phoenix-release.iso` |
+| QEMU release resurrection | OK, `QEMU_STATUS:33` via `isa-debug-exit` |
+| QEMU interrupt trace | Real `#DE` at CPL0, valid `IDT=... 00000fff`, no triple fault |
+| QEMU release normal boot | Reaches `OK`; timeout `124` is expected idle behavior |
+| `make build` | OK |
+| `make test` | `2975 passed; 0 failed; 3 ignored` |
+| `./run_tests.sh --verbose` | `PASS 25`, `FAIL 0`, `WARN 0` |
+| TLA+ SANY | OK for `ExoPhoenixHandoff` and `ExoOS_Full` |
+| TLA+ TLC simulation | `11046 states checked`, finished in 6s |
+| ExoPhoenix degraded hash warning | Not present in captured build/test/proof logs |
+
+Proof artifacts have been moved into [`docs/avancement/exophoenix_release_resurrection_2026-05-05/`](docs/avancement/exophoenix_release_resurrection_2026-05-05/), including the release E9 proof log, QEMU status, IDT excerpt, normal release boot log, unit/integration test logs, and TLA+ logs.
+
+Diagnostic note for external presentations: the proof log still contains `[CAL:PIT-DRV-FAIL][CAL:FB3G][TIME-INIT hz=3000000000]`. This is expected on the current QEMU TCG path: the PIT driver calibration may fail, then ExoOS intentionally falls back to the 3 GHz constant-TSC calibration path. This timing fallback is documented in [`docs/kernel/BOOT_FIX_HISTORY.md`](docs/kernel/BOOT_FIX_HISTORY.md) and is not an ExoPhoenix failure. The short pre-`OK` byte sequence (`XK...`, `4D56...`) is early bring-up/debug-port telemetry emitted before the formatted boot logger is fully initialized.
 
 ---
 
@@ -188,6 +229,7 @@ Six security properties are formally specified and verified in TLA+: `S33` throu
 - ExoShield v1.0 specification (multi-AI consensus process)
 - Full TLA+ formal verification corpus (CORR-01..54 + SRV-05)
 - First boot validated on QEMU
+- ExoPhoenix release resurrection proof on QEMU (`#DE` collapse, handoff, IOMMU lock, clean image reload, relaunch)
 
 **In Progress (P0 blockers)**
 - `SSR_MAX_CORES_LAYOUT` constant divergence fix (shared crate vs kernel local)

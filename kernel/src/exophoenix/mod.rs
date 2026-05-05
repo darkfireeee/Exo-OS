@@ -10,6 +10,7 @@ pub mod forge;
 pub mod handoff;
 pub mod interrupts;
 pub mod isolate;
+pub mod resurrection;
 pub mod sentinel;
 pub mod ssr;
 pub mod stage0;

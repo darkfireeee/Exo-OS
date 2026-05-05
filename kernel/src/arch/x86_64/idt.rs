@@ -539,7 +539,7 @@ pub fn load_idt() {
         core::arch::asm!(
             "lidt [{idtr}]",
             idtr = in(reg) &idtr as *const IdtRegister,
-            options(nostack, nomem)
+            options(nostack, readonly, preserves_flags)
         );
     }
 }

@@ -236,7 +236,7 @@ pub unsafe fn init_gdt_for_cpu(cpu_id: usize, kernel_stack_top: u64) {
         core::arch::asm!(
             "lgdt [{gdtr}]",
             gdtr = in(reg) &gdtr as *const GdtRegister,
-            options(nostack, nomem)
+            options(nostack, readonly, preserves_flags)
         );
     }
 

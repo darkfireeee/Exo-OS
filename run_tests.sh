@@ -14,8 +14,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KERNEL_DIR="$REPO_ROOT/kernel"
 LIBS_DIR="$REPO_ROOT/libs"
-CARGO_BARE_CMD=(cargo +nightly check -Z build-std=core,alloc --target x86_64-unknown-none)
-CARGO_HOST_CMD=(cargo test --target x86_64-unknown-linux-gnu)
+CARGO_BARE_CMD=(env EXOPHOENIX_BUILD_ROLE=A cargo +nightly check -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem --target x86_64-unknown-none)
+CARGO_HOST_CMD=(env EXOPHOENIX_BUILD_ROLE=A cargo test --target x86_64-unknown-linux-gnu)
 VERBOSE="${1:-}"
 
 # ── Couleurs ──────────────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@
 #   make qemu    → lance QEMU depuis l'ISO (x86_64, 256M RAM, sortie série stdio)
 #   make run     → alias de qemu
 
-.PHONY: all build release iso qemu run clean check fmt test test-exofs info help qemu-headless-safe
+.PHONY: all build release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu run clean check fmt test test-exofs info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection
 
 # ── Outils ───────────────────────────────────────────────────────────────────
 CARGO          = cargo
@@ -23,6 +23,8 @@ HOST_TEST_OVERRIDES = --target $(HOST_TEST_TARGET)
 # Kernel buildé par cargo (dans le workspace target/)
 KERNEL_BIN_DBG  = target/x86_64-unknown-none/debug/exo-os-kernel
 KERNEL_BIN_REL  = target/x86_64-unknown-none/release/exo-os-kernel
+KERNEL_A_DBG    = target/exophoenix/kernel-a-debug.elf
+KERNEL_A_REL    = target/exophoenix/kernel-a-release.elf
 
 # ── QEMU ─────────────────────────────────────────────────────────────────────
 # Paramètres QEMU communs (machine Q35 moderne, 256 MiB, VGA standard)
@@ -69,14 +71,22 @@ all: iso
 
 ## 1. Build debug du kernel (rapide, symboles complets)
 build:
-	@echo "$(BLUE)[1/1] Compilation kernel Exo-OS (debug)...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) build --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@echo "$(BLUE)[1/2] Compilation Kernel A propre ExoPhoenix (release, image de résurrection)...$(NC)"
+	@mkdir -p target/exophoenix
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cp $(KERNEL_BIN_REL) $(KERNEL_A_DBG)
+	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (debug)...$(NC)"
+	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_DBG))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_DBG)$(NC)"
 
 ## 2. Build release du kernel (optimisé, LTO, plus petit)
 release:
-	@echo "$(BLUE)[1/1] Compilation kernel Exo-OS (release)...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@echo "$(BLUE)[1/2] Compilation Kernel A propre ExoPhoenix (release)...$(NC)"
+	@mkdir -p target/exophoenix
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cp $(KERNEL_BIN_REL) $(KERNEL_A_REL)
+	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (release)...$(NC)"
+	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_REL))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_REL)$(NC)"
 
 # ── Cible ISO (debug) ─────────────────────────────────────────────────────────
@@ -93,6 +103,14 @@ iso-release: release
 	@$(MAKE) --no-print-directory _make_iso KERNEL_BIN=$(KERNEL_BIN_REL)
 	@echo "$(GREEN)[OK] ISO release créée : $(ISO_OUTPUT)$(NC)"
 	@ls -lh $(ISO_OUTPUT)
+
+## 3c. ISO debug avec autodestruction/résurrection ExoPhoenix activée
+iso-phoenix-resurrection:
+	@$(MAKE) --no-print-directory iso EXOPHOENIX_RESCUE_TEST=1 ISO_OUTPUT=exo-os-phoenix.iso
+
+## 3d. ISO release avec autodestruction/résurrection ExoPhoenix activée
+iso-release-phoenix-resurrection:
+	@$(MAKE) --no-print-directory iso-release EXOPHOENIX_RESCUE_TEST=1 ISO_OUTPUT=exo-os-phoenix-release.iso
 
 # Sous-cible interne : assemble l'ISO depuis le KERNEL_BIN fourni en paramètre.
 _make_iso:
@@ -129,13 +147,29 @@ qemu-headless-safe: iso
 	@echo "$(YELLOW)E9 log  : $(QEMU_SAFE_E9_LOG)$(NC)"
 	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) -cdrom $(ISO_OUTPUT) -display none
 
+## 4e. Lancer le test de résurrection ExoPhoenix en QEMU headless
+qemu-phoenix-resurrection: iso-phoenix-resurrection
+	@echo "$(CYAN)Lancement QEMU test ExoPhoenix résurrection$(NC)"
+	@echo "$(YELLOW)Serial  : $(QEMU_SAFE_SERIAL_LOG)$(NC)"
+	@echo "$(YELLOW)INT log : $(QEMU_SAFE_INT_LOG)$(NC)"
+	@echo "$(YELLOW)E9 log  : $(QEMU_SAFE_E9_LOG)$(NC)"
+	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) -cdrom exo-os-phoenix.iso -display none
+
+## 4f. Lancer le test de résurrection ExoPhoenix en release headless
+qemu-release-phoenix-resurrection: iso-release-phoenix-resurrection
+	@echo "$(CYAN)Lancement QEMU test ExoPhoenix résurrection (release)$(NC)"
+	@echo "$(YELLOW)Serial  : $(QEMU_SAFE_SERIAL_LOG)$(NC)"
+	@echo "$(YELLOW)INT log : $(QEMU_SAFE_INT_LOG)$(NC)"
+	@echo "$(YELLOW)E9 log  : $(QEMU_SAFE_E9_LOG)$(NC)"
+	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) -cdrom exo-os-phoenix-release.iso -display none
+
 run: qemu
 
 # ── Tests & qualité ──────────────────────────────────────────────────────────
 ## Vérifier (clippy)
 check:
 	@echo "$(BLUE)Vérification clippy...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) clippy --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) clippy --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK]$(NC)"
 
 ## Formatter le code
@@ -147,12 +181,12 @@ fmt:
 ## Tests unitaires (host, pas bare-metal)
 test:
 	@echo "$(BLUE)Tests unitaires...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) test --lib $(CARGO_TEST_FLAGS) $(HOST_TEST_OVERRIDES)
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) test --lib $(CARGO_TEST_FLAGS) $(HOST_TEST_OVERRIDES)
 
 ## Tests ExoFS ciblés (corrige duplicate-core via panic-abort-tests)
 test-exofs:
 	@echo "$(BLUE)Tests ExoFS (filtre fs::exofs::)...$(NC)"
-	@cd $(KERNEL_DIR) && $(CARGO) test --lib $(CARGO_TEST_FLAGS) $(HOST_TEST_OVERRIDES) fs::exofs::
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) test --lib $(CARGO_TEST_FLAGS) $(HOST_TEST_OVERRIDES) fs::exofs::
 
 # ── Nettoyage ─────────────────────────────────────────────────────────────────
 clean:
