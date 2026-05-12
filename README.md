@@ -76,10 +76,10 @@ ExoOS now reaches the Ring1 userspace console under QEMU. The boot path complete
 
 Latest validated framebuffer capture:
 
-![ExoOS QEMU boot milestone](docs/avancement/qemu_boot/img1.png)(docs/avancement/qemu_boot/img2.png)
+![ExoOS QEMU boot milestone](docs/avancement/qemu_boot/img1.png) , ![ExoOS QEMU boot milestone](docs/avancement/qemu_boot/img2.png)
+
 
 Boot validation artifacts are stored in [`docs/avancement/qemu_boot/`](docs/avancement/qemu_boot/) and the v0.1.0 verification log is stored in [`docs/special/1/qemu_verify/e9.log`](docs/special/1/qemu_verify/e9.log).
-
 ---
 
 ## ExoPhoenix Release Resurrection Milestone
